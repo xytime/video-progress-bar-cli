@@ -179,6 +179,9 @@ python -m cli.main add-progressbar ~/Downloads/4Video-processing/input.mp4 \
 pytest
 ```
 
+### 效果图
+![效果图](./docs/assets/effect-proccess-bar.png)
+
 ### 代码规范
 
 项目遵循PEP 8代码规范。
