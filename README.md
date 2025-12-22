@@ -51,6 +51,12 @@
   - **实时进度反馈**：显示处理进度和预计剩余时间
   - **性能优化**：针对大文件优化内存占用和处理速度
 
+- **智能双语字幕 (Smart Captioning)**：
+  - **自动语音转文字**：使用 Whisper 模型进行高精度识别
+  - **自动翻译**：支持中英互译
+  - **多风格字幕**：提供多种预设样式（电影感、科技风、霓虹等）
+  - **智能排版**：自动双语分行，防止遮挡关键画面
+
 ## 项目结构
 
 ```
@@ -170,7 +176,7 @@ video-process add-progressbar input.mp4 -c 30 -c 75 -c 120
 ```
 
 
-## 应用案例
+## 应用案例1，进度条
 ```
 <!-- 例1 -->
 python -m cli.main add-progressbar ~/Downloads/4Video-processing/input.mp4 \
@@ -198,7 +204,24 @@ python -m cli.main add-progressbar ~/Downloads/4Video-processing/input.mp4 \
     --color-scheme tech_dark
 ```
 
+## 应用案例2，字幕
+```
+  # 请确保使用 python (对应 venv/conda 环境) 而非 python3 (可能指向系统python)
+  # 基本使用 (默认样式)
+  python scripts/video-process auto-caption ~/Videos/Test.mp4 --src-lang en --target-lang zh-CN
 
+  # 指定样式 (推荐)
+  # 可选样式: default (白字黑底), movie_yellow (电影黄), tech_blue (科技蓝), cyberpunk (赛博朋克), soft_pink (柔和粉)
+  python scripts/video-process auto-caption ~/Videos/Test.mp4 --style movie_yellow
+
+  # 使用 GPU 加速 (如果可用)
+  python scripts/video-process auto-caption ~/Videos/Test.mp4 --style tech_blue --device cuda
+```
+或者
+```
+python -m src.cli.main auto-caption ~/Downloads/4Video-processing/TestVideo.mp4 --src-lang en --target-lang zh-CN --device mps
+# 注意：这需要确保 src 在 PYTHONPATH 中，比较麻烦。推荐使用上面的 scripts/video-process 方法。
+```
 
 ## 开发
 
