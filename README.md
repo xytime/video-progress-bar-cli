@@ -232,6 +232,10 @@ pytest
 ```
 
 ### 效果图
+#### Captioned subtitle
+![效果图](./docs/assets/effect-captioned-subtitle-CN-EN.png)
+
+#### progressbar  
 ![效果图](./docs/assets/effect-proccess-bar.png)
 
 ### 代码规范
