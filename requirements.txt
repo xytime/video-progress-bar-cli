@@ -20,3 +20,7 @@ tqdm>=4.66.0
 # mypy>=1.5.0
 # types-python-dotenv>=1.0.0
 
+# 字幕生成与处理
+openai-whisper>=20231117
+deep-translator>=1.11.0
+pysubs2>=1.6.0

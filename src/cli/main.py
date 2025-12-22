@@ -33,14 +33,18 @@ def info():
 # 导入并注册命令模块
 try:
     from cli.commands.add_progressbar import add_progressbar
+    from cli.commands.auto_caption import auto_caption
     cli.add_command(add_progressbar)
+    cli.add_command(auto_caption)
 except ImportError:
     # 如果相对导入失败，尝试绝对导入
     import sys
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from cli.commands.add_progressbar import add_progressbar
+    from cli.commands.auto_caption import auto_caption
     cli.add_command(add_progressbar)
+    cli.add_command(auto_caption)
 
 
 def main():
