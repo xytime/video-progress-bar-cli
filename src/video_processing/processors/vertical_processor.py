@@ -7,6 +7,8 @@ import pysubs2
 
 from .caption_processor import AutoCaptionProcessor, CAPTION_STYLES, VideoProcessingError
 from ..utils.layout import VerticalLayout
+from ..core.tts_engine import TTSEngine, TTSProvider
+from ..core.audio_mixer import AudioMixer
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         bg_blur: bool = False,
         font_path: str = "/Library/Fonts/Arial Unicode.ttf",
         font_size: int = 84,
-        bilingual: bool = False
+        bilingual: bool = False,
+        tts_provider: Optional[str] = None
     ):
         super().__init__(
             input_path, output_path, model_size, src_lang, target_lang, device, style
@@ -44,6 +47,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         self.font_path = font_path
         self.font_size = font_size
         self.bilingual = bilingual
+        self.tts_provider = tts_provider
+        self.segments = [] # Store for TTS usage
 
     def _generate_ass_file(self, segments: List[Dict[str, Any]]) -> Path:
         """Override to adjust subtitle vertical position (MarginV) and font size"""
@@ -53,6 +58,9 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         # The VerticalLayout defaults are good enough for the ASS generation 
         # because the canvas size is fixed to 1080x1920 regardless of input video.
         
+        
+        # Store segments for TTS generation later
+        self.segments = segments
         
         # Initialize ASS file
         subs = pysubs2.SSAFile()
@@ -139,6 +147,53 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         
         output_path = self.output_path or self.input_path.parent / f"{self.input_path.stem}_vertical{self.input_path.suffix}"
         self.output_path = output_path
+        
+        # TTS Logic
+        generated_audio_track = None
+        if self.tts_provider and self.segments:
+            logger.info(f"Generating TTS audio using provider: {self.tts_provider}")
+            try:
+                # Initialize Engine
+                provider = TTSProvider.INDEXTTS if self.tts_provider == "indextts" else TTSProvider.EDGE
+                tts_engine = TTSEngine(provider=provider)
+                
+                # Prepare items
+                tts_items = []
+                audio_dir = output_path.parent / f"{output_path.stem}_audio_gen"
+                audio_dir.mkdir(exist_ok=True)
+                
+                audio_segments = []
+                
+                for i, seg in enumerate(self.segments):
+                    zh_text = seg.get('zh_text', '').strip().replace('\\N', ' ')
+                    if not zh_text: 
+                        continue
+                        
+                    filename = f"line_{i:04d}.wav"
+                    tts_items.append({'text': zh_text, 'filename': filename})
+                    
+                    audio_segments.append({
+                        'start': seg['start'],
+                        'path': audio_dir / filename
+                    })
+                
+                if tts_items:
+                    # Batch Generate
+                    tts_engine.batch_generate(tts_items, audio_dir, voice_prompt="examples/test_audio.wav" if provider == TTSProvider.INDEXTTS else "onyx")
+                    
+                    # Mix Audio
+                    generated_audio_track = audio_dir / "mixed_narration.wav"
+                    # We need total duration. Prob video duration? 
+                    # We can use probing later or just let ffmpeg handle it by input 0 map.
+                    # AudioMixer might fail if no duration. 
+                    # Let's rely on ffmpeg merging in main command if mixer is complex.
+                    # Actually AudioMixer.create_mixed_audio_track was implemented to use filter_complex `adelay`.
+                    # We can use that.
+                    AudioMixer.create_mixed_audio_track(audio_segments, 0, generated_audio_track)
+                
+            except Exception as e:
+                logger.error(f"TTS Generation failed: {e}")
+                generated_audio_track = None
 
         # 1. Probe input video dimensions
         try:
@@ -178,12 +233,6 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             
         title_text = display_title.replace("'", "'\\''").replace(":", "\\:")
         
-        # Font file for drawtext
-        font_cmd = f":fontfile='{self.font_path}'" 
-        
-        # Colors
-        title_color = "yellow" # As per user requirement A (Classic Black/Yellow)
-        
         filters = []
         
         if self.bg_blur:
@@ -201,14 +250,53 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             # pad=width:height:x:y:color
             filters.append(f"[fg]pad=1080:1920:0:{layout.video_y}:black[merged]")
 
-        # Draw Title
-        # split long title? drawtext doesn't wrap automatically well without complex options.
-        # User said "Two lines large title".
-        # Let's simple-draw for now at title_y.
-        # fontsize=60
+        # Font file for drawtext
+        font_cmd = f":fontfile='{self.font_path}'" 
+        
+        # Colors & Style Logic
+        config = CAPTION_STYLES.get(self.style, CAPTION_STYLES["default"])
+        
+        def ass_to_ffmpeg_color(ass_hex: str) -> str:
+            # ASS: &HBBGGRR -> FFmpeg: #RRGGBB
+            clean = ass_hex.replace('&H', '').replace('&', '').strip()
+            if len(clean) == 8: # AABBGGRR? usually ASS is BBGGRR in config dict here
+                clean = clean[2:]
+            if len(clean) == 6:
+                b = clean[0:2]
+                g = clean[2:4]
+                r = clean[4:6]
+                return f"#{r}{g}{b}"
+            return "white" # fallback
+            
+        title_color = ass_to_ffmpeg_color(config['zh_color'])
+        
+        # Box Logic
+        # Priority: Style Config > Bg Blur Fallback
+        box_cmd = ""
+        has_box = (config.get('border_style', 1) == 3)
+        
+        if has_box:
+            # Use style's box color
+            box_color = ass_to_ffmpeg_color(config.get('bg_color', '&H000000'))
+            alpha = config.get('bg_alpha', 128)
+            # Map 0-255 to 0.0-1.0
+            opacity = round(alpha / 255.0, 2)
+            box_cmd = f":box=1:boxcolor={box_color}@{opacity}:boxborderw=20"
+        elif self.bg_blur:
+            # Fallback for visibility on blurred bg (if style doesn't insist on no box)
+            # Or maybe Shadow is better? But user liked valid mask.
+            box_cmd = ":box=1:boxcolor=black@0.4:boxborderw=20"
+        
+        # Add Shadow/Border for styles without box?
+        # Movie Yellow has outline=2.
+        if not has_box and config.get('outline', 0) > 0:
+             # Drawtext border
+             # borderw=2:bordercolor=black
+             box_cmd += ":borderw=2:bordercolor=black"
+
         filters.append(
             f"[merged]drawtext=text='{title_text}':fontcolor={title_color}:fontsize=60:"
-            f"x=(w-text_w)/2:y={layout.title_y}{font_cmd}[titled]"
+            f"x=(w-text_w)/2:y={layout.title_y}{font_cmd}{box_cmd}[titled]"
         )
         
         # Burn Subtitles
@@ -219,14 +307,26 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         cmd = [
             "ffmpeg", "-y",
             "-i", str(self.input_path),
+        ]
+        
+        # Audio Mapping Logic
+        audio_inputs = ["-map", "0:a"] # Default: Original Audio
+        
+        if generated_audio_track and generated_audio_track.exists():
+            # Add new audio as input 1
+            cmd += ["-i", str(generated_audio_track)]
+            
+            audio_filter = f"[0:a]volume=0.1[bg];[1:a]volume=1.5[fg];[bg][fg]amix=inputs=2:duration=first[aout]"
+            filter_str += f";{audio_filter}"
+            
+            audio_inputs = ["-map", "[aout]"]
+        
+        cmd += [
             "-filter_complex", filter_str,
             "-map", "[out]",
-            "-map", "0:a", # Copy audio
+            *audio_inputs, 
             "-c:v", "libx264",
-            "-c:a", "aac", # Re-encode audio to be safe or copy? 
-            # If we limit length or anything, copy might drift if not careful.
-            # But here we just filter video. 'copy' usually fails with filter_complex for video. 
-            # Audio can be copied if unchanged.
+            "-c:a", "aac",
             str(output_path)
         ]
         

@@ -22,9 +22,19 @@ logger = logging.getLogger(__name__)
 @click.option('--font-path', type=click.Path(path_type=Path), default="/Library/Fonts/Arial Unicode.ttf", show_default=True, help='Font file path for title/subtitles.')
 @click.option('--font-size', type=int, default=84, show_default=True, help='Subtitle font size (Vertical mode only, default 84)')
 @click.option('--bilingual', is_flag=True, help='Show bilingual subtitles (ZH+EN) in Vertical mode. Default is Chinese only.')
-def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual):
+@click.option('--tts', is_flag=True, help='Generate speech using Edge TTS (Free).')
+@click.option('--tts-real', is_flag=True, help='Generate speech using IndexTTS (requires local IndexTTS installation).')
+def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, tts, tts_real):
     """Generate and burn bilingual subtitles for a video."""
     try:
+        
+        # Determine TTS provider
+        tts_provider = None
+        if tts:
+            tts_provider = "edge"
+        elif tts_real:
+            tts_provider = "indextts"
+
         if vertical:
             processor = VerticalCaptionProcessor(
                 input_path=input_path,
@@ -38,7 +48,8 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
                 bg_blur=bg_blur,
                 font_path=str(font_path),
                 font_size=font_size,
-                bilingual=bilingual
+                bilingual=bilingual,
+                tts_provider=tts_provider
             )
             mode_str = "Vertical (9:16)"
         else:
