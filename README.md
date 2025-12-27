@@ -204,7 +204,7 @@ python -m cli.main add-progressbar ~/Downloads/4Video-processing/input.mp4 \
     --color-scheme tech_dark
 ```
 
-## 应用案例2，字幕
+## 应用案例2，转字幕
 ```
   # 请确保使用 python (对应 venv/conda 环境) 而非 python3 (可能指向系统python)
   # 基本使用 (默认样式)
@@ -222,6 +222,13 @@ python -m cli.main add-progressbar ~/Downloads/4Video-processing/input.mp4 \
 python -m src.cli.main auto-caption ~/Downloads/4Video-processing/TestVideo.mp4 --src-lang en --target-lang zh-CN --device mps
 # 注意：这需要确保 src 在 PYTHONPATH 中，比较麻烦。推荐使用上面的 scripts/video-process 方法。
 ```
+## 应用案例3，转字幕+TTS合成语音
+
+```
+python src/cli/main.py auto-caption ~/Downloads/帝王蝶.mp4 --vertical --title "科学家为何给蝴蝶做脑手术？解密帝王蝶“导航系统”" --style tech_blue --tts 
+```
+
+
 
 ## 开发
 
