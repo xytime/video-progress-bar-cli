@@ -43,18 +43,20 @@ show_usage() {
     echo "用法: ./vpanel [命令组] [操作]"
     echo ""
     echo "命令组: ui (仪表盘管理)"
-    echo "  ./vpanel ui start       后台启动控制中心仪表盘 (http://localhost:8765)"
-    echo "  ./vpanel ui stop        停止控制中心仪表盘"
-    echo "  ./vpanel ui status      查看控制中心运行状态"
-    echo "  ./vpanel ui logs        实时查看控制中心日志（最近 50 行）"
-    echo "  ./vpanel ui open        在浏览器中打开仪表盘"
+    echo "  ./vpanel ui start             后台启动控制中心仪表盘 (http://localhost:8765)"
+    echo "  ./vpanel ui stop              停止控制中心仪表盘"
+    echo "  ./vpanel ui status            查看控制中心运行状态"
+    echo "  ./vpanel ui logs              实时查看控制中心日志（最近 50 行）"
+    echo "  ./vpanel ui open              在浏览器中打开仪表盘"
     echo ""
     echo "命令组: job (自动化管线任务)"
-    echo "  ./vpanel job run        启动单次全自动管线任务 (抓取 + 加工 + 发布)"
-    echo "  ./vpanel job logs       实时查看管线运行日志（最近 50 行）"
+    echo "  ./vpanel job run              启动单次全自动管线任务 (抓取 + 加工 + 发布)"
+    echo "  ./vpanel job logs             实时查看管线运行日志（最近 50 行）"
+    echo "  ./vpanel job channels         列出当前已批准的频道白名单"
+    echo "  ./vpanel job add-channel URL  通过 yt-dlp 验证并添加一个 YouTube 频道到白名单"
     echo ""
     echo "通用:"
-    echo "  ./vpanel help           显示此帮助信息"
+    echo "  ./vpanel help                 显示此帮助信息"
     echo ""
 }
 
@@ -147,22 +149,23 @@ ui_open() {
 job_run() {
     echo "🔥 [点火] 开始执行单次全自动流水线..."
     echo "1. 正在检索监控频道获取最新视频..."
-    # [Claude_Sonnet_4.6_Thinking_planning] P1修复：monitor 失败（如网络超时）不应崩溃整个脚本
-    # 改为显式处理退出码：失败时打印警告并继续，让管线尝试处理已有的 PENDING 视频
     if ! "$PYTHON" "$PRJ_ROOT/scripts/monitor_channels.py"; then
         echo "⚠️  monitor_channels.py 运行出错（可能是网络问题）"
         echo "   将继续尝试处理数据库中已有的 PENDING 视频..."
     fi
 
     echo "2. 正在启动管线管理器处理高评分视频并发布..."
-    # 后台运行，避免当前终端被阻滞数十分钟
-    nohup "$PYTHON" "$PRJ_ROOT/src/video_processing/pipeline_manager.py" >> "$JOB_LOG_FILE" 2>&1 &
+    # [Claude_Sonnet_4.6_Thinking_planning] 修复：pipeline_manager.py 含相对导入，
+    # 用 PYTHONPATH 注入 src/ 让 -m 能找到 video_processing 包，无需 cd 进目录
+    PYTHONPATH="$PRJ_ROOT/src" nohup "$PYTHON" -m video_processing.pipeline_manager \
+        >> "$JOB_LOG_FILE" 2>&1 &
     JOB_PID=$!
     echo "✅ 管线后台任务已启动 (PID: $JOB_PID)"
     echo "📄 详细加工过程将写入: output/pipeline.log"
     echo "⏳ Whisper 阶段耗时最长（30~90分钟），请耐心等待"
     echo "💡 运行 './vpanel job logs' 或打开仪表盘跟踪进度"
 }
+
 
 job_logs() {
     if [ -f "$JOB_LOG_FILE" ]; then
@@ -171,6 +174,65 @@ job_logs() {
     else
         echo "ℹ️ 管线运行日志尚未创建，请先运行一次 './vpanel job run'"
     fi
+}
+
+job_channels() {
+    echo "📡 当前已批准的频道白名单："
+    "$PYTHON" -c "
+import sys; sys.path.insert(0, '$PRJ_ROOT/src')
+from video_processing.db.database import PipelineDB
+db = PipelineDB()
+channels = db.get_approved_channels()
+if not channels:
+    print('  (空)暂无已批准频道，请运行 ./vpanel job add-channel <URL>')
+else:
+    for c in channels:
+        print(f\"  ✅ {c['channel_name']:30s} {c['channel_id']}\")
+print(f'\n共 {len(channels)} 个已批准频道')
+"
+}
+
+job_add_channel() {
+    local URL="${1:-}"
+    if [ -z "$URL" ]; then
+        echo "❌ 用法: ./vpanel job add-channel <YouTube频道URL>"
+        echo "   示例: ./vpanel job add-channel https://www.youtube.com/@TheVerge"
+        exit 1
+    fi
+
+    echo "🔍 正在通过 yt-dlp 验证频道 ID（验证过才入库，防止错误 ID）..."
+    INFO=$(.venv/bin/yt-dlp --print "%(channel_id)s|%(channel)s" \
+        --playlist-items 1 --no-warnings \
+        --cookies-from-browser safari \
+        "$URL" 2>&1)
+
+    if echo "$INFO" | grep -q "ERROR"; then
+        echo "❌ yt-dlp 无法访问该 URL："
+        echo "   $INFO"
+        exit 1
+    fi
+
+    CHANNEL_ID=$(echo "$INFO" | head -1 | cut -d'|' -f1)
+    CHANNEL_NAME=$(echo "$INFO" | head -1 | cut -d'|' -f2)
+
+    if [ -z "$CHANNEL_ID" ]; then
+        echo "❌ 未能解析到频道 ID，请检查 URL 格式"
+        exit 1
+    fi
+
+    echo "  频道名: $CHANNEL_NAME"
+    echo "  频道ID: $CHANNEL_ID"
+
+    "$PYTHON" -c "
+import sys; sys.path.insert(0, '$PRJ_ROOT/src')
+from video_processing.db.database import PipelineDB
+db = PipelineDB()
+ok = db.add_channel('$CHANNEL_ID', '$CHANNEL_NAME', status='APPROVED', reason='Added via vpanel job add-channel')
+if ok:
+    print('✅ 已添加并批准')
+else:
+    print('ℹ️ 已存在，记录已更新')
+"
 }
 
 # -----------------------------------------------------------------------
@@ -201,8 +263,10 @@ case "$GROUP" in
         ;;
     job)
         case "$ACTION" in
-            run)  job_run ;;
-            logs) job_logs ;;
+            run)         job_run ;;
+            logs)        job_logs ;;
+            channels)    job_channels ;;
+            add-channel) job_add_channel "${3:-}" ;;
             *)
                 echo "❌ 错误: 未知操作 '$ACTION'"
                 show_usage

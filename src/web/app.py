@@ -291,18 +291,35 @@ class PriorityRequest(BaseModel):
 
 
 def _trigger_video_async(video: dict) -> None:
-    """在后台线程中处理单个视频，立刻返回不阻塞 API。"""
+    """
+    在独立子进程中处理单个视频，避免相对导入和 CWD 问题。
+    输出写入 output/pipeline.log 与 vp job logs 共享。
+    """
     def _run():
+        prj_root = Path(__file__).parent.parent.parent
+        python   = str(prj_root / ".venv" / "bin" / "python")
+        src_dir  = str(prj_root / "src")
+        log_path = prj_root / "output" / "pipeline.log"
+        log_path.parent.mkdir(exist_ok=True)
+
+        # 内联脚本：手动添加 sys.path 再导入，规避 "relative import with no known parent"
+        inline = (
+            f"import sys; sys.path.insert(0, {repr(src_dir)})\n"
+            f"from video_processing.pipeline_manager import PipelineManager\n"
+            f"pm = PipelineManager()\n"
+            f"pm._process_single_video({repr(dict(video))})\n"
+        )
         try:
-            from video_processing.pipeline_manager import PipelineManager
-            pm = PipelineManager()
-            pm._process_single_video(video)
+            with open(log_path, "a") as f:
+                import subprocess as sp
+                sp.run([python, "-c", inline],
+                       cwd=str(prj_root), stdout=f, stderr=f)
         except Exception as e:
             import logging
-            logging.getLogger(__name__).error(f"Background pipeline error for {video.get('youtube_id')}: {e}")
+            logging.getLogger(__name__).error(f"_trigger_video_async failed: {e}")
 
-    t = threading.Thread(target=_run, daemon=True, name=f"pipeline-{video.get('youtube_id','?')[:8]}")
-    t.start()
+    threading.Thread(target=_run, daemon=True,
+                     name=f"pipeline-{video.get('youtube_id','?')[:8]}").start()
 
 
 @app.patch("/api/videos/{youtube_id}/priority")
@@ -353,17 +370,23 @@ def process_video_now(youtube_id: str):
 
 @app.post("/api/pipeline/run")
 def run_full_pipeline():
-    """触发完整管线：monitor_channels + score + process。等价于 vp job run，全程后台执行。"""
+    """触发完整管线：monitor_channels + pipeline_manager。等价于 vp job run，全程后台执行。"""
     def _run():
+        prj_root = Path(__file__).parent.parent.parent
+        python   = str(prj_root / ".venv" / "bin" / "python")
+        src_dir  = str(prj_root / "src")
+        log_path = prj_root / "output" / "pipeline.log"
+        log_path.parent.mkdir(exist_ok=True)
+
         import subprocess as sp
-        # Step1: monitor
-        sp.run([_YT_DLP.replace("/yt-dlp", "/python").replace("yt-dlp", "python"),
-                str(Path(__file__).parent.parent.parent / "scripts" / "monitor_channels.py")],
-               capture_output=True)
-        # Step2: pipeline manager
-        sp.run([sys.executable,
-                str(Path(__file__).parent.parent / "video_processing" / "pipeline_manager.py")],
-               capture_output=True)
+        with open(log_path, "a") as f:
+            f.write("\n=== Web-triggered pipeline run ===\n")
+            # Step 1: monitor—直接作为脚本运行（无相对导入）
+            sp.run([python, str(prj_root / "scripts" / "monitor_channels.py")],
+                   cwd=str(prj_root), stdout=f, stderr=f)
+            # Step 2: pipeline_manager—必须用 -m 以支持相对导入
+            sp.run([python, "-m", "video_processing.pipeline_manager"],
+                   cwd=src_dir, stdout=f, stderr=f)
 
     threading.Thread(target=_run, daemon=True, name="full-pipeline").start()
     return {"success": True, "message": "全量管线已在后台启动，请关注仪表盘进度"}
