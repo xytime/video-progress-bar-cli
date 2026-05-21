@@ -129,9 +129,10 @@ class PipelineManager:
                 VENV_PYTHON, "-m", "cli.main", "auto-caption",
                 target_file, "--vertical", "--bilingual", "--title", title,
             ]
-            env = {"PYTHONPATH": str(SRC_DIR), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+            render_env = _os.environ.copy()
+            render_env["PYTHONPATH"] = str(SRC_DIR)
             subprocess.run(render_cmd, check=True, capture_output=True,
-                           cwd=str(PRJ_ROOT), env={**__import__('os').environ, **env})
+                           cwd=str(PRJ_ROOT), env=render_env)
 
             # 3. COPYWRITING
             self.db.update_video_status(yid, "COPYWRITING")
