@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>📺 Video Pipeline Control Center</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Reset & Base ── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #07071a;
+      --bg2:         #0d0d24;
+      --glass:       rgba(255,255,255,0.04);
+      --glass-b:     rgba(255,255,255,0.08);
+      --border:      rgba(255,255,255,0.08);
+      --accent:      #7c6ef7;
+      --accent2:     #a78bfa;
+      --teal:        #2dd4bf;
+      --yellow:      #fbbf24;
+      --orange:      #f97316;
+      --red:         #f87171;
+      --green:       #34d399;
+      --gray:        #64748b;
+      --text:        #e2e8f0;
+      --text2:       #94a3b8;
+      --text3:       #475569;
+      --radius:      14px;
+      --radius-sm:   8px;
+    }
+
+    html { height: 100%; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      background-image:
+        radial-gradient(ellipse 80% 50% at 20% 0%, rgba(124,110,247,0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 40% at 80% 100%, rgba(45,212,191,0.07) 0%, transparent 60%);
+    }
+
+    /* ── Layout ── */
+    .app { max-width: 1400px; margin: 0 auto; padding: 24px 28px; }
+
+    /* ── Header ── */
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 20px 28px;
+      background: var(--glass);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(20px);
+      margin-bottom: 28px;
+    }
+    .logo { display: flex; align-items: center; gap: 12px; }
+    .logo-icon {
+      font-size: 28px;
+      filter: drop-shadow(0 0 12px rgba(124,110,247,0.8));
+      animation: float 3s ease-in-out infinite;
+    }
+    @keyframes float {
+      0%,100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+    .logo-text { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    .logo-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
+
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .live-badge {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; font-weight: 600; color: var(--green);
+      padding: 5px 12px; border-radius: 20px;
+      background: rgba(52,211,153,0.1);
+      border: 1px solid rgba(52,211,153,0.2);
+    }
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--green);
+      animation: pulse-green 2s ease-in-out infinite;
+    }
+    @keyframes pulse-green {
+      0%,100% { box-shadow: 0 0 0 0 rgba(52,211,153,0.5); }
+      50% { box-shadow: 0 0 0 6px rgba(52,211,153,0); }
+    }
+    #last-update { font-size: 12px; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Stat Cards ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .stat-card {
+      background: var(--glass);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px 20px;
+      backdrop-filter: blur(20px);
+      transition: transform 0.2s ease, border-color 0.2s ease;
+      position: relative; overflow: hidden;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: var(--card-accent, var(--accent));
+      opacity: 0.8;
+    }
+    .stat-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.15); }
+    .stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text2); margin-bottom: 10px; }
+    .stat-value {
+      font-size: 40px; font-weight: 700; letter-spacing: -2px;
+      color: var(--text);
+      transition: all 0.4s ease;
+    }
+    .stat-sub { font-size: 11px; color: var(--text3); margin-top: 6px; }
+
+    .card-total  { --card-accent: var(--accent2); }
+    .card-pending { --card-accent: var(--gray); }
+    .card-active { --card-accent: var(--yellow); }
+    .card-published { --card-accent: var(--green); }
+    .card-failed  { --card-accent: var(--red); }
+
+    /* ── Two-column section ── */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    /* ── Panel ── */
+    .panel {
+      background: var(--glass);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      backdrop-filter: blur(20px);
+      overflow: hidden;
+    }
+    .panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 22px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .panel-badge {
+      font-size: 11px; font-weight: 600;
+      padding: 2px 8px; border-radius: 20px;
+      background: rgba(124,110,247,0.15);
+      color: var(--accent2);
+    }
+    .panel-body { padding: 0; }
+
+    /* ── Activity Table ── */
+    .activity-table { width: 100%; border-collapse: collapse; }
+    .activity-table th {
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.7px;
+      color: var(--text3); text-align: left;
+      padding: 12px 22px; border-bottom: 1px solid var(--border);
+    }
+    .activity-table td {
+      padding: 13px 22px; font-size: 13px;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      vertical-align: middle;
+    }
+    .activity-table tr:last-child td { border-bottom: none; }
+    .activity-table tr { transition: background 0.15s; }
+    .activity-table tr:hover td { background: rgba(255,255,255,0.03); }
+
+    .video-title { font-weight: 500; color: var(--text); max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .video-score { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); }
+    .video-time { font-size: 11px; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Status Badge ── */
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+      padding: 3px 9px; border-radius: 20px;
+      white-space: nowrap;
+    }
+    .badge-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+
+    .badge-PENDING       { background: rgba(100,116,139,0.15); color: var(--gray);   }
+    .badge-dot-PENDING   { background: var(--gray); }
+    .badge-DOWNLOADING   { background: rgba(96,165,250,0.15); color: #60a5fa; }
+    .badge-dot-DOWNLOADING { background: #60a5fa; animation: pulse-blue 1.5s infinite; }
+    .badge-TRANSCRIBING  { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .badge-dot-TRANSCRIBING { background: var(--yellow); animation: pulse-yellow 1.5s infinite; }
+    .badge-COPYWRITING   { background: rgba(167,139,250,0.15); color: var(--accent2); }
+    .badge-dot-COPYWRITING { background: var(--accent2); animation: pulse-purple 1.5s infinite; }
+    .badge-PUBLISHING    { background: rgba(249,115,22,0.15); color: var(--orange); }
+    .badge-dot-PUBLISHING { background: var(--orange); animation: pulse-orange 1.5s infinite; }
+    .badge-PUBLISHED     { background: rgba(52,211,153,0.15); color: var(--green); }
+    .badge-dot-PUBLISHED { background: var(--green); }
+    .badge-FAILED        { background: rgba(248,113,113,0.15); color: var(--red); }
+    .badge-dot-FAILED    { background: var(--red); }
+    .badge-LOGIN_REQUIRED { background: rgba(248,113,113,0.15); color: var(--red); }
+    .badge-dot-LOGIN_REQUIRED { background: var(--red); animation: pulse-red 1s infinite; }
+    .badge-COMPLETED     { background: rgba(52,211,153,0.1); color: #6ee7b7; }
+    .badge-dot-COMPLETED { background: #6ee7b7; }
+
+    @keyframes pulse-blue   { 0%,100%{box-shadow:0 0 0 0 rgba(96,165,250,.5)} 50%{box-shadow:0 0 0 5px rgba(96,165,250,0)} }
+    @keyframes pulse-yellow { 0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,.5)} 50%{box-shadow:0 0 0 5px rgba(251,191,36,0)} }
+    @keyframes pulse-purple { 0%,100%{box-shadow:0 0 0 0 rgba(167,139,250,.5)} 50%{box-shadow:0 0 0 5px rgba(167,139,250,0)} }
+    @keyframes pulse-orange { 0%,100%{box-shadow:0 0 0 0 rgba(249,115,22,.5)} 50%{box-shadow:0 0 0 5px rgba(249,115,22,0)} }
+    @keyframes pulse-red    { 0%,100%{box-shadow:0 0 0 0 rgba(248,113,113,.5)} 50%{box-shadow:0 0 0 5px rgba(248,113,113,0)} }
+
+    /* ── Channel List ── */
+    .channel-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 22px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+    }
+    .channel-item:last-child { border-bottom: none; }
+    .channel-name { font-size: 13px; font-weight: 500; }
+    .channel-id { font-size: 11px; color: var(--text3); font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
+    .empty-state {
+      padding: 40px 22px; text-align: center;
+      color: var(--text3); font-size: 13px;
+    }
+    .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
+
+    /* ── Pipeline Progress ── */
+    .pipeline-panel { margin-bottom: 20px; }
+    .pipeline-steps {
+      display: flex; align-items: center;
+      padding: 20px 28px; gap: 0;
+      overflow-x: auto;
+    }
+    .step {
+      display: flex; flex-direction: column; align-items: center;
+      flex: 1; min-width: 90px;
+      position: relative;
+    }
+    .step:not(:last-child)::after {
+      content: '';
+      position: absolute; top: 16px; left: calc(50% + 18px);
+      width: calc(100% - 36px); height: 2px;
+      background: var(--border);
+      transition: background 0.4s;
+    }
+    .step.active:not(:last-child)::after,
+    .step.done:not(:last-child)::after { background: var(--accent); }
+
+    .step-circle {
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700;
+      border: 2px solid var(--border);
+      background: var(--bg2); color: var(--text3);
+      transition: all 0.4s;
+      margin-bottom: 8px; flex-shrink: 0;
+      position: relative; z-index: 1;
+    }
+    .step.active .step-circle {
+      border-color: var(--yellow); color: var(--yellow);
+      background: rgba(251,191,36,0.1);
+      animation: step-pulse 2s infinite;
+    }
+    .step.done .step-circle {
+      border-color: var(--green); color: var(--green);
+      background: rgba(52,211,153,0.1);
+    }
+    @keyframes step-pulse {
+      0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,0.4)}
+      50%{box-shadow:0 0 0 8px rgba(251,191,36,0)}
+    }
+    .step-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text3); text-align: center; }
+    .step.active .step-label { color: var(--yellow); }
+    .step.done  .step-label { color: var(--green); }
+
+    /* ── Whisper Warning ── */
+    .whisper-warn {
+      margin: 0 28px 20px;
+      padding: 12px 16px;
+      border-radius: var(--radius-sm);
+      background: rgba(251,191,36,0.07);
+      border: 1px solid rgba(251,191,36,0.2);
+      font-size: 12px; color: var(--yellow);
+      display: flex; align-items: center; gap: 10px;
+    }
+
+    /* ── Footer ── */
+    footer {
+      text-align: center; font-size: 11px; color: var(--text3);
+      padding: 20px 0 10px;
+    }
+
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+
+    /* ── Number animation ── */
+    .stat-value { transition: color 0.3s ease; }
+    .stat-value.updated { color: var(--accent2); }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">📺</div>
+      <div>
+        <div class="logo-text">Video Pipeline Control Center</div>
+        <div class="logo-sub">全自动视频加工 · 翻译 · 微信视频号发布</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="live-badge"><div class="live-dot"></div>LIVE · 3s</div>
+      <div id="last-update">--:--:--</div>
+    </div>
+  </header>
+
+  <!-- Stats Cards -->
+  <div class="stats-grid">
+    <div class="stat-card card-total">
+      <div class="stat-label">总视频数</div>
+      <div class="stat-value" id="s-total">0</div>
+      <div class="stat-sub">历史累计入库</div>
+    </div>
+    <div class="stat-card card-pending">
+      <div class="stat-label">待评分</div>
+      <div class="stat-value" id="s-pending">0</div>
+      <div class="stat-sub">PENDING 队列</div>
+    </div>
+    <div class="stat-card card-active">
+      <div class="stat-label">处理中</div>
+      <div class="stat-value" id="s-active">0</div>
+      <div class="stat-sub">正在加工的任务</div>
+    </div>
+    <div class="stat-card card-published">
+      <div class="stat-label">已发布</div>
+      <div class="stat-value" id="s-published">0</div>
+      <div class="stat-sub">成功上架视频号</div>
+    </div>
+    <div class="stat-card card-failed">
+      <div class="stat-label">失败 / 待登录</div>
+      <div class="stat-value" id="s-failed">0</div>
+      <div class="stat-sub">需要人工干预</div>
+    </div>
+  </div>
+
+  <!-- Pipeline Progress Bar -->
+  <div class="panel pipeline-panel">
+    <div class="panel-header">
+      <div class="panel-title">🔄 管线流转进度</div>
+      <div id="pipeline-active-hint" style="font-size:12px;color:var(--text3);">等待任务中…</div>
+    </div>
+    <div class="pipeline-steps" id="pipeline-steps">
+      <div class="step" data-s="PENDING">
+        <div class="step-circle">1</div><div class="step-label">Pending</div>
+      </div>
+      <div class="step" data-s="DOWNLOADING">
+        <div class="step-circle">2</div><div class="step-label">Download</div>
+      </div>
+      <div class="step" data-s="TRANSCRIBING">
+        <div class="step-circle">3</div><div class="step-label">Whisper</div>
+      </div>
+      <div class="step" data-s="COPYWRITING">
+        <div class="step-circle">4</div><div class="step-label">AI Copy</div>
+      </div>
+      <div class="step" data-s="PUBLISHING">
+        <div class="step-circle">5</div><div class="step-label">Publish</div>
+      </div>
+      <div class="step" data-s="PUBLISHED">
+        <div class="step-circle">✓</div><div class="step-label">Done</div>
+      </div>
+    </div>
+    <div class="whisper-warn">
+      ⏳ <span><b>注意</b>：Whisper 转录阶段（Step 3）是最耗时的环节，CPU 模式下一条 10-20 分钟的视频预计需要 <b>30–90 分钟</b>。页面会持续刷新，请耐心等待。</span>
+    </div>
+  </div>
+
+  <!-- Main Grid: Activity + Channels -->
+  <div class="main-grid">
+    <!-- Activity Feed -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">⚡ 动态活动流 <span class="panel-badge" id="activity-count">0</span></div>
+        <div style="font-size:11px;color:var(--text3);">最近 20 条记录</div>
+      </div>
+      <div class="panel-body">
+        <table class="activity-table">
+          <thead>
+            <tr>
+              <th>视频标题</th>
+              <th>状态</th>
+              <th>评分</th>
+              <th>更新时间</th>
+            </tr>
+          </thead>
+          <tbody id="activity-body">
+            <tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>暂无数据，等待第一个视频入库…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Channel Watchlist -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-title">📡 频道白名单 <span class="panel-badge" id="channel-count">0</span></div>
+      </div>
+      <div class="panel-body" id="channel-list">
+        <div class="empty-state">
+          <div class="empty-icon">📻</div>
+          暂无已批准的频道
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer>Video Pipeline Control Center · Auto-refresh every 3s · <a href="/api/stats" target="_blank" style="color:var(--accent2);text-decoration:none;">/api/stats</a></footer>
+</div>
+
+<script>
+  const STEP_ORDER = ["PENDING","DOWNLOADING","TRANSCRIBING","COPYWRITING","PUBLISHING","PUBLISHED"];
+
+  function statusBadge(s) {
+    const safe = (s || 'UNKNOWN').replace(/[^A-Z_]/g,'');
+    return `<span class="badge badge-${safe}"><span class="badge-dot badge-dot-${safe}"></span>${s}</span>`;
+  }
+
+  function relativeTime(ts) {
+    if (!ts) return '—';
+    const d = new Date(ts.replace(' ','T') + 'Z');
+    if (isNaN(d)) return ts.slice(11,16);
+    const secs = Math.round((Date.now() - d.getTime()) / 1000);
+    if (secs < 60) return `${secs}s 前`;
+    if (secs < 3600) return `${Math.floor(secs/60)}m 前`;
+    return `${Math.floor(secs/3600)}h 前`;
+  }
+
+  function animateNumber(el, newVal) {
+    const old = parseInt(el.textContent) || 0;
+    if (old === newVal) return;
+    el.textContent = newVal;
+    el.classList.add('updated');
+    setTimeout(() => el.classList.remove('updated'), 600);
+  }
+
+  async function fetchStats() {
+    try {
+      const r = await fetch('/api/stats');
+      const d = await r.json();
+      animateNumber(document.getElementById('s-total'),     d.total);
+      animateNumber(document.getElementById('s-pending'),   d.pending);
+      animateNumber(document.getElementById('s-active'),    d.active);
+      animateNumber(document.getElementById('s-published'), d.published);
+      animateNumber(document.getElementById('s-failed'),    d.failed);
+      document.getElementById('last-update').textContent = d.server_time;
+
+      // Update pipeline steps
+      const breakdown = d.breakdown || {};
+      const steps = document.querySelectorAll('#pipeline-steps .step');
+      let activeIdx = -1;
+      STEP_ORDER.forEach((s, i) => { if (breakdown[s] > 0) activeIdx = i; });
+
+      steps.forEach((el, i) => {
+        el.classList.remove('active', 'done');
+        if (i < activeIdx) el.classList.add('done');
+        else if (i === activeIdx) el.classList.add('active');
+      });
+
+      const hint = document.getElementById('pipeline-active-hint');
+      if (activeIdx >= 0) {
+        hint.textContent = `当前阶段：${STEP_ORDER[activeIdx]} (${breakdown[STEP_ORDER[activeIdx]]} 个任务)`;
+        hint.style.color = 'var(--yellow)';
+      } else if (d.published > 0) {
+        hint.textContent = '✅ 所有任务已完成';
+        hint.style.color = 'var(--green)';
+      } else {
+        hint.textContent = '等待任务中…';
+        hint.style.color = 'var(--text3)';
+      }
+    } catch(e) { console.warn('stats fetch error', e); }
+  }
+
+  async function fetchActivity() {
+    try {
+      const r = await fetch('/api/activity');
+      const d = await r.json();
+      document.getElementById('activity-count').textContent = d.count;
+      const tbody = document.getElementById('activity-body');
+      if (!d.activity || d.activity.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>暂无数据，等待第一个视频入库…</td></tr>';
+        return;
+      }
+      tbody.innerHTML = d.activity.map(v => `
+        <tr>
+          <td><div class="video-title" title="${v.title}">${v.title || '—'}</div></td>
+          <td>${statusBadge(v.status)}</td>
+          <td><span class="video-score">${v.score || 0}</span></td>
+          <td><span class="video-time">${relativeTime(v.updated_at)}</span></td>
+        </tr>
+      `).join('');
+    } catch(e) { console.warn('activity fetch error', e); }
+  }
+
+  async function fetchChannels() {
+    try {
+      const r = await fetch('/api/channels');
+      const d = await r.json();
+      document.getElementById('channel-count').textContent = d.total_approved;
+      const list = document.getElementById('channel-list');
+      if (!d.approved || d.approved.length === 0) {
+        list.innerHTML = '<div class="empty-state"><div class="empty-icon">📻</div>暂无已批准的频道</div>';
+        return;
+      }
+      list.innerHTML = d.approved.map(c => `
+        <div class="channel-item">
+          <div>
+            <div class="channel-name">${c.channel_name}</div>
+            <div class="channel-id">${c.channel_id}</div>
+          </div>
+          ${statusBadge(c.status)}
+        </div>
+      `).join('');
+    } catch(e) { console.warn('channels fetch error', e); }
+  }
+
+  async function refresh() {
+    await Promise.all([fetchStats(), fetchActivity(), fetchChannels()]);
+  }
+
+  // Initial load + 3-second interval
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>

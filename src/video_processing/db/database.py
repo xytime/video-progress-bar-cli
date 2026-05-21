@@ -160,3 +160,20 @@ class PipelineDB:
                 (min_score, limit)
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_status_counts(self) -> Dict[str, int]:
+        """返回各状态下的视频数量，用于仪表盘统计卡片。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT status, COUNT(*) as cnt FROM processed_videos GROUP BY status"
+            )
+            return {row["status"]: row["cnt"] for row in cursor.fetchall()}
+
+    def get_recent_videos(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """返回最近更新的视频列表，用于仪表盘动态活动流。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM processed_videos ORDER BY updated_at DESC LIMIT ?",
+                (limit,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
