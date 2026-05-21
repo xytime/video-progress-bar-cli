@@ -357,7 +357,7 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
 
 @app.post("/api/videos/{youtube_id}/process")
 def process_video_now(youtube_id: str):
-    """立即处理指定视频，忽略分数阈値。"""
+    """立即处理指定视频，忽略分数阈值。"""
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
@@ -366,6 +366,40 @@ def process_video_now(youtube_id: str):
 
     _trigger_video_async(video)
     return {"success": True, "message": f"已在后台启动处理：{video['title']}"}
+
+
+@app.post("/api/videos/{youtube_id}/retry")
+def retry_video(youtube_id: str):
+    """
+    重试失败的视频：重置状态为 PENDING + 清除错误信息。
+    若当前分数 >= 75，立即自动重新触发管线，无需任何额外操作。
+    """
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+
+    retryable = {"FAILED", "LOGIN_REQUIRED"}
+    if video.get("status") not in retryable:
+        return {
+            "success": False,
+            "error": f"只有 FAILED / LOGIN_REQUIRED 状态可重试（当前：{video['status']}）"
+        }
+
+    # 重置状态，清空错误信息
+    db.update_video_status(youtube_id, "PENDING", error_msg=None)
+
+    # 分数已 >= 75 → 立即重新触发，不需要用户再做任何操作
+    triggered = False
+    if video.get("score", 0) >= 75:
+        fresh = db.get_video_by_youtube_id(youtube_id)
+        _trigger_video_async(fresh)
+        triggered = True
+
+    return {
+        "success": True,
+        "triggered": triggered,
+        "message": "已重置并立即重新触发" if triggered else "已重置为 PENDING，请将优先级提升至 ≥75 后触发",
+    }
 
 
 @app.post("/api/pipeline/run")

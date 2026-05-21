@@ -117,17 +117,12 @@ class PipelineDB:
                 return False # Already exists
                 
     def update_video_status(self, youtube_id: str, status: str, error_msg: Optional[str] = None):
+        """更新视频状态。error_msg=None 时主动清空旧错误信息（用于 retry 场景）。"""
         with self.get_connection() as conn:
-            if error_msg:
-                conn.execute(
-                    "UPDATE processed_videos SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
-                    (status, error_msg, youtube_id)
-                )
-            else:
-                conn.execute(
-                    "UPDATE processed_videos SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
-                    (status, youtube_id)
-                )
+            conn.execute(
+                "UPDATE processed_videos SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
+                (status, error_msg, youtube_id)
+            )
             conn.commit()
             
     def get_videos_by_status(self, status: str) -> List[Dict[str, Any]]:

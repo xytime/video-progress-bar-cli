@@ -354,6 +354,15 @@
     }
     .btn-pri:hover { border-color: var(--accent); color: var(--accent2); background: rgba(124,110,247,0.1); }
     .pri-controls { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+    .btn-retry {
+      background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3);
+      color: var(--red); font-size: 11px; font-weight: 600; cursor: pointer;
+      padding: 3px 10px; border-radius: 20px; font-family: inherit;
+      transition: all 0.15s; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 3px;
+    }
+    .btn-retry:hover { background: rgba(248,113,113,0.2); border-color: var(--red); }
+
 
     /* ── Whisper Warning ── */
     .whisper-warn {
@@ -608,12 +617,10 @@
       animateNumber(document.getElementById('s-failed'),    d.failed);
       document.getElementById('last-update').textContent = d.server_time;
 
-      // Update pipeline steps
       const breakdown = d.breakdown || {};
       const steps = document.querySelectorAll('#pipeline-steps .step');
       let activeIdx = -1;
       STEP_ORDER.forEach((s, i) => { if (breakdown[s] > 0) activeIdx = i; });
-
       steps.forEach((el, i) => {
         el.classList.remove('active', 'done');
         if (i < activeIdx) el.classList.add('done');
@@ -644,17 +651,16 @@
         tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>暂无数据，等待第一个视频入库…</td></tr>';
         return;
       }
-      const TERMINAL = new Set(['PUBLISHED','FAILED','LOGIN_REQUIRED']);
+      const TERMINAL  = new Set(['PUBLISHED','FAILED','LOGIN_REQUIRED']);
+      const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
       tbody.innerHTML = d.activity.map(v => {
-        const score = v.score ?? 0;
-        const isPending = v.status === 'PENDING';
+        const score      = v.score ?? 0;
+        const isPending  = v.status === 'PENDING';
         const isTerminal = TERMINAL.has(v.status);
-        // 优先级徽章颜色
-        const priClass = score >= 75 ? 'priority-high' : score >= 50 ? 'priority-mid' : 'priority-low';
-        // 调度线提示（只对 PENDING + score<75 显示）
+        const isRetryable = RETRYABLE.has(v.status);
+        const priClass   = score >= 75 ? 'priority-high' : score >= 50 ? 'priority-mid' : 'priority-low';
         const thresholdWarn = isPending && score < 75
           ? `<span class="priority-threshold">⚠️ 低于调度线(75)，不会被处理</span>` : '';
-        // ▲▼ 按钮（非终态视频才显示）
         const priControls = !isTerminal ? `
           <div class="pri-controls">
             <span class="priority-badge ${priClass}">${score}</span>
@@ -662,6 +668,9 @@
             <button class="btn-pri" title="优先级 -10" onclick="adjustPriority('${v.youtube_id}','decrease')">▼</button>
             ${thresholdWarn}
           </div>` : `<span class="priority-badge ${priClass}">${score}</span>`;
+        const retryBtn = isRetryable
+          ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="重置并重新触发">🔄 重试</button>`
+          : '';
         return `
           <tr>
             <td>
@@ -670,11 +679,10 @@
                 <div class="video-title">${v.title || '—'}</div>
               </a>
             </td>
-            <td>${statusBadge(v.status)}</td>
+            <td style="white-space:nowrap">${statusBadge(v.status)} ${retryBtn}</td>
             <td>${priControls}</td>
             <td><span class="video-time">${relativeTime(v.updated_at)}</span></td>
           </tr>`;
-
       }).join('');
     } catch(e) { console.warn('activity fetch error', e); }
   }
@@ -694,6 +702,19 @@
         await fetchActivity();
       }
     } catch(e) { console.warn('priority update error', e); }
+  }
+
+  async function retryVideo(youtubeId) {
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/retry`, { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        showToast(d.triggered ? '🔄 已重置并立即重新触发处理！' : `ℹ️ ${d.message}`);
+        await fetchActivity();
+      } else {
+        showToast(`❌ ${d.error}`);
+      }
+    } catch(e) { showToast('❌ 重试请求失败'); }
   }
 
   async function runPipeline() {
