@@ -72,24 +72,59 @@ def run_uploader(video_path: str = None, copy_path: str = None, state_path: str 
             pass
         page.wait_for_timeout(5000)
         
-        # 检测是否重定向到登录页面
-        is_login_page = False
+        # ── 登录状态检测（URL 优先，防止 Vue SPA 未渲染完触发误判）────────────
         current_url = page.url
-        if "login" in current_url or page.locator("text=使用微信扫码登录").is_visible() or page.locator(".login-box").is_visible() or page.locator(".login-qr").is_visible():
+        logger.info(f"Current URL after load: {current_url}")
+
+        # 1st: URL 包含 /post/create → 明确已登录，跳过所有 DOM 检测
+        if "/post/create" in current_url:
+            is_login_page = False
+            logger.info("Successfully authenticated via saved session (URL confirmed).")
+        # 2nd: URL 明确含 login → 未登录
+        elif "login" in current_url:
             is_login_page = True
-            
+            logger.warning(f"Redirected to login page: {current_url}")
+        # 3rd: URL 模糊（如首页 /）→ 再等 3s 后检查 DOM
+        else:
+            page.wait_for_timeout(3000)
+            current_url = page.url
+            if "/post/create" in current_url:
+                is_login_page = False
+                logger.info("Successfully authenticated (URL confirmed after extra wait).")
+            elif "login" in current_url:
+                is_login_page = True
+            else:
+                # DOM 检测作为最后手段
+                try:
+                    dom_login = (
+                        page.locator("text=使用微信扫码登录").is_visible(timeout=2000) or
+                        page.locator(".login-box").is_visible(timeout=2000) or
+                        page.locator(".login-qr").is_visible(timeout=2000)
+                    )
+                except Exception:
+                    dom_login = False
+                is_login_page = dom_login
+                if is_login_page:
+                    # 截图留证，方便排查是否是误判
+                    dbg = state_file.parent / "debug_login_detect.png"
+                    try:
+                        page.screenshot(path=str(dbg))
+                        logger.warning(f"Login page detected via DOM. Debug screenshot: {dbg}")
+                    except Exception:
+                        pass
+                else:
+                    logger.info("Successfully authenticated (DOM check passed).")
+
         if is_login_page:
             if headless:
-                # [Gemini_3.5_Flash_planning] 头模式下检测到登录失效，直接返回退出，提示上层触发扫码
-                logger.error("Session expired or not logged in. Headless mode cannot perform QR scan.")
+                logger.error("Session expired or not logged in. Headless mode cannot QR scan.")
                 browser.close()
-                return 2 # 返回 2 标识需要扫码登录
+                return 2  # 上层识别为 LOGIN_REQUIRED
             else:
-                logger.info("==================================================")
+                logger.info("=" * 50)
                 logger.info("⚠️ 请在弹出的浏览器窗口中，使用手机微信扫码登录！")
-                logger.info("==================================================")
+                logger.info("=" * 50)
                 try:
-                    # 等待登录成功并跳转回创作页 (超时 120 秒)
                     page.wait_for_url("**/post/create", timeout=120000)
                     logger.info("Login detected. Saving session state...")
                     context.storage_state(path=str(state_file))
@@ -98,14 +133,12 @@ def run_uploader(video_path: str = None, copy_path: str = None, state_path: str 
                     logger.error(f"Login wait timed out or failed: {e}")
                     browser.close()
                     return 1
-        else:
-            logger.info("Successfully authenticated via saved session.")
-            
+
         if login_only:
-            logger.info("Login-only mode execution completed successfully.")
+            logger.info("Login-only mode completed successfully.")
             browser.close()
             return 0
-            
+
         # 2. 上传视频文件 ─ 三段式容错策略
         logger.info(f"Uploading video: {video_abs}")
         upload_ok = False
