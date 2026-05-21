@@ -366,6 +366,29 @@
       display: flex; align-items: center; gap: 10px;
     }
 
+    /* ── Run Button ── */
+    .btn-run {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.3);
+      color: var(--green); font-size: 12px; font-weight: 600;
+      padding: 7px 16px; border-radius: 20px; cursor: pointer;
+      font-family: inherit; transition: all 0.2s;
+    }
+    .btn-run:hover:not(:disabled) { background: rgba(52,211,153,0.22); transform: scale(1.03); }
+    .btn-run:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
+      background: rgba(30,30,60,0.95); border: 1px solid var(--accent);
+      color: var(--text); font-size: 13px; font-weight: 500;
+      padding: 11px 22px; border-radius: 10px;
+      backdrop-filter: blur(20px);
+      opacity: 0; transition: all 0.3s ease;
+      pointer-events: none; z-index: 999; white-space: nowrap;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
     /* ── Footer ── */
     footer {
       text-align: center; font-size: 11px; color: var(--text3);
@@ -395,6 +418,9 @@
       </div>
     </div>
     <div class="header-right">
+      <button id="btn-run-pipeline" class="btn-run" onclick="runPipeline()">
+        ▶ 立即运行管线
+      </button>
       <div class="live-badge"><div class="live-dot"></div>LIVE · 3s</div>
       <div id="last-update">--:--:--</div>
     </div>
@@ -542,7 +568,7 @@
   </div>
 
   <footer>Video Pipeline Control Center · Auto-refresh every 3s · <a href="/api/stats" target="_blank" style="color:var(--accent2);text-decoration:none;">/api/stats</a></footer>
-
+  <div id="toast"></div>
 </div>
 
 <script>
@@ -661,8 +687,37 @@
         body: JSON.stringify({ action }),
       });
       const d = await r.json();
-      if (d.success) await fetchActivity();
+      if (d.success) {
+        if (d.triggered) {
+          showToast(`⚡ 分数已到 ${d.score}，已自动启动处理管线！`);
+        }
+        await fetchActivity();
+      }
     } catch(e) { console.warn('priority update error', e); }
+  }
+
+  async function runPipeline() {
+    const btn = document.getElementById('btn-run-pipeline');
+    btn.disabled = true;
+    btn.textContent = '⏳ 启动中…';
+    try {
+      const r = await fetch('/api/pipeline/run', { method: 'POST' });
+      const d = await r.json();
+      showToast(d.success ? '🚀 全量管线已在后台启动，请关注仪表盘' : `❌ ${d.message}`);
+    } catch(e) {
+      showToast('❌ 请求失败');
+    } finally {
+      setTimeout(() => { btn.disabled = false; btn.textContent = '▶ 立即运行管线'; }, 3000);
+    }
+  }
+
+  let _toastTimer = null;
+  function showToast(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
   }
 
 

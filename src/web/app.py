@@ -10,6 +10,7 @@ import os
 import sys
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -289,11 +290,26 @@ class PriorityRequest(BaseModel):
     value: Optional[int] = None   # 仅 action="set" 时使用
 
 
+def _trigger_video_async(video: dict) -> None:
+    """在后台线程中处理单个视频，立刻返回不阻塞 API。"""
+    def _run():
+        try:
+            from video_processing.pipeline_manager import PipelineManager
+            pm = PipelineManager()
+            pm._process_single_video(video)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Background pipeline error for {video.get('youtube_id')}: {e}")
+
+    t = threading.Thread(target=_run, daemon=True, name=f"pipeline-{video.get('youtube_id','?')[:8]}")
+    t.start()
+
+
 @app.patch("/api/videos/{youtube_id}/priority")
 def update_video_priority(youtube_id: str, req: PriorityRequest):
     """
     调整视频优先级（即 score 字段）。
-    score >= 75 的 PENDING 视频将在下次 job run 时被管线拾取。
+    若调整后 score >= 75 且视频仍是 PENDING，立即在后台启动处理管线。
     """
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
@@ -310,7 +326,48 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
         return {"success": False, "error": f"未知操作：{req.action}"}
 
     db.update_video_score(youtube_id, new_score)
-    return {"success": True, "youtube_id": youtube_id, "score": new_score}
+
+    # 自动触发：score 越过调度线且视频仍是 PENDING，立即启动后台处理
+    triggered = False
+    if new_score >= 75 and video.get("status") == "PENDING":
+        # 重新读取最新记录（含刚写入的新 score）
+        fresh = db.get_video_by_youtube_id(youtube_id)
+        _trigger_video_async(fresh)
+        triggered = True
+
+    return {"success": True, "youtube_id": youtube_id, "score": new_score, "triggered": triggered}
+
+
+@app.post("/api/videos/{youtube_id}/process")
+def process_video_now(youtube_id: str):
+    """立即处理指定视频，忽略分数阈値。"""
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+    if video.get("status") != "PENDING":
+        return {"success": False, "error": f"视频当前状态为 {video['status']}，仅 PENDING 超下可立即处理"}
+
+    _trigger_video_async(video)
+    return {"success": True, "message": f"已在后台启动处理：{video['title']}"}
+
+
+@app.post("/api/pipeline/run")
+def run_full_pipeline():
+    """触发完整管线：monitor_channels + score + process。等价于 vp job run，全程后台执行。"""
+    def _run():
+        import subprocess as sp
+        # Step1: monitor
+        sp.run([_YT_DLP.replace("/yt-dlp", "/python").replace("yt-dlp", "python"),
+                str(Path(__file__).parent.parent.parent / "scripts" / "monitor_channels.py")],
+               capture_output=True)
+        # Step2: pipeline manager
+        sp.run([sys.executable,
+                str(Path(__file__).parent.parent / "video_processing" / "pipeline_manager.py")],
+               capture_output=True)
+
+    threading.Thread(target=_run, daemon=True, name="full-pipeline").start()
+    return {"success": True, "message": "全量管线已在后台启动，请关注仪表盘进度"}
+
 
 
 if __name__ == "__main__":
