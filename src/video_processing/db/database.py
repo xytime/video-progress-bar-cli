@@ -202,4 +202,15 @@ class PipelineDB:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_video_by_youtube_id(self, youtube_id: str) -> Optional[Dict[str, Any]]:
+        """按 youtube_id 精确查找视频记录，用于重复检查。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM processed_videos WHERE youtube_id = ?",
+                (youtube_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+
 
