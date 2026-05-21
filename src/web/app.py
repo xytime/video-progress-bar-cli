@@ -433,7 +433,35 @@ def reset_video_hard(youtube_id: str):
     }
 
 
+@app.post("/api/wechat/login")
+def wechat_login():
+    """
+    在本机弹出可见浏览器窗口，引导用户扫码登录微信视频号。
+    登录成功后 Playwright 自动保存 Session 到 output/wechat_state.json。
+    此接口立即返回（后台线程执行），前端通过 Toast 提示用户扫码。
+    """
+    prj_root = Path(__file__).parent.parent.parent
+    python   = str(prj_root / ".venv" / "bin" / "python")
+    script   = str(prj_root / "scripts" / "wechat_uploader.py")
+    state    = str(prj_root / "output" / "wechat_state.json")
+
+    def _run():
+        try:
+            # 注意：不使用 capture_output，GUI 浏览器窗口需要真实 display
+            subprocess.run(
+                [python, script, "--login-only", "--no-headless", "--state", state],
+                cwd=str(prj_root),
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"WeChat login subprocess failed: {e}")
+
+    threading.Thread(target=_run, daemon=True, name="wechat-login").start()
+    return {"success": True, "message": "浏览器已在后台启动，请在弹出窗口中扫码"}
+
+
 @app.post("/api/pipeline/run")
+
 def run_full_pipeline():
     """触发完整管线：monitor_channels + pipeline_manager。等价于 vp job run，全程后台执行。"""
     def _run():

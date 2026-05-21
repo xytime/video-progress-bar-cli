@@ -435,6 +435,28 @@
     .btn-run:hover:not(:disabled) { background: rgba(52,211,153,0.22); transform: scale(1.03); }
     .btn-run:disabled { opacity: 0.5; cursor: not-allowed; }
 
+    /* 微信登录按钮（顶部常驻 + 行内扫码） */
+    .btn-wechat {
+      display: flex; align-items: center; gap: 6px;
+      background: rgba(7,193,96,0.1); border: 1px solid rgba(7,193,96,0.35);
+      color: #07c160; font-size: 12px; font-weight: 600;
+      padding: 7px 16px; border-radius: 20px; cursor: pointer;
+      font-family: inherit; transition: all 0.25s;
+    }
+    .btn-wechat:hover { background: rgba(7,193,96,0.22); transform: scale(1.03); }
+    .btn-wechat-alert {
+      border-color: var(--red) !important;
+      color: var(--red) !important;
+      animation: pulse-btn 1.2s ease-in-out infinite;
+    }
+    @keyframes pulse-btn {
+      0%,100% { box-shadow: 0 0 0 0 rgba(248,113,113,0); }
+      50%      { box-shadow: 0 0 0 6px rgba(248,113,113,0.25); }
+    }
+    .btn-wechat-row {
+      font-size: 10px; padding: 3px 10px; border-radius: 4px; display: inline-flex;
+    }
+
     /* ── Toast ── */
     #toast {
       position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
@@ -476,6 +498,9 @@
       </div>
     </div>
     <div class="header-right">
+      <button id="btn-wechat-login" class="btn-wechat" onclick="wechatLogin()" title="微信 Session 过期时点击，弹出浏览器扫码">
+        📱 微信登录
+      </button>
       <button id="btn-run-pipeline" class="btn-run" onclick="runPipeline()">
         ▶ 立即运行管线
       </button>
@@ -711,6 +736,10 @@
       const TERMINAL  = new Set(['PUBLISHED','FAILED','LOGIN_REQUIRED']);
       const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
       const STUCK     = new Set(['DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
+      // 有 LOGIN_REQUIRED 时让顶部按钮发光提示
+      const hasLoginRequired = d.activity.some(v => v.status === 'LOGIN_REQUIRED');
+      const wechatBtn = document.getElementById('btn-wechat-login');
+      if (wechatBtn) wechatBtn.classList.toggle('btn-wechat-alert', hasLoginRequired);
       tbody.innerHTML = d.activity.map(v => {
         const score      = v.score ?? 0;
         const isPending  = v.status === 'PENDING';
@@ -727,7 +756,10 @@
             <button class="btn-pri" title="优先级 -10" onclick="adjustPriority('${v.youtube_id}','decrease')">▼</button>
             ${thresholdWarn}
           </div>` : `<span class="priority-badge ${priClass}">${score}</span>`;
-        const retryBtn = isRetryable
+        const retryBtn = v.status === 'LOGIN_REQUIRED'
+          ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="点击弹出浏览器，用手机微信扫码重新登录">📱 扫码登录</button>
+             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物从头开始">🗑 硬重置</button>`
+          : isRetryable
           ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传：跳过已完成步骤">🔄 重试</button>
              <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="从头开始：删除所有产物文件重新下载">🗑 硬重置</button>`
           : isStuck
@@ -844,6 +876,24 @@
     if (btn) {
       btn.textContent = '✅ 已复制'; btn.classList.add('copied');
       setTimeout(() => { btn.textContent = '📋 复制'; btn.classList.remove('copied'); }, 1500);
+    }
+  }
+
+  async function wechatLogin() {
+    const btn = document.getElementById('btn-wechat-login');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 启动中…'; }
+    try {
+      const r = await fetch('/api/wechat/login', { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        showToast('📱 浏览器已弹出，请用手机微信扫码登录，完成后窗口自动关闭');
+      } else {
+        showToast('❌ 启动失败: ' + (d.error || '未知错误'), 'error');
+      }
+    } catch(e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '📱 微信登录'; }
     }
   }
 
