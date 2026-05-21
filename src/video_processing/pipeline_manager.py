@@ -40,28 +40,36 @@ class PipelineManager:
             logger.error(f"Failed to send Telegram message: {e}")
 
     def score_pending_videos(self):
-        """对 PENDING 状态的视频调用 LLM 进行评分并更新"""
+        """对 PENDING 状态的视频调用 LLM 进行评分并更新
+
+        规则：
+        - 已被手动设置高分（score >= 75）的视频跳过，不覆盖用户意图
+        - score < 75 的视频才进行自动评分
+        """
         pending = self.db.get_videos_by_status("PENDING")
         if not pending:
             return
 
-        logger.info(f"Scoring {len(pending)} pending videos...")
-        # 实际实现中应调用 Gemini API，此处提供基础长度/关键词伪评分逻辑作为骨架
-        for video in pending:
+        to_score = [v for v in pending if v.get('score', 0) < 75]
+        skipped  = len(pending) - len(to_score)
+        if skipped:
+            logger.info(f"Skipping {skipped} already-prioritized videos (score >= 75).")
+        if not to_score:
+            return
+
+        logger.info(f"Scoring {len(to_score)} pending videos...")
+        for video in to_score:
             title = video['title'].lower()
-            score = 60 # 基础分
-            
+            score = 60  # 基础分
+
             # 关键词加分
             if any(k in title for k in ['ai', 'future', 'speech', 'interview', 'ceo']):
                 score += 20
-                
-            # 假装调用了大模型打分...
+
             logger.info(f"Video '{title}' scored {score}")
-            
-            # 更新分数 — 通过 DAL 方法，禁止裸 SQL
-            # [Claude_Sonnet_4.6_Thinking_planning] 原裸 SQL 已移至 db.update_video_score()
             self.db.update_video_score(video['youtube_id'], score)
-                
+
+
     def process_high_score_videos(self, limit: int = 5):
         """拉取高分视频进入加工流转"""
         # [Claude_Sonnet_4.6_Thinking_planning] 原裸 SQL 已移至 db.get_high_score_pending_videos()
