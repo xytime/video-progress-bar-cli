@@ -291,91 +291,107 @@ def run_uploader(
         else:
             logger.warning("Could not find description input selector, trying fallback fill...")
             
-        # ── 3. 短标题 ─────────────────────────────────────────────────────────
+        # ── 3. 等待视频上传完成（标题/封面/分类字段在上传后才出现）────────────
+        logger.info("Waiting for video upload to complete...")
+        upload_finished = False
+        for i in range(60):  # 60 × 5s = 300s max
+            page.wait_for_timeout(5000)
+            content = page.content()
+            if "上传成功" in content or "已上传100%" in content or "上传完成" in content:
+                logger.info("Upload complete (text detected).")
+                upload_finished = True
+                break
+            publish_btn = page.locator("button:has-text('发表')").first
+            if publish_btn.count() > 0:
+                is_disabled = (
+                    publish_btn.get_attribute("disabled") is not None or
+                    "disabled" in (publish_btn.get_attribute("class") or "").lower()
+                )
+                if not is_disabled:
+                    logger.info("Upload complete (Publish button enabled).")
+                    upload_finished = True
+                    break
+            logger.info(f"Still uploading... ({i+1}/60)")
+        if not upload_finished:
+            logger.warning("Upload verification timed out (5 min). Proceeding anyway.")
+
+        # 上传后截图，确认页面状态
+        dbg_post = state_file.parent / "debug_post_upload.png"
+        try:
+            page.screenshot(path=str(dbg_post))
+            logger.info(f"Post-upload screenshot: {dbg_post}")
+        except Exception:
+            pass
+
+        # ── 4. 短标题（视频上传后字段才出现）────────────────────────────────
         if short_title:
             logger.info(f"Setting short title: {short_title!r}")
-            title_selectors = [
-                "input[placeholder*='\u6807\u9898']",
+            for sel in [
+                "input[placeholder*='标题']",
                 "input[placeholder*='title']",
                 ".post-title input",
                 ".header-input",
                 "input[maxlength='30']",
                 "input[maxlength='28']",
-            ]
-            for sel in title_selectors:
+            ]:
                 try:
                     loc = page.locator(sel)
                     if loc.count() > 0 and loc.first.is_visible(timeout=1500):
                         loc.first.fill(short_title)
-                        logger.info(f"Short title set via selector: {sel}")
+                        logger.info(f"Short title set via: {sel}")
                         break
                 except Exception:
                     continue
             else:
-                logger.warning("Could not find title input field, skipping.")
+                logger.warning("Could not find title input, skipping.")
 
-        # ── 4. 封面上传 ───────────────────────────────────────────────────────
+        # ── 5. 封面上传 ───────────────────────────────────────────────────────
         if cover_abs:
             logger.info(f"Uploading cover: {cover_abs}")
             cover_set = False
-            # 尝试直接找 accept=image 的 file input
             try:
-                n = page.evaluate("() => document.querySelectorAll('input[type=\"file\"][accept*=\"image\"]').length")
+                n = page.evaluate("() => document.querySelectorAll('input[type=\\'file\\'][accept*=\\'image\\']').length")
                 if n > 0:
                     page.locator("input[type='file'][accept*='image']").first.set_input_files(cover_abs)
                     logger.info("Cover uploaded via image file input.")
                     cover_set = True
             except Exception as e:
                 logger.warning(f"Cover direct input failed: {e}")
-            # filechooser 兜底
             if not cover_set:
                 try:
-                    cover_btn_sels = [
-                        "button:has-text('\u4e0a\u4f20\u5c01\u9762')",
-                        ".cover-upload", ".thumb-upload", "[class*='cover']",
-                    ]
                     with page.expect_file_chooser(timeout=6000) as fc_info:
-                        for sel in cover_btn_sels:
-                            try:
-                                loc = page.locator(sel)
-                                if loc.count() > 0 and loc.first.is_visible():
-                                    loc.first.click()
-                                    break
-                            except Exception:
-                                continue
+                        for sel in ["button:has-text('上传封面')", ".cover-upload",
+                                    ".thumb-upload", "[class*='cover']"]:
+                            loc = page.locator(sel)
+                            if loc.count() > 0 and loc.first.is_visible():
+                                loc.first.click()
+                                break
                     fc_info.value.set_files(cover_abs)
                     logger.info("Cover uploaded via file chooser.")
                 except Exception as e:
                     logger.warning(f"Cover upload failed (non-fatal): {e}")
 
-        # ── 5. 原创声明 ───────────────────────────────────────────────────────
+        # ── 6. 原创声明 ───────────────────────────────────────────────────────
         logger.info("Checking original declaration checkbox...")
-        original_selectors = [
+        for sel in [
             "input[type='checkbox'][class*='original']",
-            "label:has-text('\u539f\u521b') input[type='checkbox']",
+            "label:has-text('原创') input[type='checkbox']",
             ".original-declaration input",
-            "input[type='checkbox']:near(:text('\u539f\u521b'))",
-        ]
-        original_checked = False
-        for sel in original_selectors:
+        ]:
             try:
                 loc = page.locator(sel)
                 if loc.count() > 0:
                     if not loc.first.is_checked():
                         loc.first.check()
                     logger.info(f"Original declaration checked via: {sel}")
-                    original_checked = True
                     break
             except Exception:
                 continue
-        if not original_checked:
-            logger.warning("Could not find original declaration checkbox, skipping.")
 
-        # ── 6. 分类选择 ───────────────────────────────────────────────────────
+        # ── 7. 分类选择 ───────────────────────────────────────────────────────
         if category:
             logger.info(f"Selecting category: {category!r}")
             cat_set = False
-            # 尝试 select 元素
             for sel in ["select[class*='category']", "select[class*='type']", "select"]:
                 try:
                     loc = page.locator(sel)
@@ -386,17 +402,14 @@ def run_uploader(
                         break
                 except Exception:
                     continue
-            # 尝试点击式下拉（微信常用 Vue 组件）
             if not cat_set:
                 try:
-                    # 点击分类触发器
                     for sel in [".category-selector", "[class*='category']",
-                                "button:has-text('\u5206\u7c7b')", "[placeholder*='\u5206\u7c7b']"]:
+                                "button:has-text('分类')", "[placeholder*='分类']"]:
                         loc = page.locator(sel)
                         if loc.count() > 0 and loc.first.is_visible():
                             loc.first.click()
                             page.wait_for_timeout(500)
-                            # 点击对应选项
                             opt = page.locator(f"li:has-text('{category}'), div:has-text('{category}')")
                             if opt.count() > 0:
                                 opt.first.click()
@@ -407,32 +420,6 @@ def run_uploader(
                     logger.warning(f"Category dropdown failed: {e}")
             if not cat_set:
                 logger.warning(f"Could not set category '{category}', skipping.")
-
-        # ── 7. 等待视频上传完成 ────────────────────────────────────────────────
-        upload_finished = False
-        for i in range(60): # 60 * 5s = 300s
-            page.wait_for_timeout(5000)
-            
-            # 检测是否上传完成或处理完毕
-            content = page.content()
-            if "上传成功" in content or "已上传100%" in content or "上传完成" in content:
-                logger.info("Upload progress reached 100% (detected via text).")
-                upload_finished = True
-                break
-                
-            # 也可以检测发表按钮的状态是否可用
-            publish_btn = page.locator("button:has-text('发表')").first
-            if publish_btn.count() > 0:
-                is_disabled = publish_btn.get_attribute("disabled") is not None or "disabled" in (publish_btn.get_attribute("class") or "").lower()
-                if not is_disabled:
-                    logger.info("Upload progress completed (Publish button is enabled).")
-                    upload_finished = True
-                    break
-                    
-            logger.info(f"Still uploading... (tick {i+1}/60)")
-            
-        if not upload_finished:
-            logger.warning("Video upload verification timed out (5 minutes). Attempting to proceed anyway.")
             
         # 5. 执行提交或存草稿
         if draft:

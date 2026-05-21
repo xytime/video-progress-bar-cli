@@ -227,6 +227,9 @@ class PipelineManager:
                 "--video",  str(vertical),
                 "--copy",   str(copy_file),
                 "--state",  str(self._OUT_DIR / "wechat_state.json"),
+                # 微信检测 headless 浏览器会重定向登录页
+                # 本地 Mac 运行，直接用可见浏览器，窗口会自动弹出并完成后关闭
+                "--no-headless",
             ]
             if cover_file.exists():
                 upload_cmd += ["--cover", str(cover_file)]
@@ -235,7 +238,9 @@ class PipelineManager:
             if category_file.exists():
                 upload_cmd += ["--category-file", str(category_file)]
 
-            res = subprocess.run(upload_cmd, capture_output=True, text=True)
+            # 不使用 capture_output，让上传器日志流入父进程
+            res = subprocess.run(upload_cmd, text=True, capture_output=False,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
             if res.returncode == 2:
                 logger.error(f"WeChat login required for {yid}.")
