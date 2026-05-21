@@ -100,8 +100,8 @@ def get_activity():
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("DASHBOARD_PORT", 8000))
+    # [Claude_Sonnet_4.6_Thinking_planning] 端口选择规则：见 PORTS.md
+    # 8765 是本项目专属端口，避免与 OptionSense(8000) 等其他项目冲突
+    port = int(os.environ.get("DASHBOARD_PORT", 8765))
     print(f"\n\U0001f680 Video Pipeline Control Center \u2192 http://localhost:{port}\n")
-    # [Claude_Sonnet_4.6_Thinking_planning] P2修复：直接传入 app 实例而非字符串引用，
-    # 避免 app_dir 根据运行方式导入失败
     uvicorn.run(app, host="0.0.0.0", port=port, reload=False)

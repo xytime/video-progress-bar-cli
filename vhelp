@@ -27,7 +27,7 @@ echo -e "项目路径: ${CYAN}/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-
 echo -e "主入口控制脚本: ${GREEN}./vpanel${RESET} (建议别名 ${GREEN}vp${RESET})"
 echo ""
 echo -e "  ${BOLD}网页端仪表盘 (UI) 控制:${RESET}"
-echo -e "    ${CYAN}./vpanel ui start${RESET}    - 后台静默启动控制中心仪表盘 (${BLUE}http://localhost:8000${RESET})"
+echo -e "    ${CYAN}./vpanel ui start${RESET}    - 后台静默启动控制中心仪表盘 (${BLUE}http://localhost:8765${RESET})"
 echo -e "    ${CYAN}./vpanel ui stop${RESET}     - 停止控制中心仪表盘"
 echo -e "    ${CYAN}./vpanel ui status${RESET}   - 检查仪表盘运行状态"
 echo -e "    ${CYAN}./vpanel ui logs${RESET}     - 实时追踪仪表盘服务器日志"
