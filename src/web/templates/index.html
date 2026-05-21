@@ -367,6 +367,15 @@
       background: rgba(251,191,36,0.08);
     }
     .btn-retry.btn-reset:hover { background: rgba(251,191,36,0.18); border-color: var(--yellow); }
+    .btn-hard-reset {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 10px; font-weight: 600; font-family: inherit;
+      padding: 3px 8px; border-radius: 4px; cursor: pointer;
+      border: 1px solid rgba(220,38,38,0.35);
+      color: #f87171; background: rgba(220,38,38,0.08);
+      transition: all 0.2s;
+    }
+    .btn-hard-reset:hover { background: rgba(220,38,38,0.22); border-color: #dc2626; }
 
 
     /* ── Error Detail Row ── */
@@ -719,9 +728,11 @@
             ${thresholdWarn}
           </div>` : `<span class="priority-badge ${priClass}">${score}</span>`;
         const retryBtn = isRetryable
-          ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="重置并重新触发">🔄 重试</button>`
+          ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传：跳过已完成步骤">🔄 重试</button>
+             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="从头开始：删除所有产物文件重新下载">🗑 硬重置</button>`
           : isStuck
-            ? `<button class="btn-retry btn-reset" onclick="retryVideo('${v.youtube_id}')" title="任务可能因服务器重启而卡死，点击强制重置">⚡ 强制重置</button>`
+            ? `<button class="btn-retry btn-reset" onclick="retryVideo('${v.youtube_id}')" title="任务卡死，强制重置（断点续传）">⚡ 强制重置</button>
+               <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物，从头开始">🗑 硬重置</button>`
             : '';
         const errMsg   = v.error_msg || '';
         const hasError = (isRetryable || isStuck) && errMsg.length > 0;
@@ -833,6 +844,22 @@
     if (btn) {
       btn.textContent = '✅ 已复制'; btn.classList.add('copied');
       setTimeout(() => { btn.textContent = '📋 复制'; btn.classList.remove('copied'); }, 1500);
+    }
+  }
+
+  async function hardResetVideo(youtubeId) {
+    if (!confirm('⚠️ 硬重置将删除所有已下载和处理的文件，从头重新开始。\n确认继续？')) return;
+    const r = await fetch(`/api/videos/${youtubeId}/reset-hard`, {method: 'POST'});
+    const d = await r.json();
+    if (d.success) {
+      const msg = d.triggered
+        ? `✅ 已删除 ${d.deleted_files.length} 个文件，重新触发处理`
+        : `✅ 已删除 ${d.deleted_files.length} 个文件，状态重置为 PENDING`;
+      showToast(msg);
+      fetchActivity();
+      fetchStats();
+    } else {
+      showToast('❌ 硬重置失败: ' + (d.error || '未知错误'), 'error');
     }
   }
 

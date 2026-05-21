@@ -402,6 +402,37 @@ def retry_video(youtube_id: str):
     }
 
 
+@app.post("/api/videos/{youtube_id}/reset-hard")
+def reset_video_hard(youtube_id: str):
+    """
+    硬重置：删除该视频所有本地产物文件（mp4/vertical/copy/cover/title/category），
+    然后重置状态为 PENDING。若分数 >= 75 立即重新触发完整管线（从下载开始）。
+    """
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+
+    # 调用 PipelineManager 的硬重置方法删除产物文件
+    from video_processing.pipeline_manager import PipelineManager
+    pm = PipelineManager()
+    deleted = pm.reset_video_artifacts(youtube_id)
+
+    db.update_video_status(youtube_id, "PENDING", error_msg=None)
+
+    triggered = False
+    if video.get("score", 0) >= 75:
+        fresh = db.get_video_by_youtube_id(youtube_id)
+        _trigger_video_async(fresh)
+        triggered = True
+
+    return {
+        "success": True,
+        "deleted_files": deleted,
+        "triggered": triggered,
+        "message": f"已删除 {len(deleted)} 个产物文件，重置为 PENDING" + ("并重新触发" if triggered else ""),
+    }
+
+
 @app.post("/api/pipeline/run")
 def run_full_pipeline():
     """触发完整管线：monitor_channels + pipeline_manager。等价于 vp job run，全程后台执行。"""

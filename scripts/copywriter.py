@@ -1,131 +1,171 @@
-"""WeChat Channels Copywriter - Generate WeChat Channel-friendly Chinese copy from YouTube metadata.
+"""微信视频号文案生成器 - 生成短标题、文案正文、分类
 
 # Modification History
-| Version | Date | Author | Description |
-| --- | --- | --- | --- |
-| 1.0.0 | 2026-05-21 | Gemini_3.5_Flash_planning | Initial creation of the copywriter script with Gemini API and translator fallback |
-| 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 地基重构：移除 os.getenv 和 load_dotenv，通过 settings 注入 GEMINI_API_KEY |
+| Version | Date       | Author                                  | Description                                      |
+|---------|------------|-----------------------------------------|--------------------------------------------------|
+| 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning               | Initial creation with Gemini API + translator fallback |
+| 1.1.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning     | 移除 os.getenv/load_dotenv，通过 settings 注入   |
+| 1.2.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning     | 结构化输出：短标题/文案/分类三文件；加原创/分类 LLM 推断 |
 """
 
 import sys
 import os
+import json
 import argparse
 import logging
 from pathlib import Path
 
-# 确保可以导入 src 目录下的模块（scripts/ 与 src/ 同级）
 _src_root = os.path.join(os.path.dirname(__file__), '..', 'src')
 if _src_root not in sys.path:
     sys.path.insert(0, _src_root)
 
-from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] 统一通过 settings 注入
+from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning]
 
-# 设置日志
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("copywriter")
 
-def translate_fallback(title: str, description: str) -> str:
-    """当 Gemini API 无法使用时，使用 deep-translator 进行备用翻译"""
-    # [Gemini_3.5_Flash_planning] 备用逻辑，防止 API 密钥缺失导致管线崩溃
-    logger.warning("Gemini API key not found or call failed. Using deep-translator fallback.")
+# 微信视频号支持的分类（与平台实际菜单保持一致）
+WECHAT_CATEGORIES = [
+    "科技", "财经", "教育", "生活", "娱乐",
+    "游戏", "体育", "时事", "资讯", "健康",
+]
+DEFAULT_CATEGORY = "科技"
+
+
+# ── 工具函数 ─────────────────────────────────────────────────────────────────
+
+def _strip_md_code_block(text: str) -> str:
+    """剥除 LLM 可能输出的 ```json ... ``` 包裹"""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # 去掉首行 ```json 和尾行 ```
+        lines = lines[1:] if lines[0].startswith("```") else lines
+        lines = lines[:-1] if lines and lines[-1].strip() == "```" else lines
+        text = "\n".join(lines)
+    return text.strip()
+
+
+# ── 后备路径 ─────────────────────────────────────────────────────────────────
+
+def _translate_fallback(title: str, description: str) -> dict:
+    """Gemini 不可用时，用 deep-translator 作兜底翻译"""
+    logger.warning("Gemini unavailable — falling back to deep-translator")
     try:
         from deep_translator import GoogleTranslator
-        translator = GoogleTranslator(source='auto', target='zh-CN')
-        
-        translated_title = translator.translate(title)
-        
-        # 限制简介字数，避免过长
-        desc_lines = [line.strip() for line in description.split("\n") if line.strip()]
-        desc_snippet = " ".join(desc_lines[:3]) # 取前三行非空内容
-        translated_desc = ""
-        if desc_snippet:
-            translated_desc = translator.translate(desc_snippet)
-            
-        copy_text = f"【双语精选】{translated_title}\n\n"
-        if translated_desc:
-            copy_text += f"{translated_desc}\n\n"
-        copy_text += "#AI #科技 #翻译 #双语字幕\n"
-        copy_text += "🤖 关注本视频号，解锁更多前沿AI与科技资讯！"
-        return copy_text
+        tr = GoogleTranslator(source='auto', target='zh-CN')
+        zh_title = tr.translate(title) or title
+        desc_lines = [l.strip() for l in description.split("\n") if l.strip()]
+        zh_desc = tr.translate(" ".join(desc_lines[:3])) if desc_lines else ""
+        short_title = zh_title[:28]
+        copy = f"【双语精选】{zh_title}\n\n"
+        if zh_desc:
+            copy += f"{zh_desc}\n\n"
+        copy += "#AI #科技 #双语字幕\n🤖 关注本视频号，解锁更多前沿科技！"
+        return {"short_title": short_title, "copy": copy, "category": DEFAULT_CATEGORY}
     except Exception as e:
-        logger.error(f"Fallback translation also failed: {e}")
-        # 最极端的兜底：直接输出原标题和预设后缀
-        return f"{title}\n\n#AI #科技\n🤖 关注本视频号，解锁更多前沿科技！"
+        logger.error(f"deep-translator fallback failed: {e}")
+        return {
+            "short_title": title[:28],
+            "copy": f"{title}\n\n#AI #科技\n🤖 关注本视频号！",
+            "category": DEFAULT_CATEGORY,
+        }
 
-def generate_wechat_copy(title: str, description: str, model_name: str = "gemini-2.5-flash") -> str:
-    """调用 Gemini API 生成适合微信视频号的宣传文案"""
-    # [Claude_Sonnet_4.6_Thinking_planning] 通过 settings 统一注入，消灭散落的 os.getenv
+
+# ── 主生成函数 ───────────────────────────────────────────────────────────────
+
+def generate_wechat_content(title: str, description: str,
+                             model_name: str = "gemini-2.5-flash") -> dict:
+    """调用 Gemini 生成微信视频号所需的全部内容。
+
+    返回 dict:
+        short_title : str  — ≤28 字，不含违禁词
+        copy        : str  — 文案正文（100-200 字 + hashtag + CTA）
+        category    : str  — WECHAT_CATEGORIES 之一
+    """
     api_key = settings.gemini_api_key
     if not api_key:
-        return translate_fallback(title, description)
-        
+        return _translate_fallback(title, description)
+
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
-        
-        # [Gemini_3.5_Flash_planning] 构造高质量的提示词，要求输出精简、吸引人且带有话题的中文文案
-        prompt = f"""
-You are an expert social media manager specializing in tech content for WeChat Channels (微信视频号).
-Please translate and rewrite the following YouTube video title and description into an engaging Chinese social media post.
 
-Requirements:
-1. Title: Create a catchy, click-worthy Chinese title/slogan (incorporate emojis).
-2. Body: Write a concise, engaging summary in Chinese (100-200 words) summarizing the core value or most interesting parts of the video.
-3. Hashtags: Generate 3 to 5 highly relevant tech hashtags starting with # (e.g. #AI #AIGC #科技).
-4. Ending: Append a custom call-to-action inviting users to follow the channel.
-5. Length: Keep the total output under 600 Chinese characters. Do NOT output any English or markdown formatting like '【标题】' in the final output. The format should be clean text.
+        cats = "、".join(WECHAT_CATEGORIES)
+        prompt = f"""你是微信视频号运营专家。根据以下 YouTube 视频信息，生成微信视频号发布所需内容。
 
-YouTube Video Title: {title}
-YouTube Video Description:
-{description}
+要求：
+1. short_title：一个吸引眼球的中文标题（可含 emoji），严格不超过 28 字，不能含有广告、政治等违禁词。
+2. copy：文案正文，100-200 字的中文内容摘要 + 3-5 个 hashtag（#AI #科技等）+ 一句 CTA 结尾（可用 emoji），总字数不超过 600 字，纯文本不含 markdown。
+3. category：从以下选项中选最合适的一个：{cats}。若不确定选「{DEFAULT_CATEGORY}」。
 
-Example Output Format:
-🚀【视频号标题】
-(简短而具有吸引力的视频介绍内容，吸引用户点击和看完视频)
+YouTube 标题：{title}
+YouTube 简介（节选）：
+{description[:800]}
 
-#标签1 #标签2 #标签3
-🤖 关注本视频号，每天为您解锁更多前沿AI与科技黑科技！
-"""
-        logger.info(f"Calling Gemini model {model_name}...")
+仅返回 JSON，不要 markdown 代码块：
+{{"short_title": "...", "copy": "...", "category": "..."}}"""
+
+        logger.info(f"Calling Gemini [{model_name}]...")
         model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
-        text = response.text.strip()
-        
-        if not text:
-            raise ValueError("Gemini returned empty text")
-            
-        return text
+        raw = model.generate_content(prompt).text or ""
+        raw = _strip_md_code_block(raw)
+        result = json.loads(raw)
+
+        short_title = str(result.get("short_title", title))[:28]
+        copy        = str(result.get("copy", "")).strip()
+        category    = result.get("category", DEFAULT_CATEGORY)
+        if category not in WECHAT_CATEGORIES:
+            logger.warning(f"Unknown category '{category}' from LLM, using default.")
+            category = DEFAULT_CATEGORY
+        if not copy:
+            raise ValueError("Gemini returned empty copy")
+
+        return {"short_title": short_title, "copy": copy, "category": category}
+
     except Exception as e:
-        logger.error(f"Gemini API call failed: {e}")
-        return translate_fallback(title, description)
+        logger.error(f"Gemini call failed: {e}")
+        return _translate_fallback(title, description)
+
+
+# ── 兼容旧接口 ───────────────────────────────────────────────────────────────
+
+def generate_wechat_copy(title: str, description: str,
+                          model_name: str = "gemini-2.5-flash") -> str:
+    """向后兼容：仅返回 copy 字符串"""
+    return generate_wechat_content(title, description, model_name)["copy"]
+
+
+# ── CLI 入口 ─────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate WeChat Channels copy from YouTube metadata.")
-    parser.add_argument("--youtube-id", required=True, help="YouTube Video ID")
-    parser.add_argument("--title", required=True, help="Original Video Title")
-    parser.add_argument("--desc-file", help="Path to the file containing original video description")
-    parser.add_argument("--output-dir", default="output", help="Directory to save the generated copy")
-    
+    parser = argparse.ArgumentParser(description="Generate WeChat Channels copy.")
+    parser.add_argument("--youtube-id",  required=True)
+    parser.add_argument("--title",       required=True)
+    parser.add_argument("--desc-file",   help="Path to description text file")
+    parser.add_argument("--output-dir",  default="output")
     args = parser.parse_args()
-    
+
     description = ""
     if args.desc_file:
-        desc_path = Path(args.desc_file)
-        if desc_path.exists():
-            description = desc_path.read_text(encoding="utf-8")
-            
-    # 生成文案
-    copy_text = generate_wechat_copy(args.title, description)
-    
-    # 写入输出文件
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    
-    output_path = out_dir / f"{args.youtube_id}_copy.txt"
-    output_path.write_text(copy_text, encoding="utf-8")
-    
-    logger.info(f"Successfully generated WeChat copy: {output_path}")
-    print(output_path)
+        p = Path(args.desc_file)
+        if p.exists():
+            description = p.read_text(encoding="utf-8")
+
+    content = generate_wechat_content(args.title, description)
+
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+
+    (out / f"{args.youtube_id}_title.txt"   ).write_text(content["short_title"], encoding="utf-8")
+    (out / f"{args.youtube_id}_copy.txt"    ).write_text(content["copy"],        encoding="utf-8")
+    (out / f"{args.youtube_id}_category.txt").write_text(content["category"],    encoding="utf-8")
+
+    logger.info(f"short_title → {content['short_title']!r}")
+    logger.info(f"category    → {content['category']!r}")
+    logger.info(f"copy        → output/{args.youtube_id}_copy.txt")
+    print(out / f"{args.youtube_id}_copy.txt")
+
 
 if __name__ == "__main__":
     main()
