@@ -363,6 +363,29 @@
     }
     .btn-retry:hover { background: rgba(248,113,113,0.2); border-color: var(--red); }
 
+    /* ── Error Detail Row ── */
+    .error-row td {
+      background: rgba(248,113,113,0.04);
+      border-top: none;
+      padding: 0 16px 10px 16px;
+    }
+    .error-detail {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px; color: var(--red);
+      background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.2);
+      border-radius: 6px; padding: 10px 12px;
+      white-space: pre-wrap; word-break: break-all;
+      max-height: 180px; overflow-y: auto;
+      line-height: 1.6;
+    }
+    .toggle-error {
+      font-size: 10px; color: var(--red); cursor: pointer;
+      text-decoration: underline; text-underline-offset: 2px;
+      opacity: 0.75; margin-left: 6px; white-space: nowrap;
+    }
+    .toggle-error:hover { opacity: 1; }
+
+
 
     /* ── Whisper Warning ── */
     .whisper-warn {
@@ -671,6 +694,15 @@
         const retryBtn = isRetryable
           ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="重置并重新触发">🔄 重试</button>`
           : '';
+        const errMsg   = v.error_msg || '';
+        const hasError = isRetryable && errMsg.length > 0;
+        const errorToggle = hasError
+          ? `<span class="toggle-error" onclick="toggleError('${v.youtube_id}')">▼ 查看错误</span>`
+          : '';
+        const errorRow = hasError ? `
+          <tr id="err-${v.youtube_id}" class="error-row" style="display:none">
+            <td colspan="4"><div class="error-detail">${escapeHtml(errMsg)}</div></td>
+          </tr>` : '';
         return `
           <tr>
             <td>
@@ -678,11 +710,13 @@
                  target="_blank" rel="noopener" title="在 YouTube 打开：${v.title}">
                 <div class="video-title">${v.title || '—'}</div>
               </a>
+              ${errorToggle}
             </td>
             <td style="white-space:nowrap">${statusBadge(v.status)} ${retryBtn}</td>
             <td>${priControls}</td>
             <td><span class="video-time">${relativeTime(v.updated_at)}</span></td>
-          </tr>`;
+          </tr>
+          ${errorRow}`;
       }).join('');
     } catch(e) { console.warn('activity fetch error', e); }
   }
@@ -715,6 +749,21 @@
         showToast(`❌ ${d.error}`);
       }
     } catch(e) { showToast('❌ 重试请求失败'); }
+  }
+
+  function toggleError(youtubeId) {
+    const row = document.getElementById(`err-${youtubeId}`);
+    if (!row) return;
+    const hidden = row.style.display === 'none';
+    row.style.display = hidden ? 'table-row' : 'none';
+    const toggle = document.querySelector(`.toggle-error[onclick*="${youtubeId}"]`);
+    if (toggle) toggle.textContent = hidden ? '▲ 收起错误' : '▼ 查看错误';
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   async function runPipeline() {
