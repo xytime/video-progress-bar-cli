@@ -111,7 +111,14 @@ class PipelineManager:
                 "--remote-components", "ejs:github",   # deno EJS JS challenge solver
                 url, "-o", str(OUT_DIR / f"{yid}.%(ext)s"),
             ]
-            subprocess.run(dl_cmd, check=True, capture_output=True, cwd=str(PRJ_ROOT))
+            # 清除代理环境变量，防止系统代理未启动时导致 connection refused
+            # yt-dlp 凭 Safari cookies 直连 YouTube，无需走额外代理
+            import os as _os
+            _PROXY_KEYS = {'HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'}
+            env_no_proxy = {k: v for k, v in _os.environ.items() if k not in _PROXY_KEYS}
+            subprocess.run(dl_cmd, check=True, capture_output=True,
+                           cwd=str(PRJ_ROOT), env=env_no_proxy)
+
 
             # 2. TRANSCRIBING & RENDERING（cli.main 需要 PYTHONPATH=src）
             self.db.update_video_status(yid, "TRANSCRIBING")
