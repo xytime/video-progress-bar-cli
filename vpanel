@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+# =======================================================================
+# Video Pipeline Control CLI (vpanel)
+#
+# # Modification History
+# | Version | Date | Author | Description |
+# | --- | --- | --- | --- |
+# | 1.0.0 | 2026-05-21 | Gemini_3.5_Flash_planning | 初始创建 vpanel，支持 ui/job 命令组管理 |
+# =======================================================================
+
+# 严格错误处理
+set -e
+
+# 定位项目根目录
+PRJ_ROOT="/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing"
+cd "$PRJ_ROOT"
+
+# 定义相关路径与常量
+VENV_DIR="$PRJ_ROOT/.venv"
+PYTHON="$VENV_DIR/bin/python"
+PID_FILE="$PRJ_ROOT/output/dashboard.pid"
+UI_LOG_FILE="$PRJ_ROOT/output/dashboard.log"
+JOB_LOG_FILE="$PRJ_ROOT/output/pipeline.log"
+
+# 确保 output 目录存在
+mkdir -p "$PRJ_ROOT/output"
+
+# 确保使用虚拟环境
+if [ ! -d "$VENV_DIR" ]; then
+    echo "❌ 错误: 未找到虚拟环境 $VENV_DIR"
+    echo "请先运行 python -m venv .venv 并配置环境"
+    exit 1
+fi
+
+# -----------------------------------------------------------------------
+# 帮助信息
+# -----------------------------------------------------------------------
+show_usage() {
+    echo "📺 Video Pipeline 快捷控制工具 (vpanel)"
+    echo "用法: ./vpanel [命令组] [操作]"
+    echo ""
+    echo "命令组: ui (仪表盘管理)"
+    echo "  ./vpanel ui start       后台启动控制中心网页 (http://localhost:8000)"
+    echo "  ./vpanel ui stop        停止控制中心网页"
+    echo "  ./vpanel ui status      查看控制中心运行状态"
+    echo "  ./vpanel ui logs        实时查看控制中心日志"
+    echo ""
+    echo "命令组: job (自动化管线任务)"
+    echo "  ./vpanel job run        启动单次全自动管线任务 (抓取 + 加工 + 发布)"
+    echo "  ./vpanel job logs       实时查看管线运行日志"
+    echo ""
+}
+
+# -----------------------------------------------------------------------
+# 仪表盘控制 (UI)
+# -----------------------------------------------------------------------
+ui_start() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if ps -p "$PID" > /dev/null 2>&1; then
+            echo "ℹ️ 控制中心已经在运行中 (PID: $PID, http://localhost:8000)"
+            return 0
+        fi
+    fi
+
+    echo "🚀 正在启动控制中心仪表盘..."
+    nohup "$PYTHON" "$PRJ_ROOT/src/web/app.py" > "$UI_LOG_FILE" 2>&1 &
+    NEW_PID=$!
+    echo "$NEW_PID" > "$PID_FILE"
+
+    # 等待 1 秒确认是否成功运行
+    sleep 1.5
+    if ps -p "$NEW_PID" > /dev/null 2>&1; then
+        echo "✅ 启动成功！"
+        echo "🌐 仪表盘地址: http://localhost:8000"
+        echo "📄 日志文件: output/dashboard.log"
+        echo "PID: $NEW_PID"
+    else
+        echo "❌ 启动失败，请检查日志: output/dashboard.log"
+        rm -f "$PID_FILE"
+    fi
+}
+
+ui_stop() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if ps -p "$PID" > /dev/null 2>&1; then
+            echo "🛑 正在停止控制中心 (PID: $PID)..."
+            kill "$PID" || kill -9 "$PID"
+            echo "✅ 已停止"
+        else
+            echo "⚠️ PID 文件存在，但进程已不在运行。"
+        fi
+        rm -f "$PID_FILE"
+    else
+        echo "ℹ️ 控制中心未在运行"
+    fi
+}
+
+ui_status() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if ps -p "$PID" > /dev/null 2>&1; then
+            echo "🟢 运行中 (PID: $PID)"
+            echo "🌐 仪表盘地址: http://localhost:8000"
+            echo "🕒 运行时间: $(ps -p "$PID" -o etime= | xargs)"
+            return 0
+        fi
+    fi
+    echo "🔴 已停止"
+}
+
+ui_logs() {
+    if [ -f "$UI_LOG_FILE" ]; then
+        echo "📄 正在追踪控制中心日志 (按 Ctrl+C 退出)..."
+        tail -f "$UI_LOG_FILE"
+    else
+        echo "ℹ️ 日志文件尚未创建"
+    fi
+}
+
+# -----------------------------------------------------------------------
+# 管线任务控制 (JOB)
+# -----------------------------------------------------------------------
+job_run() {
+    echo "🔥 [点火] 开始执行单次全自动流水线..."
+    echo "1. 正在检索监控频道获取最新视频..."
+    "$PYTHON" "$PRJ_ROOT/scripts/monitor_channels.py"
+
+    echo "2. 正在启动管线管理器处理高评分视频并发布..."
+    # 丢到后台运行，避免当前终端被阻滞几十分钟，并将输出重定向到日志
+    nohup "$PYTHON" "$PRJ_ROOT/src/video_processing/pipeline_manager.py" >> "$JOB_LOG_FILE" 2>&1 &
+    JOB_PID=$!
+    echo "✅ 管线后台任务已启动 (PID: $JOB_PID)"
+    echo "📄 详细加工过程将写入: output/pipeline.log"
+    echo "💡 您可以运行 './vpanel job logs' 跟踪进度，或在 Web 仪表盘上查看状态！"
+}
+
+job_logs() {
+    if [ -f "$JOB_LOG_FILE" ]; then
+        echo "📄 正在追踪管线执行日志 (按 Ctrl+C 退出)..."
+        tail -f "$JOB_LOG_FILE"
+    else
+        echo "ℹ️ 管线运行日志尚未创建，请先运行一次 './vpanel job run'"
+    fi
+}
+
+# -----------------------------------------------------------------------
+# 核心分流器
+# -----------------------------------------------------------------------
+GROUP=${1:-""}
+ACTION=${2:-""}
+
+if [ -z "$GROUP" ]; then
+    show_usage
+    exit 0
+fi
+
+case "$GROUP" in
+    ui)
+        case "$ACTION" in
+            start)  ui_start ;;
+            stop)   ui_stop ;;
+            status) ui_status ;;
+            logs)   ui_logs ;;
+            *)
+                echo "❌ 错误: 未知操作 '$ACTION'"
+                show_usage
+                exit 1
+                ;;
+        esac
+        ;;
+    job)
+        case "$ACTION" in
+            run)  job_run ;;
+            logs) job_logs ;;
+            *)
+                echo "❌ 错误: 未知操作 '$ACTION'"
+                show_usage
+                exit 1
+                ;;
+        esac
+        ;;
+    *)
+        echo "❌ 错误: 未知命令组 '$GROUP'"
+        show_usage
+        exit 1
+        ;;
+esac
