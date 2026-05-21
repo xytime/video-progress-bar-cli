@@ -64,10 +64,13 @@ def run_uploader(video_path: str = None, copy_path: str = None, state_path: str 
         page = context.new_page()
         
         logger.info(f"Navigating to WeChat Channels creation page: {WECHAT_CREATE_URL}")
-        page.goto(WECHAT_CREATE_URL)
-        
-        # 等待页面加载
-        page.wait_for_timeout(3000)
+        page.goto(WECHAT_CREATE_URL, wait_until="domcontentloaded")
+        # 等待页面完全渲染（Vue SPA 需额外时间）
+        try:
+            page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass
+        page.wait_for_timeout(5000)
         
         # 检测是否重定向到登录页面
         is_login_page = False
@@ -103,20 +106,77 @@ def run_uploader(video_path: str = None, copy_path: str = None, state_path: str 
             browser.close()
             return 0
             
-        # 2. 上传视频文件
-        logger.info(f"Locating file input and uploading video: {video_abs}")
+        # 2. 上传视频文件 ─ 三段式容错策略
+        logger.info(f"Uploading video: {video_abs}")
+        upload_ok = False
+
+        # ── 策略 A：直接定位 input[type='file']（包括隐藏元素，Playwright 可设置） ──
         try:
-            # 微信视频号的文件上传控件通常是 input[type="file"]
-            file_input = page.locator("input[type='file']")
-            if file_input.count() > 0:
-                file_input.first.set_input_files(video_abs)
-                logger.info("Video file selected for upload.")
-            else:
-                logger.error("Failed to find file upload input element.")
-                browser.close()
-                return 1
-        except Exception as e:
-            logger.error(f"Failed to set input files: {e}")
+            # 通过 JS 确认 input 数量（穿透 display:none）
+            n_inputs = page.evaluate("() => document.querySelectorAll('input[type=\"file\"]').length")
+            logger.info(f"Strategy A: JS found {n_inputs} file input(s)")
+            if n_inputs > 0:
+                file_input = page.locator("input[type='file']").first
+                file_input.set_input_files(video_abs)
+                logger.info("Strategy A succeeded: file set on hidden input.")
+                upload_ok = True
+        except Exception as e_a:
+            logger.warning(f"Strategy A failed: {e_a}")
+
+        # ── 策略 B：等待上传区域出现后再用 filechooser 事件 ──
+        if not upload_ok:
+            try:
+                logger.info("Strategy B: waiting for upload area then using expect_file_chooser...")
+                upload_selectors = [
+                    "[class*='upload']:not(div>div)",
+                    "button:has-text('上传视频')",
+                    "button:has-text('上传')",
+                    ".upload-btn", ".upload-area", ".upload-wrapper",
+                    "label[for]", "[class*='Upload']",
+                ]
+                clicked = False
+                with page.expect_file_chooser(timeout=10000) as fc_info:
+                    for sel in upload_selectors:
+                        try:
+                            loc = page.locator(sel)
+                            if loc.count() > 0 and loc.first.is_visible():
+                                loc.first.click()
+                                clicked = True
+                                logger.info(f"Strategy B: clicked '{sel}'")
+                                break
+                        except Exception:
+                            continue
+                if clicked:
+                    fc = fc_info.value
+                    fc.set_files(video_abs)
+                    logger.info("Strategy B succeeded: file set via file chooser.")
+                    upload_ok = True
+            except Exception as e_b:
+                logger.warning(f"Strategy B failed: {e_b}")
+
+        # ── 策略 C：多 selector 暴力枚举 ──
+        if not upload_ok:
+            try:
+                logger.info("Strategy C: trying extended selector list...")
+                for sel in ["input[type='file']", "input[accept*='video']",
+                            "input[accept*='mp4']", "input[name*='file']"]:
+                    loc = page.locator(sel)
+                    if loc.count() > 0:
+                        loc.first.set_input_files(video_abs)
+                        logger.info(f"Strategy C succeeded with selector: {sel}")
+                        upload_ok = True
+                        break
+            except Exception as e_c:
+                logger.warning(f"Strategy C failed: {e_c}")
+
+        if not upload_ok:
+            # 截图留存，方便人工分析页面结构
+            dbg_path = Path(video_abs).parent / f"debug_upload_{Path(video_abs).stem}.png"
+            try:
+                page.screenshot(path=str(dbg_path), full_page=True)
+                logger.error(f"All upload strategies failed. Debug screenshot: {dbg_path}")
+            except Exception:
+                logger.error("All upload strategies failed and screenshot also failed.")
             browser.close()
             return 1
             
