@@ -63,3 +63,33 @@ tmp/
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
+
+# -----------------------------------------------------------------------
+# 运行时产出物 (Runtime Artifacts) — 禁止提交至版本库
+# -----------------------------------------------------------------------
+
+# 视频处理输出目录（视频、字幕、文案等全部产物）
+output/
+
+# 视频文件（防止 output/ 之外的散落文件被误提交）
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+
+# 字幕与音频文件
+*.ass
+*.srt
+*.vtt
+*.wav
+*.mp3
+*.m4a
+
+# 临时 Shell 渲染脚本（由管线生成，不属于源码）
+render_*.sh
+
+# 微信登录 Cookie（含敏感 Session 信息，绝对不能入库）
+output/wechat_state.json
+wechat_state.json
+
