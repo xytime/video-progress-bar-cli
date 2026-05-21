@@ -1,9 +1,13 @@
 """数据库访问层 - 管理自动化视频管线的状态与发现列表
 
+所有 SQL 操作必须封装在 PipelineDB 方法内。
+禁止外部模块直接调用 get_connection() 执行裸 SQL。
+
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建数据库与DAL封装 |
+| 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 补充 update_video_score / get_high_score_pending_videos，封堵 pipeline_manager 中的裸 SQL 泄漏 |
 """
 import sqlite3
 import os
@@ -120,4 +124,30 @@ class PipelineDB:
     def get_videos_by_status(self, status: str) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
             cursor = conn.execute("SELECT * FROM processed_videos WHERE status = ? ORDER BY score DESC", (status,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def update_video_score(self, youtube_id: str, score: int) -> None:
+        """更新视频评分。
+        
+        此方法封装了原本散落在 pipeline_manager.py 中的裸 SQL 写分逻辑。
+        外部模块不得绕过此方法直接操作 score 字段。
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE processed_videos SET score = ?, updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
+                (score, youtube_id)
+            )
+            conn.commit()
+
+    def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5) -> List[Dict[str, Any]]:
+        """获取高分待处理视频列表，用于触发加工管线。
+        
+        此方法封装了原本散落在 pipeline_manager.py 中的裸 SQL 查询逻辑。
+        调用方不得自行拼接 score 过滤条件，统一通过此入口。
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM processed_videos WHERE status = 'PENDING' AND score >= ? ORDER BY score DESC LIMIT ?",
+                (min_score, limit)
+            )
             return [dict(row) for row in cursor.fetchall()]

@@ -5,9 +5,9 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 初始创建 PipelineManager，实现完整的 FSM 调度 |
 | 1.1.0 | 2026-05-21 | Gemini_3.5_Flash_planning | 整合 Phase 5：加入文案生成与视频号全自动发布流，处理登录失效状态 |
+| 1.2.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 地基重构：消灭 2 处裸 SQL + os.environ 泄漏，统一通过 settings 和 DAL 方法 |
 
 """
-import os
 import time
 import logging
 import subprocess
@@ -16,14 +16,16 @@ from typing import List, Dict, Any
 from pathlib import Path
 
 from .db import PipelineDB
+from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] 统一通过 settings 读取配置
 
 logger = logging.getLogger(__name__)
 
 class PipelineManager:
     def __init__(self, db_path: str = "pipeline.db"):
         self.db = PipelineDB(db_path)
-        self.telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-        self.telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        # [Claude_Sonnet_4.6_Thinking_planning] 从 settings 注入，不直接访问 os.environ
+        self.telegram_token = settings.telegram_bot_token
+        self.telegram_chat_id = settings.telegram_chat_id
         
     def send_telegram_msg(self, text: str):
         if not self.telegram_token or not self.telegram_chat_id:
@@ -56,17 +58,14 @@ class PipelineManager:
             # 假装调用了大模型打分...
             logger.info(f"Video '{title}' scored {score}")
             
-            # 更新分数并暂时保持 PENDING（或改为 READY）
-            with self.db.get_connection() as conn:
-                conn.execute("UPDATE processed_videos SET score = ? WHERE youtube_id = ?", (score, video['youtube_id']))
-                conn.commit()
+            # 更新分数 — 通过 DAL 方法，禁止裸 SQL
+            # [Claude_Sonnet_4.6_Thinking_planning] 原裸 SQL 已移至 db.update_video_score()
+            self.db.update_video_score(video['youtube_id'], score)
                 
     def process_high_score_videos(self, limit: int = 5):
         """拉取高分视频进入加工流转"""
-        # 获取所有待处理且高分的视频
-        with self.db.get_connection() as conn:
-            cursor = conn.execute("SELECT * FROM processed_videos WHERE status = 'PENDING' AND score >= 75 ORDER BY score DESC LIMIT ?", (limit,))
-            targets = [dict(row) for row in cursor.fetchall()]
+        # [Claude_Sonnet_4.6_Thinking_planning] 原裸 SQL 已移至 db.get_high_score_pending_videos()
+        targets = self.db.get_high_score_pending_videos(min_score=75, limit=limit)
             
         if not targets:
             logger.info("No high-score videos available for processing today.")

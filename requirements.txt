@@ -12,6 +12,10 @@ click>=8.1.0
 
 # 配置管理
 python-dotenv>=1.0.0
+pydantic-settings>=2.2.0
+
+# 数据库 ORM
+SQLAlchemy>=2.0.0
 
 # 测试框架
 pytest>=7.4.0

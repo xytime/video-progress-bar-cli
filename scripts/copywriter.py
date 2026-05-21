@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-21 | Gemini_3.5_Flash_planning | Initial creation of the copywriter script with Gemini API and translator fallback |
+| 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 地基重构：移除 os.getenv 和 load_dotenv，通过 settings 注入 GEMINI_API_KEY |
 """
 
 import os
@@ -11,10 +12,15 @@ import sys
 import argparse
 import logging
 from pathlib import Path
-from dotenv import load_dotenv
 
-# 加载环境变量
-load_dotenv()
+import sys
+import os
+# 确保可以导入 src 目录下的模块
+_src_root = os.path.join(os.path.dirname(__file__), '..', 'src')
+if _src_root not in sys.path:
+    sys.path.insert(0, _src_root)
+
+from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] 不再直接 os.getenv
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -50,7 +56,8 @@ def translate_fallback(title: str, description: str) -> str:
 
 def generate_wechat_copy(title: str, description: str, model_name: str = "gemini-2.5-flash") -> str:
     """调用 Gemini API 生成适合微信视频号的宣传文案"""
-    api_key = os.getenv("GEMINI_API_KEY")
+    # [Claude_Sonnet_4.6_Thinking_planning] 通过 settings 读取，消灭检讨健居安的 os.getenv
+    api_key = settings.gemini_api_key
     if not api_key:
         return translate_fallback(title, description)
         
