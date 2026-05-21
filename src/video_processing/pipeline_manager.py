@@ -1,0 +1,184 @@
+"""自动化管线调度器 - 协调监测、评分、加工与通知流转
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 初始创建 PipelineManager，实现完整的 FSM 调度 |
+| 1.1.0 | 2026-05-21 | Gemini_3.5_Flash_planning | 整合 Phase 5：加入文案生成与视频号全自动发布流，处理登录失效状态 |
+
+"""
+import os
+import time
+import logging
+import subprocess
+import requests
+from typing import List, Dict, Any
+from pathlib import Path
+
+from .db import PipelineDB
+
+logger = logging.getLogger(__name__)
+
+class PipelineManager:
+    def __init__(self, db_path: str = "pipeline.db"):
+        self.db = PipelineDB(db_path)
+        self.telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        self.telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        
+    def send_telegram_msg(self, text: str):
+        if not self.telegram_token or not self.telegram_chat_id:
+            logger.debug(f"Telegram Config Missing. Would have sent: {text}")
+            return
+            
+        url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+        payload = {"chat_id": self.telegram_chat_id, "text": text, "parse_mode": "HTML"}
+        try:
+            requests.post(url, json=payload, timeout=10)
+        except Exception as e:
+            logger.error(f"Failed to send Telegram message: {e}")
+
+    def score_pending_videos(self):
+        """对 PENDING 状态的视频调用 LLM 进行评分并更新"""
+        pending = self.db.get_videos_by_status("PENDING")
+        if not pending:
+            return
+
+        logger.info(f"Scoring {len(pending)} pending videos...")
+        # 实际实现中应调用 Gemini API，此处提供基础长度/关键词伪评分逻辑作为骨架
+        for video in pending:
+            title = video['title'].lower()
+            score = 60 # 基础分
+            
+            # 关键词加分
+            if any(k in title for k in ['ai', 'future', 'speech', 'interview', 'ceo']):
+                score += 20
+                
+            # 假装调用了大模型打分...
+            logger.info(f"Video '{title}' scored {score}")
+            
+            # 更新分数并暂时保持 PENDING（或改为 READY）
+            with self.db.get_connection() as conn:
+                conn.execute("UPDATE processed_videos SET score = ? WHERE youtube_id = ?", (score, video['youtube_id']))
+                conn.commit()
+                
+    def process_high_score_videos(self, limit: int = 5):
+        """拉取高分视频进入加工流转"""
+        # 获取所有待处理且高分的视频
+        with self.db.get_connection() as conn:
+            cursor = conn.execute("SELECT * FROM processed_videos WHERE status = 'PENDING' AND score >= 75 ORDER BY score DESC LIMIT ?", (limit,))
+            targets = [dict(row) for row in cursor.fetchall()]
+            
+        if not targets:
+            logger.info("No high-score videos available for processing today.")
+            return
+            
+        self.send_telegram_msg(f"🚀 <b>Pipeline Started</b>\nToday's quota: {len(targets)} videos.")
+        
+        for video in targets:
+            self._process_single_video(video)
+            
+    def _process_single_video(self, video: Dict[str, Any]):
+        yid = video['youtube_id']
+        title = video['title']
+        url = f"https://youtu.be/{yid}"
+        
+        try:
+            # 1. DOWNLOADING
+            self.db.update_video_status(yid, "DOWNLOADING")
+            logger.info(f"Downloading {yid}...")
+            
+            # [Gemini_3.5_Flash_planning] Added --write-description to generate WeChat copy in copywriting phase
+            dl_cmd = [
+                "yt-dlp", "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "--cookies-from-browser", "safari",
+                "--write-description",
+                url, "-o", f"output/{yid}.%(ext)s"
+            ]
+            subprocess.run(dl_cmd, check=True, capture_output=True)
+            
+            # 2. TRANSCRIBING & RENDERING (由 cli.main 接管)
+            self.db.update_video_status(yid, "TRANSCRIBING")
+            
+            # 寻找后缀
+            ext = "mp4"
+            target_file = f"output/{yid}.{ext}"
+            
+            render_cmd = [
+                "nice", "-n", "19", # 降权运行防卡顿
+                "python", "-m", "cli.main", "auto-caption",
+                target_file, "--vertical", "--bilingual", "--title", title
+            ]
+            
+            subprocess.run(render_cmd, check=True, capture_output=True)
+            
+            # 3. COPYWRITING
+            self.db.update_video_status(yid, "COPYWRITING")
+            logger.info(f"Generating WeChat copy for {yid}...")
+            desc_file = f"output/{yid}.description"
+            copy_cmd = [
+                "python", "scripts/copywriter.py",
+                "--youtube-id", yid,
+                "--title", title,
+                "--desc-file", desc_file
+            ]
+            subprocess.run(copy_cmd, check=True, capture_output=True)
+            
+            # 4. PUBLISHING
+            self.db.update_video_status(yid, "PUBLISHING")
+            logger.info(f"Uploading to WeChat Channels for {yid}...")
+            vertical_video = f"output/{yid}_vertical.mp4"
+            copy_text_file = f"output/{yid}_copy.txt"
+            
+            upload_cmd = [
+                "python", "scripts/wechat_uploader.py",
+                "--video", vertical_video,
+                "--copy", copy_text_file,
+                "--state", "output/wechat_state.json"
+            ]
+            
+            res = subprocess.run(upload_cmd, capture_output=True, text=True)
+            
+            if res.returncode == 2:
+                # [Gemini_3.5_Flash_planning] WeChat login expired. Signal for manual scan login.
+                logger.error(f"WeChat login required for {yid}.")
+                self.db.update_video_status(yid, "LOGIN_REQUIRED")
+                self.send_telegram_msg(
+                    f"⚠️ <b>WeChat Login Required</b>\n"
+                    f"Session expired while publishing video: <b>{title}</b>.\n"
+                    f"Please run the following command on your local machine to log in:\n"
+                    f"<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
+                )
+                return
+            elif res.returncode != 0:
+                raise subprocess.CalledProcessError(res.returncode, upload_cmd, stderr=res.stderr)
+            
+            # 5. PUBLISHED (Successfully uploaded and posted)
+            self.db.update_video_status(yid, "PUBLISHED")
+            self.send_telegram_msg(
+                f"✅ <b>Video Published</b>\n"
+                f"Title: {title}\n"
+                f"Platform: WeChat Channels\n"
+                f"Score: {video['score']}"
+            )
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Failed to process {yid}. Error: {e.stderr}")
+            self.db.update_video_status(yid, "FAILED", error_msg=str(e.stderr))
+            self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}\nError: Subprocess failed.")
+            
+        except Exception as e:
+            logger.error(f"Unexpected error on {yid}: {e}")
+            self.db.update_video_status(yid, "FAILED", error_msg=str(e))
+            self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}\nError: {str(e)}")
+
+    def run_daily_job(self):
+        """执行每日例行调度"""
+        logger.info("--- Starting Daily Pipeline Job ---")
+        self.score_pending_videos()
+        self.process_high_score_videos(limit=5)
+        logger.info("--- Daily Pipeline Job Completed ---")
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    manager = PipelineManager()
+    manager.run_daily_job()

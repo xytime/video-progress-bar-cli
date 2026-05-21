@@ -28,3 +28,8 @@ tqdm>=4.66.0
 openai-whisper>=20231117
 deep-translator>=1.11.0
 pysubs2>=1.6.0
+
+# 自动化与大模型 (Phase 5)
+playwright>=1.40.0
+google-generativeai>=0.3.0
+
