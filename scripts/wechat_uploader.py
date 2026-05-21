@@ -1,9 +1,10 @@
-"""WeChat Channels Automated Video Uploader - Automates posting videos and copy to WeChat Creator Platform.
+"""WeChat Channels Automated Video Uploader
 
 # Modification History
-| Version | Date | Author | Description |
-| --- | --- | --- | --- |
-| 1.0.0 | 2026-05-21 | Gemini_3.5_Flash_planning | Initial creation of the WeChat uploader script using Playwright |
+| Version | Date       | Author                              | Description                                              |
+|---------|------------|-------------------------------------|----------------------------------------------------------|
+| 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | Initial creation using Playwright                        |
+| 1.1.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 处理短标题/封面/分类/原创勾选；修复登录误判 URL优先策略 |
 """
 
 import os
@@ -19,14 +20,22 @@ logger = logging.getLogger("wechat_uploader")
 # 微信视频号发表地址
 WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 
-def run_uploader(video_path: str = None, copy_path: str = None, state_path: str = "output/wechat_state.json", 
-                 login_only: bool = False, headless: bool = True, draft: bool = False) -> int:
+def run_uploader(
+    video_path: str = None,
+    copy_path: str = None,
+    state_path: str = "output/wechat_state.json",
+    login_only: bool = False,
+    headless: bool = True,
+    draft: bool = False,
+    title_path: str = None,      # 短标题文件（≤ 28 字）
+    cover_path: str = None,      # 封面图文件 (JPEG)
+    category_path: str = None,   # 分类文件
+) -> int:
     """运行 Playwright 微信上传自动化"""
-    
-    # 确保状态目录存在
+
     state_file = Path(state_path)
     state_file.parent.mkdir(parents=True, exist_ok=True)
-    
+
     if not login_only:
         if not video_path or not Path(video_path).exists():
             logger.error(f"Video file not found: {video_path}")
@@ -34,14 +43,24 @@ def run_uploader(video_path: str = None, copy_path: str = None, state_path: str 
         if not copy_path or not Path(copy_path).exists():
             logger.error(f"Copy text file not found: {copy_path}")
             return 1
-            
-        video_abs = str(Path(video_path).resolve())
-        copy_text = Path(copy_path).read_text(encoding="utf-8")
+        video_abs  = str(Path(video_path).resolve())
+        copy_text  = Path(copy_path).read_text(encoding="utf-8")
+        short_title = (
+            Path(title_path).read_text(encoding="utf-8").strip()
+            if title_path and Path(title_path).exists() else None
+        )
+        cover_abs  = (
+            str(Path(cover_path).resolve())
+            if cover_path and Path(cover_path).exists() else None
+        )
+        category   = (
+            Path(category_path).read_text(encoding="utf-8").strip()
+            if category_path and Path(category_path).exists() else None
+        )
+        logger.info(f"short_title={short_title!r}  category={category!r}  cover={'yes' if cover_abs else 'no'}")
     else:
-        video_abs = None
-        copy_text = None
-        # [Gemini_3.5_Flash_planning] 登录时强制展示浏览器界面
-        headless = False
+        video_abs = copy_text = short_title = cover_abs = category = None
+        headless = False  # 登录时强制显示界面
 
     with sync_playwright() as p:
         logger.info("Launching browser...")
@@ -244,8 +263,124 @@ def run_uploader(video_path: str = None, copy_path: str = None, state_path: str 
         else:
             logger.warning("Could not find description input selector, trying fallback fill...")
             
-        # 4. 等待视频上传并处理完毕
-        logger.info("Waiting for video upload processing...")
+        # ── 3. 短标题 ─────────────────────────────────────────────────────────
+        if short_title:
+            logger.info(f"Setting short title: {short_title!r}")
+            title_selectors = [
+                "input[placeholder*='\u6807\u9898']",
+                "input[placeholder*='title']",
+                ".post-title input",
+                ".header-input",
+                "input[maxlength='30']",
+                "input[maxlength='28']",
+            ]
+            for sel in title_selectors:
+                try:
+                    loc = page.locator(sel)
+                    if loc.count() > 0 and loc.first.is_visible(timeout=1500):
+                        loc.first.fill(short_title)
+                        logger.info(f"Short title set via selector: {sel}")
+                        break
+                except Exception:
+                    continue
+            else:
+                logger.warning("Could not find title input field, skipping.")
+
+        # ── 4. 封面上传 ───────────────────────────────────────────────────────
+        if cover_abs:
+            logger.info(f"Uploading cover: {cover_abs}")
+            cover_set = False
+            # 尝试直接找 accept=image 的 file input
+            try:
+                n = page.evaluate("() => document.querySelectorAll('input[type=\"file\"][accept*=\"image\"]').length")
+                if n > 0:
+                    page.locator("input[type='file'][accept*='image']").first.set_input_files(cover_abs)
+                    logger.info("Cover uploaded via image file input.")
+                    cover_set = True
+            except Exception as e:
+                logger.warning(f"Cover direct input failed: {e}")
+            # filechooser 兜底
+            if not cover_set:
+                try:
+                    cover_btn_sels = [
+                        "button:has-text('\u4e0a\u4f20\u5c01\u9762')",
+                        ".cover-upload", ".thumb-upload", "[class*='cover']",
+                    ]
+                    with page.expect_file_chooser(timeout=6000) as fc_info:
+                        for sel in cover_btn_sels:
+                            try:
+                                loc = page.locator(sel)
+                                if loc.count() > 0 and loc.first.is_visible():
+                                    loc.first.click()
+                                    break
+                            except Exception:
+                                continue
+                    fc_info.value.set_files(cover_abs)
+                    logger.info("Cover uploaded via file chooser.")
+                except Exception as e:
+                    logger.warning(f"Cover upload failed (non-fatal): {e}")
+
+        # ── 5. 原创声明 ───────────────────────────────────────────────────────
+        logger.info("Checking original declaration checkbox...")
+        original_selectors = [
+            "input[type='checkbox'][class*='original']",
+            "label:has-text('\u539f\u521b') input[type='checkbox']",
+            ".original-declaration input",
+            "input[type='checkbox']:near(:text('\u539f\u521b'))",
+        ]
+        original_checked = False
+        for sel in original_selectors:
+            try:
+                loc = page.locator(sel)
+                if loc.count() > 0:
+                    if not loc.first.is_checked():
+                        loc.first.check()
+                    logger.info(f"Original declaration checked via: {sel}")
+                    original_checked = True
+                    break
+            except Exception:
+                continue
+        if not original_checked:
+            logger.warning("Could not find original declaration checkbox, skipping.")
+
+        # ── 6. 分类选择 ───────────────────────────────────────────────────────
+        if category:
+            logger.info(f"Selecting category: {category!r}")
+            cat_set = False
+            # 尝试 select 元素
+            for sel in ["select[class*='category']", "select[class*='type']", "select"]:
+                try:
+                    loc = page.locator(sel)
+                    if loc.count() > 0 and loc.first.is_visible(timeout=1500):
+                        loc.first.select_option(label=category)
+                        logger.info(f"Category set via select: {sel}")
+                        cat_set = True
+                        break
+                except Exception:
+                    continue
+            # 尝试点击式下拉（微信常用 Vue 组件）
+            if not cat_set:
+                try:
+                    # 点击分类触发器
+                    for sel in [".category-selector", "[class*='category']",
+                                "button:has-text('\u5206\u7c7b')", "[placeholder*='\u5206\u7c7b']"]:
+                        loc = page.locator(sel)
+                        if loc.count() > 0 and loc.first.is_visible():
+                            loc.first.click()
+                            page.wait_for_timeout(500)
+                            # 点击对应选项
+                            opt = page.locator(f"li:has-text('{category}'), div:has-text('{category}')")
+                            if opt.count() > 0:
+                                opt.first.click()
+                                logger.info(f"Category '{category}' selected via dropdown.")
+                                cat_set = True
+                            break
+                except Exception as e:
+                    logger.warning(f"Category dropdown failed: {e}")
+            if not cat_set:
+                logger.warning(f"Could not set category '{category}', skipping.")
+
+        # ── 7. 等待视频上传完成 ────────────────────────────────────────────────
         upload_finished = False
         for i in range(60): # 60 * 5s = 300s
             page.wait_for_timeout(5000)
@@ -314,25 +449,32 @@ def run_uploader(video_path: str = None, copy_path: str = None, state_path: str 
 
 def main():
     parser = argparse.ArgumentParser(description="Upload and publish videos to WeChat Channels.")
-    parser.add_argument("--video", help="Path to vertical MP4 video file")
-    parser.add_argument("--copy", help="Path to WeChat copy description text file")
-    parser.add_argument("--state", default="output/wechat_state.json", help="Path to save/load Playwright state")
-    parser.add_argument("--login-only", action="store_true", help="Launch GUI to perform QR code login scan, then exit")
-    parser.add_argument("--no-headless", dest="headless", action="store_false", help="Run browser in visible GUI mode")
-    parser.add_argument("--draft", action="store_true", help="Save the video as draft instead of publishing")
-    
+    parser.add_argument("--video",         help="Path to vertical MP4 video file")
+    parser.add_argument("--copy",          help="Path to WeChat copy description text file")
+    parser.add_argument("--title-file",    help="Path to short title text file (<=28 chars)")
+    parser.add_argument("--cover",         help="Path to cover image JPEG file")
+    parser.add_argument("--category-file", help="Path to category text file")
+    parser.add_argument("--state",  default="output/wechat_state.json",
+                        help="Path to save/load Playwright session state")
+    parser.add_argument("--login-only",  action="store_true")
+    parser.add_argument("--no-headless", dest="headless", action="store_false")
+    parser.add_argument("--draft",       action="store_true")
     parser.set_defaults(headless=True)
     args = parser.parse_args()
-    
+
     code = run_uploader(
-        video_path=args.video,
-        copy_path=args.copy,
-        state_path=args.state,
-        login_only=args.login_only,
-        headless=args.headless,
-        draft=args.draft
+        video_path    = args.video,
+        copy_path     = args.copy,
+        title_path    = args.title_file,
+        cover_path    = args.cover,
+        category_path = args.category_file,
+        state_path    = args.state,
+        login_only    = args.login_only,
+        headless      = args.headless,
+        draft         = args.draft,
     )
     sys.exit(code)
+
 
 if __name__ == "__main__":
     main()
