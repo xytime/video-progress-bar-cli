@@ -64,24 +64,44 @@ def run_uploader(
 
     with sync_playwright() as p:
         logger.info("Launching browser...")
-        # 强制使用 chromium 并指定参数以支持视频格式与稳定上传
         browser = p.chromium.launch(
             headless=headless,
-            args=["--disable-web-security", "--no-sandbox"]
+            args=[
+                "--disable-web-security",
+                "--no-sandbox",
+                # 反检测：隐藏 Headless 特征
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--window-size=1280,800",
+            ]
         )
-        
+
         # 加载 Cookie 状态
         context_opts = {
             "viewport": {"width": 1280, "height": 800},
-            "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            # 使用真实 Chrome UA（与保存 Session 时一致）
+            "user_agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
         }
         if state_file.exists():
             logger.info(f"Loading session state from: {state_file}")
             context_opts["storage_state"] = str(state_file)
-            
+
         context = browser.new_context(**context_opts)
+
+        # 反检测：覆盖 navigator.webdriver = false（必须在 goto 之前注入）
+        context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+            });
+            window.chrome = { runtime: {} };
+        """)
+
         page = context.new_page()
-        
+
         logger.info(f"Navigating to WeChat Channels creation page: {WECHAT_CREATE_URL}")
         page.goto(WECHAT_CREATE_URL, wait_until="domcontentloaded")
         # 等待页面完全渲染（Vue SPA 需额外时间）
@@ -90,7 +110,15 @@ def run_uploader(
         except Exception:
             pass
         page.wait_for_timeout(5000)
-        
+
+        # 调试截图：永远保存，方便排查 headless 登录状态
+        dbg_pre = state_file.parent / "debug_pre_login_check.png"
+        try:
+            page.screenshot(path=str(dbg_pre))
+            logger.info(f"Pre-login-check screenshot: {dbg_pre}")
+        except Exception:
+            pass
+
         # ── 登录状态检测（URL 优先，防止 Vue SPA 未渲染完触发误判）────────────
         current_url = page.url
         logger.info(f"Current URL after load: {current_url}")
