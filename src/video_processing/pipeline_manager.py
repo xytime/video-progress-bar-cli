@@ -6,23 +6,41 @@
 | 1.0.0 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 初始创建 PipelineManager，实现完整的 FSM 调度 |
 | 1.1.0 | 2026-05-21 | Gemini_3.5_Flash_planning | 整合 Phase 5：加入文案生成与视频号全自动发布流，处理登录失效状态 |
 | 1.2.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 地基重构：消灭 2 处裸 SQL + os.environ 泄漏，统一通过 settings 和 DAL 方法 |
+| 1.3.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 专项审查修复：路径常量提升为类级、os 移至顶层导入、动态检测下载扩展名 |
 
 """
-import time
+import os
 import logging
 import subprocess
 import requests
-from typing import List, Dict, Any
+from typing import Dict, Any
 from pathlib import Path
 
 from .db import PipelineDB
-from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] 统一通过 settings 读取配置
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# [Claude_Sonnet_4.6_Thinking_planning] 下载产物中排除的非视频后缀
+_NON_VIDEO_SUFFIXES = {'.description', '.json', '.ytdl', '.part', '.jpg', '.png', '.webp'}
+# 系统代理 key（供 yt-dlp 子进程清除，防止代理未运行时 connection refused）
+_PROXY_KEYS = frozenset({
+    'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+    'http_proxy', 'https_proxy', 'all_proxy',
+})
+
+
 class PipelineManager:
+    # [Claude_Sonnet_4.6_Thinking_planning] BUG-4 修复：路径常量提升为类级，避免每次调用重算
+    _PRJ_ROOT    = Path(__file__).parent.parent.parent
+    _SRC_DIR     = _PRJ_ROOT / "src"
+    _VENV_PYTHON = str(_PRJ_ROOT / ".venv" / "bin" / "python")
+    _VENV_YTDLP  = str(_PRJ_ROOT / ".venv" / "bin" / "yt-dlp")
+    _OUT_DIR     = _PRJ_ROOT / "output"
+
     def __init__(self, db_path: str = "pipeline.db"):
         self.db = PipelineDB(db_path)
+        self._OUT_DIR.mkdir(exist_ok=True)
         # [Claude_Sonnet_4.6_Thinking_planning] 从 settings 注入，不直接访问 os.environ
         self.telegram_token = settings.telegram_bot_token
         self.telegram_chat_id = settings.telegram_chat_id
@@ -89,74 +107,73 @@ class PipelineManager:
         title = video['title']
         url   = f"https://youtu.be/{yid}"
 
-        # [Claude_Sonnet_4.6_Thinking_planning] 绝对路径常量，防止 CWD 漂移导致的
-        # "python not found" / "ModuleNotFoundError: pydantic_settings" 等问题
-        PRJ_ROOT    = Path(__file__).parent.parent.parent
-        SRC_DIR     = PRJ_ROOT / "src"
-        VENV_PYTHON = str(PRJ_ROOT / ".venv" / "bin" / "python")
-        VENV_YTDLP  = str(PRJ_ROOT / ".venv" / "bin" / "yt-dlp")
-        OUT_DIR     = PRJ_ROOT / "output"
-        OUT_DIR.mkdir(exist_ok=True)
-
         try:
             # 1. DOWNLOADING
             self.db.update_video_status(yid, "DOWNLOADING")
             logger.info(f"Downloading {yid}...")
 
             dl_cmd = [
-                VENV_YTDLP,
+                self._VENV_YTDLP,
                 "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
                 "--cookies-from-browser", "safari",
                 "--write-description",
-                "--remote-components", "ejs:github",   # deno EJS JS challenge solver
-                url, "-o", str(OUT_DIR / f"{yid}.%(ext)s"),
+                "--remote-components", "ejs:github",
+                url, "-o", str(self._OUT_DIR / f"{yid}.%(ext)s"),
             ]
-            # 清除代理环境变量，防止系统代理未启动时导致 connection refused
-            # yt-dlp 凭 Safari cookies 直连 YouTube，无需走额外代理
-            import os as _os
-            _PROXY_KEYS = {'HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'}
-            env_no_proxy = {k: v for k, v in _os.environ.items() if k not in _PROXY_KEYS}
+            # BUG-3 修复（proxy 清除）：移至模块级常量，不再每次 import os
+            env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
             subprocess.run(dl_cmd, check=True, capture_output=True,
-                           cwd=str(PRJ_ROOT), env=env_no_proxy)
+                           cwd=str(self._PRJ_ROOT), env=env_no_proxy)
 
+            # BUG-1 修复：动态查找实际下载文件，不硬编码 .mp4
+            candidates = [
+                f for f in self._OUT_DIR.glob(f"{yid}.*")
+                if f.suffix not in _NON_VIDEO_SUFFIXES
+            ]
+            if not candidates:
+                raise FileNotFoundError(
+                    f"yt-dlp completed but no video file found for {yid} in {self._OUT_DIR}"
+                )
+            target_file = str(candidates[0])
+            logger.info(f"Downloaded file: {target_file}")
 
             # 2. TRANSCRIBING & RENDERING（cli.main 需要 PYTHONPATH=src）
             self.db.update_video_status(yid, "TRANSCRIBING")
 
-            target_file = str(OUT_DIR / f"{yid}.mp4")
             render_cmd = [
                 "nice", "-n", "19",
-                VENV_PYTHON, "-m", "cli.main", "auto-caption",
+                self._VENV_PYTHON, "-m", "cli.main", "auto-caption",
                 target_file, "--vertical", "--bilingual", "--title", title,
             ]
-            render_env = _os.environ.copy()
-            render_env["PYTHONPATH"] = str(SRC_DIR)
+            render_env = os.environ.copy()
+            render_env["PYTHONPATH"] = str(self._SRC_DIR)
             subprocess.run(render_cmd, check=True, capture_output=True,
-                           cwd=str(PRJ_ROOT), env=render_env)
+                           cwd=str(self._PRJ_ROOT), env=render_env)
+
 
             # 3. COPYWRITING
             self.db.update_video_status(yid, "COPYWRITING")
             logger.info(f"Generating WeChat copy for {yid}...")
-            desc_file = str(OUT_DIR / f"{yid}.description")
+            desc_file = str(self._OUT_DIR / f"{yid}.description")
             copy_cmd = [
-                VENV_PYTHON, str(PRJ_ROOT / "scripts" / "copywriter.py"),
+                self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts" / "copywriter.py"),
                 "--youtube-id", yid,
                 "--title", title,
                 "--desc-file", desc_file,
             ]
-            subprocess.run(copy_cmd, check=True, capture_output=True, cwd=str(PRJ_ROOT))
+            subprocess.run(copy_cmd, check=True, capture_output=True, cwd=str(self._PRJ_ROOT))
 
             # 4. PUBLISHING
             self.db.update_video_status(yid, "PUBLISHING")
             logger.info(f"Uploading to WeChat Channels for {yid}...")
-            vertical_video  = str(OUT_DIR / f"{yid}_vertical.mp4")
-            copy_text_file  = str(OUT_DIR / f"{yid}_copy.txt")
+            vertical_video  = str(self._OUT_DIR / f"{yid}_vertical.mp4")
+            copy_text_file  = str(self._OUT_DIR / f"{yid}_copy.txt")
 
             upload_cmd = [
-                VENV_PYTHON, str(PRJ_ROOT / "scripts" / "wechat_uploader.py"),
+                self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts" / "wechat_uploader.py"),
                 "--video", vertical_video,
                 "--copy", copy_text_file,
-                "--state", str(OUT_DIR / "wechat_state.json"),
+                "--state", str(self._OUT_DIR / "wechat_state.json"),
             ]
 
             res = subprocess.run(upload_cmd, capture_output=True, text=True)

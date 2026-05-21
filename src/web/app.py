@@ -371,24 +371,24 @@ def process_video_now(youtube_id: str):
 @app.post("/api/videos/{youtube_id}/retry")
 def retry_video(youtube_id: str):
     """
-    重试失败的视频：重置状态为 PENDING + 清除错误信息。
-    若当前分数 >= 75，立即自动重新触发管线，无需任何额外操作。
+    重试/强制重置视频状态为 PENDING。
+    - FAILED / LOGIN_REQUIRED：正常重试，清除错误信息
+    - DOWNLOADING/TRANSCRIBING/COPYWRITING/PUBLISHING：服务器重启后卡死的任务，强制重置
+    若当前分数 >= 75，重置后立即自动重新触发。
     """
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
 
-    retryable = {"FAILED", "LOGIN_REQUIRED"}
+    retryable = {"FAILED", "LOGIN_REQUIRED", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
     if video.get("status") not in retryable:
         return {
             "success": False,
-            "error": f"只有 FAILED / LOGIN_REQUIRED 状态可重试（当前：{video['status']}）"
+            "error": f"只有 FAILED / LOGIN_REQUIRED / 各活跃状态可重置（当前：{video['status']}）"
         }
 
-    # 重置状态，清空错误信息
     db.update_video_status(youtube_id, "PENDING", error_msg=None)
 
-    # 分数已 >= 75 → 立即重新触发，不需要用户再做任何操作
     triggered = False
     if video.get("score", 0) >= 75:
         fresh = db.get_video_by_youtube_id(youtube_id)
@@ -411,16 +411,17 @@ def run_full_pipeline():
         src_dir  = str(prj_root / "src")
         log_path = prj_root / "output" / "pipeline.log"
         log_path.parent.mkdir(exist_ok=True)
+        # BUG-5 修复：清除代理环境变量，防止代理未运行时 monitor_channels 失败
+        _proxy = frozenset({'HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'})
+        env_clean = {k: v for k, v in os.environ.items() if k not in _proxy}
 
         import subprocess as sp
         with open(log_path, "a") as f:
             f.write("\n=== Web-triggered pipeline run ===\n")
-            # Step 1: monitor—直接作为脚本运行（无相对导入）
             sp.run([python, str(prj_root / "scripts" / "monitor_channels.py")],
-                   cwd=str(prj_root), stdout=f, stderr=f)
-            # Step 2: pipeline_manager—必须用 -m 以支持相对导入
+                   cwd=str(prj_root), stdout=f, stderr=f, env=env_clean)
             sp.run([python, "-m", "video_processing.pipeline_manager"],
-                   cwd=src_dir, stdout=f, stderr=f)
+                   cwd=src_dir, stdout=f, stderr=f, env=env_clean)
 
     threading.Thread(target=_run, daemon=True, name="full-pipeline").start()
     return {"success": True, "message": "全量管线已在后台启动，请关注仪表盘进度"}
