@@ -43,8 +43,19 @@ echo -e "    - 扫码登录专用命令（当登录失效或首次运行，会�
 # 2. 期权分析系统（关联项目：OptionSense）
 echo -e "\n${BOLD}${YELLOW}[2] 期权回测系统 (OptionSense) - 全局别名${RESET}"
 echo -e "在您的 Shell 环境中配置的全局快捷脚本："
-echo -e "  ${GREEN}backtest${RESET}   - 快速运行 V4 期权单次历史回测脚本"
-echo -e "  ${GREEN}batchtest${RESET}  - 快速运行 V4 期权批量回测/参数扫描脚本"
+echo -e ""
+echo -e "  ${BOLD}Web 界面管理 (端口 5173 + 8080 + 8001):${RESET}"
+echo -e "    ${CYAN}ui start${RESET}     - 启动前端 + API + 监控服务（含健康验证）"
+echo -e "    ${CYAN}ui stop${RESET}      - 停止以上所有服务"
+echo -e "    ${CYAN}ui restart${RESET}   - 重启所有服务"
+echo -e "    ${CYAN}ui status${RESET}    - 查看各服务运行状态（含 CORE 层探针）"
+echo -e "    ${CYAN}ui check${RESET}     - 同 status（真实端口探针验证）"
+echo -e ""
+echo -e "  ${BOLD}回测与分析:${RESET}"
+echo -e "    ${GREEN}backtest${RESET}     - 快速运行 V4 期权单次历史回测脚本"
+echo -e "    ${GREEN}batchtest${RESET}    - 快速运行 V4 期权批量回测/参数扫描脚本"
+echo -e "    ${GREEN}live_engine${RESET}  - 实盘引擎控制器: status | start [MODE] | stop | restart [MODE]"
+echo -e "    ${GREEN}option${RESET}       - 手动下单: option buy/sell \"SPY 260507 735.00P\""
 
 # 3. 推荐设置提示
 echo -e "\n${BOLD}${YELLOW}[3] 推荐本地 Shell 配置 (~/.zshrc)${RESET}"

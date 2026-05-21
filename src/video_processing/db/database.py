@@ -177,3 +177,29 @@ class PipelineDB:
                 (limit,)
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def delete_channel(self, channel_id: str) -> bool:
+        """从频道白名单中删除指定频道。"""
+        with self.get_connection() as conn:
+            try:
+                conn.execute(
+                    "DELETE FROM recommended_channels WHERE channel_id = ?",
+                    (channel_id,)
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                self._logger.error(f"delete_channel failed for {channel_id}: {e}")
+                return False
+
+    def get_channel_by_id(self, channel_id: str) -> Optional[Dict[str, Any]]:
+        """按 channel_id 精确查找频道记录，用于重复检查。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM recommended_channels WHERE channel_id = ?",
+                (channel_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+

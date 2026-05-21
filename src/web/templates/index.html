@@ -208,17 +208,63 @@
     @keyframes pulse-orange { 0%,100%{box-shadow:0 0 0 0 rgba(249,115,22,.5)} 50%{box-shadow:0 0 0 5px rgba(249,115,22,0)} }
     @keyframes pulse-red    { 0%,100%{box-shadow:0 0 0 0 rgba(248,113,113,.5)} 50%{box-shadow:0 0 0 5px rgba(248,113,113,0)} }
 
-    /* ── Channel List ── */
     .channel-item {
       display: flex; align-items: center; justify-content: space-between;
-      padding: 14px 22px;
+      padding: 12px 22px;
       border-bottom: 1px solid rgba(255,255,255,0.04);
     }
     .channel-item:last-child { border-bottom: none; }
     .channel-name { font-size: 13px; font-weight: 500; }
     .channel-id { font-size: 11px; color: var(--text3); font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
+    .channel-actions { display: flex; align-items: center; gap: 8px; }
+    .btn-delete {
+      background: none; border: 1px solid rgba(248,113,113,0.25); color: var(--red);
+      font-size: 11px; font-weight: 600; cursor: pointer;
+      padding: 3px 9px; border-radius: 6px;
+      transition: all 0.15s;
+      font-family: inherit;
+    }
+    .btn-delete:hover { background: rgba(248,113,113,0.12); border-color: var(--red); }
+
+    /* ── Add Channel Form ── */
+    .add-channel-form {
+      padding: 16px 22px;
+      border-top: 1px solid var(--border);
+      background: rgba(0,0,0,0.15);
+    }
+    .add-channel-form-title {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.7px; color: var(--text3); margin-bottom: 10px;
+    }
+    .add-channel-row { display: flex; gap: 8px; }
+    .add-channel-input {
+      flex: 1; background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border); border-radius: var(--radius-sm);
+      color: var(--text); font-size: 12px; font-family: inherit;
+      padding: 8px 12px; outline: none;
+      transition: border-color 0.2s;
+    }
+    .add-channel-input::placeholder { color: var(--text3); }
+    .add-channel-input:focus { border-color: var(--accent); }
+    .btn-add {
+      background: rgba(124,110,247,0.15); border: 1px solid rgba(124,110,247,0.3);
+      color: var(--accent2); font-size: 12px; font-weight: 600;
+      padding: 8px 16px; border-radius: var(--radius-sm); cursor: pointer;
+      font-family: inherit; white-space: nowrap;
+      transition: all 0.15s;
+    }
+    .btn-add:hover:not(:disabled) { background: rgba(124,110,247,0.25); }
+    .btn-add:disabled { opacity: 0.5; cursor: not-allowed; }
+    .add-channel-feedback {
+      font-size: 11px; margin-top: 8px; min-height: 16px;
+      transition: all 0.3s;
+    }
+    .add-channel-feedback.ok  { color: var(--green); }
+    .add-channel-feedback.err { color: var(--red); }
+    .add-channel-feedback.loading { color: var(--text3); }
+
     .empty-state {
-      padding: 40px 22px; text-align: center;
+      padding: 32px 22px; text-align: center;
       color: var(--text3); font-size: 13px;
     }
     .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
@@ -407,10 +453,19 @@
       <div class="panel-header">
         <div class="panel-title">📡 频道白名单 <span class="panel-badge" id="channel-count">0</span></div>
       </div>
-      <div class="panel-body" id="channel-list">
-        <div class="empty-state">
-          <div class="empty-icon">📻</div>
-          暂无已批准的频道
+      <div class="panel-body">
+        <div id="channel-list">
+          <div class="empty-state"><div class="empty-icon">📻</div>暂无已批准的频道</div>
+        </div>
+        <!-- Add Channel Form -->
+        <div class="add-channel-form">
+          <div class="add-channel-form-title">＋ 添加监控频道</div>
+          <div class="add-channel-row">
+            <input id="channel-url-input" class="add-channel-input"
+              type="text" placeholder="YouTube 频道 URL，例：https://www.youtube.com/@TheVerge" />
+            <button id="btn-add-channel" class="btn-add" onclick="addChannel()">验证并添加</button>
+          </div>
+          <div id="add-channel-feedback" class="add-channel-feedback"></div>
         </div>
       </div>
     </div>
@@ -510,7 +565,7 @@
       document.getElementById('channel-count').textContent = d.total_approved;
       const list = document.getElementById('channel-list');
       if (!d.approved || d.approved.length === 0) {
-        list.innerHTML = '<div class="empty-state"><div class="empty-icon">📻</div>暂无已批准的频道</div>';
+        list.innerHTML = '<div class="empty-state"><div class="empty-icon">📻</div>暂无已批准的频道，请在下方添加</div>';
         return;
       }
       list.innerHTML = d.approved.map(c => `
@@ -519,11 +574,64 @@
             <div class="channel-name">${c.channel_name}</div>
             <div class="channel-id">${c.channel_id}</div>
           </div>
-          ${statusBadge(c.status)}
+          <div class="channel-actions">
+            ${statusBadge(c.status)}
+            <button class="btn-delete" onclick="deleteChannel('${c.channel_id}', '${c.channel_name.replace(/'/g,"\\'")}')">删除</button>
+          </div>
         </div>
       `).join('');
     } catch(e) { console.warn('channels fetch error', e); }
   }
+
+  async function deleteChannel(channelId, channelName) {
+    if (!confirm(`确认要从白名单中删除「${channelName}」吗？`)) return;
+    try {
+      const r = await fetch(`/api/channels/${channelId}`, { method: 'DELETE' });
+      const d = await r.json();
+      if (d.success) await fetchChannels();
+    } catch(e) { console.warn('delete channel error', e); }
+  }
+
+  async function addChannel() {
+    const input = document.getElementById('channel-url-input');
+    const btn   = document.getElementById('btn-add-channel');
+    const fb    = document.getElementById('add-channel-feedback');
+    const url   = input.value.trim();
+    if (!url) { fb.textContent = '请输入频道 URL'; fb.className = 'add-channel-feedback err'; return; }
+
+    btn.disabled = true;
+    fb.textContent = '🔍 正在通过 yt-dlp 验证频道（约 5~15 秒）…';
+    fb.className = 'add-channel-feedback loading';
+
+    try {
+      const r = await fetch('/api/channels/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        fb.textContent = `✅ 已添加：${d.channel_name} (${d.channel_id})`;
+        fb.className = 'add-channel-feedback ok';
+        input.value = '';
+        await fetchChannels();
+      } else {
+        fb.textContent = `❌ ${d.error}`;
+        fb.className = 'add-channel-feedback err';
+      }
+    } catch(e) {
+      fb.textContent = '❌ 网络请求失败';
+      fb.className = 'add-channel-feedback err';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  // Enter 键触发添加
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('channel-url-input')
+      .addEventListener('keydown', e => { if (e.key === 'Enter') addChannel(); });
+  });
 
   async function refresh() {
     await Promise.all([fetchStats(), fetchActivity(), fetchChannels()]);
