@@ -304,8 +304,11 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         
         filter_str = ";".join(filters)
         
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_exe, "-y",
             "-i", str(self.input_path),
         ]
         
