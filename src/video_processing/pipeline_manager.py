@@ -108,6 +108,7 @@ class PipelineManager:
                 "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
                 "--cookies-from-browser", "safari",
                 "--write-description",
+                "--remote-components", "ejs:github",   # deno EJS JS challenge solver
                 url, "-o", str(OUT_DIR / f"{yid}.%(ext)s"),
             ]
             subprocess.run(dl_cmd, check=True, capture_output=True, cwd=str(PRJ_ROOT))

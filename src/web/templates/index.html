@@ -377,7 +377,18 @@
       white-space: pre-wrap; word-break: break-all;
       max-height: 180px; overflow-y: auto;
       line-height: 1.6;
+      position: relative;
     }
+    .btn-copy-err {
+      position: absolute; top: 8px; right: 8px;
+      background: rgba(248,113,113,0.15); border: 1px solid rgba(248,113,113,0.3);
+      color: var(--red); font-size: 10px; font-weight: 600;
+      padding: 2px 8px; border-radius: 4px; cursor: pointer;
+      font-family: inherit; transition: all 0.2s;
+    }
+    .btn-copy-err:hover { background: rgba(248,113,113,0.28); }
+    .btn-copy-err.copied { color: var(--green); border-color: var(--green); background: rgba(52,211,153,0.12); }
+
     .toggle-error {
       font-size: 10px; color: var(--red); cursor: pointer;
       text-decoration: underline; text-underline-offset: 2px;
@@ -708,8 +719,13 @@
           ? `<span class="toggle-error" onclick="toggleError('${v.youtube_id}')">▼ 查看错误</span>`
           : '';
         const errorRow = hasError ? `
-          <tr id="err-${v.youtube_id}" class="error-row" style="display:none">
-            <td colspan="4"><div class="error-detail">${escapeHtml(errMsg)}</div></td>
+          <tr id="err-${v.youtube_id}" class="error-row" style="display:none" data-err="${escapeAttr(errMsg)}">
+            <td colspan="4">
+              <div class="error-detail">
+                <button class="btn-copy-err" onclick="copyError('${v.youtube_id}')" id="copy-${v.youtube_id}">📋 复制</button>
+                ${escapeHtml(errMsg)}
+              </div>
+            </td>
           </tr>` : '';
         return `
           <tr>
@@ -783,6 +799,30 @@
     return String(str)
       .replace(/&/g,'&amp;').replace(/</g,'&lt;')
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function escapeAttr(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  async function copyError(youtubeId) {
+    const row = document.getElementById(`err-${youtubeId}`);
+    if (!row) return;
+    const text = row.dataset.err || '';
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch(e) {
+      // fallback
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
+    }
+    const btn = document.getElementById(`copy-${youtubeId}`);
+    if (btn) {
+      btn.textContent = '✅ 已复制'; btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = '📋 复制'; btn.classList.remove('copied'); }, 1500);
+    }
   }
 
   async function runPipeline() {
