@@ -471,7 +471,29 @@
     </div>
   </div>
 
+  <!-- 手动添加视频面板 -->
+  <div class="panel" style="margin-bottom:20px;">
+    <div class="panel-header">
+      <div class="panel-title">🎬 手动添加视频到队列</div>
+      <div style="font-size:11px;color:var(--text3);">粘贴 YouTube 链接 → yt-dlp 验证 → 自动入队 PENDING</div>
+    </div>
+    <div class="panel-body" style="padding:20px 22px;">
+      <!-- 输入行 -->
+      <div style="display:flex;gap:10px;align-items:center;">
+        <input id="video-url-input" class="add-channel-input"
+          style="font-size:13px;padding:10px 14px;"
+          type="text"
+          placeholder="例：https://www.youtube.com/watch?v=dQw4w9WgXcQ 或 https://youtu.be/dQw4w9WgXcQ" />
+        <button id="btn-add-video" class="btn-add"
+          style="padding:10px 20px;font-size:13px;white-space:nowrap;"
+          onclick="addVideo()">验证并加入队列</button>
+      </div>
+      <div id="add-video-feedback" class="add-channel-feedback" style="margin-top:10px;font-size:12px;"></div>
+    </div>
+  </div>
+
   <footer>Video Pipeline Control Center · Auto-refresh every 3s · <a href="/api/stats" target="_blank" style="color:var(--accent2);text-decoration:none;">/api/stats</a></footer>
+
 </div>
 
 <script>
@@ -627,11 +649,59 @@
     }
   }
 
-  // Enter 键触发添加
+  // Enter 键触发添加（频道 + 视频两个输入框）
   document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('channel-url-input')
       .addEventListener('keydown', e => { if (e.key === 'Enter') addChannel(); });
+    document.getElementById('video-url-input')
+      .addEventListener('keydown', e => { if (e.key === 'Enter') addVideo(); });
   });
+
+  async function addVideo() {
+    const input = document.getElementById('video-url-input');
+    const btn   = document.getElementById('btn-add-video');
+    const fb    = document.getElementById('add-video-feedback');
+    const url   = input.value.trim();
+
+    if (!url) {
+      fb.textContent = '请输入 YouTube 视频 URL';
+      fb.className = 'add-channel-feedback err';
+      return;
+    }
+
+    btn.disabled = true;
+    fb.textContent = '🔍 正在通过 yt-dlp 验证视频（约 5~15 秒）…';
+    fb.className = 'add-channel-feedback loading';
+
+    try {
+      const r = await fetch('/api/videos/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const d = await r.json();
+
+      if (d.success) {
+        fb.textContent = `✅ 已加入队列：${d.title}（来自 ${d.channel_name}）`;
+        fb.className = 'add-channel-feedback ok';
+        input.value = '';
+        // 立即刷新活动流，让用户看到新入队的视频
+        await fetchActivity();
+        await fetchStats();
+      } else if (d.already_exists) {
+        fb.textContent = `ℹ️ ${d.error}`;
+        fb.className = 'add-channel-feedback loading';
+      } else {
+        fb.textContent = `❌ ${d.error}`;
+        fb.className = 'add-channel-feedback err';
+      }
+    } catch (e) {
+      fb.textContent = '❌ 网络请求失败，请确认仪表盘服务正在运行';
+      fb.className = 'add-channel-feedback err';
+    } finally {
+      btn.disabled = false;
+    }
+  }
 
   async function refresh() {
     await Promise.all([fetchStats(), fetchActivity(), fetchChannels()]);
