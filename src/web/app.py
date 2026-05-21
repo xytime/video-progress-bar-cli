@@ -267,13 +267,13 @@ def add_video_manual(req: AddVideoRequest):
             "current_status": existing["status"],
         }
 
-    # ── 4. 写入队列（PENDING，评分 0，等待管线调度打分）─────────────
+    # ── 4. 写入队列（手动添加默认 score=100，直接跳过 LLM 打分阶段，最高优先级）
     # 若频道不在白名单则临时注册（不影响正常监控逻辑）
     if not db.get_channel_by_id(channel_id):
         db.add_channel(channel_id, channel_name,
                        status="APPROVED", reason="Auto-registered via manual video add")
 
-    db.add_video(video_id, title, channel_id, score=0)
+    db.add_video(video_id, title, channel_id, score=100)  # 手动添加 = 最高优先级
     return {
         "success": True,
         "video_id": video_id,
@@ -281,6 +281,36 @@ def add_video_manual(req: AddVideoRequest):
         "channel_name": channel_name,
     }
 
+
+
+# ── 优先级调整 API ────────────────────────────────────────────────────────
+class PriorityRequest(BaseModel):
+    action: str          # "increase" | "decrease" | "set"
+    value: Optional[int] = None   # 仅 action="set" 时使用
+
+
+@app.patch("/api/videos/{youtube_id}/priority")
+def update_video_priority(youtube_id: str, req: PriorityRequest):
+    """
+    调整视频优先级（即 score 字段）。
+    score >= 75 的 PENDING 视频将在下次 job run 时被管线拾取。
+    """
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+
+    current = video.get("score", 0)
+    if req.action == "increase":
+        new_score = min(100, current + 10)
+    elif req.action == "decrease":
+        new_score = max(0, current - 10)
+    elif req.action == "set" and req.value is not None:
+        new_score = max(0, min(100, req.value))
+    else:
+        return {"success": False, "error": f"未知操作：{req.action}"}
+
+    db.update_video_score(youtube_id, new_score)
+    return {"success": True, "youtube_id": youtube_id, "score": new_score}
 
 
 if __name__ == "__main__":

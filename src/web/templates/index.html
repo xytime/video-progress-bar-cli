@@ -318,6 +318,32 @@
     .step-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text3); text-align: center; }
     .step.active .step-label { color: var(--yellow); }
     .step.done  .step-label { color: var(--green); }
+    .step-desc {
+      font-size: 9px; color: var(--text3); text-align: center;
+      margin-top: 4px; line-height: 1.4; max-width: 80px;
+    }
+    .step.active .step-desc { color: rgba(251,191,36,0.7); }
+    .step.done  .step-desc  { color: rgba(52,211,153,0.7); }
+
+    /* ── Priority Badge ── */
+    .priority-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace;
+      padding: 2px 7px; border-radius: 6px;
+    }
+    .priority-high  { background: rgba(52,211,153,0.15);  color: var(--green); }
+    .priority-mid   { background: rgba(251,191,36,0.15);  color: var(--yellow); }
+    .priority-low   { background: rgba(100,116,139,0.15); color: var(--gray); }
+    .priority-threshold { font-size: 9px; color: var(--red); display: block; margin-top: 2px; }
+    .btn-pri {
+      background: none; border: 1px solid var(--border);
+      color: var(--text2); font-size: 12px; cursor: pointer;
+      width: 22px; height: 22px; border-radius: 4px; line-height: 1;
+      transition: all 0.15s; font-family: inherit; padding: 0;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .btn-pri:hover { border-color: var(--accent); color: var(--accent2); background: rgba(124,110,247,0.1); }
+    .pri-controls { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 
     /* ── Whisper Warning ── */
     .whisper-warn {
@@ -401,22 +427,34 @@
     </div>
     <div class="pipeline-steps" id="pipeline-steps">
       <div class="step" data-s="PENDING">
-        <div class="step-circle">1</div><div class="step-label">Pending</div>
+        <div class="step-circle">1</div>
+        <div class="step-label">Pending</div>
+        <div class="step-desc">等待调度<br>评分≥75 才进入</div>
       </div>
       <div class="step" data-s="DOWNLOADING">
-        <div class="step-circle">2</div><div class="step-label">Download</div>
+        <div class="step-circle">2</div>
+        <div class="step-label">Download</div>
+        <div class="step-desc">yt-dlp<br>下载原视频</div>
       </div>
       <div class="step" data-s="TRANSCRIBING">
-        <div class="step-circle">3</div><div class="step-label">Whisper</div>
+        <div class="step-circle">3</div>
+        <div class="step-label">Whisper</div>
+        <div class="step-desc">语音→文字<br>⚠️最耗时</div>
       </div>
       <div class="step" data-s="COPYWRITING">
-        <div class="step-circle">4</div><div class="step-label">AI Copy</div>
+        <div class="step-circle">4</div>
+        <div class="step-label">AI Copy</div>
+        <div class="step-desc">Gemini<br>生成标题/文案</div>
       </div>
       <div class="step" data-s="PUBLISHING">
-        <div class="step-circle">5</div><div class="step-label">Publish</div>
+        <div class="step-circle">5</div>
+        <div class="step-label">Publish</div>
+        <div class="step-desc">Playwright<br>上传视频号</div>
       </div>
       <div class="step" data-s="PUBLISHED">
-        <div class="step-circle">✓</div><div class="step-label">Done</div>
+        <div class="step-circle">✓</div>
+        <div class="step-label">Done</div>
+        <div class="step-desc">发布完成</div>
       </div>
     </div>
     <div class="whisper-warn">
@@ -438,7 +476,7 @@
             <tr>
               <th>视频标题</th>
               <th>状态</th>
-              <th>评分</th>
+              <th>优先级 <span style="font-weight:400;color:var(--text3);font-size:9px;">（≥75 被调度）</span></th>
               <th>更新时间</th>
             </tr>
           </thead>
@@ -570,16 +608,47 @@
         tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>暂无数据，等待第一个视频入库…</td></tr>';
         return;
       }
-      tbody.innerHTML = d.activity.map(v => `
-        <tr>
-          <td><div class="video-title" title="${v.title}">${v.title || '—'}</div></td>
-          <td>${statusBadge(v.status)}</td>
-          <td><span class="video-score">${v.score || 0}</span></td>
-          <td><span class="video-time">${relativeTime(v.updated_at)}</span></td>
-        </tr>
-      `).join('');
+      const TERMINAL = new Set(['PUBLISHED','FAILED','LOGIN_REQUIRED']);
+      tbody.innerHTML = d.activity.map(v => {
+        const score = v.score ?? 0;
+        const isPending = v.status === 'PENDING';
+        const isTerminal = TERMINAL.has(v.status);
+        // 优先级徽章颜色
+        const priClass = score >= 75 ? 'priority-high' : score >= 50 ? 'priority-mid' : 'priority-low';
+        // 调度线提示（只对 PENDING + score<75 显示）
+        const thresholdWarn = isPending && score < 75
+          ? `<span class="priority-threshold">⚠️ 低于调度线(75)，不会被处理</span>` : '';
+        // ▲▼ 按钮（非终态视频才显示）
+        const priControls = !isTerminal ? `
+          <div class="pri-controls">
+            <span class="priority-badge ${priClass}">${score}</span>
+            <button class="btn-pri" title="优先级 +10" onclick="adjustPriority('${v.youtube_id}','increase')">▲</button>
+            <button class="btn-pri" title="优先级 -10" onclick="adjustPriority('${v.youtube_id}','decrease')">▼</button>
+            ${thresholdWarn}
+          </div>` : `<span class="priority-badge ${priClass}">${score}</span>`;
+        return `
+          <tr>
+            <td><div class="video-title" title="${v.title}">${v.title || '—'}</div></td>
+            <td>${statusBadge(v.status)}</td>
+            <td>${priControls}</td>
+            <td><span class="video-time">${relativeTime(v.updated_at)}</span></td>
+          </tr>`;
+      }).join('');
     } catch(e) { console.warn('activity fetch error', e); }
   }
+
+  async function adjustPriority(youtubeId, action) {
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/priority`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const d = await r.json();
+      if (d.success) await fetchActivity();
+    } catch(e) { console.warn('priority update error', e); }
+  }
+
 
   async function fetchChannels() {
     try {
