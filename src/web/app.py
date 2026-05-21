@@ -16,7 +16,7 @@ if _src not in sys.path:
     sys.path.insert(0, _src)
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from video_processing.db.database import PipelineDB
@@ -101,6 +101,7 @@ def get_activity():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("DASHBOARD_PORT", 8000))
-    print(f"\n🚀 Video Pipeline Control Center → http://localhost:{port}\n")
-    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False,
-                app_dir=str(Path(__file__).parent))
+    print(f"\n\U0001f680 Video Pipeline Control Center \u2192 http://localhost:{port}\n")
+    # [Claude_Sonnet_4.6_Thinking_planning] P2修复：直接传入 app 实例而非字符串引用，
+    # 避免 app_dir 根据运行方式导入失败
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)

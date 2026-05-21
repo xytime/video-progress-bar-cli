@@ -6,13 +6,16 @@
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-05-21 | Gemini_3.5_Flash_planning | 初始创建 vpanel，支持 ui/job 命令组管理 |
+# | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 修复硬编码路径、set -e 静默崩溃、stop 未等待进程、help 命令缺失、tail 行数不足 |
 # =======================================================================
 
-# 严格错误处理
-set -e
+# [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
+# 注意：不使用 set -e，因为 ps/kill 的非零退出码属于正常控制流（非错误）
+set -u  # 未定义变量立即报错
 
-# 定位项目根目录
-PRJ_ROOT="/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing"
+# [Claude_Sonnet_4.6_Thinking_planning] P1修复：从脚本自身位置动态推导项目根目录，避免硬编码绝对路径
+# BASH_SOURCE[0] 在脚本被 source 或通过别名调用时也能正确工作
+PRJ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PRJ_ROOT"
 
 # 定义相关路径与常量
@@ -40,14 +43,18 @@ show_usage() {
     echo "用法: ./vpanel [命令组] [操作]"
     echo ""
     echo "命令组: ui (仪表盘管理)"
-    echo "  ./vpanel ui start       后台启动控制中心网页 (http://localhost:8000)"
-    echo "  ./vpanel ui stop        停止控制中心网页"
+    echo "  ./vpanel ui start       后台启动控制中心仪表盘 (http://localhost:8000)"
+    echo "  ./vpanel ui stop        停止控制中心仪表盘"
     echo "  ./vpanel ui status      查看控制中心运行状态"
-    echo "  ./vpanel ui logs        实时查看控制中心日志"
+    echo "  ./vpanel ui logs        实时查看控制中心日志（最近 50 行）"
+    echo "  ./vpanel ui open        在浏览器中打开仪表盘"
     echo ""
     echo "命令组: job (自动化管线任务)"
     echo "  ./vpanel job run        启动单次全自动管线任务 (抓取 + 加工 + 发布)"
-    echo "  ./vpanel job logs       实时查看管线运行日志"
+    echo "  ./vpanel job logs       实时查看管线运行日志（最近 50 行）"
+    echo ""
+    echo "通用:"
+    echo "  ./vpanel help           显示此帮助信息"
     echo ""
 }
 
@@ -86,10 +93,16 @@ ui_stop() {
         PID=$(cat "$PID_FILE")
         if ps -p "$PID" > /dev/null 2>&1; then
             echo "🛑 正在停止控制中心 (PID: $PID)..."
-            kill "$PID" || kill -9 "$PID"
+            kill "$PID"
+            # [Claude_Sonnet_4.6_Thinking_planning] P2修复：等待进程真正退出，而非立即宣告成功
+            sleep 0.8
+            if ps -p "$PID" > /dev/null 2>&1; then
+                echo "⚡ 进程未响应，强制终止..."
+                kill -9 "$PID" || true
+            fi
             echo "✅ 已停止"
         else
-            echo "⚠️ PID 文件存在，但进程已不在运行。"
+            echo "⚠️ PID 文件存在，但进程已不在运行（已清理）"
         fi
         rm -f "$PID_FILE"
     else
@@ -113,9 +126,18 @@ ui_status() {
 ui_logs() {
     if [ -f "$UI_LOG_FILE" ]; then
         echo "📄 正在追踪控制中心日志 (按 Ctrl+C 退出)..."
-        tail -f "$UI_LOG_FILE"
+        # [Claude_Sonnet_4.6_Thinking_planning] P3修复：-n 50 显示最近 50 行，提供足够上下文
+        tail -f -n 50 "$UI_LOG_FILE"
     else
-        echo "ℹ️ 日志文件尚未创建"
+        echo "ℹ️ 日志文件尚未创建，请先运行 './vpanel ui start'"
+    fi
+}
+
+ui_open() {
+    if [ -f "$PID_FILE" ] && ps -p "$(cat "$PID_FILE")" > /dev/null 2>&1; then
+        open "http://localhost:8000"
+    else
+        echo "⚠️ 仪表盘未在运行，请先执行 './vpanel ui start'"
     fi
 }
 
@@ -125,21 +147,27 @@ ui_logs() {
 job_run() {
     echo "🔥 [点火] 开始执行单次全自动流水线..."
     echo "1. 正在检索监控频道获取最新视频..."
-    "$PYTHON" "$PRJ_ROOT/scripts/monitor_channels.py"
+    # [Claude_Sonnet_4.6_Thinking_planning] P1修复：monitor 失败（如网络超时）不应崩溃整个脚本
+    # 改为显式处理退出码：失败时打印警告并继续，让管线尝试处理已有的 PENDING 视频
+    if ! "$PYTHON" "$PRJ_ROOT/scripts/monitor_channels.py"; then
+        echo "⚠️  monitor_channels.py 运行出错（可能是网络问题）"
+        echo "   将继续尝试处理数据库中已有的 PENDING 视频..."
+    fi
 
     echo "2. 正在启动管线管理器处理高评分视频并发布..."
-    # 丢到后台运行，避免当前终端被阻滞几十分钟，并将输出重定向到日志
+    # 后台运行，避免当前终端被阻滞数十分钟
     nohup "$PYTHON" "$PRJ_ROOT/src/video_processing/pipeline_manager.py" >> "$JOB_LOG_FILE" 2>&1 &
     JOB_PID=$!
     echo "✅ 管线后台任务已启动 (PID: $JOB_PID)"
     echo "📄 详细加工过程将写入: output/pipeline.log"
-    echo "💡 您可以运行 './vpanel job logs' 跟踪进度，或在 Web 仪表盘上查看状态！"
+    echo "⏳ Whisper 阶段耗时最长（30~90分钟），请耐心等待"
+    echo "💡 运行 './vpanel job logs' 或打开仪表盘跟踪进度"
 }
 
 job_logs() {
     if [ -f "$JOB_LOG_FILE" ]; then
         echo "📄 正在追踪管线执行日志 (按 Ctrl+C 退出)..."
-        tail -f "$JOB_LOG_FILE"
+        tail -f -n 50 "$JOB_LOG_FILE"
     else
         echo "ℹ️ 管线运行日志尚未创建，请先运行一次 './vpanel job run'"
     fi
@@ -163,6 +191,7 @@ case "$GROUP" in
             stop)   ui_stop ;;
             status) ui_status ;;
             logs)   ui_logs ;;
+            open)   ui_open ;;
             *)
                 echo "❌ 错误: 未知操作 '$ACTION'"
                 show_usage
@@ -180,6 +209,10 @@ case "$GROUP" in
                 exit 1
                 ;;
         esac
+        ;;
+    # [Claude_Sonnet_4.6_Thinking_planning] P2修复：注册 help 为有效命令，避免 './vpanel help' 报错
+    help)
+        show_usage
         ;;
     *)
         echo "❌ 错误: 未知命令组 '$GROUP'"
