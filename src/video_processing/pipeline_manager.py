@@ -85,64 +85,71 @@ class PipelineManager:
             self._process_single_video(video)
             
     def _process_single_video(self, video: Dict[str, Any]):
-        yid = video['youtube_id']
+        yid   = video['youtube_id']
         title = video['title']
-        url = f"https://youtu.be/{yid}"
-        
+        url   = f"https://youtu.be/{yid}"
+
+        # [Claude_Sonnet_4.6_Thinking_planning] 绝对路径常量，防止 CWD 漂移导致的
+        # "python not found" / "ModuleNotFoundError: pydantic_settings" 等问题
+        PRJ_ROOT    = Path(__file__).parent.parent.parent
+        SRC_DIR     = PRJ_ROOT / "src"
+        VENV_PYTHON = str(PRJ_ROOT / ".venv" / "bin" / "python")
+        VENV_YTDLP  = str(PRJ_ROOT / ".venv" / "bin" / "yt-dlp")
+        OUT_DIR     = PRJ_ROOT / "output"
+        OUT_DIR.mkdir(exist_ok=True)
+
         try:
             # 1. DOWNLOADING
             self.db.update_video_status(yid, "DOWNLOADING")
             logger.info(f"Downloading {yid}...")
-            
-            # [Gemini_3.5_Flash_planning] Added --write-description to generate WeChat copy in copywriting phase
+
             dl_cmd = [
-                "yt-dlp", "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                VENV_YTDLP,
+                "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
                 "--cookies-from-browser", "safari",
                 "--write-description",
-                url, "-o", f"output/{yid}.%(ext)s"
+                url, "-o", str(OUT_DIR / f"{yid}.%(ext)s"),
             ]
-            subprocess.run(dl_cmd, check=True, capture_output=True)
-            
-            # 2. TRANSCRIBING & RENDERING (由 cli.main 接管)
+            subprocess.run(dl_cmd, check=True, capture_output=True, cwd=str(PRJ_ROOT))
+
+            # 2. TRANSCRIBING & RENDERING（cli.main 需要 PYTHONPATH=src）
             self.db.update_video_status(yid, "TRANSCRIBING")
-            
-            # 寻找后缀
-            ext = "mp4"
-            target_file = f"output/{yid}.{ext}"
-            
+
+            target_file = str(OUT_DIR / f"{yid}.mp4")
             render_cmd = [
-                "nice", "-n", "19", # 降权运行防卡顿
-                "python", "-m", "cli.main", "auto-caption",
-                target_file, "--vertical", "--bilingual", "--title", title
+                "nice", "-n", "19",
+                VENV_PYTHON, "-m", "cli.main", "auto-caption",
+                target_file, "--vertical", "--bilingual", "--title", title,
             ]
-            
-            subprocess.run(render_cmd, check=True, capture_output=True)
-            
+            env = {"PYTHONPATH": str(SRC_DIR), "PATH": "/usr/bin:/bin:/usr/local/bin"}
+            subprocess.run(render_cmd, check=True, capture_output=True,
+                           cwd=str(PRJ_ROOT), env={**__import__('os').environ, **env})
+
             # 3. COPYWRITING
             self.db.update_video_status(yid, "COPYWRITING")
             logger.info(f"Generating WeChat copy for {yid}...")
-            desc_file = f"output/{yid}.description"
+            desc_file = str(OUT_DIR / f"{yid}.description")
             copy_cmd = [
-                "python", "scripts/copywriter.py",
+                VENV_PYTHON, str(PRJ_ROOT / "scripts" / "copywriter.py"),
                 "--youtube-id", yid,
                 "--title", title,
-                "--desc-file", desc_file
+                "--desc-file", desc_file,
             ]
-            subprocess.run(copy_cmd, check=True, capture_output=True)
-            
+            subprocess.run(copy_cmd, check=True, capture_output=True, cwd=str(PRJ_ROOT))
+
             # 4. PUBLISHING
             self.db.update_video_status(yid, "PUBLISHING")
             logger.info(f"Uploading to WeChat Channels for {yid}...")
-            vertical_video = f"output/{yid}_vertical.mp4"
-            copy_text_file = f"output/{yid}_copy.txt"
-            
+            vertical_video  = str(OUT_DIR / f"{yid}_vertical.mp4")
+            copy_text_file  = str(OUT_DIR / f"{yid}_copy.txt")
+
             upload_cmd = [
-                "python", "scripts/wechat_uploader.py",
+                VENV_PYTHON, str(PRJ_ROOT / "scripts" / "wechat_uploader.py"),
                 "--video", vertical_video,
                 "--copy", copy_text_file,
-                "--state", "output/wechat_state.json"
+                "--state", str(OUT_DIR / "wechat_state.json"),
             ]
-            
+
             res = subprocess.run(upload_cmd, capture_output=True, text=True)
             
             if res.returncode == 2:

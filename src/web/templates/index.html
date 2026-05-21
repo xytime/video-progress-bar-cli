@@ -674,6 +674,14 @@
         tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>暂无数据，等待第一个视频入库…</td></tr>';
         return;
       }
+
+      // 刷新前记录当前已展开的错误行，刷新后恢复
+      const expanded = new Set(
+        [...document.querySelectorAll('.error-row')]
+          .filter(el => el.style.display !== 'none')
+          .map(el => el.id.replace('err-', ''))
+      );
+
       const TERMINAL  = new Set(['PUBLISHED','FAILED','LOGIN_REQUIRED']);
       const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
       tbody.innerHTML = d.activity.map(v => {
@@ -718,6 +726,17 @@
           </tr>
           ${errorRow}`;
       }).join('');
+
+      // 恢复之前展开的错误行
+      expanded.forEach(yid => {
+        const row = document.getElementById(`err-${yid}`);
+        if (row) {
+          row.style.display = 'table-row';
+          const toggle = document.querySelector(`.toggle-error[onclick*="${yid}"]`);
+          if (toggle) toggle.textContent = '▲ 收起错误';
+        }
+      });
+
     } catch(e) { console.warn('activity fetch error', e); }
   }
 
