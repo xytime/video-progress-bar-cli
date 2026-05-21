@@ -11,11 +11,19 @@
 """
 import sqlite3
 import os
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 
 class PipelineDB:
+    """视频管线数据访问层。
+
+    所有 SQL 操作必须通过此类的方法执行。
+    外部模块禁止直接调用 get_connection() 执行裸 SQL。
+    """
+
+    _logger = logging.getLogger(__name__)
+
     def __init__(self, db_path: str = "pipeline.db"):
         # 默认在项目根目录的 output 文件夹内创建数据库
         # 如果是绝对路径则直接使用
@@ -77,6 +85,7 @@ class PipelineDB:
                 conn.commit()
                 return True
             except Exception as e:
+                self._logger.error(f"add_channel failed for {channel_id}: {e}")
                 return False
                 
     def get_approved_channels(self) -> List[Dict[str, Any]]:
@@ -107,7 +116,7 @@ class PipelineDB:
             except sqlite3.IntegrityError:
                 return False # Already exists
                 
-    def update_video_status(self, youtube_id: str, status: str, error_msg: str = None):
+    def update_video_status(self, youtube_id: str, status: str, error_msg: Optional[str] = None):
         with self.get_connection() as conn:
             if error_msg:
                 conn.execute(

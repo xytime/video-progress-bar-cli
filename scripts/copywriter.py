@@ -7,20 +7,18 @@
 | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 地基重构：移除 os.getenv 和 load_dotenv，通过 settings 注入 GEMINI_API_KEY |
 """
 
-import os
 import sys
+import os
 import argparse
 import logging
 from pathlib import Path
 
-import sys
-import os
-# 确保可以导入 src 目录下的模块
+# 确保可以导入 src 目录下的模块（scripts/ 与 src/ 同级）
 _src_root = os.path.join(os.path.dirname(__file__), '..', 'src')
 if _src_root not in sys.path:
     sys.path.insert(0, _src_root)
 
-from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] 不再直接 os.getenv
+from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] 统一通过 settings 注入
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -56,7 +54,7 @@ def translate_fallback(title: str, description: str) -> str:
 
 def generate_wechat_copy(title: str, description: str, model_name: str = "gemini-2.5-flash") -> str:
     """调用 Gemini API 生成适合微信视频号的宣传文案"""
-    # [Claude_Sonnet_4.6_Thinking_planning] 通过 settings 读取，消灭检讨健居安的 os.getenv
+    # [Claude_Sonnet_4.6_Thinking_planning] 通过 settings 统一注入，消灭散落的 os.getenv
     api_key = settings.gemini_api_key
     if not api_key:
         return translate_fallback(title, description)
@@ -124,12 +122,10 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     
     output_path = out_dir / f"{args.youtube_id}_copy.txt"
-    # Note: Use name formatting consistent with pipeline
-    output_file = output_path
-    output_file.write_text(copy_text, encoding="utf-8")
+    output_path.write_text(copy_text, encoding="utf-8")
     
-    logger.info(f"Successfully generated WeChat copy: {output_file}")
-    print(output_file)
+    logger.info(f"Successfully generated WeChat copy: {output_path}")
+    print(output_path)
 
 if __name__ == "__main__":
     main()
