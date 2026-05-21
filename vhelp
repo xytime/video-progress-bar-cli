@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# =======================================================================
+# Project Cheat Sheet & Quick Help Utility (vhelp)
+#
+# # Modification History
+# | Version | Date | Author | Description |
+# | --- | --- | --- | --- |
+# | 1.0.0 | 2026-05-21 | Gemini_3.5_Flash_planning | 初始创建 vhelp 终端速查手册 |
+# =======================================================================
+
+# 终端颜色代码
+BOLD="\033[1m"
+BLUE="\033[34m"
+GREEN="\033[32m"
+YELLOW="\033[33m"
+CYAN="\033[36m"
+RED="\033[31m"
+RESET="\033[0m"
+
+echo -e "${BOLD}${CYAN}======================================================================${RESET}"
+echo -e "${BOLD}${BLUE} 🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) 🚀 ${RESET}"
+echo -e "${BOLD}${CYAN}======================================================================${RESET}"
+
+# 1. 视频处理系统（当前项目：Video-precessing）
+echo -e "\n${BOLD}${YELLOW}[1] 视频号加工与发布系统 (Video-precessing)${RESET}"
+echo -e "项目路径: ${CYAN}/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing${RESET}"
+echo -e "主入口控制脚本: ${GREEN}./vpanel${RESET} (建议别名 ${GREEN}vp${RESET})"
+echo ""
+echo -e "  ${BOLD}网页端仪表盘 (UI) 控制:${RESET}"
+echo -e "    ${CYAN}./vpanel ui start${RESET}    - 后台静默启动控制中心仪表盘 (${BLUE}http://localhost:8000${RESET})"
+echo -e "    ${CYAN}./vpanel ui stop${RESET}     - 停止控制中心仪表盘"
+echo -e "    ${CYAN}./vpanel ui status${RESET}   - 检查仪表盘运行状态"
+echo -e "    ${CYAN}./vpanel ui logs${RESET}     - 实时追踪仪表盘服务器日志"
+echo ""
+echo -e "  ${BOLD}流水线任务 (JOB) 控制:${RESET}"
+echo -e "    ${CYAN}./vpanel job run${RESET}     - 后台启动单次全自动管线 (抓取 ➡️ 打分 ➡️ 剪辑 ➡️ 自动发布)"
+echo -e "    ${CYAN}./vpanel job logs${RESET}    - 实时查看全自动管线渲染及发布日志"
+echo ""
+echo -e "  ${BOLD}微信登录/Cookie失效处理:${RESET}"
+echo -e "    ${RED}./.venv/bin/python scripts/wechat_uploader.py --login-only --no-headless${RESET}"
+echo -e "    - 扫码登录专用命令（当登录失效或首次运行，会弹出浏览器让你扫码更新 Cookie）"
+
+# 2. 期权分析系统（关联项目：OptionSense）
+echo -e "\n${BOLD}${YELLOW}[2] 期权回测系统 (OptionSense) - 全局别名${RESET}"
+echo -e "在您的 Shell 环境中配置的全局快捷脚本："
+echo -e "  ${GREEN}backtest${RESET}   - 快速运行 V4 期权单次历史回测脚本"
+echo -e "  ${GREEN}batchtest${RESET}  - 快速运行 V4 期权批量回测/参数扫描脚本"
+
+# 3. 推荐设置提示
+echo -e "\n${BOLD}${YELLOW}[3] 推荐本地 Shell 配置 (~/.zshrc)${RESET}"
+echo -e "建议在您的 ${CYAN}~/.zshrc${RESET} 中添加以下配置，彻底解放双手："
+echo -e "----------------------------------------------------------------------"
+echo -e "  ${BLUE}# 快捷控制中心 alias${RESET}"
+echo -e "  alias ${GREEN}vp${RESET}=\"/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/vpanel\""
+echo -e "  alias ${GREEN}vhelp${RESET}=\"/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/vhelp\""
+echo -e "----------------------------------------------------------------------"
+echo -e "配置后，输入 ${GREEN}vhelp${RESET} 即可随时唤出此菜单，输入 ${GREEN}vp ui start${RESET} 直接开跑！"
+echo -e "${BOLD}${CYAN}======================================================================${RESET}"
+echo ""
