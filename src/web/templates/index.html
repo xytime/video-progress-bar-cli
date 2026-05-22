@@ -756,16 +756,17 @@
             <button class="btn-pri" title="优先级 -10" onclick="adjustPriority('${v.youtube_id}','decrease')">▼</button>
             ${thresholdWarn}
           </div>` : `<span class="priority-badge ${priClass}">${score}</span>`;
+        const deleteBtn = `<button class="btn-hard-reset" onclick="deleteVideo('${v.youtube_id}')" title="彻底清除任务记录" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
         const retryBtn = v.status === 'LOGIN_REQUIRED'
           ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="点击弹出浏览器，用手机微信扫码重新登录">📱 扫码登录</button>
-             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物从头开始">🗑 硬重置</button>`
+             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物从头开始">🗑 硬重置</button>` + deleteBtn
           : isRetryable
           ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传：跳过已完成步骤">🔄 重试</button>
-             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="从头开始：删除所有产物文件重新下载">🗑 硬重置</button>`
+             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="从头开始：删除所有产物文件重新下载">🗑 硬重置</button>` + deleteBtn
           : isStuck
             ? `<button class="btn-retry btn-reset" onclick="retryVideo('${v.youtube_id}')" title="任务卡死，强制重置（断点续传）">⚡ 强制重置</button>
-               <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物，从头开始">🗑 硬重置</button>`
-            : '';
+               <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物，从头开始">🗑 硬重置</button>` + deleteBtn
+            : deleteBtn;
         const errMsg   = v.error_msg || '';
         const hasError = (isRetryable || isStuck) && errMsg.length > 0;
         const errorToggle = hasError
@@ -910,6 +911,27 @@
       fetchStats();
     } else {
       showToast('❌ 硬重置失败: ' + (d.error || '未知错误'), 'error');
+    }
+  }
+
+  async function deleteVideo(youtubeId) {
+    if (!confirm('⚠️ 确定要删除该任务记录吗？')) return;
+    
+    // 第二步：询问是否同时删除文件
+    const deleteFiles = confirm('是否同时删除相关的本地视频、文案等产物文件？\n[确定] = 同时删除文件并释放空间\n[取消] = 仅清除数据库记录');
+    
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}?delete_files=${deleteFiles}`, { method: 'DELETE' });
+      const d = await r.json();
+      if (d.success) {
+        showToast(d.message || '✅ 已彻底删除任务记录');
+        fetchActivity();
+        fetchStats();
+      } else {
+        showToast('❌ 删除失败: ' + (d.error || '未知错误'), 'error');
+      }
+    } catch(e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
     }
   }
 

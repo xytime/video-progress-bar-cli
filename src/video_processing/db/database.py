@@ -208,4 +208,16 @@ class PipelineDB:
             return dict(row) if row else None
 
 
-
+    def delete_video_record(self, youtube_id: str) -> bool:
+        """物理删除视频记录"""
+        with self.get_connection() as conn:
+            try:
+                conn.execute(
+                    "DELETE FROM processed_videos WHERE youtube_id = ?",
+                    (youtube_id,)
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                self._logger.error(f"delete_video_record failed for {youtube_id}: {e}")
+                return False

@@ -433,6 +433,36 @@ def reset_video_hard(youtube_id: str):
     }
 
 
+@app.delete("/api/videos/{youtube_id}")
+def delete_video(youtube_id: str, delete_files: bool = False):
+    """
+    物理删除任务记录。
+    如果 delete_files=True，同时删除相关的本地产物文件。
+    注意：物理删除后，如果原视频仍在频道的最新列表中，监控爬虫可能会重新将其加入队列。
+    """
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+
+    deleted_files = []
+    if delete_files:
+        from video_processing.pipeline_manager import PipelineManager
+        pm = PipelineManager()
+        deleted_files = pm.reset_video_artifacts(youtube_id)
+
+    db.delete_video_record(youtube_id)
+
+    msg = "已彻底清除该任务记录"
+    if delete_files:
+        msg += f"，并清理了 {len(deleted_files)} 个关联产物文件"
+
+    return {
+        "success": True,
+        "deleted_files": deleted_files,
+        "message": msg,
+    }
+
+
 @app.post("/api/wechat/login")
 def wechat_login():
     """
