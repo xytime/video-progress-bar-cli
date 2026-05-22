@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建，TDD Green phase |
+| 1.1.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 增加 HTTPStatusError 与 ValueError 熔断拦截，防止 502/500 JSON 解析崩溃 |
 """
 from __future__ import annotations
 
@@ -48,33 +49,36 @@ class PipelineAPIClient:
         try:
             async with self._client() as c:
                 resp = await c.post("/api/videos/add", json={"url": url})
+                resp.raise_for_status()
                 return resp.json()
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] add_video failed (API down?): {e}")
             return None
 
-    async def get_videos(self, tab: str = "waitlist", page: int = 1, size: int = 10) -> list:
+    async def get_videos(self, tab: str = "waitlist", page: int = 1, size: int = 10) -> Optional[list]:
         """GET /api/videos — 获取视频列表。
 
         Returns:
-            video 列表，断线返回空列表。
+            video 列表，断线返回 None。
         """
         try:
             async with self._client() as c:
                 resp = await c.get("/api/videos", params={"tab": tab, "page": page, "size": size})
+                resp.raise_for_status()
                 data = resp.json()
                 return data.get("videos", [])
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] get_videos failed (API down?): {e}")
-            return []
+            return None
 
     async def get_stats(self) -> Optional[dict]:
         """GET /api/stats — 获取系统统计数据。"""
         try:
             async with self._client() as c:
                 resp = await c.get("/api/stats")
+                resp.raise_for_status()
                 return resp.json()
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] get_stats failed (API down?): {e}")
             return None
 
@@ -91,8 +95,9 @@ class PipelineAPIClient:
                     # [Claude_Sonnet_4.6_Thinking_planning] P1修复：直接传 bool，httpx 序列化为 "true"/"false"，FastAPI 正确解析
                     params={"delete_files": delete_files}
                 )
+                resp.raise_for_status()
                 return resp.json()
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] delete_video failed (API down?): {e}")
             return None
 
@@ -101,8 +106,9 @@ class PipelineAPIClient:
         try:
             async with self._client() as c:
                 resp = await c.post(f"/api/videos/{youtube_id}/retry")
+                resp.raise_for_status()
                 return resp.json()
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] retry_video failed (API down?): {e}")
             return None
 
@@ -111,7 +117,8 @@ class PipelineAPIClient:
         try:
             async with self._client() as c:
                 resp = await c.post("/api/pipeline/run")
+                resp.raise_for_status()
                 return resp.json()
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] run_pipeline failed (API down?): {e}")
             return None

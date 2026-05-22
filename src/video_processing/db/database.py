@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建数据库与DAL封装 |
 | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 补充 update_video_score / get_high_score_pending_videos，封堵 pipeline_manager 中的裸 SQL 泄漏 |
+| 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 加入 WAL 模式与 30s timeout 解决并发锁表危机 |
 """
 import sqlite3
 import os
@@ -38,13 +39,17 @@ class PipelineDB:
         self._init_db()
         
     def get_connection(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
         return conn
         
     def _init_db(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
+            # [Gemini_3.1_Pro_High_planning] 开启 WAL 模式，支持高并发读写，避免 database is locked
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA synchronous=NORMAL;")
+            
             # 1. 已处理视频状态表 (FSM 状态机)
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS processed_videos (
@@ -173,6 +178,36 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.execute("SELECT * FROM processed_videos WHERE status = ? ORDER BY score DESC", (status,))
             return [dict(row) for row in cursor.fetchall()]
+
+    def claim_video_for_processing(self, youtube_id: str) -> bool:
+        """原子地将 PENDING 状态的视频改为 DOWNLOADING，用于防止并发竞争（乐观锁）。
+        返回 True 表示抢占成功，可以启动管线处理。
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos SET status = 'DOWNLOADING', updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ? AND status = 'PENDING'",
+                (youtube_id,)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def purge_stale_tasks(self, stale_hours: int = 2) -> int:
+        """[Gemini_3.1_Pro_High_planning] 清洗器：将卡在非终态（如 DOWNLOADING）超过 N 小时的任务重置回 PENDING"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                '''
+                UPDATE processed_videos 
+                SET status = 'PENDING', 
+                    retry_count = retry_count + 1,
+                    updated_at = CURRENT_TIMESTAMP 
+                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING')
+                AND updated_at < datetime('now', ?)
+                ''',
+                (f'-{stale_hours} hours',)
+            )
+            conn.commit()
+            return cursor.rowcount
 
     def update_video_score(self, youtube_id: str, score: int) -> None:
         """更新视频评分。

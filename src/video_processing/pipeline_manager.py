@@ -86,13 +86,21 @@ class PipelineManager:
     def process_high_score_videos(self, limit: int = 5):
         """拉取高分视频进入加工流转"""
         targets = self.db.get_high_score_pending_videos(min_score=75, limit=limit)
-        if not targets:
+        
+        # [Gemini_3.1_Pro_High] 防竞态：尝试抢占，避免与 API 手工触发冲突
+        claimed_targets = []
+        for video in targets:
+            if self.db.claim_video_for_processing(video['youtube_id']):
+                claimed_targets.append(video)
+                
+        if not claimed_targets:
             logger.info("No high-score videos available for processing.")
             return
+            
         self.send_telegram_msg(
-            f"🚀 <b>Pipeline Started</b>\nToday's quota: {len(targets)} videos."
+            f"🚀 <b>Pipeline Started</b>\nToday's quota: {len(claimed_targets)} videos."
         )
-        for video in targets:
+        for video in claimed_targets:
             self._process_single_video(video)
 
     # ── 工具方法 ──────────────────────────────────────────────────────────────

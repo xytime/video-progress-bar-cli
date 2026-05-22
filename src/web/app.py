@@ -56,12 +56,13 @@ def _translate_title_task(youtube_id: str, english_title: str):
     except Exception as e:
         print(f"[Translator] Failed to translate {youtube_id}: {e}")
     finally:
-        # [Gemini_3.5_Flash_fast] 手工加急视频翻译完成后立即触发异步处理管线，避免卡在 PENDING
+        # [Gemini_3.1_Pro_High] 手工加急视频翻译完成后立即触发异步处理管线，通过 claim_video_for_processing 防止竞态
         try:
-            video = db.get_video_by_youtube_id(youtube_id)
-            if video and video.get("status") == "PENDING":
-                print(f"[Scheduler] Auto-triggering pipeline for manual video: {youtube_id}")
-                _trigger_video_async(video)
+            if db.claim_video_for_processing(youtube_id):
+                video = db.get_video_by_youtube_id(youtube_id)
+                if video:
+                    print(f"[Scheduler] Auto-triggering pipeline for manual video: {youtube_id}")
+                    _trigger_video_async(video)
         except Exception as trigger_err:
             import logging
             logging.getLogger(__name__).error(f"[Scheduler] Failed to auto-trigger video {youtube_id}: {trigger_err}")
@@ -363,17 +364,19 @@ def _trigger_video_async(video: dict) -> None:
         log_path = prj_root / "output" / "pipeline.log"
         log_path.parent.mkdir(exist_ok=True)
 
-        # 内联脚本：手动添加 sys.path 再导入，规避 "relative import with no known parent"
+        # 内联脚本：改用 JSON 通过 stdin 传递数据，避免 repr() 带来的代码注入风险
+        import json
+        video_json = json.dumps(dict(video))
         inline = (
-            f"import sys; sys.path.insert(0, {repr(src_dir)})\n"
+            f"import sys, json; sys.path.insert(0, {repr(src_dir)})\n"
             f"from video_processing.pipeline_manager import PipelineManager\n"
             f"pm = PipelineManager()\n"
-            f"pm._process_single_video({repr(dict(video))})\n"
+            f"pm._process_single_video(json.loads(sys.stdin.read()))\n"
         )
         try:
             with open(log_path, "a") as f:
                 import subprocess as sp
-                sp.run([python, "-c", inline],
+                sp.run([python, "-c", inline], input=video_json, text=True,
                        cwd=str(prj_root), stdout=f, stderr=f)
         except Exception as e:
             import logging
@@ -405,13 +408,13 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
 
     db.update_video_score(youtube_id, new_score)
 
-    # 自动触发：score 越过调度线且视频仍是 PENDING，立即启动后台处理
+    # 自动触发：score 越过调度线，且抢占成功（原状态为 PENDING）
     triggered = False
-    if new_score >= 75 and video.get("status") == "PENDING":
-        # 重新读取最新记录（含刚写入的新 score）
+    if new_score >= 75 and db.claim_video_for_processing(youtube_id):
         fresh = db.get_video_by_youtube_id(youtube_id)
-        _trigger_video_async(fresh)
-        triggered = True
+        if fresh:
+            _trigger_video_async(fresh)
+            triggered = True
 
     return {"success": True, "youtube_id": youtube_id, "score": new_score, "triggered": triggered}
 
@@ -422,10 +425,13 @@ def process_video_now(youtube_id: str):
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
-    if video.get("status") != "PENDING":
-        return {"success": False, "error": f"视频当前状态为 {video['status']}，仅 PENDING 超下可立即处理"}
+    if not db.claim_video_for_processing(youtube_id):
+        return {"success": False, "error": f"视频当前状态不是 PENDING，或者已被其他进程抢占处理"}
 
-    _trigger_video_async(video)
+    fresh = db.get_video_by_youtube_id(youtube_id)
+    if fresh:
+        _trigger_video_async(fresh)
+        
     return {"success": True, "message": f"已在后台启动处理：{video['title']}"}
 
 
@@ -451,10 +457,11 @@ def retry_video(youtube_id: str):
     db.update_video_status(youtube_id, "PENDING", error_msg=None)
 
     triggered = False
-    if video.get("score", 0) >= 75:
+    if video.get("score", 0) >= 75 and db.claim_video_for_processing(youtube_id):
         fresh = db.get_video_by_youtube_id(youtube_id)
-        _trigger_video_async(fresh)
-        triggered = True
+        if fresh:
+            _trigger_video_async(fresh)
+            triggered = True
 
     return {
         "success": True,
@@ -481,10 +488,11 @@ def reset_video_hard(youtube_id: str):
     db.update_video_status(youtube_id, "PENDING", error_msg=None)
 
     triggered = False
-    if video.get("score", 0) >= 75:
+    if video.get("score", 0) >= 75 and db.claim_video_for_processing(youtube_id):
         fresh = db.get_video_by_youtube_id(youtube_id)
-        _trigger_video_async(fresh)
-        triggered = True
+        if fresh:
+            _trigger_video_async(fresh)
+            triggered = True
 
     return {
         "success": True,

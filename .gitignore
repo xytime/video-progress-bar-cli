@@ -93,3 +93,5 @@ render_*.sh
 output/wechat_state.json
 wechat_state.json
 
+*.db
+*.sqlite3

@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.1.0 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复未导入 os 引发异常，修复硬编码 ffmpeg 导致无 libass 问题 |
 | 1.1.1 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复深层翻译API风控导致将500报错信息输出为中文字幕的重大缺陷 |
+| 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 引入正则彻底熔断 HTML 注入，修正 default 金色描边样式 |
 """
 import logging
 from pathlib import Path
@@ -239,9 +240,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
         primary_color = pysubs2.Color(255, 255, 255, 0) # 默认主色
         
         if self.style == "default":
-             primary_color = pysubs2.Color(255, 215, 0, 0) # 金色字 (Gold)
+             primary_color = pysubs2.Color(255, 255, 255, 0) # 白色字 (White)
              bg_color = pysubs2.Color(0, 0, 0, 0) # 不透明黑色阴影色
-             outline_color = pysubs2.Color(0, 0, 0, 0) # 黑色描边
+             outline_color = pysubs2.Color(255, 215, 0, 0) # 金色描边 (Gold)
              border_style = 1 # 1=描边模式, 3=底盒模式
              outline = 4 # 加粗描边
              shadow = 2 # 添加黑色阴影
@@ -392,11 +393,12 @@ class AutoCaptionProcessor(VideoProcessorBase):
                         translated_texts.append("") # 失败时为空，绝不静默混入英文
         
         # 将翻译结果回填
+        import re
         for i, text in enumerate(translated_texts):
             if i < len(segments):
-                # 过滤并清洗谷歌翻译由于被风控返回的错误页面文本
-                if text and ("Error 500" in text or "That’s an error" in text or "That's an error" in text):
-                    logger.warning("Google Translate API blocked! Removing garbage text.")
+                # [Gemini_3.1_Pro_High_planning] 过滤并清洗谷歌翻译由于被风控返回的错误页面文本
+                if text and re.search(r'<html|<body|<div|captcha|that\'s an error|error 500|cloudflare', text, re.IGNORECASE):
+                    logger.warning("Google Translate API blocked or returned HTML garbage! Removing garbage text.")
                     text = ""
                 # 如果没翻译出来，直接留空，让渲染器 fallback 到只显示英文
                 segments[i]['zh_text'] = text if text else ""

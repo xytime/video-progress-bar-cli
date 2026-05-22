@@ -416,43 +416,106 @@ def run_uploader(
                             confirm_clicked = False
                             for attempt in range(10):
                                 page.wait_for_timeout(1000)
-                                # 1. 尝试点击阅读
+                                
+                                # 1. 尝试找到弹窗内的 checkbox 并点击
                                 if not read_clicked:
-                                    for rt in ["阅读", "我已阅读"]:
-                                        lbl = page.locator(f"label:has-text('{rt}')")
-                                        if lbl.count() > 0:
+                                    for cb_sel in [
+                                        ".weui-desktop-dialog input[type='checkbox']",
+                                        ".weui-desktop-dialog__bd input[type='checkbox']",
+                                        "div[role='dialog'] input[type='checkbox']",
+                                        "text=我已阅读",
+                                        "text=阅读并同意",
+                                        "label:has-text('阅读')",
+                                        "label:has-text('条款')"
+                                    ]:
+                                        loc_cb = page.locator(cb_sel)
+                                        if loc_cb.count() > 0:
+                                            # 如果是真正的 input checkbox 并且已经勾选了，则跳过点击
                                             try:
-                                                lbl.first.click(timeout=500)
-                                                read_clicked = True
-                                                logger.info(f"Clicked '{rt}' label in modal on attempt {attempt}")
-                                                break
-                                            except Exception:
-                                                try:
-                                                    lbl.first.evaluate("node => node.click()")
+                                                if loc_cb.first.evaluate("node => node.tagName === 'INPUT' && node.type === 'checkbox' && node.checked"):
                                                     read_clicked = True
                                                     break
-                                                except Exception:
-                                                    pass
-                                                    
-                                # 2. 尝试点击同意
-                                if not confirm_clicked:
-                                    for bt in ["同意并继续", "我已阅读并同意", "同意", "确定"]:
-                                        btn = page.locator(f"button:has-text('{bt}')")
-                                        if btn.count() > 0:
+                                            except Exception:
+                                                pass
+                                            
                                             try:
-                                                btn.first.click(timeout=500)
-                                                confirm_clicked = True
-                                                logger.info(f"Clicked confirm '{bt}' button in modal on attempt {attempt}")
+                                                loc_cb.first.click(timeout=500, force=True)
+                                                read_clicked = True
+                                                logger.info(f"Checked agreement in modal via {cb_sel} on attempt {attempt}")
                                                 break
                                             except Exception:
                                                 try:
-                                                    btn.first.evaluate("node => node.click()")
-                                                    confirm_clicked = True
+                                                    # [Gemini_3.1_Pro_High_planning] 终极防爆：如果常规点击失败，使用原生 JS 强制修改 checked 属性并派发事件，无视遮罩层
+                                                    loc_cb.first.evaluate("""node => {
+                                                        if (node.tagName === 'INPUT' && node.type === 'checkbox') {
+                                                            node.checked = true;
+                                                            node.dispatchEvent(new Event('change', { bubbles: true }));
+                                                        }
+                                                        node.click();
+                                                    }""")
+                                                    read_clicked = True
+                                                    logger.info(f"Checked agreement in modal (eval override) via {cb_sel} on attempt {attempt}")
                                                     break
                                                 except Exception:
                                                     pass
+                                                
+                                        # [Gemini_3.1_Pro_High_planning] Frame 穿透：如果主 DOM 没有找到，尝试在所有的 iframes 中寻找
+                                        if not read_clicked:
+                                            for frame in page.frames:
+                                                try:
+                                                    floc = frame.locator(cb_sel)
+                                                    if floc.count() > 0:
+                                                        floc.first.evaluate("node => { node.checked = true; node.dispatchEvent(new Event('change', { bubbles: true })); node.click(); }")
+                                                        read_clicked = True
+                                                        logger.info(f"Checked agreement inside iframe via {cb_sel}")
+                                                        break
+                                                except Exception:
+                                                    pass
                                                     
+                                # 2. 尝试点击确定（必须在勾选阅读之后）
+                                if read_clicked and not confirm_clicked:
+                                    # 微信视频号声明原创弹窗按钮常见文本：“声明原创”、“确定”
+                                    for bt in ["声明原创", "确定", "同意并继续", "同意"]:
+                                        for btn_sel in [
+                                            f".weui-desktop-dialog__ft button:has-text('{bt}')",
+                                            f"button:has-text('{bt}')",
+                                            f".weui-desktop-btn:has-text('{bt}')"
+                                        ]:
+                                            btn = page.locator(btn_sel)
+                                            if btn.count() > 0:
+                                                try:
+                                                    btn.first.click(timeout=500, force=True)
+                                                    confirm_clicked = True
+                                                    logger.info(f"Clicked confirm '{bt}' button via {btn_sel} on attempt {attempt}")
+                                                    break
+                                                except Exception:
+                                                    try:
+                                                        btn.first.evaluate("node => node.click()")
+                                                        confirm_clicked = True
+                                                        logger.info(f"Clicked confirm '{bt}' button (eval) via {btn_sel} on attempt {attempt}")
+                                                        break
+                                                    except Exception:
+                                                        pass
+                                                        
+                                                # [Gemini_3.1_Pro_High_planning] Frame 穿透：确认按钮的 iframe 查找
+                                                if not confirm_clicked:
+                                                    for frame in page.frames:
+                                                        try:
+                                                            fbtn = frame.locator(btn_sel)
+                                                            if fbtn.count() > 0:
+                                                                fbtn.first.evaluate("node => node.click()")
+                                                                confirm_clicked = True
+                                                                logger.info(f"Clicked confirm '{bt}' inside iframe via {btn_sel}")
+                                                                break
+                                                        except Exception:
+                                                            pass
+                                        if confirm_clicked:
+                                            break
+
                                 if read_clicked and confirm_clicked:
+                                    logger.info("Modal dialog handled successfully.")
+                                    # 等待弹窗消失
+                                    page.wait_for_timeout(1000)
                                     break
                                     
                         except Exception as e:

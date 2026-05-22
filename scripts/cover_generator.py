@@ -97,12 +97,20 @@ def generate_cover(title: str, output_path: str):
     draw_text_centered(c_draw, "TECH INSIGHTS", badge_font, cy + 105, fill='#0f172a')
     
     # Determine Main Font and Split Text by pixel width
-    font_main = get_font(130, "black")
+    font_size = 130
+    font_main = get_font(font_size, "black")
     max_text_width = cw - 120 # Leave padding inside the card
     lines = split_text_by_width(title, font_main, max_text_width)
     
-    # Render lines (always use same font size)
+    # [Gemini_3.1_Pro_High_planning] 增加基于 Y 坐标的高度衰减算法，防止超长文本溢出边界
     total_text_height = sum([font_main.getbbox(l)[3] - font_main.getbbox(l)[1] for l in lines]) + (len(lines)-1)*40
+    while total_text_height > 600 and font_size > 40:
+        font_size -= 10
+        font_main = get_font(font_size, "black")
+        lines = split_text_by_width(title, font_main, max_text_width)
+        total_text_height = sum([font_main.getbbox(l)[3] - font_main.getbbox(l)[1] for l in lines]) + (len(lines)-1)*40
+
+    # Render lines (always use same font size)
     current_y = cy + 250 + (500 - total_text_height)/2 # Center vertically in the remaining space
     
     for line in lines:

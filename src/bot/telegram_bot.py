@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("telegram_bot")
 
-_YOUTUBE_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/)[\w\-]+")
+_YOUTUBE_RE = re.compile(r"https?://(?:(?:www|m)\.)?(?:youtube\.com/(?:watch\?.*v=|shorts/)|youtu\.be/)[\w\-]+")
 
 
 def _load_config() -> tuple[str, set[int]]:
@@ -95,13 +95,18 @@ async def cmd_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
     assert _api is not None
     # 同时取 waitlist（PENDING）和 processing（活跃中）的视频
-    # [Claude_Sonnet_4.6_Thinking_planning] P0修复：get_videos 断线返回 []，用长度+stats 双重判断
+    # [Gemini_3.1_Pro_High] P0修复：get_videos 断线返回 None，用长度+stats 双重判断
     stats = await _api.get_stats()
     if stats is None:
         await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
         return
     pending = await _api.get_videos(tab="waitlist", size=10)
-    processing = await _api.get_videos(tab="processing", size=5)
+    processing = await _api.get_videos(tab="active", size=5)
+    
+    if pending is None or processing is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+        return
+        
     videos = processing + pending
     await update.message.reply_text(fmt.fmt_queue(videos), parse_mode="Markdown")  # type: ignore
 
@@ -110,7 +115,7 @@ async def cmd_published(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _check_admin(update):
         return
     assert _api is not None
-    videos = await _api.get_videos(tab="published", size=5)
+    videos = await _api.get_videos(tab="completed", size=5)
     if videos is None:
         await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
         return
@@ -198,9 +203,12 @@ async def handle_youtube_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
     if not _check_admin(update):
         return
     assert _api is not None
-    text = update.message.text or ""  # type: ignore
+    text = update.message.text or update.message.caption or ""
+    logger.info(f"收到文本: {text}")
+    
     match = _YOUTUBE_RE.search(text)
     if not match:
+        logger.info("未检测到有效 YouTube URL")
         return
 
     url = match.group(0)
