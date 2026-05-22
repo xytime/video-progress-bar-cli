@@ -260,38 +260,7 @@ def run_uploader(
             browser.close()
             return 1
             
-        # 等待上传面板和描述编辑区呈现
-        page.wait_for_timeout(5000)
-        
-        # 3. 填写视频文案/描述
-        logger.info("Writing copy to description field...")
-        desc_input = None
-        for selector in ["div[contenteditable='true']", "textarea", ".editor", "div.placeholder", ".description-textarea"]:
-            try:
-                loc = page.locator(selector)
-                if loc.count() > 0 and loc.first.is_visible():
-                    desc_input = loc.first
-                    break
-            except Exception:
-                continue
-                
-        if desc_input:
-            try:
-                desc_input.focus()
-                # 微信使用的是 contenteditable 富文本编辑器，使用键盘模拟输入最不易出错
-                # 模拟全选并删除现有内容
-                page.keyboard.press("Meta+A")
-                page.keyboard.press("Control+A")
-                page.keyboard.press("Backspace")
-                # 逐字/段插入文案
-                page.keyboard.insert_text(copy_text)
-                logger.info("Successfully pasted copy description.")
-            except Exception as e:
-                logger.error(f"Failed to write description: {e}")
-        else:
-            logger.warning("Could not find description input selector, trying fallback fill...")
-            
-        # ── 3. 等待视频上传完成（标题/封面/分类字段在上传后才出现）────────────
+        # ── 3. 等待视频上传完成 ────────────
         logger.info("Waiting for video upload to complete...")
         upload_finished = False
         for i in range(60):  # 60 × 5s = 300s max
@@ -314,6 +283,36 @@ def run_uploader(
             logger.info(f"Still uploading... ({i+1}/60)")
         if not upload_finished:
             logger.warning("Upload verification timed out (5 min). Proceeding anyway.")
+
+        # ── 4. 填写视频文案/描述 (等上传完成页面稳定后再填) ────────────
+        logger.info("Writing copy to description field...")
+        desc_input = None
+        for selector in [".input-editor", "div[contenteditable='true']", "textarea", ".editor", ".description-textarea"]:
+            try:
+                loc = page.locator(selector)
+                if loc.count() > 0 and loc.first.is_visible():
+                    desc_input = loc.first
+                    break
+            except Exception:
+                continue
+                
+        if desc_input:
+            try:
+                desc_input.focus()
+                page.keyboard.press("Meta+A")
+                page.keyboard.press("Control+A")
+                page.keyboard.press("Backspace")
+                page.keyboard.insert_text(copy_text)
+                logger.info("Successfully pasted copy description.")
+            except Exception as e:
+                logger.error(f"Failed to write description: {e}")
+        else:
+            logger.warning("Could not find description input selector, trying fallback click on text...")
+            try:
+                page.locator("text=添加描述").click()
+                page.keyboard.insert_text(copy_text)
+            except Exception as e2:
+                logger.error(f"Fallback description fill failed: {e2}")
 
         # 上传后截图，确认页面状态
         dbg_post = state_file.parent / "debug_post_upload.png"
