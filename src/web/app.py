@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建 Dashboard API 服务 |
 | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 新增频道管理 API：add/delete，yt-dlp 验证后入库 |
+| 1.2.0 | 2026-05-22 | Gemini_3.5_Flash_fast | 修复手工添加视频（含 TG Bot 提交）卡在 PENDING 不自动触发的问题 |
 """
 import os
 import sys
@@ -54,6 +55,16 @@ def _translate_title_task(youtube_id: str, english_title: str):
             print(f"[Translator] {youtube_id} translated: {zh_title}")
     except Exception as e:
         print(f"[Translator] Failed to translate {youtube_id}: {e}")
+    finally:
+        # [Gemini_3.5_Flash_fast] 手工加急视频翻译完成后立即触发异步处理管线，避免卡在 PENDING
+        try:
+            video = db.get_video_by_youtube_id(youtube_id)
+            if video and video.get("status") == "PENDING":
+                print(f"[Scheduler] Auto-triggering pipeline for manual video: {youtube_id}")
+                _trigger_video_async(video)
+        except Exception as trigger_err:
+            import logging
+            logging.getLogger(__name__).error(f"[Scheduler] Failed to auto-trigger video {youtube_id}: {trigger_err}")
 
 def _auto_pipeline_loop():
     """后台循环任务：启动后延迟10秒执行首次管线，之后每4小时执行一次"""
