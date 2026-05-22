@@ -120,10 +120,10 @@ class PipelineManager:
         return deleted
 
     def _find_downloaded_video(self, yid: str) -> Optional[str]:
-        """glob 查找下载后的视频主文件（排除附属文件，要求 >1MB）"""
+        """glob 查找下载后的视频主文件（排除附属文件，要求 >50KB）"""
         candidates = [
             f for f in self._OUT_DIR.glob(f"{yid}.*")
-            if f.suffix not in _NON_VIDEO_SUFFIXES and f.stat().st_size > 1_000_000
+            if f.suffix not in _NON_VIDEO_SUFFIXES and f.stat().st_size > 50_000
         ]
         return str(candidates[0]) if candidates else None
 
@@ -177,28 +177,12 @@ class PipelineManager:
                 subprocess.run(render_cmd, check=True, capture_output=True,
                                cwd=str(self._PRJ_ROOT), env=render_env)
 
-            # ── 2b. 封面生成（非阻断，失败不影响发布）────────────────────────
-            cover_file = self._OUT_DIR / f"{yid}_cover.jpg"
-            if not cover_file.exists():
-                logger.info(f"Generating cover for {yid}...")
-                cover_cmd = [
-                    self._VENV_PYTHON,
-                    str(self._PRJ_ROOT / "scripts" / "cover_generator.py"),
-                    "--video", str(vertical),
-                    "--title", title,
-                    "--output", str(cover_file),
-                ]
-                res = subprocess.run(cover_cmd, capture_output=True,
-                                     cwd=str(self._PRJ_ROOT))
-                if res.returncode != 0:
-                    logger.warning(f"Cover generation failed (non-fatal): "
-                                   f"{res.stderr.decode()[:200]}")
-            else:
-                logger.info(f"[SKIP] Cover checkpoint: {cover_file.name}")
-
-            # ── 3. COPYWRITING ────────────────────────────────────────────────
+            # ── 2b. COPYWRITING ────────────────────────────────────────────────
             copy_file = self._OUT_DIR / f"{yid}_copy.txt"
-            if copy_file.exists():
+            title_file = self._OUT_DIR / f"{yid}_title.txt"
+            category_file = self._OUT_DIR / f"{yid}_category.txt"
+            
+            if copy_file.exists() and title_file.exists():
                 logger.info(f"[SKIP] Copywriting checkpoint: {copy_file.name}")
                 self.db.update_video_status(yid, "COPYWRITING")
             else:
@@ -214,12 +198,36 @@ class PipelineManager:
                 subprocess.run(copy_cmd, check=True, capture_output=True,
                                cwd=str(self._PRJ_ROOT))
 
+            # ── 3. 封面生成（非阻断，失败不影响发布）────────────────────────
+            cover_file = self._OUT_DIR / f"{yid}_cover.jpg"
+            if not cover_file.exists():
+                logger.info(f"Generating cover for {yid}...")
+                # 读取生成的短标题用于封面，如果读取失败则用原标题
+                cover_title = title
+                if title_file.exists():
+                    try:
+                        cover_title = title_file.read_text(encoding="utf-8").strip()
+                    except Exception:
+                        pass
+
+                cover_cmd = [
+                    self._VENV_PYTHON,
+                    str(self._PRJ_ROOT / "scripts" / "cover_generator.py"),
+                    "--video", str(vertical),
+                    "--title", cover_title,
+                    "--output", str(cover_file),
+                ]
+                res = subprocess.run(cover_cmd, capture_output=True,
+                                     cwd=str(self._PRJ_ROOT))
+                if res.returncode != 0:
+                    logger.warning(f"Cover generation failed (non-fatal): "
+                                   f"{res.stderr.decode()[:200]}")
+            else:
+                logger.info(f"[SKIP] Cover checkpoint: {cover_file.name}")
+
             # ── 4. PUBLISHING ─────────────────────────────────────────────────
             self.db.update_video_status(yid, "PUBLISHING")
             logger.info(f"Uploading to WeChat Channels for {yid}...")
-
-            title_file    = self._OUT_DIR / f"{yid}_title.txt"
-            category_file = self._OUT_DIR / f"{yid}_category.txt"
 
             upload_cmd = [
                 self._VENV_PYTHON,

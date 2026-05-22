@@ -20,7 +20,7 @@ _src = str(Path(__file__).parent.parent)
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -38,6 +38,42 @@ app.add_middleware(
 
 # 使用全局 DB 实例（每次方法调用内部创建新连接，线程安全）
 db = PipelineDB()
+
+def _translate_title_task(youtube_id: str, english_title: str):
+    """后台任务：调用 deep-translator 翻译标题并更新数据库"""
+    try:
+        from deep_translator import GoogleTranslator
+        zh_title = GoogleTranslator(source='auto', target='zh-CN').translate(english_title)
+        if zh_title and zh_title != english_title:
+            with db.get_connection() as conn:
+                conn.execute(
+                    "UPDATE processed_videos SET zh_title = ? WHERE youtube_id = ?",
+                    (zh_title, youtube_id)
+                )
+                conn.commit()
+            print(f"[Translator] {youtube_id} translated: {zh_title}")
+    except Exception as e:
+        print(f"[Translator] Failed to translate {youtube_id}: {e}")
+
+def _auto_pipeline_loop():
+    """后台循环任务：启动后延迟10秒执行首次管线，之后每4小时执行一次"""
+    import time
+    time.sleep(10)
+    while True:
+        try:
+            # 复用已有的全量管线触发逻辑
+            run_full_pipeline()
+            print("[Scheduler] Auto-triggered full pipeline run.")
+        except Exception as e:
+            print(f"[Scheduler] Auto pipeline error: {e}")
+        time.sleep(14400)  # 4 小时 = 14400 秒
+
+@app.on_event("startup")
+def startup_event():
+    """FastAPI 启动时自动运行后台调度器"""
+    import threading
+    threading.Thread(target=_auto_pipeline_loop, daemon=True, name="auto-pipeline-scheduler").start()
+    print("[Scheduler] Background pipeline scheduler started.")
 
 # 优先用 PATH 里的 yt-dlp，其次用 venv 里的
 _YT_DLP = shutil.which("yt-dlp") or str(
@@ -85,21 +121,21 @@ def get_stats():
     }
 
 
-@app.get("/api/queue")
-def get_queue():
-    """返回当前活跃的任务队列（处理中的视频）"""
-    active = []
-    for status in ACTIVE_STATUSES:
-        active.extend(db.get_videos_by_status(status))
-    active.sort(key=lambda v: v.get("updated_at", ""), reverse=True)
-    return {"queue": active, "count": len(active)}
-
-
-@app.get("/api/activity")
-def get_activity():
-    """返回最近 20 条视频动态（活动流）"""
-    videos = db.get_recent_videos(limit=20)
-    return {"activity": videos, "count": len(videos)}
+@app.get("/api/videos")
+def get_videos(tab: str = "waitlist", page: int = 1, size: int = 20):
+    """返回分页和分类后的视频列表，以及各个 Tab 的计数"""
+    page = max(1, page)
+    size = max(1, min(100, size))
+    videos, total_count = db.get_paginated_videos(tab, page, size)
+    tab_counts = db.get_tab_counts()
+    return {
+        "videos": videos,
+        "total_count": total_count,
+        "page": page,
+        "size": size,
+        "total_pages": (total_count + size - 1) // size,
+        "tab_counts": tab_counts
+    }
 
 
 # ── 频道管理 API ──────────────────────────────────────────────────────────
@@ -208,15 +244,15 @@ class AddVideoRequest(BaseModel):
 
 
 @app.post("/api/videos/add")
-def add_video_manual(req: AddVideoRequest):
+def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
     """
     手动将一条 YouTube 视频链接加入处理队列（状态：PENDING）。
 
     验证链：
       1. URL 必须是 YouTube 域名
-      2. yt-dlp 获取 video_id / title / channel_id / channel_name
+      2. yt-dlp 获取 video_id / title / channel_id / channel_name / duration / views / likes / upload_date
       3. 重复检测：已存在则返回当前状态，不重复写入
-      4. 通过 DAL 写入 processed_videos，评分 0，等待管线打分调度
+      4. 通过 DAL 写入 processed_videos，评分 100（手工加急），触发异步翻译
     """
     url = req.url.strip()
     if not url:
@@ -231,8 +267,8 @@ def add_video_manual(req: AddVideoRequest):
         result = subprocess.run(
             [
                 _YT_DLP,
-                "--print", "%(id)s|%(title)s|%(channel_id)s|%(channel)s",
-                "--no-playlist",       # 只处理单个视频，不展开播放列表
+                "--print", "%(id)s|||%(title)s|||%(channel_id)s|||%(channel)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s",
+                "--no-playlist",
                 "--no-warnings",
                 "--cookies-from-browser", "safari",
                 url,
@@ -245,15 +281,23 @@ def add_video_manual(req: AddVideoRequest):
         return {"success": False, "error": f"找不到 yt-dlp：{_YT_DLP}"}
 
     raw = result.stdout.strip().split("\n")[0] if result.stdout.strip() else ""
-    if not raw or raw.count("|") < 3:
+    if not raw or raw.count("|||") < 3:
         err = result.stderr.strip().split("\n")[0] if result.stderr.strip() else "无法解析视频信息"
         return {"success": False, "error": f"视频不存在或无法访问：{err}"}
 
-    video_id, title, channel_id, channel_name = raw.split("|", 3)
-    video_id     = video_id.strip()
-    title        = title.strip()
-    channel_id   = channel_id.strip()
-    channel_name = channel_name.strip()
+    parts = raw.split("|||", 7)
+    video_id    = parts[0].strip()
+    title       = parts[1].strip()
+    channel_id  = parts[2].strip()
+    channel_name = parts[3].strip()
+    # 容错处理：字段可能是 "NA" 或空
+    def _int_or_none(v): 
+        try: return int(v)
+        except: return None
+    duration_sec  = _int_or_none(parts[4]) if len(parts) > 4 else None
+    view_count    = _int_or_none(parts[5]) if len(parts) > 5 else None
+    like_count    = _int_or_none(parts[6]) if len(parts) > 6 else None
+    upload_date   = parts[7].strip() if len(parts) > 7 and parts[7].strip() not in ("NA", "") else None
 
     if not video_id or len(video_id) != 11:
         return {"success": False, "error": f"解析到的视频 ID 格式异常（{video_id}），请检查链接"}
@@ -268,13 +312,19 @@ def add_video_manual(req: AddVideoRequest):
             "current_status": existing["status"],
         }
 
-    # ── 4. 写入队列（手动添加默认 score=100，直接跳过 LLM 打分阶段，最高优先级）
-    # 若频道不在白名单则临时注册（不影响正常监控逻辑）
+    # ── 4. 写入队列（手工添加） ───────────────────────────────────────
     if not db.get_channel_by_id(channel_id):
         db.add_channel(channel_id, channel_name,
                        status="APPROVED", reason="Auto-registered via manual video add")
 
-    db.add_video(video_id, title, channel_id, score=100)  # 手动添加 = 最高优先级
+    # 手工添加给100分加急
+    db.add_video(
+        video_id, title, channel_id, score=100, source="MANUAL",
+        duration_sec=duration_sec, view_count=view_count,
+        like_count=like_count, upload_date=upload_date,
+    )
+    bg_tasks.add_task(_translate_title_task, video_id, title)
+    
     return {
         "success": True,
         "video_id": video_id,
@@ -443,6 +493,9 @@ def delete_video(youtube_id: str, delete_files: bool = False):
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
+
+    if video.get("status") in ACTIVE_STATUSES:
+        return {"success": False, "error": f"安全拦截：视频正处于执行状态（{video['status']}），无法强制物理删除，请等待其执行结束或变为 FAILED。"}
 
     deleted_files = []
     if delete_files:

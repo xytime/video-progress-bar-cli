@@ -325,19 +325,21 @@ def run_uploader(
         # ── 4. 短标题（视频上传后字段才出现）────────────────────────────────
         if short_title:
             logger.info(f"Setting short title: {short_title!r}")
-            for sel in [
-                "input[placeholder*='标题']",
-                "input[placeholder*='title']",
-                ".post-title input",
-                ".header-input",
-                "input[maxlength='30']",
-                "input[maxlength='28']",
-            ]:
+            page.wait_for_timeout(1000)
+            robust_locators = [
+                page.locator("input[placeholder*='短标题']"),
+                page.locator("input[placeholder*='标题']"),
+                page.locator("input[placeholder*='28']"),
+                page.locator("text=短标题").locator("xpath=..").locator("input"),
+                page.locator(".post-title input"),
+                page.locator(".header-input"),
+            ]
+            
+            for loc in robust_locators:
                 try:
-                    loc = page.locator(sel)
-                    if loc.count() > 0 and loc.first.is_visible(timeout=1500):
+                    if loc.count() > 0:
                         loc.first.fill(short_title)
-                        logger.info(f"Short title set via: {sel}")
+                        logger.info(f"Short title set via robust locator")
                         break
                 except Exception:
                     continue
@@ -349,24 +351,48 @@ def run_uploader(
             logger.info(f"Uploading cover: {cover_abs}")
             cover_set = False
             try:
-                n = page.evaluate("() => document.querySelectorAll('input[type=\\'file\\'][accept*=\\'image\\']').length")
-                if n > 0:
-                    page.locator("input[type='file'][accept*='image']").first.set_input_files(cover_abs)
-                    logger.info("Cover uploaded via image file input.")
+                # 尝试通过第二个 file input 注入 (通常第一个是视频，第二个是封面)
+                inputs = page.locator("input[type='file']")
+                if inputs.count() >= 2:
+                    inputs.nth(1).set_input_files(cover_abs)
+                    logger.info("Cover uploaded via second image file input.")
                     cover_set = True
             except Exception as e:
-                logger.warning(f"Cover direct input failed: {e}")
+                pass
+                
             if not cover_set:
                 try:
-                    with page.expect_file_chooser(timeout=6000) as fc_info:
-                        for sel in ["button:has-text('上传封面')", ".cover-upload",
-                                    ".thumb-upload", "[class*='cover']"]:
-                            loc = page.locator(sel)
-                            if loc.count() > 0 and loc.first.is_visible():
-                                loc.first.click()
-                                break
-                    fc_info.value.set_files(cover_abs)
-                    logger.info("Cover uploaded via file chooser.")
+                    # 必须先 Hover 视频预览区域，才能让“更换封面”按钮变为可见
+                    preview_areas = [
+                        page.locator(".video-preview").first,
+                        page.locator(".post-video-preview").first,
+                        page.locator(".cover-wrap").first,
+                        page.locator(".form-item:has-text('封面')").first
+                    ]
+                    for pa in preview_areas:
+                        if pa.count() > 0 and pa.is_visible():
+                            pa.hover()
+                            page.wait_for_timeout(500)
+                            break
+                            
+                    trigger_loc = None
+                    for sel in [
+                        "text=修改封面", "text=更换封面", "text=上传封面", "text=设置封面",
+                        "button:has-text('修改封面')", "button:has-text('上传封面')", "button:has-text('更换封面')", 
+                        ".cover-upload-btn"
+                    ]:
+                        loc = page.locator(sel).first
+                        if loc.count() > 0:
+                            trigger_loc = loc
+                            break
+                            
+                    if trigger_loc:
+                        with page.expect_file_chooser(timeout=6000) as fc_info:
+                            trigger_loc.click(force=True)
+                        fc_info.value.set_files(cover_abs)
+                        logger.info("Cover uploaded via file chooser.")
+                    else:
+                        logger.warning("Could not find a valid cover upload trigger button.")
                 except Exception as e:
                     logger.warning(f"Cover upload failed (non-fatal): {e}")
 
@@ -381,7 +407,57 @@ def run_uploader(
                 loc = page.locator(sel)
                 if loc.count() > 0:
                     if not loc.first.is_checked():
-                        loc.first.check()
+                        loc.first.click(force=True)
+                        
+                        # 处理二次确认协议窗口 (终极防爆轮询机制)
+                        try:
+                            # 尝试 10 次，每次等 1 秒（最多 10 秒），不断尝试找按钮并点击
+                            read_clicked = False
+                            confirm_clicked = False
+                            for attempt in range(10):
+                                page.wait_for_timeout(1000)
+                                # 1. 尝试点击阅读
+                                if not read_clicked:
+                                    for rt in ["阅读", "我已阅读"]:
+                                        lbl = page.locator(f"label:has-text('{rt}')")
+                                        if lbl.count() > 0:
+                                            try:
+                                                lbl.first.click(timeout=500)
+                                                read_clicked = True
+                                                logger.info(f"Clicked '{rt}' label in modal on attempt {attempt}")
+                                                break
+                                            except Exception:
+                                                try:
+                                                    lbl.first.evaluate("node => node.click()")
+                                                    read_clicked = True
+                                                    break
+                                                except Exception:
+                                                    pass
+                                                    
+                                # 2. 尝试点击同意
+                                if not confirm_clicked:
+                                    for bt in ["同意并继续", "我已阅读并同意", "同意", "确定"]:
+                                        btn = page.locator(f"button:has-text('{bt}')")
+                                        if btn.count() > 0:
+                                            try:
+                                                btn.first.click(timeout=500)
+                                                confirm_clicked = True
+                                                logger.info(f"Clicked confirm '{bt}' button in modal on attempt {attempt}")
+                                                break
+                                            except Exception:
+                                                try:
+                                                    btn.first.evaluate("node => node.click()")
+                                                    confirm_clicked = True
+                                                    break
+                                                except Exception:
+                                                    pass
+                                                    
+                                if read_clicked and confirm_clicked:
+                                    break
+                                    
+                        except Exception as e:
+                            logger.info(f"Modal handling error: {e}")
+
                     logger.info(f"Original declaration checked via: {sel}")
                     break
             except Exception:
@@ -391,32 +467,57 @@ def run_uploader(
         if category:
             logger.info(f"Selecting category: {category!r}")
             cat_set = False
-            for sel in ["select[class*='category']", "select[class*='type']", "select"]:
+            
+            # 第一阶段：找到并点击分类下拉框的入口
+            dropdown_triggers = [
+                page.locator("text=视频分类").locator("xpath=..").locator("div").first,
+                page.locator("text=分类").locator("xpath=..").locator("div").first,
+                page.locator(".category-selector"),
+                page.locator("div[class*='category-select']")
+            ]
+            
+            for trigger in dropdown_triggers:
                 try:
-                    loc = page.locator(sel)
-                    if loc.count() > 0 and loc.first.is_visible(timeout=1500):
-                        loc.first.select_option(label=category)
-                        logger.info(f"Category set via select: {sel}")
-                        cat_set = True
-                        break
+                    if trigger.count() > 0 and trigger.first.is_visible(timeout=1500):
+                        try:
+                            trigger.first.click(timeout=500)
+                        except Exception:
+                            trigger.first.evaluate("node => node.click()")
+                        page.wait_for_timeout(800) # 等待下拉菜单展开
+                        
+                        # 第二阶段：在展开的菜单中点击目标分类
+                        # 微信的选项通常在单独的浮层层级中
+                        options = [
+                            page.locator(f"li:has-text('{category}')"),
+                            page.locator(f".weui-desktop-dropdown__list li:has-text('{category}')"),
+                            page.locator(f"div[role='option']:has-text('{category}')")
+                        ]
+                        
+                        for opt in options:
+                            if opt.count() > 0 and opt.first.is_visible(timeout=1000):
+                                try:
+                                    opt.first.click(force=True, timeout=500)
+                                    logger.info(f"Category '{category}' selected successfully.")
+                                    cat_set = True
+                                    break
+                                except Exception:
+                                    try:
+                                        opt.first.evaluate("node => node.click()")
+                                        logger.info(f"Category '{category}' selected successfully via evaluate.")
+                                        cat_set = True
+                                        break
+                                    except Exception:
+                                        pass
+                        
+                        if cat_set:
+                            break
+                        else:
+                            # 没找到对应选项，可能需要点击旁边收起下拉框
+                            page.mouse.click(0, 0)
+                            page.wait_for_timeout(500)
                 except Exception:
                     continue
-            if not cat_set:
-                try:
-                    for sel in [".category-selector", "[class*='category']",
-                                "button:has-text('分类')", "[placeholder*='分类']"]:
-                        loc = page.locator(sel)
-                        if loc.count() > 0 and loc.first.is_visible():
-                            loc.first.click()
-                            page.wait_for_timeout(500)
-                            opt = page.locator(f"li:has-text('{category}'), div:has-text('{category}')")
-                            if opt.count() > 0:
-                                opt.first.click()
-                                logger.info(f"Category '{category}' selected via dropdown.")
-                                cat_set = True
-                            break
-                except Exception as e:
-                    logger.warning(f"Category dropdown failed: {e}")
+
             if not cat_set:
                 logger.warning(f"Could not set category '{category}', skipping.")
             

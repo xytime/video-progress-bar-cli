@@ -155,6 +155,42 @@
     }
     .panel-body { padding: 0; }
 
+    /* ── Tabs ── */
+    .tabs-header {
+      display: flex; gap: 10px; padding: 0 22px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(0,0,0,0.2);
+    }
+    .tab-btn {
+      background: none; border: none; color: var(--text3);
+      padding: 14px 4px; font-size: 13px; font-weight: 500;
+      cursor: pointer; position: relative; font-family: inherit;
+      transition: color 0.2s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--accent); font-weight: 600; }
+    .tab-btn.active::after {
+      content: ''; position: absolute; bottom: -1px; left: 0; right: 0;
+      height: 2px; background: var(--accent); border-radius: 2px;
+    }
+
+    /* ── Pagination ── */
+    .pagination {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 22px; border-top: 1px solid var(--border);
+      background: rgba(0,0,0,0.1);
+      font-size: 12px; color: var(--text3);
+    }
+    .page-controls { display: flex; gap: 8px; align-items: center; }
+    .btn-page {
+      background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+      color: var(--text2); padding: 4px 10px; border-radius: 6px;
+      cursor: pointer; font-family: inherit; font-size: 11px;
+      transition: all 0.2s;
+    }
+    .btn-page:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: var(--text); }
+    .btn-page:disabled { opacity: 0.5; cursor: not-allowed; }
+
     /* ── Activity Table ── */
     .activity-table { width: 100%; border-collapse: collapse; }
     .activity-table th {
@@ -171,19 +207,45 @@
     .activity-table tr { transition: background 0.15s; }
     .activity-table tr:hover td { background: rgba(255,255,255,0.03); }
 
-    .video-title { font-weight: 500; color: var(--text); max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .video-score { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text2); }
-    .video-time { font-size: 11px; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+    .video-title { font-weight: 500; color: var(--text); max-width: 500px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+    .video-zh-title { font-weight: 600; color: var(--accent); max-width: 500px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; margin-bottom: 2px; font-size: 13px; }
     .video-title-link {
-      text-decoration: none; color: inherit; display: block;
+      text-decoration: none; color: var(--text); font-size: 13px; font-weight: 500;
+      display: block; max-width: 500px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      transition: color 0.15s;
     }
-    .video-title-link:hover .video-title {
-      color: var(--accent2);
-      text-decoration: underline;
-      text-decoration-color: rgba(167,139,250,0.4);
-      text-underline-offset: 3px;
+    .video-title-link:hover { color: var(--accent2); text-decoration: underline; text-decoration-color: rgba(167,139,250,0.4); text-underline-offset: 3px; }
+    .video-title-dim { opacity: 0.45; }
+    .video-score { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text); font-weight: 600; display: inline-block; width: 30px; }
+    .video-time { font-size: 11px; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+
+    .video-meta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 5px; font-size: 11px; color: var(--text3); }
+    .video-meta-row strong { color: var(--text2); }
+    .meta-chip {
+      display: inline-flex; align-items: center; gap: 2px;
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 10px; padding: 1px 7px; font-size: 10px; color: var(--text3);
+      font-family: 'JetBrains Mono', monospace; white-space: nowrap;
     }
 
+    .source-badge {
+      display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 4px;
+      font-weight: 600; text-transform: uppercase;
+    }
+    .source-auto { background: rgba(52,211,153,0.1); color: var(--green); }
+    .source-manual { background: rgba(249,115,22,0.1); color: var(--orange); }
+
+    .score-btn-group { display: flex; gap: 4px; margin-top: 4px; }
+    .btn-score {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      color: var(--text3); font-size: 10px; padding: 2px 6px; border-radius: 4px;
+      cursor: pointer; font-family: 'JetBrains Mono', monospace;
+    }
+    .btn-score:hover { background: rgba(255,255,255,0.1); color: var(--text); }
+    .btn-score:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .video-link { text-decoration: none; color: inherit; display: inline-flex; align-items: center; gap: 5px; }
+    .btn-play { color: var(--accent); font-size: 16px; margin-right: 4px; }
 
     /* ── Status Badge ── */
     .badge {
@@ -502,7 +564,7 @@
         📱 微信登录
       </button>
       <button id="btn-run-pipeline" class="btn-run" onclick="runPipeline()">
-        ▶ 立即运行管线
+        ⚡ 强制插队运行
       </button>
       <div class="live-badge"><div class="live-dot"></div>LIVE · 3s</div>
       <div id="last-update">--:--:--</div>
@@ -583,26 +645,46 @@
 
   <!-- Main Grid: Activity + Channels -->
   <div class="main-grid">
-    <!-- Activity Feed -->
+    <!-- Activity Data Table -->
     <div class="panel">
-      <div class="panel-header">
-        <div class="panel-title">⚡ 动态活动流 <span class="panel-badge" id="activity-count">0</span></div>
-        <div style="font-size:11px;color:var(--text3);">最近 20 条记录</div>
+      <div class="panel-header" style="border-bottom:none; padding-bottom:0;">
+        <div class="panel-title">⚡ 任务数据中心 <span class="panel-badge" id="activity-count">0</span></div>
+        <div id="new-data-hint" style="font-size:11px;color:var(--accent);cursor:pointer;display:none;" onclick="loadVideos(1)">✨ 有新动态，点击刷新</div>
       </div>
+      
+      <!-- Tabs -->
+      <div class="tabs-header">
+        <button class="tab-btn active" id="tab-waitlist" onclick="switchTab('waitlist')">待筛选</button>
+        <button class="tab-btn" id="tab-queue" onclick="switchTab('queue')">待处理</button>
+        <button class="tab-btn" id="tab-active" onclick="switchTab('active')">处理中</button>
+        <button class="tab-btn" id="tab-completed" onclick="switchTab('completed')">已完成</button>
+        <button class="tab-btn" id="tab-error" onclick="switchTab('error')">出错异常</button>
+      </div>
+
       <div class="panel-body">
         <table class="activity-table">
           <thead>
             <tr>
-              <th>视频标题</th>
+              <th>视频内容</th>
               <th>状态</th>
-              <th>优先级 <span style="font-weight:400;color:var(--text3);font-size:9px;">（≥75 被调度）</span></th>
-              <th>更新时间</th>
+              <th>分数 / 操作</th>
+              <th>时间</th>
             </tr>
           </thead>
           <tbody id="activity-body">
-            <tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>暂无数据，等待第一个视频入库…</td></tr>
+            <tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>数据加载中…</td></tr>
           </tbody>
         </table>
+        
+        <!-- Pagination -->
+        <div class="pagination">
+          <div>共 <span id="total-count-display">0</span> 条记录</div>
+          <div class="page-controls">
+            <button class="btn-page" id="btn-prev-page" onclick="changePage(-1)">上一页</button>
+            <span id="page-display">1 / 1</span>
+            <button class="btn-page" id="btn-next-page" onclick="changePage(1)">下一页</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -652,6 +734,24 @@
 
   <footer>Video Pipeline Control Center · Auto-refresh every 3s · <a href="/api/stats" target="_blank" style="color:var(--accent2);text-decoration:none;">/api/stats</a></footer>
   <div id="toast"></div>
+
+  <!-- Delete Modal -->
+  <div id="delete-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
+    <div style="background:var(--bg-panel); padding:24px; border-radius:12px; width:400px; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+      <h3 style="margin-top:0; color:var(--text1); font-size:16px;">⚠️ 确认删除任务</h3>
+      <p style="color:var(--text2); font-size:13px; line-height:1.5; margin-bottom:16px;">
+        您正在删除该任务记录。默认情况下只会从数据库中清除记录。
+      </p>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text1); margin-bottom:24px; cursor:pointer; background:rgba(255,255,255,0.05); padding:10px; border-radius:8px;">
+        <input type="checkbox" id="delete-files-checkbox" style="width:16px; height:16px; cursor:pointer;">
+        同时删除相关的物理产物文件（视频、文案等）以释放空间
+      </label>
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button onclick="closeDeleteModal()" style="padding:8px 16px; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text2); cursor:pointer;">取消 (Cancel)</button>
+        <button id="btn-confirm-delete" style="padding:8px 16px; border-radius:6px; background:var(--red); border:none; color:#fff; font-weight:600; cursor:pointer;">确认删除 (Delete)</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -715,18 +815,62 @@
     } catch(e) { console.warn('stats fetch error', e); }
   }
 
-  async function fetchActivity() {
+  let currentTab = 'waitlist';
+  let currentPage = 1;
+  const pageSize = 20;
+
+  function switchTab(tab) {
+    if (currentTab === tab) return;
+    currentTab = tab;
+    currentPage = 1;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+    document.getElementById('new-data-hint').style.display = 'none';
+    loadVideos();
+  }
+
+  function changePage(delta) {
+    currentPage += delta;
+    if (currentPage < 1) currentPage = 1;
+    document.getElementById('new-data-hint').style.display = 'none';
+    loadVideos();
+  }
+
+  async function loadVideos(forcePage = null) {
+    if (forcePage !== null) {
+      currentPage = forcePage;
+      document.getElementById('new-data-hint').style.display = 'none';
+    }
+    
     try {
-      const r = await fetch('/api/activity');
+      const r = await fetch(`/api/videos?tab=${currentTab}&page=${currentPage}&size=${pageSize}`);
       const d = await r.json();
-      document.getElementById('activity-count').textContent = d.count;
+      
+      if (d.tab_counts) {
+        document.getElementById('tab-waitlist').textContent = `待筛选(${d.tab_counts.waitlist})`;
+        document.getElementById('tab-queue').textContent = `待处理(${d.tab_counts.queue})`;
+        document.getElementById('tab-active').textContent = `处理中(${d.tab_counts.active})`;
+        document.getElementById('tab-completed').textContent = `已完成(${d.tab_counts.completed})`;
+        document.getElementById('tab-error').textContent = `出错异常(${d.tab_counts.error})`;
+      }
+
+      document.getElementById('activity-count').textContent = d.total_count;
+      document.getElementById('total-count-display').textContent = d.total_count;
+      document.getElementById('page-display').textContent = `${d.page} / ${d.total_pages || 1}`;
+      document.getElementById('btn-prev-page').disabled = d.page <= 1;
+      document.getElementById('btn-next-page').disabled = d.page >= (d.total_pages || 1);
+
       const tbody = document.getElementById('activity-body');
-      if (!d.activity || d.activity.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>暂无数据，等待第一个视频入库…</td></tr>';
+      if (!d.videos || d.videos.length === 0) {
+        let emptyMsg = '暂无数据';
+        if (currentTab === 'waitlist') emptyMsg = '暂无待筛选记录，等待自动获取...';
+        else if (currentTab === 'queue') emptyMsg = '当前没有排队中的任务';
+        else if (currentTab === 'active') emptyMsg = '当前没有正在处理的任务';
+        tbody.innerHTML = `<tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>${emptyMsg}</td></tr>`;
         return;
       }
 
-      // 刷新前记录当前已展开的错误行，刷新后恢复
+      // 刷新前记录当前已展开的错误行
       const expanded = new Set(
         [...document.querySelectorAll('.error-row')]
           .filter(el => el.style.display !== 'none')
@@ -736,63 +880,129 @@
       const TERMINAL  = new Set(['PUBLISHED','FAILED','LOGIN_REQUIRED']);
       const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
       const STUCK     = new Set(['DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
-      // 有 LOGIN_REQUIRED 时让顶部按钮发光提示
-      const hasLoginRequired = d.activity.some(v => v.status === 'LOGIN_REQUIRED');
+      
+      const hasLoginRequired = d.videos.some(v => v.status === 'LOGIN_REQUIRED');
       const wechatBtn = document.getElementById('btn-wechat-login');
       if (wechatBtn) wechatBtn.classList.toggle('btn-wechat-alert', hasLoginRequired);
-      tbody.innerHTML = d.activity.map(v => {
+
+      tbody.innerHTML = d.videos.map(v => {
         const score      = v.score ?? 0;
         const isPending  = v.status === 'PENDING';
         const isTerminal = TERMINAL.has(v.status);
         const isRetryable = RETRYABLE.has(v.status);
         const isStuck     = STUCK.has(v.status);
-        const priClass   = score >= 75 ? 'priority-high' : score >= 50 ? 'priority-mid' : 'priority-low';
-        const thresholdWarn = isPending && score < 75
-          ? `<span class="priority-threshold">⚠️ 低于调度线(75)，不会被处理</span>` : '';
-        const priControls = !isTerminal ? `
-          <div class="pri-controls">
-            <span class="priority-badge ${priClass}">${score}</span>
-            <button class="btn-pri" title="优先级 +10" onclick="adjustPriority('${v.youtube_id}','increase')">▲</button>
-            <button class="btn-pri" title="优先级 -10" onclick="adjustPriority('${v.youtube_id}','decrease')">▼</button>
-            ${thresholdWarn}
-          </div>` : `<span class="priority-badge ${priClass}">${score}</span>`;
+        
+        // 分数/操作栏
+        let scoreControls = '';
+        if (!isTerminal) {
+          const thresholdWarn = isPending && score < 75 ? `<div style="font-size:9px;color:var(--orange);margin-top:2px;">⚠️ 低于75分暂停</div>` : '';
+          scoreControls = `
+            <div>
+              <span class="video-score" id="score-${v.youtube_id}">${score}</span> 分
+              ${thresholdWarn}
+              <div class="score-btn-group">
+                <button class="btn-score" onclick="setScore('${v.youtube_id}', 0)">0</button>
+                <button class="btn-score" onclick="setScore('${v.youtube_id}', 60)">60</button>
+                <button class="btn-score" onclick="setScore('${v.youtube_id}', 80)">80</button>
+                <button class="btn-score" onclick="setScore('${v.youtube_id}', 100)">100</button>
+              </div>
+            </div>`;
+        } else {
+          scoreControls = `<span class="video-score">${score}</span> 分`;
+        }
+
+        // 按钮栏
         const deleteBtn = `<button class="btn-hard-reset" onclick="deleteVideo('${v.youtube_id}')" title="彻底清除任务记录" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
         const retryBtn = v.status === 'LOGIN_REQUIRED'
-          ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="点击弹出浏览器，用手机微信扫码重新登录">📱 扫码登录</button>
-             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物从头开始">🗑 硬重置</button>` + deleteBtn
+          ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
+             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="硬重置">🗑 重置</button>` + deleteBtn
           : isRetryable
-          ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传：跳过已完成步骤">🔄 重试</button>
-             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="从头开始：删除所有产物文件重新下载">🗑 硬重置</button>` + deleteBtn
+          ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传">🔄 重试</button>
+             <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物重新下载">🗑 重置</button>` + deleteBtn
           : isStuck
-            ? `<button class="btn-retry btn-reset" onclick="retryVideo('${v.youtube_id}')" title="任务卡死，强制重置（断点续传）">⚡ 强制重置</button>
-               <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物，从头开始">🗑 硬重置</button>` + deleteBtn
+            ? `<button class="btn-retry btn-reset" onclick="retryVideo('${v.youtube_id}')" title="强制重置(断点)">⚡ 强置</button>
+               <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="从头开始">🗑 重置</button>` + deleteBtn
             : deleteBtn;
+
+        // 错误折叠
         const errMsg   = v.error_msg || '';
         const hasError = (isRetryable || isStuck) && errMsg.length > 0;
-        const errorToggle = hasError
-          ? `<span class="toggle-error" onclick="toggleError('${v.youtube_id}')">▼ 查看错误</span>`
-          : '';
+        const errorToggle = hasError ? `<span class="toggle-error" onclick="toggleError('${v.youtube_id}')">▼ 错误</span>` : '';
         const errorRow = hasError ? `
           <tr id="err-${v.youtube_id}" class="error-row" style="display:none" data-err="${escapeAttr(errMsg)}">
             <td colspan="4">
               <div class="error-detail">
-                <button class="btn-copy-err" onclick="copyError('${v.youtube_id}')" id="copy-${v.youtube_id}">📋 复制</button>
+                <button class="btn-copy-err" onclick="copyError('${v.youtube_id}')" id="copy-${v.youtube_id}">📋</button>
                 ${escapeHtml(errMsg)}
               </div>
             </td>
           </tr>` : '';
 
+        // 双标题与来源
+        const zhTitleHtml = v.zh_title ? `<div class="video-zh-title">${v.zh_title}</div>` : '';
+        const enTitleHtml = `<a class="video-title-link ${score < 80 ? 'video-title-dim' : ''}"
+          href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
+          onclick="event.stopPropagation()">${v.title || '—'}</a>`;
+        const sourceBadge = v.source === 'MANUAL'
+          ? `<span class="source-badge source-manual">👤 手工加急</span>`
+          : `<span class="source-badge source-auto">🤖 自动探测</span>`;
+
+        // 格式化时长 mm:ss 或 hh:mm:ss
+        const fmtDuration = (sec) => {
+          if (!sec) return null;
+          const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+          return h > 0
+            ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+            : `${m}:${String(s).padStart(2,'0')}`;
+        };
+        // 格式化大数字：1.2M / 34.5K
+        const fmtNum = (n) => {
+          if (n == null) return null;
+          if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+          if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+          return String(n);
+        };
+        // 视频发布距今多久 (upload_date 格式 YYYYMMDD)
+        const fmtUploadAge = (d) => {
+          if (!d || d.length !== 8) return null;
+          const y = d.slice(0,4), mo = d.slice(4,6), da = d.slice(6,8);
+          const pub = new Date(`${y}-${mo}-${da}`);
+          const days = Math.floor((Date.now() - pub) / 86400000);
+          if (days < 1)  return '今天';
+          if (days < 7)  return `${days}天前`;
+          if (days < 30) return `${Math.floor(days/7)}周前`;
+          if (days < 365) return `${Math.floor(days/30)}个月前`;
+          return `${Math.floor(days/365)}年前`;
+        };
+        // like% = likes / views
+        const likeRatio = (v.like_count != null && v.view_count > 0)
+          ? (v.like_count / v.view_count * 100).toFixed(1) + '%'
+          : null;
+
+        const dur       = fmtDuration(v.duration_sec);
+        const views     = fmtNum(v.view_count);
+        const likes     = fmtNum(v.like_count);
+        const uploadAge = fmtUploadAge(v.upload_date);
+
+        const metaChips = [
+          dur       ? `<span class="meta-chip">⏱ ${dur}</span>` : '',
+          uploadAge ? `<span class="meta-chip">📅 ${uploadAge}</span>` : '',
+          views     ? `<span class="meta-chip">👁 ${views}</span>` : '',
+          likeRatio ? `<span class="meta-chip">👍 ${likeRatio}</span>` : '',
+        ].join('');
+
+        const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${metaChips ? ' · ' + metaChips : ''}</div>`;
+
         return `
           <tr>
             <td>
-              <a class="video-title-link" href="https://www.youtube.com/watch?v=${v.youtube_id}"
-                 target="_blank" rel="noopener" title="在 YouTube 打开：${v.title}">
-                <div class="video-title">${v.title || '—'}</div>
-              </a>
+              ${zhTitleHtml}
+              ${enTitleHtml}
+              ${channelRow}
               ${errorToggle}
             </td>
-            <td style="white-space:nowrap">${statusBadge(v.status)} ${retryBtn}</td>
-            <td>${priControls}</td>
+            <td style="white-space:nowrap">${statusBadge(v.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
+            <td>${scoreControls}</td>
             <td><span class="video-time">${relativeTime(v.updated_at)}</span></td>
           </tr>
           ${errorRow}`;
@@ -804,41 +1014,42 @@
         if (row) {
           row.style.display = 'table-row';
           const toggle = document.querySelector(`.toggle-error[onclick*="${yid}"]`);
-          if (toggle) toggle.textContent = '▲ 收起错误';
+          if (toggle) toggle.textContent = '▲ 收起';
         }
       });
 
-    } catch(e) { console.warn('activity fetch error', e); }
+    } catch(e) { console.warn('videos fetch error', e); }
   }
 
-  async function adjustPriority(youtubeId, action) {
+  async function setScore(youtubeId, score) {
+    // 乐观更新 UI
+    const scoreEl = document.getElementById(`score-${youtubeId}`);
+    if (scoreEl) {
+      scoreEl.textContent = score;
+      scoreEl.style.color = 'var(--accent)';
+    }
+
     try {
       const r = await fetch(`/api/videos/${youtubeId}/priority`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action: 'set', value: score }),
       });
       const d = await r.json();
       if (d.success) {
         if (d.triggered) {
-          showToast(`⚡ 分数已到 ${d.score}，已自动启动处理管线！`);
+          showToast('🚀 分数达标，已加入后台处理队列');
+        } else {
+          showToast('✅ 评分已更新');
         }
-        await fetchActivity();
-      }
-    } catch(e) { console.warn('priority update error', e); }
-  }
-
-  async function retryVideo(youtubeId) {
-    try {
-      const r = await fetch(`/api/videos/${youtubeId}/retry`, { method: 'POST' });
-      const d = await r.json();
-      if (d.success) {
-        showToast(d.triggered ? '🔄 已重置并立即重新触发处理！' : `ℹ️ ${d.message}`);
-        await fetchActivity();
+        if (currentTab === 'waitlist' && currentPage === 1) loadVideos();
       } else {
-        showToast(`❌ ${d.error}`);
+        showToast('❌ 调整失败: ' + (d.error || '未知错误'), 'error');
+        if (currentTab === 'waitlist' && currentPage === 1) loadVideos(); // revert
       }
-    } catch(e) { showToast('❌ 重试请求失败'); }
+    } catch(e) {
+      showToast('❌ 网络错误', 'error');
+    }
   }
 
   function toggleError(youtubeId) {
@@ -881,20 +1092,33 @@
   }
 
   async function wechatLogin() {
-    const btn = document.getElementById('btn-wechat-login');
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ 启动中…'; }
+    showToast('⚠️ 如果服务器环境为无头模式，可能无法唤起浏览器。建议查看服务器终端或 VNC。');
     try {
-      const r = await fetch('/api/wechat/login', { method: 'POST' });
+      const r = await fetch('/api/pipeline/login-wechat', { method: 'POST' });
+      const d = await r.json();
+      if (!d.success) showToast('❌ ' + (d.message || d.error), 'error');
+      else showToast('✅ 登录流程触发成功');
+    } catch(e) { showToast('❌ 请求失败', 'error'); }
+  }
+
+  async function retryVideo(youtubeId) {
+    const btn = event.target;
+    const oldText = btn.textContent;
+    btn.disabled = true; btn.textContent = '⏳';
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/retry`, { method: 'POST' });
       const d = await r.json();
       if (d.success) {
-        showToast('📱 浏览器已弹出，请用手机微信扫码登录，完成后窗口自动关闭');
+        showToast('✅ ' + (d.message || '已重置状态'));
+        loadVideos();
+        fetchStats();
       } else {
-        showToast('❌ 启动失败: ' + (d.error || '未知错误'), 'error');
+        showToast('❌ 重试失败: ' + (d.error || '未知错误'), 'error');
+        btn.disabled = false; btn.textContent = oldText;
       }
     } catch(e) {
       showToast('❌ 网络错误: ' + e.message, 'error');
-    } finally {
-      if (btn) { btn.disabled = false; btn.textContent = '📱 微信登录'; }
+      if (btn) { btn.disabled = false; btn.textContent = '🔄'; }
     }
   }
 
@@ -907,46 +1131,58 @@
         ? `✅ 已删除 ${d.deleted_files.length} 个文件，重新触发处理`
         : `✅ 已删除 ${d.deleted_files.length} 个文件，状态重置为 PENDING`;
       showToast(msg);
-      fetchActivity();
+      loadVideos();
       fetchStats();
     } else {
       showToast('❌ 硬重置失败: ' + (d.error || '未知错误'), 'error');
     }
   }
 
-  async function deleteVideo(youtubeId) {
-    if (!confirm('⚠️ 确定要删除该任务记录吗？')) return;
+  let currentDeleteYoutubeId = null;
+
+  function deleteVideo(youtubeId) {
+    currentDeleteYoutubeId = youtubeId;
+    const modal = document.getElementById('delete-modal');
+    document.getElementById('delete-files-checkbox').checked = false; // default is clear record only
+    modal.style.display = 'flex';
     
-    // 第二步：询问是否同时删除文件
-    const deleteFiles = confirm('是否同时删除相关的本地视频、文案等产物文件？\n[确定] = 同时删除文件并释放空间\n[取消] = 仅清除数据库记录');
-    
-    try {
-      const r = await fetch(`/api/videos/${youtubeId}?delete_files=${deleteFiles}`, { method: 'DELETE' });
-      const d = await r.json();
-      if (d.success) {
-        showToast(d.message || '✅ 已彻底删除任务记录');
-        fetchActivity();
-        fetchStats();
-      } else {
-        showToast('❌ 删除失败: ' + (d.error || '未知错误'), 'error');
+    document.getElementById('btn-confirm-delete').onclick = async () => {
+      const deleteFiles = document.getElementById('delete-files-checkbox').checked;
+      closeDeleteModal();
+      try {
+        const r = await fetch(`/api/videos/${youtubeId}?delete_files=${deleteFiles}`, { method: 'DELETE' });
+        const d = await r.json();
+        if (d.success) {
+          showToast(d.message || '✅ 已彻底删除任务记录');
+          loadVideos();
+          fetchStats();
+        } else {
+          showToast('❌ 删除失败: ' + (d.error || '未知错误'), 'error');
+        }
+      } catch(e) {
+        showToast('❌ 网络错误: ' + e.message, 'error');
       }
-    } catch(e) {
-      showToast('❌ 网络错误: ' + e.message, 'error');
-    }
+    };
   }
+
+  function closeDeleteModal() {
+    document.getElementById('delete-modal').style.display = 'none';
+    currentDeleteYoutubeId = null;
+  }
+
 
   async function runPipeline() {
     const btn = document.getElementById('btn-run-pipeline');
     btn.disabled = true;
-    btn.textContent = '⏳ 启动中…';
+    btn.textContent = '⏳ 触发中…';
     try {
       const r = await fetch('/api/pipeline/run', { method: 'POST' });
       const d = await r.json();
-      showToast(d.success ? '🚀 全量管线已在后台启动，请关注仪表盘' : `❌ ${d.message}`);
+      showToast(d.success ? '🚀 强制任务已加入后台队列' : `❌ ${d.message}`);
     } catch(e) {
       showToast('❌ 请求失败');
     } finally {
-      setTimeout(() => { btn.disabled = false; btn.textContent = '▶ 立即运行管线'; }, 3000);
+      setTimeout(() => { btn.disabled = false; btn.textContent = '⚡ 强制插队运行'; }, 3000);
     }
   }
 
@@ -1065,8 +1301,7 @@
         fb.textContent = `✅ 已加入队列：${d.title}（来自 ${d.channel_name}）`;
         fb.className = 'add-channel-feedback ok';
         input.value = '';
-        // 立即刷新活动流，让用户看到新入队的视频
-        await fetchActivity();
+        await loadVideos();
         await fetchStats();
       } else if (d.already_exists) {
         fb.textContent = `ℹ️ ${d.error}`;
@@ -1083,8 +1318,25 @@
     }
   }
 
+  let lastTotalActive = -1;
+
   async function refresh() {
-    await Promise.all([fetchStats(), fetchActivity(), fetchChannels()]);
+    await Promise.all([fetchStats(), fetchChannels()]);
+    
+    if (currentTab === 'waitlist' && currentPage === 1) {
+      await loadVideos();
+    } else {
+      // 智能刷新：如果不处于队列第 1 页，检查后台是否有活动数量变化，如果有，显示提示
+      const activeEl = document.getElementById('s-active');
+      const pendingEl = document.getElementById('s-pending');
+      const currentTotalActive = (parseInt(activeEl ? activeEl.textContent : 0) || 0) + 
+                                 (parseInt(pendingEl ? pendingEl.textContent : 0) || 0);
+      if (lastTotalActive !== -1 && currentTotalActive !== lastTotalActive) {
+        const hint = document.getElementById('new-data-hint');
+        if (hint) hint.style.display = 'block';
+      }
+      lastTotalActive = currentTotalActive;
+    }
   }
 
   // Initial load + 3-second interval

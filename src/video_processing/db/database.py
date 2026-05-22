@@ -57,7 +57,13 @@ class PipelineDB:
                     retry_count INTEGER DEFAULT 0,
                     error_msg TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    zh_title TEXT,
+                    source TEXT DEFAULT 'AUTO',
+                    duration_sec INTEGER DEFAULT NULL,
+                    view_count INTEGER DEFAULT NULL,
+                    like_count INTEGER DEFAULT NULL,
+                    upload_date TEXT DEFAULT NULL
                 )
             ''')
             
@@ -70,6 +76,28 @@ class PipelineDB:
                     status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
                     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
+            ''')
+            
+            # 3. 动态检查并添加新列 (Schema Migration)
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'zh_title' not in columns:
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN zh_title TEXT")
+            if 'source' not in columns:
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN source TEXT DEFAULT 'AUTO'")
+            if 'duration_sec' not in columns:
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN duration_sec INTEGER DEFAULT NULL")
+            if 'view_count' not in columns:
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN view_count INTEGER DEFAULT NULL")
+            if 'like_count' not in columns:
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN like_count INTEGER DEFAULT NULL")
+            if 'upload_date' not in columns:
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN upload_date TEXT DEFAULT NULL")
+                
+            # 4. 创建复合索引优化分页查询性能
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_status_updated 
+                ON processed_videos(status, updated_at DESC)
             ''')
             
             conn.commit()
@@ -104,17 +132,33 @@ class PipelineDB:
             conn.commit()
 
     # --- Video DAL ---
-    def add_video(self, youtube_id: str, title: str, channel_id: str, score: int = 0) -> bool:
+    def add_video(
+        self,
+        youtube_id: str,
+        title: str,
+        channel_id: str,
+        score: int = 0,
+        zh_title: Optional[str] = None,
+        source: str = 'AUTO',
+        duration_sec: Optional[int] = None,
+        view_count: Optional[int] = None,
+        like_count: Optional[int] = None,
+        upload_date: Optional[str] = None,
+    ) -> bool:
         with self.get_connection() as conn:
             try:
                 conn.execute(
-                    "INSERT INTO processed_videos (youtube_id, title, channel_id, score, status) VALUES (?, ?, ?, ?, 'PENDING')",
-                    (youtube_id, title, channel_id, score)
+                    """INSERT INTO processed_videos
+                       (youtube_id, title, channel_id, score, status, zh_title, source,
+                        duration_sec, view_count, like_count, upload_date)
+                       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)""",
+                    (youtube_id, title, channel_id, score, zh_title, source,
+                     duration_sec, view_count, like_count, upload_date)
                 )
                 conn.commit()
                 return True
             except sqlite3.IntegrityError:
-                return False # Already exists
+                return False  # Already exists
                 
     def update_video_status(self, youtube_id: str, status: str, error_msg: Optional[str] = None):
         """更新视频状态。error_msg=None 时主动清空旧错误信息（用于 retry 场景）。"""
@@ -164,14 +208,62 @@ class PipelineDB:
             )
             return {row["status"]: row["cnt"] for row in cursor.fetchall()}
 
-    def get_recent_videos(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """返回最近更新的视频列表，用于仪表盘动态活动流。"""
+    def get_paginated_videos(self, tab: str = 'waitlist', page: int = 1, size: int = 20) -> tuple[List[Dict[str, Any]], int]:
+        """按分页和 Tab 类型返回视频列表和总数。"""
+        if tab == 'completed':
+            condition = "pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')"
+        elif tab == 'error':
+            condition = "pv.status IN ('FAILED', 'LOGIN_REQUIRED')"
+        elif tab == 'active':
+            condition = "pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING')"
+        elif tab == 'queue': # 待处理 (满足所有条件，在排队还没进行到)
+            condition = "pv.status = 'PENDING' AND pv.score >= 75"
+        else: # waitlist (默认，待筛选)
+            condition = "pv.status = 'PENDING' AND pv.score < 75"
+            
+        offset = (page - 1) * size
         with self.get_connection() as conn:
+            # 获取总数
             cursor = conn.execute(
-                "SELECT * FROM processed_videos ORDER BY updated_at DESC LIMIT ?",
-                (limit,)
+                f"SELECT COUNT(*) as cnt FROM processed_videos pv WHERE {condition}"
             )
-            return [dict(row) for row in cursor.fetchall()]
+            total_count = cursor.fetchone()["cnt"]
+            
+            # 获取分页数据，LEFT JOIN 带出频道名称
+            cursor = conn.execute(
+                f"""SELECT pv.*, COALESCE(rc.channel_name, pv.channel_id) AS channel_name
+                    FROM processed_videos pv
+                    LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id
+                    WHERE {condition}
+                    ORDER BY pv.updated_at DESC LIMIT ? OFFSET ?""",
+                (size, offset)
+            )
+            videos = [dict(row) for row in cursor.fetchall()]
+            
+        return videos, total_count
+
+    def get_tab_counts(self) -> Dict[str, int]:
+        """获取各 Tab 的当前数量"""
+        with self.get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT
+                    SUM(CASE WHEN status = 'PENDING' AND score < 75 THEN 1 ELSE 0 END) as waitlist,
+                    SUM(CASE WHEN status = 'PENDING' AND score >= 75 THEN 1 ELSE 0 END) as queue,
+                    SUM(CASE WHEN status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING') THEN 1 ELSE 0 END) as active,
+                    SUM(CASE WHEN status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') THEN 1 ELSE 0 END) as completed,
+                    SUM(CASE WHEN status IN ('FAILED', 'LOGIN_REQUIRED') THEN 1 ELSE 0 END) as error
+                FROM processed_videos
+            """)
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "waitlist": row["waitlist"] or 0,
+                    "queue": row["queue"] or 0,
+                    "active": row["active"] or 0,
+                    "completed": row["completed"] or 0,
+                    "error": row["error"] or 0,
+                }
+            return {"waitlist": 0, "queue": 0, "active": 0, "completed": 0, "error": 0}
 
     def delete_channel(self, channel_id: str) -> bool:
         """从频道白名单中删除指定频道。"""

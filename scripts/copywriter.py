@@ -95,7 +95,7 @@ def generate_wechat_content(title: str, description: str,
         prompt = f"""你是微信视频号运营专家。根据以下 YouTube 视频信息，生成微信视频号发布所需内容。
 
 要求：
-1. short_title：一个吸引眼球的中文标题（可含 emoji），严格不超过 28 字，不能含有广告、政治等违禁词。
+1. short_title：必须是纯中文！一个极简、吸引眼球的中文短标题（可含 emoji），严格不超过 28 字，不能含有广告、政治等违禁词。绝对不能输出英文标题。
 2. copy：文案正文，100-200 字的中文内容摘要 + 3-5 个 hashtag（#AI #科技等）+ 一句 CTA 结尾（可用 emoji），总字数不超过 600 字，纯文本不含 markdown。
 3. category：从以下选项中选最合适的一个：{cats}。若不确定选「{DEFAULT_CATEGORY}」。
 

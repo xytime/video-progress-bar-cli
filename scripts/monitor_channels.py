@@ -16,31 +16,25 @@ DISCOVERY_KEYWORDS = [
 ]
 
 def fetch_latest_videos(db: PipelineDB, channel_id: str):
-    """拉取频道过去 2 天内的最新视频"""
+    """拉取频道过去 2 天内的最新视频，同时获取元数据（时长、观看数、点赞数、发布日期）"""
     print(f"Polling channel: {channel_id}")
     url = f"https://www.youtube.com/channel/{channel_id}"
     
-    # [Claude_Sonnet_4.6_Thinking_planning] 修复：防止 yt-dlp 遍历整个频道历史
-    # --break-on-reject : 遇到第一个不符合日期过滤的视频立即停止
-    #                      （YouTube 按最新排序，超过2天即可提前退出）
-    # --playlist-end 30 : 最多检查最新 30 条，兜底防止卡死
     cmd = [
         "yt-dlp",
-        "--print", "%(id)s|%(title)s",
+        "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s",
         "--dateafter", "now-2days",
         "--match-filter", "duration > 120 & duration < 2700",
-        "--break-on-reject",   # 关键：遇到第一个不符合日期的视频立即停止
-        "--playlist-end", "30",# 兜底：最多看最新 30 条
+        "--break-on-reject",
+        "--playlist-end", "30",
         "--no-warnings",
         "--cookies-from-browser", "safari",
         url
     ]
     
     try:
-        # [Claude_Sonnet_4.6_Thinking_planning] 增加 120s 超时硬上限，防止单频道无限阻塞
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode != 0 and result.returncode != 101:
-            # returncode=101 是 yt-dlp 的 --break-on-reject 正常退出码，不算错误
             print(f"Warning: Failed to fetch {channel_id}. Error: {result.stderr.strip()}")
             return
             
@@ -48,21 +42,45 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
         if not output:
             print("  -> No recent matching videos found.")
             return
+
+        def _int_or_none(v):
+            try: return int(v)
+            except: return None
             
         for line in output.split('\n'):
-            parts = line.split('|', 1)
-            if len(parts) == 2:
-                video_id, title = parts
-                added = db.add_video(video_id, title, channel_id, score=0)
-                if added:
-                    print(f"  -> Added new video to queue: {title}")
-                else:
-                    print(f"  -> Video already in queue: {title}")
+            parts = line.split('|||', 5)
+            if len(parts) < 2:
+                continue
+            video_id = parts[0].strip()
+            title    = parts[1].strip()
+            duration_sec = _int_or_none(parts[2]) if len(parts) > 2 else None
+            view_count   = _int_or_none(parts[3]) if len(parts) > 3 else None
+            like_count   = _int_or_none(parts[4]) if len(parts) > 4 else None
+            upload_date  = parts[5].strip() if len(parts) > 5 and parts[5].strip() not in ("NA", "") else None
+                 
+            # 翻译标题
+            zh_title = title
+            try:
+                from deep_translator import GoogleTranslator
+                zh_title = GoogleTranslator(source='auto', target='zh-CN').translate(title)
+            except Exception as e:
+                print(f"  -> Translator failed for {video_id}: {e}")
+
+            added = db.add_video(
+                video_id, title, channel_id, score=0, zh_title=zh_title, source="AUTO",
+                duration_sec=duration_sec, view_count=view_count,
+                like_count=like_count, upload_date=upload_date,
+            )
+            if added:
+                print(f"  -> Added new video to queue: {title}")
+            else:
+                print(f"  -> Video already in queue: {title}")
                     
     except subprocess.TimeoutExpired:
         print(f"  -> Timeout: {channel_id} took >120s, skipped. Will retry next run.")
     except Exception as e:
         print(f"Error polling channel {channel_id}: {e}")
+
 
 
 def discover_new_channels(db: PipelineDB):

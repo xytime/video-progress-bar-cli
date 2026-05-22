@@ -24,12 +24,12 @@ def main():
     for url in HISTORICAL_URLS:
         print(f"Fetching metadata for {url}...")
         try:
-            cmd = ["yt-dlp", "--print", "%(channel_id)s|%(channel)s|%(id)s|%(title)s", "--no-playlist", "--no-warnings", "--cookies-from-browser", "safari", url]
+            cmd = ["yt-dlp", "--print", "%(channel_id)s|||%(channel)s|||%(id)s|||%(title)s", "--no-playlist", "--no-warnings", "--cookies-from-browser", "safari", url]
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             output = result.stdout.strip()
             
             if output:
-                parts = output.split("|", 3)
+                parts = output.split("|||", 3)
                 if len(parts) == 4:
                     channel_id, channel_name, video_id, title = parts
                 else:

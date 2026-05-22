@@ -7,6 +7,7 @@
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-05-21 | Gemini_3.5_Flash_planning | 初始创建 vpanel，支持 ui/job 命令组管理 |
 # | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 修复硬编码路径、set -e 静默崩溃、stop 未等待进程、help 命令缺失、tail 行数不足 |
+# | 1.2.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 新增 bot 命令组：透传 bot_daemon.py，零业务逻辑 |
 # =======================================================================
 
 # [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
@@ -54,6 +55,13 @@ show_usage() {
     echo "  ./vpanel job logs             实时查看管线运行日志（最近 50 行）"
     echo "  ./vpanel job channels         列出当前已批准的频道白名单"
     echo "  ./vpanel job add-channel URL  通过 yt-dlp 验证并添加一个 YouTube 频道到白名单"
+    echo ""
+    echo "命令组: bot (Telegram Bot 管理)"
+    echo "  ./vpanel bot start            后台启动 Telegram Bot"
+    echo "  ./vpanel bot stop             停止 Telegram Bot"
+    echo "  ./vpanel bot status           查看 Bot 运行状态"
+    echo "  ./vpanel bot logs             实时查看 Bot 日志（最近 50 行）"
+    echo "  ./vpanel bot restart          重启 Bot"
     echo ""
     echo "通用:"
     echo "  ./vpanel help                 显示此帮助信息"
@@ -277,6 +285,28 @@ case "$GROUP" in
     # [Claude_Sonnet_4.6_Thinking_planning] P2修复：注册 help 为有效命令，避免 './vpanel help' 报错
     help)
         show_usage
+        ;;
+    # [Claude_Sonnet_4.6_Thinking_planning] 1.2.0: bot 命令组 — 4 行透传网关，零业务逻辑
+    bot)
+        case "$ACTION" in
+            start|stop|status|restart)
+                "$PYTHON" "$PRJ_ROOT/scripts/bot_daemon.py" "$ACTION"
+                ;;
+            logs)
+                BOT_LOG="$PRJ_ROOT/output/bot.log"
+                if [ -f "$BOT_LOG" ]; then
+                    echo "📄 正在追踪 Bot 日志 (按 Ctrl+C 退出)..."
+                    tail -f -n 50 "$BOT_LOG"
+                else
+                    echo "ℹ️ Bot 日志尚未创建，请先运行 './vpanel bot start'"
+                fi
+                ;;
+            *)
+                echo "❌ 错误: 未知操作 '$ACTION'"
+                show_usage
+                exit 1
+                ;;
+        esac
         ;;
     *)
         echo "❌ 错误: 未知命令组 '$GROUP'"

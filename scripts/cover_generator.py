@@ -1,154 +1,130 @@
-"""封面生成器 — 从视频提取关键帧并叠加品牌水印，生成微信视频号封面图
-
-# Modification History
-| Version | Date       | Author                              | Description  |
-|---------|------------|-------------------------------------|--------------|
-| 1.0.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建     |
-"""
-
+#!/usr/bin/env python3
 import os
-import sys
 import argparse
-import logging
-import subprocess
 from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-from PIL import Image, ImageDraw, ImageFont
+# 1080x1920 (竖屏标准分辨率)
+W, H = 1080, 1920
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("cover_generator")
-
-COVER_W, COVER_H = 1080, 1350
-CHANNEL_NAME = "AI科技前沿"
-
-
-def get_video_duration(video_path: str) -> float:
-    cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        video_path,
-    ]
-    try:
-        return float(subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip())
-    except Exception as e:
-        logger.warning(f"ffprobe failed: {e}")
-        return 30.0
-
-
-def extract_frame(video_path: str, timestamp: float, out_path: str) -> bool:
-    cmd = [
-        "ffmpeg", "-y",
-        "-ss", str(timestamp),
-        "-i", video_path,
-        "-frames:v", "1",
-        "-q:v", "2",
-        out_path,
-    ]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True)
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error(f"ffmpeg frame extraction failed: {e.stderr.decode()[:300]}")
-        return False
-
-
-def get_font(size: int) -> ImageFont.FreeTypeFont:
-    candidates = [
+def get_font_path():
+    paths = [
         "/System/Library/Fonts/PingFang.ttc",
         "/System/Library/Fonts/STHeiti Light.ttc",
-        "/System/Library/Fonts/STHeiti Medium.ttc",
-        "/Library/Fonts/Arial Unicode MS.ttf",
+        "/Library/Fonts/Arial Unicode.ttf",
     ]
-    for path in candidates:
-        if Path(path).exists():
-            try:
-                return ImageFont.truetype(path, size)
-            except Exception:
-                continue
-    return ImageFont.load_default()
+    for p in paths:
+        if os.path.exists(p):
+            return p
+    return None
 
+FONT_PATH = get_font_path()
 
-def wrap_text(text: str, font: ImageFont.FreeTypeFont,
-              max_width: int, draw: ImageDraw.ImageDraw) -> list:
-    lines, current = [], ""
-    for char in text:
-        test = current + char
-        bbox = draw.textbbox((0, 0), test, font=font)
-        if bbox[2] - bbox[0] > max_width and current:
-            lines.append(current)
-            current = char
+def get_font(size, weight="regular"):
+    if not FONT_PATH: 
+        return ImageFont.load_default()
+    try:
+        if "PingFang" in FONT_PATH:
+            idx = 5 if weight == "bold" else 0 # 5=Semibold, 0=Regular
+            if weight == "black": idx = 4 # Heavy
+            return ImageFont.truetype(FONT_PATH, size, index=idx)
+        return ImageFont.truetype(FONT_PATH, size)
+    except:
+        return ImageFont.load_default()
+
+def draw_text_centered(draw, text, font, y, fill):
+    bbox = draw.textbbox((0, 0), text, font=font)
+    w = bbox[2] - bbox[0]
+    x = (W - w) / 2
+    draw.text((x, y), text, font=font, fill=fill)
+    return bbox[3] - bbox[1]
+
+def split_text_by_width(text, font, max_width):
+    """按像素宽度智能折行，绝不打断英文单词"""
+    import re
+    # 分离出所有的单词、汉字、标点
+    tokens = re.findall(r'[a-zA-Z0-9]+|[^a-zA-Z0-9]', text)
+    lines = []
+    current_line = ""
+    
+    # 忽略前导空格
+    tokens = [t for t in tokens if t != ""]
+    
+    for token in tokens:
+        test_line = current_line + token
+        # 去除开头可能多出的空格用于测试宽度
+        bbox = font.getbbox(test_line.strip())
+        width = bbox[2] - bbox[0] if bbox else 0
+        
+        if width <= max_width:
+            current_line = test_line
         else:
-            current = test
-    if current:
-        lines.append(current)
+            if current_line.strip():
+                lines.append(current_line.strip())
+            # 如果单个 token 已经超过最大宽度（比如超长英文），没办法只能硬塞
+            current_line = token.lstrip()
+            
+    if current_line.strip():
+        lines.append(current_line.strip())
     return lines
 
-
-def generate_cover(video_path: str, title: str, output_path: str) -> bool:
-    video_path  = str(Path(video_path).resolve())
-    output_path = str(Path(output_path).resolve())
-
-    duration  = get_video_duration(video_path)
-    timestamp = max(3.0, duration * 0.10)
-    tmp_frame = output_path + ".frame.jpg"
-
-    logger.info(f"Extracting frame at {timestamp:.1f}s ...")
-    if not extract_frame(video_path, timestamp, tmp_frame):
-        timestamp = duration * 0.30
-        if not extract_frame(video_path, timestamp, tmp_frame):
-            logger.error("Cannot extract frame from video.")
-            return False
-
-    bg    = Image.open(tmp_frame).convert("RGB")
-    ratio = max(COVER_W / bg.width, COVER_H / bg.height)
-    bg    = bg.resize((int(bg.width * ratio), int(bg.height * ratio)), Image.LANCZOS)
-    left  = (bg.width - COVER_W) // 2
-    top   = (bg.height - COVER_H) // 2
-    bg    = bg.crop((left, top, left + COVER_W, top + COVER_H))
-
-    overlay   = Image.new("RGBA", (COVER_W, COVER_H), (0, 0, 0, 0))
-    draw_ov   = ImageDraw.Draw(overlay)
-    grad_h    = int(COVER_H * 0.55)
-    for y in range(grad_h):
-        alpha = int(200 * (y / grad_h))
-        draw_ov.line([(0, COVER_H - grad_h + y), (COVER_W, COVER_H - grad_h + y)],
-                     fill=(0, 0, 0, alpha))
-
-    canvas = Image.alpha_composite(bg.convert("RGBA"), overlay).convert("RGB")
-    draw   = ImageDraw.Draw(canvas)
-
-    title_font   = get_font(64)
-    channel_font = get_font(36)
-    margin       = 60
-    title_lines  = wrap_text(title, title_font, COVER_W - margin * 2, draw)
-
-    line_h  = 74
-    block_h = len(title_lines) * line_h + 50 + 44
-    text_y  = COVER_H - block_h - margin
-
-    for i, line in enumerate(title_lines):
-        y = text_y + i * line_h
-        draw.text((margin + 2, y + 2), line, font=title_font, fill=(0, 0, 0))
-        draw.text((margin, y),         line, font=title_font, fill=(255, 255, 255))
-
-    ch_y = text_y + len(title_lines) * line_h + 16
-    draw.text((margin, ch_y), f"📺 {CHANNEL_NAME}", font=channel_font, fill=(200, 200, 200))
-
-    canvas.save(output_path, "JPEG", quality=92)
-    logger.info(f"Cover saved: {output_path}  ({COVER_W}x{COVER_H})")
-    Path(tmp_frame).unlink(missing_ok=True)
-    return True
-
+def generate_cover(title: str, output_path: str):
+    # Base dark background
+    img = Image.new('RGBA', (W, H), color='#030712')
+    
+    # Draw ambient glowing orbs
+    orbs = Image.new('RGBA', (W, H), (0,0,0,0))
+    o_draw = ImageDraw.Draw(orbs)
+    o_draw.ellipse([-400, 200, 800, 1400], fill=(147, 51, 234, 180)) # Purple
+    o_draw.ellipse([400, 800, 1600, 2000], fill=(59, 130, 246, 180)) # Blue
+    orbs = orbs.filter(ImageFilter.GaussianBlur(200))
+    img = Image.alpha_composite(img, orbs)
+    
+    # Glass Card
+    card = Image.new('RGBA', (W, H), (0,0,0,0))
+    c_draw = ImageDraw.Draw(card)
+    margin = 80
+    cw = W - margin*2
+    ch = 900
+    cy = H/2 - ch/2
+    
+    # Translucent fill + stroke for glassmorphism
+    c_draw.rounded_rectangle([margin, cy, margin+cw, cy+ch], radius=60, fill=(255,255,255,15), outline=(255,255,255,60), width=4)
+    
+    # Badge inside card
+    badge_font = get_font(50, "bold")
+    c_draw.rounded_rectangle([W/2 - 180, cy + 80, W/2 + 180, cy + 180], radius=50, fill=(255,255,255,255))
+    draw_text_centered(c_draw, "TECH INSIGHTS", badge_font, cy + 105, fill='#0f172a')
+    
+    # Determine Main Font and Split Text by pixel width
+    font_main = get_font(130, "black")
+    max_text_width = cw - 120 # Leave padding inside the card
+    lines = split_text_by_width(title, font_main, max_text_width)
+    
+    # Render lines (always use same font size)
+    total_text_height = sum([font_main.getbbox(l)[3] - font_main.getbbox(l)[1] for l in lines]) + (len(lines)-1)*40
+    current_y = cy + 250 + (500 - total_text_height)/2 # Center vertically in the remaining space
+    
+    for line in lines:
+        h = draw_text_centered(c_draw, line, font_main, current_y, fill='#ffffff')
+        current_y += h + 40
+            
+    # Composite card
+    img = Image.alpha_composite(img, card)
+    
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    img.convert('RGB').save(out_path, quality=95)
+    print(f"Cover generated: {out_path}")
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--video",  required=True)
-    parser.add_argument("--title",  required=True)
-    parser.add_argument("--output", required=True)
+    parser = argparse.ArgumentParser(description="Generate video cover (V5 Glassmorphism).")
+    parser.add_argument("--title", required=True, help="Video title")
+    parser.add_argument("--video", help="Video path (ignored, just for compat)")
+    parser.add_argument("--output", required=True, help="Output image path (.jpg)")
     args = parser.parse_args()
-    sys.exit(0 if generate_cover(args.video, args.title, args.output) else 1)
-
+    
+    generate_cover(args.title, args.output)
 
 if __name__ == "__main__":
     main()
