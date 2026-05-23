@@ -328,6 +328,8 @@ def run_uploader(
             page.wait_for_timeout(2000)
             robust_locators = [
                 page.locator("input[placeholder*='短标题']"),
+                page.locator("input[placeholder*='概括视频主要内容']"),
+                page.locator("input[placeholder*='6-16']"),
                 page.locator("input[placeholder*='标题']"),
                 page.locator("input[placeholder*='28']"),
                 page.locator("textarea[placeholder*='短标题']"),
@@ -350,7 +352,7 @@ def run_uploader(
                 js_injected = page.evaluate('''
                     (titleText) => {
                         let elements = Array.from(document.querySelectorAll('input, textarea'));
-                        let target = elements.find(el => (el.placeholder || '').includes('短标题') || (el.placeholder || '').includes('标题'));
+                        let target = elements.find(el => (el.placeholder || '').includes('短标题') || (el.placeholder || '').includes('标题') || (el.placeholder || '').includes('主要内容'));
                         if (target) {
                             target.value = titleText;
                             target.dispatchEvent(new Event('input', { bubbles: true }));
