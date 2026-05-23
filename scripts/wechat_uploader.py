@@ -325,26 +325,45 @@ def run_uploader(
         # ── 4. 短标题（视频上传后字段才出现）────────────────────────────────
         if short_title:
             logger.info(f"Setting short title: {short_title!r}")
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(2000)
             robust_locators = [
                 page.locator("input[placeholder*='短标题']"),
                 page.locator("input[placeholder*='标题']"),
                 page.locator("input[placeholder*='28']"),
-                page.locator("text=短标题").locator("xpath=..").locator("input"),
+                page.locator("textarea[placeholder*='短标题']"),
+                page.locator("text=短标题").locator("xpath=..").locator("input, textarea, [contenteditable='true']"),
                 page.locator(".post-title input"),
                 page.locator(".header-input"),
             ]
             
             for loc in robust_locators:
                 try:
-                    if loc.count() > 0:
+                    if loc.count() > 0 and loc.first.is_visible():
                         loc.first.fill(short_title)
                         logger.info(f"Short title set via robust locator")
                         break
                 except Exception:
                     continue
             else:
-                logger.warning("Could not find title input, skipping.")
+                logger.warning("Could not find title input via locators, trying JS evaluation...")
+                # 尝试通过 JS 强行寻找相关输入框 (有些是动态组件)
+                js_injected = page.evaluate('''
+                    (titleText) => {
+                        let elements = Array.from(document.querySelectorAll('input, textarea'));
+                        let target = elements.find(el => (el.placeholder || '').includes('短标题') || (el.placeholder || '').includes('标题'));
+                        if (target) {
+                            target.value = titleText;
+                            target.dispatchEvent(new Event('input', { bubbles: true }));
+                            return true;
+                        }
+                        return false;
+                    }
+                ''', short_title)
+                
+                if js_injected:
+                    logger.info("Short title set via JS evaluation fallback.")
+                else:
+                    logger.warning("Could not find title input anywhere, skipping.")
 
         # ── 5. 封面上传 ───────────────────────────────────────────────────────
         if cover_abs:
@@ -367,7 +386,8 @@ def run_uploader(
                         page.locator(".video-preview").first,
                         page.locator(".post-video-preview").first,
                         page.locator(".cover-wrap").first,
-                        page.locator(".form-item:has-text('封面')").first
+                        page.locator(".form-item:has-text('封面')").first,
+                        page.locator("text=封面预览").locator("xpath=..").first
                     ]
                     for pa in preview_areas:
                         if pa.count() > 0 and pa.is_visible():
@@ -377,9 +397,9 @@ def run_uploader(
                             
                     trigger_loc = None
                     for sel in [
-                        "text=修改封面", "text=更换封面", "text=上传封面", "text=设置封面",
-                        "button:has-text('修改封面')", "button:has-text('上传封面')", "button:has-text('更换封面')", 
-                        ".cover-upload-btn"
+                        "text=修改封面", "text=更换封面", "text=上传封面", "text=设置封面", "text=编辑",
+                        "button:has-text('修改封面')", "button:has-text('上传封面')", "button:has-text('更换封面')", "button:has-text('编辑')",
+                        ".cover-upload-btn", ".post-cover-edit"
                     ]:
                         loc = page.locator(sel).first
                         if loc.count() > 0:
@@ -391,6 +411,16 @@ def run_uploader(
                             trigger_loc.click(force=True)
                         fc_info.value.set_files(cover_abs)
                         logger.info("Cover uploaded via file chooser.")
+                        
+                        # 尝试点击裁剪/封面的"确定"或"完成"按钮
+                        page.wait_for_timeout(1500)
+                        for btn_sel in ["text=确定", "text=完成", "button:has-text('确定')", "button:has-text('完成')"]:
+                            btn = page.locator(btn_sel).last
+                            if btn.count() > 0 and btn.is_visible():
+                                btn.click(force=True)
+                                logger.info(f"Clicked cover confirm button: {btn_sel}")
+                                page.wait_for_timeout(1000)
+                                break
                     else:
                         logger.warning("Could not find a valid cover upload trigger button.")
                 except Exception as e:

@@ -254,9 +254,13 @@ class PipelineManager:
             if category_file.exists():
                 upload_cmd += ["--category-file", str(category_file)]
 
-            # 不使用 capture_output，让上传器日志流入父进程
-            res = subprocess.run(upload_cmd, text=True, capture_output=False,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # 使用 capture_output 获取上传器日志
+            res = subprocess.run(upload_cmd, text=True, capture_output=True, cwd=str(self._PRJ_ROOT))
+            
+            if res.stdout:
+                logger.debug(f"Uploader stdout:\n{res.stdout}")
+            if res.stderr:
+                logger.debug(f"Uploader stderr:\n{res.stderr}")
 
             if res.returncode == 2:
                 logger.error(f"WeChat login required for {yid}.")
