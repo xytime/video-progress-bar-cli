@@ -8,6 +8,7 @@
 | 1.2.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | P0根因修复: (1)封面确认改为轮询等待disabled→enabled (2)原创声明增加JS兜底 |
 | 1.3.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | 原创声明 v2.0: 抗 UI 变化三层降级架构 (_click_original_toggle + _handle_original_rights_dialog) |
 | 1.4.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | 反反爬虫 v1.0: human_mouse+浏览器指纹伪造+关键点击改为人类行为模拟 |
+| 1.5.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning      | 修复原创权益弹窗勾选：适配 Shadow DOM 内的 AntD Checkbox 与 class 类名禁用属性校验 |
 """
 
 import os
@@ -860,7 +861,8 @@ def run_uploader(
 
             # ── 客观验证: 声明原创按钮是否 enabled ────────────────────────────
             def _is_declare_btn_enabled():
-                """以"声明原创"按钮从 disabled->enabled 作为 checkbox 已勾选的验证"""
+                """以"声明原创"按钮从 disabled->enabled 作为 checkbox 已勾选的验证
+                # [Gemini_3.5_Flash_High_planning] 挂载 weui-desktop-btn_disabled 类名判定微前端场景下的禁用状态"""
                 for btn_text in ["\u58f0\u660e\u539f\u521b", "\u786e\u5b9a"]:
                     try:
                         btns = page.locator(f"button:has-text('{btn_text}')")
@@ -868,8 +870,12 @@ def run_uploader(
                             btn = btns.nth(i)
                             if not btn.is_visible():
                                 continue
+                            cls = btn.get_attribute("class") or ""
+                            # [Gemini_3.5_Flash_High_planning] 校验 disabled 属性、aria-disabled 以及 class 中的禁用类
                             if (btn.get_attribute("disabled") is None and
-                                    btn.get_attribute("aria-disabled") != "true"):
+                                    btn.get_attribute("aria-disabled") != "true" and
+                                    "disabled" not in cls.lower() and
+                                    "weui-desktop-btn_disabled" not in cls):
                                 return True, btn
                     except Exception:
                         pass
@@ -1065,6 +1071,65 @@ def run_uploader(
                 except Exception:
                     return False
 
+            def _s8_antd_checkbox_wrapper(page):
+                """S8 (新增): 点击 .ant-checkbox-wrapper 或 .ant-checkbox-inner
+                适用: 微信在微前端中使用 Ant Design Checkbox 的版本
+                # [Gemini_3.5_Flash_High_planning] 能够被 Playwright pierced-shadow 机制自动识别"""
+                for sel in [
+                    ".ant-checkbox-wrapper",
+                    ".ant-checkbox-inner",
+                    "label.ant-checkbox-wrapper",
+                    "span.ant-checkbox-inner",
+                    ".declare-body-wrapper label",
+                ]:
+                    try:
+                        cb = page.locator(sel).first
+                        if cb.count() > 0 and cb.is_visible(timeout=300):
+                            ok = human_click(page, cb)
+                            if ok:
+                                logger.info(f"[S8] AntD checkbox clicked via: {sel}")
+                                return True
+                    except Exception:
+                        pass
+                return False
+
+            def _s9_antd_checkbox_force_input(page):
+                """S9 (新增): 强制点击隐藏的 .ant-checkbox-input
+                # [Gemini_3.5_Flash_High_planning] 强制点击隐藏 input 是 Playwright 中处理不可见原生控件的推荐方式"""
+                try:
+                    cb = page.locator(".ant-checkbox-input").first
+                    if cb.count() > 0:
+                        cb.click(force=True, timeout=500)
+                        logger.info("[S9] AntD hidden input force clicked")
+                        return True
+                except Exception:
+                    pass
+                return False
+
+            def _s10_absolute_coordinate_click(page):
+                """S10 (新增): 物理坐标定位点击 (基于用户建议)
+                # [Gemini_3.5_Flash_High_planning] 获取元素 bounding box 后以真实鼠标坐标点击其中心点"""
+                for sel in [
+                    ".ant-checkbox-wrapper",
+                    ".ant-checkbox-inner",
+                    "span.ant-checkbox-inner"
+                ]:
+                    try:
+                        cb = page.locator(sel).first
+                        if cb.count() > 0 and cb.is_visible(timeout=300):
+                            box = cb.bounding_box()
+                            if box:
+                                cx = box["x"] + box["width"] / 2
+                                cy = box["y"] + box["height"] / 2
+                                page.mouse.move(cx, cy)
+                                page.wait_for_timeout(100)
+                                page.mouse.click(cx, cy)
+                                logger.info(f"[S10] absolute coordinate click at ({cx:.0f},{cy:.0f}) via: {sel}")
+                                return True
+                    except Exception as e:
+                        pass
+                return False
+
             # 策略库（按历史可靠性和通用性排序，不删除旧策略）
             CHECKBOX_STRATEGIES = [
                 ("S1_native_input_css",          _s1_native_input_css),
@@ -1074,6 +1139,9 @@ def run_uploader(
                 ("S5_label_in_container",        _s5_label_in_container),
                 ("S6_dispatch_on_small_el",      _s6_dispatch_events_on_small_element),
                 ("S7_tab_space_keyboard",        _s7_tab_space_keyboard),
+                ("S8_antd_checkbox_wrapper",     _s8_antd_checkbox_wrapper),
+                ("S9_antd_checkbox_force_input",  _s9_antd_checkbox_force_input),
+                ("S10_absolute_coordinate_click", _s10_absolute_coordinate_click),
             ]
 
             # ── 逐策略尝试，以按钮 enabled 为验证 ───────────────────────────
