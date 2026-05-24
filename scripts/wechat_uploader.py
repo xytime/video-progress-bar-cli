@@ -7,6 +7,7 @@
 | 1.1.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 处理短标题/封面/分类/原创勾选；修复登录误判 URL优先策略 |
 | 1.2.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | P0根因修复: (1)封面确认改为轮询等待disabled→enabled (2)原创声明增加JS兜底 |
 | 1.3.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | 原创声明 v2.0: 抗 UI 变化三层降级架构 (_click_original_toggle + _handle_original_rights_dialog) |
+| 1.4.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | 反反爬虫 v1.0: human_mouse+浏览器指纹伪造+关键点击改为人类行为模拟 |
 """
 
 import os
@@ -15,6 +16,19 @@ import argparse
 import logging
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+import random
+import time
+
+# [Claude_Sonnet_4.6_Thinking_planning] 反反爬虫: 人类行为模拟
+import sys as _sys
+_scripts_dir = str(Path(__file__).parent)
+if _scripts_dir not in _sys.path:
+    _sys.path.insert(0, _scripts_dir)
+from human_mouse import (
+    human_click, human_check, find_and_human_click_text,
+    find_checkbox_near_text, dispatch_human_click_events,
+    _human_delay
+)
 
 try:
     import requests as _requests
@@ -99,12 +113,25 @@ def run_uploader(
 
         context = browser.new_context(**context_opts)
 
-        # 反检测：覆盖 navigator.webdriver = false（必须在 goto 之前注入）
+        # [Claude_Sonnet_4.6_Thinking_planning] 反检测 v2.0: 完整浏览器指纹伪造
         context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => false,
-            });
-            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            window.chrome = {
+                runtime: {},
+                loadTimes: function(){},
+                csi: function(){},
+                app: {}
+            };
+            Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
+            const _oq = window.navigator.permissions.query;
+            window.navigator.permissions.query = (p) =>
+                p.name === 'notifications'
+                    ? Promise.resolve({ state: Notification.permission })
+                    : _oq(p);
+            delete window.__playwright;
+            delete window.__pw_manual;
+            delete window._phantom;
         """)
 
         page = context.new_page()
@@ -621,20 +648,22 @@ def run_uploader(
                                         # 额外检查: aria-disabled
                                         if btn.get_attribute("aria-disabled") == "true":
                                             continue
-                                        # 确认按钮可用，点击
-                                        btn.click(timeout=2000, force=True)
-                                        logger.info(f"[Strategy A] Cover confirmed via button:has-text('{btn_name}') on poll attempt {poll_attempt}")
-                                        confirmed = True
-                                        break
-                                    except Exception as click_err:
-                                        logger.warning(f"  button click error: {click_err}")
-                                        try:
-                                            btn.evaluate("node => node.click()")
+                                        # 确认按钮可用，人类化点击（避免 isTrusted=false 检测）
+                                        ok = human_click(page, btn)
+                                        if not ok:
+                                            ok = dispatch_human_click_events(page, btn)
+                                        if not ok:
+                                            try:
+                                                btn.evaluate("node => node.click()")
+                                                ok = True
+                                            except Exception:
+                                                pass
+                                        if ok:
+                                            logger.info(f"[Strategy A] Cover confirmed via human_click '{btn_name}' poll={poll_attempt}")
                                             confirmed = True
-                                            logger.info(f"[Strategy A] Cover confirmed via JS .click() on poll attempt {poll_attempt}")
                                             break
-                                        except Exception:
-                                            pass
+                                    except Exception as click_err:
+                                        logger.warning(f"  click error: {click_err}")
                                 if confirmed:
                                     break
                             if confirmed:
@@ -667,7 +696,7 @@ def run_uploader(
                             loc = page.locator(sel).first
                             if loc.count() > 0 and loc.is_visible():
                                 with page.expect_file_chooser(timeout=8000) as fc_info:
-                                    loc.click(force=True)
+                                    human_click(page, loc)  # 人类化点击打开文件选择器
                                 fc_info.value.set_files(cover_abs)
                                 page.wait_for_timeout(5000)
                                 # [Claude_Sonnet_4.6_Thinking_fast] P0: 严格在 dialog 内找确认按钮，不误点"保存草稿"
@@ -685,17 +714,18 @@ def run_uploader(
                                                     continue
                                                 if btn.get_attribute("aria-disabled") == "true":
                                                     continue
-                                                btn.click(timeout=2000, force=True)
-                                                logger.info(f"[Strategy B] Cover confirmed via button '{btn_name}' on attempt {poll_attempt}")
-                                                cover_set = True
-                                                break
-                                            except Exception:
-                                                try:
-                                                    btn.evaluate("node => node.click()")
+                                                ok = human_click(page, btn)
+                                                if not ok:
+                                                    ok = dispatch_human_click_events(page, btn)
+                                                if not ok:
+                                                    try: btn.evaluate("node => node.click()"); ok = True
+                                                    except Exception: pass
+                                                if ok:
+                                                    logger.info(f"[Strategy B] Cover confirmed via human_click '{btn_name}' attempt={poll_attempt}")
                                                     cover_set = True
                                                     break
-                                                except Exception:
-                                                    pass
+                                            except Exception:
+                                                pass
                                         if cover_set:
                                             break
                                     if cover_set:
@@ -747,10 +777,10 @@ def run_uploader(
                     if loc.count() > 0 and loc.first.is_visible():
                         if 'checkbox' in sel:
                             if not loc.first.is_checked():
-                                loc.first.click(force=True)
+                                human_click(page, loc.first)
                         else:
-                            loc.first.click(force=True)
-                        logger.info(f"[Original-ToggleA] CSS click via: {sel}")
+                            human_click(page, loc.first)
+                        logger.info(f"[Original-ToggleA] human_click via: {sel}")
                         return True
                 except Exception:
                     pass
@@ -843,9 +873,9 @@ def run_uploader(
                                     break
                             except Exception:
                                 pass
-                            cb.first.click(force=True)
+                            human_check(page, cb.first)  # 人类化勾选
                             agree_checked = True
-                            logger.info(f"[Original-Dialog] Agreement checkbox clicked via CSS: {cb_sel}")
+                            logger.info(f"[Original-Dialog] Agreement checkbox human_check via CSS: {cb_sel}")
                             break
                     except Exception:
                         pass
@@ -901,10 +931,13 @@ def run_uploader(
                                 continue
                             if btn.get_attribute("aria-disabled") == "true":
                                 continue
-                            # 点击
-                            btn.click(timeout=2000, force=True)
-                            confirm_clicked = True
-                            logger.info(f"[Original-Dialog] '声明原创' confirmed via button '{btn_text}' on poll {poll}")
+                            # 人类化点击
+                            ok = human_click(page, btn)
+                            if not ok:
+                                ok = dispatch_human_click_events(page, btn)
+                            if ok:
+                                confirm_clicked = True
+                                logger.info(f"[Original-Dialog] '声明原创' via human_click '{btn_text}' poll={poll}")
                             break
                         except Exception as ce:
                             try:
@@ -975,7 +1008,7 @@ def run_uploader(
                         for opt in options:
                             if opt.count() > 0 and opt.first.is_visible(timeout=1000):
                                 try:
-                                    opt.first.click(force=True, timeout=500)
+                                    human_click(page, opt.first)  # 人类化点击下拉选项
                                     logger.info(f"Category '{category}' selected successfully.")
                                     cat_set = True
                                     break
