@@ -822,19 +822,27 @@ def run_uploader(
 
         def _handle_original_rights_dialog(page) -> bool:
             """Step B+C: 处理"原创权益"二次确认弹窗。
-            流程: 检测弹窗 → 勾选 checkbox → 等待"声明原创"按钮变蓝 → 点击。
+            流程: 检测弹窗 -> 勾选 checkbox -> 等待"声明原创"按钮变蓝 -> 点击。
             返回: True=弹窗不存在(无需处理) 或 处理成功; False=处理失败。
+
+            # [Claude_Sonnet_4.6_Thinking_planning] v3.0 完全重写:
+            # Bug1: human_check() 返回值被忽略，agree_checked 无条件设 True
+            # Bug2: 微信使用自定义 checkbox 组件 (橙色边框 div/span)，
+            #       input[type='checkbox'] 选择器根本找不到任何元素
+            # Bug3: 没有验证 checkbox 实际是否被勾上
+            # Fix: 多策略点击包含"阅读"文字的整行/label，
+            #      以"声明原创"按钮变 enabled 作为 checkbox 已勾选的验证
             """
-            # 检测弹窗是否存在 (最多等2秒)
+            # -- 检测弹窗 (最多等4秒) --
             dialog_detected = False
-            for _ in range(4):
+            for _ in range(8):
                 page.wait_for_timeout(500)
-                # 判断"原创权益"弹窗是否出现
                 found = page.evaluate("""() => {
                     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
                     let node;
                     while (node = walker.nextNode()) {
-                        if (node.textContent.trim() === '原创权益') {
+                        const t = node.textContent.trim();
+                        if (t === '\u539f\u521b\u6743\u76ca' || t.includes('\u539f\u521b\u6743\u76ca')) {
                             const el = node.parentElement;
                             if (el && el.offsetParent !== null) return true;
                         }
@@ -843,122 +851,163 @@ def run_uploader(
                 }""")
                 if found:
                     dialog_detected = True
-                    logger.info("[Original-Dialog] '原创权益' dialog detected")
+                    logger.info("[Original-Dialog] '\u539f\u521b\u6743\u76ca' dialog detected")
+                    page.screenshot(path="output/debug_dialog_detected.png")
                     break
 
             if not dialog_detected:
-                logger.info("[Original-Dialog] No dialog appeared — toggle was direct (no confirmation needed)")
-                return True  # 无需处理
+                logger.info("[Original-Dialog] No dialog -- toggle was direct (no confirmation needed)")
+                return True
 
-            # Step C1: 勾选"我已阅读并同意"checkbox
-            # 同样用文字遍历，找 checkbox 附近的"阅读"/"同意"文字
-            agree_checked = False
-            for poll in range(10):
-                page.wait_for_timeout(800)
+            # 弹窗出现后稍等动画结束
+            page.wait_for_timeout(1000)
 
-                # CSS 方式
-                for cb_sel in [
-                    ".weui-desktop-dialog input[type='checkbox']",
-                    ".weui-desktop-dialog__bd input[type='checkbox']",
-                    "div[role='dialog'] input[type='checkbox']",
-                    "input[type='checkbox']:near(:text('阅读'))",
-                    "input[type='checkbox']:near(:text('同意'))",
-                ]:
+            # -- Step C1: 勾选 checkbox --
+            # 微信使用自定义 checkbox 组件，不是 input[type=checkbox]
+            # 成功标志: "声明原创"按钮从 disabled -> enabled
+
+            def _is_declare_btn_enabled():
+                """检查"声明原创"按钮是否已变为可点击"""
+                for btn_text in ["\u58f0\u660e\u539f\u521b", "\u786e\u5b9a"]:
                     try:
-                        cb = page.locator(cb_sel)
-                        if cb.count() > 0 and cb.first.is_visible():
-                            try:
-                                if cb.first.is_checked():
-                                    agree_checked = True
-                                    break
-                            except Exception:
-                                pass
-                            human_check(page, cb.first)  # 人类化勾选
-                            agree_checked = True
-                            logger.info(f"[Original-Dialog] Agreement checkbox human_check via CSS: {cb_sel}")
-                            break
-                    except Exception:
-                        pass
-                if agree_checked:
-                    break
-
-                # JS 文字遍历方式 (兜底)
-                result = page.evaluate("""() => {
-                    const keywords = ['我已阅读', '阅读并同意', '阅读', '同意'];
-                    // 直接找所有可见的 input[type=checkbox]
-                    const cbs = document.querySelectorAll('input[type="checkbox"]');
-                    for (const cb of cbs) {
-                        if (cb.offsetParent === null) continue;
-                        if (cb.checked) return {ok:true, method:'already-checked'};
-                        // 验证其附近文字含关键词
-                        const parentText = cb.closest('label, div, span')?.innerText || '';
-                        const isAgreeCb = keywords.some(k => parentText.includes(k)) || true; // 弹窗内只有这一个 checkbox
-                        if (isAgreeCb) {
-                            cb.click();
-                            return {ok:true, method:'direct-cb', text: parentText.slice(0,30)};
-                        }
-                    }
-                    return {ok:false};
-                }""")
-                if result and result.get('ok'):
-                    agree_checked = True
-                    logger.info(f"[Original-Dialog] Agreement checkbox via JS: {result}")
-                    break
-
-            if not agree_checked:
-                logger.warning("[Original-Dialog] Could not check agreement checkbox after 10 polls")
-                page.screenshot(path="output/debug_original_agree_fail.png")
-                return False
-
-            # Step C2: 等"声明原创"按钮从灰→蓝 (disabled→enabled)
-            page.wait_for_timeout(500)
-            confirm_clicked = False
-            for poll in range(15):
-                page.wait_for_timeout(700)
-
-                # 按优先级尝试点击: 声明原创 > 确定 > 同意
-                for btn_text in ["声明原创", "确定", "同意并继续", "同意"]:
-                    btns = page.locator(f"button:has-text('{btn_text}')")
-                    count = btns.count()
-                    for i in range(count):
-                        try:
+                        btns = page.locator(f"button:has-text('{btn_text}')")
+                        for i in range(btns.count()):
                             btn = btns.nth(i)
                             if not btn.is_visible():
                                 continue
-                            # 跳过 disabled 按钮
-                            if btn.get_attribute("disabled") is not None:
-                                logger.info(f"  [poll {poll}] '{btn_text}' still disabled, waiting...")
-                                continue
-                            if btn.get_attribute("aria-disabled") == "true":
-                                continue
-                            # 人类化点击
-                            ok = human_click(page, btn)
-                            if not ok:
-                                ok = dispatch_human_click_events(page, btn)
-                            if ok:
-                                confirm_clicked = True
-                                logger.info(f"[Original-Dialog] '声明原创' via human_click '{btn_text}' poll={poll}")
-                            break
-                        except Exception as ce:
-                            try:
-                                btns.nth(i).evaluate("node => node.click()")
-                                confirm_clicked = True
-                                logger.info(f"[Original-Dialog] Confirmed via JS .click() on poll {poll}")
-                                break
-                            except Exception:
-                                pass
-                    if confirm_clicked:
+                            if btn.get_attribute("disabled") is None and \
+                               btn.get_attribute("aria-disabled") != "true":
+                                return True, btn
+                    except Exception:
+                        pass
+                return False, None
+
+            for attempt in range(8):
+                page.wait_for_timeout(600)
+                logger.info(f"[Original-Dialog] Checkbox click attempt {attempt}...")
+                agree_clicked = False
+
+                # -- 策略1: 找包含"阅读"文字的 label 标签并点击 --
+                for text_kw in ["\u6211\u5df2\u9605\u8bfb\u5e76\u540c\u610f",
+                                "\u6211\u5df2\u9605\u8bfb", "\u9605\u8bfb\u5e76\u540c\u610f",
+                                "\u9605\u8bfb"]:
+                    for label_sel in [
+                        f"label:has-text('{text_kw}')",
+                        ".weui-desktop-dialog label",
+                        "div[role='dialog'] label",
+                    ]:
+                        try:
+                            loc = page.locator(label_sel).first
+                            if loc.count() > 0 and loc.is_visible(timeout=500):
+                                ok = human_click(page, loc)
+                                if ok:
+                                    logger.info(f"[Original-Dialog] S1 label click '{label_sel}'")
+                                    agree_clicked = True
+                                    break
+                        except Exception:
+                            pass
+                    if agree_clicked:
                         break
-                if confirm_clicked:
-                    break
 
-            if not confirm_clicked:
-                logger.warning("[Original-Dialog] '声明原创' button never enabled after 15 polls")
-                page.screenshot(path="output/debug_original_confirm_fail.png")
-                return False
+                # -- 策略2: JS 找包含"阅读"文字的元素，点击其左侧坐标 --
+                if not agree_clicked:
+                    rect = page.evaluate("""() => {
+                        const keys = ['\u6211\u5df2\u9605\u8bfb\u5e76\u540c\u610f',
+                                      '\u6211\u5df2\u9605\u8bfb', '\u9605\u8bfb\u5e76\u540c\u610f'];
+                        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                        let node;
+                        while (node = walker.nextNode()) {
+                            const t = node.textContent.trim();
+                            if (keys.some(k => t.includes(k))) {
+                                let el = node.parentElement;
+                                for (let i = 0; i < 6 && el; i++) {
+                                    if (el.offsetParent !== null) {
+                                        const r = el.getBoundingClientRect();
+                                        if (r.width > 0 && r.height > 0) {
+                                            return {x: r.left + 8, y: r.top + r.height / 2,
+                                                    text: t.slice(0, 30)};
+                                        }
+                                    }
+                                    el = el.parentElement;
+                                }
+                            }
+                        }
+                        return null;
+                    }""")
+                    if rect:
+                        import random as _rand
+                        cx = rect["x"] + _rand.uniform(1, 5)
+                        cy = rect["y"] + _rand.uniform(-2, 2)
+                        page.mouse.move(cx, cy)
+                        page.wait_for_timeout(120)
+                        page.mouse.click(cx, cy)
+                        logger.info(f"[Original-Dialog] S2 coord click ({cx:.0f},{cy:.0f}) '{rect.get('text','')}'")
+                        agree_clicked = True
 
-            page.wait_for_timeout(1000)
-            return True
+                # -- 策略3: 在弹窗容器内找任何 checkbox 类元素 --
+                if not agree_clicked:
+                    clicked = page.evaluate("""() => {
+                        const kw = '\u539f\u521b\u6743\u76ca';
+                        const dialogs = [...document.querySelectorAll(
+                            '[class*="dialog"],[class*="Dialog"],[class*="modal"],[role="dialog"]'
+                        )].filter(el => el.offsetParent !== null && el.innerText.includes(kw));
+                        const container = dialogs[0] || document.body;
+                        const candidates = container.querySelectorAll(
+                            'input[type="checkbox"],[class*="checkbox"],[class*="check-box"],' +
+                            '[class*="Checkbox"],label,[role="checkbox"]'
+                        );
+                        for (const el of candidates) {
+                            if (el.offsetParent === null) continue;
+                            const r = el.getBoundingClientRect();
+                            if (r.width === 0 || r.height === 0) continue;
+                            if (r.width < 40 || el.tagName === 'INPUT') {
+                                el.click();
+                                return {ok:true, tag:el.tagName, cls:el.className.slice(0,40)};
+                            }
+                        }
+                        const labels = container.querySelectorAll('label');
+                        for (const lb of labels) {
+                            if (lb.offsetParent !== null && lb.innerText.includes('\u9605\u8bfb')) {
+                                lb.click();
+                                return {ok:true, tag:'label', text:lb.innerText.slice(0,30)};
+                            }
+                        }
+                        return {ok:false};
+                    }""")
+                    if clicked and clicked.get("ok"):
+                        logger.info(f"[Original-Dialog] S3 JS click: {clicked}")
+                        agree_clicked = True
+
+                if not agree_clicked:
+                    logger.warning(f"[Original-Dialog] Attempt {attempt}: all strategies failed, retrying...")
+                    page.screenshot(path=f"output/debug_dialog_attempt{attempt}_noclk.png")
+                    continue
+
+                # -- 验证: "声明原创"按钮变 enabled = checkbox 已勾上 --
+                page.wait_for_timeout(800)
+                enabled, declare_btn = _is_declare_btn_enabled()
+                if enabled:
+                    logger.info("[Original-Dialog] checkbox confirmed: '\u58f0\u660e\u539f\u521b' enabled!")
+                    ok = human_click(page, declare_btn)
+                    if not ok:
+                        ok = dispatch_human_click_events(page, declare_btn)
+                    if not ok:
+                        try:
+                            declare_btn.evaluate("node => node.click()")
+                            ok = True
+                        except Exception:
+                            pass
+                    if ok:
+                        logger.info("[Original-Dialog] '\u58f0\u660e\u539f\u521b' clicked!")
+                        page.wait_for_timeout(1000)
+                        return True
+                else:
+                    logger.warning(f"[Original-Dialog] Attempt {attempt}: button still disabled after click")
+                    page.screenshot(path=f"output/debug_dialog_attempt{attempt}_disabled.png")
+
+            logger.warning("[Original-Dialog] All strategies exhausted after 8 attempts")
+            page.screenshot(path="output/debug_original_dialog_fail.png")
+            return False
 
         # ── 执行原创声明流程 ───────────────────────────────────────────────────
         page.screenshot(path="output/debug_original_before.png")
