@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建，TDD Green phase 生产代码 |
+| 1.1.0 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 增加 PipelineAgent 统一接管除 /help /start 以外的所有指令及文本消息 |
 """
 from __future__ import annotations
 
@@ -33,6 +34,7 @@ if _src not in sys.path:
 from bot.auth import SecurityConfigError, is_admin, parse_admin_ids
 from bot.api_client import PipelineAPIClient
 from bot import formatter as fmt
+from bot.pipeline_agent import PipelineAgent
 
 logging.basicConfig(
     level=logging.INFO,
@@ -245,6 +247,61 @@ async def handle_youtube_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         )
 
 
+# ── AI Agent 消息接收与响应 ───────────────────────────────────────────────
+
+_busy_chats: set[int] = set()
+
+
+async def handle_agent_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """接收 Telegram 的任何消息，由 AI Agent 直接接收并响应（除 /help 和 /start 外）"""
+    if not _check_admin(update):
+        return
+
+    chat_id = update.effective_chat.id
+    user_message = update.message.text or update.message.caption or ""
+    if not user_message.strip():
+        return
+
+    # 并发锁：如果该 chat 已经在运行 Agent 任务，提示等待
+    if chat_id in _busy_chats:
+        await update.message.reply_text(
+            "⏳ *AI Agent 正在处理前一个任务。* 请稍候，处理完成后再发送新消息。",
+            parse_mode="Markdown"
+        )
+        return
+
+    _busy_chats.add(chat_id)
+    # [Gemini_3.5_Flash_High_planning] 发送初始状态提示
+    ack_msg = await update.message.reply_text(
+        "🧠 *AI Agent 已接收指令，正在决策...*",
+        parse_mode="Markdown"
+    )
+
+    try:
+        # 在独立的线程中执行 Agent function calling 循环，防止阻碍 bot 的事件循环
+        agent = PipelineAgent(bot=ctx.bot, loop=asyncio.get_running_loop(), chat_id=chat_id)
+        response_text = await asyncio.to_thread(agent.run, user_message)
+
+        if response_text:
+            try:
+                # 尝试以 HTML 格式回复（Agent 生成的消息中可能包含 HTML 样式）
+                await update.message.reply_text(response_text, parse_mode="HTML")
+            except Exception as html_err:
+                logger.warning(f"Failed to send agent response as HTML: {html_err}, falling back to plain text")
+                # 兜底：纯文本模式
+                await update.message.reply_text(response_text)
+    except Exception as e:
+        logger.error(f"Agent execution error: {e}")
+        await update.message.reply_text(f"❌ *AI Agent 运行异常*:\n`{e}`", parse_mode="Markdown")
+    finally:
+        _busy_chats.discard(chat_id)
+        try:
+            # 尝试删除最初的提示消息，保持聊天界面整洁
+            await ack_msg.delete()
+        except Exception:
+            pass
+
+
 # ── 入口 ─────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -260,16 +317,9 @@ def main() -> None:
     # 注册命令
     app.add_handler(CommandHandler("start", cmd_help))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("queue", cmd_queue))
-    app.add_handler(CommandHandler("status", cmd_queue))
-    app.add_handler(CommandHandler("published", cmd_published))
-    app.add_handler(CommandHandler("delete", cmd_delete))
-    app.add_handler(CommandHandler("retry", cmd_retry))
-    app.add_handler(CommandHandler("run", cmd_run))
-    app.add_handler(CommandHandler("stats", cmd_stats))
 
-    # 监听所有文本消息（YouTube URL 无感提交），优先级低于命令处理器
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_youtube_url))
+    # 监听所有其他文本消息及指令（由 AI Agent 统一接收并处理）
+    app.add_handler(MessageHandler(filters.TEXT, handle_agent_message))
 
     logger.info("✅ Bot 已就绪，开始轮询...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)

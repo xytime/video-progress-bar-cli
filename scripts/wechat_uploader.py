@@ -823,17 +823,14 @@ def run_uploader(
         def _handle_original_rights_dialog(page) -> bool:
             """Step B+C: 处理"原创权益"二次确认弹窗。
             流程: 检测弹窗 -> 勾选 checkbox -> 等待"声明原创"按钮变蓝 -> 点击。
-            返回: True=弹窗不存在(无需处理) 或 处理成功; False=处理失败。
 
-            # [Claude_Sonnet_4.6_Thinking_planning] v3.0 完全重写:
-            # Bug1: human_check() 返回值被忽略，agree_checked 无条件设 True
-            # Bug2: 微信使用自定义 checkbox 组件 (橙色边框 div/span)，
-            #       input[type='checkbox'] 选择器根本找不到任何元素
-            # Bug3: 没有验证 checkbox 实际是否被勾上
-            # Fix: 多策略点击包含"阅读"文字的整行/label，
-            #      以"声明原创"按钮变 enabled 作为 checkbox 已勾选的验证
+            # [Claude_Sonnet_4.6_Thinking_planning] v4.0 策略库架构:
+            # 设计原则: 永不丢弃历史策略，只做累积。微信可能在不同版本/设备上
+            # 切换 UI 方案，历史策略随时可能重新适用。
+            # CHECKBOX_STRATEGIES = 所有已知方案的有序列表，逐一尝试，
+            # 以"声明原创"按钮变 enabled 作为 checkbox 已勾选的唯一客观验证。
             """
-            # -- 检测弹窗 (最多等4秒) --
+            # ── 检测弹窗 (最多等4秒) ────────────────────────────────────────────
             dialog_detected = False
             for _ in range(8):
                 page.wait_for_timeout(500)
@@ -856,18 +853,14 @@ def run_uploader(
                     break
 
             if not dialog_detected:
-                logger.info("[Original-Dialog] No dialog -- toggle was direct (no confirmation needed)")
+                logger.info("[Original-Dialog] No dialog -- toggle direct, no confirmation needed")
                 return True
 
-            # 弹窗出现后稍等动画结束
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(1000)  # 等动画结束
 
-            # -- Step C1: 勾选 checkbox --
-            # 微信使用自定义 checkbox 组件，不是 input[type=checkbox]
-            # 成功标志: "声明原创"按钮从 disabled -> enabled
-
+            # ── 客观验证: 声明原创按钮是否 enabled ────────────────────────────
             def _is_declare_btn_enabled():
-                """检查"声明原创"按钮是否已变为可点击"""
+                """以"声明原创"按钮从 disabled->enabled 作为 checkbox 已勾选的验证"""
                 for btn_text in ["\u58f0\u660e\u539f\u521b", "\u786e\u5b9a"]:
                     try:
                         btns = page.locator(f"button:has-text('{btn_text}')")
@@ -875,119 +868,234 @@ def run_uploader(
                             btn = btns.nth(i)
                             if not btn.is_visible():
                                 continue
-                            if btn.get_attribute("disabled") is None and \
-                               btn.get_attribute("aria-disabled") != "true":
+                            if (btn.get_attribute("disabled") is None and
+                                    btn.get_attribute("aria-disabled") != "true"):
                                 return True, btn
                     except Exception:
                         pass
                 return False, None
 
-            for attempt in range(8):
-                page.wait_for_timeout(600)
-                logger.info(f"[Original-Dialog] Checkbox click attempt {attempt}...")
-                agree_clicked = False
+            # ── CHECKBOX_STRATEGIES: 所有已知 UI 方案的策略库 ─────────────────
+            # 规则: 永不删除，只追加。每个策略返回 True/False 表示是否成功触发点击。
+            # 验证由外层统一做 (_is_declare_btn_enabled)，与策略解耦。
 
-                # -- 策略1: 找包含"阅读"文字的 label 标签并点击 --
+            def _s1_native_input_css(page):
+                """S1 (v2.0遗留): 标准 input[type=checkbox] CSS 选择器
+                适用: 微信使用原生 HTML checkbox 的版本"""
+                for sel in [
+                    ".weui-desktop-dialog input[type='checkbox']",
+                    ".weui-desktop-dialog__bd input[type='checkbox']",
+                    "div[role='dialog'] input[type='checkbox']",
+                    "input[type='checkbox']:near(:text('\u9605\u8bfb'))",
+                    "input[type='checkbox']:near(:text('\u540c\u610f'))",
+                    "input[type='checkbox']",  # 页内唯一 checkbox 兜底
+                ]:
+                    try:
+                        cb = page.locator(sel)
+                        if cb.count() > 0 and cb.first.is_visible(timeout=300):
+                            if cb.first.is_checked():
+                                logger.info(f"[S1] Already checked via {sel}")
+                                return True
+                            ok = human_check(page, cb.first)
+                            if ok:
+                                logger.info(f"[S1] native input checked via: {sel}")
+                                return True
+                    except Exception:
+                        pass
+                return False
+
+            def _s2_label_has_text(page):
+                """S2 (v3.0): 点击包含'阅读'文字的 label 标签
+                适用: 微信将 checkbox+文字 包在 label 内的版本"""
                 for text_kw in ["\u6211\u5df2\u9605\u8bfb\u5e76\u540c\u610f",
                                 "\u6211\u5df2\u9605\u8bfb", "\u9605\u8bfb\u5e76\u540c\u610f",
-                                "\u9605\u8bfb"]:
-                    for label_sel in [
+                                "\u9605\u8bfb", "\u540c\u610f"]:
+                    for sel in [
                         f"label:has-text('{text_kw}')",
+                        f".weui-desktop-dialog label:has-text('{text_kw}')",
+                        f"[role='dialog'] label:has-text('{text_kw}')",
                         ".weui-desktop-dialog label",
                         "div[role='dialog'] label",
                     ]:
                         try:
-                            loc = page.locator(label_sel).first
-                            if loc.count() > 0 and loc.is_visible(timeout=500):
+                            loc = page.locator(sel).first
+                            if loc.count() > 0 and loc.is_visible(timeout=300):
                                 ok = human_click(page, loc)
                                 if ok:
-                                    logger.info(f"[Original-Dialog] S1 label click '{label_sel}'")
-                                    agree_clicked = True
-                                    break
+                                    logger.info(f"[S2] label clicked: {sel}")
+                                    return True
                         except Exception:
                             pass
-                    if agree_clicked:
-                        break
+                return False
 
-                # -- 策略2: JS 找包含"阅读"文字的元素，点击其左侧坐标 --
-                if not agree_clicked:
-                    rect = page.evaluate("""() => {
-                        const keys = ['\u6211\u5df2\u9605\u8bfb\u5e76\u540c\u610f',
-                                      '\u6211\u5df2\u9605\u8bfb', '\u9605\u8bfb\u5e76\u540c\u610f'];
-                        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-                        let node;
-                        while (node = walker.nextNode()) {
-                            const t = node.textContent.trim();
-                            if (keys.some(k => t.includes(k))) {
-                                let el = node.parentElement;
-                                for (let i = 0; i < 6 && el; i++) {
-                                    if (el.offsetParent !== null) {
-                                        const r = el.getBoundingClientRect();
-                                        if (r.width > 0 && r.height > 0) {
-                                            return {x: r.left + 8, y: r.top + r.height / 2,
-                                                    text: t.slice(0, 30)};
-                                        }
+            def _s3_js_coord_click(page):
+                """S3 (v3.0): JS 找'阅读'文字节点 -> BoundingRect -> 鼠标坐标点击
+                适用: 自定义组件无法被 Playwright 选择器找到，但坐标可用"""
+                rect = page.evaluate("""() => {
+                    const keys = ['\u6211\u5df2\u9605\u8bfb\u5e76\u540c\u610f',
+                                  '\u6211\u5df2\u9605\u8bfb', '\u9605\u8bfb\u5e76\u540c\u610f',
+                                  '\u9605\u8bfb'];
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                    let node;
+                    while (node = walker.nextNode()) {
+                        const t = node.textContent.trim();
+                        if (keys.some(k => t.includes(k))) {
+                            let el = node.parentElement;
+                            for (let i = 0; i < 6 && el; i++) {
+                                if (el.offsetParent !== null) {
+                                    const r = el.getBoundingClientRect();
+                                    if (r.width > 0 && r.height > 0) {
+                                        return {x: r.left + 8, y: r.top + r.height / 2,
+                                                text: t.slice(0, 30)};
                                     }
-                                    el = el.parentElement;
                                 }
+                                el = el.parentElement;
                             }
                         }
-                        return null;
-                    }""")
-                    if rect:
-                        import random as _rand
-                        cx = rect["x"] + _rand.uniform(1, 5)
-                        cy = rect["y"] + _rand.uniform(-2, 2)
-                        page.mouse.move(cx, cy)
-                        page.wait_for_timeout(120)
-                        page.mouse.click(cx, cy)
-                        logger.info(f"[Original-Dialog] S2 coord click ({cx:.0f},{cy:.0f}) '{rect.get('text','')}'")
-                        agree_clicked = True
+                    }
+                    return null;
+                }""")
+                if rect:
+                    import random as _rand
+                    cx = rect["x"] + _rand.uniform(1, 6)
+                    cy = rect["y"] + _rand.uniform(-2, 2)
+                    page.mouse.move(cx, cy)
+                    page.wait_for_timeout(120)
+                    page.mouse.click(cx, cy)
+                    logger.info(f"[S3] coord click ({cx:.0f},{cy:.0f}) '{rect.get('text','')}'")
+                    return True
+                return False
 
-                # -- 策略3: 在弹窗容器内找任何 checkbox 类元素 --
-                if not agree_clicked:
-                    clicked = page.evaluate("""() => {
-                        const kw = '\u539f\u521b\u6743\u76ca';
-                        const dialogs = [...document.querySelectorAll(
-                            '[class*="dialog"],[class*="Dialog"],[class*="modal"],[role="dialog"]'
-                        )].filter(el => el.offsetParent !== null && el.innerText.includes(kw));
-                        const container = dialogs[0] || document.body;
-                        const candidates = container.querySelectorAll(
-                            'input[type="checkbox"],[class*="checkbox"],[class*="check-box"],' +
-                            '[class*="Checkbox"],label,[role="checkbox"]'
-                        );
-                        for (const el of candidates) {
-                            if (el.offsetParent === null) continue;
-                            const r = el.getBoundingClientRect();
-                            if (r.width === 0 || r.height === 0) continue;
-                            if (r.width < 40 || el.tagName === 'INPUT') {
-                                el.click();
-                                return {ok:true, tag:el.tagName, cls:el.className.slice(0,40)};
-                            }
-                        }
-                        const labels = container.querySelectorAll('label');
-                        for (const lb of labels) {
-                            if (lb.offsetParent !== null && lb.innerText.includes('\u9605\u8bfb')) {
-                                lb.click();
-                                return {ok:true, tag:'label', text:lb.innerText.slice(0,30)};
-                            }
-                        }
-                        return {ok:false};
-                    }""")
-                    if clicked and clicked.get("ok"):
-                        logger.info(f"[Original-Dialog] S3 JS click: {clicked}")
-                        agree_clicked = True
+            def _s4_class_enum_in_container(page):
+                """S4 (v3.0): 在弹窗容器内枚举所有 checkbox 类元素并点击
+                适用: class 名含'checkbox'的自定义组件版本"""
+                result = page.evaluate("""() => {
+                    const kw = '\u539f\u521b\u6743\u76ca';
+                    const dialogs = [...document.querySelectorAll(
+                        '[class*="dialog"],[class*="Dialog"],[class*="modal"],[role="dialog"]'
+                    )].filter(el => el.offsetParent !== null && el.innerText.includes(kw));
+                    const container = dialogs[0] || document.body;
+                    const candidates = container.querySelectorAll(
+                        'input[type="checkbox"],[class*="checkbox"],[class*="check-box"],' +
+                        '[class*="Checkbox"],[role="checkbox"]'
+                    );
+                    for (const el of candidates) {
+                        if (el.offsetParent === null) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.width === 0 || r.height === 0) continue;
+                        el.click();
+                        return {ok:true, tag:el.tagName, cls:el.className.slice(0,50)};
+                    }
+                    return {ok:false};
+                }""")
+                if result and result.get("ok"):
+                    logger.info(f"[S4] class enum click: {result}")
+                    return True
+                return False
 
-                if not agree_clicked:
-                    logger.warning(f"[Original-Dialog] Attempt {attempt}: all strategies failed, retrying...")
-                    page.screenshot(path=f"output/debug_dialog_attempt{attempt}_noclk.png")
+            def _s5_label_in_container(page):
+                """S5 (v3.0): 弹窗容器内找含'阅读'文字的 label 并点击
+                适用: label 不被 :has-text 找到但在容器内可枚举的版本"""
+                result = page.evaluate("""() => {
+                    const kw = '\u539f\u521b\u6743\u76ca';
+                    const dialogs = [...document.querySelectorAll(
+                        '[class*="dialog"],[class*="Dialog"],[class*="modal"],[role="dialog"]'
+                    )].filter(el => el.offsetParent !== null && el.innerText.includes(kw));
+                    const container = dialogs[0] || document.body;
+                    const labels = container.querySelectorAll('label');
+                    for (const lb of labels) {
+                        if (lb.offsetParent !== null &&
+                            (lb.innerText.includes('\u9605\u8bfb') || lb.innerText.includes('\u540c\u610f'))) {
+                            lb.click();
+                            return {ok:true, text:lb.innerText.slice(0,40)};
+                        }
+                    }
+                    return {ok:false};
+                }""")
+                if result and result.get("ok"):
+                    logger.info(f"[S5] label in container: {result}")
+                    return True
+                return False
+
+            def _s6_dispatch_events_on_small_element(page):
+                """S6 (新增): 对弹窗内第一个小型可见元素派发完整鼠标事件序列
+                适用: 自定义组件对 click() 不响应，但响应 mousedown/mouseup 的版本"""
+                result = page.evaluate("""() => {
+                    const kw = '\u539f\u521b\u6743\u76ca';
+                    const dialogs = [...document.querySelectorAll(
+                        '[class*="dialog"],[class*="Dialog"],[class*="modal"],[role="dialog"]'
+                    )].filter(el => el.offsetParent !== null && el.innerText.includes(kw));
+                    const container = dialogs[0] || document.body;
+                    // 找宽高 < 30px 的小元素 (通常是 checkbox 图标)
+                    const all = container.querySelectorAll('*');
+                    for (const el of all) {
+                        if (el.offsetParent === null) continue;
+                        const r = el.getBoundingClientRect();
+                        if (r.width > 5 && r.width <= 28 && r.height > 5 && r.height <= 28) {
+                            return {ok:true, x: r.left + r.width/2, y: r.top + r.height/2,
+                                    tag: el.tagName, cls: el.className.slice(0,40)};
+                        }
+                    }
+                    return {ok:false};
+                }""")
+                if result and result.get("ok"):
+                    import random as _rand
+                    cx = result["x"] + _rand.uniform(-2, 2)
+                    cy = result["y"] + _rand.uniform(-1, 1)
+                    # 派发完整事件序列
+                    page.mouse.move(cx, cy)
+                    page.wait_for_timeout(80)
+                    page.mouse.down()
+                    page.wait_for_timeout(60)
+                    page.mouse.up()
+                    logger.info(f"[S6] dispatch events on small el ({cx:.0f},{cy:.0f}) {result.get('tag')} '{result.get('cls','')[:30]}'")
+                    return True
+                return False
+
+            def _s7_tab_space_keyboard(page):
+                """S7 (新增): 键盘 Tab + Space 触发 checkbox
+                适用: 弹窗内 checkbox 获得焦点后 Space 可切换的版本"""
+                try:
+                    # Tab 到弹窗内元素
+                    page.keyboard.press("Tab")
+                    page.wait_for_timeout(100)
+                    page.keyboard.press("Space")
+                    logger.info("[S7] keyboard Tab+Space fired")
+                    return True
+                except Exception:
+                    return False
+
+            # 策略库（按历史可靠性和通用性排序，不删除旧策略）
+            CHECKBOX_STRATEGIES = [
+                ("S1_native_input_css",          _s1_native_input_css),
+                ("S2_label_has_text",            _s2_label_has_text),
+                ("S3_js_coord_click",            _s3_js_coord_click),
+                ("S4_class_enum_in_container",   _s4_class_enum_in_container),
+                ("S5_label_in_container",        _s5_label_in_container),
+                ("S6_dispatch_on_small_el",      _s6_dispatch_events_on_small_element),
+                ("S7_tab_space_keyboard",        _s7_tab_space_keyboard),
+            ]
+
+            # ── 逐策略尝试，以按钮 enabled 为验证 ───────────────────────────
+            for strategy_name, strategy_fn in CHECKBOX_STRATEGIES:
+                logger.info(f"[Original-Dialog] Trying {strategy_name}...")
+                try:
+                    triggered = strategy_fn(page)
+                except Exception as e:
+                    logger.warning(f"[Original-Dialog] {strategy_name} raised: {e}")
+                    triggered = False
+
+                if not triggered:
+                    logger.info(f"[Original-Dialog] {strategy_name}: no element found, skipping")
                     continue
 
-                # -- 验证: "声明原创"按钮变 enabled = checkbox 已勾上 --
+                # 等微信响应
                 page.wait_for_timeout(800)
                 enabled, declare_btn = _is_declare_btn_enabled()
+
                 if enabled:
-                    logger.info("[Original-Dialog] checkbox confirmed: '\u58f0\u660e\u539f\u521b' enabled!")
+                    logger.info(f"[Original-Dialog] \u2705 {strategy_name} succeeded! '\u58f0\u660e\u539f\u521b' now enabled")
+                    # 点击"声明原创"按钮
                     ok = human_click(page, declare_btn)
                     if not ok:
                         ok = dispatch_human_click_events(page, declare_btn)
@@ -998,14 +1106,16 @@ def run_uploader(
                         except Exception:
                             pass
                     if ok:
-                        logger.info("[Original-Dialog] '\u58f0\u660e\u539f\u521b' clicked!")
+                        logger.info("[Original-Dialog] \u2705 '\u58f0\u660e\u539f\u521b' button clicked!")
                         page.wait_for_timeout(1000)
                         return True
+                    else:
+                        logger.warning(f"[Original-Dialog] {strategy_name}: button enabled but click failed, continuing...")
                 else:
-                    logger.warning(f"[Original-Dialog] Attempt {attempt}: button still disabled after click")
-                    page.screenshot(path=f"output/debug_dialog_attempt{attempt}_disabled.png")
+                    logger.warning(f"[Original-Dialog] {strategy_name}: triggered but button still disabled — UI variant mismatch")
+                    page.screenshot(path=f"output/debug_dialog_{strategy_name}_fail.png")
 
-            logger.warning("[Original-Dialog] All strategies exhausted after 8 attempts")
+            logger.warning("[Original-Dialog] All 7 strategies exhausted — checkbox could not be activated")
             page.screenshot(path="output/debug_original_dialog_fail.png")
             return False
 
