@@ -6,6 +6,7 @@
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | Initial creation using Playwright                        |
 | 1.1.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 处理短标题/封面/分类/原创勾选；修复登录误判 URL优先策略 |
 | 1.2.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | P0根因修复: (1)封面确认改为轮询等待disabled→enabled (2)原创声明增加JS兜底 |
+| 1.3.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | 原创声明 v2.0: 抗 UI 变化三层降级架构 (_click_original_toggle + _handle_original_rights_dialog) |
 """
 
 import os
@@ -713,187 +714,233 @@ def run_uploader(
 
         # ── 6. 原创声明 ───────────────────────────────────────────────────────
         logger.info("Checking original declaration checkbox...")
-        # [Claude_Sonnet_4.6_Thinking_planning] P0 原创声明根因修复:
-        # 微信视频号的"声明原创"是一个 toggle/switch 而不是标准 checkbox
-        # 最可靠方式: 找包含"声明原创"文字的行，点击整行或其旁边的 toggle
-        # 不要依赖 CSS class (微信会变动)，直接用文字定位
-        original_toggle_clicked = False
-        for sel in [
-            # 方案1: 找原创行旁边的 input checkbox (如果有)
-            "label:has-text('原创') input[type='checkbox']",
-            "label:has-text('声明原创') input[type='checkbox']",
-            "input[type='checkbox'][class*='original']",
-            ".original-declaration input",
-            # 方案2: 找"声明原创"旁边的 toggle 或 switch
-            "input[type='checkbox']:near(:text('原创'))",
-            "input[type='checkbox']:near(:text('声明原创'))",
-            # 方案3: 找 switch 控件 (微信的 toggle 可能用 span/div 模拟)
-            ".weui-desktop-switch:near(:text('原创'))",
-            ".weui-desktop-switch:near(:text('声明原创'))",
-        ]:
-            try:
-                loc = page.locator(sel)
-                if loc.count() > 0:
-                    if sel.endswith("input[type='checkbox']") or 'checkbox' in sel:
-                        if not loc.first.is_checked():
+        # ═══════════════════════════════════════════════════════════════════════════
+        # [Claude_Sonnet_4.6_Thinking_planning] v2.0 抗 UI 变化架构
+        # 核心原则:
+        #   1. 文字定位优先 (text walker) — CSS class 会变，文字内容相对稳定
+        #   2. 逐层降级 (Tier 1→2→3) — 每一层都独立完整，不依赖上一层
+        #   3. 轮询等待 — 永远不假设 UI 状态，等待后再检查
+        #   4. 截图 + 日志 — 任何失败都留下证据
+        #
+        # 流程:
+        #   Step A: 找到并点击"声明原创"toggle/switch/行
+        #   Step B: 检测"原创权益"确认弹窗 (可能弹出)
+        #   Step C: 弹窗内 (1)勾选"我已阅读" checkbox → (2)等"声明原创"按钮变蓝 → (3)点击
+        # ═══════════════════════════════════════════════════════════════════════════
+
+        def _click_original_toggle(page) -> bool:
+            """Step A: 点击主界面上的原创声明 toggle。返回是否成功。"""
+            # 策略 1: CSS 选择器（最快，但可能因 UI 变化失效）
+            css_selectors = [
+                "label:has-text('原创') input[type='checkbox']",
+                "label:has-text('声明原创') input[type='checkbox']",
+                "input[type='checkbox'][class*='original']",
+                ".original-declaration input",
+                "input[type='checkbox']:near(:text('原创'))",
+                "input[type='checkbox']:near(:text('声明原创'))",
+                ".weui-desktop-switch:near(:text('原创'))",
+                ".weui-desktop-switch:near(:text('声明原创'))",
+            ]
+            for sel in css_selectors:
+                try:
+                    loc = page.locator(sel)
+                    if loc.count() > 0 and loc.first.is_visible():
+                        if 'checkbox' in sel:
+                            if not loc.first.is_checked():
+                                loc.first.click(force=True)
+                        else:
                             loc.first.click(force=True)
-                    else:
-                        loc.first.click(force=True)
-                        
-                        # 处理二次确认协议窗口 (终极防爆轮询机制)
-                        try:
-                            # 尝试 10 次，每次等 1 秒（最多 10 秒），不断尝试找按钮并点击
-                            read_clicked = False
-                            confirm_clicked = False
-                            for attempt in range(10):
-                                page.wait_for_timeout(1000)
-                                
-                                # 1. 尝试找到弹窗内的 checkbox 并点击
-                                if not read_clicked:
-                                    for cb_sel in [
-                                        ".weui-desktop-dialog input[type='checkbox']",
-                                        ".weui-desktop-dialog__bd input[type='checkbox']",
-                                        "div[role='dialog'] input[type='checkbox']",
-                                        "text=我已阅读",
-                                        "text=阅读并同意",
-                                        "label:has-text('阅读')",
-                                        "label:has-text('条款')"
-                                    ]:
-                                        loc_cb = page.locator(cb_sel)
-                                        if loc_cb.count() > 0:
-                                            # 如果是真正的 input checkbox 并且已经勾选了，则跳过点击
-                                            try:
-                                                if loc_cb.first.evaluate("node => node.tagName === 'INPUT' && node.type === 'checkbox' && node.checked"):
-                                                    read_clicked = True
-                                                    break
-                                            except Exception:
-                                                pass
-                                            
-                                            try:
-                                                loc_cb.first.click(timeout=500, force=True)
-                                                read_clicked = True
-                                                logger.info(f"Checked agreement in modal via {cb_sel} on attempt {attempt}")
-                                                break
-                                            except Exception:
-                                                try:
-                                                    # [Gemini_3.1_Pro_High_planning] 终极防爆：如果常规点击失败，使用原生 JS 强制修改 checked 属性并派发事件，无视遮罩层
-                                                    loc_cb.first.evaluate("""node => {
-                                                        if (node.tagName === 'INPUT' && node.type === 'checkbox') {
-                                                            node.checked = true;
-                                                            node.dispatchEvent(new Event('change', { bubbles: true }));
-                                                        }
-                                                        node.click();
-                                                    }""")
-                                                    read_clicked = True
-                                                    logger.info(f"Checked agreement in modal (eval override) via {cb_sel} on attempt {attempt}")
-                                                    break
-                                                except Exception:
-                                                    pass
-                                                
-                                        # [Gemini_3.1_Pro_High_planning] Frame 穿透：如果主 DOM 没有找到，尝试在所有的 iframes 中寻找
-                                        if not read_clicked:
-                                            for frame in page.frames:
-                                                try:
-                                                    floc = frame.locator(cb_sel)
-                                                    if floc.count() > 0:
-                                                        floc.first.evaluate("node => { node.checked = true; node.dispatchEvent(new Event('change', { bubbles: true })); node.click(); }")
-                                                        read_clicked = True
-                                                        logger.info(f"Checked agreement inside iframe via {cb_sel}")
-                                                        break
-                                                except Exception:
-                                                    pass
-                                                    
-                                # 2. 尝试点击确定（必须在勾选阅读之后）
-                                if read_clicked and not confirm_clicked:
-                                    # 微信视频号声明原创弹窗按钮常见文本：“声明原创”、“确定”
-                                    for bt in ["声明原创", "确定", "同意并继续", "同意"]:
-                                        for btn_sel in [
-                                            f".weui-desktop-dialog__ft button:has-text('{bt}')",
-                                            f"button:has-text('{bt}')",
-                                            f".weui-desktop-btn:has-text('{bt}')"
-                                        ]:
-                                            btn = page.locator(btn_sel)
-                                            if btn.count() > 0:
-                                                try:
-                                                    btn.first.click(timeout=500, force=True)
-                                                    confirm_clicked = True
-                                                    logger.info(f"Clicked confirm '{bt}' button via {btn_sel} on attempt {attempt}")
-                                                    break
-                                                except Exception:
-                                                    try:
-                                                        btn.first.evaluate("node => node.click()")
-                                                        confirm_clicked = True
-                                                        logger.info(f"Clicked confirm '{bt}' button (eval) via {btn_sel} on attempt {attempt}")
-                                                        break
-                                                    except Exception:
-                                                        pass
-                                                        
-                                                # [Gemini_3.1_Pro_High_planning] Frame 穿透：确认按钮的 iframe 查找
-                                                if not confirm_clicked:
-                                                    for frame in page.frames:
-                                                        try:
-                                                            fbtn = frame.locator(btn_sel)
-                                                            if fbtn.count() > 0:
-                                                                fbtn.first.evaluate("node => node.click()")
-                                                                confirm_clicked = True
-                                                                logger.info(f"Clicked confirm '{bt}' inside iframe via {btn_sel}")
-                                                                break
-                                                        except Exception:
-                                                            pass
-                                        if confirm_clicked:
-                                            break
+                        logger.info(f"[Original-ToggleA] CSS click via: {sel}")
+                        return True
+                except Exception:
+                    pass
 
-                                if read_clicked and confirm_clicked:
-                                    logger.info("Modal dialog handled successfully.")
-                                    # 等待弹窗消失
-                                    page.wait_for_timeout(1000)
-                                    break
-                                    
-                        except Exception as e:
-                            logger.info(f"Modal handling error: {e}")
+            # 策略 2: JS 文字遍历 (抗 CSS 变化)
+            result = page.evaluate("""() => {
+                const targets = ['声明原创', '原创声明', '原创'];
+                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                let node;
+                while (node = walker.nextNode()) {
+                    const txt = node.textContent.trim();
+                    if (!targets.includes(txt)) continue;
+                    let el = node.parentElement;
+                    for (let i = 0; i < 8 && el; i++) {
+                        // 找 input[type=checkbox]
+                        const cb = el.querySelector('input[type="checkbox"]');
+                        if (cb && !cb.checked) { cb.click(); return {ok:true, method:'cb', cls:cb.className}; }
+                        // 找 role=switch
+                        const sw = el.querySelector('[role="switch"]');
+                        if (sw) { sw.click(); return {ok:true, method:'role-switch', cls:sw.className}; }
+                        // 找 class 含 switch/toggle 的元素
+                        const toggleEl = el.querySelector('[class*="switch"],[class*="toggle"],[class*="Switch"],[class*="Toggle"]');
+                        if (toggleEl) { toggleEl.click(); return {ok:true, method:'cls-toggle', cls:toggleEl.className}; }
+                        // 最后兜底: 整行可点击
+                        if (el.tagName === 'LABEL' || el.getAttribute('role') === 'button') {
+                            el.click(); return {ok:true, method:'row-click', cls:el.className};
+                        }
+                        el = el.parentElement;
+                    }
+                }
+                return {ok:false};
+            }""")
+            if result and result.get('ok'):
+                logger.info(f"[Original-ToggleA] JS text-walker click: {result}")
+                return True
 
-                    original_toggle_clicked = True
-                    logger.info(f"Original declaration handled via: {sel}")
-                    break
-            except Exception:
-                continue
+            logger.warning("[Original-ToggleA] All strategies failed — toggle not found")
+            return False
 
-        # 兜底: 如果CSS选择器都失败，用JS直接点击包含"声明原创"的toggle行
-        if not original_toggle_clicked:
-            try:
-                clicked = page.evaluate("""() => {
-                    // 找包含"声明原创"文字的最近可点击区域
+        def _handle_original_rights_dialog(page) -> bool:
+            """Step B+C: 处理"原创权益"二次确认弹窗。
+            流程: 检测弹窗 → 勾选 checkbox → 等待"声明原创"按钮变蓝 → 点击。
+            返回: True=弹窗不存在(无需处理) 或 处理成功; False=处理失败。
+            """
+            # 检测弹窗是否存在 (最多等2秒)
+            dialog_detected = False
+            for _ in range(4):
+                page.wait_for_timeout(500)
+                # 判断"原创权益"弹窗是否出现
+                found = page.evaluate("""() => {
                     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
                     let node;
                     while (node = walker.nextNode()) {
-                        const text = node.textContent.trim();
-                        if (text === '声明原创' || text === '原创') {
-                            // 找这个文字节点的祖先中最近的可点击容器
-                            let el = node.parentElement;
-                            for (let i = 0; i < 5 && el; i++) {
-                                // 寻找同级或子级中的 input/switch/toggle
-                                const toggle = el.querySelector('input[type="checkbox"], [class*="switch"], [class*="toggle"], [role="switch"]');
-                                if (toggle) {
-                                    toggle.click();
-                                    return {found: true, tag: toggle.tagName, class: toggle.className};
-                                }
-                                // 如果整行是个可点击的 div，直接点击
-                                if (el.getAttribute('role') === 'switch' || el.className.includes('switch') || el.className.includes('toggle')) {
-                                    el.click();
-                                    return {found: true, tag: el.tagName, class: el.className, method: 'parent_click'};
-                                }
-                                el = el.parentElement;
-                            }
+                        if (node.textContent.trim() === '原创权益') {
+                            const el = node.parentElement;
+                            if (el && el.offsetParent !== null) return true;
                         }
                     }
-                    return {found: false};
+                    return false;
                 }""")
-                if clicked and clicked.get('found'):
-                    logger.info(f"Original declaration clicked via JS fallback: {clicked}")
-                else:
-                    logger.warning("Could not find original declaration toggle via JS either")
-            except Exception as e_orig:
-                logger.warning(f"JS original declaration fallback failed: {e_orig}")
+                if found:
+                    dialog_detected = True
+                    logger.info("[Original-Dialog] '原创权益' dialog detected")
+                    break
+
+            if not dialog_detected:
+                logger.info("[Original-Dialog] No dialog appeared — toggle was direct (no confirmation needed)")
+                return True  # 无需处理
+
+            # Step C1: 勾选"我已阅读并同意"checkbox
+            # 同样用文字遍历，找 checkbox 附近的"阅读"/"同意"文字
+            agree_checked = False
+            for poll in range(10):
+                page.wait_for_timeout(800)
+
+                # CSS 方式
+                for cb_sel in [
+                    ".weui-desktop-dialog input[type='checkbox']",
+                    ".weui-desktop-dialog__bd input[type='checkbox']",
+                    "div[role='dialog'] input[type='checkbox']",
+                    "input[type='checkbox']:near(:text('阅读'))",
+                    "input[type='checkbox']:near(:text('同意'))",
+                ]:
+                    try:
+                        cb = page.locator(cb_sel)
+                        if cb.count() > 0 and cb.first.is_visible():
+                            try:
+                                if cb.first.is_checked():
+                                    agree_checked = True
+                                    break
+                            except Exception:
+                                pass
+                            cb.first.click(force=True)
+                            agree_checked = True
+                            logger.info(f"[Original-Dialog] Agreement checkbox clicked via CSS: {cb_sel}")
+                            break
+                    except Exception:
+                        pass
+                if agree_checked:
+                    break
+
+                # JS 文字遍历方式 (兜底)
+                result = page.evaluate("""() => {
+                    const keywords = ['我已阅读', '阅读并同意', '阅读', '同意'];
+                    // 直接找所有可见的 input[type=checkbox]
+                    const cbs = document.querySelectorAll('input[type="checkbox"]');
+                    for (const cb of cbs) {
+                        if (cb.offsetParent === null) continue;
+                        if (cb.checked) return {ok:true, method:'already-checked'};
+                        // 验证其附近文字含关键词
+                        const parentText = cb.closest('label, div, span')?.innerText || '';
+                        const isAgreeCb = keywords.some(k => parentText.includes(k)) || true; // 弹窗内只有这一个 checkbox
+                        if (isAgreeCb) {
+                            cb.click();
+                            return {ok:true, method:'direct-cb', text: parentText.slice(0,30)};
+                        }
+                    }
+                    return {ok:false};
+                }""")
+                if result and result.get('ok'):
+                    agree_checked = True
+                    logger.info(f"[Original-Dialog] Agreement checkbox via JS: {result}")
+                    break
+
+            if not agree_checked:
+                logger.warning("[Original-Dialog] Could not check agreement checkbox after 10 polls")
+                page.screenshot(path="output/debug_original_agree_fail.png")
+                return False
+
+            # Step C2: 等"声明原创"按钮从灰→蓝 (disabled→enabled)
+            page.wait_for_timeout(500)
+            confirm_clicked = False
+            for poll in range(15):
+                page.wait_for_timeout(700)
+
+                # 按优先级尝试点击: 声明原创 > 确定 > 同意
+                for btn_text in ["声明原创", "确定", "同意并继续", "同意"]:
+                    btns = page.locator(f"button:has-text('{btn_text}')")
+                    count = btns.count()
+                    for i in range(count):
+                        try:
+                            btn = btns.nth(i)
+                            if not btn.is_visible():
+                                continue
+                            # 跳过 disabled 按钮
+                            if btn.get_attribute("disabled") is not None:
+                                logger.info(f"  [poll {poll}] '{btn_text}' still disabled, waiting...")
+                                continue
+                            if btn.get_attribute("aria-disabled") == "true":
+                                continue
+                            # 点击
+                            btn.click(timeout=2000, force=True)
+                            confirm_clicked = True
+                            logger.info(f"[Original-Dialog] '声明原创' confirmed via button '{btn_text}' on poll {poll}")
+                            break
+                        except Exception as ce:
+                            try:
+                                btns.nth(i).evaluate("node => node.click()")
+                                confirm_clicked = True
+                                logger.info(f"[Original-Dialog] Confirmed via JS .click() on poll {poll}")
+                                break
+                            except Exception:
+                                pass
+                    if confirm_clicked:
+                        break
+                if confirm_clicked:
+                    break
+
+            if not confirm_clicked:
+                logger.warning("[Original-Dialog] '声明原创' button never enabled after 15 polls")
+                page.screenshot(path="output/debug_original_confirm_fail.png")
+                return False
+
+            page.wait_for_timeout(1000)
+            return True
+
+        # ── 执行原创声明流程 ───────────────────────────────────────────────────
+        page.screenshot(path="output/debug_original_before.png")
+
+        toggle_ok = _click_original_toggle(page)
+        if toggle_ok:
+            dialog_ok = _handle_original_rights_dialog(page)
+            if dialog_ok:
+                logger.info("✅ Original declaration completed successfully")
+            else:
+                logger.warning("⚠️ Original declaration dialog handling failed — proceeding anyway")
+        else:
+            logger.warning("⚠️ Original declaration toggle not found — proceeding anyway")
+
+        page.screenshot(path="output/debug_original_after.png")
 
         # ── 7. 分类选择 ───────────────────────────────────────────────────────
         if category:

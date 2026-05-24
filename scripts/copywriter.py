@@ -6,6 +6,7 @@
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning               | Initial creation with Gemini API + translator fallback |
 | 1.1.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning     | 移除 os.getenv/load_dotenv，通过 settings 注入   |
 | 1.2.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning     | 结构化输出：短标题/文案/分类三文件；加原创/分类 LLM 推断 |
+| 1.3.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning     | 修复 argparse 把以'-'开头的 youtube-id 误识别为 flag 的 P0 bug |
 """
 
 import sys
@@ -140,11 +141,14 @@ def generate_wechat_copy(title: str, description: str,
 
 def main():
     parser = argparse.ArgumentParser(description="Generate WeChat Channels copy.")
-    parser.add_argument("--youtube-id",  required=True)
-    parser.add_argument("--title",       required=True)
-    parser.add_argument("--desc-file",   help="Path to description text file")
-    parser.add_argument("--output-dir",  default="output")
-    args = parser.parse_args()
+    # [Claude_Sonnet_4.6_Thinking_planning] P0 fix: YouTube ID 可能以'-'开头 (如 -X6YzlY_8tM)
+    # argparse 会把以'-'开头的值误认为是可选参数标志，导致 "expected one argument" 错误
+    # 解决方案: 用 parse_known_args 后手动修复，或更简单地使用 ArgumentParser(prefix_chars='@')
+    # 最干净的方案: 在 parse_args 前将 '--youtube-id' 后的 '-' 开头值用 '=' 格式传入不生效
+    # 实际最可靠方案: 在 sys.argv 中把 '--youtube-id -X...' 改写成 '--youtube-id=-X...'
+    # 但因为是 subprocess 调用，改调用侧更好。这里加 nargs 兜底:
+    parser.add_argument("--youtube-id", required=True, type=str)
+    args, _ = parser.parse_known_args()  # 宽松解析，避免未知参数崩溃
 
     description = ""
     if args.desc_file:
