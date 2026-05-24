@@ -8,7 +8,7 @@
 | 1.2.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | P0根因修复: (1)封面确认改为轮询等待disabled→enabled (2)原创声明增加JS兜底 |
 | 1.3.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | 原创声明 v2.0: 抗 UI 变化三层降级架构 (_click_original_toggle + _handle_original_rights_dialog) |
 | 1.4.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | 反反爬虫 v1.0: human_mouse+浏览器指纹伪造+关键点击改为人类行为模拟 |
-| 1.5.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning      | 修复原创权益弹窗勾选：适配 Shadow DOM 内的 AntD Checkbox 与 class 类名禁用属性校验 |
+| 1.5.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning      | 修复原创权益弹窗勾选（适配 AntD Checkbox 与 class 类名禁用校验）及分类下拉框 Shadow DOM 穿透 |
 """
 
 import os
@@ -835,21 +835,43 @@ def run_uploader(
             dialog_detected = False
             for _ in range(8):
                 page.wait_for_timeout(500)
-                found = page.evaluate("""() => {
-                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-                    let node;
-                    while (node = walker.nextNode()) {
-                        const t = node.textContent.trim();
-                        if (t === '\u539f\u521b\u6743\u76ca' || t.includes('\u539f\u521b\u6743\u76ca')) {
-                            const el = node.parentElement;
-                            if (el && el.offsetParent !== null) return true;
+                # [Gemini_3.5_Flash_High_planning] 优先使用 Playwright 自动穿透 Shadow DOM 的定位机制进行检测
+                try:
+                    # 查找可见的且包含“原创权益”的文本节点或元素
+                    loc = page.locator("text=原创权益").first
+                    if loc.count() > 0 and loc.is_visible(timeout=100):
+                        dialog_detected = True
+                        logger.info("[Original-Dialog] '原创权益' dialog detected via Playwright locator")
+                        page.screenshot(path="output/debug_dialog_detected.png")
+                        break
+                except Exception:
+                    pass
+
+                # [Gemini_3.5_Flash_High_planning] 备选：递归穿透所有 Shadow DOM 进行深度遍历检测
+                found_js = page.evaluate("""() => {
+                    function findTextDeep(root) {
+                        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+                        let node;
+                        while (node = walker.nextNode()) {
+                            const t = node.textContent.trim();
+                            if (t === '原创权益' || t.includes('原创权益')) {
+                                const el = node.parentElement;
+                                if (el && el.offsetParent !== null) return true;
+                            }
                         }
+                        const all = root.querySelectorAll('*');
+                        for (const el of all) {
+                            if (el.shadowRoot) {
+                                if (findTextDeep(el.shadowRoot)) return true;
+                            }
+                        }
+                        return false;
                     }
-                    return false;
+                    return findTextDeep(document.body);
                 }""")
-                if found:
+                if found_js:
                     dialog_detected = True
-                    logger.info("[Original-Dialog] '\u539f\u521b\u6743\u76ca' dialog detected")
+                    logger.info("[Original-Dialog] '原创权益' dialog detected via Deep JS search")
                     page.screenshot(path="output/debug_dialog_detected.png")
                     break
 
@@ -1207,10 +1229,12 @@ def run_uploader(
             logger.info(f"Selecting category: {category!r}")
             cat_set = False
             
-            # 第一阶段：找到并点击分类下拉框的入口
+            # 第一阶段：找到并点击分类下拉框的入口 (采用 shadow-safe 的定位器)
             dropdown_triggers = [
-                page.locator("text=视频分类").locator("xpath=..").locator("div").first,
-                page.locator("text=分类").locator("xpath=..").locator("div").first,
+                page.locator(".weui-desktop-dropdown__trigger:near(:text('视频分类'), 100)").first,
+                page.locator(".weui-desktop-dropdown__trigger:near(:text('分类'), 100)").first,
+                page.locator("text=视频分类").locator("xpath=..").locator("div").first, # 保留兼容
+                page.locator("text=分类").locator("xpath=..").locator("div").first,     # 保留兼容
                 page.locator(".category-selector"),
                 page.locator("div[class*='category-select']")
             ]
