@@ -9,6 +9,7 @@ based on incoming Telegram messages and commands.
 | ------- | ---------- | ------------------------------ | ---------------------------------------------------------------------------------------- |
 | 1.0.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 初始创建 PipelineAgent，支持 Gemini 2.5 Flash Agentic Pipeline 执行与自定义 Telegram 交互路由 |
 | 1.1.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-latest 以免受限于 2.5 预览版 20 RPD 的严格限制 |
+| 1.2.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-lite-latest，并加入 429 频率限额指数避让重试机制 |
 """
 import os
 import sys
@@ -516,15 +517,26 @@ class PipelineAgent:
         """
         # [Gemini_3.5_Flash_High_planning]
         model = genai.GenerativeModel(
-            model_name="gemini-flash-latest",
+            model_name="gemini-flash-lite-latest",
             tools=self.tools,
             system_instruction=self.system_prompt
         )
         chat = model.start_chat(enable_automatic_function_calling=True)
-        try:
-            response = chat.send_message(prompt)
-            return response.text
-        except Exception as e:
-            logger.error(f"Gemini execution failed: {e}")
-            self.send_telegram_message(f"❌ <b>AI Agent Error</b>: {e}")
-            return f"Execution failed: {e}"
+        
+        import time
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                response = chat.send_message(prompt)
+                return response.text
+            except Exception as e:
+                err_str = str(e).lower()
+                if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
+                    if attempt < max_retries - 1:
+                        wait_sec = (attempt + 1) * 5
+                        logger.warning(f"Gemini API 429 rate limit hit, retrying in {wait_sec} seconds (attempt {attempt + 1}/{max_retries})...")
+                        time.sleep(wait_sec)
+                        continue
+                logger.error(f"Gemini execution failed: {e}")
+                self.send_telegram_message(f"❌ <b>AI Agent Error</b>: {e}")
+                return f"Execution failed: {e}"
