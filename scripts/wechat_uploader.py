@@ -5,6 +5,7 @@
 |---------|------------|-------------------------------------|----------------------------------------------------------|
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | Initial creation using Playwright                        |
 | 1.1.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 处理短标题/封面/分类/原创勾选；修复登录误判 URL优先策略 |
+| 1.2.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | P0根因修复: (1)封面确认改为轮询等待disabled→enabled (2)原创声明增加JS兜底 |
 """
 
 import os
@@ -13,6 +14,11 @@ import argparse
 import logging
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("wechat_uploader")
@@ -95,7 +101,7 @@ def run_uploader(
         # 反检测：覆盖 navigator.webdriver = false（必须在 goto 之前注入）
         context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined,
+                get: () => false,
             });
             window.chrome = { runtime: {} };
         """)
@@ -164,9 +170,79 @@ def run_uploader(
 
         if is_login_page:
             if headless:
-                logger.error("Session expired or not logged in. Headless mode cannot QR scan.")
-                browser.close()
-                return 2  # 上层识别为 LOGIN_REQUIRED
+                # [Claude_Sonnet_4.6_Thinking_fast] P1: Telegram QR 推送登录
+                # headless 无弹窗，但可截图 QR 发 Telegram，等扫码后继续上传
+                tg_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+                tg_chat_id = (
+                    os.environ.get("TELEGRAM_CHAT_ID", "").strip() or
+                    os.environ.get("TELEGRAM_ADMIN_IDS", "").split(",")[0].strip()
+                )
+
+                if tg_token and tg_chat_id and _requests:
+                    logger.info("Headless login required. Sending QR code to Telegram...")
+                    try:
+                        page.wait_for_timeout(2000)  # 等 QR 码渲染
+
+                        # 精确截取 QR 码区域，降级截全页面
+                        qr_path = str(state_file.parent / "login_qr.png")
+                        qr_captured = False
+                        for qr_sel in ["img.qrcode", ".login-qr img", ".qr-code img",
+                                       "img[src*='qr']", ".qrcode"]:
+                            qr_el = page.locator(qr_sel)
+                            if qr_el.count() > 0:
+                                try:
+                                    qr_el.first.screenshot(path=qr_path)
+                                    qr_captured = True
+                                    logger.info(f"QR captured via: {qr_sel}")
+                                    break
+                                except Exception:
+                                    continue
+                        if not qr_captured:
+                            page.screenshot(path=qr_path)
+                            logger.info("QR full-page screenshot (fallback).")
+
+                        # 发送图片到 Telegram
+                        caption = (
+                            "\U0001f510 微信视频号登录二维码\n"
+                            "请在微信扫码授权（有效期约1分钟）\n"
+                            "扫码成功后脚本将自动继续上传。"
+                        )
+                        with open(qr_path, "rb") as f:
+                            resp = _requests.post(
+                                f"https://api.telegram.org/bot{tg_token}/sendPhoto",
+                                data={"chat_id": tg_chat_id, "caption": caption},
+                                files={"photo": ("qr.png", f, "image/png")},
+                                timeout=15,
+                            )
+                        if resp.ok:
+                            logger.info("QR code sent to Telegram. Waiting for scan (120s)...")
+                        else:
+                            logger.warning(f"Telegram sendPhoto failed: {resp.text}")
+
+                        # 等待扫码跳转（最多 120s）
+                        page.wait_for_url("**/post/create", timeout=120000)
+                        logger.info("Login detected after Telegram QR scan. Saving session...")
+                        context.storage_state(path=str(state_file))
+                        logger.info(f"Session saved to: {state_file}")
+
+                        # 告知已成功
+                        _requests.post(
+                            f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                            json={"chat_id": tg_chat_id,
+                                  "text": "\u2705 微信视频号登录成功，继续上传任务..."},
+                            timeout=10,
+                        )
+                    except Exception as e_tg:
+                        logger.error(f"Telegram QR login failed: {e_tg}")
+                        browser.close()
+                        return 2
+                else:
+                    logger.error(
+                        "Session expired. Headless mode cannot QR scan. "
+                        "Set TELEGRAM_BOT_TOKEN + TELEGRAM_ADMIN_IDS in .env to enable remote QR login."
+                    )
+                    browser.close()
+                    return 2  # 上层识别为 LOGIN_REQUIRED
             else:
                 logger.info("=" * 50)
                 logger.info("⚠️ 请在弹出的浏览器窗口中，使用手机微信扫码登录！")
@@ -323,122 +399,345 @@ def run_uploader(
             pass
 
         # ── 4. 短标题（视频上传后字段才出现）────────────────────────────────
+        # 规则来源：WeChat JS 源码 345.509f6449.js → parseShortTitle() + handleBlur()
+        # 允许字符正则：/^[\u2103\u4E00-\u9FA5A-Za-z0-9《》""":：+?？%\s]+$/
+        #   ℃ 中文 英文 数字 《》 全角引号 全角冒号 : + ? ？ % 空格
+        # 字数：min=6  max=16（.length，即 JS 的字符串长度）
+        # 禁止：逗号 , 句号 . 感叹号 ! 其他半角标点（逗号可用空格代替）
+        # 输入清洗：去除零宽字符 \u200B
+
         if short_title:
-            logger.info(f"Setting short title: {short_title!r}")
-            page.wait_for_timeout(2000)
-            robust_locators = [
-                page.locator("input[placeholder*='短标题']"),
-                page.locator("input[placeholder*='概括视频主要内容']"),
-                page.locator("input[placeholder*='6-16']"),
-                page.locator("input[placeholder*='标题']"),
-                page.locator("input[placeholder*='28']"),
-                page.locator("textarea[placeholder*='短标题']"),
-                page.locator("text=短标题").locator("xpath=..").locator("input, textarea, [contenteditable='true']"),
-                page.locator(".post-title input"),
-                page.locator(".header-input"),
-            ]
-            
-            for loc in robust_locators:
-                try:
-                    if loc.count() > 0 and loc.first.is_visible():
-                        loc.first.fill(short_title)
-                        logger.info(f"Short title set via robust locator")
-                        break
-                except Exception:
-                    continue
-            else:
-                logger.warning("Could not find title input via locators, trying JS evaluation...")
-                # 尝试通过 JS 强行寻找相关输入框 (有些是动态组件)
-                js_injected = page.evaluate('''
-                    (titleText) => {
-                        let elements = Array.from(document.querySelectorAll('input, textarea'));
-                        let target = elements.find(el => (el.placeholder || '').includes('短标题') || (el.placeholder || '').includes('标题') || (el.placeholder || '').includes('主要内容'));
-                        if (target) {
-                            target.value = titleText;
-                            target.dispatchEvent(new Event('input', { bubbles: true }));
-                            return true;
-                        }
-                        return false;
-                    }
-                ''', short_title)
-                
-                if js_injected:
-                    logger.info("Short title set via JS evaluation fallback.")
+            import re as _re
+            # [Claude_Sonnet_4.6_Thinking_fast] 规则来自 WeChat JS 源码 345.509f6449.js
+            # parseShortTitle: /^[\u2103\u4E00-\u9FA5A-Za-z0-9\u300A\u300B\u201C\u201D:+?%\s]+$/
+            # handleBlur: length < 6 → "标题至少6个字"; length > 16 → 超过限制
+            # handleInput: .replace(/\u200B/g, "")
+
+            # Step 1: 清洗零宽字符
+            short_title_clean = short_title.replace('\u200B', '').replace('\uFEFF', '').strip()
+
+            # Step 2: 字数验证
+            TITLE_MIN, TITLE_MAX = 6, 16
+            if len(short_title_clean) < TITLE_MIN:
+                logger.warning(
+                    f"Short title too short ({len(short_title_clean)} chars, min={TITLE_MIN}): "
+                    f"{short_title_clean!r} — skipping."
+                )
+                short_title_clean = None
+            elif len(short_title_clean) > TITLE_MAX:
+                short_title_clean = short_title_clean[:TITLE_MAX]
+                logger.warning(f"Short title truncated to {TITLE_MAX} chars: {short_title_clean!r}")
+
+            # Step 3: 字符白名单验证（与 WeChat parseShortTitle 一致）
+            TITLE_PAT = _re.compile(
+                r'^[\u2103\u4E00-\u9FA5A-Za-z0-9'
+                r'\u300A\u300B'           # 《》
+                r'\u201C\u201D\u2018\u2019'  # ""''
+                r'\uFF02\uFF1A\uFF1F'     # ＂：？
+                r':+?%\s]+$'
+            )
+            if short_title_clean and not TITLE_PAT.match(short_title_clean):
+                bad = [c for c in short_title_clean if not TITLE_PAT.match(c)]
+                logger.warning(
+                    f"Short title has forbidden chars {bad!r}: {short_title_clean!r}. "
+                    "Allowed: 中文/英数/《》/全角引号/：/+/？/%/空格. 逗号→空格."
+                )
+                # 自动修复：逗号→空格，其余非法字符删除
+                cleaned = _re.sub(r'[,，。！!；;]', ' ', short_title_clean)
+                cleaned = _re.sub(
+                    r'[^\u2103\u4E00-\u9FA5A-Za-z0-9'
+                    r'\u300A\u300B\u201C\u201D\u2018\u2019'
+                    r'\uFF02\uFF1A\uFF1F:+?%\s]',
+                    '', cleaned
+                ).strip()
+                if TITLE_MIN <= len(cleaned) <= TITLE_MAX:
+                    logger.info(f"Auto-cleaned short title: {cleaned!r}")
+                    short_title_clean = cleaned
                 else:
-                    logger.warning("Could not find title input anywhere, skipping.")
+                    logger.warning(f"Cleaned title invalid (len={len(cleaned)}), skipping.")
+                    short_title_clean = None
+
+            if short_title_clean:
+                logger.info(f"Setting short title: {short_title_clean!r} (len={len(short_title_clean)})")
+                page.wait_for_timeout(2000)
+
+                # DOM selector 来自真实 WeChat HTML: placeholder="概括视频主要内容，字数建议6-16个字符"
+                # 组件 class: .post-short-title-wrap > mp-input > input
+                filled = False
+                for loc in [
+                    page.locator("input[placeholder*='概括视频主要内容']"),
+                    page.locator("input[placeholder*='6-16']"),
+                    page.locator("input[placeholder*='短标题']"),
+                    page.locator(".post-short-title-wrap input"),
+                    page.locator("text=短标题").locator("xpath=..").locator("input, textarea"),
+                ]:
+                    try:
+                        if loc.count() > 0 and loc.first.is_visible():
+                            loc.first.fill(short_title_clean)
+                            loc.first.blur()  # 触发 handleBlur → 字数验证
+                            page.wait_for_timeout(500)
+                            logger.info("Short title set via placeholder locator.")
+                            filled = True
+                            break
+                    except Exception:
+                        continue
+
+                if not filled:
+                    logger.warning("Trying JS injection for short title...")
+                    result = page.evaluate(
+                        """(v) => {
+                            const el = document.querySelector(
+                                'input[placeholder*="概括视频主要内容"],'
+                                'input[placeholder*="6-16"],'
+                                'input[placeholder*="短标题"]'
+                            );
+                            if (!el) return null;
+                            const setter = Object.getOwnPropertyDescriptor(
+                                HTMLInputElement.prototype, 'value'
+                            )?.set;
+                            setter?.call(el, v);
+                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                            el.blur();
+                            return el.value;
+                        }""",
+                        short_title_clean
+                    )
+                    if result:
+                        logger.info(f"Short title set via JS injection: {result!r}")
+                    else:
+                        logger.warning("All short title strategies failed — skipping.")
 
         # ── 5. 封面上传 ───────────────────────────────────────────────────────
+        # [Claude_Sonnet_4.6_Thinking_fast] 修复 Bug1/Bug2/Bug3：
+        # 真实 UI 流程：Hover 缩略图 → 浮现"编辑"按钮 → 点击"编辑" → Modal 内点"上传封面"
+        # → set_input_files 注入文件 → 等待上传完成 → 点"确定"确认应用封面
         if cover_abs:
             logger.info(f"Uploading cover: {cover_abs}")
             cover_set = False
+
+            # ── Strategy A: 直接 Hover 封面缩略图，等"编辑"按钮浮现后点击（正确流程）──
             try:
-                # 尝试通过第二个 file input 注入 (通常第一个是视频，第二个是封面)
-                inputs = page.locator("input[type='file']")
-                if inputs.count() >= 2:
-                    inputs.nth(1).set_input_files(cover_abs)
-                    logger.info("Cover uploaded via second image file input.")
-                    cover_set = True
-            except Exception as e:
-                pass
-                
-            if not cover_set:
-                try:
-                    # 必须先 Hover 视频预览区域，才能让“更换封面”按钮变为可见
-                    preview_areas = [
-                        page.locator(".video-preview").first,
-                        page.locator(".post-video-preview").first,
-                        page.locator(".cover-wrap").first,
-                        page.locator(".form-item:has-text('封面')").first,
-                        page.locator("text=封面预览").locator("xpath=..").first
-                    ]
-                    for pa in preview_areas:
-                        if pa.count() > 0 and pa.is_visible():
-                            pa.hover()
-                            page.wait_for_timeout(500)
-                            break
-                            
-                    trigger_loc = None
-                    for sel in [
-                        "text=修改封面", "text=更换封面", "text=上传封面", "text=设置封面", "text=编辑",
-                        "button:has-text('修改封面')", "button:has-text('上传封面')", "button:has-text('更换封面')", "button:has-text('编辑')",
-                        ".cover-upload-btn", ".post-cover-edit"
-                    ]:
-                        loc = page.locator(sel).first
-                        if loc.count() > 0:
-                            trigger_loc = loc
-                            break
-                            
-                    if trigger_loc:
-                        with page.expect_file_chooser(timeout=6000) as fc_info:
-                            trigger_loc.click(force=True)
-                        fc_info.value.set_files(cover_abs)
-                        logger.info("Cover uploaded via file chooser.")
-                        
-                        # 尝试点击裁剪/封面的"确定"或"完成"按钮
-                        page.wait_for_timeout(1500)
-                        for btn_sel in ["text=确定", "text=完成", "button:has-text('确定')", "button:has-text('完成')"]:
-                            btn = page.locator(btn_sel).last
-                            if btn.count() > 0 and btn.is_visible():
-                                btn.click(force=True)
-                                logger.info(f"Clicked cover confirm button: {btn_sel}")
-                                page.wait_for_timeout(1000)
+                cover_card_sels = [
+                    "text=个人主页卡片",
+                    "text=分享卡片",
+                    "text=封面预览",
+                ]
+                for card_sel in cover_card_sels:
+                    try:
+                        card_container = page.locator(card_sel).locator("xpath=..")
+                        if card_container.count() == 0:
+                            continue
+                        card_container.first.hover()
+                        page.wait_for_timeout(1000)
+
+                        edit_btn = card_container.first.locator("text=编辑")
+                        if edit_btn.count() == 0:
+                            edit_btn = card_container.first.locator("xpath=..").locator("text=编辑")
+                        if edit_btn.count() == 0:
+                            continue
+
+                        logger.info(f"Found 编辑 button under: {card_sel}. Clicking...")
+                        edit_btn.first.click(force=True)
+                        page.wait_for_timeout(2000)
+
+                        # Step 1: 点击"上传封面"，触发 WeChat 创建隐藏 input
+                        upload_btn = None
+                        for inner_sel in ["text=上传封面", "text=本地上传", ".upload-btn", ".cover-upload"]:
+                            try:
+                                inner_loc = page.locator(inner_sel).last
+                                if inner_loc.count() > 0 and inner_loc.is_visible():
+                                    upload_btn = inner_loc
+                                    logger.info(f"Found upload trigger: {inner_sel}")
+                                    break
+                            except Exception:
+                                continue
+
+                        if upload_btn:
+                            upload_btn.click(force=True)
+                            page.wait_for_timeout(1500)
+
+                        # Step 2: 注入文件到 hidden input[type=file]
+                        file_injected = False
+                        for input_sel in [
+                            ".edit-cover-dialog-container input[type=\'file\']",
+                            "input[type=\'file\'][accept*=\'image\']",
+                            "input[type=\'file\']",
+                        ]:
+                            try:
+                                file_input = page.locator(input_sel).last
+                                if file_input.count() > 0:
+                                    file_input.set_input_files(cover_abs)
+                                    logger.info(f"Cover file injected via hidden input: {input_sel}")
+                                    file_injected = True
+                                    break
+                            except Exception:
+                                continue
+
+                        if not file_injected:
+                            logger.warning("Direct input injection failed, trying expect_file_chooser...")
+                            try:
+                                with page.expect_file_chooser(timeout=8000) as fc_info:
+                                    if upload_btn:
+                                        upload_btn.click(force=True)
+                                    else:
+                                        edit_btn.first.click(force=True)
+                                fc_info.value.set_files(cover_abs)
+                                file_injected = True
+                                logger.info("Cover file set via OS file chooser.")
+                            except Exception as fc_err:
+                                logger.error(f"File chooser fallback also failed: {fc_err}")
+                                raise
+
+                        # Step 3: 等待上传完成
+                        page.wait_for_timeout(5000)
+                        page.screenshot(path="output/debug_cover_before_confirm.png")
+
+                        # Step 4: 轮询等待"确认"按钮变为可点击状态，然后点击
+                        # [Claude_Sonnet_4.6_Thinking_planning] P0 根因修复:
+                        # 封面图上传后，微信需要几秒钟处理图片，期间"确认"按钮处于disabled状态
+                        # 必须循环等待按钮从disabled变为enabled，而不是静态等待5秒就直接找
+                        confirmed = False
+                        logger.info("Polling for enabled confirm button in cover dialog (max 20s)...")
+
+                        for poll_attempt in range(20):  # 最多等20秒
+                            page.wait_for_timeout(1000)
+                            # 用最直接的全局选择器: button:has-text('确认')
+                            # 不限定在 dialog 容器内，因为微信的弹窗不一定有标准的 dialog role
+                            for btn_name in ["确认", "确定", "完成"]:
+                                # 策略1: 直接全局找 button 标签
+                                btns = page.locator(f"button:has-text('{btn_name}')")
+                                count = btns.count()
+                                for i in range(count):
+                                    try:
+                                        btn = btns.nth(i)
+                                        if not btn.is_visible():
+                                            continue
+                                        # 检查是否 disabled: 属性存在且不为 None 则跳过
+                                        disabled_attr = btn.get_attribute("disabled")
+                                        if disabled_attr is not None:
+                                            logger.info(f"  [poll {poll_attempt}] button '{btn_name}' still disabled, waiting...")
+                                            continue
+                                        # 额外检查: aria-disabled
+                                        if btn.get_attribute("aria-disabled") == "true":
+                                            continue
+                                        # 确认按钮可用，点击
+                                        btn.click(timeout=2000, force=True)
+                                        logger.info(f"[Strategy A] Cover confirmed via button:has-text('{btn_name}') on poll attempt {poll_attempt}")
+                                        confirmed = True
+                                        break
+                                    except Exception as click_err:
+                                        logger.warning(f"  button click error: {click_err}")
+                                        try:
+                                            btn.evaluate("node => node.click()")
+                                            confirmed = True
+                                            logger.info(f"[Strategy A] Cover confirmed via JS .click() on poll attempt {poll_attempt}")
+                                            break
+                                        except Exception:
+                                            pass
+                                if confirmed:
+                                    break
+                            if confirmed:
                                 break
-                    else:
-                        logger.warning("Could not find a valid cover upload trigger button.")
-                except Exception as e:
-                    logger.warning(f"Cover upload failed (non-fatal): {e}")
+
+                        if not confirmed:
+                            logger.warning("Cover confirm button not found after 20s polling — cover may not be applied!")
+                            page.screenshot(path="output/debug_cover_failed_confirm.png")
+                        else:
+                            page.wait_for_timeout(2000)
+                            page.screenshot(path="output/debug_cover_after_confirm.png")
+                            cover_set = True
+                        break  # 成功处理一张卡片即退出循环
+                    except Exception as e_card:
+                        logger.warning(f"Cover strategy A failed for card \'{card_sel}\': {e_card}")
+                        continue
+            except Exception as e_a:
+                logger.warning(f"Cover Strategy A (hover+edit) failed: {e_a}")
+
+            # ── Strategy B: 兜底 — 暴力枚举常见上传 selector ──
+            if not cover_set:
+                logger.info("Cover Strategy B: brute-force selector search...")
+                try:
+                    for sel in [
+                        "text=修改封面", "text=更换封面", "text=设置封面",
+                        "button:has-text('修改封面')", "button:has-text('更换封面')",
+                        ".cover-upload-btn",
+                    ]:
+                        try:
+                            loc = page.locator(sel).first
+                            if loc.count() > 0 and loc.is_visible():
+                                with page.expect_file_chooser(timeout=8000) as fc_info:
+                                    loc.click(force=True)
+                                fc_info.value.set_files(cover_abs)
+                                page.wait_for_timeout(5000)
+                                # [Claude_Sonnet_4.6_Thinking_fast] P0: 严格在 dialog 内找确认按钮，不误点"保存草稿"
+                                # [Claude_Sonnet_4.6_Thinking_planning] 同 Strategy A，轮询等待按钮
+                                for poll_attempt in range(20):
+                                    page.wait_for_timeout(1000)
+                                    for btn_name in ["确认", "确定", "完成"]:
+                                        btns = page.locator(f"button:has-text('{btn_name}')")
+                                        for i in range(btns.count()):
+                                            try:
+                                                btn = btns.nth(i)
+                                                if not btn.is_visible():
+                                                    continue
+                                                if btn.get_attribute("disabled") is not None:
+                                                    continue
+                                                if btn.get_attribute("aria-disabled") == "true":
+                                                    continue
+                                                btn.click(timeout=2000, force=True)
+                                                logger.info(f"[Strategy B] Cover confirmed via button '{btn_name}' on attempt {poll_attempt}")
+                                                cover_set = True
+                                                break
+                                            except Exception:
+                                                try:
+                                                    btn.evaluate("node => node.click()")
+                                                    cover_set = True
+                                                    break
+                                                except Exception:
+                                                    pass
+                                        if cover_set:
+                                            break
+                                    if cover_set:
+                                        break
+                                if cover_set:
+                                    logger.info(f"[Strategy B] Cover set via selector: {sel}")
+                                    break
+                        except Exception:
+                            continue
+
+                except Exception as e_b:
+                    logger.warning(f"Cover Strategy B failed: {e_b}")
+
+            if not cover_set:
+                logger.warning("All cover upload strategies failed — publishing without custom cover.")
 
         # ── 6. 原创声明 ───────────────────────────────────────────────────────
         logger.info("Checking original declaration checkbox...")
+        # [Claude_Sonnet_4.6_Thinking_planning] P0 原创声明根因修复:
+        # 微信视频号的"声明原创"是一个 toggle/switch 而不是标准 checkbox
+        # 最可靠方式: 找包含"声明原创"文字的行，点击整行或其旁边的 toggle
+        # 不要依赖 CSS class (微信会变动)，直接用文字定位
+        original_toggle_clicked = False
         for sel in [
-            "input[type='checkbox'][class*='original']",
+            # 方案1: 找原创行旁边的 input checkbox (如果有)
             "label:has-text('原创') input[type='checkbox']",
+            "label:has-text('声明原创') input[type='checkbox']",
+            "input[type='checkbox'][class*='original']",
             ".original-declaration input",
+            # 方案2: 找"声明原创"旁边的 toggle 或 switch
+            "input[type='checkbox']:near(:text('原创'))",
+            "input[type='checkbox']:near(:text('声明原创'))",
+            # 方案3: 找 switch 控件 (微信的 toggle 可能用 span/div 模拟)
+            ".weui-desktop-switch:near(:text('原创'))",
+            ".weui-desktop-switch:near(:text('声明原创'))",
         ]:
             try:
                 loc = page.locator(sel)
                 if loc.count() > 0:
-                    if not loc.first.is_checked():
+                    if sel.endswith("input[type='checkbox']") or 'checkbox' in sel:
+                        if not loc.first.is_checked():
+                            loc.first.click(force=True)
+                    else:
                         loc.first.click(force=True)
                         
                         # 处理二次确认协议窗口 (终极防爆轮询机制)
@@ -553,10 +852,48 @@ def run_uploader(
                         except Exception as e:
                             logger.info(f"Modal handling error: {e}")
 
-                    logger.info(f"Original declaration checked via: {sel}")
+                    original_toggle_clicked = True
+                    logger.info(f"Original declaration handled via: {sel}")
                     break
             except Exception:
                 continue
+
+        # 兜底: 如果CSS选择器都失败，用JS直接点击包含"声明原创"的toggle行
+        if not original_toggle_clicked:
+            try:
+                clicked = page.evaluate("""() => {
+                    // 找包含"声明原创"文字的最近可点击区域
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                    let node;
+                    while (node = walker.nextNode()) {
+                        const text = node.textContent.trim();
+                        if (text === '声明原创' || text === '原创') {
+                            // 找这个文字节点的祖先中最近的可点击容器
+                            let el = node.parentElement;
+                            for (let i = 0; i < 5 && el; i++) {
+                                // 寻找同级或子级中的 input/switch/toggle
+                                const toggle = el.querySelector('input[type="checkbox"], [class*="switch"], [class*="toggle"], [role="switch"]');
+                                if (toggle) {
+                                    toggle.click();
+                                    return {found: true, tag: toggle.tagName, class: toggle.className};
+                                }
+                                // 如果整行是个可点击的 div，直接点击
+                                if (el.getAttribute('role') === 'switch' || el.className.includes('switch') || el.className.includes('toggle')) {
+                                    el.click();
+                                    return {found: true, tag: el.tagName, class: el.className, method: 'parent_click'};
+                                }
+                                el = el.parentElement;
+                            }
+                        }
+                    }
+                    return {found: false};
+                }""")
+                if clicked and clicked.get('found'):
+                    logger.info(f"Original declaration clicked via JS fallback: {clicked}")
+                else:
+                    logger.warning("Could not find original declaration toggle via JS either")
+            except Exception as e_orig:
+                logger.warning(f"JS original declaration fallback failed: {e_orig}")
 
         # ── 7. 分类选择 ───────────────────────────────────────────────────────
         if category:
