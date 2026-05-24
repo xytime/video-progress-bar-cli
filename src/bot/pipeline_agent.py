@@ -8,6 +8,7 @@ based on incoming Telegram messages and commands.
 | Version | Date       | Author                         | Description                                                                              |
 | ------- | ---------- | ------------------------------ | ---------------------------------------------------------------------------------------- |
 | 1.0.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 初始创建 PipelineAgent，支持 Gemini 2.5 Flash Agentic Pipeline 执行与自定义 Telegram 交互路由 |
+| 1.1.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-latest 以免受限于 2.5 预览版 20 RPD 的严格限制 |
 """
 import os
 import sys
@@ -515,7 +516,7 @@ class PipelineAgent:
         """
         # [Gemini_3.5_Flash_High_planning]
         model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
+            model_name="gemini-flash-latest",
             tools=self.tools,
             system_instruction=self.system_prompt
         )
