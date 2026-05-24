@@ -9,6 +9,7 @@
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建，TDD Green phase 生产代码 |
 | 1.1.0 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 增加 PipelineAgent 统一接管除 /help /start 以外的所有指令及文本消息 |
 | 1.1.1 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 调整为仅非 /help 命令交由 Agent，标准指令由程序处理 |
+| 1.1.2 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将 YouTube URL 链接处理重归程序接管，不使用 Agent |
 """
 from __future__ import annotations
 
@@ -327,7 +328,10 @@ def main() -> None:
     app.add_handler(CommandHandler("run", cmd_run))
     app.add_handler(CommandHandler("stats", cmd_stats))
 
-    # 监听所有其他文本消息及指令（由 AI Agent 统一接收并处理，如 URL 和闲聊问答）
+    # 监听 YouTube URL 并由程序接管自动提交（不消耗 API 限额）
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(_YOUTUBE_RE), handle_youtube_url))
+
+    # 监听所有其他文本消息（由 AI Agent 统一接收并处理，如闲聊问答）
     app.add_handler(MessageHandler(filters.TEXT, handle_agent_message))
 
     logger.info("✅ Bot 已就绪，开始轮询...")
