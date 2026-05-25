@@ -7,6 +7,7 @@
 # |---------|------------|--------------------------------|---------------------------|
 # | 1.0.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 初始创建 crontab 自动启动配置脚本 |
 # | 1.1.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 改为使用 vpanel 启动服务，修复 PID 丢失问题 |
+# | 1.2.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 添加 Bot 看门狗定时检测 crontab 规则，修复网络挂死问题 |
 # =======================================================================
 
 set -euo pipefail
@@ -24,13 +25,15 @@ crontab -l > "$TMP_CRON" 2>/dev/null || true
 sed -i '' '/video-progress-bar-cli/d; /Video-precessing/d' "$TMP_CRON" 2>/dev/null || \
 sed -i '/video-progress-bar-cli/d; /Video-precessing/d' "$TMP_CRON" 2>/dev/null || true
 
-# 添加自动启动命令 (用路径标识以便于清理)
-echo "⚙️ Adding @reboot entries to crontab..."
+# 添加自动启动及看门狗命令 (用路径标识以便于清理)
+echo "⚙️ Adding @reboot and watchdog entries to crontab..."
 cat <<EOF >> "$TMP_CRON"
 # [video-progress-bar-cli] Auto-start Telegram Bot on reboot
 @reboot "$PRJ_ROOT/vpanel" bot start
 # [video-progress-bar-cli] Auto-start Control Panel Dashboard on reboot
 @reboot "$PRJ_ROOT/vpanel" ui start
+# [video-progress-bar-cli] Bot Watchdog to recover from network hangs (runs every 5 minutes)
+*/5 * * * * "$PRJ_ROOT/.venv/bin/python" "$PRJ_ROOT/scripts/bot_watchdog.py" >> "$PRJ_ROOT/output/watchdog.log" 2>&1
 EOF
 
 # 加载新的 crontab
