@@ -91,12 +91,12 @@ class TestGetVideos:
 
     @respx.mock
     async def test_get_videos_api_down_returns_empty(self, api_client):
-        """FastAPI 断线时返回空列表，不抛出异常"""
+        """FastAPI 断线时返回 None，不抛出异常"""
         respx.get(f"{BASE_URL}/api/videos").mock(
             side_effect=httpx.ConnectError("Connection refused")
         )
         result = await api_client.get_videos(tab="waitlist")
-        assert result == []
+        assert result is None
 
 
 @pytest.mark.asyncio

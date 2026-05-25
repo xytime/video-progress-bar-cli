@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建，TDD Green phase |
 | 1.1.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 增加 HTTPStatusError 与 ValueError 熔断拦截，防止 502/500 JSON 解析崩溃 |
+| 1.1.1 | 2026-05-25 | Gemini_3.5_Flash_High_planning | 增加 add_video API 调用的 timeout 至 45s，防止 yt-dlp 查询超时导致控制中心不可用假警报 |
 """
 from __future__ import annotations
 
@@ -48,7 +49,8 @@ class PipelineAPIClient:
         """
         try:
             async with self._client() as c:
-                resp = await c.post("/api/videos/add", json={"url": url})
+                # [Gemini_3.5_Flash_High_planning] yt-dlp 查询元数据可能比较耗时，此处放宽超时限制至 45 秒
+                resp = await c.post("/api/videos/add", json={"url": url}, timeout=45.0)
                 resp.raise_for_status()
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:

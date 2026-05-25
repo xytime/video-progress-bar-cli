@@ -10,6 +10,7 @@ based on incoming Telegram messages and commands.
 | 1.0.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 初始创建 PipelineAgent，支持 Gemini 2.5 Flash Agentic Pipeline 执行与自定义 Telegram 交互路由 |
 | 1.1.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-latest 以免受限于 2.5 预览版 20 RPD 的严格限制 |
 | 1.2.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-lite-latest，并加入 429 频率限额指数避让重试机制 |
+| 1.3.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 在 5 个核心工具中加入 fcntl 跨进程排他锁，强制实现串行执行 |
 """
 import os
 import sys
@@ -17,6 +18,7 @@ import json
 import logging
 import asyncio
 import subprocess
+import fcntl
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -208,32 +210,42 @@ class PipelineAgent:
             youtube_id: The 11-character YouTube video ID.
         """
         # [Gemini_3.5_Flash_High_planning]
-        existing = self._find_downloaded_video(youtube_id)
-        if existing:
-            return json.dumps({"ok": True, "message": f"Video already downloaded", "path": existing})
-
-        url = f"https://youtu.be/{youtube_id}"
-        dl_cmd = [
-            self.venv_ytdlp,
-            "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "--cookies-from-browser", "safari",
-            "--write-description",
-            "--remote-components", "ejs:github",
-            url, "-o", str(self.output_dir / f"{youtube_id}.%(ext)s"),
-        ]
-        _PROXY_KEYS = {'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'}
-        env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
-
+        lock_path = self.output_dir / "pipeline.lock"
+        logger.info(f"[Lock] Waiting for pipeline lock to download {youtube_id}...")
+        lock_file = open(lock_path, "w")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        logger.info(f"[Lock] Acquired pipeline lock to download {youtube_id}.")
         try:
-            subprocess.run(dl_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root), env=env_no_proxy)
-            target_file = self._find_downloaded_video(youtube_id)
-            if not target_file:
-                return json.dumps({"ok": False, "error": "No video file found after download completed"})
-            return json.dumps({"ok": True, "message": "Download successful", "path": target_file})
-        except subprocess.CalledProcessError as e:
-            return json.dumps({"ok": False, "error": f"yt-dlp download failed: {e.stderr}"})
-        except Exception as e:
-            return json.dumps({"ok": False, "error": f"Unexpected download error: {e}"})
+            existing = self._find_downloaded_video(youtube_id)
+            if existing:
+                return json.dumps({"ok": True, "message": f"Video already downloaded", "path": existing})
+
+            url = f"https://youtu.be/{youtube_id}"
+            dl_cmd = [
+                self.venv_ytdlp,
+                "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                "--cookies-from-browser", "safari",
+                "--write-description",
+                "--remote-components", "ejs:github",
+                url, "-o", str(self.output_dir / f"{youtube_id}.%(ext)s"),
+            ]
+            _PROXY_KEYS = {'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'}
+            env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
+
+            try:
+                subprocess.run(dl_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root), env=env_no_proxy)
+                target_file = self._find_downloaded_video(youtube_id)
+                if not target_file:
+                    return json.dumps({"ok": False, "error": "No video file found after download completed"})
+                return json.dumps({"ok": True, "message": "Download successful", "path": target_file})
+            except subprocess.CalledProcessError as e:
+                return json.dumps({"ok": False, "error": f"yt-dlp download failed: {e.stderr}"})
+            except Exception as e:
+                return json.dumps({"ok": False, "error": f"Unexpected download error: {e}"})
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+            logger.info(f"[Lock] Released pipeline lock after download {youtube_id}.")
 
     def transcribe_and_caption_video(self, youtube_id: str) -> str:
         """Runs the transcription and bilingual caption rendering on the downloaded video.
@@ -242,34 +254,44 @@ class PipelineAgent:
             youtube_id: The 11-character YouTube video ID.
         """
         # [Gemini_3.5_Flash_High_planning]
-        video_file = self._find_downloaded_video(youtube_id)
-        if not video_file:
-            return json.dumps({"ok": False, "error": "Downloaded video file not found. Download it first."})
-
-        vertical = self.output_dir / f"{youtube_id}_vertical.mp4"
-        if vertical.exists() and vertical.stat().st_size > 1_000_000:
-            return json.dumps({"ok": True, "message": "Video already transcribed and captioned", "path": str(vertical)})
-
-        video_rec = self.db.get_video_by_youtube_id(youtube_id)
-        title = video_rec["title"] if video_rec else "Video"
-
-        render_cmd = [
-            "nice", "-n", "19",
-            self.venv_python, "-m", "cli.main", "auto-caption",
-            video_file, "--vertical", "--bilingual", "--title", title,
-        ]
-        render_env = os.environ.copy()
-        render_env["PYTHONPATH"] = str(self.src_dir)
-
+        lock_path = self.output_dir / "pipeline.lock"
+        logger.info(f"[Lock] Waiting for pipeline lock to transcribe {youtube_id}...")
+        lock_file = open(lock_path, "w")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        logger.info(f"[Lock] Acquired pipeline lock to transcribe {youtube_id}.")
         try:
-            subprocess.run(render_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root), env=render_env)
+            video_file = self._find_downloaded_video(youtube_id)
+            if not video_file:
+                return json.dumps({"ok": False, "error": "Downloaded video file not found. Download it first."})
+
+            vertical = self.output_dir / f"{youtube_id}_vertical.mp4"
             if vertical.exists() and vertical.stat().st_size > 1_000_000:
-                return json.dumps({"ok": True, "message": "Transcription and caption rendering successful", "path": str(vertical)})
-            return json.dumps({"ok": False, "error": "Rendered vertical video not found or too small after transcription"})
-        except subprocess.CalledProcessError as e:
-            return json.dumps({"ok": False, "error": f"Transcription process failed: {e.stderr}"})
-        except Exception as e:
-            return json.dumps({"ok": False, "error": f"Unexpected transcription error: {e}"})
+                return json.dumps({"ok": True, "message": "Video already transcribed and captioned", "path": str(vertical)})
+
+            video_rec = self.db.get_video_by_youtube_id(youtube_id)
+            title = video_rec["title"] if video_rec else "Video"
+
+            render_cmd = [
+                "nice", "-n", "19",
+                self.venv_python, "-m", "cli.main", "auto-caption",
+                video_file, "--vertical", "--bilingual", "--title", title,
+            ]
+            render_env = os.environ.copy()
+            render_env["PYTHONPATH"] = str(self.src_dir)
+
+            try:
+                subprocess.run(render_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root), env=render_env)
+                if vertical.exists() and vertical.stat().st_size > 1_000_000:
+                    return json.dumps({"ok": True, "message": "Transcription and caption rendering successful", "path": str(vertical)})
+                return json.dumps({"ok": False, "error": "Rendered vertical video not found or too small after transcription"})
+            except subprocess.CalledProcessError as e:
+                return json.dumps({"ok": False, "error": f"Transcription process failed: {e.stderr}"})
+            except Exception as e:
+                return json.dumps({"ok": False, "error": f"Unexpected transcription error: {e}"})
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+            logger.info(f"[Lock] Released pipeline lock after transcribe {youtube_id}.")
 
     def generate_wechat_copy(self, youtube_id: str) -> str:
         """Generates WeChat Channels copy (title, body description, category) using Gemini/DeepTranslator.
@@ -278,48 +300,58 @@ class PipelineAgent:
             youtube_id: The 11-character YouTube video ID.
         """
         # [Gemini_3.5_Flash_High_planning]
-        copy_file = self.output_dir / f"{youtube_id}_copy.txt"
-        title_file = self.output_dir / f"{youtube_id}_title.txt"
-        category_file = self.output_dir / f"{youtube_id}_category.txt"
-
-        if copy_file.exists() and title_file.exists():
-            return json.dumps({
-                "ok": True,
-                "message": "WeChat copy already generated",
-                "copy_path": str(copy_file),
-                "title_path": str(title_file)
-            })
-
-        video_rec = self.db.get_video_by_youtube_id(youtube_id)
-        if not video_rec:
-            return json.dumps({"ok": False, "error": "Video record not found in database"})
-
-        title = video_rec["title"]
-        desc_file = self.output_dir / f"{youtube_id}.description"
-        if not desc_file.exists():
-            desc_file.write_text("", encoding="utf-8")
-
-        copy_cmd = [
-            self.venv_python,
-            str(self.project_root / "scripts" / "copywriter.py"),
-            "--youtube-id", youtube_id,
-            "--title", title,
-            "--desc-file", str(desc_file),
-        ]
+        lock_path = self.output_dir / "pipeline.lock"
+        logger.info(f"[Lock] Waiting for pipeline lock to generate copy for {youtube_id}...")
+        lock_file = open(lock_path, "w")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        logger.info(f"[Lock] Acquired pipeline lock to generate copy for {youtube_id}.")
         try:
-            subprocess.run(copy_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root))
+            copy_file = self.output_dir / f"{youtube_id}_copy.txt"
+            title_file = self.output_dir / f"{youtube_id}_title.txt"
+            category_file = self.output_dir / f"{youtube_id}_category.txt"
+
             if copy_file.exists() and title_file.exists():
                 return json.dumps({
                     "ok": True,
-                    "message": "WeChat copy generated successfully",
+                    "message": "WeChat copy already generated",
                     "copy_path": str(copy_file),
                     "title_path": str(title_file)
                 })
-            return json.dumps({"ok": False, "error": "Copy files were not created by copywriter.py"})
-        except subprocess.CalledProcessError as e:
-            return json.dumps({"ok": False, "error": f"Copywriter failed: {e.stderr}"})
-        except Exception as e:
-            return json.dumps({"ok": False, "error": f"Unexpected copywriter error: {e}"})
+
+            video_rec = self.db.get_video_by_youtube_id(youtube_id)
+            if not video_rec:
+                return json.dumps({"ok": False, "error": "Video record not found in database"})
+
+            title = video_rec["title"]
+            desc_file = self.output_dir / f"{youtube_id}.description"
+            if not desc_file.exists():
+                desc_file.write_text("", encoding="utf-8")
+
+            copy_cmd = [
+                self.venv_python,
+                str(self.project_root / "scripts" / "copywriter.py"),
+                "--youtube-id", youtube_id,
+                "--title", title,
+                "--desc-file", str(desc_file),
+            ]
+            try:
+                subprocess.run(copy_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root))
+                if copy_file.exists() and title_file.exists():
+                    return json.dumps({
+                        "ok": True,
+                        "message": "WeChat copy generated successfully",
+                        "copy_path": str(copy_file),
+                        "title_path": str(title_file)
+                    })
+                return json.dumps({"ok": False, "error": "Copy files were not created by copywriter.py"})
+            except subprocess.CalledProcessError as e:
+                return json.dumps({"ok": False, "error": f"Copywriter failed: {e.stderr}"})
+            except Exception as e:
+                return json.dumps({"ok": False, "error": f"Unexpected copywriter error: {e}"})
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+            logger.info(f"[Lock] Released pipeline lock after copy generation for {youtube_id}.")
 
     def generate_video_cover(self, youtube_id: str) -> str:
         """Generates a cover image for WeChat Channels from the vertical video.
@@ -328,41 +360,51 @@ class PipelineAgent:
             youtube_id: The 11-character YouTube video ID.
         """
         # [Gemini_3.5_Flash_High_planning]
-        vertical = self.output_dir / f"{youtube_id}_vertical.mp4"
-        if not vertical.exists():
-            return json.dumps({"ok": False, "error": "Vertical video not found. Run transcription first."})
-
-        cover_file = self.output_dir / f"{youtube_id}_cover.jpg"
-        if cover_file.exists():
-            return json.dumps({"ok": True, "message": "Cover already exists", "path": str(cover_file)})
-
-        title_file = self.output_dir / f"{youtube_id}_title.txt"
-        cover_title = ""
-        if title_file.exists():
-            try:
-                cover_title = title_file.read_text(encoding="utf-8").strip()
-            except Exception:
-                pass
-        if not cover_title:
-            video_rec = self.db.get_video_by_youtube_id(youtube_id)
-            cover_title = video_rec["title"] if video_rec else "Video"
-
-        cover_cmd = [
-            self.venv_python,
-            str(self.project_root / "scripts" / "cover_generator.py"),
-            "--video", str(vertical),
-            "--title", cover_title,
-            "--output", str(cover_file),
-        ]
+        lock_path = self.output_dir / "pipeline.lock"
+        logger.info(f"[Lock] Waiting for pipeline lock to generate cover for {youtube_id}...")
+        lock_file = open(lock_path, "w")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        logger.info(f"[Lock] Acquired pipeline lock to generate cover for {youtube_id}.")
         try:
-            res = subprocess.run(cover_cmd, check=False, capture_output=True, text=True, cwd=str(self.project_root))
-            if res.returncode != 0:
-                return json.dumps({"ok": False, "error": f"Cover generator failed: {res.stderr}"})
+            vertical = self.output_dir / f"{youtube_id}_vertical.mp4"
+            if not vertical.exists():
+                return json.dumps({"ok": False, "error": "Vertical video not found. Run transcription first."})
+
+            cover_file = self.output_dir / f"{youtube_id}_cover.jpg"
             if cover_file.exists():
-                return json.dumps({"ok": True, "message": "Cover generated successfully", "path": str(cover_file)})
-            return json.dumps({"ok": False, "error": "Cover file was not created by cover_generator.py"})
-        except Exception as e:
-            return json.dumps({"ok": False, "error": f"Cover generator encountered unexpected error: {e}"})
+                return json.dumps({"ok": True, "message": "Cover already exists", "path": str(cover_file)})
+
+            title_file = self.output_dir / f"{youtube_id}_title.txt"
+            cover_title = ""
+            if title_file.exists():
+                try:
+                    cover_title = title_file.read_text(encoding="utf-8").strip()
+                except Exception:
+                    pass
+            if not cover_title:
+                video_rec = self.db.get_video_by_youtube_id(youtube_id)
+                cover_title = video_rec["title"] if video_rec else "Video"
+
+            cover_cmd = [
+                self.venv_python,
+                str(self.project_root / "scripts" / "cover_generator.py"),
+                "--video", str(vertical),
+                "--title", cover_title,
+                "--output", str(cover_file),
+            ]
+            try:
+                res = subprocess.run(cover_cmd, check=False, capture_output=True, text=True, cwd=str(self.project_root))
+                if res.returncode != 0:
+                    return json.dumps({"ok": False, "error": f"Cover generator failed: {res.stderr}"})
+                if cover_file.exists():
+                    return json.dumps({"ok": True, "message": "Cover generated successfully", "path": str(cover_file)})
+                return json.dumps({"ok": False, "error": "Cover file was not created by cover_generator.py"})
+            except Exception as e:
+                return json.dumps({"ok": False, "error": f"Cover generator encountered unexpected error: {e}"})
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+            logger.info(f"[Lock] Released pipeline lock after cover generation for {youtube_id}.")
 
     def upload_to_wechat(self, youtube_id: str) -> str:
         """Uploads the video, cover, copy, and category to WeChat Channels using Playwright.
@@ -371,50 +413,60 @@ class PipelineAgent:
             youtube_id: The 11-character YouTube video ID.
         """
         # [Gemini_3.5_Flash_High_planning]
-        vertical = self.output_dir / f"{youtube_id}_vertical.mp4"
-        if not vertical.exists():
-            return json.dumps({"ok": False, "error": "Vertical video not found. Run transcription first."})
-
-        copy_file = self.output_dir / f"{youtube_id}_copy.txt"
-        if not copy_file.exists():
-            return json.dumps({"ok": False, "error": "WeChat copy file not found. Run copywriter first."})
-
-        cover_file = self.output_dir / f"{youtube_id}_cover.jpg"
-        title_file = self.output_dir / f"{youtube_id}_title.txt"
-        category_file = self.output_dir / f"{youtube_id}_category.txt"
-
-        upload_cmd = [
-            self.venv_python,
-            str(self.project_root / "scripts" / "wechat_uploader.py"),
-            "--video", str(vertical),
-            "--copy", str(copy_file),
-            "--state", str(self.output_dir / "wechat_state.json"),
-            "--no-headless",
-        ]
-        if cover_file.exists():
-            upload_cmd += ["--cover", str(cover_file)]
-        if title_file.exists():
-            upload_cmd += ["--title-file", str(title_file)]
-        if category_file.exists():
-            upload_cmd += ["--category-file", str(category_file)]
-
+        lock_path = self.output_dir / "pipeline.lock"
+        logger.info(f"[Lock] Waiting for pipeline lock to upload {youtube_id}...")
+        lock_file = open(lock_path, "w")
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        logger.info(f"[Lock] Acquired pipeline lock to upload {youtube_id}.")
         try:
-            res = subprocess.run(upload_cmd, capture_output=True, text=True, cwd=str(self.project_root))
-            if res.returncode == 2:
-                return json.dumps({
-                    "ok": False,
-                    "error": "WECHAT_LOGIN_EXPIRED",
-                    "message": "WeChat login session has expired. Human scanning is required."
-                })
-            elif res.returncode != 0:
-                return json.dumps({
-                    "ok": False,
-                    "error": f"Upload process failed with exit code {res.returncode}",
-                    "details": res.stderr
-                })
-            return json.dumps({"ok": True, "message": "Uploaded to WeChat Channels successfully"})
-        except Exception as e:
-            return json.dumps({"ok": False, "error": f"Unexpected error during upload: {e}"})
+            vertical = self.output_dir / f"{youtube_id}_vertical.mp4"
+            if not vertical.exists():
+                return json.dumps({"ok": False, "error": "Vertical video not found. Run transcription first."})
+
+            copy_file = self.output_dir / f"{youtube_id}_copy.txt"
+            if not copy_file.exists():
+                return json.dumps({"ok": False, "error": "WeChat copy file not found. Run copywriter first."})
+
+            cover_file = self.output_dir / f"{youtube_id}_cover.jpg"
+            title_file = self.output_dir / f"{youtube_id}_title.txt"
+            category_file = self.output_dir / f"{youtube_id}_category.txt"
+
+            upload_cmd = [
+                self.venv_python,
+                str(self.project_root / "scripts" / "wechat_uploader.py"),
+                "--video", str(vertical),
+                "--copy", str(copy_file),
+                "--state", str(self.output_dir / "wechat_state.json"),
+                "--no-headless",
+            ]
+            if cover_file.exists():
+                upload_cmd += ["--cover", str(cover_file)]
+            if title_file.exists():
+                upload_cmd += ["--title-file", str(title_file)]
+            if category_file.exists():
+                upload_cmd += ["--category-file", str(category_file)]
+
+            try:
+                res = subprocess.run(upload_cmd, capture_output=True, text=True, cwd=str(self.project_root))
+                if res.returncode == 2:
+                    return json.dumps({
+                        "ok": False,
+                        "error": "WECHAT_LOGIN_EXPIRED",
+                        "message": "WeChat login session has expired. Human scanning is required."
+                    })
+                elif res.returncode != 0:
+                    return json.dumps({
+                        "ok": False,
+                        "error": f"Upload process failed with exit code {res.returncode}",
+                        "details": res.stderr
+                    })
+                return json.dumps({"ok": True, "message": "Uploaded to WeChat Channels successfully"})
+            except Exception as e:
+                return json.dumps({"ok": False, "error": f"Unexpected error during upload: {e}"})
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
+            logger.info(f"[Lock] Released pipeline lock after upload {youtube_id}.")
 
     def update_video_status(self, youtube_id: str, status: str, error_msg: Optional[str] = None) -> str:
         """Updates the processing status of a video in the database.
