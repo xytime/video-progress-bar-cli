@@ -1,16 +1,19 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
-| Version | Date       | Author                              | Description                                           |
-|---------|------------|-------------------------------------|-------------------------------------------------------|
-| 1.0.0   | 2026-05-21 | Gemini_3.1_Pro_High_planning        | 初始创建 PipelineManager，实现完整的 FSM 调度          |
-| 1.1.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | 整合 Phase 5：文案生成与视频号全自动发布流             |
-| 1.2.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 地基重构：消灭裸 SQL + os.environ 泄漏                 |
-| 1.3.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 专项审查：路径常量类级化、os 顶层导入、动态扩展名检测  |
-| 1.4.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 断点续传检查点、封面生成步骤、硬重置接口、完整上传参数 |
+| Version | Date       | Author                              | Description                                                                    |
+|---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 1.0.0   | 2026-05-21 | Gemini_3.1_Pro_High_planning        | 初始创建 PipelineManager，实现完整的 FSM 调度                                   |
+| 1.1.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | 整合 Phase 5：文案生成与视频号全自动发布流                                       |
+| 1.2.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 地基重构：消灭裸 SQL + os.environ 泄漏                                           |
+| 1.3.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 专项审查：路径常量类级化、os 顶层导入、动态扩展名检测                            |
+| 1.4.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 断点续传检查点、封面生成步骤、硬重置接口、完整上传参数                           |
+| 2.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 3] Popen+os.setsid 进程组隔离、PID 追踪、SIGTERM handler、评分锁防覆盖 |
 """
 
 import os
+import signal
+import time
 import logging
 import subprocess
 import requests
@@ -22,6 +25,18 @@ from .db import PipelineDB
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块级 SIGTERM 信号处理器
+# 当该进程收到 SIGTERM 时，设置此标志位，由主循环在安全点检查并执行清理退出。
+# 注意：signal handler 只能做最简单的操作（设置标志位），不能在 handler 内直接操作数据库或锁。
+_sigterm_received: bool = False
+
+
+def _sigterm_handler(signum: int, frame) -> None:  # noqa: ANN001
+    """SIGTERM 信号处理器 — 设置模块级标志位，由主流程在安全点响应。"""
+    global _sigterm_received
+    _sigterm_received = True
+    logger.warning("[SIGTERM] Signal received. Will clean up at next safe checkpoint.")
 
 # 非视频文件后缀（下载产物中排除）
 _NON_VIDEO_SUFFIXES = {'.description', '.json', '.ytdl', '.part', '.jpg', '.png', '.webp'}
@@ -65,6 +80,7 @@ class PipelineManager:
 
     def score_pending_videos(self):
         """对 PENDING 且 score < 75 的视频自动评分（不覆盖人工调分）"""
+        import math
         pending  = self.db.get_videos_by_status("PENDING")
         to_score = [v for v in pending if v.get('score', 0) < 75]
         skipped  = len(pending) - len(to_score)
@@ -75,12 +91,30 @@ class PipelineManager:
 
         logger.info(f"Scoring {len(to_score)} pending videos...")
         for video in to_score:
-            title = video['title'].lower()
-            score = 60
-            if any(k in title for k in ['ai', 'future', 'speech', 'interview', 'ceo']):
-                score += 20
-            logger.info(f"  '{title}' → {score}")
-            self.db.update_video_score(video['youtube_id'], score)
+            yid        = video['youtube_id']
+            view_count = video.get('view_count') or 0
+            like_count = video.get('like_count') or 0
+            views      = max(0, view_count)
+            likes      = max(0, like_count)
+
+            if views <= 0:
+                score = 0
+            else:
+                like_rate = min(100.0, likes / views * 100)
+                if views > 2000 and like_rate > 3.5:
+                    # [Claude_Sonnet_4.6_Thinking_planning] 满足热度门槛：对数加权评分 [80, 95]
+                    v_bonus = min(10.0, 5 * math.log10(views / 2000))
+                    l_bonus = min(5.0, 5 * (like_rate - 3.5) / 6.5)
+                    score   = max(80, min(95, round(80 + v_bonus + l_bonus)))
+                else:
+                    # 未满足门槛：比例评分 [0, 70]
+                    v_ratio = min(1.0, views / 2000)
+                    l_ratio = min(1.0, like_rate / 3.5) if like_rate > 0 else 0.0
+                    score   = max(0, min(70, round(70 * v_ratio * l_ratio)))
+
+            logger.info(f"  [{yid}] views={views} like_rate={likes/views*100:.1f}% → score={score}" if views > 0 else f"  [{yid}] no view data → score=0")
+            # force=False：自动算分，is_manually_scored=1 的记录会被 DB 层自动跳过
+            self.db.update_video_score(yid, score, force=False)
 
     # ── 批量触发 ──────────────────────────────────────────────────────────────
 
@@ -136,12 +170,49 @@ class PipelineManager:
         ]
         return str(candidates[0]) if candidates else None
 
+    # ── 子进程辅助（v7.0: Popen + 进程组隔离）────────────────────────────────
+
+    def _run_tracked(self, cmd: list, yid: str, **kwargs) -> subprocess.CompletedProcess:
+        """以独立进程组运行命令，并将 PGID 写入数据库，供 API 层 SIGTERM 精准击杀。
+
+        [Claude_Sonnet_4.6_Thinking_planning] v7.0 关键设计：
+        - os.setsid() 在子进程建立独立的会话（Session Leader），
+          使 os.killpg(pgid, SIGTERM) 只击杀该子进程组，不波及 FastAPI 父进程。
+        - 仅当 settings.enable_sigterm_kill=True 时启用 PID 追踪（Feature Flag 保护）。
+        """
+        if settings.enable_sigterm_kill:
+            proc = subprocess.Popen(
+                cmd,
+                preexec_fn=os.setsid,  # 建立独立进程组
+                **kwargs
+            )
+            try:
+                pgid = os.getpgid(proc.pid)
+                self.db.update_process_pid(yid, pgid)
+            except ProcessLookupError:
+                pass  # 进程已极速退出，无需记录
+            stdout, stderr = proc.communicate()
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    proc.returncode, cmd,
+                    output=stdout, stderr=stderr,
+                )
+            return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+        else:
+            # Feature Flag 关闭时：回退到原有 subprocess.run，零侵入
+            return subprocess.run(cmd, check=True, **kwargs)
+
     # ── 主处理流程 ────────────────────────────────────────────────────────────
 
     def _process_single_video(self, video: Dict[str, Any]):
         yid   = video['youtube_id']
         title = video['title']
         url   = f"https://youtu.be/{yid}"
+
+        # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 注册 SIGTERM handler
+        # 仅在启用 Flag 时注册，避免影响原有行为
+        if settings.enable_sigterm_kill:
+            signal.signal(signal.SIGTERM, _sigterm_handler)
 
         lock_path = self._OUT_DIR / "pipeline.lock"
         logger.info(f"[Lock] Waiting for pipeline lock to process {yid}...")
@@ -152,6 +223,11 @@ class PipelineManager:
         try:
             try:
                 # ── 1. DOWNLOADING ────────────────────────────────────────────────
+                # [Claude_Sonnet_4.6_Thinking_planning] v7.0: SIGTERM 安全检查点
+                if settings.enable_sigterm_kill and _sigterm_received:
+                    logger.warning(f"[SIGTERM] Checkpoint before DOWNLOADING: aborting {yid}")
+                    raise InterruptedError("SIGTERM received before download start")
+
                 existing = self._find_downloaded_video(yid)
                 if existing:
                     logger.info(f"[SKIP] Download checkpoint: {existing}")
@@ -169,8 +245,8 @@ class PipelineManager:
                         url, "-o", str(self._OUT_DIR / f"{yid}.%(ext)s"),
                     ]
                     env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
-                    subprocess.run(dl_cmd, check=True, capture_output=True,
-                                   cwd=str(self._PRJ_ROOT), env=env_no_proxy)
+                    self._run_tracked(dl_cmd, yid, capture_output=True,
+                                      cwd=str(self._PRJ_ROOT), env=env_no_proxy)
                     target_file = self._find_downloaded_video(yid)
                     if not target_file:
                         raise FileNotFoundError(f"No video file found for {yid} after download")
@@ -182,6 +258,10 @@ class PipelineManager:
                     logger.info(f"[SKIP] Transcribe checkpoint: {vertical.name}")
                     self.db.update_video_status(yid, "TRANSCRIBING")
                 else:
+                    # [Claude_Sonnet_4.6_Thinking_planning] v7.0: SIGTERM 安全检查点
+                    if settings.enable_sigterm_kill and _sigterm_received:
+                        logger.warning(f"[SIGTERM] Checkpoint before TRANSCRIBING: aborting {yid}")
+                        raise InterruptedError("SIGTERM received before transcription")
                     self.db.update_video_status(yid, "TRANSCRIBING")
                     render_cmd = [
                         "nice", "-n", "19",
@@ -190,8 +270,8 @@ class PipelineManager:
                     ]
                     render_env = os.environ.copy()
                     render_env["PYTHONPATH"] = str(self._SRC_DIR)
-                    subprocess.run(render_cmd, check=True, capture_output=True,
-                                   cwd=str(self._PRJ_ROOT), env=render_env)
+                    self._run_tracked(render_cmd, yid, capture_output=True,
+                                      cwd=str(self._PRJ_ROOT), env=render_env)
 
                 # ── 2b. COPYWRITING ────────────────────────────────────────────────
                 copy_file = self._OUT_DIR / f"{yid}_copy.txt"
@@ -211,8 +291,8 @@ class PipelineManager:
                         "--title", title,
                         "--desc-file", str(self._OUT_DIR / f"{yid}.description"),
                     ]
-                    subprocess.run(copy_cmd, check=True, capture_output=True,
-                                   cwd=str(self._PRJ_ROOT))
+                    self._run_tracked(copy_cmd, yid, capture_output=True,
+                                      cwd=str(self._PRJ_ROOT))
 
                 # ── 3. 封面生成（非阻断，失败不影响发布）────────────────────────
                 cover_file = self._OUT_DIR / f"{yid}_cover.jpg"
@@ -292,6 +372,12 @@ class PipelineManager:
                     f"Platform: WeChat Channels\nScore: {video['score']}"
                 )
 
+            except InterruptedError as e:
+                # [Claude_Sonnet_4.6_Thinking_planning] v7.0: SIGTERM 触发的可控退出
+                logger.warning(f"[SIGTERM] Clean abort for {yid}: {e}")
+                self.db.update_video_status(yid, "PENDING", error_msg="Aborted by SIGTERM")
+                self.reset_video_artifacts(yid)
+
             except subprocess.CalledProcessError as e:
                 err = e.stderr if isinstance(e.stderr, str) else (e.stderr or b"").decode()
                 logger.error(f"Process failed for {yid}: {err[:500]}")
@@ -308,6 +394,9 @@ class PipelineManager:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             lock_file.close()
             logger.info(f"[Lock] Released pipeline lock for {yid}.")
+            # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 清除 PID 记录（进程已终止）
+            if settings.enable_sigterm_kill:
+                self.db.update_process_pid(yid, None)
 
     # ── 每日作业 ──────────────────────────────────────────────────────────────
 

@@ -1,0 +1,259 @@
+"""v7.0 安全升级功能单元测试
+
+覆盖范围：
+- DB 迁移幂等性
+- 黑名单墓碑防重抓
+- 人工评分锁
+- 频道 MANUAL_ONLY 隔离
+- CensorshipEngine 双语拦截与豁免
+- 评分公式极端值钳位
+
+# Modification History
+| Version | Date       | Author                                 | Description          |
+|---------|------------|----------------------------------------|----------------------|
+| 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建 v7.0 TDD 测试套件 |
+"""
+
+import math
+import os
+import sys
+import tempfile
+import pytest
+
+# 确保 src 在路径中
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
+
+from video_processing.db.database import PipelineDB
+from video_processing.censor_engine import (
+    check_text,
+    ACTION_REJECT_SIGTERM,
+    ACTION_SUSPEND_MANUAL,
+    ACTION_DEPRIORITIZE,
+)
+
+
+# ── 测试夹具 ──────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def tmp_db(tmp_path):
+    """每个测试用例使用独立的临时数据库，零相互污染。"""
+    db_path = str(tmp_path / "test_pipeline.db")
+    db = PipelineDB(db_path)
+    yield db
+
+
+def _add_test_video(db: PipelineDB, yid: str = "testid12345",
+                    view_count: int = 5000, like_count: int = 300) -> bool:
+    return db.add_video(
+        youtube_id=yid, title="Test Video", channel_id="UCtest12345678901234567",
+        score=0, source="TEST", view_count=view_count, like_count=like_count,
+        upload_date="20260526",
+    )
+
+
+# ── Phase 1: DB 迁移测试 ──────────────────────────────────────────────────────
+
+class TestDbMigration:
+
+    def test_migration_idempotent(self, tmp_db):
+        """重复初始化不报错，v7.0 新列均存在。"""
+        # 第二次 init（内部会再次调用 _init_db）
+        tmp_db._init_db()
+        # 验证列存在
+        with tmp_db.get_connection() as conn:
+            cursor = conn.execute("PRAGMA table_info(processed_videos)")
+            cols = {row[1] for row in cursor.fetchall()}
+        for col in ('censor_tag', 'censor_score', 'is_manually_scored', 'process_pid'):
+            assert col in cols, f"Missing column: {col}"
+
+    def test_blacklist_table_exists(self, tmp_db):
+        """blacklisted_videos 表已正确创建。"""
+        with tmp_db.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='blacklisted_videos'"
+            )
+            assert cursor.fetchone() is not None
+
+
+# ── Phase 1: 黑名单墓碑测试 ───────────────────────────────────────────────────
+
+class TestBlacklistTombstone:
+
+    def test_blacklist_prevents_readd(self, tmp_db):
+        """删除后加入黑名单，再次 add_video 应被拦截。"""
+        _add_test_video(tmp_db, "blacklisted1")
+        tmp_db.add_to_blacklist("blacklisted1", reason="user_deleted")
+        tmp_db.delete_video_record("blacklisted1")
+
+        result = _add_test_video(tmp_db, "blacklisted1")  # 再次尝试添加
+        assert result is False, "Should be blocked by blacklist"
+
+    def test_is_blacklisted_false_for_new(self, tmp_db):
+        """未加入黑名单的 ID 应返回 False。"""
+        assert tmp_db.is_blacklisted("newvideo12345") is False
+
+    def test_blacklist_insert_or_ignore(self, tmp_db):
+        """重复写入黑名单不报错（INSERT OR IGNORE）。"""
+        tmp_db.add_to_blacklist("dup123456789")
+        result = tmp_db.add_to_blacklist("dup123456789")  # 第二次
+        assert result is True  # 不应抛异常
+
+
+# ── Phase 1: 人工评分锁测试 ──────────────────────────────────────────────────
+
+class TestManualScoreLock:
+
+    def test_manual_score_lock_prevents_auto_overwrite(self, tmp_db):
+        """人工打分后，auto 算分（force=False）不得覆盖。"""
+        _add_test_video(tmp_db, "locktest1234")
+        # 人工打 90 分（force=True）
+        tmp_db.update_video_score("locktest1234", 90, force=True)
+        # 自动算分尝试改为 60（force=False）
+        tmp_db.update_video_score("locktest1234", 60, force=False)
+        video = tmp_db.get_video_by_youtube_id("locktest1234")
+        assert video["score"] == 90, "Manual score should not be overwritten by auto-scoring"
+
+    def test_force_true_updates_is_manually_scored(self, tmp_db):
+        """force=True 应将 is_manually_scored 设为 1。"""
+        _add_test_video(tmp_db, "forcelock123")
+        tmp_db.update_video_score("forcelock123", 75, force=True)
+        video = tmp_db.get_video_by_youtube_id("forcelock123")
+        assert video["is_manually_scored"] == 1
+
+    def test_set_manually_scored_unlock(self, tmp_db):
+        """set_manually_scored(False) 解锁后，auto 算分可以写入。"""
+        _add_test_video(tmp_db, "unlocktest12")
+        tmp_db.update_video_score("unlocktest12", 90, force=True)
+        tmp_db.set_manually_scored("unlocktest12", locked=False)
+        tmp_db.update_video_score("unlocktest12", 60, force=False)
+        video = tmp_db.get_video_by_youtube_id("unlocktest12")
+        assert video["score"] == 60, "After unlock, auto score should apply"
+
+
+# ── Phase 4: 频道隔离测试 ─────────────────────────────────────────────────────
+
+class TestChannelIsolation:
+
+    def test_manual_only_not_in_approved(self, tmp_db):
+        """MANUAL_ONLY 状态的频道不出现在 get_approved_channels() 中。"""
+        tmp_db.add_channel("UCmanual12345678901234", "Manual Channel",
+                           status="MANUAL_ONLY", reason="via manual video add")
+        approved = tmp_db.get_approved_channels()
+        ids = [c["channel_id"] for c in approved]
+        assert "UCmanual12345678901234" not in ids
+
+    def test_approved_channel_in_approved(self, tmp_db):
+        """APPROVED 状态的频道正常出现在 get_approved_channels() 中。"""
+        tmp_db.add_channel("UCapprov12345678901234", "Approved Channel",
+                           status="APPROVED")
+        approved = tmp_db.get_approved_channels()
+        ids = [c["channel_id"] for c in approved]
+        assert "UCapprov12345678901234" in ids
+
+
+# ── Phase 2: CensorshipEngine 测试 ───────────────────────────────────────────
+
+class TestCensorEngine:
+
+    # P0 中文通道
+    def test_p0_zh_channel_reject(self):
+        r = check_text(zh_text="这是关于港独运动的视频", en_text="")
+        assert r.hit is True
+        assert r.level == "P0"
+        assert r.action == ACTION_REJECT_SIGTERM
+        assert r.channel == "zh"
+
+    # P0 英文通道（独立备用，防翻译失效）
+    def test_p0_en_channel_fallback(self):
+        r = check_text(zh_text="", en_text="the tiananmen square incident")
+        assert r.hit is True
+        assert r.level == "P0"
+        assert r.channel == "en"
+
+    # P1 中文 + 豁免
+    def test_p1_beijing_exemption(self):
+        """'北京大学' 不应触发 P1 拦截。"""
+        r = check_text(zh_text="北京大学2026年录取分数线公布", en_text="")
+        assert r.hit is False, f"Should be exempted, but got: {r}"
+
+    def test_p1_triggers_without_exemption(self):
+        r = check_text(zh_text="如何使用翻墙软件访问境外网站", en_text="")
+        assert r.hit is True
+        assert r.level == "P1"
+        assert r.action == ACTION_SUSPEND_MANUAL
+
+    # P2 商业合规
+    def test_p2_commercial_deprioritize(self):
+        r = check_text(zh_text="教你一夜暴富的方法", en_text="")
+        assert r.hit is True
+        assert r.level == "P2"
+        assert r.action == ACTION_DEPRIORITIZE
+
+    # 干净内容通过
+    def test_clean_content_passes(self):
+        r = check_text(zh_text="今天我们来学习 Python 编程", en_text="learning python programming today")
+        assert r.hit is False
+
+    # 大小写不敏感（英文）
+    def test_case_insensitive_en(self):
+        r = check_text(zh_text="", en_text="TIANANMEN Square Protest")
+        assert r.hit is True
+        assert r.level == "P0"
+
+    # 全角字符归一化
+    def test_fullwidth_normalization(self):
+        """全角字母应被归一化后命中规则。"""
+        r = check_text(zh_text="", en_text="ｔｉａｎａｎｍｅｎ square")
+        assert r.hit is True
+        assert r.level == "P0"
+
+
+# ── Phase 4: 评分公式极端值测试 ──────────────────────────────────────────────
+
+class TestScoringFormula:
+    """直接测试评分逻辑（不依赖 PipelineManager，避免外部依赖）。"""
+
+    @staticmethod
+    def _compute_score(views: int, likes: int) -> int:
+        """内联评分公式，镜像 pipeline_manager.score_pending_videos 逻辑。"""
+        if views <= 0:
+            return 0
+        like_rate = min(100.0, likes / views * 100)
+        if views > 2000 and like_rate > 3.5:
+            v_bonus = min(10.0, 5 * math.log10(views / 2000))
+            l_bonus = min(5.0, 5 * (like_rate - 3.5) / 6.5)
+            return max(80, min(95, round(80 + v_bonus + l_bonus)))
+        else:
+            v_ratio = min(1.0, views / 2000)
+            l_ratio = min(1.0, like_rate / 3.5) if like_rate > 0 else 0.0
+            return max(0, min(70, round(70 * v_ratio * l_ratio)))
+
+    def test_zero_views(self):
+        assert self._compute_score(0, 0) == 0
+
+    def test_likes_exceed_views(self):
+        """点赞数超过播放数（异常数据）不越界。"""
+        score = self._compute_score(100, 9999)
+        assert 0 <= score <= 100
+
+    def test_high_traffic_score_clamped_at_95(self):
+        """超高播放量分数不超过 95。"""
+        score = self._compute_score(10_000_000, 500_000)
+        assert score <= 95
+
+    def test_qualifying_video_score_gte_80(self):
+        """满足门槛的视频得分应 >= 80。"""
+        score = self._compute_score(5000, 250)  # 5% like rate
+        assert score >= 80
+
+    def test_below_threshold_score_lte_70(self):
+        """未满足门槛（低播放量）得分应 <= 70。"""
+        score = self._compute_score(500, 10)
+        assert score <= 70
+
+    def test_score_always_in_range(self):
+        """边界值遍历，确保所有情况下分数在 [0, 100]。"""
+        test_cases = [(0, 0), (1, 1), (2000, 70), (2001, 71), (100000, 5000)]
+        for views, likes in test_cases:
+            score = self._compute_score(views, likes)
+            assert 0 <= score <= 100, f"Score out of range for views={views}, likes={likes}: {score}"

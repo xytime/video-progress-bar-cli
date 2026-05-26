@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-20 | Gemini_3.1_Pro_High_planning | 初始创建 Settings 类 |
 | 2.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 重构为 pydantic-settings BaseSettings，收口全部环境变量，消灭散落的 os.getenv |
+| 2.1.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | v7.0 Feature Flags：新功能开关，默认全部关闭，保护生产环境稳定性 |
 """
 from pathlib import Path
 from typing import Optional
@@ -45,6 +46,25 @@ class Settings(BaseSettings):
 
     # Google Gemini API Key
     gemini_api_key: Optional[str] = None
+
+    # -------------------------------------------------------------------------
+    # v7.0 Feature Flags — 新功能灰度开关 [Claude_Sonnet_4.6_Thinking_planning]
+    # 默认全部 False，保证 feature 分支代码 merge 后对生产环境零影响。
+    # 验证通过后，在 .env 中逐条设置为 true 开启对应功能。
+    # 开启顺序建议：blacklist → manual_score_lock → censorship → sigterm_kill
+    # -------------------------------------------------------------------------
+
+    # 黑名单墓碑防重抓（删除/打0分的视频不再被爬虫二次拉取）
+    enable_blacklist_tombstone: bool = False
+
+    # 人工评分锁（手动打分后，自动算分不覆盖）
+    enable_manual_score_lock: bool = False
+
+    # 内容安全审查引擎（双语双通道 P0/P1/P2 违禁拦截）
+    enable_censorship_engine: bool = False
+
+    # SIGTERM 阶梯强杀机制（删除活跃任务时优雅终止底层进程）
+    enable_sigterm_kill: bool = False
 
     # -------------------------------------------------------------------------
     # 静态配置常量 (Static Constants) — 固定值，不依赖环境

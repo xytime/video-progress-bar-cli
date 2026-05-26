@@ -9,6 +9,7 @@
 | 1.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建数据库与DAL封装 |
 | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 补充 update_video_score / get_high_score_pending_videos，封堵 pipeline_manager 中的裸 SQL 泄漏 |
 | 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 加入 WAL 模式与 30s timeout 解决并发锁表危机 |
+| 2.0.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 1] 黑名单墓碑表、v7.0 新列迁移、人工评分锁、process_pid 追踪、add_video 黑名单前置检查 |
 """
 import sqlite3
 import os
@@ -98,7 +99,28 @@ class PipelineDB:
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN like_count INTEGER DEFAULT NULL")
             if 'upload_date' not in columns:
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN upload_date TEXT DEFAULT NULL")
-                
+
+            # [Claude_Sonnet_4.6_Thinking_planning] v7.0 新列迁移（ADD COLUMN only，不影响现有数据）
+            _v7_cols = {
+                'censor_tag':         "TEXT DEFAULT NULL",
+                'censor_score':       "INTEGER DEFAULT NULL",
+                'is_manually_scored': "INTEGER DEFAULT 0",
+                'process_pid':        "INTEGER DEFAULT NULL",
+            }
+            for col, definition in _v7_cols.items():
+                if col not in columns:
+                    cursor.execute(f"ALTER TABLE processed_videos ADD COLUMN {col} {definition}")
+                    self._logger.info(f"[Migration] Added column: processed_videos.{col}")
+
+            # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表（防止删除后被爬虫二次拉取）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS blacklisted_videos (
+                    youtube_id TEXT PRIMARY KEY,
+                    reason     TEXT DEFAULT 'user_deleted',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
             # 4. 创建复合索引优化分页查询性能
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_status_updated 
@@ -150,6 +172,11 @@ class PipelineDB:
         like_count: Optional[int] = None,
         upload_date: Optional[str] = None,
     ) -> bool:
+        # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 前置黑名单检查，防止已删除视频被爬虫二次拉取
+        if self.is_blacklisted(youtube_id):
+            self._logger.warning(f"[Blacklist] Blocked re-add of blacklisted video: {youtube_id}")
+            return False
+
         with self.get_connection() as conn:
             try:
                 conn.execute(
@@ -209,17 +236,36 @@ class PipelineDB:
             conn.commit()
             return cursor.rowcount
 
-    def update_video_score(self, youtube_id: str, score: int) -> None:
+    def update_video_score(self, youtube_id: str, score: int, force: bool = False) -> None:
         """更新视频评分。
-        
+
         此方法封装了原本散落在 pipeline_manager.py 中的裸 SQL 写分逻辑。
         外部模块不得绕过此方法直接操作 score 字段。
+
+        Args:
+            youtube_id: 视频 ID。
+            score:      新分值。
+            force:      为 True 时强制写入（人工调分场景），忽略 is_manually_scored 锁。
+                        为 False 时（自动算分场景），若 is_manually_scored=1 则跳过，保护人工设置。
         """
         with self.get_connection() as conn:
-            conn.execute(
-                "UPDATE processed_videos SET score = ?, updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
-                (score, youtube_id)
-            )
+            if force:
+                # [Claude_Sonnet_4.6_Thinking_planning] 人工调分：同步打上手动锁，后续自动算分不得覆盖
+                conn.execute(
+                    "UPDATE processed_videos SET score = ?, is_manually_scored = 1, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
+                    (score, youtube_id)
+                )
+            else:
+                # [Claude_Sonnet_4.6_Thinking_planning] 自动算分：仅对未锁定的记录生效
+                cursor = conn.execute(
+                    "UPDATE processed_videos SET score = ?, updated_at = CURRENT_TIMESTAMP "
+                    "WHERE youtube_id = ? AND is_manually_scored = 0",
+                    (score, youtube_id)
+                )
+                if cursor.rowcount == 0:
+                    self._logger.info(f"[ScoreLock] Skipped auto-score for manually-locked video: {youtube_id}")
+                    return
             conn.commit()
 
     def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5) -> List[Dict[str, Any]]:
@@ -348,3 +394,56 @@ class PipelineDB:
             except Exception as e:
                 self._logger.error(f"delete_video_record failed for {youtube_id}: {e}")
                 return False
+
+    # --- v7.0 Blacklist DAL [Claude_Sonnet_4.6_Thinking_planning] ---
+
+    def add_to_blacklist(self, youtube_id: str, reason: str = 'user_deleted') -> bool:
+        """将视频 ID 写入黑名单墓碑表。
+
+        此操作不可逆（设计上），调用方需确保已先执行 delete_video_record。
+        """
+        with self.get_connection() as conn:
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO blacklisted_videos (youtube_id, reason) VALUES (?, ?)",
+                    (youtube_id, reason)
+                )
+                conn.commit()
+                self._logger.info(f"[Blacklist] Added: {youtube_id} ({reason})")
+                return True
+            except Exception as e:
+                self._logger.error(f"add_to_blacklist failed for {youtube_id}: {e}")
+                return False
+
+    def is_blacklisted(self, youtube_id: str) -> bool:
+        """检查视频是否在黑名单中（爬虫插入前的前置校验）。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM blacklisted_videos WHERE youtube_id = ?",
+                (youtube_id,)
+            )
+            return cursor.fetchone() is not None
+
+    def update_process_pid(self, youtube_id: str, pid: Optional[int]) -> None:
+        """记录或清除当前处理该视频的子进程组 ID（用于 SIGTERM 精准击杀）。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE processed_videos SET process_pid = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ?",
+                (pid, youtube_id)
+            )
+            conn.commit()
+
+    def set_manually_scored(self, youtube_id: str, locked: bool = True) -> None:
+        """设置或解除人工评分锁。
+
+        locked=True: 人工调分后锁定，自动算分不得覆盖。
+        locked=False: 硬重置时解锁，恢复自动算分。
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE processed_videos SET is_manually_scored = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
+                (1 if locked else 0, youtube_id)
+            )
+            conn.commit()
