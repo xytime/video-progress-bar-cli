@@ -11,6 +11,7 @@
 | 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 加入 WAL 模式与 30s timeout 解决并发锁表危机 |
 | 2.0.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 1] 黑名单墓碑表、v7.0 新列迁移、人工评分锁、process_pid 追踪、add_video 黑名单前置检查 |
 | 2.0.1 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] LINT-5: 修宊 add_to_blacklist docstring 调用顺序说明 |
+| 2.0.2 | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Censor Engine] 新增 update_video_censor_status 用于写入内容审查审计数据 |
 """
 import sqlite3
 import os
@@ -436,6 +437,16 @@ class PipelineDB:
                 "UPDATE processed_videos SET process_pid = ?, updated_at = CURRENT_TIMESTAMP "
                 "WHERE youtube_id = ?",
                 (pid, youtube_id)
+            )
+            conn.commit()
+
+    def update_video_censor_status(self, youtube_id: str, tag: Optional[str], score: Optional[int]) -> None:
+        """更新视频的安全审查标签与分值。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE processed_videos SET censor_tag = ?, censor_score = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
+                (tag, score, youtube_id)
             )
             conn.commit()
 

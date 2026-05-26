@@ -15,6 +15,7 @@
 |---------|------------|----------------------------------------|----------------------|
 | 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建 v7.0 TDD 测试套件 |
 | 1.1.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 SEC-1 与 SEC-2 安全加固单元测试 |
+| 1.2.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 CensorEngine 流水线集成与安全锁异常测试用例 |
 """
 
 import math
@@ -350,6 +351,13 @@ class TestSecurityBypassFortification:
                 channel_after = tmp_db.get_channel_by_id(channel_id)
                 assert channel_after["status"] == "MANUAL_ONLY", "Status should not be silently promoted to APPROVED"
 
+                # 3. 传入 promote=True，验证成功提升状态为 APPROVED
+                req_promote = AddChannelRequest(url=f"https://www.youtube.com/channel/{channel_id}", promote=True)
+                resp_promote = add_channel(req_promote)
+                assert resp_promote["success"] is True
+                channel_promoted = tmp_db.get_channel_by_id(channel_id)
+                assert channel_promoted["status"] == "APPROVED", "Status should be promoted to APPROVED"
+
     def test_con1_lock_handle_closed_on_flock_error(self):
         """CON-1: 验证 flock() 抛异常时，lock_file 仍被正确 close，不泄露句柄。"""
         from video_processing.pipeline_manager import PipelineManager
@@ -376,12 +384,121 @@ class TestSecurityBypassFortification:
         with patch("builtins.open", new=mock_open), \
              patch("fcntl.flock", side_effect=mock_flock):
             
-            with pytest.raises(OSError, match="Simulated flock acquisition error"):
-                pm._process_single_video({
-                    'youtube_id': 'lockerrvideo',
-                    'title': 'Test Lock Err',
-                    'score': 80
-                })
+            pm._process_single_video({
+                'youtube_id': 'lockerrvideo',
+                'title': 'Test Lock Err',
+                'score': 80
+            })
             
             # 验证即使 flock(LOCK_EX) 抛出异常，mock_file.close() 依然被调用，避免句柄泄漏
             mock_file.close.assert_called_once()
+            pm.db.update_video_status.assert_called_with('lockerrvideo', 'FAILED', error_msg='Pipeline lock error: Simulated flock acquisition error')
+
+
+# ── Phase 7: CensorshipEngine 集成测试 ───────────────────────────────────────────
+
+class TestCensorEngineIntegration:
+    """测试 CensorshipEngine 与 PipelineManager 真实流水线的集成行为。"""
+
+    def test_censor_integration_p0_reject(self, tmp_db):
+        """P0 违禁词在下载前应触发一票否决：状态设为 FAILED，写入黑名单，清理半成品。"""
+        from video_processing.pipeline_manager import PipelineManager
+        from unittest.mock import patch, MagicMock
+
+        # 开启内容审查、黑名单墓碑开关
+        with patch("config.settings.settings.enable_censorship_engine", True), \
+             patch("config.settings.settings.enable_blacklist_tombstone", True):
+            
+            pm = PipelineManager()
+            pm.db = tmp_db
+            
+            # 使用包含 P0 违禁词的视频标题
+            video = {
+                'youtube_id': 'p0censorvid12',
+                'title': '关于疆独势力的调查',  # 命中 P0
+                'score': 80
+            }
+            tmp_db.add_video(
+                youtube_id=video['youtube_id'], title=video['title'],
+                channel_id="UCtest12345678901234567", score=video['score'],
+                source="TEST", upload_date="20260526"
+            )
+
+            # 模拟 telegram 消息发送以防抛错
+            pm.send_telegram_msg = MagicMock()
+            
+            # 运行 _process_single_video
+            pm._process_single_video(video)
+
+            # 验证状态和审计字段
+            fresh = tmp_db.get_video_by_youtube_id(video['youtube_id'])
+            assert fresh["status"] == "FAILED"
+            assert "Censorship P0 Reject" in fresh["error_msg"]
+            assert fresh["censor_tag"] == "🔴 政治安全违禁"
+            assert fresh["censor_score"] == 95
+            
+            # 验证已写入黑名单墓碑
+            assert tmp_db.is_blacklisted(video['youtube_id']) is True
+
+    def test_censor_integration_p1_suspend(self, tmp_db):
+        """P1 违禁词应触发人工挂起：状态设为 FAILED，但不加入黑名单。"""
+        from video_processing.pipeline_manager import PipelineManager
+        from unittest.mock import patch, MagicMock
+
+        with patch("config.settings.settings.enable_censorship_engine", True):
+            pm = PipelineManager()
+            pm.db = tmp_db
+            
+            video = {
+                'youtube_id': 'p1censorvid12',
+                'title': '如何科学上网与使用翻墙软件',  # 命中 P1
+                'score': 80
+            }
+            tmp_db.add_video(
+                youtube_id=video['youtube_id'], title=video['title'],
+                channel_id="UCtest12345678901234567", score=video['score'],
+                source="TEST", upload_date="20260526"
+            )
+
+            pm.send_telegram_msg = MagicMock()
+            pm._process_single_video(video)
+
+            fresh = tmp_db.get_video_by_youtube_id(video['youtube_id'])
+            assert fresh["status"] == "FAILED"
+            assert "Censorship P1 Suspend" in fresh["error_msg"]
+            assert fresh["censor_tag"] == "🟡 政策敏感拦截"
+            assert fresh["censor_score"] == 75
+            
+            # 验证未被黑名单
+            assert tmp_db.is_blacklisted(video['youtube_id']) is False
+
+    def test_censor_integration_p2_deprioritize(self, tmp_db):
+        """P2 违禁词应触发降权：分数设为 0，锁定，状态恢复为 PENDING。"""
+        from video_processing.pipeline_manager import PipelineManager
+        from unittest.mock import patch, MagicMock
+
+        with patch("config.settings.settings.enable_censorship_engine", True):
+            pm = PipelineManager()
+            pm.db = tmp_db
+            
+            video = {
+                'youtube_id': 'p2censorvid12',
+                'title': '教你如何在一夜暴富',  # 命中 P2
+                'score': 80
+            }
+            tmp_db.add_video(
+                youtube_id=video['youtube_id'], title=video['title'],
+                channel_id="UCtest12345678901234567", score=video['score'],
+                source="TEST", upload_date="20260526"
+            )
+
+            pm.send_telegram_msg = MagicMock()
+            pm._process_single_video(video)
+
+            fresh = tmp_db.get_video_by_youtube_id(video['youtube_id'])
+            assert fresh["status"] == "PENDING"
+            assert fresh["score"] == 0
+            assert fresh["is_manually_scored"] == 1  # 自动锁定
+            assert fresh["censor_tag"] == "🔵 商业合规预警"
+            assert fresh["censor_score"] == 50
+

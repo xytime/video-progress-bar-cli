@@ -151,6 +151,7 @@ STATUS_ORDER = [
 # ── Pydantic 请求体 ──────────────────────────────────────────────────────
 class AddChannelRequest(BaseModel):
     url: str
+    promote: Optional[bool] = False
 
 
 # ── 页面路由 ─────────────────────────────────────────────────────────────
@@ -289,17 +290,19 @@ def add_channel(req: AddChannelRequest):
                 "already_exists": True,
             }
         elif status == "MANUAL_ONLY":
-            # 该频道曾通过手动视频下载注册，需用户明确确认才能提升为自动爬取白名单
-            return {
-                "success": False,
-                "error": (
-                    f"频道《{existing['channel_name']}》（{channel_id}）已通过手动视频下载注册（MANUAL_ONLY），"
-                    "不会被自动爬取。如确实需要将其加入白名单，请先在频道管理页面将其状态手动提升为 APPROVED。"
-                ),
-                "requires_promotion": True,
-                "channel_id": channel_id,
-                "channel_name": existing['channel_name'],
-            }
+            if not req.promote:
+                # 该频道曾通过手动视频下载注册，需用户明确确认才能提升为自动爬取白名单
+                return {
+                    "success": False,
+                    "error": (
+                        f"频道《{existing['channel_name']}》（{channel_id}）已通过手动视频下载注册（MANUAL_ONLY），"
+                        "不会被自动爬取。是否确认将其状态提升为 APPROVED（加入自动监控白名单）？"
+                    ),
+                    "requires_promotion": True,
+                    "channel_id": channel_id,
+                    "channel_name": existing['channel_name'],
+                }
+            # 用户确认了 promote，允许通过
         # 其他状态（PENDING/REJECTED 等）：允许覆盖写入 APPROVED
 
     # ── 6. 全部通过，写入 ──────────────────────────────────────────────

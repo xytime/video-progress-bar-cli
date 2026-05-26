@@ -11,6 +11,7 @@
 | 2.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 3] Popen+os.setsid 进程组隔离、PID 追踪、SIGTERM handler、评分锁防覆盖 |
 | 2.0.1   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] BUG-1:移除线程内 signal.signal(); BUG-2:重置 _sigterm_received; BUG-3:upload 用 _run_tracked; LINT-4:math 顶层 import |
 | 2.0.2   | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Phase 6 CON-1] 修复 open() 成功但 flock() 失败时 lock_file 的句柄泄露 |
+| 2.1.0   | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Censor Engine] 整合安全过滤引擎，新增三道违禁词拦截检查点，并捕获锁异常 |
 """
 
 import os
@@ -205,6 +206,52 @@ class PipelineManager:
             # Feature Flag 关闭时：回退到原有 subprocess.run，零侵入
             return subprocess.run(cmd, check=True, **kwargs)
 
+    def _check_censorship(self, yid: str, title: str, description: str = "") -> bool:
+        """执行内容安全审查。如果命中违禁词，根据级别执行对应的干预动作。
+        [Gemini_3.5_Flash_planning] 用于整合 CensorshipEngine 到主流程。
+        返回 True 表示命中违禁（需要拦截/中断），False 表示合规通过。
+        """
+        if not settings.enable_censorship_engine:
+            return False
+
+        try:
+            from .censor_engine import check_text, ACTION_REJECT_SIGTERM, ACTION_SUSPEND_MANUAL, ACTION_DEPRIORITIZE
+            
+            # 双语双通道匹配
+            result = check_text(zh_text=title, en_text=f"{title} {description}")
+            if result.hit:
+                logger.warning(f"[Censor] Video {yid} hit censorship rule: {result}")
+                # 1. 写入审计日志与数据库
+                self.db.update_video_censor_status(yid, result.tag, result.score)
+                
+                # 2. 按动作执行系统干预
+                if result.action == ACTION_REJECT_SIGTERM:
+                    # P0 一票否决
+                    logger.error(f"[Censor] P0 violation. Failing video {yid} and blacklisting.")
+                    self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P0 Reject: {result.tag} (matched: '{result.matched}')")
+                    if settings.enable_blacklist_tombstone:
+                        self.db.add_to_blacklist(yid, reason=f"censor_p0_{result.matched}")
+                    self.send_telegram_msg(f"🔴 <b>Censorship P0 Reject</b>\nTitle: {title}\nMatched: {result.matched}")
+                    
+                elif result.action == ACTION_SUSPEND_MANUAL:
+                    # P1 人工挂起
+                    logger.warning(f"[Censor] P1 violation. Suspending video {yid} for manual review.")
+                    self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P1 Suspend: {result.tag} (matched: '{result.matched}')")
+                    self.send_telegram_msg(f"🟡 <b>Censorship P1 Suspend</b>\nTitle: {title}\nMatched: {result.matched}")
+                    
+                elif result.action == ACTION_DEPRIORITIZE:
+                    # P2 降权预警
+                    logger.info(f"[Censor] P2 violation. Deprioritizing video {yid} to 0 points.")
+                    self.db.update_video_score(yid, 0, force=True)
+                    self.db.update_video_status(yid, "PENDING", error_msg=f"Censorship P2 Deprioritized: {result.tag}")
+                    self.send_telegram_msg(f"🔵 <b>Censorship P2 Deprioritized</b>\nTitle: {title}")
+                    
+                return True
+        except Exception as e:
+            logger.error(f"[Censor] Verification process error: {e}")
+            
+        return False
+
     # ── 主处理流程 ────────────────────────────────────────────────────────────
 
     def _process_single_video(self, video: Dict[str, Any]):
@@ -223,9 +270,21 @@ class PipelineManager:
         logger.info(f"[Lock] Waiting for pipeline lock to process {yid}...")
         lock_file = None
         try:
-            lock_file = open(lock_path, "w")
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            logger.info(f"[Lock] Acquired pipeline lock. Processing {yid}...")
+            try:
+                lock_file = open(lock_path, "w")
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                logger.info(f"[Lock] Acquired pipeline lock. Processing {yid}...")
+            except Exception as lock_err:
+                # [Gemini_3.5_Flash_planning] 捕捉 lock_file open() 或 flock() 等底层锁获取异常，防止崩溃整个调度循环
+                logger.error(f"Failed to acquire pipeline lock for {yid}: {lock_err}")
+                self.db.update_video_status(yid, "FAILED", error_msg=f"Pipeline lock error: {lock_err}")
+                self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}\nError: Lock error: {lock_err}")
+                return
+
+            # ── 0. CENSORSHIP PRE-CHECK ───────────────────────────────────────
+            # [Gemini_3.5_Flash_planning] 下载前的视频标题前置安全检查
+            if self._check_censorship(yid, title):
+                return
 
             try:
                 # ── 1. DOWNLOADING ────────────────────────────────────────────────
@@ -257,6 +316,18 @@ class PipelineManager:
                     if not target_file:
                         raise FileNotFoundError(f"No video file found for {yid} after download")
                     logger.info(f"Downloaded: {target_file}")
+
+                # ── 1b. CENSORSHIP DESC CHECK ─────────────────────────────────────
+                # [Gemini_3.5_Flash_planning] 下载完成后，对视频简介描述进行安全检查
+                desc_path = self._OUT_DIR / f"{yid}.description"
+                description = ""
+                if desc_path.exists():
+                    try:
+                        description = desc_path.read_text(encoding="utf-8").strip()
+                    except Exception:
+                        pass
+                if self._check_censorship(yid, title, description):
+                    return
 
                 # ── 2. TRANSCRIBING & RENDERING ───────────────────────────────────
                 vertical = self._OUT_DIR / f"{yid}_vertical.mp4"
@@ -299,6 +370,25 @@ class PipelineManager:
                     ]
                     self._run_tracked(copy_cmd, yid, capture_output=True,
                                       cwd=str(self._PRJ_ROOT))
+
+                # ── 2c. CENSORSHIP COPYWRITING CHECK ──────────────────────────────
+                # [Gemini_3.5_Flash_planning] 文案生成后，对生成的短标题和文案正文进行安全检查
+                copy_content = ""
+                if copy_file.exists():
+                    try:
+                        copy_content = copy_file.read_text(encoding="utf-8").strip()
+                    except Exception:
+                        pass
+                
+                short_title = title
+                if title_file.exists():
+                    try:
+                        short_title = title_file.read_text(encoding="utf-8").strip()
+                    except Exception:
+                        pass
+
+                if self._check_censorship(yid, short_title, copy_content):
+                    return
 
                 # ── 3. 封面生成（非阻断，失败不影响发布）────────────────────────
                 cover_file = self._OUT_DIR / f"{yid}_cover.jpg"
