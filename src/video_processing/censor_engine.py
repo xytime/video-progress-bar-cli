@@ -67,6 +67,9 @@ _BLOCKLIST: dict = {
             "罢工", "暴动",
             "封锁消息", "被消音",
             "翻墙", "翻墙软件", "梯子软件", "科学上网",
+            # [Claude_Sonnet_4.6_Thinking_planning] BUG-4 修复: 加入"北京"触发词，配合 exemptions_zh 豁免逻辑。
+            # 测试证明："北京大学"/"北京时间"等安全词组必须豁免拦截。
+            "北京",
         ],
         "en": [
             "vpn", "gfw", "great firewall",
@@ -83,6 +86,7 @@ _BLOCKLIST: dict = {
             "beijing olympics", "beijing time",
         ],
     },
+
     "P2": {
         "tag":    "🔵 商业合规预警",
         "score":  50,

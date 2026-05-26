@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 新增频道管理 API：add/delete，yt-dlp 验证后入库 |
 | 1.2.0 | 2026-05-22 | Gemini_3.5_Flash_fast | 修复手工添加视频（含 TG Bot 提交）卡在 PENDING 不自动触发的问题 |
 | 2.0.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 3+4] SIGTERM 强杀+黑名单墓碑、人工调分锁、频道手动隔离(MANUAL_ONLY) |
+| 2.0.1 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] BUG-1: SIGTERM 注册移至主线程 startup_event；清理函数内重复 import |
 """
 import os
 import sys
@@ -30,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from video_processing.db.database import PipelineDB
+from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
 
@@ -85,7 +87,17 @@ def _auto_pipeline_loop():
 
 @app.on_event("startup")
 def startup_event():
-    """FastAPI 启动时自动运行后台调度器"""
+    """FastAPI 启动时自动运行后台调度器，并在主线程注册信号处理器。
+
+    [Claude_Sonnet_4.6_Thinking_planning] BUG-1 修复：signal.signal() 只能在主线程调用。
+    _process_single_video 经由 daemon 线程执行，无法在内部注册信号。
+    将 SIGTERM handler 注册移至此处（FastAPI startup 在主线程运行）。
+    """
+    # [Claude_Sonnet_4.6_Thinking_planning] BUG-1: 在主线程注册 SIGTERM handler
+    if settings.enable_sigterm_kill:
+        from video_processing import pipeline_manager as _pm
+        signal.signal(signal.SIGTERM, _pm._sigterm_handler)
+
     import threading
     threading.Thread(target=_auto_pipeline_loop, daemon=True, name="auto-pipeline-scheduler").start()
     print("[Scheduler] Background pipeline scheduler started.")
@@ -417,9 +429,8 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
     db.update_video_score(youtube_id, new_score, force=True)
 
     # 若打分为 0，将视频加入黑名单（Flag 保护）
-    from config.settings import settings
     if new_score == 0 and settings.enable_blacklist_tombstone:
-        db.add_to_blacklist(youtube_id, reason=f"manually_scored_zero")
+        db.add_to_blacklist(youtube_id, reason="manually_scored_zero")  # LINT-3: 去除多余 f-string
         db.delete_video_record(youtube_id)
         return {"success": True, "youtube_id": youtube_id, "score": 0,
                 "triggered": False, "blacklisted": True,
@@ -531,7 +542,7 @@ def delete_video(youtube_id: str, delete_files: bool = False):
     - 删除后将 youtube_id 写入 blacklisted_videos 墓碑表，
       防止爬虫二次拉取。
     """
-    from config.settings import settings
+    # settings 已在模块顶层导入（LINT-2 修复）
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
@@ -545,26 +556,25 @@ def delete_video(youtube_id: str, delete_files: bool = False):
                              "请等待完成或变为 FAILED。"}
 
         # Flag 开启：SIGTERM 阶梯强杀
+        # [Claude_Sonnet_4.6_Thinking_planning] LINT-1: 使用顶层 time/signal，移除函数内重复 import
         pid = video.get("process_pid")
         if pid:
             try:
-                os.killpg(pid, signal.SIGTERM)  # 优雅终止信号
-                import time
-                time.sleep(2.0)  # 等待 2秒自退
+                os.killpg(pid, signal.SIGTERM)   # 优雅终止信号
+                time.sleep(2.0)                  # 等待 2 秒自退（time 已顶层导入）
                 try:
-                    os.killpg(pid, 0)  # 检查进程是否仍存活
-                    # 仍存活：强杀
+                    os.killpg(pid, 0)            # 检查进程是否仍存活
                     os.killpg(pid, signal.SIGKILL)
-                    import logging
-                    logging.getLogger(__name__).warning(
+                    import logging as _logging   # 局部别名，避免覆盖模块级 logger
+                    _logging.getLogger(__name__).warning(
                         f"[SIGKILL] Process group {pid} did not exit after SIGTERM, force killed.")
                 except ProcessLookupError:
                     pass  # 进程已自退，正常
             except ProcessLookupError:
-                pass  # PID 已不存在
+                pass  # PID 已不存在（进程组消亡）
             except PermissionError as e:
-                import logging
-                logging.getLogger(__name__).error(f"[SIGTERM] Permission error killing pid {pid}: {e}")
+                import logging as _logging
+                _logging.getLogger(__name__).error(f"[SIGTERM] Permission error killing pid {pid}: {e}")
 
     # ── 2. 删除产物文件 ─────────────────────────────────────────
     deleted_files = []

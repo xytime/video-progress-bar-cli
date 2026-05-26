@@ -10,6 +10,7 @@
 | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 补充 update_video_score / get_high_score_pending_videos，封堵 pipeline_manager 中的裸 SQL 泄漏 |
 | 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 加入 WAL 模式与 30s timeout 解决并发锁表危机 |
 | 2.0.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 1] 黑名单墓碑表、v7.0 新列迁移、人工评分锁、process_pid 追踪、add_video 黑名单前置检查 |
+| 2.0.1 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] LINT-5: 修宊 add_to_blacklist docstring 调用顺序说明 |
 """
 import sqlite3
 import os
@@ -400,7 +401,11 @@ class PipelineDB:
     def add_to_blacklist(self, youtube_id: str, reason: str = 'user_deleted') -> bool:
         """将视频 ID 写入黑名单墓碑表。
 
-        此操作不可逆（设计上），调用方需确保已先执行 delete_video_record。
+        [Claude_Sonnet_4.6_Thinking_planning] LINT-5 修复: 正确的原常保证调用顺序是《先写墓碑、再删主记录》。
+        这样可以防止删除窗口期内爬虫二次插入（墓碑写入即封堵入口，小于 1ms）。
+        即: add_to_blacklist() 先调用，再调用 delete_video_record()。
+        
+        此操作不可逆（设计上）。
         """
         with self.get_connection() as conn:
             try:

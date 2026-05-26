@@ -9,9 +9,11 @@
 | 1.3.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 专项审查：路径常量类级化、os 顶层导入、动态扩展名检测                            |
 | 1.4.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 断点续传检查点、封面生成步骤、硬重置接口、完整上传参数                           |
 | 2.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 3] Popen+os.setsid 进程组隔离、PID 追踪、SIGTERM handler、评分锁防覆盖 |
+| 2.0.1   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] BUG-1:移除线程内 signal.signal(); BUG-2:重置 _sigterm_received; BUG-3:upload 用 _run_tracked; LINT-4:math 顶层 import |
 """
 
 import os
+import math
 import signal
 import time
 import logging
@@ -80,7 +82,7 @@ class PipelineManager:
 
     def score_pending_videos(self):
         """对 PENDING 且 score < 75 的视频自动评分（不覆盖人工调分）"""
-        import math
+        # [Claude_Sonnet_4.6_Thinking_planning] LINT-4 修复: math 已移至模块顶层导入
         pending  = self.db.get_videos_by_status("PENDING")
         to_score = [v for v in pending if v.get('score', 0) < 75]
         skipped  = len(pending) - len(to_score)
@@ -209,10 +211,12 @@ class PipelineManager:
         title = video['title']
         url   = f"https://youtu.be/{yid}"
 
-        # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 注册 SIGTERM handler
-        # 仅在启用 Flag 时注册，避免影响原有行为
-        if settings.enable_sigterm_kill:
-            signal.signal(signal.SIGTERM, _sigterm_handler)
+        # [Claude_Sonnet_4.6_Thinking_planning] BUG-1 修复: signal.signal() 只能在主线程调用。
+        # 此方法通过 daemon 线程执行，signal 注册已移至 app.py startup_event()。
+        # [Claude_Sonnet_4.6_Thinking_planning] BUG-2 修复: 每个视频开始时重置标志位。
+        # 若不重置，一旦 video1 收到 SIGTERM，后续所有视频将在首个 checkpoint 立即中断。
+        global _sigterm_received
+        _sigterm_received = False  # 每个视频独立的中断状态
 
         lock_path = self._OUT_DIR / "pipeline.lock"
         logger.info(f"[Lock] Waiting for pipeline lock to process {yid}...")
@@ -342,28 +346,29 @@ class PipelineManager:
                 if category_file.exists():
                     upload_cmd += ["--category-file", str(category_file)]
 
-                # 使用 capture_output 获取上传器日志
-                res = subprocess.run(upload_cmd, text=True, capture_output=True, cwd=str(self._PRJ_ROOT))
-                
-                if res.stdout:
-                    logger.debug(f"Uploader stdout:\n{res.stdout}")
-                if res.stderr:
-                    logger.debug(f"Uploader stderr:\n{res.stderr}")
+                # [Claude_Sonnet_4.6_Thinking_planning] BUG-3 修复: 使用 _run_tracked 覆盖 PUBLISHING 阶段的 PID 追踪。
+                # wechat_uploader 启动 Playwright 可见浏览器 GUI；os.setsid() 不影响 GUI 进程组。
+                # 特殊返回码 2 表示微信 session 过期，须单独捕获，不作为普通失败处理。
+                try:
+                    res = self._run_tracked(upload_cmd, yid, text=True,
+                                            capture_output=True, cwd=str(self._PRJ_ROOT))
+                    if res.stdout:
+                        logger.debug(f"Uploader stdout:\n{res.stdout}")
+                    if res.stderr:
+                        logger.debug(f"Uploader stderr:\n{res.stderr}")
+                except subprocess.CalledProcessError as upload_err:
+                    if upload_err.returncode == 2:
+                        # 登录 session 过期，非普通失败
+                        logger.error(f"WeChat login required for {yid}.")
+                        self.db.update_video_status(yid, "LOGIN_REQUIRED")
+                        self.send_telegram_msg(
+                            f"⚠️ <b>WeChat Login Required</b>\n"
+                            f"Session expired: <b>{title}</b>\n"
+                            f"<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
+                        )
+                        return
+                    raise  # 其他错误上抛给外层 CalledProcessError 处理器
 
-                if res.returncode == 2:
-                    logger.error(f"WeChat login required for {yid}.")
-                    self.db.update_video_status(yid, "LOGIN_REQUIRED")
-                    self.send_telegram_msg(
-                        f"⚠️ <b>WeChat Login Required</b>\n"
-                        f"Session expired: <b>{title}</b>\n"
-                        f"<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
-                    )
-                    return
-                elif res.returncode != 0:
-                    raise subprocess.CalledProcessError(
-                        res.returncode, upload_cmd,
-                        stderr=res.stderr.encode() if isinstance(res.stderr, str) else res.stderr,
-                    )
 
                 # ── 5. PUBLISHED ──────────────────────────────────────────────────
                 self.db.update_video_status(yid, "PUBLISHED")

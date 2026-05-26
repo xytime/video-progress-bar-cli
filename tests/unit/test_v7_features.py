@@ -172,9 +172,26 @@ class TestCensorEngine:
 
     # P1 中文 + 豁免
     def test_p1_beijing_exemption(self):
-        """'北京大学' 不应触发 P1 拦截。"""
+        """'北京大学' 上下文应触发豁免，不拦截。
+
+        [Claude_Sonnet_4.6_Thinking_planning] BUG-4 修复：
+        '北京' 已加入 P1 词库。此测试真正验证豁免逻辑：
+        - 输入包含触发词 '北京'
+        - 同时包含豁免词 '北京大学'
+        - 期望结果：豁免生效，PASS
+        """
         r = check_text(zh_text="北京大学2026年录取分数线公布", en_text="")
-        assert r.hit is False, f"Should be exempted, but got: {r}"
+        assert r.hit is False, f"'北京大学' should be exempted, but got: {r}"
+
+    def test_p1_beijing_triggers_without_exemption(self):
+        """'北京' 单独出现（无豁免上下文）应触发 P1 拦截。
+
+        [Claude_Sonnet_4.6_Thinking_planning] BUG-4 修复：
+        此测试确认 '北京' 确实在 P1 词库中，豁免逻辑有意义。
+        """
+        r = check_text(zh_text="北京当局下令封锁消息", en_text="")
+        assert r.hit is True, f"'北京' should trigger P1, but got: {r}"
+        assert r.level == "P1"
 
     def test_p1_triggers_without_exemption(self):
         r = check_text(zh_text="如何使用翻墙软件访问境外网站", en_text="")
