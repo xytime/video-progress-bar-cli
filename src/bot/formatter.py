@@ -6,6 +6,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建，TDD Green phase |
+| 1.1.0 | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 status] 新增 fmt_status_report 全局宏观状态渲染支持 |
 """
 from __future__ import annotations
 from typing import List
@@ -103,6 +104,7 @@ def fmt_help() -> str:
         "🤖 *微信视频号 Bot 使用指南*\n\n"
         "📩 *发送 YouTube 链接* → 自动加入加急队列\n\n"
         "📋 `/queue` — 查看当前处理队列\n"
+        "📊 `/status` — 查看全局宏观状态报告\n"
         "✅ `/published` — 查看最近发布到视频号的视频\n"
         "🗑 `/delete <ID>` — 删除指定视频任务\n"
         "♻️ `/retry <ID>` — 重试失败的视频任务\n"
@@ -110,3 +112,54 @@ def fmt_help() -> str:
         "📊 `/stats` — 查看系统统计数据\n"
         "❓ `/help` — 显示本帮助"
     )
+
+
+def fmt_status_report(stats: dict, processing: List[dict], pending: List[dict]) -> str:
+    """渲染宏观的全局状态报告
+    
+    # [Gemini_3.5_Flash_fast] 新增的宏观报告格式化逻辑
+    """
+    total = stats.get("total", 0)
+    pending_cnt = stats.get("pending", 0)
+    active_cnt = stats.get("active", 0)
+    published_cnt = stats.get("published", 0)
+    failed_cnt = stats.get("failed", 0)
+    
+    lines = [
+        "📊 *系统全局宏观状态报告*",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "📈 *队列统计概览*",
+        f"• ⏳ 待处理 (PENDING): `{pending_cnt}`",
+        f"• 🔄 处理中 (ACTIVE): `{active_cnt}`",
+        f"• ✅ 已发布 (PUBLISHED): `{published_cnt}`",
+        f"• ❌ 失败数 (FAILED): `{failed_cnt}`",
+        f"• 📦 队列总计 (TOTAL): `{total}`",
+        ""
+    ]
+    
+    lines.append("⚙️ *当前活跃管线 (ACTIVE)*")
+    if not processing:
+        lines.append("   _当前无正在执行的视频加工任务_")
+    else:
+        for v in processing:
+            icon = _status_icon(v.get("status", ""))
+            vid = v.get("youtube_id", "?")
+            title = v.get("title", "未知标题")[:30]
+            status = v.get("status", "?")
+            lines.append(f"   {icon} `{vid}` — {title}\n   └ 进度：`{status}`")
+    lines.append("")
+    
+    lines.append("⏳ *待处理队列 (TOP 3 PENDING)*")
+    if not pending:
+        lines.append("   _待处理队列为空_")
+    else:
+        for v in pending[:3]:
+            vid = v.get("youtube_id", "?")
+            title = v.get("title", "未知标题")[:30]
+            lines.append(f"   ⏳ `{vid}` — {title}")
+            
+    lines.append("")
+    lines.append("💡 *提示*：发送 `/run` 立即调度，发送 `/help` 查看指令列表。")
+    
+    return "\n".join(lines)
+

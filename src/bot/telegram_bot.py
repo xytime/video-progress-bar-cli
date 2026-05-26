@@ -10,6 +10,7 @@
 | 1.1.0 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 增加 PipelineAgent 统一接管除 /help /start 以外的所有指令及文本消息 |
 | 1.1.1 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 调整为仅非 /help 命令交由 Agent，标准指令由程序处理 |
 | 1.1.2 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将 YouTube URL 链接处理重归程序接管，不使用 Agent |
+| 1.2.0 | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 status] 新增 cmd_status 宏观状态指令并调整命令路由 |
 """
 from __future__ import annotations
 
@@ -114,6 +115,30 @@ async def cmd_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         
     videos = processing + pending
     await update.message.reply_text(fmt.fmt_queue(videos), parse_mode="Markdown")  # type: ignore
+
+
+async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/status 指令：宏观的全局状态汇报
+    
+    # [Gemini_3.5_Flash_fast] 新增的宏观状态指令逻辑
+    """
+    if not _check_admin(update):
+        return
+    assert _api is not None
+    stats = await _api.get_stats()
+    if stats is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+        return
+    pending = await _api.get_videos(tab="waitlist", size=5)
+    processing = await _api.get_videos(tab="active", size=5)
+    
+    if pending is None or processing is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+        return
+        
+    msg = fmt.fmt_status_report(stats, processing, pending)
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
 
 
 async def cmd_published(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -321,7 +346,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_help))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("queue", cmd_queue))
-    app.add_handler(CommandHandler("status", cmd_queue))
+    app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("published", cmd_published))
     app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CommandHandler("retry", cmd_retry))
