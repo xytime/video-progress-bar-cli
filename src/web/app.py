@@ -9,6 +9,7 @@
 | 2.0.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 3+4] SIGTERM 强杀+黑名单墓碑、人工调分锁、频道手动隔离(MANUAL_ONLY) |
 | 2.0.1 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] BUG-1: SIGTERM 注册移至主线程 startup_event；清理函数内重复 import |
 | 2.1.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 6] SEC-1: urlparse 严格 netloc 校验替换 in-string 旁路；SEC-2: add_channel 覆盖 MANUAL_ONLY 防隐式提升 |
+| 2.1.1 | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 macOS Fix] 解决 killpg(pid, 0) 对未收割僵尸进程返回 EPERM 导致误报的 macOS 特有行为 |
 """
 import os
 import sys
@@ -618,8 +619,8 @@ def delete_video(youtube_id: str, delete_files: bool = False):
                     import logging as _logging   # 局部别名，避免覆盖模块级 logger
                     _logging.getLogger(__name__).warning(
                         f"[SIGKILL] Process group {pid} did not exit after SIGTERM, force killed.")
-                except ProcessLookupError:
-                    pass  # 进程已自退，正常
+                except (ProcessLookupError, PermissionError):
+                    pass  # 进程已自退或在 macOS 下已变为僵尸进程，视为正常退出
             except ProcessLookupError:
                 pass  # PID 已不存在（进程组消亡）
             except PermissionError as e:
