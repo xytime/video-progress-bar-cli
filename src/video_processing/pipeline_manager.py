@@ -10,6 +10,7 @@
 | 1.4.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 断点续传检查点、封面生成步骤、硬重置接口、完整上传参数                           |
 | 2.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 3] Popen+os.setsid 进程组隔离、PID 追踪、SIGTERM handler、评分锁防覆盖 |
 | 2.0.1   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] BUG-1:移除线程内 signal.signal(); BUG-2:重置 _sigterm_received; BUG-3:upload 用 _run_tracked; LINT-4:math 顶层 import |
+| 2.0.2   | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Phase 6 CON-1] 修复 open() 成功但 flock() 失败时 lock_file 的句柄泄露 |
 """
 
 import os
@@ -220,11 +221,12 @@ class PipelineManager:
 
         lock_path = self._OUT_DIR / "pipeline.lock"
         logger.info(f"[Lock] Waiting for pipeline lock to process {yid}...")
-        lock_file = open(lock_path, "w")
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        logger.info(f"[Lock] Acquired pipeline lock. Processing {yid}...")
-
+        lock_file = None
         try:
+            lock_file = open(lock_path, "w")
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            logger.info(f"[Lock] Acquired pipeline lock. Processing {yid}...")
+
             try:
                 # ── 1. DOWNLOADING ────────────────────────────────────────────────
                 # [Claude_Sonnet_4.6_Thinking_planning] v7.0: SIGTERM 安全检查点
@@ -395,10 +397,15 @@ class PipelineManager:
                 self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}\nError: {e}")
 
         finally:
-            # [Gemini_3.5_Flash_High_planning] 无论处理成功、失败或发生任何异常，都必须释放进程锁
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-            lock_file.close()
-            logger.info(f"[Lock] Released pipeline lock for {yid}.")
+            # [Gemini_3.5_Flash_planning] CON-1: 无论处理成功、失败或发生任何异常，都必须释放进程锁并关闭句柄
+            if lock_file is not None:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    logger.info(f"[Lock] Released pipeline lock for {yid}.")
+                except Exception as ex:
+                    logger.error(f"[Lock] Error releasing lock: {ex}")
+                finally:
+                    lock_file.close()
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 清除 PID 记录（进程已终止）
             if settings.enable_sigterm_kill:
                 self.db.update_process_pid(yid, None)

@@ -8,6 +8,7 @@
 | 1.2.0 | 2026-05-22 | Gemini_3.5_Flash_fast | 修复手工添加视频（含 TG Bot 提交）卡在 PENDING 不自动触发的问题 |
 | 2.0.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 3+4] SIGTERM 强杀+黑名单墓碑、人工调分锁、频道手动隔离(MANUAL_ONLY) |
 | 2.0.1 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] BUG-1: SIGTERM 注册移至主线程 startup_event；清理函数内重复 import |
+| 2.1.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 6] SEC-1: urlparse 严格 netloc 校验替换 in-string 旁路；SEC-2: add_channel 覆盖 MANUAL_ONLY 防隐式提升 |
 """
 import os
 import sys
@@ -19,6 +20,7 @@ import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 
 # 确保能导入 src 下的模块
 _src = str(Path(__file__).parent.parent)
@@ -107,6 +109,34 @@ _YT_DLP = shutil.which("yt-dlp") or str(
     Path(__file__).parent.parent.parent / ".venv" / "bin" / "yt-dlp"
 )
 
+# [Claude_Sonnet_4.6_Thinking_planning] SEC-1 修复：严格 YouTube 域名白名单。
+# 旧方案 `any(d in url ...)` 可被路径、子域名、data URI 等 5 种向量绕过。
+# urlparse().netloc 精准提取 host，不受路径/查询串/协议影响。
+_ALLOWED_YOUTUBE_HOSTS: frozenset = frozenset({
+    "www.youtube.com",
+    "youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+})
+
+
+def _is_youtube_url(url: str) -> bool:
+    """严格校验 URL 是否属于 YouTube 官方域名（netloc 级别匹配）。
+
+    防御向量：
+    - https://evil.com/youtube.com       → netloc=evil.com → BLOCKED
+    - https://youtube.com.evil.com/      → netloc=youtube.com.evil.com → BLOCKED
+    - data:text/html,youtube.com         → netloc='' → BLOCKED
+    - https://www.youtube.com/watch?v=x  → netloc=www.youtube.com → ALLOWED
+    """
+    try:
+        host = urlparse(url).netloc.lower().split(":")[0]  # 去端口号
+        return host in _ALLOWED_YOUTUBE_HOSTS
+    except Exception:
+        return False
+
+
 # 所有处于"活跃"加工中的状态
 ACTIVE_STATUSES = {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
 
@@ -194,10 +224,11 @@ def add_channel(req: AddChannelRequest):
         return {"success": False, "error": "URL 不能为空"}
 
     # ── 1. 前置 URL 格式校验（拒绝非 YouTube 输入）──────────────────────
-    if not any(d in url for d in ("youtube.com", "youtu.be")):
+    # [Claude_Sonnet_4.6_Thinking_planning] SEC-1: 使用 _is_youtube_url() 严格 netloc 匹配
+    if not _is_youtube_url(url):
         return {
             "success": False,
-            "error": "请输入有效的 YouTube 频道 URL（需包含 youtube.com 或 youtu.be）"
+            "error": "请输入有效的 YouTube 频道 URL（必须来自 youtube.com 或 youtu.be）"
         }
 
     # ── 2. 调用 yt-dlp 获取频道元数据 ─────────────────────────────────
@@ -244,13 +275,31 @@ def add_channel(req: AddChannelRequest):
         }
 
     # ── 5. 重复检测 ───────────────────────────────────────────────────
+    # [Claude_Sonnet_4.6_Thinking_planning] SEC-2 修复：覆盖所有已存在状态，防止 MANUAL_ONLY → APPROVED 隐式提升。
+    # 旧逻辑只检测 APPROVED，MANUAL_ONLY 频道被放行后 INSERT OR REPLACE 会静默覆盖为 APPROVED，
+    # 导致用户手动下载某视频后其频道被意外加入爬虫白名单，直接破坏频道隔离设计。
     existing = db.get_channel_by_id(channel_id)
-    if existing and existing.get("status") == "APPROVED":
-        return {
-            "success": False,
-            "error": f"该频道已在白名单中：{existing['channel_name']}（{channel_id}）",
-            "already_exists": True,
-        }
+    if existing:
+        status = existing.get("status")
+        if status == "APPROVED":
+            return {
+                "success": False,
+                "error": f"该频道已在白名单中：{existing['channel_name']}（{channel_id}）",
+                "already_exists": True,
+            }
+        elif status == "MANUAL_ONLY":
+            # 该频道曾通过手动视频下载注册，需用户明确确认才能提升为自动爬取白名单
+            return {
+                "success": False,
+                "error": (
+                    f"频道《{existing['channel_name']}》（{channel_id}）已通过手动视频下载注册（MANUAL_ONLY），"
+                    "不会被自动爬取。如确实需要将其加入白名单，请先在频道管理页面将其状态手动提升为 APPROVED。"
+                ),
+                "requires_promotion": True,
+                "channel_id": channel_id,
+                "channel_name": existing['channel_name'],
+            }
+        # 其他状态（PENDING/REJECTED 等）：允许覆盖写入 APPROVED
 
     # ── 6. 全部通过，写入 ──────────────────────────────────────────────
     db.add_channel(channel_id, channel_name, status="APPROVED", reason="Added via Web UI")
@@ -286,8 +335,9 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         return {"success": False, "error": "URL 不能为空"}
 
     # ── 1. 前置 URL 格式校验 ─────────────────────────────────────────
-    if not any(d in url for d in ("youtube.com", "youtu.be")):
-        return {"success": False, "error": "请输入有效的 YouTube 视频 URL"}
+    # [Claude_Sonnet_4.6_Thinking_planning] SEC-1: 使用 _is_youtube_url() 严格 netloc 匹配
+    if not _is_youtube_url(url):
+        return {"success": False, "error": "请输入有效的 YouTube 视频 URL（必须来自 youtube.com 或 youtu.be）"}
 
     # ── 2. yt-dlp 获取视频元数据 ─────────────────────────────────────
     try:

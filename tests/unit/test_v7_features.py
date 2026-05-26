@@ -7,11 +7,14 @@
 - 频道 MANUAL_ONLY 隔离
 - CensorshipEngine 双语拦截与豁免
 - 评分公式极端值钳位
+- SEC-1: URL 验证旁路防护
+- SEC-2: MANUAL_ONLY 频道防隐式提升
 
 # Modification History
 | Version | Date       | Author                                 | Description          |
 |---------|------------|----------------------------------------|----------------------|
 | 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建 v7.0 TDD 测试套件 |
+| 1.1.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 SEC-1 与 SEC-2 安全加固单元测试 |
 """
 
 import math
@@ -274,3 +277,111 @@ class TestScoringFormula:
         for views, likes in test_cases:
             score = self._compute_score(views, likes)
             assert 0 <= score <= 100, f"Score out of range for views={views}, likes={likes}: {score}"
+
+
+# ── Phase 6: 安全升级二次加固测试 (SEC-1 / SEC-2) ───────────────────────────────
+
+class TestSecurityBypassFortification:
+
+    def test_sec1_url_validation_bypass_vectors(self):
+        """SEC-1: 验证 _is_youtube_url() 能完全阻断所有旁路绕过向量，并放行合法 URL。"""
+        from web.app import _is_youtube_url
+
+        # 1. 旁路绕过向量 (应全部拦截)
+        bypass_vectors = [
+            "https://evil.com/youtube.com",                # 路径绕过
+            "https://youtube.com.evil.com/watch?v=123",    # 子域名绕过
+            "data:text/html,youtube.com",                  # data-URI 绕过
+            "https://evil-youtube.com/watch?v=123",        # 相似域名绕过
+            "youtube.com/path",                             # 无协议头
+            "https://youtube.com@evil.com/watch",           # 用户名绕过
+        ]
+        for url in bypass_vectors:
+            assert _is_youtube_url(url) is False, f"Bypass vector allowed: {url}"
+
+        # 2. 合法官方域名 (应放行)
+        legitimate_urls = [
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://youtube.com/c/OfficialChannel",
+            "https://youtu.be/dQw4w9WgXcQ",
+            "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+            "http://youtube.com/watch?v=dQw4w9WgXcQ",      # 支持 http
+        ]
+        for url in legitimate_urls:
+            assert _is_youtube_url(url) is True, f"Legitimate URL blocked: {url}"
+
+    def test_sec2_channel_promotion_block(self, tmp_db):
+        """SEC-2: DB 测试和 API 级别测试，验证 MANUAL_ONLY 频道防隐式提升。"""
+        import web.app
+        from web.app import add_channel, AddChannelRequest
+        from unittest.mock import patch, MagicMock
+
+        # 1. DB 级别测试：写入 MANUAL_ONLY 并获取状态验证
+        channel_id = "UCmanualpromotion1234567"
+        channel_name = "Manual-Only Test Channel"
+        tmp_db.add_channel(channel_id, channel_name, status="MANUAL_ONLY", reason="Manual video add")
+        
+        existing = tmp_db.get_channel_by_id(channel_id)
+        assert existing is not None
+        assert existing["status"] == "MANUAL_ONLY"
+
+        # 2. API 级别测试：
+        # 将 web.app 模块中的全局 db 实例临时替换为 tmp_db
+        with patch.object(web.app, "db", tmp_db):
+            # 模拟 subprocess.run 返回 yt-dlp 解析结果
+            mock_result = MagicMock()
+            mock_result.stdout = f"{channel_id}|{channel_name}\n"
+            mock_result.returncode = 0
+
+            with patch("subprocess.run", return_value=mock_result):
+                # 尝试通过 add_channel API 将其加入自动爬虫白名单
+                req = AddChannelRequest(url=f"https://www.youtube.com/channel/{channel_id}")
+                resp = add_channel(req)
+
+                # 应该被拦截，并返回 requires_promotion=True
+                assert resp["success"] is False
+                assert resp.get("requires_promotion") is True
+                assert resp.get("channel_id") == channel_id
+                assert resp.get("channel_name") == channel_name
+                assert "MANUAL_ONLY" in resp["error"]
+
+                # 确认数据库中该频道状态依然是 MANUAL_ONLY，未被覆盖为 APPROVED
+                channel_after = tmp_db.get_channel_by_id(channel_id)
+                assert channel_after["status"] == "MANUAL_ONLY", "Status should not be silently promoted to APPROVED"
+
+    def test_con1_lock_handle_closed_on_flock_error(self):
+        """CON-1: 验证 flock() 抛异常时，lock_file 仍被正确 close，不泄露句柄。"""
+        from video_processing.pipeline_manager import PipelineManager
+        from unittest.mock import patch, MagicMock
+        import fcntl
+
+        pm = PipelineManager()
+        pm.db = MagicMock()
+        mock_file = MagicMock()
+
+        # 模拟 open() 返回 mock_file，以及 fcntl.flock() 在 LOCK_EX 时抛异常
+        def mock_flock(fd, operation):
+            if operation == fcntl.LOCK_EX:
+                raise OSError("Simulated flock acquisition error")
+            return None
+
+        # 仅针对 pipeline.lock 的 open 进行 mock，避免影响其他模块
+        original_open = open
+        def mock_open(file, mode="r", *args, **kwargs):
+            if "pipeline.lock" in str(file):
+                return mock_file
+            return original_open(file, mode, *args, **kwargs)
+
+        with patch("builtins.open", new=mock_open), \
+             patch("fcntl.flock", side_effect=mock_flock):
+            
+            with pytest.raises(OSError, match="Simulated flock acquisition error"):
+                pm._process_single_video({
+                    'youtube_id': 'lockerrvideo',
+                    'title': 'Test Lock Err',
+                    'score': 80
+                })
+            
+            # 验证即使 flock(LOCK_EX) 抛出异常，mock_file.close() 依然被调用，避免句柄泄漏
+            mock_file.close.assert_called_once()
