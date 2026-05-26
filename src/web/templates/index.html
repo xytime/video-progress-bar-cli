@@ -1254,6 +1254,37 @@
         input.value = '';
         await fetchChannels();
       } else {
+        if (d.requires_promotion) {
+          if (confirm(d.error)) {
+            // Re-run with promote=true
+            btn.disabled = true;
+            fb.textContent = '⚡ 正在提升频道权限…';
+            fb.className = 'add-channel-feedback loading';
+            try {
+              const r2 = await fetch('/api/channels/add', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url, promote: true }),
+              });
+              const d2 = await r2.json();
+              if (d2.success) {
+                fb.textContent = `✅ 已成功提升并添加：${d2.channel_name} (${d2.channel_id})`;
+                fb.className = 'add-channel-feedback ok';
+                input.value = '';
+                await fetchChannels();
+              } else {
+                fb.textContent = `❌ ${d2.error}`;
+                fb.className = 'add-channel-feedback err';
+              }
+            } catch(e) {
+              fb.textContent = '❌ 提升权限网络请求失败';
+              fb.className = 'add-channel-feedback err';
+            } finally {
+              btn.disabled = false;
+            }
+            return;
+          }
+        }
         fb.textContent = `❌ ${d.error}`;
         fb.className = 'add-channel-feedback err';
       }

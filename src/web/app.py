@@ -6,15 +6,22 @@
 | 1.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建 Dashboard API 服务 |
 | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 新增频道管理 API：add/delete，yt-dlp 验证后入库 |
 | 1.2.0 | 2026-05-22 | Gemini_3.5_Flash_fast | 修复手工添加视频（含 TG Bot 提交）卡在 PENDING 不自动触发的问题 |
+| 2.0.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 3+4] SIGTERM 强杀+黑名单墓碑、人工调分锁、频道手动隔离(MANUAL_ONLY) |
+| 2.0.1 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] BUG-1: SIGTERM 注册移至主线程 startup_event；清理函数内重复 import |
+| 2.1.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 6] SEC-1: urlparse 严格 netloc 校验替换 in-string 旁路；SEC-2: add_channel 覆盖 MANUAL_ONLY 防隐式提升 |
+| 2.1.1 | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 macOS Fix] 解决 killpg(pid, 0) 对未收割僵尸进程返回 EPERM 导致误报的 macOS 特有行为 |
 """
 import os
 import sys
+import signal
+import time
 import shutil
 import subprocess
 import threading
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
+from urllib.parse import urlparse
 
 # 确保能导入 src 下的模块
 _src = str(Path(__file__).parent.parent)
@@ -27,6 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from video_processing.db.database import PipelineDB
+from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
 
@@ -82,7 +90,17 @@ def _auto_pipeline_loop():
 
 @app.on_event("startup")
 def startup_event():
-    """FastAPI 启动时自动运行后台调度器"""
+    """FastAPI 启动时自动运行后台调度器，并在主线程注册信号处理器。
+
+    [Claude_Sonnet_4.6_Thinking_planning] BUG-1 修复：signal.signal() 只能在主线程调用。
+    _process_single_video 经由 daemon 线程执行，无法在内部注册信号。
+    将 SIGTERM handler 注册移至此处（FastAPI startup 在主线程运行）。
+    """
+    # [Claude_Sonnet_4.6_Thinking_planning] BUG-1: 在主线程注册 SIGTERM handler
+    if settings.enable_sigterm_kill:
+        from video_processing import pipeline_manager as _pm
+        signal.signal(signal.SIGTERM, _pm._sigterm_handler)
+
     import threading
     threading.Thread(target=_auto_pipeline_loop, daemon=True, name="auto-pipeline-scheduler").start()
     print("[Scheduler] Background pipeline scheduler started.")
@@ -91,6 +109,34 @@ def startup_event():
 _YT_DLP = shutil.which("yt-dlp") or str(
     Path(__file__).parent.parent.parent / ".venv" / "bin" / "yt-dlp"
 )
+
+# [Claude_Sonnet_4.6_Thinking_planning] SEC-1 修复：严格 YouTube 域名白名单。
+# 旧方案 `any(d in url ...)` 可被路径、子域名、data URI 等 5 种向量绕过。
+# urlparse().netloc 精准提取 host，不受路径/查询串/协议影响。
+_ALLOWED_YOUTUBE_HOSTS: frozenset = frozenset({
+    "www.youtube.com",
+    "youtube.com",
+    "m.youtube.com",
+    "music.youtube.com",
+    "youtu.be",
+})
+
+
+def _is_youtube_url(url: str) -> bool:
+    """严格校验 URL 是否属于 YouTube 官方域名（netloc 级别匹配）。
+
+    防御向量：
+    - https://evil.com/youtube.com       → netloc=evil.com → BLOCKED
+    - https://youtube.com.evil.com/      → netloc=youtube.com.evil.com → BLOCKED
+    - data:text/html,youtube.com         → netloc='' → BLOCKED
+    - https://www.youtube.com/watch?v=x  → netloc=www.youtube.com → ALLOWED
+    """
+    try:
+        host = urlparse(url).netloc.lower().split(":")[0]  # 去端口号
+        return host in _ALLOWED_YOUTUBE_HOSTS
+    except Exception:
+        return False
+
 
 # 所有处于"活跃"加工中的状态
 ACTIVE_STATUSES = {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
@@ -105,6 +151,7 @@ STATUS_ORDER = [
 # ── Pydantic 请求体 ──────────────────────────────────────────────────────
 class AddChannelRequest(BaseModel):
     url: str
+    promote: Optional[bool] = False
 
 
 # ── 页面路由 ─────────────────────────────────────────────────────────────
@@ -179,10 +226,11 @@ def add_channel(req: AddChannelRequest):
         return {"success": False, "error": "URL 不能为空"}
 
     # ── 1. 前置 URL 格式校验（拒绝非 YouTube 输入）──────────────────────
-    if not any(d in url for d in ("youtube.com", "youtu.be")):
+    # [Claude_Sonnet_4.6_Thinking_planning] SEC-1: 使用 _is_youtube_url() 严格 netloc 匹配
+    if not _is_youtube_url(url):
         return {
             "success": False,
-            "error": "请输入有效的 YouTube 频道 URL（需包含 youtube.com 或 youtu.be）"
+            "error": "请输入有效的 YouTube 频道 URL（必须来自 youtube.com 或 youtu.be）"
         }
 
     # ── 2. 调用 yt-dlp 获取频道元数据 ─────────────────────────────────
@@ -229,13 +277,33 @@ def add_channel(req: AddChannelRequest):
         }
 
     # ── 5. 重复检测 ───────────────────────────────────────────────────
+    # [Claude_Sonnet_4.6_Thinking_planning] SEC-2 修复：覆盖所有已存在状态，防止 MANUAL_ONLY → APPROVED 隐式提升。
+    # 旧逻辑只检测 APPROVED，MANUAL_ONLY 频道被放行后 INSERT OR REPLACE 会静默覆盖为 APPROVED，
+    # 导致用户手动下载某视频后其频道被意外加入爬虫白名单，直接破坏频道隔离设计。
     existing = db.get_channel_by_id(channel_id)
-    if existing and existing.get("status") == "APPROVED":
-        return {
-            "success": False,
-            "error": f"该频道已在白名单中：{existing['channel_name']}（{channel_id}）",
-            "already_exists": True,
-        }
+    if existing:
+        status = existing.get("status")
+        if status == "APPROVED":
+            return {
+                "success": False,
+                "error": f"该频道已在白名单中：{existing['channel_name']}（{channel_id}）",
+                "already_exists": True,
+            }
+        elif status == "MANUAL_ONLY":
+            if not req.promote:
+                # 该频道曾通过手动视频下载注册，需用户明确确认才能提升为自动爬取白名单
+                return {
+                    "success": False,
+                    "error": (
+                        f"频道《{existing['channel_name']}》（{channel_id}）已通过手动视频下载注册（MANUAL_ONLY），"
+                        "不会被自动爬取。是否确认将其状态提升为 APPROVED（加入自动监控白名单）？"
+                    ),
+                    "requires_promotion": True,
+                    "channel_id": channel_id,
+                    "channel_name": existing['channel_name'],
+                }
+            # 用户确认了 promote，允许通过
+        # 其他状态（PENDING/REJECTED 等）：允许覆盖写入 APPROVED
 
     # ── 6. 全部通过，写入 ──────────────────────────────────────────────
     db.add_channel(channel_id, channel_name, status="APPROVED", reason="Added via Web UI")
@@ -271,8 +339,9 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         return {"success": False, "error": "URL 不能为空"}
 
     # ── 1. 前置 URL 格式校验 ─────────────────────────────────────────
-    if not any(d in url for d in ("youtube.com", "youtu.be")):
-        return {"success": False, "error": "请输入有效的 YouTube 视频 URL"}
+    # [Claude_Sonnet_4.6_Thinking_planning] SEC-1: 使用 _is_youtube_url() 严格 netloc 匹配
+    if not _is_youtube_url(url):
+        return {"success": False, "error": "请输入有效的 YouTube 视频 URL（必须来自 youtube.com 或 youtu.be）"}
 
     # ── 2. yt-dlp 获取视频元数据 ─────────────────────────────────────
     try:
@@ -325,9 +394,11 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         }
 
     # ── 4. 写入队列（手工添加） ───────────────────────────────────────
+    # [Claude_Sonnet_4.6_Thinking_planning] v7.0 Phase 4: 手动添加视频时，频道写入 MANUAL_ONLY
+    # 而非 APPROVED，避免单视频下载导致频道被自动爬虫拉取
     if not db.get_channel_by_id(channel_id):
         db.add_channel(channel_id, channel_name,
-                       status="APPROVED", reason="Auto-registered via manual video add")
+                       status="MANUAL_ONLY", reason="Auto-registered via manual video add — NOT whitelisted")
 
     # 手工添加给100分加急
     db.add_video(
@@ -406,7 +477,18 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
     else:
         return {"success": False, "error": f"未知操作：{req.action}"}
 
-    db.update_video_score(youtube_id, new_score)
+
+    # [Claude_Sonnet_4.6_Thinking_planning] v7.0 Phase 3+4:
+    # 人工调分使用 force=True 打上手动锁，防止自动算分覆盖
+    db.update_video_score(youtube_id, new_score, force=True)
+
+    # 若打分为 0，将视频加入黑名单（Flag 保护）
+    if new_score == 0 and settings.enable_blacklist_tombstone:
+        db.add_to_blacklist(youtube_id, reason="manually_scored_zero")  # LINT-3: 去除多余 f-string
+        db.delete_video_record(youtube_id)
+        return {"success": True, "youtube_id": youtube_id, "score": 0,
+                "triggered": False, "blacklisted": True,
+                "message": "已打 0 分并移入黑名单，该视频不会被自动爬虫再次拉取"}
 
     # 自动触发：score 越过调度线，且抢占成功（原状态为 PENDING）
     triggered = False
@@ -505,26 +587,64 @@ def reset_video_hard(youtube_id: str):
 @app.delete("/api/videos/{youtube_id}")
 def delete_video(youtube_id: str, delete_files: bool = False):
     """
-    物理删除任务记录。
+    删除任务记录并写入黑名单墓碑。
     如果 delete_files=True，同时删除相关的本地产物文件。
-    注意：物理删除后，如果原视频仍在频道的最新列表中，监控爬虫可能会重新将其加入队列。
+
+    [Claude_Sonnet_4.6_Thinking_planning] v7.0 升级：
+    - 如果视频处于活跃状态且 settings.enable_sigterm_kill=True，
+      会向其进程组发 SIGTERM 优雅终止，超时 2s 后强杀。
+    - 删除后将 youtube_id 写入 blacklisted_videos 墓碑表，
+      防止爬虫二次拉取。
     """
+    # settings 已在模块顶层导入（LINT-2 修复）
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
 
+    # ── 1. 处理活跃任务：SIGTERM 阶梯强杀 ───────────────────────
     if video.get("status") in ACTIVE_STATUSES:
-        return {"success": False, "error": f"安全拦截：视频正处于执行状态（{video['status']}），无法强制物理删除，请等待其执行结束或变为 FAILED。"}
+        if not settings.enable_sigterm_kill:
+            # Flag 未开启：保持原有行为，拒绝删除活跃任务
+            return {"success": False,
+                    "error": f"安全拦截：视频正处于执行状态（{video['status']}）。"
+                             "请等待完成或变为 FAILED。"}
 
+        # Flag 开启：SIGTERM 阶梯强杀
+        # [Claude_Sonnet_4.6_Thinking_planning] LINT-1: 使用顶层 time/signal，移除函数内重复 import
+        pid = video.get("process_pid")
+        if pid:
+            try:
+                os.killpg(pid, signal.SIGTERM)   # 优雅终止信号
+                time.sleep(2.0)                  # 等待 2 秒自退（time 已顶层导入）
+                try:
+                    os.killpg(pid, 0)            # 检查进程是否仍存活
+                    os.killpg(pid, signal.SIGKILL)
+                    import logging as _logging   # 局部别名，避免覆盖模块级 logger
+                    _logging.getLogger(__name__).warning(
+                        f"[SIGKILL] Process group {pid} did not exit after SIGTERM, force killed.")
+                except (ProcessLookupError, PermissionError):
+                    pass  # 进程已自退或在 macOS 下已变为僵尸进程，视为正常退出
+            except ProcessLookupError:
+                pass  # PID 已不存在（进程组消亡）
+            except PermissionError as e:
+                import logging as _logging
+                _logging.getLogger(__name__).error(f"[SIGTERM] Permission error killing pid {pid}: {e}")
+
+    # ── 2. 删除产物文件 ─────────────────────────────────────────
     deleted_files = []
     if delete_files:
         from video_processing.pipeline_manager import PipelineManager
         pm = PipelineManager()
         deleted_files = pm.reset_video_artifacts(youtube_id)
 
+    # ── 3. 黑名单墓碑 + 删除主表记录 ──────────────────────────
+    if settings.enable_blacklist_tombstone:
+        db.add_to_blacklist(youtube_id, reason="user_deleted")
     db.delete_video_record(youtube_id)
 
     msg = "已彻底清除该任务记录"
+    if settings.enable_blacklist_tombstone:
+        msg += "（已写入黑名单，爬虫不会再次拉取）"
     if delete_files:
         msg += f"，并清理了 {len(deleted_files)} 个关联产物文件"
 
