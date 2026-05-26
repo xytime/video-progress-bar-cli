@@ -47,6 +47,8 @@ def test_pipeline_manager_flock_serialization(tmp_path):
         return res
 
     # 模拟 wechat_uploader 等一系列子进程调用
+    # [Gemini_3.5_Flash_fast] 强制使 enable_sigterm_kill 为 False，让其走正常的 subprocess.run 分支，以便被 fake_subprocess_run 拦截
+    @patch('src.video_processing.pipeline_manager.settings.enable_sigterm_kill', new=False)
     @patch('src.video_processing.pipeline_manager.subprocess.run', side_effect=fake_subprocess_run)
     @patch('src.video_processing.pipeline_manager.PipelineManager._find_downloaded_video')
     def run_test(mock_find_video, mock_run):

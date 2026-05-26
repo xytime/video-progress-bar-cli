@@ -12,7 +12,9 @@
 | 2.0.1   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] BUG-1:移除线程内 signal.signal(); BUG-2:重置 _sigterm_received; BUG-3:upload 用 _run_tracked; LINT-4:math 顶层 import |
 | 2.0.2   | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Phase 6 CON-1] 修复 open() 成功但 flock() 失败时 lock_file 的句柄泄露 |
 | 2.1.0   | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Censor Engine] 整合安全过滤引擎，新增三道违禁词拦截检查点，并捕获锁异常 |
+| 2.1.1   | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 Fix] 修复 _run_tracked 传入 subprocess.Popen 时不支持 capture_output 等 kwargs 的问题 |
 """
+
 
 import os
 import math
@@ -184,11 +186,18 @@ class PipelineManager:
           使 os.killpg(pgid, SIGTERM) 只击杀该子进程组，不波及 FastAPI 父进程。
         - 仅当 settings.enable_sigterm_kill=True 时启用 PID 追踪（Feature Flag 保护）。
         """
+        # [Gemini_3.5_Flash_fast] 避免 Popen 收到不支持的 capture_output 和 check 参数
+        popen_kwargs = kwargs.copy()
+        if popen_kwargs.pop("capture_output", False):
+            popen_kwargs["stdout"] = subprocess.PIPE
+            popen_kwargs["stderr"] = subprocess.PIPE
+        popen_kwargs.pop("check", None)
+
         if settings.enable_sigterm_kill:
             proc = subprocess.Popen(
                 cmd,
                 preexec_fn=os.setsid,  # 建立独立进程组
-                **kwargs
+                **popen_kwargs
             )
             try:
                 pgid = os.getpgid(proc.pid)
