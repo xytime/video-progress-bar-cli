@@ -13,6 +13,7 @@
 | 2.0.2   | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Phase 6 CON-1] 修复 open() 成功但 flock() 失败时 lock_file 的句柄泄露 |
 | 2.1.0   | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Censor Engine] 整合安全过滤引擎，新增三道违禁词拦截检查点，并捕获锁异常 |
 | 2.1.1   | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 Fix] 修复 _run_tracked 传入 subprocess.Popen 时不支持 capture_output 等 kwargs 的问题 |
+| 2.2.0   | 2026-05-26 | Gemini_3.5_Flash_planning           | 封面引擎 2.0 联动：读取短标题/副标题/内容 hints，组装 payload 传给生成器 |
 """
 
 
@@ -403,7 +404,7 @@ class PipelineManager:
                 cover_file = self._OUT_DIR / f"{yid}_cover.jpg"
                 if not cover_file.exists():
                     logger.info(f"Generating cover for {yid}...")
-                    # 读取生成的短标题用于封面，如果读取失败则用原标题
+                    # [Gemini_3.5_Flash_planning] 读取短标题、副标题与内容语义 hints 并组装 payload
                     cover_title = title
                     if title_file.exists():
                         try:
@@ -411,11 +412,37 @@ class PipelineManager:
                         except Exception:
                             pass
 
+                    import json
+                    cover_payload = {
+                        "title": cover_title,
+                        "subtitle": "",
+                        "category": "",
+                        "content_hints": []
+                    }
+                    subtitle_file = self._OUT_DIR / f"{yid}_subtitle.txt"
+                    if subtitle_file.exists():
+                        try:
+                            cover_payload["subtitle"] = subtitle_file.read_text(encoding="utf-8").strip()
+                        except Exception:
+                            pass
+                    category_file = self._OUT_DIR / f"{yid}_category.txt"
+                    if category_file.exists():
+                        try:
+                            cover_payload["category"] = category_file.read_text(encoding="utf-8").strip()
+                        except Exception:
+                            pass
+                    hints_file = self._OUT_DIR / f"{yid}_content_hints.json"
+                    if hints_file.exists():
+                        try:
+                            cover_payload["content_hints"] = json.loads(hints_file.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+
                     cover_cmd = [
                         self._VENV_PYTHON,
                         str(self._PRJ_ROOT / "scripts" / "cover_generator.py"),
                         "--video", str(vertical),
-                        "--title", cover_title,
+                        "--payload", json.dumps(cover_payload, ensure_ascii=False),
                         "--output", str(cover_file),
                     ]
                     res = subprocess.run(cover_cmd, capture_output=True,

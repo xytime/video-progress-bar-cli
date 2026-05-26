@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Cover Render Template</title>
+    <style>
+        :root {
+            --bg-start: {{ background_gradient_start }};
+            --bg-end: {{ background_gradient_end }};
+            --accent-color: {{ accent_color }};
+            --accent-glow: {{ accent_glow }};
+            --grid-color: {{ grid_color }};
+            --noise-opacity: {{ noise_opacity }};
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: {{ canvas_width }}px;
+            height: {{ canvas_height }}px;
+            background: linear-gradient(135deg, var(--bg-start) 0%, var(--bg-end) 100%);
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "STHeiti", "Microsoft YaHei", sans-serif;
+            overflow: hidden;
+            position: relative;
+            box-sizing: border-box;
+        }
+
+        /* 氛围发光球 */
+        .orb-container {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        .orb {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(180px);
+            mix-blend-mode: screen;
+            opacity: 0.75;
+        }
+
+        /* 点阵网格 */
+        .grid-layer {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            z-index: 2;
+            background-image: radial-gradient(var(--grid-color) 2.5px, transparent 0);
+            background-size: 80px 80px;
+            background-position: 40px 40px;
+        }
+
+        /* 磨砂玻璃卡片 */
+        .glass-card {
+            position: absolute;
+            left: {{ safe_zone.margin_pct }}%;
+            right: {{ safe_zone.margin_pct }}%;
+            top: 50%;
+            transform: translateY(-50%);
+            height: 950px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 3px solid rgba(255, 255, 255, 0.18);
+            border-radius: 60px;
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            z-index: 10;
+            box-sizing: border-box;
+            padding: 85px 70px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        /* 徽章 */
+        .badge-capsule {
+            background: #ffffff;
+            color: #0f172a;
+            padding: 12px 40px;
+            border-radius: 40px;
+            font-size: 38px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
+            margin-bottom: 20px;
+        }
+
+        /* 内容文字容器 */
+        .text-content-wrapper {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            margin: 40px 0;
+        }
+
+        /* 主标题 */
+        .main-title {
+            font-size: 96px;
+            font-weight: 900;
+            color: #ffffff;
+            text-align: center;
+            line-height: 1.35;
+            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+            word-break: break-all;
+            margin: 0;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        /* 副标题 */
+        .sub-title {
+            font-size: 54px;
+            font-weight: 600;
+            color: rgba(255, 255, 255, 0.85);
+            text-align: center;
+            line-height: 1.45;
+            text-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+            margin-top: 50px;
+            word-break: break-all;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        /* 隐喻矢量图标 */
+        .metaphor-icon {
+            position: absolute;
+            width: 110px;
+            height: 110px;
+            z-index: 15;
+            opacity: 0.65;
+            color: var(--accent-color);
+            filter: drop-shadow(0 0 12px var(--accent-color));
+        }
+
+        .metaphor-icon svg {
+            width: 100%;
+            height: 100%;
+            stroke: currentColor;
+            stroke-width: 1.5;
+            fill: none;
+        }
+
+        /* 定位布局配置 */
+        .pos-top-right {
+            top: 75px;
+            right: 70px;
+        }
+
+        .pos-bottom-left {
+            bottom: 75px;
+            left: 70px;
+        }
+    </style>
+</head>
+<body>
+    <!-- 点阵网格层 -->
+    <div class="grid-layer"></div>
+
+    <!-- 氛围光晕层 -->
+    <div class="orb-container">
+        {% for orb in orbs %}
+        <div class="orb" style="
+            left: {{ orb.cx_pct * 100 }}%;
+            top: {{ orb.cy_pct * 100 }}%;
+            width: {{ orb.radius_pct * 1080 * 2 }}px;
+            height: {{ orb.radius_pct * 1080 * 2 }}px;
+            transform: translate(-50%, -50%);
+            background: radial-gradient(circle, rgba({{ orb.color_rgba[0] }}, {{ orb.color_rgba[1] }}, {{ orb.color_rgba[2] }}, {{ orb.color_rgba[3] / 255 }}) 0%, transparent 70%);
+        "></div>
+        {% endfor %}
+    </div>
+
+    <!-- 磨砂玻璃卡片 -->
+    <div class="glass-card">
+        <!-- 徽章药丸 -->
+        <div class="badge-capsule">{{ badge }}</div>
+        
+        <!-- 核心内容 -->
+        <div class="text-content-wrapper">
+            <h1 class="main-title">{{ title }}</h1>
+            {% if subtitle %}
+            <div class="sub-title">{{ subtitle }}</div>
+            {% endif %}
+        </div>
+
+        <!-- 隐喻矢量图标注入 (内联定位) -->
+        {% if metaphor_svg %}
+        <div class="metaphor-icon pos-{{ metaphor_placement }}">
+            {{ metaphor_svg }}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
+"""封面图像生成服务 (cover_generator.py)
+
+# Modification History
+| Version | Date       | Author                       | Description                                                     |
+|---------|------------|------------------------------|-----------------------------------------------------------------|
+| 1.0.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking   | Pillow 基础玻璃态排版绘制                                        |
+| 2.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 增加 --payload 参数，支持集成 CoverEngine v2.0，且保留 Pillow 兜底  |
+"""
+
 import os
+import sys
+import json
 import argparse
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -126,13 +137,42 @@ def generate_cover(title: str, output_path: str):
     print(f"Cover generated: {out_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate video cover (V5 Glassmorphism).")
-    parser.add_argument("--title", required=True, help="Video title")
+    # [Gemini_3.5_Flash_planning] 支持 --payload 参数接入 CoverEngine v2.0，同时支持 Pillow 降级兜底
+    parser = argparse.ArgumentParser(description="Generate video cover (V5 Glassmorphism or V2 HTML).")
+    parser.add_argument("--title", help="Video title (fallback Pillow generator)")
+    parser.add_argument("--payload", help="JSON payload for Cover Engine v2.0")
     parser.add_argument("--video", help="Video path (ignored, just for compat)")
     parser.add_argument("--output", required=True, help="Output image path (.jpg)")
     args = parser.parse_args()
     
-    generate_cover(args.title, args.output)
+    if args.payload:
+        try:
+            # 引入项目 src 目录
+            sys.path.append(str(Path(__file__).parent.parent / "src"))
+            from cover import CoverEngine
+            
+            payload = json.loads(args.payload)
+            print(f"Using CoverEngine v2.0 (Playwright HTML) for payload: {payload}")
+            engine = CoverEngine()
+            engine.generate(payload, args.output)
+            return
+        except Exception as e:
+            # [Gemini_3.5_Flash_planning] 降级保护：防止 Playwright 在某些环境下运行失败阻断管线
+            print(f"Error running CoverEngine v2.0: {e}. Falling back to Pillow.")
+            
+    # Pillow 渲染流程
+    title_to_use = args.title
+    if not title_to_use and args.payload:
+        try:
+            payload = json.loads(args.payload)
+            title_to_use = payload.get("title", "Untitled")
+        except Exception:
+            title_to_use = "Untitled"
+            
+    if not title_to_use:
+        parser.error("Either --title or --payload is required")
+        
+    generate_cover(title_to_use, args.output)
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,59 @@
+{
+  "rules": [
+    {
+      "id": "policy_security",
+      "hints": ["policy", "quantum", "crypto", "geopolitics"],
+      "keywords": ["和谈", "政策", "隐私", "加密", "量子", "安全", "监控", "法案"],
+      "accent": "red_alert",
+      "base_gradient": "policy_security",
+      "metaphor": "shield-off",
+      "metaphor_placement": "bottom-left",
+      "emotion_temperature": "cold",
+      "default_badge": "安全局势"
+    },
+    {
+      "id": "market_capital",
+      "hints": ["market", "capital", "energy"],
+      "keywords": ["市场", "上市", "资本", "股价", "崩盘", "投资", "泡沫", "接盘"],
+      "accent": "gold_warning",
+      "base_gradient": "jet_black",
+      "metaphor": "trending-down",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "hot",
+      "default_badge": "资本财评"
+    },
+    {
+      "id": "robotics_tech",
+      "hints": ["robot", "ai", "space"],
+      "keywords": ["机器人", "原型机", "AI", "算法", "芯片", "科技", "智能", "提示词", "电脑"],
+      "accent": "cyan_pulsing",
+      "base_gradient": "deep_blue",
+      "metaphor": "cpu",
+      "metaphor_placement": "bottom-left",
+      "emotion_temperature": "neutral",
+      "default_badge": "前沿科技"
+    },
+    {
+      "id": "mindset_change",
+      "hints": ["mindset", "health"],
+      "keywords": ["认知", "改变", "思维", "方法", "框架", "成长", "命运"],
+      "accent": "purple_mindset",
+      "base_gradient": "mindset_change",
+      "metaphor": "brain",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "neutral",
+      "default_badge": "思维跃迁"
+    },
+    {
+      "id": "default",
+      "hints": [],
+      "keywords": [],
+      "accent": "cyan_pulsing",
+      "base_gradient": "deep_blue",
+      "metaphor": "zap",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "neutral",
+      "default_badge": "科技观察"
+    }
+  ]
+}

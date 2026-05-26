@@ -49,7 +49,7 @@ def run_uploader(
     login_only: bool = False,
     headless: bool = True,
     draft: bool = False,
-    title_path: str = None,      # 短标题文件（≤ 28 字）
+    title_path: str = None,      # 短标题文件（6-16 字，匹配微信平台真实限制）
     cover_path: str = None,      # 封面图文件 (JPEG)
     category_path: str = None,   # 分类文件
 ) -> int:
@@ -1329,7 +1329,7 @@ def main():
     parser = argparse.ArgumentParser(description="Upload and publish videos to WeChat Channels.")
     parser.add_argument("--video",         help="Path to vertical MP4 video file")
     parser.add_argument("--copy",          help="Path to WeChat copy description text file")
-    parser.add_argument("--title-file",    help="Path to short title text file (<=28 chars)")
+    parser.add_argument("--title-file",    help="Path to short title text file (6-16 chars, WeChat platform limit)")
     parser.add_argument("--cover",         help="Path to cover image JPEG file")
     parser.add_argument("--category-file", help="Path to category text file")
     parser.add_argument("--state",  default="output/wechat_state.json",
