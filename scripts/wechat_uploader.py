@@ -11,6 +11,7 @@
 | 1.5.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning      | 修复原创权益弹窗勾选（适配 AntD Checkbox 与 class 类名禁用校验）及分类下拉框 Shadow DOM 穿透 |
 | 1.6.0   | 2026-05-27 | Claude_Sonnet_4.6_Thinking_planning | 优雅截断: 引入 graceful_truncate_title，替换硬截断兜底，防止磁盘读入的超长标题被截成半句 |
 | 1.7.0   | 2026-05-27 | Gemini_2.0_Flash_fast               | 增加 Web UI 临时二维码自动生成与无头等待扫码支持 |
+| 1.8.0   | 2026-05-27 | Antigravity_planning                | 移除彻底失效的分类选择 UI 操作逻辑（微信官方升级已移除），由自然语言 Hashtag 替代 |
 """
 
 import os
@@ -45,105 +46,7 @@ logger = logging.getLogger("wechat_uploader")
 # 微信视频号发表地址
 WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 
-def _select_category(page, category: str) -> bool:
-    """在微信视频号助手页面选择视频分类。
-    
-    采用分层限制定位机制（抗 UI 变化）以避免误触其他导航链接。
-    """
-    if not category:
-        return True
-        
-    logger.info(f"Selecting category: {category!r}")
-    
-    # 1. 尝试找到分类选择器的触发按钮
-    form_items = page.locator(".weui-desktop-form__item")
-    dropdown_trigger = None
-    
-    # 策略 1: 寻找包含“分类”文字的表单项，并在其内寻找触发按钮
-    for i in range(form_items.count()):
-        item = form_items.nth(i)
-        if "分类" in (item.inner_text() or ""):
-            trigger = item.locator(".weui-desktop-dropdown__trigger").first
-            if trigger.count() > 0 and trigger.is_visible():
-                dropdown_trigger = trigger
-                logger.info("Found category dropdown trigger within form item.")
-                break
-                
-    # 策略 2: 兜底匹配全局 trigger 选项
-    if not dropdown_trigger:
-        triggers = [
-            page.locator(".weui-desktop-dropdown__trigger:near(:text('视频分类'), 100)").first,
-            page.locator(".weui-desktop-dropdown__trigger:near(:text('分类'), 100)").first,
-            page.locator("text=视频分类").locator("xpath=..").locator("div").first,
-            page.locator(".category-selector"),
-            page.locator("div[class*='category-select']")
-        ]
-        for trg in triggers:
-            try:
-                if trg.count() > 0 and trg.is_visible():
-                    dropdown_trigger = trg
-                    logger.info("Found category dropdown trigger via fallback locators.")
-                    break
-            except Exception:
-                continue
-                
-    if not dropdown_trigger:
-        logger.warning("Could not find category dropdown trigger.")
-        return False
-        
-    # 2. 点击下拉触发按钮展开列表
-    try:
-        dropdown_trigger.click(timeout=1000)
-    except Exception:
-        try:
-            dropdown_trigger.evaluate("node => node.click()")
-        except Exception as click_err:
-            logger.error(f"Failed to click category dropdown trigger: {click_err}")
-            return False
-            
-    # 3. 等待下拉列表容器渲染完成
-    list_container = page.locator(".weui-desktop-dropdown__list").first
-    try:
-        list_container.wait_for(state="visible", timeout=3000)
-    except Exception:
-        logger.warning("Category dropdown list container did not appear.")
-        
-    # 4. 在列表容器内进行精确匹配点击
-    options = [
-        list_container.locator(f"li:has-text('{category}')").first,
-        list_container.locator(f"div[role='option']:has-text('{category}')").first,
-        list_container.locator(f"*:has-text('{category}')").last
-    ]
-    
-    for opt in options:
-        try:
-            if opt.count() > 0 and opt.is_visible():
-                ok = human_click(page, opt)
-                if not ok:
-                    opt.evaluate("node => node.click()")
-                logger.info(f"Category {category!r} selected successfully.")
-                return True
-        except Exception:
-            continue
-            
-    # 全局 popover 兜底
-    try:
-        global_opts = page.locator(f".weui-desktop-dropdown__list li:has-text('{category}')").first
-        if global_opts.count() > 0 and global_opts.is_visible():
-            ok = human_click(page, global_opts)
-            if not ok:
-                global_opts.evaluate("node => node.click()")
-            logger.info(f"Category {category!r} selected via global list fallback.")
-            return True
-    except Exception:
-        pass
-        
-    try:
-        page.mouse.click(0, 0)
-    except Exception:
-        pass
-    logger.warning(f"Could not find category option for {category!r}.")
-    return False
+
 
 def _select_collection(page, collection_name: str) -> bool:
     """在微信视频号助手页面选择视频合集，若不存在则自动新建。
@@ -1524,9 +1427,9 @@ def run_uploader(
 
         page.screenshot(path="output/debug_original_after.png")
 
-        # ── 7. 分类选择 ───────────────────────────────────────────────────────
+        # ── 7. 分类选择 (已弃用) ──────────────────────────────────────────────────────
         if category:
-            _select_category(page, category)
+            logger.info(f"Category logic skipped. WeChat Web UI no longer supports category selectors. Relying on hashtags for {category!r}.")
             
         # ── 8. 合集选择与新建 ───────────────────────────────────────────────────
         if collection:
