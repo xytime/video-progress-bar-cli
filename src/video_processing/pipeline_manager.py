@@ -16,6 +16,8 @@
 | 2.2.0   | 2026-05-26 | Gemini_3.5_Flash_planning           | 封面引擎 2.0 联动：读取短标题/副标题/内容 hints，组装 payload 传给生成器 |
 | 2.3.0   | 2026-05-27 | Gemini_3.5_Flash                    | 新增下载后立即裁剪功能 (FFmpeg 流复制裁剪，支持 trim_start/trim_end) |
 | 2.3.1   | 2026-05-27 | Unknown_Model_planning              | 修复分片时无法导入 copywriter 的 ModuleNotFoundError 问题                      |
+| 2.3.2   | 2026-05-27 | Unknown_Model_planning              | 修复 slice_index > 0 时未执行导入代码导致的 UnboundLocalError 异常          |
+| 2.4.0   | 2026-05-27 | Unknown_Model_planning              | 强制子分片封面副标题显示：主标题 + {当前集}/{总集数} 集                      |
 """
 
 
@@ -325,6 +327,13 @@ class PipelineManager:
     # ── 主处理流程 ────────────────────────────────────────────────────────────
 
     def _process_single_video(self, video: Dict[str, Any]):
+        # [Unknown_Model_planning] 动态导入 scripts/copywriter.py 以获取截断算法（置于顶层以避免 UnboundLocalError）
+        import sys as _sys
+        _scripts_dir = str(self._PRJ_ROOT / "scripts")
+        if _scripts_dir not in _sys.path:
+            _sys.path.insert(0, _scripts_dir)
+        from copywriter import graceful_truncate_title
+
         yid   = video['youtube_id']
         title = video['title']
         url   = f"https://youtu.be/{yid}"
@@ -453,13 +462,6 @@ class PipelineManager:
                             parent_id = parent_video["id"] if parent_video else None
                             
                             slice_tasks = []
-                            # [Unknown_Model_planning] 动态导入 scripts/copywriter.py 以获取截断算法
-                            import sys as _sys
-                            _scripts_dir = str(self._PRJ_ROOT / "scripts")
-                            if _scripts_dir not in _sys.path:
-                                _sys.path.insert(0, _scripts_dir)
-                            from copywriter import graceful_truncate_title
-                            
                             for idx, ch in enumerate(chapters, start=1):
                                 prefix_title = graceful_truncate_title(title, max_len=6)
                                 ch_title = ch["title"]
@@ -578,6 +580,34 @@ class PipelineManager:
                         "content_hints": []
                     }
                     subtitle_file = self._OUT_DIR / f"{prefix}_subtitle.txt"
+                    
+                    # [Unknown_Model_planning] 强制子分段视频封面副标题：整体的标题 + {当前集}/{总集数} 集
+                    if slice_index > 0:
+                        parent_video = self.db.get_video_by_youtube_id(yid, 0)
+                        if parent_video:
+                            parent_zh = parent_video.get("zh_title") or parent_video.get("title") or ""
+                            # 剔除括号以防止副标题过长
+                            import re as _re
+                            parent_zh_clean = _re.sub(r'\([^)]*\)|（[^）]*）|\[[^\]]*\]|【[^】]*】', '', parent_zh).strip()
+                            
+                            parent_title_file = self._OUT_DIR / f"{yid}_title.txt"
+                            if parent_title_file.exists():
+                                try:
+                                    parent_short = parent_title_file.read_text(encoding="utf-8").strip()
+                                except Exception:
+                                    parent_short = graceful_truncate_title(parent_zh_clean, max_len=14)
+                            else:
+                                parent_short = graceful_truncate_title(parent_zh_clean, max_len=14)
+                                
+                            all_slices = self.db.get_slices_by_parent_yid(yid)
+                            total_cnt = len(all_slices) if all_slices else 1
+                            slice_subtitle = f"{parent_short} {slice_index}/{total_cnt}集"
+                            try:
+                                subtitle_file.write_text(slice_subtitle, encoding="utf-8")
+                                logger.info(f"Enforced slice subtitle: {slice_subtitle}")
+                            except Exception as e:
+                                logger.error(f"Failed to write slice subtitle file: {e}")
+
                     if subtitle_file.exists():
                         try:
                             cover_payload["subtitle"] = subtitle_file.read_text(encoding="utf-8").strip()

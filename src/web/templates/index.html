@@ -1403,6 +1403,15 @@
 
   const STEP_ORDER = ["PENDING","DOWNLOADING","TRANSCRIBING","COPYWRITING","PUBLISHING","PUBLISHED"];
 
+  function formatTrimTime(secStr) {
+    if (!secStr) return '0\'00';
+    const val = parseFloat(secStr);
+    if (isNaN(val)) return secStr;
+    const mins = Math.floor(val / 60);
+    const secs = Math.floor(val % 60);
+    return `${mins}'${secs.toString().padStart(2, '0')}`;
+  }
+
   function statusBadge(s) {
     const safe = (s || 'UNKNOWN').replace(/[^A-Z_]/g,'');
     return `<span class="badge badge-${safe}"><span class="badge-dot badge-dot-${safe}"></span>${s}</span>`;
@@ -1696,7 +1705,7 @@
           trimTimelineHtml = `
             <div class="trim-timeline-wrapper" style="margin-top: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
               <span style="font-size:11px; color:var(--accent2); font-weight:500; display:flex; align-items:center; gap:3px; white-space:nowrap;">
-                ✂️ 裁剪区间: ${v.trim_start || '0'} - ${v.trim_end || 'End'}
+                ✂️ 裁剪区间: ${formatTrimTime(v.trim_start || '0')} - ${formatTrimTime(v.trim_end || 'End')}
               </span>
               <div style="flex:1; min-width: 100px; max-width: 180px;">
                 <div class="trim-timeline-bar">
@@ -2149,7 +2158,7 @@
               <td class="info-cell" style="padding-left: 24px;">
                 <div class="video-zh-title" style="padding-left: 20px;">${s.title}</div>
                 <div class="video-meta-row" style="padding-left: 20px;">
-                  <span>分段区间: ⏱ <strong>${s.trim_start} - ${s.trim_end}</strong></span> · ${durationChip}
+                  <span>分段区间: ⏱ <strong>${formatTrimTime(s.trim_start)} - ${formatTrimTime(s.trim_end)}</strong></span> · ${durationChip}
                 </div>
                 ${errorToggle}
               </td>
@@ -2713,7 +2722,7 @@
       const d = await r.json();
 
       if (d.success) {
-        let trimText = (d.trim_start || d.trim_end) ? ` (✂️ ${d.trim_start || '0'}-${d.trim_end || 'End'})` : '';
+        let trimText = (d.trim_start || d.trim_end) ? ` (✂️ ${formatTrimTime(d.trim_start || '0')}-${formatTrimTime(d.trim_end || 'End')})` : '';
         fb.textContent = `✅ 已加入队列：${d.title}${trimText}（来自 ${d.channel_name}）`;
         fb.className = 'add-channel-feedback ok';
         input.value = '';
