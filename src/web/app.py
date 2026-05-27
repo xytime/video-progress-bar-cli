@@ -14,6 +14,7 @@
 | 2.3.0 | 2026-05-27 | Gemini_2.0_Flash_fast               | 适配微信扫码登录 QR 服务与状态查询 API |
 | 2.3.1 | 2026-05-27 | Gemini_3.5_Flash_planning           | 修复由于缺少 re 模块导致的视频添加接口 500 报错 |
 | 2.4.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 delete_video 接口支持单个 slice 物理删除；新增获取所有 slices 与重试单个 slice 的 API |
+| 2.5.0 | 2026-05-27 | Unknown_Model_planning              | 新增 process_slice_now 接口以支持立即强制执行切片子任务 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -651,6 +652,50 @@ def retry_slice(youtube_id: str, slice_index: int):
         "success": True,
         "triggered": triggered,
         "message": "已重置并立即重新触发" if triggered else "已重置为 PENDING，等待父任务下载或前导分集发布",
+    }
+
+
+@app.post("/api/videos/{youtube_id}/slices/{slice_index}/process")
+def process_slice_now(youtube_id: str, slice_index: int):
+    """[Unknown_Model_planning] 立即处理指定切片子任务，忽略分数。"""
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+    if not video:
+        raise HTTPException(status_code=404, detail="切片任务不存在")
+
+    if video.get("status") != "PENDING":
+        return {
+            "success": False,
+            "error": f"只有 PENDING 状态的切片可以启动（当前：{video['status']}）"
+        }
+
+    # 检查父视频文件是否下载就绪
+    from video_processing.pipeline_manager import PipelineManager
+    pm = PipelineManager()
+    parent_file = pm._find_downloaded_video(youtube_id)
+    if not parent_file:
+        return {"success": False, "error": "父视频主文件尚未就绪，请先下载或重试父视频。"}
+
+    # 检查顺序锁（前序子任务是否已发布）
+    all_slices = db.get_slices_by_parent_yid(youtube_id)
+    prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] not in ('PUBLISHED', 'IGNORED', 'COMPLETED')]
+    if prev_not_published:
+        prev_indices = [s['slice_index'] for s in prev_not_published]
+        return {
+            "success": False,
+            "error": f"前序切片 {prev_indices} 尚未发布/跳过/手动上传，当前切片已被顺序锁阻断。"
+        }
+
+    # 抢占任务
+    if not db.claim_video_for_processing(youtube_id, slice_index=slice_index):
+        return {"success": False, "error": "切片已被其他进程抢占。"}
+
+    fresh = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+    if fresh:
+        _trigger_video_async(fresh)
+
+    return {
+        "success": True,
+        "message": f"已在后台启动切片子任务 [{youtube_id} s{slice_index}] 处理"
     }
 
 

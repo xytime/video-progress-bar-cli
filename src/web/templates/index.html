@@ -1608,6 +1608,8 @@
         const retryBtn = v.status === 'LOGIN_REQUIRED'
           ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
              <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="硬重置">🗑 重置</button>` + deleteBtn
+          : v.status === 'PENDING'
+          ? `<button class="btn-retry btn-reset" onclick="processVideoNow('${v.youtube_id}')" title="立即启动视频管线">⚡ 执行</button>` + deleteBtn
           : isRetryable
           ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传">🔄 重试</button>
              <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物重新下载">🗑 重置</button>` + deleteBtn
@@ -2132,6 +2134,8 @@
           const retryBtn = s.status === 'LOGIN_REQUIRED'
             ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
                <button class="btn-hard-reset" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="重试分集">🗑 重试</button>` + deleteBtn
+            : s.status === 'PENDING'
+            ? `<button class="btn-retry btn-reset" onclick="processSliceNow('${s.youtube_id}', ${s.slice_index})" title="立即执行分集">⚡ 执行</button>` + deleteBtn
             : isRetryable
             ? `<button class="btn-retry" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="重试分集">🔄 重试</button>` + deleteBtn
             : isStuck
@@ -2206,6 +2210,56 @@
         fetchStats();
       } else {
         showToast('❌ 重试失败: ' + (res.error || '未知错误'), 'error');
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+      }
+    } catch (e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+    }
+  }
+
+  async function processVideoNow(youtubeId) {
+    navigator.vibrate(15);
+    const btn = event?.target;
+    const oldText = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span>';
+    }
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/process`, { method: 'POST' });
+      const res = await r.json();
+      if (res.success) {
+        showToast('✅ ' + (res.message || '管线已手动启动'));
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ 启动失败: ' + (res.error || '未知错误'), 'error');
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+      }
+    } catch (e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+    }
+  }
+
+  async function processSliceNow(youtubeId, sliceIndex) {
+    navigator.vibrate(15);
+    const btn = event?.target;
+    const oldText = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span>';
+    }
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/slices/${sliceIndex}/process`, { method: 'POST' });
+      const res = await r.json();
+      if (res.success) {
+        showToast('✅ ' + (res.message || '分集任务已启动'));
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ 启动失败: ' + (res.error || '未知错误'), 'error');
         if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
       }
     } catch (e) {
