@@ -14,6 +14,7 @@
 | 1.8.0   | 2026-05-27 | Claude_Sonnet_4.6_Thinking_planning     | AI重构: 用 google-genai + Pydantic response_schema 替换手工JSON解析，彻底解决分类不准问题 |
 | 1.9.0   | 2026-05-27 | Claude_Sonnet_4.6_Thinking_planning     | 优雅截断: 引入 graceful_truncate_title，替换全部硬截断，消除半句标题问题 |
 | 1.9.1   | 2026-05-27 | Gemini_3.5_Flash_planning               | 算法调优: graceful_truncate_title 预处理过滤括号，并将排序策略由尾部优先改为首部语义优先，防截断偏斜 |
+| 1.10.0  | 2026-05-27 | Gemini_3.1_Pro_High_planning            | P0体验修复: 引入斐波那契重试；新增正则提取主干降级方案；graceful_truncate_title 增加悬空词惩罚评分 |
 """
 
 import re
@@ -22,6 +23,7 @@ import os
 import json
 import argparse
 import logging
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -288,8 +290,24 @@ def graceful_truncate_title(title: str, max_len: int = 16, min_len: int = 6) -> 
                 candidates.append((i, len(cleaned), cleaned))
 
     if candidates:
-        # [Gemini_3.5_Flash_planning] 核心优化点：优先选择靠左的起始片段（i 升序），其次选择长度大的片段（长度降序）
-        candidates.sort(key=lambda x: (x[0], -x[1]))
+        # [Gemini_3.1_Pro_High_planning] v1.10.0 核心优化点：引入质量评分惩罚悬空词和转折词
+        def score_candidate(cand_tuple):
+            start_idx, length, text = cand_tuple
+            score = start_idx  # 基础分是起始位置，越小越好 (即优先靠左)
+            # 惩罚悬空陈述词结尾
+            if re.search(r'(表示|认为|指出|宣布|警告|谈到|说|称|直言|坦言|解析|探讨|强调|证实|透露|预计|预测|建议|呼吁|提醒|坚信)$', text):
+                score += 100
+            # 惩罚以转折词或连词开头
+            if re.match(r'^(但是|但|而且|并且|和|与|或|以及|却)', text):
+                score += 50
+            # 多余的单边引号惩罚
+            if text.count('“') != text.count('”') or text.count('"') % 2 != 0:
+                score += 30
+            # 长度得分，越长越好，转为负数加上去，影响较小
+            score -= (length * 0.1)
+            return score
+
+        candidates.sort(key=score_candidate)
         return candidates[0][2]
 
     # 4. 兜底裁剪：先去末尾标点，再按字符硬截，最后剔除末尾虚词/连接词
@@ -304,6 +322,39 @@ def graceful_truncate_title(title: str, max_len: int = 16, min_len: int = 6) -> 
 
 # ── 后备路径 ─────────────────────────────────────────────────────────────────
 
+def extract_headline_workaround(translated_title: str) -> tuple[str, str]:
+    """[v1.10.0 Workaround] 借鉴专业新闻解析器提取主干语义标题"""
+    text = translated_title.strip()
+    # 去除常见的末尾时间戳（如 7.30）
+    text = re.sub(r'\s*\d+\.\d+\s*$', '', text).strip()
+    
+    verbs = "表示|认为|指出|宣布|警告|谈到|说|称|直言|坦言|解析|探讨|强调|证实|透露|预计|预测|建议|呼吁|提醒|坚信"
+    
+    # 模式 1：发言人 + 动词 + 逗号/冒号 + 言论
+    # 例：联邦银行老板表示，人工智能要做好准备 -> 人工智能要做好准备
+    m1 = re.match(r'^([^，,：:+]+(?:' + verbs + r'))[，,：:\s]+(.+)$', text)
+    if m1:
+        subject_clause, content_clause = m1.group(1), m1.group(2)
+        if len(content_clause.strip()) >= 5: # 长度安全网兜底
+            return content_clause.strip(), subject_clause.strip()
+            
+    # 模式 2：言论 + 逗号 + 发言人 + 动词
+    m2 = re.match(r'^(.+?)[，,][\s]*([^，,：:+]+(?:' + verbs + r'))$', text)
+    if m2:
+        content_clause, subject_clause = m2.group(1), m2.group(2)
+        if len(content_clause.strip()) >= 5:
+            return content_clause.strip(), subject_clause.strip()
+            
+    # 模式 3：主题 + 冒号 + 陈述
+    m3 = re.match(r'^([^：:+]+)[：:][\s]*(.+)$', text)
+    if m3:
+        topic_clause, statement_clause = m3.group(1), m3.group(2)
+        if len(statement_clause.strip()) >= 5:
+            return statement_clause.strip(), topic_clause.strip()
+            
+    return text, ""
+
+
 def _translate_fallback(title: str, description: str) -> dict:
     """Gemini 不可用时，用 deep-translator 作兜底翻译"""
     logger.warning("Gemini unavailable — falling back to deep-translator")
@@ -313,7 +364,14 @@ def _translate_fallback(title: str, description: str) -> dict:
         zh_title = tr.translate(title) or title
         desc_lines = [l.strip() for l in description.split("\n") if l.strip()]
         zh_desc = tr.translate(" ".join(desc_lines[:3])) if desc_lines else ""
-        short_title = graceful_truncate_title(zh_title)  # [Claude_Sonnet_4.6_Thinking_planning] v1.9.0 优雅截断
+        
+        # [Gemini_3.1_Pro_High_planning] 提取主干并兜底
+        core_title, hook_subtitle = extract_headline_workaround(zh_title)
+        short_title = graceful_truncate_title(core_title)
+        # 如果截断后太短，回退到原始
+        if len(short_title) < 6:
+            short_title = graceful_truncate_title(zh_title)
+            hook_subtitle = ""
         
         # 动态分类与文案装配 (泛化解决)
         cat = classify_category(title, description)
@@ -325,7 +383,7 @@ def _translate_fallback(title: str, description: str) -> dict:
         copy_text += f"{config['tags']}\n🤖 {config['cta']}"
         return {
             "short_title":   short_title,
-            "hook_subtitle": "",
+            "hook_subtitle": hook_subtitle,
             "copy":          copy_text,
             "category":      cat,
             "content_hints": [],
@@ -419,15 +477,31 @@ def generate_wechat_content(title: str, description: str,
 
         logger.info(f"[v1.8.0] Calling Gemini [{model_name}] with response_schema...")
         client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=_SYSTEM_INSTRUCTION,
-                response_mime_type="application/json",
-                response_schema=WeChatContentSchema,  # 强类型，无需 json.loads
-            ),
-        )
+        
+        # [Gemini_3.1_Pro_High_planning] v1.10.0 引入斐波那契重试退避机制
+        fib_delays = [1, 2, 3]
+        max_retries = len(fib_delays)
+        response = None
+        
+        for attempt in range(max_retries + 1):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=_SYSTEM_INSTRUCTION,
+                        response_mime_type="application/json",
+                        response_schema=WeChatContentSchema,
+                    ),
+                )
+                break
+            except Exception as e:
+                if attempt == max_retries:
+                    logger.error(f"Gemini API call failed after {max_retries} retries: {e}")
+                    raise e
+                delay = fib_delays[attempt]
+                logger.warning(f"Gemini API attempt {attempt+1} failed: {e}. Retrying in {delay}s...")
+                time.sleep(delay)
 
         parsed: Optional[WeChatContentSchema] = response.parsed
         if parsed is None:

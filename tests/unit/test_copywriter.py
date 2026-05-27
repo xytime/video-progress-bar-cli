@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from scripts.copywriter import classify_category, DEFAULT_CATEGORY, graceful_truncate_title
+from scripts.copywriter import classify_category, DEFAULT_CATEGORY, graceful_truncate_title, extract_headline_workaround
 
 
 # ── 原有功能测试 ─────────────────────────────────────────────────────────────
@@ -128,3 +128,37 @@ def test_graceful_truncate_title_parentheses_only():
     # 去除括号后: 这是一款非常好的产品 (10字)，合规 [6, 16]
     truncated = graceful_truncate_title(title, max_len=16, min_len=6)
     assert truncated == "这是一款非常好的产品"
+
+
+def test_extract_headline_workaround():
+    """[Gemini_3.1_Pro_High_planning] v1.10.0 测试降级方案正则提取主干语义标题"""
+    # 模式1: 发言人在前
+    c, s = extract_headline_workaround("联邦银行老板表示，人工智能要做好准备，但不一定要惊慌 7.30")
+    assert c == "人工智能要做好准备，但不一定要惊慌"
+    assert s == "联邦银行老板表示"
+
+    # 模式2: 发言人在后
+    c, s = extract_headline_workaround("这真是一件大好事，马斯克指出")
+    assert c == "这真是一件大好事"
+    assert s == "马斯克指出"
+    
+    # 模式3: 冒号主题
+    c, s = extract_headline_workaround("最新研判：A股将迎来长期大牛市")
+    assert c == "A股将迎来长期大牛市"
+    assert s == "最新研判"
+
+    # 长度安全网测试：提取出的主干少于5个字，应当放弃提取
+    c, s = extract_headline_workaround("专家表示，你好")
+    assert c == "专家表示，你好"  # 原样返回
+    assert s == ""
+
+
+def test_graceful_truncate_title_dangling_reporting_clause():
+    """[Gemini_3.1_Pro_High_planning] v1.10.0 测试悬空动词/连词惩罚算法"""
+    # 如果不惩罚“表示”，原本由于它在最左边，且长度足够，会被优先选中
+    title = "联邦银行老板表示，人工智能要做好准备，但不一定要惊慌"
+    truncated = graceful_truncate_title(title, max_len=16, min_len=6)
+    # 因为“联邦银行老板表示”结尾有“表示”被重度惩罚(score+100)
+    # “但是不一定要惊慌”以“但是”/“但”开头被中度惩罚(score+50)
+    # 最终应选择中间正常的“人工智能要做好准备”
+    assert truncated == "人工智能要做好准备"
