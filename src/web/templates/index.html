@@ -1731,7 +1731,16 @@
           likeRatio ? `<span class="meta-chip">👍 ${likeRatio}</span>` : '',
         ].join('');
 
-        const sliceBadge = v.slices_count > 0 ? `<span class="panel-badge" style="margin-left: 8px; font-size:9px; padding:1px 5px; background:rgba(124,110,247,0.1); color:var(--accent2);">${v.slices_count}个分段</span>` : '';
+        // [Unknown_Model_planning] 显示 已完成集数/全部集数 状态标签，按全部完成与否区分颜色
+        let sliceBadge = '';
+        if (v.slices_count > 0) {
+          const completedCount = v.completed_slices_count || 0;
+          const totalCount = v.slices_count;
+          const isAllCompleted = completedCount === totalCount;
+          const badgeBg = isAllCompleted ? 'rgba(52,211,153,0.15)' : 'rgba(124,110,247,0.15)';
+          const badgeColor = isAllCompleted ? '#6ee7b7' : 'var(--accent2)';
+          sliceBadge = `<span class="panel-badge" style="margin-left: 8px; font-size:9px; padding:1px 5px; background:${badgeBg}; color:${badgeColor}; font-weight:500;">已完成 ${completedCount}/${totalCount} 集</span>`;
+        }
         const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${sliceBadge}${metaChips ? ' · ' + metaChips : ''}</div>`;
 
         // [Gemini_2.5_Pro_planning] 封面缩略图单元格

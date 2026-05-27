@@ -12,6 +12,7 @@
 | 2.5.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 修复 _init_db 中遗漏推荐频道表 recommended_channels 的创建问题 |
 | 2.5.2   | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 新增 get_detailed_stats 方法提供父子任务的细分状态统计数据 |
 | 2.5.3   | 2026-05-27 | Unknown_Model_planning              | 修复已分片(SEGMENTED)父视频在后台仪表盘各 Tab 中隐藏不可见的 Bug |
+| 2.5.4   | 2026-05-27 | Unknown_Model_planning              | 仅当切片全部完成时才允许父视频进入“已完成”Tab，否则根据切片状态归入“处理中”或“错误”Tab |
 """
 
 import sqlite3
@@ -439,12 +440,30 @@ class PipelineDB:
         """
         # [Gemini_3.5_Flash_planning] 增加了 parent_id IS NULL 的前置过滤，实现主列表仅展现主任务，切片在树形中折叠
         if tab == 'completed':
-            # [Unknown_Model_planning] 包括已分集(SEGMENTED)的父任务，以便在已完成列表中查看和展开
-            condition = "pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'SEGMENTED') AND pv.parent_id IS NULL"
+            # [Unknown_Model_planning] 父任务在所有切片都完成后才能进入 completed
+            condition = """(
+                (pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') AND pv.parent_id IS NULL)
+                OR
+                (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
+                 (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) = 0)
+            )"""
         elif tab == 'error':
-            condition = "pv.status IN ('FAILED', 'LOGIN_REQUIRED') AND pv.parent_id IS NULL"
+            # [Unknown_Model_planning] 父任务下有任何切片失败时，进入 error tab
+            condition = """(
+                (pv.status IN ('FAILED', 'LOGIN_REQUIRED') AND pv.parent_id IS NULL)
+                OR
+                (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
+                 (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) > 0)
+            )"""
         elif tab == 'active':
-            condition = "pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING') AND pv.parent_id IS NULL"
+            # [Unknown_Model_planning] 父任务在切片未全部完成且没有失败时，进入 active tab
+            condition = """(
+                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING') AND pv.parent_id IS NULL)
+                OR
+                (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
+                 (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
+                 (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0)
+            )"""
         elif tab == 'queue':
             condition = "pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL"
         else:
@@ -459,10 +478,11 @@ class PipelineDB:
             )
             total_count = cursor.fetchone()["cnt"]
 
-            # [Gemini_3.5_Flash_planning] 查询时，利用子查询带出子切片数量 count
+            # [Unknown_Model_planning] 查询时，利用子查询带出子切片数量 count 和已完成子切片数量 completed_slices_count
             cursor = conn.execute(
                 f"""SELECT pv.*, COALESCE(rc.channel_name, pv.channel_id) AS channel_name,
-                           (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id) AS slices_count
+                           (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id) AS slices_count,
+                           (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) AS completed_slices_count
                     FROM processed_videos pv
                     LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id
                     WHERE {condition}
@@ -491,12 +511,29 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.execute("""
                 SELECT
-                    SUM(CASE WHEN status = 'PENDING' AND score < 75 AND parent_id IS NULL THEN 1 ELSE 0 END) as waitlist,
-                    SUM(CASE WHEN status = 'PENDING' AND score >= 75 AND parent_id IS NULL THEN 1 ELSE 0 END) as queue,
-                    SUM(CASE WHEN status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING') AND parent_id IS NULL THEN 1 ELSE 0 END) as active,
-                    SUM(CASE WHEN status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'SEGMENTED') AND parent_id IS NULL THEN 1 ELSE 0 END) as completed,
-                    SUM(CASE WHEN status IN ('FAILED', 'LOGIN_REQUIRED') AND parent_id IS NULL THEN 1 ELSE 0 END) as error
-                FROM processed_videos
+                    SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 THEN 1 ELSE 0 END) as waitlist,
+                    SUM(CASE WHEN pv.status = 'PENDING' AND pv.score >= 75 THEN 1 ELSE 0 END) as queue,
+                    SUM(CASE WHEN (
+                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING')
+                        OR
+                        (pv.status = 'SEGMENTED' AND 
+                         (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
+                         (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0)
+                    ) THEN 1 ELSE 0 END) as active,
+                    SUM(CASE WHEN (
+                        pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')
+                        OR
+                        (pv.status = 'SEGMENTED' AND 
+                         (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) = 0)
+                    ) THEN 1 ELSE 0 END) as completed,
+                    SUM(CASE WHEN (
+                        pv.status IN ('FAILED', 'LOGIN_REQUIRED')
+                        OR
+                        (pv.status = 'SEGMENTED' AND 
+                         (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) > 0)
+                    ) THEN 1 ELSE 0 END) as error
+                FROM processed_videos pv
+                WHERE pv.parent_id IS NULL
             """)
             row = cursor.fetchone()
             if row:

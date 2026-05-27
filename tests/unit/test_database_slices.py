@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                    | Description                                     |
 |---------|------------|---------------------------|-------------------------------------------------|
+| 1.1.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证多切片视频在不同子切片状态下的 Tab 归属逻辑 |
 | 1.0.0   | 2026-05-27 | Gemini_3.5_Flash_planning | Initial TDD test creation for database composite keys |
 """
 
@@ -115,3 +116,90 @@ def test_batch_insertion_and_cascade(temp_db):
     # 子任务应当被外键级联删除
     sub_slices_after = db.get_slices_by_parent_yid("parent_vid")
     assert len(sub_slices_after) == 0
+
+def test_segmented_parent_tab_routing(temp_db):
+    """[Unknown_Model_planning] 验证当父视频为 SEGMENTED 时，根据子视频切片的不同状态分别路由到不同的选项卡"""
+    db = PipelineDB(temp_db)
+    
+    # 1. 插入父视频 (STATUS = SEGMENTED)
+    db.add_video(
+        youtube_id="segmented_parent",
+        title="Segmented Video Parent",
+        channel_id="channel_1",
+        score=90,
+        slice_index=0
+    )
+    db.update_video_status("segmented_parent", "SEGMENTED", slice_index=0)
+    
+    parent_video = db.get_video_by_youtube_id("segmented_parent", 0)
+    parent_id = parent_video["id"]
+    
+    # 2. 插入两个子视频切片，默认状态为 PENDING
+    slices = [
+        {
+            "youtube_id": "segmented_parent",
+            "slice_index": 1,
+            "parent_id": parent_id,
+            "title": "Slice 1",
+            "channel_id": "channel_1",
+            "score": 90,
+            "source": "AUTO"
+        },
+        {
+            "youtube_id": "segmented_parent",
+            "slice_index": 2,
+            "parent_id": parent_id,
+            "title": "Slice 2",
+            "channel_id": "channel_1",
+            "score": 90,
+            "source": "AUTO"
+        }
+    ]
+    db.batch_add_videos(slices)
+    
+    # 因为子任务在 PENDING 状态（未完成），父任务应该被归入 active（处理中）选项卡，而不应该在 completed 选项卡中
+    videos, total = db.get_paginated_videos(tab="active")
+    assert any(v["youtube_id"] == "segmented_parent" for v in videos)
+    
+    videos_comp, total_comp = db.get_paginated_videos(tab="completed")
+    assert not any(v["youtube_id"] == "segmented_parent" for v in videos_comp)
+    
+    counts = db.get_tab_counts()
+    assert counts["active"] == 1
+    assert counts["completed"] == 0
+    assert counts["error"] == 0
+
+    # 3. 将 Slice 1 改为 FAILED，验证父任务进入 error 选项卡
+    db.update_video_status("segmented_parent", "FAILED", slice_index=1)
+    
+    videos_err, total_err = db.get_paginated_videos(tab="error")
+    assert any(v["youtube_id"] == "segmented_parent" for v in videos_err)
+    
+    videos_act, total_act = db.get_paginated_videos(tab="active")
+    assert not any(v["youtube_id"] == "segmented_parent" for v in videos_act)
+    
+    counts = db.get_tab_counts()
+    assert counts["active"] == 0
+    assert counts["completed"] == 0
+    assert counts["error"] == 1
+
+    # 4. 将 Slice 1 改回 PUBLISHED，Slice 2 改为 PUBLISHED，全部完成，验证父任务进入 completed 选项卡
+    db.update_video_status("segmented_parent", "PUBLISHED", slice_index=1)
+    db.update_video_status("segmented_parent", "PUBLISHED", slice_index=2)
+    
+    videos_comp2, total_comp2 = db.get_paginated_videos(tab="completed")
+    assert any(v["youtube_id"] == "segmented_parent" for v in videos_comp2)
+    
+    # 验证 slices_count 与 completed_slices_count 字段带出正确
+    parent_comp = next(v for v in videos_comp2 if v["youtube_id"] == "segmented_parent")
+    assert parent_comp["slices_count"] == 2
+    assert parent_comp["completed_slices_count"] == 2
+    
+    videos_err2, total_err2 = db.get_paginated_videos(tab="error")
+    assert not any(v["youtube_id"] == "segmented_parent" for v in videos_err2)
+    
+    counts = db.get_tab_counts()
+    assert counts["active"] == 0
+    assert counts["completed"] == 1
+    assert counts["error"] == 0
+
