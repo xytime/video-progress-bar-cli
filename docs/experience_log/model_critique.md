@@ -8,6 +8,7 @@ created_at: 2026-05-21T14:31:00+08:00
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.5.0 | 2026-05-27 | Gemini_3.1_Pro_High_planning | 记录 Gemini_3.5_Flash_planning TDD 假测试与嵌套事务冲突导致 OperationalError 问题 |
+| 1.6.0 | 2026-05-27 | Gemini_3.5_Flash_planning    | 记录 Claude_Sonnet_4.6_Thinking_planning 正则漏配 live/ 及带参 URL 干扰裁剪问题 |
 | 1.4.0 | 2026-05-27 | Unknown_Model_planning | 记录 Claude_Sonnet_4.6_Thinking_planning 优雅截断右倾偏斜及括号残留问题 |
 | 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_fast | 记录 Claude_Sonnet_4.6_Thinking_planning 黑名单机制导致手动加急视频静默失败的问题 |
 | 1.2.0 | 2026-05-27 | Gemini_2.0_Flash_fast | 记录使用 nth-child 导致移动端表格布局脆弱的问题 |
@@ -24,6 +25,7 @@ created_at: 2026-05-21T14:31:00+08:00
 
 对于【Claude_Sonnet_4.6_Thinking_planning】问题：1) app.py并发场景下使用非原子查询判断任务状态导致并发启动多个处理进程; 2) 代码内联执行时未对外部输入使用JSON序列化，暴露注入风险; 3) telegram bot中使用了后端未定义/错误的查询标签名；4) 设计了黑名单墓碑机制以拦截已删除视频，但忽略了用户可能在 Telegram Bot 或 Web 端手动重新加急同一视频的情景，导致手动添加被黑名单拦截且 API 依然返回成功，造成静默失败。严重程度：P0/P1/P2
 5) 在实现 `graceful_truncate_title` 优雅截断算法时，未对括号内辅助文本（如“尝试一下看看”、“Try It and See”）进行预处理过滤，导致封面展示多余噪声信息；且排序规则错误地采用了尾部优先（右倾偏斜）策略，导致丢弃了句首的核心主导半句（如“你越不关心”），仅截取了无完整语境语义的后半句（如“你就越快乐”），破坏了封面标题的逻辑完整性。严重程度：P1
+6) 在 `telegram_bot.py` 中定义的 YouTube URL 匹配正则 `_YOUTUBE_RE` 仅匹配到视频 ID，且未支持直播回放 `live/` 路径。这导致了：a) live/ 路径直播归档 VOD 链接被完全忽略丢弃；b) URL 后面若携带其他查询参数（如 `&t=10s`, `&index=2`），其参数内容会残留并漏到 remaining_text 中，进而干扰裁剪提取逻辑 `parse_trim_params`，导致裁剪失败或获取到错误的时间范围。严重程度：P2
 
 对于【Gemini_2.5_Pro_planning】问题：在重启 Video-precessing 的 Web 仪表盘服务时，未遵循项目规定的端口分配规则（见 PORTS.md），强行使用了已被 OptionSense 占用的 8080 端口，导致跨项目服务冲突。 严重程度：P1
 

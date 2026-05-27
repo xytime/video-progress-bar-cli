@@ -12,6 +12,7 @@
 | 1.1.2 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将 YouTube URL 链接处理重归程序接管，不使用 Agent |
 | 1.2.0 | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 status] 新增 cmd_status 宏观状态指令并调整命令路由 |
 | 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 cmd_retry 与 cmd_delete 命令，支持可选 [slice_index] 对切片子任务的操作 |
+| 1.4.0 | 2026-05-27 | Gemini_3.5_Flash_planning           | 优化 YouTube URL 正则以原生支持直播回放 (live/) 与完整提取带参数链接，防止裁剪干扰 |
 """
 from __future__ import annotations
 
@@ -47,7 +48,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("telegram_bot")
 
-_YOUTUBE_RE = re.compile(r"https?://(?:(?:www|m)\.)?(?:youtube\.com/(?:watch\?.*v=|shorts/)|youtu\.be/)[\w\-]+")
+# [Gemini_3.5_Flash_planning] 优化正则匹配，包含整个带参数的 URL (排除末尾标点)，并支持 live/ 路径
+_YOUTUBE_RE = re.compile(r"https?://(?:(?:www|m)\.)?(?:youtube\.com/(?:watch\?.*v=|shorts/|live/)|youtu\.be/)[^\s]+(?<![.,!?;:\)\"\'\]\}])")
 
 
 def _load_config() -> tuple[str, set[int]]:
