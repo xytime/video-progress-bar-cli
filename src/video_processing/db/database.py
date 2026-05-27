@@ -12,6 +12,10 @@
 | 2.0.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 1] 黑名单墓碑表、v7.0 新列迁移、人工评分锁、process_pid 追踪、add_video 黑名单前置检查 |
 | 2.0.1 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] LINT-5: 修宊 add_to_blacklist docstring 调用顺序说明 |
 | 2.0.2 | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Censor Engine] 新增 update_video_censor_status 用于写入内容审查审计数据 |
+| 2.1.0 | 2026-05-27 | Gemini_2.5_Pro_planning             | 排序优化：waitlist 按 created_at DESC，其他 tab 按 updated_at DESC；新增 batch_delete_video_records |
+| 2.2.0 | 2026-05-27 | Gemini_3.5_Flash                    | 新增 trim_start/trim_end 列以支持视频截取功能 |
+| 2.3.0 | 2026-05-27 | Gemini_3.5_Flash_fast               | 为 processed_videos 建立高频复合索引，防止 3 秒短轮询 SQLite 锁死 |
+| 2.4.0 | 2026-05-27 | Gemini_3.5_Flash_fast               | 手动添加视频时，自动从黑名单墓碑表移除以允许重新处理 |
 """
 import sqlite3
 import os
@@ -102,12 +106,13 @@ class PipelineDB:
             if 'upload_date' not in columns:
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN upload_date TEXT DEFAULT NULL")
 
-            # [Claude_Sonnet_4.6_Thinking_planning] v7.0 新列迁移（ADD COLUMN only，不影响现有数据）
             _v7_cols = {
                 'censor_tag':         "TEXT DEFAULT NULL",
                 'censor_score':       "INTEGER DEFAULT NULL",
                 'is_manually_scored': "INTEGER DEFAULT 0",
                 'process_pid':        "INTEGER DEFAULT NULL",
+                'trim_start':         "TEXT DEFAULT NULL",
+                'trim_end':           "TEXT DEFAULT NULL",
             }
             for col, definition in _v7_cols.items():
                 if col not in columns:
@@ -127,6 +132,18 @@ class PipelineDB:
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_status_updated 
                 ON processed_videos(status, updated_at DESC)
+            ''')
+            
+            # [Gemini_3.5_Flash_fast] 建立复合索引 (status, score, created_at DESC)
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_status_score_created
+                ON processed_videos(status, score, created_at DESC)
+            ''')
+            
+            # [Gemini_3.5_Flash_fast] 建立复合索引 (status, score, updated_at DESC)
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_status_score_updated
+                ON processed_videos(status, score, updated_at DESC)
             ''')
             
             conn.commit()
@@ -173,21 +190,27 @@ class PipelineDB:
         view_count: Optional[int] = None,
         like_count: Optional[int] = None,
         upload_date: Optional[str] = None,
+        trim_start: Optional[str] = None,
+        trim_end: Optional[str] = None,
     ) -> bool:
         # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 前置黑名单检查，防止已删除视频被爬虫二次拉取
         if self.is_blacklisted(youtube_id):
-            self._logger.warning(f"[Blacklist] Blocked re-add of blacklisted video: {youtube_id}")
-            return False
+            if source == 'MANUAL':
+                # [Gemini_3.5_Flash_fast] 手动重新添加的视频，自动从黑名单中移出，允许继续加工
+                self.remove_from_blacklist(youtube_id)
+            else:
+                self._logger.warning(f"[Blacklist] Blocked re-add of blacklisted video: {youtube_id}")
+                return False
 
         with self.get_connection() as conn:
             try:
                 conn.execute(
                     """INSERT INTO processed_videos
                        (youtube_id, title, channel_id, score, status, zh_title, source,
-                        duration_sec, view_count, like_count, upload_date)
-                       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?)""",
+                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end)
+                       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (youtube_id, title, channel_id, score, zh_title, source,
-                     duration_sec, view_count, like_count, upload_date)
+                     duration_sec, view_count, like_count, upload_date, trim_start, trim_end)
                 )
                 conn.commit()
                 return True
@@ -292,7 +315,12 @@ class PipelineDB:
             return {row["status"]: row["cnt"] for row in cursor.fetchall()}
 
     def get_paginated_videos(self, tab: str = 'waitlist', page: int = 1, size: int = 20) -> tuple[List[Dict[str, Any]], int]:
-        """按分页和 Tab 类型返回视频列表和总数。"""
+        """按分页和 Tab 类型返回视频列表和总数。
+
+        [Gemini_2.5_Pro_planning] 排序策略：
+        - waitlist: 按 created_at DESC（最新发现的视频在最前）
+        - 其他所有 tab: 按 updated_at DESC（最近有状态变化的在最前）
+        """
         if tab == 'completed':
             condition = "pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')"
         elif tab == 'error':
@@ -303,7 +331,10 @@ class PipelineDB:
             condition = "pv.status = 'PENDING' AND pv.score >= 75"
         else: # waitlist (默认，待筛选)
             condition = "pv.status = 'PENDING' AND pv.score < 75"
-            
+
+        # [Gemini_2.5_Pro_planning] waitlist 按入库时间倒序，其他按最新操作时间倒序
+        order_col = "pv.created_at" if tab == 'waitlist' else "pv.updated_at"
+
         offset = (page - 1) * size
         with self.get_connection() as conn:
             # 获取总数
@@ -311,18 +342,19 @@ class PipelineDB:
                 f"SELECT COUNT(*) as cnt FROM processed_videos pv WHERE {condition}"
             )
             total_count = cursor.fetchone()["cnt"]
-            
+
             # 获取分页数据，LEFT JOIN 带出频道名称
             cursor = conn.execute(
                 f"""SELECT pv.*, COALESCE(rc.channel_name, pv.channel_id) AS channel_name
                     FROM processed_videos pv
                     LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id
                     WHERE {condition}
-                    ORDER BY pv.updated_at DESC LIMIT ? OFFSET ?""",
+                    ORDER BY {order_col} DESC LIMIT ? OFFSET """
+                + "?",
                 (size, offset)
             )
             videos = [dict(row) for row in cursor.fetchall()]
-            
+
         return videos, total_count
 
     def get_tab_counts(self) -> Dict[str, int]:
@@ -397,6 +429,42 @@ class PipelineDB:
                 self._logger.error(f"delete_video_record failed for {youtube_id}: {e}")
                 return False
 
+    def batch_delete_video_records(self, youtube_ids: List[str], tombstone: bool = True) -> tuple[int, List[str]]:
+        """[Gemini_2.5_Pro_planning] 批量删除视频记录（可选写黑名单墓碑）。
+
+        Args:
+            youtube_ids: 要删除的 YouTube ID 列表
+            tombstone: 是否写入黑名单墓碑（默认 True）
+
+        Returns:
+            (deleted_count, failed_ids): 成功删除数量和失败的 ID 列表
+        """
+        if not youtube_ids:
+            return 0, []
+
+        deleted = 0
+        failed: List[str] = []
+        with self.get_connection() as conn:
+            try:
+                if tombstone:
+                    for yid in youtube_ids:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO blacklisted_videos (youtube_id, reason) VALUES (?, ?)",
+                            (yid, "user_deleted")
+                        )
+                # 批量删除 —— SQLite 支持多参数 IN (占位符)
+                placeholders = ",".join(["?"] * len(youtube_ids))
+                cursor = conn.execute(
+                    f"DELETE FROM processed_videos WHERE youtube_id IN ({placeholders})",
+                    youtube_ids
+                )
+                deleted = cursor.rowcount
+                conn.commit()
+            except Exception as e:
+                self._logger.error(f"batch_delete_video_records failed: {e}")
+                failed = list(youtube_ids)  # 全部标记为失败
+        return deleted, failed
+
     # --- v7.0 Blacklist DAL [Claude_Sonnet_4.6_Thinking_planning] ---
 
     def add_to_blacklist(self, youtube_id: str, reason: str = 'user_deleted') -> bool:
@@ -429,6 +497,21 @@ class PipelineDB:
                 (youtube_id,)
             )
             return cursor.fetchone() is not None
+
+    def remove_from_blacklist(self, youtube_id: str) -> bool:
+        """[Gemini_3.5_Flash_fast] 从黑名单中移出指定视频 ID，主要在手动添加已删除视频时使用。"""
+        with self.get_connection() as conn:
+            try:
+                conn.execute(
+                    "DELETE FROM blacklisted_videos WHERE youtube_id = ?",
+                    (youtube_id,)
+                )
+                conn.commit()
+                self._logger.info(f"[Blacklist] Removed from blacklist: {youtube_id}")
+                return True
+            except Exception as e:
+                self._logger.error(f"remove_from_blacklist failed for {youtube_id}: {e}")
+                return False
 
     def update_process_pid(self, youtube_id: str, pid: Optional[int]) -> None:
         """记录或清除当前处理该视频的子进程组 ID（用于 SIGTERM 精准击杀）。"""
