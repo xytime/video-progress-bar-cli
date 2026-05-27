@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                    | Description                                     |
 |---------|------------|---------------------------|-------------------------------------------------|
+| 1.2.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证 purge_stale_tasks, batch_add_videos 补齐 disable_slicing 以及 delete_slices_by_parent_id |
 | 1.1.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证多切片视频在不同子切片状态下的 Tab 归属逻辑 |
 | 1.0.0   | 2026-05-27 | Gemini_3.5_Flash_planning | Initial TDD test creation for database composite keys |
 """
@@ -219,3 +220,106 @@ def test_database_disable_slicing_column(temp_db):
     assert v_sliced["disable_slicing"] == 0
 
 
+def test_purge_stale_tasks_excludes_segmented(temp_db):
+    """[Unknown_Model_planning] 验证 purge_stale_tasks 运行后，SEGMENTED 和 IGNORED 的任务状态仍维持原样，不被重置"""
+    db = PipelineDB(temp_db)
+    
+    # 1. 插入状态为 SEGMENTED 和 IGNORED 的任务
+    db.add_video("yid_seg", "Segmented Video", "channel_1", slice_index=0)
+    db.update_video_status("yid_seg", "SEGMENTED", slice_index=0)
+    
+    db.add_video("yid_ignored", "Ignored Video", "channel_1", slice_index=1)
+    db.update_video_status("yid_ignored", "IGNORED", slice_index=1)
+    
+    # 2. 插入一个 DOWNLOADING 任务
+    db.add_video("yid_dl", "Downloading Video", "channel_1", slice_index=0)
+    db.update_video_status("yid_dl", "DOWNLOADING", slice_index=0)
+    
+    # 手动把他们的 updated_at 设置为 3 小时前，以触发过期
+    with db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET updated_at = datetime('now', '-3 hours')")
+        conn.commit()
+        
+    # 3. 运行清洗，清理 2 小时前的数据
+    purged_count = db.purge_stale_tasks(stale_hours=2)
+    
+    # 4. 验证只有 DOWNLOADING 的被重置了，SEGMENTED 和 IGNORED 没有被重置
+    v_seg = db.get_video_by_youtube_id("yid_seg", 0)
+    v_ignored = db.get_video_by_youtube_id("yid_ignored", 1)
+    v_dl = db.get_video_by_youtube_id("yid_dl", 0)
+    
+    assert v_seg["status"] == "SEGMENTED"
+    assert v_ignored["status"] == "IGNORED"
+    assert v_dl["status"] == "PENDING"
+    assert purged_count == 1
+
+
+def test_batch_add_videos_preserves_disable_slicing(temp_db):
+    """[Unknown_Model_planning] 验证批量插入子任务时，disable_slicing 值在数据库中正确持久化"""
+    db = PipelineDB(temp_db)
+    
+    slices = [
+        {
+            "youtube_id": "batch_sliced",
+            "slice_index": 1,
+            "title": "Slice 1",
+            "channel_id": "channel_1",
+            "score": 90,
+            "source": "AUTO",
+            "disable_slicing": 1
+        },
+        {
+            "youtube_id": "batch_sliced",
+            "slice_index": 2,
+            "title": "Slice 2",
+            "channel_id": "channel_1",
+            "score": 90,
+            "source": "AUTO",
+            "disable_slicing": 0
+        }
+    ]
+    
+    db.batch_add_videos(slices)
+    
+    v1 = db.get_video_by_youtube_id("batch_sliced", 1)
+    v2 = db.get_video_by_youtube_id("batch_sliced", 2)
+    
+    assert v1["disable_slicing"] == 1
+    assert v2["disable_slicing"] == 0
+
+
+def test_delete_slices_by_parent_id(temp_db):
+    """[Unknown_Model_planning] 验证 delete_slices_by_parent_id 能成功删除关联子切片记录，但保留父任务"""
+    db = PipelineDB(temp_db)
+    
+    db.add_video("parent_yid", "Parent title", "channel_1", slice_index=0)
+    parent = db.get_video_by_youtube_id("parent_yid", 0)
+    parent_id = parent["id"]
+    
+    slices = [
+        {
+            "youtube_id": "parent_yid",
+            "slice_index": 1,
+            "parent_id": parent_id,
+            "title": "Slice 1",
+            "channel_id": "channel_1"
+        },
+        {
+            "youtube_id": "parent_yid",
+            "slice_index": 2,
+            "parent_id": parent_id,
+            "title": "Slice 2",
+            "channel_id": "channel_1"
+        }
+    ]
+    db.batch_add_videos(slices)
+    
+    assert len(db.get_slices_by_parent_yid("parent_yid")) == 2
+    
+    # 删除子切片
+    success = db.delete_slices_by_parent_id(parent_id)
+    assert success is True
+    
+    # 验证子切片被删，父任务还在
+    assert len(db.get_slices_by_parent_yid("parent_yid")) == 0
+    assert db.get_video_by_youtube_id("parent_yid", 0) is not None

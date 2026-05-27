@@ -13,10 +13,11 @@
 # Modification History
 | Version | Date       | Author                                 | Description          |
 |---------|------------|----------------------------------------|----------------------|
-| 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建 v7.0 TDD 测试套件 |
-| 1.1.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 SEC-1 与 SEC-2 安全加固单元测试 |
-| 1.2.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 CensorEngine 流水线集成与安全锁异常测试用例 |
+| 1.3.0   | 2026-05-27 | Unknown_Model_planning                 | 新增顺序锁放宽测试与垃圾回收 GC 深度清理测试用例 |
 | 1.2.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning         | 修复 test_con1_lock_handle_closed_on_flock_error 中 mock 调用的 slice_index 断言 |
+| 1.2.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 CensorEngine 流水线集成与安全锁异常测试用例 |
+| 1.1.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 SEC-1 与 SEC-2 安全加固单元测试 |
+| 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建 v7.0 TDD 测试套件 |
 """
 
 import math
@@ -502,4 +503,149 @@ class TestCensorEngineIntegration:
             assert fresh["is_manually_scored"] == 1  # 自动锁定
             assert fresh["censor_tag"] == "🔵 商业合规预警"
             assert fresh["censor_score"] == 50
+
+
+class TestSequenceLockRelaxation:
+    def test_sequence_lock_allows_ignored_and_completed(self, tmp_db):
+        """[Unknown_Model_planning] 验证顺序锁在有前序切片为 IGNORED 或 COMPLETED 时允许当前切片通过，但在前序为 PENDING 时阻断。"""
+        from video_processing.pipeline_manager import PipelineManager
+        from unittest.mock import patch, MagicMock
+        
+        pm = PipelineManager()
+        pm.db = tmp_db
+        
+        yid = "seq_lock_test"
+        
+        # 1. 插入父视频和三个子切片
+        tmp_db.add_video(yid, "Parent Video", "channel_1", score=90, slice_index=0)
+        parent = tmp_db.get_video_by_youtube_id(yid, 0)
+        parent_id = parent["id"]
+        
+        slices = [
+            {"youtube_id": yid, "slice_index": 1, "parent_id": parent_id, "title": "Slice 1", "channel_id": "channel_1", "score": 90},
+            {"youtube_id": yid, "slice_index": 2, "parent_id": parent_id, "title": "Slice 2", "channel_id": "channel_1", "score": 90},
+            {"youtube_id": yid, "slice_index": 3, "parent_id": parent_id, "title": "Slice 3", "channel_id": "channel_1", "score": 90},
+        ]
+        tmp_db.batch_add_videos(slices)
+        
+        # 2. 将 Slice 1 设为 IGNORED, Slice 2 设为 COMPLETED, Slice 3 设为 PENDING
+        tmp_db.update_video_status(yid, "IGNORED", slice_index=1)
+        tmp_db.update_video_status(yid, "COMPLETED", slice_index=2)
+        
+        # Mock _find_downloaded_video to return a dummy path so it passes parent video file check
+        with patch.object(pm, "_find_downloaded_video", return_value="dummy_path"):
+            # 获取待处理视频列表并进行顺序锁测试
+            targets = tmp_db.get_high_score_pending_videos(min_score=75, limit=5)
+            # 过滤出 slice 3
+            slice3 = next(v for v in targets if v["youtube_id"] == yid and v["slice_index"] == 3)
+            
+            # 由于前序 (1, 2) 都是终态 (IGNORED, COMPLETED)，不应阻断 slice 3
+            # 运行排队检查
+            all_slices = tmp_db.get_slices_by_parent_yid(yid)
+            prev_not_published = [s for s in all_slices if s['slice_index'] < 3 and s['status'] not in ('PUBLISHED', 'IGNORED', 'COMPLETED')]
+            assert len(prev_not_published) == 0, "Should not be blocked because previous slices are IGNORED and COMPLETED"
+            
+            # 如果把 Slice 2 改为 PENDING
+            tmp_db.update_video_status(yid, "PENDING", slice_index=2)
+            all_slices_blocked = tmp_db.get_slices_by_parent_yid(yid)
+            prev_not_published_blocked = [s for s in all_slices_blocked if s['slice_index'] < 3 and s['status'] not in ('PUBLISHED', 'IGNORED', 'COMPLETED')]
+            assert len(prev_not_published_blocked) == 1, "Should be blocked because Slice 2 is PENDING"
+
+
+class TestGarbageCollectionOverhaul:
+    def test_garbage_collection_cleanup_files_and_dirs(self, tmp_db):
+        """[Unknown_Model_planning] 验证 _run_garbage_collection 能彻底清理特定切片/整片的中间文件与语音生成文件夹。"""
+        import shutil
+        from pathlib import Path
+        from video_processing.pipeline_manager import PipelineManager
+        
+        pm = PipelineManager()
+        pm.db = tmp_db
+        out_dir = Path(pm._OUT_DIR)
+        
+        yid = "gc_test_video"
+        
+        # 1. 模拟 slice_index == 0 发布成功
+        # 创建各种临时中间文件
+        files_to_create = [
+            f"{yid}.mp4",
+            f"{yid}_vertical.mp4",
+            f"{yid}.ass",
+            f"{yid}_subtitle.txt",
+            f"{yid}_copy.txt",
+            f"{yid}_title.txt",
+            f"{yid}_category.txt",
+            f"{yid}_cover.jpg",
+            f"{yid}.description"
+        ]
+        
+        for f_name in files_to_create:
+            f_path = out_dir / f_name
+            f_path.write_text("dummy content", encoding="utf-8")
+            
+        audio_dir = out_dir / f"{yid}_audio_gen"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        (audio_dir / "temp.wav").write_text("audio content")
+        
+        pm._run_garbage_collection(yid, slice_index=0, status="PUBLISHED")
+        
+        # 检查所有文件和目录是否已被清理干净
+        for f_name in files_to_create:
+            assert not (out_dir / f_name).exists(), f"File {f_name} should be cleaned up"
+        assert not audio_dir.exists(), "Audio gen directory should be cleaned up"
+        
+    def test_garbage_collection_parent_cleanup_after_last_slice(self, tmp_db):
+        """[Unknown_Model_planning] 验证当所有兄弟子任务都进入终态（PUBLISHED/FAILED/IGNORED/COMPLETED）时，清理父任务的临时文件"""
+        from pathlib import Path
+        from video_processing.pipeline_manager import PipelineManager
+        
+        pm = PipelineManager()
+        pm.db = tmp_db
+        out_dir = Path(pm._OUT_DIR)
+        
+        yid = "gc_parent_test"
+        
+        # 1. 插入父视频和子视频切片
+        tmp_db.add_video(yid, "Parent Video", "channel_1", score=90, slice_index=0)
+        parent = tmp_db.get_video_by_youtube_id(yid, 0)
+        parent_id = parent["id"]
+        
+        slices = [
+            {"youtube_id": yid, "slice_index": 1, "parent_id": parent_id, "title": "Slice 1", "channel_id": "channel_1"},
+            {"youtube_id": yid, "slice_index": 2, "parent_id": parent_id, "title": "Slice 2", "channel_id": "channel_1"},
+        ]
+        tmp_db.batch_add_videos(slices)
+        
+        # 创建父任务的中间文件和临时语音目录
+        parent_files = [
+            f"{yid}.mp4",
+            f"{yid}.info.json",
+            f"{yid}_subtitle.txt",
+            f"{yid}_copy.txt"
+        ]
+        for f_name in parent_files:
+            (out_dir / f_name).write_text("dummy parent content", encoding="utf-8")
+            
+        parent_audio_dir = out_dir / f"{yid}_audio_gen"
+        parent_audio_dir.mkdir(parents=True, exist_ok=True)
+        (parent_audio_dir / "temp.wav").write_text("audio content")
+        
+        # 模拟 slice 1 成功发布 (终态 1)
+        tmp_db.update_video_status(yid, "PUBLISHED", slice_index=1)
+        pm._run_garbage_collection(yid, slice_index=1, status="PUBLISHED")
+        
+        # 此时 slice 2 还在 PENDING (未完成)，不应当触发父文件清理
+        for f_name in parent_files:
+            assert (out_dir / f_name).exists(), f"Parent file {f_name} should NOT be cleaned up yet"
+        assert parent_audio_dir.exists(), "Parent audio gen folder should NOT be cleaned up yet"
+        
+        # 模拟 slice 2 被设置为 IGNORED (终态 2)
+        tmp_db.update_video_status(yid, "IGNORED", slice_index=2)
+        pm._run_garbage_collection(yid, slice_index=2, status="IGNORED")
+        
+        # 现在所有切片均进入终态，应该触发父任务清理
+        for f_name in parent_files:
+            assert not (out_dir / f_name).exists(), f"Parent file {f_name} should be cleaned up now"
+        assert not parent_audio_dir.exists(), "Parent audio gen folder should be cleaned up now"
+
 

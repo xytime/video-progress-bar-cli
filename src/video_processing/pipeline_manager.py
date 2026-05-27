@@ -19,6 +19,7 @@
 | 2.3.2   | 2026-05-27 | Unknown_Model_planning              | 修复 slice_index > 0 时未执行导入代码导致的 UnboundLocalError 异常          |
 | 2.4.0   | 2026-05-27 | Unknown_Model_planning              | 强制子分片封面副标题显示：主标题 + {当前集}/{总集数} 集                      |
 | 2.5.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 支持 disable_slicing == 1 时强制跳过章节切片，保留整片制作发布流程 |
+| 2.6.0   | 2026-05-27 | Unknown_Model_planning              | 红蓝博弈安全性与容错性审计修复 (P1/P2) |
 """
 
 
@@ -149,7 +150,8 @@ class PipelineManager:
                 
                 # 2. 检查前序子任务是否已发布 (Sequence Locking)
                 all_slices = self.db.get_slices_by_parent_yid(yid)
-                prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] != 'PUBLISHED']
+                # [Unknown_Model_planning] 放宽顺序锁：跳过处于已发布/跳过/手动上传状态的切片任务
+                prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] not in ('PUBLISHED', 'IGNORED', 'COMPLETED')]
                 if prev_not_published:
                     prev_indices = [s['slice_index'] for s in prev_not_published]
                     logger.info(f"Sub-task [{yid} s{slice_index}] skipped: Waiting for previous slices {prev_indices} to publish.")
@@ -243,41 +245,81 @@ class PipelineManager:
             return subprocess.run(cmd, check=True, **kwargs)
 
     def _run_garbage_collection(self, yid: str, slice_index: int, status: str):
-        """[Gemini_3.5_Flash_High_planning] GC 自动清理器：
-        - 子任务发布成功后，立即清理其对应的竖屏视频（*_vertical.mp4）和临时切片。
-        - 当所有子任务均进入终态，清理父任务的超大原始 MP4 视频与 info.json 临时文件。
+        """[Unknown_Model_planning] GC 自动清理器：
+        - 支持子任务 (slice_index > 0) 或整片任务 (slice_index == 0) 发布成功后，清理其对应的临时媒体文件与文本/字幕/语音夹。
+        - 当所有子任务均进入终态，清理父任务的超大原始 MP4 视频与 info.json 等临时文件。
         """
-        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        import shutil
         
-        # 1. 如果子任务发布成功，清理其临时文件
-        if slice_index > 0 and status == "PUBLISHED":
-            for pat in [
-                f"{prefix}.mp4",
-                f"{prefix}_vertical.mp4",
-            ]:
-                for f in self._OUT_DIR.glob(pat):
+        # 1. 如果任务发布成功，清理其关联的临时文件
+        if status == "PUBLISHED":
+            prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+            # 需要清理的中间文件和中间产物后缀
+            suffixes = [
+                ".mp4",
+                "_vertical.mp4",
+                ".ass",
+                "_subtitle.txt",
+                "_copy.txt",
+                "_title.txt",
+                "_category.txt",
+                "_cover.jpg",
+                ".description"
+            ]
+            
+            for suffix in suffixes:
+                file_path = self._OUT_DIR / f"{prefix}{suffix}"
+                if file_path.exists():
                     try:
-                        f.unlink()
-                        logger.info(f"[GC] Deleted sub-task vertical/slice artifact: {f.name}")
+                        file_path.unlink()
+                        logger.info(f"[GC] Deleted artifact: {file_path.name}")
                     except Exception as e:
-                        logger.warning(f"[GC] Failed to delete sub-task artifact {f.name}: {e}")
+                        logger.warning(f"[GC] Failed to delete artifact {file_path.name}: {e}")
+            
+            # 清理 Edge TTS 生成的临时语音目录
+            audio_gen_dir = self._OUT_DIR / f"{prefix}_audio_gen"
+            if audio_gen_dir.exists() and audio_gen_dir.is_dir():
+                try:
+                    shutil.rmtree(audio_gen_dir)
+                    logger.info(f"[GC] Deleted audio gen folder: {audio_gen_dir.name}")
+                except Exception as e:
+                    logger.warning(f"[GC] Failed to delete audio gen folder {audio_gen_dir.name}: {e}")
                         
         # 2. 检查兄弟子任务状态以判断是否清理父文件
-        all_slices = self.db.get_slices_by_parent_yid(yid)
-        if all_slices:
-            all_finished = all(s["status"] in ("PUBLISHED", "FAILED") for s in all_slices)
-            if all_finished:
-                logger.info(f"[GC] All slices for parent {yid} are finished. Cleaning up parent video...")
-                for pat in [
-                    f"{yid}.mp4",
-                    f"{yid}.info.json"
-                ]:
-                    for f in self._OUT_DIR.glob(pat):
+        if slice_index > 0:
+            all_slices = self.db.get_slices_by_parent_yid(yid)
+            if all_slices:
+                all_finished = all(s["status"] in ("PUBLISHED", "FAILED", "IGNORED", "COMPLETED") for s in all_slices)
+                if all_finished:
+                    logger.info(f"[GC] All slices for parent {yid} are finished. Cleaning up parent artifacts...")
+                    parent_suffixes = [
+                        ".mp4",
+                        ".info.json",
+                        ".description",
+                        "_subtitle.txt",
+                        "_copy.txt",
+                        "_title.txt",
+                        "_category.txt",
+                        "_cover.jpg",
+                        ".ass"
+                    ]
+                    for suffix in parent_suffixes:
+                        file_path = self._OUT_DIR / f"{yid}{suffix}"
+                        if file_path.exists():
+                            try:
+                                file_path.unlink()
+                                logger.info(f"[GC] Deleted parent artifact: {file_path.name}")
+                            except Exception as e:
+                                logger.warning(f"[GC] Failed to delete parent artifact {file_path.name}: {e}")
+                    
+                    # 清理父级语音临时目录
+                    parent_audio_dir = self._OUT_DIR / f"{yid}_audio_gen"
+                    if parent_audio_dir.exists() and parent_audio_dir.is_dir():
                         try:
-                            f.unlink()
-                            logger.info(f"[GC] Deleted parent big video/json: {f.name}")
+                            shutil.rmtree(parent_audio_dir)
+                            logger.info(f"[GC] Deleted parent audio gen folder: {parent_audio_dir.name}")
                         except Exception as e:
-                            logger.warning(f"[GC] Failed to delete parent artifact {f.name}: {e}")
+                            logger.warning(f"[GC] Failed to delete parent audio gen folder {parent_audio_dir.name}: {e}")
 
     def _check_censorship(self, yid: str, title: str, description: str = "") -> bool:
         """执行内容安全审查。如果命中违禁词，根据级别执行对应的干预动作。
@@ -466,6 +508,11 @@ class PipelineManager:
                             parent_video = self.db.get_video_by_youtube_id(yid, 0)
                             parent_id = parent_video["id"] if parent_video else None
                             
+                            # [Unknown_Model_planning] 强制先清理已存在的陈旧切片，规避 Unique constraint 冲突
+                            if parent_id is not None:
+                                logger.info(f"Purging old slices for parent task ID {parent_id} before recreation.")
+                                self.db.delete_slices_by_parent_id(parent_id)
+
                             slice_tasks = []
                             for idx, ch in enumerate(chapters, start=1):
                                 prefix_title = graceful_truncate_title(title, max_len=6)
@@ -486,15 +533,19 @@ class PipelineManager:
                                     "duration_sec": int(ch["end_time"] - ch["start_time"]),
                                     "trim_start": f"{ch['start_time']:.3f}",
                                     "trim_end": f"{ch['end_time']:.3f}",
+                                    "disable_slicing": 1,  # [Unknown_Model_planning] 切片任务本身必须禁用分片
                                 })
                                 
-                            if self.db.batch_add_videos(slice_tasks):
-                                self.db.update_video_status(yid, "SEGMENTED", slice_index=0)
-                                self.send_telegram_msg(
-                                    f"📦 <b>Video Segmented</b>\nParent: {title}\n"
-                                    f"Generated {len(slice_tasks)} slices to publish."
-                                )
-                                return
+                            # [Unknown_Model_planning] 强制抛出异常以防默默回退整视频处理
+                            if not self.db.batch_add_videos(slice_tasks):
+                                raise RuntimeError(f"batch_add_videos failed to insert slice tasks for parent {yid}")
+                                
+                            self.db.update_video_status(yid, "SEGMENTED", slice_index=0)
+                            self.send_telegram_msg(
+                                f"📦 <b>Video Segmented</b>\nParent: {title}\n"
+                                f"Generated {len(slice_tasks)} slices to publish."
+                            )
+                            return
 
                 # ── 1b. CENSORSHIP DESC CHECK ─────────────────────────────────────
                 desc_path = self._OUT_DIR / f"{yid}.description"
@@ -650,7 +701,8 @@ class PipelineManager:
                 # Sequence Locking 二次校验（防止在 queue 排队期间状态改变）
                 if slice_index > 0:
                     all_slices = self.db.get_slices_by_parent_yid(yid)
-                    prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] != 'PUBLISHED']
+                    # [Unknown_Model_planning] 放宽顺序锁：跳过处于已发布/跳过/手动上传状态的切片任务
+                    prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] not in ('PUBLISHED', 'IGNORED', 'COMPLETED')]
                     if prev_not_published:
                         logger.warning(f"Sequence Lock active: slice {slice_index} waiting for previous slices. Resetting to PENDING.")
                         self.db.update_video_status(yid, "PENDING", slice_index=slice_index)

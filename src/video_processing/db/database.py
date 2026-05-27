@@ -14,6 +14,7 @@
 | 2.5.3   | 2026-05-27 | Unknown_Model_planning              | 修复已分片(SEGMENTED)父视频在后台仪表盘各 Tab 中隐藏不可见的 Bug |
 | 2.5.4   | 2026-05-27 | Unknown_Model_planning              | 仅当切片全部完成时才允许父视频进入“已完成”Tab，否则根据切片状态归入“处理中”或“错误”Tab |
 | 2.6.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 新增 disable_slicing 状态列用于整片发布/切片发布的控制 (默认 1 为整片发布) |
+| 2.7.0   | 2026-05-27 | Unknown_Model_planning              | 红蓝博弈安全性与容错性审计修复 (P1/P2) |
 """
 
 import sqlite3
@@ -324,7 +325,8 @@ class PipelineDB:
                 insert_data.append((
                     yid, v.get("slice_index", 0), v.get("parent_id"), v.get("title"), v.get("channel_id"),
                     v.get("score", 0), v.get("zh_title"), source, v.get("duration_sec"), v.get("view_count"),
-                    v.get("like_count"), v.get("upload_date"), v.get("trim_start"), v.get("trim_end")
+                    v.get("like_count"), v.get("upload_date"), v.get("trim_start"), v.get("trim_end"),
+                    v.get("disable_slicing", 1)  # [Unknown_Model_planning] 批量插入子任务时传递并持久化 disable_slicing
                 ))
             
             if not insert_data:
@@ -334,8 +336,8 @@ class PipelineDB:
                 conn.executemany(
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
-                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     insert_data
                 )
                 conn.commit()
@@ -377,13 +379,14 @@ class PipelineDB:
         """清洗器：将卡在非终态（如 DOWNLOADING）超过 N 小时的任务重置回 PENDING"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
+            # [Unknown_Model_planning] 排除已分集(SEGMENTED)父视频和跳过(IGNORED)任务，防止无限循环
             cursor.execute(
                 '''
                 UPDATE processed_videos 
                 SET status = 'PENDING', 
                     retry_count = retry_count + 1,
                     updated_at = CURRENT_TIMESTAMP 
-                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'PUBLISHED')
+                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'PUBLISHED', 'SEGMENTED', 'IGNORED')
                 AND updated_at < datetime('now', ?)
                 ''',
                 (f'-{stale_hours} hours',)
@@ -610,6 +613,20 @@ class PipelineDB:
                 return True
             except Exception as e:
                 self._logger.error(f"delete_video_record failed for {youtube_id} (slice {slice_index}): {e}")
+                return False
+
+    def delete_slices_by_parent_id(self, parent_id: int) -> bool:
+        """[Unknown_Model_planning] 物理删除指定父任务关联的所有子切片任务。"""
+        with self.get_connection() as conn:
+            try:
+                conn.execute(
+                    "DELETE FROM processed_videos WHERE parent_id = ?",
+                    (parent_id,)
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                self._logger.error(f"delete_slices_by_parent_id failed for parent {parent_id}: {e}")
                 return False
 
     def batch_delete_video_records(self, youtube_ids: List[str], tombstone: bool = True) -> tuple[int, List[str]]:
