@@ -2,6 +2,13 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
+  <!--
+  Modification History:
+  | Date       | Author                | Description                                   |
+  |------------|-----------------------|-----------------------------------------------|
+  | 2026-05-27 | Gemini_2.0_Flash_fast | Refine table to card flow classes, improve touch targets size to 44px. |
+  | 2026-05-27 | Gemini_2.0_Flash_fast | Optimize mobile/responsive layout for control center dashboard. |
+  -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>" />
@@ -87,6 +94,106 @@
       50% { box-shadow: 0 0 0 6px rgba(52,211,153,0); }
     }
     #last-update { font-size: 12px; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Cover Thumbnail ── */
+    .cover-thumb-cell { width: 52px; padding: 8px 8px 8px 16px !important; vertical-align: middle; }
+    .cover-thumb {
+      width: 44px; height: 78px;
+      border-radius: 6px;
+      object-fit: cover;
+      cursor: zoom-in;
+      border: 1px solid rgba(255,255,255,0.1);
+      transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s;
+      display: block;
+    }
+    .cover-thumb:hover {
+      transform: scale(1.08);
+      border-color: var(--accent);
+      box-shadow: 0 4px 16px rgba(124,110,247,0.4);
+    }
+    .cover-placeholder {
+      width: 44px; height: 78px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.04);
+      border: 1px dashed rgba(255,255,255,0.12);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; color: rgba(255,255,255,0.15);
+      cursor: default;
+    }
+
+    /* ── Multi-select Checkbox ── */
+    .cb-cell { width: 38px; padding: 8px 4px 8px 14px !important; vertical-align: middle; }
+    .video-cb {
+      width: 16px; height: 16px;
+      accent-color: var(--accent);
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    .row-selected td { background: rgba(124,110,247,0.07) !important; }
+
+    /* ── Batch Action Bar ── */
+    #batch-action-bar {
+      display: none;
+      align-items: center; gap: 10px;
+      padding: 8px 22px;
+      background: rgba(124,110,247,0.08);
+      border-bottom: 1px solid rgba(124,110,247,0.2);
+      font-size: 12px; color: var(--text2);
+    }
+    #batch-action-bar.visible { display: flex; }
+    .btn-batch-del {
+      background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3);
+      color: var(--red); padding: 4px 12px; border-radius: 6px;
+      cursor: pointer; font-size: 11px; font-family: inherit;
+      transition: background 0.15s;
+    }
+    .btn-batch-del:hover { background: rgba(239,68,68,0.22); }
+    .btn-clear-all {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
+      color: var(--text3); padding: 4px 12px; border-radius: 6px;
+      cursor: pointer; font-size: 11px; font-family: inherit; margin-left: auto;
+      transition: background 0.15s;
+    }
+    .btn-clear-all:hover { background: rgba(255,80,80,0.12); border-color: rgba(239,68,68,0.3); color: var(--red); }
+    .batch-deselect {
+      cursor: pointer; color: var(--accent); font-size: 11px; text-decoration: underline; text-underline-offset: 2px;
+    }
+
+    /* ── Cover Lightbox ── */
+    #cover-lightbox {
+      display: none;
+      position: fixed; inset: 0; z-index: 9999;
+      background: rgba(0,0,0,0.85);
+      backdrop-filter: blur(8px);
+      align-items: center; justify-content: center;
+      cursor: zoom-out;
+    }
+    #cover-lightbox.active { display: flex; }
+    #cover-lightbox img {
+      max-height: 88vh;
+      max-width: min(500px, 90vw);
+      border-radius: 12px;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.7);
+      animation: lb-in 0.22s cubic-bezier(0.34,1.56,0.64,1);
+    }
+    @keyframes lb-in {
+      from { transform: scale(0.82); opacity: 0; }
+      to   { transform: scale(1);    opacity: 1; }
+    }
+    #lb-close {
+      position: absolute; top: 18px; right: 22px;
+      font-size: 28px; color: rgba(255,255,255,0.6);
+      cursor: pointer; line-height: 1;
+      transition: color 0.15s;
+    }
+    #lb-close:hover { color: #fff; }
+    #lb-caption {
+      position: absolute; bottom: 24px;
+      left: 50%; transform: translateX(-50%);
+      font-size: 12px; color: rgba(255,255,255,0.45);
+      font-family: 'JetBrains Mono', monospace;
+      white-space: nowrap;
+    }
 
     /* ── Stat Cards ── */
     .stats-grid {
@@ -545,6 +652,364 @@
     /* ── Number animation ── */
     .stat-value { transition: color 0.3s ease; }
     .stat-value.updated { color: var(--accent2); }
+
+    /* ── Add Video Form ── */
+    .add-video-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .add-video-url-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .add-video-url-input {
+      font-size: 13px;
+      padding: 10px 14px;
+      flex: 1;
+    }
+    .add-video-trim-row {
+      display: flex;
+      gap: 15px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .trim-input-group {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .trim-input {
+      font-size: 12px;
+      padding: 6px 10px;
+      width: 100px;
+      text-align: center;
+      margin: 0;
+    }
+    .trim-hint {
+      font-size: 11px;
+      color: var(--text3);
+    }
+    .btn-submit-video {
+      padding: 8px 20px;
+      font-size: 13px;
+      white-space: nowrap;
+      margin-left: auto;
+    }
+
+    /* ── Mobile Optimization ── */
+    @media (max-width: 768px) {
+      .app {
+        padding: 12px 16px;
+      }
+      
+      header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 16px;
+        padding: 16px 20px;
+      }
+      .header-right {
+        width: 100%;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .btn-wechat, .btn-run {
+        width: 100%;
+        justify-content: center;
+        padding: 10px 12px;
+        font-size: 13px;
+        min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
+      }
+      .live-badge {
+        grid-column: span 1;
+        justify-content: center;
+        min-height: 32px;
+      }
+      #last-update {
+        grid-column: span 1;
+        align-self: center;
+        text-align: right;
+      }
+
+      .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .stat-card {
+        padding: 16px 14px;
+      }
+      .stat-value {
+        font-size: 28px;
+      }
+      .card-failed {
+        grid-column: span 2;
+      }
+
+      .pipeline-steps {
+        padding: 16px 8px;
+      }
+      .step {
+        min-width: 60px;
+      }
+      .step-circle {
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+      }
+      .step-desc {
+        display: none;
+      }
+      .whisper-warn {
+        margin: 0 16px 16px;
+        padding: 10px 12px;
+        font-size: 11px;
+      }
+
+      .main-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+
+      /* Tabs Scrollable */
+      .tabs-header {
+        overflow-x: auto;
+        white-space: nowrap;
+        padding: 0 12px;
+        gap: 16px;
+        -webkit-overflow-scrolling: touch;
+      }
+      .tabs-header::-webkit-scrollbar {
+        display: none;
+      }
+      .tab-btn {
+        padding: 12px 4px;
+        flex-shrink: 0;
+      }
+
+      /* Batch Action Bar */
+      #batch-action-bar {
+        padding: 10px 16px;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .btn-batch-del, .btn-clear-all {
+        padding: 8px 14px !important;
+        font-size: 12px !important;
+        min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
+      }
+      .btn-clear-all {
+        margin-left: 0 !important;
+        flex-grow: 1;
+      }
+
+      /* Table to Card Flow Layout */
+      .activity-table thead {
+        display: none;
+      }
+      .activity-table, .activity-table tbody {
+        display: block;
+        width: 100%;
+      }
+      .activity-table tr {
+        display: grid;
+        grid-template-columns: auto auto 1fr;
+        align-items: start;
+        padding: 14px;
+        margin: 10px 0;
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        position: relative;
+        gap: 10px;
+      }
+      
+      .activity-table td.cb-cell {
+        grid-column: 1;
+        grid-row: 1;
+        align-self: center;
+        padding: 0 !important;
+        min-width: 44px; /* [Gemini_2.0_Flash_fast] 优化复选框触控大小 */
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      /* Checkbox 触控区域优化 */
+      .video-cb {
+        width: 22px;
+        height: 22px;
+      }
+      .activity-table td.cover-thumb-cell {
+        grid-column: 2;
+        grid-row: 1;
+        padding: 0 !important;
+      }
+      .cover-thumb {
+        width: 52px;
+        height: 92px;
+      }
+      .activity-table td.info-cell { /* [Gemini_2.0_Flash_fast] 改为 class 选择器 */
+        grid-column: 3;
+        grid-row: 1;
+        padding: 0 !important;
+        padding-right: 50px !important; /* 避免与绝对定位的时间重叠 */
+      }
+      .video-zh-title, .video-title-link {
+        max-width: 100%;
+        white-space: normal; /* 手机上标题允许折行 */
+        word-break: break-all;
+      }
+      
+      .activity-table td.status-cell { /* [Gemini_2.0_Flash_fast] 改为 class 选择器 */
+        grid-column: 1 / -1;
+        grid-row: 2;
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        padding-top: 10px !important;
+        padding-bottom: 4px !important;
+      }
+      /* 按钮在卡片底部的间距和尺寸 */
+      .activity-table td.status-cell div { /* [Gemini_2.0_Flash_fast] 改为 class 选择器 */
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-top: 8px !important;
+      }
+      .btn-retry, .btn-hard-reset, .btn-wechat-row {
+        padding: 8px 12px !important;
+        font-size: 11px !important;
+        min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      
+      .activity-table td.score-cell { /* [Gemini_2.0_Flash_fast] 改为 class 选择器 */
+        grid-column: 1 / -1;
+        grid-row: 3;
+        background: rgba(255, 255, 255, 0.03);
+        padding: 10px !important;
+        border-radius: var(--radius-sm);
+      }
+      .score-btn-group {
+        display: flex;
+        gap: 6px;
+        margin-top: 6px !important;
+      }
+      .btn-score {
+        padding: 6px 12px !important;
+        font-size: 11px !important;
+        min-width: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
+        min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
+        border-radius: 6px !important;
+        flex: 1;
+      }
+      
+      .activity-table td.time-cell { /* [Gemini_2.0_Flash_fast] 改为 class 选择器 */
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        font-size: 11px;
+        color: var(--text3);
+        padding: 0 !important;
+      }
+
+      /* Error Row Mobile */
+      .error-row {
+        display: block !important;
+        margin: -4px 0 12px 0;
+        background: rgba(248,113,113,0.03) !important;
+        border: 1px solid rgba(248,113,113,0.2) !important;
+        border-radius: var(--radius-sm);
+        padding: 8px !important;
+      }
+      .error-row[style*="display: none"] {
+        display: none !important;
+      }
+      .error-row td {
+        display: block;
+        width: 100% !important;
+        padding: 0 !important;
+        background: transparent !important;
+      }
+
+      /* Pagination Mobile */
+      .pagination {
+        padding: 12px 16px;
+        flex-direction: row;
+        justify-content: space-between;
+        font-size: 11px;
+      }
+      .btn-page {
+        padding: 8px 14px !important;
+        font-size: 12px !important;
+        min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
+      }
+
+      /* Channel Watchlist Mobile */
+      .channel-item {
+        padding: 12px 16px;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      .channel-actions {
+        width: 100%;
+        justify-content: space-between;
+      }
+      .btn-delete {
+        padding: 8px 14px !important;
+        font-size: 12px !important;
+        min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
+      }
+      .add-channel-row {
+        flex-direction: column;
+        gap: 10px;
+      }
+      .btn-add {
+        width: 100%;
+        padding: 10px 16px !important;
+        font-size: 13px !important;
+        justify-content: center;
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
+      }
+
+      /* Add Video Mobile Form */
+      .add-video-trim-row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+      }
+      .trim-input-group {
+        justify-content: space-between;
+        width: 100%;
+      }
+      .trim-input-group span {
+        flex-shrink: 0;
+      }
+      .trim-input {
+        flex: 1;
+        max-width: none;
+      }
+      .trim-hint {
+        text-align: center;
+        margin-top: -4px;
+        margin-bottom: 4px;
+      }
+      .btn-submit-video {
+        margin-left: 0;
+        width: 100%;
+        padding: 10px 20px;
+        font-size: 14px;
+        min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
+      }
+    }
   </style>
 </head>
 <body>
@@ -661,10 +1126,21 @@
         <button class="tab-btn" id="tab-error" onclick="switchTab('error')">出错异常</button>
       </div>
 
+      <!-- [Gemini_2.5_Pro_planning] 批量操作栏（仅待筛选 tab 显示） -->
+      <div id="batch-action-bar">
+        <input type="checkbox" id="cb-select-all" class="video-cb" onchange="toggleSelectAll(this.checked)" title="全选/取消全选" />
+        <span id="batch-selected-count">0</span> 项已选
+        <span class="batch-deselect" onclick="clearSelection()">取消选择</span>
+        <button class="btn-batch-del" onclick="batchDelete()">🗑 删除所选</button>
+        <button class="btn-clear-all" onclick="clearAllWaitlist()">⚠️ 清空全部待筛选</button>
+      </div>
+
       <div class="panel-body">
         <table class="activity-table">
           <thead>
             <tr>
+              <th class="cb-cell" id="th-cb" style="display:none"><input type="checkbox" id="cb-header" class="video-cb" onchange="toggleSelectAll(this.checked)" /></th>
+              <th class="cover-thumb-cell"></th>
               <th>视频内容</th>
               <th>状态</th>
               <th>分数 / 操作</th>
@@ -672,7 +1148,7 @@
             </tr>
           </thead>
           <tbody id="activity-body">
-            <tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>数据加载中…</td></tr>
+            <tr><td colspan="6" class="empty-state"><div class="empty-icon">📭</div>数据加载中…</td></tr>
           </tbody>
         </table>
         
@@ -719,16 +1195,31 @@
     </div>
     <div class="panel-body" style="padding:20px 22px;">
       <!-- 输入行 -->
-      <div style="display:flex;gap:10px;align-items:center;">
-        <input id="video-url-input" class="add-channel-input"
-          style="font-size:13px;padding:10px 14px;"
-          type="text"
-          placeholder="例：https://www.youtube.com/watch?v=dQw4w9WgXcQ 或 https://youtu.be/dQw4w9WgXcQ" />
-        <button id="btn-add-video" class="btn-add"
-          style="padding:10px 20px;font-size:13px;white-space:nowrap;"
-          onclick="addVideo()">验证并加入队列</button>
+      <div class="add-video-wrapper">
+        <div class="add-video-url-row">
+          <input id="video-url-input" class="add-channel-input add-video-url-input"
+            type="text"
+            placeholder="例：https://www.youtube.com/watch?v=dQw4w9WgXcQ 或 https://youtu.be/dQw4w9WgXcQ" />
+        </div>
+        <div class="add-video-trim-row">
+          <div class="trim-input-group">
+            <span style="font-size:12px; color:var(--text2); white-space:nowrap;">开始时间 (Start):</span>
+            <input id="video-trim-start" class="add-channel-input trim-input"
+              type="text"
+              placeholder="00:00:38" />
+          </div>
+          <div class="trim-input-group">
+            <span style="font-size:12px; color:var(--text2); white-space:nowrap;">结束时间 (End):</span>
+            <input id="video-trim-end" class="add-channel-input trim-input"
+              type="text"
+              placeholder="00:14:43" />
+          </div>
+          <span class="trim-hint">*(可选，支持秒数如 38 或时间格式如 14:43)</span>
+          <button id="btn-add-video" class="btn-add btn-submit-video"
+            onclick="addVideo()">验证并加入队列</button>
+        </div>
       </div>
-      <div id="add-video-feedback" class="add-channel-feedback" style="margin-top:10px;font-size:12px;"></div>
+      <div id="add-video-feedback" class="add-channel-feedback" style="margin-top:10px; font-size:12px;"></div>
     </div>
   </div>
 
@@ -737,7 +1228,7 @@
 
   <!-- Delete Modal -->
   <div id="delete-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
-    <div style="background:var(--bg-panel); padding:24px; border-radius:12px; width:400px; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+    <div style="background:var(--bg2); padding:24px; border-radius:12px; width:calc(100% - 32px); max-width:400px; box-sizing:border-box; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5);">
       <h3 style="margin-top:0; color:var(--text1); font-size:16px;">⚠️ 确认删除任务</h3>
       <p style="color:var(--text2); font-size:13px; line-height:1.5; margin-bottom:16px;">
         您正在删除该任务记录。默认情况下只会从数据库中清除记录。
@@ -755,6 +1246,10 @@
 </div>
 
 <script>
+  function handleCoverError(img) {
+    img.outerHTML = '<div class="cover-placeholder">🎬</div>';
+  }
+
   const STEP_ORDER = ["PENDING","DOWNLOADING","TRANSCRIBING","COPYWRITING","PUBLISHING","PUBLISHED"];
 
   function statusBadge(s) {
@@ -826,6 +1321,17 @@
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('tab-' + tab).classList.add('active');
     document.getElementById('new-data-hint').style.display = 'none';
+    // [Gemini_2.5_Pro_planning] 切换 tab 时清空选中状态和批量操作栏
+    clearSelection();
+    const bar = document.getElementById('batch-action-bar');
+    const thCb = document.getElementById('th-cb');
+    if (tab === 'waitlist') {
+      bar.classList.add('visible');
+      if (thCb) thCb.style.display = '';
+    } else {
+      bar.classList.remove('visible');
+      if (thCb) thCb.style.display = 'none';
+    }
     loadVideos();
   }
 
@@ -979,6 +1485,11 @@
           ? (v.like_count / v.view_count * 100).toFixed(1) + '%'
           : null;
 
+        // [Gemini_3.5_Flash] 裁剪区间标识
+        const trimStr   = (v.trim_start || v.trim_end)
+          ? `✂️ ${v.trim_start || '0'}-${v.trim_end || 'End'}`
+          : null;
+
         const dur       = fmtDuration(v.duration_sec);
         const views     = fmtNum(v.view_count);
         const likes     = fmtNum(v.like_count);
@@ -986,6 +1497,7 @@
 
         const metaChips = [
           dur       ? `<span class="meta-chip">⏱ ${dur}</span>` : '',
+          trimStr   ? `<span class="meta-chip" style="color:var(--accent2); background:rgba(0,180,216,0.15); border:1px solid rgba(0,180,216,0.3);"> ${trimStr}</span>` : '',
           uploadAge ? `<span class="meta-chip">📅 ${uploadAge}</span>` : '',
           views     ? `<span class="meta-chip">👁 ${views}</span>` : '',
           likeRatio ? `<span class="meta-chip">👍 ${likeRatio}</span>` : '',
@@ -993,20 +1505,48 @@
 
         const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${metaChips ? ' · ' + metaChips : ''}</div>`;
 
+        // [Gemini_2.5_Pro_planning] 封面缩略图单元格
+        const coverUrl = `/api/covers/${v.youtube_id}`;
+        const coverCell = `
+          <td class="cover-thumb-cell">
+            <img
+              class="cover-thumb"
+              src="${coverUrl}"
+              alt="封面"
+              loading="lazy"
+              onerror="handleCoverError(this)"
+              onclick="openCoverLightbox('${coverUrl}', '${escapeAttr(v.title || '')}');"
+            />
+          </td>`;
+
+        // [Gemini_2.5_Pro_planning] checkbox 单元格（仅 waitlist tab 显示）
+        const isWaitlist = currentTab === 'waitlist';
+        const cbCell = isWaitlist
+          ? `<td class="cb-cell"><input type="checkbox" class="video-cb row-cb" data-yid="${v.youtube_id}"
+               onchange="onRowCbChange()" onclick="event.stopPropagation()" /></td>`
+          : `<td class="cb-cell" style="display:none"></td>`;
+
         return `
-          <tr>
-            <td>
+          <tr id="row-${v.youtube_id}" class="" onclick="${isWaitlist ? `toggleRowCb('${v.youtube_id}')` : ''}"
+              style="${isWaitlist ? 'cursor:default' : ''}">
+            ${cbCell}
+            ${coverCell}
+            <td class="info-cell">
               ${zhTitleHtml}
               ${enTitleHtml}
               ${channelRow}
               ${errorToggle}
             </td>
-            <td style="white-space:nowrap">${statusBadge(v.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
-            <td>${scoreControls}</td>
-            <td><span class="video-time">${relativeTime(v.updated_at)}</span></td>
+            <td class="status-cell" style="white-space:nowrap">${statusBadge(v.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
+            <td class="score-cell">${scoreControls}</td>
+            <td class="time-cell"><span class="video-time">${relativeTime(v.updated_at)}</span></td>
           </tr>
           ${errorRow}`;
       }).join('');
+
+      // 同步 checkbox 状态
+      syncHeaderCheckbox();
+      updateBatchBar();
 
       // 恢复之前展开的错误行
       expanded.forEach(yid => {
@@ -1019,6 +1559,98 @@
       });
 
     } catch(e) { console.warn('videos fetch error', e); }
+  }
+
+  // ── [Gemini_2.5_Pro_planning] Multi-select & Batch Delete ─────────────────
+  let _selectedYids = new Set();
+
+  function toggleRowCb(yid) {
+    const cb = document.querySelector(`.row-cb[data-yid="${yid}"]`);
+    if (!cb) return;
+    cb.checked = !cb.checked;
+    onRowCbChange();
+  }
+
+  function onRowCbChange() {
+    _selectedYids.clear();
+    document.querySelectorAll('.row-cb:checked').forEach(cb => _selectedYids.add(cb.dataset.yid));
+    // 更新行选中高亮
+    document.querySelectorAll('.row-cb').forEach(cb => {
+      const row = document.getElementById(`row-${cb.dataset.yid}`);
+      if (row) row.classList.toggle('row-selected', cb.checked);
+    });
+    syncHeaderCheckbox();
+    updateBatchBar();
+  }
+
+  function syncHeaderCheckbox() {
+    const allCbs = document.querySelectorAll('.row-cb');
+    const checkedCbs = document.querySelectorAll('.row-cb:checked');
+    const headerCb = document.getElementById('cb-header');
+    const barCb = document.getElementById('cb-select-all');
+    const allChecked = allCbs.length > 0 && allCbs.length === checkedCbs.length;
+    [headerCb, barCb].forEach(cb => { if (cb) { cb.checked = allChecked; cb.indeterminate = checkedCbs.length > 0 && !allChecked; } });
+  }
+
+  function toggleSelectAll(checked) {
+    document.querySelectorAll('.row-cb').forEach(cb => { cb.checked = checked; });
+    onRowCbChange();
+    // 同步两个 checkbox
+    const headerCb = document.getElementById('cb-header');
+    const barCb = document.getElementById('cb-select-all');
+    [headerCb, barCb].forEach(cb => { if (cb) cb.checked = checked; });
+  }
+
+  function clearSelection() {
+    _selectedYids.clear();
+    document.querySelectorAll('.row-cb').forEach(cb => { cb.checked = false; });
+    document.querySelectorAll('.row-selected').forEach(r => r.classList.remove('row-selected'));
+    syncHeaderCheckbox();
+    updateBatchBar();
+  }
+
+  function updateBatchBar() {
+    const countEl = document.getElementById('batch-selected-count');
+    if (countEl) countEl.textContent = _selectedYids.size;
+  }
+
+  async function batchDelete() {
+    if (_selectedYids.size === 0) return;
+    const ids = [..._selectedYids];
+    if (!confirm(`确定删除所选 ${ids.length} 条视频？\n删除后会写入黑名单，爬虫不会再次抓取。`)) return;
+    try {
+      const r = await fetch('/api/videos', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ youtube_ids: ids }),
+      });
+      const d = await r.json();
+      if (d.success) {
+        showToast(`✅ ${d.message}`);
+        clearSelection();
+        loadVideos();
+      } else {
+        showToast('❌ ' + (d.error || d.message || '删除失败'), 'error');
+      }
+    } catch(e) { showToast('❌ 网络错误', 'error'); }
+  }
+
+  async function clearAllWaitlist() {
+    const bar = document.getElementById('batch-action-bar');
+    const countEl = document.getElementById('total-count-display');
+    const total = countEl ? parseInt(countEl.textContent) || 0 : 0;
+    if (!confirm(`确定清空全部待筛选视频（${total} 条）？\n清空后这些视频将写入黑名单，爬虫不会再次拉取。`)) return;
+    try {
+      const r = await fetch('/api/videos/waitlist/all', { method: 'DELETE' });
+      const d = await r.json();
+      if (d.success || d.deleted_count >= 0) {
+        showToast(`✅ ${d.message}`);
+        clearSelection();
+        loadVideos(1);
+      } else {
+        showToast('❌ ' + (d.message || '清空失败'), 'error');
+      }
+    } catch(e) { showToast('❌ 网络错误', 'error'); }
   }
 
   async function setScore(youtubeId, score) {
@@ -1306,9 +1938,13 @@
 
   async function addVideo() {
     const input = document.getElementById('video-url-input');
+    const trimStartInput = document.getElementById('video-trim-start');
+    const trimEndInput = document.getElementById('video-trim-end');
     const btn   = document.getElementById('btn-add-video');
     const fb    = document.getElementById('add-video-feedback');
     const url   = input.value.trim();
+    const trim_start = trimStartInput ? trimStartInput.value.trim() : '';
+    const trim_end   = trimEndInput ? trimEndInput.value.trim() : '';
 
     if (!url) {
       fb.textContent = '请输入 YouTube 视频 URL';
@@ -1324,14 +1960,17 @@
       const r = await fetch('/api/videos/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, trim_start, trim_end }),
       });
       const d = await r.json();
 
       if (d.success) {
-        fb.textContent = `✅ 已加入队列：${d.title}（来自 ${d.channel_name}）`;
+        let trimText = (d.trim_start || d.trim_end) ? ` (✂️ ${d.trim_start || '0'}-${d.trim_end || 'End'})` : '';
+        fb.textContent = `✅ 已加入队列：${d.title}${trimText}（来自 ${d.channel_name}）`;
         fb.className = 'add-channel-feedback ok';
         input.value = '';
+        if (trimStartInput) trimStartInput.value = '';
+        if (trimEndInput) trimEndInput.value = '';
         await loadVideos();
         await fetchStats();
       } else if (d.already_exists) {
@@ -1371,8 +2010,43 @@
   }
 
   // Initial load + 3-second interval
+  // [Gemini_2.5_Pro_planning] 初始化时 waitlist 是默认 tab，显示批量操作栏
+  document.getElementById('batch-action-bar').classList.add('visible');
+  const _thCbInit = document.getElementById('th-cb');
+  if (_thCbInit) _thCbInit.style.display = '';
   refresh();
   setInterval(refresh, 3000);
+</script>
+
+<!-- [Gemini_2.5_Pro_planning] Cover Lightbox Overlay -->
+<div id="cover-lightbox" onclick="closeCoverLightbox()">
+  <span id="lb-close" onclick="closeCoverLightbox()">✕</span>
+  <img id="lb-img" src="" alt="封面大图" onclick="event.stopPropagation()" />
+  <div id="lb-caption"></div>
+</div>
+
+<script>
+  // [Gemini_2.5_Pro_planning] Lightbox 打开/关闭
+  function openCoverLightbox(url, title) {
+    const lb  = document.getElementById('cover-lightbox');
+    const img = document.getElementById('lb-img');
+    const cap = document.getElementById('lb-caption');
+    img.src = url;
+    cap.textContent = title || '';
+    lb.classList.add('active');
+    document.body.style.overflow = 'hidden';
+  }
+  function closeCoverLightbox() {
+    const lb = document.getElementById('cover-lightbox');
+    lb.classList.remove('active');
+    document.body.style.overflow = '';
+    // 延迟清空 src，避免关闭动画中闪烁
+    setTimeout(() => { document.getElementById('lb-img').src = ''; }, 300);
+  }
+  // ESC 键关闭
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeCoverLightbox();
+  });
 </script>
 </body>
 </html>
