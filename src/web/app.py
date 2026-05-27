@@ -10,8 +10,12 @@
 | 2.0.1 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] BUG-1: SIGTERM 注册移至主线程 startup_event；清理函数内重复 import |
 | 2.1.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 6] SEC-1: urlparse 严格 netloc 校验替换 in-string 旁路；SEC-2: add_channel 覆盖 MANUAL_ONLY 防隐式提升 |
 | 2.1.1 | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 macOS Fix] 解决 killpg(pid, 0) 对未收割僵尸进程返回 EPERM 导致误报的 macOS 特有行为 |
+| 2.2.0 | 2026-05-27 | Gemini_3.5_Flash                    | 新增 trim_start/trim_end 请求参数接收与安全校验 |
+| 2.3.0 | 2026-05-27 | Gemini_2.0_Flash_fast               | 适配微信扫码登录 QR 服务与状态查询 API |
+| 2.3.1 | 2026-05-27 | Gemini_3.5_Flash_planning           | 修复由于缺少 re 模块导致的视频添加接口 500 报错 |
 """
 import os
+import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
 import sys
 import signal
 import time
@@ -28,8 +32,8 @@ _src = str(Path(__file__).parent.parent)
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-from fastapi import FastAPI, BackgroundTasks
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -154,12 +158,39 @@ class AddChannelRequest(BaseModel):
     promote: Optional[bool] = False
 
 
+class BatchDeleteRequest(BaseModel):  # [Gemini_2.5_Pro_planning]
+    youtube_ids: list[str]
+    delete_files: bool = False
+
+
+_OUT_DIR = Path(__file__).parent.parent.parent / "output"
+
+
 # ── 页面路由 ─────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     """返回仪表盘 HTML 页面"""
     template_path = Path(__file__).parent / "templates" / "index.html"
     return HTMLResponse(content=template_path.read_text(encoding="utf-8"))
+
+
+# ── 封面图片 API ─────────────────────────────────────────────────────────
+@app.get("/api/covers/{youtube_id}")
+def get_cover(youtube_id: str):
+    """[Gemini_2.5_Pro_planning] 返回指定视频 ID 的封面图片（JPEG）。
+    若封面文件不存在则返回 404，前端可据此显示占位符。
+    """
+    # 安全校验：youtube_id 只允许字母/数字/连字符/下划线
+    if not re.match(r'^[A-Za-z0-9_\-]+$', youtube_id):
+        raise HTTPException(status_code=400, detail="Invalid youtube_id")
+    cover_path = _OUT_DIR / f"{youtube_id}_cover.jpg"
+    if not cover_path.exists():
+        raise HTTPException(status_code=404, detail="Cover not found")
+    return FileResponse(
+        str(cover_path),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 # ── 统计 API ─────────────────────────────────────────────────────────────
@@ -321,6 +352,8 @@ def remove_channel(channel_id: str):
 # ── 手动添加视频 API ──────────────────────────────────────────────────────
 class AddVideoRequest(BaseModel):
     url: str
+    trim_start: Optional[str] = None
+    trim_end: Optional[str] = None
 
 
 @app.post("/api/videos/add")
@@ -330,20 +363,32 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
 
     验证链：
       1. URL 必须是 YouTube 域名
-      2. yt-dlp 获取 video_id / title / channel_id / channel_name / duration / views / likes / upload_date
-      3. 重复检测：已存在则返回当前状态，不重复写入
-      4. 通过 DAL 写入 processed_videos，评分 100（手工加急），触发异步翻译
+      2. 校验裁剪时间参数格式
+      3. yt-dlp 获取 video_id / title / channel_id / channel_name / duration / views / likes / upload_date
+      4. 重复检测：已存在则返回当前状态，不重复写入
+      5. 通过 DAL 写入 processed_videos，评分 100（手工加急），触发异步翻译
     """
     url = req.url.strip()
     if not url:
         return {"success": False, "error": "URL 不能为空"}
 
-    # ── 1. 前置 URL 格式校验 ─────────────────────────────────────────
+    # ── 1. 裁剪时间参数校验与格式清洗 ──────────────────────────────────
+    trim_start = req.trim_start.strip() if req.trim_start else None
+    trim_end = req.trim_end.strip() if req.trim_end else None
+
+    # 正则防注入校验 (只允许数字、冒号、点)
+    time_pattern = re.compile(r"^[0-9:.]*$")
+    if trim_start and not time_pattern.match(trim_start):
+        return {"success": False, "error": "开始时间格式不合法，仅支持数字、冒号和点"}
+    if trim_end and not time_pattern.match(trim_end):
+        return {"success": False, "error": "结束时间格式不合法，仅支持数字、冒号和点"}
+
+    # ── 2. 前置 URL 格式校验 ─────────────────────────────────────────
     # [Claude_Sonnet_4.6_Thinking_planning] SEC-1: 使用 _is_youtube_url() 严格 netloc 匹配
     if not _is_youtube_url(url):
         return {"success": False, "error": "请输入有效的 YouTube 视频 URL（必须来自 youtube.com 或 youtu.be）"}
 
-    # ── 2. yt-dlp 获取视频元数据 ─────────────────────────────────────
+    # ── 3. yt-dlp 获取视频元数据 ─────────────────────────────────────
     try:
         result = subprocess.run(
             [
@@ -383,7 +428,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
     if not video_id or len(video_id) != 11:
         return {"success": False, "error": f"解析到的视频 ID 格式异常（{video_id}），请检查链接"}
 
-    # ── 3. 重复检测 ───────────────────────────────────────────────────
+    # ── 4. 重复检测 ───────────────────────────────────────────────────
     existing = db.get_video_by_youtube_id(video_id)
     if existing:
         return {
@@ -393,7 +438,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
             "current_status": existing["status"],
         }
 
-    # ── 4. 写入队列（手工添加） ───────────────────────────────────────
+    # ── 5. 写入队列（手工添加） ───────────────────────────────────────
     # [Claude_Sonnet_4.6_Thinking_planning] v7.0 Phase 4: 手动添加视频时，频道写入 MANUAL_ONLY
     # 而非 APPROVED，避免单视频下载导致频道被自动爬虫拉取
     if not db.get_channel_by_id(channel_id):
@@ -405,6 +450,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         video_id, title, channel_id, score=100, source="MANUAL",
         duration_sec=duration_sec, view_count=view_count,
         like_count=like_count, upload_date=upload_date,
+        trim_start=trim_start, trim_end=trim_end,
     )
     bg_tasks.add_task(_translate_title_task, video_id, title)
     
@@ -413,6 +459,8 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         "video_id": video_id,
         "title": title,
         "channel_name": channel_name,
+        "trim_start": trim_start,
+        "trim_end": trim_end,
     }
 
 
@@ -584,6 +632,90 @@ def reset_video_hard(youtube_id: str):
     }
 
 
+# [Gemini_2.5_Pro_planning] 注意：此路由必须在 /api/videos/{youtube_id} 之前注册，
+# 否则 FastAPI 会将 'waitlist' 当成 youtube_id 参数，导致 404。
+@app.delete("/api/videos/waitlist/all")
+def clear_waitlist():
+    """[Gemini_2.5_Pro_planning] 清空待筛选列表（全部 PENDING 且分数 < 75 的视频）。
+
+    清空后会写入黑名单墓碑，爬虫不会再次拉取这些视频。
+    """
+    # 获取待筛选列表所有 ID（不分页，全量）
+    with db.get_connection() as conn:
+        cursor = conn.execute(
+            "SELECT youtube_id FROM processed_videos WHERE status = 'PENDING' AND score < 75"
+        )
+        all_ids = [row["youtube_id"] for row in cursor.fetchall()]
+
+    if not all_ids:
+        return {"success": True, "deleted_count": 0, "message": "待筛选列表已经是空的"}
+
+    tombstone = settings.enable_blacklist_tombstone
+    deleted_count, failed_ids = db.batch_delete_video_records(all_ids, tombstone=tombstone)
+
+    msg = f"共清空 {deleted_count} 条待筛选视频"
+    if tombstone:
+        msg += "（已全部写入黑名单，爬虫不会再次抓取）"
+    return {
+        "success": not failed_ids,
+        "deleted_count": deleted_count,
+        "failed_ids": failed_ids,
+        "message": msg,
+    }
+
+
+@app.delete("/api/videos")
+def batch_delete_videos(req: BatchDeleteRequest):
+    """[Gemini_2.5_Pro_planning] 批量删除视频记录并写入黑名单墓碑。
+
+    不支持删除正处于活跃状态的视频（ACTIVE_STATUSES）——需先停止进程再删除。
+    """
+    if not req.youtube_ids:
+        return {"success": False, "error": "请提供要删除的视频 ID 列表"}
+
+    # 安全校验：拒绝删除活跃任务
+    invalid = [yid for yid in req.youtube_ids if not re.match(r'^[A-Za-z0-9_\-]+$', yid)]
+    if invalid:
+        return {"success": False, "error": f"非法 ID: {invalid}"}
+
+    active_ids = [
+        yid for yid in req.youtube_ids
+        if (v := db.get_video_by_youtube_id(yid)) and v.get("status") in ACTIVE_STATUSES
+    ]
+    if active_ids:
+        return {
+            "success": False,
+            "error": f"以下视频正在处理中，无法批量删除：{active_ids}",
+        }
+
+    # 可选删除产物文件
+    deleted_files_total: list[str] = []
+    if req.delete_files:
+        from video_processing.pipeline_manager import PipelineManager
+        pm = PipelineManager()
+        for yid in req.youtube_ids:
+            deleted_files_total.extend(pm.reset_video_artifacts(yid))
+
+    tombstone = settings.enable_blacklist_tombstone
+    deleted_count, failed_ids = db.batch_delete_video_records(req.youtube_ids, tombstone=tombstone)
+
+    msg = f"共删除 {deleted_count} 条视频记录"
+    if tombstone:
+        msg += "（已写入黑名单，爬虫不会再次抓取）"
+    if req.delete_files:
+        msg += f"，并清理了 {len(deleted_files_total)} 个产物文件"
+    if failed_ids:
+        msg += f"。失败: {failed_ids}"
+
+    return {
+        "success": not failed_ids,
+        "deleted_count": deleted_count,
+        "failed_ids": failed_ids,
+        "deleted_files": deleted_files_total,
+        "message": msg,
+    }
+
+
 @app.delete("/api/videos/{youtube_id}")
 def delete_video(youtube_id: str, delete_files: bool = False):
     """
@@ -656,30 +788,71 @@ def delete_video(youtube_id: str, delete_files: bool = False):
 
 
 @app.post("/api/wechat/login")
-def wechat_login():
+def wechat_login(headless: bool = True):
     """
-    在本机弹出可见浏览器窗口，引导用户扫码登录微信视频号。
-    登录成功后 Playwright 自动保存 Session 到 output/wechat_state.json。
-    此接口立即返回（后台线程执行），前端通过 Toast 提示用户扫码。
+    启动微信登录。默认以无头模式运行并生成二维码图片以供前端扫码；
+    也可以传递 headless=false 以便在本地有图形界面的机器上弹出浏览器。
+    # [Gemini_2.0_Flash_fast]
     """
     prj_root = Path(__file__).parent.parent.parent
     python   = str(prj_root / ".venv" / "bin" / "python")
     script   = str(prj_root / "scripts" / "wechat_uploader.py")
     state    = str(prj_root / "output" / "wechat_state.json")
 
+    # 启动前先清理可能存在的旧二维码
+    qr_path = prj_root / "output" / "login_qr.png"
+    if qr_path.exists():
+        try:
+            os.remove(qr_path)
+        except Exception:
+            pass
+
+    args = [python, script, "--login-only", "--state", state]
+    if not headless:
+        args.append("--no-headless")
+
     def _run():
         try:
-            # 注意：不使用 capture_output，GUI 浏览器窗口需要真实 display
-            subprocess.run(
-                [python, script, "--login-only", "--no-headless", "--state", state],
-                cwd=str(prj_root),
-            )
+            subprocess.run(args, cwd=str(prj_root))
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"WeChat login subprocess failed: {e}")
 
     threading.Thread(target=_run, daemon=True, name="wechat-login").start()
-    return {"success": True, "message": "浏览器已在后台启动，请在弹出窗口中扫码"}
+    return {
+        "success": True, 
+        "message": "无头登录程序已启动，正在获取二维码，请等待浮层刷新" if headless else "已在本机启动浏览器，请在弹出窗口中扫码"
+    }
+
+
+@app.get("/api/wechat/qr")
+def get_wechat_qr():
+    """[Gemini_2.0_Flash_fast] 返回微信扫码登录的临时二维码图片"""
+    prj_root = Path(__file__).parent.parent.parent
+    qr_path = prj_root / "output" / "login_qr.png"
+    if not qr_path.exists():
+        raise HTTPException(status_code=404, detail="QR code not found")
+    return FileResponse(
+        str(qr_path),
+        media_type="image/png",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
+
+
+@app.get("/api/wechat/status")
+def get_wechat_status():
+    """[Gemini_2.0_Flash_fast] 获取当前微信登录状态与后台登录子进程状态"""
+    prj_root = Path(__file__).parent.parent.parent
+    state_path = prj_root / "output" / "wechat_state.json"
+    qr_path = prj_root / "output" / "login_qr.png"
+    
+    is_running = any(t.name == "wechat-login" for t in threading.enumerate())
+    
+    return {
+        "logged_in": state_path.exists(),
+        "qr_exists": qr_path.exists(),
+        "is_running": is_running,
+    }
 
 
 @app.post("/api/pipeline/run")
