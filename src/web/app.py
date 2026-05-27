@@ -364,6 +364,7 @@ class AddVideoRequest(BaseModel):
     url: str
     trim_start: Optional[str] = None
     trim_end: Optional[str] = None
+    disable_slicing: Optional[bool] = True  # [Gemini_3.5_Flash_planning] 默认不分片 (整片模式)
 
 
 @app.post("/api/videos/add")
@@ -456,11 +457,13 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
                        status="MANUAL_ONLY", reason="Auto-registered via manual video add — NOT whitelisted")
 
     # 手工添加给100分加急
+    disable_slicing_val = 1 if req.disable_slicing else 0
     db.add_video(
         video_id, title, channel_id, score=100, source="MANUAL",
         duration_sec=duration_sec, view_count=view_count,
         like_count=like_count, upload_date=upload_date,
         trim_start=trim_start, trim_end=trim_end,
+        disable_slicing=disable_slicing_val,
     )
     bg_tasks.add_task(_translate_title_task, video_id, title)
     
@@ -471,6 +474,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         "channel_name": channel_name,
         "trim_start": trim_start,
         "trim_end": trim_end,
+        "disable_slicing": req.disable_slicing,
     }
 
 

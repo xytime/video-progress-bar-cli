@@ -18,6 +18,7 @@
 | 2.3.1   | 2026-05-27 | Unknown_Model_planning              | 修复分片时无法导入 copywriter 的 ModuleNotFoundError 问题                      |
 | 2.3.2   | 2026-05-27 | Unknown_Model_planning              | 修复 slice_index > 0 时未执行导入代码导致的 UnboundLocalError 异常          |
 | 2.4.0   | 2026-05-27 | Unknown_Model_planning              | 强制子分片封面副标题显示：主标题 + {当前集}/{总集数} 集                      |
+| 2.5.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 支持 disable_slicing == 1 时强制跳过章节切片，保留整片制作发布流程 |
 """
 
 
@@ -447,6 +448,10 @@ class PipelineManager:
                 # ── 1a. CHAPTERS EXTRACTION (仅针对主任务) ────────────────────────
                 if slice_index == 0:
                     enable_chapters = getattr(settings, "enable_chapters_slicing", True)
+                    if video.get("disable_slicing") == 1:
+                        enable_chapters = False
+                        logger.info(f"[Pipeline] Slicing explicitly disabled for {yid} (disable_slicing=1)")
+                    
                     if enable_chapters:
                         from .processors.chapters_extractor import ChaptersExtractor
                         extractor = ChaptersExtractor()

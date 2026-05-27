@@ -8,6 +8,7 @@
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建，TDD Green phase |
 | 1.1.0 | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 status] 新增 fmt_status_report 全局宏观状态渲染支持 |
 | 1.2.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 fmt_status_report 支持展现父任务与子切片细分统计 |
+| 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_planning           | 在 fmt_help 中增加 /whole 与 /slice 的说明 |
 """
 from __future__ import annotations
 from typing import List
@@ -104,9 +105,11 @@ def fmt_help() -> str:
     """帮助信息，列出所有命令"""
     return (
         "🤖 *微信视频号 Bot 使用指南*\n\n"
-        "📩 *发送 YouTube 链接* → 自动加入加急队列\n"
+        "📩 *发送 YouTube 链接* → 自动作为整片发布（默认不切分）\n"
         "   _💡 支持移动端极简裁剪，格式：链接 [开始时间] [结束时间]_\n"
         "   _例：链接 38 14:43 或 链接 30 (去头) 或 链接 -300 (截前段)_\n\n"
+        "🎥 `/whole <url> [开始] [结束]` — 强制以完整整片加入队列\n"
+        "🎬 `/slice <url> [开始] [结束]` — 允许切片（若有章节）加入队列\n"
         "📋 `/queue` — 查看当前处理队列\n"
         "📊 `/status` — 查看全局宏观状态报告\n"
         "✅ `/published` — 查看最近发布到视频号的视频\n"

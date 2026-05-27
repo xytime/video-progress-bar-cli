@@ -13,6 +13,7 @@
 | 2.5.2   | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 新增 get_detailed_stats 方法提供父子任务的细分状态统计数据 |
 | 2.5.3   | 2026-05-27 | Unknown_Model_planning              | 修复已分片(SEGMENTED)父视频在后台仪表盘各 Tab 中隐藏不可见的 Bug |
 | 2.5.4   | 2026-05-27 | Unknown_Model_planning              | 仅当切片全部完成时才允许父视频进入“已完成”Tab，否则根据切片状态归入“处理中”或“错误”Tab |
+| 2.6.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 新增 disable_slicing 状态列用于整片发布/切片发布的控制 (默认 1 为整片发布) |
 """
 
 import sqlite3
@@ -105,6 +106,7 @@ class PipelineDB:
                             process_pid INTEGER DEFAULT NULL,
                             trim_start TEXT DEFAULT NULL,
                             trim_end TEXT DEFAULT NULL,
+                            disable_slicing INTEGER DEFAULT 1,
                             UNIQUE(youtube_id, slice_index),
                             FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                         )
@@ -179,10 +181,19 @@ class PipelineDB:
                         process_pid INTEGER DEFAULT NULL,
                         trim_start TEXT DEFAULT NULL,
                         trim_end TEXT DEFAULT NULL,
+                        disable_slicing INTEGER DEFAULT 1,
                         UNIQUE(youtube_id, slice_index),
                         FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                     )
                 ''')
+
+            # [Gemini_3.5_Flash_planning] 检查并补足 disable_slicing 字段，默认值为 1（禁用分片即整片发布）
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "disable_slicing" not in columns:
+                self._logger.info("[Migration] Adding disable_slicing column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN disable_slicing INTEGER DEFAULT 1;")
+                conn.commit()
             
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
             cursor.execute('''
@@ -263,6 +274,7 @@ class PipelineDB:
         trim_end: Optional[str] = None,
         slice_index: int = 0,                       # [Gemini_3.5_Flash_planning] 新增：切片索引，默认0 (主视频)
         parent_id: Optional[int] = None,            # [Gemini_3.5_Flash_planning] 新增：父自增 ID
+        disable_slicing: int = 1,                   # [Gemini_3.5_Flash_planning] 新增：禁用分片标识 (默认1=不分片)
     ) -> bool:
         # 前置黑名单检查，防止已删除视频被二次拉取
         if self.is_blacklisted(youtube_id):
@@ -277,10 +289,10 @@ class PipelineDB:
                 conn.execute(
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
-                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (youtube_id, slice_index, parent_id, title, channel_id, score, zh_title, source,
-                     duration_sec, view_count, like_count, upload_date, trim_start, trim_end)
+                     duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing)
                 )
                 conn.commit()
                 return True

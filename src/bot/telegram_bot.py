@@ -13,6 +13,7 @@
 | 1.2.0 | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 status] 新增 cmd_status 宏观状态指令并调整命令路由 |
 | 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 cmd_retry 与 cmd_delete 命令，支持可选 [slice_index] 对切片子任务的操作 |
 | 1.4.0 | 2026-05-27 | Gemini_3.5_Flash_planning           | 优化 YouTube URL 正则以原生支持直播回放 (live/) 与完整提取带参数链接，防止裁剪干扰 |
+| 1.5.0 | 2026-05-27 | Gemini_3.5_Flash_planning           | 新增 /whole 和 /slice 指令并更新默认纯 URL 路由行为为不分集模式 |
 """
 from __future__ import annotations
 
@@ -257,6 +258,106 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode="Markdown")  # type: ignore
 
 
+async def cmd_whole(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/whole <url> [开始时间] [结束时间] — 强制不分集发布"""
+    if not _check_admin(update):
+        return
+    assert _api is not None
+    args = ctx.args  # type: ignore
+    if not args:
+        await update.message.reply_text(fmt.fmt_error("用法：/whole <youtube_url> [开始时间] [结束时间]"), parse_mode="Markdown")  # type: ignore
+        return
+
+    url_input = args[0].strip()
+    match = _YOUTUBE_RE.search(url_input)
+    if not match:
+        await update.message.reply_text(fmt.fmt_error("请输入有效的 YouTube 视频链接！"), parse_mode="Markdown")  # type: ignore
+        return
+    url = match.group(0)
+
+    trim_start, trim_end = None, None
+    if len(args) >= 2:
+        remaining_text = " ".join(args[1:])
+        trim_start, trim_end = parse_trim_params(remaining_text)
+
+    await update.message.reply_text(f"🔍 *正在验证视频并设置为整片制作...*\n`{url}`", parse_mode="Markdown")  # type: ignore
+
+    result = await _api.add_video(url, trim_start=trim_start, trim_end=trim_end, disable_slicing=True)
+
+    if result is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+        return
+
+    if result.get("success"):
+        t_start = result.get("trim_start")
+        t_end = result.get("trim_end")
+        await update.message.reply_text(  # type: ignore
+            f"✅ *已加入队列（整片制作/不切片）！*\n"
+            f"📌 标题：`{result['title']}`\n"
+            f"🆔 ID：`{result['video_id']}`\n"
+            f"⏱ 裁剪：`{t_start or '0'} - {t_end or 'End'}`",
+            parse_mode="Markdown"
+        )
+    elif result.get("already_exists"):
+        raw_error = result.get("error", "")
+        await update.message.reply_text(  # type: ignore
+            fmt.fmt_video_exists(title=raw_error, status=result.get("current_status", "UNKNOWN")),
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
+
+
+async def cmd_slice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/slice <url> [开始时间] [结束时间] — 强制允许切片发布（若支持）"""
+    if not _check_admin(update):
+        return
+    assert _api is not None
+    args = ctx.args  # type: ignore
+    if not args:
+        await update.message.reply_text(fmt.fmt_error("用法：/slice <youtube_url> [开始时间] [结束时间]"), parse_mode="Markdown")  # type: ignore
+        return
+
+    url_input = args[0].strip()
+    match = _YOUTUBE_RE.search(url_input)
+    if not match:
+        await update.message.reply_text(fmt.fmt_error("请输入有效的 YouTube 视频链接！"), parse_mode="Markdown")  # type: ignore
+        return
+    url = match.group(0)
+
+    trim_start, trim_end = None, None
+    if len(args) >= 2:
+        remaining_text = " ".join(args[1:])
+        trim_start, trim_end = parse_trim_params(remaining_text)
+
+    await update.message.reply_text(f"🔍 *正在验证视频并设置为切片制作...*\n`{url}`", parse_mode="Markdown")  # type: ignore
+
+    result = await _api.add_video(url, trim_start=trim_start, trim_end=trim_end, disable_slicing=False)
+
+    if result is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+        return
+
+    if result.get("success"):
+        t_start = result.get("trim_start")
+        t_end = result.get("trim_end")
+        await update.message.reply_text(  # type: ignore
+            f"✅ *已加入队列（允许切片分集）！*\n"
+            f"📌 标题：`{result['title']}`\n"
+            f"🆔 ID：`{result['video_id']}`\n"
+            f"⏱ 裁剪：`{t_start or '0'} - {t_end or 'End'}`",
+            parse_mode="Markdown"
+        )
+    elif result.get("already_exists"):
+        raw_error = result.get("error", "")
+        await update.message.reply_text(  # type: ignore
+            fmt.fmt_video_exists(title=raw_error, status=result.get("current_status", "UNKNOWN")),
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
+
+
 def parse_trim_params(text: str) -> tuple[str | None, str | None]:
     """[v1.3.0] 智能提取移动端极简裁剪参数
 
@@ -316,7 +417,7 @@ async def handle_youtube_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
 
     await update.message.reply_text(f"🔍 *正在验证视频...*\n`{url}`", parse_mode="Markdown")  # type: ignore
 
-    result = await _api.add_video(url, trim_start=trim_start, trim_end=trim_end)
+    result = await _api.add_video(url, trim_start=trim_start, trim_end=trim_end, disable_slicing=True)
 
     if result is None:
         await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
@@ -426,6 +527,8 @@ def main() -> None:
     app.add_handler(CommandHandler("retry", cmd_retry))
     app.add_handler(CommandHandler("run", cmd_run))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("whole", cmd_whole))
+    app.add_handler(CommandHandler("slice", cmd_slice))
 
     # 监听 YouTube URL 并由程序接管自动提交（不消耗 API 限额）
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(_YOUTUBE_RE), handle_youtube_url))

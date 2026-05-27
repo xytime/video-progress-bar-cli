@@ -10,6 +10,7 @@
 | 1.1.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 增加 HTTPStatusError 与 ValueError 熔断拦截，防止 502/500 JSON 解析崩溃 |
 | 1.1.1 | 2026-05-25 | Gemini_3.5_Flash_High_planning | 增加 add_video API 调用的 timeout 至 45s，防止 yt-dlp 查询超时导致控制中心不可用假警报 |
 | 1.2.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning | 新增 get_slices, retry_slice, delete_slice API 调用封装 |
+| 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 为 add_video 新增 disable_slicing 参数支持 |
 """
 from __future__ import annotations
 
@@ -42,7 +43,7 @@ class PipelineAPIClient:
 
     # ── 视频管理 ────────────────────────────────────────────────────────
 
-    async def add_video(self, url: str, trim_start: Optional[str] = None, trim_end: Optional[str] = None) -> Optional[dict]:
+    async def add_video(self, url: str, trim_start: Optional[str] = None, trim_end: Optional[str] = None, disable_slicing: Optional[bool] = None) -> Optional[dict]:
         """POST /api/videos/add — 手动添加 YouTube 视频到队列。
 
         Returns:
@@ -55,6 +56,8 @@ class PipelineAPIClient:
                     payload["trim_start"] = trim_start
                 if trim_end is not None:
                     payload["trim_end"] = trim_end
+                if disable_slicing is not None:
+                    payload["disable_slicing"] = disable_slicing
                 # [Gemini_3.5_Flash_High_planning] yt-dlp 查询元数据可能比较耗时，此处放宽超时限制至 45 秒
                 resp = await c.post("/api/videos/add", json=payload, timeout=45.0)
                 resp.raise_for_status()

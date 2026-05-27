@@ -203,3 +203,19 @@ def test_segmented_parent_tab_routing(temp_db):
     assert counts["completed"] == 1
     assert counts["error"] == 0
 
+
+def test_database_disable_slicing_column(temp_db):
+    """[Gemini_3.5_Flash_planning] 验证数据库写入与读取时 disable_slicing 值的正确性与默认值"""
+    db = PipelineDB(temp_db)
+    
+    # 1. 默认参数添加视频，验证其 disable_slicing 默认为 1
+    db.add_video("default_slicing", "Default title", "channel_1")
+    v_default = db.get_video_by_youtube_id("default_slicing")
+    assert v_default["disable_slicing"] == 1
+    
+    # 2. 传入 disable_slicing=0，验证其是否成功保存为 0
+    db.add_video("enable_slicing", "Sliced title", "channel_1", disable_slicing=0)
+    v_sliced = db.get_video_by_youtube_id("enable_slicing")
+    assert v_sliced["disable_slicing"] == 0
+
+

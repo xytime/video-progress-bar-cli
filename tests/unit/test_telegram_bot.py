@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 初始创建，实现 Telegram URL 路由与裁剪参数提取的 TDD 单元测试 |
+| 1.1.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 新增 /whole 与 /slice 核心指令测试，验证默认不切片与强制切片策略的路由传导 |
 """
 import re
 import sys
@@ -103,7 +104,74 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
             mock_api_client.add_video.assert_called_once_with(
                 "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=10s",
                 trim_start="30",
-                trim_end="60"
+                trim_end="60",
+                disable_slicing=True
+            )
+
+    @patch("bot.telegram_bot._api")
+    async def test_cmd_whole_routing(self, mock_api_client):
+        """[Gemini_3.5_Flash_planning] 验证 /whole 指令能正确拦截并传导 disable_slicing=True"""
+        mock_api_client.add_video = AsyncMock(return_value={"success": True, "title": "Test Whole", "video_id": "vid123"})
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.text = "/whole https://www.youtube.com/watch?v=dQw4w9WgXcQ 10 20"
+        update.message.reply_text = AsyncMock()
+
+        # CommandHandler 将命令参数分配到 context.args 
+        context = MagicMock()
+        context.args = ["https://www.youtube.com/watch?v=dQw4w9WgXcQ", "10", "20"]
+
+        from bot.telegram_bot import cmd_whole
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await cmd_whole(update, context)
+
+            mock_api_client.add_video.assert_called_once_with(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                trim_start="10",
+                trim_end="20",
+                disable_slicing=True
+            )
+
+    @patch("bot.telegram_bot._api")
+    async def test_cmd_slice_routing(self, mock_api_client):
+        """[Gemini_3.5_Flash_planning] 验证 /slice 指令能正确拦截并传导 disable_slicing=False"""
+        mock_api_client.add_video = AsyncMock(return_value={"success": True, "title": "Test Slice", "video_id": "vid123"})
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.text = "/slice https://www.youtube.com/watch?v=dQw4w9WgXcQ 15 35"
+        update.message.reply_text = AsyncMock()
+
+        context = MagicMock()
+        context.args = ["https://www.youtube.com/watch?v=dQw4w9WgXcQ", "15", "35"]
+
+        from bot.telegram_bot import cmd_slice
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await cmd_slice(update, context)
+
+            mock_api_client.add_video.assert_called_once_with(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                trim_start="15",
+                trim_end="35",
+                disable_slicing=False
+            )
+
+    @patch("bot.telegram_bot._api")
+    async def test_handle_youtube_url_default_disable_slicing(self, mock_api_client):
+        """[Gemini_3.5_Flash_planning] 验证默认直接发送 URL 时，应默认传导 disable_slicing=True 以启用整片发布"""
+        mock_api_client.add_video = AsyncMock(return_value={"success": True, "title": "Test Default", "video_id": "vid123"})
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.text = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        update.message.reply_text = AsyncMock()
+
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await handle_youtube_url(update, MagicMock())
+
+            mock_api_client.add_video.assert_called_once_with(
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                trim_start=None,
+                trim_end=None,
+                disable_slicing=True
             )
 
 
