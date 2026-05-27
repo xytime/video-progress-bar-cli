@@ -4,19 +4,15 @@
 禁止外部模块直接调用 get_connection() 执行裸 SQL。
 
 # Modification History
-| Version | Date | Author | Description |
-| --- | --- | --- | --- |
-| 1.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建数据库与DAL封装 |
-| 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 补充 update_video_score / get_high_score_pending_videos，封堵 pipeline_manager 中的裸 SQL 泄漏 |
-| 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 加入 WAL 模式与 30s timeout 解决并发锁表危机 |
-| 2.0.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Phase 1] 黑名单墓碑表、v7.0 新列迁移、人工评分锁、process_pid 追踪、add_video 黑名单前置检查 |
-| 2.0.1 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | [v7.0 Review Fix] LINT-5: 修宊 add_to_blacklist docstring 调用顺序说明 |
-| 2.0.2 | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Censor Engine] 新增 update_video_censor_status 用于写入内容审查审计数据 |
-| 2.1.0 | 2026-05-27 | Gemini_2.5_Pro_planning             | 排序优化：waitlist 按 created_at DESC，其他 tab 按 updated_at DESC；新增 batch_delete_video_records |
-| 2.2.0 | 2026-05-27 | Gemini_3.5_Flash                    | 新增 trim_start/trim_end 列以支持视频截取功能 |
-| 2.3.0 | 2026-05-27 | Gemini_3.5_Flash_fast               | 为 processed_videos 建立高频复合索引，防止 3 秒短轮询 SQLite 锁死 |
-| 2.4.0 | 2026-05-27 | Gemini_3.5_Flash_fast               | 手动添加视频时，自动从黑名单墓碑表移除以允许重新处理 |
+| Version | Date       | Author                              | Description                                                                    |
+|---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建数据库与DAL封装                                                         |
+| 2.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | v7.0 架构升级：黑名单表、Pid追踪、手动评分锁                                      |
+| 2.5.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 一变多升级：复合唯一约束(youtube_id, slice_index)、自关联外键级联删除与批量插入 |
+| 2.5.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 修复 _init_db 中遗漏推荐频道表 recommended_channels 的创建问题 |
+| 2.5.2   | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 新增 get_detailed_stats 方法提供父子任务的细分状态统计数据 |
 """
+
 import sqlite3
 import os
 import logging
@@ -53,73 +49,140 @@ class PipelineDB:
     def _init_db(self):
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            # [Gemini_3.1_Pro_High_planning] 开启 WAL 模式，支持高并发读写，避免 database is locked
+            # [Gemini_3.5_Flash_planning] 开启 WAL 模式，支持高并发读写，并激活 SQLite 外键支持
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute("PRAGMA synchronous=NORMAL;")
+            cursor.execute("PRAGMA foreign_keys=ON;")
             
-            # 1. 已处理视频状态表 (FSM 状态机)
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS processed_videos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    youtube_id TEXT UNIQUE NOT NULL,
-                    title TEXT NOT NULL,
-                    channel_id TEXT NOT NULL,
-                    score INTEGER DEFAULT 0,
-                    status TEXT NOT NULL DEFAULT 'PENDING',
-                    retry_count INTEGER DEFAULT 0,
-                    error_msg TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    zh_title TEXT,
-                    source TEXT DEFAULT 'AUTO',
-                    duration_sec INTEGER DEFAULT NULL,
-                    view_count INTEGER DEFAULT NULL,
-                    like_count INTEGER DEFAULT NULL,
-                    upload_date TEXT DEFAULT NULL
-                )
-            ''')
-            
-            # 2. 频道白名单与推荐表
+            # [Gemini_3.5_Flash_High_planning] 重新加入推荐频道表的创建，防测试环境与空数据库丢失此表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS recommended_channels (
                     channel_id TEXT PRIMARY KEY,
                     channel_name TEXT NOT NULL,
                     reason TEXT,
-                    status TEXT NOT NULL DEFAULT 'PENDING', -- PENDING, APPROVED, REJECTED
+                    status TEXT NOT NULL DEFAULT 'PENDING',
                     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
-            
-            # 3. 动态检查并添加新列 (Schema Migration)
+
+            # 检测是否已经进行了复合键和自关联级联删除的表升级 (检查 parent_id 列是否存在)
             cursor.execute("PRAGMA table_info(processed_videos)")
             columns = [col[1] for col in cursor.fetchall()]
-            if 'zh_title' not in columns:
-                cursor.execute("ALTER TABLE processed_videos ADD COLUMN zh_title TEXT")
-            if 'source' not in columns:
-                cursor.execute("ALTER TABLE processed_videos ADD COLUMN source TEXT DEFAULT 'AUTO'")
-            if 'duration_sec' not in columns:
-                cursor.execute("ALTER TABLE processed_videos ADD COLUMN duration_sec INTEGER DEFAULT NULL")
-            if 'view_count' not in columns:
-                cursor.execute("ALTER TABLE processed_videos ADD COLUMN view_count INTEGER DEFAULT NULL")
-            if 'like_count' not in columns:
-                cursor.execute("ALTER TABLE processed_videos ADD COLUMN like_count INTEGER DEFAULT NULL")
-            if 'upload_date' not in columns:
-                cursor.execute("ALTER TABLE processed_videos ADD COLUMN upload_date TEXT DEFAULT NULL")
-
-            _v7_cols = {
-                'censor_tag':         "TEXT DEFAULT NULL",
-                'censor_score':       "INTEGER DEFAULT NULL",
-                'is_manually_scored': "INTEGER DEFAULT 0",
-                'process_pid':        "INTEGER DEFAULT NULL",
-                'trim_start':         "TEXT DEFAULT NULL",
-                'trim_end':           "TEXT DEFAULT NULL",
-            }
-            for col, definition in _v7_cols.items():
-                if col not in columns:
-                    cursor.execute(f"ALTER TABLE processed_videos ADD COLUMN {col} {definition}")
-                    self._logger.info(f"[Migration] Added column: processed_videos.{col}")
-
-            # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表（防止删除后被爬虫二次拉取）
+            
+            if columns and "parent_id" not in columns:
+                self._logger.info("[Migration] Upgrading database schema to composite keys (yid, slice_index) & parent_id cascade relation...")
+                # 使用隐式事务，不再手动 BEGIN IMMEDIATE 避免 OperationalError
+                try:
+                    # 1. 重命名原表
+                    cursor.execute("ALTER TABLE processed_videos RENAME TO processed_videos_old;")
+                    
+                    # 2. 创建支持复合主键和外键级联删除的新表
+                    cursor.execute('''
+                        CREATE TABLE processed_videos (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            youtube_id TEXT NOT NULL,
+                            slice_index INTEGER NOT NULL DEFAULT 0,
+                            parent_id INTEGER DEFAULT NULL,
+                            title TEXT NOT NULL,
+                            channel_id TEXT NOT NULL,
+                            score INTEGER DEFAULT 0,
+                            status TEXT NOT NULL DEFAULT 'PENDING',
+                            retry_count INTEGER DEFAULT 0,
+                            error_msg TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            zh_title TEXT,
+                            source TEXT DEFAULT 'AUTO',
+                            duration_sec INTEGER DEFAULT NULL,
+                            view_count INTEGER DEFAULT NULL,
+                            like_count INTEGER DEFAULT NULL,
+                            upload_date TEXT DEFAULT NULL,
+                            censor_tag TEXT DEFAULT NULL,
+                            censor_score INTEGER DEFAULT NULL,
+                            is_manually_scored INTEGER DEFAULT 0,
+                            process_pid INTEGER DEFAULT NULL,
+                            trim_start TEXT DEFAULT NULL,
+                            trim_end TEXT DEFAULT NULL,
+                            UNIQUE(youtube_id, slice_index),
+                            FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                        )
+                    ''')
+                    
+                    # 3. 提取旧表字段并导入新表（设置默认 slice_index=0, parent_id=NULL）
+                    old_fields = [
+                        "id", "youtube_id", "title", "channel_id", "score", "status", "retry_count", 
+                        "error_msg", "created_at", "updated_at", "zh_title", "source", "duration_sec", 
+                        "view_count", "like_count", "upload_date"
+                    ]
+                    # v7 系列列
+                    for col in ["censor_tag", "censor_score", "is_manually_scored", "process_pid", "trim_start", "trim_end"]:
+                        if col in columns:
+                            old_fields.append(col)
+                            
+                    old_fields_str = ", ".join(old_fields)
+                    
+                    new_fields = [
+                        "id", "youtube_id", "slice_index", "parent_id", "title", "channel_id", "score", 
+                        "status", "retry_count", "error_msg", "created_at", "updated_at", "zh_title", 
+                        "source", "duration_sec", "view_count", "like_count", "upload_date"
+                    ]
+                    for col in ["censor_tag", "censor_score", "is_manually_scored", "process_pid", "trim_start", "trim_end"]:
+                        if col in columns:
+                            new_fields.append(col)
+                    new_fields_str = ", ".join(new_fields)
+                    
+                    # 导回，在 id, youtube_id 后补上常量 0 和 NULL
+                    select_fields_str = "id, youtube_id, 0, NULL, " + ", ".join(old_fields[2:])
+                    
+                    cursor.execute(f"""
+                        INSERT INTO processed_videos ({new_fields_str})
+                        SELECT {select_fields_str}
+                        FROM processed_videos_old
+                    """)
+                    
+                    # 4. 删除旧表
+                    cursor.execute("DROP TABLE processed_videos_old;")
+                    
+                    conn.commit()
+                    self._logger.info("[Migration] Database schema successfully migrated.")
+                except Exception as e:
+                    conn.rollback()
+                    self._logger.error(f"[Migration] Schema migration failed, rolled back: {e}")
+                    raise e
+            elif not columns:
+                # 第一次初始建表
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS processed_videos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        youtube_id TEXT NOT NULL,
+                        slice_index INTEGER NOT NULL DEFAULT 0,
+                        parent_id INTEGER DEFAULT NULL,
+                        title TEXT NOT NULL,
+                        channel_id TEXT NOT NULL,
+                        score INTEGER DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'PENDING',
+                        retry_count INTEGER DEFAULT 0,
+                        error_msg TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        zh_title TEXT,
+                        source TEXT DEFAULT 'AUTO',
+                        duration_sec INTEGER DEFAULT NULL,
+                        view_count INTEGER DEFAULT NULL,
+                        like_count INTEGER DEFAULT NULL,
+                        upload_date TEXT DEFAULT NULL,
+                        censor_tag TEXT DEFAULT NULL,
+                        censor_score INTEGER DEFAULT NULL,
+                        is_manually_scored INTEGER DEFAULT 0,
+                        process_pid INTEGER DEFAULT NULL,
+                        trim_start TEXT DEFAULT NULL,
+                        trim_end TEXT DEFAULT NULL,
+                        UNIQUE(youtube_id, slice_index),
+                        FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                    )
+                ''')
+            
+            # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS blacklisted_videos (
                     youtube_id TEXT PRIMARY KEY,
@@ -128,22 +191,26 @@ class PipelineDB:
                 )
             ''')
 
-            # 4. 创建复合索引优化分页查询性能
+            # 4. 创建复合索引优化分页查询与状态调度性能
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_status_updated 
                 ON processed_videos(status, updated_at DESC)
             ''')
             
-            # [Gemini_3.5_Flash_fast] 建立复合索引 (status, score, created_at DESC)
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_status_score_created
                 ON processed_videos(status, score, created_at DESC)
             ''')
             
-            # [Gemini_3.5_Flash_fast] 建立复合索引 (status, score, updated_at DESC)
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_status_score_updated
                 ON processed_videos(status, score, updated_at DESC)
+            ''')
+            
+            # [Gemini_3.5_Flash_planning] 新建 parent_id 索引提升自关联级联删除与关联查询速度
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_parent_id
+                ON processed_videos(parent_id)
             ''')
             
             conn.commit()
@@ -192,11 +259,12 @@ class PipelineDB:
         upload_date: Optional[str] = None,
         trim_start: Optional[str] = None,
         trim_end: Optional[str] = None,
+        slice_index: int = 0,                       # [Gemini_3.5_Flash_planning] 新增：切片索引，默认0 (主视频)
+        parent_id: Optional[int] = None,            # [Gemini_3.5_Flash_planning] 新增：父自增 ID
     ) -> bool:
-        # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 前置黑名单检查，防止已删除视频被爬虫二次拉取
+        # 前置黑名单检查，防止已删除视频被二次拉取
         if self.is_blacklisted(youtube_id):
             if source == 'MANUAL':
-                # [Gemini_3.5_Flash_fast] 手动重新添加的视频，自动从黑名单中移出，允许继续加工
                 self.remove_from_blacklist(youtube_id)
             else:
                 self._logger.warning(f"[Blacklist] Blocked re-add of blacklisted video: {youtube_id}")
@@ -206,23 +274,71 @@ class PipelineDB:
             try:
                 conn.execute(
                     """INSERT INTO processed_videos
-                       (youtube_id, title, channel_id, score, status, zh_title, source,
+                       (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
                         duration_sec, view_count, like_count, upload_date, trim_start, trim_end)
-                       VALUES (?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (youtube_id, title, channel_id, score, zh_title, source,
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (youtube_id, slice_index, parent_id, title, channel_id, score, zh_title, source,
                      duration_sec, view_count, like_count, upload_date, trim_start, trim_end)
                 )
                 conn.commit()
                 return True
             except sqlite3.IntegrityError:
-                return False  # Already exists
+                return False  # Already exists (youtube_id + slice_index duplicate)
+
+    def batch_add_videos(self, videos: List[Dict[str, Any]]) -> bool:
+        """[Gemini_3.1_Pro_High_planning] 批量插入子任务列表，使用 executemany 配合自动事务，规避性能与死锁问题"""
+        if not videos:
+            return True
+            
+        with self.get_connection() as conn:
+            # 1. 批量查询黑名单
+            yids = list(set(v.get("youtube_id") for v in videos if v.get("youtube_id")))
+            blacklisted = set()
+            if yids:
+                placeholders = ",".join(["?"] * len(yids))
+                cursor = conn.execute(f"SELECT youtube_id FROM blacklisted_videos WHERE youtube_id IN ({placeholders})", yids)
+                blacklisted = {row["youtube_id"] for row in cursor.fetchall()}
                 
-    def update_video_status(self, youtube_id: str, status: str, error_msg: Optional[str] = None):
-        """更新视频状态。error_msg=None 时主动清空旧错误信息（用于 retry 场景）。"""
+            # 2. 准备插入数据
+            insert_data = []
+            for v in videos:
+                yid = v.get("youtube_id")
+                source = v.get("source", "AUTO")
+                if yid in blacklisted and source != "MANUAL":
+                    continue
+                    
+                insert_data.append((
+                    yid, v.get("slice_index", 0), v.get("parent_id"), v.get("title"), v.get("channel_id"),
+                    v.get("score", 0), v.get("zh_title"), source, v.get("duration_sec"), v.get("view_count"),
+                    v.get("like_count"), v.get("upload_date"), v.get("trim_start"), v.get("trim_end")
+                ))
+            
+            if not insert_data:
+                return True
+                
+            try:
+                conn.executemany(
+                    """INSERT INTO processed_videos
+                       (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
+                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    insert_data
+                )
+                conn.commit()
+                return True
+            except Exception as e:
+                conn.rollback()
+                self._logger.error(f"[DB] batch_add_videos failed: {e}")
+                return False
+
+    def update_video_status(self, youtube_id: str, status: str, error_msg: Optional[str] = None, slice_index: int = 0):
+        """更新指定联合键 (youtube_id, slice_index) 视频的状态。"""
+        # [Gemini_3.5_Flash_planning] 更新定位增加 slice_index = ?
         with self.get_connection() as conn:
             conn.execute(
-                "UPDATE processed_videos SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
-                (status, error_msg, youtube_id)
+                "UPDATE processed_videos SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (status, error_msg, youtube_id, slice_index)
             )
             conn.commit()
             
@@ -231,20 +347,20 @@ class PipelineDB:
             cursor = conn.execute("SELECT * FROM processed_videos WHERE status = ? ORDER BY score DESC", (status,))
             return [dict(row) for row in cursor.fetchall()]
 
-    def claim_video_for_processing(self, youtube_id: str) -> bool:
-        """原子地将 PENDING 状态的视频改为 DOWNLOADING，用于防止并发竞争（乐观锁）。
-        返回 True 表示抢占成功，可以启动管线处理。
-        """
+    def claim_video_for_processing(self, youtube_id: str, slice_index: int = 0) -> bool:
+        """原子地将 PENDING 状态的特定切片任务改为 DOWNLOADING，用于防止并发抢占。"""
+        # [Gemini_3.5_Flash_planning] 抢占定位增加 slice_index = ?
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "UPDATE processed_videos SET status = 'DOWNLOADING', updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ? AND status = 'PENDING'",
-                (youtube_id,)
+                "UPDATE processed_videos SET status = 'DOWNLOADING', updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING'",
+                (youtube_id, slice_index)
             )
             conn.commit()
             return cursor.rowcount > 0
 
     def purge_stale_tasks(self, stale_hours: int = 2) -> int:
-        """[Gemini_3.1_Pro_High_planning] 清洗器：将卡在非终态（如 DOWNLOADING）超过 N 小时的任务重置回 PENDING"""
+        """清洗器：将卡在非终态（如 DOWNLOADING）超过 N 小时的任务重置回 PENDING"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -253,7 +369,7 @@ class PipelineDB:
                 SET status = 'PENDING', 
                     retry_count = retry_count + 1,
                     updated_at = CURRENT_TIMESTAMP 
-                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING')
+                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'PUBLISHED')
                 AND updated_at < datetime('now', ?)
                 ''',
                 (f'-{stale_hours} hours',)
@@ -261,44 +377,29 @@ class PipelineDB:
             conn.commit()
             return cursor.rowcount
 
-    def update_video_score(self, youtube_id: str, score: int, force: bool = False) -> None:
-        """更新视频评分。
-
-        此方法封装了原本散落在 pipeline_manager.py 中的裸 SQL 写分逻辑。
-        外部模块不得绕过此方法直接操作 score 字段。
-
-        Args:
-            youtube_id: 视频 ID。
-            score:      新分值。
-            force:      为 True 时强制写入（人工调分场景），忽略 is_manually_scored 锁。
-                        为 False 时（自动算分场景），若 is_manually_scored=1 则跳过，保护人工设置。
-        """
+    def update_video_score(self, youtube_id: str, score: int, force: bool = False, slice_index: int = 0) -> None:
+        """更新特定切片的评分，支持评分锁保护。"""
+        # [Gemini_3.5_Flash_planning] 定位增加 slice_index = ?
         with self.get_connection() as conn:
             if force:
-                # [Claude_Sonnet_4.6_Thinking_planning] 人工调分：同步打上手动锁，后续自动算分不得覆盖
                 conn.execute(
                     "UPDATE processed_videos SET score = ?, is_manually_scored = 1, "
-                    "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
-                    (score, youtube_id)
+                    "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ? AND slice_index = ?",
+                    (score, youtube_id, slice_index)
                 )
             else:
-                # [Claude_Sonnet_4.6_Thinking_planning] 自动算分：仅对未锁定的记录生效
                 cursor = conn.execute(
                     "UPDATE processed_videos SET score = ?, updated_at = CURRENT_TIMESTAMP "
-                    "WHERE youtube_id = ? AND is_manually_scored = 0",
-                    (score, youtube_id)
+                    "WHERE youtube_id = ? AND slice_index = ? AND is_manually_scored = 0",
+                    (score, youtube_id, slice_index)
                 )
                 if cursor.rowcount == 0:
-                    self._logger.info(f"[ScoreLock] Skipped auto-score for manually-locked video: {youtube_id}")
+                    self._logger.info(f"[ScoreLock] Skipped auto-score for manually-locked video: {youtube_id} (slice {slice_index})")
                     return
             conn.commit()
 
     def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5) -> List[Dict[str, Any]]:
-        """获取高分待处理视频列表，用于触发加工管线。
-        
-        此方法封装了原本散落在 pipeline_manager.py 中的裸 SQL 查询逻辑。
-        调用方不得自行拼接 score 过滤条件，统一通过此入口。
-        """
+        """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。"""
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "SELECT * FROM processed_videos WHERE status = 'PENDING' AND score >= ? ORDER BY score DESC LIMIT ?",
@@ -307,66 +408,92 @@ class PipelineDB:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_status_counts(self) -> Dict[str, int]:
-        """返回各状态下的视频数量，用于仪表盘统计卡片。"""
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "SELECT status, COUNT(*) as cnt FROM processed_videos GROUP BY status"
             )
             return {row["status"]: row["cnt"] for row in cursor.fetchall()}
 
+    def get_detailed_stats(self) -> Dict[str, Any]:
+        """[Gemini_3.5_Flash_High_planning] 分别统计父任务与切片子任务在各状态下的数量"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT status, COUNT(*) as cnt FROM processed_videos WHERE parent_id IS NULL GROUP BY status"
+            )
+            parents = {row["status"]: row["cnt"] for row in cursor.fetchall()}
+            
+            cursor = conn.execute(
+                "SELECT status, COUNT(*) as cnt FROM processed_videos WHERE parent_id IS NOT NULL GROUP BY status"
+            )
+            children = {row["status"]: row["cnt"] for row in cursor.fetchall()}
+            
+            return {
+                "parents": parents,
+                "children": children
+            }
+
     def get_paginated_videos(self, tab: str = 'waitlist', page: int = 1, size: int = 20) -> tuple[List[Dict[str, Any]], int]:
         """按分页和 Tab 类型返回视频列表和总数。
-
-        [Gemini_2.5_Pro_planning] 排序策略：
-        - waitlist: 按 created_at DESC（最新发现的视频在最前）
-        - 其他所有 tab: 按 updated_at DESC（最近有状态变化的在最前）
+        为了在折叠树中优雅呈现，在此查询时，主列表仅返回主任务（parent_id IS NULL 且 slice_index = 0）。
         """
+        # [Gemini_3.5_Flash_planning] 增加了 parent_id IS NULL 的前置过滤，实现主列表仅展现主任务，切片在树形中折叠
         if tab == 'completed':
-            condition = "pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')"
+            condition = "pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') AND pv.parent_id IS NULL"
         elif tab == 'error':
-            condition = "pv.status IN ('FAILED', 'LOGIN_REQUIRED')"
+            condition = "pv.status IN ('FAILED', 'LOGIN_REQUIRED') AND pv.parent_id IS NULL"
         elif tab == 'active':
-            condition = "pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING')"
-        elif tab == 'queue': # 待处理 (满足所有条件，在排队还没进行到)
-            condition = "pv.status = 'PENDING' AND pv.score >= 75"
-        else: # waitlist (默认，待筛选)
-            condition = "pv.status = 'PENDING' AND pv.score < 75"
+            condition = "pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING') AND pv.parent_id IS NULL"
+        elif tab == 'queue':
+            condition = "pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL"
+        else:
+            condition = "pv.status = 'PENDING' AND pv.score < 75 AND pv.parent_id IS NULL"
 
-        # [Gemini_2.5_Pro_planning] waitlist 按入库时间倒序，其他按最新操作时间倒序
         order_col = "pv.created_at" if tab == 'waitlist' else "pv.updated_at"
-
         offset = (page - 1) * size
+        
         with self.get_connection() as conn:
-            # 获取总数
             cursor = conn.execute(
                 f"SELECT COUNT(*) as cnt FROM processed_videos pv WHERE {condition}"
             )
             total_count = cursor.fetchone()["cnt"]
 
-            # 获取分页数据，LEFT JOIN 带出频道名称
+            # [Gemini_3.5_Flash_planning] 查询时，利用子查询带出子切片数量 count
             cursor = conn.execute(
-                f"""SELECT pv.*, COALESCE(rc.channel_name, pv.channel_id) AS channel_name
+                f"""SELECT pv.*, COALESCE(rc.channel_name, pv.channel_id) AS channel_name,
+                           (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id) AS slices_count
                     FROM processed_videos pv
                     LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id
                     WHERE {condition}
-                    ORDER BY {order_col} DESC LIMIT ? OFFSET """
-                + "?",
+                    ORDER BY {order_col} DESC LIMIT ? OFFSET ?""",
                 (size, offset)
             )
             videos = [dict(row) for row in cursor.fetchall()]
 
         return videos, total_count
 
+    def get_slices_by_parent_yid(self, parent_yid: str) -> List[Dict[str, Any]]:
+        """[Gemini_3.5_Flash_planning] 新增：按父任务 youtube_id 提取其下所有关联子切片元数据"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """SELECT sub.*, parent.youtube_id AS parent_youtube_id
+                   FROM processed_videos sub
+                   JOIN processed_videos parent ON sub.parent_id = parent.id
+                   WHERE parent.youtube_id = ? AND sub.slice_index > 0
+                   ORDER BY sub.slice_index ASC""",
+                (parent_yid,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
     def get_tab_counts(self) -> Dict[str, int]:
-        """获取各 Tab 的当前数量"""
+        """获取各 Tab 的当前数量（仅统计 parent_id IS NULL 级别的父视频，清爽管理）"""
         with self.get_connection() as conn:
             cursor = conn.execute("""
                 SELECT
-                    SUM(CASE WHEN status = 'PENDING' AND score < 75 THEN 1 ELSE 0 END) as waitlist,
-                    SUM(CASE WHEN status = 'PENDING' AND score >= 75 THEN 1 ELSE 0 END) as queue,
-                    SUM(CASE WHEN status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING') THEN 1 ELSE 0 END) as active,
-                    SUM(CASE WHEN status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') THEN 1 ELSE 0 END) as completed,
-                    SUM(CASE WHEN status IN ('FAILED', 'LOGIN_REQUIRED') THEN 1 ELSE 0 END) as error
+                    SUM(CASE WHEN status = 'PENDING' AND score < 75 AND parent_id IS NULL THEN 1 ELSE 0 END) as waitlist,
+                    SUM(CASE WHEN status = 'PENDING' AND score >= 75 AND parent_id IS NULL THEN 1 ELSE 0 END) as queue,
+                    SUM(CASE WHEN status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING') AND parent_id IS NULL THEN 1 ELSE 0 END) as active,
+                    SUM(CASE WHEN status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') AND parent_id IS NULL THEN 1 ELSE 0 END) as completed,
+                    SUM(CASE WHEN status IN ('FAILED', 'LOGIN_REQUIRED') AND parent_id IS NULL THEN 1 ELSE 0 END) as error
                 FROM processed_videos
             """)
             row = cursor.fetchone()
@@ -381,7 +508,6 @@ class PipelineDB:
             return {"waitlist": 0, "queue": 0, "active": 0, "completed": 0, "error": 0}
 
     def delete_channel(self, channel_id: str) -> bool:
-        """从频道白名单中删除指定频道。"""
         with self.get_connection() as conn:
             try:
                 conn.execute(
@@ -395,7 +521,6 @@ class PipelineDB:
                 return False
 
     def get_channel_by_id(self, channel_id: str) -> Optional[Dict[str, Any]]:
-        """按 channel_id 精确查找频道记录，用于重复检查。"""
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "SELECT * FROM recommended_channels WHERE channel_id = ?",
@@ -404,41 +529,39 @@ class PipelineDB:
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def get_video_by_youtube_id(self, youtube_id: str) -> Optional[Dict[str, Any]]:
-        """按 youtube_id 精确查找视频记录，用于重复检查。"""
+    def get_video_by_youtube_id(self, youtube_id: str, slice_index: int = 0) -> Optional[Dict[str, Any]]:
+        """按 youtube_id 和 slice_index 精确查找视频记录，用于重复检查。"""
+        # [Gemini_3.5_Flash_planning] 校验增加了 slice_index = ?
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT * FROM processed_videos WHERE youtube_id = ?",
-                (youtube_id,)
+                "SELECT * FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index)
             )
             row = cursor.fetchone()
             return dict(row) if row else None
 
-
-    def delete_video_record(self, youtube_id: str) -> bool:
-        """物理删除视频记录"""
+    def delete_video_record(self, youtube_id: str, slice_index: Optional[int] = None) -> bool:
+        """物理删除视频记录。如果 slice_index 传入 None，删除父及所有关联子视频；否则只删除单切片。"""
+        # [Gemini_3.5_Flash_planning] 支持分级删除。级联删除靠 FOREIGN KEY ... REFERENCES ... ON DELETE CASCADE 实现
         with self.get_connection() as conn:
             try:
-                conn.execute(
-                    "DELETE FROM processed_videos WHERE youtube_id = ?",
-                    (youtube_id,)
-                )
+                if slice_index is None:
+                    conn.execute(
+                        "DELETE FROM processed_videos WHERE youtube_id = ?",
+                        (youtube_id,)
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                        (youtube_id, slice_index)
+                    )
                 conn.commit()
                 return True
             except Exception as e:
-                self._logger.error(f"delete_video_record failed for {youtube_id}: {e}")
+                self._logger.error(f"delete_video_record failed for {youtube_id} (slice {slice_index}): {e}")
                 return False
 
     def batch_delete_video_records(self, youtube_ids: List[str], tombstone: bool = True) -> tuple[int, List[str]]:
-        """[Gemini_2.5_Pro_planning] 批量删除视频记录（可选写黑名单墓碑）。
-
-        Args:
-            youtube_ids: 要删除的 YouTube ID 列表
-            tombstone: 是否写入黑名单墓碑（默认 True）
-
-        Returns:
-            (deleted_count, failed_ids): 成功删除数量和失败的 ID 列表
-        """
         if not youtube_ids:
             return 0, []
 
@@ -452,7 +575,6 @@ class PipelineDB:
                             "INSERT OR IGNORE INTO blacklisted_videos (youtube_id, reason) VALUES (?, ?)",
                             (yid, "user_deleted")
                         )
-                # 批量删除 —— SQLite 支持多参数 IN (占位符)
                 placeholders = ",".join(["?"] * len(youtube_ids))
                 cursor = conn.execute(
                     f"DELETE FROM processed_videos WHERE youtube_id IN ({placeholders})",
@@ -462,20 +584,10 @@ class PipelineDB:
                 conn.commit()
             except Exception as e:
                 self._logger.error(f"batch_delete_video_records failed: {e}")
-                failed = list(youtube_ids)  # 全部标记为失败
+                failed = list(youtube_ids)
         return deleted, failed
 
-    # --- v7.0 Blacklist DAL [Claude_Sonnet_4.6_Thinking_planning] ---
-
     def add_to_blacklist(self, youtube_id: str, reason: str = 'user_deleted') -> bool:
-        """将视频 ID 写入黑名单墓碑表。
-
-        [Claude_Sonnet_4.6_Thinking_planning] LINT-5 修复: 正确的原常保证调用顺序是《先写墓碑、再删主记录》。
-        这样可以防止删除窗口期内爬虫二次插入（墓碑写入即封堵入口，小于 1ms）。
-        即: add_to_blacklist() 先调用，再调用 delete_video_record()。
-        
-        此操作不可逆（设计上）。
-        """
         with self.get_connection() as conn:
             try:
                 conn.execute(
@@ -490,7 +602,6 @@ class PipelineDB:
                 return False
 
     def is_blacklisted(self, youtube_id: str) -> bool:
-        """检查视频是否在黑名单中（爬虫插入前的前置校验）。"""
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "SELECT 1 FROM blacklisted_videos WHERE youtube_id = ?",
@@ -499,7 +610,6 @@ class PipelineDB:
             return cursor.fetchone() is not None
 
     def remove_from_blacklist(self, youtube_id: str) -> bool:
-        """[Gemini_3.5_Flash_fast] 从黑名单中移出指定视频 ID，主要在手动添加已删除视频时使用。"""
         with self.get_connection() as conn:
             try:
                 conn.execute(
@@ -513,36 +623,35 @@ class PipelineDB:
                 self._logger.error(f"remove_from_blacklist failed for {youtube_id}: {e}")
                 return False
 
-    def update_process_pid(self, youtube_id: str, pid: Optional[int]) -> None:
-        """记录或清除当前处理该视频的子进程组 ID（用于 SIGTERM 精准击杀）。"""
+    def update_process_pid(self, youtube_id: str, pid: Optional[int], slice_index: int = 0) -> None:
+        """记录或清除特定切片视频关联的处理进程组 ID。"""
+        # [Gemini_3.5_Flash_planning] 定位增加 slice_index = ?
         with self.get_connection() as conn:
             conn.execute(
                 "UPDATE processed_videos SET process_pid = ?, updated_at = CURRENT_TIMESTAMP "
-                "WHERE youtube_id = ?",
-                (pid, youtube_id)
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (pid, youtube_id, slice_index)
             )
             conn.commit()
 
-    def update_video_censor_status(self, youtube_id: str, tag: Optional[str], score: Optional[int]) -> None:
-        """更新视频的安全审查标签与分值。"""
+    def update_video_censor_status(self, youtube_id: str, tag: Optional[str], score: Optional[int], slice_index: int = 0) -> None:
+        """更新特定切片的违禁词过滤状态。"""
+        # [Gemini_3.5_Flash_planning] 定位增加 slice_index = ?
         with self.get_connection() as conn:
             conn.execute(
                 "UPDATE processed_videos SET censor_tag = ?, censor_score = ?, "
-                "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
-                (tag, score, youtube_id)
+                "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ? AND slice_index = ?",
+                (tag, score, youtube_id, slice_index)
             )
             conn.commit()
 
-    def set_manually_scored(self, youtube_id: str, locked: bool = True) -> None:
-        """设置或解除人工评分锁。
-
-        locked=True: 人工调分后锁定，自动算分不得覆盖。
-        locked=False: 硬重置时解锁，恢复自动算分。
-        """
+    def set_manually_scored(self, youtube_id: str, locked: bool = True, slice_index: int = 0) -> None:
+        """设置或解除特定视频/切片的人工评分锁。"""
+        # [Gemini_3.5_Flash_planning] 定位增加 slice_index = ?
         with self.get_connection() as conn:
             conn.execute(
                 "UPDATE processed_videos SET is_manually_scored = ?, "
-                "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ?",
-                (1 if locked else 0, youtube_id)
+                "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ? AND slice_index = ?",
+                (1 if locked else 0, youtube_id, slice_index)
             )
             conn.commit()

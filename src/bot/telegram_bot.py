@@ -11,6 +11,7 @@
 | 1.1.1 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 调整为仅非 /help 命令交由 Agent，标准指令由程序处理 |
 | 1.1.2 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将 YouTube URL 链接处理重归程序接管，不使用 Agent |
 | 1.2.0 | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 status] 新增 cmd_status 宏观状态指令并调整命令路由 |
+| 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 cmd_retry 与 cmd_delete 命令，支持可选 [slice_index] 对切片子任务的操作 |
 """
 from __future__ import annotations
 
@@ -158,16 +159,29 @@ async def cmd_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     assert _api is not None
     args = ctx.args  # type: ignore
     if not args:
-        await update.message.reply_text(fmt.fmt_error("用法：/delete <youtube_id>"), parse_mode="Markdown")  # type: ignore
+        await update.message.reply_text(fmt.fmt_error("用法：/delete <youtube_id> [slice_index]"), parse_mode="Markdown")  # type: ignore
         return
 
     youtube_id = args[0].strip()
-    result = await _api.delete_video(youtube_id)
+    slice_index = None
+    if len(args) >= 2:
+        try:
+            slice_index = int(args[1].strip())
+        except ValueError:
+            await update.message.reply_text(fmt.fmt_error("分集索引 slice_index 必须为整数"), parse_mode="Markdown")  # type: ignore
+            return
+
+    if slice_index is not None:
+        result = await _api.delete_slice(youtube_id, slice_index)
+    else:
+        result = await _api.delete_video(youtube_id)
+
     if result is None:
         await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
         return
     if result.get("success"):
-        await update.message.reply_text(fmt.fmt_delete_success(youtube_id), parse_mode="Markdown")  # type: ignore
+        target_name = f"{youtube_id}_s{slice_index}" if slice_index is not None else youtube_id
+        await update.message.reply_text(fmt.fmt_delete_success(target_name), parse_mode="Markdown")  # type: ignore
     else:
         await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
 
@@ -178,16 +192,31 @@ async def cmd_retry(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     assert _api is not None
     args = ctx.args  # type: ignore
     if not args:
-        await update.message.reply_text(fmt.fmt_error("用法：/retry <youtube_id>"), parse_mode="Markdown")  # type: ignore
+        await update.message.reply_text(fmt.fmt_error("用法：/retry <youtube_id> [slice_index]"), parse_mode="Markdown")  # type: ignore
         return
 
     youtube_id = args[0].strip()
-    result = await _api.retry_video(youtube_id)
+    slice_index = None
+    if len(args) >= 2:
+        try:
+            slice_index = int(args[1].strip())
+        except ValueError:
+            await update.message.reply_text(fmt.fmt_error("分集索引 slice_index 必须为整数"), parse_mode="Markdown")  # type: ignore
+            return
+
+    if slice_index is not None:
+        result = await _api.retry_slice(youtube_id, slice_index)
+    else:
+        result = await _api.retry_video(youtube_id)
+
     if result is None:
         await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
         return
     if result.get("success"):
-        msg = f"♻️ *重试已触发*\n🆔 ID：`{youtube_id}`\n_视频已重置为 PENDING，管线将在下次调度时处理。_"
+        if slice_index is not None:
+            msg = f"♻️ *切片重试已触发*\n🆔 ID：`{youtube_id}`\n🔢 分集：第 `{slice_index}` 集\n_切片任务已重置为 PENDING，将在满足前导条件后重新触发。_"
+        else:
+            msg = f"♻️ *重试已触发*\n🆔 ID：`{youtube_id}`\n_视频已重置为 PENDING，管线将在下次调度时处理。_"
         await update.message.reply_text(msg, parse_mode="Markdown")  # type: ignore
     else:
         await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore

@@ -16,6 +16,7 @@
 | 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建 v7.0 TDD 测试套件 |
 | 1.1.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 SEC-1 与 SEC-2 安全加固单元测试 |
 | 1.2.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 CensorEngine 流水线集成与安全锁异常测试用例 |
+| 1.2.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning         | 修复 test_con1_lock_handle_closed_on_flock_error 中 mock 调用的 slice_index 断言 |
 """
 
 import math
@@ -392,7 +393,7 @@ class TestSecurityBypassFortification:
             
             # 验证即使 flock(LOCK_EX) 抛出异常，mock_file.close() 依然被调用，避免句柄泄漏
             mock_file.close.assert_called_once()
-            pm.db.update_video_status.assert_called_with('lockerrvideo', 'FAILED', error_msg='Pipeline lock error: Simulated flock acquisition error')
+            pm.db.update_video_status.assert_called_with('lockerrvideo', 'FAILED', error_msg='Pipeline lock error: Simulated flock acquisition error', slice_index=0) # [Gemini_3.5_Flash_High_planning] 传入 slice_index=0 以匹配 pipeline_manager.py 的调用参数
 
 
 # ── Phase 7: CensorshipEngine 集成测试 ───────────────────────────────────────────

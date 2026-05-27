@@ -128,13 +128,34 @@ class PipelineManager:
 
     def process_high_score_videos(self, limit: int = 5):
         """拉取高分视频进入加工流转"""
-        targets = self.db.get_high_score_pending_videos(min_score=75, limit=limit)
+        # 拉取多一点以备过滤父视频就绪与发布顺序锁
+        targets = self.db.get_high_score_pending_videos(min_score=75, limit=limit * 3)
         
-        # [Gemini_3.1_Pro_High] 防竞态：尝试抢占，避免与 API 手工触发冲突
         claimed_targets = []
         for video in targets:
-            if self.db.claim_video_for_processing(video['youtube_id']):
+            yid = video['youtube_id']
+            slice_index = video.get('slice_index', 0)
+            
+            if slice_index > 0:
+                # 1. 检查父视频文件是否下载就绪
+                parent_file = self._find_downloaded_video(yid)
+                if not parent_file:
+                    logger.info(f"Sub-task [{yid} s{slice_index}] skipped: Parent video file not ready.")
+                    continue
+                
+                # 2. 检查前序子任务是否已发布 (Sequence Locking)
+                all_slices = self.db.get_slices_by_parent_yid(yid)
+                prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] != 'PUBLISHED']
+                if prev_not_published:
+                    prev_indices = [s['slice_index'] for s in prev_not_published]
+                    logger.info(f"Sub-task [{yid} s{slice_index}] skipped: Waiting for previous slices {prev_indices} to publish.")
+                    continue
+            
+            # [Gemini_3.1_Pro_High] 防竞态：尝试抢占，避免与 API 手工触发冲突
+            if self.db.claim_video_for_processing(yid, slice_index=slice_index):
                 claimed_targets.append(video)
+                if len(claimed_targets) >= limit:
+                    break
                 
         if not claimed_targets:
             logger.info("No high-score videos available for processing.")
@@ -180,7 +201,7 @@ class PipelineManager:
 
     # ── 子进程辅助（v7.0: Popen + 进程组隔离）────────────────────────────────
 
-    def _run_tracked(self, cmd: list, yid: str, **kwargs) -> subprocess.CompletedProcess:
+    def _run_tracked(self, cmd: list, yid: str, slice_index: int = 0, **kwargs) -> subprocess.CompletedProcess:
         """以独立进程组运行命令，并将 PGID 写入数据库，供 API 层 SIGTERM 精准击杀。
 
         [Claude_Sonnet_4.6_Thinking_planning] v7.0 关键设计：
@@ -203,7 +224,7 @@ class PipelineManager:
             )
             try:
                 pgid = os.getpgid(proc.pid)
-                self.db.update_process_pid(yid, pgid)
+                self.db.update_process_pid(yid, pgid, slice_index=slice_index)
             except ProcessLookupError:
                 pass  # 进程已极速退出，无需记录
             stdout, stderr = proc.communicate()
@@ -216,6 +237,43 @@ class PipelineManager:
         else:
             # Feature Flag 关闭时：回退到原有 subprocess.run，零侵入
             return subprocess.run(cmd, check=True, **kwargs)
+
+    def _run_garbage_collection(self, yid: str, slice_index: int, status: str):
+        """[Gemini_3.5_Flash_High_planning] GC 自动清理器：
+        - 子任务发布成功后，立即清理其对应的竖屏视频（*_vertical.mp4）和临时切片。
+        - 当所有子任务均进入终态，清理父任务的超大原始 MP4 视频与 info.json 临时文件。
+        """
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        
+        # 1. 如果子任务发布成功，清理其临时文件
+        if slice_index > 0 and status == "PUBLISHED":
+            for pat in [
+                f"{prefix}.mp4",
+                f"{prefix}_vertical.mp4",
+            ]:
+                for f in self._OUT_DIR.glob(pat):
+                    try:
+                        f.unlink()
+                        logger.info(f"[GC] Deleted sub-task vertical/slice artifact: {f.name}")
+                    except Exception as e:
+                        logger.warning(f"[GC] Failed to delete sub-task artifact {f.name}: {e}")
+                        
+        # 2. 检查兄弟子任务状态以判断是否清理父文件
+        all_slices = self.db.get_slices_by_parent_yid(yid)
+        if all_slices:
+            all_finished = all(s["status"] in ("PUBLISHED", "FAILED") for s in all_slices)
+            if all_finished:
+                logger.info(f"[GC] All slices for parent {yid} are finished. Cleaning up parent video...")
+                for pat in [
+                    f"{yid}.mp4",
+                    f"{yid}.info.json"
+                ]:
+                    for f in self._OUT_DIR.glob(pat):
+                        try:
+                            f.unlink()
+                            logger.info(f"[GC] Deleted parent big video/json: {f.name}")
+                        except Exception as e:
+                            logger.warning(f"[GC] Failed to delete parent artifact {f.name}: {e}")
 
     def _check_censorship(self, yid: str, title: str, description: str = "") -> bool:
         """执行内容安全审查。如果命中违禁词，根据级别执行对应的干预动作。
@@ -271,6 +329,8 @@ class PipelineManager:
         url   = f"https://youtu.be/{yid}"
         trim_start = video.get('trim_start')
         trim_end   = video.get('trim_end')
+        slice_index = video.get('slice_index', 0)
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
 
         # [Claude_Sonnet_4.6_Thinking_planning] BUG-1 修复: signal.signal() 只能在主线程调用。
         # 此方法通过 daemon 线程执行，signal 注册已移至 app.py startup_event()。
@@ -280,97 +340,149 @@ class PipelineManager:
         _sigterm_received = False  # 每个视频独立的中断状态
 
         lock_path = self._OUT_DIR / "pipeline.lock"
-        logger.info(f"[Lock] Waiting for pipeline lock to process {yid}...")
+        logger.info(f"[Lock] Waiting for pipeline lock to process {prefix}...")
         lock_file = None
         try:
             try:
                 lock_file = open(lock_path, "w")
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                logger.info(f"[Lock] Acquired pipeline lock. Processing {yid}...")
+                logger.info(f"[Lock] Acquired pipeline lock. Processing {prefix}...")
             except Exception as lock_err:
-                # [Gemini_3.5_Flash_planning] 捕捉 lock_file open() 或 flock() 等底层锁获取异常，防止崩溃整个调度循环
-                logger.error(f"Failed to acquire pipeline lock for {yid}: {lock_err}")
-                self.db.update_video_status(yid, "FAILED", error_msg=f"Pipeline lock error: {lock_err}")
+                logger.error(f"Failed to acquire pipeline lock for {prefix}: {lock_err}")
+                self.db.update_video_status(yid, "FAILED", error_msg=f"Pipeline lock error: {lock_err}", slice_index=slice_index)
                 self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}\nError: Lock error: {lock_err}")
                 return
 
             # ── 0. CENSORSHIP PRE-CHECK ───────────────────────────────────────
-            # [Gemini_3.5_Flash_planning] 下载前的视频标题前置安全检查
             if self._check_censorship(yid, title):
                 return
 
             try:
-                # ── 1. DOWNLOADING ────────────────────────────────────────────────
-                # [Claude_Sonnet_4.6_Thinking_planning] v7.0: SIGTERM 安全检查点
+                # ── 1. DOWNLOADING / SLICING ──────────────────────────────────────
                 if settings.enable_sigterm_kill and _sigterm_received:
-                    logger.warning(f"[SIGTERM] Checkpoint before DOWNLOADING: aborting {yid}")
-                    raise InterruptedError("SIGTERM received before download start")
+                    logger.warning(f"[SIGTERM] Checkpoint before DOWNLOADING: aborting {prefix}")
+                    raise InterruptedError("SIGTERM received before download/slice start")
 
-                existing = self._find_downloaded_video(yid)
-                if existing:
-                    logger.info(f"[SKIP] Download checkpoint: {existing}")
-                    self.db.update_video_status(yid, "DOWNLOADING")
-                    target_file = existing
+                if slice_index > 0:
+                    # 子任务：无需下载，只需从父任务的视频执行切片操作
+                    target_file = self._OUT_DIR / f"{prefix}.mp4"
+                    if target_file.exists() and target_file.stat().st_size > 50_000:
+                        logger.info(f"[SKIP] Slice checkpoint: {target_file.name}")
+                    else:
+                        parent_file = self._find_downloaded_video(yid)
+                        if not parent_file:
+                            raise FileNotFoundError(f"Parent video file not found for slice {prefix}")
+                        
+                        self.db.update_video_status(yid, "DOWNLOADING", slice_index=slice_index)
+                        from .processors.slicer import VideoSlicer
+                        slicer = VideoSlicer(Path(parent_file), self._OUT_DIR)
+                        
+                        # 毫秒精度寻求解析
+                        trim_start_val = float(video.get("trim_start", 0.0) or 0.0)
+                        trim_end_val = float(video.get("trim_end", 0.0) or 0.0)
+                        
+                        logger.info(f"Slicing parent {parent_file} -> {target_file} ({trim_start_val} -> {trim_end_val})")
+                        success = slicer.slice_video(trim_start_val, trim_end_val, Path(target_file))
+                        if not success or not target_file.exists():
+                            raise RuntimeError(f"Failed to slice parent video for {prefix}")
                 else:
-                    self.db.update_video_status(yid, "DOWNLOADING")
-                    logger.info(f"Downloading {yid}...")
-                    dl_cmd = [
-                        self._VENV_YTDLP,
-                        "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                        "--cookies-from-browser", "safari",
-                        "--write-description",
-                        "--remote-components", "ejs:github",
-                        url, "-o", str(self._OUT_DIR / f"{yid}.%(ext)s"),
-                    ]
-                    env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
-                    self._run_tracked(dl_cmd, yid, capture_output=True,
-                                      cwd=str(self._PRJ_ROOT), env=env_no_proxy)
-                    target_file = self._find_downloaded_video(yid)
-                    if not target_file:
-                        raise FileNotFoundError(f"No video file found for {yid} after download")
-                    logger.info(f"Downloaded: {target_file}")
+                    # 主任务：常规下载逻辑
+                    existing = self._find_downloaded_video(yid)
+                    if existing:
+                        logger.info(f"[SKIP] Download checkpoint: {existing}")
+                        self.db.update_video_status(yid, "DOWNLOADING", slice_index=slice_index)
+                        target_file = existing
+                    else:
+                        self.db.update_video_status(yid, "DOWNLOADING", slice_index=slice_index)
+                        logger.info(f"Downloading {yid}...")
+                        dl_cmd = [
+                            self._VENV_YTDLP,
+                            "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                            "--cookies-from-browser", "safari",
+                            "--write-description",
+                            "--write-info-json",  # 新增：写 info.json 便于 chapters 提取
+                            "--remote-components", "ejs:github",
+                            url, "-o", str(self._OUT_DIR / f"{yid}.%(ext)s"),
+                        ]
+                        env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
+                        self._run_tracked(dl_cmd, yid, slice_index=slice_index, capture_output=True,
+                                          cwd=str(self._PRJ_ROOT), env=env_no_proxy)
+                        target_file = self._find_downloaded_video(yid)
+                        if not target_file:
+                            raise FileNotFoundError(f"No video file found for {yid} after download")
+                        logger.info(f"Downloaded: {target_file}")
 
-                    # ── 1a. VIDEO TRIMMING ──────────────────────────────────────────
-                    if trim_start or trim_end:
-                        logger.info(f"Trimming video {yid} to range: {trim_start or '0'} -> {trim_end or 'End'}")
-                        temp_trimmed = self._OUT_DIR / f"{yid}_trimmed.mp4"
-                        
-                        # Build ffmpeg command
-                        import imageio_ffmpeg
-                        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-                        
-                        # Note: we use -c copy for lossless/fast seeking.
-                        # -ss is placed before -i for fast seek, which is optimal for download cut.
-                        trim_cmd = [ffmpeg_exe, "-y"]
-                        if trim_start:
-                            trim_cmd += ["-ss", trim_start]
-                        if trim_end:
-                            trim_cmd += ["-to", trim_end]
-                        trim_cmd += ["-i", str(target_file), "-c", "copy", str(temp_trimmed)]
-                        
-                        logger.info(f"Running ffmpeg trim: {' '.join(trim_cmd)}")
-                        # Use subprocess.run directly as this is a fast copy operation (~0.5s)
-                        res = subprocess.run(trim_cmd, capture_output=True, text=True, cwd=str(self._PRJ_ROOT))
-                        if res.returncode != 0:
-                            err_msg = res.stderr if res.stderr else "Unknown ffmpeg error"
-                            logger.error(f"Ffmpeg trim failed: {err_msg}")
+                        if trim_start or trim_end:
+                            logger.info(f"Trimming main video {yid} to range: {trim_start or '0'} -> {trim_end or 'End'}")
+                            temp_trimmed = self._OUT_DIR / f"{yid}_trimmed.mp4"
+                            
+                            import imageio_ffmpeg
+                            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+                            
+                            trim_cmd = [ffmpeg_exe, "-y"]
+                            if trim_start:
+                                trim_cmd += ["-ss", trim_start]
+                            if trim_end:
+                                trim_cmd += ["-to", trim_end]
+                            trim_cmd += ["-i", str(target_file), "-c", "copy", str(temp_trimmed)]
+                            
+                            res = subprocess.run(trim_cmd, capture_output=True, text=True, cwd=str(self._PRJ_ROOT))
+                            if res.returncode != 0:
+                                raise subprocess.CalledProcessError(res.returncode, trim_cmd, output=res.stdout, stderr=res.stderr)
+                            
                             if temp_trimmed.exists():
-                                try: temp_trimmed.unlink()
-                                except: pass
-                            raise subprocess.CalledProcessError(res.returncode, trim_cmd, output=res.stdout, stderr=res.stderr)
-                        
-                        # Overwrite original target_file with trimmed video
-                        if temp_trimmed.exists():
-                            try:
                                 Path(target_file).unlink()
                                 temp_trimmed.rename(target_file)
-                                logger.info(f"Trimmed successfully. Overwrote: {target_file}")
-                            except Exception as overwrite_err:
-                                logger.error(f"Failed to overwrite target file with trimmed file: {overwrite_err}")
-                                raise FileNotFoundError(f"Trimmed file overwrite failed: {overwrite_err}")
+
+                # ── 1a. CHAPTERS EXTRACTION (仅针对主任务) ────────────────────────
+                if slice_index == 0:
+                    enable_chapters = getattr(settings, "enable_chapters_slicing", True)
+                    if enable_chapters:
+                        from .processors.chapters_extractor import ChaptersExtractor
+                        extractor = ChaptersExtractor()
+                        info_json_path = self._OUT_DIR / f"{yid}.info.json"
+                        
+                        chapters = []
+                        if info_json_path.exists():
+                            chapters = extractor.extract_from_metadata(info_json_path)
+                            
+                        if len(chapters) > 1:
+                            logger.info(f"Found {len(chapters)} native chapters. Slicing enabled.")
+                            parent_video = self.db.get_video_by_youtube_id(yid, 0)
+                            parent_id = parent_video["id"] if parent_video else None
+                            
+                            slice_tasks = []
+                            from copywriter import graceful_truncate_title
+                            for idx, ch in enumerate(chapters, start=1):
+                                prefix_title = graceful_truncate_title(title, max_len=6)
+                                ch_title = ch["title"]
+                                import re as _re
+                                ch_title_clean = _re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', '', ch_title).strip()
+                                sub_title = f"【{prefix_title} {idx:02d}】{ch_title_clean}"
+                                sub_title = graceful_truncate_title(sub_title, max_len=16)
+                                
+                                slice_tasks.append({
+                                    "youtube_id": yid,
+                                    "slice_index": idx,
+                                    "parent_id": parent_id,
+                                    "title": sub_title,
+                                    "channel_id": video.get("channel_id", ""),
+                                    "score": video.get("score", 0),
+                                    "source": video.get("source", "AUTO"),
+                                    "duration_sec": int(ch["end_time"] - ch["start_time"]),
+                                    "trim_start": f"{ch['start_time']:.3f}",
+                                    "trim_end": f"{ch['end_time']:.3f}",
+                                })
+                                
+                            if self.db.batch_add_videos(slice_tasks):
+                                self.db.update_video_status(yid, "SEGMENTED", slice_index=0)
+                                self.send_telegram_msg(
+                                    f"📦 <b>Video Segmented</b>\nParent: {title}\n"
+                                    f"Generated {len(slice_tasks)} slices to publish."
+                                )
+                                return
 
                 # ── 1b. CENSORSHIP DESC CHECK ─────────────────────────────────────
-                # [Gemini_3.5_Flash_planning] 下载完成后，对视频简介描述进行安全检查
                 desc_path = self._OUT_DIR / f"{yid}.description"
                 description = ""
                 if desc_path.exists():
@@ -382,49 +494,47 @@ class PipelineManager:
                     return
 
                 # ── 2. TRANSCRIBING & RENDERING ───────────────────────────────────
-                vertical = self._OUT_DIR / f"{yid}_vertical.mp4"
+                vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
                 if vertical.exists() and vertical.stat().st_size > 1_000_000:
                     logger.info(f"[SKIP] Transcribe checkpoint: {vertical.name}")
-                    self.db.update_video_status(yid, "TRANSCRIBING")
+                    self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
                 else:
-                    # [Claude_Sonnet_4.6_Thinking_planning] v7.0: SIGTERM 安全检查点
                     if settings.enable_sigterm_kill and _sigterm_received:
-                        logger.warning(f"[SIGTERM] Checkpoint before TRANSCRIBING: aborting {yid}")
+                        logger.warning(f"[SIGTERM] Checkpoint before TRANSCRIBING: aborting {prefix}")
                         raise InterruptedError("SIGTERM received before transcription")
-                    self.db.update_video_status(yid, "TRANSCRIBING")
+                    self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
                     render_cmd = [
                         "nice", "-n", "19",
                         self._VENV_PYTHON, "-m", "cli.main", "auto-caption",
-                        target_file, "--vertical", "--bilingual", "--title", title,
+                        str(target_file), "--vertical", "--bilingual", "--title", title,
                     ]
                     render_env = os.environ.copy()
                     render_env["PYTHONPATH"] = str(self._SRC_DIR)
-                    self._run_tracked(render_cmd, yid, capture_output=True,
+                    self._run_tracked(render_cmd, yid, slice_index=slice_index, capture_output=True,
                                       cwd=str(self._PRJ_ROOT), env=render_env)
 
                 # ── 2b. COPYWRITING ────────────────────────────────────────────────
-                copy_file = self._OUT_DIR / f"{yid}_copy.txt"
-                title_file = self._OUT_DIR / f"{yid}_title.txt"
-                category_file = self._OUT_DIR / f"{yid}_category.txt"
+                copy_file = self._OUT_DIR / f"{prefix}_copy.txt"
+                title_file = self._OUT_DIR / f"{prefix}_title.txt"
+                category_file = self._OUT_DIR / f"{prefix}_category.txt"
                 
                 if copy_file.exists() and title_file.exists():
                     logger.info(f"[SKIP] Copywriting checkpoint: {copy_file.name}")
-                    self.db.update_video_status(yid, "COPYWRITING")
+                    self.db.update_video_status(yid, "COPYWRITING", slice_index=slice_index)
                 else:
-                    self.db.update_video_status(yid, "COPYWRITING")
-                    logger.info(f"Generating WeChat copy for {yid}...")
+                    self.db.update_video_status(yid, "COPYWRITING", slice_index=slice_index)
+                    logger.info(f"Generating WeChat copy for {prefix}...")
                     copy_cmd = [
                         self._VENV_PYTHON,
                         str(self._PRJ_ROOT / "scripts" / "copywriter.py"),
-                        "--youtube-id", yid,
+                        "--youtube-id", prefix,
                         "--title", title,
                         "--desc-file", str(self._OUT_DIR / f"{yid}.description"),
                     ]
-                    self._run_tracked(copy_cmd, yid, capture_output=True,
+                    self._run_tracked(copy_cmd, yid, slice_index=slice_index, capture_output=True,
                                       cwd=str(self._PRJ_ROOT))
 
                 # ── 2c. CENSORSHIP COPYWRITING CHECK ──────────────────────────────
-                # [Gemini_3.5_Flash_planning] 文案生成后，对生成的短标题和文案正文进行安全检查
                 copy_content = ""
                 if copy_file.exists():
                     try:
@@ -442,11 +552,10 @@ class PipelineManager:
                 if self._check_censorship(yid, short_title, copy_content):
                     return
 
-                # ── 3. 封面生成（非阻断，失败不影响发布）────────────────────────
-                cover_file = self._OUT_DIR / f"{yid}_cover.jpg"
+                # ── 3. 封面生成 ──────────────────────────────────────────────────
+                cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"
                 if not cover_file.exists():
-                    logger.info(f"Generating cover for {yid}...")
-                    # [Gemini_3.5_Flash_planning] 读取短标题、副标题与内容语义 hints 并组装 payload
+                    logger.info(f"Generating cover for {prefix}...")
                     cover_title = title
                     if title_file.exists():
                         try:
@@ -461,19 +570,19 @@ class PipelineManager:
                         "category": "",
                         "content_hints": []
                     }
-                    subtitle_file = self._OUT_DIR / f"{yid}_subtitle.txt"
+                    subtitle_file = self._OUT_DIR / f"{prefix}_subtitle.txt"
                     if subtitle_file.exists():
                         try:
                             cover_payload["subtitle"] = subtitle_file.read_text(encoding="utf-8").strip()
                         except Exception:
                             pass
-                    category_file = self._OUT_DIR / f"{yid}_category.txt"
+                    category_file = self._OUT_DIR / f"{prefix}_category.txt"
                     if category_file.exists():
                         try:
                             cover_payload["category"] = category_file.read_text(encoding="utf-8").strip()
                         except Exception:
                             pass
-                    hints_file = self._OUT_DIR / f"{yid}_content_hints.json"
+                    hints_file = self._OUT_DIR / f"{prefix}_content_hints.json"
                     if hints_file.exists():
                         try:
                             cover_payload["content_hints"] = json.loads(hints_file.read_text(encoding="utf-8"))
@@ -496,8 +605,20 @@ class PipelineManager:
                     logger.info(f"[SKIP] Cover checkpoint: {cover_file.name}")
 
                 # ── 4. PUBLISHING ─────────────────────────────────────────────────
-                self.db.update_video_status(yid, "PUBLISHING")
-                logger.info(f"Uploading to WeChat Channels for {yid}...")
+                # Sequence Locking 二次校验（防止在 queue 排队期间状态改变）
+                if slice_index > 0:
+                    all_slices = self.db.get_slices_by_parent_yid(yid)
+                    prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] != 'PUBLISHED']
+                    if prev_not_published:
+                        logger.warning(f"Sequence Lock active: slice {slice_index} waiting for previous slices. Resetting to PENDING.")
+                        self.db.update_video_status(yid, "PENDING", slice_index=slice_index)
+                        return
+
+                self.db.update_video_status(yid, "PUBLISHING", slice_index=slice_index)
+                logger.info(f"Uploading to WeChat Channels for {prefix}...")
+
+                # 获取微信合集名称 (这里可以使用父视频的标题作为合集前缀，或者指定特定合集)
+                collection_name = graceful_truncate_title(title, max_len=15)
 
                 upload_cmd = [
                     self._VENV_PYTHON,
@@ -505,8 +626,6 @@ class PipelineManager:
                     "--video",  str(vertical),
                     "--copy",   str(copy_file),
                     "--state",  str(self._OUT_DIR / "wechat_state.json"),
-                    # 微信检测 headless 浏览器会重定向登录页
-                    # 本地 Mac 运行，直接用可见浏览器，窗口会自动弹出并完成后关闭
                     "--no-headless",
                 ]
                 if cover_file.exists():
@@ -515,12 +634,11 @@ class PipelineManager:
                     upload_cmd += ["--title-file", str(title_file)]
                 if category_file.exists():
                     upload_cmd += ["--category-file", str(category_file)]
+                if slice_index > 0 and collection_name:
+                    upload_cmd += ["--collection", collection_name]
 
-                # [Claude_Sonnet_4.6_Thinking_planning] BUG-3 修复: 使用 _run_tracked 覆盖 PUBLISHING 阶段的 PID 追踪。
-                # wechat_uploader 启动 Playwright 可见浏览器 GUI；os.setsid() 不影响 GUI 进程组。
-                # 特殊返回码 2 表示微信 session 过期，须单独捕获，不作为普通失败处理。
                 try:
-                    res = self._run_tracked(upload_cmd, yid, text=True,
+                    res = self._run_tracked(upload_cmd, yid, slice_index=slice_index, text=True,
                                             capture_output=True, cwd=str(self._PRJ_ROOT))
                     if res.stdout:
                         logger.debug(f"Uploader stdout:\n{res.stdout}")
@@ -528,55 +646,55 @@ class PipelineManager:
                         logger.debug(f"Uploader stderr:\n{res.stderr}")
                 except subprocess.CalledProcessError as upload_err:
                     if upload_err.returncode == 2:
-                        # 登录 session 过期，非普通失败
-                        logger.error(f"WeChat login required for {yid}.")
-                        self.db.update_video_status(yid, "LOGIN_REQUIRED")
+                        logger.error(f"WeChat login required for {prefix}.")
+                        self.db.update_video_status(yid, "LOGIN_REQUIRED", slice_index=slice_index)
                         self.send_telegram_msg(
                             f"⚠️ <b>WeChat Login Required</b>\n"
-                            f"Session expired: <b>{title}</b>\n"
+                            f"Session expired: <b>{prefix}</b>\n"
                             f"<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
                         )
                         return
-                    raise  # 其他错误上抛给外层 CalledProcessError 处理器
-
+                    raise
 
                 # ── 5. PUBLISHED ──────────────────────────────────────────────────
-                self.db.update_video_status(yid, "PUBLISHED")
+                self.db.update_video_status(yid, "PUBLISHED", slice_index=slice_index)
                 self.send_telegram_msg(
-                    f"✅ <b>Video Published</b>\nTitle: {title}\n"
+                    f"✅ <b>Video Published</b>\nTitle: {short_title}\n"
                     f"Platform: WeChat Channels\nScore: {video['score']}"
                 )
+                
+                # 触发 GC 清理该子任务的临时文件
+                self._run_garbage_collection(yid, slice_index, "PUBLISHED")
 
             except InterruptedError as e:
-                # [Claude_Sonnet_4.6_Thinking_planning] v7.0: SIGTERM 触发的可控退出
-                logger.warning(f"[SIGTERM] Clean abort for {yid}: {e}")
-                self.db.update_video_status(yid, "PENDING", error_msg="Aborted by SIGTERM")
-                self.reset_video_artifacts(yid)
+                logger.warning(f"[SIGTERM] Clean abort for {prefix}: {e}")
+                self.db.update_video_status(yid, "PENDING", error_msg="Aborted by SIGTERM", slice_index=slice_index)
+                self.reset_video_artifacts(prefix)
 
             except subprocess.CalledProcessError as e:
                 err = e.stderr if isinstance(e.stderr, str) else (e.stderr or b"").decode()
-                logger.error(f"Process failed for {yid}: {err[:500]}")
-                self.db.update_video_status(yid, "FAILED", error_msg=err)
+                logger.error(f"Process failed for {prefix}: {err[:500]}")
+                self.db.update_video_status(yid, "FAILED", error_msg=err, slice_index=slice_index)
                 self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}")
+                self._run_garbage_collection(yid, slice_index, "FAILED")
 
             except Exception as e:
-                logger.error(f"Unexpected error for {yid}: {e}")
-                self.db.update_video_status(yid, "FAILED", error_msg=str(e))
+                logger.error(f"Unexpected error for {prefix}: {e}")
+                self.db.update_video_status(yid, "FAILED", error_msg=str(e), slice_index=slice_index)
                 self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}\nError: {e}")
+                self._run_garbage_collection(yid, slice_index, "FAILED")
 
         finally:
-            # [Gemini_3.5_Flash_planning] CON-1: 无论处理成功、失败或发生任何异常，都必须释放进程锁并关闭句柄
             if lock_file is not None:
                 try:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                    logger.info(f"[Lock] Released pipeline lock for {yid}.")
+                    logger.info(f"[Lock] Released pipeline lock for {prefix}.")
                 except Exception as ex:
                     logger.error(f"[Lock] Error releasing lock: {ex}")
                 finally:
                     lock_file.close()
-            # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 清除 PID 记录（进程已终止）
             if settings.enable_sigterm_kill:
-                self.db.update_process_pid(yid, None)
+                self.db.update_process_pid(yid, None, slice_index=slice_index)
 
     # ── 每日作业 ──────────────────────────────────────────────────────────────
 

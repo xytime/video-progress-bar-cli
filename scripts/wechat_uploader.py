@@ -45,6 +45,286 @@ logger = logging.getLogger("wechat_uploader")
 # 微信视频号发表地址
 WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 
+def _select_category(page, category: str) -> bool:
+    """在微信视频号助手页面选择视频分类。
+    
+    采用分层限制定位机制（抗 UI 变化）以避免误触其他导航链接。
+    """
+    if not category:
+        return True
+        
+    logger.info(f"Selecting category: {category!r}")
+    
+    # 1. 尝试找到分类选择器的触发按钮
+    form_items = page.locator(".weui-desktop-form__item")
+    dropdown_trigger = None
+    
+    # 策略 1: 寻找包含“分类”文字的表单项，并在其内寻找触发按钮
+    for i in range(form_items.count()):
+        item = form_items.nth(i)
+        if "分类" in (item.inner_text() or ""):
+            trigger = item.locator(".weui-desktop-dropdown__trigger").first
+            if trigger.count() > 0 and trigger.is_visible():
+                dropdown_trigger = trigger
+                logger.info("Found category dropdown trigger within form item.")
+                break
+                
+    # 策略 2: 兜底匹配全局 trigger 选项
+    if not dropdown_trigger:
+        triggers = [
+            page.locator(".weui-desktop-dropdown__trigger:near(:text('视频分类'), 100)").first,
+            page.locator(".weui-desktop-dropdown__trigger:near(:text('分类'), 100)").first,
+            page.locator("text=视频分类").locator("xpath=..").locator("div").first,
+            page.locator(".category-selector"),
+            page.locator("div[class*='category-select']")
+        ]
+        for trg in triggers:
+            try:
+                if trg.count() > 0 and trg.is_visible():
+                    dropdown_trigger = trg
+                    logger.info("Found category dropdown trigger via fallback locators.")
+                    break
+            except Exception:
+                continue
+                
+    if not dropdown_trigger:
+        logger.warning("Could not find category dropdown trigger.")
+        return False
+        
+    # 2. 点击下拉触发按钮展开列表
+    try:
+        dropdown_trigger.click(timeout=1000)
+    except Exception:
+        try:
+            dropdown_trigger.evaluate("node => node.click()")
+        except Exception as click_err:
+            logger.error(f"Failed to click category dropdown trigger: {click_err}")
+            return False
+            
+    # 3. 等待下拉列表容器渲染完成
+    list_container = page.locator(".weui-desktop-dropdown__list").first
+    try:
+        list_container.wait_for(state="visible", timeout=3000)
+    except Exception:
+        logger.warning("Category dropdown list container did not appear.")
+        
+    # 4. 在列表容器内进行精确匹配点击
+    options = [
+        list_container.locator(f"li:has-text('{category}')").first,
+        list_container.locator(f"div[role='option']:has-text('{category}')").first,
+        list_container.locator(f"*:has-text('{category}')").last
+    ]
+    
+    for opt in options:
+        try:
+            if opt.count() > 0 and opt.is_visible():
+                ok = human_click(page, opt)
+                if not ok:
+                    opt.evaluate("node => node.click()")
+                logger.info(f"Category {category!r} selected successfully.")
+                return True
+        except Exception:
+            continue
+            
+    # 全局 popover 兜底
+    try:
+        global_opts = page.locator(f".weui-desktop-dropdown__list li:has-text('{category}')").first
+        if global_opts.count() > 0 and global_opts.is_visible():
+            ok = human_click(page, global_opts)
+            if not ok:
+                global_opts.evaluate("node => node.click()")
+            logger.info(f"Category {category!r} selected via global list fallback.")
+            return True
+    except Exception:
+        pass
+        
+    try:
+        page.mouse.click(0, 0)
+    except Exception:
+        pass
+    logger.warning(f"Could not find category option for {category!r}.")
+    return False
+
+def _select_collection(page, collection_name: str) -> bool:
+    """在微信视频号助手页面选择视频合集，若不存在则自动新建。
+    
+    微信合集的选择交互流程：
+    1. 找到包含“合集”文本的触发按钮并点击展开。
+    2. 在展开的下拉项中匹配 collection_name。
+    3. 如果找到，点击勾选。
+    4. 如果没有找到，向下滚动点击“新建合集”按钮。
+    5. 弹出新建 Modal，在输入框填入合集名，点击确定保存。
+    """
+    if not collection_name:
+        return True
+        
+    logger.info(f"Setting collection: {collection_name!r}")
+    
+    # 1. 寻找“合集”表单项容器
+    form_items = page.locator(".weui-desktop-form__item")
+    collection_trigger = None
+    
+    for i in range(form_items.count()):
+        item = form_items.nth(i)
+        text = item.inner_text() or ""
+        if "合集" in text:
+            trigger = item.locator(".weui-desktop-dropdown__trigger, .weui-desktop-select__trigger").first
+            if trigger.count() == 0:
+                trigger = item.locator("div[class*='select'], div[class*='dropdown']").first
+            if trigger.count() > 0 and trigger.is_visible():
+                collection_trigger = trigger
+                logger.info("Found collection dropdown trigger within form item.")
+                break
+                
+    # 兜底匹配
+    if not collection_trigger:
+        triggers = [
+            page.locator(".weui-desktop-dropdown__trigger:near(:text('添加到合集'), 100)").first,
+            page.locator(".weui-desktop-dropdown__trigger:near(:text('合集'), 100)").first,
+            page.locator("text=添加到合集").locator("xpath=..").locator("div").first,
+            page.locator(".collection-selector").first
+        ]
+        for trg in triggers:
+            try:
+                if trg.count() > 0 and trg.is_visible():
+                    collection_trigger = trg
+                    logger.info("Found collection dropdown trigger via fallback locators.")
+                    break
+            except Exception:
+                continue
+                
+    if not collection_trigger:
+        logger.warning("Could not find collection dropdown trigger.")
+        return False
+        
+    # 2. 点击展开合集下拉菜单
+    try:
+        collection_trigger.click(timeout=1000)
+    except Exception:
+        try:
+            collection_trigger.evaluate("node => node.click()")
+        except Exception as e:
+            logger.error(f"Failed to click collection dropdown: {e}")
+            return False
+            
+    page.wait_for_timeout(800)
+    
+    # 3. 检查下拉菜单容器中是否已经有目标合集
+    list_container = page.locator(".weui-desktop-dropdown__list").first
+    target_option = None
+    if list_container.count() > 0 and list_container.is_visible():
+        option = list_container.locator(f"li:has-text('{collection_name}')").first
+        if option.count() > 0 and option.is_visible():
+            target_option = option
+            
+    if not target_option:
+        try:
+            opt = page.locator(f".weui-desktop-dropdown__list li:has-text('{collection_name}')").first
+            if opt.count() > 0 and opt.is_visible():
+                target_option = opt
+        except Exception:
+            pass
+            
+    # 4. 如果合集存在，点击勾选
+    if target_option:
+        logger.info(f"Collection {collection_name!r} already exists. Selecting...")
+        try:
+            cb = target_option.locator("input[type='checkbox']").first
+            if cb.count() > 0:
+                if not cb.is_checked():
+                    human_click(page, cb)
+            else:
+                ok = human_click(page, target_option)
+                if not ok:
+                    target_option.evaluate("node => node.click()")
+            logger.info(f"Successfully selected existing collection {collection_name!r}")
+            return True
+        except Exception as select_err:
+            logger.warning(f"Failed to select existing collection: {select_err}")
+            
+    # 5. 如果合集不存在，执行新建合集流程
+    logger.info(f"Collection {collection_name!r} not found. Creating a new one...")
+    create_btn = None
+    for btn_text in ["新建合集", "创建合集", "新建", "创建"]:
+        btn = page.locator(f"button:has-text('{btn_text}')").first
+        if btn.count() > 0 and btn.is_visible():
+            create_btn = btn
+            break
+            
+    if not create_btn:
+        result_js = page.evaluate("""() => {
+            const btns = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
+            const target = btns.find(b => b.innerText.includes('新建') || b.innerText.includes('创建'));
+            if (target && target.offsetParent !== null) {
+                const r = target.getBoundingClientRect();
+                return {ok: true, x: r.left + r.width/2, y: r.top + r.height/2};
+            }
+            return {ok: false};
+        }""")
+        if result_js and result_js.get("ok"):
+            page.mouse.click(result_js["x"], result_js["y"])
+            logger.info("Clicked 'Create Collection' button via coordinates.")
+        else:
+            logger.warning("Could not find 'Create Collection' button, exiting collection setup.")
+            page.mouse.click(0, 0)
+            return False
+    else:
+        try:
+            ok = human_click(page, create_btn)
+            if not ok:
+                create_btn.evaluate("node => node.click()")
+            logger.info("Clicked 'Create Collection' button.")
+        except Exception as e:
+            logger.error(f"Failed to click Create Collection button: {e}")
+            page.mouse.click(0, 0)
+            return False
+            
+    page.wait_for_timeout(1000)
+    
+    # 6. 处理新建对话框 Modal
+    modal = page.locator(".weui-desktop-dialog, div[role='dialog']").first
+    if modal.count() > 0 and modal.is_visible():
+        logger.info("New collection creation dialog detected.")
+        page.screenshot(path="output/debug_collection_dialog.png")
+        
+        input_box = modal.locator("input[type='text'], input[placeholder*='合集名称'], input[placeholder*='标题']").first
+        if input_box.count() > 0:
+            try:
+                import re as _re
+                cleaned_name = _re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', '', collection_name).strip()
+                cleaned_name = cleaned_name[:15]
+                logger.info(f"Cleaned collection name: {cleaned_name!r}")
+                
+                input_box.fill(cleaned_name)
+                page.wait_for_timeout(500)
+                
+                confirm_btn = None
+                for bt in ["确定", "保存", "创建", "确认"]:
+                    btn = modal.locator(f"button:has-text('{bt}')").first
+                    if btn.count() > 0 and btn.is_visible():
+                        confirm_btn = btn
+                        break
+                        
+                if confirm_btn:
+                    ok = human_click(page, confirm_btn)
+                    if not ok:
+                        confirm_btn.evaluate("node => node.click()")
+                    logger.info("Clicked confirm button in new collection dialog.")
+                    page.wait_for_timeout(1500)
+                    page.screenshot(path="output/debug_collection_after_create.png")
+                    return True
+                else:
+                    logger.warning("Could not find confirm button in creation dialog.")
+            except Exception as create_err:
+                logger.error(f"Failed during collection creation: {create_err}")
+        else:
+            logger.warning("Could not find input box in creation dialog.")
+    else:
+        logger.warning("Collection creation dialog did not appear.")
+        
+    page.mouse.click(0, 0)
+    return False
+
 def run_uploader(
     video_path: str = None,
     copy_path: str = None,
@@ -55,6 +335,7 @@ def run_uploader(
     title_path: str = None,      # 短标题文件（6-16 字，匹配微信平台真实限制）
     cover_path: str = None,      # 封面图文件 (JPEG)
     category_path: str = None,   # 分类文件
+    collection: str = None,      # 新增：微信合集名称
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -82,9 +363,9 @@ def run_uploader(
             Path(category_path).read_text(encoding="utf-8").strip()
             if category_path and Path(category_path).exists() else None
         )
-        logger.info(f"short_title={short_title!r}  category={category!r}  cover={'yes' if cover_abs else 'no'}")
+        logger.info(f"short_title={short_title!r}  category={category!r}  collection={collection!r}  cover={'yes' if cover_abs else 'no'}")
     else:
-        video_abs = copy_text = short_title = cover_abs = category = None
+        video_abs = copy_text = short_title = cover_abs = category = collection = None
         headless = False  # 登录时强制显示界面
 
     with sync_playwright() as p:
@@ -1245,63 +1526,11 @@ def run_uploader(
 
         # ── 7. 分类选择 ───────────────────────────────────────────────────────
         if category:
-            logger.info(f"Selecting category: {category!r}")
-            cat_set = False
+            _select_category(page, category)
             
-            # 第一阶段：找到并点击分类下拉框的入口 (采用 shadow-safe 的定位器)
-            dropdown_triggers = [
-                page.locator(".weui-desktop-dropdown__trigger:near(:text('视频分类'), 100)").first,
-                page.locator(".weui-desktop-dropdown__trigger:near(:text('分类'), 100)").first,
-                page.locator("text=视频分类").locator("xpath=..").locator("div").first, # 保留兼容
-                page.locator("text=分类").locator("xpath=..").locator("div").first,     # 保留兼容
-                page.locator(".category-selector"),
-                page.locator("div[class*='category-select']")
-            ]
-            
-            for trigger in dropdown_triggers:
-                try:
-                    if trigger.count() > 0 and trigger.first.is_visible(timeout=1500):
-                        try:
-                            trigger.first.click(timeout=500)
-                        except Exception:
-                            trigger.first.evaluate("node => node.click()")
-                        page.wait_for_timeout(800) # 等待下拉菜单展开
-                        
-                        # 第二阶段：在展开的菜单中点击目标分类
-                        # 微信的选项通常在单独的浮层层级中
-                        options = [
-                            page.locator(f"li:has-text('{category}')"),
-                            page.locator(f".weui-desktop-dropdown__list li:has-text('{category}')"),
-                            page.locator(f"div[role='option']:has-text('{category}')")
-                        ]
-                        
-                        for opt in options:
-                            if opt.count() > 0 and opt.first.is_visible(timeout=1000):
-                                try:
-                                    human_click(page, opt.first)  # 人类化点击下拉选项
-                                    logger.info(f"Category '{category}' selected successfully.")
-                                    cat_set = True
-                                    break
-                                except Exception:
-                                    try:
-                                        opt.first.evaluate("node => node.click()")
-                                        logger.info(f"Category '{category}' selected successfully via evaluate.")
-                                        cat_set = True
-                                        break
-                                    except Exception:
-                                        pass
-                        
-                        if cat_set:
-                            break
-                        else:
-                            # 没找到对应选项，可能需要点击旁边收起下拉框
-                            page.mouse.click(0, 0)
-                            page.wait_for_timeout(500)
-                except Exception:
-                    continue
-
-            if not cat_set:
-                logger.warning(f"Could not set category '{category}', skipping.")
+        # ── 8. 合集选择与新建 ───────────────────────────────────────────────────
+        if collection:
+            _select_collection(page, collection)
             
         # 5. 执行提交或存草稿
         if draft:
@@ -1351,6 +1580,7 @@ def main():
     parser.add_argument("--title-file",    help="Path to short title text file (6-16 chars, WeChat platform limit)")
     parser.add_argument("--cover",         help="Path to cover image JPEG file")
     parser.add_argument("--category-file", help="Path to category text file")
+    parser.add_argument("--collection",    help="Custom collection/playlist name to associate with this video")
     parser.add_argument("--state",  default="output/wechat_state.json",
                         help="Path to save/load Playwright session state")
     parser.add_argument("--login-only",  action="store_true")
@@ -1369,6 +1599,7 @@ def main():
         login_only    = args.login_only,
         headless      = args.headless,
         draft         = args.draft,
+        collection    = args.collection,
     )
     sys.exit(code)
 

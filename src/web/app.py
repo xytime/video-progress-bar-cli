@@ -13,6 +13,7 @@
 | 2.2.0 | 2026-05-27 | Gemini_3.5_Flash                    | 新增 trim_start/trim_end 请求参数接收与安全校验 |
 | 2.3.0 | 2026-05-27 | Gemini_2.0_Flash_fast               | 适配微信扫码登录 QR 服务与状态查询 API |
 | 2.3.1 | 2026-05-27 | Gemini_3.5_Flash_planning           | 修复由于缺少 re 模块导致的视频添加接口 500 报错 |
+| 2.4.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 delete_video 接口支持单个 slice 物理删除；新增获取所有 slices 与重试单个 slice 的 API |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -200,6 +201,7 @@ def get_stats():
     counts = db.get_status_counts()
     total = sum(counts.values())
     active = sum(v for k, v in counts.items() if k in ACTIVE_STATUSES)
+    detailed = db.get_detailed_stats()
     return {
         "total": total,
         "pending": counts.get("PENDING", 0),
@@ -207,6 +209,7 @@ def get_stats():
         "published": counts.get("PUBLISHED", 0),
         "failed": counts.get("FAILED", 0) + counts.get("LOGIN_REQUIRED", 0),
         "breakdown": {s: counts.get(s, 0) for s in STATUS_ORDER},
+        "detailed": detailed,
         "server_time": datetime.now().strftime("%H:%M:%S"),
     }
 
@@ -226,6 +229,13 @@ def get_videos(tab: str = "waitlist", page: int = 1, size: int = 20):
         "total_pages": (total_count + size - 1) // size,
         "tab_counts": tab_counts
     }
+
+
+@app.get("/api/videos/{youtube_id}/slices")
+def get_slices(youtube_id: str):
+    """[Gemini_3.5_Flash_High_planning] 获取指定 YouTube ID 的所有切片子任务"""
+    slices = db.get_slices_by_parent_yid(youtube_id)
+    return {"slices": slices}
 
 
 # ── 频道管理 API ──────────────────────────────────────────────────────────
@@ -600,6 +610,46 @@ def retry_video(youtube_id: str):
     }
 
 
+@app.post("/api/videos/{youtube_id}/slices/{slice_index}/retry")
+def retry_slice(youtube_id: str, slice_index: int):
+    """[Gemini_3.5_Flash_High_planning] 针对单个切片子任务执行重置与重试"""
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+    if not video:
+        raise HTTPException(status_code=404, detail="切片任务不存在")
+
+    retryable = {"FAILED", "LOGIN_REQUIRED", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
+    if video.get("status") not in retryable:
+        return {
+            "success": False,
+            "error": f"只有 FAILED / LOGIN_REQUIRED / 各活跃状态可重置（当前：{video['status']}）"
+        }
+
+    db.update_video_status(youtube_id, "PENDING", error_msg=None, slice_index=slice_index)
+
+    triggered = False
+    # 手动重试：若分数 >= 75 且父视频存在，并且满足 Sequence Lock（前序子任务均已发布），则立即触发
+    if video.get("score", 0) >= 75:
+        from video_processing.pipeline_manager import PipelineManager
+        pm = PipelineManager()
+        parent_file = pm._find_downloaded_video(youtube_id)
+        
+        all_slices = db.get_slices_by_parent_yid(youtube_id)
+        prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] != 'PUBLISHED']
+        
+        if parent_file and not prev_not_published:
+            if db.claim_video_for_processing(youtube_id, slice_index=slice_index):
+                fresh = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+                if fresh:
+                    _trigger_video_async(fresh)
+                    triggered = True
+
+    return {
+        "success": True,
+        "triggered": triggered,
+        "message": "已重置并立即重新触发" if triggered else "已重置为 PENDING，等待父任务下载或前导分集发布",
+    }
+
+
 @app.post("/api/videos/{youtube_id}/reset-hard")
 def reset_video_hard(youtube_id: str):
     """
@@ -717,19 +767,19 @@ def batch_delete_videos(req: BatchDeleteRequest):
 
 
 @app.delete("/api/videos/{youtube_id}")
-def delete_video(youtube_id: str, delete_files: bool = False):
+def delete_video(youtube_id: str, delete_files: bool = False, slice_index: Optional[int] = None):
     """
-    删除任务记录并写入黑名单墓碑。
+    删除任务记录并可选写入黑名单墓碑。
     如果 delete_files=True，同时删除相关的本地产物文件。
 
-    [Claude_Sonnet_4.6_Thinking_planning] v7.0 升级：
+    [Gemini_3.5_Flash_High_planning] 升级：
+    - 支持通过 slice_index 参数定向物理删除子任务。
     - 如果视频处于活跃状态且 settings.enable_sigterm_kill=True，
       会向其进程组发 SIGTERM 优雅终止，超时 2s 后强杀。
-    - 删除后将 youtube_id 写入 blacklisted_videos 墓碑表，
+    - 删除后（若是父视频）将 youtube_id 写入 blacklisted_videos 墓碑表，
       防止爬虫二次拉取。
     """
-    # settings 已在模块顶层导入（LINT-2 修复）
-    video = db.get_video_by_youtube_id(youtube_id)
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index or 0)
     if not video:
         return {"success": False, "error": "视频不存在"}
 
@@ -742,7 +792,6 @@ def delete_video(youtube_id: str, delete_files: bool = False):
                              "请等待完成或变为 FAILED。"}
 
         # Flag 开启：SIGTERM 阶梯强杀
-        # [Claude_Sonnet_4.6_Thinking_planning] LINT-1: 使用顶层 time/signal，移除函数内重复 import
         pid = video.get("process_pid")
         if pid:
             try:
@@ -767,15 +816,18 @@ def delete_video(youtube_id: str, delete_files: bool = False):
     if delete_files:
         from video_processing.pipeline_manager import PipelineManager
         pm = PipelineManager()
-        deleted_files = pm.reset_video_artifacts(youtube_id)
+        prefix = f"{youtube_id}_s{slice_index}" if (slice_index and slice_index > 0) else youtube_id
+        deleted_files = pm.reset_video_artifacts(prefix)
 
     # ── 3. 黑名单墓碑 + 删除主表记录 ──────────────────────────
-    if settings.enable_blacklist_tombstone:
+    # [Gemini_3.5_Flash_High_planning] 仅当删除父视频（非 slice 子任务）时，才写入黑名单墓碑
+    if settings.enable_blacklist_tombstone and not slice_index:
         db.add_to_blacklist(youtube_id, reason="user_deleted")
-    db.delete_video_record(youtube_id)
+        
+    db.delete_video_record(youtube_id, slice_index=slice_index)
 
     msg = "已彻底清除该任务记录"
-    if settings.enable_blacklist_tombstone:
+    if settings.enable_blacklist_tombstone and not slice_index:
         msg += "（已写入黑名单，爬虫不会再次拉取）"
     if delete_files:
         msg += f"，并清理了 {len(deleted_files)} 个关联产物文件"

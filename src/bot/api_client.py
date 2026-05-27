@@ -9,6 +9,7 @@
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建，TDD Green phase |
 | 1.1.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 增加 HTTPStatusError 与 ValueError 熔断拦截，防止 502/500 JSON 解析崩溃 |
 | 1.1.1 | 2026-05-25 | Gemini_3.5_Flash_High_planning | 增加 add_video API 调用的 timeout 至 45s，防止 yt-dlp 查询超时导致控制中心不可用假警报 |
+| 1.2.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning | 新增 get_slices, retry_slice, delete_slice API 调用封装 |
 """
 from __future__ import annotations
 
@@ -128,4 +129,41 @@ class PipelineAPIClient:
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] run_pipeline failed (API down?): {e}")
+            return None
+
+    async def get_slices(self, youtube_id: str) -> Optional[list]:
+        """GET /api/videos/{youtube_id}/slices — 获取主视频下的所有切片子任务"""
+        try:
+            async with self._client() as c:
+                resp = await c.get(f"/api/videos/{youtube_id}/slices")
+                resp.raise_for_status()
+                data = resp.json()
+                return data.get("slices", [])
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] get_slices failed: {e}")
+            return None
+
+    async def retry_slice(self, youtube_id: str, slice_index: int) -> Optional[dict]:
+        """POST /api/videos/{youtube_id}/slices/{slice_index}/retry — 重试单个切片任务"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(f"/api/videos/{youtube_id}/slices/{slice_index}/retry")
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] retry_slice failed: {e}")
+            return None
+
+    async def delete_slice(self, youtube_id: str, slice_index: int, delete_files: bool = True) -> Optional[dict]:
+        """DELETE /api/videos/{youtube_id}?slice_index={slice_index} — 删除单个切片任务"""
+        try:
+            async with self._client() as c:
+                resp = await c.delete(
+                    f"/api/videos/{youtube_id}",
+                    params={"delete_files": delete_files, "slice_index": slice_index}
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] delete_slice failed: {e}")
             return None

@@ -7,6 +7,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建，TDD Green phase |
 | 1.1.0 | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 status] 新增 fmt_status_report 全局宏观状态渲染支持 |
+| 1.2.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 fmt_status_report 支持展现父任务与子切片细分统计 |
 """
 from __future__ import annotations
 from typing import List
@@ -120,7 +121,7 @@ def fmt_help() -> str:
 def fmt_status_report(stats: dict, processing: List[dict], pending: List[dict]) -> str:
     """渲染宏观的全局状态报告
     
-    # [Gemini_3.5_Flash_fast] 新增的宏观报告格式化逻辑
+    # [Gemini_3.5_Flash_High_planning] 升级后的父子宏观状态渲染逻辑
     """
     total = stats.get("total", 0)
     pending_cnt = stats.get("pending", 0)
@@ -128,15 +129,31 @@ def fmt_status_report(stats: dict, processing: List[dict], pending: List[dict]) 
     published_cnt = stats.get("published", 0)
     failed_cnt = stats.get("failed", 0)
     
+    detailed = stats.get("detailed", {})
+    parents_stats = detailed.get("parents", {})
+    children_stats = detailed.get("children", {})
+    
+    total_parents = sum(parents_stats.values())
+    total_children = sum(children_stats.values())
+    
+    # 计算活跃的父视频和切片任务数
+    active_statuses = ("DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING")
+    active_parents = sum(parents_stats.get(s, 0) for s in active_statuses)
+    active_children = sum(children_stats.get(s, 0) for s in active_statuses)
+    
+    # 计算失败的父视频和切片任务数 (含 LOGIN_REQUIRED)
+    failed_parents = parents_stats.get("FAILED", 0) + parents_stats.get("LOGIN_REQUIRED", 0)
+    failed_children = children_stats.get("FAILED", 0) + children_stats.get("LOGIN_REQUIRED", 0)
+
     lines = [
         "📊 *系统全局宏观状态报告*",
         "━━━━━━━━━━━━━━━━━━━━",
         "📈 *队列统计概览*",
-        f"• ⏳ 待处理 (PENDING): `{pending_cnt}`",
-        f"• 🔄 处理中 (ACTIVE): `{active_cnt}`",
-        f"• ✅ 已发布 (PUBLISHED): `{published_cnt}`",
-        f"• ❌ 失败数 (FAILED): `{failed_cnt}`",
-        f"• 📦 队列总计 (TOTAL): `{total}`",
+        f"• ⏳ 待处理 (PENDING): `{pending_cnt}`  (🎥 主任务 `{parents_stats.get('PENDING', 0)}` / ✂️ 切片 `{children_stats.get('PENDING', 0)}`)",
+        f"• 🔄 处理中 (ACTIVE): `{active_cnt}`  (🎥 主任务 `{active_parents}` / ✂️ 切片 `{active_children}`)",
+        f"• ✅ 已发布 (PUBLISHED): `{published_cnt}`  (🎥 主任务 `{parents_stats.get('PUBLISHED', 0)}` / ✂️ 切片 `{children_stats.get('PUBLISHED', 0)}`)",
+        f"• ❌ 失败数 (FAILED): `{failed_cnt}`  (🎥 主任务 `{failed_parents}` / ✂️ 切片 `{failed_children}`)",
+        f"• 📦 队列总计 (TOTAL): `{total}`  (🎥 主任务 `{total_parents}` / ✂️ 切片 `{total_children}`)",
         ""
     ]
     
@@ -147,9 +164,11 @@ def fmt_status_report(stats: dict, processing: List[dict], pending: List[dict]) 
         for v in processing:
             icon = _status_icon(v.get("status", ""))
             vid = v.get("youtube_id", "?")
+            slice_idx = v.get("slice_index", 0)
+            prefix = f"{vid}_s{slice_idx}" if slice_idx > 0 else vid
             title = v.get("title", "未知标题")[:30]
             status = v.get("status", "?")
-            lines.append(f"   {icon} `{vid}` — {title}\n   └ 进度：`{status}`")
+            lines.append(f"   {icon} `{prefix}` — {title}\n   └ 进度：`{status}`")
     lines.append("")
     
     lines.append("⏳ *待处理队列 (TOP 3 PENDING)*")
@@ -158,8 +177,10 @@ def fmt_status_report(stats: dict, processing: List[dict], pending: List[dict]) 
     else:
         for v in pending[:3]:
             vid = v.get("youtube_id", "?")
+            slice_idx = v.get("slice_index", 0)
+            prefix = f"{vid}_s{slice_idx}" if slice_idx > 0 else vid
             title = v.get("title", "未知标题")[:30]
-            lines.append(f"   ⏳ `{vid}` — {title}")
+            lines.append(f"   ⏳ `{prefix}` — {title}")
             
     lines.append("")
     lines.append("💡 *提示*：发送 `/run` 立即调度，发送 `/help` 查看指令列表。")

@@ -1620,10 +1620,23 @@
           </tr>` : '';
 
         // 双标题与来源
-        const zhTitleHtml = v.zh_title ? `<div class="video-zh-title">${v.zh_title}</div>` : '';
+        const treeToggle = v.slices_count > 0 
+          ? `<button class="btn-pri" style="margin-right: 6px; border:none; background:none; font-size:12px; cursor:pointer;" onclick="toggleSlices(event, '${v.youtube_id}')" id="btn-toggle-${v.youtube_id}">▶</button>`
+          : '';
+        const zhTitleHtml = v.zh_title ? `<div class="video-zh-title" style="display:flex; align-items:center;">${treeToggle}${v.zh_title}</div>` : '';
         const enTitleHtml = `<a class="video-title-link ${score < 80 ? 'video-title-dim' : ''}"
           href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
           onclick="event.stopPropagation()">${v.title || '—'}</a>`;
+        
+        let titleBlock = '';
+        if (v.zh_title) {
+          titleBlock = `${zhTitleHtml}${enTitleHtml}`;
+        } else {
+          titleBlock = treeToggle 
+            ? `<div style="display:flex; align-items:center;">${treeToggle}${enTitleHtml}</div>` 
+            : enTitleHtml;
+        }
+
         const sourceBadge = v.source === 'MANUAL'
           ? `<span class="source-badge source-manual">👤 手工加急</span>`
           : `<span class="source-badge source-auto">🤖 自动探测</span>`;
@@ -1707,7 +1720,8 @@
           likeRatio ? `<span class="meta-chip">👍 ${likeRatio}</span>` : '',
         ].join('');
 
-        const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${metaChips ? ' · ' + metaChips : ''}</div>`;
+        const sliceBadge = v.slices_count > 0 ? `<span class="panel-badge" style="margin-left: 8px; font-size:9px; padding:1px 5px; background:rgba(124,110,247,0.1); color:var(--accent2);">${v.slices_count}个分段</span>` : '';
+        const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${sliceBadge}${metaChips ? ' · ' + metaChips : ''}</div>`;
 
         // [Gemini_2.5_Pro_planning] 封面缩略图单元格
         const coverUrl = `/api/covers/${v.youtube_id}`;
@@ -1741,8 +1755,7 @@
             ${cbCell}
             ${coverCell}
             <td class="info-cell">
-              ${zhTitleHtml}
-              ${enTitleHtml}
+              ${titleBlock}
               ${channelRow}
               ${trimTimelineHtml}
               ${errorToggle}
@@ -2046,6 +2059,164 @@
     if (mainBtn) {
       mainBtn.disabled = false;
       mainBtn.innerHTML = '📱 微信登录';
+    }
+  }
+
+  async function toggleSlices(event, parentYid) {
+    event.stopPropagation();
+    const btn = event.currentTarget || event.target;
+    const isExpanded = btn.classList.contains('expanded');
+    
+    if (isExpanded) {
+      btn.classList.remove('expanded');
+      btn.textContent = '▶';
+      document.querySelectorAll(`.child-row-${parentYid}`).forEach(el => el.remove());
+    } else {
+      btn.classList.add('expanded');
+      btn.textContent = '▼';
+      
+      try {
+        const r = await fetch(`/api/videos/${parentYid}/slices`);
+        const d = await r.json();
+        const slices = d.slices || [];
+        
+        if (slices.length === 0) {
+          showToast('无切片任务数据');
+          btn.textContent = '▶';
+          btn.classList.remove('expanded');
+          return;
+        }
+        
+        const parentRow = document.getElementById(`row-${parentYid}`);
+        let lastNode = parentRow;
+        
+        // 如果有错误行展开，插在错误行后面
+        const errRow = document.getElementById(`err-${parentYid}`);
+        if (errRow && errRow.style.display !== 'none') {
+          lastNode = errRow;
+        }
+        
+        const TERMINAL  = new Set(['PUBLISHED','FAILED','LOGIN_REQUIRED']);
+        const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
+        const STUCK     = new Set(['DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
+
+        const childRowsHtml = slices.map(s => {
+          const score = s.score ?? 0;
+          const isTerminal = TERMINAL.has(s.status);
+          const isRetryable = RETRYABLE.has(s.status);
+          const isStuck = STUCK.has(s.status);
+          
+          let scoreControls = `<span class="video-score">${score}</span> 分`;
+
+          const deleteBtn = `<button class="btn-hard-reset" onclick="deleteSlice('${s.youtube_id}', ${s.slice_index})" title="彻底删除分集" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
+          const retryBtn = s.status === 'LOGIN_REQUIRED'
+            ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
+               <button class="btn-hard-reset" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="重试分集">🗑 重试</button>` + deleteBtn
+            : isRetryable
+            ? `<button class="btn-retry" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="重试分集">🔄 重试</button>` + deleteBtn
+            : isStuck
+              ? `<button class="btn-retry btn-reset" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="强制重置">⚡ 强置</button>` + deleteBtn
+              : deleteBtn;
+              
+          const formatDuration = (sec) => {
+            if (!sec) return null;
+            const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+            return h > 0
+              ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+              : `${m}:${String(s).padStart(2,'0')}`;
+          };
+
+          const dur = formatDuration(s.duration_sec);
+          const durationChip = dur ? `<span class="meta-chip">⏱ ${dur}</span>` : '';
+          
+          const errorToggle = s.error_msg ? `<span class="toggle-error" onclick="toggleError('${s.youtube_id}_s${s.slice_index}')">▼ 错误</span>` : '';
+          const errorRowHtml = s.error_msg ? `
+            <tr id="err-${s.youtube_id}_s${s.slice_index}" class="error-row child-row-${parentYid}" style="display:none" data-err="${escapeAttr(s.error_msg)}">
+              <td colspan="4">
+                <div class="error-detail" style="margin-left: 20px;">
+                  <button class="btn-copy-err" onclick="copyError('${s.youtube_id}_s${s.slice_index}')" id="copy-${s.youtube_id}_s${s.slice_index}" style="min-height: 32px; padding: 4px 10px; font-size: 11px;">📋 复制日志</button>
+                  ${escapeHtml(s.error_msg)}
+                </div>
+              </td>
+            </tr>` : '';
+
+          return `
+            <tr id="row-${s.youtube_id}_s${s.slice_index}" class="child-row-${parentYid}" style="background: rgba(255,255,255,0.015); border-left: 3px solid var(--accent);">
+              <td class="cb-cell" style="${currentTab === 'waitlist' ? '' : 'display:none'}"></td>
+              <td class="cover-thumb-cell"><div class="cover-placeholder" style="width:36px; height:64px; font-size:14px;">✂️</div></td>
+              <td class="info-cell" style="padding-left: 24px;">
+                <div class="video-zh-title" style="padding-left: 20px;">${s.title}</div>
+                <div class="video-meta-row" style="padding-left: 20px;">
+                  <span>分段区间: ⏱ <strong>${s.trim_start} - ${s.trim_end}</strong></span> · ${durationChip}
+                </div>
+                ${errorToggle}
+              </td>
+              <td class="status-cell" style="white-space:nowrap">${statusBadge(s.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
+              <td class="score-cell">${scoreControls}</td>
+              <td class="time-cell"><span class="video-time">${relativeTime(s.updated_at)}</span></td>
+            </tr>
+            ${errorRowHtml}
+          `;
+        }).join('');
+        
+        lastNode.insertAdjacentHTML('afterend', childRowsHtml);
+      } catch (err) {
+        console.error(err);
+        showToast('获取子任务失败');
+        btn.textContent = '▶';
+        btn.classList.remove('expanded');
+      }
+    }
+  }
+
+  async function retrySlice(youtubeId, sliceIndex) {
+    navigator.vibrate(15);
+    const btn = event?.target;
+    const oldText = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span>';
+    }
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/slices/${sliceIndex}/retry`, { method: 'POST' });
+      const res = await r.json();
+      if (res.success) {
+        showToast('✅ ' + (res.message || '重试已触发'));
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ 重试失败: ' + (res.error || '未知错误'), 'error');
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+      }
+    } catch (e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+    }
+  }
+
+  async function deleteSlice(youtubeId, sliceIndex) {
+    navigator.vibrate(15);
+    if (!confirm(`⚠️ 确定要物理删除分集任务 [第 ${sliceIndex} 集] 吗？此操作不可逆。\n确认继续？`)) return;
+    const btn = event?.target;
+    const oldText = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span>';
+    }
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}?slice_index=${sliceIndex}&delete_files=true`, { method: 'DELETE' });
+      const res = await r.json();
+      if (res.success) {
+        showToast('✅ ' + (res.message || '已彻底删除分集'));
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ 删除失败: ' + (res.error || '未知错误'), 'error');
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+      }
+    } catch (e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
   }
 
