@@ -11,6 +11,7 @@
 | 2.5.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 一变多升级：复合唯一约束(youtube_id, slice_index)、自关联外键级联删除与批量插入 |
 | 2.5.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 修复 _init_db 中遗漏推荐频道表 recommended_channels 的创建问题 |
 | 2.5.2   | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 新增 get_detailed_stats 方法提供父子任务的细分状态统计数据 |
+| 2.5.3   | 2026-05-27 | Unknown_Model_planning              | 修复已分片(SEGMENTED)父视频在后台仪表盘各 Tab 中隐藏不可见的 Bug |
 """
 
 import sqlite3
@@ -438,7 +439,8 @@ class PipelineDB:
         """
         # [Gemini_3.5_Flash_planning] 增加了 parent_id IS NULL 的前置过滤，实现主列表仅展现主任务，切片在树形中折叠
         if tab == 'completed':
-            condition = "pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') AND pv.parent_id IS NULL"
+            # [Unknown_Model_planning] 包括已分集(SEGMENTED)的父任务，以便在已完成列表中查看和展开
+            condition = "pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'SEGMENTED') AND pv.parent_id IS NULL"
         elif tab == 'error':
             condition = "pv.status IN ('FAILED', 'LOGIN_REQUIRED') AND pv.parent_id IS NULL"
         elif tab == 'active':
@@ -492,7 +494,7 @@ class PipelineDB:
                     SUM(CASE WHEN status = 'PENDING' AND score < 75 AND parent_id IS NULL THEN 1 ELSE 0 END) as waitlist,
                     SUM(CASE WHEN status = 'PENDING' AND score >= 75 AND parent_id IS NULL THEN 1 ELSE 0 END) as queue,
                     SUM(CASE WHEN status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING') AND parent_id IS NULL THEN 1 ELSE 0 END) as active,
-                    SUM(CASE WHEN status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') AND parent_id IS NULL THEN 1 ELSE 0 END) as completed,
+                    SUM(CASE WHEN status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'SEGMENTED') AND parent_id IS NULL THEN 1 ELSE 0 END) as completed,
                     SUM(CASE WHEN status IN ('FAILED', 'LOGIN_REQUIRED') AND parent_id IS NULL THEN 1 ELSE 0 END) as error
                 FROM processed_videos
             """)
