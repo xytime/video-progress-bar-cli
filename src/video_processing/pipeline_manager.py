@@ -14,6 +14,7 @@
 | 2.1.0   | 2026-05-26 | Gemini_3.5_Flash_planning           | [v7.0 Censor Engine] 整合安全过滤引擎，新增三道违禁词拦截检查点，并捕获锁异常 |
 | 2.1.1   | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 Fix] 修复 _run_tracked 传入 subprocess.Popen 时不支持 capture_output 等 kwargs 的问题 |
 | 2.2.0   | 2026-05-26 | Gemini_3.5_Flash_planning           | 封面引擎 2.0 联动：读取短标题/副标题/内容 hints，组装 payload 传给生成器 |
+| 2.3.0   | 2026-05-27 | Gemini_3.5_Flash                    | 新增下载后立即裁剪功能 (FFmpeg 流复制裁剪，支持 trim_start/trim_end) |
 """
 
 
@@ -268,6 +269,8 @@ class PipelineManager:
         yid   = video['youtube_id']
         title = video['title']
         url   = f"https://youtu.be/{yid}"
+        trim_start = video.get('trim_start')
+        trim_end   = video.get('trim_end')
 
         # [Claude_Sonnet_4.6_Thinking_planning] BUG-1 修复: signal.signal() 只能在主线程调用。
         # 此方法通过 daemon 线程执行，signal 注册已移至 app.py startup_event()。
@@ -326,6 +329,45 @@ class PipelineManager:
                     if not target_file:
                         raise FileNotFoundError(f"No video file found for {yid} after download")
                     logger.info(f"Downloaded: {target_file}")
+
+                    # ── 1a. VIDEO TRIMMING ──────────────────────────────────────────
+                    if trim_start or trim_end:
+                        logger.info(f"Trimming video {yid} to range: {trim_start or '0'} -> {trim_end or 'End'}")
+                        temp_trimmed = self._OUT_DIR / f"{yid}_trimmed.mp4"
+                        
+                        # Build ffmpeg command
+                        import imageio_ffmpeg
+                        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+                        
+                        # Note: we use -c copy for lossless/fast seeking.
+                        # -ss is placed before -i for fast seek, which is optimal for download cut.
+                        trim_cmd = [ffmpeg_exe, "-y"]
+                        if trim_start:
+                            trim_cmd += ["-ss", trim_start]
+                        if trim_end:
+                            trim_cmd += ["-to", trim_end]
+                        trim_cmd += ["-i", str(target_file), "-c", "copy", str(temp_trimmed)]
+                        
+                        logger.info(f"Running ffmpeg trim: {' '.join(trim_cmd)}")
+                        # Use subprocess.run directly as this is a fast copy operation (~0.5s)
+                        res = subprocess.run(trim_cmd, capture_output=True, text=True, cwd=str(self._PRJ_ROOT))
+                        if res.returncode != 0:
+                            err_msg = res.stderr if res.stderr else "Unknown ffmpeg error"
+                            logger.error(f"Ffmpeg trim failed: {err_msg}")
+                            if temp_trimmed.exists():
+                                try: temp_trimmed.unlink()
+                                except: pass
+                            raise subprocess.CalledProcessError(res.returncode, trim_cmd, output=res.stdout, stderr=res.stderr)
+                        
+                        # Overwrite original target_file with trimmed video
+                        if temp_trimmed.exists():
+                            try:
+                                Path(target_file).unlink()
+                                temp_trimmed.rename(target_file)
+                                logger.info(f"Trimmed successfully. Overwrote: {target_file}")
+                            except Exception as overwrite_err:
+                                logger.error(f"Failed to overwrite target file with trimmed file: {overwrite_err}")
+                                raise FileNotFoundError(f"Trimmed file overwrite failed: {overwrite_err}")
 
                 # ── 1b. CENSORSHIP DESC CHECK ─────────────────────────────────────
                 # [Gemini_3.5_Flash_planning] 下载完成后，对视频简介描述进行安全检查

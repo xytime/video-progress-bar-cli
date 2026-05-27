@@ -29,10 +29,11 @@ def _status_icon(status: str) -> str:
     return _STATUS_EMOJI.get(status, "❓")
 
 
-def fmt_video_added(title: str, video_id: str) -> str:
+def fmt_video_added(title: str, video_id: str, trim_start: Optional[str] = None, trim_end: Optional[str] = None) -> str:
     """视频成功加入加急队列"""
+    trim_info = f"\n✂️ *裁剪区间*：`{trim_start or '0'}` 至 `{trim_end or 'End'}`" if (trim_start or trim_end) else ""
     return (
-        f"✅ *已加入加急队列！*\n"
+        f"✅ *已加入加急队列！*{trim_info}\n"
         f"📌 标题：`{title}`\n"
         f"🆔 ID：`{video_id}`\n"
         f"_管线将自动处理：下载 → 字幕 → 翻译 → 发布_"
@@ -102,7 +103,9 @@ def fmt_help() -> str:
     """帮助信息，列出所有命令"""
     return (
         "🤖 *微信视频号 Bot 使用指南*\n\n"
-        "📩 *发送 YouTube 链接* → 自动加入加急队列\n\n"
+        "📩 *发送 YouTube 链接* → 自动加入加急队列\n"
+        "   _💡 支持移动端极简裁剪，格式：链接 [开始时间] [结束时间]_\n"
+        "   _例：链接 38 14:43 或 链接 30 (去头) 或 链接 -300 (截前段)_\n\n"
         "📋 `/queue` — 查看当前处理队列\n"
         "📊 `/status` — 查看全局宏观状态报告\n"
         "✅ `/published` — 查看最近发布到视频号的视频\n"

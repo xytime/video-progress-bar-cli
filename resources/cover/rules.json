@@ -45,6 +45,28 @@
       "default_badge": "思维跃迁"
     },
     {
+      "id": "entertainment_arts",
+      "hints": ["entertainment", "music", "art", "movie", "show", "song"],
+      "keywords": ["音乐", "演唱", "歌曲", "歌词", "翻唱", "舞蹈", "电影", "电视剧", "综艺", "明星", "搞笑", "歌", "曲"],
+      "accent": "purple_mindset",
+      "base_gradient": "mindset_change",
+      "metaphor": "zap",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "warm",
+      "default_badge": "影音娱乐"
+    },
+    {
+      "id": "gaming_esports",
+      "hints": ["gaming", "game", "esports", "playthrough", "console"],
+      "keywords": ["游戏", "实况", "攻略", "手游", "端游", "电竞", "玩家", "主机", "联机"],
+      "accent": "gold_warning",
+      "base_gradient": "jet_black",
+      "metaphor": "zap",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "hot",
+      "default_badge": "游戏电竞"
+    },
+    {
       "id": "default",
       "hints": [],
       "keywords": [],

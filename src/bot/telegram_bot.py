@@ -226,7 +226,41 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode="Markdown")  # type: ignore
 
 
-# ── YouTube URL 无感提交 ─────────────────────────────────────────────────
+def parse_trim_params(text: str) -> tuple[str | None, str | None]:
+    """[v1.3.0] 智能提取移动端极简裁剪参数
+
+    支持格式：
+      - 链接 38 14:43 (空格分隔，推荐)
+      - 链接 38 883 (纯秒数)
+      - 链接 30 (仅设起始时间)
+      - 链接 -300 (仅设结束时间)
+      - 链接 30 到 120 (自然语言)
+      - 链接 38-14:43 (传统连字符)
+    """
+    text = text.strip()
+    if not text:
+        return None, None
+
+    # Case 1: 仅设置结束时间，如 "-14:43" 或 "-883"
+    if text.startswith('-') or text.startswith('~') or text.startswith('to') or text.startswith('到'):
+        clean = re.sub(r'^[\s\-~to到,，]+', '', text)
+        return None, (clean if re.match(r'^[0-9:.]+$', clean) else None)
+
+    # Case 2: 分隔符拆分，支持 空格、连字符、中文"到"、英文"to"、逗号等
+    parts = [p.strip() for p in re.split(r'[\s\-—~to到,，]+', text) if p.strip()]
+    if len(parts) >= 2:
+        start, end = parts[0], parts[1]
+        start = start if re.match(r'^[0-9:.]+$', start) else None
+        end = end if re.match(r'^[0-9:.]+$', end) else None
+        return start, end
+    elif len(parts) == 1:
+        # 仅设置开始时间
+        start = parts[0]
+        start = start if re.match(r'^[0-9:.]+$', start) else None
+        return start, None
+
+    return None, None
+
 
 async def handle_youtube_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """监听所有消息，检测 YouTube URL，自动提交加急队列。"""
@@ -242,17 +276,26 @@ async def handle_youtube_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     url = match.group(0)
+    
+    # 提取裁剪区间：从文本中剔除 URL 后进行智能解析
+    remaining_text = text.replace(url, "").strip()
+    trim_start, trim_end = parse_trim_params(remaining_text)
+    if trim_start or trim_end:
+        logger.info(f"Telegram 智能解析到裁剪区间: start={trim_start}, end={trim_end}")
+
     await update.message.reply_text(f"🔍 *正在验证视频...*\n`{url}`", parse_mode="Markdown")  # type: ignore
 
-    result = await _api.add_video(url)
+    result = await _api.add_video(url, trim_start=trim_start, trim_end=trim_end)
 
     if result is None:
         await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
         return
 
     if result.get("success"):
+        t_start = result.get("trim_start")
+        t_end = result.get("trim_end")
         await update.message.reply_text(  # type: ignore
-            fmt.fmt_video_added(result["title"], result["video_id"]),
+            fmt.fmt_video_added(result["title"], result["video_id"], trim_start=t_start, trim_end=t_end),
             parse_mode="Markdown"
         )
     elif result.get("already_exists"):

@@ -9,6 +9,8 @@
 | 1.3.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | 原创声明 v2.0: 抗 UI 变化三层降级架构 (_click_original_toggle + _handle_original_rights_dialog) |
 | 1.4.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | 反反爬虫 v1.0: human_mouse+浏览器指纹伪造+关键点击改为人类行为模拟 |
 | 1.5.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning      | 修复原创权益弹窗勾选（适配 AntD Checkbox 与 class 类名禁用校验）及分类下拉框 Shadow DOM 穿透 |
+| 1.6.0   | 2026-05-27 | Claude_Sonnet_4.6_Thinking_planning | 优雅截断: 引入 graceful_truncate_title，替换硬截断兜底，防止磁盘读入的超长标题被截成半句 |
+| 1.7.0   | 2026-05-27 | Gemini_2.0_Flash_fast               | 增加 Web UI 临时二维码自动生成与无头等待扫码支持 |
 """
 
 import os
@@ -30,6 +32,7 @@ from human_mouse import (
     find_checkbox_near_text, dispatch_human_click_events,
     _human_delay
 )
+from copywriter import graceful_truncate_title  # [Claude_Sonnet_4.6_Thinking_planning] v1.6.0
 
 try:
     import requests as _requests
@@ -198,6 +201,28 @@ def run_uploader(
                     logger.info("Successfully authenticated (DOM check passed).")
 
         if is_login_page:
+            # [Gemini_2.0_Flash_fast] 无论是否 headless，均尝试捕获并保存 QR 码图片，以供 Web UI 临时扫码登录使用
+            try:
+                page.wait_for_timeout(2000)  # 等 QR 码渲染
+                qr_path = str(state_file.parent / "login_qr.png")
+                qr_captured = False
+                for qr_sel in ["img.qrcode", ".login-qr img", ".qr-code img",
+                               "img[src*='qr']", ".qrcode"]:
+                    qr_el = page.locator(qr_sel)
+                    if qr_el.count() > 0:
+                        try:
+                            qr_el.first.screenshot(path=qr_path)
+                            qr_captured = True
+                            logger.info(f"QR captured via: {qr_sel} (Always-save)")
+                            break
+                        except Exception:
+                            continue
+                if not qr_captured:
+                    page.screenshot(path=qr_path)
+                    logger.info("QR full-page screenshot (fallback, Always-save).")
+            except Exception as e_qr:
+                logger.warning(f"Failed to capture QR code: {e_qr}")
+
             if headless:
                 # [Claude_Sonnet_4.6_Thinking_fast] P1: Telegram QR 推送登录
                 # headless 无弹窗，但可截图 QR 发 Telegram，等扫码后继续上传
@@ -210,29 +235,9 @@ def run_uploader(
                 if tg_token and tg_chat_id and _requests:
                     logger.info("Headless login required. Sending QR code to Telegram...")
                     try:
-                        page.wait_for_timeout(2000)  # 等 QR 码渲染
-
-                        # 精确截取 QR 码区域，降级截全页面
-                        qr_path = str(state_file.parent / "login_qr.png")
-                        qr_captured = False
-                        for qr_sel in ["img.qrcode", ".login-qr img", ".qr-code img",
-                                       "img[src*='qr']", ".qrcode"]:
-                            qr_el = page.locator(qr_sel)
-                            if qr_el.count() > 0:
-                                try:
-                                    qr_el.first.screenshot(path=qr_path)
-                                    qr_captured = True
-                                    logger.info(f"QR captured via: {qr_sel}")
-                                    break
-                                except Exception:
-                                    continue
-                        if not qr_captured:
-                            page.screenshot(path=qr_path)
-                            logger.info("QR full-page screenshot (fallback).")
-
                         # 发送图片到 Telegram
                         caption = (
-                            "\U0001f510 微信视频号登录二维码\n"
+                            "🔑 微信视频号登录二维码\n"
                             "请在微信扫码授权（有效期约1分钟）\n"
                             "扫码成功后脚本将自动继续上传。"
                         )
@@ -247,31 +252,38 @@ def run_uploader(
                             logger.info("QR code sent to Telegram. Waiting for scan (120s)...")
                         else:
                             logger.warning(f"Telegram sendPhoto failed: {resp.text}")
-
-                        # 等待扫码跳转（最多 120s）
-                        page.wait_for_url("**/post/create", timeout=120000)
-                        logger.info("Login detected after Telegram QR scan. Saving session...")
-                        context.storage_state(path=str(state_file))
-                        logger.info(f"Session saved to: {state_file}")
-
-                        # 告知已成功
-                        _requests.post(
-                            f"https://api.telegram.org/bot{tg_token}/sendMessage",
-                            json={"chat_id": tg_chat_id,
-                                  "text": "\u2705 微信视频号登录成功，继续上传任务..."},
-                            timeout=10,
-                        )
                     except Exception as e_tg:
-                        logger.error(f"Telegram QR login failed: {e_tg}")
-                        browser.close()
-                        return 2
-                else:
-                    logger.error(
-                        "Session expired. Headless mode cannot QR scan. "
-                        "Set TELEGRAM_BOT_TOKEN + TELEGRAM_ADMIN_IDS in .env to enable remote QR login."
-                    )
+                        logger.error(f"Failed to send QR to Telegram: {e_tg}")
+
+                # [Gemini_2.0_Flash_fast] 无论是否配置 TG，在 headless 模式下均挂起等待扫码（120秒内由 Web UI 扫码完成登录）
+                logger.info("Waiting for QR scan (Web UI / Telegram / App) (120s)...")
+                try:
+                    page.wait_for_url("**/post/create", timeout=120000)
+                    logger.info("Login detected. Saving session...")
+                    context.storage_state(path=str(state_file))
+                    logger.info(f"Session saved to: {state_file}")
+                    
+                    # 成功后尝试删除临时二维码
+                    if Path(qr_path).exists():
+                        try: os.remove(qr_path)
+                        except Exception: pass
+                        
+                    if tg_token and tg_chat_id and _requests:
+                        try:
+                            _requests.post(
+                                f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                                json={"chat_id": tg_chat_id, "text": "✅ 微信视频号登录成功，继续上传任务..."},
+                                timeout=10,
+                            )
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.error(f"Headless QR login wait timed out or failed: {e}")
+                    if Path(qr_path).exists():
+                        try: os.remove(qr_path)
+                        except Exception: pass
                     browser.close()
-                    return 2  # 上层识别为 LOGIN_REQUIRED
+                    return 2  # 返回 LOGIN_REQUIRED
             else:
                 logger.info("=" * 50)
                 logger.info("⚠️ 请在弹出的浏览器窗口中，使用手机微信扫码登录！")
@@ -281,8 +293,14 @@ def run_uploader(
                     logger.info("Login detected. Saving session state...")
                     context.storage_state(path=str(state_file))
                     logger.info(f"Session saved to: {state_file}")
+                    if Path(qr_path).exists():
+                        try: os.remove(qr_path)
+                        except Exception: pass
                 except Exception as e:
                     logger.error(f"Login wait timed out or failed: {e}")
+                    if Path(qr_path).exists():
+                        try: os.remove(qr_path)
+                        except Exception: pass
                     browser.close()
                     return 1
 
@@ -454,8 +472,9 @@ def run_uploader(
                 )
                 short_title_clean = None
             elif len(short_title_clean) > TITLE_MAX:
-                short_title_clean = short_title_clean[:TITLE_MAX]
-                logger.warning(f"Short title truncated to {TITLE_MAX} chars: {short_title_clean!r}")
+                # [Claude_Sonnet_4.6_Thinking_planning] v1.6.0: 优雅截断替换硬截断兜底
+                short_title_clean = graceful_truncate_title(short_title_clean, max_len=TITLE_MAX)
+                logger.warning(f"Short title gracefully truncated to {len(short_title_clean)} chars: {short_title_clean!r}")
 
             # Step 3: 字符白名单验证（与 WeChat parseShortTitle 一致）
             TITLE_PAT = _re.compile(

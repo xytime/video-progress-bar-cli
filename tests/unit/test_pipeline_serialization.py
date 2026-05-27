@@ -23,6 +23,7 @@ def test_pipeline_manager_flock_serialization(tmp_path):
     db.add_video("vid2", "Title 2", "Channel")
 
     pm = PipelineManager(db_path=str(db_path))
+    pm._OUT_DIR = tmp_path
 
     # 用来记录各个线程进入临界区（加锁后）的起止时间点
     lock_intervals = []
@@ -48,9 +49,9 @@ def test_pipeline_manager_flock_serialization(tmp_path):
 
     # 模拟 wechat_uploader 等一系列子进程调用
     # [Gemini_3.5_Flash_fast] 强制使 enable_sigterm_kill 为 False，让其走正常的 subprocess.run 分支，以便被 fake_subprocess_run 拦截
-    @patch('src.video_processing.pipeline_manager.settings.enable_sigterm_kill', new=False)
-    @patch('src.video_processing.pipeline_manager.subprocess.run', side_effect=fake_subprocess_run)
-    @patch('src.video_processing.pipeline_manager.PipelineManager._find_downloaded_video')
+    @patch('video_processing.pipeline_manager.settings.enable_sigterm_kill', new=False)
+    @patch('video_processing.pipeline_manager.subprocess.run', side_effect=fake_subprocess_run)
+    @patch('video_processing.pipeline_manager.PipelineManager._find_downloaded_video')
     def run_test(mock_find_video, mock_run):
         # 模拟始终能找到已下载的视频文件，方便跳过实际下载以快速测试
         mock_find_video.return_value = str(tmp_path / "vid1.mp4")
@@ -77,14 +78,11 @@ def test_pipeline_manager_flock_serialization(tmp_path):
         # 验证 lock_intervals 中记录的临界区是否有重叠
         # 我们对时间区间按开始时间排序
         sorted_intervals = sorted(lock_intervals, key=lambda x: x[0])
-        assert len(sorted_intervals) == 2
+        assert len(sorted_intervals) >= 2
         
-        # 第一个区间的结束时间点必须小于或等于第二个区间的开始时间点（表明它们是串行的）
-        first_end = sorted_intervals[0][1]
-        second_start = sorted_intervals[1][0]
-        
-        print(f"First end: {first_end}, Second start: {second_start}")
-        assert second_start >= first_end
+        # 验证所有区间是否完全串行且无重叠
+        for i in range(1, len(sorted_intervals)):
+            assert sorted_intervals[i][0] >= sorted_intervals[i-1][1], f"Interval overlap detected at index {i}: {sorted_intervals[i]} vs {sorted_intervals[i-1]}"
 
     run_test()
 
@@ -117,7 +115,7 @@ async def test_pipeline_agent_tools_serialization(tmp_path):
         return res
 
     # 测试 download_video 工具的锁排队
-    @patch('src.bot.pipeline_agent.subprocess.run', side_effect=fake_subprocess_run)
+    @patch('bot.pipeline_agent.subprocess.run', side_effect=fake_subprocess_run)
     def run_test(mock_run):
         # 强制清除 mock 缓存
         if (tmp_path / "vid1.mp4").exists():

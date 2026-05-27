@@ -41,7 +41,7 @@ class PipelineAPIClient:
 
     # ── 视频管理 ────────────────────────────────────────────────────────
 
-    async def add_video(self, url: str) -> Optional[dict]:
+    async def add_video(self, url: str, trim_start: Optional[str] = None, trim_end: Optional[str] = None) -> Optional[dict]:
         """POST /api/videos/add — 手动添加 YouTube 视频到队列。
 
         Returns:
@@ -49,8 +49,13 @@ class PipelineAPIClient:
         """
         try:
             async with self._client() as c:
+                payload = {"url": url}
+                if trim_start is not None:
+                    payload["trim_start"] = trim_start
+                if trim_end is not None:
+                    payload["trim_end"] = trim_end
                 # [Gemini_3.5_Flash_High_planning] yt-dlp 查询元数据可能比较耗时，此处放宽超时限制至 45 秒
-                resp = await c.post("/api/videos/add", json={"url": url}, timeout=45.0)
+                resp = await c.post("/api/videos/add", json=payload, timeout=45.0)
                 resp.raise_for_status()
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
