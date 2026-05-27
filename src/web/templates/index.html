@@ -6,8 +6,12 @@
   Modification History:
   | Date       | Author                | Description                                   |
   |------------|-----------------------|-----------------------------------------------|
+  | 2026-05-27 | Gemini_3.5_Flash_planning | Optimize trim segment UX: add collapsible switch, preset chips, live validation, and visual timeline progress bar. |
+  | 2026-05-27 | Gemini_3.5_Flash_planning | Avoid 404 cover request console errors; fix Stats redirects, Tab persistence, Batch Edit checkbox toggle, and layout alignment. |
   | 2026-05-27 | Gemini_2.0_Flash_fast | Refine table to card flow classes, improve touch targets size to 44px. |
   | 2026-05-27 | Gemini_2.0_Flash_fast | Optimize mobile/responsive layout for control center dashboard. |
+  | 2026-05-27 | Gemini_2.0_Flash_fast | Add smart clipboard detection, toast queue, backoff and gesture swipe. |
+  | 2026-05-27 | Gemini_3.5_Flash_planning | Fix giant linear-gradient overlay cover bug on completed tab by adding missing .trim-timeline-bar styles. |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -626,17 +630,39 @@
       font-size: 10px; padding: 3px 10px; border-radius: 4px; display: inline-flex;
     }
 
-    /* ── Toast ── */
-    #toast {
-      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(20px);
+    /* ── Toast Queue (Gemini_2.0_Flash_fast) ── */
+    #toast-container {
+      position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; gap: 8px;
+      pointer-events: none; z-index: 10000; align-items: center;
+    }
+    .toast-item {
       background: rgba(30,30,60,0.95); border: 1px solid var(--accent);
       color: var(--text); font-size: 13px; font-weight: 500;
       padding: 11px 22px; border-radius: 10px;
       backdrop-filter: blur(20px);
-      opacity: 0; transition: all 0.3s ease;
-      pointer-events: none; z-index: 999; white-space: nowrap;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      opacity: 0; transform: translateY(20px);
+      transition: all 0.3s ease;
+      white-space: nowrap;
     }
-    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .toast-item.show { opacity: 1; transform: translateY(0); }
+
+    /* ── Inline Spinner & Hover Micro-animations (Gemini_2.0_Flash_fast) ── */
+    .inline-spinner {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      border-radius: 50%;
+      border-top-color: currentColor;
+      animation: inline-spin 1s ease-in-out infinite;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+    @keyframes inline-spin {
+      to { transform: rotate(360deg); }
+    }
 
     /* ── Footer ── */
     footer {
@@ -817,25 +843,29 @@
       }
       .activity-table tr {
         display: grid;
-        grid-template-columns: auto auto 1fr;
-        align-items: start;
+        grid-template-columns: auto 1fr; /* 默认：仅 Cover (auto) + Info (1fr) */
+        align-items: center; /* 垂直居中对齐，更合理 */
         padding: 14px;
         margin: 10px 0;
         background: rgba(255, 255, 255, 0.02);
         border: 1px solid var(--border);
         border-radius: var(--radius);
         position: relative;
-        gap: 10px;
+        gap: 12px;
+      }
+      .activity-table.in-edit-mode tr {
+        grid-template-columns: auto auto 1fr; /* 编辑模式：Checkbox (auto) + Cover (auto) + Info (1fr) */
       }
       
       .activity-table td.cb-cell {
-        grid-column: 1;
-        grid-row: 1;
+        display: none !important;
+      }
+      .in-edit-mode .cb-cell {
+        display: inline-flex !important;
         align-self: center;
         padding: 0 !important;
-        min-width: 44px; /* [Gemini_2.0_Flash_fast] 优化复选框触控大小 */
+        min-width: 44px;
         min-height: 44px;
-        display: inline-flex;
         align-items: center;
         justify-content: center;
       }
@@ -845,19 +875,17 @@
         height: 22px;
       }
       .activity-table td.cover-thumb-cell {
-        grid-column: 2;
-        grid-row: 1;
         padding: 0 !important;
+        display: inline-block;
       }
       .cover-thumb {
         width: 52px;
         height: 92px;
       }
-      .activity-table td.info-cell { /* [Gemini_2.0_Flash_fast] 改为 class 选择器 */
-        grid-column: 3;
-        grid-row: 1;
+      .activity-table td.info-cell {
         padding: 0 !important;
         padding-right: 50px !important; /* 避免与绝对定位的时间重叠 */
+        min-width: 0; /* 防止内容溢出 */
       }
       .video-zh-title, .video-title-link {
         max-width: 100%;
@@ -1010,6 +1038,44 @@
         min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
       }
     }
+
+    /* ── Video Segment Trim UX (Gemini_3.5_Flash_planning) ── */
+    .preset-chip {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text2);
+      font-size: 11px;
+      font-family: inherit;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .preset-chip:hover {
+      background: rgba(124, 110, 247, 0.15);
+      border-color: rgba(124, 110, 247, 0.35);
+      color: var(--accent2);
+    }
+    .preset-chip.reset {
+      border-color: rgba(248, 113, 113, 0.2);
+      color: var(--red);
+    }
+    .preset-chip.reset:hover {
+      background: rgba(248, 113, 113, 0.1);
+      border-color: var(--red);
+    }
+    .trim-input.invalid {
+      border-color: var(--red) !important;
+      background: rgba(248, 113, 113, 0.03) !important;
+    }
+    .trim-timeline-bar {
+      position: relative;
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 3px;
+      overflow: hidden;
+    }
   </style>
 </head>
 <body>
@@ -1038,27 +1104,27 @@
 
   <!-- Stats Cards -->
   <div class="stats-grid">
-    <div class="stat-card card-total">
+    <div class="stat-card card-total" onclick="switchTab('waitlist')" style="cursor: pointer;" title="点击查看待筛选列表">
       <div class="stat-label">总视频数</div>
       <div class="stat-value" id="s-total">0</div>
       <div class="stat-sub">历史累计入库</div>
     </div>
-    <div class="stat-card card-pending">
+    <div class="stat-card card-pending" onclick="switchTab('queue')" style="cursor: pointer;" title="点击查看待处理队列">
       <div class="stat-label">待评分</div>
       <div class="stat-value" id="s-pending">0</div>
       <div class="stat-sub">PENDING 队列</div>
     </div>
-    <div class="stat-card card-active">
+    <div class="stat-card card-active" onclick="switchTab('active')" style="cursor: pointer;" title="点击查看正在加工的任务">
       <div class="stat-label">处理中</div>
       <div class="stat-value" id="s-active">0</div>
       <div class="stat-sub">正在加工的任务</div>
     </div>
-    <div class="stat-card card-published">
+    <div class="stat-card card-published" onclick="switchTab('completed')" style="cursor: pointer;" title="点击查看已上架视频">
       <div class="stat-label">已发布</div>
       <div class="stat-value" id="s-published">0</div>
       <div class="stat-sub">成功上架视频号</div>
     </div>
-    <div class="stat-card card-failed">
+    <div class="stat-card card-failed" onclick="switchTab('error')" style="cursor: pointer;" title="点击查看需要人工干预的任务">
       <div class="stat-label">失败 / 待登录</div>
       <div class="stat-value" id="s-failed">0</div>
       <div class="stat-sub">需要人工干预</div>
@@ -1072,32 +1138,32 @@
       <div id="pipeline-active-hint" style="font-size:12px;color:var(--text3);">等待任务中…</div>
     </div>
     <div class="pipeline-steps" id="pipeline-steps">
-      <div class="step" data-s="PENDING">
+      <div class="step" data-s="PENDING" onclick="switchTab('queue')" style="cursor: pointer;" title="点击切换到待处理队列">
         <div class="step-circle">1</div>
         <div class="step-label">Pending</div>
         <div class="step-desc">等待调度<br>评分≥75 才进入</div>
       </div>
-      <div class="step" data-s="DOWNLOADING">
+      <div class="step" data-s="DOWNLOADING" onclick="switchTab('active')" style="cursor: pointer;" title="点击切换到处理中列表">
         <div class="step-circle">2</div>
         <div class="step-label">Download</div>
         <div class="step-desc">yt-dlp<br>下载原视频</div>
       </div>
-      <div class="step" data-s="TRANSCRIBING">
+      <div class="step" data-s="TRANSCRIBING" onclick="switchTab('active')" style="cursor: pointer;" title="点击切换到处理中列表">
         <div class="step-circle">3</div>
         <div class="step-label">Whisper</div>
         <div class="step-desc">语音→文字<br>⚠️最耗时</div>
       </div>
-      <div class="step" data-s="COPYWRITING">
+      <div class="step" data-s="COPYWRITING" onclick="switchTab('active')" style="cursor: pointer;" title="点击切换到处理中列表">
         <div class="step-circle">4</div>
         <div class="step-label">AI Copy</div>
         <div class="step-desc">Gemini<br>生成标题/文案</div>
       </div>
-      <div class="step" data-s="PUBLISHING">
+      <div class="step" data-s="PUBLISHING" onclick="switchTab('active')" style="cursor: pointer;" title="点击切换到处理中列表">
         <div class="step-circle">5</div>
         <div class="step-label">Publish</div>
         <div class="step-desc">Playwright<br>上传视频号</div>
       </div>
-      <div class="step" data-s="PUBLISHED">
+      <div class="step" data-s="PUBLISHED" onclick="switchTab('completed')" style="cursor: pointer;" title="点击切换到已完成列表">
         <div class="step-circle">✓</div>
         <div class="step-label">Done</div>
         <div class="step-desc">发布完成</div>
@@ -1128,11 +1194,20 @@
 
       <!-- [Gemini_2.5_Pro_planning] 批量操作栏（仅待筛选 tab 显示） -->
       <div id="batch-action-bar">
-        <input type="checkbox" id="cb-select-all" class="video-cb" onchange="toggleSelectAll(this.checked)" title="全选/取消全选" />
-        <span id="batch-selected-count">0</span> 项已选
-        <span class="batch-deselect" onclick="clearSelection()">取消选择</span>
-        <button class="btn-batch-del" onclick="batchDelete()">🗑 删除所选</button>
-        <button class="btn-clear-all" onclick="clearAllWaitlist()">⚠️ 清空全部待筛选</button>
+        <!-- 默认模式 (Normal View) -->
+        <div id="batch-normal-view" style="display:flex; align-items:center; width:100%; gap:10px;">
+          <button class="btn-batch-del" style="background:var(--accent); border-color:var(--accent); color:#fff; min-height:44px;" onclick="enterEditMode()">🛠 批量管理 (Batch Edit)</button>
+          <button class="btn-clear-all" onclick="clearAllWaitlist()" style="min-height:44px; margin-left:auto;">⚠️ 清空全部待筛选</button>
+        </div>
+        
+        <!-- 编辑模式 (Edit Mode) -->
+        <div id="batch-edit-view" style="display:none; align-items:center; width:100%; gap:12px; flex-wrap:wrap;">
+          <input type="checkbox" id="cb-select-all" class="video-cb" onchange="toggleSelectAll(this.checked)" title="全选/取消全选" />
+          <span id="batch-selected-count">0</span> 项已选
+          <span class="batch-deselect" onclick="clearSelection()">取消选择</span>
+          <button class="btn-batch-del" onclick="batchDelete()" style="min-height:44px;">🗑 删除所选</button>
+          <button class="btn-clear-all" onclick="exitEditMode()" style="background:rgba(255,255,255,0.05); border-color:var(--border); color:var(--text2); min-height:44px; margin-left:auto;">退出编辑</button>
+        </div>
       </div>
 
       <div class="panel-body">
@@ -1200,22 +1275,51 @@
           <input id="video-url-input" class="add-channel-input add-video-url-input"
             type="text"
             placeholder="例：https://www.youtube.com/watch?v=dQw4w9WgXcQ 或 https://youtu.be/dQw4w9WgXcQ" />
+          <!-- Clipboard smart paste (Gemini_2.0_Flash_fast) -->
+          <div id="clipboard-smart-paste-prompt" style="display:none; margin-top:8px; font-size:12px; color:var(--accent2); background:rgba(0,180,216,0.1); border:1px dashed var(--accent2); padding:10px 14px; border-radius:8px; align-items:center; justify-content:space-between; cursor:pointer;">
+            <span id="clipboard-detected-text">📋 检测到剪贴板有 YouTube 链接：</span>
+            <span style="font-weight:bold; text-decoration:underline;">[一键填入]</span>
+          </div>
         </div>
-        <div class="add-video-trim-row">
-          <div class="trim-input-group">
-            <span style="font-size:12px; color:var(--text2); white-space:nowrap;">开始时间 (Start):</span>
-            <input id="video-trim-start" class="add-channel-input trim-input"
-              type="text"
-              placeholder="00:00:38" />
+        
+        <!-- Toggle switch for trim panel (Gemini_3.5_Flash_planning) -->
+        <div class="trim-toggle-row" onclick="toggleTrimPanelCheckbox()" style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; margin-top: 4px; width: fit-content;">
+          <input type="checkbox" id="enable-trim-checkbox" style="cursor: pointer; width:16px; height:16px; accent-color:var(--accent2);" onclick="event.stopPropagation(); toggleTrimPanel();" />
+          <span style="font-size: 13px; color: var(--text2); font-weight: 500; display: flex; align-items: center; gap: 4px;">✂️ 启用片段截取 (Enable Segment Clip)</span>
+        </div>
+
+        <div id="video-trim-container" style="display: none; margin-top: 10px; border-left: 2px solid var(--border); padding-left: 14px; flex-direction: column; gap: 10px;">
+          <div class="add-video-trim-row" style="margin-top: 0;">
+            <div class="trim-input-group">
+              <span style="font-size:12px; color:var(--text2); white-space:nowrap;">开始时间 (Start):</span>
+              <input id="video-trim-start" class="add-channel-input trim-input"
+                type="text"
+                placeholder="00:00:38"
+                oninput="validateTrimInputs()" />
+            </div>
+            <div class="trim-input-group">
+              <span style="font-size:12px; color:var(--text2); white-space:nowrap;">结束时间 (End):</span>
+              <input id="video-trim-end" class="add-channel-input trim-input"
+                type="text"
+                placeholder="00:14:43"
+                oninput="validateTrimInputs()" />
+            </div>
+            <span class="trim-hint">*(支持秒数如 38 或时间格式如 14:43)</span>
           </div>
-          <div class="trim-input-group">
-            <span style="font-size:12px; color:var(--text2); white-space:nowrap;">结束时间 (End):</span>
-            <input id="video-trim-end" class="add-channel-input trim-input"
-              type="text"
-              placeholder="00:14:43" />
+          <!-- Presets and validation output -->
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div class="trim-presets" style="display: flex; gap: 8px;">
+              <button type="button" class="preset-chip" onclick="setTrimPreset(0, 30)">前30s</button>
+              <button type="button" class="preset-chip" onclick="setTrimPreset(0, 60)">前1m</button>
+              <button type="button" class="preset-chip" onclick="setTrimPreset(0, 180)">前3m</button>
+              <button type="button" class="preset-chip reset" onclick="clearTrimInputs()">重置</button>
+            </div>
+            <div id="trim-validation-output" style="font-size: 11px; color: var(--accent2); font-weight: 500;"></div>
           </div>
-          <span class="trim-hint">*(可选，支持秒数如 38 或时间格式如 14:43)</span>
-          <button id="btn-add-video" class="btn-add btn-submit-video"
+        </div>
+
+        <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
+          <button id="btn-add-video" class="btn-add btn-submit-video" style="width: auto; min-width: 150px;"
             onclick="addVideo()">验证并加入队列</button>
         </div>
       </div>
@@ -1224,7 +1328,7 @@
   </div>
 
   <footer>Video Pipeline Control Center · Auto-refresh every 3s · <a href="/api/stats" target="_blank" style="color:var(--accent2);text-decoration:none;">/api/stats</a></footer>
-  <div id="toast"></div>
+  <div id="toast-container"></div>
 
   <!-- Delete Modal -->
   <div id="delete-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
@@ -1233,13 +1337,58 @@
       <p style="color:var(--text2); font-size:13px; line-height:1.5; margin-bottom:16px;">
         您正在删除该任务记录。默认情况下只会从数据库中清除记录。
       </p>
-      <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text1); margin-bottom:24px; cursor:pointer; background:rgba(255,255,255,0.05); padding:10px; border-radius:8px;">
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text1); margin-bottom:16px; cursor:pointer; background:rgba(255,255,255,0.05); padding:10px; border-radius:8px;">
         <input type="checkbox" id="delete-files-checkbox" style="width:16px; height:16px; cursor:pointer;">
         同时删除相关的物理产物文件（视频、文案等）以释放空间
       </label>
+      
+      <!-- 安全锁校验 (Gemini_2.0_Flash_fast) -->
+      <div id="delete-safety-lock-container" style="margin-bottom: 20px;">
+        <label for="delete-confirm-code-input" style="display:block; font-size:13px; color:var(--text2); margin-bottom:8px;">
+          安全校验：请输入验证码 <strong id="delete-safety-code" style="color:var(--red); font-size:15px; letter-spacing:2px;"></strong>
+        </label>
+        <input type="text" id="delete-confirm-code-input" placeholder="输入4位验证码" maxlength="4" style="width:100%; box-sizing:border-box; padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--bg3); color:var(--text1); text-align:center; font-size:16px; font-weight:bold; letter-spacing:4px;">
+      </div>
+
       <div style="display:flex; justify-content:flex-end; gap:10px;">
         <button onclick="closeDeleteModal()" style="padding:8px 16px; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text2); cursor:pointer;">取消 (Cancel)</button>
         <button id="btn-confirm-delete" style="padding:8px 16px; border-radius:6px; background:var(--red); border:none; color:#fff; font-weight:600; cursor:pointer;">确认删除 (Delete)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- WeChat Login Modal (Gemini_2.0_Flash_fast) -->
+  <div id="wechat-login-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
+    <div style="background:var(--bg2); padding:24px; border-radius:12px; width:calc(100% - 32px); max-width:400px; box-sizing:border-box; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5); text-align:center;">
+      <h3 style="margin-top:0; color:var(--text1); font-size:16px; display:flex; align-items:center; justify-content:center; gap:8px;">
+        <span>📱 微信视频号登录</span>
+      </h3>
+      <p style="color:var(--text2); font-size:12px; line-height:1.5; margin-bottom:16px;">
+        请在手机端微信扫码授权登录。你可以长按保存二维码。
+      </p>
+      
+      <!-- 二维码显示区 -->
+      <div id="wechat-qr-container" style="background:#fff; padding:12px; border-radius:8px; display:inline-block; margin-bottom:16px; position:relative; min-width:200px; min-height:200px;">
+        <div id="wechat-qr-loading" style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:#333; font-size:14px; background:rgba(255,255,255,0.9); border-radius:8px;">
+          <span>⏳ 正在获取登录二维码...</span>
+        </div>
+        <img id="wechat-qr-image" style="width:200px; height:200px; display:none; border-radius:4px;" src="" alt="微信登录二维码">
+      </div>
+      
+      <div style="margin-bottom:20px; display:flex; flex-direction:column; gap:8px;">
+        <a id="btn-save-qr" href="" download="wechat_login_qr.png" style="display:none; padding:10px; border-radius:8px; background:var(--bg3); border:1px solid var(--border); color:var(--text1); text-decoration:none; font-size:13px; font-weight:600; cursor:pointer; align-items:center; justify-content:center; gap:6px;" onclick="navigator.vibrate(15)">
+          📥 保存二维码到相册
+        </a>
+        <a href="weixin://" style="padding:10px; border-radius:8px; background:#07c160; border:none; color:#fff; text-decoration:none; font-size:13px; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px;" onclick="navigator.vibrate(15)">
+          🟢 打开微信 (Deep Link)
+        </a>
+        <div style="font-size:11px; color:var(--text3); margin-top:4px;">
+          保存二维码后，点击跳转微信可在相册中进行识别。
+        </div>
+      </div>
+      
+      <div style="display:flex; justify-content:center;">
+        <button onclick="closeWechatLoginModal()" style="padding:8px 24px; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text2); cursor:pointer;">关闭窗口</button>
       </div>
     </div>
   </div>
@@ -1310,27 +1459,53 @@
     } catch(e) { console.warn('stats fetch error', e); }
   }
 
-  let currentTab = 'waitlist';
+  let currentTab = localStorage.getItem('video_pipeline_active_tab') || 'waitlist';
   let currentPage = 1;
   const pageSize = 20;
 
-  function switchTab(tab) {
-    if (currentTab === tab) return;
-    currentTab = tab;
-    currentPage = 1;
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('tab-' + tab).classList.add('active');
-    document.getElementById('new-data-hint').style.display = 'none';
-    // [Gemini_2.5_Pro_planning] 切换 tab 时清空选中状态和批量操作栏
-    clearSelection();
-    const bar = document.getElementById('batch-action-bar');
+  function enterEditMode(vibrate = true) {
+    if (vibrate && navigator.vibrate) navigator.vibrate(15);
+    const table = document.querySelector('.activity-table');
+    if (table) table.classList.add('in-edit-mode');
+    const norm = document.getElementById('batch-normal-view');
+    const edit = document.getElementById('batch-edit-view');
+    if (norm) norm.style.display = 'none';
+    if (edit) edit.style.display = 'flex';
     const thCb = document.getElementById('th-cb');
+    if (thCb) thCb.style.display = '';
+  }
+
+  function exitEditMode(vibrate = false) {
+    if (vibrate && navigator.vibrate) navigator.vibrate(15);
+    const table = document.querySelector('.activity-table');
+    if (table) table.classList.remove('in-edit-mode');
+    const norm = document.getElementById('batch-normal-view');
+    const edit = document.getElementById('batch-edit-view');
+    if (norm) norm.style.display = 'flex';
+    if (edit) edit.style.display = 'none';
+    const thCb = document.getElementById('th-cb');
+    if (thCb) thCb.style.display = 'none';
+    clearSelection();
+  }
+
+  function switchTab(tab) {
+    if (currentTab !== tab) {
+      currentTab = tab;
+      localStorage.setItem('video_pipeline_active_tab', tab);
+      currentPage = 1;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('tab-' + tab).classList.add('active');
+    }
+    document.getElementById('new-data-hint').style.display = 'none';
+    
+    // 切换 Tab 时重置为非编辑状态，并清空选中 (不触发震动以防安全报错)
+    exitEditMode(false);
+    
+    const bar = document.getElementById('batch-action-bar');
     if (tab === 'waitlist') {
-      bar.classList.add('visible');
-      if (thCb) thCb.style.display = '';
+      if (bar) bar.classList.add('visible');
     } else {
-      bar.classList.remove('visible');
-      if (thCb) thCb.style.display = 'none';
+      if (bar) bar.classList.remove('visible');
     }
     loadVideos();
   }
@@ -1438,7 +1613,7 @@
           <tr id="err-${v.youtube_id}" class="error-row" style="display:none" data-err="${escapeAttr(errMsg)}">
             <td colspan="4">
               <div class="error-detail">
-                <button class="btn-copy-err" onclick="copyError('${v.youtube_id}')" id="copy-${v.youtube_id}">📋</button>
+                <button class="btn-copy-err" onclick="copyError('${v.youtube_id}')" id="copy-${v.youtube_id}" style="min-height: 32px; padding: 4px 10px; font-size: 11px;">📋 复制日志 (Copy Logs)</button>
                 ${escapeHtml(errMsg)}
               </div>
             </td>
@@ -1485,10 +1660,40 @@
           ? (v.like_count / v.view_count * 100).toFixed(1) + '%'
           : null;
 
-        // [Gemini_3.5_Flash] 裁剪区间标识
-        const trimStr   = (v.trim_start || v.trim_end)
-          ? `✂️ ${v.trim_start || '0'}-${v.trim_end || 'End'}`
-          : null;
+        // [Gemini_3.5_Flash_planning] 裁剪时间轴及可视化
+        let trimTimelineHtml = '';
+        if (v.trim_start || v.trim_end) {
+          const totalSec = v.duration_sec || 0;
+          const startSec = parseTimeToSeconds(v.trim_start);
+          const endSec = v.trim_end ? parseTimeToSeconds(v.trim_end) : totalSec;
+          
+          let startPercent = 0;
+          let widthPercent = 100;
+          let trimmedDurationText = '';
+          if (totalSec > 0) {
+            const s = Math.max(0, Math.min(totalSec, startSec));
+            const e = Math.max(s, Math.min(totalSec, endSec));
+            startPercent = (s / totalSec) * 100;
+            widthPercent = ((e - s) / totalSec) * 100;
+            trimmedDurationText = formatDurationSeconds(e - s);
+          }
+          
+          trimTimelineHtml = `
+            <div class="trim-timeline-wrapper" style="margin-top: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+              <span style="font-size:11px; color:var(--accent2); font-weight:500; display:flex; align-items:center; gap:3px; white-space:nowrap;">
+                ✂️ 裁剪区间: ${v.trim_start || '0'} - ${v.trim_end || 'End'}
+              </span>
+              <div style="flex:1; min-width: 100px; max-width: 180px;">
+                <div class="trim-timeline-bar">
+                  <div style="position:absolute; left:${startPercent}%; width:${widthPercent}%; height:100%; background:linear-gradient(90deg, var(--accent2), #52b788); border-radius:2px;"></div>
+                </div>
+              </div>
+              <span style="font-size:10px; color:var(--text3); white-space:nowrap;">
+                (截取 ${trimmedDurationText || '—'} / 共 ${fmtDuration(totalSec) || '—'})
+              </span>
+            </div>
+          `;
+        }
 
         const dur       = fmtDuration(v.duration_sec);
         const views     = fmtNum(v.view_count);
@@ -1497,7 +1702,6 @@
 
         const metaChips = [
           dur       ? `<span class="meta-chip">⏱ ${dur}</span>` : '',
-          trimStr   ? `<span class="meta-chip" style="color:var(--accent2); background:rgba(0,180,216,0.15); border:1px solid rgba(0,180,216,0.3);"> ${trimStr}</span>` : '',
           uploadAge ? `<span class="meta-chip">📅 ${uploadAge}</span>` : '',
           views     ? `<span class="meta-chip">👁 ${views}</span>` : '',
           likeRatio ? `<span class="meta-chip">👍 ${likeRatio}</span>` : '',
@@ -1507,8 +1711,10 @@
 
         // [Gemini_2.5_Pro_planning] 封面缩略图单元格
         const coverUrl = `/api/covers/${v.youtube_id}`;
+        const hasLocalCover = ['PUBLISHING', 'PUBLISHED', 'COMPLETED'].includes(v.status);
         const coverCell = `
           <td class="cover-thumb-cell">
+            ${hasLocalCover ? `
             <img
               class="cover-thumb"
               src="${coverUrl}"
@@ -1516,8 +1722,11 @@
               loading="lazy"
               onerror="handleCoverError(this)"
               onclick="openCoverLightbox('${coverUrl}', '${escapeAttr(v.title || '')}');"
-            />
+            />` : `
+            <div class="cover-placeholder">🎬</div>
+            `}
           </td>`;
+
 
         // [Gemini_2.5_Pro_planning] checkbox 单元格（仅 waitlist tab 显示）
         const isWaitlist = currentTab === 'waitlist';
@@ -1535,6 +1744,7 @@
               ${zhTitleHtml}
               ${enTitleHtml}
               ${channelRow}
+              ${trimTimelineHtml}
               ${errorToggle}
             </td>
             <td class="status-cell" style="white-space:nowrap">${statusBadge(v.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
@@ -1615,9 +1825,16 @@
   }
 
   async function batchDelete() {
+    navigator.vibrate(15);
     if (_selectedYids.size === 0) return;
     const ids = [..._selectedYids];
-    if (!confirm(`确定删除所选 ${ids.length} 条视频？\n删除后会写入黑名单，爬虫不会再次抓取。`)) return;
+    
+    // 安全验证 (Gemini_2.0_Flash_fast)
+    const confirmInput = prompt(`⚠️ 确定要批量删除所选 ${ids.length} 条视频吗？\n删除后将计入黑名单，不再自动爬取。\n请输入 "delete" 以确认执行批量删除：`);
+    if (confirmInput !== 'delete') {
+      showToast('❌ 批量删除取消，安全验证不匹配');
+      return;
+    }
     try {
       const r = await fetch('/api/videos', {
         method: 'DELETE',
@@ -1636,10 +1853,17 @@
   }
 
   async function clearAllWaitlist() {
+    navigator.vibrate(15);
     const bar = document.getElementById('batch-action-bar');
     const countEl = document.getElementById('total-count-display');
     const total = countEl ? parseInt(countEl.textContent) || 0 : 0;
-    if (!confirm(`确定清空全部待筛选视频（${total} 条）？\n清空后这些视频将写入黑名单，爬虫不会再次拉取。`)) return;
+    
+    // 安全验证 (Gemini_2.0_Flash_fast)
+    const confirmInput = prompt(`⚠️ 警告：确定要清空全部 ${total} 条待筛选视频吗？\n清空后全部清零并拉黑！\n请输入 "clear" 以确认清空全部待筛选视频：`);
+    if (confirmInput !== 'clear') {
+      showToast('❌ 清空操作已取消，安全验证不匹配');
+      return;
+    }
     try {
       const r = await fetch('/api/videos/waitlist/all', { method: 'DELETE' });
       const d = await r.json();
@@ -1723,20 +1947,116 @@
     }
   }
 
+  let wechatPollInterval = null;
+  let wechatLoginActive = false;
+
   async function wechatLogin() {
-    showToast('⚠️ 如果服务器环境为无头模式，可能无法唤起浏览器。建议查看服务器终端或 VNC。');
+    navigator.vibrate(15);
+    // Prevent double clicking on any trigger buttons
+    const btn = event?.target;
+    const oldText = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span> 启动中...';
+    }
+
+    const modal = document.getElementById('wechat-login-modal');
+    modal.style.display = 'flex';
+
+    // Reset modal content
+    const qrContainer = document.getElementById('wechat-qr-container');
+    const qrImage = document.getElementById('wechat-qr-image');
+    const qrLoading = document.getElementById('wechat-qr-loading');
+    const saveBtn = document.getElementById('btn-save-qr');
+
+    qrImage.style.display = 'none';
+    qrLoading.style.display = 'flex';
+    qrLoading.innerHTML = '<span>⏳ 正在启动登录程序...</span>';
+    saveBtn.style.display = 'none';
+
     try {
-      const r = await fetch('/api/pipeline/login-wechat', { method: 'POST' });
+      const r = await fetch('/api/wechat/login?headless=true', { method: 'POST' });
       const d = await r.json();
-      if (!d.success) showToast('❌ ' + (d.message || d.error), 'error');
-      else showToast('✅ 登录流程触发成功');
-    } catch(e) { showToast('❌ 请求失败', 'error'); }
+      if (!d.success) {
+        showToast('❌ ' + (d.message || d.error), 'error');
+        closeWechatLoginModal();
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+        return;
+      }
+      showToast('✅ 微信登录程序已启动，正在获取二维码');
+      qrLoading.innerHTML = '<span>⏳ 正在生成二维码，约需5-10秒...</span>';
+      
+      wechatLoginActive = true;
+      let attempts = 0;
+      const maxAttempts = 60; // 120s
+      
+      if (wechatPollInterval) clearInterval(wechatPollInterval);
+      wechatPollInterval = setInterval(async () => {
+        if (!wechatLoginActive) {
+          clearInterval(wechatPollInterval);
+          return;
+        }
+        attempts++;
+        if (attempts > maxAttempts) {
+          showToast('❌ 获取微信二维码超时，请重试', 'error');
+          closeWechatLoginModal();
+          return;
+        }
+        try {
+          const res = await fetch('/api/wechat/status');
+          const data = await res.json();
+          if (data.logged_in) {
+            showToast('🎉 微信登录成功！');
+            closeWechatLoginModal();
+            refresh();
+            return;
+          }
+          if (data.qr_exists) {
+            qrImage.src = `/api/wechat/qr?t=${new Date().getTime()}`;
+            qrImage.style.display = 'block';
+            qrLoading.style.display = 'none';
+            saveBtn.href = `/api/wechat/qr?t=${new Date().getTime()}`;
+            saveBtn.style.display = 'inline-flex';
+          } else {
+            if (!data.is_running && !data.logged_in) {
+              showToast('❌ 登录程序异常退出，请重试', 'error');
+              closeWechatLoginModal();
+            }
+          }
+        } catch (err) {
+          console.warn('wechat poll status error', err);
+        }
+      }, 2000);
+    } catch(e) { 
+      showToast('❌ 启动请求失败', 'error'); 
+      closeWechatLoginModal();
+      if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+    }
+  }
+
+  function closeWechatLoginModal() {
+    navigator.vibrate(15);
+    wechatLoginActive = false;
+    if (wechatPollInterval) {
+      clearInterval(wechatPollInterval);
+      wechatPollInterval = null;
+    }
+    document.getElementById('wechat-login-modal').style.display = 'none';
+    const mainBtn = document.getElementById('btn-wechat-login');
+    if (mainBtn) {
+      mainBtn.disabled = false;
+      mainBtn.innerHTML = '📱 微信登录';
+    }
   }
 
   async function retryVideo(youtubeId) {
-    const btn = event.target;
-    const oldText = btn.textContent;
-    btn.disabled = true; btn.textContent = '⏳';
+    navigator.vibrate(15);
+    const btn = event?.target;
+    if (!btn) return;
+    const oldText = btn.innerHTML;
+    btn.disabled = true;
+    // Inline loading animation for high risk operations
+    btn.innerHTML = '<span class="inline-spinner"></span>';
     try {
       const r = await fetch(`/api/videos/${youtubeId}/retry`, { method: 'POST' });
       const d = await r.json();
@@ -1746,41 +2066,87 @@
         fetchStats();
       } else {
         showToast('❌ 重试失败: ' + (d.error || '未知错误'), 'error');
-        btn.disabled = false; btn.textContent = oldText;
+        btn.disabled = false; btn.innerHTML = oldText;
       }
     } catch(e) {
       showToast('❌ 网络错误: ' + e.message, 'error');
-      if (btn) { btn.disabled = false; btn.textContent = '🔄'; }
+      btn.disabled = false; btn.innerHTML = '🔄';
     }
   }
 
   async function hardResetVideo(youtubeId) {
+    navigator.vibrate(15);
     if (!confirm('⚠️ 硬重置将删除所有已下载和处理的文件，从头重新开始。\n确认继续？')) return;
-    const r = await fetch(`/api/videos/${youtubeId}/reset-hard`, {method: 'POST'});
-    const d = await r.json();
-    if (d.success) {
-      const msg = d.triggered
-        ? `✅ 已删除 ${d.deleted_files.length} 个文件，重新触发处理`
-        : `✅ 已删除 ${d.deleted_files.length} 个文件，状态重置为 PENDING`;
-      showToast(msg);
-      loadVideos();
-      fetchStats();
-    } else {
-      showToast('❌ 硬重置失败: ' + (d.error || '未知错误'), 'error');
+    const btn = event?.target;
+    const oldText = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span>';
+    }
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/reset-hard`, {method: 'POST'});
+      const d = await r.json();
+      if (d.success) {
+        const msg = d.triggered
+          ? `✅ 已删除 ${d.deleted_files.length} 个文件，重新触发处理`
+          : `✅ 已删除 ${d.deleted_files.length} 个文件，状态重置为 PENDING`;
+        showToast(msg);
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ 硬重置失败: ' + (d.error || '未知错误'), 'error');
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+      }
+    } catch(e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
   }
 
   let currentDeleteYoutubeId = null;
+  let deleteConfirmCode = '';
 
   function deleteVideo(youtubeId) {
+    navigator.vibrate(15);
     currentDeleteYoutubeId = youtubeId;
     const modal = document.getElementById('delete-modal');
-    document.getElementById('delete-files-checkbox').checked = false; // default is clear record only
+    document.getElementById('delete-files-checkbox').checked = false;
+    
+    // 生成随机4位安全校验码 (Gemini_2.0_Flash_fast)
+    deleteConfirmCode = Math.floor(1000 + Math.random() * 9000).toString();
+    document.getElementById('delete-safety-code').textContent = deleteConfirmCode;
+    
+    const codeInput = document.getElementById('delete-confirm-code-input');
+    codeInput.value = '';
+    
+    const confirmBtn = document.getElementById('btn-confirm-delete');
+    confirmBtn.disabled = true;
+    confirmBtn.style.opacity = '0.5';
+    confirmBtn.style.cursor = 'not-allowed';
+    confirmBtn.innerHTML = '确认删除 (Delete)';
+    
+    codeInput.oninput = () => {
+      if (codeInput.value.trim() === deleteConfirmCode) {
+        confirmBtn.disabled = false;
+        confirmBtn.style.opacity = '1';
+        confirmBtn.style.cursor = 'pointer';
+      } else {
+        confirmBtn.disabled = true;
+        confirmBtn.style.opacity = '0.5';
+        confirmBtn.style.cursor = 'not-allowed';
+      }
+    };
+    
     modal.style.display = 'flex';
     
-    document.getElementById('btn-confirm-delete').onclick = async () => {
+    confirmBtn.onclick = async () => {
+      navigator.vibrate(15);
       const deleteFiles = document.getElementById('delete-files-checkbox').checked;
-      closeDeleteModal();
+      
+      // Inline loading state
+      confirmBtn.disabled = true;
+      confirmBtn.innerHTML = '<span class="inline-spinner"></span> 正在删除...';
+      
       try {
         const r = await fetch(`/api/videos/${youtubeId}?delete_files=${deleteFiles}`, { method: 'DELETE' });
         const d = await r.json();
@@ -1788,16 +2154,22 @@
           showToast(d.message || '✅ 已彻底删除任务记录');
           loadVideos();
           fetchStats();
+          closeDeleteModal();
         } else {
           showToast('❌ 删除失败: ' + (d.error || '未知错误'), 'error');
+          confirmBtn.disabled = false;
+          confirmBtn.innerHTML = '确认删除 (Delete)';
         }
       } catch(e) {
         showToast('❌ 网络错误: ' + e.message, 'error');
+        confirmBtn.disabled = false;
+        confirmBtn.innerHTML = '确认删除 (Delete)';
       }
     };
   }
 
   function closeDeleteModal() {
+    navigator.vibrate(15);
     document.getElementById('delete-modal').style.display = 'none';
     currentDeleteYoutubeId = null;
   }
@@ -1854,6 +2226,7 @@
   }
 
   async function deleteChannel(channelId, channelName) {
+    navigator.vibrate(15);
     if (!confirm(`确认要从白名单中删除「${channelName}」吗？`)) return;
     try {
       const r = await fetch(`/api/channels/${channelId}`, { method: 'DELETE' });
@@ -1863,6 +2236,7 @@
   }
 
   async function addChannel() {
+    navigator.vibrate(15);
     const input = document.getElementById('channel-url-input');
     const btn   = document.getElementById('btn-add-channel');
     const fb    = document.getElementById('add-channel-feedback');
@@ -1870,6 +2244,7 @@
     if (!url) { fb.textContent = '请输入频道 URL'; fb.className = 'add-channel-feedback err'; return; }
 
     btn.disabled = true;
+    btn.innerHTML = '<span class="inline-spinner"></span> 验证中...';
     fb.textContent = '🔍 正在通过 yt-dlp 验证频道（约 5~15 秒）…';
     fb.className = 'add-channel-feedback loading';
 
@@ -1913,6 +2288,7 @@
               fb.className = 'add-channel-feedback err';
             } finally {
               btn.disabled = false;
+              btn.innerHTML = '验证并添加';
             }
             return;
           }
@@ -1925,6 +2301,83 @@
       fb.className = 'add-channel-feedback err';
     } finally {
       btn.disabled = false;
+      btn.innerHTML = '验证并添加';
+    }
+  }
+
+  // [Gemini_2.0_Flash_fast] Damped Swipe-Down-To-Dismiss for Cover Lightbox
+  let lbStartY = 0;
+  let lbCurrentY = 0;
+  let lbDragging = false;
+
+  function setupLightboxGestures() {
+    const lb = document.getElementById('cover-lightbox');
+    const img = document.getElementById('lb-img');
+    if (!lb || !img) return;
+
+    lb.addEventListener('touchstart', e => {
+      lbStartY = e.touches[0].clientY;
+      lbDragging = true;
+      img.style.transition = 'none';
+      lb.style.transition = 'none';
+    }, { passive: true });
+
+    lb.addEventListener('touchmove', e => {
+      if (!lbDragging) return;
+      lbCurrentY = e.touches[0].clientY;
+      const diffY = lbCurrentY - lbStartY;
+      if (diffY > 0) { // drag down only
+        const dampY = Math.pow(diffY, 0.85);
+        img.style.transform = `translateY(${dampY}px)`;
+        const opacity = Math.max(0.3, 0.85 - (dampY / 300));
+        lb.style.background = `rgba(0, 0, 0, ${opacity})`;
+      }
+    }, { passive: true });
+
+    lb.addEventListener('touchend', () => {
+      if (!lbDragging) return;
+      lbDragging = false;
+      const diffY = lbCurrentY - lbStartY;
+      if (diffY > 120) {
+        closeCoverLightbox();
+      } else {
+        img.style.transition = 'transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275)';
+        lb.style.transition = 'background-color 0.3s ease';
+        img.style.transform = 'translateY(0)';
+        lb.style.background = 'rgba(0, 0, 0, 0.85)';
+      }
+      lbStartY = 0;
+      lbCurrentY = 0;
+    });
+  }
+
+  // [Gemini_2.0_Flash_fast] 检测剪贴板中的 Youtube 链接并提示一键填入
+  async function checkClipboardForYoutube() {
+    if (document.visibilityState !== 'visible') return;
+    try {
+      const text = await navigator.clipboard.readText();
+      const prompt = document.getElementById('clipboard-smart-paste-prompt');
+      const detectedText = document.getElementById('clipboard-detected-text');
+      
+      if (text && (text.includes('youtube.com/') || text.includes('youtu.be/'))) {
+        if (prompt && detectedText) {
+          detectedText.innerHTML = `📋 检测到剪贴板有 YouTube 链接：<code style="background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px; font-family:monospace; font-size:11px;">${escapeHtml(text.substring(0, 45))}...</code>`;
+          prompt.style.display = 'flex';
+          prompt.onclick = () => {
+            navigator.vibrate(15);
+            const input = document.getElementById('video-url-input');
+            if (input) {
+              input.value = text.trim();
+              showToast('✅ 已自动填入链接');
+            }
+            prompt.style.display = 'none';
+          };
+        }
+      } else {
+        if (prompt) prompt.style.display = 'none';
+      }
+    } catch (e) {
+      // browser security block, ignore silently
     }
   }
 
@@ -1934,17 +2387,138 @@
       .addEventListener('keydown', e => { if (e.key === 'Enter') addChannel(); });
     document.getElementById('video-url-input')
       .addEventListener('keydown', e => { if (e.key === 'Enter') addVideo(); });
+
+    // 初始化 Lightbox 触摸手势 (Gemini_2.0_Flash_fast)
+    setupLightboxGestures();
+    
+    // 初始化剪贴板自动检测 (Gemini_2.0_Flash_fast)
+    checkClipboardForYoutube();
+    window.addEventListener('focus', checkClipboardForYoutube);
   });
 
+  // [Gemini_3.5_Flash_planning] 视频截取片段逻辑与校验
+  function toggleTrimPanel() {
+    const cb = document.getElementById('enable-trim-checkbox');
+    const container = document.getElementById('video-trim-container');
+    if (!cb || !container) return;
+    
+    if (cb.checked) {
+      container.style.display = 'flex';
+      validateTrimInputs();
+    } else {
+      container.style.display = 'none';
+      clearTrimInputs();
+    }
+  }
+
+  function toggleTrimPanelCheckbox() {
+    const cb = document.getElementById('enable-trim-checkbox');
+    if (cb) {
+      cb.checked = !cb.checked;
+      toggleTrimPanel();
+    }
+  }
+
+  function setTrimPreset(start, end) {
+    if (navigator.vibrate) navigator.vibrate(10);
+    const startInput = document.getElementById('video-trim-start');
+    const endInput = document.getElementById('video-trim-end');
+    if (startInput) startInput.value = formatDurationSeconds(start);
+    if (endInput) endInput.value = formatDurationSeconds(end);
+    validateTrimInputs();
+  }
+
+  function clearTrimInputs() {
+    const startInput = document.getElementById('video-trim-start');
+    const endInput = document.getElementById('video-trim-end');
+    if (startInput) { startInput.value = ''; startInput.classList.remove('invalid'); }
+    if (endInput) { endInput.value = ''; endInput.classList.remove('invalid'); }
+    const out = document.getElementById('trim-validation-output');
+    if (out) out.textContent = '';
+  }
+
+  function parseTimeToSeconds(t) {
+    if (!t) return 0;
+    t = String(t).trim();
+    if (!t) return 0;
+    if (/^\d+$/.test(t)) return parseInt(t, 10);
+    const parts = t.split(':').map(Number);
+    if (parts.some(isNaN)) return 0;
+    if (parts.length === 2) {
+      return parts[0] * 60 + parts[1];
+    } else if (parts.length === 3) {
+      return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    }
+    return 0;
+  }
+
+  function formatDurationSeconds(sec) {
+    if (sec == null || sec < 0) return '';
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return h > 0
+      ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+      : `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  function validateTrimFormat(val) {
+    if (!val) return true;
+    if (/^\d+$/.test(val)) return true;
+    const parts = val.split(':');
+    if (parts.length === 2 || parts.length === 3) {
+      return parts.every(p => /^\d{1,2}$/.test(p) && !isNaN(Number(p)));
+    }
+    return false;
+  }
+
+  function validateTrimInputs() {
+    const startInput = document.getElementById('video-trim-start');
+    const endInput = document.getElementById('video-trim-end');
+    const out = document.getElementById('trim-validation-output');
+    if (!startInput || !endInput || !out) return;
+
+    const startVal = startInput.value.trim();
+    const endVal = endInput.value.trim();
+
+    const startOk = validateTrimFormat(startVal);
+    const endOk = validateTrimFormat(endVal);
+
+    startInput.classList.toggle('invalid', !startOk);
+    endInput.classList.toggle('invalid', !endOk);
+
+    if (!startOk || !endOk) {
+      out.innerHTML = '<span style="color:var(--red);">❌ 格式不正确 (支持秒数或 时:分:秒)</span>';
+      return;
+    }
+
+    if (startVal || endVal) {
+      const sSec = parseTimeToSeconds(startVal);
+      const eSec = parseTimeToSeconds(endVal);
+      if (startVal && endVal && sSec >= eSec) {
+        out.innerHTML = '<span style="color:var(--red);">⚠️ 开始时间应小于结束时间</span>';
+        startInput.classList.add('invalid');
+        endInput.classList.add('invalid');
+      } else {
+        const startText = startVal ? formatDurationSeconds(sSec) : '起点';
+        const endText = endVal ? formatDurationSeconds(eSec) : '终点';
+        const durText = (startVal && endVal) ? `，共截取 ${formatDurationSeconds(eSec - sSec)}` : '';
+        out.innerHTML = `<span style="color:var(--green);">ℹ️ 将截取: ${startText} 至 ${endText}${durText}</span>`;
+      }
+    } else {
+      out.textContent = '';
+    }
+  }
+
   async function addVideo() {
+    if (navigator.vibrate) navigator.vibrate(15);
     const input = document.getElementById('video-url-input');
     const trimStartInput = document.getElementById('video-trim-start');
     const trimEndInput = document.getElementById('video-trim-end');
     const btn   = document.getElementById('btn-add-video');
     const fb    = document.getElementById('add-video-feedback');
     const url   = input.value.trim();
-    const trim_start = trimStartInput ? trimStartInput.value.trim() : '';
-    const trim_end   = trimEndInput ? trimEndInput.value.trim() : '';
+    const enableTrim = document.getElementById('enable-trim-checkbox')?.checked;
+    const trim_start = (enableTrim && trimStartInput) ? trimStartInput.value.trim() : '';
+    const trim_end   = (enableTrim && trimEndInput) ? trimEndInput.value.trim() : '';
 
     if (!url) {
       fb.textContent = '请输入 YouTube 视频 URL';
@@ -1953,6 +2527,7 @@
     }
 
     btn.disabled = true;
+    btn.innerHTML = '<span class="inline-spinner"></span> 验证中...';
     fb.textContent = '🔍 正在通过 yt-dlp 验证视频（约 5~15 秒）…';
     fb.className = 'add-channel-feedback loading';
 
@@ -1971,6 +2546,11 @@
         input.value = '';
         if (trimStartInput) trimStartInput.value = '';
         if (trimEndInput) trimEndInput.value = '';
+        const checkbox = document.getElementById('enable-trim-checkbox');
+        if (checkbox) {
+          checkbox.checked = false;
+          toggleTrimPanel();
+        }
         await loadVideos();
         await fetchStats();
       } else if (d.already_exists) {
@@ -1985,37 +2565,85 @@
       fb.className = 'add-channel-feedback err';
     } finally {
       btn.disabled = false;
+      btn.innerHTML = '验证并加入队列';
     }
   }
 
   let lastTotalActive = -1;
 
+  let refreshTimeoutId = null;
+  let currentRefreshInterval = 3000;
+  const MIN_REFRESH_INTERVAL = 3000;
+  const MAX_REFRESH_INTERVAL = 30000;
+
   async function refresh() {
-    await Promise.all([fetchStats(), fetchChannels()]);
-    
-    if (currentTab === 'waitlist' && currentPage === 1) {
-      await loadVideos();
-    } else {
-      // 智能刷新：如果不处于队列第 1 页，检查后台是否有活动数量变化，如果有，显示提示
-      const activeEl = document.getElementById('s-active');
-      const pendingEl = document.getElementById('s-pending');
-      const currentTotalActive = (parseInt(activeEl ? activeEl.textContent : 0) || 0) + 
-                                 (parseInt(pendingEl ? pendingEl.textContent : 0) || 0);
-      if (lastTotalActive !== -1 && currentTotalActive !== lastTotalActive) {
-        const hint = document.getElementById('new-data-hint');
-        if (hint) hint.style.display = 'block';
-      }
-      lastTotalActive = currentTotalActive;
+    if (document.visibilityState === 'hidden') {
+      // Page is sleeping, check again later but don't fetch stats
+      scheduleNextRefresh();
+      return;
     }
+
+    try {
+      await Promise.all([fetchStats(), fetchChannels()]);
+      
+      if (currentTab === 'waitlist' && currentPage === 1) {
+        await loadVideos();
+      } else {
+        // 智能刷新
+        const activeEl = document.getElementById('s-active');
+        const pendingEl = document.getElementById('s-pending');
+        const currentTotalActive = (parseInt(activeEl ? activeEl.textContent : 0) || 0) + 
+                                   (parseInt(pendingEl ? pendingEl.textContent : 0) || 0);
+        if (lastTotalActive !== -1 && currentTotalActive !== lastTotalActive) {
+          const hint = document.getElementById('new-data-hint');
+          if (hint) hint.style.display = 'block';
+        }
+        lastTotalActive = currentTotalActive;
+      }
+      // Restore default 3s interval on success
+      currentRefreshInterval = MIN_REFRESH_INTERVAL;
+    } catch (e) {
+      console.warn('Stats refresh error, backing off:', e);
+      // Exponential backoff up to 30s
+      currentRefreshInterval = Math.min(currentRefreshInterval * 1.5, MAX_REFRESH_INTERVAL);
+    }
+    
+    scheduleNextRefresh();
   }
 
-  // Initial load + 3-second interval
-  // [Gemini_2.5_Pro_planning] 初始化时 waitlist 是默认 tab，显示批量操作栏
-  document.getElementById('batch-action-bar').classList.add('visible');
-  const _thCbInit = document.getElementById('th-cb');
-  if (_thCbInit) _thCbInit.style.display = '';
+  function scheduleNextRefresh() {
+    if (refreshTimeoutId) clearTimeout(refreshTimeoutId);
+    refreshTimeoutId = setTimeout(refresh, currentRefreshInterval);
+  }
+
+  // Listen for visibility state change to resume/pause refresh
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      currentRefreshInterval = MIN_REFRESH_INTERVAL;
+      refresh();
+    }
+  });
+
+  // Initial load + interval setup
+  // 读取持久化的 Tab 并进行高亮和视图渲染初始化 (Gemini_3.5_Flash_planning)
+  const savedTab = localStorage.getItem('video_pipeline_active_tab') || 'waitlist';
+  currentTab = savedTab;
+  
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  const savedTabBtn = document.getElementById('tab-' + savedTab);
+  if (savedTabBtn) savedTabBtn.classList.add('active');
+
+  const bar = document.getElementById('batch-action-bar');
+  if (savedTab === 'waitlist') {
+    if (bar) bar.classList.add('visible');
+    exitEditMode(); // 待筛选模式下默认展示 Normal View
+  } else {
+    if (bar) bar.classList.remove('visible');
+    exitEditMode(); // 隐藏并清空编辑状态
+  }
+  
+  loadVideos(); // 无条件加载初始 Tab 数据 (Gemini_3.5_Flash_planning)
   refresh();
-  setInterval(refresh, 3000);
 </script>
 
 <!-- [Gemini_2.5_Pro_planning] Cover Lightbox Overlay -->
@@ -2033,15 +2661,26 @@
     const cap = document.getElementById('lb-caption');
     img.src = url;
     cap.textContent = title || '';
+    
+    // Reset transforms and transitions (Gemini_2.0_Flash_fast)
+    img.style.transform = 'translateY(0)';
+    img.style.transition = '';
+    lb.style.background = 'rgba(0, 0, 0, 0.85)';
+    lb.style.transition = '';
+    
     lb.classList.add('active');
     document.body.style.overflow = 'hidden';
   }
   function closeCoverLightbox() {
     const lb = document.getElementById('cover-lightbox');
+    const img = document.getElementById('lb-img');
     lb.classList.remove('active');
     document.body.style.overflow = '';
     // 延迟清空 src，避免关闭动画中闪烁
-    setTimeout(() => { document.getElementById('lb-img').src = ''; }, 300);
+    setTimeout(() => { 
+      img.src = ''; 
+      img.style.transform = ''; 
+    }, 300);
   }
   // ESC 键关闭
   document.addEventListener('keydown', e => {
