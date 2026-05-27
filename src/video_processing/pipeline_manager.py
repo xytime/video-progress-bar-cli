@@ -15,6 +15,7 @@
 | 2.1.1   | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 Fix] 修复 _run_tracked 传入 subprocess.Popen 时不支持 capture_output 等 kwargs 的问题 |
 | 2.2.0   | 2026-05-26 | Gemini_3.5_Flash_planning           | 封面引擎 2.0 联动：读取短标题/副标题/内容 hints，组装 payload 传给生成器 |
 | 2.3.0   | 2026-05-27 | Gemini_3.5_Flash                    | 新增下载后立即裁剪功能 (FFmpeg 流复制裁剪，支持 trim_start/trim_end) |
+| 2.3.1   | 2026-05-27 | Unknown_Model_planning              | 修复分片时无法导入 copywriter 的 ModuleNotFoundError 问题                      |
 """
 
 
@@ -452,7 +453,13 @@ class PipelineManager:
                             parent_id = parent_video["id"] if parent_video else None
                             
                             slice_tasks = []
+                            # [Unknown_Model_planning] 动态导入 scripts/copywriter.py 以获取截断算法
+                            import sys as _sys
+                            _scripts_dir = str(self._PRJ_ROOT / "scripts")
+                            if _scripts_dir not in _sys.path:
+                                _sys.path.insert(0, _scripts_dir)
                             from copywriter import graceful_truncate_title
+                            
                             for idx, ch in enumerate(chapters, start=1):
                                 prefix_title = graceful_truncate_title(title, max_len=6)
                                 ch_title = ch["title"]

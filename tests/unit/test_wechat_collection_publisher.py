@@ -3,12 +3,13 @@
 # Modification History
 | Version | Date       | Author                         | Description                                            |
 |---------|------------|--------------------------------|--------------------------------------------------------|
+| 1.1.2   | 2026-05-27 | Unknown_Model_planning         | 移除已弃用的微信视频号分类选择测试                      |
 | 1.1.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning | 修复 Playwright .first/.last 链式调用导致的 Mock 崩溃错误 |
 """
 
 import pytest
 from unittest.mock import patch, MagicMock
-from scripts.wechat_uploader import _select_category, _select_collection
+from scripts.wechat_uploader import _select_collection
 
 def create_locator_mock(count=1, visible=True, inner_text=""):
     """辅助创建链式调用的 Playwright Locator Mock"""
@@ -23,38 +24,6 @@ def create_locator_mock(count=1, visible=True, inner_text=""):
     loc.nth.return_value = loc
     loc.locator.return_value = loc
     return loc
-
-def test_select_category_success():
-    """测试分类选择成功分支"""
-    mock_page = MagicMock()
-    
-    # 1. 模拟 weui-desktop-form__item
-    mock_item = create_locator_mock(count=1, visible=True, inner_text="视频分类")
-    mock_form_items = create_locator_mock(count=1)
-    mock_form_items.nth.return_value = mock_item
-    
-    # 2. 模拟下拉触发器和列表
-    mock_trigger = create_locator_mock(count=1, visible=True)
-    mock_item.locator.return_value = mock_trigger
-    
-    mock_container = create_locator_mock(count=1, visible=True)
-    mock_option = create_locator_mock(count=1, visible=True)
-    mock_container.locator.return_value = mock_option
-    
-    def locator_side_effect(selector):
-        if ".weui-desktop-form__item" in selector:
-            return mock_form_items
-        elif ".weui-desktop-dropdown__list" in selector:
-            return mock_container
-        return create_locator_mock(count=0, visible=False)
-        
-    mock_page.locator.side_effect = locator_side_effect
-    
-    with patch("scripts.wechat_uploader.human_click", return_value=True) as mock_click:
-        result = _select_category(mock_page, "科技")
-        assert result is True
-        mock_trigger.click.assert_called_once()
-        mock_click.assert_called_once_with(mock_page, mock_option)
 
 def test_select_collection_exists():
     """测试合集存在时的选中分支"""
