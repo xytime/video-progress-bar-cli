@@ -6,6 +6,7 @@
 | ------- | ---------- | ------------------------- | ----------- |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，支持三段式与边缘配音/本地配音 |
 | 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 CosyVoice 语音合成 Provider 支持并实现 TTS 说话时背景音动态闪避 (Ducking) 功能，标注 # [Gemini_3.5_Flash_planning] |
+| 1.1.1   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 mute_original 参数支持，允许将原视频静音只保留 TTS 音轨，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -47,7 +48,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         font_size: int = 84,
         bilingual: bool = False,
         tts_provider: Optional[str] = None,
-        tts_voice: Optional[str] = None  # [Gemini_3.5_Flash_planning]
+        tts_voice: Optional[str] = None,  # [Gemini_3.5_Flash_planning]
+        mute_original: bool = True  # [Gemini_3.5_Flash_planning]
     ):
         super().__init__(
             input_path, output_path, model_size, src_lang, target_lang, device, style
@@ -59,6 +61,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         self.bilingual = bilingual
         self.tts_provider = tts_provider
         self.tts_voice = tts_voice  # [Gemini_3.5_Flash_planning]
+        self.mute_original = mute_original  # [Gemini_3.5_Flash_planning]
         self.segments = [] # Store for TTS usage
 
     def _get_audio_duration(self, path: Path) -> float:
@@ -365,21 +368,24 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             # Add new audio as input 1
             cmd += ["-i", str(generated_audio_track)]
             
-            # [Gemini_3.5_Flash_planning] 计算每一句 TTS 说话的开始与结束区间，生成动态音量过滤表达式
-            intervals = []
-            for seg in audio_segments:
-                start = seg['start']
-                path = seg['path']
-                duration = self._get_audio_duration(path)
-                if duration > 0:
-                    intervals.append((start, start + duration))
-            
-            if intervals:
-                # 使用 between 串联各个发音区间，如果当前时间 t 处于任意发音区间，则背景音设为 10% (0.1)，否则保持 100% (1.0)
-                conds = " + ".join([f"between(t,{s:.3f},{e:.3f})" for s, e in intervals])
-                volume_filter = f"volume='if({conds},0.1,1.0)':eval=frame"
+            # [Gemini_3.5_Flash_planning] 根据 mute_original 决定是完全静音还是动态音量闪避
+            if self.mute_original:
+                volume_filter = "volume=0.0"
             else:
-                volume_filter = "volume=0.1"
+                intervals = []
+                for seg in audio_segments:
+                    start = seg['start']
+                    path = seg['path']
+                    duration = self._get_audio_duration(path)
+                    if duration > 0:
+                        intervals.append((start, start + duration))
+                
+                if intervals:
+                    # 使用 between 串联各个发音区间，如果当前时间 t 处于任意发音区间，则背景音设为 10% (0.1)，否则保持 100% (1.0)
+                    conds = " + ".join([f"between(t,{s:.3f},{e:.3f})" for s, e in intervals])
+                    volume_filter = f"volume='if({conds},0.1,1.0)':eval=frame"
+                else:
+                    volume_filter = "volume=0.1"
                 
             audio_filter = f"[0:a]{volume_filter}[bg];[1:a]volume=1.5[fg];[bg][fg]amix=inputs=2:duration=first[aout]"
             filter_str += f";{audio_filter}"

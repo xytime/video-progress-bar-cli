@@ -13,6 +13,7 @@
 | 2.0.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | 新增 COSYVOICE Provider，集成 DashScope SDK，支持 Instruct 情感控制与字级别时间戳 |
 | 2.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 自动检测输出音频文件后缀名，动态配置 SDK 音频编码格式（WAV / MP3）并写入 # [Gemini_3.5_Flash_planning] 标志 |
 | 2.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 变更默认音色为龙安智 (longanzhi_v3) 并增加音色支持的指令自动过滤防御逻辑，标注 # [Gemini_3.5_Flash_planning] |
+| 2.3.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 增加根据音色（如 _v2 后缀）自动匹配并重置为合理 CosyVoice 模型版本（v1/v2/v3）的智能映射逻辑，标注 # [Gemini_3.5_Flash_planning] |
 """
 import os
 import logging
@@ -131,8 +132,18 @@ class TTSEngine:
         self.index_tts_path = index_tts_path
 
         # --- CosyVoice 配置 [Gemini_3.5_Flash_planning] ---
-        self.cosyvoice_model = cosyvoice_model
         self.cosyvoice_voice = cosyvoice_voice
+        self.cosyvoice_model = cosyvoice_model
+        
+        # 自动匹配合理的模型：v2 音色需要使用 cosyvoice-v2 模型，v1 使用 cosyvoice-v1
+        if cosyvoice_model == COSYVOICE_DEFAULT_MODEL:
+            if self.cosyvoice_voice.endswith("_v2"):
+                self.cosyvoice_model = "cosyvoice-v2"
+            elif self.cosyvoice_voice == "longwan":
+                self.cosyvoice_model = "cosyvoice-v1"
+            else:
+                self.cosyvoice_model = "cosyvoice-v3-flash"
+
         # 防御性逻辑：只有标杆音色支持 Instruct 指令控制，其他系统音色传此参数会导致 API 报错
         if self.cosyvoice_voice in ("longanyang", "longanhuan"):
             self.cosyvoice_instruction = cosyvoice_instruction
