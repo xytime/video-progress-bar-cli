@@ -9,6 +9,7 @@
 | 1.0.0 | 2026-05-20 | Gemini_3.1_Pro_High_planning | 初始创建 Settings 类 |
 | 2.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 重构为 pydantic-settings BaseSettings，收口全部环境变量，消灭散落的 os.getenv |
 | 2.1.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | v7.0 Feature Flags：新功能开关，默认全部关闭，保护生产环境稳定性 |
+| 2.2.0 | 2026-05-28 | Gemini_2.5_Pro_planning | 新增 dashscope_api_key，支持阿里云百炼 CosyVoice TTS 集成 |
 """
 from pathlib import Path
 from typing import Optional
@@ -46,6 +47,10 @@ class Settings(BaseSettings):
 
     # Google Gemini API Key
     gemini_api_key: Optional[str] = None
+
+    # 阿里云百炼 (DashScope / Model Studio) API Key — 用于 CosyVoice TTS
+    # 获取地址：https://bailian.console.aliyun.com/ → API-KEY 管理
+    dashscope_api_key: Optional[str] = None  # [Gemini_2.5_Pro_planning]
 
     # -------------------------------------------------------------------------
     # v7.0 Feature Flags — 新功能灰度开关 [Claude_Sonnet_4.6_Thinking_planning]

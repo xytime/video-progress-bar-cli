@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""自动生成字幕 CLI 命令 — 提供语音识别、翻译及烧录入口
+
+# Modification History
+| Version | Date       | Author                    | Description |
+| ------- | ---------- | ------------------------- | ----------- |
+| 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，提供 cli 主入口与 edge/indextts 选择 |
+| 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --tts-cosy 参数，支持阿里云百炼 CosyVoice 配音服务，标有 # [Gemini_3.5_Flash_planning] |
+"""
 import click
 from pathlib import Path
 import logging
@@ -24,16 +33,20 @@ logger = logging.getLogger(__name__)
 @click.option('--bilingual', is_flag=True, help='Show bilingual subtitles (ZH+EN) in Vertical mode. Default is Chinese only.')
 @click.option('--tts', is_flag=True, help='Generate speech using Edge TTS (Free).')
 @click.option('--tts-real', is_flag=True, help='Generate speech using IndexTTS (requires local IndexTTS installation).')
-def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, tts, tts_real):
+@click.option('--tts-cosy', is_flag=True, help='Generate speech using Aliyun CosyVoice.')  # [Gemini_3.5_Flash_planning]
+def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, tts, tts_real, tts_cosy):
     """Generate and burn bilingual subtitles for a video."""
     try:
         
         # Determine TTS provider
+        # [Gemini_3.5_Flash_planning]
         tts_provider = None
         if tts:
             tts_provider = "edge"
         elif tts_real:
             tts_provider = "indextts"
+        elif tts_cosy:
+            tts_provider = "cosyvoice"
 
         if vertical:
             processor = VerticalCaptionProcessor(

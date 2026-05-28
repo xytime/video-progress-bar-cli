@@ -1,3 +1,12 @@
+# -*- coding: utf-8 -*-
+"""竖屏视频处理器 (9:16) — 提供三段式布局、字幕与配音生成
+
+# Modification History
+| Version | Date       | Author                    | Description |
+| ------- | ---------- | ------------------------- | ----------- |
+| 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，支持三段式与边缘配音/本地配音 |
+| 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 CosyVoice 语音合成 Provider 支持，标注 # [Gemini_3.5_Flash_planning] |
+"""
 import logging
 import subprocess
 from pathlib import Path
@@ -154,7 +163,13 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             logger.info(f"Generating TTS audio using provider: {self.tts_provider}")
             try:
                 # Initialize Engine
-                provider = TTSProvider.INDEXTTS if self.tts_provider == "indextts" else TTSProvider.EDGE
+                # [Gemini_3.5_Flash_planning] 支持 cosyvoice 配音服务
+                if self.tts_provider == "indextts":
+                    provider = TTSProvider.INDEXTTS
+                elif self.tts_provider == "cosyvoice":
+                    provider = TTSProvider.COSYVOICE
+                else:
+                    provider = TTSProvider.EDGE
                 tts_engine = TTSEngine(provider=provider)
                 
                 # Prepare items
