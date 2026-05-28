@@ -9,6 +9,7 @@
 | 1.1.1   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 mute_original 参数支持，允许将原视频静音只保留 TTS 音轨，标注 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 tts_volume 和 tts_speech_rate 支持，并在分段混合前引入 atempo 自动加速防重叠安全阀机制，标注 # [Gemini_3.5_Flash_planning] |
 | 1.3.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | TTSEngine 默认 fallback voice 改为 "auto"，自动从精选播音音色池随机选取，标注 # [Gemini_2.5_Pro_planning] |
+| 1.4.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 实现非中文视频自动开启 TTS 配音逻辑，无指定 tts_provider 时自适应检测并启用，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -213,6 +214,42 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         output_path = self.output_path or self.input_path.parent / f"{self.input_path.stem}_vertical{self.input_path.suffix}"
         self.output_path = output_path
         
+        # 1. 智能判定原视频是否为中文 [Gemini_3.5_Flash_planning]
+        src_lang = self.src_lang.lower() if self.src_lang else "auto"
+        detected_lang = getattr(self, "detected_lang", "").lower() if getattr(self, "detected_lang", None) else ""
+        
+        has_chinese = False
+        import re
+        if self.segments:
+            for seg in self.segments:
+                if re.search(r"[\u4e00-\u9fa5]", seg.get("text", "")):
+                    has_chinese = True
+                    break
+                    
+        is_chinese = (
+            "zh" in src_lang or 
+            "zh" in detected_lang or 
+            has_chinese
+        )
+
+        # 2. 决策是否启用 TTS [Gemini_3.5_Flash_planning]
+        should_enable_tts = False
+        if self.tts_provider:
+            should_enable_tts = True
+        elif not is_chinese:
+            should_enable_tts = True
+
+        # 3. 引擎降级与自适应激活 [Gemini_3.5_Flash_planning]
+        if should_enable_tts and not self.tts_provider:
+            from src.config.settings import settings
+            api_key = settings.dashscope_api_key
+            if api_key:
+                self.tts_provider = "cosyvoice"
+                logger.info(f"[TTS Auto] Non-Chinese video detected (src_lang: {self.src_lang}, detected_lang: {self.detected_lang}). Auto activating cosyvoice.")
+            else:
+                logger.warning("[TTS Auto] Non-Chinese video detected but DASHSCOPE_API_KEY not found. Downgrading to Edge TTS.")
+                self.tts_provider = "edge"
+
         # TTS Logic
         generated_audio_track = None
         audio_segments = []  # [Gemini_3.5_Flash_planning] 声明为外部作用域变量，以供后面的 Ducking 计算使用

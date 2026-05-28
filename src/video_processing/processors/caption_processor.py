@@ -7,6 +7,7 @@
 | 1.1.1 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复深层翻译API风控导致将500报错信息输出为中文字幕的重大缺陷 |
 | 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 引入正则彻底熔断 HTML 注入，修正 default 金色描边样式 |
 | 1.3.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 Gemini API 高质量批翻译功能，自动 fallback 到谷歌翻译，标注 # [Gemini_3.5_Flash_planning] |
+| 1.4.0 | 2026-05-28 | Gemini_3.5_Flash_planning | ASR 转录时保存 self.detected_lang 属性，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 from pathlib import Path
@@ -126,6 +127,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         
         # 延迟加载模型
         self.model = None
+        self.detected_lang = None  # [Gemini_3.5_Flash_planning] 保存 Whisper ASR 检测到的语种
 
     def process(self, **kwargs) -> Path:
         """
@@ -351,6 +353,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
             language=self.src_lang if self.src_lang != "auto" else None,
             fp16=False # Force FP32 for CPU compatibility if needed, or check device
         )
+        self.detected_lang = result.get("language")  # [Gemini_3.5_Flash_planning] 保存 ASR 识别的语种，供 TTS 智能判断使用
         return result["segments"]
 
     def _translate_segments_gemini(self, segments: List[Dict[str, Any]]) -> Optional[List[str]]:
