@@ -551,6 +551,15 @@
       transition: all 0.2s;
     }
     .btn-hard-reset:hover { background: rgba(220,38,38,0.22); border-color: #dc2626; }
+    .btn-stop {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 10px; font-weight: 600; font-family: inherit;
+      padding: 3px 8px; border-radius: 4px; cursor: pointer;
+      border: 1px solid rgba(239, 68, 68, 0.45);
+      color: #ef4444; background: rgba(239, 68, 68, 0.08);
+      transition: all 0.2s;
+    }
+    .btn-stop:hover { background: rgba(239, 68, 68, 0.22); border-color: #dc2626; }
 
 
     /* ── Error Detail Row ── */
@@ -1603,7 +1612,6 @@
           scoreControls = `<span class="video-score">${score}</span> 分`;
         }
 
-        // 按钮栏
         const deleteBtn = `<button class="btn-hard-reset" onclick="deleteVideo('${v.youtube_id}')" title="彻底清除任务记录" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
         const retryBtn = v.status === 'LOGIN_REQUIRED'
           ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
@@ -1614,7 +1622,8 @@
           ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传">🔄 重试</button>
              <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物重新下载">🗑 重置</button>` + deleteBtn
           : isStuck
-            ? `<button class="btn-retry btn-reset" onclick="retryVideo('${v.youtube_id}')" title="强制重置(断点)">⚡ 强置</button>
+            ? `<button class="btn-stop" onclick="stopVideo('${v.youtube_id}')" title="强行停止任务" style="margin-right: 4px;">🛑 停止</button>
+               <button class="btn-retry btn-reset" onclick="retryVideo('${v.youtube_id}')" title="强制重置(断点)">⚡ 强置</button>
                <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="从头开始">🗑 重置</button>` + deleteBtn
             : deleteBtn;
 
@@ -2139,7 +2148,8 @@
             : isRetryable
             ? `<button class="btn-retry" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="重试分集">🔄 重试</button>` + deleteBtn
             : isStuck
-              ? `<button class="btn-retry btn-reset" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="强制重置">⚡ 强置</button>` + deleteBtn
+              ? `<button class="btn-stop" onclick="stopVideo('${s.youtube_id}', ${s.slice_index})" title="强行停止分集任务" style="margin-right: 4px;">🛑 停止</button>
+                 <button class="btn-retry btn-reset" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="强制重置">⚡ 强置</button>` + deleteBtn
               : deleteBtn;
               
           const formatDuration = (sec) => {
@@ -2340,6 +2350,39 @@
         fetchStats();
       } else {
         showToast('❌ 硬重置失败: ' + (d.error || '未知错误'), 'error');
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+      }
+    } catch(e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+    }
+  }
+
+  async function stopVideo(youtubeId, sliceIndex = null) {
+    navigator.vibrate(20);
+    const label = sliceIndex !== null ? `分集任务 [第 ${sliceIndex} 集]` : '任务';
+    if (!confirm(`⚠️ 确定要强行停止 ${label} 吗？\n停止后运行进程将被终止，且状态会置为 FAILED。`)) return;
+
+    const btn = event?.target;
+    const oldText = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span>';
+    }
+
+    try {
+      let url = `/api/videos/${youtubeId}/stop`;
+      if (sliceIndex !== null) {
+        url += `?slice_index=${sliceIndex}`;
+      }
+      const r = await fetch(url, { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        showToast(d.message || '✅ 任务已停止');
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ 停止失败: ' + (d.error || '未知错误'), 'error');
         if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
       }
     } catch(e) {

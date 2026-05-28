@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date       | Author                                 | Description          |
 |---------|------------|----------------------------------------|----------------------|
+| 1.4.0   | 2026-05-28 | Gemini_3.5_Flash_planning              | 新增 stop_video API 强杀进程与状态置为 FAILED 的单元测试 |
 | 1.3.0   | 2026-05-27 | Unknown_Model_planning                 | 新增顺序锁放宽测试与垃圾回收 GC 深度清理测试用例 |
 | 1.2.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning         | 修复 test_con1_lock_handle_closed_on_flock_error 中 mock 调用的 slice_index 断言 |
 | 1.2.0   | 2026-05-26 | Gemini_3.5_Flash_planning              | 新增 CensorEngine 流水线集成与安全锁异常测试用例 |
@@ -647,5 +648,70 @@ class TestGarbageCollectionOverhaul:
         for f_name in parent_files:
             assert not (out_dir / f_name).exists(), f"Parent file {f_name} should be cleaned up now"
         assert not parent_audio_dir.exists(), "Parent audio gen folder should be cleaned up now"
+
+
+class TestStopVideoApi:
+    """
+    [Gemini_3.5_Flash_planning] Stop Video API 单元测试类
+
+    # Modification History
+    | Version | Date | Author | Description |
+    | --- | --- | --- | --- |
+    | 1.0.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 初始创建测试类 |
+    """
+
+    def test_stop_video_success(self, tmp_db):
+        """[Gemini_3.5_Flash_planning] 验证 stop_video API 成功杀掉进程并更新数据库状态为 FAILED。"""
+        import web.app
+        from fastapi.testclient import TestClient
+        
+        yid = "stop_test_yid"
+        # 1. 往数据库中插入一个处于 active 状态的任务 (例如 DOWNLOADING) [Gemini_3.5_Flash_planning]
+        tmp_db.add_video(yid, "Stop Test Video", "channel_1", score=90, slice_index=0)
+        tmp_db.update_video_status(yid, "DOWNLOADING", slice_index=0)
+        # 设置一个模拟 pid
+        tmp_db.update_process_pid(yid, 99999, slice_index=0)
+        
+        # 2. 模拟 os.killpg 和 settings.enable_sigterm_kill=True [Gemini_3.5_Flash_planning]
+        import unittest.mock as mock
+        client = TestClient(web.app.app)
+        
+        with mock.patch.object(web.app, "db", tmp_db), \
+             mock.patch.object(web.app.settings, "enable_sigterm_kill", True), \
+             mock.patch("os.killpg") as mock_killpg:
+            
+            response = client.post(f"/api/videos/{yid}/stop")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is True
+            assert "成功停止" in data["message"]
+            
+            # 验证 killpg 曾以 SIGTERM 信号调用过 [Gemini_3.5_Flash_planning]
+            import signal
+            mock_killpg.assert_any_call(99999, signal.SIGTERM)
+            
+            # 验证数据库状态更新为 FAILED [Gemini_3.5_Flash_planning]
+            video = tmp_db.get_video_by_youtube_id(yid, slice_index=0)
+            assert video["status"] == "FAILED"
+            assert video["error_msg"] == "用户手动停止"
+
+    def test_stop_video_not_active(self, tmp_db):
+        """[Gemini_3.5_Flash_planning] 验证停止非活跃状态的任务会报错。"""
+        import web.app
+        from fastapi.testclient import TestClient
+        import unittest.mock as mock
+        
+        yid = "stop_test_yid_inactive"
+        tmp_db.add_video(yid, "Stop Test Inactive", "channel_1", score=90, slice_index=0)
+        tmp_db.update_video_status(yid, "PENDING", slice_index=0) # 非活跃
+        
+        client = TestClient(web.app.app)
+        with mock.patch.object(web.app, "db", tmp_db):
+            response = client.post(f"/api/videos/{yid}/stop")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["success"] is False
+            assert "当前不处于运行状态" in data["error"]
+
 
 

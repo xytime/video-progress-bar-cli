@@ -15,6 +15,7 @@
 | 2.3.1 | 2026-05-27 | Gemini_3.5_Flash_planning           | 修复由于缺少 re 模块导致的视频添加接口 500 报错 |
 | 2.4.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 delete_video 接口支持单个 slice 物理删除；新增获取所有 slices 与重试单个 slice 的 API |
 | 2.5.0 | 2026-05-27 | Unknown_Model_planning              | 新增 process_slice_now 接口以支持立即强制执行切片子任务 |
+| 2.6.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 新增 stop_video 接口以支持真实停止进程并状态置为 FAILED |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -765,8 +766,14 @@ def clear_waitlist():
 
 @app.delete("/api/videos")
 def batch_delete_videos(req: BatchDeleteRequest):
-    """[Gemini_2.5_Pro_planning] 批量删除视频记录并写入黑名单墓碑。
-
+    """[Gemini_2.5_Pro_planning]    批量删除视频记录（不含物理文件，除非可选）。
+    
+    # Modification History
+    | Version | Date | Author | Description |
+    | --- | --- | --- | --- |
+    | 1.0.0 | 2026-05-24 | Unknown_Model | Initial creation |
+    | 1.1.0 | 2026-05-27 | Unknown_Model_planning | 修复未清理活跃切片任务进程和产物文件的 bug |
+    
     不支持删除正处于活跃状态的视频（ACTIVE_STATUSES）——需先停止进程再删除。
     """
     if not req.youtube_ids:
@@ -777,14 +784,18 @@ def batch_delete_videos(req: BatchDeleteRequest):
     if invalid:
         return {"success": False, "error": f"非法 ID: {invalid}"}
 
-    active_ids = [
-        yid for yid in req.youtube_ids
-        if (v := db.get_video_by_youtube_id(yid)) and v.get("status") in ACTIVE_STATUSES
-    ]
+    active_ids = []
+    for yid in req.youtube_ids:
+        parent = db.get_video_by_youtube_id(yid, slice_index=0)
+        slices = db.get_slices_by_parent_yid(yid)
+        targets = ([parent] if parent else []) + slices
+        if any(t.get("status") in ACTIVE_STATUSES for t in targets):
+            active_ids.append(yid)
+
     if active_ids:
         return {
             "success": False,
-            "error": f"以下视频正在处理中，无法批量删除：{active_ids}",
+            "error": f"以下视频（或其切片）正在处理中，无法批量删除：{active_ids}",
         }
 
     # 可选删除产物文件
@@ -794,6 +805,9 @@ def batch_delete_videos(req: BatchDeleteRequest):
         pm = PipelineManager()
         for yid in req.youtube_ids:
             deleted_files_total.extend(pm.reset_video_artifacts(yid))
+            slices = db.get_slices_by_parent_yid(yid)
+            for s in slices:
+                deleted_files_total.extend(pm.reset_video_artifacts(f"{yid}_s{s['slice_index']}"))
 
     tombstone = settings.enable_blacklist_tombstone
     deleted_count, failed_ids = db.batch_delete_video_records(req.youtube_ids, tombstone=tombstone)
@@ -821,6 +835,13 @@ def delete_video(youtube_id: str, delete_files: bool = False, slice_index: Optio
     删除任务记录并可选写入黑名单墓碑。
     如果 delete_files=True，同时删除相关的本地产物文件。
 
+    # Modification History
+    | Version | Date | Author | Description |
+    | --- | --- | --- | --- |
+    | 1.0.0 | 2026-05-24 | Unknown_Model | Initial creation |
+    | 1.1.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning | 支持定向删除 slice_index，加入 SIGTERM 强杀逻辑 |
+    | 1.2.0 | 2026-05-27 | Unknown_Model_planning | [Bugfix] 删除父视频时，连带强杀所有活跃切片子进程并删除产物 |
+
     [Gemini_3.5_Flash_High_planning] 升级：
     - 支持通过 slice_index 参数定向物理删除子任务。
     - 如果视频处于活跃状态且 settings.enable_sigterm_kill=True，
@@ -828,24 +849,40 @@ def delete_video(youtube_id: str, delete_files: bool = False, slice_index: Optio
     - 删除后（若是父视频）将 youtube_id 写入 blacklisted_videos 墓碑表，
       防止爬虫二次拉取。
     """
-    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index or 0)
-    if not video:
+    if slice_index is not None:
+        targets = [db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)]
+    else:
+        parent = db.get_video_by_youtube_id(youtube_id, slice_index=0)
+        slices = db.get_slices_by_parent_yid(youtube_id)
+        targets = ([parent] if parent else []) + slices
+
+    targets = [t for t in targets if t]
+    if not targets:
         return {"success": False, "error": "视频不存在"}
 
     # ── 1. 处理活跃任务：SIGTERM 阶梯强杀 ───────────────────────
-    if video.get("status") in ACTIVE_STATUSES:
+    active_targets = [t for t in targets if t.get("status") in ACTIVE_STATUSES]
+    
+    if active_targets:
         if not settings.enable_sigterm_kill:
             # Flag 未开启：保持原有行为，拒绝删除活跃任务
+            active_statuses = {str(t.get("status")) for t in active_targets}
             return {"success": False,
-                    "error": f"安全拦截：视频正处于执行状态（{video['status']}）。"
+                    "error": f"安全拦截：相关视频/切片正处于执行状态（{', '.join(active_statuses)}）。"
                              "请等待完成或变为 FAILED。"}
 
         # Flag 开启：SIGTERM 阶梯强杀
-        pid = video.get("process_pid")
-        if pid:
-            try:
-                os.killpg(pid, signal.SIGTERM)   # 优雅终止信号
-                time.sleep(2.0)                  # 等待 2 秒自退（time 已顶层导入）
+        pids_to_kill = [t.get("process_pid") for t in active_targets if t.get("process_pid")]
+        if pids_to_kill:
+            for pid in pids_to_kill:
+                try:
+                    os.killpg(pid, signal.SIGTERM)   # 优雅终止信号
+                except (ProcessLookupError, PermissionError):
+                    pass
+            
+            time.sleep(2.0)                  # 等待 2 秒自退（time 已顶层导入）
+            
+            for pid in pids_to_kill:
                 try:
                     os.killpg(pid, 0)            # 检查进程是否仍存活
                     os.killpg(pid, signal.SIGKILL)
@@ -854,19 +891,21 @@ def delete_video(youtube_id: str, delete_files: bool = False, slice_index: Optio
                         f"[SIGKILL] Process group {pid} did not exit after SIGTERM, force killed.")
                 except (ProcessLookupError, PermissionError):
                     pass  # 进程已自退或在 macOS 下已变为僵尸进程，视为正常退出
-            except ProcessLookupError:
-                pass  # PID 已不存在（进程组消亡）
-            except PermissionError as e:
-                import logging as _logging
-                _logging.getLogger(__name__).error(f"[SIGTERM] Permission error killing pid {pid}: {e}")
 
     # ── 2. 删除产物文件 ─────────────────────────────────────────
     deleted_files = []
     if delete_files:
         from video_processing.pipeline_manager import PipelineManager
         pm = PipelineManager()
-        prefix = f"{youtube_id}_s{slice_index}" if (slice_index and slice_index > 0) else youtube_id
-        deleted_files = pm.reset_video_artifacts(prefix)
+        if slice_index is not None:
+            prefix = f"{youtube_id}_s{slice_index}" if slice_index > 0 else youtube_id
+            deleted_files.extend(pm.reset_video_artifacts(prefix))
+        else:
+            deleted_files.extend(pm.reset_video_artifacts(youtube_id))
+            for t in targets:
+                idx = t.get("slice_index")
+                if idx and idx > 0:
+                    deleted_files.extend(pm.reset_video_artifacts(f"{youtube_id}_s{idx}"))
 
     # ── 3. 黑名单墓碑 + 删除主表记录 ──────────────────────────
     # [Gemini_3.5_Flash_High_planning] 仅当删除父视频（非 slice 子任务）时，才写入黑名单墓碑
@@ -885,6 +924,75 @@ def delete_video(youtube_id: str, delete_files: bool = False, slice_index: Optio
         "success": True,
         "deleted_files": deleted_files,
         "message": msg,
+    }
+
+
+@app.post("/api/videos/{youtube_id}/stop")
+def stop_video(youtube_id: str, slice_index: Optional[int] = None):
+    """
+    停止正在运行的任务进程，并将数据库中的状态置为 FAILED (用户手动停止)。
+
+    # Modification History
+    | Version | Date | Author | Description |
+    | --- | --- | --- | --- |
+    | 1.0.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 初始创建，实现 SIGTERM/SIGKILL 阶梯强杀与状态流转 |
+
+    [Gemini_3.5_Flash_planning]:
+    - 支持通过 slice_index 定向停止子切片或停止父视频及其所有切片。
+    - 使用 SIGTERM -> wait 2s -> SIGKILL 强杀正在运行的进程组。
+    - 将相关任务在数据库中的状态更新为 FAILED，并记录 error_msg 为 "用户手动停止"。
+    """
+    if slice_index is not None:
+        targets = [db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)]
+    else:
+        parent = db.get_video_by_youtube_id(youtube_id, slice_index=0)
+        slices = db.get_slices_by_parent_yid(youtube_id)
+        targets = ([parent] if parent else []) + slices
+
+    targets = [t for t in targets if t]
+    if not targets:
+        return {"success": False, "error": "视频不存在"}
+
+    # 过滤出处于活跃状态的任务 [Gemini_3.5_Flash_planning]
+    active_targets = [t for t in targets if t.get("status") in ACTIVE_STATUSES]
+    if not active_targets:
+        return {"success": False, "error": "相关视频/切片当前不处于运行状态"}
+
+    if not settings.enable_sigterm_kill:
+        return {"success": False, "error": "未启用进程强杀机制，无法强制停止任务"}
+
+    pids_to_kill = [t.get("process_pid") for t in active_targets if t.get("process_pid")]
+    if pids_to_kill:
+        for pid in pids_to_kill:
+            try:
+                os.killpg(pid, signal.SIGTERM)   # 优雅终止信号
+            except (ProcessLookupError, PermissionError):
+                pass
+        
+        time.sleep(2.0)                  # 等待 2 秒自退 [Gemini_3.5_Flash_planning]
+        
+        for pid in pids_to_kill:
+            try:
+                os.killpg(pid, 0)            # 检查进程是否仍存活
+                os.killpg(pid, signal.SIGKILL)
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    f"[SIGKILL] Process group {pid} did not exit after SIGTERM, force killed.")
+            except (ProcessLookupError, PermissionError):
+                pass
+
+    # 将数据库状态更新为 FAILED 并设置错误信息
+    for t in active_targets:
+        db.update_video_status(
+            t["youtube_id"],
+            "FAILED",
+            error_msg="用户手动停止",
+            slice_index=t.get("slice_index", 0)
+        )
+
+    return {
+        "success": True,
+        "message": f"成功停止 {len(active_targets)} 个活跃任务，状态已置为 FAILED"
     }
 
 
