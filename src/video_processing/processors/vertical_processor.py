@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 CosyVoice 语音合成 Provider 支持并实现 TTS 说话时背景音动态闪避 (Ducking) 功能，标注 # [Gemini_3.5_Flash_planning] |
 | 1.1.1   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 mute_original 参数支持，允许将原视频静音只保留 TTS 音轨，标注 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 tts_volume 和 tts_speech_rate 支持，并在分段混合前引入 atempo 自动加速防重叠安全阀机制，标注 # [Gemini_3.5_Flash_planning] |
+| 1.3.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | TTSEngine 默认 fallback voice 改为 "auto"，自动从精选播音音色池随机选取，标注 # [Gemini_2.5_Pro_planning] |
 """
 import logging
 import subprocess
@@ -226,10 +227,10 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                     provider = TTSProvider.COSYVOICE
                 else:
                     provider = TTSProvider.EDGE
-                # [Gemini_3.5_Flash_planning] 传入指定的音色参数，默认将使用更合适更动听的龙安智
+                # [Gemini_2.5_Pro_planning] tts_voice 默认为 "auto"，触发精选播音池随机选取；用户也可传具体 voice ID 覆盖
                 tts_engine = TTSEngine(
                     provider=provider,
-                    cosyvoice_voice=self.tts_voice or "longanzhi_v3",
+                    cosyvoice_voice=self.tts_voice or "auto",
                     cosyvoice_volume=self.tts_volume,              # [Gemini_3.5_Flash_planning]
                     cosyvoice_speech_rate=self.tts_speech_rate    # [Gemini_3.5_Flash_planning]
                 )

@@ -15,10 +15,12 @@
 | 2.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 变更默认音色为龙安智 (longanzhi_v3) 并增加音色支持的指令自动过滤防御逻辑，标注 # [Gemini_3.5_Flash_planning] |
 | 2.3.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 增加根据音色（如 _v2 后缀）自动匹配并重置为合理 CosyVoice 模型版本（v1/v2/v3）的智能映射逻辑，标注 # [Gemini_3.5_Flash_planning] |
 | 2.4.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 增加 cosyvoice_volume 和 cosyvoice_speech_rate 参数以控制 API 的音量与语速，标注 # [Gemini_3.5_Flash_planning] |
+| 2.5.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | 新增播音精选音色池 COSYVOICE_BROADCAST_VOICES 与 pick_broadcast_voice()，传入 voice="auto" 时每次随机选取一个最佳播音音色，标注 # [Gemini_2.5_Pro_planning] |
 """
 import os
 import logging
 import json
+import random  # [Gemini_2.5_Pro_planning]
 import subprocess
 import threading
 from pathlib import Path
@@ -40,6 +42,38 @@ class TTSProvider(Enum):
 COSYVOICE_DEFAULT_MODEL = "cosyvoice-v3-flash"
 COSYVOICE_DEFAULT_VOICE = "longanzhi_v3"    # [Gemini_3.5_Flash_planning] 默认变更为龙安智 (睿智轻熟男)，适合科技财经知性讲解
 COSYVOICE_DEFAULT_INSTRUCTION = "你现在说话的角色是一个旁白，你说话的情感是neutral。"
+
+# [Gemini_2.5_Pro_planning] 精选播音级音色池
+# 筛选标准：官方文档中「新闻播报」分类 + 用户验证过的播音女音色 + 高品质知性男声
+# 模型版本说明：
+#   - _v2 后缀 → 使用 cosyvoice-v2 模型
+#   - _v3 后缀 → 使用 cosyvoice-v3-flash 模型
+#   - 无后缀   → Benchmark 音色，使用 cosyvoice-v2 模型（longanyang/longanhuan）
+COSYVOICE_BROADCAST_VOICES = [
+    # === 新闻播报（官方 News broadcast 类） ===
+    "longshuo_v3",    # 龙硕 - 博学能干男声 25-30岁，官方新闻播报分类首选
+    "longshu_v3",     # 龙树 - 沉稳年轻男声 20-25岁，官方新闻播报分类
+    "loongbella_v3",  # Bella 3.0 - 精准能干女声 25-30岁，官方新闻播报分类
+    # === 用户验证的播音女声 ===
+    "longjing_v2",    # 龙婧 - 典型播音女，用户明确验证最佳，cosyvoice-v2 模型
+    # === 高品质知性音色（知识/科技节目适用） ===
+    "longanzhi_v3",   # 龙安智 - 睿智成熟男声 25-35岁，知识讲解风格
+    "longxiaochun_v3", # 龙小春 - 知性积极女声 25-30岁，语音助手/播报风格
+]
+
+
+def pick_broadcast_voice() -> str:
+    """[Gemini_2.5_Pro_planning] 从精选播音音色池中随机选取一个音色并返回其 voice ID。
+
+    供 TTSEngine 在 cosyvoice_voice="auto" 时调用。每次合成任务选取一个固定音色，
+    保证同一视频内所有字幕段使用一致的音色，避免割裂感。
+
+    Returns:
+        str: 音色 voice 参数值，例如 "longshuo_v3"
+    """
+    selected = random.choice(COSYVOICE_BROADCAST_VOICES)
+    logger.info(f"[CosyVoice] Auto voice selection: {selected}")  # [Gemini_2.5_Pro_planning]
+    return selected
 
 
 class _CosyVoiceCallback:
@@ -135,7 +169,12 @@ class TTSEngine:
         self.index_tts_path = index_tts_path
 
         # --- CosyVoice 配置 [Gemini_3.5_Flash_planning] ---
-        self.cosyvoice_voice = cosyvoice_voice
+        # [Gemini_2.5_Pro_planning] 支持 "auto" 关键字，从精选播音池随机选取音色
+        # 注意：随机选取在 __init__ 时发生一次，整个视频保持音色一致
+        if cosyvoice_voice == "auto":
+            self.cosyvoice_voice = pick_broadcast_voice()  # [Gemini_2.5_Pro_planning]
+        else:
+            self.cosyvoice_voice = cosyvoice_voice
         self.cosyvoice_model = cosyvoice_model
         self.cosyvoice_volume = cosyvoice_volume            # [Gemini_3.5_Flash_planning]
         self.cosyvoice_speech_rate = cosyvoice_speech_rate  # [Gemini_3.5_Flash_planning]
@@ -146,6 +185,9 @@ class TTSEngine:
                 self.cosyvoice_model = "cosyvoice-v2"
             elif self.cosyvoice_voice == "longwan":
                 self.cosyvoice_model = "cosyvoice-v1"
+            # Benchmark 音色（无 _vX 后缀）使用 cosyvoice-v2
+            elif not any(self.cosyvoice_voice.endswith(f"_v{n}") for n in ("1", "2", "3")):
+                self.cosyvoice_model = "cosyvoice-v2"  # [Gemini_2.5_Pro_planning]
             else:
                 self.cosyvoice_model = "cosyvoice-v3-flash"
 

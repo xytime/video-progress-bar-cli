@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --tts-cosy 参数，支持阿里云百炼 CosyVoice 配音服务，标有 # [Gemini_3.5_Flash_planning] |
 | 1.1.1   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --mute-original / --no-mute-original 参数，支持将原视频静音只保留 TTS，标注 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --tts-volume 和 --tts-speech-rate 参数以控制音量与语速，标有 # [Gemini_3.5_Flash_planning] |
+| 1.3.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | 将 --tts-voice 默认值改为 "auto"，自动从精选播音音色池随机选取，标注 # [Gemini_2.5_Pro_planning] |
 """
 import click
 from pathlib import Path
@@ -36,7 +37,7 @@ logger = logging.getLogger(__name__)
 @click.option('--tts', is_flag=True, help='Generate speech using Edge TTS (Free).')
 @click.option('--tts-real', is_flag=True, help='Generate speech using IndexTTS (requires local IndexTTS installation).')
 @click.option('--tts-cosy', is_flag=True, help='Generate speech using Aliyun CosyVoice.')  # [Gemini_3.5_Flash_planning]
-@click.option('--tts-voice', default="longanzhi_v3", help='TTS voice name (e.g. longanzhi_v3, longsanshu_v3, longshuo_v3).', show_default=True)  # [Gemini_3.5_Flash_planning]
+@click.option('--tts-voice', default="auto", help='TTS voice name. Use "auto" to randomly pick from curated broadcast voices (longshuo_v3/longjing_v2/etc.), or specify a voice ID directly e.g. longanzhi_v3.', show_default=True)  # [Gemini_2.5_Pro_planning]
 @click.option('--mute-original/--no-mute-original', default=True, help='Mute the original video audio track when TTS is enabled.', show_default=True)  # [Gemini_3.5_Flash_planning]
 @click.option('--tts-volume', type=int, default=90, help='TTS volume (0-100) for CosyVoice.', show_default=True)  # [Gemini_3.5_Flash_planning]
 @click.option('--tts-speech-rate', type=float, default=1.0, help='TTS speech rate (0.5-2.0) for CosyVoice.', show_default=True)  # [Gemini_3.5_Flash_planning]
