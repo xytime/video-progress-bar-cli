@@ -6,6 +6,7 @@
 | 1.1.0 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复未导入 os 引发异常，修复硬编码 ffmpeg 导致无 libass 问题 |
 | 1.1.1 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复深层翻译API风控导致将500报错信息输出为中文字幕的重大缺陷 |
 | 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 引入正则彻底熔断 HTML 注入，修正 default 金色描边样式 |
+| 1.3.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 Gemini API 高质量批翻译功能，自动 fallback 到谷歌翻译，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 from pathlib import Path
@@ -352,12 +353,68 @@ class AutoCaptionProcessor(VideoProcessorBase):
         )
         return result["segments"]
 
+    def _translate_segments_gemini(self, segments: List[Dict[str, Any]]) -> Optional[List[str]]:
+        """[Gemini_3.5_Flash_planning] 使用 Gemini API 进行高质量批翻译"""
+        try:
+            from src.config.settings import settings
+            api_key = settings.gemini_api_key or os.getenv("GEMINI_API_KEY", "")
+            if not api_key:
+                logger.warning("GEMINI_API_KEY not found. Fallback to Google Translate.")
+                return None
+                
+            import google.generativeai as genai
+            genai.configure(api_key=api_key)
+            
+            # [Gemini_3.5_Flash_planning] 使用更稳定的 gemini-1.5-flash 模型，保证高速度与高质量
+            model = genai.GenerativeModel(
+                model_name="gemini-1.5-flash",
+                generation_config={"response_mime_type": "application/json"}
+            )
+            
+            texts = [seg['text'].strip() for seg in segments]
+            import json
+            
+            prompt = (
+                "You are an expert video subtitle translator. Translate the following list of English subtitle segments "
+                "into natural, professional, and native Chinese (zh-CN) for a video of Jeff Bezos speaking about artificial intelligence.\n"
+                "The translation must be accurate, concise, screen-friendly, and maintain standard Chinese terminology for tech/AI.\n"
+                "Return a JSON list of strings containing only the translations, maintaining the exact same order and count.\n\n"
+                f"Input segments:\n{json.dumps(texts, ensure_ascii=False)}"
+            )
+            
+            logger.info("Calling Gemini API for batch subtitle translation...")
+            response = model.generate_content(prompt)
+            result = json.loads(response.text)
+            
+            if isinstance(result, dict) and "translations" in result:
+                result = result["translations"]
+            elif isinstance(result, dict) and "list" in result:
+                result = result["list"]
+                
+            if isinstance(result, list) and len(result) == len(texts):
+                logger.info("Gemini translation completed successfully.")
+                return [str(t) for t in result]
+            else:
+                logger.warning(f"Gemini returned invalid translation list: {result}")
+                return None
+        except Exception as e:
+            logger.error(f"Gemini translation failed: {e}")
+            return None
+
     def _translate_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """批量翻译字幕片段"""
         if not segments:
             return segments
             
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
+        
+        # [Gemini_3.5_Flash_planning] 优先使用 Gemini 进行自然语言翻译
+        gemini_translations = self._translate_segments_gemini(segments)
+        if gemini_translations:
+            for i, text in enumerate(gemini_translations):
+                if i < len(segments):
+                    segments[i]['zh_text'] = text
+            return segments
         
         # 提取原文列表
         texts = [seg['text'].strip() for seg in segments]
