@@ -16,6 +16,8 @@
 | 2.4.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 delete_video 接口支持单个 slice 物理删除；新增获取所有 slices 与重试单个 slice 的 API |
 | 2.5.0 | 2026-05-27 | Unknown_Model_planning              | 新增 process_slice_now 接口以支持立即强制执行切片子任务 |
 | 2.6.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 新增 stop_video 接口以支持真实停止进程并状态置为 FAILED |
+| 2.7.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 新增后台队列自动轮询器 _queue_runner_loop 自动执行切片/高分任务 |
+| 2.8.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 使用 python -u 启动子进程以实现 pipeline.log 实时无缓冲日志输出 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -95,12 +97,61 @@ def _auto_pipeline_loop():
             print(f"[Scheduler] Auto pipeline error: {e}")
         time.sleep(14400)  # 4 小时 = 14400 秒
 
+
+def _run_pipeline_manager():
+    """[Gemini_3.5_Flash_planning] 后台运行 pipeline_manager 进程处理高分视频"""
+    prj_root = Path(__file__).parent.parent.parent
+    python = str(prj_root / ".venv" / "bin" / "python")
+    src_dir = str(prj_root / "src")
+    log_path = prj_root / "output" / "pipeline.log"
+    log_path.parent.mkdir(exist_ok=True)
+    _proxy = frozenset({'HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'})
+    env_clean = {k: v for k, v in os.environ.items() if k not in _proxy}
+
+    import subprocess as sp
+    try:
+        with open(log_path, "a") as f:
+            f.write("\n=== Auto-triggered queue pipeline run ===\n")
+            # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
+            sp.run([python, "-u", "-m", "video_processing.pipeline_manager"],
+                   cwd=src_dir, stdout=f, stderr=f, env=env_clean)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"_run_pipeline_manager failed: {e}")
+
+
+def _queue_runner_loop():
+    """[Gemini_3.5_Flash_planning] 每15秒巡检一次：如果有 >=75 分且状态为 PENDING 的任务，且当前没有管线任务在运行，则自动启动管线处理"""
+    import time
+    # [Gemini_3.5_Flash_planning] 自动执行队列轮询逻辑，解决切片子任务需要手动点击的痛点
+    time.sleep(5)
+    while True:
+        try:
+            # 1. 检查是否有 >=75 的 PENDING 视频
+            pending_videos = db.get_high_score_pending_videos(min_score=75, limit=1)
+            if pending_videos:
+                # 2. 检查当前是否有活跃的 pipeline 线程正在运行
+                active_threads = threading.enumerate()
+                is_pipeline_running = any(
+                    t.name in ("full-pipeline", "queue-pipeline") or t.name.startswith("pipeline-")
+                    for t in active_threads
+                )
+                
+                if not is_pipeline_running:
+                    print(f"[Scheduler] Found pending high-score video {pending_videos[0]['youtube_id']}, auto-triggering queue pipeline...")
+                    threading.Thread(target=_run_pipeline_manager, daemon=True, name="queue-pipeline").start()
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"[Scheduler] Queue runner loop error: {e}")
+        time.sleep(15)
+
+
 @app.on_event("startup")
 def startup_event():
     """FastAPI 启动时自动运行后台调度器，并在主线程注册信号处理器。
 
     [Claude_Sonnet_4.6_Thinking_planning] BUG-1 修复：signal.signal() 只能在主线程调用。
-    _process_single_video 经由 daemon 线程执行，无法在内部注册信号。
+    _process_single_video经由 daemon 线程执行，无法在内部注册信号。
     将 SIGTERM handler 注册移至此处（FastAPI startup 在主线程运行）。
     """
     # [Claude_Sonnet_4.6_Thinking_planning] BUG-1: 在主线程注册 SIGTERM handler
@@ -111,6 +162,9 @@ def startup_event():
     import threading
     threading.Thread(target=_auto_pipeline_loop, daemon=True, name="auto-pipeline-scheduler").start()
     print("[Scheduler] Background pipeline scheduler started.")
+
+    threading.Thread(target=_queue_runner_loop, daemon=True, name="queue-runner-scheduler").start()
+    print("[Scheduler] Queue runner scheduler started.")
 
 # 优先用 PATH 里的 yt-dlp，其次用 venv 里的
 _YT_DLP = shutil.which("yt-dlp") or str(
@@ -511,7 +565,8 @@ def _trigger_video_async(video: dict) -> None:
         try:
             with open(log_path, "a") as f:
                 import subprocess as sp
-                sp.run([python, "-c", inline], input=video_json, text=True,
+                # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
+                sp.run([python, "-u", "-c", inline], input=video_json, text=True,
                        cwd=str(prj_root), stdout=f, stderr=f)
         except Exception as e:
             import logging
@@ -1081,9 +1136,10 @@ def run_full_pipeline():
         import subprocess as sp
         with open(log_path, "a") as f:
             f.write("\n=== Web-triggered pipeline run ===\n")
-            sp.run([python, str(prj_root / "scripts" / "monitor_channels.py")],
+            # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
+            sp.run([python, "-u", str(prj_root / "scripts" / "monitor_channels.py")],
                    cwd=str(prj_root), stdout=f, stderr=f, env=env_clean)
-            sp.run([python, "-m", "video_processing.pipeline_manager"],
+            sp.run([python, "-u", "-m", "video_processing.pipeline_manager"],
                    cwd=src_dir, stdout=f, stderr=f, env=env_clean)
 
     threading.Thread(target=_run, daemon=True, name="full-pipeline").start()

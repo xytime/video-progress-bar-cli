@@ -7,6 +7,7 @@
 # | ---     | ---        | ---                           | ---                                         |
 # | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning     | 初始创建 vhelp 终端速查手册                 |
 # | 1.1.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking    | 新增 OptionSense 核心服务全景 & 启停命令表  |
+# | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning     | 细化 live_main 启动依赖顺序 & 新增维护锁说明  |
 # =======================================================================
 
 # 终端颜色代码
@@ -23,7 +24,7 @@ RESET="\033[0m"
 SEP="${DIM}──────────────────────────────────────────────────────────────────────${RESET}"
 
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.1  ${RESET}"
+echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.2  ${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 
 # ================================================================
@@ -79,13 +80,15 @@ echo -e "    ${DIM}⚠️  依赖 FutuOpenD (:11111) 已运行${RESET}"
 echo ""
 echo -e "  ${BOLD}  ④ live_main${RESET}  ${DIM}[实盘交易引擎]${RESET}"
 echo -e "    ${DIM}职责: V4 实盘交易主引擎。包含信号生成 / 风控 / 持仓管理 / 盘中 bar 数据。${RESET}"
+echo -e "    ${DIM}⚠️  依赖 FutuOpenD (:11111)、data_api_server (:8000)、ZMQ 广播 (:5555) 均已就绪。${RESET}"
 echo -e "    ${DIM}⚠️  盘中 (ET 09:15–16:15) 禁止重启，防止 v4_live_state 内存清零（数据永久丢失）${RESET}"
 echo -e "    ${GREEN}查询: live_engine status${RESET}"
-echo -e "    ${GREEN}启动: live_engine start${RESET}              ${DIM}# SIMULATE 模拟模式${RESET}"
-echo -e "    ${GREEN}启动: live_engine start LIVE${RESET}         ${DIM}# 实盘模式 ⚠️${RESET}"
-echo -e "    ${RED}停止: live_engine stop${RESET}"
+echo -e "    ${GREEN}启动: live_engine start${RESET}              ${DIM}# SIMULATE 模拟模式 (会自动解开维护锁)${RESET}"
+echo -e "    ${GREEN}启动: live_engine start LIVE${RESET}         ${DIM}# 实盘模式 ⚠️ (会自动解开维护锁)${RESET}"
+echo -e "    ${RED}停止: live_engine stop${RESET}                  ${DIM}# 优雅停止 (会自动挂起维护锁，防看门狗抢跑)${RESET}"
 echo -e "    ${CYAN}重启: live_engine restart${RESET}"
-echo -e "    ${CYAN}重启: live_engine restart SHADOW${RESET}    ${DIM}# 指定模式重启${RESET}"
+echo -e "    ${CYAN}锁定: live_engine maintenance-on${RESET}      ${DIM}# 开启人工维护锁 (手动调试时必挂此锁)${RESET}"
+echo -e "    ${CYAN}解锁: live_engine maintenance-off${RESET}     ${DIM}# 解除人工维护锁 (恢复看门狗自动保活)${RESET}"
 echo ""
 
 echo -e "  ${BOLD}⚙️  AUXILIARY 层 — 辅助服务（可独立启停，不影响交易）${RESET}"
@@ -155,10 +158,10 @@ echo -e "    ${BLUE}alias batchtest${RESET}=${CYAN}\"python /path/to/OptionSense
 echo -e "    ${BLUE}alias ui${RESET}=${CYAN}\"/path/to/OptionSense/.../web_manager.sh\"${RESET}"
 echo -e "    ${BLUE}alias vhelp${RESET}=${CYAN}\"/path/to/Video-precessing/vhelp\"${RESET}"
 echo -e "    ${BLUE}alias vp${RESET}=${CYAN}\"/path/to/Video-precessing/vpanel\"${RESET}"
-echo -e "    ${BLUE}live_engine()${RESET} { /path/to/scripts/live_engine_ctl.sh \"\$@\" }"
-echo -e "    ${BLUE}option()${RESET}      { python /path/to/scripts/trade_option.py \"\$@\" }"
+echo -e "    ${BLUE}live_engine()${RESET} { /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/live_engine_ctl.sh \"\$@\" }"
+echo -e "    ${BLUE}option()${RESET}      { python /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/trade_option.py \"\$@\" }"
 
 echo -e "\n${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.1${RESET}"
+echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.2${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 echo ""

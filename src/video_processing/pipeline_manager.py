@@ -19,6 +19,9 @@
 | 2.3.2   | 2026-05-27 | Unknown_Model_planning              | 修复 slice_index > 0 时未执行导入代码导致的 UnboundLocalError 异常          |
 | 2.4.0   | 2026-05-27 | Unknown_Model_planning              | 强制子分片封面副标题显示：主标题 + {当前集}/{总集数} 集                      |
 | 2.5.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 支持 disable_slicing == 1 时强制跳过章节切片，保留整片制作发布流程 |
+| 2.9.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | 多切片视频头部标题追加集数进度（如"AI写代码 3/9"），整片视频不受影响 |
+| 2.8.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | 前移 COPYWRITING 至 TRANSCRIBING 之前，用中文短标题渲染，使视频头部与封面标题一致 |
+| 2.7.0   | 2026-05-28 | Gemini_3.5_Flash_planning           | 改进 process_high_score_videos 支持连续批处理以自动完成所有切片与排队任务 |
 | 2.6.0   | 2026-05-27 | Unknown_Model_planning              | 红蓝博弈安全性与容错性审计修复 (P1/P2) |
 """
 
@@ -132,46 +135,63 @@ class PipelineManager:
     # ── 批量触发 ──────────────────────────────────────────────────────────────
 
     def process_high_score_videos(self, limit: int = 5):
-        """拉取高分视频进入加工流转"""
-        # 拉取多一点以备过滤父视频就绪与发布顺序锁
-        targets = self.db.get_high_score_pending_videos(min_score=75, limit=limit * 3)
+        """拉取高分视频进入加工流转，自动循环处理全部队列和切片任务直至清空。
+
+        # Modification History
+        | Version | Date | Author | Description |
+        | --- | --- | --- | --- |
+        | 1.0.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 实现批次自动循环调度，彻底消除切片子任务需要手动执行的痛点 |
+        """
+        # [Gemini_3.5_Flash_planning] 连续拉取高分视频直至全部处理完成，避免切片或排队任务需要频繁手动执行
+        logger.info(f"Starting pipeline run loop (batch limit={limit}).")
+        total_processed = 0
         
-        claimed_targets = []
-        for video in targets:
-            yid = video['youtube_id']
-            slice_index = video.get('slice_index', 0)
-            
-            if slice_index > 0:
-                # 1. 检查父视频文件是否下载就绪
-                parent_file = self._find_downloaded_video(yid)
-                if not parent_file:
-                    logger.info(f"Sub-task [{yid} s{slice_index}] skipped: Parent video file not ready.")
-                    continue
+        while True:
+            # 拉取多一点以备过滤父视频就绪与发布顺序锁 [Gemini_3.5_Flash_planning]
+            targets = self.db.get_high_score_pending_videos(min_score=75, limit=limit * 3)
+            if not targets:
+                logger.info("No more high-score videos available for processing.")
+                break
+
+            claimed_targets = []
+            for video in targets:
+                yid = video['youtube_id']
+                slice_index = video.get('slice_index', 0)
                 
-                # 2. 检查前序子任务是否已发布 (Sequence Locking)
-                all_slices = self.db.get_slices_by_parent_yid(yid)
-                # [Unknown_Model_planning] 放宽顺序锁：跳过处于已发布/跳过/手动上传状态的切片任务
-                prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] not in ('PUBLISHED', 'IGNORED', 'COMPLETED')]
-                if prev_not_published:
-                    prev_indices = [s['slice_index'] for s in prev_not_published]
-                    logger.info(f"Sub-task [{yid} s{slice_index}] skipped: Waiting for previous slices {prev_indices} to publish.")
-                    continue
-            
-            # [Gemini_3.1_Pro_High] 防竞态：尝试抢占，避免与 API 手工触发冲突
-            if self.db.claim_video_for_processing(yid, slice_index=slice_index):
-                claimed_targets.append(video)
-                if len(claimed_targets) >= limit:
-                    break
+                if slice_index > 0:
+                    # 1. 检查父视频文件是否下载就绪
+                    parent_file = self._find_downloaded_video(yid)
+                    if not parent_file:
+                        logger.info(f"Sub-task [{yid} s{slice_index}] skipped: Parent video file not ready.")
+                        continue
+                    
+                    # 2. 检查前序子任务是否已发布 (Sequence Locking)
+                    all_slices = self.db.get_slices_by_parent_yid(yid)
+                    prev_not_published = [s for s in all_slices if s['slice_index'] < slice_index and s['status'] not in ('PUBLISHED', 'IGNORED', 'COMPLETED')]
+                    if prev_not_published:
+                        prev_indices = [s['slice_index'] for s in prev_not_published]
+                        logger.info(f"Sub-task [{yid} s{slice_index}] skipped: Waiting for previous slices {prev_indices} to publish.")
+                        continue
                 
-        if not claimed_targets:
-            logger.info("No high-score videos available for processing.")
-            return
-            
-        self.send_telegram_msg(
-            f"🚀 <b>Pipeline Started</b>\nToday's quota: {len(claimed_targets)} videos."
-        )
-        for video in claimed_targets:
-            self._process_single_video(video)
+                # 防竞态：尝试抢占 [Gemini_3.5_Flash_planning]
+                if self.db.claim_video_for_processing(yid, slice_index=slice_index):
+                    claimed_targets.append(video)
+                    if len(claimed_targets) >= limit:
+                        break
+
+            if not claimed_targets:
+                logger.info("No claimable high-score videos in this batch. Exiting loop.")
+                break
+
+            logger.info(f"Processing a batch of {len(claimed_targets)} video(s).")
+            self.send_telegram_msg(
+                f"🚀 <b>Pipeline Batch Started</b>\nProcessing {len(claimed_targets)} videos in this batch."
+            )
+            for video in claimed_targets:
+                self._process_single_video(video)
+                total_processed += 1
+
+        logger.info(f"Pipeline run loop completed. Total processed: {total_processed}")
 
     # ── 工具方法 ──────────────────────────────────────────────────────────────
 
@@ -558,31 +578,14 @@ class PipelineManager:
                 if self._check_censorship(yid, title, description):
                     return
 
-                # ── 2. TRANSCRIBING & RENDERING ───────────────────────────────────
-                vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
-                if vertical.exists() and vertical.stat().st_size > 1_000_000:
-                    logger.info(f"[SKIP] Transcribe checkpoint: {vertical.name}")
-                    self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
-                else:
-                    if settings.enable_sigterm_kill and _sigterm_received:
-                        logger.warning(f"[SIGTERM] Checkpoint before TRANSCRIBING: aborting {prefix}")
-                        raise InterruptedError("SIGTERM received before transcription")
-                    self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
-                    render_cmd = [
-                        "nice", "-n", "19",
-                        self._VENV_PYTHON, "-m", "cli.main", "auto-caption",
-                        str(target_file), "--vertical", "--bilingual", "--title", title,
-                    ]
-                    render_env = os.environ.copy()
-                    render_env["PYTHONPATH"] = str(self._SRC_DIR)
-                    self._run_tracked(render_cmd, yid, slice_index=slice_index, capture_output=True,
-                                      cwd=str(self._PRJ_ROOT), env=render_env)
-
-                # ── 2b. COPYWRITING ────────────────────────────────────────────────
+                # ── 2a. COPYWRITING ────────────────────────────────────────────────
+                # [Claude_Sonnet_4.6_Thinking_planning] v2.8.0 前移至 TRANSCRIBING 之前：
+                # Copywriter 仅依赖 YouTube ID + 原始标题 + description，不需要 transcript。
+                # 先生成中文短标题，TRANSCRIBING 步骤再读取，确保视频头部标题与封面一致。
                 copy_file = self._OUT_DIR / f"{prefix}_copy.txt"
                 title_file = self._OUT_DIR / f"{prefix}_title.txt"
                 category_file = self._OUT_DIR / f"{prefix}_category.txt"
-                
+
                 if copy_file.exists() and title_file.exists():
                     logger.info(f"[SKIP] Copywriting checkpoint: {copy_file.name}")
                     self.db.update_video_status(yid, "COPYWRITING", slice_index=slice_index)
@@ -599,6 +602,47 @@ class PipelineManager:
                     self._run_tracked(copy_cmd, yid, slice_index=slice_index, capture_output=True,
                                       cwd=str(self._PRJ_ROOT))
 
+                # ── 2b. TRANSCRIBING & RENDERING ──────────────────────────────────
+                # [Claude_Sonnet_4.6_Thinking_planning] v2.8.0 读取 copywriter 生成的中文短标题
+                # 作为渲染标题，使视频头部 title 与封面 title 保持一致。
+                render_title = title  # fallback：若 title_file 不存在则用 DB 原始标题
+                if title_file.exists():
+                    try:
+                        _rt = title_file.read_text(encoding="utf-8").strip()
+                        if _rt:
+                            render_title = _rt
+                    except Exception:
+                        pass
+
+                # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0 多切片视频：在视频头部标题追加集数进度
+                # 格式："{短标题} {当前集}/{总集数}"，如 "AI写代码 3/9"
+                # 整片视频（slice_index == 0）不追加，避免干扰。
+                if slice_index > 0:
+                    all_slices = self.db.get_slices_by_parent_yid(yid)
+                    total_cnt = len(all_slices) if all_slices else 1
+                    render_title = f"{render_title} {slice_index}/{total_cnt}"
+                logger.info(f"[Render] Using title for video header: {render_title!r}")
+
+
+                vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
+                if vertical.exists() and vertical.stat().st_size > 1_000_000:
+                    logger.info(f"[SKIP] Transcribe checkpoint: {vertical.name}")
+                    self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
+                else:
+                    if settings.enable_sigterm_kill and _sigterm_received:
+                        logger.warning(f"[SIGTERM] Checkpoint before TRANSCRIBING: aborting {prefix}")
+                        raise InterruptedError("SIGTERM received before transcription")
+                    self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
+                    render_cmd = [
+                        "nice", "-n", "19",
+                        self._VENV_PYTHON, "-m", "cli.main", "auto-caption",
+                        str(target_file), "--vertical", "--bilingual", "--title", render_title,
+                    ]
+                    render_env = os.environ.copy()
+                    render_env["PYTHONPATH"] = str(self._SRC_DIR)
+                    self._run_tracked(render_cmd, yid, slice_index=slice_index, capture_output=True,
+                                      cwd=str(self._PRJ_ROOT), env=render_env)
+
                 # ── 2c. CENSORSHIP COPYWRITING CHECK ──────────────────────────────
                 copy_content = ""
                 if copy_file.exists():
@@ -606,7 +650,7 @@ class PipelineManager:
                         copy_content = copy_file.read_text(encoding="utf-8").strip()
                     except Exception:
                         pass
-                
+
                 short_title = title
                 if title_file.exists():
                     try:
@@ -616,6 +660,7 @@ class PipelineManager:
 
                 if self._check_censorship(yid, short_title, copy_content):
                     return
+
 
                 # ── 3. 封面生成 ──────────────────────────────────────────────────
                 cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"
@@ -711,8 +756,35 @@ class PipelineManager:
                 self.db.update_video_status(yid, "PUBLISHING", slice_index=slice_index)
                 logger.info(f"Uploading to WeChat Channels for {prefix}...")
 
-                # 获取微信合集名称 (这里可以使用父视频的标题作为合集前缀，或者指定特定合集)
-                collection_name = graceful_truncate_title(title, max_len=15)
+                # [Claude_Sonnet_4.6_Thinking_planning] BUG-FIX: 合集名称必须来自父视频标题
+                # 使用切片自身的 title 会导致每个切片合集名不同（如"【01】引言"vs"【02】发展"），
+                # WeChat 会将它们识别为不同合集而无法归并。
+                # 修复：当 slice_index > 0 时，从父视频 (slice_index=0) 获取 zh_title 作为合集名。
+                collection_name = ""
+                if slice_index > 0:
+                    import re as _re
+                    parent_video_for_coll = self.db.get_video_by_youtube_id(yid, 0)
+                    if parent_video_for_coll:
+                        parent_zh_coll = (
+                            parent_video_for_coll.get("zh_title")
+                            or parent_video_for_coll.get("title")
+                            or ""
+                        )
+                        # 剔除括号内容防止合集名过长
+                        parent_zh_coll = _re.sub(
+                            r'\([^)]*\)|（[^）]*）|\[[^\]]*\]|【[^】]*】', '', parent_zh_coll
+                        ).strip()
+                        # 尝试从父任务的 title_file 读取已生成的短标题
+                        parent_title_file_coll = self._OUT_DIR / f"{yid}_title.txt"
+                        if parent_title_file_coll.exists():
+                            try:
+                                parent_zh_coll = parent_title_file_coll.read_text(encoding="utf-8").strip()
+                            except Exception:
+                                pass
+                        collection_name = graceful_truncate_title(parent_zh_coll, max_len=15)
+                    else:
+                        # fallback: 不设合集，总比设一个错误合集名好
+                        logger.warning(f"[Collection] Parent video (slice_index=0) not found for {yid}, skipping collection.")
 
                 upload_cmd = [
                     self._VENV_PYTHON,

@@ -8,6 +8,7 @@
 # | 1.0.0 | 2026-05-21 | Gemini_3.5_Flash_planning | 初始创建 vpanel，支持 ui/job 命令组管理 |
 # | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 修复硬编码路径、set -e 静默崩溃、stop 未等待进程、help 命令缺失、tail 行数不足 |
 # | 1.2.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 新增 bot 命令组：透传 bot_daemon.py，零业务逻辑 |
+# | 1.3.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 使用 python -u 启用无缓冲输出以实时更新日志 |
 # =======================================================================
 
 # [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
@@ -81,7 +82,7 @@ ui_start() {
     fi
 
     echo "🚀 正在启动控制中心仪表盘..."
-    nohup "$PYTHON" "$PRJ_ROOT/src/web/app.py" > "$UI_LOG_FILE" 2>&1 &
+    nohup "$PYTHON" -u "$PRJ_ROOT/src/web/app.py" > "$UI_LOG_FILE" 2>&1 &
     NEW_PID=$!
     echo "$NEW_PID" > "$PID_FILE"
 

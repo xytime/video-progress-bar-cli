@@ -15,6 +15,7 @@
 | 2.5.4   | 2026-05-27 | Unknown_Model_planning              | 仅当切片全部完成时才允许父视频进入“已完成”Tab，否则根据切片状态归入“处理中”或“错误”Tab |
 | 2.6.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 新增 disable_slicing 状态列用于整片发布/切片发布的控制 (默认 1 为整片发布) |
 | 2.7.0   | 2026-05-27 | Unknown_Model_planning              | 红蓝博弈安全性与容错性审计修复 (P1/P2) |
+| 2.8.0   | 2026-05-28 | Gemini_3.5_Flash_planning           | 优化 get_high_score_pending_videos：利用 EXISTS 子查询在 SQL 层直接过滤被顺序锁阻断的切片任务 |
 """
 
 import sqlite3
@@ -416,12 +417,27 @@ class PipelineDB:
             conn.commit()
 
     def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5) -> List[Dict[str, Any]]:
-        """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。"""
+        """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。
+        [Gemini_3.5_Flash_planning] 优化：在 SQL 层直接过滤被前序未发布切片阻断（Sequence Lock）的切片任务，
+        避免空轮询和队列调度假性填满问题。
+        """
+        query = """
+            SELECT * FROM processed_videos pv
+            WHERE pv.status = 'PENDING' AND pv.score >= ?
+              AND (
+                pv.slice_index = 0
+                OR NOT EXISTS (
+                  SELECT 1 FROM processed_videos sib
+                  WHERE sib.parent_id = pv.parent_id
+                    AND sib.slice_index > 0
+                    AND sib.slice_index < pv.slice_index
+                    AND sib.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')
+                )
+              )
+            ORDER BY pv.score DESC LIMIT ?
+        """
         with self.get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT * FROM processed_videos WHERE status = 'PENDING' AND score >= ? ORDER BY score DESC LIMIT ?",
-                (min_score, limit)
-            )
+            cursor = conn.execute(query, (min_score, limit))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_status_counts(self) -> Dict[str, int]:
