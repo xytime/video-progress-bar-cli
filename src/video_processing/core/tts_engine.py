@@ -12,6 +12,7 @@
 | 1.0.0   | 2026-05-20 | Gemini_3.1_Pro_High_planning  | 初始创建，支持 EDGE / INDEXTTS |
 | 2.0.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | 新增 COSYVOICE Provider，集成 DashScope SDK，支持 Instruct 情感控制与字级别时间戳 |
 | 2.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 自动检测输出音频文件后缀名，动态配置 SDK 音频编码格式（WAV / MP3）并写入 # [Gemini_3.5_Flash_planning] 标志 |
+| 2.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 变更默认音色为龙安智 (longanzhi_v3) 并增加音色支持的指令自动过滤防御逻辑，标注 # [Gemini_3.5_Flash_planning] |
 """
 import os
 import logging
@@ -35,7 +36,7 @@ class TTSProvider(Enum):
 # CosyVoice 默认配置常量
 # ---------------------------------------------------------------------------
 COSYVOICE_DEFAULT_MODEL = "cosyvoice-v3-flash"
-COSYVOICE_DEFAULT_VOICE = "longanyang"    # 阳光大男孩，支持 Instruct + 时间戳
+COSYVOICE_DEFAULT_VOICE = "longanzhi_v3"    # [Gemini_3.5_Flash_planning] 默认变更为龙安智 (睿智轻熟男)，适合科技财经知性讲解
 COSYVOICE_DEFAULT_INSTRUCTION = "你现在说话的角色是一个旁白，你说话的情感是neutral。"
 
 
@@ -129,10 +130,14 @@ class TTSEngine:
         self.provider = provider
         self.index_tts_path = index_tts_path
 
-        # --- CosyVoice 配置 [Gemini_2.5_Pro_planning] ---
+        # --- CosyVoice 配置 [Gemini_3.5_Flash_planning] ---
         self.cosyvoice_model = cosyvoice_model
         self.cosyvoice_voice = cosyvoice_voice
-        self.cosyvoice_instruction = cosyvoice_instruction
+        # 防御性逻辑：只有标杆音色支持 Instruct 指令控制，其他系统音色传此参数会导致 API 报错
+        if self.cosyvoice_voice in ("longanyang", "longanhuan"):
+            self.cosyvoice_instruction = cosyvoice_instruction
+        else:
+            self.cosyvoice_instruction = None
 
         if self.provider == TTSProvider.INDEXTTS:
             if not self.index_tts_path:

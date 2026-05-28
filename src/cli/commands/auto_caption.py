@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 @click.option('--tts', is_flag=True, help='Generate speech using Edge TTS (Free).')
 @click.option('--tts-real', is_flag=True, help='Generate speech using IndexTTS (requires local IndexTTS installation).')
 @click.option('--tts-cosy', is_flag=True, help='Generate speech using Aliyun CosyVoice.')  # [Gemini_3.5_Flash_planning]
-def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, tts, tts_real, tts_cosy):
+@click.option('--tts-voice', default="longanzhi_v3", help='TTS voice name (e.g. longanzhi_v3, longsanshu_v3, longshuo_v3).', show_default=True)  # [Gemini_3.5_Flash_planning]
+def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, tts, tts_real, tts_cosy, tts_voice):
     """Generate and burn bilingual subtitles for a video."""
     try:
         
@@ -62,7 +63,8 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
                 font_path=str(font_path),
                 font_size=font_size,
                 bilingual=bilingual,
-                tts_provider=tts_provider
+                tts_provider=tts_provider,
+                tts_voice=tts_voice  # [Gemini_3.5_Flash_planning]
             )
             mode_str = "Vertical (9:16)"
         else:

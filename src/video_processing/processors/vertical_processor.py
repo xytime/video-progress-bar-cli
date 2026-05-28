@@ -5,7 +5,7 @@
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，支持三段式与边缘配音/本地配音 |
-| 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 CosyVoice 语音合成 Provider 支持，标注 # [Gemini_3.5_Flash_planning] |
+| 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 CosyVoice 语音合成 Provider 支持并实现 TTS 说话时背景音动态闪避 (Ducking) 功能，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -46,7 +46,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         font_path: str = "/Library/Fonts/Arial Unicode.ttf",
         font_size: int = 84,
         bilingual: bool = False,
-        tts_provider: Optional[str] = None
+        tts_provider: Optional[str] = None,
+        tts_voice: Optional[str] = None  # [Gemini_3.5_Flash_planning]
     ):
         super().__init__(
             input_path, output_path, model_size, src_lang, target_lang, device, style
@@ -57,7 +58,32 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         self.font_size = font_size
         self.bilingual = bilingual
         self.tts_provider = tts_provider
+        self.tts_voice = tts_voice  # [Gemini_3.5_Flash_planning]
         self.segments = [] # Store for TTS usage
+
+    def _get_audio_duration(self, path: Path) -> float:
+        """[Gemini_3.5_Flash_planning] 获取音频文件的精确时长，优先使用 ffprobe 避免读取到流式 WAV 头中的超大占位符"""
+        import subprocess
+        try:
+            cmd = [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            return float(result.stdout.strip())
+        except Exception:
+            # 备用方案：使用 wave 读取（仅作最后兜底）
+            try:
+                import wave
+                with wave.open(str(path), 'rb') as w:
+                    nframes = w.getnframes()
+                    # 如果 nframes 异常大（例如超过 1 小时，对于短视频片段显然不合理），则根据文件大小估算
+                    if nframes > 10000000:
+                        # 16kHz 16bit mono = 32000 bytes/sec
+                        return path.stat().st_size / 32000.0
+                    return nframes / float(w.getframerate())
+            except Exception:
+                return 0.0
 
     def _generate_ass_file(self, segments: List[Dict[str, Any]]) -> Path:
         """Override to adjust subtitle vertical position (MarginV) and font size"""
@@ -159,6 +185,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         
         # TTS Logic
         generated_audio_track = None
+        audio_segments = []  # [Gemini_3.5_Flash_planning] 声明为外部作用域变量，以供后面的 Ducking 计算使用
         if self.tts_provider and self.segments:
             logger.info(f"Generating TTS audio using provider: {self.tts_provider}")
             try:
@@ -170,7 +197,11 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                     provider = TTSProvider.COSYVOICE
                 else:
                     provider = TTSProvider.EDGE
-                tts_engine = TTSEngine(provider=provider)
+                # [Gemini_3.5_Flash_planning] 传入指定的音色参数，默认将使用更合适更动听的龙安智
+                tts_engine = TTSEngine(
+                    provider=provider,
+                    cosyvoice_voice=self.tts_voice or "longanzhi_v3"
+                )
                 
                 # Prepare items
                 tts_items = []
@@ -334,7 +365,23 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             # Add new audio as input 1
             cmd += ["-i", str(generated_audio_track)]
             
-            audio_filter = f"[0:a]volume=0.1[bg];[1:a]volume=1.5[fg];[bg][fg]amix=inputs=2:duration=first[aout]"
+            # [Gemini_3.5_Flash_planning] 计算每一句 TTS 说话的开始与结束区间，生成动态音量过滤表达式
+            intervals = []
+            for seg in audio_segments:
+                start = seg['start']
+                path = seg['path']
+                duration = self._get_audio_duration(path)
+                if duration > 0:
+                    intervals.append((start, start + duration))
+            
+            if intervals:
+                # 使用 between 串联各个发音区间，如果当前时间 t 处于任意发音区间，则背景音设为 10% (0.1)，否则保持 100% (1.0)
+                conds = " + ".join([f"between(t,{s:.3f},{e:.3f})" for s, e in intervals])
+                volume_filter = f"volume='if({conds},0.1,1.0)':eval=frame"
+            else:
+                volume_filter = "volume=0.1"
+                
+            audio_filter = f"[0:a]{volume_filter}[bg];[1:a]volume=1.5[fg];[bg][fg]amix=inputs=2:duration=first[aout]"
             filter_str += f";{audio_filter}"
             
             audio_inputs = ["-map", "[aout]"]
