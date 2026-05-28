@@ -14,6 +14,7 @@
 | 2.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 自动检测输出音频文件后缀名，动态配置 SDK 音频编码格式（WAV / MP3）并写入 # [Gemini_3.5_Flash_planning] 标志 |
 | 2.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 变更默认音色为龙安智 (longanzhi_v3) 并增加音色支持的指令自动过滤防御逻辑，标注 # [Gemini_3.5_Flash_planning] |
 | 2.3.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 增加根据音色（如 _v2 后缀）自动匹配并重置为合理 CosyVoice 模型版本（v1/v2/v3）的智能映射逻辑，标注 # [Gemini_3.5_Flash_planning] |
+| 2.4.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 增加 cosyvoice_volume 和 cosyvoice_speech_rate 参数以控制 API 的音量与语速，标注 # [Gemini_3.5_Flash_planning] |
 """
 import os
 import logging
@@ -127,6 +128,8 @@ class TTSEngine:
         cosyvoice_model: str = COSYVOICE_DEFAULT_MODEL,
         cosyvoice_voice: str = COSYVOICE_DEFAULT_VOICE,
         cosyvoice_instruction: str = COSYVOICE_DEFAULT_INSTRUCTION,
+        cosyvoice_volume: int = 90,                  # [Gemini_3.5_Flash_planning]
+        cosyvoice_speech_rate: float = 1.0,          # [Gemini_3.5_Flash_planning]
     ):
         self.provider = provider
         self.index_tts_path = index_tts_path
@@ -134,6 +137,8 @@ class TTSEngine:
         # --- CosyVoice 配置 [Gemini_3.5_Flash_planning] ---
         self.cosyvoice_voice = cosyvoice_voice
         self.cosyvoice_model = cosyvoice_model
+        self.cosyvoice_volume = cosyvoice_volume            # [Gemini_3.5_Flash_planning]
+        self.cosyvoice_speech_rate = cosyvoice_speech_rate  # [Gemini_3.5_Flash_planning]
         
         # 自动匹配合理的模型：v2 音色需要使用 cosyvoice-v2 模型，v1 使用 cosyvoice-v1
         if cosyvoice_model == COSYVOICE_DEFAULT_MODEL:
@@ -370,6 +375,8 @@ class TTSEngine:
             voice=self.cosyvoice_voice,
             callback=cb_wrapper,
             format=audio_format,
+            volume=self.cosyvoice_volume,                  # [Gemini_3.5_Flash_planning]
+            speech_rate=self.cosyvoice_speech_rate,        # [Gemini_3.5_Flash_planning]
             instruction=self.cosyvoice_instruction,          # [Gemini_2.5_Pro_planning] 构造时传入
             additional_params={"word_timestamp_enabled": True},  # 通过 additional_params 写入 parameters
         )

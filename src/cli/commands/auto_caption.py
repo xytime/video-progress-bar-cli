@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，提供 cli 主入口与 edge/indextts 选择 |
 | 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --tts-cosy 参数，支持阿里云百炼 CosyVoice 配音服务，标有 # [Gemini_3.5_Flash_planning] |
 | 1.1.1   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --mute-original / --no-mute-original 参数，支持将原视频静音只保留 TTS，标注 # [Gemini_3.5_Flash_planning] |
+| 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --tts-volume 和 --tts-speech-rate 参数以控制音量与语速，标有 # [Gemini_3.5_Flash_planning] |
 """
 import click
 from pathlib import Path
@@ -37,7 +38,9 @@ logger = logging.getLogger(__name__)
 @click.option('--tts-cosy', is_flag=True, help='Generate speech using Aliyun CosyVoice.')  # [Gemini_3.5_Flash_planning]
 @click.option('--tts-voice', default="longanzhi_v3", help='TTS voice name (e.g. longanzhi_v3, longsanshu_v3, longshuo_v3).', show_default=True)  # [Gemini_3.5_Flash_planning]
 @click.option('--mute-original/--no-mute-original', default=True, help='Mute the original video audio track when TTS is enabled.', show_default=True)  # [Gemini_3.5_Flash_planning]
-def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, tts, tts_real, tts_cosy, tts_voice, mute_original):
+@click.option('--tts-volume', type=int, default=90, help='TTS volume (0-100) for CosyVoice.', show_default=True)  # [Gemini_3.5_Flash_planning]
+@click.option('--tts-speech-rate', type=float, default=1.0, help='TTS speech rate (0.5-2.0) for CosyVoice.', show_default=True)  # [Gemini_3.5_Flash_planning]
+def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, tts, tts_real, tts_cosy, tts_voice, mute_original, tts_volume, tts_speech_rate):
     """Generate and burn bilingual subtitles for a video."""
     try:
         
@@ -67,7 +70,9 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
                 bilingual=bilingual,
                 tts_provider=tts_provider,
                 tts_voice=tts_voice,  # [Gemini_3.5_Flash_planning]
-                mute_original=mute_original  # [Gemini_3.5_Flash_planning]
+                mute_original=mute_original,  # [Gemini_3.5_Flash_planning]
+                tts_volume=tts_volume,  # [Gemini_3.5_Flash_planning]
+                tts_speech_rate=tts_speech_rate  # [Gemini_3.5_Flash_planning]
             )
             mode_str = "Vertical (9:16)"
         else:

@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，支持三段式与边缘配音/本地配音 |
 | 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 CosyVoice 语音合成 Provider 支持并实现 TTS 说话时背景音动态闪避 (Ducking) 功能，标注 # [Gemini_3.5_Flash_planning] |
 | 1.1.1   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 mute_original 参数支持，允许将原视频静音只保留 TTS 音轨，标注 # [Gemini_3.5_Flash_planning] |
+| 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 tts_volume 和 tts_speech_rate 支持，并在分段混合前引入 atempo 自动加速防重叠安全阀机制，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -49,7 +50,9 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         bilingual: bool = False,
         tts_provider: Optional[str] = None,
         tts_voice: Optional[str] = None,  # [Gemini_3.5_Flash_planning]
-        mute_original: bool = True  # [Gemini_3.5_Flash_planning]
+        mute_original: bool = True,  # [Gemini_3.5_Flash_planning]
+        tts_volume: int = 90,  # [Gemini_3.5_Flash_planning]
+        tts_speech_rate: float = 1.0  # [Gemini_3.5_Flash_planning]
     ):
         super().__init__(
             input_path, output_path, model_size, src_lang, target_lang, device, style
@@ -62,6 +65,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         self.tts_provider = tts_provider
         self.tts_voice = tts_voice  # [Gemini_3.5_Flash_planning]
         self.mute_original = mute_original  # [Gemini_3.5_Flash_planning]
+        self.tts_volume = tts_volume  # [Gemini_3.5_Flash_planning]
+        self.tts_speech_rate = tts_speech_rate  # [Gemini_3.5_Flash_planning]
         self.segments = [] # Store for TTS usage
 
     def _get_audio_duration(self, path: Path) -> float:
@@ -87,6 +92,27 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                     return nframes / float(w.getframerate())
             except Exception:
                 return 0.0
+
+    def _adjust_audio_speed(self, input_path: Path, factor: float):
+        """[Gemini_3.5_Flash_planning] 使用 ffmpeg atempo 滤镜调整音频速度并覆盖原文件"""
+        temp_path = input_path.with_name(f"temp_{input_path.name}")
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        
+        factor = min(2.0, max(0.5, factor))
+        
+        cmd = [
+            ffmpeg_exe, "-y",
+            "-i", str(input_path),
+            "-filter:a", f"atempo={factor:.3f}",
+            str(temp_path)
+        ]
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if temp_path.exists():
+                temp_path.replace(input_path)
+        except Exception as e:
+            logger.error(f"Failed to adjust audio speed for {input_path}: {e}")
 
     def _generate_ass_file(self, segments: List[Dict[str, Any]]) -> Path:
         """Override to adjust subtitle vertical position (MarginV) and font size"""
@@ -203,7 +229,9 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                 # [Gemini_3.5_Flash_planning] 传入指定的音色参数，默认将使用更合适更动听的龙安智
                 tts_engine = TTSEngine(
                     provider=provider,
-                    cosyvoice_voice=self.tts_voice or "longanzhi_v3"
+                    cosyvoice_voice=self.tts_voice or "longanzhi_v3",
+                    cosyvoice_volume=self.tts_volume,              # [Gemini_3.5_Flash_planning]
+                    cosyvoice_speech_rate=self.tts_speech_rate    # [Gemini_3.5_Flash_planning]
                 )
                 
                 # Prepare items
@@ -229,6 +257,32 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                 if tts_items:
                     # Batch Generate
                     tts_engine.batch_generate(tts_items, audio_dir, voice_prompt="examples/test_audio.wav" if provider == TTSProvider.INDEXTTS else "onyx")
+                    
+                    # [Gemini_3.5_Flash_planning] 防重叠后处理：对超出当前字幕槽或间隔时间段上限的音频段，动态使用 atempo 滤镜进行无损加速
+                    for idx, seg_audio in enumerate(audio_segments):
+                        path = seg_audio['path']
+                        if not path.exists():
+                            continue
+                        duration = self._get_audio_duration(path)
+                        if duration <= 0:
+                            continue
+                        
+                        limit_duration = 9999.0
+                        if idx + 1 < len(audio_segments):
+                            limit_duration = audio_segments[idx+1]['start'] - seg_audio['start']
+                        else:
+                            try:
+                                video_duration = self._get_audio_duration(self.input_path)
+                                if video_duration > 0:
+                                    limit_duration = video_duration - seg_audio['start']
+                            except Exception:
+                                pass
+                        
+                        safe_limit = max(0.5, limit_duration - 0.1)
+                        if duration > safe_limit:
+                            factor = duration / safe_limit
+                            logger.info(f"[Ducking Optimization] Segment {idx} duration {duration:.2f}s exceeds limit {safe_limit:.2f}s. Auto speeding up by {factor:.2f}x")
+                            self._adjust_audio_speed(path, factor)
                     
                     # Mix Audio
                     generated_audio_track = audio_dir / "mixed_narration.wav"
