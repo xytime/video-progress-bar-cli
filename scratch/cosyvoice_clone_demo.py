@@ -21,13 +21,14 @@ load_dotenv()
 # Configure dashscope API key
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "sk-d2d0ca986de94c47990a3015bb585f7c")
 
+MODEL_NAME = "cosyvoice-v3-plus"  # High-quality model (use "cosyvoice-v3-flash" for low-latency)
 SOURCE_VIDEO = "output/XcSdPK5Xwbk.mp4"
 ASS_FILE = "output/XcSdPK5Xwbk.ass"
 REF_AUDIO = "scratch/denzel_ref.wav"
 TEMP_DIR = "scratch/temp_cosyvoice"
-FINAL_AUDIO_PURE = "output/XcSdPK5Xwbk_cosyvoice_zh_pure.mp3"
-FINAL_VIDEO_PURE = "output/XcSdPK5Xwbk_cosyvoice_zh_pure.mp4"
-FINAL_VIDEO_MIXED = "output/XcSdPK5Xwbk_cosyvoice_zh_mixed.mp4"
+FINAL_AUDIO_PURE = f"output/XcSdPK5Xwbk_cosyvoice_plus_zh_pure.mp3"
+FINAL_VIDEO_PURE = f"output/XcSdPK5Xwbk_cosyvoice_plus_zh_pure.mp4"
+FINAL_VIDEO_MIXED = f"output/XcSdPK5Xwbk_cosyvoice_plus_zh_mixed.mp4"
 
 # OSS Configuration
 OSS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID")
@@ -118,11 +119,20 @@ def get_or_create_voice_id():
             print("  Enrolling voice with prefix 'denzeloss'...")
             service = VoiceEnrollmentService()
             voice_id = service.create_voice(
-                target_model="cosyvoice-v3-flash",
-                prefix="denzeloss",
+                target_model=MODEL_NAME,
+                prefix="denzelplus",
                 url=signed_url
             )
             print(f"  Successfully Enrolled! Voice ID: {voice_id}")
+            
+            # [Gemini_3.5_Flash_planning] Automatically delete the temporary file from OSS bucket to avoid storage accumulation
+            try:
+                print("  Deleting temporary reference audio from OSS bucket...")
+                bucket.delete_object("denzel_ref.wav")
+                print("  OSS file deleted successfully.")
+            except Exception as delete_error:
+                print(f"  Failed to delete temporary OSS file: {delete_error}")
+                
             return voice_id
         except Exception as e:
             print(f"  OSS Enrollment flow failed: {e}")
@@ -130,8 +140,8 @@ def get_or_create_voice_id():
     else:
         print("\n[Config] OSS credentials not fully set in .env. Using fallback voice ID.")
 
-    # Fallback/default Voice ID
-    return "cosyvoice-v3-flash-denzeloss-6d8e0b29c24f4aa882e91e7b669eb670"
+    # Fallback/default Voice ID (Pre-enrolled on cosyvoice-v3-plus)
+    return "cosyvoice-v3-plus-denzelplus-c7830e95a436407898127a767579600c"
 
 def run_cosyvoice_clone_demo():
     print("=== Alibaba Cloud CosyVoice Voice Cloning & Synthesis ===")
@@ -178,7 +188,7 @@ def run_cosyvoice_clone_demo():
         
         print(f"  [{idx+1}/{len(segments)}] Synthesizing text: '{seg['text']}'")
         try:
-            synthesizer = SpeechSynthesizer(model="cosyvoice-v3-flash", voice=voice_id)
+            synthesizer = SpeechSynthesizer(model=MODEL_NAME, voice=voice_id)
             audio_data = synthesizer.call(seg['text'])
             with open(seg_file, "wb") as f:
                 f.write(audio_data)
@@ -213,7 +223,7 @@ def run_cosyvoice_clone_demo():
     print("\n[4/4] Assembling final dubbed video outputs...")
     
     # Version A: Pure cloned voice track (No background music / English vocal)
-    print("  Creating pure Mandarin dubbed video (XcSdPK5Xwbk_cosyvoice_zh_pure.mp4)...")
+    print(f"  Creating pure Mandarin dubbed video ({FINAL_VIDEO_PURE})...")
     ffmpeg_merge_pure = [
         "ffmpeg", "-y", "-i", SOURCE_VIDEO, "-i", FINAL_AUDIO_PURE,
         "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-shortest",
@@ -226,7 +236,7 @@ def run_cosyvoice_clone_demo():
         print(f"    Pure merge failed: {e}")
         
     # Version B: Mixed track with ducked original audio (Maintains background music, ducks English vocals)
-    print("  Creating mixed Mandarin dubbed video with ducked BGM (XcSdPK5Xwbk_cosyvoice_zh_mixed.mp4)...")
+    print(f"  Creating mixed Mandarin dubbed video with ducked BGM ({FINAL_VIDEO_MIXED})...")
     ffmpeg_merge_mixed = [
         "ffmpeg", "-y", "-i", SOURCE_VIDEO, "-i", FINAL_AUDIO_PURE,
         "-filter_complex", "[0:a]volume=0.12[bg]; [1:a]volume=1.0[fg]; [bg][fg]amix=inputs=2:normalize=0[outa]",
