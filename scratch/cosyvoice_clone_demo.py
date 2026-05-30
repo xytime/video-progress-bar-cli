@@ -3,27 +3,37 @@ Alibaba Cloud CosyVoice Voice Cloning & Subtitle Synthesis Pipeline
 
 Modification History:
 - 2026-05-30: Gemini_3.5_Flash_planning: Created full cloning, subtitle synthesis, and mixing pipeline.
+- 2026-05-30: Gemini_3.5_Flash_planning: Upgraded to use local Aliyun OSS signed URLs for fully automated zero-shot voice cloning.
 """
 
 import os
 import re
 import time
 import subprocess
+import oss2
 import dashscope
-from dashscope.audio.tts_v2 import SpeechSynthesizer
+from dotenv import load_dotenv
+from dashscope.audio.tts_v2 import VoiceEnrollmentService, SpeechSynthesizer
+
+# Load environment variables
+load_dotenv()
 
 # Configure dashscope API key
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "sk-d2d0ca986de94c47990a3015bb585f7c")
 
 SOURCE_VIDEO = "output/XcSdPK5Xwbk.mp4"
 ASS_FILE = "output/XcSdPK5Xwbk.ass"
+REF_AUDIO = "scratch/denzel_ref.wav"
 TEMP_DIR = "scratch/temp_cosyvoice"
 FINAL_AUDIO_PURE = "output/XcSdPK5Xwbk_cosyvoice_zh_pure.mp3"
 FINAL_VIDEO_PURE = "output/XcSdPK5Xwbk_cosyvoice_zh_pure.mp4"
 FINAL_VIDEO_MIXED = "output/XcSdPK5Xwbk_cosyvoice_zh_mixed.mp4"
 
-# [Gemini_3.5_Flash_planning] Use the voice ID successfully enrolled via the ngrok tunnel test to save billing quota
-VOICE_ID = "cosyvoice-v3-flash-denzel-5452c7a4407c46119ef096d9860711ff"
+# OSS Configuration
+OSS_KEY_ID = os.getenv("OSS_ACCESS_KEY_ID")
+OSS_KEY_SECRET = os.getenv("OSS_ACCESS_KEY_SECRET")
+OSS_BUCKET = os.getenv("OSS_BUCKET_NAME")
+OSS_ENDPOINT = os.getenv("OSS_ENDPOINT", "oss-cn-beijing.aliyuncs.com")
 
 def parse_time(time_str):
     parts = time_str.split(':')
@@ -88,11 +98,64 @@ def parse_subtitles():
     print(f"Found {len(segments)} segments.")
     return segments
 
+def get_or_create_voice_id():
+    # If the user has configured OSS credentials, dynamically upload and enroll
+    if OSS_KEY_ID and OSS_KEY_SECRET and OSS_BUCKET:
+        print("\n[OSS] Uploading reference audio to your private bucket...")
+        try:
+            # 1. Upload to OSS
+            auth = oss2.Auth(OSS_KEY_ID, OSS_KEY_SECRET)
+            endpoint_url = f"https://{OSS_ENDPOINT}"
+            bucket = oss2.Bucket(auth, endpoint_url, OSS_BUCKET)
+            bucket.put_object_from_file("denzel_ref.wav", REF_AUDIO)
+            print("  Upload successful!")
+            
+            # 2. Generate signed HTTPS URL
+            print("  Generating signed HTTPS URL...")
+            signed_url = bucket.sign_url('GET', "denzel_ref.wav", 300)
+            
+            # 3. Enroll voice via DashScope
+            print("  Enrolling voice with prefix 'denzeloss'...")
+            service = VoiceEnrollmentService()
+            voice_id = service.create_voice(
+                target_model="cosyvoice-v3-flash",
+                prefix="denzeloss",
+                url=signed_url
+            )
+            print(f"  Successfully Enrolled! Voice ID: {voice_id}")
+            return voice_id
+        except Exception as e:
+            print(f"  OSS Enrollment flow failed: {e}")
+            print("  Falling back to previously generated voice ID...")
+    else:
+        print("\n[Config] OSS credentials not fully set in .env. Using fallback voice ID.")
+
+    # Fallback/default Voice ID
+    return "cosyvoice-v3-flash-denzeloss-6d8e0b29c24f4aa882e91e7b669eb670"
+
 def run_cosyvoice_clone_demo():
     print("=== Alibaba Cloud CosyVoice Voice Cloning & Synthesis ===")
-    print(f"Using enrolled Voice ID: {VOICE_ID}")
     
-    # 1. Parse subtitles
+    # 1. Extract reference audio from original video if not exists
+    if not os.path.exists(REF_AUDIO):
+        print("\nExtracting reference audio from video...")
+        cmd = [
+            "ffmpeg", "-y", "-i", SOURCE_VIDEO,
+            "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+            REF_AUDIO
+        ]
+        try:
+            subprocess.run(cmd, check=True)
+            print("Audio extracted successfully.")
+        except Exception as e:
+            print(f"FFmpeg extraction failed: {e}")
+            return
+
+    # 2. Get or Enroll Voice ID
+    voice_id = get_or_create_voice_id()
+    print(f"Using Voice ID for synthesis: {voice_id}")
+    
+    # 3. Parse subtitles
     print("\n[1/4] Parsing subtitles...")
     segments = parse_subtitles()
     if not segments:
@@ -102,7 +165,7 @@ def run_cosyvoice_clone_demo():
     for idx, seg in enumerate(segments):
         print(f"  Segment #{idx+1} [{seg['start_str']} -> {seg['end_str']}]: {seg['text']}")
         
-    # 2. Synthesize each Mandarin segment
+    # 4. Synthesize each Mandarin segment
     print("\n[2/4] Synthesizing Mandarin audio segments via CosyVoice...")
     os.makedirs(TEMP_DIR, exist_ok=True)
     input_files = []
@@ -115,8 +178,7 @@ def run_cosyvoice_clone_demo():
         
         print(f"  [{idx+1}/{len(segments)}] Synthesizing text: '{seg['text']}'")
         try:
-            # We use standard speed (speech_rate=1.0) and pitch (pitch_rate=1.0)
-            synthesizer = SpeechSynthesizer(model="cosyvoice-v3-flash", voice=VOICE_ID)
+            synthesizer = SpeechSynthesizer(model="cosyvoice-v3-flash", voice=voice_id)
             audio_data = synthesizer.call(seg['text'])
             with open(seg_file, "wb") as f:
                 f.write(audio_data)
@@ -129,7 +191,7 @@ def run_cosyvoice_clone_demo():
         filter_complex_parts.append(f"[{idx}:a]adelay={delay_ms}|{delay_ms}[a{idx}]")
         amix_inputs.append(f"[a{idx}]")
 
-    # 3. Stitch and mix segments using FFmpeg
+    # 5. Stitch and mix segments using FFmpeg
     print("\n[3/4] Aligning and stitching segments into single track...")
     filter_complex_str = "; ".join(filter_complex_parts)
     amix_str = f"{''.join(amix_inputs)}amix=inputs={len(segments)}:normalize=0[out]"
@@ -147,7 +209,7 @@ def run_cosyvoice_clone_demo():
         print(f"  FFmpeg mixing failed: {e}")
         return
 
-    # 4. Assemble output videos
+    # 6. Assemble output videos
     print("\n[4/4] Assembling final dubbed video outputs...")
     
     # Version A: Pure cloned voice track (No background music / English vocal)
