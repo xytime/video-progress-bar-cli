@@ -10,6 +10,7 @@
 | 2.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 重构为 pydantic-settings BaseSettings，收口全部环境变量，消灭散落的 os.getenv |
 | 2.1.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | v7.0 Feature Flags：新功能开关，默认全部关闭，保护生产环境稳定性 |
 | 2.2.0 | 2026-05-28 | Gemini_2.5_Pro_planning | 新增 dashscope_api_key，支持阿里云百炼 CosyVoice TTS 集成 |
+| 2.3.0 | 2026-06-01 | Gemini_2.5_Flash_planning | 新增 enable_channel_policy_filter：频道内容策略层独立开关 |
 """
 from pathlib import Path
 from typing import Optional
@@ -67,6 +68,11 @@ class Settings(BaseSettings):
 
     # 内容安全审查引擎（双语双通道 P0/P1/P2 违禁拦截）
     enable_censorship_engine: bool = False
+
+    # 频道内容策略过滤层（运营层，独立于违法内容拦截，默认关闭）
+    # [Gemini_2.5_Flash_planning] 开启后，视频标题/文案命中「频道策略词库」时标记 FAILED + Telegram 警告。
+    # 触发词由 censor_engine._CHANNEL_POLICY 定义，用户可按需调整。
+    enable_channel_policy_filter: bool = False  # [Gemini_2.5_Flash_planning]
 
     # SIGTERM 阶梯强杀机制（删除活跃任务时优雅终止底层进程）
     enable_sigterm_kill: bool = False

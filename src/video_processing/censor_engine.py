@@ -4,9 +4,10 @@
 任何命中结果均须由调用方执行对应的系统拦截动作。
 
 # Modification History
-| Version | Date       | Author                                 | Description                                                           |
-|---------|------------|----------------------------------------|-----------------------------------------------------------------------|
-| 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建：双语规则引擎、归一化预处理、豁免列表、P0/P1/P2 动作分发    |
+| Version | Date       | Author                                 | Description                                                                  |
+|---------|------------|----------------------------------------|------------------------------------------------------------------------------|
+| 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建：双语规则引擎、归一化预处理、豁免列表、P0/P1/P2 动作分发           |
+| 1.1.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | 新增「频道内容策略层」：_CHANNEL_POLICY + check_channel_policy()，独立于违法拦截规则 |
 """
 
 import re
@@ -20,9 +21,10 @@ logger = logging.getLogger(__name__)
 # ── 动作常量 (Action Constants) ────────────────────────────────────────────────
 # 调用方根据 action 字段决定执行何种系统干预动作
 
-ACTION_REJECT_SIGTERM     = "REJECT_SIGTERM"      # P0: 一票否决，立即 SIGTERM + FAILED
+ACTION_REJECT_SIGTERM     = "REJECT_SIGTERM"       # P0: 一票否决，立即 SIGTERM + FAILED
 ACTION_SUSPEND_MANUAL     = "SUSPEND_MANUAL_REVIEW"  # P1: 挂起，等待人工复核
 ACTION_DEPRIORITIZE       = "DEPRIORITIZE"         # P2: 降权，进入 PENDING 屏蔽队列
+ACTION_CHANNEL_POLICY     = "CHANNEL_POLICY_SKIP"  # CP: 超出频道内容策略边界 → FAILED + Telegram 警告
 
 # ── 违禁规则库 (Blocklist Rules) ───────────────────────────────────────────────
 # [Claude_Sonnet_4.6_Thinking_planning] 双语规则：zh 通道检测中文字幕，en 通道检测原始英文字幕
@@ -106,6 +108,43 @@ _BLOCKLIST: dict = {
         "exemptions_zh": [],
         "exemptions_en": [],
     },
+}
+
+# ── 频道内容策略规则表 (Channel Policy Rules) ─────────────────────────────────
+# [Gemini_2.5_Flash_planning] 设计原则：
+#   1. 与 _BLOCKLIST（违法内容）完全分离，独立开关控制（enable_channel_policy_filter）
+#   2. 这里的词汇不违法，但超出频道内容定位边界，由用户根据运营需要自由调整
+#   3. 触发后的动作为 ACTION_CHANNEL_POLICY → 调用方标记 FAILED + Telegram 警告
+
+_CHANNEL_POLICY: dict = {
+    "tag":   "🚫 频道策略限制",
+    "action": ACTION_CHANNEL_POLICY,
+    "zh": [
+        # 用户明确声明：不做中国政治/外交/地缘话题
+        "中国政府", "中国共产党", "中共", "中南海",
+        "中美关系", "中美贸易", "对华关税",
+        "台湾问题", "台海", "台海局势",
+        "习近平", "李克强", "王毅",
+        "新疆问题", "西藏问题",
+        "一带一路政治",
+    ],
+    "en": [
+        "xi jinping", "chinese communist party", "ccp",
+        "china-us relations", "us china trade", "tariffs on china",
+        "taiwan strait", "taiwan issue", "cross-strait",
+        "xinjiang issue", "tibet issue",
+        "belt and road politics",
+        "beijing policy", "chinese government policy",
+    ],
+    # 豁免：中性商业/技术语境，允许通过
+    "exemptions_zh": [
+        "中国芯片", "中国制造", "中国市场", "中国消费者", "中国科技",
+        "在中国上市", "中国经济数据", "中概股",
+    ],
+    "exemptions_en": [
+        "made in china", "chinese chip", "chinese market", "chinese consumer",
+        "chinese tech", "china economy", "china gdp", "china stock",
+    ],
 }
 
 
@@ -239,4 +278,65 @@ def check_text(zh_text: str = "", en_text: str = "") -> CensorResult:
                     )
 
     # 全部通过
+    return CensorResult(hit=False)
+
+
+# ── 频道内容策略检测函数 (Channel Policy Check) ───────────────────────────────
+
+def check_channel_policy(zh_text: str = "", en_text: str = "") -> CensorResult:
+    """检测视频内容是否超出频道内容策略边界（与违法内容拦截完全独立）。
+
+    [Gemini_2.5_Flash_planning] 设计说明：
+    - 本函数仅检测「频道运营策略」层，不检测法律合规层。
+    - 触发词汇均合法，但超出频道内容定位（如：用户声明不做中国政治话题）。
+    - 命中时返回 action=ACTION_CHANNEL_POLICY，调用方负责标记 FAILED 并发 Telegram 警告。
+
+    Args:
+        zh_text: 中文标题或文案（可为空）。
+        en_text: 英文标题或描述（可为空）。
+
+    Returns:
+        CensorResult 实例。hit=False 表示通过策略检测。
+    """
+    rule = _CHANNEL_POLICY
+    tag    = rule["tag"]
+    action = rule["action"]
+    exempts_zh = rule.get("exemptions_zh", [])
+    exempts_en = rule.get("exemptions_en", [])
+
+    zh_norm  = _normalize(zh_text)
+    zh_dense = _strip_spaces(zh_norm)
+    en_norm  = _normalize(en_text)
+
+    # ── 中文通道 ────────────────────────────────────────────────────────────
+    if zh_norm:
+        for word in rule["zh"]:
+            word_norm  = _normalize(word)
+            word_dense = _strip_spaces(word_norm)
+            if word_dense in zh_dense:
+                if _is_exempted(zh_norm, exempts_zh):
+                    logger.debug(f"[ChannelPolicy] zh exemption hit for '{word}'")
+                    continue
+                logger.warning(f"[ChannelPolicy] zh-channel hit: '{word}'")
+                return CensorResult(
+                    hit=True, level="CP", tag=tag,
+                    score=0, action=action,
+                    matched=word, channel="zh",
+                )
+
+    # ── 英文通道 ────────────────────────────────────────────────────────────
+    if en_norm:
+        for word in rule["en"]:
+            word_norm = _normalize(word)
+            if word_norm in en_norm:
+                if _is_exempted(en_norm, exempts_en):
+                    logger.debug(f"[ChannelPolicy] en exemption hit for '{word}'")
+                    continue
+                logger.warning(f"[ChannelPolicy] en-channel hit: '{word}'")
+                return CensorResult(
+                    hit=True, level="CP", tag=tag,
+                    score=0, action=action,
+                    matched=word, channel="en",
+                )
+
     return CensorResult(hit=False)

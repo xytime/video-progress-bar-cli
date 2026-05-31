@@ -23,6 +23,7 @@
 | 2.8.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | 前移 COPYWRITING 至 TRANSCRIBING 之前，用中文短标题渲染，使视频头部与封面标题一致 |
 | 2.7.0   | 2026-05-28 | Gemini_3.5_Flash_planning           | 改进 process_high_score_videos 支持连续批处理以自动完成所有切片与排队任务 |
 | 2.6.0   | 2026-05-27 | Unknown_Model_planning              | 红蓝博弈安全性与容错性审计修复 (P1/P2) |
+| 2.11.0  | 2026-06-01 | Gemini_2.5_Flash_planning           | [Censor Hardening] 修复 zh_text 参数 Bug（中文通道现在真正检测中文）；集成频道策略层；三处调用点传入 zh_title |
 """
 
 
@@ -341,50 +342,91 @@ class PipelineManager:
                         except Exception as e:
                             logger.warning(f"[GC] Failed to delete parent audio gen folder {parent_audio_dir.name}: {e}")
 
-    def _check_censorship(self, yid: str, title: str, description: str = "") -> bool:
-        """执行内容安全审查。如果命中违禁词，根据级别执行对应的干预动作。
-        [Gemini_3.5_Flash_planning] 用于整合 CensorshipEngine 到主流程。
-        返回 True 表示命中违禁（需要拦截/中断），False 表示合规通过。
+    def _check_censorship(self, yid: str, title: str, description: str = "", zh_title: str = "") -> bool:
+        """执行内容安全审查（违法层）+ 频道内容策略检查（运营层）。
+
+        [Gemini_2.5_Flash_planning] v2.11.0 修复：
+        - 修复 zh_text 参数 Bug：原来错误地将英文 title 传给 zh 通道，现在使用 zh_title。
+        - 集成频道内容策略层（check_channel_policy），由 enable_channel_policy_filter 控制。
+        - 手动触发与自动触发统一走同一套审查流程，无例外。
+
+        返回 True 表示命中（任意层）→ 需要拦截/中断，False 表示全部通过。
         """
-        if not settings.enable_censorship_engine:
+        if not settings.enable_censorship_engine and not settings.enable_channel_policy_filter:
             return False
 
         try:
-            from .censor_engine import check_text, ACTION_REJECT_SIGTERM, ACTION_SUSPEND_MANUAL, ACTION_DEPRIORITIZE
-            
-            # 双语双通道匹配
-            result = check_text(zh_text=title, en_text=f"{title} {description}")
-            if result.hit:
-                logger.warning(f"[Censor] Video {yid} hit censorship rule: {result}")
-                # 1. 写入审计日志与数据库
-                self.db.update_video_censor_status(yid, result.tag, result.score)
-                
-                # 2. 按动作执行系统干预
-                if result.action == ACTION_REJECT_SIGTERM:
-                    # P0 一票否决
-                    logger.error(f"[Censor] P0 violation. Failing video {yid} and blacklisting.")
-                    self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P0 Reject: {result.tag} (matched: '{result.matched}')")
-                    if settings.enable_blacklist_tombstone:
-                        self.db.add_to_blacklist(yid, reason=f"censor_p0_{result.matched}")
-                    self.send_telegram_msg(f"🔴 <b>Censorship P0 Reject</b>\nTitle: {title}\nMatched: {result.matched}")
-                    
-                elif result.action == ACTION_SUSPEND_MANUAL:
-                    # P1 人工挂起
-                    logger.warning(f"[Censor] P1 violation. Suspending video {yid} for manual review.")
-                    self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P1 Suspend: {result.tag} (matched: '{result.matched}')")
-                    self.send_telegram_msg(f"🟡 <b>Censorship P1 Suspend</b>\nTitle: {title}\nMatched: {result.matched}")
-                    
-                elif result.action == ACTION_DEPRIORITIZE:
-                    # P2 降权预警
-                    logger.info(f"[Censor] P2 violation. Deprioritizing video {yid} to 0 points.")
-                    self.db.update_video_score(yid, 0, force=True)
-                    self.db.update_video_status(yid, "PENDING", error_msg=f"Censorship P2 Deprioritized: {result.tag}")
-                    self.send_telegram_msg(f"🔵 <b>Censorship P2 Deprioritized</b>\nTitle: {title}")
-                    
-                return True
+            from .censor_engine import (
+                check_text, check_channel_policy,
+                ACTION_REJECT_SIGTERM, ACTION_SUSPEND_MANUAL,
+                ACTION_DEPRIORITIZE, ACTION_CHANNEL_POLICY,
+            )
+
+            # ── A. 违法内容审查（P0/P1/P2） ────────────────────────────────
+            if settings.enable_censorship_engine:
+                # [Gemini_2.5_Flash_planning] BUG FIX: zh_text 使用中文标题，en_text 使用英文标题+描述
+                # 原来错误地将英文 title 传给 zh_text，导致中文规则库从未真正生效
+                zh_for_censor = zh_title or ""  # 中文标题（爬虫翻译或 AI 生成），为空时中文通道跳过
+                en_for_censor = f"{title} {description}".strip()
+                result = check_text(zh_text=zh_for_censor, en_text=en_for_censor)
+                if result.hit:
+                    logger.warning(f"[Censor] Video {yid} hit censorship rule: {result}")
+                    self.db.update_video_censor_status(yid, result.tag, result.score)
+
+                    if result.action == ACTION_REJECT_SIGTERM:
+                        logger.error(f"[Censor] P0 violation. Failing video {yid} and blacklisting.")
+                        self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P0 Reject: {result.tag} (matched: '{result.matched}')")
+                        if settings.enable_blacklist_tombstone:
+                            self.db.add_to_blacklist(yid, reason=f"censor_p0_{result.matched}")
+                        self.send_telegram_msg(
+                            f"\U0001f534 <b>Censorship P0 Reject</b>"
+                            f"\nTitle: {title}\nMatched: <code>{result.matched}</code> (via {result.channel})"
+                        )
+                        return True
+
+                    elif result.action == ACTION_SUSPEND_MANUAL:
+                        logger.warning(f"[Censor] P1 violation. Suspending video {yid} for manual review.")
+                        self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P1 Suspend: {result.tag} (matched: '{result.matched}')")
+                        self.send_telegram_msg(
+                            f"\U0001f7e1 <b>Censorship P1 Suspend</b>"
+                            f"\nTitle: {title}\nMatched: <code>{result.matched}</code> (via {result.channel})"
+                        )
+                        return True
+
+                    elif result.action == ACTION_DEPRIORITIZE:
+                        logger.info(f"[Censor] P2 violation. Deprioritizing video {yid} to 0 points.")
+                        self.db.update_video_score(yid, 0, force=True)
+                        self.db.update_video_status(yid, "PENDING", error_msg=f"Censorship P2 Deprioritized: {result.tag}")
+                        self.send_telegram_msg(
+                            f"\U0001f535 <b>Censorship P2 Deprioritized</b>"
+                            f"\nTitle: {title}\nMatched: <code>{result.matched}</code>"
+                        )
+                        return True
+
+            # ── B. 频道内容策略检查（CP 层） ────────────────────────────────
+            if settings.enable_channel_policy_filter:
+                # [Gemini_2.5_Flash_planning] 运营策略层：检测超出频道内容定位的话题
+                # zh_title 优先；description 也纳入英文通道，防止标题无命中但描述已暴露
+                zh_for_policy = zh_title or ""
+                en_for_policy = f"{title} {description}".strip()
+                cp_result = check_channel_policy(zh_text=zh_for_policy, en_text=en_for_policy)
+                if cp_result.hit:
+                    logger.warning(f"[ChannelPolicy] Video {yid} hit channel policy: {cp_result}")
+                    self.db.update_video_status(
+                        yid, "FAILED",
+                        error_msg=f"Channel Policy Reject: {cp_result.tag} (matched: '{cp_result.matched}' via {cp_result.channel})"
+                    )
+                    self.send_telegram_msg(
+                        f"\U0001f6ab <b>Channel Policy Reject</b>"
+                        f"\nTitle: {title}"
+                        f"\nMatched: <code>{cp_result.matched}</code> (via {cp_result.channel})"
+                        f"\n\n\u26a0\ufe0f \u6b64\u89c6\u9891\u8d85\u51fa\u9891\u9053\u5185\u5bb9\u5b9a\u4f4d\u8fb9\u754c\uff0c\u5df2\u62d2\u7edd\u5904\u7406\u3002"
+                    )
+                    return True
+
         except Exception as e:
             logger.error(f"[Censor] Verification process error: {e}")
-            
+
         return False
 
     # ── 主处理流程 ────────────────────────────────────────────────────────────
@@ -427,7 +469,10 @@ class PipelineManager:
                 return
 
             # ── 0. CENSORSHIP PRE-CHECK ───────────────────────────────────────
-            if self._check_censorship(yid, title):
+            # [Gemini_2.5_Flash_planning] v2.11.0: 手动/自动任务统一走同一套审查流程
+            # zh_title 来自 DB，爬虫入库时已翻译；手动添加视频若翻译任务尚未完成则为空（回退到英文通道）
+            zh_title_for_check = video.get('zh_title') or ""
+            if self._check_censorship(yid, title, zh_title=zh_title_for_check):
                 return
 
             try:
@@ -575,7 +620,7 @@ class PipelineManager:
                         description = desc_path.read_text(encoding="utf-8").strip()
                     except Exception:
                         pass
-                if self._check_censorship(yid, title, description):
+                if self._check_censorship(yid, title, description, zh_title=zh_title_for_check):
                     return
 
                 # ── 2a. COPYWRITING ────────────────────────────────────────────────
@@ -638,6 +683,17 @@ class PipelineManager:
                         self._VENV_PYTHON, "-m", "cli.main", "auto-caption",
                         str(target_file), "--vertical", "--bilingual", "--title", render_title,
                     ]
+                    # [Claude_Sonnet_4.6_Thinking_planning] v2.10.0: 按需附加 TTS 参数
+                    # 只有 tts_provider 非空时才开启，默认流程不开启 TTS
+                    _tts_provider = video.get("tts_provider") or None
+                    if _tts_provider == "cosyvoice":
+                        render_cmd += ["--tts-cosy"]
+                        logger.info(f"[TTS] Activating CosyVoice for {prefix} (stored tts_provider={_tts_provider})")
+                    elif _tts_provider == "edge":
+                        render_cmd += ["--tts"]
+                        logger.info(f"[TTS] Activating Edge TTS for {prefix} (stored tts_provider={_tts_provider})")
+                    elif _tts_provider:
+                        logger.warning(f"[TTS] Unknown tts_provider={_tts_provider!r} for {prefix}, skipping TTS")
                     render_env = os.environ.copy()
                     render_env["PYTHONPATH"] = str(self._SRC_DIR)
                     self._run_tracked(render_cmd, yid, slice_index=slice_index, capture_output=True,
@@ -658,7 +714,9 @@ class PipelineManager:
                     except Exception:
                         pass
 
-                if self._check_censorship(yid, short_title, copy_content):
+                # [Gemini_2.5_Flash_planning] v2.11.0: 文案检测使用 AI 生成的中文短标题作为 zh_title
+                # short_title 此时已是文案阶段生成的中文标题，直接作为 zh 通道输入
+                if self._check_censorship(yid, short_title, copy_content, zh_title=short_title):
                     return
 
 
