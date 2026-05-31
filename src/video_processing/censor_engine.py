@@ -8,6 +8,7 @@
 |---------|------------|----------------------------------------|------------------------------------------------------------------------------|
 | 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建：双语规则引擎、归一化预处理、豁免列表、P0/P1/P2 动作分发           |
 | 1.1.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | 新增「频道内容策略层」：_CHANNEL_POLICY + check_channel_policy()，独立于违法拦截规则 |
+| 1.2.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | [Code Review Fix] 移除 CP 层 exemptions（文本层豁免会让违禁词被商业词庚护）；移除 CP 层重复的 xi jinping |
 """
 
 import re
@@ -129,22 +130,25 @@ _CHANNEL_POLICY: dict = {
         "一带一路政治",
     ],
     "en": [
-        "xi jinping", "chinese communist party", "ccp",
+        # [Gemini_2.5_Flash_planning] Code Review Fix v1.2.0:
+        # 移除 "xi jinping"——P0 _BLOCKLIST 已包含，重复定义会导致认知混乱：
+        # 两层同时开启时 P0 先拦截， CP 层永远不会执行到；
+        # 两层分开开启时行为不一致，难以解释。
+        "chinese communist party", "ccp",
         "china-us relations", "us china trade", "tariffs on china",
         "taiwan strait", "taiwan issue", "cross-strait",
         "xinjiang issue", "tibet issue",
         "belt and road politics",
         "beijing policy", "chinese government policy",
     ],
-    # 豁免：中性商业/技术语境，允许通过
-    "exemptions_zh": [
-        "中国芯片", "中国制造", "中国市场", "中国消费者", "中国科技",
-        "在中国上市", "中国经济数据", "中概股",
-    ],
-    "exemptions_en": [
-        "made in china", "chinese chip", "chinese market", "chinese consumer",
-        "chinese tech", "china economy", "china gdp", "china stock",
-    ],
+    # [Gemini_2.5_Flash_planning] Code Review Fix v1.2.0:
+    # CP 层不应设置 exemptions。
+    # 原因：_is_exempted 工作在整段文本级别（只要文本中出现任意一个豁免词，就豁免该检测层所有命中词）。
+    # 这导致安全漏洞："xi jinping discusses china economy" 将因 "china economy" 而豁免。
+    # CP 层的词汇本身应足够精确，不依赖豁免词容错率。
+    # 如需豁免特定商业场景，应直接精减违禁词列表。
+    "exemptions_zh": [],
+    "exemptions_en": [],
 }
 
 

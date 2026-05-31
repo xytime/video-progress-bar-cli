@@ -23,6 +23,7 @@
 | 2.8.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | 前移 COPYWRITING 至 TRANSCRIBING 之前，用中文短标题渲染，使视频头部与封面标题一致 |
 | 2.7.0   | 2026-05-28 | Gemini_3.5_Flash_planning           | 改进 process_high_score_videos 支持连续批处理以自动完成所有切片与排队任务 |
 | 2.6.0   | 2026-05-27 | Unknown_Model_planning              | 红蓝博弈安全性与容错性审计修复 (P1/P2) |
+| 2.10.0  | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 从 video dict 读取 tts_provider 并在 render_cmd 中按需附加 --tts-cosy 参数，实现按需 TTS 配音而非默认自动开启 |
 | 2.11.0  | 2026-06-01 | Gemini_2.5_Flash_planning           | [Censor Hardening] 修复 zh_text 参数 Bug（中文通道现在真正检测中文）；集成频道策略层；三处调用点传入 zh_title |
 """
 
@@ -412,6 +413,8 @@ class PipelineManager:
                 cp_result = check_channel_policy(zh_text=zh_for_policy, en_text=en_for_policy)
                 if cp_result.hit:
                     logger.warning(f"[ChannelPolicy] Video {yid} hit channel policy: {cp_result}")
+                    # [Gemini_2.5_Flash_planning] Code Review Fix: CP 层也写入 censor_tag，与 P0/P1 审计行为保持一致
+                    self.db.update_video_censor_status(yid, cp_result.tag, score=0)
                     self.db.update_video_status(
                         yid, "FAILED",
                         error_msg=f"Channel Policy Reject: {cp_result.tag} (matched: '{cp_result.matched}' via {cp_result.channel})"
