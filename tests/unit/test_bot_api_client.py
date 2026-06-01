@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | TDD Red phase: 先写测试定义合约 |
+| 1.1.0 | 2026-06-01 | Gemini_3.5_Flash_planning | 新增 respec_video API 接口调用契约单元测试 |
 """
 import pytest
 import respx
@@ -134,3 +135,45 @@ class TestRetryVideo:
         )
         result = await api_client.retry_video("abc123")
         assert result["success"] is True
+
+
+@pytest.mark.asyncio
+class TestRespecVideo:
+    """测试 POST /api/videos/{youtube_id}/respec 的调用合约"""
+
+    @respx.mock
+    async def test_respec_video_success(self, api_client):
+        """覆盖规格成功"""
+        respx.post(f"{BASE_URL}/api/videos/abc123/respec").mock(
+            return_value=httpx.Response(200, json={
+                "success": True,
+                "youtube_id": "abc123",
+                "title": "Test Video",
+                "trim_start": "0",
+                "trim_end": "10",
+                "disable_slicing": True,
+                "tts_provider": "cosyvoice",
+                "was_stopped": True,
+                "triggered": True
+            })
+        )
+        result = await api_client.respec_video(
+            "abc123",
+            trim_start="0",
+            trim_end="10",
+            disable_slicing=True,
+            tts_provider="cosyvoice"
+        )
+        assert result["success"] is True
+        assert result["trim_start"] == "0"
+        assert result["tts_provider"] == "cosyvoice"
+        assert result["was_stopped"] is True
+
+    @respx.mock
+    async def test_respec_video_api_down_returns_none(self, api_client):
+        """FastAPI 断线时应返回 None，不抛出异常"""
+        respx.post(f"{BASE_URL}/api/videos/abc123/respec").mock(
+            side_effect=httpx.ConnectError("Connection refused")
+        )
+        result = await api_client.respec_video("abc123", trim_start="0")
+        assert result is None

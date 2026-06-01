@@ -25,6 +25,7 @@
 | 2.6.0   | 2026-05-27 | Unknown_Model_planning              | 红蓝博弈安全性与容错性审计修复 (P1/P2) |
 | 2.10.0  | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 从 video dict 读取 tts_provider 并在 render_cmd 中按需附加 --tts-cosy 参数，实现按需 TTS 配音而非默认自动开启 |
 | 2.11.0  | 2026-06-01 | Gemini_2.5_Flash_planning           | [Censor Hardening] 修复 zh_text 参数 Bug（中文通道现在真正检测中文）；集成频道策略层；三处调用点传入 zh_title |
+| 2.11.1  | 2026-06-01 | Gemini_3.5_Flash_planning           | [Censor Bugfix] 修复无 zh_title 时的中文视频内容安全与频道策略漏检，fallback 到 title |
 """
 
 
@@ -351,6 +352,9 @@ class PipelineManager:
         - 集成频道内容策略层（check_channel_policy），由 enable_channel_policy_filter 控制。
         - 手动触发与自动触发统一走同一套审查流程，无例外。
 
+        [Gemini_3.5_Flash_planning] v2.11.1 修复：
+        - 修复测试用例或手动视频无 zh_title 时的中文漏检问题。若 zh_title 为空，但 original title 包含中文，则 fallback 到 title。
+
         返回 True 表示命中（任意层）→ 需要拦截/中断，False 表示全部通过。
         """
         if not settings.enable_censorship_engine and not settings.enable_channel_policy_filter:
@@ -365,9 +369,14 @@ class PipelineManager:
 
             # ── A. 违法内容审查（P0/P1/P2） ────────────────────────────────
             if settings.enable_censorship_engine:
-                # [Gemini_2.5_Flash_planning] BUG FIX: zh_text 使用中文标题，en_text 使用英文标题+描述
-                # 原来错误地将英文 title 传给 zh_text，导致中文规则库从未真正生效
-                zh_for_censor = zh_title or ""  # 中文标题（爬虫翻译或 AI 生成），为空时中文通道跳过
+                # [Gemini_3.5_Flash_planning] BUG FIX: zh_text 使用中文标题，en_text 使用英文标题+描述
+                # 若 zh_title 为空但原始 title 包含中文，则 fallback 到 title
+                zh_for_censor = zh_title or ""
+                if not zh_for_censor:
+                    import re as _re
+                    if _re.search(r"[\u4e00-\u9fa5]", title):
+                        zh_for_censor = title
+
                 en_for_censor = f"{title} {description}".strip()
                 result = check_text(zh_text=zh_for_censor, en_text=en_for_censor)
                 if result.hit:
@@ -406,9 +415,14 @@ class PipelineManager:
 
             # ── B. 频道内容策略检查（CP 层） ────────────────────────────────
             if settings.enable_channel_policy_filter:
-                # [Gemini_2.5_Flash_planning] 运营策略层：检测超出频道内容定位的话题
-                # zh_title 优先；description 也纳入英文通道，防止标题无命中但描述已暴露
+                # [Gemini_3.5_Flash_planning] 运营策略层：检测超出频道内容定位的话题
+                # zh_title 优先；若为空且原始 title 包含中文，则 fallback 到 title
                 zh_for_policy = zh_title or ""
+                if not zh_for_policy:
+                    import re as _re
+                    if _re.search(r"[\u4e00-\u9fa5]", title):
+                        zh_for_policy = title
+
                 en_for_policy = f"{title} {description}".strip()
                 cp_result = check_channel_policy(zh_text=zh_for_policy, en_text=en_for_policy)
                 if cp_result.hit:

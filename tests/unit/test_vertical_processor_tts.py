@@ -5,6 +5,7 @@
 | Version | Date       | Author                     | Description |
 | ------- | ---------- | -------------------------- | ----------- |
 | 1.0.0   | 2026-05-28 | Gemini_3.5_Flash_planning  | 初始创建，测试非中文视频自动激活 TTS 逻辑 |
+| 1.1.0   | 2026-06-01 | Gemini_3.5_Flash_planning  | 更新测试以适配默认关闭 TTS 且显式传入 tts_provider 时才激活的行为 |
 """
 
 import os
@@ -31,8 +32,8 @@ class TestVerticalProcessorTTSAutoActivation:
     @patch('video_processing.processors.vertical_processor.TTSEngine')
     @patch('video_processing.processors.vertical_processor.AudioMixer')
     @patch('src.config.settings.settings')
-    def test_auto_activate_cosyvoice_when_key_exists(self, mock_settings, mock_mixer, mock_tts_engine, mock_run, mock_validate):
-        """[Gemini_3.5_Flash_planning] 验证当 API Key 存在且为非中文视频时，自动激活 cosyvoice"""
+    def test_no_auto_activation_for_non_chinese_when_tts_provider_none(self, mock_settings, mock_mixer, mock_tts_engine, mock_run, mock_validate):
+        """[Gemini_3.5_Flash_planning] 验证即使 API Key 存在且为非中文视频，默认情况下（tts_provider=None）也不激活 TTS"""
         mock_settings.dashscope_api_key = "test_dashscope_key"
         
         # 准备处理器实例
@@ -55,24 +56,24 @@ class TestVerticalProcessorTTSAutoActivation:
         with patch.object(processor, "_get_audio_duration", return_value=1.5):
             processor._burn_subtitles(Path("test_video.ass"))
             
-        # 验证 tts_provider 已被自动修改为 cosyvoice
-        assert processor.tts_provider == "cosyvoice"
-        # 验证 TTSEngine 确实被正确实例化
-        mock_tts_engine.assert_called_once()
+        # 验证 tts_provider 保持为 None
+        assert processor.tts_provider is None
+        # 验证 TTSEngine 没有被实例化
+        mock_tts_engine.assert_not_called()
 
     @patch('video_processing.core.base.VideoProcessorBase._validate_input')
     @patch('video_processing.processors.vertical_processor.subprocess.run')
     @patch('video_processing.processors.vertical_processor.TTSEngine')
     @patch('video_processing.processors.vertical_processor.AudioMixer')
     @patch('src.config.settings.settings')
-    def test_auto_activate_edge_when_key_missing(self, mock_settings, mock_mixer, mock_tts_engine, mock_run, mock_validate):
-        """[Gemini_3.5_Flash_planning] 验证当 API Key 缺失且为非中文视频时，降级激活 edge"""
-        mock_settings.dashscope_api_key = None
+    def test_explicit_activation_when_tts_provider_set(self, mock_settings, mock_mixer, mock_tts_engine, mock_run, mock_validate):
+        """[Gemini_3.5_Flash_planning] 验证当显式传入 tts_provider 时，成功激活语音合成引擎"""
+        mock_settings.dashscope_api_key = "test_dashscope_key"
         
         processor = VerticalCaptionProcessor(
             input_path=Path("test_video.mp4"),
             src_lang="en",
-            tts_provider=None
+            tts_provider="cosyvoice"
         )
         processor.segments = [
             {"start": 0.0, "end": 2.0, "text": "Hello, welcome.", "zh_text": "你好，欢迎。"}
@@ -84,8 +85,8 @@ class TestVerticalProcessorTTSAutoActivation:
         with patch.object(processor, "_get_audio_duration", return_value=1.5):
             processor._burn_subtitles(Path("test_video.ass"))
             
-        # 验证 tts_provider 降级为 edge
-        assert processor.tts_provider == "edge"
+        # 验证 tts_provider 仍为 cosyvoice
+        assert processor.tts_provider == "cosyvoice"
         mock_tts_engine.assert_called_once()
 
     @patch('video_processing.core.base.VideoProcessorBase._validate_input')
