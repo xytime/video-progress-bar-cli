@@ -7,8 +7,9 @@ created_at: 2026-05-21T14:31:00+08:00
 
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
-| 1.5.0 | 2026-05-27 | Gemini_3.1_Pro_High_planning | 记录 Gemini_3.5_Flash_planning TDD 假测试与嵌套事务冲突导致 OperationalError 问题 |
+| 1.7.0 | 2026-06-01 | Gemini_3.5_Flash_planning    | 记录 Gemini_2.5_Flash_planning 因过度严格分离中英文输入导致中文安全审查漏检绕过问题 |
 | 1.6.0 | 2026-05-27 | Gemini_3.5_Flash_planning    | 记录 Claude_Sonnet_4.6_Thinking_planning 正则漏配 live/ 及带参 URL 干扰裁剪问题 |
+| 1.5.0 | 2026-05-27 | Gemini_3.1_Pro_High_planning | 记录 Gemini_3.5_Flash_planning TDD 假测试与嵌套事务冲突导致 OperationalError 问题 |
 | 1.4.0 | 2026-05-27 | Unknown_Model_planning | 记录 Claude_Sonnet_4.6_Thinking_planning 优雅截断右倾偏斜及括号残留问题 |
 | 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_fast | 记录 Claude_Sonnet_4.6_Thinking_planning 黑名单机制导致手动加急视频静默失败的问题 |
 | 1.2.0 | 2026-05-27 | Gemini_2.0_Flash_fast | 记录使用 nth-child 导致移动端表格布局脆弱的问题 |
@@ -34,3 +35,8 @@ created_at: 2026-05-21T14:31:00+08:00
 
 
 对于【微信视频号 Web 分类】问题：微信官方已经彻底移除了“视频分类”的下拉选择组件，全面转为根据视频描述（标题、描述文案、Hashtag）由平台算法进行自动归类。代码中强制寻找 UI 下拉框会导致超时失败。 严重程度：P1
+
+对于【Gemini_2.5_Flash_planning】问题：
+在 v2.11.0 中重构 Censor 审查输入时，过度严格地区分了中英文通道（仅将 zh_title 传入 zh_text，而将原始 title 传入 en_text）。由于手动添加、测试用例或尚未翻译完成的视频记录其 zh_title 为空，这导致原始中文标题被当作英文文本传入并完全跳过了中文违禁词/策略规则过滤，造成了严重的内容安全绕过隐患（并在运行 pytest 时导致 3 个 Censorship 整合测试全部失败）。应在 zh_title 为空但原始 title 含有中文时自动 fallback 检查。
+**严重程度**：P1
+
