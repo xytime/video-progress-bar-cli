@@ -1,129 +1,171 @@
-"""TDD test cases for WeChat Channels collection/category selector and publish sandbox controls.
+"""TDD test cases for WeChat Channels collection selector.
 
 # Modification History
-| Version | Date       | Author                         | Description                                            |
-|---------|------------|--------------------------------|--------------------------------------------------------|
-| 1.1.2   | 2026-05-27 | Unknown_Model_planning         | 移除已弃用的微信视频号分类选择测试                      |
-| 1.1.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning | 修复 Playwright .first/.last 链式调用导致的 Mock 崩溃错误 |
+| Version | Date       | Author                              | Description                                              |
+|---------|------------|-------------------------------------|----------------------------------------------------------|
+| 1.1.2   | 2026-05-27 | Unknown_Model_planning              | 移除已弃用的微信视频号分类选择测试                        |
+| 1.1.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 修复 Playwright .first/.last 链式调用导致的 Mock 崩溃     |
+| 1.2.0   | 2026-06-02 | Claude_Sonnet_4.6_Thinking_planning | 全面重写：适配 v1.9.0 新选择器（.post-album-display-wrap / .option-item / .create a） |
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 from scripts.wechat_uploader import _select_collection
 
-def create_locator_mock(count=1, visible=True, inner_text=""):
-    """辅助创建链式调用的 Playwright Locator Mock"""
+
+# ── 辅助工厂 ─────────────────────────────────────────────────────────────────
+
+def create_locator_mock(count=1, visible=True, inner_text="", cls=""):
+    """辅助创建链式调用的 Playwright Locator Mock。
+
+    # [Claude_Sonnet_4.6_Thinking_planning]
+    """
     loc = MagicMock()
     loc.count.return_value = count
     loc.is_visible.return_value = visible
     loc.inner_text.return_value = inner_text
-    
-    # 链式自引用
+    loc.get_attribute.return_value = cls  # class 属性
+
+    # 链式自引用（.first / .last 返回自身）
     loc.first = loc
     loc.last = loc
     loc.nth.return_value = loc
     loc.locator.return_value = loc
     return loc
 
+
+# ── Test 1: 合集已存在 → 直接选中 ────────────────────────────────────────────
+
 def test_select_collection_exists():
-    """测试合集存在时的选中分支"""
+    """选择已存在的合集：点触发器 → 等下拉 → 找到 option-item → 点击选中"""
     mock_page = MagicMock()
-    
-    # 1. 模拟 weui-desktop-form__item
-    mock_item = create_locator_mock(count=1, visible=True, inner_text="添加到合集")
-    mock_form_items = create_locator_mock(count=1)
-    mock_form_items.nth.return_value = mock_item
-    
-    # 2. 模拟触发按钮
+
+    # 触发器：.post-album-display-wrap
     mock_trigger = create_locator_mock(count=1, visible=True)
-    mock_item.locator.return_value = mock_trigger
-    
-    # 3. 模拟合集列表与选项
-    mock_container = create_locator_mock(count=1, visible=True)
-    mock_option = create_locator_mock(count=1, visible=True)
-    
-    # 模拟 option 内部没有 checkbox，导致 count() == 0 从而直接点击 option
-    mock_checkbox = create_locator_mock(count=0, visible=False)
-    
-    # 区分 locator 内部调用
-    def option_locator_side_effect(selector):
-        if "checkbox" in selector:
-            return mock_checkbox
+
+    # 合集条目：.post-album-wrap .option-item（has= 匹配到目标）
+    # get_attribute("class") 第一次返回 ""（非active），第二次返回 "option-item active"
+    mock_item = create_locator_mock(count=1, visible=True)
+    mock_item.get_attribute.side_effect = ["", "option-item active"]
+
+    # page.locator 路由
+    def locator_side_effect(selector, **kwargs):
+        if ".post-album-display-wrap" in selector:
+            return mock_trigger
+        if ".post-album-wrap .option-item" in selector:
+            return mock_item
+        # 兜底：count=0
         return create_locator_mock(count=0, visible=False)
-    mock_option.locator.side_effect = option_locator_side_effect
-    
-    mock_container.locator.return_value = mock_option
-    
-    def locator_side_effect(selector):
-        if ".weui-desktop-form__item" in selector:
-            return mock_form_items
-        elif ".weui-desktop-dropdown__list" in selector:
-            return mock_container
-        return create_locator_mock(count=0, visible=False)
-        
+
     mock_page.locator.side_effect = locator_side_effect
-    
-    with patch("scripts.wechat_uploader.human_click", return_value=True) as mock_click:
-        result = _select_collection(mock_page, "AI内幕")
-        assert result is True
-        mock_trigger.click.assert_called_once()
-        mock_click.assert_called_once_with(mock_page, mock_option)
+    # wait_for_selector 默认不抛异常 → 模拟下拉出现
+
+    result = _select_collection(mock_page, "AI内幕")
+
+    assert result is True
+    mock_trigger.click.assert_called_once()
+    mock_page.wait_for_selector.assert_called_once_with("text=创建新合集", timeout=5000)
+    mock_item.click.assert_called_once()
+
+
+# ── Test 2: 合集已选中 → 去重返回 ────────────────────────────────────────────
+
+def test_select_collection_dedup():
+    """合集已为 active 状态时，直接按 Escape 关闭并返回 True"""
+    mock_page = MagicMock()
+
+    mock_trigger = create_locator_mock(count=1, visible=True)
+    mock_item = create_locator_mock(count=1, visible=True, cls="option-item active")
+
+    def locator_side_effect(selector, **kwargs):
+        if ".post-album-display-wrap" in selector:
+            return mock_trigger
+        if ".post-album-wrap .option-item" in selector:
+            return mock_item
+        return create_locator_mock(count=0, visible=False)
+
+    mock_page.locator.side_effect = locator_side_effect
+
+    result = _select_collection(mock_page, "AI内幕")
+
+    assert result is True
+    mock_item.click.assert_not_called()          # 已 active 不需要再点
+    mock_page.keyboard.press.assert_called_with("Escape")
+
+
+# ── Test 3: 合集不存在 → 自动新建 ─────────────────────────────────────────────
 
 def test_select_collection_create_new():
-    """测试合集不存在时自动新建的分支"""
+    """合集不存在时：点「创建新合集」→ 填 Modal → 确认"""
     mock_page = MagicMock()
-    
-    # 1. 模拟 weui-desktop-form__item
-    mock_item = create_locator_mock(count=1, visible=True, inner_text="添加到合集")
-    mock_form_items = create_locator_mock(count=1)
-    mock_form_items.nth.return_value = mock_item
-    
-    # 2. 模拟触发按钮
+
     mock_trigger = create_locator_mock(count=1, visible=True)
-    mock_item.locator.return_value = mock_trigger
-    
-    # 3. 模拟列表容器，但找不到对应的选项 (count=0)
-    mock_container = create_locator_mock(count=1, visible=True)
-    mock_option = create_locator_mock(count=0, visible=False)
-    mock_container.locator.return_value = mock_option
-    
-    # 4. 模拟新建按钮
+    mock_no_item = create_locator_mock(count=0, visible=False)   # 找不到对应合集
+
+    # 「创建新合集」按钮
     mock_create_btn = create_locator_mock(count=1, visible=True)
-    
-    # 5. 模拟新建 Modal
+
+    # 新建 Modal
     mock_modal = create_locator_mock(count=1, visible=True)
     mock_input = create_locator_mock(count=1, visible=True)
-    mock_confirm_btn = create_locator_mock(count=1, visible=True)
-    
+    mock_confirm = create_locator_mock(count=1, visible=True)
+
     def modal_locator_side_effect(selector):
         if "input" in selector:
             return mock_input
-        elif "button" in selector:
-            return mock_confirm_btn
+        if "button" in selector:
+            return mock_confirm
         return create_locator_mock(count=0, visible=False)
     mock_modal.locator.side_effect = modal_locator_side_effect
-    
-    def locator_side_effect(selector):
-        if "li:has-text" in selector or "option" in selector:
-            return mock_option
-        elif ".weui-desktop-form__item" in selector:
-            return mock_form_items
-        elif ".weui-desktop-dropdown__list" in selector:
-            return mock_container
-        elif "新建" in selector or "创建" in selector:
+
+    def locator_side_effect(selector, **kwargs):
+        if ".post-album-display-wrap" in selector:
+            return mock_trigger
+        if ".post-album-wrap .option-item" in selector:
+            return mock_no_item
+        if ".post-album-wrap .create a" in selector:
             return mock_create_btn
-        elif ".weui-desktop-dialog" in selector or "div[role='dialog']" in selector:
+        if ".weui-desktop-dialog" in selector:
             return mock_modal
         return create_locator_mock(count=0, visible=False)
-        
+
     mock_page.locator.side_effect = locator_side_effect
-    
-    with patch("scripts.wechat_uploader.human_click", return_value=True) as mock_click:
+
+    with patch("scripts.wechat_uploader.human_click", return_value=True) as mock_hc:
         result = _select_collection(mock_page, "AI内幕?!：长于十五个字符的超长合集标题名称")
-        assert result is True
-        # 验证是否触发了新建按钮点击
-        mock_click.assert_any_call(mock_page, mock_create_btn)
-        # 验证输入框是否被填入了清洗和截断（15个字）后的名称
-        mock_input.fill.assert_called_once_with("AI内幕长于十五个字符的超长合")
-        # 验证是否触发了保存确认按钮点击
-        mock_click.assert_any_call(mock_page, mock_confirm_btn)
+
+    assert result is True
+
+    # 触发器被点击
+    mock_trigger.click.assert_called_once()
+    # 创建按钮被点击
+    mock_create_btn.click.assert_called_once()
+    # 输入框填入清洗并截断后的名称（去掉特殊字符，保留15个字）
+    # "AI内幕长于十五个字符的超长合" - 特殊字符清除 + 15字截断
+    mock_input.fill.assert_called_once()
+    filled_name = mock_input.fill.call_args[0][0]
+    assert len(filled_name) <= 15, f"Filled name too long: {filled_name!r}"
+    assert "?!" not in filled_name, "Special chars not cleaned"
+    # 确认按钮被点击
+    mock_hc.assert_called_with(mock_page, mock_confirm)
+
+
+# ── Test 4: 触发器找不到 → 返回 False ────────────────────────────────────────
+
+def test_select_collection_no_trigger():
+    """找不到触发器时优雅返回 False"""
+    mock_page = MagicMock()
+    mock_page.locator.return_value = create_locator_mock(count=0, visible=False)
+
+    result = _select_collection(mock_page, "AI内幕")
+    assert result is False
+
+
+# ── Test 5: 空 collection_name → 直接返回 True ───────────────────────────────
+
+def test_select_collection_empty_name():
+    """空合集名称时跳过整个流程"""
+    mock_page = MagicMock()
+    result = _select_collection(mock_page, "")
+    assert result is True
+    mock_page.locator.assert_not_called()

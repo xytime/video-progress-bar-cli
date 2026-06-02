@@ -12,6 +12,7 @@
 | 1.6.0   | 2026-05-27 | Claude_Sonnet_4.6_Thinking_planning | 优雅截断: 引入 graceful_truncate_title，替换硬截断兜底，防止磁盘读入的超长标题被截成半句 |
 | 1.7.0   | 2026-05-27 | Gemini_2.0_Flash_fast               | 增加 Web UI 临时二维码自动生成与无头等待扫码支持 |
 | 1.8.0   | 2026-05-27 | Antigravity_planning                | 移除彻底失效的分类选择 UI 操作逻辑（微信官方升级已移除），由自然语言 Hashtag 替代 |
+| 1.9.0   | 2026-06-02 | Claude_Sonnet_4.6_Thinking_planning | _select_collection 全面重写：5轮DOM探针实证，正确选择器 .post-album-display-wrap/.option-item/.create a |
 """
 
 import os
@@ -50,183 +51,158 @@ WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 
 def _select_collection(page, collection_name: str) -> bool:
     """在微信视频号助手页面选择视频合集，若不存在则自动新建。
-    
-    微信合集的选择交互流程：
-    1. 找到包含“合集”文本的触发按钮并点击展开。
-    2. 在展开的下拉项中匹配 collection_name。
-    3. 如果找到，点击勾选。
-    4. 如果没有找到，向下滚动点击“新建合集”按钮。
-    5. 弹出新建 Modal，在输入框填入合集名，点击确定保存。
+
+    # [Claude_Sonnet_4.6_Thinking_planning] v1.9.0 - 5轮DOM探针实证重写
+    # 真实 DOM 结构（微信视频号助手发布页）：
+    #
+    #  div.post-album-display-wrap      ← 点击展开触发器
+    #  div.filter-wrap                  ← 展开后面板
+    #    div.common-option-list-wrap
+    #      div.option-item [.active]    ← 每个合集项（.active=已选中）
+    #        div.item
+    #          div.name   "合集名"
+    #          div.desc   "共N个内容"
+    #    div.create
+    #      <a>创建新合集</a>             ← 新建按钮
+    #
+    # 新建后弹出 .weui-desktop-dialog 对话框（与旧代码一致）
     """
     if not collection_name:
         return True
-        
+
     logger.info(f"Setting collection: {collection_name!r}")
-    
-    # 1. 寻找“合集”表单项容器
-    form_items = page.locator(".weui-desktop-form__item")
-    collection_trigger = None
-    
-    for i in range(form_items.count()):
-        item = form_items.nth(i)
-        text = item.inner_text() or ""
-        if "合集" in text:
-            trigger = item.locator(".weui-desktop-dropdown__trigger, .weui-desktop-select__trigger").first
-            if trigger.count() == 0:
-                trigger = item.locator("div[class*='select'], div[class*='dropdown']").first
-            if trigger.count() > 0 and trigger.is_visible():
-                collection_trigger = trigger
-                logger.info("Found collection dropdown trigger within form item.")
-                break
-                
-    # 兜底匹配
-    if not collection_trigger:
-        triggers = [
-            page.locator(".weui-desktop-dropdown__trigger:near(:text('添加到合集'), 100)").first,
-            page.locator(".weui-desktop-dropdown__trigger:near(:text('合集'), 100)").first,
-            page.locator("text=添加到合集").locator("xpath=..").locator("div").first,
-            page.locator(".collection-selector").first
-        ]
-        for trg in triggers:
-            try:
-                if trg.count() > 0 and trg.is_visible():
-                    collection_trigger = trg
-                    logger.info("Found collection dropdown trigger via fallback locators.")
-                    break
-            except Exception:
-                continue
-                
-    if not collection_trigger:
-        logger.warning("Could not find collection dropdown trigger.")
+
+    # ── Step 1: 找触发器并展开 ─────────────────────────────────────────────
+    trigger = page.locator(".post-album-display-wrap").first
+    if trigger.count() == 0:
+        # 兜底：通过「添加到合集」标签找到相邻的显示区
+        trigger = page.locator("text=添加到合集").locator(
+            "xpath=following-sibling::div//*[contains(@class,'post-album-display')]"
+        ).first
+    if trigger.count() == 0:
+        logger.warning("Could not find collection trigger (.post-album-display-wrap).")
         return False
-        
-    # 2. 点击展开合集下拉菜单
+
     try:
-        collection_trigger.click(timeout=1000)
+        trigger.click(timeout=2000)
+    except Exception as e:
+        logger.error(f"Failed to click collection trigger: {e}")
+        return False
+
+    # ── Step 2: 等待面板展开（以「创建新合集」出现为信号）──────────────────
+    try:
+        page.wait_for_selector("text=创建新合集", timeout=5000)
+        logger.info("Collection dropdown opened.")
     except Exception:
-        try:
-            collection_trigger.evaluate("node => node.click()")
-        except Exception as e:
-            logger.error(f"Failed to click collection dropdown: {e}")
-            return False
-            
-    page.wait_for_timeout(800)
-    
-    # 3. 检查下拉菜单容器中是否已经有目标合集
-    list_container = page.locator(".weui-desktop-dropdown__list").first
-    target_option = None
-    if list_container.count() > 0 and list_container.is_visible():
-        option = list_container.locator(f"li:has-text('{collection_name}')").first
-        if option.count() > 0 and option.is_visible():
-            target_option = option
-            
-    if not target_option:
-        try:
-            opt = page.locator(f".weui-desktop-dropdown__list li:has-text('{collection_name}')").first
-            if opt.count() > 0 and opt.is_visible():
-                target_option = opt
-        except Exception:
-            pass
-            
-    # 4. 如果合集存在，点击勾选
-    if target_option:
-        logger.info(f"Collection {collection_name!r} already exists. Selecting...")
-        try:
-            cb = target_option.locator("input[type='checkbox']").first
-            if cb.count() > 0:
-                if not cb.is_checked():
-                    human_click(page, cb)
-            else:
-                ok = human_click(page, target_option)
-                if not ok:
-                    target_option.evaluate("node => node.click()")
-            logger.info(f"Successfully selected existing collection {collection_name!r}")
+        logger.warning("Collection dropdown did not open within 5s.")
+        return False
+    page.wait_for_timeout(300)  # 等动画稳定
+
+    # ── Step 3: 在 .option-item 中查找目标合集 ─────────────────────────────
+    # 使用 has= 参数：在 .post-album-wrap 下，找 .option-item 且包含 .name 精确文字
+    target_item = page.locator(
+        ".post-album-wrap .option-item",
+        has=page.locator(f".name:text-is('{collection_name}')")
+    ).first
+
+    if target_item.count() == 0:
+        # text-is 严格匹配失败，退化为 has-text（包含匹配）
+        target_item = page.locator(
+            ".post-album-wrap .option-item",
+            has=page.locator(f".name:has-text('{collection_name}')")
+        ).first
+
+    # ── Step 4a: 已存在 → 选中（含去重检测）──────────────────────────────
+    if target_item.count() > 0:
+        item_class = target_item.get_attribute("class") or ""
+        if "active" in item_class:
+            # 已经选中，去重直接返回
+            logger.info(f"Collection {collection_name!r} already active (dedup). Closing.")
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(300)
             return True
-        except Exception as select_err:
-            logger.warning(f"Failed to select existing collection: {select_err}")
-            
-    # 5. 如果合集不存在，执行新建合集流程
-    logger.info(f"Collection {collection_name!r} not found. Creating a new one...")
-    create_btn = None
-    for btn_text in ["新建合集", "创建合集", "新建", "创建"]:
-        btn = page.locator(f"button:has-text('{btn_text}')").first
-        if btn.count() > 0 and btn.is_visible():
-            create_btn = btn
-            break
-            
-    if not create_btn:
-        result_js = page.evaluate("""() => {
-            const btns = Array.from(document.querySelectorAll('button, a, div[role="button"]'));
-            const target = btns.find(b => b.innerText.includes('新建') || b.innerText.includes('创建'));
-            if (target && target.offsetParent !== null) {
-                const r = target.getBoundingClientRect();
-                return {ok: true, x: r.left + r.width/2, y: r.top + r.height/2};
-            }
-            return {ok: false};
-        }""")
-        if result_js and result_js.get("ok"):
-            page.mouse.click(result_js["x"], result_js["y"])
-            logger.info("Clicked 'Create Collection' button via coordinates.")
-        else:
-            logger.warning("Could not find 'Create Collection' button, exiting collection setup.")
-            page.mouse.click(0, 0)
-            return False
-    else:
+
+        logger.info(f"Collection {collection_name!r} found. Selecting...")
         try:
-            ok = human_click(page, create_btn)
-            if not ok:
-                create_btn.evaluate("node => node.click()")
-            logger.info("Clicked 'Create Collection' button.")
+            target_item.click(timeout=2000)
+            page.wait_for_timeout(500)
+            item_class_after = target_item.get_attribute("class") or ""
+            if "active" in item_class_after:
+                logger.info(f"Successfully selected collection {collection_name!r}.")
+            else:
+                logger.warning("Clicked but 'active' class not detected (may still work).")
+            return True
         except Exception as e:
-            logger.error(f"Failed to click Create Collection button: {e}")
-            page.mouse.click(0, 0)
-            return False
-            
-    page.wait_for_timeout(1000)
-    
-    # 6. 处理新建对话框 Modal
-    modal = page.locator(".weui-desktop-dialog, div[role='dialog']").first
-    if modal.count() > 0 and modal.is_visible():
-        logger.info("New collection creation dialog detected.")
-        page.screenshot(path="output/debug_collection_dialog.png")
-        
-        input_box = modal.locator("input[type='text'], input[placeholder*='合集名称'], input[placeholder*='标题']").first
-        if input_box.count() > 0:
+            logger.warning(f"Click on collection item failed: {e}, trying JS fallback...")
             try:
-                import re as _re
-                cleaned_name = _re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', '', collection_name).strip()
-                cleaned_name = cleaned_name[:15]
-                logger.info(f"Cleaned collection name: {cleaned_name!r}")
-                
-                input_box.fill(cleaned_name)
+                target_item.evaluate("node => node.click()")
                 page.wait_for_timeout(500)
-                
-                confirm_btn = None
-                for bt in ["确定", "保存", "创建", "确认"]:
-                    btn = modal.locator(f"button:has-text('{bt}')").first
-                    if btn.count() > 0 and btn.is_visible():
-                        confirm_btn = btn
-                        break
-                        
-                if confirm_btn:
-                    ok = human_click(page, confirm_btn)
-                    if not ok:
-                        confirm_btn.evaluate("node => node.click()")
-                    logger.info("Clicked confirm button in new collection dialog.")
-                    page.wait_for_timeout(1500)
-                    page.screenshot(path="output/debug_collection_after_create.png")
-                    return True
-                else:
-                    logger.warning("Could not find confirm button in creation dialog.")
-            except Exception as create_err:
-                logger.error(f"Failed during collection creation: {create_err}")
-        else:
-            logger.warning("Could not find input box in creation dialog.")
-    else:
+                return True
+            except Exception as e2:
+                logger.error(f"JS click also failed: {e2}")
+                return False
+
+    # ── Step 4b: 不存在 → 创建新合集 ─────────────────────────────────────
+    logger.info(f"Collection {collection_name!r} not in list. Creating new...")
+
+    # 实证 HTML: <div class="create"><a data-v-021f92ab="">创建新合集 </a></div>
+    create_btn = page.locator(".post-album-wrap .create a").first
+    if create_btn.count() == 0:
+        create_btn = page.get_by_text("创建新合集").first
+    if create_btn.count() == 0:
+        logger.warning("Could not find '创建新合集' button.")
+        page.keyboard.press("Escape")
+        return False
+
+    try:
+        create_btn.click(timeout=2000)
+    except Exception as e:
+        logger.error(f"Failed to click '创建新合集': {e}")
+        return False
+
+    page.wait_for_timeout(1000)
+
+    # ── Step 5: 填写新建 Modal ─────────────────────────────────────────────
+    modal = page.locator(".weui-desktop-dialog").first
+    if modal.count() == 0 or not modal.is_visible():
         logger.warning("Collection creation dialog did not appear.")
-        
-    page.mouse.click(0, 0)
-    return False
+        return False
+
+    logger.info("New collection creation dialog detected.")
+    page.screenshot(path="output/debug_collection_dialog.png")
+
+    input_box = modal.locator(
+        "input[type='text'], input[placeholder*='合集名称'], input[placeholder*='标题'], input"
+    ).first
+    if input_box.count() == 0:
+        logger.warning("No input box in creation dialog.")
+        return False
+
+    import re as _re
+    cleaned_name = _re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9\s]', '', collection_name).strip()[:15]
+    logger.info(f"Filling dialog with cleaned name: {cleaned_name!r}")
+
+    input_box.fill(cleaned_name)
+    page.wait_for_timeout(500)
+
+    confirm_btn = None
+    for bt in ["确定", "保存", "创建", "确认"]:
+        btn = modal.locator(f"button:has-text('{bt}')").first
+        if btn.count() > 0 and btn.is_visible():
+            confirm_btn = btn
+            break
+
+    if not confirm_btn:
+        logger.warning("No confirm button found in creation dialog.")
+        return False
+
+    ok = human_click(page, confirm_btn)
+    if not ok:
+        confirm_btn.evaluate("node => node.click()")
+    logger.info("Clicked confirm button in new collection dialog.")
+    page.wait_for_timeout(1500)
+    page.screenshot(path="output/debug_collection_after_create.png")
+    return True
 
 def run_uploader(
     video_path: str = None,
