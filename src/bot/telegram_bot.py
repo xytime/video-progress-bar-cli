@@ -16,6 +16,7 @@
 | 1.5.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 新增 /whole 和 /slice 指令并更新默认纯 URL 路由行为为不分集模式 |
 | 1.6.0   | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 新增 /tts 指令：发送 /tts <url> 时以 CosyVoice TTS 配音模式加入队列；移除了默认自动 TTS 行为 |
 | 1.7.0   | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 _handle_respec helper；各命令 already_exists 分支升级：有 trim/TTS 参数时自动调用 respec 实现“以最后一次为准” |
+| 1.8.0   | 2026-06-03 | Claude_Sonnet_4.6_Thinking_planning | 新增 _normalize_time() 预处理，parse_trim_params 支持 M'S 分秒格式（如 1'10 → 1:10） |
 """
 from __future__ import annotations
 
@@ -451,6 +452,15 @@ async def cmd_slice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
 
 
+def _normalize_time(t: str) -> str:
+    """[Claude_Sonnet_4.6_Thinking_planning] 将 M'S 格式标准化为 M:S（冒号格式）。
+
+    例：\"1'10\" → \"1:10\"，\"2'05\" → \"2:05\"
+    对已是标准格式（如 \"70\"、\"1:10\"）的字符串无副作用。
+    """
+    return re.sub(r"(\d+)'(\d+)", r"\1:\2", t)
+
+
 def parse_trim_params(text: str) -> tuple[str | None, str | None]:
     """[v1.3.0] 智能提取移动端极简裁剪参数
 
@@ -461,6 +471,7 @@ def parse_trim_params(text: str) -> tuple[str | None, str | None]:
       - 链接 -300 (仅设结束时间)
       - 链接 30 到 120 (自然语言)
       - 链接 38-14:43 (传统连字符)
+      - 链接 0 1'10 (M'S 分秒格式，移动端友好) [Claude_Sonnet_4.6_Thinking_planning]
     """
     text = text.strip()
     if not text:
@@ -469,22 +480,26 @@ def parse_trim_params(text: str) -> tuple[str | None, str | None]:
     # Case 1: 仅设置结束时间，如 "-14:43" 或 "-883"
     if text.startswith('-') or text.startswith('~') or text.startswith('to') or text.startswith('到'):
         clean = re.sub(r'^[\s\-~to到,，]+', '', text)
+        clean = _normalize_time(clean)  # [Claude_Sonnet_4.6_Thinking_planning] 支持 M'S 格式
         return None, (clean if re.match(r'^[0-9:.]+$', clean) else None)
 
     # Case 2: 分隔符拆分，支持 空格、连字符、中文"到"、英文"to"、逗号等
     parts = [p.strip() for p in re.split(r'[\s\-—~to到,，]+', text) if p.strip()]
     if len(parts) >= 2:
         start, end = parts[0], parts[1]
+        start = _normalize_time(start)  # [Claude_Sonnet_4.6_Thinking_planning] 支持 M'S 格式
+        end   = _normalize_time(end)
         start = start if re.match(r'^[0-9:.]+$', start) else None
-        end = end if re.match(r'^[0-9:.]+$', end) else None
+        end   = end   if re.match(r'^[0-9:.]+$', end)   else None
         return start, end
     elif len(parts) == 1:
         # 仅设置开始时间
-        start = parts[0]
+        start = _normalize_time(parts[0])  # [Claude_Sonnet_4.6_Thinking_planning] 支持 M'S 格式
         start = start if re.match(r'^[0-9:.]+$', start) else None
         return start, None
 
     return None, None
+
 
 
 async def _handle_respec(

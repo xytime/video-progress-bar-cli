@@ -26,6 +26,7 @@
 | 2.10.0  | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 从 video dict 读取 tts_provider 并在 render_cmd 中按需附加 --tts-cosy 参数，实现按需 TTS 配音而非默认自动开启 |
 | 2.11.0  | 2026-06-01 | Gemini_2.5_Flash_planning           | [Censor Hardening] 修复 zh_text 参数 Bug（中文通道现在真正检测中文）；集成频道策略层；三处调用点传入 zh_title |
 | 2.11.1  | 2026-06-01 | Gemini_3.5_Flash_planning           | [Censor Bugfix] 修复无 zh_title 时的中文视频内容安全与频道策略漏检，fallback 到 title |
+| 2.12.0  | 2026-06-03 | Claude_Sonnet_4.6_Thinking_planning | [精准下载] 有 trim 参数时加入 --download-sections + --force-keyframes-at-cuts，避免完整下载长视频；跳过 ffmpeg 二次裁剪 |
 """
 
 
@@ -539,6 +540,24 @@ class PipelineManager:
                             "--remote-components", "ejs:github",
                             url, "-o", str(self._OUT_DIR / f"{yid}.%(ext)s"),
                         ]
+
+                        # [Claude_Sonnet_4.6_Thinking_planning] v2.12.0: 精准区间下载
+                        # 若有裁剪参数，使用 --download-sections 让 yt-dlp 只下载必要片段，
+                        # 避免先完整下载 2 小时视频再裁剪的巨大浪费。
+                        # --force-keyframes-at-cuts 确保切割点关键帧精确（需 yt-dlp >= 2022.10.04）。
+                        used_download_sections = False
+                        if trim_start or trim_end:
+                            _sec_start = trim_start or "0"
+                            _sec_end   = trim_end   or "inf"
+                            dl_cmd += [
+                                "--download-sections", f"*{_sec_start}-{_sec_end}",
+                                "--force-keyframes-at-cuts",
+                            ]
+                            used_download_sections = True
+                            logger.info(
+                                f"[PARTIAL DL] Using --download-sections *{_sec_start}-{_sec_end} for {yid}"
+                            )
+
                         env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
                         self._run_tracked(dl_cmd, yid, slice_index=slice_index, capture_output=True,
                                           cwd=str(self._PRJ_ROOT), env=env_no_proxy)
@@ -547,24 +566,26 @@ class PipelineManager:
                             raise FileNotFoundError(f"No video file found for {yid} after download")
                         logger.info(f"Downloaded: {target_file}")
 
-                        if trim_start or trim_end:
+                        # [Claude_Sonnet_4.6_Thinking_planning] v2.12.0: 仅在未使用 --download-sections
+                        # 时才执行 ffmpeg 二次裁剪（used_download_sections=True 时 yt-dlp 已完成裁剪）。
+                        if (trim_start or trim_end) and not used_download_sections:
                             logger.info(f"Trimming main video {yid} to range: {trim_start or '0'} -> {trim_end or 'End'}")
                             temp_trimmed = self._OUT_DIR / f"{yid}_trimmed.mp4"
-                            
+
                             import imageio_ffmpeg
                             ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
-                            
+
                             trim_cmd = [ffmpeg_exe, "-y"]
                             if trim_start:
                                 trim_cmd += ["-ss", trim_start]
                             if trim_end:
                                 trim_cmd += ["-to", trim_end]
                             trim_cmd += ["-i", str(target_file), "-c", "copy", str(temp_trimmed)]
-                            
+
                             res = subprocess.run(trim_cmd, capture_output=True, text=True, cwd=str(self._PRJ_ROOT))
                             if res.returncode != 0:
                                 raise subprocess.CalledProcessError(res.returncode, trim_cmd, output=res.stdout, stderr=res.stderr)
-                            
+
                             if temp_trimmed.exists():
                                 Path(target_file).unlink()
                                 temp_trimmed.rename(target_file)
