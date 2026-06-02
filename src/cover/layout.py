@@ -7,6 +7,7 @@
 | 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 将 template_variant 字段加入 LayoutSpec，供 HTMLRenderer 选择对应模板文件 |
 | 1.2.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 将 content_label 角标标签透传入 LayoutSpec，供模板渲染丝带角标 |
 | 1.3.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | icon/丝带角落冲突避免：丝带在右上角时，自动将 top-right icon 切换到 bottom-left |
+| 1.4.0   | 2026-06-02 | Gemini_3.5_Flash_planning    | 修正 LayoutSpec 的 canvas_height 为 6:7 比例 (1260px) |
 """
 
 from typing import Dict, Any, List
@@ -35,7 +36,7 @@ class LayoutComposer:
         # 组装 layout_spec
         layout_spec = {
             "canvas_width": 1080,
-            "canvas_height": 1920,
+            "canvas_height": 1260, # [Gemini_3.5_Flash_planning] 修正为 6:7 比例以适配视频号竖版封面要求
             
             # 文字载荷
             "title": title,

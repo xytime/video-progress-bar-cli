@@ -5,6 +5,7 @@
 |---------|------------|------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，支持 Jinja2 模板装配、Inline SVG 注入以及 Playwright 截图生成 |
 | 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 模板目录化：接受 template_dir 替代单文件，根据 layout_spec.template_variant 动态选择 .html.j2 文件 |
+| 1.2.0   | 2026-06-02 | Gemini_3.5_Flash_planning    | 修正截图视口为 6:7 比例 (1080x1260) |
 """
 
 import os
@@ -76,8 +77,8 @@ class HTMLRenderer:
                 browser = p.chromium.launch(headless=True)
                 page = browser.new_page()
                 
-                # 微信视频号标准：1080x1920
-                page.set_viewport_size({"width": 1080, "height": 1920})
+                # [Gemini_3.5_Flash_planning] 微信视频号竖版封面标准比例：6:7 (1080x1260)
+                page.set_viewport_size({"width": 1080, "height": 1260})
                 
                 # 导航到临时文件 URL
                 file_url = temp_html_path.resolve().as_uri()
