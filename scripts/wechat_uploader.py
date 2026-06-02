@@ -13,6 +13,7 @@
 | 1.7.0   | 2026-05-27 | Gemini_2.0_Flash_fast               | 增加 Web UI 临时二维码自动生成与无头等待扫码支持 |
 | 1.8.0   | 2026-05-27 | Antigravity_planning                | 移除彻底失效的分类选择 UI 操作逻辑（微信官方升级已移除），由自然语言 Hashtag 替代 |
 | 1.9.0   | 2026-06-02 | Claude_Sonnet_4.6_Thinking_planning | _select_collection 全面重写：5轮DOM探针实证，正确选择器 .post-album-display-wrap/.option-item/.create a |
+| 2.0.0   | 2026-06-02 | Claude_Sonnet_4.6_Thinking_planning | bugfix: Modal检测改用wait_for_selector(state=visible)；所有return False前Escape关闭遮罩；publish前清理残留dialog |
 """
 
 import os
@@ -160,13 +161,20 @@ def _select_collection(page, collection_name: str) -> bool:
         logger.error(f"Failed to click '创建新合集': {e}")
         return False
 
-    page.wait_for_timeout(1000)
+    page.wait_for_timeout(500)
 
     # ── Step 5: 填写新建 Modal ─────────────────────────────────────────────
-    modal = page.locator(".weui-desktop-dialog").first
-    if modal.count() == 0 or not modal.is_visible():
-        logger.warning("Collection creation dialog did not appear.")
+    # [Claude_Sonnet_4.6_Thinking_planning] v2.0.0 bugfix:
+    # is_visible() 在 CSS transition 期间可能误报 False，改用 wait_for_selector
+    try:
+        page.wait_for_selector(".weui-desktop-dialog", state="visible", timeout=5000)
+    except Exception:
+        logger.warning("Collection creation dialog did not appear within 5s.")
+        # 可能有残留遮罩，按 Escape 清理
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
         return False
+    modal = page.locator(".weui-desktop-dialog").first
 
     logger.info("New collection creation dialog detected.")
     page.screenshot(path="output/debug_collection_dialog.png")
@@ -176,6 +184,8 @@ def _select_collection(page, collection_name: str) -> bool:
     ).first
     if input_box.count() == 0:
         logger.warning("No input box in creation dialog.")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
         return False
 
     import re as _re
@@ -194,6 +204,8 @@ def _select_collection(page, collection_name: str) -> bool:
 
     if not confirm_btn:
         logger.warning("No confirm button found in creation dialog.")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
         return False
 
     ok = human_click(page, confirm_btn)
@@ -1410,6 +1422,18 @@ def run_uploader(
         # ── 8. 合集选择与新建 ───────────────────────────────────────────────────
         if collection:
             _select_collection(page, collection)
+
+        # ── 9. 发表前清理残留遮罩 ────────────────────────────────────────────────
+        # [Claude_Sonnet_4.6_Thinking_planning] v2.0.0 bugfix:
+        # 合集创建流程可能留下未关闭的 .weui-desktop-dialog__wrp，会拦截「发表」按钮点击
+        try:
+            overlay = page.locator(".weui-desktop-dialog__wrp").first
+            if overlay.count() > 0 and overlay.is_visible():
+                logger.warning("Detected open dialog overlay before publish — pressing Escape to dismiss.")
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(500)
+        except Exception:
+            pass
             
         # 5. 执行提交或存草稿
         if draft:
