@@ -9,6 +9,7 @@
 | 1.1.0 | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 status] 新增 fmt_status_report 全局宏观状态渲染支持 |
 | 1.2.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 fmt_status_report 支持展现父任务与子切片细分统计 |
 | 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_planning           | 在 fmt_help 中增加 /whole 与 /slice 的说明 |
+| 1.4.0 | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 在 fmt_help 中新增 /tts 命令说明 |
 """
 from __future__ import annotations
 from typing import List
@@ -117,7 +118,8 @@ def fmt_help() -> str:
         "♻️ `/retry <ID> [slice_index]` — 重试失败的视频或分集任务\n"
         "🏃 `/run` — 立即触发一次全量管线\n"
         "📊 `/stats` — 查看系统统计数据\n"
-        "❓ `/help` — 显示本帮助"
+        "🎙 `/tts <url> [开始] [结束]` — 以 CosyVoice TTS 配音模式加入队列\n"
+        "🤖 `/help` — 显示本帮助"
     )
 
 

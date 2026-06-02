@@ -2,69 +2,183 @@
   "rules": [
     {
       "id": "policy_security",
-      "hints": ["policy", "quantum", "crypto", "geopolitics"],
-      "keywords": ["和谈", "政策", "隐私", "加密", "量子", "安全", "监控", "法案"],
+      "hints": ["policy", "crypto", "geopolitics", "sanction", "military", "nuclear"],
+      "keywords": ["和谈", "政策", "隐私", "加密", "量子", "安全", "监控", "法案", "制裁", "军事", "冲突", "选举", "总统", "峰会", "战争", "地缘"],
       "accent": "red_alert",
       "base_gradient": "policy_security",
-      "metaphor": "shield-off",
+      "metaphor": "shield",
       "metaphor_placement": "bottom-left",
       "emotion_temperature": "cold",
-      "default_badge": "安全局势"
+      "default_badge": "安全局势",
+      "template_variant": "cover_drama"
     },
     {
       "id": "market_capital",
-      "hints": ["market", "capital", "energy"],
-      "keywords": ["市场", "上市", "资本", "股价", "崩盘", "投资", "泡沫", "接盘"],
+      "hints": ["market", "capital", "stock", "ipo", "finance", "crypto_finance"],
+      "keywords": ["市场", "上市", "资本", "股价", "崩盘", "投资", "泡沫", "接盘", "融资", "财报", "估值", "基金", "债券", "降息", "加息"],
       "accent": "gold_warning",
       "base_gradient": "jet_black",
-      "metaphor": "trending-down",
+      "metaphor": "trending-up",
       "metaphor_placement": "top-right",
       "emotion_temperature": "hot",
-      "default_badge": "资本财评"
+      "default_badge": "资本财评",
+      "template_variant": "cover_drama"
     },
     {
-      "id": "robotics_tech",
-      "hints": ["robot", "ai", "space"],
-      "keywords": ["机器人", "原型机", "AI", "算法", "芯片", "科技", "智能", "提示词", "电脑"],
+      "id": "ai_software",
+      "hints": ["ai", "llm", "coding", "software", "algorithm"],
+      "keywords": ["AI", "大模型", "提示词", "算法", "代码", "编程", "开发者", "大语言模型", "ChatGPT", "Gemini", "Claude", "程序"],
+      "accent": "cyan_pulsing",
+      "base_gradient": "deep_blue",
+      "metaphor": "code",
+      "metaphor_placement": "bottom-left",
+      "emotion_temperature": "neutral",
+      "default_badge": "AI前沿",
+      "template_variant": "cover"
+    },
+    {
+      "id": "robotics_hardware",
+      "hints": ["robot", "hardware", "chip", "space", "drone"],
+      "keywords": ["机器人", "原型机", "芯片", "硬件", "无人机", "太空", "火箭", "卫星", "英伟达", "特斯拉", "制造", "工厂"],
       "accent": "cyan_pulsing",
       "base_gradient": "deep_blue",
       "metaphor": "cpu",
       "metaphor_placement": "bottom-left",
       "emotion_temperature": "neutral",
-      "default_badge": "前沿科技"
+      "default_badge": "前沿科技",
+      "template_variant": "cover"
     },
     {
-      "id": "mindset_change",
-      "hints": ["mindset", "health"],
-      "keywords": ["认知", "改变", "思维", "方法", "框架", "成长", "命运"],
+      "id": "space_science",
+      "hints": ["space", "physics", "science", "astronomy"],
+      "keywords": ["太空", "宇宙", "物理", "科学", "星球", "探测器", "NASA", "SpaceX", "黑洞", "量子", "天文"],
+      "accent": "indigo_cosmos",
+      "base_gradient": "cosmos",
+      "metaphor": "rocket",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "neutral",
+      "default_badge": "宇宙探索",
+      "template_variant": "cover"
+    },
+    {
+      "id": "mindset_growth",
+      "hints": ["mindset", "psychology", "philosophy", "self_improvement"],
+      "keywords": ["认知", "改变", "思维", "方法", "框架", "成长", "命运", "哲学", "心理", "潜意识", "目标", "习惯", "效率"],
       "accent": "purple_mindset",
       "base_gradient": "mindset_change",
       "metaphor": "brain",
       "metaphor_placement": "top-right",
       "emotion_temperature": "neutral",
-      "default_badge": "思维跃迁"
+      "default_badge": "思维跃迁",
+      "template_variant": "cover_minimal"
     },
     {
-      "id": "entertainment_arts",
-      "hints": ["entertainment", "music", "art", "movie", "show", "song"],
-      "keywords": ["音乐", "演唱", "歌曲", "歌词", "翻唱", "舞蹈", "电影", "电视剧", "综艺", "明星", "搞笑", "歌", "曲"],
-      "accent": "purple_mindset",
-      "base_gradient": "mindset_change",
-      "metaphor": "zap",
+      "id": "health_wellness",
+      "hints": ["health", "medical", "nutrition", "wellness", "mental_health"],
+      "keywords": ["健康", "医疗", "医生", "疾病", "疫苗", "饮食", "养生", "医院", "治疗", "营养", "心理健康", "运动康复"],
+      "accent": "green_health",
+      "base_gradient": "nature_green",
+      "metaphor": "heart-pulse",
       "metaphor_placement": "top-right",
       "emotion_temperature": "warm",
-      "default_badge": "影音娱乐"
+      "default_badge": "健康生活",
+      "template_variant": "cover_minimal"
+    },
+    {
+      "id": "education_learning",
+      "hints": ["education", "course", "tutorial", "lecture", "learning"],
+      "keywords": ["教程", "讲座", "学习", "科普", "教育", "大学", "学校", "名校", "公开课", "培训", "课程", "知识", "tutorial"],
+      "accent": "amber_learn",
+      "base_gradient": "amber_warm",
+      "metaphor": "graduation-cap",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "warm",
+      "default_badge": "知识讲堂",
+      "template_variant": "cover_minimal"
+    },
+    {
+      "id": "entertainment_music",
+      "hints": ["music", "song", "concert", "album", "artist"],
+      "keywords": ["音乐", "演唱", "歌曲", "歌词", "翻唱", "吉他", "钢琴", "声乐", "乐团", "乐器", "专辑", "演出", "巡演", "MV", "单曲"],
+      "accent": "pink_music",
+      "base_gradient": "sunset_purple",
+      "metaphor": "music",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "warm",
+      "default_badge": "音乐现场",
+      "template_variant": "cover"
+    },
+    {
+      "id": "entertainment_film",
+      "hints": ["movie", "film", "drama", "show", "entertainment"],
+      "keywords": ["电影", "电视剧", "综艺", "明星", "搞笑", "喜剧", "导演", "票房", "评分", "剧情", "彩蛋"],
+      "accent": "purple_mindset",
+      "base_gradient": "mindset_change",
+      "metaphor": "layers",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "warm",
+      "default_badge": "影视娱乐",
+      "template_variant": "cover"
     },
     {
       "id": "gaming_esports",
       "hints": ["gaming", "game", "esports", "playthrough", "console"],
-      "keywords": ["游戏", "实况", "攻略", "手游", "端游", "电竞", "玩家", "主机", "联机"],
+      "keywords": ["游戏", "实况", "攻略", "手游", "端游", "电竞", "玩家", "主机", "联机", "Steam", "Xbox", "PlayStation"],
       "accent": "gold_warning",
       "base_gradient": "jet_black",
-      "metaphor": "zap",
+      "metaphor": "gamepad",
       "metaphor_placement": "top-right",
       "emotion_temperature": "hot",
-      "default_badge": "游戏电竞"
+      "default_badge": "游戏电竞",
+      "template_variant": "cover"
+    },
+    {
+      "id": "sports_fitness",
+      "hints": ["sports", "fitness", "athlete", "competition"],
+      "keywords": ["体育", "比赛", "足球", "篮球", "健身", "运动", "奥运", "运动员", "跑步", "游泳", "训练", "冠军", "联赛"],
+      "accent": "green_health",
+      "base_gradient": "nature_green",
+      "metaphor": "activity",
+      "metaphor_placement": "bottom-left",
+      "emotion_temperature": "hot",
+      "default_badge": "体育热血",
+      "template_variant": "cover"
+    },
+    {
+      "id": "news_media",
+      "hints": ["news", "media", "report", "breaking", "interview"],
+      "keywords": ["新闻", "报道", "日报", "快讯", "播报", "访谈", "专访", "资讯", "时事", "最新", "突发"],
+      "accent": "cyan_pulsing",
+      "base_gradient": "deep_blue",
+      "metaphor": "newspaper",
+      "metaphor_placement": "bottom-left",
+      "emotion_temperature": "neutral",
+      "default_badge": "资讯播报",
+      "template_variant": "cover_minimal"
+    },
+    {
+      "id": "lifestyle_travel",
+      "hints": ["lifestyle", "travel", "food", "culture", "vlog"],
+      "keywords": ["生活", "旅行", "美食", "做饭", "日常", "家居", "文化", "艺术", "设计", "时尚", "宠物", "猫", "狗", "烹饪", "食谱", "探店"],
+      "accent": "amber_learn",
+      "base_gradient": "amber_warm",
+      "metaphor": "map-pin",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "warm",
+      "default_badge": "生活美学",
+      "template_variant": "cover_minimal"
+    },
+    {
+      "id": "business_startup",
+      "hints": ["startup", "entrepreneur", "business", "product", "innovation"],
+      "keywords": ["创业", "商业", "产品", "创新", "品牌", "营销", "用户增长", "融资", "独角兽", "CEO", "商业模式"],
+      "accent": "gold_warning",
+      "base_gradient": "jet_black",
+      "metaphor": "trending-up",
+      "metaphor_placement": "bottom-left",
+      "emotion_temperature": "hot",
+      "default_badge": "商业洞察",
+      "template_variant": "cover_minimal"
     },
     {
       "id": "default",
@@ -75,7 +189,8 @@
       "metaphor": "zap",
       "metaphor_placement": "top-right",
       "emotion_temperature": "neutral",
-      "default_badge": "科技观察"
+      "default_badge": "科技观察",
+      "template_variant": "cover"
     }
   ]
 }

@@ -4,6 +4,7 @@
 | Version | Date       | Author                       | Description                                                  |
 |---------|------------|------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，根据 content_hints 和标题关键字匹配视觉信号和主题颜色 |
+| 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 将 template_variant 字段加入 ContentSignal，支持 rules.json 自定义模板变体 |
 """
 
 import json
@@ -21,6 +22,8 @@ class ContentSignal:
     metaphor_placement: str
     emotion_temperature: str
     default_badge: str
+    # [Gemini_2.5_Pro_planning] v1.1.0 模板变体，默认 'cover'
+    template_variant: str = "cover"
 
 class SemanticAnalyzer:
     """
@@ -106,5 +109,7 @@ class SemanticAnalyzer:
             metaphor=matched_rule["metaphor"],
             metaphor_placement=matched_rule["metaphor_placement"],
             emotion_temperature=matched_rule["emotion_temperature"],
-            default_badge=matched_rule.get("default_badge", "科技观察")
+            default_badge=matched_rule.get("default_badge", "科技观察"),
+            # [Gemini_2.5_Pro_planning] v1.1.0: 传递 template_variant
+            template_variant=matched_rule.get("template_variant", "cover"),
         )

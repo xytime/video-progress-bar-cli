@@ -801,6 +801,13 @@ class PipelineManager:
                             cover_payload["content_hints"] = json.loads(hints_file.read_text(encoding="utf-8"))
                         except Exception:
                             pass
+                    # [Gemini_2.5_Pro_planning] v3.0.0: 读取封面角标标签
+                    label_file = self._OUT_DIR / f"{prefix}_label.txt"
+                    if label_file.exists():
+                        try:
+                            cover_payload["content_label"] = label_file.read_text(encoding="utf-8").strip()
+                        except Exception:
+                            pass
 
                     cover_cmd = [
                         self._VENV_PYTHON,
@@ -831,12 +838,26 @@ class PipelineManager:
                 self.db.update_video_status(yid, "PUBLISHING", slice_index=slice_index)
                 logger.info(f"Uploading to WeChat Channels for {prefix}...")
 
-                # [Claude_Sonnet_4.6_Thinking_planning] BUG-FIX: 合集名称必须来自父视频标题
-                # 使用切片自身的 title 会导致每个切片合集名不同（如"【01】引言"vs"【02】发展"），
-                # WeChat 会将它们识别为不同合集而无法归并。
-                # 修复：当 slice_index > 0 时，从父视频 (slice_index=0) 获取 zh_title 作为合集名。
+                # ── 合集（Collection）名称决策 ──────────────────────────────────
+                # [Gemini_2.5_Pro_planning] v3.0.0 修复: 微信视频号"分类"已改名为"合集"。
+                # 规则：
+                #   slice_index == 0（整片视频）→ 使用 AI 生成的大分类（如"科技""财经"）作为合集
+                #   slice_index >  0（系列切片）→ 使用父视频短标题作为合集（各切片共享同一合集）
+                # _select_collection 已能处理"选中已有"和"自动新建"两种情况。
                 collection_name = ""
-                if slice_index > 0:
+                if slice_index == 0:
+                    # 整片视频：用 AI 分类结果作为大类合集名
+                    if category_file.exists():
+                        try:
+                            collection_name = category_file.read_text(encoding="utf-8").strip()
+                        except Exception:
+                            pass
+                    if collection_name:
+                        logger.info(f"[Collection] Single video → using category as collection: {collection_name!r}")
+                    else:
+                        logger.warning(f"[Collection] Single video: no category_file, skipping collection.")
+                else:
+                    # 系列切片：用父视频短标题作为合集名（确保各切片合集一致）
                     import re as _re
                     parent_video_for_coll = self.db.get_video_by_youtube_id(yid, 0)
                     if parent_video_for_coll:
@@ -849,7 +870,7 @@ class PipelineManager:
                         parent_zh_coll = _re.sub(
                             r'\([^)]*\)|（[^）]*）|\[[^\]]*\]|【[^】]*】', '', parent_zh_coll
                         ).strip()
-                        # 尝试从父任务的 title_file 读取已生成的短标题
+                        # 优先使用已生成的中文短标题
                         parent_title_file_coll = self._OUT_DIR / f"{yid}_title.txt"
                         if parent_title_file_coll.exists():
                             try:
@@ -857,8 +878,8 @@ class PipelineManager:
                             except Exception:
                                 pass
                         collection_name = graceful_truncate_title(parent_zh_coll, max_len=15)
+                        logger.info(f"[Collection] Slice video → using parent short title as collection: {collection_name!r}")
                     else:
-                        # fallback: 不设合集，总比设一个错误合集名好
                         logger.warning(f"[Collection] Parent video (slice_index=0) not found for {yid}, skipping collection.")
 
                 upload_cmd = [
@@ -875,7 +896,8 @@ class PipelineManager:
                     upload_cmd += ["--title-file", str(title_file)]
                 if category_file.exists():
                     upload_cmd += ["--category-file", str(category_file)]
-                if slice_index > 0 and collection_name:
+                # [Gemini_2.5_Pro_planning] v3.0.0: 对单视频和多切片均传 collection
+                if collection_name:
                     upload_cmd += ["--collection", collection_name]
 
                 try:

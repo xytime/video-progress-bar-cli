@@ -16,6 +16,8 @@
 | 2.6.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 新增 disable_slicing 状态列用于整片发布/切片发布的控制 (默认 1 为整片发布) |
 | 2.7.0   | 2026-05-27 | Unknown_Model_planning              | 红蓝博弈安全性与容错性审计修复 (P1/P2) |
 | 2.8.0   | 2026-05-28 | Gemini_3.5_Flash_planning           | 优化 get_high_score_pending_videos：利用 EXISTS 子查询在 SQL 层直接过滤被顺序锁阻断的切片任务 |
+| 2.9.0   | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 新增 tts_provider 列，用于按视频记录 TTS 配音引擎（nullable），供 /tts 命令按需存储 |
+| 3.0.0   | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 update_video_spec 方法，全量覆盖规格字段（trim/disable_slicing/tts），供 respec 流程使用 |
 """
 
 import sqlite3
@@ -196,6 +198,15 @@ class PipelineDB:
                 self._logger.info("[Migration] Adding disable_slicing column to processed_videos table...")
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN disable_slicing INTEGER DEFAULT 1;")
                 conn.commit()
+
+            # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: 检查并补足 tts_provider 字段
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "tts_provider" not in columns:
+                self._logger.info("[Migration] Adding tts_provider column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN tts_provider TEXT DEFAULT NULL;")
+                conn.commit()
+
             
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
             cursor.execute('''
@@ -277,6 +288,7 @@ class PipelineDB:
         slice_index: int = 0,                       # [Gemini_3.5_Flash_planning] 新增：切片索引，默认0 (主视频)
         parent_id: Optional[int] = None,            # [Gemini_3.5_Flash_planning] 新增：父自增 ID
         disable_slicing: int = 1,                   # [Gemini_3.5_Flash_planning] 新增：禁用分片标识 (默认1=不分片)
+        tts_provider: Optional[str] = None,         # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: TTS 配音引擎（nullable）
     ) -> bool:
         # 前置黑名单检查，防止已删除视频被二次拉取
         if self.is_blacklisted(youtube_id):
@@ -291,15 +303,18 @@ class PipelineDB:
                 conn.execute(
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
-                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
+                        tts_provider)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (youtube_id, slice_index, parent_id, title, channel_id, score, zh_title, source,
-                     duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing)
+                     duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
+                     tts_provider)  # [Claude_Sonnet_4.6_Thinking_planning]
                 )
                 conn.commit()
                 return True
             except sqlite3.IntegrityError:
                 return False  # Already exists (youtube_id + slice_index duplicate)
+
 
     def batch_add_videos(self, videos: List[Dict[str, Any]]) -> bool:
         """[Gemini_3.1_Pro_High_planning] 批量插入子任务列表，使用 executemany 配合自动事务，规避性能与死锁问题"""
@@ -347,6 +362,32 @@ class PipelineDB:
                 conn.rollback()
                 self._logger.error(f"[DB] batch_add_videos failed: {e}")
                 return False
+
+    def update_video_spec(
+        self,
+        youtube_id: str,
+        trim_start: Optional[str],
+        trim_end: Optional[str],
+        disable_slicing: int,
+        tts_provider: Optional[str] = None,
+        slice_index: int = 0,
+    ) -> bool:
+        """[Claude_Sonnet_4.6_Thinking_planning] 全量覆盖更新视频规格字段。
+
+        规格字段：trim_start / trim_end / disable_slicing / tts_provider。
+        NULL 值也会被写入（可清除原有裁剪区间或 TTS 配置）。
+        仅操作父任务（默认 slice_index=0），不影响子切片。
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos "
+                "SET trim_start = ?, trim_end = ?, disable_slicing = ?, tts_provider = ?, "
+                "    updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (trim_start, trim_end, disable_slicing, tts_provider, youtube_id, slice_index),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def update_video_status(self, youtube_id: str, status: str, error_msg: Optional[str] = None, slice_index: int = 0):
         """更新指定联合键 (youtube_id, slice_index) 视频的状态。"""

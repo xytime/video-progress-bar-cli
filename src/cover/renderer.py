@@ -4,6 +4,7 @@
 | Version | Date       | Author                       | Description                                                  |
 |---------|------------|------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，支持 Jinja2 模板装配、Inline SVG 注入以及 Playwright 截图生成 |
+| 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 模板目录化：接受 template_dir 替代单文件，根据 layout_spec.template_variant 动态选择 .html.j2 文件 |
 """
 
 import os
@@ -16,8 +17,9 @@ class HTMLRenderer:
     封面图片截图渲染器 (HTMLRenderer)
     使用 Jinja2 模板和 Playwright 无头浏览器生成高质量、高精度的 1080x1920 封面。
     """
-    def __init__(self, template_path: Path, metaphors_dir: Path):
-        self.template_path = Path(template_path)
+    def __init__(self, template_dir: Path, metaphors_dir: Path):
+        # [Gemini_2.5_Pro_planning] v1.1.0: 接受目录而非单文件
+        self.template_dir = Path(template_dir)
         self.metaphors_dir = Path(metaphors_dir)
 
     def _load_metaphor_svg(self, metaphor_name: str) -> str:
@@ -44,16 +46,23 @@ class HTMLRenderer:
     def render(self, layout_spec: dict, output_path: str) -> None:
         """
         [Gemini_3.5_Flash_planning] 将 LayoutSpec 渲染成 HTML，并通过 Playwright 无头浏览器截图输出为图片
+        [Gemini_2.5_Pro_planning] v1.1.0: 依据 layout_spec.template_variant 选择对应的 .html.j2 文件
         """
-        if not self.template_path.exists():
-            raise FileNotFoundError(f"Jinja2 template not found at: {self.template_path}")
+        # [Gemini_2.5_Pro_planning] v1.1.0 动态选择模板
+        variant = layout_spec.get("template_variant", "cover")
+        template_path = self.template_dir / f"{variant}.html.j2"
+        # 文件不存在时阶梯到默认模板
+        if not template_path.exists():
+            template_path = self.template_dir / "cover.html.j2"
+        if not template_path.exists():
+            raise FileNotFoundError(f"No template found in: {self.template_dir}")
 
         # 1. 注入 SVG 隐喻
         metaphor_name = layout_spec.get("metaphor", "")
         layout_spec["metaphor_svg"] = self._load_metaphor_svg(metaphor_name)
 
         # 2. 渲染 Jinja2 模板得到 HTML
-        template_text = self.template_path.read_text(encoding="utf-8")
+        template_text = template_path.read_text(encoding="utf-8")
         template = Template(template_text)
         rendered_html = template.render(**layout_spec)
 

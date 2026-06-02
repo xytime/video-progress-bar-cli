@@ -39,6 +39,46 @@
         {"cx_pct": -0.2, "cy_pct": 0.15, "radius_pct": 0.65, "color_rgba": [168, 85, 247, 160]},
         {"cx_pct": 1.2, "cy_pct": 0.85, "radius_pct": 0.7, "color_rgba": [79, 70, 229, 140]}
       ]
+    },
+    "cosmos": {
+      "background_gradient_start": "#020412",
+      "background_gradient_end": "#0b0e2e",
+      "noise_opacity": 0.07,
+      "grid_color": "rgba(99,102,241,0.07)",
+      "orbs": [
+        {"cx_pct": 0.5, "cy_pct": -0.1, "radius_pct": 0.8, "color_rgba": [99, 102, 241, 130]},
+        {"cx_pct": -0.1, "cy_pct": 1.1, "radius_pct": 0.6, "color_rgba": [16, 185, 129, 100]}
+      ]
+    },
+    "nature_green": {
+      "background_gradient_start": "#021208",
+      "background_gradient_end": "#051f0e",
+      "noise_opacity": 0.04,
+      "grid_color": "rgba(16,185,129,0.06)",
+      "orbs": [
+        {"cx_pct": -0.2, "cy_pct": 0.2, "radius_pct": 0.65, "color_rgba": [16, 185, 129, 140]},
+        {"cx_pct": 1.2, "cy_pct": 0.8, "radius_pct": 0.55, "color_rgba": [5, 150, 105, 120]}
+      ]
+    },
+    "amber_warm": {
+      "background_gradient_start": "#120800",
+      "background_gradient_end": "#1f1000",
+      "noise_opacity": 0.05,
+      "grid_color": "rgba(251,191,36,0.05)",
+      "orbs": [
+        {"cx_pct": 1.2, "cy_pct": 0.2, "radius_pct": 0.65, "color_rgba": [251, 191, 36, 140]},
+        {"cx_pct": -0.1, "cy_pct": 0.85, "radius_pct": 0.55, "color_rgba": [217, 119, 6, 120]}
+      ]
+    },
+    "sunset_purple": {
+      "background_gradient_start": "#10020f",
+      "background_gradient_end": "#1e0428",
+      "noise_opacity": 0.05,
+      "grid_color": "rgba(236,72,153,0.06)",
+      "orbs": [
+        {"cx_pct": -0.2, "cy_pct": 0.2, "radius_pct": 0.7, "color_rgba": [236, 72, 153, 140]},
+        {"cx_pct": 1.1, "cy_pct": 0.85, "radius_pct": 0.6, "color_rgba": [168, 85, 247, 130]}
+      ]
     }
   },
   "accents": {
@@ -57,6 +97,22 @@
     "purple_mindset": {
       "color": "#c084fc",
       "glow": "0 0 30px rgba(168,85,247,0.5)"
+    },
+    "indigo_cosmos": {
+      "color": "#818cf8",
+      "glow": "0 0 30px rgba(99,102,241,0.55)"
+    },
+    "green_health": {
+      "color": "#34d399",
+      "glow": "0 0 30px rgba(16,185,129,0.55)"
+    },
+    "amber_learn": {
+      "color": "#fbbf24",
+      "glow": "0 0 30px rgba(251,191,36,0.5)"
+    },
+    "pink_music": {
+      "color": "#f472b6",
+      "glow": "0 0 30px rgba(236,72,153,0.55)"
     }
   }
 }

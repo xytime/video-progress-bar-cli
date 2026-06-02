@@ -18,6 +18,7 @@
 | 2.6.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 新增 stop_video 接口以支持真实停止进程并状态置为 FAILED |
 | 2.7.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 新增后台队列自动轮询器 _queue_runner_loop 自动执行切片/高分任务 |
 | 2.8.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 使用 python -u 启动子进程以实现 pipeline.log 实时无缓冲日志输出 |
+| 2.9.0 | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 respec_video 端点：停止当前处理、覆盖规格并重新入队；add_video_manual 重复检测补充 video_id/title 返回 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -421,6 +422,7 @@ class AddVideoRequest(BaseModel):
     trim_start: Optional[str] = None
     trim_end: Optional[str] = None
     disable_slicing: Optional[bool] = True  # [Gemini_3.5_Flash_planning] 默认不分片 (整片模式)
+    tts_provider: Optional[str] = None      # [Claude_Sonnet_4.6_Thinking_planning] TTS 配音引擎，nullable
 
 
 @app.post("/api/videos/add")
@@ -503,6 +505,8 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
             "error": f"视频已在队列中（当前状态：{existing['status']}）：{existing['title']}",
             "already_exists": True,
             "current_status": existing["status"],
+            "video_id": video_id,        # [Claude_Sonnet_4.6_Thinking_planning] 供 Bot 侧 respec 直接使用
+            "title": existing["title"],  # [Claude_Sonnet_4.6_Thinking_planning] 供 Bot 侧特显提示展示
         }
 
     # ── 5. 写入队列（手工添加） ───────────────────────────────────────
@@ -520,6 +524,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         like_count=like_count, upload_date=upload_date,
         trim_start=trim_start, trim_end=trim_end,
         disable_slicing=disable_slicing_val,
+        tts_provider=req.tts_provider or None,  # [Claude_Sonnet_4.6_Thinking_planning] 传递 TTS 配音引擎设置
     )
     bg_tasks.add_task(_translate_title_task, video_id, title)
     
@@ -531,6 +536,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         "trim_start": trim_start,
         "trim_end": trim_end,
         "disable_slicing": req.disable_slicing,
+        "tts_provider": req.tts_provider,  # [Claude_Sonnet_4.6_Thinking_planning]
     }
 
 
@@ -979,6 +985,114 @@ def delete_video(youtube_id: str, delete_files: bool = False, slice_index: Optio
         "success": True,
         "deleted_files": deleted_files,
         "message": msg,
+    }
+
+
+class RespecVideoRequest(BaseModel):
+    trim_start: Optional[str] = None
+    trim_end: Optional[str] = None
+    disable_slicing: Optional[bool] = True
+    tts_provider: Optional[str] = None
+
+
+@app.post("/api/videos/{youtube_id}/respec")
+def respec_video(youtube_id: str, req: RespecVideoRequest):
+    """规格覆盖：停止当前处理（如有），更新规格字段，重新入队并触发。
+
+    适用于：用户发现裁剪参数有误，重发同一 URL + 新参数后的自动修正流程。
+
+    # Modification History
+    | Version | Date       | Author                              | Description  |
+    | ------- | ---------- | ----------------------------------- | ------------ |
+    | 1.0.0   | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 初始创建     |
+
+    状态处理规则：
+    - PUBLISHED / SEGMENTED / IGNORED / COMPLETED → 拒绝（终态，不可覆盖）
+    - DOWNLOADING / TRANSCRIBING / COPYWRITING / PUBLISHING → kill 进程后更新
+    - PENDING / FAILED → 直接更新规格，重置 PENDING
+    物理文件：不删除。pipeline_manager 将检测现有文件并以新 trim 参数重新处理。
+    """
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+
+    status = video.get("status", "")
+
+    # ── 1. 终态拒绝 ─────────────────────────────────────────────
+    _TERMINAL_STATUSES = {"PUBLISHED", "SEGMENTED", "IGNORED", "COMPLETED"}
+    if status in _TERMINAL_STATUSES:
+        return {
+            "success": False,
+            "error": f"视频当前状态为 {status}，无法覆盖规格（终态保护）",
+            "current_status": status,
+        }
+
+    # ── 2. 活跃状态：杀进程 ────────────────────────────────────
+    was_stopped = False
+    if status in ACTIVE_STATUSES:
+        if not settings.enable_sigterm_kill:
+            return {
+                "success": False,
+                "error": "进程强杀未启用（enable_sigterm_kill=False），无法中止活跃任务",
+            }
+        pid = video.get("process_pid")
+        if pid:
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                pass
+            time.sleep(2.0)
+            try:
+                os.killpg(pid, 0)              # 检查进程是否仍存活
+                os.killpg(pid, signal.SIGKILL)  # 残存 → 强杀
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    f"[SIGKILL] respec forced kill pid={pid} for {youtube_id}"
+                )
+            except (ProcessLookupError, PermissionError):
+                pass  # 已自行退出，正常
+        was_stopped = True
+
+    # ── 3. 校验裁剪参数 ─────────────────────────────────────
+    _time_re = re.compile(r"^[0-9:.]*$")
+    trim_start = req.trim_start.strip() if req.trim_start else None
+    trim_end   = req.trim_end.strip()   if req.trim_end   else None
+    if trim_start and not _time_re.match(trim_start):
+        return {"success": False, "error": "开始时间格式不合法，仅支持数字、冒号和点"}
+    if trim_end and not _time_re.match(trim_end):
+        return {"success": False, "error": "结束时间格式不合法，仅支持数字、冒号和点"}
+
+    disable_slicing_val = 1 if req.disable_slicing else 0
+
+    # ── 4. 更新规格 ─────────────────────────────────────────────
+    db.update_video_spec(
+        youtube_id,
+        trim_start=trim_start,
+        trim_end=trim_end,
+        disable_slicing=disable_slicing_val,
+        tts_provider=req.tts_provider,
+    )
+
+    # ── 5. 重置状态并触发 ────────────────────────────────────────
+    db.update_video_status(youtube_id, "PENDING", error_msg=None)
+
+    triggered = False
+    if db.claim_video_for_processing(youtube_id):
+        fresh = db.get_video_by_youtube_id(youtube_id)
+        if fresh:
+            _trigger_video_async(fresh)
+            triggered = True
+
+    return {
+        "success": True,
+        "youtube_id": youtube_id,
+        "title": video.get("title"),
+        "trim_start": trim_start,
+        "trim_end": trim_end,
+        "disable_slicing": req.disable_slicing,
+        "tts_provider": req.tts_provider,
+        "was_stopped": was_stopped,
+        "triggered": triggered,
     }
 
 

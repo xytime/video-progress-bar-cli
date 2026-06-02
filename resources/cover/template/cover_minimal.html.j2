@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>Cover Render Template</title>
+    <title>Cover Render Template - Minimal</title>
     <style>
         :root {
             --bg-start: {{ background_gradient_start }};
@@ -18,7 +18,7 @@
             padding: 0;
             width: {{ canvas_width }}px;
             height: {{ canvas_height }}px;
-            background: linear-gradient(135deg, var(--bg-start) 0%, var(--bg-end) 100%);
+            background: linear-gradient(160deg, var(--bg-start) 0%, var(--bg-end) 100%);
             font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "STHeiti", "Microsoft YaHei", sans-serif;
             overflow: hidden;
             position: relative;
@@ -39,82 +39,65 @@
         .orb {
             position: absolute;
             border-radius: 50%;
-            filter: blur(180px);
+            filter: blur(200px);
             mix-blend-mode: screen;
-            opacity: 0.75;
+            opacity: 0.6;
         }
 
-        /* 点阵网格 */
-        .grid-layer {
+        /* 极简分割线装饰 */
+        .divider {
             position: absolute;
-            width: 100%;
-            height: 100%;
-            top: 0;
-            left: 0;
-            z-index: 2;
-            background-image: radial-gradient(var(--grid-color) 2.5px, transparent 0);
-            background-size: 80px 80px;
-            background-position: 40px 40px;
+            left: 8%;
+            right: 8%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent-color), transparent);
+            opacity: 0.4;
+            z-index: 5;
         }
 
-        /* 磨砂玻璃卡片 */
-        .glass-card {
-            position: absolute;
-            left: {{ safe_zone.margin_pct }}%;
-            right: {{ safe_zone.margin_pct }}%;
-            top: 50%;
-            transform: translateY(-50%);
-            height: 950px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 3px solid rgba(255, 255, 255, 0.18);
-            border-radius: 60px;
-            backdrop-filter: blur(25px);
-            -webkit-backdrop-filter: blur(25px);
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-            z-index: 10;
-            box-sizing: border-box;
-            padding: 85px 70px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: space-between;
-        }
+        .divider-top { top: 20%; }
+        .divider-bottom { bottom: 20%; }
 
         /* 徽章 */
         .badge-capsule {
-            background: #ffffff;
-            color: #0f172a;
-            padding: 12px 40px;
+            position: absolute;
+            top: 12%;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            background: transparent;
+            border: 2px solid var(--accent-color);
+            color: var(--accent-color);
+            padding: 10px 42px;
             border-radius: 40px;
             font-size: 38px;
-            font-weight: 800;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
-            margin-bottom: 20px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            white-space: nowrap;
+            box-shadow: var(--accent-glow);
         }
 
-        /* 内容文字容器 */
-        .text-content-wrapper {
-            flex-grow: 1;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            width: 100%;
-            margin: 40px 0;
+        /* 核心文字区 */
+        .content-area {
+            position: absolute;
+            top: 50%;
+            left: 8%;
+            right: 8%;
+            transform: translateY(-50%);
+            z-index: 10;
+            text-align: center;
         }
 
         /* 主标题 */
         .main-title {
-            font-size: 96px;
+            font-size: 104px;
             font-weight: 900;
             color: #ffffff;
             text-align: center;
-            line-height: 1.35;
-            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+            line-height: 1.3;
+            text-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
             word-break: break-all;
-            margin: 0;
+            margin: 0 0 40px 0;
             display: -webkit-box;
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;
@@ -123,29 +106,26 @@
 
         /* 副标题 */
         .sub-title {
-            font-size: 54px;
-            font-weight: 600;
-            color: rgba(255, 255, 255, 0.85);
+            font-size: 50px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.75);
             text-align: center;
-            line-height: 1.45;
-            text-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
-            margin-top: 50px;
+            line-height: 1.5;
             word-break: break-all;
             display: -webkit-box;
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;
             overflow: hidden;
+            letter-spacing: 1px;
         }
 
         /* 隐喻矢量图标 */
         .metaphor-icon {
             position: absolute;
-            width: 110px;
-            height: 110px;
             z-index: 15;
-            opacity: 0.65;
+            opacity: 0.5;
             color: var(--accent-color);
-            filter: drop-shadow(0 0 12px var(--accent-color));
+            filter: drop-shadow(0 0 16px var(--accent-color));
         }
 
         .metaphor-icon svg {
@@ -156,22 +136,37 @@
             fill: none;
         }
 
-        /* 定位布局配置 */
         .pos-top-right {
-            top: 75px;
-            right: 70px;
+            width: 90px;
+            height: 90px;
+            top: 8%;
+            right: 8%;
         }
 
         .pos-bottom-left {
-            bottom: 75px;
-            left: 70px;
+            width: 90px;
+            height: 90px;
+            bottom: 8%;
+            left: 8%;
         }
+
+        /* 底部水印 */
+        .watermark {
+            position: absolute;
+            bottom: 8%;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            font-size: 28px;
+            color: rgba(255,255,255,0.25);
+            letter-spacing: 3px;
+            font-weight: 300;
+            white-space: nowrap;
+        }
+
     </style>
 </head>
 <body>
-    <!-- 点阵网格层 -->
-    <div class="grid-layer"></div>
-
     <!-- 氛围光晕层 -->
     <div class="orb-container">
         {% for orb in orbs %}
@@ -185,6 +180,28 @@
         "></div>
         {% endfor %}
     </div>
+
+    <!-- 上下分割线 -->
+    <div class="divider divider-top"></div>
+    <div class="divider divider-bottom"></div>
+
+    <!-- 徽章 -->
+    <div class="badge-capsule">{{ badge }}</div>
+
+    <!-- 核心内容区 -->
+    <div class="content-area">
+        <h1 class="main-title">{{ title }}</h1>
+        {% if subtitle %}
+        <div class="sub-title">{{ subtitle }}</div>
+        {% endif %}
+    </div>
+
+    <!-- 隐喻图标 -->
+    {% if metaphor_svg %}
+    <div class="metaphor-icon pos-{{ metaphor_placement }}">
+        {{ metaphor_svg }}
+    </div>
+    {% endif %}
 
     <!-- [Gemini_2.5_Pro_planning] SVG丝带角标：右上角对角线织物丝带，精确几何路径 -->
     {% if content_label is defined and content_label %}
@@ -250,25 +267,7 @@
     </div>
     {% endif %}
 
-    <!-- 磨砂玻璃卡片 -->
-    <div class="glass-card">
-        <!-- 徽章药丸 -->
-        <div class="badge-capsule">{{ badge }}</div>
-        
-        <!-- 核心内容 -->
-        <div class="text-content-wrapper">
-            <h1 class="main-title">{{ title }}</h1>
-            {% if subtitle %}
-            <div class="sub-title">{{ subtitle }}</div>
-            {% endif %}
-        </div>
-
-        <!-- 隐喻矢量图标注入 (内联定位) -->
-        {% if metaphor_svg %}
-        <div class="metaphor-icon pos-{{ metaphor_placement }}">
-            {{ metaphor_svg }}
-        </div>
-        {% endif %}
-    </div>
+    <!-- 水印 -->
+    <div class="watermark">科技前沿</div>
 </body>
 </html>

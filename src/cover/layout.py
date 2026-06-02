@@ -4,6 +4,9 @@
 | Version | Date       | Author                       | Description                                                  |
 |---------|------------|------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，组装 LayoutSpec，支持双层标题、安全区计算与隐喻位置  |
+| 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 将 template_variant 字段加入 LayoutSpec，供 HTMLRenderer 选择对应模板文件 |
+| 1.2.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 将 content_label 角标标签透传入 LayoutSpec，供模板渲染丝带角标 |
+| 1.3.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | icon/丝带角落冲突避免：丝带在右上角时，自动将 top-right icon 切换到 bottom-left |
 """
 
 from typing import Dict, Any, List
@@ -50,7 +53,25 @@ class LayoutComposer:
             
             # 隐喻属性
             "metaphor": signal.metaphor,
-            "metaphor_placement": signal.metaphor_placement,
+            # [Gemini_2.5_Pro_planning] v1.3.0 icon/丝带角落冲突避免
+            # 丝带固定占据右上角(top-right)。
+            # 若 icon 原定位为 top-right 且有丝带，就将 icon 切到 bottom-left。
+            "metaphor_placement": (
+                "bottom-left"
+                if (
+                    str(payload.get("content_label", "") or "").strip()
+                    and getattr(signal, "metaphor_placement", "") == "top-right"
+                )
+                else signal.metaphor_placement
+            ),
+            
+            # [Gemini_2.5_Pro_planning] v1.1.0 模板变体选择
+            # rules.json 中每条规则可指定 template_variant 字段
+            # 可选值：'cover'（默认）/ 'cover_minimal' / 'cover_drama'
+            "template_variant": getattr(signal, 'template_variant', 'cover'),
+            
+            # [Gemini_2.5_Pro_planning] v1.2.0 封面角标标签，空字符串表示无标签
+            "content_label": str(payload.get("content_label", "") or "").strip(),
             
             # 安全区参数（按比例，供 CSS 使用）
             "safe_zone": {

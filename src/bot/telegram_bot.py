@@ -12,8 +12,10 @@
 | 1.1.2 | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将 YouTube URL 链接处理重归程序接管，不使用 Agent |
 | 1.2.0 | 2026-05-26 | Gemini_3.5_Flash                    | [v7.0 status] 新增 cmd_status 宏观状态指令并调整命令路由 |
 | 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 cmd_retry 与 cmd_delete 命令，支持可选 [slice_index] 对切片子任务的操作 |
-| 1.4.0 | 2026-05-27 | Gemini_3.5_Flash_planning           | 优化 YouTube URL 正则以原生支持直播回放 (live/) 与完整提取带参数链接，防止裁剪干扰 |
-| 1.5.0 | 2026-05-27 | Gemini_3.5_Flash_planning           | 新增 /whole 和 /slice 指令并更新默认纯 URL 路由行为为不分集模式 |
+| 1.4.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 优化 YouTube URL 正则以原生支持直播回放 (live/) 与完整提取带参数链接，防止裁剪干扰 |
+| 1.5.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 新增 /whole 和 /slice 指令并更新默认纯 URL 路由行为为不分集模式 |
+| 1.6.0   | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 新增 /tts 指令：发送 /tts <url> 时以 CosyVoice TTS 配音模式加入队列；移除了默认自动 TTS 行为 |
+| 1.7.0   | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 _handle_respec helper；各命令 already_exists 分支升级：有 trim/TTS 参数时自动调用 respec 实现“以最后一次为准” |
 """
 from __future__ import annotations
 
@@ -225,6 +227,83 @@ async def cmd_retry(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
 
 
+async def cmd_tts(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/tts <url> [开始时间] [结束时间] — 以 CosyVoice 配音模式加入队列。
+
+    # [Claude_Sonnet_4.6_Thinking_planning] TTS 按需激活入口：
+    # 默认流程不做 TTS 配音，只有通过此命令才会启用 CosyVoice 普通话配音。
+    """
+    if not _check_admin(update):
+        return
+    assert _api is not None
+    args = ctx.args  # type: ignore
+    if not args:
+        await update.message.reply_text(fmt.fmt_error("用法：/tts <youtube_url> [开始时间] [结束时间]"), parse_mode="Markdown")  # type: ignore
+        return
+
+    url_input = args[0].strip()
+    match = _YOUTUBE_RE.search(url_input)
+    if not match:
+        await update.message.reply_text(fmt.fmt_error("请输入有效的 YouTube 视频链接！"), parse_mode="Markdown")  # type: ignore
+        return
+    url = match.group(0)
+
+    trim_start, trim_end = None, None
+    if len(args) >= 2:
+        remaining_text = " ".join(args[1:])
+        trim_start, trim_end = parse_trim_params(remaining_text)
+
+    await update.message.reply_text(
+        f"🎙 *正在验证视频并启用 TTS 配音模式...*\n`{url}`",
+        parse_mode="Markdown"
+    )  # type: ignore
+
+    result = await _api.add_video(
+        url,
+        trim_start=trim_start,
+        trim_end=trim_end,
+        disable_slicing=True,
+        tts_provider="cosyvoice"  # [Claude_Sonnet_4.6_Thinking_planning] 明确指定 CosyVoice
+    )
+
+    if result is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+        return
+
+    if result.get("success"):
+        t_start = result.get("trim_start")
+        t_end = result.get("trim_end")
+        await update.message.reply_text(  # type: ignore
+            f"✅ *已加入队列（TTS 配音模式）！*\n"
+            f"📌 标题：`{result['title']}`\n"
+            f"🆔 ID：`{result['video_id']}`\n"
+            f"🎙 配音：CosyVoice 普通话\n"
+            f"⏱ 裁剪：`{t_start or '0'} - {t_end or 'End'}`",
+            parse_mode="Markdown"
+        )
+    elif result.get("already_exists"):
+        video_id = result.get("video_id")
+        # [Claude_Sonnet_4.6_Thinking_planning] /tts: 始终 respec（启用 TTS 本身是规格变更）
+        if video_id:
+            await _handle_respec(
+                update, _api, video_id,
+                trim_start=trim_start,
+                trim_end=trim_end,
+                disable_slicing=True,
+                tts_provider="cosyvoice",
+            )
+        else:
+            await update.message.reply_text(  # type: ignore
+                fmt.fmt_video_exists(
+                    title=result.get("error", ""),
+                    status=result.get("current_status", "UNKNOWN"),
+                ),
+                parse_mode="Markdown",
+            )
+    else:
+        await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
+
+
 async def cmd_run(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _check_admin(update):
         return
@@ -299,11 +378,18 @@ async def cmd_whole(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode="Markdown"
         )
     elif result.get("already_exists"):
-        raw_error = result.get("error", "")
-        await update.message.reply_text(  # type: ignore
-            fmt.fmt_video_exists(title=raw_error, status=result.get("current_status", "UNKNOWN")),
-            parse_mode="Markdown"
-        )
+        video_id = result.get("video_id")
+        # [Claude_Sonnet_4.6_Thinking_planning] /whole: 有 trim 参数时 respec（保持整片模式）
+        if (trim_start or trim_end) and video_id:
+            await _handle_respec(update, _api, video_id, trim_start, trim_end, disable_slicing=True)
+        else:
+            await update.message.reply_text(  # type: ignore
+                fmt.fmt_video_exists(
+                    title=result.get("error", ""),
+                    status=result.get("current_status", "UNKNOWN"),
+                ),
+                parse_mode="Markdown",
+            )
     else:
         await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
 
@@ -349,11 +435,18 @@ async def cmd_slice(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode="Markdown"
         )
     elif result.get("already_exists"):
-        raw_error = result.get("error", "")
-        await update.message.reply_text(  # type: ignore
-            fmt.fmt_video_exists(title=raw_error, status=result.get("current_status", "UNKNOWN")),
-            parse_mode="Markdown"
-        )
+        video_id = result.get("video_id")
+        # [Claude_Sonnet_4.6_Thinking_planning] /slice: 有 trim 参数时 respec（保持切片模式）
+        if (trim_start or trim_end) and video_id:
+            await _handle_respec(update, _api, video_id, trim_start, trim_end, disable_slicing=False)
+        else:
+            await update.message.reply_text(  # type: ignore
+                fmt.fmt_video_exists(
+                    title=result.get("error", ""),
+                    status=result.get("current_status", "UNKNOWN"),
+                ),
+                parse_mode="Markdown",
+            )
     else:
         await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
 
@@ -394,6 +487,51 @@ def parse_trim_params(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+async def _handle_respec(
+    update: Update,
+    api: PipelineAPIClient,
+    video_id: str,
+    trim_start: str | None,
+    trim_end: str | None,
+    disable_slicing: bool = True,
+    tts_provider: str | None = None,
+) -> None:
+    """[Claude_Sonnet_4.6_Thinking_planning] 统一处理 respec 响应并回复用户。
+
+    小工具函数，封装调用 respec API、解析结果、回复用户的全流程。
+    由 handle_youtube_url / cmd_whole / cmd_slice / cmd_tts 共用。
+    """
+    respec = await api.respec_video(
+        video_id,
+        trim_start=trim_start,
+        trim_end=trim_end,
+        disable_slicing=disable_slicing,
+        tts_provider=tts_provider,
+    )
+    if respec is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+        return
+    if respec.get("success"):
+        t_start   = respec.get("trim_start")
+        t_end     = respec.get("trim_end")
+        stop_note = "⚠️ _原进程已中止_\n" if respec.get("was_stopped") else ""
+        tts_note  = f"🎙 配音：`{tts_provider}`\n" if tts_provider else ""
+        await update.message.reply_text(  # type: ignore
+            f"🔄 *规格已更新，重新触发！*\n"
+            f"{stop_note}"
+            f"📌 标题：`{respec.get('title', '')}`\n"
+            f"⏱ 裁剪：`{t_start or '0'}` 至 `{t_end or 'End'}`\n"
+            f"{tts_note}",
+            parse_mode="Markdown",
+        )
+    else:
+        err = respec.get("error", "未知错误")
+        await update.message.reply_text(  # type: ignore
+            fmt.fmt_error(f"规格更新失败：{err}"),
+            parse_mode="Markdown",
+        )
+
+
 async def handle_youtube_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """监听所有消息，检测 YouTube URL，自动提交加急队列。"""
     if not _check_admin(update):
@@ -431,18 +569,19 @@ async def handle_youtube_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
             parse_mode="Markdown"
         )
     elif result.get("already_exists"):
-        # [Claude_Sonnet_4.6_Thinking_planning] P0修复：error 字段是错误描述，不是标题
-        # 用 current_status 展示状态，标题从 error 字段中提取或降级显示
-        raw_error = result.get("error", "")
-        # API 返回格式："视频已在队列中（当前状态：XXX）：[Title]"
-        # 安全降级：直接展示 error 原文作为标题上下文
-        await update.message.reply_text(  # type: ignore
-            fmt.fmt_video_exists(
-                title=raw_error,
-                status=result.get("current_status", "UNKNOWN")
-            ),
-            parse_mode="Markdown"
-        )
+        video_id       = result.get("video_id")
+        current_status = result.get("current_status", "UNKNOWN")
+        # [Claude_Sonnet_4.6_Thinking_planning] 有裁剪参数 + 状态可覆盖 → 自动 respec
+        if (trim_start or trim_end) and video_id:
+            await _handle_respec(update, _api, video_id, trim_start, trim_end, disable_slicing=True)
+        else:
+            await update.message.reply_text(  # type: ignore
+                fmt.fmt_video_exists(
+                    title=result.get("error", ""),
+                    status=current_status,
+                ),
+                parse_mode="Markdown",
+            )
     else:
         await update.message.reply_text(  # type: ignore
             fmt.fmt_error(result.get("error", "未知错误")),
@@ -529,6 +668,7 @@ def main() -> None:
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("whole", cmd_whole))
     app.add_handler(CommandHandler("slice", cmd_slice))
+    app.add_handler(CommandHandler("tts", cmd_tts))  # [Claude_Sonnet_4.6_Thinking_planning] 按需 TTS 配音命令
 
     # 监听 YouTube URL 并由程序接管自动提交（不消耗 API 限额）
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(_YOUTUBE_RE), handle_youtube_url))

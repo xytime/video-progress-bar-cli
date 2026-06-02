@@ -11,6 +11,8 @@
 | 1.1.1 | 2026-05-25 | Gemini_3.5_Flash_High_planning | 增加 add_video API 调用的 timeout 至 45s，防止 yt-dlp 查询超时导致控制中心不可用假警报 |
 | 1.2.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning | 新增 get_slices, retry_slice, delete_slice API 调用封装 |
 | 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 为 add_video 新增 disable_slicing 参数支持 |
+| 1.4.0 | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 为 add_video 新增 tts_provider 参数支持，供 Telegram /tts 命令按需指定配音 |
+| 1.5.0 | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 respec_video() 封装，供 Bot 侧在 already_exists 时自动调用规格覆盖 |
 """
 from __future__ import annotations
 
@@ -43,7 +45,7 @@ class PipelineAPIClient:
 
     # ── 视频管理 ────────────────────────────────────────────────────────
 
-    async def add_video(self, url: str, trim_start: Optional[str] = None, trim_end: Optional[str] = None, disable_slicing: Optional[bool] = None) -> Optional[dict]:
+    async def add_video(self, url: str, trim_start: Optional[str] = None, trim_end: Optional[str] = None, disable_slicing: Optional[bool] = None, tts_provider: Optional[str] = None) -> Optional[dict]:  # [Claude_Sonnet_4.6_Thinking_planning]
         """POST /api/videos/add — 手动添加 YouTube 视频到队列。
 
         Returns:
@@ -58,6 +60,8 @@ class PipelineAPIClient:
                     payload["trim_end"] = trim_end
                 if disable_slicing is not None:
                     payload["disable_slicing"] = disable_slicing
+                if tts_provider is not None:
+                    payload["tts_provider"] = tts_provider  # [Claude_Sonnet_4.6_Thinking_planning]
                 # [Gemini_3.5_Flash_High_planning] yt-dlp 查询元数据可能比较耗时，此处放宽超时限制至 45 秒
                 resp = await c.post("/api/videos/add", json=payload, timeout=45.0)
                 resp.raise_for_status()
@@ -65,6 +69,7 @@ class PipelineAPIClient:
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] add_video failed (API down?): {e}")
             return None
+
 
     async def get_videos(self, tab: str = "waitlist", page: int = 1, size: int = 10) -> Optional[list]:
         """GET /api/videos — 获取视频列表。
@@ -110,6 +115,40 @@ class PipelineAPIClient:
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] delete_video failed (API down?): {e}")
+            return None
+
+    async def respec_video(
+        self,
+        youtube_id: str,
+        trim_start: Optional[str] = None,
+        trim_end: Optional[str] = None,
+        disable_slicing: Optional[bool] = None,
+        tts_provider: Optional[str] = None,
+    ) -> Optional[dict]:
+        """POST /api/videos/{youtube_id}/respec — 覆盖规格并重新触发处理。
+
+        [Claude_Sonnet_4.6_Thinking_planning] 供 Bot 侧在 already_exists 且有裁剪参数/TTS要求时自动调用。
+        """
+        try:
+            async with self._client() as c:
+                payload: dict = {}
+                if trim_start is not None:
+                    payload["trim_start"] = trim_start
+                if trim_end is not None:
+                    payload["trim_end"] = trim_end
+                if disable_slicing is not None:
+                    payload["disable_slicing"] = disable_slicing
+                if tts_provider is not None:
+                    payload["tts_provider"] = tts_provider
+                resp = await c.post(
+                    f"/api/videos/{youtube_id}/respec",
+                    json=payload,
+                    timeout=15.0,  # kill 处理最长约 2s+超时，15s 包含内容
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] respec_video failed: {e}")
             return None
 
     async def retry_video(self, youtube_id: str) -> Optional[dict]:

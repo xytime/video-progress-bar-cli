@@ -15,6 +15,7 @@
 | 1.9.0   | 2026-05-27 | Claude_Sonnet_4.6_Thinking_planning     | 优雅截断: 引入 graceful_truncate_title，替换全部硬截断，消除半句标题问题 |
 | 1.9.1   | 2026-05-27 | Gemini_3.5_Flash_planning               | 算法调优: graceful_truncate_title 预处理过滤括号，并将排序策略由尾部优先改为首部语义优先，防截断偏斜 |
 | 1.10.0  | 2026-05-27 | Gemini_3.1_Pro_High_planning            | P0体验修复: 引入斐波那契重试；新增正则提取主干降级方案；graceful_truncate_title 增加悬空词惩罚评分 |
+| 1.11.0  | 2026-06-02 | Gemini_2.5_Pro_planning                 | 封面内容角标: 新增 content_label 字段，LLM 自动按内容选择 重磅/突发/独家/最新 等运营标签，写入 {yid}_label.txt |
 """
 
 import re
@@ -219,7 +220,32 @@ class WeChatContentSchema(pydantic.BaseModel):  # [Claude_Sonnet_4.6_Thinking_pl
         description="视频分类，必须从10个选项中选1个：科技、财经、教育、生活、娱乐、游戏、体育、时事、资讯、健康"
     )
     content_hints: list[str] = pydantic.Field(
-        description="2-5个英文语义token，从以下备选词选取: policy market capital robot ai crypto mindset health geopolitics space energy quantum"
+        description=(
+            "2-5个英文语义token，从以下备选词选取: "
+            "policy market capital stock robot ai llm coding software algorithm chip hardware "
+            "crypto mindset health medical nutrition geopolitics war election military "
+            "space physics astronomy science news media report "
+            "music song concert film movie drama comedy entertainment gaming esports "
+            "sports fitness travel food lifestyle education course tutorial startup innovation"
+        )
+    )
+    # [Gemini_2.5_Pro_planning] v1.11.0 内容角标标签
+    content_label: str = pydantic.Field(
+        description=(
+            "封面角标运营标签，从以下选扨1个（若内容普通则返回空字符串）: "
+            "重磅、突发、独家、最新、深度、解析、揭秘、完整版、专访、警示、局势、首发"
+            "——符合以下任一条才贴标签："
+            "1.重磅/突发→重大政策/紧急事件/大厂崩塑; "
+            "2.独家/首发→第一手信息/专访内容; "
+            "3.最新→新产品发布/新发现/今日更新; "
+            "4.深度/解析→长篇分析/机制拆解; "
+            "5.揭秘→幕后/内幕/反转; "
+            "6.专访→对话/访谈; "
+            "7.完整版→全程/合集; "
+            "8.警示→风险警示/安全警示; "
+            "9.局势→地缘局势/大国博弈; "
+            "不符合以上任一条的正常视频请返回空字符串''"
+        )
     )
 
 
@@ -316,7 +342,7 @@ def graceful_truncate_title(title: str, max_len: int = 16, min_len: int = 6) -> 
         return safe
     truncated = safe[:max_len]
     truncated = re.sub(r'[的得地与和或而将于在以等着了]$', '', truncated)
-    truncated = re.sub(r'[：:，,|｜—\s]+$', '', truncated).strip()
+    truncated = re.sub(r'[：:，,|｜\s]+$', '', truncated).strip()
     return truncated
 
 
@@ -387,6 +413,7 @@ def _translate_fallback(title: str, description: str) -> dict:
             "copy":          copy_text,
             "category":      cat,
             "content_hints": [],
+            "content_label": "",
         }
     except Exception as e:
         logger.error(f"deep-translator fallback failed: {e}")
@@ -398,6 +425,7 @@ def _translate_fallback(title: str, description: str) -> dict:
             "copy":          f"{title}\n\n{config['tags']}\n🤖 {config['cta']}",
             "category":      cat,
             "content_hints": [],
+            "content_label": "",
         }
 
 
@@ -448,15 +476,13 @@ def generate_wechat_content(title: str, description: str,
         copy          : str  — 文案正文（100-200 字 + hashtag + CTA）
         category      : str  — WECHAT_CATEGORIES 之一
         content_hints : list — 2-5 个语义 token（英文）
+        content_label : str  — 运营标签
     """
     api_key = settings.gemini_api_key
     if not api_key:
         return _translate_fallback(title, description)
 
     try:
-        # [Claude_Sonnet_4.6_Thinking_planning] v1.8.0: 使用 google-genai
-        # google-antigravity 因 protobuf edition 不兼容无法导入；
-        # google-genai 是其底层依赖，已安装（v2.6.0），直接使用。
         from google import genai
         from google.genai import types as genai_types
 
@@ -469,7 +495,13 @@ def generate_wechat_content(title: str, description: str,
             f"- copy：100-200字 + 3-5个hashtag + 一句CTA，纯文本无markdown\n"
             f"- category：从以下选1个：{cats}\n"
             f"- content_hints：从备选词选2-5个: "
-            f"policy market capital robot ai crypto mindset health geopolitics space energy quantum\n"
+            f"policy market capital stock robot ai llm coding software algorithm chip hardware "
+            f"crypto mindset health medical nutrition geopolitics war election military "
+            f"space physics astronomy science news media report "
+            f"music song concert film movie drama entertainment gaming esports "
+            f"sports fitness travel food lifestyle education course tutorial startup innovation\n"
+            f"- content_label：封面角标（重磅/突发/独家/最新/深度/解析/揭秘/完整版/专访/警示/局势/首发）。"
+            f"内容普通则返回空字符串''\n"
             f"- 禁止：emoji / 广告废话 / 翻译腔 / 政治敏感词\n\n"
             f"YouTube 标题：{title}\n"
             f"YouTube 简介（节选）：\n{description[:800]}"
@@ -513,6 +545,7 @@ def generate_wechat_content(title: str, description: str,
         copy          = str(parsed.wechat_copy).strip()
         category      = str(parsed.category).strip()
         content_hints = parsed.content_hints if isinstance(parsed.content_hints, list) else []
+        content_label = str(parsed.content_label).strip()
 
         if len(short_title) < 6:
             logger.warning(f"short_title too short ({len(short_title)} chars), using graceful fallback")
@@ -527,13 +560,14 @@ def generate_wechat_content(title: str, description: str,
 
         short_title, hook_subtitle = _apply_post_processing(short_title, hook_subtitle)
 
-        logger.info(f"AI success: category={category!r}, title={short_title!r}")
+        logger.info(f"AI success: category={category!r}, title={short_title!r}, label={content_label!r}")
         return {
             "short_title":   short_title,
             "hook_subtitle": hook_subtitle,
             "copy":          copy,
             "category":      category,
             "content_hints": content_hints,
+            "content_label": content_label,
         }
 
     except Exception as e:
@@ -600,6 +634,10 @@ def main():
             json.dumps(content["content_hints"], ensure_ascii=False), encoding="utf-8"
         )
         logger.info(f"content_hints → {content['content_hints']!r}")
+    # [Gemini_2.5_Pro_planning] v1.11.0: 写出封面角标标签
+    if content.get("content_label"):
+        (out / f"{yid}_label.txt").write_text(content["content_label"], encoding="utf-8")
+        logger.info(f"content_label → {content['content_label']!r}")
 
     logger.info(f"short_title → {content['short_title']!r} (len={len(content['short_title'])})")
     logger.info(f"category    → {content['category']!r}")
