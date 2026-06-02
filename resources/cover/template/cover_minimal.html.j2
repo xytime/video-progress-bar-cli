@@ -61,7 +61,7 @@
         /* 徽章 */
         .badge-capsule {
             position: absolute;
-            top: 12%;
+            top: 280px; /* [Gemini_3.5_Flash_planning] 下移以避开 240px 裁剪边界 */
             left: 50%;
             transform: translateX(-50%);
             z-index: 10;
@@ -139,21 +139,21 @@
         .pos-top-right {
             width: 90px;
             height: 90px;
-            top: 8%;
+            top: 280px; /* [Gemini_3.5_Flash_planning] 下移以避开 240px 裁剪边界 */
             right: 8%;
         }
 
         .pos-bottom-left {
             width: 90px;
             height: 90px;
-            bottom: 8%;
+            bottom: 280px; /* [Gemini_3.5_Flash_planning] 上移以避开底部 240px 裁剪边界 */
             left: 8%;
         }
 
         /* 底部水印 */
         .watermark {
             position: absolute;
-            bottom: 8%;
+            bottom: 280px; /* [Gemini_3.5_Flash_planning] 上移以避开底部 240px 裁剪边界 */
             left: 50%;
             transform: translateX(-50%);
             z-index: 10;
@@ -220,7 +220,8 @@
     {% else %}
       {% set _rl = '#9ca3af' %}{% set _rc = '#374151' %}{% set _rd = '#111827' %}{% set _rt = '#ffffff' %}
     {% endif %}
-    <div style="position:absolute; top:0; right:0; width:400px; height:400px; z-index:30; overflow:hidden; pointer-events:none;">
+    <!-- [Gemini_3.5_Flash_planning] 右上角丝带定位从 top:0 下移到 top:240px，使其在 3:4 裁剪比例下完全可见 -->
+    <div style="position:absolute; top:240px; right:0; width:400px; height:400px; z-index:30; overflow:hidden; pointer-events:none;">
       <svg width="400" height="400" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
         <defs>
           <!-- 跨丝带宽度方向的渐变：高光→主色→阴影，模拟织物立体感 -->

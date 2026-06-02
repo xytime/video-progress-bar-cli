@@ -14,6 +14,7 @@
 | 1.8.0   | 2026-05-27 | Antigravity_planning                | 移除彻底失效的分类选择 UI 操作逻辑（微信官方升级已移除），由自然语言 Hashtag 替代 |
 | 1.9.0   | 2026-06-02 | Claude_Sonnet_4.6_Thinking_planning | _select_collection 全面重写：5轮DOM探针实证，正确选择器 .post-album-display-wrap/.option-item/.create a |
 | 2.0.0   | 2026-06-02 | Claude_Sonnet_4.6_Thinking_planning | bugfix: Modal检测改用wait_for_selector(state=visible)；所有return False前Escape关闭遮罩；publish前清理残留dialog |
+| 2.1.0   | 2026-06-02 | Gemini_3.5_Flash_planning           | 修复合集列表异步加载延迟；优化创建新合集按钮滚动及 JS 点击兜底 |
 """
 
 import os
@@ -100,21 +101,33 @@ def _select_collection(page, collection_name: str) -> bool:
     page.wait_for_timeout(300)  # 等动画稳定
 
     # ── Step 3: 在 .option-item 中查找目标合集 ─────────────────────────────
-    # 使用 has= 参数：在 .post-album-wrap 下，找 .option-item 且包含 .name 精确文字
-    target_item = page.locator(
-        ".post-album-wrap .option-item",
-        has=page.locator(f".name:text-is('{collection_name}')")
-    ).first
+    # [Gemini_3.5_Flash_planning] 循环等待最多 3 秒，防止因为微信异步拉取列表导致误判“合集不存在”
+    target_item = None
+    for attempt in range(10):
+        # 使用 has= 参数：在 .post-album-wrap 下，找 .option-item 且包含 .name 精确文字
+        temp_item = page.locator(
+            ".post-album-wrap .option-item",
+            has=page.locator(f".name:text-is('{collection_name}')")
+        ).first
 
-    if target_item.count() == 0:
+        if temp_item.count() > 0:
+            target_item = temp_item
+            break
+
         # text-is 严格匹配失败，退化为 has-text（包含匹配）
-        target_item = page.locator(
+        temp_item = page.locator(
             ".post-album-wrap .option-item",
             has=page.locator(f".name:has-text('{collection_name}')")
         ).first
 
+        if temp_item.count() > 0:
+            target_item = temp_item
+            break
+
+        page.wait_for_timeout(300)
+
     # ── Step 4a: 已存在 → 选中（含去重检测）──────────────────────────────
-    if target_item.count() > 0:
+    if target_item and target_item.count() > 0:
         item_class = target_item.get_attribute("class") or ""
         if "active" in item_class:
             # 已经选中，去重直接返回
@@ -155,11 +168,18 @@ def _select_collection(page, collection_name: str) -> bool:
         page.keyboard.press("Escape")
         return False
 
+    # [Gemini_3.5_Flash_planning] 优化创建按钮的滚动与 JS 点击兜底
     try:
+        create_btn.scroll_into_view_if_needed(timeout=2000)
         create_btn.click(timeout=2000)
     except Exception as e:
-        logger.error(f"Failed to click '创建新合集': {e}")
-        return False
+        logger.warning(f"Failed to click '创建新合集' via standard click: {e}, trying JS fallback...")
+        try:
+            create_btn.evaluate("node => node.click()")
+        except Exception as e2:
+            logger.error(f"JS click on '创建新合集' also failed: {e2}")
+            page.keyboard.press("Escape")
+            return False
 
     page.wait_for_timeout(500)
 
