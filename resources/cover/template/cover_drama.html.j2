@@ -216,50 +216,44 @@
       {% set _rl = '#9ca3af' %}{% set _rc = '#374151' %}{% set _rd = '#111827' %}{% set _rt = '#ffffff' %}
     {% endif %}
     <!-- [Gemini_3.5_Flash_planning] 右上角丝带定位（6:7 封面下直接贴在 top:0 位置，不需要下移） -->
-    <div style="position:absolute; top:0; right:0; width:400px; height:400px; z-index:30; overflow:hidden; pointer-events:none;">
-      <svg width="400" height="400" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <!-- 跨丝带宽度方向的渐变：高光→主色→阴影，模拟织物立体感 -->
-          <!-- 渐变方向：从右上角(upper edge)到左下角(lower edge)，垂直于丝带长轴 -->
-          <linearGradient id="lrg" x1="270" y1="0" x2="130" y2="0" gradientUnits="userSpaceOnUse">
-            <stop offset="0%" stop-color="{{ _rl }}"/>
-            <stop offset="45%" stop-color="{{ _rc }}"/>
-            <stop offset="100%" stop-color="{{ _rd }}"/>
-          </linearGradient>
-          <!-- 阴影滤镜，制造悬浮感 -->
-          <filter id="lrs" x="-5%" y="-5%" width="110%" height="110%">
-            <feDropShadow dx="-3" dy="6" stdDeviation="10" flood-color="rgba(0,0,0,0.65)"/>
-          </filter>
-        </defs>
-        <!--
-          几何设计（画布400×400，丝带在右上角）：
-          丝带方向：45° 对角线，从右边向左下斜穿
-          上边缘：(130,0) → (400,270)，斜率方向向量(270,270)=45°
-          下边缘：(260,0) → (400,140)，同向，间距130px
-          垂直宽度（绳带宽）：130 / √2 ≈ 92px，在1080px封面上视觉清晰
-          两端自然隐入画面边缘，产生「穿过」效果
-          丝带中心点：约 (295, 70)，文字对齐于此
-        -->
-        <polygon
-          points="130,0 260,0 400,140 400,270"
-          fill="url(#lrg)"
-          filter="url(#lrs)"/>
-        <!-- 织物高光边线（上缘） -->
-        <line x1="130" y1="0" x2="400" y2="270" stroke="rgba(255,255,255,0.22)" stroke-width="2.5"/>
-        <!-- 织物阴影边线（下缘） -->
-        <line x1="260" y1="0" x2="400" y2="140" stroke="rgba(0,0,0,0.25)" stroke-width="2"/>
-        <!-- 文字：沿丝带长轴方向(45°)，居于丝带中心 -->
-        <text
-          transform="translate(295, 103) rotate(45)"
-          text-anchor="middle"
-          dominant-baseline="middle"
-          font-family="-apple-system, BlinkMacSystemFont, PingFang SC, STHeiti, Microsoft YaHei, sans-serif"
-          font-size="52"
-          font-weight="900"
-          fill="{{ _rt }}"
-          letter-spacing="5"
-          style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));">{{ content_label }}</text>
-      </svg>
+        {% set _rgb = "110, 68, 255" %}
+    {% if content_label in ["重磅", "突发", "警示"] %}{% set _rgb = "239, 68, 68" %}
+    {% elif content_label in ["独家", "首发", "专访"] %}{% set _rgb = "217, 119, 6" %}
+    {% elif content_label == "最新" %}{% set _rgb = "8, 145, 178" %}
+    {% elif content_label in ["深度", "解析", "完整版"] %}{% set _rgb = "124, 58, 237" %}
+    {% elif content_label == "揭秘" %}{% set _rgb = "234, 88, 12" %}
+    {% elif content_label == "局势" %}{% set _rgb = "29, 78, 216" %}
+    {% else %}{% set _rgb = "156, 163, 175" %}{% endif %}
+    
+    <div style="position:absolute; top:90px; right:100px; z-index:30; pointer-events:none;
+                display:flex; flex-direction:column; align-items:flex-end;">
+      <!-- Horizontal indicator line with label -->
+      <div style="display:flex; align-items:center; margin-bottom: 8px;">
+        <!-- Small tech dot -->
+        <span style="width: 8px; height: 8px; background-color: {{ _rl }}; margin-right: 10px; border-radius: 50%; box-shadow: 0 0 8px {{ _rl }};"></span>
+        <!-- Small sub text -->
+        <span style="font-family: monospace; font-size: 16px; color: {{ _rl }}; letter-spacing: 2px; font-weight: bold; text-transform: uppercase;">
+          SYS_ALERT // {{ content_label }}
+        </span>
+      </div>
+      <!-- Main label box -->
+      <div style="background: linear-gradient(135deg, rgba({{ _rgb }}, 0.15) 0%, rgba({{ _rgb }}, 0.03) 100%);
+                  border: 1px solid rgba({{ _rgb }}, 0.3);
+                  border-right: 6px solid {{ _rl }};
+                  border-radius: 4px;
+                  padding: 12px 24px;
+                  height: 48px;
+                  box-shadow: -5px 5px 25px rgba(0,0,0,0.5);
+                  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+                  display: flex; align-items: center; justify-content: center;">
+        <span style="font-family: -apple-system, BlinkMacSystemFont, PingFang SC, sans-serif;
+                     font-size: 36px; font-weight: 900; color: #ffffff; letter-spacing: 6px; line-height: 1;
+                     text-shadow: 0 0 10px rgba({{ _rgb }}, 0.8);">
+          {{ content_label }}
+        </span>
+      </div>
+      <!-- Corner bracket line accents -->
+      <div style="width: 180px; height: 2px; background: linear-gradient(to left, transparent, {{ _rl }}); margin-top: 6px; opacity: 0.8;"></div>
     </div>
     {% endif %}
 
