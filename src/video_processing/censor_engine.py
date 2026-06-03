@@ -9,6 +9,7 @@
 | 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建：双语规则引擎、归一化预处理、豁免列表、P0/P1/P2 动作分发           |
 | 1.1.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | 新增「频道内容策略层」：_CHANNEL_POLICY + check_channel_policy()，独立于违法拦截规则 |
 | 1.2.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | [Code Review Fix] 移除 CP 层 exemptions（文本层豁免会让违禁词被商业词庚护）；移除 CP 层重复的 xi jinping |
+| 1.3.0   | 2026-06-04 | Claude_Sonnet_4.6_Thinking_fast        | _CHANNEL_POLICY 新增美国国家领导人名单（中英双通道），与中国政治人名对等处理 |
 """
 
 import re
@@ -128,6 +129,31 @@ _CHANNEL_POLICY: dict = {
         "习近平", "李克强", "王毅",
         "新疆问题", "西藏问题",
         "一带一路政治",
+        # [Claude_Sonnet_4.6_Thinking_fast] v1.3.0 — 美国国家领导人（与中国政治人名对等处理）
+        # 现任政府核心（第47届，2025─）
+        "特朗普", "川普",      # Donald Trump，总统
+        "万斯",               # JD Vance，副总统
+        "卢比奥",             # Marco Rubio，国务卿
+        "贝森特",             # Scott Bessent，财政部长
+        "赫格塞斯",           # Pete Hegseth，国防部长
+        "邦迪",               # Pam Bondi，司法部长
+        # 前任政府（第46届，2021—2025）
+        "拜登",               # Joe Biden，前总统
+        "哈里斯",             # Kamala Harris，前副总统
+        "布林肯",             # Antony Blinken，前国务卿
+        "耶伦",               # Janet Yellen，前财政部长
+        "奥斯汀",             # Lloyd Austin，前国防部长
+        # 国会领导层
+        "舒默",               # Chuck Schumer，参议院民主党领袖
+        "麦卡锡",             # Kevin McCarthy，前众议院议长
+        "约翰逊",             # Mike Johnson，现任众议院议长
+        # 其他高曝光度政治人物（精确限定政治语境，避免误杀 SpaceX/Tesla/AI 视频）
+        "马斯克政府",            # Elon Musk + 政府语境
+        "马斯克DOGE", "马斯克doge",
+        # 聚合词（泛政治化上下文）
+        "美国总统",
+        "美国国会", "美参议院", "美众议院",
+        "白宫政策", "美国政府政策",
     ],
     "en": [
         # [Gemini_2.5_Flash_planning] Code Review Fix v1.2.0:
@@ -140,6 +166,32 @@ _CHANNEL_POLICY: dict = {
         "xinjiang issue", "tibet issue",
         "belt and road politics",
         "beijing policy", "chinese government policy",
+        # [Claude_Sonnet_4.6_Thinking_fast] v1.3.0 — 美国国家领导人（英文通道，与中文通道对等）
+        # 现任政府核心（第47届）
+        "donald trump", "trump administration",
+        "jd vance",
+        "marco rubio",
+        "scott bessent",
+        "pete hegseth",
+        "pam bondi",
+        # 前任政府（第46届）
+        "joe biden", "biden administration",
+        "kamala harris",
+        "antony blinken",
+        "janet yellen",
+        "lloyd austin",
+        # 国会领导层
+        "chuck schumer",
+        "kevin mccarthy",
+        "mike johnson",
+        # 其他高曝光度政治人物（精确限定政治语境，避免误杀 SpaceX/Tesla/AI 视频）
+        "elon musk doge",          # DOGE 政府效率部门语境
+        "elon musk government",    # 政府顾问语境
+        "elon musk white house",   # 白宫语境
+        "elon musk trump",         # 与 Trump 政治绑定
+        # 聚合词（泛政治化上下文）
+        "us president policy", "white house policy",
+        "us congress", "us senate politics", "us house of representatives",
     ],
     # [Gemini_2.5_Flash_planning] Code Review Fix v1.2.0:
     # CP 层不应设置 exemptions。
