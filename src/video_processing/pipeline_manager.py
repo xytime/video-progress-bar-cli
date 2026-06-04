@@ -28,7 +28,7 @@
 | 2.11.1  | 2026-06-01 | Gemini_3.5_Flash_planning           | [Censor Bugfix] 修复无 zh_title 时的中文视频内容安全与频道策略漏检，fallback 到 title |
 | 2.12.0  | 2026-06-03 | Claude_Sonnet_4.6_Thinking_planning | [精准下载] 有 trim 参数时加入 --download-sections + --force-keyframes-at-cuts，避免完整下载长视频；跳过 ffmpeg 二次裁剪 |
 | 3.0.0   | 2026-06-04 | Gemini_2.5_Pro_planning             | [丝带修复] copywriter checkpoint 增加 label_file 校验：copy+title 存在但 label 缺失时强制重跑，确保封面角标始终正确生成 |
-| 3.1.0   | 2026-06-04 | Gemini_3.5_Flash_planning           | [下载优化] yt-dlp 增加 --downloader curl 参数，解决在代理环境下载大文件时 Python ssl.c 的 UNEXPECTED_EOF_WHILE_READING 报错 |
+| 3.1.0   | 2026-06-04 | Gemini_3.5_Flash_planning           | [下载优化] yt-dlp 启用 curl 外部下载器并配置 10 次自动重试与断点续传，解决代理环境下大视频/音频下载中断报错 |
 """
 
 
@@ -543,6 +543,7 @@ class PipelineManager:
                             "--write-info-json",  # 新增：写 info.json 便于 chapters 提取
                             "--remote-components", "ejs:github",
                             "--downloader", "curl",
+                            "--downloader-args", "curl:--retry 10 --retry-delay 3 --retry-all-errors",
                             url, "-o", str(self._OUT_DIR / f"{yid}.%(ext)s"),
                         ]
 

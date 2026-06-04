@@ -11,7 +11,7 @@ based on incoming Telegram messages and commands.
 | 1.1.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-latest 以免受限于 2.5 预览版 20 RPD 的严格限制 |
 | 1.2.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-lite-latest，并加入 429 频率限额指数避让重试机制 |
 | 1.3.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 在 5 个核心工具中加入 fcntl 跨进程排他锁，强制实现串行执行 |
-| 1.3.1   | 2026-06-04 | Gemini_3.5_Flash_planning      | [下载优化] yt-dlp 增加 --downloader curl 参数，解决在代理环境下载大文件时 Python ssl.c 的 UNEXPECTED_EOF_WHILE_READING 报错 |
+| 1.3.1   | 2026-06-04 | Gemini_3.5_Flash_planning      | [下载优化] yt-dlp 启用 curl 外部下载器并配置 10 次自动重试与断点续传，解决代理环境下大视频/音频下载中断报错 |
 """
 import os
 import sys
@@ -230,6 +230,7 @@ class PipelineAgent:
                 "--write-description",
                 "--remote-components", "ejs:github",
                 "--downloader", "curl",
+                "--downloader-args", "curl:--retry 10 --retry-delay 3 --retry-all-errors",
                 url, "-o", str(self.output_dir / f"{youtube_id}.%(ext)s"),
             ]
             _PROXY_KEYS = {'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'}
