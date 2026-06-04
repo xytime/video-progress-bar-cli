@@ -27,6 +27,7 @@
 | 2.11.0  | 2026-06-01 | Gemini_2.5_Flash_planning           | [Censor Hardening] 修复 zh_text 参数 Bug（中文通道现在真正检测中文）；集成频道策略层；三处调用点传入 zh_title |
 | 2.11.1  | 2026-06-01 | Gemini_3.5_Flash_planning           | [Censor Bugfix] 修复无 zh_title 时的中文视频内容安全与频道策略漏检，fallback 到 title |
 | 2.12.0  | 2026-06-03 | Claude_Sonnet_4.6_Thinking_planning | [精准下载] 有 trim 参数时加入 --download-sections + --force-keyframes-at-cuts，避免完整下载长视频；跳过 ffmpeg 二次裁剪 |
+| 3.0.0   | 2026-06-04 | Gemini_2.5_Pro_planning             | [丝带修复] copywriter checkpoint 增加 label_file 校验：copy+title 存在但 label 缺失时强制重跑，确保封面角标始终正确生成 |
 """
 
 
@@ -668,13 +669,19 @@ class PipelineManager:
                 copy_file = self._OUT_DIR / f"{prefix}_copy.txt"
                 title_file = self._OUT_DIR / f"{prefix}_title.txt"
                 category_file = self._OUT_DIR / f"{prefix}_category.txt"
+                # [Gemini_2.5_Pro_planning] v3.0.0: label 也是 checkpoint 校验条件。
+                # 旧视频（copywriter v1.11.0 前处理）有 copy+title 但无 label，
+                # 原 checkpoint 会跳过 copywriter → cover 生成时读不到 label → 封面无丝带。
+                # 修复：三者同时存在才算命中 checkpoint；任一缺失则强制重跑 copywriter。
+                label_file = self._OUT_DIR / f"{prefix}_label.txt"
 
-                if copy_file.exists() and title_file.exists():
-                    logger.info(f"[SKIP] Copywriting checkpoint: {copy_file.name}")
+                if copy_file.exists() and title_file.exists() and label_file.exists():
+                    logger.info(f"[SKIP] Copywriting checkpoint: {copy_file.name} (label ok)")
                     self.db.update_video_status(yid, "COPYWRITING", slice_index=slice_index)
                 else:
+                    _reason = "label missing, re-generating" if (copy_file.exists() and title_file.exists()) else "first run"
                     self.db.update_video_status(yid, "COPYWRITING", slice_index=slice_index)
-                    logger.info(f"Generating WeChat copy for {prefix}...")
+                    logger.info(f"Generating WeChat copy for {prefix}... ({_reason})")
                     copy_cmd = [
                         self._VENV_PYTHON,
                         str(self._PRJ_ROOT / "scripts" / "copywriter.py"),
@@ -822,8 +829,7 @@ class PipelineManager:
                             cover_payload["content_hints"] = json.loads(hints_file.read_text(encoding="utf-8"))
                         except Exception:
                             pass
-                    # [Gemini_2.5_Pro_planning] v3.0.0: 读取封面角标标签
-                    label_file = self._OUT_DIR / f"{prefix}_label.txt"
+                    # [Gemini_2.5_Pro_planning] v3.0.0: 读取封面角标标签（label_file 已在 2a 段定义）
                     if label_file.exists():
                         try:
                             cover_payload["content_label"] = label_file.read_text(encoding="utf-8").strip()
