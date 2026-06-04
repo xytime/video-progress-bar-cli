@@ -10,6 +10,7 @@
 | 1.1.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | 新增「频道内容策略层」：_CHANNEL_POLICY + check_channel_policy()，独立于违法拦截规则 |
 | 1.2.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | [Code Review Fix] 移除 CP 层 exemptions（文本层豁免会让违禁词被商业词庚护）；移除 CP 层重复的 xi jinping |
 | 1.3.0   | 2026-06-04 | Claude_Sonnet_4.6_Thinking_fast        | _CHANNEL_POLICY 新增美国国家领导人名单（中英双通道），与中国政治人名对等处理 |
+| 1.4.0   | 2026-06-04 | Gemini_3.5_Flash_planning           | [风控优化] 英文通道引入 \b 单词边界正则匹配，解决 Patriot 包含 riot 导致误杀的问题 |
 """
 
 import re
@@ -322,7 +323,9 @@ def check_text(zh_text: str = "", en_text: str = "") -> CensorResult:
         if en_norm:
             for word in rule["en"]:
                 word_norm = _normalize(word)
-                if word_norm in en_norm:
+                # [Gemini_3.5_Flash_planning] v1.4.0: 英文单词必须独立匹配（使用 \b 单词边界检测），
+                # 避免 "Patriot" 中的 "riot" 等子串引发误杀。
+                if re.search(rf"\b{re.escape(word_norm)}\b", en_norm):
                     if _is_exempted(en_norm, exempts_en):
                         logger.debug(f"[Censor] en exemption hit for '{word}' in level {level}")
                         continue
@@ -384,7 +387,8 @@ def check_channel_policy(zh_text: str = "", en_text: str = "") -> CensorResult:
     if en_norm:
         for word in rule["en"]:
             word_norm = _normalize(word)
-            if word_norm in en_norm:
+            # [Gemini_3.5_Flash_planning] v1.4.0: 英文单词必须独立匹配（使用 \b 单词边界检测），避免子串误杀
+            if re.search(rf"\b{re.escape(word_norm)}\b", en_norm):
                 if _is_exempted(en_norm, exempts_en):
                     logger.debug(f"[ChannelPolicy] en exemption hit for '{word}'")
                     continue
