@@ -11,6 +11,7 @@ based on incoming Telegram messages and commands.
 | 1.1.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-latest 以免受限于 2.5 预览版 20 RPD 的严格限制 |
 | 1.2.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-lite-latest，并加入 429 频率限额指数避让重试机制 |
 | 1.3.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 在 5 个核心工具中加入 fcntl 跨进程排他锁，强制实现串行执行 |
+| 1.3.1   | 2026-06-04 | Gemini_3.5_Flash_planning      | [下载优化] yt-dlp 增加 --downloader curl 参数，解决在代理环境下载大文件时 Python ssl.c 的 UNEXPECTED_EOF_WHILE_READING 报错 |
 """
 import os
 import sys
@@ -220,13 +221,15 @@ class PipelineAgent:
             if existing:
                 return json.dumps({"ok": True, "message": f"Video already downloaded", "path": existing})
 
-            url = f"https://youtu.be/{youtube_id}"
+            # [Gemini_3.5_Flash_planning] v1.3.1: 针对代理环境下的 SSL UNEXPECTED_EOF_WHILE_READING 报错，
+            # 引入 --downloader curl 将大文件下载转交给 curl 处理，其代理兼容性和 TLS 握手比 python ssl 模块更稳定。
             dl_cmd = [
                 self.venv_ytdlp,
                 "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
                 "--cookies-from-browser", "safari",
                 "--write-description",
                 "--remote-components", "ejs:github",
+                "--downloader", "curl",
                 url, "-o", str(self.output_dir / f"{youtube_id}.%(ext)s"),
             ]
             _PROXY_KEYS = {'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'}
