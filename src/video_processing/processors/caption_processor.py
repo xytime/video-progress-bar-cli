@@ -10,6 +10,7 @@
 | 1.4.0 | 2026-05-28 | Gemini_3.5_Flash_planning | ASR 转录时保存 self.detected_lang 属性，标注 # [Gemini_3.5_Flash_planning] |
 | 1.5.0 | 2026-06-07 | Gemini_3.5_Flash_planning | Handle audio-less videos gracefully by skipping audio extraction/transcription and omitting -c:a copy during burn-in. |
 | 1.6.0 | 2026-06-07 | Gemini_3.5_Flash_planning | 修复 src.config.settings 导入路径错误，并升级 Gemini 批翻译提示词以同时提取重点难词和释义，标注 # [Gemini_3.5_Flash_planning] |
+| 1.7.0 | 2026-06-07 | Gemini_3.5_Flash_planning | 将 Gemini 模型从 gemini-2.5-flash 切换为 gemini-1.5-flash 以免遭遇 20 RPD 的 Free Tier 每日限流，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 from pathlib import Path
@@ -418,9 +419,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
             import google.generativeai as genai
             genai.configure(api_key=api_key)
             
-            # [Gemini_3.5_Flash_planning] 使用更稳定的 gemini-2.5-flash 模型，保证高速度与高质量
+            # [Gemini_3.5_Flash_planning] 使用 models/gemini-3.5-flash 模型，保证足够的 API 配额限制（1500 RPD）与高速度高品质
             model = genai.GenerativeModel(
-                model_name="gemini-2.5-flash",
+                model_name="models/gemini-3.5-flash",
                 generation_config={"response_mime_type": "application/json"}
             )
             
