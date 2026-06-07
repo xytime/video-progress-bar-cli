@@ -29,6 +29,8 @@
 | 2.12.0  | 2026-06-03 | Claude_Sonnet_4.6_Thinking_planning | [精准下载] 有 trim 参数时加入 --download-sections + --force-keyframes-at-cuts，避免完整下载长视频；跳过 ffmpeg 二次裁剪 |
 | 3.0.0   | 2026-06-04 | Gemini_2.5_Pro_planning             | [丝带修复] copywriter checkpoint 增加 label_file 校验：copy+title 存在但 label 缺失时强制重跑，确保封面角标始终正确生成 |
 | 3.1.0   | 2026-06-04 | Gemini_3.5_Flash_planning           | [下载优化] yt-dlp 启用 curl 外部下载器并配置 10 次自动重试与断点续传，解决代理环境下大视频/音频下载中断报错 |
+| 3.1.1   | 2026-06-07 | Gemini_3.5_Flash_planning           | [修复上传错误] 渲染命令中增加 --output 参数，确保输出视频名不带 yt-dlp 格式后缀，从而与上传器期望路径一致 |
+| 3.2.0   | 2026-06-07 | Gemini_3.5_Flash_planning           | [修复下载匹配] 优化 _find_downloaded_video：限定文件名主干(stem)必须与 yid 完全一致，排除包含 _vertical 等衍生文件或格式后缀的临时文件 |
 """
 
 
@@ -224,11 +226,21 @@ class PipelineManager:
         return deleted
 
     def _find_downloaded_video(self, yid: str) -> Optional[str]:
-        """glob 查找下载后的视频主文件（排除附属文件，要求 >50KB）"""
-        candidates = [
-            f for f in self._OUT_DIR.glob(f"{yid}.*")
-            if f.suffix not in _NON_VIDEO_SUFFIXES and f.stat().st_size > 50_000
-        ]
+        """查找下载后的视频主文件。
+        
+        要求文件名主干（stem）必须与 yid 完全一致（排除包含 _vertical 或是格式后缀的中间临时文件），且大于 50KB。
+        # [Gemini_3.5_Flash_planning]
+        """
+        candidates = []
+        for f in self._OUT_DIR.glob(f"{yid}.*"):
+            if f.suffix in _NON_VIDEO_SUFFIXES:
+                continue
+            if f.stat().st_size <= 50_000:
+                continue
+            # 主干名称必须完全等于 yid，防止匹配到形如 {yid}.f398.mp4 或 {yid}_vertical.mp4 的视频文件
+            if f.stem != yid:
+                continue
+            candidates.append(f)
         return str(candidates[0]) if candidates else None
 
     # ── 子进程辅助（v7.0: Popen + 进程组隔离）────────────────────────────────
@@ -732,6 +744,7 @@ class PipelineManager:
                         "nice", "-n", "19",
                         self._VENV_PYTHON, "-m", "cli.main", "auto-caption",
                         str(target_file), "--vertical", "--bilingual", "--title", render_title,
+                        "--output", str(vertical),  # [Gemini_3.5_Flash_planning] 指定输出路径，去除可能携带的格式后缀
                     ]
                     # [Claude_Sonnet_4.6_Thinking_planning] v2.10.0: 按需附加 TTS 参数
                     # 只有 tts_provider 非空时才开启，默认流程不开启 TTS

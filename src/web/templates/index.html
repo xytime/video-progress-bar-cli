@@ -1645,7 +1645,7 @@
         if (currentTab === 'waitlist') emptyMsg = '暂无待筛选记录，等待自动获取...';
         else if (currentTab === 'queue') emptyMsg = '当前没有排队中的任务';
         else if (currentTab === 'active') emptyMsg = '当前没有正在处理的任务';
-        tbody.innerHTML = `<tr><td colspan="4" class="empty-state"><div class="empty-icon">📭</div>${emptyMsg}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><div class="empty-icon">📭</div>${emptyMsg}</td></tr>`;
         return;
       }
 
@@ -1711,7 +1711,7 @@
         const errorToggle = hasError ? `<span class="toggle-error" onclick="toggleError('${v.youtube_id}')">▼ 错误</span>` : '';
         const errorRow = hasError ? `
           <tr id="err-${v.youtube_id}" class="error-row" style="display:none" data-err="${escapeAttr(errMsg)}">
-            <td colspan="4">
+            <td colspan="8">
               <div class="error-detail">
                 <button class="btn-copy-err" onclick="copyError('${v.youtube_id}')" id="copy-${v.youtube_id}" style="min-height: 32px; padding: 4px 10px; font-size: 11px;">📋 复制日志 (Copy Logs)</button>
                 ${escapeHtml(errMsg)}
@@ -2261,7 +2261,7 @@
           const errorToggle = s.error_msg ? `<span class="toggle-error" onclick="toggleError('${s.youtube_id}_s${s.slice_index}')">▼ 错误</span>` : '';
           const errorRowHtml = s.error_msg ? `
             <tr id="err-${s.youtube_id}_s${s.slice_index}" class="error-row child-row-${parentYid}" style="display:none" data-err="${escapeAttr(s.error_msg)}">
-              <td colspan="4">
+              <td colspan="8">
                 <div class="error-detail" style="margin-left: 20px;">
                   <button class="btn-copy-err" onclick="copyError('${s.youtube_id}_s${s.slice_index}')" id="copy-${s.youtube_id}_s${s.slice_index}" style="min-height: 32px; padding: 4px 10px; font-size: 11px;">📋 复制日志</button>
                   ${escapeHtml(s.error_msg)}
@@ -2280,6 +2280,8 @@
                 </div>
                 ${errorToggle}
               </td>
+              <td class="vt-cell" style="text-align:right;color:var(--text3);padding-right:16px;">—</td>
+              <td class="lr-cell" style="text-align:right;color:var(--text3);padding-right:16px;">—</td>
               <td class="status-cell" style="white-space:nowrap">${statusBadge(s.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
               <td class="score-cell">${scoreControls}</td>
               <td class="time-cell"><span class="video-time">${relativeTime(s.updated_at)}</span></td>
