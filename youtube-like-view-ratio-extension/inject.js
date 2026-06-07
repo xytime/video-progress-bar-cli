@@ -3,6 +3,7 @@
  * 
  * Version | Date       | Author               | Description
  * --------|------------|----------------------|----------------------------------------------------
+ * 1.2.2   | 2026-06-07 | Gemini_3.5_Flash_planning | 解决 YouTube 严格 Trusted HTML (Trusted Types) 策略下直接写入 innerHTML 被阻止的 bug，改用标准 DOM API 渲染
  * 1.2.1   | 2026-06-07 | Gemini_3.5_Flash_planning | 针对红蓝审计结果进行加固：解决 SPA 视频卡片复用渲染脏数据、引入 10 秒超时清理防范内存泄露，并支持原地更新
  * 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 深度修复 Shadow DOM 穿透和样式隔离，支持影子 DOM 内部渲染和动态 CSS 注入
  * 1.0.0   | 2026-06-07 | Gemini_3.5_Flash_fast| 初始创建 inject.js，作为 Main World 注入脚本运行，100% 穿透 Polymer 的 Shadow DOM
@@ -357,8 +358,15 @@
         }
       }
 
-      // 包含自带样式的分割圆点，省去 pseudo-element 的依赖，支持原地更新
-      textSpan.innerHTML = `<span style="margin-right: 8px; color: var(--yt-spec-text-secondary, #aaaaaa);">•</span>👍/👁️ ${ratioFormatted}`;
+      // # [Gemini_3.5_Flash_planning] 包含自带样式的分割圆点，省去 pseudo-element 的依赖，使用标准 DOM API 绕过 YouTube 的 Trusted HTML 限制
+      textSpan.textContent = '';
+      const dotSpan = document.createElement('span');
+      dotSpan.style.marginRight = '8px';
+      dotSpan.style.color = 'var(--yt-spec-text-secondary, #aaaaaa)';
+      dotSpan.textContent = '•';
+      const textNode = document.createTextNode(`👍/👁️ ${ratioFormatted}`);
+      textSpan.appendChild(dotSpan);
+      textSpan.appendChild(textNode);
     }
 
     console.log(`[Like-to-View] 渲染成功: ID=${card.dataset.ytVideoId}, 播放量=${views}, 比例=${ratioFormatted}`);
