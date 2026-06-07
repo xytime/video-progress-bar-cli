@@ -16,6 +16,7 @@
 | 1.8.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 双语字幕中英文顺序互换，英文设为金色（Gold），字号与中文接近一致（0.82倍），标注 # [Gemini_3.5_Flash_planning] |
 | 1.9.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 优化竖屏字幕样式，支持半透明黑色背景底框，增强复杂背景下的对比度与可读性，标注 # [Gemini_3.5_Flash_planning] |
 | 1.10.0  | 2026-06-07 | Gemini_3.5_Flash_planning | 修复英文单词中插入折行标签的bug，引入标签敏感的折行函数 tag_aware_wrap，标注 # [Gemini_3.5_Flash_planning] |
+| 1.11.0  | 2026-06-07 | Gemini_3.5_Flash_planning | 采用 Option 5（贴地固定脚栏）独立双样式双卡排版，将单词注释区与字幕区剥离，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -284,6 +285,20 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             fontname="Arial Unicode MS"
         )
         subs.styles["Default"] = style
+
+        # [Gemini_3.5_Flash_planning] Option 5: 底部贴地固定栏样式，将难词注释与普通字幕物理分离
+        vocab_style = pysubs2.SSAStyle(
+            fontsize=int(font_size * 0.58),
+            primarycolor=pysubs2.Color(0, 255, 255),  # 青色 (Cyan)
+            backcolor=bg_color, 
+            borderstyle=border_style, 
+            outline=int(outline * 0.8),  # 稍微收缩的内边距，使背景盒看起来更小巧精致
+            shadow=shadow,
+            alignment=2,  # 底部居中对齐 (Bottom Center)
+            marginv=80 if is_vertical_input else 40,
+            fontname="Arial Unicode MS"
+        )
+        subs.styles["VocabFooter"] = vocab_style
         
         zh_c = config['zh_color']
         # [Gemini_3.5_Flash_planning] 金色高亮与青色难词底栏颜色配置
@@ -312,26 +327,28 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                 # [Gemini_3.5_Flash_planning] 使用标签敏感的折行函数，避免折行标记破坏含有 override 标签的单词
                 en_text = tag_aware_wrap(en_text, wrap_width_en)
             
-            # [Gemini_3.5_Flash_planning] 3. 双语字幕互调与三行布局（英文/中文/难词释义栏）
+            # [Gemini_3.5_Flash_planning] 3. 双语字幕互调与贴地难词底栏物理分割 (Option 5)
             if zh_text and en_text:
                 if self.bilingual:
                     text = f"{en_text}\\N{{\\fs{int(font_size*0.82)} \\c{zh_c}}}{zh_text}"
-                    if vocab_items:
-                        vocab_bar = "   ".join([f"💡 {k}: {v}" for k, v in vocab_items.items()])
-                        text += f"\\N{{\\fs{int(font_size*0.58)} \\c{cyan_c}}}{vocab_bar}"
                 else:
                     text = f"{{\\c{zh_c}}}{zh_text}"
             elif zh_text:
                 text = f"{{\\c{zh_c}}}{zh_text}"
             else:
                 text = f"{en_text}"
-                if vocab_items:
-                    vocab_bar = "   ".join([f"💡 {k}: {v}" for k, v in vocab_items.items()])
-                    text += f"\\N{{\\fs{int(font_size*0.58)} \\c{cyan_c}}}{vocab_bar}"
 
-                
             evt = pysubs2.SSAEvent(start=start_ms, end=end_ms, text=text)
             subs.events.append(evt)
+
+            # [Gemini_3.5_Flash_planning] 难词注释作为独立事件输出，使用 VocabFooter 独立样式和底盒贴地显示
+            if vocab_items and self.bilingual:
+                vocab_bar = "   ".join([f"💡 {k}: {v}" for k, v in vocab_items.items()])
+                wrap_width_vocab = max(30, int(safe_width / (font_size * 0.58 * 0.45)))
+                vocab_bar_wrapped = textwrap.fill(vocab_bar, width=wrap_width_vocab).replace('\n', '\\N')
+                
+                evt_vocab = pysubs2.SSAEvent(start=start_ms, end=end_ms, style="VocabFooter", text=vocab_bar_wrapped)
+                subs.events.append(evt_vocab)
             
         ass_path = self.input_path.with_suffix('.ass')
         subs.save(str(ass_path))

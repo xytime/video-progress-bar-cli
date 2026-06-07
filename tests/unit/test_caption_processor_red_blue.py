@@ -7,8 +7,9 @@
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建 |
 | 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增竖屏视频布局与智能字幕坐标位置测试，标有 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增双语字幕互调与金色英文样式及字号占比测试，标注 # [Gemini_3.5_Flash_planning] |
-| 1.3.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增竖屏字幕底盒样式及内边距和透明度测试，标注 # [Gemini_3.5_Flash_planning] |
+| 1.3.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增竖屏字幕底盒样式及内边距 and 透明度测试，标注 # [Gemini_3.5_Flash_planning] |
 | 1.4.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增标签敏感折行函数测试，确保 highlighted 英文长词不被折断，标注 # [Gemini_3.5_Flash_planning] |
+| 1.5.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 更新独立双事件排版测试，适应 Option 5 贴地难词底框设计，标注 # [Gemini_3.5_Flash_planning] |
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -186,15 +187,20 @@ class TestCaptionProcessorRedBlueFixes:
         # Trigger generation
         processor._generate_ass_file(segments=test_segments)
 
-        # Assert event generated correctly
-        assert len(mock_events) == 1, "Expected 1 subtitle event to be generated"
-        evt = mock_events[0]
+        # Assert events generated correctly (bilingual subtitle and independent vocabulary footer)
+        assert len(mock_events) == 2, f"Expected 2 subtitle events (bilingual text + vocab footer), got {len(mock_events)}"
+        
+        evt_sub = mock_events[0]
+        evt_vocab = mock_events[1]
         
         # English is on top (White, with "world" highlighted in Gold)
         # Chinese is on bottom (White, 0.82x size = 68), trailing periods are stripped
-        # Cyan vocabulary bar is appended at bottom (0.58x size = 48)
-        expected_text = r"Hello {\c&H00D7FF}world{\c}\N{\fs68 \c&HFFFFFF}你好世界\N{\fs48 \c&HFFFF00}💡 world: 世界"
-        assert evt.text == expected_text, f"Expected subtitle text '{expected_text}', got '{evt.text}'"
+        expected_sub_text = r"Hello {\c&H00D7FF}world{\c}\N{\fs68 \c&HFFFFFF}你好世界"
+        assert evt_sub.text == expected_sub_text, f"Expected bilingual text '{expected_sub_text}', got '{evt_sub.text}'"
+        
+        # Independent vocabulary card at bottom, using style "VocabFooter"
+        assert evt_vocab.style == "VocabFooter", f"Expected style 'VocabFooter' for vocabulary footer event, got '{evt_vocab.style}'"
+        assert evt_vocab.text == "💡 world: 世界", f"Expected vocab text '💡 world: 世界', got '{evt_vocab.text}'"
 
     @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._validate_input')
     @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._get_video_resolution')
