@@ -7,6 +7,7 @@ created_at: 2026-05-21T14:31:00+08:00
 
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.0 | 2026-06-07 | Gemini_3.5_Flash_planning    | 记录 Gemini_3.5_Flash_fast 在 YouTube 插件中直接向 innerHTML 写入导致 Trusted Types 限制拦截报错的问题 |
 | 1.8.0 | 2026-06-07 | Gemini_3.5_Flash_planning    | 记录 Gemini_3.5_Flash_planning 在实现 yt-dlp curl 优化时产生 NameError 崩溃的问题 |
 | 1.7.0 | 2026-06-01 | Gemini_3.5_Flash_planning    | 记录 Gemini_2.5_Flash_planning 因过度严格分离中英文输入导致中文安全审查漏检绕过问题 |
 | 1.6.0 | 2026-05-27 | Gemini_3.5_Flash_planning    | 记录 Claude_Sonnet_4.6_Thinking_planning 正则漏配 live/ 及带参 URL 干扰裁剪问题 |
@@ -41,4 +42,9 @@ created_at: 2026-05-21T14:31:00+08:00
 对于【Gemini_2.5_Flash_planning】问题：
 在 v2.11.0 中重构 Censor 审查输入时，过度严格地区分了中英文通道（仅将 zh_title 传入 zh_text，而将原始 title 传入 en_text）。由于手动添加、测试用例或尚未翻译完成的视频记录其 zh_title 为空，这导致原始中文标题被当作英文文本传入并完全跳过了中文违禁词/策略规则过滤，造成了严重的内容安全绕过隐患（并在运行 pytest 时导致 3 个 Censorship 整合测试全部失败）。应在 zh_title 为空但原始 title 含有中文时自动 fallback 检查。
 **严重程度**：P1
+
+## 对于【Gemini_3.5_Flash_fast】问题：
+在 YouTube 像点赞/播放率指示条插件的实现中，直接向 `.innerHTML` 赋值拼装 HTML 字符串。由于 YouTube 网页启用了严格的 Trusted HTML (Trusted Types) 策略，任何未经受信任类型（Trusted Types）处理的原始 HTML 字符串写入均会被浏览器底层强行拦截并抛出 JavaScript Runtime Error。这导致在主页面上无法渲染指示条文本。应当完全使用标准的 DOM API（如 `document.createElement`, `.textContent`, `.appendChild`）来构建并挂载节点，以确保不受 Trusted Types 安全策略的影响。
+**严重程度**：P1
+
 
