@@ -3,6 +3,7 @@
  * 
  * Version | Date       | Author               | Description
  * --------|------------|----------------------|----------------------------------------------------
+ * 1.2.4   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 修复 injectStylesIntoShadow(document) 抛出 HierarchyRequestError 导致 renderUI 静默崩溃的根本 bug；加入 try/catch
  * 1.2.3   | 2026-06-07 | Gemini_3.5_Flash_planning | 兼容 YouTube 新版首页卡片布局 yt-lockup-view-model，支持 Light DOM 渲染与 text 渲染 fallback 链路
  * 1.2.2   | 2026-06-07 | Gemini_3.5_Flash_planning | 解决 YouTube 严格 Trusted HTML (Trusted Types) 策略下直接写入 innerHTML 被阻止的 bug，改用标准 DOM API 渲染
  * 1.2.1   | 2026-06-07 | Gemini_3.5_Flash_planning | 针对红蓝审计结果进行加固：解决 SPA 视频卡片复用渲染脏数据、引入 10 秒超时清理防范内存泄露，并支持原地更新
@@ -177,16 +178,30 @@
   }
 
   /**
-   * 动态向影子 DOM 内部注入进度条所需的 CSS 样式
-   * # [Gemini_3.5_Flash_planning]
+   * 动态向影子 DOM 内部（或主文档 head）注入进度条所需的 CSS 样式
+   * # [Claude_Sonnet_4.6_Thinking_planning] 修复：当 root 为 document 时必须注入到 document.head，
+   * 直接调用 document.appendChild() 会因已存在 <html> 根节点而抛出 HierarchyRequestError。
    */
-  function injectStylesIntoShadow(shadowRoot) {
-    if (!shadowRoot) return;
-    if (!shadowRoot.getElementById(STYLE_ID)) {
+  function injectStylesIntoShadow(root) {
+    if (!root) return;
+
+    if (root === document) {
+      // 主文档：注入到 <head>，避免直接 document.appendChild 抛错
+      if (!document.getElementById(STYLE_ID)) {
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.textContent = CSS_TEXT;
+        (document.head || document.documentElement).appendChild(style);
+      }
+      return;
+    }
+
+    // Shadow Root：直接 append
+    if (!root.getElementById(STYLE_ID)) {
       const style = document.createElement('style');
       style.id = STYLE_ID;
       style.textContent = CSS_TEXT;
-      shadowRoot.appendChild(style);
+      root.appendChild(style);
     }
   }
 
@@ -259,7 +274,12 @@
     const cards = pendingCards.get(videoId);
     if (cards) {
       cards.forEach(card => {
-        renderUI(card, rawRatio, smoothedRatio, likes, views);
+        // # [Claude_Sonnet_4.6_Thinking_planning] 加入 try/catch：防止 renderUI 内部异常静默吞没，导致无任何日志输出
+        try {
+          renderUI(card, rawRatio, smoothedRatio, likes, views);
+        } catch (err) {
+          console.error(`[Like-to-View] renderUI 异常: ID=${videoId}`, err);
+        }
       });
       pendingCards.delete(videoId);
     }
