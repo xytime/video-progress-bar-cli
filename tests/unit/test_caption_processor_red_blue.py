@@ -12,6 +12,7 @@
 | 1.5.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 更新独立双事件排版测试，适应 Option 5 贴地难词底框设计，标注 # [Gemini_3.5_Flash_planning] |
 | 1.6.0   | 2026-06-07 | Gemini_3.5_Flash_High_planning | 整合双语字幕一体化卡片及多色高亮和下划线测试，标注 # [Gemini_3.5_Flash_High_planning] |
 | 1.7.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 更新测试适配 GlossaryCard 灰色背景楷体独立卡片，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
+| 1.8.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 更新双语字幕测试断言，匹配 Georgia/Hiragino 样式与 HTML 模版配色，标注 # [Gemini_3.5_Flash_planning] |
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -195,19 +196,19 @@ class TestCaptionProcessorRedBlueFixes:
         evt_sub = mock_events[0]
         evt_glossary = mock_events[1]
 
-        # Subtitle event: English on top (Gold default, world highlighted Cyan+Underline), Chinese below (White, 0.82x size)
-        # font_size=84, 0.82*84=68 (rounded), trailing periods stripped
-        expected_sub_text = r"Hello {\u1\c&HFFFF00}world{\u0\c}\N{\fs68 \c&HFFFFFF}你好世界"
+        # [Gemini_3.5_Flash_planning] 更新双语字幕测试，以适配最新版的 Georgia/Hiragino 独立字体和暖黄/暖白配色
+        # 英文字号 84 * 0.71 = 59，中文字号 84 * 0.81 = 68，高亮色为 &HC7D36F&
+        expected_sub_text = r"{\fnGeorgia\fs59\c&H3FD2FF&}Hello {\u1\c&HC7D36F&}world{\u0\c}\N{\fnHiragino Sans GB\fs68\c&HE9EFF2&}你好世界"
         assert evt_sub.text == expected_sub_text, (
             f"Expected subtitle text '{expected_sub_text}', got '{evt_sub.text}'"
         )
 
-        # GlossaryCard event: separate event, GlossaryCard style, Kaiti SC, gray background
+        # GlossaryCard event: separate event, GlossaryCard style, Songti SC, gray background
         assert evt_glossary.style == "GlossaryCard", (
             f"Expected GlossaryCard style, got '{evt_glossary.style}'"
         )
-        # word is upright+colored (\i0\c{Cyan}), definition is italic+white (\i1\c&HFFFFFF&)
-        expected_glossary_text = r"{\i0\c&HFFFF00}world{\i1\c&HFFFFFF&}: 世界{\i0}"
+        # 英文单词使用 Georgia 字体和暖黄色 &H3FD2FF&，词义前带青绿色 [词汇] 标签，翻译使用宋体-简 (\fnSongti SC) 和灰白 &HBDC5C9&
+        expected_glossary_text = r"{\fnHiragino Sans GB\c&HC7D36F&}词汇  {\fnGeorgia\i0\c&H3FD2FF&}world {\fnSongti SC\i1\c&HBDC5C9&}· 世界{\i0}"
         assert evt_glossary.text == expected_glossary_text, (
             f"Expected glossary text '{expected_glossary_text}', got '{evt_glossary.text}'"
         )

@@ -22,6 +22,7 @@
 | 1.14.0  | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 将释义区分离为独立灰色背景 GlossaryCard 事件，紧随字幕卡片正下方；字体改为楷体 (Kaiti SC)，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 | 1.15.0  | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 字幕字体升级为 PingFang SC（Apple 官方 Pan-CJK 字体，行业最佳实践）；修复 GlossaryCard 灰色蒙版为可辨识度更高的中灰，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 | 1.16.0  | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 修复乱码：字幕字体改为 Hiragino Sans GB（冬青黑体简体中文，fc-list 可发现），注释卡片字体改为 Songti SC（宋体-简，表感辷线字体，同样 fc-list 可发现），标注 # [Claude_Sonnet_4.6_Thinking_planning] |
+| 1.17.0  | 2026-06-08 | Gemini_3.5_Flash_planning | 彻底解决英文溢出，美化英文字体为 Georgia 衬线体并缩小字号，修复释义灰色卡片不显示及黑边问题，高亮色统一为青绿并加下划线，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -44,14 +45,8 @@ def strip_trailing_punctuation(text: str) -> str:
         return text
     return re.sub(r'[\.,\?!\;:\"\'。，？！；：”、\s]+$', '', text)
 
-# [Gemini_3.5_Flash_High_planning] 颜色调色板，用于多色高亮和释义词汇匹配 (BGR ASS 格式)
-VOCAB_COLORS = [
-    "&HFFFF00",  # 青蓝色 (Cyan)
-    "&HFF80FF",  # 紫色/粉红 (Soft Magenta)
-    "&H80FF80",  # 嫩绿色 (Light Green)
-    "&H80C0FF",  # 珊瑚橙 (Light Orange)
-    "&H00FFFF",  # 明黄色 (Yellow)
-]
+# [Gemini_3.5_Flash_planning] 统一使用单一强调青绿色 (BGR 格式，对应 HTML 中的 --en-accent #6FD3C7)，且在样式上更显 premium
+VOCAB_COLORS = ["&HC7D36F&"]
 
 def apply_word_highlights(text: str, word_colors: Dict[str, str]) -> str:
     """# [Gemini_3.5_Flash_High_planning] 在英文句子中高亮重点难词，使用对应的颜色，并加上下划线"""
@@ -222,29 +217,21 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
 
         font_size = self.font_size
         
+        # [Gemini_3.5_Flash_planning] 英文实际渲染字号缩水至 0.71，中文设为 0.81 以获得最佳比例
+        en_size = int(font_size * 0.71)
+        zh_size = int(font_size * 0.81)
+        
         # Calculate dynamic wrap width
-        # User feedback: Width can be wider (currently looks like 80%).
-        # Increase safety factor to 0.96 (approx 1036px)
         safe_width = int(VerticalLayout.CANVAS_WIDTH * 0.96)
         
-        # Approximate char width factor
-        # Fonts vary, but usually 1 em = font_size.
-        # We'll allow a bit more density. 
-        # [Gemini_3.5_Flash_planning] English is primary (font_size), Chinese is secondary (font_size * 0.82)
-        wrap_width_zh = max(10, int(safe_width / (font_size * 0.82)))
-        wrap_width_en = max(20, int(safe_width / (font_size * 0.45)))
+        # [Gemini_3.5_Flash_planning] 计算折行限制：中文等宽，英文 Georgia 比例字体宽度因子设为 0.54 以防溢出
+        wrap_width_zh = max(10, int(safe_width / zh_size))
+        wrap_width_en = max(20, int(safe_width / (en_size * 0.54)))
         
-        # Get base config (single read - used for bg_color, border_style, outline, shadow, zh_color)
+        # Get base config
         config = CAPTION_STYLES.get(self.style, CAPTION_STYLES["default"])
         
-        
-        # User feedback: Subtitles shouldn't jump around (fixed top position) 
-        # and shouldn't overlap video.
-        # Solution: Use Top-Center Alignment (8) and fixed MarginV from Top.
-        # Video Top = 350. Video Height (16:9) ~ 607. Video Bottom ~ 957.
-        # Let's start subtitles at Y = 1000.
-        # [Gemini_3.5_Flash_planning] For vertical videos, move subtitles down to Y=1400 (bottom safety/blank zone)
-        # to avoid covering center content. For landscape videos, keep at Y=1000.
+        # Determine fixed MarginV to prevent overlapping on different video types
         try:
             video_w, video_h = self._get_video_resolution()
             is_vertical_input = video_w < video_h
@@ -257,9 +244,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         else:
             subtitle_top_y = 1000
         
-        # [Gemini_3.5_Flash_planning] Parse style config to support opaque background box (BorderStyle=3)
-        
-        # Parse background color and alpha (ASS format is BGR)
+        # Parse background color and alpha
         bg_hex = config.get("bg_color", "&H000000")
         bg_alpha = config.get("bg_alpha", 180)  # Default to semi-transparent black
         
@@ -278,43 +263,49 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         border_style = config.get("border_style", 3)
         outline = config.get("outline", 12)
         
-        # In BorderStyle=3 (Opaque box), outline acts as padding around the box.
-        # Ensure there is enough padding (at least 10px) for a premium, readable look.
         if border_style == 3:
             outline = max(outline, 10)
             
         shadow = config.get("shadow", 0)
 
+        # [Gemini_3.5_Flash_planning] Default 样式设定：
+        # PrimaryColor 使用 HTML 模板中的暖黄 (RGB 255, 210, 63)
+        # 将 outlinecolor 设为与 backcolor 一致，消除黑色边缘，达到平滑现代的卡片边缘质感
         style = pysubs2.SSAStyle(
             fontsize=font_size,
-            primarycolor=pysubs2.Color(255, 215, 0), # [Claude_Sonnet_4.6_Thinking_planning] 英文默认金色 (Gold RGB 255,215,0)
+            primarycolor=pysubs2.Color(255, 210, 63),
             backcolor=bg_color,
+            outlinecolor=bg_color,
             borderstyle=border_style,
             outline=outline,
             shadow=shadow,
             alignment=8,  # Top Center
             marginv=subtitle_top_y,
-            fontname="Hiragino Sans GB"  # [Claude_Sonnet_4.6_Thinking_planning] 冬青黑体简体中文：fc-list 可发现，苹果官方简体中文 Sans-Serif
+            fontname="Hiragino Sans GB"
         )
         subs.styles["Default"] = style
 
-        # [Claude_Sonnet_4.6_Thinking_planning] GlossaryCard: 独立灰色背景注释卡片，紧随字幕区正下方
-        # 位置 = 字幕起始 Y + 估算字幕高度（约 3.5 行字号 + 上下框 outline）+ 间距
+        # [Gemini_3.5_Flash_planning] GlossaryCard: 独立灰色背景注释卡片，紧随字幕区正下方
+        # 修复灰色卡片不显示的问题：将 alpha 设为 40 开启高可见度 (约 84% 不透明度)
+        # 同样将 outlinecolor 设为与 backcolor 一致，消除难看的黑色粗边框，呈现完美半透明蒙版质感
+        glossary_bg = pysubs2.Color(105, 105, 105, 40)
         glossary_marginv = subtitle_top_y + int(font_size * 3.5) + outline * 2 + 10
         glossary_style = pysubs2.SSAStyle(
-            fontsize=int(font_size * 0.62),
+            fontsize=int(font_size * 0.48),                       # 精致化释义字号 (0.48倍)
             primarycolor=pysubs2.Color(255, 255, 255),            # 白色默认（中文释义继承此色）
-            backcolor=pysubs2.Color(105, 105, 105, 240),          # [Claude_Sonnet_4.6_Thinking_planning] 中灰 RGB(105,105,105) 高不透明度(94%)，与字幕黑底卡形成明显对比
+            backcolor=glossary_bg,
+            outlinecolor=glossary_bg,
             borderstyle=3,                                         # 背景底盒 (Opaque box)
             outline=max(8, int(outline * 0.7)),                    # 稍小内边距
             shadow=0,
             alignment=8,                                           # 顶部居中，向下扩展
             marginv=glossary_marginv,
-            fontname="Songti SC"                                   # [Claude_Sonnet_4.6_Thinking_planning] 宋体-简：fc-list 可发现，衰线/无衰线对比与主字幕 Hiragino Sans 形成区分
+            fontname="Songti SC"                                   # 宋体-简
         )
         subs.styles["GlossaryCard"] = glossary_style
 
-        zh_c = config['zh_color']
+        # Retrieve Config settings if needed
+        zh_c = config.get('zh_color', '&HE9EFF2&')  # Fallback to warm white
 
         for seg in segments:
             start_ms = int(seg['start'] * 1000)
@@ -323,47 +314,50 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             zh_text = seg.get('zh_text', '').strip().replace('\n', ' ')
             vocab_items = seg.get('vocab', {})
             
-            # [Gemini_3.5_Flash_planning] 1. 去除末尾的半角/全角标点符号，防止单符号折行
+            # 1. 去除末尾的半角/全角标点符号，防止单符号折行
             en_text = strip_trailing_punctuation(en_text)
             zh_text = strip_trailing_punctuation(zh_text)
             
-            # # [Gemini_3.5_Flash_High_planning] 2. 为难词分配多色调色板颜色
+            # 2. 为英文句中的重点词汇注入高亮和下划线 override 标签
             word_colors = {}
             if vocab_items:
                 for idx, word in enumerate(vocab_items.keys()):
                     word_colors[word] = VOCAB_COLORS[idx % len(VOCAB_COLORS)]
                 
-                # 为英文句中的重点词汇注入多色高亮和下划线 override 标签
                 en_text = apply_word_highlights(en_text, word_colors)
             
             # Wrap Text
             if zh_text:
                 zh_text = textwrap.fill(zh_text, width=wrap_width_zh).replace('\n', '\\N')
             if en_text:
-                # [Gemini_3.5_Flash_planning] 使用标签敏感的折行函数，避免折行标记破坏含有 override 标签的单词
                 en_text = tag_aware_wrap(en_text, wrap_width_en)
             
-            # [Claude_Sonnet_4.6_Thinking_planning] 3. 构造字幕文本（英文+中文，不含内嵌释义）
+            # [Gemini_3.5_Flash_planning] 3. 构造双语/单语字幕，指定 Georgia 和 Hiragino Sans GB 以及相应的暖黄/暖白配色
             if zh_text and en_text:
                 if self.bilingual:
-                    text = f"{en_text}\\N{{\\fs{int(font_size*0.82)} \\c{zh_c}}}{zh_text}"
+                    text = f"{{\\fnGeorgia\\fs{en_size}\\c&H3FD2FF&}}{en_text}\\N{{\\fnHiragino Sans GB\\fs{zh_size}\\c&HE9EFF2&}}{zh_text}"
                 else:
-                    text = f"{{\\c{zh_c}}}{zh_text}"
+                    text = f"{{\\fnHiragino Sans GB\\fs{font_size}\\c&HE9EFF2&}}{zh_text}"
             elif zh_text:
-                text = f"{{\\c{zh_c}}}{zh_text}"
+                text = f"{{\\fnHiragino Sans GB\\fs{font_size}\\c&HE9EFF2&}}{zh_text}"
             else:
-                text = en_text
+                text = f"{{\\fnGeorgia\\fs{en_size}\\c&H3FD2FF&}}{en_text}"
 
             evt = pysubs2.SSAEvent(start=start_ms, end=end_ms, text=text)
             subs.events.append(evt)
 
-            # [Claude_Sonnet_4.6_Thinking_planning] 4. 独立 GlossaryCard 事件：灰色背景+楷体，紧随字幕卡片正下方
+            # [Gemini_3.5_Flash_planning] 4. 独立 GlossaryCard 事件：灰色半透明背景，首个难词前置 [词汇] 标签，
+            # 单词使用 Georgia + 暖黄色，释义使用宋体-简 (Songti SC) + 灰白(#C9C5BD)
             if vocab_items and self.bilingual:
                 glossary_parts = []
-                for word, translation in vocab_items.items():
+                for idx, (word, translation) in enumerate(vocab_items.items()):
                     color = word_colors[word]
-                    # 单词：对应颜色 + 直立（\i0）；释义：斜体（\i1）+ 白色
-                    glossary_parts.append(f"{{\\i0\\c{color}}}{word}{{\\i1\\c&HFFFFFF&}}: {translation}{{\\i0}}")
+                    part_str = ""
+                    if idx == 0:
+                        part_str += f"{{\\fnHiragino Sans GB\\c&HC7D36F&}}词汇  "
+                    
+                    part_str += f"{{\\fnGeorgia\\i0\\c&H3FD2FF&}}{word} {{\\fnSongti SC\\i1\\c&HBDC5C9&}}· {translation}{{\\i0}}"
+                    glossary_parts.append(part_str)
                 glossary_text = "   ".join(glossary_parts)
                 evt_glossary = pysubs2.SSAEvent(start=start_ms, end=end_ms, style="GlossaryCard", text=glossary_text)
                 subs.events.append(evt_glossary)
