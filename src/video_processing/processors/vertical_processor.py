@@ -15,6 +15,7 @@
 | 1.7.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 竖屏视频输入时将字幕起始 y 坐标调整为 1400，防止遮挡画面中心内容，标注 # [Gemini_3.5_Flash_planning] |
 | 1.8.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 双语字幕中英文顺序互换，英文设为金色（Gold），字号与中文接近一致（0.82倍），标注 # [Gemini_3.5_Flash_planning] |
 | 1.9.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 优化竖屏字幕样式，支持半透明黑色背景底框，增强复杂背景下的对比度与可读性，标注 # [Gemini_3.5_Flash_planning] |
+| 1.10.0  | 2026-06-07 | Gemini_3.5_Flash_planning | 修复英文单词中插入折行标签的bug，引入标签敏感的折行函数 tag_aware_wrap，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -53,6 +54,51 @@ def apply_word_highlights(text: str, vocab_items: Dict[str, Any], gold_c: str = 
         # 将匹配的单词替换为金色格式，并在结尾处重置为主色 (白色)
         text = pattern.sub(rf'{{\\c{gold_c}}}\1{{\\c}}', text)
     return text
+
+def tag_aware_wrap(text: str, max_width: int) -> str:
+    """[Gemini_3.5_Flash_planning] 标签敏感的折行函数，忽略 ASS 样式标签 (如 {\\c&H...}) 的视觉长度并防止其内部断词"""
+    if not text:
+        return text
+    
+    # 匹配含可能被 ASS 标签包裹的单词，或者纯 ASS 标签，或者空白字符
+    token_pattern = re.compile(r'((?:\{[^\}]*\})*[^\s{]+(?:\{[^\}]*\})*|\{[^\}]*\}|\s+)')
+    tokens = token_pattern.findall(text)
+    
+    lines = []
+    current_line = []
+    current_visual_len = 0
+    
+    def get_visual_length(s: str) -> int:
+        return len(re.sub(r'\{[^\}]*\}', '', s))
+        
+    for token in tokens:
+        if not token:
+            continue
+            
+        if token.isspace():
+            if current_line:
+                current_line.append(token)
+            continue
+            
+        token_visual_len = get_visual_length(token)
+        
+        if current_visual_len + token_visual_len > max_width:
+            if not current_line:
+                current_line.append(token)
+                current_visual_len = token_visual_len
+            else:
+                line_str = "".join(current_line).rstrip()
+                lines.append(line_str)
+                current_line = [token]
+                current_visual_len = token_visual_len
+        else:
+            current_line.append(token)
+            current_visual_len += token_visual_len
+            
+    if current_line:
+        lines.append("".join(current_line).rstrip())
+        
+    return "\\N".join(lines)
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +309,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             if zh_text:
                 zh_text = textwrap.fill(zh_text, width=wrap_width_zh).replace('\n', '\\N')
             if en_text:
-                en_text = textwrap.fill(en_text, width=wrap_width_en).replace('\n', '\\N')
+                # [Gemini_3.5_Flash_planning] 使用标签敏感的折行函数，避免折行标记破坏含有 override 标签的单词
+                en_text = tag_aware_wrap(en_text, wrap_width_en)
             
             # [Gemini_3.5_Flash_planning] 3. 双语字幕互调与三行布局（英文/中文/难词释义栏）
             if zh_text and en_text:

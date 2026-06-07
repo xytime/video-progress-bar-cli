@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增竖屏视频布局与智能字幕坐标位置测试，标有 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增双语字幕互调与金色英文样式及字号占比测试，标注 # [Gemini_3.5_Flash_planning] |
 | 1.3.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增竖屏字幕底盒样式及内边距和透明度测试，标注 # [Gemini_3.5_Flash_planning] |
+| 1.4.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增标签敏感折行函数测试，确保 highlighted 英文长词不被折断，标注 # [Gemini_3.5_Flash_planning] |
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -234,3 +235,32 @@ class TestCaptionProcessorRedBlueFixes:
         
         # Verify outline (padding) is at least 10 pixels
         assert style.outline >= 10, f"Expected outline padding to be at least 10, got {style.outline}"
+
+    def test_tag_aware_wrap(self):
+        """
+        [Gemini_3.5_Flash_planning] Test that tag_aware_wrap ignores ASS override tags when calculating visual line length,
+        preventing tags/words from being broken in the middle, and splitting lines correctly.
+        """
+        from video_processing.processors.vertical_processor import tag_aware_wrap
+        
+        # Test case 1: normal text wrapping
+        text1 = "A complex mixture of lightweight hydrocarbons"
+        wrapped1 = tag_aware_wrap(text1, 27)
+        # Expected: "A complex mixture of\Nlightweight hydrocarbons"
+        # Since "lightweight" (11) + " hydrocarbons" (13) = 24 <= 27, it should be wrapped before "lightweight"
+        assert wrapped1 == "A complex mixture of\\Nlightweight hydrocarbons"
+        
+        # Test case 2: text containing ASS style override tags
+        # "hydrocarbons" is wrapped in {\c&H00D7FF} and {\c} tags. Tag length is 15 chars, but visual length is 12 chars.
+        text2 = "A complex mixture of lightweight {\\c&H00D7FF}hydrocarbons{\\c}"
+        wrapped2 = tag_aware_wrap(text2, 27)
+        # Without tag_aware_wrap, the tag + word is 27 characters.
+        # "lightweight {\\c&H00D7FF}hydrocarbons{\\c}" is 11 + 1 + 27 = 39 characters, which exceeds 27.
+        # "lightweight" (11) + " " (1) + "hydrocarbons" (12) = 24 <= 27.
+        # It should wrap before "lightweight" and keep the tags completely intact with the word!
+        assert wrapped2 == "A complex mixture of\\Nlightweight {\\c&H00D7FF}hydrocarbons{\\c}"
+        
+        # Test case 3: very long highlighted word that exceeds limit (should not crash/infinite loop)
+        text3 = "{\\c&H00D7FF}supercalifragilisticexpialidocious{\\c}"
+        wrapped3 = tag_aware_wrap(text3, 10)
+        assert wrapped3 == "{\\c&H00D7FF}supercalifragilisticexpialidocious{\\c}"
