@@ -7,6 +7,7 @@ created_at: 2026-05-21T14:31:00+08:00
 
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 记录 Gemini_3.5_Flash_planning 在 YouTube 插件中将 document 传入 injectStylesIntoShadow 导致 HierarchyRequestError 静默崩溃的 P0 问题 |
 | 1.9.0 | 2026-06-07 | Gemini_3.5_Flash_planning    | 记录 Gemini_3.5_Flash_fast 在 YouTube 插件中直接向 innerHTML 写入导致 Trusted Types 限制拦截报错的问题 |
 | 1.8.0 | 2026-06-07 | Gemini_3.5_Flash_planning    | 记录 Gemini_3.5_Flash_planning 在实现 yt-dlp curl 优化时产生 NameError 崩溃的问题 |
 | 1.7.0 | 2026-06-01 | Gemini_3.5_Flash_planning    | 记录 Gemini_2.5_Flash_planning 因过度严格分离中英文输入导致中文安全审查漏检绕过问题 |
@@ -47,4 +48,6 @@ created_at: 2026-05-21T14:31:00+08:00
 在 YouTube 像点赞/播放率指示条插件的实现中，直接向 `.innerHTML` 赋值拼装 HTML 字符串。由于 YouTube 网页启用了严格的 Trusted HTML (Trusted Types) 策略，任何未经受信任类型（Trusted Types）处理的原始 HTML 字符串写入均会被浏览器底层强行拦截并抛出 JavaScript Runtime Error。这导致在主页面上无法渲染指示条文本。应当完全使用标准的 DOM API（如 `document.createElement`, `.textContent`, `.appendChild`）来构建并挂载节点，以确保不受 Trusted Types 安全策略的影响。
 **严重程度**：P1
 
-
+## 对于【Gemini_3.5_Flash_planning】问题（YouTube 调用 injectStylesIntoShadow(document)）：
+在实现 Light DOM 进度条渲染时，向 `injectStylesIntoShadow()` 传入了 `document` 对象。该函数内部直接调用 `shadowRoot.appendChild(style)`，而 `document.appendChild()` 在文档已有 `<html>` 根节点时会抛出 `HierarchyRequestError`。这个异常导致整个 `renderUI` 函数崩溃，且由于 `YT_RECEIVE_RATIO` 事件回调外没有 try/catch，错误被静默吐掉。结果：控制台完全无输出，表面看起来插件没有运行，极难定位。正确做法是：当 root 为 document 时应 append 到 `document.head` 或 `document.documentElement`，而非直接操作 document 节点本身。
+**严重程度**：P0
