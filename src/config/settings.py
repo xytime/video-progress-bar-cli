@@ -13,11 +13,12 @@
 | 2.3.0 | 2026-06-01 | Gemini_2.5_Flash_planning | 新增 enable_channel_policy_filter：频道内容策略层独立开关 |
 | 2.4.0 | 2026-06-07 | Gemini_3.5_Flash_High_planning | 新增 enable_dynamic_keywords 与 hn_top_n 配置，支持动态热词注入 |
 | 2.5.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix] env_file 改为绝对路径，修复 cwd != project_root 时 .env 无法加载导致 Feature Flag 全部回退的根因；新增 get_active_proxies() 动态检测系统代理连通性 |
+| 2.6.0 | 2026-06-08 | Gemini_3.5_Flash_planning           | 新增 wechat_headless 配置项及 active_telegram_chat_id 动态计算属性 |
 """
 import socket
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -58,6 +59,11 @@ class Settings(BaseSettings):
     # Telegram 通知 Bot 配置
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
+    telegram_admin_ids: Optional[str] = None  # [Gemini_3.5_Flash_planning] 管理员 ID 列表
+
+    # 微信上传是否使用无头模式，默认开启
+    wechat_headless: bool = True  # [Gemini_3.5_Flash_planning]
+
 
     # Google Gemini API Key
     gemini_api_key: Optional[str] = None
@@ -115,6 +121,18 @@ class Settings(BaseSettings):
     # 计算型路径 (Computed Paths) — 基于项目结构自动推导，不来自环境变量
     # 注意：必须用 @computed_field 而非类属性，否则 pydantic 会尝试从环境注入
     # -------------------------------------------------------------------------
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def active_telegram_chat_id(self) -> Optional[str]:
+        """[Gemini_3.5_Flash_planning] 获取当前活跃的 Telegram Chat ID。
+        若显式配置了 telegram_chat_id 则优先使用；否则从 telegram_admin_ids 中提取第一个管理员 ID 作为 fallback。
+        """
+        if self.telegram_chat_id:
+            return self.telegram_chat_id
+        if self.telegram_admin_ids:
+            return self.telegram_admin_ids.split(",")[0].strip()
+        return None
 
     @computed_field  # type: ignore[misc]
     @property

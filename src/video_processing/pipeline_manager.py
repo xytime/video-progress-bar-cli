@@ -32,6 +32,7 @@
 | 3.1.1   | 2026-06-07 | Gemini_3.5_Flash_planning           | [修复上传错误] 渲染命令中增加 --output 参数，确保输出视频名不带 yt-dlp 格式后缀，从而与上传器期望路径一致 |
 | 3.2.0   | 2026-06-07 | Gemini_3.5_Flash_planning           | [修复下载匹配] 优化 _find_downloaded_video：限定文件名主干(stem)必须与 yid 完全一致，排除包含 _vertical 等衍生文件或格式后缀的临时文件 |
 | 3.3.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [代理内射] 修复下载死锁/丢包根因：不再无条件清除代理变量改为动态检测+验证连通性后注入/不注入，确保 curl/yt-dlp 在代理可用时使用代理高速下载 |
+| 3.4.0   | 2026-06-08 | Gemini_3.5_Flash_planning           | 注入 Telegram 配置环境变量；upload_cmd 中根据 settings.wechat_headless 动态配置 --no-headless 选项 |
 """
 
 
@@ -86,6 +87,13 @@ def _build_subprocess_env() -> dict:
     active_proxies = settings.get_active_proxies()  # TCP 测试：就绣注入，不就绣不注入
     # 从当前进程环境中展开，然后用 active_proxies 覆盖到/不到变量
     env = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
+    # [Gemini_3.5_Flash_planning] v3.4.0: 注入 Telegram 配置环境变量，使 wechat_uploader 能够推送二维码
+    if settings.telegram_bot_token:
+        env["TELEGRAM_BOT_TOKEN"] = settings.telegram_bot_token
+    if settings.active_telegram_chat_id:
+        env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
+    if settings.telegram_admin_ids:
+        env["TELEGRAM_ADMIN_IDS"] = settings.telegram_admin_ids
     env.update(active_proxies)  # 若 active_proxies 为空字典，则不注入任何代理
     return env
 
@@ -963,8 +971,9 @@ class PipelineManager:
                     "--video",  str(vertical),
                     "--copy",   str(copy_file),
                     "--state",  str(self._OUT_DIR / "wechat_state.json"),
-                    "--no-headless",
                 ]
+                if not settings.wechat_headless:
+                    upload_cmd += ["--no-headless"]
                 if cover_file.exists():
                     upload_cmd += ["--cover", str(cover_file)]
                 if title_file.exists():
