@@ -11,6 +11,7 @@
 | 2.1.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | v7.0 Feature Flags：新功能开关，默认全部关闭，保护生产环境稳定性 |
 | 2.2.0 | 2026-05-28 | Gemini_2.5_Pro_planning | 新增 dashscope_api_key，支持阿里云百炼 CosyVoice TTS 集成 |
 | 2.3.0 | 2026-06-01 | Gemini_2.5_Flash_planning | 新增 enable_channel_policy_filter：频道内容策略层独立开关 |
+| 2.4.0 | 2026-06-07 | Gemini_3.5_Flash_High_planning | 新增 enable_dynamic_keywords 与 hn_top_n 配置，支持动态热词注入 |
 """
 from pathlib import Path
 from typing import Optional
@@ -33,7 +34,7 @@ class Settings(BaseSettings):
     )
 
     # -------------------------------------------------------------------------
-    # 运行时环境变量 (Runtime Env Vars) — 从 .env 或系统环境注入
+    # 运行时环境变量 (Runtime Env Vars) — 从 .env 或系统 environment 注入
     # -------------------------------------------------------------------------
 
     # 日志级别
@@ -76,6 +77,10 @@ class Settings(BaseSettings):
 
     # SIGTERM 阶梯强杀机制（删除活跃任务时优雅终止底层进程）
     enable_sigterm_kill: bool = False
+
+    # 动态热词注入开关 [Gemini_3.5_Flash_High_planning]
+    enable_dynamic_keywords: bool = False
+    hn_top_n: int = 30
 
     # -------------------------------------------------------------------------
     # 静态配置常量 (Static Constants) — 固定值，不依赖环境

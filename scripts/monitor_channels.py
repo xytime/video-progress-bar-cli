@@ -1,3 +1,12 @@
+"""
+频道监控与发现脚本
+
+# Modification History
+| Version | Date       | Author                         | Description |
+|---------|------------|--------------------------------|-------------|
+| 1.0.0   | 2026-05-20 | Unknown                        | 初始创建     |
+| 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_High_planning | 整合动态热词注入逻辑，支持从 HN 热榜获取动态关键词 |
+"""
 import sys
 from pathlib import Path
 import subprocess
@@ -6,14 +15,37 @@ import datetime
 
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 from video_processing.db import PipelineDB
+from config.settings import settings  # [Gemini_3.5_Flash_High_planning]
 
-# 定义主动发现的热门搜索词
-DISCOVERY_KEYWORDS = [
+# 定义主动发现的静态热门搜索词
+STATIC_KEYWORDS = [
     "AI interview",
     "tech keynote 2026",
     "business podcast",
     "founder speech"
 ]
+
+def get_discovery_keywords() -> list[str]:
+    """获取发现新频道所需的关键词（合并静态和动态热词）"""
+    # [Gemini_3.5_Flash_High_planning] 检查 Feature Flag 是否开启
+    if not settings.enable_dynamic_keywords:
+        print("[Discovery] Dynamic keywords disabled via settings, using static only.")
+        return STATIC_KEYWORDS
+
+    try:
+        # 显式将 scripts 目录加入 sys.path 以防 import 失败
+        scripts_dir = str(Path(__file__).parent)
+        if scripts_dir not in sys.path:
+            sys.path.append(scripts_dir)
+            
+        from fetch_trending_keywords import get_dynamic_keywords
+        dynamic = get_dynamic_keywords()
+        print(f"[Discovery] Using {len(dynamic)} dynamic + {len(STATIC_KEYWORDS)} static keywords")
+        return list(dict.fromkeys(STATIC_KEYWORDS + dynamic))
+    except Exception as e:
+        print(f"[Discovery] Dynamic keywords unavailable ({e}), using static only.")
+        return STATIC_KEYWORDS
+
 
 def fetch_latest_videos(db: PipelineDB, channel_id: str):
     """拉取频道过去 2 天内的最新视频，同时获取元数据（时长、观看数、点赞数、发布日期）"""
@@ -86,7 +118,8 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
 def discover_new_channels(db: PipelineDB):
     """通过关键词搜索发现潜在的优质频道，加入推荐列表"""
     print("Running active discovery for new channels...")
-    for keyword in DISCOVERY_KEYWORDS:
+    keywords = get_discovery_keywords()  # [Gemini_3.5_Flash_High_planning]
+    for keyword in keywords:
         print(f"Searching for: {keyword}")
         cmd = [
             "yt-dlp",
