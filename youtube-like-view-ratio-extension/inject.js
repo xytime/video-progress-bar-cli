@@ -3,6 +3,7 @@
  * 
  * Version | Date       | Author               | Description
  * --------|------------|----------------------|----------------------------------------------------
+ * 1.2.5   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 彻底移除 IntersectionObserver（DevTools 调试确认其在 IIFE 内就未实际 fire），改为直接在 scanAndProcess 里调用 requestRatioData
  * 1.2.4   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 修复 injectStylesIntoShadow(document) 抛出 HierarchyRequestError 导致 renderUI 静默崩溃的根本 bug；加入 try/catch
  * 1.2.3   | 2026-06-07 | Gemini_3.5_Flash_planning | 兼容 YouTube 新版首页卡片布局 yt-lockup-view-model，支持 Light DOM 渲染与 text 渲染 fallback 链路
  * 1.2.2   | 2026-06-07 | Gemini_3.5_Flash_planning | 解决 YouTube 严格 Trusted HTML (Trusted Types) 策略下直接写入 innerHTML 被阻止的 bug，改用标准 DOM API 渲染
@@ -224,24 +225,8 @@
     return null;
   }
 
-  // 观察卡片是否可见
-  const intersectionObserver = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        const card = entry.target;
-        const videoId = card.dataset.ytVideoId;
-        
-        intersectionObserver.unobserve(card);
-        
-        if (videoId) {
-          // 发起广播通知 Content Script 去获取数据
-          requestRatioData(card, videoId);
-        }
-      }
-    });
-  }, {
-    rootMargin: '200px 0px'
-  });
+  // 观察卡片是否可见（已删除 IntersectionObserver — DevTools 调试确认其在 IIFE 内就未实际 fire）
+  // # [Claude_Sonnet_4.6_Thinking_planning] 改为直接在 scanAndProcess 里调用 requestRatioData，简单可靠
 
   function requestRatioData(card, videoId) {
     // 放入待处理队列
@@ -468,8 +453,14 @@
       card.dataset.ytVideoId = videoId;
       card.dataset.ytProcessed = 'true';
 
-      // 观察可见性，以触发数据查询
-      intersectionObserver.observe(card);
+      // # [Claude_Sonnet_4.6_Thinking_planning] 直接请求数据（移除 IntersectionObserver）
+      // 防重复：如果 pendingCards 里已有这个 videoId 则不重复发送
+      if (!pendingCards.has(videoId)) {
+        requestRatioData(card, videoId);
+      } else {
+        // 已在待遇队列中，直接把卡片加入资开等待
+        pendingCards.get(videoId).add(card);
+      }
     });
 
     if (!hasLoggedScan && totalCards > 0) {
