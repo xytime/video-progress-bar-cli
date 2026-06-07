@@ -13,6 +13,7 @@
 | 1.5.0   | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 移除"非中文视频自动开启 TTS"行为：TTS 默认关闭，只有用户通过 --tts-cosy / --tts-real 参数，或 Telegram /tts 命令明确指定时才启用 |
 | 1.6.0   | 2026-06-07 | Gemini_3.5_Flash_planning | Handle audio-less videos gracefully during vertical subtitle burn-in. |
 | 1.7.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 竖屏视频输入时将字幕起始 y 坐标调整为 1400，防止遮挡画面中心内容，标注 # [Gemini_3.5_Flash_planning] |
+| 1.8.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 双语字幕中英文顺序互换，英文设为金色（Gold），字号与中文接近一致（0.82倍），标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -121,13 +122,6 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
 
     def _generate_ass_file(self, segments: List[Dict[str, Any]]) -> Path:
         """Override to adjust subtitle vertical position (MarginV) and font size"""
-        # Calculate layout first to get MarginV
-        # We need video dimensions. Typically we'd probe. 
-        # But here we just assume the default margin for the standardized 1080x1920 canvas.
-        # The VerticalLayout defaults are good enough for the ASS generation 
-        # because the canvas size is fixed to 1080x1920 regardless of input video.
-        
-        
         # Store segments for TTS generation later
         self.segments = segments
         
@@ -135,8 +129,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         subs = pysubs2.SSAFile()
         subs.info['PlayResX'] = VerticalLayout.CANVAS_WIDTH
         subs.info['PlayResY'] = VerticalLayout.CANVAS_HEIGHT
-        
-        # Adjust Font Size
+
         font_size = self.font_size
         
         # Calculate dynamic wrap width
@@ -147,15 +140,15 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         # Approximate char width factor
         # Fonts vary, but usually 1 em = font_size.
         # We'll allow a bit more density. 
-        wrap_width_zh = max(10, int(safe_width / font_size))
-        wrap_width_en = max(20, int(safe_width / (font_size * 0.5)))
+        # [Gemini_3.5_Flash_planning] English is primary (font_size), Chinese is secondary (font_size * 0.82)
+        wrap_width_zh = max(10, int(safe_width / (font_size * 0.82)))
+        wrap_width_en = max(20, int(safe_width / (font_size * 0.45)))
         
         import textwrap
 
         # Get base config
         config = CAPTION_STYLES.get(self.style, CAPTION_STYLES["default"])
         
-
         
         # User feedback: Subtitles shouldn't jump around (fixed top position) 
         # and shouldn't overlap video.
@@ -190,7 +183,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         subs.styles["Default"] = style
         
         zh_c = config['zh_color']
-        en_c = config['en_color']
+        # [Gemini_3.5_Flash_planning] 英文颜色强制设为金色 (Gold)
+        gold_c = "&H00D7FF"
 
         for seg in segments:
             start_ms = int(seg['start'] * 1000)
@@ -204,16 +198,16 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             if en_text:
                 en_text = textwrap.fill(en_text, width=wrap_width_en).replace('\n', '\\N')
             
-            # Simple Dual Line: ZH top, EN bottom (smaller)
+            # [Gemini_3.5_Flash_planning] 双语字幕互调：英文在上（金色），中文在下（白色/默认，0.82倍大小）
             if zh_text and en_text:
                 if self.bilingual:
-                    text = f"{{\\c{zh_c}}}{zh_text}\\N{{\\fs{int(font_size*0.6)} \\c{en_c}}}{en_text}"
+                    text = f"{{\\c{gold_c}}}{en_text}\\N{{\\fs{int(font_size*0.82)} \\c{zh_c}}}{zh_text}"
                 else:
                     text = f"{{\\c{zh_c}}}{zh_text}"
             elif zh_text:
                 text = f"{{\\c{zh_c}}}{zh_text}"
             else:
-                text = f"{{\\c{en_c}}}{en_text}"
+                text = f"{{\\c{gold_c}}}{en_text}"
 
                 
             evt = pysubs2.SSAEvent(start=start_ms, end=end_ms, text=text)

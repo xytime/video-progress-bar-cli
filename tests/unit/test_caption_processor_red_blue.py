@@ -6,6 +6,7 @@
 | ------- | ---------- | ------------------------- | ----------- |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建 |
 | 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增竖屏视频布局与智能字幕坐标位置测试，标有 # [Gemini_3.5_Flash_planning] |
+| 1.2.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增双语字幕互调与金色英文样式及字号占比测试，标注 # [Gemini_3.5_Flash_planning] |
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -143,3 +144,49 @@ class TestCaptionProcessorRedBlueFixes:
         assert "Default" in mock_subs_instance_landscape.styles
         style_landscape = mock_subs_instance_landscape.styles["Default"]
         assert style_landscape.marginv == 1000, f"Expected subtitle marginv (Y) to be 1000 for landscape video, got {style_landscape.marginv}"
+
+    @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._validate_input')
+    @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._get_video_resolution')
+    @patch('pysubs2.SSAFile')
+    def test_bilingual_subtitle_swap_and_styling(self, MockSSAFile, mock_get_resolution, mock_validate_input):
+        """
+        [Gemini_3.5_Flash_planning] Test that VerticalCaptionProcessor correctly swaps bilingual text order,
+        making English the primary text on top (in Gold) and Chinese secondary on bottom (in White, 0.82x size).
+        """
+        from video_processing.processors.vertical_processor import VerticalCaptionProcessor
+
+        mock_get_resolution.return_value = (1920, 1080)
+        mock_subs_instance = MagicMock()
+        mock_subs_instance.styles = {}
+        mock_subs_instance.info = {}
+        mock_events = []
+        mock_subs_instance.events = mock_events
+        MockSSAFile.return_value = mock_subs_instance
+
+        # Instantiate processor with bilingual=True
+        processor = VerticalCaptionProcessor(
+            input_path=Path("dummy_bilingual.mp4"),
+            output_path=Path("dummy_output"),
+            bilingual=True,
+            font_size=84,
+            style="default"
+        )
+
+        test_segments = [{
+            "start": 0.0,
+            "end": 2.0,
+            "text": "Hello world",
+            "zh_text": "你好世界"
+        }]
+
+        # Trigger generation
+        processor._generate_ass_file(segments=test_segments)
+
+        # Assert event generated correctly
+        assert len(mock_events) == 1, "Expected 1 subtitle event to be generated"
+        evt = mock_events[0]
+        
+        # English is on top, Gold color (&H00D7FF)
+        # Chinese is on bottom, White color (&HFFFFFF), 0.82x size (84 * 0.82 = 68)
+        expected_text = r"{\c&H00D7FF}Hello world\N{\fs68 \c&HFFFFFF}你好世界"
+        assert evt.text == expected_text, f"Expected subtitle text '{expected_text}', got '{evt.text}'"
