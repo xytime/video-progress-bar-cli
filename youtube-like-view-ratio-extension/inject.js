@@ -3,6 +3,7 @@
  * 
  * Version | Date       | Author               | Description
  * --------|------------|----------------------|----------------------------------------------------
+ * 1.2.6   | 2026-06-07 | Gemini_3.5_Flash_High_planning | 修复 ytd-thumbnail 无 shadowRoot 时进度条不显示的问题，增强缩略图锚点获取逻辑的鲁棒性
  * 1.2.5   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 彻底移除 IntersectionObserver（DevTools 调试确认其在 IIFE 内就未实际 fire），改为直接在 scanAndProcess 里调用 requestRatioData
  * 1.2.4   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 修复 injectStylesIntoShadow(document) 抛出 HierarchyRequestError 导致 renderUI 静默崩溃的根本 bug；加入 try/catch
  * 1.2.3   | 2026-06-07 | Gemini_3.5_Flash_planning | 兼容 YouTube 新版首页卡片布局 yt-lockup-view-model，支持 Light DOM 渲染与 text 渲染 fallback 链路
@@ -312,9 +313,12 @@
     if (thumbnailContainer && thumbnailContainer.shadowRoot) {
       anchor = thumbnailContainer.shadowRoot.querySelector('a#thumbnail');
       styleTargetRoot = thumbnailContainer.shadowRoot;
-    } else {
-      // 兼容新版首页 Light DOM 缩略图
-      anchor = querySelectorShadow(card, 'a.ytLockupViewModelContentImage');
+    }
+
+    // # [Gemini_3.5_Flash_High_planning] 修复：若 ytd-thumbnail 处于 Light DOM（无 shadowRoot），
+    // 或者需要兼容新版首页 Light DOM 缩略图，则在卡片域内进行二次查找。
+    if (!anchor) {
+      anchor = querySelectorShadow(card, 'a#thumbnail') || querySelectorShadow(card, 'a.ytLockupViewModelContentImage');
       styleTargetRoot = document;
     }
 
