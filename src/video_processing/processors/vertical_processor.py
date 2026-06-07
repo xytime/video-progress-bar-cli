@@ -10,7 +10,9 @@
 | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 tts_volume 和 tts_speech_rate 支持，并在分段混合前引入 atempo 自动加速防重叠安全阀机制，标注 # [Gemini_3.5_Flash_planning] |
 | 1.3.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | TTSEngine 默认 fallback voice 改为 "auto"，自动从精选播音音色池随机选取，标注 # [Gemini_2.5_Pro_planning] |
 | 1.4.0   | 2026-05-28 | Gemini_3.5_Flash_planning | [已废弃] 非中文视频自动开启 TTS 配音逻辑（不符合默认行为需求，已在 1.5.0 移除） |
-| 1.5.0   | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 移除"非中文视频自动开启 TTS"行为：TTS 默认关闭，只有用户通过 --tts-cosy 或 Telegram /tts 命令明确指定时才启用 |
+| 1.5.0   | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 移除"非中文视频自动开启 TTS"行为：TTS 默认关闭，只有用户通过 --tts-cosy / --tts-real 参数，或 Telegram /tts 命令明确指定时才启用 |
+| 1.6.0   | 2026-06-07 | Gemini_3.5_Flash_planning | Handle audio-less videos gracefully during vertical subtitle burn-in. |
+| 1.7.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 竖屏视频输入时将字幕起始 y 坐标调整为 1400，防止遮挡画面中心内容，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -160,7 +162,19 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         # Solution: Use Top-Center Alignment (8) and fixed MarginV from Top.
         # Video Top = 350. Video Height (16:9) ~ 607. Video Bottom ~ 957.
         # Let's start subtitles at Y = 1000.
-        subtitle_top_y = 1000
+        # [Gemini_3.5_Flash_planning] For vertical videos, move subtitles down to Y=1400 (bottom safety/blank zone)
+        # to avoid covering center content. For landscape videos, keep at Y=1000.
+        try:
+            video_w, video_h = self._get_video_resolution()
+            is_vertical_input = video_w < video_h
+        except Exception as e:
+            logger.warning(f"Could not probe video size for subtitle margin, fallback to landscape layout: {e}")
+            is_vertical_input = False
+
+        if is_vertical_input:
+            subtitle_top_y = 1400
+        else:
+            subtitle_top_y = 1000
         
         style = pysubs2.SSAStyle(
             fontsize=font_size,
@@ -424,45 +438,69 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             "-i", str(self.input_path),
         ]
         
+        # [Gemini_3.5_Flash_planning] 检测输入视频是否含有音频流
+        has_audio = True
+        try:
+            cmd_probe = [
+                "ffprobe", "-v", "error", "-select_streams", "a",
+                "-show_entries", "stream=index", "-of", "csv=p=0",
+                str(self.input_path)
+            ]
+            result = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
+            has_audio = bool(result.stdout.strip())
+        except Exception:
+            pass
+            
         # Audio Mapping Logic
-        audio_inputs = ["-map", "0:a"] # Default: Original Audio
-        
-        if generated_audio_track and generated_audio_track.exists():
-            # Add new audio as input 1
-            cmd += ["-i", str(generated_audio_track)]
+        if has_audio:
+            audio_inputs = ["-map", "0:a"] # Default: Original Audio
             
-            # [Gemini_3.5_Flash_planning] 根据 mute_original 决定是完全静音还是动态音量闪避
-            if self.mute_original:
-                volume_filter = "volume=0.0"
-            else:
-                intervals = []
-                for seg in audio_segments:
-                    start = seg['start']
-                    path = seg['path']
-                    duration = self._get_audio_duration(path)
-                    if duration > 0:
-                        intervals.append((start, start + duration))
+            if generated_audio_track and generated_audio_track.exists():
+                # Add new audio as input 1
+                cmd += ["-i", str(generated_audio_track)]
                 
-                if intervals:
-                    # 使用 between 串联各个发音区间，如果当前时间 t 处于任意发音区间，则背景音设为 10% (0.1)，否则保持 100% (1.0)
-                    conds = " + ".join([f"between(t,{s:.3f},{e:.3f})" for s, e in intervals])
-                    volume_filter = f"volume='if({conds},0.1,1.0)':eval=frame"
+                # [Gemini_3.5_Flash_planning] 根据 mute_original 决定是完全静音还是动态音量闪避
+                if self.mute_original:
+                    volume_filter = "volume=0.0"
                 else:
-                    volume_filter = "volume=0.1"
+                    intervals = []
+                    for seg in audio_segments:
+                        start = seg['start']
+                        path = seg['path']
+                        duration = self._get_audio_duration(path)
+                        if duration > 0:
+                            intervals.append((start, start + duration))
+                    
+                    if intervals:
+                        # 使用 between 串联各个发音区间，如果当前时间 t 处于任意发音区间，则背景音设为 10% (0.1)，否则保持 100% (1.0)
+                        conds = " + ".join([f"between(t,{s:.3f},{e:.3f})" for s, e in intervals])
+                        volume_filter = f"volume='if({conds},0.1,1.0)':eval=frame"
+                    else:
+                        volume_filter = "volume=0.1"
+                    
+                audio_filter = f"[0:a]{volume_filter}[bg];[1:a]volume=1.5[fg];[bg][fg]amix=inputs=2:duration=first[aout]"
+                filter_str += f";{audio_filter}"
                 
-            audio_filter = f"[0:a]{volume_filter}[bg];[1:a]volume=1.5[fg];[bg][fg]amix=inputs=2:duration=first[aout]"
-            filter_str += f";{audio_filter}"
-            
-            audio_inputs = ["-map", "[aout]"]
+                audio_inputs = ["-map", "[aout]"]
+        else:
+            # Input video has no audio
+            if generated_audio_track and generated_audio_track.exists():
+                # Add new audio as input 1
+                cmd += ["-i", str(generated_audio_track)]
+                # Just map the generated audio track directly (no mixing needed)
+                audio_inputs = ["-map", "1:a"]
+            else:
+                audio_inputs = [] # No audio mapping needed
         
         cmd += [
             "-filter_complex", filter_str,
             "-map", "[out]",
             *audio_inputs, 
             "-c:v", "libx264",
-            "-c:a", "aac",
-            str(output_path)
         ]
+        if audio_inputs:
+            cmd += ["-c:a", "aac"]
+        cmd.append(str(output_path))
         
         logger.info(f"Rendering Vertical Video: {' '.join(cmd)}")
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

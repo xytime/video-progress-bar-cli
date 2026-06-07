@@ -8,6 +8,7 @@
 | 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 引入正则彻底熔断 HTML 注入，修正 default 金色描边样式 |
 | 1.3.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 Gemini API 高质量批翻译功能，自动 fallback 到谷歌翻译，标注 # [Gemini_3.5_Flash_planning] |
 | 1.4.0 | 2026-05-28 | Gemini_3.5_Flash_planning | ASR 转录时保存 self.detected_lang 属性，标注 # [Gemini_3.5_Flash_planning] |
+| 1.5.0 | 2026-06-07 | Gemini_3.5_Flash_planning | Handle audio-less videos gracefully by skipping audio extraction/transcription and omitting -c:a copy during burn-in. |
 """
 import logging
 from pathlib import Path
@@ -140,11 +141,18 @@ class AutoCaptionProcessor(VideoProcessorBase):
         
         # 2. 提取音频
         audio_path = self._extract_audio()
-        logger.info(f"Audio extracted to: {audio_path}")
+        if audio_path:
+            logger.info(f"Audio extracted to: {audio_path}")
+        else:
+            logger.info("No audio stream extracted (video is likely silent).")
         
         try:
             # 3. 转录
-            segments = self._transcribe_audio(audio_path)
+            if audio_path is not None:
+                segments = self._transcribe_audio(audio_path)
+            else:
+                logger.info("Skipping transcription since there is no audio track.")
+                segments = []
             
             # 4. 翻译 (如果提供了目标语言且不同于源语言)
             if self.target_lang and self.target_lang != self.src_lang:
@@ -163,7 +171,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         finally:
             # 清理临时文件 (音频 和 ASS文件?)
             # 用户可能想要保留 ASS 文件以便后续修改，这里暂时只清理音频
-            if audio_path.exists():
+            if audio_path and audio_path.exists():
                 os.remove(audio_path)
                 logger.debug(f"Removed temp audio: {audio_path}")
     
@@ -186,13 +194,29 @@ class AutoCaptionProcessor(VideoProcessorBase):
         import imageio_ffmpeg
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         
+        # [Gemini_3.5_Flash_planning] 检测输入视频是否含有音频流，避免无音频流时使用 -c:a copy 报错
+        has_audio = True
+        try:
+            cmd_probe = [
+                "ffprobe", "-v", "error", "-select_streams", "a",
+                "-show_entries", "stream=index", "-of", "csv=p=0",
+                str(self.input_path)
+            ]
+            result = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
+            has_audio = bool(result.stdout.strip())
+        except Exception:
+            pass
+        
         cmd = [
             ffmpeg_exe, "-y",
             "-i", str(self.input_path),
             "-vf", f"ass='{escaped_ass_path}'",
-            "-c:a", "copy",  # 音频流直接复制，不重编码
-            str(output_path)
         ]
+        
+        if has_audio:
+            cmd += ["-c:a", "copy"]  # 音频流直接复制，不重编码
+            
+        cmd.append(str(output_path))
         
         logger.info(f"Burning subtitles: {' '.join(cmd)}")
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -313,10 +337,27 @@ class AutoCaptionProcessor(VideoProcessorBase):
         subs.save(str(ass_path))
         return ass_path
 
-    def _extract_audio(self) -> Path:
+    def _extract_audio(self) -> Optional[Path]:
         """从视频提取音频到临时 .wav 文件 (16kHz, mono for Whisper)"""
         import tempfile
         import subprocess
+        
+        # [Gemini_3.5_Flash_planning] 预先检测音轨是否存在
+        has_audio = True
+        try:
+            cmd_probe = [
+                "ffprobe", "-v", "error", "-select_streams", "a",
+                "-show_entries", "stream=index", "-of", "csv=p=0",
+                str(self.input_path)
+            ]
+            result = subprocess.run(cmd_probe, capture_output=True, text=True, check=True)
+            has_audio = bool(result.stdout.strip())
+        except Exception:
+            pass
+            
+        if not has_audio:
+            logger.warning(f"No audio stream found in {self.input_path}. Skipping audio extraction.")
+            return None
         
         temp_dir = Path(tempfile.gettempdir())
         audio_path = temp_dir / f"{self.input_path.stem}_temp_audio.wav"
@@ -336,7 +377,15 @@ class AutoCaptionProcessor(VideoProcessorBase):
         ]
         
         logger.debug(f"Extracting audio: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as e:
+            stderr_str = e.stderr.decode('utf-8', errors='ignore') if e.stderr else ""
+            # 如果 FFmpeg 因找不到音频流报错，也视为无音轨，返回 None
+            if "does not contain any stream" in stderr_str or "Output file does not contain any stream" in stderr_str:
+                logger.warning(f"FFmpeg reported no audio stream during extraction: {stderr_str.strip()}")
+                return None
+            raise e
         
         if not audio_path.exists():
             raise VideoProcessingError("Audio extraction failed")

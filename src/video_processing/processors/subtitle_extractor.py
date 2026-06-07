@@ -1,4 +1,11 @@
-"""Subtitle Extraction Processor - Extract subtitles without translation or burning"""
+"""Subtitle Extraction Processor - Extract subtitles without translation or burning
+
+# Modification History
+| Version | Date       | Author                    | Description |
+| ------- | ---------- | ------------------------- | ----------- |
+| 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，提供字幕提取主入口 |
+| 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | Handle audio-less videos gracefully. |
+"""
 import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -55,7 +62,11 @@ class SubtitleExtractionProcessor(AutoCaptionProcessor):
         try:
             # 3. Transcribe
             logger.info("Transcribing audio...")
-            segments = self._transcribe_audio(audio_path)
+            if audio_path is not None:
+                segments = self._transcribe_audio(audio_path)
+            else:
+                logger.info("Skipping transcription since there is no audio track.")
+                segments = []
             
             # 4. Generate Output File
             output_file = self._save_subtitles(segments)
@@ -65,7 +76,7 @@ class SubtitleExtractionProcessor(AutoCaptionProcessor):
             
         finally:
             # Cleanup
-            if audio_path.exists():
+            if audio_path and audio_path.exists():
                 os.remove(audio_path)
 
     def _save_subtitles(self, segments: List[Dict[str, Any]]) -> Path:
