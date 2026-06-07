@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建 |
 | 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增竖屏视频布局与智能字幕坐标位置测试，标有 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增双语字幕互调与金色英文样式及字号占比测试，标注 # [Gemini_3.5_Flash_planning] |
+| 1.3.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 新增竖屏字幕底盒样式及内边距和透明度测试，标注 # [Gemini_3.5_Flash_planning] |
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -151,7 +152,8 @@ class TestCaptionProcessorRedBlueFixes:
     def test_bilingual_subtitle_swap_and_styling(self, MockSSAFile, mock_get_resolution, mock_validate_input):
         """
         [Gemini_3.5_Flash_planning] Test that VerticalCaptionProcessor correctly swaps bilingual text order,
-        making English the primary text on top (in Gold) and Chinese secondary on bottom (in White, 0.82x size).
+        making English the primary text on top (in White, with Gold highlighted vocab), Chinese secondary on bottom (White, 0.82x size),
+        automatically strips trailing punctuations, and appends the cyan vocabulary annotation bar.
         """
         from video_processing.processors.vertical_processor import VerticalCaptionProcessor
 
@@ -175,8 +177,9 @@ class TestCaptionProcessorRedBlueFixes:
         test_segments = [{
             "start": 0.0,
             "end": 2.0,
-            "text": "Hello world",
-            "zh_text": "你好世界"
+            "text": "Hello world.",
+            "zh_text": "你好世界。",
+            "vocab": {"world": "世界"}
         }]
 
         # Trigger generation
@@ -186,7 +189,48 @@ class TestCaptionProcessorRedBlueFixes:
         assert len(mock_events) == 1, "Expected 1 subtitle event to be generated"
         evt = mock_events[0]
         
-        # English is on top, Gold color (&H00D7FF)
-        # Chinese is on bottom, White color (&HFFFFFF), 0.82x size (84 * 0.82 = 68)
-        expected_text = r"{\c&H00D7FF}Hello world\N{\fs68 \c&HFFFFFF}你好世界"
+        # English is on top (White, with "world" highlighted in Gold)
+        # Chinese is on bottom (White, 0.82x size = 68), trailing periods are stripped
+        # Cyan vocabulary bar is appended at bottom (0.58x size = 48)
+        expected_text = r"Hello {\c&H00D7FF}world{\c}\N{\fs68 \c&HFFFFFF}你好世界\N{\fs48 \c&HFFFF00}💡 world: 世界"
         assert evt.text == expected_text, f"Expected subtitle text '{expected_text}', got '{evt.text}'"
+
+    @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._validate_input')
+    @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._get_video_resolution')
+    @patch('pysubs2.SSAFile')
+    def test_vertical_processor_opaque_box_styling(self, MockSSAFile, mock_get_resolution, mock_validate_input):
+        """
+        [Gemini_3.5_Flash_planning] Test that VerticalCaptionProcessor uses BorderStyle=3 (Opaque box)
+        with semi-transparent black background and appropriate padding (outline) to ensure high readability.
+        """
+        from video_processing.processors.vertical_processor import VerticalCaptionProcessor
+
+        mock_get_resolution.return_value = (1080, 1920)
+        mock_subs_instance = MagicMock()
+        mock_subs_instance.styles = {}
+        mock_subs_instance.info = {}
+        MockSSAFile.return_value = mock_subs_instance
+
+        # Instantiate processor with default style (which has border_style=3)
+        processor = VerticalCaptionProcessor(
+            input_path=Path("dummy_opaque.mp4"),
+            output_path=Path("dummy_output"),
+            style="default"
+        )
+
+        # Trigger generation
+        processor._generate_ass_file(segments=[])
+
+        assert "Default" in mock_subs_instance.styles
+        style = mock_subs_instance.styles["Default"]
+        
+        # Verify Border Style is 3 (Opaque Box)
+        assert style.borderstyle == 3, f"Expected borderstyle to be 3 for high contrast vertical subtitles, got {style.borderstyle}"
+        
+        # Verify BackColor is semi-transparent black (R=0, G=0, B=0, A=200 from default config)
+        assert style.backcolor.r == 0 and style.backcolor.g == 0 and style.backcolor.b == 0, \
+            "Expected background color to be black"
+        assert style.backcolor.a == 200, f"Expected background alpha to be 200, got {style.backcolor.a}"
+        
+        # Verify outline (padding) is at least 10 pixels
+        assert style.outline >= 10, f"Expected outline padding to be at least 10, got {style.outline}"

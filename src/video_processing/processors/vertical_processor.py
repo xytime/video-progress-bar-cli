@@ -14,6 +14,7 @@
 | 1.6.0   | 2026-06-07 | Gemini_3.5_Flash_planning | Handle audio-less videos gracefully during vertical subtitle burn-in. |
 | 1.7.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 竖屏视频输入时将字幕起始 y 坐标调整为 1400，防止遮挡画面中心内容，标注 # [Gemini_3.5_Flash_planning] |
 | 1.8.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 双语字幕中英文顺序互换，英文设为金色（Gold），字号与中文接近一致（0.82倍），标注 # [Gemini_3.5_Flash_planning] |
+| 1.9.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 优化竖屏字幕样式，支持半透明黑色背景底框，增强复杂背景下的对比度与可读性，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -26,6 +27,32 @@ from .caption_processor import AutoCaptionProcessor, CAPTION_STYLES, VideoProces
 from ..utils.layout import VerticalLayout
 from ..core.tts_engine import TTSEngine, TTSProvider
 from ..core.audio_mixer import AudioMixer
+
+import re
+
+def strip_trailing_punctuation(text: str) -> str:
+    """[Gemini_3.5_Flash_planning] 去除段落末尾的半角/全角标点符号，防止折行时标点符号单独占一行"""
+    if not text:
+        return text
+    return re.sub(r'[\.,\?!\;:\"\'。，？！；：”、\s]+$', '', text)
+
+def apply_word_highlights(text: str, vocab_items: Dict[str, Any], gold_c: str = "&H00D7FF") -> str:
+    """[Gemini_3.5_Flash_planning] 在英文句子中高亮重点难词为金色"""
+    if not vocab_items or not text:
+        return text
+    
+    # 按长度降序排序，优先匹配长词/短语，防止短词部分匹配
+    sorted_words = sorted(vocab_items.keys(), key=len, reverse=True)
+    
+    for word in sorted_words:
+        word_clean = word.strip()
+        if not word_clean:
+            continue
+        word_escaped = re.escape(word_clean)
+        pattern = re.compile(rf'\b({word_escaped})\b', re.IGNORECASE)
+        # 将匹配的单词替换为金色格式，并在结尾处重置为主色 (白色)
+        text = pattern.sub(rf'{{\\c{gold_c}}}\1{{\\c}}', text)
+    return text
 
 logger = logging.getLogger(__name__)
 
@@ -169,13 +196,43 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         else:
             subtitle_top_y = 1000
         
+        # [Gemini_3.5_Flash_planning] Parse style config to support opaque background box (BorderStyle=3)
+        # Read style configuration
+        config = CAPTION_STYLES.get(self.style, CAPTION_STYLES["default"])
+        
+        # Parse background color and alpha (ASS format is BGR)
+        bg_hex = config.get("bg_color", "&H000000")
+        bg_alpha = config.get("bg_alpha", 180)  # Default to semi-transparent black
+        
+        clean_bg = bg_hex.replace('&H', '').replace('&', '').strip()
+        if len(clean_bg) == 8:
+            clean_bg = clean_bg[2:]
+        if len(clean_bg) == 6:
+            b_val = int(clean_bg[0:2], 16)
+            g_val = int(clean_bg[2:4], 16)
+            r_val = int(clean_bg[4:6], 16)
+        else:
+            r_val, g_val, b_val = 0, 0, 0
+            
+        bg_color = pysubs2.Color(r_val, g_val, b_val, bg_alpha)
+        
+        border_style = config.get("border_style", 3)
+        outline = config.get("outline", 12)
+        
+        # In BorderStyle=3 (Opaque box), outline acts as padding around the box.
+        # Ensure there is enough padding (at least 10px) for a premium, readable look.
+        if border_style == 3:
+            outline = max(outline, 10)
+            
+        shadow = config.get("shadow", 0)
+
         style = pysubs2.SSAStyle(
             fontsize=font_size,
             primarycolor=pysubs2.Color(255, 255, 255),
-            backcolor=pysubs2.Color(0, 0, 0, 0), 
-            borderstyle=1, 
-            outline=2,
-            shadow=0,
+            backcolor=bg_color, 
+            borderstyle=border_style, 
+            outline=outline,
+            shadow=shadow,
             alignment=8, # Top Center (Fixes jumping, grows downwards)
             marginv=subtitle_top_y,
             fontname="Arial Unicode MS"
@@ -183,14 +240,24 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         subs.styles["Default"] = style
         
         zh_c = config['zh_color']
-        # [Gemini_3.5_Flash_planning] 英文颜色强制设为金色 (Gold)
+        # [Gemini_3.5_Flash_planning] 金色高亮与青色难词底栏颜色配置
         gold_c = "&H00D7FF"
+        cyan_c = "&HFFFF00"
 
         for seg in segments:
             start_ms = int(seg['start'] * 1000)
             end_ms = int(seg['end'] * 1000)
             en_text = seg.get('text', '').strip().replace('\n', ' ')
             zh_text = seg.get('zh_text', '').strip().replace('\n', ' ')
+            vocab_items = seg.get('vocab', {})
+            
+            # [Gemini_3.5_Flash_planning] 1. 去除末尾的半角/全角标点符号，防止单符号折行
+            en_text = strip_trailing_punctuation(en_text)
+            zh_text = strip_trailing_punctuation(zh_text)
+            
+            # [Gemini_3.5_Flash_planning] 2. 为英文句中的重点词汇注入金色高亮 override 标签
+            if vocab_items:
+                en_text = apply_word_highlights(en_text, vocab_items, gold_c)
             
             # Wrap Text
             if zh_text:
@@ -198,16 +265,22 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             if en_text:
                 en_text = textwrap.fill(en_text, width=wrap_width_en).replace('\n', '\\N')
             
-            # [Gemini_3.5_Flash_planning] 双语字幕互调：英文在上（金色），中文在下（白色/默认，0.82倍大小）
+            # [Gemini_3.5_Flash_planning] 3. 双语字幕互调与三行布局（英文/中文/难词释义栏）
             if zh_text and en_text:
                 if self.bilingual:
-                    text = f"{{\\c{gold_c}}}{en_text}\\N{{\\fs{int(font_size*0.82)} \\c{zh_c}}}{zh_text}"
+                    text = f"{en_text}\\N{{\\fs{int(font_size*0.82)} \\c{zh_c}}}{zh_text}"
+                    if vocab_items:
+                        vocab_bar = "   ".join([f"💡 {k}: {v}" for k, v in vocab_items.items()])
+                        text += f"\\N{{\\fs{int(font_size*0.58)} \\c{cyan_c}}}{vocab_bar}"
                 else:
                     text = f"{{\\c{zh_c}}}{zh_text}"
             elif zh_text:
                 text = f"{{\\c{zh_c}}}{zh_text}"
             else:
-                text = f"{{\\c{gold_c}}}{en_text}"
+                text = f"{en_text}"
+                if vocab_items:
+                    vocab_bar = "   ".join([f"💡 {k}: {v}" for k, v in vocab_items.items()])
+                    text += f"\\N{{\\fs{int(font_size*0.58)} \\c{cyan_c}}}{vocab_bar}"
 
                 
             evt = pysubs2.SSAEvent(start=start_ms, end=end_ms, text=text)

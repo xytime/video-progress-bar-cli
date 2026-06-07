@@ -9,6 +9,7 @@
 | 1.3.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 Gemini API 高质量批翻译功能，自动 fallback 到谷歌翻译，标注 # [Gemini_3.5_Flash_planning] |
 | 1.4.0 | 2026-05-28 | Gemini_3.5_Flash_planning | ASR 转录时保存 self.detected_lang 属性，标注 # [Gemini_3.5_Flash_planning] |
 | 1.5.0 | 2026-06-07 | Gemini_3.5_Flash_planning | Handle audio-less videos gracefully by skipping audio extraction/transcription and omitting -c:a copy during burn-in. |
+| 1.6.0 | 2026-06-07 | Gemini_3.5_Flash_planning | 修复 src.config.settings 导入路径错误，并升级 Gemini 批翻译提示词以同时提取重点难词和释义，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 from pathlib import Path
@@ -405,10 +406,10 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self.detected_lang = result.get("language")  # [Gemini_3.5_Flash_planning] 保存 ASR 识别的语种，供 TTS 智能判断使用
         return result["segments"]
 
-    def _translate_segments_gemini(self, segments: List[Dict[str, Any]]) -> Optional[List[str]]:
-        """[Gemini_3.5_Flash_planning] 使用 Gemini API 进行高质量批翻译"""
+    def _translate_segments_gemini(self, segments: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+        """[Gemini_3.5_Flash_planning] 使用 Gemini API 进行高质量批翻译与重点单词释义提取"""
         try:
-            from src.config.settings import settings
+            from config.settings import settings
             api_key = settings.gemini_api_key or os.getenv("GEMINI_API_KEY", "")
             if not api_key:
                 logger.warning("GEMINI_API_KEY not found. Fallback to Google Translate.")
@@ -417,24 +418,27 @@ class AutoCaptionProcessor(VideoProcessorBase):
             import google.generativeai as genai
             genai.configure(api_key=api_key)
             
-            # [Gemini_3.5_Flash_planning] 使用更稳定的 gemini-1.5-flash 模型，保证高速度与高质量
+            # [Gemini_3.5_Flash_planning] 使用更稳定的 gemini-2.5-flash 模型，保证高速度与高质量
             model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
+                model_name="gemini-2.5-flash",
                 generation_config={"response_mime_type": "application/json"}
             )
             
             texts = [seg['text'].strip() for seg in segments]
             import json
             
+            # [Gemini_3.5_Flash_planning] 升级提示词：不仅翻译，还要智能提取 1-2 个重点难词及其中文释义
             prompt = (
-                "You are an expert video subtitle translator. Translate the following list of English subtitle segments "
-                "into natural, professional, and native Chinese (zh-CN) for a video of Jeff Bezos speaking about artificial intelligence.\n"
-                "The translation must be accurate, concise, screen-friendly, and maintain standard Chinese terminology for tech/AI.\n"
-                "Return a JSON list of strings containing only the translations, maintaining the exact same order and count.\n\n"
+                "You are an expert video subtitle translator and English educator. For each of the following English subtitle segments:\n"
+                "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
+                "2. Identify 1 to 2 key, academic, or difficult vocabulary words/phrases (CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. Provide their concise Chinese definitions. Do not extract common/easy words. If there are no difficult words, leave the vocabulary dictionary empty.\n"
+                "Return a JSON array of objects (one for each segment in the exact same order and count). Each object must contain:\n"
+                "- \"translation\": string (Chinese translation)\n"
+                "- \"vocab\": object (keys are the exact English words/phrases as they appear in the text, values are their concise Chinese translations)\n\n"
                 f"Input segments:\n{json.dumps(texts, ensure_ascii=False)}"
             )
             
-            logger.info("Calling Gemini API for batch subtitle translation...")
+            logger.info("Calling Gemini API for batch subtitle translation and vocabulary extraction...")
             response = model.generate_content(prompt)
             result = json.loads(response.text)
             
@@ -444,10 +448,10 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 result = result["list"]
                 
             if isinstance(result, list) and len(result) == len(texts):
-                logger.info("Gemini translation completed successfully.")
-                return [str(t) for t in result]
+                logger.info("Gemini translation and vocabulary extraction completed successfully.")
+                return result
             else:
-                logger.warning(f"Gemini returned invalid translation list: {result}")
+                logger.warning(f"Gemini returned invalid translation list structure: {result}")
                 return None
         except Exception as e:
             logger.error(f"Gemini translation failed: {e}")
@@ -460,12 +464,13 @@ class AutoCaptionProcessor(VideoProcessorBase):
             
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         
-        # [Gemini_3.5_Flash_planning] 优先使用 Gemini 进行自然语言翻译
-        gemini_translations = self._translate_segments_gemini(segments)
-        if gemini_translations:
-            for i, text in enumerate(gemini_translations):
+        # [Gemini_3.5_Flash_planning] 优先使用 Gemini 进行自然语言翻译与难词提取
+        gemini_results = self._translate_segments_gemini(segments)
+        if gemini_results:
+            for i, res in enumerate(gemini_results):
                 if i < len(segments):
-                    segments[i]['zh_text'] = text
+                    segments[i]['zh_text'] = res.get('translation', '')
+                    segments[i]['vocab'] = res.get('vocab', {})
             return segments
         
         # 提取原文列表
@@ -511,6 +516,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     text = ""
                 # 如果没翻译出来，直接留空，让渲染器 fallback 到只显示英文
                 segments[i]['zh_text'] = text if text else ""
+                segments[i]['vocab'] = {}  # fallback with empty vocabulary
                 
         return segments
 
