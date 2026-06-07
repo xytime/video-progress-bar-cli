@@ -12,12 +12,19 @@
 | 2.2.0 | 2026-05-28 | Gemini_2.5_Pro_planning | 新增 dashscope_api_key，支持阿里云百炼 CosyVoice TTS 集成 |
 | 2.3.0 | 2026-06-01 | Gemini_2.5_Flash_planning | 新增 enable_channel_policy_filter：频道内容策略层独立开关 |
 | 2.4.0 | 2026-06-07 | Gemini_3.5_Flash_High_planning | 新增 enable_dynamic_keywords 与 hn_top_n 配置，支持动态热词注入 |
+| 2.5.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix] env_file 改为绝对路径，修复 cwd != project_root 时 .env 无法加载导致 Feature Flag 全部回退的根因；新增 get_active_proxies() 动态检测系统代理连通性 |
 """
+import socket
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# [Claude_Sonnet_4.6_Thinking_planning] 项目根目录的绝对路径，在模块加载时确定
+# 用于 env_file 绝对路径，避免 cwd 不同时 .env 加载失败的根因
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 class Settings(BaseSettings):
@@ -27,7 +34,12 @@ class Settings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # [Claude_Sonnet_4.6_Thinking_planning] v2.5.0: 使用绝对路径
+        # 修复根因：相对路径 ".env" 依赖于进程的 cwd。当 _run_pipeline_manager()
+        # 以 cwd=src 启动子进程时，Python 在 src/.env 找不到文件，导致所有
+        # Feature Flags 回退为 False（enable_sigterm_kill=False 等），API 密钥全失效。
+        # 使用绝对路径后，无论从哪个工作目录启动均能正确加载项目根的 .env。
+        env_file=str(_PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=False,   # 环境变量大小写不敏感
         extra="ignore",         # 忽略 .env 中未声明的多余字段
@@ -130,6 +142,48 @@ class Settings(BaseSettings):
         """确保运行时必要的目录存在"""
         self.default_output_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_active_proxies(self) -> dict:
+        """[Claude_Sonnet_4.6_Thinking_planning] v2.5.0: 动态检测系统代理并验证连通性。
+
+        从 macOS/系统全局代理设置中读取配置（通过 urllib.request.getproxies()），
+        随后对代理服务器进行 TCP 连通性测试（超时 0.5 秒）。
+
+        - 若代理可达：返回含代理 env var 的字典，可直接注入 subprocess 环境。
+        - 若代理不可达或未配置：返回空字典（不注入，避免 connection refused）。
+
+        使用场景：注入 yt-dlp / curl 下载子进程，确保走代理高速下载；
+                  同时注入 pipeline_manager 进程，确保 Gemini API 调用正常。
+        """
+        try:
+            system_proxies = urllib.request.getproxies()  # 读取 macOS 系统全局代理
+        except Exception:
+            return {}
+
+        http_proxy = system_proxies.get("http") or system_proxies.get("https")
+        if not http_proxy:
+            return {}
+
+        # 解析代理地址和端口，进行 TCP 连通性测试
+        try:
+            from urllib.parse import urlparse
+            parsed = urlparse(http_proxy)
+            host = parsed.hostname
+            port = parsed.port or 7890
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.5)
+            sock.connect((host, port))
+            sock.close()
+            # 代理可达，返回注入字典
+            return {
+                "HTTP_PROXY":  http_proxy,
+                "HTTPS_PROXY": http_proxy,
+                "http_proxy":  http_proxy,
+                "https_proxy": http_proxy,
+            }
+        except Exception:
+            # 代理不可达，返回空字典（保持直连，不注入任何代理变量）
+            return {}
 
 
 # 全局单例 — 整个项目统一引用此实例

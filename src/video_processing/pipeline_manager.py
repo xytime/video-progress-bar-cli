@@ -31,6 +31,7 @@
 | 3.1.0   | 2026-06-04 | Gemini_3.5_Flash_planning           | [下载优化] yt-dlp 启用 curl 外部下载器并配置 10 次自动重试与断点续传，解决代理环境下大视频/音频下载中断报错 |
 | 3.1.1   | 2026-06-07 | Gemini_3.5_Flash_planning           | [修复上传错误] 渲染命令中增加 --output 参数，确保输出视频名不带 yt-dlp 格式后缀，从而与上传器期望路径一致 |
 | 3.2.0   | 2026-06-07 | Gemini_3.5_Flash_planning           | [修复下载匹配] 优化 _find_downloaded_video：限定文件名主干(stem)必须与 yid 完全一致，排除包含 _vertical 等衍生文件或格式后缀的临时文件 |
+| 3.3.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [代理内射] 修复下载死锁/丢包根因：不再无条件清除代理变量改为动态检测+验证连通性后注入/不注入，确保 curl/yt-dlp 在代理可用时使用代理高速下载 |
 """
 
 
@@ -64,11 +65,29 @@ def _sigterm_handler(signum: int, frame) -> None:  # noqa: ANN001
 
 # 非视频文件后缀（下载产物中排除）
 _NON_VIDEO_SUFFIXES = {'.description', '.json', '.ytdl', '.part', '.jpg', '.png', '.webp'}
-# 系统代理 key，yt-dlp 子进程清除以防代理未运行时 connection refused
+# [Claude_Sonnet_4.6_Thinking_planning] v3.3.0: 代理环境变量选集，用于清除或替换
 _PROXY_KEYS = frozenset({
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
     'http_proxy', 'https_proxy', 'all_proxy',
 })
+
+
+def _build_subprocess_env() -> dict:
+    """[Claude_Sonnet_4.6_Thinking_planning] v3.3.0: 构建 subprocess 环境字典。
+
+    策略：动态检测系统代理可用性，自动决定是否注入代理。
+    - 若代理可达：将代理变量注入子进程，让 curl/yt-dlp 通过代理高速下载。
+    - 若代理不可达：清除代理变量，避免 connection refused 导致进程卡死。
+
+    这起到了两个作用：
+    1. 免除旧日代理已关闭时直连 192.168.1.5:7890 导致 connection refused 的问题
+    2. 在代理服务正常时，自动利用代理高速下载，避免直连 CDN 丢包/限速导致 curl exit 18
+    """
+    active_proxies = settings.get_active_proxies()  # TCP 测试：就绣注入，不就绣不注入
+    # 从当前进程环境中展开，然后用 active_proxies 覆盖到/不到变量
+    env = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
+    env.update(active_proxies)  # 若 active_proxies 为空字典，则不注入任何代理
+    return env
 
 
 class PipelineManager:
@@ -259,6 +278,10 @@ class PipelineManager:
             popen_kwargs["stdout"] = subprocess.PIPE
             popen_kwargs["stderr"] = subprocess.PIPE
         popen_kwargs.pop("check", None)
+        # [Claude_Sonnet_4.6_Thinking_planning] v3.3.0: 若调用方未显式提供 env，
+        # 则自动注入动态代理环境（可达则注入，不可达则清除）
+        if "env" not in popen_kwargs:
+            popen_kwargs["env"] = _build_subprocess_env()
 
         if settings.enable_sigterm_kill:
             proc = subprocess.Popen(
@@ -576,9 +599,16 @@ class PipelineManager:
                                 f"[PARTIAL DL] Using --download-sections *{_sec_start}-{_sec_end} for {yid}"
                             )
 
-                        env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
+                        # [Claude_Sonnet_4.6_Thinking_planning] v3.3.0: 动态代理环境构建
+                        # 检测系统代理可用性：可达则注入代理，不可达则不注入
+                        # 避免旧日代理已关闭时由于 curl connection refused 导致下载卡死
+                        # 同时确保代理可用时 curl 通过代理高速下载，避免直连 CDN 丢包/curl exit 18
+                        subprocess_env = _build_subprocess_env()
+                        logger.info(
+                            f"[PROXY] Download env proxy: {'active' if subprocess_env.get('HTTP_PROXY') else 'direct'}"
+                        )
                         self._run_tracked(dl_cmd, yid, slice_index=slice_index, capture_output=True,
-                                          cwd=str(self._PRJ_ROOT), env=env_no_proxy)
+                                          cwd=str(self._PRJ_ROOT), env=subprocess_env)
                         target_file = self._find_downloaded_video(yid)
                         if not target_file:
                             raise FileNotFoundError(f"No video file found for {yid} after download")

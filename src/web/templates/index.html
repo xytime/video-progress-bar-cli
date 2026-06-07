@@ -303,7 +303,7 @@
     .btn-page:disabled { opacity: 0.5; cursor: not-allowed; }
 
     /* ── Activity Table ── */
-    .activity-table { width: 100%; border-collapse: collapse; }
+    .activity-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
     .activity-table th {
       font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.7px;
       color: var(--text3); text-align: left;
@@ -704,6 +704,21 @@
     .upload-age-fresh { color: var(--green) !important; font-weight: 600; }
     .upload-age-today { color: var(--teal)  !important; }
     .upload-age-week  { color: var(--yellow)!important; }
+    /* ── 观看数/点赞率列固定宽度 — 防止占用所有剩余空间 ── */
+    .activity-table td.vt-cell,
+    .activity-table th.col-views-hd {
+      width: 72px; min-width: 72px; max-width: 72px;
+      text-align: right; white-space: nowrap;
+      font-variant-numeric: tabular-nums; font-weight: 500;
+      padding-right: 14px;
+    }
+    .activity-table td.lr-cell,
+    .activity-table th.col-lr-hd {
+      width: 70px; min-width: 70px; max-width: 70px;
+      text-align: right; white-space: nowrap;
+      font-variant-numeric: tabular-nums; font-weight: 600;
+      padding-right: 14px;
+    }
 
     /* ── [Claude_Sonnet_4.6_Thinking_planning] Hotwords Tab Badges ── */
     .hw-badge {
@@ -1252,14 +1267,14 @@
         <table class="activity-table">
           <thead>
             <tr>
-              <th class="cb-cell" id="th-cb" style="display:none"><input type="checkbox" id="cb-header" class="video-cb" onchange="toggleSelectAll(this.checked)" /></th>
-              <th class="cover-thumb-cell"></th>
-              <th>视频内容</th>
-              <th class="col-views-hd" style="text-align:right;min-width:72px;">观看数</th>
-              <th class="col-lr-hd" style="text-align:right;min-width:68px;">点赞率</th>
-              <th>状态</th>
-              <th>分数 / 操作</th>
-              <th>时间</th>
+              <th class="cb-cell" id="th-cb" style="display:none;width:32px;"><input type="checkbox" id="cb-header" class="video-cb" onchange="toggleSelectAll(this.checked)" /></th>
+              <th class="cover-thumb-cell" style="width:54px;"></th>
+              <th style="width:auto;">视频内容</th>
+              <th class="col-views-hd" style="width:76px;text-align:right;">观看数</th>
+              <th class="col-lr-hd" style="width:72px;text-align:right;">点赞率</th>
+              <th style="width:130px;">状态</th>
+              <th style="width:170px;">分数 / 操作</th>
+              <th style="width:80px;">时间</th>
             </tr>
           </thead>
           <tbody id="activity-body">
@@ -1884,8 +1899,8 @@
               ${trimTimelineHtml}
               ${errorToggle}
             </td>
-            <td class="vt-cell ${viewsCls}" style="text-align:right;font-variant-numeric:tabular-nums;font-weight:500;white-space:nowrap;padding-right:16px;">${viewsStr}</td>
-            <td class="lr-cell ${lrCls}" style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;padding-right:16px;">${lrStr}</td>
+            <td class="vt-cell ${viewsCls}">${viewsStr}</td>
+            <td class="lr-cell ${lrCls}">${lrStr}</td>
             <td class="status-cell" style="white-space:nowrap">${statusBadge(v.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
             <td class="score-cell">${scoreControls}</td>
             <td class="time-cell"><span class="video-time">${relativeTime(v.updated_at)}</span></td>
@@ -2280,8 +2295,8 @@
                 </div>
                 ${errorToggle}
               </td>
-              <td class="vt-cell" style="text-align:right;color:var(--text3);padding-right:16px;">—</td>
-              <td class="lr-cell" style="text-align:right;color:var(--text3);padding-right:16px;">—</td>
+              <td class="vt-cell" style="color:var(--text3);">—</td>
+              <td class="lr-cell" style="color:var(--text3);">—</td>
               <td class="status-cell" style="white-space:nowrap">${statusBadge(s.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
               <td class="score-cell">${scoreControls}</td>
               <td class="time-cell"><span class="video-time">${relativeTime(s.updated_at)}</span></td>

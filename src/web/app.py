@@ -20,6 +20,7 @@
 | 2.8.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 使用 python -u 启动子进程以实现 pipeline.log 实时无缓冲日志输出 |
 | 2.9.0 | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 respec_video 端点：停止当前处理、覆盖规格并重新入队；add_video_manual 重复检测补充 video_id/title 返回 |
 | 3.0.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 新增 /api/trending-keywords 端点，整合 HN 热词注入功能到后台 Web UI 热词监控 Tab |
+| 3.1.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix+防卡] _run_pipeline_manager 使用 settings.get_active_proxies() 动态代理注入；_queue_runner_loop 新增 purge_stale_tasks() 自动清理卡死 DOWNLOADING 任务 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -107,8 +108,12 @@ def _run_pipeline_manager():
     src_dir = str(prj_root / "src")
     log_path = prj_root / "output" / "pipeline.log"
     log_path.parent.mkdir(exist_ok=True)
-    _proxy = frozenset({'HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'})
-    env_clean = {k: v for k, v in os.environ.items() if k not in _proxy}
+    # [Claude_Sonnet_4.6_Thinking_planning] v3.1.0: 动态代理注入策略
+    # 1. 先清除老代理变量，防止某些历史变量影响子进程
+    # 2. 再检测当前代理可用性，就绣将代理注入，不就绣则不注入
+    _proxy_keys = frozenset({'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'})
+    env_clean = {k: v for k, v in os.environ.items() if k not in _proxy_keys}
+    env_clean.update(settings.get_active_proxies())  # 就绣注入，不就绣空 update（无副作用）
 
     import subprocess as sp
     try:
@@ -129,6 +134,16 @@ def _queue_runner_loop():
     time.sleep(5)
     while True:
         try:
+            # [Claude_Sonnet_4.6_Thinking_planning] v3.1.0: 每轮先清理卡在非终态的任务
+            # 将卡在 DOWNLOADING/PROCESSING 超过 2 小时的死锁任务重置回 PENDING
+            # 这解决了历史任务卡死后永久占用队列、幹操新任务调度的问题
+            purged = db.purge_stale_tasks(stale_hours=2)
+            if purged > 0:
+                import logging
+                logging.getLogger(__name__).info(
+                    f"[Scheduler] Purged {purged} stale task(s) back to PENDING"
+                )
+
             # 1. 检查是否有 >=75 的 PENDING 视频
             pending_videos = db.get_high_score_pending_videos(min_score=75, limit=1)
             if pending_videos:
@@ -138,7 +153,7 @@ def _queue_runner_loop():
                     t.name in ("full-pipeline", "queue-pipeline") or t.name.startswith("pipeline-")
                     for t in active_threads
                 )
-                
+
                 if not is_pipeline_running:
                     print(f"[Scheduler] Found pending high-score video {pending_videos[0]['youtube_id']}, auto-triggering queue pipeline...")
                     threading.Thread(target=_run_pipeline_manager, daemon=True, name="queue-pipeline").start()

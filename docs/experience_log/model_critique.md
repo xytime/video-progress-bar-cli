@@ -7,6 +7,7 @@ created_at: 2026-05-21T14:31:00+08:00
 
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.1.0 | 2026-06-07 | Gemini_3.5_Flash_planning           | 记录 Gemini_3.1_Pro_High_planning 相对路径 env_file 导致 Feature Flags 失效及 Gemini_3.5_Flash_planning 无条件清除代理导致 curl 下载挂起的 P1 问题 |
 | 2.0.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 记录 Gemini_3.5_Flash_planning 在 YouTube 插件中将 document 传入 injectStylesIntoShadow 导致 HierarchyRequestError 静默崩溃的 P0 问题 |
 | 1.9.0 | 2026-06-07 | Gemini_3.5_Flash_planning    | 记录 Gemini_3.5_Flash_fast 在 YouTube 插件中直接向 innerHTML 写入导致 Trusted Types 限制拦截报错的问题 |
 | 1.8.0 | 2026-06-07 | Gemini_3.5_Flash_planning    | 记录 Gemini_3.5_Flash_planning 在实现 yt-dlp curl 优化时产生 NameError 崩溃的问题 |
@@ -51,3 +52,12 @@ created_at: 2026-05-21T14:31:00+08:00
 ## 对于【Gemini_3.5_Flash_planning】问题（YouTube 调用 injectStylesIntoShadow(document)）：
 在实现 Light DOM 进度条渲染时，向 `injectStylesIntoShadow()` 传入了 `document` 对象。该函数内部直接调用 `shadowRoot.appendChild(style)`，而 `document.appendChild()` 在文档已有 `<html>` 根节点时会抛出 `HierarchyRequestError`。这个异常导致整个 `renderUI` 函数崩溃，且由于 `YT_RECEIVE_RATIO` 事件回调外没有 try/catch，错误被静默吐掉。结果：控制台完全无输出，表面看起来插件没有运行，极难定位。正确做法是：当 root 为 document 时应 append 到 `document.head` 或 `document.documentElement`，而非直接操作 document 节点本身。
 **严重程度**：P0
+
+## 对于【Gemini_3.1_Pro_High_planning】问题：
+在配置类 `settings.py` 中，定义 `.env` 配置文件路径时使用了相对路径（如 `"../.env"`）。这导致当 Web 应用或调度器在不同的当前工作目录（Cwd，如 `src/` 文件夹下）以子进程启动 Pipeline 时，Pydantic 无法正确查找到该配置文件，导致所有系统 Feature Flags（如 `ENABLE_SIGTERM_KILL`）和凭证密钥全部静默退化为默认值（如 False），导致系统核心功能失效。应当在定义时基于当前文件 `__file__` 推导出绝对路径来指定 `env_file` 路径，避免对运行时的 Cwd 产生依赖。
+**严重程度**：P1
+
+## 对于【Gemini_3.5_Flash_planning】问题（无条件清除代理导致下载挂起）：
+在 `pipeline_manager.py` 的子进程环境变量构建中，为了防止多级代理干扰，采取了无条件从环境变量中删除所有 `HTTP_PROXY` / `HTTPS_PROXY` 等代理项的过度清理策略。这导致在国内网络环境里，`curl` 外部下载器直连 Google Video CDN 时发生严重丢包和网络超时（返回 curl exit code 18），导致任务无限期卡死在 DOWNLOADING 状态。应当通过 TCP 动态探测当前系统代理的可用性，按需且安全地进行代理注入或隔离，而非粗暴的无条件清除。
+**严重程度**：P1
+
