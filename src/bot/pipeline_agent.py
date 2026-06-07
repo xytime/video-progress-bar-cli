@@ -12,6 +12,7 @@ based on incoming Telegram messages and commands.
 | 1.2.0   | 2026-05-24 | Gemini_3.5_Flash_High_planning | 将模型切换为 gemini-flash-lite-latest，并加入 429 频率限额指数避让重试机制 |
 | 1.3.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 在 5 个核心工具中加入 fcntl 跨进程排他锁，强制实现串行执行 |
 | 1.3.1   | 2026-06-04 | Gemini_3.5_Flash_planning      | [下载优化] yt-dlp 启用 curl 外部下载器并配置 10 次自动重试与断点续传，解决代理环境下大视频/音频下载中断报错 |
+| 1.3.2   | 2026-06-07 | Gemini_3.5_Flash_planning      | 修复 download_video 中 url 未定义 NameError 崩溃问题，标注 # [Gemini_3.5_Flash_planning] |
 """
 import os
 import sys
@@ -221,8 +222,8 @@ class PipelineAgent:
             if existing:
                 return json.dumps({"ok": True, "message": f"Video already downloaded", "path": existing})
 
-            # [Gemini_3.5_Flash_planning] v1.3.1: 针对代理环境下的 SSL UNEXPECTED_EOF_WHILE_READING 报错，
-            # 引入 --downloader curl 将大文件下载转交给 curl 处理，其代理兼容性和 TLS 握手比 python ssl 模块更稳定。
+            # [Gemini_3.5_Flash_planning] v1.3.2: 修复 url 未定义 NameError 崩溃，增加 url = f"https://youtu.be/{youtube_id}"
+            url = f"https://youtu.be/{youtube_id}"
             dl_cmd = [
                 self.venv_ytdlp,
                 "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
