@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YouTube Like-to-View Ratio Bar",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "在 YouTube 列表页及搜索页的视频缩略图下方展示点赞量/播放量比例条，并在视频信息中插入具体百分比数值。",
   "permissions": [
     "storage"

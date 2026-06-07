@@ -3,6 +3,7 @@
  * 
  * Version | Date       | Author               | Description
  * --------|------------|----------------------|----------------------------------------------------
+ * 1.2.3   | 2026-06-07 | Gemini_3.5_Flash_planning | 兼容 YouTube 新版首页卡片布局 yt-lockup-view-model，支持 Light DOM 渲染与 text 渲染 fallback 链路
  * 1.2.2   | 2026-06-07 | Gemini_3.5_Flash_planning | 解决 YouTube 严格 Trusted HTML (Trusted Types) 策略下直接写入 innerHTML 被阻止的 bug，改用标准 DOM API 渲染
  * 1.2.1   | 2026-06-07 | Gemini_3.5_Flash_planning | 针对红蓝审计结果进行加固：解决 SPA 视频卡片复用渲染脏数据、引入 10 秒超时清理防范内存泄露，并支持原地更新
  * 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 深度修复 Shadow DOM 穿透和样式隔离，支持影子 DOM 内部渲染和动态 CSS 注入
@@ -15,6 +16,7 @@
   const MAX_RATIO_THRESHOLD = 8.0;
   const MIN_VIEWS_THRESHOLD = 500;
 
+  // # [Gemini_3.5_Flash_planning] 扩充 CARD_SELECTORS 支持新版 yt-lockup-view-model 卡片标签
   const CARD_SELECTORS = [
     'ytd-video-renderer',
     'ytd-rich-item-renderer',
@@ -23,14 +25,17 @@
     'ytd-compact-video-renderer',
     'ytd-grid-video-renderer',
     'ytd-playlist-video-renderer',
-    'ytd-rich-grid-slim-media'
+    'ytd-rich-grid-slim-media',
+    'yt-lockup-view-model'
   ];
 
-  // # [Gemini_3.5_Flash_planning] 样式注入标记与 CSS 定义
+  // # [Gemini_3.5_Flash_planning] 样式中添加对新布局缩略图容器 a.ytLockupViewModelContentImage 的支持，设置相对定位及悬停行为
   const STYLE_ID = 'yt-like-view-ratio-styles';
   const CSS_TEXT = `
-    a#thumbnail {
+    a#thumbnail,
+    a.ytLockupViewModelContentImage {
       position: relative !important;
+      display: block !important;
     }
     .yt-like-view-ratio-bar-container {
       position: absolute;
@@ -46,6 +51,7 @@
       cursor: help;
     }
     a#thumbnail:hover .yt-like-view-ratio-bar-container,
+    a.ytLockupViewModelContentImage:hover .yt-like-view-ratio-bar-container,
     .yt-like-view-ratio-bar-container:hover {
       height: 6px;
     }
@@ -184,14 +190,17 @@
     }
   }
 
+  // # [Gemini_3.5_Flash_planning] 支持新版布局 a.ytLockupViewModelContentImage 和 title 链接的 ID 提取
   function findVideoIdInCard(card) {
-    const thumbnailAnchor = querySelectorShadow(card, 'a#thumbnail');
+    const thumbnailAnchor = querySelectorShadow(card, 'a#thumbnail') || querySelectorShadow(card, 'a.ytLockupViewModelContentImage');
     if (thumbnailAnchor && thumbnailAnchor.href) {
       const id = extractVideoId(thumbnailAnchor.href);
       if (id) return id;
     }
 
-    const titleAnchor = querySelectorShadow(card, 'a#video-title-link') || querySelectorShadow(card, 'a#video-title');
+    const titleAnchor = querySelectorShadow(card, 'a#video-title-link') || 
+                        querySelectorShadow(card, 'a#video-title') ||
+                        querySelectorShadow(card, 'a.ytLockupMetadataViewModelTitle');
     if (titleAnchor && titleAnchor.href) {
       const id = extractVideoId(titleAnchor.href);
       if (id) return id;
@@ -256,9 +265,29 @@
     }
   });
 
+  // # [Gemini_3.5_Flash_planning] 重构后的 renderUI，完美兼容 Shadow DOM (ytd-thumbnail) 和 Light DOM (yt-lockup-view-model) 双重布局
   function renderUI(card, rawRatio, smoothedRatio, likes, views) {
     const thumbnailContainer = querySelectorShadow(card, 'ytd-thumbnail');
-    const metadataLine = querySelectorShadow(card, '#metadata-line');
+    
+    // 寻找新旧布局的百分比文本容器
+    let metadataLine = querySelectorShadow(card, '#metadata-line');
+    if (!metadataLine) {
+      // 兼容新版首页 yt-lockup-view-model 的 metadata 结构
+      const contentMetadata = querySelectorShadow(card, 'yt-content-metadata-view-model');
+      if (contentMetadata) {
+        const rows = contentMetadata.querySelectorAll('.ytContentMetadataViewModelMetadataRow');
+        if (rows && rows.length > 0) {
+          metadataLine = rows[rows.length - 1];
+        } else {
+          metadataLine = contentMetadata;
+        }
+      }
+    }
+    if (!metadataLine) {
+      metadataLine = querySelectorShadow(card, '.ytLockupMetadataViewModelMetadata') ||
+                     querySelectorShadow(card, '.ytLockupMetadataViewModelTextContainer');
+    }
+
     const isLowSample = views < MIN_VIEWS_THRESHOLD;
     
     let tooltipText = '';
@@ -268,59 +297,68 @@
       tooltipText = `置信度点赞率: ${smoothedRatio.toFixed(1)}% (真实值: ${rawRatio.toFixed(1)}%)\n数据结构: 👍 ${formatNumber(likes)} / 👁️ ${formatNumber(views)}`;
     }
 
-    // # [Gemini_3.5_Flash_planning] 1. 渲染/更新进度条到 a#thumbnail (Shadow DOM 内部)
+    // 1. 确保全局文档注入样式（为 Light DOM 的进度条提供样式支持）
+    injectStylesIntoShadow(document);
+
+    // 确定当前卡片应挂载进度条的 anchor 和对应的样式作用域
+    let anchor = null;
+    let styleTargetRoot = null;
+
     if (thumbnailContainer && thumbnailContainer.shadowRoot) {
-      const anchor = thumbnailContainer.shadowRoot.querySelector('a#thumbnail');
-      if (anchor) {
-        injectStylesIntoShadow(thumbnailContainer.shadowRoot);
+      anchor = thumbnailContainer.shadowRoot.querySelector('a#thumbnail');
+      styleTargetRoot = thumbnailContainer.shadowRoot;
+    } else {
+      // 兼容新版首页 Light DOM 缩略图
+      anchor = querySelectorShadow(card, 'a.ytLockupViewModelContentImage');
+      styleTargetRoot = document;
+    }
 
-        let barContainer = anchor.querySelector('.yt-like-view-ratio-bar-container');
-        let barFill = null;
+    if (anchor) {
+      if (styleTargetRoot && styleTargetRoot !== document) {
+        injectStylesIntoShadow(styleTargetRoot);
+      }
 
-        if (!barContainer) {
-          // 不存在则创建
-          barContainer = document.createElement('div');
-          barContainer.className = 'yt-like-view-ratio-bar-container';
-          
-          barFill = document.createElement('div');
-          barFill.className = 'yt-like-view-ratio-bar-fill';
-          
-          barContainer.appendChild(barFill);
-          anchor.appendChild(barContainer);
-        } else {
-          // 已存在则获取 fill，用于原地更新
-          barFill = barContainer.querySelector('.yt-like-view-ratio-bar-fill');
-        }
+      let barContainer = anchor.querySelector('.yt-like-view-ratio-bar-container');
+      let barFill = null;
 
-        // 原地更新 tooltip
-        barContainer.title = tooltipText;
-
-        // 原地更新进度条宽度和颜色类别
-        const ratio = isLowSample ? rawRatio : smoothedRatio;
-        const fillPercentage = Math.min(100, (ratio / MAX_RATIO_THRESHOLD) * 100);
-        barFill.style.width = `${fillPercentage}%`;
+      if (!barContainer) {
+        barContainer = document.createElement('div');
+        barContainer.className = 'yt-like-view-ratio-bar-container';
         
-        // 重置类别
+        barFill = document.createElement('div');
         barFill.className = 'yt-like-view-ratio-bar-fill';
-        if (isLowSample) {
-          barFill.classList.add('ratio-insufficient');
+        
+        barContainer.appendChild(barFill);
+        anchor.appendChild(barContainer);
+      } else {
+        barFill = barContainer.querySelector('.yt-like-view-ratio-bar-fill');
+      }
+
+      barContainer.title = tooltipText;
+
+      const ratio = isLowSample ? rawRatio : smoothedRatio;
+      const fillPercentage = Math.min(100, (ratio / MAX_RATIO_THRESHOLD) * 100);
+      barFill.style.width = `${fillPercentage}%`;
+      
+      barFill.className = 'yt-like-view-ratio-bar-fill';
+      if (isLowSample) {
+        barFill.classList.add('ratio-insufficient');
+      } else {
+        if (smoothedRatio < 2.0) {
+          barFill.classList.add('ratio-low');
+        } else if (smoothedRatio < 4.0) {
+          barFill.classList.add('ratio-medium');
+        } else if (smoothedRatio < 7.0) {
+          barFill.classList.add('ratio-high');
         } else {
-          if (smoothedRatio < 2.0) {
-            barFill.classList.add('ratio-low');
-          } else if (smoothedRatio < 4.0) {
-            barFill.classList.add('ratio-medium');
-          } else if (smoothedRatio < 7.0) {
-            barFill.classList.add('ratio-high');
-          } else {
-            barFill.classList.add('ratio-super');
-          }
+          barFill.classList.add('ratio-super');
         }
       }
     }
 
     const ratioFormatted = isLowSample ? `${rawRatio.toFixed(1)}%*` : `${smoothedRatio.toFixed(1)}%`;
 
-    // # [Gemini_3.5_Flash_planning] 2. 渲染/更新比例文字到 #metadata-line
+    // 2. 渲染/更新比例文字到 metadata 节点
     if (metadataLine) {
       let textSpan = metadataLine.querySelector('.yt-like-view-ratio-text');
       if (!textSpan) {
@@ -358,7 +396,6 @@
         }
       }
 
-      // # [Gemini_3.5_Flash_planning] 包含自带样式的分割圆点，省去 pseudo-element 的依赖，使用标准 DOM API 绕过 YouTube 的 Trusted HTML 限制
       textSpan.textContent = '';
       const dotSpan = document.createElement('span');
       dotSpan.style.marginRight = '8px';
@@ -388,8 +425,9 @@
       const videoId = findVideoIdInCard(card);
       if (!videoId) {
         // 如果卡片还没有被赋予 videoId，不作标记，下次轮询时重新匹配（防止属性绑定延迟竞争）
-        const hasThumb = !!querySelectorShadow(card, 'ytd-thumbnail');
-        const hasAnchor = !!querySelectorShadow(card, 'a#thumbnail');
+        // # [Gemini_3.5_Flash_planning] 诊断日志检查：支持新版卡片的缩略图和锚点判断
+        const hasThumb = !!querySelectorShadow(card, 'ytd-thumbnail') || !!querySelectorShadow(card, 'yt-thumbnail-view-model');
+        const hasAnchor = !!querySelectorShadow(card, 'a#thumbnail') || !!querySelectorShadow(card, 'a.ytLockupViewModelContentImage');
         if (!hasThumb || !hasAnchor) {
           missingAnchor++;
         } else {
