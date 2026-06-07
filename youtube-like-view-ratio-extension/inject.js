@@ -3,6 +3,7 @@
  * 
  * Version | Date       | Author               | Description
  * --------|------------|----------------------|----------------------------------------------------
+ * 1.2.1   | 2026-06-07 | Gemini_3.5_Flash_planning | 针对红蓝审计结果进行加固：解决 SPA 视频卡片复用渲染脏数据、引入 10 秒超时清理防范内存泄露，并支持原地更新
  * 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 深度修复 Shadow DOM 穿透和样式隔离，支持影子 DOM 内部渲染和动态 CSS 注入
  * 1.0.0   | 2026-06-07 | Gemini_3.5_Flash_fast| 初始创建 inject.js，作为 Main World 注入脚本运行，100% 穿透 Polymer 的 Shadow DOM
  */
@@ -221,6 +222,13 @@
     // 放入待处理队列
     if (!pendingCards.has(videoId)) {
       pendingCards.set(videoId, new Set());
+      
+      // # [Gemini_3.5_Flash_planning] 漏洞防护：10秒超时自动清理，防止因 API 失败或路由卸载导致 Set 累积引起内存泄露
+      setTimeout(() => {
+        if (pendingCards.has(videoId)) {
+          pendingCards.delete(videoId);
+        }
+      }, 10000);
     }
     pendingCards.get(videoId).add(card);
 
@@ -249,25 +257,7 @@
 
   function renderUI(card, rawRatio, smoothedRatio, likes, views) {
     const thumbnailContainer = querySelectorShadow(card, 'ytd-thumbnail');
-    
-    // # [Gemini_3.5_Flash_planning] 检查是否已经渲染过进度条（需要查 a#thumbnail 内部是否存在我们的进度条容器）
-    let hasBar = false;
-    let anchor = null;
-    if (thumbnailContainer && thumbnailContainer.shadowRoot) {
-      anchor = thumbnailContainer.shadowRoot.querySelector('a#thumbnail');
-      if (anchor && anchor.querySelector('.yt-like-view-ratio-bar-container')) {
-        hasBar = true;
-      }
-    }
-
     const metadataLine = querySelectorShadow(card, '#metadata-line');
-    let hasText = false;
-    if (metadataLine && metadataLine.querySelector('.yt-like-view-ratio-text')) {
-      hasText = true;
-    }
-
-    if (hasBar && hasText) return;
-
     const isLowSample = views < MIN_VIEWS_THRESHOLD;
     
     let tooltipText = '';
@@ -277,49 +267,70 @@
       tooltipText = `置信度点赞率: ${smoothedRatio.toFixed(1)}% (真实值: ${rawRatio.toFixed(1)}%)\n数据结构: 👍 ${formatNumber(likes)} / 👁️ ${formatNumber(views)}`;
     }
 
-    // # [Gemini_3.5_Flash_planning] 渲染进度条到 a#thumbnail (Shadow DOM 内部)
-    if (!hasBar && thumbnailContainer && thumbnailContainer.shadowRoot && anchor) {
-      injectStylesIntoShadow(thumbnailContainer.shadowRoot);
+    // # [Gemini_3.5_Flash_planning] 1. 渲染/更新进度条到 a#thumbnail (Shadow DOM 内部)
+    if (thumbnailContainer && thumbnailContainer.shadowRoot) {
+      const anchor = thumbnailContainer.shadowRoot.querySelector('a#thumbnail');
+      if (anchor) {
+        injectStylesIntoShadow(thumbnailContainer.shadowRoot);
 
-      const barContainer = document.createElement('div');
-      barContainer.className = 'yt-like-view-ratio-bar-container';
-      barContainer.title = tooltipText;
+        let barContainer = anchor.querySelector('.yt-like-view-ratio-bar-container');
+        let barFill = null;
 
-      const barFill = document.createElement('div');
-      barFill.className = 'yt-like-view-ratio-bar-fill';
-
-      if (isLowSample) {
-        const fillPercentage = Math.min(100, (rawRatio / MAX_RATIO_THRESHOLD) * 100);
-        barFill.style.width = `${fillPercentage}%`;
-        barFill.classList.add('ratio-insufficient');
-      } else {
-        const fillPercentage = Math.min(100, (smoothedRatio / MAX_RATIO_THRESHOLD) * 100);
-        barFill.style.width = `${fillPercentage}%`;
-
-        if (smoothedRatio < 2.0) {
-          barFill.classList.add('ratio-low');
-        } else if (smoothedRatio < 4.0) {
-          barFill.classList.add('ratio-medium');
-        } else if (smoothedRatio < 7.0) {
-          barFill.classList.add('ratio-high');
+        if (!barContainer) {
+          // 不存在则创建
+          barContainer = document.createElement('div');
+          barContainer.className = 'yt-like-view-ratio-bar-container';
+          
+          barFill = document.createElement('div');
+          barFill.className = 'yt-like-view-ratio-bar-fill';
+          
+          barContainer.appendChild(barFill);
+          anchor.appendChild(barContainer);
         } else {
-          barFill.classList.add('ratio-super');
+          // 已存在则获取 fill，用于原地更新
+          barFill = barContainer.querySelector('.yt-like-view-ratio-bar-fill');
+        }
+
+        // 原地更新 tooltip
+        barContainer.title = tooltipText;
+
+        // 原地更新进度条宽度和颜色类别
+        const ratio = isLowSample ? rawRatio : smoothedRatio;
+        const fillPercentage = Math.min(100, (ratio / MAX_RATIO_THRESHOLD) * 100);
+        barFill.style.width = `${fillPercentage}%`;
+        
+        // 重置类别
+        barFill.className = 'yt-like-view-ratio-bar-fill';
+        if (isLowSample) {
+          barFill.classList.add('ratio-insufficient');
+        } else {
+          if (smoothedRatio < 2.0) {
+            barFill.classList.add('ratio-low');
+          } else if (smoothedRatio < 4.0) {
+            barFill.classList.add('ratio-medium');
+          } else if (smoothedRatio < 7.0) {
+            barFill.classList.add('ratio-high');
+          } else {
+            barFill.classList.add('ratio-super');
+          }
         }
       }
-
-      barContainer.appendChild(barFill);
-      anchor.appendChild(barContainer);
     }
 
     const ratioFormatted = isLowSample ? `${rawRatio.toFixed(1)}%*` : `${smoothedRatio.toFixed(1)}%`;
 
-    // # [Gemini_3.5_Flash_planning] 渲染比例文字到 #metadata-line (并使用行内样式绕过 shadowRoot 样式隔离)
-    if (!hasText && metadataLine) {
-      const textSpan = document.createElement('span');
-      textSpan.className = 'yt-like-view-ratio-text';
+    // # [Gemini_3.5_Flash_planning] 2. 渲染/更新比例文字到 #metadata-line
+    if (metadataLine) {
+      let textSpan = metadataLine.querySelector('.yt-like-view-ratio-text');
+      if (!textSpan) {
+        textSpan = document.createElement('span');
+        textSpan.className = 'yt-like-view-ratio-text';
+        metadataLine.appendChild(textSpan);
+      }
+
       textSpan.title = tooltipText;
 
-      // 使用内联样式，绕开全局样式在 shadowRoot 下被屏蔽的问题
+      // 原地更新内联样式，避免残留旧属性
       textSpan.style.fontSize = '1.2rem';
       textSpan.style.fontWeight = '400';
       textSpan.style.lineHeight = '1.8rem';
@@ -329,6 +340,8 @@
       textSpan.style.display = 'inline-flex';
       textSpan.style.alignItems = 'center';
       textSpan.style.transition = 'color 0.2s ease';
+      textSpan.style.fontStyle = '';
+      textSpan.style.textShadow = '';
 
       if (isLowSample) {
         textSpan.style.color = 'var(--yt-spec-text-disabled, #7f8c8d)';
@@ -344,9 +357,8 @@
         }
       }
 
-      // 包含自带样式的分割圆点，省去 pseudo-element 的依赖
+      // 包含自带样式的分割圆点，省去 pseudo-element 的依赖，支持原地更新
       textSpan.innerHTML = `<span style="margin-right: 8px; color: var(--yt-spec-text-secondary, #aaaaaa);">•</span>👍/👁️ ${ratioFormatted}`;
-      metadataLine.appendChild(textSpan);
     }
 
     console.log(`[Like-to-View] 渲染成功: ID=${card.dataset.ytVideoId}, 播放量=${views}, 比例=${ratioFormatted}`);
@@ -365,17 +377,9 @@
     totalCards = cards.length;
 
     cards.forEach(card => {
-      if (card.dataset.ytProcessed === 'true') {
-        processedCards++;
-        return;
-      }
-
       const videoId = findVideoIdInCard(card);
-      if (videoId) {
-        card.dataset.ytProcessed = 'true';
-        card.dataset.ytVideoId = videoId;
-        intersectionObserver.observe(card);
-      } else {
+      if (!videoId) {
+        // 如果卡片还没有被赋予 videoId，不作标记，下次轮询时重新匹配（防止属性绑定延迟竞争）
         const hasThumb = !!querySelectorShadow(card, 'ytd-thumbnail');
         const hasAnchor = !!querySelectorShadow(card, 'a#thumbnail');
         if (!hasThumb || !hasAnchor) {
@@ -383,7 +387,23 @@
         } else {
           missingId++;
         }
+        return;
       }
+
+      // # [Gemini_3.5_Flash_planning] 漏洞防护：判断当前真实 ID 是否与卡片缓存的 ID 相同。
+      // 如果相同，且已被标记为处理，则直接跳过（常规已处理卡片）。
+      // 如果不同（说明是 SPA 路由切换引起的 DOM 节点复用），则重新进行数据获取和渲染。
+      if (card.dataset.ytVideoId === videoId && card.dataset.ytProcessed === 'true') {
+        processedCards++;
+        return;
+      }
+
+      // 更新（或初始化）卡片的缓存 ID 及状态
+      card.dataset.ytVideoId = videoId;
+      card.dataset.ytProcessed = 'true';
+
+      // 观察可见性，以触发数据查询
+      intersectionObserver.observe(card);
     });
 
     if (!hasLoggedScan && totalCards > 0) {
@@ -403,4 +423,5 @@
   setInterval(scanAndProcess, 1000);
 
 })();
+
 
