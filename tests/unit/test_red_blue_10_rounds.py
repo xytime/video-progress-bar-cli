@@ -115,7 +115,9 @@ def test_translation_html_filtering(mock_translator_class, tmp_path):
         {"text": "Captcha"}
     ]
     
-    processor._translate_segments(segments)
+    # [Claude_Sonnet_4.6_Thinking_planning] 必须禁用 Gemini 路径，否则真实 API 调用成功后会绕过 GoogleTranslator mock，导致测试失效
+    with patch.object(processor, '_translate_segments_gemini', return_value=None):
+        processor._translate_segments(segments)
     
     assert segments[0]['zh_text'] == "正常翻译"
     assert segments[1]['zh_text'] == "" # Filtered

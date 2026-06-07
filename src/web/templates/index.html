@@ -690,6 +690,32 @@
     .stat-value { transition: color 0.3s ease; }
     .stat-value.updated { color: var(--accent2); }
 
+    /* ── [Claude_Sonnet_4.6_Thinking_planning] 观看数颜色分级 (ref: keyword_report.html) ── */
+    .vt-mega { color: #bc8cff; font-weight: 700; }
+    .vt-big  { color: #58a6ff; font-weight: 600; }
+    .vt-mid  { color: var(--text); }
+    .vt-small{ color: var(--text3); }
+    /* ── 点赞率颜色分级 ── */
+    .lr-great{ color: var(--green);  font-weight: 700; }
+    .lr-ok   { color: var(--yellow); font-weight: 600; }
+    .lr-low  { color: var(--orange); }
+    .lr-poor { color: var(--red);    }
+    /* ── 新鲜度点 ── */
+    .upload-age-fresh { color: var(--green) !important; font-weight: 600; }
+    .upload-age-today { color: var(--teal)  !important; }
+    .upload-age-week  { color: var(--yellow)!important; }
+
+    /* ── [Claude_Sonnet_4.6_Thinking_planning] Hotwords Tab Badges ── */
+    .hw-badge {
+      display: inline-flex; align-items: center;
+      font-size: 11px; font-weight: 600;
+      padding: 3px 10px; border-radius: 20px;
+    }
+    .hw-badge-cache  { background: rgba(100,116,139,.15); color: #94a3b8; border: 1px solid rgba(100,116,139,.3); }
+    .hw-badge-live   { background: rgba(52,211,153,.15);  color: var(--green); border: 1px solid rgba(52,211,153,.3); }
+    .hw-badge-static { background: rgba(124,110,247,.12); color: var(--accent2); border: 1px solid rgba(124,110,247,.25); }
+    .hw-badge-error  { background: rgba(248,113,113,.12); color: var(--red); border: 1px solid rgba(248,113,113,.3); }
+
     /* ── Add Video Form ── */
     .add-video-wrapper {
       display: flex;
@@ -1201,6 +1227,7 @@
         <button class="tab-btn" id="tab-active" onclick="switchTab('active')">处理中</button>
         <button class="tab-btn" id="tab-completed" onclick="switchTab('completed')">已完成</button>
         <button class="tab-btn" id="tab-error" onclick="switchTab('error')">出错异常</button>
+        <button class="tab-btn" id="tab-hotwords" onclick="switchTab('hotwords')">🔥 热词监控</button>
       </div>
 
       <!-- [Gemini_2.5_Pro_planning] 批量操作栏（仅待筛选 tab 显示） -->
@@ -1228,13 +1255,15 @@
               <th class="cb-cell" id="th-cb" style="display:none"><input type="checkbox" id="cb-header" class="video-cb" onchange="toggleSelectAll(this.checked)" /></th>
               <th class="cover-thumb-cell"></th>
               <th>视频内容</th>
+              <th class="col-views-hd" style="text-align:right;min-width:72px;">观看数</th>
+              <th class="col-lr-hd" style="text-align:right;min-width:68px;">点赞率</th>
               <th>状态</th>
               <th>分数 / 操作</th>
               <th>时间</th>
             </tr>
           </thead>
           <tbody id="activity-body">
-            <tr><td colspan="6" class="empty-state"><div class="empty-icon">📭</div>数据加载中…</td></tr>
+            <tr><td colspan="8" class="empty-state"><div class="empty-icon">📭</div>数据加载中…</td></tr>
           </tbody>
         </table>
         
@@ -1247,6 +1276,38 @@
             <button class="btn-page" id="btn-next-page" onclick="changePage(1)">下一页</button>
           </div>
         </div>
+      </div>
+
+      <!-- [Claude_Sonnet_4.6_Thinking_planning] 🔥 热词监控面板 -->
+      <div id="hotwords-panel" style="display:none; padding:20px 22px;">
+        <!-- 状态栏 -->
+        <div id="hw-status-bar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span id="hw-source-badge" class="hw-badge hw-badge-cache">⏳ 加载中</span>
+            <span id="hw-updated-at" style="font-size:11px;color:var(--text3);"></span>
+          </div>
+          <button onclick="refreshHotwords()" id="hw-refresh-btn" class="btn-run" style="padding:5px 14px;font-size:12px;">
+            🔄 立即刷新 HN 热榜
+          </button>
+        </div>
+        <!-- 统计卡片 -->
+        <div id="hw-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:18px;"></div>
+        <!-- 关键词表格 -->
+        <div style="border:1px solid var(--border);border-radius:10px;overflow:hidden;overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;white-space:nowrap;">
+            <thead>
+              <tr>
+                <th style="background:rgba(0,0,0,0.3);color:var(--text3);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);">类型</th>
+                <th style="background:rgba(0,0,0,0.3);color:var(--text3);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);">搜索词</th>
+                <th style="background:rgba(0,0,0,0.3);color:var(--text3);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);">YouTube 搜索</th>
+              </tr>
+            </thead>
+            <tbody id="hw-table-body">
+              <tr><td colspan="3" style="padding:24px;text-align:center;color:var(--text3);">加载中…</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="font-size:11px;color:var(--text3);margin-top:12px;">⚠ 只读展示，未影响任何生产数据。点击 YouTube 链接将在新标签页打开搜索结果。</p>
       </div>
     </div>
 
@@ -1509,6 +1570,12 @@
   }
 
   function switchTab(tab) {
+    // [Claude_Sonnet_4.6_Thinking_planning] 热词面板独立显示/隐藏
+    const hwPanel  = document.getElementById('hotwords-panel');
+    const mainBody = document.querySelector('.panel-body');
+    const pgn      = document.querySelector('.pagination');
+    const batchBar = document.getElementById('batch-action-bar');
+
     if (currentTab !== tab) {
       currentTab = tab;
       localStorage.setItem('video_pipeline_active_tab', tab);
@@ -1517,15 +1584,26 @@
       document.getElementById('tab-' + tab).classList.add('active');
     }
     document.getElementById('new-data-hint').style.display = 'none';
-    
-    // 切换 Tab 时重置为非编辑状态，并清空选中 (不触发震动以防安全报错)
     exitEditMode(false);
-    
-    const bar = document.getElementById('batch-action-bar');
+
+    if (tab === 'hotwords') {
+      if (hwPanel)  hwPanel.style.display  = 'block';
+      if (mainBody) mainBody.style.display = 'none';
+      if (pgn)      pgn.style.display      = 'none';
+      if (batchBar) batchBar.classList.remove('visible');
+      loadHotwords();
+      return;
+    }
+
+    // 恢复普通 Tab
+    if (hwPanel)  hwPanel.style.display  = 'none';
+    if (mainBody) mainBody.style.display = '';
+    if (pgn)      pgn.style.display      = '';
+
     if (tab === 'waitlist') {
-      if (bar) bar.classList.add('visible');
+      if (batchBar) batchBar.classList.add('visible');
     } else {
-      if (bar) bar.classList.remove('visible');
+      if (batchBar) batchBar.classList.remove('visible');
     }
     loadVideos();
   }
@@ -1690,6 +1768,15 @@
           if (days < 365) return `${Math.floor(days/30)}个月前`;
           return `${Math.floor(days/365)}年前`;
         };
+        // [Claude_Sonnet_4.6_Thinking_planning] CSS class for upload freshness
+        const uploadAgeCls = (d) => {
+          if (!d || d.length !== 8) return '';
+          const days = Math.floor((Date.now() - new Date(`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`)) / 86400000);
+          if (days < 1) return 'fresh';
+          if (days < 3) return 'today';
+          if (days < 7) return 'week';
+          return '';
+        };
         // like% = likes / views
         const likeRatio = (v.like_count != null && v.view_count > 0)
           ? (v.like_count / v.view_count * 100).toFixed(1) + '%'
@@ -1735,11 +1822,10 @@
         const likes     = fmtNum(v.like_count);
         const uploadAge = fmtUploadAge(v.upload_date);
 
+        // [Claude_Sonnet_4.6_Thinking_planning] metaChips: 移除 views/likeRatio（已有独立列）
         const metaChips = [
           dur       ? `<span class="meta-chip">⏱ ${dur}</span>` : '',
-          uploadAge ? `<span class="meta-chip">📅 ${uploadAge}</span>` : '',
-          views     ? `<span class="meta-chip">👁 ${views}</span>` : '',
-          likeRatio ? `<span class="meta-chip">👍 ${likeRatio}</span>` : '',
+          uploadAge ? `<span class="meta-chip upload-age-${uploadAgeCls(v.upload_date)}">📅 ${uploadAge}</span>` : '',
         ].join('');
 
         // [Unknown_Model_planning] 显示 已完成集数/全部集数 状态标签，按全部完成与否区分颜色
@@ -1780,6 +1866,13 @@
                onchange="onRowCbChange()" onclick="event.stopPropagation()" /></td>`
           : `<td class="cb-cell" style="display:none"></td>`;
 
+        // [Claude_Sonnet_4.6_Thinking_planning] 观看数带颜色分级（参考 keyword_report.html 设计）
+        const viewsCls = !v.view_count ? '' : v.view_count >= 1e6 ? 'vt-mega' : v.view_count >= 1e5 ? 'vt-big' : v.view_count >= 1e4 ? 'vt-mid' : 'vt-small';
+        const likeRawPct = (v.like_count != null && v.view_count > 0) ? v.like_count / v.view_count * 100 : null;
+        const lrCls = likeRawPct == null ? '' : likeRawPct >= 5 ? 'lr-great' : likeRawPct >= 3 ? 'lr-ok' : likeRawPct >= 1 ? 'lr-low' : 'lr-poor';
+        const lrStr = likeRawPct != null ? likeRawPct.toFixed(2) + '%' : '—';
+        const viewsStr = views || '—';
+
         return `
           <tr id="row-${v.youtube_id}" class="" onclick="${isWaitlist ? `toggleRowCb('${v.youtube_id}')` : ''}"
               style="${isWaitlist ? 'cursor:default' : ''}">
@@ -1791,6 +1884,8 @@
               ${trimTimelineHtml}
               ${errorToggle}
             </td>
+            <td class="vt-cell ${viewsCls}" style="text-align:right;font-variant-numeric:tabular-nums;font-weight:500;white-space:nowrap;padding-right:16px;">${viewsStr}</td>
+            <td class="lr-cell ${lrCls}" style="text-align:right;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap;padding-right:16px;">${lrStr}</td>
             <td class="status-cell" style="white-space:nowrap">${statusBadge(v.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
             <td class="score-cell">${scoreControls}</td>
             <td class="time-cell"><span class="video-time">${relativeTime(v.updated_at)}</span></td>
@@ -2932,6 +3027,106 @@
   
   loadVideos(); // 无条件加载初始 Tab 数据 (Gemini_3.5_Flash_planning)
   refresh();
+
+  // ── [Claude_Sonnet_4.6_Thinking_planning] 热词监控 Tab 逻辑 ────────────
+  let _hwLoading = false;
+
+  function fmtTs(ts) {
+    if (!ts) return '';
+    const d = new Date(ts * 1000);
+    return `缓存于 ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`;
+  }
+
+  async function loadHotwords(force = false) {
+    if (_hwLoading) return;
+    _hwLoading = true;
+    const url = force ? '/api/trending-keywords/refresh' : '/api/trending-keywords';
+    const method = force ? 'POST' : 'GET';
+    const btn = document.getElementById('hw-refresh-btn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="inline-spinner"></span> 刷新中…'; }
+    try {
+      const r = await fetch(url, { method });
+      const d = await r.json();
+      renderHotwords(d);
+    } catch(e) {
+      console.error('[HotWords] fetch error', e);
+      document.getElementById('hw-table-body').innerHTML =
+        '<tr><td colspan="3" style="padding:24px;text-align:center;color:var(--red);">加载失败：' + e.message + '</td></tr>';
+    } finally {
+      _hwLoading = false;
+      if (btn) { btn.disabled = false; btn.innerHTML = '🔄 立即刷新 HN 热榜'; }
+    }
+  }
+
+  function refreshHotwords() { loadHotwords(true); }
+
+  function renderHotwords(d) {
+    // 状态标签
+    const badge = document.getElementById('hw-source-badge');
+    const updAt = document.getElementById('hw-updated-at');
+    if (badge) {
+      const srcMap = { cache: ['📦 缓存', 'hw-badge-cache'], live: ['🌐 实时', 'hw-badge-live'],
+                       static: ['📌 仅静态', 'hw-badge-static'], error: ['⚠ 拉取失败', 'hw-badge-error'] };
+      const [label, cls] = srcMap[d.source] || ['— 未知', 'hw-badge-cache'];
+      badge.textContent = label;
+      badge.className   = 'hw-badge ' + cls;
+    }
+    if (updAt) updAt.textContent = fmtTs(d.updated_at);
+
+    // 统计卡片
+    const stats = document.getElementById('hw-stats');
+    if (stats) {
+      const dyn = (d.keywords || []).filter(k => k.type === 'dynamic').length;
+      const sta = (d.keywords || []).filter(k => k.type === 'static').length;
+      stats.innerHTML = [
+        ['动态热词', dyn, '#f97316'],
+        ['静态兜底', sta, '#7c6ef7'],
+        ['合并总词', dyn + sta, '#34d399'],
+        ['覆盖提升', sta ? '+' + Math.round(dyn/sta*100) + '%' : '—', '#2dd4bf'],
+      ].map(([label, val, color]) => `
+        <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:12px 14px;">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;">${label}</div>
+          <div style="font-size:22px;font-weight:700;color:${color};margin-top:4px;">${val}</div>
+        </div>`).join('');
+    }
+
+    // 关键词表格
+    const tbody = document.getElementById('hw-table-body');
+    if (!tbody) return;
+    const kws = d.keywords || [];
+    if (!kws.length) {
+      tbody.innerHTML = '<tr><td colspan="3" style="padding:24px;text-align:center;color:var(--text3);">暂无关键词</td></tr>';
+      return;
+    }
+    tbody.innerHTML = kws.map((k, i) => {
+      const isDyn  = k.type === 'dynamic';
+      const typeBadge = isDyn
+        ? '<span style="background:rgba(249,115,22,.15);color:#f97316;border:1px solid rgba(249,115,22,.3);font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;">🔥 HN今日</span>'
+        : '<span style="background:rgba(124,110,247,.12);color:#a78bfa;border:1px solid rgba(124,110,247,.25);font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;">📌 固定</span>';
+      const ytLink = k.yt_url
+        ? `<a href="${k.yt_url}" target="_blank" style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:5px;background:rgba(255,68,68,.12);color:#ff4444;border:1px solid rgba(255,68,68,.25);text-decoration:none;font-size:11px;font-weight:500;">
+             <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31.5 31.5 0 0 0 0 12a31.5 31.5 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31.5 31.5 0 0 0 24 12a31.5 31.5 0 0 0-.5-5.8zM9.7 15.5V8.5l6.3 3.5-6.3 3.5z"/></svg>
+             搜索视频
+           </a>`
+        : '—';
+      return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04);transition:background .12s;" onmouseover="this.style.background='rgba(255,255,255,0.03)'" onmouseout="this.style.background=''">
+        <td style="padding:10px 14px;">${typeBadge}</td>
+        <td style="padding:10px 14px;font-size:13px;color:var(--text);max-width:300px;white-space:normal;">${k.keyword}</td>
+        <td style="padding:10px 14px;">${ytLink}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // 初始化时若 savedTab 为 hotwords，执行热词面板显示逻辑
+  if (savedTab === 'hotwords') {
+    const hwPanel  = document.getElementById('hotwords-panel');
+    const mainBody = document.querySelector('.panel-body');
+    const pgn      = document.querySelector('.pagination');
+    if (hwPanel)  hwPanel.style.display  = 'block';
+    if (mainBody) mainBody.style.display = 'none';
+    if (pgn)      pgn.style.display      = 'none';
+    loadHotwords();
+  }
 </script>
 
 <!-- [Gemini_2.5_Pro_planning] Cover Lightbox Overlay -->

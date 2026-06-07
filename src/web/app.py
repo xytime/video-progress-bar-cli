@@ -19,6 +19,7 @@
 | 2.7.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 新增后台队列自动轮询器 _queue_runner_loop 自动执行切片/高分任务 |
 | 2.8.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 使用 python -u 启动子进程以实现 pipeline.log 实时无缓冲日志输出 |
 | 2.9.0 | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 respec_video 端点：停止当前处理、覆盖规格并重新入队；add_video_manual 重复检测补充 video_id/title 返回 |
+| 3.0.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 新增 /api/trending-keywords 端点，整合 HN 热词注入功能到后台 Web UI 热词监控 Tab |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -1259,6 +1260,101 @@ def run_full_pipeline():
     threading.Thread(target=_run, daemon=True, name="full-pipeline").start()
     return {"success": True, "message": "全量管线已在后台启动，请关注仪表盘进度"}
 
+
+
+# ── 热词监控 API ─────────────────────────────────────────────────────────
+@app.get("/api/trending-keywords")
+def get_trending_keywords(force_refresh: bool = False):
+    """[Claude_Sonnet_4.6_Thinking_planning] 返回当前动态热词列表及元数据
+
+    响应结构:
+      enabled: bool          — settings.enable_dynamic_keywords
+      source: str            — 'cache' | 'live' | 'static'
+      keywords: list[dict]   — 每条含 keyword/type/hn_score/signal/title/yt_url
+      updated_at: float|None — 缓存 Unix 时间戳
+      hn_top_n: int          — 从 HN 抓取的条数
+    """
+    import json as _json
+    import time as _time
+
+    prj_root = Path(__file__).parent.parent.parent
+    scripts_dir = str(prj_root / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+
+    # 静态兜底词
+    STATIC_KWS = ["AI interview", "tech keynote 2026", "business podcast", "founder speech"]
+
+    if not settings.enable_dynamic_keywords:
+        return {
+            "enabled": False,
+            "source": "static",
+            "keywords": [{"keyword": kw, "type": "static", "hn_score": None,
+                          "signal": None, "title": None, "yt_url": None} for kw in STATIC_KWS],
+            "updated_at": None,
+            "hn_top_n": 0,
+        }
+
+    cache_path = prj_root / "output" / "trending_keywords.json"
+    cache_age  = None
+    cached_kws = []
+
+    # 读缓存
+    if cache_path.exists() and not force_refresh:
+        try:
+            data = _json.loads(cache_path.read_text(encoding="utf-8"))
+            age  = _time.time() - data.get("updated_at", 0)
+            if age < 3600:  # 1 小时内有效
+                cached_kws  = data.get("keywords", [])
+                cache_age   = data.get("updated_at")
+        except Exception:
+            pass
+
+    source = "cache" if cached_kws else "live"
+
+    # 需要实时拉取（无缓存 or 强制刷新）
+    if not cached_kws or force_refresh:
+        try:
+            from fetch_trending_keywords import fetch_hn_trending_keywords
+            top_n     = getattr(settings, "hn_top_n", 30)
+            cached_kws = fetch_hn_trending_keywords(top_n=top_n)
+            cache_age  = _time.time()
+            cache_path.write_text(_json.dumps({
+                "updated_at": cache_age,
+                "keywords":   cached_kws,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            source = "live"
+        except Exception as e:
+            print(f"[HotwordsAPI] fetch failed: {e}")
+            source = "error"
+
+    # 静态词永远追加在后面
+    dynamic_set = set(cached_kws)
+    result_kws  = [
+        {"keyword": kw, "type": "dynamic", "hn_score": None,
+         "signal": None, "title": None,
+         "yt_url": f"https://www.youtube.com/results?search_query={kw.replace(' ', '+')}"
+         } for kw in cached_kws
+    ] + [
+        {"keyword": kw, "type": "static",  "hn_score": None,
+         "signal": None, "title": None,
+         "yt_url": f"https://www.youtube.com/results?search_query={kw.replace(' ', '+')}"
+         } for kw in STATIC_KWS if kw not in dynamic_set
+    ]
+
+    return {
+        "enabled":    True,
+        "source":     source,
+        "keywords":   result_kws,
+        "updated_at": cache_age,
+        "hn_top_n":   getattr(settings, "hn_top_n", 30),
+    }
+
+
+@app.post("/api/trending-keywords/refresh")
+def refresh_trending_keywords():
+    """[Claude_Sonnet_4.6_Thinking_planning] 强制刷新 HN 热词缓存（忽略 1h TTL）"""
+    return get_trending_keywords(force_refresh=True)
 
 
 if __name__ == "__main__":

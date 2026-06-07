@@ -11,6 +11,7 @@
 | 1.5.0 | 2026-06-07 | Gemini_3.5_Flash_planning | Handle audio-less videos gracefully by skipping audio extraction/transcription and omitting -c:a copy during burn-in. |
 | 1.6.0 | 2026-06-07 | Gemini_3.5_Flash_planning | 修复 src.config.settings 导入路径错误，并升级 Gemini 批翻译提示词以同时提取重点难词和释义，标注 # [Gemini_3.5_Flash_planning] |
 | 1.7.0 | 2026-06-07 | Gemini_3.5_Flash_planning | 将 Gemini 模型从 gemini-2.5-flash 切换为 gemini-1.5-flash 以免遭遇 20 RPD 的 Free Tier 每日限流，标注 # [Gemini_3.5_Flash_planning] |
+| 1.8.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 迁移至 google.genai SDK（v2.6.0），废弃已停止维护的 google.generativeai，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 """
 import logging
 from pathlib import Path
@@ -416,14 +417,10 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 logger.warning("GEMINI_API_KEY not found. Fallback to Google Translate.")
                 return None
                 
-            import google.generativeai as genai
-            genai.configure(api_key=api_key)
-            
-            # [Gemini_3.5_Flash_planning] 使用 models/gemini-3.5-flash 模型，保证足够的 API 配额限制（1500 RPD）与高速度高品质
-            model = genai.GenerativeModel(
-                model_name="models/gemini-3.5-flash",
-                generation_config={"response_mime_type": "application/json"}
-            )
+            # [Claude_Sonnet_4.6_Thinking_planning] 迁移至 google.genai SDK v2.6.0，废弃已停止维护的 google.generativeai
+            from google import genai as _genai
+            from google.genai import types as _genai_types
+            _client = _genai.Client(api_key=api_key)
             
             texts = [seg['text'].strip() for seg in segments]
             import json
@@ -440,7 +437,13 @@ class AutoCaptionProcessor(VideoProcessorBase):
             )
             
             logger.info("Calling Gemini API for batch subtitle translation and vocabulary extraction...")
-            response = model.generate_content(prompt)
+            response = _client.models.generate_content(  # [Claude_Sonnet_4.6_Thinking_planning] google.genai SDK
+                model="models/gemini-3.5-flash",
+                contents=prompt,
+                config=_genai_types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
+            )
             result = json.loads(response.text)
             
             if isinstance(result, dict) and "translations" in result:

@@ -13,6 +13,7 @@ based on incoming Telegram messages and commands.
 | 1.3.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 在 5 个核心工具中加入 fcntl 跨进程排他锁，强制实现串行执行 |
 | 1.3.1   | 2026-06-04 | Gemini_3.5_Flash_planning      | [下载优化] yt-dlp 启用 curl 外部下载器并配置 10 次自动重试与断点续传，解决代理环境下大视频/音频下载中断报错 |
 | 1.3.2   | 2026-06-07 | Gemini_3.5_Flash_planning      | 修复 download_video 中 url 未定义 NameError 崩溃问题，标注 # [Gemini_3.5_Flash_planning] |
+| 1.4.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 迁移至 google.genai SDK v2.6.0，废弃已停止维护的 google.generativeai；Client()代替 configure()，client.chats.create() 代替 GenerativeModel.start_chat()，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 """
 import os
 import sys
@@ -24,7 +25,8 @@ import fcntl
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-import google.generativeai as genai
+from google import genai  # [Claude_Sonnet_4.6_Thinking_planning] 迁移至 google.genai SDK v2.6.0
+from google.genai import types as genai_types  # [Claude_Sonnet_4.6_Thinking_planning]
 
 # Ensure src/ is in sys.path
 _src = str(Path(__file__).parent.parent)
@@ -66,7 +68,7 @@ class PipelineAgent:
         api_key = settings.gemini_api_key
         if not api_key:
             raise ValueError("GEMINI_API_KEY is not configured in settings.")
-        genai.configure(api_key=api_key)
+        self._genai_client = genai.Client(api_key=api_key)  # [Claude_Sonnet_4.6_Thinking_planning] 使用 Client() 替代全局 configure()
 
         # Expose tools for Gemini Function Calling
         self.tools = [
@@ -573,12 +575,14 @@ class PipelineAgent:
         This method is blocking and must be run via asyncio.to_thread in the handler.
         """
         # [Gemini_3.5_Flash_High_planning]
-        model = genai.GenerativeModel(
-            model_name="gemini-flash-lite-latest",
-            tools=self.tools,
-            system_instruction=self.system_prompt
+        # [Claude_Sonnet_4.6_Thinking_planning] 迁移至 google.genai SDK - 使用 client.chats.create() 替代 GenerativeModel.start_chat()
+        chat = self._genai_client.chats.create(
+            model="gemini-flash-lite-latest",
+            config=genai_types.GenerateContentConfig(
+                tools=self.tools,
+                system_instruction=self.system_prompt,
+            )
         )
-        chat = model.start_chat(enable_automatic_function_calling=True)
         
         import time
         max_retries = 3

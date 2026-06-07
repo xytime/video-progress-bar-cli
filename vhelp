@@ -8,6 +8,7 @@
 # | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning     | 初始创建 vhelp 终端速查手册                 |
 # | 1.1.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking    | 新增 OptionSense 核心服务全景 & 启停命令表  |
 # | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning     | 细化 live_main 启动依赖顺序 & 新增维护锁说明  |
+# | 1.3.0   | 2026-06-04 | Claude_Sonnet_4.6_Thinking_planning | 新增 🩺 开盘前体检 premarket_check 命令  |
 # =======================================================================
 
 # 终端颜色代码
@@ -24,7 +25,7 @@ RESET="\033[0m"
 SEP="${DIM}──────────────────────────────────────────────────────────────────────${RESET}"
 
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.2  ${RESET}"
+echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.3  ${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 
 # ================================================================
@@ -126,6 +127,22 @@ echo -e "    ${CYAN}ui restart${RESET}  - 重启所有辅助服务"
 echo -e "    ${CYAN}ui status${RESET}   - 查看所有服务状态 (含 CORE 层端口探针)"
 echo -e "    ${CYAN}ui check${RESET}    - 同 status（真实端口 HTTP 探针验证）"
 
+echo ""
+echo -e "  ${BOLD}🩺 开盘前体检 (premarket_check):${RESET}"
+echo ""
+echo -e "    ${GREEN}premarket${RESET}   - 彩色报告（推荐，含诊断提示 + 可复制命令）"
+echo -e "    ${GREEN}premarket_check${RESET}   - 同上"
+echo ""
+echo -e "    ${DIM}底层命令:${RESET}"
+echo -e "    ${CYAN}cd /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp${RESET}"
+echo -e "    ${GREEN}python scripts/premarket_check.py${RESET}             ${DIM}# 彩色终端报告${RESET}"
+echo -e "    ${GREEN}python scripts/premarket_check.py --json${RESET}      ${DIM}# JSON 输出（可接 jq）${RESET}"
+echo -e "    ${GREEN}python scripts/premarket_check.py --url http://IP:8080${RESET}  ${DIM}# 远程体检${RESET}"
+echo ""
+echo -e "    ${DIM}覆盖服务: FutuOpenD / Subscription:5555 / DataAPI:8000 / live_main / TG-BOT / ZMQ${RESET}"
+echo -e "    ${DIM}退出码: 0=PASS (全绿) | 1=WARN (有警告) | 2=FAIL (有关键错误)${RESET}"
+echo -e "    ${DIM}等同 Web UI: http://localhost:5173/#infra → 点击「🩺 开盘前体检」按钮${RESET}"
+
 echo -e "\n${SEP}"
 
 # ================================================================
@@ -162,6 +179,6 @@ echo -e "    ${BLUE}live_engine()${RESET} { /Volumes/EXT2T/MacMini4_SSD/PycharmP
 echo -e "    ${BLUE}option()${RESET}      { python /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/trade_option.py \"\$@\" }"
 
 echo -e "\n${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.2${RESET}"
+echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.3${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 echo ""
