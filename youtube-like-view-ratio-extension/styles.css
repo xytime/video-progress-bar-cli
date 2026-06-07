@@ -1,0 +1,12 @@
+/* [Gemini_3.5_Flash_planning] YouTube Like-to-View Ratio Bar Styles */
+
+/* 
+ * 注意：由于 YouTube 采用 Shadow DOM 隔离技术，
+ * 绝大部分样式均已移动到 inject.js 中通过影子 DOM 内部动态样式注入（进度条）
+ * 以及行内样式（比例文字）来实现。本样式文件目前仅做占位及基本环境适配。
+ */
+
+ytd-thumbnail {
+  position: relative !important;
+}
+
