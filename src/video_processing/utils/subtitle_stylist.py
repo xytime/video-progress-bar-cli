@@ -8,6 +8,7 @@
 | 1.0.1   | 2026-06-08 | Gemini_3.5_Flash_planning           | 修复 apply_word_highlights 中的 re.sub regex 转义错误，标注 # [Gemini_3.5_Flash_planning] |
 | 1.1.0   | 2026-06-08 | Gemini_3.5_Flash_planning           | 新增 apply_chinese_highlights，在中文句子中寻找生词并绘制带颜色的下划线，标注 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 修复中文折行截断标签bug：将 apply_chinese_highlights 移到 textwrap.fill 之后；build_glossary_text 增加 en_size 参数以限制释义字号不超过英文主字幕字号 |
+| 1.3.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 修复 apply_chinese_highlights 短词淘汰长词问题：改用 token分段方案仅在裸文本段进行匹配，封锁已标注内容 |
 """
 
 import re
@@ -105,20 +106,61 @@ def apply_word_highlights(text: str, word_colors: Dict[str, str]) -> str:
 
 
 def apply_chinese_highlights(text: str, vocab_items: Dict[str, str]) -> str:
-    """[Gemini_3.5_Flash_planning] 在中文翻译文本中寻找并高亮画线对应的词汇（颜色同英文生词一致，重置为ZH_COLOR）"""
+    """[Claude_Sonnet_4.6_Thinking_planning] v1.3.0 在中文字幕中高亮难词并画下划线。
+
+    核心设计：先将 text 按 {ASS标签} 分割为 token 序列，仅在「裸文本」token
+    上执行替换，已带标签的 token 完全跳过。这样即使先处理了长词（如"卓越的领导力"），
+    短词（如"领导"）也不会再次匹配已被包裹的内容，消除了标签嵌套污染。
+
+    Args:
+        text: 可能含 ASS 内联标签（{...}）的中文字幕文本。
+        vocab_items: {英文词: 对应中文子串} 字典。
+
+    Returns:
+        插入了高亮标签的中文字幕文本。
+    """
     if not vocab_items or not text:
         return text
 
-    # 按字符长度降序排序，防止短词部分匹配干扰长词（例如先处理“先驱者”再处理“先驱”）
-    sorted_translations = sorted(vocab_items.values(), key=len, reverse=True)
-    for zh_word in sorted_translations:
-        zh_word_clean = zh_word.strip()
-        if not zh_word_clean or len(zh_word_clean) < 1:
-            continue
-        # 使用正则在 braces {} 之外匹配该中文词汇并替换
-        pattern = re.compile(rf'(?![^{{]*}}){re.escape(zh_word_clean)}')
-        text = pattern.sub(rf'{{\\u1\\c{VOCAB_HIGHLIGHT_COLOR}}}{zh_word_clean}{{\\u0\\c{ZH_COLOR}}}', text)
-    return text
+    # 按中文值长度降序排列，长词优先，防止短词切割长词
+    zh_words = sorted(
+        (v.strip() for v in vocab_items.values() if v and v.strip()),
+        key=len,
+        reverse=True,
+    )
+    if not zh_words:
+        return text
+
+    # 将 text 按 {tag} 分割为 token 列表：[bare_text, {tag}, bare_text, {tag}, ...]
+    # re.split 保留分隔符（用 capture group）
+    _TAG_RE = re.compile(r'(\{[^}]*\})')
+    tokens: list[str] = _TAG_RE.split(text)
+
+    # 构建 alternation pattern（长词优先）—— 单次扫描，避免短词二次匹配已标注内容
+    pattern = re.compile('|'.join(re.escape(w) for w in zh_words))
+
+    def _replace_in_bare_text(bare: str) -> str:
+        """在裸文本段中，用 finditer 一次性处理所有命中，长词优先（pattern 已排序）。"""
+        result_parts: list[str] = []
+        last = 0
+        for m in pattern.finditer(bare):
+            result_parts.append(bare[last:m.start()])
+            zh_word = m.group(0)
+            open_tag  = '{' + '\\u1' + '\\c' + VOCAB_HIGHLIGHT_COLOR + '}'
+            close_tag = '{' + '\\u0' + '\\c' + ZH_COLOR + '}'
+            result_parts.append(open_tag + zh_word + close_tag)
+            last = m.end()
+        result_parts.append(bare[last:])
+        return ''.join(result_parts)
+
+    result_tokens: list[str] = []
+    for tok in tokens:
+        if _TAG_RE.fullmatch(tok):
+            result_tokens.append(tok)  # {tag} 原样保留
+        else:
+            result_tokens.append(_replace_in_bare_text(tok))
+
+    return ''.join(result_tokens)
 
 
 def tag_aware_wrap(text: str, max_width: int) -> str:

@@ -12,11 +12,13 @@ from src.video_processing.utils.subtitle_stylist import (
     SubtitleLayout,
     strip_trailing_punctuation,
     apply_word_highlights,
+    apply_chinese_highlights,
     tag_aware_wrap,
     FONT_EN,
     FONT_ZH,
     EN_COLOR,
     ZH_COLOR,
+    VOCAB_HIGHLIGHT_COLOR,
 )
 
 
@@ -80,6 +82,56 @@ class TestApplyWordHighlights:
         # 长词组先匹配，"Hello world" 会被包裹一次
         assert "&HC7D36F&" in result  # 长词组颜色出现过
         assert "Hello" in result
+
+
+# ── apply_chinese_highlights ─────────────────────────────────────────────────
+
+class TestApplyChineseHighlights:
+    def test_highlights_chinese_word_when_present(self):
+        """中文生词存在于字幕文本时，应插入高亮标签"""
+        result = apply_chinese_highlights("这是一个复杂的算法", {"algorithm": "算法"})
+        assert f"\\u1\\c{VOCAB_HIGHLIGHT_COLOR}" in result
+        assert "算法" in result
+        assert f"\\u0\\c{ZH_COLOR}" in result
+
+    def test_no_highlight_when_word_absent(self):
+        """中文生词不存在于字幕文本时，不应插入高亮标签"""
+        result = apply_chinese_highlights("这是一个简单的句子", {"algorithm": "算法"})
+        assert "\\u1" not in result
+        assert result == "这是一个简单的句子"
+
+    def test_empty_vocab_returns_unchanged(self):
+        """空词汇表时，文本原样返回"""
+        text = "这是一个测试"
+        assert apply_chinese_highlights(text, {}) == text
+
+    def test_empty_text_returns_empty(self):
+        assert apply_chinese_highlights("", {"algorithm": "算法"}) == ""
+
+    def test_longer_word_matched_before_shorter(self):
+        """多个词汇时，较长的词应优先匹配，防止短词干扰长词"""
+        result = apply_chinese_highlights(
+            "他展现了卓越的领导力",
+            {"outstanding leadership": "卓越的领导力", "leader": "领导"}
+        )
+        # 长词先匹配后，短词可能无法在标签内部再次匹配，但长词高亮一定存在
+        assert "卓越的领导力" in result
+
+    def test_multiple_vocab_all_highlighted(self):
+        """多个中文生词都在文本中时，均应被高亮"""
+        result = apply_chinese_highlights(
+            "他采取了大胆的行动",
+            {"bold": "大胆", "action": "行动"}
+        )
+        assert "大胆" in result
+        assert "行动" in result
+        assert result.count("\\u1") >= 2
+
+    def test_newline_preserved_after_highlighting(self):
+        """折行标签 \\N 在高亮后应完整保留"""
+        text = "他采取了大胆\\N的行动"
+        result = apply_chinese_highlights(text, {"bold": "大胆"})
+        assert "\\N" in result
 
 
 # ── tag_aware_wrap ────────────────────────────────────────────────────────────

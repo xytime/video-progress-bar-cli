@@ -28,6 +28,7 @@
 | 2.1.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 横屏输入视频使用动态计算的字幕起始 Y 坐标，修复 SyntaxError 并优化排版，标注 # [Gemini_3.5_Flash_planning] |
 | 2.2.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 将释义区字号比例下调至 0.42 倍以显主次，并标注 # [Gemini_3.5_Flash_planning] |
 | 2.3.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 竖屏模式下释义区最下沿上移半字高度 (≈17px)，同步缩减主字幕最大高度防重叠 |
+| 2.4.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 自动从 .info.json 加载视频标题，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -163,7 +164,21 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         super().__init__(
             input_path, output_path, model_size, src_lang, target_lang, device, style
         )
-        self.title = title or input_path.stem  # Default to filename if empty
+        # [Gemini_3.5_Flash_planning] Try to load title from .info.json if it exists
+        detected_title = title
+        if not detected_title:
+            info_json_path = input_path.with_suffix('.info.json')
+            if info_json_path.exists():
+                try:
+                    import json
+                    with open(info_json_path, 'r', encoding='utf-8') as f:
+                        info_data = json.load(f)
+                        detected_title = info_data.get('title', '')
+                        logger.info(f"Loaded title from info.json: {detected_title}")
+                except Exception as e:
+                    logger.warning(f"Failed to load title from {info_json_path}: {e}")
+
+        self.title = detected_title or input_path.stem  # Default to filename if empty
         self.bg_blur = bg_blur
         self.font_path = font_path
         self.font_size = font_size
