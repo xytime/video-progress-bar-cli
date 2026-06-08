@@ -19,6 +19,7 @@
 | 2.9.0   | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 新增 tts_provider 列，用于按视频记录 TTS 配音引擎（nullable），供 /tts 命令按需存储 |
 | 3.0.0   | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 update_video_spec 方法，全量覆盖规格字段（trim/disable_slicing/tts），供 respec 流程使用 |
 | 3.1.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | 新增 high_likes tab 支持，显示最近24小时发布的高赞视频 |
+| 3.2.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | add_video 支持 category, censor_tag, censor_score 录入 |
 """
 
 import sqlite3
@@ -208,6 +209,14 @@ class PipelineDB:
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN tts_provider TEXT DEFAULT NULL;")
                 conn.commit()
 
+            # [Gemini_3.5_Flash_planning] 检查并补足 category 字段以存储视频的分类信息
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "category" not in columns:
+                self._logger.info("[Migration] Adding category column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN category TEXT DEFAULT NULL;")
+                conn.commit()
+
             
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
             cursor.execute('''
@@ -290,6 +299,9 @@ class PipelineDB:
         parent_id: Optional[int] = None,            # [Gemini_3.5_Flash_planning] 新增：父自增 ID
         disable_slicing: int = 1,                   # [Gemini_3.5_Flash_planning] 新增：禁用分片标识 (默认1=不分片)
         tts_provider: Optional[str] = None,         # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: TTS 配音引擎（nullable）
+        category: Optional[str] = None,             # [Gemini_3.5_Flash_planning] 新增：分类字段
+        censor_tag: Optional[str] = None,           # [Gemini_3.5_Flash_planning] 新增：敏感词标签
+        censor_score: Optional[int] = None,         # [Gemini_3.5_Flash_planning] 新增：敏感词得分
     ) -> bool:
         # 前置黑名单检查，防止已删除视频被二次拉取
         if self.is_blacklisted(youtube_id):
@@ -305,11 +317,11 @@ class PipelineDB:
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
                         duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
-                        tts_provider)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        tts_provider, category, censor_tag, censor_score)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (youtube_id, slice_index, parent_id, title, channel_id, score, zh_title, source,
                      duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
-                     tts_provider)  # [Claude_Sonnet_4.6_Thinking_planning]
+                     tts_provider, category, censor_tag, censor_score)  # [Gemini_3.5_Flash_planning]
                 )
                 conn.commit()
                 return True

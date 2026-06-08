@@ -1882,7 +1882,46 @@
           const badgeColor = isAllCompleted ? '#6ee7b7' : 'var(--accent2)';
           sliceBadge = `<span class="panel-badge" style="margin-left: 8px; font-size:9px; padding:1px 5px; background:${badgeBg}; color:${badgeColor}; font-weight:500;">已完成 ${completedCount}/${totalCount} 集</span>`;
         }
-        const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${sliceBadge}${metaChips ? ' · ' + metaChips : ''}</div>`;
+
+        // [Gemini_3.5_Flash_planning] 类别展示
+        const categoryBadge = v.category ? `<span class="meta-chip category-badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); font-weight: 500;">📂 ${v.category}</span>` : '';
+
+        // [Gemini_3.5_Flash_planning] 敏感词检测展示
+        let censorBadge = '';
+        if (v.censor_tag) {
+          let censorColor = 'var(--text3)';
+          let censorBg = 'rgba(255,255,255,0.05)';
+          let censorBorder = 'rgba(255,255,255,0.1)';
+          if (v.censor_tag.includes('🔴') || v.censor_tag.includes('政治')) {
+            censorColor = '#f87171';
+            censorBg = 'rgba(239, 68, 68, 0.15)';
+            censorBorder = 'rgba(239, 68, 68, 0.25)';
+          } else if (v.censor_tag.includes('🟡') || v.censor_tag.includes('敏感') || v.censor_tag.includes('政策')) {
+            censorColor = '#fbbf24';
+            censorBg = 'rgba(245, 158, 11, 0.15)';
+            censorBorder = 'rgba(245, 158, 11, 0.25)';
+          } else if (v.censor_tag.includes('🚫') || v.censor_tag.includes('限制') || v.censor_tag.includes('策略')) {
+            censorColor = '#60a5fa';
+            censorBg = 'rgba(59, 130, 246, 0.15)';
+            censorBorder = 'rgba(59, 130, 246, 0.25)';
+          } else if (v.censor_tag.includes('🔵') || v.censor_tag.includes('预警') || v.censor_tag.includes('合规')) {
+            censorColor = '#a78bfa';
+            censorBg = 'rgba(139, 92, 246, 0.15)';
+            censorBorder = 'rgba(139, 92, 246, 0.25)';
+          }
+          censorBadge = `<span class="meta-chip censor-badge censor-hit" style="background: ${censorBg}; color: ${censorColor}; border: 1px solid ${censorBorder}; font-weight: 500;">⚠️ ${v.censor_tag}</span>`;
+        } else {
+          if (currentTab === 'high_likes' || v.source === 'DISCOVERY') {
+            censorBadge = `<span class="meta-chip censor-badge censor-safe" style="background: rgba(16, 185, 129, 0.1); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.15); font-weight: 500;">✅ 未命中敏感词</span>`;
+          }
+        }
+
+        const badgesPart = [
+          categoryBadge,
+          censorBadge
+        ].filter(Boolean).join(' ');
+
+        const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${sliceBadge}${metaChips ? ' · ' + metaChips : ''}${badgesPart ? ' · ' + badgesPart : ''}</div>`;
 
         // [Gemini_2.5_Pro_planning] 封面缩略图单元格
         const coverUrl = `/api/covers/${v.youtube_id}`;

@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_High_planning | 整合动态热词注入逻辑，支持从 HN 热榜获取动态关键词 |
 | 1.2.0   | 2026-06-08 | Claude_Sonnet_4.6_planning     | 标题翻译改用 translation_helper（阿里云 MT 优先）|
 | 1.3.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | 升级新视频主动搜索发现逻辑，将符合高赞筛选要求的视频录入 DISCOVERY 源 |
+| 1.4.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | discover_high_like_videos 引入类别抓取及敏感词过滤检查，并在 add_video 时存入 |
 """
 import sys
 from pathlib import Path
@@ -146,9 +147,12 @@ def discover_new_channels(db: PipelineDB):
 
 
 def discover_high_like_videos(db: PipelineDB):
-    """通过关键词搜索发现最近24小时内的高赞视频，存入数据库以供浏览和手动触发"""
+    """通过关键词搜索发现最近24小时内的高赞视频，进行敏感词检测和分类提取，存入数据库以供浏览和手动触发"""
     # [Gemini_3.5_Flash_planning] 独立高赞视频发现逻辑，避免与频道发现逻辑混合
     print("Running active discovery for high-like videos...")
+    
+    # 导入安全审查引擎 [Gemini_3.5_Flash_planning]
+    from video_processing.censor_engine import check_text, check_channel_policy
     
     def _int_or_none(v):
         try: return int(v)
@@ -163,7 +167,7 @@ def discover_high_like_videos(db: PipelineDB):
         cmd = [
             "yt-dlp",
             "ytsearch10:" + keyword,  # 抓取前10个搜索结果
-            "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s|||%(channel_id)s",
+            "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s|||%(channel_id)s|||%(categories.0)s",
             "--no-warnings",
             "--cookies-from-browser", "safari"
         ]
@@ -171,8 +175,8 @@ def discover_high_like_videos(db: PipelineDB):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode == 0 and result.stdout.strip():
                 for line in result.stdout.strip().split('\n'):
-                    parts = line.split('|||', 6)
-                    if len(parts) == 7:
+                    parts = line.split('|||', 7)
+                    if len(parts) == 8:
                         video_id = parts[0].strip()
                         title = parts[1].strip()
                         duration_sec = _int_or_none(parts[2])
@@ -180,6 +184,9 @@ def discover_high_like_videos(db: PipelineDB):
                         like_count = _int_or_none(parts[4])
                         upload_date = parts[5].strip()
                         channel_id = parts[6].strip()
+                        category = parts[7].strip()
+                        if category in ("NA", ""):
+                            category = None
 
                         # 筛选最近24-48小时内发布且观看量>500的视频
                         if upload_date and upload_date >= yesterday_str:
@@ -190,14 +197,31 @@ def discover_high_like_videos(db: PipelineDB):
                                 except Exception as e:
                                     print(f"  -> Translator failed for {video_id}: {e}")
 
+                                # [Gemini_3.5_Flash_planning] 进行敏感词检测
+                                censor_tag = None
+                                censor_score = None
+                                try:
+                                    block_res = check_text(zh_text=zh_title, en_text=title)
+                                    if block_res.hit:
+                                        censor_tag = block_res.tag
+                                        censor_score = block_res.score
+                                    else:
+                                        policy_res = check_channel_policy(zh_text=zh_title, en_text=title)
+                                        if policy_res.hit:
+                                            censor_tag = policy_res.tag
+                                            censor_score = policy_res.score
+                                except Exception as e:
+                                    print(f"  -> Censor engine failed for {video_id}: {e}")
+
                                 # 以 DISCOVERY 源入库，score=0，防自动处理，仅在 Web 端高赞 Tab 供浏览
                                 added = db.add_video(
                                     video_id, title, channel_id, score=0, zh_title=zh_title, source="DISCOVERY",
                                     duration_sec=duration_sec, view_count=view_count,
                                     like_count=like_count, upload_date=upload_date,
+                                    category=category, censor_tag=censor_tag, censor_score=censor_score
                                 )
                                 if added:
-                                    print(f"  -> Discovered high-like video: {title} (likes={like_count}, views={view_count})")
+                                    print(f"  -> Discovered high-like video: {title} (likes={like_count}, views={view_count}, category={category}, censor={censor_tag})")
         except subprocess.TimeoutExpired:
             print(f"  -> Timeout searching '{keyword}'")
         except Exception as e:
