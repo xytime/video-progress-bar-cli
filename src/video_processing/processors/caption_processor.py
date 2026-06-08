@@ -12,6 +12,8 @@
 | 1.6.0 | 2026-06-07 | Gemini_3.5_Flash_planning | 修复 src.config.settings 导入路径错误，并升级 Gemini 批翻译提示词以同时提取重点难词和释义，标注 # [Gemini_3.5_Flash_planning] |
 | 1.7.0 | 2026-06-07 | Gemini_3.5_Flash_planning | 将 Gemini 模型从 gemini-2.5-flash 切换为 gemini-1.5-flash 以免遭遇 20 RPD 的 Free Tier 每日限流，标注 # [Gemini_3.5_Flash_planning] |
 | 1.8.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 迁移至 google.genai SDK（v2.6.0），废弃已停止维护的 google.generativeai，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
+| 1.9.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增阿里云机器翻译通用版作为二级 fallback：Gemini(429) → Aliyun MT → Google Translate |
+| 1.9.1 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 将阿里云 MT 逐条串行请求改为批量拼接方案（SEP 分隔符 + 切割回填），100+ 次 API 调用压缩到 4-5 次，延迟降低约 20x |
 """
 import logging
 from pathlib import Path
@@ -425,11 +427,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
             texts = [seg['text'].strip() for seg in segments]
             import json
             
-            # [Gemini_3.5_Flash_planning] 升级提示词：不仅翻译，还要智能提取 1-2 个重点难词及其中文释义
+            # [Gemini_3.5_Flash_fast] 升级提示词：不仅翻译，还要智能提取 1-3 个重点难词及其中文释义
             prompt = (
                 "You are an expert video subtitle translator and English educator. For each of the following English subtitle segments:\n"
                 "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
-                "2. Identify 1 to 2 key, academic, or difficult vocabulary words/phrases (CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. Provide their concise Chinese definitions. Do not extract common/easy words. If there are no difficult words, leave the vocabulary dictionary empty.\n"
+                "2. Identify 1 to 3 key, academic, or difficult vocabulary words/phrases (CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. Provide their concise Chinese definitions. Do not extract common/easy words. If there are no difficult words, leave the vocabulary dictionary empty.\n"
                 "Return a JSON array of objects (one for each segment in the exact same order and count). Each object must contain:\n"
                 "- \"translation\": string (Chinese translation)\n"
                 "- \"vocab\": object (keys are the exact English words/phrases as they appear in the text, values are their concise Chinese translations)\n\n"
@@ -461,6 +463,94 @@ class AutoCaptionProcessor(VideoProcessorBase):
             logger.error(f"Gemini translation failed: {e}")
             return None
 
+    def _translate_segments_aliyun(self, segments: List[Dict[str, Any]]) -> Optional[List[str]]:
+        """[Claude_Sonnet_4.6_Thinking_planning] v1.9.1
+        阿里云机器翻译通用版 (TranslateGeneral) 作为二级 fallback。
+        QPS=50，每月 100 万字符免费额度。仅做翻译，不提取词汇。
+
+        优化策略：批量拼接（Batching）
+        将每批 BATCH_SIZE 个 segments 的文本用 SEP 特殊分隔符拼接成单次 API 调用，
+        翻译完成后按分隔符切割回填。将 100+ 次串行请求压缩至 4-5 次，延迟降低约 20x。
+
+        Returns:
+            List[str]: 按入入顺序排列的翻译结果列表，失败时返回 None。
+        """
+        try:
+            from config.settings import settings
+            ak_id = settings.aliyun_mt_access_key_id or ""
+            ak_secret = settings.aliyun_mt_access_key_secret or ""
+            if not ak_id or not ak_secret:
+                logger.info("ALIYUN_MT_ACCESS_KEY_ID/SECRET not configured. Skipping Aliyun MT fallback.")
+                return None
+
+            # [Claude_Sonnet_4.6_Thinking_planning] 使用阿里云官方 SDK
+            from alibabacloud_alimt20181012.client import Client as AlimtClient
+            from alibabacloud_tea_openapi.models import Config as OpenApiConfig
+            from alibabacloud_alimt20181012 import models as alimt_models
+
+            config = OpenApiConfig(
+                access_key_id=ak_id,
+                access_key_secret=ak_secret,
+                endpoint="mt.aliyuncs.com"
+            )
+            client = AlimtClient(config)
+
+            src_lang = "en" if self.src_lang in ("en", "auto", None) else self.src_lang
+            tgt_lang = "zh" if self.target_lang in ("zh", "zh-CN", None) else self.target_lang
+
+            # [Claude_Sonnet_4.6_Thinking_planning] 批量拼接策略
+            # 每段字幕平均 ~40 字符，阿里云单次最大 5000 字符
+            # 每批 25 条：25 * 40 ≈ 1000 字符，远低于 5000 字符上限，安全可靠
+            SEP = "\n###\n"
+            BATCH_SIZE = 25
+
+            texts = [seg.get("text", "").strip() for seg in segments]
+            translated: List[str] = [""] * len(texts)
+
+            logger.info(f"Calling Aliyun MT API for {len(texts)} segments in batches of {BATCH_SIZE} ({src_lang} → {tgt_lang})...")
+
+            for batch_start in range(0, len(texts), BATCH_SIZE):
+                batch_texts = texts[batch_start: batch_start + BATCH_SIZE]
+                # 过滤掉空文本，记录其原始位置
+                non_empty_indices = [i for i, t in enumerate(batch_texts) if t]
+                non_empty_texts = [batch_texts[i] for i in non_empty_indices]
+
+                if not non_empty_texts:
+                    continue
+
+                combined = SEP.join(non_empty_texts)
+                req = alimt_models.TranslateGeneralRequest(
+                    format_type="text",
+                    scene="general",
+                    source_language=src_lang,
+                    source_text=combined[:5000],  # 安全截断，防止超限
+                    target_language=tgt_lang
+                )
+                resp = client.translate_general(req)
+
+                if resp and resp.body and str(resp.body.code) == "200":
+                    result_text = resp.body.data.translated or ""
+                    # 按分隔符切割，允许两侧有空白
+                    parts = [p.strip() for p in result_text.split("###")]
+                    for local_idx, abs_idx in enumerate(non_empty_indices):
+                        if local_idx < len(parts):
+                            translated[batch_start + abs_idx] = parts[local_idx]
+                        else:
+                            logger.warning(f"[AliyunMT] Batch split count mismatch at batch_start={batch_start}")
+                else:
+                    code = resp.body.code if resp and resp.body else "unknown"
+                    logger.warning(f"Aliyun MT returned non-200 code={code} for batch starting at index {batch_start}")
+
+            logger.info("Aliyun MT batch translation completed.")
+            return translated
+
+        except ImportError:
+            logger.warning("alibabacloud-alimt20181012 not installed. Run: pip install alibabacloud-alimt20181012")
+            return None
+        except Exception as e:
+            logger.error(f"Aliyun MT translation failed: {e}")
+            return None
+
     def _translate_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """批量翻译字幕片段"""
         if not segments:
@@ -476,8 +566,15 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     segments[i]['zh_text'] = res.get('translation', '')
                     segments[i]['vocab'] = res.get('vocab', {})
             return segments
-        
-        # 提取原文列表
+
+        # [Claude_Sonnet_4.6_Thinking_planning] v1.9.0 二级 fallback: Gemini 限流 / 失败 → 阿里云 MT
+        aliyun_results = self._translate_segments_aliyun(segments)
+        if aliyun_results:
+            for i, text in enumerate(aliyun_results):
+                if i < len(segments):
+                    segments[i]['zh_text'] = text
+                    segments[i]['vocab'] = {}  # Aliyun MT 无词汇提取能力
+            return segments
         texts = [seg['text'].strip() for seg in segments]
         
         # 分批处理以防止突破API限制

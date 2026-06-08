@@ -121,11 +121,13 @@ class TestCaptionProcessorRedBlueFixes:
         assert layout.video_y == 0, f"Expected video_y to be 0 for vertical input, got {layout.video_y}"
 
         # Verify ASS Subtitle Top position for Vertical Video
-        # [Gemini_3.5_Flash_planning] MarginV should be 1400 for vertical video
+        # [Claude_Sonnet_4.6_Thinking_planning] MarginV for vertical = 1200 (≈62.5% canvas).
+        # Moved from 1000 to bring subtitles visually closer to GlossaryCard.
+        # Overflow handled by per-segment dynamic font scaling, not by subtitle_top_y.
         processor._generate_ass_file(segments=[])
         assert "Default" in mock_subs_instance.styles
         style = mock_subs_instance.styles["Default"]
-        assert style.marginv == 1400, f"Expected subtitle marginv (Y) to be 1400 for vertical video, got {style.marginv}"
+        assert style.marginv == 1200, f"Expected subtitle marginv (Y) to be 1200 for vertical video, got {style.marginv}"
 
         # --- Case 2: Landscape Input Video (1920x1080) ---
         mock_get_resolution.return_value = (1920, 1080)
@@ -145,11 +147,13 @@ class TestCaptionProcessorRedBlueFixes:
         assert layout_landscape.video_y == VerticalLayout.TOP_MARGIN, f"Expected video_y to be {VerticalLayout.TOP_MARGIN} for landscape input, got {layout_landscape.video_y}"
 
         # Verify ASS Subtitle Top position for Landscape Video
-        # [Gemini_3.5_Flash_planning] MarginV should be 1000 for landscape video
+        # [Claude_Sonnet_4.6_Thinking_planning] MarginV for landscape = 1300:
+        # Landscape 1280×720 video, when scaled to fit 1080-wide canvas, has bottom at Y≈1263.
+        # Subtitle starts at Y=1300, just below the video, with 37px gap.
         processor_landscape._generate_ass_file(segments=[])
         assert "Default" in mock_subs_instance_landscape.styles
         style_landscape = mock_subs_instance_landscape.styles["Default"]
-        assert style_landscape.marginv == 1000, f"Expected subtitle marginv (Y) to be 1000 for landscape video, got {style_landscape.marginv}"
+        assert style_landscape.marginv == 1300, f"Expected subtitle marginv (Y) to be 1300 for landscape video, got {style_landscape.marginv}"
 
     @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._validate_input')
     @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._get_video_resolution')
@@ -198,7 +202,7 @@ class TestCaptionProcessorRedBlueFixes:
 
         # [Gemini_3.5_Flash_planning] 更新双语字幕测试，以适配最新版的 Georgia/Hiragino 独立字体和暖黄/暖白配色
         # 英文字号 84 * 0.71 = 59，中文字号 84 * 0.81 = 68，高亮色为 &HC7D36F&
-        expected_sub_text = r"{\fnGeorgia\fs59\c&H3FD2FF&}Hello {\u1\c&HC7D36F&}world{\u0\c}\N{\fnHiragino Sans GB\fs68\c&HE9EFF2&}你好世界"
+        expected_sub_text = r"{\fnGeorgia\fs59\c&H3FD2FF&}Hello {\u1\c&HC7D36F&}world{\u0\c}\N{\fs24\alpha&HFF&} \N{\fnHiragino Sans GB\fs68\alpha&H00&\c&HE9EFF2&}你好世界"
         assert evt_sub.text == expected_sub_text, (
             f"Expected subtitle text '{expected_sub_text}', got '{evt_sub.text}'"
         )
@@ -281,3 +285,89 @@ class TestCaptionProcessorRedBlueFixes:
         text3 = "{\\c&H00D7FF}supercalifragilisticexpialidocious{\\c}"
         wrapped3 = tag_aware_wrap(text3, 10)
         assert wrapped3 == "{\\c&H00D7FF}supercalifragilisticexpialidocious{\\c}"
+
+    @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._validate_input')
+    @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._get_video_resolution')
+    @patch('pysubs2.SSAFile')
+    def test_dynamic_font_scaling_on_long_subtitle(self, MockSSAFile, mock_get_resolution, mock_validate_input):
+        """
+        [Claude_Sonnet_4.6_Thinking_planning] Verify that when a bilingual subtitle segment would
+        overflow SUBTITLE_ZONE_MAX_HEIGHT at default font size, the per-segment font size is
+        scaled down automatically, and the resulting estimated height fits within the allowed zone.
+        """
+        import re
+        from video_processing.processors.vertical_processor import (
+            VerticalCaptionProcessor, SUBTITLE_ZONE_MAX_HEIGHT,
+            SUBTITLE_MIN_EN_SIZE, SUBTITLE_MIN_ZH_SIZE, tag_aware_wrap
+        )
+        import textwrap as tw
+
+        mock_get_resolution.return_value = (1080, 1920)
+        mock_subs_instance = MagicMock()
+        mock_subs_instance.styles = {}
+        mock_subs_instance.info = {}
+        mock_subs_instance.events = []
+        MockSSAFile.return_value = mock_subs_instance
+
+        processor = VerticalCaptionProcessor(
+            input_path=Path("dummy_vertical.mp4"),
+            output_path=Path("dummy_output"),
+            style="default",
+            bilingual=True,
+        )
+
+        # Construct an artificially long segment with 3 EN + 3 ZH lines
+        # to trigger overflow at default sizes (en=59, zh=68)
+        long_seg = {
+            'start': 0.0,
+            'end': 5.0,
+            'text': ("This is a very long English subtitle sentence that will definitely "
+                     "wrap across multiple lines when rendered at the default font size in "
+                     "the vertical video canvas layout with limited width."),
+            'zh_text': ("这是一段非常长的中文字幕，它将在默认字号下被折成多行，"
+                        "用于测试竖屏布局中的动态字体缩放功能，确保任何长度的内容都不会溢出字幕区。"),
+            'vocab': {}
+        }
+        processor._generate_ass_file(segments=[long_seg])
+
+        # Extract the generated dialogue text from the mock SSAEvent call
+        assert len(mock_subs_instance.events) >= 1
+        evt_text = mock_subs_instance.events[0].text
+
+        # Parse the actual en and zh font sizes used in the ASS override tags
+        en_match = re.search(r'\\fnGeorgia\\fs(\d+)', evt_text)
+        zh_match = re.search(r'\\fnHiragino Sans GB\\fs(\d+)', evt_text)
+        assert en_match, f"No Georgia font tag found in: {evt_text[:80]}"
+        assert zh_match, f"No Hiragino Sans GB font tag found in: {evt_text[:80]}"
+
+        actual_en_size = int(en_match.group(1))
+        actual_zh_size = int(zh_match.group(1))
+
+        # Verify sizes are at or above minimum
+        assert actual_en_size >= SUBTITLE_MIN_EN_SIZE, \
+            f"en_size {actual_en_size} below minimum {SUBTITLE_MIN_EN_SIZE}"
+        assert actual_zh_size >= SUBTITLE_MIN_ZH_SIZE, \
+            f"zh_size {actual_zh_size} below minimum {SUBTITLE_MIN_ZH_SIZE}"
+
+        # Verify estimated height fits within allowed zone using the actual sizes
+        safe_width = int(1080 * 0.96)
+        w_en = max(20, int(safe_width / (actual_en_size * 0.54)))
+        w_zh = max(10, int(safe_width / actual_zh_size))
+
+        en_plain = re.sub(r'\{[^}]*\}', '', long_seg['text'])
+        zh_plain = re.sub(r'\{[^}]*\}', '', long_seg['zh_text'])
+        wrapped_en = tag_aware_wrap(en_plain, w_en)
+        wrapped_zh = tw.fill(zh_plain, width=w_zh)
+
+        en_lines = wrapped_en.count('\\N') + 1
+        zh_lines = wrapped_zh.count('\n') + 1
+        outline = 10  # default
+        est_height = en_lines * actual_en_size * 1.25 + 24 + zh_lines * actual_zh_size * 1.25 + outline * 2
+
+        assert est_height <= SUBTITLE_ZONE_MAX_HEIGHT, (
+            f"After font scaling, estimated height {est_height:.0f}px still exceeds "
+            f"SUBTITLE_ZONE_MAX_HEIGHT={SUBTITLE_ZONE_MAX_HEIGHT}px. "
+            f"en_size={actual_en_size}, zh_size={actual_zh_size}, "
+            f"en_lines={en_lines}, zh_lines={zh_lines}"
+        )
+

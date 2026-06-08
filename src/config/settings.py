@@ -15,6 +15,7 @@
 | 2.5.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix] env_file 改为绝对路径，修复 cwd != project_root 时 .env 无法加载导致 Feature Flag 全部回退的根因；新增 get_active_proxies() 动态检测系统代理连通性 |
 | 2.6.0 | 2026-06-08 | Gemini_3.5_Flash_planning           | 新增 wechat_headless 配置项及 active_telegram_chat_id 动态计算属性 |
 | 2.7.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 wechat_keepalive_* 看门狗配置项，支持定期刷新 Session 防止闲置掉线 |
+| 2.8.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 aliyun_mt_access_key_id/secret，支持阿里云机器翻译通用版作为 Gemini 限流时的二级 fallback |
 """
 import socket
 import urllib.request
@@ -80,6 +81,13 @@ class Settings(BaseSettings):
     # 阿里云百炼 (DashScope / Model Studio) API Key — 用于 CosyVoice TTS
     # 获取地址：https://bailian.console.aliyun.com/ → API-KEY 管理
     dashscope_api_key: Optional[str] = None  # [Gemini_2.5_Pro_planning]
+
+    # [Claude_Sonnet_4.6_Thinking_planning] v2.8.0 阿里云机器翻译通用版 AccessKey
+    # 申请地址：https://www.aliyun.com/product/ai/alimt
+    # 在「RAM 访问控制」创建子账号后，授权 AliyunMTFullAccess 策略，并获取 AccessKey ID 和 Secret。
+    # Gemini API 触发 429 限流时，自动降级使用阿里云 MT（QPS 50，每月 100 万字符免费额度）。
+    aliyun_mt_access_key_id: Optional[str] = None
+    aliyun_mt_access_key_secret: Optional[str] = None
 
     # -------------------------------------------------------------------------
     # v7.0 Feature Flags — 新功能灰度开关 [Claude_Sonnet_4.6_Thinking_planning]

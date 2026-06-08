@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.1 | 2026-06-08 | Gemini_3.5_Flash_planning | 修复 test_translation_html_filtering 未 mock 阿里云翻译方法导致真实调用 API 断言失败的问题，标注 # [Gemini_3.5_Flash_planning] |
+"""
 import os
 import sqlite3
 import threading
@@ -115,8 +122,9 @@ def test_translation_html_filtering(mock_translator_class, tmp_path):
         {"text": "Captcha"}
     ]
     
-    # [Claude_Sonnet_4.6_Thinking_planning] 必须禁用 Gemini 路径，否则真实 API 调用成功后会绕过 GoogleTranslator mock，导致测试失效
-    with patch.object(processor, '_translate_segments_gemini', return_value=None):
+    # [Gemini_3.5_Flash_planning] 必须同时禁用 Gemini 和 Aliyun MT 路径，防止真实 API 调用绕过 GoogleTranslator mock 导致单元测试失效及发生实际的云端网络请求
+    with patch.object(processor, '_translate_segments_gemini', return_value=None), \
+         patch.object(processor, '_translate_segments_aliyun', return_value=None):
         processor._translate_segments(segments)
     
     assert segments[0]['zh_text'] == "正常翻译"

@@ -33,6 +33,7 @@
 | 3.2.0   | 2026-06-07 | Gemini_3.5_Flash_planning           | [修复下载匹配] 优化 _find_downloaded_video：限定文件名主干(stem)必须与 yid 完全一致，排除包含 _vertical 等衍生文件或格式后缀的临时文件 |
 | 3.3.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [代理内射] 修复下载死锁/丢包根因：不再无条件清除代理变量改为动态检测+验证连通性后注入/不注入，确保 curl/yt-dlp 在代理可用时使用代理高速下载 |
 | 3.4.0   | 2026-06-08 | Gemini_3.5_Flash_planning           | 注入 Telegram 配置环境变量；upload_cmd 中根据 settings.wechat_headless 动态配置 --no-headless 选项 |
+| 3.5.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [缓存失效] Transcribe Checkpoint 增加 .ass 双语内容校验：旧格式缓存缺少 Georgia 字体标签时强制删除并重渲，彻底消除代码升级后复用旧单语视频的缺陷 |
 """
 
 
@@ -770,10 +771,49 @@ class PipelineManager:
 
 
                 vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
+                # [Claude_Sonnet_4.6_Thinking_planning] v3.5.0 Transcribe Checkpoint 缓存校验增强：
+                # 仅检测 _vertical.mp4 存在不够，当字幕渲染代码升级后旧格式视频会被错误地复用。
+                # 策略：检查关联的 .ass 文件是否包含双语标记（Georgia 字体标签），
+                # 若缺失则说明是旧格式单语缓存，强制删除后重新渲染。
+                _ass_file = self._OUT_DIR / f"{prefix}.ass"
+                _cache_valid = False
                 if vertical.exists() and vertical.stat().st_size > 1_000_000:
-                    logger.info(f"[SKIP] Transcribe checkpoint: {vertical.name}")
+                    _cache_valid = True  # 默认视为有效
+                    if _ass_file.exists():
+                        try:
+                            _ass_content = _ass_file.read_text(encoding="utf-8", errors="ignore")
+                            # Georgia 字体标签是双语字幕的必要标志（单语版本不含此标签）
+                            if "fnGeorgia" not in _ass_content:
+                                logger.warning(
+                                    f"[CacheInvalid] {_ass_file.name} missing bilingual marker "
+                                    f"(fnGeorgia), forcing re-render for {prefix}"
+                                )
+                                _cache_valid = False
+                        except Exception as _e:
+                            logger.warning(f"[CacheCheck] Failed to read {_ass_file.name}: {_e}")
+                    else:
+                        # .ass 文件不存在但 _vertical.mp4 存在，说明 .ass 已被清理或历史遗留
+                        # 保守起见：若 .ass 不存在则信任 _vertical.mp4（可能是手动渲染）
+                        pass
+
+                if _cache_valid:
+                    logger.info(f"[SKIP] Transcribe checkpoint (bilingual verified): {vertical.name}")
                     self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
                 else:
+                    # 强制清除过期/无效缓存
+                    if vertical.exists():
+                        try:
+                            vertical.unlink()
+                            logger.info(f"[CacheEvict] Deleted stale vertical: {vertical.name}")
+                        except Exception as _e:
+                            logger.warning(f"[CacheEvict] Failed to delete {vertical.name}: {_e}")
+                    if _ass_file.exists():
+                        try:
+                            _ass_file.unlink()
+                            logger.info(f"[CacheEvict] Deleted stale ASS: {_ass_file.name}")
+                        except Exception as _e:
+                            logger.warning(f"[CacheEvict] Failed to delete {_ass_file.name}: {_e}")
+                    # 执行渲染
                     if settings.enable_sigterm_kill and _sigterm_received:
                         logger.warning(f"[SIGTERM] Checkpoint before TRANSCRIBING: aborting {prefix}")
                         raise InterruptedError("SIGTERM received before transcription")
@@ -799,6 +839,7 @@ class PipelineManager:
                     render_env["PYTHONPATH"] = str(self._SRC_DIR)
                     self._run_tracked(render_cmd, yid, slice_index=slice_index, capture_output=True,
                                       cwd=str(self._PRJ_ROOT), env=render_env)
+
 
                 # ── 2c. CENSORSHIP COPYWRITING CHECK ──────────────────────────────
                 copy_content = ""
