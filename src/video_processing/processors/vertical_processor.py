@@ -23,7 +23,9 @@
 | 1.15.0  | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 字幕字体升级为 PingFang SC（Apple 官方 Pan-CJK 字体，行业最佳实践）；修复 GlossaryCard 灰色蒙版为可辨识度更高的中灰，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 | 1.16.0  | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 修复乱码：字幕字体改为 Hiragino Sans GB（冬青黑体简体中文，fc-list 可发现），注释卡片字体改为 Songti SC（宋体-简，表感辷线字体，同样 fc-list 可发现），标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 | 1.17.0  | 2026-06-08 | Gemini_3.5_Flash_planning | 彻底解决英文溢出，美化英文字体为 Georgia 衬线体并缩小字号，修复释义灰色卡片不显示及黑边问题，高亮色统一为青绿并加下划线，标注 # [Gemini_3.5_Flash_planning] |
-| 1.18.0  | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 实现双语字幕动态字体缩放：每段字幕均在固定可用高度内自适应缩小字号，消除任意行数溢出风险；消除魔法数字，引入 SUBTITLE_ZONE_MAX_HEIGHT 常量 |
+| 1.18.0  | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 实现双语字幕动态字体缩放：每段字幕均在固定可用高度内自适应缩小字号，消除任意行数溢出风险 |
+| 2.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [架构解耦] 将字幕样式/ASS标签/字号缩放/高亮/折行完全委托给 SubtitleStylist，_generate_ass_file 仅负责时间轴与文件写入 |
+| 2.1.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 横屏输入视频使用动态计算的字幕起始 Y 坐标，修复 SyntaxError 并优化排版，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -39,6 +41,8 @@ from ..core.tts_engine import TTSEngine, TTSProvider
 from ..core.audio_mixer import AudioMixer
 
 import re
+
+from ..utils.subtitle_stylist import SubtitleStylist, SubtitleLayout
 
 def strip_trailing_punctuation(text: str) -> str:
     """[Gemini_3.5_Flash_planning] 去除段落末尾的半角/全角标点符号，防止折行时标点符号单独占一行"""
@@ -240,15 +244,16 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         # Get base config
         config = CAPTION_STYLES.get(self.style, CAPTION_STYLES["default"])
         
-        # Determine fixed MarginV to prevent overlapping on different video types
+        # Determine dynamic MarginV to prevent overlapping on different video types
+        # [Gemini_3.5_Flash_planning] Fetch video resolution to calculate layout dynamically
         try:
             video_w, video_h = self._get_video_resolution()
-            is_vertical_input = video_w < video_h
         except Exception as e:
             logger.warning(f"Could not probe video size for subtitle margin, fallback to landscape layout: {e}")
-            is_vertical_input = False
+            video_w, video_h = 1920, 1080
 
-
+        is_vertical_input = video_w < video_h
+        layout_params = VerticalLayout.calculate(video_w, video_h)
 
         # Parse background color and alpha
         bg_hex = config.get("bg_color", "&H000000")
@@ -276,20 +281,25 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
 
         # [Claude_Sonnet_4.6_Thinking_planning] 字幕区顶部位置和最大可用高度（在 outline 确定后计算）：
         # 竖屏输入：Y=1200，GlossaryCard 顶部约 Y=1532，留 32px 安全边 → max_height=300px
-        # 横屏输入：Y=1300，GlossaryCard 紧跟字幕下方（landscape glossary marginv = 1300+294+20+10=1624）
+        # 横屏输入：使用 layout_params 计算得到的动态 margin_v (video_bottom_y + 90px)，GlossaryCard 紧跟字幕下方
         #            → max_height = font_size*3.5 + outline*2 - 20 ≈ 294px
         # 两种模式下单行文本（≈203px）均不触发缩放，多行才缩放。
+        subtitle_top_y = layout_params.subtitle_margin_v
         if is_vertical_input:
-            subtitle_top_y = 1200
             GLOSSARY_EXPECTED_TOP = int(VerticalLayout.CANVAS_HEIGHT * 0.90) - 196  # ≈1532
             subtitle_max_height = max(200, GLOSSARY_EXPECTED_TOP - 32 - subtitle_top_y)  # = 300px
         else:
-            subtitle_top_y = 1300
-            subtitle_max_height = max(200, int(font_size * 3.5) + outline * 2 - 20)  # ≈ 294px
+            subtitle_max_height = max(200, int(font_size * 3.5) + outline * 2 - 20)  # [Gemini_3.5_Flash_planning] Fixed syntax error by adding closing parenthesis
+        layout = SubtitleLayout(
+            en_size=en_size,
+            zh_size=zh_size,
+            safe_width=safe_width,
+            max_height=subtitle_max_height,
+            outline=outline,
+        )
+        stylist = SubtitleStylist(layout)
 
-        # [Gemini_3.5_Flash_planning] Default 样式设定：
-        # PrimaryColor 使用 HTML 模板中的暖黄 (RGB 255, 210, 63)
-        # 将 outlinecolor 设为与 backcolor 一致，消除黑色边缘，达到平滑现代的卡片边缘质感
+        # [Gemini_3.5_Flash_planning] Re-add Default and GlossaryCard styles to subs.styles
         style = pysubs2.SSAStyle(
             fontsize=font_size,
             primarycolor=pysubs2.Color(255, 210, 63),
@@ -304,10 +314,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         )
         subs.styles["Default"] = style
 
-        # [Claude_Sonnet_4.6_Thinking_planning] Determine glossary alignment and marginv.
-        # In vertical mode: alignment=2 (bottom center, grows upward), marginv = 10% of canvas height
-        # = 192px, computed from VerticalLayout.CANVAS_HEIGHT to avoid magic numbers.
-        # This ensures GlossaryCard bottom never enters the WeChat Channels UI zone.
+        # Determine glossary alignment and marginv
         if is_vertical_input:
             glossary_alignment = 2  # Bottom Center, grows upwards
             glossary_marginv = int(VerticalLayout.CANVAS_HEIGHT * 0.10)  # 10% safety margin = 192px
@@ -315,25 +322,20 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             glossary_alignment = 8  # Top Center
             glossary_marginv = subtitle_top_y + int(font_size * 3.5) + outline * 2 + 10
 
-        # [Gemini_3.5_Flash_planning] GlossaryCard: 独立灰色背景注释卡片，紧随字幕区正下方
-        # 修复灰色卡片不显示的问题：将 alpha 设为 40 开启高可见度 (约 84% 不透明度)
-        # 同样将 outlinecolor 设为与 backcolor 一致，消除难看的黑色粗边框，呈现完美半透明蒙版质感
-        glossary_bg = pysubs2.Color(105, 105, 105, 40)
-        glossary_style = pysubs2.SSAStyle(
-            fontsize=int(font_size * 0.48),                       # 精致化释义字号 (0.48倍)
-            primarycolor=pysubs2.Color(255, 255, 255),            # 白色默认（中文释义继承此色）
-            backcolor=glossary_bg,
-            outlinecolor=glossary_bg,
-            borderstyle=3,                                         # 背景底盒 (Opaque box)
-            outline=max(8, int(outline * 0.7)),                    # 稍小内边距
-            shadow=0,
+        glossary_bg_color = pysubs2.Color(105, 105, 105, 40)
+        style_glossary = pysubs2.SSAStyle(
+            fontsize=int(font_size * 0.58), # 84 * 0.58 ≈ 48
+            primarycolor=pysubs2.Color(255, 210, 63),
+            backcolor=glossary_bg_color,
+            outlinecolor=glossary_bg_color,
+            borderstyle=border_style,
+            outline=outline,
+            shadow=shadow,
             alignment=glossary_alignment,
             marginv=glossary_marginv,
-            fontname="Songti SC"                                   # 宋体-简
+            fontname="Songti SC"
         )
-        subs.styles["GlossaryCard"] = glossary_style
-
-        # [Claude_Sonnet_4.6_Thinking_planning] zh_c 已废弃：字幕颜色现已全部通过 ASS 内联标签硬编码，不再从 config 读取
+        subs.styles["GlossaryCard"] = style_glossary
 
         for seg in segments:
             start_ms = int(seg['start'] * 1000)
@@ -341,97 +343,24 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             en_text = seg.get('text', '').strip().replace('\n', ' ')
             zh_text = seg.get('zh_text', '').strip().replace('\n', ' ')
             vocab_items = seg.get('vocab', {})
-            
-            # 1. 去除末尾的半角/全角标点符号，防止单符号折行
-            en_text = strip_trailing_punctuation(en_text)
-            zh_text = strip_trailing_punctuation(zh_text)
-            
-            # 2. 为英文句中的重点词汇注入高亮和下划线 override 标签
-            word_colors = {}
-            if vocab_items:
-                for idx, word in enumerate(vocab_items.keys()):
-                    word_colors[word] = VOCAB_COLORS[idx % len(VOCAB_COLORS)]
-                en_text = apply_word_highlights(en_text, word_colors)
 
-            # [Claude_Sonnet_4.6_Thinking_planning] 3. 动态字体缩放：逐段计算折行后行数，
-            # 若估算高度超出 SUBTITLE_ZONE_MAX_HEIGHT，则等比缩小字号直至适配或达最小值。
-            # 这样无论内容有几行（2行、3行、甚至更多），都能自动容纳，不依赖人工预测最坏情况。
-            seg_en_size = en_size
-            seg_zh_size = zh_size
-            LINE_HEIGHT_FACTOR = 1.25
-            SPACER_PX = 24
+            # 委托字幕样式和折行给 SubtitleStylist
+            rendered = stylist.render(
+                en_text=en_text,
+                zh_text=zh_text,
+                vocab_items=vocab_items or {},
+                bilingual=self.bilingual,
+            )
 
-            for _ in range(30):  # 最多尝试 30 次，每次缩小 2pt
-                w_en = max(20, int(safe_width / (seg_en_size * 0.54)))
-                w_zh = max(10, int(safe_width / seg_zh_size))
-
-                wrapped_en = tag_aware_wrap(en_text, w_en) if en_text else ''
-                # 中文折行在高亮注入前的纯文本估算（高亮标签不影响视觉长度）
-                raw_zh = re.sub(r'\{[^}]*\}', '', zh_text)  # strip existing tags for width calc
-                wrapped_zh_raw = textwrap.fill(raw_zh, width=w_zh) if raw_zh else ''
-
-                en_lines = wrapped_en.count('\\N') + 1 if wrapped_en else 0
-                zh_lines = wrapped_zh_raw.count('\n') + 1 if wrapped_zh_raw else 0
-
-                est_height = (
-                    en_lines * seg_en_size * LINE_HEIGHT_FACTOR
-                    + SPACER_PX
-                    + zh_lines * seg_zh_size * LINE_HEIGHT_FACTOR
-                    + outline * 2
-                )
-
-                if est_height <= subtitle_max_height:
-                    break
-
-                if seg_en_size <= SUBTITLE_MIN_EN_SIZE and seg_zh_size <= SUBTITLE_MIN_ZH_SIZE:
-                    break  # 已达最小字号，停止缩放
-
-                seg_en_size = max(SUBTITLE_MIN_EN_SIZE, seg_en_size - 2)
-                seg_zh_size = max(SUBTITLE_MIN_ZH_SIZE, seg_zh_size - 2)
-
-            # 用本段最终确定的字号重新折行
-            wrap_width_en = max(20, int(safe_width / (seg_en_size * 0.54)))
-            wrap_width_zh = max(10, int(safe_width / seg_zh_size))
-
-            # Wrap Text with per-segment sizes
-            if zh_text:
-                zh_text = textwrap.fill(zh_text, width=wrap_width_zh).replace('\n', '\\N')
-            if en_text:
-                en_text = tag_aware_wrap(en_text, wrap_width_en)
-
-            # [Claude_Sonnet_4.6_Thinking_planning] 4. 构造双语/单语字幕，使用逐段字号 seg_en_size/seg_zh_size
-            if zh_text and en_text:
-                if self.bilingual:
-                    # 使用一个完全透明的 24pt 字号空格作为换行缓冲，增加行与行之间的视觉空间，消除局促感
-                    # [Claude_Sonnet_4.6_Thinking_planning] BUG FIX: 使用逐段缩放后的 seg_en_size/seg_zh_size
-                    text = f"{{\\fnGeorgia\\fs{seg_en_size}\\c&H3FD2FF&}}{en_text}\\N{{\\fs24\\alpha&HFF&}} \\N{{\\fnHiragino Sans GB\\fs{seg_zh_size}\\alpha&H00&\\c&HE9EFF2&}}{zh_text}"
-                else:
-                    text = f"{{\\fnHiragino Sans GB\\fs{font_size}\\c&HE9EFF2&}}{zh_text}"
-            elif zh_text:
-                text = f"{{\\fnHiragino Sans GB\\fs{font_size}\\c&HE9EFF2&}}{zh_text}"
-            else:
-                text = f"{{\\fnGeorgia\\fs{seg_en_size}\\c&H3FD2FF&}}{en_text}"
-
-            evt = pysubs2.SSAEvent(start=start_ms, end=end_ms, text=text)
+            evt = pysubs2.SSAEvent(start=start_ms, end=end_ms, text=rendered.ass_text)
             subs.events.append(evt)
 
-            # [Gemini_3.5_Flash_planning] 4. 独立 GlossaryCard 事件：灰色半透明背景，首个难词前置 [词汇] 标签，
-            # 单词使用 Georgia + 暖黄色，释义使用宋体-简 (Songti SC) + 灰白(#C9C5BD)
+            # GlossaryCard 词汇释义区
             if vocab_items and self.bilingual:
-                glossary_parts = []
-                for idx, (word, translation) in enumerate(vocab_items.items()):
-                    # [Claude_Sonnet_4.6_Thinking_planning] GlossaryCard 单词颜色已硬编码为暖黄，
-                    # word_colors 仅用于主字幕行内高亮，此处不再需要 color 变量
-                    part_str = ""
-                    if idx == 0:
-                        part_str += f"{{\\fnHiragino Sans GB\\c&HC7D36F&}}词汇  "
-                    
-                    part_str += f"{{\\fnGeorgia\\i0\\c&H3FD2FF&}}{word} {{\\fnSongti SC\\i1\\c&HBDC5C9&}}· {translation}{{\\i0}}"
-                    glossary_parts.append(part_str)
-                glossary_text = "   ".join(glossary_parts)
+                glossary_text = stylist.build_glossary_text(vocab_items)
                 evt_glossary = pysubs2.SSAEvent(start=start_ms, end=end_ms, style="GlossaryCard", text=glossary_text)
                 subs.events.append(evt_glossary)
-            
+
         ass_path = self.input_path.with_suffix('.ass')
         subs.save(str(ass_path))
         return ass_path
