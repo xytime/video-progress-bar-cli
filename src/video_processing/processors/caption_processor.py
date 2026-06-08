@@ -14,6 +14,9 @@
 | 1.8.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 迁移至 google.genai SDK（v2.6.0），废弃已停止维护的 google.generativeai，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 | 1.9.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增阿里云机器翻译通用版作为二级 fallback：Gemini(429) → Aliyun MT → Google Translate |
 | 1.9.1 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 将阿里云 MT 逐条串行请求改为批量拼接方案（SEP 分隔符 + 切割回填），100+ 次 API 调用压缩到 4-5 次，延迟降低约 20x |
+| 1.10.0 | 2026-06-08 | Gemini_3.5_Flash_planning | 智能提取 2-3 个单词释义（不多于3个以免内容过多），并为 Gemini API 引入 429 限流重试与多模型(3.5/1.5)回退机制，标注 # [Gemini_3.5_Flash_planning] |
+| 1.10.1 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [ReviewFix] P0: 提示词更新为 3-5 个词汇; P1: sleep 压缩至 2-8s; P2: import 移顶层; P3: 非429错误立即 raise |
+| 1.10.2 | 2026-06-08 | Gemini_3.5_Flash_planning | 根据用户要求将词组提取上限严格控制在 3 个以内 (2-3个)，并将 Fallback 模型修正为可用且不超限的 gemini-2.5-flash，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 from pathlib import Path
@@ -24,6 +27,8 @@ from deep_translator import GoogleTranslator
 import pysubs2
 import requests
 import os
+import json  # [Claude_Sonnet_4.6_Thinking_planning] moved from function body (P2 fix)
+import time  # [Claude_Sonnet_4.6_Thinking_planning] moved from function body (P2 fix)
 
 # [Gemini_3.1_Pro_High_planning] Monkeypatch requests to bypass VPN SSL interception
 old_request = requests.Session.request
@@ -425,27 +430,72 @@ class AutoCaptionProcessor(VideoProcessorBase):
             _client = _genai.Client(api_key=api_key)
             
             texts = [seg['text'].strip() for seg in segments]
-            import json
-            
-            # [Gemini_3.5_Flash_fast] 升级提示词：不仅翻译，还要智能提取 1-3 个重点难词及其中文释义
+
+            # [Gemini_3.5_Flash_planning] 根据用户要求将词组提取上限控制在 3 个以内 (2-3个)，防止屏幕内容过多
             prompt = (
                 "You are an expert video subtitle translator and English educator. For each of the following English subtitle segments:\n"
                 "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
-                "2. Identify 1 to 3 key, academic, or difficult vocabulary words/phrases (CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. Provide their concise Chinese definitions. Do not extract common/easy words. If there are no difficult words, leave the vocabulary dictionary empty.\n"
+                "2. Identify 2 to 3 key, academic, or difficult vocabulary words/phrases (CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. Provide their concise Chinese definitions. Do not extract common/easy words. If there are no difficult words, leave the vocabulary dictionary empty.\n"
                 "Return a JSON array of objects (one for each segment in the exact same order and count). Each object must contain:\n"
                 "- \"translation\": string (Chinese translation)\n"
                 "- \"vocab\": object (keys are the exact English words/phrases as they appear in the text, values are their concise Chinese translations)\n\n"
                 f"Input segments:\n{json.dumps(texts, ensure_ascii=False)}"
             )
+
             
-            logger.info("Calling Gemini API for batch subtitle translation and vocabulary extraction...")
-            response = _client.models.generate_content(  # [Claude_Sonnet_4.6_Thinking_planning] google.genai SDK
-                model="models/gemini-3.5-flash",
-                contents=prompt,
-                config=_genai_types.GenerateContentConfig(
-                    response_mime_type="application/json"
-                )
-            )
+            # [Claude_Sonnet_4.6_Thinking_planning] 指数退避重试 + 多模型 Fallback
+            # P1 fix: retry_delay 从 4 压缩到 2（初始），min() 限制最大 8s，防止 pipeline 冻结过久
+            # P3 fix: 非 429/RESOURCE_EXHAUSTED 的 fatal 错误立即 raise，不浪费时间遍历其他模型
+            # [Gemini_3.5_Flash_planning] Fallback model switched to gemini-2.5-flash (which works under the current API key)
+            models_to_try = ["gemini-3.5-flash", "gemini-2.5-flash"]
+            response = None
+            last_err = None
+
+            for model_name in models_to_try:
+                max_retries = 3
+                retry_delay = 2  # [Claude_Sonnet_4.6_Thinking_planning] P1 fix: 初始 2s（原为 4s）
+                for attempt in range(max_retries):
+                    try:
+                        logger.info(f"Calling Gemini API with {model_name} (attempt {attempt + 1}/{max_retries})...")
+                        response = _client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config=_genai_types.GenerateContentConfig(
+                                response_mime_type="application/json"
+                            )
+                        )
+                        break  # 成功，退出重试循环
+                    except Exception as e:
+                        last_err = e
+                        err_msg = str(e)
+                        is_rate_limit = (
+                            "429" in err_msg
+                            or "RESOURCE_EXHAUSTED" in err_msg
+                            or "rate limit" in err_msg.lower()
+                        )
+                        if is_rate_limit:
+                            if attempt < max_retries - 1:
+                                wait = min(retry_delay, 8)  # [Claude_Sonnet_4.6_Thinking_planning] P1 fix: 上限 8s
+                                logger.warning(f"{model_name} rate limited (429). Retrying in {wait}s... ({attempt + 1}/{max_retries})")
+                                time.sleep(wait)
+                                retry_delay *= 2
+                                continue
+                            # 429 且重试耗尽 → 尝试下一个模型
+                            logger.warning(f"{model_name} exhausted all {max_retries} retries due to rate limiting. Falling back to next model.")
+                            break
+                        else:
+                            # [Claude_Sonnet_4.6_Thinking_planning] P3 fix: 非限流型错误（如 400 Bad Request、503）
+                            # 立即 raise，不再浪费时间尝试其他模型（这类错误通常不因模型切换而恢复）
+                            logger.error(f"{model_name} fatal error (non-rate-limit): {e}")
+                            raise
+                if response is not None:
+                    break
+
+            if response is None:
+                if last_err:
+                    raise last_err
+                raise Exception("Failed to get response from any Gemini model.")
+
             result = json.loads(response.text)
             
             if isinstance(result, dict) and "translations" in result:
