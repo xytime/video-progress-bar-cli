@@ -34,6 +34,7 @@
 | 3.3.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [代理内射] 修复下载死锁/丢包根因：不再无条件清除代理变量改为动态检测+验证连通性后注入/不注入，确保 curl/yt-dlp 在代理可用时使用代理高速下载 |
 | 3.4.0   | 2026-06-08 | Gemini_3.5_Flash_planning           | 注入 Telegram 配置环境变量；upload_cmd 中根据 settings.wechat_headless 动态配置 --no-headless 选项 |
 | 3.5.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [缓存失效] Transcribe Checkpoint 增加 .ass 双语内容校验：旧格式缓存缺少 Georgia 字体标签时强制删除并重渲，彻底消除代码升级后复用旧单语视频的缺陷 |
+| 3.6.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [原始归档] 下载完成后将原始媒体文件移入 original_video/ 子目录保留 3 天，_find_downloaded_video 优先热目录再回退冷存档，GC 逻辑零改动 |
 """
 
 
@@ -105,11 +106,13 @@ class PipelineManager:
     _SRC_DIR     = _PRJ_ROOT / "src"
     _VENV_PYTHON = str(_PRJ_ROOT / ".venv" / "bin" / "python")
     _VENV_YTDLP  = str(_PRJ_ROOT / ".venv" / "bin" / "yt-dlp")
-    _OUT_DIR     = _PRJ_ROOT / "output"
+    _OUT_DIR          = _PRJ_ROOT / "output"
+    _ORIG_VIDEO_DIR   = _OUT_DIR / "original_video"   # [Claude_Sonnet_4.6_Thinking_planning] 原始视频归档目录
 
     def __init__(self, db_path: str = "pipeline.db"):
         self.db = PipelineDB(db_path)
         self._OUT_DIR.mkdir(exist_ok=True)
+        self._ORIG_VIDEO_DIR.mkdir(exist_ok=True)  # [Claude_Sonnet_4.6_Thinking_planning] 归档目录随主目录一并创建
         self.telegram_token   = settings.telegram_bot_token
         self.telegram_chat_id = settings.telegram_chat_id
 
@@ -255,21 +258,102 @@ class PipelineManager:
 
     def _find_downloaded_video(self, yid: str) -> Optional[str]:
         """查找下载后的视频主文件。
-        
-        要求文件名主干（stem）必须与 yid 完全一致（排除包含 _vertical 或是格式后缀的中间临时文件），且大于 50KB。
-        # [Gemini_3.5_Flash_planning]
+
+        查找策略（优先级从高到低）：
+        1. 热目录 output/：yt-dlp 刚下载、尚未归档的文件（最新鲜）
+        2. 冷存档 output/original_video/：已归档的原始视频（3天TTL保留）
+
+        要求文件名主干（stem）必须与 yid 完全一致（排除包含 _vertical 或格式后缀的中间临时文件），且大于 50KB。
+        # [Gemini_3.5_Flash_planning] 原实现
+        # [Claude_Sonnet_4.6_Thinking_planning] v3.6.0 新增冷路径回退
         """
-        candidates = []
-        for f in self._OUT_DIR.glob(f"{yid}.*"):
-            if f.suffix in _NON_VIDEO_SUFFIXES:
-                continue
-            if f.stat().st_size <= 50_000:
-                continue
-            # 主干名称必须完全等于 yid，防止匹配到形如 {yid}.f398.mp4 或 {yid}_vertical.mp4 的视频文件
+        def _scan_dir(directory: Path) -> list:
+            result = []
+            for f in directory.glob(f"{yid}.*"):
+                if f.suffix in _NON_VIDEO_SUFFIXES:
+                    continue
+                if f.stat().st_size <= 50_000:
+                    continue
+                # 主干名称必须完全等于 yid，防止匹配到形如 {yid}.f398.mp4 或 {yid}_vertical.mp4 的视频文件
+                if f.stem != yid:
+                    continue
+                result.append(f)
+            return result
+
+        # 1. 先查热目录（output/）
+        candidates = _scan_dir(self._OUT_DIR)
+        if candidates:
+            return str(candidates[0])
+
+        # 2. 再查冷存档（output/original_video/）
+        archived = _scan_dir(self._ORIG_VIDEO_DIR)
+        if archived:
+            logger.info(f"[OV] Found archived original video for {yid}: {archived[0].name}")
+            return str(archived[0])
+
+        return None
+
+    # ── 原始视频归档（v3.6.0）────────────────────────────────────────────────
+
+    def _archive_original_video(self, yid: str) -> None:
+        """将 output/ 中属于 yid 的原始媒体文件移入 original_video/ 归档目录。
+
+        归档文件范围：
+        - 媒体文件：.mp4, .webm, .mkv, .m4a（原始素材）
+        - 元数据文件：.info.json（章节提取所需，与视频强绑定）
+        - 排除：_vertical.mp4、_copy.txt 等加工产物（stem 含下划线子段）
+
+        移动后立即触发 TTL 清理，防止归档目录无限膨胀。
+        # [Claude_Sonnet_4.6_Thinking_planning] v3.6.0
+        """
+        import shutil
+
+        # 允许归档的媒体扩展名（排除 _NON_VIDEO_SUFFIXES 中非媒体项，保留 .info.json）
+        _ARCHIVE_SUFFIXES = {'.mp4', '.webm', '.mkv', '.m4a', '.json'}
+
+        archived_count = 0
+        for f in list(self._OUT_DIR.glob(f"{yid}.*")):
+            # 只归档主干等于 yid 的文件，排除 {yid}_vertical.mp4 等衍生产物
             if f.stem != yid:
                 continue
-            candidates.append(f)
-        return str(candidates[0]) if candidates else None
+            if f.suffix not in _ARCHIVE_SUFFIXES:
+                continue
+            dest = self._ORIG_VIDEO_DIR / f.name
+            try:
+                shutil.move(str(f), str(dest))
+                logger.info(f"[OV] Archived: {f.name} → original_video/")
+                archived_count += 1
+            except Exception as e:
+                logger.warning(f"[OV] Failed to archive {f.name}: {e}")
+
+        if archived_count > 0:
+            logger.info(f"[OV] Archived {archived_count} file(s) for {yid}. Triggering TTL eviction.")
+            self._evict_original_video_dir()
+
+    def _evict_original_video_dir(self, ttl_days: int = 3) -> None:
+        """删除 original_video/ 中修改时间超过 ttl_days 天的文件（TTL 清理）。
+
+        设计原则：只按 mtime 判断，不区分视频 ID，对正在使用的新鲜文件无影响。
+        # [Claude_Sonnet_4.6_Thinking_planning] v3.6.0
+        """
+        import time as _time
+
+        ttl_seconds = ttl_days * 86400
+        now = _time.time()
+        evicted = 0
+        for f in self._ORIG_VIDEO_DIR.iterdir():
+            if not f.is_file():
+                continue
+            age = now - f.stat().st_mtime
+            if age > ttl_seconds:
+                try:
+                    f.unlink()
+                    logger.info(f"[OV-GC] Evicted (age={age/86400:.1f}d): {f.name}")
+                    evicted += 1
+                except Exception as e:
+                    logger.warning(f"[OV-GC] Failed to evict {f.name}: {e}")
+        if evicted:
+            logger.info(f"[OV-GC] TTL eviction complete: {evicted} file(s) removed from original_video/.")
 
     # ── 子进程辅助（v7.0: Popen + 进程组隔离）────────────────────────────────
 
@@ -622,6 +706,13 @@ class PipelineManager:
                         if not target_file:
                             raise FileNotFoundError(f"No video file found for {yid} after download")
                         logger.info(f"Downloaded: {target_file}")
+
+                        # [Claude_Sonnet_4.6_Thinking_planning] v3.6.0: 归档原始视频到 original_video/ 子目录
+                        # 注意：归档后 target_file 路径变更，必须重新获取
+                        self._archive_original_video(yid)
+                        target_file = self._find_downloaded_video(yid)
+                        if not target_file:
+                            raise FileNotFoundError(f"No video file found for {yid} after archiving")
 
                         # [Claude_Sonnet_4.6_Thinking_planning] v2.12.0: 仅在未使用 --download-sections
                         # 时才执行 ffmpeg 二次裁剪（used_download_sections=True 时 yt-dlp 已完成裁剪）。
