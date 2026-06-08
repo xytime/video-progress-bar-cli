@@ -21,6 +21,7 @@
 | 2.9.0 | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 respec_video 端点：停止当前处理、覆盖规格并重新入队；add_video_manual 重复检测补充 video_id/title 返回 |
 | 3.0.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 新增 /api/trending-keywords 端点，整合 HN 热词注入功能到后台 Web UI 热词监控 Tab |
 | 3.1.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix+防卡] _run_pipeline_manager 使用 settings.get_active_proxies() 动态代理注入；_queue_runner_loop 新增 purge_stale_tasks() 自动清理卡死 DOWNLOADING 任务 |
+| 3.2.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 _wechat_keepalive_loop：定期局动 wechat_keepalive.py 子进程刷新 Session，防止闲置掉线 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -163,6 +164,91 @@ def _queue_runner_loop():
         time.sleep(15)
 
 
+def _wechat_keepalive_loop():
+    """[Claude_Sonnet_4.6_Thinking_planning] v3.2.0: WeChat Session 看门狗循环。
+
+    每隔随机的 min~max 分钟（可通过 settings 配置），启动一个独立子进程
+    （wechat_keepalive.py）无感访问微信视频号发布页，停留指定秒数后保存刷新的 Cookie。
+
+    互斥保护：若检测到微信上传任务正在运行，则跳过本轮，避免两个
+    Playwright 进程共享 Session 文件产生竞态。
+    """
+    import random
+    import logging
+    log = logging.getLogger(__name__)
+
+    prj_root = Path(__file__).parent.parent.parent
+    python = str(prj_root / ".venv" / "bin" / "python")
+    state_file = str(prj_root / "output" / "wechat_state.json")
+    keepalive_script = str(prj_root / "scripts" / "wechat_keepalive.py")
+
+    import subprocess as _sp
+    import threading as _threading
+
+    while True:
+        # 随机等待 min~max 分钟
+        min_s = settings.wechat_keepalive_min_interval * 60
+        max_s = settings.wechat_keepalive_max_interval * 60
+        interval = random.randint(min_s, max_s)
+        log.info(f"[Keepalive] Next keepalive scheduled in {interval // 60}m{interval % 60}s.")
+        time.sleep(interval)
+
+        # 开关检查（sleep 后判断，支持运行时热更新配置）
+        if not settings.wechat_keepalive_enabled:
+            log.debug("[Keepalive] Keepalive disabled by settings, skipping.")
+            continue
+
+        # 互斥检测：若有微信上传相关线程正在运行，跳过本轮 keepalive
+        # [Claude_Sonnet_4.6_Thinking_planning] 防止两个 Playwright 进程并发读写
+        # wechat_state.json 产生 Cookie 竞态（两个进程同时 storage_state() 相互覆盖）
+        active_threads = _threading.enumerate()
+        upload_running = any(
+            "wechat-uploader" in t.name or "upload" in t.name.lower()
+            for t in active_threads
+        )
+        if upload_running:
+            log.info("[Keepalive] Upload in progress, skipping keepalive this round.")
+            continue
+
+        log.info("[Keepalive] Triggering WeChat session keepalive...")
+
+        # 构建子进程环境：不注入代理（与 wechat_uploader 一致），注入 Telegram 凭据
+        _proxy_keys = frozenset({
+            'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
+            'http_proxy', 'https_proxy', 'all_proxy'
+        })
+        env = {k: v for k, v in os.environ.items() if k not in _proxy_keys}
+        if settings.telegram_bot_token:
+            env["TELEGRAM_BOT_TOKEN"] = settings.telegram_bot_token
+        if settings.active_telegram_chat_id:
+            env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
+        if settings.telegram_admin_ids:
+            env["TELEGRAM_ADMIN_IDS"] = settings.telegram_admin_ids
+
+        try:
+            result = _sp.run(
+                [
+                    python, keepalive_script,
+                    "--state", state_file,
+                    "--dwell", str(settings.wechat_keepalive_dwell),
+                ],
+                env=env,
+                timeout=120,  # 子进程最大 120 秒超时保护
+            )
+            if result.returncode == 0:
+                log.info("[Keepalive] WeChat session refreshed successfully.")
+            elif result.returncode == 2:
+                log.warning("[Keepalive] WeChat session expired (LOGIN_REQUIRED). Telegram alert sent.")
+            else:
+                log.warning(f"[Keepalive] Keepalive subprocess returned code: {result.returncode}.")
+        except _sp.TimeoutExpired:
+            log.error("[Keepalive] Keepalive subprocess timed out after 120s.")
+        except FileNotFoundError:
+            log.error(f"[Keepalive] Keepalive script not found: {keepalive_script}")
+        except Exception as e:
+            log.error(f"[Keepalive] Unexpected error: {e}")
+
+
 @app.on_event("startup")
 def startup_event():
     """FastAPI 启动时自动运行后台调度器，并在主线程注册信号处理器。
@@ -182,6 +268,10 @@ def startup_event():
 
     threading.Thread(target=_queue_runner_loop, daemon=True, name="queue-runner-scheduler").start()
     print("[Scheduler] Queue runner scheduler started.")
+
+    # [Claude_Sonnet_4.6_Thinking_planning] v3.2.0: WeChat Session 看门狗
+    threading.Thread(target=_wechat_keepalive_loop, daemon=True, name="wechat-keepalive-watchdog").start()
+    print("[Scheduler] WeChat session keepalive watchdog started.")
 
 # 优先用 PATH 里的 yt-dlp，其次用 venv 里的
 _YT_DLP = shutil.which("yt-dlp") or str(

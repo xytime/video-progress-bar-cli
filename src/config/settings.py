@@ -14,6 +14,7 @@
 | 2.4.0 | 2026-06-07 | Gemini_3.5_Flash_High_planning | 新增 enable_dynamic_keywords 与 hn_top_n 配置，支持动态热词注入 |
 | 2.5.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix] env_file 改为绝对路径，修复 cwd != project_root 时 .env 无法加载导致 Feature Flag 全部回退的根因；新增 get_active_proxies() 动态检测系统代理连通性 |
 | 2.6.0 | 2026-06-08 | Gemini_3.5_Flash_planning           | 新增 wechat_headless 配置项及 active_telegram_chat_id 动态计算属性 |
+| 2.7.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 wechat_keepalive_* 看门狗配置项，支持定期刷新 Session 防止闲置掉线 |
 """
 import socket
 import urllib.request
@@ -63,6 +64,14 @@ class Settings(BaseSettings):
 
     # 微信上传是否使用无头模式，默认开启
     wechat_headless: bool = True  # [Gemini_3.5_Flash_planning]
+
+    # [Claude_Sonnet_4.6_Thinking_planning] v2.7.0: WeChat Session 看门狗配置
+    # 看门狗会定期（每 min~max 分钟随机一次）在后台静默访问微信发布页，
+    # 维持 Cookie 活跃，防止长时间无发布任务时 Session 闲置过期。
+    wechat_keepalive_enabled: bool = False          # 默认关闭，需在 .env 中显式设置 WECHAT_KEEPALIVE_ENABLED=true
+    wechat_keepalive_min_interval: int = 50         # 最短触发间隔（分钟）
+    wechat_keepalive_max_interval: int = 65         # 最长触发间隔（分钟）
+    wechat_keepalive_dwell: int = 15                # 停留时长（秒），供微信记录活跃请求
 
 
     # Google Gemini API Key
