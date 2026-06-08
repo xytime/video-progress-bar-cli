@@ -7,6 +7,7 @@ created_at: 2026-05-21T14:31:00+08:00
 
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.2.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 记录 Gemini_3.5_Flash_planning 代理注入泄露至 Playwright 导致微信异地登录掉线的 P0 问题 |
 | 2.1.0 | 2026-06-07 | Gemini_3.5_Flash_planning           | 记录 Gemini_3.1_Pro_High_planning 相对路径 env_file 导致 Feature Flags 失效及 Gemini_3.5_Flash_planning 无条件清除代理导致 curl 下载挂起的 P1 问题 |
 | 2.0.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 记录 Gemini_3.5_Flash_planning 在 YouTube 插件中将 document 传入 injectStylesIntoShadow 导致 HierarchyRequestError 静默崩溃的 P0 问题 |
 | 1.9.0 | 2026-06-07 | Gemini_3.5_Flash_planning    | 记录 Gemini_3.5_Flash_fast 在 YouTube 插件中直接向 innerHTML 写入导致 Trusted Types 限制拦截报错的问题 |
@@ -61,3 +62,6 @@ created_at: 2026-05-21T14:31:00+08:00
 在 `pipeline_manager.py` 的子进程环境变量构建中，为了防止多级代理干扰，采取了无条件从环境变量中删除所有 `HTTP_PROXY` / `HTTPS_PROXY` 等代理项的过度清理策略。这导致在国内网络环境里，`curl` 外部下载器直连 Google Video CDN 时发生严重丢包和网络超时（返回 curl exit code 18），导致任务无限期卡死在 DOWNLOADING 状态。应当通过 TCP 动态探测当前系统代理的可用性，按需且安全地进行代理注入或隔离，而非粗暴的无条件清除。
 **严重程度**：P1
 
+## 对于【Gemini_3.5_Flash_planning】问题（代理注入泄露至 Playwright 导致微信掉线）：
+在 `pipeline_manager.py` 实现动态代理注入优化时（v3.3.0），`_run_tracked` 默认将含有海外节点代理的 `HTTP_PROXY` 环境变量一并注入给了执行微信上传的子进程 `wechat_uploader.py`。因为 Playwright Chromium 默认遵循环境代理，这导致访问微信视频号的流量意外绕行海外节点，被微信安全系统判定为高危异地登录而强制踢下线并阻断回话，导致后续的所有自动发布任务返回 `LOGIN_REQUIRED`。应在启动 Playwright 进程时传入 `--no-proxy-server` 进行防内射隔离保护。
+**严重程度**：P0

@@ -290,6 +290,8 @@ def run_uploader(
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--window-size=1280,800",
+                # [BugFix] 禁用代理，防止 Playwright 走海外节点导致微信异地登录强制掉线
+                "--no-proxy-server",
             ]
         )
 
@@ -636,6 +638,13 @@ def run_uploader(
             logger.info(f"Post-upload screenshot: {dbg_post}")
         except Exception:
             pass
+
+        # [BugFix] 每次上传成功后及时保存最新的 storage_state，保存刷新的 Cookie / Token
+        try:
+            context.storage_state(path=str(state_file))
+            logger.info(f"Session state updated and saved to: {state_file}")
+        except Exception as e:
+            logger.warning(f"Failed to update session state after upload: {e}")
 
         # ── 4. 短标题（视频上传后字段才出现）────────────────────────────────
         # 规则来源：WeChat JS 源码 345.509f6449.js → parseShortTitle() + handleBlur()
