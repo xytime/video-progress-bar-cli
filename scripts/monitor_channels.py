@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-05-20 | Unknown                        | 初始创建     |
 | 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_High_planning | 整合动态热词注入逻辑，支持从 HN 热榜获取动态关键词 |
 | 1.2.0   | 2026-06-08 | Claude_Sonnet_4.6_planning     | 标题翻译改用 translation_helper（阿里云 MT 优先）|
+| 1.3.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | 升级新视频主动搜索发现逻辑，将符合高赞筛选要求的视频录入 DISCOVERY 源 |
 """
 import sys
 from pathlib import Path
@@ -118,10 +119,11 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
 
 def discover_new_channels(db: PipelineDB):
     """通过关键词搜索发现潜在的优质频道，加入推荐列表"""
+    # [Gemini_3.5_Flash_planning] 独立频道探索逻辑，保持高内聚低耦合
     print("Running active discovery for new channels...")
-    keywords = get_discovery_keywords()  # [Gemini_3.5_Flash_High_planning]
+    keywords = get_discovery_keywords()
     for keyword in keywords:
-        print(f"Searching for: {keyword}")
+        print(f"Searching channels for: {keyword}")
         cmd = [
             "yt-dlp",
             "ytsearch5:" + keyword,  # 抓取前5个搜索结果
@@ -130,18 +132,77 @@ def discover_new_channels(db: PipelineDB):
             "--cookies-from-browser", "safari"
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             if result.returncode == 0 and result.stdout.strip():
                 for line in result.stdout.strip().split('\n'):
                     parts = line.split('|', 1)
                     if len(parts) == 2:
                         channel_id, channel_name = parts
-                        # 尝试添加至待审核列表
                         success = db.add_channel(channel_id, channel_name, status="PENDING", reason=f"Discovered via search: '{keyword}'")
                         if success:
                             print(f"  -> Discovered new channel: {channel_name} ({channel_id})")
         except Exception as e:
-            print(f"Error during discovery for '{keyword}': {e}")
+            print(f"Error during channel discovery for '{keyword}': {e}")
+
+
+def discover_high_like_videos(db: PipelineDB):
+    """通过关键词搜索发现最近24小时内的高赞视频，存入数据库以供浏览和手动触发"""
+    # [Gemini_3.5_Flash_planning] 独立高赞视频发现逻辑，避免与频道发现逻辑混合
+    print("Running active discovery for high-like videos...")
+    
+    def _int_or_none(v):
+        try: return int(v)
+        except: return None
+
+    import datetime
+    yesterday_str = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+    
+    keywords = get_discovery_keywords()
+    for keyword in keywords:
+        print(f"Searching high-like videos for: {keyword}")
+        cmd = [
+            "yt-dlp",
+            "ytsearch10:" + keyword,  # 抓取前10个搜索结果
+            "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s|||%(channel_id)s",
+            "--no-warnings",
+            "--cookies-from-browser", "safari"
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0 and result.stdout.strip():
+                for line in result.stdout.strip().split('\n'):
+                    parts = line.split('|||', 6)
+                    if len(parts) == 7:
+                        video_id = parts[0].strip()
+                        title = parts[1].strip()
+                        duration_sec = _int_or_none(parts[2])
+                        view_count = _int_or_none(parts[3])
+                        like_count = _int_or_none(parts[4])
+                        upload_date = parts[5].strip()
+                        channel_id = parts[6].strip()
+
+                        # 筛选最近24-48小时内发布且观看量>500的视频
+                        if upload_date and upload_date >= yesterday_str:
+                            if view_count and view_count > 500:
+                                zh_title = title
+                                try:
+                                    zh_title = _translate_text(title, src_lang="auto", target_lang="zh-CN")
+                                except Exception as e:
+                                    print(f"  -> Translator failed for {video_id}: {e}")
+
+                                # 以 DISCOVERY 源入库，score=0，防自动处理，仅在 Web 端高赞 Tab 供浏览
+                                added = db.add_video(
+                                    video_id, title, channel_id, score=0, zh_title=zh_title, source="DISCOVERY",
+                                    duration_sec=duration_sec, view_count=view_count,
+                                    like_count=like_count, upload_date=upload_date,
+                                )
+                                if added:
+                                    print(f"  -> Discovered high-like video: {title} (likes={like_count}, views={view_count})")
+        except subprocess.TimeoutExpired:
+            print(f"  -> Timeout searching '{keyword}'")
+        except Exception as e:
+            print(f"Error during video discovery for '{keyword}': {e}")
+
 
 def main():
     db = PipelineDB()
@@ -149,7 +210,10 @@ def main():
     # 1. 探索新频道
     discover_new_channels(db)
     
-    # 2. 拉取已有白名单的新视频
+    # 2. 探索高赞视频
+    discover_high_like_videos(db)
+    
+    # 3. 拉取已有白名单的新视频
     approved_channels = db.get_approved_channels()
     print(f"\nFound {len(approved_channels)} approved channels.")
     
