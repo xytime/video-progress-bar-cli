@@ -27,6 +27,7 @@
 | 2.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [架构解耦] 将字幕样式/ASS标签/字号缩放/高亮/折行完全委托给 SubtitleStylist，_generate_ass_file 仅负责时间轴与文件写入 |
 | 2.1.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 横屏输入视频使用动态计算的字幕起始 Y 坐标，修复 SyntaxError 并优化排版，标注 # [Gemini_3.5_Flash_planning] |
 | 2.2.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 将释义区字号比例下调至 0.42 倍以显主次，并标注 # [Gemini_3.5_Flash_planning] |
+| 2.3.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 竖屏模式下释义区最下沿上移半字高度 (≈17px)，同步缩减主字幕最大高度防重叠 |
 """
 import logging
 import subprocess
@@ -287,8 +288,12 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         # 两种模式下单行文本（≈203px）均不触发缩放，多行才缩放。
         subtitle_top_y = layout_params.subtitle_margin_v
         if is_vertical_input:
-            GLOSSARY_EXPECTED_TOP = int(VerticalLayout.CANVAS_HEIGHT * 0.90) - 196  # ≈1532
-            subtitle_max_height = max(200, GLOSSARY_EXPECTED_TOP - 32 - subtitle_top_y)  # = 300px
+            # [Claude_Sonnet_4.6_planning] 释义区字号 = font_size * 0.42；半字高 ≈ gloss_size / 2
+            _gloss_size = int(font_size * 0.42)  # 默认 84*0.42=35pt
+            _gloss_half_height = int(_gloss_size / 2.0)  # ≈17px
+            # GlossaryCard 顶部的预期位置（随底部 marginv 上移而相应上移）
+            GLOSSARY_EXPECTED_TOP = int(VerticalLayout.CANVAS_HEIGHT * 0.90) - 196 - _gloss_half_height  # ≈1515
+            subtitle_max_height = max(200, GLOSSARY_EXPECTED_TOP - 32 - subtitle_top_y)
         else:
             subtitle_max_height = max(200, int(font_size * 3.5) + outline * 2 - 20)  # [Gemini_3.5_Flash_planning] Fixed syntax error by adding closing parenthesis
         layout = SubtitleLayout(
@@ -318,7 +323,10 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         # Determine glossary alignment and marginv
         if is_vertical_input:
             glossary_alignment = 2  # Bottom Center, grows upwards
-            glossary_marginv = int(VerticalLayout.CANVAS_HEIGHT * 0.10)  # 10% safety margin = 192px
+            # [Claude_Sonnet_4.6_planning] 底部边距加上半字高，使释义区最下沿上移 ~17px
+            _gloss_size = int(font_size * 0.42)
+            _gloss_half_height = int(_gloss_size / 2.0)
+            glossary_marginv = int(VerticalLayout.CANVAS_HEIGHT * 0.10) + _gloss_half_height  # ≈209px
         else:
             glossary_alignment = 8  # Top Center
             glossary_marginv = subtitle_top_y + int(font_size * 3.5) + outline * 2 + 10

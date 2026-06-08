@@ -6,6 +6,7 @@
 |---------|------------|--------------------------------|-------------|
 | 1.0.0   | 2026-05-20 | Unknown                        | 初始创建     |
 | 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_High_planning | 整合动态热词注入逻辑，支持从 HN 热榜获取动态关键词 |
+| 1.2.0   | 2026-06-08 | Claude_Sonnet_4.6_planning     | 标题翻译改用 translation_helper（阿里云 MT 优先）|
 """
 import sys
 from pathlib import Path
@@ -16,6 +17,7 @@ import datetime
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 from video_processing.db import PipelineDB
 from config.settings import settings  # [Gemini_3.5_Flash_High_planning]
+from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning]
 
 # 定义主动发现的静态热门搜索词
 STATIC_KEYWORDS = [
@@ -90,11 +92,10 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
             like_count   = _int_or_none(parts[4]) if len(parts) > 4 else None
             upload_date  = parts[5].strip() if len(parts) > 5 and parts[5].strip() not in ("NA", "") else None
                  
-            # 翻译标题
+            # 翻译标题（阿里云 MT 优先）
             zh_title = title
             try:
-                from deep_translator import GoogleTranslator
-                zh_title = GoogleTranslator(source='auto', target='zh-CN').translate(title)
+                zh_title = _translate_text(title, src_lang="auto", target_lang="zh-CN")
             except Exception as e:
                 print(f"  -> Translator failed for {video_id}: {e}")
 

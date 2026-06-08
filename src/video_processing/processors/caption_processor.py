@@ -21,6 +21,7 @@
 | 1.10.4 | 2026-06-08 | Gemini_3.5_Flash_planning | 优化错误分类：连接断开与 5xx 服务端错误不作为立即 raise 的致命错误，允许 fallback 到备用模型，标注 # [Gemini_3.5_Flash_planning] |
 | 1.10.5 | 2026-06-08 | Gemini_3.5_Flash_planning | _translate_segments 增加 try-except 容灾保护，使 Gemini 异常对调用链安全，标注 # [Gemini_3.5_Flash_planning] |
 | 1.10.6 | 2026-06-08 | Gemini_3.5_Flash_planning | 提示词升级：强制让 vocab 中的中文词汇与翻译句子中的子串完全对齐，以便于前端画下划线，标注 # [Gemini_3.5_Flash_planning] |
+| 1.11.0 | 2026-06-08 | Claude_Sonnet_4.6_planning | 将 _translate_segments_aliyun 迁移至 translation_helper 模块，实现高内聘低耦合的统一翻译接口 |
 """
 import logging
 from pathlib import Path
@@ -46,6 +47,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ..core.base import VideoProcessorBase, VideoProcessingError
+from ..utils.translation_helper import translate_batch_aliyun, translate_batch as _google_batch_fallback  # [Claude_Sonnet_4.6_planning]
 
 logger = logging.getLogger(__name__)
 
@@ -616,23 +618,33 @@ class AutoCaptionProcessor(VideoProcessorBase):
             return None
 
     def _translate_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """批量翻译字幕片段"""
+        """批量翻译字幕片段 — 阿里云 MT → Gemini vocab → Google Translate 三级降级。
+
+        [Claude_Sonnet_4.6_planning] v1.11.0:
+        使用 translation_helper.translate_batch_aliyun 统一调用阿里云翻译，
+        Google Translate fallback 亦通过 translation_helper 统一路由。
+        Gemini 仅负责难词（vocab）提取，不再用于一级翻译。
+        """
         if not segments:
             return segments
-            
+
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
-        
-        # [Gemini_3.5_Flash_planning] 优先调用阿里云 MT 获取高精度翻译以确保稳定与流畅
-        aliyun_results = self._translate_segments_aliyun(segments)
-        
-        # [Gemini_3.5_Flash_planning] 同时调用 Gemini 以提供难词提取（及可能需要的翻译 Fallback）。
-        # 即使 Gemini 发生致命错误引发异常，也仅记录警告并允许翻译继续，实现最大化的容灾降级。
+
+        # 标准化语言代码（阿里云使用 "zh"，Google 使用 "zh-CN"）
+        ali_tgt = "zh" if self.target_lang in ("zh-CN", "zh", None) else self.target_lang
+        ali_src = "en" if self.src_lang in ("en", "auto", None) else self.src_lang
+
+        # [Claude_Sonnet_4.6_planning] 优先调用阿里云 MT（通过 translation_helper 统一入口）
+        texts = [seg.get("text", "").strip() for seg in segments]
+        aliyun_results = translate_batch_aliyun(texts, src_lang=ali_src, target_lang=ali_tgt)
+
+        # [Gemini_3.5_Flash_planning] 同时调用 Gemini 进行难词提取（允许失败降级）
         try:
             gemini_results = self._translate_segments_gemini(segments)
         except Exception as e:
             logger.warning(f"Gemini translation/vocab extraction failed (non-blocking fallback): {e}")
             gemini_results = None
-        
+
         if aliyun_results:
             # 优先使用阿里云的翻译
             logger.info("Prioritizing Aliyun MT translation results.")
@@ -645,7 +657,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     else:
                         segments[i]['vocab'] = {}
             return segments
-            
+
         if gemini_results:
             # 阿里云失败，回退使用 Gemini 翻译与难词
             logger.warning("Aliyun MT failed. Falling back to Gemini translation and vocabulary.")
@@ -655,52 +667,15 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     segments[i]['vocab'] = res.get('vocab', {})
             return segments
 
-        # 阿里云和 Gemini 均失败，进入三级 fallback 谷歌翻译
+        # 三级 fallback：Google Translate（通过 translation_helper 统一路由）
         logger.warning("Both Aliyun MT and Gemini failed. Falling back to Google Translate.")
-        texts = [seg['text'].strip() for seg in segments]
-        
-        # 分批处理以防止突破API限制
-        translator = GoogleTranslator(source='auto', target=self.target_lang)
-        batch_size = 30
-        translated_texts = []
-        
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i+batch_size]
-            try:
-                res = translator.translate_batch(batch)
-                translated_texts.extend(res)
-            except Exception as e:
-                logger.error(f"Batch translation failed at index {i}: {e}")
-                # 如果分批翻译失败，回退到逐条翻译，并加入延时防风控
-                import time
-                for text in batch:
-                    retry_count = 3
-                    success = False
-                    for _ in range(retry_count):
-                        try:
-                            single_res = translator.translate(text)
-                            translated_texts.append(single_res if single_res else "")
-                            success = True
-                            time.sleep(0.5)
-                            break
-                        except Exception as inner_e:
-                            time.sleep(2)
-                    if not success:
-                        logger.error(f"Failed to translate segment after {retry_count} retries.")
-                        translated_texts.append("") # 失败时为空，绝不静默混入英文
-        
-        # 将翻译结果回填
-        import re
-        for i, text in enumerate(translated_texts):
+        gt_translated = _google_batch_fallback(texts, src_lang="auto", target_lang=self.target_lang)
+
+        for i, text in enumerate(gt_translated):
             if i < len(segments):
-                # [Gemini_3.1_Pro_High_planning] 过滤并清洗谷歌翻译由于被风控返回的错误页面文本
-                if text and re.search(r'<html|<body|<div|captcha|that\'s an error|error 500|cloudflare', text, re.IGNORECASE):
-                    logger.warning("Google Translate API blocked or returned HTML garbage! Removing garbage text.")
-                    text = ""
-                # 如果没翻译出来，直接留空，让渲染器 fallback 到只显示英文
                 segments[i]['zh_text'] = text if text else ""
                 segments[i]['vocab'] = {}  # fallback with empty vocabulary
-                
+
         return segments
 
     def _load_model(self):

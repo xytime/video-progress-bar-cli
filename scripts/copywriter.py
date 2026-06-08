@@ -16,6 +16,7 @@
 | 1.9.1   | 2026-05-27 | Gemini_3.5_Flash_planning               | 算法调优: graceful_truncate_title 预处理过滤括号，并将排序策略由尾部优先改为首部语义优先，防截断偏斜 |
 | 1.10.0  | 2026-05-27 | Gemini_3.1_Pro_High_planning            | P0体验修复: 引入斐波那契重试；新增正则提取主干降级方案；graceful_truncate_title 增加悬空词惩罚评分 |
 | 1.11.0  | 2026-06-02 | Gemini_2.5_Pro_planning                 | 封面内容角标: 新增 content_label 字段，LLM 自动按内容选择 重磅/突发/独家/最新 等运营标签，写入 {yid}_label.txt |
+| 1.12.0  | 2026-06-08 | Claude_Sonnet_4.6_planning             | _translate_fallback 改用 translation_helper（阿里云 MT 优先）|
 """
 
 import re
@@ -35,6 +36,11 @@ if _src_root not in sys.path:
     sys.path.insert(0, _src_root)
 
 from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning]
+
+_src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
+if _src_path not in sys.path:
+    sys.path.insert(0, _src_path)
+from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("copywriter")
@@ -382,14 +388,16 @@ def extract_headline_workaround(translated_title: str) -> tuple[str, str]:
 
 
 def _translate_fallback(title: str, description: str) -> dict:
-    """Gemini 不可用时，用 deep-translator 作兜底翻译"""
-    logger.warning("Gemini unavailable — falling back to deep-translator")
+    """Gemini 不可用时，用 translation_helper（阿里云 MT 优先）作内容兼底翻译。
+
+    [Claude_Sonnet_4.6_planning] 改用 translation_helper.translate_text，
+    共享与字幕翻译相同的阿里云 MT 优先策略。
+    """
+    logger.warning("Gemini unavailable — falling back to translation_helper")
     try:
-        from deep_translator import GoogleTranslator
-        tr = GoogleTranslator(source='auto', target='zh-CN')
-        zh_title = tr.translate(title) or title
+        zh_title = _translate_text(title, src_lang="auto", target_lang="zh-CN") or title
         desc_lines = [l.strip() for l in description.split("\n") if l.strip()]
-        zh_desc = tr.translate(" ".join(desc_lines[:3])) if desc_lines else ""
+        zh_desc = _translate_text(" ".join(desc_lines[:3]), src_lang="auto", target_lang="zh-CN") if desc_lines else ""
         
         # [Gemini_3.1_Pro_High_planning] 提取主干并兜底
         core_title, hook_subtitle = extract_headline_workaround(zh_title)

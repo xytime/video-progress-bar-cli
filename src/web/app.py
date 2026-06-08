@@ -48,6 +48,7 @@ from pydantic import BaseModel
 
 from video_processing.db.database import PipelineDB
 from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
+from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning] 统一翻译入口
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
 
@@ -62,10 +63,13 @@ app.add_middleware(
 db = PipelineDB()
 
 def _translate_title_task(youtube_id: str, english_title: str):
-    """后台任务：调用 deep-translator 翻译标题并更新数据库"""
+    """后台任务：调用翻译接口（阿里云 MT 优先）翻译标题并更新数据库。
+
+    [Claude_Sonnet_4.6_planning] 改用 translation_helper.translate_text，
+    使标题翻译与字幕翻译共享相同的阿里云 MT 优先策略。
+    """
     try:
-        from deep_translator import GoogleTranslator
-        zh_title = GoogleTranslator(source='auto', target='zh-CN').translate(english_title)
+        zh_title = _translate_text(english_title, src_lang="auto", target_lang="zh-CN")
         if zh_title and zh_title != english_title:
             with db.get_connection() as conn:
                 conn.execute(
