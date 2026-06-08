@@ -13,6 +13,7 @@
 | 1.6.0   | 2026-06-07 | Gemini_3.5_Flash_High_planning | 整合双语字幕一体化卡片及多色高亮和下划线测试，标注 # [Gemini_3.5_Flash_High_planning] |
 | 1.7.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 更新测试适配 GlossaryCard 灰色背景楷体独立卡片，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 | 1.8.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 更新双语字幕测试断言，匹配 Georgia/Hiragino 样式与 HTML 模版配色，标注 # [Gemini_3.5_Flash_planning] |
+| 1.9.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 更新释义卡断言匹配 build_glossary_text en_size 参数的\\fs标签输出；转移中文高亮到折行之后的新行为 |
 """
 import pytest
 from unittest.mock import patch, MagicMock
@@ -147,13 +148,13 @@ class TestCaptionProcessorRedBlueFixes:
         assert layout_landscape.video_y == VerticalLayout.TOP_MARGIN, f"Expected video_y to be {VerticalLayout.TOP_MARGIN} for landscape input, got {layout_landscape.video_y}"
 
         # Verify ASS Subtitle Top position for Landscape Video
-        # [Claude_Sonnet_4.6_Thinking_planning] MarginV for landscape = 1300:
-        # Landscape 1280×720 video, when scaled to fit 1080-wide canvas, has bottom at Y≈1263.
-        # Subtitle starts at Y=1300, just below the video, with 37px gap.
+        # [Gemini_3.5_Flash_planning] MarginV for landscape 1920x1080 is dynamically calculated:
+        # scaled new_h = 607, video_bottom_y = 350 + 607 = 957.
+        # Subtitle starts at 957 + 90 = 1047 (just below the video in the black area, biased upwards).
         processor_landscape._generate_ass_file(segments=[])
         assert "Default" in mock_subs_instance_landscape.styles
         style_landscape = mock_subs_instance_landscape.styles["Default"]
-        assert style_landscape.marginv == 1300, f"Expected subtitle marginv (Y) to be 1300 for landscape video, got {style_landscape.marginv}"
+        assert style_landscape.marginv == 1047, f"Expected subtitle marginv (Y) to be 1047 for landscape video, got {style_landscape.marginv}"
 
     @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._validate_input')
     @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._get_video_resolution')
@@ -202,7 +203,8 @@ class TestCaptionProcessorRedBlueFixes:
 
         # [Gemini_3.5_Flash_planning] 更新双语字幕测试，以适配最新版的 Georgia/Hiragino 独立字体和暖黄/暖白配色
         # 英文字号 84 * 0.71 = 59，中文字号 84 * 0.81 = 68，高亮色为 &HC7D36F&
-        expected_sub_text = r"{\fnGeorgia\fs59\c&H3FD2FF&}Hello {\u1\c&HC7D36F&}world{\u0\c}\N{\fs24\alpha&HFF&} \N{\fnHiragino Sans GB\fs68\alpha&H00&\c&HE9EFF2&}你好世界"
+        # [Claude_Sonnet_4.6_Thinking_planning] 中文高亮现在在折行之后执行，所以 \N 不会截断 ASS 标签
+        expected_sub_text = r"{\fnGeorgia\fs59\c&H3FD2FF&}Hello {\u1\c&HC7D36F&}world{\u0\c}\N{\fs24\alpha&HFF&} \N{\fnHiragino Sans GB\fs68\alpha&H00&\c&HE9EFF2&}你好{\u1\c&HC7D36F&}世界{\u0\c&HE9EFF2&}"
         assert evt_sub.text == expected_sub_text, (
             f"Expected subtitle text '{expected_sub_text}', got '{evt_sub.text}'"
         )
@@ -211,11 +213,13 @@ class TestCaptionProcessorRedBlueFixes:
         assert evt_glossary.style == "GlossaryCard", (
             f"Expected GlossaryCard style, got '{evt_glossary.style}'"
         )
-        # 英文单词使用 Georgia 字体和暖黄色 &H3FD2FF&，词义前带青绿色 [词汇] 标签，翻译使用宋体-简 (\fnSongti SC) 和灰白 &HBDC5C9&
-        expected_glossary_text = r"{\fnHiragino Sans GB\c&HC7D36F&}词汇  {\fnGeorgia\i0\c&H3FD2FF&}world {\fnSongti SC\i1\c&HBDC5C9&}· 世界{\i0}"
+        # [Claude_Sonnet_4.6_Thinking_planning] build_glossary_text 现在接收 en_size=59，
+        # 所以释义标签头部会加入 \fs59 以限制释义字号 <= 英文字幕字号
+        expected_glossary_text = r"{\fnHiragino Sans GB\fs59\c&HC7D36F&}词汇  {\fnGeorgia\i0\c&H3FD2FF&}world {\fnSongti SC\i1\c&HBDC5C9&}· 世界{\i0}"
         assert evt_glossary.text == expected_glossary_text, (
             f"Expected glossary text '{expected_glossary_text}', got '{evt_glossary.text}'"
         )
+
 
     @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._validate_input')
     @patch('video_processing.processors.vertical_processor.VerticalCaptionProcessor._get_video_resolution')

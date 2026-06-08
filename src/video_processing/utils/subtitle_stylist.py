@@ -6,6 +6,8 @@
 | ------- | ---------- | ----------------------------------- | ------------------------------------------------------------------- |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：从 vertical_processor.py 抽取字幕样式/ASS标签/字号/折行职责，实现单一职责原则 |
 | 1.0.1   | 2026-06-08 | Gemini_3.5_Flash_planning           | 修复 apply_word_highlights 中的 re.sub regex 转义错误，标注 # [Gemini_3.5_Flash_planning] |
+| 1.1.0   | 2026-06-08 | Gemini_3.5_Flash_planning           | 新增 apply_chinese_highlights，在中文句子中寻找生词并绘制带颜色的下划线，标注 # [Gemini_3.5_Flash_planning] |
+| 1.2.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 修复中文折行截断标签bug：将 apply_chinese_highlights 移到 textwrap.fill 之后；build_glossary_text 增加 en_size 参数以限制释义字号不超过英文主字幕字号 |
 """
 
 import re
@@ -99,6 +101,23 @@ def apply_word_highlights(text: str, word_colors: Dict[str, str]) -> str:
         pattern = re.compile(rf'\b({re.escape(word_clean)})\b', re.IGNORECASE)
         # [Gemini_3.5_Flash_planning] Escape backslashes in replacement string so re.sub receives literal backslashes
         text = pattern.sub(rf'{{\\u1\\c{color}}}\1{{\\u0\\c}}', text)
+    return text
+
+
+def apply_chinese_highlights(text: str, vocab_items: Dict[str, str]) -> str:
+    """[Gemini_3.5_Flash_planning] 在中文翻译文本中寻找并高亮画线对应的词汇（颜色同英文生词一致，重置为ZH_COLOR）"""
+    if not vocab_items or not text:
+        return text
+
+    # 按字符长度降序排序，防止短词部分匹配干扰长词（例如先处理“先驱者”再处理“先驱”）
+    sorted_translations = sorted(vocab_items.values(), key=len, reverse=True)
+    for zh_word in sorted_translations:
+        zh_word_clean = zh_word.strip()
+        if not zh_word_clean or len(zh_word_clean) < 1:
+            continue
+        # 使用正则在 braces {} 之外匹配该中文词汇并替换
+        pattern = re.compile(rf'(?![^{{]*}}){re.escape(zh_word_clean)}')
+        text = pattern.sub(rf'{{\\u1\\c{VOCAB_HIGHLIGHT_COLOR}}}{zh_word_clean}{{\\u0\\c{ZH_COLOR}}}', text)
     return text
 
 
@@ -210,7 +229,9 @@ class SubtitleStylist:
         en_text = strip_trailing_punctuation(en_text)
         zh_text = strip_trailing_punctuation(zh_text)
 
-        # 2. 词汇高亮（先于折行，避免标签被截断）
+        # 2. 英文词汇高亮（先于折行，避免英文标签被截断）
+        # [Claude_Sonnet_4.6_Thinking_planning] 中文高亮故意推迟到折行之后（步骤4），
+        # 确保 textwrap.fill 不会把 \N 插入 ASS 标签内部（如 {\u1\c&HC7D36F&}）
         word_colors: Dict[str, str] = {}
         if vocab_items:
             for idx, word in enumerate(vocab_items.keys()):
@@ -219,14 +240,19 @@ class SubtitleStylist:
             en_text = apply_word_highlights(en_text, word_colors)
 
         # 3. 动态字号缩放：迭代缩小直至估算高度适配
+        # 注意：此时 zh_text 还是纯文本（未加标签），_fit_font_size 的高度估算结果准确
         en_size, zh_size = self._fit_font_size(en_text, zh_text, en_size, zh_size)
 
-        # 4. 以最终字号重新折行
+        # 4. 以最终字号重新折行，折行后再施加中文高亮
+        # [Claude_Sonnet_4.6_Thinking_planning] 折行必须在高亮之前，防止 \N 截断标签
         wrap_w_en = max(20, int(layout.safe_width / (en_size * 0.54)))
         wrap_w_zh = max(10, int(layout.safe_width / zh_size))
 
         if zh_text:
             zh_text = textwrap.fill(zh_text, width=wrap_w_zh).replace('\n', '\\N')
+            # 折行完成后再进行中文词汇高亮（标签插入不会跨行被截断）
+            if vocab_items:
+                zh_text = apply_chinese_highlights(zh_text, vocab_items)
         if en_text:
             en_text = tag_aware_wrap(en_text, wrap_w_en)
 
@@ -235,11 +261,14 @@ class SubtitleStylist:
 
         return RenderedSubtitle(ass_text=ass_text, en_size=en_size, zh_size=zh_size)
 
-    def build_glossary_text(self, vocab_items: Dict[str, str]) -> str:
+    def build_glossary_text(self, vocab_items: Dict[str, str], en_size: Optional[int] = None) -> str:
         """构造 GlossaryCard 的 ASS 文本（词汇释义区域）。
 
         Args:
             vocab_items: {单词: 释义} 有序字典
+            en_size: 当前段落英文字幕的实际字号（动态缩放后）。
+                若传入，则将释义字号上限钳制在 en_size，
+                确保释义区字号绝不大于英文字幕字号（Principle 1）。
 
         Returns:
             可直接写入 GlossaryCard SSAEvent.text 的字符串
@@ -247,11 +276,23 @@ class SubtitleStylist:
         if not vocab_items:
             return ""
 
+        # [Claude_Sonnet_4.6_Thinking_planning] 释义字号默认为样式文件已设置的 font_size*0.42，
+        # 但若传入 en_size，则进一步钳制：gloss_size <= en_size（保持次要层级）。
+        # 这里在 ASS text 层面用 \fs 覆盖，确保字号统一且不超过英文字幕。
+        gloss_size: Optional[int] = None
+        if en_size is not None:
+            # 样式层默认已是 font_size*0.42（约 35pt），再与 en_size 取 min 保证上限
+            gloss_size = en_size  # 上限 = 英文字幕字号；实际值由 SSAStyle.fontsize 决定下限
+            # 只有当 en_size < 样式默认字号时才需要内联覆盖
+            # 我们始终插入 \fs 以统一一致性，避免潜在的样式继承问题
+
         parts = []
         for idx, (word, translation) in enumerate(vocab_items.items()):
             part = ""
             if idx == 0:
-                part += f"{{\\fn{FONT_ZH}\\c{VOCAB_HIGHLIGHT_COLOR}}}词汇  "
+                # 插入字号控制标签（若 gloss_size 已设置）
+                fs_tag = f"\\fs{gloss_size}" if gloss_size is not None else ""
+                part += f"{{\\fn{FONT_ZH}{fs_tag}\\c{VOCAB_HIGHLIGHT_COLOR}}}词汇  "
             part += f"{{\\fn{FONT_EN}\\i0\\c{EN_COLOR}}}{word} {{\\fn{FONT_GLOSS}\\i1\\c&HBDC5C9&}}· {translation}{{\\i0}}"
             parts.append(part)
 

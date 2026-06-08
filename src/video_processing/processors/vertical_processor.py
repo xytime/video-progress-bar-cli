@@ -26,6 +26,7 @@
 | 1.18.0  | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 实现双语字幕动态字体缩放：每段字幕均在固定可用高度内自适应缩小字号，消除任意行数溢出风险 |
 | 2.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [架构解耦] 将字幕样式/ASS标签/字号缩放/高亮/折行完全委托给 SubtitleStylist，_generate_ass_file 仅负责时间轴与文件写入 |
 | 2.1.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 横屏输入视频使用动态计算的字幕起始 Y 坐标，修复 SyntaxError 并优化排版，标注 # [Gemini_3.5_Flash_planning] |
+| 2.2.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 将释义区字号比例下调至 0.42 倍以显主次，并标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 import subprocess
@@ -324,7 +325,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
 
         glossary_bg_color = pysubs2.Color(105, 105, 105, 40)
         style_glossary = pysubs2.SSAStyle(
-            fontsize=int(font_size * 0.58), # 84 * 0.58 ≈ 48
+            fontsize=int(font_size * 0.42), # [Gemini_3.5_Flash_planning] 将字号调为 0.42 倍 (约 35pt)，使其小于英文字幕 (59pt)，符合次要辅助排版原则
             primarycolor=pysubs2.Color(255, 210, 63),
             backcolor=glossary_bg_color,
             outlinecolor=glossary_bg_color,
@@ -357,7 +358,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
 
             # GlossaryCard 词汇释义区
             if vocab_items and self.bilingual:
-                glossary_text = stylist.build_glossary_text(vocab_items)
+                # [Claude_Sonnet_4.6_Thinking_planning] 传入 rendered.en_size 以确保释义字号不超过英文字幕字号（Principle 1）
+                glossary_text = stylist.build_glossary_text(vocab_items, en_size=rendered.en_size)
                 evt_glossary = pysubs2.SSAEvent(start=start_ms, end=end_ms, style="GlossaryCard", text=glossary_text)
                 subs.events.append(evt_glossary)
 
