@@ -1,6 +1,8 @@
 ---
 created_by: Gemini_3.1_Pro_High
 created_at: 2026-05-17
+updated_by: Claude_Sonnet_4.6_Thinking_planning
+updated_at: 2026-06-08T10:05:00+08:00
 purpose: 视频处理项目的关键教训防重犯清单
 ---
 
@@ -21,3 +23,11 @@ purpose: 视频处理项目的关键教训防重犯清单
 ## L4: pysubs2.Color 参数陷阱 (P2)
 **症状**: 配置的颜色无效，抛出类型错误。
 **规约**: 禁用 HEX 或 RGBA 直传，必须使用 `(R, G, B, Alpha)` 整数。同时 ASS 的 Alpha 通道数值（255 代表完全透明）与普通图形库相反。
+
+## L5: ASS 中文高亮必须在折行之后施加 (P1)
+**症状**: `textwrap.fill` 对已含 `{\u1\c&HC7D36F&}` 等 ASS 标签的中文文本做折行时，会把 `\N` 插入标签内部（如 `{\u1\c&HC7D36\NF&}`），导致 libass 解析失败，字幕渲染出乱码或原始标签字符。
+**规约**: **先折行，再高亮**。英文高亮（`apply_word_highlights`）可以在折行前执行，因为英文使用了 `tag_aware_wrap` 跳过标签字符长度计算。但中文高亮（`apply_chinese_highlights`）必须在 `textwrap.fill(...).replace('\n', '\\N')` 完成之后再调用，此时 `\N` 已经固化，不会再被 `textwrap` 修改。
+
+## L6: GlossaryCard 释义区字号必须动态钳制，不可仅靠 SSAStyle (P2)
+**症状**: 当主字幕因多行折叠触发动态缩放（`_fit_font_size`）后，英文字号可能降至 28-45pt。但 `GlossaryCard` SSAStyle 的 `fontsize` 是全局固定值（42% × 84 ≈ 35pt），不感知动态缩放结果。未来若主字号调低至 28pt 时，释义区固定 35pt 反而会比主字幕更大，违反「Principle 1：释义字号不超过英文字幕字号」。
+**规约**: `build_glossary_text` 必须接收当前段落渲染后的实际英文字号 `en_size`，并在 ASS text 层插入 `{\fs{min(gloss_size, en_size)}}` 内联覆盖标签，以硬性保证释义字号 ≤ 当前段落英文字号，而非依赖静态样式。

@@ -17,6 +17,10 @@
 | 1.10.0 | 2026-06-08 | Gemini_3.5_Flash_planning | 智能提取 2-3 个单词释义（不多于3个以免内容过多），并为 Gemini API 引入 429 限流重试与多模型(3.5/1.5)回退机制，标注 # [Gemini_3.5_Flash_planning] |
 | 1.10.1 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [ReviewFix] P0: 提示词更新为 3-5 个词汇; P1: sleep 压缩至 2-8s; P2: import 移顶层; P3: 非429错误立即 raise |
 | 1.10.2 | 2026-06-08 | Gemini_3.5_Flash_planning | 根据用户要求将词组提取上限严格控制在 3 个以内 (2-3个)，并将 Fallback 模型修正为可用且不超限的 gemini-2.5-flash，标注 # [Gemini_3.5_Flash_planning] |
+| 1.10.3 | 2026-06-08 | Gemini_3.5_Flash_planning | 优先使用阿里云 MT 进行主字幕翻译，并将 Gemini 作为翻译 fallback 与难词提取器，标注 # [Gemini_3.5_Flash_planning] |
+| 1.10.4 | 2026-06-08 | Gemini_3.5_Flash_planning | 优化错误分类：连接断开与 5xx 服务端错误不作为立即 raise 的致命错误，允许 fallback 到备用模型，标注 # [Gemini_3.5_Flash_planning] |
+| 1.10.5 | 2026-06-08 | Gemini_3.5_Flash_planning | _translate_segments 增加 try-except 容灾保护，使 Gemini 异常对调用链安全，标注 # [Gemini_3.5_Flash_planning] |
+| 1.10.6 | 2026-06-08 | Gemini_3.5_Flash_planning | 提示词升级：强制让 vocab 中的中文词汇与翻译句子中的子串完全对齐，以便于前端画下划线，标注 # [Gemini_3.5_Flash_planning] |
 """
 import logging
 from pathlib import Path
@@ -431,11 +435,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
             
             texts = [seg['text'].strip() for seg in segments]
 
-            # [Gemini_3.5_Flash_planning] 根据用户要求将词组提取上限控制在 3 个以内 (2-3个)，防止屏幕内容过多
+            # [Gemini_3.5_Flash_planning] 升级提示词：要求词组的中文释义与翻译句子中的对应字符子串严格一致（不超过 3 个），方便画下划线
             prompt = (
                 "You are an expert video subtitle translator and English educator. For each of the following English subtitle segments:\n"
                 "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
-                "2. Identify 2 to 3 key, academic, or difficult vocabulary words/phrases (CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. Provide their concise Chinese definitions. Do not extract common/easy words. If there are no difficult words, leave the vocabulary dictionary empty.\n"
+                "2. Identify 2 to 3 key, academic, or difficult vocabulary words/phrases (CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. Provide their concise Chinese definitions. CRITICAL: For each extracted word/phrase, its Chinese definition in the 'vocab' dictionary MUST be the exact substring as it appears in your translated 'translation' string (e.g. if the translation sentence uses '先驱' instead of '先驱者', use '先驱' as the definition). Do not extract common/easy words. If there are no difficult words, leave the vocabulary dictionary empty.\n"
                 "Return a JSON array of objects (one for each segment in the exact same order and count). Each object must contain:\n"
                 "- \"translation\": string (Chinese translation)\n"
                 "- \"vocab\": object (keys are the exact English words/phrases as they appear in the text, values are their concise Chinese translations)\n\n"
@@ -484,10 +488,20 @@ class AutoCaptionProcessor(VideoProcessorBase):
                             logger.warning(f"{model_name} exhausted all {max_retries} retries due to rate limiting. Falling back to next model.")
                             break
                         else:
-                            # [Claude_Sonnet_4.6_Thinking_planning] P3 fix: 非限流型错误（如 400 Bad Request、503）
-                            # 立即 raise，不再浪费时间尝试其他模型（这类错误通常不因模型切换而恢复）
-                            logger.error(f"{model_name} fatal error (non-rate-limit): {e}")
-                            raise
+                            # [Gemini_3.5_Flash_planning] 区分客户端致命错误与服务端/网络临时错误。
+                            # 400/401/403 等配置错误立即 raise；但连接断开、500/503等允许 Fallback 尝试其他模型。
+                            is_fatal_client_error = (
+                                "400" in err_msg
+                                or "401" in err_msg
+                                or "403" in err_msg
+                                or "API_KEY" in err_msg
+                            )
+                            if is_fatal_client_error:
+                                logger.error(f"{model_name} fatal client error: {e}")
+                                raise
+                            else:
+                                logger.warning(f"{model_name} non-fatal error: {e}. Falling back to next model.")
+                                break
                 if response is not None:
                     break
 
@@ -608,23 +622,41 @@ class AutoCaptionProcessor(VideoProcessorBase):
             
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         
-        # [Gemini_3.5_Flash_planning] 优先使用 Gemini 进行自然语言翻译与难词提取
-        gemini_results = self._translate_segments_gemini(segments)
+        # [Gemini_3.5_Flash_planning] 优先调用阿里云 MT 获取高精度翻译以确保稳定与流畅
+        aliyun_results = self._translate_segments_aliyun(segments)
+        
+        # [Gemini_3.5_Flash_planning] 同时调用 Gemini 以提供难词提取（及可能需要的翻译 Fallback）。
+        # 即使 Gemini 发生致命错误引发异常，也仅记录警告并允许翻译继续，实现最大化的容灾降级。
+        try:
+            gemini_results = self._translate_segments_gemini(segments)
+        except Exception as e:
+            logger.warning(f"Gemini translation/vocab extraction failed (non-blocking fallback): {e}")
+            gemini_results = None
+        
+        if aliyun_results:
+            # 优先使用阿里云的翻译
+            logger.info("Prioritizing Aliyun MT translation results.")
+            for i, text in enumerate(aliyun_results):
+                if i < len(segments):
+                    segments[i]['zh_text'] = text
+                    # 如果 Gemini 难词提取成功，则进行难词填充
+                    if gemini_results and i < len(gemini_results):
+                        segments[i]['vocab'] = gemini_results[i].get('vocab', {})
+                    else:
+                        segments[i]['vocab'] = {}
+            return segments
+            
         if gemini_results:
+            # 阿里云失败，回退使用 Gemini 翻译与难词
+            logger.warning("Aliyun MT failed. Falling back to Gemini translation and vocabulary.")
             for i, res in enumerate(gemini_results):
                 if i < len(segments):
                     segments[i]['zh_text'] = res.get('translation', '')
                     segments[i]['vocab'] = res.get('vocab', {})
             return segments
 
-        # [Claude_Sonnet_4.6_Thinking_planning] v1.9.0 二级 fallback: Gemini 限流 / 失败 → 阿里云 MT
-        aliyun_results = self._translate_segments_aliyun(segments)
-        if aliyun_results:
-            for i, text in enumerate(aliyun_results):
-                if i < len(segments):
-                    segments[i]['zh_text'] = text
-                    segments[i]['vocab'] = {}  # Aliyun MT 无词汇提取能力
-            return segments
+        # 阿里云和 Gemini 均失败，进入三级 fallback 谷歌翻译
+        logger.warning("Both Aliyun MT and Gemini failed. Falling back to Google Translate.")
         texts = [seg['text'].strip() for seg in segments]
         
         # 分批处理以防止突破API限制

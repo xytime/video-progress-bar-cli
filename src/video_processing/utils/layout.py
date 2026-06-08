@@ -6,6 +6,7 @@
 | ------- | ---------- | ------------------------- | ----------- |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建 |
 | 1.1.0   | 2026-06-07 | Gemini_3.5_Flash_planning | 竖屏输入视频不进行TOP_MARGIN偏移裁切，居中显示，标有 # [Gemini_3.5_Flash_planning] |
+| 1.2.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 横屏输入视频字幕位置动态计算，偏靠视频下方以优化排版并避免遮挡，标有 # [Gemini_3.5_Flash_planning] |
 """
 from dataclasses import dataclass
 from typing import Tuple
@@ -61,8 +62,13 @@ class VerticalLayout:
         if video_w < video_h:
             # [Gemini_3.5_Flash_planning] For vertical inputs, center vertically
             video_y = max(0, (cls.CANVAS_HEIGHT - new_h) // 2)
+            subtitle_margin_v = 1200
         else:
             video_y = cls.TOP_MARGIN
+            # [Gemini_3.5_Flash_planning] For landscape inputs, calculate subtitle_margin_v dynamically.
+            # Subtitles start in the black area, slightly below the video bottom edge.
+            video_bottom_y = video_y + new_h
+            subtitle_margin_v = video_bottom_y + 90
         
         return LayoutParams(
             scale_factor=scale,
@@ -70,6 +76,6 @@ class VerticalLayout:
             new_height=new_h,
             video_x=video_x,
             video_y=video_y,
-            subtitle_margin_v=cls.DEFAULT_SUBTITLE_MARGIN_V,
+            subtitle_margin_v=subtitle_margin_v,
             title_y=cls.DEFAULT_TITLE_Y
         )
