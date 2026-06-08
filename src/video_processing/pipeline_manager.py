@@ -35,6 +35,8 @@
 | 3.4.0   | 2026-06-08 | Gemini_3.5_Flash_planning           | 注入 Telegram 配置环境变量；upload_cmd 中根据 settings.wechat_headless 动态配置 --no-headless 选项 |
 | 3.5.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [缓存失效] Transcribe Checkpoint 增加 .ass 双语内容校验：旧格式缓存缺少 Georgia 字体标签时强制删除并重渲，彻底消除代码升级后复用旧单语视频的缺陷 |
 | 3.6.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [原始归档] 下载完成后将原始媒体文件移入 original_video/ 子目录保留 3 天，_find_downloaded_video 优先热目录再回退冷存档，GC 逻辑零改动 |
+| 3.7.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | 跳过 DISCOVERY 源视频的自动评分，保证高赞发现列表不被自动发布 |
+| 3.8.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | [下载限速超时] 限制 curl 最低速度 50KB/s 持续 30秒，防止代理连接坏节点时无限期卡死下载 |
 """
 
 
@@ -137,10 +139,11 @@ class PipelineManager:
         """对 PENDING 且 score < 75 的视频自动评分（不覆盖人工调分）"""
         # [Claude_Sonnet_4.6_Thinking_planning] LINT-4 修复: math 已移至模块顶层导入
         pending  = self.db.get_videos_by_status("PENDING")
-        to_score = [v for v in pending if v.get('score', 0) < 75]
+        # [Gemini_3.5_Flash_planning] 跳过 DISCOVERY 来源的视频，防止其被自动评分机制提高到 >= 75 分从而触发自动发布
+        to_score = [v for v in pending if v.get('score', 0) < 75 and v.get('source') != 'DISCOVERY']
         skipped  = len(pending) - len(to_score)
         if skipped:
-            logger.info(f"Skipping {skipped} already-prioritized videos (score >= 75).")
+            logger.info(f"Skipping {skipped} already-prioritized or discovery videos.")
         if not to_score:
             return
 
@@ -671,7 +674,8 @@ class PipelineManager:
                             "--write-info-json",  # 新增：写 info.json 便于 chapters 提取
                             "--remote-components", "ejs:github",
                             "--downloader", "curl",
-                            "--downloader-args", "curl:--retry 10 --retry-delay 3 --retry-all-errors",
+                            # [Gemini_3.5_Flash_planning] v3.8.0: 增加最低速度限制(50KB/s 持续 30s)和超时，防止代理网络连接到慢速 CDN 时无限期卡住下载
+                            "--downloader-args", "curl:--retry 10 --retry-delay 3 --retry-all-errors --speed-limit 50000 --speed-time 30 --connect-timeout 15",
                             url, "-o", str(self._OUT_DIR / f"{yid}.%(ext)s"),
                         ]
 
