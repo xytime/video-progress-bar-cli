@@ -37,6 +37,7 @@
 | 3.6.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | [原始归档] 下载完成后将原始媒体文件移入 original_video/ 子目录保留 3 天，_find_downloaded_video 优先热目录再回退冷存档，GC 逻辑零改动 |
 | 3.7.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | 跳过 DISCOVERY 源视频的自动评分，保证高赞发现列表不被自动发布 |
 | 3.8.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | [下载限速超时] 限制 curl 最低速度 50KB/s 持续 30秒，防止代理连接坏节点时无限期卡死下载 |
+| 3.8.1   | 2026-06-09 | Gemini_3.5_Flash_planning           | [下载限速调整] 将最低速度限制调低为 10KB/s (10000)，防止音频正常限速下载时被异常中断导致无限循环重试 |
 """
 
 
@@ -674,8 +675,8 @@ class PipelineManager:
                             "--write-info-json",  # 新增：写 info.json 便于 chapters 提取
                             "--remote-components", "ejs:github",
                             "--downloader", "curl",
-                            # [Gemini_3.5_Flash_planning] v3.8.0: 增加最低速度限制(50KB/s 持续 30s)和超时，防止代理网络连接到慢速 CDN 时无限期卡住下载
-                            "--downloader-args", "curl:--retry 10 --retry-delay 3 --retry-all-errors --speed-limit 50000 --speed-time 30 --connect-timeout 15",
+                            # [Gemini_3.5_Flash_planning] v3.8.1: 最低速度限制从 50KB/s 降低为 10KB/s (10000) 持续 30s，防止音频下载被 YouTube 限速导致无限重试
+                            "--downloader-args", "curl:--retry 10 --retry-delay 3 --retry-all-errors --speed-limit 10000 --speed-time 30 --connect-timeout 15",
                             url, "-o", str(self._OUT_DIR / f"{yid}.%(ext)s"),
                         ]
 
