@@ -9,6 +9,7 @@
 | 1.1.0   | 2026-06-08 | Gemini_3.5_Flash_planning           | 新增 apply_chinese_highlights，在中文句子中寻找生词并绘制带颜色的下划线，标注 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 修复中文折行截断标签bug：将 apply_chinese_highlights 移到 textwrap.fill 之后；build_glossary_text 增加 en_size 参数以限制释义字号不超过英文主字幕字号 |
 | 1.3.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 修复 apply_chinese_highlights 短词淘汰长词问题：改用 token分段方案仅在裸文本段进行匹配，封锁已标注内容 |
+| 1.4.0   | 2026-06-09 | Claude_Opus_4.6_Thinking_planning   | 修复 build_glossary_text 字号 bug（gloss_size=en_size 覆盖样式层 35pt）改为 min(default,en_size)；释义区颜色改为淡色系，视觉分层 |
 """
 
 import re
@@ -23,6 +24,13 @@ EN_COLOR = "&H3FD2FF&"
 ZH_COLOR = "&HE9EFF2&"
 # 词汇高亮色：青绿 #C7D36F (BGR)
 VOCAB_HIGHLIGHT_COLOR = "&HC7D36F&"
+# [Claude_Opus_4.6_Thinking_planning] 释义区专用淡色系 — 视觉分层，与主字幕拉开层级
+# 释义区「词汇」标签色：淡青绿 (比主高亮色更淡)
+GLOSS_LABEL_COLOR = "&HDBE5A0&"  # BGR: 淡薄荷绿
+# 释义区英文词色：淡暖金（比主字幕 EN_COLOR 更柔和）
+GLOSS_WORD_COLOR = "&H7FD9E8&"   # BGR: 淡金
+# 释义区中文释义色：浅灰
+GLOSS_TRANS_COLOR = "&HBDC5C9&"  # BGR: 浅暖灰
 
 # [Claude_Sonnet_4.6_Thinking_planning] 动态缩放下限，防止过小无法阅读
 SUBTITLE_MIN_EN_SIZE = 28
@@ -303,14 +311,25 @@ class SubtitleStylist:
 
         return RenderedSubtitle(ass_text=ass_text, en_size=en_size, zh_size=zh_size)
 
-    def build_glossary_text(self, vocab_items: Dict[str, str], en_size: Optional[int] = None) -> str:
+    def build_glossary_text(
+        self,
+        vocab_items: Dict[str, str],
+        en_size: Optional[int] = None,
+        default_gloss_size: Optional[int] = None,
+    ) -> str:
         """构造 GlossaryCard 的 ASS 文本（词汇释义区域）。
+
+        [Claude_Opus_4.6_Thinking_planning] v1.4.0:
+        - 字号修正：gloss_size = min(default_gloss_size, en_size)，
+          确保释义区字号始终小于英文字幕字号，避免喧宾夺主。
+        - 颜色分层：使用淡色系专用常量（GLOSS_LABEL_COLOR / GLOSS_WORD_COLOR / GLOSS_TRANS_COLOR），
+          与主字幕（EN_COLOR / ZH_COLOR / VOCAB_HIGHLIGHT_COLOR）形成明显的视觉层级差。
 
         Args:
             vocab_items: {单词: 释义} 有序字典
             en_size: 当前段落英文字幕的实际字号（动态缩放后）。
-                若传入，则将释义字号上限钳制在 en_size，
-                确保释义区字号绝不大于英文字幕字号（Principle 1）。
+            default_gloss_size: GlossaryCard SSAStyle 的默认字号（font_size*0.42）。
+                gloss_size = min(default_gloss_size, en_size)，保证释义区始终更小。
 
         Returns:
             可直接写入 GlossaryCard SSAEvent.text 的字符串
@@ -318,24 +337,26 @@ class SubtitleStylist:
         if not vocab_items:
             return ""
 
-        # [Claude_Sonnet_4.6_Thinking_planning] 释义字号默认为样式文件已设置的 font_size*0.42，
-        # 但若传入 en_size，则进一步钳制：gloss_size <= en_size（保持次要层级）。
-        # 这里在 ASS text 层面用 \fs 覆盖，确保字号统一且不超过英文字幕。
+        # [Claude_Opus_4.6_Thinking_planning] 字号计算：
+        # 取 min(样式默认字号, 英文字幕字号)，确保释义区字号永远是最小的。
+        # 之前的 bug 是直接 gloss_size = en_size（59pt），覆盖了样式层的 35pt。
         gloss_size: Optional[int] = None
-        if en_size is not None:
-            # 样式层默认已是 font_size*0.42（约 35pt），再与 en_size 取 min 保证上限
-            gloss_size = en_size  # 上限 = 英文字幕字号；实际值由 SSAStyle.fontsize 决定下限
-            # 只有当 en_size < 样式默认字号时才需要内联覆盖
-            # 我们始终插入 \fs 以统一一致性，避免潜在的样式继承问题
+        if default_gloss_size is not None and en_size is not None:
+            gloss_size = min(default_gloss_size, en_size)
+        elif en_size is not None:
+            gloss_size = en_size
+        elif default_gloss_size is not None:
+            gloss_size = default_gloss_size
 
         parts = []
         for idx, (word, translation) in enumerate(vocab_items.items()):
             part = ""
             if idx == 0:
-                # 插入字号控制标签（若 gloss_size 已设置）
+                # 插入字号控制标签 + 淡色「词汇」标签
                 fs_tag = f"\\fs{gloss_size}" if gloss_size is not None else ""
-                part += f"{{\\fn{FONT_ZH}{fs_tag}\\c{VOCAB_HIGHLIGHT_COLOR}}}词汇  "
-            part += f"{{\\fn{FONT_EN}\\i0\\c{EN_COLOR}}}{word} {{\\fn{FONT_GLOSS}\\i1\\c&HBDC5C9&}}· {translation}{{\\i0}}"
+                part += f"{{\\fn{FONT_ZH}{fs_tag}\\c{GLOSS_LABEL_COLOR}}}词汇  "
+            # [Claude_Opus_4.6_Thinking_planning] 释义区使用淡色系：英文词用淡金，中文释义用浅灰
+            part += f"{{\\fn{FONT_EN}\\i0\\c{GLOSS_WORD_COLOR}}}{word} {{\\fn{FONT_GLOSS}\\i1\\c{GLOSS_TRANS_COLOR}}}· {translation}{{\\i0}}"
             parts.append(part)
 
         return "   ".join(parts)

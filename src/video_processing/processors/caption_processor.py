@@ -24,6 +24,7 @@
 | 1.11.0 | 2026-06-08 | Claude_Sonnet_4.6_planning | 将 _translate_segments_aliyun 迁移至 translation_helper 模块，实现高内聘低耦合的统一翻译接口 |
 | 1.12.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 移除 _translate_segments_gemini，委托至 vocab_helper.extract_vocab_batch；将阿里云翻译结果传入以实现中文字幕下划线 100% 精确对齐 |
 | 1.13.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 翻转翻译优先级：Gemini 主译（习语/语境准确 + vocab 天然对齐）→ Aliyun 降级 → Google 终级 Fallback |
+| 1.14.0 | 2026-06-09 | Claude_Opus_4.6_Thinking_planning   | Aliyun/Google 翻译成功后二次尝试 Gemini 对齐模式提取 vocab，解决 Gemini 429 时生词丢失问题 |
 """
 import logging
 from pathlib import Path
@@ -558,6 +559,23 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 if i < len(segments):
                     segments[i]['zh_text'] = text
                     segments[i]['vocab']   = {}
+
+            # [Claude_Opus_4.6_Thinking_planning] 二次尝试：用 Aliyun 的翻译结果作为
+            # chinese_translations 传回 Gemini "对齐模式"，仅做 vocab 提取。
+            # 这样即使 Gemini 翻译模式 429，对齐模式只需要更少的 token 可能成功。
+            try:
+                zh_texts = [seg.get('zh_text', '') for seg in segments]
+                vocab_results = extract_vocab_batch(texts, chinese_translations=zh_texts)
+                if vocab_results:
+                    logger.info("Gemini vocab alignment succeeded (post-Aliyun).")
+                    for i, res in enumerate(vocab_results):
+                        if i < len(segments):
+                            segments[i]['vocab'] = res.get('vocab', {})
+                else:
+                    logger.info("Gemini vocab alignment also failed. Proceeding without vocab.")
+            except Exception as e:
+                logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
+
             return segments
 
         # ── 三级：Google Translate（无 vocab）────────────────────────────────
@@ -567,6 +585,19 @@ class AutoCaptionProcessor(VideoProcessorBase):
             if i < len(segments):
                 segments[i]['zh_text'] = text if text else ""
                 segments[i]['vocab']   = {}
+
+        # [Claude_Opus_4.6_Thinking_planning] Google 翻译后也尝试 Gemini 对齐模式
+        try:
+            zh_texts = [seg.get('zh_text', '') for seg in segments]
+            vocab_results = extract_vocab_batch(texts, chinese_translations=zh_texts)
+            if vocab_results:
+                logger.info("Gemini vocab alignment succeeded (post-Google).")
+                for i, res in enumerate(vocab_results):
+                    if i < len(segments):
+                        segments[i]['vocab'] = res.get('vocab', {})
+        except Exception as e:
+            logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
+
         return segments
 
     def _load_model(self):

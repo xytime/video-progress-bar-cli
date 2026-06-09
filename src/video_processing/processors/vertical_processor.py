@@ -381,8 +381,14 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
 
             # GlossaryCard 词汇释义区
             if vocab_items and self.bilingual:
-                # [Claude_Sonnet_4.6_Thinking_planning] 传入 rendered.en_size 以确保释义字号不超过英文字幕字号（Principle 1）
-                glossary_text = stylist.build_glossary_text(vocab_items, en_size=rendered.en_size)
+                # [Claude_Opus_4.6_Thinking_planning] 传入 default_gloss_size 和 en_size，
+                # build_glossary_text 内部取 min() 确保释义字号始终 ≤ 样式默认值 ≤ 英文字幕字号
+                _default_gloss_size = int(self.font_size * 0.42)
+                glossary_text = stylist.build_glossary_text(
+                    vocab_items,
+                    en_size=rendered.en_size,
+                    default_gloss_size=_default_gloss_size,
+                )
                 evt_glossary = pysubs2.SSAEvent(start=start_ms, end=end_ms, style="GlossaryCard", text=glossary_text)
                 subs.events.append(evt_glossary)
 
