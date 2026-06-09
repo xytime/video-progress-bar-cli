@@ -1871,7 +1871,7 @@
           .map(el => el.id.replace('err-', ''))
       );
 
-      const TERMINAL  = new Set(['PUBLISHED','FAILED','LOGIN_REQUIRED']);
+      const TERMINAL  = new Set(['PUBLISHED','FAILED']);  // [Claude_Sonnet_4.6_Thinking_planning] LOGIN_REQUIRED removed: it is retryable, not terminal
       const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
       const STUCK     = new Set(['DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
       
@@ -1950,6 +1950,7 @@
           ? markDoneBtn + ytLinkBtn + deleteBtn
           : v.status === 'LOGIN_REQUIRED'
           ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
+             <button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="扫码后点此重试上传">🔄 重试</button>
              <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="硬重置">🗑 重置</button>` + deleteBtn
           : v.status === 'PENDING'
           ? `<button class="btn-retry btn-reset" onclick="processVideoNow('${v.youtube_id}')" title="立即启动视频管线">⚡ 执行</button>` + deleteBtn
@@ -2518,7 +2519,7 @@
           lastNode = errRow;
         }
         
-        const TERMINAL  = new Set(['PUBLISHED','FAILED','LOGIN_REQUIRED']);
+        const TERMINAL  = new Set(['PUBLISHED','FAILED']);  // [Claude_Sonnet_4.6_Thinking_planning] LOGIN_REQUIRED removed: it is retryable
         const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
         const STUCK     = new Set(['DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
 
@@ -2533,7 +2534,8 @@
           const deleteBtn = `<button class="btn-hard-reset" onclick="deleteSlice('${s.youtube_id}', ${s.slice_index})" title="彻底删除分集" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
           const retryBtn = s.status === 'LOGIN_REQUIRED'
             ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
-               <button class="btn-hard-reset" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="重试分集">🗑 重试</button>` + deleteBtn
+               <button class="btn-retry" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="扫码后点此重试上传">🔄 重试</button>
+               <button class="btn-hard-reset" onclick="hardResetVideo('${s.youtube_id}')" title="硬重置">🗑 重置</button>` + deleteBtn
             : s.status === 'PENDING'
             ? `<button class="btn-retry btn-reset" onclick="processSliceNow('${s.youtube_id}', ${s.slice_index})" title="立即执行分集">⚡ 执行</button>` + deleteBtn
             : isRetryable
