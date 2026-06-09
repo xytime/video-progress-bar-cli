@@ -9,6 +9,7 @@
 | 1.2.0   | 2026-06-08 | Claude_Sonnet_4.6_planning     | 标题翻译改用 translation_helper（阿里云 MT 优先）|
 | 1.3.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | 升级新视频主动搜索发现逻辑，将符合高赞筛选要求的视频录入 DISCOVERY 源 |
 | 1.4.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | discover_high_like_videos 引入类别抓取及敏感词过滤检查，并在 add_video 时存入 |
+| 1.5.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | 将高赞视频时间窗口从 24 小时扩大至 3 天，解决刷新内容少的问题 |
 """
 import sys
 from pathlib import Path
@@ -59,7 +60,7 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
     cmd = [
         "yt-dlp",
         "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s",
-        "--dateafter", "now-2days",
+        "--dateafter", "now-3days",
         "--match-filter", "duration > 120 & duration < 2700",
         "--break-on-reject",
         "--playlist-end", "30",
@@ -147,7 +148,7 @@ def discover_new_channels(db: PipelineDB):
 
 
 def discover_high_like_videos(db: PipelineDB):
-    """通过关键词搜索发现最近24小时内的高赞视频，进行敏感词检测和分类提取，存入数据库以供浏览和手动触发"""
+    """通过关键词搜索发现最近3天内的高赞视频，进行敏感词检测和分类提取，存入数据库以供浏览和手动触发"""
     # [Gemini_3.5_Flash_planning] 独立高赞视频发现逻辑，避免与频道发现逻辑混合
     print("Running active discovery for high-like videos...")
     
@@ -159,7 +160,8 @@ def discover_high_like_videos(db: PipelineDB):
         except: return None
 
     import datetime
-    yesterday_str = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+    # [Gemini_3.5_Flash_planning] 将高赞视频发现窗口扩大至 3 天，提供更多发现结果
+    yesterday_str = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y%m%d")
     
     keywords = get_discovery_keywords()
     for keyword in keywords:

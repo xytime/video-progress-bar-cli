@@ -20,6 +20,7 @@
 | 3.0.0   | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 update_video_spec 方法，全量覆盖规格字段（trim/disable_slicing/tts），供 respec 流程使用 |
 | 3.1.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | 新增 high_likes tab 支持，显示最近24小时发布的高赞视频 |
 | 3.2.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | add_video 支持 category, censor_tag, censor_score 录入 |
+| 3.3.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | 将 high_likes 高赞视频时间窗口由 24 小时调整为 3 天，优化刷新发现效果 |
 """
 
 import sqlite3
@@ -552,9 +553,9 @@ class PipelineDB:
         elif tab == 'queue':
             condition = "pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL"
         elif tab == 'high_likes':
-            # [Gemini_3.5_Flash_planning] 最近24小时发布且观看量>500的高赞视频
+            # [Gemini_3.5_Flash_planning] 最近 3 天发布且观看量>500的高赞视频
             import datetime
-            yesterday = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+            yesterday = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y%m%d")
             condition = f"pv.upload_date >= '{yesterday}' AND pv.view_count > 500 AND pv.like_count IS NOT NULL AND pv.view_count IS NOT NULL AND pv.parent_id IS NULL"
         else:
             condition = "pv.status = 'PENDING' AND pv.score < 75 AND pv.parent_id IS NULL"
