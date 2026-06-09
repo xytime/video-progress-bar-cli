@@ -16,9 +16,12 @@
 | 2.6.0 | 2026-06-08 | Gemini_3.5_Flash_planning           | 新增 wechat_headless 配置项及 active_telegram_chat_id 动态计算属性 |
 | 2.7.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 wechat_keepalive_* 看门狗配置项，支持定期刷新 Session 防止闲置掉线 |
 | 2.8.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 aliyun_mt_access_key_id/secret，支持阿里云机器翻译通用版作为 Gemini 限流时的二级 fallback |
+| 2.9.0 | 2026-06-09 | Claude_Sonnet_4.6_Thinking_planning | 新增 Clash Mi API 配置及 clash_switch_node() 上下文管理器：下载前自动切到日本节点，完成后还原。Clash Mi Network Extension 架构下唯一可行的进程级优化方案 |
 """
+import json
 import socket
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, List
 
@@ -88,6 +91,17 @@ class Settings(BaseSettings):
     # Gemini API 触发 429 限流时，自动降级使用阿里云 MT（QPS 50，每月 100 万字符免费额度）。
     aliyun_mt_access_key_id: Optional[str] = None
     aliyun_mt_access_key_secret: Optional[str] = None
+
+    # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: Clash Mi 下载节点切换配置
+    # 架构背景：Clash Mi 使用 macOS Network Extension，系统扩展不允许动态开放任意端口，
+    # 因此无法通过 listeners 实现真正的进程级隔离。唯一可行的优化方案是:
+    # 下载前通过 API 将代理组切换到日本节点，完成后自动还原。
+    # 影响范围：仅在实际下载期间（约 5-15 分钟）全局流量临时走日本，签出后自动还原。
+    clash_api_url: str = "http://127.0.0.1:9090"   # Clash 外部控制器地址
+    clash_api_secret: Optional[str] = None          # CLASH_API_SECRET=...
+    clash_proxy_group: str = "🌍 国外网站"           # 要切换的代理组
+    clash_download_node: Optional[str] = None       # 下载时使用的节点（None=不切换）
+                                                    # 示例: CLASH_DOWNLOAD_NODE=🏯🇵 日本下载专用
 
     # -------------------------------------------------------------------------
     # v7.0 Feature Flags — 新功能灰度开关 [Claude_Sonnet_4.6_Thinking_planning]
@@ -221,5 +235,99 @@ class Settings(BaseSettings):
             return {}
 
 
-# 全局单例 — 整个项目统一引用此实例
+    @contextmanager
+    def clash_switch_node(self, node: Optional[str] = None):
+        """[Claude_Sonnet_4.6_Thinking_planning] v2.9.0: Clash 下载节点切换上下文管理器。
+
+        在 with 块进入时，将 clash_proxy_group 切换到指定节点（默认使用 clash_download_node）；
+        退出时（无论正常或异常）自动还原到切换前的节点。
+
+        架构说明：Clash Mi 使用 macOS Network Extension，系统扩展不允许动态开放新端口(listeners)。
+        因此此方案是在 TUN/proxy 层面切换代理组，下载期间全局流量共用日本节点。
+        若 API 未配置或节点为 None，静默透传（不切换）。
+
+        用法::
+            with settings.clash_switch_node():
+                # 此处所有下载走日本节点
+                self._run_tracked(dl_cmd, ...)
+            # 退出后自动还原节点
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+
+        target_node = node or self.clash_download_node
+        if not target_node or not self.clash_api_secret:
+            yield
+            return
+
+        import urllib.parse as _up
+        encoded_group = _up.quote(self.clash_proxy_group, safe="")
+        api_base = self.clash_api_url.rstrip("/")
+        headers = {
+            "Authorization": f"Bearer {self.clash_api_secret}",
+            "Content-Type": "application/json",
+        }
+
+        def _get_current() -> Optional[str]:
+            try:
+                req = urllib.request.Request(
+                    f"{api_base}/proxies/{encoded_group}",
+                    headers=headers,
+                )
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    return json.loads(resp.read()).get("now")
+            except Exception as e:
+                _log.warning(f"[Clash] 获取当前节点失败: {e}")
+                return None
+
+        def _switch(to_node: str) -> bool:
+            try:
+                body = json.dumps({"name": to_node}).encode()
+                req = urllib.request.Request(
+                    f"{api_base}/proxies/{encoded_group}",
+                    data=body,
+                    headers=headers,
+                    method="PUT",
+                )
+                with urllib.request.urlopen(req, timeout=3):
+                    pass
+                _log.info(f"[Clash] [{self.clash_proxy_group}] → {to_node!r}")
+                return True
+            except Exception as e:
+                _log.warning(f"[Clash] 切换失败 {to_node!r}: {e}")
+                return False
+
+        original = _get_current()
+
+        # [Claude_Sonnet_4.6_Thinking_planning] 若 clash_download_node 是一个 URLTest 组名
+        # （如 🇯🇵 日本下载专用），Selector 无法直接选择子组，需要先读取该组的 .now（当前最快节点）
+        # 再把 Selector 切换到那个直连节点，从而动态跟踪最快日本节点。
+        def _resolve_target() -> str:
+            try:
+                encoded = _up.quote(target_node, safe="")
+                req = urllib.request.Request(
+                    f"{api_base}/proxies/{encoded}",
+                    headers=headers,
+                )
+                with urllib.request.urlopen(req, timeout=3) as resp:
+                    data = json.loads(resp.read())
+                    now = data.get("now")
+                    if now:  # 是一个组，返回它当前选中的直连节点
+                        _log.info(f"[Clash] {target_node!r} → 解析为直连节点 {now!r}")
+                        return now
+            except Exception:
+                pass
+            return target_node  # 不是组，直接用原名
+
+        resolved_node = _resolve_target()
+        switched = _switch(resolved_node)
+        try:
+            yield
+        finally:
+            if switched and original:
+                _switch(original)
+                _log.info(f"[Clash] 已还原 → {original!r}")
+
+
+# 全局单例
 settings = Settings()

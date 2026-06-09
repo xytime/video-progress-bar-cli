@@ -698,14 +698,20 @@ class PipelineManager:
 
                         # [Claude_Sonnet_4.6_Thinking_planning] v3.3.0: 动态代理环境构建
                         # 检测系统代理可用性：可达则注入代理，不可达则不注入
-                        # 避免旧日代理已关闭时由于 curl connection refused 导致下载卡死
-                        # 同时确保代理可用时 curl 通过代理高速下载，避免直连 CDN 丢包/curl exit 18
                         subprocess_env = _build_subprocess_env()
-                        logger.info(
-                            f"[PROXY] Download env proxy: {'active' if subprocess_env.get('HTTP_PROXY') else 'direct'}"
-                        )
-                        self._run_tracked(dl_cmd, yid, slice_index=slice_index, capture_output=True,
-                                          cwd=str(self._PRJ_ROOT), env=subprocess_env)
+
+                        # [Claude_Sonnet_4.6_Thinking_planning] v3.9.0: 日本节点切换（Clash Mi API）
+                        # Clash Mi 基于 macOS Network Extension，无法动态开放新端口，
+                        # 因此通过 API 临时切换代理组到日本 URLTest 组来提速，
+                        # 下载结束（含异常）后自动还原原节点。
+                        # 配置项：CLASH_API_SECRET + CLASH_DOWNLOAD_NODE（见 .env）
+                        if settings.clash_download_node:
+                            logger.info(
+                                f"[Clash] 切换到日本节点: {settings.clash_download_node}"
+                            )
+                        with settings.clash_switch_node():
+                            self._run_tracked(dl_cmd, yid, slice_index=slice_index, capture_output=True,
+                                              cwd=str(self._PRJ_ROOT), env=subprocess_env)
                         target_file = self._find_downloaded_video(yid)
                         if not target_file:
                             raise FileNotFoundError(f"No video file found for {yid} after download")

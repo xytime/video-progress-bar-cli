@@ -146,6 +146,36 @@
       font-size: 12px; color: var(--text2);
     }
     #batch-action-bar.visible { display: flex; }
+    /* [Gemini_2.5_Pro_planning] 高赞专属工具栏 */
+    #high-likes-bar {
+      display: none;
+      align-items: center; gap: 12px;
+      padding: 8px 22px;
+      background: rgba(16,185,129,0.06);
+      border-bottom: 1px solid rgba(16,185,129,0.15);
+      font-size: 12px; color: var(--text2);
+    }
+    #high-likes-bar.visible { display: flex; }
+    #high-likes-bar label { display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none; }
+    #high-likes-bar input[type=checkbox] { width:14px; height:14px; accent-color:#34d399; cursor:pointer; }
+    /* [Gemini_2.5_Pro_planning] 已处理行样式 */
+    .discovery-done td { opacity: 0.35; }
+    .discovery-done .video-zh-title,
+    .discovery-done .video-title-link { text-decoration: line-through; }
+    .btn-mark-done {
+      background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.3);
+      color: #34d399; padding: 3px 9px; border-radius: 6px;
+      cursor: pointer; font-size: 10px; font-family: inherit;
+      transition: background 0.15s; white-space: nowrap;
+    }
+    .btn-mark-done:hover { background: rgba(16,185,129,0.25); }
+    .btn-mark-undone {
+      background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+      color: var(--text3); padding: 3px 9px; border-radius: 6px;
+      cursor: pointer; font-size: 10px; font-family: inherit;
+      transition: background 0.15s; white-space: nowrap;
+    }
+    .btn-mark-undone:hover { background: rgba(255,255,255,0.1); color: var(--text2); }
     .btn-batch-del {
       background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3);
       color: var(--red); padding: 4px 12px; border-radius: 6px;
@@ -1288,6 +1318,28 @@
         </div>
       </div>
 
+      <!-- [Gemini_2.5_Pro_planning] 高赞内容专属工具栏 -->
+      <div id="high-likes-bar">
+        <span style="color:#34d399; font-weight:600;">✨ 高赞发现</span>
+        <span style="color:var(--text3); font-size:11px;">点击"✓ 已处理"标记看过的内容，默认隐藏</span>
+        <label style="margin-left:auto;">
+          <input type="checkbox" id="cb-show-processed" onchange="toggleShowProcessed(this.checked)" />
+          显示已处理
+        </label>
+        <span id="processed-count-badge" style="font-size:11px; color:var(--text3);"></span>
+        <!-- [Claude_Sonnet_4.6_Thinking_planning] v3.4.0: 手动刷新按钮 -->
+        <button id="btn-refresh-high-likes" onclick="refreshHighLikes()"
+          style="display:flex;align-items:center;gap:5px;
+                 background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.3);
+                 color:var(--green);font-size:11px;font-weight:600;
+                 padding:5px 12px;border-radius:16px;cursor:pointer;
+                 font-family:inherit;transition:all 0.2s;white-space:nowrap;"
+          title="立即搜索最新高赞视频（yt-dlp 约需 1~3 分钟）">
+          🔄 立即刷新
+        </button>
+        <span id="high-likes-refresh-status" style="font-size:10px;color:var(--text3);"></span>
+      </div>
+
       <div class="panel-body">
         <table class="activity-table">
           <thead>
@@ -1584,6 +1636,114 @@
   let currentPage = 1;
   const pageSize = 20;
 
+  // [Gemini_2.5_Pro_planning] 已处理状态（localStorage 持久化，仅高赞 Tab 使用）
+  const _PROCESSED_KEY = 'discovery_processed_ids_v1';
+  let showProcessed = false;  // 默认不显示已处理
+
+  function _getProcessedSet() {
+    try {
+      const raw = localStorage.getItem(_PROCESSED_KEY);
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch { return new Set(); }
+  }
+
+  function _saveProcessedSet(set) {
+    try { localStorage.setItem(_PROCESSED_KEY, JSON.stringify([...set])); }
+    catch (e) { console.warn('[Processed] localStorage write failed:', e); }
+  }
+
+  function markProcessed(youtubeId, done) {
+    const set = _getProcessedSet();
+    if (done) set.add(youtubeId); else set.delete(youtubeId);
+    _saveProcessedSet(set);
+
+    if (done && !showProcessed) {
+      // 淡出该行，无需重新请求
+      const row = document.getElementById('row-' + youtubeId);
+      if (row) {
+        row.style.transition = 'opacity 0.35s';
+        row.style.opacity = '0';
+        setTimeout(() => { if (row.parentNode) row.parentNode.removeChild(row); }, 360);
+      }
+    } else {
+      // 撤销或显示模式：直接切换 class 和按钮
+      const row = document.getElementById('row-' + youtubeId);
+      if (row) {
+        row.classList.toggle('discovery-done', done);
+        const btn = row.querySelector('.btn-mark-done, .btn-mark-undone');
+        if (btn) {
+          btn.className = done ? 'btn-mark-undone' : 'btn-mark-done';
+          btn.title = done ? '撤销已处理标记' : '标记为已处理';
+          btn.innerHTML = done ? '&#x21A9; 撤销' : '&#x2713; 已处理';
+          btn.onclick = () => markProcessed(youtubeId, !done);
+        }
+      }
+    }
+    // 更新计数徽章
+    const badge = document.getElementById('processed-count-badge');
+    if (badge) {
+      const cnt = _getProcessedSet().size;
+      badge.textContent = cnt > 0 ? `（已处理 ${cnt} 条）` : '';
+    }
+  }
+
+  function toggleShowProcessed(checked) {
+    showProcessed = checked;
+    loadVideos();
+  }
+
+  // [Claude_Sonnet_4.6_Thinking_planning] v3.4.0: 高赞内容手动刷新
+  let _highLikesPollTimer = null;
+  async function refreshHighLikes() {
+    const btn = document.getElementById('btn-refresh-high-likes');
+    const statusEl = document.getElementById('high-likes-refresh-status');
+    if (!btn) return;
+
+    // 防重复点击
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="inline-spinner"></span> 刷新中…';
+    btn.style.opacity = '0.7';
+    if (statusEl) statusEl.textContent = '正在通过 yt-dlp 搜索最新高赞视频，约需 1~3 分钟…';
+
+    try {
+      const r = await fetch('/api/high-likes/refresh', { method: 'POST' });
+      const d = await r.json();
+      if (!d.started) {
+        if (statusEl) statusEl.textContent = d.message || '已有刷新任务在运行，请稍候';
+        btn.disabled = false;
+        btn.innerHTML = '🔄 立即刷新';
+        btn.style.opacity = '1';
+        return;
+      }
+    } catch (e) {
+      if (statusEl) statusEl.textContent = '请求失败，请检查服务连接';
+      btn.disabled = false;
+      btn.innerHTML = '🔄 立即刷新';
+      btn.style.opacity = '1';
+      return;
+    }
+
+    // 每 5 秒轮询状态，完成后恢复按钮并刷新列表
+    if (_highLikesPollTimer) clearInterval(_highLikesPollTimer);
+    _highLikesPollTimer = setInterval(async () => {
+      try {
+        const s = await fetch('/api/high-likes/status');
+        const sd = await s.json();
+        if (!sd.running) {
+          clearInterval(_highLikesPollTimer);
+          _highLikesPollTimer = null;
+          btn.disabled = false;
+          btn.innerHTML = '🔄 立即刷新';
+          btn.style.opacity = '1';
+          if (statusEl) statusEl.textContent = '✅ 刷新完成！';
+          setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 4000);
+          loadVideos();  // 自动刷新表格
+        }
+      } catch (_) {}
+    }, 5000);
+  }
+
   function enterEditMode(vibrate = true) {
     if (vibrate && navigator.vibrate) navigator.vibrate(15);
     const table = document.querySelector('.activity-table');
@@ -1631,6 +1791,8 @@
       if (mainBody) mainBody.style.display = 'none';
       if (pgn)      pgn.style.display      = 'none';
       if (batchBar) batchBar.classList.remove('visible');
+      const _hlBar0 = document.getElementById('high-likes-bar');
+      if (_hlBar0) _hlBar0.classList.remove('visible');
       loadHotwords();
       return;
     }
@@ -1640,10 +1802,19 @@
     if (mainBody) mainBody.style.display = '';
     if (pgn)      pgn.style.display      = '';
 
+    const _hlBar = document.getElementById('high-likes-bar');
     if (tab === 'waitlist') {
       if (batchBar) batchBar.classList.add('visible');
+      if (_hlBar) _hlBar.classList.remove('visible');
+    } else if (tab === 'high_likes') {
+      // [Gemini_2.5_Pro_planning] 高赞 tab 显示专属工具栏
+      if (batchBar) batchBar.classList.remove('visible');
+      if (_hlBar) _hlBar.classList.add('visible');
+      const cbShow = document.getElementById('cb-show-processed');
+      if (cbShow) cbShow.checked = showProcessed;
     } else {
       if (batchBar) batchBar.classList.remove('visible');
+      if (_hlBar) _hlBar.classList.remove('visible');
     }
     loadVideos();
   }
@@ -1708,7 +1879,27 @@
       const wechatBtn = document.getElementById('btn-wechat-login');
       if (wechatBtn) wechatBtn.classList.toggle('btn-wechat-alert', hasLoginRequired);
 
-      tbody.innerHTML = d.videos.map(v => {
+      // [Gemini_2.5_Pro_planning] 已处理过滤（high_likes tab 专属）
+      const _processedSet = _getProcessedSet();
+      let videos = d.videos;
+      if (currentTab === 'high_likes' && !showProcessed) {
+        videos = videos.filter(v => !_processedSet.has(v.youtube_id));
+      }
+      // 更新已处理计数徽章
+      if (currentTab === 'high_likes') {
+        const _badge = document.getElementById('processed-count-badge');
+        if (_badge) {
+          const _cnt = _processedSet.size;
+          _badge.textContent = _cnt > 0 ? `（已处理 ${_cnt} 条）` : '';
+        }
+      }
+      // 客户端过滤后全部已处理
+      if (videos.length === 0 && currentTab === 'high_likes') {
+        tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><div class="empty-icon">🎉</div>未处理的高赞视频已全部看完！勾选上方"显示已处理"可查看历史</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = videos.map(v => {
         const score      = v.score ?? 0;
         const isPending  = v.status === 'PENDING';
         const isTerminal = TERMINAL.has(v.status);
@@ -1716,8 +1907,22 @@
         const isStuck     = STUCK.has(v.status);
         
         // 分数/操作栏
+        // [Gemini_2.5_Pro_planning] DISCOVERY 源视频：只读，不展示评分按钮（防止误触发管线）
+        const isDiscovery = v.source === 'DISCOVERY';
+        // [Gemini_2.5_Pro_planning] high_likes tab: 已处理行标记
+        const isDone = isDiscovery && _getProcessedSet().has(v.youtube_id);
         let scoreControls = '';
-        if (!isTerminal) {
+        if (isDiscovery) {
+          // 高赞发现视频：展示点赞率而非评分，提示只读
+          const likeRatePct = (v.like_count != null && v.view_count > 0)
+            ? (v.like_count / v.view_count * 100).toFixed(2) + '%'
+            : '—';
+          scoreControls = `<div style="text-align:center; line-height:1.4;">
+            <span style="font-size:11px; color:var(--text3);">点赞率</span><br>
+            <span style="font-size:14px; font-weight:600; color:#34d399;">${likeRatePct}</span>
+            <div style="font-size:9px; color:var(--text3); margin-top:2px;">👁 仅浏览</div>
+          </div>`;
+        } else if (!isTerminal) {
           const thresholdWarn = isPending && score < 75 ? `<div style="font-size:9px;color:var(--orange);margin-top:2px;">⚠️ 低于75分暂停</div>` : '';
           scoreControls = `
             <div>
@@ -1735,7 +1940,15 @@
         }
 
         const deleteBtn = `<button class="btn-hard-reset" onclick="deleteVideo('${v.youtube_id}')" title="彻底清除任务记录" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
-        const retryBtn = v.status === 'LOGIN_REQUIRED'
+        // [Gemini_2.5_Pro_planning] DISCOVERY 源：不显示⚡执行按钮；已处理显示"↩ 撤销"
+        const markDoneBtn = isDone
+          ? `<button class="btn-mark-undone" onclick="markProcessed('${v.youtube_id}', false)" title="撤销已处理标记">↩ 撤销</button>`
+          : `<button class="btn-mark-done" onclick="markProcessed('${v.youtube_id}', true)" title="标记为已处理">✓ 已处理</button>`;
+        const ytLinkBtn = `<a href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
+             class="btn-score" style="text-decoration:none; padding:3px 8px; font-size:10px;" title="在 YouTube 中查看">▶ 查看</a>`;
+        const retryBtn = isDiscovery
+          ? markDoneBtn + ytLinkBtn + deleteBtn
+          : v.status === 'LOGIN_REQUIRED'
           ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
              <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="硬重置">🗑 重置</button>` + deleteBtn
           : v.status === 'PENDING'
@@ -1957,7 +2170,7 @@
         const viewsStr = views || '—';
 
         return `
-          <tr id="row-${v.youtube_id}" class="" onclick="${isWaitlist ? `toggleRowCb('${v.youtube_id}')` : ''}"
+          <tr id="row-${v.youtube_id}" class="${isDone ? 'discovery-done' : ''}" onclick="${isWaitlist ? `toggleRowCb('${v.youtube_id}')` : ''}"
               style="${isWaitlist ? 'cursor:default' : ''}">
             ${cbCell}
             ${coverCell}

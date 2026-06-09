@@ -22,6 +22,7 @@
 | 3.0.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 新增 /api/trending-keywords 端点，整合 HN 热词注入功能到后台 Web UI 热词监控 Tab |
 | 3.1.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix+防卡] _run_pipeline_manager 使用 settings.get_active_proxies() 动态代理注入；_queue_runner_loop 新增 purge_stale_tasks() 自动清理卡死 DOWNLOADING 任务 |
 | 3.2.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 _wechat_keepalive_loop：定期局动 wechat_keepalive.py 子进程刷新 Session，防止闲置掉线 |
+| 3.3.0 | 2026-06-09 | Gemini_2.5_Pro_planning             | 修复 DISCOVERY 源视频被 process_video_now / update_video_priority 误触发自动处理的 Bug；API 层防火墙 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -702,6 +703,10 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
     if not video:
         return {"success": False, "error": "视频不存在"}
 
+    # [Gemini_2.5_Pro_planning] v3.3.0: DISCOVERY 源视频禁止通过评分按钮触发管线
+    # 用户可以在 high_likes tab 浏览，但不能通过调分间接发起下载/发布
+    is_discovery = video.get("source") == "DISCOVERY"
+
     current = video.get("score", 0)
     if req.action == "increase":
         new_score = min(100, current + 10)
@@ -712,22 +717,28 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
     else:
         return {"success": False, "error": f"未知操作：{req.action}"}
 
-
     # [Claude_Sonnet_4.6_Thinking_planning] v7.0 Phase 3+4:
     # 人工调分使用 force=True 打上手动锁，防止自动算分覆盖
     db.update_video_score(youtube_id, new_score, force=True)
 
     # 若打分为 0，将视频加入黑名单（Flag 保护）
-    if new_score == 0 and settings.enable_blacklist_tombstone:
+    # [Gemini_2.5_Pro_planning] DISCOVERY 视频打 0 分只删除记录，不加黑名单（发现列表和业务黑名单隔离）
+    if new_score == 0 and settings.enable_blacklist_tombstone and not is_discovery:
         db.add_to_blacklist(youtube_id, reason="manually_scored_zero")  # LINT-3: 去除多余 f-string
         db.delete_video_record(youtube_id)
         return {"success": True, "youtube_id": youtube_id, "score": 0,
                 "triggered": False, "blacklisted": True,
                 "message": "已打 0 分并移入黑名单，该视频不会被自动爬虫再次拉取"}
+    elif new_score == 0 and is_discovery:
+        db.delete_video_record(youtube_id)
+        return {"success": True, "youtube_id": youtube_id, "score": 0,
+                "triggered": False, "blacklisted": False,
+                "message": "已从高赞发现列表中删除该条目"}
 
     # 自动触发：score 越过调度线，且抢占成功（原状态为 PENDING）
+    # [Gemini_2.5_Pro_planning] DISCOVERY 视频不允许通过调分触发管线，防火墙保护
     triggered = False
-    if new_score >= 75 and db.claim_video_for_processing(youtube_id):
+    if not is_discovery and new_score >= 75 and db.claim_video_for_processing(youtube_id):
         fresh = db.get_video_by_youtube_id(youtube_id)
         if fresh:
             _trigger_video_async(fresh)
@@ -742,6 +753,9 @@ def process_video_now(youtube_id: str):
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
+    # [Gemini_2.5_Pro_planning] v3.3.0: DISCOVERY 源视频仅供浏览，禁止通过 API 直接触发自动处理管线
+    if video.get("source") == "DISCOVERY":
+        return {"success": False, "error": "DISCOVERY 来源视频不允许自动处理，请手动添加后再执行"}
     if not db.claim_video_for_processing(youtube_id):
         return {"success": False, "error": f"视频当前状态不是 PENDING，或者已被其他进程抢占处理"}
 
@@ -1464,6 +1478,44 @@ def get_trending_keywords(force_refresh: bool = False):
 def refresh_trending_keywords():
     """[Claude_Sonnet_4.6_Thinking_planning] 强制刷新 HN 热词缓存（忽略 1h TTL）"""
     return get_trending_keywords(force_refresh=True)
+
+
+# ── [Claude_Sonnet_4.6_Thinking_planning] v3.4.0: 高赞内容手动刷新 ──────────────
+_high_likes_refresh_running = False  # 全局互斥锁，防止重复触发
+
+@app.post("/api/high-likes/refresh")
+def refresh_high_likes():
+    """在后台线程中执行 discover_high_like_videos()，立即返回状态。
+
+    discover_high_like_videos() 需要通过 yt-dlp 搜索多个关键词（约 1~3 分钟），
+    因此采用异步触发而非同步阻塞，前端轮询或刷新 Tab 即可获取最新数据。
+    """
+    global _high_likes_refresh_running
+    if _high_likes_refresh_running:
+        return {"started": False, "message": "刷新任务已在进行中，请稍候..."}
+
+    def _run():
+        global _high_likes_refresh_running
+        _high_likes_refresh_running = True
+        try:
+            import sys as _sys
+            _sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
+            from monitor_channels import discover_high_like_videos  # [Claude_Sonnet_4.6_Thinking_planning]
+            discover_high_like_videos(db)
+        except Exception as e:
+            import logging as _log
+            _log.getLogger(__name__).error(f"[HighLikes] refresh failed: {e}")
+        finally:
+            _high_likes_refresh_running = False
+
+    threading.Thread(target=_run, daemon=True, name="high-likes-refresh").start()
+    return {"started": True, "message": "已在后台开始刷新，1~3 分钟后刷新页面查看结果"}
+
+
+@app.get("/api/high-likes/status")
+def high_likes_refresh_status():
+    """查询高赞刷新任务是否正在运行"""
+    return {"running": _high_likes_refresh_running}
 
 
 if __name__ == "__main__":
