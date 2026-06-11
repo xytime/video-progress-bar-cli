@@ -22,11 +22,13 @@
 | 3.2.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | add_video 支持 category, censor_tag, censor_score 录入 |
 | 3.3.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | 将 high_likes 高赞视频时间窗口由 24 小时调整为 3 天，优化刷新发现效果 |
 | 3.4.0   | 2026-06-11 | Gemini_3.5_Flash_planning           | [高赞优化] 对齐 get_tab_counts 徽章时间窗口为 3 天，优化高赞视频排序机制优先新视频 |
+| 3.4.1   | 2026-06-11 | Claude_Opus_4.6_Thinking_planning   | [CodeReview修复] 统一变量名 yesterday→three_days_ago，提升 datetime 为 top-level import |
 """
 
 import sqlite3
 import os
 import logging
+import datetime  # [Claude_Opus_4.6_Thinking_planning] 提升为 top-level import，用于高赞时间窗口计算
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -555,9 +557,8 @@ class PipelineDB:
             condition = "pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL"
         elif tab == 'high_likes':
             # [Gemini_3.5_Flash_planning] 最近 3 天发布且观看量>500的高赞视频
-            import datetime
-            yesterday = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y%m%d")
-            condition = f"pv.upload_date >= '{yesterday}' AND pv.view_count > 500 AND pv.like_count IS NOT NULL AND pv.view_count IS NOT NULL AND pv.parent_id IS NULL"
+            three_days_ago = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y%m%d")
+            condition = f"pv.upload_date >= '{three_days_ago}' AND pv.view_count > 500 AND pv.like_count IS NOT NULL AND pv.view_count IS NOT NULL AND pv.parent_id IS NULL"
         else:
             condition = "pv.status = 'PENDING' AND pv.score < 75 AND pv.parent_id IS NULL"
 
@@ -605,7 +606,6 @@ class PipelineDB:
     def get_tab_counts(self) -> Dict[str, int]:
         """获取各 Tab 的当前数量（仅统计 parent_id IS NULL 级别的父视频，清爽管理）"""
         # [Gemini_3.5_Flash_planning] 计算 3 天前的日期字符串以过滤高赞视频数量，防止与列表条目数不一致
-        import datetime
         three_days_ago = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y%m%d")
         with self.get_connection() as conn:
             cursor = conn.execute("""

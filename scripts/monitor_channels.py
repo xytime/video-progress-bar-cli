@@ -201,7 +201,7 @@ def discover_high_like_videos(db: PipelineDB):
                         if category in ("NA", ""):
                             category = None
 
-                        # 筛选最近24-48小时内发布且观看量>500的视频
+                        # 筛选最近 3 天内发布且观看量>500的视频
                         if upload_date and upload_date >= yesterday_str:
                             if view_count and view_count > 500:
                                 zh_title = title

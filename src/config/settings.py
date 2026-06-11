@@ -199,7 +199,7 @@ class Settings(BaseSettings):
         self.default_output_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_yt_cookie_args(self) -> list:
+    def get_yt_cookie_args(self) -> list[str]:
         """返回 yt-dlp 的 Cookie 参数列表。
         优先使用静态 Cookie 文件（避免每次调用触发 YouTube 轮转）；
         文件不存在或未配置时回退到 --cookies-from-browser safari。

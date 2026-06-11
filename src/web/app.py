@@ -24,9 +24,11 @@
 | 3.2.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 _wechat_keepalive_loop：定期局动 wechat_keepalive.py 子进程刷新 Session，防止闲置掉线 |
 | 3.3.0 | 2026-06-09 | Gemini_2.5_Pro_planning             | 修复 DISCOVERY 源视频被 process_video_now / update_video_priority 误触发自动处理的 Bug；API 层防火墙 |
 | 3.4.0 | 2026-06-11 | Gemini_3.5_Flash_planning           | [高赞+防泄露] 新增 _is_pipeline_manager_running；全量管线去重，防止并发阻塞导致进程泄露 |
+| 3.4.1 | 2026-06-11 | Claude_Opus_4.6_Thinking_planning   | [P0修复] _run()闭包缺少global声明导致刷新按钮一次性失效；fcntl提升为top-level import |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
+import fcntl  # [Claude_Opus_4.6_Thinking_planning] 用于 _is_pipeline_manager_running() 非阻塞锁探测
 import sys
 import signal
 import time
@@ -1365,7 +1367,6 @@ def _is_pipeline_manager_running() -> bool:
         return False
     try:
         with open(lock_path, "r") as f:
-            import fcntl
             try:
                 # 尝试获取排他锁（非阻塞）
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1525,6 +1526,7 @@ def refresh_high_likes():
     _high_likes_refresh_running = True  # 在启动线程前置位，避免竞态
 
     def _run():
+        global _high_likes_refresh_running  # [Claude_Opus_4.6_Thinking_planning] P0修复：闭包必须声明global才能写入模块级变量
         try:
             import sys as _sys
             _sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
