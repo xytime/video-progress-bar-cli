@@ -29,7 +29,8 @@ STATIC_KEYWORDS = [
     "AI interview",
     "tech keynote 2026",
     "business podcast",
-    "founder speech"
+    "founder speech",
+    "world cup 2026",
 ]
 
 def get_discovery_keywords() -> list[str]:
