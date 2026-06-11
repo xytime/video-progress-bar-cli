@@ -10,6 +10,8 @@
 | 1.3.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | 升级新视频主动搜索发现逻辑，将符合高赞筛选要求的视频录入 DISCOVERY 源 |
 | 1.4.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | discover_high_like_videos 引入类别抓取及敏感词过滤检查，并在 add_video 时存入 |
 | 1.5.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | 将高赞视频时间窗口从 24 小时扩大至 3 天，解决刷新内容少的问题 |
+| 1.6.0   | 2026-06-11 | Claude_Sonnet_4.6              | [静默失败修复] exit 101 且 stdout 为空时输出真实 Cookie/auth 错误，不再静默当成"无新视频" |
+| 1.7.0   | 2026-06-11 | Gemini_3.5_Flash_planning      | [高赞发现优化] 提升搜索数为30，添加 --dateafter 3天，解决历史高赞霸榜且无更新问题 |
 """
 import sys
 from pathlib import Path
@@ -65,16 +67,23 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
         "--break-on-reject",
         "--playlist-end", "30",
         "--no-warnings",
-        "--cookies-from-browser", "safari",
+        *settings.get_yt_cookie_args(),
         url
     ]
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode != 0 and result.returncode != 101:
-            print(f"Warning: Failed to fetch {channel_id}. Error: {result.stderr.strip()}")
+        # exit 101 = yt-dlp partial errors (e.g. cookie/bot-check); treat as real failure
+        # and surface the error so it doesn't look like "no new videos"
+        if result.returncode not in (0, 101):
+            print(f"Warning: Failed to fetch {channel_id}. Error: {result.stderr.strip()[:200]}")
             return
-            
+        if result.returncode == 101 and not result.stdout.strip():
+            # All requests rejected — surface the actual stderr instead of silently skipping
+            err_line = result.stderr.strip().split('\n')[0][:200] if result.stderr.strip() else "unknown error"
+            print(f"  -> Cookie/auth error (exit 101): {err_line}")
+            return
+
         output = result.stdout.strip()
         if not output:
             print("  -> No recent matching videos found.")
@@ -131,7 +140,7 @@ def discover_new_channels(db: PipelineDB):
             "ytsearch5:" + keyword,  # 抓取前5个搜索结果
             "--print", "%(channel_id)s|%(channel)s",
             "--no-warnings",
-            "--cookies-from-browser", "safari"
+            *settings.get_yt_cookie_args()
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -168,10 +177,11 @@ def discover_high_like_videos(db: PipelineDB):
         print(f"Searching high-like videos for: {keyword}")
         cmd = [
             "yt-dlp",
-            "ytsearch10:" + keyword,  # 抓取前10个搜索结果
+            "ytsearch30:" + keyword,  # [Gemini_3.5_Flash_planning] 抓取前30个搜索结果以提高最新视频命中率
+            "--dateafter", "now-3days",  # [Gemini_3.5_Flash_planning] 仅抓取最近3天的视频，规避历史热门视频干扰
             "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s|||%(channel_id)s|||%(categories.0)s",
             "--no-warnings",
-            "--cookies-from-browser", "safari"
+            *settings.get_yt_cookie_args()
         ]
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)

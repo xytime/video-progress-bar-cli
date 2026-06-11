@@ -1922,7 +1922,7 @@
             <span style="font-size:14px; font-weight:600; color:#34d399;">${likeRatePct}</span>
             <div style="font-size:9px; color:var(--text3); margin-top:2px;">👁 仅浏览</div>
           </div>`;
-        } else if (!isTerminal) {
+        } else if (!isTerminal || isRetryable) {
           const thresholdWarn = isPending && score < 75 ? `<div style="font-size:9px;color:var(--orange);margin-top:2px;">⚠️ 低于75分暂停</div>` : '';
           scoreControls = `
             <div>

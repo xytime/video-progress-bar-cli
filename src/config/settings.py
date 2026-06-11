@@ -17,6 +17,7 @@
 | 2.7.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 wechat_keepalive_* 看门狗配置项，支持定期刷新 Session 防止闲置掉线 |
 | 2.8.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 aliyun_mt_access_key_id/secret，支持阿里云机器翻译通用版作为 Gemini 限流时的二级 fallback |
 | 2.9.0 | 2026-06-09 | Claude_Sonnet_4.6_Thinking_planning | 新增 Clash Mi API 配置及 clash_switch_node() 上下文管理器：下载前自动切到日本节点，完成后还原。Clash Mi Network Extension 架构下唯一可行的进程级优化方案 |
+| 3.0.0 | 2026-06-11 | Claude_Opus_4.8                     | 新增 youtube_cookies_file：Cookie 文件路径，优先级高于 --cookies-from-browser safari；避免 YouTube 频繁轮转 Cookie |
 """
 import json
 import socket
@@ -102,6 +103,12 @@ class Settings(BaseSettings):
     clash_proxy_group: str = "🌍 国外网站"           # 要切换的代理组
     clash_download_node: Optional[str] = None       # 下载时使用的节点（None=不切换）
                                                     # 示例: CLASH_DOWNLOAD_NODE=🏯🇵 日本下载专用
+
+    # [Claude_Opus_4.8] v3.0.0: YouTube Cookie 文件路径
+    # 优先使用静态 Cookie 文件，避免 --cookies-from-browser safari 在每次调用后触发 YouTube 轮转
+    # 留空("")则回退到 --cookies-from-browser safari
+    # 使用 scripts/refresh_yt_cookies.py 从 Safari 导出并保存到此文件
+    youtube_cookies_file: str = ""
 
     # -------------------------------------------------------------------------
     # v7.0 Feature Flags — 新功能灰度开关 [Claude_Sonnet_4.6_Thinking_planning]
@@ -191,6 +198,17 @@ class Settings(BaseSettings):
         """确保运行时必要的目录存在"""
         self.default_output_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_yt_cookie_args(self) -> list:
+        """返回 yt-dlp 的 Cookie 参数列表。
+        优先使用静态 Cookie 文件（避免每次调用触发 YouTube 轮转）；
+        文件不存在或未配置时回退到 --cookies-from-browser safari。
+        """
+        if self.youtube_cookies_file:
+            p = Path(self.youtube_cookies_file).expanduser()
+            if p.exists():
+                return ["--cookies", str(p)]
+        return ["--cookies-from-browser", "safari"]
 
     def get_active_proxies(self) -> dict:
         """[Claude_Sonnet_4.6_Thinking_planning] v2.5.0: 动态检测系统代理并验证连通性。

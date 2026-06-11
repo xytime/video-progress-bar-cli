@@ -38,6 +38,7 @@
 | 3.7.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | 跳过 DISCOVERY 源视频的自动评分，保证高赞发现列表不被自动发布 |
 | 3.8.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | [下载限速超时] 限制 curl 最低速度 50KB/s 持续 30秒，防止代理连接坏节点时无限期卡死下载 |
 | 3.8.1   | 2026-06-09 | Gemini_3.5_Flash_planning           | [下载限速调整] 将最低速度限制调低为 10KB/s (10000)，防止音频正常限速下载时被异常中断导致无限循环重试 |
+| 3.9.0   | 2026-06-11 | Claude_Sonnet_4.6                   | [评分修复] 消除悬崖效应：发布门槛从 (views>2000, like_rate>3.5%) 调低至 (views>1500, like_rate>3.0%)，根治连续两天零发布的根因 |
 """
 
 
@@ -160,15 +161,17 @@ class PipelineManager:
                 score = 0
             else:
                 like_rate = min(100.0, likes / views * 100)
-                if views > 2000 and like_rate > 3.5:
-                    # [Claude_Sonnet_4.6_Thinking_planning] 满足热度门槛：对数加权评分 [80, 95]
-                    v_bonus = min(10.0, 5 * math.log10(views / 2000))
-                    l_bonus = min(5.0, 5 * (like_rate - 3.5) / 6.5)
+                if views > 1500 and like_rate > 3.0:
+                    # [Claude_Sonnet_4.6_Thinking_planning v3.9.0] 满足热度门槛：对数加权评分 [80, 95]
+                    # 阈值从 (2000, 3.5%) 调低至 (1500, 3.0%)，消除发布断流：
+                    # 旧公式存在悬崖效应（views=1999 or like_rate=3.49% 硬限 70，无法进队列）
+                    v_bonus = min(10.0, 5 * math.log10(views / 1500))
+                    l_bonus = min(5.0, 5 * (like_rate - 3.0) / 7.0)
                     score   = max(80, min(95, round(80 + v_bonus + l_bonus)))
                 else:
                     # 未满足门槛：比例评分 [0, 70]
-                    v_ratio = min(1.0, views / 2000)
-                    l_ratio = min(1.0, like_rate / 3.5) if like_rate > 0 else 0.0
+                    v_ratio = min(1.0, views / 1500)
+                    l_ratio = min(1.0, like_rate / 3.0) if like_rate > 0 else 0.0
                     score   = max(0, min(70, round(70 * v_ratio * l_ratio)))
 
             logger.info(f"  [{yid}] views={views} like_rate={likes/views*100:.1f}% → score={score}" if views > 0 else f"  [{yid}] no view data → score=0")
@@ -670,7 +673,7 @@ class PipelineManager:
                         dl_cmd = [
                             self._VENV_YTDLP,
                             "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-                            "--cookies-from-browser", "safari",
+                            *settings.get_yt_cookie_args(),
                             "--write-description",
                             "--write-info-json",  # 新增：写 info.json 便于 chapters 提取
                             "--remote-components", "ejs:github",

@@ -23,6 +23,7 @@
 | 3.1.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix+防卡] _run_pipeline_manager 使用 settings.get_active_proxies() 动态代理注入；_queue_runner_loop 新增 purge_stale_tasks() 自动清理卡死 DOWNLOADING 任务 |
 | 3.2.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 _wechat_keepalive_loop：定期局动 wechat_keepalive.py 子进程刷新 Session，防止闲置掉线 |
 | 3.3.0 | 2026-06-09 | Gemini_2.5_Pro_planning             | 修复 DISCOVERY 源视频被 process_video_now / update_video_priority 误触发自动处理的 Bug；API 层防火墙 |
+| 3.4.0 | 2026-06-11 | Gemini_3.5_Flash_planning           | [高赞+防泄露] 新增 _is_pipeline_manager_running；全量管线去重，防止并发阻塞导致进程泄露 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -1357,8 +1358,28 @@ def get_wechat_status():
     }
 
 
-@app.post("/api/pipeline/run")
+def _is_pipeline_manager_running() -> bool:
+    """[Gemini_3.5_Flash_planning] 通过尝试获取文件锁来非阻塞检测当前是否已有 pipeline_manager 正在运行"""
+    lock_path = Path(__file__).parent.parent.parent / "output" / "pipeline.lock"
+    if not lock_path.exists():
+        return False
+    try:
+        with open(lock_path, "r") as f:
+            import fcntl
+            try:
+                # 尝试获取排他锁（非阻塞）
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # 能够获取到锁，说明当前没有进程持有锁，释放并返回 False
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                return False
+            except (BlockingIOError, OSError):
+                # 无法获取锁，说明已被其他处理进程占用
+                return True
+    except Exception:
+        return False
 
+
+@app.post("/api/pipeline/run")
 def run_full_pipeline():
     """触发完整管线：monitor_channels + pipeline_manager。等价于 vp job run，全程后台执行。"""
     def _run():
@@ -1373,12 +1394,19 @@ def run_full_pipeline():
 
         import subprocess as sp
         with open(log_path, "a") as f:
-            f.write("\n=== Web-triggered pipeline run ===\n")
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"\n=== Web-triggered pipeline run ({now_str}) ===\n")
             # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
             sp.run([python, "-u", str(prj_root / "scripts" / "monitor_channels.py")],
                    cwd=str(prj_root), stdout=f, stderr=f, env=env_clean)
-            sp.run([python, "-u", "-m", "video_processing.pipeline_manager"],
-                   cwd=src_dir, stdout=f, stderr=f, env=env_clean)
+            
+            # [Gemini_3.5_Flash_planning] 校验引擎排他锁以防并发阻塞导致进程堆积泄露
+            if _is_pipeline_manager_running():
+                f.write("[Scheduler] pipeline_manager is already running (pipeline.lock is held). Skipping duplicate run to prevent process leaks.\n")
+                f.flush()
+            else:
+                sp.run([python, "-u", "-m", "video_processing.pipeline_manager"],
+                       cwd=src_dir, stdout=f, stderr=f, env=env_clean)
 
     threading.Thread(target=_run, daemon=True, name="full-pipeline").start()
     return {"success": True, "message": "全量管线已在后台启动，请关注仪表盘进度"}
@@ -1494,9 +1522,9 @@ def refresh_high_likes():
     if _high_likes_refresh_running:
         return {"started": False, "message": "刷新任务已在进行中，请稍候..."}
 
+    _high_likes_refresh_running = True  # 在启动线程前置位，避免竞态
+
     def _run():
-        global _high_likes_refresh_running
-        _high_likes_refresh_running = True
         try:
             import sys as _sys
             _sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))

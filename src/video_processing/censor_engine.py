@@ -11,6 +11,7 @@
 | 1.2.0   | 2026-06-01 | Gemini_2.5_Flash_planning              | [Code Review Fix] 移除 CP 层 exemptions（文本层豁免会让违禁词被商业词庚护）；移除 CP 层重复的 xi jinping |
 | 1.3.0   | 2026-06-04 | Claude_Sonnet_4.6_Thinking_fast        | _CHANNEL_POLICY 新增美国国家领导人名单（中英双通道），与中国政治人名对等处理 |
 | 1.4.0   | 2026-06-04 | Gemini_3.5_Flash_planning           | [风控优化] 英文通道引入 \b 单词边界正则匹配，解决 Patriot 包含 riot 导致误杀的问题 |
+| 1.5.0   | 2026-06-11 | Claude_Opus_4.8                        | _CHANNEL_POLICY 新增中东战争、乌克兰战争、伊朗冲突关键词，全面覆盖地缘政治内容 |
 """
 
 import re
@@ -155,6 +156,31 @@ _CHANNEL_POLICY: dict = {
         "美国总统",
         "美国国会", "美参议院", "美众议院",
         "白宫政策", "美国政府政策",
+        # [Claude_Opus_4.8] v1.5.0 — 中东战争/乌克兰战争/伊朗冲突
+        # 以色列-巴勒斯坦/黎巴嫩冲突
+        "以色列", "以军", "加沙", "加沙地带",
+        "黎巴嫩", "真主党", "哈马斯", "胡塞武装",
+        "内塔尼亚胡", "西岸", "约旦河西岸",
+        "贝鲁特", "以黎冲突", "以哈冲突",
+        "空袭加沙", "轰炸加沙", "轰炸黎巴嫩",
+        "停火协议", "停战协议",          # 仅在冲突语境下出现
+        "加沙医院", "加沙平民",
+        # 乌克兰战争
+        "乌克兰", "泽连斯基", "俄乌战争", "俄乌冲突",
+        "基辅", "顿巴斯", "乌东",
+        # 伊朗冲突/核问题
+        "伊朗", "德黑兰", "伊斯兰革命卫队",
+        "伊朗核", "伊朗导弹",
+        # 也门胡塞
+        "也门战争", "胡塞", "红海袭击",
+        # 泛战争/军事冲突语境
+        "空袭", "导弹袭击", "地面进攻",           # 结合具体国家时才出现
+        "战争罪", "平民伤亡", "难民危机",
+        "联合国安理会制裁",
+        # 美国国内政治（补充）
+        "民主党", "共和党", "两党", "国会听证",
+        "众议院民主党", "参议院共和党",
+        "CIA", "中情局",
     ],
     "en": [
         # [Gemini_2.5_Flash_planning] Code Review Fix v1.2.0:
@@ -193,6 +219,31 @@ _CHANNEL_POLICY: dict = {
         # 聚合词（泛政治化上下文）
         "us president policy", "white house policy",
         "us congress", "us senate politics", "us house of representatives",
+        # [Claude_Opus_4.8] v1.5.0 — 中东/乌克兰/伊朗/美国国内政治（英文通道）
+        # 以色列-巴勒斯坦/黎巴嫩冲突
+        "israel", "israeli", "gaza", "west bank",
+        "hezbollah", "hamas", "houthi",
+        "netanyahu", "idf",
+        "beirut", "southern lebanon",
+        "ceasefire", "airstrike", "air strike",
+        "gaza strip", "israeli strike", "israeli operation",
+        # 乌克兰战争
+        "ukraine", "ukrainian", "zelensky", "volodymyr",
+        "kyiv", "donbas", "russia-ukraine",
+        # 伊朗
+        "iran", "iranian", "tehran",
+        "irgc", "revolutionary guard",
+        "iran nuclear", "iran sanctions",
+        # 美国国内政治（补充）
+        "house democrats", "senate republicans", "house republicans",
+        "senate democrats",
+        "republican party", "democratic party",
+        "partisan", "senate hearing", "house hearing",
+        "congressional hearing", "senate committee", "house committee",
+        "cia director",
+        "us military strike", "us sanctions",
+        # 也门/胡塞
+        "red sea attack", "yemen war",
     ],
     # [Gemini_2.5_Flash_planning] Code Review Fix v1.2.0:
     # CP 层不应设置 exemptions。
