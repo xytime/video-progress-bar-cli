@@ -12,6 +12,7 @@
 | 1.5.0   | 2026-06-09 | Gemini_3.5_Flash_planning      | 将高赞视频时间窗口从 24 小时扩大至 3 天，解决刷新内容少的问题 |
 | 1.6.0   | 2026-06-11 | Claude_Sonnet_4.6              | [静默失败修复] exit 101 且 stdout 为空时输出真实 Cookie/auth 错误，不再静默当成"无新视频" |
 | 1.7.0   | 2026-06-11 | Gemini_3.5_Flash_planning      | [高赞发现优化] 提升搜索数为30，添加 --dateafter 3天，解决历史高赞霸榜且无更新问题 |
+| 1.8.0   | 2026-06-11 | Claude_Opus_4.6_Thinking_planning | [Timeout修复] ytsearch30+dateafter导致大量超时，回调为ytsearch10，timeout 120→18s |
 """
 import sys
 from pathlib import Path
@@ -178,14 +179,14 @@ def discover_high_like_videos(db: PipelineDB):
         print(f"Searching high-like videos for: {keyword}")
         cmd = [
             "yt-dlp",
-            "ytsearch30:" + keyword,  # [Gemini_3.5_Flash_planning] 抓取前30个搜索结果以提高最新视频命中率
+            "ytsearch10:" + keyword,  # [Claude_Opus_4.6_Thinking_planning] 回调为10：ytsearch30+dateafter导致yt-dlp需翻百页凑数，大量超时
             "--dateafter", "now-3days",  # [Gemini_3.5_Flash_planning] 仅抓取最近3天的视频，规避历史热门视频干扰
             "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s|||%(channel_id)s|||%(categories.0)s",
             "--no-warnings",
             *settings.get_yt_cookie_args()
         ]
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)  # [Claude_Opus_4.6_Thinking_planning] 120→180s，dateafter过滤需更多时间
             if result.returncode == 0 and result.stdout.strip():
                 for line in result.stdout.strip().split('\n'):
                     parts = line.split('|||', 7)
