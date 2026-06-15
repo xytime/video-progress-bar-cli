@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date       | Author                                 | Description          |
 |---------|------------|----------------------------------------|----------------------|
+| 1.5.0   | 2026-06-13 | Claude_Opus_4.8                        | 更新 GC 测试以匹配 v3.11.0：发布后保留再发产物（成片/封面/文案/标题/分类），仅删源视频与中间字幕 |
 | 1.4.0   | 2026-05-28 | Gemini_3.5_Flash_planning              | 新增 stop_video API 强杀进程与状态置为 FAILED 的单元测试 |
 | 1.3.0   | 2026-05-27 | Unknown_Model_planning                 | 新增顺序锁放宽测试与垃圾回收 GC 深度清理测试用例 |
 | 1.2.1   | 2026-05-27 | Gemini_3.5_Flash_High_planning         | 修复 test_con1_lock_handle_closed_on_flock_error 中 mock 调用的 slice_index 断言 |
@@ -555,44 +556,47 @@ class TestSequenceLockRelaxation:
 
 class TestGarbageCollectionOverhaul:
     def test_garbage_collection_cleanup_files_and_dirs(self, tmp_db):
-        """[Unknown_Model_planning] 验证 _run_garbage_collection 能彻底清理特定切片/整片的中间文件与语音生成文件夹。"""
-        import shutil
+        """[Claude_Opus_4.8] v3.11.0: 发布后 GC 仅清理源视频/中间字幕与语音目录，
+        但保留「再次发布」所需产物（成片/封面/文案/短标题/分类），以支撑秒级重发。
+        """
         from pathlib import Path
         from video_processing.pipeline_manager import PipelineManager
-        
+
         pm = PipelineManager()
         pm.db = tmp_db
         out_dir = Path(pm._OUT_DIR)
-        
+
         yid = "gc_test_video"
-        
+
         # 1. 模拟 slice_index == 0 发布成功
-        # 创建各种临时中间文件
-        files_to_create = [
+        # 应被清理：源视频 + 中间字幕（体积大且可重建；源另有 original_video/ 冷存档兜底）
+        should_delete = [
             f"{yid}.mp4",
-            f"{yid}_vertical.mp4",
             f"{yid}.ass",
             f"{yid}_subtitle.txt",
+            f"{yid}.description",
+        ]
+        # 应被保留：再次发布直接复用的产物
+        should_keep = [
+            f"{yid}_vertical.mp4",
             f"{yid}_copy.txt",
             f"{yid}_title.txt",
             f"{yid}_category.txt",
             f"{yid}_cover.jpg",
-            f"{yid}.description"
         ]
-        
-        for f_name in files_to_create:
-            f_path = out_dir / f_name
-            f_path.write_text("dummy content", encoding="utf-8")
-            
+        for f_name in should_delete + should_keep:
+            (out_dir / f_name).write_text("dummy content", encoding="utf-8")
+
         audio_dir = out_dir / f"{yid}_audio_gen"
         audio_dir.mkdir(parents=True, exist_ok=True)
         (audio_dir / "temp.wav").write_text("audio content")
-        
+
         pm._run_garbage_collection(yid, slice_index=0, status="PUBLISHED")
-        
-        # 检查所有文件和目录是否已被清理干净
-        for f_name in files_to_create:
+
+        for f_name in should_delete:
             assert not (out_dir / f_name).exists(), f"File {f_name} should be cleaned up"
+        for f_name in should_keep:
+            assert (out_dir / f_name).exists(), f"File {f_name} should be RETAINED for republish"
         assert not audio_dir.exists(), "Audio gen directory should be cleaned up"
         
     def test_garbage_collection_parent_cleanup_after_last_slice(self, tmp_db):

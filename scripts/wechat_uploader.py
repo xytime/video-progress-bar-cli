@@ -15,6 +15,7 @@
 | 1.9.0   | 2026-06-02 | Claude_Sonnet_4.6_Thinking_planning | _select_collection 全面重写：5轮DOM探针实证，正确选择器 .post-album-display-wrap/.option-item/.create a |
 | 2.0.0   | 2026-06-02 | Claude_Sonnet_4.6_Thinking_planning | bugfix: Modal检测改用wait_for_selector(state=visible)；所有return False前Escape关闭遮罩；publish前清理残留dialog |
 | 2.1.0   | 2026-06-02 | Gemini_3.5_Flash_planning           | 修复合集列表异步加载延迟；优化创建新合集按钮滚动及 JS 点击兜底 |
+| 2.2.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2] 发布确认改为 confirmed 布尔：仅 /post/list 跳转或明确成功文案才 return 0，否则 return 3(UNCONFIRMED) 交管线人工核验，杜绝「假成功」 |
 """
 
 import os
@@ -235,6 +236,30 @@ def _select_collection(page, collection_name: str) -> bool:
     page.wait_for_timeout(1500)
     page.screenshot(path="output/debug_collection_after_create.png")
     return True
+
+# [Claude_Opus_4.8] BUG-2: 发布结果判定抽成纯函数，便于单测，且把「确认成功」的标准集中在一处。
+# 误判后果不对称：假阳性(实际没发却判成功) → 误置 PUBLISHED + GC 删源（数据丢失）；
+# 假阴性(实际发了却判失败) → 重复发布。故仅在【强信号】下判成功：跳转 /post/list，
+# 或出现与当前模式匹配的明确成功文案，且排除「不成功」等报错文案。
+def classify_publish_result(redirected: bool, page_content: str, draft: bool = False) -> bool:
+    """判定发表/存草稿是否【确认成功】。
+
+    Args:
+        redirected: 发表后是否跳转到 /post/list（最可靠信号）。
+        page_content: 未跳转时的页面文本（降级判据）。
+        draft: 是否为存草稿模式（成功文案不同）。
+
+    Returns:
+        True 仅当能确认成功；无法确认一律 False（交由调用方按未发布处理）。
+    """
+    if redirected:
+        return True
+    content = page_content or ""
+    if "不成功" in content:  # 明确的失败文案，直接否决
+        return False
+    positives = ("保存草稿成功", "保存成功") if draft else ("发表成功", "发布成功")
+    return any(k in content for k in positives)
+
 
 def run_uploader(
     video_path: str = None,
@@ -1489,21 +1514,24 @@ def run_uploader(
                 return 1
                 
         # 6. 确认发布/保存成功
+        # [Claude_Opus_4.8] BUG-2: 必须真正确认成功才返回 0。无法确认时返回 UNCONFIRMED(3)，
+        # 由管线视为「未发布」——不置 PUBLISHED、不 GC 删源、可重试/人工复核，杜绝「假成功」。
         page.wait_for_timeout(5000)
+        redirected, page_content = False, ""
         try:
-            # 成功发布后视频号网页通常跳转到 /post/list
+            # 成功发布后视频号网页通常跳转到 /post/list（最可靠信号）
             page.wait_for_url("**/post/list**", timeout=15000)
+            redirected = True
             logger.info("Confirmed: Successfully navigated to post list. Publish complete.")
         except Exception:
-            # 降级通过页面文本判断
-            content = page.content()
-            if "成功" in content or "发表成功" in content or "保存成功" in content:
-                logger.info("Confirmed: Success message found in page content.")
-            else:
-                logger.warning("Could not confirm success via URL redirect or page content. Please double check manually.")
-                
+            page_content = page.content()  # 未跳转 → 取页面文本走降级判据
+
+        confirmed = classify_publish_result(redirected, page_content, draft=draft)
         browser.close()
-        return 0
+        if confirmed:
+            return 0
+        logger.warning("Publish could NOT be confirmed — returning UNCONFIRMED(3) so pipeline will NOT mark PUBLISHED/GC.")
+        return 3
 
 def main():
     parser = argparse.ArgumentParser(description="Upload and publish videos to WeChat Channels.")

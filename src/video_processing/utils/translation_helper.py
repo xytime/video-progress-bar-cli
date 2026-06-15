@@ -8,6 +8,7 @@
 | Version | Date       | Author                     | Description |
 | ------- | ---------- | -------------------------- | ----------- |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 初始创建：高内聚翻译模块，阿里云 MT 优先 + Google Translate 降级兜底 |
+| 1.1.0   | 2026-06-15 | Claude_Opus_4.8 | [BUG-4] 按字数预算先切子块再拼接（替代 combined[:5000] 截断丢行）；split 段数须与输入严格相等才回写，否则留空，杜绝错位 |
 """
 
 import logging
@@ -28,6 +29,32 @@ logger = logging.getLogger(__name__)
 # 阿里云 MT 批量拼接常量
 _SEP = "\n###\n"
 _BATCH_SIZE = 25
+# [Claude_Opus_4.8] BUG-4: 阿里云 TranslateGeneral 单请求约 5000 字上限。改为「先按字数切子块再拼接」，
+# 杜绝旧实现 combined[:5000] 截断丢尾行 + 仍按位置回写造成的整体串位。
+_MAX_CHARS = 5000
+
+
+def _split_by_char_budget(indices: List[int], batch_texts: List[str], max_chars: int) -> List[List[int]]:
+    """把 indices 切成若干子组，使每组 _SEP.join 后长度 <= max_chars。
+
+    单行本身超预算时独占一组（兜底，避免丢行）。返回子组列表（每组为 batch 内下标）。
+    """
+    sep_len = len(_SEP)
+    groups: List[List[int]] = []
+    cur: List[int] = []
+    cur_len = 0
+    for i in indices:
+        tlen = len(batch_texts[i])
+        add = tlen + (sep_len if cur else 0)
+        if cur and cur_len + add > max_chars:
+            groups.append(cur)
+            cur, cur_len = [], 0
+            add = tlen
+        cur.append(i)
+        cur_len += add
+    if cur:
+        groups.append(cur)
+    return groups
 
 
 def translate_batch_aliyun(
@@ -97,31 +124,38 @@ def translate_batch_aliyun(
             if not non_empty_texts:
                 continue
 
-            combined = _SEP.join(non_empty_texts)
-            req = alimt_models.TranslateGeneralRequest(
-                format_type="text",
-                scene="general",
-                source_language=src,
-                source_text=combined[:5000],  # 安全截断，防止超限
-                target_language=tgt,
-            )
-            resp = client.translate_general(req)
+            # [Claude_Opus_4.8] BUG-4: 先按字数预算把本批切成子块（避免截断丢行），逐子块请求；
+            # 仅当 split 段数与输入数【严格相等】才回写，否则整子块保持空串占位（绝不按位置错位回写）。
+            for sub_idxs in _split_by_char_budget(non_empty_indices, batch_texts, _MAX_CHARS):
+                sub_texts = [batch_texts[i] for i in sub_idxs]
+                combined = _SEP.join(sub_texts)
+                req = alimt_models.TranslateGeneralRequest(
+                    format_type="text",
+                    scene="general",
+                    source_language=src,
+                    source_text=combined,
+                    target_language=tgt,
+                )
+                resp = client.translate_general(req)
 
-            if resp and resp.body and str(resp.body.code) == "200":
+                if not (resp and resp.body and str(resp.body.code) == "200"):
+                    code = resp.body.code if resp and resp.body else "unknown"
+                    logger.warning(
+                        f"[AliyunMT] Non-200 code={code} for sub-batch at index {batch_start}"
+                    )
+                    continue
+
                 result_text = resp.body.data.translated or ""
                 parts = [p.strip() for p in result_text.split("###")]
-                for local_idx, abs_idx in enumerate(non_empty_indices):
-                    if local_idx < len(parts):
-                        translated[batch_start + abs_idx] = parts[local_idx]
-                    else:
-                        logger.warning(
-                            f"[AliyunMT] Batch split count mismatch at batch_start={batch_start}"
-                        )
-            else:
-                code = resp.body.code if resp and resp.body else "unknown"
-                logger.warning(
-                    f"[AliyunMT] Non-200 code={code} for batch starting at index {batch_start}"
-                )
+                if len(parts) != len(sub_texts):
+                    # 段数对不上 → 无法可靠对位，整子块放弃（留空），交由上层 fallback，绝不错位回写
+                    logger.warning(
+                        f"[AliyunMT] split count mismatch (got {len(parts)}, expected {len(sub_texts)}); "
+                        f"leaving sub-batch untranslated to avoid subtitle desync."
+                    )
+                    continue
+                for local_idx, abs_idx in enumerate(sub_idxs):
+                    translated[batch_start + abs_idx] = parts[local_idx]
 
         logger.info("[AliyunMT] Batch translation completed.")
         return translated

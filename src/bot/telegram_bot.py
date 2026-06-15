@@ -17,6 +17,7 @@
 | 1.6.0   | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 新增 /tts 指令：发送 /tts <url> 时以 CosyVoice TTS 配音模式加入队列；移除了默认自动 TTS 行为 |
 | 1.7.0   | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 _handle_respec helper；各命令 already_exists 分支升级：有 trim/TTS 参数时自动调用 respec 实现“以最后一次为准” |
 | 1.8.0   | 2026-06-03 | Claude_Sonnet_4.6_Thinking_planning | 新增 _normalize_time() 预处理，parse_trim_params 支持 M'S 分秒格式（如 1'10 → 1:10） |
+| 1.9.0   | 2026-06-14 | Claude_Opus_4.8                     | 新增 /getvideo 命令：把成片发回 Telegram，>50MB 经 video_delivery 自动压缩（转码放进 executor 不阻塞轮询） |
 """
 from __future__ import annotations
 
@@ -45,6 +46,12 @@ from bot.auth import SecurityConfigError, is_admin, parse_admin_ids
 from bot.api_client import PipelineAPIClient
 from bot import formatter as fmt
 from bot.pipeline_agent import PipelineAgent
+from bot.video_delivery import (
+    prepare_for_delivery,
+    finished_video_path,
+    FinishedVideoNotFound,
+    CompressionError,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -157,6 +164,79 @@ async def cmd_published(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
         return
     await update.message.reply_text(fmt.fmt_published(videos), parse_mode="Markdown")  # type: ignore
+
+
+async def cmd_getvideo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/getvideo <youtube_id> [slice_index] — 把制作好的成片发回当前对话。
+
+    成片 = output/{prefix}_vertical.mp4。>50MB（Telegram 上限）时由 video_delivery
+    自动压缩出一份 ≤50MB 的副本再发。转码阻塞，放进 to_thread 以免卡住轮询。
+    """
+    if not _check_admin(update):
+        return
+    args = ctx.args  # type: ignore
+    if not args:
+        await update.message.reply_text(fmt.fmt_error("用法：/getvideo <youtube_id> [slice_index]"), parse_mode="Markdown")  # type: ignore
+        return
+
+    youtube_id = args[0].strip()
+    slice_index = 0
+    if len(args) >= 2:
+        try:
+            slice_index = int(args[1].strip())
+        except ValueError:
+            await update.message.reply_text(fmt.fmt_error("分集索引 slice_index 必须为整数"), parse_mode="Markdown")  # type: ignore
+            return
+
+    notice = await update.message.reply_text(  # type: ignore
+        "📦 *正在准备成片…*\n_大文件会自动压缩，可能需要几分钟，请稍候。_",
+        parse_mode="Markdown",
+    )
+
+    try:
+        prepared = await asyncio.to_thread(prepare_for_delivery, youtube_id, slice_index)
+    except FinishedVideoNotFound:
+        await notice.edit_text(
+            fmt.fmt_error(f"没找到 `{youtube_id}` 的成片，可能尚未制作完成或已被清理。"),
+            parse_mode="Markdown",
+        )
+        return
+    except CompressionError as e:
+        src = finished_video_path(youtube_id, slice_index)
+        await notice.edit_text(
+            fmt.fmt_error(f"成片过大且压缩失败：{e}\n本机路径：`{src}`"),
+            parse_mode="Markdown",
+        )
+        return
+    except Exception as e:  # noqa: BLE001
+        logger.exception("getvideo 准备失败")
+        await notice.edit_text(fmt.fmt_error(f"准备成片出错：{e}"), parse_mode="Markdown")
+        return
+
+    tag = f"{youtube_id}" + (f"_s{slice_index}" if slice_index else "")
+    caption = f"🎬 <b>{tag}</b> 成片　{prepared.size_mb:.1f}MB"
+    if prepared.compressed:
+        caption += "（已压缩）"
+
+    try:
+        with prepared.path.open("rb") as fh:
+            await update.message.reply_video(  # type: ignore
+                video=fh,
+                caption=caption,
+                parse_mode="HTML",
+                supports_streaming=True,
+                read_timeout=120,
+                write_timeout=600,
+                connect_timeout=60,
+                pool_timeout=60,
+            )
+        await notice.delete()
+    except Exception as e:  # noqa: BLE001
+        logger.exception("getvideo 发送失败")
+        await notice.edit_text(
+            fmt.fmt_error(f"发送失败：{e}\n本机路径：`{prepared.path}`"),
+            parse_mode="Markdown",
+        )
 
 
 async def cmd_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -677,6 +757,7 @@ def main() -> None:
     app.add_handler(CommandHandler("queue", cmd_queue))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("published", cmd_published))
+    app.add_handler(CommandHandler("getvideo", cmd_getvideo))  # [Claude_Opus_4.8] 发回成片（超 50MB 自动压缩）
     app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CommandHandler("retry", cmd_retry))
     app.add_handler(CommandHandler("run", cmd_run))

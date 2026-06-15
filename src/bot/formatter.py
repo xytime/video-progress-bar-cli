@@ -114,6 +114,7 @@ def fmt_help() -> str:
         "📋 `/queue` — 查看当前处理队列\n"
         "📊 `/status` — 查看全局宏观状态报告\n"
         "✅ `/published` — 查看最近发布到视频号的视频\n"
+        "📥 `/getvideo <ID> [slice_index]` — 把成片发回给你（超 50MB 自动压缩）\n"
         "🗑 `/delete <ID> [slice_index]` — 删除指定视频或分集任务\n"
         "♻️ `/retry <ID> [slice_index]` — 重试失败的视频或分集任务\n"
         "🏃 `/run` — 立即触发一次全量管线\n"

@@ -14,6 +14,8 @@ based on incoming Telegram messages and commands.
 | 1.3.1   | 2026-06-04 | Gemini_3.5_Flash_planning      | [下载优化] yt-dlp 启用 curl 外部下载器并配置 10 次自动重试与断点续传，解决代理环境下大视频/音频下载中断报错 |
 | 1.3.2   | 2026-06-07 | Gemini_3.5_Flash_planning      | 修复 download_video 中 url 未定义 NameError 崩溃问题，标注 # [Gemini_3.5_Flash_planning] |
 | 1.4.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 迁移至 google.genai SDK v2.6.0，废弃已停止维护的 google.generativeai；Client()代替 configure()，client.chats.create() 代替 GenerativeModel.start_chat()，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
+| 1.5.0   | 2026-06-14 | Claude_Opus_4.8                     | 新增 send_finished_video 工具：自然语言「把成片发我」即把成片发回 Telegram，>50MB 经 video_delivery 自动压缩 |
+| 1.6.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-3] 删除分叉的私有 _find_downloaded_video，改委托 utils.file_utils.find_downloaded_video（白名单+stem+冷归档回退），杜绝 .ass/无音轨分片被误喂 ffmpeg |
 """
 import os
 import sys
@@ -35,7 +37,13 @@ if _src not in sys.path:
 
 from config.settings import settings
 from video_processing.db import PipelineDB
+from video_processing.utils.file_utils import find_downloaded_video
 from bot.api_client import PipelineAPIClient
+from bot.video_delivery import (
+    prepare_for_delivery,
+    FinishedVideoNotFound,
+    CompressionError,
+)
 
 logger = logging.getLogger("pipeline_agent")
 
@@ -86,7 +94,8 @@ class PipelineAgent:
             self.delete_video_from_db,
             self.retry_video_in_db,
             self.get_system_stats,
-            self.trigger_wechat_login
+            self.trigger_wechat_login,
+            self.send_finished_video,
         ]
 
         self.system_prompt = (
@@ -123,6 +132,9 @@ class PipelineAgent:
             "6. When the user sends '/delete <youtube_id>', call delete_video_from_db.\n\n"
             "7. When the user sends '/retry <youtube_id>', call retry_video_in_db.\n\n"
             "8. When the user sends '/wechat_login' (or requests logging in to WeChat), call trigger_wechat_login to pop up the QR code window.\n\n"
+            "9b. When the user asks you to SEND/give them the finished/produced video (e.g. '把成片发我', '发我做好的视频', 'send me the video for <id>'), "
+            "call send_finished_video(youtube_id, slice_index). It handles Telegram's 50MB limit by auto-compressing large files. "
+            "Report back whether it was sent and whether it was compressed; if it returns ok=false, relay the error to the user.\n\n"
             "9. For any other message, respond directly and concisely. If the user asks a question, call the relevant query tool "
             "to get facts before answering. Avoid guessing or hallucinating facts.\n\n"
             "IMPORTANT formatting rule: Keep all Telegram messages concise. Use HTML tags (e.g., <b>bold</b>, <i>italic</i>, "
@@ -150,6 +162,57 @@ class PipelineAgent:
         except Exception as e:
             logger.error(f"Failed to send telegram message: {e}")
             return f"Error sending message: {e}"
+
+    def send_finished_video(self, youtube_id: str, slice_index: int = 0) -> str:
+        """Sends the FINISHED produced video file (the ready-to-publish vertical MP4)
+        back to the user's Telegram chat. If the file exceeds Telegram's 50MB upload
+        limit, it is automatically compressed first.
+
+        Use this when the user asks you to send/give them the finished or produced
+        video (e.g. "把成片发我" / "send me the video for <id>").
+
+        Args:
+            youtube_id: The 11-character YouTube video ID.
+            slice_index: Slice index for sliced videos (0 = the whole video).
+        """
+        # [Claude_Opus_4.8] 本工具在 agent 工作线程中执行，故可同步调用含 ffmpeg 的 prepare_for_delivery
+        try:
+            prepared = prepare_for_delivery(youtube_id, slice_index)
+        except FinishedVideoNotFound as e:
+            return json.dumps({"ok": False, "error": str(e)})
+        except CompressionError as e:
+            return json.dumps({"ok": False, "error": f"compression failed: {e}"})
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)})
+
+        tag = youtube_id + (f"_s{slice_index}" if slice_index else "")
+        caption = f"🎬 <b>{tag}</b> 成片　{prepared.size_mb:.1f}MB"
+        if prepared.compressed:
+            caption += "（已压缩）"
+
+        try:
+            coro = self.bot.send_video(
+                chat_id=self.chat_id,
+                video=prepared.path.read_bytes(),
+                caption=caption,
+                parse_mode="HTML",
+                supports_streaming=True,
+                read_timeout=120,
+                write_timeout=600,
+                connect_timeout=60,
+                pool_timeout=60,
+            )
+            future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+            future.result(timeout=900)
+        except Exception as e:
+            logger.error(f"Failed to send finished video: {e}")
+            return json.dumps({"ok": False, "error": f"send failed: {e}"})
+
+        return json.dumps({
+            "ok": True,
+            "compressed": prepared.compressed,
+            "size_mb": round(prepared.size_mb, 1),
+        })
 
     def list_pending_videos(self) -> str:
         """Lists all pending videos in the queue ordered by score descending."""
@@ -560,12 +623,14 @@ class PipelineAgent:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _find_downloaded_video(self, yid: str) -> Optional[str]:
-        _NON_VIDEO_SUFFIXES = {'.description', '.json', '.ytdl', '.part', '.jpg', '.png', '.webp'}
-        candidates = [
-            f for f in self.output_dir.glob(f"{yid}.*")
-            if f.suffix not in _NON_VIDEO_SUFFIXES and f.stat().st_size > 50_000
-        ]
-        return str(candidates[0]) if candidates else None
+        """委托给共享实现，避免与管线实现分叉。
+
+        旧私有副本用「黑名单」且不校验 stem，会把 `{yid}.ass` 字幕 / `{yid}.f398.mp4`
+        无音轨分片误当源视频喂给 ffmpeg（exit 234 崩溃 / 无声成片）。现统一走
+        ``utils.file_utils.find_downloaded_video``（白名单 + stem==yid + 体积 + 冷归档回退）。
+        # [Claude_Opus_4.8] BUG-3 修复：复用单一真相源
+        """
+        return find_downloaded_video(self.output_dir, yid, self.output_dir / "original_video")
 
     # ── Main Run Entrypoint ───────────────────────────────────────────────────
 

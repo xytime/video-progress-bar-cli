@@ -6,6 +6,7 @@
 | ------- | ---------- | ----------------------------------- | ------------------------------------------------------------------------ |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：从 caption_processor.py 抽取 Gemini 生词提取与对齐职责，实现高内聚低耦合 |
 | 1.1.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 实现分批调用（50段/次）解决277段场景下输出截断导致计数不符的问题；放宽计数校验 |
+| 1.2.0   | 2026-06-15 | Claude_Opus_4.8 | [BUG-4] prompt 给每段加 id 并要求回显；_parse_response 按 id 重对齐到定长列表，缺失段留空于正确位置，废弃「补空错位」级联 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -133,15 +134,19 @@ def _build_prompt(
     翻译模式（chinese_translations 为 None 时）：
         - Gemini 自行翻译并提取词汇（传统 fallback 逻辑）。
     """
+    # [Claude_Opus_4.8] BUG-4: 每个输入项带 0-based 整数 id，要求模型逐项回显 id。
+    # 解析端按 id 重对齐到定长列表——即便模型漏返/合并某段，也只是该 id 槽位留空（位置正确），
+    # 绝不发生「该段之后整体串位」的级联错位。
     if chinese_translations and len(chinese_translations) == len(english_texts):
         # 对齐模式：中文翻译已由阿里云/Google 提供，Gemini 只做词汇识别与子串对齐
         segments_payload = [
-            {"english": en, "chinese": zh}
-            for en, zh in zip(english_texts, chinese_translations)
+            {"id": i, "english": en, "chinese": zh}
+            for i, (en, zh) in enumerate(zip(english_texts, chinese_translations))
         ]
         prompt = (
             "You are an expert English educator analyzing video subtitles.\n"
             "For each item in the input array, you are given:\n"
+            "  - 'id': an integer index you MUST echo back unchanged\n"
             "  - 'english': the original English subtitle text\n"
             "  - 'chinese': the already-translated Chinese subtitle text (DO NOT change it)\n\n"
             "Your task:\n"
@@ -153,16 +158,20 @@ def _build_prompt(
             "object MUST be an EXACT SUBSTRING of the provided 'chinese' translation string. "
             "Use the shortest meaningful substring that corresponds to that English term. "
             "If no exact substring match is possible for a word, skip that word entirely.\n\n"
-            "Return a JSON array (one object per input item, same order). Each object:\n"
+            "Return a JSON array with EXACTLY ONE object per input item — never merge, drop, or reorder. "
+            "Each object:\n"
+            "  - \"id\": integer (echo the input item's id verbatim)\n"
             "  - \"translation\": string (the Chinese value verbatim from input)\n"
             "  - \"vocab\": object (English word/phrase keys → exact Chinese substring values)\n\n"
             f"Input:\n{json.dumps(segments_payload, ensure_ascii=False)}"
         )
     else:
         # 翻译模式：Gemini 自行翻译并提取词汇（fallback）
+        segments_payload = [{"id": i, "english": en} for i, en in enumerate(english_texts)]
         prompt = (
             "You are an expert video subtitle translator and English educator. "
-            "For each of the following English subtitle segments:\n"
+            "Each input item has an integer 'id' (echo it back unchanged) and 'english' text. "
+            "For each segment:\n"
             "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
             "2. Identify 2 to 3 key, academic, or difficult vocabulary words/phrases "
             "(CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. "
@@ -170,11 +179,12 @@ def _build_prompt(
             "dictionary MUST be the exact substring as it appears in your translated 'translation' "
             "string. Do not extract common/easy words. If there are no difficult words, leave the "
             "vocabulary dictionary empty.\n"
-            "Return a JSON array of objects (one for each segment in the exact same order). "
+            "Return a JSON array with EXACTLY ONE object per input item — never merge, drop, or reorder. "
             "Each object must contain:\n"
+            "  - \"id\": integer (echo the input item's id verbatim)\n"
             "  - \"translation\": string (Chinese translation)\n"
             "  - \"vocab\": object (English word/phrase keys → exact Chinese substring values)\n\n"
-            f"Input segments:\n{json.dumps(english_texts, ensure_ascii=False)}"
+            f"Input segments:\n{json.dumps(segments_payload, ensure_ascii=False)}"
         )
     return prompt
 
@@ -235,11 +245,21 @@ def _call_with_retry(client: Any, prompt: str, genai_types: Any) -> Optional[Any
 
 
 def _parse_response(text: str, expected_count: int) -> Optional[List[Dict[str, Any]]]:
-    """[Claude_Sonnet_4.6_Thinking_planning] 解析并校验 Gemini JSON 响应。
+    """[Claude_Opus_4.8] v1.2.0 BUG-4: 解析并【按 id 重对齐】Gemini JSON 响应。
 
-    v1.1.0: 放宽计数校验 — 允许返回件数在 [expected_count*0.8, expected_count] 范围内，
-    不足的条目由调用方补空 vocab。严格等值校验在大批量场景下过于脆弱。
+    每个返回项应回显 0-based 整数 "id"。按 id 放回定长列表（长度 expected_count），
+    缺失的 id 槽位以空条目占位——位置永远正确，绝不发生「整体串位」级联错位。
+
+    回退兼容：若模型完全没回显 id，则仅在数量【完全一致】时按顺序映射；
+    数量不一致则判定失败（返回 None，交由上层 fallback），绝不再做「补空错位」。
     """
+    def _norm(item: Any) -> Dict[str, Any]:
+        if not isinstance(item, dict):
+            return {"translation": "", "vocab": {}}
+        return {"translation": item.get("translation", "") or "",
+                "vocab": item.get("vocab", {}) or {}}
+
+    _EMPTY = {"translation": "", "vocab": {}}
     try:
         result = json.loads(text)
         # 兼容部分模型返回顶级 dict 包装
@@ -249,27 +269,44 @@ def _parse_response(text: str, expected_count: int) -> Optional[List[Dict[str, A
             result = result["list"]
 
         if not isinstance(result, list) or len(result) == 0:
-            logger.warning(f"[vocab_helper] Empty or non-list response.")
+            logger.warning("[vocab_helper] Empty or non-list response.")
             return None
 
-        # 允许小幅欠缺（模型偶尔合并相邻空段）
+        # bool 是 int 子类，需排除（避免把 True/False 当作 id）
+        has_ids = any(isinstance(it, dict) and isinstance(it.get("id"), int)
+                      and not isinstance(it.get("id"), bool) for it in result)
+
+        if has_ids:
+            slots: List[Optional[Dict[str, Any]]] = [None] * expected_count
+            placed = 0
+            for it in result:
+                if not isinstance(it, dict):
+                    continue
+                idx = it.get("id")
+                if isinstance(idx, bool) or not isinstance(idx, int):
+                    continue
+                if 0 <= idx < expected_count and slots[idx] is None:
+                    slots[idx] = _norm(it)
+                    placed += 1
+            if placed < int(expected_count * 0.8):
+                logger.warning(f"[vocab_helper] Too few id-aligned items: {placed}/{expected_count}. Discarding.")
+                return None
+            if placed < expected_count:
+                logger.warning(
+                    f"[vocab_helper] {expected_count - placed} segment(s) missing; "
+                    f"left EMPTY at correct index (no positional shift)."
+                )
+            return [s if s is not None else dict(_EMPTY) for s in slots]
+
+        # 无 id 回显：仅当数量完全一致才安全地顺序映射；否则判失败（绝不补空错位）
         if len(result) == expected_count:
-            logger.info(f"[vocab_helper] Vocab extraction succeeded ({expected_count} segments).")
-            return result
-        elif len(result) >= int(expected_count * 0.8):
-            logger.warning(
-                f"[vocab_helper] Count mismatch: expected {expected_count}, got {len(result)}. "
-                f"Padding remaining with empty vocab."
-            )
-            # 不足部分补空条目
-            while len(result) < expected_count:
-                result.append({"translation": "", "vocab": {}})
-            return result[:expected_count]
-        else:
-            logger.warning(
-                f"[vocab_helper] Count too low: expected {expected_count}, got {len(result)}. Discarding."
-            )
-            return None
+            logger.info(f"[vocab_helper] Vocab extraction succeeded ({expected_count} segments, positional).")
+            return [_norm(it) for it in result]
+        logger.warning(
+            f"[vocab_helper] No id echo and count mismatch (got {len(result)}, expected {expected_count}). "
+            f"Discarding to avoid subtitle desync."
+        )
+        return None
     except Exception as e:
         logger.error(f"[vocab_helper] Failed to parse Gemini response: {e}\nRaw text: {text[:300]}")
         return None

@@ -39,6 +39,12 @@
 | 3.8.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | [下载限速超时] 限制 curl 最低速度 50KB/s 持续 30秒，防止代理连接坏节点时无限期卡死下载 |
 | 3.8.1   | 2026-06-09 | Gemini_3.5_Flash_planning           | [下载限速调整] 将最低速度限制调低为 10KB/s (10000)，防止音频正常限速下载时被异常中断导致无限循环重试 |
 | 3.9.0   | 2026-06-11 | Claude_Sonnet_4.6                   | [评分修复] 消除悬崖效应：发布门槛从 (views>2000, like_rate>3.5%) 调低至 (views>1500, like_rate>3.0%)，根治连续两天零发布的根因 |
+| 3.10.0  | 2026-06-13 | Claude_Opus_4.8                     | _check_censorship 开头读取 is_censorship_bypassed(yid)：人工「🔓 复核放行」后跳过全部审查层，自动/手动触发均生效 |
+| 3.11.0  | 2026-06-13 | Claude_Opus_4.8                     | GC 发布后保留再发产物（_vertical/_cover/_copy/_title/_category），仅删源视频与中间字幕，支撑「🔁 再次发布」复用 checkpoint 秒级重发 |
+| 3.12.0  | 2026-06-13 | Claude_Opus_4.8                     | [Bugfix] _find_downloaded_video 改用视频扩展名白名单 _VIDEO_SUFFIXES，修复归档目录残留 .ass 被误当源视频喂给 ffmpeg（exit 234）的崩溃 |
+| 3.13.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-3] _find_downloaded_video 提取为 utils.file_utils.find_downloaded_video 单一真相源（bot 与管线共用），消除 bot 侧分叉实现 |
+| 3.14.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-1] _check_censorship 新增并透传 slice_index 到全部 db.* 调用与三处调用点，修复切片审查污染父行/卡死/漏发 |
+| 3.15.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2] 上传器返回 3(UNCONFIRMED) 时不置 PUBLISHED、不 GC，转 FAILED 并告警人工核验，杜绝「假成功」误删源 |
 """
 
 
@@ -54,6 +60,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from .db import PipelineDB
+from .utils.file_utils import find_downloaded_video, VIDEO_CONTAINER_SUFFIXES
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -72,6 +79,9 @@ def _sigterm_handler(signum: int, frame) -> None:  # noqa: ANN001
 
 # 非视频文件后缀（下载产物中排除）
 _NON_VIDEO_SUFFIXES = {'.description', '.json', '.ytdl', '.part', '.jpg', '.png', '.webp'}
+# [Claude_Opus_4.8] 源视频识别改用「白名单」：仅这些容器扩展名才会被当作源视频。
+# 单一真相源已上移至 utils.file_utils.VIDEO_CONTAINER_SUFFIXES（bot 与管线共用）；此处保留别名兼容旧引用。
+_VIDEO_SUFFIXES = VIDEO_CONTAINER_SUFFIXES
 # [Claude_Sonnet_4.6_Thinking_planning] v3.3.0: 代理环境变量选集，用于清除或替换
 _PROXY_KEYS = frozenset({
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
@@ -264,41 +274,16 @@ class PipelineManager:
         return deleted
 
     def _find_downloaded_video(self, yid: str) -> Optional[str]:
-        """查找下载后的视频主文件。
+        """查找下载后的视频主文件（热目录 output/ 优先，回退冷归档 original_video/）。
 
-        查找策略（优先级从高到低）：
-        1. 热目录 output/：yt-dlp 刚下载、尚未归档的文件（最新鲜）
-        2. 冷存档 output/original_video/：已归档的原始视频（3天TTL保留）
-
-        要求文件名主干（stem）必须与 yid 完全一致（排除包含 _vertical 或格式后缀的中间临时文件），且大于 50KB。
-        # [Gemini_3.5_Flash_planning] 原实现
-        # [Claude_Sonnet_4.6_Thinking_planning] v3.6.0 新增冷路径回退
+        实现已提取为 ``utils.file_utils.find_downloaded_video`` 单一真相源，
+        bot（pipeline_agent）与管线共用，避免两处实现分叉。
+        # [Claude_Opus_4.8] v3.13.0 提取共享实现；保留薄封装以维持归档命中的日志。
         """
-        def _scan_dir(directory: Path) -> list:
-            result = []
-            for f in directory.glob(f"{yid}.*"):
-                if f.suffix in _NON_VIDEO_SUFFIXES:
-                    continue
-                if f.stat().st_size <= 50_000:
-                    continue
-                # 主干名称必须完全等于 yid，防止匹配到形如 {yid}.f398.mp4 或 {yid}_vertical.mp4 的视频文件
-                if f.stem != yid:
-                    continue
-                result.append(f)
-            return result
-
-        # 1. 先查热目录（output/）
-        candidates = _scan_dir(self._OUT_DIR)
-        if candidates:
-            return str(candidates[0])
-
-        # 2. 再查冷存档（output/original_video/）
-        archived = _scan_dir(self._ORIG_VIDEO_DIR)
-        if archived:
-            logger.info(f"[OV] Found archived original video for {yid}: {archived[0].name}")
-            return str(archived[0])
-
-        return None
+        result = find_downloaded_video(self._OUT_DIR, yid, self._ORIG_VIDEO_DIR)
+        if result and Path(result).parent == self._ORIG_VIDEO_DIR:
+            logger.info(f"[OV] Found archived original video for {yid}: {Path(result).name}")
+        return result
 
     # ── 原始视频归档（v3.6.0）────────────────────────────────────────────────
 
@@ -415,17 +400,15 @@ class PipelineManager:
         # 1. 如果任务发布成功，清理其关联的临时文件
         if status == "PUBLISHED":
             prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
-            # 需要清理的中间文件和中间产物后缀
+            # [Claude_Opus_4.8] 保留「再次发布」所需产物——成片(_vertical.mp4)、封面、文案、
+            # 短标题、分类，使已发布视频可被「🔁 再次发布」秒级重发（复用本地产物、内容与原版一致）。
+            # 仅清理体积大且可重建的源视频与中间字幕：源视频另有 original_video/ 冷存档（保留 3 天）兜底，
+            # 故热目录源可安全删除；超出存档窗口再次发布时管线会自动回退重新下载/渲染。
             suffixes = [
-                ".mp4",
-                "_vertical.mp4",
+                ".mp4",            # 源视频（已归档到 original_video/，热目录副本可删）
                 ".ass",
                 "_subtitle.txt",
-                "_copy.txt",
-                "_title.txt",
-                "_category.txt",
-                "_cover.jpg",
-                ".description"
+                ".description",
             ]
             
             for suffix in suffixes:
@@ -482,8 +465,13 @@ class PipelineManager:
                         except Exception as e:
                             logger.warning(f"[GC] Failed to delete parent audio gen folder {parent_audio_dir.name}: {e}")
 
-    def _check_censorship(self, yid: str, title: str, description: str = "", zh_title: str = "") -> bool:
+    def _check_censorship(self, yid: str, title: str, description: str = "", zh_title: str = "", slice_index: int = 0) -> bool:
         """执行内容安全审查（违法层）+ 频道内容策略检查（运营层）。
+
+        [Claude_Opus_4.8] v3.14.0 BUG-1 修复：新增 slice_index 并透传到每一处 db.* 调用。
+        此前所有写入默认 slice_index=0（父行），切片命中违禁词时会污染父视频状态/分数，
+        且切片本行不被置 FAILED 导致漏审/卡死。调用方必须传入当前任务的 slice_index。
+
 
         [Gemini_2.5_Flash_planning] v2.11.0 修复：
         - 修复 zh_text 参数 Bug：原来错误地将英文 title 传给 zh 通道，现在使用 zh_title。
@@ -496,6 +484,12 @@ class PipelineManager:
         返回 True 表示命中（任意层）→ 需要拦截/中断，False 表示全部通过。
         """
         if not settings.enable_censorship_engine and not settings.enable_channel_policy_filter:
+            return False
+
+        # [Claude_Opus_4.8] 人工复核放行：bypass_censorship=1 时跳过全部审查层（P0/P1/P2/CP）。
+        # 由前端「🔓 复核放行」按钮在用户知情确认后置位；此处统一兜底，自动/手动触发均生效。
+        if self.db.is_censorship_bypassed(yid, slice_index=slice_index):
+            logger.warning(f"[Censor] Video {yid} BYPASSED by manual review — skipping all censorship layers.")
             return False
 
         try:
@@ -519,11 +513,11 @@ class PipelineManager:
                 result = check_text(zh_text=zh_for_censor, en_text=en_for_censor)
                 if result.hit:
                     logger.warning(f"[Censor] Video {yid} hit censorship rule: {result}")
-                    self.db.update_video_censor_status(yid, result.tag, result.score)
+                    self.db.update_video_censor_status(yid, result.tag, result.score, slice_index=slice_index)
 
                     if result.action == ACTION_REJECT_SIGTERM:
                         logger.error(f"[Censor] P0 violation. Failing video {yid} and blacklisting.")
-                        self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P0 Reject: {result.tag} (matched: '{result.matched}')")
+                        self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P0 Reject: {result.tag} (matched: '{result.matched}')", slice_index=slice_index)
                         if settings.enable_blacklist_tombstone:
                             self.db.add_to_blacklist(yid, reason=f"censor_p0_{result.matched}")
                         self.send_telegram_msg(
@@ -534,7 +528,7 @@ class PipelineManager:
 
                     elif result.action == ACTION_SUSPEND_MANUAL:
                         logger.warning(f"[Censor] P1 violation. Suspending video {yid} for manual review.")
-                        self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P1 Suspend: {result.tag} (matched: '{result.matched}')")
+                        self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P1 Suspend: {result.tag} (matched: '{result.matched}')", slice_index=slice_index)
                         self.send_telegram_msg(
                             f"\U0001f7e1 <b>Censorship P1 Suspend</b>"
                             f"\nTitle: {title}\nMatched: <code>{result.matched}</code> (via {result.channel})"
@@ -543,8 +537,8 @@ class PipelineManager:
 
                     elif result.action == ACTION_DEPRIORITIZE:
                         logger.info(f"[Censor] P2 violation. Deprioritizing video {yid} to 0 points.")
-                        self.db.update_video_score(yid, 0, force=True)
-                        self.db.update_video_status(yid, "PENDING", error_msg=f"Censorship P2 Deprioritized: {result.tag}")
+                        self.db.update_video_score(yid, 0, force=True, slice_index=slice_index)
+                        self.db.update_video_status(yid, "PENDING", error_msg=f"Censorship P2 Deprioritized: {result.tag}", slice_index=slice_index)
                         self.send_telegram_msg(
                             f"\U0001f535 <b>Censorship P2 Deprioritized</b>"
                             f"\nTitle: {title}\nMatched: <code>{result.matched}</code>"
@@ -566,10 +560,11 @@ class PipelineManager:
                 if cp_result.hit:
                     logger.warning(f"[ChannelPolicy] Video {yid} hit channel policy: {cp_result}")
                     # [Gemini_2.5_Flash_planning] Code Review Fix: CP 层也写入 censor_tag，与 P0/P1 审计行为保持一致
-                    self.db.update_video_censor_status(yid, cp_result.tag, score=0)
+                    self.db.update_video_censor_status(yid, cp_result.tag, score=0, slice_index=slice_index)
                     self.db.update_video_status(
                         yid, "FAILED",
-                        error_msg=f"Channel Policy Reject: {cp_result.tag} (matched: '{cp_result.matched}' via {cp_result.channel})"
+                        error_msg=f"Channel Policy Reject: {cp_result.tag} (matched: '{cp_result.matched}' via {cp_result.channel})",
+                        slice_index=slice_index
                     )
                     self.send_telegram_msg(
                         f"\U0001f6ab <b>Channel Policy Reject</b>"
@@ -627,7 +622,7 @@ class PipelineManager:
             # [Gemini_2.5_Flash_planning] v2.11.0: 手动/自动任务统一走同一套审查流程
             # zh_title 来自 DB，爬虫入库时已翻译；手动添加视频若翻译任务尚未完成则为空（回退到英文通道）
             zh_title_for_check = video.get('zh_title') or ""
-            if self._check_censorship(yid, title, zh_title=zh_title_for_check):
+            if self._check_censorship(yid, title, zh_title=zh_title_for_check, slice_index=slice_index):
                 return
 
             try:
@@ -820,7 +815,7 @@ class PipelineManager:
                         description = desc_path.read_text(encoding="utf-8").strip()
                     except Exception:
                         pass
-                if self._check_censorship(yid, title, description, zh_title=zh_title_for_check):
+                if self._check_censorship(yid, title, description, zh_title=zh_title_for_check, slice_index=slice_index):
                     return
 
                 # ── 2a. COPYWRITING ────────────────────────────────────────────────
@@ -963,7 +958,7 @@ class PipelineManager:
 
                 # [Gemini_2.5_Flash_planning] v2.11.0: 文案检测使用 AI 生成的中文短标题作为 zh_title
                 # short_title 此时已是文案阶段生成的中文标题，直接作为 zh 通道输入
-                if self._check_censorship(yid, short_title, copy_content, zh_title=short_title):
+                if self._check_censorship(yid, short_title, copy_content, zh_title=short_title, slice_index=slice_index):
                     return
 
 
@@ -1147,6 +1142,21 @@ class PipelineManager:
                             f"<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
                         )
                         return
+                    if upload_err.returncode == 3:
+                        # [Claude_Opus_4.8] BUG-2: 发布结果无法确认（可能已发/可能未发）。
+                        # 绝不置 PUBLISHED、绝不 GC 删源（保留产物供核验/重发），也不自动重发（防重复）。
+                        logger.error(f"WeChat publish UNCONFIRMED for {prefix} — keeping artifacts, no GC, no auto-republish.")
+                        self.db.update_video_status(
+                            yid, "FAILED",
+                            error_msg=("发布结果无法确认（可能已发/可能未发）。请到视频号后台核对：\n"
+                                       "· 若【未发布】→ 点「重试」重新发布；\n"
+                                       "· 若【已发布】→ 点「已处理」，切勿重试以免重复发布。"),
+                            slice_index=slice_index)
+                        self.send_telegram_msg(
+                            f"⚠️ <b>发布结果待人工核实</b>\nTitle: {short_title}\n"
+                            f"无法确认是否已发布到视频号，请核对后再操作，避免重复发布。"
+                        )
+                        return  # 关键：不置 PUBLISHED、不 GC
                     raise
 
                 # ── 5. PUBLISHED ──────────────────────────────────────────────────

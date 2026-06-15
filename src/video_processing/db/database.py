@@ -23,6 +23,10 @@
 | 3.3.0   | 2026-06-09 | Gemini_3.5_Flash_planning           | 将 high_likes 高赞视频时间窗口由 24 小时调整为 3 天，优化刷新发现效果 |
 | 3.4.0   | 2026-06-11 | Gemini_3.5_Flash_planning           | [高赞优化] 对齐 get_tab_counts 徽章时间窗口为 3 天，优化高赞视频排序机制优先新视频 |
 | 3.4.1   | 2026-06-11 | Claude_Opus_4.6_Thinking_planning   | [CodeReview修复] 统一变量名 yesterday→three_days_ago，提升 datetime 为 top-level import |
+| 3.5.0   | 2026-06-13 | Claude_Opus_4.8                     | 新增 promote_to_manual：将高赞发现(DISCOVERY)条目原子提升为 MANUAL 加急任务（source/score/手动锁），供「📥 加入队列」一键发布 |
+| 3.6.0   | 2026-06-13 | Claude_Opus_4.8                     | 新增 bypass_censorship 列 + set_bypass_censorship/is_censorship_bypassed：供「🔓 复核放行」人工绕过审查后管线跳过全部审查层 |
+| 3.7.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2/#11] purge_stale_tasks 额外排除 PUBLISHING，防止发布中崩溃被自动重置 PENDING 导致重复公开发布 |
+| 3.8.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-5] 新增 get_waitlist_clearable_ids 并在 waitlist 展示/统计谓词排除 DISCOVERY，防一键清空误删/拉黑高赞发现条目 |
 """
 
 import sqlite3
@@ -117,6 +121,7 @@ class PipelineDB:
                             trim_start TEXT DEFAULT NULL,
                             trim_end TEXT DEFAULT NULL,
                             disable_slicing INTEGER DEFAULT 1,
+                            bypass_censorship INTEGER DEFAULT 0,
                             UNIQUE(youtube_id, slice_index),
                             FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                         )
@@ -192,6 +197,7 @@ class PipelineDB:
                         trim_start TEXT DEFAULT NULL,
                         trim_end TEXT DEFAULT NULL,
                         disable_slicing INTEGER DEFAULT 1,
+                        bypass_censorship INTEGER DEFAULT 0,
                         UNIQUE(youtube_id, slice_index),
                         FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                     )
@@ -221,7 +227,15 @@ class PipelineDB:
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN category TEXT DEFAULT NULL;")
                 conn.commit()
 
-            
+            # [Claude_Opus_4.8] v3.6.0: 检查并补足 bypass_censorship 字段（人工复核放行标志）
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "bypass_censorship" not in columns:
+                self._logger.info("[Migration] Adding bypass_censorship column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN bypass_censorship INTEGER DEFAULT 0;")
+                conn.commit()
+
+
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS blacklisted_videos (
@@ -439,13 +453,16 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             # [Unknown_Model_planning] 排除已分集(SEGMENTED)父视频和跳过(IGNORED)任务，防止无限循环
+            # [Claude_Opus_4.8] BUG-2/#11: 额外排除 PUBLISHING——发布是对外不可逆动作，若进程在
+            # 「微信已接收发表」与「写 PUBLISHED」之间崩溃，自动重置回 PENDING 会导致重复公开发布。
+            # 卡住的 PUBLISHING 改由人工在面板核对后处理（重试/标记已处理），不自动重排队。
             cursor.execute(
                 '''
-                UPDATE processed_videos 
-                SET status = 'PENDING', 
+                UPDATE processed_videos
+                SET status = 'PENDING',
                     retry_count = retry_count + 1,
-                    updated_at = CURRENT_TIMESTAMP 
-                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'PUBLISHED', 'SEGMENTED', 'IGNORED')
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'PUBLISHED', 'PUBLISHING', 'SEGMENTED', 'IGNORED')
                 AND updated_at < datetime('now', ?)
                 ''',
                 (f'-{stale_hours} hours',)
@@ -473,6 +490,53 @@ class PipelineDB:
                     self._logger.info(f"[ScoreLock] Skipped auto-score for manually-locked video: {youtube_id} (slice {slice_index})")
                     return
             conn.commit()
+
+    def promote_to_manual(self, youtube_id: str, score: int = 100) -> bool:
+        """[Claude_Opus_4.8] 将高赞发现(DISCOVERY)条目「提升」为手动加急任务。
+
+        原子地把主任务(slice_index=0)的 source 改为 MANUAL、score 设为 score，
+        并打上手动评分锁（is_manually_scored=1），使其脱离「仅浏览」防火墙、
+        正常进入处理/发布队列。保留已抓取的元数据与 zh_title，不经过黑名单墓碑。
+
+        仅当 source='DISCOVERY' 时生效，避免误改已在正式队列中的任务。
+
+        Returns:
+            True 表示成功转换（命中一行）；False 表示视频不存在或来源不是 DISCOVERY。
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos SET source = 'MANUAL', score = ?, "
+                "is_manually_scored = 1, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = 0 AND source = 'DISCOVERY'",
+                (score, youtube_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def set_bypass_censorship(self, youtube_id: str, enabled: bool = True, slice_index: int = 0) -> None:
+        """[Claude_Opus_4.8] 设置/清除「人工复核放行」标志。
+
+        置位后，管线 _check_censorship 会跳过全部审查层（P0/P1/P2/Channel Policy），
+        使该视频即使命中审查词也能继续处理并发布。仅供前端「🔓 复核放行」按钮在用户
+        知情确认后调用。
+        """
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE processed_videos SET bypass_censorship = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (1 if enabled else 0, youtube_id, slice_index)
+            )
+            conn.commit()
+
+    def is_censorship_bypassed(self, youtube_id: str, slice_index: int = 0) -> bool:
+        """[Claude_Opus_4.8] 查询某视频是否已被人工复核放行（bypass_censorship=1）。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT bypass_censorship FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index)
+            )
+            row = cursor.fetchone()
+            return bool(row and row["bypass_censorship"])
 
     def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5) -> List[Dict[str, Any]]:
         """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。
@@ -560,7 +624,8 @@ class PipelineDB:
             three_days_ago = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y%m%d")
             condition = f"pv.upload_date >= '{three_days_ago}' AND pv.view_count > 500 AND pv.like_count IS NOT NULL AND pv.view_count IS NOT NULL AND pv.parent_id IS NULL"
         else:
-            condition = "pv.status = 'PENDING' AND pv.score < 75 AND pv.parent_id IS NULL"
+            # [Claude_Opus_4.8] BUG-5: 待筛选排除 DISCOVERY（发现条目仅在「高赞」tab 浏览，受发现防火墙保护）
+            condition = "pv.status = 'PENDING' AND pv.score < 75 AND pv.parent_id IS NULL AND IFNULL(pv.source,'') != 'DISCOVERY'"
 
         # [Gemini_3.5_Flash_planning] 高赞列表按发布时间倒序排列，同一天内按点赞率降序排列，保证新视频置顶
         if tab == 'high_likes':
@@ -590,6 +655,21 @@ class PipelineDB:
 
         return videos, total_count
 
+    def get_waitlist_clearable_ids(self) -> List[str]:
+        """返回「待筛选(waitlist)」中可被一键清空的视频 youtube_id。
+
+        [Claude_Opus_4.8] BUG-5: 与 get_paginated_videos('waitlist') 谓词一致，并显式排除
+        DISCOVERY（发现条目仅供「高赞」tab 浏览，受发现防火墙保护，绝不能被清空/拉黑）。
+        集中在 DAL 内，避免业务层裸 SQL 与谓词漂移。
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT youtube_id FROM processed_videos "
+                "WHERE status = 'PENDING' AND score < 75 AND parent_id IS NULL "
+                "AND IFNULL(source,'') != 'DISCOVERY'"
+            )
+            return [row["youtube_id"] for row in cursor.fetchall()]
+
     def get_slices_by_parent_yid(self, parent_yid: str) -> List[Dict[str, Any]]:
         """[Gemini_3.5_Flash_planning] 新增：按父任务 youtube_id 提取其下所有关联子切片元数据"""
         with self.get_connection() as conn:
@@ -610,7 +690,7 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.execute("""
                 SELECT
-                    SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 THEN 1 ELSE 0 END) as waitlist,
+                    SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 AND IFNULL(pv.source,'') != 'DISCOVERY' THEN 1 ELSE 0 END) as waitlist,
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score >= 75 THEN 1 ELSE 0 END) as queue,
                     SUM(CASE WHEN (
                         pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING')

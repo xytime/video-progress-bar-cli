@@ -12,6 +12,8 @@
 | 1.3.0   | 2026-06-04 | Claude_Sonnet_4.6_Thinking_fast        | _CHANNEL_POLICY 新增美国国家领导人名单（中英双通道），与中国政治人名对等处理 |
 | 1.4.0   | 2026-06-04 | Gemini_3.5_Flash_planning           | [风控优化] 英文通道引入 \b 单词边界正则匹配，解决 Patriot 包含 riot 导致误杀的问题 |
 | 1.5.0   | 2026-06-11 | Claude_Opus_4.8                        | _CHANNEL_POLICY 新增中东战争、乌克兰战争、伊朗冲突关键词，全面覆盖地缘政治内容 |
+| 1.6.0   | 2026-06-13 | Claude_Opus_4.8                        | [误杀优化] CP 层裸国名（iran/ukraine/israel…）改为「国名+冲突词」上下文共现判定，单独出现不再拦截；新增 country_*/conflict_* 词组 |
+| 1.7.0   | 2026-06-13 | Claude_Opus_4.8                        | 新增 scan_all_matches()：不短路扫描全部层，返回文本命中的所有审查词，供「复核放行」标签云高亮与人工决策展示 |
 """
 
 import re
@@ -119,10 +121,24 @@ _BLOCKLIST: dict = {
 #   1. 与 _BLOCKLIST（违法内容）完全分离，独立开关控制（enable_channel_policy_filter）
 #   2. 这里的词汇不违法，但超出频道内容定位边界，由用户根据运营需要自由调整
 #   3. 触发后的动作为 ACTION_CHANNEL_POLICY → 调用方标记 FAILED + Telegram 警告
+#
+# [Claude_Opus_4.8] v1.6.0 — 词表分三类，区分「硬命中」与「上下文共现」：
+#   • zh / en          : 硬命中词。政治人物、政党机构、武装组织/领导人，以及本身
+#                        已含「国家+冲突」语义的复合词（如 "iran nuclear"、"俄乌战争"）。
+#                        命中任意一词即直接拦截（行为同 v1.5.0）。
+#   • country_zh/en    : 「裸国名/地名」软命中词（iran、ukraine、israel、加沙…）。
+#                        单独出现 *不* 拦截——避免旅游/美食/历史/体育类视频被误杀。
+#   • conflict_zh/en   : 冲突/军事信号词（war、strike、sanctions、空袭、制裁…）。
+#                        单独出现 *不* 拦截。
+#   仅当「某个 country 词」与「某个 conflict 词」在同一段文本中共现时，才判定为
+#   地缘政治内容并拦截；matched 字段记为 "<country>+<conflict>"，便于事后复盘。
+#   注意：单字冲突词（如 "核"）会误伤 "核心/核实"，故 conflict_zh 只收多字词，
+#   "核问题/核设施/核武器" 而非裸 "核"。
 
 _CHANNEL_POLICY: dict = {
     "tag":   "🚫 频道策略限制",
     "action": ACTION_CHANNEL_POLICY,
+    # ── 硬命中词（命中即拦截）──────────────────────────────────────────────────
     "zh": [
         # 用户明确声明：不做中国政治/外交/地缘话题
         "中国政府", "中国共产党", "中共", "中南海",
@@ -156,26 +172,13 @@ _CHANNEL_POLICY: dict = {
         "美国总统",
         "美国国会", "美参议院", "美众议院",
         "白宫政策", "美国政府政策",
-        # [Claude_Opus_4.8] v1.5.0 — 中东战争/乌克兰战争/伊朗冲突
-        # 以色列-巴勒斯坦/黎巴嫩冲突
-        "以色列", "以军", "加沙", "加沙地带",
-        "黎巴嫩", "真主党", "哈马斯", "胡塞武装",
-        "内塔尼亚胡", "西岸", "约旦河西岸",
-        "贝鲁特", "以黎冲突", "以哈冲突",
-        "空袭加沙", "轰炸加沙", "轰炸黎巴嫩",
-        "停火协议", "停战协议",          # 仅在冲突语境下出现
-        "加沙医院", "加沙平民",
-        # 乌克兰战争
-        "乌克兰", "泽连斯基", "俄乌战争", "俄乌冲突",
-        "基辅", "顿巴斯", "乌东",
-        # 伊朗冲突/核问题
-        "伊朗", "德黑兰", "伊斯兰革命卫队",
+        # [Claude_Opus_4.8] v1.5.0 — 武装组织/领导人，及「国家+冲突」复合词（硬命中）
+        "以军", "真主党", "哈马斯", "胡塞武装", "胡塞",
+        "内塔尼亚胡", "伊斯兰革命卫队",
+        "以黎冲突", "以哈冲突",
+        "泽连斯基", "俄乌战争", "俄乌冲突",
         "伊朗核", "伊朗导弹",
-        # 也门胡塞
-        "也门战争", "胡塞", "红海袭击",
-        # 泛战争/军事冲突语境
-        "空袭", "导弹袭击", "地面进攻",           # 结合具体国家时才出现
-        "战争罪", "平民伤亡", "难民危机",
+        "也门战争", "红海袭击",
         "联合国安理会制裁",
         # 美国国内政治（补充）
         "民主党", "共和党", "两党", "国会听证",
@@ -219,21 +222,13 @@ _CHANNEL_POLICY: dict = {
         # 聚合词（泛政治化上下文）
         "us president policy", "white house policy",
         "us congress", "us senate politics", "us house of representatives",
-        # [Claude_Opus_4.8] v1.5.0 — 中东/乌克兰/伊朗/美国国内政治（英文通道）
-        # 以色列-巴勒斯坦/黎巴嫩冲突
-        "israel", "israeli", "gaza", "west bank",
+        # [Claude_Opus_4.8] v1.5.0 — 武装组织/领导人，及「国家+冲突」复合词（硬命中）
         "hezbollah", "hamas", "houthi",
         "netanyahu", "idf",
-        "beirut", "southern lebanon",
-        "ceasefire", "airstrike", "air strike",
-        "gaza strip", "israeli strike", "israeli operation",
-        # 乌克兰战争
-        "ukraine", "ukrainian", "zelensky", "volodymyr",
-        "kyiv", "donbas", "russia-ukraine",
-        # 伊朗
-        "iran", "iranian", "tehran",
+        "zelensky", "volodymyr", "russia-ukraine",
         "irgc", "revolutionary guard",
         "iran nuclear", "iran sanctions",
+        "red sea attack", "yemen war",
         # 美国国内政治（补充）
         "house democrats", "senate republicans", "house republicans",
         "senate democrats",
@@ -242,8 +237,35 @@ _CHANNEL_POLICY: dict = {
         "congressional hearing", "senate committee", "house committee",
         "cia director",
         "us military strike", "us sanctions",
-        # 也门/胡塞
-        "red sea attack", "yemen war",
+    ],
+    # ── 「裸国名/地名」软命中词（须与 conflict_* 共现才拦截）────────────────────
+    # [Claude_Opus_4.8] v1.6.0：单独出现放行，仅在与冲突信号词共现时判定为地缘政治内容。
+    "country_zh": [
+        "以色列", "加沙", "黎巴嫩", "贝鲁特", "约旦河西岸",
+        "乌克兰", "基辅", "顿巴斯", "乌东",
+        "伊朗", "德黑兰",
+    ],
+    "country_en": [
+        "israel", "israeli", "gaza", "lebanon", "beirut", "west bank",
+        "ukraine", "ukrainian", "kyiv", "donbas",
+        "iran", "iranian", "tehran",
+    ],
+    # ── 冲突/军事信号词（单独出现放行，仅用于解锁 country_* 共现）────────────────
+    # [Claude_Opus_4.8] v1.6.0：zh 侧只收多字词，避免单字 "核" 误伤 "核心/核实"。
+    "conflict_zh": [
+        "战争", "冲突", "空袭", "轰炸", "导弹", "导弹袭击",
+        "制裁", "入侵", "袭击", "进攻", "地面进攻",
+        "停火", "停战", "战争罪", "平民伤亡", "难民危机",
+        "军事冲突", "核武器", "核设施", "核问题", "核计划",
+    ],
+    "conflict_en": [
+        "war", "wars", "conflict", "strike", "strikes",
+        "airstrike", "airstrikes", "air strike",
+        "missile", "missiles", "nuclear",
+        "sanction", "sanctions", "invasion", "invade",
+        "military", "troops", "bombing", "bombard",
+        "attack", "attacks", "casualties", "offensive",
+        "siege", "ceasefire", "war crime", "war crimes",
     ],
     # [Gemini_2.5_Flash_planning] Code Review Fix v1.2.0:
     # CP 层不应设置 exemptions。
@@ -401,6 +423,12 @@ def check_channel_policy(zh_text: str = "", en_text: str = "") -> CensorResult:
     - 触发词汇均合法，但超出频道内容定位（如：用户声明不做中国政治话题）。
     - 命中时返回 action=ACTION_CHANNEL_POLICY，调用方负责标记 FAILED 并发 Telegram 警告。
 
+    [Claude_Opus_4.8] v1.6.0 检测顺序（命中即返回）：
+      1. 硬命中词（zh/en）——政治人物、机构、武装组织、「国家+冲突」复合词，直接拦截。
+      2. 上下文共现——「裸国名」(country_*) 与「冲突信号词」(conflict_*) 同时出现才拦截；
+         单独的国名（如旅游视频里的 "iran"）或单独的冲突词（如 "price war"）均放行，
+         matched 记为 "<country>+<conflict>"。
+
     Args:
         zh_text: 中文标题或文案（可为空）。
         en_text: 英文标题或描述（可为空）。
@@ -418,36 +446,127 @@ def check_channel_policy(zh_text: str = "", en_text: str = "") -> CensorResult:
     zh_dense = _strip_spaces(zh_norm)
     en_norm  = _normalize(en_text)
 
+    def _result(matched: str, channel: str) -> CensorResult:
+        return CensorResult(
+            hit=True, level="CP", tag=tag,
+            score=0, action=action,
+            matched=matched, channel=channel,
+        )
+
+    # 中文：去空格后做连续子串匹配（防拆字绕过），返回首个命中的原始词。
+    def _find_zh(words: list[str]) -> Optional[str]:
+        for word in words:
+            if _strip_spaces(_normalize(word)) in zh_dense:
+                return word
+        return None
+
+    # 英文：\b 单词边界匹配（避免子串误杀，如 Patriot 含 riot），返回首个命中的原始词。
+    def _find_en(words: list[str]) -> Optional[str]:
+        for word in words:
+            if re.search(rf"\b{re.escape(_normalize(word))}\b", en_norm):
+                return word
+        return None
+
     # ── 中文通道 ────────────────────────────────────────────────────────────
-    if zh_norm:
-        for word in rule["zh"]:
-            word_norm  = _normalize(word)
-            word_dense = _strip_spaces(word_norm)
-            if word_dense in zh_dense:
-                if _is_exempted(zh_norm, exempts_zh):
-                    logger.debug(f"[ChannelPolicy] zh exemption hit for '{word}'")
-                    continue
-                logger.warning(f"[ChannelPolicy] zh-channel hit: '{word}'")
-                return CensorResult(
-                    hit=True, level="CP", tag=tag,
-                    score=0, action=action,
-                    matched=word, channel="zh",
-                )
+    # 豁免词为空（见 _CHANNEL_POLICY 注释）；命中任意豁免词则整通道跳过。
+    if zh_norm and not _is_exempted(zh_norm, exempts_zh):
+        hard = _find_zh(rule["zh"])
+        if hard:
+            logger.warning(f"[ChannelPolicy] zh-channel hard hit: '{hard}'")
+            return _result(hard, "zh")
+        country = _find_zh(rule["country_zh"])
+        if country:
+            conflict = _find_zh(rule["conflict_zh"])
+            if conflict:
+                logger.warning(f"[ChannelPolicy] zh-channel co-occurrence hit: '{country}'+'{conflict}'")
+                return _result(f"{country}+{conflict}", "zh")
+            logger.debug(f"[ChannelPolicy] zh country '{country}' without conflict word → pass")
 
     # ── 英文通道 ────────────────────────────────────────────────────────────
-    if en_norm:
-        for word in rule["en"]:
-            word_norm = _normalize(word)
-            # [Gemini_3.5_Flash_planning] v1.4.0: 英文单词必须独立匹配（使用 \b 单词边界检测），避免子串误杀
-            if re.search(rf"\b{re.escape(word_norm)}\b", en_norm):
-                if _is_exempted(en_norm, exempts_en):
-                    logger.debug(f"[ChannelPolicy] en exemption hit for '{word}'")
-                    continue
-                logger.warning(f"[ChannelPolicy] en-channel hit: '{word}'")
-                return CensorResult(
-                    hit=True, level="CP", tag=tag,
-                    score=0, action=action,
-                    matched=word, channel="en",
-                )
+    if en_norm and not _is_exempted(en_norm, exempts_en):
+        hard = _find_en(rule["en"])
+        if hard:
+            logger.warning(f"[ChannelPolicy] en-channel hard hit: '{hard}'")
+            return _result(hard, "en")
+        country = _find_en(rule["country_en"])
+        if country:
+            conflict = _find_en(rule["conflict_en"])
+            if conflict:
+                logger.warning(f"[ChannelPolicy] en-channel co-occurrence hit: '{country}'+'{conflict}'")
+                return _result(f"{country}+{conflict}", "en")
+            logger.debug(f"[ChannelPolicy] en country '{country}' without conflict word → pass")
 
     return CensorResult(hit=False)
+
+
+# ── 全量扫描（人工复核辅助）─────────────────────────────────────────────────
+
+def scan_all_matches(zh_text: str = "", en_text: str = "") -> list:
+    """[Claude_Opus_4.8] 不短路扫描全部审查层，返回文本命中的「所有」审查词。
+
+    与 check_text / check_channel_policy 不同：本函数不在首个命中处返回，而是遍历
+    P0/P1/P2 违法词库与 Channel Policy 运营词库的全部词，收集所有命中项，供「复核
+    放行」弹窗的关键词标签云高亮、以及人工决策展示使用（仅展示，不执行任何拦截）。
+
+    注意：本函数不应用 exemptions（豁免）——它的目的是把文本里「所有可能敏感的词」
+    都摊给人看，由人决策，而非自动判定是否拦截。
+
+    Returns:
+        去重后的命中列表（按 P0→P1→P2→CP 顺序）：
+        [{"term": 原始词, "layer": 'P0'/'P1'/'P2'/'CP', "tag": 展示标签, "channel": 'zh'/'en'}]
+    """
+    zh_norm  = _normalize(zh_text)
+    zh_dense = _strip_spaces(zh_norm)
+    en_norm  = _normalize(en_text)
+
+    hits: list = []
+    seen: set = set()  # (term, layer) 去重
+
+    def _add(term: str, layer: str, tag: str, channel: str) -> None:
+        key = (term, layer)
+        if key not in seen:
+            seen.add(key)
+            hits.append({"term": term, "layer": layer, "tag": tag, "channel": channel})
+
+    def _zh_hit(word: str) -> bool:
+        return _strip_spaces(_normalize(word)) in zh_dense
+
+    def _en_hit(word: str) -> bool:
+        return re.search(rf"\b{re.escape(_normalize(word))}\b", en_norm) is not None
+
+    # ── 违法词库 P0/P1/P2（不短路）────────────────────────────────────────────
+    for level in ("P0", "P1", "P2"):
+        rule = _BLOCKLIST[level]
+        tag = rule["tag"]
+        if zh_norm:
+            for word in rule.get("zh", []):
+                if _zh_hit(word):
+                    _add(word, level, tag, "zh")
+        if en_norm:
+            for word in rule.get("en", []):
+                if _en_hit(word):
+                    _add(word, level, tag, "en")
+
+    # ── Channel Policy（硬命中词 + 国名/冲突共现）────────────────────────────────
+    cp = _CHANNEL_POLICY
+    cp_tag = cp["tag"]
+    if zh_norm:
+        for word in cp["zh"]:
+            if _zh_hit(word):
+                _add(word, "CP", cp_tag, "zh")
+        zh_country = [w for w in cp["country_zh"] if _zh_hit(w)]
+        zh_conflict = [w for w in cp["conflict_zh"] if _zh_hit(w)]
+        if zh_country and zh_conflict:  # 仅当国名与冲突词共现时才视为命中
+            for c in zh_country + zh_conflict:
+                _add(c, "CP", cp_tag, "zh")
+    if en_norm:
+        for word in cp["en"]:
+            if _en_hit(word):
+                _add(word, "CP", cp_tag, "en")
+        en_country = [w for w in cp["country_en"] if _en_hit(w)]
+        en_conflict = [w for w in cp["conflict_en"] if _en_hit(w)]
+        if en_country and en_conflict:
+            for c in en_country + en_conflict:
+                _add(c, "CP", cp_tag, "en")
+
+    return hits

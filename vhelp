@@ -9,6 +9,7 @@
 # | 1.1.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking    | 新增 OptionSense 核心服务全景 & 启停命令表  |
 # | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning     | 细化 live_main 启动依赖顺序 & 新增维护锁说明  |
 # | 1.3.0   | 2026-06-04 | Claude_Sonnet_4.6_Thinking_planning | 新增 🩺 开盘前体检 premarket_check 命令  |
+# | 1.4.0   | 2026-06-12 | Claude_Opus_4.8               | 新增 [4] 富途日本代理 (futu-mihomo) 速查板块  |
 # =======================================================================
 
 # 终端颜色代码
@@ -25,7 +26,7 @@ RESET="\033[0m"
 SEP="${DIM}──────────────────────────────────────────────────────────────────────${RESET}"
 
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.3  ${RESET}"
+echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.4  ${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 
 # ================================================================
@@ -165,9 +166,40 @@ echo -e "    ${GREEN}option buy  \"SPY 260507 735.00P\" --dry-run${RESET}   - �
 echo -e "\n${SEP}"
 
 # ================================================================
-# [4] 推荐本地 Shell 配置
+# [4] 富途日本代理 (futu-mihomo) — 独立代理服务
 # ================================================================
-echo -e "\n${BOLD}${YELLOW}[4] 推荐本地 Shell 配置 (~/.zshrc)${RESET}"
+echo -e "\n${BOLD}${YELLOW}[4] 富途日本代理 (futu-mihomo)${RESET}"
+echo -e "${DIM}富途牛牛专用: 行情/交易经日本 hy2 节点出口, 与 Clash Mi 主梯子完全隔离${RESET}"
+echo -e "${DIM}代理端口 :7899 (富途 SOCKS5 指向此) · 服务 com.user.futu-mihomo (launchd 开机自启)${RESET}"
+echo ""
+echo -e "  ${BOLD}📌 平时无需操作${RESET} ${DIM}— 开机自启 + 崩溃自动拉起, 富途打开即用${RESET}"
+echo ""
+echo -e "  ${BOLD}状态检查:${RESET}"
+echo -e "    ${CYAN}launchctl list | grep futu-mihomo${RESET}        ${DIM}# 有输出 = 在跑${RESET}"
+echo -e "    ${CYAN}lsof -nP -iTCP:7899 -sTCP:LISTEN${RESET}          ${DIM}# 看 7899 是否监听${RESET}"
+echo ""
+echo -e "  ${BOLD}🔄 换节点 / 连不上 / 出口不是日本 (一键修复):${RESET}"
+echo -e "    ${GREEN}双击 ~/Desktop/富途日本代理/刷新节点.command${RESET}"
+echo -e "    ${DIM}↳ 从 Clash Mi 最新订阅重抽日本 hy2 → 校验 → 重启 (校验失败自动保留旧配置, 不会断网)${RESET}"
+echo ""
+echo -e "  ${BOLD}服务启停:${RESET}"
+echo -e "    ${CYAN}launchctl kickstart -k gui/501/com.user.futu-mihomo${RESET}                              ${DIM}# 重启${RESET}"
+echo -e "    ${RED}launchctl bootout   gui/501/com.user.futu-mihomo${RESET}                                 ${DIM}# 停止${RESET}"
+echo -e "    ${GREEN}launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.user.futu-mihomo.plist${RESET}      ${DIM}# 启动${RESET}"
+echo ""
+echo -e "  ${BOLD}富途接线 (一次性):${RESET} ${DIM}登出 → 登录界面 → 代理设置 → SOCKS5 / 127.0.0.1 / 7899 / 无账密${RESET}"
+echo -e "  ${BOLD}验证出口:${RESET} ${DIM}下行应显示 Japan${RESET}"
+echo -e "    ${CYAN}python3 -c \"import urllib.request,json;p=urllib.request.ProxyHandler({'http':'http://127.0.0.1:7899','https':'http://127.0.0.1:7899'});print(json.load(urllib.request.build_opener(p).open('http://ip-api.com/json/?fields=country,query',timeout=20)))\"${RESET}"
+echo ""
+echo -e "  ${BOLD}📖 完整维护手册:${RESET} ${GREEN}~/Desktop/富途日本代理/维护手册.md${RESET}"
+echo -e "    ${RED}⚠️  此服务 ≠ FutuOpenD${RESET}${DIM}: FutuOpenD 是行情网关 (:11111), 两者无关, 勿混淆。${RESET}"
+
+echo -e "\n${SEP}"
+
+# ================================================================
+# [5] 推荐本地 Shell 配置
+# ================================================================
+echo -e "\n${BOLD}${YELLOW}[5] 推荐本地 Shell 配置 (~/.zshrc)${RESET}"
 echo -e "${DIM}如需保持上述全局别名，请确认 ~/.zshrc 中包含以下内容：${RESET}"
 echo ""
 echo -e "    ${BLUE}alias backtest${RESET}=${CYAN}\"python /path/to/OptionSense/.../lab/run_backtest_v4.py\"${RESET}"
@@ -179,6 +211,6 @@ echo -e "    ${BLUE}live_engine()${RESET} { /Volumes/EXT2T/MacMini4_SSD/PycharmP
 echo -e "    ${BLUE}option()${RESET}      { python /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/trade_option.py \"\$@\" }"
 
 echo -e "\n${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.3${RESET}"
+echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.4${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 echo ""

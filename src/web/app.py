@@ -25,6 +25,12 @@
 | 3.3.0 | 2026-06-09 | Gemini_2.5_Pro_planning             | 修复 DISCOVERY 源视频被 process_video_now / update_video_priority 误触发自动处理的 Bug；API 层防火墙 |
 | 3.4.0 | 2026-06-11 | Gemini_3.5_Flash_planning           | [高赞+防泄露] 新增 _is_pipeline_manager_running；全量管线去重，防止并发阻塞导致进程泄露 |
 | 3.4.1 | 2026-06-11 | Claude_Opus_4.6_Thinking_planning   | [P0修复] _run()闭包缺少global声明导致刷新按钮一次性失效；fcntl提升为top-level import |
+| 3.5.0 | 2026-06-13 | Claude_Opus_4.8                     | 新增 promote_video 端点 (/api/videos/{id}/promote)：高赞发现视频一键转 MANUAL(100) 并立即触发管线，替代删除+重粘的绕路 |
+| 3.6.0 | 2026-06-13 | Claude_Opus_4.8                     | 新增 censor_keywords + bypass_censor 端点：审查失败视频「🔓 复核放行」——返回命中词/标题+字幕关键词标签云，确认后置 bypass 标志并重新触发管线 |
+| 3.7.0 | 2026-06-13 | Claude_Opus_4.8                     | 新增 download_progress 端点：轮询 output/{yid}.f* 临时文件大小 + info.json.filesize_approx 估算下载进度/速度/ETA（下载器无关，零侵入下载流程） |
+| 3.8.0 | 2026-06-13 | Claude_Opus_4.8                     | 新增 republish_video 端点 (/api/videos/{id}/republish)：已完成视频「🔁 再次发布」——重置 PENDING 重新触发，复用 GC 保留的成片/封面/文案 checkpoint 秒级重发 |
+| 3.9.0 | 2026-06-15 | Claude_Opus_4.8                     | [BUG-1 配套] bypass_censor / censor_keywords / _read_subtitle_text 增加 slice_index 粒度，与管线侧透传对齐，使审查类失败的切片可按 (id,slice) 单独放行 |
+| 3.10.0 | 2026-06-15 | Claude_Opus_4.8                    | [BUG-5] clear_waitlist 改走 DAL get_waitlist_clearable_ids（排除 DISCOVERY），消除业务层裸 SQL，修复一键清空击穿发现防火墙 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -765,8 +771,348 @@ def process_video_now(youtube_id: str):
     fresh = db.get_video_by_youtube_id(youtube_id)
     if fresh:
         _trigger_video_async(fresh)
-        
+
     return {"success": True, "message": f"已在后台启动处理：{video['title']}"}
+
+
+@app.post("/api/videos/{youtube_id}/promote")
+def promote_video(youtube_id: str):
+    """[Claude_Opus_4.8] 将高赞发现(DISCOVERY)视频一键「加入队列」并立即发布。
+
+    把 source 提升为 MANUAL、score=100 后立即触发完整处理管线，
+    替代原先「删除 DISCOVERY 条目 → 手动重新粘贴链接」的三步绕路：
+    保留已抓取的元数据/zh_title，且不经过黑名单墓碑。
+    仅 DISCOVERY 源视频可被提升（其余来源已在正式队列中，应使用 ⚡执行/重试）。
+    """
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+
+    if video.get("source") != "DISCOVERY":
+        return {"success": False,
+                "error": f"仅高赞发现视频可加入队列（当前来源：{video.get('source')}）"}
+
+    # 原子转换：DISCOVERY → MANUAL，score=100，并打手动评分锁
+    if not db.promote_to_manual(youtube_id, score=100):
+        return {"success": False, "error": "转换失败：该视频可能已被处理或来源已变更"}
+
+    # 立即触发管线：抢占 PENDING → DOWNLOADING 后异步执行
+    triggered = False
+    if db.claim_video_for_processing(youtube_id):
+        fresh = db.get_video_by_youtube_id(youtube_id)
+        if fresh:
+            _trigger_video_async(fresh)
+            triggered = True
+
+    return {
+        "success": True,
+        "youtube_id": youtube_id,
+        "triggered": triggered,
+        "message": "已加入队列并立即开始处理" if triggered
+                   else "已加入队列（score=100），等待调度器触发",
+    }
+
+
+# ── 审查复核：关键词标签云 + 一键放行 ───────────────────────────────────────
+# [Claude_Opus_4.8] 供「🔓 复核放行」按钮：把命中词与字幕关键词摊给人看，知情后绕过审查。
+_EN_STOPWORDS = {
+    "the","a","an","and","or","but","of","to","in","on","for","with","at","by","from",
+    "is","are","was","were","be","been","being","this","that","these","those","it","its",
+    "as","if","so","than","then","there","here","not","no","you","your","yours","we","our",
+    "they","he","she","his","her","him","i","me","my","us","them","what","which","who","how",
+    "when","where","why","will","would","can","could","should","may","might","must","do","does",
+    "did","done","have","has","had","about","into","over","under","after","before","up","down",
+    "out","off","just","like","get","got","now","all","one","two","more","most","some","any",
+    "very","also","only","even","because","while","such","each","other","many","much","they're",
+}
+
+
+def _read_subtitle_text(youtube_id: str, slice_index: int = 0, max_chars: int = 40000) -> str:
+    """读取该视频（或指定切片）所有 .ass 双语字幕的纯文本（去 ASS 标签）并拼接。失败时返回空串。"""
+    try:
+        import pysubs2
+    except Exception:
+        return ""
+    # [Claude_Opus_4.8] BUG-1 配套：切片走 {yid}_s{n} 前缀，避免读到父/其它切片字幕
+    prefix = f"{youtube_id}_s{slice_index}" if slice_index and slice_index > 0 else youtube_id
+    parts, total = [], 0
+    for ass in sorted(_OUT_DIR.glob(f"{prefix}*.ass")):
+        try:
+            subs = pysubs2.load(str(ass))
+        except Exception:
+            continue
+        for ev in subs:
+            txt = (getattr(ev, "plaintext", "") or "").strip()
+            if not txt:
+                continue
+            parts.append(txt)
+            total += len(txt)
+            if total >= max_chars:
+                return "\n".join(parts)
+    return "\n".join(parts)
+
+
+def _censor_layer_from_error(error_msg: str):
+    """从 error_msg 反推审查层级与告警严重度。返回 (layer, label, severity)。"""
+    em = error_msg or ""
+    if "Censorship P0" in em:
+        return ("P0", "P0 · 政治安全违禁", "critical")
+    if "Censorship P1" in em:
+        return ("P1", "P1 · 敏感内容挂起", "high")
+    if "Censorship P2" in em:
+        return ("P2", "P2 · 商业合规降权", "medium")
+    if "Channel Policy" in em:
+        return ("CP", "频道策略限制", "low")
+    return (None, "未知审查层", "low")
+
+
+def _build_keyword_cloud(text_zh: str, text_en: str, matched_terms: list, top_k: int = 40) -> list:
+    """jieba(中文 TF-IDF) + 英文词频 → [{word, weight, flagged}]，命中词置顶并高亮。"""
+    cloud: dict = {}
+    # 中文关键词（TF-IDF）
+    try:
+        import jieba.analyse
+        for word, weight in jieba.analyse.extract_tags(text_zh, topK=top_k, withWeight=True):
+            w = (word or "").strip()
+            if len(w) >= 2:
+                cloud[w] = max(cloud.get(w, 0.0), float(weight))
+    except Exception:
+        pass
+    # 英文词频（归一化到与 TF-IDF 量级接近的区间）
+    try:
+        from collections import Counter
+        words = [w for w in re.findall(r"[a-zA-Z][a-zA-Z'\-]{2,}", text_en.lower())
+                 if w not in _EN_STOPWORDS]
+        if words:
+            cnt = Counter(words)
+            mx = max(cnt.values())
+            for w, c in cnt.most_common(top_k):
+                cloud[w] = max(cloud.get(w, 0.0), 0.15 + 0.5 * (c / mx))
+    except Exception:
+        pass
+
+    matched_lower = [str(m.get("term", "")).lower() for m in matched_terms if m.get("term")]
+    # 命中词强制注入，权重置顶，确保即使未被 TF-IDF 选中也出现在云里
+    for m in matched_terms:
+        t = str(m.get("term", "")).strip()
+        if t:
+            cloud[t] = max(cloud.get(t, 0.0), 1.0)
+
+    def _is_flagged(word: str) -> bool:
+        wl = word.lower()
+        return any(mt and (mt in wl or wl in mt) for mt in matched_lower)
+
+    items = [{"word": w, "weight": round(wt, 4), "flagged": _is_flagged(w)} for w, wt in cloud.items()]
+    items.sort(key=lambda x: (not x["flagged"], -x["weight"]))  # 命中词置顶，其余按权重降序
+    return items[:top_k]
+
+
+@app.get("/api/videos/{youtube_id}/censor-keywords")
+def censor_keywords(youtube_id: str, slice_index: int = 0):
+    """[Claude_Opus_4.8] 「复核放行」弹窗数据：审查层级、全部命中词、标题+字幕关键词标签云。"""
+    if not re.match(r'^[A-Za-z0-9_\-]+$', youtube_id):
+        raise HTTPException(status_code=400, detail="Invalid youtube_id")
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+
+    title = video.get("title") or ""
+    zh_title = video.get("zh_title") or ""
+    subtitle = _read_subtitle_text(youtube_id, slice_index=slice_index)
+
+    has_zh = bool(re.search(r"[一-龥]", title))
+    text_zh = "\n".join(filter(None, [zh_title or (title if has_zh else ""), subtitle]))
+    text_en = "\n".join(filter(None, [title, subtitle]))
+
+    from video_processing.censor_engine import scan_all_matches
+    matched = scan_all_matches(zh_text=text_zh, en_text=text_en)
+    layer, layer_label, severity = _censor_layer_from_error(video.get("error_msg"))
+    keywords = _build_keyword_cloud(text_zh, text_en, matched)
+
+    return {
+        "success": True,
+        "youtube_id": youtube_id,
+        "title": title,
+        "zh_title": zh_title,
+        "error_msg": video.get("error_msg") or "",
+        "censor_tag": video.get("censor_tag") or "",
+        "layer": layer,
+        "layer_label": layer_label,
+        "severity": severity,
+        "matched": matched,
+        "keywords": keywords,
+        "has_subtitle": bool(subtitle),
+        "subtitle_chars": len(subtitle),
+    }
+
+
+@app.post("/api/videos/{youtube_id}/bypass-censor")
+def bypass_censor(youtube_id: str, slice_index: int = 0):
+    """[Claude_Opus_4.8] 人工复核放行：对审查类失败视频置 bypass 标志，解黑名单、过线、重置并重新触发。
+
+    仅 FAILED 且失败原因为审查（Censorship P0/P1 或 Channel Policy）的视频可放行。
+    放行后管线 _check_censorship 会跳过全部审查层（用户已知情确认）。
+
+    [Claude_Opus_4.8] BUG-1 配套：bypass 现按 (youtube_id, slice_index) 粒度放行——
+    与管线侧 _check_censorship 透传 slice_index 对齐，避免「放行父视频即静默放行全部切片」。
+    切片任务（slice_index>0）须由调用方传入对应 slice_index 才能释放该切片本身。
+    """
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+
+    em = video.get("error_msg") or ""
+    is_censor_fail = ("Censorship" in em) or ("Channel Policy" in em) or bool(video.get("censor_tag"))
+    if video.get("status") != "FAILED" or not is_censor_fail:
+        return {"success": False,
+                "error": f"仅审查类失败(FAILED)的视频可复核放行（当前状态：{video.get('status')}）"}
+
+    layer, _label, _sev = _censor_layer_from_error(em)
+
+    # 1) 置放行标志（管线据此跳过全部审查层）——按当前 (yid, slice_index) 粒度
+    db.set_bypass_censorship(youtube_id, True, slice_index=slice_index)
+    # 2) 若 P0 曾写入黑名单墓碑，移除以允许继续处理（黑名单按视频 ID 维度，无切片粒度）
+    db.remove_from_blacklist(youtube_id)
+    # 3) 确保分数过调度线（P2 曾降权至 0；其余一般已过线）
+    if (video.get("score") or 0) < 75:
+        db.update_video_score(youtube_id, 100, force=True, slice_index=slice_index)
+    # 4) 重置为 PENDING 并清除错误信息
+    db.update_video_status(youtube_id, "PENDING", error_msg=None, slice_index=slice_index)
+    # 5) 立即抢占并触发管线
+    triggered = False
+    if db.claim_video_for_processing(youtube_id, slice_index=slice_index):
+        fresh = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+        if fresh:
+            _trigger_video_async(fresh)
+            triggered = True
+
+    return {
+        "success": True,
+        "youtube_id": youtube_id,
+        "slice_index": slice_index,
+        "layer": layer,
+        "triggered": triggered,
+        "message": "已复核放行并重新触发管线" if triggered else "已复核放行（score=100），等待调度器触发",
+    }
+
+
+# ── 下载进度估算（磁盘轮询，下载器无关）─────────────────────────────────────
+# [Claude_Opus_4.8] yt-dlp 用 curl 外部下载器，其进度模板/钩子对外部下载不生效；
+# 改为轮询 output/{yid}.f* 临时分片文件大小估算已下字节，info.json.filesize_approx 为总量，
+# 两次轮询的字节差 / 时间差即为速度。完全不侵入 pipeline_manager 的下载流程。
+_DL_SAMPLES: dict = {}   # {yid: (monotonic_ts, downloaded_bytes)} 用于速度估算
+
+
+def _dl_downloaded_bytes(yid: str) -> int:
+    """累加 output/{yid}.f*（视频流/音频流/分片，含 .part）的大小作为已下字节数。"""
+    total = 0
+    for p in _OUT_DIR.glob(f"{yid}.f*"):
+        try:
+            total += p.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def _dl_total_bytes(yid: str):
+    """从 output/{yid}.info.json 读取选定格式的总大小（filesize 优先，回退 filesize_approx）。"""
+    info = _OUT_DIR / f"{yid}.info.json"
+    if not info.exists():
+        return None
+    try:
+        import json
+        d = json.loads(info.read_text(encoding="utf-8"))
+        return d.get("filesize") or d.get("filesize_approx")
+    except Exception:
+        return None
+
+
+@app.get("/api/videos/{youtube_id}/download-progress")
+def download_progress(youtube_id: str):
+    """[Claude_Opus_4.8] 估算 DOWNLOADING 视频的下载进度/速度/ETA。
+
+    返回 active=False 表示当前不在下载态（前端据此停止显示进度条）。
+    percent 为 None 表示拿不到总量（info.json 缺 filesize_*），此时仍返回已下字节与速度。
+    """
+    if not re.match(r'^[A-Za-z0-9_\-]+$', youtube_id):
+        raise HTTPException(status_code=400, detail="Invalid youtube_id")
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+    if video.get("status") != "DOWNLOADING":
+        _DL_SAMPLES.pop(youtube_id, None)
+        return {"success": True, "active": False, "phase": "idle"}
+
+    downloaded = _dl_downloaded_bytes(youtube_id)
+    total = _dl_total_bytes(youtube_id)
+
+    # 速度：与上次采样比较（dt ≥ 0.5s 才更新采样，避免多标签页高频轮询导致抖动）
+    now = time.monotonic()
+    speed_bps = None
+    prev = _DL_SAMPLES.get(youtube_id)
+    if prev:
+        dt = now - prev[0]
+        delta = downloaded - prev[1]
+        if dt >= 0.5:
+            if delta >= 0:
+                speed_bps = delta / dt
+            _DL_SAMPLES[youtube_id] = (now, downloaded)
+    else:
+        _DL_SAMPLES[youtube_id] = (now, downloaded)
+
+    if downloaded <= 0:
+        return {"success": True, "active": True, "phase": "starting",
+                "downloaded_bytes": 0, "total_bytes": total,
+                "percent": None, "speed_bps": int(speed_bps) if speed_bps else None, "eta_sec": None}
+
+    percent = None
+    eta_sec = None
+    if total and total > 0:
+        percent = max(0.0, min(99.0, downloaded / total * 100.0))
+        if speed_bps and speed_bps > 0:
+            eta_sec = max(0, int((total - downloaded) / speed_bps))
+
+    return {
+        "success": True, "active": True, "phase": "downloading",
+        "downloaded_bytes": downloaded, "total_bytes": total,
+        "percent": round(percent, 1) if percent is not None else None,
+        "speed_bps": int(speed_bps) if speed_bps else None,
+        "eta_sec": eta_sec,
+    }
+
+
+@app.post("/api/videos/{youtube_id}/republish")
+def republish_video(youtube_id: str):
+    """[Claude_Opus_4.8] 再次发布：已发布视频在平台被别的接口删掉后，重新发布一次。
+
+    重置为 PENDING 并立即重新触发管线。由于 GC 已保留成片/封面/文案/标题/分类，
+    管线 checkpoint 会自动跳过下载（源 3 天内从 original_video/ 冷存档命中）、渲染、
+    封面、文案，直奔发布——即「秒级重发」。产物缺失（超存档窗口）则自动回退全量重跑。
+    仅 PUBLISHED / COMPLETED 状态可触发。
+    """
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+    if video.get("status") not in ("PUBLISHED", "COMPLETED"):
+        return {"success": False,
+                "error": f"仅已完成/已发布的视频可再次发布（当前状态：{video.get('status')}）"}
+
+    vertical = _OUT_DIR / f"{youtube_id}_vertical.mp4"
+    copy_file = _OUT_DIR / f"{youtube_id}_copy.txt"
+    fast = vertical.exists() and copy_file.exists()
+
+    db.update_video_status(youtube_id, "PENDING", error_msg=None)
+    triggered = False
+    if db.claim_video_for_processing(youtube_id):
+        fresh = db.get_video_by_youtube_id(youtube_id)
+        if fresh:
+            _trigger_video_async(fresh)
+            triggered = True
+
+    msg = "将复用本地成片快速重发" if fast else "本地成片已清理，将重新下载/渲染后再发布"
+    if not triggered:
+        msg += "（等待调度器触发）"
+    return {"success": True, "youtube_id": youtube_id, "fast": fast, "triggered": triggered, "message": msg}
 
 
 @app.post("/api/videos/{youtube_id}/retry")
@@ -927,13 +1273,12 @@ def clear_waitlist():
     """[Gemini_2.5_Pro_planning] 清空待筛选列表（全部 PENDING 且分数 < 75 的视频）。
 
     清空后会写入黑名单墓碑，爬虫不会再次拉取这些视频。
+
+    [Claude_Opus_4.8] BUG-5: 改走 DAL get_waitlist_clearable_ids()，显式排除 DISCOVERY，
+    避免一键清空误删/拉黑高赞发现条目（击穿发现防火墙）。
     """
-    # 获取待筛选列表所有 ID（不分页，全量）
-    with db.get_connection() as conn:
-        cursor = conn.execute(
-            "SELECT youtube_id FROM processed_videos WHERE status = 'PENDING' AND score < 75"
-        )
-        all_ids = [row["youtube_id"] for row in cursor.fetchall()]
+    # 获取待筛选列表所有可清空 ID（DAL 集中谓词，排除 DISCOVERY）
+    all_ids = db.get_waitlist_clearable_ids()
 
     if not all_ids:
         return {"success": True, "deleted_count": 0, "message": "待筛选列表已经是空的"}

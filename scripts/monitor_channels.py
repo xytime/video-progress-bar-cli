@@ -13,12 +13,15 @@
 | 1.6.0   | 2026-06-11 | Claude_Sonnet_4.6              | [静默失败修复] exit 101 且 stdout 为空时输出真实 Cookie/auth 错误，不再静默当成"无新视频" |
 | 1.7.0   | 2026-06-11 | Gemini_3.5_Flash_planning      | [高赞发现优化] 提升搜索数为30，添加 --dateafter 3天，解决历史高赞霸榜且无更新问题 |
 | 1.8.0   | 2026-06-11 | Claude_Opus_4.6_Thinking_planning | [Timeout修复] ytsearch30+dateafter导致大量超时，回调为ytsearch10，timeout 120→18s |
+| 1.9.0   | 2026-06-14 | Claude_Opus_4.8                | [限流缓解] 频道轮询间加 1~2.5s 随机间隔；exit 101 退避后重试一次；日志措辞由"Cookie/auth error"改为"瞬时限流"，避免误判 cookie 失效 |
 """
 import sys
 from pathlib import Path
 import subprocess
 import json
 import datetime
+import time      # [Claude_Opus_4.8] 频道轮询间隔，规避 YouTube 瞬时限流
+import random    # [Claude_Opus_4.8] 间隔抖动 + 退避重试
 
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 from video_processing.db import PipelineDB
@@ -75,15 +78,23 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        # [Claude_Opus_4.8] exit 101 + 空 stdout：多为批量轮询触发的 YouTube 瞬时限流/bot-check
+        # （cookie 通常仍有效，单独重试即成功）。退避后重试一次，避免误判为"无新视频/Cookie失效"。
+        if result.returncode == 101 and not result.stdout.strip():
+            wait = random.uniform(4.0, 8.0)
+            print(f"  -> 瞬时限流(exit 101)，{wait:.1f}s 后退避重试一次…")
+            time.sleep(wait)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+
         # exit 101 = yt-dlp partial errors (e.g. cookie/bot-check); treat as real failure
         # and surface the error so it doesn't look like "no new videos"
         if result.returncode not in (0, 101):
             print(f"Warning: Failed to fetch {channel_id}. Error: {result.stderr.strip()[:200]}")
             return
         if result.returncode == 101 and not result.stdout.strip():
-            # All requests rejected — surface the actual stderr instead of silently skipping
+            # 重试后仍被拒：本轮跳过（下一轮会再试），措辞改为"限流"以免误导为 cookie 失效
             err_line = result.stderr.strip().split('\n')[0][:200] if result.stderr.strip() else "unknown error"
-            print(f"  -> Cookie/auth error (exit 101): {err_line}")
+            print(f"  -> 重试后仍被限流(exit 101)，本轮跳过（下轮再试）: {err_line}")
             return
 
         output = result.stdout.strip()
@@ -255,7 +266,10 @@ def main():
     approved_channels = db.get_approved_channels()
     print(f"\nFound {len(approved_channels)} approved channels.")
     
-    for row in approved_channels:
+    # [Claude_Opus_4.8] 频道间加 1~2.5s 随机间隔，避免连续快速轮询触发 YouTube 限流（exit 101）
+    for idx, row in enumerate(approved_channels):
+        if idx > 0:
+            time.sleep(random.uniform(1.0, 2.5))
         fetch_latest_videos(db, row['channel_id'])
 
 if __name__ == "__main__":

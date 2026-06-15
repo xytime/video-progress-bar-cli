@@ -13,6 +13,10 @@
   | 2026-05-27 | Gemini_2.0_Flash_fast | Add smart clipboard detection, toast queue, backoff and gesture swipe. |
   | 2026-05-27 | Gemini_3.5_Flash_planning | Fix giant linear-gradient overlay cover bug on completed tab by adding missing .trim-timeline-bar styles. |
   | 2026-06-09 | Gemini_3.5_Flash_planning | Add high_likes tab showing the highest like-ratio content published in the last 24 hours (views > 500) for manual trigger. |
+  | 2026-06-13 | Claude_Opus_4.8 | Add "📥 加入队列" button + promoteVideo() on high_likes rows: one-click DISCOVERY→MANUAL promote via /api/videos/{id}/promote. |
+  | 2026-06-13 | Claude_Opus_4.8 | Add "🔓 复核放行" button + bypass-modal on censorship-FAILED rows: warning banner, matched-term chips, weighted keyword tag cloud (title+subtitle), P0 second-confirm; bypass via /api/videos/{id}/bypass-censor. |
+  | 2026-06-13 | Claude_Opus_4.8 | Show live download progress bar + speed/ETA on DOWNLOADING rows (1.5s poll of /api/videos/{id}/download-progress); fix showToast referencing non-existent #toast (now uses #toast-container/.toast-item). |
+  | 2026-06-13 | Claude_Opus_4.8 | Add "🔁 再次发布" button on completed (PUBLISHED/COMPLETED) rows with duplicate-warning confirm; republish via /api/videos/{id}/republish (reuses retained artifacts). |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -574,6 +578,40 @@
       background: rgba(251,191,36,0.08);
     }
     .btn-retry.btn-reset:hover { background: rgba(251,191,36,0.18); border-color: var(--yellow); }
+    /* [Claude_Opus_4.8] 审查复核放行按钮（紫色，区别于重试/重置） */
+    .btn-bypass {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 10px; font-weight: 600; font-family: inherit; white-space: nowrap;
+      padding: 3px 8px; border-radius: 4px; cursor: pointer; margin-right: 4px;
+      border: 1px solid rgba(167,139,250,0.45);
+      color: #a78bfa; background: rgba(167,139,250,0.10);
+      transition: all 0.2s;
+    }
+    .btn-bypass:hover { background: rgba(167,139,250,0.22); border-color: #a78bfa; }
+    /* [Claude_Opus_4.8] 再次发布按钮（青绿色，区别于重试/绕过） */
+    .btn-republish {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 10px; font-weight: 600; font-family: inherit; white-space: nowrap;
+      padding: 3px 8px; border-radius: 4px; cursor: pointer; margin-right: 4px;
+      border: 1px solid rgba(34,211,238,0.45);
+      color: #22d3ee; background: rgba(34,211,238,0.10);
+      transition: all 0.2s;
+    }
+    .btn-republish:hover { background: rgba(34,211,238,0.22); border-color: #22d3ee; }
+    /* [Claude_Opus_4.8] 下载进度条（DOWNLOADING 行内） */
+    .dl-progress { margin-top: 6px; min-width: 140px; }
+    .dl-bar { height: 5px; background: rgba(255,255,255,0.10); border-radius: 3px; overflow: hidden; }
+    .dl-bar-fill {
+      height: 100%; width: 0%; border-radius: 3px;
+      background: linear-gradient(90deg, #34d399, #22d3ee);
+      transition: width 0.6s ease;
+    }
+    .dl-bar-fill.indeterminate {
+      width: 40% !important; background: linear-gradient(90deg, rgba(52,211,153,0.3), #22d3ee, rgba(52,211,153,0.3));
+      animation: dl-slide 1.3s ease-in-out infinite;
+    }
+    @keyframes dl-slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
+    .dl-meta { font-size: 10px; color: var(--text3); margin-top: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .btn-hard-reset {
       display: inline-flex; align-items: center; gap: 3px;
       font-size: 10px; font-weight: 600; font-family: inherit;
@@ -1521,6 +1559,40 @@
     </div>
   </div>
 
+  <!-- [Claude_Opus_4.8] Censorship Bypass Review Modal -->
+  <div id="bypass-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
+    <div style="background:var(--bg2); padding:22px; border-radius:12px; width:calc(100% - 32px); max-width:560px; max-height:86vh; overflow-y:auto; box-sizing:border-box; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+      <h3 style="margin-top:0; color:var(--text1); font-size:16px;">🔓 复核放行 — 绕过内容审查</h3>
+      <p style="color:var(--text3); font-size:12px; line-height:1.5; margin:-4px 0 14px;">
+        审查命中的内容默认拒绝发布。请先核对下方命中词与字幕关键词，确认无问题后再放行——放行后本视频将跳过<strong>全部</strong>审查层继续发布。
+      </p>
+
+      <!-- 层级警示横幅 -->
+      <div id="bypass-banner" style="border-radius:8px; padding:10px 12px; margin-bottom:14px; font-size:13px; line-height:1.5;"></div>
+
+      <!-- 命中词 -->
+      <div style="font-size:12px; color:var(--text3); margin-bottom:6px;">⛔ 触发审查的命中词</div>
+      <div id="bypass-matched" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;"></div>
+
+      <!-- 关键词标签云 -->
+      <div style="font-size:12px; color:var(--text3); margin-bottom:6px;">
+        ☁️ 内容关键词标签云 <span id="bypass-cloud-src" style="color:var(--text3);"></span>
+      </div>
+      <div id="bypass-cloud" style="display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; padding:14px; background:var(--bg3); border-radius:8px; margin-bottom:16px; min-height:52px; line-height:1.3;"></div>
+
+      <!-- P0 政治安全违禁：二次强确认 -->
+      <label id="bypass-p0-confirm" style="display:none; align-items:flex-start; gap:8px; font-size:13px; color:var(--red); margin-bottom:16px; cursor:pointer; background:rgba(248,113,113,0.08); padding:10px; border-radius:8px;">
+        <input type="checkbox" id="bypass-p0-checkbox" style="width:16px; height:16px; margin-top:2px; cursor:pointer; flex-shrink:0;">
+        <span>我已知晓此为<strong>政治安全违禁(P0)</strong>内容，发布到视频号可能导致<strong>账号封禁</strong>，我自行承担风险并坚持发布。</span>
+      </label>
+
+      <div style="display:flex; justify-content:flex-end; gap:10px;">
+        <button onclick="closeBypassModal()" style="padding:8px 16px; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text2); cursor:pointer;">取消</button>
+        <button id="btn-confirm-bypass" onclick="confirmBypass()" style="padding:8px 16px; border-radius:6px; background:var(--orange); border:none; color:#fff; font-weight:600; cursor:pointer;">确认放行并发布</button>
+      </div>
+    </div>
+  </div>
+
   <!-- WeChat Login Modal (Gemini_2.0_Flash_fast) -->
   <div id="wechat-login-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
     <div style="background:var(--bg2); padding:24px; border-radius:12px; width:calc(100% - 32px); max-width:400px; box-sizing:border-box; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5); text-align:center;">
@@ -1946,8 +2018,16 @@
           : `<button class="btn-mark-done" onclick="markProcessed('${v.youtube_id}', true)" title="标记为已处理">✓ 已处理</button>`;
         const ytLinkBtn = `<a href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
              class="btn-score" style="text-decoration:none; padding:3px 8px; font-size:10px;" title="在 YouTube 中查看">▶ 查看</a>`;
+        // [Claude_Opus_4.8] 高赞发现专属：一键转 MANUAL 并立即下载/发布
+        const promoteBtn = `<button class="btn-retry btn-reset" onclick="promoteVideo('${v.youtube_id}')" title="转为手动加急任务并立即下载、生成字幕/封面并发布到视频号">📥 加入队列</button>`;
+        // [Claude_Opus_4.8] 审查类失败：提供「🔓 复核放行」一键绕过（带警示弹窗 + 关键词标签云）
+        const _emForBypass = v.error_msg || '';
+        const isCensorFail = isRetryable && (/Censorship|Channel Policy/.test(_emForBypass) || !!v.censor_tag);
+        const bypassBtn = isCensorFail
+          ? `<button class="btn-bypass" onclick="openBypassModal('${v.youtube_id}')" title="人工复核字幕内容后，绕过审查并继续发布">🔓 复核放行</button>`
+          : '';
         const retryBtn = isDiscovery
-          ? markDoneBtn + ytLinkBtn + deleteBtn
+          ? promoteBtn + markDoneBtn + ytLinkBtn + deleteBtn
           : v.status === 'LOGIN_REQUIRED'
           ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
              <button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="扫码后点此重试上传">🔄 重试</button>
@@ -1955,13 +2035,15 @@
           : v.status === 'PENDING'
           ? `<button class="btn-retry btn-reset" onclick="processVideoNow('${v.youtube_id}')" title="立即启动视频管线">⚡ 执行</button>` + deleteBtn
           : isRetryable
-          ? `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传">🔄 重试</button>
+          ? bypassBtn + `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传">🔄 重试</button>
              <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物重新下载">🗑 重置</button>` + deleteBtn
           : isStuck
             ? `<button class="btn-stop" onclick="stopVideo('${v.youtube_id}')" title="强行停止任务" style="margin-right: 4px;">🛑 停止</button>
                <button class="btn-retry btn-reset" onclick="retryVideo('${v.youtube_id}')" title="强制重置(断点)">⚡ 强置</button>
                <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="从头开始">🗑 重置</button>` + deleteBtn
-            : deleteBtn;
+            : (v.status === 'PUBLISHED' || v.status === 'COMPLETED')
+              ? `<button class="btn-republish" onclick="republishVideo('${v.youtube_id}')" title="该视频在平台被删后，重新发布一次（复用本地成片，可能产生重复）">🔁 再次发布</button>` + deleteBtn
+              : deleteBtn;
 
         // 错误折叠
         const errMsg   = v.error_msg || '';
@@ -2183,7 +2265,11 @@
             </td>
             <td class="vt-cell ${viewsCls}">${viewsStr}</td>
             <td class="lr-cell ${lrCls}">${lrStr}</td>
-            <td class="status-cell">${statusBadge(v.status)} <div>${retryBtn}</div></td>
+            <td class="status-cell">${statusBadge(v.status)}${v.status === 'DOWNLOADING' ? `
+              <div class="dl-progress" data-dlprog="${v.youtube_id}">
+                <div class="dl-bar"><div class="dl-bar-fill indeterminate"></div></div>
+                <div class="dl-meta">连接中…</div>
+              </div>` : ''} <div>${retryBtn}</div></td>
             <td class="score-cell">${scoreControls}</td>
             <td class="time-cell"><span class="video-time">${relativeTime(v.updated_at)}</span></td>
           </tr>
@@ -2532,6 +2618,12 @@
           let scoreControls = `<span class="video-score">${score}</span> 分`;
 
           const deleteBtn = `<button class="btn-hard-reset" onclick="deleteSlice('${s.youtube_id}', ${s.slice_index})" title="彻底删除分集" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
+          // [Claude_Opus_4.8] BUG-1 配套：分集审查类失败也提供「🔓 复核放行」（按 slice_index 粒度放行）
+          const _emSlice = s.error_msg || '';
+          const sliceIsCensorFail = isRetryable && (/Censorship|Channel Policy/.test(_emSlice) || !!s.censor_tag);
+          const sliceBypassBtn = sliceIsCensorFail
+            ? `<button class="btn-bypass" onclick="openBypassModal('${s.youtube_id}', ${s.slice_index})" title="人工复核后绕过审查并继续发布该分集">🔓 复核放行</button>`
+            : '';
           const retryBtn = s.status === 'LOGIN_REQUIRED'
             ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
                <button class="btn-retry" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="扫码后点此重试上传">🔄 重试</button>
@@ -2539,7 +2631,7 @@
             : s.status === 'PENDING'
             ? `<button class="btn-retry btn-reset" onclick="processSliceNow('${s.youtube_id}', ${s.slice_index})" title="立即执行分集">⚡ 执行</button>` + deleteBtn
             : isRetryable
-            ? `<button class="btn-retry" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="重试分集">🔄 重试</button>` + deleteBtn
+            ? sliceBypassBtn + `<button class="btn-retry" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="重试分集">🔄 重试</button>` + deleteBtn
             : isStuck
               ? `<button class="btn-stop" onclick="stopVideo('${s.youtube_id}', ${s.slice_index})" title="强行停止分集任务" style="margin-right: 4px;">🛑 停止</button>
                  <button class="btn-retry btn-reset" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="强制重置">⚡ 强置</button>` + deleteBtn
@@ -2640,6 +2732,171 @@
         fetchStats();
       } else {
         showToast('❌ 启动失败: ' + (res.error || '未知错误'), 'error');
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+      }
+    } catch (e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+    }
+  }
+
+  // [Claude_Opus_4.8] 高赞发现视频一键加入队列：DISCOVERY → MANUAL(100) 并立即触发完整管线
+  async function promoteVideo(youtubeId) {
+    navigator.vibrate(15);
+    if (!confirm('📥 将该高赞视频转为手动加急任务并立即开始处理？\n（下载 → 文案 → 双语字幕 → 封面 → 发布到视频号）')) return;
+    const btn = event?.target;
+    const oldText = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span>';
+    }
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/promote`, { method: 'POST' });
+      const res = await r.json();
+      if (res.success) {
+        showToast('✅ ' + (res.message || '已加入队列'));
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ 加入队列失败: ' + (res.error || '未知错误'), 'error');
+        if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+      }
+    } catch (e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+      if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
+    }
+  }
+
+  // [Claude_Opus_4.8] 审查复核放行：弹窗展示命中词 + 关键词标签云，确认后绕过审查重新发布
+  let _bypassYid = null;
+  let _bypassSlice = 0;
+  let _bypassSeverity = 'low';
+  async function openBypassModal(youtubeId, sliceIndex = 0) {
+    navigator.vibrate(15);
+    _bypassYid = youtubeId;
+    _bypassSlice = sliceIndex || 0;
+    const modal = document.getElementById('bypass-modal');
+    const banner = document.getElementById('bypass-banner');
+    const matchedEl = document.getElementById('bypass-matched');
+    const cloudEl = document.getElementById('bypass-cloud');
+    const srcEl = document.getElementById('bypass-cloud-src');
+    const p0Wrap = document.getElementById('bypass-p0-confirm');
+    const p0Chk = document.getElementById('bypass-p0-checkbox');
+    const confirmBtn = document.getElementById('btn-confirm-bypass');
+
+    // 重置弹窗状态
+    banner.textContent = '正在分析内容…';
+    banner.style.background = 'rgba(255,255,255,0.05)';
+    banner.style.color = 'var(--text2)';
+    matchedEl.innerHTML = '';
+    cloudEl.innerHTML = '<span style="color:var(--text3); font-size:12px;">加载中…</span>';
+    srcEl.textContent = '';
+    p0Wrap.style.display = 'none';
+    p0Chk.checked = false;
+    confirmBtn.disabled = false;
+    modal.style.display = 'flex';
+
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/censor-keywords?slice_index=${_bypassSlice}`);
+      const d = await r.json();
+      if (!d.success) { banner.textContent = '❌ ' + (d.error || '加载失败'); return; }
+
+      _bypassSeverity = d.severity || 'low';
+      const sevColor = { critical:'var(--red)', high:'#f59e0b', medium:'#f59e0b', low:'#eab308' }[_bypassSeverity] || 'var(--text2)';
+      const sevBg = { critical:'rgba(248,113,113,0.12)', high:'rgba(245,158,11,0.12)', medium:'rgba(245,158,11,0.10)', low:'rgba(234,179,8,0.10)' }[_bypassSeverity] || 'rgba(255,255,255,0.05)';
+      banner.style.background = sevBg;
+      banner.style.color = sevColor;
+      banner.innerHTML = `<strong>审查层级：${escapeHtml(d.layer_label || '未知')}</strong><br>`
+        + `<span style="color:var(--text2);">原因：${escapeHtml(d.error_msg || '—')}</span>`;
+
+      // 命中词
+      if (d.matched && d.matched.length) {
+        matchedEl.innerHTML = d.matched.map(m =>
+          `<span style="background:rgba(248,113,113,0.18); color:var(--red); border:1px solid rgba(248,113,113,0.3); border-radius:6px; padding:2px 8px; font-size:12px; font-weight:600;">${escapeHtml(m.term)} <span style="opacity:0.6; font-weight:400;">${escapeHtml(m.layer)}</span></span>`
+        ).join('');
+      } else {
+        matchedEl.innerHTML = '<span style="color:var(--text3); font-size:12px;">（标题/字幕中未再扫描到命中词，可能来自历史评分或已修改）</span>';
+      }
+
+      // 关键词标签云：按权重映射字号/不透明度，命中词红色加粗下划线
+      srcEl.textContent = d.has_subtitle ? `（标题 + 字幕约 ${d.subtitle_chars} 字）` : '（仅标题/文案，字幕未生成）';
+      const kws = d.keywords || [];
+      if (kws.length) {
+        const weights = kws.map(k => k.weight);
+        const wMin = Math.min(...weights), wMax = Math.max(...weights);
+        cloudEl.innerHTML = kws.map(k => {
+          const t = wMax > wMin ? (k.weight - wMin) / (wMax - wMin) : 0.5;
+          const size = (12 + t * 16).toFixed(1);
+          const op = (0.55 + t * 0.45).toFixed(2);
+          const color = k.flagged ? 'var(--red)' : 'var(--text1)';
+          const fw = k.flagged ? 700 : 500;
+          const deco = k.flagged ? 'border-bottom:2px solid var(--red);' : '';
+          const tip = k.flagged ? '命中审查词' : ('权重 ' + k.weight);
+          return `<span title="${tip}" style="font-size:${size}px; opacity:${op}; color:${color}; font-weight:${fw}; ${deco}">${escapeHtml(k.word)}</span>`;
+        }).join('');
+      } else {
+        cloudEl.innerHTML = '<span style="color:var(--text3); font-size:12px;">无可提取的关键词</span>';
+      }
+
+      // P0 政治安全违禁：强制二次确认
+      if (_bypassSeverity === 'critical') {
+        p0Wrap.style.display = 'flex';
+        confirmBtn.disabled = true;
+        p0Chk.onchange = () => { confirmBtn.disabled = !p0Chk.checked; };
+      }
+    } catch (e) {
+      banner.textContent = '❌ 网络错误: ' + e.message;
+    }
+  }
+
+  async function confirmBypass() {
+    if (!_bypassYid) return;
+    if (_bypassSeverity === 'critical' && !document.getElementById('bypass-p0-checkbox').checked) {
+      showToast('请先勾选 P0 风险确认项', 'error'); return;
+    }
+    const btn = document.getElementById('btn-confirm-bypass');
+    const oldText = btn.innerHTML;
+    btn.disabled = true; btn.innerHTML = '<span class="inline-spinner"></span>';
+    try {
+      const r = await fetch(`/api/videos/${_bypassYid}/bypass-censor?slice_index=${_bypassSlice}`, { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        showToast('✅ ' + (d.message || '已复核放行'));
+        closeBypassModal();
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ 放行失败: ' + (d.error || '未知错误'), 'error');
+        btn.disabled = false; btn.innerHTML = oldText;
+      }
+    } catch (e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+      btn.disabled = false; btn.innerHTML = oldText;
+    }
+  }
+
+  function closeBypassModal() {
+    document.getElementById('bypass-modal').style.display = 'none';
+    _bypassYid = null;
+    _bypassSlice = 0;
+  }
+
+  // [Claude_Opus_4.8] 再次发布：已发布视频在平台被删后重新发布一次（带重复警示二次确认）
+  async function republishVideo(youtubeId) {
+    navigator.vibrate(15);
+    if (!confirm('🔁 确定要「再次发布」该视频吗？\n\n⚠️ 此操作仅用于视频在平台被删除后需要补发的情况。\n如果原视频仍在平台上，再次发布会产生【重复/多份】内容！\n\n请确认无重复风险后再继续。')) return;
+    const btn = event?.target;
+    const oldText = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="inline-spinner"></span>'; }
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/republish`, { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        showToast('✅ ' + (d.message || '已触发再次发布'));
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ 再次发布失败: ' + (d.error || '未知错误'), 'error');
         if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
       }
     } catch (e) {
@@ -2873,15 +3130,66 @@
     }
   }
 
-  let _toastTimer = null;
-  function showToast(msg) {
-    const el = document.getElementById('toast');
-    el.textContent = msg;
-    el.classList.add('show');
-    if (_toastTimer) clearTimeout(_toastTimer);
-    _toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+  // [Claude_Opus_4.8] 修复：原实现引用不存在的 #toast 元素导致 showToast 必抛错（页面只有 #toast-container + .toast-item）。
+  // 改为向 #toast-container 追加 .toast-item，支持多条堆叠与 error 标红；自动淡出移除。
+  function showToast(msg, type) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const item = document.createElement('div');
+    item.className = 'toast-item';
+    item.textContent = msg;
+    if (type === 'error') item.style.borderColor = 'var(--red)';
+    container.appendChild(item);
+    requestAnimationFrame(() => item.classList.add('show'));
+    setTimeout(() => {
+      item.classList.remove('show');
+      setTimeout(() => { if (item.parentNode) item.parentNode.removeChild(item); }, 320);
+    }, 3500);
   }
 
+
+  // [Claude_Opus_4.8] 下载进度轮询：对所有 DOWNLOADING 行（[data-dlprog]）查询进度并更新进度条
+  function _fmtBytes(n) {
+    if (n == null || n < 0) return '—';
+    if (n < 1024) return n + ' B';
+    const u = ['KB','MB','GB']; let i = -1, v = n;
+    do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
+    return v.toFixed(v < 10 ? 1 : 0) + ' ' + u[i];
+  }
+  function _fmtDur(s) {
+    if (s == null) return '—';
+    if (s < 60) return s + 's';
+    const m = Math.floor(s / 60), ss = s % 60;
+    if (m < 60) return m + 'm' + (ss ? ss + 's' : '');
+    return Math.floor(m / 60) + 'h' + (m % 60) + 'm';
+  }
+  async function updateDownloadProgress() {
+    const els = document.querySelectorAll('[data-dlprog]');
+    if (!els.length) return;
+    for (const el of els) {
+      const yid = el.getAttribute('data-dlprog');
+      const fill = el.querySelector('.dl-bar-fill');
+      const meta = el.querySelector('.dl-meta');
+      if (!fill || !meta) continue;
+      try {
+        const r = await fetch(`/api/videos/${yid}/download-progress`);
+        const d = await r.json();
+        if (!d.success || !d.active) { meta.textContent = d.phase === 'idle' ? '即将完成…' : '准备中…'; continue; }
+        const spd = d.speed_bps ? _fmtBytes(d.speed_bps) + '/s' : '—';
+        if (d.percent != null) {
+          fill.classList.remove('indeterminate');
+          fill.style.width = d.percent + '%';
+          const eta = d.eta_sec != null ? ` · 剩 ${_fmtDur(d.eta_sec)}` : '';
+          meta.textContent = `${d.percent}% · ${_fmtBytes(d.downloaded_bytes)}/${_fmtBytes(d.total_bytes)} · ${spd}${eta}`;
+        } else {
+          fill.classList.add('indeterminate');
+          meta.textContent = d.downloaded_bytes > 0 ? `${_fmtBytes(d.downloaded_bytes)} · ${spd}`
+            : (d.phase === 'starting' ? '连接中…' : '下载中…');
+        }
+      } catch (e) { /* 瞬时网络错误，忽略，下一轮再试 */ }
+    }
+  }
+  setInterval(updateDownloadProgress, 1500);
 
   async function fetchChannels() {
     try {
