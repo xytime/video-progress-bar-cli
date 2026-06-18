@@ -10,6 +10,7 @@
 # | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning     | 细化 live_main 启动依赖顺序 & 新增维护锁说明  |
 # | 1.3.0   | 2026-06-04 | Claude_Sonnet_4.6_Thinking_planning | 新增 🩺 开盘前体检 premarket_check 命令  |
 # | 1.4.0   | 2026-06-12 | Claude_Opus_4.8               | 新增 [4] 富途日本代理 (futu-mihomo) 速查板块  |
+# | 1.5.0   | 2026-06-17 | Claude_Opus_4.8               | 新增 [5] 共识中枢 Hub 启停板块 (launchd 永活)  |
 # =======================================================================
 
 # 终端颜色代码
@@ -26,7 +27,7 @@ RESET="\033[0m"
 SEP="${DIM}──────────────────────────────────────────────────────────────────────${RESET}"
 
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.4  ${RESET}"
+echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.5  ${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 
 # ================================================================
@@ -36,8 +37,8 @@ echo -e "\n${BOLD}${YELLOW}[1] 视频号加工与发布系统 (Video-precessing)
 echo -e "${DIM}项目路径: /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing${RESET}"
 echo -e "${DIM}主入口控制脚本: ${GREEN}./vpanel${RESET} ${DIM}(别名 ${GREEN}vp${RESET}${DIM})${RESET}"
 echo ""
-echo -e "  ${BOLD}网页端仪表盘 (UI, 端口 :8765):${RESET}"
-echo -e "    ${CYAN}./vpanel ui start${RESET}    - 后台启动控制中心仪表盘 (${BLUE}http://localhost:8765${RESET})"
+echo -e "  ${BOLD}网页端仪表盘 (UI, 端口 :9100):${RESET}"
+echo -e "    ${CYAN}./vpanel ui start${RESET}    - 后台启动控制中心仪表盘 (${BLUE}http://localhost:9100${RESET})"
 echo -e "    ${CYAN}./vpanel ui stop${RESET}     - 停止控制中心仪表盘"
 echo -e "    ${CYAN}./vpanel ui status${RESET}   - 检查仪表盘运行状态"
 echo -e "    ${CYAN}./vpanel ui logs${RESET}     - 实时追踪仪表盘服务器日志"
@@ -197,9 +198,35 @@ echo -e "    ${RED}⚠️  此服务 ≠ FutuOpenD${RESET}${DIM}: FutuOpenD 是�
 echo -e "\n${SEP}"
 
 # ================================================================
-# [5] 推荐本地 Shell 配置
+# [5] 共识中枢 Hub (Consensus Hub) — 常驻看板
 # ================================================================
-echo -e "\n${BOLD}${YELLOW}[5] 推荐本地 Shell 配置 (~/.zshrc)${RESET}"
+echo -e "\n${BOLD}${YELLOW}[5] 共识中枢 Hub (Consensus Hub)${RESET}"
+echo -e "${DIM}常驻看板: 汇总各子项目共识 / 进度 / 待拍板 · launchd 永活 (开机自启 + 崩溃自愈)${RESET}"
+echo -e "${DIM}端口 :9848 (http://127.0.0.1:9848/) · 服务 com.optionsense.hub${RESET}"
+echo ""
+echo -e "  ${BOLD}📌 平时无需操作${RESET} ${DIM}— launchd KeepAlive 托管, 关终端 / 退出 Claude / 重启电脑都不掉${RESET}"
+echo ""
+echo -e "  ${BOLD}内容更新 (在 Claude 里):${RESET} ${GREEN}/hub${RESET} ${DIM}起服务+刷新${RESET}  ${DIM}·${RESET}  ${GREEN}/hub <子项目> <进度>${RESET} ${DIM}更新状态${RESET}"
+echo ""
+echo -e "  ${BOLD}服务启停 (封装脚本 hub_ctl.sh, 推荐):${RESET}"
+echo -e "    ${CYAN}hub status${RESET}    - launchd 状态 + HTTP 探活"
+echo -e "    ${GREEN}hub start${RESET}     - 启动"
+echo -e "    ${RED}hub stop${RESET}      - 停止 (卸载; KeepAlive 下唯一停得住的方式)"
+echo -e "    ${CYAN}hub restart${RESET}   - 重启"
+echo -e "    ${DIM}↳ 需在 ~/.zshrc 加 ${RESET}${BLUE}hub()${RESET} ${DIM}函数 (见 [6]); 没加时直接跑:${RESET}"
+echo -e "      ${DIM}bash /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/hub/hub_ctl.sh status${RESET}"
+echo ""
+echo -e "  ${BOLD}底层 launchctl (不用封装时):${RESET}"
+echo -e "    ${RED}launchctl bootout   gui/501/com.optionsense.hub${RESET}                                ${DIM}# 停${RESET}"
+echo -e "    ${GREEN}launchctl bootstrap gui/501 ~/Library/LaunchAgents/com.optionsense.hub.plist${RESET}     ${DIM}# 起${RESET}"
+echo -e "    ${CYAN}launchctl kickstart -k gui/501/com.optionsense.hub${RESET}                             ${DIM}# 重启${RESET}"
+
+echo -e "\n${SEP}"
+
+# ================================================================
+# [6] 推荐本地 Shell 配置
+# ================================================================
+echo -e "\n${BOLD}${YELLOW}[6] 推荐本地 Shell 配置 (~/.zshrc)${RESET}"
 echo -e "${DIM}如需保持上述全局别名，请确认 ~/.zshrc 中包含以下内容：${RESET}"
 echo ""
 echo -e "    ${BLUE}alias backtest${RESET}=${CYAN}\"python /path/to/OptionSense/.../lab/run_backtest_v4.py\"${RESET}"
@@ -209,8 +236,9 @@ echo -e "    ${BLUE}alias vhelp${RESET}=${CYAN}\"/path/to/Video-precessing/vhelp
 echo -e "    ${BLUE}alias vp${RESET}=${CYAN}\"/path/to/Video-precessing/vpanel\"${RESET}"
 echo -e "    ${BLUE}live_engine()${RESET} { /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/live_engine_ctl.sh \"\$@\" }"
 echo -e "    ${BLUE}option()${RESET}      { python /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/trade_option.py \"\$@\" }"
+echo -e "    ${BLUE}hub()${RESET}         { bash /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/hub/hub_ctl.sh \"\$@\" }"
 
 echo -e "\n${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.4${RESET}"
+echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.5${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 echo ""

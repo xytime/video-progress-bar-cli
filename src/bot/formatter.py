@@ -14,6 +14,8 @@
 from __future__ import annotations
 from typing import List
 
+from config.settings import settings
+
 
 # 状态 → Emoji 映射
 _STATUS_EMOJI: dict[str, str] = {
@@ -97,7 +99,7 @@ def fmt_api_unavailable() -> str:
     """FastAPI 断线降级回复"""
     return (
         "⚠️ *控制中心暂时不可用*\n"
-        "无法连接到本地 API 服务（localhost:8765）。\n"
+        f"无法连接到本地 API 服务（localhost:{settings.dashboard_port}）。\n"
         "_请确认 `vp ui start` 已启动，然后重试。_"
     )
 

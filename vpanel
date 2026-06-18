@@ -45,7 +45,7 @@ show_usage() {
     echo "用法: ./vpanel [命令组] [操作]"
     echo ""
     echo "命令组: ui (仪表盘管理)"
-    echo "  ./vpanel ui start             后台启动控制中心仪表盘 (http://localhost:8765)"
+    echo "  ./vpanel ui start             后台启动控制中心仪表盘 (http://localhost:9100)"
     echo "  ./vpanel ui stop              停止控制中心仪表盘"
     echo "  ./vpanel ui status            查看控制中心运行状态"
     echo "  ./vpanel ui logs              实时查看控制中心日志（最近 50 行）"
@@ -76,7 +76,7 @@ ui_start() {
     if [ -f "$PID_FILE" ]; then
         PID=$(cat "$PID_FILE")
         if ps -p "$PID" > /dev/null 2>&1; then
-            echo "ℹ️ 控制中心已经在运行中 (PID: $PID, http://localhost:8765)"
+            echo "ℹ️ 控制中心已经在运行中 (PID: $PID, http://localhost:9100)"
             return 0
         fi
     fi
@@ -90,7 +90,7 @@ ui_start() {
     sleep 1.5
     if ps -p "$NEW_PID" > /dev/null 2>&1; then
         echo "✅ 启动成功！"
-        echo "🌐 仪表盘地址: http://localhost:8765"
+        echo "🌐 仪表盘地址: http://localhost:9100"
         echo "📄 日志文件: output/dashboard.log"
         echo "PID: $NEW_PID"
     else
@@ -126,7 +126,7 @@ ui_status() {
         PID=$(cat "$PID_FILE")
         if ps -p "$PID" > /dev/null 2>&1; then
             echo "🟢 运行中 (PID: $PID)"
-            echo "🌐 仪表盘地址: http://localhost:8765"
+            echo "🌐 仪表盘地址: http://localhost:9100"
             echo "🕒 运行时间: $(ps -p "$PID" -o etime= | xargs)"
             return 0
         fi
@@ -146,7 +146,7 @@ ui_logs() {
 
 ui_open() {
     if [ -f "$PID_FILE" ] && ps -p "$(cat "$PID_FILE")" > /dev/null 2>&1; then
-        open "http://localhost:8765"
+        open "http://localhost:9100"
     else
         echo "⚠️ 仪表盘未在运行，请先执行 './vpanel ui start'"
     fi

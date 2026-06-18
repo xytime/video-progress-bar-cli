@@ -21,6 +21,8 @@ from typing import Optional
 
 import httpx
 
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(10.0)  # [Claude_Sonnet_4.6_Thinking_planning] 断路器：10s 强制熔断
@@ -34,8 +36,9 @@ class PipelineAPIClient:
         result = await client.add_video(url)
     """
 
-    def __init__(self, base_url: str = "http://localhost:8765"):
-        self._base_url = base_url.rstrip("/")
+    def __init__(self, base_url: Optional[str] = None):
+        # 端口单一真相源 settings.dashboard_port（见 PORTS.md，9100-9199 区间）
+        self._base_url = (base_url or f"http://localhost:{settings.dashboard_port}").rstrip("/")
 
     # ── 私有辅助 ────────────────────────────────────────────────────────
 

@@ -16,6 +16,7 @@ based on incoming Telegram messages and commands.
 | 1.4.0   | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 迁移至 google.genai SDK v2.6.0，废弃已停止维护的 google.generativeai；Client()代替 configure()，client.chats.create() 代替 GenerativeModel.start_chat()，标注 # [Claude_Sonnet_4.6_Thinking_planning] |
 | 1.5.0   | 2026-06-14 | Claude_Opus_4.8                     | 新增 send_finished_video 工具：自然语言「把成片发我」即把成片发回 Telegram，>50MB 经 video_delivery 自动压缩 |
 | 1.6.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-3] 删除分叉的私有 _find_downloaded_video，改委托 utils.file_utils.find_downloaded_video（白名单+stem+冷归档回退），杜绝 .ass/无音轨分片被误喂 ffmpeg |
+| 1.7.0   | 2026-06-18 | Claude_Opus_4.8                     | [崩溃根治] download_video 下载格式优先 H.264(avc) 而非 AV1(av01)，与 pipeline_manager v3.16.0 对齐：规避 imageio-ffmpeg 内置 AOM 解码器解码 AV1 时间歇性 SIGSEGV |
 """
 import os
 import sys
@@ -291,7 +292,15 @@ class PipelineAgent:
             url = f"https://youtu.be/{youtube_id}"
             dl_cmd = [
                 self.venv_ytdlp,
-                "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                # [Claude_Opus_4.8] v1.7.0: 优先 H.264(avc)，规避 AV1(av01)。与 pipeline_manager
+                # v3.16.0 对齐——imageio-ffmpeg 内置 AOM AV1 解码器解码 YouTube AV1 流时会间歇性
+                # SIGSEGV，导致后续 ffmpeg 渲染崩溃。YouTube ≤720p 始终提供 avc1，无 avc 时回退原选择器。
+                "-f", (
+                    "bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/"
+                    "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/"
+                    "best[ext=mp4]/best"
+                ),
+                "-S", "vcodec:h264",
                 "--cookies-from-browser", "safari",
                 "--write-description",
                 "--remote-components", "ejs:github",

@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # FFmpeg 可执行文件路径（留空则使用系统 PATH 中的默认值）
     ffmpeg_path: Optional[str] = None
 
+    # 仪表盘端口（见 PORTS.md：9100-9199 为本项目专属区间，避开 :8080 等其他项目）
+    # 可用环境变量 DASHBOARD_PORT 覆盖
+    dashboard_port: int = 9100
+
+    # [Claude_Opus_4.8] 美股盘中重负载保护：开启后，自动调度器在美股盘中
+    # （ET 09:15–16:15，按 America/New_York 自动处理夏/冬令时）暂停一切重型
+    # 管线处理（下载/Whisper/渲染），避免抢占与实盘交易行情管线共用的整机 CPU。
+    # 本机为共享主机，已确认「盘中过载 → 富途行情积压 → 实盘用过期价格」的失效模式。
+    enable_market_hours_guard: bool = True
+
     # Telegram 通知 Bot 配置
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
@@ -198,6 +208,24 @@ class Settings(BaseSettings):
         """确保运行时必要的目录存在"""
         self.default_output_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
+
+    def is_us_market_guard_window(self) -> bool:
+        """[Claude_Opus_4.8] 是否处于美股盘中重负载保护窗口（单一真相源）。
+
+        共享主机同时运行实盘交易行情管线，盘中 CPU 被抢会导致行情积压 → 实盘用过期价格
+        （已确认失效模式）。窗口 = ET 09:15–16:15 工作日，用 America/New_York 时区自动适配
+        夏/冬令时；非交易时段（含周末）返回 False。可经 enable_market_hours_guard 关闭。
+        供 web 调度器与 pipeline_manager 共用，避免重复实现。
+        """
+        if not self.enable_market_hours_guard:
+            return False
+        from zoneinfo import ZoneInfo
+        from datetime import datetime
+        et = datetime.now(ZoneInfo("America/New_York"))
+        if et.weekday() >= 5:  # 周六/日：美股休市
+            return False
+        minutes = et.hour * 60 + et.minute
+        return (9 * 60 + 15) <= minutes < (16 * 60 + 15)
 
     def get_yt_cookie_args(self) -> list[str]:
         """返回 yt-dlp 的 Cookie 参数列表。

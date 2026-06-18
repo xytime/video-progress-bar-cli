@@ -45,6 +45,9 @@
 | 3.13.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-3] _find_downloaded_video 提取为 utils.file_utils.find_downloaded_video 单一真相源（bot 与管线共用），消除 bot 侧分叉实现 |
 | 3.14.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-1] _check_censorship 新增并透传 slice_index 到全部 db.* 调用与三处调用点，修复切片审查污染父行/卡死/漏发 |
 | 3.15.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2] 上传器返回 3(UNCONFIRMED) 时不置 PUBLISHED、不 GC，转 FAILED 并告警人工核验，杜绝「假成功」误删源 |
+| 3.16.0  | 2026-06-18 | Claude_Opus_4.8                     | [崩溃根治] 下载格式优先 H.264(avc) 而非 AV1(av01)：imageio-ffmpeg 内置 AOM AV1 解码器解码 YouTube AV1 流时间歇性 SIGSEGV，导致 _burn_subtitles 渲染崩溃；新增 vcodec^=avc 选择器分支 + -S vcodec:h264 排序，无 avc 时回退原行为 |
+| 3.17.0  | 2026-06-18 | Claude_Opus_4.8                     | [假成片防护] 渲染 checkpoint 增加 ffprobe 完整性校验：渲染中途崩溃会留下 >1MB 但缺 moov 的截断 _vertical.mp4，旧校验仅看体积 → 误判有效 → 跳过重渲并发布损坏视频；现用 get_video_duration_ffprobe 验证可解析 |
+| 3.18.0  | 2026-06-18 | Claude_Opus_4.8                     | [盘中重负载保护] process_high_score_videos 在美股盘中（settings.is_us_market_guard_window：ET 09:15–16:15 工作日）暂停批处理与逐视频处理，剩余任务保持 PENDING 待盘后；共享主机避免抢占实盘行情管线 CPU |
 """
 
 
@@ -203,6 +206,13 @@ class PipelineManager:
         total_processed = 0
         
         while True:
+            # [Claude_Opus_4.8] 美股盘中重负载保护：盘中（ET 09:15–16:15 工作日）不开新批，
+            # 剩余高分任务保持 PENDING，盘后（北京 04:15 起）由调度器自动恢复。共享主机避免
+            # 抢占实盘交易行情管线 CPU（已确认「盘中过载→行情积压→实盘用过期价格」失效模式）。
+            if settings.is_us_market_guard_window():
+                logger.info("[MarketGuard] 美股盘中，暂停高分视频批处理（重负载保护），剩余任务保持 PENDING。")
+                break
+
             # 拉取多一点以备过滤父视频就绪与发布顺序锁 [Gemini_3.5_Flash_planning]
             targets = self.db.get_high_score_pending_videos(min_score=75, limit=limit * 3)
             if not targets:
@@ -244,6 +254,11 @@ class PipelineManager:
                 f"🚀 <b>Pipeline Batch Started</b>\nProcessing {len(claimed_targets)} videos in this batch."
             )
             for video in claimed_targets:
+                # [Claude_Opus_4.8] 窗口若在批处理中途开盘，立即停手，剩余 claimed 任务由
+                # 调度器 purge_stale_tasks 复位回 PENDING，盘后重跑（重负载保护）。
+                if settings.is_us_market_guard_window():
+                    logger.info("[MarketGuard] 进入美股盘中窗口，停止本批剩余视频处理（重负载保护）。")
+                    break
                 self._process_single_video(video)
                 total_processed += 1
 
@@ -667,7 +682,17 @@ class PipelineManager:
                         # 引入 --downloader curl 将大文件下载转交给 curl 处理，其代理兼容性和 TLS 握手比 python ssl 模块更稳定。
                         dl_cmd = [
                             self._VENV_YTDLP,
-                            "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+                            # [Claude_Opus_4.8] v3.16.0: 优先 H.264(avc) 视频流，规避 AV1(av01)。
+                            # imageio-ffmpeg 内置的 AOM AV1 解码器解码 YouTube AV1 流时会间歇性
+                            # SIGSEGV，导致后续 _burn_subtitles(ffmpeg) 渲染崩溃。YouTube ≤720p
+                            # 始终提供 avc1，故首选 vcodec^=avc；仅当无 avc 可用时回退原选择器
+                            # （可能落到 av01）。-S vcodec:h264 进一步保证回退分支也优先 H.264。
+                            "-f", (
+                                "bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/"
+                                "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/"
+                                "best[ext=mp4]/best"
+                            ),
+                            "-S", "vcodec:h264",
                             *settings.get_yt_cookie_args(),
                             "--write-description",
                             "--write-info-json",  # 新增：写 info.json 便于 chapters 提取
@@ -879,7 +904,21 @@ class PipelineManager:
                 _cache_valid = False
                 if vertical.exists() and vertical.stat().st_size > 1_000_000:
                     _cache_valid = True  # 默认视为有效
-                    if _ass_file.exists():
+                    # [Claude_Opus_4.8] v3.17.0: _vertical.mp4 完整性校验（不止看体积）。
+                    # 历史根因：_burn_subtitles 渲染中途崩溃（如 AV1 解码 SIGSEGV）会留下
+                    # 体积 >1MB 但缺失 moov atom 的截断文件，旧校验仅看体积 → 误判为有效缓存 →
+                    # 跳过重渲并把损坏视频直接送入发布。此处用 ffprobe 读取 duration 验证文件可解析，
+                    # 不可解析（截断/损坏）则判缓存失效，强制重渲。
+                    try:
+                        from .utils.video_metadata import get_video_duration_ffprobe
+                        if get_video_duration_ffprobe(vertical) <= 0:
+                            raise ValueError("duration<=0")
+                    except Exception as _e:
+                        logger.warning(
+                            f"[CacheInvalid] {vertical.name} 无法解析（疑似截断/损坏: {_e}），强制重渲 {prefix}"
+                        )
+                        _cache_valid = False
+                    if _cache_valid and _ass_file.exists():
                         try:
                             _ass_content = _ass_file.read_text(encoding="utf-8", errors="ignore")
                             # Georgia 字体标签是双语字幕的必要标志（单语版本不含此标签）

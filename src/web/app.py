@@ -31,6 +31,7 @@
 | 3.8.0 | 2026-06-13 | Claude_Opus_4.8                     | 新增 republish_video 端点 (/api/videos/{id}/republish)：已完成视频「🔁 再次发布」——重置 PENDING 重新触发，复用 GC 保留的成片/封面/文案 checkpoint 秒级重发 |
 | 3.9.0 | 2026-06-15 | Claude_Opus_4.8                     | [BUG-1 配套] bypass_censor / censor_keywords / _read_subtitle_text 增加 slice_index 粒度，与管线侧透传对齐，使审查类失败的切片可按 (id,slice) 单独放行 |
 | 3.10.0 | 2026-06-15 | Claude_Opus_4.8                    | [BUG-5] clear_waitlist 改走 DAL get_waitlist_clearable_ids（排除 DISCOVERY），消除业务层裸 SQL，修复一键清空击穿发现防火墙 |
+| 3.11.0 | 2026-06-18 | Claude_Opus_4.8                    | [盘中重负载保护] 新增 _in_us_market_window()；_auto_pipeline_loop 与 _queue_runner_loop 在美股盘中(ET 09:15–16:15,工作日,自动夏/冬令时)暂停重型管线，避免抢占共享主机实盘行情管线 CPU；开关 settings.enable_market_hours_guard；仪表盘端口默认 8765→9100 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -102,15 +103,25 @@ def _translate_title_task(youtube_id: str, english_title: str):
             import logging
             logging.getLogger(__name__).error(f"[Scheduler] Failed to auto-trigger video {youtube_id}: {trigger_err}")
 
+def _in_us_market_window() -> bool:
+    """[Claude_Opus_4.8] 美股盘中重负载保护窗口判定，委托 settings 单一真相源
+    （ET 09:15–16:15 工作日，自动夏/冬令时；与 pipeline_manager 共用同一实现）。"""
+    return settings.is_us_market_guard_window()
+
+
 def _auto_pipeline_loop():
     """后台循环任务：启动后延迟10秒执行首次管线，之后每4小时执行一次"""
     import time
     time.sleep(10)
     while True:
         try:
-            # 复用已有的全量管线触发逻辑
-            run_full_pipeline()
-            print("[Scheduler] Auto-triggered full pipeline run.")
+            # [Claude_Opus_4.8] 美股盘中保护：盘中跳过重型全量管线，避免抢占实盘行情管线 CPU
+            if _in_us_market_window():
+                print("[Scheduler] 美股盘中，跳过全量管线（重负载保护）。")
+            else:
+                # 复用已有的全量管线触发逻辑
+                run_full_pipeline()
+                print("[Scheduler] Auto-triggered full pipeline run.")
         except Exception as e:
             print(f"[Scheduler] Auto pipeline error: {e}")
         time.sleep(14400)  # 4 小时 = 14400 秒
@@ -158,6 +169,12 @@ def _queue_runner_loop():
                 logging.getLogger(__name__).info(
                     f"[Scheduler] Purged {purged} stale task(s) back to PENDING"
                 )
+
+            # [Claude_Opus_4.8] 美股盘中保护：盘中不启动重型队列管线（下载/Whisper/渲染），
+            # 避免抢占与实盘交易行情管线共用的整机 CPU。盘后（北京 04:15 起）自动恢复。
+            if _in_us_market_window():
+                time.sleep(15)
+                continue
 
             # 1. 检查是否有 >=75 的 PENDING 视频
             pending_videos = db.get_high_score_pending_videos(min_score=75, limit=1)
@@ -1896,7 +1913,8 @@ def high_likes_refresh_status():
 if __name__ == "__main__":
     import uvicorn
     # 端口选择规则：见 PORTS.md
-    # 8765 是本项目专属端口，避免与 OptionSense(8000) 等其他项目冲突
-    port = int(os.environ.get("DASHBOARD_PORT", 8765))
+    # 9100-9199 为本项目专属区间，避开 :8080（其他项目）等。端口为单一真相源 settings.dashboard_port，
+    # 可经环境变量 DASHBOARD_PORT 覆盖（见 src/config/settings.py）。
+    port = settings.dashboard_port
     print(f"\n\U0001f680 Video Pipeline Control Center → http://localhost:{port}\n")
     uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
