@@ -18,6 +18,8 @@
 | 1.7.0   | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 _handle_respec helper；各命令 already_exists 分支升级：有 trim/TTS 参数时自动调用 respec 实现“以最后一次为准” |
 | 1.8.0   | 2026-06-03 | Claude_Sonnet_4.6_Thinking_planning | 新增 _normalize_time() 预处理，parse_trim_params 支持 M'S 分秒格式（如 1'10 → 1:10） |
 | 1.9.0   | 2026-06-14 | Claude_Opus_4.8                     | 新增 /getvideo 命令：把成片发回 Telegram，>50MB 经 video_delivery 自动压缩（转码放进 executor 不阻塞轮询） |
+| 1.10.0  | 2026-06-20 | Claude_Opus_4.8                     | 修「对话无响应」：builder 开 concurrent_updates(True) 消除慢 Agent 对后续消息的串行阻塞；放宽 pool_timeout=20s 等超时，避免网络抖动时 Pool timeout 发不出回复 |
+| 1.11.0  | 2026-06-20 | Claude_Opus_4.8                     | 新增确定性命令 /process <youtube_id>：经 api_client.process_video → web /api/videos/{id}/process 立即处理单条视频（忽略分数阈值），不依赖 AI 编排，作为「发布某条」的可靠兜底 |
 """
 from __future__ import annotations
 
@@ -385,6 +387,36 @@ async def cmd_tts(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
 
 
+async def cmd_process(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    # [Claude_Opus_4.8] 确定性单条发布：不经 AI 编排，直接走 web /api/videos/{id}/process
+    # （claim 原子抢占 + DISCOVERY 守卫 + 稳健后台 _process_single_video，忽略分数阈值）。
+    if not _check_admin(update):
+        return
+    assert _api is not None
+    args = ctx.args  # type: ignore
+    if not args:
+        await update.message.reply_text(  # type: ignore
+            fmt.fmt_error("用法：/process <youtube_id>\n例：/process NSn6uQoPO5U"),
+            parse_mode="Markdown",
+        )
+        return
+    youtube_id = args[0].strip()
+    result = await _api.process_video(youtube_id)
+    if result is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+        return
+    if result.get("success"):
+        await update.message.reply_text(  # type: ignore
+            f"🚀 *已开始处理* `{youtube_id}`\n_{result.get('message', '后台执行中，进度见 /queue。')}_",
+            parse_mode="Markdown",
+        )
+    else:
+        await update.message.reply_text(  # type: ignore
+            fmt.fmt_error(result.get("error", "未知错误")),
+            parse_mode="Markdown",
+        )
+
+
 async def cmd_run(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _check_admin(update):
         return
@@ -749,7 +781,20 @@ def main() -> None:
 
     logger.info(f"🤖 Bot 正在启动，管理员白名单：{_admin_ids}")
 
-    app = Application.builder().token(token).build()
+    # [Claude_Opus_4.8] concurrent_updates(True)：默认串行处理 update，一条 14s 的
+    # AI Agent 消息会把后续所有消息/命令(含忙提示)压住十几秒 → 表现为「无响应」。
+    # 开并发后每条 update 独立成 task，慢 agent 不再 head-of-line 阻塞其它消息。
+    # pool_timeout 默认仅 1s，网络/代理一抖就抛 Pool timeout 导致回复发不出，放宽到 20s。
+    app = (
+        Application.builder()
+        .token(token)
+        .concurrent_updates(True)
+        .pool_timeout(20)
+        .read_timeout(30)
+        .write_timeout(60)
+        .connect_timeout(15)
+        .build()
+    )
 
     # 注册命令（直接由程序接管，不消耗 API 限额）
     app.add_handler(CommandHandler("start", cmd_help))
@@ -760,6 +805,7 @@ def main() -> None:
     app.add_handler(CommandHandler("getvideo", cmd_getvideo))  # [Claude_Opus_4.8] 发回成片（超 50MB 自动压缩）
     app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CommandHandler("retry", cmd_retry))
+    app.add_handler(CommandHandler("process", cmd_process))  # [Claude_Opus_4.8] 确定性单条发布：/process <youtube_id>
     app.add_handler(CommandHandler("run", cmd_run))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("whole", cmd_whole))

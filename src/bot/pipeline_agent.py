@@ -17,6 +17,7 @@ based on incoming Telegram messages and commands.
 | 1.5.0   | 2026-06-14 | Claude_Opus_4.8                     | 新增 send_finished_video 工具：自然语言「把成片发我」即把成片发回 Telegram，>50MB 经 video_delivery 自动压缩 |
 | 1.6.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-3] 删除分叉的私有 _find_downloaded_video，改委托 utils.file_utils.find_downloaded_video（白名单+stem+冷归档回退），杜绝 .ass/无音轨分片被误喂 ffmpeg |
 | 1.7.0   | 2026-06-18 | Claude_Opus_4.8                     | [崩溃根治] download_video 下载格式优先 H.264(avc) 而非 AV1(av01)，与 pipeline_manager v3.16.0 对齐：规避 imageio-ffmpeg 内置 AOM 解码器解码 AV1 时间歇性 SIGSEGV |
+| 1.8.0   | 2026-06-20 | Claude_Opus_4.8                     | [修「发布3」误路由] 新增 process_video_now 工具(复用 web /api/videos/{id}/process，单条确定性发布、忽略分数阈值)；system prompt 教会序数指代(「发布第N个」→列表第N条 youtube_id→process_video_now)，并在 queue(≥75) 为空时 fallback 列 waitlist 候选请用户选 |
 """
 import os
 import sys
@@ -86,6 +87,7 @@ class PipelineAgent:
             self.list_videos,
             self.get_video_details,
             self.add_video_to_queue,
+            self.process_video_now,
             self.download_video,
             self.transcribe_and_caption_video,
             self.generate_wechat_copy,
@@ -107,7 +109,10 @@ class PipelineAgent:
             "1. When the user sends '/run' (or indicates running the whole pipeline), you must:\n"
             "   - Call send_telegram_message to announce you are starting.\n"
             "   - Call list_videos(tab='queue', size=3) to fetch high-score pending videos.\n"
-            "   - If empty, report that there are no videos in the queue.\n"
+            "   - If empty, DO NOT just say there are none. Also call list_videos(tab='waitlist', size=5) "
+            "to fetch the best below-threshold candidates, present them as a NUMBERED list (with title + youtube_id + score), "
+            "and ask the user which one(s) to publish. (The auto-publish bar is score>=75; the waitlist holds good-but-sub-75 videos "
+            "that the user can manually approve.)\n"
             "   - Otherwise, process up to 3 videos sequentially. For each video:\n"
             "     * Update status to 'DOWNLOADING' via update_video_status, then run download_video. "
             "If download fails, update status to 'FAILED', record the error, send a Telegram alert, and proceed to the next video.\n"
@@ -123,10 +128,17 @@ class PipelineAgent:
             "       - If it fails with other errors, update status to 'FAILED', record the error, send a Telegram alert, and proceed.\n"
             "       - If it succeeds, update status to 'PUBLISHED', send a success message to Telegram.\n"
             "   - At the end of the run, compile a summary of what succeeded, failed, or was skipped, and present it to the user.\n\n"
-            "2. When the user sends '/process <youtube_id>', follow the same sequence as above but ONLY for the single specified video ID. "
-            "If its status is not PENDING, claim it anyway or reset it to PENDING first, and proceed.\n\n"
+            "2. When the user names a SPECIFIC video to publish/process — by youtube_id, OR by its position in the list you just "
+            "showed (e.g. '发布3', '处理第2个', 'publish number 1', 'do the FreeBuff one') — resolve it to that video's youtube_id "
+            "(use the numbered list from YOUR most recent message; the Nth item maps to the Nth youtube_id) and call "
+            "process_video_now(youtube_id). That ONE tool runs the full robust pipeline in the background (ignores the score "
+            "threshold, checkpoint-resumable). Report back what it returned: on success tell the user it has started, on error relay "
+            "the reason. Do NOT manually chain download/transcribe/copy/cover/upload for single-video requests — process_video_now "
+            "handles the whole thing. If you are unsure which video the ordinal refers to, ask the user to confirm the youtube_id "
+            "rather than guessing.\n\n"
             "3. When the user sends a YouTube URL, call add_video_to_queue(url). If the video is added successfully, reply to the user "
-            "confirming it and show the parsed video details. Inform them they can run /process <youtube_id> to process it immediately.\n\n"
+            "confirming it and show the parsed video details. Inform them they can ask you to publish it (or run /process <youtube_id>) "
+            "to process it immediately.\n\n"
             "4. When the user sends '/queue', '/status', or asks 'what is in the queue?', call list_videos(tab='queue') and "
             "list_videos(tab='active'), then present the queue status to the user.\n\n"
             "5. When the user sends '/stats', call get_system_stats and format a nice statistical report.\n\n"
@@ -270,6 +282,25 @@ class PipelineAgent:
             return json.dumps({"ok": True, "data": res})
         except Exception as e:
             return json.dumps({"ok": False, "error": f"Exception calling add_video API: {e}"})
+
+    def process_video_now(self, youtube_id: str) -> str:
+        """立即对指定视频跑完整发布流程（下载→字幕→文案→封面→发布），忽略分数阈值，后台执行、断点续跑。
+        当用户指名要发布/处理某一条具体视频时调用（例如「发布第3个」「处理 NSn6uQoPO5U」「把 FreeBuff 那条发了」）。
+
+        Args:
+            youtube_id: The 11-character YouTube video ID.
+        """
+        # [Claude_Opus_4.8] 复用 web 端 /api/videos/{id}/process（已含 claim 原子抢占 + DISCOVERY 守卫 +
+        # 稳健后台触发 _process_single_video），不再依赖 LLM 逐步编排 download→…→upload，单条发布确定可控。
+        coro = self.api_client.process_video(youtube_id)
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+            res = future.result(timeout=20)
+            if res is None:
+                return json.dumps({"ok": False, "error": "FastAPI 控制中心未响应（web 服务是否在运行？）"})
+            return json.dumps({"ok": res.get("success", False), "data": res})
+        except Exception as e:
+            return json.dumps({"ok": False, "error": f"Exception calling process API: {e}"})
 
     def download_video(self, youtube_id: str) -> str:
         """Downloads a YouTube video using yt-dlp.

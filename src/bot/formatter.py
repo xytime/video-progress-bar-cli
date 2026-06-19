@@ -10,6 +10,7 @@
 | 1.2.0 | 2026-05-27 | Gemini_3.5_Flash_High_planning      | 升级 fmt_status_report 支持展现父任务与子切片细分统计 |
 | 1.3.0 | 2026-05-27 | Gemini_3.5_Flash_planning           | 在 fmt_help 中增加 /whole 与 /slice 的说明 |
 | 1.4.0 | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 在 fmt_help 中新增 /tts 命令说明 |
+| 1.5.0 | 2026-06-20 | Claude_Opus_4.8                     | 在 fmt_help 中新增 /process <ID> 命令说明（确定性单条发布，忽略分数阈值） |
 """
 from __future__ import annotations
 from typing import List
@@ -119,6 +120,7 @@ def fmt_help() -> str:
         "📥 `/getvideo <ID> [slice_index]` — 把成片发回给你（超 50MB 自动压缩）\n"
         "🗑 `/delete <ID> [slice_index]` — 删除指定视频或分集任务\n"
         "♻️ `/retry <ID> [slice_index]` — 重试失败的视频或分集任务\n"
+        "🚀 `/process <ID>` — 立即处理指定视频（忽略分数阈值，单条发布）\n"
         "🏃 `/run` — 立即触发一次全量管线\n"
         "📊 `/stats` — 查看系统统计数据\n"
         "🎙 `/tts <url> [开始] [结束]` — 以 CosyVoice TTS 配音模式加入队列\n"
