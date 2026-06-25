@@ -479,7 +479,7 @@ def add_channel(req: AddChannelRequest):
                 "--playlist-items", "1",    # 只取第一条，快速返回
                 "--print", "%(channel_id)s|%(channel)s",
                 "--no-warnings",
-                "--cookies-from-browser", "safari",
+                *settings.get_yt_cookie_args(),
                 url,
             ],
             capture_output=True, text=True, timeout=30
@@ -602,7 +602,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
                 "--print", "%(id)s|||%(title)s|||%(channel_id)s|||%(channel)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s",
                 "--no-playlist",
                 "--no-warnings",
-                "--cookies-from-browser", "safari",
+                *settings.get_yt_cookie_args(),
                 url,
             ],
             capture_output=True, text=True, timeout=30
@@ -845,28 +845,13 @@ _EN_STOPWORDS = {
 
 
 def _read_subtitle_text(youtube_id: str, slice_index: int = 0, max_chars: int = 40000) -> str:
-    """读取该视频（或指定切片）所有 .ass 双语字幕的纯文本（去 ASS 标签）并拼接。失败时返回空串。"""
-    try:
-        import pysubs2
-    except Exception:
-        return ""
-    # [Claude_Opus_4.8] BUG-1 配套：切片走 {yid}_s{n} 前缀，避免读到父/其它切片字幕
-    prefix = f"{youtube_id}_s{slice_index}" if slice_index and slice_index > 0 else youtube_id
-    parts, total = [], 0
-    for ass in sorted(_OUT_DIR.glob(f"{prefix}*.ass")):
-        try:
-            subs = pysubs2.load(str(ass))
-        except Exception:
-            continue
-        for ev in subs:
-            txt = (getattr(ev, "plaintext", "") or "").strip()
-            if not txt:
-                continue
-            parts.append(txt)
-            total += len(txt)
-            if total >= max_chars:
-                return "\n".join(parts)
-    return "\n".join(parts)
+    """读取该视频（或指定切片）所有 .ass 双语字幕的纯文本（去 ASS 标签）并拼接。失败时返回空串。
+
+    [Claude_Opus_4.8] 实现已下沉至 utils.file_utils.read_subtitle_text（单一真相源，
+    与管线字幕审查共用）；此处保留薄封装以兼容 Web 复核 UI 既有调用点。
+    """
+    from video_processing.utils.file_utils import read_subtitle_text
+    return read_subtitle_text(_OUT_DIR, youtube_id, slice_index=slice_index, max_chars=max_chars)
 
 
 def _censor_layer_from_error(error_msg: str):

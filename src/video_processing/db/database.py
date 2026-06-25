@@ -27,6 +27,9 @@
 | 3.6.0   | 2026-06-13 | Claude_Opus_4.8                     | 新增 bypass_censorship 列 + set_bypass_censorship/is_censorship_bypassed：供「🔓 复核放行」人工绕过审查后管线跳过全部审查层 |
 | 3.7.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2/#11] purge_stale_tasks 额外排除 PUBLISHING，防止发布中崩溃被自动重置 PENDING 导致重复公开发布 |
 | 3.8.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-5] 新增 get_waitlist_clearable_ids 并在 waitlist 展示/统计谓词排除 DISCOVERY，防一键清空误删/拉黑高赞发现条目 |
+| 3.9.0   | 2026-06-25 | Claude_Opus_4.8                     | [黑名单根治] get_high_score_pending_videos 在 SQL 层硬过滤 BLACKLISTED 频道与 blacklisted_videos 墓碑：此为所有自动发布路径取候选的唯一咽喉，杜绝已拉黑频道存量 PENDING 被任何路径（调度器/管线/重算）顶发 |
+| 3.10.0  | 2026-06-25 | Claude_Opus_4.8                     | 新增 get_rescore_candidates（含同款黑名单过滤、UTC 对齐窗口）：收敛 rescore_refresh 手抄过滤 SQL 为 DAL 单一真相源，消除黑名单语义漂移与 rule-2 裸 SQL 违规 |
+| 3.11.0  | 2026-06-25 | Claude_Opus_4.8                     | 新增 is_manually_scored(yid,slice) 查询：供审查执行层判定手动锁定视频命中 P2 时挂起人工复核而非 force 清零回弹 |
 """
 
 import sqlite3
@@ -273,6 +276,13 @@ class PipelineDB:
     def add_channel(self, channel_id: str, channel_name: str, status: str = 'APPROVED', reason: str = '') -> bool:
         with self.get_connection() as conn:
             try:
+                # [blacklist tombstone 2026-06-24] 已拉黑频道拒绝被发现/手动重加覆盖(防自动复活)
+                row = conn.execute(
+                    "SELECT status FROM recommended_channels WHERE channel_id = ?", (channel_id,)
+                ).fetchone()
+                if row and row[0] == 'BLACKLISTED' and status != 'BLACKLISTED':
+                    self._logger.info(f"[Blacklist] Blocked re-add of blacklisted channel: {channel_id}")
+                    return False
                 conn.execute(
                     "INSERT OR REPLACE INTO recommended_channels (channel_id, channel_name, reason, status) VALUES (?, ?, ?, ?)",
                     (channel_id, channel_name, reason, status)
@@ -491,6 +501,21 @@ class PipelineDB:
                     return
             conn.commit()
 
+    def is_manually_scored(self, youtube_id: str, slice_index: int = 0) -> bool:
+        """查询某切片是否已被手动评分锁定（is_manually_scored=1）。
+
+        供审查执行层判断：手动锁定的视频命中 P2 时改为挂起人工复核，而非静默清零回弹
+        （force 清零会让用户的调分凭空消失、反复弹回待筛选且无提示）。
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT IFNULL(is_manually_scored, 0) AS locked FROM processed_videos "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index)
+            )
+            row = cursor.fetchone()
+            return bool(row and row["locked"])
+
     def promote_to_manual(self, youtube_id: str, score: int = 100) -> bool:
         """[Claude_Opus_4.8] 将高赞发现(DISCOVERY)条目「提升」为手动加急任务。
 
@@ -542,10 +567,15 @@ class PipelineDB:
         """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。
         [Gemini_3.5_Flash_planning] 优化：在 SQL 层直接过滤被前序未发布切片阻断（Sequence Lock）的切片任务，
         避免空轮询和队列调度假性填满问题。
+        [Claude_Opus_4.8 黑名单根治] 这是所有自动发布路径（dashboard 调度器 / pipeline_manager /
+        rescore 重算）取「可发候选」的唯一咽喉。在此 SQL 层硬过滤 BLACKLISTED 频道与 blacklisted_videos
+        墓碑视频，确保任何路径都绝不发布被拉黑频道的视频（含已在库的存量 PENDING）。
         """
         query = """
             SELECT * FROM processed_videos pv
             WHERE pv.status = 'PENDING' AND pv.score >= ?
+              AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
+              AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
               AND (
                 pv.slice_index = 0
                 OR NOT EXISTS (
@@ -560,6 +590,29 @@ class PipelineDB:
         """
         with self.get_connection() as conn:
             cursor = conn.execute(query, (min_score, limit))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_rescore_candidates(self, days: int = 8, limit: int = 250) -> List[Dict[str, Any]]:
+        """[Claude_Opus_4.8] 重算候选：近 N 天、AUTO、未手动锁分、<75 分的 PENDING 视频。
+
+        与 get_high_score_pending_videos 共用同一套黑名单过滤（BLACKLISTED 频道 + blacklisted_videos
+        墓碑），把黑名单语义收敛为 DAL 单一真相源——杜绝 rescore 脚本手抄过滤 SQL 随 DAL 漂移、
+        重新顶发已拉黑频道（2026-06-25 事故根因）。
+        时间比较用 SQLite datetime('now')（UTC）对齐 created_at（CURRENT_TIMESTAMP 亦为 UTC），
+        避免宿主本地时区（UTC+8）与库内 UTC 不一致造成的窗口边界漂移。
+        """
+        query = """
+            SELECT youtube_id, slice_index, view_count, like_count, score
+            FROM processed_videos
+            WHERE status = 'PENDING' AND source = 'AUTO' AND IFNULL(is_manually_scored, 0) = 0
+              AND score < 75
+              AND created_at >= datetime('now', ?)
+              AND channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
+              AND youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+            ORDER BY view_count DESC LIMIT ?
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(query, (f"-{int(days)} days", limit))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_status_counts(self) -> Dict[str, int]:

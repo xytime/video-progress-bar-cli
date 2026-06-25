@@ -18,6 +18,9 @@
 | 2.8.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 aliyun_mt_access_key_id/secret，支持阿里云机器翻译通用版作为 Gemini 限流时的二级 fallback |
 | 2.9.0 | 2026-06-09 | Claude_Sonnet_4.6_Thinking_planning | 新增 Clash Mi API 配置及 clash_switch_node() 上下文管理器：下载前自动切到日本节点，完成后还原。Clash Mi Network Extension 架构下唯一可行的进程级优化方案 |
 | 3.0.0 | 2026-06-11 | Claude_Opus_4.8                     | 新增 youtube_cookies_file：Cookie 文件路径，优先级高于 --cookies-from-browser safari；避免 YouTube 频繁轮转 Cookie |
+| 3.1.0 | 2026-06-22 | Claude_Opus_4.8                     | 新增 enable_subtitle_censorship（症结8）、enable_external_censor_rules（🅰️词库热加载）开关，及 censor_rules_path 计算属性 |
+| 3.2.0 | 2026-06-23 | Claude_Opus_4.8                     | 新增 ytdlp_path 计算属性（单一真相源）：杜绝裸 'yt-dlp'，修复发布断流根因——cron 最小 PATH 无 .venv/bin 致 FileNotFoundError，频道发现整体静默失败 |
+| 3.3.0 | 2026-06-25 | Claude_Opus_4.8                     | 新增 enable_source_date_stamp / source_date_stamp_label：竖屏成片左上角「源视频发布日期」毛玻璃戳开关与文案前缀，默认关闭 |
 """
 import json
 import socket
@@ -115,9 +118,10 @@ class Settings(BaseSettings):
                                                     # 示例: CLASH_DOWNLOAD_NODE=🏯🇵 日本下载专用
 
     # [Claude_Opus_4.8] v3.0.0: YouTube Cookie 文件路径
-    # 优先使用静态 Cookie 文件，避免 --cookies-from-browser safari 在每次调用后触发 YouTube 轮转
-    # 留空("")则回退到 --cookies-from-browser safari
-    # 使用 scripts/refresh_yt_cookies.py 从 Safari 导出并保存到此文件
+    # 优先使用静态 Cookie 文件，避免 --cookies-from-browser 在每次调用后触发 YouTube 轮转
+    # 留空("")则回退到 --cookies-from-browser chrome
+    # 使用 scripts/refresh_yt_cookies.py 从 Chrome 导出并保存到此文件
+    # （2026-06-25：源由 Safari 改 Chrome——本机 Safari 未登录 YouTube，导出的匿名 cookie 触发 bot 风控）
     youtube_cookies_file: str = ""
 
     # -------------------------------------------------------------------------
@@ -141,12 +145,34 @@ class Settings(BaseSettings):
     # 触发词由 censor_engine._CHANNEL_POLICY 定义，用户可按需调整。
     enable_channel_policy_filter: bool = False  # [Gemini_2.5_Flash_planning]
 
+    # 审查词库外部化热加载（_BLOCKLIST/_CHANNEL_POLICY → config/censor_rules.json）
+    # [Claude_Opus_4.8] 🅰️ 进化：运维在线增删敏感词、无需改代码重部署，闭合突发事件空窗期。
+    # 关闭时用硬编码默认；开启后文件缺失/损坏/P0 空均安全回退默认，绝不静默置空审查。
+    enable_external_censor_rules: bool = False
+
+    # 字幕正文内容审查（渲染后对 Whisper 转录的 .ass 字幕全文做违禁词扫描）
+    # [Claude_Opus_4.8] 闭合「标题/文案干净但语音敏感」的发布漏洞（红蓝审计 症结 8）。
+    # 仅复用违法层 P0/P1/P2（精确词匹配，长文本安全）；不接入 CP 共现层——
+    # CP 的「国名+冲突词」全文共现在数万字转录上几乎必然误杀，故字幕通道刻意绕开。
+    # 默认关闭：开启会对此前「标题干净」的存量视频新增拦截，需先灰度验证再在 .env 置 true。
+    enable_subtitle_censorship: bool = False
+
     # SIGTERM 阶梯强杀机制（删除活跃任务时优雅终止底层进程）
     enable_sigterm_kill: bool = False
 
     # 动态热词注入开关 [Gemini_3.5_Flash_High_planning]
     enable_dynamic_keywords: bool = False
     hn_top_n: int = 30
+
+    # 源视频「发布日期」毛玻璃水印戳 [Claude_Opus_4.8]
+    # 在竖屏成片左上角叠加一枚圆角毛玻璃日期戳（局部高斯模糊 + 半透明深色着色 + 白字），
+    # 覆盖源视频左上角频道水印，并向观众标明「源视频的发布日期」——区别于视频号原生显示的
+    # 「我们的发布时间(1小时前)」。数据取自 processed_videos.upload_date（YYYYMMDD），切片回退父行；
+    # 缺失/非法则不渲染。默认关闭，灰度验证后在 .env 置 true。
+    enable_source_date_stamp: bool = False
+    # 日期戳文字前缀（与日期拼接，如「发布日期：2026-06-25」）。
+    # 使用全角冒号「：」而非半角「:」，避免与 ffmpeg filtergraph 选项分隔符冲突。
+    source_date_stamp_label: str = "发布日期："
 
     # -------------------------------------------------------------------------
     # 静态配置常量 (Static Constants) — 固定值，不依赖环境
@@ -200,6 +226,24 @@ class Settings(BaseSettings):
         """日志目录"""
         return self.project_root / "logs"
 
+    @computed_field  # type: ignore[misc]
+    @property
+    def censor_rules_path(self) -> Path:
+        """外部审查词库 JSON 路径（热加载，由 enable_external_censor_rules 控制）"""
+        return self.project_root / "config" / "censor_rules.json"
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def ytdlp_path(self) -> str:
+        """yt-dlp 可执行文件的绝对路径（项目 .venv/bin/yt-dlp）——单一真相源。
+
+        所有调用 yt-dlp 的子进程（发现脚本 / 下载管理器）一律使用此绝对路径，
+        严禁裸 "yt-dlp"。根因教训：cron 以 .venv/bin/python 直跑脚本时**不激活 venv**，
+        其最小 PATH（/usr/bin:/bin）既无 .venv/bin 也无 /opt/homebrew/bin，裸命令必然
+        FileNotFoundError → 频道发现每轮全灭却被当成"无新视频"静默吞掉（发布断流根因之一）。
+        """
+        return str(self.project_root / ".venv" / "bin" / "yt-dlp")
+
     # -------------------------------------------------------------------------
     # 工具方法
     # -------------------------------------------------------------------------
@@ -230,13 +274,14 @@ class Settings(BaseSettings):
     def get_yt_cookie_args(self) -> list[str]:
         """返回 yt-dlp 的 Cookie 参数列表。
         优先使用静态 Cookie 文件（避免每次调用触发 YouTube 轮转）；
-        文件不存在或未配置时回退到 --cookies-from-browser safari。
+        文件不存在或未配置时回退到 --cookies-from-browser chrome
+        （本机 Chrome 已登录 YouTube；Safari 未登录会导出匿名 cookie 触发 bot 风控）。
         """
         if self.youtube_cookies_file:
             p = Path(self.youtube_cookies_file).expanduser()
             if p.exists():
                 return ["--cookies", str(p)]
-        return ["--cookies-from-browser", "safari"]
+        return ["--cookies-from-browser", "chrome"]
 
     def get_active_proxies(self) -> dict:
         """[Claude_Sonnet_4.6_Thinking_planning] v2.5.0: 动态检测系统代理并验证连通性。

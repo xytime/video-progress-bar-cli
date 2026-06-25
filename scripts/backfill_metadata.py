@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 from video_processing.db import PipelineDB
+from config.settings import settings
 
 db = PipelineDB()
 
@@ -21,7 +22,7 @@ for yid in ids:
         "--print", "%(duration)s|%(view_count)s|%(like_count)s|%(upload_date)s",
         "--no-playlist",
         "--no-warnings",
-        "--cookies-from-browser", "safari",
+        *settings.get_yt_cookie_args(),
         url
     ]
     try:

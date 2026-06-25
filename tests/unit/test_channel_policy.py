@@ -12,6 +12,7 @@
 | Version | Date       | Author          | Description                                  |
 |---------|------------|-----------------|----------------------------------------------|
 | 1.0.0   | 2026-06-13 | Claude_Opus_4.8 | 初始创建：锁定 v1.6.0 CP 层上下文共现判定行为 |
+| 1.1.0   | 2026-06-22 | Claude_Opus_4.8 | [🅱️ 精准制导] 政客/政党裸名移出硬命中：bare 人名放行、人名+政治语境才拦截；新增 TestChannelPolicyPersonContext |
 """
 
 import os
@@ -34,8 +35,7 @@ class TestChannelPolicyHardHit:
     """政治人物 / 机构 / 武装组织 / 国家+冲突复合词，单独出现即拦截。"""
 
     @pytest.mark.parametrize("zh_text", [
-        "特朗普集会演讲精彩瞬间",        # 美国政治人物
-        "习近平出席会议",               # 中国政治人物
+        "习近平出席会议",               # 中国政治人物（仍硬命中）
         "俄乌战争最新进展",             # 国家+冲突复合词
         "伊朗核问题谈判破裂",           # '伊朗核' 复合词
         "哈马斯发表声明",               # 武装组织
@@ -49,7 +49,6 @@ class TestChannelPolicyHardHit:
         assert r.channel == "zh"
 
     @pytest.mark.parametrize("en_text", [
-        "Donald Trump holds a rally",
         "Iran nuclear deal explained",
         "Hamas releases a statement",
         "Russia-Ukraine frontline report",
@@ -140,3 +139,52 @@ class TestChannelPolicyClean:
     def test_empty_input_passes(self):
         r = check_channel_policy(zh_text="", en_text="")
         assert r.hit is False
+
+
+# ── 🅱️ 精准制导：政客/政党裸名「人名 + 政治语境」共现才拦截 ─────────────────────
+
+class TestChannelPolicyPersonContext:
+    """v1.9.0：美国政客/政党人名移出硬命中，仅与政治语境/冲突词共现时拦截。"""
+
+    @pytest.mark.parametrize("zh_text", [
+        "特朗普为SpaceX星舰项目投资",     # 科技语境顺带提名 → 放行
+        "马斯克发布新一代星舰",          # 同上
+        "拜登的家庭生活纪录片",          # 传记语境
+        "回顾历届美国大选趣闻",          # '大选' 无具体人名 → 放行
+        "他是共和党支持者也爱徒步",       # 党名 + 生活内容 → 放行
+    ])
+    def test_zh_bare_person_passes(self, zh_text):
+        r = check_channel_policy(zh_text=zh_text, en_text="")
+        assert r.hit is False, f"裸人名/无政治语境应放行: {zh_text} → {r}"
+
+    @pytest.mark.parametrize("en_text", [
+        "Trump made a comment about Tesla stock",   # 科技语境 → 放行
+        "the best trump card strategy in this game",# 'trump card' 习语 → 放行
+        "Elon Musk unveils the new Starship",       # 科技 → 放行
+        "a biography of Joe Biden's early years",   # 传记 → 放行
+    ])
+    def test_en_bare_person_passes(self, en_text):
+        r = check_channel_policy(zh_text="", en_text=en_text)
+        assert r.hit is False, f"裸人名/无政治语境应放行: {en_text} → {r}"
+
+    @pytest.mark.parametrize("zh_text, person", [
+        ("特朗普签署最新行政令", "特朗普"),
+        ("拜登宣布新一轮制裁", "拜登"),
+        ("马斯克领导政府效率部门改革", "马斯克"),
+    ])
+    def test_zh_person_with_context_rejects(self, zh_text, person):
+        r = check_channel_policy(zh_text=zh_text, en_text="")
+        assert r.hit is True, f"人名+政治语境应拦截: {zh_text} → {r}"
+        assert r.channel == "zh"
+        assert r.matched.startswith(f"{person}+"), f"matched 应为 人名+语境: {r.matched}"
+
+    @pytest.mark.parametrize("en_text", [
+        "Trump signs a new executive order",
+        "the republican party wins the election",
+        "elon musk joins the government",
+    ])
+    def test_en_person_with_context_rejects(self, en_text):
+        r = check_channel_policy(zh_text="", en_text=en_text)
+        assert r.hit is True, f"人名+政治语境应拦截: {en_text} → {r}"
+        assert r.channel == "en"
+        assert "+" in (r.matched or ""), f"共现 matched 应含 '+': {r.matched}"

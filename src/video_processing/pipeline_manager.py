@@ -48,6 +48,12 @@
 | 3.16.0  | 2026-06-18 | Claude_Opus_4.8                     | [崩溃根治] 下载格式优先 H.264(avc) 而非 AV1(av01)：imageio-ffmpeg 内置 AOM AV1 解码器解码 YouTube AV1 流时间歇性 SIGSEGV，导致 _burn_subtitles 渲染崩溃；新增 vcodec^=avc 选择器分支 + -S vcodec:h264 排序，无 avc 时回退原行为 |
 | 3.17.0  | 2026-06-18 | Claude_Opus_4.8                     | [假成片防护] 渲染 checkpoint 增加 ffprobe 完整性校验：渲染中途崩溃会留下 >1MB 但缺 moov 的截断 _vertical.mp4，旧校验仅看体积 → 误判有效 → 跳过重渲并发布损坏视频；现用 get_video_duration_ffprobe 验证可解析 |
 | 3.18.0  | 2026-06-18 | Claude_Opus_4.8                     | [盘中重负载保护] process_high_score_videos 在美股盘中（settings.is_us_market_guard_window：ET 09:15–16:15 工作日）暂停批处理与逐视频处理，剩余任务保持 PENDING 待盘后；共享主机避免抢占实盘行情管线 CPU |
+| 3.19.0  | 2026-06-22 | Claude_Opus_4.8                     | [症结 8 修复] 闭合「字幕正文从未过审」漏洞：2c 检查点在渲染后读取 .ass 转录全文，经 enable_subtitle_censorship 开关并入违法层 P0/P1/P2 复检；刻意绕开 CP 共现层避免长转录误杀；字幕读取下沉 utils.file_utils.read_subtitle_text 单一真相源（与 app.py 复核 UI 共用） |
+| 3.20.0  | 2026-06-22 | Claude_Opus_4.8                     | [架构 C·DAG 修复] graceful_truncate_title 改从 utils.text_utils 顶层 import，移除 _process_single_video 内 sys.path 注入 scripts/ 反向 import copywriter 的 DAG 违规 |
+| 3.21.0  | 2026-06-22 | Claude_Opus_4.8                     | [架构 B] 评分曲线抽出 scoring.compute_auto_score（+12 单测）；_check_censorship 审查执行抽出 censorship_service.CensorshipService（行为逐字保留，按调用契约即时构造）；PipelineManager 职责收敛 |
+| 3.22.0  | 2026-06-23 | Claude_Opus_4.8                     | [发布断流根治②] _build_subprocess_env 强制 PATH 含 /opt/homebrew/bin(deno/node)与 .venv/bin：cron 最小 PATH 无 deno → yt-dlp 解 n-sig 挑战失败 → 高分视频"format not available"下载全败；_VENV_YTDLP 统一到 settings.ytdlp_path 单一真相源 |
+| 3.23.0  | 2026-06-25 | Claude_Opus_4.8                     | [发布日期戳] enable_source_date_stamp 开启时，render_cmd 注入 --source-date（主视频取 upload_date，切片回退父行），格式化 YYYYMMDD→YYYY-MM-DD，缺失/非法则跳过 |
+| 3.24.0  | 2026-06-25 | Claude_Opus_4.8                     | [失败可观测] 新增 _notify_failed(yid,title,reason,slice)：FAILED 通知统一带 youtube_id+精简原因；CalledProcessError(下载失败,最常见) 此前只发 Title 无 ID 无原因→用户无从定位「发了没动静」。title/reason 经 html.escape 防 yt-dlp stderr 的 &/<> 触发 Telegram HTML 400 丢通知 |
 """
 
 
@@ -59,11 +65,15 @@ import logging
 import subprocess
 import requests
 import fcntl
+import html
 from typing import Dict, Any, Optional
 from pathlib import Path
 
 from .db import PipelineDB
-from .utils.file_utils import find_downloaded_video, VIDEO_CONTAINER_SUFFIXES
+from .utils.file_utils import find_downloaded_video, VIDEO_CONTAINER_SUFFIXES, read_subtitle_text
+from .utils.text_utils import graceful_truncate_title
+from .scoring import compute_auto_score, PUBLISH_SCORE_LINE
+from .censorship_service import CensorshipService
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -114,6 +124,13 @@ def _build_subprocess_env() -> dict:
     if settings.telegram_admin_ids:
         env["TELEGRAM_ADMIN_IDS"] = settings.telegram_admin_ids
     env.update(active_proxies)  # 若 active_proxies 为空字典，则不注入任何代理
+    # [Claude_Opus_4.8] 保证子进程 PATH 含 deno/node(yt-dlp 解 YouTube n-sig 挑战的 JS 运行时)
+    # 与 .venv/bin。根因：cron 以 .venv/bin/python 直跑时**不激活 venv**，最小 PATH(/usr/bin:/bin)
+    # 既无 /opt/homebrew/bin 也无 .venv/bin → yt-dlp 的 ejs 挑战求解器找不到 deno →
+    # "n challenge solving failed" → 所有格式失效 → 高分视频下载整体失败（与发现路径裸 yt-dlp 同类）。
+    # 此处自给自足，无论父进程(cron/dashboard/交互shell)的 PATH 如何，下载链路均能解挑战。
+    _extra_path = [str(settings.project_root / ".venv" / "bin"), "/opt/homebrew/bin", "/usr/local/bin"]
+    env["PATH"] = ":".join(_extra_path + ([env["PATH"]] if env.get("PATH") else []))
     return env
 
 
@@ -122,7 +139,7 @@ class PipelineManager:
     _PRJ_ROOT    = Path(__file__).parent.parent.parent
     _SRC_DIR     = _PRJ_ROOT / "src"
     _VENV_PYTHON = str(_PRJ_ROOT / ".venv" / "bin" / "python")
-    _VENV_YTDLP  = str(_PRJ_ROOT / ".venv" / "bin" / "yt-dlp")
+    _VENV_YTDLP  = settings.ytdlp_path  # [Claude_Opus_4.8] 单一真相源（settings.ytdlp_path）；值与 _PRJ_ROOT/.venv/bin/yt-dlp 等同
     _OUT_DIR          = _PRJ_ROOT / "output"
     _ORIG_VIDEO_DIR   = _OUT_DIR / "original_video"   # [Claude_Sonnet_4.6_Thinking_planning] 原始视频归档目录
 
@@ -148,6 +165,24 @@ class PipelineManager:
         except Exception as e:
             logger.error(f"Telegram send failed: {e}")
 
+    def _notify_failed(self, yid: str, title: str, reason: str = "", slice_index: int = 0):
+        """统一的「视频失败」Telegram 通知：带 youtube_id 与精简错误原因，便于定位。
+
+        修复此前 CalledProcessError（最常见的下载失败）路径只发 'Title'、无 ID 无原因，
+        用户无从判断「发了却没动静」的体验缺口（2026-06-25 GsqW5MPFajw 事故）。
+        """
+        prefix = yid if slice_index == 0 else f"{yid}#{slice_index}"
+        # send_telegram_msg 用 parse_mode=HTML，title/reason 含 yt-dlp stderr（常带 & < >，
+        # 如 googlevideo URL 的 query 串）会触发 Telegram 400「can't parse entities」→ 通知被
+        # 静默丢弃（恰好砸在我们要修的『失败却没动静』场景）。故对插值部分做 HTML 转义，
+        # 自己的 <b>/<code> 标签保持不转义。
+        safe_title = html.escape(title or "")
+        msg = f"❌ <b>Video Failed</b>\nTitle: {safe_title}\nID: <code>{prefix}</code>"
+        if reason:
+            snippet = html.escape(" ".join(reason.split())[:200])  # 折叠空白/换行，截断防刷屏
+            msg += f"\nReason: {snippet}"
+        self.send_telegram_msg(msg)
+
     # ── 评分 ──────────────────────────────────────────────────────────────────
 
     def score_pending_videos(self):
@@ -155,7 +190,7 @@ class PipelineManager:
         # [Claude_Sonnet_4.6_Thinking_planning] LINT-4 修复: math 已移至模块顶层导入
         pending  = self.db.get_videos_by_status("PENDING")
         # [Gemini_3.5_Flash_planning] 跳过 DISCOVERY 来源的视频，防止其被自动评分机制提高到 >= 75 分从而触发自动发布
-        to_score = [v for v in pending if v.get('score', 0) < 75 and v.get('source') != 'DISCOVERY']
+        to_score = [v for v in pending if v.get('score', 0) < PUBLISH_SCORE_LINE and v.get('source') != 'DISCOVERY']
         skipped  = len(pending) - len(to_score)
         if skipped:
             logger.info(f"Skipping {skipped} already-prioritized or discovery videos.")
@@ -165,29 +200,15 @@ class PipelineManager:
         logger.info(f"Scoring {len(to_score)} pending videos...")
         for video in to_score:
             yid        = video['youtube_id']
-            view_count = video.get('view_count') or 0
-            like_count = video.get('like_count') or 0
-            views      = max(0, view_count)
-            likes      = max(0, like_count)
+            views      = max(0, video.get('view_count') or 0)
+            likes      = max(0, video.get('like_count') or 0)
+            # [Claude_Opus_4.8 架构B] 评分曲线已抽至 scoring.compute_auto_score（纯函数，可单测）
+            score      = compute_auto_score(views, likes)
 
-            if views <= 0:
-                score = 0
+            if views > 0:
+                logger.info(f"  [{yid}] views={views} like_rate={likes / views * 100:.1f}% → score={score}")
             else:
-                like_rate = min(100.0, likes / views * 100)
-                if views > 1500 and like_rate > 3.0:
-                    # [Claude_Sonnet_4.6_Thinking_planning v3.9.0] 满足热度门槛：对数加权评分 [80, 95]
-                    # 阈值从 (2000, 3.5%) 调低至 (1500, 3.0%)，消除发布断流：
-                    # 旧公式存在悬崖效应（views=1999 or like_rate=3.49% 硬限 70，无法进队列）
-                    v_bonus = min(10.0, 5 * math.log10(views / 1500))
-                    l_bonus = min(5.0, 5 * (like_rate - 3.0) / 7.0)
-                    score   = max(80, min(95, round(80 + v_bonus + l_bonus)))
-                else:
-                    # 未满足门槛：比例评分 [0, 70]
-                    v_ratio = min(1.0, views / 1500)
-                    l_ratio = min(1.0, like_rate / 3.0) if like_rate > 0 else 0.0
-                    score   = max(0, min(70, round(70 * v_ratio * l_ratio)))
-
-            logger.info(f"  [{yid}] views={views} like_rate={likes/views*100:.1f}% → score={score}" if views > 0 else f"  [{yid}] no view data → score=0")
+                logger.info(f"  [{yid}] no view data → score=0")
             # force=False：自动算分，is_manually_scored=1 的记录会被 DB 层自动跳过
             self.db.update_video_score(yid, score, force=False)
 
@@ -480,8 +501,13 @@ class PipelineManager:
                         except Exception as e:
                             logger.warning(f"[GC] Failed to delete parent audio gen folder {parent_audio_dir.name}: {e}")
 
-    def _check_censorship(self, yid: str, title: str, description: str = "", zh_title: str = "", slice_index: int = 0) -> bool:
+    def _check_censorship(self, yid: str, title: str, description: str = "", zh_title: str = "", slice_index: int = 0, subtitle_text: str = "") -> bool:
         """执行内容安全审查（违法层）+ 频道内容策略检查（运营层）。
+
+        [Claude_Opus_4.8] 症结 8 修复：新增 subtitle_text（Whisper 转录的 .ass 字幕正文）。
+        该文本仅并入违法层 P0/P1/P2（精确词匹配，对数万字长文本安全），
+        刻意不并入 CP 频道策略层——CP 的「国名+冲突词」全文共现判定在长转录上几乎必然误杀。
+        调用方仅在 settings.enable_subtitle_censorship 开启时才读取并传入此参数。
 
         [Claude_Opus_4.8] v3.14.0 BUG-1 修复：新增 slice_index 并透传到每一处 db.* 调用。
         此前所有写入默认 slice_index=0（父行），切片命中违禁词时会污染父视频状态/分数，
@@ -498,112 +524,18 @@ class PipelineManager:
 
         返回 True 表示命中（任意层）→ 需要拦截/中断，False 表示全部通过。
         """
-        if not settings.enable_censorship_engine and not settings.enable_channel_policy_filter:
-            return False
-
-        # [Claude_Opus_4.8] 人工复核放行：bypass_censorship=1 时跳过全部审查层（P0/P1/P2/CP）。
-        # 由前端「🔓 复核放行」按钮在用户知情确认后置位；此处统一兜底，自动/手动触发均生效。
-        if self.db.is_censorship_bypassed(yid, slice_index=slice_index):
-            logger.warning(f"[Censor] Video {yid} BYPASSED by manual review — skipping all censorship layers.")
-            return False
-
-        try:
-            from .censor_engine import (
-                check_text, check_channel_policy,
-                ACTION_REJECT_SIGTERM, ACTION_SUSPEND_MANUAL,
-                ACTION_DEPRIORITIZE, ACTION_CHANNEL_POLICY,
-            )
-
-            # ── A. 违法内容审查（P0/P1/P2） ────────────────────────────────
-            if settings.enable_censorship_engine:
-                # [Gemini_3.5_Flash_planning] BUG FIX: zh_text 使用中文标题，en_text 使用英文标题+描述
-                # 若 zh_title 为空但原始 title 包含中文，则 fallback 到 title
-                zh_for_censor = zh_title or ""
-                if not zh_for_censor:
-                    import re as _re
-                    if _re.search(r"[\u4e00-\u9fa5]", title):
-                        zh_for_censor = title
-
-                en_for_censor = f"{title} {description}".strip()
-                result = check_text(zh_text=zh_for_censor, en_text=en_for_censor)
-                if result.hit:
-                    logger.warning(f"[Censor] Video {yid} hit censorship rule: {result}")
-                    self.db.update_video_censor_status(yid, result.tag, result.score, slice_index=slice_index)
-
-                    if result.action == ACTION_REJECT_SIGTERM:
-                        logger.error(f"[Censor] P0 violation. Failing video {yid} and blacklisting.")
-                        self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P0 Reject: {result.tag} (matched: '{result.matched}')", slice_index=slice_index)
-                        if settings.enable_blacklist_tombstone:
-                            self.db.add_to_blacklist(yid, reason=f"censor_p0_{result.matched}")
-                        self.send_telegram_msg(
-                            f"\U0001f534 <b>Censorship P0 Reject</b>"
-                            f"\nTitle: {title}\nMatched: <code>{result.matched}</code> (via {result.channel})"
-                        )
-                        return True
-
-                    elif result.action == ACTION_SUSPEND_MANUAL:
-                        logger.warning(f"[Censor] P1 violation. Suspending video {yid} for manual review.")
-                        self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P1 Suspend: {result.tag} (matched: '{result.matched}')", slice_index=slice_index)
-                        self.send_telegram_msg(
-                            f"\U0001f7e1 <b>Censorship P1 Suspend</b>"
-                            f"\nTitle: {title}\nMatched: <code>{result.matched}</code> (via {result.channel})"
-                        )
-                        return True
-
-                    elif result.action == ACTION_DEPRIORITIZE:
-                        logger.info(f"[Censor] P2 violation. Deprioritizing video {yid} to 0 points.")
-                        self.db.update_video_score(yid, 0, force=True, slice_index=slice_index)
-                        self.db.update_video_status(yid, "PENDING", error_msg=f"Censorship P2 Deprioritized: {result.tag}", slice_index=slice_index)
-                        self.send_telegram_msg(
-                            f"\U0001f535 <b>Censorship P2 Deprioritized</b>"
-                            f"\nTitle: {title}\nMatched: <code>{result.matched}</code>"
-                        )
-                        return True
-
-            # ── B. 频道内容策略检查（CP 层） ────────────────────────────────
-            if settings.enable_channel_policy_filter:
-                # [Gemini_3.5_Flash_planning] 运营策略层：检测超出频道内容定位的话题
-                # zh_title 优先；若为空且原始 title 包含中文，则 fallback 到 title
-                zh_for_policy = zh_title or ""
-                if not zh_for_policy:
-                    import re as _re
-                    if _re.search(r"[\u4e00-\u9fa5]", title):
-                        zh_for_policy = title
-
-                en_for_policy = f"{title} {description}".strip()
-                cp_result = check_channel_policy(zh_text=zh_for_policy, en_text=en_for_policy)
-                if cp_result.hit:
-                    logger.warning(f"[ChannelPolicy] Video {yid} hit channel policy: {cp_result}")
-                    # [Gemini_2.5_Flash_planning] Code Review Fix: CP 层也写入 censor_tag，与 P0/P1 审计行为保持一致
-                    self.db.update_video_censor_status(yid, cp_result.tag, score=0, slice_index=slice_index)
-                    self.db.update_video_status(
-                        yid, "FAILED",
-                        error_msg=f"Channel Policy Reject: {cp_result.tag} (matched: '{cp_result.matched}' via {cp_result.channel})",
-                        slice_index=slice_index
-                    )
-                    self.send_telegram_msg(
-                        f"\U0001f6ab <b>Channel Policy Reject</b>"
-                        f"\nTitle: {title}"
-                        f"\nMatched: <code>{cp_result.matched}</code> (via {cp_result.channel})"
-                        f"\n\n\u26a0\ufe0f \u6b64\u89c6\u9891\u8d85\u51fa\u9891\u9053\u5185\u5bb9\u5b9a\u4f4d\u8fb9\u754c\uff0c\u5df2\u62d2\u7edd\u5904\u7406\u3002"
-                    )
-                    return True
-
-        except Exception as e:
-            logger.error(f"[Censor] Verification process error: {e}")
-
-        return False
+        # [Claude_Opus_4.8 架构B] 审查执行已抽至 CensorshipService（内聚单元，可独立测试）。
+        # 这里按调用方既有契约（仅需 self.db + self.send_telegram_msg）即时构造，零状态。
+        return CensorshipService(self.db, self.send_telegram_msg).check(
+            yid, title, description, zh_title=zh_title,
+            slice_index=slice_index, subtitle_text=subtitle_text,
+        )
 
     # ── 主处理流程 ────────────────────────────────────────────────────────────
 
     def _process_single_video(self, video: Dict[str, Any]):
-        # [Unknown_Model_planning] 动态导入 scripts/copywriter.py 以获取截断算法（置于顶层以避免 UnboundLocalError）
-        import sys as _sys
-        _scripts_dir = str(self._PRJ_ROOT / "scripts")
-        if _scripts_dir not in _sys.path:
-            _sys.path.insert(0, _scripts_dir)
-        from copywriter import graceful_truncate_title
-
+        # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils.text_utils 并在模块顶部 import，
+        # 消除此前 sys.path 注入 scripts/ 反向 import copywriter 的 DAG 违规。
         yid   = video['youtube_id']
         title = video['title']
         url   = f"https://youtu.be/{yid}"
@@ -630,7 +562,7 @@ class PipelineManager:
             except Exception as lock_err:
                 logger.error(f"Failed to acquire pipeline lock for {prefix}: {lock_err}")
                 self.db.update_video_status(yid, "FAILED", error_msg=f"Pipeline lock error: {lock_err}", slice_index=slice_index)
-                self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}\nError: Lock error: {lock_err}")
+                self._notify_failed(yid, title, f"Lock error: {lock_err}", slice_index=slice_index)
                 return
 
             # ── 0. CENSORSHIP PRE-CHECK ───────────────────────────────────────
@@ -963,6 +895,20 @@ class PipelineManager:
                         str(target_file), "--vertical", "--bilingual", "--title", render_title,
                         "--output", str(vertical),  # [Gemini_3.5_Flash_planning] 指定输出路径，去除可能携带的格式后缀
                     ]
+                    # [Claude_Opus_4.8] 源视频「发布日期」毛玻璃戳：仅在开关开启且能取到合法 upload_date 时注入。
+                    # 主视频行自带 upload_date；切片行不带 → 回退父行(slice_index=0)。缺失/非法则跳过（不烧戳）。
+                    if settings.enable_source_date_stamp:
+                        from .processors.date_stamp import format_upload_date
+                        _raw_upload = video.get("upload_date")
+                        if not _raw_upload and slice_index:
+                            _parent_row = self.db.get_video_by_youtube_id(yid, 0)
+                            _raw_upload = _parent_row.get("upload_date") if _parent_row else None
+                        _src_date = format_upload_date(_raw_upload)
+                        if _src_date:
+                            render_cmd += ["--source-date", _src_date]
+                            logger.info(f"[DateStamp] {prefix} 源发布日期戳: {_src_date}")
+                        else:
+                            logger.info(f"[DateStamp] {prefix} 无合法 upload_date({_raw_upload!r})，跳过日期戳")
                     # [Claude_Sonnet_4.6_Thinking_planning] v2.10.0: 按需附加 TTS 参数
                     # 只有 tts_provider 非空时才开启，默认流程不开启 TTS
                     _tts_provider = video.get("tts_provider") or None
@@ -997,7 +943,16 @@ class PipelineManager:
 
                 # [Gemini_2.5_Flash_planning] v2.11.0: 文案检测使用 AI 生成的中文短标题作为 zh_title
                 # short_title 此时已是文案阶段生成的中文标题，直接作为 zh 通道输入
-                if self._check_censorship(yid, short_title, copy_content, zh_title=short_title, slice_index=slice_index):
+                # [Claude_Opus_4.8] v3.19.0 症结 8 修复：此处已在 2b 渲染之后，.ass 字幕正文就绪。
+                # 当 enable_subtitle_censorship 开启时，读取转录字幕全文一并送审，闭合
+                # 「标题/文案干净但语音内容敏感」的发布漏洞。读取失败返回空串则退化为原行为。
+                subtitle_text = ""
+                if settings.enable_subtitle_censorship:
+                    subtitle_text = read_subtitle_text(self._OUT_DIR, yid, slice_index=slice_index)
+                    if subtitle_text:
+                        logger.info(f"[Censor] Subtitle body included for {prefix} ({len(subtitle_text)} chars)")
+                if self._check_censorship(yid, short_title, copy_content, zh_title=short_title,
+                                          slice_index=slice_index, subtitle_text=subtitle_text):
                     return
 
 
@@ -1217,13 +1172,13 @@ class PipelineManager:
                 err = e.stderr if isinstance(e.stderr, str) else (e.stderr or b"").decode()
                 logger.error(f"Process failed for {prefix}: {err[:500]}")
                 self.db.update_video_status(yid, "FAILED", error_msg=err, slice_index=slice_index)
-                self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}")
+                self._notify_failed(yid, title, err, slice_index=slice_index)
                 self._run_garbage_collection(yid, slice_index, "FAILED")
 
             except Exception as e:
                 logger.error(f"Unexpected error for {prefix}: {e}")
                 self.db.update_video_status(yid, "FAILED", error_msg=str(e), slice_index=slice_index)
-                self.send_telegram_msg(f"❌ <b>Video Failed</b>\nTitle: {title}\nError: {e}")
+                self._notify_failed(yid, title, str(e), slice_index=slice_index)
                 self._run_garbage_collection(yid, slice_index, "FAILED")
 
         finally:

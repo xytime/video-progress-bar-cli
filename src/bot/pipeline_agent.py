@@ -332,7 +332,7 @@ class PipelineAgent:
                     "best[ext=mp4]/best"
                 ),
                 "-S", "vcodec:h264",
-                "--cookies-from-browser", "safari",
+                *settings.get_yt_cookie_args(),
                 "--write-description",
                 "--remote-components", "ejs:github",
                 "--downloader", "curl",

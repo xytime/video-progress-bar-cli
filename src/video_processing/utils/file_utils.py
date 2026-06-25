@@ -1,7 +1,16 @@
-"""文件操作工具"""
+"""文件操作工具
+
+# Modification History
+| Version | Date       | Author          | Description                                                        |
+|---------|------------|-----------------|-------------------------------------------------------------------|
+| 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | find_downloaded_video 单一真相源（bot 与管线共用）                  |
+| 1.1.0   | 2026-06-22 | Claude_Opus_4.8 | 新增 read_subtitle_text（.ass 纯文本，管线字幕审查与复核 UI 共用）   |
+| 1.2.0   | 2026-06-22 | Claude_Opus_4.8 | [Review Fix] read_subtitle_text 精确匹配切片，排除 {yid}_s1 误配子切片/_s11 |
+"""
+import re
+import shutil
 from pathlib import Path
 from typing import List, Optional
-import shutil
 
 
 def ensure_directory(path: Path) -> Path:
@@ -127,6 +136,62 @@ def find_downloaded_video(
     if archived:
         return str(archived[0])
     return None
+
+
+def read_subtitle_text(
+    output_dir: Path,
+    youtube_id: str,
+    slice_index: int = 0,
+    max_chars: int = 40000,
+) -> str:
+    """读取某视频（或指定切片）已渲染的 .ass 双语字幕纯文本（去 ASS 标签）并拼接。
+
+    单一真相源：Web 复核 UI（app.py）与管线字幕审查（pipeline_manager）共用本函数，
+    杜绝两处实现分叉。失败（pysubs2 缺失 / 文件损坏）时返回空串，由调用方决定如何降级。
+
+    [Claude_Opus_4.8] BUG-1 配套：切片走 ``{yid}_s{n}`` 前缀，避免读到父/其它切片字幕。
+
+    Args:
+        output_dir: .ass 所在目录（通常为 output/）。
+        youtube_id: YouTube 视频 ID。
+        slice_index: 切片序号，0 表示整片。
+        max_chars: 纯文本累计上限，超过即截断返回（字幕动辄数万字，限长控成本）。
+
+    Returns:
+        去标签后的字幕纯文本（多事件以换行拼接）；无字幕或读取失败返回空串。
+    """
+    try:
+        import pysubs2
+    except Exception:
+        return ""
+    out = Path(output_dir)
+    # [Claude_Opus_4.8] v1.2.0 精确匹配本切片，避免：
+    #   • 整片(slice 0) 误读子切片 {yid}_s1.ass → 把切片字幕并入父片审查；
+    #   • 切片 1 的 glob {yid}_s1*.ass 误配 {yid}_s11.ass（≥11 切片时）。
+    # 接受 {stem}.ass 与 {stem}.<lang>.ass，排除其余。
+    if slice_index and slice_index > 0:
+        stem = f"{youtube_id}_s{slice_index}"
+        glob_pat = f"{stem}*.ass"
+    else:
+        stem = youtube_id
+        glob_pat = f"{youtube_id}*.ass"
+    accept = re.compile(rf"^{re.escape(stem)}(\.|$)")
+    parts: List[str] = []
+    total = 0
+    for ass in sorted(p for p in out.glob(glob_pat) if accept.match(p.stem)):
+        try:
+            subs = pysubs2.load(str(ass))
+        except Exception:
+            continue
+        for ev in subs:
+            txt = (getattr(ev, "plaintext", "") or "").strip()
+            if not txt:
+                continue
+            parts.append(txt)
+            total += len(txt)
+            if total >= max_chars:
+                return "\n".join(parts)
+    return "\n".join(parts)
 
 
 def safe_remove(path: Path) -> bool:

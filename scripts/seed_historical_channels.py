@@ -7,6 +7,7 @@ import json
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from video_processing.db import PipelineDB
+from config.settings import settings
 
 HISTORICAL_URLS = [
     "https://www.youtube.com/watch?v=A1kX8fJx53c",
@@ -24,7 +25,7 @@ def main():
     for url in HISTORICAL_URLS:
         print(f"Fetching metadata for {url}...")
         try:
-            cmd = ["yt-dlp", "--print", "%(channel_id)s|||%(channel)s|||%(id)s|||%(title)s", "--no-playlist", "--no-warnings", "--cookies-from-browser", "safari", url]
+            cmd = ["yt-dlp", "--print", "%(channel_id)s|||%(channel)s|||%(id)s|||%(title)s", "--no-playlist", "--no-warnings", *settings.get_yt_cookie_args(), url]
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             output = result.stdout.strip()
             

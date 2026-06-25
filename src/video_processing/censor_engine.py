@@ -14,13 +14,20 @@
 | 1.5.0   | 2026-06-11 | Claude_Opus_4.8                        | _CHANNEL_POLICY 新增中东战争、乌克兰战争、伊朗冲突关键词，全面覆盖地缘政治内容 |
 | 1.6.0   | 2026-06-13 | Claude_Opus_4.8                        | [误杀优化] CP 层裸国名（iran/ukraine/israel…）改为「国名+冲突词」上下文共现判定，单独出现不再拦截；新增 country_*/conflict_* 词组 |
 | 1.7.0   | 2026-06-13 | Claude_Opus_4.8                        | 新增 scan_all_matches()：不短路扫描全部层，返回文本命中的所有审查词，供「复核放行」标签云高亮与人工决策展示 |
+| 1.8.0   | 2026-06-22 | Claude_Opus_4.8                        | [🅰️ 词库热加载] 硬编码 _BLOCKLIST/_CHANNEL_POLICY 改名 _DEFAULT_* 作兜底；新增外部 JSON（config/censor_rules.json）按 mtime 热加载，运维可在线增删词无需重部署；缺失/损坏/P0 空 → 安全回退默认（绝不置空）；选 JSON 而非 YAML 避免 P0 路径引入 pyyaml 依赖；由 enable_external_censor_rules 控制 |
+| 1.9.0   | 2026-06-22 | Claude_Opus_4.8                        | [🅱️ CP 精准制导] 美国政客/政党裸人名从 CP 硬命中迁至 person_*，仅与 policy_context_*/conflict_* 共现时才拦截，根治审计「症结 3 过宽杀」（传记/大选科普/科技顺带提名误杀）；中国政治实体/领导人/武装组织/冲突复合词仍硬命中不变；scan_all_matches 同步；person_*/policy_context_* 为热加载可选键 |
 """
 
 import re
+import copy
+import json
 import logging
 import unicodedata
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
+
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +43,7 @@ ACTION_CHANNEL_POLICY     = "CHANNEL_POLICY_SKIP"  # CP: 超出频道内容策�
 # [Claude_Sonnet_4.6_Thinking_planning] 双语规则：zh 通道检测中文字幕，en 通道检测原始英文字幕
 # 设计原则：翻译引擎风控失效导致中文字幕为空时，en 通道独立兜底拦截
 
-_BLOCKLIST: dict = {
+_DEFAULT_BLOCKLIST: dict = {
     "P0": {
         "tag":    "🔴 政治安全违禁",
         "score":  95,
@@ -106,8 +113,11 @@ _BLOCKLIST: dict = {
             "日赚几千", "网赚", "兼职月入",
         ],
         "en": [
+            # 2026-06-25: 移除 "gamble"/"betting"——英文财经标题/描述中 "gamble"(豪赌/押注)、
+            # "betting"(押注) 几乎都是隐喻，曾把 "The $400B AI infrastructure gamble" 误杀降权。
+            # 保留无歧义的 "gambling"；中文 赌博/博彩/网络赌博 词表不动（中文平台主防线）。
             "get rich quick", "overnight millionaire",
-            "gamble", "gambling", "betting",
+            "gambling",
             "porn", "adult content", "escort",
             "make money online", "passive income secret",
         ],
@@ -135,7 +145,7 @@ _BLOCKLIST: dict = {
 #   注意：单字冲突词（如 "核"）会误伤 "核心/核实"，故 conflict_zh 只收多字词，
 #   "核问题/核设施/核武器" 而非裸 "核"。
 
-_CHANNEL_POLICY: dict = {
+_DEFAULT_CHANNEL_POLICY: dict = {
     "tag":   "🚫 频道策略限制",
     "action": ACTION_CHANNEL_POLICY,
     # ── 硬命中词（命中即拦截）──────────────────────────────────────────────────
@@ -147,27 +157,10 @@ _CHANNEL_POLICY: dict = {
         "习近平", "李克强", "王毅",
         "新疆问题", "西藏问题",
         "一带一路政治",
-        # [Claude_Sonnet_4.6_Thinking_fast] v1.3.0 — 美国国家领导人（与中国政治人名对等处理）
-        # 现任政府核心（第47届，2025─）
-        "特朗普", "川普",      # Donald Trump，总统
-        "万斯",               # JD Vance，副总统
-        "卢比奥",             # Marco Rubio，国务卿
-        "贝森特",             # Scott Bessent，财政部长
-        "赫格塞斯",           # Pete Hegseth，国防部长
-        "邦迪",               # Pam Bondi，司法部长
-        # 前任政府（第46届，2021—2025）
-        "拜登",               # Joe Biden，前总统
-        "哈里斯",             # Kamala Harris，前副总统
-        "布林肯",             # Antony Blinken，前国务卿
-        "耶伦",               # Janet Yellen，前财政部长
-        "奥斯汀",             # Lloyd Austin，前国防部长
-        # 国会领导层
-        "舒默",               # Chuck Schumer，参议院民主党领袖
-        "麦卡锡",             # Kevin McCarthy，前众议院议长
-        "约翰逊",             # Mike Johnson，现任众议院议长
-        # 其他高曝光度政治人物（精确限定政治语境，避免误杀 SpaceX/Tesla/AI 视频）
-        "马斯克政府",            # Elon Musk + 政府语境
-        "马斯克DOGE", "马斯克doge",
+        # [Claude_Opus_4.8] v1.9.0 🅱️ 精准制导：美国政客/政党「裸人名」已从硬命中迁至
+        # 下方 person_zh —— 仅在与 policy_context_zh / conflict_zh 共现时才拦截，消除
+        # 传记/历史/大选科普/科技视频里「顺带提到人名」的误杀（详见 person_zh 注释）。
+        # 中国政治实体/领导人（习近平/李克强/王毅 等）仍保留在上方硬命中，不受影响。
         # 聚合词（泛政治化上下文）
         "美国总统",
         "美国国会", "美参议院", "美众议院",
@@ -180,8 +173,8 @@ _CHANNEL_POLICY: dict = {
         "伊朗核", "伊朗导弹",
         "也门战争", "红海袭击",
         "联合国安理会制裁",
-        # 美国国内政治（补充）
-        "民主党", "共和党", "两党", "国会听证",
+        # 美国国内政治（补充）—— 政党名（民主党/共和党/两党）已迁至 person_zh 上下文判定
+        "国会听证",
         "众议院民主党", "参议院共和党",
         "CIA", "中情局",
     ],
@@ -196,30 +189,10 @@ _CHANNEL_POLICY: dict = {
         "xinjiang issue", "tibet issue",
         "belt and road politics",
         "beijing policy", "chinese government policy",
-        # [Claude_Sonnet_4.6_Thinking_fast] v1.3.0 — 美国国家领导人（英文通道，与中文通道对等）
-        # 现任政府核心（第47届）
-        "donald trump", "trump administration",
-        "jd vance",
-        "marco rubio",
-        "scott bessent",
-        "pete hegseth",
-        "pam bondi",
-        # 前任政府（第46届）
-        "joe biden", "biden administration",
-        "kamala harris",
-        "antony blinken",
-        "janet yellen",
-        "lloyd austin",
-        # 国会领导层
-        "chuck schumer",
-        "kevin mccarthy",
-        "mike johnson",
-        # 其他高曝光度政治人物（精确限定政治语境，避免误杀 SpaceX/Tesla/AI 视频）
-        "elon musk doge",          # DOGE 政府效率部门语境
-        "elon musk government",    # 政府顾问语境
-        "elon musk white house",   # 白宫语境
-        "elon musk trump",         # 与 Trump 政治绑定
-        # 聚合词（泛政治化上下文）
+        # [Claude_Opus_4.8] v1.9.0 🅱️ 精准制导：美国政客/政党裸人名已迁至 person_en
+        # （仅在与 policy_context_en / conflict_en 共现时拦截），消除科技/传记/大选科普
+        # 视频里顺带提及人名的误杀。"trump administration" 等也由 trump+administration 共现覆盖。
+        # 聚合词（本身已含明确政治语境，保留硬命中）
         "us president policy", "white house policy",
         "us congress", "us senate politics", "us house of representatives",
         # [Claude_Opus_4.8] v1.5.0 — 武装组织/领导人，及「国家+冲突」复合词（硬命中）
@@ -232,7 +205,7 @@ _CHANNEL_POLICY: dict = {
         # 美国国内政治（补充）
         "house democrats", "senate republicans", "house republicans",
         "senate democrats",
-        "republican party", "democratic party",
+        # 政党名（republican party / democratic party）已迁至 person_en 上下文判定
         "partisan", "senate hearing", "house hearing",
         "congressional hearing", "senate committee", "house committee",
         "cia director",
@@ -267,6 +240,39 @@ _CHANNEL_POLICY: dict = {
         "attack", "attacks", "casualties", "offensive",
         "siege", "ceasefire", "war crime", "war crimes",
     ],
+    # ── 政治人物/政党「裸名」(须与 policy_context_* 或 conflict_* 共现才拦截)──────
+    # [Claude_Opus_4.8] v1.9.0 🅱️ 精准制导：人名/党名单独出现（传记、历史、大选科普、
+    # 科技视频顺带提及）不再拦截；仅当同段文本另有「政策/选举/立法/制裁/听证」等政治
+    # 语境词（policy_context_*）或冲突词（conflict_*）共现时，才判为频道越界并拦截。
+    # 这把审计「症结 3 过宽杀」从地毯式人名匹配升级为上下文制导，显著降低误杀。
+    "person_zh": [
+        "特朗普", "川普", "万斯", "卢比奥", "贝森特", "赫格塞斯", "邦迪",
+        "拜登", "哈里斯", "布林肯", "耶伦", "奥斯汀",
+        "舒默", "麦卡锡", "马斯克",
+        "民主党", "共和党", "两党",
+    ],
+    "person_en": [
+        "donald trump", "trump", "jd vance", "marco rubio", "scott bessent",
+        "pete hegseth", "pam bondi", "joe biden", "kamala harris",
+        "antony blinken", "janet yellen", "lloyd austin",
+        "chuck schumer", "kevin mccarthy", "mike johnson", "elon musk",
+        "republican party", "democratic party",
+    ],
+    # ── 政治语境信号词（解锁 person_* 共现判定）────────────────────────────────
+    "policy_context_zh": [
+        "政策", "政府", "法案", "行政令", "总统令", "大选", "选举", "竞选", "弹劾",
+        "制裁", "关税", "执政", "连任", "投票", "听证", "内阁", "国务卿",
+        "白宫", "国会", "参议院", "众议院", "政变", "外交政策", "峰会",
+        "集会", "竞选集会", "移民政策", "签证令", "党争",
+    ],
+    "policy_context_en": [
+        "policy", "policies", "government", "bill", "legislation", "executive order",
+        "election", "campaign", "rally", "impeach", "impeachment",
+        "sanction", "sanctions", "tariff", "tariffs", "administration",
+        "white house", "congress", "senate", "cabinet", "secretary of state",
+        "ballot", "hearing", "inauguration", "reelection", "diplomacy", "coup",
+        "president", "presidential",
+    ],
     # [Gemini_2.5_Flash_planning] Code Review Fix v1.2.0:
     # CP 层不应设置 exemptions。
     # 原因：_is_exempted 工作在整段文本级别（只要文本中出现任意一个豁免词，就豁免该检测层所有命中词）。
@@ -276,6 +282,125 @@ _CHANNEL_POLICY: dict = {
     "exemptions_zh": [],
     "exemptions_en": [],
 }
+
+
+# ── 外部规则热加载 (External Rules Hot-Reload) ─────────────────────────────────
+# [Claude_Opus_4.8] 🅰️ 进化：把上面的硬编码词库迁到可热加载的外部 JSON
+# （config/censor_rules.json）。运维可在线增删敏感词、无需改代码重部署，闭合
+# 「突发敏感事件 → 词库更新」之间数小时到数天的空窗期。
+#
+# 安全底线（吸取 R8「.env 回退致审查全失效」的教训）：
+#   • 由 settings.enable_external_censor_rules 控制；关闭 → 永远用硬编码默认。
+#   • 文件缺失 / 解析失败 / 结构非法 → 回退到「上一次成功加载的缓存」或硬编码默认，
+#     绝不返回空词库（否则等于静默关闭审查）。
+#   • P0 层 zh+en 不得同时为空，否则判文件非法并回退（防误清空导致政治违禁全失效）。
+#   • 选用 JSON 而非报告建议的 YAML：JSON 是标准库、零新增依赖；censor_engine 处于
+#     P0 导入路径，绝不能因第三方库（pyyaml）缺失而 import 失败。
+#   • 按 st_mtime 热加载：每次检测 stat 文件，mtime 变化才重解析，常态零开销。
+
+_REQUIRED_BLOCK_LEVELS = ("P0", "P1", "P2")
+_REQUIRED_CP_LIST_KEYS = ("zh", "en", "country_zh", "country_en", "conflict_zh", "conflict_en")
+
+# 缓存：mtime 不变则直接复用，避免每次审查都读盘解析
+_rules_cache: dict = {"mtime": None, "blocklist": None, "channel_policy": None}
+
+
+def _validate_rules(data: dict) -> tuple:
+    """校验外部规则结构并补全可选字段，返回 (blocklist, channel_policy)。结构非法抛 ValueError。"""
+    if not isinstance(data, dict):
+        raise ValueError("top-level must be a JSON object")
+    bl = data.get("blocklist")
+    cp = data.get("channel_policy")
+    if not isinstance(bl, dict) or not isinstance(cp, dict):
+        raise ValueError("missing 'blocklist' or 'channel_policy' object")
+
+    for lvl in _REQUIRED_BLOCK_LEVELS:
+        r = bl.get(lvl)
+        if not isinstance(r, dict):
+            raise ValueError(f"blocklist.{lvl} must be an object")
+        for k in ("tag", "action"):
+            if not isinstance(r.get(k), str):
+                raise ValueError(f"blocklist.{lvl}.{k} must be a string")
+        for k in ("zh", "en"):
+            if not isinstance(r.get(k), list):
+                raise ValueError(f"blocklist.{lvl}.{k} must be a list")
+        r.setdefault("score", 0)
+        r.setdefault("exemptions_zh", [])
+        r.setdefault("exemptions_en", [])
+    # P0 是政治安全红线，绝不允许被（误）清空
+    if not (bl["P0"]["zh"] or bl["P0"]["en"]):
+        raise ValueError("blocklist.P0 has no words — refusing to disable the political red line")
+
+    for k in ("tag", "action"):
+        if not isinstance(cp.get(k), str):
+            raise ValueError(f"channel_policy.{k} must be a string")
+    for k in _REQUIRED_CP_LIST_KEYS:
+        if not isinstance(cp.get(k), list):
+            raise ValueError(f"channel_policy.{k} must be a list")
+    # [Claude_Opus_4.8] v1.9.0 🅱️：person_*/policy_context_* 为可选键（旧文件无则默认空，
+    # 退化为纯硬命中+国名共现，不报错），存在时必须是 list。
+    for k in ("person_zh", "person_en", "policy_context_zh", "policy_context_en"):
+        cp.setdefault(k, [])
+        if not isinstance(cp[k], list):
+            raise ValueError(f"channel_policy.{k} must be a list")
+    cp.setdefault("exemptions_zh", [])
+    cp.setdefault("exemptions_en", [])
+    return bl, cp
+
+
+def _load_external_rules() -> tuple:
+    """返回当前生效的 (blocklist, channel_policy)。
+
+    flag 关闭 → 硬编码默认；开启 → 外部 JSON（按 mtime 热加载，任何失败均安全回退）。
+    """
+    if not settings.enable_external_censor_rules:
+        return _DEFAULT_BLOCKLIST, _DEFAULT_CHANNEL_POLICY
+
+    def _fallback(reason: str) -> tuple:
+        if _rules_cache["blocklist"] is not None:
+            logger.error(f"[Censor] external rules unusable ({reason}); keeping last-good cache")
+            return _rules_cache["blocklist"], _rules_cache["channel_policy"]
+        logger.error(f"[Censor] external rules unusable ({reason}); falling back to built-in defaults")
+        return _DEFAULT_BLOCKLIST, _DEFAULT_CHANNEL_POLICY
+
+    try:
+        path = Path(settings.censor_rules_path)
+        if not path.is_file():
+            return _fallback(f"file not found: {path}")
+        mtime = path.stat().st_mtime
+        if mtime == _rules_cache["mtime"] and _rules_cache["blocklist"] is not None:
+            return _rules_cache["blocklist"], _rules_cache["channel_policy"]
+        bl, cp = _validate_rules(json.loads(path.read_text(encoding="utf-8")))
+        _rules_cache.update(mtime=mtime, blocklist=bl, channel_policy=cp)
+        logger.info(f"[Censor] external rules (re)loaded from {path}")
+        return bl, cp
+    except Exception as e:
+        return _fallback(str(e))
+
+
+def _get_blocklist() -> dict:
+    """当前生效的违法词库（P0/P1/P2）。"""
+    return _load_external_rules()[0]
+
+
+def _get_channel_policy() -> dict:
+    """当前生效的频道策略词库（CP）。"""
+    return _load_external_rules()[1]
+
+
+def dump_default_rules() -> dict:
+    """导出硬编码默认规则为可 JSON 序列化的 dict，用于生成/重置 config/censor_rules.json。
+
+    [Claude_Opus_4.8] 返回深拷贝：调用方（或误传入 _validate_rules 的 setdefault）对返回值的
+    任何改动都不会污染模块级 _DEFAULT_* 兜底词库。
+    """
+    return {
+        "_comment": "内容审查词库（热加载）。编辑保存后无需重启，由 enable_external_censor_rules 开关控制；"
+                    "P0 层不得为空；action 取值见 censor_engine.ACTION_* 常量。",
+        "version": 1,
+        "blocklist": copy.deepcopy(_DEFAULT_BLOCKLIST),
+        "channel_policy": copy.deepcopy(_DEFAULT_CHANNEL_POLICY),
+    }
 
 
 @dataclass
@@ -365,8 +490,9 @@ def check_text(zh_text: str = "", en_text: str = "") -> CensorResult:
     zh_dense  = _strip_spaces(zh_norm)  # 去空格版，用于中文词汇匹配
     en_norm   = _normalize(en_text)
 
+    _blocklist = _get_blocklist()
     for level in ("P0", "P1", "P2"):
-        rule        = _BLOCKLIST[level]
+        rule        = _blocklist[level]
         tag         = rule["tag"]
         score       = rule["score"]
         action      = rule["action"]
@@ -436,7 +562,7 @@ def check_channel_policy(zh_text: str = "", en_text: str = "") -> CensorResult:
     Returns:
         CensorResult 实例。hit=False 表示通过策略检测。
     """
-    rule = _CHANNEL_POLICY
+    rule = _get_channel_policy()
     tag    = rule["tag"]
     action = rule["action"]
     exempts_zh = rule.get("exemptions_zh", [])
@@ -481,6 +607,14 @@ def check_channel_policy(zh_text: str = "", en_text: str = "") -> CensorResult:
                 logger.warning(f"[ChannelPolicy] zh-channel co-occurrence hit: '{country}'+'{conflict}'")
                 return _result(f"{country}+{conflict}", "zh")
             logger.debug(f"[ChannelPolicy] zh country '{country}' without conflict word → pass")
+        # [Claude_Opus_4.8] v1.9.0 🅱️：政治人名/党名 仅在与政治语境/冲突词共现时拦截
+        person = _find_zh(rule.get("person_zh", []))
+        if person:
+            pctx = _find_zh(rule.get("policy_context_zh", [])) or _find_zh(rule.get("conflict_zh", []))
+            if pctx:
+                logger.warning(f"[ChannelPolicy] zh-channel person co-occurrence hit: '{person}'+'{pctx}'")
+                return _result(f"{person}+{pctx}", "zh")
+            logger.debug(f"[ChannelPolicy] zh person '{person}' without policy context → pass")
 
     # ── 英文通道 ────────────────────────────────────────────────────────────
     if en_norm and not _is_exempted(en_norm, exempts_en):
@@ -495,6 +629,14 @@ def check_channel_policy(zh_text: str = "", en_text: str = "") -> CensorResult:
                 logger.warning(f"[ChannelPolicy] en-channel co-occurrence hit: '{country}'+'{conflict}'")
                 return _result(f"{country}+{conflict}", "en")
             logger.debug(f"[ChannelPolicy] en country '{country}' without conflict word → pass")
+        # [Claude_Opus_4.8] v1.9.0 🅱️：政治人名/党名 仅在与政治语境/冲突词共现时拦截
+        person = _find_en(rule.get("person_en", []))
+        if person:
+            pctx = _find_en(rule.get("policy_context_en", [])) or _find_en(rule.get("conflict_en", []))
+            if pctx:
+                logger.warning(f"[ChannelPolicy] en-channel person co-occurrence hit: '{person}'+'{pctx}'")
+                return _result(f"{person}+{pctx}", "en")
+            logger.debug(f"[ChannelPolicy] en person '{person}' without policy context → pass")
 
     return CensorResult(hit=False)
 
@@ -535,8 +677,9 @@ def scan_all_matches(zh_text: str = "", en_text: str = "") -> list:
         return re.search(rf"\b{re.escape(_normalize(word))}\b", en_norm) is not None
 
     # ── 违法词库 P0/P1/P2（不短路）────────────────────────────────────────────
+    _blocklist = _get_blocklist()
     for level in ("P0", "P1", "P2"):
-        rule = _BLOCKLIST[level]
+        rule = _blocklist[level]
         tag = rule["tag"]
         if zh_norm:
             for word in rule.get("zh", []):
@@ -548,7 +691,7 @@ def scan_all_matches(zh_text: str = "", en_text: str = "") -> list:
                     _add(word, level, tag, "en")
 
     # ── Channel Policy（硬命中词 + 国名/冲突共现）────────────────────────────────
-    cp = _CHANNEL_POLICY
+    cp = _get_channel_policy()
     cp_tag = cp["tag"]
     if zh_norm:
         for word in cp["zh"]:
@@ -559,6 +702,12 @@ def scan_all_matches(zh_text: str = "", en_text: str = "") -> list:
         if zh_country and zh_conflict:  # 仅当国名与冲突词共现时才视为命中
             for c in zh_country + zh_conflict:
                 _add(c, "CP", cp_tag, "zh")
+        # [Claude_Opus_4.8] v1.9.0 🅱️：政治人名/党名 + 政治语境/冲突词 共现
+        zh_person = [w for w in cp.get("person_zh", []) if _zh_hit(w)]
+        zh_pctx = [w for w in cp.get("policy_context_zh", []) if _zh_hit(w)]
+        if zh_person and (zh_pctx or zh_conflict):
+            for c in zh_person + zh_pctx:
+                _add(c, "CP", cp_tag, "zh")
     if en_norm:
         for word in cp["en"]:
             if _en_hit(word):
@@ -567,6 +716,12 @@ def scan_all_matches(zh_text: str = "", en_text: str = "") -> list:
         en_conflict = [w for w in cp["conflict_en"] if _en_hit(w)]
         if en_country and en_conflict:
             for c in en_country + en_conflict:
+                _add(c, "CP", cp_tag, "en")
+        # [Claude_Opus_4.8] v1.9.0 🅱️：政治人名/党名 + 政治语境/冲突词 共现
+        en_person = [w for w in cp.get("person_en", []) if _en_hit(w)]
+        en_pctx = [w for w in cp.get("policy_context_en", []) if _en_hit(w)]
+        if en_person and (en_pctx or en_conflict):
+            for c in en_person + en_pctx:
                 _add(c, "CP", cp_tag, "en")
 
     return hits
