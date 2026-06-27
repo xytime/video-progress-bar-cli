@@ -8,6 +8,7 @@
 |---------|------------|-------------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：WeChat Session 看门狗脚本，仅访问发布页刷新 Cookie |
 | 1.1.0   | 2026-06-27 | Claude_Opus_4.8 | [无痛重登·预警] 会话龄追踪(标记文件，刷新不重置、过期清零) + 临期预警：龄超 settings.wechat_session_warn_hours(默认22h) 即推 Telegram「该重扫」，在 ~24h 服务端硬上限断档前提醒；Telegram 凭据迁移至 settings（消除 os.environ 违规） |
+| 1.2.0   | 2026-06-27 | Claude_Opus_4.8 | 临期预警/过期告警话术改为引导「发 /wechat_login 取二维码到 Telegram 手机扫码」，与 pipeline_agent 无头 QR 推送闭环（替代原终端 --no-headless 命令） |
 
 Exit Codes:
     0 - Session 活跃，Cookie 已刷新
@@ -97,7 +98,7 @@ def _maybe_warn_expiry(login_at_path: Path, warned_path: Path) -> None:
         _send_telegram(
             f"🟠 <b>WeChat 会话临期（约 {age_h:.1f}h）</b>\n"
             f"服务端 ~24h 硬上限将至，建议现在重扫，避免发布断档。\n"
-            f"<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
+            f"👉 给 Bot 发 <code>/wechat_login</code>，登录二维码会推到这里，手机微信扫码即可。"
         )
         try:
             warned_path.write_text(str(int(time.time())))
@@ -229,7 +230,7 @@ def run_keepalive(
             _send_telegram(
                 "⚠️ <b>WeChat Session 已过期</b>\n"
                 "看门狗检测到登录态失效，请尽快重新扫码登录。\n"
-                "<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
+                "👉 给 Bot 发 <code>/wechat_login</code>，登录二维码会推到这里，手机微信扫码即可。"
             )
             logger.info("[Keepalive] Sent LOGIN_REQUIRED alert to Telegram.")
             browser.close()

@@ -16,6 +16,7 @@
 | 2.0.0   | 2026-06-02 | Claude_Sonnet_4.6_Thinking_planning | bugfix: Modal检测改用wait_for_selector(state=visible)；所有return False前Escape关闭遮罩；publish前清理残留dialog |
 | 2.1.0   | 2026-06-02 | Gemini_3.5_Flash_planning           | 修复合集列表异步加载延迟；优化创建新合集按钮滚动及 JS 点击兜底 |
 | 2.2.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2] 发布确认改为 confirmed 布尔：仅 /post/list 跳转或明确成功文案才 return 0，否则 return 3(UNCONFIRMED) 交管线人工核验，杜绝「假成功」 |
+| 2.3.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登] --login-only 不再强制 headless=False，改遵循传入 headless：headless 时走「截图 QR→发 Telegram/Web UI」远程扫码（与上传流登录同路径），实现「登录态丢失后经 Telegram 主动取二维码」；本机当面登录用 --no-headless |
 """
 
 import os
@@ -302,7 +303,9 @@ def run_uploader(
         logger.info(f"short_title={short_title!r}  category={category!r}  collection={collection!r}  cover={'yes' if cover_abs else 'no'}")
     else:
         video_abs = copy_text = short_title = cover_abs = category = collection = None
-        headless = False  # 登录时强制显示界面
+        # [Claude_Opus_4.8] 不再强制 headless=False。--login-only 现遵循传入的 headless：
+        # headless 时走下方「截图 QR → 发 Telegram / Web UI 浮层」远程扫码分支（与上传流登录同路径，
+        # 已验证可达），实现「登录态丢失后经 Telegram 主动获取二维码」；本机当面登录用 --no-headless 显式弹窗。
 
     with sync_playwright() as p:
         logger.info("Launching browser...")
@@ -477,7 +480,7 @@ def run_uploader(
                 # [Gemini_2.0_Flash_fast] 无论是否配置 TG，在 headless 模式下均挂起等待扫码（120秒内由 Web UI 扫码完成登录）
                 logger.info("Waiting for QR scan (Web UI / Telegram / App) (120s)...")
                 try:
-                    page.wait_for_url("**/post/create", timeout=120000)
+                    page.wait_for_url("**/post/create", timeout=600000)
                     logger.info("Login detected. Saving session...")
                     context.storage_state(path=str(state_file))
                     logger.info(f"Session saved to: {state_file}")
@@ -508,7 +511,7 @@ def run_uploader(
                 logger.info("⚠️ 请在弹出的浏览器窗口中，使用手机微信扫码登录！")
                 logger.info("=" * 50)
                 try:
-                    page.wait_for_url("**/post/create", timeout=120000)
+                    page.wait_for_url("**/post/create", timeout=600000)
                     logger.info("Login detected. Saving session state...")
                     context.storage_state(path=str(state_file))
                     logger.info(f"Session saved to: {state_file}")

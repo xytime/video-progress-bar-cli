@@ -18,6 +18,7 @@ based on incoming Telegram messages and commands.
 | 1.6.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-3] 删除分叉的私有 _find_downloaded_video，改委托 utils.file_utils.find_downloaded_video（白名单+stem+冷归档回退），杜绝 .ass/无音轨分片被误喂 ffmpeg |
 | 1.7.0   | 2026-06-18 | Claude_Opus_4.8                     | [崩溃根治] download_video 下载格式优先 H.264(avc) 而非 AV1(av01)，与 pipeline_manager v3.16.0 对齐：规避 imageio-ffmpeg 内置 AOM 解码器解码 AV1 时间歇性 SIGSEGV |
 | 1.8.0   | 2026-06-20 | Claude_Opus_4.8                     | [修「发布3」误路由] 新增 process_video_now 工具(复用 web /api/videos/{id}/process，单条确定性发布、忽略分数阈值)；system prompt 教会序数指代(「发布第N个」→列表第N条 youtube_id→process_video_now)，并在 queue(≥75) 为空时 fallback 列 waitlist 候选请用户选 |
+| 1.9.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登] trigger_wechat_login 改无头运行 wechat_uploader --login-only 并注入 Telegram 凭据→登录二维码 sendPhoto 到 Telegram 远程扫码(不再弹主机窗口需远程桌面)；同步更新 system prompt 第8条与登录失效告警话术 |
 """
 import os
 import sys
@@ -123,7 +124,7 @@ class PipelineAgent:
             "     * Run generate_video_cover (non-fatal, ignore errors).\n"
             "     * Update status to 'PUBLISHING', then run upload_to_wechat.\n"
             "       - If it returns error 'WECHAT_LOGIN_EXPIRED', update status to 'LOGIN_REQUIRED' in DB, "
-            "send a high-priority Telegram message alerting the user to run /wechat_login or scan the QR code to log in, "
+            "send a high-priority Telegram message telling the user to send /wechat_login to get a login QR pushed here for remote scan, "
             "and IMMEDIATELY stop processing further videos (abort pipeline) and finish.\n"
             "       - If it fails with other errors, update status to 'FAILED', record the error, send a Telegram alert, and proceed.\n"
             "       - If it succeeds, update status to 'PUBLISHED', send a success message to Telegram.\n"
@@ -144,7 +145,10 @@ class PipelineAgent:
             "5. When the user sends '/stats', call get_system_stats and format a nice statistical report.\n\n"
             "6. When the user sends '/delete <youtube_id>', call delete_video_from_db.\n\n"
             "7. When the user sends '/retry <youtube_id>', call retry_video_in_db.\n\n"
-            "8. When the user sends '/wechat_login' (or requests logging in to WeChat), call trigger_wechat_login to pop up the QR code window.\n\n"
+            "8. When the user sends '/wechat_login' (or requests logging in to WeChat / re-login / a login QR code), call trigger_wechat_login. "
+            "It starts a HEADLESS login and pushes the login QR code image to Telegram (here in this chat) for the user to scan on their phone — "
+            "no need to be at the host. Tell the user the QR will arrive shortly and to scan it; on success the session is saved and stuck "
+            "LOGIN_REQUIRED videos auto-resume.\n\n"
             "9b. When the user asks you to SEND/give them the finished/produced video (e.g. '把成片发我', '发我做好的视频', 'send me the video for <id>'), "
             "call send_finished_video(youtube_id, slice_index). It handles Telegram's 50MB limit by auto-compressing large files. "
             "Report back whether it was sent and whether it was compressed; if it returns ok=false, relay the error to the user.\n\n"
@@ -639,24 +643,30 @@ class PipelineAgent:
             return json.dumps({"ok": False, "error": str(e)})
 
     def trigger_wechat_login(self) -> str:
-        """Launches a local visible browser window to guide the user to scan and log in to WeChat Channels.
+        """Starts a HEADLESS WeChat login and pushes the QR code to Telegram for remote scan.
 
-        This pops up a browser window on the MacMini host.
+        [Claude_Opus_4.8] 无需在主机旁：以无头模式运行 wechat_uploader --login-only，截图登录二维码
+        并经 sendPhoto 发到 Telegram，用户手机微信扫码即可；扫码成功后会话自动保存（卡
+        LOGIN_REQUIRED 的高分视频随后自动续发）。注入 Telegram 凭据，使子进程能推送二维码。
         """
-        # [Gemini_3.5_Flash_High_planning]
         script = str(self.project_root / "scripts" / "wechat_uploader.py")
         state = str(self.output_dir / "wechat_state.json")
         login_cmd = [
             self.venv_python,
             script,
-            "--login-only",
-            "--no-headless",
+            "--login-only",          # 默认 headless → 截图 QR 发 Telegram，远程扫码
             "--state",
-            state
+            state,
         ]
+        # 注入 Telegram 凭据（wechat_uploader 经 os.environ 读取），使二维码能 sendPhoto 到 Telegram。
+        env = {**os.environ, "PYTHONPATH": str(self.project_root / "src")}
+        if settings.telegram_bot_token:
+            env["TELEGRAM_BOT_TOKEN"] = settings.telegram_bot_token
+        if settings.active_telegram_chat_id:
+            env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
         try:
-            subprocess.Popen(login_cmd, cwd=str(self.project_root))
-            return json.dumps({"ok": True, "message": "WeChat login window launched. Please scan the QR code on the screen."})
+            subprocess.Popen(login_cmd, cwd=str(self.project_root), env=env)
+            return json.dumps({"ok": True, "message": "微信登录已启动（无头）。登录二维码将稍后发到这里，请用手机微信扫码；扫码成功后会自动保存登录态并继续。"})
         except Exception as e:
             return json.dumps({"ok": False, "error": f"Failed to launch WeChat login process: {e}"})
 
