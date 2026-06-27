@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     wechat_keepalive_min_interval: int = 50         # 最短触发间隔（分钟）
     wechat_keepalive_max_interval: int = 65         # 最长触发间隔（分钟）
     wechat_keepalive_dwell: int = 15                # 停留时长（秒），供微信记录活跃请求
+    # [Claude_Opus_4.8] 微信会话临期预警阈值（小时）：会话龄超过此值，看门狗推 Telegram「该重扫了」，
+    # 在 ~24h 服务端硬上限造成发布断档前主动提醒（见 docs/wechat_login_expiry_rca.html 候选②坐实）。
+    wechat_session_warn_hours: float = 22.0
 
 
     # Google Gemini API Key

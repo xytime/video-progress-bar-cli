@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>微信视频号「登录一天就失效」根因分析与方案 (修正版)</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --mut:#8b949e;
+    --line:#30363d; --red:#ff6b6b; --amber:#f0a020; --green:#3fb950; --blue:#58a6ff;
+    --pur:#bc8cff; --cyan:#56d4dd;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(160deg,#0d1117,#0a0e14);color:var(--ink);
+    font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;line-height:1.7}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 22px 80px}
+  h1{font-size:29px;margin:0 0 4px}
+  h2{font-size:21px;margin:38px 0 14px;padding-left:12px;border-left:4px solid var(--blue)}
+  h3{font-size:16px;margin:20px 0 8px;color:var(--cyan)}
+  .sub{color:var(--mut);font-size:13px;margin-bottom:22px}
+  .badge{display:inline-block;font-size:12px;padding:2px 9px;border-radius:20px;font-weight:600;margin-right:6px}
+  .b-red{background:rgba(255,107,107,.15);color:var(--red);border:1px solid rgba(255,107,107,.4)}
+  .b-grn{background:rgba(63,185,80,.15);color:var(--green);border:1px solid rgba(63,185,80,.4)}
+  .b-amb{background:rgba(240,160,32,.15);color:var(--amber);border:1px solid rgba(240,160,32,.4)}
+  .b-blu{background:rgba(88,166,255,.15);color:var(--blue);border:1px solid rgba(88,166,255,.4)}
+  .b-pur{background:rgba(188,140,255,.15);color:var(--pur);border:1px solid rgba(188,140,255,.4)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:14px 0}
+  .tldr{background:linear-gradient(135deg,rgba(88,166,255,.10),rgba(63,185,80,.08));border:1px solid rgba(88,166,255,.35)}
+  .correction{background:linear-gradient(135deg,rgba(240,160,32,.12),rgba(255,107,107,.08));border:1px solid rgba(240,160,32,.45)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin:14px 0}
+  .ev{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .ev .k{font-size:12px;color:var(--mut)}
+  .ev .v{font-size:17px;font-weight:700;margin-top:4px}
+  .ev .v.red{color:var(--red)} .ev .v.grn{color:var(--green)} .ev .v.amb{color:var(--amber)} .ev .v.blu{color:var(--blue)}
+  code,.mono{font-family:"SF Mono",Menlo,Consolas,monospace;font-size:13px}
+  .mono{background:#0a0e14;border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    display:block;white-space:pre-wrap;color:#c9d1d9;overflow-x:auto}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--cyan)}
+  .x{color:var(--red);font-weight:700}.ok{color:var(--green);font-weight:700}.q{color:var(--amber);font-weight:700}
+  .flow{background:#0a0e14;border:1px solid var(--line);border-radius:12px;padding:18px;margin:16px 0;overflow-x:auto}
+  ul{margin:8px 0;padding-left:22px} li{margin:5px 0}
+  .step{display:flex;gap:12px;align-items:flex-start;margin:10px 0}
+  .step .n{flex:0 0 26px;height:26px;border-radius:50%;background:var(--blue);color:#001;
+    font-weight:800;display:flex;align-items:center;justify-content:center;font-size:13px}
+  .step.g .n{background:var(--green)} .step.a .n{background:var(--amber)}
+  .foot{color:var(--mut);font-size:12px;margin-top:40px;border-top:1px solid var(--line);padding-top:14px}
+  .hl{color:var(--amber);font-weight:600}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:720px){.two{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>微信视频号「登录一天就失效」</h1>
+  <div class="sub">根因分析 (RCA · 修正版) 与解决方案 · 2026-06-24（结论 2026-06-26 坐实：候选②服务端~24h硬上限）· 自动发布流水线运维诊断</div>
+
+  <div class="card correction">
+    <div style="font-size:14px;font-weight:700;margin-bottom:6px">📝 v2 修正说明（重要）</div>
+    初版曾把根因判为「流量经美国机房代理 IP」——<b>这是错的</b>。经用户指正「微信应直连」后重新正确测量：
+    禁用 HTTP 代理、改查<b>国内</b> IP 回显服务（Clash 对国内目标走 DIRECT），证实
+    <b>微信看到的是国内直连 IP，并非境外代理</b>。本版据此推翻并重写。教训：测出口 IP 必须区分「代理路径 / 直连路径」「国内目标 / 国外目标」。
+  </div>
+
+  <div class="card tldr">
+    <div style="font-size:15px;font-weight:700;margin-bottom:6px">⚡ 修正后结论</div>
+    会话失效 <b>不是 cookie 过期</b>（有效期 <span class="hl">≈400 天</span>），<b>不是 keepalive 失灵</b>（已启用且每小时刷新成功），
+    <b>也不是走了境外代理</b>——微信确实<b>直连</b>，出口是 <span class="ok">中国北京联通住宅 IP（123.119.162.223）</span>，对国内平台是「好 IP」。
+    真因已坐实（<span class="ok">2026-06-25 判定实验结论</span>）：
+    <div style="margin-top:8px">
+      ✓ <b>候选②：微信服务端会话硬上限（~24h）</b>——实验当天<b>出口 IP 整天未变</b>，会话仍在 ~24h 准时失效，
+      与 IP/cookie 无关，keepalive 每小时刷新也无法延长其绝对寿命。属平台策略，技术上无法绕过，<b>必须人工重扫</b>。
+      <br>✗ <b>候选①：住宅动态 IP 轮换</b>——已推翻（IP 全程不变却仍失效，证明失效与 IP 变化无因果）。
+    </div>
+    <div style="margin-top:10px">
+      <span class="badge b-blu">类别：会话寿命</span>
+      <span class="badge b-grn">✓ 坐实 候选②服务端~24h硬上限</span>
+      <span class="badge b-amb">✗ 排除 候选①动态IP</span>
+      <span class="badge b-grn">兜底：自动化无痛重登</span>
+    </div>
+  </div>
+
+  <h2>1. 现象</h2>
+  <ul>
+    <li>扫码登录后发布正常；<b>约一天后</b>转 <code>LOGIN_REQUIRED</code>，必须人工重扫。</li>
+    <li>今日(6-24)：02:25 / 02:40 两条高分视频卡 <code>LOGIN_REQUIRED</code>；重扫后立即发布成功 → 除登录态外链路健康。</li>
+    <li>15:05 重登后，15:33 keepalive 确认 <code>Session active</code> 并刷新 state——会话正常。</li>
+    <li><b>2026-06-25 判定实验结论</b>：出口 IP 整天未变，会话仍在 ~24h 准时失效 → <b>坐实候选②（服务端 ~24h 硬上限）</b>，候选①（动态 IP）排除。</li>
+  </ul>
+
+  <h2>2. 证据（含已排除项）</h2>
+  <div class="grid">
+    <div class="ev"><div class="k">sessionid / wxuin Cookie 有效期</div><div class="v grn">≈ 400 天</div><div class="k" style="margin-top:6px">→ 排除「cookie TTL 短」</div></div>
+    <div class="ev"><div class="k">keepalive 看门狗</div><div class="v grn">已启用·每小时刷</div><div class="k" style="margin-top:6px">50–65min/次，15:33 刷新成功</div></div>
+    <div class="ev"><div class="k">微信直连出口 IP（修正后）</div><div class="v grn">123.119.162.223</div><div class="k" style="margin-top:6px">🇨🇳 北京 · 联通 · 住宅</div></div>
+    <div class="ev"><div class="k">国外目标才走代理</div><div class="v amb">US/LA 机房</div><div class="k" style="margin-top:6px">与微信无关（微信 CN 直连）</div></div>
+  </div>
+  <div class="card">
+    <table>
+      <tr><th>假设</th><th>证据</th><th>结论</th></tr>
+      <tr><td>cookie 一天过期</td><td>有效期 ≈400 天</td><td class="x">✗ 排除</td></tr>
+      <tr><td>keepalive 没运行 / 没存回</td><td>已启用、每小时刷新并 storage_state 保存</td><td class="x">✗ 排除</td></tr>
+      <tr><td>走境外/美国代理 IP（初版错误结论）</td><td>禁代理查国内服务 → 北京联通直连 IP</td><td class="x">✗ 推翻</td></tr>
+      <tr><td><b>① 住宅动态 IP 每日轮换</b></td><td>2026-06-25 实验：出口 IP 整天未变，会话仍 ~24h 失效 → 失效与 IP 无因果</td><td class="x">✗ 排除</td></tr>
+      <tr><td><b>② 微信服务端会话 ~24h 硬上限</b></td><td>IP 不变 + keepalive 每小时刷新仍准时 ~24h 失效（2026-06-25 坐实，历史日志多次 expired 印证）</td><td class="ok">✓ 坐实</td></tr>
+    </table>
+  </div>
+
+  <h2>3. 两个候选根因（图解）</h2>
+  <div class="two">
+    <div class="card">
+      <span class="badge b-amb">候选 ①</span><b>住宅动态 IP 每日轮换</b>
+      <div class="flow" style="margin:10px 0;padding:12px">
+<svg viewBox="0 0 440 200" width="100%" xmlns="http://www.w3.org/2000/svg" font-size="12" font-family="monospace">
+  <rect x="10" y="80" width="120" height="44" rx="8" fill="#161b22" stroke="#3fb950"/>
+  <text x="70" y="100" fill="#3fb950" text-anchor="middle">Day1 登录</text>
+  <text x="70" y="116" fill="#8b949e" text-anchor="middle">IP=...162.223</text>
+  <rect x="300" y="80" width="130" height="44" rx="8" fill="#161b22" stroke="#ff6b6b"/>
+  <text x="365" y="100" fill="#ff6b6b" text-anchor="middle">Day2 凌晨重拨</text>
+  <text x="365" y="116" fill="#8b949e" text-anchor="middle">IP 变为新值</text>
+  <line x1="130" y1="102" x2="298" y2="102" stroke="#f0a020" stroke-width="2"/>
+  <text x="214" y="92" fill="#f0a020" text-anchor="middle">联通 PPPoE</text>
+  <text x="214" y="146" fill="#ff6b6b" text-anchor="middle">微信:会话IP突变→异地→注销</text>
+</svg>
+      </div>
+      为何 keepalive 救不了：IP 一变，连 keepalive 自己也从新 IP 发请求，无法"续"回旧绑定。
+    </div>
+    <div class="card">
+      <span class="badge b-pur">候选 ②</span><b>微信服务端会话硬上限</b>
+      <div class="flow" style="margin:10px 0;padding:12px">
+<svg viewBox="0 0 440 200" width="100%" xmlns="http://www.w3.org/2000/svg" font-size="12" font-family="monospace">
+  <rect x="10" y="80" width="120" height="44" rx="8" fill="#161b22" stroke="#3fb950"/>
+  <text x="70" y="100" fill="#3fb950" text-anchor="middle">登录(t0)</text>
+  <rect x="300" y="80" width="130" height="44" rx="8" fill="#161b22" stroke="#ff6b6b"/>
+  <text x="365" y="100" fill="#ff6b6b" text-anchor="middle">t0+~24h</text>
+  <text x="365" y="116" fill="#8b949e" text-anchor="middle">服务端到期</text>
+  <line x1="130" y1="102" x2="298" y2="102" stroke="#bc8cff" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="214" y="92" fill="#bc8cff" text-anchor="middle">绝对寿命计时</text>
+  <text x="214" y="146" fill="#ff6b6b" text-anchor="middle">刷新不延长→到点即失效</text>
+</svg>
+      </div>
+      为何 keepalive 救不了：服务端按"绝对登录时长"封顶，滑动刷新不重置计时。
+    </div>
+  </div>
+
+  <h2>4. 判定实验（区分①②，1–2 天出结论）</h2>
+  <div class="card">
+    <span class="badge b-blu">关键</span>无法靠一次测量区分，需轻量观测：
+    <div class="step a"><div class="n">1</div><div>每 30 分钟记录一行：<b>当前直连出口 IP</b>（禁代理查国内服务）+ <b>会话是否存活</b>（keepalive 的 URL 判定）+ 时间戳。</div></div>
+    <div class="step a"><div class="n">2</div><div>跑满到下一次失效（≤30h）。</div></div>
+    <div class="step g"><div class="n">3</div><div><b>判读</b>：失效时刻若<b>紧跟 IP 变化</b> → 候选①（动态 IP）；若 IP <b>全程不变</b>却仍在 ~24h 失效 → 候选②（服务端硬上限）。</div></div>
+    <div class="mono"># 观测脚本思路（只读，不改任何配置；可挂 crontab 每 30min）
+直连IP = 禁代理 + 查 myip.ipip.net / cip.cc
+会话状态 = 复用 wechat_keepalive 的 URL 判活（/post/create 活 vs login.html 死）
+追加写入 output/wechat_session_probe.csv: 时间, IP, 状态</div>
+  </div>
+
+  <h2>5. 解决方案（按判定结果）</h2>
+
+  <h3>若为 ① 动态 IP —— 让微信出口 IP 固定下来</h3>
+  <div class="card">
+    <ul>
+      <li><b>向联通申请固定公网 IP</b>（家宽/企业宽带可办），从源头消除每日换 IP。最干净。</li>
+      <li>或：为微信域名（<code>*.weixin.qq.com / *.qq.com</code>）单独走一条<b>固定 IP 的国内住宅代理/SD-WAN</b>，其余流量不变。</li>
+      <li>注意：当前机场节点只有 TW/US/SG/JP，<b>无大陆节点</b>，故"钉到国内节点"需另购国内固定出口；不能用现有机场节点（境外，对视频号更糟）。</li>
+    </ul>
+  </div>
+
+  <h3>若为 ② 服务端硬上限 —— 网络改不了，只能让重登无痛</h3>
+  <div class="card">
+    <ul>
+      <li>微信强制 ~24h 重扫属平台策略，技术上<b>无法绕过</b>（必须人工扫码）。</li>
+      <li>对策是<b>把重登变成"无感例行"</b>：在预测失效前主动推新二维码、走可靠到达通道、一键扫码。</li>
+    </ul>
+  </div>
+
+  <h3>通用兜底（无论①②都该做 · 代码侧 · 零网络风险 · 可立即实施）</h3>
+  <div class="card">
+    <ul>
+      <li><b>出口 IP 漂移检测</b>：每次发布/keepalive 记录直连 IP，变化即 Telegram 预警「IP 已变，会话可能失效」。</li>
+      <li><b>失效前预警</b>：基于历史失效节律，在临近 24h 前主动推送二维码（而非失效后才告警）。</li>
+      <li><b>二维码可靠投递</b>：走 Telegram <code>sendPhoto</code>（今日已实测 HTTP 200 可达），附剩余时效与一键重发；不依赖不可见的图床。</li>
+      <li><b>失效即自动备好新码</b>：检测到 <code>LOGIN_REQUIRED</code> 立刻生成并推送二维码，把"停摆数小时"压到"几分钟内重扫即恢复"。</li>
+    </ul>
+  </div>
+
+  <h2>6. 附录：原始证据</h2>
+  <div class="mono"># Cookie 有效期（output/wechat_state.json）
+sessionid / wxuin @ channels.weixin.qq.com  剩余 ≈ 9599.9h（≈400 天）；localStorage 33 条
+
+# 出口 IP —— 区分路径（修正关键）
+直连(禁代理)+国内服务 myip.ipip.net => 123.119.162.223  中国 北京 联通   ← 微信实际看到
+直连+cip.cc            => 123.119.162.223  中国 北京 联通
+默认(经HTTP代理)+国外服务 ipinfo.io => 172.96.141.159  美国 洛杉矶 机房   ← 仅国外流量，与微信无关
+
+# keepalive 配置/状态
+wechat_keepalive_enabled=True  interval=50~65min  dwell=15s
+15:33 日志: Session active (URL /post/create) → state refreshed and saved
+
+# 代码事实
+wechat_uploader 浏览器 --no-proxy-server；微信(CN)经 Clash 走 DIRECT → 本机真实 IP
+wechat_keepalive.py:193 storage_state(path=...) 仅在已登录时保存（逻辑正确）
+下载时 clash_switch_node() 切日本节点，仅影响代理组(国外流量)，不影响微信 CN 直连</div>
+
+  <div class="foot">
+    基于 2026-06-24 实测（会话文件、双路径出口 IP、进程、Clash 配置、keepalive 日志、源码）。<br>
+    本版已修正初版「境外代理 IP」误判。两个候选根因需 1–2 天观测实验定论；通用兜底方案与根因无关，可先行实施。<br>
+    本文档为只读分析产物，未改动任何代码或网络配置。
+  </div>
+
+</div>
+</body>
+</html>

@@ -7,6 +7,7 @@
 | Version | Date       | Author                              | Description                                                  |
 |---------|------------|-------------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：WeChat Session 看门狗脚本，仅访问发布页刷新 Cookie |
+| 1.1.0   | 2026-06-27 | Claude_Opus_4.8 | [无痛重登·预警] 会话龄追踪(标记文件，刷新不重置、过期清零) + 临期预警：龄超 settings.wechat_session_warn_hours(默认22h) 即推 Telegram「该重扫」，在 ~24h 服务端硬上限断档前提醒；Telegram 凭据迁移至 settings（消除 os.environ 违规） |
 
 Exit Codes:
     0 - Session 活跃，Cookie 已刷新
@@ -14,7 +15,6 @@ Exit Codes:
     2 - Session 已过期（LOGIN_REQUIRED），需重新扫码
 """
 
-import os
 import sys
 import time
 import argparse
@@ -22,6 +22,10 @@ import logging
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+
+# [Claude_Opus_4.8] 接入 settings 单一真相源（临期预警阈值 + Telegram 凭据，消除 os.environ 违规）
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+from config.settings import settings
 
 try:
     import requests as _requests
@@ -36,6 +40,70 @@ logger = logging.getLogger("wechat_keepalive")
 
 # [Claude_Sonnet_4.6_Thinking_planning] 与 wechat_uploader.py 保持一致
 WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
+
+# [Claude_Opus_4.8] 会话龄追踪：标记文件记录上次「扫码登录」的近似时刻(epoch)。
+# 看门狗的 Cookie 刷新【不】重置它（刷新无法延长 ~24h 服务端硬上限，见 RCA 候选②）；
+# 仅在会话过期(login required)时清除，使下一次 active 视为重扫后重新计时。
+_LOGIN_AT_FILE = "output/wechat_login_at.txt"
+_WARNED_FILE = "output/wechat_login_warned.flag"
+
+
+def _send_telegram(html: str) -> None:
+    """推送 Telegram（凭据走 settings 单一真相源）。未配置/失败仅记录，不抛。"""
+    token = (settings.telegram_bot_token or "").strip()
+    chat_id = (settings.active_telegram_chat_id or "").strip()
+    if not (token and chat_id and _requests):
+        logger.warning("[Keepalive] Telegram not configured; skip notify.")
+        return
+    try:
+        _requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": html, "parse_mode": "HTML"},
+            timeout=10,
+        )
+    except Exception as e:
+        logger.error(f"[Keepalive] Telegram send failed: {e}")
+
+
+def _stamp_login_if_absent(login_at_path: Path) -> None:
+    """首次观测到 active（或重扫后）→ 记录登录时刻；已存在则不动，让会话龄正确累计。"""
+    if not login_at_path.exists():
+        try:
+            login_at_path.write_text(str(int(time.time())))
+        except Exception as e:
+            logger.warning(f"[Keepalive] Failed to stamp login time: {e}")
+
+
+def _reset_login_markers(*paths: Path) -> None:
+    """会话过期 → 清除登录时刻与已预警标记，便于重扫后重新计时。"""
+    for p in paths:
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"[Keepalive] Failed to clear marker {p}: {e}")
+
+
+def _maybe_warn_expiry(login_at_path: Path, warned_path: Path) -> None:
+    """会话龄超过阈值且本登录周期未预警过 → 推 Telegram 临期提醒（每登录周期仅一次）。"""
+    try:
+        login_at = int(login_at_path.read_text().strip())
+    except Exception:
+        return
+    age_h = (time.time() - login_at) / 3600.0
+    warn_h = float(settings.wechat_session_warn_hours)
+    if age_h >= warn_h and not warned_path.exists():
+        _send_telegram(
+            f"🟠 <b>WeChat 会话临期（约 {age_h:.1f}h）</b>\n"
+            f"服务端 ~24h 硬上限将至，建议现在重扫，避免发布断档。\n"
+            f"<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
+        )
+        try:
+            warned_path.write_text(str(int(time.time())))
+        except Exception:
+            pass
+        logger.info(f"[Keepalive] Sent pre-expiry warning (age={age_h:.1f}h >= {warn_h}h).")
 
 
 def run_keepalive(
@@ -156,33 +224,22 @@ def run_keepalive(
                     is_logged_in = True  # 不确定时乐观假设已登录
 
         if not is_logged_in:
-            # [Claude_Sonnet_4.6_Thinking_planning] Session 已过期 → 发送 Telegram 报警
-            tg_token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-            tg_chat_id = (
-                os.environ.get("TELEGRAM_CHAT_ID", "").strip() or
-                os.environ.get("TELEGRAM_ADMIN_IDS", "").split(",")[0].strip()
+            # [Claude_Opus_4.8] Session 已过期：清除会话龄标记（重扫后重新计时）+ 推 Telegram 报警
+            _reset_login_markers(Path(_LOGIN_AT_FILE), Path(_WARNED_FILE))
+            _send_telegram(
+                "⚠️ <b>WeChat Session 已过期</b>\n"
+                "看门狗检测到登录态失效，请尽快重新扫码登录。\n"
+                "<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
             )
-            if tg_token and tg_chat_id and _requests:
-                try:
-                    _requests.post(
-                        f"https://api.telegram.org/bot{tg_token}/sendMessage",
-                        json={
-                            "chat_id": tg_chat_id,
-                            "text": (
-                                "⚠️ <b>WeChat Session 已过期</b>\n"
-                                "看门狗检测到登录态失效，请尽快重新扫码登录。\n"
-                                "<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
-                            ),
-                            "parse_mode": "HTML",
-                        },
-                        timeout=10,
-                    )
-                    logger.info("[Keepalive] Sent LOGIN_REQUIRED alert to Telegram.")
-                except Exception as e:
-                    logger.error(f"[Keepalive] Failed to send Telegram alert: {e}")
-
+            logger.info("[Keepalive] Sent LOGIN_REQUIRED alert to Telegram.")
             browser.close()
             return 2  # LOGIN_REQUIRED
+
+        # [Claude_Opus_4.8] 会话龄追踪 + 临期预警：首次/重扫后记录登录时刻，临近 ~24h 硬上限主动提醒，
+        # 在发布断档前让你有时间重扫（见 docs/wechat_login_expiry_rca.html 候选②坐实）。
+        login_at_file = Path(_LOGIN_AT_FILE)
+        _stamp_login_if_absent(login_at_file)
+        _maybe_warn_expiry(login_at_file, Path(_WARNED_FILE))
 
         # ── Session 活跃：停留 dwell 秒，让微信服务端记录活跃请求 ─────────────
         logger.info(f"[Keepalive] Session active. Dwelling for {dwell}s to refresh cookies...")
