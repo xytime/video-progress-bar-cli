@@ -69,7 +69,7 @@ cd /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing
 
 ## 五、一次性 Backlog（非每日；做完打勾，源自 2026-06-26 自我审查）
 
-- [ ] **建「无痛自动化重登」**：会话失效前预警 + 二维码可靠推送 + 失效即自动备码（根治每天手动扫码之痛；网络改不了，只能让重登无感）
+- [x] **建「无痛自动化重登」**（2026-06-27 完成可行部分）：✅ 会话失效前预警（keepalive 龄超 22h 推 TG）+ ✅ 二维码可靠推送（`/wechat_login` 无头登录→QR sendPhoto 到 Telegram，手机扫码）。「失效即自动备码」物理上不可行（微信必须人工扫码），已用「预警+远程取码」把重登做到无感。
 - [ ] **清理临时探针**：登录实验已结论，删 `scripts/session_ip_probe.py` + crontab 中 `TEMP-WeChat-RCA-probe` 行 + 根目录 `*.err/*.e` scratch
 - [x] **更新** `docs/wechat_login_expiry_rca.html` 结论为「候选②服务端~24h硬上限」已坐实（2026-06-26 完成）
 - [ ] **提交**未入库的 `vpanel`(运维加固) / `monitor_channels.py` / `session_ip_probe.py` / `docs/*`
