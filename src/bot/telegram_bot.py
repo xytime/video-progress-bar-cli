@@ -20,6 +20,7 @@
 | 1.9.0   | 2026-06-14 | Claude_Opus_4.8                     | 新增 /getvideo 命令：把成片发回 Telegram，>50MB 经 video_delivery 自动压缩（转码放进 executor 不阻塞轮询） |
 | 1.10.0  | 2026-06-20 | Claude_Opus_4.8                     | 修「对话无响应」：builder 开 concurrent_updates(True) 消除慢 Agent 对后续消息的串行阻塞；放宽 pool_timeout=20s 等超时，避免网络抖动时 Pool timeout 发不出回复 |
 | 1.11.0  | 2026-06-20 | Claude_Opus_4.8                     | 新增确定性命令 /process <youtube_id>：经 api_client.process_video → web /api/videos/{id}/process 立即处理单条视频（忽略分数阈值），不依赖 AI 编排，作为「发布某条」的可靠兜底 |
+| 1.12.0  | 2026-06-27 | Claude_Opus_4.8                     | [根治崩溃循环/「无反应」] builder 显式 connection_pool_size(256) + get_updates_connection_pool_size(16)/get_updates_pool_timeout(20)：concurrent_updates(True) 下默认池仅 1 条→PoolTimeout 抛进 updater 轮询→Application 停止(频繁重启)。enlarge 后并发 handler 不再抢空连接池 |
 """
 from __future__ import annotations
 
@@ -785,11 +786,18 @@ def main() -> None:
     # AI Agent 消息会把后续所有消息/命令(含忙提示)压住十几秒 → 表现为「无响应」。
     # 开并发后每条 update 独立成 task，慢 agent 不再 head-of-line 阻塞其它消息。
     # pool_timeout 默认仅 1s，网络/代理一抖就抛 Pool timeout 导致回复发不出，放宽到 20s。
+    # [Claude_Opus_4.8] 根治 httpx PoolTimeout 崩溃循环：concurrent_updates(True) 下多 handler 并发，
+    # 但默认连接池仅 1 条 → getUpdates/sendMessage 抢不到连接 → PoolTimeout 抛进 updater 轮询循环 →
+    # Application 停止（日志「Application is stopping」+ 频繁重启 487 次，表现为「/命令无反应」）。
+    # 显式放大主连接池(256)与 getUpdates 专用池(16)，并放宽各自 pool_timeout。
     app = (
         Application.builder()
         .token(token)
         .concurrent_updates(True)
+        .connection_pool_size(256)
         .pool_timeout(20)
+        .get_updates_connection_pool_size(16)
+        .get_updates_pool_timeout(20)
         .read_timeout(30)
         .write_timeout(60)
         .connect_timeout(15)
