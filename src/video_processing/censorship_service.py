@@ -12,6 +12,7 @@
 |---------|------------|-----------------|---------------------------------------------------------------|
 | 1.0.0   | 2026-06-22 | Claude_Opus_4.8 | 从 pipeline_manager._check_censorship 抽出 CensorshipService（行为逐字保留） |
 | 1.1.0   | 2026-06-25 | Claude_Opus_4.8 | P2 命中手动锁定(is_manually_scored=1)视频时改为挂起人工复核(FAILED+TG)而非 force 清零回弹——根治"调分后反复弹回待筛选且分数归0"的困惑；非锁定视频仍按原 deprioritize |
+| 1.2.0   | 2026-06-28 | Claude_Opus_4.8 | 受信任频道白名单：channel_id 在 settings.censorship_bypass_channel_set 中→跳过全部审查层(P0/P1/P2/CP)。供运营对自审过的优质频道整体开绿灯（如财经频道的地缘共现词不再误杀） |
 """
 import re
 import html
@@ -57,6 +58,16 @@ class CensorshipService:
         if self.db.is_censorship_bypassed(yid, slice_index=slice_index):
             logger.warning(f"[Censor] Video {yid} BYPASSED by manual review — skipping all censorship layers.")
             return False
+
+        # [Claude_Opus_4.8] 受信任频道白名单：channel_id 在 settings.censorship_bypass_channel_set
+        # → 跳过全部审查层（P0/P1/P2/CP）。供运营对自审过、确定可发的优质频道整体开绿灯。
+        bypass_chs = settings.censorship_bypass_channel_set
+        if bypass_chs:
+            _row = self.db.get_video_by_youtube_id(yid, slice_index=slice_index)
+            _ch = _row.get("channel_id") if _row else None
+            if _ch and _ch in bypass_chs:
+                logger.warning(f"[Censor] Video {yid} from trusted channel {_ch} — skipping all censorship layers.")
+                return False
 
         try:
             # ── A. 违法内容审查（P0/P1/P2） ────────────────────────────────

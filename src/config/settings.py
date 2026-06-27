@@ -21,6 +21,7 @@
 | 3.1.0 | 2026-06-22 | Claude_Opus_4.8                     | 新增 enable_subtitle_censorship（症结8）、enable_external_censor_rules（🅰️词库热加载）开关，及 censor_rules_path 计算属性 |
 | 3.2.0 | 2026-06-23 | Claude_Opus_4.8                     | 新增 ytdlp_path 计算属性（单一真相源）：杜绝裸 'yt-dlp'，修复发布断流根因——cron 最小 PATH 无 .venv/bin 致 FileNotFoundError，频道发现整体静默失败 |
 | 3.3.0 | 2026-06-25 | Claude_Opus_4.8                     | 新增 enable_source_date_stamp / source_date_stamp_label：竖屏成片左上角「源视频发布日期」毛玻璃戳开关与文案前缀，默认关闭 |
+| 3.4.0 | 2026-06-28 | Claude_Opus_4.8                     | 新增 censorship_bypass_channels（逗号分隔 channel_id）+ censorship_bypass_channel_set 解析属性：受信任频道整体跳过审查(P0/P1/P2/CP)，供运营对自审过的优质频道开绿灯；另新增 wechat_session_warn_hours(会话临期预警阈值) |
 """
 import json
 import socket
@@ -160,6 +161,12 @@ class Settings(BaseSettings):
     # 默认关闭：开启会对此前「标题干净」的存量视频新增拦截，需先灰度验证再在 .env 置 true。
     enable_subtitle_censorship: bool = False
 
+    # [Claude_Opus_4.8] 受信任频道白名单：列出的 channel_id（逗号分隔）跳过全部内容审查
+    # （P0/P1/P2 + 频道策略 CP），其视频不受敏感词/地缘政治共现拦截。供运营对「自审过、
+    # 确定可发」的优质频道开绿灯。⚠️ 等同于对该频道关闭审查防线——仅加自己充分信任的频道，
+    # 政治/地缘内容在视频号有封号风险，由运营自担。经 settings.censorship_bypass_channel_set 读取。
+    censorship_bypass_channels: str = ""
+
     # SIGTERM 阶梯强杀机制（删除活跃任务时优雅终止底层进程）
     enable_sigterm_kill: bool = False
 
@@ -210,6 +217,11 @@ class Settings(BaseSettings):
         if self.telegram_admin_ids:
             return self.telegram_admin_ids.split(",")[0].strip()
         return None
+
+    @property
+    def censorship_bypass_channel_set(self) -> set:
+        """[Claude_Opus_4.8] 受信任频道 channel_id 集合（跳过全部审查）。解析逗号分隔配置。"""
+        return {c.strip() for c in (self.censorship_bypass_channels or "").split(",") if c.strip()}
 
     @computed_field  # type: ignore[misc]
     @property
