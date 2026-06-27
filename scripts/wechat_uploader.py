@@ -18,6 +18,7 @@
 | 2.2.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2] 发布确认改为 confirmed 布尔：仅 /post/list 跳转或明确成功文案才 return 0，否则 return 3(UNCONFIRMED) 交管线人工核验，杜绝「假成功」 |
 | 2.3.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登] --login-only 不再强制 headless=False，改遵循传入 headless：headless 时走「截图 QR→发 Telegram/Web UI」远程扫码（与上传流登录同路径），实现「登录态丢失后经 Telegram 主动取二维码」；本机当面登录用 --no-headless |
 | 2.4.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登·强制] 新增 --relogin：忽略现有会话→必到登录页出二维码，支持「临期主动重登刷新 24h」（不只过期后）；安全——旧 state 不删，仅扫码成功才覆盖，未扫则旧会话保持有效、管线不掉线 |
+| 2.5.0   | 2026-06-28 | Claude_Opus_4.8                     | [二维码精裁] 登录二维码在内嵌 iframe(/platform/login-for-iframe)的 img.qrcode(208x208)里，顶层 locator 找不到→以前总发整页截图(206KB,难扫)。改遍历所有 frame 精确裁剪→发 13KB 干净二维码 |
 """
 
 import os
@@ -434,17 +435,23 @@ def run_uploader(
                 page.wait_for_timeout(2000)  # 等 QR 码渲染
                 qr_path = str(state_file.parent / "login_qr.png")
                 qr_captured = False
-                for qr_sel in ["img.qrcode", ".login-qr img", ".qr-code img",
-                               "img[src*='qr']", ".qrcode"]:
-                    qr_el = page.locator(qr_sel)
-                    if qr_el.count() > 0:
+                # [Claude_Opus_4.8] 微信登录二维码渲染在内嵌 iframe(/platform/login-for-iframe)里的
+                # <img class="qrcode">(208x208)。顶层 page.locator 找不到→以前总回退全页截图(整页发 TG，
+                # 难扫)。改为遍历所有 frame(含主框架)精确裁剪二维码；全找不到才回退整页。
+                qr_selectors = ["img.qrcode", ".login-qr img", ".qr-code img", "img[src*='qr']", ".qrcode"]
+                for fr in page.frames:
+                    for qr_sel in qr_selectors:
                         try:
-                            qr_el.first.screenshot(path=qr_path)
-                            qr_captured = True
-                            logger.info(f"QR captured via: {qr_sel} (Always-save)")
-                            break
+                            qr_el = fr.locator(qr_sel)
+                            if qr_el.count() > 0:
+                                qr_el.first.screenshot(path=qr_path)
+                                qr_captured = True
+                                logger.info(f"QR captured (cropped) via frame={fr.url[:40]!r} sel={qr_sel!r}")
+                                break
                         except Exception:
                             continue
+                    if qr_captured:
+                        break
                 if not qr_captured:
                     page.screenshot(path=qr_path)
                     logger.info("QR full-page screenshot (fallback, Always-save).")
