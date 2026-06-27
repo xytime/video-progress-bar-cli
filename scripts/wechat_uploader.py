@@ -17,6 +17,7 @@
 | 2.1.0   | 2026-06-02 | Gemini_3.5_Flash_planning           | 修复合集列表异步加载延迟；优化创建新合集按钮滚动及 JS 点击兜底 |
 | 2.2.0   | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2] 发布确认改为 confirmed 布尔：仅 /post/list 跳转或明确成功文案才 return 0，否则 return 3(UNCONFIRMED) 交管线人工核验，杜绝「假成功」 |
 | 2.3.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登] --login-only 不再强制 headless=False，改遵循传入 headless：headless 时走「截图 QR→发 Telegram/Web UI」远程扫码（与上传流登录同路径），实现「登录态丢失后经 Telegram 主动取二维码」；本机当面登录用 --no-headless |
+| 2.4.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登·强制] 新增 --relogin：忽略现有会话→必到登录页出二维码，支持「临期主动重登刷新 24h」（不只过期后）；安全——旧 state 不删，仅扫码成功才覆盖，未扫则旧会话保持有效、管线不掉线 |
 """
 
 import os
@@ -273,6 +274,7 @@ def run_uploader(
     cover_path: str = None,      # 封面图文件 (JPEG)
     category_path: str = None,   # 分类文件
     collection: str = None,      # 新增：微信合集名称
+    relogin: bool = False,       # [Claude_Opus_4.8] 强制重登：忽略现有会话→走登录页出二维码（成功才覆盖 state）
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -333,7 +335,11 @@ def run_uploader(
                 "Chrome/124.0.0.0 Safari/537.36"
             ),
         }
-        if state_file.exists():
+        if relogin:
+            # [Claude_Opus_4.8] 强制重登：不加载旧会话→必到登录页出二维码。旧 state 文件**不删**，
+            # 仅在扫码成功后由 context.storage_state() 覆盖；未扫码则旧会话保持有效（管线不掉线）。
+            logger.info("Force-relogin: ignoring existing session, will show fresh QR.")
+        elif state_file.exists():
             logger.info(f"Loading session state from: {state_file}")
             context_opts["storage_state"] = str(state_file)
 
@@ -1547,6 +1553,8 @@ def main():
     parser.add_argument("--state",  default="output/wechat_state.json",
                         help="Path to save/load Playwright session state")
     parser.add_argument("--login-only",  action="store_true")
+    parser.add_argument("--relogin",     action="store_true",
+                        help="强制重登：忽略现有会话，必出二维码（成功扫码才覆盖 state；未扫旧会话保持有效）")
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--draft",       action="store_true")
     parser.set_defaults(headless=True)
@@ -1563,6 +1571,7 @@ def main():
         headless      = args.headless,
         draft         = args.draft,
         collection    = args.collection,
+        relogin       = args.relogin,
     )
     sys.exit(code)
 

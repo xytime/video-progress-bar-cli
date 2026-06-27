@@ -19,6 +19,7 @@ based on incoming Telegram messages and commands.
 | 1.7.0   | 2026-06-18 | Claude_Opus_4.8                     | [崩溃根治] download_video 下载格式优先 H.264(avc) 而非 AV1(av01)，与 pipeline_manager v3.16.0 对齐：规避 imageio-ffmpeg 内置 AOM 解码器解码 AV1 时间歇性 SIGSEGV |
 | 1.8.0   | 2026-06-20 | Claude_Opus_4.8                     | [修「发布3」误路由] 新增 process_video_now 工具(复用 web /api/videos/{id}/process，单条确定性发布、忽略分数阈值)；system prompt 教会序数指代(「发布第N个」→列表第N条 youtube_id→process_video_now)，并在 queue(≥75) 为空时 fallback 列 waitlist 候选请用户选 |
 | 1.9.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登] trigger_wechat_login 改无头运行 wechat_uploader --login-only 并注入 Telegram 凭据→登录二维码 sendPhoto 到 Telegram 远程扫码(不再弹主机窗口需远程桌面)；同步更新 system prompt 第8条与登录失效告警话术 |
+| 1.10.0  | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登·强制] trigger_wechat_login 加 --relogin：即使当前已登录也必出二维码（修复「已登录→/wechat_login 无二维码、用户干等」），支持临期主动重登刷新 24h；旧会话扫码成功前保持有效 |
 """
 import os
 import sys
@@ -655,6 +656,8 @@ class PipelineAgent:
             self.venv_python,
             script,
             "--login-only",          # 默认 headless → 截图 QR 发 Telegram，远程扫码
+            "--relogin",             # 强制出二维码（即使当前已登录），支持「临期主动重登刷新 24h」；
+                                     # 旧会话在扫码成功前保持有效，未扫不掉线
             "--state",
             state,
         ]
