@@ -27,6 +27,16 @@ PID_FILE="$PRJ_ROOT/output/dashboard.pid"
 UI_LOG_FILE="$PRJ_ROOT/output/dashboard.log"
 JOB_LOG_FILE="$PRJ_ROOT/output/pipeline.log"
 
+# [Claude_Opus_4.8] 仪表盘端口（与 settings.dashboard_port 一致，支持 DASHBOARD_PORT 覆盖）
+DASH_PORT="${DASHBOARD_PORT:-9100}"
+DASH_PATTERN="src/web/app.py"
+
+# 进程发现以「端口归属」为权威判断（PID 文件易漂移，曾导致 stop 漏杀真服务进程、
+# start 不察端口被占而硬起游离僵进程）。_all_dash_pids 同时覆盖游离进程与占端口者。
+_dash_pids()     { pgrep -f "$DASH_PATTERN" 2>/dev/null; }
+_port_pid()      { lsof -nP -iTCP:"$DASH_PORT" -sTCP:LISTEN -t 2>/dev/null | head -1; }
+_all_dash_pids() { printf '%s\n%s\n' "$(_dash_pids)" "$(_port_pid)" | sort -u | grep -v '^$'; }
+
 # 确保 output 目录存在
 mkdir -p "$PRJ_ROOT/output"
 
@@ -46,7 +56,8 @@ show_usage() {
     echo ""
     echo "命令组: ui (仪表盘管理)"
     echo "  ./vpanel ui start             后台启动控制中心仪表盘 (http://localhost:9100)"
-    echo "  ./vpanel ui stop              停止控制中心仪表盘"
+    echo "  ./vpanel ui stop              停止控制中心仪表盘（清光所有进程 + 释放端口）"
+    echo "  ./vpanel ui restart           重启控制中心（彻底清停 → 验证端口 → 验证绑定）"
     echo "  ./vpanel ui status            查看控制中心运行状态"
     echo "  ./vpanel ui logs              实时查看控制中心日志（最近 50 行）"
     echo "  ./vpanel ui open              在浏览器中打开仪表盘"
@@ -73,12 +84,20 @@ show_usage() {
 # 仪表盘控制 (UI)
 # -----------------------------------------------------------------------
 ui_start() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null 2>&1; then
-            echo "ℹ️ 控制中心已经在运行中 (PID: $PID, http://localhost:9100)"
-            return 0
-        fi
+    # [Claude_Opus_4.8] 权威判断：端口已被占用 = 已在运行（不再只信易漂移的 PID 文件）
+    local pp; pp="$(_port_pid)"
+    if [ -n "$pp" ]; then
+        echo "ℹ️ 控制中心已在运行 (PID: $pp, http://localhost:$DASH_PORT)"
+        echo "$pp" > "$PID_FILE"
+        return 0
+    fi
+    # 清理「持有 app.py 但没绑端口」的游离/僵进程（如端口冲突起飞失败的残留）
+    local strays; strays="$(_dash_pids)"
+    if [ -n "$strays" ]; then
+        echo "🧹 清理未绑定端口的游离进程: $(echo "$strays" | tr '\n' ' ')"
+        for p in $strays; do kill "$p" 2>/dev/null || true; done
+        sleep 1
+        for p in $(_dash_pids); do kill -9 "$p" 2>/dev/null || true; done
     fi
 
     echo "🚀 正在启动控制中心仪表盘..."
@@ -86,52 +105,77 @@ ui_start() {
     NEW_PID=$!
     echo "$NEW_PID" > "$PID_FILE"
 
-    # 等待 1 秒确认是否成功运行
-    sleep 1.5
-    if ps -p "$NEW_PID" > /dev/null 2>&1; then
-        echo "✅ 启动成功！"
-        echo "🌐 仪表盘地址: http://localhost:9100"
-        echo "📄 日志文件: output/dashboard.log"
-        echo "PID: $NEW_PID"
-    else
-        echo "❌ 启动失败，请检查日志: output/dashboard.log"
-        rm -f "$PID_FILE"
-    fi
+    # 成功判据 = 新进程「真的绑上了端口」，而非仅"进程还活着"（旧 bug 根因）
+    local i bound
+    for i in $(seq 1 20); do
+        sleep 0.5
+        bound="$(_port_pid)"
+        if [ "$bound" = "$NEW_PID" ]; then
+            echo "✅ 启动成功！端口 :$DASH_PORT 由 PID $NEW_PID 接管"
+            echo "🌐 仪表盘地址: http://localhost:$DASH_PORT"
+            echo "📄 日志文件: output/dashboard.log"
+            return 0
+        fi
+        ps -p "$NEW_PID" > /dev/null 2>&1 || break   # 进程提前退出 → 失败
+    done
+    echo "❌ 启动失败/未能绑定端口 :$DASH_PORT，请检查日志: output/dashboard.log"
+    rm -f "$PID_FILE"
+    return 1
 }
 
 ui_stop() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null 2>&1; then
-            echo "🛑 正在停止控制中心 (PID: $PID)..."
-            kill "$PID"
-            # [Claude_Sonnet_4.6_Thinking_planning] P2修复：等待进程真正退出，而非立即宣告成功
-            sleep 0.8
-            if ps -p "$PID" > /dev/null 2>&1; then
-                echo "⚡ 进程未响应，强制终止..."
-                kill -9 "$PID" || true
-            fi
-            echo "✅ 已停止"
-        else
-            echo "⚠️ PID 文件存在，但进程已不在运行（已清理）"
-        fi
-        rm -f "$PID_FILE"
-    else
+    # [Claude_Opus_4.8] 杀光所有 dashboard 进程 + 占端口者（不再只杀 PID 文件那一个，
+    # 避免 PID 文件漂移后漏掉真正在服务的进程；并在最后验证端口确已释放）
+    local pids; pids="$(_all_dash_pids)"
+    if [ -z "$pids" ]; then
         echo "ℹ️ 控制中心未在运行"
+        rm -f "$PID_FILE"
+        return 0
     fi
+    echo "🛑 正在停止控制中心 (PID: $(echo "$pids" | tr '\n' ' '))..."
+    for p in $pids; do kill "$p" 2>/dev/null || true; done   # 优雅 SIGTERM
+    local i
+    for i in $(seq 1 12); do                                  # 等待最多 ~6s 退出+释放端口
+        sleep 0.5
+        [ -z "$(_all_dash_pids)" ] && break
+    done
+    local left; left="$(_all_dash_pids)"
+    if [ -n "$left" ]; then
+        echo "⚡ 进程未响应，强制终止: $(echo "$left" | tr '\n' ' ')"
+        for p in $left; do kill -9 "$p" 2>/dev/null || true; done
+        sleep 0.5
+    fi
+    rm -f "$PID_FILE"
+    if [ -n "$(_port_pid)" ]; then
+        echo "❌ 端口 :$DASH_PORT 仍被 PID $(_port_pid) 占用，请人工检查"
+        return 1
+    fi
+    echo "✅ 已停止，端口 :$DASH_PORT 已释放"
+}
+
+ui_restart() {
+    # [Claude_Opus_4.8] 真正的重启：彻底清停（含游离进程）→ 验证端口释放 → 验证绑定启动
+    echo "🔄 重启控制中心..."
+    ui_stop || true
+    sleep 1
+    ui_start
 }
 
 ui_status() {
-    if [ -f "$PID_FILE" ]; then
-        PID=$(cat "$PID_FILE")
-        if ps -p "$PID" > /dev/null 2>&1; then
-            echo "🟢 运行中 (PID: $PID)"
-            echo "🌐 仪表盘地址: http://localhost:9100"
-            echo "🕒 运行时间: $(ps -p "$PID" -o etime= | xargs)"
-            return 0
-        fi
+    # [Claude_Opus_4.8] 以端口归属为准，并主动报告游离进程
+    local pp; pp="$(_port_pid)"
+    if [ -n "$pp" ]; then
+        echo "🟢 运行中 (PID: $pp, 端口 :$DASH_PORT)"
+        echo "🌐 仪表盘地址: http://localhost:$DASH_PORT"
+        echo "🕒 运行时间: $(ps -p "$pp" -o etime= | xargs)"
+    else
+        echo "🔴 已停止（端口 :$DASH_PORT 无监听）"
     fi
-    echo "🔴 已停止"
+    local strays; strays="$(_dash_pids | grep -vx "$pp" 2>/dev/null)"
+    if [ -n "$strays" ]; then
+        echo "⚠️ 检测到游离 app.py 进程(未绑端口): $(echo "$strays" | tr '\n' ' ')"
+        echo "   建议 './vpanel ui restart' 一键清理并重启"
+    fi
 }
 
 ui_logs() {
@@ -258,11 +302,12 @@ fi
 case "$GROUP" in
     ui)
         case "$ACTION" in
-            start)  ui_start ;;
-            stop)   ui_stop ;;
-            status) ui_status ;;
-            logs)   ui_logs ;;
-            open)   ui_open ;;
+            start)   ui_start ;;
+            stop)    ui_stop ;;
+            restart) ui_restart ;;
+            status)  ui_status ;;
+            logs)    ui_logs ;;
+            open)    ui_open ;;
             *)
                 echo "❌ 错误: 未知操作 '$ACTION'"
                 show_usage

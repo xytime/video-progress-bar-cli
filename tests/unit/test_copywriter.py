@@ -6,6 +6,7 @@
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning  | Initial creation of copywriter tests |
 | 1.1.0   | 2026-05-26 | Gemini_2.5_Pro_planning    | 新增P0回归测试: ①零分fallback, ②英文子串污染, ③音乐7用例覆盖率 |
 | 1.2.0   | 2026-05-27 | Gemini_3.5_Flash_planning  | 新增 graceful_truncate_title 测试用例（括号剔除与最左侧语义段优先） |
+| 1.3.0   | 2026-06-22 | Claude_Opus_4.8            | [🅲] 新增 _apply_post_processing 兜底纠偏测试（营销词/网络梗替换、干净文本不变） |
 """
 import sys
 import pytest
@@ -15,7 +16,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from scripts.copywriter import classify_category, DEFAULT_CATEGORY, graceful_truncate_title, extract_headline_workaround
+from scripts.copywriter import (
+    classify_category, DEFAULT_CATEGORY, graceful_truncate_title,
+    extract_headline_workaround, _apply_post_processing,
+)
+from video_processing.utils.text_utils import verbatim_overlap_ratio
 
 
 # ── 原有功能测试 ─────────────────────────────────────────────────────────────
@@ -151,6 +156,53 @@ def test_extract_headline_workaround():
     c, s = extract_headline_workaround("专家表示，你好")
     assert c == "专家表示，你好"  # 原样返回
     assert s == ""
+
+
+def test_post_processing_replaces_marketing_and_slang():
+    """[Claude_Opus_4.8] 🅲: 残留的营销词/网络梗应被兜底替换为通顺表达。"""
+    title, sub = _apply_post_processing("爆款Python秘籍", "保姆级教程YYDS")
+    assert "爆款" not in title and "秘籍" not in title
+    assert "保姆级" not in sub and "YYDS" not in sub
+    assert title == "高阶Python指南"
+    assert sub == "详尽教程顶级"
+
+
+def test_post_processing_leaves_clean_text_untouched():
+    """[Claude_Opus_4.8] 🅲: 干净文案不应被改动。"""
+    title, sub = _apply_post_processing("AI如何改写代码", "程序员必备工具")
+    assert title == "AI如何改写代码"
+    assert sub == "程序员必备工具"
+
+
+# ── 🅴 反搬运：原创度（逐字照搬）信号 ────────────────────────────────────────
+
+def test_overlap_identical_is_high():
+    s = "This phone has a brand new titanium frame and improved battery life."
+    assert verbatim_overlap_ratio(s, s) > 0.9
+
+
+def test_overlap_distinct_is_zero():
+    a = "全新钛金属边框，续航大幅提升的国产旗舰手机深度体验"
+    b = "A completely unrelated cooking tutorial about making pasta sauce."
+    assert verbatim_overlap_ratio(a, b) == 0.0
+
+
+def test_overlap_cross_language_copy_vs_english_desc_low():
+    """中文原创文案 vs 英文源描述：逐字照搬比例应≈0（达到反搬运预期）。"""
+    copy = "三分钟看懂这款旗舰手机的钛金属边框与续航升级，值得收藏分享。"
+    desc = "The new flagship features a titanium frame and much better battery."
+    assert verbatim_overlap_ratio(copy, desc) < 0.1
+
+
+def test_overlap_partial_echo_detected():
+    """文案中段照搬了描述的一长串 → 比例应明显>0。"""
+    desc = "introducing the titanium frame with aerospace grade aluminum alloy chassis"
+    copy = "重磅新品 introducing the titanium frame with aerospace grade 这就是亮点"
+    assert verbatim_overlap_ratio(copy, desc) >= 0.3
+
+
+def test_overlap_short_inputs_return_zero():
+    assert verbatim_overlap_ratio("短", "短文本", min_run=8) == 0.0
 
 
 def test_graceful_truncate_title_dangling_reporting_clause():

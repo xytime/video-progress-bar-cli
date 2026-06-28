@@ -17,6 +17,9 @@
 | 1.10.0  | 2026-05-27 | Gemini_3.1_Pro_High_planning            | P0体验修复: 引入斐波那契重试；新增正则提取主干降级方案；graceful_truncate_title 增加悬空词惩罚评分 |
 | 1.11.0  | 2026-06-02 | Gemini_2.5_Pro_planning                 | 封面内容角标: 新增 content_label 字段，LLM 自动按内容选择 重磅/突发/独家/最新 等运营标签，写入 {yid}_label.txt |
 | 1.12.0  | 2026-06-08 | Claude_Sonnet_4.6_planning             | _translate_fallback 改用 translation_helper（阿里云 MT 优先）|
+| 1.13.0  | 2026-06-22 | Claude_Opus_4.8                         | [🅲 文案本土化 V2] _SYSTEM_INSTRUCTION 升级为视频号原生爆款操盘手：强化平台心智（完播率/转发率优先、去搬运去翻译腔）、短标题黄金公式细化、禁止清单扩充翻译腔/网络梗；不写入未证实受众统计；post-processing 兜底新增 保姆级/YYDS/绝绝子 |
+| 1.14.0  | 2026-06-22 | Claude_Opus_4.8                         | [架构 C] graceful_truncate_title 下沉至 utils.text_utils 单一真相源；本文件顶部 re-import 保持既有调用方零改动；消除 pipeline_manager→scripts 反向依赖 |
+| 1.15.0  | 2026-06-22 | Claude_Opus_4.8                         | [🅴 反搬运·零渲染] 接入 verbatim_overlap_ratio：文案对源描述逐字照搬 >=25% 时告警（原创度信号，不阻断发布） |
 """
 
 import re
@@ -41,6 +44,9 @@ _src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
 if _src_path not in sys.path:
     sys.path.insert(0, _src_path)
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning]
+# [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils（单一真相源）；此处 re-import 保持
+# `from copywriter import graceful_truncate_title` 的既有调用方（wechat_uploader、测试）零改动。
+from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("copywriter")
@@ -269,87 +275,9 @@ def _strip_md_code_block(text: str) -> str:
     return text.strip()
 
 
-def graceful_truncate_title(title: str, max_len: int = 16, min_len: int = 6) -> str:  # [Gemini_3.5_Flash_planning]
-    """[v1.9.1] 优雅截断短标题，保证截断后语义完整。
-
-    算法：预处理净化（括号剔除）+ 正则分词 + 滑动窗口穷举 + 首部语义优先排序
-    1. 预处理：对于超长标题，优先移除括号/方括号内的补充说明，避免其占据宝贵的短标题字数或导致分词不当
-    2. 将处理后的标题按常见分隔符（：、，、|、—、空格等）切分为 token 列表（保留分隔符）
-    3. 穷举所有 contiguous token 子序列，收集满足 [min_len, max_len] 的候选
-    4. 按 (起始位置升序, 长度降序) 排序，优先保留最左侧（最核心）的语义段
-    5. 若无任何合规候选，则进行安全兜底裁剪（末尾虚词/标点剔除）
-
-    Args:
-        title:   原始标题字符串（可能超出 max_len）
-        max_len: 最大允许字符数，默认 16（微信视频号上限）
-        min_len: 最小允许字符数，默认 6（微信视频号下限）
-
-    Returns:
-        满足 [min_len, max_len] 的最优子段，实在无法满足则返回安全截断结果
-    """
-    title = title.strip()
-    if len(title) <= max_len:
-        return title
-
-    # 1. 预处理：优先移除括号/方括号内的辅助信息 (Try It and See / 尝试一下看看)
-    cleaned_title = re.sub(r'\([^)]*\)|（[^）]*）|\[[^\]]*\]|【[^】]*】', '', title).strip()
-    cleaned_title = re.sub(r'\s*，\s*，', '，', cleaned_title)
-    cleaned_title = re.sub(r'\s*,\s*,', ',', cleaned_title)
-    cleaned_title = re.sub(r'\s+', ' ', cleaned_title)
-
-    if min_len <= len(cleaned_title) <= max_len:
-        return cleaned_title
-
-    title_for_trunc = cleaned_title if len(cleaned_title) >= min_len else title
-    if len(title_for_trunc) <= max_len:
-        return title_for_trunc
-
-    # 2. 正则分词，捕获组保留分隔符本身
-    sep_pattern = r'([：:\s|｜—–\-+，,、；;]+)'
-    tokens = re.split(sep_pattern, title_for_trunc)
-
-    candidates: list[tuple[int, int, str]] = []
-    n = len(tokens)
-
-    # 3. 穷举所有以文本段（偶数索引）为起止 of 连续子序列
-    for i in range(0, n, 2):
-        for j in range(i, n, 2):
-            joined = "".join(tokens[i:j + 1]).strip()
-            # 清除两端残留分隔符
-            cleaned = re.sub(r'^[：:\s|｜—–\-+，,、；;]+|[：:\s|｜—–\-+，,、；;]+$', '', joined)
-            if min_len <= len(cleaned) <= max_len:
-                # 记录 (起始位置 i, 实际长度) — 排序时优先选最左侧起始（x[0] 越小越好），长度越长越好（-x[1] 越小越好）
-                candidates.append((i, len(cleaned), cleaned))
-
-    if candidates:
-        # [Gemini_3.1_Pro_High_planning] v1.10.0 核心优化点：引入质量评分惩罚悬空词和转折词
-        def score_candidate(cand_tuple):
-            start_idx, length, text = cand_tuple
-            score = start_idx  # 基础分是起始位置，越小越好 (即优先靠左)
-            # 惩罚悬空陈述词结尾
-            if re.search(r'(表示|认为|指出|宣布|警告|谈到|说|称|直言|坦言|解析|探讨|强调|证实|透露|预计|预测|建议|呼吁|提醒|坚信)$', text):
-                score += 100
-            # 惩罚以转折词或连词开头
-            if re.match(r'^(但是|但|而且|并且|和|与|或|以及|却)', text):
-                score += 50
-            # 多余的单边引号惩罚
-            if text.count('“') != text.count('”') or text.count('"') % 2 != 0:
-                score += 30
-            # 长度得分，越长越好，转为负数加上去，影响较小
-            score -= (length * 0.1)
-            return score
-
-        candidates.sort(key=score_candidate)
-        return candidates[0][2]
-
-    # 4. 兜底裁剪：先去末尾标点，再按字符硬截，最后剔除末尾虚词/连接词
-    safe = re.sub(r'[？?！!。，,：:\s]+$', '', title_for_trunc)
-    if len(safe) <= max_len:
-        return safe
-    truncated = safe[:max_len]
-    truncated = re.sub(r'[的得地与和或而将于在以等着了]$', '', truncated)
-    truncated = re.sub(r'[：:，,|｜\s]+$', '', truncated).strip()
-    return truncated
+# [Claude_Opus_4.8] graceful_truncate_title 已下沉至 video_processing.utils.text_utils
+# （单一真相源，消除 pipeline_manager 反向 import scripts/ 的 DAG 违规）。
+# 见本文件顶部的 re-import；既有 `from copywriter import graceful_truncate_title` 仍可用。
 
 
 # ── 后备路径 ─────────────────────────────────────────────────────────────────
@@ -443,19 +371,38 @@ def _translate_fallback(title: str, description: str) -> dict:
 _FORBIDDEN_WORD_REPLACEMENTS: dict[str, str] = {
     "概念本": "原型机", "爆款": "高阶", "秘籍": "指南",
     "公式": "体系", "逆天": "突破", "震惊": "震撼",
+    # [Claude_Opus_4.8] v1.13.0 微信生态违和网络梗兜底纠偏（读起来仍通顺的替换）
+    "保姆级": "详尽", "YYDS": "顶级", "yyds": "顶级", "绝绝子": "绝佳",
 }
 
-_SYSTEM_INSTRUCTION = """你是顶级微信视频号内容策划和中文科技媒体专栏主编。
+# [Claude_Opus_4.8] v1.13.0 🅲 文案本土化 V2：从「科技媒体主编」升级为「视频号原生爆款操盘手」，
+# 强化平台心智（完播率/转发率优先、去搬运/去翻译腔）。注意：不写入任何未经证实的受众统计数字。
+_SYSTEM_INSTRUCTION = """你是顶级微信视频号内容策划，兼具中文科技媒体专栏主编的专业与视频号爆款操盘手的网感。
+目标：把搬运的海外视频，改写成微信用户「像原生内容一样爱看、并愿意转发」的中文文案。
+
+【平台心智（微信视频号 ≠ YouTube/抖音）】
+- 受众偏成熟、重实用：实用价值 > 猎奇 > 纯娱乐；标题须精确承诺内容价值，兑现不了会被算法降权。
+- 完播率权重最高：标题与封面副标题要让人「想看完」，绝不做与正文不符的标题党空头支票。
+- 转发率其次：好文案自带「值得转发给朋友」的知识点或情绪共鸣。
+- 去 YouTube 化：消除一切搬运痕迹与翻译腔，让中文读起来像中文母语者原创，而非译文。
 
 【专业词汇映射规范（禁止生硬直译）】
-- concept laptop -> 概念机/原型机  - prompting -> 提示词/向AI提问
-- exit trap -> 资本接盘/套现陷阱  - crushes -> 彻底碾压/超越
+- concept laptop -> 概念机/原型机   - prompting -> 提示词/向AI提问
+- exit trap -> 资本接盘/套现陷阱    - crushes -> 彻底碾压/超越
+- guys/folks -> 省略不直译          - insane/epic -> 惊人/炸裂（克制使用）
 
-【格调规范（禁止廉价营销词）】
-严禁：爆款、干货、秘籍、公式、逆天、震惊、绝密、必看、收藏、保姆级、悄悄告诉你
+【短标题黄金公式（6-16字，择一，须有母语网感）】
+- 知识型：具体结论/数字 + 领域    →「3分钟看懂AI如何改写代码」
+- 利益型：目标人群 + 具体收益      →「程序员必看的AI审码工具」
+- 悬念型：已知事实 + 反转/新发现  →「Vision Pro 失败的真正原因」
+- 时效型：时间信号 + 事件          →「刚刚，OpenAI又发新模型」
+- 冲突/颠覆/预言型亦可，但情绪张力要真实、不浮夸。
 
-【短标题黄金公式】
-冲突型/悬念型/利益型/颠覆型/预言型，必须达到流量型标题的情绪张力"""
+【禁止清单】
+- 廉价营销词：爆款、干货、秘籍、公式、逆天、震惊、绝密、必看、收藏、保姆级、悄悄告诉你
+- 翻译腔残留：Guys/Let's/Epic/Insane 等直译、英式语序、生硬被动句
+- 微信生态违和网络梗：YYDS、绝绝子、xswl（与成熟受众气质不符）
+- 标题党空头支票：与正文不符的夸大承诺"""
 
 
 def _apply_post_processing(short_title: str, hook_subtitle: str) -> tuple[str, str]:
@@ -567,6 +514,13 @@ def generate_wechat_content(title: str, description: str,
             raise ValueError("google-genai returned empty copy")
 
         short_title, hook_subtitle = _apply_post_processing(short_title, hook_subtitle)
+
+        # [Claude_Opus_4.8] 🅴 反搬运·零渲染：检测文案是否大段逐字照搬 YouTube 原始描述。
+        # 高重合 = 低原创度 = 易被微信判搬运。此处为可观测信号（不阻断发布），便于后续调权/复核。
+        _overlap = verbatim_overlap_ratio(copy, description)
+        if _overlap >= 0.25:
+            logger.warning(f"[Originality] copy overlaps source description {_overlap:.0%} "
+                           f"(>=25%) — possible搬运 signal; title={title!r}")
 
         logger.info(f"AI success: category={category!r}, title={short_title!r}, label={content_label!r}")
         return {

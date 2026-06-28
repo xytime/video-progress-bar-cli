@@ -14,6 +14,7 @@
 | 1.7.0   | 2026-06-11 | Gemini_3.5_Flash_planning      | [高赞发现优化] 提升搜索数为30，添加 --dateafter 3天，解决历史高赞霸榜且无更新问题 |
 | 1.8.0   | 2026-06-11 | Claude_Opus_4.6_Thinking_planning | [Timeout修复] ytsearch30+dateafter导致大量超时，回调为ytsearch10，timeout 120→18s |
 | 1.9.0   | 2026-06-14 | Claude_Opus_4.8                | [限流缓解] 频道轮询间加 1~2.5s 随机间隔；exit 101 退避后重试一次；日志措辞由"Cookie/auth error"改为"瞬时限流"，避免误判 cookie 失效 |
+| 2.0.0   | 2026-06-23 | Claude_Opus_4.8                | [发布断流根治] ①裸 "yt-dlp" 改 settings.ytdlp_path 绝对路径——cron 最小 PATH 找不到致全灭(monitor.log 1555 条 FileNotFoundError)；②三处加 --ignore-no-formats-error——YouTube 格式门控使 --print 元数据整体中止(返回 0 候选)，发现仅需元数据故忽略格式错误 |
 """
 import sys
 from pathlib import Path
@@ -27,6 +28,14 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 from video_processing.db import PipelineDB
 from config.settings import settings  # [Gemini_3.5_Flash_High_planning]
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning]
+
+# [Claude_Opus_4.8 v2.0.0] yt-dlp 绝对路径（单一真相源，见 settings.ytdlp_path）。
+# 严禁裸 "yt-dlp"：cron 以 .venv/bin/python 直跑本脚本时不激活 venv，最小 PATH 找不到 yt-dlp
+# → 每轮发现全灭却被静默吞成"无新视频"（发布断流根因之一，已复现 FileNotFoundError）。
+_YTDLP = settings.ytdlp_path
+# 发现仅需元数据，不下载；YouTube 对格式下发做 bot/PO-token 门控时 --print 会整体中止，
+# 故统一忽略"无可用格式"错误，保证 view/like/duration 等元数据照常取回。
+_IGNORE_NO_FORMATS = "--ignore-no-formats-error"
 
 # 定义主动发现的静态热门搜索词
 STATIC_KEYWORDS = [
@@ -65,7 +74,8 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
     url = f"https://www.youtube.com/channel/{channel_id}"
     
     cmd = [
-        "yt-dlp",
+        _YTDLP,
+        _IGNORE_NO_FORMATS,
         "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s",
         "--dateafter", "now-3days",
         "--match-filter", "duration > 120 & duration < 2700",
@@ -149,7 +159,10 @@ def discover_new_channels(db: PipelineDB):
     for keyword in keywords:
         print(f"Searching channels for: {keyword}")
         cmd = [
-            "yt-dlp",
+            _YTDLP,
+            # [Claude_Opus_4.8 v2.0.0] 频道发现仅需 channel_id：用 --flat-playlist 跳过逐视频提取，
+            # 避免加 --ignore-no-formats-error 后逐个完整解析导致 ytsearch5 超时（实测 60s 超时 → 3.5s）。
+            "--flat-playlist",
             "ytsearch5:" + keyword,  # 抓取前5个搜索结果
             "--print", "%(channel_id)s|%(channel)s",
             "--no-warnings",
@@ -189,7 +202,8 @@ def discover_high_like_videos(db: PipelineDB):
     for keyword in keywords:
         print(f"Searching high-like videos for: {keyword}")
         cmd = [
-            "yt-dlp",
+            _YTDLP,
+            _IGNORE_NO_FORMATS,
             "ytsearch10:" + keyword,  # [Claude_Opus_4.6_Thinking_planning] 回调为10：ytsearch30+dateafter导致yt-dlp需翻百页凑数，大量超时
             "--dateafter", "now-3days",  # [Gemini_3.5_Flash_planning] 仅抓取最近3天的视频，规避历史热门视频干扰
             "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s|||%(channel_id)s|||%(categories.0)s",

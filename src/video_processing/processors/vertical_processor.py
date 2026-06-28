@@ -29,6 +29,7 @@
 | 2.2.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 将释义区字号比例下调至 0.42 倍以显主次，并标注 # [Gemini_3.5_Flash_planning] |
 | 2.3.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 竖屏模式下释义区最下沿上移半字高度 (≈17px)，同步缩减主字幕最大高度防重叠 |
 | 2.4.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 自动从 .info.json 加载视频标题，标注 # [Gemini_3.5_Flash_planning] |
+| 2.5.0   | 2026-06-25 | Claude_Opus_4.8 | 新增 source_date 参数：字幕烧录后叠加左上角「源视频发布日期」毛玻璃戳(date_stamp 模块)，覆盖源水印；遮罩/边框输入索引按音轨情况动态计算，渲染后清理临时资源 |
 """
 import logging
 import subprocess
@@ -159,7 +160,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         tts_voice: Optional[str] = None,  # [Gemini_3.5_Flash_planning]
         mute_original: bool = True,  # [Gemini_3.5_Flash_planning]
         tts_volume: int = 90,  # [Gemini_3.5_Flash_planning]
-        tts_speech_rate: float = 1.0  # [Gemini_3.5_Flash_planning]
+        tts_speech_rate: float = 1.0,  # [Gemini_3.5_Flash_planning]
+        source_date: Optional[str] = None  # [Claude_Opus_4.8] 源视频发布日期(YYYY-MM-DD)，毛玻璃戳
     ):
         super().__init__(
             input_path, output_path, model_size, src_lang, target_lang, device, style
@@ -188,6 +190,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         self.mute_original = mute_original  # [Gemini_3.5_Flash_planning]
         self.tts_volume = tts_volume  # [Gemini_3.5_Flash_planning]
         self.tts_speech_rate = tts_speech_rate  # [Gemini_3.5_Flash_planning]
+        self.source_date = source_date  # [Claude_Opus_4.8] 源视频发布日期(YYYY-MM-DD)；None/"" 则不渲染日期戳
         self.segments = [] # Store for TTS usage
 
     def _get_audio_duration(self, path: Path) -> float:
@@ -599,8 +602,15 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         )
         
         # Burn Subtitles
-        filters.append(f"[titled]ass='{escaped_ass}'[out]")
-        
+        # [Claude_Opus_4.8] 若启用「源视频发布日期戳」，字幕烧录输出改为中间标签 [ds_subbed]，
+        # 之后再叠加毛玻璃日期戳产出 [out]；未启用则字幕直接产出 [out]（行为完全不变）。
+        _stamp_value = (self.source_date or "").strip()
+        _stamp_enabled = bool(_stamp_value)
+        if _stamp_enabled:
+            filters.append(f"[titled]ass='{escaped_ass}'[ds_subbed]")
+        else:
+            filters.append(f"[titled]ass='{escaped_ass}'[out]")
+
         filter_str = ";".join(filters)
         
         import imageio_ffmpeg
@@ -665,10 +675,40 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             else:
                 audio_inputs = [] # No audio mapping needed
         
+        # [Claude_Opus_4.8] 源视频发布日期毛玻璃戳：在字幕之上叠加圆角毛玻璃日期戳。
+        # 局部高斯模糊 + 半透明深色着色 + 圆角遮罩 + 白字，覆盖源左上角频道水印。
+        # 遮罩/边框作为图片输入**追加在视频(0)与可选配音轨之后**，避免与音频 [1:a] 索引冲突。
+        _stamp_tmpdir = None
+        if _stamp_enabled:
+            import tempfile
+            from config.settings import settings as _settings
+            from . import date_stamp as _ds
+            _geom = _ds.compute_geometry(
+                _stamp_value,
+                label=_settings.source_date_stamp_label,
+                font_path=self.font_path,
+                canvas_w=VerticalLayout.CANVAS_WIDTH,
+                frame_top_y=layout.video_y,
+            )
+            _stamp_tmpdir = Path(tempfile.mkdtemp(prefix="datestamp_"))
+            _mask_path, _border_path = _ds.generate_assets(_geom, _stamp_tmpdir)
+            # 是否已追加独立配音输入(input 1) → 决定遮罩/边框的输入索引基址
+            _has_audio_in = bool(generated_audio_track and generated_audio_track.exists())
+            _stamp_base = 1 + (1 if _has_audio_in else 0)
+            filter_str += ";" + _ds.build_filter_chain(
+                _geom, in_label="ds_subbed", out_label="out",
+                mask_idx=_stamp_base, border_idx=_stamp_base + 1,
+            )
+            cmd += ["-i", str(_mask_path), "-i", str(_border_path)]
+            logger.info(
+                f"[DateStamp] 叠加源发布日期戳 text={_geom.text!r} "
+                f"@({_geom.px},{_geom.py}) {_geom.pw}x{_geom.ph} inputs=({_stamp_base},{_stamp_base + 1})"
+            )
+
         cmd += [
             "-filter_complex", filter_str,
             "-map", "[out]",
-            *audio_inputs, 
+            *audio_inputs,
             "-c:v", "libx264",
         ]
         if audio_inputs:
@@ -676,6 +716,11 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         cmd.append(str(output_path))
         
         logger.info(f"Rendering Vertical Video: {' '.join(cmd)}")
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
+        try:
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        finally:
+            if _stamp_tmpdir is not None:
+                import shutil
+                shutil.rmtree(_stamp_tmpdir, ignore_errors=True)
+
         return output_path
