@@ -21,6 +21,7 @@
 | 1.10.0  | 2026-06-20 | Claude_Opus_4.8                     | 修「对话无响应」：builder 开 concurrent_updates(True) 消除慢 Agent 对后续消息的串行阻塞；放宽 pool_timeout=20s 等超时，避免网络抖动时 Pool timeout 发不出回复 |
 | 1.11.0  | 2026-06-20 | Claude_Opus_4.8                     | 新增确定性命令 /process <youtube_id>：经 api_client.process_video → web /api/videos/{id}/process 立即处理单条视频（忽略分数阈值），不依赖 AI 编排，作为「发布某条」的可靠兜底 |
 | 1.12.0  | 2026-06-27 | Claude_Opus_4.8                     | [根治崩溃循环/「无反应」] builder 显式 connection_pool_size(256) + get_updates_connection_pool_size(16)/get_updates_pool_timeout(20)：concurrent_updates(True) 下默认池仅 1 条→PoolTimeout 抛进 updater 轮询→Application 停止(频繁重启)。enlarge 后并发 handler 不再抢空连接池 |
+| 1.13.0  | 2026-06-28 | Claude_Opus_4.8                     | 新增 /deploy：手机远程一键在主机上 git push 当前分支到 origin（bot 进程用主机凭据非交互推送，GIT_TERMINAL_PROMPT=0 防挂起，异步不阻塞，管理员限定）——解决「人不在电脑旁、agent 工具层拒绝 push」的远程部署缺口 |
 """
 from __future__ import annotations
 
@@ -451,6 +452,39 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(msg, parse_mode="Markdown")  # type: ignore
 
 
+async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """[Claude_Opus_4.8] /deploy — 手机远程一键：在主机上把当前分支 git push 到 origin。
+
+    bot 进程跑在主机，用主机 git 凭据非交互推送；GIT_TERMINAL_PROMPT=0 防止无凭据时挂起。
+    异步子进程，不阻塞事件循环。仅管理员可用。
+    """
+    if not _check_admin(update):
+        return
+    prj_root = str(Path(__file__).parent.parent.parent)
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    await update.message.reply_text("🚀 正在推送当前分支到 origin…", parse_mode="Markdown")  # type: ignore
+    try:
+        p = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "--abbrev-ref", "HEAD",
+            cwd=prj_root, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await p.communicate()
+        branch = out.decode(errors="ignore").strip() or "HEAD"
+        p = await asyncio.create_subprocess_exec(
+            "git", "push", "-u", "origin", branch,
+            cwd=prj_root, env=env,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(p.communicate(), timeout=120)
+        tail = out.decode(errors="ignore").strip()[-700:] or "(no output)"
+        head = "✅ 已推送" if p.returncode == 0 else f"❌ 推送失败 (exit {p.returncode})"
+        # 纯文本回复：git 输出含特殊字符会破坏 Markdown 解析
+        await update.message.reply_text(f"{head}  分支 {branch}\n\n{tail}")  # type: ignore
+    except asyncio.TimeoutError:
+        await update.message.reply_text(  # type: ignore
+            "❌ 推送超时(120s)——多半是主机 git 未存凭据在等输入。请在主机配置 credential helper / token 后重试。")
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"❌ /deploy 异常：{e}")  # type: ignore
+
+
 async def cmd_whole(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """/whole <url> [开始时间] [结束时间] — 强制不分集发布"""
     if not _check_admin(update):
@@ -816,6 +850,7 @@ def main() -> None:
     app.add_handler(CommandHandler("process", cmd_process))  # [Claude_Opus_4.8] 确定性单条发布：/process <youtube_id>
     app.add_handler(CommandHandler("run", cmd_run))
     app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("deploy", cmd_deploy))  # [Claude_Opus_4.8] 手机远程一键 git push 当前分支
     app.add_handler(CommandHandler("whole", cmd_whole))
     app.add_handler(CommandHandler("slice", cmd_slice))
     app.add_handler(CommandHandler("tts", cmd_tts))  # [Claude_Sonnet_4.6_Thinking_planning] 按需 TTS 配音命令
