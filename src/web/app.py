@@ -32,6 +32,7 @@
 | 3.9.0 | 2026-06-15 | Claude_Opus_4.8                     | [BUG-1 配套] bypass_censor / censor_keywords / _read_subtitle_text 增加 slice_index 粒度，与管线侧透传对齐，使审查类失败的切片可按 (id,slice) 单独放行 |
 | 3.10.0 | 2026-06-15 | Claude_Opus_4.8                    | [BUG-5] clear_waitlist 改走 DAL get_waitlist_clearable_ids（排除 DISCOVERY），消除业务层裸 SQL，修复一键清空击穿发现防火墙 |
 | 3.11.0 | 2026-06-18 | Claude_Opus_4.8                    | [盘中重负载保护] 新增 _in_us_market_window()；_auto_pipeline_loop 与 _queue_runner_loop 在美股盘中(ET 09:15–16:15,工作日,自动夏/冬令时)暂停重型管线，避免抢占共享主机实盘行情管线 CPU；开关 settings.enable_market_hours_guard；仪表盘端口默认 8765→9100 |
+| 3.12.0 | 2026-06-28 | Claude_Opus_4.8                    | 新增 POST /api/videos/retry-recent?hours=N：批量重置最近 N 小时 FAILED 为 PENDING（不逐条触发，交调度器按节奏重发），供 Telegram /retry <小时数> |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -1149,6 +1150,32 @@ def retry_video(youtube_id: str):
         "success": True,
         "triggered": triggered,
         "message": "已重置并立即重新触发" if triggered else "已重置为 PENDING，请将优先级提升至 ≥75 后触发",
+    }
+
+
+@app.post("/api/videos/retry-recent")
+def retry_recent(hours: int = 24):
+    """[Claude_Opus_4.8] 批量重试最近 N 小时内 FAILED 的任务：重置为 PENDING（复用 GC 保留的
+    成片/封面/文案 checkpoint，秒级重跑）。供 Telegram /retry <hours>。
+
+    仅重置状态、不在此逐条触发（避免一次性 spawn 过多进程）；score>=75 的会被仪表盘调度器
+    在下次巡检自动重新发布（盘中重负载护栏仍生效）。
+    """
+    if hours <= 0 or hours > 720:
+        return {"success": False, "error": "hours 需在 1~720 之间"}
+    rows = db.get_failed_videos_since(hours)
+    count = 0
+    for r in rows:
+        db.update_video_status(
+            r["youtube_id"], "PENDING", error_msg=None,
+            slice_index=int(r.get("slice_index") or 0),
+        )
+        count += 1
+    return {
+        "success": True,
+        "count": count,
+        "hours": hours,
+        "items": [(r.get("title") or "")[:42] for r in rows[:10]],
     }
 
 

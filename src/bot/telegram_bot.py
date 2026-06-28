@@ -22,6 +22,7 @@
 | 1.11.0  | 2026-06-20 | Claude_Opus_4.8                     | 新增确定性命令 /process <youtube_id>：经 api_client.process_video → web /api/videos/{id}/process 立即处理单条视频（忽略分数阈值），不依赖 AI 编排，作为「发布某条」的可靠兜底 |
 | 1.12.0  | 2026-06-27 | Claude_Opus_4.8                     | [根治崩溃循环/「无反应」] builder 显式 connection_pool_size(256) + get_updates_connection_pool_size(16)/get_updates_pool_timeout(20)：concurrent_updates(True) 下默认池仅 1 条→PoolTimeout 抛进 updater 轮询→Application 停止(频繁重启)。enlarge 后并发 handler 不再抢空连接池 |
 | 1.13.0  | 2026-06-28 | Claude_Opus_4.8                     | 新增 /deploy：手机远程一键在主机上 git push 当前分支到 origin（bot 进程用主机凭据非交互推送，GIT_TERMINAL_PROMPT=0 防挂起，异步不阻塞，管理员限定）——解决「人不在电脑旁、agent 工具层拒绝 push」的远程部署缺口 |
+| 1.14.0  | 2026-06-28 | Claude_Opus_4.8                     | /retry 支持小时参数：/retry <小时数>（纯数字≤3位）批量重试最近 N 小时内 FAILED 任务（如 /retry 24/48）；youtube_id 单条重试保持不变（11位含字母无歧义） |
 """
 from __future__ import annotations
 
@@ -282,10 +283,33 @@ async def cmd_retry(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     assert _api is not None
     args = ctx.args  # type: ignore
     if not args:
-        await update.message.reply_text(fmt.fmt_error("用法：/retry <youtube_id> [slice_index]"), parse_mode="Markdown")  # type: ignore
+        await update.message.reply_text(fmt.fmt_error("用法：/retry <youtube_id> [slice_index]  或  /retry <小时数>（批量重试最近N小时失败，如 `/retry 24`）"), parse_mode="Markdown")  # type: ignore
         return
 
-    youtube_id = args[0].strip()
+    arg0 = args[0].strip()
+    # [Claude_Opus_4.8] /retry <小时数>：纯数字(≤3位)→批量重试最近 N 小时内 FAILED；否则按 youtube_id 单条。
+    # youtube_id 恒为 11 位含字母，绝不会是 ≤3 位纯数字，故无歧义。
+    if arg0.isdigit() and len(arg0) <= 3:
+        hours = int(arg0)
+        result = await _api.retry_recent(hours)
+        if result is None:
+            await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+            return
+        if result.get("success"):
+            n = result.get("count", 0)
+            if n:
+                items = result.get("items", [])
+                sample = "\n".join(f"· {t}" for t in items)
+                more = f"\n…等共 {n} 条" if n > len(items) else ""
+                msg = f"♻️ *批量重试最近 {hours}h 失败任务*\n已重置 `{n}` 条为 PENDING（≥75 分将由调度器自动重发）。\n{sample}{more}"
+            else:
+                msg = f"✅ 最近 {hours}h 没有失败任务，无需重试。"
+            await update.message.reply_text(msg, parse_mode="Markdown")  # type: ignore
+        else:
+            await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
+        return
+
+    youtube_id = arg0
     slice_index = None
     if len(args) >= 2:
         try:

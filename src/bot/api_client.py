@@ -14,6 +14,7 @@
 | 1.4.0 | 2026-05-29 | Claude_Sonnet_4.6_Thinking_planning | 为 add_video 新增 tts_provider 参数支持，供 Telegram /tts 命令按需指定配音 |
 | 1.5.0 | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 respec_video() 封装，供 Bot 侧在 already_exists 时自动调用规格覆盖 |
 | 1.6.0 | 2026-06-20 | Claude_Opus_4.8 | 新增 process_video()：POST /api/videos/{id}/process，供 /process 命令与 Agent 工具确定性触发单条视频处理（忽略分数阈值） |
+| 1.7.0 | 2026-06-28 | Claude_Opus_4.8 | 新增 retry_recent(hours)：POST /api/videos/retry-recent，供 /retry <小时数> 批量重试最近 N 小时失败任务 |
 """
 from __future__ import annotations
 
@@ -164,6 +165,17 @@ class PipelineAPIClient:
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] retry_video failed (API down?): {e}")
+            return None
+
+    async def retry_recent(self, hours: int) -> Optional[dict]:
+        """POST /api/videos/retry-recent?hours=N — 批量重试最近 N 小时内 FAILED 的任务。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post("/api/videos/retry-recent", params={"hours": hours})
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] retry_recent failed (API down?): {e}")
             return None
 
     async def process_video(self, youtube_id: str) -> Optional[dict]:
