@@ -54,6 +54,7 @@
 | 3.22.0  | 2026-06-23 | Claude_Opus_4.8                     | [发布断流根治②] _build_subprocess_env 强制 PATH 含 /opt/homebrew/bin(deno/node)与 .venv/bin：cron 最小 PATH 无 deno → yt-dlp 解 n-sig 挑战失败 → 高分视频"format not available"下载全败；_VENV_YTDLP 统一到 settings.ytdlp_path 单一真相源 |
 | 3.23.0  | 2026-06-25 | Claude_Opus_4.8                     | [发布日期戳] enable_source_date_stamp 开启时，render_cmd 注入 --source-date（主视频取 upload_date，切片回退父行），格式化 YYYYMMDD→YYYY-MM-DD，缺失/非法则跳过 |
 | 3.24.0  | 2026-06-25 | Claude_Opus_4.8                     | [失败可观测] 新增 _notify_failed(yid,title,reason,slice)：FAILED 通知统一带 youtube_id+精简原因；CalledProcessError(下载失败,最常见) 此前只发 Title 无 ID 无原因→用户无从定位「发了没动静」。title/reason 经 html.escape 防 yt-dlp stderr 的 &/<> 触发 Telegram HTML 400 丢通知 |
+| 3.25.0  | 2026-06-28 | Claude_Opus_4.8                     | score_pending_videos 应用 settings.channel_score_floor_map 地板分：受信任频道(如 @wstruthbombs:80)自动评分托底→其所有视频过发布线全发（force=False 仍尊重人工锁分）|
 """
 
 
@@ -204,6 +205,13 @@ class PipelineManager:
             likes      = max(0, video.get('like_count') or 0)
             # [Claude_Opus_4.8 架构B] 评分曲线已抽至 scoring.compute_auto_score（纯函数，可单测）
             score      = compute_auto_score(views, likes)
+
+            # [Claude_Opus_4.8] 受信任频道地板分：列入 settings.channel_score_floor_map 的频道
+            # 评分托底（如 @wstruthbombs 默认 80→必过发布线 ≥75，整批自动发布，不受低播放拖累）。
+            _floor = settings.channel_score_floor_map.get(video.get('channel_id'), 0)
+            if _floor > score:
+                logger.info(f"  [{yid}] trusted-channel score floor {_floor} applied (computed was {score})")
+                score = _floor
 
             if views > 0:
                 logger.info(f"  [{yid}] views={views} like_rate={likes / views * 100:.1f}% → score={score}")

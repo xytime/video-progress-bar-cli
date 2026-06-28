@@ -22,6 +22,7 @@
 | 3.2.0 | 2026-06-23 | Claude_Opus_4.8                     | 新增 ytdlp_path 计算属性（单一真相源）：杜绝裸 'yt-dlp'，修复发布断流根因——cron 最小 PATH 无 .venv/bin 致 FileNotFoundError，频道发现整体静默失败 |
 | 3.3.0 | 2026-06-25 | Claude_Opus_4.8                     | 新增 enable_source_date_stamp / source_date_stamp_label：竖屏成片左上角「源视频发布日期」毛玻璃戳开关与文案前缀，默认关闭 |
 | 3.4.0 | 2026-06-28 | Claude_Opus_4.8                     | 新增 censorship_bypass_channels（逗号分隔 channel_id）+ censorship_bypass_channel_set 解析属性：受信任频道整体跳过审查(P0/P1/P2/CP)，供运营对自审过的优质频道开绿灯；另新增 wechat_session_warn_hours(会话临期预警阈值) |
+| 3.5.0 | 2026-06-28 | Claude_Opus_4.8                     | 新增 channel_score_floors（"channel_id:分数"）+ channel_score_floor_map：受信任频道评分地板分，使其所有视频(含低播放)过发布线 ≥75 全发（@wstruthbombs 默认 80）|
 """
 import json
 import socket
@@ -167,6 +168,11 @@ class Settings(BaseSettings):
     # 政治/地缘内容在视频号有封号风险，由运营自担。经 settings.censorship_bypass_channel_set 读取。
     censorship_bypass_channels: str = ""
 
+    # [Claude_Opus_4.8] 受信任频道评分下限（地板分）：列出的频道自动评分不低于指定分，使其所有视频
+    # （含低播放/低互动）都过发布线 ≥75 自动发布。格式 "channel_id:分数,channel_id:分数"。
+    # 与 censorship_bypass_channels 配合 = 该频道整批无障碍发布。经 channel_score_floor_map 读取。
+    channel_score_floors: str = ""
+
     # SIGTERM 阶梯强杀机制（删除活跃任务时优雅终止底层进程）
     enable_sigterm_kill: bool = False
 
@@ -222,6 +228,19 @@ class Settings(BaseSettings):
     def censorship_bypass_channel_set(self) -> set:
         """[Claude_Opus_4.8] 受信任频道 channel_id 集合（跳过全部审查）。解析逗号分隔配置。"""
         return {c.strip() for c in (self.censorship_bypass_channels or "").split(",") if c.strip()}
+
+    @property
+    def channel_score_floor_map(self) -> dict:
+        """[Claude_Opus_4.8] channel_id→地板分 映射（解析 channel_score_floors，如 'UCxxx:80'）。"""
+        m = {}
+        for pair in (self.channel_score_floors or "").split(","):
+            cid, sep, sc = pair.strip().partition(":")
+            if sep and cid.strip():
+                try:
+                    m[cid.strip()] = int(sc.strip())
+                except ValueError:
+                    pass
+        return m
 
     @computed_field  # type: ignore[misc]
     @property
