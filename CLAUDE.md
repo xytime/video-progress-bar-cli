@@ -107,13 +107,29 @@ pytest -k red_blue                              # by keyword
 4. **Mock gate**: if a unit test needs to mock **more than 3** external objects, the module is too coupled — redesign it (facade / service layer), don't pile on mocks.
 5. **Modification History**: new files or changes ≥ 10 logic lines must update the `# Modification History` markdown table in the file's docstring (see any existing module for the format).
 6. **Port registry**: register new service ports in `PORTS.md` and read them from env vars, never hardcode. :8765 is the dashboard.
+7. **Git 分支纪律（单工作区单主干）**: 默认直接在 `main` 上干活、提交、push；线上 = `main`。仅「危险大重构 / 实验」才开**短命**分支或 `git worktree`，做完立刻合回 `main` 并删除。详见下方《Git 分支纪律》。
+
+## Git 分支纪律（铁律：单工作区 = 单主干 = 单线上）
+
+**为什么有这条法律**：本机只有**一个工作区**，所有 cron（`monitor_channels` 每 30 分、`pipeline_manager` 每天 09:00 / 21:00 渲染+发布）都 `cd` 进**这一个目录**直接跑工作区代码——没有任何「部署」或「切分支」步骤。所以 **「线上」不是某个会话的属性，而是「工作区当前 checkout 的那一个分支」这一物理事实。** 一个工作区任一时刻只有一条分支能是线上，**多分支「同时生效」物理上不可能**。历史教训：分支从 `main` 长出去却从不合回，真主干悄悄漂移到「最后被 checkout 的分支」、`main` 烂在原地（2026-06 的 censor / 字幕分支即如此，现已收敛回 `main`）。
+
+铁律：
+
+1. **默认直接在 `main` 上提交。** 绝大多数改动（bugfix、小功能、运维脚本、文案）——改完即 `commit` + `push`，**不开分支**。
+2. **会话开工第一步**：`git checkout main`（确认在主干）。**严禁在非 `main` 分支上做要上線的改动**（否则线上漂移、`main` 烂掉）。
+3. **唯一可开分支的情形**（满足任一，且必须短命 ≤ 当天）：① 危险/大重构，可能让流水线跑不起来、暂不想上線，需隔离验证；② 大概率会丢弃的实验/spike。需要「边跑边改、互不干扰」时用 `git worktree add <dir>` 开**独立物理目录**，**绝不在同一工作区 `git checkout` 切分支**（会把代码从正在跑的进程脚下换掉、且 `output/` checkpoint 是共享的）。
+4. **开了分支就必须收敛**：做完立刻 `git checkout main && git merge --ff <branch> && git branch -d <branch>`。**任何分支存活 > 当天即为异味；绝不允许长期并行分支。**
+5. **每次会话结束 `git push origin main`**：origin 是唯一真相源 + 异地备份（不 push = 全部代码只在本地磁盘，磁盘坏即全损）。
+6. **合并 / 删分支 / 切分支只在流水线空闲时做**：避开 09:00、21:00（`pipeline_manager`）与任何正在进行的渲染。
+
+一句话宪法：**一个工作区，一条主干 `main`，一个线上。要隔离就开 `worktree`、做完即合即删；否则一律直接 `main`。**
 
 ## Critical video/subtitle rules (`docs/experience_log/critical_lessons.md`, `.windsurfrules`)
 
 These encode hard-won failures — violating them silently corrupts subtitles:
 
 - **ASS line breaks**: pysubs2 does not honor Python `\n`. Run `text.replace('\n', '\\N')` before building any `SSAEvent`. `\N` is ASS's only forced line break.
-- **Order matters**: wrap text *first*, then apply Chinese highlights — applying `{...}` ASS tags before `textwrap.fill` lets `\N` land inside a tag and breaks libass parsing. (English highlights are tag-aware and may precede wrapping.)
+- **Order matters（中文 v1.5.0 起已更新）**: 中、英文都是 **先高亮、后折行**，但折行必须用 *tag-aware* 折行器——英文 `tag_aware_wrap`、中文 `tag_aware_wrap_zh`。二者把 `{...}` 标签视觉记为 0 宽、且把**完整高亮短语当不可分原子**，故 `\N` 既不会落进标签内部、也不会把生词词组（如「头条叙事」）从中间劈开。**切勿改回**「先 `textwrap.fill` 再 `apply_chinese_highlights`」的旧顺序——那会按字符任意断行劈断词组，使中文生词的连续子串匹配失败而漏标（中英高亮不对称 Bug，见 `subtitle_stylist.py` v1.5.0）。
 - **Bilingual margins are dynamic**: the Chinese layer's bottom margin must be computed from the English layer's actual wrapped line count (e.g. `margin_zh = 10 + en_lines*18 + 5`) — never a fixed offset, or layers overlap.
 - **Whisper input**: always re-sample extracted audio to **16 kHz mono** (`-ar 16000 -ac 1`).
 - **`pysubs2.Color`**: pass `(R, G, B)` integers, not hex/RGBA. ASS alpha is **inverted** (255 = fully transparent).
