@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：从 caption_processor.py 抽取 Gemini 生词提取与对齐职责，实现高内聚低耦合 |
 | 1.1.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 实现分批调用（50段/次）解决277段场景下输出截断导致计数不符的问题；放宽计数校验 |
 | 1.2.0   | 2026-06-15 | Claude_Opus_4.8 | [BUG-4] prompt 给每段加 id 并要求回显；_parse_response 按 id 重对齐到定长列表，缺失段留空于正确位置，废弃「补空错位」级联 |
+| 1.3.0   | 2026-06-28 | Claude_Opus_4.8 | 词汇质量：①双模式 prompt 增加「禁止抽取周知专有名词/常识词」约束；②新增 _STOPWORDS + _filter_vocab，解析后剔除 Wall Street/Google 等周知词，避免占用词汇卡而无学习价值 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -26,10 +27,42 @@
 
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# [Claude_Opus_4.8] v1.3.0 词汇黑名单：周知专有名词 / 常识词 / 填充词。
+# 这些词对中文观众毫无学习价值（人人都懂），却会占用词汇卡格子（如截图里的
+# "Wall Street"）。词汇卡定位是 CEFR/TOEFL 级英语「生词」学习，专有名词本就不属于此列，
+# 故在解析后统一剔除。匹配时对英文 key 做「去标点 + 小写」归一化。可按需扩充。
+_STOPWORDS = frozenset({
+    # 地名 / 国家（周知）
+    "wall street", "new york", "london", "paris", "tokyo", "hong kong",
+    "silicon valley", "america", "american", "china", "chinese", "europe",
+    "european", "japan", "japanese",
+    # 知名公司 / 品牌 / 产品
+    "google", "apple", "iphone", "ipad", "amazon", "facebook", "meta",
+    "microsoft", "tesla", "twitter", "youtube", "instagram", "tiktok",
+    "netflix", "nvidia", "openai", "chatgpt",
+    # 周知缩写 / 常识词 / 填充词
+    "ai", "ceo", "cfo", "gdp", "usa", "us", "uk", "eu", "covid",
+    "internet", "email", "ok", "okay",
+})
+
+
+def _filter_vocab(vocab: Any) -> Dict[str, Any]:
+    """[Claude_Opus_4.8] v1.3.0 剔除 _STOPWORDS 命中的周知词，返回过滤后的 vocab dict。"""
+    if not isinstance(vocab, dict) or not vocab:
+        return vocab if isinstance(vocab, dict) else {}
+    out: Dict[str, Any] = {}
+    for k, v in vocab.items():
+        key_norm = re.sub(r"[^\w\s&]", "", str(k)).strip().lower()
+        if key_norm in _STOPWORDS:
+            continue
+        out[k] = v
+    return out
 
 # [Claude_Sonnet_4.6_Thinking_planning] 模型候选列表：按质量优先排序
 # gemini-2.5-flash: 最高质量，但 20 RPD/日，跑多次后耗尽
@@ -153,7 +186,12 @@ def _build_prompt(
             "1. Return the 'chinese' value UNCHANGED as the 'translation' field.\n"
             "2. From the English text, identify 2-3 key academic/difficult vocabulary "
             "words or phrases (CEFR B2-C2 / TOEFL / IELTS / GRE level). "
-            "Do NOT extract common or easy words. If no difficult words exist, use an empty object {}.\n"
+            "Do NOT extract common or easy words. "
+            "Do NOT extract well-known proper nouns or common-knowledge terms — place names, "
+            "country names, brand/company/product names, or globally famous terms "
+            "(e.g. Wall Street, Google, iPhone, New York, AI, CEO, GDP). "
+            "Focus ONLY on genuinely difficult academic/technical vocabulary. "
+            "If no difficult words exist, use an empty object {}.\n"
             "3. CRITICAL: For each extracted English word/phrase, its Chinese value in the 'vocab' "
             "object MUST be an EXACT SUBSTRING of the provided 'chinese' translation string. "
             "Use the shortest meaningful substring that corresponds to that English term. "
@@ -175,6 +213,9 @@ def _build_prompt(
             "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
             "2. Identify 2 to 3 key, academic, or difficult vocabulary words/phrases "
             "(CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. "
+            "Do NOT extract well-known proper nouns or common-knowledge terms — place names, "
+            "country names, brand/company/product names, or globally famous terms "
+            "(e.g. Wall Street, Google, iPhone, New York, AI, CEO, GDP). "
             "CRITICAL: For each extracted word/phrase, its Chinese definition in the 'vocab' "
             "dictionary MUST be the exact substring as it appears in your translated 'translation' "
             "string. Do not extract common/easy words. If there are no difficult words, leave the "
@@ -257,7 +298,7 @@ def _parse_response(text: str, expected_count: int) -> Optional[List[Dict[str, A
         if not isinstance(item, dict):
             return {"translation": "", "vocab": {}}
         return {"translation": item.get("translation", "") or "",
-                "vocab": item.get("vocab", {}) or {}}
+                "vocab": _filter_vocab(item.get("vocab", {}) or {})}
 
     _EMPTY = {"translation": "", "vocab": {}}
     try:

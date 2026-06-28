@@ -5,7 +5,10 @@
 | Version | Date       | Author                              | Description                          |
 | ------- | ---------- | ----------------------------------- | ------------------------------------ |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：覆盖高亮、折行、动态缩放、ASS 标签构造、GlossaryCard |
+| 1.1.0   | 2026-06-28 | Claude_Opus_4.8                     | 新增 tag_aware_wrap_zh 测试 + 中英高亮不对称 Bug 回归测试（高亮短语不被 \\N 劈开） |
 """
+import textwrap
+
 import pytest
 from src.video_processing.utils.subtitle_stylist import (
     SubtitleStylist,
@@ -14,6 +17,7 @@ from src.video_processing.utils.subtitle_stylist import (
     apply_word_highlights,
     apply_chinese_highlights,
     tag_aware_wrap,
+    tag_aware_wrap_zh,
     FONT_EN,
     FONT_ZH,
     EN_COLOR,
@@ -157,6 +161,70 @@ class TestTagAwareWrap:
         assert "{\\c&HFF0000&}" in result
 
 
+# ── tag_aware_wrap（方案B：英文高亮短语不跨行）──────────────────────────────────
+
+class TestEnglishHighlightPhraseNoSplit:
+    """[Claude_Opus_4.8] 方案B：完整高亮短语（含内部空格）必须整体折行，不被 \\N 劈开。"""
+
+    def test_wall_street_phrase_stays_together(self):
+        import re as _re
+        text = apply_word_highlights("a b c Wall Street d e f g", {"Wall Street": VOCAB_HIGHLIGHT_COLOR})
+        # 折到很窄宽度（小于短语本身长度）也不能把 Wall 与 Street 拆到两行
+        wrapped = tag_aware_wrap(text, 8)
+        assert "Wall\\N" not in wrapped
+        assert "Wall \\N" not in wrapped
+        # 去掉标签后，Wall Street 仍相邻
+        assert "Wall Street" in _re.sub(r"\{[^}]*\}", "", wrapped)
+
+    def test_highlight_span_intact_after_wrap(self):
+        import re as _re
+        text = apply_word_highlights("The Wall Street narrative", {"Wall Street": VOCAB_HIGHLIGHT_COLOR})
+        wrapped = tag_aware_wrap(text, 6)
+        # 高亮 open/close 标签都在，且短语本体（去标签后）仍相邻、未被 \\N 截断
+        assert "\\u1" in wrapped and "\\u0" in wrapped
+        assert "Wall Street" in _re.sub(r"\{[^}]*\}", "", wrapped)
+
+
+# ── tag_aware_wrap_zh（方案A：中文 tag/词-aware 折行）────────────────────────────
+
+class TestTagAwareWrapZh:
+    def test_empty(self):
+        assert tag_aware_wrap_zh("", 10) == ""
+
+    def test_per_char_wrap(self):
+        # 10 个汉字、宽 5 → 折成 2 行（一个 \\N）
+        result = tag_aware_wrap_zh("一二三四五六七八九十", 5)
+        assert result.count("\\N") == 1
+
+    def test_tag_zero_width(self):
+        # 标签视觉 0 宽：标签 + 短文本不应折行
+        result = tag_aware_wrap_zh("{\\fs40}短句", 10)
+        assert "\\N" not in result
+
+    def test_highlight_phrase_not_split_across_lines(self):
+        open_tag = "{\\u1\\c" + VOCAB_HIGHLIGHT_COLOR + "}"
+        close_tag = "{\\u0\\c" + ZH_COLOR + "}"
+        # 边界落在「头条叙事」附近，高亮短语必须整体保留
+        text = "这就是一直灌输的" + open_tag + "头条叙事" + close_tag  # 8 + 4 可见字符
+        result = tag_aware_wrap_zh(text, 10)
+        assert open_tag + "头条叙事" + close_tag in result
+        assert "头\\N条" not in result
+        assert "条\\N叙" not in result
+        assert "叙\\N事" not in result
+
+    def test_regression_old_order_would_drop_highlight(self):
+        """文档化回归 Bug：旧顺序「textwrap.fill→高亮」因 \\N 劈断词组而漏标；新顺序修复。"""
+        zh = "这就是一直灌输的头条叙事"
+        vocab = {"headline narrative": "头条叙事"}
+        # 旧顺序：先折行（任意字符断）再高亮 → 词组被 \\N 劈断 → 子串匹配失败 → 漏标
+        old = apply_chinese_highlights(textwrap.fill(zh, 10).replace("\n", "\\N"), vocab)
+        assert "\\u1" not in old, "旧逻辑应复现漏标 Bug"
+        # 新顺序：先高亮再 tag-aware 折行 → 词组完整 → 高亮保留
+        new = tag_aware_wrap_zh(apply_chinese_highlights(zh, vocab), 10)
+        assert "\\u1" in new
+        assert "头条叙事" in new and "头\\N条" not in new
+
+
 # ── SubtitleStylist ───────────────────────────────────────────────────────────
 
 class TestSubtitleStylistRender:
@@ -231,6 +299,29 @@ class TestSubtitleStylistRender:
             bilingual=True
         )
         assert "\\u1" in result.ass_text
+
+    def test_screenshot_scenario_both_chinese_highlights_survive_wrap(self):
+        """[Claude_Opus_4.8] 复现截图场景：窄字幕区导致「头条叙事」横跨折行边界，
+        两个中文生词（华尔街/头条叙事）都必须被高亮且不被 \\N 劈开。
+
+        safe_width=600 → wrap_w_zh=10，22 字句子中「头条叙事」正好跨行——旧逻辑会漏标
+        （这正是截图里中文只亮「华尔街」、不亮「头条叙事」的根因）。
+        """
+        layout = make_layout(safe_width=600, max_height=2000)
+        stylist = SubtitleStylist(layout)
+        result = stylist.render(
+            "Okay, here's the headline narrative that Wall Street's been feeding you all along",
+            "好的，这就是华尔街一直在向你们灌输的头条叙事",
+            vocab_items={"headline narrative": "头条叙事", "Wall Street": "华尔街"},
+            bilingual=True,
+        )
+        # 取中文片段（FONT_ZH 标签之后）
+        zh_part = result.ass_text.split(f"fn{FONT_ZH}", 1)[1]
+        open_tag = "{\\u1\\c" + VOCAB_HIGHLIGHT_COLOR + "}"
+        # 两个中文词都被高亮，且词组本体未被 \\N 劈断
+        assert open_tag + "华尔街" in zh_part, "华尔街 应被高亮"
+        assert open_tag + "头条叙事" in zh_part, "头条叙事 应被高亮（旧逻辑漏标的词）"
+        assert "头\\N条" not in zh_part and "条\\N叙" not in zh_part
 
 
 class TestSubtitleStylistGlossaryCard:

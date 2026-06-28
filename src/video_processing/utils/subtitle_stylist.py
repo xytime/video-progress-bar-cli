@@ -10,6 +10,7 @@
 | 1.2.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 修复中文折行截断标签bug：将 apply_chinese_highlights 移到 textwrap.fill 之后；build_glossary_text 增加 en_size 参数以限制释义字号不超过英文主字幕字号 |
 | 1.3.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 修复 apply_chinese_highlights 短词淘汰长词问题：改用 token分段方案仅在裸文本段进行匹配，封锁已标注内容 |
 | 1.4.0   | 2026-06-09 | Claude_Opus_4.6_Thinking_planning   | 修复 build_glossary_text 字号 bug（gloss_size=en_size 覆盖样式层 35pt）改为 min(default,en_size)；释义区颜色改为淡色系，视觉分层 |
+| 1.5.0   | 2026-06-28 | Claude_Opus_4.8                     | 修中英高亮不对称 Bug：①新增 tag_aware_wrap_zh，render() 中文路径改「先高亮→后折行」，使 vocab 词组（如「头条叙事」）不再被 \\N 从中间劈开导致 substring 失配；②tag_aware_wrap 分词器把完整高亮短语 {\\u1…}…{\\u0…}（含内部空格）当 1 个 token，避免 Wall|Street 跨行 |
 """
 
 import re
@@ -186,7 +187,16 @@ def tag_aware_wrap(text: str, max_width: int) -> str:
     if not text:
         return text
 
-    token_pattern = re.compile(r'((?:\{[^\}]*\})*[^\s{]+(?:\{[^\}]*\})*|\{[^\}]*\}|\s+)')
+    # [Claude_Opus_4.8] v1.5.0: 第一选择项「完整高亮短语」必须最先匹配——把
+    # {\u1…}headline narrative{\u0…} / {\u1…}Wall Street{\u0…} 这类含内部空格的
+    # 高亮词组整体当作 1 个 token，否则空格会把 "Wall" 与 "Street" 拆成两个 token
+    # 而被折到两行，造成高亮短语被行尾劈断。
+    token_pattern = re.compile(
+        r'(\{\\u1[^}]*\}.*?\{\\u0[^}]*\}'          # ① 完整高亮短语（含内部空格）整体不拆
+        r'|(?:\{[^\}]*\})*[^\s{]+(?:\{[^\}]*\})*'  # ② 普通词（可带前后标签）
+        r'|\{[^\}]*\}'                             # ③ 独立标签
+        r'|\s+)'                                   # ④ 空白
+    )
     tokens = token_pattern.findall(text)
 
     def get_visual_len(s: str) -> int:
@@ -218,6 +228,59 @@ def tag_aware_wrap(text: str, max_width: int) -> str:
 
     if current_line:
         lines.append("".join(current_line).rstrip())
+
+    return "\\N".join(lines)
+
+
+def tag_aware_wrap_zh(text: str, max_width: int) -> str:
+    """[Claude_Opus_4.8] v1.5.0 中文 tag/词-aware 折行。
+
+    与 tag_aware_wrap（英文按空格分词）不同，中文逐字断行，但有两条不可破坏的约束：
+    - {…} ASS 标签视觉宽度记为 0，且绝不在标签内部插入 \\N；
+    - 完整高亮短语 {\\u1…}词{\\u0…} 作为不可分原子，绝不被 \\N 从中间劈开。
+      旧逻辑「先 textwrap.fill 再高亮」会在任意字符处把「头条叙事」劈成
+      「头\\N条叙事」，使 apply_chinese_highlights 的连续子串匹配失败而漏标，
+      也让已标注词组被折行截断——本函数从源头杜绝。
+
+    Args:
+        text: 已施加中文高亮（含 ASS 标签）或纯中文文本。
+        max_width: 每行最大可见字符数。
+
+    Returns:
+        以 \\N 分隔的折行文本。
+    """
+    if not text:
+        return text
+
+    # 切成原子序列：完整高亮短语 / 独立标签(0宽) / 单个可见字符(逐字断行)
+    atom_pattern = re.compile(
+        r'\{\\u1[^}]*\}.*?\{\\u0[^}]*\}'   # ① 完整高亮短语（含内部任意字符）整体
+        r'|\{[^}]*\}'                       # ② 独立标签（视觉 0 宽）
+        r'|[^{]'                            # ③ 单个可见字符
+    )
+    atoms = atom_pattern.findall(text)
+
+    def visual_len(atom: str) -> int:
+        return len(re.sub(r'\{[^}]*\}', '', atom))
+
+    lines: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for atom in atoms:
+        alen = visual_len(atom)
+        if alen == 0:
+            # 0 宽标签：附着当前行，不触发折行
+            current.append(atom)
+            continue
+        if current_len + alen > max_width and current:
+            lines.append("".join(current))
+            current = [atom]
+            current_len = alen
+        else:
+            current.append(atom)
+            current_len += alen
+    if current:
+        lines.append("".join(current))
 
     return "\\N".join(lines)
 
@@ -299,10 +362,13 @@ class SubtitleStylist:
         wrap_w_zh = max(10, int(layout.safe_width / zh_size))
 
         if zh_text:
-            zh_text = textwrap.fill(zh_text, width=wrap_w_zh).replace('\n', '\\N')
-            # 折行完成后再进行中文词汇高亮（标签插入不会跨行被截断）
+            # [Claude_Opus_4.8] v1.5.0: 先在「未折行的纯文本」上施加中文高亮，
+            # 再用 tag/词-aware 折行（tag_aware_wrap_zh）。这样 vocab 词组作为不可分
+            # 原子参与折行，绝不被 \N 从中间劈开——与英文路径（高亮→tag_aware_wrap）对称。
+            # 旧顺序「textwrap.fill→高亮」会把「头条叙事」劈成「头\N条叙事」致 substring 失配漏标。
             if vocab_items:
                 zh_text = apply_chinese_highlights(zh_text, vocab_items)
+            zh_text = tag_aware_wrap_zh(zh_text, wrap_w_zh)
         if en_text:
             en_text = tag_aware_wrap(en_text, wrap_w_en)
 
