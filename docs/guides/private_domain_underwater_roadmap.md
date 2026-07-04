@@ -104,6 +104,7 @@ flowchart LR
 | 1.2 | 增加 `content_intent` | 区分英语、宏观、美股、演讲、词汇 | 对应服务号关键词和企业微信标签 | 不创建真实用户标签 |
 | 1.3 | 增加 `lead_magnet_hint` | 知道适合“词汇/美股/日历/复盘”哪类资料 | 资料包选题从内容中长出来 | 不自动发送资料 |
 | 1.4 | 增加 `compliance_risk_level` | 财经内容发布前多一层提醒 | 后续 CTA 灰度有风险阈值 | 不替代现有审查引擎 |
+| 1.5 | 增加 `learning_asset` | 判断适合词块、跟读、精听、Anki/SRS 哪种学习资产 | 让“词汇入口”变成真实可领取资料 | 不生成付费资料、不写公开视频 |
 
 `growth_meta` 可以长这样：
 
@@ -114,9 +115,47 @@ flowchart LR
   "lead_magnet_hint": "词汇",
   "cta_allowed": false,
   "compliance_risk_level": "low",
-  "future_product_hint": "全球经济关键词精读包"
+  "future_product_hint": "全球经济关键词精读包",
+  "learning_asset": {
+    "learning_format": ["shadowing", "word_chunk", "sentence_mining"],
+    "source_type": "speech",
+    "difficulty": "intermediate",
+    "recommended_output": ["词块卡", "跟读句", "Anki卡"],
+    "key_phrases": ["sticky inflation", "rate cut expectations"],
+    "asset_priority": "high"
+  }
 }
 ```
+
+### 英语学习资产化
+
+英语学习形式不是另一个项目，而是“暗渡成仓”的上游资产层。它回答的是：这条视频沉淀成什么资料，用户才愿意领取、复习，甚至未来付费。
+
+```mermaid
+flowchart LR
+    A["视频原声/字幕"] --> B["growth_meta"]
+    B --> C["learning_asset"]
+    C --> D["词块表"]
+    C --> E["跟读句"]
+    C --> F["双语精读稿"]
+    C --> G["Anki/SRS 卡片"]
+    D --> H["词汇/词块入口"]
+    E --> H
+    F --> H
+    G --> H
+```
+
+学习形式枚举先保持轻量：
+
+| learning_format | 用途 | 暂不做 |
+| --- | --- | --- |
+| `shadowing` | 原声跟读句卡 | 不生成音频课程 |
+| `sentence_loop` | 单句循环精听 | 不做播放器 |
+| `word_chunk` | 财经英语词块表 | 不自动售卖 |
+| `sentence_mining` | 原句挖掘和例句积累 | 不批量生成教材 |
+| `bilingual_subtitle` | 双语精读稿 | 不替换公开视频字幕 |
+| `anki_card` | Anki/SRS 卡片素材 | 不自动生成卡包 |
+| `speech_quote` | 演讲金句摘录 | 不做外部发布 |
 
 ## 阶段 2：把“资料包”先做成配置，不做成交
 
@@ -136,7 +175,13 @@ flowchart LR
   "词汇": {
     "title": "全球经济高频词汇整理",
     "match_intents": ["财经词汇", "英语学习", "人物演讲"],
+    "learning_format": ["word_chunk", "sentence_mining", "anki_card"],
+    "recommended_output": ["词块表", "原句拆解", "复习卡模板"],
     "safe_cta": "回复「词汇」领取本期关键词整理",
+    "safe_cta_templates": [
+      "回复「词汇」，领取本期财经英语词块表。",
+      "回复「词块」，领取这期英文原句和关键词拆解。"
+    ],
     "risk": "low"
   },
   "美股": {
@@ -207,10 +252,11 @@ sequenceDiagram
 | 4.2 | CTA 通过合规规则才可显示为“可用” | 避免把风险留到最后 | 形成可灰度的安全阀 | 不绕过现有审查 |
 | 4.3 | 记录 shadow CTA 命中率 | 知道多少内容适合私域 | 判断是否值得通车 | 不看短期收入 |
 | 4.4 | 输出周报：可通车内容比例 | 管理预期 | 帮助选择第一个灰度入口 | 不做商业承诺 |
+| 4.5 | 增加英语学习 CTA 模板 | 词汇、词块、跟读、精听、卡片可做影子演练 | 给词汇入口补足产品感 | 不真实写入 copy |
 
 ## 阶段 5：真正通车，但只开一条窄车道
 
-只有当前面几层稳定后，才打开引流。第一条车道应该选择风险最低、交付最轻的入口：**词汇资料包**。
+只有当前面几层稳定后，才打开引流。第一条车道应该选择风险最低、交付最轻的入口：**词汇/词块资料包**。
 
 ```mermaid
 flowchart LR
@@ -226,7 +272,7 @@ flowchart LR
 | 任务 | 小改进 | 当前收益 | 未来价值 | 明确不做 |
 | --- | --- | --- | --- | --- |
 | 5.1 | 增加 `enable_private_domain_cta=false` | 开关默认安全 | 可按需灰度 | 不默认开启 |
-| 5.2 | 首批只允许 `词汇` CTA | 风险低、交付轻 | 验证私域入口承接 | 不碰荐股/收益/带单 |
+| 5.2 | 首批只允许 `词汇/词块` CTA | 风险低、交付轻 | 验证私域入口承接 | 不碰荐股/收益/带单 |
 | 5.3 | 必须人工确认才写入发布文案 | 防止突兀商业化 | 训练运营判断 | 不全自动 |
 | 5.4 | 只记录关键词响应，不急着卖 | 先验证需求 | 以后再设计产品价格 | 不做训练营转化 |
 
@@ -236,6 +282,7 @@ flowchart LR
 | --- | --- | --- |
 | P0 | `growth_meta.json` 侧车文件 | 最小、无侵入、立刻让内容资产可见 |
 | P0 | `lead_magnets.json` 配置 | 后续所有 CTA 和资料包都需要单一真相源 |
+| P0 | `learning_asset` 资产建议 | 让词汇入口从“领取资料”升级为“可复习的英语学习资料” |
 | P0 | 合规 CTA 白名单/黑名单 | 财经私域的第一道闸门 |
 | P1 | dashboard 只读展示 | 让水下能力进入日常运营 |
 | P1 | shadow CTA 演练 | 通车前压力测试 |
@@ -259,11 +306,13 @@ flowchart LR
 如果从明天开始动手，建议按下面顺序拆：
 
 1. 新增 `config/lead_magnets.example.json`，只定义 `词汇`、`美股`、`日历`。
-2. 在 `scripts/copywriter.py` 生成 `*_growth_meta.json`，默认 `cta_allowed=false`。
-3. 写单元测试，保证没有 feature flag 时不会改变 `*_copy.txt`。
-4. 在后台视频列表只读显示 `content_intent`、`lead_magnet_hint`、`risk_level`。
-5. 新增 shadow CTA 生成脚本，只输出报告，不写发布文案。
-6. 运行一周后看报告，再决定是否打开 `词汇` 入口灰度。
+2. 定义 `learning_format` 和 `difficulty` 枚举，只做 schema 和测试。
+3. 在 `scripts/copywriter.py` 生成 `*_growth_meta.json`，默认 `cta_allowed=false`。
+4. 在 `growth_meta` 内增加 `learning_asset` 子对象，fallback 为空资产。
+5. 写单元测试，保证没有 feature flag 时不会改变 `*_copy.txt`。
+6. 在后台视频列表只读显示 `content_intent`、`lead_magnet_hint`、`risk_level`、`learning_asset` 摘要。
+7. 新增 shadow CTA 生成脚本，只输出报告，不写发布文案。
+8. 运行一周后看报告，再决定是否打开 `词汇/词块` 入口灰度。
 
 ## 开发纪律与测试原则
 
@@ -300,7 +349,7 @@ flowchart TD
     D -- "否" --> E["继续沉淀资料包"]
     D -- "是" --> F{"CTA 合规通过率稳定？"}
     F -- "否" --> G["调整白名单和黑名单"]
-    F -- "是" --> H["只灰度词汇入口"]
+    F -- "是" --> H["只灰度词汇/词块入口"]
 ```
 
 通车不是“开始变现”的第一天，而是水下工程已经证明自己稳定之后的一次开闸。
@@ -311,3 +360,4 @@ flowchart TD
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-04 | Codex | 初始创建：将视频号私域变现前置工作重构为“水下工程路线图”，明确引流是最后通车仪式 |
 | 1.1.0 | 2026-07-04 | Codex | 确定项目代号“暗渡成仓”，补充 TDD、测试验证和默认关闭等开发纪律 |
+| 1.2.0 | 2026-07-04 | Codex | 纳入英语学习资产化上游能力，补充 learning_asset、学习形式枚举、词汇/词块入口和影子 CTA 模板 |

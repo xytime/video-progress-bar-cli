@@ -22,6 +22,7 @@
 | dashboard 展示若过早加入“确认 CTA”按钮 | 误触发通车 | 前两个 milestone 只读，不提供写入按钮 |
 | 私域准备度如果被当成发布评分 | 干扰现有 75 分自动发布线 | 新指标只供运营参考，不进入 `score` |
 | “美股/复盘”入口风险高 | 可能被平台理解为投顾导流 | 第一条真实通车只允许“词汇”入口 |
+| 英语学习资料如果只停留在“词汇入口” | 入口价值不足，用户领取后难以沉淀 | 新增 learning_asset_meta，把原声精听、词块、跟读、Anki/SRS 作为上游资产 |
 
 ### 产品边界
 
@@ -29,6 +30,7 @@
 | --- | --- |
 | 内容意图识别 | 自动引流 |
 | 资料包配置 | 真实服务号接口 |
+| 英语学习资产建议 | 自动生成付费资料 |
 | shadow CTA 演练 | 付费转化 |
 | 后台只读展示 | 训练营销售 |
 | 人工运营备注 | CRM 自动化 |
@@ -97,6 +99,7 @@ flowchart LR
 | PD-000-2 | 新增 `config/private_domain_compliance.example.json` | 包含 CTA 白名单、禁止词、风险等级说明 | PD-000-1 |
 | PD-000-3 | 增加配置读取工具，放在 `src/video_processing/utils/` | 不反向导入 `scripts/` 或 `cli/`；缺配置时安全返回默认空能力 | PD-000-1 |
 | PD-000-4 | 配置 schema 单测 | 错误配置会失败，缺真实配置不影响现有流水线 | PD-000-3 |
+| PD-000-5 | 扩展 `lead_magnets` schema | 支持 `learning_format`、`recommended_output`、`safe_cta_templates`，但缺字段安全降级 | PD-000-3 |
 
 **不做**：不新增环境变量，不写入发布文案，不接微信接口。
 
@@ -111,6 +114,21 @@ flowchart LR
 | PD-001-3 | 写枚举映射文档 | 文档说明每个标签适用和不适用场景 | PD-001-1 |
 
 **不做**：不创建用户画像，不进入 DB 迁移。
+
+### Story PD-002：定义英语学习形式枚举
+
+**用户故事**：作为运营者，我希望系统不仅知道视频适合“英语学习”，还知道它适合哪种学习形式，方便后续沉淀为词汇表、跟读句、双语精读稿或 Anki 卡片。
+
+| Task | 内容 | 验收标准 | 依赖 |
+| --- | --- | --- | --- |
+| PD-002-1 | 定义 `learning_format` 枚举 | 包含 `shadowing`、`sentence_loop`、`word_chunk`、`sentence_mining`、`bilingual_subtitle`、`anki_card`、`speech_quote` | PD-001 |
+| PD-002-2 | 定义 `difficulty` 枚举 | 包含 `beginner`、`intermediate`、`advanced`，未知值安全回退为 `intermediate` 或空 | PD-001 |
+| PD-002-3 | 写学习形式映射文档 | 说明每种学习形式适合的视频类型、字幕条件和不适用场景 | PD-002-1 |
+| PD-002-4 | 增加枚举单测 | 非法枚举失败或安全降级；缺字段不影响 `growth_meta` 读取 | PD-002-1 |
+
+**不做**：不生成真实学习资料，不写入公开视频文案，不创建数据库迁移。
+
+**Definition of Done**：枚举有测试；默认关闭路径通过；缺字段和未知枚举有安全默认；文档说明与 `lead_magnets` schema 对齐。
 
 ## Milestone 1：每条视频生成水下标签
 
@@ -141,6 +159,37 @@ flowchart LR
 
 **不做**：不做 DB schema 迁移。
 
+### Story PD-012：生成 learning_asset_meta
+
+**用户故事**：作为运营者，我希望每条视频自动生成英语学习资产建议，告诉我它适合做词块表、跟读练习、双语精读稿还是 Anki 卡。
+
+`learning_asset` 必须作为 `growth_meta` 的子对象：
+
+```json
+{
+  "learning_asset": {
+    "learning_format": ["shadowing", "word_chunk", "sentence_mining"],
+    "source_type": "speech",
+    "difficulty": "intermediate",
+    "recommended_output": ["词块卡", "跟读句", "Anki卡"],
+    "key_phrases": ["sticky inflation", "rate cut expectations"],
+    "asset_priority": "high"
+  }
+}
+```
+
+| Task | 内容 | 验收标准 | 依赖 |
+| --- | --- | --- | --- |
+| PD-012-1 | 扩展 `growth_meta` schema | 增加 `learning_asset` 对象；字段至少包含 `learning_format`、`source_type`、`difficulty`、`recommended_output`、`key_phrases`、`asset_priority` | PD-010, PD-002 |
+| PD-012-2 | 输出学习形式建议 | 能把演讲/访谈/财经词汇类内容映射到合适学习形式；无法判断时返回空资产 | PD-012-1 |
+| PD-012-3 | 提取候选词块 | 只输出候选 `key_phrases`，不进入发布文案，不生成 Anki 文件 | PD-012-1 |
+| PD-012-4 | fallback 安全默认 | LLM 不可用或 JSON 损坏时返回空 `learning_asset`，不影响 copy/title/category/label 输出 | PD-012-2 |
+| PD-012-5 | 单测验证 copy 不变 | 原 `{yid}_copy.txt` 不被修改；`growth_meta` 缺 `learning_asset` 时读取层不崩溃 | PD-012-1 |
+
+**不做**：不自动生成 Anki 文件，不自动发布资料包，不把学习资产写入公开视频。
+
+**Definition of Done**：新增 schema 测试、fallback 测试、copy 不变测试；`learning_asset` 只读可回滚；不增加 DB 迁移。
+
 ## Milestone 2：后台只读可见
 
 目标：让水下标签进入日常运营视野，但仍不提供“发布 CTA”能力。
@@ -170,6 +219,21 @@ flowchart LR
 
 **不做**：不抓评论，不计算收入。
 
+### Story PD-022：英语学习资产周报
+
+**用户故事**：作为运营者，我希望每周看到哪些视频适合沉淀为英语学习资料，以便优先制作词块表、跟读句、双语精读稿或 Anki 卡片。
+
+| Task | 内容 | 验收标准 | 依赖 |
+| --- | --- | --- | --- |
+| PD-022-1 | 统计 `learning_format` 分布 | 按 `shadowing`、`word_chunk`、`sentence_mining`、`bilingual_subtitle`、`anki_card` 等分组 | PD-012 |
+| PD-022-2 | 输出高优先级素材列表 | 包含视频 ID、推荐资料类型、风险等级、`asset_priority` | PD-022-1 |
+| PD-022-3 | 输出词汇入口素材池 | 只列 `risk=low` 且适合 `词汇/词块` 入口的视频 | PD-022-1 |
+| PD-022-4 | 生成 Markdown 报告 | 报告可直接用于人工选题；缺 `learning_asset` 的视频被归为“待补充” | PD-022-1 |
+
+**不做**：不计算收入，不自动生成付费内容，不接 CRM。
+
+**Definition of Done**：报表测试覆盖空目录、缺字段、损坏 JSON、风险过滤；报告不读取裸 SQL。
+
 ## Milestone 3：影子漏斗演练
 
 目标：演练“如果通车会怎么说”，但不改变公开视频。
@@ -184,8 +248,23 @@ flowchart LR
 | PD-030-2 | 新增 CTA 审查函数 | 命中禁止词则 `shadow_cta_status=blocked` | PD-000 |
 | PD-030-3 | 写入 `{yid}_shadow_cta.json` | 只输出候选，不触碰 `{yid}_copy.txt` | PD-030-2 |
 | PD-030-4 | 单测覆盖高风险财经表达 | “荐股”“收益”“带单”等表达必须 blocked | PD-030-2 |
+| PD-030-5 | 扩展低风险英语学习 CTA 模板 | 支持 `词汇`、`词块`、`跟读`、`精听`、`卡片`；继续禁止 `荐股`、`收益`、`带单`、`实盘`、`买点`、`卖点`、`入场`、`翻倍` | PD-000, PD-012 |
 
 **不做**：不在文案中展示 CTA。
+
+低风险 CTA 模板示意：
+
+```json
+{
+  "safe_cta_templates": {
+    "词汇": ["回复「词汇」，领取本期财经英语词块表。"],
+    "词块": ["回复「词块」，领取这期英文原句和关键词拆解。"],
+    "跟读": ["回复「跟读」，领取本期原声跟读句卡。"],
+    "精听": ["回复「精听」，领取这段演讲的中英精读稿。"],
+    "卡片": ["回复「卡片」，领取本期复习卡模板。"]
+  }
+}
+```
 
 ### Story PD-031：shadow CTA 周报
 
@@ -234,7 +313,8 @@ flowchart LR
 | 门槛 | 标准 |
 | --- | --- |
 | 标签可信 | 连续 7 天 `growth_meta` 生成稳定，人工抽检 80% 以上可信 |
-| 入口聚焦 | 至少一个低风险入口有足够素材，优先 `词汇` |
+| 学习资产可信 | `learning_asset` 对英语学习/财经词汇视频的人工抽检 80% 以上可信 |
+| 入口聚焦 | 至少一个低风险入口有足够素材，真实通车前第一入口只能是 `词汇/词块` |
 | 合规稳定 | shadow CTA blocked 原因清晰，无明显漏放 |
 | 行为隔离 | 现有发布成功率、登录状态、上传流程未被影响 |
 | 人工可控 | 必须有人确认才能写入公开视频 |
@@ -245,14 +325,14 @@ flowchart TD
     B -- "否" --> R1["回到 PD-010/PD-020 调整"]
     B -- "是" --> C{"shadow CTA 合规稳定?"}
     C -- "否" --> R2["回到 PD-030 调整规则"]
-    C -- "是" --> D{"首入口是否只选词汇?"}
+    C -- "是" --> D{"首入口是否只选词汇/词块?"}
     D -- "否" --> R3["降低范围"]
     D -- "是" --> E["允许进入 Milestone 5"]
 ```
 
-## Milestone 5：词汇入口灰度通车
+## Milestone 5：词汇/词块入口灰度通车
 
-目标：只为低风险词汇入口打开一条窄车道，并且必须人工确认。
+目标：只为低风险词汇/词块入口打开一条窄车道，并且必须人工确认。
 
 ### Story PD-050：私域 CTA feature flag
 
@@ -261,18 +341,18 @@ flowchart TD
 | Task | 内容 | 验收标准 | 依赖 |
 | --- | --- | --- | --- |
 | PD-050-1 | 在 `settings.py` 增加 `enable_private_domain_cta=false` | 默认关闭；`.env.example` 同步 | Gate |
-| PD-050-2 | 增加 `private_domain_allowed_keywords` | 默认只允许 `词汇` | PD-050-1 |
+| PD-050-2 | 增加 `private_domain_allowed_keywords` | 默认只允许 `词汇,词块`，不允许 `美股/复盘模板` | PD-050-1 |
 | PD-050-3 | 单测验证默认不写 CTA | 不设置 flag 时发布文案完全不变 | PD-050-1 |
 
 **不做**：不默认打开，不允许美股/复盘入口。
 
-### Story PD-051：人工确认后写入词汇 CTA
+### Story PD-051：人工确认后写入词汇/词块 CTA
 
-**用户故事**：作为运营者，我希望只在人工确认后，把低风险词汇 CTA 写入发布文案。
+**用户故事**：作为运营者，我希望只在人工确认后，把低风险词汇/词块 CTA 写入发布文案。
 
 | Task | 内容 | 验收标准 | 依赖 |
 | --- | --- | --- | --- |
-| PD-051-1 | 后台增加“确认词汇 CTA”按钮 | 只在 `risk=low`、`lead_magnet_hint=词汇`、flag 开启时出现 | PD-050 |
+| PD-051-1 | 后台增加“确认词汇/词块 CTA”按钮 | 只在 `risk=low`、`lead_magnet_hint=词汇/词块`、flag 开启时出现 | PD-050 |
 | PD-051-2 | 写入 copy 前保留原文备份 | 可回滚，避免误污染文案 | PD-051-1 |
 | PD-051-3 | 上传前再次审查 CTA | 审查失败则拒绝写入 | PD-030 |
 | PD-051-4 | 审计日志记录确认人和时间 | 可复盘谁打开了通车 | PD-051-1 |
@@ -288,12 +368,15 @@ gantt
     section 地基
     PD-000 配置骨架           :a1, 2026-07-05, 1d
     PD-001 内容意图枚举       :a2, after a1, 1d
+    PD-002 学习形式枚举       :a3, after a2, 1d
     section 侧车
-    PD-010 growth_meta 输出   :b1, after a2, 2d
+    PD-010 growth_meta 输出   :b1, after a3, 2d
     PD-011 校验器             :b2, after b1, 1d
+    PD-012 learning_asset     :b3, after b2, 2d
     section 可见
-    PD-020 后台只读展示       :c1, after b2, 2d
-    PD-021 周报               :c2, after b2, 1d
+    PD-020 后台只读展示       :c1, after b3, 2d
+    PD-021 周报               :c2, after b3, 1d
+    PD-022 学习资产周报       :c3, after c2, 1d
     section 演练
     PD-030 shadow CTA         :d1, after c1, 2d
     PD-031 shadow 周报        :d2, after d1, 1d
@@ -308,14 +391,16 @@ gantt
 
 ## 第一批建议开工单
 
-第一批只开 6 个，避免把工程面铺太大：
+第一批建议开 8 个，仍然只做水下能力，不碰公开视频引流：
 
 1. `PD-000`：配置骨架。
 2. `PD-001`：内容意图与风险枚举。
-3. `PD-010`：`growth_meta` 侧车输出。
-4. `PD-011`：`growth_meta` 安全读取与校验。
-5. `PD-020`：后台只读展示。
-6. `PD-030`：shadow CTA 演练。
+3. `PD-002`：英语学习形式枚举。
+4. `PD-010`：`growth_meta` 侧车输出。
+5. `PD-011`：`growth_meta` 安全读取与校验。
+6. `PD-012`：`learning_asset` 资产建议。
+7. `PD-020`：后台只读展示。
+8. `PD-030`：shadow CTA 演练。
 
 这些做完后，项目仍然没有公开引流，但已经拥有“看见内容资产、看见风险、看见可通车入口”的能力。
 
@@ -329,7 +414,8 @@ gantt
 | 流水线安全 | `PipelineManager` checkpoint 不被破坏 |
 | 配置安全 | 新配置缺失时安全降级 |
 | 合规安全 | CTA 只能来自配置，不能由 LLM 自由生成 |
-| TDD/测试 | 纯逻辑先写失败测试；至少覆盖默认关闭、缺文件、损坏文件、禁止词命中、LLM fallback |
+| 学习资产安全 | `learning_asset` 只能作为 sidecar 子对象和只读展示，不自动生成付费资料 |
+| TDD/测试 | 纯逻辑先写失败测试；至少覆盖默认关闭、缺文件、损坏文件、禁止词命中、未知学习形式、LLM fallback |
 | 验证 | 在工单记录中写明实际运行过的测试命令或浏览器验收方式 |
 | 文档 | 修改超过 10 行逻辑时更新文件 Modification History |
 
@@ -339,3 +425,4 @@ gantt
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-04 | Codex | 初始创建：对水下工程路线图进行 review，并拆分为 story/task 工单流 |
 | 1.1.0 | 2026-07-04 | Codex | 确定项目代号“暗渡成仓”，补充 TDD、测试验证、默认关闭和可回滚工程规范 |
+| 1.2.0 | 2026-07-04 | Codex | 纳入英语学习资产化上游能力：新增学习形式枚举、learning_asset_meta、学习资产周报和低风险英语学习 CTA 模板 |

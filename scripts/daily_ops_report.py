@@ -1,0 +1,127 @@
+"""每日运维工单巡检 — 自动每天执行，推送 Telegram。
+
+固化「每日该盯的循环项」（源自 2026-06-26 自我审查）：
+  1. 发布健康：今日发布/失败数、可发队列、在途
+  2. 黑名单完整性：有无已拉黑频道的视频泄漏到 PUBLISHED/可发队列（防 2026-06-25 事故复发）
+  3. 微信会话：是否失效（~24h 服务端硬上限，几乎每天需重扫）
+  4. 限流：discovery/rescore 的 exit-101/取不到 比例
+
+只读巡检，不改任何状态。报告推 Telegram；同时落 output/daily_ops_report.log。
+
+# Modification History
+| Version | Date       | Author          | Description                          |
+|---------|------------|-----------------|--------------------------------------|
+| 1.0.0   | 2026-06-26 | Claude_Opus_4.8 | 初版：每日发布/黑名单/会话/限流巡检工单 |
+"""
+from __future__ import annotations
+
+import datetime
+import sqlite3
+import sys
+from pathlib import Path
+
+PRJ = Path(__file__).parent.parent
+sys.path.insert(0, str(PRJ / "src"))
+from config.settings import settings  # noqa: E402
+
+_DB = PRJ / "output" / "pipeline.db"
+_DASH_LOG = PRJ / "output" / "dashboard.log"
+_MON_LOG = PRJ / "output" / "monitor.log"
+
+
+def _ro_conn():
+    return sqlite3.connect(f"file:{_DB}?mode=ro", uri=True, timeout=10)
+
+
+def _one(con, sql, *args):
+    return con.execute(sql, args).fetchone()[0]
+
+
+def collect() -> str:
+    # 北京今天 00:00 ≈ UTC 前一天 16:00；用 datetime('now','-16 hours')(SQLite UTC) 对齐"今天"
+    since = "datetime('now','-16 hours')"
+    con = _ro_conn()
+
+    pub = _one(con, f"SELECT count(*) FROM processed_videos WHERE status='PUBLISHED' AND updated_at>={since}")
+    fail = _one(con, f"SELECT count(*) FROM processed_videos WHERE status='FAILED' AND updated_at>={since}")
+    queue = _one(con, "SELECT count(*) FROM processed_videos WHERE status='PENDING' AND score>=75 AND IFNULL(source,'')!='DISCOVERY'")
+    active = _one(con, "SELECT count(*) FROM processed_videos WHERE status IN ('DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING')")
+    login_req = _one(con, "SELECT count(*) FROM processed_videos WHERE status='LOGIN_REQUIRED'")
+
+    # 黑名单泄漏：已拉黑频道的视频出现在 已发(今日) 或 可发队列(≥75 PENDING) = 异常
+    leak = _one(con, f"""SELECT count(*) FROM processed_videos p
+        JOIN recommended_channels r ON p.channel_id=r.channel_id
+        WHERE r.status='BLACKLISTED'
+          AND ( (p.status='PUBLISHED' AND p.updated_at>={since})
+                OR (p.status='PENDING' AND p.score>=75) )""")
+    con.close()
+
+    # 微信会话：keepalive 最近判活 + LOGIN_REQUIRED
+    sess = "未知"
+    try:
+        lines = _DASH_LOG.read_text(errors="ignore").splitlines()
+        for ln in reversed(lines):
+            if "Keepalive" not in ln:
+                continue
+            if "Session active" in ln:
+                sess = "🟢 活跃"; break
+            if "expired" in ln or "Redirected to login" in ln:
+                sess = "🔴 已失效→需扫码"; break
+    except Exception:
+        pass
+    if login_req > 0:
+        sess = f"🔴 已失效→需扫码（{login_req} 条卡 LOGIN_REQUIRED）"
+
+    # 限流：今日 monitor 限流跳过次数
+    rl = "?"
+    try:
+        txt = _MON_LOG.read_text(errors="ignore")
+        rl = str(txt.count("重试后仍被限流"))
+    except Exception:
+        pass
+
+    leak_line = "0 ✅" if leak == 0 else f"⚠️ {leak} 条（需立刻排查！）"
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    return (
+        f"📋 <b>每日运维工单 {today}</b>\n"
+        f"━━ 发布健康 ━━\n"
+        f"今日发布 <b>{pub}</b> | 失败 {fail} | 可发队列(≥75) {queue} | 在途 {active}\n"
+        f"━━ 黑名单完整性 ━━\n"
+        f"已拉黑频道泄漏: {leak_line}\n"
+        f"━━ 微信会话 ━━\n"
+        f"{sess}（~24h 服务端硬上限，几乎每天需重扫）\n"
+        f"━━ 限流 ━━\n"
+        f"discovery 累计限流跳过(monitor.log): {rl}\n"
+        f"━━ 每日须办 ━━\n"
+        f"• 会话若失效→ <code>python scripts/wechat_uploader.py --login-only</code> 重扫\n"
+        f"• 泄漏若&gt;0→ 立刻查 get_high_score_pending_videos 黑名单过滤是否被绕过"
+    )
+
+
+def push_telegram(text: str) -> bool:
+    token = settings.telegram_bot_token
+    chat = settings.active_telegram_chat_id or (settings.telegram_admin_ids or "").split(",")[0].strip()
+    if not (token and chat):
+        return False
+    try:
+        import urllib.request, urllib.parse, json
+        data = urllib.parse.urlencode({"chat_id": chat, "text": text, "parse_mode": "HTML"}).encode()
+        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
+        r = json.load(urllib.request.urlopen(req, timeout=15))
+        return bool(r.get("ok"))
+    except Exception as e:
+        print("telegram push failed:", e)
+        return False
+
+
+def main():
+    report = collect()
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    plain = report.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "").replace("&gt;", ">")
+    print(f"[{ts}]\n{plain}\n")
+    ok = push_telegram(report)
+    print("telegram:", "✅ sent" if ok else "❌ not sent")
+
+
+if __name__ == "__main__":
+    main()
