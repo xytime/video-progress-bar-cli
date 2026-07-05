@@ -23,6 +23,7 @@
 | 1.16.0  | 2026-07-05 | Codex                                   | 接入 translation_quality_guard：标题/文案生成后做事实保真审计，P0 阻断写出 |
 | 1.17.0  | 2026-07-05 | Codex                                   | 标题/文案质量审计可选落盘为 *_copy_quality.json，记录 warning/blocking issues |
 | 1.18.0  | 2026-07-05 | Codex                                   | 标题/文案复用 translation_consistency_guard，审计字段间术语漂移 warning |
+| 1.19.0  | 2026-07-05 | Codex                                   | 标题/文案改用 translation_quality_evaluator，与字幕共享质量决策内核 |
 """
 
 import re
@@ -50,8 +51,9 @@ from video_processing.utils.translation_helper import translate_text as _transla
 # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils（单一真相源）；此处 re-import 保持
 # `from copywriter import graceful_truncate_title` 的既有调用方（wechat_uploader、测试）零改动。
 from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
-from video_processing.utils.translation_consistency_guard import evaluate_translation_consistency
-from video_processing.utils.translation_quality_guard import evaluate_translation_pair
+from video_processing.utils.translation_quality_evaluator import (
+    evaluate_translation_candidate,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("copywriter")
@@ -388,13 +390,13 @@ def _guard_wechat_content_quality(
     if not source_text or not translated_text:
         return
 
-    result = evaluate_translation_pair(source_text, translated_text)
-    consistency_issues = evaluate_translation_consistency(
+    decision = evaluate_translation_candidate(
         [source_text],
         [translated_text],
+        provider=provider,
+        final_provider=True,
     )
-    issues = result.issues + consistency_issues
-    for issue in issues:
+    for issue in decision.issues:
         logger.warning(
             "[CopyGuard][%s] %s | source=%s translation=%s",
             issue.code,
@@ -403,28 +405,18 @@ def _guard_wechat_content_quality(
             issue.translation_signal,
         )
 
-    blocking = [issue for issue in issues if issue.severity == "P0"]
-    report = {
-        "provider": provider,
+    report = decision.to_audit_event()
+    report.update({
         "source_title": title,
-        "status": "blocked" if blocking else "passed",
-        "action": "fail" if blocking else "accept",
         "content": {
             "short_title": str(content.get("short_title", "")),
             "hook_subtitle": str(content.get("hook_subtitle", "")),
             "category": str(content.get("category", "")),
         },
-        "warning_issues": [
-            _copy_issue_to_dict(issue)
-            for issue in issues
-            if issue.severity != "P0"
-        ],
-        "blocking_issues": [_copy_issue_to_dict(issue) for issue in blocking],
-    }
+    })
     _write_copy_quality_report(audit_path, report)
-    if blocking:
-        details = "; ".join(f"{issue.code}: {issue.message}" for issue in blocking[:3])
-        raise ValueError(f"WeChat copy quality guard blocked output: {details}")
+    if decision.should_fail:
+        raise ValueError(f"WeChat copy quality guard blocked output: {decision.blocking_summary()}")
 
 
 def _write_copy_quality_report(audit_path: Optional[Path], payload: dict) -> None:
@@ -440,17 +432,6 @@ def _write_copy_quality_report(audit_path: Optional[Path], payload: dict) -> Non
         logger.info(f"[CopyGuard] quality report → {audit_path}")
     except Exception as e:
         logger.warning(f"[CopyGuard] failed to write quality report: {e}")
-
-
-def _copy_issue_to_dict(issue) -> dict:
-    return {
-        "severity": issue.severity,
-        "code": issue.code,
-        "message": issue.message,
-        "source_signal": issue.source_signal,
-        "translation_signal": issue.translation_signal,
-        "suggested_fix": issue.suggested_fix,
-    }
 
 
 # ── 主生成函数 ───────────────────────────────────────────────────────────────
