@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕翻译供应商顺序配置解析 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 配置解析 |
+| 1.2.0   | 2026-07-05 | Codex  | 覆盖翻译供应商配置在 .env.example 中可发现 |
 """
 
 import sys
@@ -37,3 +38,13 @@ def test_empty_subtitle_translation_provider_order_falls_back_to_default():
     settings = Settings(_env_file=None, subtitle_translation_provider_order="unknown,,")
 
     assert settings.subtitle_translation_provider_order_list == ["gemini", "aliyun", "google"]
+
+
+def test_translation_provider_env_example_documents_required_keys():
+    env_example = Path(__file__).parent.parent.parent / ".env.example"
+    content = env_example.read_text(encoding="utf-8")
+
+    assert "SUBTITLE_TRANSLATION_PROVIDER_ORDER=" in content
+    assert "DEEPSEEK_API_KEY=" in content
+    assert "DEEPSEEK_BASE_URL=" in content
+    assert "DEEPSEEK_MODEL=" in content
