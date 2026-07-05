@@ -9,6 +9,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：从全片文本抽取领域、事实、术语提示并渲染为翻译上下文 |
 | 1.1.0   | 2026-07-06 | Codex  | 抽取受保护英文实体并注入 prompt，减少整片实体漂移 |
+| 1.2.0   | 2026-07-06 | Codex  | 从全片文本抽取结构化信号，避免长视频中段关键事实被采样遗漏 |
 """
 
 from __future__ import annotations
@@ -66,13 +67,12 @@ def build_translation_context(
     description: str = "",
 ) -> TranslationContext:
     """从标题、简介和全片字幕构建翻译上下文。"""
-    sampled_texts = _sample_texts(english_texts)
-    context_parts = [title, description, *sampled_texts]
-    corpus = _join_non_empty(context_parts)
-    domain = _detect_domain(corpus)
-    facts = _extract_facts(corpus)
-    entities = extract_protected_entities(context_parts)
-    term_notes = _extract_term_notes(corpus, domain)
+    full_parts = [title, description, *_clean_texts(english_texts)]
+    full_corpus = _join_non_empty(full_parts)
+    domain = _detect_domain(full_corpus)
+    facts = _extract_facts(full_corpus)
+    entities = extract_protected_entities(full_parts)
+    term_notes = _extract_term_notes(full_corpus, domain)
     style_notes = [
         "Translate meaning, not isolated words; keep subtitles concise and natural in zh-CN.",
         "Preserve event direction, money flow, entities, and numeric magnitude.",
@@ -158,11 +158,8 @@ def _extract_term_notes(text: str, domain: str) -> List[str]:
     return _dedupe(notes)
 
 
-def _sample_texts(texts: Sequence[str], *, head: int = 40, tail: int = 20) -> List[str]:
-    cleaned = [text.strip() for text in texts if text and text.strip()]
-    if len(cleaned) <= head + tail:
-        return cleaned
-    return cleaned[:head] + cleaned[-tail:]
+def _clean_texts(texts: Sequence[str]) -> List[str]:
+    return [text.strip() for text in texts if text and text.strip()]
 
 
 def _join_non_empty(parts: Iterable[str]) -> str:

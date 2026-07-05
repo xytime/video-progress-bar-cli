@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖无 $ 金融金额进入上下文金额提示 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖 B/M/T 金融金额缩写进入上下文金额提示 |
 | 1.3.0   | 2026-07-06 | Codex  | 覆盖受保护英文实体进入翻译上下文 prompt |
+| 1.4.0   | 2026-07-06 | Codex  | 覆盖长视频中段关键事实也会进入翻译上下文 |
 """
 
 import sys
@@ -79,3 +80,24 @@ def test_translation_context_keeps_general_domain_for_plain_text():
 
     assert context.domain == "general"
     assert not context.facts
+
+
+def test_translation_context_uses_full_video_not_only_head_tail_sample():
+    texts = (
+        [f"Opening general market commentary line {idx}." for idx in range(45)]
+        + [
+            (
+                "MGX announced the final close of its AI infrastructure fund "
+                "with $49 billion in capital commitments."
+            )
+        ]
+        + [f"Closing general commentary line {idx}." for idx in range(25)]
+    )
+
+    context = build_translation_context(texts)
+    prompt_context = context.to_prompt_context()
+
+    assert context.domain == "finance/technology"
+    assert context.entities == ["MGX"]
+    assert "$49B" in prompt_context
+    assert any("completing fundraising" in fact for fact in context.facts)
