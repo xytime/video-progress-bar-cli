@@ -30,6 +30,7 @@
 | 1.17.0 | 2026-07-05 | Codex | 质量守门 P0 触发供应商降级：Gemini→Aliyun→Google，最终供应商仍失败才阻断 |
 | 1.18.0 | 2026-07-05 | Codex | 翻译质量审计落盘为 *.translation_quality.json，记录供应商、告警、阻断与降级动作 |
 | 1.19.0 | 2026-07-05 | Codex | 引入 provider-neutral SubtitleTranslationCandidate，统一字幕候选结果回填 |
+| 1.20.0 | 2026-07-05 | Codex | 字幕翻译供应商顺序改由 settings 配置，主流程按 provider candidate 循环编排 |
 """
 import logging
 from pathlib import Path
@@ -63,6 +64,7 @@ from ..utils.subtitle_translation_provider import (
     SubtitleTranslationCandidate,
     apply_translation_candidate,
 )
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -547,7 +549,51 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self._translation_quality_audit = []
         translation_context = build_translation_context(texts).to_prompt_context()
 
-        # ── 一级：Gemini（翻译 + vocab，天然对齐）─────────────────────────────
+        provider_order = settings.subtitle_translation_provider_order_list
+        for idx, provider in enumerate(provider_order):
+            final_provider = idx == len(provider_order) - 1
+            candidate = self._build_translation_candidate(provider, texts, translation_context)
+            if not candidate or not candidate.is_usable_for(len(segments)):
+                logger.warning("[Translate] Provider %s produced no usable candidate.", provider)
+                continue
+
+            apply_translation_candidate(segments, candidate)
+            if not candidate.supports_vocab:
+                self._align_vocab_after_plain_translation(texts, segments, translation_context, candidate.provider)
+
+            if self._guard_translation_quality(
+                texts,
+                segments,
+                provider=candidate.provider,
+                final_provider=final_provider,
+            ):
+                self._write_translation_quality_report()
+                return segments
+
+        raise VideoProcessingError("All subtitle translation providers failed or were blocked.")
+
+    def _build_translation_candidate(
+        self,
+        provider: str,
+        texts: List[str],
+        translation_context: str,
+    ) -> Optional[SubtitleTranslationCandidate]:
+        """按 provider 名称构建字幕翻译候选。"""
+        if provider == "gemini":
+            return self._build_gemini_candidate(texts, translation_context)
+        if provider == "aliyun":
+            return self._build_aliyun_candidate(texts)
+        if provider == "google":
+            return self._build_google_candidate(texts)
+        logger.warning("[Translate] Unknown provider ignored: %s", provider)
+        return None
+
+    def _build_gemini_candidate(
+        self,
+        texts: List[str],
+        translation_context: str,
+    ) -> Optional[SubtitleTranslationCandidate]:
+        """Gemini 主译：翻译 + vocab 天然对齐。"""
         try:
             gemini_results = extract_vocab_batch(
                 texts,
@@ -560,62 +606,39 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
         if gemini_results:
             logger.info("Gemini translation succeeded. Using Gemini as primary translator.")
-            candidate = SubtitleTranslationCandidate(
+            return SubtitleTranslationCandidate(
                 provider="Gemini",
                 translations=[res.get("translation", "") for res in gemini_results],
                 vocabs=[res.get("vocab", {}) for res in gemini_results],
                 supports_vocab=True,
             )
-            apply_translation_candidate(segments, candidate)
-            if self._guard_translation_quality(texts, segments, provider="Gemini", final_provider=False):
-                self._write_translation_quality_report()
-                return segments
+        return None
 
-        # ── 二级：Aliyun MT（仅翻译，无 vocab 对齐）──────────────────────────
+    def _build_aliyun_candidate(self, texts: List[str]) -> Optional[SubtitleTranslationCandidate]:
+        """Aliyun MT：仅翻译，无 vocab。"""
         ali_tgt = "zh" if self.target_lang in ("zh-CN", "zh", None) else self.target_lang
         ali_src = "en" if self.src_lang in ("en", "auto", None) else self.src_lang
         aliyun_results = translate_batch_aliyun(texts, src_lang=ali_src, target_lang=ali_tgt)
 
         if aliyun_results:
-            logger.warning("Gemini failed. Falling back to Aliyun MT (no vocab alignment).")
-            apply_translation_candidate(
-                segments,
-                SubtitleTranslationCandidate(provider="Aliyun", translations=aliyun_results),
-            )
+            logger.info("Aliyun MT produced a subtitle translation candidate (no vocab alignment).")
+            return SubtitleTranslationCandidate(provider="Aliyun", translations=aliyun_results)
+        return None
 
-            # [Claude_Opus_4.6_Thinking_planning] 二次尝试：用 Aliyun 的翻译结果作为
-            # chinese_translations 传回 Gemini "对齐模式"，仅做 vocab 提取。
-            # 这样即使 Gemini 翻译模式 429，对齐模式只需要更少的 token 可能成功。
-            try:
-                zh_texts = [seg.get('zh_text', '') for seg in segments]
-                vocab_results = extract_vocab_batch(
-                    texts,
-                    chinese_translations=zh_texts,
-                    context_text=translation_context,
-                )
-                if vocab_results:
-                    logger.info("Gemini vocab alignment succeeded (post-Aliyun).")
-                    for i, res in enumerate(vocab_results):
-                        if i < len(segments):
-                            segments[i]['vocab'] = res.get('vocab', {})
-                else:
-                    logger.info("Gemini vocab alignment also failed. Proceeding without vocab.")
-            except Exception as e:
-                logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
-
-            if self._guard_translation_quality(texts, segments, provider="Aliyun", final_provider=False):
-                self._write_translation_quality_report()
-                return segments
-
-        # ── 三级：Google Translate（无 vocab）────────────────────────────────
-        logger.warning("Both Gemini and Aliyun failed. Falling back to Google Translate.")
+    def _build_google_candidate(self, texts: List[str]) -> SubtitleTranslationCandidate:
+        """Google Translate 终级 fallback：仅翻译，无 vocab。"""
+        logger.info("Google Translate produced a subtitle translation candidate (no vocab alignment).")
         gt_translated = _google_batch_fallback(texts, src_lang="auto", target_lang=self.target_lang)
-        apply_translation_candidate(
-            segments,
-            SubtitleTranslationCandidate(provider="Google", translations=gt_translated),
-        )
+        return SubtitleTranslationCandidate(provider="Google", translations=gt_translated)
 
-        # [Claude_Opus_4.6_Thinking_planning] Google 翻译后也尝试 Gemini 对齐模式
+    def _align_vocab_after_plain_translation(
+        self,
+        texts: List[str],
+        segments: List[Dict[str, Any]],
+        translation_context: str,
+        provider: str,
+    ) -> None:
+        """Aliyun/Google 翻译后尝试用 Gemini 对齐模式补 vocab。"""
         try:
             zh_texts = [seg.get('zh_text', '') for seg in segments]
             vocab_results = extract_vocab_batch(
@@ -624,16 +647,14 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 context_text=translation_context,
             )
             if vocab_results:
-                logger.info("Gemini vocab alignment succeeded (post-Google).")
+                logger.info("Gemini vocab alignment succeeded (post-%s).", provider)
                 for i, res in enumerate(vocab_results):
                     if i < len(segments):
                         segments[i]['vocab'] = res.get('vocab', {})
+            else:
+                logger.info("Gemini vocab alignment also failed. Proceeding without vocab.")
         except Exception as e:
             logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
-
-        self._guard_translation_quality(texts, segments, provider="Google", final_provider=True)
-        self._write_translation_quality_report()
-        return segments
 
     def _guard_translation_quality(
         self,

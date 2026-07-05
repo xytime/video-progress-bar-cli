@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：验证字幕处理器接入事实保真守门器后 P0 阻断、P1 放行 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖 P0 质量失败时 Gemini→Aliyun→Google 自动降级 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖 *.translation_quality.json 审计报告落盘与 fallback/fail 动作 |
+| 1.3.0   | 2026-07-05 | Codex  | 覆盖 settings 配置字幕翻译供应商顺序 |
 """
 
 import json
@@ -17,6 +18,11 @@ import pytest
 
 from video_processing.core.base import VideoProcessingError
 from video_processing.processors.caption_processor import AutoCaptionProcessor
+
+
+class _SettingsOrder:
+    def __init__(self, providers):
+        self.subtitle_translation_provider_order_list = providers
 
 
 def _processor() -> AutoCaptionProcessor:
@@ -116,6 +122,34 @@ def test_translate_segments_writes_quality_report_for_fallback(
     assert report["events"][0]["blocking_issues"][0]["code"] == "FINANCE_EVENT_DIRECTION_REVERSAL"
     assert report["events"][1]["status"] == "passed"
     assert report["events"][1]["action"] == "accept"
+
+
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._align_vocab_after_plain_translation")
+@patch("video_processing.processors.caption_processor._google_batch_fallback")
+@patch("video_processing.processors.caption_processor.translate_batch_aliyun")
+@patch("video_processing.processors.caption_processor.extract_vocab_batch")
+def test_translate_segments_respects_provider_order_without_gemini(
+    mock_extract_vocab_batch,
+    mock_aliyun,
+    mock_google,
+    _mock_align_vocab,
+    _mock_validate_input,
+):
+    processor = _processor()
+    source = "MGX announced the final close of Fund I at $49 billion."
+    mock_aliyun.return_value = ["MGX一期基金最终募集规模达490亿美元。"]
+
+    with patch(
+        "video_processing.processors.caption_processor.settings",
+        _SettingsOrder(["aliyun", "google"]),
+    ):
+        result = processor._translate_segments([{"text": source}])
+
+    assert result[0]["zh_text"] == "MGX一期基金最终募集规模达490亿美元。"
+    mock_extract_vocab_batch.assert_not_called()
+    mock_aliyun.assert_called_once()
+    mock_google.assert_not_called()
 
 
 @patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
