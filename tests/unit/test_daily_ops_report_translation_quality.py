@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖翻译质量摘要展示非阻断告警数 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖翻译质量摘要分开展示最高频告警与阻断 |
 | 1.3.0   | 2026-07-06 | Codex  | 覆盖翻译质量摘要展示 provider-issue 高频组合 |
+| 1.4.0   | 2026-07-06 | Codex  | 覆盖翻译质量摘要展示 selected 候选统计 |
 """
 
 import sys
@@ -29,6 +30,8 @@ def test_format_translation_quality_with_counts():
         {
             "files_scanned": 3,
             "event_count": 5,
+            "selected_count": 2,
+            "selected_warning_count": 1,
             "warning_count": 1,
             "blocked_count": 2,
             "issue_counts": {
@@ -45,6 +48,12 @@ def test_format_translation_quality_with_counts():
                 "Gemini": 3,
                 "Aliyun": 2,
             },
+            "selected_provider_counts": {
+                "Aliyun": 2,
+            },
+            "selected_warning_issue_counts": {
+                "AMOUNT_CONSISTENCY_UNIT_DRIFT": 1,
+            },
             "provider_issue_counts": {
                 "Gemini": {
                     "FINANCE_EVENT_DIRECTION_REVERSAL": 2,
@@ -58,9 +67,13 @@ def test_format_translation_quality_with_counts():
 
     assert "报告 3" in line
     assert "事件 5" in line
+    assert "采用 2" in line
+    assert "采用告警 1" in line
     assert "告警 1" in line
     assert "阻断/降级 2" in line
     assert "AMOUNT_CONSISTENCY_UNIT_DRIFT×1" in line
     assert "FINANCE_EVENT_DIRECTION_REVERSAL×2" in line
     assert "Gemini×3" in line
+    assert "采用provider Aliyun×2" in line
+    assert "采用告警项 AMOUNT_CONSISTENCY_UNIT_DRIFT×1" in line
     assert "provider问题 Gemini:FINANCE_EVENT_DIRECTION_REVERSAL×2" in line

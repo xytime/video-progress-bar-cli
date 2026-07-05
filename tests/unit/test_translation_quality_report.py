@@ -9,6 +9,7 @@
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖 warning_count/warning_files 聚合字段 |
 | 1.3.0   | 2026-07-05 | Codex  | 覆盖 warning/blocking issue counts 分离统计 |
 | 1.4.0   | 2026-07-06 | Codex  | 覆盖 provider_issue_counts 按供应商归因问题类型 |
+| 1.5.0   | 2026-07-06 | Codex  | 覆盖 selected 候选维度聚合统计 |
 """
 
 import json
@@ -57,6 +58,7 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
                         "provider": "Aliyun",
                         "status": "passed",
                         "action": "accept",
+                        "selected": True,
                         "warning_issues": [
                             {"code": "FINANCE_TERM_AMBIGUOUS_CLOSE"},
                             {"code": "TERM_CONSISTENCY_FUND_CLOSE_DRIFT"},
@@ -91,9 +93,12 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
 
     assert summary["files_scanned"] == 2
     assert summary["event_count"] == 3
+    assert summary["selected_count"] == 1
+    assert summary["selected_warning_count"] == 1
     assert summary["warning_count"] == 1
     assert summary["blocked_count"] == 2
     assert summary["provider_counts"] == {"Aliyun": 1, "Gemini": 1, "fallback": 1}
+    assert summary["selected_provider_counts"] == {"Aliyun": 1}
     assert summary["issue_counts"] == {
         "FINANCE_EVENT_DIRECTION_REVERSAL": 1,
         "FINANCE_TERM_AMBIGUOUS_CLOSE": 1,
@@ -101,6 +106,14 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
         "TERM_CONSISTENCY_FUND_CLOSE_DRIFT": 1,
     }
     assert summary["warning_issue_counts"] == {
+        "FINANCE_TERM_AMBIGUOUS_CLOSE": 1,
+        "TERM_CONSISTENCY_FUND_CLOSE_DRIFT": 1,
+    }
+    assert summary["selected_issue_counts"] == {
+        "FINANCE_TERM_AMBIGUOUS_CLOSE": 1,
+        "TERM_CONSISTENCY_FUND_CLOSE_DRIFT": 1,
+    }
+    assert summary["selected_warning_issue_counts"] == {
         "FINANCE_TERM_AMBIGUOUS_CLOSE": 1,
         "TERM_CONSISTENCY_FUND_CLOSE_DRIFT": 1,
     }

@@ -11,6 +11,7 @@
 | 1.1.0   | 2026-07-05 | Codex  | 新增 warning_count/warning_files，让非阻断一致性告警可运营观测 |
 | 1.2.0   | 2026-07-05 | Codex  | 分离 warning/blocking issue 计数，让日报可同时展示最高频告警与阻断 |
 | 1.3.0   | 2026-07-06 | Codex  | 新增 provider_issue_counts，定位不同翻译供应商的高频质量问题 |
+| 1.4.0   | 2026-07-06 | Codex  | 新增 selected 维度统计，区分尝试候选与最终采用候选质量 |
 """
 
 from __future__ import annotations
@@ -28,10 +29,15 @@ class TranslationQualityAggregate:
 
     files_scanned: int = 0
     event_count: int = 0
+    selected_count: int = 0
+    selected_warning_count: int = 0
     warning_count: int = 0
     blocked_count: int = 0
     provider_counts: Counter = field(default_factory=Counter)
+    selected_provider_counts: Counter = field(default_factory=Counter)
     issue_counts: Counter = field(default_factory=Counter)
+    selected_issue_counts: Counter = field(default_factory=Counter)
+    selected_warning_issue_counts: Counter = field(default_factory=Counter)
     warning_issue_counts: Counter = field(default_factory=Counter)
     blocking_issue_counts: Counter = field(default_factory=Counter)
     provider_issue_counts: Dict[str, Counter] = field(default_factory=dict)
@@ -42,10 +48,15 @@ class TranslationQualityAggregate:
         return {
             "files_scanned": self.files_scanned,
             "event_count": self.event_count,
+            "selected_count": self.selected_count,
+            "selected_warning_count": self.selected_warning_count,
             "warning_count": self.warning_count,
             "blocked_count": self.blocked_count,
             "provider_counts": dict(sorted(self.provider_counts.items())),
+            "selected_provider_counts": dict(sorted(self.selected_provider_counts.items())),
             "issue_counts": dict(sorted(self.issue_counts.items())),
+            "selected_issue_counts": dict(sorted(self.selected_issue_counts.items())),
+            "selected_warning_issue_counts": dict(sorted(self.selected_warning_issue_counts.items())),
             "warning_issue_counts": dict(sorted(self.warning_issue_counts.items())),
             "blocking_issue_counts": dict(sorted(self.blocking_issue_counts.items())),
             "provider_issue_counts": _sorted_nested_counters(self.provider_issue_counts),
@@ -83,13 +94,23 @@ def aggregate_quality_reports(root: Path) -> Dict[str, Any]:
             warning_issues = list(event.get("warning_issues") or [])
             blocking_issues = list(event.get("blocking_issues") or [])
             issues = warning_issues + blocking_issues
+            selected = event.get("selected") is True
+            if selected:
+                aggregate.selected_count += 1
+                aggregate.selected_provider_counts[provider] += 1
+                if warning_issues:
+                    aggregate.selected_warning_count += 1
             for issue in issues:
                 code = str(issue.get("code") or "UNKNOWN")
                 aggregate.issue_counts[code] += 1
                 aggregate.provider_issue_counts.setdefault(provider, Counter())[code] += 1
+                if selected:
+                    aggregate.selected_issue_counts[code] += 1
             for issue in warning_issues:
                 code = str(issue.get("code") or "UNKNOWN")
                 aggregate.warning_issue_counts[code] += 1
+                if selected:
+                    aggregate.selected_warning_issue_counts[code] += 1
             for issue in blocking_issues:
                 code = str(issue.get("code") or "UNKNOWN")
                 aggregate.blocking_issue_counts[code] += 1
