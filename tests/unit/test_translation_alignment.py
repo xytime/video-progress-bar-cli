@@ -15,6 +15,7 @@
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | 初始创建：锁定 BUG-4 翻译 id 对齐 + 字数切块行为 |
+| 1.1.0   | 2026-07-05 | Codex           | 增加 vocab_helper prompt 上下文注入回归测试 |
 """
 
 import json
@@ -25,7 +26,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
-from video_processing.utils.vocab_helper import _parse_response
+from video_processing.utils.vocab_helper import _build_prompt, _parse_response
 from video_processing.utils.translation_helper import _split_by_char_budget, _SEP
 
 
@@ -105,3 +106,28 @@ class TestSplitByCharBudget:
 
     def test_empty(self):
         assert _split_by_char_budget([], [], max_chars=5000) == []
+
+
+# ── 3. 全片上下文注入 ───────────────────────────────────────────────────────
+class TestVocabPromptContext:
+    def test_translation_prompt_includes_global_context(self):
+        prompt = _build_prompt(
+            ["MGX announced the final close of Fund I."],
+            None,
+            context_text="Domain note: final close means 完成募集, not withdrawal.",
+        )
+
+        assert "global context" in prompt.lower()
+        assert "完成募集" in prompt
+        assert "not withdrawal" in prompt
+
+    def test_alignment_prompt_includes_context_without_changing_chinese(self):
+        prompt = _build_prompt(
+            ["MGX announced the final close of Fund I."],
+            ["MGX宣布一期基金完成募集。"],
+            context_text="Use fund context.",
+        )
+
+        assert "Use fund context" in prompt
+        assert "DO NOT change it" in prompt
+        assert "MGX宣布一期基金完成募集。" in prompt

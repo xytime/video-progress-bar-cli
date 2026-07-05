@@ -26,6 +26,7 @@
 | 1.13.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 翻转翻译优先级：Gemini 主译（习语/语境准确 + vocab 天然对齐）→ Aliyun 降级 → Google 终级 Fallback |
 | 1.14.0 | 2026-06-09 | Claude_Opus_4.6_Thinking_planning   | Aliyun/Google 翻译成功后二次尝试 Gemini 对齐模式提取 vocab，解决 Gemini 429 时生词丢失问题 |
 | 1.15.0 | 2026-07-05 | Codex | 接入 translation_quality_guard：翻译后统一做事实保真审计，P0 阻断，P1 告警 |
+| 1.16.0 | 2026-07-05 | Codex | Gemini 翻译接入全片 TranslationContext，减少逐句翻译丢失语境 |
 """
 import logging
 from pathlib import Path
@@ -54,6 +55,7 @@ from ..core.base import VideoProcessorBase, VideoProcessingError
 from ..utils.translation_helper import translate_batch_aliyun, translate_batch as _google_batch_fallback  # [Claude_Sonnet_4.6_planning]
 from ..utils.vocab_helper import extract_vocab_batch  # [Claude_Sonnet_4.6_Thinking_planning]
 from ..utils.translation_quality_guard import evaluate_translation_batch
+from ..utils.translation_context import build_translation_context
 
 logger = logging.getLogger(__name__)
 
@@ -534,10 +536,15 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
+        translation_context = build_translation_context(texts).to_prompt_context()
 
         # ── 一级：Gemini（翻译 + vocab，天然对齐）─────────────────────────────
         try:
-            gemini_results = extract_vocab_batch(texts, chinese_translations=None)
+            gemini_results = extract_vocab_batch(
+                texts,
+                chinese_translations=None,
+                context_text=translation_context,
+            )
         except Exception as e:
             logger.warning(f"Gemini translation/vocab extraction failed: {e}")
             gemini_results = None
@@ -568,7 +575,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
             # 这样即使 Gemini 翻译模式 429，对齐模式只需要更少的 token 可能成功。
             try:
                 zh_texts = [seg.get('zh_text', '') for seg in segments]
-                vocab_results = extract_vocab_batch(texts, chinese_translations=zh_texts)
+                vocab_results = extract_vocab_batch(
+                    texts,
+                    chinese_translations=zh_texts,
+                    context_text=translation_context,
+                )
                 if vocab_results:
                     logger.info("Gemini vocab alignment succeeded (post-Aliyun).")
                     for i, res in enumerate(vocab_results):
@@ -593,7 +604,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
         # [Claude_Opus_4.6_Thinking_planning] Google 翻译后也尝试 Gemini 对齐模式
         try:
             zh_texts = [seg.get('zh_text', '') for seg in segments]
-            vocab_results = extract_vocab_batch(texts, chinese_translations=zh_texts)
+            vocab_results = extract_vocab_batch(
+                texts,
+                chinese_translations=zh_texts,
+                context_text=translation_context,
+            )
             if vocab_results:
                 logger.info("Gemini vocab alignment succeeded (post-Google).")
                 for i, res in enumerate(vocab_results):

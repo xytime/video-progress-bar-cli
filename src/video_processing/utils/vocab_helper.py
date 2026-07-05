@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 实现分批调用（50段/次）解决277段场景下输出截断导致计数不符的问题；放宽计数校验 |
 | 1.2.0   | 2026-06-15 | Claude_Opus_4.8 | [BUG-4] prompt 给每段加 id 并要求回显；_parse_response 按 id 重对齐到定长列表，缺失段留空于正确位置，废弃「补空错位」级联 |
 | 1.3.0   | 2026-06-28 | Claude_Opus_4.8 | 词汇质量：①双模式 prompt 增加「禁止抽取周知专有名词/常识词」约束；②新增 _STOPWORDS + _filter_vocab，解析后剔除 Wall Street/Google 等周知词，避免占用词汇卡而无学习价值 |
+| 1.4.0   | 2026-07-05 | Codex | 支持注入全片翻译上下文，避免逐批字幕缺少主题与金融术语语境 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -83,6 +84,7 @@ _MAX_RETRIES_PER_MODEL = 3
 def extract_vocab_batch(
     english_texts: List[str],
     chinese_translations: Optional[List[str]] = None,
+    context_text: str = "",
 ) -> Optional[List[Dict[str, Any]]]:
     """批量从英文字幕段落中提取难词词汇，并可选地与中文翻译句子对齐。
 
@@ -93,6 +95,7 @@ def extract_vocab_batch(
     Args:
         english_texts: 英文字幕文本列表（按 segment 顺序）。
         chinese_translations: 可选的中文翻译文本列表（与 english_texts 一一对应）。
+        context_text: 可选的全片翻译上下文，注入每个批次 prompt。
 
     Returns:
         每个 segment 对应的字典列表，或失败时返回 None。
@@ -134,7 +137,7 @@ def extract_vocab_batch(
         logger.info(f"[vocab_helper] Processing batch {batch_start//_BATCH_SIZE + 1} "
                     f"(segments {batch_start+1}-{batch_end}/{total})...")
 
-        prompt = _build_prompt(en_batch, zh_batch)
+        prompt = _build_prompt(en_batch, zh_batch, context_text=context_text)
         response = _call_with_retry(client, prompt, _genai_types)
         if response is None:
             logger.warning(f"[vocab_helper] Batch {batch_start//_BATCH_SIZE + 1} failed. Aborting.")
@@ -156,6 +159,7 @@ def extract_vocab_batch(
 def _build_prompt(
     english_texts: List[str],
     chinese_translations: Optional[List[str]],
+    context_text: str = "",
 ) -> str:
     """[Claude_Sonnet_4.6_Thinking_planning] 构造双模式提示词。
 
@@ -170,6 +174,7 @@ def _build_prompt(
     # [Claude_Opus_4.8] BUG-4: 每个输入项带 0-based 整数 id，要求模型逐项回显 id。
     # 解析端按 id 重对齐到定长列表——即便模型漏返/合并某段，也只是该 id 槽位留空（位置正确），
     # 绝不发生「该段之后整体串位」的级联错位。
+    context_block = _render_context_block(context_text)
     if chinese_translations and len(chinese_translations) == len(english_texts):
         # 对齐模式：中文翻译已由阿里云/Google 提供，Gemini 只做词汇识别与子串对齐
         segments_payload = [
@@ -182,6 +187,7 @@ def _build_prompt(
             "  - 'id': an integer index you MUST echo back unchanged\n"
             "  - 'english': the original English subtitle text\n"
             "  - 'chinese': the already-translated Chinese subtitle text (DO NOT change it)\n\n"
+            f"{context_block}"
             "Your task:\n"
             "1. Return the 'chinese' value UNCHANGED as the 'translation' field.\n"
             "2. From the English text, identify 2-3 key academic/difficult vocabulary "
@@ -209,6 +215,7 @@ def _build_prompt(
         prompt = (
             "You are an expert video subtitle translator and English educator. "
             "Each input item has an integer 'id' (echo it back unchanged) and 'english' text. "
+            f"{context_block}"
             "For each segment:\n"
             "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
             "2. Identify 2 to 3 key, academic, or difficult vocabulary words/phrases "
@@ -228,6 +235,16 @@ def _build_prompt(
             f"Input segments:\n{json.dumps(segments_payload, ensure_ascii=False)}"
         )
     return prompt
+
+
+def _render_context_block(context_text: str) -> str:
+    if not context_text or not context_text.strip():
+        return ""
+    return (
+        "Use the following global context for every segment. "
+        "It is more authoritative than isolated word senses, but do not invent facts beyond it.\n"
+        f"{context_text.strip()}\n\n"
+    )
 
 
 def _call_with_retry(client: Any, prompt: str, genai_types: Any) -> Optional[Any]:
