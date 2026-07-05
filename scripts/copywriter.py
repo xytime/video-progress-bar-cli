@@ -24,6 +24,7 @@
 | 1.17.0  | 2026-07-05 | Codex                                   | 标题/文案质量审计可选落盘为 *_copy_quality.json，记录 warning/blocking issues |
 | 1.18.0  | 2026-07-05 | Codex                                   | 标题/文案复用 translation_consistency_guard，审计字段间术语漂移 warning |
 | 1.19.0  | 2026-07-05 | Codex                                   | 标题/文案改用 translation_quality_evaluator，与字幕共享质量决策内核 |
+| 1.20.0  | 2026-07-05 | Codex                                   | 文案生成 prompt 复用 TranslationContext 的事实与术语提示，减少事后审核拦截 |
 """
 
 import re
@@ -51,6 +52,7 @@ from video_processing.utils.translation_helper import translate_text as _transla
 # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils（单一真相源）；此处 re-import 保持
 # `from copywriter import graceful_truncate_title` 的既有调用方（wechat_uploader、测试）零改动。
 from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
+from video_processing.utils.translation_context import build_translation_context
 from video_processing.utils.translation_quality_evaluator import (
     evaluate_translation_candidate,
 )
@@ -419,6 +421,37 @@ def _guard_wechat_content_quality(
         raise ValueError(f"WeChat copy quality guard blocked output: {decision.blocking_summary()}")
 
 
+def _build_wechat_prompt(title: str, description: str) -> str:
+    """构建带事实/术语上下文的微信文案生成 prompt。"""
+    cats = "、".join(WECHAT_CATEGORIES)
+    translation_context = build_translation_context(
+        [description],
+        title=title,
+        description=description,
+    ).to_prompt_context(max_chars=1200)
+    return (
+        f"请根据以下 YouTube 视频信息，生成适合微信视频号发布的完整内容。\n\n"
+        f"【硬性约束】\n"
+        f"- short_title：纯中文，6-16字，流量型标题\n"
+        f"- hook_subtitle：纯中文，不超过24字\n"
+        f"- copy：100-200字 + 3-5个hashtag + 一句CTA，纯文本无markdown\n"
+        f"- category：从以下选1个：{cats}\n"
+        f"- content_hints：从备选词选2-5个: "
+        f"policy market capital stock robot ai llm coding software algorithm chip hardware "
+        f"crypto mindset health medical nutrition geopolitics war election military "
+        f"space physics astronomy science news media report "
+        f"music song concert film movie drama entertainment gaming esports "
+        f"sports fitness travel food lifestyle education course tutorial startup innovation\n"
+        f"- content_label：封面角标（重磅/突发/独家/最新/深度/解析/揭秘/完整版/专访/警示/局势/首发）。"
+        f"内容普通则返回空字符串''\n"
+        f"- 禁止：emoji / 广告废话 / 翻译腔 / 政治敏感词\n\n"
+        f"【事实与术语上下文】\n"
+        f"{translation_context}\n\n"
+        f"YouTube 标题：{title}\n"
+        f"YouTube 简介（节选）：\n{description[:800]}"
+    )
+
+
 def _write_copy_quality_report(audit_path: Optional[Path], payload: dict) -> None:
     """写出标题/文案质量审计报告；未传路径时保持库调用零副作用。"""
     if audit_path is None:
@@ -522,26 +555,7 @@ def generate_wechat_content(
         from google import genai
         from google.genai import types as genai_types
 
-        cats = "、".join(WECHAT_CATEGORIES)
-        prompt = (
-            f"请根据以下 YouTube 视频信息，生成适合微信视频号发布的完整内容。\n\n"
-            f"【硬性约束】\n"
-            f"- short_title：纯中文，6-16字，流量型标题\n"
-            f"- hook_subtitle：纯中文，不超过24字\n"
-            f"- copy：100-200字 + 3-5个hashtag + 一句CTA，纯文本无markdown\n"
-            f"- category：从以下选1个：{cats}\n"
-            f"- content_hints：从备选词选2-5个: "
-            f"policy market capital stock robot ai llm coding software algorithm chip hardware "
-            f"crypto mindset health medical nutrition geopolitics war election military "
-            f"space physics astronomy science news media report "
-            f"music song concert film movie drama entertainment gaming esports "
-            f"sports fitness travel food lifestyle education course tutorial startup innovation\n"
-            f"- content_label：封面角标（重磅/突发/独家/最新/深度/解析/揭秘/完整版/专访/警示/局势/首发）。"
-            f"内容普通则返回空字符串''\n"
-            f"- 禁止：emoji / 广告废话 / 翻译腔 / 政治敏感词\n\n"
-            f"YouTube 标题：{title}\n"
-            f"YouTube 简介（节选）：\n{description[:800]}"
-        )
+        prompt = _build_wechat_prompt(title, description)
 
         logger.info(f"[v1.8.0] Calling Gemini [{model_name}] with response_schema...")
         client = genai.Client(api_key=api_key)

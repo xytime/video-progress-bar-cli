@@ -11,6 +11,7 @@
 | 1.5.0   | 2026-07-05 | Codex                      | 新增 *_copy_quality.json 审计报告落盘测试 |
 | 1.6.0   | 2026-07-05 | Codex                      | 覆盖标题/文案字段间术语一致性 warning |
 | 1.7.0   | 2026-07-05 | Codex                      | 覆盖标题/文案金额单位漂移 warning |
+| 1.8.0   | 2026-07-05 | Codex                      | 覆盖文案生成 prompt 注入 TranslationContext 事实与术语提示 |
 """
 import json
 import sys
@@ -24,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from scripts.copywriter import (
     classify_category, DEFAULT_CATEGORY, graceful_truncate_title,
     extract_headline_workaround, _apply_post_processing,
-    _guard_wechat_content_quality,
+    _build_wechat_prompt, _guard_wechat_content_quality,
 )
 from video_processing.utils.text_utils import verbatim_overlap_ratio
 
@@ -178,6 +179,22 @@ def test_post_processing_leaves_clean_text_untouched():
     title, sub = _apply_post_processing("AI如何改写代码", "程序员必备工具")
     assert title == "AI如何改写代码"
     assert sub == "程序员必备工具"
+
+
+def test_wechat_prompt_includes_translation_context_for_fund_close():
+    title = "MGX closes $49 billion AI fund"
+    description = (
+        "MGX announced the final close of Fund I at $49 billion, "
+        "exceeding its initial $45 billion target."
+    )
+
+    prompt = _build_wechat_prompt(title, description)
+
+    assert "【事实与术语上下文】" in prompt
+    assert "final close" in prompt
+    assert "完成募集" in prompt or "最终关账" in prompt
+    assert "not 关闭/撤退" in prompt
+    assert "$49B" in prompt
 
 
 # ── 🅴 反搬运：原创度（逐字照搬）信号 ────────────────────────────────────────
