@@ -29,6 +29,7 @@
 | 1.16.0 | 2026-07-05 | Codex | Gemini 翻译接入全片 TranslationContext，减少逐句翻译丢失语境 |
 | 1.17.0 | 2026-07-05 | Codex | 质量守门 P0 触发供应商降级：Gemini→Aliyun→Google，最终供应商仍失败才阻断 |
 | 1.18.0 | 2026-07-05 | Codex | 翻译质量审计落盘为 *.translation_quality.json，记录供应商、告警、阻断与降级动作 |
+| 1.19.0 | 2026-07-05 | Codex | 引入 provider-neutral SubtitleTranslationCandidate，统一字幕候选结果回填 |
 """
 import logging
 from pathlib import Path
@@ -58,6 +59,10 @@ from ..utils.translation_helper import translate_batch_aliyun, translate_batch a
 from ..utils.vocab_helper import extract_vocab_batch  # [Claude_Sonnet_4.6_Thinking_planning]
 from ..utils.translation_quality_guard import evaluate_translation_batch
 from ..utils.translation_context import build_translation_context
+from ..utils.subtitle_translation_provider import (
+    SubtitleTranslationCandidate,
+    apply_translation_candidate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -555,10 +560,13 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
         if gemini_results:
             logger.info("Gemini translation succeeded. Using Gemini as primary translator.")
-            for i, res in enumerate(gemini_results):
-                if i < len(segments):
-                    segments[i]['zh_text'] = res.get('translation', '')
-                    segments[i]['vocab']   = res.get('vocab', {})
+            candidate = SubtitleTranslationCandidate(
+                provider="Gemini",
+                translations=[res.get("translation", "") for res in gemini_results],
+                vocabs=[res.get("vocab", {}) for res in gemini_results],
+                supports_vocab=True,
+            )
+            apply_translation_candidate(segments, candidate)
             if self._guard_translation_quality(texts, segments, provider="Gemini", final_provider=False):
                 self._write_translation_quality_report()
                 return segments
@@ -570,10 +578,10 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
         if aliyun_results:
             logger.warning("Gemini failed. Falling back to Aliyun MT (no vocab alignment).")
-            for i, text in enumerate(aliyun_results):
-                if i < len(segments):
-                    segments[i]['zh_text'] = text
-                    segments[i]['vocab']   = {}
+            apply_translation_candidate(
+                segments,
+                SubtitleTranslationCandidate(provider="Aliyun", translations=aliyun_results),
+            )
 
             # [Claude_Opus_4.6_Thinking_planning] 二次尝试：用 Aliyun 的翻译结果作为
             # chinese_translations 传回 Gemini "对齐模式"，仅做 vocab 提取。
@@ -602,10 +610,10 @@ class AutoCaptionProcessor(VideoProcessorBase):
         # ── 三级：Google Translate（无 vocab）────────────────────────────────
         logger.warning("Both Gemini and Aliyun failed. Falling back to Google Translate.")
         gt_translated = _google_batch_fallback(texts, src_lang="auto", target_lang=self.target_lang)
-        for i, text in enumerate(gt_translated):
-            if i < len(segments):
-                segments[i]['zh_text'] = text if text else ""
-                segments[i]['vocab']   = {}
+        apply_translation_candidate(
+            segments,
+            SubtitleTranslationCandidate(provider="Google", translations=gt_translated),
+        )
 
         # [Claude_Opus_4.6_Thinking_planning] Google 翻译后也尝试 Gemini 对齐模式
         try:
