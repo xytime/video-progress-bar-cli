@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-06 | Codex  | 初始创建：覆盖共享翻译生产硬约束渲染 |
+| 1.1.0   | 2026-07-06 | Codex  | 覆盖非字幕调用可关闭字幕段落顺序约束 |
 """
 
 import sys
@@ -34,3 +35,13 @@ def test_render_translation_constraints_without_context_has_no_context_header():
 
     assert "Global context:" not in rendered
     assert "Preserve event direction" in rendered
+
+
+def test_render_translation_constraints_can_skip_subtitle_segment_rule():
+    rendered = render_translation_constraints(
+        "Preserve entities.",
+        include_subtitle_segment_rule=False,
+    )
+
+    assert "Preserve entities." in rendered
+    assert "Do not merge, split, omit, or reorder subtitle segments" not in rendered

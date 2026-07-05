@@ -15,6 +15,7 @@
 | 1.9.0   | 2026-07-05 | Codex                      | 覆盖 copy quality report 写入 quality_context |
 | 1.10.0  | 2026-07-06 | Codex                      | 覆盖 copy quality report 写入受保护英文实体 |
 | 1.11.0  | 2026-07-06 | Codex                      | 覆盖标题/文案 warning-aware 候选仲裁 |
+| 1.12.0  | 2026-07-06 | Codex                      | 覆盖文案 prompt 复用共享翻译硬约束且不带字幕段落规则 |
 """
 import json
 import sys
@@ -197,8 +198,11 @@ def test_wechat_prompt_includes_translation_context_for_fund_close():
     assert "【事实与术语上下文】" in prompt
     assert "final close" in prompt
     assert "完成募集" in prompt or "最终关账" in prompt
+    assert "Treat the global context as hard constraints" in prompt
+    assert "Preserve event direction, entity names, money flow, and numeric magnitude" in prompt
     assert "not 关闭/撤退" in prompt
     assert "$49B" in prompt
+    assert "Do not merge, split, omit, or reorder subtitle segments" not in prompt
 
 
 # ── 🅴 反搬运：原创度（逐字照搬）信号 ────────────────────────────────────────

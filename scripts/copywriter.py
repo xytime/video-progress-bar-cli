@@ -28,6 +28,7 @@
 | 1.21.0  | 2026-07-05 | Codex                                   | 文案质量审计报告写入 TranslationQualityContext，生产与审核共用上下文摘要 |
 | 1.22.0  | 2026-07-06 | Codex                                   | 标题/文案质量上下文写入受保护英文实体，供审计与一致性检查复用 |
 | 1.23.0  | 2026-07-06 | Codex                                   | 标题/文案生成接入通用候选仲裁，warning 时尝试更干净 fallback |
+| 1.24.0  | 2026-07-06 | Codex                                   | 文案生成 prompt 接入共享翻译硬约束，减少与字幕 provider 规则漂移 |
 """
 
 import re
@@ -56,6 +57,7 @@ from video_processing.utils.translation_helper import translate_text as _transla
 # `from copywriter import graceful_truncate_title` 的既有调用方（wechat_uploader、测试）零改动。
 from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
 from video_processing.utils.translation_context import build_translation_context
+from video_processing.utils.translation_prompt_constraints import render_translation_constraints
 from video_processing.utils.translation_quality_evaluator import (
     TranslationQualityContext,
     TranslationQualityDecision,
@@ -541,6 +543,10 @@ def _build_wechat_prompt(title: str, description: str) -> str:
         title=title,
         description=description,
     ).to_prompt_context(max_chars=1200)
+    translation_constraints = render_translation_constraints(
+        translation_context,
+        include_subtitle_segment_rule=False,
+    )
     return (
         f"请根据以下 YouTube 视频信息，生成适合微信视频号发布的完整内容。\n\n"
         f"【硬性约束】\n"
@@ -558,7 +564,7 @@ def _build_wechat_prompt(title: str, description: str) -> str:
         f"内容普通则返回空字符串''\n"
         f"- 禁止：emoji / 广告废话 / 翻译腔 / 政治敏感词\n\n"
         f"【事实与术语上下文】\n"
-        f"{translation_context}\n\n"
+        f"{translation_constraints}\n\n"
         f"YouTube 标题：{title}\n"
         f"YouTube 简介（节选）：\n{description[:800]}"
     )
