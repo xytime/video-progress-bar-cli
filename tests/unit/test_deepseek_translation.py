@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖 DeepSeek provider 无 key 跳过与响应解析 |
 | 1.1.0   | 2026-07-06 | Codex  | 覆盖 DeepSeek payload 注入全局上下文硬约束与金融翻译规则 |
+| 1.2.0   | 2026-07-06 | Codex  | 覆盖 DeepSeek payload 复用共享翻译硬约束 |
 """
 
 import json
@@ -94,7 +95,7 @@ def test_deepseek_payload_uses_context_as_hard_constraints():
     user_prompt = payload["messages"][1]["content"]
 
     assert payload["model"] == "deepseek-test"
-    assert "Global context and hard constraints" in user_prompt
+    assert "Global context:" in user_prompt
     assert "Treat the global context as hard constraints" in user_prompt
     assert "close/final close usually means 完成募集/最终关账" in user_prompt
     assert "billion/bn = 十亿美元" in user_prompt
