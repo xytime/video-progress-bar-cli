@@ -8,6 +8,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：抽取融资完成/退出语义、金额数量级，并输出可阻断的质量问题 |
+| 1.1.0   | 2026-07-05 | Codex  | 本句信号优先、上下文只补足未知语义；新增批量 P0 汇总供字幕链路接入 |
 """
 
 from __future__ import annotations
@@ -71,6 +72,35 @@ class GuardResult:
     @property
     def passed(self) -> bool:
         return not any(Severity[item.severity] >= Severity.P1 for item in self.issues)
+
+
+@dataclass(frozen=True)
+class BatchGuardSummary:
+    """批量守门摘要，用于调用方决定是否阻断。"""
+
+    results: List[GuardResult]
+
+    @property
+    def blocking_issues(self) -> List[QualityIssue]:
+        return [
+            issue
+            for result in self.results
+            for issue in result.issues
+            if Severity[issue.severity] >= Severity.P0
+        ]
+
+    @property
+    def warning_issues(self) -> List[QualityIssue]:
+        return [
+            issue
+            for result in self.results
+            for issue in result.issues
+            if Severity.P1 <= Severity[issue.severity] < Severity.P0
+        ]
+
+    @property
+    def passed(self) -> bool:
+        return not self.blocking_issues
 
 
 _FUNDRAISING_SOURCE_PATTERNS: Sequence[re.Pattern[str]] = tuple(
@@ -176,7 +206,10 @@ def evaluate_translation_pair(
         translated_text: 待检查的中文译文。
         context_text: 可选的全局上下文；用于补充短字幕缺失的主题语义。
     """
-    source_signal = extract_fact_signal(_join_non_empty([context_text, source_text]), lang="en")
+    source_signal = _merge_source_with_context(
+        extract_fact_signal(source_text, lang="en"),
+        extract_fact_signal(context_text, lang="en") if context_text else None,
+    )
     translation_signal = extract_fact_signal(translated_text, lang="zh")
     issues: List[QualityIssue] = []
 
@@ -195,12 +228,34 @@ def evaluate_translation_batch(
     translated_texts: Sequence[str],
     *,
     context_text: str = "",
-) -> List[GuardResult]:
-    """批量评估字幕片段，返回与输入顺序一致的守门结果。"""
-    return [
+) -> BatchGuardSummary:
+    """批量评估字幕片段，返回可直接用于阻断/告警的摘要。"""
+    return BatchGuardSummary([
         evaluate_translation_pair(source, translated, context_text=context_text)
         for source, translated in zip(source_texts, translated_texts)
-    ]
+    ])
+
+
+def _merge_source_with_context(source_signal: FactSignal, context_signal: FactSignal | None) -> FactSignal:
+    """用上下文补足本句缺失的事实信号，但不覆盖本句已有的明确事件。"""
+    if context_signal is None:
+        return source_signal
+
+    event_type = source_signal.event_type
+    money_flow = source_signal.money_flow
+    markers = list(source_signal.markers)
+
+    if event_type == "unknown" and context_signal.event_type != "unknown":
+        event_type = context_signal.event_type
+        money_flow = context_signal.money_flow
+        markers.extend(f"context:{marker}" for marker in context_signal.markers)
+
+    return FactSignal(
+        event_type=event_type,
+        money_flow=money_flow,
+        amounts_usd=source_signal.amounts_usd or context_signal.amounts_usd,
+        markers=markers,
+    )
 
 
 def _append_event_direction_issues(

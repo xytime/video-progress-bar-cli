@@ -25,6 +25,7 @@
 | 1.12.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 移除 _translate_segments_gemini，委托至 vocab_helper.extract_vocab_batch；将阿里云翻译结果传入以实现中文字幕下划线 100% 精确对齐 |
 | 1.13.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 翻转翻译优先级：Gemini 主译（习语/语境准确 + vocab 天然对齐）→ Aliyun 降级 → Google 终级 Fallback |
 | 1.14.0 | 2026-06-09 | Claude_Opus_4.6_Thinking_planning   | Aliyun/Google 翻译成功后二次尝试 Gemini 对齐模式提取 vocab，解决 Gemini 429 时生词丢失问题 |
+| 1.15.0 | 2026-07-05 | Codex | 接入 translation_quality_guard：翻译后统一做事实保真审计，P0 阻断，P1 告警 |
 """
 import logging
 from pathlib import Path
@@ -52,6 +53,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from ..core.base import VideoProcessorBase, VideoProcessingError
 from ..utils.translation_helper import translate_batch_aliyun, translate_batch as _google_batch_fallback  # [Claude_Sonnet_4.6_planning]
 from ..utils.vocab_helper import extract_vocab_batch  # [Claude_Sonnet_4.6_Thinking_planning]
+from ..utils.translation_quality_guard import evaluate_translation_batch
 
 logger = logging.getLogger(__name__)
 
@@ -546,6 +548,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 if i < len(segments):
                     segments[i]['zh_text'] = res.get('translation', '')
                     segments[i]['vocab']   = res.get('vocab', {})
+            self._guard_translation_quality(texts, segments, provider="Gemini")
             return segments
 
         # ── 二级：Aliyun MT（仅翻译，无 vocab 对齐）──────────────────────────
@@ -576,6 +579,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
             except Exception as e:
                 logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
 
+            self._guard_translation_quality(texts, segments, provider="Aliyun")
             return segments
 
         # ── 三级：Google Translate（无 vocab）────────────────────────────────
@@ -598,7 +602,43 @@ class AutoCaptionProcessor(VideoProcessorBase):
         except Exception as e:
             logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
 
+        self._guard_translation_quality(texts, segments, provider="Google")
         return segments
+
+    def _guard_translation_quality(
+        self,
+        source_texts: List[str],
+        segments: List[Dict[str, Any]],
+        *,
+        provider: str,
+    ) -> None:
+        """翻译后事实保真审计：P0 阻断，P1 仅告警。"""
+        translated_texts = [seg.get("zh_text", "") for seg in segments]
+        context_text = "\n".join(source_texts)
+        summary = evaluate_translation_batch(
+            source_texts,
+            translated_texts,
+            context_text=context_text,
+        )
+
+        for issue in summary.warning_issues:
+            logger.warning(
+                "[TranslationGuard][%s][%s] %s | source=%s translation=%s",
+                provider,
+                issue.code,
+                issue.message,
+                issue.source_signal,
+                issue.translation_signal,
+            )
+
+        if summary.blocking_issues:
+            details = "; ".join(
+                f"{issue.code}: {issue.message}"
+                for issue in summary.blocking_issues[:3]
+            )
+            raise VideoProcessingError(
+                f"Translation quality guard blocked {provider} output: {details}"
+            )
 
     def _load_model(self):
         """加载 Whisper 模型"""
