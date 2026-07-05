@@ -19,6 +19,8 @@
 | 2.3.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登] --login-only 不再强制 headless=False，改遵循传入 headless：headless 时走「截图 QR→发 Telegram/Web UI」远程扫码（与上传流登录同路径），实现「登录态丢失后经 Telegram 主动取二维码」；本机当面登录用 --no-headless |
 | 2.4.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登·强制] 新增 --relogin：忽略现有会话→必到登录页出二维码，支持「临期主动重登刷新 24h」（不只过期后）；安全——旧 state 不删，仅扫码成功才覆盖，未扫则旧会话保持有效、管线不掉线 |
 | 2.5.0   | 2026-06-28 | Claude_Opus_4.8                     | [二维码精裁] 登录二维码在内嵌 iframe(/platform/login-for-iframe)的 img.qrcode(208x208)里，顶层 locator 找不到→以前总发整页截图(206KB,难扫)。改遍历所有 frame 精确裁剪→发 13KB 干净二维码 |
+| 2.6.0   | 2026-07-05 | Codex                               | 扫码成功保存 Playwright state 后同步写 wechat_login_at.txt，供 Web/TG 状态判断使用，避免旧 state 文件造成“已登录”假阳性 |
+| 2.7.0   | 2026-07-05 | Codex                               | 二维码捕获改为先落盘整页兜底图再尝试精裁覆盖，避免 selector 漂移时 Web UI 无二维码可扫 |
 """
 
 import os
@@ -53,6 +55,15 @@ logger = logging.getLogger("wechat_uploader")
 # 微信视频号发表地址
 WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 
+
+def _stamp_login_success(state_file: Path) -> None:
+    """真实跳回发布页并保存 state 后，记录本轮登录成功时间。"""
+    try:
+        marker = state_file.parent / "wechat_login_at.txt"
+        marker.write_text(str(int(time.time())), encoding="utf-8")
+        logger.info(f"Login success marker updated: {marker}")
+    except Exception as e:
+        logger.warning(f"Failed to update login success marker: {e}")
 
 
 def _select_collection(page, collection_name: str) -> bool:
@@ -435,6 +446,11 @@ def run_uploader(
                 page.wait_for_timeout(2000)  # 等 QR 码渲染
                 qr_path = str(state_file.parent / "login_qr.png")
                 qr_captured = False
+                try:
+                    page.screenshot(path=qr_path)
+                    logger.info("QR fallback full-page screenshot saved before crop attempt.")
+                except Exception as e_full:
+                    logger.warning(f"Failed to save QR fallback full-page screenshot: {e_full}")
                 # [Claude_Opus_4.8] 微信登录二维码渲染在内嵌 iframe(/platform/login-for-iframe)里的
                 # <img class="qrcode">(208x208)。顶层 page.locator 找不到→以前总回退全页截图(整页发 TG，
                 # 难扫)。改为遍历所有 frame(含主框架)精确裁剪二维码；全找不到才回退整页。
@@ -496,6 +512,7 @@ def run_uploader(
                     page.wait_for_url("**/post/create", timeout=600000)
                     logger.info("Login detected. Saving session...")
                     context.storage_state(path=str(state_file))
+                    _stamp_login_success(state_file)
                     logger.info(f"Session saved to: {state_file}")
                     
                     # 成功后尝试删除临时二维码
@@ -527,6 +544,7 @@ def run_uploader(
                     page.wait_for_url("**/post/create", timeout=600000)
                     logger.info("Login detected. Saving session state...")
                     context.storage_state(path=str(state_file))
+                    _stamp_login_success(state_file)
                     logger.info(f"Session saved to: {state_file}")
                     if Path(qr_path).exists():
                         try: os.remove(qr_path)
@@ -683,6 +701,7 @@ def run_uploader(
         # [BugFix] 每次上传成功后及时保存最新的 storage_state，保存刷新的 Cookie / Token
         try:
             context.storage_state(path=str(state_file))
+            _stamp_login_success(state_file)
             logger.info(f"Session state updated and saved to: {state_file}")
         except Exception as e:
             logger.warning(f"Failed to update session state after upload: {e}")

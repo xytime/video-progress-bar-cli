@@ -23,10 +23,16 @@
 | 1.12.0  | 2026-06-27 | Claude_Opus_4.8                     | [根治崩溃循环/「无反应」] builder 显式 connection_pool_size(256) + get_updates_connection_pool_size(16)/get_updates_pool_timeout(20)：concurrent_updates(True) 下默认池仅 1 条→PoolTimeout 抛进 updater 轮询→Application 停止(频繁重启)。enlarge 后并发 handler 不再抢空连接池 |
 | 1.13.0  | 2026-06-28 | Claude_Opus_4.8                     | 新增 /deploy：手机远程一键在主机上 git push 当前分支到 origin（bot 进程用主机凭据非交互推送，GIT_TERMINAL_PROMPT=0 防挂起，异步不阻塞，管理员限定）——解决「人不在电脑旁、agent 工具层拒绝 push」的远程部署缺口 |
 | 1.14.0  | 2026-06-28 | Claude_Opus_4.8                     | /retry 支持小时参数：/retry <小时数>（纯数字≤3位）批量重试最近 N 小时内 FAILED 任务（如 /retry 24/48）；youtube_id 单条重试保持不变（11位含字母无歧义） |
+| 1.15.0  | 2026-07-05 | Codex                               | 新增确定性 /wechat_login 命令，避免扫码重登依赖通用 Agent 兜底路由 |
+| 1.16.0  | 2026-07-05 | Codex                               | /status 改为手机值班面板，合并微信登录态、自动发布队列、最近异常和建议动作 |
+| 1.16.1  | 2026-07-05 | Codex                               | /status 最近异常展示失败总数、标题、YouTube 链接和单条 /retry 命令 |
+| 1.16.2  | 2026-07-05 | Codex                               | /status 展示 /retry 24 只读预览数量，避免用户发出批量命令后才知道影响范围 |
+| 1.16.3  | 2026-07-05 | Codex                               | /status 展示 /retry 24/48 数量，并给最近失败标注相对时间 |
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -137,10 +143,7 @@ async def cmd_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """/status 指令：宏观的全局状态汇报
-    
-    # [Gemini_3.5_Flash_fast] 新增的宏观状态指令逻辑
-    """
+    """/status 指令：手机端值班面板。"""
     if not _check_admin(update):
         return
     assert _api is not None
@@ -148,16 +151,57 @@ async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if stats is None:
         await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
         return
+    wechat = await _api.get_wechat_status()
+    queue = await _api.get_videos(tab="queue", size=5)
     pending = await _api.get_videos(tab="waitlist", size=5)
     processing = await _api.get_videos(tab="active", size=5)
+    error_page = await _api.get_video_page(tab="error", size=3)
+    retry24_preview = await _api.retry_recent_preview(24)
+    retry48_preview = await _api.retry_recent_preview(48)
     
-    if pending is None or processing is None:
+    if queue is None or pending is None or processing is None or error_page is None or retry24_preview is None or retry48_preview is None:
         await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
         return
         
-    msg = fmt.fmt_status_report(stats, processing, pending)
+    msg = fmt.fmt_status_report(
+        stats,
+        processing,
+        queue,
+        pending,
+        error_page.get("videos", []),
+        wechat,
+        error_total=error_page.get("total_count", 0),
+        retry24_count=retry24_preview.get("count", 0),
+        retry48_count=retry48_preview.get("count", 0),
+    )
     await update.message.reply_text(msg, parse_mode="Markdown")
 
+
+async def cmd_wechat_login(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/wechat_login — 确定性启动微信视频号扫码重登流程。"""
+    if not _check_admin(update):
+        return
+
+    notice = await update.message.reply_text(  # type: ignore
+        "🔐 *正在启动微信视频号扫码登录...*\n二维码稍后会推送到这里。",
+        parse_mode="Markdown",
+    )
+    try:
+        agent = PipelineAgent(bot=ctx.bot, loop=asyncio.get_running_loop(), chat_id=update.effective_chat.id)
+        raw = await asyncio.to_thread(agent.trigger_wechat_login)
+        result = json.loads(raw)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("wechat_login command failed")
+        await notice.edit_text(fmt.fmt_error(f"启动微信登录失败：{e}"), parse_mode="Markdown")
+        return
+
+    if result.get("ok"):
+        await notice.edit_text(
+            "🔐 *微信登录流程已启动*\n请等待二维码图片推送，然后用手机微信扫码。扫码成功后会自动保存登录态。",
+            parse_mode="Markdown",
+        )
+    else:
+        await notice.edit_text(fmt.fmt_error(result.get("error", "启动微信登录失败")), parse_mode="Markdown")
 
 
 async def cmd_published(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -867,6 +911,7 @@ def main() -> None:
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("queue", cmd_queue))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("wechat_login", cmd_wechat_login))
     app.add_handler(CommandHandler("published", cmd_published))
     app.add_handler(CommandHandler("getvideo", cmd_getvideo))  # [Claude_Opus_4.8] 发回成片（超 50MB 自动压缩）
     app.add_handler(CommandHandler("delete", cmd_delete))

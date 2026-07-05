@@ -33,6 +33,10 @@
 | 3.10.0 | 2026-06-15 | Claude_Opus_4.8                    | [BUG-5] clear_waitlist 改走 DAL get_waitlist_clearable_ids（排除 DISCOVERY），消除业务层裸 SQL，修复一键清空击穿发现防火墙 |
 | 3.11.0 | 2026-06-18 | Claude_Opus_4.8                    | [盘中重负载保护] 新增 _in_us_market_window()；_auto_pipeline_loop 与 _queue_runner_loop 在美股盘中(ET 09:15–16:15,工作日,自动夏/冬令时)暂停重型管线，避免抢占共享主机实盘行情管线 CPU；开关 settings.enable_market_hours_guard；仪表盘端口默认 8765→9100 |
 | 3.12.0 | 2026-06-28 | Claude_Opus_4.8                    | 新增 POST /api/videos/retry-recent?hours=N：批量重置最近 N 小时 FAILED 为 PENDING（不逐条触发，交调度器按节奏重发），供 Telegram /retry <小时数> |
+| 3.13.0 | 2026-07-04 | Gemini_3.5_Flash_planning           | [anduchencang] 新增 /demo 交互式英文精读体验页路由 |
+| 3.14.0 | 2026-07-05 | Codex                               | 修复微信扫码状态假阳性：状态接口改信真实登录成功标记，并阻止 Web 端重复启动并发登录进程 |
+| 3.14.1 | 2026-07-05 | Codex                               | /api/videos/retry-recent 批量重试纳入 LOGIN_REQUIRED，覆盖微信登录过期恢复场景 |
+| 3.14.2 | 2026-07-05 | Codex                               | 新增 /api/videos/retry-recent/preview 只读预览，供 Telegram /status 展示批量重试会影响几条 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -73,6 +77,7 @@ app.add_middleware(
 
 # 使用全局 DB 实例（每次方法调用内部创建新连接，线程安全）
 db = PipelineDB()
+_wechat_login_thread: Optional[threading.Thread] = None
 
 def _translate_title_task(youtube_id: str, english_title: str):
     """后台任务：调用翻译接口（阿里云 MT 优先）翻译标题并更新数据库。
@@ -1155,7 +1160,7 @@ def retry_video(youtube_id: str):
 
 @app.post("/api/videos/retry-recent")
 def retry_recent(hours: int = 24):
-    """[Claude_Opus_4.8] 批量重试最近 N 小时内 FAILED 的任务：重置为 PENDING（复用 GC 保留的
+    """批量重试最近 N 小时内 FAILED / LOGIN_REQUIRED 的任务：重置为 PENDING（复用 GC 保留的
     成片/封面/文案 checkpoint，秒级重跑）。供 Telegram /retry <hours>。
 
     仅重置状态、不在此逐条触发（避免一次性 spawn 过多进程）；score>=75 的会被仪表盘调度器
@@ -1176,6 +1181,28 @@ def retry_recent(hours: int = 24):
         "count": count,
         "hours": hours,
         "items": [(r.get("title") or "")[:42] for r in rows[:10]],
+    }
+
+
+@app.get("/api/videos/retry-recent/preview")
+def retry_recent_preview(hours: int = 24):
+    """只读预览最近 N 小时内 /retry <hours> 会重置的任务。"""
+    if hours <= 0 or hours > 720:
+        return {"success": False, "error": "hours 需在 1~720 之间"}
+    rows = db.get_failed_videos_since(hours)
+    return {
+        "success": True,
+        "count": len(rows),
+        "hours": hours,
+        "items": [
+            {
+                "youtube_id": r.get("youtube_id"),
+                "slice_index": int(r.get("slice_index") or 0),
+                "title": (r.get("title") or "")[:80],
+                "status": r.get("status"),
+            }
+            for r in rows[:10]
+        ],
     }
 
 
@@ -1677,16 +1704,23 @@ def wechat_login(headless: bool = True):
     python   = str(prj_root / ".venv" / "bin" / "python")
     script   = str(prj_root / "scripts" / "wechat_uploader.py")
     state    = str(prj_root / "output" / "wechat_state.json")
+    qr_path  = prj_root / "output" / "login_qr.png"
+
+    if _is_wechat_login_running():
+        return {
+            "success": True,
+            "already_running": True,
+            "message": "微信登录程序已在运行，请使用当前二维码扫码",
+        }
 
     # 启动前先清理可能存在的旧二维码
-    qr_path = prj_root / "output" / "login_qr.png"
     if qr_path.exists():
         try:
             os.remove(qr_path)
         except Exception:
             pass
 
-    args = [python, script, "--login-only", "--state", state]
+    args = [python, script, "--login-only", "--relogin", "--state", state]
     if not headless:
         args.append("--no-headless")
 
@@ -1697,7 +1731,9 @@ def wechat_login(headless: bool = True):
             import logging
             logging.getLogger(__name__).error(f"WeChat login subprocess failed: {e}")
 
-    threading.Thread(target=_run, daemon=True, name="wechat-login").start()
+    global _wechat_login_thread
+    _wechat_login_thread = threading.Thread(target=_run, daemon=True, name="wechat-login")
+    _wechat_login_thread.start()
     return {
         "success": True, 
         "message": "无头登录程序已启动，正在获取二维码，请等待浮层刷新" if headless else "已在本机启动浏览器，请在弹出窗口中扫码"
@@ -1723,15 +1759,48 @@ def get_wechat_status():
     """[Gemini_2.0_Flash_fast] 获取当前微信登录状态与后台登录子进程状态"""
     prj_root = Path(__file__).parent.parent.parent
     state_path = prj_root / "output" / "wechat_state.json"
+    login_at_path = prj_root / "output" / "wechat_login_at.txt"
     qr_path = prj_root / "output" / "login_qr.png"
     
-    is_running = any(t.name == "wechat-login" for t in threading.enumerate())
+    is_running = _is_wechat_login_running()
+    login_marker_active = _wechat_login_marker_active(login_at_path)
     
     return {
-        "logged_in": state_path.exists(),
+        "logged_in": state_path.exists() and login_marker_active,
+        "state_exists": state_path.exists(),
+        "login_marker_active": login_marker_active,
         "qr_exists": qr_path.exists(),
         "is_running": is_running,
     }
+
+
+def _is_wechat_login_running() -> bool:
+    """判断是否已有 Web/TG 触发的微信登录进程在等待扫码，避免二维码互相覆盖。"""
+    if _wechat_login_thread and _wechat_login_thread.is_alive():
+        return True
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            cwd=str(Path(__file__).parent.parent.parent),
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        return any(
+            ".venv/bin/python" in line and "scripts/wechat_uploader.py" in line and "--login-only" in line
+            for line in result.stdout.splitlines()
+        )
+    except Exception:
+        return False
+
+
+def _wechat_login_marker_active(login_at_path: Path, max_age_hours: int = 23) -> bool:
+    """仅把真实扫码成功后写入且未超龄的标记视为登录有效。"""
+    try:
+        login_at = int(login_at_path.read_text().strip())
+    except Exception:
+        return False
+    return (time.time() - login_at) < max_age_hours * 3600
 
 
 def _is_pipeline_manager_running() -> bool:
@@ -1920,6 +1989,13 @@ def refresh_high_likes():
 def high_likes_refresh_status():
     """查询高赞刷新任务是否正在运行"""
     return {"running": _high_likes_refresh_running}
+
+
+@app.get("/demo", response_class=HTMLResponse)
+def get_interactive_demo():
+    """[Gemini_3.5_Flash_planning] 返回交互式财经英文原声精读体验页 (Anduchencang Demo)"""
+    from web.study_demo_html import HTML_CONTENT
+    return HTML_CONTENT
 
 
 if __name__ == "__main__":

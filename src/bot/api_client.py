@@ -15,6 +15,9 @@
 | 1.5.0 | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 respec_video() 封装，供 Bot 侧在 already_exists 时自动调用规格覆盖 |
 | 1.6.0 | 2026-06-20 | Claude_Opus_4.8 | 新增 process_video()：POST /api/videos/{id}/process，供 /process 命令与 Agent 工具确定性触发单条视频处理（忽略分数阈值） |
 | 1.7.0 | 2026-06-28 | Claude_Opus_4.8 | 新增 retry_recent(hours)：POST /api/videos/retry-recent，供 /retry <小时数> 批量重试最近 N 小时失败任务 |
+| 1.8.0 | 2026-07-05 | Codex | 新增 get_wechat_status()，供 /status 首屏展示发布登录态 |
+| 1.9.0 | 2026-07-05 | Codex | 新增 get_video_page() 返回 total_count，供 /status 展示失败总数与最近失败样例 |
+| 1.10.0 | 2026-07-05 | Codex | 新增 retry_recent_preview()，供 /status 展示 /retry 24 会影响几条 |
 """
 from __future__ import annotations
 
@@ -92,6 +95,17 @@ class PipelineAPIClient:
             logger.warning(f"[api_client] get_videos failed (API down?): {e}")
             return None
 
+    async def get_video_page(self, tab: str = "waitlist", page: int = 1, size: int = 10) -> Optional[dict]:
+        """GET /api/videos — 获取分页原始响应，包含 total_count。"""
+        try:
+            async with self._client() as c:
+                resp = await c.get("/api/videos", params={"tab": tab, "page": page, "size": size})
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] get_video_page failed (API down?): {e}")
+            return None
+
     async def get_stats(self) -> Optional[dict]:
         """GET /api/stats — 获取系统统计数据。"""
         try:
@@ -101,6 +115,17 @@ class PipelineAPIClient:
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] get_stats failed (API down?): {e}")
+            return None
+
+    async def get_wechat_status(self) -> Optional[dict]:
+        """GET /api/wechat/status — 获取微信视频号发布登录态。"""
+        try:
+            async with self._client() as c:
+                resp = await c.get("/api/wechat/status")
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] get_wechat_status failed (API down?): {e}")
             return None
 
     async def delete_video(self, youtube_id: str, delete_files: bool = True) -> Optional[dict]:
@@ -168,7 +193,7 @@ class PipelineAPIClient:
             return None
 
     async def retry_recent(self, hours: int) -> Optional[dict]:
-        """POST /api/videos/retry-recent?hours=N — 批量重试最近 N 小时内 FAILED 的任务。"""
+        """POST /api/videos/retry-recent?hours=N — 批量重试最近 N 小时内失败/需登录任务。"""
         try:
             async with self._client() as c:
                 resp = await c.post("/api/videos/retry-recent", params={"hours": hours})
@@ -176,6 +201,17 @@ class PipelineAPIClient:
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] retry_recent failed (API down?): {e}")
+            return None
+
+    async def retry_recent_preview(self, hours: int) -> Optional[dict]:
+        """GET /api/videos/retry-recent/preview?hours=N — 只读预览批量重试影响范围。"""
+        try:
+            async with self._client() as c:
+                resp = await c.get("/api/videos/retry-recent/preview", params={"hours": hours})
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] retry_recent_preview failed (API down?): {e}")
             return None
 
     async def process_video(self, youtube_id: str) -> Optional[dict]:

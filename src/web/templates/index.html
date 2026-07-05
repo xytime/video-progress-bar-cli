@@ -2510,7 +2510,7 @@
       
       wechatLoginActive = true;
       let attempts = 0;
-      const maxAttempts = 60; // 120s
+      const maxAttempts = 300; // 600s，与 wechat_uploader.py 的扫码等待窗口一致
       
       if (wechatPollInterval) clearInterval(wechatPollInterval);
       wechatPollInterval = setInterval(async () => {

@@ -31,6 +31,7 @@
 | 3.10.0  | 2026-06-25 | Claude_Opus_4.8                     | 新增 get_rescore_candidates（含同款黑名单过滤、UTC 对齐窗口）：收敛 rescore_refresh 手抄过滤 SQL 为 DAL 单一真相源，消除黑名单语义漂移与 rule-2 裸 SQL 违规 |
 | 3.11.0  | 2026-06-25 | Claude_Opus_4.8                     | 新增 is_manually_scored(yid,slice) 查询：供审查执行层判定手动锁定视频命中 P2 时挂起人工复核而非 force 清零回弹 |
 | 3.12.0  | 2026-06-28 | Claude_Opus_4.8                     | 新增 get_failed_videos_since(hours)：取最近 N 小时内 FAILED 任务（UTC 对齐窗口），供 Telegram /retry <小时数> 批量重试 |
+| 3.12.1  | 2026-07-05 | Codex                               | get_failed_videos_since 纳入 LOGIN_REQUIRED，修复微信过期导致的批量重试遗漏 |
 """
 
 import sqlite3
@@ -448,12 +449,12 @@ class PipelineDB:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_failed_videos_since(self, hours: int) -> List[Dict[str, Any]]:
-        """[Claude_Opus_4.8] 取最近 N 小时内转入 FAILED 的任务（供 Telegram /retry <hours> 批量重试）。
+        """取最近 N 小时内可批量重试的失败任务（FAILED / LOGIN_REQUIRED）。
         updated_at 用 SQLite datetime('now')(UTC) 比较，与 CURRENT_TIMESTAMP(UTC) 对齐，避免时区漂移。"""
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT youtube_id, slice_index, score, title FROM processed_videos "
-                "WHERE status = 'FAILED' AND updated_at >= datetime('now', ?) "
+                "SELECT youtube_id, slice_index, score, title, status FROM processed_videos "
+                "WHERE status IN ('FAILED', 'LOGIN_REQUIRED') AND updated_at >= datetime('now', ?) "
                 "ORDER BY updated_at DESC",
                 (f"-{int(hours)} hours",)
             )
