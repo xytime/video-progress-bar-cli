@@ -35,6 +35,7 @@
 | 1.22.0 | 2026-07-05 | Codex | 将字幕翻译质量决策抽象到 subtitle_translation_quality，主流程只保留编排职责 |
 | 1.23.0 | 2026-07-05 | Codex | 质量审核复用 TranslationContext 的领域、事实与术语提示，并写入审计事件 |
 | 1.24.0 | 2026-07-06 | Codex | 字幕质量上下文写入受保护英文实体，供审计与一致性检查复用 |
+| 1.25.0 | 2026-07-06 | Codex | 字幕 provider 选择改为 warning-aware 仲裁，优先采用无告警候选 |
 """
 import logging
 from pathlib import Path
@@ -69,6 +70,7 @@ from ..utils.subtitle_translation_provider import (
 )
 from ..utils.subtitle_translation_quality import (
     SubtitleTranslationQualityContext,
+    SubtitleTranslationQualityDecision,
     evaluate_subtitle_translation_candidate,
 )
 from ..utils.deepseek_translation import translate_batch_deepseek
@@ -77,6 +79,36 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 import textwrap
+
+
+_WARNING_SEVERITY_RANK = {
+    "P0": 4,
+    "P1": 3,
+    "P2": 2,
+    "P3": 1,
+    "PASS": 0,
+}
+
+
+def _warning_rank(decision: SubtitleTranslationQualityDecision) -> tuple[int, int]:
+    """候选 warning 排序键：优先更低严重度，其次更少 warning。"""
+    max_rank = max(
+        (_WARNING_SEVERITY_RANK.get(issue.severity, 0) for issue in decision.warning_issues),
+        default=0,
+    )
+    return (max_rank, len(decision.warning_issues))
+
+
+def _warning_rank_from_event(event: Optional[Dict[str, Any]]) -> tuple[int, int]:
+    """从审计事件计算 warning 排序键。"""
+    if event is None:
+        return (999, 999)
+    warning_issues = list(event.get("warning_issues") or [])
+    max_rank = max(
+        (_WARNING_SEVERITY_RANK.get(str(issue.get("severity") or ""), 0) for issue in warning_issues),
+        default=0,
+    )
+    return (max_rank, len(warning_issues))
 
 # 定义字幕样式方案
 # 格式: {name: {zh_color: hex, en_color: hex, bg_color: hex, bg_alpha: 0-255, outline: int, shadow: int}}
@@ -567,6 +599,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
         )
 
         provider_order = settings.subtitle_translation_provider_order_list
+        best_warning_candidate: Optional[SubtitleTranslationCandidate] = None
+        best_warning_event: Optional[Dict[str, Any]] = None
         for idx, provider in enumerate(provider_order):
             final_provider = idx == len(provider_order) - 1
             candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
@@ -574,21 +608,90 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 logger.warning("[Translate] Provider %s produced no usable candidate.", provider)
                 continue
 
-            apply_translation_candidate(segments, candidate)
-            if not candidate.supports_vocab:
-                self._align_vocab_after_plain_translation(texts, segments, translation_prompt_context, candidate.provider)
-
-            if self._guard_translation_quality(
+            decision = self._evaluate_translation_quality(
                 texts,
-                segments,
+                candidate.translations[:len(segments)],
                 provider=candidate.provider,
                 final_provider=final_provider,
                 quality_context=quality_context,
-            ):
+            )
+            event = self._record_translation_quality_decision(
+                decision,
+                provider=candidate.provider,
+                final_provider=final_provider,
+                selected=False,
+            )
+
+            if decision.should_fallback:
+                self._write_translation_quality_report()
+                logger.warning(
+                    "[TranslationGuard][%s] Blocking issue found; falling back to next provider: %s",
+                    candidate.provider,
+                    decision.blocking_summary(),
+                )
+                continue
+
+            if decision.should_fail:
+                if best_warning_candidate is not None:
+                    best_warning_event["selected"] = True
+                    self._apply_selected_translation_candidate(
+                        segments,
+                        best_warning_candidate,
+                        texts,
+                        translation_prompt_context,
+                    )
+                    self._write_translation_quality_report()
+                    return segments
+                self._write_translation_quality_report()
+                raise VideoProcessingError(
+                    f"Translation quality guard blocked {candidate.provider} output: {decision.blocking_summary()}"
+                )
+
+            if not decision.warning_issues:
+                event["selected"] = True
+                self._apply_selected_translation_candidate(segments, candidate, texts, translation_prompt_context)
                 self._write_translation_quality_report()
                 return segments
 
+            if best_warning_candidate is None or _warning_rank(decision) < _warning_rank_from_event(best_warning_event):
+                best_warning_candidate = candidate
+                best_warning_event = event
+
+            if final_provider and best_warning_candidate is not None:
+                best_warning_event["selected"] = True
+                self._apply_selected_translation_candidate(
+                    segments,
+                    best_warning_candidate,
+                    texts,
+                    translation_prompt_context,
+                )
+                self._write_translation_quality_report()
+                return segments
+
+        if best_warning_candidate is not None:
+            best_warning_event["selected"] = True
+            self._apply_selected_translation_candidate(
+                segments,
+                best_warning_candidate,
+                texts,
+                translation_prompt_context,
+            )
+            self._write_translation_quality_report()
+            return segments
+
         raise VideoProcessingError("All subtitle translation providers failed or were blocked.")
+
+    def _apply_selected_translation_candidate(
+        self,
+        segments: List[Dict[str, Any]],
+        candidate: SubtitleTranslationCandidate,
+        texts: List[str],
+        translation_context: str,
+    ) -> None:
+        """应用最终选中的 provider-neutral 候选，并按需补齐 vocab。"""
+        apply_translation_candidate(segments, candidate)
+        if not candidate.supports_vocab:
+            self._align_vocab_after_plain_translation(texts, segments, translation_context, candidate.provider)
 
     def _build_translation_candidate(
         self,
@@ -699,27 +802,20 @@ class AutoCaptionProcessor(VideoProcessorBase):
     ) -> bool:
         """翻译后事实保真审计并返回候选是否可接受。"""
         translated_texts = [seg.get("zh_text", "") for seg in segments]
-        fallback_context_text = "\n".join(source_texts)
-        decision = evaluate_subtitle_translation_candidate(
+        decision = self._evaluate_translation_quality(
             source_texts,
             translated_texts,
             provider=provider,
             final_provider=final_provider,
-            context_text=fallback_context_text,
             quality_context=quality_context,
         )
+        self._record_translation_quality_decision(
+            decision,
+            provider=provider,
+            final_provider=final_provider,
+            selected=decision.accepted,
+        )
 
-        for issue in decision.warning_issues:
-            logger.warning(
-                "[TranslationGuard][%s][%s] %s | source=%s translation=%s",
-                provider,
-                issue.code,
-                issue.message,
-                issue.source_signal,
-                issue.translation_signal,
-            )
-
-        self._translation_quality_audit.append(decision.to_audit_event(final_provider=final_provider))
         if decision.should_fallback:
             self._write_translation_quality_report()
             logger.warning(
@@ -734,6 +830,50 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 f"Translation quality guard blocked {provider} output: {decision.blocking_summary()}"
             )
         return True
+
+    def _evaluate_translation_quality(
+        self,
+        source_texts: List[str],
+        translated_texts: List[str],
+        *,
+        provider: str,
+        final_provider: bool,
+        quality_context: SubtitleTranslationQualityContext | None,
+    ) -> SubtitleTranslationQualityDecision:
+        """只评估候选质量，不修改字幕段或审计状态。"""
+        fallback_context_text = "\n".join(source_texts)
+        return evaluate_subtitle_translation_candidate(
+            source_texts,
+            translated_texts,
+            provider=provider,
+            final_provider=final_provider,
+            context_text=fallback_context_text,
+            quality_context=quality_context,
+        )
+
+    def _record_translation_quality_decision(
+        self,
+        decision: SubtitleTranslationQualityDecision,
+        *,
+        provider: str,
+        final_provider: bool,
+        selected: bool,
+    ) -> Dict[str, Any]:
+        """记录质量决策审计事件并输出 warning 日志。"""
+        for issue in decision.warning_issues:
+            logger.warning(
+                "[TranslationGuard][%s][%s] %s | source=%s translation=%s",
+                provider,
+                issue.code,
+                issue.message,
+                issue.source_signal,
+                issue.translation_signal,
+            )
+
+        event = decision.to_audit_event(final_provider=final_provider)
+        event["selected"] = selected
+        self._translation_quality_audit.append(event)
+        return event
 
     def _write_translation_quality_report(self) -> None:
         """写出字幕翻译质量审计报告，供后续统计和排障。"""

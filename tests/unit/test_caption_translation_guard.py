@@ -10,6 +10,7 @@
 | 1.3.0   | 2026-07-05 | Codex  | 覆盖 settings 配置字幕翻译供应商顺序 |
 | 1.4.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 顺序接入 |
 | 1.5.0   | 2026-07-05 | Codex  | 覆盖质量审计报告写入全片上下文摘要 |
+| 1.6.0   | 2026-07-06 | Codex  | 覆盖非最终 provider 出现 warning 时继续尝试更干净候选 |
 """
 
 import json
@@ -125,6 +126,70 @@ def test_translate_segments_writes_quality_report_for_fallback(
     assert report["events"][0]["quality_context"]["facts"]
     assert report["events"][1]["status"] == "passed"
     assert report["events"][1]["action"] == "accept"
+
+
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._align_vocab_after_plain_translation")
+@patch("video_processing.processors.caption_processor._google_batch_fallback")
+@patch("video_processing.processors.caption_processor.translate_batch_aliyun")
+@patch("video_processing.processors.caption_processor.extract_vocab_batch")
+def test_translate_segments_tries_next_provider_after_warning(
+    mock_extract_vocab_batch,
+    mock_aliyun,
+    mock_google,
+    _mock_align_vocab,
+    _mock_validate_input,
+    tmp_path,
+):
+    input_path = tmp_path / "video.mp4"
+    input_path.touch()
+    processor = _processor_for(input_path)
+    source = "MGX announced that it has closed its Fund I at $49 billion."
+    mock_extract_vocab_batch.return_value = [
+        {"translation": "MGX宣布第一期基金已以490亿美元关闭。", "vocab": {}}
+    ]
+    mock_aliyun.return_value = ["MGX宣布一期基金最终募集规模达490亿美元。"]
+
+    result = processor._translate_segments([{"text": source}])
+
+    assert result[0]["zh_text"] == "MGX宣布一期基金最终募集规模达490亿美元。"
+    mock_aliyun.assert_called_once()
+    mock_google.assert_not_called()
+
+    report = json.loads(input_path.with_suffix(".translation_quality.json").read_text(encoding="utf-8"))
+    assert [event["provider"] for event in report["events"]] == ["Gemini", "Aliyun"]
+    assert [event["selected"] for event in report["events"]] == [False, True]
+    assert report["events"][0]["warning_issues"][0]["code"] == "FINANCE_TERM_AMBIGUOUS_CLOSE"
+
+
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
+@patch("video_processing.processors.caption_processor.translate_batch_deepseek", return_value=None)
+@patch("video_processing.processors.caption_processor.extract_vocab_batch")
+def test_translate_segments_uses_warning_candidate_when_later_providers_unavailable(
+    mock_extract_vocab_batch,
+    _mock_deepseek,
+    _mock_validate_input,
+    tmp_path,
+):
+    input_path = tmp_path / "video.mp4"
+    input_path.touch()
+    processor = _processor_for(input_path)
+    source = "MGX announced that it has closed its Fund I at $49 billion."
+    mock_extract_vocab_batch.return_value = [
+        {"translation": "MGX宣布第一期基金已以490亿美元关闭。", "vocab": {}}
+    ]
+
+    with patch(
+        "video_processing.processors.caption_processor.settings",
+        _SettingsOrder(["gemini", "deepseek"]),
+    ):
+        result = processor._translate_segments([{"text": source}])
+
+    assert result[0]["zh_text"] == "MGX宣布第一期基金已以490亿美元关闭。"
+    report = json.loads(input_path.with_suffix(".translation_quality.json").read_text(encoding="utf-8"))
+    assert [event["provider"] for event in report["events"]] == ["Gemini"]
+    assert report["events"][0]["selected"] is True
+    assert report["events"][0]["warning_issues"][0]["code"] == "FINANCE_TERM_AMBIGUOUS_CLOSE"
 
 
 @patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
