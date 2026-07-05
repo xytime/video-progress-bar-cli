@@ -12,6 +12,7 @@
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
 | 1.0.0   | 2026-06-26 | Claude_Opus_4.8 | 初版：每日发布/黑名单/会话/限流巡检工单 |
+| 1.1.0   | 2026-07-05 | Codex           | 接入翻译质量审计聚合摘要，纳入每日巡检 |
 """
 from __future__ import annotations
 
@@ -23,10 +24,12 @@ from pathlib import Path
 PRJ = Path(__file__).parent.parent
 sys.path.insert(0, str(PRJ / "src"))
 from config.settings import settings  # noqa: E402
+from video_processing.utils.translation_quality_report import aggregate_quality_reports  # noqa: E402
 
 _DB = PRJ / "output" / "pipeline.db"
 _DASH_LOG = PRJ / "output" / "dashboard.log"
 _MON_LOG = PRJ / "output" / "monitor.log"
+_OUT_DIR = PRJ / "output"
 
 
 def _ro_conn():
@@ -35,6 +38,33 @@ def _ro_conn():
 
 def _one(con, sql, *args):
     return con.execute(sql, args).fetchone()[0]
+
+
+def format_translation_quality(summary: dict) -> str:
+    """把翻译质量聚合结果格式化为 Telegram 友好的日报行。"""
+    files_scanned = int(summary.get("files_scanned") or 0)
+    event_count = int(summary.get("event_count") or 0)
+    blocked_count = int(summary.get("blocked_count") or 0)
+    issue_counts = summary.get("issue_counts") or {}
+    provider_counts = summary.get("provider_counts") or {}
+
+    if files_scanned == 0:
+        return "翻译质量: 暂无审计报告"
+
+    top_issue = "无"
+    if issue_counts:
+        code, count = max(issue_counts.items(), key=lambda item: item[1])
+        top_issue = f"{code}×{count}"
+
+    top_provider = "无"
+    if provider_counts:
+        provider, count = max(provider_counts.items(), key=lambda item: item[1])
+        top_provider = f"{provider}×{count}"
+
+    return (
+        f"翻译质量: 报告 {files_scanned} | 事件 {event_count} | "
+        f"阻断/降级 {blocked_count} | 最高频错误 {top_issue} | provider {top_provider}"
+    )
 
 
 def collect() -> str:
@@ -80,6 +110,11 @@ def collect() -> str:
     except Exception:
         pass
 
+    try:
+        translation_quality_line = format_translation_quality(aggregate_quality_reports(_OUT_DIR))
+    except Exception:
+        translation_quality_line = "翻译质量: 汇总失败"
+
     leak_line = "0 ✅" if leak == 0 else f"⚠️ {leak} 条（需立刻排查！）"
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     return (
@@ -92,6 +127,8 @@ def collect() -> str:
         f"{sess}（~24h 服务端硬上限，几乎每天需重扫）\n"
         f"━━ 限流 ━━\n"
         f"discovery 累计限流跳过(monitor.log): {rl}\n"
+        f"━━ 翻译质量 ━━\n"
+        f"{translation_quality_line}\n"
         f"━━ 每日须办 ━━\n"
         f"• 会话若失效→ <code>python scripts/wechat_uploader.py --login-only</code> 重扫\n"
         f"• 泄漏若&gt;0→ 立刻查 get_high_score_pending_videos 黑名单过滤是否被绕过"
