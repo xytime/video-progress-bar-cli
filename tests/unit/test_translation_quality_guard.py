@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖基金 close 方向反转、有效译文放行、金额数量级错误 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖上下文本句优先与批量阻断摘要 |
+| 1.2.0   | 2026-07-05 | Codex  | 覆盖无 $ 金融金额抽取与非金融 million 误伤防护 |
 """
 
 import sys
@@ -18,6 +19,7 @@ if str(_src_root) not in sys.path:
 from video_processing.utils.translation_quality_guard import (  # noqa: E402
     evaluate_translation_batch,
     evaluate_translation_pair,
+    extract_fact_signal,
 )
 
 
@@ -71,6 +73,23 @@ def test_billion_to_trillion_magnitude_block():
     assert not result.passed
     assert result.max_severity == "P0"
     assert any(issue.code == "NUMBER_MAGNITUDE_MISMATCH" for issue in result.issues)
+
+
+def test_bare_billion_finance_amount_is_checked():
+    source = "MGX closes 49 billion AI fund after exceeding its target."
+    translated = "MGX完成49亿美元AI基金募集，超过目标。"
+
+    result = evaluate_translation_pair(source, translated)
+
+    assert not result.passed
+    assert result.max_severity == "P1"
+    assert any(issue.code == "NUMBER_MAGNITUDE_SUSPECT" for issue in result.issues)
+
+
+def test_bare_million_users_is_not_treated_as_usd_amount():
+    signal = extract_fact_signal("The product reached 5 million users in one week.", lang="en")
+
+    assert signal.amounts_usd == []
 
 
 def test_exit_when_source_exit_passes():

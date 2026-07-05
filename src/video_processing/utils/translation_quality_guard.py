@@ -9,6 +9,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：抽取融资完成/退出语义、金额数量级，并输出可阻断的质量问题 |
 | 1.1.0   | 2026-07-05 | Codex  | 本句信号优先、上下文只补足未知语义；新增批量 P0 汇总供字幕链路接入 |
+| 1.2.0   | 2026-07-05 | Codex  | 金融语境下支持无 $ 的 billion/million/trillion 金额抽取 |
 """
 
 from __future__ import annotations
@@ -342,12 +343,12 @@ def _extract_amounts_usd(text: str) -> List[float]:
     amounts: List[float] = []
     amounts.extend(_extract_english_amounts_usd(text))
     amounts.extend(_extract_chinese_amounts_usd(text))
-    return amounts
+    return _dedupe_amounts(amounts)
 
 
 def _extract_english_amounts_usd(text: str) -> List[float]:
     amounts: List[float] = []
-    pattern = re.compile(
+    dollar_pattern = re.compile(
         r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(trillion|billion|million)?",
         re.IGNORECASE,
     )
@@ -357,11 +358,43 @@ def _extract_english_amounts_usd(text: str) -> List[float]:
         "million": 1_000_000,
         None: 1,
     }
-    for match in pattern.finditer(text):
+    for match in dollar_pattern.finditer(text):
         value = _parse_number(match.group(1))
         if value is None:
             continue
         unit = match.group(2).lower() if match.group(2) else None
+        amounts.append(value * multipliers[unit])
+
+    bare_money_cues = (
+        "fund", "capital", "capex", "expenditure", "commitment", "commitments",
+        "valuation", "revenue", "market cap", "investment", "investments",
+        "target", "assets", "aum",
+    )
+    cue_pattern = "|".join(re.escape(cue) for cue in bare_money_cues)
+    bare_after_pattern = re.compile(
+        rf"\b([0-9][0-9,]*(?:\.[0-9]+)?)\s*"
+        rf"(trillion|billion|million)\b"
+        rf"(?:\s+\w+){{0,3}}\s+(?:{cue_pattern})\b",
+        re.IGNORECASE,
+    )
+    for match in bare_after_pattern.finditer(text):
+        value = _parse_number(match.group(1))
+        if value is None:
+            continue
+        unit = match.group(2).lower()
+        amounts.append(value * multipliers[unit])
+
+    bare_before_pattern = re.compile(
+        rf"\b(?:raised|raising|committed|commit|valued\s+at|worth|target(?:ed)?\s+at|at)\s+"
+        rf"([0-9][0-9,]*(?:\.[0-9]+)?)\s*"
+        rf"(trillion|billion|million)\b",
+        re.IGNORECASE,
+    )
+    for match in bare_before_pattern.finditer(text):
+        value = _parse_number(match.group(1))
+        if value is None:
+            continue
+        unit = match.group(2).lower()
         amounts.append(value * multipliers[unit])
     return amounts
 
@@ -381,6 +414,17 @@ def _extract_chinese_amounts_usd(text: str) -> List[float]:
     for match in pattern.finditer(text):
         amounts.append(float(match.group(1)) * multipliers[match.group(2)])
     return amounts
+
+
+def _dedupe_amounts(amounts: Sequence[float]) -> List[float]:
+    unique: List[float] = []
+    for amount in amounts:
+        if amount <= 0:
+            continue
+        if any(abs(amount - existing) / max(amount, existing) < 0.01 for existing in unique):
+            continue
+        unique.append(amount)
+    return unique
 
 
 def _any_match(patterns: Sequence[re.Pattern[str]], text: str) -> bool:

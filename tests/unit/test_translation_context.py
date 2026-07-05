@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖全片上下文、金融术语提示和长文本采样 |
+| 1.1.0   | 2026-07-05 | Codex  | 覆盖无 $ 金融金额进入上下文金额提示 |
 """
 
 import sys
@@ -43,6 +44,16 @@ def test_translation_context_preserves_amount_magnitude_hint():
     assert "$650B" in prompt_context
     assert "capital expenditure" in prompt_context
     assert "billion/trillion" in prompt_context
+
+
+def test_translation_context_preserves_bare_finance_amount_magnitude_hint():
+    context = build_translation_context([
+        "MGX closes 49 billion AI fund after exceeding its initial target."
+    ])
+
+    prompt_context = context.to_prompt_context()
+
+    assert "$49B" in prompt_context
 
 
 def test_translation_context_keeps_general_domain_for_plain_text():
