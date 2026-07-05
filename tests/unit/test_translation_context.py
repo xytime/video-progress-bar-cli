@@ -9,6 +9,7 @@
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖 B/M/T 金融金额缩写进入上下文金额提示 |
 | 1.3.0   | 2026-07-06 | Codex  | 覆盖受保护英文实体进入翻译上下文 prompt |
 | 1.4.0   | 2026-07-06 | Codex  | 覆盖长视频中段关键事实也会进入翻译上下文 |
+| 1.5.0   | 2026-07-06 | Codex  | 覆盖 US$49bn/49bn 金融金额缩写进入上下文金额提示 |
 """
 
 import sys
@@ -71,6 +72,18 @@ def test_translation_context_preserves_compact_finance_amount_hints():
 
     assert "$49B" in prompt_context
     assert "$650B" in prompt_context
+
+
+def test_translation_context_preserves_bn_finance_amount_hints():
+    context = build_translation_context([
+        "MGX announced the final close of Fund I at US$49bn.",
+        "It had initially targeted 45bn in commitments.",
+    ])
+
+    prompt_context = context.to_prompt_context()
+
+    assert "$49B" in prompt_context
+    assert "$45B" in prompt_context
 
 
 def test_translation_context_keeps_general_domain_for_plain_text():

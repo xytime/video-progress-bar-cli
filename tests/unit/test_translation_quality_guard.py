@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖上下文本句优先与批量阻断摘要 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖无 $ 金融金额抽取与非金融 million 误伤防护 |
 | 1.3.0   | 2026-07-05 | Codex  | 覆盖 $49B/49B fund 等 B/M/T 金融金额缩写 |
+| 1.4.0   | 2026-07-06 | Codex  | 覆盖 US$49bn/49bn fund 等 bn/mn/tn 金融金额缩写 |
 """
 
 import sys
@@ -87,6 +88,17 @@ def test_dollar_b_suffix_amount_is_checked():
     assert any(issue.code == "NUMBER_MAGNITUDE_MISMATCH" for issue in result.issues)
 
 
+def test_us_dollar_bn_suffix_amount_is_checked():
+    source = "MGX announced the final close of Fund I at US$49bn."
+    translated = "MGX宣布一期基金最终募集规模达49亿美元。"
+
+    result = evaluate_translation_pair(source, translated)
+
+    assert not result.passed
+    assert result.max_severity == "P1"
+    assert any(issue.code == "NUMBER_MAGNITUDE_SUSPECT" for issue in result.issues)
+
+
 def test_bare_billion_finance_amount_is_checked():
     source = "MGX closes 49 billion AI fund after exceeding its target."
     translated = "MGX完成49亿美元AI基金募集，超过目标。"
@@ -109,6 +121,17 @@ def test_bare_b_suffix_finance_amount_is_checked():
     assert any(issue.code == "NUMBER_MAGNITUDE_SUSPECT" for issue in result.issues)
 
 
+def test_bare_bn_suffix_finance_amount_is_checked():
+    source = "MGX closes 49bn AI fund after exceeding its target."
+    translated = "MGX完成49亿美元AI基金募集，超过目标。"
+
+    result = evaluate_translation_pair(source, translated)
+
+    assert not result.passed
+    assert result.max_severity == "P1"
+    assert any(issue.code == "NUMBER_MAGNITUDE_SUSPECT" for issue in result.issues)
+
+
 def test_bare_million_users_is_not_treated_as_usd_amount():
     signal = extract_fact_signal("The product reached 5 million users in one week.", lang="en")
 
@@ -117,6 +140,12 @@ def test_bare_million_users_is_not_treated_as_usd_amount():
 
 def test_bare_m_suffix_users_is_not_treated_as_usd_amount():
     signal = extract_fact_signal("The product reached 5M users in one week.", lang="en")
+
+    assert signal.amounts_usd == []
+
+
+def test_bare_mn_suffix_users_is_not_treated_as_usd_amount():
+    signal = extract_fact_signal("The product reached 5mn users in one week.", lang="en")
 
     assert signal.amounts_usd == []
 

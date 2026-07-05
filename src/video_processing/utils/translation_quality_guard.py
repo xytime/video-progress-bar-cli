@@ -11,6 +11,7 @@
 | 1.1.0   | 2026-07-05 | Codex  | 本句信号优先、上下文只补足未知语义；新增批量 P0 汇总供字幕链路接入 |
 | 1.2.0   | 2026-07-05 | Codex  | 金融语境下支持无 $ 的 billion/million/trillion 金额抽取 |
 | 1.3.0   | 2026-07-05 | Codex  | 支持 $49B/49B fund 等 B/M/T 金融金额缩写抽取 |
+| 1.4.0   | 2026-07-06 | Codex  | 支持 US$49bn/49bn fund 等 bn/mn/tn 金融金额缩写抽取 |
 """
 
 from __future__ import annotations
@@ -349,8 +350,9 @@ def _extract_amounts_usd(text: str) -> List[float]:
 
 def _extract_english_amounts_usd(text: str) -> List[float]:
     amounts: List[float] = []
+    unit_pattern = _english_amount_unit_pattern()
     dollar_pattern = re.compile(
-        r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*(trillion|billion|million|[tmb])?",
+        rf"(?:US)?\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)\s*({unit_pattern})?",
         re.IGNORECASE,
     )
     multipliers = _english_amount_multipliers()
@@ -369,7 +371,7 @@ def _extract_english_amounts_usd(text: str) -> List[float]:
     cue_pattern = "|".join(re.escape(cue) for cue in bare_money_cues)
     bare_after_pattern = re.compile(
         rf"\b([0-9][0-9,]*(?:\.[0-9]+)?)\s*"
-        rf"(trillion|billion|million|[tmb])\b"
+        rf"({unit_pattern})\b"
         rf"(?:\s+\w+){{0,3}}\s+(?:{cue_pattern})\b",
         re.IGNORECASE,
     )
@@ -383,7 +385,7 @@ def _extract_english_amounts_usd(text: str) -> List[float]:
     bare_before_pattern = re.compile(
         rf"\b(?:raised|raising|committed|commit|valued\s+at|worth|target(?:ed)?\s+at|at)\s+"
         rf"([0-9][0-9,]*(?:\.[0-9]+)?)\s*"
-        rf"(trillion|billion|million|[tmb])\b",
+        rf"({unit_pattern})\b",
         re.IGNORECASE,
     )
     for match in bare_before_pattern.finditer(text):
@@ -395,11 +397,18 @@ def _extract_english_amounts_usd(text: str) -> List[float]:
     return amounts
 
 
+def _english_amount_unit_pattern() -> str:
+    return r"trillion|billion|million|tn|bn|mn|[tmb]"
+
+
 def _english_amount_multipliers() -> dict[str | None, int]:
     return {
         "trillion": 1_000_000_000_000,
         "billion": 1_000_000_000,
         "million": 1_000_000,
+        "tn": 1_000_000_000_000,
+        "bn": 1_000_000_000,
+        "mn": 1_000_000,
         "t": 1_000_000_000_000,
         "b": 1_000_000_000,
         "m": 1_000_000,
