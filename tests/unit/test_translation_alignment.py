@@ -121,6 +121,18 @@ class TestVocabPromptContext:
         assert "完成募集" in prompt
         assert "not withdrawal" in prompt
 
+    def test_translation_prompt_treats_global_context_as_hard_constraints(self):
+        prompt = _build_prompt(
+            ["MGX announced the final close of Fund I at US$49bn."],
+            None,
+            context_text="Preserve USD amount magnitudes exactly where mentioned: $49B.",
+        )
+
+        assert "hard constraints" in prompt
+        assert "close/final close usually means 完成募集/最终关账" in prompt
+        assert "billion/bn = 十亿美元" in prompt
+        assert "$49B" in prompt
+
     def test_alignment_prompt_includes_context_without_changing_chinese(self):
         prompt = _build_prompt(
             ["MGX announced the final close of Fund I."],

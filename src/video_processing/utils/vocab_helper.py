@@ -9,6 +9,7 @@
 | 1.2.0   | 2026-06-15 | Claude_Opus_4.8 | [BUG-4] prompt 给每段加 id 并要求回显；_parse_response 按 id 重对齐到定长列表，缺失段留空于正确位置，废弃「补空错位」级联 |
 | 1.3.0   | 2026-06-28 | Claude_Opus_4.8 | 词汇质量：①双模式 prompt 增加「禁止抽取周知专有名词/常识词」约束；②新增 _STOPWORDS + _filter_vocab，解析后剔除 Wall Street/Google 等周知词，避免占用词汇卡而无学习价值 |
 | 1.4.0   | 2026-07-05 | Codex | 支持注入全片翻译上下文，避免逐批字幕缺少主题与金融术语语境 |
+| 1.5.0   | 2026-07-06 | Codex | 强化 Gemini 翻译 prompt 全局上下文硬约束，降低金融 close/金额单位误译 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -241,8 +242,13 @@ def _render_context_block(context_text: str) -> str:
     if not context_text or not context_text.strip():
         return ""
     return (
-        "Use the following global context for every segment. "
+        "Use the following global context as hard constraints for every segment. "
         "It is more authoritative than isolated word senses, but do not invent facts beyond it.\n"
+        "Preserve event direction, entity names, money flow, and numeric magnitude. "
+        "For private funds, close/final close usually means 完成募集/最终关账, "
+        "not 退出、撤退、关闭、清盘 or liquidation. "
+        "Preserve USD magnitude exactly: billion/bn = 十亿美元 = 10亿美元, "
+        "million/mn = 百万美元, trillion/tn = 万亿美元.\n"
         f"{context_text.strip()}\n\n"
     )
 
