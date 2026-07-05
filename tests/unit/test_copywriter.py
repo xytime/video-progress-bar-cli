@@ -14,6 +14,7 @@
 | 1.8.0   | 2026-07-05 | Codex                      | 覆盖文案生成 prompt 注入 TranslationContext 事实与术语提示 |
 | 1.9.0   | 2026-07-05 | Codex                      | 覆盖 copy quality report 写入 quality_context |
 | 1.10.0  | 2026-07-06 | Codex                      | 覆盖 copy quality report 写入受保护英文实体 |
+| 1.11.0  | 2026-07-06 | Codex                      | 覆盖标题/文案 warning-aware 候选仲裁 |
 """
 import json
 import sys
@@ -28,6 +29,7 @@ from scripts.copywriter import (
     classify_category, DEFAULT_CATEGORY, graceful_truncate_title,
     extract_headline_workaround, _apply_post_processing,
     _build_wechat_prompt, _guard_wechat_content_quality,
+    _select_wechat_content_candidate,
 )
 from video_processing.utils.text_utils import verbatim_overlap_ratio
 
@@ -366,3 +368,72 @@ def test_copy_guard_writes_quality_report_for_block(tmp_path):
     assert report["status"] == "blocked"
     assert report["action"] == "fail"
     assert report["blocking_issues"][0]["code"] == "FINANCE_EVENT_DIRECTION_REVERSAL"
+
+
+def test_copy_candidate_selector_prefers_clean_fallback_after_warning(tmp_path):
+    title = "MGX closes $49 billion AI fund"
+    description = "MGX announced that it has closed its Fund I at $49 billion."
+    warning_content = {
+        "short_title": "AI基金490亿美元",
+        "hook_subtitle": "完成募集",
+        "copy": "MGX在强劲投资者需求后关闭了这只基金，市场仍在加码AI。",
+        "category": "财经",
+    }
+    clean_content = {
+        "short_title": "AI基金超募",
+        "hook_subtitle": "490亿美元完成募集",
+        "copy": "MGX一期基金最终募集规模达490亿美元。",
+        "category": "财经",
+    }
+    audit_path = tmp_path / "Z2z34FFT81c_copy_quality.json"
+
+    selected = _select_wechat_content_candidate(
+        title,
+        description,
+        [
+            ("gemini-test", lambda: warning_content),
+            ("fallback", lambda: clean_content),
+        ],
+        audit_path=audit_path,
+    )
+
+    assert selected == clean_content
+    report = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert [event["provider"] for event in report["events"]] == ["gemini-test", "fallback"]
+    assert [event["selected"] for event in report["events"]] == [False, True]
+    assert report["events"][0]["warning_issues"][0]["code"] == "TERM_CONSISTENCY_FUND_CLOSE_DRIFT"
+
+
+def test_copy_candidate_selector_keeps_warning_candidate_when_fallback_blocked(tmp_path):
+    title = "MGX closes $49 billion AI fund"
+    description = "MGX announced that it has closed its Fund I at $49 billion."
+    warning_content = {
+        "short_title": "AI基金490亿美元",
+        "hook_subtitle": "完成募集",
+        "copy": "MGX在强劲投资者需求后关闭了这只基金，市场仍在加码AI。",
+        "category": "财经",
+    }
+    blocked_content = {
+        "short_title": "490亿主权基金撤退",
+        "hook_subtitle": "主权基金离场",
+        "copy": "这只主权投资基金选择退出市场，AI资金开始撤退。",
+        "category": "财经",
+    }
+    audit_path = tmp_path / "Z2z34FFT81c_copy_quality.json"
+
+    selected = _select_wechat_content_candidate(
+        title,
+        description,
+        [
+            ("gemini-test", lambda: warning_content),
+            ("fallback", lambda: blocked_content),
+        ],
+        audit_path=audit_path,
+    )
+
+    assert selected == warning_content
+    report = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert [event["provider"] for event in report["events"]] == ["gemini-test", "fallback"]
+    assert [event["selected"] for event in report["events"]] == [True, False]
+    assert report["events"][1]["action"] == "fail"
+    assert report["events"][1]["blocking_issues"][0]["code"] == "FINANCE_EVENT_DIRECTION_REVERSAL"

@@ -27,6 +27,7 @@
 | 1.20.0  | 2026-07-05 | Codex                                   | 文案生成 prompt 复用 TranslationContext 的事实与术语提示，减少事后审核拦截 |
 | 1.21.0  | 2026-07-05 | Codex                                   | 文案质量审计报告写入 TranslationQualityContext，生产与审核共用上下文摘要 |
 | 1.22.0  | 2026-07-06 | Codex                                   | 标题/文案质量上下文写入受保护英文实体，供审计与一致性检查复用 |
+| 1.23.0  | 2026-07-06 | Codex                                   | 标题/文案生成接入通用候选仲裁，warning 时尝试更干净 fallback |
 """
 
 import re
@@ -37,7 +38,7 @@ import argparse
 import logging
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import pydantic
 
@@ -57,8 +58,10 @@ from video_processing.utils.text_utils import graceful_truncate_title, verbatim_
 from video_processing.utils.translation_context import build_translation_context
 from video_processing.utils.translation_quality_evaluator import (
     TranslationQualityContext,
+    TranslationQualityDecision,
     evaluate_translation_candidate,
 )
+from video_processing.utils.translation_candidate_arbitration import TranslationCandidateArbiter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("copywriter")
@@ -387,19 +390,52 @@ def _guard_wechat_content_quality(
 ) -> None:
     """对标题/文案整体做事实保真审计；P0 阻断写出。"""
     source_text = "\n".join(part for part in (title, description) if part and part.strip())
+    if not source_text:
+        return
+
+    decision = _evaluate_wechat_content_quality(
+        title,
+        description,
+        content,
+        provider=provider,
+        final_provider=True,
+        source_text=source_text,
+    )
+    report = _build_copy_quality_event(title, content, decision, selected=decision.accepted)
+    _write_copy_quality_report(audit_path, report)
+    if decision.should_fail:
+        raise ValueError(f"WeChat copy quality guard blocked output: {decision.blocking_summary()}")
+
+
+def _evaluate_wechat_content_quality(
+    title: str,
+    description: str,
+    content: dict,
+    *,
+    provider: str,
+    final_provider: bool,
+    source_text: str,
+) -> TranslationQualityDecision:
+    """评估标题/文案候选质量，不写文件、不抛异常。"""
     translated_text = "\n".join(
         str(content.get(key, "")).strip()
         for key in ("short_title", "hook_subtitle", "copy")
         if str(content.get(key, "")).strip()
     )
-    if not source_text or not translated_text:
-        return
+    if not translated_text:
+        return TranslationQualityDecision(
+            provider=provider,
+            accepted=True,
+            action="accept",
+            status="passed",
+            quality_context=_build_copy_quality_context(title, description, source_text),
+        )
 
     decision = evaluate_translation_candidate(
         [source_text],
         [translated_text],
         provider=provider,
-        final_provider=True,
+        final_provider=final_provider,
         quality_context=_build_copy_quality_context(title, description, source_text),
     )
     for issue in decision.issues:
@@ -410,9 +446,20 @@ def _guard_wechat_content_quality(
             issue.source_signal,
             issue.translation_signal,
         )
+    return decision
 
+
+def _build_copy_quality_event(
+    title: str,
+    content: dict,
+    decision: TranslationQualityDecision,
+    *,
+    selected: bool,
+) -> dict:
+    """把文案候选质量决策转成稳定审计事件。"""
     report = decision.to_audit_event()
     report.update({
+        "selected": selected,
         "source_title": title,
         "content": {
             "short_title": str(content.get("short_title", "")),
@@ -420,9 +467,70 @@ def _guard_wechat_content_quality(
             "category": str(content.get("category", "")),
         },
     })
-    _write_copy_quality_report(audit_path, report)
-    if decision.should_fail:
-        raise ValueError(f"WeChat copy quality guard blocked output: {decision.blocking_summary()}")
+    return report
+
+
+def _select_wechat_content_candidate(
+    title: str,
+    description: str,
+    candidates: list[tuple[str, Callable[[], dict]]],
+    *,
+    audit_path: Optional[Path] = None,
+) -> dict:
+    """在 Gemini/fallback 文案候选中选择质量更好的结果。"""
+    source_text = "\n".join(part for part in (title, description) if part and part.strip())
+    if not source_text:
+        provider, factory = candidates[0]
+        logger.warning("[CopyGuard] Empty source text; using first candidate from %s.", provider)
+        return factory()
+
+    arbiter = TranslationCandidateArbiter()
+    events: list[dict] = []
+    last_failure_summary = ""
+    for idx, (provider, factory) in enumerate(candidates):
+        final_provider = idx == len(candidates) - 1
+        content = factory()
+        decision = _evaluate_wechat_content_quality(
+            title,
+            description,
+            content,
+            provider=provider,
+            final_provider=final_provider,
+            source_text=source_text,
+        )
+        event = _build_copy_quality_event(title, content, decision, selected=False)
+        events.append(event)
+        outcome = arbiter.consider(
+            candidate=content,
+            decision=decision,
+            event=event,
+            final_provider=final_provider,
+        )
+
+        if decision.should_fallback:
+            last_failure_summary = decision.blocking_summary()
+            logger.warning(
+                "[CopyGuard][%s] Blocking issue found; trying next content candidate: %s",
+                provider,
+                last_failure_summary,
+            )
+            continue
+
+        if outcome.should_use_candidate:
+            _write_copy_candidate_report(audit_path, title, events)
+            return outcome.candidate
+
+        if outcome.should_fail:
+            _write_copy_candidate_report(audit_path, title, events)
+            raise ValueError(f"WeChat copy quality guard blocked output: {decision.blocking_summary()}")
+
+    outcome = arbiter.finish()
+    if outcome.should_use_candidate:
+        _write_copy_candidate_report(audit_path, title, events)
+        return outcome.candidate
+
+    _write_copy_candidate_report(audit_path, title, events)
+    raise ValueError(f"WeChat copy quality guard blocked output: {last_failure_summary}")
 
 
 def _build_wechat_prompt(title: str, description: str) -> str:
@@ -490,6 +598,19 @@ def _write_copy_quality_report(audit_path: Optional[Path], payload: dict) -> Non
         logger.info(f"[CopyGuard] quality report → {audit_path}")
     except Exception as e:
         logger.warning(f"[CopyGuard] failed to write quality report: {e}")
+
+
+def _write_copy_candidate_report(audit_path: Optional[Path], title: str, events: list[dict]) -> None:
+    """写出多候选标题/文案质量审计报告。"""
+    if not events:
+        return
+    _write_copy_quality_report(
+        audit_path,
+        {
+            "source_title": title,
+            "events": events,
+        },
+    )
 
 
 # ── 主生成函数 ───────────────────────────────────────────────────────────────
@@ -566,15 +687,12 @@ def generate_wechat_content(
     """
     api_key = settings.gemini_api_key
     if not api_key:
-        fallback_content = _translate_fallback(title, description)
-        _guard_wechat_content_quality(
+        return _select_wechat_content_candidate(
             title,
             description,
-            fallback_content,
+            [("fallback", lambda: _translate_fallback(title, description))],
             audit_path=audit_path,
-            provider="fallback",
         )
-        return fallback_content
 
     try:
         from google import genai
@@ -650,27 +768,31 @@ def generate_wechat_content(
             "content_hints": content_hints,
             "content_label": content_label,
         }
-        _guard_wechat_content_quality(
-            title,
-            description,
-            content,
-            audit_path=audit_path,
-            provider=model_name,
-        )
-        logger.info(f"AI success: category={category!r}, title={short_title!r}, label={content_label!r}")
-        return content
-
     except Exception as e:
         logger.error(f"google-genai call failed: {e}")
-        fallback_content = _translate_fallback(title, description)
-        _guard_wechat_content_quality(
+        return _select_wechat_content_candidate(
             title,
             description,
-            fallback_content,
+            [("fallback", lambda: _translate_fallback(title, description))],
             audit_path=audit_path,
-            provider="fallback",
         )
-        return fallback_content
+
+    selected_content = _select_wechat_content_candidate(
+        title,
+        description,
+        [
+            (model_name, lambda: content),
+            ("fallback", lambda: _translate_fallback(title, description)),
+        ],
+        audit_path=audit_path,
+    )
+    logger.info(
+        "AI content candidate selected: category=%r, title=%r, label=%r",
+        selected_content.get("category", ""),
+        selected_content.get("short_title", ""),
+        selected_content.get("content_label", ""),
+    )
+    return selected_content
 
 
 # ── 兼容旧接口 ───────────────────────────────────────────────────────────────
