@@ -28,12 +28,26 @@
 
 | 现在要做 | 暂时不做 |
 | --- | --- |
+| 受众画像校准 | 凭主观想象设计产品 |
 | 内容意图识别 | 自动引流 |
 | 资料包配置 | 真实服务号接口 |
 | 英语学习资产建议 | 自动生成付费资料 |
 | shadow CTA 演练 | 付费转化 |
 | 后台只读展示 | 训练营销售 |
 | 人工运营备注 | CRM 自动化 |
+
+### 受众画像校准结论
+
+基于视频号后台截图，当前粉丝总量约 12,180。已知画像包括：
+
+| 维度 | 数据 | 工单影响 |
+| --- | --- | --- |
+| 性别 | 男性约 70.27%，女性约 27.51%，未知约 2.22% | 资料表达优先信息密度、框架化、专业可信，不走低幼英语学习风 |
+| 地域 | 中国内地约 9,036 人，海外约 3,144 人 | 国内私域承接可行，但资料形态要兼容海外用户阅读 |
+| 省市 | 广东 17.63%、上海 16.94%、北京 14.03%；广东内深圳 39.92%、广州 26.18% | 一线/沿海/商业科技人群明显，应强调全球经济、科技商业、美股语境 |
+| 设备 | iOS 42.63%、安卓 36.91%、未知 20.46% | 移动端资料包和轻量复习卡优先，不先做复杂桌面课程 |
+
+校准后的产品假设：`词汇/词块` 入口不是学生背单词入口，而是 **财经英文原声精读入口**。所有后续 story 默认用这个假设设计字段、CTA 和报表；如后续年龄分布显示明显偏学生，再单独修正。跟读/精听必须使用原视频音频切片，不能用 TTS 替代真实原声。
 
 ## 工单流总览
 
@@ -123,8 +137,10 @@ flowchart LR
 | --- | --- | --- | --- |
 | PD-002-1 | 定义 `learning_format` 枚举 | 包含 `shadowing`、`sentence_loop`、`word_chunk`、`sentence_mining`、`bilingual_subtitle`、`anki_card`、`speech_quote` | PD-001 |
 | PD-002-2 | 定义 `difficulty` 枚举 | 包含 `beginner`、`intermediate`、`advanced`，未知值安全回退为 `intermediate` 或空 | PD-001 |
-| PD-002-3 | 写学习形式映射文档 | 说明每种学习形式适合的视频类型、字幕条件和不适用场景 | PD-002-1 |
+| PD-002-3 | 写学习形式映射文档 | 说明每种形式适合的视频类型、字幕条件、受众画像和不适用场景 | PD-002-1 |
 | PD-002-4 | 增加枚举单测 | 非法枚举失败或安全降级；缺字段不影响 `growth_meta` 读取 | PD-002-1 |
+| PD-002-5 | 增加 `audience_profile_hint` 枚举 | 默认支持 `finance_professional`、`city_white_collar`、`overseas_chinese`、`english_learner`，仅作为只读提示 | PD-001 |
+| PD-002-6 | 定义 `audio_source_policy` 枚举 | 默认 `original_audio_clip_only`；禁止 `tts_as_original` | PD-002-1 |
 
 **不做**：不生成真实学习资料，不写入公开视频文案，不创建数据库迁移。
 
@@ -170,8 +186,10 @@ flowchart LR
   "learning_asset": {
     "learning_format": ["shadowing", "word_chunk", "sentence_mining"],
     "source_type": "speech",
+    "audio_source_policy": "original_audio_clip_only",
     "difficulty": "intermediate",
-    "recommended_output": ["词块卡", "跟读句", "Anki卡"],
+    "audience_profile_hint": ["finance_professional", "city_white_collar"],
+    "recommended_output": ["词块卡", "原音频跟读句", "Anki卡"],
     "key_phrases": ["sticky inflation", "rate cut expectations"],
     "asset_priority": "high"
   }
@@ -180,15 +198,15 @@ flowchart LR
 
 | Task | 内容 | 验收标准 | 依赖 |
 | --- | --- | --- | --- |
-| PD-012-1 | 扩展 `growth_meta` schema | 增加 `learning_asset` 对象；字段至少包含 `learning_format`、`source_type`、`difficulty`、`recommended_output`、`key_phrases`、`asset_priority` | PD-010, PD-002 |
-| PD-012-2 | 输出学习形式建议 | 能把演讲/访谈/财经词汇类内容映射到合适学习形式；无法判断时返回空资产 | PD-012-1 |
-| PD-012-3 | 提取候选词块 | 只输出候选 `key_phrases`，不进入发布文案，不生成 Anki 文件 | PD-012-1 |
+| PD-012-1 | 扩展 `growth_meta` schema | 增加 `learning_asset` 对象；字段至少包含 `learning_format`、`source_type`、`audio_source_policy`、`difficulty`、`audience_profile_hint`、`recommended_output`、`key_phrases`、`asset_priority` | PD-010, PD-002 |
+| PD-012-2 | 输出学习形式建议 | 能把演讲/访谈/财经词汇类内容映射到适合一线/沿海财经效率型受众的学习形式；无法判断时返回空资产 | PD-012-1 |
+| PD-012-3 | 提取候选词块和原音频切片候选 | 只输出候选 `key_phrases` 和句子级 `audio_clip` 元数据，不进入发布文案，不生成 Anki 文件 | PD-012-1 |
 | PD-012-4 | fallback 安全默认 | LLM 不可用或 JSON 损坏时返回空 `learning_asset`，不影响 copy/title/category/label 输出 | PD-012-2 |
 | PD-012-5 | 单测验证 copy 不变 | 原 `{yid}_copy.txt` 不被修改；`growth_meta` 缺 `learning_asset` 时读取层不崩溃 | PD-012-1 |
 
-**不做**：不自动生成 Anki 文件，不自动发布资料包，不把学习资产写入公开视频。
+**不做**：不自动生成 Anki 文件，不自动发布资料包，不把学习资产写入公开视频，不使用 TTS 冒充原声。
 
-**Definition of Done**：新增 schema 测试、fallback 测试、copy 不变测试；`learning_asset` 只读可回滚；不增加 DB 迁移。
+**Definition of Done**：新增 schema 测试、fallback 测试、copy 不变测试；`learning_asset` 只读可回滚；不增加 DB 迁移；跟读/精听相关字段必须标记 `original_audio_clip_only`。
 
 ## Milestone 2：后台只读可见
 
@@ -229,6 +247,7 @@ flowchart LR
 | PD-022-2 | 输出高优先级素材列表 | 包含视频 ID、推荐资料类型、风险等级、`asset_priority` | PD-022-1 |
 | PD-022-3 | 输出词汇入口素材池 | 只列 `risk=low` 且适合 `词汇/词块` 入口的视频 | PD-022-1 |
 | PD-022-4 | 生成 Markdown 报告 | 报告可直接用于人工选题；缺 `learning_asset` 的视频被归为“待补充” | PD-022-1 |
+| PD-022-5 | 输出受众匹配提示 | 标记更适合 `finance_professional/city_white_collar/overseas_chinese` 的素材 | PD-022-1 |
 
 **不做**：不计算收入，不自动生成付费内容，不接 CRM。
 
@@ -314,6 +333,8 @@ flowchart LR
 | --- | --- |
 | 标签可信 | 连续 7 天 `growth_meta` 生成稳定，人工抽检 80% 以上可信 |
 | 学习资产可信 | `learning_asset` 对英语学习/财经词汇视频的人工抽检 80% 以上可信 |
+| 画像匹配 | 抽检确认 CTA 和资料包表达符合一线/沿海财经效率型受众，不走学生化英语包装 |
+| 原声约束 | 跟读/精听候选必须来自原视频音频切片，不允许 TTS 冒充原声 |
 | 入口聚焦 | 至少一个低风险入口有足够素材，真实通车前第一入口只能是 `词汇/词块` |
 | 合规稳定 | shadow CTA blocked 原因清晰，无明显漏放 |
 | 行为隔离 | 现有发布成功率、登录状态、上传流程未被影响 |
@@ -415,6 +436,8 @@ gantt
 | 配置安全 | 新配置缺失时安全降级 |
 | 合规安全 | CTA 只能来自配置，不能由 LLM 自由生成 |
 | 学习资产安全 | `learning_asset` 只能作为 sidecar 子对象和只读展示，不自动生成付费资料 |
+| 原声安全 | 跟读/精听音频必须保留原视频来源、起止时间和用途；TTS 只能用于自制旁白，不得标为原声 |
+| 画像安全 | 不基于单张截图过度自动化决策；受众画像只作为人工校准和报表维度 |
 | TDD/测试 | 纯逻辑先写失败测试；至少覆盖默认关闭、缺文件、损坏文件、禁止词命中、未知学习形式、LLM fallback |
 | 验证 | 在工单记录中写明实际运行过的测试命令或浏览器验收方式 |
 | 文档 | 修改超过 10 行逻辑时更新文件 Modification History |
@@ -426,3 +449,5 @@ gantt
 | 1.0.0 | 2026-07-04 | Codex | 初始创建：对水下工程路线图进行 review，并拆分为 story/task 工单流 |
 | 1.1.0 | 2026-07-04 | Codex | 确定项目代号“暗渡成仓”，补充 TDD、测试验证、默认关闭和可回滚工程规范 |
 | 1.2.0 | 2026-07-04 | Codex | 纳入英语学习资产化上游能力：新增学习形式枚举、learning_asset_meta、学习资产周报和低风险英语学习 CTA 模板 |
+| 1.3.0 | 2026-07-04 | Codex | 根据粉丝性别、地域、城市和设备画像校准产品假设：词汇/词块入口定位为财经英文原声精读 |
+| 1.4.0 | 2026-07-04 | Codex | 明确跟读/精听素材必须截取原视频音频，禁止 TTS 冒充原声 |
