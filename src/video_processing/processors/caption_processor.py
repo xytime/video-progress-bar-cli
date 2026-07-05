@@ -27,6 +27,7 @@
 | 1.14.0 | 2026-06-09 | Claude_Opus_4.6_Thinking_planning   | Aliyun/Google 翻译成功后二次尝试 Gemini 对齐模式提取 vocab，解决 Gemini 429 时生词丢失问题 |
 | 1.15.0 | 2026-07-05 | Codex | 接入 translation_quality_guard：翻译后统一做事实保真审计，P0 阻断，P1 告警 |
 | 1.16.0 | 2026-07-05 | Codex | Gemini 翻译接入全片 TranslationContext，减少逐句翻译丢失语境 |
+| 1.17.0 | 2026-07-05 | Codex | 质量守门 P0 触发供应商降级：Gemini→Aliyun→Google，最终供应商仍失败才阻断 |
 """
 import logging
 from pathlib import Path
@@ -555,8 +556,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 if i < len(segments):
                     segments[i]['zh_text'] = res.get('translation', '')
                     segments[i]['vocab']   = res.get('vocab', {})
-            self._guard_translation_quality(texts, segments, provider="Gemini")
-            return segments
+            if self._guard_translation_quality(texts, segments, provider="Gemini", final_provider=False):
+                return segments
 
         # ── 二级：Aliyun MT（仅翻译，无 vocab 对齐）──────────────────────────
         ali_tgt = "zh" if self.target_lang in ("zh-CN", "zh", None) else self.target_lang
@@ -590,8 +591,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
             except Exception as e:
                 logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
 
-            self._guard_translation_quality(texts, segments, provider="Aliyun")
-            return segments
+            if self._guard_translation_quality(texts, segments, provider="Aliyun", final_provider=False):
+                return segments
 
         # ── 三级：Google Translate（无 vocab）────────────────────────────────
         logger.warning("Both Gemini and Aliyun failed. Falling back to Google Translate.")
@@ -617,7 +618,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         except Exception as e:
             logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
 
-        self._guard_translation_quality(texts, segments, provider="Google")
+        self._guard_translation_quality(texts, segments, provider="Google", final_provider=True)
         return segments
 
     def _guard_translation_quality(
@@ -626,8 +627,13 @@ class AutoCaptionProcessor(VideoProcessorBase):
         segments: List[Dict[str, Any]],
         *,
         provider: str,
-    ) -> None:
-        """翻译后事实保真审计：P0 阻断，P1 仅告警。"""
+        final_provider: bool = True,
+    ) -> bool:
+        """翻译后事实保真审计。
+
+        非最终供应商命中 P0 时返回 False，调用方继续降级；最终供应商命中
+        P0 时抛出 VideoProcessingError，阻断流水线。
+        """
         translated_texts = [seg.get("zh_text", "") for seg in segments]
         context_text = "\n".join(source_texts)
         summary = evaluate_translation_batch(
@@ -651,9 +657,17 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 f"{issue.code}: {issue.message}"
                 for issue in summary.blocking_issues[:3]
             )
+            if not final_provider:
+                logger.warning(
+                    "[TranslationGuard][%s] Blocking issue found; falling back to next provider: %s",
+                    provider,
+                    details,
+                )
+                return False
             raise VideoProcessingError(
                 f"Translation quality guard blocked {provider} output: {details}"
             )
+        return True
 
     def _load_model(self):
         """加载 Whisper 模型"""
