@@ -14,6 +14,7 @@
 | 1.0.0   | 2026-06-26 | Claude_Opus_4.8 | 初版：每日发布/黑名单/会话/限流巡检工单 |
 | 1.1.0   | 2026-07-05 | Codex           | 接入翻译质量审计聚合摘要，纳入每日巡检 |
 | 1.2.0   | 2026-07-05 | Codex           | 翻译质量摘要显示非阻断告警数，便于追踪术语一致性漂移 |
+| 1.3.0   | 2026-07-05 | Codex           | 翻译质量摘要分开展示最高频告警与最高频阻断 |
 """
 from __future__ import annotations
 
@@ -48,6 +49,8 @@ def format_translation_quality(summary: dict) -> str:
     warning_count = int(summary.get("warning_count") or 0)
     blocked_count = int(summary.get("blocked_count") or 0)
     issue_counts = summary.get("issue_counts") or {}
+    warning_issue_counts = summary.get("warning_issue_counts") or {}
+    blocking_issue_counts = summary.get("blocking_issue_counts") or {}
     provider_counts = summary.get("provider_counts") or {}
 
     if files_scanned == 0:
@@ -58,6 +61,16 @@ def format_translation_quality(summary: dict) -> str:
         code, count = max(issue_counts.items(), key=lambda item: item[1])
         top_issue = f"{code}×{count}"
 
+    top_warning = "无"
+    if warning_issue_counts:
+        code, count = max(warning_issue_counts.items(), key=lambda item: item[1])
+        top_warning = f"{code}×{count}"
+
+    top_blocking = "无"
+    if blocking_issue_counts:
+        code, count = max(blocking_issue_counts.items(), key=lambda item: item[1])
+        top_blocking = f"{code}×{count}"
+
     top_provider = "无"
     if provider_counts:
         provider, count = max(provider_counts.items(), key=lambda item: item[1])
@@ -66,6 +79,7 @@ def format_translation_quality(summary: dict) -> str:
     return (
         f"翻译质量: 报告 {files_scanned} | 事件 {event_count} | "
         f"告警 {warning_count} | 阻断/降级 {blocked_count} | "
+        f"最高频告警 {top_warning} | 最高频阻断 {top_blocking} | "
         f"最高频错误 {top_issue} | provider {top_provider}"
     )
 

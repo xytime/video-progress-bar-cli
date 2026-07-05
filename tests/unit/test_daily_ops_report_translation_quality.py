@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖每日运维报告中的翻译质量摘要格式 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖翻译质量摘要展示非阻断告警数 |
+| 1.2.0   | 2026-07-05 | Codex  | 覆盖翻译质量摘要分开展示最高频告警与阻断 |
 """
 
 import sys
@@ -33,6 +34,12 @@ def test_format_translation_quality_with_counts():
                 "FINANCE_EVENT_DIRECTION_REVERSAL": 2,
                 "NUMBER_MAGNITUDE_MISMATCH": 1,
             },
+            "warning_issue_counts": {
+                "AMOUNT_CONSISTENCY_UNIT_DRIFT": 1,
+            },
+            "blocking_issue_counts": {
+                "FINANCE_EVENT_DIRECTION_REVERSAL": 2,
+            },
             "provider_counts": {
                 "Gemini": 3,
                 "Aliyun": 2,
@@ -44,5 +51,6 @@ def test_format_translation_quality_with_counts():
     assert "事件 5" in line
     assert "告警 1" in line
     assert "阻断/降级 2" in line
+    assert "AMOUNT_CONSISTENCY_UNIT_DRIFT×1" in line
     assert "FINANCE_EVENT_DIRECTION_REVERSAL×2" in line
     assert "Gemini×3" in line

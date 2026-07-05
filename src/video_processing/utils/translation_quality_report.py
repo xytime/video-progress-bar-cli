@@ -9,6 +9,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：聚合字幕/文案质量报告，统计 provider、issue code 与阻断项 |
 | 1.1.0   | 2026-07-05 | Codex  | 新增 warning_count/warning_files，让非阻断一致性告警可运营观测 |
+| 1.2.0   | 2026-07-05 | Codex  | 分离 warning/blocking issue 计数，让日报可同时展示最高频告警与阻断 |
 """
 
 from __future__ import annotations
@@ -30,6 +31,8 @@ class TranslationQualityAggregate:
     blocked_count: int = 0
     provider_counts: Counter = field(default_factory=Counter)
     issue_counts: Counter = field(default_factory=Counter)
+    warning_issue_counts: Counter = field(default_factory=Counter)
+    blocking_issue_counts: Counter = field(default_factory=Counter)
     warning_files: List[Dict[str, Any]] = field(default_factory=list)
     blocked_files: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -41,6 +44,8 @@ class TranslationQualityAggregate:
             "blocked_count": self.blocked_count,
             "provider_counts": dict(sorted(self.provider_counts.items())),
             "issue_counts": dict(sorted(self.issue_counts.items())),
+            "warning_issue_counts": dict(sorted(self.warning_issue_counts.items())),
+            "blocking_issue_counts": dict(sorted(self.blocking_issue_counts.items())),
             "warning_files": self.warning_files,
             "blocked_files": self.blocked_files,
         }
@@ -78,6 +83,12 @@ def aggregate_quality_reports(root: Path) -> Dict[str, Any]:
             for issue in issues:
                 code = str(issue.get("code") or "UNKNOWN")
                 aggregate.issue_counts[code] += 1
+            for issue in warning_issues:
+                code = str(issue.get("code") or "UNKNOWN")
+                aggregate.warning_issue_counts[code] += 1
+            for issue in blocking_issues:
+                code = str(issue.get("code") or "UNKNOWN")
+                aggregate.blocking_issue_counts[code] += 1
 
             if warning_issues:
                 aggregate.warning_count += 1

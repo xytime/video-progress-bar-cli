@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕/文案翻译质量报告聚合 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖术语一致性 warning 进入聚合统计 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖 warning_count/warning_files 聚合字段 |
+| 1.3.0   | 2026-07-05 | Codex  | 覆盖 warning/blocking issue counts 分离统计 |
 """
 
 import json
@@ -97,6 +98,14 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
         "FINANCE_TERM_AMBIGUOUS_CLOSE": 1,
         "NUMBER_MAGNITUDE_MISMATCH": 1,
         "TERM_CONSISTENCY_FUND_CLOSE_DRIFT": 1,
+    }
+    assert summary["warning_issue_counts"] == {
+        "FINANCE_TERM_AMBIGUOUS_CLOSE": 1,
+        "TERM_CONSISTENCY_FUND_CLOSE_DRIFT": 1,
+    }
+    assert summary["blocking_issue_counts"] == {
+        "FINANCE_EVENT_DIRECTION_REVERSAL": 1,
+        "NUMBER_MAGNITUDE_MISMATCH": 1,
     }
     assert summary["warning_files"][0]["issue_codes"] == [
         "FINANCE_TERM_AMBIGUOUS_CLOSE",
