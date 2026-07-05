@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖 P0 质量失败时 Gemini→Aliyun→Google 自动降级 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖 *.translation_quality.json 审计报告落盘与 fallback/fail 动作 |
 | 1.3.0   | 2026-07-05 | Codex  | 覆盖 settings 配置字幕翻译供应商顺序 |
+| 1.4.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 顺序接入 |
 """
 
 import json
@@ -150,6 +151,55 @@ def test_translate_segments_respects_provider_order_without_gemini(
     mock_extract_vocab_batch.assert_not_called()
     mock_aliyun.assert_called_once()
     mock_google.assert_not_called()
+
+
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._align_vocab_after_plain_translation")
+@patch("video_processing.processors.caption_processor._google_batch_fallback")
+@patch("video_processing.processors.caption_processor.translate_batch_deepseek")
+def test_translate_segments_can_use_deepseek_provider(
+    mock_deepseek,
+    mock_google,
+    _mock_align_vocab,
+    _mock_validate_input,
+):
+    processor = _processor()
+    source = "MGX announced the final close of Fund I at $49 billion."
+    mock_deepseek.return_value = ["MGX一期基金最终募集规模达490亿美元。"]
+
+    with patch(
+        "video_processing.processors.caption_processor.settings",
+        _SettingsOrder(["deepseek", "google"]),
+    ):
+        result = processor._translate_segments([{"text": source}])
+
+    assert result[0]["zh_text"] == "MGX一期基金最终募集规模达490亿美元。"
+    mock_deepseek.assert_called_once()
+    mock_google.assert_not_called()
+
+
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._align_vocab_after_plain_translation")
+@patch("video_processing.processors.caption_processor._google_batch_fallback")
+@patch("video_processing.processors.caption_processor.translate_batch_deepseek", return_value=None)
+def test_translate_segments_falls_back_when_deepseek_unavailable(
+    _mock_deepseek,
+    mock_google,
+    _mock_align_vocab,
+    _mock_validate_input,
+):
+    processor = _processor()
+    source = "MGX announced the final close of Fund I at $49 billion."
+    mock_google.return_value = ["MGX一期基金最终募集规模达490亿美元。"]
+
+    with patch(
+        "video_processing.processors.caption_processor.settings",
+        _SettingsOrder(["deepseek", "google"]),
+    ):
+        result = processor._translate_segments([{"text": source}])
+
+    assert result[0]["zh_text"] == "MGX一期基金最终募集规模达490亿美元。"
+    mock_google.assert_called_once()
 
 
 @patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")

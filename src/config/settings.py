@@ -24,6 +24,7 @@
 | 3.4.0 | 2026-06-28 | Claude_Opus_4.8                     | 新增 censorship_bypass_channels（逗号分隔 channel_id）+ censorship_bypass_channel_set 解析属性：受信任频道整体跳过审查(P0/P1/P2/CP)，供运营对自审过的优质频道开绿灯；另新增 wechat_session_warn_hours(会话临期预警阈值) |
 | 3.5.0 | 2026-06-28 | Claude_Opus_4.8                     | 新增 channel_score_floors（"channel_id:分数"）+ channel_score_floor_map：受信任频道评分地板分，使其所有视频(含低播放)过发布线 ≥75 全发（@wstruthbombs 默认 80）|
 | 3.6.0 | 2026-07-05 | Codex                               | 新增 subtitle_translation_provider_order，支持字幕翻译供应商顺序配置 |
+| 3.7.0 | 2026-07-05 | Codex                               | 新增 DeepSeek OpenAI-compatible API 配置，为字幕翻译 provider 预留 |
 """
 import json
 import socket
@@ -115,6 +116,11 @@ class Settings(BaseSettings):
     # 字幕翻译供应商顺序，逗号分隔。默认保持现有行为：Gemini → Aliyun → Google。
     # 后续接入 DeepSeek/OpenAI 时，只需在配置解析白名单和 provider 构造处扩展。
     subtitle_translation_provider_order: str = "gemini,aliyun,google"
+
+    # DeepSeek OpenAI-compatible API（默认不启用；需把 deepseek 放入 subtitle_translation_provider_order）
+    deepseek_api_key: Optional[str] = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-v4-flash"
 
     # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: Clash Mi 下载节点切换配置
     # 架构背景：Clash Mi 使用 macOS Network Extension，系统扩展不允许动态开放任意端口，
@@ -250,7 +256,7 @@ class Settings(BaseSettings):
     @property
     def subtitle_translation_provider_order_list(self) -> list[str]:
         """字幕翻译供应商顺序（过滤未知值，空配置回退默认顺序）。"""
-        allowed = {"gemini", "aliyun", "google"}
+        allowed = {"gemini", "deepseek", "aliyun", "google"}
         providers = []
         for item in (self.subtitle_translation_provider_order or "").split(","):
             provider = item.strip().lower()

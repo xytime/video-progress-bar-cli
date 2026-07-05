@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕翻译供应商顺序配置解析 |
+| 1.1.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 配置解析 |
 """
 
 import sys
@@ -29,7 +30,7 @@ def test_subtitle_translation_provider_order_filters_unknowns_and_duplicates():
         subtitle_translation_provider_order="aliyun,deepseek,google,aliyun,gemini",
     )
 
-    assert settings.subtitle_translation_provider_order_list == ["aliyun", "google", "gemini"]
+    assert settings.subtitle_translation_provider_order_list == ["aliyun", "deepseek", "google", "gemini"]
 
 
 def test_empty_subtitle_translation_provider_order_falls_back_to_default():

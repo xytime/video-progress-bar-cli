@@ -31,6 +31,7 @@
 | 1.18.0 | 2026-07-05 | Codex | 翻译质量审计落盘为 *.translation_quality.json，记录供应商、告警、阻断与降级动作 |
 | 1.19.0 | 2026-07-05 | Codex | 引入 provider-neutral SubtitleTranslationCandidate，统一字幕候选结果回填 |
 | 1.20.0 | 2026-07-05 | Codex | 字幕翻译供应商顺序改由 settings 配置，主流程按 provider candidate 循环编排 |
+| 1.21.0 | 2026-07-05 | Codex | 接入 DeepSeek 字幕翻译候选 provider（配置启用，默认关闭） |
 """
 import logging
 from pathlib import Path
@@ -64,6 +65,7 @@ from ..utils.subtitle_translation_provider import (
     SubtitleTranslationCandidate,
     apply_translation_candidate,
 )
+from ..utils.deepseek_translation import translate_batch_deepseek
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -581,6 +583,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
         """按 provider 名称构建字幕翻译候选。"""
         if provider == "gemini":
             return self._build_gemini_candidate(texts, translation_context)
+        if provider == "deepseek":
+            return self._build_deepseek_candidate(texts, translation_context)
         if provider == "aliyun":
             return self._build_aliyun_candidate(texts)
         if provider == "google":
@@ -612,6 +616,18 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 vocabs=[res.get("vocab", {}) for res in gemini_results],
                 supports_vocab=True,
             )
+        return None
+
+    def _build_deepseek_candidate(
+        self,
+        texts: List[str],
+        translation_context: str,
+    ) -> Optional[SubtitleTranslationCandidate]:
+        """DeepSeek：仅翻译，无 vocab。"""
+        translated = translate_batch_deepseek(texts, context_text=translation_context)
+        if translated:
+            logger.info("DeepSeek produced a subtitle translation candidate (no vocab alignment).")
+            return SubtitleTranslationCandidate(provider="DeepSeek", translations=translated)
         return None
 
     def _build_aliyun_candidate(self, texts: List[str]) -> Optional[SubtitleTranslationCandidate]:
