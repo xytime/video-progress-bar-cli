@@ -20,6 +20,7 @@
 | 1.13.0  | 2026-06-22 | Claude_Opus_4.8                         | [🅲 文案本土化 V2] _SYSTEM_INSTRUCTION 升级为视频号原生爆款操盘手：强化平台心智（完播率/转发率优先、去搬运去翻译腔）、短标题黄金公式细化、禁止清单扩充翻译腔/网络梗；不写入未证实受众统计；post-processing 兜底新增 保姆级/YYDS/绝绝子 |
 | 1.14.0  | 2026-06-22 | Claude_Opus_4.8                         | [架构 C] graceful_truncate_title 下沉至 utils.text_utils 单一真相源；本文件顶部 re-import 保持既有调用方零改动；消除 pipeline_manager→scripts 反向依赖 |
 | 1.15.0  | 2026-06-22 | Claude_Opus_4.8                         | [🅴 反搬运·零渲染] 接入 verbatim_overlap_ratio：文案对源描述逐字照搬 >=25% 时告警（原创度信号，不阻断发布） |
+| 1.16.0  | 2026-07-05 | Codex                                   | 接入 translation_quality_guard：标题/文案生成后做事实保真审计，P0 阻断写出 |
 """
 
 import re
@@ -47,6 +48,7 @@ from video_processing.utils.translation_helper import translate_text as _transla
 # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils（单一真相源）；此处 re-import 保持
 # `from copywriter import graceful_truncate_title` 的既有调用方（wechat_uploader、测试）零改动。
 from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
+from video_processing.utils.translation_quality_guard import evaluate_translation_pair
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("copywriter")
@@ -365,6 +367,33 @@ def _translate_fallback(title: str, description: str) -> dict:
         }
 
 
+def _guard_wechat_content_quality(title: str, description: str, content: dict) -> None:
+    """对标题/文案整体做事实保真审计；P0 阻断写出。"""
+    source_text = "\n".join(part for part in (title, description) if part and part.strip())
+    translated_text = "\n".join(
+        str(content.get(key, "")).strip()
+        for key in ("short_title", "hook_subtitle", "copy")
+        if str(content.get(key, "")).strip()
+    )
+    if not source_text or not translated_text:
+        return
+
+    result = evaluate_translation_pair(source_text, translated_text)
+    for issue in result.issues:
+        logger.warning(
+            "[CopyGuard][%s] %s | source=%s translation=%s",
+            issue.code,
+            issue.message,
+            issue.source_signal,
+            issue.translation_signal,
+        )
+
+    blocking = [issue for issue in result.issues if issue.severity == "P0"]
+    if blocking:
+        details = "; ".join(f"{issue.code}: {issue.message}" for issue in blocking[:3])
+        raise ValueError(f"WeChat copy quality guard blocked output: {details}")
+
+
 # ── 主生成函数 ───────────────────────────────────────────────────────────────
 
 # [Claude_Sonnet_4.6_Thinking_planning] v1.8.0 模块级常量
@@ -435,7 +464,9 @@ def generate_wechat_content(title: str, description: str,
     """
     api_key = settings.gemini_api_key
     if not api_key:
-        return _translate_fallback(title, description)
+        fallback_content = _translate_fallback(title, description)
+        _guard_wechat_content_quality(title, description, fallback_content)
+        return fallback_content
 
     try:
         from google import genai
@@ -522,8 +553,7 @@ def generate_wechat_content(title: str, description: str,
             logger.warning(f"[Originality] copy overlaps source description {_overlap:.0%} "
                            f"(>=25%) — possible搬运 signal; title={title!r}")
 
-        logger.info(f"AI success: category={category!r}, title={short_title!r}, label={content_label!r}")
-        return {
+        content = {
             "short_title":   short_title,
             "hook_subtitle": hook_subtitle,
             "copy":          copy,
@@ -531,10 +561,15 @@ def generate_wechat_content(title: str, description: str,
             "content_hints": content_hints,
             "content_label": content_label,
         }
+        _guard_wechat_content_quality(title, description, content)
+        logger.info(f"AI success: category={category!r}, title={short_title!r}, label={content_label!r}")
+        return content
 
     except Exception as e:
         logger.error(f"google-genai call failed: {e}")
-        return _translate_fallback(title, description)
+        fallback_content = _translate_fallback(title, description)
+        _guard_wechat_content_quality(title, description, fallback_content)
+        return fallback_content
 
 
 # ── 兼容旧接口 ───────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@
 | 1.1.0   | 2026-05-26 | Gemini_2.5_Pro_planning    | 新增P0回归测试: ①零分fallback, ②英文子串污染, ③音乐7用例覆盖率 |
 | 1.2.0   | 2026-05-27 | Gemini_3.5_Flash_planning  | 新增 graceful_truncate_title 测试用例（括号剔除与最左侧语义段优先） |
 | 1.3.0   | 2026-06-22 | Claude_Opus_4.8            | [🅲] 新增 _apply_post_processing 兜底纠偏测试（营销词/网络梗替换、干净文本不变） |
+| 1.4.0   | 2026-07-05 | Codex                      | 新增 copywriter 事实保真守门器测试：P0 阻断、正确募资语义放行 |
 """
 import sys
 import pytest
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from scripts.copywriter import (
     classify_category, DEFAULT_CATEGORY, graceful_truncate_title,
     extract_headline_workaround, _apply_post_processing,
+    _guard_wechat_content_quality,
 )
 from video_processing.utils.text_utils import verbatim_overlap_ratio
 
@@ -214,3 +216,36 @@ def test_graceful_truncate_title_dangling_reporting_clause():
     # “但是不一定要惊慌”以“但是”/“但”开头被中度惩罚(score+50)
     # 最终应选择中间正常的“人工智能要做好准备”
     assert truncated == "人工智能要做好准备"
+
+
+# ── 文案事实保真守门器 ───────────────────────────────────────────────────────
+
+def test_copy_guard_blocks_fundraising_as_market_exit():
+    title = "The Money Just SOUNDED Its FINAL ALARM!"
+    description = (
+        "MGX announced the final close of Fund I at $49 billion, "
+        "exceeding its initial $45 billion target."
+    )
+    content = {
+        "short_title": "490亿主权基金撤退",
+        "hook_subtitle": "主权基金离场",
+        "copy": "这只主权投资基金选择退出市场，AI资金开始撤退。",
+    }
+
+    with pytest.raises(ValueError, match="WeChat copy quality guard blocked"):
+        _guard_wechat_content_quality(title, description, content)
+
+
+def test_copy_guard_allows_fundraising_complete_copy():
+    title = "The Money Just SOUNDED Its FINAL ALARM!"
+    description = (
+        "MGX announced the final close of Fund I at $49 billion, "
+        "exceeding its initial $45 billion target."
+    )
+    content = {
+        "short_title": "AI基金超募",
+        "hook_subtitle": "490亿美元完成募集",
+        "copy": "MGX一期基金最终募集规模达490亿美元，超过原定450亿美元目标。",
+    }
+
+    _guard_wechat_content_quality(title, description, content)
