@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕翻译候选质量决策与审计事件 |
+| 1.1.0   | 2026-07-05 | Codex  | 覆盖质量上下文参与守门与审计事件输出 |
 """
 
 import sys
@@ -15,6 +16,7 @@ if str(_src_root) not in sys.path:
     sys.path.insert(0, str(_src_root))
 
 from video_processing.utils.subtitle_translation_quality import (  # noqa: E402
+    SubtitleTranslationQualityContext,
     evaluate_subtitle_translation_candidate,
 )
 
@@ -88,3 +90,47 @@ def test_quality_decision_audit_event_is_report_ready():
     assert event["status"] == "passed"
     assert event["action"] == "accept"
     assert event["warning_issues"][0]["code"] == "FINANCE_TERM_AMBIGUOUS_CLOSE"
+
+
+def test_quality_context_is_included_in_audit_event():
+    source = ["It closed at $49 billion."]
+    translated = ["它最终募集规模达490亿美元。"]
+    quality_context = SubtitleTranslationQualityContext(
+        source_context_text="MGX announced the final close of Fund I at $49 billion.",
+        domain="finance/technology",
+        facts=["The source describes a fund reaching final close/completing fundraising."],
+        term_notes=["'final close' means 最终关账, not 关闭."],
+    )
+
+    decision = evaluate_subtitle_translation_candidate(
+        source,
+        translated,
+        provider="UnitTest",
+        final_provider=True,
+        quality_context=quality_context,
+    )
+    event = decision.to_audit_event(final_provider=True)
+
+    assert event["quality_context"]["domain"] == "finance/technology"
+    assert "final close" in event["quality_context"]["term_notes"][0]
+
+
+def test_quality_context_can_supply_missing_fact_signal_to_guard():
+    source = ["It closed at $49 billion."]
+    translated = ["它撤退了490亿美元。"]
+    quality_context = SubtitleTranslationQualityContext(
+        source_context_text="MGX announced the final close of Fund I at $49 billion.",
+        domain="finance",
+        facts=["The source describes a fund reaching final close/completing fundraising."],
+    )
+
+    decision = evaluate_subtitle_translation_candidate(
+        source,
+        translated,
+        provider="UnitTest",
+        final_provider=False,
+        quality_context=quality_context,
+    )
+
+    assert decision.should_fallback
+    assert decision.blocking_issues[0].code == "FINANCE_EVENT_DIRECTION_REVERSAL"

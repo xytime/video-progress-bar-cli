@@ -33,6 +33,7 @@
 | 1.20.0 | 2026-07-05 | Codex | 字幕翻译供应商顺序改由 settings 配置，主流程按 provider candidate 循环编排 |
 | 1.21.0 | 2026-07-05 | Codex | 接入 DeepSeek 字幕翻译候选 provider（配置启用，默认关闭） |
 | 1.22.0 | 2026-07-05 | Codex | 将字幕翻译质量决策抽象到 subtitle_translation_quality，主流程只保留编排职责 |
+| 1.23.0 | 2026-07-05 | Codex | 质量审核复用 TranslationContext 的领域、事实与术语提示，并写入审计事件 |
 """
 import logging
 from pathlib import Path
@@ -65,7 +66,10 @@ from ..utils.subtitle_translation_provider import (
     SubtitleTranslationCandidate,
     apply_translation_candidate,
 )
-from ..utils.subtitle_translation_quality import evaluate_subtitle_translation_candidate
+from ..utils.subtitle_translation_quality import (
+    SubtitleTranslationQualityContext,
+    evaluate_subtitle_translation_candidate,
+)
 from ..utils.deepseek_translation import translate_batch_deepseek
 from config.settings import settings
 
@@ -550,25 +554,34 @@ class AutoCaptionProcessor(VideoProcessorBase):
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
         self._translation_quality_audit = []
-        translation_context = build_translation_context(texts).to_prompt_context()
+        translation_context = build_translation_context(texts)
+        translation_prompt_context = translation_context.to_prompt_context()
+        quality_context = SubtitleTranslationQualityContext(
+            source_context_text="\n".join(texts),
+            domain=translation_context.domain,
+            facts=translation_context.facts,
+            term_notes=translation_context.term_notes,
+            style_notes=translation_context.style_notes,
+        )
 
         provider_order = settings.subtitle_translation_provider_order_list
         for idx, provider in enumerate(provider_order):
             final_provider = idx == len(provider_order) - 1
-            candidate = self._build_translation_candidate(provider, texts, translation_context)
+            candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
             if not candidate or not candidate.is_usable_for(len(segments)):
                 logger.warning("[Translate] Provider %s produced no usable candidate.", provider)
                 continue
 
             apply_translation_candidate(segments, candidate)
             if not candidate.supports_vocab:
-                self._align_vocab_after_plain_translation(texts, segments, translation_context, candidate.provider)
+                self._align_vocab_after_plain_translation(texts, segments, translation_prompt_context, candidate.provider)
 
             if self._guard_translation_quality(
                 texts,
                 segments,
                 provider=candidate.provider,
                 final_provider=final_provider,
+                quality_context=quality_context,
             ):
                 self._write_translation_quality_report()
                 return segments
@@ -680,16 +693,18 @@ class AutoCaptionProcessor(VideoProcessorBase):
         *,
         provider: str,
         final_provider: bool = True,
+        quality_context: SubtitleTranslationQualityContext | None = None,
     ) -> bool:
         """翻译后事实保真审计并返回候选是否可接受。"""
         translated_texts = [seg.get("zh_text", "") for seg in segments]
-        context_text = "\n".join(source_texts)
+        fallback_context_text = "\n".join(source_texts)
         decision = evaluate_subtitle_translation_candidate(
             source_texts,
             translated_texts,
             provider=provider,
             final_provider=final_provider,
-            context_text=context_text,
+            context_text=fallback_context_text,
+            quality_context=quality_context,
         )
 
         for issue in decision.warning_issues:

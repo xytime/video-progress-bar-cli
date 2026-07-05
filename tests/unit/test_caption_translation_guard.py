@@ -9,6 +9,7 @@
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖 *.translation_quality.json 审计报告落盘与 fallback/fail 动作 |
 | 1.3.0   | 2026-07-05 | Codex  | 覆盖 settings 配置字幕翻译供应商顺序 |
 | 1.4.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 顺序接入 |
+| 1.5.0   | 2026-07-05 | Codex  | 覆盖质量审计报告写入全片上下文摘要 |
 """
 
 import json
@@ -121,6 +122,7 @@ def test_translate_segments_writes_quality_report_for_fallback(
     assert report["events"][0]["status"] == "blocked"
     assert report["events"][0]["action"] == "fallback"
     assert report["events"][0]["blocking_issues"][0]["code"] == "FINANCE_EVENT_DIRECTION_REVERSAL"
+    assert report["events"][0]["quality_context"]["facts"]
     assert report["events"][1]["status"] == "passed"
     assert report["events"][1]["action"] == "accept"
 
