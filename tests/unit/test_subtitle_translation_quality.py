@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕翻译候选质量决策与审计事件 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖质量上下文参与守门与审计事件输出 |
+| 1.2.0   | 2026-07-05 | Codex  | 覆盖整片术语一致性 warning 合并进质量决策 |
 """
 
 import sys
@@ -134,3 +135,27 @@ def test_quality_context_can_supply_missing_fact_signal_to_guard():
 
     assert decision.should_fallback
     assert decision.blocking_issues[0].code == "FINANCE_EVENT_DIRECTION_REVERSAL"
+
+
+def test_quality_decision_includes_consistency_warning_issues():
+    source = [
+        "MGX announced the final close of Fund I at $49 billion.",
+        "MGX closed its fund after strong investor demand.",
+    ]
+    translated = [
+        "MGX宣布一期基金最终募集规模达490亿美元。",
+        "MGX在强劲投资者需求后关闭了该基金。",
+    ]
+
+    decision = evaluate_subtitle_translation_candidate(
+        source,
+        translated,
+        provider="UnitTest",
+        final_provider=True,
+    )
+    event = decision.to_audit_event(final_provider=True)
+
+    assert decision.accepted
+    assert "TERM_CONSISTENCY_FUND_CLOSE_DRIFT" in {
+        issue["code"] for issue in event["warning_issues"]
+    }

@@ -10,6 +10,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：抽象字幕翻译候选质量决策和审计事件 |
 | 1.1.0   | 2026-07-05 | Codex  | 新增质量评估上下文载体，让审核与审计复用全片领域、事实、术语提示 |
+| 1.2.0   | 2026-07-05 | Codex  | 合并整片术语一致性检查结果，为后续字幕/标题统一审核预留入口 |
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Sequence
 
+from .translation_consistency_guard import evaluate_translation_consistency
 from .translation_quality_guard import QualityIssue, evaluate_translation_batch
 
 
@@ -111,7 +113,8 @@ def evaluate_subtitle_translation_candidate(
         translated_texts,
         context_text=guard_context_text,
     )
-    warning_issues = summary.warning_issues
+    consistency_issues = evaluate_translation_consistency(source_texts, translated_texts)
+    warning_issues = summary.warning_issues + consistency_issues
     blocking_issues = summary.blocking_issues
 
     if blocking_issues:
