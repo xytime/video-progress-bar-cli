@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖基金 close 方向反转、有效译文放行、金额数量级错误 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖上下文本句优先与批量阻断摘要 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖无 $ 金融金额抽取与非金融 million 误伤防护 |
+| 1.3.0   | 2026-07-05 | Codex  | 覆盖 $49B/49B fund 等 B/M/T 金融金额缩写 |
 """
 
 import sys
@@ -75,6 +76,17 @@ def test_billion_to_trillion_magnitude_block():
     assert any(issue.code == "NUMBER_MAGNITUDE_MISMATCH" for issue in result.issues)
 
 
+def test_dollar_b_suffix_amount_is_checked():
+    source = "The four largest platforms committed $650B in capital expenditure."
+    translated = "四大平台承诺了650万亿美元的资本支出。"
+
+    result = evaluate_translation_pair(source, translated)
+
+    assert not result.passed
+    assert result.max_severity == "P0"
+    assert any(issue.code == "NUMBER_MAGNITUDE_MISMATCH" for issue in result.issues)
+
+
 def test_bare_billion_finance_amount_is_checked():
     source = "MGX closes 49 billion AI fund after exceeding its target."
     translated = "MGX完成49亿美元AI基金募集，超过目标。"
@@ -86,8 +98,25 @@ def test_bare_billion_finance_amount_is_checked():
     assert any(issue.code == "NUMBER_MAGNITUDE_SUSPECT" for issue in result.issues)
 
 
+def test_bare_b_suffix_finance_amount_is_checked():
+    source = "MGX closes 49B AI fund after exceeding its target."
+    translated = "MGX完成49亿美元AI基金募集，超过目标。"
+
+    result = evaluate_translation_pair(source, translated)
+
+    assert not result.passed
+    assert result.max_severity == "P1"
+    assert any(issue.code == "NUMBER_MAGNITUDE_SUSPECT" for issue in result.issues)
+
+
 def test_bare_million_users_is_not_treated_as_usd_amount():
     signal = extract_fact_signal("The product reached 5 million users in one week.", lang="en")
+
+    assert signal.amounts_usd == []
+
+
+def test_bare_m_suffix_users_is_not_treated_as_usd_amount():
+    signal = extract_fact_signal("The product reached 5M users in one week.", lang="en")
 
     assert signal.amounts_usd == []
 
