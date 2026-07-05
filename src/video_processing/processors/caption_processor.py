@@ -36,6 +36,7 @@
 | 1.23.0 | 2026-07-05 | Codex | 质量审核复用 TranslationContext 的领域、事实与术语提示，并写入审计事件 |
 | 1.24.0 | 2026-07-06 | Codex | 字幕质量上下文写入受保护英文实体，供审计与一致性检查复用 |
 | 1.25.0 | 2026-07-06 | Codex | 字幕 provider 选择改为 warning-aware 仲裁，优先采用无告警候选 |
+| 1.26.0 | 2026-07-06 | Codex | 将翻译候选仲裁状态机抽离到 utils，降低字幕处理器职责 |
 """
 import logging
 from pathlib import Path
@@ -73,42 +74,13 @@ from ..utils.subtitle_translation_quality import (
     SubtitleTranslationQualityDecision,
     evaluate_subtitle_translation_candidate,
 )
+from ..utils.translation_candidate_arbitration import TranslationCandidateArbiter
 from ..utils.deepseek_translation import translate_batch_deepseek
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 import textwrap
-
-
-_WARNING_SEVERITY_RANK = {
-    "P0": 4,
-    "P1": 3,
-    "P2": 2,
-    "P3": 1,
-    "PASS": 0,
-}
-
-
-def _warning_rank(decision: SubtitleTranslationQualityDecision) -> tuple[int, int]:
-    """候选 warning 排序键：优先更低严重度，其次更少 warning。"""
-    max_rank = max(
-        (_WARNING_SEVERITY_RANK.get(issue.severity, 0) for issue in decision.warning_issues),
-        default=0,
-    )
-    return (max_rank, len(decision.warning_issues))
-
-
-def _warning_rank_from_event(event: Optional[Dict[str, Any]]) -> tuple[int, int]:
-    """从审计事件计算 warning 排序键。"""
-    if event is None:
-        return (999, 999)
-    warning_issues = list(event.get("warning_issues") or [])
-    max_rank = max(
-        (_WARNING_SEVERITY_RANK.get(str(issue.get("severity") or ""), 0) for issue in warning_issues),
-        default=0,
-    )
-    return (max_rank, len(warning_issues))
 
 # 定义字幕样式方案
 # 格式: {name: {zh_color: hex, en_color: hex, bg_color: hex, bg_alpha: 0-255, outline: int, shadow: int}}
@@ -599,8 +571,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         )
 
         provider_order = settings.subtitle_translation_provider_order_list
-        best_warning_candidate: Optional[SubtitleTranslationCandidate] = None
-        best_warning_event: Optional[Dict[str, Any]] = None
+        arbiter = TranslationCandidateArbiter()
         for idx, provider in enumerate(provider_order):
             final_provider = idx == len(provider_order) - 1
             candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
@@ -621,6 +592,12 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 final_provider=final_provider,
                 selected=False,
             )
+            outcome = arbiter.consider(
+                candidate=candidate,
+                decision=decision,
+                event=event,
+                final_provider=final_provider,
+            )
 
             if decision.should_fallback:
                 self._write_translation_quality_report()
@@ -631,48 +608,27 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 )
                 continue
 
-            if decision.should_fail:
-                if best_warning_candidate is not None:
-                    best_warning_event["selected"] = True
-                    self._apply_selected_translation_candidate(
-                        segments,
-                        best_warning_candidate,
-                        texts,
-                        translation_prompt_context,
-                    )
-                    self._write_translation_quality_report()
-                    return segments
-                self._write_translation_quality_report()
-                raise VideoProcessingError(
-                    f"Translation quality guard blocked {candidate.provider} output: {decision.blocking_summary()}"
-                )
-
-            if not decision.warning_issues:
-                event["selected"] = True
-                self._apply_selected_translation_candidate(segments, candidate, texts, translation_prompt_context)
-                self._write_translation_quality_report()
-                return segments
-
-            if best_warning_candidate is None or _warning_rank(decision) < _warning_rank_from_event(best_warning_event):
-                best_warning_candidate = candidate
-                best_warning_event = event
-
-            if final_provider and best_warning_candidate is not None:
-                best_warning_event["selected"] = True
+            if outcome.should_use_candidate:
                 self._apply_selected_translation_candidate(
                     segments,
-                    best_warning_candidate,
+                    outcome.candidate,
                     texts,
                     translation_prompt_context,
                 )
                 self._write_translation_quality_report()
                 return segments
 
-        if best_warning_candidate is not None:
-            best_warning_event["selected"] = True
+            if outcome.should_fail:
+                self._write_translation_quality_report()
+                raise VideoProcessingError(
+                    f"Translation quality guard blocked {candidate.provider} output: {decision.blocking_summary()}"
+                )
+
+        outcome = arbiter.finish()
+        if outcome.should_use_candidate:
             self._apply_selected_translation_candidate(
                 segments,
-                best_warning_candidate,
+                outcome.candidate,
                 texts,
                 translation_prompt_context,
             )
