@@ -85,6 +85,7 @@ output/
 *.wav
 *.mp3
 *.m4a
+*.translation_quality.json
 
 # 临时 Shell 渲染脚本（由管线生成，不属于源码）
 render_*.sh

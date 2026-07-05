@@ -28,6 +28,7 @@
 | 1.15.0 | 2026-07-05 | Codex | 接入 translation_quality_guard：翻译后统一做事实保真审计，P0 阻断，P1 告警 |
 | 1.16.0 | 2026-07-05 | Codex | Gemini 翻译接入全片 TranslationContext，减少逐句翻译丢失语境 |
 | 1.17.0 | 2026-07-05 | Codex | 质量守门 P0 触发供应商降级：Gemini→Aliyun→Google，最终供应商仍失败才阻断 |
+| 1.18.0 | 2026-07-05 | Codex | 翻译质量审计落盘为 *.translation_quality.json，记录供应商、告警、阻断与降级动作 |
 """
 import logging
 from pathlib import Path
@@ -154,6 +155,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         # 延迟加载模型
         self.model = None
         self.detected_lang = None  # [Gemini_3.5_Flash_planning] 保存 Whisper ASR 检测到的语种
+        self._translation_quality_audit: List[Dict[str, Any]] = []
 
     def process(self, **kwargs) -> Path:
         """
@@ -537,6 +539,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
+        self._translation_quality_audit = []
         translation_context = build_translation_context(texts).to_prompt_context()
 
         # ── 一级：Gemini（翻译 + vocab，天然对齐）─────────────────────────────
@@ -557,6 +560,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     segments[i]['zh_text'] = res.get('translation', '')
                     segments[i]['vocab']   = res.get('vocab', {})
             if self._guard_translation_quality(texts, segments, provider="Gemini", final_provider=False):
+                self._write_translation_quality_report()
                 return segments
 
         # ── 二级：Aliyun MT（仅翻译，无 vocab 对齐）──────────────────────────
@@ -592,6 +596,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
 
             if self._guard_translation_quality(texts, segments, provider="Aliyun", final_provider=False):
+                self._write_translation_quality_report()
                 return segments
 
         # ── 三级：Google Translate（无 vocab）────────────────────────────────
@@ -619,6 +624,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
             logger.warning(f"Gemini vocab alignment failed: {e}. Proceeding without vocab.")
 
         self._guard_translation_quality(texts, segments, provider="Google", final_provider=True)
+        self._write_translation_quality_report()
         return segments
 
     def _guard_translation_quality(
@@ -652,22 +658,73 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 issue.translation_signal,
             )
 
+        warning_issues = [self._issue_to_dict(issue) for issue in summary.warning_issues]
+        blocking_issues = [self._issue_to_dict(issue) for issue in summary.blocking_issues]
+        audit_event: Dict[str, Any] = {
+            "provider": provider,
+            "final_provider": final_provider,
+            "status": "passed",
+            "action": "accept",
+            "warning_issues": warning_issues,
+            "blocking_issues": blocking_issues,
+        }
+
         if summary.blocking_issues:
             details = "; ".join(
                 f"{issue.code}: {issue.message}"
                 for issue in summary.blocking_issues[:3]
             )
             if not final_provider:
+                audit_event["status"] = "blocked"
+                audit_event["action"] = "fallback"
+                self._translation_quality_audit.append(audit_event)
+                self._write_translation_quality_report()
                 logger.warning(
                     "[TranslationGuard][%s] Blocking issue found; falling back to next provider: %s",
                     provider,
                     details,
                 )
                 return False
+            audit_event["status"] = "blocked"
+            audit_event["action"] = "fail"
+            self._translation_quality_audit.append(audit_event)
+            self._write_translation_quality_report()
             raise VideoProcessingError(
                 f"Translation quality guard blocked {provider} output: {details}"
             )
+        self._translation_quality_audit.append(audit_event)
         return True
+
+    def _write_translation_quality_report(self) -> None:
+        """写出字幕翻译质量审计报告，供后续统计和排障。"""
+        if not self._translation_quality_audit:
+            return
+        report_path = self.input_path.with_suffix(".translation_quality.json")
+        payload = {
+            "input": str(self.input_path),
+            "src_lang": self.src_lang,
+            "target_lang": self.target_lang,
+            "events": self._translation_quality_audit,
+        }
+        try:
+            report_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            logger.info(f"[TranslationGuard] quality report → {report_path}")
+        except Exception as e:
+            logger.warning(f"[TranslationGuard] failed to write quality report: {e}")
+
+    @staticmethod
+    def _issue_to_dict(issue: Any) -> Dict[str, str]:
+        return {
+            "severity": issue.severity,
+            "code": issue.code,
+            "message": issue.message,
+            "source_signal": issue.source_signal,
+            "translation_signal": issue.translation_signal,
+            "suggested_fix": issue.suggested_fix,
+        }
 
     def _load_model(self):
         """加载 Whisper 模型"""

@@ -6,8 +6,10 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：验证字幕处理器接入事实保真守门器后 P0 阻断、P1 放行 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖 P0 质量失败时 Gemini→Aliyun→Google 自动降级 |
+| 1.2.0   | 2026-07-05 | Codex  | 覆盖 *.translation_quality.json 审计报告落盘与 fallback/fail 动作 |
 """
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,6 +23,15 @@ def _processor() -> AutoCaptionProcessor:
     return AutoCaptionProcessor(
         input_path=Path("dummy.mp4"),
         output_path=Path("dummy_output.mp4"),
+        src_lang="en",
+        target_lang="zh-CN",
+    )
+
+
+def _processor_for(path: Path) -> AutoCaptionProcessor:
+    return AutoCaptionProcessor(
+        input_path=path,
+        output_path=path.with_name("dummy_output.mp4"),
         src_lang="en",
         target_lang="zh-CN",
     )
@@ -78,6 +89,38 @@ def test_translate_segments_falls_back_when_gemini_quality_blocked(
 @patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
 @patch("video_processing.processors.caption_processor._google_batch_fallback")
 @patch("video_processing.processors.caption_processor.translate_batch_aliyun")
+@patch("video_processing.processors.caption_processor.extract_vocab_batch")
+def test_translate_segments_writes_quality_report_for_fallback(
+    mock_extract_vocab_batch,
+    mock_aliyun,
+    _mock_google,
+    _mock_validate_input,
+    tmp_path,
+):
+    input_path = tmp_path / "video.mp4"
+    input_path.touch()
+    processor = _processor_for(input_path)
+    source = "MGX announced the final close of Fund I at $49 billion."
+    mock_extract_vocab_batch.side_effect = [
+        [{"translation": "490亿主权基金撤退。", "vocab": {}}],
+        None,
+    ]
+    mock_aliyun.return_value = ["MGX一期基金最终募集规模达490亿美元。"]
+
+    processor._translate_segments([{"text": source}])
+
+    report = json.loads(input_path.with_suffix(".translation_quality.json").read_text(encoding="utf-8"))
+    assert [event["provider"] for event in report["events"]] == ["Gemini", "Aliyun"]
+    assert report["events"][0]["status"] == "blocked"
+    assert report["events"][0]["action"] == "fallback"
+    assert report["events"][0]["blocking_issues"][0]["code"] == "FINANCE_EVENT_DIRECTION_REVERSAL"
+    assert report["events"][1]["status"] == "passed"
+    assert report["events"][1]["action"] == "accept"
+
+
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
+@patch("video_processing.processors.caption_processor._google_batch_fallback")
+@patch("video_processing.processors.caption_processor.translate_batch_aliyun")
 @patch("video_processing.processors.caption_processor.extract_vocab_batch", return_value=None)
 def test_translate_segments_falls_back_when_aliyun_quality_blocked(
     _mock_extract_vocab_batch,
@@ -107,11 +150,41 @@ def test_translate_segments_blocks_when_final_provider_quality_blocked(
     _mock_aliyun,
     mock_google,
     _mock_validate_input,
+    tmp_path,
 ):
-    processor = _processor()
+    input_path = tmp_path / "video.mp4"
+    input_path.touch()
+    processor = _processor_for(input_path)
     source = "MGX announced the final close of Fund I at $49 billion."
     segments = [{"text": source}]
     mock_google.return_value = ["490亿主权基金撤退。"]
 
     with pytest.raises(VideoProcessingError, match="Translation quality guard blocked Google output"):
         processor._translate_segments(segments)
+
+
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
+@patch("video_processing.processors.caption_processor._google_batch_fallback")
+@patch("video_processing.processors.caption_processor.translate_batch_aliyun", return_value=None)
+@patch("video_processing.processors.caption_processor.extract_vocab_batch", return_value=None)
+def test_translate_segments_writes_quality_report_for_final_failure(
+    _mock_extract_vocab_batch,
+    _mock_aliyun,
+    mock_google,
+    _mock_validate_input,
+    tmp_path,
+):
+    input_path = tmp_path / "video.mp4"
+    input_path.touch()
+    processor = _processor_for(input_path)
+    source = "MGX announced the final close of Fund I at $49 billion."
+    mock_google.return_value = ["490亿主权基金撤退。"]
+
+    with pytest.raises(VideoProcessingError):
+        processor._translate_segments([{"text": source}])
+
+    report = json.loads(input_path.with_suffix(".translation_quality.json").read_text(encoding="utf-8"))
+    assert len(report["events"]) == 1
+    assert report["events"][0]["provider"] == "Google"
+    assert report["events"][0]["status"] == "blocked"
+    assert report["events"][0]["action"] == "fail"
