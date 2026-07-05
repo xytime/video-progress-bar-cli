@@ -32,6 +32,7 @@
 | 1.19.0 | 2026-07-05 | Codex | 引入 provider-neutral SubtitleTranslationCandidate，统一字幕候选结果回填 |
 | 1.20.0 | 2026-07-05 | Codex | 字幕翻译供应商顺序改由 settings 配置，主流程按 provider candidate 循环编排 |
 | 1.21.0 | 2026-07-05 | Codex | 接入 DeepSeek 字幕翻译候选 provider（配置启用，默认关闭） |
+| 1.22.0 | 2026-07-05 | Codex | 将字幕翻译质量决策抽象到 subtitle_translation_quality，主流程只保留编排职责 |
 """
 import logging
 from pathlib import Path
@@ -59,12 +60,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from ..core.base import VideoProcessorBase, VideoProcessingError
 from ..utils.translation_helper import translate_batch_aliyun, translate_batch as _google_batch_fallback  # [Claude_Sonnet_4.6_planning]
 from ..utils.vocab_helper import extract_vocab_batch  # [Claude_Sonnet_4.6_Thinking_planning]
-from ..utils.translation_quality_guard import evaluate_translation_batch
 from ..utils.translation_context import build_translation_context
 from ..utils.subtitle_translation_provider import (
     SubtitleTranslationCandidate,
     apply_translation_candidate,
 )
+from ..utils.subtitle_translation_quality import evaluate_subtitle_translation_candidate
 from ..utils.deepseek_translation import translate_batch_deepseek
 from config.settings import settings
 
@@ -680,20 +681,18 @@ class AutoCaptionProcessor(VideoProcessorBase):
         provider: str,
         final_provider: bool = True,
     ) -> bool:
-        """翻译后事实保真审计。
-
-        非最终供应商命中 P0 时返回 False，调用方继续降级；最终供应商命中
-        P0 时抛出 VideoProcessingError，阻断流水线。
-        """
+        """翻译后事实保真审计并返回候选是否可接受。"""
         translated_texts = [seg.get("zh_text", "") for seg in segments]
         context_text = "\n".join(source_texts)
-        summary = evaluate_translation_batch(
+        decision = evaluate_subtitle_translation_candidate(
             source_texts,
             translated_texts,
+            provider=provider,
+            final_provider=final_provider,
             context_text=context_text,
         )
 
-        for issue in summary.warning_issues:
+        for issue in decision.warning_issues:
             logger.warning(
                 "[TranslationGuard][%s][%s] %s | source=%s translation=%s",
                 provider,
@@ -703,41 +702,20 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 issue.translation_signal,
             )
 
-        warning_issues = [self._issue_to_dict(issue) for issue in summary.warning_issues]
-        blocking_issues = [self._issue_to_dict(issue) for issue in summary.blocking_issues]
-        audit_event: Dict[str, Any] = {
-            "provider": provider,
-            "final_provider": final_provider,
-            "status": "passed",
-            "action": "accept",
-            "warning_issues": warning_issues,
-            "blocking_issues": blocking_issues,
-        }
-
-        if summary.blocking_issues:
-            details = "; ".join(
-                f"{issue.code}: {issue.message}"
-                for issue in summary.blocking_issues[:3]
+        self._translation_quality_audit.append(decision.to_audit_event(final_provider=final_provider))
+        if decision.should_fallback:
+            self._write_translation_quality_report()
+            logger.warning(
+                "[TranslationGuard][%s] Blocking issue found; falling back to next provider: %s",
+                provider,
+                decision.blocking_summary(),
             )
-            if not final_provider:
-                audit_event["status"] = "blocked"
-                audit_event["action"] = "fallback"
-                self._translation_quality_audit.append(audit_event)
-                self._write_translation_quality_report()
-                logger.warning(
-                    "[TranslationGuard][%s] Blocking issue found; falling back to next provider: %s",
-                    provider,
-                    details,
-                )
-                return False
-            audit_event["status"] = "blocked"
-            audit_event["action"] = "fail"
-            self._translation_quality_audit.append(audit_event)
+            return False
+        if decision.should_fail:
             self._write_translation_quality_report()
             raise VideoProcessingError(
-                f"Translation quality guard blocked {provider} output: {details}"
+                f"Translation quality guard blocked {provider} output: {decision.blocking_summary()}"
             )
-        self._translation_quality_audit.append(audit_event)
         return True
 
     def _write_translation_quality_report(self) -> None:
@@ -759,17 +737,6 @@ class AutoCaptionProcessor(VideoProcessorBase):
             logger.info(f"[TranslationGuard] quality report → {report_path}")
         except Exception as e:
             logger.warning(f"[TranslationGuard] failed to write quality report: {e}")
-
-    @staticmethod
-    def _issue_to_dict(issue: Any) -> Dict[str, str]:
-        return {
-            "severity": issue.severity,
-            "code": issue.code,
-            "message": issue.message,
-            "source_signal": issue.source_signal,
-            "translation_signal": issue.translation_signal,
-            "suggested_fix": issue.suggested_fix,
-        }
 
     def _load_model(self):
         """加载 Whisper 模型"""
