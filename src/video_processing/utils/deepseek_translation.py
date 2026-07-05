@@ -9,6 +9,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：DeepSeek OpenAI-compatible 字幕批量翻译 provider |
+| 1.1.0   | 2026-07-06 | Codex  | 强化全局上下文硬约束提示，降低金融 close/金额单位误译 |
 """
 
 from __future__ import annotations
@@ -76,10 +77,20 @@ def translate_batch_deepseek(
 
 def _build_payload(texts: List[str], *, context_text: str, model: str) -> Dict[str, Any]:
     items = [{"id": i, "english": text} for i, text in enumerate(texts)]
-    context_block = f"\nGlobal context:\n{context_text.strip()}\n" if context_text.strip() else ""
+    context_block = (
+        f"\nGlobal context and hard constraints:\n{context_text.strip()}\n"
+        if context_text.strip()
+        else ""
+    )
     user_prompt = (
         "Translate each subtitle segment into concise, natural zh-CN.\n"
+        "Treat the global context as hard constraints for every segment.\n"
         "Preserve event direction, entity names, money flow, and numeric magnitude.\n"
+        "For private funds, close/final close usually means 完成募集/最终关账, "
+        "not 退出、撤退、关闭、清盘 or liquidation.\n"
+        "Preserve USD magnitude exactly: billion/bn = 十亿美元 = 10亿美元, "
+        "million/mn = 百万美元, trillion/tn = 万亿美元.\n"
+        "Do not merge, split, omit, or reorder subtitle segments.\n"
         "Return JSON only: an array with exactly one object per input item.\n"
         "Each object must contain: id (same integer) and translation (Chinese string).\n"
         f"{context_block}\n"
