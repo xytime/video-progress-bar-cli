@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖通用翻译质量 evaluator 的接受、降级、失败与审计输出 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖金额单位漂移 warning 进入通用 evaluator audit |
+| 1.2.0   | 2026-07-06 | Codex  | 覆盖实体上下文进入审计并触发实体丢失 warning |
 """
 
 import sys
@@ -64,6 +65,7 @@ def test_evaluator_merges_consistency_warnings_and_context():
         source_context_text="MGX announced the final close of Fund I at $49 billion.",
         domain="finance/technology",
         facts=["The source describes a fund reaching final close/completing fundraising."],
+        entities=["MGX"],
         term_notes=["'final close' means 最终关账, not 关闭."],
     )
     decision = evaluate_translation_candidate(
@@ -81,6 +83,7 @@ def test_evaluator_merges_consistency_warnings_and_context():
     event = decision.to_audit_event(final_provider=True)
 
     assert event["quality_context"]["domain"] == "finance/technology"
+    assert event["quality_context"]["entities"] == ["MGX"]
     assert "TERM_CONSISTENCY_FUND_CLOSE_DRIFT" in {
         issue["code"] for issue in event["warning_issues"]
     }
@@ -104,4 +107,23 @@ def test_evaluator_includes_amount_unit_drift_warning():
     assert decision.accepted
     assert "AMOUNT_CONSISTENCY_UNIT_DRIFT" in {
         issue["code"] for issue in event["warning_issues"]
+    }
+
+
+def test_evaluator_uses_context_entities_for_missing_entity_warning():
+    context = TranslationQualityContext(
+        source_context_text="MGX announced the final close of Fund I.",
+        domain="finance",
+        entities=["MGX"],
+    )
+    decision = evaluate_translation_candidate(
+        ["The fund exceeded its target."],
+        ["该基金超过目标。"],
+        provider="UnitTest",
+        quality_context=context,
+    )
+
+    assert decision.accepted
+    assert "ENTITY_CONSISTENCY_MISSING_PROTECTED_ENTITY" in {
+        issue.code for issue in decision.warning_issues
     }

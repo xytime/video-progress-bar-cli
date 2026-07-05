@@ -8,6 +8,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：从全片文本抽取领域、事实、术语提示并渲染为翻译上下文 |
+| 1.1.0   | 2026-07-06 | Codex  | 抽取受保护英文实体并注入 prompt，减少整片实体漂移 |
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Iterable, List, Sequence
 
+from .translation_entity_guard import extract_protected_entities
 from .translation_quality_guard import extract_fact_signal
 
 
@@ -25,6 +27,7 @@ class TranslationContext:
 
     domain: str = "general"
     facts: List[str] = field(default_factory=list)
+    entities: List[str] = field(default_factory=list)
     term_notes: List[str] = field(default_factory=list)
     style_notes: List[str] = field(default_factory=list)
 
@@ -37,6 +40,12 @@ class TranslationContext:
         if self.facts:
             sections.append("- Source facts to preserve:")
             sections.extend(f"  - {fact}" for fact in self.facts)
+        if self.entities:
+            sections.append("- Protected source entities:")
+            sections.append(
+                "  - Keep these entity names recognizable in the zh-CN output: "
+                + ", ".join(self.entities)
+            )
         if self.term_notes:
             sections.append("- Domain translation notes:")
             sections.extend(f"  - {note}" for note in self.term_notes)
@@ -57,9 +66,12 @@ def build_translation_context(
     description: str = "",
 ) -> TranslationContext:
     """从标题、简介和全片字幕构建翻译上下文。"""
-    corpus = _join_non_empty([title, description, *_sample_texts(english_texts)])
+    sampled_texts = _sample_texts(english_texts)
+    context_parts = [title, description, *sampled_texts]
+    corpus = _join_non_empty(context_parts)
     domain = _detect_domain(corpus)
     facts = _extract_facts(corpus)
+    entities = extract_protected_entities(context_parts)
     term_notes = _extract_term_notes(corpus, domain)
     style_notes = [
         "Translate meaning, not isolated words; keep subtitles concise and natural in zh-CN.",
@@ -69,6 +81,7 @@ def build_translation_context(
     return TranslationContext(
         domain=domain,
         facts=facts,
+        entities=entities,
         term_notes=term_notes,
         style_notes=style_notes,
     )

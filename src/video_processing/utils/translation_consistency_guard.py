@@ -9,6 +9,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：检查金融 close/oversubscribe 术语在整片译文中的一致性风险 |
 | 1.1.0   | 2026-07-05 | Codex  | 新增金额单位漂移 consistency warning，捕捉同一候选中正确金额与十倍级错译并存 |
+| 1.2.0   | 2026-07-06 | Codex  | 新增受保护英文实体整片丢失 warning，减少组织/产品名漂移 |
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 import re
 from typing import List, Sequence
 
+from .translation_entity_guard import find_missing_protected_entities
 from .translation_quality_guard import QualityIssue, extract_fact_signal
 
 
@@ -61,11 +63,14 @@ _ZH_AMBIGUOUS_OR_WRONG_CLOSE_TERMS: Sequence[re.Pattern[str]] = tuple(
 def evaluate_translation_consistency(
     source_texts: Sequence[str],
     translated_texts: Sequence[str],
+    *,
+    protected_entities: Sequence[str] | None = None,
 ) -> List[QualityIssue]:
     """检查整片候选译文的一致性风险。"""
     issues: List[QualityIssue] = []
     _append_fund_close_consistency_issue(issues, source_texts, translated_texts)
     _append_amount_consistency_issue(issues, source_texts, translated_texts)
+    _append_entity_consistency_issue(issues, source_texts, translated_texts, protected_entities)
     return issues
 
 
@@ -159,6 +164,32 @@ def _append_amount_consistency_issue(
             )
         )
         return
+
+
+def _append_entity_consistency_issue(
+    issues: List[QualityIssue],
+    source_texts: Sequence[str],
+    translated_texts: Sequence[str],
+    protected_entities: Sequence[str] | None,
+) -> None:
+    missing_entities = find_missing_protected_entities(
+        source_texts,
+        translated_texts,
+        protected_entities=protected_entities,
+    )
+    if not missing_entities:
+        return
+
+    issues.append(
+        QualityIssue(
+            severity="P2",
+            code="ENTITY_CONSISTENCY_MISSING_PROTECTED_ENTITY",
+            message="源内容中的受保护英文实体在整份译文中完全不可见，可能发生组织、产品或基金名丢失。",
+            source_signal=", ".join(missing_entities[:8]),
+            translation_signal="missing_in_translation",
+            suggested_fix="保留关键英文实体名，或使用公认中文译名并避免改成无关主体。",
+        )
+    )
 
 
 def _unique_amounts(amounts) -> List[float]:

@@ -26,6 +26,7 @@
 | 1.19.0  | 2026-07-05 | Codex                                   | 标题/文案改用 translation_quality_evaluator，与字幕共享质量决策内核 |
 | 1.20.0  | 2026-07-05 | Codex                                   | 文案生成 prompt 复用 TranslationContext 的事实与术语提示，减少事后审核拦截 |
 | 1.21.0  | 2026-07-05 | Codex                                   | 文案质量审计报告写入 TranslationQualityContext，生产与审核共用上下文摘要 |
+| 1.22.0  | 2026-07-06 | Codex                                   | 标题/文案质量上下文写入受保护英文实体，供审计与一致性检查复用 |
 """
 
 import re
@@ -470,6 +471,7 @@ def _build_copy_quality_context(
         source_context_text=source_text,
         domain=translation_context.domain,
         facts=translation_context.facts,
+        entities=translation_context.entities,
         term_notes=translation_context.term_notes,
         style_notes=translation_context.style_notes,
     )

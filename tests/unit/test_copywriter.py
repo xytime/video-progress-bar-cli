@@ -13,6 +13,7 @@
 | 1.7.0   | 2026-07-05 | Codex                      | 覆盖标题/文案金额单位漂移 warning |
 | 1.8.0   | 2026-07-05 | Codex                      | 覆盖文案生成 prompt 注入 TranslationContext 事实与术语提示 |
 | 1.9.0   | 2026-07-05 | Codex                      | 覆盖 copy quality report 写入 quality_context |
+| 1.10.0  | 2026-07-06 | Codex                      | 覆盖 copy quality report 写入受保护英文实体 |
 """
 import json
 import sys
@@ -295,6 +296,7 @@ def test_copy_guard_writes_quality_report_for_pass(tmp_path):
     assert report["action"] == "accept"
     assert report["content"]["short_title"] == "AI基金超募"
     assert report["quality_context"]["facts"]
+    assert report["quality_context"]["entities"] == ["MGX"]
     assert any("final close" in note for note in report["quality_context"]["term_notes"])
     assert report["blocking_issues"] == []
 

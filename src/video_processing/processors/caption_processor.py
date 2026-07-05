@@ -34,6 +34,7 @@
 | 1.21.0 | 2026-07-05 | Codex | 接入 DeepSeek 字幕翻译候选 provider（配置启用，默认关闭） |
 | 1.22.0 | 2026-07-05 | Codex | 将字幕翻译质量决策抽象到 subtitle_translation_quality，主流程只保留编排职责 |
 | 1.23.0 | 2026-07-05 | Codex | 质量审核复用 TranslationContext 的领域、事实与术语提示，并写入审计事件 |
+| 1.24.0 | 2026-07-06 | Codex | 字幕质量上下文写入受保护英文实体，供审计与一致性检查复用 |
 """
 import logging
 from pathlib import Path
@@ -560,6 +561,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
             source_context_text="\n".join(texts),
             domain=translation_context.domain,
             facts=translation_context.facts,
+            entities=translation_context.entities,
             term_notes=translation_context.term_notes,
             style_notes=translation_context.style_notes,
         )

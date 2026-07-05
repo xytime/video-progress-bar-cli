@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖整片基金 close 术语一致性检查 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖金额单位漂移 consistency warning |
+| 1.2.0   | 2026-07-06 | Codex  | 覆盖受保护英文实体整片丢失 warning |
 """
 
 import sys
@@ -81,6 +82,34 @@ def test_consistency_guard_allows_consistent_amount_units():
     translated_texts = [
         "MGX宣布一期基金最终募集规模达490亿美元。",
         "同一只490亿美元基金获得主要投资者支持。",
+    ]
+
+    assert evaluate_translation_consistency(source_texts, translated_texts) == []
+
+
+def test_consistency_guard_warns_when_repeated_protected_entity_disappears():
+    source_texts = [
+        "MGX announced the final close of Fund I.",
+        "MGX exceeded its initial target.",
+    ]
+    translated_texts = [
+        "该基金宣布完成一期基金最终募集。",
+        "该基金超过最初目标。",
+    ]
+
+    issues = evaluate_translation_consistency(source_texts, translated_texts)
+
+    assert "ENTITY_CONSISTENCY_MISSING_PROTECTED_ENTITY" in {issue.code for issue in issues}
+
+
+def test_consistency_guard_allows_preserved_protected_entity():
+    source_texts = [
+        "MGX announced the final close of Fund I.",
+        "MGX exceeded its initial target.",
+    ]
+    translated_texts = [
+        "MGX宣布完成一期基金最终募集。",
+        "MGX超过最初目标。",
     ]
 
     assert evaluate_translation_consistency(source_texts, translated_texts) == []

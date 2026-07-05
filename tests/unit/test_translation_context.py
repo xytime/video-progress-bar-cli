@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖全片上下文、金融术语提示和长文本采样 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖无 $ 金融金额进入上下文金额提示 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖 B/M/T 金融金额缩写进入上下文金额提示 |
+| 1.3.0   | 2026-07-06 | Codex  | 覆盖受保护英文实体进入翻译上下文 prompt |
 """
 
 import sys
@@ -31,8 +32,10 @@ def test_build_translation_context_detects_fund_final_close():
 
     assert context.domain == "finance/technology"
     assert any("completing fundraising" in fact for fact in context.facts)
+    assert context.entities == ["MGX"]
     assert "最终关账" in prompt_context
     assert "撤退" in prompt_context
+    assert "MGX" in prompt_context
 
 
 def test_translation_context_preserves_amount_magnitude_hint():

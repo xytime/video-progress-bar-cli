@@ -9,6 +9,7 @@ provider-neutral 入口。字幕、标题、短标题、文案都可以复用它
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：统一事实守门、一致性检查、候选决策和审计事件输出 |
+| 1.1.0   | 2026-07-06 | Codex  | 质量上下文加入受保护实体，并传递给整片一致性检查 |
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ class TranslationQualityContext:
     source_context_text: str = ""
     domain: str = "general"
     facts: List[str] = field(default_factory=list)
+    entities: List[str] = field(default_factory=list)
     term_notes: List[str] = field(default_factory=list)
     style_notes: List[str] = field(default_factory=list)
 
@@ -44,6 +46,7 @@ class TranslationQualityContext:
         return {
             "domain": self.domain,
             "facts": list(self.facts),
+            "entities": list(self.entities),
             "term_notes": list(self.term_notes),
             "style_notes": list(self.style_notes),
         }
@@ -117,7 +120,11 @@ def evaluate_translation_candidate(
         translated_texts,
         context_text=guard_context_text,
     )
-    consistency_issues = evaluate_translation_consistency(source_texts, translated_texts)
+    consistency_issues = evaluate_translation_consistency(
+        source_texts,
+        translated_texts,
+        protected_entities=quality_context.entities if quality_context is not None else None,
+    )
     warning_issues = summary.warning_issues + consistency_issues
     blocking_issues = summary.blocking_issues
 

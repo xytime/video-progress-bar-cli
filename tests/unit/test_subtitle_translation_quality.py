@@ -113,6 +113,7 @@ def test_quality_context_is_included_in_audit_event():
     event = decision.to_audit_event(final_provider=True)
 
     assert event["quality_context"]["domain"] == "finance/technology"
+    assert event["quality_context"]["entities"] == []
     assert "final close" in event["quality_context"]["term_notes"][0]
 
 
