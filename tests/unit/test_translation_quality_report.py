@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖术语一致性 warning 进入聚合统计 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖 warning_count/warning_files 聚合字段 |
 | 1.3.0   | 2026-07-05 | Codex  | 覆盖 warning/blocking issue counts 分离统计 |
+| 1.4.0   | 2026-07-06 | Codex  | 覆盖 provider_issue_counts 按供应商归因问题类型 |
 """
 
 import json
@@ -106,6 +107,18 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
     assert summary["blocking_issue_counts"] == {
         "FINANCE_EVENT_DIRECTION_REVERSAL": 1,
         "NUMBER_MAGNITUDE_MISMATCH": 1,
+    }
+    assert summary["provider_issue_counts"] == {
+        "Aliyun": {
+            "FINANCE_TERM_AMBIGUOUS_CLOSE": 1,
+            "TERM_CONSISTENCY_FUND_CLOSE_DRIFT": 1,
+        },
+        "Gemini": {
+            "FINANCE_EVENT_DIRECTION_REVERSAL": 1,
+        },
+        "fallback": {
+            "NUMBER_MAGNITUDE_MISMATCH": 1,
+        },
     }
     assert summary["warning_files"][0]["issue_codes"] == [
         "FINANCE_TERM_AMBIGUOUS_CLOSE",

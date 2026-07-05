@@ -10,6 +10,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：聚合字幕/文案质量报告，统计 provider、issue code 与阻断项 |
 | 1.1.0   | 2026-07-05 | Codex  | 新增 warning_count/warning_files，让非阻断一致性告警可运营观测 |
 | 1.2.0   | 2026-07-05 | Codex  | 分离 warning/blocking issue 计数，让日报可同时展示最高频告警与阻断 |
+| 1.3.0   | 2026-07-06 | Codex  | 新增 provider_issue_counts，定位不同翻译供应商的高频质量问题 |
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ class TranslationQualityAggregate:
     issue_counts: Counter = field(default_factory=Counter)
     warning_issue_counts: Counter = field(default_factory=Counter)
     blocking_issue_counts: Counter = field(default_factory=Counter)
+    provider_issue_counts: Dict[str, Counter] = field(default_factory=dict)
     warning_files: List[Dict[str, Any]] = field(default_factory=list)
     blocked_files: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -46,6 +48,7 @@ class TranslationQualityAggregate:
             "issue_counts": dict(sorted(self.issue_counts.items())),
             "warning_issue_counts": dict(sorted(self.warning_issue_counts.items())),
             "blocking_issue_counts": dict(sorted(self.blocking_issue_counts.items())),
+            "provider_issue_counts": _sorted_nested_counters(self.provider_issue_counts),
             "warning_files": self.warning_files,
             "blocked_files": self.blocked_files,
         }
@@ -83,6 +86,7 @@ def aggregate_quality_reports(root: Path) -> Dict[str, Any]:
             for issue in issues:
                 code = str(issue.get("code") or "UNKNOWN")
                 aggregate.issue_counts[code] += 1
+                aggregate.provider_issue_counts.setdefault(provider, Counter())[code] += 1
             for issue in warning_issues:
                 code = str(issue.get("code") or "UNKNOWN")
                 aggregate.warning_issue_counts[code] += 1
@@ -124,3 +128,11 @@ def _iter_events(payload: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
 
     if "status" in payload or "action" in payload:
         yield payload
+
+
+def _sorted_nested_counters(counters: Dict[str, Counter]) -> Dict[str, Dict[str, int]]:
+    """把 provider -> Counter 转成稳定排序的 JSON 结构。"""
+    return {
+        provider: dict(sorted(counter.items()))
+        for provider, counter in sorted(counters.items())
+    }

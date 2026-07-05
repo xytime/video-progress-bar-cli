@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖每日运维报告中的翻译质量摘要格式 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖翻译质量摘要展示非阻断告警数 |
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖翻译质量摘要分开展示最高频告警与阻断 |
+| 1.3.0   | 2026-07-06 | Codex  | 覆盖翻译质量摘要展示 provider-issue 高频组合 |
 """
 
 import sys
@@ -44,6 +45,14 @@ def test_format_translation_quality_with_counts():
                 "Gemini": 3,
                 "Aliyun": 2,
             },
+            "provider_issue_counts": {
+                "Gemini": {
+                    "FINANCE_EVENT_DIRECTION_REVERSAL": 2,
+                },
+                "Aliyun": {
+                    "AMOUNT_CONSISTENCY_UNIT_DRIFT": 1,
+                },
+            },
         }
     )
 
@@ -54,3 +63,4 @@ def test_format_translation_quality_with_counts():
     assert "AMOUNT_CONSISTENCY_UNIT_DRIFT×1" in line
     assert "FINANCE_EVENT_DIRECTION_REVERSAL×2" in line
     assert "Gemini×3" in line
+    assert "provider问题 Gemini:FINANCE_EVENT_DIRECTION_REVERSAL×2" in line

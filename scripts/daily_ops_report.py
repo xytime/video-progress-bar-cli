@@ -15,6 +15,7 @@
 | 1.1.0   | 2026-07-05 | Codex           | 接入翻译质量审计聚合摘要，纳入每日巡检 |
 | 1.2.0   | 2026-07-05 | Codex           | 翻译质量摘要显示非阻断告警数，便于追踪术语一致性漂移 |
 | 1.3.0   | 2026-07-05 | Codex           | 翻译质量摘要分开展示最高频告警与最高频阻断 |
+| 1.4.0   | 2026-07-06 | Codex           | 翻译质量摘要展示最高频 provider-issue 组合，便于定位供应商质量问题 |
 """
 from __future__ import annotations
 
@@ -52,6 +53,7 @@ def format_translation_quality(summary: dict) -> str:
     warning_issue_counts = summary.get("warning_issue_counts") or {}
     blocking_issue_counts = summary.get("blocking_issue_counts") or {}
     provider_counts = summary.get("provider_counts") or {}
+    provider_issue_counts = summary.get("provider_issue_counts") or {}
 
     if files_scanned == 0:
         return "翻译质量: 暂无审计报告"
@@ -76,11 +78,22 @@ def format_translation_quality(summary: dict) -> str:
         provider, count = max(provider_counts.items(), key=lambda item: item[1])
         top_provider = f"{provider}×{count}"
 
+    top_provider_issue = "无"
+    flattened_provider_issues = [
+        (provider, code, count)
+        for provider, issue_counts_for_provider in provider_issue_counts.items()
+        for code, count in issue_counts_for_provider.items()
+    ]
+    if flattened_provider_issues:
+        provider, code, count = max(flattened_provider_issues, key=lambda item: item[2])
+        top_provider_issue = f"{provider}:{code}×{count}"
+
     return (
         f"翻译质量: 报告 {files_scanned} | 事件 {event_count} | "
         f"告警 {warning_count} | 阻断/降级 {blocked_count} | "
         f"最高频告警 {top_warning} | 最高频阻断 {top_blocking} | "
-        f"最高频错误 {top_issue} | provider {top_provider}"
+        f"最高频错误 {top_issue} | provider {top_provider} | "
+        f"provider问题 {top_provider_issue}"
     )
 
 
