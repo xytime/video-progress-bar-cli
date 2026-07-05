@@ -10,6 +10,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：从全片文本抽取领域、事实、术语提示并渲染为翻译上下文 |
 | 1.1.0   | 2026-07-06 | Codex  | 抽取受保护英文实体并注入 prompt，减少整片实体漂移 |
 | 1.2.0   | 2026-07-06 | Codex  | 从全片文本抽取结构化信号，避免长视频中段关键事实被采样遗漏 |
+| 1.3.0   | 2026-07-06 | Codex  | 金额事实提示避免科学计数法，降低模型误读数字单位风险 |
 """
 
 from __future__ import annotations
@@ -188,4 +189,4 @@ def _format_usd(value: float) -> str:
         return f"${value / 1_000_000_000:.3g}B"
     if value >= 1_000_000:
         return f"${value / 1_000_000:.3g}M"
-    return f"${value:.3g}"
+    return f"${value:,.0f}" if value.is_integer() else f"${value:,.2f}".rstrip("0").rstrip(".")

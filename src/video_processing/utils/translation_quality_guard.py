@@ -12,6 +12,7 @@
 | 1.2.0   | 2026-07-05 | Codex  | 金融语境下支持无 $ 的 billion/million/trillion 金额抽取 |
 | 1.3.0   | 2026-07-05 | Codex  | 支持 $49B/49B fund 等 B/M/T 金融金额缩写抽取 |
 | 1.4.0   | 2026-07-06 | Codex  | 支持 US$49bn/49bn fund 等 bn/mn/tn 金融金额缩写抽取 |
+| 1.5.0   | 2026-07-06 | Codex  | 金额信号格式避免科学计数法，提升审计报告和 prompt 可读性 |
 """
 
 from __future__ import annotations
@@ -476,4 +477,4 @@ def _format_usd(value: float) -> str:
         return f"${value / 1_000_000_000:.3g}B"
     if value >= 1_000_000:
         return f"${value / 1_000_000:.3g}M"
-    return f"${value:.3g}"
+    return f"${value:,.0f}" if value.is_integer() else f"${value:,.2f}".rstrip("0").rstrip(".")

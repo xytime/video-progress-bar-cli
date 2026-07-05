@@ -11,6 +11,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：DeepSeek OpenAI-compatible 字幕批量翻译 provider |
 | 1.1.0   | 2026-07-06 | Codex  | 强化全局上下文硬约束提示，降低金融 close/金额单位误译 |
 | 1.2.0   | 2026-07-06 | Codex  | 复用 translation_prompt_constraints，避免 provider 约束漂移 |
+| 1.3.0   | 2026-07-06 | Codex  | 兼容 DeepSeek 返回 translations/list 顶层包装，减少可解析响应误降级 |
 """
 
 from __future__ import annotations
@@ -121,6 +122,11 @@ def _parse_translation_json(content: str, *, expected_count: int) -> Optional[Li
         result = json.loads(text)
     except json.JSONDecodeError:
         return None
+
+    if isinstance(result, dict) and "translations" in result:
+        result = result["translations"]
+    elif isinstance(result, dict) and "list" in result:
+        result = result["list"]
 
     if not isinstance(result, list):
         return None

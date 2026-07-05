@@ -9,6 +9,7 @@
 | 1.2.0   | 2026-07-05 | Codex  | 覆盖无 $ 金融金额抽取与非金融 million 误伤防护 |
 | 1.3.0   | 2026-07-05 | Codex  | 覆盖 $49B/49B fund 等 B/M/T 金融金额缩写 |
 | 1.4.0   | 2026-07-06 | Codex  | 覆盖 US$49bn/49bn fund 等 bn/mn/tn 金融金额缩写 |
+| 1.5.0   | 2026-07-06 | Codex  | 覆盖金额 mismatch 审计信号不使用科学计数法 |
 """
 
 import sys
@@ -190,3 +191,16 @@ def test_batch_summary_reports_blocking_issues_only_for_p0():
     assert len(summary.warning_issues) == 1
     assert len(summary.blocking_issues) == 1
     assert summary.blocking_issues[0].code == "NUMBER_MAGNITUDE_MISMATCH"
+
+
+def test_amount_mismatch_signal_uses_readable_usd_format():
+    result = evaluate_translation_pair(
+        "The investment was valued at $4200.",
+        "这笔投资估值为42亿美元。",
+    )
+
+    issue = result.issues[0]
+
+    assert issue.code == "NUMBER_MAGNITUDE_MISMATCH"
+    assert issue.source_signal == "$4,200"
+    assert "e+" not in issue.source_signal

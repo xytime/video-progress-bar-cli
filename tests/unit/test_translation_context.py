@@ -10,6 +10,7 @@
 | 1.3.0   | 2026-07-06 | Codex  | 覆盖受保护英文实体进入翻译上下文 prompt |
 | 1.4.0   | 2026-07-06 | Codex  | 覆盖长视频中段关键事实也会进入翻译上下文 |
 | 1.5.0   | 2026-07-06 | Codex  | 覆盖 US$49bn/49bn 金融金额缩写进入上下文金额提示 |
+| 1.6.0   | 2026-07-06 | Codex  | 覆盖小额美元事实提示不使用科学计数法 |
 """
 
 import sys
@@ -114,3 +115,14 @@ def test_translation_context_uses_full_video_not_only_head_tail_sample():
     assert context.entities == ["MGX"]
     assert "$49B" in prompt_context
     assert any("completing fundraising" in fact for fact in context.facts)
+
+
+def test_translation_context_formats_small_usd_amounts_without_scientific_notation():
+    context = build_translation_context([
+        "The fund was valued at $4200 after a small follow-on investment."
+    ])
+
+    prompt_context = context.to_prompt_context()
+
+    assert "$4,200" in prompt_context
+    assert "$4.2e+03" not in prompt_context

@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖 DeepSeek provider 无 key 跳过与响应解析 |
 | 1.1.0   | 2026-07-06 | Codex  | 覆盖 DeepSeek payload 注入全局上下文硬约束与金融翻译规则 |
 | 1.2.0   | 2026-07-06 | Codex  | 覆盖 DeepSeek payload 复用共享翻译硬约束 |
+| 1.3.0   | 2026-07-06 | Codex  | 覆盖 DeepSeek 响应顶层 translations 包装解析 |
 """
 
 import json
@@ -67,6 +68,33 @@ def test_deepseek_parses_id_aligned_translations():
                             {"id": 1, "translation": "世界"},
                             {"id": 0, "translation": "你好"},
                         ],
+                        ensure_ascii=False,
+                    )
+                }
+            }
+        ]
+    }
+
+    with patch("urllib.request.urlopen", return_value=_Response(payload)):
+        result = translate_batch_deepseek(["Hello", "World"], settings_obj=settings)
+
+    assert result == ["你好", "世界"]
+
+
+def test_deepseek_parses_wrapped_translations_response():
+    settings = _Settings()
+    settings.deepseek_api_key = "test-key"
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "translations": [
+                                {"id": 0, "translation": "你好"},
+                                {"id": 1, "translation": "世界"},
+                            ]
+                        },
                         ensure_ascii=False,
                     )
                 }
