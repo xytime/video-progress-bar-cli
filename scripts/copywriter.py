@@ -25,6 +25,7 @@
 | 1.18.0  | 2026-07-05 | Codex                                   | 标题/文案复用 translation_consistency_guard，审计字段间术语漂移 warning |
 | 1.19.0  | 2026-07-05 | Codex                                   | 标题/文案改用 translation_quality_evaluator，与字幕共享质量决策内核 |
 | 1.20.0  | 2026-07-05 | Codex                                   | 文案生成 prompt 复用 TranslationContext 的事实与术语提示，减少事后审核拦截 |
+| 1.21.0  | 2026-07-05 | Codex                                   | 文案质量审计报告写入 TranslationQualityContext，生产与审核共用上下文摘要 |
 """
 
 import re
@@ -54,6 +55,7 @@ from video_processing.utils.translation_helper import translate_text as _transla
 from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
 from video_processing.utils.translation_context import build_translation_context
 from video_processing.utils.translation_quality_evaluator import (
+    TranslationQualityContext,
     evaluate_translation_candidate,
 )
 
@@ -397,6 +399,7 @@ def _guard_wechat_content_quality(
         [translated_text],
         provider=provider,
         final_provider=True,
+        quality_context=_build_copy_quality_context(title, description, source_text),
     )
     for issue in decision.issues:
         logger.warning(
@@ -449,6 +452,26 @@ def _build_wechat_prompt(title: str, description: str) -> str:
         f"{translation_context}\n\n"
         f"YouTube 标题：{title}\n"
         f"YouTube 简介（节选）：\n{description[:800]}"
+    )
+
+
+def _build_copy_quality_context(
+    title: str,
+    description: str,
+    source_text: str,
+) -> TranslationQualityContext:
+    """把标题/简介上下文转换为通用质量评估上下文。"""
+    translation_context = build_translation_context(
+        [description],
+        title=title,
+        description=description,
+    )
+    return TranslationQualityContext(
+        source_context_text=source_text,
+        domain=translation_context.domain,
+        facts=translation_context.facts,
+        term_notes=translation_context.term_notes,
+        style_notes=translation_context.style_notes,
     )
 
 

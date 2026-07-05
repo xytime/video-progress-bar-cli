@@ -1,3 +1,11 @@
+"""Integration tests for extract-subs CLI.
+
+# Modification History
+| Version | Date       | Author | Description |
+| ------- | ---------- | ------ | ----------- |
+| 1.0.0   | 2026-07-05 | Codex  | 测试视频生成失败或无音轨时显式 skip，避免 dummy mp4 造成误导性失败 |
+"""
+
 import os
 import shutil
 import subprocess
@@ -5,6 +13,7 @@ from pathlib import Path
 import logging
 import sys
 import click
+import pytest
 from click.testing import CliRunner
 
 # Add src to path
@@ -15,6 +24,18 @@ from video_processing.processors.subtitle_extractor import SubtitleExtractionPro
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("test_extract_subs")
+
+def _has_audio_stream(path: Path) -> bool:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "a",
+            "-show_entries", "stream=index", "-of", "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0 and bool(result.stdout.strip())
 
 def create_test_video(path: Path):
     """Generate a test video with speech using macOS 'say' and ffmpeg"""
@@ -37,15 +58,13 @@ def create_test_video(path: Path):
         
         # Clean up audio
         os.remove(audio_path)
+        if not _has_audio_stream(path):
+            pytest.skip("Generated test video has no audio stream; local TTS/ffmpeg fixture is unavailable.")
         logger.info(f"Created test video at: {path}")
         
     except Exception as e:
         logger.error(f"Failed to create test video: {e}")
-        # Create a dummy file if ffmpeg fails (e.g. CI env without ffmpeg)
-        # But we assume local env has ffmpeg based on user info.
-        with open(path, 'wb') as f:
-            f.write(b'dummy content')
-        # raise # Don't raise, let the test fail later if needed or mock
+        pytest.skip(f"Unable to create speech test video in this environment: {e}")
 
 def test_extract_subs_command():
     test_dir = Path("draft-code/test_data_subs")
