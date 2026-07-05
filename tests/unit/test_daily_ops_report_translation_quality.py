@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖每日运维报告中的翻译质量摘要格式 |
+| 1.1.0   | 2026-07-05 | Codex  | 覆盖翻译质量摘要展示非阻断告警数 |
 """
 
 import sys
@@ -26,6 +27,7 @@ def test_format_translation_quality_with_counts():
         {
             "files_scanned": 3,
             "event_count": 5,
+            "warning_count": 1,
             "blocked_count": 2,
             "issue_counts": {
                 "FINANCE_EVENT_DIRECTION_REVERSAL": 2,
@@ -40,6 +42,7 @@ def test_format_translation_quality_with_counts():
 
     assert "报告 3" in line
     assert "事件 5" in line
+    assert "告警 1" in line
     assert "阻断/降级 2" in line
     assert "FINANCE_EVENT_DIRECTION_REVERSAL×2" in line
     assert "Gemini×3" in line

@@ -22,6 +22,7 @@
 | 1.15.0  | 2026-06-22 | Claude_Opus_4.8                         | [🅴 反搬运·零渲染] 接入 verbatim_overlap_ratio：文案对源描述逐字照搬 >=25% 时告警（原创度信号，不阻断发布） |
 | 1.16.0  | 2026-07-05 | Codex                                   | 接入 translation_quality_guard：标题/文案生成后做事实保真审计，P0 阻断写出 |
 | 1.17.0  | 2026-07-05 | Codex                                   | 标题/文案质量审计可选落盘为 *_copy_quality.json，记录 warning/blocking issues |
+| 1.18.0  | 2026-07-05 | Codex                                   | 标题/文案复用 translation_consistency_guard，审计字段间术语漂移 warning |
 """
 
 import re
@@ -49,6 +50,7 @@ from video_processing.utils.translation_helper import translate_text as _transla
 # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils（单一真相源）；此处 re-import 保持
 # `from copywriter import graceful_truncate_title` 的既有调用方（wechat_uploader、测试）零改动。
 from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
+from video_processing.utils.translation_consistency_guard import evaluate_translation_consistency
 from video_processing.utils.translation_quality_guard import evaluate_translation_pair
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -387,7 +389,12 @@ def _guard_wechat_content_quality(
         return
 
     result = evaluate_translation_pair(source_text, translated_text)
-    for issue in result.issues:
+    consistency_issues = evaluate_translation_consistency(
+        [source_text],
+        [translated_text],
+    )
+    issues = result.issues + consistency_issues
+    for issue in issues:
         logger.warning(
             "[CopyGuard][%s] %s | source=%s translation=%s",
             issue.code,
@@ -396,7 +403,7 @@ def _guard_wechat_content_quality(
             issue.translation_signal,
         )
 
-    blocking = [issue for issue in result.issues if issue.severity == "P0"]
+    blocking = [issue for issue in issues if issue.severity == "P0"]
     report = {
         "provider": provider,
         "source_title": title,
@@ -409,7 +416,7 @@ def _guard_wechat_content_quality(
         },
         "warning_issues": [
             _copy_issue_to_dict(issue)
-            for issue in result.issues
+            for issue in issues
             if issue.severity != "P0"
         ],
         "blocking_issues": [_copy_issue_to_dict(issue) for issue in blocking],

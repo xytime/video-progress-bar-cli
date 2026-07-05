@@ -8,6 +8,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：聚合字幕/文案质量报告，统计 provider、issue code 与阻断项 |
+| 1.1.0   | 2026-07-05 | Codex  | 新增 warning_count/warning_files，让非阻断一致性告警可运营观测 |
 """
 
 from __future__ import annotations
@@ -25,18 +26,22 @@ class TranslationQualityAggregate:
 
     files_scanned: int = 0
     event_count: int = 0
+    warning_count: int = 0
     blocked_count: int = 0
     provider_counts: Counter = field(default_factory=Counter)
     issue_counts: Counter = field(default_factory=Counter)
+    warning_files: List[Dict[str, Any]] = field(default_factory=list)
     blocked_files: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "files_scanned": self.files_scanned,
             "event_count": self.event_count,
+            "warning_count": self.warning_count,
             "blocked_count": self.blocked_count,
             "provider_counts": dict(sorted(self.provider_counts.items())),
             "issue_counts": dict(sorted(self.issue_counts.items())),
+            "warning_files": self.warning_files,
             "blocked_files": self.blocked_files,
         }
 
@@ -67,10 +72,22 @@ def aggregate_quality_reports(root: Path) -> Dict[str, Any]:
             provider = str(event.get("provider") or "unknown")
             aggregate.provider_counts[provider] += 1
 
-            issues = list(event.get("warning_issues") or []) + list(event.get("blocking_issues") or [])
+            warning_issues = list(event.get("warning_issues") or [])
+            blocking_issues = list(event.get("blocking_issues") or [])
+            issues = warning_issues + blocking_issues
             for issue in issues:
                 code = str(issue.get("code") or "UNKNOWN")
                 aggregate.issue_counts[code] += 1
+
+            if warning_issues:
+                aggregate.warning_count += 1
+                aggregate.warning_files.append(
+                    {
+                        "path": str(path),
+                        "provider": provider,
+                        "issue_codes": [str(issue.get("code") or "UNKNOWN") for issue in warning_issues],
+                    }
+                )
 
             if event.get("status") == "blocked" or event.get("action") in {"fallback", "fail"}:
                 aggregate.blocked_count += 1

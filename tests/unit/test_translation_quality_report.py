@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕/文案翻译质量报告聚合 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖术语一致性 warning 进入聚合统计 |
+| 1.2.0   | 2026-07-05 | Codex  | 覆盖 warning_count/warning_files 聚合字段 |
 """
 
 import json
@@ -88,6 +89,7 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
 
     assert summary["files_scanned"] == 2
     assert summary["event_count"] == 3
+    assert summary["warning_count"] == 1
     assert summary["blocked_count"] == 2
     assert summary["provider_counts"] == {"Aliyun": 1, "Gemini": 1, "fallback": 1}
     assert summary["issue_counts"] == {
@@ -96,4 +98,8 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
         "NUMBER_MAGNITUDE_MISMATCH": 1,
         "TERM_CONSISTENCY_FUND_CLOSE_DRIFT": 1,
     }
+    assert summary["warning_files"][0]["issue_codes"] == [
+        "FINANCE_TERM_AMBIGUOUS_CLOSE",
+        "TERM_CONSISTENCY_FUND_CLOSE_DRIFT",
+    ]
     assert len(summary["blocked_files"]) == 2
