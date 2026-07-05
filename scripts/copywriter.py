@@ -21,6 +21,7 @@
 | 1.14.0  | 2026-06-22 | Claude_Opus_4.8                         | [架构 C] graceful_truncate_title 下沉至 utils.text_utils 单一真相源；本文件顶部 re-import 保持既有调用方零改动；消除 pipeline_manager→scripts 反向依赖 |
 | 1.15.0  | 2026-06-22 | Claude_Opus_4.8                         | [🅴 反搬运·零渲染] 接入 verbatim_overlap_ratio：文案对源描述逐字照搬 >=25% 时告警（原创度信号，不阻断发布） |
 | 1.16.0  | 2026-07-05 | Codex                                   | 接入 translation_quality_guard：标题/文案生成后做事实保真审计，P0 阻断写出 |
+| 1.17.0  | 2026-07-05 | Codex                                   | 标题/文案质量审计可选落盘为 *_copy_quality.json，记录 warning/blocking issues |
 """
 
 import re
@@ -367,7 +368,14 @@ def _translate_fallback(title: str, description: str) -> dict:
         }
 
 
-def _guard_wechat_content_quality(title: str, description: str, content: dict) -> None:
+def _guard_wechat_content_quality(
+    title: str,
+    description: str,
+    content: dict,
+    *,
+    audit_path: Optional[Path] = None,
+    provider: str = "copywriter",
+) -> None:
     """对标题/文案整体做事实保真审计；P0 阻断写出。"""
     source_text = "\n".join(part for part in (title, description) if part and part.strip())
     translated_text = "\n".join(
@@ -389,9 +397,53 @@ def _guard_wechat_content_quality(title: str, description: str, content: dict) -
         )
 
     blocking = [issue for issue in result.issues if issue.severity == "P0"]
+    report = {
+        "provider": provider,
+        "source_title": title,
+        "status": "blocked" if blocking else "passed",
+        "action": "fail" if blocking else "accept",
+        "content": {
+            "short_title": str(content.get("short_title", "")),
+            "hook_subtitle": str(content.get("hook_subtitle", "")),
+            "category": str(content.get("category", "")),
+        },
+        "warning_issues": [
+            _copy_issue_to_dict(issue)
+            for issue in result.issues
+            if issue.severity != "P0"
+        ],
+        "blocking_issues": [_copy_issue_to_dict(issue) for issue in blocking],
+    }
+    _write_copy_quality_report(audit_path, report)
     if blocking:
         details = "; ".join(f"{issue.code}: {issue.message}" for issue in blocking[:3])
         raise ValueError(f"WeChat copy quality guard blocked output: {details}")
+
+
+def _write_copy_quality_report(audit_path: Optional[Path], payload: dict) -> None:
+    """写出标题/文案质量审计报告；未传路径时保持库调用零副作用。"""
+    if audit_path is None:
+        return
+    try:
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        audit_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        logger.info(f"[CopyGuard] quality report → {audit_path}")
+    except Exception as e:
+        logger.warning(f"[CopyGuard] failed to write quality report: {e}")
+
+
+def _copy_issue_to_dict(issue) -> dict:
+    return {
+        "severity": issue.severity,
+        "code": issue.code,
+        "message": issue.message,
+        "source_signal": issue.source_signal,
+        "translation_signal": issue.translation_signal,
+        "suggested_fix": issue.suggested_fix,
+    }
 
 
 # ── 主生成函数 ───────────────────────────────────────────────────────────────
@@ -446,8 +498,12 @@ def _apply_post_processing(short_title: str, hook_subtitle: str) -> tuple[str, s
     return short_title, hook_subtitle
 
 
-def generate_wechat_content(title: str, description: str,
-                             model_name: str = "gemini-2.5-flash") -> dict:
+def generate_wechat_content(
+    title: str,
+    description: str,
+    model_name: str = "gemini-2.5-flash",
+    audit_path: Optional[Path] = None,
+) -> dict:
     """调用 Gemini 生成微信视频号所需的全部内容。
 
     [Claude_Sonnet_4.6_Thinking_planning] v1.8.0 重构：
@@ -465,7 +521,13 @@ def generate_wechat_content(title: str, description: str,
     api_key = settings.gemini_api_key
     if not api_key:
         fallback_content = _translate_fallback(title, description)
-        _guard_wechat_content_quality(title, description, fallback_content)
+        _guard_wechat_content_quality(
+            title,
+            description,
+            fallback_content,
+            audit_path=audit_path,
+            provider="fallback",
+        )
         return fallback_content
 
     try:
@@ -561,14 +623,26 @@ def generate_wechat_content(title: str, description: str,
             "content_hints": content_hints,
             "content_label": content_label,
         }
-        _guard_wechat_content_quality(title, description, content)
+        _guard_wechat_content_quality(
+            title,
+            description,
+            content,
+            audit_path=audit_path,
+            provider=model_name,
+        )
         logger.info(f"AI success: category={category!r}, title={short_title!r}, label={content_label!r}")
         return content
 
     except Exception as e:
         logger.error(f"google-genai call failed: {e}")
         fallback_content = _translate_fallback(title, description)
-        _guard_wechat_content_quality(title, description, fallback_content)
+        _guard_wechat_content_quality(
+            title,
+            description,
+            fallback_content,
+            audit_path=audit_path,
+            provider="fallback",
+        )
         return fallback_content
 
 
@@ -612,12 +686,15 @@ def main():
         if p.exists():
             description = p.read_text(encoding="utf-8")
 
-    content = generate_wechat_content(args.title, description)
-
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
     yid = args.youtube_id
+    content = generate_wechat_content(
+        args.title,
+        description,
+        audit_path=out / f"{yid}_copy_quality.json",
+    )
     (out / f"{yid}_title.txt"   ).write_text(content["short_title"],   encoding="utf-8")
     (out / f"{yid}_copy.txt"    ).write_text(content["copy"],           encoding="utf-8")
     (out / f"{yid}_category.txt").write_text(content["category"],       encoding="utf-8")

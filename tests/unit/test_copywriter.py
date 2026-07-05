@@ -8,7 +8,9 @@
 | 1.2.0   | 2026-05-27 | Gemini_3.5_Flash_planning  | 新增 graceful_truncate_title 测试用例（括号剔除与最左侧语义段优先） |
 | 1.3.0   | 2026-06-22 | Claude_Opus_4.8            | [🅲] 新增 _apply_post_processing 兜底纠偏测试（营销词/网络梗替换、干净文本不变） |
 | 1.4.0   | 2026-07-05 | Codex                      | 新增 copywriter 事实保真守门器测试：P0 阻断、正确募资语义放行 |
+| 1.5.0   | 2026-07-05 | Codex                      | 新增 *_copy_quality.json 审计报告落盘测试 |
 """
+import json
 import sys
 import pytest
 from pathlib import Path
@@ -249,3 +251,50 @@ def test_copy_guard_allows_fundraising_complete_copy():
     }
 
     _guard_wechat_content_quality(title, description, content)
+
+
+def test_copy_guard_writes_quality_report_for_pass(tmp_path):
+    title = "The Money Just SOUNDED Its FINAL ALARM!"
+    description = (
+        "MGX announced the final close of Fund I at $49 billion, "
+        "exceeding its initial $45 billion target."
+    )
+    content = {
+        "short_title": "AI基金超募",
+        "hook_subtitle": "490亿美元完成募集",
+        "copy": "MGX一期基金最终募集规模达490亿美元，超过原定450亿美元目标。",
+        "category": "财经",
+    }
+    audit_path = tmp_path / "Z2z34FFT81c_copy_quality.json"
+
+    _guard_wechat_content_quality(title, description, content, audit_path=audit_path, provider="unit")
+
+    report = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert report["provider"] == "unit"
+    assert report["status"] == "passed"
+    assert report["action"] == "accept"
+    assert report["content"]["short_title"] == "AI基金超募"
+    assert report["blocking_issues"] == []
+
+
+def test_copy_guard_writes_quality_report_for_block(tmp_path):
+    title = "The Money Just SOUNDED Its FINAL ALARM!"
+    description = (
+        "MGX announced the final close of Fund I at $49 billion, "
+        "exceeding its initial $45 billion target."
+    )
+    content = {
+        "short_title": "490亿主权基金撤退",
+        "hook_subtitle": "主权基金离场",
+        "copy": "这只主权投资基金选择退出市场，AI资金开始撤退。",
+        "category": "财经",
+    }
+    audit_path = tmp_path / "Z2z34FFT81c_copy_quality.json"
+
+    with pytest.raises(ValueError, match="WeChat copy quality guard blocked"):
+        _guard_wechat_content_quality(title, description, content, audit_path=audit_path, provider="unit")
+
+    report = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert report["status"] == "blocked"
+    assert report["action"] == "fail"
+    assert report["blocking_issues"][0]["code"] == "FINANCE_EVENT_DIRECTION_REVERSAL"
