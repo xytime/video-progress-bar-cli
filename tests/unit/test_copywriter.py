@@ -10,6 +10,7 @@
 | 1.4.0   | 2026-07-05 | Codex                      | 新增 copywriter 事实保真守门器测试：P0 阻断、正确募资语义放行 |
 | 1.5.0   | 2026-07-05 | Codex                      | 新增 *_copy_quality.json 审计报告落盘测试 |
 | 1.6.0   | 2026-07-05 | Codex                      | 覆盖标题/文案字段间术语一致性 warning |
+| 1.7.0   | 2026-07-05 | Codex                      | 覆盖标题/文案金额单位漂移 warning |
 """
 import json
 import sys
@@ -298,6 +299,26 @@ def test_copy_guard_warns_for_field_level_term_drift(tmp_path):
     assert report["status"] == "passed"
     assert report["blocking_issues"] == []
     assert "TERM_CONSISTENCY_FUND_CLOSE_DRIFT" in {
+        issue["code"] for issue in report["warning_issues"]
+    }
+
+
+def test_copy_guard_warns_for_amount_unit_drift(tmp_path):
+    title = "MGX closes $49 billion AI fund"
+    description = "MGX announced the final close of Fund I at $49 billion."
+    content = {
+        "short_title": "AI基金490亿美元",
+        "hook_subtitle": "完成募集",
+        "copy": "MGX一期基金最终募集规模达490亿美元，但正文另一处写成49亿美元。",
+        "category": "财经",
+    }
+    audit_path = tmp_path / "Z2z34FFT81c_copy_quality.json"
+
+    _guard_wechat_content_quality(title, description, content, audit_path=audit_path, provider="unit")
+
+    report = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert report["status"] == "passed"
+    assert "AMOUNT_CONSISTENCY_UNIT_DRIFT" in {
         issue["code"] for issue in report["warning_issues"]
     }
 

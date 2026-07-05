@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖通用翻译质量 evaluator 的接受、降级、失败与审计输出 |
+| 1.1.0   | 2026-07-05 | Codex  | 覆盖金额单位漂移 warning 进入通用 evaluator audit |
 """
 
 import sys
@@ -81,5 +82,26 @@ def test_evaluator_merges_consistency_warnings_and_context():
 
     assert event["quality_context"]["domain"] == "finance/technology"
     assert "TERM_CONSISTENCY_FUND_CLOSE_DRIFT" in {
+        issue["code"] for issue in event["warning_issues"]
+    }
+
+
+def test_evaluator_includes_amount_unit_drift_warning():
+    decision = evaluate_translation_candidate(
+        [
+            "MGX announced the final close of Fund I at $49 billion.",
+            "The same $49 billion fund was backed by major investors.",
+        ],
+        [
+            "MGX宣布一期基金最终募集规模达490亿美元。",
+            "同一只49亿美元基金获得主要投资者支持。",
+        ],
+        provider="UnitTest",
+        final_provider=True,
+    )
+    event = decision.to_audit_event()
+
+    assert decision.accepted
+    assert "AMOUNT_CONSISTENCY_UNIT_DRIFT" in {
         issue["code"] for issue in event["warning_issues"]
     }

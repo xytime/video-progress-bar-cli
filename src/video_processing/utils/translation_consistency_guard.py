@@ -8,6 +8,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：检查金融 close/oversubscribe 术语在整片译文中的一致性风险 |
+| 1.1.0   | 2026-07-05 | Codex  | 新增金额单位漂移 consistency warning，捕捉同一候选中正确金额与十倍级错译并存 |
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 import re
 from typing import List, Sequence
 
-from .translation_quality_guard import QualityIssue
+from .translation_quality_guard import QualityIssue, extract_fact_signal
 
 
 _SOURCE_FUND_CLOSE_PATTERNS: Sequence[re.Pattern[str]] = tuple(
@@ -64,6 +65,7 @@ def evaluate_translation_consistency(
     """检查整片候选译文的一致性风险。"""
     issues: List[QualityIssue] = []
     _append_fund_close_consistency_issue(issues, source_texts, translated_texts)
+    _append_amount_consistency_issue(issues, source_texts, translated_texts)
     return issues
 
 
@@ -111,3 +113,80 @@ def _append_fund_close_consistency_issue(
 
 def _any_match(patterns: Sequence[re.Pattern[str]], text: str) -> bool:
     return any(pattern.search(text or "") for pattern in patterns)
+
+
+def _append_amount_consistency_issue(
+    issues: List[QualityIssue],
+    source_texts: Sequence[str],
+    translated_texts: Sequence[str],
+) -> None:
+    source_amounts = _unique_amounts(
+        amount
+        for text in source_texts
+        for amount in extract_fact_signal(text, lang="en").amounts_usd
+    )
+    translated_amounts = _unique_amounts(
+        amount
+        for text in translated_texts
+        for amount in extract_fact_signal(text, lang="zh").amounts_usd
+    )
+    if not source_amounts or len(translated_amounts) < 2:
+        return
+
+    for source_amount in source_amounts:
+        close_matches = [
+            amount for amount in translated_amounts
+            if _ratio(source_amount, amount) < 2
+        ]
+        drift_matches = [
+            amount for amount in translated_amounts
+            if _ratio(source_amount, amount) >= 10
+        ]
+        if not close_matches or not drift_matches:
+            continue
+
+        issues.append(
+            QualityIssue(
+                severity="P1",
+                code="AMOUNT_CONSISTENCY_UNIT_DRIFT",
+                message="同一候选中既出现接近原文的金额，也出现相差十倍以上的金额，存在单位漂移风险。",
+                source_signal=_format_amounts([source_amount]),
+                translation_signal=(
+                    f"close={_format_amounts(close_matches[:4])}; "
+                    f"drift={_format_amounts(drift_matches[:4])}"
+                ),
+                suggested_fix="统一核对 billion/million/trillion 与 亿/万亿/万美元 的转换，删除或修正漂移金额。",
+            )
+        )
+        return
+
+
+def _unique_amounts(amounts) -> List[float]:
+    unique: List[float] = []
+    for amount in amounts:
+        if amount <= 0:
+            continue
+        if any(_ratio(amount, existing) < 1.01 for existing in unique):
+            continue
+        unique.append(amount)
+    return unique
+
+
+def _ratio(left: float, right: float) -> float:
+    if left <= 0 or right <= 0:
+        return float("inf")
+    return max(left / right, right / left)
+
+
+def _format_amounts(amounts: Sequence[float]) -> str:
+    return ", ".join(_format_usd(amount) for amount in amounts)
+
+
+def _format_usd(value: float) -> str:
+    if value >= 1_000_000_000_000:
+        return f"${value / 1_000_000_000_000:.3g}T"
+    if value >= 1_000_000_000:
+        return f"${value / 1_000_000_000:.3g}B"
+    if value >= 1_000_000:
+        return f"${value / 1_000_000:.3g}M"
+    return f"${value:.3g}"
