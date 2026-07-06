@@ -10,6 +10,7 @@ provider-neutral 入口。字幕、标题、短标题、文案都可以复用它
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：统一事实守门、一致性检查、候选决策和审计事件输出 |
 | 1.1.0   | 2026-07-06 | Codex  | 质量上下文加入受保护实体，并传递给整片一致性检查 |
+| 1.2.0   | 2026-07-06 | Codex  | 合并翻译自然度直译腔 warning，供候选仲裁复用 |
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Sequence
 
 from .translation_consistency_guard import evaluate_translation_consistency
+from .translation_fluency_guard import evaluate_translation_fluency
 from .translation_quality_guard import QualityIssue, evaluate_translation_batch
 
 
@@ -125,7 +127,8 @@ def evaluate_translation_candidate(
         translated_texts,
         protected_entities=quality_context.entities if quality_context is not None else None,
     )
-    warning_issues = summary.warning_issues + consistency_issues
+    fluency_issues = evaluate_translation_fluency(source_texts, translated_texts)
+    warning_issues = summary.warning_issues + consistency_issues + fluency_issues
     blocking_issues = summary.blocking_issues
 
     if blocking_issues:

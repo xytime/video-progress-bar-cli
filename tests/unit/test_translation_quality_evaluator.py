@@ -7,6 +7,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖通用翻译质量 evaluator 的接受、降级、失败与审计输出 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖金额单位漂移 warning 进入通用 evaluator audit |
 | 1.2.0   | 2026-07-06 | Codex  | 覆盖实体上下文进入审计并触发实体丢失 warning |
+| 1.3.0   | 2026-07-06 | Codex  | 覆盖英语习语被逐词直译时进入自然度 warning |
 """
 
 import sys
@@ -126,4 +127,21 @@ def test_evaluator_uses_context_entities_for_missing_entity_warning():
     assert decision.accepted
     assert "ENTITY_CONSISTENCY_MISSING_PROTECTED_ENTITY" in {
         issue.code for issue in decision.warning_issues
+    }
+
+
+def test_evaluator_includes_fluency_warning_for_literal_calque():
+    decision = evaluate_translation_candidate(
+        ["Let's get into it now. This should be on your radar."],
+        ["让我们现在进入它。这应该在你的雷达上。"],
+        provider="UnitTest",
+        final_provider=True,
+    )
+
+    assert decision.accepted
+    assert {
+        issue.code for issue in decision.warning_issues
+    } >= {
+        "FLUENCY_LITERAL_CALQUE_GET_INTO_IT",
+        "FLUENCY_LITERAL_CALQUE_RADAR",
     }
