@@ -11,6 +11,7 @@
 | 1.4.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 顺序接入 |
 | 1.5.0   | 2026-07-05 | Codex  | 覆盖质量审计报告写入全片上下文摘要 |
 | 1.6.0   | 2026-07-06 | Codex  | 覆盖非最终 provider 出现 warning 时继续尝试更干净候选 |
+| 1.7.0   | 2026-07-06 | Codex  | 固定默认 provider order，避免本地 .env 启用 DeepSeek 污染既有 fallback 测试 |
 """
 
 import json
@@ -43,6 +44,18 @@ def _processor_for(path: Path) -> AutoCaptionProcessor:
         output_path=path.with_name("dummy_output.mp4"),
         src_lang="en",
         target_lang="zh-CN",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _default_provider_order(monkeypatch):
+    """隔离本地 .env 中的 provider 顺序，保持单测只验证显式声明的 provider。"""
+    import video_processing.processors.caption_processor as caption_processor
+
+    monkeypatch.setattr(
+        caption_processor,
+        "settings",
+        _SettingsOrder(["gemini", "aliyun", "google"]),
     )
 
 
