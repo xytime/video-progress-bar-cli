@@ -15,6 +15,8 @@
 | 1.8.0   | 2026-06-11 | Claude_Opus_4.6_Thinking_planning | [Timeout修复] ytsearch30+dateafter导致大量超时，回调为ytsearch10，timeout 120→18s |
 | 1.9.0   | 2026-06-14 | Claude_Opus_4.8                | [限流缓解] 频道轮询间加 1~2.5s 随机间隔；exit 101 退避后重试一次；日志措辞由"Cookie/auth error"改为"瞬时限流"，避免误判 cookie 失效 |
 | 2.0.0   | 2026-06-23 | Claude_Opus_4.8                | [发布断流根治] ①裸 "yt-dlp" 改 settings.ytdlp_path 绝对路径——cron 最小 PATH 找不到致全灭(monitor.log 1555 条 FileNotFoundError)；②三处加 --ignore-no-formats-error——YouTube 格式门控使 --print 元数据整体中止(返回 0 候选)，发现仅需元数据故忽略格式错误 |
+| 2.1.0   | 2026-07-09 | Codex                          | [白名单优先] 批准频道轮询前置；探索型发现降为每6小时一次；本轮白名单已限流时跳过探索，避免高价值频道被前置搜索流量拖死 |
+| 2.2.0   | 2026-07-10 | Codex                          | [监控可观测性] 输出逐频道健康报告，区分成功/空结果/SSL/限流/超时；整轮全部失败时返回非零，避免频道更新静默中断 |
 """
 import sys
 from pathlib import Path
@@ -100,17 +102,17 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
         # and surface the error so it doesn't look like "no new videos"
         if result.returncode not in (0, 101):
             print(f"Warning: Failed to fetch {channel_id}. Error: {result.stderr.strip()[:200]}")
-            return
+            return "error"
         if result.returncode == 101 and not result.stdout.strip():
             # 重试后仍被拒：本轮跳过（下一轮会再试），措辞改为"限流"以免误导为 cookie 失效
             err_line = result.stderr.strip().split('\n')[0][:200] if result.stderr.strip() else "unknown error"
             print(f"  -> 重试后仍被限流(exit 101)，本轮跳过（下轮再试）: {err_line}")
-            return
+            return "limited"
 
         output = result.stdout.strip()
         if not output:
             print("  -> No recent matching videos found.")
-            return
+            return "empty"
 
         def _int_or_none(v):
             try: return int(v)
@@ -143,11 +145,39 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
                 print(f"  -> Added new video to queue: {title}")
             else:
                 print(f"  -> Video already in queue: {title}")
+        return "ok"
                     
     except subprocess.TimeoutExpired:
         print(f"  -> Timeout: {channel_id} took >120s, skipped. Will retry next run.")
+        return "timeout"
     except Exception as e:
         print(f"Error polling channel {channel_id}: {e}")
+        return "error"
+
+
+def should_run_discovery(now: datetime.datetime | None = None) -> bool:
+    """探索型发现只在 6 小时窗口运行，避免每 30 分钟都打搜索流量。"""
+    now = now or datetime.datetime.now()
+    return now.minute < 30 and now.hour in {0, 6, 12, 18}
+
+
+def _write_monitor_report(results: list[dict], approved_count: int) -> None:
+    """写入本轮结构化健康快照，便于看板/告警区分失败与真实空结果。"""
+    report = {
+        "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "approved_count": approved_count,
+        "polled_count": len(results),
+        "summary": {
+            status: sum(1 for item in results if item["status"] == status)
+            for status in ("ok", "empty", "limited", "timeout", "error")
+        },
+        "channels": results,
+    }
+    report_path = Path(__file__).parent.parent / "output" / "monitor_health.json"
+    try:
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as exc:
+        print(f"[Monitor] Failed to write health report: {exc}")
 
 
 
@@ -269,22 +299,46 @@ def discover_high_like_videos(db: PipelineDB):
 
 def main():
     db = PipelineDB()
-    
-    # 1. 探索新频道
-    discover_new_channels(db)
-    
-    # 2. 探索高赞视频
-    discover_high_like_videos(db)
-    
-    # 3. 拉取已有白名单的新视频
+
+    # 1. 先拉取已有白名单的新视频，避免探索流量耗尽额度后拖死高价值频道。
     approved_channels = db.get_approved_channels()
     print(f"\nFound {len(approved_channels)} approved channels.")
-    
+
+    results = []
+    limited_cnt = 0
     # [Claude_Opus_4.8] 频道间加 1~2.5s 随机间隔，避免连续快速轮询触发 YouTube 限流（exit 101）
     for idx, row in enumerate(approved_channels):
         if idx > 0:
             time.sleep(random.uniform(1.0, 2.5))
-        fetch_latest_videos(db, row['channel_id'])
+        result = fetch_latest_videos(db, row['channel_id'])
+        results.append({"channel_id": row["channel_id"], "channel_name": row["channel_name"], "status": result})
+        if result == "limited":
+            limited_cnt += 1
+
+    _write_monitor_report(results, len(approved_channels))
+    failed_results = [item for item in results if item["status"] in {"limited", "timeout", "error"}]
+    if failed_results:
+        print(
+            f"[Monitor] WARNING: {len(failed_results)}/{len(results)} approved channels failed this round; "
+            "inspect output/monitor_health.json."
+        )
+    if results and len(failed_results) == len(results):
+        print("[Monitor] ERROR: every approved channel failed; returning non-zero to expose upstream outage.")
+        raise SystemExit(2)
+
+    # 2. 探索型发现降频，只在固定窗口执行；若白名单轮询已出现限流，则本轮直接熔断。
+    if not should_run_discovery():
+        print("\n[Discovery] Outside 6-hour discovery window. Skipping exploratory searches this run.")
+        return
+    if limited_cnt > 0:
+        print(f"\n[Discovery] Approved-channel polling already hit rate limits ({limited_cnt}/{len(approved_channels)}). Skipping exploratory searches to preserve quota.")
+        return
+
+    # 3. 探索新频道
+    discover_new_channels(db)
+
+    # 4. 探索高赞视频
+    discover_high_like_videos(db)
 
 if __name__ == "__main__":
     main()

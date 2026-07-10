@@ -13,6 +13,7 @@
 | 1.0.0   | 2026-06-22 | Claude_Opus_4.8 | 从 pipeline_manager._check_censorship 抽出 CensorshipService（行为逐字保留） |
 | 1.1.0   | 2026-06-25 | Claude_Opus_4.8 | P2 命中手动锁定(is_manually_scored=1)视频时改为挂起人工复核(FAILED+TG)而非 force 清零回弹——根治"调分后反复弹回待筛选且分数归0"的困惑；非锁定视频仍按原 deprioritize |
 | 1.2.0   | 2026-06-28 | Claude_Opus_4.8 | 受信任频道白名单：channel_id 在 settings.censorship_bypass_channel_set 中→跳过全部审查层(P0/P1/P2/CP)。供运营对自审过的优质频道整体开绿灯（如财经频道的地缘共现词不再误杀） |
+| 1.3.0   | 2026-07-09 | Codex | 新增频道策略临时 fail-open 开关：命中 CP 告警时可按紧急策略放行 |
 """
 import re
 import html
@@ -137,6 +138,12 @@ class CensorshipService:
 
             # ── B. 频道内容策略检查（CP 层） ────────────────────────────────
             if settings.enable_channel_policy_filter:
+                # TODO 临时兜底：当前 CP 规则会误杀“频道策略偏差场景”，先放行不中断发布。
+                # 完成规则收敛后请将该开关关闭，恢复原有失败/告警流程。
+                if settings.enable_channel_policy_fail_open:
+                    logger.warning(f"[ChannelPolicy] TEMP_FAIL_OPEN enabled, skipping Channel Policy check for video {yid}.")
+                    return False
+
                 zh_for_policy = zh_title or ""
                 if not zh_for_policy and re.search(r"[一-龥]", title):
                     zh_for_policy = title

@@ -13,6 +13,8 @@
 | 1.3.0   | 2026-07-05 | Codex  | 支持 $49B/49B fund 等 B/M/T 金融金额缩写抽取 |
 | 1.4.0   | 2026-07-06 | Codex  | 支持 US$49bn/49bn fund 等 bn/mn/tn 金融金额缩写抽取 |
 | 1.5.0   | 2026-07-06 | Codex  | 金额信号格式避免科学计数法，提升审计报告和 prompt 可读性 |
+| 1.6.0   | 2026-07-09 | Codex  | 仅允许上下文补足事件语义，不再为单句金额检查继承全片金额，避免财经长字幕跨句错配导致 P0 误杀 |
+| 1.7.0   | 2026-07-09 | Codex  | 对被字幕切断的金额短语做窄范围补全：仅当本句出现裸数字而上下文出现同尾数带单位金额时，提升为带单位金额，避免 `$600` vs `$450B` 这类拆句误杀 |
 """
 
 from __future__ import annotations
@@ -257,9 +259,48 @@ def _merge_source_with_context(source_signal: FactSignal, context_signal: FactSi
     return FactSignal(
         event_type=event_type,
         money_flow=money_flow,
-        amounts_usd=source_signal.amounts_usd or context_signal.amounts_usd,
+        # 金额只能按“本句原文 ↔ 本句译文”比较。
+        # 若把整片上下文金额继承到当前句，会把别句的 600B/145B 拿来和本句 450B 比，
+        # 在财经长视频里制造跨句错配的 P0 误杀。全片级金额漂移仍由 consistency guard 负责。
+        # 但字幕切句会把 “$600” 与下一句 “billion” 拆开，导致本句只看到裸数字。
+        # 这里仅在“本句是小裸数、上下文里存在同尾数的带单位金额”时做窄范围补全，
+        # 不把上下文金额整体继承进来，避免重新引入跨句污染。
+        amounts_usd=_promote_split_amount_fragments(
+            source_signal.amounts_usd,
+            context_signal.amounts_usd,
+        ),
         markers=markers,
     )
+
+
+def _promote_split_amount_fragments(
+    source_amounts: Sequence[float],
+    context_amounts: Sequence[float],
+) -> List[float]:
+    """把被字幕切断的裸数字金额提升为上下文中同尾数的带单位金额。"""
+    if not source_amounts or not context_amounts:
+        return list(source_amounts)
+
+    promoted: List[float] = []
+    multipliers = (
+        10_000,
+        100_000_000,
+        1_000_000,
+        1_000_000_000,
+        1_000_000_000_000,
+    )
+    for amount in source_amounts:
+        candidate = amount
+        if 0 < amount < 1_000_000:
+            for context_amount in context_amounts:
+                for multiplier in multipliers:
+                    if abs((amount * multiplier) - context_amount) / max(context_amount, 1.0) < 0.01:
+                        candidate = context_amount
+                        break
+                if candidate != amount:
+                    break
+        promoted.append(candidate)
+    return _dedupe_amounts(promoted)
 
 
 def _append_event_direction_issues(

@@ -21,6 +21,7 @@
 | 2.5.0   | 2026-06-28 | Claude_Opus_4.8                     | [二维码精裁] 登录二维码在内嵌 iframe(/platform/login-for-iframe)的 img.qrcode(208x208)里，顶层 locator 找不到→以前总发整页截图(206KB,难扫)。改遍历所有 frame 精确裁剪→发 13KB 干净二维码 |
 | 2.6.0   | 2026-07-05 | Codex                               | 扫码成功保存 Playwright state 后同步写 wechat_login_at.txt，供 Web/TG 状态判断使用，避免旧 state 文件造成“已登录”假阳性 |
 | 2.7.0   | 2026-07-05 | Codex                               | 二维码捕获改为先落盘整页兜底图再尝试精裁覆盖，避免 selector 漂移时 Web UI 无二维码可扫 |
+| 2.8.0   | 2026-07-10 | Codex                               | 自动发布新增 fail-fast-login 模式：检测到登录页立即返回 LOGIN_REQUIRED，不把管线挂在扫码等待上 |
 """
 
 import os
@@ -61,6 +62,12 @@ def _stamp_login_success(state_file: Path) -> None:
     try:
         marker = state_file.parent / "wechat_login_at.txt"
         marker.write_text(str(int(time.time())), encoding="utf-8")
+        # 自动预热重登成功后允许下一登录周期再次触发。
+        auto_flag = state_file.parent / "wechat_auto_relogin_started.flag"
+        try:
+            auto_flag.unlink()
+        except FileNotFoundError:
+            pass
         logger.info(f"Login success marker updated: {marker}")
     except Exception as e:
         logger.warning(f"Failed to update login success marker: {e}")
@@ -287,6 +294,7 @@ def run_uploader(
     category_path: str = None,   # 分类文件
     collection: str = None,      # 新增：微信合集名称
     relogin: bool = False,       # [Claude_Opus_4.8] 强制重登：忽略现有会话→走登录页出二维码（成功才覆盖 state）
+    fail_fast_login: bool = False,  # 自动管线使用：登录失效立即返回，不等待二维码
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -441,6 +449,11 @@ def run_uploader(
                     logger.info("Successfully authenticated (DOM check passed).")
 
         if is_login_page:
+            if fail_fast_login and not login_only:
+                logger.error("Login required; fail-fast mode refuses to wait for QR during automatic publish.")
+                browser.close()
+                return 2  # LOGIN_REQUIRED，交由管线回写状态并告警
+
             # [Gemini_2.0_Flash_fast] 无论是否 headless，均尝试捕获并保存 QR 码图片，以供 Web UI 临时扫码登录使用
             try:
                 page.wait_for_timeout(2000)  # 等 QR 码渲染
@@ -1581,6 +1594,8 @@ def main():
     parser.add_argument("--login-only",  action="store_true")
     parser.add_argument("--relogin",     action="store_true",
                         help="强制重登：忽略现有会话，必出二维码（成功扫码才覆盖 state；未扫旧会话保持有效）")
+    parser.add_argument("--fail-fast-login", action="store_true",
+                        help="自动发布模式：检测到登录失效立即退出，不等待二维码扫码")
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--draft",       action="store_true")
     parser.set_defaults(headless=True)
@@ -1598,6 +1613,7 @@ def main():
         draft         = args.draft,
         collection    = args.collection,
         relogin       = args.relogin,
+        fail_fast_login = args.fail_fast_login,
     )
     sys.exit(code)
 

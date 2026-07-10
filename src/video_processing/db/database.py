@@ -32,6 +32,7 @@
 | 3.11.0  | 2026-06-25 | Claude_Opus_4.8                     | 新增 is_manually_scored(yid,slice) 查询：供审查执行层判定手动锁定视频命中 P2 时挂起人工复核而非 force 清零回弹 |
 | 3.12.0  | 2026-06-28 | Claude_Opus_4.8                     | 新增 get_failed_videos_since(hours)：取最近 N 小时内 FAILED 任务（UTC 对齐窗口），供 Telegram /retry <小时数> 批量重试 |
 | 3.12.1  | 2026-07-05 | Codex                               | get_failed_videos_since 纳入 LOGIN_REQUIRED，修复微信过期导致的批量重试遗漏 |
+| 3.12.2  | 2026-07-08 | Codex                               | 新增 get_stale_publishing_videos：暴露长时间停留在 PUBLISHING 的候选任务，供调度器做“进程已死但状态未回收”的保守降级 |
 """
 
 import sqlite3
@@ -493,6 +494,21 @@ class PipelineDB:
             )
             conn.commit()
             return cursor.rowcount
+
+    def get_stale_publishing_videos(self, stale_minutes: int = 30) -> List[Dict[str, Any]]:
+        """取长时间停留在 PUBLISHING 的任务，供上层结合进程存活性做保守回收。
+
+        注意：这里只暴露候选，不直接改状态；是否回收由业务层依据 process_pid 是否仍存活决定，
+        以避免把仍在微信后台真实上传/发表中的任务误判为失败。
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM processed_videos "
+                "WHERE status = 'PUBLISHING' AND updated_at < datetime('now', ?) "
+                "ORDER BY updated_at ASC",
+                (f"-{int(stale_minutes)} minutes",)
+            )
+            return [dict(row) for row in cursor.fetchall()]
 
     def update_video_score(self, youtube_id: str, score: int, force: bool = False, slice_index: int = 0) -> None:
         """更新特定切片的评分，支持评分锁保护。"""

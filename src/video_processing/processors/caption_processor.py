@@ -37,6 +37,8 @@
 | 1.24.0 | 2026-07-06 | Codex | 字幕质量上下文写入受保护英文实体，供审计与一致性检查复用 |
 | 1.25.0 | 2026-07-06 | Codex | 字幕 provider 选择改为 warning-aware 仲裁，优先采用无告警候选 |
 | 1.26.0 | 2026-07-06 | Codex | 将翻译候选仲裁状态机抽离到 utils，降低字幕处理器职责 |
+| 1.27.0 | 2026-07-09 | Codex | 为 requests 系 SDK 请求补默认连接/读取超时，避免代理或上游 API 卡死时 auto-caption 无限等待 |
+| 1.28.0 | 2026-07-09 | Codex | 新增翻译质量 fail-open 开关逻辑：临时降级阻断为告警放行 |
 """
 import logging
 from pathlib import Path
@@ -54,6 +56,7 @@ import time  # [Claude_Sonnet_4.6_Thinking_planning] moved from function body (P
 old_request = requests.Session.request
 def new_request(*args, **kwargs):
     kwargs['verify'] = False
+    kwargs.setdefault('timeout', (20, 90))
     return old_request(*args, **kwargs)
 requests.Session.request = new_request
 
@@ -798,7 +801,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
     ) -> SubtitleTranslationQualityDecision:
         """只评估候选质量，不修改字幕段或审计状态。"""
         fallback_context_text = "\n".join(source_texts)
-        return evaluate_subtitle_translation_candidate(
+        decision = evaluate_subtitle_translation_candidate(
             source_texts,
             translated_texts,
             provider=provider,
@@ -806,6 +809,27 @@ class AutoCaptionProcessor(VideoProcessorBase):
             context_text=fallback_context_text,
             quality_context=quality_context,
         )
+
+        # TODO 临时处理：量化误杀（金额单位漂移/事件方向偏差）和频道策略误判高发阶段，先保证发布可继续。
+        # 长期要求：恢复阻断语义后关闭开关，改由更细粒度规则修复。
+        if settings.enable_translation_quality_fail_open and decision.blocking_issues:
+            logger.warning(
+                "[TranslationGuard] TEMP_FAIL_OPEN: blocking quality issues ignored (provider=%s)."
+                " Issues: %s",
+                provider,
+                decision.blocking_summary(),
+            )
+            return SubtitleTranslationQualityDecision(
+                provider=decision.provider,
+                accepted=True,
+                status="passed_temporarily",
+                action="accept",
+                warning_issues=[*decision.warning_issues, *decision.blocking_issues],
+                blocking_issues=[],
+                quality_context=decision.quality_context,
+            )
+
+        return decision
 
     def _record_translation_quality_decision(
         self,

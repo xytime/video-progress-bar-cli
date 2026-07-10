@@ -17,6 +17,7 @@
   | 2026-06-13 | Claude_Opus_4.8 | Add "🔓 复核放行" button + bypass-modal on censorship-FAILED rows: warning banner, matched-term chips, weighted keyword tag cloud (title+subtitle), P0 second-confirm; bypass via /api/videos/{id}/bypass-censor. |
   | 2026-06-13 | Claude_Opus_4.8 | Show live download progress bar + speed/ETA on DOWNLOADING rows (1.5s poll of /api/videos/{id}/download-progress); fix showToast referencing non-existent #toast (now uses #toast-container/.toast-item). |
   | 2026-06-13 | Claude_Opus_4.8 | Add "🔁 再次发布" button on completed (PUBLISHED/COMPLETED) rows with duplicate-warning confirm; republish via /api/videos/{id}/republish (reuses retained artifacts). |
+  | 2026-07-07 | Codex | 微信登录轮询优先展示二维码和登录流程中状态，避免旧登录标记在扫码前误报“登录成功”。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -2527,23 +2528,22 @@
         try {
           const res = await fetch('/api/wechat/status');
           const data = await res.json();
-          if (data.logged_in) {
-            showToast('🎉 微信登录成功！');
-            closeWechatLoginModal();
-            refresh();
-            return;
-          }
+
+          const loginFlowActive = Boolean(data.login_flow_active ?? (data.is_running || data.qr_exists));
           if (data.qr_exists) {
             qrImage.src = `/api/wechat/qr?t=${new Date().getTime()}`;
             qrImage.style.display = 'block';
             qrLoading.style.display = 'none';
             saveBtn.href = `/api/wechat/qr?t=${new Date().getTime()}`;
             saveBtn.style.display = 'inline-flex';
-          } else {
-            if (!data.is_running && !data.logged_in) {
-              showToast('❌ 登录程序异常退出，请重试', 'error');
-              closeWechatLoginModal();
-            }
+          } else if (data.logged_in && !loginFlowActive) {
+            showToast('🎉 微信登录成功！');
+            closeWechatLoginModal();
+            refresh();
+            return;
+          } else if (!loginFlowActive && !data.logged_in) {
+            showToast('❌ 登录程序异常退出，请重试', 'error');
+            closeWechatLoginModal();
           }
         } catch (err) {
           console.warn('wechat poll status error', err);

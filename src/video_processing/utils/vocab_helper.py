@@ -11,6 +11,7 @@
 | 1.4.0   | 2026-07-05 | Codex | 支持注入全片翻译上下文，避免逐批字幕缺少主题与金融术语语境 |
 | 1.5.0   | 2026-07-06 | Codex | 强化 Gemini 翻译 prompt 全局上下文硬约束，降低金融 close/金额单位误译 |
 | 1.6.0   | 2026-07-06 | Codex | 复用 translation_prompt_constraints，避免 provider 约束漂移 |
+| 1.7.0   | 2026-07-09 | Codex | Gemini Client 显式设置 HTTP timeout=90 秒，避免代理/上游 API 半开连接导致词汇提取无限等待 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -128,7 +129,10 @@ def extract_vocab_batch(
         logger.error("[vocab_helper] google-genai SDK not installed. Cannot extract vocab.")
         return None
 
-    client = _genai.Client(api_key=api_key)
+    client = _genai.Client(
+        api_key=api_key,
+        http_options=_genai_types.HttpOptions(timeout=90),
+    )
 
     # [Claude_Sonnet_4.6_Thinking_planning] v1.1.0: 分批处理，每批 _BATCH_SIZE 段
     all_results: List[Dict[str, Any]] = []

@@ -25,6 +25,8 @@
 | 3.5.0 | 2026-06-28 | Claude_Opus_4.8                     | 新增 channel_score_floors（"channel_id:分数"）+ channel_score_floor_map：受信任频道评分地板分，使其所有视频(含低播放)过发布线 ≥75 全发（@wstruthbombs 默认 80）|
 | 3.6.0 | 2026-07-05 | Codex                               | 新增 subtitle_translation_provider_order，支持字幕翻译供应商顺序配置 |
 | 3.7.0 | 2026-07-05 | Codex                               | 新增 DeepSeek OpenAI-compatible API 配置，为字幕翻译 provider 预留 |
+| 3.8.0 | 2026-07-09 | Codex                               | 新增字幕质量与频道策略 fail-open 运行时开关，支持紧急恢复发布 |
+| 3.9.0 | 2026-07-10 | Codex                               | 新增微信会话临期自动预热重登开关，提前推送二维码避免发布时才发现过期 |
 """
 import json
 import socket
@@ -97,6 +99,9 @@ class Settings(BaseSettings):
     # [Claude_Opus_4.8] 微信会话临期预警阈值（小时）：会话龄超过此值，看门狗推 Telegram「该重扫了」，
     # 在 ~24h 服务端硬上限造成发布断档前主动提醒（见 docs/wechat_login_expiry_rca.html 候选②坐实）。
     wechat_session_warn_hours: float = 22.0
+    # 临期时自动启动 --login-only --relogin 并把二维码推送到 Telegram。
+    # 旧 state 在扫码成功前不覆盖；该开关不能绕过微信扫码，只把人工动作前移。
+    wechat_auto_relogin_enabled: bool = False
 
 
     # Google Gemini API Key
@@ -161,6 +166,11 @@ class Settings(BaseSettings):
     # 触发词由 censor_engine._CHANNEL_POLICY 定义，用户可按需调整。
     enable_channel_policy_filter: bool = False  # [Gemini_2.5_Flash_planning]
 
+    # [临时兜底] 频道策略拦截 fail-open 开关。置 true 时，仅用于紧急回归，
+    # 将 CP 层命中的中断降级为告警，不阻断发布；恢复后请改为 false。
+    # TODO：后续删除该开关并用更精细可控的规则白名单替代，避免误放。
+    enable_channel_policy_fail_open: bool = False
+
     # 审查词库外部化热加载（_BLOCKLIST/_CHANNEL_POLICY → config/censor_rules.json）
     # [Claude_Opus_4.8] 🅰️ 进化：运维在线增删敏感词、无需改代码重部署，闭合突发事件空窗期。
     # 关闭时用硬编码默认；开启后文件缺失/损坏/P0 空均安全回退默认，绝不静默置空审查。
@@ -172,6 +182,10 @@ class Settings(BaseSettings):
     # CP 的「国名+冲突词」全文共现在数万字转录上几乎必然误杀，故字幕通道刻意绕开。
     # 默认关闭：开启会对此前「标题干净」的存量视频新增拦截，需先灰度验证再在 .env 置 true。
     enable_subtitle_censorship: bool = False
+
+    # [临时兜底] 翻译质量守门 fail-open 开关。置 true 时，阻断问题仅留告警，不阻塞发布。
+    # TODO：后续继续修复金额单位、事件方向相关误杀后，改回 blocking 语义并关闭该开关。
+    enable_translation_quality_fail_open: bool = False
 
     # [Claude_Opus_4.8] 受信任频道白名单：列出的 channel_id（逗号分隔）跳过全部内容审查
     # （P0/P1/P2 + 频道策略 CP），其视频不受敏感词/地缘政治共现拦截。供运营对「自审过、

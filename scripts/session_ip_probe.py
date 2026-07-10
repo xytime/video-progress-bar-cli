@@ -16,6 +16,7 @@
 | Version | Date       | Author          | Description                                         |
 |---------|------------|-----------------|-----------------------------------------------------|
 | 1.0.0   | 2026-06-24 | Claude_Opus_4.8 | 临时诊断探针：直连IP + keepalive判活，定位会话失效根因 |
+| 1.1.0   | 2026-07-10 | Codex             | 出口 IP 变化时推送 Telegram 告警，提前暴露可能触发微信风控的网络漂移 |
 """
 import csv
 import datetime
@@ -23,10 +24,30 @@ import re
 import urllib.request
 from pathlib import Path
 
+import sys
+
 _PRJ = Path(__file__).parent.parent
 _CSV = _PRJ / "output" / "wechat_session_probe.csv"
 _DASH = _PRJ / "output" / "dashboard.log"
 _DB = _PRJ / "output" / "pipeline.db"
+
+
+def _send_ip_change_alert(old_ip: str, new_ip: str) -> None:
+    """出口 IP 变化时告警，不修改微信 state。"""
+    try:
+        sys.path.insert(0, str(_PRJ / "src"))
+        from config.settings import settings
+        import requests
+        token = (settings.telegram_bot_token or "").strip()
+        chat_id = (settings.active_telegram_chat_id or "").strip()
+        if token and chat_id:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": f"⚠️ 微信出口 IP 变化：{old_ip} → {new_ip}\n会话可能被风控，请关注 keepalive 状态。"},
+                timeout=10,
+            )
+    except Exception as exc:
+        print(f"IP change alert failed: {exc}")
 
 # 国内 IP 回显服务（Clash 对 CN 目标走 DIRECT → 反映微信实际看到的直连 IP）
 _CN_IP_URLS = ["https://myip.ipip.net/", "http://cip.cc/"]
@@ -91,7 +112,8 @@ def prev_ip() -> str:
 def main():
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ip = get_direct_cn_ip()
-    changed = "NEW" if (ip and prev_ip() and ip != prev_ip()) else ("" if ip else "FAIL")
+    old_ip = prev_ip()
+    changed = "NEW" if (ip and old_ip and ip != old_ip) else ("" if ip else "FAIL")
     verdict = last_keepalive_verdict()
     lr = login_required_count()
 
@@ -101,6 +123,8 @@ def main():
         if new_file:
             w.writerow(["ts", "direct_cn_ip", "ip_changed", "keepalive", "login_required_cnt"])
         w.writerow([ts, ip, changed, verdict, lr])
+    if changed == "NEW":
+        _send_ip_change_alert(old_ip, ip)
     print(f"{ts} ip={ip or 'FAIL'} changed={changed or '-'} keepalive={verdict} login_req={lr}")
 
 

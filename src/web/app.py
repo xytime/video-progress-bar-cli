@@ -37,6 +37,9 @@
 | 3.14.0 | 2026-07-05 | Codex                               | 修复微信扫码状态假阳性：状态接口改信真实登录成功标记，并阻止 Web 端重复启动并发登录进程 |
 | 3.14.1 | 2026-07-05 | Codex                               | /api/videos/retry-recent 批量重试纳入 LOGIN_REQUIRED，覆盖微信登录过期恢复场景 |
 | 3.14.2 | 2026-07-05 | Codex                               | 新增 /api/videos/retry-recent/preview 只读预览，供 Telegram /status 展示批量重试会影响几条 |
+| 3.14.3 | 2026-07-07 | Codex                               | 微信扫码登录启动前先失效旧登录标记，并在状态接口中显式返回登录流程是否仍在进行，避免后台误把旧态判成成功 |
+| 3.14.4 | 2026-07-08 | Codex                               | 调度器新增孤儿 PUBLISHING 回收：发现发布进程已死但状态长时间未回收时，保守降级为 FAILED 并提示先核对视频号后台，避免队列被无限卡住 |
+| 3.15.0 | 2026-07-10 | Codex                               | 会话临期自动预热重登：保留旧 state，提前经 Telegram 推送二维码，扫码成功后才替换会话 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -78,6 +81,94 @@ app.add_middleware(
 # 使用全局 DB 实例（每次方法调用内部创建新连接，线程安全）
 db = PipelineDB()
 _wechat_login_thread: Optional[threading.Thread] = None
+_WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
+
+
+def _wechat_login_env() -> dict:
+    """构建登录子进程环境，确保 Telegram 凭据随设置注入而不是依赖父进程环境。"""
+    proxy_keys = frozenset({
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+    })
+    env = {k: v for k, v in os.environ.items() if k not in proxy_keys}
+    env["PYTHONPATH"] = str(Path(__file__).parent.parent)
+    if settings.telegram_bot_token:
+        env["TELEGRAM_BOT_TOKEN"] = settings.telegram_bot_token
+    if settings.active_telegram_chat_id:
+        env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
+    if settings.telegram_admin_ids:
+        env["TELEGRAM_ADMIN_IDS"] = settings.telegram_admin_ids
+    return env
+
+
+def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = False, reason: str = "manual") -> dict:
+    """启动单实例微信登录；自动预热时保留旧登录标记和 state，避免提前把现行会话判死。"""
+    prj_root = Path(__file__).parent.parent.parent
+    python = str(prj_root / ".venv" / "bin" / "python")
+    script = str(prj_root / "scripts" / "wechat_uploader.py")
+    state = prj_root / "output" / "wechat_state.json"
+    qr_path = prj_root / "output" / "login_qr.png"
+    login_at_path = prj_root / "output" / "wechat_login_at.txt"
+    auto_flag = prj_root / "output" / _WECHAT_AUTO_RELOGIN_FLAG
+
+    if _is_wechat_login_running():
+        return {"success": True, "already_running": True, "message": "微信登录程序已在运行"}
+
+    if auto_flag.exists():
+        try:
+            # 未扫码的登录流程最多保留 15 分钟，避免一次失败永久阻塞后续预热。
+            if time.time() - auto_flag.stat().st_mtime < 15 * 60:
+                return {"success": True, "already_running": True, "message": "自动重登二维码仍在有效等待期"}
+            auto_flag.unlink()
+        except Exception:
+            pass
+
+    if not preserve_marker:
+        try:
+            login_at_path.unlink()
+        except FileNotFoundError:
+            pass
+    try:
+        qr_path.unlink()
+    except FileNotFoundError:
+        pass
+
+    args = [python, script, "--login-only", "--relogin", "--state", str(state)]
+    if not headless:
+        args.append("--no-headless")
+    if preserve_marker:
+        try:
+            auto_flag.write_text(str(int(time.time())), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _run():
+        try:
+            subprocess.run(args, cwd=str(prj_root), env=_wechat_login_env())
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(f"WeChat login subprocess failed ({reason}): {exc}")
+
+    global _wechat_login_thread
+    _wechat_login_thread = threading.Thread(target=_run, daemon=True, name="wechat-login")
+    _wechat_login_thread.start()
+    return {"success": True, "message": "微信登录流程已启动"}
+
+
+def _wechat_session_needs_auto_relogin() -> bool:
+    """判断是否已接近服务端绝对会话上限，且当前没有进行中的自动重登。"""
+    if not settings.wechat_auto_relogin_enabled or not settings.wechat_keepalive_enabled:
+        return False
+    prj_root = Path(__file__).parent.parent.parent
+    login_at = prj_root / "output" / "wechat_login_at.txt"
+    auto_flag = prj_root / "output" / _WECHAT_AUTO_RELOGIN_FLAG
+    try:
+        if auto_flag.exists() and time.time() - auto_flag.stat().st_mtime < 15 * 60:
+            return False
+        stamp = int(login_at.read_text(encoding="utf-8").strip())
+        return (time.time() - stamp) / 3600.0 >= settings.wechat_session_warn_hours
+    except Exception:
+        return False
 
 def _translate_title_task(youtube_id: str, english_title: str):
     """后台任务：调用翻译接口（阿里云 MT 优先）翻译标题并更新数据库。
@@ -166,6 +257,13 @@ def _queue_runner_loop():
     time.sleep(5)
     while True:
         try:
+            recovered = _recover_orphaned_publishing_tasks(stale_minutes=30)
+            if recovered > 0:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"[Scheduler] Recovered {recovered} orphaned PUBLISHING task(s) to FAILED"
+                )
+
             # [Claude_Sonnet_4.6_Thinking_planning] v3.1.0: 每轮先清理卡在非终态的任务
             # 将卡在 DOWNLOADING/PROCESSING 超过 2 小时的死锁任务重置回 PENDING
             # 这解决了历史任务卡死后永久占用队列、幹操新任务调度的问题
@@ -199,6 +297,67 @@ def _queue_runner_loop():
             import logging
             logging.getLogger(__name__).error(f"[Scheduler] Queue runner loop error: {e}")
         time.sleep(15)
+
+
+def _process_group_alive(pid: Optional[int]) -> bool:
+    """保守判断进程组是否仍活着。
+
+    优先使用 ps 实证，而不是单纯依赖 killpg(pid, 0)，避免 macOS 上僵尸/权限细节造成误判。
+    """
+    if not pid:
+        return False
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pgid=,stat=,command="],
+            cwd=str(Path(__file__).parent.parent.parent),
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return True
+
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 2:
+            continue
+        try:
+            pgid = int(parts[0])
+        except ValueError:
+            continue
+        stat = parts[1]
+        if pgid == int(pid) and "Z" not in stat:
+            return True
+    return False
+
+
+def _recover_orphaned_publishing_tasks(stale_minutes: int = 30) -> int:
+    """将“发布进程已死、但状态仍停在 PUBLISHING”的任务保守降级到 FAILED。
+
+    这里绝不自动重置回 PENDING，原因与 BUG-2 一致：发布动作对外不可逆，必须先让人工核对
+    视频号后台，确认未发布后再手动重试，避免重复公开发布。
+    """
+    recovered = 0
+    candidates = db.get_stale_publishing_videos(stale_minutes=stale_minutes)
+    for video in candidates:
+        pid = video.get("process_pid")
+        if _process_group_alive(pid):
+            continue
+
+        yid = video.get("youtube_id")
+        slice_index = int(video.get("slice_index") or 0)
+        db.update_video_status(
+            yid,
+            "FAILED",
+            error_msg=(
+                "发布进程已结束，但数据库仍停留在 PUBLISHING。"
+                "请先到视频号后台核对：若未发布可点“重试”，若已发布请勿重试以免重复发布。"
+            ),
+            slice_index=slice_index,
+        )
+        db.update_process_pid(yid, None, slice_index=slice_index)
+        recovered += 1
+    return recovered
 
 
 def _wechat_keepalive_loop():
@@ -245,6 +404,18 @@ def _wechat_keepalive_loop():
         )
         if upload_running:
             log.info("[Keepalive] Upload in progress, skipping keepalive this round.")
+            continue
+
+        # 微信服务端会话存在约 24 小时绝对寿命；在临期窗口提前推送二维码，
+        # 保留旧 state 直到扫码成功，避免发布时才被动发现 LOGIN_REQUIRED。
+        # 必须在上传互斥之后执行，避免登录成功写回 state 与上传并发。
+        if _wechat_session_needs_auto_relogin():
+            started = _start_wechat_login_flow(
+                headless=True,
+                preserve_marker=True,
+                reason="automatic pre-expiry relogin",
+            )
+            log.warning(f"[Keepalive] Automatic pre-expiry relogin triggered: {started}")
             continue
 
         log.info("[Keepalive] Triggering WeChat session keepalive...")
@@ -1700,43 +1871,16 @@ def wechat_login(headless: bool = True):
     也可以传递 headless=false 以便在本地有图形界面的机器上弹出浏览器。
     # [Gemini_2.0_Flash_fast]
     """
-    prj_root = Path(__file__).parent.parent.parent
-    python   = str(prj_root / ".venv" / "bin" / "python")
-    script   = str(prj_root / "scripts" / "wechat_uploader.py")
-    state    = str(prj_root / "output" / "wechat_state.json")
-    qr_path  = prj_root / "output" / "login_qr.png"
-
-    if _is_wechat_login_running():
-        return {
-            "success": True,
-            "already_running": True,
-            "message": "微信登录程序已在运行，请使用当前二维码扫码",
-        }
-
-    # 启动前先清理可能存在的旧二维码
-    if qr_path.exists():
-        try:
-            os.remove(qr_path)
-        except Exception:
-            pass
-
-    args = [python, script, "--login-only", "--relogin", "--state", state]
-    if not headless:
-        args.append("--no-headless")
-
-    def _run():
-        try:
-            subprocess.run(args, cwd=str(prj_root))
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f"WeChat login subprocess failed: {e}")
-
-    global _wechat_login_thread
-    _wechat_login_thread = threading.Thread(target=_run, daemon=True, name="wechat-login")
-    _wechat_login_thread.start()
+    started = _start_wechat_login_flow(headless=headless, preserve_marker=False, reason="manual login")
+    if started.get("already_running"):
+        started["message"] = "微信登录程序已在运行，请使用当前二维码扫码"
     return {
-        "success": True, 
-        "message": "无头登录程序已启动，正在获取二维码，请等待浮层刷新" if headless else "已在本机启动浏览器，请在弹出窗口中扫码"
+        **started,
+        "message": (
+            "无头登录程序已启动，正在获取二维码，请等待浮层刷新"
+            if headless and not started.get("already_running")
+            else ("已在本机启动浏览器，请在弹出窗口中扫码" if not headless and not started.get("already_running") else started["message"])
+        ),
     }
 
 
@@ -1764,6 +1908,7 @@ def get_wechat_status():
     
     is_running = _is_wechat_login_running()
     login_marker_active = _wechat_login_marker_active(login_at_path)
+    login_flow_active = is_running or qr_path.exists()
     
     return {
         "logged_in": state_path.exists() and login_marker_active,
@@ -1771,6 +1916,7 @@ def get_wechat_status():
         "login_marker_active": login_marker_active,
         "qr_exists": qr_path.exists(),
         "is_running": is_running,
+        "login_flow_active": login_flow_active,
     }
 
 

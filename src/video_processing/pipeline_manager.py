@@ -55,6 +55,9 @@
 | 3.23.0  | 2026-06-25 | Claude_Opus_4.8                     | [发布日期戳] enable_source_date_stamp 开启时，render_cmd 注入 --source-date（主视频取 upload_date，切片回退父行），格式化 YYYYMMDD→YYYY-MM-DD，缺失/非法则跳过 |
 | 3.24.0  | 2026-06-25 | Claude_Opus_4.8                     | [失败可观测] 新增 _notify_failed(yid,title,reason,slice)：FAILED 通知统一带 youtube_id+精简原因；CalledProcessError(下载失败,最常见) 此前只发 Title 无 ID 无原因→用户无从定位「发了没动静」。title/reason 经 html.escape 防 yt-dlp stderr 的 &/<> 触发 Telegram HTML 400 丢通知 |
 | 3.25.0  | 2026-06-28 | Claude_Opus_4.8                     | score_pending_videos 应用 settings.channel_score_floor_map 地板分：受信任频道(如 @wstruthbombs:80)自动评分托底→其所有视频过发布线全发（force=False 仍尊重人工锁分）|
+| 3.26.0  | 2026-07-09 | Codex                               | [发布防卡死] _run_tracked 支持 timeout 并在超时时清理子进程组；微信上传调用增加 25 分钟硬超时，避免单条发布挂住拖死整队 |
+| 3.27.0  | 2026-07-09 | Codex                               | [转录防卡死] auto-caption 渲染调用增加 45 分钟硬超时，超时后回写 FAILED 并通知，避免状态长期卡在 TRANSCRIBING |
+| 3.28.0  | 2026-07-10 | Codex                               | 发布前启用上传器 fail-fast-login，失效登录立即回写 LOGIN_REQUIRED，避免 PUBLISHING 长时间等待扫码 |
 """
 
 
@@ -101,6 +104,8 @@ _PROXY_KEYS = frozenset({
     'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
     'http_proxy', 'https_proxy', 'all_proxy',
 })
+_WECHAT_UPLOAD_TIMEOUT_SEC = 25 * 60
+_AUTO_CAPTION_TIMEOUT_SEC = 45 * 60
 
 
 def _build_subprocess_env() -> dict:
@@ -403,6 +408,7 @@ class PipelineManager:
         """
         # [Gemini_3.5_Flash_fast] 避免 Popen 收到不支持的 capture_output 和 check 参数
         popen_kwargs = kwargs.copy()
+        timeout = popen_kwargs.pop("timeout", None)
         if popen_kwargs.pop("capture_output", False):
             popen_kwargs["stdout"] = subprocess.PIPE
             popen_kwargs["stderr"] = subprocess.PIPE
@@ -423,7 +429,15 @@ class PipelineManager:
                 self.db.update_process_pid(yid, pgid, slice_index=slice_index)
             except ProcessLookupError:
                 pass  # 进程已极速退出，无需记录
-            stdout, stderr = proc.communicate()
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired as e:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except Exception:
+                    proc.kill()
+                stdout, stderr = proc.communicate()
+                raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr) from e
             if proc.returncode != 0:
                 raise subprocess.CalledProcessError(
                     proc.returncode, cmd,
@@ -930,8 +944,36 @@ class PipelineManager:
                         logger.warning(f"[TTS] Unknown tts_provider={_tts_provider!r} for {prefix}, skipping TTS")
                     render_env = os.environ.copy()
                     render_env["PYTHONPATH"] = str(self._SRC_DIR)
-                    self._run_tracked(render_cmd, yid, slice_index=slice_index, capture_output=True,
-                                      cwd=str(self._PRJ_ROOT), env=render_env)
+                    try:
+                        self._run_tracked(
+                            render_cmd,
+                            yid,
+                            slice_index=slice_index,
+                            capture_output=True,
+                            cwd=str(self._PRJ_ROOT),
+                            env=render_env,
+                            timeout=_AUTO_CAPTION_TIMEOUT_SEC,
+                        )
+                    except subprocess.TimeoutExpired:
+                        logger.error(
+                            f"Auto-caption timed out for {prefix} after {_AUTO_CAPTION_TIMEOUT_SEC}s."
+                        )
+                        self.db.update_video_status(
+                            yid,
+                            "FAILED",
+                            error_msg=(
+                                "字幕转录/翻译/渲染超时（>45分钟）并已被系统终止。"
+                                "通常是 Whisper、翻译质量守卫或 FFmpeg 渲染阶段异常拖长；"
+                                "请查看 translation_quality 报告与 pipeline.log 后再点「重试」。"
+                            ),
+                            slice_index=slice_index,
+                        )
+                        self.send_telegram_msg(
+                            f"⚠️ <b>Auto-caption timed out</b>\n"
+                            f"Title: {render_title}\n"
+                            f"Renderer exceeded {_AUTO_CAPTION_TIMEOUT_SEC // 60} minutes and was terminated."
+                        )
+                        return
 
 
                 # ── 2c. CENSORSHIP COPYWRITING CHECK ──────────────────────────────
@@ -1114,6 +1156,7 @@ class PipelineManager:
                     "--video",  str(vertical),
                     "--copy",   str(copy_file),
                     "--state",  str(self._OUT_DIR / "wechat_state.json"),
+                    "--fail-fast-login",
                 ]
                 if not settings.wechat_headless:
                     upload_cmd += ["--no-headless"]
@@ -1129,11 +1172,28 @@ class PipelineManager:
 
                 try:
                     res = self._run_tracked(upload_cmd, yid, slice_index=slice_index, text=True,
-                                            capture_output=True, cwd=str(self._PRJ_ROOT))
+                                            capture_output=True, cwd=str(self._PRJ_ROOT),
+                                            timeout=_WECHAT_UPLOAD_TIMEOUT_SEC)
                     if res.stdout:
                         logger.debug(f"Uploader stdout:\n{res.stdout}")
                     if res.stderr:
                         logger.debug(f"Uploader stderr:\n{res.stderr}")
+                except subprocess.TimeoutExpired:
+                    logger.error(f"WeChat publish timed out for {prefix} after {_WECHAT_UPLOAD_TIMEOUT_SEC}s.")
+                    self.db.update_video_status(
+                        yid, "FAILED",
+                        error_msg=(
+                            "微信上传超时（>25分钟）并已被系统终止。"
+                            "通常是页面交互卡住或发布结果迟迟未确认；请先核对视频号后台，"
+                            "确认未发后再点「重试」。"
+                        ),
+                        slice_index=slice_index)
+                    self.send_telegram_msg(
+                        f"⚠️ <b>WeChat publish timed out</b>\n"
+                        f"Title: {short_title}\n"
+                        f"Uploader exceeded {_WECHAT_UPLOAD_TIMEOUT_SEC // 60} minutes and was terminated."
+                    )
+                    return
                 except subprocess.CalledProcessError as upload_err:
                     if upload_err.returncode == 2:
                         logger.error(f"WeChat login required for {prefix}.")
