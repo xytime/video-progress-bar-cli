@@ -13,6 +13,7 @@
 | 1.6.0   | 2026-07-06 | Codex | 复用 translation_prompt_constraints，避免 provider 约束漂移 |
 | 1.7.0   | 2026-07-09 | Codex | Gemini Client 显式设置 HTTP timeout=90 秒，避免代理/上游 API 半开连接导致词汇提取无限等待 |
 | 1.8.0   | 2026-07-13 | Codex | 词汇标准改为 PET/B1 起，保留专有名词，消除历史黑名单漏词 |
+| 1.9.0   | 2026-07-13 | Codex | 保留每条最多三项词汇卡，按学习价值取舍避免字幕版面溢出 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -174,8 +175,9 @@ def _build_prompt(
             "2. Extract all meaningful learning vocabulary at CEFR B1 (PET) or above, including "
             "academic, technical, finance, economics, and idiomatic words or phrases. Always extract "
             "proper nouns (people, organisations, products, places, frameworks, acronyms) when present. "
-            "Do not extract only A1-A2 function words or trivial greetings. Extract every eligible item; "
-            "prefer phrases over their component words. If there is no B1+ vocabulary or proper noun, "
+            "Do not extract only A1-A2 function words or trivial greetings. Extract at most three items, "
+            "choosing the highest learning value and preferring phrases over component words. If there is no "
+            "B1+ vocabulary or proper noun, "
             "use an empty object {}.\n"
             "3. CRITICAL: For each extracted English word/phrase, its Chinese value in the 'vocab' "
             "object MUST be an EXACT SUBSTRING of the provided 'chinese' translation string. "
@@ -200,8 +202,8 @@ def _build_prompt(
             "2. Extract all meaningful learning vocabulary at CEFR B1 (PET) or above, including academic, "
             "technical, finance, economics, and idiomatic words or phrases. Always extract proper nouns "
             "(people, organisations, products, places, frameworks, acronyms) when present. Do not extract "
-            "only A1-A2 function words or trivial greetings. Extract every eligible item and prefer phrases "
-            "over their component words. "
+            "only A1-A2 function words or trivial greetings. Extract at most three items, choosing the highest "
+            "learning value and preferring phrases over component words. "
             "CRITICAL: For each extracted word/phrase, its Chinese definition in the 'vocab' "
             "dictionary MUST be the exact substring as it appears in your translated 'translation' "
             "string. If there is no B1+ vocabulary or proper noun, leave the "

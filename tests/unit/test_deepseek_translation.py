@@ -72,6 +72,7 @@ def test_deepseek_vocab_prompt_uses_pet_and_keeps_proper_nouns():
     prompt = _build_vocab_payload(["Wall Street researchers use AI agents."], context_text="", model="test")["messages"][1]["content"]
     assert "CEFR B1 (PET)" in prompt
     assert "Always extract proper nouns" in prompt
+    assert "three eligible items" in prompt
 
 
 def test_deepseek_returns_none_without_key():

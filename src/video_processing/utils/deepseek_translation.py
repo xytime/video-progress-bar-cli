@@ -17,6 +17,7 @@
 | 1.6.0   | 2026-07-13 | Codex  | 强制 vocabulary 使用英文词到中文子串的 JSON 对象，修复模型返回列表被安全过滤 |
 | 1.7.0   | 2026-07-13 | Codex  | 翻译+vocabulary 按 25 段分批调用，避免长视频 JSON 输出截断 |
 | 1.8.0   | 2026-07-13 | Codex  | 词汇口径下调至 PET/B1，并要求保留专有名词，统一学习字幕标准 |
+| 1.9.0   | 2026-07-13 | Codex  | 恢复每条字幕最多三项词汇卡，按学习价值排序避免版面拥挤 |
 """
 
 from __future__ import annotations
@@ -179,9 +180,8 @@ def _build_vocab_payload(texts: List[str], *, context_text: str, model: str) -> 
         "including academic, technical, finance, economics, and idiomatic terms. Always extract proper nouns "
         "(people, organisations, products, places, frameworks, acronyms) when present; they are learning "
         "content, not stop words. Do not extract only A1-A2 function words or trivial greetings. "
-        "When a segment contains eligible vocabulary, extract every eligible item; prefer phrases over "
-        "their component words. The renderer is responsible for wrapping long vocabulary cards. "
-        "Examples: portfolio→投资组合, hedge→对冲, "
+        "When a segment contains more than three eligible items, select the three with the highest learning "
+        "value; prefer phrases over their component words. Examples: portfolio→投资组合, hedge→对冲, "
         "disinflationary→反通胀, inflationary pressures→通胀压力, liquidity→流动性. "
         "Use {} only when the segment genuinely has no eligible vocabulary or proper noun.\n"
         f"Input:\n{json.dumps(items, ensure_ascii=False)}"
