@@ -280,8 +280,12 @@ def _queue_runner_loop():
                 time.sleep(15)
                 continue
 
-            # 1. 检查是否有 >=75 的 PENDING 视频
-            pending_videos = db.get_high_score_pending_videos(min_score=75, limit=1)
+            # 1. 普通频道 >=75；演讲/TED/高校频道 >= speech_publish_score_line
+            pending_videos = db.get_high_score_pending_videos(
+                min_score=75,
+                limit=1,
+                channel_min_scores=settings.auto_publish_channel_min_scores,
+            )
             if pending_videos:
                 # 2. 检查当前是否有活跃的 pipeline 线程正在运行
                 active_threads = threading.enumerate()
@@ -941,7 +945,8 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
     # 自动触发：score 越过调度线，且抢占成功（原状态为 PENDING）
     # [Gemini_2.5_Pro_planning] DISCOVERY 视频不允许通过调分触发管线，防火墙保护
     triggered = False
-    if not is_discovery and new_score >= 75 and db.claim_video_for_processing(youtube_id):
+    publish_line = settings.speech_publish_score_line if video.get("channel_id") in settings.speech_channel_id_set else 75
+    if not is_discovery and new_score >= publish_line and db.claim_video_for_processing(youtube_id):
         fresh = db.get_video_by_youtube_id(youtube_id)
         if fresh:
             _trigger_video_async(fresh)

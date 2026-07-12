@@ -58,6 +58,7 @@
 | 3.26.0  | 2026-07-09 | Codex                               | [发布防卡死] _run_tracked 支持 timeout 并在超时时清理子进程组；微信上传调用增加 25 分钟硬超时，避免单条发布挂住拖死整队 |
 | 3.27.0  | 2026-07-09 | Codex                               | [转录防卡死] auto-caption 渲染调用增加 45 分钟硬超时，超时后回写 FAILED 并通知，避免状态长期卡在 TRANSCRIBING |
 | 3.28.0  | 2026-07-10 | Codex                               | 发布前启用上传器 fail-fast-login，失效登录立即回写 LOGIN_REQUIRED，避免 PUBLISHING 长时间等待扫码 |
+| 3.29.0  | 2026-07-12 | Codex                               | 演讲类频道自动发布线降至 40，普通频道保持 75 |
 """
 
 
@@ -248,7 +249,11 @@ class PipelineManager:
                 break
 
             # 拉取多一点以备过滤父视频就绪与发布顺序锁 [Gemini_3.5_Flash_planning]
-            targets = self.db.get_high_score_pending_videos(min_score=75, limit=limit * 3)
+            targets = self.db.get_high_score_pending_videos(
+                min_score=75,
+                limit=limit * 3,
+                channel_min_scores=settings.auto_publish_channel_min_scores,
+            )
             if not targets:
                 logger.info("No more high-score videos available for processing.")
                 break

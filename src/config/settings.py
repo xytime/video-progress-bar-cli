@@ -27,6 +27,7 @@
 | 3.7.0 | 2026-07-05 | Codex                               | 新增 DeepSeek OpenAI-compatible API 配置，为字幕翻译 provider 预留 |
 | 3.8.0 | 2026-07-09 | Codex                               | 新增字幕质量与频道策略 fail-open 运行时开关，支持紧急恢复发布 |
 | 3.9.0 | 2026-07-10 | Codex                               | 新增微信会话临期自动预热重登开关，提前推送二维码避免发布时才发现过期 |
+| 3.10.0 | 2026-07-12 | Codex                              | 新增演讲类频道独立自动发布线，score >= 40 进入自动处理队列 |
 """
 import json
 import socket
@@ -198,6 +199,15 @@ class Settings(BaseSettings):
     # 与 censorship_bypass_channels 配合 = 该频道整批无障碍发布。经 channel_score_floor_map 读取。
     channel_score_floors: str = ""
 
+    # 演讲/TED/高校频道使用较低的自动发布线；普通频道仍使用 75。
+    speech_publish_score_line: int = 40
+    speech_channel_ids: str = (
+        "UCt84aUC9OG6di8kSdKzEHTQ,UCLv7Gzc3VTO6ggFlXY0sOyw,"
+        "UCzWwWbbKHg4aodl0S35R6XA,UC-EnprmCZ3OXyAoG7vjVNCA,"
+        "UCAuUUnT6oDeKwE6v1NGQxug,UCsT0YIqwnpJCM-mx7-gSA4Q,"
+        "UCnBT5HobLD5_iyHsZNL85Ng,UCSh-dNnqe1agUSzPM01LgBA"
+    )
+
     # SIGTERM 阶梯强杀机制（删除活跃任务时优雅终止底层进程）
     enable_sigterm_kill: bool = False
 
@@ -266,6 +276,14 @@ class Settings(BaseSettings):
                 except ValueError:
                     pass
         return m
+
+    @property
+    def speech_channel_id_set(self) -> set[str]:
+        return {cid.strip() for cid in (self.speech_channel_ids or "").split(",") if cid.strip()}
+
+    @property
+    def auto_publish_channel_min_scores(self) -> dict[str, int]:
+        return {cid: self.speech_publish_score_line for cid in self.speech_channel_id_set}
 
     @property
     def subtitle_translation_provider_order_list(self) -> list[str]:

@@ -33,6 +33,7 @@
 | 3.12.0  | 2026-06-28 | Claude_Opus_4.8                     | 新增 get_failed_videos_since(hours)：取最近 N 小时内 FAILED 任务（UTC 对齐窗口），供 Telegram /retry <小时数> 批量重试 |
 | 3.12.1  | 2026-07-05 | Codex                               | get_failed_videos_since 纳入 LOGIN_REQUIRED，修复微信过期导致的批量重试遗漏 |
 | 3.12.2  | 2026-07-08 | Codex                               | 新增 get_stale_publishing_videos：暴露长时间停留在 PUBLISHING 的候选任务，供调度器做“进程已死但状态未回收”的保守降级 |
+| 3.13.0  | 2026-07-12 | Codex                               | get_high_score_pending_videos 支持按频道覆盖自动发布线，保持黑名单与顺序锁过滤不变 |
 """
 
 import sqlite3
@@ -593,7 +594,8 @@ class PipelineDB:
             row = cursor.fetchone()
             return bool(row and row["bypass_censorship"])
 
-    def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5,
+                                      channel_min_scores: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
         """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。
         [Gemini_3.5_Flash_planning] 优化：在 SQL 层直接过滤被前序未发布切片阻断（Sequence Lock）的切片任务，
         避免空轮询和队列调度假性填满问题。
@@ -601,9 +603,15 @@ class PipelineDB:
         rescore 重算）取「可发候选」的唯一咽喉。在此 SQL 层硬过滤 BLACKLISTED 频道与 blacklisted_videos
         墓碑视频，确保任何路径都绝不发布被拉黑频道的视频（含已在库的存量 PENDING）。
         """
-        query = """
+        threshold_clauses = ["pv.score >= ?"]
+        threshold_params: list[Any] = [min_score]
+        for channel_id, channel_min_score in (channel_min_scores or {}).items():
+            threshold_clauses.append("(pv.channel_id = ? AND pv.score >= ?)")
+            threshold_params.extend([channel_id, channel_min_score])
+        threshold_sql = " OR ".join(threshold_clauses)
+        query = f"""
             SELECT * FROM processed_videos pv
-            WHERE pv.status = 'PENDING' AND pv.score >= ?
+            WHERE pv.status = 'PENDING' AND ({threshold_sql})
               AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
               AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
               AND (
@@ -619,7 +627,7 @@ class PipelineDB:
             ORDER BY pv.score DESC LIMIT ?
         """
         with self.get_connection() as conn:
-            cursor = conn.execute(query, (min_score, limit))
+            cursor = conn.execute(query, (*threshold_params, limit))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_rescore_candidates(self, days: int = 8, limit: int = 250) -> List[Dict[str, Any]]:
