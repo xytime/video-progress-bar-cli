@@ -8,6 +8,7 @@
 | 1.1.0   | 2026-07-06 | Codex  | 覆盖 DeepSeek payload 注入全局上下文硬约束与金融翻译规则 |
 | 1.2.0   | 2026-07-06 | Codex  | 覆盖 DeepSeek payload 复用共享翻译硬约束 |
 | 1.3.0   | 2026-07-06 | Codex  | 覆盖 DeepSeek 响应顶层 translations 包装解析 |
+| 1.4.0   | 2026-07-13 | Codex  | 覆盖翻译+vocabulary JSON 对齐和长视频分批调用 |
 """
 
 import json
@@ -150,3 +151,25 @@ def test_deepseek_payload_uses_context_as_hard_constraints():
     assert "close/final close usually means 完成募集/最终关账" in user_prompt
     assert "billion/bn = 十亿美元" in user_prompt
     assert "$49B" in user_prompt
+
+
+def test_deepseek_translation_vocab_batches_long_input():
+    settings = _Settings()
+    settings.deepseek_api_key = "test-key"
+    first = [{"id": i, "translation": f"译文{i}", "vocab": {}} for i in range(25)]
+    second = [{"id": 0, "translation": "译文25", "vocab": {}}]
+    payloads = [
+        {"choices": [{"message": {"content": json.dumps(first, ensure_ascii=False)}}]},
+        {"choices": [{"message": {"content": json.dumps(second, ensure_ascii=False)}}]},
+    ]
+
+    with patch("urllib.request.urlopen", side_effect=[_Response(payload) for payload in payloads]) as mocked:
+        result = translate_batch_with_vocab_deepseek(
+            [f"segment {i}" for i in range(26)],
+            settings_obj=settings,
+        )
+
+    assert result is not None
+    assert len(result) == 26
+    assert result[-1]["translation"] == "译文25"
+    assert mocked.call_count == 2

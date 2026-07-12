@@ -15,6 +15,7 @@
 | 1.4.0   | 2026-07-13 | Codex  | 新增一次返回翻译与 vocabulary 的结构化候选，供 Gemini 对比测试 |
 | 1.5.0   | 2026-07-13 | Codex  | 明确财经/学术术语至少提取一项，修复模型因保守策略持续返回空 vocabulary |
 | 1.6.0   | 2026-07-13 | Codex  | 强制 vocabulary 使用英文词到中文子串的 JSON 对象，修复模型返回列表被安全过滤 |
+| 1.7.0   | 2026-07-13 | Codex  | 翻译+vocabulary 按 25 段分批调用，避免长视频 JSON 输出截断 |
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ from typing import Any, Dict, List, Optional
 from .translation_prompt_constraints import render_translation_constraints
 
 logger = logging.getLogger(__name__)
+
+_VOCAB_BATCH_SIZE = 25
 
 
 def translate_batch_deepseek(
@@ -108,25 +111,30 @@ def translate_batch_with_vocab_deepseek(
 
     base_url = (getattr(settings_obj, "deepseek_base_url", "") or "https://api.deepseek.com").rstrip("/")
     model = getattr(settings_obj, "deepseek_model", "") or "deepseek-v4-flash"
-    req = urllib.request.Request(
-        f"{base_url}/chat/completions",
-        data=json.dumps(_build_vocab_payload(texts, context_text=context_text, model=model), ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
-        logger.warning(f"[DeepSeek] Translation+vocab API call failed: {e}")
-        record_error(str(e))
-        return None
-    content = _extract_message_content(data)
-    items = _parse_translation_vocab_json(content, expected_count=len(texts)) if content else None
-    if items is None:
-        logger.warning("[DeepSeek] Could not parse aligned translation+vocab response.")
-        record_error("DeepSeek invalid or empty aligned response")
-    return items
+    all_items: List[Dict[str, Any]] = []
+    for batch_start in range(0, len(texts), _VOCAB_BATCH_SIZE):
+        batch = texts[batch_start: batch_start + _VOCAB_BATCH_SIZE]
+        req = urllib.request.Request(
+            f"{base_url}/chat/completions",
+            data=json.dumps(_build_vocab_payload(batch, context_text=context_text, model=model), ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+            logger.warning(f"[DeepSeek] Translation+vocab API call failed: {e}")
+            record_error(str(e))
+            return None
+        content = _extract_message_content(data)
+        items = _parse_translation_vocab_json(content, expected_count=len(batch)) if content else None
+        if items is None:
+            logger.warning("[DeepSeek] Could not parse aligned translation+vocab response.")
+            record_error("DeepSeek invalid or empty aligned response")
+            return None
+        all_items.extend(items)
+    return all_items
 
 
 def _build_payload(texts: List[str], *, context_text: str, model: str) -> Dict[str, Any]:
