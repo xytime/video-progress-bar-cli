@@ -9,6 +9,7 @@
 | ------- | ---------- | -------------------------- | ----------- |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 初始创建：高内聚翻译模块，阿里云 MT 优先 + Google Translate 降级兜底 |
 | 1.1.0   | 2026-06-15 | Claude_Opus_4.8 | [BUG-4] 按字数预算先切子块再拼接（替代 combined[:5000] 截断丢行）；split 段数须与输入严格相等才回写，否则留空，杜绝错位 |
+| 1.2.0   | 2026-07-13 | Codex | 阿里云失败返回结构化错误给动态模型池，非 200 不再伪装为空翻译成功 |
 """
 
 import logging
@@ -61,6 +62,7 @@ def translate_batch_aliyun(
     texts: List[str],
     src_lang: str = "en",
     target_lang: str = "zh",
+    error_out: Optional[List[str]] = None,
 ) -> Optional[List[str]]:
     """调用阿里云机器翻译通用版批量翻译文本列表。
 
@@ -76,18 +78,24 @@ def translate_batch_aliyun(
     """
     # 使用模块级 settings 对象（可在测试中 mock）
     _settings = settings
+    def record_error(message: str) -> None:
+        if error_out is not None:
+            error_out.append(message)
     if _settings is None:
         logger.debug("[AliyunMT] settings not available.")
+        record_error("settings unavailable")
         return None
     try:
         ak_id = _settings.aliyun_mt_access_key_id or ""
         ak_secret = _settings.aliyun_mt_access_key_secret or ""
     except Exception as e:
         logger.debug(f"[AliyunMT] Could not read settings: {e}")
+        record_error(str(e))
         return None
 
     if not ak_id or not ak_secret:
         logger.info("[AliyunMT] ALIYUN_MT_ACCESS_KEY_ID/SECRET not configured. Skipping.")
+        record_error("credentials not configured")
         return None
 
     try:
@@ -96,6 +104,7 @@ def translate_batch_aliyun(
         from alibabacloud_alimt20181012 import models as alimt_models
     except ImportError as e:
         logger.info(f"[AliyunMT] SDK not installed ({e}). Skipping.")
+        record_error(str(e))
         return None
 
     try:
@@ -143,7 +152,8 @@ def translate_batch_aliyun(
                     logger.warning(
                         f"[AliyunMT] Non-200 code={code} for sub-batch at index {batch_start}"
                     )
-                    continue
+                    record_error(f"AliyunMT non-200 code={code}")
+                    return None
 
                 result_text = resp.body.data.translated or ""
                 parts = [p.strip() for p in result_text.split("###")]
@@ -153,7 +163,8 @@ def translate_batch_aliyun(
                         f"[AliyunMT] split count mismatch (got {len(parts)}, expected {len(sub_texts)}); "
                         f"leaving sub-batch untranslated to avoid subtitle desync."
                     )
-                    continue
+                    record_error(f"AliyunMT split count mismatch got={len(parts)} expected={len(sub_texts)}")
+                    return None
                 for local_idx, abs_idx in enumerate(sub_idxs):
                     translated[batch_start + abs_idx] = parts[local_idx]
 
@@ -162,6 +173,7 @@ def translate_batch_aliyun(
 
     except Exception as e:
         logger.error(f"[AliyunMT] Translation failed: {e}")
+        record_error(str(e))
         return None
 
 

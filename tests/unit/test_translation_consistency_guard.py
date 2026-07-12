@@ -74,6 +74,25 @@ def test_consistency_guard_warns_when_amount_unit_drifts_inside_candidate():
     assert "AMOUNT_CONSISTENCY_UNIT_DRIFT" in {issue.code for issue in issues}
 
 
+def test_consistency_guard_can_disable_amount_unit_drift():
+    source_texts = [
+        "MGX announced the final close of Fund I at $49 billion.",
+        "The same $49 billion fund was backed by major investors.",
+    ]
+    translated_texts = [
+        "MGX宣布一期基金最终募集规模达490亿美元。",
+        "同一只49亿美元基金获得主要投资者支持。",
+    ]
+
+    issues = evaluate_translation_consistency(
+        source_texts,
+        translated_texts,
+        enable_numeric_checks=False,
+    )
+
+    assert "AMOUNT_CONSISTENCY_UNIT_DRIFT" not in {issue.code for issue in issues}
+
+
 def test_consistency_guard_allows_consistent_amount_units():
     source_texts = [
         "MGX announced the final close of Fund I at $49 billion.",

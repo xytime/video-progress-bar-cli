@@ -8,11 +8,15 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-13 | Codex  | 新增字幕 provider 动态排序、冷却记忆、错误分类与质量评分 |
+| 1.1.0   | 2026-07-13 | Codex  | 状态文件改为锁保护的原子替换，避免截断 JSON 丢失冷却记忆 |
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -120,10 +124,26 @@ class DynamicTranslationModelPool:
             return
         try:
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
-            self.state_path.write_text(
-                json.dumps(self._state, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+            lock_path = self.state_path.with_suffix(f"{self.state_path.suffix}.lock")
+            with lock_path.open("a+") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                try:
+                    # 同目录临时文件 + replace，读者只会看到完整 JSON。
+                    with tempfile.NamedTemporaryFile(
+                        mode="w",
+                        encoding="utf-8",
+                        dir=self.state_path.parent,
+                        prefix=f".{self.state_path.name}.",
+                        suffix=".tmp",
+                        delete=False,
+                    ) as tmp:
+                        json.dump(self._state, tmp, ensure_ascii=False, indent=2)
+                        tmp.flush()
+                        os.fsync(tmp.fileno())
+                        temp_name = tmp.name
+                    os.replace(temp_name, self.state_path)
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         except OSError:
             # 模型池不能阻断主流程；无法落盘时仍保留本进程内存状态。
             return

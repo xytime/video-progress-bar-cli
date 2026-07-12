@@ -10,6 +10,7 @@
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：检查金融 close/oversubscribe 术语在整片译文中的一致性风险 |
 | 1.1.0   | 2026-07-05 | Codex  | 新增金额单位漂移 consistency warning，捕捉同一候选中正确金额与十倍级错译并存 |
 | 1.2.0   | 2026-07-06 | Codex  | 新增受保护英文实体整片丢失 warning，减少组织/产品名漂移 |
+| 1.3.0   | 2026-07-13 | Codex  | 数字检查开关同时覆盖整片金额单位漂移规则 |
 """
 
 from __future__ import annotations
@@ -65,11 +66,13 @@ def evaluate_translation_consistency(
     translated_texts: Sequence[str],
     *,
     protected_entities: Sequence[str] | None = None,
+    enable_numeric_checks: bool = True,
 ) -> List[QualityIssue]:
     """检查整片候选译文的一致性风险。"""
     issues: List[QualityIssue] = []
     _append_fund_close_consistency_issue(issues, source_texts, translated_texts)
-    _append_amount_consistency_issue(issues, source_texts, translated_texts)
+    if enable_numeric_checks:
+        _append_amount_consistency_issue(issues, source_texts, translated_texts)
     _append_entity_consistency_issue(issues, source_texts, translated_texts, protected_entities)
     return issues
 

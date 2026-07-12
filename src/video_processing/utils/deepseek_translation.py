@@ -85,10 +85,14 @@ def translate_batch_with_vocab_deepseek(
     *,
     context_text: str = "",
     settings_obj: Any = None,
+    error_out: Optional[List[str]] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """一次调用返回中文翻译和与中文子串严格对齐的 vocabulary。"""
     if not texts:
         return []
+    def record_error(message: str) -> None:
+        if error_out is not None:
+            error_out.append(message)
     if settings_obj is None:
         try:
             from config.settings import settings as settings_obj
@@ -97,6 +101,7 @@ def translate_batch_with_vocab_deepseek(
     api_key = getattr(settings_obj, "deepseek_api_key", "") if settings_obj else ""
     if not api_key:
         logger.info("[DeepSeek] API key not configured. Skipping vocab provider.")
+        record_error("credentials not configured")
         return None
 
     base_url = (getattr(settings_obj, "deepseek_base_url", "") or "https://api.deepseek.com").rstrip("/")
@@ -112,11 +117,13 @@ def translate_batch_with_vocab_deepseek(
             data = json.loads(resp.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
         logger.warning(f"[DeepSeek] Translation+vocab API call failed: {e}")
+        record_error(str(e))
         return None
     content = _extract_message_content(data)
     items = _parse_translation_vocab_json(content, expected_count=len(texts)) if content else None
     if items is None:
         logger.warning("[DeepSeek] Could not parse aligned translation+vocab response.")
+        record_error("DeepSeek invalid or empty aligned response")
     return items
 
 

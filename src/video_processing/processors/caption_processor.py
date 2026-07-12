@@ -39,6 +39,7 @@
 | 1.26.0 | 2026-07-06 | Codex | 将翻译候选仲裁状态机抽离到 utils，降低字幕处理器职责 |
 | 1.27.0 | 2026-07-09 | Codex | 为 requests 系 SDK 请求补默认连接/读取超时，避免代理或上游 API 卡死时 auto-caption 无限等待 |
 | 1.28.0 | 2026-07-09 | Codex | 新增翻译质量 fail-open 开关逻辑：临时降级阻断为告警放行 |
+| 1.29.0 | 2026-07-13 | Codex | 动态模型池接入真实 provider 错误，按限流、权限、网络和解析问题冷却 |
 """
 import logging
 from pathlib import Path
@@ -594,10 +595,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
         arbiter = TranslationCandidateArbiter()
         for idx, provider in enumerate(provider_order):
             final_provider = idx == len(provider_order) - 1
+            self._last_provider_error = ""
             candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
             if not candidate or not candidate.is_usable_for(len(segments)):
                 logger.warning("[Translate] Provider %s produced no usable candidate.", provider)
-                pool.record_failure(provider, "empty_or_insufficient_translation", category="invalid_response")
+                pool.record_failure(provider, self._last_provider_error or "empty_or_insufficient_translation")
                 continue
 
             decision = self._evaluate_translation_quality(
@@ -707,6 +709,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
             )
         except Exception as e:
             logger.warning(f"Gemini translation/vocab extraction failed: {e}")
+            self._last_provider_error = str(e)
             gemini_results = None
 
         if gemini_results:
@@ -717,6 +720,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 vocabs=[res.get("vocab", {}) for res in gemini_results],
                 supports_vocab=True,
             )
+        self._last_provider_error = self._last_provider_error or "Gemini returned no aligned candidate"
         return None
 
     def _build_deepseek_candidate(
@@ -735,7 +739,12 @@ class AutoCaptionProcessor(VideoProcessorBase):
             )
         if not settings.enable_deepseek_vocab_fallback:
             return None
-        results = translate_batch_with_vocab_deepseek(texts, context_text=translation_context)
+        errors: List[str] = []
+        results = translate_batch_with_vocab_deepseek(
+            texts,
+            context_text=translation_context,
+            error_out=errors,
+        )
         if results:
             logger.info("DeepSeek produced a subtitle translation+vocab candidate.")
             return SubtitleTranslationCandidate(
@@ -744,23 +753,33 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 vocabs=[res.get("vocab", {}) for res in results],
                 supports_vocab=True,
             )
+        self._last_provider_error = "; ".join(errors) or "DeepSeek returned no aligned candidate"
         return None
 
     def _build_aliyun_candidate(self, texts: List[str]) -> Optional[SubtitleTranslationCandidate]:
         """Aliyun MT：仅翻译，无 vocab。"""
         ali_tgt = "zh" if self.target_lang in ("zh-CN", "zh", None) else self.target_lang
         ali_src = "en" if self.src_lang in ("en", "auto", None) else self.src_lang
-        aliyun_results = translate_batch_aliyun(texts, src_lang=ali_src, target_lang=ali_tgt)
+        errors: List[str] = []
+        aliyun_results = translate_batch_aliyun(
+            texts,
+            src_lang=ali_src,
+            target_lang=ali_tgt,
+            error_out=errors,
+        )
 
         if aliyun_results:
             logger.info("Aliyun MT produced a subtitle translation candidate (no vocab alignment).")
             return SubtitleTranslationCandidate(provider="Aliyun", translations=aliyun_results)
+        self._last_provider_error = "; ".join(errors) or "Aliyun returned no aligned candidate"
         return None
 
     def _build_google_candidate(self, texts: List[str]) -> SubtitleTranslationCandidate:
         """Google Translate 终级 fallback：仅翻译，无 vocab。"""
         logger.info("Google Translate produced a subtitle translation candidate (no vocab alignment).")
         gt_translated = _google_batch_fallback(texts, src_lang="auto", target_lang=self.target_lang)
+        if not gt_translated or any(not text or not text.strip() for text in gt_translated[:len(texts)]):
+            self._last_provider_error = "Google returned empty translation"
         return SubtitleTranslationCandidate(provider="Google", translations=gt_translated)
 
     def _align_vocab_after_plain_translation(

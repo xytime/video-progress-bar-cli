@@ -129,6 +129,7 @@ def evaluate_translation_candidate(
         source_texts,
         translated_texts,
         protected_entities=quality_context.entities if quality_context is not None else None,
+        enable_numeric_checks=enable_numeric_checks,
     )
     fluency_issues = evaluate_translation_fluency(source_texts, translated_texts)
     warning_issues = summary.warning_issues + consistency_issues + fluency_issues
