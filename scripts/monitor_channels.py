@@ -17,6 +17,7 @@
 | 2.0.0   | 2026-06-23 | Claude_Opus_4.8                | [发布断流根治] ①裸 "yt-dlp" 改 settings.ytdlp_path 绝对路径——cron 最小 PATH 找不到致全灭(monitor.log 1555 条 FileNotFoundError)；②三处加 --ignore-no-formats-error——YouTube 格式门控使 --print 元数据整体中止(返回 0 候选)，发现仅需元数据故忽略格式错误 |
 | 2.1.0   | 2026-07-09 | Codex                          | [白名单优先] 批准频道轮询前置；探索型发现降为每6小时一次；本轮白名单已限流时跳过探索，避免高价值频道被前置搜索流量拖死 |
 | 2.2.0   | 2026-07-10 | Codex                          | [监控可观测性] 输出逐频道健康报告，区分成功/空结果/SSL/限流/超时；整轮全部失败时返回非零，避免频道更新静默中断 |
+| 2.3.0   | 2026-07-12 | Codex                          | [分层降频] Wall Street Truthbombs 每小时、演讲类每3小时、其他保留频道每6小时；关闭全网探索并记录逐频道轮询时间 |
 """
 import sys
 from pathlib import Path
@@ -30,6 +31,21 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 from video_processing.db import PipelineDB
 from config.settings import settings  # [Gemini_3.5_Flash_High_planning]
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning]
+
+# 由 cron 每 30 分钟唤醒，但不再每轮访问所有频道。
+CORE_CHANNEL_IDS = {"UCTK_cv-y88CScoudcXnS1Ew"}  # Wall Street Truthbombs
+SPEECH_CHANNEL_IDS = {
+    "UCt84aUC9OG6di8kSdKzEHTQ",  # Google for Education
+    "UCLv7Gzc3VTO6ggFlXY0sOyw",  # Harvard University
+    "UCzWwWbbKHg4aodl0S35R6XA",  # Hoover Institution
+    "UC-EnprmCZ3OXyAoG7vjVNCA",  # Stanford
+    "UCAuUUnT6oDeKwE6v1NGQxug",  # TED
+    "UCsT0YIqwnpJCM-mx7-gSA4Q",  # TEDx Talks
+    "UCnBT5HobLD5_iyHsZNL85Ng",  # UC Berkeley Inspires
+    "UCSh-dNnqe1agUSzPM01LgBA",  # Yale University
+}
+POLL_INTERVALS = {"core": 3600, "speech": 3 * 3600, "other": 6 * 3600}
+POLL_STATE_PATH = Path(__file__).parent.parent / "output" / "monitor_schedule_state.json"
 
 # [Claude_Opus_4.8 v2.0.0] yt-dlp 绝对路径（单一真相源，见 settings.ytdlp_path）。
 # 严禁裸 "yt-dlp"：cron 以 .venv/bin/python 直跑本脚本时不激活 venv，最小 PATH 找不到 yt-dlp
@@ -159,6 +175,42 @@ def should_run_discovery(now: datetime.datetime | None = None) -> bool:
     """探索型发现只在 6 小时窗口运行，避免每 30 分钟都打搜索流量。"""
     now = now or datetime.datetime.now()
     return now.minute < 30 and now.hour in {0, 6, 12, 18}
+
+
+def _channel_tier(channel_id: str) -> str:
+    if channel_id in CORE_CHANNEL_IDS:
+        return "core"
+    if channel_id in SPEECH_CHANNEL_IDS:
+        return "speech"
+    return "other"
+
+
+def _load_poll_state() -> dict[str, str]:
+    try:
+        return json.loads(POLL_STATE_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_poll_state(state: dict[str, str]) -> None:
+    try:
+        POLL_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = POLL_STATE_PATH.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(POLL_STATE_PATH)
+    except OSError as exc:
+        print(f"[Monitor] Failed to save schedule state: {exc}")
+
+
+def _is_channel_due(channel_id: str, now: datetime.datetime, state: dict[str, str]) -> bool:
+    last_raw = state.get(channel_id)
+    if not last_raw:
+        return True
+    try:
+        last = datetime.datetime.fromisoformat(last_raw)
+    except ValueError:
+        return True
+    return (now - last).total_seconds() >= POLL_INTERVALS[_channel_tier(channel_id)]
 
 
 def _write_monitor_report(results: list[dict], approved_count: int) -> None:
@@ -304,16 +356,30 @@ def main():
     approved_channels = db.get_approved_channels()
     print(f"\nFound {len(approved_channels)} approved channels.")
 
+    now = datetime.datetime.now()
+    poll_state = _load_poll_state()
     results = []
     limited_cnt = 0
+    due_channels = [row for row in approved_channels if _is_channel_due(row["channel_id"], now, poll_state)]
+    print(
+        "[Monitor] Due channels: "
+        f"{len(due_channels)}/{len(approved_channels)} "
+        f"(core={sum(_channel_tier(r['channel_id']) == 'core' for r in due_channels)}, "
+        f"speech={sum(_channel_tier(r['channel_id']) == 'speech' for r in due_channels)}, "
+        f"other={sum(_channel_tier(r['channel_id']) == 'other' for r in due_channels)})"
+    )
     # [Claude_Opus_4.8] 频道间加 1~2.5s 随机间隔，避免连续快速轮询触发 YouTube 限流（exit 101）
-    for idx, row in enumerate(approved_channels):
+    for idx, row in enumerate(due_channels):
         if idx > 0:
             time.sleep(random.uniform(1.0, 2.5))
-        result = fetch_latest_videos(db, row['channel_id'])
+        channel_id = row["channel_id"]
+        result = fetch_latest_videos(db, channel_id)
+        poll_state[channel_id] = now.isoformat(timespec="seconds")
         results.append({"channel_id": row["channel_id"], "channel_name": row["channel_name"], "status": result})
         if result == "limited":
             limited_cnt += 1
+
+    _save_poll_state(poll_state)
 
     _write_monitor_report(results, len(approved_channels))
     failed_results = [item for item in results if item["status"] in {"limited", "timeout", "error"}]
@@ -326,19 +392,8 @@ def main():
         print("[Monitor] ERROR: every approved channel failed; returning non-zero to expose upstream outage.")
         raise SystemExit(2)
 
-    # 2. 探索型发现降频，只在固定窗口执行；若白名单轮询已出现限流，则本轮直接熔断。
-    if not should_run_discovery():
-        print("\n[Discovery] Outside 6-hour discovery window. Skipping exploratory searches this run.")
-        return
-    if limited_cnt > 0:
-        print(f"\n[Discovery] Approved-channel polling already hit rate limits ({limited_cnt}/{len(approved_channels)}). Skipping exploratory searches to preserve quota.")
-        return
-
-    # 3. 探索新频道
-    discover_new_channels(db)
-
-    # 4. 探索高赞视频
-    discover_high_like_videos(db)
+    # 2. 全网探索关闭：当前只服务核心频道和演讲类白名单，避免额外搜索流量。
+    print("\n[Discovery] Disabled: whitelist-only low-traffic mode.")
 
 if __name__ == "__main__":
     main()
