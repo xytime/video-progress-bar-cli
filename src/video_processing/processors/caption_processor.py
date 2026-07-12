@@ -595,6 +595,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
         provider_order = pool.order(
             configured_providers,
             required={"translate", "vocab"},
+            # Gemini 的限流必须落到具体模型；不可让旧的 provider 冷却掩盖 3.1 Flash Lite 等余量。
+            ignore_cooldown={"gemini"},
         )
         arbiter = TranslationCandidateArbiter()
         for idx, provider in enumerate(provider_order):

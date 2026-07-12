@@ -26,3 +26,9 @@ def test_model_pool_cools_only_the_rate_limited_gemini_model(tmp_path: Path):
     pool.record_failure("gemini-2.5-flash", "429 RESOURCE_EXHAUSTED")
     ordered = pool.order(["gemini-2.5-flash", "gemini-3.1-flash-lite"], required={"translate", "vocab"})
     assert ordered == ["gemini-3.1-flash-lite"]
+
+
+def test_model_pool_can_ignore_outer_provider_cooldown(tmp_path: Path):
+    pool = DynamicTranslationModelPool(tmp_path / "pool.json")
+    pool.record_failure("gemini", "429 RESOURCE_EXHAUSTED")
+    assert pool.order(["gemini", "deepseek"], ignore_cooldown={"gemini"}) == ["gemini", "deepseek"]

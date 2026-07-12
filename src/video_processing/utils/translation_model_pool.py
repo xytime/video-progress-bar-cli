@@ -10,6 +10,7 @@
 | 1.0.0   | 2026-07-13 | Codex  | 新增字幕 provider 动态排序、冷却记忆、错误分类与质量评分 |
 | 1.1.0   | 2026-07-13 | Codex  | 状态文件改为锁保护的原子替换，避免截断 JSON 丢失冷却记忆 |
 | 1.2.0   | 2026-07-13 | Codex  | 纳入 Gemini 模型级 profile，使免费模型分别冷却与排序 |
+| 1.3.0   | 2026-07-13 | Codex  | 支持外层 provider 忽略冷却，避免遮蔽内部模型级免费容量 |
 """
 
 from __future__ import annotations
@@ -74,10 +75,16 @@ class DynamicTranslationModelPool:
         self.state_path = state_path
         self._state = self._load()
 
-    def order(self, providers: Iterable[str], required: set[str] | None = None) -> list[str]:
+    def order(
+        self,
+        providers: Iterable[str],
+        required: set[str] | None = None,
+        ignore_cooldown: set[str] | None = None,
+    ) -> list[str]:
         """按能力匹配、质量分和静态优先级排序；冷却中的模型排除。"""
         now = time.time()
         required = required or set()
+        ignore_cooldown = {name.lower() for name in (ignore_cooldown or set())}
         candidates = []
         for raw in providers:
             name = raw.strip().lower()
@@ -85,7 +92,7 @@ class DynamicTranslationModelPool:
             if profile is None:
                 continue
             item = self._state.setdefault(name, {})
-            if float(item.get("cooldown_until", 0)) > now:
+            if float(item.get("cooldown_until", 0)) > now and name not in ignore_cooldown:
                 continue
             missing = len(required - profile.capabilities)
             quality = float(item.get("quality_score", 70.0))
