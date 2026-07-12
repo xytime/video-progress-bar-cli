@@ -14,6 +14,7 @@
 | 1.7.0   | 2026-07-09 | Codex | Gemini Client 显式设置 HTTP timeout=90 秒，避免代理/上游 API 半开连接导致词汇提取无限等待 |
 | 1.8.0   | 2026-07-13 | Codex | 词汇标准改为 PET/B1 起，保留专有名词，消除历史黑名单漏词 |
 | 1.9.0   | 2026-07-13 | Codex | 保留每条最多三项词汇卡，按学习价值取舍避免字幕版面溢出 |
+| 2.0.0   | 2026-07-13 | Codex | PET/B1 改为最低门槛，优先 C1-C2、专业术语和关键专有名词 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -172,12 +173,13 @@ def _build_prompt(
             f"{context_block}"
             "Your task:\n"
             "1. Return the 'chinese' value UNCHANGED as the 'translation' field.\n"
-            "2. Extract all meaningful learning vocabulary at CEFR B1 (PET) or above, including "
-            "academic, technical, finance, economics, and idiomatic words or phrases. Always extract "
-            "proper nouns (people, organisations, products, places, frameworks, acronyms) when present. "
-            "Do not extract only A1-A2 function words or trivial greetings. Extract at most three items, "
-            "choosing the highest learning value and preferring phrases over component words. If there is no "
-            "B1+ vocabulary or proper noun, "
+            "2. CEFR B1 (PET) is the minimum eligibility threshold, not a requirement to extract every B1 "
+            "word. Extract at most three items. Prioritise C1-C2 vocabulary, specialist academic/technical/"
+            "finance/economics terms, meaningful proper nouns (people, organisations, products, places, "
+            "frameworks, acronyms), then B2 and PET/B1 words only when especially useful in context. Do not "
+            "extract A1-A2 words, function words, trivial greetings, or low-learning-value words. Prefer "
+            "phrases over component words. If there is no worthwhile PET-or-higher vocabulary or meaningful "
+            "proper noun, "
             "use an empty object {}.\n"
             "3. CRITICAL: For each extracted English word/phrase, its Chinese value in the 'vocab' "
             "object MUST be an EXACT SUBSTRING of the provided 'chinese' translation string. "
@@ -199,11 +201,12 @@ def _build_prompt(
             f"{context_block}"
             "For each segment:\n"
             "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
-            "2. Extract all meaningful learning vocabulary at CEFR B1 (PET) or above, including academic, "
-            "technical, finance, economics, and idiomatic words or phrases. Always extract proper nouns "
-            "(people, organisations, products, places, frameworks, acronyms) when present. Do not extract "
-            "only A1-A2 function words or trivial greetings. Extract at most three items, choosing the highest "
-            "learning value and preferring phrases over component words. "
+            "2. CEFR B1 (PET) is the minimum eligibility threshold, not a requirement to extract every B1 word. "
+            "Extract at most three items. Prioritise C1-C2 vocabulary, specialist academic/technical/finance/"
+            "economics terms, meaningful proper nouns (people, organisations, products, places, frameworks, "
+            "acronyms), then B2 and PET/B1 words only when especially useful in context. Do not extract A1-A2 "
+            "words, function words, trivial greetings, or low-learning-value words. Prefer phrases over "
+            "component words. "
             "CRITICAL: For each extracted word/phrase, its Chinese definition in the 'vocab' "
             "dictionary MUST be the exact substring as it appears in your translated 'translation' "
             "string. If there is no B1+ vocabulary or proper noun, leave the "

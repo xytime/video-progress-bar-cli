@@ -18,6 +18,7 @@
 | 1.7.0   | 2026-07-13 | Codex  | 翻译+vocabulary 按 25 段分批调用，避免长视频 JSON 输出截断 |
 | 1.8.0   | 2026-07-13 | Codex  | 词汇口径下调至 PET/B1，并要求保留专有名词，统一学习字幕标准 |
 | 1.9.0   | 2026-07-13 | Codex  | 恢复每条字幕最多三项词汇卡，按学习价值排序避免版面拥挤 |
+| 2.0.0   | 2026-07-13 | Codex  | 明确 PET/B1 为最低门槛，优先高难度词汇与关键专有名词 |
 """
 
 from __future__ import annotations
@@ -176,14 +177,14 @@ def _build_vocab_payload(texts: List[str], *, context_text: str, model: str) -> 
         "the exact English source words/phrases and whose values are Chinese strings. Never return vocab "
         "as an array/list. The Chinese value MUST be an exact substring of that item's translation. "
         "For example: {\"id\": 0, \"translation\": \"能够对冲风险\", \"vocab\": {\"hedge\": \"对冲\"}}. "
-        "Vocabulary policy: extract all meaningful content words or phrases at CEFR B1 (PET) or above, "
-        "including academic, technical, finance, economics, and idiomatic terms. Always extract proper nouns "
-        "(people, organisations, products, places, frameworks, acronyms) when present; they are learning "
-        "content, not stop words. Do not extract only A1-A2 function words or trivial greetings. "
-        "When a segment contains more than three eligible items, select the three with the highest learning "
-        "value; prefer phrases over their component words. Examples: portfolio→投资组合, hedge→对冲, "
+        "Vocabulary policy: CEFR B1 (PET) is the minimum eligibility threshold, not a requirement to extract "
+        "every B1 word. Extract at most three items per segment. Prioritise, in order: C1-C2 vocabulary, "
+        "specialist academic/technical/finance/economics terms, meaningful proper nouns (people, organisations, "
+        "products, places, frameworks, acronyms), then B2 and PET/B1 words only if they are especially useful "
+        "in context. Do not extract A1-A2 words, function words, trivial greetings, or low-learning-value words. "
+        "Prefer phrases over their component words. Examples: portfolio→投资组合, hedge→对冲, "
         "disinflationary→反通胀, inflationary pressures→通胀压力, liquidity→流动性. "
-        "Use {} only when the segment genuinely has no eligible vocabulary or proper noun.\n"
+        "Use {} when the segment has no worthwhile PET-or-higher vocabulary or meaningful proper noun.\n"
         f"Input:\n{json.dumps(items, ensure_ascii=False)}"
     )
     return {

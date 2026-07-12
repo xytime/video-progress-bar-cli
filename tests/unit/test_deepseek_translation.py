@@ -68,11 +68,11 @@ def test_deepseek_translation_vocab_parses_and_filters_non_substrings():
     assert "exact substring" in _build_vocab_payload(["Fund closed"], context_text="", model="test")["messages"][1]["content"]
 
 
-def test_deepseek_vocab_prompt_uses_pet_and_keeps_proper_nouns():
+def test_deepseek_vocab_prompt_uses_pet_threshold_and_prioritises_difficulty():
     prompt = _build_vocab_payload(["Wall Street researchers use AI agents."], context_text="", model="test")["messages"][1]["content"]
-    assert "CEFR B1 (PET)" in prompt
-    assert "Always extract proper nouns" in prompt
-    assert "three eligible items" in prompt
+    assert "CEFR B1 (PET) is the minimum eligibility threshold" in prompt
+    assert "Prioritise, in order: C1-C2 vocabulary" in prompt
+    assert "at most three items per segment" in prompt
 
 
 def test_deepseek_returns_none_without_key():
