@@ -16,6 +16,7 @@
 |---------|------------|-----------------|--------------------------------------|
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | 初始创建：锁定 BUG-4 翻译 id 对齐 + 字数切块行为 |
 | 1.1.0   | 2026-07-05 | Codex           | 增加 vocab_helper prompt 上下文注入回归测试 |
+| 1.2.0   | 2026-07-13 | Codex           | 覆盖长上下文压缩，防 Gemini TPM 峰值 |
 """
 
 import json
@@ -143,3 +144,8 @@ class TestVocabPromptContext:
         assert "Use fund context" in prompt
         assert "DO NOT change it" in prompt
         assert "MGX宣布一期基金完成募集。" in prompt
+
+    def test_prompt_caps_oversized_global_context(self):
+        prompt = _build_prompt(["A sentence."], None, context_text="x" * 7000)
+        assert "context truncated for rate-limit safety" in prompt
+        assert len(prompt) < 14000

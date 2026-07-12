@@ -15,6 +15,7 @@
 | 1.8.0   | 2026-07-13 | Codex | 词汇标准改为 PET/B1 起，保留专有名词，消除历史黑名单漏词 |
 | 1.9.0   | 2026-07-13 | Codex | 保留每条最多三项词汇卡，按学习价值取舍避免字幕版面溢出 |
 | 2.0.0   | 2026-07-13 | Codex | PET/B1 改为最低门槛，优先 C1-C2、专业术语和关键专有名词 |
+| 2.1.0   | 2026-07-13 | Codex | Gemini 改为模型级动态池，接入 3.1 Flash Lite 并压缩批量/上下文防 TPM 峰值 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -38,6 +39,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .translation_prompt_constraints import render_translation_constraints
+from .translation_model_pool import DynamicTranslationModelPool, classify_error
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +47,13 @@ def _filter_vocab(vocab: Any) -> Dict[str, Any]:
     """保留模型返回的有效词汇；PET/B1 及专有名词均属于学习内容。"""
     return vocab if isinstance(vocab, dict) else {}
 
-# [Claude_Sonnet_4.6_Thinking_planning] 模型候选列表：按质量优先排序
-# gemini-2.5-flash: 最高质量，但 20 RPD/日，跑多次后耗尽
-# gemini-3.5-flash: 20 RPD/日，与 2.5 交替使用延长配额
-# gemini-2.5-flash-lite: 轻量版，RPD 更高，翻译质量仍远超 Aliyun
-_MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"]
+# 模型级池：先保留质量最好的 Flash；一旦单模型冷却，才使用免费 Lite 容量。
+_MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-2.5-flash-lite"]
 
 # [Claude_Sonnet_4.6_Thinking_planning] v1.1.0: 每批最多 50 段
 # 277 段 1 次调用时模型输出被截断，分批后每次 ≤ 50 段，避免计数不符
-_BATCH_SIZE = 50
+_BATCH_SIZE = 25
+_MAX_CONTEXT_CHARS = 6000
 
 # 指数退避参数
 _INITIAL_RETRY_DELAY_S = 2
@@ -84,9 +84,10 @@ def extract_vocab_batch(
         return []
 
     try:
-        from config.settings import settings
-        api_key = settings.gemini_api_key or ""
+        from config.settings import settings as settings_obj
+        api_key = settings_obj.gemini_api_key or ""
     except Exception:
+        settings_obj = None
         api_key = ""
 
     if not api_key:
@@ -121,7 +122,11 @@ def extract_vocab_batch(
                     f"(segments {batch_start+1}-{batch_end}/{total})...")
 
         prompt = _build_prompt(en_batch, zh_batch, context_text=context_text)
-        response = _call_with_retry(client, prompt, _genai_types)
+        state_path = (
+            getattr(settings_obj, "project_root", None) / "output" / "translation_model_pool.json"
+            if getattr(settings_obj, "project_root", None) is not None else None
+        )
+        response = _call_with_retry(client, prompt, _genai_types, state_path=state_path)
         if response is None:
             logger.warning(f"[vocab_helper] Batch {batch_start//_BATCH_SIZE + 1} failed. Aborting.")
             return None
@@ -224,15 +229,19 @@ def _build_prompt(
 def _render_context_block(context_text: str) -> str:
     if not context_text or not context_text.strip():
         return ""
-    return f"{render_translation_constraints(context_text)}\n\n"
+    normalized = context_text.strip()
+    if len(normalized) > _MAX_CONTEXT_CHARS:
+        normalized = normalized[:_MAX_CONTEXT_CHARS] + "\n[context truncated for rate-limit safety]"
+    return f"{render_translation_constraints(normalized)}\n\n"
 
 
-def _call_with_retry(client: Any, prompt: str, genai_types: Any) -> Optional[Any]:
-    """[Claude_Sonnet_4.6_Thinking_planning] 多模型 Fallback + 指数退避重试。"""
+def _call_with_retry(client: Any, prompt: str, genai_types: Any, *, state_path=None) -> Optional[Any]:
+    """模型级动态 fallback；429 立即冷却切换，网络问题才短暂重试。"""
     last_err = None
     response = None
+    pool = DynamicTranslationModelPool(state_path)
 
-    for model_name in _MODELS_TO_TRY:
+    for model_name in pool.order(_MODELS_TO_TRY, required={"translate", "vocab"}):
         retry_delay = _INITIAL_RETRY_DELAY_S
         for attempt in range(_MAX_RETRIES_PER_MODEL):
             try:
@@ -244,6 +253,7 @@ def _call_with_retry(client: Any, prompt: str, genai_types: Any) -> Optional[Any
                         response_mime_type="application/json"
                     ),
                 )
+                pool.record_quality(model_name, score=90.0)
                 break  # 成功
             except Exception as e:
                 last_err = e
@@ -259,15 +269,22 @@ def _call_with_retry(client: Any, prompt: str, genai_types: Any) -> Optional[Any
                     or "403" in err_msg
                     or "API_KEY" in err_msg
                 )
+                error_class = classify_error(err_msg)
+                if is_rate_limit:
+                    pool.record_failure(model_name, err_msg, category=error_class)
+                    logger.warning(f"[vocab_helper] {model_name} rate limited; cooling it and trying another model.")
+                    break
                 if is_fatal:
-                    logger.error(f"[vocab_helper] {model_name} fatal client error: {e}")
-                    raise
-                if is_rate_limit and attempt < _MAX_RETRIES_PER_MODEL - 1:
+                    pool.record_failure(model_name, err_msg, category=error_class)
+                    logger.error(f"[vocab_helper] {model_name} fatal client error: {e}. Trying next model.")
+                    break
+                if attempt < _MAX_RETRIES_PER_MODEL - 1:
                     wait = min(retry_delay, _MAX_RETRY_DELAY_S)
-                    logger.warning(f"[vocab_helper] {model_name} rate limited. Retry in {wait}s...")
+                    logger.warning(f"[vocab_helper] {model_name} transient failure. Retry in {wait}s...")
                     time.sleep(wait)
                     retry_delay *= 2
                     continue
+                pool.record_failure(model_name, err_msg, category=error_class)
                 logger.warning(f"[vocab_helper] {model_name} failed: {e}. Trying next model.")
                 break
 

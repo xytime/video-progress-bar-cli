@@ -19,3 +19,10 @@ def test_model_pool_cools_rate_limited_provider_and_persists(tmp_path: Path):
     assert "gemini" not in pool.order(["gemini", "deepseek"])
     restored = DynamicTranslationModelPool(path)
     assert restored.snapshot()["gemini"]["last_error_class"] == "rate_limit"
+
+
+def test_model_pool_cools_only_the_rate_limited_gemini_model(tmp_path: Path):
+    pool = DynamicTranslationModelPool(tmp_path / "pool.json")
+    pool.record_failure("gemini-2.5-flash", "429 RESOURCE_EXHAUSTED")
+    ordered = pool.order(["gemini-2.5-flash", "gemini-3.1-flash-lite"], required={"translate", "vocab"})
+    assert ordered == ["gemini-3.1-flash-lite"]
