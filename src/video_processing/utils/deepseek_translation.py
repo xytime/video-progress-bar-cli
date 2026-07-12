@@ -13,6 +13,8 @@
 | 1.2.0   | 2026-07-06 | Codex  | 复用 translation_prompt_constraints，避免 provider 约束漂移 |
 | 1.3.0   | 2026-07-06 | Codex  | 兼容 DeepSeek 返回 translations/list 顶层包装，减少可解析响应误降级 |
 | 1.4.0   | 2026-07-13 | Codex  | 新增一次返回翻译与 vocabulary 的结构化候选，供 Gemini 对比测试 |
+| 1.5.0   | 2026-07-13 | Codex  | 明确财经/学术术语至少提取一项，修复模型因保守策略持续返回空 vocabulary |
+| 1.6.0   | 2026-07-13 | Codex  | 强制 vocabulary 使用英文词到中文子串的 JSON 对象，修复模型返回列表被安全过滤 |
 """
 
 from __future__ import annotations
@@ -160,8 +162,15 @@ def _build_vocab_payload(texts: List[str], *, context_text: str, model: str) -> 
         "academic or technical vocabulary items.\n"
         f"{render_translation_constraints(context_text)}\n"
         "Return JSON only: exactly one object per input item, preserving id order by id.\n"
-        "Each object must contain id, translation, and vocab. The vocab value MUST be an exact substring "
-        "of that item's translation. Do not extract proper nouns or easy/common words. Use {} when none.\n"
+        "Each object must contain id, translation, and vocab. vocab MUST be a JSON object whose keys are "
+        "the exact English source words/phrases and whose values are Chinese strings. Never return vocab "
+        "as an array/list. The Chinese value MUST be an exact substring of that item's translation. "
+        "For example: {\"id\": 0, \"translation\": \"能够对冲风险\", \"vocab\": {\"hedge\": \"对冲\"}}. "
+        "Do not extract proper nouns or easy/common words.\n"
+        "When a segment contains an eligible finance, economics, technology, or academic term, you MUST "
+        "extract at least one item (at most 3). Examples: portfolio→投资组合, hedge→对冲, "
+        "disinflationary→反通胀, inflationary pressures→通胀压力, liquidity→流动性. "
+        "Use {} only when the segment genuinely has no eligible term.\n"
         f"Input:\n{json.dumps(items, ensure_ascii=False)}"
     )
     return {
