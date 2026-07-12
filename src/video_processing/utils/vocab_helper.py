@@ -12,6 +12,7 @@
 | 1.5.0   | 2026-07-06 | Codex | 强化 Gemini 翻译 prompt 全局上下文硬约束，降低金融 close/金额单位误译 |
 | 1.6.0   | 2026-07-06 | Codex | 复用 translation_prompt_constraints，避免 provider 约束漂移 |
 | 1.7.0   | 2026-07-09 | Codex | Gemini Client 显式设置 HTTP timeout=90 秒，避免代理/上游 API 半开连接导致词汇提取无限等待 |
+| 1.8.0   | 2026-07-13 | Codex | 词汇标准改为 PET/B1 起，保留专有名词，消除历史黑名单漏词 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -31,7 +32,6 @@
 
 import json
 import logging
-import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -39,36 +39,9 @@ from .translation_prompt_constraints import render_translation_constraints
 
 logger = logging.getLogger(__name__)
 
-# [Claude_Opus_4.8] v1.3.0 词汇黑名单：周知专有名词 / 常识词 / 填充词。
-# 这些词对中文观众毫无学习价值（人人都懂），却会占用词汇卡格子（如截图里的
-# "Wall Street"）。词汇卡定位是 CEFR/TOEFL 级英语「生词」学习，专有名词本就不属于此列，
-# 故在解析后统一剔除。匹配时对英文 key 做「去标点 + 小写」归一化。可按需扩充。
-_STOPWORDS = frozenset({
-    # 地名 / 国家（周知）
-    "wall street", "new york", "london", "paris", "tokyo", "hong kong",
-    "silicon valley", "america", "american", "china", "chinese", "europe",
-    "european", "japan", "japanese",
-    # 知名公司 / 品牌 / 产品
-    "google", "apple", "iphone", "ipad", "amazon", "facebook", "meta",
-    "microsoft", "tesla", "twitter", "youtube", "instagram", "tiktok",
-    "netflix", "nvidia", "openai", "chatgpt",
-    # 周知缩写 / 常识词 / 填充词
-    "ai", "ceo", "cfo", "gdp", "usa", "us", "uk", "eu", "covid",
-    "internet", "email", "ok", "okay",
-})
-
-
 def _filter_vocab(vocab: Any) -> Dict[str, Any]:
-    """[Claude_Opus_4.8] v1.3.0 剔除 _STOPWORDS 命中的周知词，返回过滤后的 vocab dict。"""
-    if not isinstance(vocab, dict) or not vocab:
-        return vocab if isinstance(vocab, dict) else {}
-    out: Dict[str, Any] = {}
-    for k, v in vocab.items():
-        key_norm = re.sub(r"[^\w\s&]", "", str(k)).strip().lower()
-        if key_norm in _STOPWORDS:
-            continue
-        out[k] = v
-    return out
+    """保留模型返回的有效词汇；PET/B1 及专有名词均属于学习内容。"""
+    return vocab if isinstance(vocab, dict) else {}
 
 # [Claude_Sonnet_4.6_Thinking_planning] 模型候选列表：按质量优先排序
 # gemini-2.5-flash: 最高质量，但 20 RPD/日，跑多次后耗尽
@@ -198,14 +171,12 @@ def _build_prompt(
             f"{context_block}"
             "Your task:\n"
             "1. Return the 'chinese' value UNCHANGED as the 'translation' field.\n"
-            "2. From the English text, identify 2-3 key academic/difficult vocabulary "
-            "words or phrases (CEFR B2-C2 / TOEFL / IELTS / GRE level). "
-            "Do NOT extract common or easy words. "
-            "Do NOT extract well-known proper nouns or common-knowledge terms — place names, "
-            "country names, brand/company/product names, or globally famous terms "
-            "(e.g. Wall Street, Google, iPhone, New York, AI, CEO, GDP). "
-            "Focus ONLY on genuinely difficult academic/technical vocabulary. "
-            "If no difficult words exist, use an empty object {}.\n"
+            "2. Extract all meaningful learning vocabulary at CEFR B1 (PET) or above, including "
+            "academic, technical, finance, economics, and idiomatic words or phrases. Always extract "
+            "proper nouns (people, organisations, products, places, frameworks, acronyms) when present. "
+            "Do not extract only A1-A2 function words or trivial greetings. Extract up to 5 items and "
+            "prefer phrases over their component words. If there is no B1+ vocabulary or proper noun, "
+            "use an empty object {}.\n"
             "3. CRITICAL: For each extracted English word/phrase, its Chinese value in the 'vocab' "
             "object MUST be an EXACT SUBSTRING of the provided 'chinese' translation string. "
             "Use the shortest meaningful substring that corresponds to that English term. "
@@ -226,14 +197,14 @@ def _build_prompt(
             f"{context_block}"
             "For each segment:\n"
             "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
-            "2. Identify 2 to 3 key, academic, or difficult vocabulary words/phrases "
-            "(CEFR B2-C2 or TOEFL/IELTS/GRE level) that are essential to the segment's meaning. "
-            "Do NOT extract well-known proper nouns or common-knowledge terms — place names, "
-            "country names, brand/company/product names, or globally famous terms "
-            "(e.g. Wall Street, Google, iPhone, New York, AI, CEO, GDP). "
+            "2. Extract all meaningful learning vocabulary at CEFR B1 (PET) or above, including academic, "
+            "technical, finance, economics, and idiomatic words or phrases. Always extract proper nouns "
+            "(people, organisations, products, places, frameworks, acronyms) when present. Do not extract "
+            "only A1-A2 function words or trivial greetings. Extract up to 5 items and prefer phrases over "
+            "their component words. "
             "CRITICAL: For each extracted word/phrase, its Chinese definition in the 'vocab' "
             "dictionary MUST be the exact substring as it appears in your translated 'translation' "
-            "string. Do not extract common/easy words. If there are no difficult words, leave the "
+            "string. If there is no B1+ vocabulary or proper noun, leave the "
             "vocabulary dictionary empty.\n"
             "Return a JSON array with EXACTLY ONE object per input item — never merge, drop, or reorder. "
             "Each object must contain:\n"
