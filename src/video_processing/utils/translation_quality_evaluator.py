@@ -11,6 +11,7 @@ provider-neutral 入口。字幕、标题、短标题、文案都可以复用它
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：统一事实守门、一致性检查、候选决策和审计事件输出 |
 | 1.1.0   | 2026-07-06 | Codex  | 质量上下文加入受保护实体，并传递给整片一致性检查 |
 | 1.2.0   | 2026-07-06 | Codex  | 合并翻译自然度直译腔 warning，供候选仲裁复用 |
+| 1.3.0   | 2026-07-13 | Codex  | 支持字幕侧临时关闭误报较高的数字数量级检查 |
 """
 
 from __future__ import annotations
@@ -110,6 +111,7 @@ def evaluate_translation_candidate(
     final_provider: bool = True,
     context_text: str = "",
     quality_context: TranslationQualityContext | None = None,
+    enable_numeric_checks: bool = True,
 ) -> TranslationQualityDecision:
     """评估一个翻译候选，返回接受/降级/失败决策。"""
     guard_context_text = (
@@ -121,6 +123,7 @@ def evaluate_translation_candidate(
         source_texts,
         translated_texts,
         context_text=guard_context_text,
+        enable_numeric_checks=enable_numeric_checks,
     )
     consistency_issues = evaluate_translation_consistency(
         source_texts,

@@ -78,7 +78,11 @@ from ..utils.subtitle_translation_quality import (
     evaluate_subtitle_translation_candidate,
 )
 from ..utils.translation_candidate_arbitration import TranslationCandidateArbiter
-from ..utils.deepseek_translation import translate_batch_deepseek
+from ..utils.translation_model_pool import DynamicTranslationModelPool
+from ..utils.deepseek_translation import (
+    translate_batch_deepseek,
+    translate_batch_with_vocab_deepseek,
+)
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -573,13 +577,27 @@ class AutoCaptionProcessor(VideoProcessorBase):
             style_notes=translation_context.style_notes,
         )
 
-        provider_order = settings.subtitle_translation_provider_order_list
+        project_root = getattr(settings, "project_root", None)
+        state_path = (
+            project_root / "output" / "translation_model_pool.json"
+            if project_root is not None
+            else None
+        )
+        pool = DynamicTranslationModelPool(state_path)
+        configured_providers = settings.subtitle_translation_provider_order_list
+        if hasattr(settings, "enable_deepseek_vocab_fallback") and not settings.enable_deepseek_vocab_fallback:
+            configured_providers = [provider for provider in configured_providers if provider != "deepseek"]
+        provider_order = pool.order(
+            configured_providers,
+            required={"translate", "vocab"},
+        )
         arbiter = TranslationCandidateArbiter()
         for idx, provider in enumerate(provider_order):
             final_provider = idx == len(provider_order) - 1
             candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
             if not candidate or not candidate.is_usable_for(len(segments)):
                 logger.warning("[Translate] Provider %s produced no usable candidate.", provider)
+                pool.record_failure(provider, "empty_or_insufficient_translation", category="invalid_response")
                 continue
 
             decision = self._evaluate_translation_quality(
@@ -601,6 +619,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 event=event,
                 final_provider=final_provider,
             )
+            quality_score = max(0.0, 100.0 - len(decision.warning_issues) * 8.0 - len(decision.blocking_issues) * 30.0)
+            if decision.should_fallback or decision.should_fail:
+                pool.record_failure(provider, decision.blocking_summary(), category="quality_blocked")
+            else:
+                pool.record_quality(provider, score=quality_score, warning_count=len(decision.warning_issues))
 
             if decision.should_fallback:
                 self._write_translation_quality_report()
@@ -701,11 +724,26 @@ class AutoCaptionProcessor(VideoProcessorBase):
         texts: List[str],
         translation_context: str,
     ) -> Optional[SubtitleTranslationCandidate]:
-        """DeepSeek：仅翻译，无 vocab。"""
-        translated = translate_batch_deepseek(texts, context_text=translation_context)
-        if translated:
-            logger.info("DeepSeek produced a subtitle translation candidate (no vocab alignment).")
-            return SubtitleTranslationCandidate(provider="DeepSeek", translations=translated)
+        """DeepSeek：对比开关开启后一次返回翻译与 vocab。"""
+        # 旧的测试替身没有新开关：保留旧 plain provider 兼容路径；真实 Settings 默认关闭，
+        # 等 A/B 完成后再开启一体化候选。
+        if not hasattr(settings, "enable_deepseek_vocab_fallback"):
+            translated = translate_batch_deepseek(texts, context_text=translation_context)
+            return (
+                SubtitleTranslationCandidate(provider="DeepSeek", translations=translated)
+                if translated else None
+            )
+        if not settings.enable_deepseek_vocab_fallback:
+            return None
+        results = translate_batch_with_vocab_deepseek(texts, context_text=translation_context)
+        if results:
+            logger.info("DeepSeek produced a subtitle translation+vocab candidate.")
+            return SubtitleTranslationCandidate(
+                provider="DeepSeek",
+                translations=[res.get("translation", "") for res in results],
+                vocabs=[res.get("vocab", {}) for res in results],
+                supports_vocab=True,
+            )
         return None
 
     def _build_aliyun_candidate(self, texts: List[str]) -> Optional[SubtitleTranslationCandidate]:
@@ -808,11 +846,12 @@ class AutoCaptionProcessor(VideoProcessorBase):
             final_provider=final_provider,
             context_text=fallback_context_text,
             quality_context=quality_context,
+            enable_numeric_checks=getattr(settings, "enable_translation_numeric_guard", True),
         )
 
         # TODO 临时处理：量化误杀（金额单位漂移/事件方向偏差）和频道策略误判高发阶段，先保证发布可继续。
         # 长期要求：恢复阻断语义后关闭开关，改由更细粒度规则修复。
-        if settings.enable_translation_quality_fail_open and decision.blocking_issues:
+        if getattr(settings, "enable_translation_quality_fail_open", False) and decision.blocking_issues:
             logger.warning(
                 "[TranslationGuard] TEMP_FAIL_OPEN: blocking quality issues ignored (provider=%s)."
                 " Issues: %s",

@@ -9,6 +9,7 @@ Gemini、Aliyun、Google、DeepSeek/OpenAI 等供应商只要产出同一结构�
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：抽象字幕翻译候选结果与应用函数，为多供应商接入预留接口 |
+| 1.1.0   | 2026-07-13 | Codex  | 拒绝全空或中文覆盖率不足的候选，禁止空字幕进入发布链路 |
 """
 
 from __future__ import annotations
@@ -28,7 +29,13 @@ class SubtitleTranslationCandidate:
 
     def is_usable_for(self, segment_count: int) -> bool:
         """候选结果是否足以应用到指定数量的字幕段。"""
-        return bool(self.translations) and len(self.translations) >= segment_count
+        if not self.translations or len(self.translations) < segment_count:
+            return False
+        non_empty = [text.strip() for text in self.translations[:segment_count] if text and text.strip()]
+        # 这是发布安全底线：等长度的空字符串列表不能被视为成功翻译。
+        if not non_empty:
+            return False
+        return len(non_empty) == segment_count
 
 
 def apply_translation_candidate(

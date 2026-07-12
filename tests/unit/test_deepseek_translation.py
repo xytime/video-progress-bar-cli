@@ -21,6 +21,8 @@ if str(_src_root) not in sys.path:
 
 from video_processing.utils.deepseek_translation import (  # noqa: E402
     _build_payload,
+    _build_vocab_payload,
+    translate_batch_with_vocab_deepseek,
     translate_batch_deepseek,
 )
 
@@ -43,6 +45,26 @@ class _Response:
 
     def read(self):
         return json.dumps(self.payload, ensure_ascii=False).encode("utf-8")
+
+
+def test_deepseek_translation_vocab_parses_and_filters_non_substrings():
+    settings = _Settings()
+    settings.deepseek_api_key = "test-key"
+    payload = {
+        "choices": [{"message": {"content": json.dumps([
+            {"id": 1, "translation": "市场出现波动", "vocab": {"volatility": "波动", "wrong": "不存在"}},
+            {"id": 0, "translation": "完成募集", "vocab": {"fund close": "完成募集"}},
+        ], ensure_ascii=False)}}]
+    }
+    with patch("urllib.request.urlopen", return_value=_Response(payload)):
+        result = translate_batch_with_vocab_deepseek(
+            ["Fund closed", "Market volatility"], settings_obj=settings
+        )
+    assert result == [
+        {"translation": "完成募集", "vocab": {"fund close": "完成募集"}},
+        {"translation": "市场出现波动", "vocab": {"volatility": "波动"}},
+    ]
+    assert "exact substring" in _build_vocab_payload(["Fund closed"], context_text="", model="test")["messages"][1]["content"]
 
 
 def test_deepseek_returns_none_without_key():

@@ -15,6 +15,7 @@
 | 1.5.0   | 2026-07-06 | Codex  | 金额信号格式避免科学计数法，提升审计报告和 prompt 可读性 |
 | 1.6.0   | 2026-07-09 | Codex  | 仅允许上下文补足事件语义，不再为单句金额检查继承全片金额，避免财经长字幕跨句错配导致 P0 误杀 |
 | 1.7.0   | 2026-07-09 | Codex  | 对被字幕切断的金额短语做窄范围补全：仅当本句出现裸数字而上下文出现同尾数带单位金额时，提升为带单位金额，避免 `$600` vs `$450B` 这类拆句误杀 |
+| 1.8.0   | 2026-07-13 | Codex  | 支持暂时禁用金额数量级检查，保留事件方向与空译文安全检查 |
 """
 
 from __future__ import annotations
@@ -204,6 +205,7 @@ def evaluate_translation_pair(
     translated_text: str,
     *,
     context_text: str = "",
+    enable_numeric_checks: bool = True,
 ) -> GuardResult:
     """评估一组原文/译文是否存在会改变事实的严重错误。
 
@@ -220,7 +222,8 @@ def evaluate_translation_pair(
     issues: List[QualityIssue] = []
 
     _append_event_direction_issues(issues, source_signal, translation_signal)
-    _append_amount_issues(issues, source_signal, translation_signal)
+    if enable_numeric_checks:
+        _append_amount_issues(issues, source_signal, translation_signal)
 
     return GuardResult(
         issues=issues,
@@ -234,10 +237,16 @@ def evaluate_translation_batch(
     translated_texts: Sequence[str],
     *,
     context_text: str = "",
+    enable_numeric_checks: bool = True,
 ) -> BatchGuardSummary:
     """批量评估字幕片段，返回可直接用于阻断/告警的摘要。"""
     return BatchGuardSummary([
-        evaluate_translation_pair(source, translated, context_text=context_text)
+        evaluate_translation_pair(
+            source,
+            translated,
+            context_text=context_text,
+            enable_numeric_checks=enable_numeric_checks,
+        )
         for source, translated in zip(source_texts, translated_texts)
     ])
 

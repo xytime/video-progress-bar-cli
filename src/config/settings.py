@@ -28,6 +28,7 @@
 | 3.8.0 | 2026-07-09 | Codex                               | 新增字幕质量与频道策略 fail-open 运行时开关，支持紧急恢复发布 |
 | 3.9.0 | 2026-07-10 | Codex                               | 新增微信会话临期自动预热重登开关，提前推送二维码避免发布时才发现过期 |
 | 3.10.0 | 2026-07-12 | Codex                              | 新增演讲类频道独立自动发布线，score >= 40 进入自动处理队列 |
+| 3.11.0 | 2026-07-13 | Codex                              | 新增动态字幕模型池、DeepSeek vocab fallback 与数字检查开关 |
 """
 import json
 import socket
@@ -127,6 +128,8 @@ class Settings(BaseSettings):
     deepseek_api_key: Optional[str] = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
+    # DeepSeek 一体化翻译+vocabulary 候选：完成 A/B 对比前保持关闭。
+    enable_deepseek_vocab_fallback: bool = False
 
     # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: Clash Mi 下载节点切换配置
     # 架构背景：Clash Mi 使用 macOS Network Extension，系统扩展不允许动态开放任意端口，
@@ -187,6 +190,8 @@ class Settings(BaseSettings):
     # [临时兜底] 翻译质量守门 fail-open 开关。置 true 时，阻断问题仅留告警，不阻塞发布。
     # TODO：后续继续修复金额单位、事件方向相关误杀后，改回 blocking 语义并关闭该开关。
     enable_translation_quality_fail_open: bool = False
+    # 财经数字数量级检查当前误报较多，暂时关闭；事件方向、实体、空字幕检查仍保留。
+    enable_translation_numeric_guard: bool = False
 
     # [Claude_Opus_4.8] 受信任频道白名单：列出的 channel_id（逗号分隔）跳过全部内容审查
     # （P0/P1/P2 + 频道策略 CP），其视频不受敏感词/地缘政治共现拦截。供运营对「自审过、

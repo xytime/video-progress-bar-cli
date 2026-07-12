@@ -36,6 +36,7 @@ def evaluate_subtitle_translation_candidate(
     final_provider: bool,
     context_text: str = "",
     quality_context: SubtitleTranslationQualityContext | None = None,
+    enable_numeric_checks: bool = True,
 ) -> SubtitleTranslationQualityDecision:
     """评估一个字幕 provider 候选，返回接受/降级/失败决策。"""
     return evaluate_translation_candidate(
@@ -45,4 +46,5 @@ def evaluate_subtitle_translation_candidate(
         final_provider=final_provider,
         context_text=context_text,
         quality_context=quality_context,
+        enable_numeric_checks=enable_numeric_checks,
     )

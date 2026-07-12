@@ -55,3 +55,8 @@ def test_candidate_usability_requires_enough_translations():
 
     assert candidate.is_usable_for(1)
     assert not candidate.is_usable_for(2)
+
+
+def test_candidate_rejects_empty_translations():
+    assert not SubtitleTranslationCandidate(provider="Aliyun", translations=["", ""]).is_usable_for(2)
+    assert not SubtitleTranslationCandidate(provider="Aliyun", translations=["你好", ""]).is_usable_for(2)
