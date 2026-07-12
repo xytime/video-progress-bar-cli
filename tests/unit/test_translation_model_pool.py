@@ -32,3 +32,14 @@ def test_model_pool_can_ignore_outer_provider_cooldown(tmp_path: Path):
     pool = DynamicTranslationModelPool(tmp_path / "pool.json")
     pool.record_failure("gemini", "429 RESOURCE_EXHAUSTED")
     assert pool.order(["gemini", "deepseek"], ignore_cooldown={"gemini"}) == ["gemini", "deepseek"]
+
+
+def test_model_pool_merge_preserves_model_cooldown_from_another_instance(tmp_path: Path):
+    path = tmp_path / "pool.json"
+    outer = DynamicTranslationModelPool(path)
+    inner = DynamicTranslationModelPool(path)
+    inner.record_failure("gemini-2.5-flash", "429 RESOURCE_EXHAUSTED")
+    outer.record_quality("gemini", score=90)
+    restored = DynamicTranslationModelPool(path)
+    assert restored.snapshot()["gemini-2.5-flash"]["last_error_class"] == "rate_limit"
+    assert restored.snapshot()["gemini"]["quality_score"] > 70

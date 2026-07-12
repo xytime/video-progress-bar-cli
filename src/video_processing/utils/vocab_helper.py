@@ -126,15 +126,21 @@ def extract_vocab_batch(
             getattr(settings_obj, "project_root", None) / "output" / "translation_model_pool.json"
             if getattr(settings_obj, "project_root", None) is not None else None
         )
-        response = _call_with_retry(client, prompt, _genai_types, state_path=state_path)
-        if response is None:
+        call_result = _call_with_retry(client, prompt, _genai_types, state_path=state_path)
+        if call_result is None:
             logger.warning(f"[vocab_helper] Batch {batch_start//_BATCH_SIZE + 1} failed. Aborting.")
             return None
+        response, model_name = call_result
 
         batch_result = _parse_response(response.text, len(en_batch))
         if batch_result is None:
+            DynamicTranslationModelPool(state_path).record_failure(
+                model_name, "invalid aligned JSON response", category="invalid_response",
+            )
             logger.warning(f"[vocab_helper] Batch {batch_start//_BATCH_SIZE + 1} parse failed. Aborting.")
             return None
+        # 只有 JSON 与段落对齐都通过，才给具体模型计入质量成功。
+        DynamicTranslationModelPool(state_path).record_quality(model_name, score=90.0)
 
         all_results.extend(batch_result)
 
@@ -235,7 +241,7 @@ def _render_context_block(context_text: str) -> str:
     return f"{render_translation_constraints(normalized)}\n\n"
 
 
-def _call_with_retry(client: Any, prompt: str, genai_types: Any, *, state_path=None) -> Optional[Any]:
+def _call_with_retry(client: Any, prompt: str, genai_types: Any, *, state_path=None) -> Optional[tuple[Any, str]]:
     """模型级动态 fallback；429 立即冷却切换，网络问题才短暂重试。"""
     last_err = None
     response = None
@@ -253,7 +259,7 @@ def _call_with_retry(client: Any, prompt: str, genai_types: Any, *, state_path=N
                         response_mime_type="application/json"
                     ),
                 )
-                pool.record_quality(model_name, score=90.0)
+                response = (response, model_name)
                 break  # 成功
             except Exception as e:
                 last_err = e

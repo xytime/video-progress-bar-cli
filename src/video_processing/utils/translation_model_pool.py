@@ -11,6 +11,7 @@
 | 1.1.0   | 2026-07-13 | Codex  | 状态文件改为锁保护的原子替换，避免截断 JSON 丢失冷却记忆 |
 | 1.2.0   | 2026-07-13 | Codex  | 纳入 Gemini 模型级 profile，使免费模型分别冷却与排序 |
 | 1.3.0   | 2026-07-13 | Codex  | 支持外层 provider 忽略冷却，避免遮蔽内部模型级免费容量 |
+| 1.4.0   | 2026-07-13 | Codex  | 锁内 read-merge-write，避免外层旧快照覆盖具体模型冷却状态 |
 """
 
 from __future__ import annotations
@@ -74,6 +75,7 @@ class DynamicTranslationModelPool:
     def __init__(self, state_path: Path | None):
         self.state_path = state_path
         self._state = self._load()
+        self._dirty: dict[str, dict] = {}
 
     def order(
         self,
@@ -107,6 +109,7 @@ class DynamicTranslationModelPool:
         item["last_error_class"] = category
         item["last_error"] = (error or "")[:240]
         item["cooldown_until"] = time.time() + self._COOLDOWN_SECONDS.get(category, 180)
+        self._dirty[name] = dict(item)
         self._save()
 
     def record_quality(self, provider: str, *, score: float, warning_count: int = 0) -> None:
@@ -116,6 +119,7 @@ class DynamicTranslationModelPool:
         item["warning_count"] = int(item.get("warning_count", 0)) + warning_count
         item["last_success_at"] = time.time()
         item["cooldown_until"] = 0
+        self._dirty[provider.lower()] = dict(item)
         self._save()
 
     def snapshot(self) -> dict:
@@ -141,6 +145,10 @@ class DynamicTranslationModelPool:
             with lock_path.open("a+") as lock_file:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
                 try:
+                    # 锁外加载的 self._state 可能已过期；仅合并本实例实际更新过的 key。
+                    latest = self._load()
+                    latest.update(self._dirty)
+                    self._state = latest
                     # 同目录临时文件 + replace，读者只会看到完整 JSON。
                     with tempfile.NamedTemporaryFile(
                         mode="w",
@@ -150,11 +158,12 @@ class DynamicTranslationModelPool:
                         suffix=".tmp",
                         delete=False,
                     ) as tmp:
-                        json.dump(self._state, tmp, ensure_ascii=False, indent=2)
+                        json.dump(latest, tmp, ensure_ascii=False, indent=2)
                         tmp.flush()
                         os.fsync(tmp.fileno())
                         temp_name = tmp.name
                     os.replace(temp_name, self.state_path)
+                    self._dirty.clear()
                 finally:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         except OSError:
