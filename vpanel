@@ -9,6 +9,7 @@
 # | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 修复硬编码路径、set -e 静默崩溃、stop 未等待进程、help 命令缺失、tail 行数不足 |
 # | 1.2.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 新增 bot 命令组：透传 bot_daemon.py，零业务逻辑 |
 # | 1.3.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 使用 python -u 启用无缓冲输出以实时更新日志 |
+# | 1.4.0 | 2026-07-13 | Codex | UI 检测 LaunchAgent 后统一由 launchd 启停，避免 KeepAlive 与 nohup 双重管理争抢端口 |
 # =======================================================================
 
 # [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
@@ -26,6 +27,10 @@ PYTHON="$VENV_DIR/bin/python"
 PID_FILE="$PRJ_ROOT/output/dashboard.pid"
 UI_LOG_FILE="$PRJ_ROOT/output/dashboard.log"
 JOB_LOG_FILE="$PRJ_ROOT/output/pipeline.log"
+LAUNCH_LABEL="com.videopipeline.ui"
+LAUNCH_PLIST="$HOME/Library/LaunchAgents/$LAUNCH_LABEL.plist"
+LAUNCH_LOG="/tmp/videopipeline-ui.log"
+LAUNCH_DOMAIN="gui/$(id -u)"
 
 # [Claude_Opus_4.8] 仪表盘端口（与 settings.dashboard_port 一致，支持 DASHBOARD_PORT 覆盖）
 DASH_PORT="${DASHBOARD_PORT:-9100}"
@@ -36,6 +41,7 @@ DASH_PATTERN="src/web/app.py"
 _dash_pids()     { pgrep -f "$DASH_PATTERN" 2>/dev/null; }
 _port_pid()      { lsof -nP -iTCP:"$DASH_PORT" -sTCP:LISTEN -t 2>/dev/null | head -1; }
 _all_dash_pids() { printf '%s\n%s\n' "$(_dash_pids)" "$(_port_pid)" | sort -u | grep -v '^$'; }
+_launch_loaded()  { launchctl print "$LAUNCH_DOMAIN/$LAUNCH_LABEL" >/dev/null 2>&1; }
 
 # 确保 output 目录存在
 mkdir -p "$PRJ_ROOT/output"
@@ -91,6 +97,30 @@ ui_start() {
         echo "$pp" > "$PID_FILE"
         return 0
     fi
+
+    if [ -f "$LAUNCH_PLIST" ]; then
+        echo "🚀 正在通过 launchd 启动控制中心仪表盘..."
+        if ! _launch_loaded; then
+            launchctl bootstrap "$LAUNCH_DOMAIN" "$LAUNCH_PLIST" || return 1
+        else
+            launchctl kickstart "$LAUNCH_DOMAIN/$LAUNCH_LABEL" >/dev/null 2>&1 || true
+        fi
+        local i bound
+        for i in $(seq 1 20); do
+            sleep 0.5
+            bound="$(_port_pid)"
+            if [ -n "$bound" ]; then
+                echo "$bound" > "$PID_FILE"
+                echo "✅ 启动成功！端口 :$DASH_PORT 由 PID $bound 接管"
+                echo "🌐 仪表盘地址: http://localhost:$DASH_PORT"
+                echo "📄 launchd 日志: $LAUNCH_LOG"
+                return 0
+            fi
+        done
+        echo "❌ launchd 未能绑定端口 :$DASH_PORT，请检查日志: $LAUNCH_LOG"
+        return 1
+    fi
+
     # 清理「持有 app.py 但没绑端口」的游离/僵进程（如端口冲突起飞失败的残留）
     local strays; strays="$(_dash_pids)"
     if [ -n "$strays" ]; then
@@ -126,6 +156,10 @@ ui_start() {
 ui_stop() {
     # [Claude_Opus_4.8] 杀光所有 dashboard 进程 + 占端口者（不再只杀 PID 文件那一个，
     # 避免 PID 文件漂移后漏掉真正在服务的进程；并在最后验证端口确已释放）
+    if _launch_loaded; then
+        echo "🛑 正在停止 launchd 控制中心..."
+        launchctl bootout "$LAUNCH_DOMAIN/$LAUNCH_LABEL" 2>/dev/null || true
+    fi
     local pids; pids="$(_all_dash_pids)"
     if [ -z "$pids" ]; then
         echo "ℹ️ 控制中心未在运行"
@@ -179,10 +213,12 @@ ui_status() {
 }
 
 ui_logs() {
-    if [ -f "$UI_LOG_FILE" ]; then
+    local log_file="$UI_LOG_FILE"
+    [ -f "$LAUNCH_PLIST" ] && [ -f "$LAUNCH_LOG" ] && log_file="$LAUNCH_LOG"
+    if [ -f "$log_file" ]; then
         echo "📄 正在追踪控制中心日志 (按 Ctrl+C 退出)..."
         # [Claude_Sonnet_4.6_Thinking_planning] P3修复：-n 50 显示最近 50 行，提供足够上下文
-        tail -f -n 50 "$UI_LOG_FILE"
+        tail -f -n 50 "$log_file"
     else
         echo "ℹ️ 日志文件尚未创建，请先运行 './vpanel ui start'"
     fi
