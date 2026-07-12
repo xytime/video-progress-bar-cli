@@ -40,6 +40,7 @@
 | 3.14.3 | 2026-07-07 | Codex                               | 微信扫码登录启动前先失效旧登录标记，并在状态接口中显式返回登录流程是否仍在进行，避免后台误把旧态判成成功 |
 | 3.14.4 | 2026-07-08 | Codex                               | 调度器新增孤儿 PUBLISHING 回收：发现发布进程已死但状态长时间未回收时，保守降级为 FAILED 并提示先核对视频号后台，避免队列被无限卡住 |
 | 3.15.0 | 2026-07-10 | Codex                               | 会话临期自动预热重登：保留旧 state，提前经 Telegram 推送二维码，扫码成功后才替换会话 |
+| 3.16.0 | 2026-07-13 | Codex                               | 新增 AI 处理审计 API，后台可读取 provider 尝试、降级和质量结果 |
 """
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
@@ -548,6 +549,24 @@ def dashboard():
     """返回仪表盘 HTML 页面"""
     template_path = Path(__file__).parent / "templates" / "index.html"
     return HTMLResponse(content=template_path.read_text(encoding="utf-8"))
+
+
+@app.get("/api/ai-audit/summary")
+def get_ai_audit_summary(hours: int = 168):
+    """AI 字幕调用概览：近期开销、失败与降级统计。"""
+    return db.get_ai_audit_summary(hours=hours)
+
+
+@app.get("/api/ai-audit/videos/{youtube_id}")
+def get_ai_audit_video(youtube_id: str, slice_index: int = 0, limit: int = 20):
+    """指定视频的 AI 处理运行与 provider 尝试时间线。"""
+    if not re.match(r'^[A-Za-z0-9_\-]+$', youtube_id):
+        raise HTTPException(status_code=400, detail="Invalid youtube_id")
+    return {
+        "youtube_id": youtube_id,
+        "slice_index": slice_index,
+        "runs": db.get_ai_audit_for_video(youtube_id, slice_index=slice_index, limit=limit),
+    }
 
 
 # ── 封面图片 API ─────────────────────────────────────────────────────────

@@ -35,6 +35,7 @@
 | 3.12.2  | 2026-07-08 | Codex                               | 新增 get_stale_publishing_videos：暴露长时间停留在 PUBLISHING 的候选任务，供调度器做“进程已死但状态未回收”的保守降级 |
 | 3.13.0  | 2026-07-12 | Codex                               | get_high_score_pending_videos 支持按频道覆盖自动发布线，保持黑名单与顺序锁过滤不变 |
 | 3.13.1  | 2026-07-12 | Codex                               | get_rescore_candidates 返回 channel_id，供重算层跳过已过频道专属发布线的候选 |
+| 3.14.0  | 2026-07-13 | Codex                               | 新增 AI 字幕处理审计表与 DAL，记录逐视频 provider 尝试、降级和质量结果 |
 """
 
 import sqlite3
@@ -253,6 +254,47 @@ class PipelineDB:
                 )
             ''')
 
+            # AI 调用审计：仅保存可观测性元数据，禁止保存密钥、完整 prompt 或原始字幕。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS ai_processing_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    youtube_id TEXT NOT NULL,
+                    slice_index INTEGER NOT NULL DEFAULT 0,
+                    operation TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'RUNNING',
+                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TIMESTAMP DEFAULT NULL,
+                    final_provider TEXT DEFAULT NULL,
+                    fallback_used INTEGER NOT NULL DEFAULT 0,
+                    quality_score REAL DEFAULT NULL,
+                    chinese_coverage REAL DEFAULT NULL,
+                    vocabulary_segments INTEGER DEFAULT NULL,
+                    quality_status TEXT DEFAULT NULL,
+                    error_class TEXT DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS ai_provider_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    provider TEXT NOT NULL,
+                    model TEXT DEFAULT NULL,
+                    capabilities TEXT DEFAULT NULL,
+                    attempt_order INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    duration_ms INTEGER DEFAULT NULL,
+                    error_class TEXT DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    quality_score REAL DEFAULT NULL,
+                    warning_count INTEGER NOT NULL DEFAULT 0,
+                    blocking_count INTEGER NOT NULL DEFAULT 0,
+                    selected INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(run_id) REFERENCES ai_processing_runs(id) ON DELETE CASCADE
+                )
+            ''')
+
             # 4. 创建复合索引优化分页查询与状态调度性能
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_status_updated 
@@ -274,8 +316,130 @@ class PipelineDB:
                 CREATE INDEX IF NOT EXISTS idx_parent_id
                 ON processed_videos(parent_id)
             ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_ai_runs_video_started
+                ON ai_processing_runs(youtube_id, slice_index, started_at DESC)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_ai_attempts_run_order
+                ON ai_provider_attempts(run_id, attempt_order)
+            ''')
             
             conn.commit()
+
+    # --- AI processing audit DAL ---
+    def start_ai_processing_run(self, youtube_id: str, *, slice_index: int = 0, operation: str = "subtitle_translation") -> int:
+        """创建一次 AI 处理审计运行，返回不可暴露给外部的内部 run id。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO ai_processing_runs (youtube_id, slice_index, operation) VALUES (?, ?, ?)",
+                (youtube_id, slice_index, operation),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+
+    def record_ai_provider_attempt(
+        self,
+        run_id: int,
+        *,
+        provider: str,
+        model: Optional[str],
+        capabilities: str,
+        attempt_order: int,
+        status: str,
+        duration_ms: Optional[int] = None,
+        error_class: Optional[str] = None,
+        error_message: Optional[str] = None,
+        quality_score: Optional[float] = None,
+        warning_count: int = 0,
+        blocking_count: int = 0,
+        selected: bool = False,
+    ) -> None:
+        """记录单次 provider 尝试；错误内容截断，避免审计表被异常响应污染。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                """INSERT INTO ai_provider_attempts
+                   (run_id, provider, model, capabilities, attempt_order, status, duration_ms,
+                    error_class, error_message, quality_score, warning_count, blocking_count, selected)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id, provider, model, capabilities, attempt_order, status, duration_ms,
+                    error_class, (error_message or "")[:500] or None, quality_score,
+                    int(warning_count), int(blocking_count), int(selected),
+                ),
+            )
+            conn.commit()
+
+    def finish_ai_processing_run(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        final_provider: Optional[str] = None,
+        fallback_used: bool = False,
+        quality_score: Optional[float] = None,
+        chinese_coverage: Optional[float] = None,
+        vocabulary_segments: Optional[int] = None,
+        quality_status: Optional[str] = None,
+        error_class: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """结束一次 AI 审计运行。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                """UPDATE ai_processing_runs
+                   SET status = ?, finished_at = CURRENT_TIMESTAMP, final_provider = ?, fallback_used = ?,
+                       quality_score = ?, chinese_coverage = ?, vocabulary_segments = ?, quality_status = ?,
+                       error_class = ?, error_message = ?
+                   WHERE id = ?""",
+                (
+                    status, final_provider, int(fallback_used), quality_score, chinese_coverage,
+                    vocabulary_segments, quality_status, error_class, (error_message or "")[:500] or None,
+                    run_id,
+                ),
+            )
+            conn.commit()
+
+    def get_ai_audit_summary(self, hours: int = 168) -> Dict[str, Any]:
+        """返回后台概览所需的用量、失败和降级统计。"""
+        with self.get_connection() as conn:
+            runs = conn.execute(
+                """SELECT COUNT(*) AS total_runs,
+                          SUM(CASE WHEN status = 'SUCCEEDED' THEN 1 ELSE 0 END) AS succeeded_runs,
+                          SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) AS failed_runs,
+                          SUM(CASE WHEN fallback_used = 1 THEN 1 ELSE 0 END) AS fallback_runs
+                   FROM ai_processing_runs WHERE started_at >= datetime('now', ?)""",
+                (f"-{max(1, int(hours))} hours",),
+            ).fetchone()
+            providers = conn.execute(
+                """SELECT provider, COUNT(*) AS attempts,
+                          SUM(CASE WHEN status = 'SUCCEEDED' THEN 1 ELSE 0 END) AS successes,
+                          SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) AS failures
+                   FROM ai_provider_attempts
+                   WHERE created_at >= datetime('now', ?)
+                   GROUP BY provider ORDER BY attempts DESC""",
+                (f"-{max(1, int(hours))} hours",),
+            ).fetchall()
+            return {"hours": max(1, int(hours)), "runs": dict(runs), "providers": [dict(row) for row in providers]}
+
+    def get_ai_audit_for_video(self, youtube_id: str, *, slice_index: int = 0, limit: int = 20) -> List[Dict[str, Any]]:
+        """返回单视频 AI 处理运行及其 provider 尝试时间线。"""
+        with self.get_connection() as conn:
+            run_rows = conn.execute(
+                """SELECT * FROM ai_processing_runs WHERE youtube_id = ? AND slice_index = ?
+                   ORDER BY started_at DESC LIMIT ?""",
+                (youtube_id, slice_index, max(1, min(int(limit), 100))),
+            ).fetchall()
+            results = []
+            for row in run_rows:
+                item = dict(row)
+                attempts = conn.execute(
+                    "SELECT * FROM ai_provider_attempts WHERE run_id = ? ORDER BY attempt_order, id",
+                    (item["id"],),
+                ).fetchall()
+                item["attempts"] = [dict(attempt) for attempt in attempts]
+                results.append(item)
+            return results
 
     # --- Channel DAL ---
     def add_channel(self, channel_id: str, channel_name: str, status: str = 'APPROVED', reason: str = '') -> bool:

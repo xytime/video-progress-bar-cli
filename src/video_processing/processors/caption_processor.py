@@ -40,6 +40,7 @@
 | 1.27.0 | 2026-07-09 | Codex | 为 requests 系 SDK 请求补默认连接/读取超时，避免代理或上游 API 卡死时 auto-caption 无限等待 |
 | 1.28.0 | 2026-07-09 | Codex | 新增翻译质量 fail-open 开关逻辑：临时降级阻断为告警放行 |
 | 1.29.0 | 2026-07-13 | Codex | 动态模型池接入真实 provider 错误，按限流、权限、网络和解析问题冷却 |
+| 1.30.0 | 2026-07-13 | Codex | 字幕翻译逐视频写入 SQLite AI 审计，记录 provider 尝试、降级、质量和最终结果 |
 """
 import logging
 from pathlib import Path
@@ -79,11 +80,12 @@ from ..utils.subtitle_translation_quality import (
     evaluate_subtitle_translation_candidate,
 )
 from ..utils.translation_candidate_arbitration import TranslationCandidateArbiter
-from ..utils.translation_model_pool import DynamicTranslationModelPool
+from ..utils.translation_model_pool import DynamicTranslationModelPool, PROFILES, classify_error
 from ..utils.deepseek_translation import (
     translate_batch_deepseek,
     translate_batch_with_vocab_deepseek,
 )
+from ..db.database import PipelineDB
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -183,6 +185,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self.model = None
         self.detected_lang = None  # [Gemini_3.5_Flash_planning] 保存 Whisper ASR 检测到的语种
         self._translation_quality_audit: List[Dict[str, Any]] = []
+        self._translation_audit_run_id: Optional[int] = None
 
     def process(self, **kwargs) -> Path:
         """
@@ -567,6 +570,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
         self._translation_quality_audit = []
+        self._translation_audit_run_id = self._start_translation_audit()
         translation_context = build_translation_context(texts)
         translation_prompt_context = translation_context.to_prompt_context()
         quality_context = SubtitleTranslationQualityContext(
@@ -596,10 +600,17 @@ class AutoCaptionProcessor(VideoProcessorBase):
         for idx, provider in enumerate(provider_order):
             final_provider = idx == len(provider_order) - 1
             self._last_provider_error = ""
+            attempt_started = time.monotonic()
             candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
+            duration_ms = int((time.monotonic() - attempt_started) * 1000)
             if not candidate or not candidate.is_usable_for(len(segments)):
                 logger.warning("[Translate] Provider %s produced no usable candidate.", provider)
-                pool.record_failure(provider, self._last_provider_error or "empty_or_insufficient_translation")
+                error = self._last_provider_error or "empty_or_insufficient_translation"
+                error_class = classify_error(error)
+                pool.record_failure(provider, error, category=error_class)
+                self._record_translation_attempt(
+                    provider, idx + 1, "FAILED", duration_ms, error_class=error_class, error_message=error,
+                )
                 continue
 
             decision = self._evaluate_translation_quality(
@@ -627,6 +638,20 @@ class AutoCaptionProcessor(VideoProcessorBase):
             else:
                 pool.record_quality(provider, score=quality_score, warning_count=len(decision.warning_issues))
 
+            attempt_status = "BLOCKED" if decision.should_fallback or decision.should_fail else "SUCCEEDED"
+            self._record_translation_attempt(
+                provider,
+                idx + 1,
+                attempt_status,
+                duration_ms,
+                error_class="quality_blocked" if attempt_status == "BLOCKED" else None,
+                error_message=decision.blocking_summary() if attempt_status == "BLOCKED" else None,
+                quality_score=quality_score,
+                warning_count=len(decision.warning_issues),
+                blocking_count=len(decision.blocking_issues),
+                selected=outcome.should_use_candidate,
+            )
+
             if decision.should_fallback:
                 self._write_translation_quality_report()
                 logger.warning(
@@ -643,6 +668,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     texts,
                     translation_prompt_context,
                 )
+                self._finish_translation_audit("SUCCEEDED", outcome.candidate, quality_score, decision.status, idx > 0, segments)
                 self._write_translation_quality_report()
                 return segments
 
@@ -660,10 +686,102 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 texts,
                 translation_prompt_context,
             )
+            self._finish_translation_audit("SUCCEEDED", outcome.candidate, None, "accepted_after_arbitration", True, segments)
             self._write_translation_quality_report()
             return segments
 
+        self._finish_translation_audit(
+            "FAILED", None, None, "all_providers_failed", bool(provider_order), segments,
+            error_class="all_providers_failed", error_message="All subtitle translation providers failed or were blocked.",
+        )
         raise VideoProcessingError("All subtitle translation providers failed or were blocked.")
+
+    def _start_translation_audit(self) -> Optional[int]:
+        """创建可观测性运行记录；审计故障不可阻断视频处理。"""
+        try:
+            return PipelineDB().start_ai_processing_run(self.input_path.stem)
+        except Exception as exc:
+            logger.warning("[AIAudit] failed to start translation audit: %s", exc)
+            return None
+
+    def _record_translation_attempt(
+        self,
+        provider: str,
+        attempt_order: int,
+        status: str,
+        duration_ms: int,
+        *,
+        error_class: Optional[str] = None,
+        error_message: Optional[str] = None,
+        quality_score: Optional[float] = None,
+        warning_count: int = 0,
+        blocking_count: int = 0,
+        selected: bool = False,
+    ) -> None:
+        if self._translation_audit_run_id is None:
+            return
+        try:
+            key = provider.lower()
+            profile = PROFILES.get(key)
+            model = {
+                "gemini": "dynamic Gemini pool",
+                "deepseek": getattr(settings, "deepseek_model", "") or "DeepSeek default",
+                "aliyun": "Aliyun MT",
+                "google": "Google Translate",
+            }.get(key)
+            capabilities = ",".join(sorted(profile.capabilities)) if profile else "translate"
+            PipelineDB().record_ai_provider_attempt(
+                self._translation_audit_run_id,
+                provider=provider,
+                model=model,
+                capabilities=capabilities,
+                attempt_order=attempt_order,
+                status=status,
+                duration_ms=duration_ms,
+                error_class=error_class,
+                error_message=error_message,
+                quality_score=quality_score,
+                warning_count=warning_count,
+                blocking_count=blocking_count,
+                selected=selected,
+            )
+        except Exception as exc:
+            logger.warning("[AIAudit] failed to record provider attempt: %s", exc)
+
+    def _finish_translation_audit(
+        self,
+        status: str,
+        candidate: Optional[SubtitleTranslationCandidate],
+        quality_score: Optional[float],
+        quality_status: str,
+        fallback_used: bool,
+        segments: List[Dict[str, Any]],
+        *,
+        error_class: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        if self._translation_audit_run_id is None:
+            return
+        try:
+            chinese_coverage = (
+                sum(bool(str(segment.get("zh_text") or "").strip()) for segment in segments) / len(segments)
+                if segments else 0.0
+            )
+            vocabulary_segments = sum(bool(segment.get("vocab")) for segment in segments)
+            PipelineDB().finish_ai_processing_run(
+                self._translation_audit_run_id,
+                status=status,
+                final_provider=candidate.provider if candidate else None,
+                fallback_used=fallback_used,
+                quality_score=quality_score,
+                chinese_coverage=chinese_coverage,
+                vocabulary_segments=vocabulary_segments,
+                quality_status=quality_status,
+                error_class=error_class,
+                error_message=error_message,
+            )
+        except Exception as exc:
+            logger.warning("[AIAudit] failed to finish translation audit: %s", exc)
 
     def _apply_selected_translation_candidate(
         self,

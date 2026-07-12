@@ -4,6 +4,7 @@
 | Version | Date       | Author                    | Description                                     |
 |---------|------------|---------------------------|-------------------------------------------------|
 | 1.2.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证 purge_stale_tasks, batch_add_videos 补齐 disable_slicing 以及 delete_slices_by_parent_id |
+| 1.3.0   | 2026-07-13 | Codex                    | 覆盖 AI 字幕审计运行、provider 尝试与汇总查询 |
 | 1.1.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证多切片视频在不同子切片状态下的 Tab 归属逻辑 |
 | 1.0.0   | 2026-05-27 | Gemini_3.5_Flash_planning | Initial TDD test creation for database composite keys |
 """
@@ -218,6 +219,54 @@ def test_database_disable_slicing_column(temp_db):
     db.add_video("enable_slicing", "Sliced title", "channel_1", disable_slicing=0)
     v_sliced = db.get_video_by_youtube_id("enable_slicing")
     assert v_sliced["disable_slicing"] == 0
+
+
+def test_ai_processing_audit_records_timeline_and_summary(temp_db):
+    db = PipelineDB(temp_db)
+    run_id = db.start_ai_processing_run("audit_video")
+    db.record_ai_provider_attempt(
+        run_id,
+        provider="gemini",
+        model="gemini-2.5-flash",
+        capabilities="translate,vocab",
+        attempt_order=1,
+        status="FAILED",
+        duration_ms=120,
+        error_class="rate_limit",
+        error_message="429 quota",
+    )
+    db.record_ai_provider_attempt(
+        run_id,
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        capabilities="translate,vocab",
+        attempt_order=2,
+        status="SUCCEEDED",
+        duration_ms=240,
+        quality_score=100.0,
+        selected=True,
+    )
+    db.finish_ai_processing_run(
+        run_id,
+        status="SUCCEEDED",
+        final_provider="DeepSeek",
+        fallback_used=True,
+        quality_score=100.0,
+        chinese_coverage=1.0,
+        vocabulary_segments=3,
+        quality_status="passed",
+    )
+
+    runs = db.get_ai_audit_for_video("audit_video")
+    assert len(runs) == 1
+    assert runs[0]["final_provider"] == "DeepSeek"
+    assert [item["provider"] for item in runs[0]["attempts"]] == ["gemini", "deepseek"]
+    assert runs[0]["attempts"][1]["selected"] == 1
+
+    summary = db.get_ai_audit_summary(hours=1)
+    assert summary["runs"]["total_runs"] == 1
+    assert summary["runs"]["fallback_runs"] == 1
+    assert {item["provider"] for item in summary["providers"]} == {"gemini", "deepseek"}
 
 
 def test_purge_stale_tasks_excludes_segmented(temp_db):
