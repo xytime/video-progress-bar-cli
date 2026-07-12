@@ -19,6 +19,7 @@
 | 2.2.0   | 2026-07-10 | Codex                          | [监控可观测性] 输出逐频道健康报告，区分成功/空结果/SSL/限流/超时；整轮全部失败时返回非零，避免频道更新静默中断 |
 | 2.3.0   | 2026-07-12 | Codex                          | [分层降频] Wall Street Truthbombs 每小时、演讲类每3小时、其他保留频道每6小时；关闭全网探索并记录逐频道轮询时间 |
 | 2.4.0   | 2026-07-12 | Codex                          | [首次初始化] 增加 --bootstrap：一次性全量轮询批准频道，并将发现窗口放宽到最近5天 |
+| 2.5.0   | 2026-07-12 | Codex                          | [访问减压] 频道最多解析12条；取消被拒后的即时重试；连续拒绝按6/12/24小时逐频道熔断 |
 """
 import sys
 import argparse
@@ -48,6 +49,8 @@ SPEECH_CHANNEL_IDS = {
 }
 POLL_INTERVALS = {"core": 3600, "speech": 3 * 3600, "other": 6 * 3600}
 POLL_STATE_PATH = Path(__file__).parent.parent / "output" / "monitor_schedule_state.json"
+RATE_LIMIT_STATE_PATH = Path(__file__).parent.parent / "output" / "monitor_access_backoff.json"
+ACCESS_BACKOFF_HOURS = (6, 12, 24)
 
 # [Claude_Opus_4.8 v2.0.0] yt-dlp 绝对路径（单一真相源，见 settings.ytdlp_path）。
 # 严禁裸 "yt-dlp"：cron 以 .venv/bin/python 直跑本脚本时不激活 venv，最小 PATH 找不到 yt-dlp
@@ -100,7 +103,7 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str, lookback_days: int = 3)
         "--dateafter", f"now-{lookback_days}days",
         "--match-filter", "duration > 120 & duration < 2700",
         "--break-on-reject",
-        "--playlist-end", "30",
+        "--playlist-end", "12",
         "--no-warnings",
         *settings.get_yt_cookie_args(),
         url
@@ -108,23 +111,16 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str, lookback_days: int = 3)
     
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        # [Claude_Opus_4.8] exit 101 + 空 stdout：多为批量轮询触发的 YouTube 瞬时限流/bot-check
-        # （cookie 通常仍有效，单独重试即成功）。退避后重试一次，避免误判为"无新视频/Cookie失效"。
-        if result.returncode == 101 and not result.stdout.strip():
-            wait = random.uniform(4.0, 8.0)
-            print(f"  -> 瞬时限流(exit 101)，{wait:.1f}s 后退避重试一次…")
-            time.sleep(wait)
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-
         # exit 101 = yt-dlp partial errors (e.g. cookie/bot-check); treat as real failure
         # and surface the error so it doesn't look like "no new videos"
         if result.returncode not in (0, 101):
             print(f"Warning: Failed to fetch {channel_id}. Error: {result.stderr.strip()[:200]}")
             return "error"
         if result.returncode == 101 and not result.stdout.strip():
-            # 重试后仍被拒：本轮跳过（下一轮会再试），措辞改为"限流"以免误导为 cookie 失效
-            err_line = result.stderr.strip().split('\n')[0][:200] if result.stderr.strip() else "unknown error"
-            print(f"  -> 重试后仍被限流(exit 101)，本轮跳过（下轮再试）: {err_line}")
+            # exit 101 不是 HTTP 429 的充分证据：只标记为访问受阻，交给逐频道长退避处理。
+            stderr_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+            err_line = stderr_lines[-1][:300] if stderr_lines else "exit 101 with empty output"
+            print(f"  -> YouTube 访问受阻，本轮不即时重试: {err_line}")
             return "limited"
 
         output = result.stdout.strip()
@@ -202,6 +198,49 @@ def _save_poll_state(state: dict[str, str]) -> None:
         tmp_path.replace(POLL_STATE_PATH)
     except OSError as exc:
         print(f"[Monitor] Failed to save schedule state: {exc}")
+
+
+def _load_access_backoff() -> dict[str, dict]:
+    try:
+        data = json.loads(RATE_LIMIT_STATE_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_access_backoff(state: dict[str, dict]) -> None:
+    try:
+        RATE_LIMIT_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = RATE_LIMIT_STATE_PATH.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(RATE_LIMIT_STATE_PATH)
+    except OSError as exc:
+        print(f"[Monitor] Failed to save access backoff state: {exc}")
+
+
+def _is_backoff_active(channel_id: str, now: datetime.datetime, state: dict[str, dict]) -> bool:
+    until_raw = (state.get(channel_id) or {}).get("cooldown_until")
+    if not until_raw:
+        return False
+    try:
+        return now < datetime.datetime.fromisoformat(until_raw)
+    except ValueError:
+        return False
+
+
+def _record_access_result(channel_id: str, result: str, now: datetime.datetime,
+                          state: dict[str, dict]) -> None:
+    if result in {"ok", "empty"}:
+        state.pop(channel_id, None)
+        return
+    if result != "limited":
+        return
+    failures = int((state.get(channel_id) or {}).get("consecutive_failures", 0)) + 1
+    cooldown_hours = ACCESS_BACKOFF_HOURS[min(failures - 1, len(ACCESS_BACKOFF_HOURS) - 1)]
+    state[channel_id] = {
+        "consecutive_failures": failures,
+        "cooldown_until": (now + datetime.timedelta(hours=cooldown_hours)).isoformat(timespec="seconds"),
+    }
 
 
 def _is_channel_due(channel_id: str, now: datetime.datetime, state: dict[str, str]) -> bool:
@@ -367,16 +406,25 @@ def main():
 
     now = datetime.datetime.now()
     poll_state = _load_poll_state()
+    access_backoff = _load_access_backoff()
     results = []
-    limited_cnt = 0
-    due_channels = (
-        approved_channels
-        if args.bootstrap
-        else [row for row in approved_channels if _is_channel_due(row["channel_id"], now, poll_state)]
-    )
+    scheduled_channels = [
+        row for row in approved_channels
+        if _is_channel_due(row["channel_id"], now, poll_state)
+    ]
+    backoff_channels = [
+        row for row in scheduled_channels
+        if _is_backoff_active(row["channel_id"], now, access_backoff)
+    ]
+    due_channels = approved_channels if args.bootstrap else [
+        row for row in scheduled_channels
+        if row not in backoff_channels
+    ]
     lookback_days = 5 if args.bootstrap else 3
     if args.bootstrap:
         print("[Monitor] Bootstrap mode: all approved channels, lookback=5 days")
+    elif backoff_channels:
+        print(f"[Monitor] Access cooldown skipped {len(backoff_channels)} channel(s).")
     print(
         "[Monitor] Due channels: "
         f"{len(due_channels)}/{len(approved_channels)} "
@@ -391,13 +439,17 @@ def main():
         channel_id = row["channel_id"]
         result = fetch_latest_videos(db, channel_id, lookback_days=lookback_days)
         poll_state[channel_id] = now.isoformat(timespec="seconds")
+        _record_access_result(channel_id, result, now, access_backoff)
         results.append({"channel_id": row["channel_id"], "channel_name": row["channel_name"], "status": result})
-        if result == "limited":
-            limited_cnt += 1
 
     _save_poll_state(poll_state)
+    _save_access_backoff(access_backoff)
 
-    _write_monitor_report(results, len(approved_channels))
+    # 无频道到期时保留上一轮真实健康快照，避免用全 0 抹掉最近一次访问结果。
+    if results:
+        _write_monitor_report(results, len(approved_channels))
+    else:
+        print("[Monitor] No channel polled; preserving previous health report.")
     failed_results = [item for item in results if item["status"] in {"limited", "timeout", "error"}]
     if failed_results:
         print(

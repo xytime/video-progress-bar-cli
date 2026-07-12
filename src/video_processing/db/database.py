@@ -34,6 +34,7 @@
 | 3.12.1  | 2026-07-05 | Codex                               | get_failed_videos_since 纳入 LOGIN_REQUIRED，修复微信过期导致的批量重试遗漏 |
 | 3.12.2  | 2026-07-08 | Codex                               | 新增 get_stale_publishing_videos：暴露长时间停留在 PUBLISHING 的候选任务，供调度器做“进程已死但状态未回收”的保守降级 |
 | 3.13.0  | 2026-07-12 | Codex                               | get_high_score_pending_videos 支持按频道覆盖自动发布线，保持黑名单与顺序锁过滤不变 |
+| 3.13.1  | 2026-07-12 | Codex                               | get_rescore_candidates 返回 channel_id，供重算层跳过已过频道专属发布线的候选 |
 """
 
 import sqlite3
@@ -640,7 +641,7 @@ class PipelineDB:
         避免宿主本地时区（UTC+8）与库内 UTC 不一致造成的窗口边界漂移。
         """
         query = """
-            SELECT youtube_id, slice_index, view_count, like_count, score
+            SELECT youtube_id, slice_index, channel_id, view_count, like_count, score
             FROM processed_videos
             WHERE status = 'PENDING' AND source = 'AUTO' AND IFNULL(is_manually_scored, 0) = 0
               AND score < 75

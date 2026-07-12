@@ -14,6 +14,7 @@
 | 1.1.0   | 2026-06-25 | Claude_Opus_4.8 | 改滚动近8天窗口，挂 cron 每小时第15分定期运行（错开发现:00/:30）|
 | 1.2.0   | 2026-06-25 | Claude_Opus_4.8 | [严重修复] 重算前排除 BLACKLISTED 频道与 blacklisted_videos 墓碑——此前漏检导致已拉黑频道视频被重算顶发 |
 | 1.3.0   | 2026-06-25 | Claude_Opus_4.8 | [审查整改] 候选查询下沉 PipelineDB.get_rescore_candidates（消除裸 SQL/手抄黑名单过滤/时区漂移）；fetch_current 健壮解析 yt-dlp 输出，避免异常被静默吞成"取不到" |
+| 1.4.0   | 2026-07-12 | Codex           | [访问减压] 单轮最多查询50条，并跳过已达到频道专属发布线的演讲类候选 |
 """
 import subprocess
 import sys
@@ -26,7 +27,7 @@ from config.settings import settings
 from video_processing.db import PipelineDB
 from video_processing.scoring import compute_auto_score
 
-CAP = 250  # 安全上限（候选窗口与黑名单过滤已下沉至 PipelineDB.get_rescore_candidates）
+CAP = 50  # 单轮网络查询上限；DAL 可多取一些供本地过滤，不增加 YouTube 请求
 
 
 def fetch_current(yid: str):
@@ -48,9 +49,17 @@ def fetch_current(yid: str):
 def main():
     db = PipelineDB()
     # 候选与黑名单过滤全部下沉至 DAL（单一真相源，杜绝手抄过滤漂移重发黑名单频道）
-    rows = db.get_rescore_candidates(days=8, limit=CAP)
+    raw_rows = db.get_rescore_candidates(days=8, limit=250)
+    rows = [
+        row for row in raw_rows
+        if (row.get("score") or 0) < (
+            settings.speech_publish_score_line
+            if row.get("channel_id") in settings.speech_channel_id_set
+            else 75
+        )
+    ][:CAP]
 
-    print(f"[rescore] 候选 {len(rows)} 条（近 8 天 AUTO PENDING <75分），开始刷新…", flush=True)
+    print(f"[rescore] 候选 {len(rows)} 条（近 8 天、低于各自频道发布线），开始刷新…", flush=True)
     rescued, updated, failed = [], 0, 0
     for i, row in enumerate(rows, 1):
         yid, si, old = row["youtube_id"], row["slice_index"], row["score"]
@@ -62,14 +71,19 @@ def main():
             if new > (old or 0):
                 db.update_video_score(yid, new, slice_index=si or 0)
                 updated += 1
-                if (old or 0) < 75 <= new:
+                publish_line = (
+                    settings.speech_publish_score_line
+                    if row.get("channel_id") in settings.speech_channel_id_set
+                    else 75
+                )
+                if (old or 0) < publish_line <= new:
                     rescued.append((new, cv, cl, yid))
-                    print(f"  ★捞回 分{new} 播放{cv} 赞{cl} {yid}（老分{old}）", flush=True)
+                    print(f"  ★捞回 分{new} 发布线{publish_line} 播放{cv} 赞{cl} {yid}（老分{old}）", flush=True)
         if i % 20 == 0:
             print(f"  …进度 {i}/{len(rows)}  已捞回 {len(rescued)}  取不到 {failed}", flush=True)
         time.sleep(random.uniform(1.5, 3.0))
 
-    print(f"\n[rescore] 完成：扫描{len(rows)} 升分{updated} 捞回(≥75){len(rescued)} 取不到{failed}", flush=True)
+    print(f"\n[rescore] 完成：扫描{len(rows)} 升分{updated} 跨发布线{len(rescued)} 取不到{failed}", flush=True)
     rescued.sort(reverse=True)
     for new, cv, cl, yid in rescued:
         print(f"  分{new}  播放{cv:>7}  赞{cl:>5}  {yid}", flush=True)
