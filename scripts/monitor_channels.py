@@ -18,8 +18,10 @@
 | 2.1.0   | 2026-07-09 | Codex                          | [白名单优先] 批准频道轮询前置；探索型发现降为每6小时一次；本轮白名单已限流时跳过探索，避免高价值频道被前置搜索流量拖死 |
 | 2.2.0   | 2026-07-10 | Codex                          | [监控可观测性] 输出逐频道健康报告，区分成功/空结果/SSL/限流/超时；整轮全部失败时返回非零，避免频道更新静默中断 |
 | 2.3.0   | 2026-07-12 | Codex                          | [分层降频] Wall Street Truthbombs 每小时、演讲类每3小时、其他保留频道每6小时；关闭全网探索并记录逐频道轮询时间 |
+| 2.4.0   | 2026-07-12 | Codex                          | [首次初始化] 增加 --bootstrap：一次性全量轮询批准频道，并将发现窗口放宽到最近5天 |
 """
 import sys
+import argparse
 from pathlib import Path
 import subprocess
 import json
@@ -86,7 +88,7 @@ def get_discovery_keywords() -> list[str]:
         return STATIC_KEYWORDS
 
 
-def fetch_latest_videos(db: PipelineDB, channel_id: str):
+def fetch_latest_videos(db: PipelineDB, channel_id: str, lookback_days: int = 3):
     """拉取频道过去 2 天内的最新视频，同时获取元数据（时长、观看数、点赞数、发布日期）"""
     print(f"Polling channel: {channel_id}")
     url = f"https://www.youtube.com/channel/{channel_id}"
@@ -95,7 +97,7 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str):
         _YTDLP,
         _IGNORE_NO_FORMATS,
         "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s",
-        "--dateafter", "now-3days",
+        "--dateafter", f"now-{lookback_days}days",
         "--match-filter", "duration > 120 & duration < 2700",
         "--break-on-reject",
         "--playlist-end", "30",
@@ -350,6 +352,13 @@ def discover_high_like_videos(db: PipelineDB):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="按频道分层轮询 YouTube 元数据")
+    parser.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="首次初始化：所有批准频道立即轮询，并将窗口放宽到最近 5 天",
+    )
+    args = parser.parse_args()
     db = PipelineDB()
 
     # 1. 先拉取已有白名单的新视频，避免探索流量耗尽额度后拖死高价值频道。
@@ -360,7 +369,14 @@ def main():
     poll_state = _load_poll_state()
     results = []
     limited_cnt = 0
-    due_channels = [row for row in approved_channels if _is_channel_due(row["channel_id"], now, poll_state)]
+    due_channels = (
+        approved_channels
+        if args.bootstrap
+        else [row for row in approved_channels if _is_channel_due(row["channel_id"], now, poll_state)]
+    )
+    lookback_days = 5 if args.bootstrap else 3
+    if args.bootstrap:
+        print("[Monitor] Bootstrap mode: all approved channels, lookback=5 days")
     print(
         "[Monitor] Due channels: "
         f"{len(due_channels)}/{len(approved_channels)} "
@@ -373,7 +389,7 @@ def main():
         if idx > 0:
             time.sleep(random.uniform(1.0, 2.5))
         channel_id = row["channel_id"]
-        result = fetch_latest_videos(db, channel_id)
+        result = fetch_latest_videos(db, channel_id, lookback_days=lookback_days)
         poll_state[channel_id] = now.isoformat(timespec="seconds")
         results.append({"channel_id": row["channel_id"], "channel_name": row["channel_name"], "status": result})
         if result == "limited":
