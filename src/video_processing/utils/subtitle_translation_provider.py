@@ -26,6 +26,7 @@ class SubtitleTranslationCandidate:
     translations: List[str]
     vocabs: List[Dict[str, Any]] = field(default_factory=list)
     supports_vocab: bool = False
+    model: str | None = None
 
     def is_usable_for(self, segment_count: int) -> bool:
         """候选结果是否足以应用到指定数量的字幕段。"""

@@ -65,6 +65,7 @@ def extract_vocab_batch(
     english_texts: List[str],
     chinese_translations: Optional[List[str]] = None,
     context_text: str = "",
+    model_out: Optional[List[str]] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """批量从英文字幕段落中提取难词词汇，并可选地与中文翻译句子对齐。
 
@@ -139,8 +140,8 @@ def extract_vocab_batch(
             )
             logger.warning(f"[vocab_helper] Batch {batch_start//_BATCH_SIZE + 1} parse failed. Aborting.")
             return None
-        # 只有 JSON 与段落对齐都通过，才给具体模型计入质量成功。
-        DynamicTranslationModelPool(state_path).record_quality(model_name, score=90.0)
+        if model_out is not None and model_name not in model_out:
+            model_out.append(model_name)
 
         all_results.extend(batch_result)
 

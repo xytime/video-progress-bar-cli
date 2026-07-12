@@ -637,8 +637,6 @@ class AutoCaptionProcessor(VideoProcessorBase):
             quality_score = max(0.0, 100.0 - len(decision.warning_issues) * 8.0 - len(decision.blocking_issues) * 30.0)
             if decision.should_fallback or decision.should_fail:
                 pool.record_failure(provider, decision.blocking_summary(), category="quality_blocked")
-            else:
-                pool.record_quality(provider, score=quality_score, warning_count=len(decision.warning_issues))
 
             attempt_status = "BLOCKED" if decision.should_fallback or decision.should_fail else "SUCCEEDED"
             self._record_translation_attempt(
@@ -670,6 +668,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     texts,
                     translation_prompt_context,
                 )
+                pool.record_quality(provider, score=quality_score, warning_count=len(decision.warning_issues))
+                self._record_selected_gemini_model_quality(outcome.candidate, quality_score, state_path)
                 self._finish_translation_audit("SUCCEEDED", outcome.candidate, quality_score, decision.status, idx > 0, segments)
                 self._write_translation_quality_report()
                 return segments
@@ -688,6 +688,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 texts,
                 translation_prompt_context,
             )
+            self._record_selected_gemini_model_quality(outcome.candidate, 90.0, state_path)
             self._finish_translation_audit("SUCCEEDED", outcome.candidate, None, "accepted_after_arbitration", True, segments)
             self._write_translation_quality_report()
             return segments
@@ -697,6 +698,12 @@ class AutoCaptionProcessor(VideoProcessorBase):
             error_class="all_providers_failed", error_message="All subtitle translation providers failed or were blocked.",
         )
         raise VideoProcessingError("All subtitle translation providers failed or were blocked.")
+
+    def _record_selected_gemini_model_quality(self, candidate: SubtitleTranslationCandidate, score: float, state_path: Optional[Path]) -> None:
+        if candidate.provider.lower() != "gemini" or not candidate.model:
+            return
+        for model_name in candidate.model.split(","):
+            DynamicTranslationModelPool(state_path).record_quality(model_name, score=score)
 
     def _start_translation_audit(self) -> Optional[int]:
         """创建可观测性运行记录；审计故障不可阻断视频处理。"""
@@ -821,11 +828,13 @@ class AutoCaptionProcessor(VideoProcessorBase):
         translation_context: str,
     ) -> Optional[SubtitleTranslationCandidate]:
         """Gemini 主译：翻译 + vocab 天然对齐。"""
+        used_models: List[str] = []
         try:
             gemini_results = extract_vocab_batch(
                 texts,
                 chinese_translations=None,
                 context_text=translation_context,
+                model_out=used_models,
             )
         except Exception as e:
             logger.warning(f"Gemini translation/vocab extraction failed: {e}")
@@ -839,6 +848,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 translations=[res.get("translation", "") for res in gemini_results],
                 vocabs=[res.get("vocab", {}) for res in gemini_results],
                 supports_vocab=True,
+                model=",".join(used_models) or None,
             )
         self._last_provider_error = self._last_provider_error or "Gemini returned no aligned candidate"
         return None
