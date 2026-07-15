@@ -59,10 +59,13 @@
 | 3.27.0  | 2026-07-09 | Codex                               | [转录防卡死] auto-caption 渲染调用增加 45 分钟硬超时，超时后回写 FAILED 并通知，避免状态长期卡在 TRANSCRIBING |
 | 3.28.0  | 2026-07-10 | Codex                               | 发布前启用上传器 fail-fast-login，失效登录立即回写 LOGIN_REQUIRED，避免 PUBLISHING 长时间等待扫码 |
 | 3.29.0  | 2026-07-12 | Codex                               | 演讲类频道自动发布线降至 40，普通频道保持 75 |
+| 3.30.0  | 2026-07-15 | Codex                               | 接入快手创作者中心账本：作品管理确认后才记成功；失败固定重试同一条，历史迁移每日最多 10 条 |
+| 3.31.0  | 2026-07-15 | Codex                               | 拆分快手历史迁移与新片审核入口：审核回查绝不上传或发布 |
 """
 
 
 import os
+import hashlib
 import math
 import signal
 import time
@@ -106,6 +109,7 @@ _PROXY_KEYS = frozenset({
     'http_proxy', 'https_proxy', 'all_proxy',
 })
 _WECHAT_UPLOAD_TIMEOUT_SEC = 25 * 60
+_KUAISHOU_UPLOAD_TIMEOUT_SEC = 25 * 60
 _AUTO_CAPTION_TIMEOUT_SEC = 45 * 60
 
 
@@ -491,42 +495,239 @@ class PipelineManager:
                     logger.info(f"[GC] Deleted audio gen folder: {audio_gen_dir.name}")
                 except Exception as e:
                     logger.warning(f"[GC] Failed to delete audio gen folder {audio_gen_dir.name}: {e}")
-                        
+
         # 2. 检查兄弟子任务状态以判断是否清理父文件
         if slice_index > 0:
             all_slices = self.db.get_slices_by_parent_yid(yid)
-            if all_slices:
-                all_finished = all(s["status"] in ("PUBLISHED", "FAILED", "IGNORED", "COMPLETED") for s in all_slices)
-                if all_finished:
-                    logger.info(f"[GC] All slices for parent {yid} are finished. Cleaning up parent artifacts...")
-                    parent_suffixes = [
-                        ".mp4",
-                        ".info.json",
-                        ".description",
-                        "_subtitle.txt",
-                        "_copy.txt",
-                        "_title.txt",
-                        "_category.txt",
-                        "_cover.jpg",
-                        ".ass"
-                    ]
-                    for suffix in parent_suffixes:
-                        file_path = self._OUT_DIR / f"{yid}{suffix}"
-                        if file_path.exists():
-                            try:
-                                file_path.unlink()
-                                logger.info(f"[GC] Deleted parent artifact: {file_path.name}")
-                            except Exception as e:
-                                logger.warning(f"[GC] Failed to delete parent artifact {file_path.name}: {e}")
-                    
-                    # 清理父级语音临时目录
-                    parent_audio_dir = self._OUT_DIR / f"{yid}_audio_gen"
-                    if parent_audio_dir.exists() and parent_audio_dir.is_dir():
+            if all_slices and all(s["status"] in ("PUBLISHED", "FAILED", "IGNORED", "COMPLETED") for s in all_slices):
+                logger.info(f"[GC] All slices for parent {yid} are finished. Cleaning up parent artifacts...")
+                parent_suffixes = [
+                    ".mp4", ".info.json", ".description", "_subtitle.txt", "_copy.txt",
+                    "_title.txt", "_category.txt", "_cover.jpg", ".ass",
+                ]
+                for suffix in parent_suffixes:
+                    file_path = self._OUT_DIR / f"{yid}{suffix}"
+                    if file_path.exists():
                         try:
-                            shutil.rmtree(parent_audio_dir)
-                            logger.info(f"[GC] Deleted parent audio gen folder: {parent_audio_dir.name}")
+                            file_path.unlink()
+                            logger.info(f"[GC] Deleted parent artifact: {file_path.name}")
                         except Exception as e:
-                            logger.warning(f"[GC] Failed to delete parent audio gen folder {parent_audio_dir.name}: {e}")
+                            logger.warning(f"[GC] Failed to delete parent artifact {file_path.name}: {e}")
+                parent_audio_dir = self._OUT_DIR / f"{yid}_audio_gen"
+                if parent_audio_dir.exists() and parent_audio_dir.is_dir():
+                    try:
+                        shutil.rmtree(parent_audio_dir)
+                        logger.info(f"[GC] Deleted parent audio gen folder: {parent_audio_dir.name}")
+                    except Exception as e:
+                        logger.warning(f"[GC] Failed to delete parent audio gen folder {parent_audio_dir.name}: {e}")
+
+    # ── 快手创作者中心发布 ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _sha256_file(path: Path) -> str:
+        """计算成片摘要；同一摘要只有在快手作品管理确认已发布后才会去重。"""
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    def _kuaishou_asset_paths(self, yid: str, slice_index: int) -> tuple[Path, Path]:
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        return self._OUT_DIR / f"{prefix}_vertical.mp4", self._OUT_DIR / f"{prefix}_copy.txt"
+
+    def _publish_claimed_kuaishou_publication(self, publication: Dict[str, Any]) -> bool:
+        """执行已领取的快手任务；只有上传器完成作品管理回查才将账本置 PUBLISHED。"""
+        publication_id = publication["id"]
+        yid = publication["youtube_id"]
+        slice_index = publication.get("slice_index", 0)
+        vertical, copy_file = self._kuaishou_asset_paths(yid, slice_index)
+        if not vertical.is_file() or not copy_file.is_file():
+            reason = f"快手投递产物缺失：video={vertical.is_file()} copy={copy_file.is_file()}"
+            logger.error("[%s] %s", yid, reason)
+            self.db.update_kuaishou_publication_state(publication_id, "RETRYABLE_FAILED", error_message=reason)
+            return False
+
+        upload_cmd = [
+            self._VENV_PYTHON,
+            str(self._PRJ_ROOT / "scripts" / "kuaishou_uploader.py"),
+            "--video", str(vertical),
+            "--copy", str(copy_file),
+            "--state", str(self._OUT_DIR / "kuaishou_state.json"),
+            "--fail-fast-login",
+            "--calibrate-after-upload",
+            "--prepare-description",
+            "--publish",
+        ]
+        if not settings.kuaishou_browser_headless:
+            upload_cmd.append("--no-headless")
+        try:
+            result = self._run_tracked(
+                upload_cmd,
+                yid,
+                slice_index=slice_index,
+                text=True,
+                capture_output=True,
+                cwd=str(self._PRJ_ROOT),
+                timeout=_KUAISHOU_UPLOAD_TIMEOUT_SEC,
+            )
+            if result.stdout:
+                logger.debug("Kuaishou uploader stdout:\n%s", result.stdout)
+            if result.stderr:
+                logger.debug("Kuaishou uploader stderr:\n%s", result.stderr)
+        except subprocess.TimeoutExpired:
+            reason = "快手发布超过 25 分钟未完成；可能已提交但未能完成作品管理回查。"
+            logger.error("[%s] %s", yid, reason)
+            self.db.update_kuaishou_publication_state(publication_id, "UNCERTAIN", error_message=reason)
+            return False
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode()
+            if exc.returncode == 2:
+                state = "RETRYABLE_FAILED"
+                reason = "快手登录态失效，尚未开始公开发布；请重新登录后重试同一视频。"
+            elif exc.returncode == 6:
+                reason = "快手作品管理已可见，当前审核中；等待平台审核结果，不重新上传。"
+                logger.info("[%s] %s", yid, reason)
+                self.db.update_kuaishou_publication_state(publication_id, "UNDER_REVIEW", error_message=reason)
+                self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Kuaishou\nYouTube ID: {yid}")
+                return True
+            elif exc.returncode == 3:
+                state = "UNCERTAIN"
+                reason = "快手提交后未能在作品管理确认可见；请先人工核对，勿切换视频。"
+            else:
+                state = "RETRYABLE_FAILED"
+                reason = f"快手上传器失败（exit {exc.returncode}）：{stderr[:500]}"
+            logger.error("[%s] %s", yid, reason)
+            self.db.update_kuaishou_publication_state(publication_id, state, error_message=reason)
+            return False
+
+        self.db.update_kuaishou_publication_state(publication_id, "PUBLISHED")
+        self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Kuaishou\nYouTube ID: {yid}")
+        return True
+
+    def _queue_and_publish_new_kuaishou_video(self, yid: str, slice_index: int) -> bool:
+        """视频号发布完成后立即投递同一成片到快手；默认由特性开关关闭。"""
+        if not settings.enable_kuaishou_browser_publishing:
+            return True
+        if self.db.is_blacklisted(yid):
+            logger.warning("[%s] 已拉黑视频，跳过快手同步投递", yid)
+            return False
+        vertical, _ = self._kuaishou_asset_paths(yid, slice_index)
+        if not vertical.is_file():
+            logger.error("[%s] 快手同步投递缺少成片：%s", yid, vertical)
+            return False
+        publication = self.db.create_kuaishou_publication(
+            yid,
+            self._sha256_file(vertical),
+            str(vertical),
+            source_kind="NEW",
+            slice_index=slice_index,
+        )
+        if publication["state"] == "PUBLISHED":
+            logger.info("[%s] 相同成片已在快手作品管理确认发布，跳过重复投递", yid)
+            return True
+        claimed = self.db.claim_kuaishou_publication(publication["id"])
+        if not claimed:
+            logger.warning("[%s] 快手新片任务未能领取，保留账本等待下次重试", yid)
+            return False
+        return self._publish_claimed_kuaishou_publication(claimed)
+
+    def _run_kuaishou_history_migration(self) -> None:
+        """按每日限额迁移视频号历史作品；任一失败后固定在该视频，绝不切换下一条。"""
+        if not settings.enable_kuaishou_browser_publishing:
+            return
+        daily_limit = settings.kuaishou_history_daily_limit
+        for candidate in self.db.get_unqueued_kuaishou_history_videos(limit=daily_limit):
+            yid = candidate["youtube_id"]
+            slice_index = candidate.get("slice_index", 0)
+            vertical, _ = self._kuaishou_asset_paths(yid, slice_index)
+            if not vertical.is_file():
+                logger.warning("[%s] 历史快手迁移跳过：本地成片不存在", yid)
+                continue
+            self.db.create_kuaishou_publication(
+                yid,
+                self._sha256_file(vertical),
+                str(vertical),
+                source_kind="HISTORY",
+                slice_index=slice_index,
+            )
+
+        while True:
+            claimed = self.db.claim_next_kuaishou_history_publication(daily_limit=daily_limit)
+            if not claimed:
+                return
+            if not self._publish_claimed_kuaishou_publication(claimed):
+                logger.warning("[%s] 快手历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
+                return
+
+    def run_kuaishou_history_migration(self) -> None:
+        """供早间定时任务调用：仅迁移快手历史作品，不执行视频加工或新片发布。"""
+        logger.info("--- Starting Kuaishou History Migration ---")
+        self._run_kuaishou_history_migration()
+        logger.info("--- Kuaishou History Migration Completed ---")
+
+    def reconcile_kuaishou_under_review(self) -> int:
+        """只读回查快手审核中的作品；确认发布才落账，绝不再次上传或提交。"""
+        if not settings.enable_kuaishou_browser_publishing:
+            return 0
+        reviewed = 0
+        publications = self.db.get_kuaishou_publications_by_states(["UNDER_REVIEW"])
+        for publication in publications:
+            publication_id = publication["id"]
+            yid = publication["youtube_id"]
+            slice_index = publication.get("slice_index", 0)
+            _, copy_file = self._kuaishou_asset_paths(yid, slice_index)
+            if not copy_file.is_file():
+                logger.error("[%s] 快手审核回查缺少文案文件：%s", yid, copy_file)
+                continue
+            verify_cmd = [
+                self._VENV_PYTHON,
+                str(self._PRJ_ROOT / "scripts" / "kuaishou_uploader.py"),
+                "--copy", str(copy_file),
+                "--state", str(self._OUT_DIR / "kuaishou_state.json"),
+                "--fail-fast-login",
+                "--verify-only",
+            ]
+            if not settings.kuaishou_browser_headless:
+                verify_cmd.append("--no-headless")
+            try:
+                result = self._run_tracked(
+                    verify_cmd,
+                    yid,
+                    slice_index=slice_index,
+                    text=True,
+                    capture_output=True,
+                    cwd=str(self._PRJ_ROOT),
+                    timeout=180,
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning("[%s] 快手审核回查超时，保留审核中状态", yid)
+                continue
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode == 6:
+                    logger.info("[%s] 快手作品仍在审核中", yid)
+                elif exc.returncode == 2:
+                    logger.warning("[%s] 快手登录态失效，保留审核中状态等待下次核对", yid)
+                else:
+                    logger.warning("[%s] 快手审核回查未确认状态（exit %s），保留审核中", yid, exc.returncode)
+                continue
+            if result.stdout:
+                logger.debug("Kuaishou review verifier stdout:\n%s", result.stdout)
+            if result.stderr:
+                logger.debug("Kuaishou review verifier stderr:\n%s", result.stderr)
+            self.db.update_kuaishou_publication_state(publication_id, "PUBLISHED")
+            self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Kuaishou\nYouTube ID: {yid}")
+            reviewed += 1
+        return reviewed
+
+    def _retry_one_kuaishou_new_video(self) -> bool:
+        """每日优先重试一条未确认的新片；失败时由调用者停止历史迁移，避免换片。"""
+        if not settings.enable_kuaishou_browser_publishing:
+            return True
+        claimed = self.db.claim_next_kuaishou_publication("NEW")
+        if not claimed:
+            return True
+        return self._publish_claimed_kuaishou_publication(claimed)
 
     def _check_censorship(self, yid: str, title: str, description: str = "", zh_title: str = "", slice_index: int = 0, subtitle_text: str = "") -> bool:
         """执行内容安全审查（违法层）+ 频道内容策略检查（运营层）。
@@ -1232,6 +1433,10 @@ class PipelineManager:
                     f"✅ <b>Video Published</b>\nTitle: {short_title}\n"
                     f"Platform: WeChat Channels\nScore: {video['score']}"
                 )
+
+                if settings.enable_kuaishou_browser_publishing:
+                    if not self._queue_and_publish_new_kuaishou_video(yid, slice_index):
+                        logger.warning("[%s] 视频号已发布；快手未确认成功，将固定重试同一成片", yid)
                 
                 # 触发 GC 清理该子任务的临时文件
                 self._run_garbage_collection(yid, slice_index, "PUBLISHED")
@@ -1273,6 +1478,10 @@ class PipelineManager:
         logger.info("--- Starting Daily Pipeline Job ---")
         self.score_pending_videos()
         self.process_high_score_videos(limit=5)
+        if settings.enable_kuaishou_browser_publishing:
+            self.reconcile_kuaishou_under_review()
+            if not self._retry_one_kuaishou_new_video():
+                logger.warning("快手新片重试未确认成功，保留同一视频下次重试。")
         logger.info("--- Daily Pipeline Job Completed ---")
 
 

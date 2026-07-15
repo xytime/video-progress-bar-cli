@@ -36,6 +36,11 @@
 | 3.13.0  | 2026-07-12 | Codex                               | get_high_score_pending_videos 支持按频道覆盖自动发布线，保持黑名单与顺序锁过滤不变 |
 | 3.13.1  | 2026-07-12 | Codex                               | get_rescore_candidates 返回 channel_id，供重算层跳过已过频道专属发布线的候选 |
 | 3.14.0  | 2026-07-13 | Codex                               | 新增 AI 字幕处理审计表与 DAL，记录逐视频 provider 尝试、降级和质量结果 |
+| 3.15.0  | 2026-07-15 | Codex                               | 新增快手浏览器发布账本，以成片摘要去重并支持历史迁移每日限额 |
+| 3.15.1  | 2026-07-15 | Codex                               | 修正快手去重语义：仅已发布作品阻止重传，失败和临时上传保留可重试尝试 |
+| 3.15.2  | 2026-07-15 | Codex                               | 新增手动提交回填领取时间，确保人工补发也计入当日快手历史迁移上限 |
+| 3.15.3  | 2026-07-15 | Codex                               | 历史日限额仅统计实际提交/待核验状态，校准或上传失败不再虚占当天发布名额 |
+| 3.15.4  | 2026-07-15 | Codex                               | 提供快手审核状态批量查询，供定时任务只读回查作品管理结果 |
 """
 
 import sqlite3
@@ -43,7 +48,7 @@ import os
 import logging
 import datetime  # [Claude_Opus_4.6_Thinking_planning] 提升为 top-level import，用于高赞时间窗口计算
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Collection, List, Dict, Any, Optional
 
 class PipelineDB:
     """视频管线数据访问层。
@@ -254,6 +259,61 @@ class PipelineDB:
                 )
             ''')
 
+            # 快手发布账本：仅“已发布”的成片摘要禁止再次投递；失败、临时上传和未发布草稿
+            # 都保留为独立尝试，允许用户重试。它独立于 processed_videos 的微信状态。
+            cursor.execute("PRAGMA table_info(kuaishou_publications)")
+            kuaishou_columns = {row[1] for row in cursor.fetchall()}
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'kuaishou_publications'")
+            kuaishou_schema = (cursor.fetchone() or [""])[0] or ""
+            migrate_kuaishou_ledger = bool(
+                kuaishou_columns and (
+                    "attempt_number" not in kuaishou_columns or "UNDER_REVIEW" not in kuaishou_schema
+                )
+            )
+            if migrate_kuaishou_ledger:
+                cursor.execute("ALTER TABLE kuaishou_publications RENAME TO kuaishou_publications_legacy")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS kuaishou_publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL,
+                    asset_sha256 TEXT NOT NULL,
+                    source_kind TEXT NOT NULL CHECK(source_kind IN ('HISTORY', 'NEW')),
+                    state TEXT NOT NULL DEFAULT 'QUEUED'
+                        CHECK(state IN ('QUEUED', 'UPLOADING', 'DRAFT', 'UNDER_REVIEW', 'PUBLISHED', 'RETRYABLE_FAILED', 'UNCERTAIN', 'BANNED')),
+                    video_path TEXT NOT NULL,
+                    attempt_number INTEGER NOT NULL DEFAULT 1,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    claimed_at TIMESTAMP DEFAULT NULL,
+                    published_at TIMESTAMP DEFAULT NULL,
+                    external_post_id TEXT DEFAULT NULL,
+                    external_url TEXT DEFAULT NULL,
+                    last_error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(video_id, attempt_number),
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT
+                )
+            ''')
+            if migrate_kuaishou_ledger:
+                cursor.execute('''
+                    INSERT INTO kuaishou_publications (
+                        id, video_id, asset_sha256, source_kind, state, video_path, attempt_number,
+                        attempt_count, claimed_at, published_at, external_post_id, external_url,
+                        last_error_message, created_at, updated_at
+                    )
+                    SELECT id, video_id, asset_sha256, source_kind,
+                           CASE WHEN state IN ('UPLOADING', 'UPLOADED', 'UNCERTAIN')
+                                THEN 'RETRYABLE_FAILED' ELSE state END,
+                           video_path, 1, attempt_count, claimed_at, published_at,
+                           external_post_id, external_url,
+                           CASE WHEN state IN ('UPLOADING', 'UPLOADED', 'UNCERTAIN')
+                                THEN '作品管理未确认可见，迁移为可重试尝试'
+                                ELSE last_error_message END,
+                           created_at, updated_at
+                    FROM kuaishou_publications_legacy
+                ''')
+                cursor.execute("DROP TABLE kuaishou_publications_legacy")
+
             # AI 调用审计：仅保存可观测性元数据，禁止保存密钥、完整 prompt 或原始字幕。
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS ai_processing_runs (
@@ -323,6 +383,10 @@ class PipelineDB:
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_ai_attempts_run_order
                 ON ai_provider_attempts(run_id, attempt_order)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_kuaishou_publications_state_source
+                ON kuaishou_publications(state, source_kind, claimed_at, created_at)
             ''')
             
             conn.commit()
@@ -1015,6 +1079,267 @@ class PipelineDB:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    # --- Kuaishou browser publication DAL ---
+    _KUAISHOU_STATES = {
+        "QUEUED", "UPLOADING", "DRAFT", "UNDER_REVIEW", "PUBLISHED",
+        "RETRYABLE_FAILED", "UNCERTAIN", "BANNED",
+    }
+    _KUAISHOU_SOURCES = {"HISTORY", "NEW"}
+
+    def create_kuaishou_publication(
+        self,
+        youtube_id: str,
+        asset_sha256: str,
+        video_path: str,
+        *,
+        source_kind: str,
+        slice_index: int = 0,
+    ) -> Dict[str, Any]:
+        """登记一次快手投递尝试；仅已发布的相同成片摘要会阻止再次投递。"""
+        source = (source_kind or "").upper()
+        if source not in self._KUAISHOU_SOURCES:
+            raise ValueError(f"Unsupported Kuaishou source kind: {source_kind}")
+        if len(asset_sha256) != 64:
+            raise ValueError("asset_sha256 must be a SHA-256 hex digest")
+        with self.get_connection() as conn:
+            published = conn.execute(
+                "SELECT * FROM kuaishou_publications WHERE asset_sha256 = ? AND state = 'PUBLISHED'",
+                (asset_sha256,),
+            ).fetchone()
+            if published:
+                return dict(published)
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError("Video or slice does not exist")
+            next_attempt = conn.execute(
+                "SELECT COALESCE(MAX(attempt_number), 0) + 1 AS number FROM kuaishou_publications WHERE video_id = ?",
+                (video["id"],),
+            ).fetchone()["number"]
+            conn.execute(
+                '''
+                INSERT INTO kuaishou_publications (
+                    video_id, asset_sha256, source_kind, video_path, attempt_number
+                ) VALUES (?, ?, ?, ?, ?)
+                ''',
+                (video["id"], asset_sha256, source, video_path, next_attempt),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM kuaishou_publications WHERE video_id = ? AND attempt_number = ?",
+                (video["id"], next_attempt),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to create Kuaishou publication")
+            return dict(row)
+
+    def get_kuaishou_publication(self, youtube_id: str, slice_index: int = 0) -> Optional[Dict[str, Any]]:
+        """按原视频/切片查询快手发布记录。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''
+                SELECT kp.*, pv.youtube_id, pv.slice_index
+                FROM kuaishou_publications kp
+                JOIN processed_videos pv ON pv.id = kp.video_id
+                WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                ORDER BY kp.attempt_number DESC, kp.id DESC LIMIT 1
+                ''',
+                (youtube_id, slice_index),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_kuaishou_publications_by_states(self, states: Collection[str]) -> List[Dict[str, Any]]:
+        """按状态返回快手发布账本，包含原视频标识，供审核回查任务使用。"""
+        normalized_states = [str(state or "").upper() for state in states]
+        if not normalized_states or any(state not in self._KUAISHOU_STATES for state in normalized_states):
+            raise ValueError("states must contain supported Kuaishou states")
+        placeholders = ", ".join("?" for _ in normalized_states)
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f'''\
+                SELECT kp.*, pv.youtube_id, pv.slice_index
+                FROM kuaishou_publications kp
+                JOIN processed_videos pv ON pv.id = kp.video_id
+                WHERE kp.state IN ({placeholders})
+                ORDER BY kp.updated_at ASC, kp.id ASC
+                ''',
+                normalized_states,
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_unqueued_kuaishou_history_videos(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """返回微信已发布、尚未登记快手账本且未被拉黑的历史视频。
+
+        文件是否仍在本地由上层检查；此方法只负责从数据库给出合规候选，避免业务层直接写 SQL。
+        """
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                '''
+                SELECT pv.*
+                FROM processed_videos pv
+                WHERE pv.status = 'PUBLISHED'
+                  AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM kuaishou_publications kp WHERE kp.video_id = pv.id
+                  )
+                ORDER BY pv.updated_at ASC, pv.id ASC
+                LIMIT ?
+                ''',
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def claim_next_kuaishou_publication(
+        self,
+        source_kind: str,
+        *,
+        daily_limit: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """原子领取同一来源的一条可重试快手任务。
+
+        HISTORY 必须提供 daily_limit；NEW 不受历史迁移配额限制，保证新片可同步投递。
+        """
+        source = (source_kind or "").upper()
+        if source not in self._KUAISHOU_SOURCES:
+            raise ValueError(f"Unsupported Kuaishou source kind: {source_kind}")
+        if source == "HISTORY" and (daily_limit is None or daily_limit < 1):
+            raise ValueError("daily_limit must be at least 1 for HISTORY")
+        with self.get_connection() as conn:
+            if source == "HISTORY":
+                used = conn.execute(
+                    '''
+                    SELECT COUNT(*) AS count FROM kuaishou_publications
+                    WHERE source_kind = 'HISTORY'
+                      AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                      AND claimed_at IS NOT NULL
+                      AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                    '''
+                ).fetchone()["count"]
+                if used >= daily_limit:
+                    return None
+            candidate = conn.execute(
+                '''
+                SELECT kp.*, pv.youtube_id, pv.slice_index
+                FROM kuaishou_publications kp
+                JOIN processed_videos pv ON pv.id = kp.video_id
+                WHERE kp.source_kind = ? AND kp.state IN ('QUEUED', 'RETRYABLE_FAILED')
+                  AND (kp.claimed_at IS NULL OR date(kp.claimed_at, 'localtime') < date('now', 'localtime'))
+                ORDER BY kp.created_at ASC, kp.id ASC LIMIT 1
+                ''',
+                (source,),
+            ).fetchone()
+            if not candidate:
+                return None
+            cursor = conn.execute(
+                '''
+                UPDATE kuaishou_publications
+                SET state = 'UPLOADING', attempt_count = attempt_count + 1,
+                    claimed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND state IN ('QUEUED', 'RETRYABLE_FAILED')
+                ''',
+                (candidate["id"],),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                return None
+            conn.commit()
+            row = conn.execute(
+                '''
+                SELECT kp.*, pv.youtube_id, pv.slice_index
+                FROM kuaishou_publications kp
+                JOIN processed_videos pv ON pv.id = kp.video_id
+                WHERE kp.id = ?
+                ''',
+                (candidate["id"],),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def claim_kuaishou_publication(self, publication_id: int) -> Optional[Dict[str, Any]]:
+        """原子领取指定快手任务，供新片在视频号成功后立即同步投递。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                '''
+                UPDATE kuaishou_publications
+                SET state = 'UPLOADING', attempt_count = attempt_count + 1,
+                    claimed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND state IN ('QUEUED', 'RETRYABLE_FAILED')
+                ''',
+                (publication_id,),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                return None
+            conn.commit()
+            row = conn.execute(
+                '''
+                SELECT kp.*, pv.youtube_id, pv.slice_index
+                FROM kuaishou_publications kp
+                JOIN processed_videos pv ON pv.id = kp.video_id
+                WHERE kp.id = ?
+                ''',
+                (publication_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def claim_next_kuaishou_history_publication(self, daily_limit: int) -> Optional[Dict[str, Any]]:
+        """兼容入口：原子领取一条历史迁移任务并遵守当天上限。"""
+        return self.claim_next_kuaishou_publication("HISTORY", daily_limit=daily_limit)
+
+    def update_kuaishou_publication_state(
+        self,
+        publication_id: int,
+        state: str,
+        *,
+        external_post_id: Optional[str] = None,
+        external_url: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> bool:
+        """更新快手投递状态；只有 PUBLISHED 才会在后续尝试中触发成片去重。"""
+        normalized_state = (state or "").upper()
+        if normalized_state not in self._KUAISHOU_STATES:
+            raise ValueError(f"Unsupported Kuaishou state: {state}")
+        assignments = ["state = ?", "updated_at = CURRENT_TIMESTAMP"]
+        values: List[Any] = [normalized_state]
+        if external_post_id is not None:
+            assignments.append("external_post_id = ?")
+            values.append(external_post_id)
+        if external_url is not None:
+            assignments.append("external_url = ?")
+            values.append(external_url)
+        if error_message is not None:
+            assignments.append("last_error_message = ?")
+            values.append(error_message)
+        if normalized_state == "PUBLISHED":
+            assignments.append("published_at = COALESCE(published_at, CURRENT_TIMESTAMP)")
+        values.append(publication_id)
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                f"UPDATE kuaishou_publications SET {', '.join(assignments)} WHERE id = ?",
+                values,
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def mark_kuaishou_publication_attempted(self, publication_id: int) -> bool:
+        """回填一次已实际提交的尝试，用于人工恢复流程也遵守 HISTORY 当日配额。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                '''
+                UPDATE kuaishou_publications
+                SET claimed_at = COALESCE(claimed_at, CURRENT_TIMESTAMP),
+                    attempt_count = CASE WHEN attempt_count = 0 THEN 1 ELSE attempt_count END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ''',
+                (publication_id,),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
 
     def delete_video_record(self, youtube_id: str, slice_index: Optional[int] = None) -> bool:
         """物理删除视频记录。如果 slice_index 传入 None，删除父及所有关联子视频；否则只删除单切片。"""

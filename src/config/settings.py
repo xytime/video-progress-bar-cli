@@ -29,6 +29,7 @@
 | 3.9.0 | 2026-07-10 | Codex                               | 新增微信会话临期自动预热重登开关，提前推送二维码避免发布时才发现过期 |
 | 3.10.0 | 2026-07-12 | Codex                              | 新增演讲类频道独立自动发布线，score >= 40 进入自动处理队列 |
 | 3.11.0 | 2026-07-13 | Codex                              | 新增动态字幕模型池、DeepSeek vocab fallback 与数字检查开关 |
+| 3.12.0 | 2026-07-15 | Codex                              | 新增快手创作者中心浏览器上传开关；默认关闭，不改变现有微信发布链路 |
 """
 import json
 import socket
@@ -229,6 +230,13 @@ class Settings(BaseSettings):
     # 日期戳文字前缀（与日期拼接，如「发布日期：2026-06-25」）。
     # 使用全角冒号「：」而非半角「:」，避免与 ffmpeg filtergraph 选项分隔符冲突。
     source_date_stamp_label: str = "发布日期："
+
+    # 快手创作者中心浏览器上传。默认关闭；启用后使用本地 Playwright 会话文件扫码登录，
+    # 不需要快手开放平台 App ID、密钥或 OAuth 授权。
+    enable_kuaishou_browser_publishing: bool = False
+    kuaishou_browser_headless: bool = True
+    # 历史视频迁移到快手的每日上限；新视频双平台投递不受此上限限制。
+    kuaishou_history_daily_limit: int = 10
 
     # -------------------------------------------------------------------------
     # 静态配置常量 (Static Constants) — 固定值，不依赖环境
