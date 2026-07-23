@@ -58,6 +58,7 @@ def _make_pm(db):
 def _enable(monkeypatch, *, censor=False, channel=False):
     monkeypatch.setattr(settings, "enable_censorship_engine", censor)
     monkeypatch.setattr(settings, "enable_channel_policy_filter", channel)
+    monkeypatch.setattr(settings, "enable_channel_policy_fail_open", False)
     monkeypatch.setattr(settings, "enable_blacklist_tombstone", False)
 
 

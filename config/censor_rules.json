@@ -78,6 +78,82 @@
         "riot",
         "protest suppression"
       ],
+      "cooccurrence_zh": [
+        {
+          "primary": [
+            "中国",
+            "中国政府",
+            "中共",
+            "中国共产党"
+          ],
+          "context": [
+            "独裁",
+            "专制",
+            "威权",
+            "极权",
+            "侵略",
+            "敌对政权",
+            "敌对阵营",
+            "改写国际规则"
+          ],
+          "max_gap": 80
+        },
+        {
+          "primary": [
+            "中国",
+            "中国银行",
+            "中资银行"
+          ],
+          "context": [
+            "规避制裁",
+            "逃避制裁",
+            "绕过制裁",
+            "制裁规避"
+          ],
+          "max_gap": 80
+        }
+      ],
+      "cooccurrence_en": [
+        {
+          "primary": [
+            "china",
+            "chinese",
+            "beijing",
+            "chinese government",
+            "ccp",
+            "prc"
+          ],
+          "context": [
+            "dictatorship",
+            "dictatorships",
+            "authoritarian",
+            "authoritarian governance",
+            "totalitarian",
+            "aggression",
+            "acts of aggression",
+            "hostile regime",
+            "hostile regimes",
+            "rewrite the rules"
+          ],
+          "max_gap": 240
+        },
+        {
+          "primary": [
+            "china",
+            "chinese",
+            "chinese banks",
+            "beijing",
+            "prc"
+          ],
+          "context": [
+            "evading sanctions",
+            "sanctions evasion",
+            "evade sanctions",
+            "circumvent sanctions"
+          ],
+          "max_gap": 180
+        }
+      ],
       "exemptions_zh": [
         "北京大学",
         "北京时间",

@@ -16,6 +16,7 @@
 | 1.7.0   | 2026-06-13 | Claude_Opus_4.8                        | 新增 scan_all_matches()：不短路扫描全部层，返回文本命中的所有审查词，供「复核放行」标签云高亮与人工决策展示 |
 | 1.8.0   | 2026-06-22 | Claude_Opus_4.8                        | [🅰️ 词库热加载] 硬编码 _BLOCKLIST/_CHANNEL_POLICY 改名 _DEFAULT_* 作兜底；新增外部 JSON（config/censor_rules.json）按 mtime 热加载，运维可在线增删词无需重部署；缺失/损坏/P0 空 → 安全回退默认（绝不置空）；选 JSON 而非 YAML 避免 P0 路径引入 pyyaml 依赖；由 enable_external_censor_rules 控制 |
 | 1.9.0   | 2026-06-22 | Claude_Opus_4.8                        | [🅱️ CP 精准制导] 美国政客/政党裸人名从 CP 硬命中迁至 person_*，仅与 policy_context_*/conflict_* 共现时才拦截，根治审计「症结 3 过宽杀」（传记/大选科普/科技顺带提名误杀）；中国政治实体/领导人/武装组织/冲突复合词仍硬命中不变；scan_all_matches 同步；person_*/policy_context_* 为热加载可选键 |
+| 2.0.0   | 2026-07-23 | Codex                                  | P0/P1/P2 支持 cooccurrence_zh/en 近距离共现规则，用于拦截“中国+独裁/威权/侵略/制裁规避”等字幕风险而不误杀泛地缘政治 |
 """
 
 import re
@@ -91,6 +92,34 @@ _DEFAULT_BLOCKLIST: dict = {
             "climb over the wall", "circumvention",
             "riot", "protest suppression",
         ],
+        "cooccurrence_zh": [
+            {
+                "primary": ["中国", "中国政府", "中共", "中国共产党"],
+                "context": ["独裁", "专制", "威权", "极权", "侵略", "敌对政权", "敌对阵营", "改写国际规则"],
+                "max_gap": 80,
+            },
+            {
+                "primary": ["中国", "中国银行", "中资银行"],
+                "context": ["规避制裁", "逃避制裁", "绕过制裁", "制裁规避"],
+                "max_gap": 80,
+            },
+        ],
+        "cooccurrence_en": [
+            {
+                "primary": ["china", "chinese", "beijing", "chinese government", "ccp", "prc"],
+                "context": [
+                    "dictatorship", "dictatorships", "authoritarian", "authoritarian governance",
+                    "totalitarian", "aggression", "acts of aggression", "hostile regime",
+                    "hostile regimes", "rewrite the rules",
+                ],
+                "max_gap": 240,
+            },
+            {
+                "primary": ["china", "chinese", "chinese banks", "beijing", "prc"],
+                "context": ["evading sanctions", "sanctions evasion", "evade sanctions", "circumvent sanctions"],
+                "max_gap": 180,
+            },
+        ],
         # "北京大学"、"北京时间" 等不触发拦截（仅中文通道）
         "exemptions_zh": [
             "北京大学", "北京时间", "北京烤鸭", "北京协和", "北京中关村",
@@ -123,6 +152,8 @@ _DEFAULT_BLOCKLIST: dict = {
         ],
         "exemptions_zh": [],
         "exemptions_en": [],
+        "cooccurrence_zh": [],
+        "cooccurrence_en": [],
     },
 }
 
@@ -305,6 +336,25 @@ _REQUIRED_CP_LIST_KEYS = ("zh", "en", "country_zh", "country_en", "conflict_zh",
 _rules_cache: dict = {"mtime": None, "blocklist": None, "channel_policy": None}
 
 
+def _validate_cooccurrence_rules(items: list, path: str) -> None:
+    """校验 P0/P1/P2 的近距离共现规则，避免外部 JSON 写错后静默放行。"""
+    if not isinstance(items, list):
+        raise ValueError(f"{path} must be a list")
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"{path}[{idx}] must be an object")
+        for key in ("primary", "context"):
+            values = item.get(key)
+            if not isinstance(values, list) or not values or not all(isinstance(v, str) and v.strip() for v in values):
+                raise ValueError(f"{path}[{idx}].{key} must be a non-empty string list")
+        max_gap = item.get("max_gap", 240)
+        if not isinstance(max_gap, int) or max_gap < 0:
+            raise ValueError(f"{path}[{idx}].max_gap must be a non-negative integer")
+        label = item.get("matched")
+        if label is not None and not isinstance(label, str):
+            raise ValueError(f"{path}[{idx}].matched must be a string")
+
+
 def _validate_rules(data: dict) -> tuple:
     """校验外部规则结构并补全可选字段，返回 (blocklist, channel_policy)。结构非法抛 ValueError。"""
     if not isinstance(data, dict):
@@ -327,6 +377,9 @@ def _validate_rules(data: dict) -> tuple:
         r.setdefault("score", 0)
         r.setdefault("exemptions_zh", [])
         r.setdefault("exemptions_en", [])
+        for k in ("cooccurrence_zh", "cooccurrence_en"):
+            r.setdefault(k, [])
+            _validate_cooccurrence_rules(r[k], f"blocklist.{lvl}.{k}")
     # P0 是政治安全红线，绝不允许被（误）清空
     if not (bl["P0"]["zh"] or bl["P0"]["en"]):
         raise ValueError("blocklist.P0 has no words — refusing to disable the political red line")
@@ -467,6 +520,45 @@ def _is_exempted(normalized_text: str, exemptions: list[str]) -> bool:
     return False
 
 
+def _term_spans_zh(dense_text: str, term: str) -> list[tuple[int, int]]:
+    dense_term = _strip_spaces(_normalize(term))
+    if not dense_term:
+        return []
+    return [(m.start(), m.end()) for m in re.finditer(re.escape(dense_term), dense_text)]
+
+
+def _term_spans_en(normalized_text: str, term: str) -> list[tuple[int, int]]:
+    norm_term = _normalize(term)
+    if not norm_term:
+        return []
+    return [(m.start(), m.end()) for m in re.finditer(rf"\b{re.escape(norm_term)}\b", normalized_text)]
+
+
+def _cooccurrence_hit(text: str, rules: list[dict], *, channel: str, dense_text: str = "") -> Optional[str]:
+    """返回首个近距离共现命中，matched 形如 "china+dictatorship"。"""
+    if not text or not rules:
+        return None
+    span_fn = _term_spans_zh if channel == "zh" else _term_spans_en
+    haystack = dense_text if channel == "zh" else text
+
+    for rule in rules:
+        max_gap = rule.get("max_gap", 240)
+        for primary in rule["primary"]:
+            primary_spans = span_fn(haystack, primary)
+            if not primary_spans:
+                continue
+            for context in rule["context"]:
+                context_spans = span_fn(haystack, context)
+                if not context_spans:
+                    continue
+                for p_start, p_end in primary_spans:
+                    for c_start, c_end in context_spans:
+                        gap = max(c_start - p_end, p_start - c_end, 0)
+                        if gap <= max_gap:
+                            return rule.get("matched") or f"{primary}+{context}"
+    return None
+
+
 # ── 主检测函数 (Main Censor Function) ─────────────────────────────────────────
 
 def check_text(zh_text: str = "", en_text: str = "") -> CensorResult:
@@ -518,6 +610,20 @@ def check_text(zh_text: str = "", en_text: str = "") -> CensorResult:
                         matched=word, channel="zh",
                     )
 
+            cohit = _cooccurrence_hit(
+                zh_norm,
+                rule.get("cooccurrence_zh", []),
+                channel="zh",
+                dense_text=zh_dense,
+            )
+            if cohit and not _is_exempted(zh_norm, exempts_zh):
+                logger.warning(f"[Censor] {level} zh-channel co-occurrence hit: '{cohit}'")
+                return CensorResult(
+                    hit=True, level=level, tag=tag,
+                    score=score, action=action,
+                    matched=cohit, channel="zh",
+                )
+
         # ── 英文通道检测（独立备用，翻译失效时也能拦截）─────────────────────
         if en_norm:
             for word in rule["en"]:
@@ -534,6 +640,15 @@ def check_text(zh_text: str = "", en_text: str = "") -> CensorResult:
                         score=score, action=action,
                         matched=word, channel="en",
                     )
+
+            cohit = _cooccurrence_hit(en_norm, rule.get("cooccurrence_en", []), channel="en")
+            if cohit and not _is_exempted(en_norm, exempts_en):
+                logger.warning(f"[Censor] {level} en-channel co-occurrence hit: '{cohit}'")
+                return CensorResult(
+                    hit=True, level=level, tag=tag,
+                    score=score, action=action,
+                    matched=cohit, channel="en",
+                )
 
     # 全部通过
     return CensorResult(hit=False)
@@ -689,6 +804,17 @@ def scan_all_matches(zh_text: str = "", en_text: str = "") -> list:
             for word in rule.get("en", []):
                 if _en_hit(word):
                     _add(word, level, tag, "en")
+        cohit_zh = _cooccurrence_hit(
+            zh_norm,
+            rule.get("cooccurrence_zh", []),
+            channel="zh",
+            dense_text=zh_dense,
+        )
+        if cohit_zh:
+            _add(cohit_zh, level, tag, "zh")
+        cohit_en = _cooccurrence_hit(en_norm, rule.get("cooccurrence_en", []), channel="en")
+        if cohit_en:
+            _add(cohit_en, level, tag, "en")
 
     # ── Channel Policy（硬命中词 + 国名/冲突共现）────────────────────────────────
     cp = _get_channel_policy()

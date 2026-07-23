@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date       | Author                                 | Description          |
 |---------|------------|----------------------------------------|----------------------|
+| 1.6.0   | 2026-07-23 | Codex                                  | 新增“中国+负面政治定性/制裁规避”近距离共现拦截回归 |
 | 1.5.0   | 2026-06-13 | Claude_Opus_4.8                        | 更新 GC 测试以匹配 v3.11.0：发布后保留再发产物（成片/封面/文案/标题/分类），仅删源视频与中间字幕 |
 | 1.4.0   | 2026-05-28 | Gemini_3.5_Flash_planning              | 新增 stop_video API 强杀进程与状态置为 FAILED 的单元测试 |
 | 1.3.0   | 2026-05-27 | Unknown_Model_planning                 | 新增顺序锁放宽测试与垃圾回收 GC 深度清理测试用例 |
@@ -231,6 +232,41 @@ class TestCensorEngine:
         r = check_text(zh_text="", en_text="ｔｉａｎａｎｍｅｎ square")
         assert r.hit is True
         assert r.level == "P0"
+
+    def test_p1_china_negative_political_cooccurrence_en(self):
+        """中国与独裁/威权/侵略等负面政治定性近距离共现时，应挂起人工复核。"""
+        text = (
+            "The dictatorships of Russia, China, Iran, and North Korea are engaging "
+            "in acts of aggression and working together to rewrite the rules."
+        )
+        r = check_text(zh_text="", en_text=text)
+        assert r.hit is True
+        assert r.level == "P1"
+        assert r.action == ACTION_SUSPEND_MANUAL
+        assert "china+" in r.matched
+
+    def test_p1_chinese_sanctions_evasion_cooccurrence_en(self):
+        """Chinese 与 evading sanctions 近距离共现，覆盖本次涉事字幕里的制裁规避风险。"""
+        r = check_text(
+            zh_text="",
+            en_text="Iran hid key components while evading sanctions through Chinese banks and shell companies.",
+        )
+        assert r.hit is True
+        assert r.level == "P1"
+        assert r.action == ACTION_SUSPEND_MANUAL
+
+    def test_p1_china_negative_political_cooccurrence_zh(self):
+        r = check_text(zh_text="这个片段把中国描述为威权阵营并讨论侵略行为", en_text="")
+        assert r.hit is True
+        assert r.level == "P1"
+        assert r.channel == "zh"
+
+    def test_china_negative_terms_far_apart_pass(self):
+        """同一长文本里远距离出现 China 和 dictatorship，不应按组合规则误杀。"""
+        far_text = "China market demand is discussed first. " + ("neutral business context. " * 30) + \
+            "A separate history segment mentions a dictatorship in Libya."
+        r = check_text(zh_text="", en_text=far_text)
+        assert r.hit is False
 
 
 # ── Phase 4: 评分公式极端值测试 ──────────────────────────────────────────────
@@ -716,6 +752,5 @@ class TestStopVideoApi:
             data = response.json()
             assert data["success"] is False
             assert "当前不处于运行状态" in data["error"]
-
 
 
