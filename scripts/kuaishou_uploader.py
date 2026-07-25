@@ -24,6 +24,7 @@
 | 1.7.0 | 2026-07-15 | Codex | 区分作品管理中的“审核中”和“已发布”；审核中只表示提交成功，不能冒充最终发布成功 |
 | 1.7.1 | 2026-07-15 | Codex | 快手专属文案适配：最多保留前 4 个话题，避免平台因标签上限拒绝，原始视频号文案不改 |
 | 1.8.0 | 2026-07-15 | Codex | 新增仅核对作品管理状态模式，用于定时审核，不触发上传或发布 |
+| 1.9.0 | 2026-07-25 | Gemini_3.6_Flash_planning | 修复发布模式下 apply_cover 被提前 return 阻断 Bug，解耦 DOM 查找助手 |
 """
 
 from __future__ import annotations
@@ -343,6 +344,7 @@ def upload_for_calibration(
     upload_wait_seconds: int = 900,
     description_text: Optional[str] = None,
     publish: bool = False,
+    cover_path: Optional[str] = None,
 ) -> bool | str | None:
     """只上传一个已授权视频并保存表单结构；绝不填写、保存草稿或发布。"""
     upload_input = get_video_upload_input(page)
@@ -359,6 +361,11 @@ def upload_for_calibration(
         return False
     if description_text is not None:
         capture_submission_area(page, artifact_dir)
+
+    if cover_path and Path(cover_path).is_file():
+        logger.info(f"开始应用快手封面: {cover_path}")
+        apply_cover(page, cover_path)
+
     if publish:
         return publish_after_review(page, artifact_dir, description_text or "")
     if advance_form_once:
@@ -369,8 +376,99 @@ def upload_for_calibration(
         next_step.click()
         page.wait_for_timeout(1_500)
         _capture_form_controls(page, artifact_dir, "kuaishou_next_step")
+
     logger.info("已上传文件并保存表单控件；未保存草稿、未发布")
     return True
+
+
+def _find_visible_element(scope, selectors: Iterable[str], timeout_ms: int = 1000):
+    """从候选选择器列表中依次定位第一个可切且可见的元素。"""
+    for sel in selectors:
+        try:
+            el = scope.locator(sel).first
+            if el.is_visible(timeout=timeout_ms):
+                return el
+        except Exception:
+            continue
+    return None
+
+
+def apply_cover(page, cover_path: str) -> bool:
+    """应用快手封面上传。"""
+    if not cover_path or not Path(cover_path).is_file():
+        logger.error("快手封面文件不存在: %s", cover_path)
+        return False
+    try:
+        logger.info("开始应用快手封面: %s", cover_path)
+        cover_path_abs = str(Path(cover_path).resolve())
+
+        # 1. 尝试寻找设置封面/上传封面入口
+        entry_selectors = [
+            "text=编辑封面", "text=设置封面", "text=更换封面", "text=上传封面", 
+            "button:has-text('封面')", ".cover-edit-btn", ".cover-upload-btn"
+        ]
+        cover_entry = _find_visible_element(page, entry_selectors)
+
+        if cover_entry:
+            cover_entry.click(timeout=2000)
+            page.wait_for_timeout(1000)
+
+            # 点击本地上传 Tab (如果有)
+            tab_el = _find_visible_element(page, ["text=本地上传", "text=上传封面", ".upload-tab"])
+            if tab_el:
+                tab_el.click(timeout=1000)
+                logger.info("已点击快手'本地上传' Tab")
+                page.wait_for_timeout(500)
+
+            # 2. 注入文件：优先直接通过 set_input_files 注入
+            injected = False
+            try:
+                inputs = page.locator("input[type='file']")
+                for i in range(inputs.count()):
+                    try:
+                        inputs.nth(i).set_input_files(cover_path_abs, timeout=2000)
+                        injected = True
+                        logger.info("成功直接注入快手封面文件")
+                        break
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.debug("快手直接 input 注入异常: %s", e)
+
+            if not injected:
+                upload_area = _find_visible_element(page, ["text=点击上传", ".upload-btn", "div:has-text('点击上传')"])
+                if upload_area:
+                    try:
+                        with page.expect_file_chooser(timeout=4000) as fc_info:
+                            upload_area.click(timeout=2000)
+                        fc_info.value.set_files(cover_path_abs)
+                        injected = True
+                        logger.info("已通过点击上传区域注入快手封面文件")
+                    except Exception as exc:
+                        logger.debug("快手点击上传区域触发 file_chooser 失败: %s", exc)
+
+            if injected:
+                page.wait_for_timeout(2000)
+                confirm_btn = _find_visible_element(page, ["text=确定", "text=完成", "text=确认", ".confirm-btn"])
+                if confirm_btn and confirm_btn.is_enabled():
+                    confirm_btn.click(timeout=2000)
+                    logger.info("快手封面已确认应用")
+                    page.wait_for_timeout(2000)
+                return True
+        else:
+            logger.warning("未找到快手封面设置入口，尝试直接注入 input file")
+            inputs = page.locator("input[type='file']")
+            for i in range(inputs.count()):
+                try:
+                    inputs.nth(i).set_input_files(cover_path_abs, timeout=1000)
+                    logger.info("强制注入快手封面文件成功")
+                    page.wait_for_timeout(2000)
+                    return True
+                except Exception:
+                    continue
+    except Exception as e:
+        logger.warning(f"快手封面应用过程发生异常: {e}")
+    return False
 
 
 def _page_login_required(page) -> bool:
@@ -426,6 +524,7 @@ def run_uploader(
     prepare_description: bool = False,
     publish: bool = False,
     verify_only: bool = False,
+    cover_path: Optional[str] = None,
 ) -> int:
     """登录并进入快手发表页；上传动作在真实 DOM 校准前被显式阻止。"""
     state_file = Path(state_path)
@@ -500,6 +599,7 @@ def run_uploader(
                     upload_wait_seconds=upload_wait_seconds,
                     description_text=copy_text,
                     publish=publish,
+                    cover_path=cover_path,
                 )
                 if publish:
                     if publish_result == MANAGEMENT_PUBLISHED:
@@ -529,6 +629,7 @@ def run_uploader(
 def main() -> int:
     parser = argparse.ArgumentParser(description="快手创作者中心浏览器上传器")
     parser.add_argument("--video", help="待上传视频路径")
+    parser.add_argument("--cover", help="封面图片路径")
     parser.add_argument("--copy", help="发布文案文本路径")
     parser.add_argument("--state", default="output/kuaishou_state.json", help="本机 Playwright 会话文件")
     parser.add_argument("--login-only", action="store_true", help="仅扫码登录并保存本机会话")
@@ -560,6 +661,7 @@ def main() -> int:
         prepare_description=args.prepare_description,
         publish=args.publish,
         verify_only=args.verify_only,
+        cover_path=args.cover,
     )
 
 

@@ -61,6 +61,7 @@
 | 3.29.0  | 2026-07-12 | Codex                               | 演讲类频道自动发布线降至 40，普通频道保持 75 |
 | 3.30.0  | 2026-07-15 | Codex                               | 接入快手创作者中心账本：作品管理确认后才记成功；失败固定重试同一条，历史迁移每日最多 10 条 |
 | 3.31.0  | 2026-07-15 | Codex                               | 拆分快手历史迁移与新片审核入口：审核回查绝不上传或发布 |
+| 3.32.0  | 2026-07-25 | Gemini_3.6_Flash_planning           | 抽离 _resolve_cover_file 支持切片与父视频封面智能退避，补全快手 --cover 参数 |
 """
 
 
@@ -110,6 +111,7 @@ _PROXY_KEYS = frozenset({
 })
 _WECHAT_UPLOAD_TIMEOUT_SEC = 25 * 60
 _KUAISHOU_UPLOAD_TIMEOUT_SEC = 25 * 60
+_DOUYIN_UPLOAD_TIMEOUT_SEC = 25 * 60
 _AUTO_CAPTION_TIMEOUT_SEC = 45 * 60
 
 
@@ -536,6 +538,16 @@ class PipelineManager:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
         return self._OUT_DIR / f"{prefix}_vertical.mp4", self._OUT_DIR / f"{prefix}_copy.txt"
 
+    def _resolve_cover_file(self, yid: str, slice_index: int = 0) -> Optional[Path]:
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        candidate = self._OUT_DIR / f"{prefix}_cover.jpg"
+        if candidate.is_file():
+            return candidate
+        fallback = self._OUT_DIR / f"{yid}_cover.jpg"
+        if fallback.is_file():
+            return fallback
+        return None
+
     def _publish_claimed_kuaishou_publication(self, publication: Dict[str, Any]) -> bool:
         """执行已领取的快手任务；只有上传器完成作品管理回查才将账本置 PUBLISHED。"""
         publication_id = publication["id"]
@@ -559,6 +571,10 @@ class PipelineManager:
             "--prepare-description",
             "--publish",
         ]
+        cover_file = self._resolve_cover_file(yid, slice_index)
+        if cover_file:
+            upload_cmd += ["--cover", str(cover_file)]
+
         if not settings.kuaishou_browser_headless:
             upload_cmd.append("--no-headless")
         try:
@@ -631,6 +647,223 @@ class PipelineManager:
             logger.warning("[%s] 快手新片任务未能领取，保留账本等待下次重试", yid)
             return False
         return self._publish_claimed_kuaishou_publication(claimed)
+
+    # ── 抖音创作者中心发布 ─────────────────────────────────────────────────────
+
+    def _douyin_asset_paths(self, yid: str, slice_index: int) -> tuple[Path, Path]:
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        return self._OUT_DIR / f"{prefix}_vertical.mp4", self._OUT_DIR / f"{prefix}_copy.txt"
+
+    def _douyin_title_path(self, yid: str, slice_index: int) -> Path:
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        return self._OUT_DIR / f"{prefix}_title.txt"
+
+    def _publish_claimed_douyin_publication(self, publication: Dict[str, Any]) -> bool:
+        """执行已领取的抖音任务；校准完成前上传器会 fail-closed，不会误点发布。"""
+        publication_id = publication["id"]
+        yid = publication["youtube_id"]
+        slice_index = publication.get("slice_index", 0)
+        vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
+        title_file = self._douyin_title_path(yid, slice_index)
+        if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
+            reason = (
+                f"抖音投递产物缺失：video={vertical.is_file()} "
+                f"copy={copy_file.is_file()} title={title_file.is_file()}"
+            )
+            logger.error("[%s] %s", yid, reason)
+            self.db.update_douyin_publication_state(publication_id, "RETRYABLE_FAILED", error_message=reason)
+            return False
+
+        upload_cmd = [
+            self._VENV_PYTHON,
+            str(self._PRJ_ROOT / "scripts" / "douyin_uploader.py"),
+            "--video", str(vertical),
+            "--copy", str(copy_file),
+            "--title-file", str(title_file),
+            "--state", str(self._OUT_DIR / "douyin_state.json"),
+            "--fail-fast-login",
+            "--prepare-description",
+            "--publish",
+        ]
+        cover_file = self._resolve_cover_file(yid, slice_index)
+        if cover_file:
+            upload_cmd += ["--cover", str(cover_file)]
+
+        if not settings.douyin_browser_headless:
+            upload_cmd.append("--no-headless")
+        try:
+            result = self._run_tracked(
+                upload_cmd,
+                yid,
+                slice_index=slice_index,
+                text=True,
+                capture_output=True,
+                cwd=str(self._PRJ_ROOT),
+                timeout=_DOUYIN_UPLOAD_TIMEOUT_SEC,
+            )
+            if result.stdout:
+                logger.debug("Douyin uploader stdout:\n%s", result.stdout)
+            if result.stderr:
+                logger.debug("Douyin uploader stderr:\n%s", result.stderr)
+        except subprocess.TimeoutExpired:
+            reason = "抖音发布超过 25 分钟未完成；可能已提交但未能完成作品管理回查。"
+            logger.error("[%s] %s", yid, reason)
+            self.db.update_douyin_publication_state(publication_id, "UNCERTAIN", error_message=reason)
+            return False
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode()
+            if exc.returncode == 2:
+                state = "RETRYABLE_FAILED"
+                reason = "抖音登录态失效，尚未开始公开发布；请重新登录后重试同一视频。"
+            elif exc.returncode == 6:
+                reason = "抖音已接受发布提交，当前按审核中处理；等待作品管理回查校准后确认最终发布。"
+                logger.info("[%s] %s", yid, reason)
+                self.db.update_douyin_publication_state(publication_id, "UNDER_REVIEW", error_message=reason)
+                self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+                return True
+            elif exc.returncode == 3:
+                state = "UNCERTAIN"
+                reason = "抖音提交后未能在作品管理确认可见；请先人工核对，勿切换视频。"
+            elif exc.returncode == 4:
+                state = "RETRYABLE_FAILED"
+                reason = "抖音上传器尚未完成页面校准；本次没有触发发布。"
+            else:
+                state = "RETRYABLE_FAILED"
+                reason = f"抖音上传器失败（exit {exc.returncode}）：{stderr[:500]}"
+            logger.error("[%s] %s", yid, reason)
+            self.db.update_douyin_publication_state(publication_id, state, error_message=reason)
+            return False
+
+        self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
+        self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+        return True
+
+    def _queue_and_publish_new_douyin_video(self, yid: str, slice_index: int = 0) -> bool:
+        """为成片入库一条 NEW 抖音发布任务，并当即触发发布。"""
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
+        title_file = self._douyin_title_path(yid, slice_index)
+        if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
+            logger.error("[%s] 无法入库抖音任务：投递产物不全", prefix)
+            return False
+        publication = self.db.get_douyin_publication(yid, slice_index=slice_index)
+        if not publication:
+            publication = self.db.create_douyin_publication(
+                yid,
+                self._sha256_file(vertical),
+                str(vertical),
+                source_kind="NEW",
+                slice_index=slice_index,
+            )
+        publication_id = publication["id"]
+        claimed = self.db.claim_douyin_publication(publication_id)
+        if not claimed:
+            logger.warning("[%s] 抖音任务 id=%s 当前无法 claim", prefix, publication_id)
+            return False
+        return self._publish_claimed_douyin_publication(claimed)
+
+    def _run_douyin_history_migration(self) -> None:
+        """按每日限额迁移历史作品到抖音；任一失败后固定在该视频。"""
+        if not settings.enable_douyin_browser_publishing:
+            return
+        daily_limit = settings.douyin_history_daily_limit
+        for candidate in self.db.get_platform_backfill_preview_candidates(
+            "douyin",
+            wall_street_since_upload_date=settings.platform_backfill_wall_street_since_upload_date,
+            limit=daily_limit,
+        ):
+            yid = candidate["youtube_id"]
+            slice_index = candidate.get("slice_index", 0)
+            vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
+            title_file = self._douyin_title_path(yid, slice_index)
+            if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
+                logger.warning("[%s] 历史抖音迁移跳过：本地产物不全", yid)
+                continue
+            self.db.create_douyin_publication(
+                yid,
+                self._sha256_file(vertical),
+                str(vertical),
+                source_kind="HISTORY",
+                slice_index=slice_index,
+            )
+
+        while True:
+            claimed = self.db.claim_next_douyin_history_publication(daily_limit=daily_limit)
+            if not claimed:
+                return
+            if not self._publish_claimed_douyin_publication(claimed):
+                logger.warning("[%s] 抖音历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
+                return
+
+    def run_douyin_history_migration(self) -> None:
+        """供早间定时任务调用：仅迁移抖音历史作品。"""
+        logger.info("--- Starting Douyin History Migration ---")
+        self._run_douyin_history_migration()
+        logger.info("--- Douyin History Migration Completed ---")
+
+    def reconcile_douyin_under_review(self) -> int:
+        """只读回查抖音审核中的作品；确认发布才落账。"""
+        if not settings.enable_douyin_browser_publishing:
+            return 0
+        reviewed = 0
+        publications = self.db.get_douyin_publications_by_states(["UNDER_REVIEW"])
+        for publication in publications:
+            publication_id = publication["id"]
+            yid = publication["youtube_id"]
+            slice_index = publication.get("slice_index", 0)
+            _, copy_file = self._douyin_asset_paths(yid, slice_index)
+            if not copy_file.is_file():
+                logger.error("[%s] 抖音审核回查缺少文案文件：%s", yid, copy_file)
+                continue
+            verify_cmd = [
+                self._VENV_PYTHON,
+                str(self._PRJ_ROOT / "scripts" / "douyin_uploader.py"),
+                "--copy", str(copy_file),
+                "--state", str(self._OUT_DIR / "douyin_state.json"),
+                "--fail-fast-login",
+                "--verify-only",
+            ]
+            if not settings.douyin_browser_headless:
+                verify_cmd.append("--no-headless")
+            try:
+                result = self._run_tracked(
+                    verify_cmd,
+                    yid,
+                    slice_index=slice_index,
+                    text=True,
+                    capture_output=True,
+                    cwd=str(self._PRJ_ROOT),
+                    timeout=180,
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning("[%s] 抖音审核回查超时，保留审核中状态", yid)
+                continue
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode == 6:
+                    logger.info("[%s] 抖音作品仍在审核中", yid)
+                elif exc.returncode == 2:
+                    logger.warning("[%s] 抖音登录态失效，保留审核中状态等待下次核对", yid)
+                else:
+                    logger.warning("[%s] 抖音审核回查未确认状态（exit %s），保留审核中", yid, exc.returncode)
+                continue
+            if result.stdout:
+                logger.debug("Douyin review verifier stdout:\n%s", result.stdout)
+            if result.stderr:
+                logger.debug("Douyin review verifier stderr:\n%s", result.stderr)
+            self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
+            self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+            reviewed += 1
+        return reviewed
+
+    def _retry_one_douyin_new_video(self) -> bool:
+        """每日优先重试一条抖音未确认的新片；失败则保留同一视频下次再试。"""
+        if not settings.enable_douyin_browser_publishing:
+            return True
+        claimed = self.db.claim_next_douyin_publication("NEW")
+        if not claimed:
+            return True
+        return self._publish_claimed_douyin_publication(claimed)
+
 
     def _run_kuaishou_history_migration(self) -> None:
         """按每日限额迁移视频号历史作品；任一失败后固定在该视频，绝不切换下一条。"""
@@ -728,6 +961,223 @@ class PipelineManager:
         if not claimed:
             return True
         return self._publish_claimed_kuaishou_publication(claimed)
+
+    # ── 抖音创作者中心发布 ─────────────────────────────────────────────────────
+
+    def _douyin_asset_paths(self, yid: str, slice_index: int) -> tuple[Path, Path]:
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        return self._OUT_DIR / f"{prefix}_vertical.mp4", self._OUT_DIR / f"{prefix}_copy.txt"
+
+    def _douyin_title_path(self, yid: str, slice_index: int) -> Path:
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        return self._OUT_DIR / f"{prefix}_title.txt"
+
+    def _publish_claimed_douyin_publication(self, publication: Dict[str, Any]) -> bool:
+        """执行已领取的抖音任务；校准完成前上传器会 fail-closed，不会误点发布。"""
+        publication_id = publication["id"]
+        yid = publication["youtube_id"]
+        slice_index = publication.get("slice_index", 0)
+        vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
+        title_file = self._douyin_title_path(yid, slice_index)
+        if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
+            reason = (
+                f"抖音投递产物缺失：video={vertical.is_file()} "
+                f"copy={copy_file.is_file()} title={title_file.is_file()}"
+            )
+            logger.error("[%s] %s", yid, reason)
+            self.db.update_douyin_publication_state(publication_id, "RETRYABLE_FAILED", error_message=reason)
+            return False
+
+        upload_cmd = [
+            self._VENV_PYTHON,
+            str(self._PRJ_ROOT / "scripts" / "douyin_uploader.py"),
+            "--video", str(vertical),
+            "--copy", str(copy_file),
+            "--title-file", str(title_file),
+            "--state", str(self._OUT_DIR / "douyin_state.json"),
+            "--fail-fast-login",
+            "--prepare-description",
+            "--publish",
+        ]
+        cover_file = self._resolve_cover_file(yid, slice_index)
+        if cover_file:
+            upload_cmd += ["--cover", str(cover_file)]
+
+        if not settings.douyin_browser_headless:
+            upload_cmd.append("--no-headless")
+        try:
+            result = self._run_tracked(
+                upload_cmd,
+                yid,
+                slice_index=slice_index,
+                text=True,
+                capture_output=True,
+                cwd=str(self._PRJ_ROOT),
+                timeout=_DOUYIN_UPLOAD_TIMEOUT_SEC,
+            )
+            if result.stdout:
+                logger.debug("Douyin uploader stdout:\n%s", result.stdout)
+            if result.stderr:
+                logger.debug("Douyin uploader stderr:\n%s", result.stderr)
+        except subprocess.TimeoutExpired:
+            reason = "抖音发布超过 25 分钟未完成；可能已提交但未能完成作品管理回查。"
+            logger.error("[%s] %s", yid, reason)
+            self.db.update_douyin_publication_state(publication_id, "UNCERTAIN", error_message=reason)
+            return False
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode()
+            if exc.returncode == 2:
+                state = "RETRYABLE_FAILED"
+                reason = "抖音登录态失效，尚未开始公开发布；请重新登录后重试同一视频。"
+            elif exc.returncode == 6:
+                reason = "抖音已接受发布提交，当前按审核中处理；等待作品管理回查校准后确认最终发布。"
+                logger.info("[%s] %s", yid, reason)
+                self.db.update_douyin_publication_state(publication_id, "UNDER_REVIEW", error_message=reason)
+                self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+                return True
+            elif exc.returncode == 3:
+                state = "UNCERTAIN"
+                reason = "抖音提交后未能在作品管理确认可见；请先人工核对，勿切换视频。"
+            elif exc.returncode == 4:
+                state = "RETRYABLE_FAILED"
+                reason = "抖音上传器尚未完成页面校准；本次没有触发发布。"
+            else:
+                state = "RETRYABLE_FAILED"
+                reason = f"抖音上传器失败（exit {exc.returncode}）：{stderr[:500]}"
+            logger.error("[%s] %s", yid, reason)
+            self.db.update_douyin_publication_state(publication_id, state, error_message=reason)
+            return False
+
+        self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
+        self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+        return True
+
+    def _queue_and_publish_new_douyin_video(self, yid: str, slice_index: int = 0) -> bool:
+        """为成片入库一条 NEW 抖音发布任务，并当即触发发布。"""
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
+        title_file = self._douyin_title_path(yid, slice_index)
+        if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
+            logger.error("[%s] 无法入库抖音任务：投递产物不全", prefix)
+            return False
+        publication = self.db.get_douyin_publication(yid, slice_index=slice_index)
+        if not publication:
+            publication = self.db.create_douyin_publication(
+                yid,
+                self._sha256_file(vertical),
+                str(vertical),
+                source_kind="NEW",
+                slice_index=slice_index,
+            )
+        publication_id = publication["id"]
+        claimed = self.db.claim_douyin_publication(publication_id)
+        if not claimed:
+            logger.warning("[%s] 抖音任务 id=%s 当前无法 claim", prefix, publication_id)
+            return False
+        return self._publish_claimed_douyin_publication(claimed)
+
+    def _run_douyin_history_migration(self) -> None:
+        """按每日限额迁移历史作品到抖音；任一失败后固定在该视频。"""
+        if not settings.enable_douyin_browser_publishing:
+            return
+        daily_limit = settings.douyin_history_daily_limit
+        for candidate in self.db.get_platform_backfill_preview_candidates(
+            "douyin",
+            wall_street_since_upload_date=settings.platform_backfill_wall_street_since_upload_date,
+            limit=daily_limit,
+        ):
+            yid = candidate["youtube_id"]
+            slice_index = candidate.get("slice_index", 0)
+            vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
+            title_file = self._douyin_title_path(yid, slice_index)
+            if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
+                logger.warning("[%s] 历史抖音迁移跳过：本地产物不全", yid)
+                continue
+            self.db.create_douyin_publication(
+                yid,
+                self._sha256_file(vertical),
+                str(vertical),
+                source_kind="HISTORY",
+                slice_index=slice_index,
+            )
+
+        while True:
+            claimed = self.db.claim_next_douyin_history_publication(daily_limit=daily_limit)
+            if not claimed:
+                return
+            if not self._publish_claimed_douyin_publication(claimed):
+                logger.warning("[%s] 抖音历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
+                return
+
+    def run_douyin_history_migration(self) -> None:
+        """供早间定时任务调用：仅迁移抖音历史作品。"""
+        logger.info("--- Starting Douyin History Migration ---")
+        self._run_douyin_history_migration()
+        logger.info("--- Douyin History Migration Completed ---")
+
+    def reconcile_douyin_under_review(self) -> int:
+        """只读回查抖音审核中的作品；确认发布才落账。"""
+        if not settings.enable_douyin_browser_publishing:
+            return 0
+        reviewed = 0
+        publications = self.db.get_douyin_publications_by_states(["UNDER_REVIEW"])
+        for publication in publications:
+            publication_id = publication["id"]
+            yid = publication["youtube_id"]
+            slice_index = publication.get("slice_index", 0)
+            _, copy_file = self._douyin_asset_paths(yid, slice_index)
+            if not copy_file.is_file():
+                logger.error("[%s] 抖音审核回查缺少文案文件：%s", yid, copy_file)
+                continue
+            verify_cmd = [
+                self._VENV_PYTHON,
+                str(self._PRJ_ROOT / "scripts" / "douyin_uploader.py"),
+                "--copy", str(copy_file),
+                "--state", str(self._OUT_DIR / "douyin_state.json"),
+                "--fail-fast-login",
+                "--verify-only",
+            ]
+            if not settings.douyin_browser_headless:
+                verify_cmd.append("--no-headless")
+            try:
+                result = self._run_tracked(
+                    verify_cmd,
+                    yid,
+                    slice_index=slice_index,
+                    text=True,
+                    capture_output=True,
+                    cwd=str(self._PRJ_ROOT),
+                    timeout=180,
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning("[%s] 抖音审核回查超时，保留审核中状态", yid)
+                continue
+            except subprocess.CalledProcessError as exc:
+                if exc.returncode == 6:
+                    logger.info("[%s] 抖音作品仍在审核中", yid)
+                elif exc.returncode == 2:
+                    logger.warning("[%s] 抖音登录态失效，保留审核中状态等待下次核对", yid)
+                else:
+                    logger.warning("[%s] 抖音审核回查未确认状态（exit %s），保留审核中", yid, exc.returncode)
+                continue
+            if result.stdout:
+                logger.debug("Douyin review verifier stdout:\n%s", result.stdout)
+            if result.stderr:
+                logger.debug("Douyin review verifier stderr:\n%s", result.stderr)
+            self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
+            self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+            reviewed += 1
+        return reviewed
+
+    def _retry_one_douyin_new_video(self) -> bool:
+        """每日优先重试一条抖音未确认的新片；失败则保留同一视频下次再试。"""
+        if not settings.enable_douyin_browser_publishing:
+            return True
+        claimed = self.db.claim_next_douyin_publication("NEW")
+        if not claimed:
+            return True
+        return self._publish_claimed_douyin_publication(claimed)
+
 
     def _check_censorship(self, yid: str, title: str, description: str = "", zh_title: str = "", slice_index: int = 0, subtitle_text: str = "") -> bool:
         """执行内容安全审查（违法层）+ 频道内容策略检查（运营层）。
@@ -1437,6 +1887,9 @@ class PipelineManager:
                 if settings.enable_kuaishou_browser_publishing:
                     if not self._queue_and_publish_new_kuaishou_video(yid, slice_index):
                         logger.warning("[%s] 视频号已发布；快手未确认成功，将固定重试同一成片", yid)
+                if settings.enable_douyin_browser_publishing:
+                    if not self._queue_and_publish_new_douyin_video(yid, slice_index):
+                        logger.warning("[%s] 视频号已发布；抖音未确认成功，将固定重试同一成片", yid)
                 
                 # 触发 GC 清理该子任务的临时文件
                 self._run_garbage_collection(yid, slice_index, "PUBLISHED")
@@ -1473,6 +1926,31 @@ class PipelineManager:
 
     # ── 每日作业 ──────────────────────────────────────────────────────────────
 
+    def recover_deferred_wechat_publications(self) -> int:
+        """从 WECHAT_DEFERRED 状态按限额恢复微信发布"""
+        if settings.wechat_publishing_paused:
+            return 0
+        limit = settings.wechat_deferred_recovery_daily_limit
+        recovered = 0
+        for _ in range(limit):
+            claimed = self.db.claim_next_deferred_wechat_publication()
+            if not claimed:
+                break
+            self._process_single_video(claimed)
+            recovered += 1
+        return recovered
+
+    def _defer_wechat_and_publish_kuaishou(self, yid: str, slice_index: int = 0) -> None:
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        self.db.update_video_status(yid, "WECHAT_DEFERRED", slice_index=slice_index)
+        if settings.enable_kuaishou_browser_publishing:
+            if not self.db.get_kuaishou_publication(yid, slice_index=slice_index):
+                self._queue_and_publish_new_kuaishou_video(yid, slice_index=slice_index)
+        if settings.enable_douyin_browser_publishing:
+            if not self.db.get_douyin_publication(yid, slice_index=slice_index):
+                self._queue_and_publish_new_douyin_video(yid, slice_index=slice_index)
+        self._run_garbage_collection(yid, slice_index, "WECHAT_DEFERRED")
+
     def run_daily_job(self):
         """执行每日例行调度"""
         logger.info("--- Starting Daily Pipeline Job ---")
@@ -1482,6 +1960,12 @@ class PipelineManager:
             self.reconcile_kuaishou_under_review()
             if not self._retry_one_kuaishou_new_video():
                 logger.warning("快手新片重试未确认成功，保留同一视频下次重试。")
+        if settings.enable_douyin_browser_publishing:
+            self.reconcile_douyin_under_review()
+            if not self._retry_one_douyin_new_video():
+                logger.warning("抖音新片重试未确认成功，保留同一视频下次重试。")
+            else:
+                self._run_douyin_history_migration()
         logger.info("--- Daily Pipeline Job Completed ---")
 
 

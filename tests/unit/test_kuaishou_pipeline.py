@@ -1,4 +1,12 @@
-"""快手账本到浏览器上传器的管线衔接测试。"""
+"""快手账本到浏览器上传器的管线衔接测试。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-07-15 | Codex | 覆盖快手账本、发布器和审核回查衔接 |
+| 1.1.0 | 2026-07-16 | Codex | 覆盖视频号暂停期间的快手单平台发布与恢复入口 |
+| 1.2.0 | 2026-07-23 | Codex | 显式隔离抖音开关，避免三平台上线后快手单测被环境配置带偏 |
+"""
 
 import subprocess
 from pathlib import Path
@@ -81,14 +89,99 @@ def test_daily_job_does_not_run_history_migration(tmp_path: Path):
     manager._retry_one_kuaishou_new_video = MagicMock(return_value=True)
     manager._run_kuaishou_history_migration = MagicMock()
     previous = settings.enable_kuaishou_browser_publishing
+    previous_douyin = settings.enable_douyin_browser_publishing
+    previous_paused = settings.wechat_publishing_paused
     settings.enable_kuaishou_browser_publishing = True
+    settings.enable_douyin_browser_publishing = False
+    settings.wechat_publishing_paused = True
     try:
         manager.run_daily_job()
     finally:
         settings.enable_kuaishou_browser_publishing = previous
+        settings.enable_douyin_browser_publishing = previous_douyin
+        settings.wechat_publishing_paused = previous_paused
 
     manager.score_pending_videos.assert_called_once()
     manager.process_high_score_videos.assert_called_once_with(limit=5)
     manager.reconcile_kuaishou_under_review.assert_called_once()
     manager._retry_one_kuaishou_new_video.assert_called_once()
     manager._run_kuaishou_history_migration.assert_not_called()
+
+
+def test_paused_wechat_defers_video_and_uses_existing_kuaishou_submission(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    manager.db.get_kuaishou_publication.return_value = {"state": "UNDER_REVIEW"}
+    manager.db.is_blacklisted.return_value = False
+    previous_douyin = settings.enable_douyin_browser_publishing
+    settings.enable_douyin_browser_publishing = False
+
+    try:
+        manager._defer_wechat_and_publish_kuaishou("video-id", 0)
+    finally:
+        settings.enable_douyin_browser_publishing = previous_douyin
+
+    manager.db.update_video_status.assert_called_once_with("video-id", "WECHAT_DEFERRED", slice_index=0)
+    manager.db.create_kuaishou_publication.assert_not_called()
+    manager.send_telegram_msg.assert_not_called()
+
+
+def test_recovery_claims_at_most_the_configured_daily_limit(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    manager.db.claim_next_deferred_wechat_publication.side_effect = [
+        {"youtube_id": "video-id", "slice_index": 0},
+        {"youtube_id": "second-video", "slice_index": 0},
+    ]
+    manager._process_single_video = MagicMock()
+    prior_paused = settings.wechat_publishing_paused
+    prior_limit = settings.wechat_deferred_recovery_daily_limit
+    settings.wechat_publishing_paused = False
+    settings.wechat_deferred_recovery_daily_limit = 1
+    try:
+        assert manager.recover_deferred_wechat_publications() == 1
+    finally:
+        settings.wechat_publishing_paused = prior_paused
+        settings.wechat_deferred_recovery_daily_limit = prior_limit
+
+    manager._process_single_video.assert_called_once_with({"youtube_id": "video-id", "slice_index": 0})
+    manager.db.claim_next_deferred_wechat_publication.assert_called_once()
+
+
+def test_paused_daily_job_skips_wechat_recovery(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    manager.score_pending_videos = MagicMock()
+    manager.process_high_score_videos = MagicMock()
+    manager.recover_deferred_wechat_publications = MagicMock()
+    manager.reconcile_kuaishou_under_review = MagicMock()
+    manager._retry_one_kuaishou_new_video = MagicMock(return_value=True)
+    prior_paused = settings.wechat_publishing_paused
+    prior_kuaishou = settings.enable_kuaishou_browser_publishing
+    prior_douyin = settings.enable_douyin_browser_publishing
+    settings.wechat_publishing_paused = True
+    settings.enable_kuaishou_browser_publishing = True
+    settings.enable_douyin_browser_publishing = False
+    try:
+        manager.run_daily_job()
+    finally:
+        settings.wechat_publishing_paused = prior_paused
+        settings.enable_kuaishou_browser_publishing = prior_kuaishou
+        settings.enable_douyin_browser_publishing = prior_douyin
+
+    manager.recover_deferred_wechat_publications.assert_not_called()
+    manager.process_high_score_videos.assert_called_once_with(limit=5)
+
+
+def test_claimed_kuaishou_publication_passes_cover_arg_when_cover_exists(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    (tmp_path / "video-id_cover.jpg").write_bytes(b"cover_image_bytes")
+    manager._run_tracked = MagicMock(
+        return_value=subprocess.CompletedProcess(["kuaishou"], 0, stdout="ok", stderr="")
+    )
+
+    assert manager._publish_claimed_kuaishou_publication(
+        {"id": 77, "youtube_id": "video-id", "slice_index": 0}
+    )
+
+    command = manager._run_tracked.call_args.args[0]
+    assert "--cover" in command
+    assert str(tmp_path / "video-id_cover.jpg") in command
+

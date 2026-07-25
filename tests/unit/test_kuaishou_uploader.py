@@ -8,6 +8,7 @@ from scripts.kuaishou_uploader import (
     EXIT_NOT_CALIBRATED,
     KUAISHOU_VIDEO_INPUT_SELECTOR,
     KUAISHOU_DESCRIPTION_SELECTOR,
+    apply_cover,
     dismiss_onboarding_if_present,
     is_upload_in_progress,
     fill_description_for_review,
@@ -278,3 +279,54 @@ def test_logged_in_upload_stops_before_uncalibrated_submission(tmp_path: Path):
 
     assert result == EXIT_NOT_CALIBRATED
     context.storage_state.assert_called_once()
+
+
+def test_kuaishou_apply_cover_returns_false_when_cover_missing(tmp_path: Path):
+    page = MagicMock()
+    missing_file = str(tmp_path / "non_existent.jpg")
+    assert not apply_cover(page, missing_file)
+
+
+def test_kuaishou_apply_cover_success_with_input_file(tmp_path: Path):
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"cover_bytes")
+
+    entry_el = MagicMock()
+    entry_el.is_visible.return_value = True
+
+    tab_el = MagicMock()
+    tab_el.is_visible.return_value = True
+
+    file_input = MagicMock()
+
+    confirm_btn = MagicMock()
+    confirm_btn.is_visible.return_value = True
+    confirm_btn.is_enabled.return_value = True
+
+    def locator_side_effect(sel):
+        if "设置封面" in sel or "编辑封面" in sel:
+            m = MagicMock()
+            m.first = entry_el
+            return m
+        if "本地上传" in sel:
+            m = MagicMock()
+            m.first = tab_el
+            return m
+        if "input[type='file']" in sel:
+            m = MagicMock()
+            m.count.return_value = 1
+            m.nth.return_value = file_input
+            return m
+        if "确定" in sel or "完成" in sel:
+            m = MagicMock()
+            m.first = confirm_btn
+            return m
+        return MagicMock()
+
+    page = MagicMock()
+    page.locator.side_effect = locator_side_effect
+
+    assert apply_cover(page, str(cover))
+    file_input.set_input_files.assert_called_once_with(str(cover.resolve()), timeout=2000)
+    confirm_btn.click.assert_called_once()
+
