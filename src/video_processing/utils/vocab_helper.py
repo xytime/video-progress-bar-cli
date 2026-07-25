@@ -16,6 +16,7 @@
 | 1.9.0   | 2026-07-13 | Codex | 保留每条最多三项词汇卡，按学习价值取舍避免字幕版面溢出 |
 | 2.0.0   | 2026-07-13 | Codex | PET/B1 改为最低门槛，优先 C1-C2、专业术语和关键专有名词 |
 | 2.1.0   | 2026-07-13 | Codex | Gemini 改为模型级动态池，接入 3.1 Flash Lite 并压缩批量/上下文防 TPM 峰值 |
+| 2.2.0   | 2026-07-25 | Codex | 修正 google-genai HttpOptions.timeout 单位为毫秒，避免 90ms TLS 握手超时导致字幕翻译全失败 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -54,6 +55,7 @@ _MODELS_TO_TRY = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite
 # 277 段 1 次调用时模型输出被截断，分批后每次 ≤ 50 段，避免计数不符
 _BATCH_SIZE = 25
 _MAX_CONTEXT_CHARS = 6000
+_GENAI_HTTP_TIMEOUT_MS = 90_000
 
 # 指数退避参数
 _INITIAL_RETRY_DELAY_S = 2
@@ -108,7 +110,7 @@ def extract_vocab_batch(
 
     client = _genai.Client(
         api_key=api_key,
-        http_options=_genai_types.HttpOptions(timeout=90),
+        http_options=_genai_types.HttpOptions(timeout=_GENAI_HTTP_TIMEOUT_MS),
     )
 
     # [Claude_Sonnet_4.6_Thinking_planning] v1.1.0: 分批处理，每批 _BATCH_SIZE 段

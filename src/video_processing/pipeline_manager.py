@@ -62,6 +62,8 @@
 | 3.30.0  | 2026-07-15 | Codex                               | 接入快手创作者中心账本：作品管理确认后才记成功；失败固定重试同一条，历史迁移每日最多 10 条 |
 | 3.31.0  | 2026-07-15 | Codex                               | 拆分快手历史迁移与新片审核入口：审核回查绝不上传或发布 |
 | 3.32.0  | 2026-07-25 | Gemini_3.6_Flash_planning           | 抽离 _resolve_cover_file 支持切片与父视频封面智能退避，补全快手 --cover 参数 |
+| 3.33.0  | 2026-07-25 | Codex                               | 平台历史补录缺失本地投递素材时取消该任务并继续下一条，避免每日迁移被同一条旧记录卡死 |
+| 3.34.0  | 2026-07-25 | Codex                               | 快手发布优先使用平台专用短文案，避免共享文案超出快手字数限制且不影响抖音回查 |
 """
 
 
@@ -536,7 +538,9 @@ class PipelineManager:
 
     def _kuaishou_asset_paths(self, yid: str, slice_index: int) -> tuple[Path, Path]:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
-        return self._OUT_DIR / f"{prefix}_vertical.mp4", self._OUT_DIR / f"{prefix}_copy.txt"
+        kuaishou_copy = self._OUT_DIR / f"{prefix}_kuaishou_copy.txt"
+        copy_file = kuaishou_copy if kuaishou_copy.is_file() else self._OUT_DIR / f"{prefix}_copy.txt"
+        return self._OUT_DIR / f"{prefix}_vertical.mp4", copy_file
 
     def _resolve_cover_file(self, yid: str, slice_index: int = 0) -> Optional[Path]:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
@@ -557,7 +561,8 @@ class PipelineManager:
         if not vertical.is_file() or not copy_file.is_file():
             reason = f"快手投递产物缺失：video={vertical.is_file()} copy={copy_file.is_file()}"
             logger.error("[%s] %s", yid, reason)
-            self.db.update_kuaishou_publication_state(publication_id, "RETRYABLE_FAILED", error_message=reason)
+            state = "CANCELED" if publication.get("source_kind") == "HISTORY" else "RETRYABLE_FAILED"
+            self.db.update_kuaishou_publication_state(publication_id, state, error_message=reason)
             return False
 
         upload_cmd = [
@@ -890,6 +895,12 @@ class PipelineManager:
             if not claimed:
                 return
             if not self._publish_claimed_kuaishou_publication(claimed):
+                latest = self.db.get_kuaishou_publication(
+                    claimed["youtube_id"], slice_index=claimed.get("slice_index", 0)
+                )
+                if latest and latest.get("id") == claimed["id"] and latest.get("state") == "CANCELED":
+                    logger.warning("[%s] 快手历史迁移任务已取消，继续处理下一条", claimed["youtube_id"])
+                    continue
                 logger.warning("[%s] 快手历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
                 return
 
@@ -985,7 +996,8 @@ class PipelineManager:
                 f"copy={copy_file.is_file()} title={title_file.is_file()}"
             )
             logger.error("[%s] %s", yid, reason)
-            self.db.update_douyin_publication_state(publication_id, "RETRYABLE_FAILED", error_message=reason)
+            state = "CANCELED" if publication.get("source_kind") == "HISTORY" else "RETRYABLE_FAILED"
+            self.db.update_douyin_publication_state(publication_id, state, error_message=reason)
             return False
 
         upload_cmd = [
@@ -1106,6 +1118,12 @@ class PipelineManager:
             if not claimed:
                 return
             if not self._publish_claimed_douyin_publication(claimed):
+                latest = self.db.get_douyin_publication(
+                    claimed["youtube_id"], slice_index=claimed.get("slice_index", 0)
+                )
+                if latest and latest.get("id") == claimed["id"] and latest.get("state") == "CANCELED":
+                    logger.warning("[%s] 抖音历史迁移任务已取消，继续处理下一条", claimed["youtube_id"])
+                    continue
                 logger.warning("[%s] 抖音历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
                 return
 
@@ -1956,6 +1974,10 @@ class PipelineManager:
         logger.info("--- Starting Daily Pipeline Job ---")
         self.score_pending_videos()
         self.process_high_score_videos(limit=5)
+        if not settings.wechat_publishing_paused:
+            recovered = self.recover_deferred_wechat_publications()
+            if recovered:
+                logger.info(f"WeChat deferred recovery processed {recovered} video(s).")
         if settings.enable_kuaishou_browser_publishing:
             self.reconcile_kuaishou_under_review()
             if not self._retry_one_kuaishou_new_video():
