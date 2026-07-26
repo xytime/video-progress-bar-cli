@@ -22,6 +22,7 @@
 | 2.6.0   | 2026-07-05 | Codex                               | 扫码成功保存 Playwright state 后同步写 wechat_login_at.txt，供 Web/TG 状态判断使用，避免旧 state 文件造成“已登录”假阳性 |
 | 2.7.0   | 2026-07-05 | Codex                               | 二维码捕获改为先落盘整页兜底图再尝试精裁覆盖，避免 selector 漂移时 Web UI 无二维码可扫 |
 | 2.8.0   | 2026-07-10 | Codex                               | 自动发布新增 fail-fast-login 模式：检测到登录页立即返回 LOGIN_REQUIRED，不把管线挂在扫码等待上 |
+| 2.9.0   | 2026-07-23 | Codex                               | 适配视频号新版登录页：优先点击 iframe 内微信快捷登录，失败再切换/裁剪可见二维码，保留扫码兜底 |
 """
 
 import os
@@ -282,6 +283,83 @@ def classify_publish_result(redirected: bool, page_content: str, draft: bool = F
     return any(k in content for k in positives)
 
 
+def _wait_and_save_login(page, context, state_file: Path, qr_path: Path | None = None) -> None:
+    """等待登录回到发布页，保存 Playwright state 和登录成功时间戳。"""
+    page.wait_for_url("**/post/create", timeout=600000)
+    logger.info("Login detected. Saving session...")
+    context.storage_state(path=str(state_file))
+    _stamp_login_success(state_file)
+    logger.info(f"Session saved to: {state_file}")
+    if qr_path and qr_path.exists():
+        try:
+            qr_path.unlink()
+        except Exception:
+            pass
+
+
+def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
+    """在主页面与跨域登录 iframe 中点击指定可见按钮。"""
+    for fr in page.frames:
+        try:
+            loc = fr.locator("button:visible").filter(has_text=text).first
+            if loc.count() > 0:
+                loc.click(timeout=timeout)
+                logger.info(f"Clicked visible login button {text!r} in frame={fr.url[:80]!r}")
+                return True
+        except Exception as e:
+            logger.debug(f"Login button {text!r} not usable in frame={fr.url[:80]!r}: {e}")
+    return False
+
+
+def _try_wechat_quick_login(page) -> bool:
+    """新版 open.weixin.qq.com 登录 iframe：优先点击“微信快捷登录”完成授权。"""
+    if not _click_visible_frame_button(page, "微信快捷登录"):
+        return False
+    try:
+        page.wait_for_url("**/post/create", timeout=20000)
+        logger.info("WeChat quick authorization login succeeded.")
+        return True
+    except Exception as e:
+        logger.warning(f"WeChat quick authorization did not finish within 20s: {e}")
+        return False
+
+
+def _capture_wechat_login_qr(page, qr_path: Path) -> bool:
+    """捕获可扫二维码；若新版快捷登录页挡住二维码，则先切到普通二维码模式。"""
+    qr_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        page.screenshot(path=str(qr_path))
+        logger.info("Login fallback full-page screenshot saved before QR crop attempt.")
+    except Exception as e_full:
+        logger.warning(f"Failed to save login fallback full-page screenshot: {e_full}")
+
+    # 新版 open.weixin.qq.com iframe 默认展示快捷登录；点“使用其他头像...”后二维码才可见。
+    if _click_visible_frame_button(page, "使用其他头像、昵称或账号", timeout=3000):
+        page.wait_for_timeout(1000)
+
+    qr_selectors = ["img.qrcode", ".login-qr img", ".qr-code img", "img[src*='qr']", ".qrcode"]
+    for fr in page.frames:
+        for qr_sel in qr_selectors:
+            try:
+                qr_el = fr.locator(qr_sel)
+                for idx in range(qr_el.count()):
+                    candidate = qr_el.nth(idx)
+                    if not candidate.is_visible(timeout=500):
+                        continue
+                    candidate.screenshot(path=str(qr_path))
+                    logger.info(f"QR captured (visible cropped) via frame={fr.url[:40]!r} sel={qr_sel!r} idx={idx}")
+                    return True
+            except Exception:
+                continue
+
+    try:
+        page.screenshot(path=str(qr_path))
+        logger.info("QR full-page screenshot (fallback, Always-save).")
+    except Exception as e_full:
+        logger.warning(f"Failed to save final QR fallback screenshot: {e_full}")
+    return False
+
+
 def run_uploader(
     video_path: str = None,
     copy_path: str = None,
@@ -454,40 +532,19 @@ def run_uploader(
                 browser.close()
                 return 2  # LOGIN_REQUIRED，交由管线回写状态并告警
 
-            # [Gemini_2.0_Flash_fast] 无论是否 headless，均尝试捕获并保存 QR 码图片，以供 Web UI 临时扫码登录使用
-            try:
-                page.wait_for_timeout(2000)  # 等 QR 码渲染
-                qr_path = str(state_file.parent / "login_qr.png")
-                qr_captured = False
-                try:
-                    page.screenshot(path=qr_path)
-                    logger.info("QR fallback full-page screenshot saved before crop attempt.")
-                except Exception as e_full:
-                    logger.warning(f"Failed to save QR fallback full-page screenshot: {e_full}")
-                # [Claude_Opus_4.8] 微信登录二维码渲染在内嵌 iframe(/platform/login-for-iframe)里的
-                # <img class="qrcode">(208x208)。顶层 page.locator 找不到→以前总回退全页截图(整页发 TG，
-                # 难扫)。改为遍历所有 frame(含主框架)精确裁剪二维码；全找不到才回退整页。
-                qr_selectors = ["img.qrcode", ".login-qr img", ".qr-code img", "img[src*='qr']", ".qrcode"]
-                for fr in page.frames:
-                    for qr_sel in qr_selectors:
-                        try:
-                            qr_el = fr.locator(qr_sel)
-                            if qr_el.count() > 0:
-                                qr_el.first.screenshot(path=qr_path)
-                                qr_captured = True
-                                logger.info(f"QR captured (cropped) via frame={fr.url[:40]!r} sel={qr_sel!r}")
-                                break
-                        except Exception:
-                            continue
-                    if qr_captured:
-                        break
-                if not qr_captured:
-                    page.screenshot(path=qr_path)
-                    logger.info("QR full-page screenshot (fallback, Always-save).")
-            except Exception as e_qr:
-                logger.warning(f"Failed to capture QR code: {e_qr}")
+            qr_path = state_file.parent / "login_qr.png"
+            page.wait_for_timeout(2000)  # 等登录 iframe 渲染
 
-            if headless:
+            # 2026-07 新版：open.weixin.qq.com iframe 默认先显示“微信快捷登录”授权按钮。
+            # 成功时无需二维码；失败时继续保留传统扫码兜底。
+            login_completed = False
+            if _try_wechat_quick_login(page):
+                _wait_and_save_login(page, context, state_file, qr_path)
+                login_completed = True
+            else:
+                _capture_wechat_login_qr(page, qr_path)
+
+            if not login_completed and headless:
                 # [Claude_Sonnet_4.6_Thinking_fast] P1: Telegram QR 推送登录
                 # headless 无弹窗，但可截图 QR 发 Telegram，等扫码后继续上传
                 tg_token   = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -497,41 +554,32 @@ def run_uploader(
                 )
 
                 if tg_token and tg_chat_id and _requests:
-                    logger.info("Headless login required. Sending QR code to Telegram...")
-                    try:
-                        # 发送图片到 Telegram
-                        caption = (
-                            "🔑 微信视频号登录二维码\n"
-                            "请在微信扫码授权（有效期约1分钟）\n"
-                            "扫码成功后脚本将自动继续上传。"
-                        )
-                        with open(qr_path, "rb") as f:
-                            resp = _requests.post(
-                                f"https://api.telegram.org/bot{tg_token}/sendPhoto",
-                                data={"chat_id": tg_chat_id, "caption": caption},
-                                files={"photo": ("qr.png", f, "image/png")},
-                                timeout=15,
+                    if qr_path.exists():
+                        logger.info("Headless login required. Sending QR code to Telegram...")
+                        try:
+                            caption = (
+                                "微信视频号登录\n"
+                                "请用微信扫码授权；若已通过快捷登录授权，脚本会自动继续。\n"
+                                "登录成功后会保存会话并继续任务。"
                             )
-                        if resp.ok:
-                            logger.info("QR code sent to Telegram. Waiting for scan (120s)...")
-                        else:
-                            logger.warning(f"Telegram sendPhoto failed: {resp.text}")
-                    except Exception as e_tg:
-                        logger.error(f"Failed to send QR to Telegram: {e_tg}")
+                            with open(qr_path, "rb") as f:
+                                resp = _requests.post(
+                                    f"https://api.telegram.org/bot{tg_token}/sendPhoto",
+                                    data={"chat_id": tg_chat_id, "caption": caption},
+                                    files={"photo": ("qr.png", f, "image/png")},
+                                    timeout=15,
+                                )
+                            if resp.ok:
+                                logger.info("QR code sent to Telegram. Waiting for scan/authorization...")
+                            else:
+                                logger.warning(f"Telegram sendPhoto failed: {resp.text}")
+                        except Exception as e_tg:
+                            logger.error(f"Failed to send QR to Telegram: {e_tg}")
 
                 # [Gemini_2.0_Flash_fast] 无论是否配置 TG，在 headless 模式下均挂起等待扫码（120秒内由 Web UI 扫码完成登录）
-                logger.info("Waiting for QR scan (Web UI / Telegram / App) (120s)...")
+                logger.info("Waiting for WeChat login authorization (Web UI / Telegram / App)...")
                 try:
-                    page.wait_for_url("**/post/create", timeout=600000)
-                    logger.info("Login detected. Saving session...")
-                    context.storage_state(path=str(state_file))
-                    _stamp_login_success(state_file)
-                    logger.info(f"Session saved to: {state_file}")
-                    
-                    # 成功后尝试删除临时二维码
-                    if Path(qr_path).exists():
-                        try: os.remove(qr_path)
-                        except Exception: pass
+                    _wait_and_save_login(page, context, state_file, qr_path)
                         
                     if tg_token and tg_chat_id and _requests:
                         try:
@@ -543,30 +591,27 @@ def run_uploader(
                         except Exception:
                             pass
                 except Exception as e:
-                    logger.error(f"Headless QR login wait timed out or failed: {e}")
-                    if Path(qr_path).exists():
-                        try: os.remove(qr_path)
-                        except Exception: pass
+                    logger.error(f"Headless WeChat login wait timed out or failed: {e}")
+                    if qr_path.exists():
+                        try:
+                            qr_path.unlink()
+                        except Exception:
+                            pass
                     browser.close()
                     return 2  # 返回 LOGIN_REQUIRED
-            else:
+            elif not login_completed:
                 logger.info("=" * 50)
-                logger.info("⚠️ 请在弹出的浏览器窗口中，使用手机微信扫码登录！")
+                logger.info("请在弹出的浏览器窗口中完成微信快捷授权或扫码登录。")
                 logger.info("=" * 50)
                 try:
-                    page.wait_for_url("**/post/create", timeout=600000)
-                    logger.info("Login detected. Saving session state...")
-                    context.storage_state(path=str(state_file))
-                    _stamp_login_success(state_file)
-                    logger.info(f"Session saved to: {state_file}")
-                    if Path(qr_path).exists():
-                        try: os.remove(qr_path)
-                        except Exception: pass
+                    _wait_and_save_login(page, context, state_file, qr_path)
                 except Exception as e:
                     logger.error(f"Login wait timed out or failed: {e}")
-                    if Path(qr_path).exists():
-                        try: os.remove(qr_path)
-                        except Exception: pass
+                    if qr_path.exists():
+                        try:
+                            qr_path.unlink()
+                        except Exception:
+                            pass
                     browser.close()
                     return 1
 

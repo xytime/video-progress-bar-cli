@@ -41,7 +41,10 @@
 | 3.14.4 | 2026-07-08 | Codex                               | 调度器新增孤儿 PUBLISHING 回收：发现发布进程已死但状态长时间未回收时，保守降级为 FAILED 并提示先核对视频号后台，避免队列被无限卡住 |
 | 3.15.0 | 2026-07-10 | Codex                               | 会话临期自动预热重登：保留旧 state，提前经 Telegram 推送二维码，扫码成功后才替换会话 |
 | 3.16.0 | 2026-07-13 | Codex                               | 新增 AI 处理审计 API，后台可读取 provider 尝试、降级和质量结果 |
+| 3.17.0 | 2026-07-23 | Codex                               | 新增三平台补录预览与抖音补录确认入队 API |
+| 3.18.0 | 2026-07-24 | Codex                               | [新任务启动保护] _in_us_market_window 跟随 settings 的 ET 08:15–16:15 窗口，仅阻止调度器启动新管线 |
 """
+import hashlib
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
 import fcntl  # [Claude_Opus_4.6_Thinking_planning] 用于 _is_pipeline_manager_running() 非阻塞锁探测
@@ -52,7 +55,7 @@ import shutil
 import subprocess
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -69,8 +72,10 @@ from pydantic import BaseModel
 from video_processing.db.database import PipelineDB
 from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning] 统一翻译入口
+from web.listening_transcriber import router as listening_transcriber_router
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
+app.include_router(listening_transcriber_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -203,7 +208,7 @@ def _translate_title_task(youtube_id: str, english_title: str):
 
 def _in_us_market_window() -> bool:
     """[Claude_Opus_4.8] 美股盘中重负载保护窗口判定，委托 settings 单一真相源
-    （ET 09:15–16:15 工作日，自动夏/冬令时；与 pipeline_manager 共用同一实现）。"""
+    （ET 08:15–16:15 工作日，自动夏/冬令时；与 pipeline_manager 共用同一实现）。"""
     return settings.is_us_market_guard_window()
 
 
@@ -540,7 +545,104 @@ class BatchDeleteRequest(BaseModel):  # [Gemini_2.5_Pro_planning]
     delete_files: bool = False
 
 
+class PlatformBackfillQueueRequest(BaseModel):
+    platform: str
+    since_upload_date: Optional[str] = None
+    wall_street_days: int = 10
+    daily_limit: int = 5
+    youtube_ids: Optional[list[str]] = None
+
+
 _OUT_DIR = Path(__file__).parent.parent.parent / "output"
+
+
+def _default_backfill_since_upload_date(days: int = 10) -> str:
+    return (datetime.now().date() - timedelta(days=max(0, int(days)))).strftime("%Y%m%d")
+
+
+def _normalize_backfill_since(since_upload_date: Optional[str], wall_street_days: int) -> str:
+    since = (since_upload_date or "").strip() or _default_backfill_since_upload_date(wall_street_days)
+    if not re.match(r"^\d{8}$", since):
+        raise HTTPException(status_code=400, detail="since_upload_date must be YYYYMMDD")
+    return since
+
+
+def _backfill_asset_paths(youtube_id: str, slice_index: int) -> dict[str, Path]:
+    prefix = f"{youtube_id}_s{slice_index}" if slice_index > 0 else youtube_id
+    return {
+        "video": _OUT_DIR / f"{prefix}_vertical.mp4",
+        "copy": _OUT_DIR / f"{prefix}_copy.txt",
+        "title": _OUT_DIR / f"{prefix}_title.txt",
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _backfill_row_payload(row: dict) -> dict:
+    yid = row.get("youtube_id")
+    slice_index = int(row.get("slice_index") or 0)
+    paths = _backfill_asset_paths(yid, slice_index)
+    return {
+        **row,
+        "slice_index": slice_index,
+        "rules": [
+            label for flag, label in (
+                (row.get("is_speech_or_interview"), "访谈/演讲"),
+                (row.get("is_recent_wall_street"), "Wall Street Truthbombs 最近窗口"),
+            )
+            if int(flag or 0)
+        ],
+        "assets": {name: path.is_file() for name, path in paths.items()},
+    }
+
+
+def _build_backfill_preview_payload(
+    *,
+    since_upload_date: str,
+    wechat_daily_limit: int,
+    wechat_max_daily_limit: int,
+    douyin_daily_limit: int,
+    limit: int,
+) -> dict:
+    platform_limits = {
+        "wechat": {"label": "微信", "daily_limit": max(1, min(int(wechat_daily_limit), 50))},
+        "douyin": {"label": "抖音", "daily_limit": max(1, min(int(douyin_daily_limit), 50))},
+    }
+    payload = {
+        "success": True,
+        "since_upload_date": since_upload_date,
+        "wechat_max_daily_limit": max(1, min(int(wechat_max_daily_limit), 50)),
+        "platforms": {},
+    }
+    for platform, meta in platform_limits.items():
+        rows = [
+            _backfill_row_payload(row)
+            for row in db.get_platform_backfill_preview_candidates(
+                platform,
+                wall_street_since_upload_date=since_upload_date,
+                limit=max(1, min(int(limit), 5000)),
+            )
+        ]
+        daily_limit = meta["daily_limit"]
+        batches = [rows[index:index + daily_limit] for index in range(0, len(rows), daily_limit)]
+        payload["platforms"][platform] = {
+            "label": meta["label"],
+            "daily_limit": daily_limit,
+            "candidate_count": len(rows),
+            "queueable_count": sum(1 for row in rows if row["assets"]["video"]),
+            "estimated_days": len(batches),
+            "batches": [
+                {"day": index + 1, "items": batch}
+                for index, batch in enumerate(batches[:3])
+            ],
+        }
+    return payload
 
 
 # ── 页面路由 ─────────────────────────────────────────────────────────────
@@ -605,6 +707,106 @@ def get_stats():
         "breakdown": {s: counts.get(s, 0) for s in STATUS_ORDER},
         "detailed": detailed,
         "server_time": datetime.now().strftime("%H:%M:%S"),
+    }
+
+
+@app.get("/api/platform-backfill/preview")
+def platform_backfill_preview(
+    since_upload_date: Optional[str] = None,
+    wall_street_days: int = 10,
+    wechat_daily_limit: int = 5,
+    wechat_max_daily_limit: int = 8,
+    douyin_daily_limit: int = 20,
+    limit: int = 500,
+):
+    """只读预览微信/抖音补录候选和日批次，不创建任何发布任务。"""
+    since = _normalize_backfill_since(since_upload_date, wall_street_days)
+    return _build_backfill_preview_payload(
+        since_upload_date=since,
+        wechat_daily_limit=wechat_daily_limit,
+        wechat_max_daily_limit=wechat_max_daily_limit,
+        douyin_daily_limit=douyin_daily_limit,
+        limit=limit,
+    )
+
+
+@app.post("/api/platform-backfill/queue")
+def queue_platform_backfill(req: PlatformBackfillQueueRequest):
+    """确认补录入队。
+
+    微信：WECHAT_DEFERRED 本身就是恢复队列，确认接口只返回首批清单。
+    抖音：把首批候选写入 douyin_publications(HISTORY)，等待每日迁移任务按限额发布。
+    """
+    platform = (req.platform or "").lower()
+    if platform not in {"wechat", "douyin"}:
+        return {"success": False, "error": "platform 仅支持 wechat / douyin"}
+    since = _normalize_backfill_since(req.since_upload_date, req.wall_street_days)
+    daily_limit = max(1, min(int(req.daily_limit), 50))
+    requested_ids = set(req.youtube_ids or [])
+    rows = db.get_platform_backfill_preview_candidates(
+        platform,
+        wall_street_since_upload_date=since,
+        limit=5000,
+    )
+    if requested_ids:
+        rows = [row for row in rows if row.get("youtube_id") in requested_ids]
+    rows = rows[:daily_limit]
+
+    queued = []
+    skipped = []
+    if platform == "wechat":
+        for row in rows:
+            payload = _backfill_row_payload(row)
+            queued.append({
+                "youtube_id": payload["youtube_id"],
+                "slice_index": payload["slice_index"],
+                "state": payload["wechat_status"],
+                "message": "已在微信恢复队列，等待每日任务按限额补发",
+            })
+        return {
+            "success": True,
+            "platform": platform,
+            "since_upload_date": since,
+            "queued_count": len(queued),
+            "skipped_count": 0,
+            "queued": queued,
+            "skipped": skipped,
+        }
+
+    for row in rows:
+        yid = row.get("youtube_id")
+        slice_index = int(row.get("slice_index") or 0)
+        paths = _backfill_asset_paths(yid, slice_index)
+        missing = [name for name, path in paths.items() if not path.is_file()]
+        if missing:
+            skipped.append({
+                "youtube_id": yid,
+                "slice_index": slice_index,
+                "reason": "缺少抖音投递产物：" + ",".join(missing),
+            })
+            continue
+        publication = db.create_douyin_publication(
+            yid,
+            _sha256_file(paths["video"]),
+            str(paths["video"]),
+            source_kind="HISTORY",
+            slice_index=slice_index,
+        )
+        queued.append({
+            "youtube_id": yid,
+            "slice_index": slice_index,
+            "publication_id": publication.get("id"),
+            "state": publication.get("state"),
+            "attempt_number": publication.get("attempt_number"),
+        })
+    return {
+        "success": True,
+        "platform": platform,
+        "since_upload_date": since,
+        "queued_count": len(queued),
+        "skipped_count": len(skipped),
+        "queued": queued,
+        "skipped": skipped,
     }
 
 

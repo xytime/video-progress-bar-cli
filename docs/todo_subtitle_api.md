@@ -10,7 +10,7 @@
   - 每次字幕质量记录：中文覆盖率、vocabulary 覆盖率、质量告警/阻断项、是否触发 fail-open、是否允许发布。
   - 管理后台新增“AI 处理审计”视图：按视频查看完整时间线；按时间、provider、模型、失败类型、降级状态筛选；展示今日/近 7 日用量、失败率、降级率和冷却中的 provider。
   - 记录必须写入 SQLite 结构化表，而非只靠日志；不得保存 API key、完整敏感 prompt 或未脱敏凭据。
-  - 验收：构造 Gemini 429 → DeepSeek 成功、Aliyun 10009 → Google 成功、全 provider 失败、质量拦截四类测试任务，后台均可看到完整链路与最终结果。
+  - 验收：构造 Gemini 429 → DeepSeek 成功、DeepSeek 不可用 → Google 成功、全 provider 失败、质量拦截四类测试任务，后台均可看到完整链路与最终结果。
 
 - [ ] **P0：调查并提升 Gemini API 配额**
   - 当前项目：`ContentWorker`
@@ -32,7 +32,7 @@
 ## 保持一致性品质的备用方案
 
 - [ ] 优先使用 DeepSeek 作为完整中文翻译备用，并固定同一套上下文约束、JSON 对齐格式、金额/实体校验。
-- [ ] Aliyun 只作为低成本翻译备用；先修复 RAM 权限 `10009`，并增加服务可用性与中文覆盖率探针。
+- [x] 已移除阿里云翻译备用；由 Gemini、DeepSeek、Google 质量链路替代。
 - [ ] Google Translate 仅作最后救援，不作为默认质量路径。
 - [ ] 为每次字幕任务保存 provider、失败原因、中文覆盖率、vocabulary 对齐状态和最终选择结果。
 - [ ] 关闭字幕质量 fail-open 前，先完成至少一轮真实视频回归测试。

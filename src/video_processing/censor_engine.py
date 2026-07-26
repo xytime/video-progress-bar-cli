@@ -17,6 +17,7 @@
 | 1.8.0   | 2026-06-22 | Claude_Opus_4.8                        | [🅰️ 词库热加载] 硬编码 _BLOCKLIST/_CHANNEL_POLICY 改名 _DEFAULT_* 作兜底；新增外部 JSON（config/censor_rules.json）按 mtime 热加载，运维可在线增删词无需重部署；缺失/损坏/P0 空 → 安全回退默认（绝不置空）；选 JSON 而非 YAML 避免 P0 路径引入 pyyaml 依赖；由 enable_external_censor_rules 控制 |
 | 1.9.0   | 2026-06-22 | Claude_Opus_4.8                        | [🅱️ CP 精准制导] 美国政客/政党裸人名从 CP 硬命中迁至 person_*，仅与 policy_context_*/conflict_* 共现时才拦截，根治审计「症结 3 过宽杀」（传记/大选科普/科技顺带提名误杀）；中国政治实体/领导人/武装组织/冲突复合词仍硬命中不变；scan_all_matches 同步；person_*/policy_context_* 为热加载可选键 |
 | 2.0.0   | 2026-07-23 | Codex                                  | P0/P1/P2 支持 cooccurrence_zh/en 近距离共现规则，用于拦截“中国+独裁/威权/侵略/制裁规避”等字幕风险而不误杀泛地缘政治 |
+| 2.1.0   | 2026-07-26 | Codex                                  | 中国领导人姓名提升为 P0 红线；新增“中国/敏感人物+爆炸/袭击/死亡”P0 兜底与严重负面事件 P1 人工复核 |
 """
 
 import re
@@ -56,6 +57,8 @@ _DEFAULT_BLOCKLIST: dict = {
             "达赖喇嘛", "班禅喇嘛",
             "大纪元", "新唐人", "看中国", "阿波罗网",
             "郭文贵", "郝海东",
+            "习近平", "李强", "赵乐际", "王沪宁", "蔡奇", "丁薛祥",
+            "李希", "韩正", "王毅", "李克强", "胡锦涛", "江泽民",
             "分裂中国", "推翻政府", "颠覆国家",
             "支那",
         ],
@@ -67,8 +70,63 @@ _DEFAULT_BLOCKLIST: dict = {
             "hong kong independence",
             "taiwan independence",
             "xi jinping", "xijinping",
+            "li qiang", "zhao leji", "wang huning", "cai qi", "ding xuexiang",
+            "li xi", "han zheng", "wang yi", "li keqiang", "hu jintao", "jiang zemin",
             "overthrow the government",
             "split china",
+        ],
+        "cooccurrence_zh": [
+            {
+                "primary": [
+                    "中国人", "中国公民", "中国工程师", "中国工人", "中方人员",
+                    "中国项目", "中资项目", "中巴经济走廊", "一带一路",
+                    "中国在中东", "中国战略", "中国政策",
+                ],
+                "context": [
+                    "杀", "杀害", "伤害", "袭击", "攻击", "爆炸", "炸弹",
+                    "阻止", "破坏", "报复", "发动者", "目标",
+                ],
+                "max_gap": 160,
+                "matched": "anti_china_targeted_violence",
+            },
+            {
+                "primary": ["中国", "中国政府", "中共", "中国共产党", "北京", "习近平", "李强", "王毅"],
+                "context": ["爆炸", "火灾", "袭击", "枪击", "空袭", "死亡", "遇难", "伤亡", "坠毁", "灾难", "事故"],
+                "max_gap": 120,
+                "matched": "china_sensitive_negative_news",
+            },
+        ],
+        "cooccurrence_en": [
+            {
+                "primary": [
+                    "chinese nationals", "chinese citizens", "chinese engineers",
+                    "chinese workers", "chinese personnel", "chinese projects",
+                    "china-backed projects", "chinese-backed projects", "cpec",
+                    "china-pakistan economic corridor", "belt and road",
+                    "belt and road initiative", "china's strategy", "chinese strategy",
+                    "china's policy", "chinese policy",
+                ],
+                "context": [
+                    "kill", "killing", "killed", "target", "targeted", "attack",
+                    "attacked", "blast", "explosion", "bomb", "bombing", "hurt",
+                    "harm", "stop", "prevent", "disrupt", "sabotage",
+                ],
+                "max_gap": 320,
+                "matched": "anti_china_targeted_violence",
+            },
+            {
+                "primary": [
+                    "china", "chinese", "beijing", "chinese government", "ccp", "prc",
+                    "xi jinping", "li qiang", "wang yi",
+                ],
+                "context": [
+                    "explosion", "blast", "fire", "attack", "attacks", "strike", "airstrike",
+                    "shooting", "killing", "killed", "dead", "death", "deaths",
+                    "casualties", "crash", "disaster", "accident",
+                ],
+                "max_gap": 240,
+                "matched": "china_sensitive_negative_news",
+            },
         ],
         # 豁免：命中上述词汇但包含以下上下文字符串时，不触发拦截
         "exemptions_zh": [],
@@ -103,6 +161,12 @@ _DEFAULT_BLOCKLIST: dict = {
                 "context": ["规避制裁", "逃避制裁", "绕过制裁", "制裁规避"],
                 "max_gap": 80,
             },
+            {
+                "primary": ["爆炸", "袭击", "枪击", "轰炸", "坠毁", "火灾"],
+                "context": ["死亡", "遇难", "受伤", "伤亡", "造成", "至少"],
+                "max_gap": 80,
+                "matched": "severe_negative_news",
+            },
         ],
         "cooccurrence_en": [
             {
@@ -118,6 +182,12 @@ _DEFAULT_BLOCKLIST: dict = {
                 "primary": ["china", "chinese", "chinese banks", "beijing", "prc"],
                 "context": ["evading sanctions", "sanctions evasion", "evade sanctions", "circumvent sanctions"],
                 "max_gap": 180,
+            },
+            {
+                "primary": ["explosion", "blast", "attack", "shooting", "bombing", "crash", "fire"],
+                "context": ["killing", "killed", "dead", "death", "deaths", "injured", "casualties", "at least"],
+                "max_gap": 180,
+                "matched": "severe_negative_news",
             },
         ],
         # "北京大学"、"北京时间" 等不触发拦截（仅中文通道）

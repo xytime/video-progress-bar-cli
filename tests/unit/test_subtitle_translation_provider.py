@@ -40,7 +40,7 @@ def test_candidate_with_vocab_applies_translation_and_vocab():
 def test_candidate_without_vocab_clears_existing_vocab():
     segments = [{"text": "Hello", "vocab": {"old": "旧"}}]
     candidate = SubtitleTranslationCandidate(
-        provider="Aliyun",
+        provider="Google",
         translations=["你好"],
     )
 
@@ -58,5 +58,5 @@ def test_candidate_usability_requires_enough_translations():
 
 
 def test_candidate_rejects_empty_translations():
-    assert not SubtitleTranslationCandidate(provider="Aliyun", translations=["", ""]).is_usable_for(2)
-    assert not SubtitleTranslationCandidate(provider="Aliyun", translations=["你好", ""]).is_usable_for(2)
+    assert not SubtitleTranslationCandidate(provider="Google", translations=["", ""]).is_usable_for(2)
+    assert not SubtitleTranslationCandidate(provider="Google", translations=["你好", ""]).is_usable_for(2)

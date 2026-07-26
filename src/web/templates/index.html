@@ -19,6 +19,8 @@
   | 2026-06-13 | Claude_Opus_4.8 | Add "🔁 再次发布" button on completed (PUBLISHED/COMPLETED) rows with duplicate-warning confirm; republish via /api/videos/{id}/republish (reuses retained artifacts). |
   | 2026-07-07 | Codex | 微信登录轮询优先展示二维码和登录流程中状态，避免旧登录标记在扫码前误报“登录成功”。 |
   | 2026-07-13 | Codex | 头部新增 AI 字幕审计摘要，展示近 7 日运行、失败和降级数量。 |
+  | 2026-07-23 | Codex | 新增微信/抖音自动补录计划预览面板。 |
+  | 2026-07-24 | Gemini_3.6_Flash_planning | 重构多平台发布矩阵组件，支持微信、快手、抖音 3 平台发布状态徽章、时间线提示及详情弹窗。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -200,6 +202,105 @@
       cursor: pointer; color: var(--accent); font-size: 11px; text-decoration: underline; text-underline-offset: 2px;
     }
 
+    /* ── [Gemini_3.6_Flash_planning] 多平台发布状态矩阵 CSS ── */
+    .platform-matrix-bar {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+      flex-wrap: wrap;
+    }
+    .platform-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 500;
+      line-height: 1.2;
+      transition: all 0.2s ease;
+      cursor: pointer;
+      user-select: none;
+    }
+    .platform-badge:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    .platform-badge.plat-wechat {
+      background: rgba(7, 193, 96, 0.12);
+      color: #07C160;
+      border: 1px solid rgba(7, 193, 96, 0.25);
+    }
+    .platform-badge.plat-kuaishou {
+      background: rgba(255, 80, 0, 0.12);
+      color: #FF5000;
+      border: 1px solid rgba(255, 80, 0, 0.25);
+    }
+    .platform-badge.plat-douyin {
+      background: rgba(254, 44, 85, 0.12);
+      color: #FF2C55;
+      border: 1px solid rgba(254, 44, 85, 0.25);
+    }
+    .platform-badge.st-published {
+      font-weight: 600;
+    }
+    .platform-badge.st-review {
+      color: #fbbf24;
+      background: rgba(245, 158, 11, 0.12);
+      border-color: rgba(245, 158, 11, 0.25);
+      animation: plat-pulse 2s infinite ease-in-out;
+    }
+    .platform-badge.st-failed {
+      color: #f87171;
+      background: rgba(239, 68, 68, 0.12);
+      border-color: rgba(239, 68, 68, 0.25);
+    }
+    .platform-badge.st-none {
+      opacity: 0.45;
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text3);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    @keyframes plat-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.55; }
+    }
+
+    #platform-detail-modal {
+      display: none;
+      position: fixed; inset: 0; z-index: 10000;
+      background: rgba(0,0,0,0.75);
+      backdrop-filter: blur(8px);
+      align-items: center; justify-content: center;
+    }
+    #platform-detail-modal.active { display: flex; }
+    .plat-modal-content {
+      background: #141724;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: min(680px, 92vw);
+      padding: 24px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+      position: relative;
+    }
+    .plat-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      font-size: 12px;
+    }
+    .plat-table th, .plat-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+      text-align: left;
+    }
+    .plat-table th {
+      color: var(--text3);
+      font-weight: 500;
+      background: rgba(255,255,255,0.02);
+    }
+
     /* ── Cover Lightbox ── */
     #cover-lightbox {
       display: none;
@@ -302,6 +403,68 @@
       color: var(--accent2);
     }
     .panel-body { padding: 0; }
+
+    /* ── Platform Backfill ── */
+    .backfill-panel { margin-bottom: 20px; }
+    .backfill-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .backfill-input {
+      width: 104px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 7px 9px;
+      outline: none;
+    }
+    .backfill-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      padding: 16px 22px 18px;
+    }
+    .backfill-platform {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius-sm);
+      background: rgba(0,0,0,0.14);
+      min-width: 0;
+      overflow: hidden;
+    }
+    .backfill-platform-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+    .backfill-platform-title { font-size: 13px; font-weight: 700; }
+    .backfill-platform-meta { font-size: 11px; color: var(--text3); }
+    .backfill-list { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 7px; }
+    .backfill-item {
+      display: grid;
+      grid-template-columns: 86px 1fr auto;
+      gap: 10px;
+      align-items: center;
+      min-width: 0;
+      font-size: 11px;
+      color: var(--text2);
+    }
+    .backfill-yid { font-family: 'JetBrains Mono', monospace; color: var(--text3); white-space: nowrap; }
+    .backfill-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    .backfill-rule { color: var(--teal); white-space: nowrap; }
+    .backfill-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px 12px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      font-size: 11px;
+      color: var(--text3);
+    }
+    .backfill-empty { padding: 18px 14px; color: var(--text3); font-size: 12px; text-align: center; }
 
     /* ── Tabs ── */
     .tabs-header {
@@ -875,7 +1038,7 @@
       .app {
         padding: 12px 16px;
       }
-      
+
       header {
         flex-direction: column;
         align-items: stretch;
@@ -945,6 +1108,17 @@
         grid-template-columns: 1fr;
         gap: 16px;
       }
+      .backfill-grid {
+        grid-template-columns: 1fr;
+        padding: 14px 16px;
+      }
+      .backfill-item {
+        grid-template-columns: 1fr;
+        gap: 3px;
+      }
+      .backfill-rule {
+        white-space: normal;
+      }
 
       /* Tabs Scrollable */
       .tabs-header {
@@ -1002,7 +1176,7 @@
       .activity-table.in-edit-mode tr {
         grid-template-columns: auto auto 1fr; /* 编辑模式：Checkbox (auto) + Cover (auto) + Info (1fr) */
       }
-      
+
       .activity-table td.cb-cell {
         display: none !important;
       }
@@ -1038,7 +1212,7 @@
         white-space: normal; /* 手机上标题允许折行 */
         word-break: break-all;
       }
-      
+
       .activity-table td.status-cell { /* [Gemini_2.0_Flash_fast] 改为 class 选择器 */
         grid-column: 1 / -1;
         grid-row: 2;
@@ -1061,7 +1235,7 @@
         align-items: center;
         justify-content: center;
       }
-      
+
       .activity-table td.score-cell { /* [Gemini_2.0_Flash_fast] 改为 class 选择器 */
         grid-column: 1 / -1;
         grid-row: 3;
@@ -1082,7 +1256,7 @@
         border-radius: 6px !important;
         flex: 1;
       }
-      
+
       .activity-table td.time-cell { /* [Gemini_2.0_Flash_fast] 改为 class 选择器 */
         position: absolute;
         top: 14px;
@@ -1321,6 +1495,26 @@
     </div>
   </div>
 
+  <!-- Platform Backfill Preview -->
+  <div class="panel backfill-panel">
+    <div class="panel-header">
+      <div class="panel-title">📦 平台补录批次 <span class="panel-badge" id="backfill-total">0</span></div>
+      <div class="backfill-controls">
+        <span style="font-size:11px;color:var(--text3);">WST 起始</span>
+        <input id="backfill-since" class="backfill-input" maxlength="8" value="20260713" />
+        <button id="btn-backfill-refresh" class="btn-add" style="padding:7px 12px;" onclick="loadBackfillPreview(true)">刷新预览</button>
+      </div>
+    </div>
+    <div class="backfill-grid">
+      <div class="backfill-platform" id="backfill-wechat">
+        <div class="backfill-empty">微信补录加载中…</div>
+      </div>
+      <div class="backfill-platform" id="backfill-douyin">
+        <div class="backfill-empty">抖音补录加载中…</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Main Grid: Activity + Channels -->
   <div class="main-grid">
     <!-- Activity Data Table -->
@@ -1329,7 +1523,7 @@
         <div class="panel-title">⚡ 任务数据中心 <span class="panel-badge" id="activity-count">0</span></div>
         <div id="new-data-hint" style="font-size:11px;color:var(--accent);cursor:pointer;display:none;" onclick="loadVideos(1)">✨ 有新动态，点击刷新</div>
       </div>
-      
+
       <!-- Tabs -->
       <div class="tabs-header">
         <button class="tab-btn active" id="tab-waitlist" onclick="switchTab('waitlist')">待筛选</button>
@@ -1348,7 +1542,7 @@
           <button class="btn-batch-del" style="background:var(--accent); border-color:var(--accent); color:#fff; min-height:44px;" onclick="enterEditMode()">🛠 批量管理 (Batch Edit)</button>
           <button class="btn-clear-all" onclick="clearAllWaitlist()" style="min-height:44px; margin-left:auto;">⚠️ 清空全部待筛选</button>
         </div>
-        
+
         <!-- 编辑模式 (Edit Mode) -->
         <div id="batch-edit-view" style="display:none; align-items:center; width:100%; gap:12px; flex-wrap:wrap;">
           <input type="checkbox" id="cb-select-all" class="video-cb" onchange="toggleSelectAll(this.checked)" title="全选/取消全选" />
@@ -1399,7 +1593,7 @@
             <tr><td colspan="8" class="empty-state"><div class="empty-icon">📭</div>数据加载中…</td></tr>
           </tbody>
         </table>
-        
+
         <!-- Pagination -->
         <div class="pagination">
           <div>共 <span id="total-count-display">0</span> 条记录</div>
@@ -1486,7 +1680,7 @@
             <span style="font-weight:bold; text-decoration:underline;">[一键填入]</span>
           </div>
         </div>
-        
+
         <!-- Toggle switch for trim panel (Gemini_3.5_Flash_planning) -->
         <div class="trim-toggle-row" onclick="toggleTrimPanelCheckbox()" style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; margin-top: 4px; width: fit-content;">
           <input type="checkbox" id="enable-trim-checkbox" style="cursor: pointer; width:16px; height:16px; accent-color:var(--accent2);" onclick="event.stopPropagation(); toggleTrimPanel();" />
@@ -1546,7 +1740,7 @@
         <input type="checkbox" id="delete-files-checkbox" style="width:16px; height:16px; cursor:pointer;">
         同时删除相关的物理产物文件（视频、文案等）以释放空间
       </label>
-      
+
       <!-- 安全锁校验 (Gemini_2.0_Flash_fast) -->
       <div id="delete-safety-lock-container" style="margin-bottom: 20px;">
         <label for="delete-confirm-code-input" style="display:block; font-size:13px; color:var(--text2); margin-bottom:8px;">
@@ -1605,7 +1799,7 @@
       <p style="color:var(--text2); font-size:12px; line-height:1.5; margin-bottom:16px;">
         请在手机端微信扫码授权登录。你可以长按保存二维码。
       </p>
-      
+
       <!-- 二维码显示区 -->
       <div id="wechat-qr-container" style="background:#fff; padding:12px; border-radius:8px; display:inline-block; margin-bottom:16px; position:relative; min-width:200px; min-height:200px;">
         <div id="wechat-qr-loading" style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:#333; font-size:14px; background:rgba(255,255,255,0.9); border-radius:8px;">
@@ -1613,7 +1807,7 @@
         </div>
         <img id="wechat-qr-image" style="width:200px; height:200px; display:none; border-radius:4px;" src="" alt="微信登录二维码">
       </div>
-      
+
       <div style="margin-bottom:20px; display:flex; flex-direction:column; gap:8px;">
         <a id="btn-save-qr" href="" download="wechat_login_qr.png" style="display:none; padding:10px; border-radius:8px; background:var(--bg3); border:1px solid var(--border); color:var(--text1); text-decoration:none; font-size:13px; font-weight:600; cursor:pointer; align-items:center; justify-content:center; gap:6px;" onclick="navigator.vibrate(15)">
           📥 保存二维码到相册
@@ -1625,7 +1819,7 @@
           保存二维码后，点击跳转微信可在相册中进行识别。
         </div>
       </div>
-      
+
       <div style="display:flex; justify-content:center;">
         <button onclick="closeWechatLoginModal()" style="padding:8px 24px; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text2); cursor:pointer;">关闭窗口</button>
       </div>
@@ -1723,6 +1917,82 @@
     } catch (e) {
       el.textContent = '🤖 AI审计暂不可用';
       el.style.color = 'var(--text3)';
+    }
+  }
+
+  const BACKFILL_LIMITS = {
+    wechat: { daily: 5, maxDaily: 8 },
+    douyin: { daily: 5, maxDaily: 5 },
+  };
+
+  function getBackfillSince() {
+    const input = document.getElementById('backfill-since');
+    const val = (input && input.value || '').trim();
+    return /^\d{8}$/.test(val) ? val : '20260713';
+  }
+
+  function renderBackfillPlatform(platform, payload) {
+    const el = document.getElementById('backfill-' + platform);
+    if (!el) return;
+    if (!payload) {
+      el.innerHTML = '<div class="backfill-empty">暂无补录数据</div>';
+      return;
+    }
+    const firstBatch = (payload.batches && payload.batches[0] && payload.batches[0].items) || [];
+    const rows = firstBatch.length
+      ? firstBatch.map(item => {
+          const rules = (item.rules || []).join(' + ') || '补录候选';
+          const assetWarn = item.assets && item.assets.video ? '' : ' · 缺成片';
+          return `<div class="backfill-item">
+            <span class="backfill-yid">${escapeHtml(item.youtube_id)} s${item.slice_index || 0}</span>
+            <span class="backfill-title" title="${escapeAttr(item.title || '')}">${escapeHtml(item.title || '—')}</span>
+            <span class="backfill-rule">${escapeHtml(rules)}${assetWarn}</span>
+          </div>`;
+        }).join('')
+      : '<div class="backfill-empty">暂无首批自动补录候选</div>';
+    const limitText = platform === 'wechat'
+      ? `${payload.daily_limit}/天，稳定后 ${BACKFILL_LIMITS.wechat.maxDaily}/天`
+      : `${payload.daily_limit}/天`;
+    el.innerHTML = `
+      <div class="backfill-platform-head">
+        <div>
+          <div class="backfill-platform-title">${escapeHtml(payload.label)}</div>
+          <div class="backfill-platform-meta">候选 ${payload.candidate_count} · 可投成片 ${payload.queueable_count} · 预计 ${payload.estimated_days} 天</div>
+        </div>
+        <span class="panel-badge">${limitText}</span>
+      </div>
+      <div class="backfill-list">${rows}</div>
+      <div class="backfill-actions">
+        <span>首批 ${firstBatch.length} 条已默认确认</span>
+        <span class="panel-badge">每日任务自动执行</span>
+      </div>`;
+  }
+
+  async function loadBackfillPreview(showDoneToast = false) {
+    const btn = document.getElementById('btn-backfill-refresh');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="inline-spinner"></span> 刷新中…';
+    }
+    try {
+      const since = getBackfillSince();
+      const url = `/api/platform-backfill/preview?since_upload_date=${since}&wechat_daily_limit=5&wechat_max_daily_limit=8&douyin_daily_limit=20`;
+      const r = await fetch(url);
+      const d = await r.json();
+      if (!d.success) throw new Error(d.error || d.detail || '预览失败');
+      renderBackfillPlatform('wechat', d.platforms.wechat);
+      renderBackfillPlatform('douyin', d.platforms.douyin);
+      const total = (d.platforms.wechat?.candidate_count || 0) + (d.platforms.douyin?.candidate_count || 0);
+      const badge = document.getElementById('backfill-total');
+      if (badge) badge.textContent = total;
+      if (showDoneToast) showToast('✅ 补录预览已刷新');
+    } catch (e) {
+      showToast('❌ 补录预览失败: ' + e.message, 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '刷新预览';
+      }
     }
   }
 
@@ -1925,11 +2195,11 @@
       currentPage = forcePage;
       document.getElementById('new-data-hint').style.display = 'none';
     }
-    
+
     try {
       const r = await fetch(`/api/videos?tab=${currentTab}&page=${currentPage}&size=${pageSize}`);
       const d = await r.json();
-      
+
       if (d.tab_counts) {
         document.getElementById('tab-waitlist').textContent = `待筛选(${d.tab_counts.waitlist})`;
         document.getElementById('tab-queue').textContent = `待处理(${d.tab_counts.queue})`;
@@ -1968,7 +2238,7 @@
       const TERMINAL  = new Set(['PUBLISHED','FAILED']);  // [Claude_Sonnet_4.6_Thinking_planning] LOGIN_REQUIRED removed: it is retryable, not terminal
       const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
       const STUCK     = new Set(['DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
-      
+
       const hasLoginRequired = d.videos.some(v => v.status === 'LOGIN_REQUIRED');
       const wechatBtn = document.getElementById('btn-wechat-login');
       if (wechatBtn) wechatBtn.classList.toggle('btn-wechat-alert', hasLoginRequired);
@@ -1993,13 +2263,15 @@
         return;
       }
 
+      _currentVideosMap = {};
       tbody.innerHTML = videos.map(v => {
+        _currentVideosMap[v.youtube_id] = v;
         const score      = v.score ?? 0;
         const isPending  = v.status === 'PENDING';
         const isTerminal = TERMINAL.has(v.status);
         const isRetryable = RETRYABLE.has(v.status);
         const isStuck     = STUCK.has(v.status);
-        
+
         // 分数/操作栏
         // [Gemini_2.5_Pro_planning] DISCOVERY 源视频：只读，不展示评分按钮（防止误触发管线）
         const isDiscovery = v.source === 'DISCOVERY';
@@ -2082,20 +2354,20 @@
           </tr>` : '';
 
         // 双标题与来源
-        const treeToggle = v.slices_count > 0 
+        const treeToggle = v.slices_count > 0
           ? `<button class="btn-pri" style="margin-right: 6px; border:none; background:none; font-size:12px; cursor:pointer;" onclick="toggleSlices(event, '${v.youtube_id}')" id="btn-toggle-${v.youtube_id}">▶</button>`
           : '';
         const zhTitleHtml = v.zh_title ? `<div class="video-zh-title" style="display:flex; align-items:center;">${treeToggle}${v.zh_title}</div>` : '';
         const enTitleHtml = `<a class="video-title-link ${score < 80 ? 'video-title-dim' : ''}"
           href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
           onclick="event.stopPropagation()">${v.title || '—'}</a>`;
-        
+
         let titleBlock = '';
         if (v.zh_title) {
           titleBlock = `${zhTitleHtml}${enTitleHtml}`;
         } else {
-          titleBlock = treeToggle 
-            ? `<div style="display:flex; align-items:center;">${treeToggle}${enTitleHtml}</div>` 
+          titleBlock = treeToggle
+            ? `<div style="display:flex; align-items:center;">${treeToggle}${enTitleHtml}</div>`
             : enTitleHtml;
         }
 
@@ -2150,7 +2422,7 @@
           const totalSec = v.duration_sec || 0;
           const startSec = parseTimeToSeconds(v.trim_start);
           const endSec = v.trim_end ? parseTimeToSeconds(v.trim_end) : totalSec;
-          
+
           let startPercent = 0;
           let widthPercent = 100;
           let trimmedDurationText = '';
@@ -2161,7 +2433,7 @@
             widthPercent = ((e - s) / totalSec) * 100;
             trimmedDurationText = formatDurationSeconds(e - s);
           }
-          
+
           trimTimelineHtml = `
             <div class="trim-timeline-wrapper" style="margin-top: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
               <span style="font-size:11px; color:var(--accent2); font-weight:500; display:flex; align-items:center; gap:3px; white-space:nowrap;">
@@ -2240,6 +2512,7 @@
         ].filter(Boolean).join(' ');
 
         const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${sliceBadge}${metaChips ? ' · ' + metaChips : ''}${badgesPart ? ' · ' + badgesPart : ''}</div>`;
+        const platformBadgesHtml = renderPlatformBadges(v);
 
         // [Gemini_2.5_Pro_planning] 封面缩略图单元格
         const coverUrl = `/api/covers/${v.youtube_id}`;
@@ -2282,6 +2555,7 @@
             <td class="info-cell">
               ${titleBlock}
               ${channelRow}
+              ${platformBadgesHtml}
               ${trimTimelineHtml}
               ${errorToggle}
             </td>
@@ -2372,7 +2646,7 @@
     navigator.vibrate(15);
     if (_selectedYids.size === 0) return;
     const ids = [..._selectedYids];
-    
+
     // 安全验证 (Gemini_2.0_Flash_fast)
     const confirmInput = prompt(`⚠️ 确定要批量删除所选 ${ids.length} 条视频吗？\n删除后将计入黑名单，不再自动爬取。\n请输入 "delete" 以确认执行批量删除：`);
     if (confirmInput !== 'delete') {
@@ -2401,7 +2675,7 @@
     const bar = document.getElementById('batch-action-bar');
     const countEl = document.getElementById('total-count-display');
     const total = countEl ? parseInt(countEl.textContent) || 0 : 0;
-    
+
     // 安全验证 (Gemini_2.0_Flash_fast)
     const confirmInput = prompt(`⚠️ 警告：确定要清空全部 ${total} 条待筛选视频吗？\n清空后全部清零并拉黑！\n请输入 "clear" 以确认清空全部待筛选视频：`);
     if (confirmInput !== 'clear') {
@@ -2529,11 +2803,11 @@
       }
       showToast('✅ 微信登录程序已启动，正在获取二维码');
       qrLoading.innerHTML = '<span>⏳ 正在生成二维码，约需5-10秒...</span>';
-      
+
       wechatLoginActive = true;
       let attempts = 0;
       const maxAttempts = 300; // 600s，与 wechat_uploader.py 的扫码等待窗口一致
-      
+
       if (wechatPollInterval) clearInterval(wechatPollInterval);
       wechatPollInterval = setInterval(async () => {
         if (!wechatLoginActive) {
@@ -2570,8 +2844,8 @@
           console.warn('wechat poll status error', err);
         }
       }, 2000);
-    } catch(e) { 
-      showToast('❌ 启动请求失败', 'error'); 
+    } catch(e) {
+      showToast('❌ 启动请求失败', 'error');
       closeWechatLoginModal();
       if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
@@ -2596,7 +2870,7 @@
     event.stopPropagation();
     const btn = event.currentTarget || event.target;
     const isExpanded = btn.classList.contains('expanded');
-    
+
     if (isExpanded) {
       btn.classList.remove('expanded');
       btn.textContent = '▶';
@@ -2604,28 +2878,28 @@
     } else {
       btn.classList.add('expanded');
       btn.textContent = '▼';
-      
+
       try {
         const r = await fetch(`/api/videos/${parentYid}/slices`);
         const d = await r.json();
         const slices = d.slices || [];
-        
+
         if (slices.length === 0) {
           showToast('无切片任务数据');
           btn.textContent = '▶';
           btn.classList.remove('expanded');
           return;
         }
-        
+
         const parentRow = document.getElementById(`row-${parentYid}`);
         let lastNode = parentRow;
-        
+
         // 如果有错误行展开，插在错误行后面
         const errRow = document.getElementById(`err-${parentYid}`);
         if (errRow && errRow.style.display !== 'none') {
           lastNode = errRow;
         }
-        
+
         const TERMINAL  = new Set(['PUBLISHED','FAILED']);  // [Claude_Sonnet_4.6_Thinking_planning] LOGIN_REQUIRED removed: it is retryable
         const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
         const STUCK     = new Set(['DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
@@ -2635,7 +2909,7 @@
           const isTerminal = TERMINAL.has(s.status);
           const isRetryable = RETRYABLE.has(s.status);
           const isStuck = STUCK.has(s.status);
-          
+
           let scoreControls = `<span class="video-score">${score}</span> 分`;
 
           const deleteBtn = `<button class="btn-hard-reset" onclick="deleteSlice('${s.youtube_id}', ${s.slice_index})" title="彻底删除分集" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
@@ -2657,7 +2931,7 @@
               ? `<button class="btn-stop" onclick="stopVideo('${s.youtube_id}', ${s.slice_index})" title="强行停止分集任务" style="margin-right: 4px;">🛑 停止</button>
                  <button class="btn-retry btn-reset" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="强制重置">⚡ 强置</button>` + deleteBtn
               : deleteBtn;
-              
+
           const formatDuration = (sec) => {
             if (!sec) return null;
             const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
@@ -2668,7 +2942,7 @@
 
           const dur = formatDuration(s.duration_sec);
           const durationChip = dur ? `<span class="meta-chip">⏱ ${dur}</span>` : '';
-          
+
           const errorToggle = s.error_msg ? `<span class="toggle-error" onclick="toggleError('${s.youtube_id}_s${s.slice_index}')">▼ 错误</span>` : '';
           const errorRowHtml = s.error_msg ? `
             <tr id="err-${s.youtube_id}_s${s.slice_index}" class="error-row child-row-${parentYid}" style="display:none" data-err="${escapeAttr(s.error_msg)}">
@@ -2700,7 +2974,7 @@
             ${errorRowHtml}
           `;
         }).join('');
-        
+
         lastNode.insertAdjacentHTML('afterend', childRowsHtml);
       } catch (err) {
         console.error(err);
@@ -3072,20 +3346,20 @@
     currentDeleteYoutubeId = youtubeId;
     const modal = document.getElementById('delete-modal');
     document.getElementById('delete-files-checkbox').checked = false;
-    
+
     // 生成随机4位安全校验码 (Gemini_2.0_Flash_fast)
     deleteConfirmCode = Math.floor(1000 + Math.random() * 9000).toString();
     document.getElementById('delete-safety-code').textContent = deleteConfirmCode;
-    
+
     const codeInput = document.getElementById('delete-confirm-code-input');
     codeInput.value = '';
-    
+
     const confirmBtn = document.getElementById('btn-confirm-delete');
     confirmBtn.disabled = true;
     confirmBtn.style.opacity = '0.5';
     confirmBtn.style.cursor = 'not-allowed';
     confirmBtn.innerHTML = '确认删除 (Delete)';
-    
+
     codeInput.oninput = () => {
       if (codeInput.value.trim() === deleteConfirmCode) {
         confirmBtn.disabled = false;
@@ -3097,17 +3371,17 @@
         confirmBtn.style.cursor = 'not-allowed';
       }
     };
-    
+
     modal.style.display = 'flex';
-    
+
     confirmBtn.onclick = async () => {
       navigator.vibrate(15);
       const deleteFiles = document.getElementById('delete-files-checkbox').checked;
-      
+
       // Inline loading state
       confirmBtn.disabled = true;
       confirmBtn.innerHTML = '<span class="inline-spinner"></span> 正在删除...';
-      
+
       try {
         const r = await fetch(`/api/videos/${youtubeId}?delete_files=${deleteFiles}`, { method: 'DELETE' });
         const d = await r.json();
@@ -3370,7 +3644,7 @@
       const text = await navigator.clipboard.readText();
       const prompt = document.getElementById('clipboard-smart-paste-prompt');
       const detectedText = document.getElementById('clipboard-detected-text');
-      
+
       if (text && (text.includes('youtube.com/') || text.includes('youtu.be/'))) {
         if (prompt && detectedText) {
           detectedText.innerHTML = `📋 检测到剪贴板有 YouTube 链接：<code style="background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px; font-family:monospace; font-size:11px;">${escapeHtml(text.substring(0, 45))}...</code>`;
@@ -3402,7 +3676,7 @@
 
     // 初始化 Lightbox 触摸手势 (Gemini_2.0_Flash_fast)
     setupLightboxGestures();
-    
+
     // 初始化剪贴板自动检测 (Gemini_2.0_Flash_fast)
     checkClipboardForYoutube();
     window.addEventListener('focus', checkClipboardForYoutube);
@@ -3413,7 +3687,7 @@
     const cb = document.getElementById('enable-trim-checkbox');
     const container = document.getElementById('video-trim-container');
     if (!cb || !container) return;
-    
+
     if (cb.checked) {
       container.style.display = 'flex';
       validateTrimInputs();
@@ -3597,14 +3871,14 @@
 
     try {
       await Promise.all([fetchStats(), fetchChannels(), fetchAiAuditSummary()]);
-      
+
       if (currentTab === 'waitlist' && currentPage === 1) {
         await loadVideos();
       } else {
         // 智能刷新
         const activeEl = document.getElementById('s-active');
         const pendingEl = document.getElementById('s-pending');
-        const currentTotalActive = (parseInt(activeEl ? activeEl.textContent : 0) || 0) + 
+        const currentTotalActive = (parseInt(activeEl ? activeEl.textContent : 0) || 0) +
                                    (parseInt(pendingEl ? pendingEl.textContent : 0) || 0);
         if (lastTotalActive !== -1 && currentTotalActive !== lastTotalActive) {
           const hint = document.getElementById('new-data-hint');
@@ -3619,7 +3893,7 @@
       // Exponential backoff up to 30s
       currentRefreshInterval = Math.min(currentRefreshInterval * 1.5, MAX_REFRESH_INTERVAL);
     }
-    
+
     scheduleNextRefresh();
   }
 
@@ -3640,7 +3914,7 @@
   // 读取持久化的 Tab 并进行高亮和视图渲染初始化 (Gemini_3.5_Flash_planning)
   const savedTab = localStorage.getItem('video_pipeline_active_tab') || 'waitlist';
   currentTab = savedTab;
-  
+
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   const savedTabBtn = document.getElementById('tab-' + savedTab);
   if (savedTabBtn) savedTabBtn.classList.add('active');
@@ -3653,8 +3927,9 @@
     if (bar) bar.classList.remove('visible');
     exitEditMode(); // 隐藏并清空编辑状态
   }
-  
+
   loadVideos(); // 无条件加载初始 Tab 数据 (Gemini_3.5_Flash_planning)
+  loadBackfillPreview();
   refresh();
 
   // ── [Claude_Sonnet_4.6_Thinking_planning] 热词监控 Tab 逻辑 ────────────
@@ -3773,13 +4048,13 @@
     const cap = document.getElementById('lb-caption');
     img.src = url;
     cap.textContent = title || '';
-    
+
     // Reset transforms and transitions (Gemini_2.0_Flash_fast)
     img.style.transform = 'translateY(0)';
     img.style.transition = '';
     lb.style.background = 'rgba(0, 0, 0, 0.85)';
     lb.style.transition = '';
-    
+
     lb.classList.add('active');
     document.body.style.overflow = 'hidden';
   }
@@ -3789,15 +4064,153 @@
     lb.classList.remove('active');
     document.body.style.overflow = '';
     // 延迟清空 src，避免关闭动画中闪烁
-    setTimeout(() => { 
-      img.src = ''; 
-      img.style.transform = ''; 
+    setTimeout(() => {
+      img.src = '';
+      img.style.transform = '';
     }, 300);
   }
   // ESC 键关闭
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeCoverLightbox();
+    if (e.key === 'Escape') {
+      closeCoverLightbox();
+      closePlatformDetailsModal();
+    }
   });
+</script>
+
+<!-- [Gemini_3.6_Flash_planning] 多平台发布明细弹窗 Overlay -->
+<div id="platform-detail-modal" onclick="closePlatformDetailsModal()">
+  <div class="plat-modal-content" onclick="event.stopPropagation()">
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:12px;">
+      <h3 style="margin:0; font-size:16px; color:var(--text1); font-weight:600; display:flex; align-items:center; gap:8px;">
+        🌐 视频多平台发布状态明细 (Multi-Platform Publishing)
+      </h3>
+      <span style="cursor:pointer; font-size:20px; color:var(--text3);" onclick="closePlatformDetailsModal()">✕</span>
+    </div>
+
+    <div id="plat-modal-video-title" style="margin-top:12px; font-size:13px; color:var(--accent2); font-weight:500;"></div>
+
+    <table class="plat-table">
+      <thead>
+        <tr>
+          <th>平台名称</th>
+          <th>当前发布状态</th>
+          <th>发布时间 / 尝试</th>
+          <th>作品链接 / 日志</th>
+        </tr>
+      </thead>
+      <tbody id="plat-modal-table-body">
+        <tr><td colspan="4" style="text-align:center; color:var(--text3); padding:20px;">加载中...</td></tr>
+      </tbody>
+    </table>
+
+    <div style="margin-top:20px; text-align:right;">
+      <button class="btn-clear-all" onclick="closePlatformDetailsModal()" style="margin-left:0;">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // [Gemini_3.6_Flash_planning] 存储全局可访问的当前页视频数据映射
+  let _currentVideosMap = {};
+
+  function renderPlatformBadges(v) {
+    if (!v || !v.platforms) return '';
+    const plats = ['wechat', 'kuaishou', 'douyin'];
+    const names = { wechat: '微信', kuaishou: '快手', douyin: '抖音' };
+    const icons = { wechat: '🟢', kuaishou: '🟧', douyin: '🎵' };
+
+    let html = '<div class="platform-matrix-bar">';
+
+    plats.forEach(key => {
+      const info = v.platforms[key] || { state: 'NOT_QUEUED' };
+      const st = info.state || 'NOT_QUEUED';
+      let cls = 'st-none';
+      let stateLabel = '未队列';
+      let tooltip = `${names[key]}: 未投递`;
+
+      if (st === 'PUBLISHED') {
+        cls = 'st-published';
+        stateLabel = '已发布';
+        tooltip = `${names[key]}: 已发布 (${info.published_at || '成功'})`;
+      } else if (['UNDER_REVIEW', 'UPLOADING', 'QUEUED', 'PUBLISHING', 'WECHAT_DEFERRED'].includes(st)) {
+        cls = 'st-review';
+        stateLabel = st === 'UNDER_REVIEW' ? '审核中' : (st === 'WECHAT_DEFERRED' ? '已延后' : '发送中');
+        tooltip = `${names[key]}: ${stateLabel}`;
+      } else if (['RETRYABLE_FAILED', 'BANNED', 'FAILED', 'LOGIN_REQUIRED'].includes(st)) {
+        cls = 'st-failed';
+        stateLabel = '异常';
+        tooltip = `${names[key]}: 发布失败 (${info.error || '失败'})`;
+      }
+
+      html += `<span class="platform-badge plat-${key} ${cls}" title="${escapeAttr(tooltip)}" onclick="event.stopPropagation(); openPlatformDetailsModal('${v.youtube_id}')">
+        <span class="plat-icon">${icons[key]}</span> ${names[key]}·${stateLabel}
+      </span>`;
+    });
+
+    html += `</div>`;
+    return html;
+  }
+
+  function openPlatformDetailsModal(youtubeId) {
+    const modal = document.getElementById('platform-detail-modal');
+    const titleEl = document.getElementById('plat-modal-video-title');
+    const tbody = document.getElementById('plat-modal-table-body');
+
+    const video = _currentVideosMap[youtubeId];
+    if (!video) return;
+
+    titleEl.textContent = `📹 ${video.zh_title || video.title || youtubeId}`;
+
+    const plats = ['wechat', 'kuaishou', 'douyin'];
+    const names = { wechat: '微信视频号 (WeChat)', kuaishou: '快手 (Kuaishou)', douyin: '抖音 (Douyin)' };
+    const icons = { wechat: '💬', kuaishou: '⚡', douyin: '🎵' };
+
+    const rows = plats.map(key => {
+      const info = (video.platforms && video.platforms[key]) || { state: 'NOT_QUEUED' };
+      const st = info.state || 'NOT_QUEUED';
+
+      let stateBadge = `<span class="badge badge-UNKNOWN">未队列</span>`;
+      if (st === 'PUBLISHED') {
+        stateBadge = `<span class="badge badge-PUBLISHED" style="background:rgba(52,211,153,0.15); color:#34d399;">🟢 已发布</span>`;
+      } else if (st === 'UNDER_REVIEW') {
+        stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">⏳ 平台审核中</span>`;
+      } else if (['QUEUED', 'UPLOADING', 'PUBLISHING', 'WECHAT_DEFERRED'].includes(st)) {
+        stateBadge = `<span class="badge badge-PUBLISHING">⚡ 正在发送/队列</span>`;
+      } else if (['RETRYABLE_FAILED', 'BANNED', 'FAILED', 'LOGIN_REQUIRED'].includes(st)) {
+        stateBadge = `<span class="badge badge-FAILED">🔴 投递失败 / 异常</span>`;
+      }
+
+      const timeStr = info.published_at ? info.published_at : '—';
+      const attemptsStr = info.attempt_count ? `(尝试 ${info.attempt_count} 次)` : '';
+
+      let linkOrLog = '—';
+      if (info.external_url) {
+        linkOrLog = `<a href="${escapeAttr(info.external_url)}" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none;">🔗 打开作品</a>`;
+      } else if (info.error) {
+        linkOrLog = `<span style="color:#f87171;" title="${escapeAttr(info.error)}">⚠️ ${escapeHtml(info.error.slice(0, 30))}...</span>`;
+      }
+
+      return `<tr>
+        <td style="font-weight:600; color:var(--text1); display:flex; align-items:center; gap:6px;">
+          <span>${icons[key]}</span> ${names[key]}
+        </td>
+        <td>${stateBadge}</td>
+        <td><span style="font-family:'JetBrains Mono',monospace;">${timeStr}</span> ${attemptsStr}</td>
+        <td>${linkOrLog}</td>
+      </tr>`;
+    }).join('');
+
+    tbody.innerHTML = rows;
+    modal.classList.add('active');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closePlatformDetailsModal() {
+    const modal = document.getElementById('platform-detail-modal');
+    modal.classList.remove('active');
+    document.body.style.overflow = '';
+  }
 </script>
 </body>
 </html>

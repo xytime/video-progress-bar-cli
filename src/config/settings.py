@@ -22,6 +22,7 @@
 | 3.2.0 | 2026-06-23 | Claude_Opus_4.8                     | 新增 ytdlp_path 计算属性（单一真相源）：杜绝裸 'yt-dlp'，修复发布断流根因——cron 最小 PATH 无 .venv/bin 致 FileNotFoundError，频道发现整体静默失败 |
 | 3.3.0 | 2026-06-25 | Claude_Opus_4.8                     | 新增 enable_source_date_stamp / source_date_stamp_label：竖屏成片左上角「源视频发布日期」毛玻璃戳开关与文案前缀，默认关闭 |
 | 3.4.0 | 2026-06-28 | Claude_Opus_4.8                     | 新增 censorship_bypass_channels（逗号分隔 channel_id）+ censorship_bypass_channel_set 解析属性：受信任频道整体跳过审查(P0/P1/P2/CP)，供运营对自审过的优质频道开绿灯；另新增 wechat_session_warn_hours(会话临期预警阈值) |
+| 3.4.1 | 2026-07-26 | Codex                               | censorship_bypass_channels 收紧为仅豁免 CP 频道策略，P0/P1/P2 违法层不再允许整频道绕过 |
 | 3.5.0 | 2026-06-28 | Claude_Opus_4.8                     | 新增 channel_score_floors（"channel_id:分数"）+ channel_score_floor_map：受信任频道评分地板分，使其所有视频(含低播放)过发布线 ≥75 全发（@wstruthbombs 默认 80）|
 | 3.6.0 | 2026-07-05 | Codex                               | 新增 subtitle_translation_provider_order，支持字幕翻译供应商顺序配置 |
 | 3.7.0 | 2026-07-05 | Codex                               | 新增 DeepSeek OpenAI-compatible API 配置，为字幕翻译 provider 预留 |
@@ -30,6 +31,8 @@
 | 3.10.0 | 2026-07-12 | Codex                              | 新增演讲类频道独立自动发布线，score >= 40 进入自动处理队列 |
 | 3.11.0 | 2026-07-13 | Codex                              | 新增动态字幕模型池、DeepSeek vocab fallback 与数字检查开关 |
 | 3.12.0 | 2026-07-15 | Codex                              | 新增快手创作者中心浏览器上传开关；默认关闭，不改变现有微信发布链路 |
+| 3.13.0 | 2026-07-25 | Codex                              | 补齐抖音、视频号暂停恢复与多平台补录配置字段，避免运行时配置缺失崩溃 |
+| 3.13.1 | 2026-07-26 | Codex                              | 字幕翻译默认顺序改为 Gemini→DeepSeek→Google，移除阿里云作为可选 provider |
 """
 import json
 import socket
@@ -121,9 +124,8 @@ class Settings(BaseSettings):
     aliyun_mt_access_key_id: Optional[str] = None
     aliyun_mt_access_key_secret: Optional[str] = None
 
-    # 字幕翻译供应商顺序，逗号分隔。默认保持现有行为：Gemini → Aliyun → Google。
-    # 后续接入 DeepSeek/OpenAI 时，只需在配置解析白名单和 provider 构造处扩展。
-    subtitle_translation_provider_order: str = "gemini,aliyun,google"
+    # 字幕翻译供应商顺序，逗号分隔。主链路默认：Gemini → DeepSeek → Google。
+    subtitle_translation_provider_order: str = "gemini,deepseek,google"
 
     # DeepSeek OpenAI-compatible API（默认不启用；需把 deepseek 放入 subtitle_translation_provider_order）
     deepseek_api_key: Optional[str] = None
@@ -194,15 +196,15 @@ class Settings(BaseSettings):
     # 财经数字数量级检查当前误报较多，暂时关闭；事件方向、实体、空字幕检查仍保留。
     enable_translation_numeric_guard: bool = False
 
-    # [Claude_Opus_4.8] 受信任频道白名单：列出的 channel_id（逗号分隔）跳过全部内容审查
-    # （P0/P1/P2 + 频道策略 CP），其视频不受敏感词/地缘政治共现拦截。供运营对「自审过、
-    # 确定可发」的优质频道开绿灯。⚠️ 等同于对该频道关闭审查防线——仅加自己充分信任的频道，
-    # 政治/地缘内容在视频号有封号风险，由运营自担。经 settings.censorship_bypass_channel_set 读取。
+    # 受信任频道白名单：列出的 channel_id（逗号分隔）仅跳过频道策略 CP。
+    # P0/P1/P2 违法层始终执行，不能因整频道白名单绕过中国领导人、反华暴力、严重敏感事件等红线。
+    # 经 settings.censorship_bypass_channel_set 读取。
     censorship_bypass_channels: str = ""
 
     # [Claude_Opus_4.8] 受信任频道评分下限（地板分）：列出的频道自动评分不低于指定分，使其所有视频
     # （含低播放/低互动）都过发布线 ≥75 自动发布。格式 "channel_id:分数,channel_id:分数"。
-    # 与 censorship_bypass_channels 配合 = 该频道整批无障碍发布。经 channel_score_floor_map 读取。
+    # 与 censorship_bypass_channels 配合时也只影响评分与 CP，P0/P1/P2 仍强制审查。
+    # 经 channel_score_floor_map 读取。
     channel_score_floors: str = ""
 
     # 演讲/TED/高校频道使用较低的自动发布线；普通频道仍使用 75。
@@ -237,6 +239,19 @@ class Settings(BaseSettings):
     kuaishou_browser_headless: bool = True
     # 历史视频迁移到快手的每日上限；新视频双平台投递不受此上限限制。
     kuaishou_history_daily_limit: int = 10
+
+    # 抖音创作者中心浏览器上传。默认关闭；启用后使用本地 Playwright 会话文件扫码登录。
+    enable_douyin_browser_publishing: bool = False
+    douyin_browser_headless: bool = True
+    # 历史视频迁移到抖音的每日上限；新视频双平台投递不受此上限限制。
+    douyin_history_daily_limit: int = 5
+
+    # 视频号暂停发布时，新视频可先进入 WECHAT_DEFERRED，并按限额在恢复后补发。
+    wechat_publishing_paused: bool = False
+    wechat_deferred_recovery_daily_limit: int = 5
+
+    # 多平台历史补录规则：Wall Street Truthbombs 的源视频发布日期下界（YYYYMMDD）。
+    platform_backfill_wall_street_since_upload_date: str = "20260713"
 
     # -------------------------------------------------------------------------
     # 静态配置常量 (Static Constants) — 固定值，不依赖环境
@@ -301,13 +316,13 @@ class Settings(BaseSettings):
     @property
     def subtitle_translation_provider_order_list(self) -> list[str]:
         """字幕翻译供应商顺序（过滤未知值，空配置回退默认顺序）。"""
-        allowed = {"gemini", "deepseek", "aliyun", "google"}
+        allowed = {"gemini", "deepseek", "google"}
         providers = []
         for item in (self.subtitle_translation_provider_order or "").split(","):
             provider = item.strip().lower()
             if provider in allowed and provider not in providers:
                 providers.append(provider)
-        return providers or ["gemini", "aliyun", "google"]
+        return providers or ["gemini", "deepseek", "google"]
 
     @computed_field  # type: ignore[misc]
     @property

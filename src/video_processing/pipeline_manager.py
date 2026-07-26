@@ -64,6 +64,7 @@
 | 3.32.0  | 2026-07-25 | Gemini_3.6_Flash_planning           | 抽离 _resolve_cover_file 支持切片与父视频封面智能退避，补全快手 --cover 参数 |
 | 3.33.0  | 2026-07-25 | Codex                               | 平台历史补录缺失本地投递素材时取消该任务并继续下一条，避免每日迁移被同一条旧记录卡死 |
 | 3.34.0  | 2026-07-25 | Codex                               | 快手发布优先使用平台专用短文案，避免共享文案超出快手字数限制且不影响抖音回查 |
+| 3.35.0  | 2026-07-26 | Codex                               | 快手/抖音上传前统一复跑内容安全闸门，历史补录与新片命中违禁均取消平台任务，杜绝绕过主流程审查 |
 """
 
 
@@ -552,6 +553,60 @@ class PipelineManager:
             return fallback
         return None
 
+    def _read_publication_text_file(self, path: Path, yid: str, label: str) -> str:
+        """读取平台投递文本；读取失败时返回空串，由审查层按已有内容继续判断。"""
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            logger.warning("[%s] 读取%s失败：%s", yid, label, exc)
+            return ""
+
+    def _platform_publication_censorship_blocked(
+        self,
+        publication: Dict[str, Any],
+        platform: str,
+        copy_file: Path,
+        title_file: Optional[Path] = None,
+    ) -> bool:
+        """平台上传前复跑同一套审查；命中后取消平台任务而不是调用浏览器上传器。"""
+        publication_id = publication["id"]
+        yid = publication["youtube_id"]
+        slice_index = publication.get("slice_index", 0)
+        video = self.db.get_video_by_youtube_id(yid, slice_index) or {}
+
+        copy_text = self._read_publication_text_file(copy_file, yid, f"{platform}文案")
+        platform_title = ""
+        if title_file is not None:
+            platform_title = self._read_publication_text_file(title_file, yid, f"{platform}标题")
+
+        title = platform_title or video.get("zh_title") or video.get("title") or yid
+        zh_title = platform_title or video.get("zh_title") or title
+        subtitle_text = ""
+        if settings.enable_subtitle_censorship:
+            subtitle_text = read_subtitle_text(self._OUT_DIR, yid, slice_index=slice_index)
+            if subtitle_text:
+                logger.info("[%s] %s上传前审查包含字幕正文（%s chars）", yid, platform, len(subtitle_text))
+
+        if not self._check_censorship(
+            yid,
+            title,
+            copy_text,
+            zh_title=zh_title,
+            slice_index=slice_index,
+            subtitle_text=subtitle_text,
+        ):
+            return False
+
+        reason = f"{platform}上传前内容安全审查拦截；平台任务已取消，禁止自动重试。"
+        logger.error("[%s] %s", yid, reason)
+        if platform == "快手":
+            self.db.update_kuaishou_publication_state(publication_id, "CANCELED", error_message=reason)
+        elif platform == "抖音":
+            self.db.update_douyin_publication_state(publication_id, "CANCELED", error_message=reason)
+        else:
+            logger.warning("[%s] 未知平台审查拦截，无法更新平台账本：%s", yid, platform)
+        return True
+
     def _publish_claimed_kuaishou_publication(self, publication: Dict[str, Any]) -> bool:
         """执行已领取的快手任务；只有上传器完成作品管理回查才将账本置 PUBLISHED。"""
         publication_id = publication["id"]
@@ -563,6 +618,9 @@ class PipelineManager:
             logger.error("[%s] %s", yid, reason)
             state = "CANCELED" if publication.get("source_kind") == "HISTORY" else "RETRYABLE_FAILED"
             self.db.update_kuaishou_publication_state(publication_id, state, error_message=reason)
+            return False
+
+        if self._platform_publication_censorship_blocked(publication, "快手", copy_file):
             return False
 
         upload_cmd = [
@@ -677,6 +735,9 @@ class PipelineManager:
             )
             logger.error("[%s] %s", yid, reason)
             self.db.update_douyin_publication_state(publication_id, "RETRYABLE_FAILED", error_message=reason)
+            return False
+
+        if self._platform_publication_censorship_blocked(publication, "抖音", copy_file, title_file):
             return False
 
         upload_cmd = [
@@ -998,6 +1059,9 @@ class PipelineManager:
             logger.error("[%s] %s", yid, reason)
             state = "CANCELED" if publication.get("source_kind") == "HISTORY" else "RETRYABLE_FAILED"
             self.db.update_douyin_publication_state(publication_id, state, error_message=reason)
+            return False
+
+        if self._platform_publication_censorship_blocked(publication, "抖音", copy_file, title_file):
             return False
 
         upload_cmd = [

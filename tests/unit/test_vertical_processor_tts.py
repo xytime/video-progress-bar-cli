@@ -17,11 +17,6 @@ import pytest
 # Adjust path to import correctly
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../src')))
 
-# Mock dashscope to avoid import issues
-mock_dashscope = MagicMock()
-sys.modules['dashscope'] = mock_dashscope
-sys.modules['dashscope.audio.tts_v2'] = MagicMock()
-
 from video_processing.processors.vertical_processor import VerticalCaptionProcessor
 
 class TestVerticalProcessorTTSAutoActivation:
@@ -34,8 +29,6 @@ class TestVerticalProcessorTTSAutoActivation:
     @patch('src.config.settings.settings')
     def test_no_auto_activation_for_non_chinese_when_tts_provider_none(self, mock_settings, mock_mixer, mock_tts_engine, mock_run, mock_validate):
         """[Gemini_3.5_Flash_planning] 验证即使 API Key 存在且为非中文视频，默认情况下（tts_provider=None）也不激活 TTS"""
-        mock_settings.dashscope_api_key = "test_dashscope_key"
-        
         # 准备处理器实例
         processor = VerticalCaptionProcessor(
             input_path=Path("test_video.mp4"),
@@ -68,12 +61,10 @@ class TestVerticalProcessorTTSAutoActivation:
     @patch('src.config.settings.settings')
     def test_explicit_activation_when_tts_provider_set(self, mock_settings, mock_mixer, mock_tts_engine, mock_run, mock_validate):
         """[Gemini_3.5_Flash_planning] 验证当显式传入 tts_provider 时，成功激活语音合成引擎"""
-        mock_settings.dashscope_api_key = "test_dashscope_key"
-        
         processor = VerticalCaptionProcessor(
             input_path=Path("test_video.mp4"),
             src_lang="en",
-            tts_provider="cosyvoice"
+            tts_provider="indextts"
         )
         processor.segments = [
             {"start": 0.0, "end": 2.0, "text": "Hello, welcome.", "zh_text": "你好，欢迎。"}
@@ -85,8 +76,7 @@ class TestVerticalProcessorTTSAutoActivation:
         with patch.object(processor, "_get_audio_duration", return_value=1.5):
             processor._burn_subtitles(Path("test_video.ass"))
             
-        # 验证 tts_provider 仍为 cosyvoice
-        assert processor.tts_provider == "cosyvoice"
+        assert processor.tts_provider == "indextts"
         mock_tts_engine.assert_called_once()
 
     @patch('video_processing.core.base.VideoProcessorBase._validate_input')
@@ -95,8 +85,6 @@ class TestVerticalProcessorTTSAutoActivation:
     @patch('src.config.settings.settings')
     def test_no_activation_for_chinese_by_lang(self, mock_settings, mock_tts_engine, mock_run, mock_validate):
         """[Gemini_3.5_Flash_planning] 验证当 src_lang 或 detected_lang 明确指定为 zh 时，不激活 TTS"""
-        mock_settings.dashscope_api_key = "test_dashscope_key"
-        
         # 场景 A: src_lang 为 zh
         processor_a = VerticalCaptionProcessor(
             input_path=Path("test_video.mp4"),
@@ -133,8 +121,6 @@ class TestVerticalProcessorTTSAutoActivation:
     @patch('src.config.settings.settings')
     def test_no_activation_for_chinese_by_content(self, mock_settings, mock_tts_engine, mock_run, mock_validate):
         """[Gemini_3.5_Flash_planning] 验证当 segments 内容中包含中文字符时，不激活 TTS"""
-        mock_settings.dashscope_api_key = "test_dashscope_key"
-        
         processor = VerticalCaptionProcessor(
             input_path=Path("test_video.mp4"),
             src_lang="auto",

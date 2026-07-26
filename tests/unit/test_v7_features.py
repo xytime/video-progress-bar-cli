@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date       | Author                                 | Description          |
 |---------|------------|----------------------------------------|----------------------|
+| 1.7.0   | 2026-07-26 | Codex                                  | 中国领导人姓名 P0、“中国/敏感人物+负面新闻”P0、严重负面事件 P1 回归 |
 | 1.6.0   | 2026-07-23 | Codex                                  | 新增“中国+负面政治定性/制裁规避”近距离共现拦截回归 |
 | 1.5.0   | 2026-06-13 | Claude_Opus_4.8                        | 更新 GC 测试以匹配 v3.11.0：发布后保留再发产物（成片/封面/文案/标题/分类），仅删源视频与中间字幕 |
 | 1.4.0   | 2026-05-28 | Gemini_3.5_Flash_planning              | 新增 stop_video API 强杀进程与状态置为 FAILED 的单元测试 |
@@ -260,6 +261,76 @@ class TestCensorEngine:
         assert r.hit is True
         assert r.level == "P1"
         assert r.channel == "zh"
+
+    @pytest.mark.parametrize("zh_text", [
+        "习近平出席会议",
+        "李强主持国务院会议",
+        "王毅会见外方代表",
+    ])
+    def test_chinese_leader_names_are_p0_zh(self, zh_text):
+        """用户规则：提到中国领导人姓名一律不发布，不能依赖可 fail-open 的 CP 层。"""
+        r = check_text(zh_text=zh_text, en_text="")
+        assert r.hit is True
+        assert r.level == "P0"
+        assert r.action == ACTION_REJECT_SIGTERM
+
+    @pytest.mark.parametrize("en_text", [
+        "Xi Jinping meets Pakistan's prime minister in Beijing.",
+        "Li Qiang hosts the policy meeting.",
+        "Wang Yi comments on the talks.",
+    ])
+    def test_chinese_leader_names_are_p0_en(self, en_text):
+        r = check_text(zh_text="", en_text=en_text)
+        assert r.hit is True
+        assert r.level == "P0"
+        assert r.action == ACTION_REJECT_SIGTERM
+
+    def test_china_negative_news_cooccurrence_is_p0_zh(self):
+        r = check_text(zh_text="中国边境附近发生爆炸事故，造成多人死亡", en_text="")
+        assert r.hit is True
+        assert r.level == "P0"
+        assert r.matched == "china_sensitive_negative_news"
+
+    def test_china_negative_news_cooccurrence_is_p0_en(self):
+        text = "A powerful blast near a Chinese facility killed several workers."
+        r = check_text(zh_text="", en_text=text)
+        assert r.hit is True
+        assert r.level == "P0"
+        assert r.matched == "china_sensitive_negative_news"
+
+    def test_anti_china_targeted_violence_is_p0_zh(self):
+        text = "袭击发动者称爆炸是为了杀害中国工程师，阻止中国继续推进当地项目。"
+        r = check_text(zh_text=text, en_text="")
+        assert r.hit is True
+        assert r.level == "P0"
+        assert r.action == ACTION_REJECT_SIGTERM
+        assert r.matched == "anti_china_targeted_violence"
+
+    def test_anti_china_targeted_violence_is_p0_en(self):
+        text = (
+            "The attackers said the blast was intended to kill Chinese engineers "
+            "and stop CPEC projects from moving forward."
+        )
+        r = check_text(zh_text="", en_text=text)
+        assert r.hit is True
+        assert r.level == "P0"
+        assert r.action == ACTION_REJECT_SIGTERM
+        assert r.matched == "anti_china_targeted_violence"
+
+    def test_severe_negative_news_is_p1_zh(self):
+        r = check_text(zh_text="巴基斯坦奎达火车发生强烈爆炸，造成至少10人死亡", en_text="")
+        assert r.hit is True
+        assert r.level == "P1"
+        assert r.action == ACTION_SUSPEND_MANUAL
+        assert r.matched == "severe_negative_news"
+
+    def test_severe_negative_news_is_p1_en(self):
+        text = "Powerful blast hits train in Pakistan's Quetta, killing at least 10."
+        r = check_text(zh_text="", en_text=text)
+        assert r.hit is True
+        assert r.level == "P1"
+        assert r.action == ACTION_SUSPEND_MANUAL
+        assert r.matched == "severe_negative_news"
 
     def test_china_negative_terms_far_apart_pass(self):
         """同一长文本里远距离出现 China 和 dictatorship，不应按组合规则误杀。"""
@@ -752,5 +823,3 @@ class TestStopVideoApi:
             data = response.json()
             assert data["success"] is False
             assert "当前不处于运行状态" in data["error"]
-
-

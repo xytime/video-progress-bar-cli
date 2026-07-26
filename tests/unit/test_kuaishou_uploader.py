@@ -28,6 +28,7 @@ from scripts.kuaishou_uploader import (
     MANAGEMENT_UNDER_REVIEW,
     is_creator_publish_url,
     is_login_required,
+    prepare_kuaishou_cover_upload_file,
     run_uploader,
     verify_submission_in_management,
 )
@@ -218,6 +219,14 @@ def test_management_state_is_scoped_to_the_current_copy():
     assert get_management_submission_state(published_page, "测试文案") == MANAGEMENT_PUBLISHED
 
 
+def test_management_state_accepts_truncated_long_copy_marker():
+    copy_text = "美国经济一片繁荣景象，GDP增长喜人，但奇怪的是，就业市场却前所未有的冷清，工作机会难觅。后续长文案"
+    management_page = "作品管理 美国经济一片繁荣景象，GDP增长喜人，但奇怪的是，就业市场却 审核中"
+
+    assert is_visible_in_management(management_page, copy_text)
+    assert get_management_submission_state(management_page, copy_text) == MANAGEMENT_UNDER_REVIEW
+
+
 def test_verify_only_maps_review_state_without_uploading():
     page = MagicMock()
     with patch(
@@ -287,6 +296,20 @@ def test_kuaishou_apply_cover_returns_false_when_cover_missing(tmp_path: Path):
     assert not apply_cover(page, missing_file)
 
 
+def test_prepare_kuaishou_cover_upload_file_scales_small_cover(tmp_path: Path):
+    from PIL import Image
+
+    cover = tmp_path / "cover.jpg"
+    Image.new("RGB", (1080, 1260), "black").save(cover)
+
+    prepared = prepare_kuaishou_cover_upload_file(str(cover))
+    assert prepared is not None
+    with Image.open(prepared) as image:
+        width, height = image.size
+    assert (width, height) == (1280, 2276)
+    assert Path(prepared).name == "cover_kuaishou.jpg"
+
+
 def test_kuaishou_apply_cover_success_with_input_file(tmp_path: Path):
     cover = tmp_path / "cover.jpg"
     cover.write_bytes(b"cover_bytes")
@@ -298,16 +321,26 @@ def test_kuaishou_apply_cover_success_with_input_file(tmp_path: Path):
     tab_el.is_visible.return_value = True
 
     file_input = MagicMock()
+    file_input.get_attribute.return_value = "image/jpeg,image/png"
 
     confirm_btn = MagicMock()
     confirm_btn.is_visible.return_value = True
     confirm_btn.is_enabled.return_value = True
+    dialog_scope = MagicMock()
+    dialog_scope.is_visible.return_value = True
 
-    def locator_side_effect(sel):
-        if "设置封面" in sel or "编辑封面" in sel:
+    def page_locator_side_effect(sel):
+        if "封面设置" in sel or "设置封面" in sel or "编辑封面" in sel:
             m = MagicMock()
             m.first = entry_el
             return m
+        if "dialog" in sel or "ant-modal" in sel or "el-dialog" in sel or "ant-drawer" in sel:
+            m = MagicMock()
+            m.first = dialog_scope
+            return m
+        return MagicMock()
+
+    def dialog_locator_side_effect(sel):
         if "本地上传" in sel:
             m = MagicMock()
             m.first = tab_el
@@ -324,9 +357,122 @@ def test_kuaishou_apply_cover_success_with_input_file(tmp_path: Path):
         return MagicMock()
 
     page = MagicMock()
-    page.locator.side_effect = locator_side_effect
+    page.locator.side_effect = page_locator_side_effect
+    dialog_scope.locator.side_effect = dialog_locator_side_effect
 
-    assert apply_cover(page, str(cover))
+    with patch("scripts.kuaishou_uploader._is_inline_cover_applied", return_value=True):
+        assert apply_cover(page, str(cover))
     file_input.set_input_files.assert_called_once_with(str(cover.resolve()), timeout=2000)
     confirm_btn.click.assert_called_once()
 
+
+def test_kuaishou_apply_cover_refuses_global_file_input_when_entry_missing(tmp_path: Path):
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"cover_bytes")
+    hidden_video_input = MagicMock()
+    hidden_video_input.get_attribute.return_value = "video/mp4"
+    hidden_video_input.is_visible.return_value = False
+
+    def locator_side_effect(sel):
+        locator = MagicMock()
+        if "input[type='file']" in sel:
+            locator.count.return_value = 1
+            locator.nth.return_value = hidden_video_input
+        locator.first.is_visible.return_value = False
+        return locator
+
+    page = MagicMock()
+    page.locator.side_effect = locator_side_effect
+
+    assert not apply_cover(page, str(cover))
+    hidden_video_input.set_input_files.assert_not_called()
+
+
+def test_kuaishou_apply_cover_rejects_page_input_without_commit_control(tmp_path: Path):
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"cover_bytes")
+
+    entry_el = MagicMock()
+    entry_el.is_visible.return_value = True
+    file_input = MagicMock()
+    file_input.get_attribute.return_value = "image/jpeg,image/png"
+
+    def hidden_locator():
+        locator = MagicMock()
+        locator.first.is_visible.return_value = False
+        locator.count.return_value = 0
+        return locator
+
+    def locator_side_effect(sel):
+        locator = hidden_locator()
+        if "封面设置" in sel or "设置封面" in sel or "编辑封面" in sel:
+            locator.first = entry_el
+        elif "input[type='file'][accept*='image']" in sel:
+            locator.count.return_value = 1
+            locator.nth.return_value = file_input
+        return locator
+
+    page = MagicMock()
+    page.locator.side_effect = locator_side_effect
+
+    assert not apply_cover(page, str(cover))
+    file_input.set_input_files.assert_called_once_with(str(cover.resolve()), timeout=2000)
+
+
+def test_upload_stops_when_required_cover_cannot_be_applied(tmp_path: Path):
+    video = tmp_path / "video.mp4"
+    cover = tmp_path / "cover.jpg"
+    video.write_bytes(b"video")
+    cover.write_bytes(b"cover")
+    upload_input = MagicMock()
+
+    page = MagicMock()
+    with patch("scripts.kuaishou_uploader.get_video_upload_input", return_value=upload_input), patch(
+        "scripts.kuaishou_uploader.wait_for_upload_completion",
+        return_value=True,
+    ), patch("scripts.kuaishou_uploader._capture_form_controls"), patch(
+        "scripts.kuaishou_uploader.apply_cover",
+        return_value=False,
+    ), patch("scripts.kuaishou_uploader.publish_after_review") as publish_after_review:
+        assert not upload_for_calibration(
+            page,
+            str(video),
+            tmp_path,
+            publish=True,
+            cover_path=str(cover),
+        )
+
+    publish_after_review.assert_not_called()
+
+
+def test_upload_captures_evidence_after_cover_is_applied(tmp_path: Path):
+    video = tmp_path / "video.mp4"
+    cover = tmp_path / "cover.jpg"
+    video.write_bytes(b"video")
+    cover.write_bytes(b"cover")
+    upload_input = MagicMock()
+
+    captured_names = []
+
+    def capture_side_effect(page, artifact_dir, artifact_name):
+        captured_names.append(artifact_name)
+
+    page = MagicMock()
+    with patch("scripts.kuaishou_uploader.get_video_upload_input", return_value=upload_input), patch(
+        "scripts.kuaishou_uploader.wait_for_upload_completion",
+        return_value=True,
+    ), patch("scripts.kuaishou_uploader._capture_form_controls", side_effect=capture_side_effect), patch(
+        "scripts.kuaishou_uploader.prepare_kuaishou_cover_upload_file",
+        return_value=str(cover),
+    ), patch(
+        "scripts.kuaishou_uploader.apply_cover",
+        return_value=True,
+    ):
+        assert upload_for_calibration(
+            page,
+            str(video),
+            tmp_path,
+            cover_path=str(cover),
+        )
+
+    assert "kuaishou_cover_applied" in captured_names

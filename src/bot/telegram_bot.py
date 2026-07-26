@@ -18,6 +18,7 @@
 | 1.7.0   | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 _handle_respec helper；各命令 already_exists 分支升级：有 trim/TTS 参数时自动调用 respec 实现“以最后一次为准” |
 | 1.8.0   | 2026-06-03 | Claude_Sonnet_4.6_Thinking_planning | 新增 _normalize_time() 预处理，parse_trim_params 支持 M'S 分秒格式（如 1'10 → 1:10） |
 | 1.9.0   | 2026-06-14 | Claude_Opus_4.8                     | 新增 /getvideo 命令：把成片发回 Telegram，>50MB 经 video_delivery 自动压缩（转码放进 executor 不阻塞轮询） |
+| 1.10.0  | 2026-07-17 | Codex                               | 当前无配音业务场景，/tts 明确停用且不再创建视频任务 |
 | 1.10.0  | 2026-06-20 | Claude_Opus_4.8                     | 修「对话无响应」：builder 开 concurrent_updates(True) 消除慢 Agent 对后续消息的串行阻塞；放宽 pool_timeout=20s 等超时，避免网络抖动时 Pool timeout 发不出回复 |
 | 1.11.0  | 2026-06-20 | Claude_Opus_4.8                     | 新增确定性命令 /process <youtube_id>：经 api_client.process_video → web /api/videos/{id}/process 立即处理单条视频（忽略分数阈值），不依赖 AI 编排，作为「发布某条」的可靠兜底 |
 | 1.12.0  | 2026-06-27 | Claude_Opus_4.8                     | [根治崩溃循环/「无反应」] builder 显式 connection_pool_size(256) + get_updates_connection_pool_size(16)/get_updates_pool_timeout(20)：concurrent_updates(True) 下默认池仅 1 条→PoolTimeout 抛进 updater 轮询→Application 停止(频繁重启)。enlarge 后并发 handler 不再抢空连接池 |
@@ -381,80 +382,13 @@ async def cmd_retry(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_tts(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """/tts <url> [开始时间] [结束时间] — 以 CosyVoice 配音模式加入队列。
-
-    # [Claude_Sonnet_4.6_Thinking_planning] TTS 按需激活入口：
-    # 默认流程不做 TTS 配音，只有通过此命令才会启用 CosyVoice 普通话配音。
-    """
+    """TTS 当前无业务场景，命令保留为明确提示，绝不创建或改写任务。"""
     if not _check_admin(update):
         return
-    assert _api is not None
-    args = ctx.args  # type: ignore
-    if not args:
-        await update.message.reply_text(fmt.fmt_error("用法：/tts <youtube_url> [开始时间] [结束时间]"), parse_mode="Markdown")  # type: ignore
-        return
-
-    url_input = args[0].strip()
-    match = _YOUTUBE_RE.search(url_input)
-    if not match:
-        await update.message.reply_text(fmt.fmt_error("请输入有效的 YouTube 视频链接！"), parse_mode="Markdown")  # type: ignore
-        return
-    url = match.group(0)
-
-    trim_start, trim_end = None, None
-    if len(args) >= 2:
-        remaining_text = " ".join(args[1:])
-        trim_start, trim_end = parse_trim_params(remaining_text)
-
     await update.message.reply_text(
-        f"🎙 *正在验证视频并启用 TTS 配音模式...*\n`{url}`",
-        parse_mode="Markdown"
+        "🎙 配音功能当前未启用；视频将保持原声发布。",
+        parse_mode="Markdown",
     )  # type: ignore
-
-    result = await _api.add_video(
-        url,
-        trim_start=trim_start,
-        trim_end=trim_end,
-        disable_slicing=True,
-        tts_provider="cosyvoice"  # [Claude_Sonnet_4.6_Thinking_planning] 明确指定 CosyVoice
-    )
-
-    if result is None:
-        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
-        return
-
-    if result.get("success"):
-        t_start = result.get("trim_start")
-        t_end = result.get("trim_end")
-        await update.message.reply_text(  # type: ignore
-            f"✅ *已加入队列（TTS 配音模式）！*\n"
-            f"📌 标题：`{result['title']}`\n"
-            f"🆔 ID：`{result['video_id']}`\n"
-            f"🎙 配音：CosyVoice 普通话\n"
-            f"⏱ 裁剪：`{t_start or '0'} - {t_end or 'End'}`",
-            parse_mode="Markdown"
-        )
-    elif result.get("already_exists"):
-        video_id = result.get("video_id")
-        # [Claude_Sonnet_4.6_Thinking_planning] /tts: 始终 respec（启用 TTS 本身是规格变更）
-        if video_id:
-            await _handle_respec(
-                update, _api, video_id,
-                trim_start=trim_start,
-                trim_end=trim_end,
-                disable_slicing=True,
-                tts_provider="cosyvoice",
-            )
-        else:
-            await update.message.reply_text(  # type: ignore
-                fmt.fmt_video_exists(
-                    title=result.get("error", ""),
-                    status=result.get("current_status", "UNKNOWN"),
-                ),
-                parse_mode="Markdown",
-            )
-    else:
-        await update.message.reply_text(fmt.fmt_error(result.get("error", "未知错误")), parse_mode="Markdown")  # type: ignore
 
 
 async def cmd_process(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:

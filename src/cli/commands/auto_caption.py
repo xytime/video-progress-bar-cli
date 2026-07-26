@@ -10,6 +10,7 @@
 | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 --tts-volume 和 --tts-speech-rate 参数以控制音量与语速，标有 # [Gemini_3.5_Flash_planning] |
 | 1.3.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | 将 --tts-voice 默认值改为 "auto"，自动从精选播音音色池随机选取，标注 # [Gemini_2.5_Pro_planning] |
 | 1.4.0   | 2026-06-25 | Claude_Opus_4.8 | 新增 --source-date 参数，透传源视频发布日期(YYYY-MM-DD)到 VerticalCaptionProcessor 渲染左上角毛玻璃日期戳 |
+| 1.5.0   | 2026-07-17 | Codex | 当前无配音业务场景，移除全部 TTS CLI 入口 |
 """
 import click
 from pathlib import Path
@@ -35,28 +36,11 @@ logger = logging.getLogger(__name__)
 @click.option('--font-path', type=click.Path(path_type=Path), default="/Library/Fonts/Arial Unicode.ttf", show_default=True, help='Font file path for title/subtitles.')
 @click.option('--font-size', type=int, default=84, show_default=True, help='Subtitle font size (Vertical mode only, default 84)')
 @click.option('--bilingual', is_flag=True, help='Show bilingual subtitles (ZH+EN) in Vertical mode. Default is Chinese only.')
-@click.option('--tts', is_flag=True, help='Generate speech using Edge TTS (Free).')
-@click.option('--tts-real', is_flag=True, help='Generate speech using IndexTTS (requires local IndexTTS installation).')
-@click.option('--tts-cosy', is_flag=True, help='Generate speech using Aliyun CosyVoice.')  # [Gemini_3.5_Flash_planning]
-@click.option('--tts-voice', default="auto", help='TTS voice name. Use "auto" to randomly pick from curated broadcast voices (longshuo_v3/longjing_v2/etc.), or specify a voice ID directly e.g. longanzhi_v3.', show_default=True)  # [Gemini_2.5_Pro_planning]
-@click.option('--mute-original/--no-mute-original', default=True, help='Mute the original video audio track when TTS is enabled.', show_default=True)  # [Gemini_3.5_Flash_planning]
-@click.option('--tts-volume', type=int, default=90, help='TTS volume (0-100) for CosyVoice.', show_default=True)  # [Gemini_3.5_Flash_planning]
-@click.option('--tts-speech-rate', type=float, default=1.0, help='TTS speech rate (0.5-2.0) for CosyVoice.', show_default=True)  # [Gemini_3.5_Flash_planning]
 @click.option('--source-date', default=None, help='Source video publish date (YYYY-MM-DD) for the frosted date stamp in the top-left corner. Vertical mode only.')  # [Claude_Opus_4.8]
-def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, tts, tts_real, tts_cosy, tts_voice, mute_original, tts_volume, tts_speech_rate, source_date):
+def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, source_date):
     """Generate and burn bilingual subtitles for a video."""
     try:
         
-        # Determine TTS provider
-        # [Gemini_3.5_Flash_planning]
-        tts_provider = None
-        if tts:
-            tts_provider = "edge"
-        elif tts_real:
-            tts_provider = "indextts"
-        elif tts_cosy:
-            tts_provider = "cosyvoice"
-
         if vertical:
             processor = VerticalCaptionProcessor(
                 input_path=input_path,
@@ -71,11 +55,6 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
                 font_path=str(font_path),
                 font_size=font_size,
                 bilingual=bilingual,
-                tts_provider=tts_provider,
-                tts_voice=tts_voice,  # [Gemini_3.5_Flash_planning]
-                mute_original=mute_original,  # [Gemini_3.5_Flash_planning]
-                tts_volume=tts_volume,  # [Gemini_3.5_Flash_planning]
-                tts_speech_rate=tts_speech_rate,  # [Gemini_3.5_Flash_planning]
                 source_date=source_date  # [Claude_Opus_4.8] 源视频发布日期毛玻璃戳
             )
             mode_str = "Vertical (9:16)"

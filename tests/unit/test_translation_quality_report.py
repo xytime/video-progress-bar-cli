@@ -55,7 +55,7 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
                         ],
                     },
                     {
-                        "provider": "Aliyun",
+                        "provider": "DeepSeek",
                         "status": "passed",
                         "action": "accept",
                         "selected": True,
@@ -97,8 +97,8 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
     assert summary["selected_warning_count"] == 1
     assert summary["warning_count"] == 1
     assert summary["blocked_count"] == 2
-    assert summary["provider_counts"] == {"Aliyun": 1, "Gemini": 1, "fallback": 1}
-    assert summary["selected_provider_counts"] == {"Aliyun": 1}
+    assert summary["provider_counts"] == {"DeepSeek": 1, "Gemini": 1, "fallback": 1}
+    assert summary["selected_provider_counts"] == {"DeepSeek": 1}
     assert summary["issue_counts"] == {
         "FINANCE_EVENT_DIRECTION_REVERSAL": 1,
         "FINANCE_TERM_AMBIGUOUS_CLOSE": 1,
@@ -122,7 +122,7 @@ def test_aggregate_quality_reports_counts_providers_and_issues(tmp_path):
         "NUMBER_MAGNITUDE_MISMATCH": 1,
     }
     assert summary["provider_issue_counts"] == {
-        "Aliyun": {
+        "DeepSeek": {
             "FINANCE_TERM_AMBIGUOUS_CLOSE": 1,
             "TERM_CONSISTENCY_FUND_CLOSE_DRIFT": 1,
         },

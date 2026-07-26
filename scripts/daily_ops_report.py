@@ -17,6 +17,7 @@
 | 1.3.0   | 2026-07-05 | Codex           | 翻译质量摘要分开展示最高频告警与最高频阻断 |
 | 1.4.0   | 2026-07-06 | Codex           | 翻译质量摘要展示最高频 provider-issue 组合，便于定位供应商质量问题 |
 | 1.5.0   | 2026-07-06 | Codex           | 翻译质量摘要展示最终采用 provider 与采用候选告警 |
+| 1.6.0   | 2026-07-17 | Codex           | 日报新增 DeepSeek 余额与近 24 小时翻译 provider 调用审计汇总 |
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ from pathlib import Path
 PRJ = Path(__file__).parent.parent
 sys.path.insert(0, str(PRJ / "src"))
 from config.settings import settings  # noqa: E402
+from video_processing.db.database import PipelineDB  # noqa: E402
 from video_processing.utils.translation_quality_report import aggregate_quality_reports  # noqa: E402
 
 _DB = PRJ / "output" / "pipeline.db"
@@ -114,6 +116,65 @@ def format_translation_quality(summary: dict) -> str:
     )
 
 
+def format_ai_provider_usage(summary: dict) -> str:
+    """格式化本地审计的 provider 尝试次数；这不是云厂商账单 token。"""
+    providers = summary.get("providers") or []
+    if not providers:
+        return "API 调用审计(近24h): 暂无字幕翻译尝试"
+
+    labels = {"gemini": "Gemini", "deepseek": "DeepSeek", "google": "Google"}
+    entries = []
+    for item in providers:
+        provider = str(item.get("provider") or "unknown").lower()
+        name = labels.get(provider, provider)
+        attempts = int(item.get("attempts") or 0)
+        successes = int(item.get("successes") or 0)
+        failures = int(item.get("failures") or 0)
+        entries.append(f"{name} 尝试{attempts}/成功{successes}/失败{failures}")
+    return "API 调用审计(近24h): " + "；".join(entries) + "（按 provider 尝试，不等同 token/账单）"
+
+
+def format_deepseek_balance(payload: dict) -> str:
+    """只展示余额数字，避免将 API key 或完整响应写入 Telegram/日志。"""
+    if not payload.get("is_available"):
+        return "DeepSeek 余额: 🔴 当前不可用"
+    balances = payload.get("balance_infos") or []
+    if not isinstance(balances, list) or not balances:
+        return "DeepSeek 余额: ⚠️ 接口未返回余额明细"
+    items = []
+    for balance in balances:
+        if not isinstance(balance, dict):
+            continue
+        currency = str(balance.get("currency") or "?")
+        total = str(balance.get("total_balance") or "?")
+        granted = str(balance.get("granted_balance") or "?")
+        topped_up = str(balance.get("topped_up_balance") or "?")
+        items.append(f"{currency} 总{total}（赠金{granted}/充值{topped_up}）")
+    return "DeepSeek 余额: 🟢 " + ("；".join(items) if items else "⚠️ 返回格式异常")
+
+
+def fetch_deepseek_balance() -> str:
+    """查询 DeepSeek 官方余额端点；失败只在日报中告警，不影响处理管线。"""
+    api_key = (settings.deepseek_api_key or "").strip()
+    if not api_key:
+        return "DeepSeek 余额: ⚠️ 未配置 API Key"
+    base_url = (settings.deepseek_base_url or "https://api.deepseek.com").rstrip("/")
+    try:
+        import json
+        import urllib.request
+
+        request = urllib.request.Request(
+            f"{base_url}/user/balance",
+            headers={"Accept": "application/json", "Authorization": f"Bearer {api_key}"},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return format_deepseek_balance(payload)
+    except Exception as exc:
+        return f"DeepSeek 余额: ⚠️ 查询失败（{type(exc).__name__}）"
+
+
 def collect() -> str:
     # 北京今天 00:00 ≈ UTC 前一天 16:00；用 datetime('now','-16 hours')(SQLite UTC) 对齐"今天"
     since = "datetime('now','-16 hours')"
@@ -162,6 +223,12 @@ def collect() -> str:
     except Exception:
         translation_quality_line = "翻译质量: 汇总失败"
 
+    try:
+        ai_usage_line = format_ai_provider_usage(PipelineDB().get_ai_audit_summary(hours=24))
+    except Exception:
+        ai_usage_line = "API 调用审计(近24h): 汇总失败"
+    deepseek_balance_line = fetch_deepseek_balance()
+
     leak_line = "0 ✅" if leak == 0 else f"⚠️ {leak} 条（需立刻排查！）"
     today = datetime.datetime.now().strftime("%Y-%m-%d")
     return (
@@ -176,6 +243,9 @@ def collect() -> str:
         f"discovery 累计限流跳过(monitor.log): {rl}\n"
         f"━━ 翻译质量 ━━\n"
         f"{translation_quality_line}\n"
+        f"━━ API 用量与余额 ━━\n"
+        f"{ai_usage_line}\n"
+        f"{deepseek_balance_line}\n"
         f"━━ 每日须办 ━━\n"
         f"• 会话若失效→ <code>python scripts/wechat_uploader.py --login-only</code> 重扫\n"
         f"• 泄漏若&gt;0→ 立刻查 get_high_score_pending_videos 黑名单过滤是否被绕过"

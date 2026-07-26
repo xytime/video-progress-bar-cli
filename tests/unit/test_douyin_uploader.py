@@ -8,7 +8,7 @@
 """
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from scripts.douyin_uploader import (
     DOUYIN_DESCRIPTION_SELECTOR,
@@ -24,6 +24,8 @@ from scripts.douyin_uploader import (
     has_post_upload_form,
     is_login_required,
     is_upload_in_progress,
+    prepare_douyin_cover_upload_file,
+    prepare_douyin_horizontal_cover_upload_file,
     publish_after_review,
     upload_for_calibration,
     upload_and_publish,
@@ -246,6 +248,32 @@ def test_douyin_apply_cover_returns_false_when_cover_file_missing(tmp_path: Path
     assert not apply_cover(page, missing_file)
 
 
+def test_prepare_douyin_cover_upload_file_creates_vertical_safe_cover(tmp_path: Path):
+    from PIL import Image
+
+    cover = tmp_path / "cover.jpg"
+    Image.new("RGB", (1080, 1260), "black").save(cover)
+
+    prepared = prepare_douyin_cover_upload_file(str(cover))
+    assert prepared is not None
+    with Image.open(prepared) as image:
+        assert image.size == (1080, 1440)
+    assert Path(prepared).name == "cover_douyin.png"
+
+
+def test_prepare_douyin_horizontal_cover_upload_file_creates_4x3_safe_cover(tmp_path: Path):
+    from PIL import Image
+
+    cover = tmp_path / "cover.jpg"
+    Image.new("RGB", (1080, 1260), "black").save(cover)
+
+    prepared = prepare_douyin_horizontal_cover_upload_file(str(cover))
+    assert prepared is not None
+    with Image.open(prepared) as image:
+        assert image.size == (1280, 960)
+    assert Path(prepared).name == "cover_douyin_horizontal.png"
+
+
 def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
     cover = tmp_path / "cover.jpg"
     cover.write_bytes(b"cover_bytes")
@@ -257,6 +285,7 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
     tab_el.is_visible.return_value = True
 
     input_el = MagicMock()
+    input_el.get_attribute.return_value = "image/png,image/jpeg,image/jpg"
 
     confirm_btn = MagicMock()
     confirm_btn.is_visible.return_value = True
@@ -275,7 +304,7 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
         if "input[type='file']" in sel:
             m = MagicMock()
             m.count.return_value = 1
-            m.first = input_el
+            m.nth.return_value = input_el
             return m
         if "完成" in sel or "确定" in sel:
             m = MagicMock()
@@ -297,8 +326,41 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
 
     page = MagicMock()
     page.locator.side_effect = page_locator_side_effect
+    page.expect_file_chooser.side_effect = RuntimeError("no chooser")
 
-    assert apply_cover(page, str(cover))
+    with patch("scripts.douyin_uploader._click_matching_cover_thumbnail", return_value=True), patch(
+        "scripts.douyin_uploader._is_cover_preview_matched",
+        return_value=True,
+    ):
+        assert apply_cover(page, str(cover))
     input_el.set_input_files.assert_called_once_with(str(cover.resolve()), timeout=3000)
     confirm_btn.click.assert_called_once()
 
+
+def test_douyin_publish_fields_stop_when_required_cover_fails(tmp_path: Path):
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"cover")
+    title = MagicMock()
+    title.count.return_value = 1
+    editor = MagicMock()
+    editor.count.return_value = 1
+    controls = MagicMock()
+    controls.evaluate_all.return_value = []
+    page = MagicMock()
+    page.locator.side_effect = lambda selector: (
+        title if selector == DOUYIN_TITLE_SELECTOR
+        else editor if selector == DOUYIN_DESCRIPTION_SELECTOR
+        else controls
+    )
+
+    with patch("scripts.douyin_uploader.prepare_douyin_cover_upload_file", return_value=str(cover)), patch(
+        "scripts.douyin_uploader.prepare_douyin_horizontal_cover_upload_file",
+        return_value=str(cover),
+    ), patch("scripts.douyin_uploader.apply_cover", return_value=False) as apply_cover_mock:
+        assert not fill_publish_fields(page, "标题", "描述", tmp_path, cover_path=str(cover))
+    apply_cover_mock.assert_called_once_with(
+        page,
+        str(cover),
+        artifact_dir=tmp_path,
+        horizontal_cover_path=str(cover),
+    )

@@ -6,7 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕翻译供应商顺序配置解析 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 配置解析 |
-| 1.2.0   | 2026-07-05 | Codex  | 覆盖翻译供应商配置在 .env.example 中可发现 |
+| 1.3.0   | 2026-07-17 | Codex  | 移除阿里云配置，固定 Gemini→DeepSeek→Google 质量链路 |
 """
 
 import sys
@@ -22,22 +22,22 @@ from config.settings import Settings  # noqa: E402
 def test_default_subtitle_translation_provider_order():
     settings = Settings(_env_file=None)
 
-    assert settings.subtitle_translation_provider_order_list == ["gemini", "aliyun", "google"]
+    assert settings.subtitle_translation_provider_order_list == ["gemini", "deepseek", "google"]
 
 
 def test_subtitle_translation_provider_order_filters_unknowns_and_duplicates():
     settings = Settings(
         _env_file=None,
-        subtitle_translation_provider_order="aliyun,deepseek,google,aliyun,gemini",
+        subtitle_translation_provider_order="unknown,deepseek,google,deepseek,gemini",
     )
 
-    assert settings.subtitle_translation_provider_order_list == ["aliyun", "deepseek", "google", "gemini"]
+    assert settings.subtitle_translation_provider_order_list == ["deepseek", "google", "gemini"]
 
 
 def test_empty_subtitle_translation_provider_order_falls_back_to_default():
     settings = Settings(_env_file=None, subtitle_translation_provider_order="unknown,,")
 
-    assert settings.subtitle_translation_provider_order_list == ["gemini", "aliyun", "google"]
+    assert settings.subtitle_translation_provider_order_list == ["gemini", "deepseek", "google"]
 
 
 def test_translation_provider_env_example_documents_required_keys():

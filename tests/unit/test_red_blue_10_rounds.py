@@ -123,10 +123,7 @@ def test_translation_html_filtering(mock_translator_class, tmp_path):
         {"text": "Captcha"}
     ]
     
-    # [Claude_Sonnet_4.6_planning] v1.0.2: _translate_segments_aliyun 已删除，
-    # 改为 mock translation_helper.translate_batch_aliyun （最终调用错径）
-    with patch('src.video_processing.utils.translation_helper.translate_batch_aliyun', return_value=None), \
-         patch('src.video_processing.utils.vocab_helper.extract_vocab_batch', return_value=None), \
+    with patch('src.video_processing.utils.vocab_helper.extract_vocab_batch', return_value=None), \
          patch('src.video_processing.processors.caption_processor._google_batch_fallback',
                side_effect=lambda texts, **kw: [mock_instance.translate_batch(texts)[i] if i < len(mock_instance.translate_batch(texts)) else '' for i in range(len(texts))]):
         # 我们必须通过 translation_helper._google_translate_batch 来测试 HTML 过滤。
@@ -230,4 +227,3 @@ def test_db_deadlock_purger(tmp_path):
     videos = db.get_videos_by_status("PENDING")
     assert len(videos) > 0
     assert videos[0]['status'] == "PENDING"
-

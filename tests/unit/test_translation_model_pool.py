@@ -8,7 +8,7 @@ from video_processing.utils.translation_model_pool import DynamicTranslationMode
 
 def test_model_pool_prefers_vocab_capable_provider(tmp_path: Path):
     pool = DynamicTranslationModelPool(tmp_path / "pool.json")
-    assert pool.order(["aliyun", "deepseek", "gemini"], required={"translate", "vocab"}) == ["gemini", "deepseek", "aliyun"]
+    assert pool.order(["google", "deepseek", "gemini"], required={"translate", "vocab"}) == ["gemini", "deepseek", "google"]
 
 
 def test_model_pool_cools_rate_limited_provider_and_persists(tmp_path: Path):

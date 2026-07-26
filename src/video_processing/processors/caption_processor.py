@@ -27,7 +27,7 @@
 | 1.14.0 | 2026-06-09 | Claude_Opus_4.6_Thinking_planning   | Aliyun/Google 翻译成功后二次尝试 Gemini 对齐模式提取 vocab，解决 Gemini 429 时生词丢失问题 |
 | 1.15.0 | 2026-07-05 | Codex | 接入 translation_quality_guard：翻译后统一做事实保真审计，P0 阻断，P1 告警 |
 | 1.16.0 | 2026-07-05 | Codex | Gemini 翻译接入全片 TranslationContext，减少逐句翻译丢失语境 |
-| 1.17.0 | 2026-07-05 | Codex | 质量守门 P0 触发供应商降级：Gemini→Aliyun→Google，最终供应商仍失败才阻断 |
+| 1.18.0 | 2026-07-17 | Codex | 移除阿里云 MT；质量守门改为 Gemini→DeepSeek→Google |
 | 1.18.0 | 2026-07-05 | Codex | 翻译质量审计落盘为 *.translation_quality.json，记录供应商、告警、阻断与降级动作 |
 | 1.19.0 | 2026-07-05 | Codex | 引入 provider-neutral SubtitleTranslationCandidate，统一字幕候选结果回填 |
 | 1.20.0 | 2026-07-05 | Codex | 字幕翻译供应商顺序改由 settings 配置，主流程按 provider candidate 循环编排 |
@@ -67,7 +67,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ..core.base import VideoProcessorBase, VideoProcessingError
-from ..utils.translation_helper import translate_batch_aliyun, translate_batch as _google_batch_fallback  # [Claude_Sonnet_4.6_planning]
+from ..utils.translation_helper import translate_batch as _google_batch_fallback
 from ..utils.vocab_helper import extract_vocab_batch  # [Claude_Sonnet_4.6_Thinking_planning]
 from ..utils.translation_context import build_translation_context
 from ..utils.subtitle_translation_provider import (
@@ -465,104 +465,15 @@ class AutoCaptionProcessor(VideoProcessorBase):
     # [Claude_Sonnet_4.6_Thinking_planning] v1.12.0: _translate_segments_gemini 已移除。
     # 所有 Gemini SDK 交互现由 vocab_helper.extract_vocab_batch 高内聚地封装。
 
-    def _translate_segments_aliyun(self, segments: List[Dict[str, Any]]) -> Optional[List[str]]:
-        """[Claude_Sonnet_4.6_Thinking_planning] v1.9.1
-        阿里云机器翻译通用版 (TranslateGeneral) 作为二级 fallback。
-        QPS=50，每月 100 万字符免费额度。仅做翻译，不提取词汇。
-
-        优化策略：批量拼接（Batching）
-        将每批 BATCH_SIZE 个 segments 的文本用 SEP 特殊分隔符拼接成单次 API 调用，
-        翻译完成后按分隔符切割回填。将 100+ 次串行请求压缩至 4-5 次，延迟降低约 20x。
-
-        Returns:
-            List[str]: 按入入顺序排列的翻译结果列表，失败时返回 None。
-        """
-        try:
-            from config.settings import settings
-            ak_id = settings.aliyun_mt_access_key_id or ""
-            ak_secret = settings.aliyun_mt_access_key_secret or ""
-            if not ak_id or not ak_secret:
-                logger.info("ALIYUN_MT_ACCESS_KEY_ID/SECRET not configured. Skipping Aliyun MT fallback.")
-                return None
-
-            # [Claude_Sonnet_4.6_Thinking_planning] 使用阿里云官方 SDK
-            from alibabacloud_alimt20181012.client import Client as AlimtClient
-            from alibabacloud_tea_openapi.models import Config as OpenApiConfig
-            from alibabacloud_alimt20181012 import models as alimt_models
-
-            config = OpenApiConfig(
-                access_key_id=ak_id,
-                access_key_secret=ak_secret,
-                endpoint="mt.aliyuncs.com"
-            )
-            client = AlimtClient(config)
-
-            src_lang = "en" if self.src_lang in ("en", "auto", None) else self.src_lang
-            tgt_lang = "zh" if self.target_lang in ("zh", "zh-CN", None) else self.target_lang
-
-            # [Claude_Sonnet_4.6_Thinking_planning] 批量拼接策略
-            # 每段字幕平均 ~40 字符，阿里云单次最大 5000 字符
-            # 每批 25 条：25 * 40 ≈ 1000 字符，远低于 5000 字符上限，安全可靠
-            SEP = "\n###\n"
-            BATCH_SIZE = 25
-
-            texts = [seg.get("text", "").strip() for seg in segments]
-            translated: List[str] = [""] * len(texts)
-
-            logger.info(f"Calling Aliyun MT API for {len(texts)} segments in batches of {BATCH_SIZE} ({src_lang} → {tgt_lang})...")
-
-            for batch_start in range(0, len(texts), BATCH_SIZE):
-                batch_texts = texts[batch_start: batch_start + BATCH_SIZE]
-                # 过滤掉空文本，记录其原始位置
-                non_empty_indices = [i for i, t in enumerate(batch_texts) if t]
-                non_empty_texts = [batch_texts[i] for i in non_empty_indices]
-
-                if not non_empty_texts:
-                    continue
-
-                combined = SEP.join(non_empty_texts)
-                req = alimt_models.TranslateGeneralRequest(
-                    format_type="text",
-                    scene="general",
-                    source_language=src_lang,
-                    source_text=combined[:5000],  # 安全截断，防止超限
-                    target_language=tgt_lang
-                )
-                resp = client.translate_general(req)
-
-                if resp and resp.body and str(resp.body.code) == "200":
-                    result_text = resp.body.data.translated or ""
-                    # 按分隔符切割，允许两侧有空白
-                    parts = [p.strip() for p in result_text.split("###")]
-                    for local_idx, abs_idx in enumerate(non_empty_indices):
-                        if local_idx < len(parts):
-                            translated[batch_start + abs_idx] = parts[local_idx]
-                        else:
-                            logger.warning(f"[AliyunMT] Batch split count mismatch at batch_start={batch_start}")
-                else:
-                    code = resp.body.code if resp and resp.body else "unknown"
-                    logger.warning(f"Aliyun MT returned non-200 code={code} for batch starting at index {batch_start}")
-
-            logger.info("Aliyun MT batch translation completed.")
-            return translated
-
-        except ImportError:
-            logger.warning("alibabacloud-alimt20181012 not installed. Run: pip install alibabacloud-alimt20181012")
-            return None
-        except Exception as e:
-            logger.error(f"Aliyun MT translation failed: {e}")
-            return None
-
     def _translate_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """批量翻译字幕片段 — Gemini 主译 → Aliyun 降级 → Google 终级 Fallback。
+        """批量翻译字幕片段 — Gemini 主译 → DeepSeek 交叉候选 → Google 终级兜底。
 
         [Claude_Sonnet_4.6_Thinking_planning] v1.13.0:
         Gemini 优先：其对习语/隐喻/语境有正确理解（如 'in code'→'暗示' 而非'代码'），
         且翻译与词汇注释在同一次调用中天然对齐，vocab 值即为 translation 子串，
         使 SubtitleStylist.apply_chinese_highlights 能 100% 命中并画出下划线。
 
-        Aliyun 降级（无 vocab）：Gemini 配额耗尽或失败时用于救急，确保主字幕不为空。
-        Google 终级 Fallback：两者均失败时使用。
+        DeepSeek 作为独立的翻译 + vocabulary 候选，Google 只在前两者不可用时兜底。
         """
         if not segments:
             return segments
@@ -735,7 +646,6 @@ class AutoCaptionProcessor(VideoProcessorBase):
             model = {
                 "gemini": "dynamic Gemini pool",
                 "deepseek": getattr(settings, "deepseek_model", "") or "DeepSeek default",
-                "aliyun": "Aliyun MT",
                 "google": "Google Translate",
             }.get(key)
             capabilities = ",".join(sorted(profile.capabilities)) if profile else "translate"
@@ -815,8 +725,6 @@ class AutoCaptionProcessor(VideoProcessorBase):
             return self._build_gemini_candidate(texts, translation_context)
         if provider == "deepseek":
             return self._build_deepseek_candidate(texts, translation_context)
-        if provider == "aliyun":
-            return self._build_aliyun_candidate(texts)
         if provider == "google":
             return self._build_google_candidate(texts)
         logger.warning("[Translate] Unknown provider ignored: %s", provider)
@@ -886,24 +794,6 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self._last_provider_error = "; ".join(errors) or "DeepSeek returned no aligned candidate"
         return None
 
-    def _build_aliyun_candidate(self, texts: List[str]) -> Optional[SubtitleTranslationCandidate]:
-        """Aliyun MT：仅翻译，无 vocab。"""
-        ali_tgt = "zh" if self.target_lang in ("zh-CN", "zh", None) else self.target_lang
-        ali_src = "en" if self.src_lang in ("en", "auto", None) else self.src_lang
-        errors: List[str] = []
-        aliyun_results = translate_batch_aliyun(
-            texts,
-            src_lang=ali_src,
-            target_lang=ali_tgt,
-            error_out=errors,
-        )
-
-        if aliyun_results:
-            logger.info("Aliyun MT produced a subtitle translation candidate (no vocab alignment).")
-            return SubtitleTranslationCandidate(provider="Aliyun", translations=aliyun_results)
-        self._last_provider_error = "; ".join(errors) or "Aliyun returned no aligned candidate"
-        return None
-
     def _build_google_candidate(self, texts: List[str]) -> SubtitleTranslationCandidate:
         """Google Translate 终级 fallback：仅翻译，无 vocab。"""
         logger.info("Google Translate produced a subtitle translation candidate (no vocab alignment).")
@@ -919,7 +809,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         translation_context: str,
         provider: str,
     ) -> None:
-        """Aliyun/Google 翻译后尝试用 Gemini 对齐模式补 vocab。"""
+        """Google 终级翻译后尝试用 Gemini 对齐模式补 vocab。"""
         try:
             zh_texts = [seg.get('zh_text', '') for seg in segments]
             vocab_results = extract_vocab_batch(

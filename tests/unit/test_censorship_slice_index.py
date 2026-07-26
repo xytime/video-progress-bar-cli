@@ -14,6 +14,8 @@
 # Modification History
 | Version | Date       | Author          | Description                                |
 |---------|------------|-----------------|--------------------------------------------|
+| 1.2.0   | 2026-07-26 | Codex           | 收紧 bypass 回归：人工放行和频道白名单均不能绕过 P0 红线 |
+| 1.1.0   | 2026-07-26 | Codex           | 新增 censorship_incidents 台账写入回归，确保违规命中可复盘 |
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | 初始创建：锁定 BUG-1 审查 slice_index 透传行为 |
 """
 
@@ -68,7 +70,7 @@ def _enable(monkeypatch, *, censor=False, channel=False):
 def test_p0_hit_on_slice_fails_slice_not_parent(temp_db, monkeypatch):
     db = _db_with_parent_and_slice(temp_db)
     _enable(monkeypatch, censor=True)
-    hit = SimpleNamespace(hit=True, tag="P0_POLITICAL", score=99,
+    hit = SimpleNamespace(hit=True, level="P0", tag="P0_POLITICAL", score=99,
                           action=censor_engine.ACTION_REJECT_SIGTERM, matched="iran", channel="en")
     monkeypatch.setattr(censor_engine, "check_text", lambda zh_text="", en_text="": hit)
 
@@ -79,6 +81,12 @@ def test_p0_hit_on_slice_fails_slice_not_parent(temp_db, monkeypatch):
     sl = db.get_video_by_youtube_id("vid12345678", slice_index=1)
     assert sl["status"] == "FAILED"          # 切片自己被置 FAILED
     assert parent["status"] == "SEGMENTED"   # 父行不被污染（旧 BUG 会变 FAILED）
+    incidents = db.get_censorship_incidents("vid12345678", slice_index=1)
+    assert len(incidents) == 1
+    assert incidents[0]["level"] == "P0"
+    assert incidents[0]["matched"] == "iran"
+    assert incidents[0]["decision"] == "REJECT_FAILED"
+    assert incidents[0]["title"] == "Slice One"
 
 
 def test_p2_deprioritizes_slice_not_parent(temp_db, monkeypatch):
@@ -100,6 +108,7 @@ def test_p2_deprioritizes_slice_not_parent(temp_db, monkeypatch):
 def test_channel_policy_hit_on_slice_fails_slice_not_parent(temp_db, monkeypatch):
     db = _db_with_parent_and_slice(temp_db)
     _enable(monkeypatch, channel=True)
+    monkeypatch.setattr(settings, "enable_channel_policy_fail_open", False)
     cp = SimpleNamespace(hit=True, tag="CP_OUT_OF_SCOPE", matched="ukraine+war", channel="en")
     monkeypatch.setattr(censor_engine, "check_channel_policy", lambda zh_text="", en_text="": cp)
 
@@ -110,6 +119,10 @@ def test_channel_policy_hit_on_slice_fails_slice_not_parent(temp_db, monkeypatch
     sl = db.get_video_by_youtube_id("vid12345678", slice_index=1)
     assert sl["status"] == "FAILED"
     assert parent["status"] == "SEGMENTED"
+    incidents = db.get_censorship_incidents("vid12345678", slice_index=1)
+    assert incidents[0]["level"] == "CP"
+    assert incidents[0]["matched"] == "ukraine+war"
+    assert incidents[0]["decision"] == "CHANNEL_POLICY_REJECT"
 
 
 def test_default_slice_index_zero_still_targets_parent(temp_db, monkeypatch):
@@ -141,12 +154,38 @@ class TestBypassIsPerSlice:
         db = _db_with_parent_and_slice(temp_db)
         db.set_bypass_censorship("vid12345678", True, slice_index=1)
         _enable(monkeypatch, censor=True)
-        # 即便会命中，bypass 也应让该切片直接放行（返回 False）
-        hit = SimpleNamespace(hit=True, tag="P0", score=99,
-                              action=censor_engine.ACTION_REJECT_SIGTERM, matched="x", channel="en")
+        # 非 P0 命中仍可由人工复核放行，P0 另有单测锁死为不可绕过。
+        hit = SimpleNamespace(hit=True, level="P1", tag="P1", score=75,
+                              action=censor_engine.ACTION_SUSPEND_MANUAL, matched="x", channel="en")
         monkeypatch.setattr(censor_engine, "check_text", lambda zh_text="", en_text="": hit)
         pm = _make_pm(db)
 
         assert pm._check_censorship("vid12345678", "Slice One", slice_index=1) is False  # 切片放行
         # 父行（未放行）仍会被拦截
         assert pm._check_censorship("vid12345678", "Parent", slice_index=0) is True
+
+    def test_manual_bypass_does_not_skip_p0_redline(self, temp_db, monkeypatch):
+        db = _db_with_parent_and_slice(temp_db)
+        db.set_bypass_censorship("vid12345678", True, slice_index=1)
+        _enable(monkeypatch, censor=True)
+        hit = SimpleNamespace(hit=True, level="P0", tag="P0", score=99,
+                              action=censor_engine.ACTION_REJECT_SIGTERM,
+                              matched="xi jinping", channel="en")
+        monkeypatch.setattr(censor_engine, "check_text", lambda zh_text="", en_text="": hit)
+        pm = _make_pm(db)
+
+        assert pm._check_censorship("vid12345678", "Slice One", slice_index=1) is True
+        assert db.get_video_by_youtube_id("vid12345678", slice_index=1)["status"] == "FAILED"
+
+    def test_channel_bypass_does_not_skip_p0_redline(self, temp_db, monkeypatch):
+        db = _db_with_parent_and_slice(temp_db)
+        _enable(monkeypatch, censor=True, channel=True)
+        monkeypatch.setattr(settings, "censorship_bypass_channels", "c1")
+        hit = SimpleNamespace(hit=True, level="P0", tag="P0", score=99,
+                              action=censor_engine.ACTION_REJECT_SIGTERM,
+                              matched="anti_china_targeted_violence", channel="en")
+        monkeypatch.setattr(censor_engine, "check_text", lambda zh_text="", en_text="": hit)
+        pm = _make_pm(db)
+
+        assert pm._check_censorship("vid12345678", "Slice One", slice_index=1) is True
+        assert db.get_video_by_youtube_id("vid12345678", slice_index=1)["status"] == "FAILED"

@@ -25,11 +25,22 @@
 | 1.7.1 | 2026-07-15 | Codex | 快手专属文案适配：最多保留前 4 个话题，避免平台因标签上限拒绝，原始视频号文案不改 |
 | 1.8.0 | 2026-07-15 | Codex | 新增仅核对作品管理状态模式，用于定时审核，不触发上传或发布 |
 | 1.9.0 | 2026-07-25 | Gemini_3.6_Flash_planning | 修复发布模式下 apply_cover 被提前 return 阻断 Bug，解耦 DOM 查找助手 |
+| 1.10.0 | 2026-07-26 | Codex | 收紧快手封面入口与文件输入作用域，封面应用失败时阻断发布 |
+| 1.10.1 | 2026-07-26 | Codex | 适配快手页面内 image input 封面控件，并保存封面应用后的证据快照 |
+| 1.11.0 | 2026-07-26 | Codex | 封面提交改为确认制，作品管理核验输出文案指纹和元素位置证据 |
+| 1.11.1 | 2026-07-26 | Codex | 管理页证据自动比较可见缩略图与本地封面的视觉哈希距离 |
+| 1.11.2 | 2026-07-26 | Codex | 封面流程失败时保存分阶段 DOM/坐标/图片证据，便于定位真实提交控件 |
+| 1.11.3 | 2026-07-26 | Codex | 上传快手封面前派生不低于 1280x960 的平台专用图片副本 |
+| 1.11.4 | 2026-07-26 | Codex | 将内联封面组件的成功提示和 blob 预览纳入封面应用成功判据 |
+| 1.11.5 | 2026-07-26 | Codex | 快手封面副本改为 9:16 安全画布，降低发布后缩略图裁剪风险 |
+| 1.11.6 | 2026-07-26 | Codex | 封面入口优先点击真实预览卡片，并用预览哈希校验封面是否真正替换 |
+| 1.11.7 | 2026-07-26 | Codex | 封面弹窗确认后也必须通过预览哈希校验，避免按钮点击误报 |
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import re
@@ -46,9 +57,51 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 
 KUAISHOU_PUBLISH_URL = "https://cp.kuaishou.com/article/publish/video"
 KUAISHOU_MANAGE_URL = "https://cp.kuaishou.com/article/manage/video"
+KUAISHOU_MANAGEMENT_URL_CANDIDATES = (
+    KUAISHOU_MANAGE_URL,
+    "https://cp.kuaishou.com/profile",
+)
 KUAISHOU_VIDEO_INPUT_SELECTOR = 'input[type="file"][accept*="video"]'
 KUAISHOU_DESCRIPTION_SELECTOR = '[contenteditable="true"][placeholder*="作品描述"]'
 KUAISHOU_MAX_TOPIC_TAGS = 4
+KUAISHOU_COVER_MIN_WIDTH = 1280
+KUAISHOU_COVER_MIN_HEIGHT = 960
+KUAISHOU_COVER_TARGET_WIDTH = 1280
+KUAISHOU_COVER_TARGET_HEIGHT = 2276
+KUAISHOU_COVER_SETTLE_MS = 8_000
+KUAISHOU_COVER_PREVIEW_MAX_HASH_DISTANCE = 18
+KUAISHOU_COVER_ENTRY_SELECTORS = (
+    "div[class*='cover-full-editor']",
+    "div[class*='default-cover']",
+    "div[class*='cover'][class*='editor'] img",
+    "text=封面设置",
+    "text=编辑封面",
+    "text=设置封面",
+    "text=更换封面",
+    "text=上传封面",
+    "button:has-text('封面')",
+    ".cover-edit-btn",
+    ".cover-upload-btn",
+)
+KUAISHOU_COVER_UPLOAD_SCOPE_SELECTORS = (
+    "[role='dialog']:has-text('封面')",
+    ".ant-modal:has-text('封面')",
+    ".el-dialog:has-text('封面')",
+    ".ant-drawer:has-text('封面')",
+)
+KUAISHOU_COVER_COMMIT_SELECTORS = (
+    "button:has-text('确定')",
+    "button:has-text('完成')",
+    "button:has-text('确认')",
+    "button:has-text('保存')",
+    ".confirm-btn",
+)
+KUAISHOU_COVER_IMAGE_INPUT_SELECTOR = (
+    "input[type='file'][accept*='image'],"
+    "input[type='file'][accept*='.jpg'],"
+    "input[type='file'][accept*='.jpeg'],"
+    "input[type='file'][accept*='.png']"
+)
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_LOGIN_REQUIRED = 2
@@ -141,14 +194,31 @@ def _capture_form_controls(page, artifact_dir: Path, artifact_name: str) -> None
     ).evaluate_all(
         """elements => elements.map(element => ({
             tag: element.tagName.toLowerCase(),
+            id: element.getAttribute('id'),
             type: element.getAttribute('type'),
+            accept: element.getAttribute('accept'),
             name: element.getAttribute('name'),
             placeholder: element.getAttribute('placeholder'),
             ariaLabel: element.getAttribute('aria-label'),
+            title: element.getAttribute('title'),
+            dataE2e: element.getAttribute('data-e2e') || element.getAttribute('data-testid'),
+            href: element.getAttribute('href'),
+            src: element.getAttribute('src'),
             role: element.getAttribute('role'),
             contentEditable: element.getAttribute('contenteditable'),
             className: String(element.className || '').slice(0, 160),
             text: (element.textContent || '').trim().slice(0, 80),
+            parentText: (element.parentElement?.textContent || '').trim().slice(0, 120),
+            parentClassName: String(element.parentElement?.className || '').slice(0, 160),
+            rect: (() => {
+                const rect = element.getBoundingClientRect();
+                return {
+                    x: Math.round(rect.x),
+                    y: Math.round(rect.y),
+                    width: Math.round(rect.width),
+                    height: Math.round(rect.height),
+                };
+            })(),
             disabled: Boolean(element.disabled),
         }))"""
     )
@@ -160,6 +230,58 @@ def _capture_form_controls(page, artifact_dir: Path, artifact_name: str) -> None
         page.screenshot(path=str(artifact_dir / f"{artifact_name}.png"), full_page=True)
     except Exception as exc:
         logger.warning("保存快手表单截图失败: %s", exc)
+
+
+def _capture_cover_evidence(page, artifact_dir: Optional[Path], artifact_name: str) -> None:
+    """采集封面流程的候选控件、文件 input、图片和文本坐标。"""
+    if not artifact_dir:
+        return
+    try:
+        evidence = page.evaluate(
+            """() => {
+                const pick = selector => Array.from(document.querySelectorAll(selector)).slice(0, 120).map(element => {
+                    const rect = element.getBoundingClientRect();
+                    return {
+                        tag: element.tagName.toLowerCase(),
+                        type: element.getAttribute('type'),
+                        accept: element.getAttribute('accept'),
+                        role: element.getAttribute('role'),
+                        ariaLabel: element.getAttribute('aria-label'),
+                        title: element.getAttribute('title'),
+                        dataE2e: element.getAttribute('data-e2e') || element.getAttribute('data-testid'),
+                        className: String(element.className || '').slice(0, 180),
+                        text: (element.innerText || element.textContent || '').trim().slice(0, 200),
+                        parentText: (element.parentElement?.innerText || element.parentElement?.textContent || '').trim().slice(0, 220),
+                        src: element.getAttribute('src'),
+                        disabled: Boolean(element.disabled),
+                        rect: {
+                            x: Math.round(rect.x),
+                            y: Math.round(rect.y),
+                            width: Math.round(rect.width),
+                            height: Math.round(rect.height),
+                        },
+                    };
+                });
+                return {
+                    url: location.href,
+                    title: document.title,
+                    bodyTextPreview: (document.body?.innerText || '').slice(0, 3000),
+                    coverTextElements: pick('button, [role="button"], [class*="cover"], [class*="Cover"], [class*="upload"], [class*="Upload"]'),
+                    fileInputs: pick('input[type="file"]'),
+                    visibleImages: pick('img').filter(item => item.rect.width > 20 && item.rect.height > 20),
+                };
+            }"""
+        )
+    except Exception as exc:
+        evidence = {"error": str(exc), "url": getattr(page, "url", "")}
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / f"{artifact_name}.json").write_text(
+        json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    try:
+        page.screenshot(path=str(artifact_dir / f"{artifact_name}.png"), full_page=True)
+    except Exception as exc:
+        logger.warning("保存快手封面证据截图失败: %s", exc)
 
 
 def dismiss_onboarding_if_present(page) -> bool:
@@ -275,54 +397,307 @@ def _normalize_page_text(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
 
 
+def get_copy_identity_markers(copy_text: str) -> list[str]:
+    """生成作品管理页可见列表可匹配的文案指纹，优先完整文案，再退到长前缀。"""
+    normalized = _normalize_page_text(copy_text)
+    markers: list[str] = []
+    for size in (len(normalized), 96, 64, 40, 24):
+        if size <= 0 or len(normalized) < size:
+            continue
+        marker = normalized[:size]
+        if marker and marker not in markers:
+            markers.append(marker)
+    return markers
+
+
 def is_visible_in_management(page_text: str, copy_text: str) -> bool:
     """管理页须包含本次完整文案（忽略空白）才视为作品确实可见。"""
-    marker = _normalize_page_text(copy_text)
-    return bool(marker) and marker in _normalize_page_text(page_text)
+    normalized_page = _normalize_page_text(page_text)
+    return any(marker in normalized_page for marker in get_copy_identity_markers(copy_text))
 
 
 def get_management_submission_state(page_text: str, copy_text: str) -> Optional[str]:
     """从本次作品所在的管理列表片段读取审核状态，避免被其他作品状态干扰。"""
     normalized_page = _normalize_page_text(page_text)
-    marker = _normalize_page_text(copy_text)
-    if not marker:
-        return None
-    marker_index = normalized_page.find(marker)
-    if marker_index < 0:
-        return None
-    status_window = normalized_page[marker_index + len(marker):marker_index + len(marker) + 100]
-    review_index = status_window.find("审核中")
-    published_index = status_window.find("已发布")
-    if review_index >= 0 and (published_index < 0 or review_index < published_index):
-        return MANAGEMENT_UNDER_REVIEW
-    if published_index >= 0:
-        return MANAGEMENT_PUBLISHED
-    return MANAGEMENT_VISIBLE_UNCONFIRMED
-
-
-def wait_for_management_submission_state(page, copy_text: str, timeout_seconds: int = 60) -> Optional[str]:
-    """进入作品管理并轮询本次文案及其状态；超时必须返回未确认。"""
-    try:
-        page.goto(KUAISHOU_MANAGE_URL, wait_until="domcontentloaded")
-    except Exception as exc:
-        logger.error("无法进入快手作品管理页核验发布结果: %s", exc)
-        return False
-    for _ in range(timeout_seconds):
-        if _page_login_required(page):
-            logger.error("进入作品管理页后登录态失效，无法核验发布结果")
-            return False
-        try:
-            page_text = page.locator("body").inner_text(timeout=3_000)
-        except Exception:
-            page_text = ""
-        state = get_management_submission_state(page_text, copy_text)
-        if state:
-            return state
-        page.wait_for_timeout(1_000)
+    for marker in get_copy_identity_markers(copy_text):
+        marker_index = normalized_page.find(marker)
+        if marker_index < 0:
+            continue
+        status_window = normalized_page[marker_index + len(marker):marker_index + len(marker) + 180]
+        review_index = status_window.find("审核中")
+        published_index = status_window.find("已发布")
+        if review_index >= 0 and (published_index < 0 or review_index < published_index):
+            return MANAGEMENT_UNDER_REVIEW
+        if published_index >= 0:
+            return MANAGEMENT_PUBLISHED
+        return MANAGEMENT_VISIBLE_UNCONFIRMED
     return None
 
 
-def publish_after_review(page, artifact_dir: Path, copy_text: str) -> Optional[str]:
+def _sha256_file(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    target = Path(path)
+    if not target.is_file():
+        return None
+    digest = hashlib.sha256()
+    with target.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def prepare_kuaishou_cover_upload_file(cover_path: str) -> Optional[str]:
+    """按快手页面提示生成平台专用封面副本；原始封面不改动。"""
+    source = Path(cover_path)
+    if not source.is_file():
+        logger.error("快手封面文件不存在: %s", cover_path)
+        return None
+    try:
+        from PIL import Image, ImageEnhance, ImageFilter
+
+        image = Image.open(source).convert("RGB")
+        width, height = image.size
+        if width == KUAISHOU_COVER_TARGET_WIDTH and height == KUAISHOU_COVER_TARGET_HEIGHT:
+            return str(source.resolve())
+        background_scale = max(KUAISHOU_COVER_TARGET_WIDTH / width, KUAISHOU_COVER_TARGET_HEIGHT / height)
+        background_size = (round(width * background_scale), round(height * background_scale))
+        background = image.resize(background_size, Image.Resampling.LANCZOS)
+        left = (background.width - KUAISHOU_COVER_TARGET_WIDTH) // 2
+        top = (background.height - KUAISHOU_COVER_TARGET_HEIGHT) // 2
+        background = background.crop(
+            (left, top, left + KUAISHOU_COVER_TARGET_WIDTH, top + KUAISHOU_COVER_TARGET_HEIGHT)
+        )
+        background = ImageEnhance.Brightness(background.filter(ImageFilter.GaussianBlur(18))).enhance(0.45)
+
+        foreground_scale = min(KUAISHOU_COVER_TARGET_WIDTH / width, KUAISHOU_COVER_TARGET_HEIGHT / height)
+        foreground_size = (round(width * foreground_scale), round(height * foreground_scale))
+        foreground = image.resize(foreground_size, Image.Resampling.LANCZOS)
+        paste_at = (
+            (KUAISHOU_COVER_TARGET_WIDTH - foreground.width) // 2,
+            (KUAISHOU_COVER_TARGET_HEIGHT - foreground.height) // 2,
+        )
+        background.paste(foreground, paste_at)
+        target = source.with_name(f"{source.stem}_kuaishou.jpg")
+        background.save(target, format="JPEG", quality=95, optimize=True)
+        logger.info(
+            "已生成快手专用封面副本: %s (%sx%s -> %sx%s)",
+            target,
+            width,
+            height,
+            KUAISHOU_COVER_TARGET_WIDTH,
+            KUAISHOU_COVER_TARGET_HEIGHT,
+        )
+        return str(target.resolve())
+    except Exception as exc:
+        logger.error("生成快手专用封面副本失败: %s", exc)
+        return None
+
+
+def _average_hash_for_image(path: Path) -> Optional[str]:
+    try:
+        from PIL import Image
+
+        image = Image.open(path).convert("L").resize((8, 8))
+        pixels = list(image.getdata())
+    except Exception as exc:
+        logger.debug("计算图片视觉哈希失败: %s", exc)
+        return None
+    average = sum(pixels) / len(pixels)
+    bits = "".join("1" if pixel >= average else "0" for pixel in pixels)
+    return f"{int(bits, 2):016x}"
+
+
+def _hash_distance(left: Optional[str], right: Optional[str]) -> Optional[int]:
+    if not left or not right:
+        return None
+    try:
+        return (int(left, 16) ^ int(right, 16)).bit_count()
+    except ValueError:
+        return None
+
+
+def _compare_cover_with_visible_images(evidence: dict, cover_path: Optional[str]) -> dict:
+    """对管理页可见缩略图做低成本感知哈希比较；失败只影响证据，不影响页面核验。"""
+    cover_hash = _average_hash_for_image(Path(cover_path)) if cover_path else None
+    if not cover_hash:
+        return {"coverAhash": cover_hash, "candidates": [], "bestDistance": None}
+
+    import tempfile
+    import urllib.request
+
+    comparisons = []
+    visible_images = evidence.get("visibleImages") or []
+    for image in visible_images:
+        rect = image.get("rect") or {}
+        src = image.get("src") or ""
+        if not src.startswith("https://"):
+            continue
+        if rect.get("width", 0) < 80 or rect.get("height", 0) < 80:
+            continue
+        tmp_path: Optional[Path] = None
+        try:
+            with urllib.request.urlopen(src, timeout=8) as response:
+                payload = response.read(5 * 1024 * 1024)
+            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                tmp.write(payload)
+                tmp_path = Path(tmp.name)
+            thumbnail_hash = _average_hash_for_image(tmp_path)
+        except Exception as exc:
+            logger.debug("下载或比较快手缩略图失败: %s", exc)
+            thumbnail_hash = None
+        finally:
+            if tmp_path:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        distance = _hash_distance(cover_hash, thumbnail_hash)
+        comparisons.append(
+            {
+                "src": src,
+                "rect": rect,
+                "thumbnailAhash": thumbnail_hash,
+                "hammingDistance": distance,
+                "parentText": image.get("parentText", ""),
+            }
+        )
+        if len(comparisons) >= 12:
+            break
+    comparable = [item["hammingDistance"] for item in comparisons if item["hammingDistance"] is not None]
+    return {
+        "coverAhash": cover_hash,
+        "candidates": comparisons,
+        "bestDistance": min(comparable) if comparable else None,
+    }
+
+
+def _capture_management_evidence(
+    page,
+    artifact_dir: Path,
+    artifact_name: str,
+    copy_text: str,
+    *,
+    cover_path: Optional[str] = None,
+) -> None:
+    """保存管理/主页中与本次作品有关的只读证据，避免只靠日志判断。"""
+    markers = get_copy_identity_markers(copy_text)
+    try:
+        evidence = page.evaluate(
+            """markers => {
+                const normalize = text => String(text || '').replace(/\\s+/g, '');
+                const bodyText = document.body?.innerText || '';
+                const normalizedBody = normalize(bodyText);
+                const markerHits = markers.map(marker => {
+                    const index = normalizedBody.indexOf(marker);
+                    return {
+                        marker,
+                        length: marker.length,
+                        found: index >= 0,
+                        normalizedIndex: index,
+                        snippet: index >= 0 ? normalizedBody.slice(Math.max(0, index - 80), index + marker.length + 180) : '',
+                    };
+                });
+                const visibleImages = Array.from(document.images).filter(img => {
+                    const rect = img.getBoundingClientRect();
+                    const style = getComputedStyle(img);
+                    return rect.width > 20 && rect.height > 20
+                        && style.visibility !== 'hidden' && style.display !== 'none';
+                }).slice(0, 40).map(img => {
+                    const rect = img.getBoundingClientRect();
+                    return {
+                        src: img.currentSrc || img.src || '',
+                        alt: img.alt || '',
+                        parentText: (img.parentElement?.innerText || img.parentElement?.textContent || '').trim().slice(0, 160),
+                        rect: {
+                            x: Math.round(rect.x),
+                            y: Math.round(rect.y),
+                            width: Math.round(rect.width),
+                            height: Math.round(rect.height),
+                        },
+                    };
+                });
+                return {
+                    url: location.href,
+                    title: document.title,
+                    bodyTextPreview: bodyText.slice(0, 2000),
+                    markerHits,
+                    visibleImages,
+                };
+            }""",
+            markers,
+        )
+    except Exception as exc:
+        evidence = {"error": str(exc), "markers": markers, "url": getattr(page, "url", "")}
+    evidence["localCover"] = {
+        "path": str(Path(cover_path).resolve()) if cover_path else None,
+        "sha256": _sha256_file(cover_path),
+    }
+    evidence["visualCoverComparison"] = _compare_cover_with_visible_images(evidence, cover_path)
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / f"{artifact_name}.json").write_text(
+        json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    try:
+        page.screenshot(path=str(artifact_dir / f"{artifact_name}.png"), full_page=True)
+    except Exception as exc:
+        logger.warning("保存快手管理页证据截图失败: %s", exc)
+
+
+def wait_for_management_submission_state(
+    page,
+    copy_text: str,
+    timeout_seconds: int = 60,
+    *,
+    artifact_dir: Optional[Path] = None,
+    cover_path: Optional[str] = None,
+) -> Optional[str]:
+    """进入作品管理并轮询本次文案及其状态；超时必须返回未确认。"""
+    last_error: Optional[Exception] = None
+    for url in KUAISHOU_MANAGEMENT_URL_CANDIDATES:
+        try:
+            page.goto(url, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state("networkidle", timeout=10_000)
+            except Exception:
+                pass
+        except Exception as exc:
+            last_error = exc
+            continue
+        for _ in range(timeout_seconds):
+            if _page_login_required(page):
+                logger.error("进入快手作品管理页后登录态失效，无法核验发布结果")
+                return False
+            try:
+                page_text = page.locator("body").inner_text(timeout=3_000)
+            except Exception:
+                page_text = ""
+            state = get_management_submission_state(page_text, copy_text)
+            if artifact_dir:
+                _capture_management_evidence(
+                    page,
+                    artifact_dir,
+                    "kuaishou_management_evidence",
+                    copy_text,
+                    cover_path=cover_path,
+                )
+            if state:
+                return state
+            page.wait_for_timeout(1_000)
+    if last_error:
+        logger.error("无法进入快手作品管理页核验发布结果: %s", last_error)
+    if artifact_dir:
+        _capture_management_evidence(
+            page,
+            artifact_dir,
+            "kuaishou_management_evidence",
+            copy_text,
+            cover_path=cover_path,
+        )
+    return None
+
+
+def publish_after_review(page, artifact_dir: Path, copy_text: str, *, cover_path: Optional[str] = None) -> Optional[str]:
     """执行最终发布，并返回作品管理中确认到的本次作品状态。"""
     button = get_publish_button(page)
     if not button:
@@ -332,7 +707,7 @@ def publish_after_review(page, artifact_dir: Path, copy_text: str) -> Optional[s
     _capture_form_controls(page, artifact_dir, "kuaishou_post_submit")
     if not confirmed:
         return None
-    return wait_for_management_submission_state(page, copy_text)
+    return wait_for_management_submission_state(page, copy_text, artifact_dir=artifact_dir, cover_path=cover_path)
 
 
 def upload_for_calibration(
@@ -362,12 +737,20 @@ def upload_for_calibration(
     if description_text is not None:
         capture_submission_area(page, artifact_dir)
 
-    if cover_path and Path(cover_path).is_file():
-        logger.info(f"开始应用快手封面: {cover_path}")
-        apply_cover(page, cover_path)
+    if cover_path:
+        logger.info("开始应用快手封面: %s", cover_path)
+        cover_upload_path = prepare_kuaishou_cover_upload_file(cover_path)
+        if not cover_upload_path:
+            return False
+        if not apply_cover(page, cover_upload_path, artifact_dir=artifact_dir):
+            logger.error("快手封面未能确认应用，停止后续发布以避免默认封面作品")
+            return False
+        _capture_form_controls(page, artifact_dir, "kuaishou_cover_applied")
+    else:
+        cover_upload_path = None
 
     if publish:
-        return publish_after_review(page, artifact_dir, description_text or "")
+        return publish_after_review(page, artifact_dir, description_text or "", cover_path=cover_upload_path)
     if advance_form_once:
         next_step = page.get_by_text("下一步", exact=True)
         if next_step.count() != 1:
@@ -386,14 +769,137 @@ def _find_visible_element(scope, selectors: Iterable[str], timeout_ms: int = 100
     for sel in selectors:
         try:
             el = scope.locator(sel).first
-            if el.is_visible(timeout=timeout_ms):
+            if el.is_visible(timeout=timeout_ms) is True:
                 return el
         except Exception:
             continue
     return None
 
 
-def apply_cover(page, cover_path: str) -> bool:
+def _get_file_accept(file_input) -> str:
+    try:
+        accept = file_input.get_attribute("accept") or ""
+    except Exception:
+        return ""
+    return accept if isinstance(accept, str) else ""
+
+
+def _is_cover_file_input_candidate(file_input, *, allow_untyped: bool) -> bool:
+    """避免把 JPG 封面误塞进视频上传 input；无 accept 只允许在封面弹窗内使用。"""
+    accept = _get_file_accept(file_input).lower()
+    if "video" in accept or "mp4" in accept or "mov" in accept:
+        return False
+    return bool(accept) or allow_untyped
+
+
+def _find_cover_upload_scope(page):
+    """封面文件只能在含“封面”的弹层/抽屉里注入；找不到则拒绝猜测。"""
+    return _find_visible_element(page, KUAISHOU_COVER_UPLOAD_SCOPE_SELECTORS, timeout_ms=2_000)
+
+
+def _get_inline_cover_preview_hash(page) -> Optional[str]:
+    try:
+        return page.evaluate(
+            """() => {
+                const image = document.querySelector("div[class*='cover'] img[src^='blob:'], div[class*='Cover'] img[src^='blob:']");
+                if (!image || !image.complete || image.naturalWidth <= 0 || image.naturalHeight <= 0) return null;
+                const canvas = document.createElement('canvas');
+                canvas.width = 8;
+                canvas.height = 8;
+                const context = canvas.getContext('2d', { willReadFrequently: true });
+                context.drawImage(image, 0, 0, 8, 8);
+                const pixels = context.getImageData(0, 0, 8, 8).data;
+                let values = [];
+                for (let i = 0; i < pixels.length; i += 4) {
+                    values.push(Math.round(0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2]));
+                }
+                const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+                let bits = '';
+                for (const value of values) bits += value >= average ? '1' : '0';
+                return BigInt('0b' + bits).toString(16).padStart(16, '0');
+            }"""
+        )
+    except Exception as exc:
+        logger.debug("读取快手封面预览哈希失败: %s", exc)
+        return None
+
+
+def _is_inline_cover_applied(page, cover_path_abs: str) -> bool:
+    """快手新版发表页是内联封面组件，成功证据为 toast 文案和封面区视觉匹配。"""
+    try:
+        page_text = page.locator("body").inner_text(timeout=3_000)
+    except Exception:
+        page_text = ""
+    if not isinstance(page_text, str) or "封面应用成功" not in page_text:
+        return False
+    local_hash = _average_hash_for_image(Path(cover_path_abs))
+    preview_hash = _get_inline_cover_preview_hash(page)
+    distance = _hash_distance(local_hash, preview_hash)
+    if distance is None:
+        logger.error("快手封面预览无法计算视觉哈希，不能确认封面真正替换")
+        return False
+    if distance > KUAISHOU_COVER_PREVIEW_MAX_HASH_DISTANCE:
+        logger.error("快手封面预览与上传封面不匹配，视觉哈希距离=%s", distance)
+        return False
+    logger.info("快手封面预览与上传封面匹配，视觉哈希距离=%s", distance)
+    return True
+
+
+def _click_cover_entry(cover_entry) -> None:
+    """优先点击封面预览卡片中心，避免点到左侧标签文本导致没有打开编辑器。"""
+    try:
+        cover_entry.click(timeout=2_000, position={"x": 80, "y": 60})
+    except Exception:
+        cover_entry.click(timeout=2_000)
+
+
+def _set_cover_file_in_scope(scope, cover_path_abs: str, *, allow_untyped_inputs: bool = True) -> bool:
+    """优先选择明确 image accept 的 input；弹层内才允许无 accept 的文件 input。"""
+    try:
+        image_inputs = scope.locator(KUAISHOU_COVER_IMAGE_INPUT_SELECTOR)
+        for i in range(image_inputs.count()):
+            file_input = image_inputs.nth(i)
+            if not _is_cover_file_input_candidate(file_input, allow_untyped=False):
+                continue
+            file_input.set_input_files(cover_path_abs, timeout=2_000)
+            logger.info("已向快手封面 image input 注入文件")
+            return True
+    except Exception as exc:
+        logger.debug("快手封面 image input 注入异常: %s", exc)
+
+    try:
+        file_inputs = scope.locator("input[type='file']")
+        for i in range(file_inputs.count()):
+            file_input = file_inputs.nth(i)
+            if not _is_cover_file_input_candidate(file_input, allow_untyped=allow_untyped_inputs):
+                logger.warning("跳过疑似视频上传 input，accept=%s", _get_file_accept(file_input))
+                continue
+            file_input.set_input_files(cover_path_abs, timeout=2_000)
+            logger.info("已向快手封面弹层内文件 input 注入文件")
+            return True
+    except Exception as exc:
+        logger.debug("快手封面弹层 input 注入异常: %s", exc)
+    return False
+
+
+def _confirm_cover_upload(scope, page, timeout_seconds: int = 10) -> bool:
+    for _ in range(timeout_seconds * 2):
+        confirm_btn = _find_visible_element(scope, KUAISHOU_COVER_COMMIT_SELECTORS, timeout_ms=500)
+        if confirm_btn:
+            try:
+                if confirm_btn.is_enabled():
+                    confirm_btn.click(timeout=2_000)
+                    logger.info("快手封面已确认应用")
+                    page.wait_for_timeout(2_000)
+                    return True
+            except Exception as exc:
+                logger.debug("快手封面确认按钮点击失败: %s", exc)
+        page.wait_for_timeout(500)
+    logger.error("快手封面确认按钮未在 %s 秒内变为可用", timeout_seconds)
+    return False
+
+
+def apply_cover(page, cover_path: str, *, artifact_dir: Optional[Path] = None) -> bool:
     """应用快手封面上传。"""
     if not cover_path or not Path(cover_path).is_file():
         logger.error("快手封面文件不存在: %s", cover_path)
@@ -402,72 +908,63 @@ def apply_cover(page, cover_path: str) -> bool:
         logger.info("开始应用快手封面: %s", cover_path)
         cover_path_abs = str(Path(cover_path).resolve())
 
-        # 1. 尝试寻找设置封面/上传封面入口
-        entry_selectors = [
-            "text=编辑封面", "text=设置封面", "text=更换封面", "text=上传封面", 
-            "button:has-text('封面')", ".cover-edit-btn", ".cover-upload-btn"
-        ]
-        cover_entry = _find_visible_element(page, entry_selectors)
+        cover_entry = _find_visible_element(page, KUAISHOU_COVER_ENTRY_SELECTORS)
+        if not cover_entry:
+            logger.error("未找到快手封面设置入口，拒绝全局猜测文件 input")
+            return False
 
-        if cover_entry:
-            cover_entry.click(timeout=2000)
-            page.wait_for_timeout(1000)
+        _click_cover_entry(cover_entry)
+        page.wait_for_timeout(1_000)
+        _capture_cover_evidence(page, artifact_dir, "kuaishou_cover_entry_opened")
 
-            # 点击本地上传 Tab (如果有)
-            tab_el = _find_visible_element(page, ["text=本地上传", "text=上传封面", ".upload-tab"])
-            if tab_el:
-                tab_el.click(timeout=1000)
-                logger.info("已点击快手'本地上传' Tab")
-                page.wait_for_timeout(500)
-
-            # 2. 注入文件：优先直接通过 set_input_files 注入
-            injected = False
-            try:
-                inputs = page.locator("input[type='file']")
-                for i in range(inputs.count()):
-                    try:
-                        inputs.nth(i).set_input_files(cover_path_abs, timeout=2000)
-                        injected = True
-                        logger.info("成功直接注入快手封面文件")
-                        break
-                    except Exception:
-                        continue
-            except Exception as e:
-                logger.debug("快手直接 input 注入异常: %s", e)
-
-            if not injected:
-                upload_area = _find_visible_element(page, ["text=点击上传", ".upload-btn", "div:has-text('点击上传')"])
-                if upload_area:
-                    try:
-                        with page.expect_file_chooser(timeout=4000) as fc_info:
-                            upload_area.click(timeout=2000)
-                        fc_info.value.set_files(cover_path_abs)
-                        injected = True
-                        logger.info("已通过点击上传区域注入快手封面文件")
-                    except Exception as exc:
-                        logger.debug("快手点击上传区域触发 file_chooser 失败: %s", exc)
-
-            if injected:
-                page.wait_for_timeout(2000)
-                confirm_btn = _find_visible_element(page, ["text=确定", "text=完成", "text=确认", ".confirm-btn"])
-                if confirm_btn and confirm_btn.is_enabled():
-                    confirm_btn.click(timeout=2000)
-                    logger.info("快手封面已确认应用")
-                    page.wait_for_timeout(2000)
-                return True
-        else:
-            logger.warning("未找到快手封面设置入口，尝试直接注入 input file")
-            inputs = page.locator("input[type='file']")
-            for i in range(inputs.count()):
-                try:
-                    inputs.nth(i).set_input_files(cover_path_abs, timeout=1000)
-                    logger.info("强制注入快手封面文件成功")
-                    page.wait_for_timeout(2000)
+        cover_scope = _find_cover_upload_scope(page)
+        if not cover_scope:
+            logger.info("未找到快手封面弹层，尝试页面内明确 image input 封面控件")
+            if _set_cover_file_in_scope(page, cover_path_abs, allow_untyped_inputs=False):
+                page.wait_for_timeout(2_000)
+                _capture_cover_evidence(page, artifact_dir, "kuaishou_cover_after_input_injection")
+                cover_scope = _find_cover_upload_scope(page)
+                if cover_scope:
+                    return _confirm_cover_upload(cover_scope, page)
+                if _is_inline_cover_applied(page, cover_path_abs):
+                    logger.info("快手内联封面预览已确认应用")
+                    page.wait_for_timeout(KUAISHOU_COVER_SETTLE_MS)
                     return True
-                except Exception:
-                    continue
-    except Exception as e:
-        logger.warning(f"快手封面应用过程发生异常: {e}")
+                logger.error("快手封面 image input 已注入，但未出现可确认的封面提交控件")
+                return False
+            logger.error("未找到快手封面上传弹层或明确 image input，拒绝向页面全局 input 注入封面")
+            return False
+
+        tab_el = _find_visible_element(cover_scope, ["text=本地上传", "text=上传封面", ".upload-tab"])
+        if tab_el:
+            tab_el.click(timeout=1_000)
+            logger.info("已点击快手'本地上传' Tab")
+            page.wait_for_timeout(500)
+            _capture_cover_evidence(page, artifact_dir, "kuaishou_cover_upload_tab_opened")
+
+        if _set_cover_file_in_scope(cover_scope, cover_path_abs):
+            page.wait_for_timeout(2_000)
+            _capture_cover_evidence(page, artifact_dir, "kuaishou_cover_after_input_injection")
+            if not _confirm_cover_upload(cover_scope, page):
+                return False
+            return _is_inline_cover_applied(page, cover_path_abs)
+
+        upload_area = _find_visible_element(cover_scope, ["text=点击上传", ".upload-btn", "div:has-text('点击上传')"])
+        if upload_area:
+            try:
+                with page.expect_file_chooser(timeout=4_000) as fc_info:
+                    upload_area.click(timeout=2_000)
+                fc_info.value.set_files(cover_path_abs)
+                logger.info("已通过封面弹层上传区域注入快手封面文件")
+                page.wait_for_timeout(2_000)
+                _capture_cover_evidence(page, artifact_dir, "kuaishou_cover_after_file_chooser")
+                if not _confirm_cover_upload(cover_scope, page):
+                    return False
+                return _is_inline_cover_applied(page, cover_path_abs)
+            except Exception as exc:
+                logger.debug("快手封面弹层上传区域触发 file_chooser 失败: %s", exc)
+    except Exception as exc:
+        logger.warning("快手封面应用过程发生异常: %s", exc)
     return False
 
 
@@ -494,9 +991,20 @@ def _wait_for_manual_login(page, timeout_seconds: int) -> bool:
     return False
 
 
-def verify_submission_in_management(page, copy_text: str) -> int:
+def verify_submission_in_management(
+    page,
+    copy_text: str,
+    *,
+    artifact_dir: Optional[Path] = None,
+    cover_path: Optional[str] = None,
+) -> int:
     """只读核对当前文案在作品管理中的最终状态，绝不上传或提交。"""
-    submission_state = wait_for_management_submission_state(page, copy_text)
+    submission_state = wait_for_management_submission_state(
+        page,
+        copy_text,
+        artifact_dir=artifact_dir,
+        cover_path=cover_path,
+    )
     if submission_state == MANAGEMENT_PUBLISHED:
         logger.info("快手作品管理已确认本次作品为已发布")
         return EXIT_OK
@@ -576,7 +1084,12 @@ def run_uploader(
                 copy_text, removed_tags = adapt_copy_for_kuaishou(copy_text)
                 if removed_tags:
                     logger.info("快手审核核对使用已适配的 %s 标签文案", KUAISHOU_MAX_TOPIC_TAGS)
-                return verify_submission_in_management(page, copy_text)
+                return verify_submission_in_management(
+                    page,
+                    copy_text,
+                    artifact_dir=state_file.parent,
+                    cover_path=cover_path,
+                )
 
             # 已实测为唯一 input[type=file][accept*=video]；真正传输前仍须由上层
             # 获得明确授权，并在上传后的表单上继续校准标题、简介及草稿/发布按钮。

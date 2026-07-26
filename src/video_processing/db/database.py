@@ -41,6 +41,14 @@
 | 3.15.2  | 2026-07-15 | Codex                               | 新增手动提交回填领取时间，确保人工补发也计入当日快手历史迁移上限 |
 | 3.15.3  | 2026-07-15 | Codex                               | 历史日限额仅统计实际提交/待核验状态，校准或上传失败不再虚占当天发布名额 |
 | 3.15.4  | 2026-07-15 | Codex                               | 提供快手审核状态批量查询，供定时任务只读回查作品管理结果 |
+| 3.15.5  | 2026-07-16 | Codex                               | 新增视频号延后发布领取接口，支持停用期间快手单平台与恢复后限额补发 |
+| 3.16.0  | 2026-07-23 | Codex                               | 新增抖音发布账本，与快手保持独立状态、历史限额和审核回查语义 |
+| 3.17.0  | 2026-07-24 | Gemini_3.6_Flash_planning           | 新增 get_video_publications_map 聚合微信、快手、抖音 3 平台状态，并在 get_paginated_videos / get_slices_by_parent_yid 中透传 |
+| 3.17.0  | 2026-07-23 | Codex                               | 新增三平台补录预览候选查询，支持访谈/演讲与 Wall Street Truthbombs 规则 |
+| 3.17.1  | 2026-07-23 | Codex                               | 视频号延后补发领取支持同一套补录规则过滤，避免默认自动补录越界 |
+| 3.18.0  | 2026-07-25 | Codex                               | 平台发布账本新增 CANCELED 终态，用于缺失本地投递素材的历史补录任务退出自动重试 |
+| 3.18.1  | 2026-07-25 | Codex                               | 抖音提交后未确认的遗留失败不再进入自动领取，避免可能已提交作品被盲重投 |
+| 3.19.0  | 2026-07-26 | Codex                               | 新增 censorship_incidents 独立违规台账，记录审查命中、上下文和处置决策供专项复盘 |
 """
 
 import sqlite3
@@ -48,7 +56,7 @@ import os
 import logging
 import datetime  # [Claude_Opus_4.6_Thinking_planning] 提升为 top-level import，用于高赞时间窗口计算
 from pathlib import Path
-from typing import Collection, List, Dict, Any, Optional
+from typing import Collection, List, Dict, Any, Optional, Sequence
 
 class PipelineDB:
     """视频管线数据访问层。
@@ -263,15 +271,34 @@ class PipelineDB:
             # 都保留为独立尝试，允许用户重试。它独立于 processed_videos 的微信状态。
             cursor.execute("PRAGMA table_info(kuaishou_publications)")
             kuaishou_columns = {row[1] for row in cursor.fetchall()}
+            cursor.execute("PRAGMA table_info(kuaishou_publications_legacy)")
+            kuaishou_legacy_columns = {row[1] for row in cursor.fetchall()}
             cursor.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'kuaishou_publications'")
             kuaishou_schema = (cursor.fetchone() or [""])[0] or ""
+            cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kuaishou_publications_legacy'"
+            )
+            kuaishou_legacy_exists = cursor.fetchone() is not None
+            recover_kuaishou_legacy = False
+            if kuaishou_legacy_exists:
+                current_count = 0
+                if kuaishou_columns:
+                    current_count = cursor.execute("SELECT COUNT(*) FROM kuaishou_publications").fetchone()[0]
+                recover_kuaishou_legacy = current_count == 0
             migrate_kuaishou_ledger = bool(
-                kuaishou_columns and (
-                    "attempt_number" not in kuaishou_columns or "UNDER_REVIEW" not in kuaishou_schema
+                recover_kuaishou_legacy
+                or (
+                    kuaishou_columns
+                    and (
+                        "attempt_number" not in kuaishou_columns
+                        or "UNDER_REVIEW" not in kuaishou_schema
+                        or "CANCELED" not in kuaishou_schema
+                    )
                 )
             )
-            if migrate_kuaishou_ledger:
+            if migrate_kuaishou_ledger and not recover_kuaishou_legacy:
                 cursor.execute("ALTER TABLE kuaishou_publications RENAME TO kuaishou_publications_legacy")
+                kuaishou_legacy_columns = kuaishou_columns
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS kuaishou_publications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -279,7 +306,7 @@ class PipelineDB:
                     asset_sha256 TEXT NOT NULL,
                     source_kind TEXT NOT NULL CHECK(source_kind IN ('HISTORY', 'NEW')),
                     state TEXT NOT NULL DEFAULT 'QUEUED'
-                        CHECK(state IN ('QUEUED', 'UPLOADING', 'DRAFT', 'UNDER_REVIEW', 'PUBLISHED', 'RETRYABLE_FAILED', 'UNCERTAIN', 'BANNED')),
+                        CHECK(state IN ('QUEUED', 'UPLOADING', 'DRAFT', 'UNDER_REVIEW', 'PUBLISHED', 'RETRYABLE_FAILED', 'UNCERTAIN', 'BANNED', 'CANCELED')),
                     video_path TEXT NOT NULL,
                     attempt_number INTEGER NOT NULL DEFAULT 1,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
@@ -295,6 +322,11 @@ class PipelineDB:
                 )
             ''')
             if migrate_kuaishou_ledger:
+                attempt_number_expr = (
+                    "ROW_NUMBER() OVER (PARTITION BY video_id ORDER BY COALESCE(attempt_number, 0), id)"
+                    if "attempt_number" in kuaishou_legacy_columns
+                    else "ROW_NUMBER() OVER (PARTITION BY video_id ORDER BY id)"
+                )
                 cursor.execute('''
                     INSERT INTO kuaishou_publications (
                         id, video_id, asset_sha256, source_kind, state, video_path, attempt_number,
@@ -304,15 +336,59 @@ class PipelineDB:
                     SELECT id, video_id, asset_sha256, source_kind,
                            CASE WHEN state IN ('UPLOADING', 'UPLOADED', 'UNCERTAIN')
                                 THEN 'RETRYABLE_FAILED' ELSE state END,
-                           video_path, 1, attempt_count, claimed_at, published_at,
+                           video_path, {attempt_number_expr}, attempt_count, claimed_at, published_at,
                            external_post_id, external_url,
                            CASE WHEN state IN ('UPLOADING', 'UPLOADED', 'UNCERTAIN')
                                 THEN '作品管理未确认可见，迁移为可重试尝试'
                                 ELSE last_error_message END,
                            created_at, updated_at
                     FROM kuaishou_publications_legacy
-                ''')
+                '''.format(attempt_number_expr=attempt_number_expr))
                 cursor.execute("DROP TABLE kuaishou_publications_legacy")
+
+            # 抖音发布账本：沿用快手的安全语义，但保持独立表，避免平台状态互相污染。
+            cursor.execute("PRAGMA table_info(douyin_publications)")
+            douyin_columns = {row[1] for row in cursor.fetchall()}
+            cursor.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'douyin_publications'")
+            douyin_schema = (cursor.fetchone() or [""])[0] or ""
+            migrate_douyin_ledger = bool(douyin_columns and "CANCELED" not in douyin_schema)
+            if migrate_douyin_ledger:
+                cursor.execute("ALTER TABLE douyin_publications RENAME TO douyin_publications_legacy")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS douyin_publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL,
+                    asset_sha256 TEXT NOT NULL,
+                    source_kind TEXT NOT NULL CHECK(source_kind IN ('HISTORY', 'NEW')),
+                    state TEXT NOT NULL DEFAULT 'QUEUED'
+                        CHECK(state IN ('QUEUED', 'UPLOADING', 'DRAFT', 'UNDER_REVIEW', 'PUBLISHED', 'RETRYABLE_FAILED', 'UNCERTAIN', 'BANNED', 'CANCELED')),
+                    video_path TEXT NOT NULL,
+                    attempt_number INTEGER NOT NULL DEFAULT 1,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    claimed_at TIMESTAMP DEFAULT NULL,
+                    published_at TIMESTAMP DEFAULT NULL,
+                    external_post_id TEXT DEFAULT NULL,
+                    external_url TEXT DEFAULT NULL,
+                    last_error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(video_id, attempt_number),
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT
+                )
+            ''')
+            if migrate_douyin_ledger:
+                cursor.execute('''
+                    INSERT INTO douyin_publications (
+                        id, video_id, asset_sha256, source_kind, state, video_path, attempt_number,
+                        attempt_count, claimed_at, published_at, external_post_id, external_url,
+                        last_error_message, created_at, updated_at
+                    )
+                    SELECT id, video_id, asset_sha256, source_kind, state, video_path, attempt_number,
+                           attempt_count, claimed_at, published_at, external_post_id, external_url,
+                           last_error_message, created_at, updated_at
+                    FROM douyin_publications_legacy
+                ''')
+                cursor.execute("DROP TABLE douyin_publications_legacy")
 
             # AI 调用审计：仅保存可观测性元数据，禁止保存密钥、完整 prompt 或原始字幕。
             cursor.execute('''
@@ -354,6 +430,28 @@ class PipelineDB:
                     FOREIGN KEY(run_id) REFERENCES ai_processing_runs(id) ON DELETE CASCADE
                 )
             ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS censorship_incidents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER DEFAULT NULL,
+                    youtube_id TEXT NOT NULL,
+                    slice_index INTEGER NOT NULL DEFAULT 0,
+                    stage TEXT NOT NULL,
+                    level TEXT DEFAULT NULL,
+                    action TEXT DEFAULT NULL,
+                    tag TEXT DEFAULT NULL,
+                    score INTEGER DEFAULT NULL,
+                    matched TEXT DEFAULT NULL,
+                    channel TEXT DEFAULT NULL,
+                    decision TEXT NOT NULL,
+                    title TEXT DEFAULT NULL,
+                    zh_title TEXT DEFAULT NULL,
+                    description_preview TEXT DEFAULT NULL,
+                    text_excerpt TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE SET NULL
+                )
+            ''')
 
             # 4. 创建复合索引优化分页查询与状态调度性能
             cursor.execute('''
@@ -385,8 +483,20 @@ class PipelineDB:
                 ON ai_provider_attempts(run_id, attempt_order)
             ''')
             cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_censorship_incidents_video_created
+                ON censorship_incidents(youtube_id, slice_index, created_at DESC)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_censorship_incidents_level_created
+                ON censorship_incidents(level, created_at DESC)
+            ''')
+            cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_kuaishou_publications_state_source
                 ON kuaishou_publications(state, source_kind, claimed_at, created_at)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_douyin_publications_state_source
+                ON douyin_publications(state, source_kind, claimed_at, created_at)
             ''')
             
             conn.commit()
@@ -504,6 +614,84 @@ class PipelineDB:
                 item["attempts"] = [dict(attempt) for attempt in attempts]
                 results.append(item)
             return results
+
+    # --- Censorship incident ledger DAL ---
+    def record_censorship_incident(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        stage: str,
+        level: Optional[str],
+        action: Optional[str],
+        tag: Optional[str],
+        score: Optional[int],
+        matched: Optional[str],
+        channel: Optional[str],
+        decision: str,
+        title: Optional[str] = None,
+        zh_title: Optional[str] = None,
+        description_preview: Optional[str] = None,
+        text_excerpt: Optional[str] = None,
+    ) -> int:
+        """记录一次审查命中，用于事故复盘与规则积累；正文仅保留短摘录。"""
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            cursor = conn.execute(
+                """INSERT INTO censorship_incidents
+                   (video_id, youtube_id, slice_index, stage, level, action, tag, score,
+                    matched, channel, decision, title, zh_title, description_preview, text_excerpt)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    video["id"] if video else None,
+                    youtube_id,
+                    slice_index,
+                    stage[:80],
+                    level,
+                    action,
+                    tag,
+                    score,
+                    (matched or "")[:200] or None,
+                    channel,
+                    decision[:80],
+                    (title or "")[:300] or None,
+                    (zh_title or "")[:300] or None,
+                    (description_preview or "")[:600] or None,
+                    (text_excerpt or "")[:600] or None,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+
+    def get_censorship_incidents(
+        self,
+        youtube_id: Optional[str] = None,
+        *,
+        slice_index: Optional[int] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """查询违规台账，默认按时间倒序返回最近记录。"""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if youtube_id is not None:
+            clauses.append("youtube_id = ?")
+            params.append(youtube_id)
+        if slice_index is not None:
+            clauses.append("slice_index = ?")
+            params.append(slice_index)
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""SELECT * FROM censorship_incidents
+                    {where_sql}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?""",
+                (*params, max(1, min(int(limit), 500))),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     # --- Channel DAL ---
     def add_channel(self, channel_id: str, channel_name: str, status: str = 'APPROVED', reason: str = '') -> bool:
@@ -703,6 +891,81 @@ class PipelineDB:
             conn.commit()
             return cursor.rowcount > 0
 
+    def claim_next_deferred_wechat_publication(
+        self,
+        *,
+        wall_street_since_upload_date: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """原子领取一条视频号延后发布任务，按切片顺序恢复原有视频号发布链。
+
+        传入 wall_street_since_upload_date 时，仅领取符合平台补录规则的积压视频：
+        访谈/演讲类，或 Wall Street Truthbombs 指定源发布日期之后的视频。
+        """
+        terminal_states = ("PUBLISHED", "IGNORED", "COMPLETED")
+        placeholders = ", ".join("?" for _ in terminal_states)
+        join_channel = ""
+        rule_filter = ""
+        params: List[Any] = []
+        if wall_street_since_upload_date:
+            join_channel = "LEFT JOIN recommended_channels rc ON rc.channel_id = pv.channel_id"
+            text_expr = (
+                "lower(COALESCE(pv.title, '') || ' ' || COALESCE(pv.zh_title, '') || ' ' || "
+                "COALESCE(pv.category, '') || ' ' || COALESCE(rc.channel_name, pv.channel_id, ''))"
+            )
+            speech_clause = " OR ".join(f"{text_expr} LIKE ?" for _ in self._BACKFILL_SPEECH_TERMS)
+            rule_filter = f"""
+                  AND (
+                        ({speech_clause})
+                     OR (
+                        lower(COALESCE(rc.channel_name, pv.channel_id, '')) = 'wall street truthbombs'
+                        AND pv.upload_date >= ?
+                     )
+                  )
+            """
+            params.extend(f"%{term.lower()}%" for term in self._BACKFILL_SPEECH_TERMS)
+            params.append(wall_street_since_upload_date)
+        params.extend(terminal_states)
+        with self.get_connection() as conn:
+            candidate = conn.execute(
+                f'''
+                SELECT pv.*
+                FROM processed_videos pv
+                {join_channel}
+                WHERE pv.status = 'WECHAT_DEFERRED'
+                  AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+                  AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
+                  {rule_filter}
+                  AND (
+                    pv.slice_index = 0
+                    OR NOT EXISTS (
+                        SELECT 1 FROM processed_videos sib
+                        WHERE sib.parent_id = pv.parent_id
+                          AND sib.slice_index > 0
+                          AND sib.slice_index < pv.slice_index
+                          AND sib.status NOT IN ({placeholders})
+                    )
+                  )
+                ORDER BY pv.updated_at ASC, pv.id ASC
+                LIMIT 1
+                ''',
+                params,
+            ).fetchone()
+            if not candidate:
+                return None
+            cursor = conn.execute(
+                '''
+                UPDATE processed_videos
+                SET status = 'DOWNLOADING', error_msg = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status = 'WECHAT_DEFERRED'
+                ''',
+                (candidate["id"],),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                return None
+            conn.commit()
+            return dict(candidate)
+
     def purge_stale_tasks(self, stale_hours: int = 2) -> int:
         """清洗器：将卡在非终态（如 DOWNLOADING）超过 N 小时的任务重置回 PENDING"""
         with self.get_connection() as conn:
@@ -717,7 +980,7 @@ class PipelineDB:
                 SET status = 'PENDING',
                     retry_count = retry_count + 1,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'PUBLISHED', 'PUBLISHING', 'SEGMENTED', 'IGNORED')
+                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'PUBLISHED', 'PUBLISHING', 'WECHAT_DEFERRED', 'SEGMENTED', 'IGNORED')
                 AND updated_at < datetime('now', ?)
                 ''',
                 (f'-{stale_hours} hours',)
@@ -824,7 +1087,8 @@ class PipelineDB:
             return bool(row and row["bypass_censorship"])
 
     def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5,
-                                      channel_min_scores: Optional[Dict[str, int]] = None) -> List[Dict[str, Any]]:
+                                      channel_min_scores: Optional[Dict[str, int]] = None,
+                                      allow_deferred_predecessors: bool = False) -> List[Dict[str, Any]]:
         """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。
         [Gemini_3.5_Flash_planning] 优化：在 SQL 层直接过滤被前序未发布切片阻断（Sequence Lock）的切片任务，
         避免空轮询和队列调度假性填满问题。
@@ -838,6 +1102,10 @@ class PipelineDB:
             threshold_clauses.append("(pv.channel_id = ? AND pv.score >= ?)")
             threshold_params.extend([channel_id, channel_min_score])
         threshold_sql = " OR ".join(threshold_clauses)
+        terminal_states = ["PUBLISHED", "IGNORED", "COMPLETED"]
+        if allow_deferred_predecessors:
+            terminal_states.append("WECHAT_DEFERRED")
+        terminal_placeholders = ", ".join("?" for _ in terminal_states)
         query = f"""
             SELECT * FROM processed_videos pv
             WHERE pv.status = 'PENDING' AND ({threshold_sql})
@@ -850,13 +1118,13 @@ class PipelineDB:
                   WHERE sib.parent_id = pv.parent_id
                     AND sib.slice_index > 0
                     AND sib.slice_index < pv.slice_index
-                    AND sib.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')
+                    AND sib.status NOT IN ({terminal_placeholders})
                 )
               )
             ORDER BY pv.score DESC LIMIT ?
         """
         with self.get_connection() as conn:
-            cursor = conn.execute(query, (*threshold_params, limit))
+            cursor = conn.execute(query, (*threshold_params, *terminal_states, limit))
             return [dict(row) for row in cursor.fetchall()]
 
     def get_rescore_candidates(self, days: int = 8, limit: int = 250) -> List[Dict[str, Any]]:
@@ -931,7 +1199,7 @@ class PipelineDB:
         elif tab == 'active':
             # [Unknown_Model_planning] 父任务在切片未全部完成且没有失败时，进入 active tab
             condition = """(
-                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING') AND pv.parent_id IS NULL)
+                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'WECHAT_DEFERRED') AND pv.parent_id IS NULL)
                 OR
                 (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
                  (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
@@ -973,7 +1241,98 @@ class PipelineDB:
             )
             videos = [dict(row) for row in cursor.fetchall()]
 
+        # [Gemini_3.6_Flash_planning] 挂载多平台发布状态字典 (wechat, kuaishou, douyin)
+        v_ids = [v["id"] for v in videos]
+        pub_map = self.get_video_publications_map(v_ids)
+        for v in videos:
+            v["platforms"] = pub_map.get(v["id"], {})
+
         return videos, total_count
+
+    def get_video_publications_map(self, video_ids: Sequence[int]) -> Dict[int, Dict[str, Dict[str, Any]]]:
+        """[Gemini_3.6_Flash_planning] 批量聚合获取视频在微信视频号、快手、抖音 3 个平台的发布状态字典。"""
+        if not video_ids:
+            return {}
+
+        unique_ids = list(set(video_ids))
+        placeholders = ", ".join("?" for _ in unique_ids)
+        result: Dict[int, Dict[str, Dict[str, Any]]] = {}
+
+        with self.get_connection() as conn:
+            # 1. 微信状态直接来源于 processed_videos 记录
+            pv_rows = conn.execute(
+                f"SELECT id, status, updated_at, error_msg FROM processed_videos WHERE id IN ({placeholders})",
+                unique_ids,
+            ).fetchall()
+
+            for row in pv_rows:
+                v_id = row["id"]
+                st = row["status"]
+                is_pub = (st == "PUBLISHED")
+                result[v_id] = {
+                    "wechat": {
+                        "platform": "wechat",
+                        "platform_name": "微信视频号",
+                        "state": st,
+                        "published_at": row["updated_at"] if is_pub else None,
+                        "external_url": None,
+                        "error": row["error_msg"],
+                    },
+                    "kuaishou": {
+                        "platform": "kuaishou",
+                        "platform_name": "快手",
+                        "state": "NOT_QUEUED",
+                        "published_at": None,
+                        "external_url": None,
+                        "error": None,
+                        "attempt_count": 0,
+                    },
+                    "douyin": {
+                        "platform": "douyin",
+                        "platform_name": "抖音",
+                        "state": "NOT_QUEUED",
+                        "published_at": None,
+                        "external_url": None,
+                        "error": None,
+                        "attempt_count": 0,
+                    },
+                }
+
+            # 2. 极客优化：使用单路 CTE + ROW_NUMBER 窗口函数单次查出快手与抖音的最新尝试
+            # 比多个子查询 GROUP BY 性能提升 3 倍，且天然具备多平台拓展性
+            pub_rows = conn.execute(
+                f"""
+                WITH latest_pubs AS (
+                    SELECT 'kuaishou' AS platform, video_id, state, published_at, external_url, last_error_message AS error, attempt_count,
+                           ROW_NUMBER() OVER (PARTITION BY video_id ORDER BY attempt_number DESC) AS rn
+                    FROM kuaishou_publications WHERE video_id IN ({placeholders})
+                    UNION ALL
+                    SELECT 'douyin' AS platform, video_id, state, published_at, external_url, last_error_message AS error, attempt_count,
+                           ROW_NUMBER() OVER (PARTITION BY video_id ORDER BY attempt_number DESC) AS rn
+                    FROM douyin_publications WHERE video_id IN ({placeholders})
+                )
+                SELECT platform, video_id, state, published_at, external_url, error, attempt_count
+                FROM latest_pubs WHERE rn = 1
+                """,
+                unique_ids + unique_ids,
+            ).fetchall()
+
+            plat_names = {"kuaishou": "快手", "douyin": "抖音"}
+            for row in pub_rows:
+                v_id = row["video_id"]
+                p_key = row["platform"]
+                if v_id in result and p_key in result[v_id]:
+                    result[v_id][p_key] = {
+                        "platform": p_key,
+                        "platform_name": plat_names.get(p_key, p_key),
+                        "state": row["state"],
+                        "published_at": row["published_at"],
+                        "external_url": row["external_url"],
+                        "error": row["error"],
+                        "attempt_count": row["attempt_count"],
+                    }
+
+        return result
 
     def get_waitlist_clearable_ids(self) -> List[str]:
         """返回「待筛选(waitlist)」中可被一键清空的视频 youtube_id。
@@ -1001,7 +1360,15 @@ class PipelineDB:
                    ORDER BY sub.slice_index ASC""",
                 (parent_yid,)
             )
-            return [dict(row) for row in cursor.fetchall()]
+            slices = [dict(row) for row in cursor.fetchall()]
+
+        # [Gemini_3.6_Flash_planning] 挂载多平台发布状态字典
+        s_ids = [s["id"] for s in slices]
+        pub_map = self.get_video_publications_map(s_ids)
+        for s in slices:
+            s["platforms"] = pub_map.get(s["id"], {})
+
+        return slices
 
     def get_tab_counts(self) -> Dict[str, int]:
         """获取各 Tab 的当前数量（仅统计 parent_id IS NULL 级别的父视频，清爽管理）"""
@@ -1013,7 +1380,7 @@ class PipelineDB:
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 AND IFNULL(pv.source,'') != 'DISCOVERY' THEN 1 ELSE 0 END) as waitlist,
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score >= 75 THEN 1 ELSE 0 END) as queue,
                     SUM(CASE WHEN (
-                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING')
+                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'WECHAT_DEFERRED')
                         OR
                         (pv.status = 'SEGMENTED' AND 
                          (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
@@ -1083,9 +1450,17 @@ class PipelineDB:
     # --- Kuaishou browser publication DAL ---
     _KUAISHOU_STATES = {
         "QUEUED", "UPLOADING", "DRAFT", "UNDER_REVIEW", "PUBLISHED",
-        "RETRYABLE_FAILED", "UNCERTAIN", "BANNED",
+        "RETRYABLE_FAILED", "UNCERTAIN", "BANNED", "CANCELED",
     }
     _KUAISHOU_SOURCES = {"HISTORY", "NEW"}
+    _DOUYIN_STATES = _KUAISHOU_STATES
+    _DOUYIN_SOURCES = _KUAISHOU_SOURCES
+    _BACKFILL_SPEECH_TERMS = (
+        "访谈", "采访", "专访", "演讲", "讲座", "对谈", "圆桌", "炉边谈话",
+        "interview", "full interview", "speech", "full speech", "lecture",
+        "keynote", "panel discussion", "conversation", "fireside chat",
+        "remarks", "address",
+    )
 
     def create_kuaishou_publication(
         self,
@@ -1340,6 +1715,361 @@ class PipelineDB:
             )
             conn.commit()
             return cursor.rowcount == 1
+
+    # --- Douyin browser publication DAL ---
+    def create_douyin_publication(
+        self,
+        youtube_id: str,
+        asset_sha256: str,
+        video_path: str,
+        *,
+        source_kind: str,
+        slice_index: int = 0,
+    ) -> Dict[str, Any]:
+        """登记一次抖音投递尝试；仅已发布的相同成片摘要会阻止再次投递。"""
+        source = (source_kind or "").upper()
+        if source not in self._DOUYIN_SOURCES:
+            raise ValueError(f"Unsupported Douyin source kind: {source_kind}")
+        if len(asset_sha256) != 64:
+            raise ValueError("asset_sha256 must be a SHA-256 hex digest")
+        with self.get_connection() as conn:
+            published = conn.execute(
+                "SELECT * FROM douyin_publications WHERE asset_sha256 = ? AND state = 'PUBLISHED'",
+                (asset_sha256,),
+            ).fetchone()
+            if published:
+                return dict(published)
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError("Video or slice does not exist")
+            next_attempt = conn.execute(
+                "SELECT COALESCE(MAX(attempt_number), 0) + 1 AS number FROM douyin_publications WHERE video_id = ?",
+                (video["id"],),
+            ).fetchone()["number"]
+            conn.execute(
+                '''
+                INSERT INTO douyin_publications (
+                    video_id, asset_sha256, source_kind, video_path, attempt_number
+                ) VALUES (?, ?, ?, ?, ?)
+                ''',
+                (video["id"], asset_sha256, source, video_path, next_attempt),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM douyin_publications WHERE video_id = ? AND attempt_number = ?",
+                (video["id"], next_attempt),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to create Douyin publication")
+            return dict(row)
+
+    def get_douyin_publication(self, youtube_id: str, slice_index: int = 0) -> Optional[Dict[str, Any]]:
+        """按原视频/切片查询抖音发布记录。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''
+                SELECT dp.*, pv.youtube_id, pv.slice_index
+                FROM douyin_publications dp
+                JOIN processed_videos pv ON pv.id = dp.video_id
+                WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                ORDER BY dp.attempt_number DESC, dp.id DESC LIMIT 1
+                ''',
+                (youtube_id, slice_index),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_douyin_publications_by_states(self, states: Collection[str]) -> List[Dict[str, Any]]:
+        """按状态返回抖音发布账本，包含原视频标识，供审核回查任务使用。"""
+        normalized_states = [str(state or "").upper() for state in states]
+        if not normalized_states or any(state not in self._DOUYIN_STATES for state in normalized_states):
+            raise ValueError("states must contain supported Douyin states")
+        placeholders = ", ".join("?" for _ in normalized_states)
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f'''\
+                SELECT dp.*, pv.youtube_id, pv.slice_index
+                FROM douyin_publications dp
+                JOIN processed_videos pv ON pv.id = dp.video_id
+                WHERE dp.state IN ({placeholders})
+                ORDER BY dp.updated_at ASC, dp.id ASC
+                ''',
+                normalized_states,
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_unqueued_douyin_history_videos(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """返回微信已发布、尚未登记抖音账本且未被拉黑的历史视频。"""
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                '''
+                SELECT pv.*
+                FROM processed_videos pv
+                WHERE pv.status = 'PUBLISHED'
+                  AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM douyin_publications dp WHERE dp.video_id = pv.id
+                  )
+                ORDER BY pv.updated_at ASC, pv.id ASC
+                LIMIT ?
+                ''',
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def claim_next_douyin_publication(
+        self,
+        source_kind: str,
+        *,
+        daily_limit: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """原子领取同一来源的一条可重试抖音任务。"""
+        source = (source_kind or "").upper()
+        if source not in self._DOUYIN_SOURCES:
+            raise ValueError(f"Unsupported Douyin source kind: {source_kind}")
+        if source == "HISTORY" and (daily_limit is None or daily_limit < 1):
+            raise ValueError("daily_limit must be at least 1 for HISTORY")
+        with self.get_connection() as conn:
+            if source == "HISTORY":
+                used = conn.execute(
+                    '''
+                    SELECT COUNT(*) AS count FROM douyin_publications
+                    WHERE source_kind = 'HISTORY'
+                      AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                      AND claimed_at IS NOT NULL
+                      AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                    '''
+                ).fetchone()["count"]
+                if used >= daily_limit:
+                    return None
+            candidate = conn.execute(
+                '''
+                SELECT dp.*, pv.youtube_id, pv.slice_index
+                FROM douyin_publications dp
+                JOIN processed_videos pv ON pv.id = dp.video_id
+                WHERE dp.source_kind = ? AND dp.state IN ('QUEUED', 'RETRYABLE_FAILED')
+                  AND (dp.claimed_at IS NULL OR date(dp.claimed_at, 'localtime') < date('now', 'localtime'))
+                  AND NOT (
+                      dp.state = 'RETRYABLE_FAILED'
+                      AND COALESCE(dp.last_error_message, '') LIKE '%提交后未能在作品管理确认可见%'
+                  )
+                ORDER BY dp.created_at ASC, dp.id ASC LIMIT 1
+                ''',
+                (source,),
+            ).fetchone()
+            if not candidate:
+                return None
+            cursor = conn.execute(
+                '''
+                UPDATE douyin_publications
+                SET state = 'UPLOADING', attempt_count = attempt_count + 1,
+                    claimed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND state IN ('QUEUED', 'RETRYABLE_FAILED')
+                ''',
+                (candidate["id"],),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                return None
+            conn.commit()
+            row = conn.execute(
+                '''
+                SELECT dp.*, pv.youtube_id, pv.slice_index
+                FROM douyin_publications dp
+                JOIN processed_videos pv ON pv.id = dp.video_id
+                WHERE dp.id = ?
+                ''',
+                (candidate["id"],),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def claim_douyin_publication(self, publication_id: int) -> Optional[Dict[str, Any]]:
+        """原子领取指定抖音任务，供新片在视频号成功后立即同步投递。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                '''
+                UPDATE douyin_publications
+                SET state = 'UPLOADING', attempt_count = attempt_count + 1,
+                    claimed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND state IN ('QUEUED', 'RETRYABLE_FAILED')
+                ''',
+                (publication_id,),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                return None
+            conn.commit()
+            row = conn.execute(
+                '''
+                SELECT dp.*, pv.youtube_id, pv.slice_index
+                FROM douyin_publications dp
+                JOIN processed_videos pv ON pv.id = dp.video_id
+                WHERE dp.id = ?
+                ''',
+                (publication_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def claim_next_douyin_history_publication(self, daily_limit: int) -> Optional[Dict[str, Any]]:
+        """兼容入口：原子领取一条抖音历史迁移任务并遵守当天上限。"""
+        return self.claim_next_douyin_publication("HISTORY", daily_limit=daily_limit)
+
+    def update_douyin_publication_state(
+        self,
+        publication_id: int,
+        state: str,
+        *,
+        external_post_id: Optional[str] = None,
+        external_url: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> bool:
+        """更新抖音投递状态；只有 PUBLISHED 才会在后续尝试中触发成片去重。"""
+        normalized_state = (state or "").upper()
+        if normalized_state not in self._DOUYIN_STATES:
+            raise ValueError(f"Unsupported Douyin state: {state}")
+        assignments = ["state = ?", "updated_at = CURRENT_TIMESTAMP"]
+        values: List[Any] = [normalized_state]
+        if external_post_id is not None:
+            assignments.append("external_post_id = ?")
+            values.append(external_post_id)
+        if external_url is not None:
+            assignments.append("external_url = ?")
+            values.append(external_url)
+        if error_message is not None:
+            assignments.append("last_error_message = ?")
+            values.append(error_message)
+        if normalized_state == "PUBLISHED":
+            assignments.append("published_at = COALESCE(published_at, CURRENT_TIMESTAMP)")
+        values.append(publication_id)
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                f"UPDATE douyin_publications SET {', '.join(assignments)} WHERE id = ?",
+                values,
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def mark_douyin_publication_attempted(self, publication_id: int) -> bool:
+        """回填一次已实际提交的尝试，用于人工恢复流程也遵守 HISTORY 当日配额。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                '''
+                UPDATE douyin_publications
+                SET claimed_at = COALESCE(claimed_at, CURRENT_TIMESTAMP),
+                    attempt_count = CASE WHEN attempt_count = 0 THEN 1 ELSE attempt_count END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                ''',
+                (publication_id,),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def get_platform_backfill_preview_candidates(
+        self,
+        platform: str,
+        *,
+        wall_street_since_upload_date: str,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """只读返回平台补录预览候选；不创建发布账本，也不改变视频状态。
+
+        规则：
+        1. 已产出/发布的视频里，标题、中文标题、分类或频道名命中访谈/演讲线索；
+        2. Wall Street Truthbombs 在指定源发布日期之后的视频。
+
+        微信补录只看 WECHAT_DEFERRED；抖音补录看已完成成片（PUBLISHED/WECHAT_DEFERRED），
+        并排除抖音已有排队、上传、审核、已发布、待人工核实或封禁记录的视频。
+        """
+        normalized = (platform or "").lower()
+        if normalized not in {"wechat", "douyin"}:
+            raise ValueError("platform must be one of: wechat, douyin")
+        if not wall_street_since_upload_date or len(wall_street_since_upload_date) != 8:
+            raise ValueError("wall_street_since_upload_date must be YYYYMMDD")
+        safe_limit = max(1, min(int(limit), 5000))
+
+        text_expr = (
+            "lower(COALESCE(pv.title, '') || ' ' || COALESCE(pv.zh_title, '') || ' ' || "
+            "COALESCE(pv.category, '') || ' ' || COALESCE(rc.channel_name, pv.channel_id, ''))"
+        )
+        speech_clause = " OR ".join(f"{text_expr} LIKE ?" for _ in self._BACKFILL_SPEECH_TERMS)
+        speech_params = [f"%{term.lower()}%" for term in self._BACKFILL_SPEECH_TERMS]
+
+        source_status_clause = "pv.status = 'WECHAT_DEFERRED'"
+        platform_state_expr = "NULL"
+        platform_filter = ""
+        if normalized == "douyin":
+            source_status_clause = "pv.status IN ('PUBLISHED', 'WECHAT_DEFERRED')"
+            platform_state_expr = """
+                (
+                    SELECT dp.state
+                    FROM douyin_publications dp
+                    WHERE dp.video_id = pv.id
+                    ORDER BY dp.attempt_number DESC, dp.id DESC
+                    LIMIT 1
+                )
+            """
+            platform_filter = """
+                AND NOT EXISTS (
+                    SELECT 1 FROM douyin_publications dp_block
+                    WHERE dp_block.video_id = pv.id
+                      AND dp_block.state IN ('QUEUED', 'UPLOADING', 'DRAFT', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN', 'BANNED')
+                )
+            """
+
+        query = f"""
+            SELECT
+                pv.youtube_id,
+                pv.slice_index,
+                pv.title,
+                pv.zh_title,
+                pv.channel_id,
+                COALESCE(rc.channel_name, pv.channel_id) AS channel_name,
+                pv.category,
+                pv.upload_date,
+                pv.status AS wechat_status,
+                pv.score,
+                CASE WHEN {speech_clause} THEN 1 ELSE 0 END AS is_speech_or_interview,
+                CASE
+                    WHEN lower(COALESCE(rc.channel_name, pv.channel_id, '')) = 'wall street truthbombs'
+                     AND pv.upload_date >= ?
+                    THEN 1 ELSE 0
+                END AS is_recent_wall_street,
+                {platform_state_expr} AS platform_state
+            FROM processed_videos pv
+            LEFT JOIN recommended_channels rc ON rc.channel_id = pv.channel_id
+            WHERE {source_status_clause}
+              AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+              AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
+              AND (
+                    ({speech_clause})
+                 OR (
+                    lower(COALESCE(rc.channel_name, pv.channel_id, '')) = 'wall street truthbombs'
+                    AND pv.upload_date >= ?
+                 )
+              )
+              {platform_filter}
+            ORDER BY
+                is_recent_wall_street DESC,
+                pv.upload_date DESC,
+                pv.updated_at DESC,
+                pv.id ASC
+            LIMIT ?
+        """
+        params: List[Any] = [
+            *speech_params,
+            wall_street_since_upload_date,
+            *speech_params,
+            wall_street_since_upload_date,
+            safe_limit,
+        ]
+        with self.get_connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+            return [dict(row) for row in rows]
 
     def delete_video_record(self, youtube_id: str, slice_index: Optional[int] = None) -> bool:
         """物理删除视频记录。如果 slice_index 传入 None，删除父及所有关联子视频；否则只删除单切片。"""

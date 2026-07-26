@@ -30,6 +30,7 @@ tqdm>=4.66.0
 
 # 字幕生成与处理
 openai-whisper>=20231117
+pypdf>=5.0.0
 deep-translator>=1.11.0
 pysubs2>=1.6.0
 

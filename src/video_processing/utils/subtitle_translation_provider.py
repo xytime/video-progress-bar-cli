@@ -2,7 +2,7 @@
 """字幕翻译供应商结果模型。
 
 本模块只定义 provider-neutral 的字幕翻译候选结果，不直接调用任何 API。
-Gemini、Aliyun、Google、DeepSeek/OpenAI 等供应商只要产出同一结构，
+Gemini、Google、DeepSeek/OpenAI 等供应商只要产出同一结构，
 上层就能复用统一的质量守门、降级和审计逻辑。
 
 # Modification History

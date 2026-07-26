@@ -131,7 +131,6 @@ def fmt_help() -> str:
         "🚀 `/process <ID>` — 立即处理指定视频（忽略分数阈值，单条发布）\n"
         "🏃 `/run` — 立即触发一次全量管线\n"
         "📊 `/stats` — 查看系统统计数据\n"
-        "🎙 `/tts <url> [开始] [结束]` — 以 CosyVoice TTS 配音模式加入队列\n"
         "🤖 `/help` — 显示本帮助"
     )
 

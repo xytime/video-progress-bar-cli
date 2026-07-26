@@ -8,7 +8,7 @@ source: 2026-06-26 自我审查的循环项 + 历史事故教训
 
 # 每日运维工单
 
-> **怎么用**：每天早 **09:00** cron 自动跑 `scripts/daily_ops_report.py`，把巡检报告推到 **Telegram**。
+> **怎么用**：在本机登录终端一次执行 `./scripts/install_daily_ops_schedule.sh`；之后每天早 **09:00** LaunchAgent 自动跑 `scripts/daily_ops_report.py`，把巡检报告推到 **Telegram**。
 > 你只需看那条消息，按本工单「每天须办」处理标红项即可。本文件是配套说明 + 异常处置手册 + 一次性 backlog。
 
 ---

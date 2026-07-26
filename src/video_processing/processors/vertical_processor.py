@@ -5,7 +5,7 @@
 | Version | Date       | Author                    | Description |
 | ------- | ---------- | ------------------------- | ----------- |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking | 初始创建，支持三段式与边缘配音/本地配音 |
-| 1.1.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 集成 CosyVoice 语音合成 Provider 支持并实现 TTS 说话时背景音动态闪避 (Ducking) 功能，标注 # [Gemini_3.5_Flash_planning] |
+| 1.6.0   | 2026-07-17 | Codex | 移除 CosyVoice；高品质 TTS 改由本地 IndexTTS，并迁移历史 cosyvoice 任务 |
 | 1.1.1   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 mute_original 参数支持，允许将原视频静音只保留 TTS 音轨，标注 # [Gemini_3.5_Flash_planning] |
 | 1.2.0   | 2026-05-28 | Gemini_3.5_Flash_planning | 新增 tts_volume 和 tts_speech_rate 支持，并在分段混合前引入 atempo 自动加速防重叠安全阀机制，标注 # [Gemini_3.5_Flash_planning] |
 | 1.3.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | TTSEngine 默认 fallback voice 改为 "auto"，自动从精选播音音色池随机选取，标注 # [Gemini_2.5_Pro_planning] |
@@ -406,7 +406,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         self.output_path = output_path
         
         # [Claude_Sonnet_4.6_Thinking_planning] v1.5.0: TTS 默认关闭。
-        # 只有用户通过 --tts / --tts-cosy / --tts-real 参数，或 Telegram /tts 命令
+        # 只有用户通过 --tts / --tts-real 参数，或 Telegram /tts 命令
         # 明确指定 tts_provider 后，才启用语音合成。非中文视频不再自动激活 TTS。
         if self.tts_provider:
             logger.info(f"[TTS] Provider explicitly set: {self.tts_provider}")
@@ -418,20 +418,13 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             logger.info(f"Generating TTS audio using provider: {self.tts_provider}")
             try:
                 # Initialize Engine
-                # [Gemini_3.5_Flash_planning] 支持 cosyvoice 配音服务
-                if self.tts_provider == "indextts":
+                if self.tts_provider in {"indextts", "cosyvoice"}:
                     provider = TTSProvider.INDEXTTS
-                elif self.tts_provider == "cosyvoice":
-                    provider = TTSProvider.COSYVOICE
                 else:
                     provider = TTSProvider.EDGE
-                # [Gemini_2.5_Pro_planning] tts_voice 默认为 "auto"，触发精选播音池随机选取；用户也可传具体 voice ID 覆盖
-                tts_engine = TTSEngine(
-                    provider=provider,
-                    cosyvoice_voice=self.tts_voice or "auto",
-                    cosyvoice_volume=self.tts_volume,              # [Gemini_3.5_Flash_planning]
-                    cosyvoice_speech_rate=self.tts_speech_rate    # [Gemini_3.5_Flash_planning]
-                )
+                if self.tts_provider == "cosyvoice":
+                    logger.info("[TTS] Migrating legacy cosyvoice task to local IndexTTS.")
+                tts_engine = TTSEngine(provider=provider)
                 
                 # Prepare items
                 tts_items = []
@@ -455,7 +448,7 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
                 
                 if tts_items:
                     # Batch Generate
-                    tts_engine.batch_generate(tts_items, audio_dir, voice_prompt="examples/test_audio.wav" if provider == TTSProvider.INDEXTTS else "onyx")
+                    tts_engine.batch_generate(tts_items, audio_dir, voice_prompt="test_audio.wav" if provider == TTSProvider.INDEXTTS else "zh-CN-XiaoxiaoNeural")
                     
                     # [Gemini_3.5_Flash_planning] 防重叠后处理：对超出当前字幕槽或间隔时间段上限的音频段，动态使用 atempo 滤镜进行无损加速
                     for idx, seg_audio in enumerate(audio_segments):

@@ -1,9 +1,20 @@
-"""快手浏览器发布账本：仅发布成功去重、迁移限额和不确定结果保护。"""
+"""快手浏览器发布账本：仅发布成功去重、迁移限额和不确定结果保护。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-07-15 | Codex | 覆盖快手账本去重、迁移限额和审核状态 |
+| 1.1.0 | 2026-07-16 | Codex | 覆盖视频号延后发布任务的原子领取与黑名单保护 |
+| 1.2.0 | 2026-07-25 | Codex | 覆盖取消状态为历史补录自动重试终态与多尝试账本迁移 |
+| 1.3.0 | 2026-07-26 | Codex | 覆盖快手上传前审查命中时取消平台任务且不调用上传器 |
+"""
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from video_processing.db.database import PipelineDB
+from video_processing.pipeline_manager import PipelineManager
 
 
 def _add_video(db: PipelineDB, youtube_id: str) -> None:
@@ -110,6 +121,45 @@ def test_under_review_is_a_terminal_submission_state_not_a_duplicate_retry(tmp_p
     assert db.claim_next_kuaishou_history_publication(daily_limit=10) is None
 
 
+def test_canceled_history_publication_is_not_claimed_again(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "missing-assets-video")
+    publication = db.create_kuaishou_publication(
+        "missing-assets-video", "6" * 64, "/tmp/missing.mp4", source_kind="HISTORY"
+    )
+    assert db.update_kuaishou_publication_state(
+        publication["id"], "CANCELED", error_message="本地投递产物缺失"
+    )
+
+    assert db.get_kuaishou_publication("missing-assets-video")["state"] == "CANCELED"
+    assert db.claim_next_kuaishou_history_publication(daily_limit=10) is None
+
+
+def test_kuaishou_publication_censorship_hit_cancels_without_upload(tmp_path: Path):
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    (tmp_path / "video-id_vertical.mp4").write_bytes(b"video")
+    (tmp_path / "video-id_kuaishou_copy.txt").write_text("涉及中国工程师遇袭的敏感文案", encoding="utf-8")
+    manager.db = MagicMock()
+    manager.db.get_video_by_youtube_id.return_value = {
+        "title": "测试视频",
+        "zh_title": "测试标题",
+    }
+    manager._check_censorship = MagicMock(return_value=True)
+    manager._run_tracked = MagicMock()
+
+    assert not manager._publish_claimed_kuaishou_publication(
+        {"id": 191, "youtube_id": "video-id", "slice_index": 0, "source_kind": "HISTORY"}
+    )
+
+    manager._run_tracked.assert_not_called()
+    manager.db.update_kuaishou_publication_state.assert_called_once()
+    args, kwargs = manager.db.update_kuaishou_publication_state.call_args
+    assert args == (191, "CANCELED")
+    assert "上传前内容安全审查拦截" in kwargs["error_message"]
+    manager._check_censorship.assert_called_once()
+
+
 def test_manually_completed_attempt_counts_toward_history_daily_limit(tmp_path: Path):
     db = PipelineDB(str(tmp_path / "pipeline.db"))
     _add_video(db, "manual-attempt")
@@ -172,3 +222,71 @@ def test_existing_ledger_is_migrated_to_support_under_review(tmp_path: Path):
     )
 
     assert db.update_kuaishou_publication_state(publication["id"], "UNDER_REVIEW")
+
+
+def test_ledger_migration_preserves_multiple_attempt_numbers(tmp_path: Path):
+    db_path = tmp_path / "pipeline.db"
+    db = PipelineDB(str(db_path))
+    _add_video(db, "multi-attempt")
+    video_id = db.get_video_by_youtube_id("multi-attempt")["id"]
+    old_schema = '''
+        CREATE TABLE kuaishou_publications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            video_id INTEGER NOT NULL,
+            asset_sha256 TEXT NOT NULL,
+            source_kind TEXT NOT NULL CHECK(source_kind IN ('HISTORY', 'NEW')),
+            state TEXT NOT NULL DEFAULT 'QUEUED'
+                CHECK(state IN ('QUEUED', 'UPLOADING', 'DRAFT', 'UNDER_REVIEW', 'PUBLISHED', 'RETRYABLE_FAILED', 'UNCERTAIN', 'BANNED')),
+            video_path TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL DEFAULT 1,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            claimed_at TIMESTAMP DEFAULT NULL,
+            published_at TIMESTAMP DEFAULT NULL,
+            external_post_id TEXT DEFAULT NULL,
+            external_url TEXT DEFAULT NULL,
+            last_error_message TEXT DEFAULT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(video_id, attempt_number)
+        )
+    '''
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE kuaishou_publications")
+        conn.execute(old_schema)
+        conn.execute(
+            "INSERT INTO kuaishou_publications (video_id, asset_sha256, source_kind, state, video_path, attempt_number) VALUES (?, ?, 'HISTORY', 'RETRYABLE_FAILED', '/tmp/one.mp4', 1)",
+            (video_id, "a" * 64),
+        )
+        conn.execute(
+            "INSERT INTO kuaishou_publications (video_id, asset_sha256, source_kind, state, video_path, attempt_number) VALUES (?, ?, 'HISTORY', 'PUBLISHED', '/tmp/two.mp4', 2)",
+            (video_id, "b" * 64),
+        )
+
+    migrated = PipelineDB(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT state, attempt_number FROM kuaishou_publications ORDER BY attempt_number"
+        ).fetchall()
+        schema = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'kuaishou_publications'"
+        ).fetchone()[0]
+    assert rows == [("RETRYABLE_FAILED", 1), ("PUBLISHED", 2)]
+    assert "CANCELED" in schema
+    assert migrated.update_kuaishou_publication_state(1, "CANCELED")
+
+
+def test_deferred_wechat_publication_is_claimed_once_and_blacklist_is_never_released(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "deferred-video")
+    _add_video(db, "blocked-deferred")
+    db.update_video_status("deferred-video", "WECHAT_DEFERRED")
+    db.update_video_status("blocked-deferred", "WECHAT_DEFERRED")
+    assert db.add_to_blacklist("blocked-deferred", "wechat_takedown_prohibited")
+
+    claimed = db.claim_next_deferred_wechat_publication()
+
+    assert claimed is not None
+    assert claimed["youtube_id"] == "deferred-video"
+    assert db.get_video_by_youtube_id("deferred-video")["status"] == "DOWNLOADING"
+    assert db.claim_next_deferred_wechat_publication() is None

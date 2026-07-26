@@ -152,7 +152,7 @@ class TestRespecVideo:
                 "trim_start": "0",
                 "trim_end": "10",
                 "disable_slicing": True,
-                "tts_provider": "cosyvoice",
+                "tts_provider": "indextts",
                 "was_stopped": True,
                 "triggered": True
             })
@@ -162,11 +162,11 @@ class TestRespecVideo:
             trim_start="0",
             trim_end="10",
             disable_slicing=True,
-            tts_provider="cosyvoice"
+            tts_provider="indextts"
         )
         assert result["success"] is True
         assert result["trim_start"] == "0"
-        assert result["tts_provider"] == "cosyvoice"
+        assert result["tts_provider"] == "indextts"
         assert result["was_stopped"] is True
 
     @respx.mock

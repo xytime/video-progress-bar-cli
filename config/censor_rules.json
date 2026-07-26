@@ -25,6 +25,18 @@
         "阿波罗网",
         "郭文贵",
         "郝海东",
+        "习近平",
+        "李强",
+        "赵乐际",
+        "王沪宁",
+        "蔡奇",
+        "丁薛祥",
+        "李希",
+        "韩正",
+        "王毅",
+        "李克强",
+        "胡锦涛",
+        "江泽民",
         "分裂中国",
         "推翻政府",
         "颠覆国家",
@@ -45,8 +57,157 @@
         "taiwan independence",
         "xi jinping",
         "xijinping",
+        "li qiang",
+        "zhao leji",
+        "wang huning",
+        "cai qi",
+        "ding xuexiang",
+        "li xi",
+        "han zheng",
+        "wang yi",
+        "li keqiang",
+        "hu jintao",
+        "jiang zemin",
         "overthrow the government",
         "split china"
+      ],
+      "cooccurrence_zh": [
+        {
+          "primary": [
+            "中国人",
+            "中国公民",
+            "中国工程师",
+            "中国工人",
+            "中方人员",
+            "中国项目",
+            "中资项目",
+            "中巴经济走廊",
+            "一带一路",
+            "中国在中东",
+            "中国战略",
+            "中国政策"
+          ],
+          "context": [
+            "杀",
+            "杀害",
+            "伤害",
+            "袭击",
+            "攻击",
+            "爆炸",
+            "炸弹",
+            "阻止",
+            "破坏",
+            "报复",
+            "发动者",
+            "目标"
+          ],
+          "max_gap": 160,
+          "matched": "anti_china_targeted_violence"
+        },
+        {
+          "primary": [
+            "中国",
+            "中国政府",
+            "中共",
+            "中国共产党",
+            "北京",
+            "习近平",
+            "李强",
+            "王毅"
+          ],
+          "context": [
+            "爆炸",
+            "火灾",
+            "袭击",
+            "枪击",
+            "空袭",
+            "死亡",
+            "遇难",
+            "伤亡",
+            "坠毁",
+            "灾难",
+            "事故"
+          ],
+          "max_gap": 120,
+          "matched": "china_sensitive_negative_news"
+        }
+      ],
+      "cooccurrence_en": [
+        {
+          "primary": [
+            "chinese nationals",
+            "chinese citizens",
+            "chinese engineers",
+            "chinese workers",
+            "chinese personnel",
+            "chinese projects",
+            "china-backed projects",
+            "chinese-backed projects",
+            "cpec",
+            "china-pakistan economic corridor",
+            "belt and road",
+            "belt and road initiative",
+            "china's strategy",
+            "chinese strategy",
+            "china's policy",
+            "chinese policy"
+          ],
+          "context": [
+            "kill",
+            "killing",
+            "killed",
+            "target",
+            "targeted",
+            "attack",
+            "attacked",
+            "blast",
+            "explosion",
+            "bomb",
+            "bombing",
+            "hurt",
+            "harm",
+            "stop",
+            "prevent",
+            "disrupt",
+            "sabotage"
+          ],
+          "max_gap": 320,
+          "matched": "anti_china_targeted_violence"
+        },
+        {
+          "primary": [
+            "china",
+            "chinese",
+            "beijing",
+            "chinese government",
+            "ccp",
+            "prc",
+            "xi jinping",
+            "li qiang",
+            "wang yi"
+          ],
+          "context": [
+            "explosion",
+            "blast",
+            "fire",
+            "attack",
+            "attacks",
+            "strike",
+            "airstrike",
+            "shooting",
+            "killing",
+            "killed",
+            "dead",
+            "death",
+            "deaths",
+            "casualties",
+            "crash",
+            "disaster",
+            "accident"
+          ],
+          "max_gap": 240,
+          "matched": "china_sensitive_negative_news"
+        }
       ],
       "exemptions_zh": [],
       "exemptions_en": []
@@ -111,6 +272,26 @@
             "制裁规避"
           ],
           "max_gap": 80
+        },
+        {
+          "primary": [
+            "爆炸",
+            "袭击",
+            "枪击",
+            "轰炸",
+            "坠毁",
+            "火灾"
+          ],
+          "context": [
+            "死亡",
+            "遇难",
+            "受伤",
+            "伤亡",
+            "造成",
+            "至少"
+          ],
+          "max_gap": 80,
+          "matched": "severe_negative_news"
         }
       ],
       "cooccurrence_en": [
@@ -152,6 +333,29 @@
             "circumvent sanctions"
           ],
           "max_gap": 180
+        },
+        {
+          "primary": [
+            "explosion",
+            "blast",
+            "attack",
+            "shooting",
+            "bombing",
+            "crash",
+            "fire"
+          ],
+          "context": [
+            "killing",
+            "killed",
+            "dead",
+            "death",
+            "deaths",
+            "injured",
+            "casualties",
+            "at least"
+          ],
+          "max_gap": 180,
+          "matched": "severe_negative_news"
         }
       ],
       "exemptions_zh": [

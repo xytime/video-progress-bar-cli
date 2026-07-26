@@ -12,6 +12,7 @@
 | 1.2.0   | 2026-07-13 | Codex  | 纳入 Gemini 模型级 profile，使免费模型分别冷却与排序 |
 | 1.3.0   | 2026-07-13 | Codex  | 支持外层 provider 忽略冷却，避免遮蔽内部模型级免费容量 |
 | 1.4.0   | 2026-07-13 | Codex  | 锁内 read-merge-write，避免外层旧快照覆盖具体模型冷却状态 |
+| 1.5.0   | 2026-07-17 | Codex  | 移除阿里云 MT profile，避免配置残留重新进入字幕质量链路 |
 """
 
 from __future__ import annotations
@@ -36,7 +37,6 @@ class ModelProfile:
 PROFILES = {
     "gemini": ModelProfile("gemini", frozenset({"translate", "vocab"}), 100),
     "deepseek": ModelProfile("deepseek", frozenset({"translate", "vocab"}), 90),
-    "aliyun": ModelProfile("aliyun", frozenset({"translate"}), 40),
     "google": ModelProfile("google", frozenset({"translate"}), 20),
     # Gemini 供应商内部也必须按模型而不是整体冷却，否则一个模型撞配额会拖垮全部免费池。
     "gemini-2.5-flash": ModelProfile("gemini-2.5-flash", frozenset({"translate", "vocab"}), 100),

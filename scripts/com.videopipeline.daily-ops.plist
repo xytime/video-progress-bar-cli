@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 每日只读运维/API 用量与余额日报；不会触发视频处理或发布。 -->
+    <key>Label</key>
+    <string>com.videopipeline.daily-ops</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python</string>
+        <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/daily_ops_report.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PYTHONPATH</key>
+        <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/daily_ops_report.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/daily_ops_report.log</string>
+</dict>
+</plist>
