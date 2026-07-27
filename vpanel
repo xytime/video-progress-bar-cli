@@ -11,6 +11,7 @@
 # | 1.3.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 使用 python -u 启用无缓冲输出以实时更新日志 |
 # | 1.4.0 | 2026-07-13 | Codex | UI 检测 LaunchAgent 后统一由 launchd 启停，避免 KeepAlive 与 nohup 双重管理争抢端口 |
 # | 1.4.1 | 2026-07-27 | Codex | 端口变量输出统一使用 ${DASH_PORT}，避免 set -u 下中文标点紧邻变量导致误解析 |
+# | 1.4.2 | 2026-07-27 | Codex | _port_pid 增加 netstat fallback，避免 lsof 受异常挂载影响误报 UI 未监听 |
 # =======================================================================
 
 # [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
@@ -40,7 +41,24 @@ DASH_PATTERN="src/web/app.py"
 # 进程发现以「端口归属」为权威判断（PID 文件易漂移，曾导致 stop 漏杀真服务进程、
 # start 不察端口被占而硬起游离僵进程）。_all_dash_pids 同时覆盖游离进程与占端口者。
 _dash_pids()     { pgrep -f "$DASH_PATTERN" 2>/dev/null; }
-_port_pid()      { lsof -nP -iTCP:"$DASH_PORT" -sTCP:LISTEN -t 2>/dev/null | head -1; }
+_port_pid() {
+    local pid
+    pid="$(lsof -nP -iTCP:"$DASH_PORT" -sTCP:LISTEN -t 2>/dev/null | head -1)"
+    if [ -n "$pid" ]; then
+        echo "$pid"
+        return 0
+    fi
+    netstat -anv -p tcp 2>/dev/null \
+        | awk -v port=".$DASH_PORT" '$0 ~ port && $0 ~ /LISTEN/ {
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /:[0-9]+$/) {
+                    split($i, parts, ":")
+                    print parts[length(parts)]
+                    exit
+                }
+            }
+        }'
+}
 _all_dash_pids() { printf '%s\n%s\n' "$(_dash_pids)" "$(_port_pid)" | sort -u | grep -v '^$'; }
 _launch_loaded()  { launchctl print "$LAUNCH_DOMAIN/$LAUNCH_LABEL" >/dev/null 2>&1; }
 
@@ -227,7 +245,7 @@ ui_logs() {
 
 ui_open() {
     if [ -f "$PID_FILE" ] && ps -p "$(cat "$PID_FILE")" > /dev/null 2>&1; then
-        open "http://localhost:9100"
+        open "http://localhost:${DASH_PORT}"
     else
         echo "⚠️ 仪表盘未在运行，请先执行 './vpanel ui start'"
     fi
