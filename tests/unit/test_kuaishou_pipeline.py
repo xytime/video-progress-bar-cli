@@ -8,6 +8,7 @@
 | 1.2.0 | 2026-07-23 | Codex | 显式隔离抖音开关，避免三平台上线后快手单测被环境配置带偏 |
 | 1.3.0 | 2026-07-25 | Codex | 覆盖历史补录缺失本地投递素材时取消自动重试 |
 | 1.4.0 | 2026-07-25 | Codex | 覆盖快手平台专用短文案优先级 |
+| 1.5.0 | 2026-07-27 | Codex | 覆盖快手历史补发命中审查时取消当前任务并继续下一条 |
 """
 
 import subprocess
@@ -123,6 +124,42 @@ def test_history_migration_continues_after_canceling_missing_assets(tmp_path: Pa
     assert manager.db.get_kuaishou_publication("ready-history")["state"] == "PUBLISHED"
     assert manager._run_tracked.call_count == 1
     assert missing["id"] != ready["id"]
+
+
+def test_history_migration_continues_after_censorship_cancel(tmp_path: Path):
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.send_telegram_msg = MagicMock()
+    for yid in ("blocked-history", "ready-history"):
+        assert manager.db.add_video(yid, "测试视频", "test-channel", score=80)
+        manager.db.update_video_status(yid, "PUBLISHED")
+        (tmp_path / f"{yid}_vertical.mp4").write_bytes(b"video")
+        (tmp_path / f"{yid}_copy.txt").write_text("测试文案", encoding="utf-8")
+    blocked = manager.db.create_kuaishou_publication(
+        "blocked-history", "9" * 64, str(tmp_path / "blocked-history_vertical.mp4"), source_kind="HISTORY"
+    )
+    ready = manager.db.create_kuaishou_publication(
+        "ready-history", "a" * 64, str(tmp_path / "ready-history_vertical.mp4"), source_kind="HISTORY"
+    )
+    manager._check_censorship = MagicMock(side_effect=[True, False])
+    manager._run_tracked = MagicMock(
+        return_value=subprocess.CompletedProcess(["kuaishou"], 0, stdout="ok", stderr="")
+    )
+
+    previous = settings.enable_kuaishou_browser_publishing
+    previous_limit = settings.kuaishou_history_daily_limit
+    settings.enable_kuaishou_browser_publishing = True
+    settings.kuaishou_history_daily_limit = 2
+    try:
+        manager._run_kuaishou_history_migration()
+    finally:
+        settings.enable_kuaishou_browser_publishing = previous
+        settings.kuaishou_history_daily_limit = previous_limit
+
+    assert manager.db.get_kuaishou_publication("blocked-history")["state"] == "CANCELED"
+    assert manager.db.get_kuaishou_publication("ready-history")["state"] == "PUBLISHED"
+    assert manager._run_tracked.call_count == 1
+    assert blocked["id"] != ready["id"]
 
 
 def test_review_reconciliation_only_checks_management_and_marks_confirmed_publish(tmp_path: Path):

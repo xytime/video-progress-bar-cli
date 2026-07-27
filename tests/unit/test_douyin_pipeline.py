@@ -8,6 +8,7 @@
 | 1.2.0 | 2026-07-23 | Codex | 覆盖抖音历史补录每日自动领取仅限补录规则候选 |
 | 1.3.0 | 2026-07-25 | Codex | 覆盖历史补录缺失本地投递素材时取消并继续下一条 |
 | 1.4.0 | 2026-07-26 | Codex | 覆盖抖音上传前审查命中时取消平台任务且不调用上传器 |
+| 1.5.0 | 2026-07-27 | Codex | 覆盖抖音历史补发命中审查时取消当前任务并继续下一条 |
 """
 
 import subprocess
@@ -256,3 +257,39 @@ def test_douyin_history_migration_continues_after_canceling_missing_assets(tmp_p
     assert manager.db.get_douyin_publication("ready-douyin")["state"] == "PUBLISHED"
     assert manager._run_tracked.call_count == 1
     assert missing["id"] != ready["id"]
+
+
+def test_douyin_history_migration_continues_after_censorship_cancel(tmp_path: Path):
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.send_telegram_msg = MagicMock()
+    for yid in ("blocked-history", "ready-douyin"):
+        _add_history_video(manager, yid, "A full speech about markets")
+        (tmp_path / f"{yid}_vertical.mp4").write_bytes(b"video")
+        (tmp_path / f"{yid}_copy.txt").write_text("测试文案", encoding="utf-8")
+        (tmp_path / f"{yid}_title.txt").write_text("测试标题", encoding="utf-8")
+    blocked = manager.db.create_douyin_publication(
+        "blocked-history", "8" * 64, str(tmp_path / "blocked-history_vertical.mp4"), source_kind="HISTORY"
+    )
+    ready = manager.db.create_douyin_publication(
+        "ready-douyin", "9" * 64, str(tmp_path / "ready-douyin_vertical.mp4"), source_kind="HISTORY"
+    )
+    manager._check_censorship = MagicMock(side_effect=[True, False])
+    manager._run_tracked = MagicMock(
+        return_value=subprocess.CompletedProcess(["douyin"], 0, stdout="ok", stderr="")
+    )
+
+    previous_enabled = settings.enable_douyin_browser_publishing
+    previous_limit = settings.douyin_history_daily_limit
+    settings.enable_douyin_browser_publishing = True
+    settings.douyin_history_daily_limit = 2
+    try:
+        manager._run_douyin_history_migration()
+    finally:
+        settings.enable_douyin_browser_publishing = previous_enabled
+        settings.douyin_history_daily_limit = previous_limit
+
+    assert manager.db.get_douyin_publication("blocked-history")["state"] == "CANCELED"
+    assert manager.db.get_douyin_publication("ready-douyin")["state"] == "PUBLISHED"
+    assert manager._run_tracked.call_count == 1
+    assert blocked["id"] != ready["id"]

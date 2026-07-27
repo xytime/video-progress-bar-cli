@@ -8,6 +8,7 @@ created_at: 2026-05-21T17:05:00+08:00
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建项目工程宪法 |
+| 1.1.0 | 2026-07-27 | Codex | 将平台发布前内容审查提升为第一原则，覆盖新发、补发、迁移和重试 |
 
 ---
 
@@ -19,7 +20,31 @@ created_at: 2026-05-21T17:05:00+08:00
 
 ## 核心原则
 
-### 1. 架构依赖图优先
+### 1. 平台发布前内容审查优先
+
+**任何平台发布动作之前，必须先通过统一内容审查闸门。**
+
+适用范围包括但不限于：
+
+- 新片同步发布
+- 历史补发 / 历史迁移
+- 登录恢复后的重试
+- `UNDER_REVIEW` 之外任何可能重新触发上传或提交的任务
+- 未来新增的视频平台
+
+硬性规则：
+
+- 调用浏览器上传器执行公开提交之前，必须先复跑内容安全审查。
+- 审查输入必须覆盖该平台实际投递的标题、文案，以及开启字幕审查时的字幕正文。
+- 审查命中时必须 fail-closed：取消或挂起平台任务，禁止调用上传器，禁止自动切换下一条不确定任务。
+- 只读审核回查只能使用 `--verify-only`，不得带 `--publish` 或视频文件。
+- 新增平台或新增补发入口时，必须有单测证明“审查命中时 uploader 没有被调用”。
+
+如果你发现某个补发、迁移、重试或新平台入口能绕过上传前审查，**停下来，先修这个问题。**
+
+---
+
+### 2. 架构依赖图优先
 
 **在编写任何新模块之前，必须先画出它的依赖关系。**
 
@@ -41,7 +66,7 @@ config/settings.py
 
 ---
 
-### 2. 配置单一真相来源（Single Source of Truth）
+### 3. 配置单一真相来源（Single Source of Truth）
 
 **所有环境变量必须且只能在 `src/config/settings.py` 中声明。**
 
@@ -62,7 +87,7 @@ api_key = os.environ.get("GEMINI_API_KEY")
 
 ---
 
-### 3. 数据访问层封装（DAL Encapsulation）
+### 4. 数据访问层封装（DAL Encapsulation）
 
 **所有 SQL 操作必须封装在 `PipelineDB` 的方法内。**
 
@@ -83,7 +108,7 @@ with self.db.get_connection() as conn:
 
 ---
 
-### 4. 测试耦合度红线（Mock Gate）
+### 5. 测试耦合度红线（Mock Gate）
 
 **如果为一个模块写测试需要 Mock 超过 3 个外部对象，必须停止并重新设计该模块。**
 
@@ -102,7 +127,7 @@ def test_process_video():
 
 ---
 
-### 5. 修改历史追踪
+### 6. 修改历史追踪
 
 **新建文件或重大修改（≥10 行逻辑改动）时，必须在文件 docstring 中维护 Modification History 表。**
 
@@ -133,7 +158,8 @@ def test_process_video():
 
 发现违规代码时的处理方式：
 
-1. **配置泄漏** (`os.getenv` 在非 `settings.py` 的文件中) → 立即修复，列入 PR 阻断条件
-2. **SQL 泄漏** (在 `PipelineDB` 外直接调用 `get_connection()`) → 立即修复
-3. **循环依赖** → 立即修复，不允许合并
-4. **Mock 超限** → 在 PR review 中标记为 Architecture Concern，但允许合并（附改进 Issue）
+1. **平台发布绕过上传前审查** → 立即停止发布能力并修复，不允许合并
+2. **配置泄漏** (`os.getenv` 在非 `settings.py` 的文件中) → 立即修复，列入 PR 阻断条件
+3. **SQL 泄漏** (在 `PipelineDB` 外直接调用 `get_connection()`) → 立即修复
+4. **循环依赖** → 立即修复，不允许合并
+5. **Mock 超限** → 在 PR review 中标记为 Architecture Concern，但允许合并（附改进 Issue）
