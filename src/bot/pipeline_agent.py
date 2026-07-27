@@ -20,6 +20,7 @@ based on incoming Telegram messages and commands.
 | 1.8.0   | 2026-06-20 | Claude_Opus_4.8                     | [修「发布3」误路由] 新增 process_video_now 工具(复用 web /api/videos/{id}/process，单条确定性发布、忽略分数阈值)；system prompt 教会序数指代(「发布第N个」→列表第N条 youtube_id→process_video_now)，并在 queue(≥75) 为空时 fallback 列 waitlist 候选请用户选 |
 | 1.9.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登] trigger_wechat_login 改无头运行 wechat_uploader --login-only 并注入 Telegram 凭据→登录二维码 sendPhoto 到 Telegram 远程扫码(不再弹主机窗口需远程桌面)；同步更新 system prompt 第8条与登录失效告警话术 |
 | 1.10.0  | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登·强制] trigger_wechat_login 加 --relogin：即使当前已登录也必出二维码（修复「已登录→/wechat_login 无二维码、用户干等」），支持临期主动重登刷新 24h；旧会话扫码成功前保持有效 |
+| 1.11.0  | 2026-07-27 | Codex                               | 助手 bot 接入多平台 PlatformEvent 告警格式，避免继续按视频号单平台语义解释抖音/快手事件 |
 """
 import os
 import sys
@@ -41,6 +42,7 @@ if _src not in sys.path:
 
 from config.settings import settings
 from video_processing.db import PipelineDB
+from video_processing.utils.platform_events import PlatformEvent, format_platform_event_html
 from video_processing.utils.file_utils import find_downloaded_video
 from bot.api_client import PipelineAPIClient
 from bot.video_delivery import (
@@ -99,13 +101,15 @@ class PipelineAgent:
             self.delete_video_from_db,
             self.retry_video_in_db,
             self.get_system_stats,
+            self.format_platform_event_alert,
             self.trigger_wechat_login,
             self.send_finished_video,
         ]
 
         self.system_prompt = (
             "You are an intelligent Video Pipeline Agent. You manage a pipeline that downloads, processes, "
-            "transcribes, copywrites, and uploads YouTube videos to WeChat Channels.\n\n"
+            "transcribes, copywrites, and uploads YouTube videos. WeChat Channels is the primary channel; "
+            "Douyin and Kuaishou may also receive platform-specific submissions when their feature flags are enabled.\n\n"
             "Your environment has specific tools to control this pipeline. Use them to execute the tasks.\n\n"
             "Rules of operation:\n"
             "1. When the user sends '/run' (or indicates running the whole pipeline), you must:\n"
@@ -150,6 +154,11 @@ class PipelineAgent:
             "It starts a HEADLESS login and pushes the login QR code image to Telegram (here in this chat) for the user to scan on their phone — "
             "no need to be at the host. Tell the user the QR will arrive shortly and to scan it; on success the session is saved and stuck "
             "LOGIN_REQUIRED videos auto-resume.\n\n"
+            "8b. Platform publishing alerts are multi-platform. Treat states like UNDER_REVIEW, UNCERTAIN, CANCELED, "
+            "RETRYABLE_FAILED, and PUBLISHED as platform-ledger states, not just WeChat video status. If a platform event is abnormal "
+            "(content-safety block, creator-management mismatch, login/session failure, page calibration failure, timeout, or missing local assets), "
+            "use format_platform_event_alert to explain Platform / ID / State / Source / Action / Reason. Do not keep retrying or open creator pages repeatedly; "
+            "tell the user to verify the platform management page first.\n\n"
             "9b. When the user asks you to SEND/give them the finished/produced video (e.g. '把成片发我', '发我做好的视频', 'send me the video for <id>'), "
             "call send_finished_video(youtube_id, slice_index). It handles Telegram's 50MB limit by auto-compressing large files. "
             "Report back whether it was sent and whether it was compressed; if it returns ok=false, relay the error to the user.\n\n"
@@ -231,6 +240,32 @@ class PipelineAgent:
             "compressed": prepared.compressed,
             "size_mb": round(prepared.size_mb, 1),
         })
+
+    def format_platform_event_alert(
+        self,
+        platform: str,
+        youtube_id: str,
+        reason: str,
+        state: str = "",
+        source_kind: str = "",
+        action: str = "",
+        severity: str = "warning",
+    ) -> str:
+        """Formats a multi-platform publishing event as Telegram HTML without sending it.
+
+        Use this when explaining Douyin/Kuaishou/WeChat platform-ledger events or asking
+        the user to manually verify a creator-management page before any retry.
+        """
+        message = format_platform_event_html(PlatformEvent(
+            platform=platform,
+            youtube_id=youtube_id,
+            reason=reason,
+            state=state,
+            source_kind=source_kind,
+            action=action,
+            severity=severity,
+        ))
+        return json.dumps({"ok": True, "message": message})
 
     def list_pending_videos(self) -> str:
         """Lists all pending videos in the queue ordered by score descending."""

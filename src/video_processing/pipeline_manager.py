@@ -69,6 +69,7 @@
 | 3.37.0  | 2026-07-27 | Codex                               | 发布前审查调用 fail-closed 严格模式，禁止 CP fail-open 或审查异常放行到平台提交 |
 | 3.38.0  | 2026-07-27 | Codex                               | 抖音创作者中心动作加节流和异常熔断告警，避免连续开网页/连续补录触发平台风控 |
 | 3.39.0  | 2026-07-27 | Codex                               | 历史迁移限额为 0 时硬停抖音历史回填，审核回查跳过 HISTORY 记录但保留 NEW 新片发布 |
+| 3.40.0  | 2026-07-27 | Codex                               | 平台告警格式抽到共享 PlatformEvent，管线与 Telegram 助手 bot 共用同一事件语义 |
 """
 
 
@@ -87,6 +88,7 @@ from pathlib import Path
 
 from .db import PipelineDB
 from .utils.file_utils import find_downloaded_video, VIDEO_CONTAINER_SUFFIXES, read_subtitle_text
+from .utils.platform_events import PlatformEvent, format_platform_event_html
 from .utils.text_utils import graceful_truncate_title
 from .scoring import compute_auto_score, PUBLISH_SCORE_LINE
 from .censorship_service import CensorshipService
@@ -217,18 +219,15 @@ class PipelineManager:
         action: str = "",
     ) -> None:
         """平台发布链高风险告警：强调人工核对和停止自动动作。"""
-        safe_platform = html.escape(platform)
-        safe_reason = html.escape(" ".join((reason or "").split())[:500])
-        msg = f"🚨 <b>{safe_platform} Platform Alert</b>\nID: <code>{html.escape(yid)}</code>"
-        if state:
-            msg += f"\nState: <code>{html.escape(state)}</code>"
-        if source_kind:
-            msg += f"\nSource: <code>{html.escape(source_kind)}</code>"
-        if action:
-            msg += f"\nAction: {html.escape(action)}"
-        if safe_reason:
-            msg += f"\nReason: {safe_reason}"
-        self.send_telegram_msg(msg)
+        self.send_telegram_msg(format_platform_event_html(PlatformEvent(
+            platform=platform,
+            youtube_id=yid,
+            reason=reason,
+            source_kind=source_kind,
+            state=state,
+            action=action,
+            severity="critical",
+        )))
 
     def _halt_douyin_platform(
         self,
