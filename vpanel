@@ -10,6 +10,7 @@
 # | 1.2.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 新增 bot 命令组：透传 bot_daemon.py，零业务逻辑 |
 # | 1.3.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 使用 python -u 启用无缓冲输出以实时更新日志 |
 # | 1.4.0 | 2026-07-13 | Codex | UI 检测 LaunchAgent 后统一由 launchd 启停，避免 KeepAlive 与 nohup 双重管理争抢端口 |
+# | 1.4.1 | 2026-07-27 | Codex | 端口变量输出统一使用 ${DASH_PORT}，避免 set -u 下中文标点紧邻变量导致误解析 |
 # =======================================================================
 
 # [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
@@ -93,7 +94,7 @@ ui_start() {
     # [Claude_Opus_4.8] 权威判断：端口已被占用 = 已在运行（不再只信易漂移的 PID 文件）
     local pp; pp="$(_port_pid)"
     if [ -n "$pp" ]; then
-        echo "ℹ️ 控制中心已在运行 (PID: $pp, http://localhost:$DASH_PORT)"
+        echo "ℹ️ 控制中心已在运行 (PID: $pp, http://localhost:${DASH_PORT})"
         echo "$pp" > "$PID_FILE"
         return 0
     fi
@@ -111,13 +112,13 @@ ui_start() {
             bound="$(_port_pid)"
             if [ -n "$bound" ]; then
                 echo "$bound" > "$PID_FILE"
-                echo "✅ 启动成功！端口 :$DASH_PORT 由 PID $bound 接管"
-                echo "🌐 仪表盘地址: http://localhost:$DASH_PORT"
+                echo "✅ 启动成功！端口 :${DASH_PORT} 由 PID $bound 接管"
+                echo "🌐 仪表盘地址: http://localhost:${DASH_PORT}"
                 echo "📄 launchd 日志: $LAUNCH_LOG"
                 return 0
             fi
         done
-        echo "❌ launchd 未能绑定端口 :$DASH_PORT，请检查日志: $LAUNCH_LOG"
+        echo "❌ launchd 未能绑定端口 :${DASH_PORT}，请检查日志: $LAUNCH_LOG"
         return 1
     fi
 
@@ -141,14 +142,14 @@ ui_start() {
         sleep 0.5
         bound="$(_port_pid)"
         if [ "$bound" = "$NEW_PID" ]; then
-            echo "✅ 启动成功！端口 :$DASH_PORT 由 PID $NEW_PID 接管"
-            echo "🌐 仪表盘地址: http://localhost:$DASH_PORT"
+            echo "✅ 启动成功！端口 :${DASH_PORT} 由 PID $NEW_PID 接管"
+            echo "🌐 仪表盘地址: http://localhost:${DASH_PORT}"
             echo "📄 日志文件: output/dashboard.log"
             return 0
         fi
         ps -p "$NEW_PID" > /dev/null 2>&1 || break   # 进程提前退出 → 失败
     done
-    echo "❌ 启动失败/未能绑定端口 :$DASH_PORT，请检查日志: output/dashboard.log"
+    echo "❌ 启动失败/未能绑定端口 :${DASH_PORT}，请检查日志: output/dashboard.log"
     rm -f "$PID_FILE"
     return 1
 }
@@ -181,10 +182,10 @@ ui_stop() {
     fi
     rm -f "$PID_FILE"
     if [ -n "$(_port_pid)" ]; then
-        echo "❌ 端口 :$DASH_PORT 仍被 PID $(_port_pid) 占用，请人工检查"
+        echo "❌ 端口 :${DASH_PORT} 仍被 PID $(_port_pid) 占用，请人工检查"
         return 1
     fi
-    echo "✅ 已停止，端口 :$DASH_PORT 已释放"
+    echo "✅ 已停止，端口 :${DASH_PORT} 已释放"
 }
 
 ui_restart() {
@@ -199,11 +200,11 @@ ui_status() {
     # [Claude_Opus_4.8] 以端口归属为准，并主动报告游离进程
     local pp; pp="$(_port_pid)"
     if [ -n "$pp" ]; then
-        echo "🟢 运行中 (PID: $pp, 端口 :$DASH_PORT)"
-        echo "🌐 仪表盘地址: http://localhost:$DASH_PORT"
+        echo "🟢 运行中 (PID: $pp, 端口 :${DASH_PORT})"
+        echo "🌐 仪表盘地址: http://localhost:${DASH_PORT}"
         echo "🕒 运行时间: $(ps -p "$pp" -o etime= | xargs)"
     else
-        echo "🔴 已停止（端口 :$DASH_PORT 无监听）"
+        echo "🔴 已停止（端口 :${DASH_PORT} 无监听）"
     fi
     local strays; strays="$(_dash_pids | grep -vx "$pp" 2>/dev/null)"
     if [ -n "$strays" ]; then

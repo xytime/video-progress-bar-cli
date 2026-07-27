@@ -43,6 +43,7 @@
 | 3.16.0 | 2026-07-13 | Codex                               | 新增 AI 处理审计 API，后台可读取 provider 尝试、降级和质量结果 |
 | 3.17.0 | 2026-07-23 | Codex                               | 新增三平台补录预览与抖音补录确认入队 API |
 | 3.18.0 | 2026-07-24 | Codex                               | [新任务启动保护] _in_us_market_window 跟随 settings 的 ET 08:15–16:15 窗口，仅阻止调度器启动新管线 |
+| 3.18.1 | 2026-07-27 | Codex                               | 微信扫码登录成功后自动恢复 LOGIN_REQUIRED 为 PENDING，交由既有队列调度器按分数线重发 |
 """
 import hashlib
 import os
@@ -107,6 +108,28 @@ def _wechat_login_env() -> dict:
     return env
 
 
+def _restore_login_required_after_wechat_login() -> int:
+    """微信重登成功后恢复因登录态失效暂停的任务，让既有调度器按分数线重发。"""
+    import logging
+
+    rows = db.get_videos_by_status("LOGIN_REQUIRED")
+    count = 0
+    for row in rows:
+        db.update_video_status(
+            row["youtube_id"],
+            "PENDING",
+            error_msg=None,
+            slice_index=int(row.get("slice_index") or 0),
+        )
+        count += 1
+    if count:
+        logging.getLogger(__name__).info(
+            "[WeChatLogin] Restored %s LOGIN_REQUIRED task(s) to PENDING after login success.",
+            count,
+        )
+    return count
+
+
 def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = False, reason: str = "manual") -> dict:
     """启动单实例微信登录；自动预热时保留旧登录标记和 state，避免提前把现行会话判死。"""
     prj_root = Path(__file__).parent.parent.parent
@@ -150,7 +173,9 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
 
     def _run():
         try:
-            subprocess.run(args, cwd=str(prj_root), env=_wechat_login_env())
+            result = subprocess.run(args, cwd=str(prj_root), env=_wechat_login_env())
+            if result.returncode == 0 and _wechat_login_marker_active(login_at_path):
+                _restore_login_required_after_wechat_login()
         except Exception as exc:
             import logging
             logging.getLogger(__name__).error(f"WeChat login subprocess failed ({reason}): {exc}")
