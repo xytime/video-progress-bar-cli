@@ -66,6 +66,7 @@
 | 3.34.0  | 2026-07-25 | Codex                               | 快手发布优先使用平台专用短文案，避免共享文案超出快手字数限制且不影响抖音回查 |
 | 3.35.0  | 2026-07-26 | Codex                               | 快手/抖音上传前统一复跑内容安全闸门，历史补录与新片命中违禁均取消平台任务，杜绝绕过主流程审查 |
 | 3.36.0  | 2026-07-27 | Codex                               | 删除抖音旧重复发布入口，确保补发/重试只保留带上传前审查的单一实现 |
+| 3.37.0  | 2026-07-27 | Codex                               | 发布前审查调用 fail-closed 严格模式，禁止 CP fail-open 或审查异常放行到平台提交 |
 """
 
 
@@ -595,6 +596,9 @@ class PipelineManager:
             zh_title=zh_title,
             slice_index=slice_index,
             subtitle_text=subtitle_text,
+            stage="platform_publish",
+            fail_closed=True,
+            platform=platform,
         ):
             return False
 
@@ -1042,7 +1046,19 @@ class PipelineManager:
         return self._publish_claimed_douyin_publication(claimed)
 
 
-    def _check_censorship(self, yid: str, title: str, description: str = "", zh_title: str = "", slice_index: int = 0, subtitle_text: str = "") -> bool:
+    def _check_censorship(
+        self,
+        yid: str,
+        title: str,
+        description: str = "",
+        zh_title: str = "",
+        slice_index: int = 0,
+        subtitle_text: str = "",
+        *,
+        stage: str = "pipeline",
+        fail_closed: bool = False,
+        platform: str = "",
+    ) -> bool:
         """执行内容安全审查（违法层）+ 频道内容策略检查（运营层）。
 
         [Claude_Opus_4.8] 症结 8 修复：新增 subtitle_text（Whisper 转录的 .ass 字幕正文）。
@@ -1070,6 +1086,7 @@ class PipelineManager:
         return CensorshipService(self.db, self.send_telegram_msg).check(
             yid, title, description, zh_title=zh_title,
             slice_index=slice_index, subtitle_text=subtitle_text,
+            stage=stage, fail_closed=fail_closed, platform=platform,
         )
 
     # ── 主处理流程 ────────────────────────────────────────────────────────────
@@ -1521,7 +1538,8 @@ class PipelineManager:
                     if subtitle_text:
                         logger.info(f"[Censor] Subtitle body included for {prefix} ({len(subtitle_text)} chars)")
                 if self._check_censorship(yid, short_title, copy_content, zh_title=short_title,
-                                          slice_index=slice_index, subtitle_text=subtitle_text):
+                                          slice_index=slice_index, subtitle_text=subtitle_text,
+                                          stage="wechat_publish", fail_closed=True, platform="微信"):
                     return
 
 

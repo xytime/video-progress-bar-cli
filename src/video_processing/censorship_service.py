@@ -16,9 +16,11 @@
 | 1.3.0   | 2026-07-09 | Codex | 新增频道策略临时 fail-open 开关：命中 CP 告警时可按紧急策略放行 |
 | 1.4.0   | 2026-07-26 | Codex | 审查命中写入 censorship_incidents 独立台账，沉淀规则、上下文和处置决策供专项复盘 |
 | 1.5.0   | 2026-07-26 | Codex | 收紧绕过口：频道白名单只跳过 CP，人工复核放行不能绕过 P0 红线 |
+| 1.6.0   | 2026-07-27 | Codex | 发布前审查支持 fail-closed，CP fail-open 仅保留给非发布阶段，并补充规则证据与流程阶段字段 |
 """
 import re
 import html
+import hashlib
 import logging
 from typing import Callable
 
@@ -62,6 +64,21 @@ class CensorshipService:
                 return joined[start:end]
         return joined[:360]
 
+    @staticmethod
+    def _input_hash(*texts: str) -> str:
+        joined = "\n".join(t for t in texts if t)
+        if not joined:
+            return ""
+        return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
+    def _rule_id(stage: str, result) -> str:
+        level = getattr(result, "level", None) or ("CP" if stage == "channel_policy" else "SYSTEM")
+        channel = getattr(result, "channel", None) or "system"
+        matched = str(getattr(result, "matched", None) or "exception")
+        safe = re.sub(r"[^0-9a-zA-Z_\u4e00-\u9fff]+", "_", matched).strip("_").lower()
+        return f"{stage}.{level}.{channel}.{safe or 'unknown'}"
+
     def _record_incident(
         self,
         yid: str,
@@ -74,6 +91,9 @@ class CensorshipService:
         zh_title: str,
         description: str,
         checked_text: str = "",
+        source_field: str = "",
+        review_stage: str = "",
+        platform: str = "",
     ) -> None:
         """违规台账不能影响主审查流程；失败只记日志。"""
         try:
@@ -89,6 +109,12 @@ class CensorshipService:
                 matched=matched,
                 channel=getattr(result, "channel", None),
                 decision=decision,
+                rule_pack_version=censor_engine.current_rules_fingerprint(),
+                rule_id=self._rule_id(stage, result),
+                source_field=source_field,
+                review_stage=review_stage,
+                platform=platform,
+                input_hash=self._input_hash(title, zh_title, description, checked_text),
                 title=title,
                 zh_title=zh_title,
                 description_preview=description,
@@ -98,12 +124,14 @@ class CensorshipService:
             logger.warning("[CensorLedger] failed to record incident for %s: %s", yid, exc)
 
     def check(self, yid: str, title: str, description: str = "", zh_title: str = "",
-              slice_index: int = 0, subtitle_text: str = "") -> bool:
+              slice_index: int = 0, subtitle_text: str = "", *, stage: str = "pipeline",
+              fail_closed: bool = False, platform: str = "") -> bool:
         """执行审查。返回 True 表示命中（任意层）→ 需要拦截/中断；False 表示全部通过。
 
         subtitle_text（症结 8）：仅并入违法层 P0/P1/P2（精确词匹配，对长转录安全），
         刻意不并入 CP 共现层——CP「国名+冲突词」全文共现在长转录上几乎必然误杀。
         slice_index（BUG-1）：透传到每一处 db.* 写入，避免切片命中污染父行。
+        fail_closed：发布前最终闸门必须置 True；审查异常视为拦截，且 CP fail-open 不生效。
         """
         if not settings.enable_censorship_engine and not settings.enable_channel_policy_filter:
             return False
@@ -153,6 +181,9 @@ class CensorshipService:
                             decision="REJECT_FAILED_BLACKLIST" if settings.enable_blacklist_tombstone else "REJECT_FAILED",
                             title=title, zh_title=zh_title, description=description,
                             checked_text=f"{zh_for_censor}\n{en_for_censor}",
+                            source_field="title,zh_title,description,subtitle",
+                            review_stage=stage,
+                            platform=platform,
                         )
                         logger.error(f"[Censor] P0 violation. Failing video {yid} and blacklisting.")
                         self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P0 Reject: {result.tag} (matched: '{result.matched}')", slice_index=slice_index)
@@ -170,6 +201,9 @@ class CensorshipService:
                             decision="SUSPEND_MANUAL_REVIEW", title=title,
                             zh_title=zh_title, description=description,
                             checked_text=f"{zh_for_censor}\n{en_for_censor}",
+                            source_field="title,zh_title,description,subtitle",
+                            review_stage=stage,
+                            platform=platform,
                         )
                         logger.warning(f"[Censor] P1 violation. Suspending video {yid} for manual review.")
                         self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P1 Suspend: {result.tag} (matched: '{result.matched}')", slice_index=slice_index)
@@ -190,6 +224,9 @@ class CensorshipService:
                                 decision="P2_MANUAL_LOCK_SUSPEND", title=title,
                                 zh_title=zh_title, description=description,
                                 checked_text=f"{zh_for_censor}\n{en_for_censor}",
+                                source_field="title,zh_title,description,subtitle",
+                                review_stage=stage,
+                                platform=platform,
                             )
                             logger.warning(f"[Censor] P2 hit on manually-scored video {yid}; suspending for manual review (score preserved).")
                             self.db.update_video_status(
@@ -209,6 +246,9 @@ class CensorshipService:
                             decision="P2_DEPRIORITIZE", title=title,
                             zh_title=zh_title, description=description,
                             checked_text=f"{zh_for_censor}\n{en_for_censor}",
+                            source_field="title,zh_title,description,subtitle",
+                            review_stage=stage,
+                            platform=platform,
                         )
                         logger.info(f"[Censor] P2 violation. Deprioritizing video {yid} to 0 points.")
                         self.db.update_video_score(yid, 0, force=True, slice_index=slice_index)
@@ -229,7 +269,7 @@ class CensorshipService:
                     return False
                 # TODO 临时兜底：当前 CP 规则会误杀“频道策略偏差场景”，先放行不中断发布。
                 # 完成规则收敛后请将该开关关闭，恢复原有失败/告警流程。
-                if settings.enable_channel_policy_fail_open:
+                if settings.enable_channel_policy_fail_open and not fail_closed:
                     logger.warning(f"[ChannelPolicy] TEMP_FAIL_OPEN enabled, skipping Channel Policy check for video {yid}.")
                     return False
 
@@ -246,6 +286,9 @@ class CensorshipService:
                         decision="CHANNEL_POLICY_REJECT", title=title,
                         zh_title=zh_title, description=description,
                         checked_text=f"{zh_for_policy}\n{en_for_policy}",
+                        source_field="title,zh_title,description",
+                        review_stage=stage,
+                        platform=platform,
                     )
                     self.db.update_video_censor_status(yid, cp_result.tag, score=0, slice_index=slice_index)
                     self.db.update_video_status(
@@ -263,5 +306,29 @@ class CensorshipService:
 
         except Exception as e:
             logger.error(f"[Censor] Verification process error: {e}")
+            if fail_closed:
+                error_msg = f"Censorship fail-closed: {type(e).__name__}: {e}"
+                self.db.update_video_status(yid, "FAILED", error_msg=error_msg, slice_index=slice_index)
+                result = type("CensorExceptionResult", (), {
+                    "level": "SYSTEM",
+                    "action": "FAIL_CLOSED_EXCEPTION",
+                    "tag": "内容审查异常",
+                    "score": 100,
+                    "matched": type(e).__name__,
+                    "channel": "system",
+                })()
+                self._record_incident(
+                    yid, slice_index=slice_index, stage="safety_exception", result=result,
+                    decision="FAIL_CLOSED_EXCEPTION", title=title, zh_title=zh_title,
+                    description=description, checked_text=subtitle_text,
+                    source_field="title,zh_title,description,subtitle",
+                    review_stage=stage, platform=platform,
+                )
+                self.notify(
+                    f"⛔ <b>Censorship Fail-Closed</b>"
+                    f"\nTitle: {html.escape(title or '')}"
+                    f"\nError: <code>{html.escape(str(e))}</code>"
+                )
+                return True
 
         return False

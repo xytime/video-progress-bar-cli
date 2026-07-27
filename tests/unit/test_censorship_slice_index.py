@@ -17,6 +17,7 @@
 | 1.2.0   | 2026-07-26 | Codex           | 收紧 bypass 回归：人工放行和频道白名单均不能绕过 P0 红线 |
 | 1.1.0   | 2026-07-26 | Codex           | 新增 censorship_incidents 台账写入回归，确保违规命中可复盘 |
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | 初始创建：锁定 BUG-1 审查 slice_index 透传行为 |
+| 1.3.0   | 2026-07-27 | Codex           | 覆盖发布前 fail-closed：CP fail-open 不生效，审查异常不放行 |
 """
 
 import os
@@ -123,6 +124,69 @@ def test_channel_policy_hit_on_slice_fails_slice_not_parent(temp_db, monkeypatch
     assert incidents[0]["level"] == "CP"
     assert incidents[0]["matched"] == "ukraine+war"
     assert incidents[0]["decision"] == "CHANNEL_POLICY_REJECT"
+    assert incidents[0]["rule_pack_version"]
+    assert incidents[0]["rule_id"] == "channel_policy.CP.en.ukraine_war"
+    assert incidents[0]["source_field"] == "title,zh_title,description"
+    assert incidents[0]["review_stage"] == "pipeline"
+    assert incidents[0]["input_hash"]
+
+
+def test_channel_policy_fail_open_is_ignored_in_publish_fail_closed_mode(temp_db, monkeypatch):
+    db = _db_with_parent_and_slice(temp_db)
+    _enable(monkeypatch, channel=True)
+    monkeypatch.setattr(settings, "enable_channel_policy_fail_open", True)
+    cp = SimpleNamespace(hit=True, tag="CP_OUT_OF_SCOPE", matched="ukraine+war", channel="en")
+    monkeypatch.setattr(censor_engine, "check_channel_policy", lambda zh_text="", en_text="": cp)
+    pm = _make_pm(db)
+
+    assert pm._check_censorship("vid12345678", "ukraine war coverage", slice_index=1) is False
+    assert db.get_video_by_youtube_id("vid12345678", slice_index=1)["status"] == "DOWNLOADING"
+
+    assert pm._check_censorship(
+        "vid12345678",
+        "ukraine war coverage",
+        slice_index=1,
+        stage="platform_publish",
+        fail_closed=True,
+        platform="快手",
+    ) is True
+    sl = db.get_video_by_youtube_id("vid12345678", slice_index=1)
+    assert sl["status"] == "FAILED"
+    incident = db.get_censorship_incidents("vid12345678", slice_index=1)[0]
+    assert incident["decision"] == "CHANNEL_POLICY_REJECT"
+    assert incident["platform"] == "快手"
+    assert incident["review_stage"] == "platform_publish"
+
+
+def test_censorship_exception_fails_closed_only_when_requested(temp_db, monkeypatch):
+    db = _db_with_parent_and_slice(temp_db)
+    _enable(monkeypatch, censor=True)
+
+    def boom(zh_text="", en_text=""):
+        raise RuntimeError("rules unavailable")
+
+    monkeypatch.setattr(censor_engine, "check_text", boom)
+    pm = _make_pm(db)
+
+    assert pm._check_censorship("vid12345678", "Slice One", slice_index=1) is False
+    assert db.get_video_by_youtube_id("vid12345678", slice_index=1)["status"] == "DOWNLOADING"
+
+    assert pm._check_censorship(
+        "vid12345678",
+        "Slice One",
+        slice_index=1,
+        stage="platform_publish",
+        fail_closed=True,
+        platform="抖音",
+    ) is True
+    sl = db.get_video_by_youtube_id("vid12345678", slice_index=1)
+    assert sl["status"] == "FAILED"
+    assert "Censorship fail-closed" in sl["error_msg"]
+    incident = db.get_censorship_incidents("vid12345678", slice_index=1)[0]
+    assert incident["level"] == "SYSTEM"
+    assert incident["decision"] == "FAIL_CLOSED_EXCEPTION"
+    assert incident["platform"] == "抖音"
+    assert incident["review_stage"] == "platform_publish"
 
 
 def test_default_slice_index_zero_still_targets_parent(temp_db, monkeypatch):

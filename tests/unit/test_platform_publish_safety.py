@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-27 | Codex | 静态锁定平台发布入口：公开提交必须先走上传前审查，审核回查不得发布 |
+| 1.1.0 | 2026-07-27 | Codex | 锁定上传前审查必须以 fail_closed=True 调用，防止 CP fail-open 或异常放行 |
 """
 
 import ast
@@ -78,6 +79,24 @@ def test_platform_publish_entrypoints_are_single_and_guarded() -> None:
         "_publish_claimed_douyin_publication",
         "_publish_claimed_kuaishou_publication",
     ]
+
+
+def test_platform_publish_guard_uses_fail_closed_censorship() -> None:
+    methods = _pipeline_methods()
+    guard = methods["_platform_publication_censorship_blocked"]
+    calls = [
+        child
+        for child in ast.walk(guard)
+        if isinstance(child, ast.Call)
+        and isinstance(child.func, ast.Attribute)
+        and child.func.attr == "_check_censorship"
+    ]
+    assert len(calls) == 1
+    kwargs = {kw.arg: kw.value for kw in calls[0].keywords}
+    assert isinstance(kwargs.get("fail_closed"), ast.Constant)
+    assert kwargs["fail_closed"].value is True
+    assert isinstance(kwargs.get("stage"), ast.Constant)
+    assert kwargs["stage"].value == "platform_publish"
 
 
 def test_review_reconciliation_never_submits_public_publish() -> None:

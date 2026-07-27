@@ -7,12 +7,15 @@
 | 1.1.0 | 2026-07-16 | Codex | 覆盖视频号延后发布任务的原子领取与黑名单保护 |
 | 1.2.0 | 2026-07-25 | Codex | 覆盖取消状态为历史补录自动重试终态与多尝试账本迁移 |
 | 1.3.0 | 2026-07-26 | Codex | 覆盖快手上传前审查命中时取消平台任务且不调用上传器 |
+| 1.4.0 | 2026-07-27 | Codex | 覆盖快手发布前审查异常 fail-closed，不调用上传器 |
 """
 
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from config.settings import settings
+from video_processing import censor_engine
 from video_processing.db.database import PipelineDB
 from video_processing.pipeline_manager import PipelineManager
 
@@ -158,6 +161,41 @@ def test_kuaishou_publication_censorship_hit_cancels_without_upload(tmp_path: Pa
     assert args == (191, "CANCELED")
     assert "上传前内容安全审查拦截" in kwargs["error_message"]
     manager._check_censorship.assert_called_once()
+
+
+def test_kuaishou_publish_preflight_exception_cancels_without_upload(tmp_path: Path, monkeypatch):
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.db.add_video("video-id", "测试视频", "test-channel", score=80)
+    (tmp_path / "video-id_vertical.mp4").write_bytes(b"video")
+    (tmp_path / "video-id_kuaishou_copy.txt").write_text("普通文案", encoding="utf-8")
+    manager.db.create_kuaishou_publication(
+        "video-id",
+        "a" * 64,
+        str(tmp_path / "video-id_vertical.mp4"),
+        source_kind="HISTORY",
+    )
+    publication = manager.db.get_kuaishou_publication("video-id")
+
+    monkeypatch.setattr(settings, "enable_censorship_engine", True)
+    monkeypatch.setattr(settings, "enable_channel_policy_filter", False)
+
+    def boom(zh_text="", en_text=""):
+        raise RuntimeError("rules unavailable")
+
+    monkeypatch.setattr(censor_engine, "check_text", boom)
+    manager._run_tracked = MagicMock()
+    manager.send_telegram_msg = MagicMock()
+
+    assert not manager._publish_claimed_kuaishou_publication(publication)
+
+    manager._run_tracked.assert_not_called()
+    row = manager.db.get_kuaishou_publication("video-id")
+    assert row["state"] == "CANCELED"
+    assert "上传前内容安全审查拦截" in row["last_error_message"]
+    video = manager.db.get_video_by_youtube_id("video-id")
+    assert video["status"] == "FAILED"
+    assert "Censorship fail-closed" in video["error_msg"]
 
 
 def test_manually_completed_attempt_counts_toward_history_daily_limit(tmp_path: Path):

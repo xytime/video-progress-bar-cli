@@ -49,6 +49,7 @@
 | 3.18.0  | 2026-07-25 | Codex                               | 平台发布账本新增 CANCELED 终态，用于缺失本地投递素材的历史补录任务退出自动重试 |
 | 3.18.1  | 2026-07-25 | Codex                               | 抖音提交后未确认的遗留失败不再进入自动领取，避免可能已提交作品被盲重投 |
 | 3.19.0  | 2026-07-26 | Codex                               | 新增 censorship_incidents 独立违规台账，记录审查命中、上下文和处置决策供专项复盘 |
+| 3.20.0  | 2026-07-27 | Codex                               | censorship_incidents 增补规则版本、规则 ID、输入来源、流程阶段、平台和输入 hash 复盘字段 |
 """
 
 import sqlite3
@@ -444,6 +445,12 @@ class PipelineDB:
                     matched TEXT DEFAULT NULL,
                     channel TEXT DEFAULT NULL,
                     decision TEXT NOT NULL,
+                    rule_pack_version TEXT DEFAULT NULL,
+                    rule_id TEXT DEFAULT NULL,
+                    source_field TEXT DEFAULT NULL,
+                    review_stage TEXT DEFAULT NULL,
+                    platform TEXT DEFAULT NULL,
+                    input_hash TEXT DEFAULT NULL,
                     title TEXT DEFAULT NULL,
                     zh_title TEXT DEFAULT NULL,
                     description_preview TEXT DEFAULT NULL,
@@ -490,6 +497,21 @@ class PipelineDB:
                 CREATE INDEX IF NOT EXISTS idx_censorship_incidents_level_created
                 ON censorship_incidents(level, created_at DESC)
             ''')
+
+            cursor.execute("PRAGMA table_info(censorship_incidents)")
+            censorship_incident_columns = {col[1] for col in cursor.fetchall()}
+            for column_name, column_type in {
+                "rule_pack_version": "TEXT DEFAULT NULL",
+                "rule_id": "TEXT DEFAULT NULL",
+                "source_field": "TEXT DEFAULT NULL",
+                "review_stage": "TEXT DEFAULT NULL",
+                "platform": "TEXT DEFAULT NULL",
+                "input_hash": "TEXT DEFAULT NULL",
+            }.items():
+                if column_name not in censorship_incident_columns:
+                    self._logger.info("[Migration] Adding censorship_incidents.%s column...", column_name)
+                    cursor.execute(f"ALTER TABLE censorship_incidents ADD COLUMN {column_name} {column_type};")
+                    conn.commit()
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_kuaishou_publications_state_source
                 ON kuaishou_publications(state, source_kind, claimed_at, created_at)
@@ -629,6 +651,12 @@ class PipelineDB:
         matched: Optional[str],
         channel: Optional[str],
         decision: str,
+        rule_pack_version: Optional[str] = None,
+        rule_id: Optional[str] = None,
+        source_field: Optional[str] = None,
+        review_stage: Optional[str] = None,
+        platform: Optional[str] = None,
+        input_hash: Optional[str] = None,
         title: Optional[str] = None,
         zh_title: Optional[str] = None,
         description_preview: Optional[str] = None,
@@ -643,8 +671,9 @@ class PipelineDB:
             cursor = conn.execute(
                 """INSERT INTO censorship_incidents
                    (video_id, youtube_id, slice_index, stage, level, action, tag, score,
-                    matched, channel, decision, title, zh_title, description_preview, text_excerpt)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    matched, channel, decision, rule_pack_version, rule_id, source_field,
+                    review_stage, platform, input_hash, title, zh_title, description_preview, text_excerpt)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     video["id"] if video else None,
                     youtube_id,
@@ -657,6 +686,12 @@ class PipelineDB:
                     (matched or "")[:200] or None,
                     channel,
                     decision[:80],
+                    (rule_pack_version or "")[:80] or None,
+                    (rule_id or "")[:160] or None,
+                    (source_field or "")[:80] or None,
+                    (review_stage or "")[:80] or None,
+                    (platform or "")[:40] or None,
+                    (input_hash or "")[:80] or None,
                     (title or "")[:300] or None,
                     (zh_title or "")[:300] or None,
                     (description_preview or "")[:600] or None,

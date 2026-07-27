@@ -9,6 +9,7 @@
 | 1.3.0 | 2026-07-25 | Codex | 覆盖历史补录缺失本地投递素材时取消自动重试 |
 | 1.4.0 | 2026-07-25 | Codex | 覆盖快手平台专用短文案优先级 |
 | 1.5.0 | 2026-07-27 | Codex | 覆盖快手历史补发命中审查时取消当前任务并继续下一条 |
+| 1.6.0 | 2026-07-27 | Codex | 浏览器上传衔接夹具显式 mock 审查通过，避免 MagicMock DB 触发严格模式异常 |
 """
 
 import subprocess
@@ -26,6 +27,7 @@ def _manager_with_assets(tmp_path: Path) -> PipelineManager:
     (tmp_path / "video-id_copy.txt").write_text("测试文案", encoding="utf-8")
     manager.db = MagicMock()
     manager.send_telegram_msg = MagicMock()
+    manager._check_censorship = MagicMock(return_value=False)
     return manager
 
 

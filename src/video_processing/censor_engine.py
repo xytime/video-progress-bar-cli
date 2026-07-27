@@ -18,11 +18,13 @@
 | 1.9.0   | 2026-06-22 | Claude_Opus_4.8                        | [🅱️ CP 精准制导] 美国政客/政党裸人名从 CP 硬命中迁至 person_*，仅与 policy_context_*/conflict_* 共现时才拦截，根治审计「症结 3 过宽杀」（传记/大选科普/科技顺带提名误杀）；中国政治实体/领导人/武装组织/冲突复合词仍硬命中不变；scan_all_matches 同步；person_*/policy_context_* 为热加载可选键 |
 | 2.0.0   | 2026-07-23 | Codex                                  | P0/P1/P2 支持 cooccurrence_zh/en 近距离共现规则，用于拦截“中国+独裁/威权/侵略/制裁规避”等字幕风险而不误杀泛地缘政治 |
 | 2.1.0   | 2026-07-26 | Codex                                  | 中国领导人姓名提升为 P0 红线；新增“中国/敏感人物+爆炸/袭击/死亡”P0 兜底与严重负面事件 P1 人工复核 |
+| 2.2.0   | 2026-07-27 | Codex                                  | 导出当前规则包 fingerprint，供审查台账记录命中时实际生效的规则版本 |
 """
 
 import re
 import copy
 import json
+import hashlib
 import logging
 import unicodedata
 from pathlib import Path
@@ -524,6 +526,18 @@ def dump_default_rules() -> dict:
         "blocklist": copy.deepcopy(_DEFAULT_BLOCKLIST),
         "channel_policy": copy.deepcopy(_DEFAULT_CHANNEL_POLICY),
     }
+
+
+def current_rules_fingerprint() -> str:
+    """返回当前生效规则包的短 hash，用于事故复盘时确认命中依据。"""
+    blocklist, channel_policy = _load_external_rules()
+    payload = json.dumps(
+        {"blocklist": blocklist, "channel_policy": channel_policy},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 @dataclass
