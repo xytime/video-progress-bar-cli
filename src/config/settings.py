@@ -33,6 +33,7 @@
 | 3.12.0 | 2026-07-15 | Codex                              | 新增快手创作者中心浏览器上传开关；默认关闭，不改变现有微信发布链路 |
 | 3.13.0 | 2026-07-25 | Codex                              | 补齐抖音、视频号暂停恢复与多平台补录配置字段，避免运行时配置缺失崩溃 |
 | 3.13.1 | 2026-07-26 | Codex                              | 字幕翻译默认顺序改为 Gemini→DeepSeek→Google，移除阿里云作为可选 provider |
+| 3.14.0 | 2026-07-27 | Codex                              | 新增抖音浏览器动作节流和每轮审核回查上限，降低创作者中心风控风险 |
 """
 import json
 import socket
@@ -245,6 +246,10 @@ class Settings(BaseSettings):
     douyin_browser_headless: bool = True
     # 历史视频迁移到抖音的每日上限；新视频双平台投递不受此上限限制。
     douyin_history_daily_limit: int = 5
+    # 任意两次抖音创作者中心浏览器动作之间的最小间隔；覆盖审核回查、新片同步与历史补录。
+    douyin_browser_action_interval_sec: int = 180
+    # 每轮最多回查多少条 UNDER_REVIEW，避免一次性连续打开作品管理页。
+    douyin_review_max_per_run: int = 5
 
     # 视频号暂停发布时，新视频可先进入 WECHAT_DEFERRED，并按限额在恢复后补发。
     wechat_publishing_paused: bool = False

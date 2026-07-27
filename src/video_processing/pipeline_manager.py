@@ -67,6 +67,8 @@
 | 3.35.0  | 2026-07-26 | Codex                               | 快手/抖音上传前统一复跑内容安全闸门，历史补录与新片命中违禁均取消平台任务，杜绝绕过主流程审查 |
 | 3.36.0  | 2026-07-27 | Codex                               | 删除抖音旧重复发布入口，确保补发/重试只保留带上传前审查的单一实现 |
 | 3.37.0  | 2026-07-27 | Codex                               | 发布前审查调用 fail-closed 严格模式，禁止 CP fail-open 或审查异常放行到平台提交 |
+| 3.38.0  | 2026-07-27 | Codex                               | 抖音创作者中心动作加节流和异常熔断告警，避免连续开网页/连续补录触发平台风控 |
+| 3.39.0  | 2026-07-27 | Codex                               | 历史迁移限额为 0 时硬停抖音历史回填，审核回查跳过 HISTORY 记录但保留 NEW 新片发布 |
 """
 
 
@@ -167,6 +169,9 @@ class PipelineManager:
         self._ORIG_VIDEO_DIR.mkdir(exist_ok=True)  # [Claude_Sonnet_4.6_Thinking_planning] 归档目录随主目录一并创建
         self.telegram_token   = settings.telegram_bot_token
         self.telegram_chat_id = settings.telegram_chat_id
+        self._last_douyin_browser_action_at: Optional[float] = None
+        self._douyin_platform_halted = False
+        self._douyin_halt_reason = ""
 
     # ── Telegram 通知 ─────────────────────────────────────────────────────────
 
@@ -200,6 +205,72 @@ class PipelineManager:
             snippet = html.escape(" ".join(reason.split())[:200])  # 折叠空白/换行，截断防刷屏
             msg += f"\nReason: {snippet}"
         self.send_telegram_msg(msg)
+
+    def _notify_platform_alert(
+        self,
+        platform: str,
+        yid: str,
+        reason: str,
+        *,
+        source_kind: str = "",
+        state: str = "",
+        action: str = "",
+    ) -> None:
+        """平台发布链高风险告警：强调人工核对和停止自动动作。"""
+        safe_platform = html.escape(platform)
+        safe_reason = html.escape(" ".join((reason or "").split())[:500])
+        msg = f"🚨 <b>{safe_platform} Platform Alert</b>\nID: <code>{html.escape(yid)}</code>"
+        if state:
+            msg += f"\nState: <code>{html.escape(state)}</code>"
+        if source_kind:
+            msg += f"\nSource: <code>{html.escape(source_kind)}</code>"
+        if action:
+            msg += f"\nAction: {html.escape(action)}"
+        if safe_reason:
+            msg += f"\nReason: {safe_reason}"
+        self.send_telegram_msg(msg)
+
+    def _halt_douyin_platform(
+        self,
+        yid: str,
+        reason: str,
+        *,
+        publication: Optional[Dict[str, Any]] = None,
+        state: str = "",
+    ) -> None:
+        """停止本轮后续抖音浏览器动作，并发出一次明确告警。"""
+        self._douyin_platform_halted = True
+        self._douyin_halt_reason = reason
+        source_kind = ""
+        if publication:
+            source_kind = str(publication.get("source_kind") or "")
+        logger.error("[%s] 抖音自动动作已熔断：%s", yid, reason)
+        self._notify_platform_alert(
+            "Douyin",
+            yid,
+            reason,
+            source_kind=source_kind,
+            state=state,
+            action="本轮停止抖音回查/新片同步/历史回填；请先人工核对创作者中心。",
+        )
+
+    def _throttle_douyin_browser_action(self, reason: str) -> None:
+        """抖音创作者中心页面动作之间强制留间隔，降低连续打开网页的风控风险。"""
+        interval = max(0, int(settings.douyin_browser_action_interval_sec or 0))
+        now = time.monotonic()
+        if self._last_douyin_browser_action_at is not None and interval > 0:
+            elapsed = now - self._last_douyin_browser_action_at
+            remaining = interval - elapsed
+            if remaining > 0:
+                logger.info("[DouyinThrottle] %s：等待 %.1f 秒后再访问创作者中心。", reason, remaining)
+                time.sleep(remaining)
+        self._last_douyin_browser_action_at = time.monotonic()
+
+    def _reset_douyin_run_guard(self) -> None:
+        """新一轮调度开始时重置抖音本轮熔断状态。"""
+        self._douyin_platform_halted = False
+        self._douyin_halt_reason = ""
+        self._last_douyin_browser_action_at = None
 
     # ── 评分 ──────────────────────────────────────────────────────────────────
 
@@ -831,6 +902,9 @@ class PipelineManager:
 
     def _publish_claimed_douyin_publication(self, publication: Dict[str, Any]) -> bool:
         """执行已领取的抖音任务；校准完成前上传器会 fail-closed，不会误点发布。"""
+        if self._douyin_platform_halted:
+            logger.warning("[DouyinHalt] 已停止本轮抖音自动动作，跳过新提交：%s", self._douyin_halt_reason)
+            return False
         publication_id = publication["id"]
         yid = publication["youtube_id"]
         slice_index = publication.get("slice_index", 0)
@@ -844,9 +918,16 @@ class PipelineManager:
             logger.error("[%s] %s", yid, reason)
             state = "CANCELED" if publication.get("source_kind") == "HISTORY" else "RETRYABLE_FAILED"
             self.db.update_douyin_publication_state(publication_id, state, error_message=reason)
+            self._halt_douyin_platform(yid, reason, publication=publication, state=state)
             return False
 
         if self._platform_publication_censorship_blocked(publication, "抖音", copy_file, title_file):
+            self._halt_douyin_platform(
+                yid,
+                "抖音上传前内容安全审查拦截；疑似违禁或频道策略风险，禁止继续自动投递。",
+                publication=publication,
+                state="CANCELED",
+            )
             return False
 
         upload_cmd = [
@@ -867,6 +948,7 @@ class PipelineManager:
         if not settings.douyin_browser_headless:
             upload_cmd.append("--no-headless")
         try:
+            self._throttle_douyin_browser_action(f"{yid} 发布提交")
             result = self._run_tracked(
                 upload_cmd,
                 yid,
@@ -884,6 +966,7 @@ class PipelineManager:
             reason = "抖音发布超过 25 分钟未完成；可能已提交但未能完成作品管理回查。"
             logger.error("[%s] %s", yid, reason)
             self.db.update_douyin_publication_state(publication_id, "UNCERTAIN", error_message=reason)
+            self._halt_douyin_platform(yid, reason, publication=publication, state="UNCERTAIN")
             return False
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode()
@@ -907,6 +990,7 @@ class PipelineManager:
                 reason = f"抖音上传器失败（exit {exc.returncode}）：{stderr[:500]}"
             logger.error("[%s] %s", yid, reason)
             self.db.update_douyin_publication_state(publication_id, state, error_message=reason)
+            self._halt_douyin_platform(yid, reason, publication=publication, state=state)
             return False
 
         self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
@@ -915,6 +999,9 @@ class PipelineManager:
 
     def _queue_and_publish_new_douyin_video(self, yid: str, slice_index: int = 0) -> bool:
         """为成片入库一条 NEW 抖音发布任务，并当即触发发布。"""
+        if self._douyin_platform_halted:
+            logger.warning("[%s] 抖音自动动作已熔断，跳过新片同步：%s", yid, self._douyin_halt_reason)
+            return False
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
         vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
         title_file = self._douyin_title_path(yid, slice_index)
@@ -941,7 +1028,13 @@ class PipelineManager:
         """按每日限额迁移历史作品到抖音；任一失败后固定在该视频。"""
         if not settings.enable_douyin_browser_publishing:
             return
+        if self._douyin_platform_halted:
+            logger.warning("[DouyinHalt] 已停止本轮抖音历史迁移：%s", self._douyin_halt_reason)
+            return
         daily_limit = settings.douyin_history_daily_limit
+        if daily_limit < 1:
+            logger.info("[DouyinHistory] 历史迁移限额为 0，本轮不创建也不领取 HISTORY 任务。")
+            return
         for candidate in self.db.get_platform_backfill_preview_candidates(
             "douyin",
             wall_street_since_upload_date=settings.platform_backfill_wall_street_since_upload_date,
@@ -952,8 +1045,13 @@ class PipelineManager:
             vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
             title_file = self._douyin_title_path(yid, slice_index)
             if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
-                logger.warning("[%s] 历史抖音迁移跳过：本地产物不全", yid)
-                continue
+                reason = (
+                    f"历史抖音迁移本地产物不全：video={vertical.is_file()} "
+                    f"copy={copy_file.is_file()} title={title_file.is_file()}"
+                )
+                logger.error("[%s] %s", yid, reason)
+                self._halt_douyin_platform(yid, reason, state="CANCELED")
+                return
             self.db.create_douyin_publication(
                 yid,
                 self._sha256_file(vertical),
@@ -967,18 +1065,13 @@ class PipelineManager:
             if not claimed:
                 return
             if not self._publish_claimed_douyin_publication(claimed):
-                latest = self.db.get_douyin_publication(
-                    claimed["youtube_id"], slice_index=claimed.get("slice_index", 0)
-                )
-                if latest and latest.get("id") == claimed["id"] and latest.get("state") == "CANCELED":
-                    logger.warning("[%s] 抖音历史迁移任务已取消，继续处理下一条", claimed["youtube_id"])
-                    continue
                 logger.warning("[%s] 抖音历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
                 return
 
     def run_douyin_history_migration(self) -> None:
         """供早间定时任务调用：仅迁移抖音历史作品。"""
         logger.info("--- Starting Douyin History Migration ---")
+        self._reset_douyin_run_guard()
         self._run_douyin_history_migration()
         logger.info("--- Douyin History Migration Completed ---")
 
@@ -986,16 +1079,35 @@ class PipelineManager:
         """只读回查抖音审核中的作品；确认发布才落账。"""
         if not settings.enable_douyin_browser_publishing:
             return 0
+        if self._douyin_platform_halted:
+            logger.warning("[DouyinHalt] 已停止本轮抖音审核回查：%s", self._douyin_halt_reason)
+            return 0
         reviewed = 0
         publications = self.db.get_douyin_publications_by_states(["UNDER_REVIEW"])
-        for publication in publications:
+        reviewable_publications = [
+            publication for publication in publications
+            if publication.get("source_kind") != "HISTORY"
+        ]
+        skipped_history = len(publications) - len(reviewable_publications)
+        if skipped_history:
+            logger.info("跳过 %s 条历史迁移 UNDER_REVIEW 回查；历史任务当前已暂停。", skipped_history)
+        max_per_run = max(0, int(settings.douyin_review_max_per_run or 0))
+        if max_per_run and len(reviewable_publications) > max_per_run:
+            logger.warning(
+                "抖音 UNDER_REVIEW 待回查 %s 条，本轮仅检查前 %s 条，避免连续访问创作者中心。",
+                len(reviewable_publications),
+                max_per_run,
+            )
+        for publication in reviewable_publications[:max_per_run or len(reviewable_publications)]:
             publication_id = publication["id"]
             yid = publication["youtube_id"]
             slice_index = publication.get("slice_index", 0)
             _, copy_file = self._douyin_asset_paths(yid, slice_index)
             if not copy_file.is_file():
-                logger.error("[%s] 抖音审核回查缺少文案文件：%s", yid, copy_file)
-                continue
+                reason = f"抖音审核回查缺少文案文件：{copy_file}"
+                logger.error("[%s] %s", yid, reason)
+                self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
+                break
             verify_cmd = [
                 self._VENV_PYTHON,
                 str(self._PRJ_ROOT / "scripts" / "douyin_uploader.py"),
@@ -1007,6 +1119,7 @@ class PipelineManager:
             if not settings.douyin_browser_headless:
                 verify_cmd.append("--no-headless")
             try:
+                self._throttle_douyin_browser_action(f"{yid} 审核回查")
                 result = self._run_tracked(
                     verify_cmd,
                     yid,
@@ -1017,16 +1130,21 @@ class PipelineManager:
                     timeout=180,
                 )
             except subprocess.TimeoutExpired:
-                logger.warning("[%s] 抖音审核回查超时，保留审核中状态", yid)
-                continue
+                reason = "抖音审核回查超时，保留审核中状态；停止本轮后续回查，避免连续访问。"
+                logger.warning("[%s] %s", yid, reason)
+                self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
+                break
             except subprocess.CalledProcessError as exc:
                 if exc.returncode == 6:
                     logger.info("[%s] 抖音作品仍在审核中", yid)
+                    continue
                 elif exc.returncode == 2:
-                    logger.warning("[%s] 抖音登录态失效，保留审核中状态等待下次核对", yid)
+                    reason = "抖音登录态失效，保留审核中状态；停止本轮后续自动回查。"
                 else:
-                    logger.warning("[%s] 抖音审核回查未确认状态（exit %s），保留审核中", yid, exc.returncode)
-                continue
+                    reason = f"抖音审核回查未确认状态（exit {exc.returncode}），保留审核中；停止本轮后续自动回查。"
+                logger.warning("[%s] %s", yid, reason)
+                self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
+                break
             if result.stdout:
                 logger.debug("Douyin review verifier stdout:\n%s", result.stdout)
             if result.stderr:
@@ -1040,6 +1158,9 @@ class PipelineManager:
         """每日优先重试一条抖音未确认的新片；失败则保留同一视频下次再试。"""
         if not settings.enable_douyin_browser_publishing:
             return True
+        if self._douyin_platform_halted:
+            logger.warning("[DouyinHalt] 已停止本轮抖音新片重试：%s", self._douyin_halt_reason)
+            return False
         claimed = self.db.claim_next_douyin_publication("NEW")
         if not claimed:
             return True
@@ -1846,8 +1967,11 @@ class PipelineManager:
             if not self._retry_one_kuaishou_new_video():
                 logger.warning("快手新片重试未确认成功，保留同一视频下次重试。")
         if settings.enable_douyin_browser_publishing:
+            self._reset_douyin_run_guard()
             self.reconcile_douyin_under_review()
-            if not self._retry_one_douyin_new_video():
+            if self._douyin_platform_halted:
+                logger.warning("抖音审核回查触发熔断，跳过本轮新片重试和历史迁移。")
+            elif not self._retry_one_douyin_new_video():
                 logger.warning("抖音新片重试未确认成功，保留同一视频下次重试。")
             else:
                 self._run_douyin_history_migration()

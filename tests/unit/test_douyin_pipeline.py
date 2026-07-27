@@ -9,6 +9,7 @@
 | 1.3.0 | 2026-07-25 | Codex | 覆盖历史补录缺失本地投递素材时取消并继续下一条 |
 | 1.4.0 | 2026-07-26 | Codex | 覆盖抖音上传前审查命中时取消平台任务且不调用上传器 |
 | 1.5.0 | 2026-07-27 | Codex | 覆盖抖音历史补发命中审查时取消当前任务并继续下一条 |
+| 1.6.0 | 2026-07-27 | Codex | 覆盖抖音动作节流、每轮回查上限和异常熔断停止后续自动动作 |
 """
 
 import subprocess
@@ -120,6 +121,103 @@ def test_douyin_review_reconciliation_only_checks_management(tmp_path: Path):
     manager.db.update_douyin_publication_state.assert_called_once_with(19, "PUBLISHED")
 
 
+def test_douyin_review_reconciliation_halts_on_abnormal_status(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    (tmp_path / "second-id_copy.txt").write_text("第二条文案", encoding="utf-8")
+    manager.db.get_douyin_publications_by_states.return_value = [
+        {"id": 19, "youtube_id": "video-id", "slice_index": 0, "source_kind": "NEW"},
+        {"id": 20, "youtube_id": "second-id", "slice_index": 0, "source_kind": "NEW"},
+    ]
+    manager._run_tracked = MagicMock(side_effect=subprocess.CalledProcessError(4, ["douyin"]))
+    manager._throttle_douyin_browser_action = MagicMock()
+
+    previous = settings.enable_douyin_browser_publishing
+    previous_max = settings.douyin_review_max_per_run
+    settings.enable_douyin_browser_publishing = True
+    settings.douyin_review_max_per_run = 5
+    try:
+        assert manager.reconcile_douyin_under_review() == 0
+    finally:
+        settings.enable_douyin_browser_publishing = previous
+        settings.douyin_review_max_per_run = previous_max
+
+    manager._run_tracked.assert_called_once()
+    manager._throttle_douyin_browser_action.assert_called_once()
+    manager.send_telegram_msg.assert_called_once()
+    assert manager._douyin_platform_halted
+
+
+def test_douyin_review_reconciliation_respects_per_run_limit(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    (tmp_path / "second-id_copy.txt").write_text("第二条文案", encoding="utf-8")
+    manager.db.get_douyin_publications_by_states.return_value = [
+        {"id": 19, "youtube_id": "video-id", "slice_index": 0, "source_kind": "NEW"},
+        {"id": 20, "youtube_id": "second-id", "slice_index": 0, "source_kind": "NEW"},
+    ]
+    manager._run_tracked = MagicMock(side_effect=subprocess.CalledProcessError(6, ["douyin"]))
+    manager._throttle_douyin_browser_action = MagicMock()
+
+    previous = settings.enable_douyin_browser_publishing
+    previous_max = settings.douyin_review_max_per_run
+    settings.enable_douyin_browser_publishing = True
+    settings.douyin_review_max_per_run = 1
+    try:
+        assert manager.reconcile_douyin_under_review() == 0
+    finally:
+        settings.enable_douyin_browser_publishing = previous
+        settings.douyin_review_max_per_run = previous_max
+
+    manager._run_tracked.assert_called_once()
+    manager._throttle_douyin_browser_action.assert_called_once()
+    manager.send_telegram_msg.assert_not_called()
+
+
+def test_douyin_review_limit_is_applied_after_skipping_history(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    manager.db.get_douyin_publications_by_states.return_value = [
+        {"id": 18, "youtube_id": "history-id", "slice_index": 0, "source_kind": "HISTORY"},
+        {"id": 19, "youtube_id": "video-id", "slice_index": 0, "source_kind": "NEW"},
+    ]
+    manager._run_tracked = MagicMock(
+        return_value=subprocess.CompletedProcess(["douyin"], 0, stdout="published", stderr="")
+    )
+    manager._throttle_douyin_browser_action = MagicMock()
+
+    previous = settings.enable_douyin_browser_publishing
+    previous_max = settings.douyin_review_max_per_run
+    settings.enable_douyin_browser_publishing = True
+    settings.douyin_review_max_per_run = 1
+    try:
+        assert manager.reconcile_douyin_under_review() == 1
+    finally:
+        settings.enable_douyin_browser_publishing = previous
+        settings.douyin_review_max_per_run = previous_max
+
+    command = manager._run_tracked.call_args.args[0]
+    assert str(tmp_path / "video-id_copy.txt") in command
+    assert "history-id" not in " ".join(command)
+    manager.db.update_douyin_publication_state.assert_called_once_with(19, "PUBLISHED")
+
+
+def test_douyin_browser_actions_are_throttled_between_visits(tmp_path: Path, monkeypatch):
+    manager = _manager_with_assets(tmp_path)
+    monotonic_values = iter([105.0, 130.0])
+    sleep = MagicMock()
+
+    previous_interval = settings.douyin_browser_action_interval_sec
+    settings.douyin_browser_action_interval_sec = 30
+    monkeypatch.setattr("video_processing.pipeline_manager.time.monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr("video_processing.pipeline_manager.time.sleep", sleep)
+    try:
+        manager._last_douyin_browser_action_at = 100.0
+        manager._throttle_douyin_browser_action("第二次打开页面")
+    finally:
+        settings.douyin_browser_action_interval_sec = previous_interval
+
+    sleep.assert_called_once_with(25.0)
+    assert manager._last_douyin_browser_action_at == 130.0
+
+
 def test_paused_wechat_defers_video_and_uses_enabled_douyin_submission(tmp_path: Path):
     manager = _manager_with_assets(tmp_path)
     manager.db.get_kuaishou_publication.return_value = None
@@ -192,6 +290,34 @@ def test_daily_job_skips_douyin_history_migration_when_new_retry_is_uncertain(tm
     manager._run_douyin_history_migration.assert_not_called()
 
 
+def test_daily_job_skips_douyin_retry_and_history_when_review_halts(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    manager.score_pending_videos = MagicMock()
+    manager.process_high_score_videos = MagicMock()
+    manager.reconcile_douyin_under_review = MagicMock(
+        side_effect=lambda: manager._halt_douyin_platform("review-video", "作品管理异常")
+    )
+    manager._retry_one_douyin_new_video = MagicMock(return_value=True)
+    manager._run_douyin_history_migration = MagicMock()
+
+    previous_douyin = settings.enable_douyin_browser_publishing
+    previous_kuaishou = settings.enable_kuaishou_browser_publishing
+    previous_paused = settings.wechat_publishing_paused
+    settings.enable_douyin_browser_publishing = True
+    settings.enable_kuaishou_browser_publishing = False
+    settings.wechat_publishing_paused = True
+    try:
+        manager.run_daily_job()
+    finally:
+        settings.enable_douyin_browser_publishing = previous_douyin
+        settings.enable_kuaishou_browser_publishing = previous_kuaishou
+        settings.wechat_publishing_paused = previous_paused
+
+    manager.reconcile_douyin_under_review.assert_called_once()
+    manager._retry_one_douyin_new_video.assert_not_called()
+    manager._run_douyin_history_migration.assert_not_called()
+
+
 def test_douyin_history_migration_auto_queues_only_rule_candidates(tmp_path: Path):
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     manager._OUT_DIR = tmp_path
@@ -224,7 +350,7 @@ def test_douyin_history_migration_auto_queues_only_rule_candidates(tmp_path: Pat
     assert manager._publish_claimed_douyin_publication.call_count == 2
 
 
-def test_douyin_history_migration_continues_after_canceling_missing_assets(tmp_path: Path):
+def test_douyin_history_migration_halts_after_canceling_missing_assets(tmp_path: Path):
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     manager._OUT_DIR = tmp_path
     manager.send_telegram_msg = MagicMock()
@@ -254,12 +380,13 @@ def test_douyin_history_migration_continues_after_canceling_missing_assets(tmp_p
         settings.douyin_history_daily_limit = previous_limit
 
     assert manager.db.get_douyin_publication("missing-title")["state"] == "CANCELED"
-    assert manager.db.get_douyin_publication("ready-douyin")["state"] == "PUBLISHED"
-    assert manager._run_tracked.call_count == 1
+    assert manager.db.get_douyin_publication("ready-douyin")["state"] == "QUEUED"
+    manager._run_tracked.assert_not_called()
+    assert manager._douyin_platform_halted
     assert missing["id"] != ready["id"]
 
 
-def test_douyin_history_migration_continues_after_censorship_cancel(tmp_path: Path):
+def test_douyin_history_migration_halts_after_censorship_cancel(tmp_path: Path):
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     manager._OUT_DIR = tmp_path
     manager.send_telegram_msg = MagicMock()
@@ -290,6 +417,7 @@ def test_douyin_history_migration_continues_after_censorship_cancel(tmp_path: Pa
         settings.douyin_history_daily_limit = previous_limit
 
     assert manager.db.get_douyin_publication("blocked-history")["state"] == "CANCELED"
-    assert manager.db.get_douyin_publication("ready-douyin")["state"] == "PUBLISHED"
-    assert manager._run_tracked.call_count == 1
+    assert manager.db.get_douyin_publication("ready-douyin")["state"] == "QUEUED"
+    manager._run_tracked.assert_not_called()
+    assert manager._douyin_platform_halted
     assert blocked["id"] != ready["id"]
