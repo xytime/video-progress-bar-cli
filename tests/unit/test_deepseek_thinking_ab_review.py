@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-07-28 | Codex | 覆盖样本成本上限、thinking 对照请求与价格估算的离线契约 |
+| 1.1.0 | 2026-07-29 | Codex | 覆盖 AI-TR-003 的 JSON 输出契约与无正文失败分类 |
 """
 
 import sys
@@ -16,9 +17,12 @@ if str(_repo_root) not in sys.path:
 
 from scripts.deepseek_thinking_ab_review import (  # noqa: E402
     build_dry_run_report,
+    build_output_contract_payload,
     build_variant_payload,
     estimate_cost_usd,
+    inspect_translation_response,
     OfflineVariantError,
+    normalize_output_contract_order,
     normalize_thinking_order,
     reported_usage,
     select_pairs,
@@ -57,6 +61,49 @@ def test_variant_payload_can_apply_the_same_output_cap_to_both_modes():
 
     assert baseline["max_tokens"] == disabled["max_tokens"] == 1200
     assert normalize_thinking_order("disabled,production_baseline") == ["disabled", "production_baseline"]
+
+
+def test_output_contract_payload_only_adds_json_object_contract():
+    baseline = build_output_contract_payload(
+        ["Hello"], context_text="", model="test", output_contract="baseline", max_output_tokens=1200,
+    )
+    candidate = build_output_contract_payload(
+        ["Hello"], context_text="", model="test", output_contract="json_object", max_output_tokens=1200,
+    )
+
+    assert "response_format" not in baseline
+    assert candidate["response_format"] == {"type": "json_object"}
+    assert {key: value for key, value in candidate.items() if key != "response_format"} == baseline
+    assert normalize_output_contract_order("json_object,baseline") == ["json_object", "baseline"]
+
+
+def test_response_inspection_classifies_token_limit_without_retaining_content():
+    inspection = inspect_translation_response(
+        {
+            "model": "deepseek-v4-flash",
+            "choices": [{"finish_reason": "length", "message": {"content": "["}}],
+        },
+        expected_count=1,
+    )
+
+    assert inspection["translations"] is None
+    assert inspection["audit"]["failure_classification"] == "TOKEN_LIMIT"
+    assert inspection["audit"]["response_content_bytes"] == 1
+    assert "content" not in inspection["audit"]
+
+
+def test_response_inspection_distinguishes_invalid_json_from_id_mismatch():
+    invalid = inspect_translation_response(
+        {"choices": [{"finish_reason": "stop", "message": {"content": "not json"}}]}, expected_count=1,
+    )
+    mismatch = inspect_translation_response(
+        {"choices": [{"finish_reason": "stop", "message": {"content": '[{"id": 2, "translation": "x"}]'}}]},
+        expected_count=1,
+    )
+
+    assert invalid["audit"]["failure_classification"] == "INVALID_JSON"
+    assert mismatch["audit"]["json_parseable"] is True
+    assert mismatch["audit"]["failure_classification"] == "ID_MISMATCH"
 
 
 def test_usage_and_cost_are_based_only_on_provider_token_counts():

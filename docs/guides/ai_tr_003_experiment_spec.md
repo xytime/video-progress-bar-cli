@@ -9,6 +9,7 @@
 | 版本 | 日期 | 作者 | 说明 |
 | --- | --- | --- | --- |
 | 1.0 | 2026-07-29 | Codex | 从 AI-TR-002 的不可解析结果派生，冻结 JSON 契约和失败元数据的最小诊断设计 |
+| 1.1 | 2026-07-29 | Codex | 记录本地 dry-run、请求哈希和完整单测结果；未调用 API |
 
 ## 1. 为什么先做这一步
 
@@ -88,3 +89,19 @@ Dry-run 必须证明请求数、字节上限、token 上限和最坏情况预算
 > 批准 `AI-TR-003`：最多 4 次 DeepSeek API 请求，两个既有字幕样本，每次最多 1,200 输出 token、6,000 请求 bytes、90 秒，累计预算不超过 USD 0.01；仅写入 `output/research/AI-TR-003/`，不改变生产配置、队列或发布流程。
 
 未获得上述批准时，当前决定是 `NO_EXECUTION`。
+
+## 7. 本地就绪记录
+
+`2026-07-29` 已使用 `scripts/run_ai_tr_003.py` 完成 dry-run，结果位于 `output/research/AI-TR-003/dry_run.json`。该文件仅在本机研究目录中保存，不进入 Git。
+
+| 项目 | 结果 |
+| --- | --- |
+| API 请求 | 0 / 4；未传入 `--execute` |
+| 决定 | `DRY_RUN_ONLY` |
+| 最坏成本预留 | USD 0.004704 / USD 0.01 |
+| 财经样本请求体 | baseline 2,410 bytes；`json_object` 2,454 bytes |
+| 科技样本请求体 | `json_object` 1,980 bytes；baseline 1,936 bytes |
+| 契约验证 | 每对 payload 除 `response_format` 外完全相同；每条请求均低于 6,000 bytes |
+| 自动验证 | `PYTHONPATH=src .venv/bin/python -m pytest tests/unit -q`：671 passed，8 warnings，30 subtests passed |
+
+当前唯一下一项是取得第 6 节的明确执行批准。批准前不得调用 API、不得改变 thinking 或生产翻译请求。

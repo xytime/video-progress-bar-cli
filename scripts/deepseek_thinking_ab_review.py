@@ -11,11 +11,13 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-07-28 | Codex | 新增受限离线 A/B：比较 DeepSeek 当前请求形态与显式关闭 thinking 的质量、延迟、token 和价格估算 |
 | 1.1.0 | 2026-07-28 | Codex | 支持固定输出、请求字节和顺序上限，供 AI-TR-002 交叉顺序实验使用 |
+| 1.2.0 | 2026-07-29 | Codex | 增加 JSON 输出契约的离线审计能力，仅记录非敏感响应元数据，供 AI-TR-003 使用 |
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
@@ -54,18 +56,30 @@ DEFAULT_INPUT_PRICE_PER_MILLION = 0.14
 DEFAULT_INPUT_CACHE_HIT_PRICE_PER_MILLION = 0.0028
 DEFAULT_OUTPUT_PRICE_PER_MILLION = 0.28
 _VALID_THINKING_MODES = {"production_baseline", "disabled"}
+_VALID_OUTPUT_CONTRACTS = {"baseline", "json_object"}
 
 
 class OfflineVariantError(RuntimeError):
     """单次离线候选不可用时保留最小审计信息，不保留模型原始响应。"""
 
     def __init__(self, message: str, *, thinking_mode: str, latency_ms: int, usage: Dict[str, int],
-                 estimated_cost_usd: float | None):
+                 estimated_cost_usd: float | None, output_contract: str | None = None,
+                 audit: Dict[str, Any] | None = None):
         super().__init__(message)
         self.thinking_mode = thinking_mode
         self.latency_ms = latency_ms
         self.usage = usage
         self.estimated_cost_usd = estimated_cost_usd
+        self.output_contract = output_contract
+        self.audit = audit or {}
+
+
+class OfflineRequestError(RuntimeError):
+    """保留 HTTP/网络失败的最小审计信息，不保留服务端响应正文。"""
+
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def select_pairs(
@@ -98,6 +112,17 @@ def normalize_thinking_order(thinking_order: str | Sequence[str]) -> List[str]:
     return modes
 
 
+def normalize_output_contract_order(output_order: str | Sequence[str]) -> List[str]:
+    """校验 AI-TR-003 的输出契约对照顺序。"""
+    if isinstance(output_order, str):
+        modes = [item.strip() for item in output_order.split(",") if item.strip()]
+    else:
+        modes = [str(item).strip() for item in output_order if str(item).strip()]
+    if len(modes) != 2 or set(modes) != _VALID_OUTPUT_CONTRACTS:
+        raise ValueError("output contract order must contain baseline and json_object exactly once")
+    return modes
+
+
 def build_variant_payload(
     source_texts: Sequence[str], *, context_text: str, model: str, thinking_mode: str,
     max_output_tokens: int | None = None,
@@ -108,6 +133,23 @@ def build_variant_payload(
         payload["thinking"] = {"type": "disabled"}
     elif thinking_mode != "production_baseline":
         raise ValueError(f"Unsupported thinking mode: {thinking_mode}")
+    if max_output_tokens is not None:
+        if max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be positive")
+        payload["max_tokens"] = max_output_tokens
+    return payload
+
+
+def build_output_contract_payload(
+    source_texts: Sequence[str], *, context_text: str, model: str, output_contract: str,
+    max_output_tokens: int | None = None,
+) -> Dict[str, Any]:
+    """构造 AI-TR-003 payload；唯一请求差异是 JSON 输出契约。"""
+    payload = _build_payload(list(source_texts), context_text=context_text, model=model)
+    if output_contract == "json_object":
+        payload["response_format"] = {"type": "json_object"}
+    elif output_contract != "baseline":
+        raise ValueError(f"Unsupported output contract: {output_contract}")
     if max_output_tokens is not None:
         if max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive")
@@ -145,6 +187,116 @@ def estimate_cost_usd(
     )
 
 
+def _finish_reason(data: Dict[str, Any]) -> str | None:
+    """读取首个 choice 的结束原因；缺失时保留未知而不是猜测。"""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return None
+    value = choices[0].get("finish_reason")
+    return str(value) if value is not None else None
+
+
+def _strip_json_fence(content: str) -> str:
+    """与生产解析器保持一致地去掉可选 Markdown 围栏。"""
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    return text
+
+
+def inspect_translation_response(data: Dict[str, Any], *, expected_count: int) -> Dict[str, Any]:
+    """将模型响应压缩为可审计元数据，绝不把响应正文放进结果。"""
+    content = _extract_message_content(data)
+    content_bytes = content.encode("utf-8")
+    finish_reason = _finish_reason(data)
+    audit: Dict[str, Any] = {
+        "response_model": str(data.get("model") or ""),
+        "finish_reason": finish_reason,
+        "response_content_bytes": len(content_bytes),
+        "response_content_sha256": hashlib.sha256(content_bytes).hexdigest(),
+        "json_parseable": False,
+        "id_aligned": False,
+        "failure_classification": None,
+    }
+    if finish_reason == "length":
+        audit["failure_classification"] = "TOKEN_LIMIT"
+        return {"audit": audit, "translations": None}
+    if not content:
+        audit["failure_classification"] = "EMPTY_CONTENT"
+        return {"audit": audit, "translations": None}
+    try:
+        json.loads(_strip_json_fence(content))
+    except json.JSONDecodeError:
+        audit["failure_classification"] = "INVALID_JSON"
+        return {"audit": audit, "translations": None}
+    audit["json_parseable"] = True
+    translations = _parse_translation_json(content, expected_count=expected_count)
+    if translations is None:
+        audit["failure_classification"] = "ID_MISMATCH"
+        return {"audit": audit, "translations": None}
+    audit["id_aligned"] = True
+    return {"audit": audit, "translations": translations}
+
+
+def _execute_payload(
+    *, payload: Dict[str, Any], model: str, thinking_mode: str, output_contract: str | None,
+    input_price_per_million: float, input_cache_hit_price_per_million: float,
+    output_price_per_million: float, expected_count: int, max_request_bytes: int | None,
+) -> Dict[str, Any]:
+    """执行一个已冻结的离线 payload，并返回不含正文的审计结果。"""
+    api_key = settings.deepseek_api_key or ""
+    if not api_key:
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured; dry-run remains available.")
+    request_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if max_request_bytes is not None and len(request_body) > max_request_bytes:
+        raise RuntimeError(
+            f"Offline request exceeds byte cap: {len(request_body)} > {max_request_bytes}"
+        )
+    base_url = (settings.deepseek_base_url or "https://api.deepseek.com").rstrip("/")
+    request = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=request_body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        method="POST",
+    )
+    started = time.perf_counter()
+    try:
+        with urllib.request.urlopen(request, timeout=90) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise OfflineRequestError(f"DeepSeek offline experiment HTTP error: {exc.code}", status_code=exc.code) from exc
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        raise OfflineRequestError(f"DeepSeek offline experiment request failed: {type(exc).__name__}: {exc}") from exc
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
+    inspection = inspect_translation_response(data, expected_count=expected_count)
+    usage = reported_usage(data)
+    estimated_cost = estimate_cost_usd(
+        usage,
+        input_price_per_million=input_price_per_million,
+        input_cache_hit_price_per_million=input_cache_hit_price_per_million,
+        output_price_per_million=output_price_per_million,
+    )
+    audit = inspection["audit"]
+    if inspection["translations"] is None:
+        raise OfflineVariantError(
+            "DeepSeek returned no parseable aligned translation candidate.",
+            thinking_mode=thinking_mode, latency_ms=elapsed_ms, usage=usage,
+            estimated_cost_usd=estimated_cost, output_contract=output_contract, audit=audit,
+        )
+    return {
+        "thinking_mode": thinking_mode,
+        "output_contract": output_contract,
+        "model": str(audit["response_model"] or model),
+        "latency_ms": elapsed_ms,
+        "usage": usage,
+        "estimated_cost_usd": estimated_cost,
+        "audit": audit,
+        "translations": inspection["translations"],
+    }
+
+
 def execute_variant(
     *,
     source_texts: Sequence[str],
@@ -158,55 +310,37 @@ def execute_variant(
     max_request_bytes: int | None = None,
 ) -> Dict[str, Any]:
     """执行一次离线请求。异常上抛，避免把失败伪装成可比较的质量结果。"""
-    api_key = settings.deepseek_api_key or ""
-    if not api_key:
-        raise RuntimeError("DEEPSEEK_API_KEY is not configured; dry-run remains available.")
-    base_url = (settings.deepseek_base_url or "https://api.deepseek.com").rstrip("/")
     payload = build_variant_payload(
         source_texts, context_text=context_text, model=model, thinking_mode=thinking_mode,
         max_output_tokens=max_output_tokens,
     )
-    request_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    if max_request_bytes is not None and len(request_body) > max_request_bytes:
-        raise RuntimeError(
-            f"Offline request exceeds byte cap: {len(request_body)} > {max_request_bytes}"
-        )
-    request = urllib.request.Request(
-        f"{base_url}/chat/completions",
-        data=request_body,
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
-        method="POST",
-    )
-    started = time.perf_counter()
-    try:
-        with urllib.request.urlopen(request, timeout=90) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"DeepSeek offline experiment request failed: {type(exc).__name__}: {exc}") from exc
-    elapsed_ms = round((time.perf_counter() - started) * 1000)
-    content = _extract_message_content(data)
-    translations = _parse_translation_json(content, expected_count=len(source_texts)) if content else None
-    usage = reported_usage(data)
-    estimated_cost = estimate_cost_usd(
-        usage,
+    return _execute_payload(
+        payload=payload, model=model, thinking_mode=thinking_mode, output_contract=None,
         input_price_per_million=input_price_per_million,
         input_cache_hit_price_per_million=input_cache_hit_price_per_million,
-        output_price_per_million=output_price_per_million,
+        output_price_per_million=output_price_per_million, expected_count=len(source_texts),
+        max_request_bytes=max_request_bytes,
     )
-    if translations is None:
-        raise OfflineVariantError(
-            "DeepSeek returned no parseable aligned translation candidate.",
-            thinking_mode=thinking_mode, latency_ms=elapsed_ms, usage=usage,
-            estimated_cost_usd=estimated_cost,
-        )
-    return {
-        "thinking_mode": thinking_mode,
-        "model": model,
-        "latency_ms": elapsed_ms,
-        "usage": usage,
-        "estimated_cost_usd": estimated_cost,
-        "translations": translations,
-    }
+
+
+def execute_output_contract_variant(
+    *, source_texts: Sequence[str], context_text: str, model: str, output_contract: str,
+    input_price_per_million: float, input_cache_hit_price_per_million: float,
+    output_price_per_million: float, max_output_tokens: int | None = None,
+    max_request_bytes: int | None = None,
+) -> Dict[str, Any]:
+    """执行 AI-TR-003 的单次 JSON 输出契约候选，不改变 thinking。"""
+    payload = build_output_contract_payload(
+        source_texts, context_text=context_text, model=model, output_contract=output_contract,
+        max_output_tokens=max_output_tokens,
+    )
+    return _execute_payload(
+        payload=payload, model=model, thinking_mode="production_baseline",
+        output_contract=output_contract, input_price_per_million=input_price_per_million,
+        input_cache_hit_price_per_million=input_cache_hit_price_per_million,
+        output_price_per_million=output_price_per_million, expected_count=len(source_texts),
+        max_request_bytes=max_request_bytes,
+    )
 
 
 def build_dry_run_report(
