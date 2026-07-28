@@ -8,6 +8,7 @@
 | Version | Date       | Author | Description |
 |---------|------------|--------|-------------|
 | 1.0.0 | 2026-07-28 | Codex | 抽出三小时质检只读快照和三秒可读 Telegram HTML 渲染 |
+| 1.1.0 | 2026-07-28 | Codex | 增加总览行：最近发布间隔与各平台成功/待核验/失败态势 |
 """
 from __future__ import annotations
 
@@ -40,15 +41,39 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _format_time(value: str | None) -> str:
+    parsed = _parse_time(value)
+    if parsed is not None:
+        return parsed.astimezone(SHANGHAI).strftime("%m-%d %H:%M")
+    return value or "未知"
+
+
+def _parse_time(value: str | None) -> dt.datetime | None:
     if not value:
-        return "未知"
+        return None
     try:
         parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=dt.timezone.utc)
-        return parsed.astimezone(SHANGHAI).strftime("%m-%d %H:%M")
+        return parsed
     except ValueError:
-        return value
+        return None
+
+
+def _age_text(value: str | None, now: dt.datetime) -> str:
+    parsed = _parse_time(value)
+    if parsed is None:
+        return "未知"
+    seconds = max(0, int((now - parsed.astimezone(SHANGHAI)).total_seconds()))
+    minutes = seconds // 60
+    if minutes < 1:
+        return "刚刚"
+    if minutes < 60:
+        return f"{minutes}分钟"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours}小时{minutes % 60}分钟"
+    days = hours // 24
+    return f"{days}天{hours % 24}小时"
 
 
 def _monitor_summary(now: dt.datetime, monitor_path: Path, backoff_path: Path) -> dict[str, Any]:
@@ -166,6 +191,48 @@ def _join_or_none(items: list[str], *, limit: int = 3) -> str:
     return "；".join(shown) + suffix
 
 
+def _platform_overview(snapshot: dict[str, Any], now: dt.datetime) -> str:
+    labels = {"kuaishou": "快手", "douyin": "抖音"}
+    rows = {str(row.get("platform") or ""): row for row in snapshot.get("platform_overview", [])}
+    parts = ["微信 本地有产出" if snapshot.get("last_local_published") else "微信 尚无本地成功"]
+
+    for platform in ("kuaishou", "douyin"):
+        row = rows.get(platform)
+        label = labels[platform]
+        if not row:
+            parts.append(f"{label} 无账本")
+            continue
+        published_count = int(row.get("published_count") or 0)
+        review_count = int(row.get("review_count") or 0)
+        failed_count = int(row.get("failed_count") or 0)
+        queued_count = int(row.get("queued_count") or 0)
+        if published_count:
+            parts.append(
+                f"{label} 最近平台成功 {_format_time(row.get('last_published_at'))}"
+                f"（{_age_text(row.get('last_published_at'), now)}前）"
+            )
+        elif failed_count and not review_count and not queued_count:
+            parts.append(f"{label} 疑似失败阻塞 {failed_count}，最新 {row.get('latest_state') or 'UNKNOWN'}")
+        elif review_count:
+            suffix = f"/待投递 {queued_count}" if queued_count else ""
+            parts.append(f"{label} 无平台成功证明，待核验 {review_count}{suffix}")
+        elif queued_count:
+            parts.append(f"{label} 暂无平台成功证明，待投递 {queued_count}")
+        else:
+            parts.append(f"{label} 最新 {row.get('latest_state') or 'UNKNOWN'}")
+    return " | ".join(parts)
+
+
+def _local_publish_overview(snapshot: dict[str, Any], now: dt.datetime) -> str:
+    latest = snapshot.get("last_local_published")
+    if not latest:
+        return "最近本地发布：无记录"
+    return (
+        f"最近本地发布 {_format_time(latest.get('updated_at'))}"
+        f"（距今 {_age_text(latest.get('updated_at'), now)}；非平台可见证明）"
+    )
+
+
 def format_report(
     snapshot: dict[str, Any],
     monitor: dict[str, Any],
@@ -211,6 +278,8 @@ def format_report(
     return "\n".join(
         [
             f"<b>{icon} {html.escape(headline)}</b> <code>{now.strftime('%m-%d %H:%M')} CST</code>",
+            f"<b>总览</b>：{html.escape(_local_publish_overview(snapshot, now))}",
+            f"<b>平台</b>：{html.escape(_platform_overview(snapshot, now))}",
             f"<b>卡点</b>：{html.escape(blocker)}",
             f"<b>信号</b>：<code>{html.escape(key_line)}</code>",
             "",

@@ -52,6 +52,7 @@
 | 3.20.0  | 2026-07-27 | Codex                               | censorship_incidents 增补规则版本、规则 ID、输入来源、流程阶段、平台和输入 hash 复盘字段 |
 | 3.21.0  | 2026-07-28 | Codex                               | 新增监控候选入库/补全接口；RSS 降级条目保持 METADATA_PENDING，完整官方元数据到位才转 PENDING |
 | 3.22.0  | 2026-07-28 | Codex                               | 新增只读运维质检快照接口，集中队列、失败、在途和多平台账本查询 |
+| 3.22.1  | 2026-07-28 | Codex                               | 质检快照增加最近本地发布和各平台账本总览，支撑 Telegram 上帝视角状态行 |
 """
 
 import sqlite3
@@ -1293,6 +1294,12 @@ class PipelineDB:
                    WHERE status = 'PUBLISHED' AND updated_at >= datetime('now', ?)""",
                 (f"-{safe_hours} hours",),
             ).fetchone()["count"]
+            last_local_published = conn.execute(
+                """SELECT youtube_id, slice_index, title, updated_at
+                   FROM processed_videos
+                   WHERE status = 'PUBLISHED'
+                   ORDER BY updated_at DESC LIMIT 1"""
+            ).fetchone()
             active_count = conn.execute(
                 f"SELECT COUNT(*) AS count FROM processed_videos WHERE status IN ({active_placeholders})",
                 active_states,
@@ -1327,17 +1334,59 @@ class PipelineDB:
                        SELECT 'douyin' AS platform, state FROM douyin_publications
                    ) GROUP BY platform, state ORDER BY platform, state"""
             ).fetchall()
+            platform_overview_rows = conn.execute(
+                """
+                WITH all_pubs AS (
+                    SELECT 'kuaishou' AS platform, id, video_id, state, published_at,
+                           updated_at, last_error_message
+                    FROM kuaishou_publications
+                    UNION ALL
+                    SELECT 'douyin' AS platform, id, video_id, state, published_at,
+                           updated_at, last_error_message
+                    FROM douyin_publications
+                ),
+                ranked AS (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY platform ORDER BY updated_at DESC, id DESC
+                           ) AS rn
+                    FROM all_pubs
+                ),
+                agg AS (
+                    SELECT platform,
+                           COUNT(*) AS total,
+                           SUM(CASE WHEN state = 'PUBLISHED' THEN 1 ELSE 0 END) AS published_count,
+                           SUM(CASE WHEN state IN ('UNDER_REVIEW', 'UNCERTAIN') THEN 1 ELSE 0 END) AS review_count,
+                           SUM(CASE WHEN state IN ('RETRYABLE_FAILED', 'BANNED') THEN 1 ELSE 0 END) AS failed_count,
+                           SUM(CASE WHEN state IN ('QUEUED', 'UPLOADING') THEN 1 ELSE 0 END) AS queued_count,
+                           MAX(CASE WHEN state = 'PUBLISHED' THEN COALESCE(published_at, updated_at) END) AS last_published_at,
+                           MAX(CASE WHEN state IN ('RETRYABLE_FAILED', 'BANNED') THEN updated_at END) AS last_failed_at
+                    FROM all_pubs
+                    GROUP BY platform
+                )
+                SELECT agg.platform, agg.total, agg.published_count, agg.review_count,
+                       agg.failed_count, agg.queued_count, agg.last_published_at, agg.last_failed_at,
+                       ranked.video_id AS latest_video_id, ranked.state AS latest_state,
+                       ranked.updated_at AS latest_updated_at,
+                       ranked.last_error_message AS latest_error
+                FROM agg
+                JOIN ranked ON ranked.platform = agg.platform AND ranked.rn = 1
+                ORDER BY agg.platform
+                """
+            ).fetchall()
 
         return {
             "hours": safe_hours,
             "status_counts": status_counts,
             "eligible_queue": queue,
             "local_published": local_published,
+            "last_local_published": dict(last_local_published) if last_local_published else None,
             "active_count": active_count,
             "active": [dict(row) for row in active_rows],
             "stale_active": [dict(row) for row in stale_active_rows],
             "recent_failures": [dict(row) for row in recent_failures],
             "platform_states": [dict(row) for row in platform_rows],
+            "platform_overview": [dict(row) for row in platform_overview_rows],
         }
 
     def get_detailed_stats(self) -> Dict[str, Any]:
