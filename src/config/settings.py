@@ -37,12 +37,13 @@
 | 3.14.0 | 2026-07-27 | Codex                              | 新增抖音浏览器动作节流和每轮审核回查上限，降低创作者中心风控风险 |
 | 3.15.0 | 2026-07-28 | Codex                              | 新增公开视频发布黄金窗口配置，支持按北京时间活跃高峰控制平台提交 |
 | 3.15.1 | 2026-07-29 | Codex                              | 默认发布窗口整体前移 30 分钟，抢占活跃峰值前置流量 |
+| 3.15.2 | 2026-07-29 | Codex                              | 新增中国大陆节假日/补班日配置，工作日与休息日使用不同发布窗口 |
 """
 import json
 import socket
 import urllib.request
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional, List
 from zoneinfo import ZoneInfo
@@ -266,10 +267,23 @@ class Settings(BaseSettings):
     wechat_deferred_recovery_daily_limit: int = 5
 
     # 公开视频提交窗口。默认按北京时间短视频活跃规律设置：
-    # 早通勤、午休、晚通勤、晚间黄金档；各窗口相对统计峰值整体提前 30 分钟。
+    # 工作日：早通勤、午休、晚通勤、晚间黄金档；各窗口相对统计峰值整体提前 30 分钟。
     enable_public_publish_windows: bool = True
     public_publish_timezone: str = "Asia/Shanghai"
     public_publish_windows: str = "07:00-08:00,11:15-12:45,17:00-18:15,19:00-20:40"
+    # 周末/法定节假日：通勤峰弱化，上午整体后移，下午休闲窗口拉长，晚间保留更长推荐期。
+    public_publish_holiday_windows: str = "09:30-11:00,13:30-16:30,19:00-21:30"
+    # 中国大陆 2026 年国务院办公厅放假日期；格式支持 YYYY-MM-DD 或 YYYY-MM-DD..YYYY-MM-DD。
+    china_public_holidays: str = (
+        "2026-01-01..2026-01-03,"
+        "2026-02-15..2026-02-23,"
+        "2026-04-04..2026-04-06,"
+        "2026-05-01..2026-05-05,"
+        "2026-06-19..2026-06-21,"
+        "2026-09-25..2026-09-27,"
+        "2026-10-01..2026-10-07"
+    )
+    china_makeup_workdays: str = "2026-01-04,2026-02-14,2026-02-28,2026-05-09,2026-09-20,2026-10-10"
 
     # 多平台历史补录规则：Wall Street Truthbombs 的源视频发布日期下界（YYYYMMDD）。
     platform_backfill_wall_street_since_upload_date: str = "20260713"
@@ -336,14 +350,43 @@ class Settings(BaseSettings):
 
     @property
     def public_publish_window_ranges(self) -> list[tuple[int, int]]:
-        """解析 PUBLIC_PUBLISH_WINDOWS 为分钟区间；格式 HH:MM-HH:MM，逗号分隔。"""
+        """解析当前日期类型对应的发布窗口为分钟区间。"""
+        return self._parse_publish_window_ranges(self.public_publish_windows)
+
+    @property
+    def public_publish_holiday_window_ranges(self) -> list[tuple[int, int]]:
+        """解析 PUBLIC_PUBLISH_HOLIDAY_WINDOWS 为分钟区间。"""
+        return self._parse_publish_window_ranges(self.public_publish_holiday_windows)
+
+    def is_china_rest_day(self, value: date) -> bool:
+        """按中国大陆放假/补班规则判断是否休息日；补班日优先级高于周末。"""
+        if self._date_in_specs(value, self.china_makeup_workdays):
+            return False
+        if self._date_in_specs(value, self.china_public_holidays):
+            return True
+        return value.weekday() >= 5
+
+    def selected_public_publish_windows(self, now: Optional[datetime] = None) -> str:
+        """返回当前日期类型使用的发布窗口字符串。"""
+        local_now = self._local_public_publish_datetime(now)
+        if self.is_china_rest_day(local_now.date()):
+            return self.public_publish_holiday_windows
+        return self.public_publish_windows
+
+    def selected_public_publish_window_ranges(self, now: Optional[datetime] = None) -> list[tuple[int, int]]:
+        """返回当前日期类型使用的发布窗口分钟区间。"""
+        return self._parse_publish_window_ranges(self.selected_public_publish_windows(now))
+
+    @staticmethod
+    def _parse_publish_window_ranges(value: str) -> list[tuple[int, int]]:
+        """解析发布时间窗口；格式 HH:MM-HH:MM，逗号分隔。"""
         ranges: list[tuple[int, int]] = []
-        for item in (self.public_publish_windows or "").split(","):
+        for item in (value or "").split(","):
             start_raw, sep, end_raw = item.strip().partition("-")
             if not sep:
                 continue
-            start = self._parse_hhmm_minutes(start_raw)
-            end = self._parse_hhmm_minutes(end_raw)
+            start = Settings._parse_hhmm_minutes(start_raw)
+            end = Settings._parse_hhmm_minutes(end_raw)
             if start is None or end is None or start == end:
                 continue
             ranges.append((start, end))
@@ -353,20 +396,38 @@ class Settings(BaseSettings):
         """当前时间是否允许触发公开视频提交；关闭开关时始终允许。"""
         if not self.enable_public_publish_windows:
             return True
+        local_now = self._local_public_publish_datetime(now)
+        minute = local_now.hour * 60 + local_now.minute
+        for start, end in self.selected_public_publish_window_ranges(local_now):
+            if start < end and start <= minute < end:
+                return True
+            if start > end and (minute >= start or minute < end):
+                return True
+        return False
+
+    def _local_public_publish_datetime(self, now: Optional[datetime] = None) -> datetime:
         try:
             timezone = ZoneInfo(self.public_publish_timezone or "Asia/Shanghai")
         except Exception:
             timezone = ZoneInfo("Asia/Shanghai")
         local_now = datetime.now(timezone) if now is None else now
         if local_now.tzinfo is None:
-            local_now = local_now.replace(tzinfo=timezone)
-        else:
-            local_now = local_now.astimezone(timezone)
-        minute = local_now.hour * 60 + local_now.minute
-        for start, end in self.public_publish_window_ranges:
-            if start < end and start <= minute < end:
-                return True
-            if start > end and (minute >= start or minute < end):
+            return local_now.replace(tzinfo=timezone)
+        return local_now.astimezone(timezone)
+
+    @staticmethod
+    def _date_in_specs(value: date, specs: str) -> bool:
+        for item in (specs or "").split(","):
+            item = item.strip()
+            if not item:
+                continue
+            start_raw, sep, end_raw = item.partition("..")
+            try:
+                start = date.fromisoformat(start_raw.strip())
+                end = date.fromisoformat(end_raw.strip()) if sep else start
+            except ValueError:
+                continue
+            if start <= value <= end:
                 return True
         return False
 

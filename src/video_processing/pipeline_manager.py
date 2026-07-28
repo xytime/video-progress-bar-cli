@@ -220,7 +220,7 @@ class PipelineManager:
             platform,
             target,
             settings.public_publish_timezone,
-            settings.public_publish_windows,
+            settings.selected_public_publish_windows(),
         )
         return False
 
