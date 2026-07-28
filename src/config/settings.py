@@ -36,6 +36,7 @@
 | 3.13.1 | 2026-07-26 | Codex                              | 字幕翻译默认顺序改为 Gemini→DeepSeek→Google，移除阿里云作为可选 provider |
 | 3.14.0 | 2026-07-27 | Codex                              | 新增抖音浏览器动作节流和每轮审核回查上限，降低创作者中心风控风险 |
 | 3.15.0 | 2026-07-28 | Codex                              | 新增公开视频发布黄金窗口配置，支持按北京时间活跃高峰控制平台提交 |
+| 3.15.1 | 2026-07-29 | Codex                              | 默认发布窗口整体前移 30 分钟，抢占活跃峰值前置流量 |
 """
 import json
 import socket
@@ -265,10 +266,10 @@ class Settings(BaseSettings):
     wechat_deferred_recovery_daily_limit: int = 5
 
     # 公开视频提交窗口。默认按北京时间短视频活跃规律设置：
-    # 早通勤、午休、晚通勤、晚间黄金档；晚间窗口提前半小时启动，给平台审核/首轮推荐留缓冲。
+    # 早通勤、午休、晚通勤、晚间黄金档；各窗口相对统计峰值整体提前 30 分钟。
     enable_public_publish_windows: bool = True
     public_publish_timezone: str = "Asia/Shanghai"
-    public_publish_windows: str = "07:30-08:30,11:45-13:15,17:30-18:45,19:30-21:10"
+    public_publish_windows: str = "07:00-08:00,11:15-12:45,17:00-18:15,19:00-20:40"
 
     # 多平台历史补录规则：Wall Street Truthbombs 的源视频发布日期下界（YYYYMMDD）。
     platform_backfill_wall_street_since_upload_date: str = "20260713"

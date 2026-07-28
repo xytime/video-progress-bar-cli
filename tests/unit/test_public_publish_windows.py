@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-28 | Codex | 覆盖北京时间黄金发布窗口解析与窗口外平台入队等待 |
+| 1.1.0 | 2026-07-29 | Codex | 示例窗口随默认策略整体前移 30 分钟 |
 """
 
 from datetime import datetime
@@ -21,10 +22,10 @@ def test_public_publish_window_uses_configured_timezone():
     previous_windows = settings.public_publish_windows
     settings.enable_public_publish_windows = True
     settings.public_publish_timezone = "Asia/Shanghai"
-    settings.public_publish_windows = "07:30-08:30,19:30-21:10"
+    settings.public_publish_windows = "07:00-08:00,19:00-20:40"
     try:
-        assert settings.is_public_publish_window(datetime(2026, 7, 28, 20, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
-        assert not settings.is_public_publish_window(datetime(2026, 7, 28, 21, 11, tzinfo=ZoneInfo("Asia/Shanghai")))
+        assert settings.is_public_publish_window(datetime(2026, 7, 28, 19, 30, tzinfo=ZoneInfo("Asia/Shanghai")))
+        assert not settings.is_public_publish_window(datetime(2026, 7, 28, 20, 41, tzinfo=ZoneInfo("Asia/Shanghai")))
     finally:
         settings.enable_public_publish_windows = previous_enabled
         settings.public_publish_timezone = previous_timezone
