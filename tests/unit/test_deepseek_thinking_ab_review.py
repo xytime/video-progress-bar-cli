@@ -18,6 +18,8 @@ from scripts.deepseek_thinking_ab_review import (  # noqa: E402
     build_dry_run_report,
     build_variant_payload,
     estimate_cost_usd,
+    OfflineVariantError,
+    normalize_thinking_order,
     reported_usage,
     select_pairs,
 )
@@ -43,6 +45,18 @@ def test_variant_payload_only_adds_explicit_disabled_thinking():
     assert disabled["thinking"] == {"type": "disabled"}
     for key in ("model", "messages", "stream", "temperature"):
         assert disabled[key] == baseline[key]
+
+
+def test_variant_payload_can_apply_the_same_output_cap_to_both_modes():
+    baseline = build_variant_payload(
+        ["Hello"], context_text="", model="test", thinking_mode="production_baseline", max_output_tokens=1200
+    )
+    disabled = build_variant_payload(
+        ["Hello"], context_text="", model="test", thinking_mode="disabled", max_output_tokens=1200
+    )
+
+    assert baseline["max_tokens"] == disabled["max_tokens"] == 1200
+    assert normalize_thinking_order("disabled,production_baseline") == ["disabled", "production_baseline"]
 
 
 def test_usage_and_cost_are_based_only_on_provider_token_counts():
@@ -75,3 +89,14 @@ def test_dry_run_declares_no_external_or_pipeline_side_effects(tmp_path):
     assert report["mode"] == "dry_run"
     assert report["request_count"] == 2
     assert "No API call" in report["side_effects"]
+
+
+def test_offline_variant_error_keeps_auditable_metadata_without_response_body():
+    error = OfflineVariantError(
+        "invalid aligned JSON", thinking_mode="production_baseline", latency_ms=123,
+        usage={"prompt_tokens": 20}, estimated_cost_usd=0.0001,
+    )
+
+    assert error.thinking_mode == "production_baseline"
+    assert error.usage == {"prompt_tokens": 20}
+    assert "response" not in error.__dict__

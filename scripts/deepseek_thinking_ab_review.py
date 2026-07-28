@@ -10,6 +10,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-07-28 | Codex | 新增受限离线 A/B：比较 DeepSeek 当前请求形态与显式关闭 thinking 的质量、延迟、token 和价格估算 |
+| 1.1.0 | 2026-07-28 | Codex | 支持固定输出、请求字节和顺序上限，供 AI-TR-002 交叉顺序实验使用 |
 """
 
 from __future__ import annotations
@@ -52,6 +53,19 @@ from video_processing.utils.translation_quality_evaluator import evaluate_transl
 DEFAULT_INPUT_PRICE_PER_MILLION = 0.14
 DEFAULT_INPUT_CACHE_HIT_PRICE_PER_MILLION = 0.0028
 DEFAULT_OUTPUT_PRICE_PER_MILLION = 0.28
+_VALID_THINKING_MODES = {"production_baseline", "disabled"}
+
+
+class OfflineVariantError(RuntimeError):
+    """单次离线候选不可用时保留最小审计信息，不保留模型原始响应。"""
+
+    def __init__(self, message: str, *, thinking_mode: str, latency_ms: int, usage: Dict[str, int],
+                 estimated_cost_usd: float | None):
+        super().__init__(message)
+        self.thinking_mode = thinking_mode
+        self.latency_ms = latency_ms
+        self.usage = usage
+        self.estimated_cost_usd = estimated_cost_usd
 
 
 def select_pairs(
@@ -73,8 +87,20 @@ def select_pairs(
     return selected
 
 
+def normalize_thinking_order(thinking_order: str | Sequence[str]) -> List[str]:
+    """校验两个候选必须各出现一次，避免 A/B 请求偷偷改变变量数量。"""
+    if isinstance(thinking_order, str):
+        modes = [item.strip() for item in thinking_order.split(",") if item.strip()]
+    else:
+        modes = [str(item).strip() for item in thinking_order if str(item).strip()]
+    if len(modes) != 2 or set(modes) != _VALID_THINKING_MODES:
+        raise ValueError("thinking order must contain production_baseline and disabled exactly once")
+    return modes
+
+
 def build_variant_payload(
-    source_texts: Sequence[str], *, context_text: str, model: str, thinking_mode: str
+    source_texts: Sequence[str], *, context_text: str, model: str, thinking_mode: str,
+    max_output_tokens: int | None = None,
 ) -> Dict[str, Any]:
     """构造与生产翻译相同的请求，仅允许在 thinking 字段上产生差异。"""
     payload = _build_payload(list(source_texts), context_text=context_text, model=model)
@@ -82,6 +108,10 @@ def build_variant_payload(
         payload["thinking"] = {"type": "disabled"}
     elif thinking_mode != "production_baseline":
         raise ValueError(f"Unsupported thinking mode: {thinking_mode}")
+    if max_output_tokens is not None:
+        if max_output_tokens <= 0:
+            raise ValueError("max_output_tokens must be positive")
+        payload["max_tokens"] = max_output_tokens
     return payload
 
 
@@ -124,6 +154,8 @@ def execute_variant(
     input_price_per_million: float,
     input_cache_hit_price_per_million: float,
     output_price_per_million: float,
+    max_output_tokens: int | None = None,
+    max_request_bytes: int | None = None,
 ) -> Dict[str, Any]:
     """执行一次离线请求。异常上抛，避免把失败伪装成可比较的质量结果。"""
     api_key = settings.deepseek_api_key or ""
@@ -131,11 +163,17 @@ def execute_variant(
         raise RuntimeError("DEEPSEEK_API_KEY is not configured; dry-run remains available.")
     base_url = (settings.deepseek_base_url or "https://api.deepseek.com").rstrip("/")
     payload = build_variant_payload(
-        source_texts, context_text=context_text, model=model, thinking_mode=thinking_mode
+        source_texts, context_text=context_text, model=model, thinking_mode=thinking_mode,
+        max_output_tokens=max_output_tokens,
     )
+    request_body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if max_request_bytes is not None and len(request_body) > max_request_bytes:
+        raise RuntimeError(
+            f"Offline request exceeds byte cap: {len(request_body)} > {max_request_bytes}"
+        )
     request = urllib.request.Request(
         f"{base_url}/chat/completions",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        data=request_body,
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
         method="POST",
     )
@@ -148,26 +186,34 @@ def execute_variant(
     elapsed_ms = round((time.perf_counter() - started) * 1000)
     content = _extract_message_content(data)
     translations = _parse_translation_json(content, expected_count=len(source_texts)) if content else None
-    if translations is None:
-        raise RuntimeError("DeepSeek returned no parseable aligned translation candidate.")
     usage = reported_usage(data)
+    estimated_cost = estimate_cost_usd(
+        usage,
+        input_price_per_million=input_price_per_million,
+        input_cache_hit_price_per_million=input_cache_hit_price_per_million,
+        output_price_per_million=output_price_per_million,
+    )
+    if translations is None:
+        raise OfflineVariantError(
+            "DeepSeek returned no parseable aligned translation candidate.",
+            thinking_mode=thinking_mode, latency_ms=elapsed_ms, usage=usage,
+            estimated_cost_usd=estimated_cost,
+        )
     return {
         "thinking_mode": thinking_mode,
         "model": model,
         "latency_ms": elapsed_ms,
         "usage": usage,
-        "estimated_cost_usd": estimate_cost_usd(
-            usage,
-            input_price_per_million=input_price_per_million,
-            input_cache_hit_price_per_million=input_cache_hit_price_per_million,
-            output_price_per_million=output_price_per_million,
-        ),
+        "estimated_cost_usd": estimated_cost,
         "translations": translations,
     }
 
 
 def build_dry_run_report(
-    *, ass_path: Path, selected_pairs: Sequence[Dict[str, str]], model: str, output_path: Path
+    *, ass_path: Path, selected_pairs: Sequence[Dict[str, str]], model: str, output_path: Path,
+    thinking_order: Sequence[str] = ("production_baseline", "disabled"),
+    max_context_chars: int = 1800, max_output_tokens: int | None = None,
+    max_request_bytes: int | None = None,
 ) -> Dict[str, Any]:
     """生成可审阅的调用计划，不向任何 API 外发文本。"""
     return {
@@ -177,8 +223,11 @@ def build_dry_run_report(
         "model": model,
         "selected_segment_count": len(selected_pairs),
         "selected_source_chars": sum(len(pair["source"]) for pair in selected_pairs),
-        "request_count": 2,
-        "variants": ["production_baseline", "disabled"],
+        "request_count": len(thinking_order),
+        "thinking_order": list(thinking_order),
+        "max_context_chars": max_context_chars,
+        "max_output_tokens": max_output_tokens,
+        "max_request_bytes": max_request_bytes,
         "side_effects": "No API call, no PipelineDB write, no publish-state change.",
     }
 
@@ -195,6 +244,10 @@ def run_review(
     input_price_per_million: float,
     input_cache_hit_price_per_million: float,
     output_price_per_million: float,
+    thinking_order: str | Sequence[str] = ("production_baseline", "disabled"),
+    max_context_chars: int = 1800,
+    max_output_tokens: int | None = None,
+    max_request_bytes: int | None = None,
 ) -> Dict[str, Any]:
     """执行或预览一轮受限 A/B。"""
     pairs = load_ass_pairs(ass_path)
@@ -205,9 +258,12 @@ def run_review(
     )
     if not selected_pairs:
         raise ValueError("No subtitle sample fits the requested limits.")
+    order = normalize_thinking_order(thinking_order)
     if not execute:
         return build_dry_run_report(
-            ass_path=ass_path, selected_pairs=selected_pairs, model=model, output_path=output_path
+            ass_path=ass_path, selected_pairs=selected_pairs, model=model, output_path=output_path,
+            thinking_order=order, max_context_chars=max_context_chars,
+            max_output_tokens=max_output_tokens, max_request_bytes=max_request_bytes,
         )
 
     title, description = load_metadata(info_json or default_info_path(ass_path), fallback_title=ass_path.stem)
@@ -217,12 +273,13 @@ def run_review(
     quality_context = build_quality_context(source_texts, title=title, description=description)
     variant_results = [
         execute_variant(
-            source_texts=source_texts, context_text=context.to_prompt_context(), model=model,
+            source_texts=source_texts, context_text=context.to_prompt_context(max_chars=max_context_chars), model=model,
             thinking_mode=thinking_mode, input_price_per_million=input_price_per_million,
             input_cache_hit_price_per_million=input_cache_hit_price_per_million,
+            max_output_tokens=max_output_tokens, max_request_bytes=max_request_bytes,
             output_price_per_million=output_price_per_million,
         )
-        for thinking_mode in ("production_baseline", "disabled")
+        for thinking_mode in order
     ]
     events = []
     for variant in variant_results:
@@ -245,6 +302,10 @@ def run_review(
         "model": model,
         "selected_segment_count": len(selected_pairs),
         "selected_source_chars": sum(len(text) for text in source_texts),
+        "thinking_order": order,
+        "max_context_chars": max_context_chars,
+        "max_output_tokens": max_output_tokens,
+        "max_request_bytes": max_request_bytes,
         "pricing_snapshot": {
             "input_price_per_million_usd": input_price_per_million,
             "input_cache_hit_price_per_million_usd": input_cache_hit_price_per_million,
@@ -276,7 +337,11 @@ def main() -> int:
     parser.add_argument("--max-segments", type=int, default=12, help="Hard cap for sampled subtitle segments")
     parser.add_argument("--max-source-chars", type=int, default=2400, help="Hard cap for source characters sent per variant")
     parser.add_argument("--model", default=None, help="DeepSeek model (default: configured model)")
-    parser.add_argument("--execute", action="store_true", help="Actually send exactly two bounded API requests")
+    parser.add_argument("--thinking-order", default="production_baseline,disabled", help="Comma-separated A/B order")
+    parser.add_argument("--max-context-chars", type=int, default=1800)
+    parser.add_argument("--max-output-tokens", type=int, default=None)
+    parser.add_argument("--max-request-bytes", type=int, default=None)
+    parser.add_argument("--execute", action="store_true", help="Actually send two bounded API requests")
     parser.add_argument("--input-price-per-million", type=float, default=DEFAULT_INPUT_PRICE_PER_MILLION)
     parser.add_argument("--input-cache-hit-price-per-million", type=float, default=DEFAULT_INPUT_CACHE_HIT_PRICE_PER_MILLION)
     parser.add_argument("--output-price-per-million", type=float, default=DEFAULT_OUTPUT_PRICE_PER_MILLION)
@@ -291,6 +356,8 @@ def main() -> int:
         input_price_per_million=args.input_price_per_million,
         input_cache_hit_price_per_million=args.input_cache_hit_price_per_million,
         output_price_per_million=args.output_price_per_million,
+        thinking_order=args.thinking_order, max_context_chars=max(1, args.max_context_chars),
+        max_output_tokens=args.max_output_tokens, max_request_bytes=args.max_request_bytes,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
