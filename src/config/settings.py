@@ -28,6 +28,7 @@
 | 3.7.0 | 2026-07-05 | Codex                               | 新增 DeepSeek OpenAI-compatible API 配置，为字幕翻译 provider 预留 |
 | 3.8.0 | 2026-07-09 | Codex                               | 新增字幕质量与频道策略 fail-open 运行时开关，支持紧急恢复发布 |
 | 3.9.0 | 2026-07-10 | Codex                               | 新增微信会话临期自动预热重登开关，提前推送二维码避免发布时才发现过期 |
+| 3.17.0 | 2026-07-28 | Codex                              | 新增 YouTube Data API 频道目录配置；无密钥时由 RSS 降级保住候选发现 |
 | 3.10.0 | 2026-07-12 | Codex                              | 新增演讲类频道独立自动发布线，score >= 40 进入自动处理队列 |
 | 3.11.0 | 2026-07-13 | Codex                              | 新增动态字幕模型池、DeepSeek vocab fallback 与数字检查开关 |
 | 3.12.0 | 2026-07-15 | Codex                              | 新增快手创作者中心浏览器上传开关；默认关闭，不改变现有微信发布链路 |
@@ -152,6 +153,11 @@ class Settings(BaseSettings):
     # 使用 scripts/refresh_yt_cookies.py 从 Chrome 导出并保存到此文件
     # （2026-06-25：源由 Safari 改 Chrome——本机 Safari 未登录 YouTube，导出的匿名 cookie 触发 bot 风控）
     youtube_cookies_file: str = ""
+
+    # YouTube Data API 只用于频道目录和评分元数据；下载仍由 yt-dlp 负责。
+    # 留空时监控器自动退到公开 RSS，条目保持 METADATA_PENDING，绝不凭空自动发布。
+    youtube_data_api_key: str = ""
+    youtube_data_api_timeout_sec: int = 20
 
     # -------------------------------------------------------------------------
     # v7.0 Feature Flags — 新功能灰度开关 [Claude_Sonnet_4.6_Thinking_planning]

@@ -50,6 +50,7 @@
 | 3.18.1  | 2026-07-25 | Codex                               | 抖音提交后未确认的遗留失败不再进入自动领取，避免可能已提交作品被盲重投 |
 | 3.19.0  | 2026-07-26 | Codex                               | 新增 censorship_incidents 独立违规台账，记录审查命中、上下文和处置决策供专项复盘 |
 | 3.20.0  | 2026-07-27 | Codex                               | censorship_incidents 增补规则版本、规则 ID、输入来源、流程阶段、平台和输入 hash 复盘字段 |
+| 3.21.0  | 2026-07-28 | Codex                               | 新增监控候选入库/补全接口；RSS 降级条目保持 METADATA_PENDING，完整官方元数据到位才转 PENDING |
 """
 
 import sqlite3
@@ -811,6 +812,70 @@ class PipelineDB:
                 return True
             except sqlite3.IntegrityError:
                 return False  # Already exists (youtube_id + slice_index duplicate)
+
+    def upsert_monitored_video(
+        self,
+        youtube_id: str,
+        title: str,
+        channel_id: str,
+        *,
+        zh_title: Optional[str],
+        duration_sec: Optional[int],
+        view_count: Optional[int],
+        like_count: Optional[int],
+        upload_date: Optional[str],
+        metadata_complete: bool,
+    ) -> str:
+        """写入或补全白名单监控候选，且不改变既有处理/发布状态。
+
+        RSS 只有 ID、标题和发布时间，先以 METADATA_PENDING 保存；后续 Data API
+        取回完整评分数据时才把该候选转为可评分的 PENDING。
+        """
+        if self.is_blacklisted(youtube_id):
+            self._logger.warning(f"[Blacklist] Blocked monitored video: {youtube_id}")
+            return "blocked"
+
+        with self.get_connection() as conn:
+            existing = conn.execute(
+                "SELECT status FROM processed_videos WHERE youtube_id = ? AND slice_index = 0",
+                (youtube_id,),
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    """UPDATE processed_videos
+                       SET title = ?, channel_id = ?,
+                           zh_title = COALESCE(?, zh_title),
+                           duration_sec = COALESCE(?, duration_sec),
+                           view_count = COALESCE(?, view_count),
+                           like_count = COALESCE(?, like_count),
+                           upload_date = COALESCE(?, upload_date),
+                           status = CASE
+                               WHEN status = 'METADATA_PENDING' AND ? THEN 'PENDING'
+                               ELSE status
+                           END,
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE youtube_id = ? AND slice_index = 0""",
+                    (
+                        title, channel_id, zh_title, duration_sec, view_count, like_count,
+                        upload_date, metadata_complete, youtube_id,
+                    ),
+                )
+                conn.commit()
+                return "refreshed"
+
+            status = "PENDING" if metadata_complete else "METADATA_PENDING"
+            conn.execute(
+                """INSERT INTO processed_videos
+                   (youtube_id, slice_index, title, channel_id, score, status, zh_title, source,
+                    duration_sec, view_count, like_count, upload_date)
+                   VALUES (?, 0, ?, ?, 0, ?, ?, 'AUTO', ?, ?, ?, ?)""",
+                (
+                    youtube_id, title, channel_id, status, zh_title, duration_sec,
+                    view_count, like_count, upload_date,
+                ),
+            )
+            conn.commit()
+            return "inserted"
 
 
     def batch_add_videos(self, videos: List[Dict[str, Any]]) -> bool:

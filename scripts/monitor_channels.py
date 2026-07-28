@@ -20,6 +20,7 @@
 | 2.3.0   | 2026-07-12 | Codex                          | [分层降频] Wall Street Truthbombs 每小时、演讲类每3小时、其他保留频道每6小时；关闭全网探索并记录逐频道轮询时间 |
 | 2.4.0   | 2026-07-12 | Codex                          | [首次初始化] 增加 --bootstrap：一次性全量轮询批准频道，并将发现窗口放宽到最近5天 |
 | 2.5.0   | 2026-07-12 | Codex                          | [访问减压] 频道最多解析12条；取消被拒后的即时重试；连续拒绝按6/12/24小时逐频道熔断 |
+| 3.0.0   | 2026-07-28 | Codex                          | [断供根治] 官方 Data API 主源、RSS 无密钥降级；发现脱离 yt-dlp，RSS 条目待元数据补全后才可评分 |
 """
 import sys
 import argparse
@@ -34,6 +35,7 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 from video_processing.db import PipelineDB
 from config.settings import settings  # [Gemini_3.5_Flash_High_planning]
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning]
+from video_processing.utils.youtube_catalog import YouTubeCatalogError, fetch_channel_catalog
 
 # 由 cron 每 30 分钟唤醒，但不再每轮访问所有频道。
 CORE_CHANNEL_IDS = {"UCTK_cv-y88CScoudcXnS1Ew"}  # Wall Street Truthbombs
@@ -92,80 +94,47 @@ def get_discovery_keywords() -> list[str]:
 
 
 def fetch_latest_videos(db: PipelineDB, channel_id: str, lookback_days: int = 3):
-    """拉取频道过去 2 天内的最新视频，同时获取元数据（时长、观看数、点赞数、发布日期）"""
+    """拉取频道近期候选；Data API 主源，RSS 只保住待补全候选。"""
     print(f"Polling channel: {channel_id}")
-    url = f"https://www.youtube.com/channel/{channel_id}"
-    
-    cmd = [
-        _YTDLP,
-        _IGNORE_NO_FORMATS,
-        "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s",
-        "--dateafter", f"now-{lookback_days}days",
-        "--match-filter", "duration > 120 & duration < 2700",
-        "--break-on-reject",
-        "--playlist-end", "12",
-        "--no-warnings",
-        *settings.get_yt_cookie_args(),
-        url
-    ]
-    
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        # exit 101 = yt-dlp partial errors (e.g. cookie/bot-check); treat as real failure
-        # and surface the error so it doesn't look like "no new videos"
-        if result.returncode not in (0, 101):
-            print(f"Warning: Failed to fetch {channel_id}. Error: {result.stderr.strip()[:200]}")
-            return "error"
-        if result.returncode == 101 and not result.stdout.strip():
-            # exit 101 不是 HTTP 429 的充分证据：只标记为访问受阻，交给逐频道长退避处理。
-            stderr_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
-            err_line = stderr_lines[-1][:300] if stderr_lines else "exit 101 with empty output"
-            print(f"  -> YouTube 访问受阻，本轮不即时重试: {err_line}")
-            return "limited"
-
-        output = result.stdout.strip()
-        if not output:
+        catalog = fetch_channel_catalog(
+            channel_id,
+            lookback_days=lookback_days,
+            api_key=settings.youtube_data_api_key,
+            timeout_sec=settings.youtube_data_api_timeout_sec,
+        )
+        if catalog.source == "youtube_rss":
+            print(f"  -> RSS degraded mode: {catalog.fallback_reason}")
+        if not catalog.videos:
             print("  -> No recent matching videos found.")
-            return "empty"
+            return "empty" if catalog.metadata_complete else "degraded"
 
-        def _int_or_none(v):
-            try: return int(v)
-            except: return None
-            
-        for line in output.split('\n'):
-            parts = line.split('|||', 5)
-            if len(parts) < 2:
-                continue
-            video_id = parts[0].strip()
-            title    = parts[1].strip()
-            duration_sec = _int_or_none(parts[2]) if len(parts) > 2 else None
-            view_count   = _int_or_none(parts[3]) if len(parts) > 3 else None
-            like_count   = _int_or_none(parts[4]) if len(parts) > 4 else None
-            upload_date  = parts[5].strip() if len(parts) > 5 and parts[5].strip() not in ("NA", "") else None
-                 
+        for video in catalog.videos:
             # 翻译标题（阿里云 MT 优先）
-            zh_title = title
+            zh_title = video.title
             try:
-                zh_title = _translate_text(title, src_lang="auto", target_lang="zh-CN")
+                zh_title = _translate_text(video.title, src_lang="auto", target_lang="zh-CN")
             except Exception as e:
-                print(f"  -> Translator failed for {video_id}: {e}")
+                print(f"  -> Translator failed for {video.youtube_id}: {e}")
 
-            added = db.add_video(
-                video_id, title, channel_id, score=0, zh_title=zh_title, source="AUTO",
-                duration_sec=duration_sec, view_count=view_count,
-                like_count=like_count, upload_date=upload_date,
+            result = db.upsert_monitored_video(
+                video.youtube_id, video.title, channel_id,
+                zh_title=zh_title,
+                duration_sec=video.duration_sec,
+                view_count=video.view_count,
+                like_count=video.like_count,
+                upload_date=video.upload_date,
+                metadata_complete=catalog.metadata_complete,
             )
-            if added:
-                print(f"  -> Added new video to queue: {title}")
-            else:
-                print(f"  -> Video already in queue: {title}")
-        return "ok"
-                    
-    except subprocess.TimeoutExpired:
-        print(f"  -> Timeout: {channel_id} took >120s, skipped. Will retry next run.")
-        return "timeout"
-    except Exception as e:
-        print(f"Error polling channel {channel_id}: {e}")
+            if result == "inserted":
+                state = "queue" if catalog.metadata_complete else "metadata pending"
+                print(f"  -> Added new video ({state}): {video.title}")
+            elif result == "refreshed":
+                print(f"  -> Refreshed video metadata: {video.title}")
+        return "ok" if catalog.metadata_complete else "degraded"
+
+    except YouTubeCatalogError as e:
+        print(f"  -> Catalog unavailable for {channel_id}: {e}")
         return "error"
 
 
@@ -230,7 +199,7 @@ def _is_backoff_active(channel_id: str, now: datetime.datetime, state: dict[str,
 
 def _record_access_result(channel_id: str, result: str, now: datetime.datetime,
                           state: dict[str, dict]) -> None:
-    if result in {"ok", "empty"}:
+    if result in {"ok", "empty", "degraded"}:
         state.pop(channel_id, None)
         return
     if result != "limited":
@@ -262,7 +231,7 @@ def _write_monitor_report(results: list[dict], approved_count: int) -> None:
         "polled_count": len(results),
         "summary": {
             status: sum(1 for item in results if item["status"] == status)
-            for status in ("ok", "empty", "limited", "timeout", "error")
+            for status in ("ok", "degraded", "empty", "limited", "timeout", "error")
         },
         "channels": results,
     }
@@ -407,24 +376,23 @@ def main():
     now = datetime.datetime.now()
     poll_state = _load_poll_state()
     access_backoff = _load_access_backoff()
+    if access_backoff:
+        print(
+            f"[Monitor] Clearing {len(access_backoff)} legacy yt-dlp cooldown record(s); "
+            "Data API/RSS discovery does not use this backoff."
+        )
+        access_backoff = {}
     results = []
     scheduled_channels = [
         row for row in approved_channels
         if _is_channel_due(row["channel_id"], now, poll_state)
     ]
-    backoff_channels = [
-        row for row in scheduled_channels
-        if _is_backoff_active(row["channel_id"], now, access_backoff)
-    ]
-    due_channels = approved_channels if args.bootstrap else [
-        row for row in scheduled_channels
-        if row not in backoff_channels
-    ]
+    # 频道发现不再走 yt-dlp；旧的反爬冷却不能继续拦住 Data API/RSS 供给。
+    backoff_channels = []
+    due_channels = approved_channels if args.bootstrap else scheduled_channels
     lookback_days = 5 if args.bootstrap else 3
     if args.bootstrap:
         print("[Monitor] Bootstrap mode: all approved channels, lookback=5 days")
-    elif backoff_channels:
-        print(f"[Monitor] Access cooldown skipped {len(backoff_channels)} channel(s).")
     print(
         "[Monitor] Due channels: "
         f"{len(due_channels)}/{len(approved_channels)} "

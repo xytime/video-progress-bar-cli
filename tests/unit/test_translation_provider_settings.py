@@ -48,3 +48,11 @@ def test_translation_provider_env_example_documents_required_keys():
     assert "DEEPSEEK_API_KEY=" in content
     assert "DEEPSEEK_BASE_URL=" in content
     assert "DEEPSEEK_MODEL=" in content
+    assert "YOUTUBE_DATA_API_KEY=" in content
+
+
+def test_youtube_catalog_defaults_to_rss_without_an_api_key():
+    settings = Settings(_env_file=None)
+
+    assert settings.youtube_data_api_key == ""
+    assert settings.youtube_data_api_timeout_sec == 20
