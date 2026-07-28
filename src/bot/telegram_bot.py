@@ -29,6 +29,7 @@
 | 1.16.1  | 2026-07-05 | Codex                               | /status 最近异常展示失败总数、标题、YouTube 链接和单条 /retry 命令 |
 | 1.16.2  | 2026-07-05 | Codex                               | /status 展示 /retry 24 只读预览数量，避免用户发出批量命令后才知道影响范围 |
 | 1.16.3  | 2026-07-05 | Codex                               | /status 展示 /retry 24/48 数量，并给最近失败标注相对时间 |
+| 1.17.0  | 2026-07-28 | Codex                               | /status 改接只读三秒质检报告，并增加 Telegram 命令菜单和底部快捷键 |
 """
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ import re
 import sys
 from pathlib import Path
 
-from telegram import Update
+from telegram import BotCommand, ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -64,6 +65,7 @@ from bot.video_delivery import (
     FinishedVideoNotFound,
     CompressionError,
 )
+from video_processing.quality_report import collect as collect_quality_report
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,6 +75,31 @@ logger = logging.getLogger("telegram_bot")
 
 # [Gemini_3.5_Flash_planning] 优化正则匹配，包含整个带参数的 URL (排除末尾标点)，并支持 live/ 路径
 _YOUTUBE_RE = re.compile(r"https?://(?:(?:www|m)\.)?(?:youtube\.com/(?:watch\?.*v=|shorts/|live/)|youtu\.be/)[^\s]+(?<![.,!?;:\)\"\'\]\}])")
+
+_COMMAND_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["/status", "/queue"],
+        ["/run", "/wechat_login"],
+        ["/published", "/help"],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+)
+
+_BOT_COMMANDS = [
+    BotCommand("status", "3秒质检：异常/卡点/遗留"),
+    BotCommand("queue", "查看当前队列"),
+    BotCommand("run", "触发一次管线"),
+    BotCommand("wechat_login", "推送微信扫码登录"),
+    BotCommand("published", "最近本地发布记录"),
+    BotCommand("retry", "重试单条或最近N小时失败"),
+    BotCommand("help", "显示快捷菜单"),
+]
+
+
+async def _configure_bot_menu(app: Application) -> None:
+    """注册 Telegram 原生命令菜单；底部快捷键随 /help 和 /status 消息下发。"""
+    await app.bot.set_my_commands(_BOT_COMMANDS)
 
 
 def _load_config() -> tuple[str, set[int]]:
@@ -119,7 +146,7 @@ def _check_admin(update: Update) -> bool:
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _check_admin(update):
         return
-    await update.message.reply_text(fmt.fmt_help(), parse_mode="Markdown")  # type: ignore
+    await update.message.reply_text(fmt.fmt_help(), parse_mode="Markdown", reply_markup=_COMMAND_KEYBOARD)  # type: ignore
 
 
 async def cmd_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -144,38 +171,16 @@ async def cmd_queue(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """/status 指令：手机端值班面板。"""
+    """/status 指令：三秒可读的只读质检面板。"""
     if not _check_admin(update):
         return
-    assert _api is not None
-    stats = await _api.get_stats()
-    if stats is None:
-        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+    try:
+        msg = await asyncio.to_thread(collect_quality_report)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("status quality report failed")
+        await update.message.reply_text(fmt.fmt_error(f"质检报告生成失败：{e}"), parse_mode="Markdown")  # type: ignore
         return
-    wechat = await _api.get_wechat_status()
-    queue = await _api.get_videos(tab="queue", size=5)
-    pending = await _api.get_videos(tab="waitlist", size=5)
-    processing = await _api.get_videos(tab="active", size=5)
-    error_page = await _api.get_video_page(tab="error", size=3)
-    retry24_preview = await _api.retry_recent_preview(24)
-    retry48_preview = await _api.retry_recent_preview(48)
-    
-    if queue is None or pending is None or processing is None or error_page is None or retry24_preview is None or retry48_preview is None:
-        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
-        return
-        
-    msg = fmt.fmt_status_report(
-        stats,
-        processing,
-        queue,
-        pending,
-        error_page.get("videos", []),
-        wechat,
-        error_total=error_page.get("total_count", 0),
-        retry24_count=retry24_preview.get("count", 0),
-        retry48_count=retry48_preview.get("count", 0),
-    )
-    await update.message.reply_text(msg, parse_mode="Markdown")
+    await update.message.reply_text(msg, parse_mode="HTML", reply_markup=_COMMAND_KEYBOARD)  # type: ignore
 
 
 async def cmd_wechat_login(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -830,6 +835,7 @@ def main() -> None:
         Application.builder()
         .token(token)
         .concurrent_updates(True)
+        .post_init(_configure_bot_menu)
         .connection_pool_size(256)
         .pool_timeout(20)
         .get_updates_connection_pool_size(16)

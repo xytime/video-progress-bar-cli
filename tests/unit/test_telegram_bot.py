@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 初始创建，实现 Telegram URL 路由与裁剪参数提取的 TDD 单元测试 |
 | 1.1.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 新增 /whole 与 /slice 核心指令测试，验证默认不切片与强制切片策略的路由传导 |
+| 1.2.0 | 2026-07-28 | Codex | 覆盖 /status 只读质检报告和 Telegram 快捷菜单 |
 """
 import re
 import sys
@@ -17,7 +18,7 @@ _src = str(Path(__file__).parent.parent.parent / "src")
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-from bot.telegram_bot import _YOUTUBE_RE, parse_trim_params, handle_youtube_url
+from bot.telegram_bot import _BOT_COMMANDS, _YOUTUBE_RE, cmd_status, handle_youtube_url, parse_trim_params
 
 
 class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
@@ -173,6 +174,25 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
                 trim_end=None,
                 disable_slicing=True
             )
+
+    async def test_cmd_status_uses_quality_report_with_keyboard(self):
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.reply_text = AsyncMock()
+
+        with patch("bot.telegram_bot._check_admin", return_value=True), patch(
+            "bot.telegram_bot.collect_quality_report", return_value="<b>🟢 正常：有可发队列</b>"
+        ):
+            await cmd_status(update, MagicMock())
+
+        update.message.reply_text.assert_awaited_once()
+        _, kwargs = update.message.reply_text.call_args
+        self.assertEqual(kwargs["parse_mode"], "HTML")
+        self.assertEqual(kwargs["reply_markup"].keyboard[0][0].text, "/status")
+
+    def test_bot_command_menu_includes_status_first(self):
+        self.assertEqual(_BOT_COMMANDS[0].command, "status")
+        self.assertIn("质检", _BOT_COMMANDS[0].description)
 
 
 if __name__ == "__main__":
