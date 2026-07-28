@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://video-precessing.local/schemas/ai_safety_golden_manifest.schema.json",
+  "title": "AI Safety Golden Sample Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "state",
+    "created_at",
+    "source_policy",
+    "required_buckets",
+    "samples"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "manifest_id": {"type": "string", "pattern": "^AI-SF-001-[A-Za-z0-9._-]+$"},
+    "state": {"enum": ["DRAFT", "LABELING", "FROZEN"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "source_policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["raw_content_in_git", "raw_content_in_model_request", "local_manifest_only"],
+      "properties": {
+        "raw_content_in_git": {"const": false},
+        "raw_content_in_model_request": {"const": false},
+        "local_manifest_only": {"const": true}
+      }
+    },
+    "required_buckets": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"$ref": "#/$defs/bucket_requirement"}
+    },
+    "samples": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/sample"}
+    }
+  },
+  "$defs": {
+    "bucket_requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket", "minimum_samples"],
+      "properties": {
+        "bucket": {"enum": ["RULE_HIT", "PUBLISHED_ALLOW", "RULE_HIT_HUMAN_ALLOW", "CONTEXTUAL_VARIANT"]},
+        "minimum_samples": {"type": "integer", "minimum": 1}
+      }
+    },
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sample_id", "bucket", "domain", "source_ref", "rule_snapshot", "human_label"],
+      "properties": {
+        "sample_id": {"type": "string", "pattern": "^SF-[0-9]{4,}$"},
+        "bucket": {"enum": ["RULE_HIT", "PUBLISHED_ALLOW", "RULE_HIT_HUMAN_ALLOW", "CONTEXTUAL_VARIANT"]},
+        "domain": {"enum": ["finance", "technology", "education", "mixed"]},
+        "source_ref": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source_type", "local_reference", "input_sha256", "selection_reason"],
+          "properties": {
+            "source_type": {"enum": ["CENSORSHIP_INCIDENT", "VIDEO_ARTIFACT", "MANUAL_CASE"]},
+            "local_reference": {"type": "string", "minLength": 1, "maxLength": 160},
+            "input_sha256": {"$ref": "#/$defs/sha256"},
+            "selection_reason": {"type": "string", "minLength": 1, "maxLength": 480}
+          }
+        },
+        "rule_snapshot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["rules_fingerprint", "existing_rule_decision"],
+          "properties": {
+            "rules_fingerprint": {"type": "string", "pattern": "^[a-f0-9]{16}$"},
+            "existing_rule_decision": {"enum": ["BLOCK", "REVIEW", "ALLOW", "NO_MATCH", "UNKNOWN"]}
+          }
+        },
+        "human_label": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["decision", "labeler_id", "reviewed_at", "rationale_summary", "evidence_spans"],
+          "properties": {
+            "decision": {"enum": ["BLOCK", "REVIEW", "ALLOW", "UNRESOLVED"]},
+            "labeler_id": {"type": "string", "minLength": 1, "maxLength": 80},
+            "reviewed_at": {"type": "string", "format": "date"},
+            "rationale_summary": {"type": "string", "minLength": 1, "maxLength": 480},
+            "evidence_spans": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["field", "start_char", "end_char", "text_sha256"],
+                "properties": {
+                  "field": {"enum": ["title", "zh_title", "description", "subtitle"]},
+                  "start_char": {"type": "integer", "minimum": 0},
+                  "end_char": {"type": "integer", "minimum": 1},
+                  "text_sha256": {"$ref": "#/$defs/sha256"}
+                }
+              }
+            }
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"decision": {"enum": ["BLOCK", "REVIEW"]}}},
+              "then": {"properties": {"evidence_spans": {"minItems": 1}}}
+            }
+          ]
+        }
+      }
+    }
+  }
+}
