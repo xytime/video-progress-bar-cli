@@ -1,6 +1,6 @@
 # AI-TR-003 结构化输出契约诊断规格
 
-> 状态：设计完成，待负责人批准；本文件本身不授权 API 调用或生产变更。
+> 状态：已完成，结论 `CONTRACT_OBSERVABLE`；本文件不授权生产变更。
 >
 > 对应总纲：[AI 内容安全与模型评估纲领](ai_safety_offline_validation_program.md)。本项只解决 `AI-TR-002` 首次请求无法解析的问题，不检验或改变 thinking。
 
@@ -10,6 +10,7 @@
 | --- | --- | --- | --- |
 | 1.0 | 2026-07-29 | Codex | 从 AI-TR-002 的不可解析结果派生，冻结 JSON 契约和失败元数据的最小诊断设计 |
 | 1.1 | 2026-07-29 | Codex | 记录本地 dry-run、请求哈希和完整单测结果；未调用 API |
+| 1.2 | 2026-07-29 | Codex | 回写四次批准请求的结构化输出、费用与质量守门结果；未改生产 |
 
 ## 1. 为什么先做这一步
 
@@ -104,4 +105,18 @@ Dry-run 必须证明请求数、字节上限、token 上限和最坏情况预算
 | 契约验证 | 每对 payload 除 `response_format` 外完全相同；每条请求均低于 6,000 bytes |
 | 自动验证 | `PYTHONPATH=src .venv/bin/python -m pytest tests/unit -q`：671 passed，8 warnings，30 subtests passed |
 
-当前唯一下一项是取得第 6 节的明确执行批准。批准前不得调用 API、不得改变 thinking 或生产翻译请求。
+## 8. 执行记录与决定
+
+负责人已批准第 6 节的上限后，`2026-07-29` 执行了 `scripts/run_ai_tr_003.py --execute`。原始非敏感报告位于 `output/research/AI-TR-003/report.json`，不进入 Git。
+
+| 项目 | 结果 |
+| --- | --- |
+| API 请求 | 4 / 4；无重试、无停止规则触发 |
+| 结构化结果 | 4 / 4 为 `finish_reason=stop`、可解析 JSON、字幕 ID 对齐 |
+| 失败分类 | 无 `TOKEN_LIMIT`、`INVALID_JSON`、`ID_MISMATCH`、HTTP 或网络失败 |
+| 质量守门 | 每个候选均 0 blocking issue、1 个既有实体一致性 warning；两种契约一致 |
+| 实际费用 | USD 0.00092344 / USD 0.01 |
+| 延迟范围 | 3,695 至 6,658 ms；两样本交叉顺序，不将差异归因于契约 |
+| 生产影响 | 0：未修改 thinking、生产 provider、数据库、队列或发布流程 |
+
+本项的决定为 `CONTRACT_OBSERVABLE`：失败可观测性和 JSON/ID 对齐审计已具备，但两个基线请求也成功。因此它**不**证明 `response_format` 修复了 `AI-TR-002` 的失败，也不证明关闭 thinking 更好。唯一下一项是为 `AI-TR-004` 单独制定 thinking 对照、人工复核及请求/预算批准；在此之前不得改变生产 thinking 或进入 AI-SF。
