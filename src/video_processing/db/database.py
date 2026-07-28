@@ -51,6 +51,7 @@
 | 3.19.0  | 2026-07-26 | Codex                               | 新增 censorship_incidents 独立违规台账，记录审查命中、上下文和处置决策供专项复盘 |
 | 3.20.0  | 2026-07-27 | Codex                               | censorship_incidents 增补规则版本、规则 ID、输入来源、流程阶段、平台和输入 hash 复盘字段 |
 | 3.21.0  | 2026-07-28 | Codex                               | 新增监控候选入库/补全接口；RSS 降级条目保持 METADATA_PENDING，完整官方元数据到位才转 PENDING |
+| 3.22.0  | 2026-07-28 | Codex                               | 新增只读运维质检快照接口，集中队列、失败、在途和多平台账本查询 |
 """
 
 import sqlite3
@@ -1256,6 +1257,88 @@ class PipelineDB:
                 "SELECT status, COUNT(*) as cnt FROM processed_videos GROUP BY status"
             )
             return {row["status"]: row["cnt"] for row in cursor.fetchall()}
+
+    def get_quality_report_snapshot(
+        self,
+        *,
+        hours: int = 3,
+        active_stale_minutes: int = 90,
+        item_limit: int = 5,
+    ) -> Dict[str, Any]:
+        """返回定时质检所需的只读快照，不改变任务或平台账本状态。"""
+        safe_hours = max(1, int(hours))
+        safe_stale_minutes = max(1, int(active_stale_minutes))
+        safe_item_limit = max(1, min(int(item_limit), 20))
+        active_states = ("DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "PUBLISHING")
+        active_placeholders = ", ".join("?" for _ in active_states)
+
+        with self.get_connection() as conn:
+            status_rows = conn.execute(
+                "SELECT status, COUNT(*) AS count FROM processed_videos GROUP BY status"
+            ).fetchall()
+            status_counts = {row["status"]: row["count"] for row in status_rows}
+
+            queue = conn.execute(
+                """SELECT COUNT(*) AS count
+                   FROM processed_videos pv
+                   WHERE pv.status = 'PENDING' AND pv.score >= 75
+                     AND IFNULL(pv.source, '') != 'DISCOVERY'
+                     AND pv.channel_id NOT IN (
+                         SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
+                     )
+                     AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)"""
+            ).fetchone()["count"]
+            local_published = conn.execute(
+                """SELECT COUNT(*) AS count FROM processed_videos
+                   WHERE status = 'PUBLISHED' AND updated_at >= datetime('now', ?)""",
+                (f"-{safe_hours} hours",),
+            ).fetchone()["count"]
+            active_count = conn.execute(
+                f"SELECT COUNT(*) AS count FROM processed_videos WHERE status IN ({active_placeholders})",
+                active_states,
+            ).fetchone()["count"]
+            active_rows = conn.execute(
+                f"""SELECT youtube_id, slice_index, title, status, updated_at, process_pid
+                    FROM processed_videos
+                    WHERE status IN ({active_placeholders})
+                    ORDER BY updated_at ASC LIMIT ?""",
+                (*active_states, safe_item_limit),
+            ).fetchall()
+            stale_active_rows = conn.execute(
+                f"""SELECT youtube_id, slice_index, title, status, updated_at, process_pid
+                    FROM processed_videos
+                    WHERE status IN ({active_placeholders})
+                      AND updated_at < datetime('now', ?)
+                    ORDER BY updated_at ASC LIMIT ?""",
+                (*active_states, f"-{safe_stale_minutes} minutes", safe_item_limit),
+            ).fetchall()
+            recent_failures = conn.execute(
+                """SELECT youtube_id, slice_index, title, status, error_msg, updated_at
+                   FROM processed_videos
+                   WHERE status IN ('FAILED', 'LOGIN_REQUIRED')
+                     AND updated_at >= datetime('now', ?)
+                   ORDER BY updated_at DESC LIMIT ?""",
+                (f"-{safe_hours} hours", safe_item_limit),
+            ).fetchall()
+            platform_rows = conn.execute(
+                """SELECT platform, state, COUNT(*) AS count FROM (
+                       SELECT 'kuaishou' AS platform, state FROM kuaishou_publications
+                       UNION ALL
+                       SELECT 'douyin' AS platform, state FROM douyin_publications
+                   ) GROUP BY platform, state ORDER BY platform, state"""
+            ).fetchall()
+
+        return {
+            "hours": safe_hours,
+            "status_counts": status_counts,
+            "eligible_queue": queue,
+            "local_published": local_published,
+            "active_count": active_count,
+            "active": [dict(row) for row in active_rows],
+            "stale_active": [dict(row) for row in stale_active_rows],
+            "recent_failures": [dict(row) for row in recent_failures],
+            "platform_states": [dict(row) for row in platform_rows],
+        }
 
     def get_detailed_stats(self) -> Dict[str, Any]:
         """[Gemini_3.5_Flash_High_planning] 分别统计父任务与切片子任务在各状态下的数量"""

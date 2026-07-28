@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.videopipeline.periodic-qa-report</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python</string>
+    <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/periodic_qa_report.py</string>
+    <string>--send</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key>
+    <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Hour</key><integer>0</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>3</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>6</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>12</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>15</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>18</integer><key>Minute</key><integer>5</integer></dict>
+    <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>5</integer></dict>
+  </array>
+  <key>StandardOutPath</key>
+  <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/periodic_qa_report.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/periodic_qa_report.log</string>
+</dict>
+</plist>
