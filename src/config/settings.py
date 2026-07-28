@@ -35,13 +35,16 @@
 | 3.13.0 | 2026-07-25 | Codex                              | 补齐抖音、视频号暂停恢复与多平台补录配置字段，避免运行时配置缺失崩溃 |
 | 3.13.1 | 2026-07-26 | Codex                              | 字幕翻译默认顺序改为 Gemini→DeepSeek→Google，移除阿里云作为可选 provider |
 | 3.14.0 | 2026-07-27 | Codex                              | 新增抖音浏览器动作节流和每轮审核回查上限，降低创作者中心风控风险 |
+| 3.15.0 | 2026-07-28 | Codex                              | 新增公开视频发布黄金窗口配置，支持按北京时间活跃高峰控制平台提交 |
 """
 import json
 import socket
 import urllib.request
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
+from zoneinfo import ZoneInfo
 
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -261,6 +264,12 @@ class Settings(BaseSettings):
     wechat_publishing_paused: bool = False
     wechat_deferred_recovery_daily_limit: int = 5
 
+    # 公开视频提交窗口。默认按北京时间短视频活跃规律设置：
+    # 早通勤、午休、晚通勤、晚间黄金档；晚间窗口提前半小时启动，给平台审核/首轮推荐留缓冲。
+    enable_public_publish_windows: bool = True
+    public_publish_timezone: str = "Asia/Shanghai"
+    public_publish_windows: str = "07:30-08:30,11:45-13:15,17:30-18:45,19:30-21:10"
+
     # 多平台历史补录规则：Wall Street Truthbombs 的源视频发布日期下界（YYYYMMDD）。
     platform_backfill_wall_street_since_upload_date: str = "20260713"
 
@@ -323,6 +332,56 @@ class Settings(BaseSettings):
     @property
     def auto_publish_channel_min_scores(self) -> dict[str, int]:
         return {cid: self.speech_publish_score_line for cid in self.speech_channel_id_set}
+
+    @property
+    def public_publish_window_ranges(self) -> list[tuple[int, int]]:
+        """解析 PUBLIC_PUBLISH_WINDOWS 为分钟区间；格式 HH:MM-HH:MM，逗号分隔。"""
+        ranges: list[tuple[int, int]] = []
+        for item in (self.public_publish_windows or "").split(","):
+            start_raw, sep, end_raw = item.strip().partition("-")
+            if not sep:
+                continue
+            start = self._parse_hhmm_minutes(start_raw)
+            end = self._parse_hhmm_minutes(end_raw)
+            if start is None or end is None or start == end:
+                continue
+            ranges.append((start, end))
+        return ranges
+
+    def is_public_publish_window(self, now: Optional[datetime] = None) -> bool:
+        """当前时间是否允许触发公开视频提交；关闭开关时始终允许。"""
+        if not self.enable_public_publish_windows:
+            return True
+        try:
+            timezone = ZoneInfo(self.public_publish_timezone or "Asia/Shanghai")
+        except Exception:
+            timezone = ZoneInfo("Asia/Shanghai")
+        local_now = datetime.now(timezone) if now is None else now
+        if local_now.tzinfo is None:
+            local_now = local_now.replace(tzinfo=timezone)
+        else:
+            local_now = local_now.astimezone(timezone)
+        minute = local_now.hour * 60 + local_now.minute
+        for start, end in self.public_publish_window_ranges:
+            if start < end and start <= minute < end:
+                return True
+            if start > end and (minute >= start or minute < end):
+                return True
+        return False
+
+    @staticmethod
+    def _parse_hhmm_minutes(value: str) -> Optional[int]:
+        parts = value.strip().split(":")
+        if len(parts) != 2:
+            return None
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except ValueError:
+            return None
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return None
+        return hour * 60 + minute
 
     @property
     def subtitle_translation_provider_order_list(self) -> list[str]:

@@ -70,6 +70,7 @@
 | 3.38.0  | 2026-07-27 | Codex                               | 抖音创作者中心动作加节流和异常熔断告警，避免连续开网页/连续补录触发平台风控 |
 | 3.39.0  | 2026-07-27 | Codex                               | 历史迁移限额为 0 时硬停抖音历史回填，审核回查跳过 HISTORY 记录但保留 NEW 新片发布 |
 | 3.40.0  | 2026-07-27 | Codex                               | 平台告警格式抽到共享 PlatformEvent，管线与 Telegram 助手 bot 共用同一事件语义 |
+| 3.41.0  | 2026-07-28 | Codex                               | 新增公开视频提交窗口守卫，视频号/抖音/快手仅在黄金时段触发新提交 |
 """
 
 
@@ -208,6 +209,21 @@ class PipelineManager:
             msg += f"\nReason: {snippet}"
         self.send_telegram_msg(msg)
 
+    def _is_public_publish_window(self, platform: str, yid: str = "", slice_index: int = 0) -> bool:
+        """公开视频提交窗口守卫；审核回查等只读动作不受此限制。"""
+        if settings.is_public_publish_window():
+            return True
+        prefix = f"{yid}_s{slice_index}" if yid and slice_index > 0 else yid
+        target = f" {prefix}" if prefix else ""
+        logger.info(
+            "[PublishWindow] 当前不在公开视频提交窗口，跳过%s%s；配置窗口=%s %s",
+            platform,
+            target,
+            settings.public_publish_timezone,
+            settings.public_publish_windows,
+        )
+        return False
+
     def _notify_platform_alert(
         self,
         platform: str,
@@ -327,6 +343,9 @@ class PipelineManager:
             # 抢占实盘交易行情管线 CPU（已确认「盘中过载→行情积压→实盘用过期价格」失效模式）。
             if settings.is_us_market_guard_window():
                 logger.info("[MarketGuard] 美股盘中，暂停高分视频批处理（重负载保护），剩余任务保持 PENDING。")
+                break
+            if not self._is_public_publish_window("Pipeline"):
+                logger.info("[PublishWindow] 非发布窗口，暂停高分视频加工；候选保持 PENDING 等待黄金时段。")
                 break
 
             # 拉取多一点以备过滤父视频就绪与发布顺序锁 [Gemini_3.5_Flash_planning]
@@ -687,6 +706,13 @@ class PipelineManager:
         publication_id = publication["id"]
         yid = publication["youtube_id"]
         slice_index = publication.get("slice_index", 0)
+        if not self._is_public_publish_window("快手", yid, slice_index):
+            self.db.update_kuaishou_publication_state(
+                publication_id,
+                "QUEUED",
+                error_message="当前不在公开视频提交窗口，保留队列等待下一轮黄金时段。",
+            )
+            return False
         vertical, copy_file = self._kuaishou_asset_paths(yid, slice_index)
         if not vertical.is_file() or not copy_file.is_file():
             reason = f"快手投递产物缺失：video={vertical.is_file()} copy={copy_file.is_file()}"
@@ -780,6 +806,9 @@ class PipelineManager:
         if publication["state"] == "PUBLISHED":
             logger.info("[%s] 相同成片已在快手作品管理确认发布，跳过重复投递", yid)
             return True
+        if not self._is_public_publish_window("快手", yid, slice_index):
+            logger.info("[%s] 快手新片已入队，等待公开视频提交窗口。", yid)
+            return True
         claimed = self.db.claim_kuaishou_publication(publication["id"])
         if not claimed:
             logger.warning("[%s] 快手新片任务未能领取，保留账本等待下次重试", yid)
@@ -789,6 +818,8 @@ class PipelineManager:
     def _run_kuaishou_history_migration(self) -> None:
         """按每日限额迁移视频号历史作品；任一失败后固定在该视频，绝不切换下一条。"""
         if not settings.enable_kuaishou_browser_publishing:
+            return
+        if not self._is_public_publish_window("快手历史迁移"):
             return
         daily_limit = settings.kuaishou_history_daily_limit
         for candidate in self.db.get_unqueued_kuaishou_history_videos(limit=daily_limit):
@@ -884,6 +915,8 @@ class PipelineManager:
         """每日优先重试一条未确认的新片；失败时由调用者停止历史迁移，避免换片。"""
         if not settings.enable_kuaishou_browser_publishing:
             return True
+        if not self._is_public_publish_window("快手新片重试"):
+            return True
         claimed = self.db.claim_next_kuaishou_publication("NEW")
         if not claimed:
             return True
@@ -907,6 +940,13 @@ class PipelineManager:
         publication_id = publication["id"]
         yid = publication["youtube_id"]
         slice_index = publication.get("slice_index", 0)
+        if not self._is_public_publish_window("抖音", yid, slice_index):
+            self.db.update_douyin_publication_state(
+                publication_id,
+                "QUEUED",
+                error_message="当前不在公开视频提交窗口，保留队列等待下一轮黄金时段。",
+            )
+            return False
         vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
         title_file = self._douyin_title_path(yid, slice_index)
         if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
@@ -1016,6 +1056,12 @@ class PipelineManager:
                 source_kind="NEW",
                 slice_index=slice_index,
             )
+        if publication["state"] == "PUBLISHED":
+            logger.info("[%s] 相同成片已在抖音确认发布，跳过重复投递", prefix)
+            return True
+        if not self._is_public_publish_window("抖音", yid, slice_index):
+            logger.info("[%s] 抖音新片已入队，等待公开视频提交窗口。", prefix)
+            return True
         publication_id = publication["id"]
         claimed = self.db.claim_douyin_publication(publication_id)
         if not claimed:
@@ -1029,6 +1075,8 @@ class PipelineManager:
             return
         if self._douyin_platform_halted:
             logger.warning("[DouyinHalt] 已停止本轮抖音历史迁移：%s", self._douyin_halt_reason)
+            return
+        if not self._is_public_publish_window("抖音历史迁移"):
             return
         daily_limit = settings.douyin_history_daily_limit
         if daily_limit < 1:
@@ -1160,6 +1208,8 @@ class PipelineManager:
         if self._douyin_platform_halted:
             logger.warning("[DouyinHalt] 已停止本轮抖音新片重试：%s", self._douyin_halt_reason)
             return False
+        if not self._is_public_publish_window("抖音新片重试"):
+            return True
         claimed = self.db.claim_next_douyin_publication("NEW")
         if not claimed:
             return True
@@ -1760,6 +1810,11 @@ class PipelineManager:
                         self.db.update_video_status(yid, "PENDING", slice_index=slice_index)
                         return
 
+                if not self._is_public_publish_window("微信", yid, slice_index):
+                    self.db.update_video_status(yid, "PENDING", slice_index=slice_index)
+                    logger.info("[%s] 视频号成片已就绪，等待公开视频提交窗口。", prefix)
+                    return
+
                 self.db.update_video_status(yid, "PUBLISHING", slice_index=slice_index)
                 logger.info(f"Uploading to WeChat Channels for {prefix}...")
 
@@ -1930,6 +1985,8 @@ class PipelineManager:
     def recover_deferred_wechat_publications(self) -> int:
         """从 WECHAT_DEFERRED 状态按限额恢复微信发布"""
         if settings.wechat_publishing_paused:
+            return 0
+        if not self._is_public_publish_window("微信补发"):
             return 0
         limit = settings.wechat_deferred_recovery_daily_limit
         recovered = 0
