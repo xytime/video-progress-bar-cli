@@ -30,12 +30,13 @@
 | 2.3.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 竖屏模式下释义区最下沿上移半字高度 (≈17px)，同步缩减主字幕最大高度防重叠 |
 | 2.4.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 自动从 .info.json 加载视频标题，标注 # [Gemini_3.5_Flash_planning] |
 | 2.5.0   | 2026-06-25 | Claude_Opus_4.8 | 新增 source_date 参数：字幕烧录后叠加左上角「源视频发布日期」毛玻璃戳(date_stamp 模块)，覆盖源水印；遮罩/边框输入索引按音轨情况动态计算，渲染后清理临时资源 |
+| 2.6.0   | 2026-07-29 | Codex | 优化竖版头部标题：Noto/思源系字体优先、动态两行排版、强调色与 drawtext expansion 防护 |
 """
 import logging
 import subprocess
 import textwrap
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import pysubs2
 
@@ -63,6 +64,40 @@ SUBTITLE_MIN_ZH_SIZE = 32
 
 # [Gemini_3.5_Flash_planning] 统一使用单一强调青绿色 (BGR 格式，对应 HTML 中的 --en-accent #6FD3C7)，且在样式上更显 premium
 VOCAB_COLORS = ["&HC7D36F&"]
+
+TITLE_FONT_CANDIDATES = (
+    "~/Library/Fonts/NotoSerifSC-Bold.otf",
+    "~/Library/Fonts/NotoSerifSC-Bold.ttf",
+    "/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+)
+TITLE_BASE_FONT_SIZE = 82
+TITLE_MIN_FONT_SIZE = 66
+TITLE_MAX_WIDTH = 940
+TITLE_ZONE_HEIGHT = 350
+TITLE_LINE_GAP = 8
+TITLE_PRIMARY_COLOR = "#FFFFFF"
+TITLE_ACCENT_COLOR = "#FFE36E"
+TITLE_PROTECTED_TERMS = (
+    "AI",
+    "IPO",
+    "人工智能",
+    "华尔街",
+    "现金流",
+    "科技",
+    "芯片",
+    "消费",
+    "信心",
+    "就业",
+    "数据",
+    "老师",
+    "关键",
+    "影子",
+    "全球",
+    "抛售",
+    "悄悄",
+)
 
 
 def apply_word_highlights(text: str, word_colors: Dict[str, str]) -> str:
@@ -128,6 +163,157 @@ def tag_aware_wrap(text: str, max_width: int) -> str:
         lines.append("".join(current_line).rstrip())
         
     return "\\N".join(lines)
+
+
+def _title_char_em_width(char: str) -> float:
+    """估算标题字符视觉宽度，用于无渲染依赖的分行与字号选择。"""
+    if char.isspace():
+        return 0.35
+    if char in '.,，。:：;；!?！？|/\\-—()（）[]【】“”"\'':
+        return 0.45
+    if ord(char) <= 127:
+        return 0.56
+    return 1.0
+
+
+def _title_text_em_width(text: str) -> float:
+    return sum(_title_char_em_width(char) for char in text)
+
+
+def _split_semantic_title(title: str) -> Tuple[Optional[List[str]], bool]:
+    """优先按两段式标题分隔符切开，便于第二段做视觉强调。"""
+    for separator in ("：", ":", "？", "?", "！", "!", "——", " - ", "|"):
+        index = title.find(separator)
+        if 2 < index < len(title) - 3:
+            left = title[: index + len(separator)].strip()
+            right = title[index + len(separator) :].strip()
+            if len(left) >= 4 and len(right) >= 3:
+                return [left, right], True
+    return None, False
+
+
+def _best_balanced_title_break(title: str) -> int:
+    target = _title_text_em_width(title) / 2
+    best_index = max(1, len(title) // 2)
+    best_score: Optional[float] = None
+    for index in range(3, max(3, len(title) - 2)):
+        left = title[:index].rstrip()
+        right = title[index:].lstrip()
+        if not left or not right:
+            continue
+        score = abs(_title_text_em_width(left) - target)
+        if left[-1] in "的之和与及在":
+            score += 3
+        if left[-1] == right[0]:
+            score += 4
+        if _break_splits_protected_term(title, index):
+            score += 6
+        if best_score is None or score < best_score:
+            best_score = score
+            best_index = index
+    return best_index
+
+
+def _break_splits_protected_term(title: str, break_index: int) -> bool:
+    for term in TITLE_PROTECTED_TERMS:
+        start = title.find(term)
+        while start >= 0:
+            if start < break_index < start + len(term):
+                return True
+            start = title.find(term, start + 1)
+    return False
+
+
+def _truncate_title_line(line: str, max_em: float) -> str:
+    if _title_text_em_width(line) <= max_em:
+        return line
+    current = 0.0
+    output = ""
+    ellipsis_em = _title_text_em_width("...")
+    for char in line:
+        char_width = _title_char_em_width(char)
+        if current + char_width + ellipsis_em > max_em:
+            return output.rstrip() + "..."
+        current += char_width
+        output += char
+    return output
+
+
+def _layout_title_lines(title: str) -> Tuple[List[str], int, bool]:
+    """将头部标题排成最多两行，并返回适配后的字号。"""
+    title = (title or "").strip()
+    if not title:
+        return [], TITLE_BASE_FONT_SIZE, False
+
+    max_em_at_base = TITLE_MAX_WIDTH / TITLE_BASE_FONT_SIZE
+    lines, is_semantic = _split_semantic_title(title)
+    if lines is None:
+        if _title_text_em_width(title) <= max_em_at_base:
+            lines = [title]
+        else:
+            index = _best_balanced_title_break(title)
+            lines = [title[:index].rstrip(), title[index:].lstrip()]
+
+    max_line_em = max(_title_text_em_width(line) for line in lines)
+    font_size = TITLE_BASE_FONT_SIZE
+    if max_line_em * font_size > TITLE_MAX_WIDTH:
+        font_size = max(TITLE_MIN_FONT_SIZE, int(TITLE_MAX_WIDTH / max_line_em))
+
+    max_em_at_size = TITLE_MAX_WIDTH / font_size
+    fitted_lines = [_truncate_title_line(line, max_em_at_size) for line in lines[:2]]
+    return fitted_lines, font_size, is_semantic
+
+
+def _escape_drawtext_text(text: str) -> str:
+    """FFmpeg filtergraph 文本转义；配合 expansion=none 保留 466% 这类标题。"""
+    return (
+        text.replace("\\", "\\\\")
+        .replace("'", "'\\\\''")
+        .replace(":", "\\:")
+        .replace(",", "\\,")
+        .replace(";", "\\;")
+        .replace("\n", " ")
+    )
+
+
+def _resolve_title_font_path(preferred_font: str) -> str:
+    preferred_path = Path(preferred_font).expanduser() if preferred_font else None
+    if preferred_path and preferred_path.exists() and preferred_path.name != "Arial Unicode.ttf":
+        return str(preferred_path)
+    for candidate in TITLE_FONT_CANDIDATES:
+        candidate_path = Path(candidate).expanduser()
+        if candidate_path.exists():
+            return str(candidate_path)
+    return str(preferred_path) if preferred_path else ""
+
+
+def _build_title_drawtext_filters(input_label: str, title: str, preferred_font: str) -> Tuple[List[str], str]:
+    lines, font_size, is_semantic = _layout_title_lines(title)
+    if not lines:
+        return [], input_label
+
+    title_font = _resolve_title_font_path(preferred_font)
+    font_cmd = f":fontfile='{title_font}'" if title_font else ""
+    line_height = int(font_size * 1.12)
+    block_height = len(lines) * line_height + max(0, len(lines) - 1) * TITLE_LINE_GAP
+    start_y = max(58, int((TITLE_ZONE_HEIGHT - block_height) / 2))
+
+    filters = []
+    current_label = input_label
+    for index, line in enumerate(lines):
+        color = TITLE_PRIMARY_COLOR
+        if len(lines) > 1 and index == len(lines) - 1:
+            color = TITLE_ACCENT_COLOR if is_semantic or index == 1 else TITLE_PRIMARY_COLOR
+        output_label = "titled" if index == len(lines) - 1 else f"title_{index}"
+        y = start_y + index * (line_height + TITLE_LINE_GAP)
+        filters.append(
+            f"[{current_label}]drawtext=expansion=none:text='{_escape_drawtext_text(line)}':"
+            f"fontcolor={color}:fontsize={font_size}:x=(w-text_w)/2:y={y}{font_cmd}:"
+            "borderw=3:bordercolor=black@0.78:shadowx=0:shadowy=2:shadowcolor=black@0.55"
+            f"[{output_label}]"
+        )
+        current_label = output_label
+    return filters, current_label
 
 logger = logging.getLogger(__name__)
 
@@ -511,23 +697,6 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         # Escapes
         escaped_ass = str(ass_path).replace("'", "'\\''").replace(":", "\\:")
         
-        # Smart Truncate Title
-        # 1080px width, fontsize=60. 
-        # Max capacity approx 16-17 full-width chars.
-        # We estimate width: Wide(>255)=1.0, Narrow=0.5
-        max_em = 16.5
-        current_em = 0
-        display_title = ""
-        for char in self.title:
-            w = 1.0 if ord(char) > 255 else 0.5
-            if current_em + w > max_em:
-                display_title += "..."
-                break
-            current_em += w
-            display_title += char
-            
-        title_text = display_title.replace("'", "'\\''").replace(":", "\\:")
-        
         filters = []
         
         if self.bg_blur:
@@ -545,54 +714,8 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
             # pad=width:height:x:y:color
             filters.append(f"[fg]pad=1080:1920:0:{layout.video_y}:black[merged]")
 
-        # Font file for drawtext
-        font_cmd = f":fontfile='{self.font_path}'" 
-        
-        # Colors & Style Logic
-        config = CAPTION_STYLES.get(self.style, CAPTION_STYLES["default"])
-        
-        def ass_to_ffmpeg_color(ass_hex: str) -> str:
-            # ASS: &HBBGGRR -> FFmpeg: #RRGGBB
-            clean = ass_hex.replace('&H', '').replace('&', '').strip()
-            if len(clean) == 8: # AABBGGRR? usually ASS is BBGGRR in config dict here
-                clean = clean[2:]
-            if len(clean) == 6:
-                b = clean[0:2]
-                g = clean[2:4]
-                r = clean[4:6]
-                return f"#{r}{g}{b}"
-            return "white" # fallback
-            
-        title_color = ass_to_ffmpeg_color(config['zh_color'])
-        
-        # Box Logic
-        # Priority: Style Config > Bg Blur Fallback
-        box_cmd = ""
-        has_box = (config.get('border_style', 1) == 3)
-        
-        if has_box:
-            # Use style's box color
-            box_color = ass_to_ffmpeg_color(config.get('bg_color', '&H000000'))
-            alpha = config.get('bg_alpha', 128)
-            # Map 0-255 to 0.0-1.0
-            opacity = round(alpha / 255.0, 2)
-            box_cmd = f":box=1:boxcolor={box_color}@{opacity}:boxborderw=20"
-        elif self.bg_blur:
-            # Fallback for visibility on blurred bg (if style doesn't insist on no box)
-            # Or maybe Shadow is better? But user liked valid mask.
-            box_cmd = ":box=1:boxcolor=black@0.4:boxborderw=20"
-        
-        # Add Shadow/Border for styles without box?
-        # Movie Yellow has outline=2.
-        if not has_box and config.get('outline', 0) > 0:
-             # Drawtext border
-             # borderw=2:bordercolor=black
-             box_cmd += ":borderw=2:bordercolor=black"
-
-        filters.append(
-            f"[merged]drawtext=text='{title_text}':fontcolor={title_color}:fontsize=60:"
-            f"x=(w-text_w)/2:y={layout.title_y}{font_cmd}{box_cmd}[titled]"
-        )
+        title_filters, title_label = _build_title_drawtext_filters("merged", self.title, self.font_path)
+        filters.extend(title_filters)
         
         # Burn Subtitles
         # [Claude_Opus_4.8] 若启用「源视频发布日期戳」，字幕烧录输出改为中间标签 [ds_subbed]，
@@ -600,9 +723,9 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         _stamp_value = (self.source_date or "").strip()
         _stamp_enabled = bool(_stamp_value)
         if _stamp_enabled:
-            filters.append(f"[titled]ass='{escaped_ass}'[ds_subbed]")
+            filters.append(f"[{title_label}]ass='{escaped_ass}'[ds_subbed]")
         else:
-            filters.append(f"[titled]ass='{escaped_ass}'[out]")
+            filters.append(f"[{title_label}]ass='{escaped_ass}'[out]")
 
         filter_str = ";".join(filters)
         
