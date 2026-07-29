@@ -23,6 +23,9 @@
 | 2.7.0   | 2026-07-05 | Codex                               | 二维码捕获改为先落盘整页兜底图再尝试精裁覆盖，避免 selector 漂移时 Web UI 无二维码可扫 |
 | 2.8.0   | 2026-07-10 | Codex                               | 自动发布新增 fail-fast-login 模式：检测到登录页立即返回 LOGIN_REQUIRED，不把管线挂在扫码等待上 |
 | 2.9.0   | 2026-07-23 | Codex                               | 适配视频号新版登录页：优先点击 iframe 内微信快捷登录，失败再切换/裁剪可见二维码，保留扫码兜底 |
+| 3.0.0   | 2026-07-29 | Codex                               | 快捷登录后自动确认“视频号创作平台申请使用昵称、头像”的允许授权，单手机无需自扫二维码 |
+| 3.1.0   | 2026-07-29 | Codex                               | Playwright 页面/浏览器被关闭时返回 UNCONFIRMED(3)，避免后台裸 traceback 与误判发布成功 |
+| 3.2.0   | 2026-07-29 | Codex                               | 自定义封面改为发布硬门禁：仅操作封面预览专属弹层，确认后必须验证持久化证据 |
 """
 
 import os
@@ -31,6 +34,10 @@ import argparse
 import logging
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+try:
+    from playwright._impl._errors import TargetClosedError
+except Exception:  # pragma: no cover - Playwright 内部类跨版本兜底
+    TargetClosedError = ()
 import random
 import time
 
@@ -56,6 +63,82 @@ logger = logging.getLogger("wechat_uploader")
 
 # 微信视频号发表地址
 WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
+
+
+def _is_playwright_target_closed(exc: BaseException) -> bool:
+    """识别 Playwright 页面/上下文/浏览器被外部关闭的发布未确认场景。"""
+    if TargetClosedError and isinstance(exc, TargetClosedError):
+        return True
+    message = str(exc)
+    return (
+        "Target page, context or browser has been closed" in message
+        or "Target closed" in message
+    )
+
+
+def _capture_wechat_evidence(page, evidence_dir: Path, name: str) -> None:
+    """保留封面和提交页证据；采集失败不改变已验证的页面状态。"""
+    try:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(evidence_dir / f"{name}.png"), full_page=True)
+    except Exception as exc:
+        logger.warning("Failed to capture WeChat evidence %s: %s", name, exc)
+
+
+def _find_wechat_cover_dialog(page):
+    """只接受明确属于封面编辑的可见范围，拒绝向发布页全局 input 注入文件。"""
+    selectors = [
+        ".edit-cover-dialog-container",
+        "[role='dialog']:has-text('上传封面')",
+        ".weui-desktop-dialog:has-text('上传封面')",
+        ".weui-desktop-dialog:has-text('封面')",
+    ]
+    for selector in selectors:
+        try:
+            dialogs = page.locator(selector)
+            for index in range(dialogs.count()):
+                dialog = dialogs.nth(index)
+                if dialog.is_visible():
+                    return dialog
+        except Exception as exc:
+            logger.debug("Cover dialog selector %s unavailable: %s", selector, exc)
+    return None
+
+
+def _wechat_cover_preview_signature(container):
+    """读取封面预览图片地址，用于确认提交后卡片确有变化。"""
+    try:
+        images = container.locator("img")
+        for index in range(images.count()):
+            source = images.nth(index).get_attribute("src")
+            if source:
+                return source
+    except Exception as exc:
+        logger.debug("Unable to read WeChat cover preview signature: %s", exc)
+    return None
+
+
+def _is_wechat_cover_applied(page, cover_card, before_signature: str | None) -> bool:
+    """确认封面弹层已关闭，且页面给出了成功提示或封面预览确实变化。"""
+    if _find_wechat_cover_dialog(page):
+        logger.error("Cover editor remains visible after confirmation.")
+        return False
+    after_signature = _wechat_cover_preview_signature(cover_card)
+    preview_changed = bool(before_signature and after_signature and before_signature != after_signature)
+    try:
+        page_text = page.locator("body").inner_text(timeout=3_000)
+    except Exception:
+        page_text = ""
+    success_marker = any(marker in page_text for marker in ("封面已更新", "封面修改成功", "封面上传成功"))
+    if not (success_marker or preview_changed):
+        logger.error("No persisted WeChat cover evidence after confirmation.")
+        return False
+    logger.info(
+        "WeChat cover application verified (success_marker=%s, preview_changed=%s).",
+        success_marker,
+        preview_changed,
+    )
+    return True
 
 
 def _stamp_login_success(state_file: Path) -> None:
@@ -312,15 +395,38 @@ def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
 
 
 def _try_wechat_quick_login(page) -> bool:
-    """新版 open.weixin.qq.com 登录 iframe：优先点击“微信快捷登录”完成授权。"""
+    """新版 open.weixin.qq.com 登录 iframe：完成快捷登录及资料授权。"""
     if not _click_visible_frame_button(page, "微信快捷登录"):
         return False
+
+    # 点击“微信快捷登录”后，微信会在同一网页 iframe 显示「视频号创作平台
+    # 申请使用你的昵称、头像」的二次确认。它不是手机扫码/手机确认；若不点
+    # 「允许」，旧逻辑会等到超时后错误降级到二维码，导致单手机远程值守卡住。
+    # 限定先确认授权文案存在，再点完全匹配的「允许」，避免误点发布页上无关按钮。
+    for _ in range(20):
+        for fr in page.frames:
+            try:
+                request_text = fr.get_by_text("视频号创作平台申请使用", exact=False)
+                if request_text.count() == 0 or not request_text.first.is_visible():
+                    continue
+                allow = fr.get_by_role("button", name="允许", exact=True)
+                if allow.count() > 0 and allow.first.is_visible():
+                    allow.first.click(timeout=3000)
+                    logger.info("Approved WeChat Channels nickname/avatar authorization.")
+                    break
+            except Exception as e:
+                logger.debug(f"WeChat profile authorization not ready in frame={fr.url[:80]!r}: {e}")
+        else:
+            page.wait_for_timeout(500)
+            continue
+        break
+
     try:
-        page.wait_for_url("**/post/create", timeout=20000)
+        page.wait_for_url("**/post/create", timeout=30000)
         logger.info("WeChat quick authorization login succeeded.")
         return True
     except Exception as e:
-        logger.warning(f"WeChat quick authorization did not finish within 20s: {e}")
+        logger.warning(f"WeChat quick authorization did not finish within 30s: {e}")
         return False
 
 
@@ -373,11 +479,13 @@ def run_uploader(
     collection: str = None,      # 新增：微信合集名称
     relogin: bool = False,       # [Claude_Opus_4.8] 强制重登：忽略现有会话→走登录页出二维码（成功才覆盖 state）
     fail_fast_login: bool = False,  # 自动管线使用：登录失效立即返回，不等待二维码
+    evidence_dir: str = None,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
     state_file = Path(state_path)
     state_file.parent.mkdir(parents=True, exist_ok=True)
+    evidence_root = Path(evidence_dir) if evidence_dir else Path("output") / "wechat_evidence"
 
     if not login_only:
         if not video_path or not Path(video_path).exists():
@@ -385,6 +493,9 @@ def run_uploader(
             return 1
         if not copy_path or not Path(copy_path).exists():
             logger.error(f"Copy text file not found: {copy_path}")
+            return 1
+        if cover_path and not Path(cover_path).is_file():
+            logger.error(f"Requested cover file not found: {cover_path}")
             return 1
         video_abs  = str(Path(video_path).resolve())
         copy_text  = Path(copy_path).read_text(encoding="utf-8")
@@ -884,22 +995,20 @@ def run_uploader(
 
             # ── Strategy A: 直接 Hover 封面缩略图，等"编辑"按钮浮现后点击（正确流程）──
             try:
-                cover_card_sels = [
-                    "text=个人主页卡片",
-                    "text=分享卡片",
-                    "text=封面预览",
-                ]
+                cover_card_sels = ["text=封面预览"]
                 for card_sel in cover_card_sels:
                     try:
                         card_container = page.locator(card_sel).locator("xpath=..")
                         if card_container.count() == 0:
                             continue
-                        card_container.first.hover()
+                        cover_card = card_container.first
+                        before_signature = _wechat_cover_preview_signature(cover_card)
+                        cover_card.hover()
                         page.wait_for_timeout(1000)
 
-                        edit_btn = card_container.first.locator("text=编辑")
+                        edit_btn = cover_card.locator("text=编辑")
                         if edit_btn.count() == 0:
-                            edit_btn = card_container.first.locator("xpath=..").locator("text=编辑")
+                            edit_btn = cover_card.locator("xpath=..").locator("text=编辑")
                         if edit_btn.count() == 0:
                             continue
 
@@ -907,11 +1016,16 @@ def run_uploader(
                         edit_btn.first.click(force=True)
                         page.wait_for_timeout(2000)
 
+                        cover_dialog = _find_wechat_cover_dialog(page)
+                        if not cover_dialog:
+                            logger.warning("Cover editor did not open from the cover preview entry.")
+                            continue
+
                         # Step 1: 点击"上传封面"，触发 WeChat 创建隐藏 input
                         upload_btn = None
                         for inner_sel in ["text=上传封面", "text=本地上传", ".upload-btn", ".cover-upload"]:
                             try:
-                                inner_loc = page.locator(inner_sel).last
+                                inner_loc = cover_dialog.locator(inner_sel).last
                                 if inner_loc.count() > 0 and inner_loc.is_visible():
                                     upload_btn = inner_loc
                                     logger.info(f"Found upload trigger: {inner_sel}")
@@ -926,13 +1040,16 @@ def run_uploader(
                         # Step 2: 注入文件到 hidden input[type=file]
                         file_injected = False
                         for input_sel in [
-                            ".edit-cover-dialog-container input[type=\'file\']",
                             "input[type=\'file\'][accept*=\'image\']",
                             "input[type=\'file\']",
                         ]:
                             try:
-                                file_input = page.locator(input_sel).last
+                                file_input = cover_dialog.locator(input_sel).last
                                 if file_input.count() > 0:
+                                    accept = (file_input.get_attribute("accept") or "").lower()
+                                    if input_sel.endswith("input[type='file']") and ("video" in accept or "mp4" in accept):
+                                        logger.warning("Skipping non-image file input in cover dialog: %s", accept)
+                                        continue
                                     file_input.set_input_files(cover_abs)
                                     logger.info(f"Cover file injected via hidden input: {input_sel}")
                                     file_injected = True
@@ -941,23 +1058,12 @@ def run_uploader(
                                 continue
 
                         if not file_injected:
-                            logger.warning("Direct input injection failed, trying expect_file_chooser...")
-                            try:
-                                with page.expect_file_chooser(timeout=8000) as fc_info:
-                                    if upload_btn:
-                                        upload_btn.click(force=True)
-                                    else:
-                                        edit_btn.first.click(force=True)
-                                fc_info.value.set_files(cover_abs)
-                                file_injected = True
-                                logger.info("Cover file set via OS file chooser.")
-                            except Exception as fc_err:
-                                logger.error(f"File chooser fallback also failed: {fc_err}")
-                                raise
+                            logger.warning("No image file input found inside the cover editor.")
+                            continue
 
                         # Step 3: 等待上传完成
                         page.wait_for_timeout(5000)
-                        page.screenshot(path="output/debug_cover_before_confirm.png")
+                        _capture_wechat_evidence(page, evidence_root, "cover_before_confirm")
 
                         # Step 4: 轮询等待"确认"按钮变为可点击状态，然后点击
                         # [Claude_Sonnet_4.6_Thinking_planning] P0 根因修复:
@@ -968,11 +1074,8 @@ def run_uploader(
 
                         for poll_attempt in range(20):  # 最多等20秒
                             page.wait_for_timeout(1000)
-                            # 用最直接的全局选择器: button:has-text('确认')
-                            # 不限定在 dialog 容器内，因为微信的弹窗不一定有标准的 dialog role
                             for btn_name in ["确认", "确定", "完成"]:
-                                # 策略1: 直接全局找 button 标签
-                                btns = page.locator(f"button:has-text('{btn_name}')")
+                                btns = cover_dialog.locator(f"button:has-text('{btn_name}')")
                                 count = btns.count()
                                 for i in range(count):
                                     try:
@@ -1010,11 +1113,11 @@ def run_uploader(
 
                         if not confirmed:
                             logger.warning("Cover confirm button not found after 20s polling — cover may not be applied!")
-                            page.screenshot(path="output/debug_cover_failed_confirm.png")
+                            _capture_wechat_evidence(page, evidence_root, "cover_failed_confirm")
                         else:
                             page.wait_for_timeout(2000)
-                            page.screenshot(path="output/debug_cover_after_confirm.png")
-                            cover_set = True
+                            _capture_wechat_evidence(page, evidence_root, "cover_after_confirm")
+                            cover_set = _is_wechat_cover_applied(page, cover_card, before_signature)
                         break  # 成功处理一张卡片即退出循环
                     except Exception as e_card:
                         logger.warning(f"Cover strategy A failed for card \'{card_sel}\': {e_card}")
@@ -1022,64 +1125,11 @@ def run_uploader(
             except Exception as e_a:
                 logger.warning(f"Cover Strategy A (hover+edit) failed: {e_a}")
 
-            # ── Strategy B: 兜底 — 暴力枚举常见上传 selector ──
             if not cover_set:
-                logger.info("Cover Strategy B: brute-force selector search...")
-                try:
-                    for sel in [
-                        "text=修改封面", "text=更换封面", "text=设置封面",
-                        "button:has-text('修改封面')", "button:has-text('更换封面')",
-                        ".cover-upload-btn",
-                    ]:
-                        try:
-                            loc = page.locator(sel).first
-                            if loc.count() > 0 and loc.is_visible():
-                                with page.expect_file_chooser(timeout=8000) as fc_info:
-                                    human_click(page, loc)  # 人类化点击打开文件选择器
-                                fc_info.value.set_files(cover_abs)
-                                page.wait_for_timeout(5000)
-                                # [Claude_Sonnet_4.6_Thinking_fast] P0: 严格在 dialog 内找确认按钮，不误点"保存草稿"
-                                # [Claude_Sonnet_4.6_Thinking_planning] 同 Strategy A，轮询等待按钮
-                                for poll_attempt in range(20):
-                                    page.wait_for_timeout(1000)
-                                    for btn_name in ["确认", "确定", "完成"]:
-                                        btns = page.locator(f"button:has-text('{btn_name}')")
-                                        for i in range(btns.count()):
-                                            try:
-                                                btn = btns.nth(i)
-                                                if not btn.is_visible():
-                                                    continue
-                                                if btn.get_attribute("disabled") is not None:
-                                                    continue
-                                                if btn.get_attribute("aria-disabled") == "true":
-                                                    continue
-                                                ok = human_click(page, btn)
-                                                if not ok:
-                                                    ok = dispatch_human_click_events(page, btn)
-                                                if not ok:
-                                                    try: btn.evaluate("node => node.click()"); ok = True
-                                                    except Exception: pass
-                                                if ok:
-                                                    logger.info(f"[Strategy B] Cover confirmed via human_click '{btn_name}' attempt={poll_attempt}")
-                                                    cover_set = True
-                                                    break
-                                            except Exception:
-                                                pass
-                                        if cover_set:
-                                            break
-                                    if cover_set:
-                                        break
-                                if cover_set:
-                                    logger.info(f"[Strategy B] Cover set via selector: {sel}")
-                                    break
-                        except Exception:
-                            continue
-
-                except Exception as e_b:
-                    logger.warning(f"Cover Strategy B failed: {e_b}")
-
-            if not cover_set:
-                logger.warning("All cover upload strategies failed — publishing without custom cover.")
+                _capture_wechat_evidence(page, evidence_root, "cover_not_applied")
+                logger.error("Custom cover was not verified. Stopping before publish to avoid a default-cover post.")
+                browser.close()
+                return 1
 
         # ── 6. 原创声明 ───────────────────────────────────────────────────────
         logger.info("Checking original declaration checkbox...")
@@ -1616,6 +1666,7 @@ def run_uploader(
             page.wait_for_url("**/post/list**", timeout=15000)
             redirected = True
             logger.info("Confirmed: Successfully navigated to post list. Publish complete.")
+            _capture_wechat_evidence(page, evidence_root, "post_list_after_submission")
         except Exception:
             page_content = page.content()  # 未跳转 → 取页面文本走降级判据
 
@@ -1632,6 +1683,7 @@ def main():
     parser.add_argument("--copy",          help="Path to WeChat copy description text file")
     parser.add_argument("--title-file",    help="Path to short title text file (6-16 chars, WeChat platform limit)")
     parser.add_argument("--cover",         help="Path to cover image JPEG file")
+    parser.add_argument("--evidence-dir",  help="Directory for cover and post-list evidence")
     parser.add_argument("--category-file", help="Path to category text file")
     parser.add_argument("--collection",    help="Custom collection/playlist name to associate with this video")
     parser.add_argument("--state",  default="output/wechat_state.json",
@@ -1646,20 +1698,31 @@ def main():
     parser.set_defaults(headless=True)
     args = parser.parse_args()
 
-    code = run_uploader(
-        video_path    = args.video,
-        copy_path     = args.copy,
-        title_path    = args.title_file,
-        cover_path    = args.cover,
-        category_path = args.category_file,
-        state_path    = args.state,
-        login_only    = args.login_only,
-        headless      = args.headless,
-        draft         = args.draft,
-        collection    = args.collection,
-        relogin       = args.relogin,
-        fail_fast_login = args.fail_fast_login,
-    )
+    try:
+        code = run_uploader(
+            video_path    = args.video,
+            copy_path     = args.copy,
+            title_path    = args.title_file,
+            cover_path    = args.cover,
+            category_path = args.category_file,
+            state_path    = args.state,
+            login_only    = args.login_only,
+            headless      = args.headless,
+            draft         = args.draft,
+            collection    = args.collection,
+            relogin       = args.relogin,
+            fail_fast_login = args.fail_fast_login,
+            evidence_dir = args.evidence_dir,
+        )
+    except Exception as exc:
+        if not _is_playwright_target_closed(exc):
+            raise
+        logger.error(
+            "Playwright target closed before publish confirmation; "
+            "returning UNCONFIRMED(3) so pipeline will keep artifacts for manual verification: %s",
+            exc,
+        )
+        code = 3
     sys.exit(code)
 
 

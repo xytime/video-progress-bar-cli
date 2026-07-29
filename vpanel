@@ -12,6 +12,7 @@
 # | 1.4.0 | 2026-07-13 | Codex | UI 检测 LaunchAgent 后统一由 launchd 启停，避免 KeepAlive 与 nohup 双重管理争抢端口 |
 # | 1.4.1 | 2026-07-27 | Codex | 端口变量输出统一使用 ${DASH_PORT}，避免 set -u 下中文标点紧邻变量导致误解析 |
 # | 1.4.2 | 2026-07-27 | Codex | _port_pid 增加 netstat fallback，避免 lsof 受异常挂载影响误报 UI 未监听 |
+# | 1.5.0 | 2026-07-29 | Codex | 新增 dubbing 人工配音再制网关；不接入 job 自动流水线 |
 # =======================================================================
 
 # [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
@@ -92,6 +93,13 @@ show_usage() {
     echo "  ./vpanel job logs             实时查看管线运行日志（最近 50 行）"
     echo "  ./vpanel job channels         列出当前已批准的频道白名单"
     echo "  ./vpanel job add-channel URL  通过 yt-dlp 验证并添加一个 YouTube 频道到白名单"
+    echo ""
+    echo "命令组: dubbing (人工配音再制，不进入自动管线)"
+    echo "  ./vpanel dubbing create YOUTUBE_ID [YOUTUBE_ID ...] --platform wechat"
+    echo "  ./vpanel dubbing status YOUTUBE_ID"
+    echo "  ./vpanel dubbing approve YOUTUBE_ID"
+    echo "  ./vpanel dubbing publish YOUTUBE_ID --platform all --confirm"
+    echo "  ./vpanel dubbing run YOUTUBE_ID --platform all --confirm"
     echo ""
     echo "命令组: bot (Telegram Bot 管理)"
     echo "  ./vpanel bot start            后台启动 Telegram Bot"
@@ -382,6 +390,10 @@ case "$GROUP" in
                 exit 1
                 ;;
         esac
+        ;;
+    dubbing)
+        shift
+        PYTHONPATH="$PRJ_ROOT/src" "$PYTHON" "$PRJ_ROOT/scripts/dubbing_studio.py" "$@"
         ;;
     # [Claude_Sonnet_4.6_Thinking_planning] P2修复：注册 help 为有效命令，避免 './vpanel help' 报错
     help)

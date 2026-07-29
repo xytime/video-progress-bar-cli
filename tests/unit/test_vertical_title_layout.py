@@ -5,10 +5,15 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-29 | Codex  | 覆盖标题动态两行、强调色与 drawtext expansion 防护 |
+| 1.0.1   | 2026-07-29 | Codex  | 覆盖竖版渲染的单线程 H.264 输入解码保护 |
 """
+
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 from video_processing.processors.vertical_processor import (
     TITLE_ACCENT_COLOR,
+    VerticalCaptionProcessor,
     _build_title_drawtext_filters,
     _layout_title_lines,
 )
@@ -58,3 +63,22 @@ def test_build_title_drawtext_filters_disable_percent_expansion_and_accent_secon
     assert "expansion=none" in joined
     assert "466%" in joined
     assert TITLE_ACCENT_COLOR in joined
+
+
+@patch("video_processing.core.base.VideoProcessorBase._validate_input")
+@patch("video_processing.processors.vertical_processor.subprocess.run")
+@patch("imageio_ffmpeg.get_ffmpeg_exe", return_value="ffmpeg")
+def test_vertical_render_uses_single_thread_input_decode(_ffmpeg, mock_run, _validate, tmp_path):
+    mock_run.side_effect = [
+        MagicMock(stdout="1280x720"),
+        MagicMock(stdout=""),
+        MagicMock(),
+    ]
+    processor = VerticalCaptionProcessor(
+        Path("source.mp4"), output_path=tmp_path / "output.mp4", title="466%暴涨引爆全球芯片抛售潮",
+    )
+
+    processor._burn_subtitles(tmp_path / "source.ass")
+
+    render_command = mock_run.call_args_list[-1].args[0]
+    assert render_command[:5] == ["ffmpeg", "-y", "-threads", "1", "-i"]

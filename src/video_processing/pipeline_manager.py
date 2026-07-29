@@ -71,6 +71,7 @@
 | 3.39.0  | 2026-07-27 | Codex                               | 历史迁移限额为 0 时硬停抖音历史回填，审核回查跳过 HISTORY 记录但保留 NEW 新片发布 |
 | 3.40.0  | 2026-07-27 | Codex                               | 平台告警格式抽到共享 PlatformEvent，管线与 Telegram 助手 bot 共用同一事件语义 |
 | 3.41.0  | 2026-07-28 | Codex                               | 新增公开视频提交窗口守卫，视频号/抖音/快手仅在黄金时段触发新提交 |
+| 3.45.0  | 2026-07-29 | Codex                               | 可选地以已渲染成片、标题和语义策划生成内容贴合封面，默认保持旧封面流程 |
 """
 
 
@@ -1715,7 +1716,12 @@ class PipelineManager:
 
                 # ── 3. 封面生成 ──────────────────────────────────────────────────
                 cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"
-                if not cover_file.exists():
+                cover_brief_file = self._OUT_DIR / f"{prefix}_cover_brief.json"
+                content_aware_cover_enabled = settings.enable_content_aware_cover
+                cover_checkpoint_ready = cover_file.exists() and (
+                    not content_aware_cover_enabled or cover_brief_file.is_file()
+                )
+                if not cover_checkpoint_ready:
                     logger.info(f"Generating cover for {prefix}...")
                     cover_title = title
                     if title_file.exists():
@@ -1791,6 +1797,11 @@ class PipelineManager:
                         "--payload", json.dumps(cover_payload, ensure_ascii=False),
                         "--output", str(cover_file),
                     ]
+                    if content_aware_cover_enabled:
+                        cover_cmd.extend([
+                            "--content-aware",
+                            "--brief-output", str(cover_brief_file),
+                        ])
                     res = subprocess.run(cover_cmd, capture_output=True,
                                          cwd=str(self._PRJ_ROOT))
                     if res.returncode != 0:

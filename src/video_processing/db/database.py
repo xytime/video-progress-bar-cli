@@ -53,10 +53,14 @@
 | 3.21.0  | 2026-07-28 | Codex                               | 新增监控候选入库/补全接口；RSS 降级条目保持 METADATA_PENDING，完整官方元数据到位才转 PENDING |
 | 3.22.0  | 2026-07-28 | Codex                               | 新增只读运维质检快照接口，集中队列、失败、在途和多平台账本查询 |
 | 3.22.1  | 2026-07-28 | Codex                               | 质检快照增加最近本地发布和各平台账本总览，支撑 Telegram 上帝视角状态行 |
+| 3.23.0  | 2026-07-29 | Codex                               | 新增独立配音再制任务、片段、产物和投递账本；不复用原视频状态机 |
+| 3.23.1  | 2026-07-29 | Codex                               | 新增配音投递状态校正 DAL，避免人工校正被计为新上传尝试 |
+| 3.23.2  | 2026-07-29 | Codex                               | 配音任务读取透传源片 upload_date，供再制渲染继承发布日期戳并保留切片回退能力 |
 """
 
 import sqlite3
 import os
+import json
 import logging
 import datetime  # [Claude_Opus_4.6_Thinking_planning] 提升为 top-level import，用于高赞时间窗口计算
 from pathlib import Path
@@ -462,6 +466,107 @@ class PipelineDB:
                     FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE SET NULL
                 )
             ''')
+
+            # 配音再制中心账本独立于 processed_videos：源片状态、产物和既有平台记录绝不被改写。
+            # 当前仅由人工入口创建；PipelineManager 不读取这些表。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS dubbing_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_video_id INTEGER NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    state TEXT NOT NULL DEFAULT 'DRAFT'
+                        CHECK(state IN ('DRAFT', 'ANALYZING', 'SCRIPT_READY', 'SYNTHESIZING',
+                                      'ALIGNING', 'RENDERING', 'QA_REQUIRED', 'READY_TO_PUBLISH',
+                                      'PUBLISHING', 'UNDER_REVIEW', 'PUBLISHED', 'NEEDS_REWRITE',
+                                      'FAILED', 'CANCELED')),
+                    provider TEXT NOT NULL DEFAULT 'minimax',
+                    model TEXT NOT NULL,
+                    voice_id TEXT NOT NULL,
+                    requested_platforms TEXT NOT NULL DEFAULT '[]',
+                    config_json TEXT NOT NULL DEFAULT '{}',
+                    workspace_path TEXT DEFAULT NULL,
+                    narration_path TEXT DEFAULT NULL,
+                    subtitle_path TEXT DEFAULT NULL,
+                    output_video_path TEXT DEFAULT NULL,
+                    qa_report_path TEXT DEFAULT NULL,
+                    asset_sha256 TEXT DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source_video_id, version),
+                    FOREIGN KEY(source_video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS dubbing_speakers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id INTEGER NOT NULL,
+                    speaker_key TEXT NOT NULL,
+                    voice_id TEXT DEFAULT NULL,
+                    mapping_source TEXT NOT NULL DEFAULT 'DEFAULT',
+                    confidence REAL DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(job_id, speaker_key),
+                    FOREIGN KEY(job_id) REFERENCES dubbing_jobs(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS dubbing_utterances (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id INTEGER NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    speaker_key TEXT NOT NULL DEFAULT 'NARRATOR',
+                    source_start_ms INTEGER NOT NULL,
+                    source_end_ms INTEGER NOT NULL,
+                    source_text TEXT NOT NULL DEFAULT '',
+                    zh_text TEXT NOT NULL,
+                    actual_start_ms INTEGER DEFAULT NULL,
+                    actual_end_ms INTEGER DEFAULT NULL,
+                    actual_duration_ms INTEGER DEFAULT NULL,
+                    speed REAL DEFAULT NULL,
+                    alignment_strategy TEXT DEFAULT NULL,
+                    synthesis_attempts INTEGER NOT NULL DEFAULT 0,
+                    cache_key TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(job_id, ordinal),
+                    FOREIGN KEY(job_id) REFERENCES dubbing_jobs(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS dubbing_artifacts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id INTEGER NOT NULL,
+                    artifact_kind TEXT NOT NULL,
+                    path TEXT NOT NULL,
+                    sha256 TEXT DEFAULT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(job_id, artifact_kind),
+                    FOREIGN KEY(job_id) REFERENCES dubbing_jobs(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS dubbing_publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id INTEGER NOT NULL,
+                    platform TEXT NOT NULL CHECK(platform IN ('wechat', 'douyin', 'kuaishou')),
+                    state TEXT NOT NULL DEFAULT 'QUEUED'
+                        CHECK(state IN ('QUEUED', 'UPLOADING', 'DRAFT', 'UNDER_REVIEW', 'PUBLISHED',
+                                      'RETRYABLE_FAILED', 'UNCERTAIN', 'BANNED', 'CANCELED')),
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    external_post_id TEXT DEFAULT NULL,
+                    external_url TEXT DEFAULT NULL,
+                    last_error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(job_id, platform),
+                    FOREIGN KEY(job_id) REFERENCES dubbing_jobs(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_dubbing_jobs_source ON dubbing_jobs(source_video_id, updated_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_dubbing_utterances_job ON dubbing_utterances(job_id, ordinal)")
 
             # 4. 创建复合索引优化分页查询与状态调度性能
             cursor.execute('''
@@ -1678,6 +1783,254 @@ class PipelineDB:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    # --- Dubbing studio DAL (manual-only, isolated from PipelineManager) ---
+    _DUBBING_STATES = {
+        "DRAFT", "ANALYZING", "SCRIPT_READY", "SYNTHESIZING", "ALIGNING", "RENDERING",
+        "QA_REQUIRED", "READY_TO_PUBLISH", "PUBLISHING", "UNDER_REVIEW", "PUBLISHED",
+        "NEEDS_REWRITE", "FAILED", "CANCELED",
+    }
+    _DUBBING_PUBLICATION_STATES = {
+        "QUEUED", "UPLOADING", "DRAFT", "UNDER_REVIEW", "PUBLISHED",
+        "RETRYABLE_FAILED", "UNCERTAIN", "BANNED", "CANCELED",
+    }
+    _DUBBING_PLATFORMS = {"wechat", "douyin", "kuaishou"}
+
+    def create_dubbing_job(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        model: str,
+        voice_id: str,
+        requested_platforms: Sequence[str] = (),
+        config: Optional[Dict[str, Any]] = None,
+        force_new_version: bool = False,
+    ) -> Dict[str, Any]:
+        """人工为已发布源片创建配音再制任务；绝不修改源片记录。"""
+        platforms = sorted({str(platform).lower() for platform in requested_platforms})
+        if any(platform not in self._DUBBING_PLATFORMS for platform in platforms):
+            raise ValueError("requested_platforms contains unsupported platform")
+        if not model.strip() or not voice_id.strip():
+            raise ValueError("model and voice_id are required")
+        with self.get_connection() as conn:
+            source = conn.execute(
+                "SELECT id, status FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not source:
+                raise ValueError("Source video or slice does not exist")
+            if source["status"] != "PUBLISHED":
+                raise ValueError("Only platform-published source videos can enter dubbing")
+            latest = conn.execute(
+                "SELECT * FROM dubbing_jobs WHERE source_video_id = ? ORDER BY version DESC LIMIT 1",
+                (source["id"],),
+            ).fetchone()
+            if latest and not force_new_version:
+                return dict(latest)
+            version = (int(latest["version"]) + 1) if latest else 1
+            conn.execute(
+                """INSERT INTO dubbing_jobs
+                   (source_video_id, version, model, voice_id, requested_platforms, config_json)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (source["id"], version, model, voice_id, json.dumps(platforms, ensure_ascii=False),
+                 json.dumps(config or {}, ensure_ascii=False, sort_keys=True)),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM dubbing_jobs WHERE source_video_id = ? AND version = ?", (source["id"], version)).fetchone()
+            if not row:
+                raise RuntimeError("Failed to create dubbing job")
+            return dict(row)
+
+    def get_dubbing_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+        """返回再制任务及只读源片标识。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT dj.*, pv.youtube_id, pv.slice_index, pv.title AS source_title,
+                          pv.zh_title AS source_zh_title,
+                          pv.upload_date AS source_upload_date,
+                          pv.status AS source_status
+                   FROM dubbing_jobs dj JOIN processed_videos pv ON pv.id = dj.source_video_id
+                   WHERE dj.id = ?""",
+                (job_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_dubbing_job_by_source(self, youtube_id: str, *, slice_index: int = 0) -> Optional[Dict[str, Any]]:
+        """按源片取最新再制版本，便于人工 status/publish 命令恢复任务。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT dj.*, pv.youtube_id, pv.slice_index, pv.title AS source_title,
+                          pv.zh_title AS source_zh_title,
+                          pv.upload_date AS source_upload_date,
+                          pv.status AS source_status
+                   FROM dubbing_jobs dj JOIN processed_videos pv ON pv.id = dj.source_video_id
+                   WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                   ORDER BY dj.version DESC LIMIT 1""",
+                (youtube_id, slice_index),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_dubbing_job(self, job_id: int, state: str, **fields: Any) -> None:
+        """更新独立再制任务状态和产物指针，禁止写入未知列。"""
+        normalized = (state or "").upper()
+        if normalized not in self._DUBBING_STATES:
+            raise ValueError(f"Unsupported dubbing state: {state}")
+        allowed = {
+            "workspace_path", "narration_path", "subtitle_path", "output_video_path",
+            "qa_report_path", "asset_sha256", "error_message",
+        }
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported dubbing fields: {sorted(unknown)}")
+        assignments = ["state = ?", "updated_at = CURRENT_TIMESTAMP"]
+        values: List[Any] = [normalized]
+        for key, value in fields.items():
+            assignments.append(f"{key} = ?")
+            values.append(value)
+        values.append(job_id)
+        with self.get_connection() as conn:
+            cursor = conn.execute(f"UPDATE dubbing_jobs SET {', '.join(assignments)} WHERE id = ?", values)
+            if cursor.rowcount != 1:
+                raise ValueError("Dubbing job does not exist")
+            conn.commit()
+
+    def replace_dubbing_utterances(self, job_id: int, utterances: Sequence[Dict[str, Any]]) -> None:
+        """原子替换一个任务的配音片段时间线；调用方不得执行原始 SQL。"""
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM dubbing_utterances WHERE job_id = ?", (job_id,))
+            for ordinal, item in enumerate(utterances):
+                conn.execute(
+                    """INSERT INTO dubbing_utterances
+                    (job_id, ordinal, speaker_key, source_start_ms, source_end_ms, source_text, zh_text,
+                     actual_start_ms, actual_end_ms, actual_duration_ms, speed, alignment_strategy,
+                     synthesis_attempts, cache_key)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        job_id, ordinal, item.get("speaker_key", "NARRATOR"), int(item["source_start_ms"]),
+                        int(item["source_end_ms"]), item.get("source_text", ""), item["zh_text"],
+                        item.get("actual_start_ms"), item.get("actual_end_ms"), item.get("actual_duration_ms"),
+                        item.get("speed"), item.get("alignment_strategy"), int(item.get("synthesis_attempts", 0)),
+                        item.get("cache_key"),
+                    ),
+                )
+            conn.commit()
+
+    def upsert_dubbing_speaker(
+        self, job_id: int, speaker_key: str, *, voice_id: str, mapping_source: str = "DEFAULT",
+        confidence: Optional[float] = None,
+    ) -> None:
+        """记录当前视频内的说话人音色映射；P1 单人任务固定为 NARRATOR。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                """INSERT INTO dubbing_speakers (job_id, speaker_key, voice_id, mapping_source, confidence)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(job_id, speaker_key) DO UPDATE SET
+                     voice_id=excluded.voice_id, mapping_source=excluded.mapping_source,
+                     confidence=excluded.confidence, updated_at=CURRENT_TIMESTAMP""",
+                (job_id, speaker_key, voice_id, mapping_source, confidence),
+            )
+            conn.commit()
+
+    def get_dubbing_speakers(self, job_id: int) -> List[Dict[str, Any]]:
+        """返回任务内说话人映射，跨视频不共享身份。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM dubbing_speakers WHERE job_id = ? ORDER BY speaker_key ASC", (job_id,)
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_dubbing_utterances(self, job_id: int) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM dubbing_utterances WHERE job_id = ? ORDER BY ordinal ASC", (job_id,)
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def upsert_dubbing_artifact(
+        self, job_id: int, artifact_kind: str, path: str, *, sha256: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """记录可追溯产物；路径与哈希仅属于再制版本。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                """INSERT INTO dubbing_artifacts (job_id, artifact_kind, path, sha256, metadata_json)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(job_id, artifact_kind) DO UPDATE SET
+                     path=excluded.path, sha256=excluded.sha256, metadata_json=excluded.metadata_json,
+                     created_at=CURRENT_TIMESTAMP""",
+                (job_id, artifact_kind, path, sha256, json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)),
+            )
+            conn.commit()
+
+    def get_dubbing_artifacts(self, job_id: int) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM dubbing_artifacts WHERE job_id = ? ORDER BY id ASC", (job_id,)).fetchall()
+            return [dict(row) for row in rows]
+
+    def update_dubbing_publication(
+        self, job_id: int, platform: str, state: str, *, error_message: Optional[str] = None,
+        external_url: Optional[str] = None, external_post_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """登记一次显式投递的状态；任何平台终态均不回写源视频。"""
+        platform = (platform or "").lower()
+        state = (state or "").upper()
+        if platform not in self._DUBBING_PLATFORMS or state not in self._DUBBING_PUBLICATION_STATES:
+            raise ValueError("Unsupported dubbing publication platform or state")
+        with self.get_connection() as conn:
+            conn.execute(
+                """INSERT INTO dubbing_publications
+                   (job_id, platform, state, attempt_count, last_error_message, external_url, external_post_id)
+                   VALUES (?, ?, ?, 1, ?, ?, ?)
+                   ON CONFLICT(job_id, platform) DO UPDATE SET
+                     state=excluded.state, attempt_count=dubbing_publications.attempt_count + 1,
+                     last_error_message=excluded.last_error_message, external_url=excluded.external_url,
+                     external_post_id=excluded.external_post_id, updated_at=CURRENT_TIMESTAMP""",
+                (job_id, platform, state, error_message, external_url, external_post_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM dubbing_publications WHERE job_id = ? AND platform = ?", (job_id, platform)
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to update dubbing publication")
+            return dict(row)
+
+    def get_dubbing_publications(self, job_id: int) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM dubbing_publications WHERE job_id = ? ORDER BY platform ASC", (job_id,)
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def correct_dubbing_publication_state(
+        self, job_id: int, platform: str, state: str, *, error_message: Optional[str] = None,
+        external_url: Optional[str] = None, external_post_id: Optional[str] = None,
+        attempt_count: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """人工校正已存在投递记录；不增加 attempt_count，不代表重新上传。"""
+        platform = (platform or "").lower()
+        state = (state or "").upper()
+        if platform not in self._DUBBING_PLATFORMS or state not in self._DUBBING_PUBLICATION_STATES:
+            raise ValueError("Unsupported dubbing publication platform or state")
+        if attempt_count is not None and attempt_count < 0:
+            raise ValueError("attempt_count must be non-negative")
+        with self.get_connection() as conn:
+            conn.execute(
+                """UPDATE dubbing_publications
+                   SET state = ?, attempt_count = COALESCE(?, attempt_count), last_error_message = ?,
+                       external_url = COALESCE(?, external_url),
+                       external_post_id = COALESCE(?, external_post_id), updated_at = CURRENT_TIMESTAMP
+                   WHERE job_id = ? AND platform = ?""",
+                (state, attempt_count, error_message, external_url, external_post_id, job_id, platform),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM dubbing_publications WHERE job_id = ? AND platform = ?", (job_id, platform)
+            ).fetchone()
+            if not row:
+                raise ValueError("Dubbing publication does not exist")
+            return dict(row)
 
     # --- Kuaishou browser publication DAL ---
     _KUAISHOU_STATES = {

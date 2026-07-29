@@ -1,7 +1,11 @@
 """自动发布遇到失效微信登录态时的快速失败契约测试。"""
 
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
+from playwright._impl._errors import TargetClosedError
 
 
 def test_automatic_upload_returns_login_required_without_waiting_for_qr(tmp_path: Path):
@@ -34,3 +38,33 @@ def test_automatic_upload_returns_login_required_without_waiting_for_qr(tmp_path
     browser.close.assert_called_once()
     # 快速失败发生在二维码捕获与等待之前。
     page.wait_for_url.assert_not_called()
+
+
+def test_cli_returns_unconfirmed_when_playwright_target_closes(tmp_path: Path):
+    from scripts import wechat_uploader
+
+    video = tmp_path / "video.mp4"
+    copy = tmp_path / "copy.txt"
+    video.write_bytes(b"video")
+    copy.write_text("copy", encoding="utf-8")
+
+    argv = [
+        "wechat_uploader.py",
+        "--video",
+        str(video),
+        "--copy",
+        str(copy),
+        "--state",
+        str(tmp_path / "wechat_state.json"),
+    ]
+    with (
+        patch.object(sys, "argv", argv),
+        patch(
+            "scripts.wechat_uploader.run_uploader",
+            side_effect=TargetClosedError("Target page, context or browser has been closed"),
+        ),
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        wechat_uploader.main()
+
+    assert exit_info.value.code == 3

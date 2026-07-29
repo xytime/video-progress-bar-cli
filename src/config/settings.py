@@ -38,6 +38,8 @@
 | 3.15.0 | 2026-07-28 | Codex                              | 新增公开视频发布黄金窗口配置，支持按北京时间活跃高峰控制平台提交 |
 | 3.15.1 | 2026-07-29 | Codex                              | 默认发布窗口整体前移 30 分钟，抢占活跃峰值前置流量 |
 | 3.15.2 | 2026-07-29 | Codex                              | 新增中国大陆节假日/补班日配置，工作日与休息日使用不同发布窗口 |
+| 3.15.3 | 2026-07-29 | Codex                              | 人工混音版默认使用 0.16 英文底音，并增加 DeepSeek thinking 脚本精修配置 |
+| 3.15.4 | 2026-07-29 | Codex                              | 新增内容贴合封面开关，默认关闭以保持现有例行发布行为不变 |
 """
 import json
 import socket
@@ -261,6 +263,33 @@ class Settings(BaseSettings):
     douyin_browser_action_interval_sec: int = 180
     # 每轮最多回查多少条 UNDER_REVIEW，避免一次性连续打开作品管理页。
     douyin_review_max_per_run: int = 5
+    # 每轮最多同步多少条“微信已发布但抖音未建账”的新片漏项。
+    douyin_new_sync_max_per_run: int = 10
+    # 仅扫描最近 N 小时内刚完成微信发布的新片，避免把旧历史内容混入 NEW 同步。
+    douyin_new_sync_lookback_hours: int = 12
+
+    # 配音再制中心：仅由 ./vpanel dubbing 显式调用，日常 PipelineManager 不读取这些配置。
+    # API Key 只允许保存在本机 .env，禁止写入任务报告、数据库或日志。
+    minimax_api_key: Optional[str] = None
+    minimax_tts_model: str = "speech-2.8-turbo"
+    minimax_tts_voice_id: str = "Chinese (Mandarin)_Male_Announcer"
+    minimax_tts_preferred_speed: float = 1.08
+    minimax_tts_min_speed: float = 0.96
+    minimax_tts_max_speed: float = 1.28
+    minimax_tts_request_interval_sec: float = 1.1
+    dubbing_audio_policy: str = "zh_with_english_bed"
+    dubbing_english_bed_volume: float = 0.16
+    dubbing_target_lufs: float = -14.0
+    dubbing_deepseek_script_refinement: bool = True
+    dubbing_deepseek_thinking_enabled: bool = True
+    dubbing_deepseek_refinement_batch_size: int = 6
+    dubbing_subtitle_font_size: int = 72
+    dubbing_subtitle_max_page_chars: int = 28
+    dubbing_subtitle_max_line_chars: int = 12
+
+    # 内容贴合封面：根据既有标题、分类、content_hints 输出稳定视觉策划，并使用真实成片画面渲染。
+    # 默认关闭；启用后会额外持久化 _cover_brief.json，缺失时不复用旧封面 checkpoint。
+    enable_content_aware_cover: bool = False
 
     # 视频号暂停发布时，新视频可先进入 WECHAT_DEFERRED，并按限额在恢复后补发。
     wechat_publishing_paused: bool = False

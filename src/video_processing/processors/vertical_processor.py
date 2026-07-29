@@ -31,6 +31,7 @@
 | 2.4.0   | 2026-06-08 | Gemini_3.5_Flash_planning | 自动从 .info.json 加载视频标题，标注 # [Gemini_3.5_Flash_planning] |
 | 2.5.0   | 2026-06-25 | Claude_Opus_4.8 | 新增 source_date 参数：字幕烧录后叠加左上角「源视频发布日期」毛玻璃戳(date_stamp 模块)，覆盖源水印；遮罩/边框输入索引按音轨情况动态计算，渲染后清理临时资源 |
 | 2.6.0   | 2026-07-29 | Codex | 优化竖版头部标题：Noto/思源系字体优先、动态两行排版、强调色与 drawtext expansion 防护 |
+| 2.6.1   | 2026-07-29 | Codex | 竖版渲染固定单线程 H.264 输入解码，避免部分 60fps 源在多线程解码时偶发丢宏块 |
 """
 import logging
 import subprocess
@@ -734,6 +735,9 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         
         cmd = [
             ffmpeg_exe, "-y",
+            # 部分 60fps H.264 输入在当前 FFmpeg 构建的帧级多线程解码下会偶发丢失宏块；
+            # 丢失会被后续缩放/字幕烧录永久写进成片，故在统一渲染入口保守固定为单线程。
+            "-threads", "1",
             "-i", str(self.input_path),
         ]
         

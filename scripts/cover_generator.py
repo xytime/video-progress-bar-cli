@@ -6,17 +6,23 @@
 |---------|------------|------------------------------|-----------------------------------------------------------------|
 | 1.0.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking   | Pillow 基础玻璃态排版绘制                                        |
 | 2.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 增加 --payload 参数，支持集成 CoverEngine v2.0，且保留 Pillow 兜底  |
+| 2.1.0   | 2026-07-29 | Codex                        | 优先从已渲染竖版成片取真实画面，保留片头标题/日期戳生成内容贴合封面 |
+| 2.2.0   | 2026-07-29 | Codex                        | 消费独立视觉策划 JSON，为真实视频封面注入题材化色彩和可审计产物      |
 """
 
 import os
 import sys
 import json
 import argparse
+import subprocess
+import tempfile
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-# 1080x1920 (竖屏标准分辨率)
+# 旧 Pillow 兜底海报的竖屏标准分辨率。
 W, H = 1080, 1920
+# 视频号等平台使用的 6:7 封面安全尺寸。
+COVER_W, COVER_H = 1080, 1260
 
 def get_font_path():
     paths = [
@@ -136,14 +142,188 @@ def generate_cover(title: str, output_path: str):
     img.convert('RGB').save(out_path, quality=95)
     print(f"Cover generated: {out_path}")
 
+
+def _extract_cover_frame(video_path: Path) -> Image.Image:
+    """从片头候选帧中选取信息量更高的一帧，避免固定截到纯黑转场。"""
+    if not video_path.is_file():
+        raise FileNotFoundError(f"Video not found: {video_path}")
+
+    candidates = []
+    with tempfile.TemporaryDirectory(prefix="cover_frame_") as temp_dir:
+        temp_root = Path(temp_dir)
+        for index, second in enumerate((2, 5, 8)):
+            frame_path = temp_root / f"frame_{index}.jpg"
+            completed = subprocess.run(
+                [
+                    "ffmpeg", "-y", "-ss", str(second), "-i", str(video_path),
+                    "-frames:v", "1", "-q:v", "2", str(frame_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode != 0 or not frame_path.is_file():
+                continue
+            with Image.open(frame_path) as frame:
+                image = frame.convert("RGB").copy()
+            candidates.append((image, _frame_score(image)))
+
+    if not candidates:
+        raise RuntimeError("Unable to extract a usable cover frame")
+    return max(candidates, key=lambda item: item[1])[0]
+
+
+def _frame_score(image: Image.Image) -> float:
+    """排除接近全黑的转场；优先保留画面层有对比度的片段。"""
+    # 忽略竖版顶部标题黑区和底部字幕区，仅评价实际画面区域。
+    top = round(image.height * 0.18)
+    bottom = round(image.height * 0.58)
+    content = image.crop((0, top, image.width, max(top + 1, bottom))).resize((120, 80)).convert("L")
+    values = list(content.getdata())
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    return mean + variance ** 0.5 * 1.8
+
+
+def _hex_to_rgb(color: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+    value = str(color or "").strip().lstrip("#")
+    if len(value) != 6:
+        return fallback
+    try:
+        return tuple(int(value[index:index + 2], 16) for index in (0, 2, 4))
+    except ValueError:
+        return fallback
+
+
+def _draw_cover_title(image: Image.Image, title: str, brief: dict | None = None) -> None:
+    """在封面头部重绘短标题，避免历史缓存成片没有片头标题时留出黑区。"""
+    if not title.strip():
+        return
+    has_creative_brief = brief is not None
+    brief = brief or {}
+    draw = ImageDraw.Draw(image)
+    accent_color = _hex_to_rgb(brief.get("accent_color", ""), (242, 201, 76))
+    title_color = _hex_to_rgb(brief.get("title_color", ""), (245, 245, 243))
+    secondary_title_color = _hex_to_rgb(brief.get("secondary_title_color", ""), accent_color)
+    badge = str(brief.get("badge") or "").strip()
+    if has_creative_brief and badge:
+        badge_font = get_font(30, "bold")
+        draw.rounded_rectangle((82, 28, 82 + 38 + badge_font.getlength(badge), 72), radius=10, fill=accent_color)
+        draw.text((101, 34), badge, font=badge_font, fill="#101418")
+    if has_creative_brief:
+        draw.rectangle((42, 30, 56, 300), fill=accent_color)
+    max_width = COVER_W - 100
+    font_size = 86
+    lines = []
+    while font_size >= 46:
+        font = get_font(font_size, "black")
+        lines = split_text_by_width(title, font, max_width)
+        if len(lines) <= 2:
+            break
+        font_size -= 4
+    lines = lines[:2]
+    if not lines:
+        return
+    line_heights = [font.getbbox(line)[3] - font.getbbox(line)[1] for line in lines]
+    total_height = sum(line_heights) + (len(lines) - 1) * 16
+    y = max(90 if has_creative_brief and badge else 36, (330 - total_height) // 2)
+    for index, (line, height) in enumerate(zip(lines, line_heights)):
+        bbox = draw.textbbox((0, 0), line, font=font)
+        x = (COVER_W - (bbox[2] - bbox[0])) // 2
+        draw.text((x, y), line, font=font, fill=title_color if index == 0 else secondary_title_color)
+        y += height + 16
+
+
+def generate_video_backed_cover(
+    video_path: str | Path,
+    output_path: str | Path,
+    *,
+    title: str = "",
+    brief: dict | None = None,
+) -> None:
+    """用真实画面和与视频一致的双行标题制作 6:7 封面。"""
+    creative_brief = brief
+    brief = brief or {}
+    frame = _extract_cover_frame(Path(video_path))
+    if frame.width != COVER_W:
+        frame = frame.resize((COVER_W, round(frame.height * COVER_W / frame.width)), Image.Resampling.LANCZOS)
+    if frame.height < COVER_H:
+        raise RuntimeError(f"Vertical cover source too short: {frame.size}")
+
+    # 标题区统一重绘，实际画面从竖版主画面区域取，避免历史成片的空标题区和底部字幕进入封面。
+    visual_top = min(frame.height - 1, round(frame.height * 0.18))
+    visual_bottom = min(frame.height, round(frame.height * 0.50))
+    foreground_top = 330
+    foreground = frame.crop((0, visual_top, COVER_W, max(visual_top + 1, visual_bottom)))
+
+    # 底部用同一帧的真实画面做深色虚化延展，既补足 6:7 比例又不复制字幕。
+    visual = frame.crop((0, visual_top, COVER_W, max(visual_top + 1, visual_bottom)))
+    background = visual.resize((COVER_W, COVER_H), Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(26))
+    shade = Image.new("RGBA", (COVER_W, COVER_H), (0, 0, 0, 88))
+    cover = Image.alpha_composite(background.convert("RGBA"), shade)
+    cover.alpha_composite(foreground.convert("RGBA"), (0, foreground_top))
+    tint_rgb = _hex_to_rgb(brief.get("frame_tint", ""), (0, 0, 0))
+    tint_opacity = max(0, min(96, int(brief.get("frame_tint_opacity", 0) or 0)))
+    if tint_opacity:
+        cover = Image.alpha_composite(cover, Image.new("RGBA", (COVER_W, COVER_H), (*tint_rgb, tint_opacity)))
+    draw = ImageDraw.Draw(cover)
+    header_rgb = _hex_to_rgb(brief.get("header_color", ""), (5, 5, 5))
+    draw.rectangle((0, 0, COVER_W, foreground_top), fill=header_rgb)
+    _draw_cover_title(cover, title, creative_brief)
+
+    out_path = Path(output_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cover.convert("RGB").save(out_path, quality=95)
+    print(f"Video-backed cover generated: {out_path}")
+
 def main():
     # [Gemini_3.5_Flash_planning] 支持 --payload 参数接入 CoverEngine v2.0，同时支持 Pillow 降级兜底
     parser = argparse.ArgumentParser(description="Generate video cover (V5 Glassmorphism or V2 HTML).")
     parser.add_argument("--title", help="Video title (fallback Pillow generator)")
     parser.add_argument("--payload", help="JSON payload for Cover Engine v2.0")
-    parser.add_argument("--video", help="Video path (ignored, just for compat)")
+    parser.add_argument("--video", help="Rendered vertical video used as the primary cover visual")
+    parser.add_argument("--content-aware", action="store_true", help="Apply the deterministic content-aware creative brief")
+    parser.add_argument("--brief-output", help="Write the applied creative brief JSON after a successful render")
     parser.add_argument("--output", required=True, help="Output image path (.jpg)")
     args = parser.parse_args()
+    payload = {}
+    if args.payload:
+        try:
+            payload = json.loads(args.payload)
+        except json.JSONDecodeError:
+            payload = {}
+    title_to_use = args.title or str(payload.get("title") or "")
+    creative_brief = None
+    if args.content_aware:
+        try:
+            sys.path.append(str(Path(__file__).parent.parent / "src"))
+            from cover import build_cover_creative_brief, validate_cover_brief_input
+
+            validation = validate_cover_brief_input(payload)
+            if validation.ok:
+                creative_brief = build_cover_creative_brief(payload).to_dict()
+                if validation.warnings:
+                    print(f"Cover brief warnings: {', '.join(validation.warnings)}")
+                print(f"Content-aware cover style: {creative_brief['style_id']}")
+            else:
+                print(f"Content-aware cover unavailable: {', '.join(validation.warnings)}")
+        except Exception as e:
+            print(f"Content-aware cover briefing unavailable: {e}")
+
+    def persist_creative_brief() -> None:
+        if creative_brief is not None and args.brief_output:
+            brief_path = Path(args.brief_output)
+            brief_path.parent.mkdir(parents=True, exist_ok=True)
+            brief_path.write_text(json.dumps(creative_brief, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 例行流程已将最终竖版成片传入此处。优先复用其标题、日期戳和真人/实景画面；
+    # 取帧异常才降级到旧 CoverEngine，保证封面问题不阻断发布。
+    if args.video:
+        try:
+            generate_video_backed_cover(args.video, args.output, title=title_to_use, brief=creative_brief)
+            persist_creative_brief()
+            return
+        except Exception as e:
+            print(f"Video-backed cover unavailable: {e}. Falling back to generated poster.")
     
     if args.payload:
         try:
@@ -151,10 +331,10 @@ def main():
             sys.path.append(str(Path(__file__).parent.parent / "src"))
             from cover import CoverEngine
             
-            payload = json.loads(args.payload)
             print(f"Using CoverEngine v2.0 (Playwright HTML) for payload: {payload}")
             engine = CoverEngine()
             engine.generate(payload, args.output)
+            persist_creative_brief()
             return
         except Exception as e:
             # [Gemini_3.5_Flash_planning] 降级保护：防止 Playwright 在某些环境下运行失败阻断管线
@@ -164,7 +344,6 @@ def main():
     title_to_use = args.title
     if not title_to_use and args.payload:
         try:
-            payload = json.loads(args.payload)
             title_to_use = payload.get("title", "Untitled")
         except Exception:
             title_to_use = "Untitled"
@@ -173,6 +352,7 @@ def main():
         parser.error("Either --title or --payload is required")
         
     generate_cover(title_to_use, args.output)
+    persist_creative_brief()
 
 if __name__ == "__main__":
     main()
