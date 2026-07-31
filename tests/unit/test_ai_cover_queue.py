@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 覆盖任务 Markdown、完成物来源校验和超时降级时点 |
+| 1.1.0 | 2026-07-31 | Codex | 覆盖巡查前可领取任务判定，避免空队列执行外部生成器 |
 """
 
 from __future__ import annotations
@@ -85,3 +86,30 @@ def test_fallback_starts_before_forty_minute_sla(tmp_path: Path):
 
     assert queue.should_fallback(task, created + timedelta(minutes=33, seconds=59)) is False
     assert queue.should_fallback(task, created + timedelta(minutes=34)) is True
+
+
+def test_eligible_task_excludes_completed_expired_and_fresh_claims(tmp_path: Path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    created = datetime(2026, 7, 31, tzinfo=timezone.utc)
+    task = _new_task(queue, tmp_path, created)
+    current = created + timedelta(minutes=1)
+
+    assert queue.has_eligible_task(current) is True
+
+    (task.finish_dir / "claim.json").write_text(
+        json.dumps(
+            {
+                "task_id": task.task_id,
+                "claim_expires_at": "2026-07-31T00:13:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert queue.has_eligible_task(current) is False
+
+    (task.finish_dir / "claim.json").unlink()
+    (task.finish_dir / "resolution.json").write_text("{}", encoding="utf-8")
+    assert queue.has_eligible_task(current) is False
+
+    (task.finish_dir / "resolution.json").unlink()
+    assert queue.has_eligible_task(created + timedelta(minutes=32)) is False

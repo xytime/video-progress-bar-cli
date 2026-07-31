@@ -8,6 +8,7 @@
 | 1.3.0 | 2026-07-31 | Codex | 禁止视频帧封面，并验证专门生成封面来源清单 |
 | 1.4.0 | 2026-07-31 | Codex | 覆盖专属主视觉资产的哈希绑定来源证明 |
 | 1.5.0 | 2026-07-31 | Codex | 封面简报必须记录实际生效的渲染规划 |
+| 1.6.0 | 2026-07-31 | Codex | 独立主视觉合成失败时禁止默认封面回退 |
 """
 
 from pathlib import Path
@@ -56,6 +57,40 @@ def test_cover_provenance_binds_dedicated_visual_asset(tmp_path):
         "sha256": "53900a9815a35033211838d47a95a14d3a68a5fa9e37580f9e3f53a136446543",
         "kind": "dedicated_generated_visual",
     }
+
+
+def test_visual_asset_render_failure_never_falls_back_to_default_cover(tmp_path, monkeypatch):
+    visual = tmp_path / "visual.png"
+    output = tmp_path / "cover.jpg"
+    provenance = tmp_path / "cover_provenance.json"
+    Image.new("RGB", (720, 960), "white").save(visual)
+
+    class FailingCoverEngine:
+        def generate(self, payload, output_path):
+            raise RuntimeError("browser unavailable")
+
+    import cover
+
+    monkeypatch.setattr(cover, "CoverEngine", FailingCoverEngine)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cover_generator.py",
+            "--payload",
+            json.dumps({"title": "测试", "visual_asset_path": str(visual)}),
+            "--output",
+            str(output),
+            "--provenance-output",
+            str(provenance),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="refusing to fall back"):
+        cover_generator.main()
+
+    assert not output.exists()
+    assert not provenance.exists()
 
 
 def test_applied_creative_brief_uses_actual_render_plan():

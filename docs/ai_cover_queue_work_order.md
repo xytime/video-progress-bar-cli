@@ -1,9 +1,10 @@
 ---
 ticket: ACQ-001
 title: Codex 专属 AI 封面底图队列与 40 分钟降级保障
-status: PARTIALLY_IMPLEMENTED
+status: IN_PROGRESS
 priority: P0
 created: 2026-07-31
+last_updated: 2026-07-31 15:33 CST
 owner: Video-precessing / Codex Automation Owner
 ---
 
@@ -43,10 +44,10 @@ owner: Video-precessing / Codex Automation Owner
 | 两分钟本地协调器 | 已实现并已挂本机 cron | `scripts/reconcile_ai_cover_queue.py`；功能开关关闭时无副作用。 |
 | 合法 AI 底图合成最终封面 | 已实现 | 使用现有 `scripts/cover_generator.py` 绘制标题与角标。 |
 | 34 分钟后确定性降级 | 已实现 | 同一协调器生成并验证本地专属封面。 |
-| Codex 每三分钟自动巡查 | 未注册，阻塞上线 | 已有全局技能 `/ai-cover-doer`，但技能本身不会自调度；必须在 Codex 自动化系统中创建实际的定时任务并保存运行证据。 |
-| 真实端到端演练 | 未完成 | 需在自动化注册后使用一条人工选定的测试视频验证。 |
+| Codex 每三分钟自动巡查 | 已注册并验证 | `scripts/install_ai_cover_doer_schedule.sh` 已安装受管 cron，调用 `scripts/run_ai_cover_doer.sh`；15:33 CST 已记录空队列快速巡查 `skipped_no_eligible_task`，证据见 `output/ai_cover_codex_runs.log`。 |
+| 真实端到端演练 | 部分完成 | 已完成隔离影子任务的有效 AI 底图路径和超时降级路径；仍需一条人工选定、未复用旧封面的真实测试视频验证管理器状态迁移与平台编辑器预览。 |
 
-**当前结论：** 项目侧协议和降级代码已具备，但 `ENABLE_CODEX_COVER_QUEUE` 必须保持 `false`，直到 Codex 自动化真实注册、连续运行并完成端到端验收。手工调用技能不等于自动巡查已上线。
+**当前结论：** 项目侧协议、降级代码和 Codex 三分钟巡查已具备，且空队列巡查已留下真实 cron 运行记录；`ENABLE_CODEX_COVER_QUEUE` 仍必须保持 `false`，直到使用人工选定的真实测试视频完成状态迁移、最终封面和平台编辑器预览验收。手工影子演练不等于正常候选已可放量。
 
 ## 5. 任务协议
 
@@ -210,25 +211,25 @@ flowchart LR
 
 | 子工单 | 优先级 | 状态 | 交付物 |
 | --- | --- | --- | --- |
-| ACQ-001A 注册 Codex 自动化 | P0 | 待办，阻塞 | 每 3 分钟执行 `/ai-cover-doer` 的真实自动化配置、运行日志和失败告警策略。 |
+| ACQ-001A 注册 Codex 自动化 | P0 | 已完成 | `scripts/install_ai_cover_doer_schedule.sh` 安装每 3 分钟受管 cron；`output/ai_cover_codex_runs.log` 记录 2026-07-31 15:33 CST 的真实空队列巡查。 |
 | ACQ-001B 项目队列协议与降级 | P0 | 已完成 | 队列模块、状态机接入、协调器、配置和单测。 |
 | ACQ-001C 本机协调器调度 | P0 | 已完成 | 每 2 分钟 cron；功能开关关闭时保持惰性。 |
-| ACQ-001D 端到端影子演练 | P0 | 待办 | 一条人工选定视频的任务、底图、最终封面和预览证据；不自动发布。 |
-| ACQ-001E 可观测性与告警 | P1 | 待办 | 等待时长、降级率、拒绝原因、cron 新鲜度仪表和告警。 |
+| ACQ-001D 端到端影子演练 | P0 | 部分完成 | 隔离任务 `acqshadow-e25001cffc25` 验证 AI 底图、哈希、最终封面和 `codex_ai_visual` resolution；`acqfallback-8f92410d6cdb` 验证超时降级。仍需人工选定真实视频。 |
+| ACQ-001E 可观测性与告警 | P1 | 基础完成 | 运行日志 `output/ai_cover_codex_runs.log`、最后消息 `output/ai_cover_codex_last_run.txt`、互斥锁和 `skipped_no_eligible_task` 回执已实现；仪表盘指标和外部告警仍待补齐。 |
 
 ### 11.3 放量顺序
 
-1. 自动化负责人创建真实的 3 分钟 Codex 定时任务，限定工作目录和技能 `/ai-cover-doer`，不得包含发布或平台操作权限。
-2. 保持项目开关关闭，确认至少一轮自动化运行确实检查了队列并留下证据。
-3. 仅挑选一条测试视频，将 `ENABLE_CODEX_COVER_QUEUE=true` 后执行影子演练；检查任务单、`visual.png`、`result.json`、`resolution.json`、最终 JPEG 和 provenance。
+1. 已完成：受管 cron 每三分钟运行 `/ai-cover-doer`，限定工作目录和技能边界，不含发布或平台操作；空队列先由项目协议预检，避免无任务唤起模型。
+2. 已完成：保持项目开关关闭时，15:33 CST 的 cron 已检查队列并写入 `skipped_no_eligible_task` 运行证据。
+3. 仅挑选一条真实测试视频，将 `ENABLE_CODEX_COVER_QUEUE=true` 后执行影子演练；检查任务单、`visual.png`、`result.json`、`resolution.json`、最终 JPEG 和 provenance。
 4. 验证一次“有效 AI 底图”路径与一次“无结果/错误结果”降级路径，确认均在时间预算内完成。
 5. 通过视觉审查后，在视频号编辑器中检查最终封面预览，确认不是视频截图，普通话角标完整可见；平台侧预览证据单独留存。
 6. 连续观察 24 小时的队列指标后，才允许将功能用于有限的正常候选；发布成功仍须按平台侧作品管理页另行确认。
 
 ## 12. Definition of Done
 
-- ACQ-001A 至少提供一条可审计的真实 Codex 自动化配置及成功执行记录，证明每三分钟巡查不是口头约定。
-- ACQ-001D 的成功与降级两条端到端路径均有任务、完成物、解析结果、最终封面及时间戳证据。
+- ACQ-001A 已提供可审计的 cron 配置和真实运行记录，证明每三分钟巡查不是口头约定。
+- ACQ-001D 的隔离成功与降级路径已有任务、完成物、解析结果、最终封面及时间戳证据；真实测试视频的管理器状态迁移与编辑器预览仍未验收。
 - 端到端结果符合所有封面视觉硬约束，尤其是“专属设计图、绝不使用视频内部截图”和普通话译制右上角完整彩带。
 - 队列开关、发布状态、平台投递和平台可见确认之间的边界保持清晰；无任何路径因封面完成而自动发布。
 - ACQ-001E 的基础监控可识别超过预算、协调器中断和完成物被拒绝，且告警能定位任务 ID 与原因。

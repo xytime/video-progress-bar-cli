@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 新增 Markdown 任务单、完成物验收与超时降级判定 |
+| 1.1.0 | 2026-07-31 | Codex | 提供无副作用的可领取任务判定，避免空队列唤起外部 Codex 执行器 |
 """
 
 from __future__ import annotations
@@ -168,8 +169,33 @@ class AICoverQueue:
             return None
         return visual
 
+    def has_eligible_task(self, now: Optional[datetime] = None) -> bool:
+        """是否存在尚未完成、未超时且未被有效 claim 占用的任务。"""
+        current_time = now or _utc_now()
+        for task in self.list_tasks():
+            if (task.finish_dir / "result.json").is_file() or (task.finish_dir / "resolution.json").is_file():
+                continue
+            if current_time >= task.generation_deadline:
+                continue
+            if self._has_fresh_claim(task, current_time):
+                continue
+            return True
+        return False
+
     def should_fallback(self, task: AICoverTask, now: Optional[datetime] = None) -> bool:
         return (now or _utc_now()) >= task.fallback_after
+
+    @staticmethod
+    def _has_fresh_claim(task: AICoverTask, now: datetime) -> bool:
+        claim_path = task.finish_dir / "claim.json"
+        if not claim_path.is_file():
+            return False
+        try:
+            claim = json.loads(claim_path.read_text(encoding="utf-8"))
+            expires_at = _parse_time(str(claim["claim_expires_at"]))
+        except (KeyError, OSError, ValueError, json.JSONDecodeError):
+            return False
+        return claim.get("task_id") == task.task_id and expires_at > now
 
     @staticmethod
     def _valid_visual(path: Path) -> bool:

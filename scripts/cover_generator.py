@@ -12,6 +12,7 @@
 | 2.3.1   | 2026-07-31 | Codex                        | 角标文案改为普通话译制并采用右上角彩带样式，确保文字完整可见          |
 | 2.4.0   | 2026-07-31 | Codex                        | 禁止视频截帧封面，并为专门生成封面写入可验证来源清单                  |
 | 2.5.0   | 2026-07-31 | Codex                        | 支持独立主视觉资产，并将实际渲染语义写回可审计封面简报                |
+| 2.6.0   | 2026-07-31 | Codex                        | 独立主视觉合成失败时禁止静默回退，避免默认图伪装为已使用 AI 底图       |
 """
 
 import os
@@ -347,7 +348,12 @@ def main():
             _write_cover_provenance(args.output, args.provenance_output, payload)
             return
         except Exception as e:
-            # [Gemini_3.5_Flash_planning] 降级保护：防止 Playwright 在某些环境下运行失败阻断管线
+            # 有独立底图时，Pillow 回退会丢失底图却仍可能写出来源证明，必须失败关闭。
+            if str(payload.get("visual_asset_path", "") or "").strip():
+                raise RuntimeError(
+                    "Dedicated visual composition failed; refusing to fall back to a default cover."
+                ) from e
+            # [Gemini_3.5_Flash_planning] 无独立主视觉时可降级，避免普通封面链路被浏览器故障阻断。
             print(f"Error running CoverEngine v2.0: {e}. Falling back to Pillow.")
             
     # Pillow 渲染流程
