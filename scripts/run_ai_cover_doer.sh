@@ -8,6 +8,7 @@
 # | 1.1.0 | 2026-07-31 | Codex | 无任务巡查也写入开始、结束和退出码，形成可审计运行回执 |
 # | 1.2.0 | 2026-07-31 | Codex | cron 下固定关闭 stdin，避免 Codex 巡查完成后持续等待输入并占用互斥锁 |
 # | 1.3.0 | 2026-07-31 | Codex | 先用项目协议判定是否有可领取任务，空队列不唤起 Codex 会话 |
+# | 1.4.0 | 2026-07-31 | Codex | 增加 PID/时限锁回收和日志轮转，避免异常终止永久阻塞或日志无限增长 |
 
 set -euo pipefail
 
@@ -17,13 +18,56 @@ PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python"
 LOG_DIR="$PROJECT_ROOT/output"
 LOCK_DIR="$LOG_DIR/.ai_cover_doer.lock"
 LAST_MESSAGE="$LOG_DIR/ai_cover_codex_last_run.txt"
+RUN_LOG="$LOG_DIR/ai_cover_codex_runs.log"
+LOCK_STALE_SECONDS=900
+MAX_LOG_BYTES=5242880
+
+lock_is_live() {
+    local pid=""
+    local lock_mtime=0
+    local now
+
+    now="$(date +%s)"
+    lock_mtime="$(date -r "$LOCK_DIR" +%s 2>/dev/null || printf '0')"
+    if (( now - lock_mtime >= LOCK_STALE_SECONDS )); then
+        return 1
+    fi
+    if [[ -f "$LOCK_DIR/pid" ]]; then
+        pid="$(tr -d '[:space:]' < "$LOCK_DIR/pid")"
+        [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null
+        return
+    fi
+    return 0
+}
+
+rotate_run_log() {
+    local log_size=0
+
+    [[ -f "$RUN_LOG" ]] || return
+    log_size="$(wc -c < "$RUN_LOG")"
+    if (( log_size >= MAX_LOG_BYTES )); then
+        mv -f "$RUN_LOG" "$RUN_LOG.1"
+        : > "$RUN_LOG"
+    fi
+}
 
 mkdir -p "$LOG_DIR"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    printf '%s ai-cover-doer skipped: another run is active\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    exit 0
+    if lock_is_live; then
+        printf '%s ai-cover-doer skipped: another run is active\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        exit 0
+    fi
+    stale_lock="$LOCK_DIR.stale.$$"
+    if ! mv "$LOCK_DIR" "$stale_lock" 2>/dev/null || ! mkdir "$LOCK_DIR"; then
+        printf '%s ai-cover-doer skipped: lock recovery raced with another run\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        exit 0
+    fi
+    rm -rf "$stale_lock"
 fi
-trap 'rmdir "$LOCK_DIR"' EXIT
+printf '%s\n' "$$" > "$LOCK_DIR/pid"
+printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK_DIR/started_at"
+trap 'rm -rf "$LOCK_DIR"' EXIT
+rotate_run_log
 
 if [[ ! -x "$CODEX_BIN" ]]; then
     printf '%s ai-cover-doer failed: Codex executable not found at %s\n' \

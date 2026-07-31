@@ -5,13 +5,16 @@
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-07-31 | Codex | 新增每三分钟巡查安装器，保留其他 crontab 条目 |
+# | 1.1.0 | 2026-07-31 | Codex | crontab 读取异常时停止安装，避免空表覆盖既有用户调度 |
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNNER="$PROJECT_ROOT/scripts/run_ai_cover_doer.sh"
+CRONTAB_BIN="${CRONTAB_BIN:-crontab}"
 TMP_CRONTAB="$(mktemp)"
-trap 'rm -f "$TMP_CRONTAB"' EXIT
+TMP_CRONTAB_ERR="$(mktemp)"
+trap 'rm -f "$TMP_CRONTAB" "$TMP_CRONTAB_ERR"' EXIT
 
 [[ -x "$HOME/.local/bin/codex" ]] || {
     echo "Codex CLI is unavailable at $HOME/.local/bin/codex" >&2
@@ -23,7 +26,12 @@ trap 'rm -f "$TMP_CRONTAB"' EXIT
 }
 
 chmod +x "$RUNNER"
-crontab -l > "$TMP_CRONTAB" 2>/dev/null || true
+if ! "$CRONTAB_BIN" -l > "$TMP_CRONTAB" 2> "$TMP_CRONTAB_ERR"; then
+    if ! grep -qi "no crontab" "$TMP_CRONTAB_ERR"; then
+        cat "$TMP_CRONTAB_ERR" >&2
+        exit 1
+    fi
+fi
 
 awk '
   /^# BEGIN Video Pipeline ai-cover-doer \(managed\)$/ { skip = 1; next }
@@ -39,5 +47,5 @@ cat >> "$TMP_CRONTAB" <<EOF
 # END Video Pipeline ai-cover-doer (managed)
 EOF
 
-crontab "$TMP_CRONTAB"
-crontab -l | sed -n '/BEGIN Video Pipeline ai-cover-doer/,/END Video Pipeline ai-cover-doer/p'
+"$CRONTAB_BIN" "$TMP_CRONTAB"
+"$CRONTAB_BIN" -l | sed -n '/BEGIN Video Pipeline ai-cover-doer/,/END Video Pipeline ai-cover-doer/p'
