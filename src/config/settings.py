@@ -40,6 +40,7 @@
 | 3.15.2 | 2026-07-29 | Codex                              | 新增中国大陆节假日/补班日配置，工作日与休息日使用不同发布窗口 |
 | 3.15.3 | 2026-07-29 | Codex                              | 人工混音版默认使用 0.16 英文底音，并增加 DeepSeek thinking 脚本精修配置 |
 | 3.15.4 | 2026-07-29 | Codex                              | 新增内容贴合封面开关，默认关闭以保持现有例行发布行为不变 |
+| 3.15.5 | 2026-07-31 | Codex                              | 收敛发布规则默认值：工作日早窗固定 06:30-09:00、休息日早窗 07:30-11:00，视频号补发上限 10 |
 """
 import json
 import socket
@@ -293,15 +294,15 @@ class Settings(BaseSettings):
 
     # 视频号暂停发布时，新视频可先进入 WECHAT_DEFERRED，并按限额在恢复后补发。
     wechat_publishing_paused: bool = False
-    wechat_deferred_recovery_daily_limit: int = 5
+    wechat_deferred_recovery_daily_limit: int = 10
 
     # 公开视频提交窗口。默认按北京时间短视频活跃规律设置：
     # 工作日：早通勤、午休、晚通勤、晚间黄金档；各窗口相对统计峰值整体提前 30 分钟。
     enable_public_publish_windows: bool = True
     public_publish_timezone: str = "Asia/Shanghai"
-    public_publish_windows: str = "07:00-08:00,11:15-12:45,17:00-18:15,19:00-20:40"
+    public_publish_windows: str = "06:30-09:00,11:15-12:45,17:00-18:15,19:00-20:40"
     # 周末/法定节假日：通勤峰弱化，上午整体后移，下午休闲窗口拉长，晚间保留更长推荐期。
-    public_publish_holiday_windows: str = "09:30-11:00,13:30-16:30,19:00-21:30"
+    public_publish_holiday_windows: str = "07:30-11:00,13:30-16:30,19:00-21:30"
     # 中国大陆 2026 年国务院办公厅放假日期；格式支持 YYYY-MM-DD 或 YYYY-MM-DD..YYYY-MM-DD。
     china_public_holidays: str = (
         "2026-01-01..2026-01-03,"

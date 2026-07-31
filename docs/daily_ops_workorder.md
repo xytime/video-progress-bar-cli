@@ -48,8 +48,9 @@ cd /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing
 - **发布断流（队列 0、新发现也 0）** → 查发现 cron：`tail output/monitor.log`。常见根因（均已根治，复发时核对）：
   - cron 找不到 `yt-dlp`/`deno` → 子进程 PATH 是否含 `.venv/bin` + `/opt/homebrew/bin`（`settings.ytdlp_path` / `_build_subprocess_env`）。
   - yt-dlp 过旧 → `format not available` → `.venv/bin/pip install -U yt-dlp`。
-- **有片但都 <75 分** → 多为新片播放量未涨够；`rescore_refresh`（每小时）会刷新当前播放量重算捞回。手动：`.venv/bin/python scripts/rescore_refresh.py`。
-- **限流暴涨（exit-101）** → 临时降频：把 crontab 里发现 `*/30` 调回 `0 */2 * * *`、重算 `15 * * *` 拉长。
+- **有片但都 <75 分** → 多为新片播放量未涨够；`rescore_refresh`（每 3 小时的 :15）会刷新当前播放量重算捞回。它只改评分，不下载、不加工、不发布。手动：`.venv/bin/python scripts/rescore_refresh.py`。
+- **窗口无人执行** → 运行 `.venv/bin/python scripts/verify_publication_policy.py --check-installed-schedule`；若失败，执行 `./scripts/install_publication_window_schedule.sh` 恢复受管的 15 分钟窗口巡航。
+- **限流暴涨（exit-101）** → 临时降频：把 crontab 里发现 `*/30` 调回 `0 */2 * * *`、重算 `15 */3 * * *` 拉长。
 - **整机被某进程拖死** → `ps -o pid,stat,%cpu -ax | sort -k3 -rn | head`；强杀失效多为 D 态(I/O)或需 `sudo kill -9`；终极手段长按电源键 10s 硬重启（@reboot 会自动恢复 dashboard/bot）。
 
 ---
@@ -60,7 +61,8 @@ cd /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing
 |---|---|---|
 | `daily_ops_report.py` | 每日 09:00 | **本工单巡检 → Telegram** |
 | `monitor_channels.py` | 每 30 分钟 | 发现新视频 |
-| `rescore_refresh.py` | 每小时 :15 | 刷新播放量重算，捞回涨上来的爆款（黑名单安全）|
+| `rescore_refresh.py` | 每 3 小时 :15 | 刷新播放量重算，捞回涨上来的爆款（黑名单安全）|
+| `run_publication_window.py` | 每 15 分钟 06:00-21:45 | 只在 Settings 有效窗口内运行完整流水线；重叠轮次跳过 |
 | `bot_watchdog.py` | 每 5 分钟 | Bot 存活看门狗 |
 | `@reboot vpanel ui/bot start` | 开机 | 自动拉起仪表盘与 Bot |
 | `session_ip_probe.py` *(临时)* | 每 30 分钟 | 登录失效实验探针——**实验已结论(候选②)，可删** |

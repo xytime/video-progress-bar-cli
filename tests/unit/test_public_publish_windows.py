@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-07-28 | Codex | 覆盖北京时间黄金发布窗口解析与窗口外平台入队等待 |
 | 1.1.0 | 2026-07-29 | Codex | 示例窗口随默认策略整体前移 30 分钟 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖中国大陆节假日、周末和补班日窗口选择 |
+| 1.3.0 | 2026-07-31 | Codex | 更新休息日早窗为 07:30-11:00，并覆盖开始边界 |
 """
 
 from datetime import date, datetime
@@ -43,7 +44,7 @@ def test_public_publish_window_uses_holiday_schedule():
     settings.enable_public_publish_windows = True
     settings.public_publish_timezone = "Asia/Shanghai"
     settings.public_publish_windows = "07:00-08:00,19:00-20:40"
-    settings.public_publish_holiday_windows = "09:30-11:00,19:00-21:30"
+    settings.public_publish_holiday_windows = "07:30-11:00,19:00-21:30"
     settings.china_public_holidays = "2026-02-15..2026-02-23"
     settings.china_makeup_workdays = "2026-02-14"
     try:
@@ -52,7 +53,8 @@ def test_public_publish_window_uses_holiday_schedule():
         assert settings.is_china_rest_day(date(2026, 8, 1))
 
         assert not settings.is_public_publish_window(datetime(2026, 2, 14, 9, 45, tzinfo=ZoneInfo("Asia/Shanghai")))
-        assert settings.is_public_publish_window(datetime(2026, 2, 16, 9, 45, tzinfo=ZoneInfo("Asia/Shanghai")))
+        assert not settings.is_public_publish_window(datetime(2026, 2, 16, 7, 29, tzinfo=ZoneInfo("Asia/Shanghai")))
+        assert settings.is_public_publish_window(datetime(2026, 2, 16, 7, 30, tzinfo=ZoneInfo("Asia/Shanghai")))
         assert settings.is_public_publish_window(datetime(2026, 8, 1, 21, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
     finally:
         settings.enable_public_publish_windows = previous_enabled
