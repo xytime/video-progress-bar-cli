@@ -11,8 +11,11 @@
 | 1.5.0 | 2026-07-27 | Codex | 覆盖快手历史补发命中审查时取消当前任务并继续下一条 |
 | 1.6.0 | 2026-07-27 | Codex | 浏览器上传衔接夹具显式 mock 审查通过，避免 MagicMock DB 触发严格模式异常 |
 | 1.7.0 | 2026-07-29 | Codex | 覆盖快手账号封禁退出码落 BANNED，防止审核回查误标发布 |
+| 1.8.0 | 2026-07-31 | Codex | 夹具提供哈希绑定的专门生成封面，禁止历史帧封面被测试默许 |
 """
 
+import hashlib
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -24,6 +27,17 @@ from video_processing.pipeline_manager import PipelineManager
 def _manager_with_assets(tmp_path: Path) -> PipelineManager:
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     manager._OUT_DIR = tmp_path
+    cover = tmp_path / "video-id_cover.jpg"
+    cover.write_bytes(b"dedicated-cover")
+    (tmp_path / "video-id_cover_provenance.json").write_text(
+        json.dumps({
+            "cover_kind": "dedicated_generated_image",
+            "uses_video_frame": False,
+            "cover_filename": cover.name,
+            "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+        }),
+        encoding="utf-8",
+    )
     (tmp_path / "video-id_vertical.mp4").write_bytes(b"video")
     (tmp_path / "video-id_copy.txt").write_text("测试文案", encoding="utf-8")
     (tmp_path / "video-id.ass").write_text(
@@ -360,7 +374,17 @@ def test_daily_job_recovers_deferred_wechat_when_not_paused(tmp_path: Path):
 
 def test_claimed_kuaishou_publication_passes_cover_arg_when_cover_exists(tmp_path: Path):
     manager = _manager_with_assets(tmp_path)
-    (tmp_path / "video-id_cover.jpg").write_bytes(b"cover_image_bytes")
+    cover = tmp_path / "video-id_cover.jpg"
+    cover.write_bytes(b"cover_image_bytes")
+    (tmp_path / "video-id_cover_provenance.json").write_text(
+        json.dumps({
+            "cover_kind": "dedicated_generated_image",
+            "uses_video_frame": False,
+            "cover_filename": cover.name,
+            "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+        }),
+        encoding="utf-8",
+    )
     manager._run_tracked = MagicMock(
         return_value=subprocess.CompletedProcess(["kuaishou"], 0, stdout="ok", stderr="")
     )

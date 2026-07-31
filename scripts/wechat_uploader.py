@@ -40,12 +40,15 @@
 | 3.7.7   | 2026-07-31 | Codex                               | 确认封面后等待保存中的弹层关闭，避免 2 秒固定等待过早判定失败 |
 | 3.7.8   | 2026-07-31 | Codex                               | 直接读取可见封面成功 toast，避免正文同步滞后造成假失败 |
 | 3.7.9   | 2026-07-31 | Codex                               | 视频上传超时即中止并保留证据，禁止未完成上传继续进入发表流程 |
+| 3.8.0   | 2026-07-31 | Codex                               | 上传前强制校验专门生成封面来源清单，历史视频帧截图不得投递 |
+| 3.8.1   | 2026-07-31 | Codex                               | 自动投递必须提供合规封面，禁止平台回退默认视频帧 |
 """
 
 import os
 import sys
 import argparse
 import hashlib
+import json
 import logging
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -78,6 +81,28 @@ logger = logging.getLogger("wechat_uploader")
 
 # 微信视频号发表地址
 WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
+
+
+def _default_cover_provenance_path(cover_file: Path) -> Path:
+    """返回与封面同名绑定的来源清单路径。"""
+    return cover_file.with_name(f"{cover_file.stem}_provenance.json")
+
+
+def _is_dedicated_cover(cover_file: Path, provenance_file: Path) -> bool:
+    """仅接受哈希绑定且明确声明非视频帧的专门生成封面。"""
+    if not cover_file.is_file() or not provenance_file.is_file():
+        return False
+    try:
+        provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
+        digest = hashlib.sha256(cover_file.read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        return False
+    return (
+        provenance.get("cover_kind") == "dedicated_generated_image"
+        and provenance.get("uses_video_frame") is False
+        and provenance.get("cover_filename") == cover_file.name
+        and provenance.get("cover_sha256") == digest
+    )
 
 
 def _is_playwright_target_closed(exc: BaseException) -> bool:
@@ -562,6 +587,7 @@ def run_uploader(
     draft: bool = False,
     title_path: str = None,      # 短标题文件（6-16 字，匹配微信平台真实限制）
     cover_path: str = None,      # 封面图文件 (JPEG)
+    cover_provenance_path: str = None,  # 专门生成封面来源清单（哈希绑定）
     category_path: str = None,   # 分类文件
     collection: str = None,      # 新增：微信合集名称
     relogin: bool = False,       # [Claude_Opus_4.8] 强制重登：忽略现有会话→走登录页出二维码（成功才覆盖 state）
@@ -582,8 +608,23 @@ def run_uploader(
         if not copy_path or not Path(copy_path).exists():
             logger.error(f"Copy text file not found: {copy_path}")
             return 1
-        if cover_path and not Path(cover_path).is_file():
+        if not cover_path:
+            logger.error("A dedicated non-frame cover is required; refusing platform default video frame.")
+            return 1
+        cover_file = Path(cover_path)
+        if not cover_file.is_file():
             logger.error(f"Requested cover file not found: {cover_path}")
+            return 1
+        provenance_file = (
+            Path(cover_provenance_path)
+            if cover_provenance_path else _default_cover_provenance_path(cover_file)
+        )
+        if not _is_dedicated_cover(cover_file, provenance_file):
+            logger.error(
+                "Requested cover is missing valid dedicated non-frame provenance: cover=%s provenance=%s",
+                cover_file,
+                provenance_file,
+            )
             return 1
         video_abs  = str(Path(video_path).resolve())
         copy_text  = Path(copy_path).read_text(encoding="utf-8")
@@ -1832,6 +1873,7 @@ def main():
     parser.add_argument("--copy",          help="Path to WeChat copy description text file")
     parser.add_argument("--title-file",    help="Path to short title text file (6-16 chars, WeChat platform limit)")
     parser.add_argument("--cover",         help="Path to cover image JPEG file")
+    parser.add_argument("--cover-provenance", help="Path to dedicated non-frame cover provenance JSON")
     parser.add_argument("--evidence-dir",  help="Directory for cover and post-list evidence")
     parser.add_argument("--cover-manually-verified", action="store_true",
                         help="Allow one operator-verified cover submission after retaining evidence")
@@ -1855,6 +1897,7 @@ def main():
             copy_path     = args.copy,
             title_path    = args.title_file,
             cover_path    = args.cover,
+            cover_provenance_path = args.cover_provenance,
             category_path = args.category_file,
             state_path    = args.state,
             login_only    = args.login_only,

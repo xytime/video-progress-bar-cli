@@ -22,10 +22,12 @@ based on incoming Telegram messages and commands.
 | 1.10.0  | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登·强制] trigger_wechat_login 加 --relogin：即使当前已登录也必出二维码（修复「已登录→/wechat_login 无二维码、用户干等」），支持临期主动重登刷新 24h；旧会话扫码成功前保持有效 |
 | 1.11.0  | 2026-07-27 | Codex                               | 助手 bot 接入多平台 PlatformEvent 告警格式，避免继续按视频号单平台语义解释抖音/快手事件 |
 | 1.12.0  | 2026-07-31 | Codex                               | Telegram 触发封面恢复为专门生成图，不再从竖版成片截帧                    |
+| 1.13.0  | 2026-07-31 | Codex                               | Telegram 生成和上传均要求非截帧封面来源清单，禁止复用历史帧封面          |
 """
 import os
 import sys
 import json
+import hashlib
 import logging
 import asyncio
 import subprocess
@@ -43,6 +45,27 @@ if _src not in sys.path:
 
 from config.settings import settings
 from video_processing.db import PipelineDB
+
+
+def _cover_provenance_path(cover_file: Path) -> Path:
+    return cover_file.with_name(f"{cover_file.stem}_provenance.json")
+
+
+def _is_dedicated_cover(cover_file: Path) -> bool:
+    provenance_file = _cover_provenance_path(cover_file)
+    if not cover_file.is_file() or not provenance_file.is_file():
+        return False
+    try:
+        provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
+        digest = hashlib.sha256(cover_file.read_bytes()).hexdigest()
+    except (OSError, ValueError):
+        return False
+    return (
+        provenance.get("cover_kind") == "dedicated_generated_image"
+        and provenance.get("uses_video_frame") is False
+        and provenance.get("cover_filename") == cover_file.name
+        and provenance.get("cover_sha256") == digest
+    )
 from video_processing.utils.platform_events import PlatformEvent, format_platform_event_html
 from video_processing.utils.file_utils import find_downloaded_video
 from bot.api_client import PipelineAPIClient
@@ -522,8 +545,11 @@ class PipelineAgent:
                 return json.dumps({"ok": False, "error": "Vertical video not found. Run transcription first."})
 
             cover_file = self.output_dir / f"{youtube_id}_cover.jpg"
-            if cover_file.exists():
+            provenance_file = _cover_provenance_path(cover_file)
+            if _is_dedicated_cover(cover_file):
                 return json.dumps({"ok": True, "message": "Cover already exists", "path": str(cover_file)})
+            if cover_file.exists():
+                logger.warning("Discarding unverifiable legacy cover checkpoint for %s.", youtube_id)
 
             title_file = self.output_dir / f"{youtube_id}_title.txt"
             cover_title = ""
@@ -541,14 +567,15 @@ class PipelineAgent:
                 str(self.project_root / "scripts" / "cover_generator.py"),
                 "--title", cover_title,
                 "--output", str(cover_file),
+                "--provenance-output", str(provenance_file),
             ]
             try:
                 res = subprocess.run(cover_cmd, check=False, capture_output=True, text=True, cwd=str(self.project_root))
                 if res.returncode != 0:
                     return json.dumps({"ok": False, "error": f"Cover generator failed: {res.stderr}"})
-                if cover_file.exists():
+                if _is_dedicated_cover(cover_file):
                     return json.dumps({"ok": True, "message": "Cover generated successfully", "path": str(cover_file)})
-                return json.dumps({"ok": False, "error": "Cover file was not created by cover_generator.py"})
+                return json.dumps({"ok": False, "error": "Cover lacks dedicated non-frame provenance"})
             except Exception as e:
                 return json.dumps({"ok": False, "error": f"Cover generator encountered unexpected error: {e}"})
         finally:
@@ -580,6 +607,8 @@ class PipelineAgent:
             cover_file = self.output_dir / f"{youtube_id}_cover.jpg"
             title_file = self.output_dir / f"{youtube_id}_title.txt"
             category_file = self.output_dir / f"{youtube_id}_category.txt"
+            if not _is_dedicated_cover(cover_file):
+                return json.dumps({"ok": False, "error": "Cover lacks dedicated non-frame provenance; regenerate it before upload."})
 
             upload_cmd = [
                 self.venv_python,
@@ -589,8 +618,10 @@ class PipelineAgent:
                 "--state", str(self.output_dir / "wechat_state.json"),
                 "--no-headless",
             ]
-            if cover_file.exists():
-                upload_cmd += ["--cover", str(cover_file)]
+            upload_cmd += [
+                "--cover", str(cover_file),
+                "--cover-provenance", str(_cover_provenance_path(cover_file)),
+            ]
             if title_file.exists():
                 upload_cmd += ["--title-file", str(title_file)]
             if category_file.exists():

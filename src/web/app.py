@@ -45,6 +45,7 @@
 | 3.18.0 | 2026-07-24 | Codex                               | [新任务启动保护] _in_us_market_window 跟随 settings 的 ET 08:15–16:15 窗口，仅阻止调度器启动新管线 |
 | 3.18.1 | 2026-07-27 | Codex                               | 微信扫码登录成功后自动恢复 LOGIN_REQUIRED 为 PENDING，交由既有队列调度器按分数线重发 |
 | 3.18.2 | 2026-07-30 | Codex                               | 音轨规格改变时失效竖版成片与封面缓存，避免配音版继续复用原声封面       |
+| 3.18.3 | 2026-07-31 | Codex                               | 同步删除封面来源清单，防止音轨规格切换后遗留哈希失配的封面证明         |
 """
 import hashlib
 import logging
@@ -586,7 +587,7 @@ _OUT_DIR = Path(__file__).parent.parent.parent / "output"
 def _invalidate_audio_variant_artifacts(youtube_id: str) -> list[str]:
     """删除音轨规格切换后必然失真的派生产物，保留下载源和文案检查点。"""
     deleted: list[str] = []
-    for suffix in ("_vertical.mp4", ".ass", "_cover.jpg", "_cover_brief.json"):
+    for suffix in ("_vertical.mp4", ".ass", "_cover.jpg", "_cover_brief.json", "_cover_provenance.json"):
         path = _OUT_DIR / f"{youtube_id}{suffix}"
         if not path.is_file():
             continue

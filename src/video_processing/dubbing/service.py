@@ -13,6 +13,7 @@
 | 1.0.7 | 2026-07-30 | Codex | 缺少普通话配音版专属封面时阻断投递，禁止静默复用原声版封面           |
 | 1.0.8 | 2026-07-31 | Codex | 平台闸门失败未提交时保持 READY_TO_PUBLISH，避免误记 UNDER_REVIEW       |
 | 1.0.9 | 2026-07-31 | Codex | 普通话译制版投递标题和文案统一使用普通话译制命名                       |
+| 1.1.0 | 2026-07-31 | Codex | 译制版封面须有非视频帧来源清单，禁止人工路径复用历史截图               |
 """
 
 from __future__ import annotations
@@ -401,7 +402,7 @@ class DubbingService:
         title, copy, cover, category, horizontal_cover = self._variant_publish_assets(job, workspace)
         evidence_dir = workspace / "publish" / "evidence" / platform
         commands = {
-            "wechat": ["scripts/wechat_uploader.py", "--video", str(output), "--copy", str(copy), "--title-file", str(title), "--cover", str(cover), "--category-file", str(category), "--fail-fast-login", "--evidence-dir", str(evidence_dir)],
+            "wechat": ["scripts/wechat_uploader.py", "--video", str(output), "--copy", str(copy), "--title-file", str(title), "--cover", str(cover), "--cover-provenance", str(self._cover_provenance_path(cover)), "--category-file", str(category), "--fail-fast-login", "--evidence-dir", str(evidence_dir)],
             "douyin": ["scripts/douyin_uploader.py", "--video", str(output), "--copy", str(copy), "--title-file", str(title), "--cover", str(cover), "--publish", "--fail-fast-login"],
             "kuaishou": ["scripts/kuaishou_uploader.py", "--video", str(output), "--copy", str(copy), "--cover", str(cover), "--publish", "--fail-fast-login"],
         }
@@ -451,8 +452,8 @@ class DubbingService:
         title_src = self.project_root / "output" / f"{yid}_title.txt"
         copy_src = self.project_root / "output" / f"{yid}_copy.txt"
         cover = workspace / "publish" / "cover_wechat.jpg"
-        if not cover.is_file():
-            raise RuntimeError("普通话配音版缺少已验收的版本专属封面，禁止复用原声版封面投递。")
+        if not self._is_dedicated_cover(cover):
+            raise RuntimeError("普通话配音版缺少已验收的非视频帧版本专属封面来源清单，禁止投递。")
         category = self.project_root / "output" / f"{yid}_category.txt"
         if not copy_src.is_file() or not cover.is_file() or not category.is_file():
             raise RuntimeError("原发布文案或封面不完整，拒绝投递。")
@@ -466,6 +467,26 @@ class DubbingService:
         copy.write_text(copy_src.read_text(encoding="utf-8").strip() + "\n\n普通话译制版\n", encoding="utf-8")
         horizontal = self.project_root / "output" / f"{yid}_cover_douyin_horizontal.png"
         return title, copy, cover, category, horizontal if horizontal.is_file() else None
+
+    @staticmethod
+    def _cover_provenance_path(cover_file: Path) -> Path:
+        return cover_file.with_name(f"{cover_file.stem}_provenance.json")
+
+    def _is_dedicated_cover(self, cover_file: Path) -> bool:
+        """人工译制版也必须显式证明封面不是视频内截图。"""
+        provenance_file = self._cover_provenance_path(cover_file)
+        if not cover_file.is_file() or not provenance_file.is_file():
+            return False
+        try:
+            provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return (
+            provenance.get("cover_kind") == "dedicated_generated_image"
+            and provenance.get("uses_video_frame") is False
+            and provenance.get("cover_filename") == cover_file.name
+            and provenance.get("cover_sha256") == self._sha256(cover_file)
+        )
 
     def _display_title(self, job: Dict[str, Any]) -> str:
         """优先使用已审核的短标题，确保新版两行头部不以省略号损失关键信息。"""

@@ -7,8 +7,11 @@
 | 1.1.0 | 2026-07-30 | Codex | 缺少版本专属封面时拒绝普通话配音版投递 |
 | 1.2.0 | 2026-07-31 | Codex | 覆盖平台闸门失败未提交时任务不误记审核中 |
 | 1.3.0 | 2026-07-31 | Codex | 锁定普通话译制版投递标题和文案命名 |
+| 1.4.0 | 2026-07-31 | Codex | 译制版封面必须具备非视频帧来源清单 |
 """
 
+import hashlib
+import json
 import subprocess
 from unittest.mock import Mock, call
 
@@ -248,6 +251,15 @@ def test_variant_publish_assets_prefers_verified_versioned_cover(tmp_path):
     publish_dir.mkdir(parents=True)
     verified_cover = publish_dir / "cover_wechat.jpg"
     verified_cover.write_bytes(b"verified-cover")
+    (publish_dir / "cover_wechat_provenance.json").write_text(
+        json.dumps({
+            "cover_kind": "dedicated_generated_image",
+            "uses_video_frame": False,
+            "cover_filename": verified_cover.name,
+            "cover_sha256": hashlib.sha256(verified_cover.read_bytes()).hexdigest(),
+        }),
+        encoding="utf-8",
+    )
     service = DubbingService.__new__(DubbingService)
     service.project_root = tmp_path
 

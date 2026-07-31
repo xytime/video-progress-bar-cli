@@ -74,6 +74,43 @@ def test_missing_requested_cover_stops_before_browser_launch(tmp_path: Path):
     playwright.assert_not_called()
 
 
+def test_no_cover_refuses_platform_default_video_frame_before_browser_launch(tmp_path: Path):
+    video = tmp_path / "video.mp4"
+    copy = tmp_path / "copy.txt"
+    video.write_bytes(b"video")
+    copy.write_text("copy", encoding="utf-8")
+
+    with patch("scripts.wechat_uploader.sync_playwright") as playwright:
+        result = wechat_uploader.run_uploader(
+            video_path=str(video),
+            copy_path=str(copy),
+            state_path=str(tmp_path / "wechat_state.json"),
+        )
+
+    assert result == 1
+    playwright.assert_not_called()
+
+
+def test_existing_cover_without_non_frame_provenance_stops_before_browser_launch(tmp_path: Path):
+    video = tmp_path / "video.mp4"
+    copy = tmp_path / "copy.txt"
+    cover = tmp_path / "cover.jpg"
+    video.write_bytes(b"video")
+    copy.write_text("copy", encoding="utf-8")
+    cover.write_bytes(b"historical-video-frame")
+
+    with patch("scripts.wechat_uploader.sync_playwright") as playwright:
+        result = wechat_uploader.run_uploader(
+            video_path=str(video),
+            copy_path=str(copy),
+            cover_path=str(cover),
+            state_path=str(tmp_path / "wechat_state.json"),
+        )
+
+    assert result == 1
+    playwright.assert_not_called()
+
+
 def test_cover_is_not_accepted_while_cover_editor_remains_open(monkeypatch):
     monkeypatch.setattr(wechat_uploader, "_find_wechat_cover_dialog", lambda _page: object())
 

@@ -1,5 +1,7 @@
 """自动发布遇到失效微信登录态时的快速失败契约测试。"""
 
+import hashlib
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -15,6 +17,17 @@ def test_automatic_upload_returns_login_required_without_waiting_for_qr(tmp_path
     copy = tmp_path / "copy.txt"
     video.write_bytes(b"video")
     copy.write_text("copy", encoding="utf-8")
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"dedicated-cover")
+    (tmp_path / "cover_provenance.json").write_text(
+        json.dumps({
+            "cover_kind": "dedicated_generated_image",
+            "uses_video_frame": False,
+            "cover_filename": cover.name,
+            "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+        }),
+        encoding="utf-8",
+    )
 
     page = MagicMock()
     page.url = "https://channels.weixin.qq.com/login.html"
@@ -30,6 +43,7 @@ def test_automatic_upload_returns_login_required_without_waiting_for_qr(tmp_path
         result = run_uploader(
             video_path=str(video),
             copy_path=str(copy),
+            cover_path=str(cover),
             state_path=str(tmp_path / "wechat_state.json"),
             fail_fast_login=True,
         )

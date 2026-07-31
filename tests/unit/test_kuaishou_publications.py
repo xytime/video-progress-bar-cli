@@ -10,8 +10,11 @@
 | 1.4.0 | 2026-07-27 | Codex | 覆盖快手发布前审查异常 fail-closed，不调用上传器 |
 | 1.5.0 | 2026-07-29 | Codex | 覆盖平台上传前缺少可读字幕正文时取消任务，不调用上传器 |
 | 1.6.0 | 2026-07-29 | Codex | 覆盖含审核反证的快手 PUBLISHED 写入会保守降级且不参与去重 |
+| 1.7.0 | 2026-07-31 | Codex | 缺字幕用例使用带哈希来源清单的封面，隔离封面门禁影响 |
 """
 
+import hashlib
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -234,7 +237,17 @@ def test_douyin_publish_missing_subtitle_text_cancels_without_upload(tmp_path: P
     (tmp_path / "video-id_vertical.mp4").write_bytes(b"video")
     (tmp_path / "video-id_copy.txt").write_text("普通文案", encoding="utf-8")
     (tmp_path / "video-id_title.txt").write_text("普通标题", encoding="utf-8")
-    (tmp_path / "video-id_cover.jpg").write_bytes(b"cover")
+    cover = tmp_path / "video-id_cover.jpg"
+    cover.write_bytes(b"dedicated-cover")
+    (tmp_path / "video-id_cover_provenance.json").write_text(
+        json.dumps({
+            "cover_kind": "dedicated_generated_image",
+            "uses_video_frame": False,
+            "cover_filename": cover.name,
+            "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+        }),
+        encoding="utf-8",
+    )
     manager.db.create_douyin_publication(
         "video-id",
         "d" * 64,

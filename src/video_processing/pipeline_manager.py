@@ -84,11 +84,13 @@
 | 3.45.1  | 2026-07-30 | Codex                               | 视频号封面缺失即停止投递；每次投递保留独立、不可覆盖的封面与发布页面证据 |
 | 3.45.2  | 2026-07-30 | Codex                               | 封面显式携带成片音轨版本；仅真实普通话配音版本允许显示配音角标           |
 | 3.45.3  | 2026-07-31 | Codex                               | 例行发布封面恢复为专门生成图，不再默认从竖版成片截帧                       |
+| 3.45.4  | 2026-07-31 | Codex                               | 封面检查点要求非截帧来源清单与哈希匹配，禁止历史帧封面被补发复用          |
 """
 
 
 import os
 import hashlib
+import json
 import math
 import signal
 import time
@@ -617,7 +619,7 @@ class PipelineManager:
                 logger.info(f"[GC] All slices for parent {yid} are finished. Cleaning up parent artifacts...")
                 parent_suffixes = [
                     ".mp4", ".info.json", ".description", "_subtitle.txt", "_copy.txt",
-                    "_title.txt", "_category.txt", "_cover.jpg", ".ass",
+                    "_title.txt", "_category.txt", "_cover.jpg", "_cover_provenance.json", ".ass",
                 ]
                 for suffix in parent_suffixes:
                     file_path = self._OUT_DIR / f"{yid}{suffix}"
@@ -652,13 +654,33 @@ class PipelineManager:
         copy_file = kuaishou_copy if kuaishou_copy.is_file() else self._OUT_DIR / f"{prefix}_copy.txt"
         return self._OUT_DIR / f"{prefix}_vertical.mp4", copy_file
 
+    @staticmethod
+    def _cover_provenance_path(cover_file: Path) -> Path:
+        return cover_file.with_name(f"{cover_file.stem}_provenance.json")
+
+    def _is_dedicated_cover(self, cover_file: Path) -> bool:
+        """只允许具有哈希绑定来源清单的专门生成封面进入任何平台投递。"""
+        provenance_file = self._cover_provenance_path(cover_file)
+        if not cover_file.is_file() or not provenance_file.is_file():
+            return False
+        try:
+            provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        return (
+            provenance.get("cover_kind") == "dedicated_generated_image"
+            and provenance.get("uses_video_frame") is False
+            and provenance.get("cover_filename") == cover_file.name
+            and provenance.get("cover_sha256") == self._sha256_file(cover_file)
+        )
+
     def _resolve_cover_file(self, yid: str, slice_index: int = 0) -> Optional[Path]:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
         candidate = self._OUT_DIR / f"{prefix}_cover.jpg"
-        if candidate.is_file():
+        if self._is_dedicated_cover(candidate):
             return candidate
         fallback = self._OUT_DIR / f"{yid}_cover.jpg"
-        if fallback.is_file():
+        if self._is_dedicated_cover(fallback):
             return fallback
         return None
 
@@ -1894,8 +1916,9 @@ class PipelineManager:
                 # ── 3. 封面生成 ──────────────────────────────────────────────────
                 cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"
                 cover_brief_file = self._OUT_DIR / f"{prefix}_cover_brief.json"
+                cover_provenance_file = self._cover_provenance_path(cover_file)
                 content_aware_cover_enabled = settings.enable_content_aware_cover
-                cover_checkpoint_ready = cover_file.exists() and (
+                cover_checkpoint_ready = self._is_dedicated_cover(cover_file) and (
                     not content_aware_cover_enabled or cover_brief_file.is_file()
                 )
                 if not cover_checkpoint_ready:
@@ -1975,6 +1998,7 @@ class PipelineManager:
                         str(self._PRJ_ROOT / "scripts" / "cover_generator.py"),
                         "--payload", json.dumps(cover_payload, ensure_ascii=False),
                         "--output", str(cover_file),
+                        "--provenance-output", str(cover_provenance_file),
                     ]
                     if content_aware_cover_enabled:
                         cover_cmd.extend([
@@ -2005,8 +2029,8 @@ class PipelineManager:
                     logger.info("[%s] 视频号成片已就绪，等待公开视频提交窗口。", prefix)
                     return
 
-                if not cover_file.is_file():
-                    reason = "视频号投递产物缺失：封面文件不存在，禁止提交默认封面作品。"
+                if not self._is_dedicated_cover(cover_file):
+                    reason = "视频号投递封面缺少有效的专门生成来源证明，禁止提交视频截图或默认封面作品。"
                     logger.error("[%s] %s", prefix, reason)
                     self.db.update_video_status(yid, "FAILED", error_msg=reason, slice_index=slice_index)
                     self._notify_failed(yid, title, reason, slice_index=slice_index)
@@ -2071,7 +2095,10 @@ class PipelineManager:
                 ]
                 if not settings.wechat_headless:
                     upload_cmd += ["--no-headless"]
-                upload_cmd += ["--cover", str(cover_file)]
+                upload_cmd += [
+                    "--cover", str(cover_file),
+                    "--cover-provenance", str(self._cover_provenance_path(cover_file)),
+                ]
                 if title_file.exists():
                     upload_cmd += ["--title-file", str(title_file)]
                 if category_file.exists():

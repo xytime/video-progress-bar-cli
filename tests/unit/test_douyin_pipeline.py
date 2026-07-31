@@ -16,8 +16,11 @@
 | 1.7.3 | 2026-07-29 | Codex | 覆盖提交前未确认与提交后未确认的账本状态区分 |
 | 1.7.4 | 2026-07-29 | Codex | 覆盖抖音上传器正常返回仍只记审核中，禁止本地假成功 |
 | 1.7.5 | 2026-07-29 | Codex | 覆盖微信已发布但抖音 NEW 未建账时自动补齐并进入新片同步 |
+| 1.7.6 | 2026-07-31 | Codex | 夹具提供哈希绑定的专门生成封面，禁止历史帧封面被测试默许 |
 """
 
+import hashlib
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -32,7 +35,17 @@ def _manager_with_assets(tmp_path: Path) -> PipelineManager:
     (tmp_path / "video-id_vertical.mp4").write_bytes(b"video")
     (tmp_path / "video-id_copy.txt").write_text("测试文案", encoding="utf-8")
     (tmp_path / "video-id_title.txt").write_text("测试标题", encoding="utf-8")
-    (tmp_path / "video-id_cover.jpg").write_bytes(b"cover")
+    cover = tmp_path / "video-id_cover.jpg"
+    cover.write_bytes(b"dedicated-cover")
+    (tmp_path / "video-id_cover_provenance.json").write_text(
+        json.dumps({
+            "cover_kind": "dedicated_generated_image",
+            "uses_video_frame": False,
+            "cover_filename": cover.name,
+            "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+        }),
+        encoding="utf-8",
+    )
     (tmp_path / "video-id.ass").write_text(
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
@@ -62,13 +75,27 @@ def _add_history_video(manager: PipelineManager, youtube_id: str, title: str, ch
     manager.db.update_video_status(youtube_id, "PUBLISHED")
 
 
+def _write_dedicated_cover(directory: Path, youtube_id: str) -> None:
+    cover = directory / f"{youtube_id}_cover.jpg"
+    cover.write_bytes(b"dedicated-cover")
+    (directory / f"{youtube_id}_cover_provenance.json").write_text(
+        json.dumps({
+            "cover_kind": "dedicated_generated_image",
+            "uses_video_frame": False,
+            "cover_filename": cover.name,
+            "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+        }),
+        encoding="utf-8",
+    )
+
+
 def _add_published_video_assets(manager: PipelineManager, youtube_id: str) -> None:
     manager.db.add_video(youtube_id, "Published title", "general", score=88)
     manager.db.update_video_status(youtube_id, "PUBLISHED")
     (manager._OUT_DIR / f"{youtube_id}_vertical.mp4").write_bytes(b"video")
     (manager._OUT_DIR / f"{youtube_id}_copy.txt").write_text("测试文案", encoding="utf-8")
     (manager._OUT_DIR / f"{youtube_id}_title.txt").write_text("测试标题", encoding="utf-8")
-    (manager._OUT_DIR / f"{youtube_id}_cover.jpg").write_bytes(b"cover")
+    _write_dedicated_cover(manager._OUT_DIR, youtube_id)
     (manager._OUT_DIR / f"{youtube_id}.ass").write_text(
         "[Events]\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,subtitle body\n",
         encoding="utf-8",
@@ -445,7 +472,7 @@ def test_douyin_history_migration_continues_after_canceling_missing_assets(tmp_p
         _add_history_video(manager, yid, "A full speech about markets")
         (tmp_path / f"{yid}_vertical.mp4").write_bytes(b"video")
         (tmp_path / f"{yid}_copy.txt").write_text("测试文案", encoding="utf-8")
-        (tmp_path / f"{yid}_cover.jpg").write_bytes(b"cover")
+        _write_dedicated_cover(tmp_path, yid)
     (tmp_path / "ready-douyin_title.txt").write_text("测试标题", encoding="utf-8")
     missing = manager.db.create_douyin_publication(
         "missing-title", "6" * 64, str(tmp_path / "missing-title_vertical.mp4"), source_kind="HISTORY"
@@ -486,7 +513,7 @@ def test_douyin_history_migration_halts_after_censorship_cancel(tmp_path: Path):
         (tmp_path / f"{yid}_vertical.mp4").write_bytes(b"video")
         (tmp_path / f"{yid}_copy.txt").write_text("测试文案", encoding="utf-8")
         (tmp_path / f"{yid}_title.txt").write_text("测试标题", encoding="utf-8")
-        (tmp_path / f"{yid}_cover.jpg").write_bytes(b"cover")
+        _write_dedicated_cover(tmp_path, yid)
     blocked = manager.db.create_douyin_publication(
         "blocked-history", "8" * 64, str(tmp_path / "blocked-history_vertical.mp4"), source_kind="HISTORY"
     )
