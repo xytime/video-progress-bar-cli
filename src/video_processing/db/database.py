@@ -62,6 +62,7 @@
 | 3.23.1  | 2026-07-29 | Codex                               | 新增配音投递状态校正 DAL，避免人工校正被计为新上传尝试 |
 | 3.23.2  | 2026-07-29 | Codex                               | 配音任务读取透传源片 upload_date，供再制渲染继承发布日期戳并保留切片回退能力 |
 | 3.24.0  | 2026-07-29 | Codex                               | 新增发布后日粒度指标、内容唯一身份、视频关系和 AB 实验底层账本 |
+| 3.25.0  | 2026-07-31 | Codex                               | 新增源字幕预检/预加工状态与微信补发真实日额度账本 |
 """
 
 import sqlite3
@@ -194,6 +195,9 @@ class PipelineDB:
                             trim_end TEXT DEFAULT NULL,
                             disable_slicing INTEGER DEFAULT 1,
                             bypass_censorship INTEGER DEFAULT 0,
+                            preparation_ready INTEGER DEFAULT 0,
+                            source_subtitle_status TEXT DEFAULT 'PENDING',
+                            source_subtitle_checked_at TIMESTAMP DEFAULT NULL,
                             UNIQUE(youtube_id, slice_index),
                             FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                         )
@@ -270,6 +274,9 @@ class PipelineDB:
                         trim_end TEXT DEFAULT NULL,
                         disable_slicing INTEGER DEFAULT 1,
                         bypass_censorship INTEGER DEFAULT 0,
+                        preparation_ready INTEGER DEFAULT 0,
+                        source_subtitle_status TEXT DEFAULT 'PENDING',
+                        source_subtitle_checked_at TIMESTAMP DEFAULT NULL,
                         UNIQUE(youtube_id, slice_index),
                         FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                     )
@@ -307,6 +314,27 @@ class PipelineDB:
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN bypass_censorship INTEGER DEFAULT 0;")
                 conn.commit()
 
+            # 源字幕先行预检与非窗口预加工状态。历史记录默认重新预检，避免直接
+            # 将旧的未审源视频视作可下载候选。
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "preparation_ready" not in columns:
+                self._logger.info("[Migration] Adding preparation_ready column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN preparation_ready INTEGER DEFAULT 0;")
+                conn.commit()
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "source_subtitle_status" not in columns:
+                self._logger.info("[Migration] Adding source_subtitle_status column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN source_subtitle_status TEXT DEFAULT 'PENDING';")
+                conn.commit()
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "source_subtitle_checked_at" not in columns:
+                self._logger.info("[Migration] Adding source_subtitle_checked_at column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN source_subtitle_checked_at TIMESTAMP DEFAULT NULL;")
+                conn.commit()
+
 
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
             cursor.execute('''
@@ -316,6 +344,21 @@ class PipelineDB:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+
+            # 每次视频号补发领取都入账；日额度按领取而非单轮循环计数，避免
+            # 15 分钟巡航把“每日 10 条”放大为“每轮 10 条”。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS wechat_deferred_recovery_claims (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL,
+                    claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wechat_deferred_recovery_claims_day "
+                "ON wechat_deferred_recovery_claims(claimed_at)"
+            )
 
             # 快手发布账本：仅“已发布”的成片摘要禁止再次投递；失败、临时上传和未发布草稿
             # 都保留为独立尝试，允许用户重试。它独立于 processed_videos 的微信状态。
@@ -1877,12 +1920,17 @@ class PipelineDB:
         self,
         *,
         wall_street_since_upload_date: Optional[str] = None,
+        daily_limit: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """原子领取一条视频号延后发布任务，按切片顺序恢复原有视频号发布链。
 
         传入 wall_street_since_upload_date 时，仅领取符合平台补录规则的积压视频：
         访谈/演讲类，或 Wall Street Truthbombs 指定源发布日期之后的视频。
+        传入 daily_limit 时，按本机日期统计此前领取记录，并在同一写事务中写入
+        本次领取记录，避免多轮巡航把每日额度放大。
         """
+        if daily_limit is not None and daily_limit <= 0:
+            return None
         terminal_states = ("PUBLISHED", "IGNORED", "COMPLETED")
         placeholders = ", ".join("?" for _ in terminal_states)
         join_channel = ""
@@ -1908,6 +1956,16 @@ class PipelineDB:
             params.append(wall_street_since_upload_date)
         params.extend(terminal_states)
         with self.get_connection() as conn:
+            # 先获得写锁，再做额度统计和状态迁移，阻断并发巡航的竞态。
+            conn.execute("BEGIN IMMEDIATE")
+            if daily_limit is not None:
+                claimed_today = conn.execute(
+                    "SELECT COUNT(*) FROM wechat_deferred_recovery_claims "
+                    "WHERE date(claimed_at, 'localtime') = date('now', 'localtime')"
+                ).fetchone()[0]
+                if claimed_today >= daily_limit:
+                    conn.commit()
+                    return None
             candidate = conn.execute(
                 f'''
                 SELECT pv.*
@@ -1945,8 +2003,56 @@ class PipelineDB:
             if cursor.rowcount != 1:
                 conn.commit()
                 return None
+            if daily_limit is not None:
+                conn.execute(
+                    "INSERT INTO wechat_deferred_recovery_claims (video_id) VALUES (?)",
+                    (candidate["id"],),
+                )
             conn.commit()
             return dict(candidate)
+
+    def set_source_subtitle_preflight(
+        self,
+        youtube_id: str,
+        status: str,
+        *,
+        error_msg: Optional[str] = None,
+        slice_index: int = 0,
+    ) -> None:
+        """记录源字幕预检结果；非通过结果会撤销旧的预加工就绪标记。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE processed_videos SET source_subtitle_status = ?, "
+                "source_subtitle_checked_at = CURRENT_TIMESTAMP, "
+                "preparation_ready = CASE WHEN ? = 'PASSED' THEN preparation_ready ELSE 0 END, "
+                "error_msg = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (status, status, error_msg, youtube_id, slice_index),
+            )
+            conn.commit()
+
+    def set_video_preparation_ready(
+        self, youtube_id: str, ready: bool, *, slice_index: int = 0,
+    ) -> None:
+        """标记成片是否已完成到发布前；公开状态仍由调用方维持为 PENDING。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE processed_videos SET preparation_ready = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (int(ready), youtube_id, slice_index),
+            )
+            conn.commit()
+
+    def clear_video_preparation_state(self, youtube_id: str, *, slice_index: int = 0) -> None:
+        """在删除产物后清空预加工和源字幕检查点，强制下一轮重新预检。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE processed_videos SET preparation_ready = 0, source_subtitle_status = 'PENDING', "
+                "source_subtitle_checked_at = NULL, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            )
+            conn.commit()
 
     def purge_stale_tasks(self, stale_hours: int = 2) -> int:
         """清洗器：将卡在非终态（如 DOWNLOADING）超过 N 小时的任务重置回 PENDING"""
@@ -2103,10 +2209,49 @@ class PipelineDB:
                     AND sib.status NOT IN ({terminal_placeholders})
                 )
               )
-            ORDER BY pv.score DESC LIMIT ?
+            ORDER BY COALESCE(pv.preparation_ready, 0) DESC, pv.score DESC LIMIT ?
         """
         with self.get_connection() as conn:
             cursor = conn.execute(query, (*threshold_params, *terminal_states, limit))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_high_score_preparation_candidates(
+        self,
+        *,
+        min_score: int = 75,
+        limit: int = 1,
+        retry_hours: int = 6,
+        channel_min_scores: Optional[Dict[str, int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """取仅允许后台预加工的 AUTO 高分候选，不包含 DISCOVERY 或人工加急项。"""
+        threshold_clauses = ["pv.score >= ?"]
+        threshold_params: list[Any] = [min_score]
+        for channel_id, channel_min_score in (channel_min_scores or {}).items():
+            threshold_clauses.append("(pv.channel_id = ? AND pv.score >= ?)")
+            threshold_params.extend([channel_id, channel_min_score])
+        threshold_sql = " OR ".join(threshold_clauses)
+        query = f"""
+            SELECT pv.* FROM processed_videos pv
+            WHERE pv.status = 'PENDING'
+              AND pv.source = 'AUTO'
+              AND IFNULL(pv.preparation_ready, 0) = 0
+              AND ({threshold_sql})
+              AND pv.channel_id NOT IN (
+                  SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
+              )
+              AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+              AND (
+                  COALESCE(pv.source_subtitle_status, 'PENDING') != 'UNAVAILABLE'
+                  OR pv.source_subtitle_checked_at <= datetime('now', ?)
+              )
+            ORDER BY pv.score DESC, pv.created_at ASC
+            LIMIT ?
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                query,
+                (*threshold_params, f"-{max(1, int(retry_hours))} hours", limit),
+            )
             return [dict(row) for row in cursor.fetchall()]
 
     def get_rescore_candidates(self, days: int = 8, limit: int = 250) -> List[Dict[str, Any]]:

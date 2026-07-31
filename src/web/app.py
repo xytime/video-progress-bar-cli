@@ -314,6 +314,12 @@ def _queue_runner_loop():
                 time.sleep(15)
                 continue
 
+            # 队列执行者只负责窗口内提交；非窗口由受管 cron 的后台预加工入口
+            # 拉取字幕并完成重活，避免仪表盘每 15 秒反复启动完整管线进程。
+            if not settings.is_public_publish_window():
+                time.sleep(15)
+                continue
+
             # 1. 普通频道 >=75；演讲/TED/高校频道 >= speech_publish_score_line
             pending_videos = db.get_high_score_pending_videos(
                 min_score=75,

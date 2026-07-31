@@ -85,6 +85,7 @@
 | 3.45.2  | 2026-07-30 | Codex                               | 封面显式携带成片音轨版本；仅真实普通话配音版本允许显示配音角标           |
 | 3.45.3  | 2026-07-31 | Codex                               | 例行发布封面恢复为专门生成图，不再默认从竖版成片截帧                       |
 | 3.45.4  | 2026-07-31 | Codex                               | 封面检查点要求非截帧来源清单与哈希匹配，禁止历史帧封面被补发复用          |
+| 3.46.0  | 2026-07-31 | Codex                               | 源字幕先行预检、非窗口预加工与全任务互斥，未审字幕不得触发视频下载        |
 """
 
 
@@ -103,7 +104,12 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 
 from .db import PipelineDB
-from .utils.file_utils import find_downloaded_video, VIDEO_CONTAINER_SUFFIXES, read_subtitle_text
+from .utils.file_utils import (
+    find_downloaded_video,
+    VIDEO_CONTAINER_SUFFIXES,
+    read_subtitle_text,
+    read_webvtt_text,
+)
 from .utils.platform_events import PlatformEvent, format_platform_event_html
 from .utils.text_utils import graceful_truncate_title
 from .scoring import compute_auto_score, PUBLISH_SCORE_LINE
@@ -143,6 +149,7 @@ _WECHAT_UPLOAD_TIMEOUT_SEC = 25 * 60
 _KUAISHOU_UPLOAD_TIMEOUT_SEC = 25 * 60
 _DOUYIN_UPLOAD_TIMEOUT_SEC = 25 * 60
 _AUTO_CAPTION_TIMEOUT_SEC = 45 * 60
+_SOURCE_SUBTITLE_MIN_CHARS = 20
 
 
 def _build_subprocess_env() -> dict:
@@ -423,7 +430,129 @@ class PipelineManager:
 
         logger.info(f"Pipeline run loop completed. Total processed: {total_processed}")
 
+    def prepare_high_score_videos(self, limit: int = 1) -> int:
+        """在非发布窗口预加工高分 AUTO 候选，成片就绪后保持 PENDING 等待窗口提交。"""
+        if settings.is_us_market_guard_window():
+            logger.info("[MarketGuard] 美股盘中，跳过后台视频预加工。")
+            return 0
+        if settings.is_public_publish_window():
+            logger.info("[Preparation] 当前为发布窗口，优先留给提交巡航。")
+            return 0
+
+        prepared = 0
+        batch_limit = max(1, int(limit))
+        while prepared < batch_limit:
+            targets = self.db.get_high_score_preparation_candidates(
+                min_score=75,
+                limit=1,
+                retry_hours=settings.source_subtitle_retry_hours,
+                channel_min_scores=settings.auto_publish_channel_min_scores,
+            )
+            if not targets:
+                break
+            video = targets[0]
+            yid = video["youtube_id"]
+            slice_index = video.get("slice_index", 0)
+            if not self.db.claim_video_for_processing(yid, slice_index=slice_index):
+                continue
+            self._process_single_video(video, preparation_only=True)
+            prepared += 1
+
+        logger.info("[Preparation] 本轮完成 %s 个 AUTO 候选的预加工尝试。", prepared)
+        return prepared
+
     # ── 工具方法 ──────────────────────────────────────────────────────────────
+
+    def _source_subtitle_files(self, yid: str) -> list[Path]:
+        """返回该源视频由 yt-dlp 预检下载的 VTT，不匹配切片或普通字幕产物。"""
+        prefix = f"{yid}_source_subtitle"
+        return sorted(
+            path for path in self._OUT_DIR.glob(f"{prefix}*.vtt")
+            if path.name == f"{prefix}.vtt" or path.name.startswith(f"{prefix}.")
+        )
+
+    def _ensure_source_subtitle_preflight(self, video: Dict[str, Any]) -> bool:
+        """无视频下载拉取源字幕并通过审查，失败时保持 PENDING 且禁止后续下载。"""
+        yid = video["youtube_id"]
+        title = video["title"]
+        slice_index = video.get("slice_index", 0)
+        subtitle_files = self._source_subtitle_files(yid)
+        subtitle_text = read_webvtt_text(subtitle_files)
+
+        if len(subtitle_text.strip()) < _SOURCE_SUBTITLE_MIN_CHARS:
+            output_template = self._OUT_DIR / f"{yid}_source_subtitle.%(ext)s"
+            subtitle_cmd = [
+                self._VENV_YTDLP,
+                "--skip-download",
+                "--no-playlist",
+                "--write-subs",
+                "--write-auto-subs",
+                "--sub-langs", settings.source_subtitle_languages,
+                "--sub-format", "vtt",
+                *settings.get_yt_cookie_args(),
+                f"https://youtu.be/{yid}",
+                "-o", str(output_template),
+            ]
+            try:
+                logger.info("[SourceSubtitle] 拉取 %s 的源 VTT（不下载视频）。", yid)
+                self._run_tracked(
+                    subtitle_cmd,
+                    yid,
+                    slice_index=slice_index,
+                    text=True,
+                    capture_output=True,
+                    cwd=str(self._PRJ_ROOT),
+                )
+            except subprocess.CalledProcessError as exc:
+                stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(errors="replace")
+                return self._mark_source_subtitle_unavailable(yid, slice_index, stderr or "yt-dlp 未返回可用源字幕")
+
+            subtitle_files = self._source_subtitle_files(yid)
+            subtitle_text = read_webvtt_text(subtitle_files)
+
+        if len(subtitle_text.strip()) < _SOURCE_SUBTITLE_MIN_CHARS:
+            return self._mark_source_subtitle_unavailable(
+                yid,
+                slice_index,
+                "未找到可审查的 VTT 源字幕；视频下载未启动，将在后续轮次重试。",
+            )
+
+        if not settings.enable_censorship_engine:
+            return self._mark_source_subtitle_unavailable(
+                yid,
+                slice_index,
+                "安全审查引擎未启用；源字幕预检按 fail-closed 阻断视频下载。",
+            )
+
+        if self._check_censorship(
+            yid,
+            title,
+            zh_title=video.get("zh_title") or "",
+            slice_index=slice_index,
+            subtitle_text=subtitle_text,
+            stage="source_subtitle_preflight",
+            fail_closed=True,
+            platform="预加工",
+        ):
+            logger.warning("[SourceSubtitle] %s 源字幕未通过安全预检，已阻断视频下载。", yid)
+            return False
+
+        self.db.set_source_subtitle_preflight(yid, "PASSED", slice_index=slice_index)
+        logger.info("[SourceSubtitle] %s 通过安全预检（%s 字符）。", yid, len(subtitle_text))
+        return True
+
+    def _mark_source_subtitle_unavailable(self, yid: str, slice_index: int, detail: str) -> bool:
+        """记录源字幕缺失/抓取失败并复位任务；返回 False 以阻断后续视频下载。"""
+        reason = f"源字幕预检未通过（未下载视频）：{' '.join(detail.split())[:300]}"
+        self.db.set_source_subtitle_preflight(
+            yid,
+            "UNAVAILABLE",
+            error_msg=reason,
+            slice_index=slice_index,
+        )
+        self.db.update_video_status(yid, "PENDING", error_msg=reason, slice_index=slice_index)
+        logger.info("[SourceSubtitle] %s 暂无可审查字幕，保持 PENDING。", yid)
+        return False
 
     def reset_video_artifacts(self, yid: str) -> list:
         """硬重置：删除指定视频所有产物文件，返回已删除文件名列表。
@@ -437,6 +566,7 @@ class PipelineManager:
             f"{yid}_title.txt",
             f"{yid}_category.txt",
             f"{yid}_cover.jpg",
+            f"{yid}_source_subtitle*",
         ]:
             for f in self._OUT_DIR.glob(pat):
                 try:
@@ -445,6 +575,10 @@ class PipelineManager:
                     logger.info(f"[HARD RESET] Deleted: {f.name}")
                 except Exception as e:
                     logger.warning(f"Cannot delete {f.name}: {e}")
+        match = re.fullmatch(r"(.+)_s(\d+)", yid)
+        source_yid = match.group(1) if match else yid
+        slice_index = int(match.group(2)) if match else 0
+        self.db.clear_video_preparation_state(source_yid, slice_index=slice_index)
         return deleted
 
     def _find_downloaded_video(self, yid: str) -> Optional[str]:
@@ -1461,7 +1595,7 @@ class PipelineManager:
 
     # ── 主处理流程 ────────────────────────────────────────────────────────────
 
-    def _process_single_video(self, video: Dict[str, Any]):
+    def _process_single_video(self, video: Dict[str, Any], *, preparation_only: bool = False):
         # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils.text_utils 并在模块顶部 import，
         # 消除此前 sys.path 注入 scripts/ 反向 import copywriter 的 DAG 违规。
         yid   = video['youtube_id']
@@ -1499,6 +1633,14 @@ class PipelineManager:
             zh_title_for_check = video.get('zh_title') or ""
             if self._check_censorship(yid, title, zh_title=zh_title_for_check, slice_index=slice_index):
                 return
+            # 原视频通常远大于字幕。任何路径在进入下载前都必须完成源 VTT 预检，
+            # 这样手动触发、窗口巡航和后台预加工都不会绕开安全关卡。
+            local_source = self._find_downloaded_video(yid)
+            rendered_checkpoint = self._OUT_DIR / f"{prefix}_vertical.mp4"
+            if not local_source and not rendered_checkpoint.is_file():
+                if not self._ensure_source_subtitle_preflight(video):
+                    return
+            self.db.set_video_preparation_ready(yid, False, slice_index=slice_index)
 
             try:
                 # ── 1. DOWNLOADING / SLICING ──────────────────────────────────────
@@ -2013,6 +2155,14 @@ class PipelineManager:
                 else:
                     logger.info(f"[SKIP] Cover checkpoint: {cover_file.name}")
 
+                if preparation_only:
+                    if not self._is_dedicated_cover(cover_file):
+                        raise RuntimeError("预加工未生成可验证的专门封面，禁止标记为待发布就绪。")
+                    self.db.set_video_preparation_ready(yid, True, slice_index=slice_index)
+                    self.db.update_video_status(yid, "PENDING", error_msg=None, slice_index=slice_index)
+                    logger.info("[Preparation] %s 已完成下载、加工、封面和审查，等待发布窗口提交。", prefix)
+                    return
+
                 # ── 4. PUBLISHING ─────────────────────────────────────────────────
                 # Sequence Locking 二次校验（防止在 queue 排队期间状态改变）
                 if slice_index > 0:
@@ -2213,10 +2363,10 @@ class PipelineManager:
             return 0
         if not self._is_public_publish_window("微信补发"):
             return 0
-        limit = settings.wechat_deferred_recovery_daily_limit
+        limit = max(0, settings.wechat_deferred_recovery_daily_limit)
         recovered = 0
         for _ in range(limit):
-            claimed = self.db.claim_next_deferred_wechat_publication()
+            claimed = self.db.claim_next_deferred_wechat_publication(daily_limit=limit)
             if not claimed:
                 break
             self._process_single_video(claimed)
@@ -2234,8 +2384,46 @@ class PipelineManager:
                 self._queue_and_publish_new_douyin_video(yid, slice_index=slice_index)
         self._run_garbage_collection(yid, slice_index, "WECHAT_DEFERRED")
 
-    def run_daily_job(self):
-        """执行每日例行调度"""
+    def _run_with_job_lock(self, job_name: str, action) -> bool:
+        """所有入口共用的非阻塞任务锁，防止 cron、面板和手动命令并发运行。"""
+        lock_path = self._OUT_DIR / "pipeline_job.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+") as lock_file:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                logger.info("[JobLock] %s 已有任务在运行，本轮跳过。", job_name)
+                return False
+            try:
+                action()
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return True
+
+    def run_preparation_job(self) -> bool:
+        """执行非发布窗口的字幕先行预加工；不产生任何平台提交动作。"""
+        return self._run_with_job_lock("preparation", self._run_preparation_job_unlocked)
+
+    def _run_preparation_job_unlocked(self) -> None:
+        if not settings.enable_background_preparation:
+            logger.info("[Preparation] ENABLE_BACKGROUND_PREPARATION=false，跳过。")
+            return
+        if settings.is_us_market_guard_window():
+            logger.info("[MarketGuard] 美股盘中，跳过后台预加工。")
+            return
+        if settings.is_public_publish_window():
+            logger.info("[Preparation] 当前为发布窗口，跳过后台预加工。")
+            return
+        logger.info("--- Starting Background Preparation Job ---")
+        self.score_pending_videos()
+        self.prepare_high_score_videos(limit=settings.background_preparation_batch_limit)
+        logger.info("--- Background Preparation Job Completed ---")
+
+    def run_daily_job(self) -> bool:
+        """执行每日例行调度；所有入口均通过共享任务锁串行化。"""
+        return self._run_with_job_lock("daily", self._run_daily_job_unlocked)
+
+    def _run_daily_job_unlocked(self) -> None:
         logger.info("--- Starting Daily Pipeline Job ---")
         self.score_pending_videos()
         self.process_high_score_videos(limit=5)

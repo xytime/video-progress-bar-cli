@@ -41,6 +41,7 @@
 | 3.15.3 | 2026-07-29 | Codex                              | 人工混音版默认使用 0.16 英文底音，并增加 DeepSeek thinking 脚本精修配置 |
 | 3.15.4 | 2026-07-29 | Codex                              | 新增内容贴合封面开关，默认关闭以保持现有例行发布行为不变 |
 | 3.15.5 | 2026-07-31 | Codex                              | 收敛发布规则默认值：工作日早窗固定 06:30-09:00、休息日早窗 07:30-11:00，视频号补发上限 10 |
+| 3.15.6 | 2026-07-31 | Codex                              | 新增源字幕先行预检与非窗口预加工配置，阻止未审视频下载 |
 """
 import json
 import socket
@@ -295,6 +296,13 @@ class Settings(BaseSettings):
     # 视频号暂停发布时，新视频可先进入 WECHAT_DEFERRED，并按限额在恢复后补发。
     wechat_publishing_paused: bool = False
     wechat_deferred_recovery_daily_limit: int = 10
+
+    # 源字幕先行：先用 yt-dlp --skip-download 拉取 VTT 并通过安全审查，
+    # 才允许下载原视频。非发布窗口的预加工只处理 AUTO 候选，绝不提交平台。
+    enable_background_preparation: bool = True
+    background_preparation_batch_limit: int = 1
+    source_subtitle_languages: str = "en.*,en"
+    source_subtitle_retry_hours: int = 6
 
     # 公开视频提交窗口。默认按北京时间短视频活跃规律设置：
     # 工作日：早通勤、午休、晚通勤、晚间黄金档；各窗口相对统计峰值整体提前 30 分钟。

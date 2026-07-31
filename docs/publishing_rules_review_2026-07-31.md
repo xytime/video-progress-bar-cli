@@ -9,13 +9,15 @@
 
 `src/config/settings.py` 的字段默认值是版本化的发布策略；`.env.example` 与本机 `.env` 必须与其完全一致。本机实际运行仍由 `.env` 注入，但不允许它悄然形成另一套规则。
 
-`scripts/verify_publication_policy.py` 校验以下三个字段在三处来源一致：
+`scripts/verify_publication_policy.py` 校验以下三个规则字段在代码默认、`.env.example`、本机 `.env` 与当前进程有效配置中一致：
 
 | 字段 | 已批准值 |
 | --- | --- |
 | `PUBLIC_PUBLISH_WINDOWS` | `06:30-09:00,11:15-12:45,17:00-18:15,19:00-20:40` |
 | `PUBLIC_PUBLISH_HOLIDAY_WINDOWS` | `07:30-11:00,13:30-16:30,19:00-21:30` |
 | `WECHAT_DEFERRED_RECOVERY_DAILY_LIMIT` | `10` |
+
+字幕先行与后台预加工也只从 Settings 读取：`ENABLE_BACKGROUND_PREPARATION=true`、`BACKGROUND_PREPARATION_BATCH_LIMIT=1`、`SOURCE_SUBTITLE_LANGUAGES=en.*,en`、`SOURCE_SUBTITLE_RETRY_HOURS=6`。缺字幕候选每 6 小时最多重新拉取一次；不会因为 15 分钟巡航而反复请求。
 
 运行命令：
 
@@ -31,10 +33,11 @@ PYTHONPATH=src .venv/bin/python scripts/verify_publication_policy.py --check-ins
 | --- | --- | --- | --- |
 | `monitor_channels.py` | 每 30 分钟 | 发现频道新视频并写入队列 | 否 |
 | `rescore_refresh.py` | 每 3 小时的 :15 | 刷新近 8 天低分候选的播放/点赞并重算分数 | 否 |
+| `run_background_preparation.py` | 每 15 分钟 | 非发布窗口：源字幕预检通过后，下载、文案、字幕、渲染、封面和最终审查 | 会下载/加工；绝不提交 |
 | `run_publication_window.py` | 每 15 分钟，06:00-21:45 | 先判断有效窗口，再串行启动完整 `PipelineManager` | 仅有效窗口内 |
 | `daily_ops_report.py` | 每日 09:00 | 只读日报并推送 Telegram | 否 |
 
-巡航入口有跨进程非阻塞锁：上一轮尚在运行时，下一次唤醒记录“跳过”并退出，不会启动第二个完整流水线。它也会在拿到锁后再次检查窗口边界，避免在窗口关闭后才开始投递。
+发布与预加工入口共享跨进程非阻塞任务锁；上一轮尚在运行时，下一次唤醒记录“跳过”并退出。仪表盘队列、`vpanel job run` 和 cron 都使用同一把锁，不会并发下载、渲染或提交。
 
 当前开关状态：视频号和抖音启用；快手浏览器发布关闭。`run_daily_job()` 内仍按开关处理各平台，关闭的平台不会产生公开提交。
 
@@ -42,18 +45,19 @@ PYTHONPATH=src .venv/bin/python scripts/verify_publication_policy.py --check-ins
 
 1. `monitor_channels.py` 发现新视频，只将元数据写入 `processed_videos` 的待处理队列。此时不下载、不生成文案、不转写、不渲染，也不发布。
 2. `rescore_refresh.py` 只处理“发现时不火、随后上涨”的近 8 天低分候选：重新读取当前播放量/点赞，按既有规则只升不降地更新分数。它不下载、不加工、不发布。
-3. 有效发布窗口内，巡航入口调用 `PipelineManager.run_daily_job()`：先对待处理视频评分，再领取达到频道发布线的候选。普通候选线为 `score >= 75`；演讲类频道可采用 `speech_publish_score_line=40`。
-4. 被领取的视频才依次下载、生成文案、转写/翻译/字幕、渲染、生成封面、执行安全审查，并在仍处于有效窗口时提交视频号和启用的平台同步。
-5. 如果窗口在加工途中结束，最终提交会被窗口门禁拦住；已有产物作为 checkpoint 保留，下一次有效窗口继续，不会重复下载或重复加工。
+3. 非发布窗口中，后台预加工只领取达到频道发布线的 `source='AUTO'` 候选。第一步是 `yt-dlp --skip-download --write-subs --write-auto-subs` 拉取 VTT 源字幕；它不会取任何视频流。
+4. 预检字幕为空、拉取失败、少于 20 个有效字符，或安全审查引擎未启用时，候选回到 `PENDING` 并记录 `UNAVAILABLE`，原视频下载绝不启动。源字幕命中安全规则或审查异常时，沿用 fail-closed 处置并停止该候选。
+5. 源字幕通过后，后台才下载、生成文案、转写/翻译/字幕、渲染、生成专门封面，并执行现有最终字幕审查。全部就绪的候选回到 `PENDING`，标记 `preparation_ready=1`；没有任何平台提交。
+6. 有效发布窗口内，巡航入口调用 `PipelineManager.run_daily_job()`，优先领取 `preparation_ready=1` 的候选并提交视频号及已启用的平台同步。直接触发或人工候选如果尚无本地源片，也必须先通过同一源字幕闸门，不能绕过。
 
-因此，当前策略是“发现立即入队，重算独立高频，首次自动下载和加工在有效发布窗口内开始”。它并非发现后立刻重活加工。
+因此，当前策略是“发现立即入队；高分 AUTO 候选在非窗口分散预加工；窗口优先提交已就绪成片”。下载最重的一段被放在字幕安全预检之后。
 
 ## 4. 公开提交与状态边界
 
 - `settings.is_public_publish_window()` 是视频号、抖音、快手的新片提交、补发和历史迁移的统一门禁；补班日优先于周末，普通周末和法定节假日使用休息日窗口。
 - 审核回查是只读确认，不创建新公开作品；但抖音浏览器操作仍受节流和本轮熔断保护。
 - 美股盘中重负载保护独立存在：ET 工作日 09:15-16:15 不启动新的重型下载、转写和渲染。
-- 视频号补发最多每日 10 条。上传结果不能确认时保持失败/待复核并保留产物，不自动重发。
+- 视频号补发最多每日 10 条。额度按当日真实“领取”持久化计数，而不是按单轮运行计数；上传结果不能确认时保持失败/待复核并保留产物，不自动重发。
 - 本地 `PUBLISHED`、上传器退出码或日志都不等于平台作品卡片可见。抖音的 `UNDER_REVIEW`、`UNCERTAIN` 与 `PUBLISHED` 必须保持独立状态；需要创作者后台证据才能确认外部可见。
 - `source='DISCOVERY'` 的浏览型视频不进入自动评分或自动发布。
 - 普通话配音再制是独立人工确认域，不被日常自动调度领取。
@@ -68,6 +72,6 @@ PYTHONPATH=src .venv/bin/python scripts/verify_publication_policy.py --check-ins
 - 休息日早窗改为 `07:30-11:00`。
 - 视频号延迟补发上限设为 `10`。
 - 代码默认值、`.env.example`、本机 `.env` 和调研文档统一；校验脚本会拒绝不一致的安装。
-- 发布 cron 只保留版本化的 15 分钟巡航入口，不再含早窗/午窗/晚窗的硬编码单点或关闭状态下的快手历史迁移条目。
+- 发布 cron 保留版本化的 15 分钟窗口提交巡航，并新增 15 分钟后台预加工入口；二者均不复制窗口规则，也不含早窗/午窗/晚窗的硬编码单点或关闭状态下的快手历史迁移条目。
 
 仍建议后续增加窗口级心跳记录和日报告警，使日报能明确回答“窗口是否启动、候选数、提交数和阻断原因”。这是运行可观测性增强，不改变本规则的发布时间或平台成功判定。

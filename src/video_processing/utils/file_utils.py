@@ -6,11 +6,13 @@
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | find_downloaded_video 单一真相源（bot 与管线共用）                  |
 | 1.1.0   | 2026-06-22 | Claude_Opus_4.8 | 新增 read_subtitle_text（.ass 纯文本，管线字幕审查与复核 UI 共用）   |
 | 1.2.0   | 2026-06-22 | Claude_Opus_4.8 | [Review Fix] read_subtitle_text 精确匹配切片，排除 {yid}_s1 误配子切片/_s11 |
+| 1.3.0   | 2026-07-31 | Codex | 新增 WebVTT 纯文本读取，供下载前源字幕安全预检复用 |
 """
+import html
 import re
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 
 def ensure_directory(path: Path) -> Path:
@@ -194,6 +196,57 @@ def read_subtitle_text(
     return "\n".join(parts)
 
 
+def read_webvtt_text(subtitle_files: Iterable[Path], max_chars: int = 40000) -> str:
+    """读取 WebVTT cue 正文并去除时间轴、HTML 标签和实体。
+
+    仅接受时间轴之后的 cue 内容，避免把 ``WEBVTT`` 头、语言元数据或样式表送进
+    内容审查。自动字幕可能包含重叠/渐进式 cue，函数保留原文而不尝试去重，宁可
+    审查更完整的源文本，也不能因猜测性合并漏掉敏感片段。
+    """
+    parts: List[str] = []
+    total = 0
+    for subtitle_file in sorted(Path(path) for path in subtitle_files):
+        try:
+            lines = subtitle_file.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        except OSError:
+            continue
+
+        in_cue = False
+        cue_lines: List[str] = []
+
+        def flush_cue() -> bool:
+            nonlocal total
+            if not cue_lines:
+                return False
+            text = html.unescape(re.sub(r"<[^>]+>", "", " ".join(cue_lines))).strip()
+            cue_lines.clear()
+            if not text:
+                return False
+            parts.append(text)
+            total += len(text)
+            return total >= max_chars
+
+        for raw_line in lines:
+            line = raw_line.strip()
+            if "-->" in line:
+                if flush_cue():
+                    return "\n".join(parts)
+                in_cue = True
+                continue
+            if not in_cue:
+                continue
+            if not line:
+                if flush_cue():
+                    return "\n".join(parts)
+                in_cue = False
+                continue
+            cue_lines.append(line)
+
+        if flush_cue():
+            return "\n".join(parts)
+    return "\n".join(parts)
+
+
 def safe_remove(path: Path) -> bool:
     """
     安全删除文件或目录
@@ -212,4 +265,3 @@ def safe_remove(path: Path) -> bool:
         return True
     except Exception:
         return False
-

@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 新增发布窗口策略与巡航调度的一致性校验 |
 | 1.0.1 | 2026-07-31 | Codex | 巡航命令校验改为前缀匹配，允许保留 crontab 日志重定向 |
+| 1.0.2 | 2026-07-31 | Codex | 校验进程环境覆盖与后台预加工巡航，避免规则只在文件层面一致 |
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ def _check_policy_sources() -> list[str]:
     errors: list[str] = []
     env_example = dotenv_values(PROJECT_ROOT / ".env.example")
     production_env = dotenv_values(PROJECT_ROOT / ".env")
+    effective_settings = Settings()
 
     for env_name, field_name in POLICY_FIELDS.items():
         expected = _settings_default(field_name)
@@ -53,6 +55,11 @@ def _check_policy_sources() -> list[str]:
                 errors.append(
                     f"{env_name}: Settings 默认值为 {expected!r}，{source_name} 为 {actual!r}"
                 )
+        effective = str(getattr(effective_settings, field_name))
+        if effective != expected:
+            errors.append(
+                f"{env_name}: 当前进程有效值为 {effective!r}，覆盖了批准默认值 {expected!r}"
+            )
     return errors
 
 
@@ -61,6 +68,11 @@ def _check_installed_schedule() -> list[str]:
         f'*/15 6-21 * * * cd "{PROJECT_ROOT}" && '
         f'PYTHONPATH="{SRC_ROOT}" "{PROJECT_ROOT / ".venv/bin/python"}" '
         f'"{PROJECT_ROOT / "scripts/run_publication_window.py"}"'
+    )
+    expected_preparation_command = (
+        f'*/15 * * * * cd "{PROJECT_ROOT}" && '
+        f'PYTHONPATH="{SRC_ROOT}" "{PROJECT_ROOT / ".venv/bin/python"}" '
+        f'"{PROJECT_ROOT / "scripts/run_background_preparation.py"}"'
     )
     result = subprocess.run(["crontab", "-l"], text=True, capture_output=True, check=False)
     if result.returncode != 0:
@@ -71,8 +83,8 @@ def _check_installed_schedule() -> list[str]:
         return ["未找到受管的发布窗口巡航 crontab 区块。"]
     if not any(line.startswith(expected_command) for line in lines):
         return ["受管 crontab 区块缺少预期的 15 分钟窗口巡航命令。"]
-    if any("video_processing.pipeline_manager" in line for line in lines):
-        return ["仍存在旧的直连 PipelineManager crontab 条目。"]
+    if not any(line.startswith(expected_preparation_command) for line in lines):
+        return ["受管 crontab 区块缺少预期的非窗口预加工巡航命令。"]
     return []
 
 
@@ -90,9 +102,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"- {error}")
         return 1
 
-    print("发布规则校验通过：代码默认、.env.example、本机 .env 一致。")
+    print("发布规则校验通过：代码默认、.env.example、本机 .env 与当前有效配置一致。")
     if args.check_installed_schedule:
-        print("已安装 crontab 使用受管的 15 分钟窗口巡航入口。")
+        print("已安装 crontab 使用受管的窗口提交与后台预加工巡航入口。")
     return 0
 
 

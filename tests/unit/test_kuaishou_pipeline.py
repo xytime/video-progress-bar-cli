@@ -321,7 +321,7 @@ def test_recovery_claims_at_most_the_configured_daily_limit(tmp_path: Path):
         settings.wechat_deferred_recovery_daily_limit = prior_limit
 
     manager._process_single_video.assert_called_once_with({"youtube_id": "video-id", "slice_index": 0})
-    manager.db.claim_next_deferred_wechat_publication.assert_called_once()
+    manager.db.claim_next_deferred_wechat_publication.assert_called_once_with(daily_limit=1)
 
 
 def test_paused_daily_job_skips_wechat_recovery(tmp_path: Path):
