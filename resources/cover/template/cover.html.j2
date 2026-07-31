@@ -25,6 +25,15 @@
             box-sizing: border-box;
         }
 
+        .visual-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            background-image: linear-gradient(135deg, rgba(4, 9, 18, 0.72), rgba(4, 9, 18, 0.16)), url('{{ visual_asset_url }}');
+            background-size: cover;
+            background-position: center;
+        }
+
         /* 氛围发光球 */
         .orb-container {
             position: absolute;
@@ -169,6 +178,10 @@
     </style>
 </head>
 <body>
+    {% if visual_asset_url %}
+    <div class="visual-layer"></div>
+    {% endif %}
+
     <!-- 点阵网格层 -->
     <div class="grid-layer"></div>
 
@@ -259,7 +272,7 @@
         </div>
 
         <!-- 隐喻矢量图标注入 (内联定位) -->
-        {% if metaphor_svg %}
+        {% if show_metaphor and metaphor_svg %}
         <div class="metaphor-icon pos-{{ metaphor_placement }}">
             {{ metaphor_svg }}
         </div>

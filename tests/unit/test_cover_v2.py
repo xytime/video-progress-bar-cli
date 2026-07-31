@@ -4,6 +4,7 @@
 | Version | Date       | Author                       | Description                                                  |
 |---------|------------|------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，针对语义分析、主题映射、布局装配与 Facade 入口进行单元测试 |
+| 1.1.0 | 2026-07-31 | Codex                         | 覆盖专属主视觉与受控标题位置的布局规划 |
 """
 
 import os
@@ -184,6 +185,44 @@ def test_layout_composer():
     assert spec["badge"] == "科技"  # 优先采用 payload.category
     assert spec["metaphor"] == "zap"
     assert spec["safe_zone"]["top_pct"] == 12
+
+
+def test_layout_composer_uses_dedicated_visual_and_safe_headline_position():
+    composer = LayoutComposer()
+    signal = ContentSignal(
+        id="mindset_growth",
+        accent="purple_mindset",
+        base_gradient="mindset_change",
+        metaphor="brain",
+        metaphor_placement="top-right",
+        emotion_temperature="neutral",
+        default_badge="思维跃迁",
+        template_variant="cover_minimal",
+    )
+    theme = {
+        "background_gradient_start": "#1a1632",
+        "background_gradient_end": "#0d1020",
+        "noise_opacity": 0.04,
+        "grid_color": "rgba(255,255,255,0.04)",
+        "orbs": [],
+        "accent_color": "#b898ff",
+        "accent_glow": "none",
+    }
+
+    spec = composer.compose(
+        {
+            "title": "自己定义成功",
+            "visual_asset_path": "/tmp/dedicated-visual.png",
+            "headline_position": "upper_left",
+        },
+        signal,
+        theme,
+    )
+
+    assert spec["style_id"] == "mindset_growth"
+    assert spec["has_visual_asset"] is True
+    assert spec["headline_position"] == "upper_left"
+    assert spec["show_metaphor"] is False
 
 def test_cover_engine_e2e_mocked(temp_config_paths, tmp_path, monkeypatch):
     """

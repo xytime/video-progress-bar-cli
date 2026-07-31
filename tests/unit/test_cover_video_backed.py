@@ -6,6 +6,8 @@
 | 1.1.0 | 2026-07-30 | Codex | 验证配音角标仅由受限音轨版本字段决定 |
 | 1.2.0 | 2026-07-31 | Codex | 验证普通话译制彩带角标完整绘制 |
 | 1.3.0 | 2026-07-31 | Codex | 禁止视频帧封面，并验证专门生成封面来源清单 |
+| 1.4.0 | 2026-07-31 | Codex | 覆盖专属主视觉资产的哈希绑定来源证明 |
+| 1.5.0 | 2026-07-31 | Codex | 封面简报必须记录实际生效的渲染规划 |
 """
 
 from pathlib import Path
@@ -33,6 +35,53 @@ def test_cover_provenance_marks_generated_asset_as_non_frame(tmp_path):
     assert payload["uses_video_frame"] is False
     assert payload["cover_filename"] == "cover.jpg"
     assert len(payload["cover_sha256"]) == 64
+
+
+def test_cover_provenance_binds_dedicated_visual_asset(tmp_path):
+    output = tmp_path / "cover.jpg"
+    visual = tmp_path / "visual.png"
+    provenance = tmp_path / "cover_provenance.json"
+    output.write_bytes(b"composed-cover")
+    visual.write_bytes(b"independent-generated-visual")
+
+    cover_generator._write_cover_provenance(
+        str(output),
+        str(provenance),
+        {"visual_asset_path": str(visual)},
+    )
+
+    payload = json.loads(provenance.read_text(encoding="utf-8"))
+    assert payload["visual_asset"] == {
+        "filename": "visual.png",
+        "sha256": "53900a9815a35033211838d47a95a14d3a68a5fa9e37580f9e3f53a136446543",
+        "kind": "dedicated_generated_visual",
+    }
+
+
+def test_applied_creative_brief_uses_actual_render_plan():
+    brief = cover_generator._applied_creative_brief(
+        {"content_hints": ["mindset"], "visual_direction": "分岔道路"},
+        {
+            "style_id": "mindset_growth",
+            "badge": "人生哲学",
+            "template_variant": "cover_minimal",
+            "headline_position": "upper_left",
+            "has_visual_asset": True,
+            "visual_asset_path": "/tmp/success-self-defined.png",
+        },
+    )
+
+    assert brief == {
+        "schema_version": 1,
+        "style_id": "mindset_growth",
+        "badge": "人生哲学",
+        "template_variant": "cover_minimal",
+        "headline_position": "upper_left",
+        "has_visual_asset": True,
+        "visual_asset_filename": "success-self-defined.png",
+        "visual_keywords": ["mindset"],
+        "visual_direction": "分岔道路",
+    }
 
 
 def test_edition_label_is_absent_without_confirmed_mandarin_dub():
@@ -89,3 +138,4 @@ def test_minimal_template_uses_the_actual_category_not_a_hard_coded_tech_label()
 
     assert '<div class="watermark">{{ badge }}</div>' in template
     assert "科技前沿" not in template
+    assert "visual_asset_url" in template

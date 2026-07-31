@@ -5,6 +5,7 @@
 |---------|------------|------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，协调语义分析、主题解析、版式装配与 HTML 截图渲染      |
 | 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 多模板支持：由 template_dir 管理，依据 layout_spec.template_variant 动态选择 cover/cover_minimal/cover_drama |
+| 1.2.0 | 2026-07-31 | Codex                         | 暴露统一封面规划结果，确保审计简报与实际渲染采用同一语义样式 |
 """
 
 from pathlib import Path
@@ -41,7 +42,13 @@ class CoverEngine:
         self.composer = LayoutComposer()
         self.renderer = HTMLRenderer(self.template_dir, self.metaphors_dir)
 
-    def generate(self, payload: dict, output_path: str) -> None:
+    def plan(self, payload: dict) -> dict:
+        """将输入载荷收敛为唯一实际渲染的布局规划。"""
+        signal = self.analyzer.analyze(payload)
+        theme = self.registry.resolve(signal)
+        return self.composer.compose(payload, signal, theme)
+
+    def generate(self, payload: dict, output_path: str) -> dict:
         """
         [Gemini_3.5_Flash_planning] 运行全链路管线生成图片文件
         
@@ -55,14 +62,6 @@ class CoverEngine:
                 }
             output_path: str，输出的 JPEG 图片绝对路径
         """
-        # 1. 运行语义分析
-        signal = self.analyzer.analyze(payload)
-        
-        # 2. 映射配色主题
-        theme = self.registry.resolve(signal)
-        
-        # 3. 组装布局参数（含 template_variant 字段）
-        layout = self.composer.compose(payload, signal, theme)
-        
-        # 4. 调用 Playwright 渲染为图片（renderer 根据 template_variant 选择模板文件）
+        layout = self.plan(payload)
         self.renderer.render(layout, output_path)
+        return layout

@@ -25,6 +25,15 @@
             box-sizing: border-box;
         }
 
+        .visual-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            background-image: linear-gradient(90deg, rgba(8, 8, 12, 0.72), rgba(8, 8, 12, 0.14)), url('{{ visual_asset_url }}');
+            background-size: cover;
+            background-position: center;
+        }
+
         /* 氛围发光球 */
         .orb-container {
             position: absolute;
@@ -181,6 +190,10 @@
     </style>
 </head>
 <body>
+    {% if visual_asset_url %}
+    <div class="visual-layer"></div>
+    {% endif %}
+
     <!-- 点阵网格层 -->
     <div class="grid-layer"></div>
 
@@ -261,7 +274,7 @@
     <div class="diagonal-bar diagonal-bar-top"></div>
 
     <!-- 大型背景隐喻（半透明装饰）-->
-    {% if metaphor_svg %}
+    {% if show_metaphor and metaphor_svg %}
     <div class="bg-metaphor">
         {{ metaphor_svg }}
     </div>
@@ -279,7 +292,7 @@
     </div>
 
     <!-- 前景图标（小） -->
-    {% if metaphor_svg %}
+    {% if show_metaphor and metaphor_svg %}
     <div class="metaphor-icon pos-{{ metaphor_placement }}">
         {{ metaphor_svg }}
     </div>

@@ -25,6 +25,15 @@
             box-sizing: border-box;
         }
 
+        .visual-layer {
+            position: absolute;
+            inset: 0;
+            z-index: 0;
+            background-image: linear-gradient(90deg, rgba(4, 13, 28, 0.78) 0%, rgba(4, 13, 28, 0.26) 62%, rgba(4, 13, 28, 0.08) 100%), url('{{ visual_asset_url }}');
+            background-size: cover;
+            background-position: center;
+        }
+
         /* 氛围发光球 */
         .orb-container {
             position: absolute;
@@ -86,6 +95,27 @@
             transform: translateY(-50%);
             z-index: 10;
             text-align: center;
+        }
+
+        .content-area.upper_left {
+            top: 25%;
+            left: 7%;
+            right: 40%;
+            transform: none;
+            text-align: left;
+        }
+
+        .content-area.upper_left .main-title,
+        .content-area.upper_left .sub-title {
+            text-align: left;
+        }
+
+        .content-area.upper_left .main-title {
+            font-size: 76px;
+        }
+
+        .content-area.upper_left .sub-title {
+            font-size: 38px;
         }
 
         /* 主标题 */
@@ -167,6 +197,10 @@
     </style>
 </head>
 <body>
+    {% if visual_asset_url %}
+    <div class="visual-layer"></div>
+    {% endif %}
+
     <!-- 氛围光晕层 -->
     <div class="orb-container">
         {% for orb in orbs %}
@@ -189,7 +223,7 @@
     <div class="badge-capsule">{{ badge }}</div>
 
     <!-- 核心内容区 -->
-    <div class="content-area">
+    <div class="content-area {{ headline_position }}">
         <h1 class="main-title">{{ title }}</h1>
         {% if subtitle %}
         <div class="sub-title">{{ subtitle }}</div>
@@ -197,7 +231,7 @@
     </div>
 
     <!-- 隐喻图标 -->
-    {% if metaphor_svg %}
+    {% if show_metaphor and metaphor_svg %}
     <div class="metaphor-icon pos-{{ metaphor_placement }}">
         {{ metaphor_svg }}
     </div>
@@ -263,6 +297,8 @@
     {% endif %}
 
     <!-- 水印 -->
+    {% if not has_visual_asset %}
     <div class="watermark">{{ badge }}</div>
+    {% endif %}
 </body>
 </html>

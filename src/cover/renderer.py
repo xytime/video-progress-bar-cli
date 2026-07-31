@@ -6,6 +6,7 @@
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，支持 Jinja2 模板装配、Inline SVG 注入以及 Playwright 截图生成 |
 | 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 模板目录化：接受 template_dir 替代单文件，根据 layout_spec.template_variant 动态选择 .html.j2 文件 |
 | 1.2.0   | 2026-06-02 | Gemini_3.5_Flash_planning    | 修正截图视口为 6:7 比例 (1080x1260) |
+| 1.3.0 | 2026-07-31 | Codex                         | 将已验证的独立主视觉图像嵌入模板，不允许把视频文件当作背景 |
 """
 
 import os
@@ -57,6 +58,16 @@ class HTMLRenderer:
             template_path = self.template_dir / "cover.html.j2"
         if not template_path.exists():
             raise FileNotFoundError(f"No template found in: {self.template_dir}")
+
+        layout_spec = dict(layout_spec)
+        visual_asset_path = str(layout_spec.get("visual_asset_path", "") or "").strip()
+        if visual_asset_path:
+            visual_asset = Path(visual_asset_path)
+            if not visual_asset.is_file():
+                raise FileNotFoundError(f"Dedicated visual asset not found: {visual_asset}")
+            layout_spec["visual_asset_url"] = visual_asset.resolve().as_uri()
+        else:
+            layout_spec["visual_asset_url"] = ""
 
         # 1. 注入 SVG 隐喻
         metaphor_name = layout_spec.get("metaphor", "")

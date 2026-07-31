@@ -11,6 +11,7 @@
 | 2.3.0   | 2026-07-30 | Codex                        | 仅按已确认的成片音轨版本渲染配音角标，杜绝字幕版误标为译制版          |
 | 2.3.1   | 2026-07-31 | Codex                        | 角标文案改为普通话译制并采用右上角彩带样式，确保文字完整可见          |
 | 2.4.0   | 2026-07-31 | Codex                        | 禁止视频截帧封面，并为专门生成封面写入可验证来源清单                  |
+| 2.5.0   | 2026-07-31 | Codex                        | 支持独立主视觉资产，并将实际渲染语义写回可审计封面简报                |
 """
 
 import os
@@ -247,6 +248,15 @@ def _write_cover_provenance(output_path: str, provenance_output: str | None, pay
     digest = hashlib.sha256(cover_path.read_bytes()).hexdigest()
     provenance_path = Path(provenance_output)
     provenance_path.parent.mkdir(parents=True, exist_ok=True)
+    visual_asset_path = str(payload.get("visual_asset_path", "") or "").strip()
+    visual_asset = Path(visual_asset_path) if visual_asset_path else None
+    visual_asset_payload = None
+    if visual_asset and visual_asset.is_file():
+        visual_asset_payload = {
+            "filename": visual_asset.name,
+            "sha256": hashlib.sha256(visual_asset.read_bytes()).hexdigest(),
+            "kind": "dedicated_generated_visual",
+        }
     provenance_path.write_text(
         json.dumps(
             {
@@ -256,12 +266,30 @@ def _write_cover_provenance(output_path: str, provenance_output: str | None, pay
                 "cover_filename": cover_path.name,
                 "cover_sha256": digest,
                 "audio_edition": payload.get("audio_edition", "original_audio_subtitled"),
+                "visual_asset": visual_asset_payload,
             },
             ensure_ascii=False,
             indent=2,
         ) + "\n",
         encoding="utf-8",
     )
+
+
+def _applied_creative_brief(payload: dict, layout: dict) -> dict:
+    """只记录真正送入模板的视觉决策，避免审计与成图语义漂移。"""
+    visual_asset_path = str(layout.get("visual_asset_path", "") or "").strip()
+    return {
+        "schema_version": 1,
+        "style_id": layout["style_id"],
+        "badge": layout["badge"],
+        "template_variant": layout["template_variant"],
+        "headline_position": layout["headline_position"],
+        "has_visual_asset": layout["has_visual_asset"],
+        "visual_asset_filename": Path(visual_asset_path).name if visual_asset_path else None,
+        "visual_keywords": list(payload.get("content_hints", []) or []),
+        "visual_direction": str(payload.get("visual_direction", "") or "").strip(),
+    }
+
 
 def main():
     # [Gemini_3.5_Flash_planning] 支持 --payload 参数接入 CoverEngine v2.0，同时支持 Pillow 降级兜底
@@ -280,18 +308,18 @@ def main():
         except json.JSONDecodeError:
             payload = {}
     title_to_use = args.title or str(payload.get("title") or "")
+    creative_brief_requested = False
     creative_brief = None
     if args.content_aware:
         try:
             sys.path.append(str(Path(__file__).parent.parent / "src"))
-            from cover import build_cover_creative_brief, validate_cover_brief_input
+            from cover import validate_cover_brief_input
 
             validation = validate_cover_brief_input(payload)
             if validation.ok:
-                creative_brief = build_cover_creative_brief(payload).to_dict()
+                creative_brief_requested = True
                 if validation.warnings:
                     print(f"Cover brief warnings: {', '.join(validation.warnings)}")
-                print(f"Content-aware cover style: {creative_brief['style_id']}")
             else:
                 print(f"Content-aware cover unavailable: {', '.join(validation.warnings)}")
         except Exception as e:
@@ -311,7 +339,10 @@ def main():
             
             print(f"Using CoverEngine v2.0 (Playwright HTML) for payload: {payload}")
             engine = CoverEngine()
-            engine.generate(payload, args.output)
+            layout = engine.generate(payload, args.output)
+            if creative_brief_requested:
+                creative_brief = _applied_creative_brief(payload, layout)
+                print(f"Content-aware cover style: {creative_brief['style_id']}")
             persist_creative_brief()
             _write_cover_provenance(args.output, args.provenance_output, payload)
             return

@@ -8,6 +8,7 @@
 | 1.2.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 将 content_label 角标标签透传入 LayoutSpec，供模板渲染丝带角标 |
 | 1.3.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | icon/丝带角落冲突避免：丝带在右上角时，自动将 top-right icon 切换到 bottom-left |
 | 1.4.0   | 2026-06-02 | Gemini_3.5_Flash_planning    | 修正 LayoutSpec 的 canvas_height 为 6:7 比例 (1260px) |
+| 1.5.0   | 2026-07-31 | Codex                         | 支持专属主视觉图层与标题位置，主视觉存在时移除无关装饰图标 |
 """
 
 from typing import Dict, Any, List
@@ -32,6 +33,10 @@ class LayoutComposer:
         # 确定 badge 文本：如果 payload 指定了 category，则使用 category，否则使用默认语义默认值
         category = payload.get("category", "")
         badge = category if category else signal.default_badge
+        visual_asset_path = str(payload.get("visual_asset_path", "") or "").strip()
+        headline_position = str(payload.get("headline_position", "center") or "center").strip()
+        if headline_position not in {"center", "upper_left"}:
+            headline_position = "center"
         
         # 组装 layout_spec
         layout_spec = {
@@ -42,6 +47,10 @@ class LayoutComposer:
             "title": title,
             "subtitle": subtitle,
             "badge": badge,
+            "style_id": signal.id,
+            "visual_asset_path": visual_asset_path,
+            "has_visual_asset": bool(visual_asset_path),
+            "headline_position": headline_position,
             
             # 主题视觉属性
             "accent_color": theme_resolved["accent_color"],
@@ -66,6 +75,8 @@ class LayoutComposer:
                 else signal.metaphor_placement
             ),
             
+            "show_metaphor": not bool(visual_asset_path),
+
             # [Gemini_2.5_Pro_planning] v1.1.0 模板变体选择
             # rules.json 中每条规则可指定 template_variant 字段
             # 可选值：'cover'（默认）/ 'cover_minimal' / 'cover_drama'
