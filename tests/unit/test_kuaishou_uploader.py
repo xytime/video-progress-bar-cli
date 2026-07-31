@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from scripts.kuaishou_uploader import (
+    EXIT_BANNED,
     EXIT_LOGIN_REQUIRED,
     EXIT_NOT_CALIBRATED,
     KUAISHOU_VIDEO_INPUT_SELECTOR,
@@ -28,6 +29,7 @@ from scripts.kuaishou_uploader import (
     MANAGEMENT_UNDER_REVIEW,
     is_creator_publish_url,
     is_login_required,
+    is_account_banned_text,
     prepare_kuaishou_cover_upload_file,
     run_uploader,
     verify_submission_in_management,
@@ -50,6 +52,13 @@ def test_login_detection_includes_embedded_passport_and_landing_page():
         frame_urls=["https://passport.kuaishou.com/pc/account/login/"],
     )
     assert not is_login_required("https://cp.kuaishou.com/article/publish/video", "上传视频")
+
+
+def test_account_ban_is_not_login_required_or_publish_success():
+    banned_text = "TA\n账号已被封禁\n该账号因违规操作已受到限制，无法访问创作者中心"
+
+    assert is_account_banned_text(banned_text)
+    assert not is_login_required("https://cp.kuaishou.com/profile", banned_text)
 
 
 def test_submission_requires_explicit_success_evidence():
@@ -234,6 +243,15 @@ def test_verify_only_maps_review_state_without_uploading():
         return_value=MANAGEMENT_UNDER_REVIEW,
     ):
         assert verify_submission_in_management(page, "测试文案") == 6
+
+
+def test_verify_only_maps_account_banned_state_without_uploading():
+    page = MagicMock()
+    with patch(
+        "scripts.kuaishou_uploader.wait_for_management_submission_state",
+        return_value="BANNED",
+    ):
+        assert verify_submission_in_management(page, "测试文案") == EXIT_BANNED
 
 
 def test_automatic_upload_fast_fails_when_login_is_required(tmp_path: Path):

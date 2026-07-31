@@ -26,11 +26,26 @@
 | 3.0.0   | 2026-07-29 | Codex                               | 快捷登录后自动确认“视频号创作平台申请使用昵称、头像”的允许授权，单手机无需自扫二维码 |
 | 3.1.0   | 2026-07-29 | Codex                               | Playwright 页面/浏览器被关闭时返回 UNCONFIRMED(3)，避免后台裸 traceback 与误判发布成功 |
 | 3.2.0   | 2026-07-29 | Codex                               | 自定义封面改为发布硬门禁：仅操作封面预览专属弹层，确认后必须验证持久化证据 |
+| 3.3.0   | 2026-07-30 | Codex                               | 封面门禁要求预览实际变化且平台确认成功，拒绝仅凭 toast 放行 |
+| 3.4.0   | 2026-07-30 | Codex                               | 封面预览验证比较卡片内全部图片来源，避免首张视频预览遮蔽真实封面变化 |
+| 3.5.0   | 2026-07-30 | Codex                               | 图片来源未变时比较封面卡片视觉指纹，兼容平台以同一图片地址刷新封面 |
+| 3.6.0   | 2026-07-30 | Codex                               | 封面来源同时读取 img 与 CSS 背景图，适配视频号预览的背景图渲染 |
+| 3.7.0   | 2026-07-30 | Codex                               | 增加仅命令行启用的人工视觉核验覆写，保留截图且不放宽自动发布门禁 |
+| 3.7.1   | 2026-07-30 | Codex                               | 人工覆写复用封面截图时刻的成功提示，避免 toast 消退后误拒绝已核验操作 |
+| 3.7.2   | 2026-07-30 | Codex                               | 覆写以确认点击、弹层关闭和留存截图为依据，适配视觉层 toast 不可读场景 |
+| 3.7.3   | 2026-07-30 | Codex                               | 发表跳转后等待作品列表加载再截图，避免空白加载页被误作发布后证据 |
+| 3.7.4   | 2026-07-30 | Codex                               | 封面预览生成中等待可见编辑入口，避免隐藏提示被误当作编辑按钮 |
+| 3.7.5   | 2026-07-30 | Codex                               | 编辑弹层未立即出现时等待预览图生成完成并重试同一可见入口 |
+| 3.7.6   | 2026-07-31 | Codex                               | 复用确认后即时捕获的封面成功提示，避免 toast 消退导致预览已更新却误拦截 |
+| 3.7.7   | 2026-07-31 | Codex                               | 确认封面后等待保存中的弹层关闭，避免 2 秒固定等待过早判定失败 |
+| 3.7.8   | 2026-07-31 | Codex                               | 直接读取可见封面成功 toast，避免正文同步滞后造成假失败 |
+| 3.7.9   | 2026-07-31 | Codex                               | 视频上传超时即中止并保留证据，禁止未完成上传继续进入发表流程 |
 """
 
 import os
 import sys
 import argparse
+import hashlib
 import logging
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -105,40 +120,112 @@ def _find_wechat_cover_dialog(page):
     return None
 
 
-def _wechat_cover_preview_signature(container):
-    """读取封面预览图片地址，用于确认提交后卡片确有变化。"""
+def _wait_for_wechat_cover_dialog_to_close(page, attempts: int = 20) -> bool:
+    """等待平台保存封面并关闭编辑弹层，避免固定短等待误判。"""
+    for _ in range(attempts):
+        if not _find_wechat_cover_dialog(page):
+            return True
+        page.wait_for_timeout(1_000)
+    return not _find_wechat_cover_dialog(page)
+
+
+def _wechat_cover_preview_signatures(container) -> frozenset[str]:
+    """读取封面卡片内图片与背景图地址，覆盖视频号的两种预览渲染。"""
+    signatures: set[str] = set()
     try:
-        images = container.locator("img")
-        for index in range(images.count()):
-            source = images.nth(index).get_attribute("src")
-            if source:
-                return source
+        media_sources = container.locator("*").evaluate_all(
+            """elements => elements.flatMap(element => {
+                const sources = [];
+                if (element instanceof HTMLImageElement && element.currentSrc) {
+                    sources.push(`img:${element.currentSrc}`);
+                }
+                const background = getComputedStyle(element).backgroundImage;
+                if (background && background !== 'none') {
+                    sources.push(`background:${background}`);
+                }
+                return sources;
+            })"""
+        )
+        signatures.update(source for source in media_sources if source)
     except Exception as exc:
         logger.debug("Unable to read WeChat cover preview signature: %s", exc)
-    return None
+    return frozenset(signatures)
 
 
-def _is_wechat_cover_applied(page, cover_card, before_signature: str | None) -> bool:
-    """确认封面弹层已关闭，且页面给出了成功提示或封面预览确实变化。"""
+def _wechat_cover_preview_visual_signature(container) -> str | None:
+    """对可见封面卡片取视觉指纹，作为同 URL 刷新场景的受限兜底。"""
+    try:
+        return hashlib.sha256(container.screenshot()).hexdigest()
+    except Exception as exc:
+        logger.debug("Unable to capture WeChat cover preview visual signature: %s", exc)
+        return None
+
+
+def _is_wechat_cover_applied(
+    page,
+    cover_card,
+    before_signatures: frozenset[str],
+    before_visual_signature: str | None,
+    success_marker_observed: bool = False,
+) -> bool:
+    """确认封面弹层关闭、预览实际变化且本轮操作出现平台确认。"""
     if _find_wechat_cover_dialog(page):
         logger.error("Cover editor remains visible after confirmation.")
         return False
-    after_signature = _wechat_cover_preview_signature(cover_card)
-    preview_changed = bool(before_signature and after_signature and before_signature != after_signature)
+    after_signatures = _wechat_cover_preview_signatures(cover_card)
+    after_visual_signature = _wechat_cover_preview_visual_signature(cover_card)
+    source_changed = bool(after_signatures - before_signatures)
+    visual_changed = bool(
+        before_visual_signature
+        and after_visual_signature
+        and before_visual_signature != after_visual_signature
+    )
+    preview_changed = source_changed or visual_changed
     try:
         page_text = page.locator("body").inner_text(timeout=3_000)
     except Exception:
         page_text = ""
-    success_marker = any(marker in page_text for marker in ("封面已更新", "封面修改成功", "封面上传成功"))
-    if not (success_marker or preview_changed):
-        logger.error("No persisted WeChat cover evidence after confirmation.")
+    success_marker = success_marker_observed or any(
+        marker in page_text
+        for marker in ("封面已更新", "封面修改成功", "封面上传成功")
+    )
+    if not preview_changed:
+        logger.error(
+            "WeChat cover preview did not change after confirmation (before=%d, after=%d, visual_changed=%s).",
+            len(before_signatures),
+            len(after_signatures),
+            visual_changed,
+        )
+        return False
+    if not success_marker:
+        logger.error("WeChat did not show a cover-update success marker after confirmation.")
         return False
     logger.info(
-        "WeChat cover application verified (success_marker=%s, preview_changed=%s).",
+        "WeChat cover application verified (success_marker=%s, source_changed=%s, visual_changed=%s).",
         success_marker,
-        preview_changed,
+        source_changed,
+        visual_changed,
     )
     return True
+
+
+def _has_wechat_cover_success_marker(page) -> bool:
+    """读取平台明确的封面更新提示，供人工视觉核验覆写复用。"""
+    markers = ("封面已更新", "封面修改成功", "封面上传成功")
+    # 微信的短暂 toast 有时已绘制到页面，但尚未进入 body.inner_text()。
+    # 先直接查询可见文本，随后再保留正文兜底，避免把真实保存误判为失败。
+    for marker in markers:
+        try:
+            toast = page.locator(f"text={marker}")
+            if toast.count() > 0 and toast.last.is_visible():
+                return True
+        except Exception:
+            continue
+    try:
+        page_text = page.locator("body").inner_text(timeout=3_000)
+    except Exception:
+        return False
+    return any(marker in page_text for marker in markers)
 
 
 def _stamp_login_success(state_file: Path) -> None:
@@ -480,6 +567,7 @@ def run_uploader(
     relogin: bool = False,       # [Claude_Opus_4.8] 强制重登：忽略现有会话→走登录页出二维码（成功才覆盖 state）
     fail_fast_login: bool = False,  # 自动管线使用：登录失效立即返回，不等待二维码
     evidence_dir: str = None,
+    cover_manually_verified: bool = False,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -827,7 +915,10 @@ def run_uploader(
                     break
             logger.info(f"Still uploading... ({i+1}/60)")
         if not upload_finished:
-            logger.warning("Upload verification timed out (5 min). Proceeding anyway.")
+            logger.error("Upload verification timed out (5 min). Stopping before copy, cover, and publish.")
+            _capture_wechat_evidence(page, evidence_root, "upload_timeout")
+            browser.close()
+            return 1
 
         # ── 4. 填写视频文案/描述 (等上传完成页面稳定后再填) ────────────
         logger.info("Writing copy to description field...")
@@ -992,6 +1083,8 @@ def run_uploader(
         if cover_abs:
             logger.info(f"Uploading cover: {cover_abs}")
             cover_set = False
+            cover_success_marker = False
+            cover_confirmed = False
 
             # ── Strategy A: 直接 Hover 封面缩略图，等"编辑"按钮浮现后点击（正确流程）──
             try:
@@ -1002,24 +1095,64 @@ def run_uploader(
                         if card_container.count() == 0:
                             continue
                         cover_card = card_container.first
-                        before_signature = _wechat_cover_preview_signature(cover_card)
+                        before_signatures = _wechat_cover_preview_signatures(cover_card)
+                        before_visual_signature = _wechat_cover_preview_visual_signature(cover_card)
                         cover_card.hover()
                         page.wait_for_timeout(1000)
 
-                        edit_btn = cover_card.locator("text=编辑")
-                        if edit_btn.count() == 0:
-                            edit_btn = cover_card.locator("xpath=..").locator("text=编辑")
-                        if edit_btn.count() == 0:
+                        edit_btn = None
+                        for wait_attempt in range(30):
+                            for edit_root in (cover_card, cover_card.locator("xpath=..")):
+                                candidates = edit_root.locator("text=编辑")
+                                for index in range(candidates.count()):
+                                    candidate = candidates.nth(index)
+                                    if candidate.is_visible():
+                                        edit_btn = candidate
+                                        break
+                                if edit_btn:
+                                    break
+                            if edit_btn:
+                                break
+                            logger.info("Cover preview is not editable yet (wait %ss/30s).", wait_attempt + 1)
+                            page.wait_for_timeout(1000)
+                        if not edit_btn:
+                            logger.warning("Cover preview did not become editable within 30s.")
                             continue
 
-                        logger.info(f"Found 编辑 button under: {card_sel}. Clicking...")
-                        edit_btn.first.click(force=True)
+                        logger.info(f"Found visible 编辑 button under: {card_sel}. Clicking...")
+                        edit_btn.click(force=True)
                         page.wait_for_timeout(2000)
 
                         cover_dialog = _find_wechat_cover_dialog(page)
                         if not cover_dialog:
-                            logger.warning("Cover editor did not open from the cover preview entry.")
-                            continue
+                            logger.info("Cover editor did not open yet; waiting for preview generation before retrying.")
+                            for retry_attempt in range(30):
+                                page.wait_for_timeout(1000)
+                                try:
+                                    body_text = page.locator("body").inner_text(timeout=1_000)
+                                except Exception:
+                                    body_text = ""
+                                if "预览图生成中" in body_text:
+                                    continue
+                                cover_card.hover()
+                                retry_buttons = cover_card.locator("text=编辑")
+                                retry_button = None
+                                for index in range(retry_buttons.count()):
+                                    candidate = retry_buttons.nth(index)
+                                    if candidate.is_visible():
+                                        retry_button = candidate
+                                        break
+                                if not retry_button:
+                                    continue
+                                retry_button.click(force=True)
+                                page.wait_for_timeout(1000)
+                                cover_dialog = _find_wechat_cover_dialog(page)
+                                if cover_dialog:
+                                    logger.info("Cover editor opened after preview generation wait (%ss).", retry_attempt + 1)
+                                    break
+                            if not cover_dialog:
+                                logger.warning("Cover editor did not open from the cover preview entry.")
+                                continue
 
                         # Step 1: 点击"上传封面"，触发 WeChat 创建隐藏 input
                         upload_btn = None
@@ -1115,9 +1248,18 @@ def run_uploader(
                             logger.warning("Cover confirm button not found after 20s polling — cover may not be applied!")
                             _capture_wechat_evidence(page, evidence_root, "cover_failed_confirm")
                         else:
-                            page.wait_for_timeout(2000)
+                            if not _wait_for_wechat_cover_dialog_to_close(page):
+                                logger.warning("Cover editor remained visible after save wait.")
                             _capture_wechat_evidence(page, evidence_root, "cover_after_confirm")
-                            cover_set = _is_wechat_cover_applied(page, cover_card, before_signature)
+                            cover_confirmed = confirmed
+                            cover_success_marker = _has_wechat_cover_success_marker(page)
+                            cover_set = _is_wechat_cover_applied(
+                                page,
+                                cover_card,
+                                before_signatures,
+                                before_visual_signature,
+                                success_marker_observed=cover_success_marker,
+                            )
                         break  # 成功处理一张卡片即退出循环
                     except Exception as e_card:
                         logger.warning(f"Cover strategy A failed for card \'{card_sel}\': {e_card}")
@@ -1126,10 +1268,16 @@ def run_uploader(
                 logger.warning(f"Cover Strategy A (hover+edit) failed: {e_a}")
 
             if not cover_set:
-                _capture_wechat_evidence(page, evidence_root, "cover_not_applied")
-                logger.error("Custom cover was not verified. Stopping before publish to avoid a default-cover post.")
-                browser.close()
-                return 1
+                if cover_manually_verified and cover_confirmed and not _find_wechat_cover_dialog(page):
+                    logger.warning(
+                        "Using operator-verified WeChat cover override after confirmed close; evidence has been retained."
+                    )
+                    cover_set = True
+                else:
+                    _capture_wechat_evidence(page, evidence_root, "cover_not_applied")
+                    logger.error("Custom cover was not verified. Stopping before publish to avoid a default-cover post.")
+                    browser.close()
+                    return 1
 
         # ── 6. 原创声明 ───────────────────────────────────────────────────────
         logger.info("Checking original declaration checkbox...")
@@ -1666,6 +1814,7 @@ def run_uploader(
             page.wait_for_url("**/post/list**", timeout=15000)
             redirected = True
             logger.info("Confirmed: Successfully navigated to post list. Publish complete.")
+            page.wait_for_timeout(5000)
             _capture_wechat_evidence(page, evidence_root, "post_list_after_submission")
         except Exception:
             page_content = page.content()  # 未跳转 → 取页面文本走降级判据
@@ -1684,6 +1833,8 @@ def main():
     parser.add_argument("--title-file",    help="Path to short title text file (6-16 chars, WeChat platform limit)")
     parser.add_argument("--cover",         help="Path to cover image JPEG file")
     parser.add_argument("--evidence-dir",  help="Directory for cover and post-list evidence")
+    parser.add_argument("--cover-manually-verified", action="store_true",
+                        help="Allow one operator-verified cover submission after retaining evidence")
     parser.add_argument("--category-file", help="Path to category text file")
     parser.add_argument("--collection",    help="Custom collection/playlist name to associate with this video")
     parser.add_argument("--state",  default="output/wechat_state.json",
@@ -1713,6 +1864,7 @@ def main():
             relogin       = args.relogin,
             fail_fast_login = args.fail_fast_login,
             evidence_dir = args.evidence_dir,
+            cover_manually_verified = args.cover_manually_verified,
         )
     except Exception as exc:
         if not _is_playwright_target_closed(exc):

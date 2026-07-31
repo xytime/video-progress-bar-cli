@@ -35,6 +35,7 @@
 | 1.11.5 | 2026-07-26 | Codex | 快手封面副本改为 9:16 安全画布，降低发布后缩略图裁剪风险 |
 | 1.11.6 | 2026-07-26 | Codex | 封面入口优先点击真实预览卡片，并用预览哈希校验封面是否真正替换 |
 | 1.11.7 | 2026-07-26 | Codex | 封面弹窗确认后也必须通过预览哈希校验，避免按钮点击误报 |
+| 1.12.0 | 2026-07-29 | Codex | 识别快手账号封禁页并返回独立退出码，避免审核回查误入已发布路径 |
 """
 
 from __future__ import annotations
@@ -109,9 +110,11 @@ EXIT_UNCONFIRMED = 3
 EXIT_NOT_CALIBRATED = 4
 EXIT_UPLOADED_FOR_CALIBRATION = 5
 EXIT_UNDER_REVIEW = 6
+EXIT_BANNED = 7
 MANAGEMENT_PUBLISHED = "PUBLISHED"
 MANAGEMENT_UNDER_REVIEW = "UNDER_REVIEW"
 MANAGEMENT_VISIBLE_UNCONFIRMED = "VISIBLE_UNCONFIRMED"
+MANAGEMENT_BANNED = "BANNED"
 
 
 def is_creator_publish_url(url: str) -> bool:
@@ -126,6 +129,13 @@ def is_login_required(url: str, visible_text: str = "", frame_urls: Iterable[str
     if any("passport.kuaishou.com" in candidate or "/login" in candidate for candidate in candidates):
         return True
     return "立即登录" in (visible_text or "") and "快手创作者服务平台" in (visible_text or "")
+
+
+def is_account_banned_text(visible_text: str) -> bool:
+    """识别创作者中心封禁页；封禁不是登录失效，也不是发布成功。"""
+    text = visible_text or ""
+    banned_markers = ("账号已被封禁", "无法访问创作者中心", "封禁原因及申诉")
+    return any(marker in text for marker in banned_markers)
 
 
 def is_confirmed_submission(*, redirected: bool, page_text: str, draft: bool) -> bool:
@@ -672,6 +682,9 @@ def wait_for_management_submission_state(
                 page_text = page.locator("body").inner_text(timeout=3_000)
             except Exception:
                 page_text = ""
+            if is_account_banned_text(page_text):
+                logger.error("快手账号已被封禁，无法核验作品管理状态")
+                return MANAGEMENT_BANNED
             state = get_management_submission_state(page_text, copy_text)
             if artifact_dir:
                 _capture_management_evidence(
@@ -1011,6 +1024,9 @@ def verify_submission_in_management(
     if submission_state == MANAGEMENT_UNDER_REVIEW:
         logger.info("快手作品管理显示本次作品仍在审核中")
         return EXIT_UNDER_REVIEW
+    if submission_state == MANAGEMENT_BANNED:
+        logger.error("快手账号已被封禁，停止本次核验")
+        return EXIT_BANNED
     logger.warning("快手作品管理未能确认本次作品状态")
     return EXIT_UNCONFIRMED
 
@@ -1061,6 +1077,13 @@ def run_uploader(
                 page.wait_for_load_state("networkidle", timeout=10_000)
             except Exception:
                 pass
+            try:
+                page_text = page.locator("body").inner_text(timeout=3_000)
+            except Exception:
+                page_text = ""
+            if is_account_banned_text(page_text):
+                logger.error("快手账号已被封禁，无法访问创作者中心")
+                return EXIT_BANNED
 
             if _page_login_required(page):
                 if fail_fast_login:

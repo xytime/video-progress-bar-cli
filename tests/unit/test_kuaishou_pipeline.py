@@ -10,6 +10,7 @@
 | 1.4.0 | 2026-07-25 | Codex | 覆盖快手平台专用短文案优先级 |
 | 1.5.0 | 2026-07-27 | Codex | 覆盖快手历史补发命中审查时取消当前任务并继续下一条 |
 | 1.6.0 | 2026-07-27 | Codex | 浏览器上传衔接夹具显式 mock 审查通过，避免 MagicMock DB 触发严格模式异常 |
+| 1.7.0 | 2026-07-29 | Codex | 覆盖快手账号封禁退出码落 BANNED，防止审核回查误标发布 |
 """
 
 import subprocess
@@ -25,6 +26,10 @@ def _manager_with_assets(tmp_path: Path) -> PipelineManager:
     manager._OUT_DIR = tmp_path
     (tmp_path / "video-id_vertical.mp4").write_bytes(b"video")
     (tmp_path / "video-id_copy.txt").write_text("测试文案", encoding="utf-8")
+    (tmp_path / "video-id.ass").write_text(
+        "[Script Info]\nTitle: test\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,safe subtitle text\n",
+        encoding="utf-8",
+    )
     manager.db = MagicMock()
     manager.send_telegram_msg = MagicMock()
     manager._check_censorship = MagicMock(return_value=False)
@@ -45,7 +50,26 @@ def test_claimed_publication_runs_explicit_publish_and_marks_published(tmp_path:
     assert "--calibrate-after-upload" in command
     assert "--prepare-description" in command
     assert "--publish" in command
-    manager.db.update_kuaishou_publication_state.assert_called_once_with(7, "PUBLISHED")
+    manager.db.update_kuaishou_publication_state.assert_called_once_with(
+        7,
+        "PUBLISHED",
+        error_message="快手作品管理已确认本次作品为已发布。",
+    )
+
+
+def test_claimed_publication_maps_account_banned_exit_to_banned(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    error = subprocess.CalledProcessError(7, ["kuaishou"], stderr="账号已被封禁")
+    manager._run_tracked = MagicMock(side_effect=error)
+
+    assert not manager._publish_claimed_kuaishou_publication(
+        {"id": 71, "youtube_id": "video-id", "slice_index": 0}
+    )
+
+    manager.db.update_kuaishou_publication_state.assert_called_once()
+    args, kwargs = manager.db.update_kuaishou_publication_state.call_args
+    assert args == (71, "BANNED")
+    assert "账号已被封禁" in kwargs["error_message"]
 
 
 def test_kuaishou_prefers_platform_specific_copy_when_present(tmp_path: Path):
@@ -101,6 +125,10 @@ def test_history_migration_continues_after_canceling_missing_assets(tmp_path: Pa
         assert manager.db.add_video(yid, "测试视频", "test-channel", score=80)
         manager.db.update_video_status(yid, "PUBLISHED")
         (tmp_path / f"{yid}_vertical.mp4").write_bytes(b"video")
+        (tmp_path / f"{yid}.ass").write_text(
+            "[Script Info]\nTitle: test\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,safe subtitle text\n",
+            encoding="utf-8",
+        )
     (tmp_path / "ready-history_copy.txt").write_text("测试文案", encoding="utf-8")
     missing = manager.db.create_kuaishou_publication(
         "missing-copy", "7" * 64, str(tmp_path / "missing-copy_vertical.mp4"), source_kind="HISTORY"
@@ -137,6 +165,10 @@ def test_history_migration_continues_after_censorship_cancel(tmp_path: Path):
         manager.db.update_video_status(yid, "PUBLISHED")
         (tmp_path / f"{yid}_vertical.mp4").write_bytes(b"video")
         (tmp_path / f"{yid}_copy.txt").write_text("测试文案", encoding="utf-8")
+        (tmp_path / f"{yid}.ass").write_text(
+            "[Script Info]\nTitle: test\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,safe subtitle text\n",
+            encoding="utf-8",
+        )
     blocked = manager.db.create_kuaishou_publication(
         "blocked-history", "9" * 64, str(tmp_path / "blocked-history_vertical.mp4"), source_kind="HISTORY"
     )
@@ -184,7 +216,33 @@ def test_review_reconciliation_only_checks_management_and_marks_confirmed_publis
     assert "--verify-only" in command
     assert "--publish" not in command
     assert "--video" not in command
-    manager.db.update_kuaishou_publication_state.assert_called_once_with(9, "PUBLISHED")
+    manager.db.update_kuaishou_publication_state.assert_called_once_with(
+        9,
+        "PUBLISHED",
+        error_message="快手作品管理已确认本次作品为已发布。",
+    )
+
+
+def test_review_reconciliation_maps_account_banned_exit_to_banned(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    manager.db.get_kuaishou_publications_by_states.return_value = [
+        {"id": 91, "youtube_id": "video-id", "slice_index": 0}
+    ]
+    manager._run_tracked = MagicMock(
+        side_effect=subprocess.CalledProcessError(7, ["kuaishou"], stderr="账号已被封禁")
+    )
+
+    previous = settings.enable_kuaishou_browser_publishing
+    settings.enable_kuaishou_browser_publishing = True
+    try:
+        assert manager.reconcile_kuaishou_under_review() == 0
+    finally:
+        settings.enable_kuaishou_browser_publishing = previous
+
+    manager.db.update_kuaishou_publication_state.assert_called_once()
+    args, kwargs = manager.db.update_kuaishou_publication_state.call_args
+    assert args == (91, "BANNED")
+    assert "账号已被封禁" in kwargs["error_message"]
 
 
 def test_daily_job_does_not_run_history_migration(tmp_path: Path):

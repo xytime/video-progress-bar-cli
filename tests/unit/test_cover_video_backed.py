@@ -4,6 +4,8 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-29 | Codex | 验证真实成片头部被保留、字幕区不进入 6:7 封面 |
+| 1.1.0 | 2026-07-30 | Codex | 验证配音角标仅由受限音轨版本字段决定 |
+| 1.2.0 | 2026-07-31 | Codex | 验证普通话译制彩带角标完整绘制 |
 """
 
 from pathlib import Path
@@ -14,6 +16,7 @@ from PIL import Image
 
 from cover.creative_brief import build_cover_creative_brief
 from scripts import cover_generator
+from video_processing.pipeline_manager import _cover_audio_edition
 
 
 def test_video_backed_cover_draws_header_and_excludes_subtitle_area(tmp_path, monkeypatch):
@@ -55,13 +58,41 @@ def test_video_backed_cover_applies_creative_brief_colors(tmp_path, monkeypatch)
         assert red > green * 1.6 and red > blue * 1.6
 
 
+def test_edition_label_is_absent_without_confirmed_mandarin_dub():
+    assert cover_generator.resolve_edition_label({"audio_edition": "original_audio_subtitled"}) == ""
+    assert cover_generator.resolve_edition_label({"audio_edition": "untrusted_free_text"}) == ""
+    assert cover_generator.resolve_edition_label({"audio_edition": "mandarin_dubbed"}) == "普通话译制"
+
+
+def test_edition_label_draws_only_for_confirmed_mandarin_dub():
+    image = Image.new("RGB", (1080, 1260), "black")
+
+    cover_generator._draw_edition_label(image, "")
+    assert image.getpixel((1000, 40)) == (0, 0, 0)
+
+    cover_generator._draw_edition_label(image, "普通话译制")
+    red, green, blue = image.getpixel((842, 52))
+    assert red > 100 and red > green * 2 and red > blue * 1.5
+    bbox = image.getbbox()
+    assert bbox is not None
+    assert bbox[0] >= 810 and bbox[2] <= 1080
+
+
+def test_cover_audio_edition_only_accepts_providers_that_activate_tts():
+    assert _cover_audio_edition(None) == "original_audio_subtitled"
+    assert _cover_audio_edition("unknown-provider") == "original_audio_subtitled"
+    assert _cover_audio_edition("Edge") == "original_audio_subtitled"
+    assert _cover_audio_edition("edge") == "mandarin_dubbed"
+    assert _cover_audio_edition("cosyvoice") == "mandarin_dubbed"
+
+
 def test_content_aware_cli_passes_brief_to_video_renderer_and_persists_it(tmp_path, monkeypatch):
     output = tmp_path / "cover.jpg"
     brief_output = tmp_path / "cover_brief.json"
     captured = {}
 
-    def fake_render(video_path, output_path, *, title, brief):
-        captured.update(video_path=video_path, output_path=output_path, title=title, brief=brief)
+    def fake_render(video_path, output_path, *, title, brief, edition_label):
+        captured.update(video_path=video_path, output_path=output_path, title=title, brief=brief, edition_label=edition_label)
 
     monkeypatch.setattr(cover_generator, "generate_video_backed_cover", fake_render)
     monkeypatch.setattr(
@@ -80,4 +111,5 @@ def test_content_aware_cli_passes_brief_to_video_renderer_and_persists_it(tmp_pa
     cover_generator.main()
 
     assert captured["brief"]["style_id"] == "market_shock"
+    assert captured["edition_label"] == ""
     assert json.loads(brief_output.read_text(encoding="utf-8"))["badge"] == "市场警报"

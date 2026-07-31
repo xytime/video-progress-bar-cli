@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音账本去重、迁移限额和审核状态 |
 | 1.1.0 | 2026-07-25 | Codex | 覆盖提交后未确认的遗留失败不会被自动重投 |
+| 1.2.0 | 2026-07-29 | Codex | 覆盖含未确认反证的抖音 PUBLISHED 写入会保守降级且不参与去重 |
 """
 
 from pathlib import Path
@@ -32,6 +33,27 @@ def test_douyin_ledger_only_deduplicates_assets_after_published(tmp_path: Path):
 
     assert duplicate["id"] == first["id"]
     assert db.get_douyin_publication("video-one")["state"] == "PUBLISHED"
+    assert db.get_douyin_publication("video-two")["state"] == "QUEUED"
+
+
+def test_douyin_published_with_unconfirmed_evidence_is_not_success_dedup(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "video-one")
+    _add_video(db, "video-two")
+    digest = "8" * 64
+
+    first = db.create_douyin_publication("video-one", digest, "/tmp/one.mp4", source_kind="HISTORY")
+    assert db.update_douyin_publication_state(
+        first["id"],
+        "PUBLISHED",
+        error_message="抖音已接受发布提交，当前按审核中处理；等待作品管理回查校准后确认最终发布。",
+    )
+    second = db.create_douyin_publication("video-two", digest, "/tmp/two.mp4", source_kind="HISTORY")
+
+    first_row = db.get_douyin_publication("video-one")
+    assert first_row["state"] == "UNDER_REVIEW"
+    assert first_row["published_at"] is None
+    assert second["id"] != first["id"]
     assert db.get_douyin_publication("video-two")["state"] == "QUEUED"
 
 

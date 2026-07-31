@@ -70,6 +70,7 @@ def test_douyin_preview_excludes_active_terminal_and_blacklisted_candidates(tmp_
     _add_video(db, "ready-speech", "A full interview with the CEO")
     _add_video(db, "under-review", "Keynote remarks")
     _add_video(db, "retryable", "Lecture on economics")
+    _add_video(db, "canceled", "Canceled keynote remarks")
     _add_video(db, "blocked", "Full speech blocked")
     assert db.add_to_blacklist("blocked", "policy")
 
@@ -81,6 +82,10 @@ def test_douyin_preview_excludes_active_terminal_and_blacklisted_candidates(tmp_
         "retryable", "2" * 64, "/tmp/retry.mp4", source_kind="HISTORY"
     )
     assert db.update_douyin_publication_state(retryable["id"], "RETRYABLE_FAILED")
+    canceled = db.create_douyin_publication(
+        "canceled", "3" * 64, "/tmp/canceled.mp4", source_kind="HISTORY"
+    )
+    assert db.update_douyin_publication_state(canceled["id"], "CANCELED")
 
     candidates = db.get_platform_backfill_preview_candidates(
         "douyin",

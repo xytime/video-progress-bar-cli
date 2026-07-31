@@ -71,7 +71,19 @@
 | 3.39.0  | 2026-07-27 | Codex                               | 历史迁移限额为 0 时硬停抖音历史回填，审核回查跳过 HISTORY 记录但保留 NEW 新片发布 |
 | 3.40.0  | 2026-07-27 | Codex                               | 平台告警格式抽到共享 PlatformEvent，管线与 Telegram 助手 bot 共用同一事件语义 |
 | 3.41.0  | 2026-07-28 | Codex                               | 新增公开视频提交窗口守卫，视频号/抖音/快手仅在黄金时段触发新提交 |
+| 3.42.0  | 2026-07-29 | Codex                               | 平台上传前字幕审查读取热目录与 original_video 归档；均读不到才 fail-closed，避免历史补发漏审 |
+| 3.43.0  | 2026-07-29 | Codex                               | 抖音历史补发遇到本地产物缺失时取消该候选并继续补发后续视频，避免单条旧素材卡住整批 |
+| 3.44.0  | 2026-07-29 | Codex                               | 抖音历史补发每领取一条即发送实时进度：当前视频、今日已领取、剩余额度和待发队列 |
+| 3.44.1  | 2026-07-29 | Codex                               | 抖音发布将封面列为强制投递产物，缺封面时不调用上传器，避免半成品作品被提交 |
+| 3.44.2  | 2026-07-29 | Codex                               | 抖音 UNDER_REVIEW 回查遇到作品管理未校准时转 UNCERTAIN，避免每轮重复打开后台刷 exit 4 |
+| 3.44.3  | 2026-07-29 | Codex                               | 快手发布和回查识别账号封禁为 BANNED，发布确认写入明确证明备注 |
+| 3.44.4  | 2026-07-29 | Codex                               | 区分抖音提交前闸门失败和提交后未确认，避免把未提交任务误标为 UNCERTAIN |
+| 3.44.5  | 2026-07-29 | Codex                               | 抖音浏览器上传器正常返回仅记审核中，作品管理页明确已发布才允许写 PUBLISHED |
+| 3.44.6  | 2026-07-29 | Codex                               | 每轮自动补齐最近微信已发布但抖音 NEW 未建账的漏同步项，并按上限连续同步新片 |
 | 3.45.0  | 2026-07-29 | Codex                               | 可选地以已渲染成片、标题和语义策划生成内容贴合封面，默认保持旧封面流程 |
+| 3.45.1  | 2026-07-30 | Codex                               | 视频号封面缺失即停止投递；每次投递保留独立、不可覆盖的封面与发布页面证据 |
+| 3.45.2  | 2026-07-30 | Codex                               | 封面显式携带成片音轨版本；仅真实普通话配音版本允许显示配音角标           |
+| 3.45.3  | 2026-07-31 | Codex                               | 例行发布封面恢复为专门生成图，不再默认从竖版成片截帧                       |
 """
 
 
@@ -97,6 +109,11 @@ from .censorship_service import CensorshipService
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _cover_audio_edition(tts_provider: Any) -> str:
+    """将渲染配置收敛为封面可展示的音轨版本，不猜测未知 provider。"""
+    return "mandarin_dubbed" if tts_provider in {"edge", "cosyvoice"} else "original_audio_subtitled"
 
 # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块级 SIGTERM 信号处理器
 # 当该进程收到 SIGTERM 时，设置此标志位，由主循环在安全点检查并执行清理退出。
@@ -676,8 +693,22 @@ class PipelineManager:
         subtitle_text = ""
         if settings.enable_subtitle_censorship:
             subtitle_text = read_subtitle_text(self._OUT_DIR, yid, slice_index=slice_index)
+            subtitle_source = "output"
+            if not subtitle_text:
+                subtitle_text = read_subtitle_text(self._ORIG_VIDEO_DIR, yid, slice_index=slice_index)
+                subtitle_source = "original_video"
             if subtitle_text:
-                logger.info("[%s] %s上传前审查包含字幕正文（%s chars）", yid, platform, len(subtitle_text))
+                logger.info("[%s] %s上传前审查包含字幕正文（%s chars, source=%s）", yid, platform, len(subtitle_text), subtitle_source)
+            else:
+                reason = f"{platform}上传前内容安全审查缺少可读字幕正文；平台任务已取消，禁止自动投递。"
+                logger.error("[%s] %s", yid, reason)
+                if platform == "快手":
+                    self.db.update_kuaishou_publication_state(publication_id, "CANCELED", error_message=reason)
+                elif platform == "抖音":
+                    self.db.update_douyin_publication_state(publication_id, "CANCELED", error_message=reason)
+                else:
+                    logger.warning("[%s] 未知平台字幕审查缺失，无法更新平台账本：%s", yid, platform)
+                return True
 
         if not self._check_censorship(
             yid,
@@ -772,6 +803,9 @@ class PipelineManager:
                 self.db.update_kuaishou_publication_state(publication_id, "UNDER_REVIEW", error_message=reason)
                 self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Kuaishou\nYouTube ID: {yid}")
                 return True
+            elif exc.returncode == 7:
+                state = "BANNED"
+                reason = "快手账号已被封禁，无法访问创作者中心；停止快手投递并等待人工处理。"
             elif exc.returncode == 3:
                 state = "UNCERTAIN"
                 reason = "快手提交后未能在作品管理确认可见；请先人工核对，勿切换视频。"
@@ -782,7 +816,11 @@ class PipelineManager:
             self.db.update_kuaishou_publication_state(publication_id, state, error_message=reason)
             return False
 
-        self.db.update_kuaishou_publication_state(publication_id, "PUBLISHED")
+        self.db.update_kuaishou_publication_state(
+            publication_id,
+            "PUBLISHED",
+            error_message="快手作品管理已确认本次作品为已发布。",
+        )
         self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Kuaishou\nYouTube ID: {yid}")
         return True
 
@@ -900,6 +938,14 @@ class PipelineManager:
                     logger.info("[%s] 快手作品仍在审核中", yid)
                 elif exc.returncode == 2:
                     logger.warning("[%s] 快手登录态失效，保留审核中状态等待下次核对", yid)
+                elif exc.returncode == 7:
+                    reason = "快手账号已被封禁，无法访问创作者中心；停止快手审核回查。"
+                    logger.error("[%s] %s", yid, reason)
+                    self.db.update_kuaishou_publication_state(
+                        publication_id,
+                        "BANNED",
+                        error_message=reason,
+                    )
                 else:
                     logger.warning("[%s] 快手审核回查未确认状态（exit %s），保留审核中", yid, exc.returncode)
                 continue
@@ -907,7 +953,11 @@ class PipelineManager:
                 logger.debug("Kuaishou review verifier stdout:\n%s", result.stdout)
             if result.stderr:
                 logger.debug("Kuaishou review verifier stderr:\n%s", result.stderr)
-            self.db.update_kuaishou_publication_state(publication_id, "PUBLISHED")
+            self.db.update_kuaishou_publication_state(
+                publication_id,
+                "PUBLISHED",
+                error_message="快手作品管理已确认本次作品为已发布。",
+            )
             self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Kuaishou\nYouTube ID: {yid}")
             reviewed += 1
         return reviewed
@@ -950,14 +1000,18 @@ class PipelineManager:
             return False
         vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
         title_file = self._douyin_title_path(yid, slice_index)
-        if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
+        cover_file = self._resolve_cover_file(yid, slice_index)
+        if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file() or not cover_file:
             reason = (
                 f"抖音投递产物缺失：video={vertical.is_file()} "
-                f"copy={copy_file.is_file()} title={title_file.is_file()}"
+                f"copy={copy_file.is_file()} title={title_file.is_file()} cover={bool(cover_file)}"
             )
             logger.error("[%s] %s", yid, reason)
             state = "CANCELED" if publication.get("source_kind") == "HISTORY" else "RETRYABLE_FAILED"
             self.db.update_douyin_publication_state(publication_id, state, error_message=reason)
+            if publication.get("source_kind") == "HISTORY":
+                logger.warning("[%s] 抖音历史迁移任务已取消，继续处理下一条", yid)
+                return True
             self._halt_douyin_platform(yid, reason, publication=publication, state=state)
             return False
 
@@ -980,10 +1034,8 @@ class PipelineManager:
             "--fail-fast-login",
             "--prepare-description",
             "--publish",
+            "--cover", str(cover_file),
         ]
-        cover_file = self._resolve_cover_file(yid, slice_index)
-        if cover_file:
-            upload_cmd += ["--cover", str(cover_file)]
 
         if not settings.douyin_browser_headless:
             upload_cmd.append("--no-headless")
@@ -1020,8 +1072,11 @@ class PipelineManager:
                 self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\nYouTube ID: {yid}")
                 return True
             elif exc.returncode == 3:
+                state = "RETRYABLE_FAILED"
+                reason = "抖音发布前元信息、封面或自主声明闸门未能确认；本次未提交，修复后可重试。"
+            elif exc.returncode == 7:
                 state = "UNCERTAIN"
-                reason = "抖音提交后未能在作品管理确认可见；请先人工核对，勿切换视频。"
+                reason = "抖音已点击最终发布但未能在作品管理确认可见；请先人工核对，勿切换视频。"
             elif exc.returncode == 4:
                 state = "RETRYABLE_FAILED"
                 reason = "抖音上传器尚未完成页面校准；本次没有触发发布。"
@@ -1033,8 +1088,12 @@ class PipelineManager:
             self._halt_douyin_platform(yid, reason, publication=publication, state=state)
             return False
 
-        self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
-        self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+        self.db.update_douyin_publication_state(
+            publication_id,
+            "UNDER_REVIEW",
+            error_message="抖音浏览器已完成最终提交；等待作品管理页显示已发布后再确认最终成功。",
+        )
+        self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\nYouTube ID: {yid}")
         return True
 
     def _queue_and_publish_new_douyin_video(self, yid: str, slice_index: int = 0) -> bool:
@@ -1098,8 +1157,16 @@ class PipelineManager:
                     f"copy={copy_file.is_file()} title={title_file.is_file()}"
                 )
                 logger.error("[%s] %s", yid, reason)
-                self._halt_douyin_platform(yid, reason, state="CANCELED")
-                return
+                missing_asset_digest = hashlib.sha256(f"douyin-missing-assets:{yid}:{slice_index}".encode()).hexdigest()
+                publication = self.db.create_douyin_publication(
+                    yid,
+                    missing_asset_digest,
+                    str(vertical),
+                    source_kind="HISTORY",
+                    slice_index=slice_index,
+                )
+                self.db.update_douyin_publication_state(publication["id"], "CANCELED", error_message=reason)
+                continue
             self.db.create_douyin_publication(
                 yid,
                 self._sha256_file(vertical),
@@ -1112,9 +1179,38 @@ class PipelineManager:
             claimed = self.db.claim_next_douyin_history_publication(daily_limit=daily_limit)
             if not claimed:
                 return
+            self._notify_douyin_history_progress(claimed, daily_limit)
             if not self._publish_claimed_douyin_publication(claimed):
                 logger.warning("[%s] 抖音历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
                 return
+
+    def _notify_douyin_history_progress(self, publication: Dict[str, Any], daily_limit: int) -> None:
+        """每条抖音历史补发开始前汇报当前篇和队列进度。"""
+        yid = publication.get("youtube_id", "")
+        slice_index = int(publication.get("slice_index") or 0)
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        video = self.db.get_video_by_youtube_id(yid, slice_index) or {}
+        title = video.get("zh_title") or video.get("title") or prefix
+        snapshot = self.db.get_douyin_history_progress_snapshot(daily_limit)
+        claimed_today = int(snapshot.get("claimed_today", 0))
+        queue_ready = int(snapshot.get("queue_ready", 0))
+        remaining_today = int(snapshot.get("remaining_today", 0))
+        logger.info(
+            "[DouyinHistoryProgress] 当前发送 %s；今日已领取 %s/%s；剩余额度 %s；待发队列 %s",
+            prefix,
+            claimed_today,
+            daily_limit,
+            remaining_today,
+            queue_ready,
+        )
+        self.send_telegram_msg(
+            "🚚 <b>Douyin History Progress</b>\n"
+            f"正在发送：{html.escape(prefix)}\n"
+            f"标题：{html.escape(str(title)[:80])}\n"
+            f"今日进度：{claimed_today}/{daily_limit}\n"
+            f"今日剩余额度：{remaining_today}\n"
+            f"待发队列：{queue_ready}"
+        )
 
     def run_douyin_history_migration(self) -> None:
         """供早间定时任务调用：仅迁移抖音历史作品。"""
@@ -1188,6 +1284,19 @@ class PipelineManager:
                     continue
                 elif exc.returncode == 2:
                     reason = "抖音登录态失效，保留审核中状态；停止本轮后续自动回查。"
+                elif exc.returncode == 4:
+                    reason = (
+                        "抖音作品已提交但当前机器尚未完成作品管理回查校准；"
+                        "转为 UNCERTAIN 等待人工核验，避免每轮重复打开创作者中心。"
+                    )
+                    self.db.update_douyin_publication_state(
+                        publication_id,
+                        "UNCERTAIN",
+                        error_message=reason,
+                    )
+                    logger.warning("[%s] %s", yid, reason)
+                    self._halt_douyin_platform(yid, reason, publication=publication, state="UNCERTAIN")
+                    break
                 else:
                     reason = f"抖音审核回查未确认状态（exit {exc.returncode}），保留审核中；停止本轮后续自动回查。"
                 logger.warning("[%s] %s", yid, reason)
@@ -1216,6 +1325,74 @@ class PipelineManager:
             return True
         return self._publish_claimed_douyin_publication(claimed)
 
+    def _queue_missing_douyin_new_publications(self) -> int:
+        """补齐最近微信已发布但抖音 NEW 账本缺失的新片，防止同步入口漏建任务。"""
+        if not settings.enable_douyin_browser_publishing:
+            return 0
+        max_per_run = max(1, int(settings.douyin_new_sync_max_per_run or 1))
+        lookback_hours = max(1, int(settings.douyin_new_sync_lookback_hours or 24))
+        queued = 0
+        for video in self.db.get_unqueued_douyin_new_videos(
+            lookback_hours=lookback_hours,
+            limit=max_per_run,
+        ):
+            yid = video["youtube_id"]
+            slice_index = int(video.get("slice_index") or 0)
+            prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+            vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
+            title_file = self._douyin_title_path(yid, slice_index)
+            cover_file = self._resolve_cover_file(yid, slice_index)
+            if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file() or not cover_file:
+                reason = (
+                    f"抖音 NEW 漏同步产物缺失：video={vertical.is_file()} "
+                    f"copy={copy_file.is_file()} title={title_file.is_file()} cover={bool(cover_file)}"
+                )
+                logger.error("[%s] %s", prefix, reason)
+                self.send_telegram_msg(
+                    "⚠️ <b>Douyin NEW sync skipped</b>\n"
+                    f"YouTube ID: {html.escape(prefix)}\n"
+                    f"Reason: {html.escape(reason)}"
+                )
+                continue
+            self.db.create_douyin_publication(
+                yid,
+                self._sha256_file(vertical),
+                str(vertical),
+                source_kind="NEW",
+                slice_index=slice_index,
+            )
+            queued += 1
+            logger.info("[%s] 已补齐抖音 NEW 同步队列。", prefix)
+        if queued:
+            self.send_telegram_msg(f"🚚 <b>Douyin NEW Sync</b>\n已补齐漏同步队列：{queued} 条")
+        return queued
+
+    def _run_douyin_new_sync(self) -> bool:
+        """按上限同步抖音 NEW 队列；任一失败停止，保留同一视频下轮重试。"""
+        if not settings.enable_douyin_browser_publishing:
+            return True
+        if self._douyin_platform_halted:
+            logger.warning("[DouyinHalt] 已停止本轮抖音新片同步：%s", self._douyin_halt_reason)
+            return False
+        if not self._is_public_publish_window("抖音新片同步"):
+            return True
+        self._queue_missing_douyin_new_publications()
+        max_per_run = max(1, int(settings.douyin_new_sync_max_per_run or 1))
+        for index in range(max_per_run):
+            claimed = self.db.claim_next_douyin_publication("NEW")
+            if not claimed:
+                return True
+            yid = claimed.get("youtube_id", "")
+            logger.info(
+                "[DouyinNewSync] 当前发送 %s；本轮 %s/%s",
+                yid,
+                index + 1,
+                max_per_run,
+            )
+            if not self._publish_claimed_douyin_publication(claimed):
+                logger.warning("[%s] 抖音新片同步未确认成功，停止本轮，保留同一视频供下次重试。", yid)
+                return False
+        return True
 
     def _check_censorship(
         self,
@@ -1735,7 +1912,10 @@ class PipelineManager:
                         "title": cover_title,
                         "subtitle": "",
                         "category": "",
-                        "content_hints": []
+                        "content_hints": [],
+                        # 只能依据本次成片实际启用的 TTS provider 标注版本；
+                        # 原声英文加字幕与未知 provider 都不得出现“译制/配音”角标。
+                        "audio_edition": _cover_audio_edition(video.get("tts_provider")),
                     }
                     subtitle_file = self._OUT_DIR / f"{prefix}_subtitle.txt"
                     
@@ -1793,7 +1973,6 @@ class PipelineManager:
                     cover_cmd = [
                         self._VENV_PYTHON,
                         str(self._PRJ_ROOT / "scripts" / "cover_generator.py"),
-                        "--video", str(vertical),
                         "--payload", json.dumps(cover_payload, ensure_ascii=False),
                         "--output", str(cover_file),
                     ]
@@ -1824,6 +2003,13 @@ class PipelineManager:
                 if not self._is_public_publish_window("微信", yid, slice_index):
                     self.db.update_video_status(yid, "PENDING", slice_index=slice_index)
                     logger.info("[%s] 视频号成片已就绪，等待公开视频提交窗口。", prefix)
+                    return
+
+                if not cover_file.is_file():
+                    reason = "视频号投递产物缺失：封面文件不存在，禁止提交默认封面作品。"
+                    logger.error("[%s] %s", prefix, reason)
+                    self.db.update_video_status(yid, "FAILED", error_msg=reason, slice_index=slice_index)
+                    self._notify_failed(yid, title, reason, slice_index=slice_index)
                     return
 
                 self.db.update_video_status(yid, "PUBLISHING", slice_index=slice_index)
@@ -1880,11 +2066,12 @@ class PipelineManager:
                     "--copy",   str(copy_file),
                     "--state",  str(self._OUT_DIR / "wechat_state.json"),
                     "--fail-fast-login",
+                    "--evidence-dir",
+                    str(self._OUT_DIR / "wechat_evidence" / prefix / str(time.time_ns())),
                 ]
                 if not settings.wechat_headless:
                     upload_cmd += ["--no-headless"]
-                if cover_file.exists():
-                    upload_cmd += ["--cover", str(cover_file)]
+                upload_cmd += ["--cover", str(cover_file)]
                 if title_file.exists():
                     upload_cmd += ["--title-file", str(title_file)]
                 if category_file.exists():
@@ -2038,8 +2225,8 @@ class PipelineManager:
             self.reconcile_douyin_under_review()
             if self._douyin_platform_halted:
                 logger.warning("抖音审核回查触发熔断，跳过本轮新片重试和历史迁移。")
-            elif not self._retry_one_douyin_new_video():
-                logger.warning("抖音新片重试未确认成功，保留同一视频下次重试。")
+            elif not self._run_douyin_new_sync():
+                logger.warning("抖音新片同步未确认成功，保留同一视频下次重试。")
             else:
                 self._run_douyin_history_migration()
         logger.info("--- Daily Pipeline Job Completed ---")

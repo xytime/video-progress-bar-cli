@@ -25,6 +25,22 @@
 | 1.5.7 | 2026-07-26 | Codex | 使用封面编辑器中心预览截图裁剪做哈希校验，避免 DOM 图片选择器取错图 |
 | 1.5.8 | 2026-07-26 | Codex | 通过截图中的青色选中边框定位封面预览区域，提升抖音预览哈希稳定性 |
 | 1.5.9 | 2026-07-26 | Codex | 补齐抖音横封面 4:3 上传链路，横竖任一封面不可确认即阻断发布 |
+| 1.5.10 | 2026-07-29 | Codex | 上传完成判断优先检测右侧进度文本，避免表单已出现但文件仍上传时误点发布 |
+| 1.5.11 | 2026-07-29 | Codex | 发布前强制选择抖音“自主声明”为“内容为个人观点或见解”，无法确认则停止发布 |
+| 1.5.12 | 2026-07-29 | Codex | 区分固定上传提示与真实进度，并接受作品管理页发布成功吐司为提交成功证据 |
+| 1.5.13 | 2026-07-29 | Codex | 不再把“预览转码中/转码过程也可以发布作品”误判为上传未完成，避免卡在最终提交前 |
+| 1.5.14 | 2026-07-29 | Codex | 发布前强制回读标题与文案，并在封面弹窗关闭后复核可见预览；任一元信息未确认即拒绝提交 |
+| 1.5.15 | 2026-07-29 | Codex | 回读时忽略抖音编辑器自动插入的零宽格式字符，保持正文内容逐字校验 |
+| 1.5.16 | 2026-07-29 | Codex | 封面保存沿用横竖编辑面板内哈希证据，等待平台封面检测结束；避免误将作品页缩略图当原图校验 |
+| 1.5.17 | 2026-07-29 | Codex | 自主声明选择失败时输出下拉展开后的可见候选项，依据平台实际文案校准且不猜点 |
+| 1.5.18 | 2026-07-29 | Codex | 自主声明改为点击已观测的“请选择自主声明”同一行控件，再读取展开列表，避免误点父容器 |
+| 1.5.19 | 2026-07-29 | Codex | 自主声明控件先滚入浏览器视口中央，再按重算坐标点击，修复长发布页离屏点击无效 |
+| 1.5.20 | 2026-07-29 | Codex | 优先使用 Playwright 唯一可见文本点击“请选择自主声明”，由浏览器负责滚动与命中测试 |
+| 1.5.21 | 2026-07-29 | Codex | 区分“提交后未确认”与提交前各闸门未确认退出码，防止账本误标已提交 |
+| 1.5.22 | 2026-07-29 | Codex | 适配自主声明弹窗：选中唯一单选项后必须点击弹窗“确定”，再回读发布页已选值 |
+| 1.5.23 | 2026-07-29 | Codex | 横封面步骤优先点击弹窗底部“设置横封面”CTA，避免误点顶部横封面标签后停在双封面缺失 |
+| 1.5.24 | 2026-07-29 | Codex | 上传封面后先校验大预览，已匹配时不再点击候选缩略图，避免相似候选覆盖正确封面 |
+| 1.5.25 | 2026-07-29 | Codex | 封面候选缩略图已匹配但大预览 crop 误判时，交由保存后卡槽与平台封面检测继续兜底 |
 """
 
 from __future__ import annotations
@@ -49,6 +65,8 @@ DOUYIN_UPLOAD_URL = "https://creator.douyin.com/creator-micro/content/upload"
 DOUYIN_VIDEO_INPUT_SELECTOR = 'input[type="file"]'
 DOUYIN_TITLE_SELECTOR = 'input[placeholder*="作品标题"]'
 DOUYIN_DESCRIPTION_SELECTOR = '[contenteditable="true"]'
+DOUYIN_SELF_DECLARATION_LABEL_TEXT = "自主声明"
+DOUYIN_SELF_DECLARATION_OPTION_TEXT = "内容为个人观点或见解"
 DOUYIN_COVER_TARGET_WIDTH = 1080
 DOUYIN_COVER_TARGET_HEIGHT = 1440
 DOUYIN_HORIZONTAL_COVER_TARGET_WIDTH = 1280
@@ -62,6 +80,7 @@ EXIT_UNCONFIRMED = 3
 EXIT_NOT_CALIBRATED = 4
 EXIT_UPLOADED_FOR_CALIBRATION = 5
 EXIT_UNDER_REVIEW = 6
+EXIT_SUBMISSION_UNCONFIRMED = 7
 
 
 def is_creator_center_url(url: str) -> bool:
@@ -88,6 +107,23 @@ def get_page_text(page) -> str:
 
 def capture_controls(page, artifact_dir: Path, artifact_name: str) -> None:
     """采集页面控件契约，供下一轮根据真实 DOM 补充选择器。"""
+    try:
+        page_context = page.evaluate(
+            """() => ({
+                url: location.href,
+                title: document.title,
+                bodyTextPreview: (document.body?.innerText || '').slice(0, 1200),
+            })"""
+        )
+        if not isinstance(page_context, dict):
+            page_context = {}
+    except Exception:
+        page_context = {}
+    page_context = {
+        "url": str(page_context.get("url") or getattr(page, "url", "") or ""),
+        "title": str(page_context.get("title") or ""),
+        "bodyTextPreview": str(page_context.get("bodyTextPreview") or ""),
+    }
     controls = page.locator(
         'input, textarea, button, [contenteditable="true"], [role="button"]'
     ).evaluate_all(
@@ -121,7 +157,7 @@ def capture_controls(page, artifact_dir: Path, artifact_name: str) -> None:
     )
     artifact_dir.mkdir(parents=True, exist_ok=True)
     (artifact_dir / f"{artifact_name}_controls.json").write_text(
-        json.dumps(controls, ensure_ascii=False, indent=2), encoding="utf-8"
+        json.dumps({"page": page_context, "controls": controls}, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     try:
         page.screenshot(path=str(artifact_dir / f"{artifact_name}.png"), full_page=True)
@@ -160,6 +196,207 @@ def get_description_editor(page):
     return editor
 
 
+def _is_self_declaration_selected(page) -> bool:
+    """确认“自主声明”同一行已经显示目标选项，避免误读下拉列表中的候选项。"""
+    try:
+        return bool(
+            page.evaluate(
+                """({label, option}) => {
+                    const normalize = value => String(value || '').replace(/\\s+/g, '');
+                    const visible = element => {
+                        const rect = element.getBoundingClientRect();
+                        const style = window.getComputedStyle(element);
+                        return rect.width > 0 && rect.height > 0
+                            && style.visibility !== 'hidden'
+                            && style.display !== 'none';
+                    };
+                    const all = Array.from(document.querySelectorAll('body *')).filter(visible);
+                    const labelText = normalize(label);
+                    const optionText = normalize(option);
+                    const labels = all.filter(element => {
+                        const text = normalize(element.innerText || element.textContent || '');
+                        return text === labelText || (text.includes(labelText) && text.length <= labelText.length + 8);
+                    });
+                    for (const labelElement of labels) {
+                        const labelRect = labelElement.getBoundingClientRect();
+                        const labelCenterY = labelRect.y + labelRect.height / 2;
+                        const selected = all.find(element => {
+                            if (element === labelElement) return false;
+                            const rect = element.getBoundingClientRect();
+                            const text = normalize(element.innerText || element.textContent || '');
+                            return text.includes(optionText)
+                                && rect.x > labelRect.x + labelRect.width
+                                && Math.abs((rect.y + rect.height / 2) - labelCenterY) < 70;
+                        });
+                        if (selected) return true;
+                    }
+                    return false;
+                }""",
+                {"label": DOUYIN_SELF_DECLARATION_LABEL_TEXT, "option": DOUYIN_SELF_DECLARATION_OPTION_TEXT},
+            )
+        )
+    except Exception as exc:
+        logger.debug("读取抖音自主声明当前选项失败: %s", exc)
+        return False
+
+
+def _click_self_declaration_dropdown(page) -> bool:
+    """点击同一行“请选择自主声明”控件；不把外层父容器误当下拉框。"""
+    placeholder_text = f"请选择{DOUYIN_SELF_DECLARATION_LABEL_TEXT}"
+    try:
+        placeholder = page.get_by_text(placeholder_text, exact=True)
+        if placeholder.count() == 1 and placeholder.is_visible():
+            placeholder.click(timeout=2_000, force=True)
+            logger.info("已点击抖音自主声明控件：%s", placeholder_text)
+            return True
+    except Exception as exc:
+        logger.debug("通过唯一文本点击抖音自主声明控件失败，继续 DOM 兜底：%s", exc)
+    try:
+        target = page.evaluate(
+                """label => {
+                    const normalize = value => String(value || '').replace(/\\s+/g, '');
+                    const visible = element => {
+                        const rect = element.getBoundingClientRect();
+                        const style = window.getComputedStyle(element);
+                        return rect.width > 0 && rect.height > 0
+                            && style.visibility !== 'hidden'
+                            && style.display !== 'none';
+                    };
+                    const all = Array.from(document.querySelectorAll('body *')).filter(visible);
+                    const labels = all.filter(element => {
+                        const text = normalize(element.innerText || element.textContent || '');
+                        return text === normalize(label) || (text.includes(normalize(label)) && text.length <= normalize(label).length + 8);
+                    });
+                    const placeholderText = normalize(`请选择${label}`);
+                    for (const labelElement of labels) {
+                        const labelRect = labelElement.getBoundingClientRect();
+                        const labelCenterY = labelRect.y + labelRect.height / 2;
+                        const candidates = all.map(element => {
+                            const rect = element.getBoundingClientRect();
+                            const className = String(element.className || '').toLowerCase();
+                            const role = String(element.getAttribute('role') || '').toLowerCase();
+                            const aria = String(element.getAttribute('aria-haspopup') || '').toLowerCase();
+                            const text = normalize(element.innerText || element.textContent || '');
+                            const isPlaceholder = text === placeholderText;
+                            const score = (isPlaceholder ? 400 : 0)
+                                + (role === 'combobox' ? 80 : 0)
+                                + (aria.includes('listbox') ? 60 : 0)
+                                + (className.includes('select') ? 40 : 0)
+                                + (text && !text.includes(normalize(label)) ? 10 : 0)
+                                - Math.round(Math.abs((rect.y + rect.height / 2) - labelCenterY));
+                            return {element, rect, score};
+                        }).filter(item => item.rect.x > labelRect.x + labelRect.width
+                            && item.rect.width >= 80
+                            && item.rect.height >= 20
+                            && Math.abs((item.rect.y + item.rect.height / 2) - labelCenterY) < 90);
+                        candidates.sort((left, right) => right.score - left.score);
+                        if (candidates[0]) {
+                            candidates[0].element.scrollIntoView({block: 'center', inline: 'nearest'});
+                            const rect = candidates[0].element.getBoundingClientRect();
+                            return {x: rect.x + rect.width / 2, y: rect.y + rect.height / 2};
+                        }
+                    }
+                    return false;
+                }""",
+                DOUYIN_SELF_DECLARATION_LABEL_TEXT,
+            )
+        if isinstance(target, dict) and isinstance(target.get("x"), (int, float)) and isinstance(target.get("y"), (int, float)):
+            page.mouse.click(target["x"], target["y"])
+            return True
+        return bool(target)
+    except Exception as exc:
+        logger.debug("点击抖音自主声明下拉失败: %s", exc)
+        return False
+
+
+def _click_self_declaration_option(page) -> bool:
+    """在已展开下拉中点击目标自主声明选项。"""
+    try:
+        option = page.get_by_text(DOUYIN_SELF_DECLARATION_OPTION_TEXT, exact=True)
+        if option.count() == 1 and option.is_visible():
+            option.click(timeout=2_000, force=True)
+            page.wait_for_timeout(300)
+            confirm = page.get_by_text("确定", exact=True)
+            if confirm.count() != 1 or not confirm.is_visible() or not confirm.is_enabled():
+                logger.error("抖音自主声明弹窗的唯一“确定”按钮不可用")
+                return False
+            confirm.click(timeout=2_000, force=True)
+            logger.info("已选择并确认抖音自主声明: %s", DOUYIN_SELF_DECLARATION_OPTION_TEXT)
+            return True
+    except Exception as exc:
+        logger.debug("通过弹窗唯一文本选择抖音自主声明失败，继续 DOM 兜底：%s", exc)
+    try:
+        result = page.evaluate(
+                """option => {
+                    const normalize = value => String(value || '').replace(/\\s+/g, '');
+                    const visible = element => {
+                        const rect = element.getBoundingClientRect();
+                        const style = window.getComputedStyle(element);
+                        return rect.width > 0 && rect.height > 0
+                            && style.visibility !== 'hidden'
+                            && style.display !== 'none';
+                    };
+                    const optionText = normalize(option);
+                    const candidates = Array.from(document.querySelectorAll('[role="option"], li, div, span'))
+                        .filter(visible)
+                        .map(element => {
+                            const text = normalize(element.innerText || element.textContent || '');
+                            const className = String(element.className || '').toLowerCase();
+                            const role = String(element.getAttribute('role') || '').toLowerCase();
+                            const inPopup = Boolean(element.closest('[role="listbox"], [class*="option"], [class*="dropdown"], [class*="popover"], [class*="portal"]'));
+                            return {element, text, role, className, inPopup};
+                        })
+                        .filter(item => item.text === optionText || (item.text.includes(optionText) && item.text.length <= optionText.length + 12));
+                    candidates.sort((left, right) => {
+                        const leftScore = (left.role === 'option' ? 100 : 0) + (left.inPopup ? 50 : 0) + (left.className.includes('option') ? 30 : 0);
+                        const rightScore = (right.role === 'option' ? 100 : 0) + (right.inPopup ? 50 : 0) + (right.className.includes('option') ? 30 : 0);
+                        return rightScore - leftScore;
+                    });
+                    const visibleTexts = Array.from(document.querySelectorAll('body *'))
+                        .filter(visible)
+                        .map(element => normalize(element.innerText || element.textContent || ''))
+                        .filter(text => text && text.length <= 80 && (text.includes('声明') || text.includes('观点') || text.includes('内容')))
+                        .filter((text, index, values) => values.indexOf(text) === index)
+                        .slice(0, 80);
+                    if (!candidates[0]) return {clicked: false, visibleTexts};
+                    candidates[0].element.click();
+                    return {clicked: true, visibleTexts};
+                }""",
+                DOUYIN_SELF_DECLARATION_OPTION_TEXT,
+            )
+        if isinstance(result, dict):
+            if not result.get("clicked"):
+                logger.info("抖音自主声明展开后的可见候选项：%s", result.get("visibleTexts", []))
+            return bool(result.get("clicked"))
+        return bool(result)
+    except Exception as exc:
+        logger.debug("点击抖音自主声明目标选项失败: %s", exc)
+        return False
+
+
+def select_self_declaration(page, artifact_dir: Path) -> bool:
+    """发布前强制选择“内容为个人观点或见解”；不可确认时拒绝继续发布。"""
+    if _is_self_declaration_selected(page):
+        logger.info("抖音自主声明已选择: %s", DOUYIN_SELF_DECLARATION_OPTION_TEXT)
+        return True
+    if not _click_self_declaration_dropdown(page):
+        logger.error("未能定位或点击抖音“自主声明”下拉框")
+        capture_controls(page, artifact_dir, "douyin_self_declaration_failed")
+        return False
+    page.wait_for_timeout(500)
+    if not _click_self_declaration_option(page):
+        logger.error("未能选择抖音自主声明选项: %s", DOUYIN_SELF_DECLARATION_OPTION_TEXT)
+        capture_controls(page, artifact_dir, "douyin_self_declaration_failed")
+        return False
+    page.wait_for_timeout(500)
+    if not _is_self_declaration_selected(page):
+        logger.error("抖音自主声明选择后无法确认当前值: %s", DOUYIN_SELF_DECLARATION_OPTION_TEXT)
+        capture_controls(page, artifact_dir, "douyin_self_declaration_unconfirmed")
+        return False
+    logger.info("已选择抖音自主声明: %s", DOUYIN_SELF_DECLARATION_OPTION_TEXT)
+    return True
+
+
 def wait_for_video_upload_input(page, timeout_seconds: int = 15):
     """等待抖音 SPA 渲染出唯一视频上传控件。"""
     for _ in range(timeout_seconds):
@@ -172,14 +409,40 @@ def wait_for_video_upload_input(page, timeout_seconds: int = 15):
 
 def is_upload_in_progress(page) -> bool:
     """页面仍展示上传/处理进度时，绝不能把文件当作已上传完成。"""
-    if has_post_upload_form(page):
-        return False
     try:
         visible_text = page.locator("body").inner_text(timeout=3_000)
     except Exception:
         return True
-    progress_words = ("上传中", "上传进度", "视频处理中", "转码中", "处理中")
-    return any(word in visible_text for word in progress_words) or "%" in visible_text
+    if has_active_upload_progress(visible_text):
+        return True
+    if has_post_upload_form(page):
+        return False
+    return False
+
+
+def has_active_upload_progress(visible_text: str) -> bool:
+    """只把动态上传/转码状态视为未完成；固定发布提示不能阻塞或误判。"""
+    compact = " ".join((visible_text or "").split())
+    if not compact:
+        return True
+    compact = compact.replace("点击发布后，如作品还在上传中，请勿关闭页面，等待上传发布完成。", "")
+    compact = compact.replace("点击发布后，如作品还在上传中，请勿关闭页面", "")
+    compact = compact.replace("预览转码中，请稍后", "")
+    compact = compact.replace("转码过程也可以发布作品", "")
+    dynamic_markers = (
+        "上传进度",
+        "上传过程中",
+        "已上传",
+        "剩余时间",
+        "当前速度",
+    )
+    if any(marker in compact for marker in dynamic_markers):
+        return True
+    if "%" in compact and any(marker in compact for marker in ("上传", "进度", "剩余", "速度", "处理")):
+        return True
+    if "作品还在上传中" in compact and not compact.startswith("点击发布后"):
+        return True
+    return False
 
 
 def has_post_upload_form(page) -> bool:
@@ -442,6 +705,50 @@ def _find_active_modal(page, selectors: Iterable[str]):
         except Exception:
             continue
     return page
+
+
+def _click_bottom_text_button(page, texts: Iterable[str]) -> bool:
+    """点击页面底部区域最靠下的可见文本按钮，适配封面弹窗右下角 CTA。"""
+    try:
+        target = page.evaluate(
+            """texts => {
+                const wanted = new Set(texts);
+                const candidates = [];
+                for (const element of Array.from(document.querySelectorAll('button, [role="button"], span, div'))) {
+                    const text = (element.innerText || element.textContent || '').trim().replace(/\\s+/g, '');
+                    if (!wanted.has(text)) continue;
+                    const rect = element.getBoundingClientRect();
+                    const style = getComputedStyle(element);
+                    const disabled = element.disabled || element.getAttribute('aria-disabled') === 'true';
+                    if (
+                        disabled || rect.width <= 0 || rect.height <= 0 ||
+                        style.visibility === 'hidden' || style.display === 'none'
+                    ) {
+                        continue;
+                    }
+                    candidates.push({
+                        x: rect.x + rect.width / 2,
+                        y: rect.y + rect.height / 2,
+                        width: rect.width,
+                        height: rect.height,
+                        top: rect.y,
+                        text,
+                    });
+                }
+                candidates.sort((left, right) => right.top - left.top || (right.width * right.height) - (left.width * left.height));
+                return candidates[0] || null;
+            }""",
+            [text.replace(" ", "") for text in texts],
+        )
+    except Exception as exc:
+        logger.debug("查找底部文本按钮失败: %s", exc)
+        return False
+    if not target:
+        return False
+    page.mouse.click(target["x"], target["y"])
+    page.wait_for_timeout(1500)
+    logger.info("已点击底部文本按钮：%s", target.get("text"))
+    return True
 
 
 def _get_file_accept(file_input) -> str:
@@ -744,6 +1051,7 @@ def _apply_cover_in_current_panel(
     *,
     artifact_dir: Optional[Path],
     artifact_prefix: str,
+    allow_thumbnail_match_fallback: bool = False,
 ) -> bool:
     _open_cover_upload_tab(page, modal)
     if not _inject_cover_file_in_modal(page, modal, cover_path_abs):
@@ -752,14 +1060,26 @@ def _apply_cover_in_current_panel(
     page.wait_for_timeout(2000)
     if artifact_dir:
         capture_cover_evidence(page, artifact_dir, f"{artifact_prefix}_after_input_injection", cover_path_abs)
+    if _is_cover_preview_matched(page, cover_path_abs):
+        logger.info("抖音封面注入后大预览已匹配，无需再选择候选缩略图")
+        return True
     if not _click_matching_cover_thumbnail(page, cover_path_abs):
         return False
     if not _is_cover_preview_matched(page, cover_path_abs):
+        if allow_thumbnail_match_fallback:
+            logger.warning(
+                "抖音%s候选缩略图已匹配，但大预览哈希仍不匹配；继续交由保存后卡槽与平台封面检测确认",
+                artifact_prefix,
+            )
+            return True
         return False
     return True
 
 
 def _click_horizontal_cover_step(page, modal) -> bool:
+    if _click_bottom_text_button(page, ["设置横封面"]):
+        logger.info("已进入抖音横封面设置面板")
+        return True
     horizontal_selectors = [
         "button:has-text('设置横封面')",
         "span:has-text('设置横封面')",
@@ -792,6 +1112,51 @@ def _click_cover_confirm(page, modal) -> None:
         confirm_btn.click(timeout=2000)
         logger.info("已点击右下角'完成'保存封面！")
         page.wait_for_timeout(2000)
+
+
+def wait_for_cover_validation(page, timeout_seconds: int = 120) -> bool:
+    """等待平台封面检测完成；失败、超时或页面不可读都不允许进入发布。"""
+    failed_markers = ("封面检测未通过", "封面不合格", "封面违规", "封面异常")
+    try:
+        for elapsed in range(timeout_seconds):
+            text = get_page_text(page)
+            if any(marker in text for marker in failed_markers):
+                logger.error("抖音封面检测未通过：%s", text[:300])
+                return False
+            if "封面检测中" not in text:
+                logger.info("抖音封面检测已完成")
+                return True
+            if elapsed and elapsed % 15 == 0:
+                logger.info("抖音封面仍在检测，已等待 %s 秒", elapsed)
+            page.wait_for_timeout(1_000)
+    except Exception as exc:
+        logger.error("等待抖音封面检测时页面不可读：%s", exc)
+        return False
+    logger.error("抖音封面检测超过 %s 秒未完成，拒绝发布", timeout_seconds)
+    return False
+
+
+def _saved_cover_slots_present(page, *, require_horizontal: bool) -> bool:
+    """确认封面弹窗保存后，作品页仍展示对应横竖封面卡槽。"""
+    try:
+        slots = page.evaluate(
+            """() => Array.from(document.querySelectorAll('[class*="coverControl"]'))
+                .filter(element => {
+                    const rect = element.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                })
+                .map(element => (element.innerText || element.textContent || '').replace(/\\s+/g, ''))"""
+        )
+    except Exception as exc:
+        logger.error("抖音封面保存后无法读取封面卡槽：%s", exc)
+        return False
+    normalized = " ".join(str(slot) for slot in (slots or ()))
+    has_vertical = "竖封面3:4" in normalized
+    has_horizontal = "横封面4:3" in normalized
+    if not has_vertical or (require_horizontal and not has_horizontal):
+        logger.error("抖音封面保存后缺少必要卡槽：vertical=%s horizontal=%s", has_vertical, has_horizontal)
+        return False
+    return True
 
 
 def apply_cover(
@@ -837,6 +1202,7 @@ def apply_cover(
             cover_path_abs,
             artifact_dir=artifact_dir,
             artifact_prefix="douyin_cover",
+            allow_thumbnail_match_fallback=True,
         ):
             return False
 
@@ -851,6 +1217,7 @@ def apply_cover(
                 horizontal_cover_path_abs,
                 artifact_dir=artifact_dir,
                 artifact_prefix="douyin_horizontal_cover",
+                allow_thumbnail_match_fallback=True,
             ):
                 return False
 
@@ -863,6 +1230,10 @@ def apply_cover(
                 page.wait_for_timeout(1000)
         except Exception:
             pass
+        if not _saved_cover_slots_present(page, require_horizontal=bool(horizontal_cover_path_abs)):
+            return False
+        if not wait_for_cover_validation(page):
+            return False
         if artifact_dir:
             capture_cover_evidence(page, artifact_dir, "douyin_cover_applied", cover_path_abs)
         return True
@@ -872,6 +1243,29 @@ def apply_cover(
 
     return False
 
+
+def _filled_text_matches(control, expected: str, *, is_title: bool) -> bool:
+    """回读已填写的作品元信息；任何无法读取或不一致均按失败处理。"""
+    expected_normalized = _normalize_page_text(expected).replace("\u200b", "").replace("\ufeff", "").replace("\u2060", "")
+    if not expected_normalized:
+        return False
+    try:
+        actual = control.input_value() if is_title else control.inner_text()
+    except Exception as exc:
+        logger.error("抖音%s填写后无法回读：%s", "标题" if is_title else "作品描述", exc)
+        return False
+    actual_normalized = _normalize_page_text(actual).replace("\u200b", "").replace("\ufeff", "").replace("\u2060", "")
+    if actual_normalized != expected_normalized:
+        logger.error(
+            "抖音%s填写后回读不一致，拒绝发布：expected=%r actual=%r",
+            "标题" if is_title else "作品描述",
+            expected[:80],
+            str(actual)[:80],
+        )
+        return False
+    return True
+
+
 def fill_publish_fields(page, title_text: str, description_text: str, artifact_dir: Path, cover_path: Optional[str] = None) -> bool:
     """填入作品标题和描述并应用封面，停在提交前页面；不保存草稿、不发布。"""
     title_input = get_title_input(page)
@@ -880,30 +1274,38 @@ def fill_publish_fields(page, title_text: str, description_text: str, artifact_d
         return False
     title = " ".join((title_text or "").split()).strip()
     description = (description_text or "").strip()
-    if title:
-        title_input.fill(title[:50])
-    if description:
-        editor.fill(description)
+    if not title or not description or not cover_path or not Path(cover_path).is_file():
+        logger.error("抖音发布元信息不完整：title=%s description=%s cover=%s", bool(title), bool(description), bool(cover_path and Path(cover_path).is_file()))
+        return False
+    title = title[:50]
+    title_input.fill(title)
+    editor.fill(description)
     page.wait_for_timeout(500)
-    
-    if cover_path and Path(cover_path).is_file():
-        logger.info(f"开始应用抖音封面: {cover_path}")
-        cover_upload_path = prepare_douyin_cover_upload_file(cover_path)
-        horizontal_cover_upload_path = prepare_douyin_horizontal_cover_upload_file(cover_path)
-        if not cover_upload_path or not horizontal_cover_upload_path:
-            return False
-        if not apply_cover(
-            page,
-            cover_upload_path,
-            artifact_dir=artifact_dir,
-            horizontal_cover_path=horizontal_cover_upload_path,
-        ):
-            logger.error("抖音横竖封面未能完整确认应用，停止后续发布以避免默认封面作品")
-            return False
+    if not _filled_text_matches(title_input, title, is_title=True):
+        return False
+    if not _filled_text_matches(editor, description, is_title=False):
+        return False
 
+    logger.info("开始应用抖音封面: %s", cover_path)
+    cover_upload_path = prepare_douyin_cover_upload_file(cover_path)
+    horizontal_cover_upload_path = prepare_douyin_horizontal_cover_upload_file(cover_path)
+    if not cover_upload_path or not horizontal_cover_upload_path:
+        return False
+    if not apply_cover(
+        page,
+        cover_upload_path,
+        artifact_dir=artifact_dir,
+        horizontal_cover_path=horizontal_cover_upload_path,
+    ):
+        logger.error("抖音横竖封面未能完整确认应用，停止后续发布以避免默认封面作品")
+        return False
+
+    if not select_self_declaration(page, artifact_dir):
+        logger.error("抖音自主声明未能确认，停止后续发布")
+        return False
     
     capture_controls(page, artifact_dir, "douyin_ready_to_submit")
-    logger.info("已填入抖音作品标题和描述，仍未保存草稿或发布")
+    logger.info("已填入抖音作品标题、描述和自主声明，仍未保存草稿或发布")
     return True
 
 
@@ -947,6 +1349,9 @@ def wait_for_publish_submission(
             logger.info("已成功跳转至抖音作品管理页面: %s", page.url)
             return True
         text = get_page_text(page)
+        if "作品管理" in text and any(marker in text for marker in success_markers):
+            logger.info("检测到抖音作品管理页发布成功提示")
+            return True
         if any(marker in text for marker in success_markers):
             logger.info("检测到抖音成功发布提示文本")
             return True
@@ -975,6 +1380,9 @@ def publish_after_review(page, artifact_dir: Path, *, title_text: str, descripti
             page.wait_for_timeout(500)
     except Exception:
         pass
+
+    if not select_self_declaration(page, artifact_dir):
+        return False
 
     button = get_publish_button(page)
     if not button:
@@ -1016,7 +1424,7 @@ def upload_and_publish(
         return EXIT_UNCONFIRMED
     if publish_after_review(page, artifact_dir, title_text=title_text, description_text=description_text):
         return EXIT_UNDER_REVIEW
-    return EXIT_UNCONFIRMED
+    return EXIT_SUBMISSION_UNCONFIRMED
 
 
 def wait_until_logged_in(page, timeout_seconds: int = 300) -> bool:
@@ -1057,8 +1465,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if args.publish and (not args.video or not args.copy):
-        logger.error("--publish requires --video and --copy")
+    if args.publish and (not args.video or not args.copy or not args.title_file or not args.cover):
+        logger.error("--publish requires --video, --copy, --title-file and --cover")
         return EXIT_FAILED
     if args.calibrate_after_upload and not args.video:
         logger.error("--calibrate-after-upload requires --video")
@@ -1143,6 +1551,10 @@ def main() -> int:
                 return EXIT_UNCONFIRMED
             title_text = args.title_file.read_text(encoding="utf-8") if args.title_file else ""
             description_text = args.copy.read_text(encoding="utf-8") if args.copy else ""
+            if not title_text.strip() or not description_text.strip():
+                logger.error("抖音发布标题或文案为空，拒绝上传")
+                browser.close()
+                return EXIT_UNCONFIRMED
             result = upload_and_publish(
                 page,
                 str(args.video),

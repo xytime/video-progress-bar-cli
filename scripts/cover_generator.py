@@ -8,6 +8,8 @@
 | 2.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 增加 --payload 参数，支持集成 CoverEngine v2.0，且保留 Pillow 兜底  |
 | 2.1.0   | 2026-07-29 | Codex                        | 优先从已渲染竖版成片取真实画面，保留片头标题/日期戳生成内容贴合封面 |
 | 2.2.0   | 2026-07-29 | Codex                        | 消费独立视觉策划 JSON，为真实视频封面注入题材化色彩和可审计产物      |
+| 2.3.0   | 2026-07-30 | Codex                        | 仅按已确认的成片音轨版本渲染配音角标，杜绝字幕版误标为译制版          |
+| 2.3.1   | 2026-07-31 | Codex                        | 角标文案改为普通话译制并采用右上角彩带样式，确保文字完整可见          |
 """
 
 import os
@@ -233,12 +235,58 @@ def _draw_cover_title(image: Image.Image, title: str, brief: dict | None = None)
         y += height + 16
 
 
+def resolve_edition_label(payload: dict) -> str:
+    """把可审计的音轨版本映射为封面角标，拒绝消费任意自由文本。"""
+    return "普通话译制" if payload.get("audio_edition") == "mandarin_dubbed" else ""
+
+
+def _draw_edition_label(image: Image.Image, edition_label: str) -> None:
+    """在右上角用彩带标注真实的译制版本；空标签表示原声字幕版。"""
+    if not edition_label:
+        return
+    draw = ImageDraw.Draw(image)
+    font = get_font(34, "bold")
+    text_bbox = draw.textbbox((0, 0), edition_label, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    text_height = text_bbox[3] - text_bbox[1]
+    pad_x, pad_y = 26, 15
+    right, top = COVER_W - 28, 24
+    body_width = max(238, text_width + pad_x * 2)
+    left, bottom = right - body_width, top + text_height + pad_y * 2
+    notch = 18
+    shadow = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    shadow_draw = ImageDraw.Draw(shadow)
+    ribbon = [
+        (left + notch, top),
+        (right - 14, top),
+        (right, top + 12),
+        (right, bottom),
+        (left + notch, bottom),
+        (left, (top + bottom) // 2),
+    ]
+    shadow_draw.polygon([(x + 4, y + 5) for x, y in ribbon], fill=(0, 0, 0, 86))
+    image.alpha_composite(shadow) if image.mode == "RGBA" else image.paste(
+        Image.alpha_composite(image.convert("RGBA"), shadow).convert("RGB")
+    )
+    draw = ImageDraw.Draw(image)
+    draw.polygon(ribbon, fill="#b1124a")
+    draw.polygon(
+        [(right - 40, bottom), (right, bottom), (right - 16, bottom + 20), (right - 56, bottom + 20)],
+        fill="#6f0f2f",
+    )
+    draw.line([(left + notch, top), (right - 14, top)], fill="#f7a8c3", width=2)
+    text_x = left + notch + (body_width - notch - text_width) // 2
+    text_y = top + pad_y - text_bbox[1]
+    draw.text((text_x, text_y), edition_label, font=font, fill="#ffffff")
+
+
 def generate_video_backed_cover(
     video_path: str | Path,
     output_path: str | Path,
     *,
     title: str = "",
     brief: dict | None = None,
+    edition_label: str = "",
 ) -> None:
     """用真实画面和与视频一致的双行标题制作 6:7 封面。"""
     creative_brief = brief
@@ -269,6 +317,7 @@ def generate_video_backed_cover(
     header_rgb = _hex_to_rgb(brief.get("header_color", ""), (5, 5, 5))
     draw.rectangle((0, 0, COVER_W, foreground_top), fill=header_rgb)
     _draw_cover_title(cover, title, creative_brief)
+    _draw_edition_label(cover, edition_label)
 
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -319,7 +368,13 @@ def main():
     # 取帧异常才降级到旧 CoverEngine，保证封面问题不阻断发布。
     if args.video:
         try:
-            generate_video_backed_cover(args.video, args.output, title=title_to_use, brief=creative_brief)
+            generate_video_backed_cover(
+                args.video,
+                args.output,
+                title=title_to_use,
+                brief=creative_brief,
+                edition_label=resolve_edition_label(payload),
+            )
             persist_creative_brief()
             return
         except Exception as e:

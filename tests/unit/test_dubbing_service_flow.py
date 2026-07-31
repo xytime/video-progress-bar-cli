@@ -4,10 +4,15 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-29 | Codex | 覆盖人工配音任务的质检、发布状态和版本化封面选择 |
+| 1.1.0 | 2026-07-30 | Codex | 缺少版本专属封面时拒绝普通话配音版投递 |
+| 1.2.0 | 2026-07-31 | Codex | 覆盖平台闸门失败未提交时任务不误记审核中 |
+| 1.3.0 | 2026-07-31 | Codex | 锁定普通话译制版投递标题和文案命名 |
 """
 
 import subprocess
-from unittest.mock import Mock
+from unittest.mock import Mock, call
+
+import pytest
 
 from video_processing.dubbing.service import DubbingService
 
@@ -209,6 +214,28 @@ def test_publish_one_keeps_external_result_when_evidence_archiving_fails(tmp_pat
     )
 
 
+def test_publish_keeps_job_ready_when_platform_gate_fails():
+    service = DubbingService.__new__(DubbingService)
+    service.db = Mock()
+    service._require_latest_job = Mock(
+        return_value={"id": 42, "state": "READY_TO_PUBLISH", "requested_platforms": "[\"wechat\"]"}
+    )
+    service._normalize_platforms = Mock(return_value=["wechat"])
+    service._publish_one = Mock()
+    service.db.get_dubbing_publications.return_value = [
+        {"platform": "wechat", "state": "RETRYABLE_FAILED", "last_error_message": "封面未验证"}
+    ]
+    service._job_view = Mock(return_value={"state": "READY_TO_PUBLISH"})
+
+    result = service.publish("video-id", platforms=["wechat"], confirm=True)
+
+    assert result["state"] == "READY_TO_PUBLISH"
+    service.db.update_dubbing_job.assert_has_calls([
+        call(42, "PUBLISHING"),
+        call(42, "READY_TO_PUBLISH", error_message="平台投递未提交成功；请修正平台闸门失败后再重试。"),
+    ])
+
+
 def test_variant_publish_assets_prefers_verified_versioned_cover(tmp_path):
     output = tmp_path / "output"
     output.mkdir()
@@ -224,6 +251,26 @@ def test_variant_publish_assets_prefers_verified_versioned_cover(tmp_path):
     service = DubbingService.__new__(DubbingService)
     service.project_root = tmp_path
 
-    _, _, cover, _, _ = service._variant_publish_assets({"youtube_id": "video-id", "source_title": "fallback"}, workspace)
+    title, copy, cover, _, _ = service._variant_publish_assets(
+        {"youtube_id": "video-id", "source_title": "fallback"}, workspace
+    )
 
     assert cover == verified_cover
+    assert title.read_text(encoding="utf-8").strip() == "原片标题普通话译制"
+    assert copy.read_text(encoding="utf-8").endswith("普通话译制版\n")
+
+
+def test_variant_publish_assets_rejects_original_cover_fallback_for_dubbed_version(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "video-id_title.txt").write_text("原片标题", encoding="utf-8")
+    (output / "video-id_copy.txt").write_text("原片文案", encoding="utf-8")
+    (output / "video-id_cover.jpg").write_bytes(b"must-not-be-reused")
+    (output / "video-id_category.txt").write_text("财经", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = DubbingService.__new__(DubbingService)
+    service.project_root = tmp_path
+
+    with pytest.raises(RuntimeError, match="版本专属封面"):
+        service._variant_publish_assets({"youtube_id": "video-id", "source_title": "fallback"}, workspace)

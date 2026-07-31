@@ -44,8 +44,10 @@
 | 3.17.0 | 2026-07-23 | Codex                               | 新增三平台补录预览与抖音补录确认入队 API |
 | 3.18.0 | 2026-07-24 | Codex                               | [新任务启动保护] _in_us_market_window 跟随 settings 的 ET 08:15–16:15 窗口，仅阻止调度器启动新管线 |
 | 3.18.1 | 2026-07-27 | Codex                               | 微信扫码登录成功后自动恢复 LOGIN_REQUIRED 为 PENDING，交由既有队列调度器按分数线重发 |
+| 3.18.2 | 2026-07-30 | Codex                               | 音轨规格改变时失效竖版成片与封面缓存，避免配音版继续复用原声封面       |
 """
 import hashlib
+import logging
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
 import fcntl  # [Claude_Opus_4.6_Thinking_planning] 用于 _is_pipeline_manager_running() 非阻塞锁探测
@@ -579,6 +581,21 @@ class PlatformBackfillQueueRequest(BaseModel):
 
 
 _OUT_DIR = Path(__file__).parent.parent.parent / "output"
+
+
+def _invalidate_audio_variant_artifacts(youtube_id: str) -> list[str]:
+    """删除音轨规格切换后必然失真的派生产物，保留下载源和文案检查点。"""
+    deleted: list[str] = []
+    for suffix in ("_vertical.mp4", ".ass", "_cover.jpg", "_cover_brief.json"):
+        path = _OUT_DIR / f"{youtube_id}{suffix}"
+        if not path.is_file():
+            continue
+        try:
+            path.unlink()
+            deleted.append(path.name)
+        except OSError as exc:
+            logging.getLogger(__name__).warning("音轨规格变更时无法清理 %s: %s", path.name, exc)
+    return deleted
 
 
 def _default_backfill_since_upload_date(days: int = 10) -> str:
@@ -1960,7 +1977,8 @@ def respec_video(youtube_id: str, req: RespecVideoRequest):
     - PUBLISHED / SEGMENTED / IGNORED / COMPLETED → 拒绝（终态，不可覆盖）
     - DOWNLOADING / TRANSCRIBING / COPYWRITING / PUBLISHING → kill 进程后更新
     - PENDING / FAILED → 直接更新规格，重置 PENDING
-    物理文件：不删除。pipeline_manager 将检测现有文件并以新 trim 参数重新处理。
+    物理文件：通常不删除；但 TTS 音轨规格变化时，会失效竖版成片和封面，
+    防止新版本继续复用原声版缓存。
     """
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
@@ -2013,6 +2031,11 @@ def respec_video(youtube_id: str, req: RespecVideoRequest):
         return {"success": False, "error": "结束时间格式不合法，仅支持数字、冒号和点"}
 
     disable_slicing_val = 1 if req.disable_slicing else 0
+    previous_tts_provider = str(video.get("tts_provider") or "").strip()
+    requested_tts_provider = str(req.tts_provider or "").strip()
+    invalidated_artifacts: list[str] = []
+    if previous_tts_provider != requested_tts_provider:
+        invalidated_artifacts = _invalidate_audio_variant_artifacts(youtube_id)
 
     # ── 4. 更新规格 ─────────────────────────────────────────────
     db.update_video_spec(
@@ -2042,6 +2065,7 @@ def respec_video(youtube_id: str, req: RespecVideoRequest):
         "disable_slicing": req.disable_slicing,
         "tts_provider": req.tts_provider,
         "was_stopped": was_stopped,
+        "invalidated_artifacts": invalidated_artifacts,
         "triggered": triggered,
     }
 

@@ -21,6 +21,7 @@ based on incoming Telegram messages and commands.
 | 1.9.0   | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登] trigger_wechat_login 改无头运行 wechat_uploader --login-only 并注入 Telegram 凭据→登录二维码 sendPhoto 到 Telegram 远程扫码(不再弹主机窗口需远程桌面)；同步更新 system prompt 第8条与登录失效告警话术 |
 | 1.10.0  | 2026-06-27 | Claude_Opus_4.8                     | [无痛重登·强制] trigger_wechat_login 加 --relogin：即使当前已登录也必出二维码（修复「已登录→/wechat_login 无二维码、用户干等」），支持临期主动重登刷新 24h；旧会话扫码成功前保持有效 |
 | 1.11.0  | 2026-07-27 | Codex                               | 助手 bot 接入多平台 PlatformEvent 告警格式，避免继续按视频号单平台语义解释抖音/快手事件 |
+| 1.12.0  | 2026-07-31 | Codex                               | Telegram 触发封面恢复为专门生成图，不再从竖版成片截帧                    |
 """
 import os
 import sys
@@ -504,7 +505,7 @@ class PipelineAgent:
             logger.info(f"[Lock] Released pipeline lock after copy generation for {youtube_id}.")
 
     def generate_video_cover(self, youtube_id: str) -> str:
-        """Generates a cover image for WeChat Channels from the vertical video.
+        """Generates a designed cover image for WeChat Channels.
 
         Args:
             youtube_id: The 11-character YouTube video ID.
@@ -538,7 +539,6 @@ class PipelineAgent:
             cover_cmd = [
                 self.venv_python,
                 str(self.project_root / "scripts" / "cover_generator.py"),
-                "--video", str(vertical),
                 "--title", cover_title,
                 "--output", str(cover_file),
             ]

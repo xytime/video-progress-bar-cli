@@ -4124,7 +4124,7 @@
 
     plats.forEach(key => {
       const info = v.platforms[key] || { state: 'NOT_QUEUED' };
-      const st = info.state || 'NOT_QUEUED';
+      const st = info.display_state || info.state || 'NOT_QUEUED';
       let cls = 'st-none';
       let stateLabel = '未队列';
       let tooltip = `${names[key]}: 未投递`;
@@ -4137,6 +4137,10 @@
         cls = 'st-review';
         stateLabel = st === 'UNDER_REVIEW' ? '审核中' : (st === 'WECHAT_DEFERRED' ? '已延后' : '发送中');
         tooltip = `${names[key]}: ${stateLabel}`;
+      } else if (st === 'UNCERTAIN') {
+        cls = 'st-review';
+        stateLabel = '待核验';
+        tooltip = `${names[key]}: 待人工核验 (${info.error || '无平台可见证明'})`;
       } else if (['RETRYABLE_FAILED', 'BANNED', 'FAILED', 'LOGIN_REQUIRED'].includes(st)) {
         cls = 'st-failed';
         stateLabel = '异常';
@@ -4168,13 +4172,15 @@
 
     const rows = plats.map(key => {
       const info = (video.platforms && video.platforms[key]) || { state: 'NOT_QUEUED' };
-      const st = info.state || 'NOT_QUEUED';
+      const st = info.display_state || info.state || 'NOT_QUEUED';
 
       let stateBadge = `<span class="badge badge-UNKNOWN">未队列</span>`;
       if (st === 'PUBLISHED') {
         stateBadge = `<span class="badge badge-PUBLISHED" style="background:rgba(52,211,153,0.15); color:#34d399;">🟢 已发布</span>`;
       } else if (st === 'UNDER_REVIEW') {
         stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">⏳ 平台审核中</span>`;
+      } else if (st === 'UNCERTAIN') {
+        stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">⏳ 待人工核验</span>`;
       } else if (['QUEUED', 'UPLOADING', 'PUBLISHING', 'WECHAT_DEFERRED'].includes(st)) {
         stateBadge = `<span class="badge badge-PUBLISHING">⚡ 正在发送/队列</span>`;
       } else if (['RETRYABLE_FAILED', 'BANNED', 'FAILED', 'LOGIN_REQUIRED'].includes(st)) {

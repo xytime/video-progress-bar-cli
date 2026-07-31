@@ -10,6 +10,9 @@
 | 1.0.4 | 2026-07-29 | Codex | 生成前用 DeepSeek thinking 精修普通话脚本，失败时阻断而非复用旧译文 |
 | 1.0.5 | 2026-07-29 | Codex | 人工配音发布优先采用版本目录内已验收的定制封面，避免回退原片封面 |
 | 1.0.6 | 2026-07-29 | Codex | 人工配音投递归档上传器日志、封面及提交页截图，微信封面失败不再继续发表 |
+| 1.0.7 | 2026-07-30 | Codex | 缺少普通话配音版专属封面时阻断投递，禁止静默复用原声版封面           |
+| 1.0.8 | 2026-07-31 | Codex | 平台闸门失败未提交时保持 READY_TO_PUBLISH，避免误记 UNDER_REVIEW       |
+| 1.0.9 | 2026-07-31 | Codex | 普通话译制版投递标题和文案统一使用普通话译制命名                       |
 """
 
 from __future__ import annotations
@@ -125,8 +128,17 @@ class DubbingService:
         for platform in selected:
             self._publish_one(job, platform)
         publications = self.db.get_dubbing_publications(job["id"])
-        final_state = "PUBLISHED" if publications and all(item["state"] == "PUBLISHED" for item in publications) else "UNDER_REVIEW"
-        self.db.update_dubbing_job(job["id"], final_state)
+        submitted_states = {"UNDER_REVIEW", "PUBLISHED"}
+        if publications and all(item["state"] == "PUBLISHED" for item in publications):
+            final_state = "PUBLISHED"
+            final_error = None
+        elif any(item["state"] in submitted_states for item in publications):
+            final_state = "UNDER_REVIEW"
+            final_error = None
+        else:
+            final_state = "READY_TO_PUBLISH"
+            final_error = "平台投递未提交成功；请修正平台闸门失败后再重试。"
+        self.db.update_dubbing_job(job["id"], final_state, error_message=final_error)
         return self._job_view(job["id"])
 
     def run_selected(
@@ -440,7 +452,7 @@ class DubbingService:
         copy_src = self.project_root / "output" / f"{yid}_copy.txt"
         cover = workspace / "publish" / "cover_wechat.jpg"
         if not cover.is_file():
-            cover = self.project_root / "output" / f"{yid}_cover.jpg"
+            raise RuntimeError("普通话配音版缺少已验收的版本专属封面，禁止复用原声版封面投递。")
         category = self.project_root / "output" / f"{yid}_category.txt"
         if not copy_src.is_file() or not cover.is_file() or not category.is_file():
             raise RuntimeError("原发布文案或封面不完整，拒绝投递。")
@@ -449,8 +461,9 @@ class DubbingService:
         title = publish_dir / "title.txt"
         copy = publish_dir / "copy.txt"
         original_title = title_src.read_text(encoding="utf-8").strip() if title_src.is_file() else job["source_title"]
-        title.write_text((original_title[:10] + "中文配音版")[:16] + "\n", encoding="utf-8")
-        copy.write_text(copy_src.read_text(encoding="utf-8").strip() + "\n\n普通话配音版\n", encoding="utf-8")
+        concise_title = original_title.replace("之谜", "").strip()
+        title.write_text((concise_title[:10] + "普通话译制")[:16] + "\n", encoding="utf-8")
+        copy.write_text(copy_src.read_text(encoding="utf-8").strip() + "\n\n普通话译制版\n", encoding="utf-8")
         horizontal = self.project_root / "output" / f"{yid}_cover_douyin_horizontal.png"
         return title, copy, cover, category, horizontal if horizontal.is_file() else None
 

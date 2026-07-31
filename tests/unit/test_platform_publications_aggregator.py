@@ -4,6 +4,7 @@
 | Version | Date       | Author                        | Description                             |
 |---------|------------|-------------------------------|-----------------------------------------|
 | 1.0.0   | 2026-07-24 | Gemini_3.6_Flash_planning     | 新增多平台发布状态聚合查询单元测试       |
+| 1.1.0   | 2026-07-29 | Codex                         | 覆盖平台账本含审核/未确认反证时保守展示 |
 """
 import tempfile
 import pytest
@@ -64,3 +65,60 @@ def test_get_video_publications_map(test_db):
     assert v2_pubs["wechat"]["state"] == "PENDING"
     assert v2_pubs["kuaishou"]["state"] == "NOT_QUEUED"
     assert v2_pubs["douyin"]["state"] == "NOT_QUEUED"
+
+
+def test_platform_publications_map_downgrades_contradictory_published_display(test_db):
+    with test_db.get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO processed_videos (youtube_id, slice_index, title, channel_id, status) VALUES ('yid-review', 0, 'Title', 'ch1', 'PUBLISHED')"
+        )
+        vid = cursor.lastrowid
+        conn.execute(
+            """INSERT INTO kuaishou_publications (
+                   video_id, asset_sha256, source_kind, state, video_path,
+                   attempt_number, published_at, last_error_message
+               ) VALUES (
+                   ?, 'sha-review', 'HISTORY', 'PUBLISHED', '/path',
+                   1, '2026-07-24 21:56:40',
+                   '快手作品管理已可见，当前审核中；等待平台审核结果，不重新上传。'
+               )""",
+            (vid,),
+        )
+        conn.commit()
+
+    pub_map = test_db.get_video_publications_map([vid])
+
+    assert pub_map[vid]["kuaishou"]["state"] == "PUBLISHED"
+    assert pub_map[vid]["kuaishou"]["display_state"] == "UNDER_REVIEW"
+
+
+def test_quality_snapshot_uses_conservative_platform_display_state(test_db):
+    with test_db.get_connection() as conn:
+        cursor = conn.execute(
+            "INSERT INTO processed_videos (youtube_id, slice_index, title, channel_id, status) VALUES ('yid-uncertain', 0, 'Title', 'ch1', 'PUBLISHED')"
+        )
+        vid = cursor.lastrowid
+        conn.execute(
+            """INSERT INTO kuaishou_publications (
+                   video_id, asset_sha256, source_kind, state, video_path,
+                   attempt_number, published_at, last_error_message
+               ) VALUES (
+                   ?, 'sha-uncertain', 'HISTORY', 'PUBLISHED', '/path',
+                   1, '2026-07-24 21:56:40',
+                   '页面关闭前未确认平台可见'
+               )""",
+            (vid,),
+        )
+        conn.commit()
+
+    snapshot = test_db.get_quality_report_snapshot(hours=24)
+    platform_states = {
+        (row["platform"], row["state"]): row["count"]
+        for row in snapshot["platform_states"]
+    }
+    platform_overview = {row["platform"]: row for row in snapshot["platform_overview"]}
+
+    assert platform_states[("kuaishou", "UNCERTAIN")] == 1
+    assert platform_overview["kuaishou"]["published_count"] == 0
+    assert platform_overview["kuaishou"]["review_count"] == 1
+    assert platform_overview["kuaishou"]["last_published_at"] is None

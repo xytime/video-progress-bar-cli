@@ -5,6 +5,7 @@
 |---------|------------|---------------------------|-------------------------------------------------|
 | 1.2.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证 purge_stale_tasks, batch_add_videos 补齐 disable_slicing 以及 delete_slices_by_parent_id |
 | 1.3.0   | 2026-07-13 | Codex                    | 覆盖 AI 字幕审计运行、provider 尝试与汇总查询 |
+| 1.4.0   | 2026-07-29 | Codex                    | 覆盖发布后日指标、内容身份、视频关系和 AB 实验汇总 |
 | 1.1.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证多切片视频在不同子切片状态下的 Tab 归属逻辑 |
 | 1.0.0   | 2026-05-27 | Gemini_3.5_Flash_planning | Initial TDD test creation for database composite keys |
 """
@@ -372,3 +373,148 @@ def test_delete_slices_by_parent_id(temp_db):
     # 验证子切片被删，父任务还在
     assert len(db.get_slices_by_parent_yid("parent_yid")) == 0
     assert db.get_video_by_youtube_id("parent_yid", 0) is not None
+
+
+def test_published_video_daily_metrics_are_idempotent_and_summarized(temp_db):
+    db = PipelineDB(temp_db)
+    db.add_video("metric-video", "Metric title", "channel_1", score=80)
+    db.update_video_status("metric-video", "PUBLISHED")
+
+    first = db.record_published_video_daily_metrics(
+        "metric-video",
+        platform="wechat",
+        metric_date="2026-07-28",
+        click_count=10,
+        view_count=100,
+        like_count=8,
+        share_count=2,
+        comment_count=1,
+        source="manual_export",
+        raw={"row": 1},
+    )
+    second = db.record_published_video_daily_metrics(
+        "metric-video",
+        platform="wechat",
+        metric_date="2026-07-28",
+        click_count=12,
+        view_count=130,
+        like_count=9,
+        share_count=3,
+        comment_count=2,
+        source="manual_export",
+        raw={"row": 2},
+    )
+    db.record_published_video_daily_metrics(
+        "metric-video",
+        platform="douyin",
+        metric_date="2026-07-29",
+        click_count=4,
+        view_count=50,
+        like_count=5,
+        share_count=1,
+        comment_count=0,
+    )
+
+    assert first["id"] == second["id"]
+    assert second["click_count"] == 12
+
+    rows = db.get_daily_metrics_for_video("metric-video")
+    assert [(row["platform"], row["metric_date"]) for row in rows] == [
+        ("wechat", "2026-07-28"),
+        ("douyin", "2026-07-29"),
+    ]
+
+    summary = db.get_published_video_metric_summary("metric-video")
+    assert summary["total"]["metric_days"] == 2
+    assert summary["total"]["click_count"] == 16
+    assert summary["total"]["view_count"] == 180
+    assert {row["platform"]: row["like_count"] for row in summary["by_platform"]} == {
+        "douyin": 5,
+        "wechat": 9,
+    }
+
+
+def test_content_identity_and_video_relationships_support_variant_lineage(temp_db):
+    db = PipelineDB(temp_db)
+    db.add_video("source-video", "Original title", "channel_1", score=80, duration_sec=90)
+    db.add_video("variant-video", "Variant title", "channel_1", score=80, duration_sec=90)
+
+    source_identity = db.assign_video_content_identity(
+        "source-video",
+        content_key="content:market-brief-001",
+        source_kind="TRANSCRIPT",
+        fingerprint_hash="f" * 64,
+        normalized_title="market brief 001",
+        relationship_to_content="ORIGINAL",
+    )
+    variant_identity = db.assign_video_content_identity(
+        "variant-video",
+        content_key="content:market-brief-001",
+        source_kind="TRANSCRIPT",
+        relationship_to_content="VARIANT",
+        variant_key="B",
+    )
+    relation = db.record_video_relationship(
+        "source-video",
+        "variant-video",
+        relation_type="AB_VARIANT_OF",
+        notes="标题 AB 测试",
+    )
+
+    assert source_identity["id"] == variant_identity["id"]
+    assert variant_identity["variant_key"] == "B"
+    assert relation["relation_type"] == "AB_VARIANT_OF"
+    assert db.get_video_content_identity("variant-video")["content_key"] == "content:market-brief-001"
+    assert db.get_related_videos("source-video", direction="parent")[0]["child_youtube_id"] == "variant-video"
+
+
+def test_ab_experiment_summary_rolls_up_variant_metrics(temp_db):
+    db = PipelineDB(temp_db)
+    db.add_video("variant-a", "A title", "channel_1", score=80)
+    db.add_video("variant-b", "B title", "channel_1", score=80)
+    db.assign_video_content_identity(
+        "variant-a",
+        content_key="content:ab-foundation",
+        relationship_to_content="ORIGINAL",
+        variant_key="A",
+    )
+    db.assign_video_content_identity(
+        "variant-b",
+        content_key="content:ab-foundation",
+        relationship_to_content="VARIANT",
+        variant_key="B",
+    )
+    experiment = db.create_ab_experiment(
+        "cover-title-test",
+        content_key="content:ab-foundation",
+        hypothesis="短标题提升点击",
+        primary_metric="click_count",
+        state="RUNNING",
+    )
+    db.add_ab_experiment_variant(experiment["id"], "variant-a", variant_key="A", variant_label="长标题")
+    db.add_ab_experiment_variant(experiment["id"], "variant-b", variant_key="B", variant_label="短标题")
+
+    db.record_published_video_daily_metrics(
+        "variant-a",
+        platform="wechat",
+        metric_date="2026-07-28",
+        click_count=10,
+        view_count=100,
+        like_count=6,
+    )
+    db.record_published_video_daily_metrics(
+        "variant-b",
+        platform="wechat",
+        metric_date="2026-07-28",
+        click_count=18,
+        view_count=110,
+        like_count=7,
+    )
+
+    summary = db.get_ab_experiment_summary(experiment["id"], platform="wechat")
+    by_variant = {row["variant_key"]: row for row in summary["variants"]}
+
+    assert summary["experiment"]["content_key"] == "content:ab-foundation"
+    assert by_variant["A"]["click_count"] == 10
+    assert by_variant["B"]["click_count"] == 18
+    assert by_variant["B"]["youtube_id"] == "variant-b"

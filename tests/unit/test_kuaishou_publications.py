@@ -8,11 +8,15 @@
 | 1.2.0 | 2026-07-25 | Codex | 覆盖取消状态为历史补录自动重试终态与多尝试账本迁移 |
 | 1.3.0 | 2026-07-26 | Codex | 覆盖快手上传前审查命中时取消平台任务且不调用上传器 |
 | 1.4.0 | 2026-07-27 | Codex | 覆盖快手发布前审查异常 fail-closed，不调用上传器 |
+| 1.5.0 | 2026-07-29 | Codex | 覆盖平台上传前缺少可读字幕正文时取消任务，不调用上传器 |
+| 1.6.0 | 2026-07-29 | Codex | 覆盖含审核反证的快手 PUBLISHED 写入会保守降级且不参与去重 |
 """
 
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from config.settings import settings
 from video_processing import censor_engine
@@ -39,7 +43,30 @@ def test_kuaishou_ledger_only_deduplicates_assets_after_published(tmp_path: Path
     duplicate = db.create_kuaishou_publication("video-three", digest, "/tmp/three.mp4", source_kind="HISTORY")
 
     assert duplicate["id"] == first["id"]
-    assert db.get_kuaishou_publication("video-one")["state"] == "PUBLISHED"
+    first_row = db.get_kuaishou_publication("video-one")
+    assert first_row["state"] == "PUBLISHED"
+    assert first_row["last_error_message"] == "快手作品管理已确认本次作品为已发布。"
+    assert db.get_kuaishou_publication("video-two")["state"] == "QUEUED"
+
+
+def test_kuaishou_published_with_review_evidence_is_not_success_dedup(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "video-one")
+    _add_video(db, "video-two")
+    digest = "9" * 64
+
+    first = db.create_kuaishou_publication("video-one", digest, "/tmp/one.mp4", source_kind="HISTORY")
+    assert db.update_kuaishou_publication_state(
+        first["id"],
+        "PUBLISHED",
+        error_message="快手作品管理已可见，当前审核中；等待平台审核结果，不重新上传。",
+    )
+    second = db.create_kuaishou_publication("video-two", digest, "/tmp/two.mp4", source_kind="HISTORY")
+
+    first_row = db.get_kuaishou_publication("video-one")
+    assert first_row["state"] == "UNDER_REVIEW"
+    assert first_row["published_at"] is None
+    assert second["id"] != first["id"]
     assert db.get_kuaishou_publication("video-two")["state"] == "QUEUED"
 
 
@@ -138,11 +165,12 @@ def test_canceled_history_publication_is_not_claimed_again(tmp_path: Path):
     assert db.claim_next_kuaishou_history_publication(daily_limit=10) is None
 
 
-def test_kuaishou_publication_censorship_hit_cancels_without_upload(tmp_path: Path):
+def test_kuaishou_publication_censorship_hit_cancels_without_upload(tmp_path: Path, monkeypatch):
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     manager._OUT_DIR = tmp_path
     (tmp_path / "video-id_vertical.mp4").write_bytes(b"video")
     (tmp_path / "video-id_kuaishou_copy.txt").write_text("涉及中国工程师遇袭的敏感文案", encoding="utf-8")
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
     manager.db = MagicMock()
     manager.db.get_video_by_youtube_id.return_value = {
         "title": "测试视频",
@@ -179,6 +207,7 @@ def test_kuaishou_publish_preflight_exception_cancels_without_upload(tmp_path: P
 
     monkeypatch.setattr(settings, "enable_censorship_engine", True)
     monkeypatch.setattr(settings, "enable_channel_policy_filter", False)
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
 
     def boom(zh_text="", en_text=""):
         raise RuntimeError("rules unavailable")
@@ -196,6 +225,70 @@ def test_kuaishou_publish_preflight_exception_cancels_without_upload(tmp_path: P
     video = manager.db.get_video_by_youtube_id("video-id")
     assert video["status"] == "FAILED"
     assert "Censorship fail-closed" in video["error_msg"]
+
+
+def test_douyin_publish_missing_subtitle_text_cancels_without_upload(tmp_path: Path, monkeypatch):
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.db.add_video("video-id", "测试视频", "test-channel", score=80)
+    (tmp_path / "video-id_vertical.mp4").write_bytes(b"video")
+    (tmp_path / "video-id_copy.txt").write_text("普通文案", encoding="utf-8")
+    (tmp_path / "video-id_title.txt").write_text("普通标题", encoding="utf-8")
+    (tmp_path / "video-id_cover.jpg").write_bytes(b"cover")
+    manager.db.create_douyin_publication(
+        "video-id",
+        "d" * 64,
+        str(tmp_path / "video-id_vertical.mp4"),
+        source_kind="HISTORY",
+    )
+    publication = manager.db.get_douyin_publication("video-id")
+
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", True)
+    manager._is_public_publish_window = MagicMock(return_value=True)
+    manager._check_censorship = MagicMock(return_value=False)
+    manager._run_tracked = MagicMock()
+
+    assert not manager._publish_claimed_douyin_publication(publication)
+
+    manager._check_censorship.assert_not_called()
+    manager._run_tracked.assert_not_called()
+    row = manager.db.get_douyin_publication("video-id")
+    assert row["state"] == "CANCELED"
+    assert "缺少可读字幕正文" in row["last_error_message"]
+
+
+def test_platform_publish_uses_archived_subtitle_text_for_preflight(tmp_path: Path, monkeypatch):
+    pysubs2 = pytest.importorskip("pysubs2")
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager._ORIG_VIDEO_DIR = tmp_path / "original_video"
+    manager._ORIG_VIDEO_DIR.mkdir()
+    (tmp_path / "video-id_copy.txt").write_text("普通文案", encoding="utf-8")
+    (tmp_path / "video-id_title.txt").write_text("普通标题", encoding="utf-8")
+
+    subs = pysubs2.SSAFile()
+    subs.append(pysubs2.SSAEvent(start=0, end=1000, text="archived subtitle body"))
+    subs.save(str(manager._ORIG_VIDEO_DIR / "video-id.ass"))
+
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", True)
+    manager.db = MagicMock()
+    manager.db.get_video_by_youtube_id.return_value = {
+        "title": "测试视频",
+        "zh_title": "普通标题",
+    }
+    manager._check_censorship = MagicMock(return_value=False)
+
+    blocked = manager._platform_publication_censorship_blocked(
+        {"id": 193, "youtube_id": "video-id", "slice_index": 0},
+        "抖音",
+        tmp_path / "video-id_copy.txt",
+        tmp_path / "video-id_title.txt",
+    )
+
+    assert blocked is False
+    _, kwargs = manager._check_censorship.call_args
+    assert "archived subtitle body" in kwargs["subtitle_text"]
+    manager.db.update_douyin_publication_state.assert_not_called()
 
 
 def test_manually_completed_attempt_counts_toward_history_daily_limit(tmp_path: Path):

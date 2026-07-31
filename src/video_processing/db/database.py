@@ -53,9 +53,15 @@
 | 3.21.0  | 2026-07-28 | Codex                               | 新增监控候选入库/补全接口；RSS 降级条目保持 METADATA_PENDING，完整官方元数据到位才转 PENDING |
 | 3.22.0  | 2026-07-28 | Codex                               | 新增只读运维质检快照接口，集中队列、失败、在途和多平台账本查询 |
 | 3.22.1  | 2026-07-28 | Codex                               | 质检快照增加最近本地发布和各平台账本总览，支撑 Telegram 上帝视角状态行 |
+| 3.22.2  | 2026-07-29 | Codex                               | 抖音补录候选排除 CANCELED 终态，避免缺素材历史记录重复进入自动补发 |
+| 3.22.3  | 2026-07-29 | Codex                               | 新增抖音历史补发实时进度快照，供每条发送前汇报今日已发和剩余队列 |
+| 3.22.4  | 2026-07-29 | Codex                               | 平台汇总展示按审核/未确认信号保守降级，避免本地 PUBLISHED 误报为平台可见 |
+| 3.22.5  | 2026-07-29 | Codex                               | 平台 PUBLISHED 写入必须覆盖明确确认备注，防止旧审核备注残留污染终态 |
+| 3.22.6  | 2026-07-29 | Codex                               | 新增最近微信已发布但抖音 NEW 未建账的漏同步查询，供调度器自动补偿 |
 | 3.23.0  | 2026-07-29 | Codex                               | 新增独立配音再制任务、片段、产物和投递账本；不复用原视频状态机 |
 | 3.23.1  | 2026-07-29 | Codex                               | 新增配音投递状态校正 DAL，避免人工校正被计为新上传尝试 |
 | 3.23.2  | 2026-07-29 | Codex                               | 配音任务读取透传源片 upload_date，供再制渲染继承发布日期戳并保留切片回退能力 |
+| 3.24.0  | 2026-07-29 | Codex                               | 新增发布后日粒度指标、内容唯一身份、视频关系和 AB 实验底层账本 |
 """
 
 import sqlite3
@@ -74,6 +80,42 @@ class PipelineDB:
     """
 
     _logger = logging.getLogger(__name__)
+    _PLATFORM_REVIEW_MARKERS = (
+        "审核中",
+        "待审核",
+        "等待平台审核",
+        "按审核中处理",
+        "已接受发布提交",
+    )
+    _PLATFORM_UNCONFIRMED_MARKERS = (
+        "未确认",
+        "未找到",
+        "不可见",
+        "无平台成功证明",
+        "等待作品管理回查",
+        "确认最终发布",
+    )
+    _METRIC_PLATFORMS = {"wechat", "douyin", "kuaishou", "xiaohongshu"}
+    _CONTENT_IDENTITY_SOURCES = {"SOURCE", "ASSET", "TRANSCRIPT", "MANUAL", "MIXED"}
+    _CONTENT_RELATIONS = {"ORIGINAL", "CUT", "DUBBING", "TRANSLATION", "REMIX", "VARIANT", "UNKNOWN"}
+    _VIDEO_RELATIONS = {
+        "SLICE_OF", "DERIVED_FROM", "DUBBING_OF", "TRANSLATION_OF", "REMIX_OF", "AB_VARIANT_OF", "DUPLICATE_OF",
+    }
+    _AB_EXPERIMENT_STATES = {"DRAFT", "RUNNING", "PAUSED", "COMPLETED", "CANCELED"}
+
+    @classmethod
+    def _derive_platform_display_state(cls, state: Optional[str], error_message: Optional[str]) -> str:
+        """把本地账本状态转换为面向运营展示的保守状态。"""
+        normalized_state = (state or "NOT_QUEUED").upper()
+        if normalized_state != "PUBLISHED":
+            return normalized_state
+
+        text = error_message or ""
+        if any(marker in text for marker in cls._PLATFORM_REVIEW_MARKERS):
+            return "UNDER_REVIEW"
+        if any(marker in text for marker in cls._PLATFORM_UNCONFIRMED_MARKERS):
+            return "UNCERTAIN"
+        return normalized_state
 
     def __init__(self, db_path: str = "pipeline.db"):
         # 默认在项目根目录的 output 文件夹内创建数据库
@@ -568,6 +610,116 @@ class PipelineDB:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_dubbing_jobs_source ON dubbing_jobs(source_video_id, updated_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_dubbing_utterances_job ON dubbing_utterances(job_id, ordinal)")
 
+            # 发布后数据地基：日粒度指标只记录事实读数，不反推平台发布成功状态。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS published_video_daily_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL,
+                    platform TEXT NOT NULL CHECK(platform IN ('wechat', 'douyin', 'kuaishou', 'xiaohongshu')),
+                    metric_date TEXT NOT NULL,
+                    impression_count INTEGER NOT NULL DEFAULT 0,
+                    click_count INTEGER NOT NULL DEFAULT 0,
+                    view_count INTEGER NOT NULL DEFAULT 0,
+                    like_count INTEGER NOT NULL DEFAULT 0,
+                    share_count INTEGER NOT NULL DEFAULT 0,
+                    comment_count INTEGER NOT NULL DEFAULT 0,
+                    favorite_count INTEGER NOT NULL DEFAULT 0,
+                    follow_count INTEGER NOT NULL DEFAULT 0,
+                    watch_seconds INTEGER DEFAULT NULL,
+                    avg_watch_seconds REAL DEFAULT NULL,
+                    completion_rate REAL DEFAULT NULL,
+                    source TEXT NOT NULL DEFAULT 'manual',
+                    raw_json TEXT NOT NULL DEFAULT '{}',
+                    collected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(video_id, platform, metric_date),
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS video_content_identities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content_key TEXT NOT NULL UNIQUE,
+                    source_kind TEXT NOT NULL DEFAULT 'MANUAL'
+                        CHECK(source_kind IN ('SOURCE', 'ASSET', 'TRANSCRIPT', 'MANUAL', 'MIXED')),
+                    fingerprint_hash TEXT DEFAULT NULL UNIQUE,
+                    canonical_video_id INTEGER DEFAULT NULL,
+                    normalized_title TEXT DEFAULT NULL,
+                    duration_sec INTEGER DEFAULT NULL,
+                    notes TEXT DEFAULT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(canonical_video_id) REFERENCES processed_videos(id) ON DELETE SET NULL
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS video_content_links (
+                    video_id INTEGER PRIMARY KEY,
+                    content_identity_id INTEGER NOT NULL,
+                    relationship_to_content TEXT NOT NULL DEFAULT 'UNKNOWN'
+                        CHECK(relationship_to_content IN ('ORIGINAL', 'CUT', 'DUBBING', 'TRANSLATION', 'REMIX', 'VARIANT', 'UNKNOWN')),
+                    variant_key TEXT DEFAULT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE,
+                    FOREIGN KEY(content_identity_id) REFERENCES video_content_identities(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS video_relationships (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    parent_video_id INTEGER NOT NULL,
+                    child_video_id INTEGER NOT NULL,
+                    relation_type TEXT NOT NULL
+                        CHECK(relation_type IN ('SLICE_OF', 'DERIVED_FROM', 'DUBBING_OF', 'TRANSLATION_OF', 'REMIX_OF', 'AB_VARIANT_OF', 'DUPLICATE_OF')),
+                    notes TEXT DEFAULT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(parent_video_id, child_video_id, relation_type),
+                    FOREIGN KEY(parent_video_id) REFERENCES processed_videos(id) ON DELETE CASCADE,
+                    FOREIGN KEY(child_video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS ab_experiments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    content_identity_id INTEGER DEFAULT NULL,
+                    hypothesis TEXT DEFAULT NULL,
+                    primary_metric TEXT NOT NULL DEFAULT 'click_count',
+                    state TEXT NOT NULL DEFAULT 'DRAFT'
+                        CHECK(state IN ('DRAFT', 'RUNNING', 'PAUSED', 'COMPLETED', 'CANCELED')),
+                    started_at TIMESTAMP DEFAULT NULL,
+                    ended_at TIMESTAMP DEFAULT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(content_identity_id) REFERENCES video_content_identities(id) ON DELETE SET NULL
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS ab_experiment_variants (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    experiment_id INTEGER NOT NULL,
+                    video_id INTEGER NOT NULL,
+                    variant_key TEXT NOT NULL,
+                    variant_label TEXT DEFAULT NULL,
+                    traffic_share REAL DEFAULT NULL,
+                    notes TEXT DEFAULT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(experiment_id, variant_key),
+                    UNIQUE(experiment_id, video_id),
+                    FOREIGN KEY(experiment_id) REFERENCES ab_experiments(id) ON DELETE CASCADE,
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                )
+            ''')
+
             # 4. 创建复合索引优化分页查询与状态调度性能
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_status_updated 
@@ -604,6 +756,26 @@ class PipelineDB:
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_censorship_incidents_level_created
                 ON censorship_incidents(level, created_at DESC)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_daily_metrics_platform_date
+                ON published_video_daily_metrics(platform, metric_date)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_daily_metrics_video_date
+                ON published_video_daily_metrics(video_id, metric_date)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_video_content_links_identity
+                ON video_content_links(content_identity_id, variant_key)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_video_relationships_child
+                ON video_relationships(child_video_id, relation_type)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_ab_variants_experiment
+                ON ab_experiment_variants(experiment_id, variant_key)
             ''')
 
             cursor.execute("PRAGMA table_info(censorship_incidents)")
@@ -835,6 +1007,609 @@ class PipelineDB:
                 (*params, max(1, min(int(limit), 500))),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    # --- Published metrics / content identity / AB-test DAL ---
+    @classmethod
+    def _normalize_metric_platform(cls, platform: str) -> str:
+        normalized = (platform or "").lower()
+        if normalized not in cls._METRIC_PLATFORMS:
+            raise ValueError(f"Unsupported metric platform: {platform}")
+        return normalized
+
+    @staticmethod
+    def _normalize_metric_date(metric_date: str | datetime.date) -> str:
+        if isinstance(metric_date, datetime.date):
+            return metric_date.isoformat()
+        try:
+            return datetime.date.fromisoformat(str(metric_date)).isoformat()
+        except ValueError as exc:
+            raise ValueError("metric_date must be YYYY-MM-DD") from exc
+
+    @staticmethod
+    def _non_negative_int(value: Optional[int], field_name: str, *, nullable: bool = False) -> Optional[int]:
+        if value is None and nullable:
+            return None
+        number = int(value or 0)
+        if number < 0:
+            raise ValueError(f"{field_name} must be non-negative")
+        return number
+
+    @staticmethod
+    def _json_blob(value: Optional[Dict[str, Any]]) -> str:
+        return json.dumps(value or {}, ensure_ascii=False, sort_keys=True)
+
+    def record_published_video_daily_metrics(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        platform: str,
+        metric_date: str | datetime.date,
+        impression_count: int = 0,
+        click_count: int = 0,
+        view_count: int = 0,
+        like_count: int = 0,
+        share_count: int = 0,
+        comment_count: int = 0,
+        favorite_count: int = 0,
+        follow_count: int = 0,
+        watch_seconds: Optional[int] = None,
+        avg_watch_seconds: Optional[float] = None,
+        completion_rate: Optional[float] = None,
+        source: str = "manual",
+        raw: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """按平台和自然日幂等写入发布后指标读数。"""
+        metric_day = self._normalize_metric_date(metric_date)
+        normalized_platform = self._normalize_metric_platform(platform)
+        payload = {
+            "impression_count": self._non_negative_int(impression_count, "impression_count"),
+            "click_count": self._non_negative_int(click_count, "click_count"),
+            "view_count": self._non_negative_int(view_count, "view_count"),
+            "like_count": self._non_negative_int(like_count, "like_count"),
+            "share_count": self._non_negative_int(share_count, "share_count"),
+            "comment_count": self._non_negative_int(comment_count, "comment_count"),
+            "favorite_count": self._non_negative_int(favorite_count, "favorite_count"),
+            "follow_count": self._non_negative_int(follow_count, "follow_count"),
+            "watch_seconds": self._non_negative_int(watch_seconds, "watch_seconds", nullable=True),
+            "avg_watch_seconds": float(avg_watch_seconds) if avg_watch_seconds is not None else None,
+            "completion_rate": float(completion_rate) if completion_rate is not None else None,
+        }
+        if payload["avg_watch_seconds"] is not None and payload["avg_watch_seconds"] < 0:
+            raise ValueError("avg_watch_seconds must be non-negative")
+        if payload["completion_rate"] is not None and payload["completion_rate"] < 0:
+            raise ValueError("completion_rate must be non-negative")
+
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError("Video or slice does not exist")
+            conn.execute(
+                """INSERT INTO published_video_daily_metrics
+                   (video_id, platform, metric_date, impression_count, click_count, view_count,
+                    like_count, share_count, comment_count, favorite_count, follow_count,
+                    watch_seconds, avg_watch_seconds, completion_rate, source, raw_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(video_id, platform, metric_date) DO UPDATE SET
+                     impression_count=excluded.impression_count,
+                     click_count=excluded.click_count,
+                     view_count=excluded.view_count,
+                     like_count=excluded.like_count,
+                     share_count=excluded.share_count,
+                     comment_count=excluded.comment_count,
+                     favorite_count=excluded.favorite_count,
+                     follow_count=excluded.follow_count,
+                     watch_seconds=excluded.watch_seconds,
+                     avg_watch_seconds=excluded.avg_watch_seconds,
+                     completion_rate=excluded.completion_rate,
+                     source=excluded.source,
+                     raw_json=excluded.raw_json,
+                     collected_at=CURRENT_TIMESTAMP,
+                     updated_at=CURRENT_TIMESTAMP""",
+                (
+                    video["id"], normalized_platform, metric_day, payload["impression_count"],
+                    payload["click_count"], payload["view_count"], payload["like_count"],
+                    payload["share_count"], payload["comment_count"], payload["favorite_count"],
+                    payload["follow_count"], payload["watch_seconds"], payload["avg_watch_seconds"],
+                    payload["completion_rate"], (source or "manual")[:80], self._json_blob(raw),
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                """SELECT m.*, pv.youtube_id, pv.slice_index
+                   FROM published_video_daily_metrics m
+                   JOIN processed_videos pv ON pv.id = m.video_id
+                   WHERE m.video_id = ? AND m.platform = ? AND m.metric_date = ?""",
+                (video["id"], normalized_platform, metric_day),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to record daily metrics")
+            return dict(row)
+
+    def get_daily_metrics_for_video(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        platform: Optional[str] = None,
+        date_from: Optional[str | datetime.date] = None,
+        date_to: Optional[str | datetime.date] = None,
+    ) -> List[Dict[str, Any]]:
+        """返回单视频按天指标明细。"""
+        clauses = ["pv.youtube_id = ?", "pv.slice_index = ?"]
+        params: List[Any] = [youtube_id, slice_index]
+        if platform is not None:
+            clauses.append("m.platform = ?")
+            params.append(self._normalize_metric_platform(platform))
+        if date_from is not None:
+            clauses.append("m.metric_date >= ?")
+            params.append(self._normalize_metric_date(date_from))
+        if date_to is not None:
+            clauses.append("m.metric_date <= ?")
+            params.append(self._normalize_metric_date(date_to))
+        where_sql = " AND ".join(clauses)
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""SELECT m.*, pv.youtube_id, pv.slice_index, pv.title, pv.zh_title
+                    FROM published_video_daily_metrics m
+                    JOIN processed_videos pv ON pv.id = m.video_id
+                    WHERE {where_sql}
+                    ORDER BY m.metric_date ASC, m.platform ASC""",
+                params,
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_published_video_metric_summary(
+        self,
+        youtube_id: Optional[str] = None,
+        *,
+        slice_index: int = 0,
+        platform: Optional[str] = None,
+        date_from: Optional[str | datetime.date] = None,
+        date_to: Optional[str | datetime.date] = None,
+    ) -> Dict[str, Any]:
+        """汇总发布后指标；默认全库，传入 youtube_id 时聚焦单视频。"""
+        clauses: List[str] = []
+        params: List[Any] = []
+        if youtube_id is not None:
+            clauses.extend(["pv.youtube_id = ?", "pv.slice_index = ?"])
+            params.extend([youtube_id, slice_index])
+        if platform is not None:
+            clauses.append("m.platform = ?")
+            params.append(self._normalize_metric_platform(platform))
+        if date_from is not None:
+            clauses.append("m.metric_date >= ?")
+            params.append(self._normalize_metric_date(date_from))
+        if date_to is not None:
+            clauses.append("m.metric_date <= ?")
+            params.append(self._normalize_metric_date(date_to))
+        where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        metric_sql = """
+            COUNT(m.id) AS metric_days,
+            COALESCE(SUM(m.impression_count), 0) AS impression_count,
+            COALESCE(SUM(m.click_count), 0) AS click_count,
+            COALESCE(SUM(m.view_count), 0) AS view_count,
+            COALESCE(SUM(m.like_count), 0) AS like_count,
+            COALESCE(SUM(m.share_count), 0) AS share_count,
+            COALESCE(SUM(m.comment_count), 0) AS comment_count,
+            COALESCE(SUM(m.favorite_count), 0) AS favorite_count,
+            COALESCE(SUM(m.follow_count), 0) AS follow_count,
+            COALESCE(SUM(m.watch_seconds), 0) AS watch_seconds,
+            AVG(m.avg_watch_seconds) AS avg_watch_seconds,
+            AVG(m.completion_rate) AS completion_rate
+        """
+        with self.get_connection() as conn:
+            total = conn.execute(
+                f"""SELECT {metric_sql}
+                    FROM published_video_daily_metrics m
+                    JOIN processed_videos pv ON pv.id = m.video_id
+                    {where_sql}""",
+                params,
+            ).fetchone()
+            by_platform = conn.execute(
+                f"""SELECT m.platform, {metric_sql}
+                    FROM published_video_daily_metrics m
+                    JOIN processed_videos pv ON pv.id = m.video_id
+                    {where_sql}
+                    GROUP BY m.platform
+                    ORDER BY m.platform ASC""",
+                params,
+            ).fetchall()
+            by_date = conn.execute(
+                f"""SELECT m.metric_date, {metric_sql}
+                    FROM published_video_daily_metrics m
+                    JOIN processed_videos pv ON pv.id = m.video_id
+                    {where_sql}
+                    GROUP BY m.metric_date
+                    ORDER BY m.metric_date ASC""",
+                params,
+            ).fetchall()
+            return {
+                "filters": {
+                    "youtube_id": youtube_id,
+                    "slice_index": slice_index if youtube_id is not None else None,
+                    "platform": self._normalize_metric_platform(platform) if platform else None,
+                    "date_from": self._normalize_metric_date(date_from) if date_from else None,
+                    "date_to": self._normalize_metric_date(date_to) if date_to else None,
+                },
+                "total": dict(total) if total else {},
+                "by_platform": [dict(row) for row in by_platform],
+                "by_date": [dict(row) for row in by_date],
+            }
+
+    def assign_video_content_identity(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        content_key: Optional[str] = None,
+        source_kind: str = "MANUAL",
+        fingerprint_hash: Optional[str] = None,
+        normalized_title: Optional[str] = None,
+        duration_sec: Optional[int] = None,
+        relationship_to_content: str = "UNKNOWN",
+        variant_key: Optional[str] = None,
+        notes: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """把视频绑定到一个可复用内容身份；同 content_key 可承载多个平台/变体。"""
+        normalized_source = (source_kind or "MANUAL").upper()
+        if normalized_source not in self._CONTENT_IDENTITY_SOURCES:
+            raise ValueError(f"Unsupported content identity source: {source_kind}")
+        normalized_relation = (relationship_to_content or "UNKNOWN").upper()
+        if normalized_relation not in self._CONTENT_RELATIONS:
+            raise ValueError(f"Unsupported content relationship: {relationship_to_content}")
+        safe_key = (content_key or "").strip()
+        safe_fingerprint = (fingerprint_hash or "").strip() or None
+        if not safe_key:
+            safe_key = f"fingerprint:{safe_fingerprint}" if safe_fingerprint else f"youtube:{youtube_id}:slice:{slice_index}"
+
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id, duration_sec, title FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError("Video or slice does not exist")
+            conn.execute(
+                """INSERT INTO video_content_identities
+                   (content_key, source_kind, fingerprint_hash, canonical_video_id,
+                    normalized_title, duration_sec, notes, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(content_key) DO UPDATE SET
+                     source_kind=excluded.source_kind,
+                     fingerprint_hash=COALESCE(excluded.fingerprint_hash, video_content_identities.fingerprint_hash),
+                     canonical_video_id=COALESCE(video_content_identities.canonical_video_id, excluded.canonical_video_id),
+                     normalized_title=COALESCE(excluded.normalized_title, video_content_identities.normalized_title),
+                     duration_sec=COALESCE(excluded.duration_sec, video_content_identities.duration_sec),
+                     notes=COALESCE(excluded.notes, video_content_identities.notes),
+                     metadata_json=excluded.metadata_json,
+                     updated_at=CURRENT_TIMESTAMP""",
+                (
+                    safe_key, normalized_source, safe_fingerprint, video["id"],
+                    normalized_title or video["title"], duration_sec if duration_sec is not None else video["duration_sec"],
+                    notes, self._json_blob(metadata),
+                ),
+            )
+            identity = conn.execute("SELECT * FROM video_content_identities WHERE content_key = ?", (safe_key,)).fetchone()
+            if not identity:
+                raise RuntimeError("Failed to create content identity")
+            conn.execute(
+                """INSERT INTO video_content_links
+                   (video_id, content_identity_id, relationship_to_content, variant_key, metadata_json)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(video_id) DO UPDATE SET
+                     content_identity_id=excluded.content_identity_id,
+                     relationship_to_content=excluded.relationship_to_content,
+                     variant_key=excluded.variant_key,
+                     metadata_json=excluded.metadata_json,
+                     updated_at=CURRENT_TIMESTAMP""",
+                (video["id"], identity["id"], normalized_relation, variant_key, self._json_blob(metadata)),
+            )
+            conn.commit()
+            row = conn.execute(
+                """SELECT ci.*, cl.video_id, cl.relationship_to_content, cl.variant_key,
+                          pv.youtube_id, pv.slice_index
+                   FROM video_content_identities ci
+                   JOIN video_content_links cl ON cl.content_identity_id = ci.id
+                   JOIN processed_videos pv ON pv.id = cl.video_id
+                   WHERE cl.video_id = ?""",
+                (video["id"],),
+            ).fetchone()
+            return dict(row) if row else dict(identity)
+
+    def get_video_content_identity(self, youtube_id: str, *, slice_index: int = 0) -> Optional[Dict[str, Any]]:
+        """返回视频当前绑定的内容身份。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT ci.*, cl.video_id, cl.relationship_to_content, cl.variant_key,
+                          pv.youtube_id, pv.slice_index
+                   FROM video_content_links cl
+                   JOIN video_content_identities ci ON ci.id = cl.content_identity_id
+                   JOIN processed_videos pv ON pv.id = cl.video_id
+                   WHERE pv.youtube_id = ? AND pv.slice_index = ?""",
+                (youtube_id, slice_index),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def record_video_relationship(
+        self,
+        parent_youtube_id: str,
+        child_youtube_id: str,
+        *,
+        relation_type: str,
+        parent_slice_index: int = 0,
+        child_slice_index: int = 0,
+        notes: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """记录两个视频/切片之间的显式关系。"""
+        normalized_relation = (relation_type or "").upper()
+        if normalized_relation not in self._VIDEO_RELATIONS:
+            raise ValueError(f"Unsupported video relation type: {relation_type}")
+        with self.get_connection() as conn:
+            parent = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (parent_youtube_id, parent_slice_index),
+            ).fetchone()
+            child = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (child_youtube_id, child_slice_index),
+            ).fetchone()
+            if not parent or not child:
+                raise ValueError("Parent or child video does not exist")
+            if parent["id"] == child["id"]:
+                raise ValueError("A video cannot relate to itself")
+            conn.execute(
+                """INSERT INTO video_relationships
+                   (parent_video_id, child_video_id, relation_type, notes, metadata_json)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(parent_video_id, child_video_id, relation_type) DO UPDATE SET
+                     notes=excluded.notes,
+                     metadata_json=excluded.metadata_json,
+                     updated_at=CURRENT_TIMESTAMP""",
+                (parent["id"], child["id"], normalized_relation, notes, self._json_blob(metadata)),
+            )
+            conn.commit()
+            row = conn.execute(
+                """SELECT vr.*, parent.youtube_id AS parent_youtube_id, parent.slice_index AS parent_slice_index,
+                          child.youtube_id AS child_youtube_id, child.slice_index AS child_slice_index
+                   FROM video_relationships vr
+                   JOIN processed_videos parent ON parent.id = vr.parent_video_id
+                   JOIN processed_videos child ON child.id = vr.child_video_id
+                   WHERE vr.parent_video_id = ? AND vr.child_video_id = ? AND vr.relation_type = ?""",
+                (parent["id"], child["id"], normalized_relation),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to record video relationship")
+            return dict(row)
+
+    def get_related_videos(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        direction: str = "both",
+    ) -> List[Dict[str, Any]]:
+        """查询某视频作为父/子两侧的关系记录。"""
+        normalized_direction = (direction or "both").lower()
+        if normalized_direction not in {"parent", "child", "both"}:
+            raise ValueError("direction must be parent, child or both")
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                return []
+            clauses = []
+            params: List[Any] = []
+            if normalized_direction in {"parent", "both"}:
+                clauses.append("vr.parent_video_id = ?")
+                params.append(video["id"])
+            if normalized_direction in {"child", "both"}:
+                clauses.append("vr.child_video_id = ?")
+                params.append(video["id"])
+            rows = conn.execute(
+                f"""SELECT vr.*, parent.youtube_id AS parent_youtube_id, parent.slice_index AS parent_slice_index,
+                          child.youtube_id AS child_youtube_id, child.slice_index AS child_slice_index,
+                          child.title AS child_title, parent.title AS parent_title
+                    FROM video_relationships vr
+                    JOIN processed_videos parent ON parent.id = vr.parent_video_id
+                    JOIN processed_videos child ON child.id = vr.child_video_id
+                    WHERE {' OR '.join(clauses)}
+                    ORDER BY vr.updated_at DESC, vr.id DESC""",
+                params,
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def create_ab_experiment(
+        self,
+        name: str,
+        *,
+        content_key: Optional[str] = None,
+        hypothesis: Optional[str] = None,
+        primary_metric: str = "click_count",
+        state: str = "DRAFT",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """创建或更新一个 AB 实验容器。"""
+        safe_name = (name or "").strip()
+        if not safe_name:
+            raise ValueError("name is required")
+        normalized_state = (state or "DRAFT").upper()
+        if normalized_state not in self._AB_EXPERIMENT_STATES:
+            raise ValueError(f"Unsupported AB experiment state: {state}")
+        with self.get_connection() as conn:
+            identity_id = None
+            if content_key:
+                identity = conn.execute(
+                    "SELECT id FROM video_content_identities WHERE content_key = ?",
+                    (content_key,),
+                ).fetchone()
+                if not identity:
+                    raise ValueError("content_key does not exist")
+                identity_id = identity["id"]
+            conn.execute(
+                """INSERT INTO ab_experiments
+                   (name, content_identity_id, hypothesis, primary_metric, state, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(name) DO UPDATE SET
+                     content_identity_id=COALESCE(excluded.content_identity_id, ab_experiments.content_identity_id),
+                     hypothesis=excluded.hypothesis,
+                     primary_metric=excluded.primary_metric,
+                     state=excluded.state,
+                     metadata_json=excluded.metadata_json,
+                     updated_at=CURRENT_TIMESTAMP""",
+                (safe_name, identity_id, hypothesis, primary_metric, normalized_state, self._json_blob(metadata)),
+            )
+            conn.commit()
+            row = conn.execute(
+                """SELECT e.*, ci.content_key
+                   FROM ab_experiments e
+                   LEFT JOIN video_content_identities ci ON ci.id = e.content_identity_id
+                   WHERE e.name = ?""",
+                (safe_name,),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to create AB experiment")
+            return dict(row)
+
+    def add_ab_experiment_variant(
+        self,
+        experiment_id: int,
+        youtube_id: str,
+        *,
+        variant_key: str,
+        slice_index: int = 0,
+        variant_label: Optional[str] = None,
+        traffic_share: Optional[float] = None,
+        notes: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """把一个视频登记为 AB 实验变体，并在同内容实验中自动补上内容链接。"""
+        safe_variant_key = (variant_key or "").strip()
+        if not safe_variant_key:
+            raise ValueError("variant_key is required")
+        if traffic_share is not None and traffic_share < 0:
+            raise ValueError("traffic_share must be non-negative")
+        with self.get_connection() as conn:
+            experiment = conn.execute("SELECT * FROM ab_experiments WHERE id = ?", (experiment_id,)).fetchone()
+            if not experiment:
+                raise ValueError("AB experiment does not exist")
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError("Video or slice does not exist")
+            if experiment["content_identity_id"] is not None:
+                link = conn.execute(
+                    "SELECT content_identity_id FROM video_content_links WHERE video_id = ?",
+                    (video["id"],),
+                ).fetchone()
+                if link and link["content_identity_id"] != experiment["content_identity_id"]:
+                    raise ValueError("Video content identity does not match experiment")
+                if not link:
+                    conn.execute(
+                        """INSERT INTO video_content_links
+                           (video_id, content_identity_id, relationship_to_content, variant_key, metadata_json)
+                           VALUES (?, ?, 'VARIANT', ?, ?)""",
+                        (video["id"], experiment["content_identity_id"], safe_variant_key, self._json_blob(metadata)),
+                    )
+            conn.execute(
+                """INSERT INTO ab_experiment_variants
+                   (experiment_id, video_id, variant_key, variant_label, traffic_share, notes, metadata_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(experiment_id, variant_key) DO UPDATE SET
+                     video_id=excluded.video_id,
+                     variant_label=excluded.variant_label,
+                     traffic_share=excluded.traffic_share,
+                     notes=excluded.notes,
+                     metadata_json=excluded.metadata_json,
+                     updated_at=CURRENT_TIMESTAMP""",
+                (
+                    experiment_id, video["id"], safe_variant_key, variant_label,
+                    traffic_share, notes, self._json_blob(metadata),
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                """SELECT av.*, pv.youtube_id, pv.slice_index
+                   FROM ab_experiment_variants av
+                   JOIN processed_videos pv ON pv.id = av.video_id
+                   WHERE av.experiment_id = ? AND av.variant_key = ?""",
+                (experiment_id, safe_variant_key),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to add AB experiment variant")
+            return dict(row)
+
+    def get_ab_experiment_summary(
+        self,
+        experiment_id: int,
+        *,
+        platform: Optional[str] = None,
+        date_from: Optional[str | datetime.date] = None,
+        date_to: Optional[str | datetime.date] = None,
+    ) -> Dict[str, Any]:
+        """返回 AB 实验变体维度的指标汇总。"""
+        metric_clauses = ["m.video_id = av.video_id"]
+        metric_params: List[Any] = []
+        if platform is not None:
+            metric_clauses.append("m.platform = ?")
+            metric_params.append(self._normalize_metric_platform(platform))
+        if date_from is not None:
+            metric_clauses.append("m.metric_date >= ?")
+            metric_params.append(self._normalize_metric_date(date_from))
+        if date_to is not None:
+            metric_clauses.append("m.metric_date <= ?")
+            metric_params.append(self._normalize_metric_date(date_to))
+        metric_join = " AND ".join(metric_clauses)
+        metric_sql = """
+            COUNT(m.id) AS metric_days,
+            COALESCE(SUM(m.impression_count), 0) AS impression_count,
+            COALESCE(SUM(m.click_count), 0) AS click_count,
+            COALESCE(SUM(m.view_count), 0) AS view_count,
+            COALESCE(SUM(m.like_count), 0) AS like_count,
+            COALESCE(SUM(m.share_count), 0) AS share_count,
+            COALESCE(SUM(m.comment_count), 0) AS comment_count,
+            COALESCE(SUM(m.favorite_count), 0) AS favorite_count,
+            COALESCE(SUM(m.follow_count), 0) AS follow_count
+        """
+        with self.get_connection() as conn:
+            experiment = conn.execute(
+                """SELECT e.*, ci.content_key
+                   FROM ab_experiments e
+                   LEFT JOIN video_content_identities ci ON ci.id = e.content_identity_id
+                   WHERE e.id = ?""",
+                (experiment_id,),
+            ).fetchone()
+            if not experiment:
+                raise ValueError("AB experiment does not exist")
+            variants = conn.execute(
+                f"""SELECT av.id, av.variant_key, av.variant_label, av.traffic_share,
+                          pv.youtube_id, pv.slice_index, pv.title, {metric_sql}
+                    FROM ab_experiment_variants av
+                    JOIN processed_videos pv ON pv.id = av.video_id
+                    LEFT JOIN published_video_daily_metrics m ON {metric_join}
+                    WHERE av.experiment_id = ?
+                    GROUP BY av.id
+                    ORDER BY av.variant_key ASC""",
+                (*metric_params, experiment_id),
+            ).fetchall()
+            return {
+                "experiment": dict(experiment),
+                "filters": {
+                    "platform": self._normalize_metric_platform(platform) if platform else None,
+                    "date_from": self._normalize_metric_date(date_from) if date_from else None,
+                    "date_to": self._normalize_metric_date(date_to) if date_to else None,
+                },
+                "variants": [dict(row) for row in variants],
+            }
 
     # --- Channel DAL ---
     def add_channel(self, channel_id: str, channel_name: str, status: str = 'APPROVED', reason: str = '') -> bool:
@@ -1433,11 +2208,45 @@ class PipelineDB:
                 (f"-{safe_hours} hours", safe_item_limit),
             ).fetchall()
             platform_rows = conn.execute(
-                """SELECT platform, state, COUNT(*) AS count FROM (
-                       SELECT 'kuaishou' AS platform, state FROM kuaishou_publications
-                       UNION ALL
-                       SELECT 'douyin' AS platform, state FROM douyin_publications
-                   ) GROUP BY platform, state ORDER BY platform, state"""
+                """
+                WITH all_pubs AS (
+                    SELECT 'kuaishou' AS platform, state, last_error_message
+                    FROM kuaishou_publications
+                    UNION ALL
+                    SELECT 'douyin' AS platform, state, last_error_message
+                    FROM douyin_publications
+                ),
+                display_pubs AS (
+                    SELECT platform,
+                           CASE
+                               WHEN state = 'PUBLISHED'
+                                    AND (
+                                        last_error_message LIKE '%审核中%'
+                                        OR last_error_message LIKE '%待审核%'
+                                        OR last_error_message LIKE '%等待平台审核%'
+                                        OR last_error_message LIKE '%按审核中处理%'
+                                        OR last_error_message LIKE '%已接受发布提交%'
+                                    )
+                                   THEN 'UNDER_REVIEW'
+                               WHEN state = 'PUBLISHED'
+                                    AND (
+                                        last_error_message LIKE '%未确认%'
+                                        OR last_error_message LIKE '%未找到%'
+                                        OR last_error_message LIKE '%不可见%'
+                                        OR last_error_message LIKE '%无平台成功证明%'
+                                        OR last_error_message LIKE '%等待作品管理回查%'
+                                        OR last_error_message LIKE '%确认最终发布%'
+                                    )
+                                   THEN 'UNCERTAIN'
+                               ELSE state
+                           END AS state
+                    FROM all_pubs
+                )
+                SELECT platform, state, COUNT(*) AS count
+                FROM display_pubs
+                GROUP BY platform, state
+                ORDER BY platform, state
+                """
             ).fetchall()
             platform_overview_rows = conn.execute(
                 """
@@ -1450,12 +2259,38 @@ class PipelineDB:
                            updated_at, last_error_message
                     FROM douyin_publications
                 ),
+                display_pubs AS (
+                    SELECT platform, id, video_id, published_at, updated_at, last_error_message,
+                           CASE
+                               WHEN state = 'PUBLISHED'
+                                    AND (
+                                        last_error_message LIKE '%审核中%'
+                                        OR last_error_message LIKE '%待审核%'
+                                        OR last_error_message LIKE '%等待平台审核%'
+                                        OR last_error_message LIKE '%按审核中处理%'
+                                        OR last_error_message LIKE '%已接受发布提交%'
+                                    )
+                                   THEN 'UNDER_REVIEW'
+                               WHEN state = 'PUBLISHED'
+                                    AND (
+                                        last_error_message LIKE '%未确认%'
+                                        OR last_error_message LIKE '%未找到%'
+                                        OR last_error_message LIKE '%不可见%'
+                                        OR last_error_message LIKE '%无平台成功证明%'
+                                        OR last_error_message LIKE '%等待作品管理回查%'
+                                        OR last_error_message LIKE '%确认最终发布%'
+                                    )
+                                   THEN 'UNCERTAIN'
+                               ELSE state
+                           END AS state
+                    FROM all_pubs
+                ),
                 ranked AS (
                     SELECT *,
                            ROW_NUMBER() OVER (
                                PARTITION BY platform ORDER BY updated_at DESC, id DESC
                            ) AS rn
-                    FROM all_pubs
+                    FROM display_pubs
                 ),
                 agg AS (
                     SELECT platform,
@@ -1466,7 +2301,7 @@ class PipelineDB:
                            SUM(CASE WHEN state IN ('QUEUED', 'UPLOADING') THEN 1 ELSE 0 END) AS queued_count,
                            MAX(CASE WHEN state = 'PUBLISHED' THEN COALESCE(published_at, updated_at) END) AS last_published_at,
                            MAX(CASE WHEN state IN ('RETRYABLE_FAILED', 'BANNED') THEN updated_at END) AS last_failed_at
-                    FROM all_pubs
+                    FROM display_pubs
                     GROUP BY platform
                 )
                 SELECT agg.platform, agg.total, agg.published_count, agg.review_count,
@@ -1611,6 +2446,7 @@ class PipelineDB:
                         "platform": "wechat",
                         "platform_name": "微信视频号",
                         "state": st,
+                        "display_state": st,
                         "published_at": row["updated_at"] if is_pub else None,
                         "external_url": None,
                         "error": row["error_msg"],
@@ -1619,6 +2455,7 @@ class PipelineDB:
                         "platform": "kuaishou",
                         "platform_name": "快手",
                         "state": "NOT_QUEUED",
+                        "display_state": "NOT_QUEUED",
                         "published_at": None,
                         "external_url": None,
                         "error": None,
@@ -1628,6 +2465,7 @@ class PipelineDB:
                         "platform": "douyin",
                         "platform_name": "抖音",
                         "state": "NOT_QUEUED",
+                        "display_state": "NOT_QUEUED",
                         "published_at": None,
                         "external_url": None,
                         "error": None,
@@ -1659,10 +2497,12 @@ class PipelineDB:
                 v_id = row["video_id"]
                 p_key = row["platform"]
                 if v_id in result and p_key in result[v_id]:
+                    display_state = self._derive_platform_display_state(row["state"], row["error"])
                     result[v_id][p_key] = {
                         "platform": p_key,
                         "platform_name": plat_names.get(p_key, p_key),
                         "state": row["state"],
+                        "display_state": display_state,
                         "published_at": row["published_at"],
                         "external_url": row["external_url"],
                         "error": row["error"],
@@ -2067,7 +2907,9 @@ class PipelineDB:
                 "SELECT * FROM kuaishou_publications WHERE asset_sha256 = ? AND state = 'PUBLISHED'",
                 (asset_sha256,),
             ).fetchone()
-            if published:
+            if published and self._derive_platform_display_state(
+                published["state"], published["last_error_message"]
+            ) == "PUBLISHED":
                 return dict(published)
             video = conn.execute(
                 "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
@@ -2263,6 +3105,10 @@ class PipelineDB:
         normalized_state = (state or "").upper()
         if normalized_state not in self._KUAISHOU_STATES:
             raise ValueError(f"Unsupported Kuaishou state: {state}")
+        if normalized_state == "PUBLISHED" and error_message is None:
+            error_message = "快手作品管理已确认本次作品为已发布。"
+        requested_state = normalized_state
+        normalized_state = self._derive_platform_display_state(normalized_state, error_message)
         assignments = ["state = ?", "updated_at = CURRENT_TIMESTAMP"]
         values: List[Any] = [normalized_state]
         if external_post_id is not None:
@@ -2276,6 +3122,8 @@ class PipelineDB:
             values.append(error_message)
         if normalized_state == "PUBLISHED":
             assignments.append("published_at = COALESCE(published_at, CURRENT_TIMESTAMP)")
+        elif requested_state == "PUBLISHED" or normalized_state in {"UNDER_REVIEW", "UNCERTAIN", "BANNED"}:
+            assignments.append("published_at = NULL")
         values.append(publication_id)
         with self.get_connection() as conn:
             cursor = conn.execute(
@@ -2322,7 +3170,9 @@ class PipelineDB:
                 "SELECT * FROM douyin_publications WHERE asset_sha256 = ? AND state = 'PUBLISHED'",
                 (asset_sha256,),
             ).fetchone()
-            if published:
+            if published and self._derive_platform_display_state(
+                published["state"], published["last_error_message"]
+            ) == "PUBLISHED":
                 return dict(published)
             video = conn.execute(
                 "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
@@ -2403,6 +3253,31 @@ class PipelineDB:
                 LIMIT ?
                 ''',
                 (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_unqueued_douyin_new_videos(self, *, lookback_hours: int = 24, limit: int = 10) -> List[Dict[str, Any]]:
+        """返回最近微信已发布、但尚未登记抖音 NEW 账本的新片漏同步项。"""
+        if lookback_hours < 1:
+            raise ValueError("lookback_hours must be at least 1")
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                '''
+                SELECT pv.*
+                FROM processed_videos pv
+                WHERE pv.status = 'PUBLISHED'
+                  AND pv.updated_at >= datetime('now', ?)
+                  AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+                  AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM douyin_publications dp WHERE dp.video_id = pv.id
+                  )
+                ORDER BY pv.updated_at ASC, pv.id ASC
+                LIMIT ?
+                ''',
+                (f"-{int(lookback_hours)} hours", int(limit)),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -2503,6 +3378,39 @@ class PipelineDB:
         """兼容入口：原子领取一条抖音历史迁移任务并遵守当天上限。"""
         return self.claim_next_douyin_publication("HISTORY", daily_limit=daily_limit)
 
+    def get_douyin_history_progress_snapshot(self, daily_limit: int) -> Dict[str, int]:
+        """返回抖音历史补发的今日进度和可领取队列数。"""
+        if daily_limit < 1:
+            raise ValueError("daily_limit must be at least 1")
+        with self.get_connection() as conn:
+            claimed_today = conn.execute(
+                '''
+                SELECT COUNT(*) AS count FROM douyin_publications
+                WHERE source_kind = 'HISTORY'
+                  AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                  AND claimed_at IS NOT NULL
+                  AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                '''
+            ).fetchone()["count"]
+            queue_ready = conn.execute(
+                '''
+                SELECT COUNT(*) AS count FROM douyin_publications dp
+                WHERE dp.source_kind = 'HISTORY'
+                  AND dp.state IN ('QUEUED', 'RETRYABLE_FAILED')
+                  AND (dp.claimed_at IS NULL OR date(dp.claimed_at, 'localtime') < date('now', 'localtime'))
+                  AND NOT (
+                      dp.state = 'RETRYABLE_FAILED'
+                      AND COALESCE(dp.last_error_message, '') LIKE '%提交后未能在作品管理确认可见%'
+                  )
+                '''
+            ).fetchone()["count"]
+            return {
+                "daily_limit": daily_limit,
+                "claimed_today": claimed_today,
+                "remaining_today": max(0, daily_limit - claimed_today),
+                "queue_ready": queue_ready,
+            }
+
     def update_douyin_publication_state(
         self,
         publication_id: int,
@@ -2516,6 +3424,10 @@ class PipelineDB:
         normalized_state = (state or "").upper()
         if normalized_state not in self._DOUYIN_STATES:
             raise ValueError(f"Unsupported Douyin state: {state}")
+        if normalized_state == "PUBLISHED" and error_message is None:
+            error_message = "抖音作品管理已确认本次作品为已发布。"
+        requested_state = normalized_state
+        normalized_state = self._derive_platform_display_state(normalized_state, error_message)
         assignments = ["state = ?", "updated_at = CURRENT_TIMESTAMP"]
         values: List[Any] = [normalized_state]
         if external_post_id is not None:
@@ -2529,6 +3441,8 @@ class PipelineDB:
             values.append(error_message)
         if normalized_state == "PUBLISHED":
             assignments.append("published_at = COALESCE(published_at, CURRENT_TIMESTAMP)")
+        elif requested_state == "PUBLISHED" or normalized_state in {"UNDER_REVIEW", "UNCERTAIN", "BANNED"}:
+            assignments.append("published_at = NULL")
         values.append(publication_id)
         with self.get_connection() as conn:
             cursor = conn.execute(
@@ -2602,7 +3516,7 @@ class PipelineDB:
                 AND NOT EXISTS (
                     SELECT 1 FROM douyin_publications dp_block
                     WHERE dp_block.video_id = pv.id
-                      AND dp_block.state IN ('QUEUED', 'UPLOADING', 'DRAFT', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN', 'BANNED')
+                      AND dp_block.state IN ('QUEUED', 'UPLOADING', 'DRAFT', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN', 'BANNED', 'CANCELED')
                 )
             """
 
