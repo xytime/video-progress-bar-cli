@@ -86,6 +86,7 @@
 | 3.45.3  | 2026-07-31 | Codex                               | 例行发布封面恢复为专门生成图，不再默认从竖版成片截帧                       |
 | 3.45.4  | 2026-07-31 | Codex                               | 封面检查点要求非截帧来源清单与哈希匹配，禁止历史帧封面被补发复用          |
 | 3.46.0  | 2026-07-31 | Codex                               | 源字幕先行预检、非窗口预加工与全任务互斥，未审字幕不得触发视频下载        |
+| 3.47.0  | 2026-07-31 | Codex                               | 可选地将专属底图交给 Codex 文件队列，并在本地 deadline 前确定性降级        |
 """
 
 
@@ -114,6 +115,8 @@ from .utils.platform_events import PlatformEvent, format_platform_event_html
 from .utils.text_utils import graceful_truncate_title
 from .scoring import compute_auto_score, PUBLISH_SCORE_LINE
 from .censorship_service import CensorshipService
+from .ai_cover_queue import AICoverQueue
+from cover.creative_brief import build_cover_creative_brief
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -2134,6 +2137,33 @@ class PipelineManager:
                             cover_payload["content_label"] = label_file.read_text(encoding="utf-8").strip()
                         except Exception:
                             pass
+
+                    if settings.enable_codex_cover_queue:
+                        visual_brief = build_cover_creative_brief(cover_payload).to_dict()
+                        task = AICoverQueue(
+                            self._PRJ_ROOT / settings.ai_cover_queue_dir,
+                            self._PRJ_ROOT / settings.ai_cover_finish_dir,
+                        ).create_task(
+                            prefix=prefix,
+                            youtube_id=yid,
+                            slice_index=slice_index,
+                            cover_payload=cover_payload,
+                            visual_brief=visual_brief,
+                            final_cover_path=cover_file,
+                            provenance_path=cover_provenance_file,
+                            brief_path=cover_brief_file,
+                            content_aware=content_aware_cover_enabled,
+                            generation_deadline_minutes=settings.ai_cover_generation_deadline_minutes,
+                            fallback_after_minutes=settings.ai_cover_fallback_after_minutes,
+                        )
+                        self.db.update_video_status(
+                            yid,
+                            "AI_COVER_PENDING",
+                            error_msg=f"等待 Codex 专属底图任务 {task.task_id}",
+                            slice_index=slice_index,
+                        )
+                        logger.info("[%s] queued dedicated visual task %s", prefix, task.task_id)
+                        return
 
                     cover_cmd = [
                         self._VENV_PYTHON,

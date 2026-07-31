@@ -70,6 +70,8 @@ tmp/
 
 # 视频处理输出目录（视频、字幕、文案等全部产物）
 output/
+ai-cover-queue/
+ai-cover-finish/
 
 # 视频文件（防止 output/ 之外的散落文件被误提交）
 *.mp4

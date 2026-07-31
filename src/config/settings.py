@@ -42,6 +42,7 @@
 | 3.15.4 | 2026-07-29 | Codex                              | 新增内容贴合封面开关，默认关闭以保持现有例行发布行为不变 |
 | 3.15.5 | 2026-07-31 | Codex                              | 收敛发布规则默认值：工作日早窗固定 06:30-09:00、休息日早窗 07:30-11:00，视频号补发上限 10 |
 | 3.15.6 | 2026-07-31 | Codex                              | 新增源字幕先行预检与非窗口预加工配置，阻止未审视频下载 |
+| 3.15.7 | 2026-07-31 | Codex                              | 新增 Codex AI 封面任务队列与本地超时降级配置，默认关闭 |
 """
 import json
 import socket
@@ -292,6 +293,14 @@ class Settings(BaseSettings):
     # 内容贴合封面：根据既有标题、分类、content_hints 输出稳定视觉策划，并使用真实成片画面渲染。
     # 默认关闭；启用后会额外持久化 _cover_brief.json，缺失时不复用旧封面 checkpoint。
     enable_content_aware_cover: bool = False
+
+    # Codex 专属底图队列。任务单由项目写入目录，Codex 技能生成底图后写回完成目录；
+    # 本地协调器在超时前执行当前确定性封面渲染，绝不等待外部执行器无限期返回。
+    enable_codex_cover_queue: bool = False
+    ai_cover_queue_dir: str = "ai-cover-queue"
+    ai_cover_finish_dir: str = "ai-cover-finish"
+    ai_cover_generation_deadline_minutes: int = 32
+    ai_cover_fallback_after_minutes: int = 34
 
     # 视频号暂停发布时，新视频可先进入 WECHAT_DEFERRED，并按限额在恢复后补发。
     wechat_publishing_paused: bool = False

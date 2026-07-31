@@ -1,0 +1,87 @@
+"""AI 封面任务队列测试。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-07-31 | Codex | 覆盖任务 Markdown、完成物来源校验和超时降级时点 |
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from PIL import Image
+
+from src.video_processing.ai_cover_queue import AICoverQueue
+
+
+def _new_task(queue: AICoverQueue, tmp_path: Path, now: datetime):
+    return queue.create_task(
+        prefix="abcdefghijk",
+        youtube_id="abcdefghijk",
+        slice_index=0,
+        cover_payload={"title": "测试标题", "audio_edition": "original_audio_subtitled"},
+        visual_brief={"visual_direction": "开放地平线", "visual_keywords": ["mindset"]},
+        final_cover_path=tmp_path / "output" / "abcdefghijk_cover.jpg",
+        provenance_path=tmp_path / "output" / "abcdefghijk_cover_provenance.json",
+        brief_path=tmp_path / "output" / "abcdefghijk_cover_brief.json",
+        content_aware=True,
+        generation_deadline_minutes=32,
+        fallback_after_minutes=34,
+        now=now,
+    )
+
+
+def test_task_is_markdown_and_is_idempotent(tmp_path: Path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    now = datetime(2026, 7, 31, tzinfo=timezone.utc)
+
+    task = _new_task(queue, tmp_path, now)
+    same_task = _new_task(queue, tmp_path, now + timedelta(minutes=1))
+
+    assert task.task_id == same_task.task_id
+    assert task.path.suffix == ".md"
+    assert "AI_COVER_TASK_JSON" in task.path.read_text(encoding="utf-8")
+    assert task.payload["generation_deadline_at"] == "2026-07-31T00:32:00Z"
+    assert task.payload["fallback_after_at"] == "2026-07-31T00:34:00Z"
+
+
+def test_accepts_only_verified_on_time_codex_visual(tmp_path: Path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    now = datetime(2026, 7, 31, tzinfo=timezone.utc)
+    task = _new_task(queue, tmp_path, now)
+    visual = task.finish_dir / "visual.png"
+    Image.new("RGB", (720, 960), "white").save(visual)
+    digest = hashlib.sha256(visual.read_bytes()).hexdigest()
+    (task.finish_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "task_id": task.task_id,
+                "generated_by": "codex_imagegen",
+                "completed_at": "2026-07-31T00:31:00Z",
+                "visual_filename": "visual.png",
+                "sha256": digest,
+                "uses_video_frame": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert queue.accepted_visual(task) == visual
+
+    result = json.loads((task.finish_dir / "result.json").read_text(encoding="utf-8"))
+    result["completed_at"] = "2026-07-31T00:33:00Z"
+    (task.finish_dir / "result.json").write_text(json.dumps(result), encoding="utf-8")
+    assert queue.accepted_visual(task) is None
+
+
+def test_fallback_starts_before_forty_minute_sla(tmp_path: Path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    created = datetime(2026, 7, 31, tzinfo=timezone.utc)
+    task = _new_task(queue, tmp_path, created)
+
+    assert queue.should_fallback(task, created + timedelta(minutes=33, seconds=59)) is False
+    assert queue.should_fallback(task, created + timedelta(minutes=34)) is True

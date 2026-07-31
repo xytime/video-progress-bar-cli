@@ -63,6 +63,7 @@
 | 3.23.2  | 2026-07-29 | Codex                               | 配音任务读取透传源片 upload_date，供再制渲染继承发布日期戳并保留切片回退能力 |
 | 3.24.0  | 2026-07-29 | Codex                               | 新增发布后日粒度指标、内容唯一身份、视频关系和 AB 实验底层账本 |
 | 3.25.0  | 2026-07-31 | Codex                               | 新增源字幕预检/预加工状态与微信补发真实日额度账本 |
+| 3.25.1  | 2026-07-31 | Codex                               | 将 AI_COVER_PENDING 纳入处理中统计和仪表盘，避免异步制图任务隐身 |
 """
 
 import sqlite3
@@ -2068,7 +2069,7 @@ class PipelineDB:
                 SET status = 'PENDING',
                     retry_count = retry_count + 1,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'PUBLISHED', 'PUBLISHING', 'WECHAT_DEFERRED', 'SEGMENTED', 'IGNORED')
+                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'AI_COVER_PENDING', 'PUBLISHED', 'PUBLISHING', 'WECHAT_DEFERRED', 'SEGMENTED', 'IGNORED')
                 AND updated_at < datetime('now', ?)
                 ''',
                 (f'-{stale_hours} hours',)
@@ -2295,7 +2296,7 @@ class PipelineDB:
         safe_hours = max(1, int(hours))
         safe_stale_minutes = max(1, int(active_stale_minutes))
         safe_item_limit = max(1, min(int(item_limit), 20))
-        active_states = ("DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "PUBLISHING")
+        active_states = ("DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "AI_COVER_PENDING", "PUBLISHING")
         active_placeholders = ", ".join("?" for _ in active_states)
 
         with self.get_connection() as conn:
@@ -2516,7 +2517,7 @@ class PipelineDB:
         elif tab == 'active':
             # [Unknown_Model_planning] 父任务在切片未全部完成且没有失败时，进入 active tab
             condition = """(
-                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'WECHAT_DEFERRED') AND pv.parent_id IS NULL)
+                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'WECHAT_DEFERRED') AND pv.parent_id IS NULL)
                 OR
                 (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
                  (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
@@ -2702,7 +2703,7 @@ class PipelineDB:
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 AND IFNULL(pv.source,'') != 'DISCOVERY' THEN 1 ELSE 0 END) as waitlist,
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score >= 75 THEN 1 ELSE 0 END) as queue,
                     SUM(CASE WHEN (
-                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'WECHAT_DEFERRED')
+                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'WECHAT_DEFERRED')
                         OR
                         (pv.status = 'SEGMENTED' AND 
                          (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
