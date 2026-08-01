@@ -9,6 +9,7 @@
 | 1.4.0 | 2026-07-31 | Codex | 覆盖专属主视觉资产的哈希绑定来源证明 |
 | 1.5.0 | 2026-07-31 | Codex | 封面简报必须记录实际生效的渲染规划 |
 | 1.6.0 | 2026-07-31 | Codex | 独立主视觉合成失败时禁止默认封面回退 |
+| 1.7.0 | 2026-08-01 | Codex | 覆盖 CoverEngine 成功路径仍会叠加普通话译制角标 |
 """
 
 from pathlib import Path
@@ -91,6 +92,46 @@ def test_visual_asset_render_failure_never_falls_back_to_default_cover(tmp_path,
 
     assert not output.exists()
     assert not provenance.exists()
+
+
+def test_cover_engine_success_path_applies_mandarin_ribbon(tmp_path, monkeypatch):
+    output = tmp_path / "cover.jpg"
+    provenance = tmp_path / "cover_provenance.json"
+
+    class SuccessfulCoverEngine:
+        def generate(self, payload, output_path):
+            Image.new("RGB", (1080, 1260), "white").save(output_path)
+            return {
+                "style_id": "market_capital",
+                "badge": "财经",
+                "template_variant": "cover",
+                "headline_position": "upper_left",
+                "has_visual_asset": False,
+                "visual_asset_path": "",
+            }
+
+    import cover
+
+    monkeypatch.setattr(cover, "CoverEngine", SuccessfulCoverEngine)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "cover_generator.py",
+            "--payload",
+            json.dumps({"title": "测试", "audio_edition": "mandarin_dubbed"}),
+            "--output",
+            str(output),
+            "--provenance-output",
+            str(provenance),
+        ],
+    )
+
+    cover_generator.main()
+
+    image = Image.open(output).convert("RGB")
+    red, green, blue = image.getpixel((842, 52))
+    assert red > 100 and red > green * 2 and red > blue * 1.5
 
 
 def test_applied_creative_brief_uses_actual_render_plan():

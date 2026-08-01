@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-29 | Codex | 验证 thinking 请求、逐段对齐及不完整响应阻断 |
+| 1.1.0 | 2026-08-01 | Codex | 覆盖时长失配片段的短写 JSON 合约 |
 """
 
 import json
@@ -62,3 +63,30 @@ def test_refiner_rejects_incomplete_alignment(monkeypatch):
             [{"source_text": "First.", "zh_text": "第一句"}, {"source_text": "Second.", "zh_text": "第二句"}],
             video_title="测试标题",
         )
+
+
+def test_refiner_shortens_single_timing_mismatch(monkeypatch):
+    from config.settings import settings
+    import video_processing.dubbing.script_refiner as module
+
+    monkeypatch.setattr(settings, "deepseek_api_key", "test-key")
+    captured = {}
+
+    def fake_urlopen(request, timeout):
+        captured.update(json.loads(request.data.decode("utf-8")))
+        return _Response({"choices": [{"message": {"content": '{"zh_text":"每天看华尔街真相炸弹，抢先懂市场。"}'}}]})
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    rewritten = DubbingScriptRefiner().shorten_for_timing(
+        {
+            "source_text": "Join me every day for Wall Street Truth Bombs before the market figures them out",
+            "zh_text": "朋友们，每天来和我一起看《华尔街真相炸弹》。我会在市场弄明白之前，就在这里把真相炸弹抛出来。",
+        },
+        video_title="测试标题",
+        actual_ms=6800,
+        target_ms=4880,
+    )
+
+    assert rewritten == "每天看华尔街真相炸弹，抢先懂市场。"
+    assert "previous synthesized duration ms: 6800" in captured["messages"][1]["content"]

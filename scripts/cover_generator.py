@@ -10,6 +10,7 @@
 | 2.2.0   | 2026-07-29 | Codex                        | 消费独立视觉策划 JSON，为真实视频封面注入题材化色彩和可审计产物      |
 | 2.3.0   | 2026-07-30 | Codex                        | 仅按已确认的成片音轨版本渲染配音角标，杜绝字幕版误标为译制版          |
 | 2.3.1   | 2026-07-31 | Codex                        | 角标文案改为普通话译制并采用右上角彩带样式，确保文字完整可见          |
+| 2.3.2   | 2026-08-01 | Codex                        | CoverEngine 成功路径也统一叠加普通话译制右上角彩带                  |
 | 2.4.0   | 2026-07-31 | Codex                        | 禁止视频截帧封面，并为专门生成封面写入可验证来源清单                  |
 | 2.5.0   | 2026-07-31 | Codex                        | 支持独立主视觉资产，并将实际渲染语义写回可审计封面简报                |
 | 2.6.0   | 2026-07-31 | Codex                        | 独立主视觉合成失败时禁止静默回退，避免默认图伪装为已使用 AI 底图       |
@@ -241,6 +242,17 @@ def _draw_edition_label(image: Image.Image, edition_label: str) -> None:
     draw.text((text_x, text_y), edition_label, font=font, fill="#ffffff")
 
 
+def _apply_edition_label(output_path: str, payload: dict) -> None:
+    """在最终封面文件上叠加可信音轨版本角标。"""
+    edition_label = resolve_edition_label(payload)
+    if not edition_label:
+        return
+    path = Path(output_path)
+    image = Image.open(path).convert("RGBA")
+    _draw_edition_label(image, edition_label)
+    image.convert("RGB").save(path, quality=95)
+
+
 def _write_cover_provenance(output_path: str, provenance_output: str | None, payload: dict) -> None:
     """为封面写入不可把视频帧冒充为专门设计图的来源证明。"""
     if not provenance_output:
@@ -345,6 +357,7 @@ def main():
                 creative_brief = _applied_creative_brief(payload, layout)
                 print(f"Content-aware cover style: {creative_brief['style_id']}")
             persist_creative_brief()
+            _apply_edition_label(args.output, payload)
             _write_cover_provenance(args.output, args.provenance_output, payload)
             return
         except Exception as e:
@@ -369,6 +382,7 @@ def main():
         
     generate_cover(title_to_use, args.output)
     persist_creative_brief()
+    _apply_edition_label(args.output, payload)
     _write_cover_provenance(args.output, args.provenance_output, payload)
 
 if __name__ == "__main__":

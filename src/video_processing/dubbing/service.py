@@ -14,6 +14,7 @@
 | 1.0.8 | 2026-07-31 | Codex | 平台闸门失败未提交时保持 READY_TO_PUBLISH，避免误记 UNDER_REVIEW       |
 | 1.0.9 | 2026-07-31 | Codex | 普通话译制版投递标题和文案统一使用普通话译制命名                       |
 | 1.1.0 | 2026-07-31 | Codex | 译制版封面须有非视频帧来源清单，禁止人工路径复用历史截图               |
+| 1.1.1 | 2026-08-01 | Codex | TTS 时长失配时自动短写一次并重合成，减少人工卡在 NEEDS_REWRITE          |
 """
 
 from __future__ import annotations
@@ -170,27 +171,36 @@ class DubbingService:
         audio_cache = workspace / "cache"
         plans: List[Dict[str, Any]] = []
         for chunk in chunks:
-            speed = max(settings.minimax_tts_min_speed, min(settings.minimax_tts_max_speed, settings.minimax_tts_preferred_speed))
-            attempts: List[Dict[str, Any]] = []
-            for attempt in range(1, 3):
-                synthesis = client.synthesize(chunk["zh_text"], speed=speed, cache_dir=audio_cache)
-                actual_ms = self._duration_ms(synthesis.audio_path)
-                attempts.append({"speed": speed, "actual_ms": actual_ms, "synthesis": synthesis})
-                tolerance = max(220, round(chunk["target_ms"] * 0.04))
-                if abs(actual_ms - chunk["target_ms"]) <= tolerance:
+            timing_rewrites = 0
+            while True:
+                speed = max(settings.minimax_tts_min_speed, min(settings.minimax_tts_max_speed, settings.minimax_tts_preferred_speed))
+                attempts: List[Dict[str, Any]] = []
+                for attempt in range(1, 3):
+                    synthesis = client.synthesize(chunk["zh_text"], speed=speed, cache_dir=audio_cache)
+                    actual_ms = self._duration_ms(synthesis.audio_path)
+                    attempts.append({"speed": speed, "actual_ms": actual_ms, "synthesis": synthesis})
+                    tolerance = max(220, round(chunk["target_ms"] * 0.04))
+                    if abs(actual_ms - chunk["target_ms"]) <= tolerance:
+                        break
+                    next_speed = next_synthesis_speed(
+                        speed, actual_ms, chunk["target_ms"], minimum=settings.minimax_tts_min_speed,
+                        maximum=settings.minimax_tts_max_speed,
+                    )
+                    if abs(next_speed - speed) < 0.025:
+                        break
+                    speed = next_speed
+                selected = attempts[-1]
+                decision = decide_timing(selected["actual_ms"], chunk["target_ms"])
+                if not decision.requires_rewrite:
                     break
-                next_speed = next_synthesis_speed(
-                    speed, actual_ms, chunk["target_ms"], minimum=settings.minimax_tts_min_speed,
-                    maximum=settings.minimax_tts_max_speed,
+                ordinal = len(plans) + 1
+                if timing_rewrites >= 1:
+                    self.db.update_dubbing_job(job["id"], "NEEDS_REWRITE", error_message=f"第 {ordinal} 段无法自然对齐，需改写中文稿。")
+                    raise RuntimeError("存在超过 12% 的时长失配，已阻断成片并转 NEEDS_REWRITE。")
+                chunk = self._rewrite_chunk_for_timing(
+                    job, chunk, actual_ms=selected["actual_ms"], workspace=workspace, ordinal=ordinal,
                 )
-                if abs(next_speed - speed) < 0.025:
-                    break
-                speed = next_speed
-            selected = attempts[-1]
-            decision = decide_timing(selected["actual_ms"], chunk["target_ms"])
-            if decision.requires_rewrite:
-                self.db.update_dubbing_job(job["id"], "NEEDS_REWRITE", error_message=f"第 {len(plans) + 1} 段无法自然对齐，需改写中文稿。")
-                raise RuntimeError("存在超过 12% 的时长失配，已阻断成片并转 NEEDS_REWRITE。")
+                timing_rewrites += 1
             fitted = self._fit_audio(
                 selected["synthesis"].audio_path, decision.post_tempo, decision.pad_ms,
                 workspace / "fitted" / f"{len(plans):04d}.wav",
@@ -212,6 +222,55 @@ class DubbingService:
                 "subtitle_entries": subtitle_entries,
             })
         return plans
+
+    def _rewrite_chunk_for_timing(
+        self,
+        job: Dict[str, Any],
+        chunk: Dict[str, Any],
+        *,
+        actual_ms: int,
+        workspace: Path,
+        ordinal: int,
+    ) -> Dict[str, Any]:
+        """时长过长时做一次可追溯短写，仍过不了则交回人工处理。"""
+        if not settings.dubbing_deepseek_script_refinement:
+            self.db.update_dubbing_job(job["id"], "NEEDS_REWRITE", error_message=f"第 {ordinal} 段无法自然对齐，需改写中文稿。")
+            raise RuntimeError("脚本精修未启用，无法自动短写失配片段。")
+        try:
+            rewritten = DubbingScriptRefiner().shorten_for_timing(
+                chunk,
+                video_title=self._display_title(job),
+                actual_ms=actual_ms,
+                target_ms=int(chunk["target_ms"]),
+            )
+        except Exception as exc:
+            self.db.update_dubbing_job(job["id"], "NEEDS_REWRITE", error_message=f"第 {ordinal} 段自动短写失败：{exc}")
+            raise
+        if rewritten == str(chunk.get("zh_text") or "").strip():
+            self.db.update_dubbing_job(job["id"], "NEEDS_REWRITE", error_message=f"第 {ordinal} 段短写后仍未变短，需人工改写。")
+            raise RuntimeError("DeepSeek 短写未改变失配片段。")
+        record = {
+            "ordinal": ordinal,
+            "target_ms": int(chunk["target_ms"]),
+            "previous_actual_ms": actual_ms,
+            "source_text": chunk.get("source_text") or "",
+            "before": chunk.get("zh_text") or "",
+            "after": rewritten,
+        }
+        path = workspace / "timing_rewrites.json"
+        records: List[Dict[str, Any]] = []
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                records = loaded if isinstance(loaded, list) else []
+            except (OSError, ValueError):
+                records = []
+        records.append(record)
+        path.write_text(json.dumps(records, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self.db.upsert_dubbing_artifact(job["id"], "timing_rewrites", str(path), sha256=self._sha256(path))
+        item = dict(chunk)
+        item["zh_text"] = rewritten
+        return item
 
     def _load_semantic_chunks(self, source_ass: Path) -> List[Dict[str, Any]]:
         subtitles = pysubs2.load(str(source_ass))

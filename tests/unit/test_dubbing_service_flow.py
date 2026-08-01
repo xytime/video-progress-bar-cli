@@ -8,11 +8,14 @@
 | 1.2.0 | 2026-07-31 | Codex | 覆盖平台闸门失败未提交时任务不误记审核中 |
 | 1.3.0 | 2026-07-31 | Codex | 锁定普通话译制版投递标题和文案命名 |
 | 1.4.0 | 2026-07-31 | Codex | 译制版封面必须具备非视频帧来源清单 |
+| 1.5.0 | 2026-08-01 | Codex | 覆盖 TTS 时长失配后的自动短写重合成恢复 |
 """
 
 import hashlib
 import json
 import subprocess
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
@@ -108,6 +111,67 @@ def test_render_video_forwards_source_date_to_vertical_processor(tmp_path, monke
 
     assert captured["source_date"] == "2026-07-28"
     assert commands[-1][-1].endswith("dubbing_zh.mp4")
+
+
+def test_synthesize_and_fit_rewrites_one_overlong_chunk_before_blocking(tmp_path, monkeypatch):
+    from config.settings import settings
+    import video_processing.dubbing.service as dubbing_service
+
+    source = tmp_path / "source.wav"
+    rewritten = tmp_path / "rewritten.wav"
+    source.write_bytes(b"source")
+    rewritten.write_bytes(b"rewritten")
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            self.calls = 0
+
+        def synthesize(self, text, *, speed, cache_dir):
+            self.calls += 1
+            path = source if self.calls <= 2 else rewritten
+            return SimpleNamespace(
+                audio_path=path,
+                subtitles=[],
+                cache_key=f"key-{self.calls}",
+                usage_characters=len(text),
+            )
+
+    durations = {source: 1300, rewritten: 1000}
+    service = DubbingService.__new__(DubbingService)
+    service.db = Mock()
+    service._duration_ms = lambda path: durations[Path(path)]
+    service._display_title = lambda job: "测试标题"
+    service._fit_audio = lambda src, tempo, pad_ms, output: output
+    service._actual_subtitles = lambda *args: [{"start_ms": 0, "end_ms": 1000, "text": "短句。"}]
+    service._rewrite_chunk_for_timing = Mock(
+        return_value={
+            "source_start_ms": 0,
+            "source_end_ms": 1000,
+            "target_ms": 1000,
+            "source_text": "Join me every day.",
+            "zh_text": "每天看真相炸弹。",
+        }
+    )
+    monkeypatch.setattr(settings, "minimax_tts_preferred_speed", 1.0)
+    monkeypatch.setattr(settings, "minimax_tts_min_speed", 0.96)
+    monkeypatch.setattr(settings, "minimax_tts_max_speed", 1.28)
+    monkeypatch.setattr(dubbing_service, "MiniMaxTTSClient", _Client)
+
+    plans = service._synthesize_and_fit(
+        {"id": 42},
+        [{
+            "source_start_ms": 0,
+            "source_end_ms": 1000,
+            "target_ms": 1000,
+            "source_text": "Join me every day.",
+            "zh_text": "朋友们每天来和我一起看华尔街真相炸弹。",
+        }],
+        tmp_path,
+    )
+
+    service._rewrite_chunk_for_timing.assert_called_once()
+    assert plans[0]["zh_text"] == "每天看真相炸弹。"
+    assert plans[0]["alignment_strategy"] == "micro_tempo"
 
 
 def test_publish_one_maps_platform_under_review_exit_code(tmp_path, monkeypatch):
