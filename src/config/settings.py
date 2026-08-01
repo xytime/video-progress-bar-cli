@@ -41,6 +41,7 @@
 | 3.15.3 | 2026-07-29 | Codex                              | 人工混音版默认使用 0.16 英文底音，并增加 DeepSeek thinking 脚本精修配置 |
 | 3.15.4 | 2026-07-29 | Codex                              | 新增内容贴合封面开关，默认关闭以保持现有例行发布行为不变 |
 | 3.15.5 | 2026-07-31 | Codex                              | 收敛发布规则默认值：工作日早窗固定 06:30-09:00、休息日早窗 07:30-11:00，视频号补发上限 10 |
+| 3.15.8 | 2026-08-02 | Codex                              | 默认关闭发布时段限制；候选完成全部处理与审查后立即提交 |
 | 3.15.6 | 2026-07-31 | Codex                              | 新增源字幕先行预检与非窗口预加工配置，阻止未审视频下载 |
 | 3.15.7 | 2026-07-31 | Codex                              | 新增 Codex AI 封面任务队列与本地超时降级配置，默认关闭 |
 """
@@ -313,9 +314,10 @@ class Settings(BaseSettings):
     source_subtitle_languages: str = "en.*,en"
     source_subtitle_retry_hours: int = 6
 
-    # 公开视频提交窗口。默认按北京时间短视频活跃规律设置：
+    # 公开视频提交窗口。默认关闭，避免成片在等待窗口时落后于同类内容；
+    # 如需恢复定时发布，可在 .env 将开关显式设为 true。
     # 工作日：早通勤、午休、晚通勤、晚间黄金档；各窗口相对统计峰值整体提前 30 分钟。
-    enable_public_publish_windows: bool = True
+    enable_public_publish_windows: bool = False
     public_publish_timezone: str = "Asia/Shanghai"
     public_publish_windows: str = "06:30-09:00,11:15-12:45,17:00-18:15,19:00-20:40"
     # 周末/法定节假日：通勤峰弱化，上午整体后移，下午休闲窗口拉长，晚间保留更长推荐期。

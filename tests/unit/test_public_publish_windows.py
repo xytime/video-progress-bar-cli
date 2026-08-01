@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-07-29 | Codex | 示例窗口随默认策略整体前移 30 分钟 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖中国大陆节假日、周末和补班日窗口选择 |
 | 1.3.0 | 2026-07-31 | Codex | 更新休息日早窗为 07:30-11:00，并覆盖开始边界 |
+| 1.4.0 | 2026-08-02 | Codex | 覆盖默认关闭发布时段时，任意时刻均可提交 |
 """
 
 from datetime import date, datetime
@@ -63,6 +64,15 @@ def test_public_publish_window_uses_holiday_schedule():
         settings.public_publish_holiday_windows = previous_holiday_windows
         settings.china_public_holidays = previous_holidays
         settings.china_makeup_workdays = previous_workdays
+
+
+def test_public_publish_window_is_unrestricted_when_disabled():
+    previous_enabled = settings.enable_public_publish_windows
+    settings.enable_public_publish_windows = False
+    try:
+        assert settings.is_public_publish_window(datetime(2026, 8, 2, 3, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
+    finally:
+        settings.enable_public_publish_windows = previous_enabled
 
 
 def test_kuaishou_new_video_queues_without_upload_outside_publish_window(tmp_path: Path, monkeypatch):

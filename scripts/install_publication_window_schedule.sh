@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# 安装 Video Pipeline 的受管发布窗口巡航调度。
+# 安装 Video Pipeline 的受管自动发布巡航调度。
 #
 # # Modification History
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-07-31 | Codex | 以 Settings 窗口判定替代硬编码的单点发布 cron，并保留其他项目条目 |
 # | 1.1.0 | 2026-07-31 | Codex | 加入源字幕先行后台预加工巡航，并收窄旧 cron 清理范围 |
+# | 1.2.0 | 2026-08-02 | Codex | 改为每分钟完整流水线巡航，关闭按时段等待与冗余预加工巡航 |
 
 set -euo pipefail
 
@@ -32,10 +33,8 @@ mv "$TMP_CRONTAB.filtered" "$TMP_CRONTAB"
 
 cat >> "$TMP_CRONTAB" <<EOF
 # BEGIN Video Pipeline public-window cruise (managed)
-# 每 15 分钟巡航；脚本先按 Settings 的工作日/休息日窗口判定，窗口外不启动完整流水线。
-*/15 6-21 * * * cd "$PROJECT_ROOT" && PYTHONPATH="$PROJECT_ROOT/src" "$PYTHON_BIN" "$PROJECT_ROOT/scripts/run_publication_window.py" >> "$PROJECT_ROOT/output/pipeline_window.log" 2>&1
-# 非窗口时段同样每 15 分钟唤醒；脚本只做字幕预检和预加工，发布窗口/美股盘中会立即退出。
-*/15 * * * * cd "$PROJECT_ROOT" && PYTHONPATH="$PROJECT_ROOT/src" "$PYTHON_BIN" "$PROJECT_ROOT/scripts/run_background_preparation.py" >> "$PROJECT_ROOT/output/pipeline_preparation.log" 2>&1
+# 每分钟巡航；成片与审查完成后立即提交。重叠轮次由入口锁跳过。
+* * * * * cd "$PROJECT_ROOT" && PYTHONPATH="$PROJECT_ROOT/src" "$PYTHON_BIN" "$PROJECT_ROOT/scripts/run_publication_window.py" >> "$PROJECT_ROOT/output/pipeline_window.log" 2>&1
 # END Video Pipeline public-window cruise (managed)
 EOF
 
