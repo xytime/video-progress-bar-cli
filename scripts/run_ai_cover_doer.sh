@@ -12,13 +12,14 @@
 # | 1.5.0 | 2026-07-31 | Codex | 仅在确认有可领取底图任务后检查并启动 Codex |
 # | 1.6.0 | 2026-07-31 | Codex | 默认使用 gpt-5.5 和 medium 推理强度启动 Codex 子任务 |
 # | 1.7.0 | 2026-07-31 | Codex | 修复运行中锁误回收、日志轮转描述符和预检输出容错问题 |
+# | 1.8.0 | 2026-08-01 | Codex | 将默认推理强度降为 low，降低 AI 封面巡查 token 成本 |
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CODEX_BIN="${CODEX_BIN:-$HOME/.local/bin/codex}"
 CODEX_MODEL="${CODEX_MODEL:-gpt-5.5}"
-CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT:-medium}"
+CODEX_REASONING_EFFORT="${CODEX_REASONING_EFFORT:-low}"
 PYTHON_BIN="$PROJECT_ROOT/.venv/bin/python"
 LOG_DIR="$PROJECT_ROOT/output"
 LOCK_DIR="$LOG_DIR/.ai_cover_doer.lock"
