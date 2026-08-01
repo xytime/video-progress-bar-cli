@@ -1993,7 +1993,7 @@ class PipelineManager:
                         logger.info(f"[TTS] Activating Edge TTS for {prefix} (stored tts_provider={_tts_provider})")
                     elif _tts_provider:
                         logger.warning(f"[TTS] Unknown tts_provider={_tts_provider!r} for {prefix}, skipping TTS")
-                    render_env = os.environ.copy()
+                    render_env = _build_subprocess_env()
                     render_env["PYTHONPATH"] = str(self._SRC_DIR)
                     try:
                         self._run_tracked(
