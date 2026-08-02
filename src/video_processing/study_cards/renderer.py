@@ -13,6 +13,7 @@
 | 1.5.0 | 2026-08-03 | Codex | 将逐词红线预渲染为单个透明视频层，避免长样片中数百层 FFmpeg overlay 过慢。 |
 | 1.5.1 | 2026-08-03 | Codex | 主合成不再用 shortest 截短，兼容源文件视频流略短于音频流的情况。 |
 | 1.5.2 | 2026-08-03 | Codex | 滚动目标位下移，减少翻页后顶部残留孤立标点或半行文本。 |
+| 1.6.0 | 2026-08-03 | Codex | 移除翻页静音暂停，滚动改为连续原声下的自然段边界少量动画。 |
 """
 
 from __future__ import annotations
@@ -41,7 +42,8 @@ from .template_a import (
 
 _AUDIO_TAIL_SECONDS = 0.18
 _AUDIO_FADE_SECONDS = 0.08
-_SCROLL_PAUSE_SECONDS = 0.5
+_SCROLL_TRANSITION_SECONDS = 0.62
+_MAX_SCROLL_STEPS = 3
 _PRODUCTION_MAX_DURATION = 30.0
 _TEST_MAX_DURATION = 60.0
 
@@ -54,19 +56,6 @@ class ScrollStep:
     end: float
     from_offset: int
     to_offset: int
-
-
-@dataclass(frozen=True)
-class TimelinePause:
-    """输出时间轴中的一段阅读暂停；源片在 source_time 冻结，音频填静音。"""
-
-    source_time: float
-    start: float
-    end: float
-
-    @property
-    def duration(self) -> float:
-        return self.end - self.start
 
 
 class StudyCardRenderer:
@@ -114,13 +103,10 @@ class StudyCardRenderer:
         try:
             assets = self.template.render_static(content, work_dir)
             source_timed_boxes = self.template.map_word_boxes(content.words, assets.word_boxes)
-            scroll_steps, pause_segments = self._build_scroll_steps(source_timed_boxes)
-            timed_boxes = self._shift_timed_boxes_for_pauses(source_timed_boxes, pause_segments)
-            output_duration = source_clip_duration + self._total_pause_duration_before(
-                source_clip_duration, pause_segments,
-            )
+            scroll_steps = self._build_scroll_steps(content, source_timed_boxes)
+            output_duration = source_clip_duration
             underline_video = work_dir / "template_a_underlines.mov"
-            self._render_underline_overlay(underline_video, timed_boxes, scroll_steps, output_duration)
+            self._render_underline_overlay(underline_video, source_timed_boxes, scroll_steps, output_duration)
             self._run_ffmpeg(
                 source_video=source_video,
                 base_image=assets.base_image,
@@ -132,11 +118,10 @@ class StudyCardRenderer:
                 source_duration=source_clip_duration,
                 output_duration=output_duration,
                 scroll_steps=scroll_steps,
-                pause_segments=pause_segments,
             )
             self._write_manifest(
                 output_path, content, source_video, source_start, source_clip_duration,
-                output_duration, timed_boxes, scroll_steps, pause_segments,
+                output_duration, source_timed_boxes, scroll_steps,
             )
             if keep_assets:
                 assets_dir = output_path.with_suffix("").with_name(output_path.stem + "_assets")
@@ -185,7 +170,6 @@ class StudyCardRenderer:
         source_duration: float,
         output_duration: float,
         scroll_steps: list[ScrollStep],
-        pause_segments: list[TimelinePause],
     ) -> None:
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         video_w = VIDEO_BOX[2] - VIDEO_BOX[0]
@@ -198,12 +182,10 @@ class StudyCardRenderer:
                 video_w=video_w,
                 video_h=video_h,
                 source_duration=source_duration,
-                pause_segments=pause_segments,
             ),
             *self._source_audio_filters(
                 source_duration=source_duration,
                 output_duration=output_duration,
-                pause_segments=pause_segments,
                 has_audio=has_audio,
             ),
             f"[2:v]format=rgba,scale={feature_w}:{feature_h}[feature]",
@@ -292,104 +274,26 @@ class StudyCardRenderer:
         video_w: int,
         video_h: int,
         source_duration: float,
-        pause_segments: list[TimelinePause],
     ) -> str:
-        pauses = _active_pauses(source_duration, pause_segments)
         scale = f"scale={video_w}:{video_h}:force_original_aspect_ratio=increase,crop={video_w}:{video_h},fps=30"
-        if not pauses:
-            return f"[1:v]{scale}[clip]"
-
-        filters: list[str] = []
-        labels: list[str] = []
-        cursor = 0.0
-        part = 0
-        for pause in pauses:
-            if pause.source_time > cursor + 0.005:
-                label = f"vseg_{part}"
-                filters.append(
-                    f"[1:v]trim=start={cursor:.3f}:end={pause.source_time:.3f},"
-                    f"setpts=PTS-STARTPTS[{label}]"
-                )
-                labels.append(label)
-                part += 1
-            frame_duration = min(1 / 30, max(0.001, source_duration - pause.source_time))
-            label = f"vpause_{part}"
-            filters.append(
-                f"[1:v]trim=start={pause.source_time:.3f}:duration={frame_duration:.3f},"
-                f"setpts=PTS-STARTPTS,fps=30,"
-                f"tpad=stop_mode=clone:stop_duration={max(0.0, pause.duration - frame_duration):.3f}[{label}]"
-            )
-            labels.append(label)
-            cursor = pause.source_time
-            part += 1
-        if source_duration > cursor + 0.005:
-            label = f"vseg_{part}"
-            filters.append(
-                f"[1:v]trim=start={cursor:.3f}:end={source_duration:.3f},"
-                f"setpts=PTS-STARTPTS[{label}]"
-            )
-            labels.append(label)
-        filters.append(
-            "".join(f"[{label}]" for label in labels)
-            + f"concat=n={len(labels)}:v=1:a=0,fps=30[clip_timeline]"
-        )
-        filters.append(f"[clip_timeline]{scale}[clip]")
-        return ";".join(filters)
+        return f"[1:v]{scale}[clip]"
 
     @staticmethod
     def _source_audio_filters(
         *,
         source_duration: float,
         output_duration: float,
-        pause_segments: list[TimelinePause],
         has_audio: bool,
     ) -> list[str]:
         if not has_audio:
             return []
-        pauses = _active_pauses(source_duration, pause_segments)
         audio_format = "aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
         fade_duration = min(_AUDIO_FADE_SECONDS, output_duration)
         fade_start = max(0.0, output_duration - fade_duration)
-        if not pauses:
-            return [
-                f"[1:a]atrim=end={source_duration:.3f},asetpts=PTS-STARTPTS,"
-                f"{audio_format},afade=t=out:st={fade_start:.3f}:d={fade_duration:.3f}[trimmed_audio]"
-            ]
-
-        filters: list[str] = []
-        labels: list[str] = []
-        cursor = 0.0
-        part = 0
-        for pause in pauses:
-            if pause.source_time > cursor + 0.005:
-                label = f"aseg_{part}"
-                filters.append(
-                    f"[1:a]atrim=start={cursor:.3f}:end={pause.source_time:.3f},"
-                    f"asetpts=PTS-STARTPTS,{audio_format}[{label}]"
-                )
-                labels.append(label)
-                part += 1
-            label = f"apause_{part}"
-            filters.append(
-                f"anullsrc=r=48000:cl=stereo:d={pause.duration:.3f},"
-                f"aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[{label}]"
-            )
-            labels.append(label)
-            cursor = pause.source_time
-            part += 1
-        if source_duration > cursor + 0.005:
-            label = f"aseg_{part}"
-            filters.append(
-                f"[1:a]atrim=start={cursor:.3f}:end={source_duration:.3f},"
-                f"asetpts=PTS-STARTPTS,{audio_format}[{label}]"
-            )
-            labels.append(label)
-        filters.append(
-            "".join(f"[{label}]" for label in labels)
-            + f"concat=n={len(labels)}:v=0:a=1,{audio_format},"
-            f"afade=t=out:st={fade_start:.3f}:d={fade_duration:.3f}[trimmed_audio]"
-        )
-        return filters
+        return [
+            f"[1:a]atrim=end={source_duration:.3f},asetpts=PTS-STARTPTS,"
+            f"{audio_format},afade=t=out:st={fade_start:.3f}:d={fade_duration:.3f}[trimmed_audio]"
+        ]
 
     @staticmethod
     def _has_audio(source_video: Path) -> bool:
@@ -410,7 +314,6 @@ class StudyCardRenderer:
         output_duration: float,
         timed_boxes: list[tuple[Any, Any]],
         scroll_steps: list[ScrollStep],
-        pause_segments: list[TimelinePause],
     ) -> None:
         manifest = {
             "template": self.template.name,
@@ -424,15 +327,7 @@ class StudyCardRenderer:
             ),
             "word_count": len(content.words),
             "vocabulary_count": len(content.vocabulary),
-            "pause_segments": [
-                {
-                    "source_time": round(pause.source_time, 3),
-                    "start": round(pause.start, 3),
-                    "end": round(pause.end, 3),
-                    "duration": round(pause.duration, 3),
-                }
-                for pause in pause_segments
-            ],
+            "pause_segments": [],
             "scroll_steps": [
                 {
                     "start": round(step.start, 3), "end": round(step.end, 3),
@@ -450,44 +345,55 @@ class StudyCardRenderer:
             encoding="utf-8",
         )
 
-    @staticmethod
-    def _build_scroll_steps(timed_boxes: list[tuple[Any, Any]]) -> tuple[list[ScrollStep], list[TimelinePause]]:
-        """以当前朗读词为锚点滚动；每次滚动在输出时间轴中插入一段静音冻结。"""
-        steps: list[ScrollStep] = []
-        pauses: list[TimelinePause] = []
+    def _build_scroll_steps(
+        self,
+        content: StudyCardContent,
+        timed_boxes: list[tuple[Any, Any]],
+    ) -> list[ScrollStep]:
+        """只在自然段边界滚动；原声音频连续播放，不插入静音或冻结段。"""
+        candidates: list[ScrollStep] = []
         offset = 0
         trigger_y = 1540
         target_y = 1110
-        inserted_pause = 0.0
-        for word, box in timed_boxes:
+        for word_index in self._paragraph_start_word_indices(content)[1:]:
+            if word_index >= len(timed_boxes):
+                continue
+            word, box = timed_boxes[word_index]
             visible_y = box.y - offset
             if visible_y <= trigger_y:
                 continue
             target_offset = max(offset, box.y - target_y)
             if target_offset == offset:
                 continue
-            start = max(0.0, word.start + inserted_pause)
-            end = start + _SCROLL_PAUSE_SECONDS
-            steps.append(ScrollStep(start, end, offset, target_offset))
-            pauses.append(TimelinePause(word.start, start, end))
-            inserted_pause += _SCROLL_PAUSE_SECONDS
+            start = max(0.0, word.start - 0.04)
+            end = start + _SCROLL_TRANSITION_SECONDS
+            candidates.append(ScrollStep(start, end, offset, target_offset))
             offset = target_offset
-        return steps, pauses
+        return self._limit_scroll_steps(candidates, _MAX_SCROLL_STEPS)
 
     @staticmethod
-    def _shift_timed_boxes_for_pauses(
-        timed_boxes: list[tuple[StudyWord, Any]],
-        pause_segments: list[TimelinePause],
-    ) -> list[tuple[StudyWord, Any]]:
-        shifted: list[tuple[StudyWord, Any]] = []
-        for word, box in timed_boxes:
-            shift = StudyCardRenderer._total_pause_duration_before(word.start, pause_segments)
-            shifted.append((StudyWord(word.text, word.start + shift, word.end + shift), box))
-        return shifted
+    def _paragraph_start_word_indices(content: StudyCardContent) -> list[int]:
+        starts: list[int] = []
+        cursor = 0
+        for paragraph in content.paragraphs:
+            starts.append(cursor)
+            cursor += len(paragraph.english_text.split())
+        return starts
 
     @staticmethod
-    def _total_pause_duration_before(source_time: float, pause_segments: list[TimelinePause]) -> float:
-        return sum(pause.duration for pause in pause_segments if pause.source_time <= source_time + 0.0005)
+    def _limit_scroll_steps(steps: list[ScrollStep], maximum: int) -> list[ScrollStep]:
+        if maximum < 1 or len(steps) <= maximum:
+            return steps
+        raw_indices = {0, len(steps) - 1}
+        for index in range(1, maximum - 1):
+            raw_indices.add(round(index * (len(steps) - 1) / (maximum - 1)))
+        selected: list[ScrollStep] = []
+        from_offset = 0
+        for index in sorted(raw_indices)[:maximum]:
+            step = steps[index]
+            selected.append(ScrollStep(step.start, step.end, from_offset, step.to_offset))
+            from_offset = step.to_offset
+        return selected
 
     @staticmethod
     def _scroll_offset_at(timestamp: float, steps: list[ScrollStep]) -> int:
@@ -538,10 +444,3 @@ class StudyCardRenderer:
                 f"if(lt(t,{step.end:.3f}),{transition},{step.to_offset}))"
             )
         return expression.replace(",", r"\,")
-
-
-def _active_pauses(source_duration: float, pause_segments: list[TimelinePause]) -> list[TimelinePause]:
-    return [
-        pause for pause in pause_segments
-        if pause.duration > 0 and 0 <= pause.source_time <= source_duration - 0.001
-    ]

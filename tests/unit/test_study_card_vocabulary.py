@@ -4,9 +4,10 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 覆盖十级难度映射、B1 起点及 25% 全文密度上限。 |
+| 1.1.0 | 2026-08-03 | Codex | 覆盖左侧正文微笔记最多十个的学习卡展示上限。 |
 """
 
-from video_processing.study_cards import VocabularyItem, difficulty_level, select_vocabulary
+from video_processing.study_cards import MAX_STUDY_NOTE_ITEMS, VocabularyItem, difficulty_level, select_vocabulary
 
 
 def test_difficulty_level_maps_cefr_to_the_ten_level_learning_scale():
@@ -70,3 +71,12 @@ def test_selection_rejects_low_confidence_or_dictionary_fallback_candidates():
     ))
 
     assert [item.word for item in selection.items] == ["grocery"]
+
+
+def test_selection_caps_left_body_notes_at_ten_items():
+    words = [f"advanced{i}" for i in range(60)]
+    candidates = tuple(VocabularyItem(word, "高阶词", level="CET-6") for word in words)
+
+    selection = select_vocabulary(" ".join(words), candidates)
+
+    assert len(selection.items) == MAX_STUDY_NOTE_ITEMS

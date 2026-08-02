@@ -18,6 +18,7 @@
 | 1.6.0 | 2026-08-02 | Codex | 降低生词红色强调强度、为微笔记预留独立行距，并增加六维时空小程序码位。 |
 | 1.7.0 | 2026-08-03 | Codex | 在词卡展示离线词表的友好标签与最低学习门槛，保留 IPA 与词义的手机端可读性。 |
 | 1.8.0 | 2026-08-03 | Codex | 右栏词卡改为随正文 y 坐标对齐滚动，移除小程序码位，并以影子跟读 Banner 替换唱片素材。 |
+| 1.9.0 | 2026-08-03 | Codex | 左侧保留最多十个微笔记，右侧只展示难度最高五词，并清洗重复词性与过早省略的释义。 |
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from typing import Iterable
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from .models import StudyCardContent, StudyWord, VocabularyItem
+from .vocabulary import difficulty_level
 
 CANVAS_WIDTH = 1080
 CANVAS_HEIGHT = 1920
@@ -53,6 +55,10 @@ INK = "#1E1A18"
 MUTED = "#6E625A"
 MARKED_WORD_BACKGROUND = "#F3DDD5"
 MARKED_WORD_TEXT = "#A53C2B"
+RIGHT_VOCABULARY_LIMIT = 5
+RIGHT_CARD_HEIGHT = 170
+RIGHT_CARD_GAP = 18
+POS_PATTERN = re.compile(r"\b(?:interj|conj|prep|pron|adj|adv|aux|det|num|vt|vi|int|n|v)\.?", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -212,10 +218,11 @@ class RecordUnderlineTemplate:
         items: tuple[VocabularyItem, ...],
         word_boxes: tuple[WordBox, ...],
     ) -> None:
+        right_items = _right_vocabulary_items(items)
         anchored_items = sorted(
             (
                 (_vocabulary_anchor_y(item, word_boxes) or TEXT_TOP + index * 150, index, item)
-                for index, item in enumerate(items)
+                for index, item in enumerate(right_items)
             ),
             key=lambda item: (item[0], item[1]),
         )
@@ -226,7 +233,7 @@ class RecordUnderlineTemplate:
             dark = fill in {ACCENT, "#365E8B"}
             text_color = "#FFFDF8" if dark else INK
             y = max(TEXT_TOP, int(anchor_y) - 6, y_cursor)
-            card = (VOCAB_BOX[0] + 12, y, VOCAB_BOX[2] - 12, y + 132)
+            card = (VOCAB_BOX[0] + 12, y, VOCAB_BOX[2] - 12, y + RIGHT_CARD_HEIGHT)
             draw.rounded_rectangle(card, radius=14, fill=fill)
             word_font = _font(30, bold=True, serif=True)
             draw.text((card[0] + 15, card[1] + 12), _ellipsize(item.word, word_font, 235), font=word_font, fill=text_color)
@@ -242,9 +249,18 @@ class RecordUnderlineTemplate:
                     font=_font(18, bold=True),
                     fill=text_color,
                 )
-            meaning = " ".join(part for part in (item.part_of_speech, item.meaning_zh) if part).strip()
-            draw.text((card[0] + 15, card[1] + 98), _ellipsize(meaning, _font(22), 235), font=_font(22), fill=text_color)
-            y_cursor = y + 146
+            meaning_font = _font(21)
+            _draw_wrapped_text(
+                draw,
+                _meaning_line(item),
+                (card[0] + 15, card[1] + 98),
+                meaning_font,
+                text_color,
+                235,
+                max_lines=3,
+                line_height=24,
+            )
+            y_cursor = y + RIGHT_CARD_HEIGHT + RIGHT_CARD_GAP
 
     def _draw_feature_banner(self, output_path: Path) -> None:
         size = (FEATURE_BOX[2] - FEATURE_BOX[0], FEATURE_BOX[3] - FEATURE_BOX[1])
@@ -328,6 +344,72 @@ def _learning_label(item: VocabularyItem) -> str:
     return " · ".join(parts)
 
 
+def _right_vocabulary_items(items: tuple[VocabularyItem, ...]) -> tuple[VocabularyItem, ...]:
+    """右侧窄栏只承载左侧已标注词中的最高难度五个，避免和正文争夺注意力。"""
+    ranked = sorted(items, key=lambda item: (-difficulty_level(item.level), item.word.lower()))
+    return tuple(ranked[:RIGHT_VOCABULARY_LIMIT])
+
+
+def _meaning_line(item: VocabularyItem) -> str:
+    """合并词性和释义，但避免 ECDICT 释义自带词性导致 ``vt. vt.``。"""
+    pos = _clean_pos(item.part_of_speech)
+    meaning = _strip_leading_pos(item.meaning_zh).replace(";", "；").replace(",", "，")
+    meaning = re.sub(r"([；，])\s+", r"\1", meaning)
+    return " ".join(part for part in (pos, meaning) if part).strip()
+
+
+def _micro_note_text(item: VocabularyItem) -> str:
+    note = _strip_leading_pos(item.meaning_zh).replace(";", "；").replace(",", "，")
+    note = re.sub(r"([；，])\s+", r"\1", note)
+    return note or item.meaning_zh.strip()
+
+
+def _clean_pos(value: str) -> str:
+    seen: list[str] = []
+    for token in POS_PATTERN.findall(value):
+        normal = token.rstrip(".").lower() + "."
+        if normal not in seen:
+            seen.append(normal)
+    return " ".join(seen)
+
+
+def _strip_leading_pos(value: str) -> str:
+    text = value.strip()
+    while True:
+        match = POS_PATTERN.match(text)
+        if match is None:
+            return text.lstrip(" ;；,，")
+        text = text[match.end():].lstrip(" .;；,，")
+
+
+def _draw_wrapped_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    xy: tuple[int, int],
+    font: ImageFont.FreeTypeFont,
+    fill: str,
+    max_width: int,
+    *,
+    max_lines: int,
+    line_height: int,
+) -> None:
+    lines = _wrap_limited_text(text, font, max_width, max_lines)
+    x, y = xy
+    for line in lines:
+        draw.text((x, y), line, font=font, fill=fill)
+        y += line_height
+
+
+def _wrap_limited_text(text: str, font: ImageFont.FreeTypeFont, max_width: int, max_lines: int) -> list[str]:
+    lines = _wrap_chinese(text, font, max_width)
+    if len(lines) <= max_lines:
+        return lines
+    kept = lines[:max_lines]
+    remainder = "".join(lines[max_lines - 1:])
+    kept[-1] = _ellipsize(remainder, font, max_width)
+    return kept
+
+
 def _vocabulary_anchor_y(item: VocabularyItem, boxes: tuple[WordBox, ...]) -> int | None:
     phrase = tuple(part for part in (_normalise_word(part) for part in item.word.split()) if part)
     if not phrase:
@@ -349,7 +431,7 @@ def _highlighted_token_indices(
     """贪心匹配最长词组，确保 ``heat wave`` 等词卡在正文有完整红底对应。"""
     phrase_items = sorted(
         (
-            (tuple(_normalise_word(part) for part in item.word.split()), item.meaning_zh)
+            (tuple(_normalise_word(part) for part in item.word.split()), _micro_note_text(item))
             for item in items
         ),
         key=lambda item: len(item[0]),

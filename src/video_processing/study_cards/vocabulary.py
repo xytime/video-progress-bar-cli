@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：以十级难度和全文 25% 密度上限筛选供应商无关的生词候选。 |
 | 1.1.0 | 2026-08-03 | Codex | 支持离线词表考试标签，并拒绝低置信度或词典兜底结果进入自动正文标记。 |
+| 1.2.0 | 2026-08-03 | Codex | 明确左侧正文微笔记最多十个，右栏可再从中二次筛选最高难度词。 |
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from typing import Iterable, Protocol
 
 MIN_LEARNING_LEVEL = 3
 MAX_VOCABULARY_DENSITY = 0.25
+MAX_STUDY_NOTE_ITEMS = 10
 
 # 3 级对应 B1/PET：这是面向学习者的展示分级，不假装是某一词典的官方等级。
 _CEFR_LEVELS = {
@@ -81,7 +83,7 @@ def select_vocabulary(
         raise ValueError("maximum_density 必须在 0 到 1 之间")
 
     lexical_word_count = _count_lexical_words(english_text)
-    maximum_items = int(lexical_word_count * maximum_density)
+    maximum_items = min(MAX_STUDY_NOTE_ITEMS, int(lexical_word_count * maximum_density))
     article_words = _normalise(english_text)
     unique: dict[str, VocabularyCandidate] = {}
     for candidate in candidates:

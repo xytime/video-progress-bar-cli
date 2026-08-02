@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-08-02 | Codex | 覆盖长样片测试豁免和语音锚定的正文滚动计划。 |
 | 1.1.1 | 2026-08-02 | Codex | 覆盖红线使用的滚动偏移预计算，避免与正文滚动脱节。 |
 | 1.2.0 | 2026-08-03 | Codex | 覆盖滚动静音暂停、右栏词卡正文锚点与影子跟读 Banner 资产。 |
+| 1.3.0 | 2026-08-03 | Codex | 覆盖连续原声滚动、右栏最高难度五词和词卡释义清洗。 |
 """
 
 from pathlib import Path
@@ -19,6 +20,8 @@ from video_processing.study_cards.template_a import (
     RecordUnderlineTemplate,
     _highlighted_token_indices,
     _learning_label,
+    _meaning_line,
+    _right_vocabulary_items,
     _vocabulary_anchor_y,
 )
 
@@ -100,40 +103,54 @@ def test_long_duration_is_only_accepted_with_the_explicit_test_flag(tmp_path: Pa
         )
 
 
-def test_scroll_plan_moves_body_before_a_word_leaves_the_reading_area(tmp_path: Path):
+def test_scroll_plan_uses_paragraph_boundaries_without_audio_pauses(tmp_path: Path):
     template = RecordUnderlineTemplate()
-    content = StudyCardContent.from_mapping(_payload())
+    payload = _payload()
+    payload["paragraphs"] = [
+        {"english_text": "A fin whale was spotted", "translation_zh": "发现长须鲸。"},
+        {"english_text": "near Victoria today.", "translation_zh": "地点在维多利亚附近。"},
+    ]
+    content = StudyCardContent.from_mapping(payload)
     boxes = tuple(
         template.map_word_boxes(content.words, template.render_static(content, tmp_path).word_boxes)
     )
     shifted = [(word, type(box)(box.text, box.x, box.y + 1000, box.width)) for word, box in boxes]
 
-    steps, pauses = StudyCardRenderer._build_scroll_steps(shifted)
+    steps = StudyCardRenderer()._build_scroll_steps(content, shifted)
 
     assert steps
-    assert pauses
-    assert pauses[0].duration == pytest.approx(0.5)
-    assert steps[0].start == pytest.approx(shifted[0][0].start)
+    assert steps[0].start == pytest.approx(shifted[5][0].start - 0.04)
+    assert steps[0].end - steps[0].start == pytest.approx(0.62)
     assert steps[0].to_offset > 0
 
 
-def test_scroll_pause_shifts_following_word_timing():
+def test_scroll_plan_is_limited_to_three_natural_boundary_moves():
     boxes = [
         (
-            type("Word", (), {"text": "first", "start": 0.0, "end": 0.2})(),
-            type("Box", (), {"text": "first", "x": 54, "y": 1700, "width": 80})(),
-        ),
-        (
-            type("Word", (), {"text": "second", "start": 1.0, "end": 1.4})(),
-            type("Box", (), {"text": "second", "x": 54, "y": 1780, "width": 100})(),
-        ),
+            type("Word", (), {"text": f"w{index}", "start": float(index), "end": float(index) + 0.2})(),
+            type("Box", (), {"text": f"w{index}", "x": 54, "y": 800 + index * 420, "width": 80})(),
+        )
+        for index in range(7)
     ]
-    _, pauses = StudyCardRenderer._build_scroll_steps(boxes)
+    payload = {
+        "headline_zh": "测试新闻标题",
+        "headline_en": "A short test headline",
+        "english_text": " ".join(f"w{index}" for index in range(7)),
+        "translation_zh": "测试。",
+        "words": [
+            {"text": f"w{index}", "start": float(index), "end": float(index) + 0.2}
+            for index in range(7)
+        ],
+        "paragraphs": [
+            {"english_text": f"w{index}", "translation_zh": "测试。"}
+            for index in range(7)
+        ],
+        "vocabulary": [{"word": "w3", "meaning_zh": "测试", "level": "PET"}],
+    }
 
-    shifted = StudyCardRenderer._shift_timed_boxes_for_pauses(boxes, pauses)
+    steps = StudyCardRenderer()._build_scroll_steps(StudyCardContent.from_mapping(payload), boxes)
 
-    assert shifted[0][0].start == pytest.approx(0.5)
-    assert shifted[1][0].start == pytest.approx(1.5)
+    assert len(steps) <= 3
 
 
 def test_scroll_offset_for_underlines_matches_piecewise_scroll_plan():
@@ -165,6 +182,31 @@ def test_word_card_learning_label_prefers_offline_friendly_tag_and_exam_level():
     item = VocabularyItem("grocery", "食品杂货店", level="CET-4", friendly_tag="进阶词")
 
     assert _learning_label(item) == "进阶词 · CET-4"
+
+
+def test_right_vocabulary_uses_the_highest_difficulty_five_left_notes():
+    items = (
+        VocabularyItem("ket", "基础", level="KET"),
+        VocabularyItem("pet", "进阶", level="PET"),
+        VocabularyItem("gaokao", "高考", level="高考"),
+        VocabularyItem("cet4", "四级", level="CET-4"),
+        VocabularyItem("fce", "FCE", level="FCE"),
+        VocabularyItem("cet6", "六级", level="CET-6"),
+        VocabularyItem("cae", "高级", level="CAE"),
+    )
+
+    assert [item.word for item in _right_vocabulary_items(items)] == ["cae", "cet6", "fce", "cet4", "gaokao"]
+
+
+def test_word_card_meaning_removes_duplicate_part_of_speech_and_keeps_more_definition():
+    item = VocabularyItem(
+        "affect",
+        "vt. vt. 影响; 感动; 侵袭; 使感染",
+        part_of_speech="vt.",
+        level="PET",
+    )
+
+    assert _meaning_line(item) == "vt. 影响；感动；侵袭；使感染"
 
 
 def test_vocabulary_card_anchor_uses_the_first_matching_body_word(tmp_path: Path):
