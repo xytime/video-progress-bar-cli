@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：定义独立于采集、AI 与发布流程的新闻精读卡片数据契约。 |
+| 1.1.0 | 2026-08-02 | Codex | 增加阅读段落契约，使英文意群、词注与中文段译可严格同步。 |
 """
 
 from __future__ import annotations
@@ -44,6 +45,18 @@ class VocabularyItem:
 
 
 @dataclass(frozen=True)
+class StudyParagraph:
+    """一个阅读意群：英文读完后，紧跟与其严格对应的中文段译。"""
+
+    english_text: str
+    translation_zh: str
+
+    def __post_init__(self) -> None:
+        if not self.english_text.strip() or not self.translation_zh.strip():
+            raise ValueError("阅读段落必须同时包含英文和中文段译")
+
+
+@dataclass(frozen=True)
 class StudyCardContent:
     """模板渲染所需的纯内容，不包含 URL、模型名或任何供应商细节。"""
 
@@ -53,6 +66,7 @@ class StudyCardContent:
     translation_zh: str
     words: tuple[StudyWord, ...]
     vocabulary: tuple[VocabularyItem, ...]
+    paragraphs: tuple[StudyParagraph, ...]
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "StudyCardContent":
@@ -75,15 +89,31 @@ class StudyCardContent:
             )
             for item in _as_sequence(payload.get("vocabulary"), "vocabulary")
         )
+        english_text = _required_text(payload, "english_text")
+        translation_zh = _required_text(payload, "translation_zh")
+        paragraph_payload = payload.get("paragraphs")
+        paragraphs = (
+            tuple(
+                StudyParagraph(
+                    english_text=_required_text(item, "english_text"),
+                    translation_zh=_required_text(item, "translation_zh"),
+                )
+                for item in _as_sequence(paragraph_payload, "paragraphs")
+            )
+            if paragraph_payload is not None
+            else (StudyParagraph(english_text=english_text, translation_zh=translation_zh),)
+        )
         content = cls(
             headline_zh=_required_text(payload, "headline_zh"),
             headline_en=_required_text(payload, "headline_en"),
-            english_text=_required_text(payload, "english_text"),
-            translation_zh=_required_text(payload, "translation_zh"),
+            english_text=english_text,
+            translation_zh=translation_zh,
             words=words,
             vocabulary=vocabulary,
+            paragraphs=paragraphs,
         )
         content.validate_word_order()
+        content.validate_paragraphs()
         return content
 
     def validate_word_order(self) -> None:
@@ -93,6 +123,12 @@ class StudyCardContent:
             if word.start + 0.001 < previous_end:
                 raise ValueError(f"逐词时间轴发生倒退: {word.text!r}")
             previous_end = word.end
+
+    def validate_paragraphs(self) -> None:
+        """段落拆分只能改变阅读层级，不能悄悄篡改逐词朗读正文。"""
+        combined = " ".join(paragraph.english_text for paragraph in self.paragraphs)
+        if _normalise_english(combined) != _normalise_english(self.english_text):
+            raise ValueError("paragraphs 的英文合并结果必须与 english_text 完全一致")
 
 
 def _required_text(payload: Mapping[str, Any], key: str) -> str:
@@ -106,3 +142,7 @@ def _as_sequence(value: Any, field_name: str) -> Sequence[Mapping[str, Any]]:
     if not isinstance(value, list) or not all(isinstance(item, Mapping) for item in value):
         raise ValueError(f"{field_name} 必须是对象数组")
     return value
+
+
+def _normalise_english(value: str) -> str:
+    return " ".join(value.split()).strip().lower()

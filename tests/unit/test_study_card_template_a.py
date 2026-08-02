@@ -56,6 +56,17 @@ def test_rejects_time_axis_that_does_not_match_page_text(tmp_path: Path):
         template.map_word_boxes(content.words, assets.word_boxes)
 
 
+def test_rejects_paragraphs_that_rewrite_the_spoken_english():
+    payload = _payload()
+    payload["paragraphs"] = [{
+        "english_text": "A dolphin was spotted near Victoria today.",
+        "translation_zh": "今天在维多利亚附近发现了一只海豚。",
+    }]
+
+    with pytest.raises(ValueError, match="paragraphs"):
+        StudyCardContent.from_mapping(payload)
+
+
 def test_renderer_rejects_more_than_thirty_seconds_before_touching_source(tmp_path: Path):
     content = StudyCardContent.from_mapping(_payload())
 

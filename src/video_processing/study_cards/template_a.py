@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：输出模板 A 静态画布、唱片素材和逐词下划线坐标。 |
+| 1.1.0 | 2026-08-02 | Codex | 正文严格对齐新闻精读参考图：意群英文、词下小注、段后中文释义和右栏词卡。 |
 """
 
 from __future__ import annotations
@@ -25,9 +26,8 @@ DISC_BOX = (748, 274, 982, 508)
 TEXT_LEFT = 54
 TEXT_TOP = 682
 TEXT_WIDTH = 650
-TEXT_BOTTOM = 1430
+TEXT_BOTTOM = 1810
 VOCAB_BOX = (730, 548, 1025, 1820)
-TRANSLATION_BOX = (54, 1480, 682, 1818)
 ENGLISH_FONT = "/System/Library/Fonts/Supplemental/Georgia.ttf"
 CHINESE_FONT = "/System/Library/Fonts/Hiragino Sans GB.ttc"
 ACCENT = "#C6432D"
@@ -66,8 +66,7 @@ class RecordUnderlineTemplate:
         draw = ImageDraw.Draw(page)
         self._draw_page_frame(draw)
         self._draw_heading(draw, content)
-        word_boxes = self._draw_english_body(draw, content.english_text)
-        self._draw_translation(draw, content.translation_zh)
+        word_boxes = self._draw_reading_body(draw, content)
         self._draw_vocabulary(draw, content.vocabulary)
 
         base_image = output_dir / "template_a_base.png"
@@ -100,7 +99,6 @@ class RecordUnderlineTemplate:
         draw.rounded_rectangle((28, 28, 1052, 1888), radius=44, outline="#CFC5BC", width=4)
         draw.rounded_rectangle(VIDEO_BOX, radius=22, outline="#AFA49A", width=4, fill="#EDE7DF")
         draw.rounded_rectangle(VOCAB_BOX, radius=24, outline="#AFA49A", width=4, fill="#FFFEFB")
-        draw.rounded_rectangle(TRANSLATION_BOX, radius=22, fill="#F2EEE5")
         draw.text((DISC_BOX[0], DISC_BOX[1] - 54), "Listening", font=_font(34, bold=True), fill=INK)
         draw.text((VOCAB_BOX[0] + 22, VOCAB_BOX[1] + 20), "Vocabulary", font=_font(40, bold=True, serif=True), fill=INK)
 
@@ -111,25 +109,45 @@ class RecordUnderlineTemplate:
         draw.text((54, 120), _ellipsize(content.headline_en, en_font, 900), font=en_font, fill=MUTED)
         draw.line((54, 178, 1025, 178), fill="#C9BDB0", width=3)
 
-    def _draw_english_body(self, draw: ImageDraw.ImageDraw, text: str) -> list[WordBox]:
-        tokens = re.findall(r"\S+", text)
-        for size in range(64, 38, -2):
-            font = _font(size, serif=True, bold=True)
-            lines = _wrap_words(tokens, font, TEXT_WIDTH)
-            line_height = int(size * 1.33)
-            if len(lines) * line_height <= TEXT_BOTTOM - TEXT_TOP:
-                return _draw_word_lines(draw, lines, font, line_height)
-        raise ValueError("英文正文过长，无法在模板 A 的阅读区保持可读字号")
-
-    def _draw_translation(self, draw: ImageDraw.ImageDraw, translation: str) -> None:
-        label_font = _font(28)
-        text_font = _font(35)
-        draw.text((82, 1512), "中文翻译", font=label_font, fill=MUTED)
-        lines = _wrap_chinese(translation, text_font, TRANSLATION_BOX[2] - TRANSLATION_BOX[0] - 56)
-        y = 1555
-        for line in lines[:5]:
-            draw.text((82, y), line, font=text_font, fill=INK)
-            y += 48
+    def _draw_reading_body(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> list[WordBox]:
+        """严格采用参考图的阅读稿：英文意群 → 词下小注 → 本段中文释义。"""
+        english_font = _latin_font(38, bold=True)
+        gloss_font = _font(17)
+        translation_font = _font(24)
+        line_height = 65
+        marked_words = { _normalise_word(item.word): item.meaning_zh for item in content.vocabulary }
+        y = TEXT_TOP
+        boxes: list[WordBox] = []
+        for paragraph in content.paragraphs:
+            lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, TEXT_WIDTH)
+            required_height = len(lines) * line_height + 18
+            translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
+            required_height += len(translation_lines) * 34 + 28
+            if y + required_height > TEXT_BOTTOM:
+                raise ValueError("正文超出一屏；需要由滚动阅读器切换到下一阅读页")
+            for line in lines:
+                x = TEXT_LEFT
+                for token in line:
+                    width = int(draw.textlength(token, font=english_font))
+                    normal = _normalise_word(token)
+                    meaning = marked_words.get(normal)
+                    if meaning:
+                        draw.rounded_rectangle((x - 4, y - 2, x + width + 4, y + 45), radius=6, fill=ACCENT)
+                    draw.text((x, y), token, font=english_font, fill="#FFFDF8" if meaning else INK)
+                    boxes.append(WordBox(token, x, y + 47, max(8, width)))
+                    if meaning:
+                        note = _ellipsize(meaning, gloss_font, max(width + 20, 68))
+                        note_width = int(draw.textlength(note, font=gloss_font))
+                        draw.text((x + max(0, (width - note_width) // 2), y + 48), note, font=gloss_font, fill=MUTED)
+                    x += width + int(draw.textlength(" ", font=english_font))
+                y += line_height
+            draw.rounded_rectangle((TEXT_LEFT, y + 3, TEXT_LEFT + TEXT_WIDTH, y + 3 + len(translation_lines) * 34 + 14), radius=8, fill="#F8F2EA")
+            y += 10
+            for line in translation_lines:
+                draw.text((TEXT_LEFT + 10, y), line, font=translation_font, fill=INK)
+                y += 34
+            y += 18
+        return boxes
 
     def _draw_vocabulary(self, draw: ImageDraw.ImageDraw, items: tuple[VocabularyItem, ...]) -> None:
         y = VOCAB_BOX[1] + 84
@@ -162,21 +180,6 @@ class RecordUnderlineTemplate:
         draw.ellipse((centre + 17, centre - 20, centre + 29, centre - 8), fill="#F7E8BD")
         draw.ellipse((centre - 8, centre - 8, centre + 8, centre + 8), fill="#F7E8BD")
         disc.save(output_path)
-
-
-def _draw_word_lines(draw: ImageDraw.ImageDraw, lines: list[list[str]], font: ImageFont.FreeTypeFont, line_height: int) -> list[WordBox]:
-    boxes: list[WordBox] = []
-    y = TEXT_TOP
-    space_width = int(draw.textlength(" ", font=font))
-    for line in lines:
-        x = TEXT_LEFT
-        for token in line:
-            draw.text((x, y), token, font=font, fill=INK)
-            width = int(draw.textlength(token, font=font))
-            boxes.append(WordBox(token, x, y + line_height - 8, max(8, width)))
-            x += width + space_width
-        y += line_height
-    return boxes
 
 
 def _wrap_words(tokens: list[str], font: ImageFont.FreeTypeFont, max_width: int) -> list[list[str]]:
@@ -221,9 +224,10 @@ def _font(size: int, *, serif: bool = False, bold: bool = False, italic: bool = 
     return ImageFont.truetype(path, size)
 
 
-def _latin_font(size: int) -> ImageFont.FreeTypeFont:
+def _latin_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
     """IPA 走支持音标字形的拉丁字体，避免中文字体把 /ˈspiːʃiːz/ 渲染成方框。"""
-    return ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", size)
+    name = "Arial Bold.ttf" if bold else "Arial.ttf"
+    return ImageFont.truetype(f"/System/Library/Fonts/Supplemental/{name}", size)
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
