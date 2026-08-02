@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-03 | Codex | 覆盖最低考试标签优先级、词形还原、超纲兜底与文本批量分析。 |
 | 1.1.0 | 2026-08-03 | Codex | 覆盖词表缺失报错、离线语境释义选择与文章生词表抽取。 |
+| 1.2.0 | 2026-08-03 | Codex | 覆盖 ECDICT lazy/eager/off 性能模式的兼容行为。 |
 """
 
 from __future__ import annotations
@@ -122,6 +123,23 @@ def test_ecdict_only_word_is_treated_as_master_fallback(tmp_path: Path) -> None:
     assert result.covered_syllabi == ("Master",)
     assert result.friendly_tag == FriendlyTag.NEWS_ADVANCED
     assert result.source == "ecdict-fallback"
+
+
+def test_eager_mode_preloads_ecdict_fallback_entries(tmp_path: Path) -> None:
+    _write_wordlists(tmp_path)
+    leveler = VocabularyLeveler(tmp_path, ecdict_mode="eager")
+
+    assert "esoteric" in leveler._fallback_entries
+    assert leveler.analyze_word("esoteric").source == "ecdict-fallback"
+
+
+def test_off_mode_skips_ecdict_and_allows_missing_ecdict_file(tmp_path: Path) -> None:
+    _write_wordlists(tmp_path)
+    (tmp_path / "ecdict.csv").unlink()
+    result = VocabularyLeveler(tmp_path, ecdict_mode="off").analyze_word("esoteric")
+
+    assert result.source == "unknown"
+    assert result.confidence == 0.2
 
 
 def test_text_analysis_deduplicates_targets_in_order(tmp_path: Path) -> None:

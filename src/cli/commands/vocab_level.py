@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-03 | Codex | 初始创建：暴露离线词表分级 JSON 命令，供脚本和人工验证使用。 |
 | 1.1.0 | 2026-08-03 | Codex | 增加整篇正文生词表模式与筛选参数。 |
+| 1.2.0 | 2026-08-03 | Codex | 增加 ECDICT 加载模式参数，兼顾低内存与长进程高吞吐。 |
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from pathlib import Path
 
 import click
 
-from video_processing.vocabulary import DEFAULT_WORDLIST_DIR, VocabularyLeveler
+from video_processing.vocabulary import DEFAULT_WORDLIST_DIR, ECDICT_MODES, VocabularyLeveler
 
 
 @click.command(name="vocab-level")
@@ -44,6 +45,13 @@ from video_processing.vocabulary import DEFAULT_WORDLIST_DIR, VocabularyLeveler
     show_default=True,
     help="hermes-wordlists 词表目录。",
 )
+@click.option(
+    "--ecdict-mode",
+    type=click.Choice(ECDICT_MODES),
+    default="lazy",
+    show_default=True,
+    help="ECDICT 兜底词典加载策略：lazy 低内存，eager 适合长进程，off 最省资源。",
+)
 @click.option("--indent", type=int, default=2, show_default=True, help="JSON 缩进空格数；0 为单行输出。")
 def vocab_level(
     words: tuple[str, ...],
@@ -53,6 +61,7 @@ def vocab_level(
     min_level: str,
     limit: int,
     wordlist_dir: Path,
+    ecdict_mode: str,
     indent: int,
 ) -> None:
     """分析英文单词的最低考试级别与覆盖大纲。"""
@@ -63,7 +72,7 @@ def vocab_level(
     if limit < 0:
         raise click.UsageError("--limit 不能为负数")
 
-    leveler = VocabularyLeveler(wordlist_dir)
+    leveler = VocabularyLeveler(wordlist_dir, ecdict_mode=ecdict_mode)
     if article:
         results = leveler.extract_article_vocabulary(
             text,

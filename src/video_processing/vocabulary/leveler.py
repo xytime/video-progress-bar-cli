@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-03 | Codex | 初始创建：合并 hermes-wordlists 的 CEFR 与国内考试标签，支持词形还原与 JSON 输出。 |
 | 1.1.0 | 2026-08-03 | Codex | 修复词表缺失静默降级，增加离线语境释义选择与文章生词表提取接口。 |
+| 1.2.0 | 2026-08-03 | Codex | 增加 ECDICT lazy/eager/off 加载模式，按目标词批量扫描降低启动内存。 |
 """
 
 from __future__ import annotations
@@ -15,13 +16,16 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 import re
-from typing import Iterable, Sequence
+from typing import Iterable, Literal, Sequence
 
 from .models import FriendlyTag, WordLevelResult
 
 
 DEFAULT_WORDLIST_DIR = Path.home() / "Downloads" / "hermes-wordlists"
-REQUIRED_WORDLIST_FILES = ("exam-wordlists.csv", "cefr-enhanced.csv", "ecdict.csv")
+MAIN_WORDLIST_FILES = ("exam-wordlists.csv", "cefr-enhanced.csv")
+ECDICT_WORDLIST_FILE = "ecdict.csv"
+ECDICT_MODES = ("lazy", "eager", "off")
+EcdictMode = Literal["lazy", "eager", "off"]
 
 _LABEL_PRIORITY = {
     "KET": 0,
@@ -102,11 +106,19 @@ class VocabularyLeveler:
     3. ``ecdict.csv`` 提供词形还原与超纲词兜底释义。
     """
 
-    def __init__(self, wordlist_dir: Path | str = DEFAULT_WORDLIST_DIR) -> None:
+    def __init__(
+        self,
+        wordlist_dir: Path | str = DEFAULT_WORDLIST_DIR,
+        *,
+        ecdict_mode: EcdictMode = "lazy",
+    ) -> None:
         self.wordlist_dir = Path(wordlist_dir).expanduser()
+        self.ecdict_mode = _normalise_ecdict_mode(ecdict_mode)
+        self._ecdict_path = self.wordlist_dir / ECDICT_WORDLIST_FILE
         self._entries: dict[str, _WordlistEntry] = {}
         self._fallback_entries: dict[str, _WordlistEntry] = {}
         self._lemma_map: dict[str, str] = {}
+        self._ecdict_scanned_targets: set[str] = set()
         self._load()
 
     def analyze_word(self, word: str, context: str = "") -> WordLevelResult:
@@ -146,6 +158,7 @@ class VocabularyLeveler:
     def analyze_text(self, text: str, words: Iterable[str] | None = None) -> list[WordLevelResult]:
         """分析文本中的目标词；未指定目标词时按首次出现顺序抽取英文词。"""
         targets = list(words) if words is not None else _extract_words(text)
+        self.prepare_words(targets)
         results: list[WordLevelResult] = []
         seen: set[str] = set()
         for target in targets:
@@ -155,6 +168,14 @@ class VocabularyLeveler:
             seen.add(key)
             results.append(self.analyze_word(key, context=text))
         return results
+
+    def prepare_words(self, words: Iterable[str]) -> None:
+        """按目标词预热懒加载词形/兜底词典，避免正文批量分析时重复扫描。"""
+        if self.ecdict_mode != "lazy":
+            return
+        targets = {_normalise_word(word) for word in words}
+        targets = {word for word in targets if word and not self._has_lookup_without_ecdict(word)}
+        self._load_ecdict_targets(targets)
 
     def extract_article_vocabulary(
         self,
@@ -199,6 +220,14 @@ class VocabularyLeveler:
         return results
 
     def _lookup(self, word: str) -> _LookupResult | None:
+        result = self._lookup_loaded(word)
+        if result is not None or self.ecdict_mode != "lazy":
+            return result
+
+        self._load_ecdict_targets((word,))
+        return self._lookup_loaded(word)
+
+    def _lookup_loaded(self, word: str) -> _LookupResult | None:
         direct = self._entries.get(word)
         if direct is not None:
             return _LookupResult(entry=direct, lemma=word, direct_match=True)
@@ -218,15 +247,25 @@ class VocabularyLeveler:
                 return _LookupResult(entry=fallback, lemma=lemma, direct_match=False)
         return None
 
+    def _has_lookup_without_ecdict(self, word: str) -> bool:
+        if word in self._entries or word in self._fallback_entries:
+            return True
+        lemma = self._lemma_map.get(word) or _heuristic_lemma(word)
+        return lemma != word and (lemma in self._entries or lemma in self._fallback_entries)
+
     def _load(self) -> None:
         if not self.wordlist_dir.exists():
             raise FileNotFoundError(f"词表目录不存在: {self.wordlist_dir}")
-        missing = [name for name in REQUIRED_WORDLIST_FILES if not (self.wordlist_dir / name).is_file()]
+        required_files = list(MAIN_WORDLIST_FILES)
+        if self.ecdict_mode != "off":
+            required_files.append(ECDICT_WORDLIST_FILE)
+        missing = [name for name in required_files if not (self.wordlist_dir / name).is_file()]
         if missing:
             raise FileNotFoundError(f"词表文件缺失: {', '.join(missing)} in {self.wordlist_dir}")
         self._load_exam_wordlists(self.wordlist_dir / "exam-wordlists.csv")
         self._load_cefr_wordlists(self.wordlist_dir / "cefr-enhanced.csv")
-        self._load_ecdict(self.wordlist_dir / "ecdict.csv")
+        if self.ecdict_mode == "eager":
+            self._load_ecdict(self._ecdict_path)
         if not self._entries:
             raise ValueError(f"主词表为空或格式不正确: {self.wordlist_dir}")
 
@@ -270,19 +309,53 @@ class VocabularyLeveler:
             word = _normalise_word(row.get("word", ""))
             if not word:
                 continue
-            self._fallback_entries.setdefault(
-                word,
-                _WordlistEntry(
-                    word=word,
-                    labels=("Master",),
-                    pos=(row.get("pos") or "").strip(),
-                    phonetic=(row.get("phonetic") or "").strip(),
-                    translation=(row.get("translation") or "").strip(),
-                    definition=(row.get("definition") or "").strip(),
-                    source="ecdict-fallback",
-                ),
-            )
+            self._set_fallback_entry(word, row)
             self._add_exchange_forms(word, row.get("exchange", ""))
+
+    def _load_ecdict_targets(self, targets: Iterable[str]) -> None:
+        pending = {_normalise_word(target) for target in targets}
+        pending = {target for target in pending if target and target not in self._ecdict_scanned_targets}
+        if not pending or self.ecdict_mode != "lazy":
+            return
+
+        scan_terms = set(pending)
+        scan_terms.update(_heuristic_lemma(target) for target in pending)
+        scan_terms = {term for term in scan_terms if term}
+        found_targets: set[str] = set()
+        for row in _read_csv(self._ecdict_path):
+            word = _normalise_word(row.get("word", ""))
+            if not word:
+                continue
+            exchange = row.get("exchange", "")
+            forms = _parse_exchange(exchange)
+            related_forms = {word, *forms.values()}
+            matched_targets = pending & related_forms
+            if word not in scan_terms and not matched_targets:
+                continue
+
+            self._set_fallback_entry(word, row)
+            self._add_exchange_forms(word, exchange, forms=forms)
+            found_targets.update(matched_targets)
+            if word in pending:
+                found_targets.add(word)
+            if pending <= found_targets:
+                break
+
+        self._ecdict_scanned_targets.update(pending)
+
+    def _set_fallback_entry(self, word: str, row: dict[str, str]) -> None:
+        self._fallback_entries.setdefault(
+            word,
+            _WordlistEntry(
+                word=word,
+                labels=("Master",),
+                pos=(row.get("pos") or "").strip(),
+                phonetic=(row.get("phonetic") or "").strip(),
+                translation=(row.get("translation") or "").strip(),
+                definition=(row.get("definition") or "").strip(),
+                source="ecdict-fallback",
+            ),
+        )
 
     def _merge_entry(self, entry: _WordlistEntry) -> None:
         current = self._entries.get(entry.word)
@@ -308,8 +381,8 @@ class VocabularyLeveler:
             source=f"{current.source}+{entry.source}" if entry.source not in current.source else current.source,
         )
 
-    def _add_exchange_forms(self, word: str, exchange: str) -> None:
-        forms = _parse_exchange(exchange)
+    def _add_exchange_forms(self, word: str, exchange: str, forms: dict[str, str] | None = None) -> None:
+        forms = forms if forms is not None else _parse_exchange(exchange)
         lemma = forms.get("0", word)
         if lemma:
             self._lemma_map.setdefault(word, lemma)
@@ -320,22 +393,30 @@ class VocabularyLeveler:
 
 
 @lru_cache(maxsize=4)
-def _cached_leveler(wordlist_dir: str) -> VocabularyLeveler:
-    return VocabularyLeveler(Path(wordlist_dir))
+def _cached_leveler(wordlist_dir: str, ecdict_mode: EcdictMode) -> VocabularyLeveler:
+    return VocabularyLeveler(Path(wordlist_dir), ecdict_mode=ecdict_mode)
 
 
-def analyze_word(word: str, context: str = "", wordlist_dir: Path | str = DEFAULT_WORDLIST_DIR) -> WordLevelResult:
+def analyze_word(
+    word: str,
+    context: str = "",
+    wordlist_dir: Path | str = DEFAULT_WORDLIST_DIR,
+    *,
+    ecdict_mode: EcdictMode = "lazy",
+) -> WordLevelResult:
     """便捷函数：使用缓存的离线分级器分析单词。"""
-    return _cached_leveler(str(Path(wordlist_dir).expanduser())).analyze_word(word, context=context)
+    return _cached_leveler(str(Path(wordlist_dir).expanduser()), ecdict_mode).analyze_word(word, context=context)
 
 
 def analyze_text(
     text: str,
     words: Iterable[str] | None = None,
     wordlist_dir: Path | str = DEFAULT_WORDLIST_DIR,
+    *,
+    ecdict_mode: EcdictMode = "lazy",
 ) -> list[WordLevelResult]:
     """便捷函数：使用缓存的离线分级器分析文本。"""
-    return _cached_leveler(str(Path(wordlist_dir).expanduser())).analyze_text(text, words=words)
+    return _cached_leveler(str(Path(wordlist_dir).expanduser()), ecdict_mode).analyze_text(text, words=words)
 
 
 def extract_article_vocabulary(
@@ -344,10 +425,11 @@ def extract_article_vocabulary(
     min_level: str = "PET",
     max_words: int | None = 20,
     include_proper_nouns: bool = False,
+    ecdict_mode: EcdictMode = "lazy",
     wordlist_dir: Path | str = DEFAULT_WORDLIST_DIR,
 ) -> list[WordLevelResult]:
     """便捷函数：从整篇英文正文中抽取重点生词表。"""
-    return _cached_leveler(str(Path(wordlist_dir).expanduser())).extract_article_vocabulary(
+    return _cached_leveler(str(Path(wordlist_dir).expanduser()), ecdict_mode).extract_article_vocabulary(
         text,
         min_level=min_level,
         max_words=max_words,
@@ -389,6 +471,13 @@ def _normalise_label(label: str) -> str:
     if lowered in {"cet6", "cet-6"}:
         return "CET-6"
     return cleaned
+
+
+def _normalise_ecdict_mode(mode: str) -> EcdictMode:
+    normalised = (mode or "").strip().lower()
+    if normalised not in ECDICT_MODES:
+        raise ValueError(f"未知 ECDICT 加载模式: {mode}")
+    return normalised  # type: ignore[return-value]
 
 
 def _sort_labels(labels: Sequence[str]) -> tuple[str, ...]:
