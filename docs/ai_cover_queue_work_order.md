@@ -44,10 +44,10 @@ owner: Video-precessing / Codex Automation Owner
 | 两分钟本地协调器 | 已实现并已挂本机 cron | `scripts/reconcile_ai_cover_queue.py`；功能开关关闭时无副作用。 |
 | 合法 AI 底图合成最终封面 | 已实现 | 使用现有 `scripts/cover_generator.py` 绘制标题与角标。 |
 | 34 分钟后确定性降级 | 已实现 | 同一协调器生成并验证本地专属封面。 |
-| Codex 每三分钟自动巡查 | 已注册并验证 | `scripts/install_ai_cover_doer_schedule.sh` 已安装受管 cron，调用 `scripts/run_ai_cover_doer.sh`；15:33 CST 已记录空队列快速巡查 `skipped_no_eligible_task`，证据见 `output/ai_cover_codex_runs.log`。 |
+| Codex 每三分钟自动巡查 | 已注册并验证 | `scripts/install_ai_cover_doer_schedule.sh` 已迁移为用户 LaunchAgent `com.videopipeline.ai-cover-doer`；由 Home 下 launcher 调用 `scripts/run_ai_cover_doer.sh`，避免 cron/外置盘沙箱权限抖动。 |
 | 真实端到端演练 | 部分完成 | 已完成隔离影子任务的有效 AI 底图路径和超时降级路径；仍需一条人工选定、未复用旧封面的真实测试视频验证管理器状态迁移与平台编辑器预览。 |
 
-**当前结论：** 项目侧协议、降级代码和 Codex 三分钟巡查已具备，且空队列巡查已留下真实 cron 运行记录；`ENABLE_CODEX_COVER_QUEUE` 仍必须保持 `false`，直到使用人工选定的真实测试视频完成状态迁移、最终封面和平台编辑器预览验收。手工影子演练不等于正常候选已可放量。
+**当前结论：** 项目侧协议、降级代码和 Codex 三分钟巡查已具备；2026-08-02 起 AI 底图巡查由用户 LaunchAgent 执行，空队列巡查会继续写入 `output/ai_cover_codex_runs.log`。`ENABLE_CODEX_COVER_QUEUE=true` 后必须继续用 `resolution.json` 区分 `codex_ai_visual` 与 `deterministic_fallback`，不能把本地降级封面说成 AI 底图成功。
 
 ## 5. 任务协议
 
@@ -162,18 +162,19 @@ flowchart LR
 | 本地封面生成超时 | 90 秒 | `cover_generator.py` 子进程硬超时。 |
 | 最坏最终封面可用时间 | 约 37.5 分钟 | `34 + 2 + 1.5` 分钟，距 40 分钟上限至少保留约 2.5 分钟。 |
 
-推导前提：本地协调器可运行、磁盘可写、既有本地封面生成器在 90 秒内完成。若 cron、磁盘或本地生成器故障，不能宣称满足 40 分钟 SLA，必须由监控报警并按故障处理。
+推导前提：本地协调器可运行、AI doer LaunchAgent 可运行、磁盘可写、既有本地封面生成器在 90 秒内完成。若调度、磁盘或本地生成器故障，不能宣称满足 40 分钟 SLA，必须由监控报警并按故障处理。
 
 ## 9. 配置、运行与可观测性
 
 | 配置/产物 | 当前值 | 作用 |
 | --- | --- | --- |
-| `ENABLE_CODEX_COVER_QUEUE` | `false` | 总开关；未通过端到端验收前必须保持关闭。 |
+| `ENABLE_CODEX_COVER_QUEUE` | `true` | 总开关；开启后仍需用完成物证据区分 AI 底图与确定性降级。 |
 | `AI_COVER_QUEUE_DIR` | `ai-cover-queue` | 输入任务目录。 |
 | `AI_COVER_FINISH_DIR` | `ai-cover-finish` | Codex 完成物目录。 |
 | `AI_COVER_GENERATION_DEADLINE_MINUTES` | `32` | 合法 AI 完成物的截止。 |
 | `AI_COVER_FALLBACK_AFTER_MINUTES` | `34` | 本地降级起点。 |
 | `scripts/reconcile_ai_cover_queue.py` | 每 2 分钟 | 消费有效完成物或执行降级；开关关闭时直接退出。 |
+| `com.videopipeline.ai-cover-doer` | 每 180 秒 | 用户 LaunchAgent，触发 Home 下 launcher，再调用项目 `scripts/run_ai_cover_doer.sh`。 |
 | `ai-cover-finish/<task_id>/resolution.json` | 每次完成 | 记录实际采用 `codex_ai_visual` 或 `deterministic_fallback`。 |
 
 上线前还必须补充运行监控：任务创建数、接受数、拒绝原因、超时降级数、协调器最近成功运行时间和最老 `AI_COVER_PENDING` 等待时长。告警应报告事实，不得把“进程存在”误报为“封面已完成”。
@@ -211,7 +212,7 @@ flowchart LR
 
 | 子工单 | 优先级 | 状态 | 交付物 |
 | --- | --- | --- | --- |
-| ACQ-001A 注册 Codex 自动化 | P0 | 已完成 | `scripts/install_ai_cover_doer_schedule.sh` 安装每 3 分钟受管 cron；`output/ai_cover_codex_runs.log` 记录 2026-07-31 15:33 CST 的真实空队列巡查。 |
+| ACQ-001A 注册 Codex 自动化 | P0 | 已完成 | `scripts/install_ai_cover_doer_schedule.sh` 安装每 3 分钟用户 LaunchAgent；`output/ai_cover_codex_runs.log` 记录真实空队列巡查。 |
 | ACQ-001B 项目队列协议与降级 | P0 | 已完成 | 队列模块、状态机接入、协调器、配置和单测。 |
 | ACQ-001C 本机协调器调度 | P0 | 已完成 | 每 2 分钟 cron；功能开关关闭时保持惰性。 |
 | ACQ-001D 端到端影子演练 | P0 | 部分完成 | 隔离任务 `acqshadow-e25001cffc25` 验证 AI 底图、哈希、最终封面和 `codex_ai_visual` resolution；`acqfallback-8f92410d6cdb` 验证超时降级。仍需人工选定真实视频。 |
@@ -219,8 +220,8 @@ flowchart LR
 
 ### 11.3 放量顺序
 
-1. 已完成：受管 cron 每三分钟运行 `/ai-cover-doer`，限定工作目录和技能边界，不含发布或平台操作；空队列先由项目协议预检，避免无任务唤起模型。
-2. 已完成：保持项目开关关闭时，15:33 CST 的 cron 已检查队列并写入 `skipped_no_eligible_task` 运行证据。
+1. 已完成：受管 LaunchAgent 每三分钟运行 `/ai-cover-doer`，限定工作目录和技能边界，不含发布或平台操作；空队列先由项目协议预检，避免无任务唤起模型。
+2. 已完成：LaunchAgent 已检查队列并写入 `skipped_no_eligible_task` 运行证据。
 3. 仅挑选一条真实测试视频，将 `ENABLE_CODEX_COVER_QUEUE=true` 后执行影子演练；检查任务单、`visual.png`、`result.json`、`resolution.json`、最终 JPEG 和 provenance。
 4. 验证一次“有效 AI 底图”路径与一次“无结果/错误结果”降级路径，确认均在时间预算内完成。
 5. 通过视觉审查后，在视频号编辑器中检查最终封面预览，确认不是视频截图，普通话角标完整可见；平台侧预览证据单独留存。
@@ -228,7 +229,7 @@ flowchart LR
 
 ## 12. Definition of Done
 
-- ACQ-001A 已提供可审计的 cron 配置和真实运行记录，证明每三分钟巡查不是口头约定。
+- ACQ-001A 已提供可审计的 LaunchAgent 配置和真实运行记录，证明每三分钟巡查不是口头约定。
 - ACQ-001D 的隔离成功与降级路径已有任务、完成物、解析结果、最终封面及时间戳证据；真实测试视频的管理器状态迁移与编辑器预览仍未验收。
 - 端到端结果符合所有封面视觉硬约束，尤其是“专属设计图、绝不使用视频内部截图”和普通话译制右上角完整彩带。
 - 队列开关、发布状态、平台投递和平台可见确认之间的边界保持清晰；无任何路径因封面完成而自动发布。
