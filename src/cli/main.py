@@ -36,10 +36,12 @@ try:
     from cli.commands.auto_caption import auto_caption
     from cli.commands.extract_subs import extract_subs
     from cli.commands.ass_to_tts import ass_to_tts
+    from cli.commands.vocab_level import vocab_level
     cli.add_command(add_progressbar)
     cli.add_command(auto_caption)
     cli.add_command(extract_subs)
     cli.add_command(ass_to_tts)
+    cli.add_command(vocab_level)
 except ImportError:
     # 如果相对导入失败，尝试绝对导入
     import sys
@@ -49,10 +51,12 @@ except ImportError:
     from cli.commands.auto_caption import auto_caption
     from cli.commands.extract_subs import extract_subs
     from cli.commands.ass_to_tts import ass_to_tts
+    from cli.commands.vocab_level import vocab_level
     cli.add_command(add_progressbar)
     cli.add_command(auto_caption)
     cli.add_command(extract_subs)
     cli.add_command(ass_to_tts)
+    cli.add_command(vocab_level)
 
 
 def main():
@@ -62,4 +66,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
