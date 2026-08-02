@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：输出模板 A 静态画布、唱片素材和逐词下划线坐标。 |
 | 1.1.0 | 2026-08-02 | Codex | 正文严格对齐新闻精读参考图：意群英文、词下小注、段后中文释义和右栏词卡。 |
+| 1.2.0 | 2026-08-02 | Codex | 正文改为透明长画布，供渲染器逐段滚动；同时提升手机端词注、段译及头部信息层级。 |
 """
 
 from __future__ import annotations
@@ -21,13 +22,13 @@ from .models import StudyCardContent, StudyWord, VocabularyItem
 
 CANVAS_WIDTH = 1080
 CANVAS_HEIGHT = 1920
-VIDEO_BOX = (54, 238, 682, 600)
-DISC_BOX = (748, 274, 982, 508)
+VIDEO_BOX = (54, 274, 702, 638)
+DISC_BOX = (756, 298, 990, 532)
 TEXT_LEFT = 54
-TEXT_TOP = 682
+TEXT_TOP = 720
 TEXT_WIDTH = 650
-TEXT_BOTTOM = 1810
-VOCAB_BOX = (730, 548, 1025, 1820)
+READING_VIEWPORT_BOTTOM = 1840
+VOCAB_BOX = (730, 574, 1025, 1820)
 ENGLISH_FONT = "/System/Library/Fonts/Supplemental/Georgia.ttf"
 CHINESE_FONT = "/System/Library/Fonts/Hiragino Sans GB.ttc"
 ACCENT = "#C6432D"
@@ -51,6 +52,7 @@ class TemplateAAssets:
     """渲染器所需的模板资产与逐词几何。"""
 
     base_image: Path
+    reading_image: Path
     disc_image: Path
     word_boxes: tuple[WordBox, ...]
 
@@ -66,14 +68,19 @@ class RecordUnderlineTemplate:
         draw = ImageDraw.Draw(page)
         self._draw_page_frame(draw)
         self._draw_heading(draw, content)
-        word_boxes = self._draw_reading_body(draw, content)
         self._draw_vocabulary(draw, content.vocabulary)
+
+        reading_height = max(CANVAS_HEIGHT, self._measure_reading_bottom(content) + 64)
+        reading = Image.new("RGBA", (CANVAS_WIDTH, reading_height), (0, 0, 0, 0))
+        word_boxes, _ = self._draw_reading_body(ImageDraw.Draw(reading), content)
 
         base_image = output_dir / "template_a_base.png"
         page.save(base_image)
+        reading_image = output_dir / "template_a_reading.png"
+        reading.save(reading_image)
         disc_image = output_dir / "template_a_disc.png"
         self._draw_disc(disc_image)
-        return TemplateAAssets(base_image, disc_image, tuple(word_boxes))
+        return TemplateAAssets(base_image, reading_image, disc_image, tuple(word_boxes))
 
     def map_word_boxes(self, words: Iterable[StudyWord], boxes: tuple[WordBox, ...]) -> list[tuple[StudyWord, WordBox]]:
         """按规范化词面一一匹配时间轴，拒绝静默错位。"""
@@ -99,32 +106,44 @@ class RecordUnderlineTemplate:
         draw.rounded_rectangle((28, 28, 1052, 1888), radius=44, outline="#CFC5BC", width=4)
         draw.rounded_rectangle(VIDEO_BOX, radius=22, outline="#AFA49A", width=4, fill="#EDE7DF")
         draw.rounded_rectangle(VOCAB_BOX, radius=24, outline="#AFA49A", width=4, fill="#FFFEFB")
-        draw.text((DISC_BOX[0], DISC_BOX[1] - 54), "Listening", font=_font(34, bold=True), fill=INK)
+        draw.text((DISC_BOX[0], DISC_BOX[1] - 46), "Listening", font=_font(30, bold=True), fill=INK)
         draw.text((VOCAB_BOX[0] + 22, VOCAB_BOX[1] + 20), "Vocabulary", font=_font(40, bold=True, serif=True), fill=INK)
 
     def _draw_heading(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> None:
-        zh_font = _font(35)
-        en_font = _font(24, serif=True, italic=True)
-        draw.text((54, 72), _ellipsize(content.headline_zh, zh_font, 900), font=zh_font, fill=INK)
-        draw.text((54, 120), _ellipsize(content.headline_en, en_font, 900), font=en_font, fill=MUTED)
-        draw.line((54, 178, 1025, 178), fill="#C9BDB0", width=3)
+        badge = (54, 70, 142, 158)
+        draw.rectangle(badge, fill="#B73520")
+        draw.text((61, 82), "新闻", font=_font(35, bold=True), fill="#FFFDF8")
+        title_font = _font(43, bold=True)
+        sub_font = _font(23, bold=True)
+        draw.text((160, 69), _ellipsize(content.headline_zh, title_font, 845), font=title_font, fill=INK)
+        draw.text(
+            (160, 125),
+            _ellipsize(content.headline_en, sub_font, 845),
+            font=sub_font,
+            fill=INK,
+        )
+        draw.rectangle((54, 182, 1025, 214), fill="#B73520")
+        draw.text((66, 187), f"单词数 · {len(content.words)}个", font=_font(18, bold=True), fill="#FFFDF8")
+        draw.text((866, 187), "DATE: NEWS", font=_latin_font(17, bold=True), fill="#FFFDF8")
+        draw.text(
+            (54, 228),
+            "每日打卡 / 时文精读 / 高频词汇同步标记",
+            font=_font(21, bold=True),
+            fill=MUTED,
+        )
 
-    def _draw_reading_body(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> list[WordBox]:
+    def _draw_reading_body(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> tuple[list[WordBox], int]:
         """严格采用参考图的阅读稿：英文意群 → 词下小注 → 本段中文释义。"""
-        english_font = _latin_font(38, bold=True)
-        gloss_font = _font(17)
-        translation_font = _font(24)
-        line_height = 65
+        english_font = _latin_font(40, bold=True)
+        gloss_font = _font(22, bold=True)
+        translation_font = _font(30)
+        line_height = 74
         marked_words = { _normalise_word(item.word): item.meaning_zh for item in content.vocabulary }
         y = TEXT_TOP
         boxes: list[WordBox] = []
         for paragraph in content.paragraphs:
             lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, TEXT_WIDTH)
-            required_height = len(lines) * line_height + 18
             translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
-            required_height += len(translation_lines) * 34 + 28
-            if y + required_height > TEXT_BOTTOM:
-                raise ValueError("正文超出一屏；需要由滚动阅读器切换到下一阅读页")
             for line in lines:
                 x = TEXT_LEFT
                 for token in line:
@@ -132,22 +151,35 @@ class RecordUnderlineTemplate:
                     normal = _normalise_word(token)
                     meaning = marked_words.get(normal)
                     if meaning:
-                        draw.rounded_rectangle((x - 4, y - 2, x + width + 4, y + 45), radius=6, fill=ACCENT)
+                        draw.rounded_rectangle((x - 5, y - 3, x + width + 5, y + 48), radius=7, fill=ACCENT)
                     draw.text((x, y), token, font=english_font, fill="#FFFDF8" if meaning else INK)
-                    boxes.append(WordBox(token, x, y + 47, max(8, width)))
+                    boxes.append(WordBox(token, x, y + 53, max(8, width)))
                     if meaning:
-                        note = _ellipsize(meaning, gloss_font, max(width + 20, 68))
+                        note = _ellipsize(meaning, gloss_font, max(width + 22, 80))
                         note_width = int(draw.textlength(note, font=gloss_font))
-                        draw.text((x + max(0, (width - note_width) // 2), y + 48), note, font=gloss_font, fill=MUTED)
+                        draw.text((x + max(0, (width - note_width) // 2), y + 52), note, font=gloss_font, fill=MUTED)
                     x += width + int(draw.textlength(" ", font=english_font))
                 y += line_height
-            draw.rounded_rectangle((TEXT_LEFT, y + 3, TEXT_LEFT + TEXT_WIDTH, y + 3 + len(translation_lines) * 34 + 14), radius=8, fill="#F8F2EA")
-            y += 10
+            translation_line_height = 43
+            draw.rounded_rectangle((TEXT_LEFT, y + 4, TEXT_LEFT + TEXT_WIDTH, y + 4 + len(translation_lines) * translation_line_height + 20), radius=10, fill="#F8F2EA")
+            y += 13
             for line in translation_lines:
                 draw.text((TEXT_LEFT + 10, y), line, font=translation_font, fill=INK)
-                y += 34
-            y += 18
-        return boxes
+                y += translation_line_height
+            y += 28
+        return boxes, y
+
+    def _measure_reading_bottom(self, content: StudyCardContent) -> int:
+        """用与实际绘制完全相同的字级测量长正文，避免按固定屏高截断内容。"""
+        english_font = _latin_font(40, bold=True)
+        translation_font = _font(30)
+        y = TEXT_TOP
+        for paragraph in content.paragraphs:
+            lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, TEXT_WIDTH)
+            translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
+            y += len(lines) * 74
+            y += 13 + len(translation_lines) * 43 + 28
+        return y
 
     def _draw_vocabulary(self, draw: ImageDraw.ImageDraw, items: tuple[VocabularyItem, ...]) -> None:
         y = VOCAB_BOX[1] + 84

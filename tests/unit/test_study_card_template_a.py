@@ -4,6 +4,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：覆盖逐词时间线、单词映射和 30 秒约束。 |
+| 1.1.0 | 2026-08-02 | Codex | 覆盖长样片测试豁免和语音锚定的正文滚动计划。 |
 """
 
 from pathlib import Path
@@ -80,3 +81,27 @@ def test_renderer_stops_shortly_after_the_final_included_word():
     duration = StudyCardRenderer._resolve_render_duration(content, requested_duration=5.0)
 
     assert duration == pytest.approx(2.88)
+
+
+def test_long_duration_is_only_accepted_with_the_explicit_test_flag(tmp_path: Path):
+    content = StudyCardContent.from_mapping(_payload())
+
+    with pytest.raises(FileNotFoundError):
+        StudyCardRenderer().render(
+            tmp_path / "missing.mp4", content, tmp_path / "out.mp4", duration=30.1, allow_long_test=True,
+        )
+
+
+def test_scroll_plan_moves_body_before_a_word_leaves_the_reading_area(tmp_path: Path):
+    template = RecordUnderlineTemplate()
+    content = StudyCardContent.from_mapping(_payload())
+    boxes = tuple(
+        template.map_word_boxes(content.words, template.render_static(content, tmp_path).word_boxes)
+    )
+    shifted = [(word, type(box)(box.text, box.x, box.y + 1000, box.width)) for word, box in boxes]
+
+    steps = StudyCardRenderer._build_scroll_steps(shifted)
+
+    assert steps
+    assert steps[0].end <= shifted[0][0].end
+    assert steps[0].to_offset > 0

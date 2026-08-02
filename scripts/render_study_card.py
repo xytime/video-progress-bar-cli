@@ -6,6 +6,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：提供不接入发布流程的独立渲染命令。 |
+| 1.1.0 | 2026-08-02 | Codex | 增加显式长样片测试开关，仅用于验收正文滚动，不改变生产 30 秒上限。 |
 """
 
 from __future__ import annotations
@@ -27,7 +28,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeline", required=True, type=Path, help="逐词时间线及学习内容 JSON")
     parser.add_argument("--output", required=True, type=Path, help="输出 MP4")
     parser.add_argument("--source-start", default=0.0, type=float, help="从原视频截取的起点（秒）")
-    parser.add_argument("--duration", default=None, type=float, help="截取时长（秒，最大 30）")
+    parser.add_argument("--duration", default=None, type=float, help="截取时长（秒，生产最大 30）")
+    parser.add_argument(
+        "--allow-long-test",
+        action="store_true",
+        help="仅测试：允许最长 60 秒，用于验收长正文滚动；不可用于生产成片",
+    )
     parser.add_argument("--keep-assets", action="store_true", help="保留静态底图与唱片资产，便于人工验收")
     return parser.parse_args()
 
@@ -44,6 +50,7 @@ def main() -> int:
             source_start=args.source_start,
             duration=args.duration,
             keep_assets=args.keep_assets,
+            allow_long_test=args.allow_long_test,
         )
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"render_study_card: {exc}", file=sys.stderr)

@@ -6,11 +6,13 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：独立合成原片小窗、旋转唱片与逐词红线，输出 manifest。 |
 | 1.1.0 | 2026-08-02 | Codex | 以最后一个已纳入正文的单词为硬终点，音视频同步裁切并淡出，杜绝露出后续导语。 |
+| 1.2.0 | 2026-08-02 | Codex | 将正文与红线合成为同一透明长图层，按语音进度分段滚动；测试模式可显式放宽时长上限。 |
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import subprocess
@@ -20,10 +22,30 @@ from typing import Any
 import imageio_ffmpeg
 
 from .models import StudyCardContent
-from .template_a import ACCENT, DISC_BOX, VIDEO_BOX, RecordUnderlineTemplate
+from .template_a import (
+    ACCENT,
+    CANVAS_WIDTH,
+    DISC_BOX,
+    READING_VIEWPORT_BOTTOM,
+    TEXT_TOP,
+    VIDEO_BOX,
+    RecordUnderlineTemplate,
+)
 
 _AUDIO_TAIL_SECONDS = 0.18
 _AUDIO_FADE_SECONDS = 0.08
+_PRODUCTION_MAX_DURATION = 30.0
+_TEST_MAX_DURATION = 60.0
+
+
+@dataclass(frozen=True)
+class ScrollStep:
+    """正文向上移动的一次短过渡：开始、结束、起点偏移、终点偏移。"""
+
+    start: float
+    end: float
+    from_offset: int
+    to_offset: int
 
 
 class StudyCardRenderer:
@@ -41,8 +63,9 @@ class StudyCardRenderer:
         source_start: float = 0.0,
         duration: float | None = None,
         keep_assets: bool = False,
+        allow_long_test: bool = False,
     ) -> Path:
-        """渲染一个小于等于 30 秒的原声新闻精读卡片。"""
+        """渲染原声新闻精读卡片；仅显式测试模式允许超过 30 秒。"""
         source_video = source_video.expanduser().resolve()
         output_path = output_path.expanduser().resolve()
         if source_start < 0:
@@ -50,8 +73,10 @@ class StudyCardRenderer:
         if not content.words:
             raise ValueError("新闻精读卡片至少需要一个逐词时间轴")
         requested_duration = duration if duration is not None else content.words[-1].end + _AUDIO_TAIL_SECONDS
-        if requested_duration <= 0 or requested_duration > 30:
-            raise ValueError("新闻精读片段必须大于 0 且不超过 30 秒")
+        maximum_duration = _TEST_MAX_DURATION if allow_long_test else _PRODUCTION_MAX_DURATION
+        if requested_duration <= 0 or requested_duration > maximum_duration:
+            mode = "测试模式" if allow_long_test else "生产模式"
+            raise ValueError(f"{mode}新闻精读片段必须大于 0 且不超过 {maximum_duration:g} 秒")
         if content.words[-1].end > requested_duration + 0.05:
             raise ValueError("逐词时间轴超出所截取的视频时长")
         clip_duration = self._resolve_render_duration(content, requested_duration)
@@ -68,16 +93,21 @@ class StudyCardRenderer:
         try:
             assets = self.template.render_static(content, work_dir)
             timed_boxes = self.template.map_word_boxes(content.words, assets.word_boxes)
+            scroll_steps = self._build_scroll_steps(timed_boxes)
             self._run_ffmpeg(
                 source_video=source_video,
                 base_image=assets.base_image,
+                reading_image=assets.reading_image,
                 disc_image=assets.disc_image,
                 timed_boxes=timed_boxes,
                 output_path=output_path,
                 source_start=source_start,
                 duration=clip_duration,
+                scroll_steps=scroll_steps,
             )
-            self._write_manifest(output_path, content, source_video, source_start, clip_duration, timed_boxes)
+            self._write_manifest(
+                output_path, content, source_video, source_start, clip_duration, timed_boxes, scroll_steps,
+            )
             if keep_assets:
                 assets_dir = output_path.with_suffix("").with_name(output_path.stem + "_assets")
                 shutil.copytree(work_dir, assets_dir, dirs_exist_ok=True)
@@ -117,11 +147,13 @@ class StudyCardRenderer:
         *,
         source_video: Path,
         base_image: Path,
+        reading_image: Path,
         disc_image: Path,
         timed_boxes: list[tuple[Any, Any]],
         output_path: Path,
         source_start: float,
         duration: float,
+        scroll_steps: list[ScrollStep],
     ) -> None:
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         video_w = VIDEO_BOX[2] - VIDEO_BOX[0]
@@ -133,16 +165,28 @@ class StudyCardRenderer:
             f"[2:v]format=rgba,scale={disc_w}:{disc_h},rotate=2*PI*t/3:c=none:ow=rotw(iw):oh=roth(ih)[disc]",
             f"[0:v][clip]overlay={VIDEO_BOX[0]}:{VIDEO_BOX[1]}:shortest=1[page]",
             f"[page][disc]overlay={DISC_BOX[0]}:{DISC_BOX[1]}:shortest=1[animated]",
+            "[3:v]format=rgba[reading_source]",
         ]
-        current = "animated"
+        reading_current = "reading_source"
         for index, (word, box) in enumerate(timed_boxes):
-            output_label = f"underline_{index}"
+            output_label = f"reading_underline_{index}"
             filters.append(
-                f"[{current}]drawbox=x={box.x}:y={box.y}:w={box.width}:h=6:"
+                f"[{reading_current}]drawbox=x={box.x}:y={box.y}:w={box.width}:h=6:"
                 f"color={ACCENT}@0.96:t=fill:enable='between(t,{word.start:.3f},{word.end:.3f})'"
                 f"[{output_label}]"
             )
-            current = output_label
+            reading_current = output_label
+        scroll_expression = self._scroll_offset_expression(scroll_steps)
+        viewport_height = READING_VIEWPORT_BOTTOM - TEXT_TOP
+        filters.append(
+            f"color=c=black@0.0:s={CANVAS_WIDTH}x{viewport_height}:r=30,format=rgba[reading_window]"
+        )
+        filters.append(
+            f"[reading_window][{reading_current}]overlay=0:'-{TEXT_TOP}-{scroll_expression}':eval=frame[reading_clipped]"
+        )
+        filters.append(
+            f"[animated][reading_clipped]overlay=0:{TEXT_TOP}:shortest=1[composited]"
+        )
 
         has_audio = self._has_audio(source_video)
         audio_label = None
@@ -160,8 +204,9 @@ class StudyCardRenderer:
             "-loop", "1", "-framerate", "30", "-i", str(base_image),
             "-ss", f"{source_start:.3f}", "-t", f"{duration:.3f}", "-i", str(source_video),
             "-loop", "1", "-framerate", "30", "-i", str(disc_image),
+            "-loop", "1", "-framerate", "30", "-i", str(reading_image),
             "-filter_complex", ";".join(filters),
-            "-map", f"[{current}]",
+            "-map", "[composited]",
             "-t", f"{duration:.3f}", "-r", "30",
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
         ]
@@ -192,6 +237,7 @@ class StudyCardRenderer:
         source_start: float,
         duration: float,
         timed_boxes: list[tuple[Any, Any]],
+        scroll_steps: list[ScrollStep],
     ) -> None:
         manifest = {
             "template": self.template.name,
@@ -202,6 +248,13 @@ class StudyCardRenderer:
             "audio_tail_seconds": round(max(0.0, duration - content.words[-1].end), 3),
             "word_count": len(content.words),
             "vocabulary_count": len(content.vocabulary),
+            "scroll_steps": [
+                {
+                    "start": round(step.start, 3), "end": round(step.end, 3),
+                    "from_offset": step.from_offset, "to_offset": step.to_offset,
+                }
+                for step in scroll_steps
+            ],
             "underline_events": [
                 {"word": word.text, "start": word.start, "end": word.end, "x": box.x, "y": box.y, "width": box.width}
                 for word, box in timed_boxes
@@ -211,3 +264,44 @@ class StudyCardRenderer:
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+
+    @staticmethod
+    def _build_scroll_steps(timed_boxes: list[tuple[Any, Any]]) -> list[ScrollStep]:
+        """以当前朗读词为锚点滚动，保证正在读的英文保持在正文可读中区。"""
+        steps: list[ScrollStep] = []
+        offset = 0
+        trigger_y = 1540
+        target_y = 1040
+        transition_seconds = 0.34
+        last_end = 0.0
+        for word, box in timed_boxes:
+            visible_y = box.y - offset
+            if visible_y <= trigger_y:
+                continue
+            target_offset = max(offset, box.y - target_y)
+            if target_offset == offset:
+                continue
+            end = max(last_end + 0.05, word.start - 0.04)
+            start = max(last_end, end - transition_seconds)
+            if start >= end:
+                start = max(0.0, word.start - transition_seconds)
+                end = word.start
+            steps.append(ScrollStep(start, end, offset, target_offset))
+            offset = target_offset
+            last_end = end
+        return steps
+
+    @staticmethod
+    def _scroll_offset_expression(steps: list[ScrollStep]) -> str:
+        """生成 FFmpeg 可逐帧求值的偏移表达式，逗号在 filtergraph 中必须转义。"""
+        expression = "0"
+        for step in steps:
+            transition = (
+                f"{step.from_offset}+({step.to_offset}-{step.from_offset})*"
+                f"(t-{step.start:.3f})/{step.end - step.start:.3f}"
+            )
+            expression = (
+                f"if(lt(t,{step.start:.3f}),{expression},"
+                f"if(lt(t,{step.end:.3f}),{transition},{step.to_offset}))"
+            )
+        return expression.replace(",", r"\,")
