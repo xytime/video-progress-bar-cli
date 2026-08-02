@@ -5,6 +5,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：覆盖逐词时间线、单词映射和 30 秒约束。 |
 | 1.1.0 | 2026-08-02 | Codex | 覆盖长样片测试豁免和语音锚定的正文滚动计划。 |
+| 1.1.1 | 2026-08-02 | Codex | 覆盖红线使用的滚动偏移预计算，避免与正文滚动脱节。 |
 """
 
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from video_processing.study_cards import StudyCardContent, StudyCardRenderer
+from video_processing.study_cards.renderer import ScrollStep
 from video_processing.study_cards.template_a import RecordUnderlineTemplate
 
 
@@ -105,3 +107,16 @@ def test_scroll_plan_moves_body_before_a_word_leaves_the_reading_area(tmp_path: 
     assert steps
     assert steps[0].end <= shifted[0][0].end
     assert steps[0].to_offset > 0
+
+
+def test_scroll_offset_for_underlines_matches_piecewise_scroll_plan():
+    steps = [
+        ScrollStep(start=10.0, end=10.4, from_offset=0, to_offset=400),
+        ScrollStep(start=20.0, end=20.4, from_offset=400, to_offset=900),
+    ]
+
+    assert StudyCardRenderer._scroll_offset_at(5.0, steps) == 0
+    assert StudyCardRenderer._scroll_offset_at(10.2, steps) == 200
+    assert StudyCardRenderer._scroll_offset_at(15.0, steps) == 400
+    assert StudyCardRenderer._scroll_offset_at(20.2, steps) == 650
+    assert StudyCardRenderer._scroll_offset_at(25.0, steps) == 900

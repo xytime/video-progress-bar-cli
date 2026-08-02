@@ -7,6 +7,7 @@
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：独立合成原片小窗、旋转唱片与逐词红线，输出 manifest。 |
 | 1.1.0 | 2026-08-02 | Codex | 以最后一个已纳入正文的单词为硬终点，音视频同步裁切并淡出，杜绝露出后续导语。 |
 | 1.2.0 | 2026-08-02 | Codex | 将正文与红线合成为同一透明长图层，按语音进度分段滚动；测试模式可显式放宽时长上限。 |
+| 1.2.1 | 2026-08-02 | Codex | 逐词红线改为在最终不透明画面上绘制，并由 Python 预计算滚动后的屏幕坐标确保可见。 |
 """
 
 from __future__ import annotations
@@ -167,26 +168,27 @@ class StudyCardRenderer:
             f"[page][disc]overlay={DISC_BOX[0]}:{DISC_BOX[1]}:shortest=1[animated]",
             "[3:v]format=rgba[reading_source]",
         ]
-        reading_current = "reading_source"
-        for index, (word, box) in enumerate(timed_boxes):
-            output_label = f"reading_underline_{index}"
-            filters.append(
-                f"[{reading_current}]drawbox=x={box.x}:y={box.y}:w={box.width}:h=6:"
-                f"color={ACCENT}@0.96:t=fill:enable='between(t,{word.start:.3f},{word.end:.3f})'"
-                f"[{output_label}]"
-            )
-            reading_current = output_label
         scroll_expression = self._scroll_offset_expression(scroll_steps)
         viewport_height = READING_VIEWPORT_BOTTOM - TEXT_TOP
         filters.append(
             f"color=c=black@0.0:s={CANVAS_WIDTH}x{viewport_height}:r=30,format=rgba[reading_window]"
         )
         filters.append(
-            f"[reading_window][{reading_current}]overlay=0:'-{TEXT_TOP}-{scroll_expression}':eval=frame[reading_clipped]"
+            f"[reading_window][reading_source]overlay=0:'-{TEXT_TOP}-{scroll_expression}':eval=frame[reading_clipped]"
         )
         filters.append(
             f"[animated][reading_clipped]overlay=0:{TEXT_TOP}:shortest=1[composited]"
         )
+        video_label = "composited"
+        for index, (word, box) in enumerate(timed_boxes):
+            output_label = f"underlined_{index}"
+            screen_y = box.y - self._scroll_offset_at((word.start + word.end) / 2, scroll_steps)
+            filters.append(
+                f"[{video_label}]drawbox=x={box.x}:y={screen_y}:w={box.width}:h=6:"
+                f"color={ACCENT}:t=fill:enable='between(t,{word.start:.3f},{word.end:.3f})'"
+                f"[{output_label}]"
+            )
+            video_label = output_label
 
         has_audio = self._has_audio(source_video)
         audio_label = None
@@ -206,7 +208,7 @@ class StudyCardRenderer:
             "-loop", "1", "-framerate", "30", "-i", str(disc_image),
             "-loop", "1", "-framerate", "30", "-i", str(reading_image),
             "-filter_complex", ";".join(filters),
-            "-map", "[composited]",
+            "-map", f"[{video_label}]",
             "-t", f"{duration:.3f}", "-r", "30",
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
         ]
@@ -290,6 +292,20 @@ class StudyCardRenderer:
             offset = target_offset
             last_end = end
         return steps
+
+    @staticmethod
+    def _scroll_offset_at(timestamp: float, steps: list[ScrollStep]) -> int:
+        """按滚动计划预计算某个时间点的正文偏移，供红线使用固定屏幕坐标。"""
+        offset = 0.0
+        for step in steps:
+            if timestamp < step.start:
+                break
+            if timestamp < step.end:
+                ratio = (timestamp - step.start) / (step.end - step.start)
+                offset = step.from_offset + (step.to_offset - step.from_offset) * ratio
+                break
+            offset = step.to_offset
+        return int(round(offset))
 
     @staticmethod
     def _scroll_offset_expression(steps: list[ScrollStep]) -> str:
