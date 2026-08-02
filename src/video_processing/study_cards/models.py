@@ -6,12 +6,15 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：定义独立于采集、AI 与发布流程的新闻精读卡片数据契约。 |
 | 1.1.0 | 2026-08-02 | Codex | 增加阅读段落契约，使英文意群、词注与中文段译可严格同步。 |
+| 1.2.0 | 2026-08-02 | Codex | 增加全篇生词候选筛选：十级难度从 3 级起，并限制正文标记密度为 25%。 |
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
+
+from .vocabulary import select_vocabulary
 
 
 @dataclass(frozen=True)
@@ -79,7 +82,7 @@ class StudyCardContent:
             )
             for item in _as_sequence(payload.get("words"), "words")
         )
-        vocabulary = tuple(
+        vocabulary_candidates = tuple(
             VocabularyItem(
                 word=str(item["word"]),
                 meaning_zh=str(item["meaning_zh"]),
@@ -87,7 +90,9 @@ class StudyCardContent:
                 part_of_speech=str(item.get("part_of_speech", "")),
                 level=str(item.get("level", "")),
             )
-            for item in _as_sequence(payload.get("vocabulary"), "vocabulary")
+            for item in _as_sequence(
+                payload.get("vocabulary_candidates", payload.get("vocabulary")), "vocabulary_candidates"
+            )
         )
         english_text = _required_text(payload, "english_text")
         translation_zh = _required_text(payload, "translation_zh")
@@ -103,6 +108,7 @@ class StudyCardContent:
             if paragraph_payload is not None
             else (StudyParagraph(english_text=english_text, translation_zh=translation_zh),)
         )
+        vocabulary = tuple(select_vocabulary(english_text, vocabulary_candidates).items)
         content = cls(
             headline_zh=_required_text(payload, "headline_zh"),
             headline_en=_required_text(payload, "headline_en"),
