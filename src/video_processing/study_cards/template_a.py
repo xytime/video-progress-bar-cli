@@ -8,6 +8,8 @@
 | 1.1.0 | 2026-08-02 | Codex | 正文严格对齐新闻精读参考图：意群英文、词下小注、段后中文释义和右栏词卡。 |
 | 1.2.0 | 2026-08-02 | Codex | 正文改为透明长画布，供渲染器逐段滚动；同时提升手机端词注、段译及头部信息层级。 |
 | 1.3.0 | 2026-08-02 | Codex | 静态稿重置为首张新闻精读模板：报纸式双栏、固定栏目头、窄词栏与无底色段后译文。 |
+| 1.4.0 | 2026-08-02 | Codex | 中文统一改用随项目分发的思源宋体；英文正文采用 Avenir Next Condensed，词卡标题采用 Baskerville。 |
+| 1.4.1 | 2026-08-02 | Codex | 音标单独改用支持 IPA 的 Arial，避免 Avenir Next Condensed 缺字。 |
 """
 
 from __future__ import annotations
@@ -30,8 +32,11 @@ TEXT_TOP = 720
 TEXT_WIDTH = 650
 READING_VIEWPORT_BOTTOM = 1840
 VOCAB_BOX = (724, 574, 1025, 1820)
-ENGLISH_FONT = "/System/Library/Fonts/Supplemental/Georgia.ttf"
-CHINESE_FONT = "/System/Library/Fonts/Hiragino Sans GB.ttc"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+CHINESE_FONT = PROJECT_ROOT / "assets/fonts/SourceHanSerifCN-Medium.otf"
+AVENIR_NEXT_CONDENSED = Path("/System/Library/Fonts/Avenir Next Condensed.ttc")
+BASKERVILLE = Path("/System/Library/Fonts/Supplemental/Baskerville.ttc")
+ARIAL = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
 ACCENT = "#C6432D"
 PAPER = "#FFFDF8"
 INK = "#1E1A18"
@@ -194,7 +199,7 @@ class RecordUnderlineTemplate:
             draw.text((card[0] + 15, card[1] + 12), _ellipsize(item.word, _font(30, bold=True, serif=True), 235), font=_font(30, bold=True, serif=True), fill=text_color)
             detail = " ".join(part for part in (item.phonetic, item.level) if part).strip()
             if detail:
-                ipa_font = _latin_font(19)
+                ipa_font = _ipa_font(19)
                 draw.text((card[0] + 15, card[1] + 56), _ellipsize(detail, ipa_font, 235), font=ipa_font, fill=text_color)
             meaning = " ".join(part for part in (item.part_of_speech, item.meaning_zh) if part).strip()
             draw.text((card[0] + 15, card[1] + 92), _ellipsize(meaning, _font(25), 235), font=_font(25), fill=text_color)
@@ -248,19 +253,19 @@ def _wrap_chinese(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> li
 
 def _font(size: int, *, serif: bool = False, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
     if serif:
-        suffix = " Bold" if bold else ""
-        suffix += " Italic" if italic else ""
-        candidate = f"/System/Library/Fonts/Supplemental/Georgia{suffix}.ttf"
-        path = candidate if Path(candidate).exists() else ENGLISH_FONT
-    else:
-        path = CHINESE_FONT
-    return ImageFont.truetype(path, size)
+        index = 5 if bold and italic else 4 if bold else 2 if italic else 0
+        return ImageFont.truetype(BASKERVILLE, size, index=index)
+    return ImageFont.truetype(CHINESE_FONT, size)
 
 
 def _latin_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """IPA 走支持音标字形的拉丁字体，避免中文字体把 /ˈspiːʃiːz/ 渲染成方框。"""
-    name = "Arial Bold.ttf" if bold else "Arial.ttf"
-    return ImageFont.truetype(f"/System/Library/Fonts/Supplemental/{name}", size)
+    """Avenir Next Condensed 兼顾手机上的英文辨识度和新闻精读的紧凑版面。"""
+    return ImageFont.truetype(AVENIR_NEXT_CONDENSED, size, index=2 if bold else 5)
+
+
+def _ipa_font(size: int) -> ImageFont.FreeTypeFont:
+    """音标必须使用已实测覆盖 /ˈspiːʃiːz/ 等 IPA 字形的字体。"""
+    return ImageFont.truetype(ARIAL, size)
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
