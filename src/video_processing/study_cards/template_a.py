@@ -10,6 +10,7 @@
 | 1.3.0 | 2026-08-02 | Codex | 静态稿重置为首张新闻精读模板：报纸式双栏、固定栏目头、窄词栏与无底色段后译文。 |
 | 1.4.0 | 2026-08-02 | Codex | 中文统一改用随项目分发的思源宋体；英文正文采用 Avenir Next Condensed，词卡标题采用 Baskerville。 |
 | 1.4.1 | 2026-08-02 | Codex | 音标单独改用支持 IPA 的 Arial，避免 Avenir Next Condensed 缺字。 |
+| 1.4.2 | 2026-08-02 | Codex | 英文正文与词卡英文标题改用随项目分发的 Rojal.ttf，并适配其较高字面调整正文行距。 |
 """
 
 from __future__ import annotations
@@ -34,8 +35,7 @@ READING_VIEWPORT_BOTTOM = 1840
 VOCAB_BOX = (724, 574, 1025, 1820)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CHINESE_FONT = PROJECT_ROOT / "assets/fonts/SourceHanSerifCN-Medium.otf"
-AVENIR_NEXT_CONDENSED = Path("/System/Library/Fonts/Avenir Next Condensed.ttc")
-BASKERVILLE = Path("/System/Library/Fonts/Supplemental/Baskerville.ttc")
+ROJAL_FONT = PROJECT_ROOT / "assets/fonts/Rojal.ttf"
 ARIAL = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
 ACCENT = "#C6432D"
 PAPER = "#FFFDF8"
@@ -144,7 +144,7 @@ class RecordUnderlineTemplate:
         english_font = _latin_font(40, bold=True)
         gloss_font = _font(22, bold=True)
         translation_font = _font(30)
-        line_height = 74
+        line_height = 86
         marked_words = { _normalise_word(item.word): item.meaning_zh for item in content.vocabulary }
         y = TEXT_TOP
         boxes: list[WordBox] = []
@@ -183,7 +183,7 @@ class RecordUnderlineTemplate:
         for paragraph in content.paragraphs:
             lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, TEXT_WIDTH)
             translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
-            y += len(lines) * 74
+            y += len(lines) * 86
             y += 13 + len(translation_lines) * 43 + 28
         return y
 
@@ -253,14 +253,13 @@ def _wrap_chinese(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> li
 
 def _font(size: int, *, serif: bool = False, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
     if serif:
-        index = 5 if bold and italic else 4 if bold else 2 if italic else 0
-        return ImageFont.truetype(BASKERVILLE, size, index=index)
+        return ImageFont.truetype(ROJAL_FONT, size)
     return ImageFont.truetype(CHINESE_FONT, size)
 
 
 def _latin_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
-    """Avenir Next Condensed 兼顾手机上的英文辨识度和新闻精读的紧凑版面。"""
-    return ImageFont.truetype(AVENIR_NEXT_CONDENSED, size, index=2 if bold else 5)
+    """英文正文采用项目内置 Rojal，避免依赖系统字体并便于统一视觉。"""
+    return ImageFont.truetype(ROJAL_FONT, size)
 
 
 def _ipa_font(size: int) -> ImageFont.FreeTypeFont:
