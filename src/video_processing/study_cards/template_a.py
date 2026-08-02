@@ -13,6 +13,7 @@
 | 1.4.2 | 2026-08-02 | Codex | 英文正文与词卡英文标题改用随项目分发的 Rojal.ttf，并适配其较高字面调整正文行距。 |
 | 1.4.3 | 2026-08-02 | Codex | 正文英文恢复为 Avenir Next Condensed；右栏词卡英文保留 Rojal 并增加轻微字距。 |
 | 1.4.4 | 2026-08-02 | Codex | 右栏词卡英文换为 Baskerville SemiBold；视频上方内容标题加大并使用思源宋体。 |
+| 1.5.0 | 2026-08-02 | Codex | 正文支持多词生词短语：词卡、红底标记和词下中文注释使用同一份词组匹配结果。 |
 """
 
 from __future__ import annotations
@@ -148,23 +149,22 @@ class RecordUnderlineTemplate:
         gloss_font = _font(22, bold=True)
         translation_font = _font(30)
         line_height = 74
-        marked_words = { _normalise_word(item.word): item.meaning_zh for item in content.vocabulary }
         y = TEXT_TOP
         boxes: list[WordBox] = []
         for paragraph in content.paragraphs:
             lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, TEXT_WIDTH)
             translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
             for line in lines:
+                highlights = _highlighted_token_indices(line, content.vocabulary)
                 x = TEXT_LEFT
-                for token in line:
+                for token_index, token in enumerate(line):
                     width = int(draw.textlength(token, font=english_font))
-                    normal = _normalise_word(token)
-                    meaning = marked_words.get(normal)
+                    meaning, show_note = highlights.get(token_index, ("", False))
                     if meaning:
                         draw.rounded_rectangle((x - 5, y - 3, x + width + 5, y + 48), radius=7, fill=ACCENT)
                     draw.text((x, y), token, font=english_font, fill="#FFFDF8" if meaning else INK)
                     boxes.append(WordBox(token, x, y + 53, max(8, width)))
-                    if meaning:
+                    if meaning and show_note:
                         note = _ellipsize(meaning, gloss_font, max(width + 22, 80))
                         note_width = int(draw.textlength(note, font=gloss_font))
                         draw.text((x + max(0, (width - note_width) // 2), y + 52), note, font=gloss_font, fill=MUTED)
@@ -283,3 +283,32 @@ def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
 
 def _normalise_word(value: str) -> str:
     return re.sub(r"[^a-z0-9']+", "", value.lower())
+
+
+def _highlighted_token_indices(
+    tokens: list[str], items: tuple[VocabularyItem, ...],
+) -> dict[int, tuple[str, bool]]:
+    """贪心匹配最长词组，确保 ``heat wave`` 等词卡在正文有完整红底对应。"""
+    phrase_items = sorted(
+        (
+            (tuple(_normalise_word(part) for part in item.word.split()), item.meaning_zh)
+            for item in items
+        ),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    normalized_tokens = tuple(_normalise_word(token) for token in tokens)
+    matched: dict[int, tuple[str, bool]] = {}
+    index = 0
+    while index < len(tokens):
+        for phrase, meaning in phrase_items:
+            end = index + len(phrase)
+            if phrase and normalized_tokens[index:end] == phrase:
+                matched[index] = (meaning, True)
+                for nested_index in range(index + 1, end):
+                    matched[nested_index] = (meaning, False)
+                index = end
+                break
+        else:
+            index += 1
+    return matched

@@ -12,9 +12,9 @@ from pathlib import Path
 
 import pytest
 
-from video_processing.study_cards import StudyCardContent, StudyCardRenderer
+from video_processing.study_cards import StudyCardContent, StudyCardRenderer, VocabularyItem
 from video_processing.study_cards.renderer import ScrollStep
-from video_processing.study_cards.template_a import RecordUnderlineTemplate
+from video_processing.study_cards.template_a import RecordUnderlineTemplate, _highlighted_token_indices
 
 
 def _payload():
@@ -120,3 +120,18 @@ def test_scroll_offset_for_underlines_matches_piecewise_scroll_plan():
     assert StudyCardRenderer._scroll_offset_at(15.0, steps) == 400
     assert StudyCardRenderer._scroll_offset_at(20.2, steps) == 650
     assert StudyCardRenderer._scroll_offset_at(25.0, steps) == 900
+
+
+def test_phrase_vocabulary_marks_every_word_but_shows_the_note_once():
+    highlights = _highlighted_token_indices(
+        ["ripe", "conditions", "for", "a", "heat", "wave"],
+        (
+            VocabularyItem("ripe conditions", "有利条件"),
+            VocabularyItem("heat wave", "热浪"),
+        ),
+    )
+
+    assert highlights[0] == ("有利条件", True)
+    assert highlights[1] == ("有利条件", False)
+    assert highlights[4] == ("热浪", True)
+    assert highlights[5] == ("热浪", False)

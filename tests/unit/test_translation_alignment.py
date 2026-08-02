@@ -17,6 +17,7 @@
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | 初始创建：锁定 BUG-4 翻译 id 对齐 + 字数切块行为 |
 | 1.1.0   | 2026-07-05 | Codex           | 增加 vocab_helper prompt 上下文注入回归测试 |
 | 1.2.0   | 2026-07-13 | Codex           | 覆盖长上下文压缩，防 Gemini TPM 峰值 |
+| 1.3.0   | 2026-08-02 | Codex           | 覆盖词汇难度字段的兼容解析，保证旧调用方不受影响。 |
 """
 
 import json
@@ -78,6 +79,16 @@ class TestParseResponseIdAlignment:
         # 无有效 id → 走无-id 分支，数量(2)==expected(2) → 顺序映射
         out = _parse_response(text, 2)
         assert [o["translation"] for o in out] == ["x", "y"]
+
+    def test_vocab_levels_are_clamped_and_limited_to_returned_vocab(self):
+        text = json.dumps([{
+            "id": 0, "translation": "市场流动性", "vocab": {"liquidity": "流动性"},
+            "vocab_levels": {"liquidity": 12, "not_vocab": 8},
+        }])
+
+        out = _parse_response(text, 1)
+
+        assert out[0]["vocab_levels"] == {"liquidity": 10}
 
 
 # ── 2. 字数切块 ─────────────────────────────────────────────────────────────

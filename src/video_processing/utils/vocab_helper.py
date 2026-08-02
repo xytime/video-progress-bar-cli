@@ -17,6 +17,7 @@
 | 2.0.0   | 2026-07-13 | Codex | PET/B1 改为最低门槛，优先 C1-C2、专业术语和关键专有名词 |
 | 2.1.0   | 2026-07-13 | Codex | Gemini 改为模型级动态池，接入 3.1 Flash Lite 并压缩批量/上下文防 TPM 峰值 |
 | 2.2.0   | 2026-07-25 | Codex | 修正 google-genai HttpOptions.timeout 单位为毫秒，避免 90ms TLS 握手超时导致字幕翻译全失败 |
+| 2.3.0   | 2026-08-02 | Codex | 生词结果可选回传十级难度，供独立新闻精读卡片按全文密度筛选。 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -188,7 +189,8 @@ def _build_prompt(
             "Your task:\n"
             "1. Return the 'chinese' value UNCHANGED as the 'translation' field.\n"
             "2. CEFR B1 (PET) is the minimum eligibility threshold, not a requirement to extract every B1 "
-            "word. Extract at most three items. Prioritise C1-C2 vocabulary, specialist academic/technical/"
+            "word. For every extracted item, return its difficulty in a separate 'vocab_levels' object using "
+            "integer 1-10 (B1/PET=3, B2=5, C1=7, C2=9, specialist=10). Extract at most three items. Prioritise C1-C2 vocabulary, specialist academic/technical/"
             "finance/economics terms, meaningful proper nouns (people, organisations, products, places, "
             "frameworks, acronyms), then B2 and PET/B1 words only when especially useful in context. Do not "
             "extract A1-A2 words, function words, trivial greetings, or low-learning-value words. Prefer "
@@ -203,7 +205,8 @@ def _build_prompt(
             "Each object:\n"
             "  - \"id\": integer (echo the input item's id verbatim)\n"
             "  - \"translation\": string (the Chinese value verbatim from input)\n"
-            "  - \"vocab\": object (English word/phrase keys → exact Chinese substring values)\n\n"
+            "  - \"vocab\": object (English word/phrase keys → exact Chinese substring values)\n"
+            "  - \"vocab_levels\": object (same English keys → integer 1-10)\n\n"
             f"Input:\n{json.dumps(segments_payload, ensure_ascii=False)}"
         )
     else:
@@ -216,7 +219,8 @@ def _build_prompt(
             "For each segment:\n"
             "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
             "2. CEFR B1 (PET) is the minimum eligibility threshold, not a requirement to extract every B1 word. "
-            "Extract at most three items. Prioritise C1-C2 vocabulary, specialist academic/technical/finance/"
+            "For every extracted item, return its difficulty in a separate 'vocab_levels' object using integer "
+            "1-10 (B1/PET=3, B2=5, C1=7, C2=9, specialist=10). Extract at most three items. Prioritise C1-C2 vocabulary, specialist academic/technical/finance/"
             "economics terms, meaningful proper nouns (people, organisations, products, places, frameworks, "
             "acronyms), then B2 and PET/B1 words only when especially useful in context. Do not extract A1-A2 "
             "words, function words, trivial greetings, or low-learning-value words. Prefer phrases over "
@@ -229,7 +233,8 @@ def _build_prompt(
             "Each object must contain:\n"
             "  - \"id\": integer (echo the input item's id verbatim)\n"
             "  - \"translation\": string (Chinese translation)\n"
-            "  - \"vocab\": object (English word/phrase keys → exact Chinese substring values)\n\n"
+            "  - \"vocab\": object (English word/phrase keys → exact Chinese substring values)\n"
+            "  - \"vocab_levels\": object (same English keys → integer 1-10)\n\n"
             f"Input segments:\n{json.dumps(segments_payload, ensure_ascii=False)}"
         )
     return prompt
@@ -320,8 +325,17 @@ def _parse_response(text: str, expected_count: int) -> Optional[List[Dict[str, A
     def _norm(item: Any) -> Dict[str, Any]:
         if not isinstance(item, dict):
             return {"translation": "", "vocab": {}}
-        return {"translation": item.get("translation", "") or "",
-                "vocab": _filter_vocab(item.get("vocab", {}) or {})}
+        vocab = _filter_vocab(item.get("vocab", {}) or {})
+        normalized = {"translation": item.get("translation", "") or "", "vocab": vocab}
+        raw_levels = item.get("vocab_levels")
+        if isinstance(raw_levels, dict):
+            normalized["vocab_levels"] = {
+                word: max(1, min(10, int(raw_levels[word])))
+                for word in vocab
+                if isinstance(raw_levels.get(word), (int, float, str))
+                and str(raw_levels[word]).strip().isdigit()
+            }
+        return normalized
 
     _EMPTY = {"translation": "", "vocab": {}}
     try:
