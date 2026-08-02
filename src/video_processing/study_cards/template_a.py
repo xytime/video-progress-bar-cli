@@ -14,6 +14,7 @@
 | 1.4.3 | 2026-08-02 | Codex | 正文英文恢复为 Avenir Next Condensed；右栏词卡英文保留 Rojal 并增加轻微字距。 |
 | 1.4.4 | 2026-08-02 | Codex | 右栏词卡英文换为 Baskerville SemiBold；视频上方内容标题加大并使用思源宋体。 |
 | 1.5.0 | 2026-08-02 | Codex | 正文支持多词生词短语：词卡、红底标记和词下中文注释使用同一份词组匹配结果。 |
+| 1.5.1 | 2026-08-02 | Codex | 正文标题改为金色加粗，增强手机端新闻主题辨识。 |
 """
 
 from __future__ import annotations
@@ -42,6 +43,7 @@ AVENIR_NEXT_CONDENSED = Path("/System/Library/Fonts/Avenir Next Condensed.ttc")
 BASKERVILLE = Path("/System/Library/Fonts/Supplemental/Baskerville.ttc")
 ARIAL = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
 ACCENT = "#C6432D"
+GOLD = "#A87914"
 PAPER = "#FFFDF8"
 INK = "#1E1A18"
 MUTED = "#6E625A"
@@ -136,12 +138,10 @@ class RecordUnderlineTemplate:
         draw.rectangle((54, 182, 1025, 214), fill="#B73520")
         draw.text((66, 187), f"单词数 · {len(content.words)}个", font=_font(18, bold=True), fill="#FFFDF8")
         draw.text((916, 187), "DATE:", font=_latin_font(17, bold=True), fill="#FFFDF8")
-        draw.text(
-            (54, 228),
-            _ellipsize(content.headline_zh, _font(30, bold=True), 640),
-            font=_font(30, bold=True),
-            fill=MUTED,
-        )
+        headline = _ellipsize(content.headline_zh, _font(32, bold=True), 640)
+        headline_font = _font(32, bold=True)
+        draw.text((54, 228), headline, font=headline_font, fill=GOLD)
+        draw.text((55, 228), headline, font=headline_font, fill=GOLD)
 
     def _draw_reading_body(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> tuple[list[WordBox], int]:
         """严格采用参考图的阅读稿：英文意群 → 词下小注 → 本段中文释义。"""

@@ -90,6 +90,16 @@ class TestParseResponseIdAlignment:
 
         assert out[0]["vocab_levels"] == {"liquidity": 10}
 
+    def test_vocab_phonetics_are_limited_to_returned_vocab(self):
+        text = json.dumps([{
+            "id": 0, "translation": "市场流动性", "vocab": {"liquidity": "流动性"},
+            "vocab_phonetics": {"liquidity": "/lɪˈkwɪdəti/", "not_vocab": "/x/"},
+        }])
+
+        out = _parse_response(text, 1)
+
+        assert out[0]["vocab_phonetics"] == {"liquidity": "/lɪˈkwɪdəti/"}
+
 
 # ── 2. 字数切块 ─────────────────────────────────────────────────────────────
 class TestSplitByCharBudget:
@@ -160,3 +170,9 @@ class TestVocabPromptContext:
         prompt = _build_prompt(["A sentence."], None, context_text="x" * 7000)
         assert "context truncated for rate-limit safety" in prompt
         assert len(prompt) < 14000
+
+    def test_prompt_can_require_more_candidates_for_a_study_card(self):
+        prompt = _build_prompt(["A detailed sentence."], None, min_vocabulary_items=8, max_vocabulary_items=12)
+
+        assert "at least 8 distinct useful B1+ items" in prompt
+        assert "up to 12 items" in prompt

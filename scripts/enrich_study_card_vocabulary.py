@@ -6,6 +6,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：调用既有词汇服务生成十级生词候选，不接入发布流水线。 |
+| 1.1.0 | 2026-08-02 | Codex | 改为全文抽词并请求 IPA 音标，提高生词覆盖度但保留 25% 密度上限。 |
 """
 
 from __future__ import annotations
@@ -32,25 +33,28 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_candidates(payload: dict[str, Any]) -> list[dict[str, str]]:
-    """按阅读段落调用词汇服务，再压平为与渲染器无关的候选列表。"""
-    paragraphs = payload.get("paragraphs") or [{
-        "english_text": payload["english_text"], "translation_zh": payload["translation_zh"],
-    }]
-    english = [str(item["english_text"]) for item in paragraphs]
-    chinese = [str(item["translation_zh"]) for item in paragraphs]
-    result = extract_vocab_batch(english, chinese, context_text=" ".join(english))
+    """整篇抽词以提高覆盖度，再压平为与渲染器无关的候选列表。"""
+    english = [str(payload["english_text"])]
+    chinese = [str(payload["translation_zh"])]
+    result = extract_vocab_batch(
+        english, chinese, context_text=english[0], max_vocabulary_items=12, min_vocabulary_items=8,
+    )
     if result is None:
         raise RuntimeError("生词服务未返回有效且对齐的结果；未写出 timeline")
 
     candidates: list[dict[str, str]] = []
     for segment in result:
         levels = segment.get("vocab_levels", {})
+        phonetics = segment.get("vocab_phonetics", {})
         for word, meaning in segment.get("vocab", {}).items():
-            candidates.append({
+            candidate = {
                 "word": str(word),
                 "meaning_zh": str(meaning),
                 "level": str(levels.get(word, 3)),
-            })
+            }
+            if phonetic := str(phonetics.get(word, "")).strip():
+                candidate["phonetic"] = phonetic
+            candidates.append(candidate)
     return candidates
 
 

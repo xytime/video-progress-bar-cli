@@ -18,6 +18,8 @@
 | 2.1.0   | 2026-07-13 | Codex | Gemini 改为模型级动态池，接入 3.1 Flash Lite 并压缩批量/上下文防 TPM 峰值 |
 | 2.2.0   | 2026-07-25 | Codex | 修正 google-genai HttpOptions.timeout 单位为毫秒，避免 90ms TLS 握手超时导致字幕翻译全失败 |
 | 2.3.0   | 2026-08-02 | Codex | 生词结果可选回传十级难度，供独立新闻精读卡片按全文密度筛选。 |
+| 2.4.0   | 2026-08-02 | Codex | 支持独立学习卡按全文请求更多候选词，并回传 IPA 音标，不改变字幕默认三词限制。 |
+| 2.5.0   | 2026-08-02 | Codex | 学习卡可声明候选词下限，避免模型在长正文中保守少抽。 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -69,6 +71,8 @@ def extract_vocab_batch(
     chinese_translations: Optional[List[str]] = None,
     context_text: str = "",
     model_out: Optional[List[str]] = None,
+    max_vocabulary_items: int = 3,
+    min_vocabulary_items: int = 0,
 ) -> Optional[List[Dict[str, Any]]]:
     """批量从英文字幕段落中提取难词词汇，并可选地与中文翻译句子对齐。
 
@@ -80,12 +84,18 @@ def extract_vocab_batch(
         english_texts: 英文字幕文本列表（按 segment 顺序）。
         chinese_translations: 可选的中文翻译文本列表（与 english_texts 一一对应）。
         context_text: 可选的全片翻译上下文，注入每个批次 prompt。
+        max_vocabulary_items: 每个输入单元的候选词上限；字幕默认 3，学习卡可提高。
+        min_vocabulary_items: 正文候选词下限；仅在存在足够 B1+ 词时生效。
 
     Returns:
         每个 segment 对应的字典列表，或失败时返回 None。
     """
     if not english_texts:
         return []
+    if not 1 <= max_vocabulary_items <= 12:
+        raise ValueError("max_vocabulary_items 必须在 1 到 12 之间")
+    if not 0 <= min_vocabulary_items <= max_vocabulary_items:
+        raise ValueError("min_vocabulary_items 必须在 0 到 max_vocabulary_items 之间")
 
     try:
         from config.settings import settings as settings_obj
@@ -125,7 +135,10 @@ def extract_vocab_batch(
         logger.info(f"[vocab_helper] Processing batch {batch_start//_BATCH_SIZE + 1} "
                     f"(segments {batch_start+1}-{batch_end}/{total})...")
 
-        prompt = _build_prompt(en_batch, zh_batch, context_text=context_text)
+        prompt = _build_prompt(
+            en_batch, zh_batch, context_text=context_text, max_vocabulary_items=max_vocabulary_items,
+            min_vocabulary_items=min_vocabulary_items,
+        )
         state_path = (
             getattr(settings_obj, "project_root", None) / "output" / "translation_model_pool.json"
             if getattr(settings_obj, "project_root", None) is not None else None
@@ -158,6 +171,8 @@ def _build_prompt(
     english_texts: List[str],
     chinese_translations: Optional[List[str]],
     context_text: str = "",
+    max_vocabulary_items: int = 3,
+    min_vocabulary_items: int = 0,
 ) -> str:
     """[Claude_Sonnet_4.6_Thinking_planning] 构造双模式提示词。
 
@@ -173,6 +188,11 @@ def _build_prompt(
     # 解析端按 id 重对齐到定长列表——即便模型漏返/合并某段，也只是该 id 槽位留空（位置正确），
     # 绝不发生「该段之后整体串位」的级联错位。
     context_block = _render_context_block(context_text)
+    target_instruction = (
+        f"The text has enough learning value: return at least {min_vocabulary_items} distinct useful B1+ items "
+        "when they exist; include contextual B1-B2 terms after C1/C2 terms. "
+        if min_vocabulary_items else ""
+    )
     if chinese_translations and len(chinese_translations) == len(english_texts):
         # 对齐模式：中文翻译已由阿里云/Google 提供，Gemini 只做词汇识别与子串对齐
         segments_payload = [
@@ -190,7 +210,9 @@ def _build_prompt(
             "1. Return the 'chinese' value UNCHANGED as the 'translation' field.\n"
             "2. CEFR B1 (PET) is the minimum eligibility threshold, not a requirement to extract every B1 "
             "word. For every extracted item, return its difficulty in a separate 'vocab_levels' object using "
-            "integer 1-10 (B1/PET=3, B2=5, C1=7, C2=9, specialist=10). Extract at most three items. Prioritise C1-C2 vocabulary, specialist academic/technical/"
+            "integer 1-10 (B1/PET=3, B2=5, C1=7, C2=9, specialist=10). "
+            f"Extract up to {max_vocabulary_items} items. Prioritise C1-C2 vocabulary, specialist academic/technical/"
+            f"{target_instruction}"
             "finance/economics terms, meaningful proper nouns (people, organisations, products, places, "
             "frameworks, acronyms), then B2 and PET/B1 words only when especially useful in context. Do not "
             "extract A1-A2 words, function words, trivial greetings, or low-learning-value words. Prefer "
@@ -207,6 +229,7 @@ def _build_prompt(
             "  - \"translation\": string (the Chinese value verbatim from input)\n"
             "  - \"vocab\": object (English word/phrase keys → exact Chinese substring values)\n"
             "  - \"vocab_levels\": object (same English keys → integer 1-10)\n\n"
+            "  - \"vocab_phonetics\": object (same English keys → IPA pronunciation, e.g. /ˈlaɪkwɪdɪti/)\n\n"
             f"Input:\n{json.dumps(segments_payload, ensure_ascii=False)}"
         )
     else:
@@ -220,7 +243,9 @@ def _build_prompt(
             "1. Translate it into natural, native, and screen-friendly Chinese (zh-CN).\n"
             "2. CEFR B1 (PET) is the minimum eligibility threshold, not a requirement to extract every B1 word. "
             "For every extracted item, return its difficulty in a separate 'vocab_levels' object using integer "
-            "1-10 (B1/PET=3, B2=5, C1=7, C2=9, specialist=10). Extract at most three items. Prioritise C1-C2 vocabulary, specialist academic/technical/finance/"
+            "1-10 (B1/PET=3, B2=5, C1=7, C2=9, specialist=10). "
+            f"Extract up to {max_vocabulary_items} items. Prioritise C1-C2 vocabulary, specialist academic/technical/finance/"
+            f"{target_instruction}"
             "economics terms, meaningful proper nouns (people, organisations, products, places, frameworks, "
             "acronyms), then B2 and PET/B1 words only when especially useful in context. Do not extract A1-A2 "
             "words, function words, trivial greetings, or low-learning-value words. Prefer phrases over "
@@ -235,6 +260,7 @@ def _build_prompt(
             "  - \"translation\": string (Chinese translation)\n"
             "  - \"vocab\": object (English word/phrase keys → exact Chinese substring values)\n"
             "  - \"vocab_levels\": object (same English keys → integer 1-10)\n\n"
+            "  - \"vocab_phonetics\": object (same English keys → IPA pronunciation, e.g. /ˈlaɪkwɪdɪti/)\n\n"
             f"Input segments:\n{json.dumps(segments_payload, ensure_ascii=False)}"
         )
     return prompt
@@ -334,6 +360,13 @@ def _parse_response(text: str, expected_count: int) -> Optional[List[Dict[str, A
                 for word in vocab
                 if isinstance(raw_levels.get(word), (int, float, str))
                 and str(raw_levels[word]).strip().isdigit()
+            }
+        raw_phonetics = item.get("vocab_phonetics")
+        if isinstance(raw_phonetics, dict):
+            normalized["vocab_phonetics"] = {
+                word: str(raw_phonetics[word]).strip()
+                for word in vocab
+                if isinstance(raw_phonetics.get(word), str) and raw_phonetics[word].strip()
             }
         return normalized
 

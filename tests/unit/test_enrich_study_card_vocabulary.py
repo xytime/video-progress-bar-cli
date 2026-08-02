@@ -16,6 +16,7 @@ def test_build_candidates_preserves_model_difficulty(monkeypatch):
             "translation": "市场流动性承压。",
             "vocab": {"liquidity": "流动性", "pressured": "承压"},
             "vocab_levels": {"liquidity": 7, "pressured": 4},
+            "vocab_phonetics": {"liquidity": "/lɪˈkwɪdəti/"},
         }],
     )
     payload = {
@@ -24,6 +25,6 @@ def test_build_candidates_preserves_model_difficulty(monkeypatch):
     }
 
     assert build_candidates(payload) == [
-        {"word": "liquidity", "meaning_zh": "流动性", "level": "7"},
+        {"word": "liquidity", "meaning_zh": "流动性", "level": "7", "phonetic": "/lɪˈkwɪdəti/"},
         {"word": "pressured", "meaning_zh": "承压", "level": "4"},
     ]
