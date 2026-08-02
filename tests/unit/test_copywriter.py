@@ -16,6 +16,7 @@
 | 1.10.0  | 2026-07-06 | Codex                      | 覆盖 copy quality report 写入受保护英文实体 |
 | 1.11.0  | 2026-07-06 | Codex                      | 覆盖标题/文案 warning-aware 候选仲裁 |
 | 1.12.0  | 2026-07-06 | Codex                      | 覆盖文案 prompt 复用共享翻译硬约束且不带字幕段落规则 |
+| 1.13.0  | 2026-08-03 | Codex                      | 回归覆盖：降级标题不得截为“为什么只有 9”，仲裁拒绝语义不完整候选 |
 """
 import json
 import sys
@@ -30,7 +31,7 @@ from scripts.copywriter import (
     classify_category, DEFAULT_CATEGORY, graceful_truncate_title,
     extract_headline_workaround, _apply_post_processing,
     _build_wechat_prompt, _guard_wechat_content_quality,
-    _select_wechat_content_candidate,
+    _select_wechat_content_candidate, _translate_fallback,
 )
 from video_processing.utils.text_utils import verbatim_overlap_ratio
 
@@ -245,6 +246,47 @@ def test_graceful_truncate_title_dangling_reporting_clause():
     # “但是不一定要惊慌”以“但是”/“但”开头被中度惩罚(score+50)
     # 最终应选择中间正常的“人工智能要做好准备”
     assert truncated == "人工智能要做好准备"
+
+
+def test_translate_fallback_recovers_complete_question_headline(monkeypatch):
+    """机器翻译降级时，不能把《奥德赛》新闻截成“为什么只有 9”。"""
+    monkeypatch.setattr(
+        "scripts.copywriter._translate_text",
+        lambda text, **_kwargs: (
+            "为什么只有 9 个加拿大银幕可以按照诺兰的意图放映《奥德赛》"
+            if text.startswith("Why only") else ""
+        ),
+    )
+
+    content = _translate_fallback(
+        "Why only 9 Canadian screens can show The Odyssey as Nolan intended",
+        "",
+    )
+
+    assert content["short_title"] == "《奥德赛》为何仅9个加拿大银幕"
+
+
+def test_copy_candidate_selector_rejects_incomplete_question_fragment(tmp_path):
+    """即使降级候选没有翻译质量告警，也不得覆盖完整的主模型短标题。"""
+    complete = {
+        "short_title": "诺兰《奥德赛》",
+        "hook_subtitle": "加拿大仅9块银幕可按导演意图放映",
+        "copy": "加拿大只有9块银幕可以按照诺兰的意图放映《奥德赛》。",
+        "category": "娱乐",
+    }
+    incomplete = {**complete, "short_title": "为什么只有 9"}
+
+    selected = _select_wechat_content_candidate(
+        "Why only 9 Canadian screens can show The Odyssey as Nolan intended",
+        "",
+        [("fallback", lambda: incomplete), ("gemini-test", lambda: complete)],
+        audit_path=tmp_path / "odyssey_copy_quality.json",
+    )
+
+    assert selected["short_title"] == "诺兰《奥德赛》"
+    report = json.loads((tmp_path / "odyssey_copy_quality.json").read_text(encoding="utf-8"))
+    assert report["events"][0]["status"] == "rejected"
+    assert "semantic_title_guard" in report["events"][0]
 
 
 # ── 文案事实保真守门器 ───────────────────────────────────────────────────────

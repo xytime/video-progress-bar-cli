@@ -29,6 +29,7 @@
 | 1.22.0  | 2026-07-06 | Codex                                   | 标题/文案质量上下文写入受保护英文实体，供审计与一致性检查复用 |
 | 1.23.0  | 2026-07-06 | Codex                                   | 标题/文案生成接入通用候选仲裁，warning 时尝试更干净 fallback |
 | 1.24.0  | 2026-07-06 | Codex                                   | 文案生成 prompt 接入共享翻译硬约束，减少与字幕 provider 规则漂移 |
+| 1.25.0  | 2026-08-03 | Codex                                   | 标题语义守门：降级翻译不得把疑问句截成“为什么只有 9”一类残句；候选仲裁拒绝不完整短标题 |
 """
 
 import re
@@ -332,6 +333,36 @@ def extract_headline_workaround(translated_title: str) -> tuple[str, str]:
     return text, ""
 
 
+_INCOMPLETE_SHORT_TITLE_RE = re.compile(
+    r"^(?:为什么|为何|怎么|如何|是否|能否|会不会)(?:只有|仅有|仅)?\s*\d+\s*$"
+)
+
+
+def _is_semantically_complete_short_title(short_title: str) -> bool:
+    """拒绝可读却没有完成语义的短标题，避免被直接送入封面和平台。"""
+    normalized = re.sub(r"\s+", "", str(short_title or ""))
+    return bool(normalized) and not bool(_INCOMPLETE_SHORT_TITLE_RE.fullmatch(normalized))
+
+
+def _recover_question_short_title(translated_title: str) -> str:
+    """从“为何只有 N 个 X 能……”类降级译文保留对象与数量，而非硬截断句首。"""
+    text = re.sub(r"\s+", "", translated_title or "")
+    match = re.search(
+        r"(?:为什么|为何)(?:只有|仅有|仅)?(?P<count>\d+)(?P<unit>个|家|块|座|台|间)?"
+        r"(?P<subject>[^，。？！?！]{1,16}?)(?:可以|能够|能|会|按照|按|放映|显示|观看|播映)",
+        text,
+    )
+    quoted = re.search(r"《([^》]+)》", text)
+    if not match or not quoted:
+        return ""
+
+    candidate = (
+        f"《{quoted.group(1)}》为何仅{match.group('count')}"
+        f"{match.group('unit') or ''}{match.group('subject').strip()}"
+    )
+    return candidate if 6 <= len(candidate) <= 16 else ""
+
+
 def _translate_fallback(title: str, description: str) -> dict:
     """Gemini 不可用时，用 translation_helper（阿里云 MT 优先）作内容兼底翻译。
 
@@ -347,6 +378,15 @@ def _translate_fallback(title: str, description: str) -> dict:
         # [Gemini_3.1_Pro_High_planning] 提取主干并兜底
         core_title, hook_subtitle = extract_headline_workaround(zh_title)
         short_title = graceful_truncate_title(core_title)
+        if not _is_semantically_complete_short_title(short_title):
+            recovered_title = _recover_question_short_title(zh_title)
+            if recovered_title:
+                logger.warning(
+                    "Fallback short title was incomplete (%r); recovered semantic title %r",
+                    short_title,
+                    recovered_title,
+                )
+                short_title = recovered_title
         # 如果截断后太短，回退到原始
         if len(short_title) < 6:
             short_title = graceful_truncate_title(zh_title)
@@ -492,6 +532,25 @@ def _select_wechat_content_candidate(
     for idx, (provider, factory) in enumerate(candidates):
         final_provider = idx == len(candidates) - 1
         content = factory()
+        short_title = str(content.get("short_title", "")).strip()
+        if not _is_semantically_complete_short_title(short_title):
+            event = {
+                "provider": provider,
+                "status": "rejected",
+                "action": "reject",
+                "selected": False,
+                "source_title": title,
+                "content": {
+                    "short_title": short_title,
+                    "hook_subtitle": str(content.get("hook_subtitle", "")),
+                    "category": str(content.get("category", "")),
+                },
+                "semantic_title_guard": "short_title is an incomplete question/number fragment",
+            }
+            events.append(event)
+            last_failure_summary = event["semantic_title_guard"]
+            logger.warning("[CopyGuard] Rejecting incomplete short title from %s: %r", provider, short_title)
+            continue
         decision = _evaluate_wechat_content_quality(
             title,
             description,
