@@ -17,6 +17,7 @@
 | 1.5.1 | 2026-08-02 | Codex | 正文标题改为金色加粗，增强手机端新闻主题辨识。 |
 | 1.6.0 | 2026-08-02 | Codex | 降低生词红色强调强度、为微笔记预留独立行距，并增加六维时空小程序码位。 |
 | 1.7.0 | 2026-08-03 | Codex | 在词卡展示离线词表的友好标签与最低学习门槛，保留 IPA 与词义的手机端可读性。 |
+| 1.8.0 | 2026-08-03 | Codex | 右栏词卡改为随正文 y 坐标对齐滚动，移除小程序码位，并以影子跟读 Banner 替换唱片素材。 |
 """
 
 from __future__ import annotations
@@ -33,17 +34,18 @@ from .models import StudyCardContent, StudyWord, VocabularyItem
 CANVAS_WIDTH = 1080
 CANVAS_HEIGHT = 1920
 VIDEO_BOX = (54, 274, 700, 637)
-DISC_BOX = (786, 306, 960, 480)
+FEATURE_BOX = (760, 248, 1018, 568)
 TEXT_LEFT = 54
 TEXT_TOP = 720
 TEXT_WIDTH = 650
 READING_VIEWPORT_BOTTOM = 1840
-VOCAB_BOX = (724, 574, 1025, 1820)
+VOCAB_BOX = (724, 604, 1025, 1820)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CHINESE_FONT = PROJECT_ROOT / "assets/fonts/SourceHanSerifCN-Medium.otf"
 AVENIR_NEXT_CONDENSED = Path("/System/Library/Fonts/Avenir Next Condensed.ttc")
 BASKERVILLE = Path("/System/Library/Fonts/Supplemental/Baskerville.ttc")
 ARIAL = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
+FEATURE_REFERENCE = PROJECT_ROOT / "assets/study_cards/reference/shadowing_feature_banner_v1.png"
 ACCENT = "#C6432D"
 GOLD = "#A87914"
 PAPER = "#FFFDF8"
@@ -51,7 +53,6 @@ INK = "#1E1A18"
 MUTED = "#6E625A"
 MARKED_WORD_BACKGROUND = "#F3DDD5"
 MARKED_WORD_TEXT = "#A53C2B"
-MINI_PROGRAM_QR_BOX = (804, 1485, 946, 1627)
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,7 @@ class TemplateAAssets:
 
     base_image: Path
     reading_image: Path
-    disc_image: Path
+    feature_image: Path
     word_boxes: tuple[WordBox, ...]
 
 
@@ -79,8 +80,8 @@ class RecordUnderlineTemplate:
 
     name = "record_underline"
 
-    def __init__(self, mini_program_qr: Path | None = None) -> None:
-        self.mini_program_qr = mini_program_qr
+    def __init__(self, feature_reference: Path | None = None) -> None:
+        self.feature_reference = feature_reference or FEATURE_REFERENCE
 
     def render_static(self, content: StudyCardContent, output_dir: Path) -> TemplateAAssets:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -88,19 +89,24 @@ class RecordUnderlineTemplate:
         draw = ImageDraw.Draw(page)
         self._draw_page_frame(draw)
         self._draw_heading(draw, content)
-        self._draw_vocabulary(draw, content.vocabulary)
 
-        reading_height = max(CANVAS_HEIGHT, self._measure_reading_bottom(content) + 64)
+        reading_height = max(
+            CANVAS_HEIGHT,
+            self._measure_reading_bottom(content) + 64,
+            TEXT_TOP + len(content.vocabulary) * 150 + 80,
+        )
         reading = Image.new("RGBA", (CANVAS_WIDTH, reading_height), (0, 0, 0, 0))
-        word_boxes, _ = self._draw_reading_body(ImageDraw.Draw(reading), content)
+        reading_draw = ImageDraw.Draw(reading)
+        word_boxes, _ = self._draw_reading_body(reading_draw, content)
+        self._draw_aligned_vocabulary(reading_draw, content.vocabulary, tuple(word_boxes))
 
         base_image = output_dir / "template_a_base.png"
         page.save(base_image)
         reading_image = output_dir / "template_a_reading.png"
         reading.save(reading_image)
-        disc_image = output_dir / "template_a_disc.png"
-        self._draw_disc(disc_image)
-        return TemplateAAssets(base_image, reading_image, disc_image, tuple(word_boxes))
+        feature_image = output_dir / "template_a_feature.png"
+        self._draw_feature_banner(feature_image)
+        return TemplateAAssets(base_image, reading_image, feature_image, tuple(word_boxes))
 
     def map_word_boxes(self, words: Iterable[StudyWord], boxes: tuple[WordBox, ...]) -> list[tuple[StudyWord, WordBox]]:
         """按规范化词面一一匹配时间轴，拒绝静默错位。"""
@@ -124,9 +130,9 @@ class RecordUnderlineTemplate:
 
     def _draw_page_frame(self, draw: ImageDraw.ImageDraw) -> None:
         draw.rectangle(VIDEO_BOX, outline="#8E786A", width=3, fill="#EDE7DF")
+        draw.rounded_rectangle(FEATURE_BOX, radius=18, outline="#BBA376", width=3, fill="#10263C")
         for y in range(254, 1850, 14):
             draw.line((708, y, 708, y + 7), fill="#A99180", width=2)
-        draw.text((DISC_BOX[0] - 2, DISC_BOX[3] + 14), "扫码听读新闻", font=_font(18, bold=True), fill=INK)
         draw.text((VOCAB_BOX[0] + 16, VOCAB_BOX[1] + 14), "核心词汇", font=_font(27, bold=True), fill=INK)
         draw.line((VOCAB_BOX[0] + 16, VOCAB_BOX[1] + 52, VOCAB_BOX[2] - 16, VOCAB_BOX[1] + 52), fill="#BA9F8C", width=2)
 
@@ -200,14 +206,27 @@ class RecordUnderlineTemplate:
             y += 13 + len(translation_lines) * 43 + 28
         return y
 
-    def _draw_vocabulary(self, draw: ImageDraw.ImageDraw, items: tuple[VocabularyItem, ...]) -> None:
-        y = VOCAB_BOX[1] + 74
+    def _draw_aligned_vocabulary(
+        self,
+        draw: ImageDraw.ImageDraw,
+        items: tuple[VocabularyItem, ...],
+        word_boxes: tuple[WordBox, ...],
+    ) -> None:
+        anchored_items = sorted(
+            (
+                (_vocabulary_anchor_y(item, word_boxes) or TEXT_TOP + index * 150, index, item)
+                for index, item in enumerate(items)
+            ),
+            key=lambda item: (item[0], item[1]),
+        )
+        y_cursor = TEXT_TOP
         palette = (ACCENT, "#EDE6DA", "#365E8B", "#EDE6DA", ACCENT)
-        for index, item in enumerate(items[:5]):
+        for index, (anchor_y, _, item) in enumerate(anchored_items):
             fill = palette[index % len(palette)]
             dark = fill in {ACCENT, "#365E8B"}
             text_color = "#FFFDF8" if dark else INK
-            card = (VOCAB_BOX[0] + 12, y, VOCAB_BOX[2] - 12, y + 142)
+            y = max(TEXT_TOP, int(anchor_y) - 6, y_cursor)
+            card = (VOCAB_BOX[0] + 12, y, VOCAB_BOX[2] - 12, y + 132)
             draw.rounded_rectangle(card, radius=14, fill=fill)
             word_font = _font(30, bold=True, serif=True)
             draw.text((card[0] + 15, card[1] + 12), _ellipsize(item.word, word_font, 235), font=word_font, fill=text_color)
@@ -224,49 +243,26 @@ class RecordUnderlineTemplate:
                     fill=text_color,
                 )
             meaning = " ".join(part for part in (item.part_of_speech, item.meaning_zh) if part).strip()
-            draw.text((card[0] + 15, card[1] + 98), _ellipsize(meaning, _font(23), 235), font=_font(23), fill=text_color)
-            y += 158
-        self._draw_mini_program_qr(draw)
+            draw.text((card[0] + 15, card[1] + 98), _ellipsize(meaning, _font(22), 235), font=_font(22), fill=text_color)
+            y_cursor = y + 146
 
-    def _draw_mini_program_qr(self, draw: ImageDraw.ImageDraw) -> None:
-        """保留真实小程序码的完整静区；缺资产时明确显示不可扫码的待配置状态。"""
-        qr_box = MINI_PROGRAM_QR_BOX
-        draw.text((VOCAB_BOX[0] + 16, 1444), "六维时空", font=_font(25, bold=True), fill=INK)
-        if self.mini_program_qr is not None:
-            if not self.mini_program_qr.is_file():
-                raise ValueError(f"找不到六维时空小程序码: {self.mini_program_qr}")
-            with Image.open(self.mini_program_qr) as source:
-                qr = ImageOps.contain(
+    def _draw_feature_banner(self, output_path: Path) -> None:
+        size = (FEATURE_BOX[2] - FEATURE_BOX[0], FEATURE_BOX[3] - FEATURE_BOX[1])
+        if self.feature_reference.is_file():
+            with Image.open(self.feature_reference) as source:
+                ImageOps.fit(
                     source.convert("RGB"),
-                    (qr_box[2] - qr_box[0], qr_box[3] - qr_box[1]),
-                    method=Image.Resampling.NEAREST,
-                )
-                offset_x = qr_box[0] + (qr_box[2] - qr_box[0] - qr.width) // 2
-                offset_y = qr_box[1] + (qr_box[3] - qr_box[1] - qr.height) // 2
-                draw.rectangle(qr_box, fill="#FFFFFF")
-                draw._image.paste(qr, (offset_x, offset_y))
-        else:
-            draw.rounded_rectangle(qr_box, radius=10, outline="#B8A391", width=2, fill="#F7F1E9")
-            placeholder = "小程序码\n待配置"
-            draw.multiline_text((qr_box[0] + 30, qr_box[1] + 47), placeholder, font=_font(21, bold=True), fill=MUTED, spacing=6, align="center")
-        cta = "微信扫码，进入小程序"
-        cta_font = _font(20, bold=True)
-        cta_width = int(draw.textlength(cta, font=cta_font))
-        draw.text(((VOCAB_BOX[0] + VOCAB_BOX[2] - cta_width) // 2, 1642), cta, font=cta_font, fill=ACCENT)
-
-    def _draw_disc(self, output_path: Path) -> None:
-        size = DISC_BOX[2] - DISC_BOX[0]
-        disc = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(disc)
-        draw.ellipse((4, 4, size - 4, size - 4), fill="#151515", outline="#403B36", width=4)
-        for inset in range(22, size // 2 - 20, 17):
-            draw.ellipse((inset, inset, size - inset, size - inset), outline="#5B554F", width=2)
-        centre = size // 2
-        draw.ellipse((centre - 44, centre - 44, centre + 44, centre + 44), fill="#C18B3A")
-        # 非中心标记让旋转在静态纹路以外仍有清晰可感知的运动参照。
-        draw.ellipse((centre + 17, centre - 20, centre + 29, centre - 8), fill="#F7E8BD")
-        draw.ellipse((centre - 8, centre - 8, centre + 8, centre + 8), fill="#F7E8BD")
-        disc.save(output_path)
+                    size,
+                    method=Image.Resampling.LANCZOS,
+                    centering=(0.5, 0.5),
+                ).save(output_path)
+            return
+        fallback = Image.new("RGB", size, "#10263C")
+        draw = ImageDraw.Draw(fallback)
+        draw.rounded_rectangle((4, 4, size[0] - 4, size[1] - 4), radius=18, outline="#D8B56A", width=4)
+        draw.text((32, 90), "影子跟读", font=_font(42, bold=True), fill="#F7E8BD")
+        draw.text((34, 150), "紧跟原声 · 逐词训练", font=_font(23, bold=True), fill="#F7E8BD")
+        fallback.save(output_path)
 
 
 def _wrap_words(tokens: list[str], font: ImageFont.FreeTypeFont, max_width: int) -> list[list[str]]:
@@ -330,6 +326,17 @@ def _learning_label(item: VocabularyItem) -> str:
     """将词表的学习友好标签和最低门槛压缩为窄卡中的一行信息。"""
     parts = [part for part in (item.friendly_tag.strip(), item.level.strip()) if part]
     return " · ".join(parts)
+
+
+def _vocabulary_anchor_y(item: VocabularyItem, boxes: tuple[WordBox, ...]) -> int | None:
+    phrase = tuple(part for part in (_normalise_word(part) for part in item.word.split()) if part)
+    if not phrase:
+        return None
+    page_words = tuple(_normalise_word(box.text) for box in boxes)
+    for index in range(0, len(page_words) - len(phrase) + 1):
+        if page_words[index:index + len(phrase)] == phrase:
+            return boxes[index].y - 53
+    return None
 
 
 def _normalise_word(value: str) -> str:

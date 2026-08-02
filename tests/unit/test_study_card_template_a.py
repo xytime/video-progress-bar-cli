@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：覆盖逐词时间线、单词映射和 30 秒约束。 |
 | 1.1.0 | 2026-08-02 | Codex | 覆盖长样片测试豁免和语音锚定的正文滚动计划。 |
 | 1.1.1 | 2026-08-02 | Codex | 覆盖红线使用的滚动偏移预计算，避免与正文滚动脱节。 |
+| 1.2.0 | 2026-08-03 | Codex | 覆盖滚动静音暂停、右栏词卡正文锚点与影子跟读 Banner 资产。 |
 """
 
 from pathlib import Path
@@ -14,7 +15,12 @@ import pytest
 
 from video_processing.study_cards import StudyCardContent, StudyCardRenderer, VocabularyItem
 from video_processing.study_cards.renderer import ScrollStep
-from video_processing.study_cards.template_a import RecordUnderlineTemplate, _highlighted_token_indices, _learning_label
+from video_processing.study_cards.template_a import (
+    RecordUnderlineTemplate,
+    _highlighted_token_indices,
+    _learning_label,
+    _vocabulary_anchor_y,
+)
 
 
 def _payload():
@@ -102,11 +108,32 @@ def test_scroll_plan_moves_body_before_a_word_leaves_the_reading_area(tmp_path: 
     )
     shifted = [(word, type(box)(box.text, box.x, box.y + 1000, box.width)) for word, box in boxes]
 
-    steps = StudyCardRenderer._build_scroll_steps(shifted)
+    steps, pauses = StudyCardRenderer._build_scroll_steps(shifted)
 
     assert steps
-    assert steps[0].end <= shifted[0][0].end
+    assert pauses
+    assert pauses[0].duration == pytest.approx(0.5)
+    assert steps[0].start == pytest.approx(shifted[0][0].start)
     assert steps[0].to_offset > 0
+
+
+def test_scroll_pause_shifts_following_word_timing():
+    boxes = [
+        (
+            type("Word", (), {"text": "first", "start": 0.0, "end": 0.2})(),
+            type("Box", (), {"text": "first", "x": 54, "y": 1700, "width": 80})(),
+        ),
+        (
+            type("Word", (), {"text": "second", "start": 1.0, "end": 1.4})(),
+            type("Box", (), {"text": "second", "x": 54, "y": 1780, "width": 100})(),
+        ),
+    ]
+    _, pauses = StudyCardRenderer._build_scroll_steps(boxes)
+
+    shifted = StudyCardRenderer._shift_timed_boxes_for_pauses(boxes, pauses)
+
+    assert shifted[0][0].start == pytest.approx(0.5)
+    assert shifted[1][0].start == pytest.approx(1.5)
 
 
 def test_scroll_offset_for_underlines_matches_piecewise_scroll_plan():
@@ -128,10 +155,25 @@ def test_underline_alpha_expression_grows_with_the_current_word_progress():
     assert expression == "if(between(T\\,1.200\\,1.800)*lte(X\\,120*(T-1.200)/0.600)\\,255\\,0)"
 
 
+def test_underline_progress_width_tracks_the_current_word_progress():
+    assert StudyCardRenderer._underline_progress_width(120, 1.2, 1.8, 1.1) == 0
+    assert StudyCardRenderer._underline_progress_width(120, 1.2, 1.8, 1.5) == 60
+    assert StudyCardRenderer._underline_progress_width(120, 1.2, 1.8, 1.9) == 120
+
+
 def test_word_card_learning_label_prefers_offline_friendly_tag_and_exam_level():
     item = VocabularyItem("grocery", "食品杂货店", level="CET-4", friendly_tag="进阶词")
 
     assert _learning_label(item) == "进阶词 · CET-4"
+
+
+def test_vocabulary_card_anchor_uses_the_first_matching_body_word(tmp_path: Path):
+    template = RecordUnderlineTemplate()
+    content = StudyCardContent.from_mapping(_payload())
+    assets = template.render_static(content, tmp_path)
+    spotted_box = next(box for box in assets.word_boxes if box.text == "spotted")
+
+    assert _vocabulary_anchor_y(VocabularyItem("spotted", "发现"), assets.word_boxes) == spotted_box.y - 53
 
 
 def test_phrase_vocabulary_marks_every_word_but_shows_the_note_once():
@@ -149,11 +191,12 @@ def test_phrase_vocabulary_marks_every_word_but_shows_the_note_once():
     assert highlights[5] == ("热浪", False)
 
 
-def test_template_accepts_a_real_mini_program_qr(tmp_path: Path):
+def test_template_builds_feature_banner_from_reference_image(tmp_path: Path):
     from PIL import Image
 
-    qr_path = tmp_path / "mini-program-qr.png"
-    Image.new("RGB", (300, 300), "white").save(qr_path)
-    assets = RecordUnderlineTemplate(qr_path).render_static(StudyCardContent.from_mapping(_payload()), tmp_path)
+    banner_path = tmp_path / "feature.png"
+    Image.new("RGB", (1127, 1396), "#10263C").save(banner_path)
+    assets = RecordUnderlineTemplate(banner_path).render_static(StudyCardContent.from_mapping(_payload()), tmp_path)
 
     assert assets.base_image.is_file()
+    assert assets.feature_image.is_file()
