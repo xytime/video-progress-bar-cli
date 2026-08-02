@@ -15,6 +15,9 @@ def test_difficulty_level_maps_cefr_to_the_ten_level_learning_scale():
     assert difficulty_level("B2") == 5
     assert difficulty_level("C1") == 7
     assert difficulty_level("specialist") == 10
+    assert difficulty_level("PET") == 3
+    assert difficulty_level("CET-4") == 5
+    assert difficulty_level("Master") == 9
 
 
 def test_selection_starts_at_level_three_and_never_exceeds_twenty_five_percent():
@@ -56,3 +59,14 @@ def test_selection_rejects_a_candidate_not_in_the_article():
     )
 
     assert selection.items == ()
+
+
+def test_selection_rejects_low_confidence_or_dictionary_fallback_candidates():
+    text = "The outbreak worried students at the grocery store."
+    selection = select_vocabulary(text, (
+        VocabularyItem("outbreak", "暴发", level="CET-6", source="unknown", confidence=0.2),
+        VocabularyItem("students", "学生", level="CET-4", source="ecdict-fallback", confidence=0.55),
+        VocabularyItem("grocery", "食品杂货店", level="CET-4", source="exam-wordlists", confidence=0.95),
+    ))
+
+    assert [item.word for item in selection.items] == ["grocery"]

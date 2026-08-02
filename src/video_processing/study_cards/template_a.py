@@ -16,6 +16,7 @@
 | 1.5.0 | 2026-08-02 | Codex | 正文支持多词生词短语：词卡、红底标记和词下中文注释使用同一份词组匹配结果。 |
 | 1.5.1 | 2026-08-02 | Codex | 正文标题改为金色加粗，增强手机端新闻主题辨识。 |
 | 1.6.0 | 2026-08-02 | Codex | 降低生词红色强调强度、为微笔记预留独立行距，并增加六维时空小程序码位。 |
+| 1.7.0 | 2026-08-03 | Codex | 在词卡展示离线词表的友好标签与最低学习门槛，保留 IPA 与词义的手机端可读性。 |
 """
 
 from __future__ import annotations
@@ -213,9 +214,17 @@ class RecordUnderlineTemplate:
             detail = item.phonetic.strip()
             if detail:
                 ipa_font = _ipa_font(19)
-                draw.text((card[0] + 15, card[1] + 56), _ellipsize(detail, ipa_font, 235), font=ipa_font, fill=text_color)
+                draw.text((card[0] + 15, card[1] + 49), _ellipsize(detail, ipa_font, 235), font=ipa_font, fill=text_color)
+            learning_label = _learning_label(item)
+            if learning_label:
+                draw.text(
+                    (card[0] + 15, card[1] + 72),
+                    _ellipsize(learning_label, _font(18, bold=True), 235),
+                    font=_font(18, bold=True),
+                    fill=text_color,
+                )
             meaning = " ".join(part for part in (item.part_of_speech, item.meaning_zh) if part).strip()
-            draw.text((card[0] + 15, card[1] + 92), _ellipsize(meaning, _font(25), 235), font=_font(25), fill=text_color)
+            draw.text((card[0] + 15, card[1] + 98), _ellipsize(meaning, _font(23), 235), font=_font(23), fill=text_color)
             y += 158
         self._draw_mini_program_qr(draw)
 
@@ -315,6 +324,12 @@ def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
     while text and font.getlength(text + ellipsis) > max_width:
         text = text[:-1]
     return text + ellipsis
+
+
+def _learning_label(item: VocabularyItem) -> str:
+    """将词表的学习友好标签和最低门槛压缩为窄卡中的一行信息。"""
+    parts = [part for part in (item.friendly_tag.strip(), item.level.strip()) if part]
+    return " · ".join(parts)
 
 
 def _normalise_word(value: str) -> str:

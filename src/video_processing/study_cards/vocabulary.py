@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：以十级难度和全文 25% 密度上限筛选供应商无关的生词候选。 |
+| 1.1.0 | 2026-08-03 | Codex | 支持离线词表考试标签，并拒绝低置信度或词典兜底结果进入自动正文标记。 |
 """
 
 from __future__ import annotations
@@ -21,6 +22,10 @@ MAX_VOCABULARY_DENSITY = 0.25
 _CEFR_LEVELS = {
     "a1": 1, "a2": 2, "b1": 3, "b1+": 4, "b2": 5,
     "b2+": 6, "c1": 7, "c1+": 8, "c2": 9, "specialist": 10,
+}
+_EXAM_LEVELS = {
+    "ket": 1, "中考": 2, "pet": 3, "高考": 4, "cet-4": 5,
+    "fce": 6, "cet-6": 7, "cae": 8, "master": 9,
 }
 _FUNCTION_WORDS = frozenset({
     "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "in", "is",
@@ -51,10 +56,12 @@ class VocabularySelection:
 
 
 def difficulty_level(level: str) -> int:
-    """将 ``1..10``、CEFR 或 specialist 归一为学习难度；未知值安全地按 3 级处理。"""
+    """将 ``1..10``、CEFR 或离线词表考试标签归一为学习难度。"""
     normalised = level.strip().lower().replace(" ", "")
     if normalised in _CEFR_LEVELS:
         return _CEFR_LEVELS[normalised]
+    if normalised in _EXAM_LEVELS:
+        return _EXAM_LEVELS[normalised]
     if normalised.isdigit():
         return max(1, min(10, int(normalised)))
     return MIN_LEARNING_LEVEL
@@ -84,6 +91,7 @@ def select_vocabulary(
             or not candidate.meaning_zh.strip()
             or not _contains_whole_phrase(article_words, key)
             or difficulty_level(candidate.level) < minimum_level
+            or not _has_reliable_offline_evidence(candidate)
         ):
             continue
         current = unique.get(key)
@@ -108,3 +116,12 @@ def _normalise(word: str) -> str:
 
 def _contains_whole_phrase(text: str, phrase: str) -> bool:
     return f" {phrase} " in f" {text} "
+
+
+def _has_reliable_offline_evidence(candidate: VocabularyCandidate) -> bool:
+    """保留历史通用候选的兼容性，同时防止未知词被误标成高阶词。"""
+    source = str(getattr(candidate, "source", "")).strip().lower()
+    confidence = float(getattr(candidate, "confidence", 1.0))
+    if not source:
+        return True
+    return source not in {"unknown", "ecdict-fallback"} and confidence >= 0.85

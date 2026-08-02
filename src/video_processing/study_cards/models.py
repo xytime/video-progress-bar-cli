@@ -7,6 +7,7 @@
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：定义独立于采集、AI 与发布流程的新闻精读卡片数据契约。 |
 | 1.1.0 | 2026-08-02 | Codex | 增加阅读段落契约，使英文意群、词注与中文段译可严格同步。 |
 | 1.2.0 | 2026-08-02 | Codex | 增加全篇生词候选筛选：十级难度从 3 级起，并限制正文标记密度为 25%。 |
+| 1.3.0 | 2026-08-03 | Codex | 接受离线词表的学习标签、考试门槛与证据字段，供学习卡以旁路方式展示。 |
 """
 
 from __future__ import annotations
@@ -34,13 +35,17 @@ class StudyWord:
 
 @dataclass(frozen=True)
 class VocabularyItem:
-    """右栏的一张词汇卡；phonetic/part_of_speech 可以由任意上游补全。"""
+    """右栏的一张词汇卡；可携带离线词表的展示与审计信息。"""
 
     word: str
     meaning_zh: str
     phonetic: str = ""
     part_of_speech: str = ""
     level: str = ""
+    friendly_tag: str = ""
+    covered_syllabi: tuple[str, ...] = ()
+    source: str = ""
+    confidence: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.word.strip() or not self.meaning_zh.strip():
@@ -88,7 +93,11 @@ class StudyCardContent:
                 meaning_zh=str(item["meaning_zh"]),
                 phonetic=str(item.get("phonetic", "")),
                 part_of_speech=str(item.get("part_of_speech", "")),
-                level=str(item.get("level", "")),
+                level=str(item.get("recommended_level", item.get("level", ""))),
+                friendly_tag=str(item.get("friendly_tag", "")),
+                covered_syllabi=tuple(str(label) for label in item.get("covered_syllabi", ())),
+                source=str(item.get("source", "")),
+                confidence=float(item.get("confidence", 1.0)),
             )
             for item in _as_sequence(
                 payload.get("vocabulary_candidates", payload.get("vocabulary")), "vocabulary_candidates"

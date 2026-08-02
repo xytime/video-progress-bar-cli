@@ -14,7 +14,7 @@ import pytest
 
 from video_processing.study_cards import StudyCardContent, StudyCardRenderer, VocabularyItem
 from video_processing.study_cards.renderer import ScrollStep
-from video_processing.study_cards.template_a import RecordUnderlineTemplate, _highlighted_token_indices
+from video_processing.study_cards.template_a import RecordUnderlineTemplate, _highlighted_token_indices, _learning_label
 
 
 def _payload():
@@ -120,6 +120,18 @@ def test_scroll_offset_for_underlines_matches_piecewise_scroll_plan():
     assert StudyCardRenderer._scroll_offset_at(15.0, steps) == 400
     assert StudyCardRenderer._scroll_offset_at(20.2, steps) == 650
     assert StudyCardRenderer._scroll_offset_at(25.0, steps) == 900
+
+
+def test_underline_alpha_expression_grows_with_the_current_word_progress():
+    expression = StudyCardRenderer._underline_alpha_expression(120, 1.2, 1.8)
+
+    assert expression == "if(between(T\\,1.200\\,1.800)*lte(X\\,120*(T-1.200)/0.600)\\,255\\,0)"
+
+
+def test_word_card_learning_label_prefers_offline_friendly_tag_and_exam_level():
+    item = VocabularyItem("grocery", "食品杂货店", level="CET-4", friendly_tag="进阶词")
+
+    assert _learning_label(item) == "进阶词 · CET-4"
 
 
 def test_phrase_vocabulary_marks_every_word_but_shows_the_note_once():

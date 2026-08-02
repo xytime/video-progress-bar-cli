@@ -8,6 +8,7 @@
 | 1.1.0 | 2026-08-02 | Codex | 以最后一个已纳入正文的单词为硬终点，音视频同步裁切并淡出，杜绝露出后续导语。 |
 | 1.2.0 | 2026-08-02 | Codex | 将正文与红线合成为同一透明长图层，按语音进度分段滚动；测试模式可显式放宽时长上限。 |
 | 1.2.1 | 2026-08-02 | Codex | 逐词红线改为在最终不透明画面上绘制，并由 Python 预计算滚动后的屏幕坐标确保可见。 |
+| 1.3.0 | 2026-08-03 | Codex | 红线按当前单词的朗读进度由左至右增长，避免仅闪现整条下划线。 |
 """
 
 from __future__ import annotations
@@ -24,7 +25,6 @@ import imageio_ffmpeg
 
 from .models import StudyCardContent
 from .template_a import (
-    ACCENT,
     CANVAS_WIDTH,
     DISC_BOX,
     READING_VIEWPORT_BOTTOM,
@@ -181,11 +181,17 @@ class StudyCardRenderer:
         )
         video_label = "composited"
         for index, (word, box) in enumerate(timed_boxes):
+            underline_label = f"underline_source_{index}"
             output_label = f"underlined_{index}"
             screen_y = box.y - self._scroll_offset_at((word.start + word.end) / 2, scroll_steps)
+            underline_alpha = self._underline_alpha_expression(box.width, word.start, word.end)
             filters.append(
-                f"[{video_label}]drawbox=x={box.x}:y={screen_y}:w={box.width}:h=6:"
-                f"color={ACCENT}:t=fill:enable='between(t,{word.start:.3f},{word.end:.3f})'"
+                f"color=c=black@0.0:s={box.width}x6:r=30,format=rgba,"
+                f"geq=r='198':g='67':b='45':a='{underline_alpha}'[{underline_label}]"
+            )
+            filters.append(
+                f"[{video_label}][{underline_label}]overlay={box.x}:{screen_y}:"
+                f"shortest=1:enable='between(t,{word.start:.3f},{word.end:.3f})'"
                 f"[{output_label}]"
             )
             video_label = output_label
@@ -306,6 +312,16 @@ class StudyCardRenderer:
                 break
             offset = step.to_offset
         return int(round(offset))
+
+    @staticmethod
+    def _underline_alpha_expression(box_width: int, start: float, end: float) -> str:
+        """返回逐帧增长的透明度遮罩；drawbox 的宽度并不支持逐帧求值。"""
+        if box_width <= 0 or end <= start:
+            raise ValueError("红线宽度与时间轴必须有效")
+        return (
+            f"if(between(T\\,{start:.3f}\\,{end:.3f})*"
+            f"lte(X\\,{box_width}*(T-{start:.3f})/{end - start:.3f})\\,255\\,0)"
+        )
 
     @staticmethod
     def _scroll_offset_expression(steps: list[ScrollStep]) -> str:
