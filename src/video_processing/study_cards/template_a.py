@@ -12,6 +12,7 @@
 | 1.4.1 | 2026-08-02 | Codex | 音标单独改用支持 IPA 的 Arial，避免 Avenir Next Condensed 缺字。 |
 | 1.4.2 | 2026-08-02 | Codex | 英文正文与词卡英文标题改用随项目分发的 Rojal.ttf，并适配其较高字面调整正文行距。 |
 | 1.4.3 | 2026-08-02 | Codex | 正文英文恢复为 Avenir Next Condensed；右栏词卡英文保留 Rojal 并增加轻微字距。 |
+| 1.4.4 | 2026-08-02 | Codex | 右栏词卡英文换为 Baskerville SemiBold；视频上方内容标题加大并使用思源宋体。 |
 """
 
 from __future__ import annotations
@@ -36,10 +37,9 @@ READING_VIEWPORT_BOTTOM = 1840
 VOCAB_BOX = (724, 574, 1025, 1820)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CHINESE_FONT = PROJECT_ROOT / "assets/fonts/SourceHanSerifCN-Medium.otf"
-ROJAL_FONT = PROJECT_ROOT / "assets/fonts/Rojal.ttf"
 AVENIR_NEXT_CONDENSED = Path("/System/Library/Fonts/Avenir Next Condensed.ttc")
+BASKERVILLE = Path("/System/Library/Fonts/Supplemental/Baskerville.ttc")
 ARIAL = Path("/System/Library/Fonts/Supplemental/Arial.ttf")
-VOCAB_WORD_TRACKING = 1
 ACCENT = "#C6432D"
 PAPER = "#FFFDF8"
 INK = "#1E1A18"
@@ -137,8 +137,8 @@ class RecordUnderlineTemplate:
         draw.text((916, 187), "DATE:", font=_latin_font(17, bold=True), fill="#FFFDF8")
         draw.text(
             (54, 228),
-            _ellipsize(content.headline_zh, _font(20, bold=True), 620),
-            font=_font(20, bold=True),
+            _ellipsize(content.headline_zh, _font(30, bold=True), 640),
+            font=_font(30, bold=True),
             fill=MUTED,
         )
 
@@ -200,8 +200,7 @@ class RecordUnderlineTemplate:
             card = (VOCAB_BOX[0] + 12, y, VOCAB_BOX[2] - 12, y + 142)
             draw.rounded_rectangle(card, radius=14, fill=fill)
             word_font = _font(30, bold=True, serif=True)
-            word = _ellipsize_tracked(item.word, word_font, 235, VOCAB_WORD_TRACKING)
-            _draw_text_tracked(draw, (card[0] + 15, card[1] + 12), word, word_font, text_color, VOCAB_WORD_TRACKING)
+            draw.text((card[0] + 15, card[1] + 12), _ellipsize(item.word, word_font, 235), font=word_font, fill=text_color)
             detail = " ".join(part for part in (item.phonetic, item.level) if part).strip()
             if detail:
                 ipa_font = _ipa_font(19)
@@ -258,7 +257,8 @@ def _wrap_chinese(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> li
 
 def _font(size: int, *, serif: bool = False, bold: bool = False, italic: bool = False) -> ImageFont.FreeTypeFont:
     if serif:
-        return ImageFont.truetype(ROJAL_FONT, size)
+        index = 5 if bold and italic else 4 if bold else 2 if italic else 0
+        return ImageFont.truetype(BASKERVILLE, size, index=index)
     return ImageFont.truetype(CHINESE_FONT, size)
 
 
@@ -279,35 +279,6 @@ def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
     while text and font.getlength(text + ellipsis) > max_width:
         text = text[:-1]
     return text + ellipsis
-
-
-def _ellipsize_tracked(text: str, font: ImageFont.FreeTypeFont, max_width: int, tracking: int) -> str:
-    if _tracked_textlength(text, font, tracking) <= max_width:
-        return text
-    ellipsis = "…"
-    while text and _tracked_textlength(text + ellipsis, font, tracking) > max_width:
-        text = text[:-1]
-    return text + ellipsis
-
-
-def _draw_text_tracked(
-    draw: ImageDraw.ImageDraw,
-    xy: tuple[int, int],
-    text: str,
-    font: ImageFont.FreeTypeFont,
-    fill: str,
-    tracking: int,
-) -> None:
-    x, y = xy
-    for char in text:
-        draw.text((x, y), char, font=font, fill=fill)
-        x += int(draw.textlength(char, font=font)) + tracking
-
-
-def _tracked_textlength(text: str, font: ImageFont.FreeTypeFont, tracking: int) -> float:
-    if not text:
-        return 0
-    return font.getlength(text) + tracking * (len(text) - 1)
 
 
 def _normalise_word(value: str) -> str:
