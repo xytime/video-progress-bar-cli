@@ -7,6 +7,7 @@
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：输出模板 A 静态画布、唱片素材和逐词下划线坐标。 |
 | 1.1.0 | 2026-08-02 | Codex | 正文严格对齐新闻精读参考图：意群英文、词下小注、段后中文释义和右栏词卡。 |
 | 1.2.0 | 2026-08-02 | Codex | 正文改为透明长画布，供渲染器逐段滚动；同时提升手机端词注、段译及头部信息层级。 |
+| 1.3.0 | 2026-08-02 | Codex | 静态稿重置为首张新闻精读模板：报纸式双栏、固定栏目头、窄词栏与无底色段后译文。 |
 """
 
 from __future__ import annotations
@@ -22,13 +23,13 @@ from .models import StudyCardContent, StudyWord, VocabularyItem
 
 CANVAS_WIDTH = 1080
 CANVAS_HEIGHT = 1920
-VIDEO_BOX = (54, 274, 702, 638)
-DISC_BOX = (756, 298, 990, 532)
+VIDEO_BOX = (54, 274, 700, 637)
+DISC_BOX = (786, 306, 960, 480)
 TEXT_LEFT = 54
 TEXT_TOP = 720
 TEXT_WIDTH = 650
 READING_VIEWPORT_BOTTOM = 1840
-VOCAB_BOX = (730, 574, 1025, 1820)
+VOCAB_BOX = (724, 574, 1025, 1820)
 ENGLISH_FONT = "/System/Library/Fonts/Supplemental/Georgia.ttf"
 CHINESE_FONT = "/System/Library/Fonts/Hiragino Sans GB.ttc"
 ACCENT = "#C6432D"
@@ -103,32 +104,33 @@ class RecordUnderlineTemplate:
         return result
 
     def _draw_page_frame(self, draw: ImageDraw.ImageDraw) -> None:
-        draw.rounded_rectangle((28, 28, 1052, 1888), radius=44, outline="#CFC5BC", width=4)
-        draw.rounded_rectangle(VIDEO_BOX, radius=22, outline="#AFA49A", width=4, fill="#EDE7DF")
-        draw.rounded_rectangle(VOCAB_BOX, radius=24, outline="#AFA49A", width=4, fill="#FFFEFB")
-        draw.text((DISC_BOX[0], DISC_BOX[1] - 46), "Listening", font=_font(30, bold=True), fill=INK)
-        draw.text((VOCAB_BOX[0] + 22, VOCAB_BOX[1] + 20), "Vocabulary", font=_font(40, bold=True, serif=True), fill=INK)
+        draw.rectangle(VIDEO_BOX, outline="#8E786A", width=3, fill="#EDE7DF")
+        for y in range(254, 1850, 14):
+            draw.line((708, y, 708, y + 7), fill="#A99180", width=2)
+        draw.text((DISC_BOX[0] - 2, DISC_BOX[3] + 14), "扫码听读新闻", font=_font(18, bold=True), fill=INK)
+        draw.text((VOCAB_BOX[0] + 16, VOCAB_BOX[1] + 14), "核心词汇", font=_font(27, bold=True), fill=INK)
+        draw.line((VOCAB_BOX[0] + 16, VOCAB_BOX[1] + 52, VOCAB_BOX[2] - 16, VOCAB_BOX[1] + 52), fill="#BA9F8C", width=2)
 
     def _draw_heading(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> None:
-        badge = (54, 70, 142, 158)
+        badge = (54, 66, 146, 158)
         draw.rectangle(badge, fill="#B73520")
-        draw.text((61, 82), "新闻", font=_font(35, bold=True), fill="#FFFDF8")
-        title_font = _font(43, bold=True)
-        sub_font = _font(23, bold=True)
-        draw.text((160, 69), _ellipsize(content.headline_zh, title_font, 845), font=title_font, fill=INK)
+        draw.text((61, 80), "新闻", font=_font(37, bold=True), fill="#FFFDF8")
+        title_font = _font(45, bold=True)
+        sub_font = _font(22, bold=True)
+        draw.text((160, 66), "世界英语新闻时事深度阅读", font=title_font, fill=INK)
         draw.text(
-            (160, 125),
-            _ellipsize(content.headline_en, sub_font, 845),
+            (160, 123),
+            "每日打卡 / 时文时报 / 高效突破8000词汇量",
             font=sub_font,
             fill=INK,
         )
         draw.rectangle((54, 182, 1025, 214), fill="#B73520")
         draw.text((66, 187), f"单词数 · {len(content.words)}个", font=_font(18, bold=True), fill="#FFFDF8")
-        draw.text((866, 187), "DATE: NEWS", font=_latin_font(17, bold=True), fill="#FFFDF8")
+        draw.text((916, 187), "DATE:", font=_latin_font(17, bold=True), fill="#FFFDF8")
         draw.text(
             (54, 228),
-            "每日打卡 / 时文精读 / 高频词汇同步标记",
-            font=_font(21, bold=True),
+            _ellipsize(content.headline_zh, _font(20, bold=True), 620),
+            font=_font(20, bold=True),
             fill=MUTED,
         )
 
@@ -161,8 +163,7 @@ class RecordUnderlineTemplate:
                     x += width + int(draw.textlength(" ", font=english_font))
                 y += line_height
             translation_line_height = 43
-            draw.rounded_rectangle((TEXT_LEFT, y + 4, TEXT_LEFT + TEXT_WIDTH, y + 4 + len(translation_lines) * translation_line_height + 20), radius=10, fill="#F8F2EA")
-            y += 13
+            y += 11
             for line in translation_lines:
                 draw.text((TEXT_LEFT + 10, y), line, font=translation_font, fill=INK)
                 y += translation_line_height
@@ -182,22 +183,22 @@ class RecordUnderlineTemplate:
         return y
 
     def _draw_vocabulary(self, draw: ImageDraw.ImageDraw, items: tuple[VocabularyItem, ...]) -> None:
-        y = VOCAB_BOX[1] + 84
+        y = VOCAB_BOX[1] + 74
         palette = (ACCENT, "#EDE6DA", "#365E8B", "#EDE6DA", ACCENT)
         for index, item in enumerate(items[:5]):
             fill = palette[index % len(palette)]
             dark = fill in {ACCENT, "#365E8B"}
             text_color = "#FFFDF8" if dark else INK
-            card = (VOCAB_BOX[0] + 18, y, VOCAB_BOX[2] - 18, y + 184)
-            draw.rounded_rectangle(card, radius=20, fill=fill)
-            draw.text((card[0] + 18, card[1] + 16), _ellipsize(item.word, _font(34, bold=True, serif=True), 220), font=_font(34, bold=True, serif=True), fill=text_color)
+            card = (VOCAB_BOX[0] + 12, y, VOCAB_BOX[2] - 12, y + 142)
+            draw.rounded_rectangle(card, radius=14, fill=fill)
+            draw.text((card[0] + 15, card[1] + 12), _ellipsize(item.word, _font(30, bold=True, serif=True), 235), font=_font(30, bold=True, serif=True), fill=text_color)
             detail = " ".join(part for part in (item.phonetic, item.level) if part).strip()
             if detail:
-                ipa_font = _latin_font(21)
-                draw.text((card[0] + 18, card[1] + 68), _ellipsize(detail, ipa_font, 220), font=ipa_font, fill=text_color)
+                ipa_font = _latin_font(19)
+                draw.text((card[0] + 15, card[1] + 56), _ellipsize(detail, ipa_font, 235), font=ipa_font, fill=text_color)
             meaning = " ".join(part for part in (item.part_of_speech, item.meaning_zh) if part).strip()
-            draw.text((card[0] + 18, card[1] + 110), _ellipsize(meaning, _font(27), 220), font=_font(27), fill=text_color)
-            y += 202
+            draw.text((card[0] + 15, card[1] + 92), _ellipsize(meaning, _font(25), 235), font=_font(25), fill=text_color)
+            y += 158
 
     def _draw_disc(self, output_path: Path) -> None:
         size = DISC_BOX[2] - DISC_BOX[0]
