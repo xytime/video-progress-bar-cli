@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-03 | Codex | 覆盖最低考试标签优先级、词形还原、超纲兜底与文本批量分析。 |
+| 1.1.0 | 2026-08-03 | Codex | 覆盖词表缺失报错、离线语境释义选择与文章生词表抽取。 |
 """
 
 from __future__ import annotations
@@ -30,7 +31,10 @@ def _write_wordlists(base: Path) -> None:
             "corporate,a.,\"CET-4,CET-6\",'kɔːpərət,\"a. 公司的, 企业的\"",
             "job,n.,\"中考,高考\",dʒɒb,\"n. 工作, 职业\"",
             "cut,v.,\"中考,高考\",kʌt,\"v. 削减, 切割\"",
+            "say,v.,中考,seɪ,\"v. 说\"",
+            "face,v.,PET,feɪs,\"v. 面对\"",
             "tariff,n.,CET-6,'tærif,\"n. 关税, 价目表\"",
+            "pressure,n.,PET,ˈpreʃə,\"n. 压力\"",
         ]),
         encoding="utf-8",
     )
@@ -47,7 +51,7 @@ def _write_wordlists(base: Path) -> None:
         "\n".join([
             "word,phonetic,definition,translation,pos,collins,oxford,tag,bnc,frq,exchange,detail,audio",
             "jobs,dʒɒbz,work entries,n. 工作（job的复数形式）,,,,,0,0,0:job/1:s,,",
-            "cutting,kʌtɪŋ,cutting action,v. 削减；切割（cut的ing形式）,,,,,0,0,0:cut/1:i,,",
+            "cutting,kʌtɪŋ,cutting action,n. 切断；切下,,,,,0,0,0:cut/1:i,,",
             "esoteric,,known by few,adj. 深奥的,,,,,0,0,,,",
         ]),
         encoding="utf-8",
@@ -90,6 +94,17 @@ def test_exchange_lemma_maps_inflected_forms_before_lookup(tmp_path: Path) -> No
     assert cutting.context_meaning_zh.startswith("v. 削减")
 
 
+def test_context_prefers_verb_meaning_for_progressive_form(tmp_path: Path) -> None:
+    _write_wordlists(tmp_path)
+    result = VocabularyLeveler(tmp_path).analyze_word(
+        "cutting",
+        context="Amazon is cutting about 16,000 corporate jobs.",
+    )
+
+    assert result.lemma == "cut"
+    assert result.context_meaning_zh == "v. 削减；切割"
+
+
 def test_exchange_parser_ignores_numeric_internal_markers(tmp_path: Path) -> None:
     _write_wordlists(tmp_path)
     result = VocabularyLeveler(tmp_path).analyze_word("s3")
@@ -119,6 +134,43 @@ def test_text_analysis_deduplicates_targets_in_order(tmp_path: Path) -> None:
     assert results[3].friendly_tag == FriendlyTag.NEWS_ADVANCED
 
 
+def test_article_vocabulary_filters_basic_words_and_deduplicates_lemmas(tmp_path: Path) -> None:
+    _write_wordlists(tmp_path)
+    results = VocabularyLeveler(tmp_path).extract_article_vocabulary(
+        "Amazon says jobs and corporate jobs face tariff pressure and esoteric pressure.",
+        max_words=3,
+    )
+
+    assert [result.lemma for result in results] == ["corporate", "face", "tariff"]
+    assert all(result.friendly_tag != FriendlyTag.BASIC for result in results)
+
+
+def test_article_vocabulary_can_keep_probable_proper_nouns_when_requested(tmp_path: Path) -> None:
+    _write_wordlists(tmp_path)
+    results = VocabularyLeveler(tmp_path).extract_article_vocabulary(
+        "Amazon says corporate jobs face pressure.",
+        max_words=1,
+        include_proper_nouns=True,
+    )
+
+    assert results[0].word == "amazon"
+    assert results[0].recommended_level == "Master"
+
+
+def test_missing_wordlist_files_raise_clear_error(tmp_path: Path) -> None:
+    (tmp_path / "exam-wordlists.csv").write_text("word,pos,exam,phonetic,translation\n", encoding="utf-8")
+
+    try:
+        VocabularyLeveler(tmp_path)
+    except FileNotFoundError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("expected FileNotFoundError")
+
+    assert "cefr-enhanced.csv" in message
+    assert "ecdict.csv" in message
+
+
 def test_cli_outputs_json(tmp_path: Path) -> None:
     _write_wordlists(tmp_path)
     result = CliRunner().invoke(
@@ -129,3 +181,23 @@ def test_cli_outputs_json(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert '"word": "corporate"' in result.output
     assert '"recommended_level": "CET-4"' in result.output
+
+
+def test_cli_article_mode_outputs_filtered_vocabulary(tmp_path: Path) -> None:
+    _write_wordlists(tmp_path)
+    result = CliRunner().invoke(
+        vocab_level,
+        [
+            "--article",
+            "--text",
+            "Jobs and corporate jobs face tariff pressure.",
+            "--limit",
+            "2",
+            "--wordlist-dir",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert '"word": "corporate"' in result.output
+    assert '"word": "jobs"' not in result.output

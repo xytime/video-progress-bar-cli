@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-03 | Codex | 初始创建：合并 hermes-wordlists 的 CEFR 与国内考试标签，支持词形还原与 JSON 输出。 |
+| 1.1.0 | 2026-08-03 | Codex | 修复词表缺失静默降级，增加离线语境释义选择与文章生词表提取接口。 |
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from .models import FriendlyTag, WordLevelResult
 
 
 DEFAULT_WORDLIST_DIR = Path.home() / "Downloads" / "hermes-wordlists"
+REQUIRED_WORDLIST_FILES = ("exam-wordlists.csv", "cefr-enhanced.csv", "ecdict.csv")
 
 _LABEL_PRIORITY = {
     "KET": 0,
@@ -56,11 +58,21 @@ _POS_MAP = {
 }
 _FUNCTION_WORDS = frozenset({
     "a", "an", "and", "are", "as", "at", "be", "been", "being", "but", "by", "for", "from",
-    "has", "have", "had", "he", "her", "his", "i", "in", "is", "it", "its", "of", "on",
-    "or", "our", "she", "that", "the", "their", "them", "this", "to", "was", "were", "with",
-    "you", "your",
+    "can", "could", "did", "do", "does", "had", "has", "have", "he", "her", "hers", "him",
+    "his", "i", "if", "in", "into", "is", "it", "its", "me", "my", "nor", "not", "of", "on",
+    "or", "our", "ours", "she", "should", "so", "than", "that", "the", "their", "theirs",
+    "them", "then", "there", "these", "they", "this", "those", "to", "us", "was", "we",
+    "were", "will", "with", "would", "you", "your", "yours",
 })
 _EXCHANGE_FORM_CODES = frozenset({"0", "p", "d", "i", "3", "r", "t", "s"})
+_VERB_CONTEXT_PREVIOUS = frozenset({
+    "am", "are", "be", "been", "being", "can", "could", "did", "do", "does", "had", "has",
+    "have", "is", "may", "might", "must", "should", "to", "was", "were", "will", "would",
+})
+_NOUN_CONTEXT_PREVIOUS = frozenset({
+    "a", "an", "another", "each", "every", "his", "its", "many", "my", "our", "several",
+    "that", "the", "their", "these", "this", "those", "your",
+})
 
 
 @dataclass(frozen=True)
@@ -98,7 +110,7 @@ class VocabularyLeveler:
         self._load()
 
     def analyze_word(self, word: str, context: str = "") -> WordLevelResult:
-        """分析单个英文词；context 目前用于结果保留，释义仍以离线词典为准。"""
+        """分析单个英文词；context 仅用于离线词性启发式释义选择，不调用外部 API。"""
         normalised = _normalise_word(word)
         if not normalised:
             raise ValueError("word 必须包含英文字符")
@@ -110,9 +122,11 @@ class VocabularyLeveler:
 
         labels = _sort_labels(lookup.entry.labels or ("Master",))
         recommended = labels[0] if labels else "Master"
+        meaning_entries = [lookup.entry]
         surface_entry = self._fallback_entries.get(normalised) if not lookup.direct_match else None
-        meaning_entry = surface_entry if surface_entry and (surface_entry.translation or surface_entry.definition) else lookup.entry
-        meaning = _context_meaning(meaning_entry.translation, meaning_entry.definition)
+        if surface_entry and (surface_entry.translation or surface_entry.definition):
+            meaning_entries.append(surface_entry)
+        meaning_entry, meaning, meaning_pos = _context_meaning(meaning_entries, normalised, lookup.lemma, context)
         if not meaning:
             meaning = "词表未提供释义；建议结合上下文人工确认"
         confidence = _confidence(lookup.entry, lookup.direct_match)
@@ -123,7 +137,7 @@ class VocabularyLeveler:
             recommended_level=recommended,
             covered_syllabi=labels,
             friendly_tag=_friendly_tag(recommended),
-            pos=meaning_entry.pos or lookup.entry.pos,
+            pos=meaning_pos or meaning_entry.pos or lookup.entry.pos,
             phonetic=meaning_entry.phonetic or lookup.entry.phonetic,
             source=lookup.entry.source,
             confidence=confidence,
@@ -140,6 +154,48 @@ class VocabularyLeveler:
                 continue
             seen.add(key)
             results.append(self.analyze_word(key, context=text))
+        return results
+
+    def extract_article_vocabulary(
+        self,
+        text: str,
+        *,
+        min_level: str = "PET",
+        max_words: int | None = 20,
+        include_proper_nouns: bool = False,
+    ) -> list[WordLevelResult]:
+        """从整篇英文正文中一次性抽取去重后的重点生词表。
+
+        默认从 PET 起筛选并排除疑似专名，等价于抽取学习者更需要注意的正文词汇；
+        结果按正文首次出现顺序返回。
+        """
+        min_label = _normalise_label(min_level)
+        if min_label not in _LABEL_PRIORITY:
+            raise ValueError(f"未知最低级别: {min_level}")
+        if max_words is not None and max_words < 1:
+            raise ValueError("max_words 必须为正整数，或传入 None 表示不限制")
+
+        min_priority = _LABEL_PRIORITY[min_label]
+        capitalised_words = _capitalised_words(text)
+        lowercase_words = _lowercase_words(text)
+        results: list[WordLevelResult] = []
+        seen_lemmas: set[str] = set()
+        for result in self.analyze_text(text):
+            if result.lemma in seen_lemmas:
+                continue
+            seen_lemmas.add(result.lemma)
+            if (
+                not include_proper_nouns
+                and result.word in capitalised_words
+                and result.word not in lowercase_words
+                and result.source in {"unknown", "ecdict-fallback"}
+            ):
+                continue
+            if _LABEL_PRIORITY.get(result.recommended_level, _LABEL_PRIORITY["Master"]) < min_priority:
+                continue
+            results.append(result)
+            if max_words is not None and len(results) >= max_words:
+                break
         return results
 
     def _lookup(self, word: str) -> _LookupResult | None:
@@ -165,9 +221,14 @@ class VocabularyLeveler:
     def _load(self) -> None:
         if not self.wordlist_dir.exists():
             raise FileNotFoundError(f"词表目录不存在: {self.wordlist_dir}")
+        missing = [name for name in REQUIRED_WORDLIST_FILES if not (self.wordlist_dir / name).is_file()]
+        if missing:
+            raise FileNotFoundError(f"词表文件缺失: {', '.join(missing)} in {self.wordlist_dir}")
         self._load_exam_wordlists(self.wordlist_dir / "exam-wordlists.csv")
         self._load_cefr_wordlists(self.wordlist_dir / "cefr-enhanced.csv")
         self._load_ecdict(self.wordlist_dir / "ecdict.csv")
+        if not self._entries:
+            raise ValueError(f"主词表为空或格式不正确: {self.wordlist_dir}")
 
     def _load_exam_wordlists(self, path: Path) -> None:
         for row in _read_csv(path):
@@ -277,6 +338,23 @@ def analyze_text(
     return _cached_leveler(str(Path(wordlist_dir).expanduser())).analyze_text(text, words=words)
 
 
+def extract_article_vocabulary(
+    text: str,
+    *,
+    min_level: str = "PET",
+    max_words: int | None = 20,
+    include_proper_nouns: bool = False,
+    wordlist_dir: Path | str = DEFAULT_WORDLIST_DIR,
+) -> list[WordLevelResult]:
+    """便捷函数：从整篇英文正文中抽取重点生词表。"""
+    return _cached_leveler(str(Path(wordlist_dir).expanduser())).extract_article_vocabulary(
+        text,
+        min_level=min_level,
+        max_words=max_words,
+        include_proper_nouns=include_proper_nouns,
+    )
+
+
 def _read_csv(path: Path) -> Iterable[dict[str, str]]:
     if not path.exists():
         return ()
@@ -334,14 +412,44 @@ def _confidence(entry: _WordlistEntry, direct_match: bool) -> float:
     return 0.95 if direct_match else 0.88
 
 
-def _context_meaning(translation: str, definition: str) -> str:
-    for line in (translation or "").splitlines():
-        cleaned = _clean_translation_line(line)
-        if cleaned:
-            return cleaned
-    if definition:
-        return definition.splitlines()[0].strip()
-    return ""
+def _context_meaning(
+    entries: Sequence[_WordlistEntry],
+    target_word: str,
+    lemma: str,
+    context: str,
+) -> tuple[_WordlistEntry, str, str]:
+    preferred_pos = _infer_context_pos(target_word, lemma, context)
+    candidates: list[tuple[_WordlistEntry, str, str, str]] = []
+    for entry in entries:
+        for line in _translation_lines(entry.translation):
+            cleaned = _clean_translation_line(line)
+            if cleaned:
+                display_pos = _display_pos(_line_pos(line) or entry.pos)
+                candidates.append((entry, _pos_group(display_pos), display_pos, cleaned))
+        if entry.definition:
+            definition = entry.definition.splitlines()[0].strip()
+            if definition:
+                display_pos = _display_pos(entry.pos)
+                candidates.append((entry, _pos_group(display_pos), display_pos, definition))
+
+    if preferred_pos:
+        for entry, pos, display_pos, meaning in candidates:
+            if pos == preferred_pos:
+                return entry, meaning, display_pos
+    if candidates:
+        entry, _, display_pos, meaning = candidates[0]
+        return entry, meaning, display_pos
+    return entries[0], "", ""
+
+
+def _translation_lines(translation: str) -> list[str]:
+    normalised = (translation or "").replace("\\n", "\n")
+    lines = []
+    for line in normalised.splitlines():
+        stripped = line.strip()
+        if stripped:
+            lines.append(stripped)
+    return lines
 
 
 def _clean_translation_line(line: str) -> str:
@@ -355,6 +463,58 @@ def _clean_translation_line(line: str) -> str:
                 body = re.sub(r"[,，]\s*", "；", body)
                 return f"{display_pos} {body}"
     return cleaned
+
+
+def _line_pos(line: str) -> str:
+    cleaned = line.strip()
+    for raw_pos in _POS_MAP:
+        if cleaned.startswith(raw_pos):
+            return raw_pos
+    return ""
+
+
+def _pos_group(pos: str) -> str:
+    normalised = _display_pos(pos)
+    if normalised in {"vi.", "vt."}:
+        return "v."
+    if normalised == "adj.":
+        return "adj."
+    if normalised == "adv.":
+        return "adv."
+    if normalised.startswith("n."):
+        return "n."
+    if normalised.startswith("v."):
+        return "v."
+    return normalised
+
+
+def _display_pos(pos: str) -> str:
+    return _POS_MAP.get((pos or "").strip(), (pos or "").strip())
+
+
+def _infer_context_pos(target_word: str, lemma: str, context: str) -> str:
+    if target_word.endswith("ly"):
+        return "adv."
+    if not context:
+        if target_word.endswith(("ing", "ed")) and lemma != target_word:
+            return "v."
+        return ""
+
+    words = _extract_all_words(context)
+    for index, word in enumerate(words):
+        if word not in {target_word, lemma}:
+            continue
+        previous = words[index - 1] if index > 0 else ""
+        next_word = words[index + 1] if index + 1 < len(words) else ""
+        if previous in _VERB_CONTEXT_PREVIOUS:
+            return "v."
+        if target_word.endswith("ing") and next_word and next_word not in _FUNCTION_WORDS:
+            return "v."
+        if previous in _NOUN_CONTEXT_PREVIOUS:
+            return "n."
+    if target_word.endswith(("ing", "ed")) and lemma != target_word:
+        return "v."
+    return ""
 
 
 def _parse_exchange(exchange: str) -> dict[str, str]:
@@ -392,11 +552,35 @@ def _heuristic_lemma(word: str) -> str:
 
 def _extract_words(text: str) -> list[str]:
     words: list[str] = []
-    for match in re.finditer(r"[A-Za-z]+(?:'[A-Za-z]+)?", text):
-        word = match.group(0).lower()
+    for word in _extract_all_words(text):
         if word not in _FUNCTION_WORDS:
             words.append(word)
     return words
+
+
+def _extract_all_words(text: str) -> list[str]:
+    words: list[str] = []
+    for match in re.finditer(r"[A-Za-z]+(?:'[A-Za-z]+)?", text):
+        word = match.group(0).lower()
+        if word.endswith("'s"):
+            word = word[:-2]
+        if word:
+            words.append(word)
+    return words
+
+
+def _capitalised_words(text: str) -> set[str]:
+    return {
+        _normalise_word(match.group(0))
+        for match in re.finditer(r"\b[A-Z][A-Za-z]+(?:'[A-Za-z]+)?\b", text)
+    }
+
+
+def _lowercase_words(text: str) -> set[str]:
+    return {
+        _normalise_word(match.group(0))
+        for match in re.finditer(r"\b[a-z][A-Za-z]+(?:'[A-Za-z]+)?\b", text)
+    }
 
 
 def _normalise_word(word: str) -> str:
