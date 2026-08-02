@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：独立合成原片小窗、旋转唱片与逐词红线，输出 manifest。 |
+| 1.1.0 | 2026-08-02 | Codex | 以最后一个已纳入正文的单词为硬终点，音视频同步裁切并淡出，杜绝露出后续导语。 |
 """
 
 from __future__ import annotations
@@ -20,6 +21,9 @@ import imageio_ffmpeg
 
 from .models import StudyCardContent
 from .template_a import ACCENT, DISC_BOX, VIDEO_BOX, RecordUnderlineTemplate
+
+_AUDIO_TAIL_SECONDS = 0.18
+_AUDIO_FADE_SECONDS = 0.08
 
 
 class StudyCardRenderer:
@@ -43,11 +47,14 @@ class StudyCardRenderer:
         output_path = output_path.expanduser().resolve()
         if source_start < 0:
             raise ValueError("source_start 不能小于 0")
-        clip_duration = duration if duration is not None else content.words[-1].end
-        if clip_duration <= 0 or clip_duration > 30:
+        if not content.words:
+            raise ValueError("新闻精读卡片至少需要一个逐词时间轴")
+        requested_duration = duration if duration is not None else content.words[-1].end + _AUDIO_TAIL_SECONDS
+        if requested_duration <= 0 or requested_duration > 30:
             raise ValueError("新闻精读片段必须大于 0 且不超过 30 秒")
-        if content.words and content.words[-1].end > clip_duration + 0.05:
+        if content.words[-1].end > requested_duration + 0.05:
             raise ValueError("逐词时间轴超出所截取的视频时长")
+        clip_duration = self._resolve_render_duration(content, requested_duration)
         if not source_video.is_file():
             raise FileNotFoundError(f"找不到源视频: {source_video}")
         source_duration = self._probe_duration(source_video)
@@ -77,6 +84,12 @@ class StudyCardRenderer:
         finally:
             shutil.rmtree(work_dir, ignore_errors=True)
         return output_path
+
+    @staticmethod
+    def _resolve_render_duration(content: StudyCardContent, requested_duration: float) -> float:
+        """在最后一个学习词之后留极短收尾，绝不播放未纳入正文的下一个词。"""
+        spoken_end = content.words[-1].end
+        return min(requested_duration, spoken_end + _AUDIO_TAIL_SECONDS)
 
     @staticmethod
     def _probe_duration(source_video: Path) -> float:
@@ -131,20 +144,45 @@ class StudyCardRenderer:
             )
             current = output_label
 
+        has_audio = self._has_audio(source_video)
+        audio_label = None
+        if has_audio:
+            fade_duration = min(_AUDIO_FADE_SECONDS, duration)
+            fade_start = max(0.0, duration - fade_duration)
+            audio_label = "trimmed_audio"
+            filters.append(
+                f"[1:a]atrim=end={duration:.3f},"
+                f"afade=t=out:st={fade_start:.3f}:d={fade_duration:.3f}[{audio_label}]"
+            )
+
         command = [
             ffmpeg, "-y",
             "-loop", "1", "-framerate", "30", "-i", str(base_image),
             "-ss", f"{source_start:.3f}", "-t", f"{duration:.3f}", "-i", str(source_video),
             "-loop", "1", "-framerate", "30", "-i", str(disc_image),
             "-filter_complex", ";".join(filters),
-            "-map", f"[{current}]", "-map", "1:a?",
+            "-map", f"[{current}]",
             "-t", f"{duration:.3f}", "-r", "30",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
-            str(output_path),
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
         ]
+        if audio_label:
+            command.extend(["-map", f"[{audio_label}]", "-c:a", "aac"])
+        command.extend([
+            "-shortest",
+            str(output_path),
+        ])
         completed = subprocess.run(command, capture_output=True, text=True)
         if completed.returncode != 0:
             raise RuntimeError(f"新闻精读卡片渲染失败: {completed.stderr[-2000:]}")
+
+    @staticmethod
+    def _has_audio(source_video: Path) -> bool:
+        completed = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", str(source_video)],
+            capture_output=True,
+            text=True,
+        )
+        return completed.returncode == 0 and bool(completed.stdout.strip())
 
     def _write_manifest(
         self,
@@ -160,6 +198,8 @@ class StudyCardRenderer:
             "source_video": str(source_video),
             "source_start": source_start,
             "duration": duration,
+            "speech_end": content.words[-1].end,
+            "audio_tail_seconds": round(max(0.0, duration - content.words[-1].end), 3),
             "word_count": len(content.words),
             "vocabulary_count": len(content.vocabulary),
             "underline_events": [

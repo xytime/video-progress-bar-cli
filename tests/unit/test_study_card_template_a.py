@@ -72,3 +72,11 @@ def test_renderer_rejects_more_than_thirty_seconds_before_touching_source(tmp_pa
 
     with pytest.raises(ValueError, match="不超过 30 秒"):
         StudyCardRenderer().render(tmp_path / "missing.mp4", content, tmp_path / "out.mp4", duration=30.1)
+
+
+def test_renderer_stops_shortly_after_the_final_included_word():
+    content = StudyCardContent.from_mapping(_payload())
+
+    duration = StudyCardRenderer._resolve_render_duration(content, requested_duration=5.0)
+
+    assert duration == pytest.approx(2.88)
