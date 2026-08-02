@@ -15,6 +15,7 @@
 | 1.4.4 | 2026-08-02 | Codex | 右栏词卡英文换为 Baskerville SemiBold；视频上方内容标题加大并使用思源宋体。 |
 | 1.5.0 | 2026-08-02 | Codex | 正文支持多词生词短语：词卡、红底标记和词下中文注释使用同一份词组匹配结果。 |
 | 1.5.1 | 2026-08-02 | Codex | 正文标题改为金色加粗，增强手机端新闻主题辨识。 |
+| 1.6.0 | 2026-08-02 | Codex | 降低生词红色强调强度、为微笔记预留独立行距，并增加六维时空小程序码位。 |
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from pathlib import Path
 import re
 from typing import Iterable
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from .models import StudyCardContent, StudyWord, VocabularyItem
 
@@ -47,6 +48,9 @@ GOLD = "#A87914"
 PAPER = "#FFFDF8"
 INK = "#1E1A18"
 MUTED = "#6E625A"
+MARKED_WORD_BACKGROUND = "#F3DDD5"
+MARKED_WORD_TEXT = "#A53C2B"
+MINI_PROGRAM_QR_BOX = (804, 1485, 946, 1627)
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,9 @@ class RecordUnderlineTemplate:
     """只处理视觉排版；不读取视频、不调用 AI，也不启动 FFmpeg。"""
 
     name = "record_underline"
+
+    def __init__(self, mini_program_qr: Path | None = None) -> None:
+        self.mini_program_qr = mini_program_qr
 
     def render_static(self, content: StudyCardContent, output_dir: Path) -> TemplateAAssets:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -148,7 +155,7 @@ class RecordUnderlineTemplate:
         english_font = _latin_font(40, bold=True)
         gloss_font = _font(22, bold=True)
         translation_font = _font(30)
-        line_height = 74
+        line_height = 92
         y = TEXT_TOP
         boxes: list[WordBox] = []
         for paragraph in content.paragraphs:
@@ -161,13 +168,15 @@ class RecordUnderlineTemplate:
                     width = int(draw.textlength(token, font=english_font))
                     meaning, show_note = highlights.get(token_index, ("", False))
                     if meaning:
-                        draw.rounded_rectangle((x - 5, y - 3, x + width + 5, y + 48), radius=7, fill=ACCENT)
-                    draw.text((x, y), token, font=english_font, fill="#FFFDF8" if meaning else INK)
+                        draw.rounded_rectangle(
+                            (x - 5, y - 3, x + width + 5, y + 48), radius=7, fill=MARKED_WORD_BACKGROUND,
+                        )
+                    draw.text((x, y), token, font=english_font, fill=MARKED_WORD_TEXT if meaning else INK)
                     boxes.append(WordBox(token, x, y + 53, max(8, width)))
                     if meaning and show_note:
                         note = _ellipsize(meaning, gloss_font, max(width + 22, 80))
                         note_width = int(draw.textlength(note, font=gloss_font))
-                        draw.text((x + max(0, (width - note_width) // 2), y + 52), note, font=gloss_font, fill=MUTED)
+                        draw.text((x + max(0, (width - note_width) // 2), y + 56), note, font=gloss_font, fill=MUTED)
                     x += width + int(draw.textlength(" ", font=english_font))
                 y += line_height
             translation_line_height = 43
@@ -186,7 +195,7 @@ class RecordUnderlineTemplate:
         for paragraph in content.paragraphs:
             lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, TEXT_WIDTH)
             translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
-            y += len(lines) * 74
+            y += len(lines) * 92
             y += 13 + len(translation_lines) * 43 + 28
         return y
 
@@ -201,13 +210,40 @@ class RecordUnderlineTemplate:
             draw.rounded_rectangle(card, radius=14, fill=fill)
             word_font = _font(30, bold=True, serif=True)
             draw.text((card[0] + 15, card[1] + 12), _ellipsize(item.word, word_font, 235), font=word_font, fill=text_color)
-            detail = " ".join(part for part in (item.phonetic, item.level) if part).strip()
+            detail = item.phonetic.strip()
             if detail:
                 ipa_font = _ipa_font(19)
                 draw.text((card[0] + 15, card[1] + 56), _ellipsize(detail, ipa_font, 235), font=ipa_font, fill=text_color)
             meaning = " ".join(part for part in (item.part_of_speech, item.meaning_zh) if part).strip()
             draw.text((card[0] + 15, card[1] + 92), _ellipsize(meaning, _font(25), 235), font=_font(25), fill=text_color)
             y += 158
+        self._draw_mini_program_qr(draw)
+
+    def _draw_mini_program_qr(self, draw: ImageDraw.ImageDraw) -> None:
+        """保留真实小程序码的完整静区；缺资产时明确显示不可扫码的待配置状态。"""
+        qr_box = MINI_PROGRAM_QR_BOX
+        draw.text((VOCAB_BOX[0] + 16, 1444), "六维时空", font=_font(25, bold=True), fill=INK)
+        if self.mini_program_qr is not None:
+            if not self.mini_program_qr.is_file():
+                raise ValueError(f"找不到六维时空小程序码: {self.mini_program_qr}")
+            with Image.open(self.mini_program_qr) as source:
+                qr = ImageOps.contain(
+                    source.convert("RGB"),
+                    (qr_box[2] - qr_box[0], qr_box[3] - qr_box[1]),
+                    method=Image.Resampling.NEAREST,
+                )
+                offset_x = qr_box[0] + (qr_box[2] - qr_box[0] - qr.width) // 2
+                offset_y = qr_box[1] + (qr_box[3] - qr_box[1] - qr.height) // 2
+                draw.rectangle(qr_box, fill="#FFFFFF")
+                draw._image.paste(qr, (offset_x, offset_y))
+        else:
+            draw.rounded_rectangle(qr_box, radius=10, outline="#B8A391", width=2, fill="#F7F1E9")
+            placeholder = "小程序码\n待配置"
+            draw.multiline_text((qr_box[0] + 30, qr_box[1] + 47), placeholder, font=_font(21, bold=True), fill=MUTED, spacing=6, align="center")
+        cta = "微信扫码，进入小程序"
+        cta_font = _font(20, bold=True)
+        cta_width = int(draw.textlength(cta, font=cta_font))
+        draw.text(((VOCAB_BOX[0] + VOCAB_BOX[2] - cta_width) // 2, 1642), cta, font=cta_font, fill=ACCENT)
 
     def _draw_disc(self, output_path: Path) -> None:
         size = DISC_BOX[2] - DISC_BOX[0]

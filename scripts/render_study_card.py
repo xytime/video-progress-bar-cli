@@ -7,6 +7,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：提供不接入发布流程的独立渲染命令。 |
 | 1.1.0 | 2026-08-02 | Codex | 增加显式长样片测试开关，仅用于验收正文滚动，不改变生产 30 秒上限。 |
+| 1.2.0 | 2026-08-02 | Codex | 支持传入六维时空真实小程序码，独立渲染支路不依赖发布系统。 |
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from video_processing.study_cards import StudyCardContent, StudyCardRenderer  # noqa: E402
+from video_processing.study_cards.template_a import RecordUnderlineTemplate  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,6 +37,7 @@ def parse_args() -> argparse.Namespace:
         help="仅测试：允许最长 60 秒，用于验收长正文滚动；不可用于生产成片",
     )
     parser.add_argument("--keep-assets", action="store_true", help="保留静态底图与唱片资产，便于人工验收")
+    parser.add_argument("--mini-program-qr", type=Path, help="六维时空微信小程序码 PNG/JPG；不传则显示待配置位")
     return parser.parse_args()
 
 
@@ -43,7 +46,7 @@ def main() -> int:
     try:
         payload = json.loads(args.timeline.read_text(encoding="utf-8"))
         content = StudyCardContent.from_mapping(payload)
-        StudyCardRenderer().render(
+        StudyCardRenderer(RecordUnderlineTemplate(args.mini_program_qr)).render(
             args.source,
             content,
             args.output,

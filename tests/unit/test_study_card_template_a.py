@@ -135,3 +135,13 @@ def test_phrase_vocabulary_marks_every_word_but_shows_the_note_once():
     assert highlights[1] == ("有利条件", False)
     assert highlights[4] == ("热浪", True)
     assert highlights[5] == ("热浪", False)
+
+
+def test_template_accepts_a_real_mini_program_qr(tmp_path: Path):
+    from PIL import Image
+
+    qr_path = tmp_path / "mini-program-qr.png"
+    Image.new("RGB", (300, 300), "white").save(qr_path)
+    assets = RecordUnderlineTemplate(qr_path).render_static(StudyCardContent.from_mapping(_payload()), tmp_path)
+
+    assert assets.base_image.is_file()
