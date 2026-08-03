@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "description": "人工普通话译制的非密钥频道音色档案。按 channel_ids 精确匹配；未匹配时使用 Settings 中既有 MiniMax 默认 TTS。",
+  "profiles": [
+    {
+      "id": "volc_wall_street_truthbombs_mandarin_v1",
+      "description": "《华尔街真相炸弹》频道的普通话译制专属声音复刻档案；仅服务该频道的人工译制任务。",
+      "channel_ids": [
+        "UCTK_cv-y88CScoudcXnS1Ew"
+      ],
+      "provider": "volc_speech",
+      "model": "seed-icl-2.0",
+      "voice_id": "S_divMm4n62",
+      "sample_rate": 24000,
+      "preferred_speed": 1.0,
+      "min_speed": 0.9,
+      "max_speed": 1.3
+    }
+  ]
+}

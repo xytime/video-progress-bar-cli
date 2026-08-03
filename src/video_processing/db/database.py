@@ -64,6 +64,8 @@
 | 3.24.0  | 2026-07-29 | Codex                               | 新增发布后日粒度指标、内容唯一身份、视频关系和 AB 实验底层账本 |
 | 3.25.0  | 2026-07-31 | Codex                               | 新增源字幕预检/预加工状态与微信补发真实日额度账本 |
 | 3.25.1  | 2026-07-31 | Codex                               | 将 AI_COVER_PENDING 纳入处理中统计和仪表盘，避免异步制图任务隐身 |
+| 3.25.2  | 2026-08-03 | Codex                               | AI 封面完成只允许 AI_COVER_PENDING 原子回到 PENDING，防止已发布视频被旧任务重新入队 |
+| 3.25.3  | 2026-08-03 | Codex                               | 配音任务创建时持久化实际 TTS provider，保证频道专属音色可追溯 |
 """
 
 import sqlite3
@@ -1887,6 +1889,18 @@ class PipelineDB:
                 (status, error_msg, youtube_id, slice_index)
             )
             conn.commit()
+
+    def mark_ai_cover_resolved(self, youtube_id: str, slice_index: int = 0) -> bool:
+        """AI 封面任务完成后，仅把仍在 AI_COVER_PENDING 的视频恢复到待发布队列。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos "
+                "SET status = 'PENDING', error_msg = NULL, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ? AND status = 'AI_COVER_PENDING'",
+                (youtube_id, slice_index),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
             
     def get_videos_by_status(self, status: str) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
@@ -2787,6 +2801,7 @@ class PipelineDB:
         youtube_id: str,
         *,
         slice_index: int = 0,
+        provider: str = "minimax",
         model: str,
         voice_id: str,
         requested_platforms: Sequence[str] = (),
@@ -2797,6 +2812,8 @@ class PipelineDB:
         platforms = sorted({str(platform).lower() for platform in requested_platforms})
         if any(platform not in self._DUBBING_PLATFORMS for platform in platforms):
             raise ValueError("requested_platforms contains unsupported platform")
+        if provider not in {"minimax", "volc_speech"}:
+            raise ValueError("provider is unsupported")
         if not model.strip() or not voice_id.strip():
             raise ValueError("model and voice_id are required")
         with self.get_connection() as conn:
@@ -2817,9 +2834,9 @@ class PipelineDB:
             version = (int(latest["version"]) + 1) if latest else 1
             conn.execute(
                 """INSERT INTO dubbing_jobs
-                   (source_video_id, version, model, voice_id, requested_platforms, config_json)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (source["id"], version, model, voice_id, json.dumps(platforms, ensure_ascii=False),
+                   (source_video_id, version, provider, model, voice_id, requested_platforms, config_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (source["id"], version, provider, model, voice_id, json.dumps(platforms, ensure_ascii=False),
                  json.dumps(config or {}, ensure_ascii=False, sort_keys=True)),
             )
             conn.commit()

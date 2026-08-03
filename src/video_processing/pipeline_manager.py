@@ -88,6 +88,7 @@
 | 3.46.0  | 2026-07-31 | Codex                               | 源字幕先行预检、非窗口预加工与全任务互斥，未审字幕不得触发视频下载        |
 | 3.47.0  | 2026-07-31 | Codex                               | 可选地将专属底图交给 Codex 文件队列，并在本地 deadline 前确定性降级        |
 | 3.48.0  | 2026-08-03 | Codex                               | 封面 checkpoint 增加无大面积遮罩版式证明，旧遮罩封面不得复用              |
+| 3.48.1  | 2026-08-03 | Codex                               | 视频号上传前检查既有提交后证据，阻止误回队列视频再次自动公开提交          |
 """
 
 
@@ -240,6 +241,30 @@ class PipelineManager:
             snippet = html.escape(" ".join(reason.split())[:200])  # 折叠空白/换行，截断防刷屏
             msg += f"\nReason: {snippet}"
         self.send_telegram_msg(msg)
+
+    def _wechat_submission_evidence_paths(self, prefix: str) -> list[Path]:
+        """返回该任务既有的视频号提交后证据截图；存在即视为不可自动重发。"""
+        evidence_root = self._OUT_DIR / "wechat_evidence" / prefix
+        if not evidence_root.is_dir():
+            return []
+        return sorted(evidence_root.glob("*/post_list_after_submission.png"))
+
+    def _block_duplicate_wechat_submission_if_needed(self, yid: str, prefix: str, slice_index: int = 0) -> bool:
+        """发现既有视频号提交证据时恢复本地已发布态，并拒绝再次调用上传器。"""
+        evidence_paths = self._wechat_submission_evidence_paths(prefix)
+        if not evidence_paths:
+            return False
+        newest_evidence = evidence_paths[-1]
+        reason = f"检测到既有视频号提交后证据，拒绝自动重发：{newest_evidence}"
+        logger.error("[%s] %s", prefix, reason)
+        self.db.update_video_status(yid, "PUBLISHED", error_msg=reason, slice_index=slice_index)
+        self.send_telegram_msg(
+            "⚠️ <b>WeChat duplicate publish blocked</b>\n"
+            f"ID: <code>{html.escape(prefix)}</code>\n"
+            f"Evidence: <code>{html.escape(str(newest_evidence))}</code>\n"
+            "Local state restored to PUBLISHED; please verify creator management manually."
+        )
+        return True
 
     def _is_public_publish_window(self, platform: str, yid: str = "", slice_index: int = 0) -> bool:
         """公开视频提交窗口守卫；审核回查等只读动作不受此限制。"""
@@ -2205,6 +2230,9 @@ class PipelineManager:
                     logger.error("[%s] %s", prefix, reason)
                     self.db.update_video_status(yid, "FAILED", error_msg=reason, slice_index=slice_index)
                     self._notify_failed(yid, title, reason, slice_index=slice_index)
+                    return
+
+                if self._block_duplicate_wechat_submission_if_needed(yid, prefix, slice_index=slice_index):
                     return
 
                 self.db.update_video_status(yid, "PUBLISHING", slice_index=slice_index)

@@ -6,10 +6,12 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 新增两分钟巡查协调器，保证 AI 底图超时后确定性降级 |
 | 1.1.0 | 2026-08-03 | Codex | AI 封面完成物也必须通过无大面积遮罩版式来源清单校验 |
+| 1.2.0 | 2026-08-03 | Codex | 加锁并只允许 AI_COVER_PENDING 任务回到 PENDING，防止旧封面任务重发已发布视频 |
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import subprocess
@@ -29,6 +31,8 @@ from video_processing.db import PipelineDB
 
 
 logger = logging.getLogger(__name__)
+LOCK_PATH = PROJECT_ROOT / "output" / "ai_cover_reconciler.lock"
+_COVER_QUEUE_ACTIVE_STATUS = "AI_COVER_PENDING"
 
 
 def _is_dedicated_cover(cover_path: Path) -> bool:
@@ -49,7 +53,24 @@ def _write_resolution(task: AICoverTask, source: str, visual_path: Path | None) 
     )
 
 
-def _render(task: AICoverTask, visual_path: Path | None) -> bool:
+def _render(task: AICoverTask, visual_path: Path | None, db: PipelineDB | None = None) -> bool:
+    db = db or PipelineDB()
+    youtube_id = str(task.payload["youtube_id"])
+    slice_index = int(task.payload["slice_index"])
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+    if not video:
+        logger.warning("[%s] video row missing; skip cover resolution", task.task_id)
+        return False
+    if video["status"] != _COVER_QUEUE_ACTIVE_STATUS:
+        logger.warning(
+            "[%s] skip cover resolution for %s_s%s because current status is %s",
+            task.task_id,
+            youtube_id,
+            slice_index,
+            video["status"],
+        )
+        return False
+
     target = Path(str(task.payload["final_cover_path"]))
     provenance = Path(str(task.payload["provenance_path"]))
     brief = Path(str(task.payload["brief_path"]))
@@ -76,12 +97,9 @@ def _render(task: AICoverTask, visual_path: Path | None) -> bool:
         logger.error("[%s] cover render failed: %s", task.task_id, result.stderr[:400])
         return False
     _write_resolution(task, "codex_ai_visual" if visual_path else "deterministic_fallback", visual_path)
-    PipelineDB().update_video_status(
-        str(task.payload["youtube_id"]),
-        "PENDING",
-        error_msg=None,
-        slice_index=int(task.payload["slice_index"]),
-    )
+    if not db.mark_ai_cover_resolved(youtube_id, slice_index=slice_index):
+        logger.warning("[%s] cover rendered but video status changed before requeue; leaving row unchanged", task.task_id)
+        return False
     logger.info("[%s] cover resolved via %s", task.task_id, "Codex visual" if visual_path else "fallback")
     return True
 
@@ -89,21 +107,35 @@ def _render(task: AICoverTask, visual_path: Path | None) -> bool:
 def reconcile() -> int:
     if not settings.enable_codex_cover_queue:
         return 0
-    queue = AICoverQueue(
-        PROJECT_ROOT / settings.ai_cover_queue_dir,
-        PROJECT_ROOT / settings.ai_cover_finish_dir,
-    )
-    resolved = 0
-    for task in queue.list_tasks():
-        target = Path(str(task.payload["final_cover_path"]))
-        if _is_dedicated_cover(target):
-            continue
-        visual = queue.accepted_visual(task)
-        if visual and _render(task, visual):
-            resolved += 1
-        elif visual is None and queue.should_fallback(task) and _render(task, None):
-            resolved += 1
-    return resolved
+    LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with LOCK_PATH.open("a+") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.info("[AI Cover] previous reconciler run is still active; skip this round")
+            return 0
+
+        try:
+            queue = AICoverQueue(
+                PROJECT_ROOT / settings.ai_cover_queue_dir,
+                PROJECT_ROOT / settings.ai_cover_finish_dir,
+            )
+            db = PipelineDB()
+            resolved = 0
+            for task in queue.list_tasks():
+                if (task.finish_dir / "resolution.json").is_file():
+                    continue
+                target = Path(str(task.payload["final_cover_path"]))
+                if _is_dedicated_cover(target):
+                    continue
+                visual = queue.accepted_visual(task)
+                if visual and _render(task, visual, db):
+                    resolved += 1
+                elif visual is None and queue.should_fallback(task) and _render(task, None, db):
+                    resolved += 1
+            return resolved
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def main() -> int:

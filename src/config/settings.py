@@ -44,6 +44,7 @@
 | 3.15.8 | 2026-08-02 | Codex                              | 默认关闭发布时段限制；候选完成全部处理与审查后立即提交 |
 | 3.15.6 | 2026-07-31 | Codex                              | 新增源字幕先行预检与非窗口预加工配置，阻止未审视频下载 |
 | 3.15.7 | 2026-07-31 | Codex                              | 新增 Codex AI 封面任务队列与本地超时降级配置，默认关闭 |
+| 3.15.9 | 2026-08-03 | Codex                              | 新增人工普通话译制的火山语音凭据与频道音色档案路径；专属档案未命中时保持默认 TTS |
 """
 import json
 import socket
@@ -281,6 +282,13 @@ class Settings(BaseSettings):
     minimax_tts_min_speed: float = 0.96
     minimax_tts_max_speed: float = 1.28
     minimax_tts_request_interval_sec: float = 1.1
+    # 火山豆包语音 API Key：仅供“人工普通话译制中心”读取，必须只保存在本机 .env。
+    # 绝不写入音色档案、数据库快照、日志、报告或 Git；未配置时，命中火山档案的任务直接失败。
+    volc_speech_api_key: Optional[str] = None
+    volc_speech_request_interval_sec: float = 0.2
+    # 非密钥的频道音色档案。命中专属频道时选档案；没有匹配条目时回退现有 MiniMax 默认 TTS。
+    # 相对路径以项目根目录为基准，档案内容必须可安全提交且不得出现 API Key。
+    dubbing_voice_profiles_path: str = "config/dubbing_voice_profiles.json"
     dubbing_audio_policy: str = "zh_with_english_bed"
     dubbing_english_bed_volume: float = 0.16
     dubbing_target_lufs: float = -14.0

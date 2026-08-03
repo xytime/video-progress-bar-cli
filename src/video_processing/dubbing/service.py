@@ -16,6 +16,7 @@
 | 1.1.0 | 2026-07-31 | Codex | 译制版封面须有非视频帧来源清单，禁止人工路径复用历史截图               |
 | 1.1.1 | 2026-08-01 | Codex | TTS 时长失配时自动短写一次并重合成，减少人工卡在 NEEDS_REWRITE          |
 | 1.1.2 | 2026-08-03 | Codex | 译制版封面来源清单追加无大面积遮罩版式硬门槛                           |
+| 1.2.0 | 2026-08-03 | Codex | 按源频道选择专属火山声音复刻档案；未命中保持 MiniMax 默认回退            |
 """
 
 from __future__ import annotations
@@ -41,6 +42,8 @@ from .minimax_client import MiniMaxTTSClient
 from .script_refiner import DubbingScriptRefiner
 from .subtitle_pages import build_semantic_pages, write_page_ass
 from .timing import decide_timing, next_synthesis_speed
+from .voice_profiles import DubbingVoiceProfile, profile_from_snapshot, resolve_dubbing_voice_profile
+from .volc_speech_client import VolcSpeechTTSClient
 
 
 logger = logging.getLogger(__name__)
@@ -60,10 +63,11 @@ class DubbingService:
         force_new_version: bool = False,
     ) -> Dict[str, Any]:
         """人工选片后同步生产成片，完成后停在 QA_REQUIRED，绝不自动投递。"""
-        config = self._config_snapshot()
+        profile = self._voice_profile_for_source(youtube_id, slice_index)
+        config = self._config_snapshot(profile)
         job = self.db.create_dubbing_job(
-            youtube_id, slice_index=slice_index, model=settings.minimax_tts_model,
-            voice_id=settings.minimax_tts_voice_id, requested_platforms=platforms,
+            youtube_id, slice_index=slice_index, provider=profile.provider, model=profile.model,
+            voice_id=profile.voice_id, requested_platforms=platforms,
             config=config, force_new_version=force_new_version,
         )
         job = self.db.get_dubbing_job(job["id"])
@@ -81,9 +85,10 @@ class DubbingService:
                 raise RuntimeError("未从源字幕提取到可配音的中文语义片段。")
             chunks = self._refine_script(job, chunks, workspace)
             self._safety_gate(job, chunks)
-            self.db.upsert_dubbing_speaker(job["id"], "NARRATOR", voice_id=settings.minimax_tts_voice_id)
+            job_profile = self._profile_from_job(job)
+            self.db.upsert_dubbing_speaker(job["id"], "NARRATOR", voice_id=job_profile.voice_id)
             self.db.update_dubbing_job(job["id"], "SCRIPT_READY")
-            plans = self._synthesize_and_fit(job, chunks, workspace)
+            plans = self._synthesize_and_fit(job, chunks, workspace, profile=job_profile)
             self.db.update_dubbing_job(job["id"], "ALIGNING")
             narration = self._build_narration(plans, source_video, workspace)
             subtitle = self._write_actual_subtitles(plans, workspace / "subtitles" / "zh_actual.srt")
@@ -164,18 +169,19 @@ class DubbingService:
     def status(self, youtube_id: str, *, slice_index: int = 0) -> Dict[str, Any]:
         return self._job_view(self._require_latest_job(youtube_id, slice_index)["id"])
 
-    def _synthesize_and_fit(self, job: Dict[str, Any], chunks: List[Dict[str, Any]], workspace: Path) -> List[Dict[str, Any]]:
+    def _synthesize_and_fit(
+        self, job: Dict[str, Any], chunks: List[Dict[str, Any]], workspace: Path,
+        *, profile: Optional[DubbingVoiceProfile] = None,
+    ) -> List[Dict[str, Any]]:
         self.db.update_dubbing_job(job["id"], "SYNTHESIZING")
-        client = MiniMaxTTSClient(
-            api_key=settings.minimax_api_key or "", model=settings.minimax_tts_model,
-            voice_id=settings.minimax_tts_voice_id, request_interval_sec=settings.minimax_tts_request_interval_sec,
-        )
+        active_profile = profile or self._profile_from_job(job)
+        client = self._tts_client(active_profile)
         audio_cache = workspace / "cache"
         plans: List[Dict[str, Any]] = []
         for chunk in chunks:
             timing_rewrites = 0
             while True:
-                speed = max(settings.minimax_tts_min_speed, min(settings.minimax_tts_max_speed, settings.minimax_tts_preferred_speed))
+                speed = max(active_profile.min_speed, min(active_profile.max_speed, active_profile.preferred_speed))
                 attempts: List[Dict[str, Any]] = []
                 for attempt in range(1, 3):
                     synthesis = client.synthesize(chunk["zh_text"], speed=speed, cache_dir=audio_cache)
@@ -185,8 +191,8 @@ class DubbingService:
                     if abs(actual_ms - chunk["target_ms"]) <= tolerance:
                         break
                     next_speed = next_synthesis_speed(
-                        speed, actual_ms, chunk["target_ms"], minimum=settings.minimax_tts_min_speed,
-                        maximum=settings.minimax_tts_max_speed,
+                        speed, actual_ms, chunk["target_ms"], minimum=active_profile.min_speed,
+                        maximum=active_profile.max_speed,
                     )
                     if abs(next_speed - speed) < 0.025:
                         break
@@ -433,8 +439,9 @@ class DubbingService:
     def _write_qa_report(self, job: Dict[str, Any], source: Path, output: Path, plans: List[Dict[str, Any]], workspace: Path) -> Path:
         report = {
             "job_id": job["id"], "source": str(source), "output": str(output), "output_duration_ms": self._duration_ms(output),
-            "source_duration_ms": self._duration_ms(source), "model": settings.minimax_tts_model,
-            "voice_id": settings.minimax_tts_voice_id, "audio_policy": settings.dubbing_audio_policy,
+            "source_duration_ms": self._duration_ms(source), "provider": job.get("provider"), "model": job.get("model"),
+            "voice_id": job.get("voice_id"), "config": self._config_snapshot(self._profile_from_job(job)),
+            "audio_policy": settings.dubbing_audio_policy,
             "usage_characters": sum(int(plan.get("usage_characters") or 0) for plan in plans),
             "alignment": [{key: plan[key] for key in ("source_start_ms", "source_end_ms", "actual_duration_ms", "speed", "alignment_strategy", "synthesis_attempts")} for plan in plans],
         }
@@ -590,8 +597,36 @@ class DubbingService:
         job["publications"] = self.db.get_dubbing_publications(job_id)
         return job
 
-    def _config_snapshot(self) -> Dict[str, Any]:
-        return {"provider": "minimax", "model": settings.minimax_tts_model, "voice_id": settings.minimax_tts_voice_id, "preferred_speed": settings.minimax_tts_preferred_speed, "min_speed": settings.minimax_tts_min_speed, "max_speed": settings.minimax_tts_max_speed, "audio_policy": settings.dubbing_audio_policy}
+    def _voice_profile_for_source(self, youtube_id: str, slice_index: int) -> DubbingVoiceProfile:
+        source = self.db.get_video_by_youtube_id(youtube_id, slice_index)
+        return resolve_dubbing_voice_profile(source.get("channel_id") if source else None, project_root=self.project_root)
+
+    @staticmethod
+    def _profile_from_job(job: Dict[str, Any]) -> DubbingVoiceProfile:
+        try:
+            snapshot = json.loads(job.get("config_json") or "{}")
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("配音任务的音色配置快照损坏。") from exc
+        return profile_from_snapshot(snapshot if isinstance(snapshot, dict) else {})
+
+    @staticmethod
+    def _tts_client(profile: DubbingVoiceProfile) -> Any:
+        if profile.provider == "minimax":
+            return MiniMaxTTSClient(
+                api_key=settings.minimax_api_key or "", model=profile.model,
+                voice_id=profile.voice_id, request_interval_sec=settings.minimax_tts_request_interval_sec,
+            )
+        if profile.provider == "volc_speech":
+            return VolcSpeechTTSClient(
+                api_key=settings.volc_speech_api_key or "", resource_id=profile.model,
+                voice_id=profile.voice_id, sample_rate=profile.sample_rate,
+                request_interval_sec=settings.volc_speech_request_interval_sec,
+            )
+        raise RuntimeError(f"不支持的配音 TTS provider: {profile.provider}")
+
+    @staticmethod
+    def _config_snapshot(profile: DubbingVoiceProfile) -> Dict[str, Any]:
+        return profile.snapshot(audio_policy=settings.dubbing_audio_policy)
 
     @staticmethod
     def _duration_ms(path: Path) -> int:
