@@ -1,8 +1,30 @@
-"""视频元数据工具"""
+"""视频元数据工具
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-05-20 | Gemini_3.1_Pro_High_planning | 初始创建视频元数据工具 |
+| 1.1.0 | 2026-08-04 | Codex | ffprobe 解析支持 cron 最小 PATH 下的 Homebrew/配置路径回退，避免误判缓存成片损坏 |
+"""
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 import subprocess
 import cv2
+
+from config.settings import settings
+
+
+def _resolve_ffprobe_cmd(ffprobe_path: Optional[str] = None) -> str:
+    if ffprobe_path:
+        return ffprobe_path
+    if settings.ffmpeg_path:
+        sibling = Path(settings.ffmpeg_path).with_name("ffprobe")
+        if sibling.exists():
+            return str(sibling)
+    for candidate in ("/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"):
+        if Path(candidate).exists():
+            return candidate
+    return "ffprobe"
 
 
 def get_video_info(video_path: Path) -> Dict[str, any]:
@@ -86,7 +108,7 @@ def get_video_resolution_ffprobe(video_path: Path, ffprobe_path: Optional[str] =
     Raises:
         ValueError: 如果无法获取视频分辨率
     """
-    ffprobe_cmd = ffprobe_path or "ffprobe"
+    ffprobe_cmd = _resolve_ffprobe_cmd(ffprobe_path)
     
     cmd = [
         ffprobe_cmd,
@@ -134,7 +156,7 @@ def get_video_duration_ffprobe(video_path: Path, ffprobe_path: Optional[str] = N
         ValueError: 如果无法获取视频时长
         FileNotFoundError: 如果 ffprobe 未找到
     """
-    ffprobe_cmd = ffprobe_path or "ffprobe"
+    ffprobe_cmd = _resolve_ffprobe_cmd(ffprobe_path)
     
     cmd = [
         ffprobe_cmd,
@@ -167,4 +189,3 @@ def get_video_duration_ffprobe(video_path: Path, ffprobe_path: Optional[str] = N
             "未找到 ffprobe。请确保 FFmpeg 已安装并在系统 PATH 中，"
             "或通过 ffprobe_path 参数指定路径"
         )
-
