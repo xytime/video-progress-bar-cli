@@ -11,6 +11,7 @@
 | 1.6.0 | 2026-07-31 | Codex | 独立主视觉合成失败时禁止默认封面回退 |
 | 1.7.0 | 2026-08-01 | Codex | 覆盖 CoverEngine 成功路径仍会叠加普通话译制角标 |
 | 1.8.0 | 2026-08-03 | Codex | 覆盖无大面积遮罩版式来源清单和模板硬门槛 |
+| 1.9.0 | 2026-08-03 | Codex | 覆盖移动端大字可读性模板硬门槛 |
 """
 
 from pathlib import Path
@@ -66,6 +67,28 @@ def test_legacy_cover_without_layout_policy_is_rejected(tmp_path):
     assert not validate_dedicated_cover_file(output, provenance)
 
 
+def test_legacy_cover_with_old_layout_policy_version_is_rejected(tmp_path):
+    output = tmp_path / "cover.jpg"
+    output.write_bytes(b"dedicated-image")
+    provenance = tmp_path / "cover_provenance.json"
+    old_policy = compliant_cover_layout_policy()
+    old_policy["policy_version"] = "no_broad_overlay_v1"
+    provenance.write_text(
+        json.dumps(
+            {
+                "cover_kind": "dedicated_generated_image",
+                "uses_video_frame": False,
+                "cover_filename": output.name,
+                "cover_sha256": "62d91c6fdbac4427a240861ee431e4122cd4b9ee9a9c5051cab446423e7d3a33",
+                "layout_policy": old_policy,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert not validate_dedicated_cover_file(output, provenance)
+
+
 def test_template_policy_rejects_broad_visual_overlay_and_large_card(tmp_path):
     template = tmp_path / "cover.html.j2"
     template.write_text(
@@ -74,7 +97,15 @@ def test_template_policy_rejects_broad_visual_overlay_and_large_card(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="no_broad_overlay_v1"):
+    with pytest.raises(ValueError, match="no_broad_overlay_v2"):
+        assert_template_respects_cover_policy(template.read_text(encoding="utf-8"), template)
+
+
+def test_template_policy_rejects_small_or_unoutlined_cover_title(tmp_path):
+    template = tmp_path / "cover.html.j2"
+    template.write_text(".main-title{font-size:64px;color:#fff;}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="mobile cover readability"):
         assert_template_respects_cover_policy(template.read_text(encoding="utf-8"), template)
 
 

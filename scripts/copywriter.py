@@ -30,6 +30,7 @@
 | 1.23.0  | 2026-07-06 | Codex                                   | 标题/文案生成接入通用候选仲裁，warning 时尝试更干净 fallback |
 | 1.24.0  | 2026-07-06 | Codex                                   | 文案生成 prompt 接入共享翻译硬约束，减少与字幕 provider 规则漂移 |
 | 1.25.0  | 2026-08-03 | Codex                                   | 标题语义守门：降级翻译不得把疑问句截成“为什么只有 9”一类残句；候选仲裁拒绝不完整短标题 |
+| 1.25.1  | 2026-08-03 | Codex                                   | 奥德赛类数量标题恢复为自然中文量词，避免“9个加拿大银幕”翻译腔 |
 """
 
 import re
@@ -356,10 +357,17 @@ def _recover_question_short_title(translated_title: str) -> str:
     if not match or not quoted:
         return ""
 
-    candidate = (
-        f"《{quoted.group(1)}》为何仅{match.group('count')}"
-        f"{match.group('unit') or ''}{match.group('subject').strip()}"
-    )
+    count = match.group("count")
+    unit = match.group("unit") or ""
+    subject = match.group("subject").strip()
+    if "银幕" in subject:
+        location = subject.replace("银幕", "").strip()
+        candidate = f"《{quoted.group(1)}》{location}仅{count}块银幕"
+    elif "影院" in subject:
+        location = subject.replace("影院", "").strip()
+        candidate = f"《{quoted.group(1)}》{location}仅{count}家影院"
+    else:
+        candidate = f"《{quoted.group(1)}》为何仅{count}{unit}{subject}"
     return candidate if 6 <= len(candidate) <= 16 else ""
 
 

@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 覆盖任务 Markdown、完成物来源校验和超时降级时点 |
 | 1.1.0 | 2026-07-31 | Codex | 覆盖巡查前可领取任务判定，避免空队列执行外部生成器 |
+| 1.2.0 | 2026-08-03 | Codex | 覆盖已有底图优先复用和高消耗确认规则进入任务协议 |
 """
 
 from __future__ import annotations
@@ -48,6 +49,11 @@ def test_task_is_markdown_and_is_idempotent(tmp_path: Path):
     assert "AI_COVER_TASK_JSON" in task.path.read_text(encoding="utf-8")
     assert task.payload["generation_deadline_at"] == "2026-07-31T00:32:00Z"
     assert task.payload["fallback_after_at"] == "2026-07-31T00:34:00Z"
+    assert task.payload["rules"]["reuse_existing_visual_before_generation"] is True
+    assert task.payload["rules"]["ask_before_high_cost_regeneration"] is True
+    markdown = task.path.read_text(encoding="utf-8")
+    assert "已有可用 `visual.png`" in markdown
+    assert "高消耗重生成必须先获人工确认" in markdown
 
 
 def test_accepts_only_verified_on_time_codex_visual(tmp_path: Path):

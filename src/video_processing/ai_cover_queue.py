@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 新增 Markdown 任务单、完成物验收与超时降级判定 |
 | 1.1.0 | 2026-07-31 | Codex | 提供无副作用的可领取任务判定，避免空队列唤起外部 Codex 执行器 |
+| 1.2.0 | 2026-08-03 | Codex | 任务协议写明已有底图优先复用与高消耗生成需确认的执行边界 |
 """
 
 from __future__ import annotations
@@ -120,6 +121,8 @@ class AICoverQueue:
                 "no_broad_dark_overlay": True,
                 "no_large_text_card": True,
                 "text_legibility": "large text with local stroke/shadow/weight",
+                "reuse_existing_visual_before_generation": True,
+                "ask_before_high_cost_regeneration": True,
                 "headline_safe_zone": "upper_left",
                 "minimum_width": 720,
                 "minimum_height": 960,
@@ -225,6 +228,8 @@ class AICoverQueue:
             f"- 视觉方向：{brief.get('visual_direction', '')}\n"
             f"- 关键词：{'、'.join(brief.get('visual_keywords', []))}\n"
             "- 构图：主体避开左上标题安全区；保留完整人物、物体和地平线。\n"
+            "- 排版边界：最终标题会由项目用大字号、描边/阴影叠加；底图不得预留大遮罩或文字卡片。\n"
+            "- 资源边界：如果已有可用 `visual.png` 或只需要文字重排，不得重新生成底图；高消耗重生成必须先获人工确认。\n"
             "- 禁止：任何文字、Logo、水印、视频帧、视频截图、YouTube 缩略图。\n"
             "- 输出：`finish_dir/visual.png`，以及同目录的 `result.json`。\n"
         )

@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-03 | Codex | 将无大面积遮罩/卡片遮挡底图规则固化为来源清单和模板硬校验 |
+| 1.1.0 | 2026-08-03 | Codex | 将移动端大字可读性纳入封面来源清单和模板静态校验 |
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-COVER_LAYOUT_POLICY_VERSION = "no_broad_overlay_v1"
+COVER_LAYOUT_POLICY_VERSION = "no_broad_overlay_v2"
 
 
 def compliant_cover_layout_policy() -> dict[str, Any]:
@@ -26,6 +27,9 @@ def compliant_cover_layout_policy() -> dict[str, Any]:
         "no_large_text_card": True,
         "preserve_dedicated_background": True,
         "text_legibility_method": "local_stroke_shadow_weight",
+        "mobile_readable_title": True,
+        "min_title_font_px": 84,
+        "requires_local_text_stroke_or_shadow": True,
     }
 
 
@@ -60,6 +64,8 @@ _BROAD_VISUAL_OVERLAY_RE = re.compile(
     r"background-image\s*:\s*linear-gradient\([^;]+url\(",
     re.IGNORECASE | re.DOTALL,
 )
+_MAIN_TITLE_BLOCK_RE = re.compile(r"^\s*\.main-title\s*\{(?P<body>.*?)\}", re.IGNORECASE | re.DOTALL | re.MULTILINE)
+_FONT_SIZE_RE = re.compile(r"font-size\s*:\s*(?P<size>\d+)px", re.IGNORECASE)
 
 
 def assert_template_respects_cover_policy(template_text: str, template_path: Path) -> None:
@@ -69,6 +75,14 @@ def assert_template_respects_cover_policy(template_text: str, template_path: Pat
         violations.append("visual-layer must not combine a broad linear-gradient overlay with the visual asset")
     if ".glass-card" in template_text:
         violations.append("large glass/text card is prohibited over dedicated cover backgrounds")
+    title_match = _MAIN_TITLE_BLOCK_RE.search(template_text)
+    if title_match:
+        title_block = title_match.group("body")
+        size_match = _FONT_SIZE_RE.search(title_block)
+        if not size_match or int(size_match.group("size")) < 84:
+            violations.append("main title font-size must be at least 84px for mobile cover readability")
+        if "-webkit-text-stroke" not in title_block and "text-shadow" not in title_block:
+            violations.append("main title must use local stroke or shadow for readability")
     if violations:
         joined = "; ".join(violations)
         raise ValueError(f"Cover template violates {COVER_LAYOUT_POLICY_VERSION}: {template_path}: {joined}")

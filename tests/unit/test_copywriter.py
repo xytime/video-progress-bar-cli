@@ -263,7 +263,7 @@ def test_translate_fallback_recovers_complete_question_headline(monkeypatch):
         "",
     )
 
-    assert content["short_title"] == "《奥德赛》为何仅9个加拿大银幕"
+    assert content["short_title"] == "《奥德赛》加拿大仅9块银幕"
 
 
 def test_copy_candidate_selector_rejects_incomplete_question_fragment(tmp_path):
