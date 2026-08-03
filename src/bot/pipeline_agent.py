@@ -23,11 +23,11 @@ based on incoming Telegram messages and commands.
 | 1.11.0  | 2026-07-27 | Codex                               | 助手 bot 接入多平台 PlatformEvent 告警格式，避免继续按视频号单平台语义解释抖音/快手事件 |
 | 1.12.0  | 2026-07-31 | Codex                               | Telegram 触发封面恢复为专门生成图，不再从竖版成片截帧                    |
 | 1.13.0  | 2026-07-31 | Codex                               | Telegram 生成和上传均要求非截帧封面来源清单，禁止复用历史帧封面          |
+| 1.14.0  | 2026-08-03 | Codex                               | Telegram 封面生成和上传也执行无大面积遮罩版式来源清单校验                |
 """
 import os
 import sys
 import json
-import hashlib
 import logging
 import asyncio
 import subprocess
@@ -45,6 +45,7 @@ if _src not in sys.path:
 
 from config.settings import settings
 from video_processing.db import PipelineDB
+from video_processing.core.cover_policy import validate_dedicated_cover_file
 
 
 def _cover_provenance_path(cover_file: Path) -> Path:
@@ -53,19 +54,7 @@ def _cover_provenance_path(cover_file: Path) -> Path:
 
 def _is_dedicated_cover(cover_file: Path) -> bool:
     provenance_file = _cover_provenance_path(cover_file)
-    if not cover_file.is_file() or not provenance_file.is_file():
-        return False
-    try:
-        provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
-        digest = hashlib.sha256(cover_file.read_bytes()).hexdigest()
-    except (OSError, ValueError):
-        return False
-    return (
-        provenance.get("cover_kind") == "dedicated_generated_image"
-        and provenance.get("uses_video_frame") is False
-        and provenance.get("cover_filename") == cover_file.name
-        and provenance.get("cover_sha256") == digest
-    )
+    return validate_dedicated_cover_file(cover_file, provenance_file)
 from video_processing.utils.platform_events import PlatformEvent, format_platform_event_html
 from video_processing.utils.file_utils import find_downloaded_video
 from bot.api_client import PipelineAPIClient

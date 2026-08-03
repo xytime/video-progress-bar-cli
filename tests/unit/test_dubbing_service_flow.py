@@ -9,6 +9,7 @@
 | 1.3.0 | 2026-07-31 | Codex | 锁定普通话译制版投递标题和文案命名 |
 | 1.4.0 | 2026-07-31 | Codex | 译制版封面必须具备非视频帧来源清单 |
 | 1.5.0 | 2026-08-01 | Codex | 覆盖 TTS 时长失配后的自动短写重合成恢复 |
+| 1.6.0 | 2026-08-03 | Codex | 译制版封面夹具携带无大面积遮罩版式来源清单 |
 """
 
 import hashlib
@@ -20,6 +21,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
+from video_processing.core.cover_policy import compliant_cover_layout_policy
 from video_processing.dubbing.service import DubbingService
 
 
@@ -321,6 +323,7 @@ def test_variant_publish_assets_prefers_verified_versioned_cover(tmp_path):
             "uses_video_frame": False,
             "cover_filename": verified_cover.name,
             "cover_sha256": hashlib.sha256(verified_cover.read_bytes()).hexdigest(),
+            "layout_policy": compliant_cover_layout_policy(),
         }),
         encoding="utf-8",
     )

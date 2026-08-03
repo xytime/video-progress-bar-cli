@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from config.settings import settings
+from video_processing.core.cover_policy import compliant_cover_layout_policy
 from video_processing.pipeline_manager import PipelineManager
 
 
@@ -35,6 +36,7 @@ def _manager_with_assets(tmp_path: Path) -> PipelineManager:
             "uses_video_frame": False,
             "cover_filename": cover.name,
             "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+            "layout_policy": compliant_cover_layout_policy(),
         }),
         encoding="utf-8",
     )
@@ -382,6 +384,7 @@ def test_claimed_kuaishou_publication_passes_cover_arg_when_cover_exists(tmp_pat
             "uses_video_frame": False,
             "cover_filename": cover.name,
             "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+            "layout_policy": compliant_cover_layout_policy(),
         }),
         encoding="utf-8",
     )

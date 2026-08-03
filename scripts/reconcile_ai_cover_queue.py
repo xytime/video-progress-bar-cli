@@ -5,11 +5,11 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 新增两分钟巡查协调器，保证 AI 底图超时后确定性降级 |
+| 1.1.0 | 2026-08-03 | Codex | AI 封面完成物也必须通过无大面积遮罩版式来源清单校验 |
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import subprocess
@@ -24,30 +24,16 @@ if str(SRC_ROOT) not in sys.path:
 
 from config.settings import settings
 from video_processing.ai_cover_queue import AICoverQueue, AICoverTask
+from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db import PipelineDB
 
 
 logger = logging.getLogger(__name__)
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _is_dedicated_cover(cover_path: Path) -> bool:
     provenance_path = cover_path.with_name(f"{cover_path.stem}_provenance.json")
-    if not cover_path.is_file() or not provenance_path.is_file():
-        return False
-    try:
-        provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return (
-        provenance.get("cover_kind") == "dedicated_generated_image"
-        and provenance.get("uses_video_frame") is False
-        and provenance.get("cover_filename") == cover_path.name
-        and provenance.get("cover_sha256") == _sha256(cover_path)
-    )
+    return validate_dedicated_cover_file(cover_path, provenance_path)
 
 
 def _write_resolution(task: AICoverTask, source: str, visual_path: Path | None) -> None:

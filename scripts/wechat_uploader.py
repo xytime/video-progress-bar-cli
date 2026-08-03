@@ -42,6 +42,7 @@
 | 3.7.9   | 2026-07-31 | Codex                               | 视频上传超时即中止并保留证据，禁止未完成上传继续进入发表流程 |
 | 3.8.0   | 2026-07-31 | Codex                               | 上传前强制校验专门生成封面来源清单，历史视频帧截图不得投递 |
 | 3.8.1   | 2026-07-31 | Codex                               | 自动投递必须提供合规封面，禁止平台回退默认视频帧 |
+| 3.9.0   | 2026-08-03 | Codex                               | 上传前追加无大面积遮罩版式来源清单校验，旧遮罩封面不得投递 |
 """
 
 import os
@@ -64,12 +65,16 @@ import sys as _sys
 _scripts_dir = str(Path(__file__).parent)
 if _scripts_dir not in _sys.path:
     _sys.path.insert(0, _scripts_dir)
+_src_dir = str(Path(__file__).parent.parent / "src")
+if _src_dir not in _sys.path:
+    _sys.path.insert(0, _src_dir)
 from human_mouse import (
     human_click, human_check, find_and_human_click_text,
     find_checkbox_near_text, dispatch_human_click_events,
     _human_delay
 )
 from copywriter import graceful_truncate_title  # [Claude_Sonnet_4.6_Thinking_planning] v1.6.0
+from video_processing.core.cover_policy import validate_dedicated_cover_file
 
 try:
     import requests as _requests
@@ -89,20 +94,8 @@ def _default_cover_provenance_path(cover_file: Path) -> Path:
 
 
 def _is_dedicated_cover(cover_file: Path, provenance_file: Path) -> bool:
-    """仅接受哈希绑定且明确声明非视频帧的专门生成封面。"""
-    if not cover_file.is_file() or not provenance_file.is_file():
-        return False
-    try:
-        provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
-        digest = hashlib.sha256(cover_file.read_bytes()).hexdigest()
-    except (OSError, ValueError):
-        return False
-    return (
-        provenance.get("cover_kind") == "dedicated_generated_image"
-        and provenance.get("uses_video_frame") is False
-        and provenance.get("cover_filename") == cover_file.name
-        and provenance.get("cover_sha256") == digest
-    )
+    """仅接受哈希绑定、非视频帧且无大面积遮罩版式证明的专门生成封面。"""
+    return validate_dedicated_cover_file(cover_file, provenance_file)
 
 
 def _is_playwright_target_closed(exc: BaseException) -> bool:

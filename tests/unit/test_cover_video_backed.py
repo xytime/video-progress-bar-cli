@@ -10,6 +10,7 @@
 | 1.5.0 | 2026-07-31 | Codex | 封面简报必须记录实际生效的渲染规划 |
 | 1.6.0 | 2026-07-31 | Codex | 独立主视觉合成失败时禁止默认封面回退 |
 | 1.7.0 | 2026-08-01 | Codex | 覆盖 CoverEngine 成功路径仍会叠加普通话译制角标 |
+| 1.8.0 | 2026-08-03 | Codex | 覆盖无大面积遮罩版式来源清单和模板硬门槛 |
 """
 
 from pathlib import Path
@@ -20,6 +21,11 @@ from PIL import Image
 import pytest
 
 from scripts import cover_generator
+from video_processing.core.cover_policy import (
+    assert_template_respects_cover_policy,
+    compliant_cover_layout_policy,
+    validate_dedicated_cover_file,
+)
 from video_processing.pipeline_manager import _cover_audio_edition
 
 
@@ -37,6 +43,39 @@ def test_cover_provenance_marks_generated_asset_as_non_frame(tmp_path):
     assert payload["uses_video_frame"] is False
     assert payload["cover_filename"] == "cover.jpg"
     assert len(payload["cover_sha256"]) == 64
+    assert payload["layout_policy"] == compliant_cover_layout_policy()
+    assert validate_dedicated_cover_file(output, provenance)
+
+
+def test_legacy_cover_without_layout_policy_is_rejected(tmp_path):
+    output = tmp_path / "cover.jpg"
+    output.write_bytes(b"dedicated-image")
+    provenance = tmp_path / "cover_provenance.json"
+    provenance.write_text(
+        json.dumps(
+            {
+                "cover_kind": "dedicated_generated_image",
+                "uses_video_frame": False,
+                "cover_filename": output.name,
+                "cover_sha256": "62d91c6fdbac4427a240861ee431e4122cd4b9ee9a9c5051cab446423e7d3a33",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert not validate_dedicated_cover_file(output, provenance)
+
+
+def test_template_policy_rejects_broad_visual_overlay_and_large_card(tmp_path):
+    template = tmp_path / "cover.html.j2"
+    template.write_text(
+        ".visual-layer{background-image:linear-gradient(rgba(0,0,0,.8), rgba(0,0,0,.1)), url('{{ visual_asset_url }}');}"
+        ".glass-card{height:950px;}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="no_broad_overlay_v1"):
+        assert_template_respects_cover_policy(template.read_text(encoding="utf-8"), template)
 
 
 def test_cover_provenance_binds_dedicated_visual_asset(tmp_path):
@@ -215,3 +254,12 @@ def test_minimal_template_uses_the_actual_category_not_a_hard_coded_tech_label()
     assert '<div class="watermark">{{ badge }}</div>' in template
     assert "科技前沿" not in template
     assert "visual_asset_url" in template
+
+
+def test_cover_templates_respect_no_broad_overlay_policy():
+    template_dir = Path(__file__).resolve().parents[2] / "resources" / "cover" / "template"
+    for template_path in template_dir.glob("cover*.html.j2"):
+        assert_template_respects_cover_policy(
+            template_path.read_text(encoding="utf-8"),
+            template_path,
+        )

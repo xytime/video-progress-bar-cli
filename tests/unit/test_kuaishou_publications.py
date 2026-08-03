@@ -11,6 +11,7 @@
 | 1.5.0 | 2026-07-29 | Codex | 覆盖平台上传前缺少可读字幕正文时取消任务，不调用上传器 |
 | 1.6.0 | 2026-07-29 | Codex | 覆盖含审核反证的快手 PUBLISHED 写入会保守降级且不参与去重 |
 | 1.7.0 | 2026-07-31 | Codex | 缺字幕用例使用带哈希来源清单的封面，隔离封面门禁影响 |
+| 1.8.0 | 2026-08-03 | Codex | 封面夹具携带无大面积遮罩版式来源清单 |
 """
 
 import hashlib
@@ -23,6 +24,7 @@ import pytest
 
 from config.settings import settings
 from video_processing import censor_engine
+from video_processing.core.cover_policy import compliant_cover_layout_policy
 from video_processing.db.database import PipelineDB
 from video_processing.pipeline_manager import PipelineManager
 
@@ -245,6 +247,7 @@ def test_douyin_publish_missing_subtitle_text_cancels_without_upload(tmp_path: P
             "uses_video_frame": False,
             "cover_filename": cover.name,
             "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+            "layout_policy": compliant_cover_layout_policy(),
         }),
         encoding="utf-8",
     )

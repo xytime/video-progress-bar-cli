@@ -29,9 +29,14 @@
             position: absolute;
             inset: 0;
             z-index: 0;
-            background-image: linear-gradient(135deg, rgba(4, 9, 18, 0.72), rgba(4, 9, 18, 0.16)), url('{{ visual_asset_url }}');
+            background-image: url('{{ visual_asset_url }}');
             background-size: cover;
             background-position: center;
+        }
+
+        body.has-visual .orb-container,
+        body.has-visual .grid-layer {
+            display: none;
         }
 
         /* 氛围发光球 */
@@ -66,41 +71,43 @@
             background-position: 40px 40px;
         }
 
-        /* 磨砂玻璃卡片 */
-        .glass-card {
+        .content-area {
             position: absolute;
-            left: {{ safe_zone.margin_pct }}%;
-            right: {{ safe_zone.margin_pct }}%;
-            top: 50%;
-            transform: translateY(-50%);
-            height: 950px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 3px solid rgba(255, 255, 255, 0.18);
-            border-radius: 60px;
-            backdrop-filter: blur(25px);
-            -webkit-backdrop-filter: blur(25px);
-            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            left: 7%;
+            right: 7%;
+            top: 17%;
             z-index: 10;
             box-sizing: border-box;
-            padding: 85px 70px;
             display: flex;
             flex-direction: column;
+            align-items: flex-start;
+            justify-content: flex-start;
+        }
+
+        .content-area.center {
+            top: 50%;
+            transform: translateY(-50%);
             align-items: center;
-            justify-content: space-between;
+            text-align: center;
+        }
+
+        .content-area.center .main-title,
+        .content-area.center .sub-title {
+            text-align: center;
         }
 
         /* 徽章 */
         .badge-capsule {
-            background: #ffffff;
-            color: #0f172a;
-            padding: 12px 40px;
-            border-radius: 40px;
+            background: transparent;
+            color: var(--accent-color);
+            padding: 0;
             font-size: 38px;
             font-weight: 800;
             letter-spacing: 2px;
             text-transform: uppercase;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25);
-            margin-bottom: 20px;
+            text-shadow: 0 2px 5px rgba(0, 0, 0, 0.85);
+            -webkit-text-stroke: 2px rgba(3, 8, 13, 0.7);
+            margin-bottom: 34px;
         }
 
         /* 内容文字容器 */
@@ -119,9 +126,10 @@
             font-size: 96px;
             font-weight: 900;
             color: #ffffff;
-            text-align: center;
+            text-align: left;
             line-height: 1.35;
-            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.82), 0 3px 9px rgba(0, 0, 0, 0.9);
+            -webkit-text-stroke: 4px rgba(3, 8, 13, 0.78);
             word-break: break-all;
             margin: 0;
             display: -webkit-box;
@@ -134,10 +142,11 @@
         .sub-title {
             font-size: 54px;
             font-weight: 600;
-            color: rgba(255, 255, 255, 0.85);
-            text-align: center;
+            color: rgba(255, 255, 255, 0.92);
+            text-align: left;
             line-height: 1.45;
-            text-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+            text-shadow: 0 5px 16px rgba(0, 0, 0, 0.82), 0 2px 6px rgba(0, 0, 0, 0.9);
+            -webkit-text-stroke: 2px rgba(3, 8, 13, 0.72);
             margin-top: 50px;
             word-break: break-all;
             display: -webkit-box;
@@ -177,7 +186,7 @@
         }
     </style>
 </head>
-<body>
+<body class="{% if visual_asset_url %}has-visual{% endif %}">
     {% if visual_asset_url %}
     <div class="visual-layer"></div>
     {% endif %}
@@ -258,20 +267,13 @@
     </div>
     {% endif %}
 
-    <!-- 磨砂玻璃卡片 -->
-    <div class="glass-card">
-        <!-- 徽章药丸 -->
+    <div class="content-area {{ headline_position }}">
         <div class="badge-capsule">{{ badge }}</div>
-        
-        <!-- 核心内容 -->
-        <div class="text-content-wrapper">
-            <h1 class="main-title">{{ title }}</h1>
-            {% if subtitle %}
-            <div class="sub-title">{{ subtitle }}</div>
-            {% endif %}
-        </div>
+        <h1 class="main-title">{{ title }}</h1>
+        {% if subtitle %}
+        <div class="sub-title">{{ subtitle }}</div>
+        {% endif %}
 
-        <!-- 隐喻矢量图标注入 (内联定位) -->
         {% if show_metaphor and metaphor_svg %}
         <div class="metaphor-icon pos-{{ metaphor_placement }}">
             {{ metaphor_svg }}

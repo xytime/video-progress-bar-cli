@@ -14,6 +14,7 @@
 | 2.4.0   | 2026-07-31 | Codex                        | 禁止视频截帧封面，并为专门生成封面写入可验证来源清单                  |
 | 2.5.0   | 2026-07-31 | Codex                        | 支持独立主视觉资产，并将实际渲染语义写回可审计封面简报                |
 | 2.6.0   | 2026-07-31 | Codex                        | 独立主视觉合成失败时禁止静默回退，避免默认图伪装为已使用 AI 底图       |
+| 2.7.0   | 2026-08-03 | Codex                        | 来源清单写入无大面积遮罩版式硬门槛，旧缓存不得继续复用且 Pillow 兜底去卡片 |
 """
 
 import os
@@ -23,6 +24,9 @@ import argparse
 import hashlib
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
+
+sys.path.append(str(Path(__file__).parent.parent / "src"))
+from video_processing.core.cover_policy import compliant_cover_layout_policy
 
 # 旧 Pillow 兜底海报的竖屏标准分辨率。
 W, H = 1080, 1920
@@ -91,57 +95,61 @@ def split_text_by_width(text, font, max_width):
     return lines
 
 def generate_cover(title: str, output_path: str):
-    # Base dark background
     img = Image.new('RGBA', (W, H), color='#030712')
-    
-    # Draw ambient glowing orbs
     orbs = Image.new('RGBA', (W, H), (0,0,0,0))
     o_draw = ImageDraw.Draw(orbs)
     o_draw.ellipse([-400, 200, 800, 1400], fill=(147, 51, 234, 180)) # Purple
     o_draw.ellipse([400, 800, 1600, 2000], fill=(59, 130, 246, 180)) # Blue
     orbs = orbs.filter(ImageFilter.GaussianBlur(200))
     img = Image.alpha_composite(img, orbs)
-    
-    # Glass Card
-    card = Image.new('RGBA', (W, H), (0,0,0,0))
-    c_draw = ImageDraw.Draw(card)
-    margin = 80
-    cw = W - margin*2
-    ch = 900
-    cy = H/2 - ch/2
-    
-    # Translucent fill + stroke for glassmorphism
-    c_draw.rounded_rectangle([margin, cy, margin+cw, cy+ch], radius=60, fill=(255,255,255,15), outline=(255,255,255,60), width=4)
-    
-    # Badge inside card
+
+    draw = ImageDraw.Draw(img)
     badge_font = get_font(50, "bold")
-    c_draw.rounded_rectangle([W/2 - 180, cy + 80, W/2 + 180, cy + 180], radius=50, fill=(255,255,255,255))
-    draw_text_centered(c_draw, "TECH INSIGHTS", badge_font, cy + 105, fill='#0f172a')
-    
-    # Determine Main Font and Split Text by pixel width
+    draw.text(
+        (88, 190),
+        "TECH INSIGHTS",
+        font=badge_font,
+        fill="#facc15",
+        stroke_width=3,
+        stroke_fill="#020617",
+    )
+
     font_size = 130
     font_main = get_font(font_size, "black")
-    max_text_width = cw - 120 # Leave padding inside the card
+    max_text_width = W - 150
     lines = split_text_by_width(title, font_main, max_text_width)
-    
-    # [Gemini_3.1_Pro_High_planning] 增加基于 Y 坐标的高度衰减算法，防止超长文本溢出边界
+
     total_text_height = sum([font_main.getbbox(l)[3] - font_main.getbbox(l)[1] for l in lines]) + (len(lines)-1)*40
-    while total_text_height > 600 and font_size > 40:
+    while total_text_height > 900 and font_size > 40:
         font_size -= 10
         font_main = get_font(font_size, "black")
         lines = split_text_by_width(title, font_main, max_text_width)
         total_text_height = sum([font_main.getbbox(l)[3] - font_main.getbbox(l)[1] for l in lines]) + (len(lines)-1)*40
 
-    # Render lines (always use same font size)
-    current_y = cy + 250 + (500 - total_text_height)/2 # Center vertically in the remaining space
-    
+    current_y = max(360, (H - total_text_height) / 2)
     for line in lines:
-        h = draw_text_centered(c_draw, line, font_main, current_y, fill='#ffffff')
+        bbox = draw.textbbox((0, 0), line, font=font_main)
+        text_width = bbox[2] - bbox[0]
+        x = (W - text_width) / 2
+        draw.text(
+            (x + 8, current_y + 10),
+            line,
+            font=font_main,
+            fill=(0, 0, 0, 140),
+            stroke_width=8,
+            stroke_fill=(0, 0, 0, 130),
+        )
+        draw.text(
+            (x, current_y),
+            line,
+            font=font_main,
+            fill="#ffffff",
+            stroke_width=6,
+            stroke_fill="#020617",
+        )
+        h = bbox[3] - bbox[1]
         current_y += h + 40
-            
-    # Composite card
-    img = Image.alpha_composite(img, card)
-    
+
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     img.convert('RGB').save(out_path, quality=95)
@@ -280,6 +288,7 @@ def _write_cover_provenance(output_path: str, provenance_output: str | None, pay
                 "cover_sha256": digest,
                 "audio_edition": payload.get("audio_edition", "original_audio_subtitled"),
                 "visual_asset": visual_asset_payload,
+                "layout_policy": compliant_cover_layout_policy(),
             },
             ensure_ascii=False,
             indent=2,

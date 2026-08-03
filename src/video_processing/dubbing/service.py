@@ -15,6 +15,7 @@
 | 1.0.9 | 2026-07-31 | Codex | 普通话译制版投递标题和文案统一使用普通话译制命名                       |
 | 1.1.0 | 2026-07-31 | Codex | 译制版封面须有非视频帧来源清单，禁止人工路径复用历史截图               |
 | 1.1.1 | 2026-08-01 | Codex | TTS 时长失配时自动短写一次并重合成，减少人工卡在 NEEDS_REWRITE          |
+| 1.1.2 | 2026-08-03 | Codex | 译制版封面来源清单追加无大面积遮罩版式硬门槛                           |
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 import pysubs2
 
 from config.settings import settings
+from ..core.cover_policy import validate_dedicated_cover_file
 from ..censor_engine import check_text
 from ..db.database import PipelineDB
 from ..processors.date_stamp import format_upload_date
@@ -532,20 +534,9 @@ class DubbingService:
         return cover_file.with_name(f"{cover_file.stem}_provenance.json")
 
     def _is_dedicated_cover(self, cover_file: Path) -> bool:
-        """人工译制版也必须显式证明封面不是视频内截图。"""
+        """人工译制版也必须显式证明封面不是视频内截图且版式未遮挡底图。"""
         provenance_file = self._cover_provenance_path(cover_file)
-        if not cover_file.is_file() or not provenance_file.is_file():
-            return False
-        try:
-            provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return False
-        return (
-            provenance.get("cover_kind") == "dedicated_generated_image"
-            and provenance.get("uses_video_frame") is False
-            and provenance.get("cover_filename") == cover_file.name
-            and provenance.get("cover_sha256") == self._sha256(cover_file)
-        )
+        return validate_dedicated_cover_file(cover_file, provenance_file)
 
     def _display_title(self, job: Dict[str, Any]) -> str:
         """优先使用已审核的短标题，确保新版两行头部不以省略号损失关键信息。"""

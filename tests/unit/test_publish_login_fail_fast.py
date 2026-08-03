@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from playwright._impl._errors import TargetClosedError
+from video_processing.core.cover_policy import compliant_cover_layout_policy
 
 
 def test_automatic_upload_returns_login_required_without_waiting_for_qr(tmp_path: Path):
@@ -25,6 +26,7 @@ def test_automatic_upload_returns_login_required_without_waiting_for_qr(tmp_path
             "uses_video_frame": False,
             "cover_filename": cover.name,
             "cover_sha256": hashlib.sha256(cover.read_bytes()).hexdigest(),
+            "layout_policy": compliant_cover_layout_policy(),
         }),
         encoding="utf-8",
     )

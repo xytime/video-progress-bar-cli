@@ -87,6 +87,7 @@
 | 3.45.4  | 2026-07-31 | Codex                               | 封面检查点要求非截帧来源清单与哈希匹配，禁止历史帧封面被补发复用          |
 | 3.46.0  | 2026-07-31 | Codex                               | 源字幕先行预检、非窗口预加工与全任务互斥，未审字幕不得触发视频下载        |
 | 3.47.0  | 2026-07-31 | Codex                               | 可选地将专属底图交给 Codex 文件队列，并在本地 deadline 前确定性降级        |
+| 3.48.0  | 2026-08-03 | Codex                               | 封面 checkpoint 增加无大面积遮罩版式证明，旧遮罩封面不得复用              |
 """
 
 
@@ -116,6 +117,7 @@ from .utils.text_utils import graceful_truncate_title
 from .scoring import compute_auto_score, PUBLISH_SCORE_LINE
 from .censorship_service import CensorshipService
 from .ai_cover_queue import AICoverQueue
+from .core.cover_policy import validate_dedicated_cover_file
 from cover.creative_brief import build_cover_creative_brief
 from config.settings import settings
 
@@ -796,20 +798,9 @@ class PipelineManager:
         return cover_file.with_name(f"{cover_file.stem}_provenance.json")
 
     def _is_dedicated_cover(self, cover_file: Path) -> bool:
-        """只允许具有哈希绑定来源清单的专门生成封面进入任何平台投递。"""
+        """只允许具有哈希绑定来源清单且版式合规的专门生成封面进入任何平台投递。"""
         provenance_file = self._cover_provenance_path(cover_file)
-        if not cover_file.is_file() or not provenance_file.is_file():
-            return False
-        try:
-            provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return False
-        return (
-            provenance.get("cover_kind") == "dedicated_generated_image"
-            and provenance.get("uses_video_frame") is False
-            and provenance.get("cover_filename") == cover_file.name
-            and provenance.get("cover_sha256") == self._sha256_file(cover_file)
-        )
+        return validate_dedicated_cover_file(cover_file, provenance_file)
 
     def _resolve_cover_file(self, yid: str, slice_index: int = 0) -> Optional[Path]:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
