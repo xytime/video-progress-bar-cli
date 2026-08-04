@@ -90,6 +90,7 @@
 | 3.48.0  | 2026-08-03 | Codex                               | 封面 checkpoint 增加无大面积遮罩版式证明，旧遮罩封面不得复用              |
 | 3.48.1  | 2026-08-03 | Codex                               | 视频号上传前检查既有提交后证据，阻止误回队列视频再次自动公开提交          |
 | 3.48.2  | 2026-08-04 | Codex                               | 渲染缓存校验区分成片损坏与 ffprobe 不可用；校验环境故障保留缓存并停止当前任务，避免误删触发长时间重渲 |
+| 3.48.3  | 2026-08-04 | Codex                               | 文案 checkpoint 与渲染前拒绝 HTTP 错误页，避免 fallback 错误响应被烧入视频或提交平台 |
 """
 
 
@@ -116,6 +117,10 @@ from .utils.file_utils import (
 )
 from .utils.platform_events import PlatformEvent, format_platform_event_html
 from .utils.text_utils import graceful_truncate_title
+from .utils.generated_content_validation import (
+    GeneratedContentValidationError,
+    validate_publishable_generated_content,
+)
 from .scoring import compute_auto_score, PUBLISH_SCORE_LINE
 from .censorship_service import CensorshipService
 from .ai_cover_queue import AICoverQueue
@@ -1897,11 +1902,25 @@ class PipelineManager:
                 # 修复：三者同时存在才算命中 checkpoint；任一缺失则强制重跑 copywriter。
                 label_file = self._OUT_DIR / f"{prefix}_label.txt"
 
-                if copy_file.exists() and title_file.exists() and label_file.exists():
+                copy_checkpoint_ready = copy_file.exists() and title_file.exists() and label_file.exists()
+                checkpoint_reason = ""
+                if copy_checkpoint_ready:
+                    try:
+                        validate_publishable_generated_content(
+                            title_file.read_text(encoding="utf-8"),
+                            copy_file.read_text(encoding="utf-8"),
+                        )
+                    except (OSError, GeneratedContentValidationError) as exc:
+                        copy_checkpoint_ready = False
+                        checkpoint_reason = f"invalid checkpoint: {exc}"
+
+                if copy_checkpoint_ready:
                     logger.info(f"[SKIP] Copywriting checkpoint: {copy_file.name} (label ok)")
                     self.db.update_video_status(yid, "COPYWRITING", slice_index=slice_index)
                 else:
-                    _reason = "label missing, re-generating" if (copy_file.exists() and title_file.exists()) else "first run"
+                    _reason = checkpoint_reason or (
+                        "label missing, re-generating" if (copy_file.exists() and title_file.exists()) else "first run"
+                    )
                     self.db.update_video_status(yid, "COPYWRITING", slice_index=slice_index)
                     logger.info(f"Generating WeChat copy for {prefix}... ({_reason})")
                     copy_cmd = [
@@ -1914,17 +1933,19 @@ class PipelineManager:
                     self._run_tracked(copy_cmd, yid, slice_index=slice_index, capture_output=True,
                                       cwd=str(self._PRJ_ROOT))
 
+                try:
+                    generated_title = title_file.read_text(encoding="utf-8").strip()
+                    generated_copy = copy_file.read_text(encoding="utf-8").strip()
+                    validate_publishable_generated_content(generated_title, generated_copy)
+                except (OSError, GeneratedContentValidationError) as exc:
+                    raise RuntimeError(f"[CopyInvalid] {prefix} 文案不满足发布合同: {exc}") from exc
+
                 # ── 2b. TRANSCRIBING & RENDERING ──────────────────────────────────
                 # [Claude_Sonnet_4.6_Thinking_planning] v2.8.0 读取 copywriter 生成的中文短标题
                 # 作为渲染标题，使视频头部 title 与封面 title 保持一致。
                 render_title = title  # fallback：若 title_file 不存在则用 DB 原始标题
-                if title_file.exists():
-                    try:
-                        _rt = title_file.read_text(encoding="utf-8").strip()
-                        if _rt:
-                            render_title = _rt
-                    except Exception:
-                        pass
+                if generated_title:
+                    render_title = generated_title
 
                 # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0 多切片视频：在视频头部标题追加集数进度
                 # 格式："{短标题} {当前集}/{总集数}"，如 "AI写代码 3/9"

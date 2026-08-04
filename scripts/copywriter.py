@@ -31,6 +31,7 @@
 | 1.24.0  | 2026-07-06 | Codex                                   | 文案生成 prompt 接入共享翻译硬约束，减少与字幕 provider 规则漂移 |
 | 1.25.0  | 2026-08-03 | Codex                                   | 标题语义守门：降级翻译不得把疑问句截成“为什么只有 9”一类残句；候选仲裁拒绝不完整短标题 |
 | 1.25.1  | 2026-08-03 | Codex                                   | 奥德赛类数量标题恢复为自然中文量词，避免“9个加拿大银幕”翻译腔 |
+| 1.25.2  | 2026-08-04 | Codex                                   | 拒绝将上游 HTTP 错误页写入标题/文案 checkpoint，阻断错误内容进入渲染与发布 |
 """
 
 import re
@@ -58,6 +59,7 @@ from video_processing.utils.translation_helper import translate_text as _transla
 # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils（单一真相源）；此处 re-import 保持
 # `from copywriter import graceful_truncate_title` 的既有调用方（wechat_uploader、测试）零改动。
 from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
+from video_processing.utils.generated_content_validation import validate_publishable_generated_content
 from video_processing.utils.translation_context import build_translation_context
 from video_processing.utils.translation_prompt_constraints import render_translation_constraints
 from video_processing.utils.translation_quality_evaluator import (
@@ -917,6 +919,7 @@ def main():
         description,
         audit_path=out / f"{yid}_copy_quality.json",
     )
+    validate_publishable_generated_content(content["short_title"], content["copy"])
     (out / f"{yid}_title.txt"   ).write_text(content["short_title"],   encoding="utf-8")
     (out / f"{yid}_copy.txt"    ).write_text(content["copy"],           encoding="utf-8")
     (out / f"{yid}_category.txt").write_text(content["category"],       encoding="utf-8")
