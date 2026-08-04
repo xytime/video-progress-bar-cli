@@ -19,6 +19,10 @@
 | 2.0.0   | 2026-07-23 | Codex                                  | P0/P1/P2 支持 cooccurrence_zh/en 近距离共现规则，用于拦截“中国+独裁/威权/侵略/制裁规避”等字幕风险而不误杀泛地缘政治 |
 | 2.1.0   | 2026-07-26 | Codex                                  | 中国领导人姓名提升为 P0 红线；新增“中国/敏感人物+爆炸/袭击/死亡”P0 兜底与严重负面事件 P1 人工复核 |
 | 2.2.0   | 2026-07-27 | Codex                                  | 导出当前规则包 fingerprint，供审查台账记录命中时实际生效的规则版本 |
+| 2.3.0   | 2026-08-04 | Codex                                  | P2 新增博彩/投注平台风控：预测市场/Polymarket/Kalshi 与投注语义近距离共现拦截，避免恢复裸 betting 误杀财经隐喻 |
+| 2.3.1   | 2026-08-04 | Codex                                  | 整理博彩/赌博/体育投注/赌场玩法双语 P2 词表，补齐平台、网站、APP、赌场游戏等硬命中词 |
+| 2.3.2   | 2026-08-04 | Codex                                  | 回测修正“预测市场”中文歧义：裸预测市场仅配强博彩上下文，Polymarket/Kalshi 平台词保留宽上下文 |
+| 2.3.3   | 2026-08-04 | Codex                                  | 回测收窄博彩误杀：裸赌场改为平台/游戏/广告组合词，并豁免“美元级 gamble”财经隐喻 |
 """
 
 import re
@@ -209,23 +213,72 @@ _DEFAULT_BLOCKLIST: dict = {
         "action": ACTION_DEPRIORITIZE,
         "zh": [
             "一夜暴富", "快速致富", "暴利",
-            "赌博", "博彩", "网络赌博",
+            "赌博", "博彩", "网络赌博", "网络博彩", "博彩平台",
+            "赌博平台", "赌博网站", "赌博app", "赌博软件",
+            "博彩网站", "博彩app", "博彩软件", "投注平台",
+            "投注网站", "体育博彩", "体育投注", "体育竞猜",
+            "赌球", "赌马", "赌盘", "线上赌场", "在线赌场", "网络赌场",
+            "赌场平台", "赌场app", "赌场软件", "赌场游戏", "赌场广告",
+            "百家乐", "老虎机", "轮盘赌", "德州扑克",
+            "六合彩", "彩票投注", "购彩平台",
             "色情", "成人内容", "网络招嫖",
             "日赚几千", "网赚", "兼职月入",
         ],
         "en": [
             # 2026-06-25: 移除 "gamble"/"betting"——英文财经标题/描述中 "gamble"(豪赌/押注)、
             # "betting"(押注) 几乎都是隐喻，曾把 "The $400B AI infrastructure gamble" 误杀降权。
-            # 保留无歧义的 "gambling"；中文 赌博/博彩/网络赌博 词表不动（中文平台主防线）。
+            # 保留无歧义的 "gambling"；预测市场/投注平台类 betting 风险由下方上下文共现规则承接。
             "get rich quick", "overnight millionaire",
-            "gambling",
+            "gambling", "online gambling", "gambling site", "gambling app",
+            "casino", "online casino", "casino games", "betting site",
+            "betting app", "betting platform", "sports betting",
+            "sportsbook", "online sportsbook", "sports betting site",
+            "betting exchange", "bookmaker", "bookie", "parlay betting",
+            "slot machine", "roulette", "blackjack", "poker room",
             "porn", "adult content", "escort",
             "make money online", "passive income secret",
         ],
-        "exemptions_zh": [],
+        "exemptions_zh": [
+            "亿美元的赌博", "美元的赌博",
+            "亿美元 赌博", "美元 赌博",
+        ],
         "exemptions_en": [],
-        "cooccurrence_zh": [],
-        "cooccurrence_en": [],
+        "cooccurrence_zh": [
+            {
+                "primary": ["预测市场", "事件合约", "竞猜市场"],
+                "context": [
+                    "下注", "投注", "赌注", "赌局", "博彩", "赌博",
+                    "赢家", "输家", "盘口", "赔率", "封盘", "庄家",
+                    "投注者", "赌客",
+                ],
+                "max_gap": 120,
+                "matched": "prediction_market_betting_risk",
+            },
+            {
+                "primary": ["polymarket", "kalshi", "卡尔希", "预测市场平台", "投注平台"],
+                "context": [
+                    "下注", "投注", "赌注", "押注", "赌局", "博彩", "赌博",
+                    "赢家", "输家", "结算", "盘口", "赔率", "开盘",
+                    "封盘", "庄家", "投注者", "赌客",
+                ],
+                "max_gap": 160,
+                "matched": "prediction_market_betting_risk",
+            },
+        ],
+        "cooccurrence_en": [
+            {
+                "primary": [
+                    "prediction market", "prediction markets", "polymarket",
+                    "kalshi", "event contract", "event contracts",
+                ],
+                "context": [
+                    "bet", "bets", "betting", "wager", "wagers", "wagering",
+                    "gamble", "gambling", "settle", "settlement", "odds", "punters",
+                ],
+                "max_gap": 320,
+                "matched": "prediction_market_betting_risk",
+            },
+        ],
     },
 }
 
