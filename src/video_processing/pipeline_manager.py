@@ -89,6 +89,7 @@
 | 3.47.0  | 2026-07-31 | Codex                               | 可选地将专属底图交给 Codex 文件队列，并在本地 deadline 前确定性降级        |
 | 3.48.0  | 2026-08-03 | Codex                               | 封面 checkpoint 增加无大面积遮罩版式证明，旧遮罩封面不得复用              |
 | 3.48.1  | 2026-08-03 | Codex                               | 视频号上传前检查既有提交后证据，阻止误回队列视频再次自动公开提交          |
+| 3.48.2  | 2026-08-04 | Codex                               | 渲染缓存校验区分成片损坏与 ffprobe 不可用；校验环境故障保留缓存并停止当前任务，避免误删触发长时间重渲 |
 """
 
 
@@ -103,7 +104,7 @@ import subprocess
 import requests
 import fcntl
 import html
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
 
 from .db import PipelineDB
@@ -156,6 +157,25 @@ _KUAISHOU_UPLOAD_TIMEOUT_SEC = 25 * 60
 _DOUYIN_UPLOAD_TIMEOUT_SEC = 25 * 60
 _AUTO_CAPTION_TIMEOUT_SEC = 45 * 60
 _SOURCE_SUBTITLE_MIN_CHARS = 20
+
+
+def _validate_rendered_vertical_cache(vertical: Path) -> Tuple[bool, str]:
+    """验证竖版成片可解析性，校验器不可用时拒绝删除缓存。"""
+    from .utils.video_metadata import get_video_duration_ffprobe
+
+    try:
+        duration = get_video_duration_ffprobe(vertical)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"ffprobe 不可用，无法验证 {vertical.name} 的完整性；"
+            "为防止误删有效成片，已保留缓存并停止当前任务。"
+        ) from exc
+    except Exception as exc:
+        return False, str(exc)
+
+    if duration <= 0:
+        return False, "duration<=0"
+    return True, ""
 
 
 def _build_subprocess_env() -> dict:
@@ -1930,13 +1950,10 @@ class PipelineManager:
                     # 体积 >1MB 但缺失 moov atom 的截断文件，旧校验仅看体积 → 误判为有效缓存 →
                     # 跳过重渲并把损坏视频直接送入发布。此处用 ffprobe 读取 duration 验证文件可解析，
                     # 不可解析（截断/损坏）则判缓存失效，强制重渲。
-                    try:
-                        from .utils.video_metadata import get_video_duration_ffprobe
-                        if get_video_duration_ffprobe(vertical) <= 0:
-                            raise ValueError("duration<=0")
-                    except Exception as _e:
+                    _cache_valid, _cache_reason = _validate_rendered_vertical_cache(vertical)
+                    if not _cache_valid:
                         logger.warning(
-                            f"[CacheInvalid] {vertical.name} 无法解析（疑似截断/损坏: {_e}），强制重渲 {prefix}"
+                            f"[CacheInvalid] {vertical.name} 无法解析（疑似截断/损坏: {_cache_reason}），强制重渲 {prefix}"
                         )
                         _cache_valid = False
                     if _cache_valid and _ass_file.exists():
