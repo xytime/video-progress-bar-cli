@@ -2357,14 +2357,18 @@
         const treeToggle = v.slices_count > 0
           ? `<button class="btn-pri" style="margin-right: 6px; border:none; background:none; font-size:12px; cursor:pointer;" onclick="toggleSlices(event, '${v.youtube_id}')" id="btn-toggle-${v.youtube_id}">▶</button>`
           : '';
-        const zhTitleHtml = v.zh_title ? `<div class="video-zh-title" style="display:flex; align-items:center;">${treeToggle}${v.zh_title}</div>` : '';
+        const displayTitle = v.display_title || v.published_title || v.zh_title || v.title || '—';
+        const zhTitleHtml = `<div class="video-zh-title" style="display:flex; align-items:center;">${treeToggle}${escapeHtml(displayTitle)}</div>`;
         const enTitleHtml = `<a class="video-title-link ${score < 80 ? 'video-title-dim' : ''}"
           href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
-          onclick="event.stopPropagation()">${v.title || '—'}</a>`;
+          onclick="event.stopPropagation()">${escapeHtml(v.title || '—')}</a>`;
+        const sourceZhHtml = v.title_mismatch && v.zh_title
+          ? `<div class="video-title-link video-title-dim" title="本地源标题翻译，非平台发布标题">源译名：${escapeHtml(v.zh_title)}</div>`
+          : '';
 
         let titleBlock = '';
-        if (v.zh_title) {
-          titleBlock = `${zhTitleHtml}${enTitleHtml}`;
+        if (displayTitle) {
+          titleBlock = `${zhTitleHtml}${sourceZhHtml}${enTitleHtml}`;
         } else {
           titleBlock = treeToggle
             ? `<div style="display:flex; align-items:center;">${treeToggle}${enTitleHtml}</div>`
@@ -2942,6 +2946,7 @@
 
           const dur = formatDuration(s.duration_sec);
           const durationChip = dur ? `<span class="meta-chip">⏱ ${dur}</span>` : '';
+          const sliceDisplayTitle = s.display_title || s.published_title || s.zh_title || s.title || '—';
 
           const errorToggle = s.error_msg ? `<span class="toggle-error" onclick="toggleError('${s.youtube_id}_s${s.slice_index}')">▼ 错误</span>` : '';
           const errorRowHtml = s.error_msg ? `
@@ -2959,7 +2964,7 @@
               <td class="cb-cell" style="${currentTab === 'waitlist' ? '' : 'display:none'}"></td>
               <td class="cover-thumb-cell"><div class="cover-placeholder" style="width:36px; height:64px; font-size:14px;">✂️</div></td>
               <td class="info-cell" style="padding-left: 24px;">
-                <div class="video-zh-title" style="padding-left: 20px;">${s.title}</div>
+                <div class="video-zh-title" style="padding-left: 20px;">${escapeHtml(sliceDisplayTitle)}</div>
                 <div class="video-meta-row" style="padding-left: 20px;">
                   <span>分段区间: ⏱ <strong>${formatTrimTime(s.trim_start)} - ${formatTrimTime(s.trim_end)}</strong></span> · ${durationChip}
                 </div>
@@ -4164,7 +4169,7 @@
     const video = _currentVideosMap[youtubeId];
     if (!video) return;
 
-    titleEl.textContent = `📹 ${video.zh_title || video.title || youtubeId}`;
+    titleEl.textContent = `📹 ${video.display_title || video.published_title || video.zh_title || video.title || youtubeId}`;
 
     const plats = ['wechat', 'kuaishou', 'douyin'];
     const names = { wechat: '微信视频号 (WeChat)', kuaishou: '快手 (Kuaishou)', douyin: '抖音 (Douyin)' };

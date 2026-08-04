@@ -46,6 +46,7 @@
 | 3.18.1 | 2026-07-27 | Codex                               | 微信扫码登录成功后自动恢复 LOGIN_REQUIRED 为 PENDING，交由既有队列调度器按分数线重发 |
 | 3.18.2 | 2026-07-30 | Codex                               | 音轨规格改变时失效竖版成片与封面缓存，避免配音版继续复用原声封面       |
 | 3.18.3 | 2026-07-31 | Codex                               | 同步删除封面来源清单，防止音轨规格切换后遗留哈希失配的封面证明         |
+| 3.18.4 | 2026-08-04 | Codex                               | 仪表盘列表优先展示真实投递短标题，避免本地 zh_title 与微信后台标题错位 |
 """
 import hashlib
 import logging
@@ -625,6 +626,49 @@ def _backfill_asset_paths(youtube_id: str, slice_index: int) -> dict[str, Path]:
     }
 
 
+def _read_publish_text(path: Path, *, max_chars: int = 800) -> Optional[str]:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        logging.getLogger(__name__).warning("[Dashboard] Failed to read publish artifact %s: %s", path, exc)
+        return None
+    if not text:
+        return None
+    if len(text) > max_chars:
+        return text[:max_chars].rstrip() + "..."
+    return text
+
+
+def _attach_publish_display_fields(rows: list[dict]) -> list[dict]:
+    """为仪表盘行补齐真实投递标题，保证后台列表与平台发布标题一致。"""
+    for row in rows:
+        yid = row.get("youtube_id")
+        if not yid:
+            continue
+        slice_index = int(row.get("slice_index") or 0)
+        paths = _backfill_asset_paths(yid, slice_index)
+        published_title = _read_publish_text(paths["title"], max_chars=120)
+        published_copy_preview = _read_publish_text(paths["copy"], max_chars=280)
+        source_zh_title = (row.get("zh_title") or "").strip()
+
+        row["published_title"] = published_title
+        row["published_copy_preview"] = published_copy_preview
+        row["display_title"] = (
+            published_title
+            or source_zh_title
+            or (row.get("title") or "").strip()
+            or yid
+        )
+        row["title_mismatch"] = bool(
+            published_title
+            and source_zh_title
+            and published_title != source_zh_title
+        )
+    return rows
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -865,6 +909,7 @@ def get_videos(tab: str = "waitlist", page: int = 1, size: int = 20):
     page = max(1, page)
     size = max(1, min(100, size))
     videos, total_count = db.get_paginated_videos(tab, page, size)
+    _attach_publish_display_fields(videos)
     tab_counts = db.get_tab_counts()
     return {
         "videos": videos,
@@ -880,6 +925,7 @@ def get_videos(tab: str = "waitlist", page: int = 1, size: int = 20):
 def get_slices(youtube_id: str):
     """[Gemini_3.5_Flash_High_planning] 获取指定 YouTube ID 的所有切片子任务"""
     slices = db.get_slices_by_parent_yid(youtube_id)
+    _attach_publish_display_fields(slices)
     return {"slices": slices}
 
 
