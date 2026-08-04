@@ -19,6 +19,7 @@
 | 1.7.0 | 2026-08-03 | Codex | 在词卡展示离线词表的友好标签与最低学习门槛，保留 IPA 与词义的手机端可读性。 |
 | 1.8.0 | 2026-08-03 | Codex | 右栏词卡改为随正文 y 坐标对齐滚动，移除小程序码位，并以影子跟读 Banner 替换唱片素材。 |
 | 1.9.0 | 2026-08-03 | Codex | 左侧保留最多十个微笔记，右侧只展示难度最高五词，并清洗重复词性与过早省略的释义。 |
+| 1.10.0 | 2026-08-04 | Codex | 右栏为长正文滚动屏补充兜底词卡组，避免后半段核心词汇区空白。 |
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ MARKED_WORD_TEXT = "#A53C2B"
 RIGHT_VOCABULARY_LIMIT = 5
 RIGHT_CARD_HEIGHT = 170
 RIGHT_CARD_GAP = 18
+RIGHT_PARAGRAPH_GROUP_LEAD = 120
 POS_PATTERN = re.compile(r"\b(?:interj|conj|prep|pron|adj|adv|aux|det|num|vt|vi|int|n|v)\.?", re.IGNORECASE)
 
 
@@ -104,7 +106,8 @@ class RecordUnderlineTemplate:
         reading = Image.new("RGBA", (CANVAS_WIDTH, reading_height), (0, 0, 0, 0))
         reading_draw = ImageDraw.Draw(reading)
         word_boxes, _ = self._draw_reading_body(reading_draw, content)
-        self._draw_aligned_vocabulary(reading_draw, content.vocabulary, tuple(word_boxes))
+        paragraph_tops = _paragraph_vocabulary_tops(content, tuple(word_boxes))
+        self._draw_aligned_vocabulary(reading_draw, content.vocabulary, paragraph_tops)
 
         base_image = output_dir / "template_a_base.png"
         page.save(base_image)
@@ -216,51 +219,20 @@ class RecordUnderlineTemplate:
         self,
         draw: ImageDraw.ImageDraw,
         items: tuple[VocabularyItem, ...],
-        word_boxes: tuple[WordBox, ...],
+        paragraph_tops: tuple[int, ...],
     ) -> None:
         right_items = _right_vocabulary_items(items)
-        anchored_items = sorted(
-            (
-                (_vocabulary_anchor_y(item, word_boxes) or TEXT_TOP + index * 150, index, item)
-                for index, item in enumerate(right_items)
-            ),
-            key=lambda item: (item[0], item[1]),
-        )
-        y_cursor = TEXT_TOP
-        palette = (ACCENT, "#EDE6DA", "#365E8B", "#EDE6DA", ACCENT)
-        for index, (anchor_y, _, item) in enumerate(anchored_items):
-            fill = palette[index % len(palette)]
-            dark = fill in {ACCENT, "#365E8B"}
-            text_color = "#FFFDF8" if dark else INK
-            y = max(TEXT_TOP, int(anchor_y) - 6, y_cursor)
-            card = (VOCAB_BOX[0] + 12, y, VOCAB_BOX[2] - 12, y + RIGHT_CARD_HEIGHT)
-            draw.rounded_rectangle(card, radius=14, fill=fill)
-            word_font = _font(30, bold=True, serif=True)
-            draw.text((card[0] + 15, card[1] + 12), _ellipsize(item.word, word_font, 235), font=word_font, fill=text_color)
-            detail = item.phonetic.strip()
-            if detail:
-                ipa_font = _ipa_font(19)
-                draw.text((card[0] + 15, card[1] + 49), _ellipsize(detail, ipa_font, 235), font=ipa_font, fill=text_color)
-            learning_label = _learning_label(item)
-            if learning_label:
-                draw.text(
-                    (card[0] + 15, card[1] + 72),
-                    _ellipsize(learning_label, _font(18, bold=True), 235),
-                    font=_font(18, bold=True),
-                    fill=text_color,
-                )
-            meaning_font = _font(21)
-            _draw_wrapped_text(
-                draw,
-                _meaning_line(item),
-                (card[0] + 15, card[1] + 98),
-                meaning_font,
-                text_color,
-                235,
-                max_lines=3,
-                line_height=24,
-            )
-            y_cursor = y + RIGHT_CARD_HEIGHT + RIGHT_CARD_GAP
+        if not right_items:
+            return
+        drawn_ranges: list[tuple[int, int]] = []
+        for group_top in _fallback_vocabulary_group_tops(paragraph_tops):
+            y = group_top
+            for index, item in enumerate(right_items):
+                target_range = (y, y + RIGHT_CARD_HEIGHT)
+                if not _overlaps_any(target_range, drawn_ranges, margin=20):
+                    _draw_vocabulary_card(draw, item, index, y)
+                    drawn_ranges.append(target_range)
+                y += RIGHT_CARD_HEIGHT + RIGHT_CARD_GAP
 
     def _draw_feature_banner(self, output_path: Path) -> None:
         size = (FEATURE_BOX[2] - FEATURE_BOX[0], FEATURE_BOX[3] - FEATURE_BOX[1])
@@ -348,6 +320,73 @@ def _right_vocabulary_items(items: tuple[VocabularyItem, ...]) -> tuple[Vocabula
     """右侧窄栏只承载左侧已标注词中的最高难度五个，避免和正文争夺注意力。"""
     ranked = sorted(items, key=lambda item: (-difficulty_level(item.level), item.word.lower()))
     return tuple(ranked[:RIGHT_VOCABULARY_LIMIT])
+
+
+def _draw_vocabulary_card(
+    draw: ImageDraw.ImageDraw,
+    item: VocabularyItem,
+    index: int,
+    y: int,
+) -> None:
+    """绘制一个右侧词卡；对齐卡和兜底卡共用同一视觉规格。"""
+    palette = (ACCENT, "#EDE6DA", "#365E8B", "#EDE6DA", ACCENT)
+    fill = palette[index % len(palette)]
+    dark = fill in {ACCENT, "#365E8B"}
+    text_color = "#FFFDF8" if dark else INK
+    card = (VOCAB_BOX[0] + 12, y, VOCAB_BOX[2] - 12, y + RIGHT_CARD_HEIGHT)
+    draw.rounded_rectangle(card, radius=14, fill=fill)
+    word_font = _font(30, bold=True, serif=True)
+    draw.text((card[0] + 15, card[1] + 12), _ellipsize(item.word, word_font, 235), font=word_font, fill=text_color)
+    detail = item.phonetic.strip()
+    if detail:
+        ipa_font = _ipa_font(19)
+        draw.text((card[0] + 15, card[1] + 49), _ellipsize(detail, ipa_font, 235), font=ipa_font, fill=text_color)
+    learning_label = _learning_label(item)
+    if learning_label:
+        draw.text(
+            (card[0] + 15, card[1] + 72),
+            _ellipsize(learning_label, _font(18, bold=True), 235),
+            font=_font(18, bold=True),
+            fill=text_color,
+        )
+    meaning_font = _font(21)
+    _draw_wrapped_text(
+        draw,
+        _meaning_line(item),
+        (card[0] + 15, card[1] + 98),
+        meaning_font,
+        text_color,
+        235,
+        max_lines=3,
+        line_height=24,
+    )
+
+
+def _paragraph_vocabulary_tops(content: StudyCardContent, boxes: tuple[WordBox, ...]) -> tuple[int, ...]:
+    """用自然段首词作为兜底词卡组锚点，让右栏随正文段落一起进入屏幕。"""
+    tops = [TEXT_TOP]
+    cursor = 0
+    for paragraph in content.paragraphs:
+        if 0 <= cursor < len(boxes):
+            tops.append(max(TEXT_TOP, boxes[cursor].y - 53 - RIGHT_PARAGRAPH_GROUP_LEAD))
+        cursor += len(paragraph.english_text.split())
+    return tuple(sorted(set(tops)))
+
+
+def _fallback_vocabulary_group_tops(paragraph_tops: tuple[int, ...]) -> tuple[int, ...]:
+    """按正文自然段补充词卡组，确保后续屏幕右栏不会变成空白。"""
+    if not paragraph_tops:
+        return (TEXT_TOP,)
+    return tuple(sorted(set(max(TEXT_TOP, top) for top in paragraph_tops)))
+
+
+def _overlaps_any(
+    target: tuple[int, int],
+    ranges: list[tuple[int, int]],
+    *,
+    margin: int = 0,
+) -> bool:
+    return any(target[0] < end + margin and target[1] > start - margin for start, end in ranges)
 
 
 def _meaning_line(item: VocabularyItem) -> str:

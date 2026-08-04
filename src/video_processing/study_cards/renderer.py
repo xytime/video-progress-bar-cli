@@ -14,6 +14,7 @@
 | 1.5.1 | 2026-08-03 | Codex | 主合成不再用 shortest 截短，兼容源文件视频流略短于音频流的情况。 |
 | 1.5.2 | 2026-08-03 | Codex | 滚动目标位下移，减少翻页后顶部残留孤立标点或半行文本。 |
 | 1.6.0 | 2026-08-03 | Codex | 移除翻页静音暂停，滚动改为连续原声下的自然段边界少量动画。 |
+| 1.6.1 | 2026-08-04 | Codex | 将显式长样片上限扩展到 120 秒，仍保持生产片段 30 秒硬上限。 |
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ _AUDIO_FADE_SECONDS = 0.08
 _SCROLL_TRANSITION_SECONDS = 0.62
 _MAX_SCROLL_STEPS = 3
 _PRODUCTION_MAX_DURATION = 30.0
-_TEST_MAX_DURATION = 60.0
+_TEST_MAX_DURATION = 120.0
 
 
 @dataclass(frozen=True)

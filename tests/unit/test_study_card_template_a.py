@@ -8,6 +8,7 @@
 | 1.1.1 | 2026-08-02 | Codex | 覆盖红线使用的滚动偏移预计算，避免与正文滚动脱节。 |
 | 1.2.0 | 2026-08-03 | Codex | 覆盖滚动静音暂停、右栏词卡正文锚点与影子跟读 Banner 资产。 |
 | 1.3.0 | 2026-08-03 | Codex | 覆盖连续原声滚动、右栏最高难度五词和词卡释义清洗。 |
+| 1.3.1 | 2026-08-04 | Codex | 覆盖长正文右栏兜底词卡组，防止滚动后核心词汇区空白。 |
 """
 
 from pathlib import Path
@@ -17,10 +18,15 @@ import pytest
 from video_processing.study_cards import StudyCardContent, StudyCardRenderer, VocabularyItem
 from video_processing.study_cards.renderer import ScrollStep
 from video_processing.study_cards.template_a import (
+    TEXT_TOP,
+    WordBox,
+    RIGHT_PARAGRAPH_GROUP_LEAD,
     RecordUnderlineTemplate,
+    _fallback_vocabulary_group_tops,
     _highlighted_token_indices,
     _learning_label,
     _meaning_line,
+    _paragraph_vocabulary_tops,
     _right_vocabulary_items,
     _vocabulary_anchor_y,
 )
@@ -196,6 +202,34 @@ def test_right_vocabulary_uses_the_highest_difficulty_five_left_notes():
     )
 
     assert [item.word for item in _right_vocabulary_items(items)] == ["cae", "cet6", "fce", "cet4", "gaokao"]
+
+
+def test_right_vocabulary_fallback_groups_cover_long_scrolled_reading():
+    content = StudyCardContent.from_mapping({
+        "headline_zh": "测试新闻标题",
+        "headline_en": "A short test headline",
+        "english_text": "early late",
+        "translation_zh": "测试。",
+        "words": [
+            {"text": "early", "start": 0.0, "end": 0.5},
+            {"text": "late", "start": 0.5, "end": 1.0},
+        ],
+        "paragraphs": [
+            {"english_text": "early", "translation_zh": "前段。"},
+            {"english_text": "late", "translation_zh": "后段。"},
+        ],
+        "vocabulary": [{"word": "late", "meaning_zh": "晚的", "level": "PET"}],
+    })
+    boxes = (
+        WordBox("early", 54, TEXT_TOP + 50, 80),
+        WordBox("late", 54, TEXT_TOP + 4300, 80),
+    )
+
+    paragraph_tops = _paragraph_vocabulary_tops(content, boxes)
+    tops = _fallback_vocabulary_group_tops(paragraph_tops)
+
+    assert tops[0] == TEXT_TOP
+    assert TEXT_TOP + 4300 - 53 - RIGHT_PARAGRAPH_GROUP_LEAD in tops
 
 
 def test_word_card_meaning_removes_duplicate_part_of_speech_and_keeps_more_definition():
