@@ -9,6 +9,8 @@
 | 1.2.0 | 2026-08-03 | Codex | 覆盖滚动静音暂停、右栏词卡正文锚点与影子跟读 Banner 资产。 |
 | 1.3.0 | 2026-08-03 | Codex | 覆盖连续原声滚动、右栏最高难度五词和词卡释义清洗。 |
 | 1.3.1 | 2026-08-04 | Codex | 覆盖长正文右栏兜底词卡组，防止滚动后核心词汇区空白。 |
+| 1.4.0 | 2026-08-04 | Codex | 覆盖长段落溢出前滚动，防止正在朗读的词与红线被阅读窗裁掉。 |
+| 1.5.0 | 2026-08-04 | Codex | 覆盖真实阅读窗的 8–12 项微笔记选择，不再依赖全篇数量上限。 |
 """
 
 from pathlib import Path
@@ -18,6 +20,8 @@ import pytest
 from video_processing.study_cards import StudyCardContent, StudyCardRenderer, VocabularyItem
 from video_processing.study_cards.renderer import ScrollStep
 from video_processing.study_cards.template_a import (
+    MAX_MICRO_NOTES_PER_SCREEN,
+    MIN_MICRO_NOTES_PER_SCREEN,
     TEXT_TOP,
     WordBox,
     RIGHT_PARAGRAPH_GROUP_LEAD,
@@ -125,12 +129,13 @@ def test_scroll_plan_uses_paragraph_boundaries_without_audio_pauses(tmp_path: Pa
     steps = StudyCardRenderer()._build_scroll_steps(content, shifted)
 
     assert steps
-    assert steps[0].start == pytest.approx(shifted[5][0].start - 0.04)
+    # 首行已经在安全线之外时，必须从 0 秒起滚动，不能等待下一段的首词。
+    assert steps[0].start == pytest.approx(0.0)
     assert steps[0].end - steps[0].start == pytest.approx(0.62)
     assert steps[0].to_offset > 0
 
 
-def test_scroll_plan_is_limited_to_three_natural_boundary_moves():
+def test_scroll_plan_scales_for_long_samples_without_artificial_three_move_cap():
     boxes = [
         (
             type("Word", (), {"text": f"w{index}", "start": float(index), "end": float(index) + 0.2})(),
@@ -156,7 +161,33 @@ def test_scroll_plan_is_limited_to_three_natural_boundary_moves():
 
     steps = StudyCardRenderer()._build_scroll_steps(StudyCardContent.from_mapping(payload), boxes)
 
-    assert len(steps) <= 3
+    assert len(steps) <= 4
+
+
+def test_scroll_plans_before_a_long_paragraph_line_leaves_the_reading_window():
+    content = StudyCardContent.from_mapping({
+        "headline_zh": "测试新闻标题",
+        "headline_en": "A short test headline",
+        "english_text": "one two three four five six seven eight nine ten eleven twelve thirteen",
+        "translation_zh": "测试。",
+        "words": [
+            {"text": text, "start": index * 0.4, "end": index * 0.4 + 0.3}
+            for index, text in enumerate("one two three four five six seven eight nine ten eleven twelve thirteen".split())
+        ],
+        "paragraphs": [{
+            "english_text": "one two three four five six seven eight nine ten eleven twelve thirteen", "translation_zh": "测试。"}],
+        "vocabulary": [{"word": "thirteen", "meaning_zh": "十三", "level": "PET"}],
+    })
+    boxes = [
+        (word, WordBox(word.text, 54, TEXT_TOP + index * 92, 80))
+        for index, word in enumerate(content.words)
+    ]
+
+    steps = StudyCardRenderer()._build_scroll_steps(content, boxes)
+
+    assert steps
+    assert steps[0].start == pytest.approx(content.words[-1].start - 0.16)
+    assert steps[0].to_offset > 0
 
 
 def test_scroll_offset_for_underlines_matches_piecewise_scroll_plan():
@@ -250,6 +281,25 @@ def test_vocabulary_card_anchor_uses_the_first_matching_body_word(tmp_path: Path
     spotted_box = next(box for box in assets.word_boxes if box.text == "spotted")
 
     assert _vocabulary_anchor_y(VocabularyItem("spotted", "发现"), assets.word_boxes) == spotted_box.y - 53
+
+
+def test_visual_vocabulary_selection_uses_per_screen_limits_without_a_global_cap():
+    template = RecordUnderlineTemplate()
+    candidates = tuple(VocabularyItem(f"word{index}", "学习词", level="PET") for index in range(16))
+    boxes = tuple(
+        WordBox(
+            f"word{index}", 54,
+            TEXT_TOP + 100 if index < 8 else TEXT_TOP + 1100,
+            80,
+        )
+        for index in range(16)
+    )
+
+    selected = template.select_vocabulary_for_screens(candidates, boxes, (0, 1000))
+
+    assert len(selected) == 16
+    assert MIN_MICRO_NOTES_PER_SCREEN == 8
+    assert MAX_MICRO_NOTES_PER_SCREEN == 12
 
 
 def test_phrase_vocabulary_marks_every_word_but_shows_the_note_once():

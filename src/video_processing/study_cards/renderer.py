@@ -15,12 +15,13 @@
 | 1.5.2 | 2026-08-03 | Codex | 滚动目标位下移，减少翻页后顶部残留孤立标点或半行文本。 |
 | 1.6.0 | 2026-08-03 | Codex | 移除翻页静音暂停，滚动改为连续原声下的自然段边界少量动画。 |
 | 1.6.1 | 2026-08-04 | Codex | 将显式长样片上限扩展到 120 秒，仍保持生产片段 30 秒硬上限。 |
+| 1.7.0 | 2026-08-04 | Codex | 滚动由可见行溢出预测触发，不再只等待下一自然段，确保朗读词与逐词红线始终留在阅读窗内。 |
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from pathlib import Path
 import shutil
@@ -44,7 +45,10 @@ from .template_a import (
 _AUDIO_TAIL_SECONDS = 0.18
 _AUDIO_FADE_SECONDS = 0.08
 _SCROLL_TRANSITION_SECONDS = 0.62
-_MAX_SCROLL_STEPS = 3
+_SCROLL_LEAD_SECONDS = 0.16
+_SCROLL_TRIGGER_Y = READING_VIEWPORT_BOTTOM - 105
+_SCROLL_TARGET_Y = TEXT_TOP + 180
+_MAX_SCROLL_STEPS_PER_30_SECONDS = 4
 _PRODUCTION_MAX_DURATION = 30.0
 _TEST_MAX_DURATION = 120.0
 
@@ -102,9 +106,17 @@ class StudyCardRenderer:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         work_dir = Path(tempfile.mkdtemp(prefix="study_card_"))
         try:
-            assets = self.template.render_static(content, work_dir)
-            source_timed_boxes = self.template.map_word_boxes(content.words, assets.word_boxes)
-            scroll_steps = self._build_scroll_steps(content, source_timed_boxes)
+            layout_assets = self.template.render_static(content, work_dir)
+            layout_timed_boxes = self.template.map_word_boxes(content.words, layout_assets.word_boxes)
+            scroll_steps = self._build_scroll_steps(content, layout_timed_boxes)
+            visible_vocabulary = self.template.select_vocabulary_for_screens(
+                content.vocabulary_candidates or content.vocabulary,
+                layout_assets.word_boxes,
+                (0, *(step.to_offset for step in scroll_steps)),
+            )
+            render_content = replace(content, vocabulary=visible_vocabulary)
+            assets = self.template.render_static(render_content, work_dir)
+            source_timed_boxes = self.template.map_word_boxes(render_content.words, assets.word_boxes)
             output_duration = source_clip_duration
             underline_video = work_dir / "template_a_underlines.mov"
             self._render_underline_overlay(underline_video, source_timed_boxes, scroll_steps, output_duration)
@@ -121,7 +133,7 @@ class StudyCardRenderer:
                 scroll_steps=scroll_steps,
             )
             self._write_manifest(
-                output_path, content, source_video, source_start, source_clip_duration,
+                output_path, render_content, source_video, source_start, source_clip_duration,
                 output_duration, source_timed_boxes, scroll_steps,
             )
             if keep_assets:
@@ -351,26 +363,31 @@ class StudyCardRenderer:
         content: StudyCardContent,
         timed_boxes: list[tuple[Any, Any]],
     ) -> list[ScrollStep]:
-        """只在自然段边界滚动；原声音频连续播放，不插入静音或冻结段。"""
+        """在下一英文行即将越出阅读窗前滚动，原声音频保持连续。
+
+        过去只把自然段首词当作触发点：长自然段会先溢出，导致仍在朗读的词
+        和红线已经被阅读窗裁掉。这里以每行首词的屏幕 y 坐标预测溢出；一次
+        滚动跨约九行，避免在短段落间频繁卡顿。
+        """
         candidates: list[ScrollStep] = []
         offset = 0
-        trigger_y = 1540
-        target_y = 1110
-        for word_index in self._paragraph_start_word_indices(content)[1:]:
-            if word_index >= len(timed_boxes):
+        previous_line_y: int | None = None
+        for word, box in timed_boxes:
+            if box.y == previous_line_y:
                 continue
-            word, box = timed_boxes[word_index]
+            previous_line_y = box.y
             visible_y = box.y - offset
-            if visible_y <= trigger_y:
+            if visible_y <= _SCROLL_TRIGGER_Y:
                 continue
-            target_offset = max(offset, box.y - target_y)
+            target_offset = max(offset, box.y - _SCROLL_TARGET_Y)
             if target_offset == offset:
                 continue
-            start = max(0.0, word.start - 0.04)
+            start = max(0.0, word.start - _SCROLL_LEAD_SECONDS)
             end = start + _SCROLL_TRANSITION_SECONDS
             candidates.append(ScrollStep(start, end, offset, target_offset))
             offset = target_offset
-        return self._limit_scroll_steps(candidates, _MAX_SCROLL_STEPS)
+        maximum = max(1, math.ceil(content.words[-1].end / 30.0) * _MAX_SCROLL_STEPS_PER_30_SECONDS)
+        return self._limit_scroll_steps(candidates, maximum)
 
     @staticmethod
     def _paragraph_start_word_indices(content: StudyCardContent) -> list[int]:

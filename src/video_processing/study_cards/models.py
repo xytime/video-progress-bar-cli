@@ -8,6 +8,10 @@
 | 1.1.0 | 2026-08-02 | Codex | 增加阅读段落契约，使英文意群、词注与中文段译可严格同步。 |
 | 1.2.0 | 2026-08-02 | Codex | 增加全篇生词候选筛选：十级难度从 3 级起，并限制正文标记密度为 25%。 |
 | 1.3.0 | 2026-08-03 | Codex | 接受离线词表的学习标签、考试门槛与证据字段，供学习卡以旁路方式展示。 |
+| 1.4.0 | 2026-08-04 | Codex | 生词筛选传入阅读段落，保证长正文微笔记优先覆盖各段。 |
+| 1.5.0 | 2026-08-04 | Codex | 长文不再以十个微笔记截断，交由视觉层按阅读屏保证学习标记密度。 |
+| 1.6.0 | 2026-08-04 | Codex | 词汇域只提供全部合格候选；真实单屏微笔记上下限延后至模板布局层决定。 |
+| 1.6.1 | 2026-08-04 | Codex | 兼容既有离线词汇模块的 JSON 字段，维持学习卡输入与分级模块的低耦合。 |
 """
 
 from __future__ import annotations
@@ -75,6 +79,7 @@ class StudyCardContent:
     words: tuple[StudyWord, ...]
     vocabulary: tuple[VocabularyItem, ...]
     paragraphs: tuple[StudyParagraph, ...]
+    vocabulary_candidates: tuple[VocabularyItem, ...] = ()
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "StudyCardContent":
@@ -90,9 +95,9 @@ class StudyCardContent:
         vocabulary_candidates = tuple(
             VocabularyItem(
                 word=str(item["word"]),
-                meaning_zh=str(item["meaning_zh"]),
+                meaning_zh=str(item.get("meaning_zh", item.get("context_meaning_zh", ""))),
                 phonetic=str(item.get("phonetic", "")),
-                part_of_speech=str(item.get("part_of_speech", "")),
+                part_of_speech=str(item.get("part_of_speech", item.get("pos", ""))),
                 level=str(item.get("recommended_level", item.get("level", ""))),
                 friendly_tag=str(item.get("friendly_tag", "")),
                 covered_syllabi=tuple(str(label) for label in item.get("covered_syllabi", ())),
@@ -126,6 +131,7 @@ class StudyCardContent:
             words=words,
             vocabulary=vocabulary,
             paragraphs=paragraphs,
+            vocabulary_candidates=vocabulary,
         )
         content.validate_word_order()
         content.validate_paragraphs()

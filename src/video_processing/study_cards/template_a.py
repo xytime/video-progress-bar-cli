@@ -20,6 +20,8 @@
 | 1.8.0 | 2026-08-03 | Codex | 右栏词卡改为随正文 y 坐标对齐滚动，移除小程序码位，并以影子跟读 Banner 替换唱片素材。 |
 | 1.9.0 | 2026-08-03 | Codex | 左侧保留最多十个微笔记，右侧只展示难度最高五词，并清洗重复词性与过早省略的释义。 |
 | 1.10.0 | 2026-08-04 | Codex | 右栏为长正文滚动屏补充兜底词卡组，避免后半段核心词汇区空白。 |
+| 1.11.0 | 2026-08-04 | Codex | 放大栏目标题与新闻标题并增加描边阴影，提升手机端首屏辨识；配合长文微笔记池保证每屏学习信息密度。 |
+| 1.12.0 | 2026-08-04 | Codex | 按真实阅读窗挑选微笔记：不设全篇总量，只保证每屏 8–12 个，避免首屏过密和后屏稀疏。 |
 """
 
 from __future__ import annotations
@@ -57,6 +59,8 @@ MUTED = "#6E625A"
 MARKED_WORD_BACKGROUND = "#F3DDD5"
 MARKED_WORD_TEXT = "#A53C2B"
 RIGHT_VOCABULARY_LIMIT = 5
+MIN_MICRO_NOTES_PER_SCREEN = 8
+MAX_MICRO_NOTES_PER_SCREEN = 12
 RIGHT_CARD_HEIGHT = 170
 RIGHT_CARD_GAP = 18
 RIGHT_PARAGRAPH_GROUP_LEAD = 120
@@ -137,6 +141,60 @@ class RecordUnderlineTemplate:
             box_index += 1
         return result
 
+    def select_vocabulary_for_screens(
+        self,
+        candidates: tuple[VocabularyItem, ...],
+        boxes: tuple[WordBox, ...],
+        screen_offsets: Iterable[int],
+    ) -> tuple[VocabularyItem, ...]:
+        """在真实阅读窗中挑选微笔记，不以全篇词数设隐性上限。
+
+        每个候选按其所有正文出现位置映射到滚动后的各屏；贪心选择时避免让
+        任一屏超过 12 个。若某屏没有足够的可审阅候选，直接报错而非静默交付
+        稀疏页面，交由上游补充离线词表或短语 JSON。
+        """
+        offsets = tuple(dict.fromkeys(int(offset) for offset in screen_offsets))
+        if not offsets or not candidates:
+            return candidates
+        occurrences = {
+            _normalise_phrase(item.word): _vocabulary_occurrence_y_positions(item, boxes)
+            for item in candidates
+        }
+        screen_items: list[set[str]] = []
+        for offset in offsets:
+            screen_items.append({
+                key for key, ys in occurrences.items()
+                if any(TEXT_TOP <= y - offset <= READING_VIEWPORT_BOTTOM - 80 for y in ys)
+            })
+        ranked = sorted(candidates, key=lambda item: (-difficulty_level(item.level), -len(item.word), item.word.lower()))
+        selected: list[VocabularyItem] = []
+        selected_keys: set[str] = set()
+        screen_counts = [0] * len(screen_items)
+        memberships = {
+            key: tuple(index for index, keys in enumerate(screen_items) if key in keys)
+            for key in occurrences
+        }
+        for screen_index, available in enumerate(screen_items):
+            for item in ranked:
+                if screen_counts[screen_index] >= MIN_MICRO_NOTES_PER_SCREEN:
+                    break
+                key = _normalise_phrase(item.word)
+                if key in selected_keys or key not in available:
+                    continue
+                affected = memberships[key]
+                if any(screen_counts[index] >= MAX_MICRO_NOTES_PER_SCREEN for index in affected):
+                    continue
+                selected.append(item)
+                selected_keys.add(key)
+                for index in affected:
+                    screen_counts[index] += 1
+            if screen_counts[screen_index] < MIN_MICRO_NOTES_PER_SCREEN:
+                raise ValueError(
+                    f"第 {screen_index + 1} 个阅读屏只有 {screen_counts[screen_index]} 个可用微笔记；"
+                    "需补充离线词表候选或审核短语 JSON"
+                )
+        return tuple(selected)
+
     def _draw_page_frame(self, draw: ImageDraw.ImageDraw) -> None:
         draw.rectangle(VIDEO_BOX, outline="#8E786A", width=3, fill="#EDE7DF")
         draw.rounded_rectangle(FEATURE_BOX, radius=18, outline="#BBA376", width=3, fill="#10263C")
@@ -149,9 +207,12 @@ class RecordUnderlineTemplate:
         badge = (54, 66, 146, 158)
         draw.rectangle(badge, fill="#B73520")
         draw.text((61, 80), "新闻", font=_font(37, bold=True), fill="#FFFDF8")
-        title_font = _font(45, bold=True)
-        sub_font = _font(22, bold=True)
-        draw.text((160, 66), "世界英语新闻时事深度阅读", font=title_font, fill=INK)
+        title_font = _font(52, bold=True)
+        sub_font = _font(24, bold=True)
+        draw.text(
+            (160, 61), "世界英语新闻时事深度阅读", font=title_font, fill=INK,
+            stroke_width=1, stroke_fill="#FFF8EA",
+        )
         draw.text(
             (160, 123),
             "每日打卡 / 时文时报 / 高效突破8000词汇量",
@@ -161,10 +222,12 @@ class RecordUnderlineTemplate:
         draw.rectangle((54, 182, 1025, 214), fill="#B73520")
         draw.text((66, 187), f"单词数 · {len(content.words)}个", font=_font(18, bold=True), fill="#FFFDF8")
         draw.text((916, 187), "DATE:", font=_latin_font(17, bold=True), fill="#FFFDF8")
-        headline = _ellipsize(content.headline_zh, _font(32, bold=True), 640)
-        headline_font = _font(32, bold=True)
-        draw.text((54, 228), headline, font=headline_font, fill=GOLD)
-        draw.text((55, 228), headline, font=headline_font, fill=GOLD)
+        headline_font = _font(40, bold=True)
+        headline = _ellipsize(content.headline_zh, headline_font, 640)
+        draw.text(
+            (54, 225), headline, font=headline_font, fill=GOLD,
+            stroke_width=1, stroke_fill="#6B4914",
+        )
 
     def _draw_reading_body(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> tuple[list[WordBox], int]:
         """严格采用参考图的阅读稿：英文意群 → 词下小注 → 本段中文释义。"""
@@ -458,6 +521,22 @@ def _vocabulary_anchor_y(item: VocabularyItem, boxes: tuple[WordBox, ...]) -> in
         if page_words[index:index + len(phrase)] == phrase:
             return boxes[index].y - 53
     return None
+
+
+def _normalise_phrase(value: str) -> str:
+    return " ".join(part for part in (_normalise_word(part) for part in value.split()) if part)
+
+
+def _vocabulary_occurrence_y_positions(item: VocabularyItem, boxes: tuple[WordBox, ...]) -> tuple[int, ...]:
+    phrase = tuple(part for part in _normalise_phrase(item.word).split() if part)
+    if not phrase:
+        return ()
+    page_words = tuple(_normalise_word(box.text) for box in boxes)
+    return tuple(
+        boxes[index].y - 53
+        for index in range(0, len(page_words) - len(phrase) + 1)
+        if page_words[index:index + len(phrase)] == phrase
+    )
 
 
 def _normalise_word(value: str) -> str:

@@ -8,13 +8,13 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-03 | Codex | 导出学习卡片旁路渲染域的内容契约、渲染器与词汇筛选规则。 |
 | 1.1.0 | 2026-08-03 | Codex | 导出左侧正文微笔记上限，供渲染脚本和异步协调复用同一规则。 |
+| 1.2.0 | 2026-08-04 | Codex | 导出每个阅读屏的微笔记下限，供验收与异步协调使用。 |
 """
 
 from .models import StudyCardContent, StudyParagraph, StudyWord, VocabularyItem
 from .renderer import StudyCardRenderer
 from .vocabulary import (
-    MAX_STUDY_NOTE_ITEMS,
-    MAX_VOCABULARY_DENSITY,
+    MIN_STUDY_NOTES_PER_READING_SCREEN,
     MIN_LEARNING_LEVEL,
     VocabularySelection,
     difficulty_level,
@@ -22,7 +22,8 @@ from .vocabulary import (
 )
 
 __all__ = [
-    "MAX_STUDY_NOTE_ITEMS", "MAX_VOCABULARY_DENSITY", "MIN_LEARNING_LEVEL", "StudyCardContent",
+    "MIN_LEARNING_LEVEL",
+    "MIN_STUDY_NOTES_PER_READING_SCREEN", "StudyCardContent",
     "StudyCardRenderer", "StudyParagraph", "StudyWord", "VocabularyItem", "VocabularySelection",
     "difficulty_level", "select_vocabulary",
 ]
