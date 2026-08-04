@@ -40,6 +40,7 @@
 | 3.7.7   | 2026-07-31 | Codex                               | 确认封面后等待保存中的弹层关闭，避免 2 秒固定等待过早判定失败 |
 | 3.7.8   | 2026-07-31 | Codex                               | 直接读取可见封面成功 toast，避免正文同步滞后造成假失败 |
 | 3.7.9   | 2026-07-31 | Codex                               | 视频上传超时即中止并保留证据，禁止未完成上传继续进入发表流程 |
+| 3.8.0   | 2026-08-04 | Codex                               | 支持明确跳过原创声明，避免转载或获授权素材被自动错误标为原创。 |
 | 3.8.0   | 2026-07-31 | Codex                               | 上传前强制校验专门生成封面来源清单，历史视频帧截图不得投递 |
 | 3.8.1   | 2026-07-31 | Codex                               | 自动投递必须提供合规封面，禁止平台回退默认视频帧 |
 | 3.9.0   | 2026-08-03 | Codex                               | 上传前追加无大面积遮罩版式来源清单校验，旧遮罩封面不得投递 |
@@ -587,6 +588,7 @@ def run_uploader(
     fail_fast_login: bool = False,  # 自动管线使用：登录失效立即返回，不等待二维码
     evidence_dir: str = None,
     cover_manually_verified: bool = False,
+    declare_original: bool = True,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -1782,15 +1784,18 @@ def run_uploader(
         # ── 执行原创声明流程 ───────────────────────────────────────────────────
         page.screenshot(path="output/debug_original_before.png")
 
-        toggle_ok = _click_original_toggle(page)
-        if toggle_ok:
-            dialog_ok = _handle_original_rights_dialog(page)
-            if dialog_ok:
-                logger.info("✅ Original declaration completed successfully")
+        if declare_original:
+            toggle_ok = _click_original_toggle(page)
+            if toggle_ok:
+                dialog_ok = _handle_original_rights_dialog(page)
+                if dialog_ok:
+                    logger.info("✅ Original declaration completed successfully")
+                else:
+                    logger.warning("⚠️ Original declaration dialog handling failed — proceeding anyway")
             else:
-                logger.warning("⚠️ Original declaration dialog handling failed — proceeding anyway")
+                logger.warning("⚠️ Original declaration toggle not found — proceeding anyway")
         else:
-            logger.warning("⚠️ Original declaration toggle not found — proceeding anyway")
+            logger.info("Skipping original declaration by explicit operator choice.")
 
         page.screenshot(path="output/debug_original_after.png")
 
@@ -1881,6 +1886,10 @@ def main():
                         help="自动发布模式：检测到登录失效立即退出，不等待二维码扫码")
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--draft",       action="store_true")
+    parser.add_argument(
+        "--no-original-declaration", dest="declare_original", action="store_false",
+        help="明确不声明原创；适用于转载或获授权素材",
+    )
     parser.set_defaults(headless=True)
     args = parser.parse_args()
 
@@ -1901,6 +1910,7 @@ def main():
             fail_fast_login = args.fail_fast_login,
             evidence_dir = args.evidence_dir,
             cover_manually_verified = args.cover_manually_verified,
+            declare_original = args.declare_original,
         )
     except Exception as exc:
         if not _is_playwright_target_closed(exc):
