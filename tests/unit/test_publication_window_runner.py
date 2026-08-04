@@ -13,7 +13,7 @@
 import fcntl
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import scripts.run_publication_window as runner
 
@@ -30,7 +30,7 @@ def test_runner_executes_pipeline_without_consulting_publication_window(monkeypa
     monkeypatch.setattr(runner, "PipelineManager", pipeline_manager)
 
     assert runner.run_publication_window() == 0
-    pipeline_manager.assert_called_once_with()
+    pipeline_manager.assert_called_once_with(status_reporter=ANY)
     manager.run_daily_job.assert_called_once_with()
 
 
@@ -41,7 +41,7 @@ def test_runner_executes_pipeline_inside_publication_window(monkeypatch, tmp_pat
     monkeypatch.setattr(runner, "PipelineManager", pipeline_manager)
 
     assert runner.run_publication_window() == 0
-    pipeline_manager.assert_called_once_with()
+    pipeline_manager.assert_called_once_with(status_reporter=ANY)
     manager.run_daily_job.assert_called_once_with()
 
 
@@ -73,3 +73,26 @@ def test_runner_records_running_instance_revision_and_completion(monkeypatch, tm
     assert status["git_revision"] == "test-revision"
     assert status["pid"] > 0
     assert status["started_at"] <= status["last_heartbeat_at"] == status["ended_at"]
+
+
+def test_runner_records_pipeline_stage_context(monkeypatch, tmp_path: Path):
+    _configure_runner_paths(monkeypatch, tmp_path)
+    manager = MagicMock()
+
+    def pipeline_factory(*, status_reporter):
+        status_reporter({
+            "current_video": "video-id",
+            "current_slice_index": 0,
+            "stage": "RENDERING",
+            "preparation_only": False,
+        })
+        return manager
+
+    monkeypatch.setattr(runner, "PipelineManager", pipeline_factory)
+
+    assert runner.run_publication_window() == 0
+
+    status = json.loads(runner.RUN_STATUS_PATH.read_text(encoding="utf-8"))
+    assert status["current_video"] == "video-id"
+    assert status["stage"] == "RENDERING"
+    assert status["stage_started_at"] <= status["ended_at"]

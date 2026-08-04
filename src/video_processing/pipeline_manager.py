@@ -91,6 +91,7 @@
 | 3.48.1  | 2026-08-03 | Codex                               | 视频号上传前检查既有提交后证据，阻止误回队列视频再次自动公开提交          |
 | 3.48.2  | 2026-08-04 | Codex                               | 渲染缓存校验区分成片损坏与 ffprobe 不可用；校验环境故障保留缓存并停止当前任务，避免误删触发长时间重渲 |
 | 3.48.3  | 2026-08-04 | Codex                               | 文案 checkpoint 与渲染前拒绝 HTTP 错误页，避免 fallback 错误响应被烧入视频或提交平台 |
+| 3.48.4  | 2026-08-04 | Codex                               | 通过可选回调上报单视频运行阶段，供巡航状态记录当前视频和阶段而不反向依赖脚本层 |
 """
 
 
@@ -105,7 +106,7 @@ import subprocess
 import requests
 import fcntl
 import html
-from typing import Dict, Any, Optional, Tuple
+from typing import Callable, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 from .db import PipelineDB
@@ -224,8 +225,14 @@ class PipelineManager:
     _OUT_DIR          = _PRJ_ROOT / "output"
     _ORIG_VIDEO_DIR   = _OUT_DIR / "original_video"   # [Claude_Sonnet_4.6_Thinking_planning] 原始视频归档目录
 
-    def __init__(self, db_path: str = "pipeline.db"):
+    def __init__(
+        self,
+        db_path: str = "pipeline.db",
+        *,
+        status_reporter: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ):
         self.db = PipelineDB(db_path)
+        self._status_reporter = status_reporter
         self._OUT_DIR.mkdir(exist_ok=True)
         self._ORIG_VIDEO_DIR.mkdir(exist_ok=True)  # [Claude_Sonnet_4.6_Thinking_planning] 归档目录随主目录一并创建
         self.telegram_token   = settings.telegram_bot_token
@@ -233,6 +240,27 @@ class PipelineManager:
         self._last_douyin_browser_action_at: Optional[float] = None
         self._douyin_platform_halted = False
         self._douyin_halt_reason = ""
+
+    def _report_runtime_stage(
+        self,
+        youtube_id: str,
+        stage: str,
+        *,
+        slice_index: int = 0,
+        preparation_only: bool = False,
+    ) -> None:
+        """向可选的外层运行态记录器报告当前视频阶段，失败不影响发布链路。"""
+        if self._status_reporter is None:
+            return
+        try:
+            self._status_reporter({
+                "current_video": youtube_id,
+                "current_slice_index": slice_index,
+                "stage": stage,
+                "preparation_only": preparation_only,
+            })
+        except Exception as exc:
+            logger.warning("[RuntimeStatus] Failed to report %s/%s: %s", youtube_id, stage, exc)
 
     # ── Telegram 通知 ─────────────────────────────────────────────────────────
 
@@ -1649,6 +1677,12 @@ class PipelineManager:
         trim_end   = video.get('trim_end')
         slice_index = video.get('slice_index', 0)
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        self._report_runtime_stage(
+            yid,
+            "WAITING_PIPELINE_LOCK",
+            slice_index=slice_index,
+            preparation_only=preparation_only,
+        )
 
         # [Claude_Sonnet_4.6_Thinking_planning] BUG-1 修复: signal.signal() 只能在主线程调用。
         # 此方法通过 daemon 线程执行，signal 注册已移至 app.py startup_event()。
@@ -1665,6 +1699,12 @@ class PipelineManager:
                 lock_file = open(lock_path, "w")
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
                 logger.info(f"[Lock] Acquired pipeline lock. Processing {prefix}...")
+                self._report_runtime_stage(
+                    yid,
+                    "CENSORSHIP_PRECHECK",
+                    slice_index=slice_index,
+                    preparation_only=preparation_only,
+                )
             except Exception as lock_err:
                 logger.error(f"Failed to acquire pipeline lock for {prefix}: {lock_err}")
                 self.db.update_video_status(yid, "FAILED", error_msg=f"Pipeline lock error: {lock_err}", slice_index=slice_index)
@@ -1682,6 +1722,12 @@ class PipelineManager:
             local_source = self._find_downloaded_video(yid)
             rendered_checkpoint = self._OUT_DIR / f"{prefix}_vertical.mp4"
             if not local_source and not rendered_checkpoint.is_file():
+                self._report_runtime_stage(
+                    yid,
+                    "SOURCE_SUBTITLE_PRECHECK",
+                    slice_index=slice_index,
+                    preparation_only=preparation_only,
+                )
                 if not self._ensure_source_subtitle_preflight(video):
                     return
             self.db.set_video_preparation_ready(yid, False, slice_index=slice_index)
@@ -1698,6 +1744,12 @@ class PipelineManager:
                     if target_file.exists() and target_file.stat().st_size > 50_000:
                         logger.info(f"[SKIP] Slice checkpoint: {target_file.name}")
                     else:
+                        self._report_runtime_stage(
+                            yid,
+                            "DOWNLOADING",
+                            slice_index=slice_index,
+                            preparation_only=preparation_only,
+                        )
                         parent_file = self._find_downloaded_video(yid)
                         if not parent_file:
                             raise FileNotFoundError(f"Parent video file not found for slice {prefix}")
@@ -1722,6 +1774,12 @@ class PipelineManager:
                         self.db.update_video_status(yid, "DOWNLOADING", slice_index=slice_index)
                         target_file = existing
                     else:
+                        self._report_runtime_stage(
+                            yid,
+                            "DOWNLOADING",
+                            slice_index=slice_index,
+                            preparation_only=preparation_only,
+                        )
                         self.db.update_video_status(yid, "DOWNLOADING", slice_index=slice_index)
                         logger.info(f"Downloading {yid}...")
                         # [Gemini_3.5_Flash_planning] v3.1.0: 针对代理环境下的 SSL UNEXPECTED_EOF_WHILE_READING 报错，
@@ -1921,6 +1979,12 @@ class PipelineManager:
                     _reason = checkpoint_reason or (
                         "label missing, re-generating" if (copy_file.exists() and title_file.exists()) else "first run"
                     )
+                    self._report_runtime_stage(
+                        yid,
+                        "COPYWRITING",
+                        slice_index=slice_index,
+                        preparation_only=preparation_only,
+                    )
                     self.db.update_video_status(yid, "COPYWRITING", slice_index=slice_index)
                     logger.info(f"Generating WeChat copy for {prefix}... ({_reason})")
                     copy_cmd = [
@@ -1998,6 +2062,12 @@ class PipelineManager:
                     logger.info(f"[SKIP] Transcribe checkpoint (bilingual verified): {vertical.name}")
                     self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
                 else:
+                    self._report_runtime_stage(
+                        yid,
+                        "RENDERING",
+                        slice_index=slice_index,
+                        preparation_only=preparation_only,
+                    )
                     # 强制清除过期/无效缓存
                     if vertical.exists():
                         try:
@@ -2080,8 +2150,13 @@ class PipelineManager:
                         )
                         return
 
-
                 # ── 2c. CENSORSHIP COPYWRITING CHECK ──────────────────────────────
+                self._report_runtime_stage(
+                    yid,
+                    "CONTENT_CENSORSHIP",
+                    slice_index=slice_index,
+                    preparation_only=preparation_only,
+                )
                 copy_content = ""
                 if copy_file.exists():
                     try:
@@ -2121,6 +2196,12 @@ class PipelineManager:
                     not content_aware_cover_enabled or cover_brief_file.is_file()
                 )
                 if not cover_checkpoint_ready:
+                    self._report_runtime_stage(
+                        yid,
+                        "COVER_GENERATION",
+                        slice_index=slice_index,
+                        preparation_only=preparation_only,
+                    )
                     logger.info(f"Generating cover for {prefix}...")
                     cover_title = title
                     if title_file.exists():
@@ -2274,6 +2355,12 @@ class PipelineManager:
                     return
 
                 self.db.update_video_status(yid, "PUBLISHING", slice_index=slice_index)
+                self._report_runtime_stage(
+                    yid,
+                    "WECHAT_UPLOADING",
+                    slice_index=slice_index,
+                    preparation_only=preparation_only,
+                )
                 logger.info(f"Uploading to WeChat Channels for {prefix}...")
 
                 # ── 合集（Collection）名称决策 ──────────────────────────────────

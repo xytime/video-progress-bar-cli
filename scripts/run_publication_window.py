@@ -10,6 +10,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 | 1.0.0 | 2026-07-31 | Codex | 新增窗口内巡航入口，以 Settings 作为唯一窗口判定并避免定时任务重叠 |
 | 1.1.0 | 2026-08-02 | Codex | 改为每分钟自动巡航，不再因发布时段跳过完整流水线 |
 | 1.2.0 | 2026-08-04 | Codex | 记录巡航实例 PID、Git revision 与心跳，区分已推送代码和实际运行版本 |
+| 1.3.0 | 2026-08-04 | Codex | 接收管线阶段回调，状态文件记录当前视频、阶段与阶段开始时间 |
 """
 
 from __future__ import annotations
@@ -76,14 +77,28 @@ def _read_run_status() -> dict[str, Any]:
         return {}
 
 
-def _start_heartbeat(status: dict[str, Any]) -> tuple[threading.Event, threading.Thread]:
+def _update_run_status(
+    status: dict[str, Any],
+    status_lock: threading.Lock,
+    **updates: Any,
+) -> None:
+    """串行合并状态更新，避免心跳与阶段回调互相覆盖 JSON。"""
+    with status_lock:
+        status.update(updates)
+        status["last_heartbeat_at"] = updates.get("last_heartbeat_at", _now_iso())
+        _write_run_status(status)
+
+
+def _start_heartbeat(
+    status: dict[str, Any],
+    status_lock: threading.Lock,
+) -> tuple[threading.Event, threading.Thread]:
     """低频刷新存活时间，避免锁跳过日志看起来像无进度。"""
     stop_event = threading.Event()
 
     def heartbeat() -> None:
         while not stop_event.wait(_HEARTBEAT_INTERVAL_SEC):
-            status["last_heartbeat_at"] = _now_iso()
-            _write_run_status(status)
+            _update_run_status(status, status_lock)
 
     thread = threading.Thread(target=heartbeat, name="publication-window-heartbeat", daemon=True)
     thread.start()
@@ -117,26 +132,38 @@ def run_publication_window() -> int:
             "started_at": started_at,
             "last_heartbeat_at": started_at,
         }
+        status_lock = threading.Lock()
         _write_run_status(status)
-        stop_heartbeat, heartbeat_thread = _start_heartbeat(status)
+        stop_heartbeat, heartbeat_thread = _start_heartbeat(status, status_lock)
+
+        def report_pipeline_stage(update: dict[str, Any]) -> None:
+            _update_run_status(
+                status,
+                status_lock,
+                **update,
+                stage_started_at=_now_iso(),
+            )
         try:
             logging.info(
                 "[AutoPublish] 启动完整流水线。 run_id=%s revision=%s",
                 status["run_id"],
                 status["git_revision"],
             )
-            PipelineManager().run_daily_job()
-            status["state"] = "COMPLETED"
+            PipelineManager(status_reporter=report_pipeline_stage).run_daily_job()
+            _update_run_status(status, status_lock, state="COMPLETED")
         except Exception as exc:
-            status["state"] = "FAILED"
-            status["error"] = str(exc)
+            _update_run_status(status, status_lock, state="FAILED", error=str(exc))
             raise
         finally:
             stop_heartbeat.set()
             heartbeat_thread.join(timeout=1)
-            status["last_heartbeat_at"] = _now_iso()
-            status["ended_at"] = status["last_heartbeat_at"]
-            _write_run_status(status)
+            ended_at = _now_iso()
+            _update_run_status(
+                status,
+                status_lock,
+                ended_at=ended_at,
+                last_heartbeat_at=ended_at,
+            )
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     return 0
