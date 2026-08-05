@@ -1,12 +1,18 @@
 ---
 created_by: Gemini_3.1_Pro_High
 created_at: 2026-05-17
-updated_by: Claude_Sonnet_4.6_Thinking_planning
-updated_at: 2026-06-08T10:05:00+08:00
+updated_by: Codex
+updated_at: 2026-08-05T10:35:18+08:00
 purpose: 视频处理项目的关键教训防重犯清单
 ---
 
 # 🧠 Critical Lessons — 视频字幕架构核心教训
+
+## L7: HTTP 错误页绝不能作为源标题译文入库 (P0)
+**症状**: 翻译服务将 Error 500 (Server Error)…That’s all we know. 作为普通字符串返回后，被写入 processed_videos.zh_title。即使实际文案短标题与成片标题正确，后台“源译名”仍被污染，并可能在缺失发布标题时参与后续回退。
+**根因**: 发现脚本与后台异步翻译只检查“非空且不同于英文”，未识别上游 HTML/HTTP 错误页；后台路径还绕过了 PipelineDB，直接执行 SQL。
+**规约**: 在共享 generated_content_validation 中识别“错误前缀 + 至少三个错误页固定短语”，以免误伤“如何修复 Error 500”这类真实技术主题。监控翻译命中时保留英文源标题；后台翻译命中时不得写入，并把既有错误页译名回退到英文源标题。所有数据库更新必须走 PipelineDB.update_video_zh_title()。
+**处置**: 修复历史脏数据前，先核对平台账本与视频号提交证据；仅更正 zh_title，不得改任务状态、停止渲染或触发重发。运行中仪表盘必须待流水线空闲后再安全重启，避免杀掉其子进程。
 
 ## L1: ASS 字幕格式与 Python 换行符冲突 (P1)
 **症状**: 英文过长自动折行时，如果不转换换行符，可能导致生成的 `.ass` 文件损坏或不生效。
