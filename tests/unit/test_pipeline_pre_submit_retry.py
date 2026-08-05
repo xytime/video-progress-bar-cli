@@ -38,6 +38,20 @@ def test_transient_pre_submit_failure_requeues_with_bounded_attempt(tmp_path):
     assert "Pre-submit auto retry scheduled" in messages[0]
 
 
+def test_curl_ssl_timeout_is_a_retryable_pre_submit_failure(tmp_path):
+    manager = _manager(tmp_path, "curl-timeout-video")
+    manager.db.update_video_status("curl-timeout-video", "DOWNLOADING")
+    manager.send_telegram_msg = lambda _message: None
+
+    assert manager._requeue_transient_pre_submission_failure(
+        "curl-timeout-video", "测试标题", "curl: (28) SSL connection timeout"
+    )
+
+    row = manager.db.get_video_by_youtube_id("curl-timeout-video")
+    assert row["status"] == "PENDING"
+    assert row["retry_count"] == 1
+
+
 def test_transient_retry_refuses_existing_wechat_submission_evidence(tmp_path):
     manager = _manager(tmp_path, "submitted-video")
     manager.db.update_video_status("submitted-video", "DOWNLOADING")

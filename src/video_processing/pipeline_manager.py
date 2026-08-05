@@ -148,6 +148,8 @@ _COPY_NUMERIC_WARNING_CODES = frozenset({
 })
 _TRANSIENT_PRE_SUBMISSION_FAILURE_MARKERS = (
     "curl exited with code 18",
+    "curl: (28)",
+    "ssl connection timeout",
     "transfer closed",
     "http error 500",
     "server error",
