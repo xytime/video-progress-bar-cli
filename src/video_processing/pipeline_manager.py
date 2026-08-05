@@ -255,7 +255,7 @@ class PipelineManager:
         self._OUT_DIR.mkdir(exist_ok=True)
         self._ORIG_VIDEO_DIR.mkdir(exist_ok=True)  # [Claude_Sonnet_4.6_Thinking_planning] 归档目录随主目录一并创建
         self.telegram_token   = settings.telegram_bot_token
-        self.telegram_chat_id = settings.telegram_chat_id
+        self.telegram_chat_id = settings.active_telegram_chat_id
         self._last_douyin_browser_action_at: Optional[float] = None
         self._douyin_platform_halted = False
         self._douyin_halt_reason = ""

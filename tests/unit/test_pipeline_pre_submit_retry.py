@@ -4,10 +4,12 @@
 | Version | Date | Author | Description |
 | ------- | ---- | ------ | ----------- |
 | 1.0.0 | 2026-08-05 | Codex | 覆盖可安全自动重试边界、提交证据保护和 Telegram 数字告警 |
+| 1.1.0 | 2026-08-05 | Codex | 覆盖 curl SSL 超时重试及 Telegram 管理员回退会话 |
 """
 
 import json
 
+from config.settings import settings
 from video_processing.pipeline_manager import PipelineManager
 
 
@@ -50,6 +52,15 @@ def test_curl_ssl_timeout_is_a_retryable_pre_submit_failure(tmp_path):
     row = manager.db.get_video_by_youtube_id("curl-timeout-video")
     assert row["status"] == "PENDING"
     assert row["retry_count"] == 1
+
+
+def test_manager_uses_active_telegram_chat_id_fallback(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "telegram_chat_id", None)
+    monkeypatch.setattr(settings, "telegram_admin_ids", "fallback-chat,another-admin")
+
+    manager = _manager(tmp_path, "telegram-fallback-video")
+
+    assert manager.telegram_chat_id == "fallback-chat"
 
 
 def test_transient_retry_refuses_existing_wechat_submission_evidence(tmp_path):
