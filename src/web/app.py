@@ -47,6 +47,7 @@
 | 3.18.2 | 2026-07-30 | Codex                               | 音轨规格改变时失效竖版成片与封面缓存，避免配音版继续复用原声封面       |
 | 3.18.3 | 2026-07-31 | Codex                               | 同步删除封面来源清单，防止音轨规格切换后遗留哈希失配的封面证明         |
 | 3.18.4 | 2026-08-04 | Codex                               | 仪表盘列表优先展示真实投递短标题，避免本地 zh_title 与微信后台标题错位 |
+| 3.18.5 | 2026-08-05 | Codex                               | 后台标题翻译拒绝 Error 500 响应并改走 zh_title DAL，防止列表源译名污染 |
 """
 import hashlib
 import logging
@@ -77,6 +78,7 @@ from pydantic import BaseModel
 from video_processing.db.database import PipelineDB
 from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning] 统一翻译入口
+from video_processing.utils.generated_content_validation import is_upstream_error_response
 from web.listening_transcriber import router as listening_transcriber_router
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
@@ -213,14 +215,14 @@ def _translate_title_task(youtube_id: str, english_title: str):
     """
     try:
         zh_title = _translate_text(english_title, src_lang="auto", target_lang="zh-CN")
-        if zh_title and zh_title != english_title:
-            with db.get_connection() as conn:
-                conn.execute(
-                    "UPDATE processed_videos SET zh_title = ? WHERE youtube_id = ?",
-                    (zh_title, youtube_id)
-                )
-                conn.commit()
+        if zh_title and zh_title != english_title and not is_upstream_error_response(zh_title):
+            db.update_video_zh_title(youtube_id, zh_title)
             print(f"[Translator] {youtube_id} translated: {zh_title}")
+        elif is_upstream_error_response(zh_title):
+            existing = db.get_video_by_youtube_id(youtube_id)
+            if existing and is_upstream_error_response(existing.get("zh_title") or ""):
+                db.update_video_zh_title(youtube_id, english_title)
+            print(f"[Translator] {youtube_id} returned upstream error page; keeping source title")
     except Exception as e:
         print(f"[Translator] Failed to translate {youtube_id}: {e}")
     finally:

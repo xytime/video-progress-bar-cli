@@ -5,11 +5,24 @@
 |---------|------------|--------|-------------|
 | 1.0.0   | 2026-07-12 | Codex  | 覆盖6/12/24小时熔断、成功复位及演讲类40分发布线 |
 | 1.1.0   | 2026-07-28 | Codex  | 覆盖 RSS 降级成功复位与待补全候选转 PENDING 语义 |
+| 1.2.0   | 2026-08-05 | Codex  | 覆盖标题翻译错误页回退到源标题，避免污染 zh_title |
 """
 import datetime
 
 from scripts import monitor_channels
 from video_processing.db import PipelineDB
+
+
+def test_title_translation_error_page_falls_back_to_source(monkeypatch):
+    source = "SPACEX EARNINGS PREVIEW: The Hidden Short Squeeze"
+    monkeypatch.setattr(
+        monitor_channels,
+        "_translate_text",
+        lambda *_args, **_kwargs: "Error 500 (Server Error)!!1500. That's an error. "
+        "There was an error. Please try again later. That's all we know.",
+    )
+
+    assert monitor_channels._translate_title_or_source("test-video", source) == source
 
 
 def test_access_backoff_grows_and_success_resets():

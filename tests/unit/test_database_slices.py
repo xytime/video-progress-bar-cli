@@ -6,6 +6,7 @@
 | 1.2.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证 purge_stale_tasks, batch_add_videos 补齐 disable_slicing 以及 delete_slices_by_parent_id |
 | 1.3.0   | 2026-07-13 | Codex                    | 覆盖 AI 字幕审计运行、provider 尝试与汇总查询 |
 | 1.4.0   | 2026-07-29 | Codex                    | 覆盖发布后日指标、内容身份、视频关系和 AB 实验汇总 |
+| 1.5.0   | 2026-08-05 | Codex                    | 覆盖源标题译文的定点更新 DAL |
 | 1.1.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证多切片视频在不同子切片状态下的 Tab 归属逻辑 |
 | 1.0.0   | 2026-05-27 | Gemini_3.5_Flash_planning | Initial TDD test creation for database composite keys |
 """
@@ -66,6 +67,18 @@ def test_composite_unique_constraint(temp_db):
         slice_index=1
     )
     assert success3 is True
+
+
+def test_update_video_zh_title_does_not_change_status(temp_db):
+    db = PipelineDB(temp_db)
+    assert db.add_video("translated-title", "English source", "channel", score=80)
+    db.update_video_status("translated-title", "COPYWRITING")
+
+    assert db.update_video_zh_title("translated-title", "中文源标题")
+    row = db.get_video_by_youtube_id("translated-title")
+
+    assert row["zh_title"] == "中文源标题"
+    assert row["status"] == "COPYWRITING"
 
 def test_batch_insertion_and_cascade(temp_db):
     """测试批量插入与级联删除父子任务关系"""

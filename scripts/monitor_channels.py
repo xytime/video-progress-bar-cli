@@ -21,6 +21,7 @@
 | 2.4.0   | 2026-07-12 | Codex                          | [首次初始化] 增加 --bootstrap：一次性全量轮询批准频道，并将发现窗口放宽到最近5天 |
 | 2.5.0   | 2026-07-12 | Codex                          | [访问减压] 频道最多解析12条；取消被拒后的即时重试；连续拒绝按6/12/24小时逐频道熔断 |
 | 3.0.0   | 2026-07-28 | Codex                          | [断供根治] 官方 Data API 主源、RSS 无密钥降级；发现脱离 yt-dlp，RSS 条目待元数据补全后才可评分 |
+| 3.1.0   | 2026-08-05 | Codex                          | [标题译文防污] 拒绝 Error 500 错误页写入 zh_title，保留原始英文标题待下轮翻译 |
 """
 import sys
 import argparse
@@ -35,6 +36,7 @@ sys.path.append(str(Path(__file__).parent.parent / "src"))
 from video_processing.db import PipelineDB
 from config.settings import settings  # [Gemini_3.5_Flash_High_planning]
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning]
+from video_processing.utils.generated_content_validation import is_upstream_error_response
 from video_processing.utils.youtube_catalog import YouTubeCatalogError, fetch_channel_catalog
 
 # 由 cron 每 30 分钟唤醒，但不再每轮访问所有频道。
@@ -61,6 +63,19 @@ _YTDLP = settings.ytdlp_path
 # 发现仅需元数据，不下载；YouTube 对格式下发做 bot/PO-token 门控时 --print 会整体中止，
 # 故统一忽略"无可用格式"错误，保证 view/like/duration 等元数据照常取回。
 _IGNORE_NO_FORMATS = "--ignore-no-formats-error"
+
+
+def _translate_title_or_source(video_id: str, title: str) -> str:
+    """翻译失败或收到错误页时保留源标题，绝不污染监控列表。"""
+    try:
+        translated = _translate_text(title, src_lang="auto", target_lang="zh-CN")
+    except Exception as exc:
+        print(f"  -> Translator failed for {video_id}: {exc}")
+        return title
+    if not translated or is_upstream_error_response(translated):
+        print(f"  -> Translator returned upstream error page for {video_id}; keeping source title")
+        return title
+    return translated
 
 # 定义主动发现的静态热门搜索词
 STATIC_KEYWORDS = [
@@ -111,11 +126,7 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str, lookback_days: int = 3)
 
         for video in catalog.videos:
             # 翻译标题（阿里云 MT 优先）
-            zh_title = video.title
-            try:
-                zh_title = _translate_text(video.title, src_lang="auto", target_lang="zh-CN")
-            except Exception as e:
-                print(f"  -> Translator failed for {video.youtube_id}: {e}")
+            zh_title = _translate_title_or_source(video.youtube_id, video.title)
 
             result = db.upsert_monitored_video(
                 video.youtube_id, video.title, channel_id,
@@ -322,11 +333,7 @@ def discover_high_like_videos(db: PipelineDB):
                         # 筛选最近 3 天内发布且观看量>500的视频
                         if upload_date and upload_date >= yesterday_str:
                             if view_count and view_count > 500:
-                                zh_title = title
-                                try:
-                                    zh_title = _translate_text(title, src_lang="auto", target_lang="zh-CN")
-                                except Exception as e:
-                                    print(f"  -> Translator failed for {video_id}: {e}")
+                                zh_title = _translate_title_or_source(video_id, title)
 
                                 # [Gemini_3.5_Flash_planning] 进行敏感词检测
                                 censor_tag = None

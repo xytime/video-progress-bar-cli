@@ -67,6 +67,7 @@
 | 3.25.2  | 2026-08-03 | Codex                               | AI 封面完成只允许 AI_COVER_PENDING 原子回到 PENDING，防止已发布视频被旧任务重新入队 |
 | 3.25.3  | 2026-08-03 | Codex                               | 配音任务创建时持久化实际 TTS provider，保证频道专属音色可追溯 |
 | 3.25.4  | 2026-08-05 | Codex                               | 新增上传前瞬态失败的原子重入队接口；只允许下载/文案/转录阶段且递增 retry_count |
+| 3.25.5  | 2026-08-05 | Codex                               | 增加 zh_title 定点更新 DAL，移除后台标题翻译路径的裸 SQL |
 """
 
 import sqlite3
@@ -1890,6 +1891,17 @@ class PipelineDB:
                 (status, error_msg, youtube_id, slice_index)
             )
             conn.commit()
+
+    def update_video_zh_title(self, youtube_id: str, zh_title: str, slice_index: int = 0) -> bool:
+        """更新单条任务的源标题译文，不改变其处理或发布状态。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos SET zh_title = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                ((zh_title or "").strip() or None, youtube_id, slice_index),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def requeue_transient_pre_submission_failure(
         self,

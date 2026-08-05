@@ -4,12 +4,14 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-04 | Codex | 覆盖 HTTP 错误页阻断及正常技术标题不误伤 |
+| 1.1.0 | 2026-08-05 | Codex | 覆盖完整 Error 500 错误页不能作为标题翻译入库 |
 """
 
 import pytest
 
 from video_processing.utils.generated_content_validation import (
     GeneratedContentValidationError,
+    is_upstream_error_response,
     validate_publishable_generated_content,
 )
 
@@ -27,6 +29,17 @@ def test_rejects_google_error_page_copy():
 
     with pytest.raises(GeneratedContentValidationError, match="HTTP 错误页"):
         validate_publishable_generated_content("英伟达芯片变革", copy)
+
+
+def test_rejects_full_error_page_as_title_translation():
+    error_page = (
+        "Error 500 (Server Error)!!1500.That’s an error.There was an error. "
+        "Please try again later.That’s all we know."
+    )
+
+    assert is_upstream_error_response(error_page)
+    with pytest.raises(GeneratedContentValidationError, match="短标题是上游错误响应"):
+        validate_publishable_generated_content(error_page, "这是一段正常文案。")
 
 
 def test_allows_normal_technical_error_500_topic():
