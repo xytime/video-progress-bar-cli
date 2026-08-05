@@ -10,7 +10,7 @@
 | 1.3.0 | 2026-08-03 | Codex | 覆盖连续原声滚动、右栏最高难度五词和词卡释义清洗。 |
 | 1.3.1 | 2026-08-04 | Codex | 覆盖长正文右栏兜底词卡组，防止滚动后核心词汇区空白。 |
 | 1.4.0 | 2026-08-04 | Codex | 覆盖长段落溢出前滚动，防止正在朗读的词与红线被阅读窗裁掉。 |
-| 1.5.0 | 2026-08-04 | Codex | 覆盖真实阅读窗的 8–12 项微笔记选择，不再依赖全篇数量上限。 |
+| 1.5.0 | 2026-08-04 | Codex | 覆盖真实阅读窗的微笔记下限选择，不再依赖全篇或单屏数量上限。 |
 """
 
 from pathlib import Path
@@ -20,17 +20,14 @@ import pytest
 from video_processing.study_cards import StudyCardContent, StudyCardRenderer, VocabularyItem
 from video_processing.study_cards.renderer import ScrollStep
 from video_processing.study_cards.template_a import (
-    MAX_MICRO_NOTES_PER_SCREEN,
     MIN_MICRO_NOTES_PER_SCREEN,
     TEXT_TOP,
     WordBox,
-    RIGHT_PARAGRAPH_GROUP_LEAD,
+    RIGHT_CARD_TOP,
     RecordUnderlineTemplate,
-    _fallback_vocabulary_group_tops,
     _highlighted_token_indices,
     _learning_label,
     _meaning_line,
-    _paragraph_vocabulary_tops,
     _right_vocabulary_items,
     _vocabulary_anchor_y,
 )
@@ -235,32 +232,8 @@ def test_right_vocabulary_uses_the_highest_difficulty_five_left_notes():
     assert [item.word for item in _right_vocabulary_items(items)] == ["cae", "cet6", "fce", "cet4", "gaokao"]
 
 
-def test_right_vocabulary_fallback_groups_cover_long_scrolled_reading():
-    content = StudyCardContent.from_mapping({
-        "headline_zh": "测试新闻标题",
-        "headline_en": "A short test headline",
-        "english_text": "early late",
-        "translation_zh": "测试。",
-        "words": [
-            {"text": "early", "start": 0.0, "end": 0.5},
-            {"text": "late", "start": 0.5, "end": 1.0},
-        ],
-        "paragraphs": [
-            {"english_text": "early", "translation_zh": "前段。"},
-            {"english_text": "late", "translation_zh": "后段。"},
-        ],
-        "vocabulary": [{"word": "late", "meaning_zh": "晚的", "level": "PET"}],
-    })
-    boxes = (
-        WordBox("early", 54, TEXT_TOP + 50, 80),
-        WordBox("late", 54, TEXT_TOP + 4300, 80),
-    )
-
-    paragraph_tops = _paragraph_vocabulary_tops(content, boxes)
-    tops = _fallback_vocabulary_group_tops(paragraph_tops)
-
-    assert tops[0] == TEXT_TOP
-    assert TEXT_TOP + 4300 - 53 - RIGHT_PARAGRAPH_GROUP_LEAD in tops
+def test_right_vocabulary_uses_a_fixed_full_group_for_each_reading_screen():
+    assert RIGHT_CARD_TOP >= TEXT_TOP
 
 
 def test_word_card_meaning_removes_duplicate_part_of_speech_and_keeps_more_definition():
@@ -283,7 +256,7 @@ def test_vocabulary_card_anchor_uses_the_first_matching_body_word(tmp_path: Path
     assert _vocabulary_anchor_y(VocabularyItem("spotted", "发现"), assets.word_boxes) == spotted_box.y - 53
 
 
-def test_visual_vocabulary_selection_uses_per_screen_limits_without_a_global_cap():
+def test_visual_vocabulary_selection_uses_a_per_screen_minimum_without_any_cap():
     template = RecordUnderlineTemplate()
     candidates = tuple(VocabularyItem(f"word{index}", "学习词", level="PET") for index in range(16))
     boxes = tuple(
@@ -299,7 +272,6 @@ def test_visual_vocabulary_selection_uses_per_screen_limits_without_a_global_cap
 
     assert len(selected) == 16
     assert MIN_MICRO_NOTES_PER_SCREEN == 8
-    assert MAX_MICRO_NOTES_PER_SCREEN == 12
 
 
 def test_phrase_vocabulary_marks_every_word_but_shows_the_note_once():

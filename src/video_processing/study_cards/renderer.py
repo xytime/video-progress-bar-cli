@@ -16,6 +16,7 @@
 | 1.6.0 | 2026-08-03 | Codex | 移除翻页静音暂停，滚动改为连续原声下的自然段边界少量动画。 |
 | 1.6.1 | 2026-08-04 | Codex | 将显式长样片上限扩展到 120 秒，仍保持生产片段 30 秒硬上限。 |
 | 1.7.0 | 2026-08-04 | Codex | 滚动由可见行溢出预测触发，不再只等待下一自然段，确保朗读词与逐词红线始终留在阅读窗内。 |
+| 1.7.1 | 2026-08-05 | Codex | 滚动落点上移一行，避免新阅读屏顶部残留上一段的半行文字。 |
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from .template_a import (
     CANVAS_WIDTH,
     FEATURE_BOX,
     READING_VIEWPORT_BOTTOM,
+    RIGHT_CARD_TOP,
     TEXT_TOP,
     VIDEO_BOX,
     RecordUnderlineTemplate,
@@ -47,7 +49,7 @@ _AUDIO_FADE_SECONDS = 0.08
 _SCROLL_TRANSITION_SECONDS = 0.62
 _SCROLL_LEAD_SECONDS = 0.16
 _SCROLL_TRIGGER_Y = READING_VIEWPORT_BOTTOM - 105
-_SCROLL_TARGET_Y = TEXT_TOP + 180
+_SCROLL_TARGET_Y = TEXT_TOP + 80
 _MAX_SCROLL_STEPS_PER_30_SECONDS = 4
 _PRODUCTION_MAX_DURATION = 30.0
 _TEST_MAX_DURATION = 120.0
@@ -115,11 +117,28 @@ class StudyCardRenderer:
                 (0, *(step.to_offset for step in scroll_steps)),
             )
             render_content = replace(content, vocabulary=visible_vocabulary)
-            assets = self.template.render_static(render_content, work_dir)
+            final_layout = self.template.render_static(render_content, work_dir)
+            source_timed_boxes = self.template.map_word_boxes(render_content.words, final_layout.word_boxes)
+            scroll_steps = self._build_scroll_steps(render_content, source_timed_boxes)
+            assets = self.template.render_static(
+                render_content,
+                work_dir,
+            )
             source_timed_boxes = self.template.map_word_boxes(render_content.words, assets.word_boxes)
             output_duration = source_clip_duration
             underline_video = work_dir / "template_a_underlines.mov"
-            self._render_underline_overlay(underline_video, source_timed_boxes, scroll_steps, output_duration)
+            right_vocabulary_screens = self.template.right_vocabulary_for_screens(
+                render_content.vocabulary,
+                assets.word_boxes,
+                (0, *(step.to_offset for step in scroll_steps)),
+            )
+            self._render_underline_overlay(
+                underline_video,
+                source_timed_boxes,
+                scroll_steps,
+                output_duration,
+                right_vocabulary_screens,
+            )
             self._run_ffmpeg(
                 source_video=source_video,
                 base_image=assets.base_image,
@@ -245,6 +264,7 @@ class StudyCardRenderer:
         timed_boxes: list[tuple[StudyWord, Any]],
         scroll_steps: list[ScrollStep],
         duration: float,
+        right_vocabulary_screens: dict[int, tuple[Any, ...]],
     ) -> None:
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         viewport_height = READING_VIEWPORT_BOTTOM - TEXT_TOP
@@ -273,6 +293,12 @@ class StudyCardRenderer:
                             y = box.y - self._scroll_offset_at(timestamp, scroll_steps) - TEXT_TOP
                             if -6 <= y < viewport_height:
                                 draw.rectangle((box.x, y, box.x + width, y + 5), fill=(198, 67, 45, 255))
+                screen_offset = self._current_screen_offset(timestamp, scroll_steps)
+                self.template.draw_right_vocabulary_group(
+                    draw,
+                    right_vocabulary_screens.get(screen_offset, ()),
+                    viewport_y=RIGHT_CARD_TOP - TEXT_TOP,
+                )
                 process.stdin.write(frame.tobytes())
             process.stdin.close()
         except BrokenPipeError:
@@ -426,6 +452,19 @@ class StudyCardRenderer:
                 break
             offset = step.to_offset
         return int(round(offset))
+
+    @staticmethod
+    def _current_screen_offset(timestamp: float, steps: list[ScrollStep]) -> int:
+        """滚动过半后切换右栏到目的屏词卡，避免显示不相干的下一屏残影。"""
+        offset = 0
+        for step in steps:
+            if timestamp < step.start:
+                return offset
+            if step.start <= timestamp <= step.end:
+                midpoint = step.start + (step.end - step.start) / 2
+                return step.to_offset if timestamp >= midpoint else step.from_offset
+            offset = step.to_offset
+        return offset
 
     @staticmethod
     def _underline_alpha_expression(box_width: int, start: float, end: float) -> str:

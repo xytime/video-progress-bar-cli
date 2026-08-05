@@ -22,6 +22,8 @@
 | 1.10.0 | 2026-08-04 | Codex | 右栏为长正文滚动屏补充兜底词卡组，避免后半段核心词汇区空白。 |
 | 1.11.0 | 2026-08-04 | Codex | 放大栏目标题与新闻标题并增加描边阴影，提升手机端首屏辨识；配合长文微笔记池保证每屏学习信息密度。 |
 | 1.12.0 | 2026-08-04 | Codex | 按真实阅读窗挑选微笔记：不设全篇总量，只保证每屏 8–12 个，避免首屏过密和后屏稀疏。 |
+| 1.13.0 | 2026-08-05 | Codex | 取消单屏微笔记上限；词下中文释义改为完整多行排版，空间不足通过阅读区提前滚动解决。 |
+| 1.14.0 | 2026-08-05 | Codex | 微笔记按同一英文行分层避让；右栏按每个阅读屏的左侧候选稳定填充五张词卡。 |
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ FEATURE_BOX = (760, 248, 1018, 568)
 TEXT_LEFT = 54
 TEXT_TOP = 720
 TEXT_WIDTH = 650
+ENGLISH_LINE_WIDTH = 570
 READING_VIEWPORT_BOTTOM = 1840
 VOCAB_BOX = (724, 604, 1025, 1820)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -60,10 +63,9 @@ MARKED_WORD_BACKGROUND = "#F3DDD5"
 MARKED_WORD_TEXT = "#A53C2B"
 RIGHT_VOCABULARY_LIMIT = 5
 MIN_MICRO_NOTES_PER_SCREEN = 8
-MAX_MICRO_NOTES_PER_SCREEN = 12
-RIGHT_CARD_HEIGHT = 170
-RIGHT_CARD_GAP = 18
-RIGHT_PARAGRAPH_GROUP_LEAD = 120
+RIGHT_CARD_TOP = 730
+RIGHT_CARD_HEIGHT = 174
+RIGHT_CARD_GAP = 11
 POS_PATTERN = re.compile(r"\b(?:interj|conj|prep|pron|adj|adv|aux|det|num|vt|vi|int|n|v)\.?", re.IGNORECASE)
 
 
@@ -110,8 +112,8 @@ class RecordUnderlineTemplate:
         reading = Image.new("RGBA", (CANVAS_WIDTH, reading_height), (0, 0, 0, 0))
         reading_draw = ImageDraw.Draw(reading)
         word_boxes, _ = self._draw_reading_body(reading_draw, content)
-        paragraph_tops = _paragraph_vocabulary_tops(content, tuple(word_boxes))
-        self._draw_aligned_vocabulary(reading_draw, content.vocabulary, paragraph_tops)
+        # 右栏词卡由渲染器按当前阅读屏绘制为独立动态层，避免下一屏卡片
+        # 在尚未滚动时提前露到本屏底部。
 
         base_image = output_dir / "template_a_base.png"
         page.save(base_image)
@@ -149,9 +151,9 @@ class RecordUnderlineTemplate:
     ) -> tuple[VocabularyItem, ...]:
         """在真实阅读窗中挑选微笔记，不以全篇词数设隐性上限。
 
-        每个候选按其所有正文出现位置映射到滚动后的各屏；贪心选择时避免让
-        任一屏超过 12 个。若某屏没有足够的可审阅候选，直接报错而非静默交付
-        稀疏页面，交由上游补充离线词表或短语 JSON。
+        每个候选按其所有正文出现位置映射到滚动后的各屏；仅保证每屏至少
+        八项，不为全文或单屏施加上限。若某屏没有足够的可审阅候选，直接报错
+        而非静默交付稀疏页面，交由上游补充离线词表或短语 JSON。
         """
         offsets = tuple(dict.fromkeys(int(offset) for offset in screen_offsets))
         if not offsets or not candidates:
@@ -181,12 +183,9 @@ class RecordUnderlineTemplate:
                 key = _normalise_phrase(item.word)
                 if key in selected_keys or key not in available:
                     continue
-                affected = memberships[key]
-                if any(screen_counts[index] >= MAX_MICRO_NOTES_PER_SCREEN for index in affected):
-                    continue
                 selected.append(item)
                 selected_keys.add(key)
-                for index in affected:
+                for index in memberships[key]:
                     screen_counts[index] += 1
             if screen_counts[screen_index] < MIN_MICRO_NOTES_PER_SCREEN:
                 raise ValueError(
@@ -234,14 +233,14 @@ class RecordUnderlineTemplate:
         english_font = _latin_font(40, bold=True)
         gloss_font = _font(22, bold=True)
         translation_font = _font(30)
-        line_height = 92
         y = TEXT_TOP
         boxes: list[WordBox] = []
         for paragraph in content.paragraphs:
-            lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, TEXT_WIDTH)
+            lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, ENGLISH_LINE_WIDTH)
             translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
             for line in lines:
                 highlights = _highlighted_token_indices(line, content.vocabulary)
+                note_layout, line_height = _layout_line_notes(line, highlights, english_font, gloss_font)
                 x = TEXT_LEFT
                 for token_index, token in enumerate(line):
                     width = int(draw.textlength(token, font=english_font))
@@ -253,9 +252,14 @@ class RecordUnderlineTemplate:
                     draw.text((x, y), token, font=english_font, fill=MARKED_WORD_TEXT if meaning else INK)
                     boxes.append(WordBox(token, x, y + 53, max(8, width)))
                     if meaning and show_note:
-                        note = _ellipsize(meaning, gloss_font, max(width + 22, 80))
-                        note_width = int(draw.textlength(note, font=gloss_font))
-                        draw.text((x + max(0, (width - note_width) // 2), y + 56), note, font=gloss_font, fill=MUTED)
+                        note_lines, note_x, note_y = note_layout[token_index]
+                        for note_line_index, note_line in enumerate(note_lines):
+                            draw.text(
+                                (note_x, y + note_y + note_line_index * 27),
+                                note_line,
+                                font=gloss_font,
+                                fill=MUTED,
+                            )
                     x += width + int(draw.textlength(" ", font=english_font))
                 y += line_height
             translation_line_height = 43
@@ -272,30 +276,49 @@ class RecordUnderlineTemplate:
         translation_font = _font(30)
         y = TEXT_TOP
         for paragraph in content.paragraphs:
-            lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, TEXT_WIDTH)
+            lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, ENGLISH_LINE_WIDTH)
             translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
-            y += len(lines) * 92
+            for line in lines:
+                highlights = _highlighted_token_indices(line, content.vocabulary)
+                _, line_height = _layout_line_notes(line, highlights, english_font, _font(22, bold=True))
+                y += line_height
             y += 13 + len(translation_lines) * 43 + 28
         return y
 
-    def _draw_aligned_vocabulary(
+    def right_vocabulary_for_screens(
+        self,
+        items: tuple[VocabularyItem, ...],
+        boxes: tuple[WordBox, ...],
+        screen_offsets: Iterable[int],
+    ) -> dict[int, tuple[VocabularyItem, ...]]:
+        """返回每个阅读屏对应的五张右栏词卡，不修改页面长图。"""
+        result: dict[int, tuple[VocabularyItem, ...]] = {}
+        for offset in tuple(dict.fromkeys(int(value) for value in screen_offsets)) or (0,):
+            visible_items = tuple(
+                item for item in items
+                if any(
+                    TEXT_TOP <= y - offset <= READING_VIEWPORT_BOTTOM - 80
+                    for y in _vocabulary_occurrence_y_positions(item, boxes)
+                )
+            )
+            result[offset] = _right_vocabulary_items(visible_items or items)
+        return result
+
+    def draw_right_vocabulary_group(
         self,
         draw: ImageDraw.ImageDraw,
         items: tuple[VocabularyItem, ...],
-        paragraph_tops: tuple[int, ...],
+        *,
+        viewport_y: int,
     ) -> None:
-        right_items = _right_vocabulary_items(items)
-        if not right_items:
-            return
-        drawn_ranges: list[tuple[int, int]] = []
-        for group_top in _fallback_vocabulary_group_tops(paragraph_tops):
-            y = group_top
-            for index, item in enumerate(right_items):
-                target_range = (y, y + RIGHT_CARD_HEIGHT)
-                if not _overlaps_any(target_range, drawn_ranges, margin=20):
-                    _draw_vocabulary_card(draw, item, index, y)
-                    drawn_ranges.append(target_range)
-                y += RIGHT_CARD_HEIGHT + RIGHT_CARD_GAP
+        """在当前阅读窗内绘制完整五卡组。"""
+        for index, item in enumerate(items):
+            _draw_vocabulary_card(
+                draw,
+                item,
+                index,
+                viewport_y + index * (RIGHT_CARD_HEIGHT + RIGHT_CARD_GAP),
+            )
 
     def _draw_feature_banner(self, output_path: Path) -> None:
         size = (FEATURE_BOX[2] - FEATURE_BOX[0], FEATURE_BOX[3] - FEATURE_BOX[1])
@@ -385,6 +408,60 @@ def _right_vocabulary_items(items: tuple[VocabularyItem, ...]) -> tuple[Vocabula
     return tuple(ranked[:RIGHT_VOCABULARY_LIMIT])
 
 
+def _layout_line_notes(
+    line: list[str],
+    highlights: dict[int, tuple[str, bool]],
+    english_font: ImageFont.FreeTypeFont,
+    gloss_font: ImageFont.FreeTypeFont,
+) -> tuple[dict[int, tuple[list[str], int, int]], int]:
+    """为同一英文行的词下注释分层避让，保留完整中文而不重叠。"""
+    token_positions: list[tuple[int, int]] = []
+    x = TEXT_LEFT
+    space_width = int(english_font.getlength(" "))
+    for token in line:
+        width = int(english_font.getlength(token))
+        token_positions.append((x, width))
+        x += width + space_width
+
+    lanes: list[dict[str, object]] = []
+    placements: dict[int, tuple[list[str], int, int]] = {}
+    for token_index, (meaning, show_note) in highlights.items():
+        if not meaning or not show_note:
+            continue
+        token_x, token_width = token_positions[token_index]
+        available_width = max(150, min(220, token_width + 38))
+        note_lines = _wrap_chinese(meaning, gloss_font, available_width)
+        note_width = max(int(gloss_font.getlength(note_line)) for note_line in note_lines)
+        note_x = max(TEXT_LEFT, min(token_x + (token_width - note_width) // 2, TEXT_LEFT + ENGLISH_LINE_WIDTH - note_width))
+        range_start, range_end = note_x - 4, note_x + note_width + 4
+        note_height = len(note_lines) * 27
+        lane_index = next(
+            (
+                index for index, lane in enumerate(lanes)
+                if all(range_end <= left or range_start >= right for left, right in lane["ranges"])
+            ),
+            None,
+        )
+        if lane_index is None:
+            lane_index = len(lanes)
+            lanes.append({"ranges": [], "height": 0})
+        lane = lanes[lane_index]
+        lane["ranges"].append((range_start, range_end))
+        lane["height"] = max(int(lane["height"]), note_height)
+        placements[token_index] = (note_lines, note_x, lane_index)
+
+    lane_tops: list[int] = []
+    next_y = 56
+    for lane in lanes:
+        lane_tops.append(next_y)
+        next_y += int(lane["height"])
+    resolved = {
+        token_index: (note_lines, note_x, lane_tops[lane_index])
+        for token_index, (note_lines, note_x, lane_index) in placements.items()
+    }
+    return resolved, max(92, next_y + 8)
+
+
 def _draw_vocabulary_card(
     draw: ImageDraw.ImageDraw,
     item: VocabularyItem,
@@ -398,58 +475,40 @@ def _draw_vocabulary_card(
     text_color = "#FFFDF8" if dark else INK
     card = (VOCAB_BOX[0] + 12, y, VOCAB_BOX[2] - 12, y + RIGHT_CARD_HEIGHT)
     draw.rounded_rectangle(card, radius=14, fill=fill)
-    word_font = _font(30, bold=True, serif=True)
-    draw.text((card[0] + 15, card[1] + 12), _ellipsize(item.word, word_font, 235), font=word_font, fill=text_color)
+    word_font = _font(26, bold=True, serif=True)
+    word_lines = _wrap_words(item.word.split(), word_font, 250)
+    word_line_height = 29
+    for line_index, word_line in enumerate(word_lines):
+        draw.text(
+            (card[0] + 15, card[1] + 10 + line_index * word_line_height),
+            " ".join(word_line),
+            font=word_font,
+            fill=text_color,
+        )
+    detail_y = card[1] + 14 + len(word_lines) * word_line_height
     detail = item.phonetic.strip()
     if detail:
-        ipa_font = _ipa_font(19)
-        draw.text((card[0] + 15, card[1] + 49), _ellipsize(detail, ipa_font, 235), font=ipa_font, fill=text_color)
+        ipa_font = _ipa_font(17)
+        draw.text((card[0] + 15, detail_y), _ellipsize(detail, ipa_font, 250), font=ipa_font, fill=text_color)
     learning_label = _learning_label(item)
     if learning_label:
         draw.text(
-            (card[0] + 15, card[1] + 72),
-            _ellipsize(learning_label, _font(18, bold=True), 235),
-            font=_font(18, bold=True),
+            (card[0] + 15, detail_y + 22),
+            _ellipsize(learning_label, _font(16, bold=True), 250),
+            font=_font(16, bold=True),
             fill=text_color,
         )
-    meaning_font = _font(21)
+    meaning_font = _font(19)
     _draw_wrapped_text(
         draw,
         _meaning_line(item),
-        (card[0] + 15, card[1] + 98),
+        (card[0] + 15, detail_y + 45),
         meaning_font,
         text_color,
-        235,
-        max_lines=3,
-        line_height=24,
+        250,
+        max_lines=2,
+        line_height=21,
     )
-
-
-def _paragraph_vocabulary_tops(content: StudyCardContent, boxes: tuple[WordBox, ...]) -> tuple[int, ...]:
-    """用自然段首词作为兜底词卡组锚点，让右栏随正文段落一起进入屏幕。"""
-    tops = [TEXT_TOP]
-    cursor = 0
-    for paragraph in content.paragraphs:
-        if 0 <= cursor < len(boxes):
-            tops.append(max(TEXT_TOP, boxes[cursor].y - 53 - RIGHT_PARAGRAPH_GROUP_LEAD))
-        cursor += len(paragraph.english_text.split())
-    return tuple(sorted(set(tops)))
-
-
-def _fallback_vocabulary_group_tops(paragraph_tops: tuple[int, ...]) -> tuple[int, ...]:
-    """按正文自然段补充词卡组，确保后续屏幕右栏不会变成空白。"""
-    if not paragraph_tops:
-        return (TEXT_TOP,)
-    return tuple(sorted(set(max(TEXT_TOP, top) for top in paragraph_tops)))
-
-
-def _overlaps_any(
-    target: tuple[int, int],
-    ranges: list[tuple[int, int]],
-    *,
-    margin: int = 0,
-) -> bool:
-    return any(target[0] < end + margin and target[1] > start - margin for start, end in ranges)
 
 
 def _meaning_line(item: VocabularyItem) -> str:
@@ -463,7 +522,10 @@ def _meaning_line(item: VocabularyItem) -> str:
 def _micro_note_text(item: VocabularyItem) -> str:
     note = _strip_leading_pos(item.meaning_zh).replace(";", "；").replace(",", "，")
     note = re.sub(r"([；，])\s+", r"\1", note)
-    return note or item.meaning_zh.strip()
+    # 正文词下注释只呈现语境中的主释义，避免把完整词典多义项塞进一行；
+    # 这里不是按字符截断，右栏仍保留完整释义。
+    primary = next((part.strip() for part in re.split(r"[；;]", note) if part.strip()), "")
+    return primary or item.meaning_zh.strip()
 
 
 def _clean_pos(value: str) -> str:
