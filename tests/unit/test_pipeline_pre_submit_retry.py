@@ -5,6 +5,7 @@
 | ------- | ---- | ------ | ----------- |
 | 1.0.0 | 2026-08-05 | Codex | 覆盖可安全自动重试边界、提交证据保护和 Telegram 数字告警 |
 | 1.1.0 | 2026-08-05 | Codex | 覆盖 curl SSL 超时重试及 Telegram 管理员回退会话 |
+| 1.2.0 | 2026-08-05 | Codex | 验证 Telegram 告警 HTTP 回执，而非将调用本身视作送达 |
 """
 
 import json
@@ -61,6 +62,26 @@ def test_manager_uses_active_telegram_chat_id_fallback(monkeypatch, tmp_path):
     manager = _manager(tmp_path, "telegram-fallback-video")
 
     assert manager.telegram_chat_id == "fallback-chat"
+
+
+def test_telegram_send_checks_http_success(monkeypatch, tmp_path):
+    manager = _manager(tmp_path, "telegram-send-video")
+    manager.telegram_token = "test-token"
+    manager.telegram_chat_id = "test-chat"
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            calls.append("checked")
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Response()
+
+    monkeypatch.setattr("video_processing.pipeline_manager.requests.post", fake_post)
+
+    assert manager.send_telegram_msg("测试告警") is True
+    assert calls[-1] == "checked"
 
 
 def test_transient_retry_refuses_existing_wechat_submission_evidence(tmp_path):

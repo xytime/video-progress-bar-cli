@@ -93,6 +93,7 @@
 | 3.48.3  | 2026-08-04 | Codex                               | 文案 checkpoint 与渲染前拒绝 HTTP 错误页，避免 fallback 错误响应被烧入视频或提交平台 |
 | 3.48.4  | 2026-08-04 | Codex                               | 通过可选回调上报单视频运行阶段，供巡航状态记录当前视频和阶段而不反向依赖脚本层 |
 | 3.48.5  | 2026-08-05 | Codex                               | 文案金额告警推送 Telegram；仅上传前瞬态故障有界自动重试，保留提交证据与发布不确定状态的人工核验边界 |
+| 3.48.6  | 2026-08-05 | Codex                               | Telegram 使用管理员回退会话，发送后校验 HTTP 响应并返回结果；补齐 curl SSL 超时的上传前有界重试 |
 """
 
 
@@ -283,18 +284,21 @@ class PipelineManager:
 
     # ── Telegram 通知 ─────────────────────────────────────────────────────────
 
-    def send_telegram_msg(self, text: str):
+    def send_telegram_msg(self, text: str) -> bool:
         if not self.telegram_token or not self.telegram_chat_id:
             logger.debug(f"Telegram not configured. Would send: {text}")
-            return
+            return False
         try:
-            requests.post(
+            response = requests.post(
                 f"https://api.telegram.org/bot{self.telegram_token}/sendMessage",
                 json={"chat_id": self.telegram_chat_id, "text": text, "parse_mode": "HTML"},
                 timeout=10,
             )
+            response.raise_for_status()
+            return True
         except Exception as e:
             logger.error(f"Telegram send failed: {e}")
+            return False
 
     def _notify_copy_numeric_warnings(self, yid: str, title: str, prefix: str) -> None:
         """将已接受文案中的金额告警推送 Telegram；告警不改变发布链路。"""
