@@ -32,6 +32,7 @@
 | 1.25.0  | 2026-08-03 | Codex                                   | 标题语义守门：降级翻译不得把疑问句截成“为什么只有 9”一类残句；候选仲裁拒绝不完整短标题 |
 | 1.25.1  | 2026-08-03 | Codex                                   | 奥德赛类数量标题恢复为自然中文量词，避免“9个加拿大银幕”翻译腔 |
 | 1.25.2  | 2026-08-04 | Codex                                   | 拒绝将上游 HTTP 错误页写入标题/文案 checkpoint，阻断错误内容进入渲染与发布 |
+| 1.25.3  | 2026-08-05 | Codex                                   | 文案金额数量级检查降级为 Telegram 可见告警，不再阻断候选；事件方向和错误页闸门保持严格 |
 """
 
 import re
@@ -67,6 +68,7 @@ from video_processing.utils.translation_quality_evaluator import (
     TranslationQualityDecision,
     evaluate_translation_candidate,
 )
+from video_processing.utils.translation_quality_guard import QualityIssue
 from video_processing.utils.translation_candidate_arbitration import TranslationCandidateArbiter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -78,6 +80,13 @@ WECHAT_CATEGORIES = [
     "游戏", "体育", "时事", "资讯", "健康",
 ]
 DEFAULT_CATEGORY = "科技"
+
+# 文案标题/正文把多个事实压缩到同一段时，单纯按“最近金额”配对会把不同语境的
+# 数字误判为错译。金额信号继续保留并交给 Telegram 提醒，但不再使整条视频停在文案阶段。
+_COPY_NUMERIC_WARNING_SEVERITIES = {
+    "NUMBER_MAGNITUDE_MISMATCH": "P1",
+    "NUMBER_MAGNITUDE_SUSPECT": "P2",
+}
 
 # 每个分类对应的默认标签与引导关注文案
 CATEGORY_CONFIG = {
@@ -490,6 +499,7 @@ def _evaluate_wechat_content_quality(
         final_provider=final_provider,
         quality_context=_build_copy_quality_context(title, description, source_text),
     )
+    decision = _downgrade_copy_numeric_issues(decision)
     for issue in decision.issues:
         logger.warning(
             "[CopyGuard][%s] %s | source=%s translation=%s",
@@ -499,6 +509,53 @@ def _evaluate_wechat_content_quality(
             issue.translation_signal,
         )
     return decision
+
+
+def _downgrade_copy_numeric_issues(
+    decision: TranslationQualityDecision,
+) -> TranslationQualityDecision:
+    """文案数字量级信号只告警，不改变其他事实守门器的阻断语义。"""
+    numeric_blockers = [
+        issue for issue in decision.blocking_issues
+        if issue.code in _COPY_NUMERIC_WARNING_SEVERITIES
+    ]
+    if not numeric_blockers:
+        return decision
+
+    remaining_blockers = [
+        issue for issue in decision.blocking_issues
+        if issue.code not in _COPY_NUMERIC_WARNING_SEVERITIES
+    ]
+    numeric_warnings = [
+        QualityIssue(
+            severity=_COPY_NUMERIC_WARNING_SEVERITIES[issue.code],
+            code=issue.code,
+            message=f"文案数字待人工复核：{issue.message}",
+            source_signal=issue.source_signal,
+            translation_signal=issue.translation_signal,
+            suggested_fix=issue.suggested_fix,
+        )
+        for issue in numeric_blockers
+    ]
+    if remaining_blockers:
+        return TranslationQualityDecision(
+            provider=decision.provider,
+            accepted=False,
+            status=decision.status,
+            action=decision.action,
+            warning_issues=decision.warning_issues + numeric_warnings,
+            blocking_issues=remaining_blockers,
+            quality_context=decision.quality_context,
+        )
+    return TranslationQualityDecision(
+        provider=decision.provider,
+        accepted=True,
+        status="passed",
+        action="accept",
+        warning_issues=decision.warning_issues + numeric_warnings,
+        blocking_issues=[],
+        quality_context=decision.quality_context,
+    )
 
 
 def _build_copy_quality_event(

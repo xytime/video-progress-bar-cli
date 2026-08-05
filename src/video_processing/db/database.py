@@ -66,6 +66,7 @@
 | 3.25.1  | 2026-07-31 | Codex                               | 将 AI_COVER_PENDING 纳入处理中统计和仪表盘，避免异步制图任务隐身 |
 | 3.25.2  | 2026-08-03 | Codex                               | AI 封面完成只允许 AI_COVER_PENDING 原子回到 PENDING，防止已发布视频被旧任务重新入队 |
 | 3.25.3  | 2026-08-03 | Codex                               | 配音任务创建时持久化实际 TTS provider，保证频道专属音色可追溯 |
+| 3.25.4  | 2026-08-05 | Codex                               | 新增上传前瞬态失败的原子重入队接口；只允许下载/文案/转录阶段且递增 retry_count |
 """
 
 import sqlite3
@@ -1889,6 +1890,28 @@ class PipelineDB:
                 (status, error_msg, youtube_id, slice_index)
             )
             conn.commit()
+
+    def requeue_transient_pre_submission_failure(
+        self,
+        youtube_id: str,
+        error_msg: str,
+        *,
+        slice_index: int = 0,
+        max_retry_count: int = 2,
+    ) -> bool:
+        """仅将上传前阶段的瞬态失败原子恢复为 PENDING，绝不触碰发布中或已发布任务。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos "
+                "SET status = 'PENDING', retry_count = retry_count + 1, error_msg = ?, "
+                "updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ? "
+                "AND status IN ('DOWNLOADING', 'COPYWRITING', 'TRANSCRIBING') "
+                "AND retry_count < ?",
+                (error_msg, youtube_id, slice_index, max(1, int(max_retry_count))),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def mark_ai_cover_resolved(self, youtube_id: str, slice_index: int = 0) -> bool:
         """AI 封面任务完成后，仅把仍在 AI_COVER_PENDING 的视频恢复到待发布队列。"""

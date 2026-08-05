@@ -17,6 +17,7 @@
 | 1.11.0  | 2026-07-06 | Codex                      | 覆盖标题/文案 warning-aware 候选仲裁 |
 | 1.12.0  | 2026-07-06 | Codex                      | 覆盖文案 prompt 复用共享翻译硬约束且不带字幕段落规则 |
 | 1.13.0  | 2026-08-03 | Codex                      | 回归覆盖：降级标题不得截为“为什么只有 9”，仲裁拒绝语义不完整候选 |
+| 1.14.0  | 2026-08-05 | Codex                      | 覆盖文案金额数量级仅告警、不阻断的运营策略 |
 """
 import json
 import sys
@@ -391,6 +392,30 @@ def test_copy_guard_warns_for_amount_unit_drift(tmp_path):
     assert "AMOUNT_CONSISTENCY_UNIT_DRIFT" in {
         issue["code"] for issue in report["warning_issues"]
     }
+
+
+def test_copy_guard_downgrades_amount_mismatch_to_warning(tmp_path):
+    """文案含多个金额事实时，金额量级信号应告警而非停止整个发布链路。"""
+    title = "Michael Burry sees a $20B AI trap"
+    description = "The stock traded at $0.2 before the earnings release."
+    content = {
+        "short_title": "200亿美元AI陷阱",
+        "hook_subtitle": "迈克尔·伯里盯上高估值",
+        "copy": "伯里关注的AI风险规模达到200亿美元，市场需要复核估值与股价信号。",
+        "category": "财经",
+    }
+    audit_path = tmp_path / "numeric_warning_copy_quality.json"
+
+    _guard_wechat_content_quality(title, description, content, audit_path=audit_path, provider="unit")
+
+    report = json.loads(audit_path.read_text(encoding="utf-8"))
+    assert report["status"] == "passed"
+    assert report["blocking_issues"] == []
+    mismatch = next(
+        issue for issue in report["warning_issues"]
+        if issue["code"] == "NUMBER_MAGNITUDE_MISMATCH"
+    )
+    assert mismatch["severity"] == "P1"
 
 
 def test_copy_guard_writes_quality_report_for_block(tmp_path):

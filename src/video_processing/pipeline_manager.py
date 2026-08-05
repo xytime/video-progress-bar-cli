@@ -92,6 +92,7 @@
 | 3.48.2  | 2026-08-04 | Codex                               | 渲染缓存校验区分成片损坏与 ffprobe 不可用；校验环境故障保留缓存并停止当前任务，避免误删触发长时间重渲 |
 | 3.48.3  | 2026-08-04 | Codex                               | 文案 checkpoint 与渲染前拒绝 HTTP 错误页，避免 fallback 错误响应被烧入视频或提交平台 |
 | 3.48.4  | 2026-08-04 | Codex                               | 通过可选回调上报单视频运行阶段，供巡航状态记录当前视频和阶段而不反向依赖脚本层 |
+| 3.48.5  | 2026-08-05 | Codex                               | 文案金额告警推送 Telegram；仅上传前瞬态故障有界自动重试，保留提交证据与发布不确定状态的人工核验边界 |
 """
 
 
@@ -140,6 +141,22 @@ def _cover_audio_edition(tts_provider: Any) -> str:
 # 当该进程收到 SIGTERM 时，设置此标志位，由主循环在安全点检查并执行清理退出。
 # 注意：signal handler 只能做最简单的操作（设置标志位），不能在 handler 内直接操作数据库或锁。
 _sigterm_received: bool = False
+
+_COPY_NUMERIC_WARNING_CODES = frozenset({
+    "NUMBER_MAGNITUDE_MISMATCH",
+    "NUMBER_MAGNITUDE_SUSPECT",
+})
+_TRANSIENT_PRE_SUBMISSION_FAILURE_MARKERS = (
+    "curl exited with code 18",
+    "transfer closed",
+    "http error 500",
+    "server error",
+    "that's an error",
+    "that’s an error",
+    "please try again later",
+    "temporarily unavailable",
+)
+_MAX_TRANSIENT_PRE_SUBMISSION_RETRIES = 2
 
 
 def _sigterm_handler(signum: int, frame) -> None:  # noqa: ANN001
@@ -276,6 +293,101 @@ class PipelineManager:
             )
         except Exception as e:
             logger.error(f"Telegram send failed: {e}")
+
+    def _notify_copy_numeric_warnings(self, yid: str, title: str, prefix: str) -> None:
+        """将已接受文案中的金额告警推送 Telegram；告警不改变发布链路。"""
+        audit_path = self._OUT_DIR / f"{prefix}_copy_quality.json"
+        try:
+            payload = json.loads(audit_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("[%s] 无法读取文案质量告警报告：%s", prefix, exc)
+            return
+
+        events = list(payload.get("events") or [payload])
+        selected_events = [event for event in events if event.get("selected")]
+        relevant_events = selected_events or events
+        warnings: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for event in relevant_events:
+            for issue in event.get("warning_issues") or []:
+                code = str(issue.get("code") or "")
+                if code not in _COPY_NUMERIC_WARNING_CODES:
+                    continue
+                key = (
+                    code,
+                    str(issue.get("source_signal") or ""),
+                    str(issue.get("translation_signal") or ""),
+                )
+                if key not in seen:
+                    seen.add(key)
+                    warnings.append(issue)
+
+        if not warnings:
+            return
+
+        detail = "\n".join(
+            "- {code}: {source} → {translation}".format(
+                code=html.escape(str(issue.get("code") or "数字量级待复核")),
+                source=html.escape(str(issue.get("source_signal") or "原文金额缺失")),
+                translation=html.escape(str(issue.get("translation_signal") or "文案金额缺失")),
+            )
+            for issue in warnings[:3]
+        )
+        self.send_telegram_msg(
+            "⚠️ <b>Copy numeric review</b>\n"
+            f"ID: <code>{html.escape(prefix)}</code>\n"
+            f"Title: {html.escape(title or '')}\n"
+            "文案已继续处理；金额校验仅告警，请发布后复核。\n"
+            f"{detail}"
+        )
+
+    def _requeue_transient_pre_submission_failure(
+        self,
+        yid: str,
+        title: str,
+        reason: str,
+        *,
+        slice_index: int = 0,
+    ) -> bool:
+        """对未投递且可识别的临时错误有限重试，未知/发布后错误保持人工处理。"""
+        normalized_reason = " ".join(reason.lower().split())
+        if not any(marker in normalized_reason for marker in _TRANSIENT_PRE_SUBMISSION_FAILURE_MARKERS):
+            return False
+
+        prefix = yid if slice_index == 0 else f"{yid}_part{slice_index}"
+        if self._wechat_submission_evidence_paths(prefix):
+            logger.error("[%s] 已存在微信提交后证据，拒绝自动重试。", prefix)
+            return False
+
+        current = self.db.get_video_by_youtube_id(yid, slice_index=slice_index)
+        if not current:
+            logger.warning("[%s] 未找到视频记录，无法安排自动重试。", prefix)
+            return False
+        next_attempt = int(current.get("retry_count") or 0) + 1
+        if next_attempt > _MAX_TRANSIENT_PRE_SUBMISSION_RETRIES:
+            logger.warning("[%s] 上传前瞬态重试已达上限 %s。", prefix, _MAX_TRANSIENT_PRE_SUBMISSION_RETRIES)
+            return False
+
+        retry_reason = (
+            f"[自动重试 {next_attempt}/{_MAX_TRANSIENT_PRE_SUBMISSION_RETRIES}] "
+            f"上传前瞬态故障：{' '.join(reason.split())[:500]}"
+        )
+        if not self.db.requeue_transient_pre_submission_failure(
+            yid,
+            retry_reason,
+            slice_index=slice_index,
+            max_retry_count=_MAX_TRANSIENT_PRE_SUBMISSION_RETRIES,
+        ):
+            return False
+
+        self.send_telegram_msg(
+            "🔁 <b>Pre-submit auto retry scheduled</b>\n"
+            f"ID: <code>{html.escape(prefix)}</code>\n"
+            f"Title: {html.escape(title or '')}\n"
+            f"Attempt: {next_attempt}/{_MAX_TRANSIENT_PRE_SUBMISSION_RETRIES}\n"
+            f"Reason: {html.escape(' '.join(reason.split())[:200])}"
+        )
+        return True
 
     def _notify_failed(self, yid: str, title: str, reason: str = "", slice_index: int = 0):
         """统一的「视频失败」Telegram 通知：带 youtube_id 与精简错误原因，便于定位。
@@ -1803,7 +1915,7 @@ class PipelineManager:
                             "--remote-components", "ejs:github",
                             "--downloader", "curl",
                             # [Gemini_3.5_Flash_planning] v3.8.1: 最低速度限制从 50KB/s 降低为 10KB/s (10000) 持续 30s，防止音频下载被 YouTube 限速导致无限重试
-                            "--downloader-args", "curl:--retry 10 --retry-delay 3 --retry-all-errors --speed-limit 10000 --speed-time 30 --connect-timeout 15",
+                            "--downloader-args", "curl:--continue-at - --retry 10 --retry-delay 3 --retry-all-errors --speed-limit 10000 --speed-time 30 --connect-timeout 15",
                             url, "-o", str(self._OUT_DIR / f"{yid}.%(ext)s"),
                         ]
 
@@ -1996,6 +2108,7 @@ class PipelineManager:
                     ]
                     self._run_tracked(copy_cmd, yid, slice_index=slice_index, capture_output=True,
                                       cwd=str(self._PRJ_ROOT))
+                    self._notify_copy_numeric_warnings(yid, title, prefix)
 
                 try:
                     generated_title = title_file.read_text(encoding="utf-8").strip()
@@ -2507,12 +2620,20 @@ class PipelineManager:
             except subprocess.CalledProcessError as e:
                 err = e.stderr if isinstance(e.stderr, str) else (e.stderr or b"").decode()
                 logger.error(f"Process failed for {prefix}: {err[:500]}")
+                if self._requeue_transient_pre_submission_failure(
+                    yid, title, err, slice_index=slice_index,
+                ):
+                    return
                 self.db.update_video_status(yid, "FAILED", error_msg=err, slice_index=slice_index)
                 self._notify_failed(yid, title, err, slice_index=slice_index)
                 self._run_garbage_collection(yid, slice_index, "FAILED")
 
             except Exception as e:
                 logger.error(f"Unexpected error for {prefix}: {e}")
+                if self._requeue_transient_pre_submission_failure(
+                    yid, title, str(e), slice_index=slice_index,
+                ):
+                    return
                 self.db.update_video_status(yid, "FAILED", error_msg=str(e), slice_index=slice_index)
                 self._notify_failed(yid, title, str(e), slice_index=slice_index)
                 self._run_garbage_collection(yid, slice_index, "FAILED")
