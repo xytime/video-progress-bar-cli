@@ -68,6 +68,7 @@
 | 3.25.3  | 2026-08-03 | Codex                               | 配音任务创建时持久化实际 TTS provider，保证频道专属音色可追溯 |
 | 3.25.4  | 2026-08-05 | Codex                               | 新增上传前瞬态失败的原子重入队接口；只允许下载/文案/转录阶段且递增 retry_count |
 | 3.25.5  | 2026-08-05 | Codex                               | 增加 zh_title 定点更新 DAL，移除后台标题翻译路径的裸 SQL |
+| 3.25.9  | 2026-08-08 | Codex                               | 评分写入口统一执行频道上限，The Economist 永不写入超过 60 的分数 |
 """
 
 import sqlite3
@@ -77,6 +78,8 @@ import logging
 import datetime  # [Claude_Opus_4.6_Thinking_planning] 提升为 top-level import，用于高赞时间窗口计算
 from pathlib import Path
 from typing import Collection, List, Dict, Any, Optional, Sequence
+
+from ..scoring import CHANNEL_SCORE_CAPS, cap_channel_score
 
 class PipelineDB:
     """视频管线数据访问层。
@@ -2145,6 +2148,18 @@ class PipelineDB:
         """更新特定切片的评分，支持评分锁保护。"""
         # [Gemini_3.5_Flash_planning] 定位增加 slice_index = ?
         with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT channel_id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if row:
+                capped_score = cap_channel_score(row["channel_id"], score)
+                if capped_score != score:
+                    self._logger.info(
+                        "[ScoreCap] %s score capped from %s to %s",
+                        youtube_id, score, capped_score,
+                    )
+                score = capped_score
             if force:
                 conn.execute(
                     "UPDATE processed_videos SET score = ?, is_manually_scored = 1, "
@@ -2161,6 +2176,19 @@ class PipelineDB:
                     self._logger.info(f"[ScoreLock] Skipped auto-score for manually-locked video: {youtube_id} (slice {slice_index})")
                     return
             conn.commit()
+
+    def enforce_channel_score_caps(self) -> int:
+        """将历史记录收敛到当前频道评分上限，不改变状态、锁分标记或更新时间。"""
+        updated = 0
+        with self.get_connection() as conn:
+            for channel_id, cap in CHANNEL_SCORE_CAPS.items():
+                cursor = conn.execute(
+                    "UPDATE processed_videos SET score = ? WHERE channel_id = ? AND score > ?",
+                    (cap, channel_id, cap),
+                )
+                updated += cursor.rowcount
+            conn.commit()
+        return updated
 
     def is_manually_scored(self, youtube_id: str, slice_index: int = 0) -> bool:
         """查询某切片是否已被手动评分锁定（is_manually_scored=1）。
