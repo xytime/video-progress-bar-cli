@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-03 | Codex | 覆盖旧封面任务不得重新入队已发布视频、合法 AI_COVER_PENDING 回队和巡查锁 |
+| 1.1.0 | 2026-08-07 | Codex | 覆盖封面完成与预加工就绪标记原子回填，供盘中轻量提交 |
 """
 
 from __future__ import annotations
@@ -69,6 +70,7 @@ def test_render_requeues_only_active_ai_cover_pending(monkeypatch, tmp_path: Pat
 
     row = db.get_video_by_youtube_id("cover-guard")
     assert row["status"] == "PENDING"
+    assert row["preparation_ready"] == 1
     assert row["error_msg"] is None
     resolution = json.loads((task.finish_dir / "resolution.json").read_text(encoding="utf-8"))
     assert resolution["source"] == "deterministic_fallback"

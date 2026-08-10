@@ -6,6 +6,10 @@
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音账本去重、迁移限额和审核状态 |
 | 1.1.0 | 2026-07-25 | Codex | 覆盖提交后未确认的遗留失败不会被自动重投 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖含未确认反证的抖音 PUBLISHED 写入会保守降级且不参与去重 |
+| 1.3.0 | 2026-08-07 | Codex | 覆盖发布前闸门和页面校准旧失败的安全停用迁移 |
+| 1.4.0 | 2026-08-07 | Codex | 覆盖 CANCELED 抖音账本人工重入队且保留历史记录 |
+| 1.5.0 | 2026-08-08 | Codex | 覆盖缺失抖音投递产物的旧失败在恢复前安全停用 |
+| 1.6.0 | 2026-08-08 | Codex | 覆盖 NEW 每日领取上限与跨进程浏览器动作节流账本 |
 """
 
 from pathlib import Path
@@ -128,6 +132,60 @@ def test_unconfirmed_douyin_failure_is_not_claimed_again(tmp_path: Path):
     assert db.claim_next_douyin_publication("NEW") is None
 
 
+def test_pre_submit_gate_failures_are_canceled_without_touching_review_states(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "pre-submit-gate")
+    _add_video(db, "uncalibrated")
+    _add_video(db, "missing-assets")
+    _add_video(db, "under-review")
+    gate = db.create_douyin_publication(
+        "pre-submit-gate", "3" * 64, "/tmp/gate.mp4", source_kind="HISTORY"
+    )
+    calibration = db.create_douyin_publication(
+        "uncalibrated", "4" * 64, "/tmp/calibration.mp4", source_kind="HISTORY"
+    )
+    missing_assets = db.create_douyin_publication(
+        "missing-assets", "6" * 64, "/tmp/missing-assets.mp4", source_kind="NEW"
+    )
+    review = db.create_douyin_publication(
+        "under-review", "5" * 64, "/tmp/review.mp4", source_kind="HISTORY"
+    )
+    assert db.update_douyin_publication_state(
+        gate["id"], "RETRYABLE_FAILED", error_message="发布前元信息、封面或自主声明闸门未能确认；本次未提交。"
+    )
+    assert db.update_douyin_publication_state(
+        calibration["id"], "RETRYABLE_FAILED", error_message="抖音上传器尚未完成页面校准；本次没有触发发布。"
+    )
+    assert db.update_douyin_publication_state(
+        missing_assets["id"], "RETRYABLE_FAILED", error_message="抖音投递产物缺失：video=True copy=True title=True cover=False"
+    )
+    assert db.update_douyin_publication_state(review["id"], "UNDER_REVIEW")
+
+    assert db.cancel_douyin_pre_submit_gate_failures() == 3
+
+    assert db.get_douyin_publication("pre-submit-gate")["state"] == "CANCELED"
+    assert db.get_douyin_publication("uncalibrated")["state"] == "CANCELED"
+    assert db.get_douyin_publication("missing-assets")["state"] == "CANCELED"
+    assert db.get_douyin_publication("under-review")["state"] == "UNDER_REVIEW"
+    assert db.cancel_douyin_pre_submit_gate_failures() == 0
+
+
+def test_canceled_douyin_publication_requeues_as_a_new_attempt(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "requeue-video")
+    original = db.create_douyin_publication(
+        "requeue-video", "6" * 64, "/tmp/requeue.mp4", source_kind="NEW"
+    )
+    assert db.update_douyin_publication_state(original["id"], "CANCELED")
+
+    requeued = db.requeue_canceled_douyin_publication(original["id"])
+
+    assert requeued["id"] != original["id"]
+    assert requeued["attempt_number"] == 2
+    assert requeued["state"] == "QUEUED"
+    assert db.get_douyin_publication_by_id(original["id"])["state"] == "CANCELED"
+
+
 def test_douyin_new_video_claim_is_not_limited_by_historical_daily_quota(tmp_path: Path):
     db = PipelineDB(str(tmp_path / "pipeline.db"))
     _add_video(db, "new-video")
@@ -140,3 +198,24 @@ def test_douyin_new_video_claim_is_not_limited_by_historical_daily_quota(tmp_pat
     assert claimed is not None
     assert claimed["id"] == publication["id"]
     assert claimed["youtube_id"] == "new-video"
+
+
+def test_douyin_new_video_claim_respects_its_own_daily_quota(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "new-video-one")
+    _add_video(db, "new-video-two")
+    db.create_douyin_publication("new-video-one", "a" * 64, "/tmp/one.mp4", source_kind="NEW")
+    db.create_douyin_publication("new-video-two", "b" * 64, "/tmp/two.mp4", source_kind="NEW")
+
+    first = db.claim_next_douyin_publication("NEW", daily_limit=1)
+
+    assert first is not None
+    assert db.claim_next_douyin_publication("NEW", daily_limit=1) is None
+
+
+def test_douyin_browser_action_slot_persists_the_interval(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+
+    assert db.reserve_douyin_browser_action_slot(120, "first", now_epoch=1_000) == 0
+    assert db.reserve_douyin_browser_action_slot(120, "second", now_epoch=1_050) == 70
+    assert db.reserve_douyin_browser_action_slot(120, "third", now_epoch=1_120) == 0

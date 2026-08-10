@@ -17,6 +17,9 @@
 | 1.7.4 | 2026-07-29 | Codex | 覆盖抖音上传器正常返回仍只记审核中，禁止本地假成功 |
 | 1.7.5 | 2026-07-29 | Codex | 覆盖微信已发布但抖音 NEW 未建账时自动补齐并进入新片同步 |
 | 1.7.6 | 2026-07-31 | Codex | 夹具提供哈希绑定的专门生成封面，禁止历史帧封面被测试默许 |
+| 1.7.7 | 2026-08-07 | Codex | 覆盖抖音发布前闸门与页面校准失败停止自动重试 |
+| 1.7.8 | 2026-08-08 | Codex | 覆盖缺失投递产物时不再让新稿跨轮自动重试 |
+| 1.7.9 | 2026-08-08 | Codex | 覆盖跨巡航浏览器节流接口，测试替身明确返回可立即执行 |
 """
 
 import hashlib
@@ -57,6 +60,7 @@ def _manager_with_assets(tmp_path: Path) -> PipelineManager:
         encoding="utf-8",
     )
     manager.db = MagicMock()
+    manager.db.reserve_douyin_browser_action_slot.return_value = 0.0
     manager.db.get_video_by_youtube_id.return_value = {
         "title": "测试视频",
         "zh_title": "测试标题",
@@ -129,7 +133,7 @@ def test_claimed_douyin_publication_runs_publish_and_marks_under_review(tmp_path
     assert "等待作品管理页" in kwargs["error_message"]
 
 
-def test_uncalibrated_douyin_publish_never_marks_the_ledger_published(tmp_path: Path, monkeypatch):
+def test_uncalibrated_douyin_publish_cancels_automatic_retry(tmp_path: Path, monkeypatch):
     manager = _manager_with_assets(tmp_path)
     monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
     error = subprocess.CalledProcessError(4, ["douyin"], stderr="not calibrated")
@@ -141,11 +145,12 @@ def test_uncalibrated_douyin_publish_never_marks_the_ledger_published(tmp_path: 
 
     manager.db.update_douyin_publication_state.assert_called_once()
     args, kwargs = manager.db.update_douyin_publication_state.call_args
-    assert args == (18, "RETRYABLE_FAILED")
+    assert args == (18, "CANCELED")
     assert "尚未完成页面校准" in kwargs["error_message"]
+    assert "停止自动重试" in kwargs["error_message"]
 
 
-def test_pre_submit_unconfirmed_is_retryable_not_uncertain(tmp_path: Path, monkeypatch):
+def test_pre_submit_unconfirmed_cancels_not_uncertain(tmp_path: Path, monkeypatch):
     manager = _manager_with_assets(tmp_path)
     monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
     manager._run_tracked = MagicMock(side_effect=subprocess.CalledProcessError(3, ["douyin"]))
@@ -153,8 +158,9 @@ def test_pre_submit_unconfirmed_is_retryable_not_uncertain(tmp_path: Path, monke
     assert not manager._publish_claimed_douyin_publication({"id": 183, "youtube_id": "video-id", "slice_index": 0})
 
     args, kwargs = manager.db.update_douyin_publication_state.call_args
-    assert args == (183, "RETRYABLE_FAILED")
+    assert args == (183, "CANCELED")
     assert "本次未提交" in kwargs["error_message"]
+    assert "停止自动重试" in kwargs["error_message"]
 
 
 def test_post_submit_unconfirmed_is_uncertain(tmp_path: Path, monkeypatch):
@@ -200,7 +206,7 @@ def test_douyin_missing_cover_cancels_without_upload(tmp_path: Path, monkeypatch
     manager._run_tracked.assert_not_called()
     manager.db.update_douyin_publication_state.assert_called_once()
     args, kwargs = manager.db.update_douyin_publication_state.call_args
-    assert args == (182, "RETRYABLE_FAILED")
+    assert args == (182, "CANCELED")
     assert "cover=False" in kwargs["error_message"]
 
 

@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-07-23 | Codex | 覆盖微信/抖音补录预览规则、平台状态排除与日批次切分 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖后台补录预览与确认入队 API |
 | 1.2.0 | 2026-07-23 | Codex | 覆盖视频号延后补发领取同样受补录规则约束 |
+| 1.3.0 | 2026-08-07 | Codex | 覆盖抖音 CANCELED 账本经显式 API 新建人工恢复尝试 |
 """
 
 from pathlib import Path
@@ -170,6 +171,30 @@ def test_douyin_backfill_queue_api_creates_history_publication(tmp_path: Path, m
     publication = db.get_douyin_publication("api-speech")
     assert publication["source_kind"] == "HISTORY"
     assert publication["state"] == "QUEUED"
+
+
+def test_douyin_requeue_api_creates_new_attempt_from_canceled_record(tmp_path: Path, monkeypatch):
+    import web.app
+    from fastapi.testclient import TestClient
+
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "api-requeue", "A full speech about markets", upload_date="20260720")
+    video_path = tmp_path / "api-requeue_vertical.mp4"
+    video_path.write_bytes(b"video")
+    publication = db.create_douyin_publication(
+        "api-requeue", "7" * 64, str(video_path), source_kind="NEW"
+    )
+    assert db.update_douyin_publication_state(publication["id"], "CANCELED")
+    client = TestClient(web.app.app)
+    monkeypatch.setattr(web.app, "db", db)
+
+    response = client.post("/api/douyin/publications/requeue", json={"publication_id": publication["id"]})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["attempt_number"] == 2
+    assert data["state"] == "QUEUED"
 
 
 def test_douyin_backfill_queue_api_skips_missing_assets(tmp_path: Path, monkeypatch):

@@ -94,6 +94,13 @@
 | 3.48.4  | 2026-08-04 | Codex                               | 通过可选回调上报单视频运行阶段，供巡航状态记录当前视频和阶段而不反向依赖脚本层 |
 | 3.48.5  | 2026-08-05 | Codex                               | 文案金额告警推送 Telegram；仅上传前瞬态故障有界自动重试，保留提交证据与发布不确定状态的人工核验边界 |
 | 3.48.6  | 2026-08-05 | Codex                               | Telegram 使用管理员回退会话，发送后校验 HTTP 响应并返回结果；补齐 curl SSL 超时的上传前有界重试 |
+| 3.48.7  | 2026-08-07 | Codex                               | 抖音发布前闸门/页面校准失败改为 CANCELED，明确未提交时停止跨轮自动重试与重复打开后台 |
+| 3.48.8  | 2026-08-07 | Codex                               | 盘中仅放行 preparation_ready 的已验证成片提交，未完成任务继续禁止下载、转写和渲染 |
+| 3.48.9  | 2026-08-07 | Codex                               | 盘中提交改用 checkpoint-only 模式，任一产物失效即保持待处理且绝不触发重加工 |
+| 3.48.10 | 2026-08-08 | Codex                               | 抖音投递产物缺失改为终态取消，修复产物后才允许显式新建尝试，杜绝自动空转 |
+| 3.48.11 | 2026-08-08 | Codex                               | 抖音审核回查传入作品正文指纹，仅管理页精确匹配且显示已发布才落账 |
+| 3.48.12 | 2026-08-08 | Codex                               | 抖音 NEW 投递增加每日领取上限和跨巡航浏览器节流，防止每分钟任务放大平台动作 |
+| 3.48.13 | 2026-08-09 | Codex                               | 切片任务继承内容生产类型，保留英语世界短视频的端到端可检索标识 |
 """
 
 
@@ -498,7 +505,7 @@ class PipelineManager:
         )
 
     def _throttle_douyin_browser_action(self, reason: str) -> None:
-        """抖音创作者中心页面动作之间强制留间隔，降低连续打开网页的风控风险。"""
+        """跨巡航进程限制抖音浏览器动作频率，降低连续打开网页的风控风险。"""
         interval = max(0, int(settings.douyin_browser_action_interval_sec or 0))
         now = time.monotonic()
         if self._last_douyin_browser_action_at is not None and interval > 0:
@@ -507,6 +514,12 @@ class PipelineManager:
             if remaining > 0:
                 logger.info("[DouyinThrottle] %s：等待 %.1f 秒后再访问创作者中心。", reason, remaining)
                 time.sleep(remaining)
+        while interval > 0:
+            remaining = self.db.reserve_douyin_browser_action_slot(interval, reason)
+            if remaining <= 0:
+                break
+            logger.info("[DouyinThrottle] %s：上一轮巡航刚访问创作者中心，等待 %.1f 秒。", reason, remaining)
+            time.sleep(remaining)
         self._last_douyin_browser_action_at = time.monotonic()
 
     def _reset_douyin_run_guard(self) -> None:
@@ -566,13 +579,13 @@ class PipelineManager:
         total_processed = 0
         
         while True:
-            # [Claude_Opus_4.8] 美股盘中重负载保护：盘中（ET 09:15–16:15 工作日）不开新批，
-            # 剩余高分任务保持 PENDING，盘后（北京 04:15 起）由调度器自动恢复。共享主机避免
-            # 抢占实盘交易行情管线 CPU（已确认「盘中过载→行情积压→实盘用过期价格」失效模式）。
-            if settings.is_us_market_guard_window():
-                logger.info("[MarketGuard] 美股盘中，暂停高分视频批处理（重负载保护），剩余任务保持 PENDING。")
-                break
-            if not self._is_public_publish_window("Pipeline"):
+            # 盘中绝不启动下载、转写或渲染；但预加工已完整验证的成片只会命中既有
+            # checkpoint 并执行平台提交，不占用重负载资源。AI 封面异步回填后的恢复任务
+            # 因而不会被错误地卡到盘后。
+            market_guard_active = settings.is_us_market_guard_window()
+            if market_guard_active:
+                logger.info("[MarketGuard] 美股盘中，只处理已验证成片的轻量提交。")
+            elif not self._is_public_publish_window("Pipeline"):
                 logger.info("[PublishWindow] 非发布窗口，暂停高分视频加工；候选保持 PENDING 等待黄金时段。")
                 break
 
@@ -585,6 +598,12 @@ class PipelineManager:
             if not targets:
                 logger.info("No more high-score videos available for processing.")
                 break
+
+            if market_guard_active:
+                targets = [video for video in targets if video.get("preparation_ready")]
+                if not targets:
+                    logger.info("[MarketGuard] 没有已验证成片可轻量提交，剩余任务保持 PENDING。")
+                    break
 
             claimed_targets = []
             for video in targets:
@@ -621,12 +640,15 @@ class PipelineManager:
                 f"🚀 <b>Pipeline Batch Started</b>\nProcessing {len(claimed_targets)} videos in this batch."
             )
             for video in claimed_targets:
-                # [Claude_Opus_4.8] 窗口若在批处理中途开盘，立即停手，剩余 claimed 任务由
-                # 调度器 purge_stale_tasks 复位回 PENDING，盘后重跑（重负载保护）。
-                if settings.is_us_market_guard_window():
-                    logger.info("[MarketGuard] 进入美股盘中窗口，停止本批剩余视频处理（重负载保护）。")
+                # 窗口若在批处理中途开盘，仅继续当时已验证的成片；其余任务留给盘后，
+                # 防止在主机承担实盘行情时意外进入下载、转写或渲染。
+                if settings.is_us_market_guard_window() and not video.get("preparation_ready"):
+                    logger.info("[MarketGuard] 进入美股盘中窗口，停止未验证成片的重负载处理。")
                     break
-                self._process_single_video(video)
+                self._process_single_video(
+                    video,
+                    submission_only=settings.is_us_market_guard_window(),
+                )
                 total_processed += 1
 
         logger.info(f"Pipeline run loop completed. Total processed: {total_processed}")
@@ -1353,7 +1375,9 @@ class PipelineManager:
                 f"copy={copy_file.is_file()} title={title_file.is_file()} cover={bool(cover_file)}"
             )
             logger.error("[%s] %s", yid, reason)
-            state = "CANCELED" if publication.get("source_kind") == "HISTORY" else "RETRYABLE_FAILED"
+            # 本地投递产物不全可确定尚未调用浏览器上传；自动重试无法自行补齐专门封面，
+            # 必须等修复后通过显式重入队创建新尝试，避免每轮无意义地失败和打开创作者中心。
+            state = "CANCELED"
             self.db.update_douyin_publication_state(publication_id, state, error_message=reason)
             if publication.get("source_kind") == "HISTORY":
                 logger.warning("[%s] 抖音历史迁移任务已取消，继续处理下一条", yid)
@@ -1418,14 +1442,20 @@ class PipelineManager:
                 self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\nYouTube ID: {yid}")
                 return True
             elif exc.returncode == 3:
-                state = "RETRYABLE_FAILED"
-                reason = "抖音发布前元信息、封面或自主声明闸门未能确认；本次未提交，修复后可重试。"
+                state = "CANCELED"
+                reason = (
+                    "抖音发布前元信息、封面或自主声明闸门未能确认；本次未提交，"
+                    "已停止自动重试，修复后请人工重新入队。"
+                )
             elif exc.returncode == 7:
                 state = "UNCERTAIN"
                 reason = "抖音已点击最终发布但未能在作品管理确认可见；请先人工核对，勿切换视频。"
             elif exc.returncode == 4:
-                state = "RETRYABLE_FAILED"
-                reason = "抖音上传器尚未完成页面校准；本次没有触发发布。"
+                state = "CANCELED"
+                reason = (
+                    "抖音上传器尚未完成页面校准；本次没有触发发布，"
+                    "已停止自动重试，修复后请人工重新入队。"
+                )
             else:
                 state = "RETRYABLE_FAILED"
                 reason = f"抖音上传器失败（exit {exc.returncode}）：{stderr[:500]}"
@@ -1469,10 +1499,13 @@ class PipelineManager:
             logger.info("[%s] 抖音新片已入队，等待公开视频提交窗口。", prefix)
             return True
         publication_id = publication["id"]
-        claimed = self.db.claim_douyin_publication(publication_id)
+        claimed = self.db.claim_douyin_publication(
+            publication_id,
+            daily_limit=settings.douyin_new_sync_daily_limit,
+        )
         if not claimed:
-            logger.warning("[%s] 抖音任务 id=%s 当前无法 claim", prefix, publication_id)
-            return False
+            logger.info("[%s] 抖音新片达到当天领取上限或当前无法 claim，保持队列等待下一窗口。", prefix)
+            return True
         return self._publish_claimed_douyin_publication(claimed)
 
     def _run_douyin_history_migration(self) -> None:
@@ -1602,6 +1635,7 @@ class PipelineManager:
                 self._VENV_PYTHON,
                 str(self._PRJ_ROOT / "scripts" / "douyin_uploader.py"),
                 "--copy", str(copy_file),
+                "--title-file", str(self._douyin_title_path(yid, slice_index)),
                 "--state", str(self._OUT_DIR / "douyin_state.json"),
                 "--fail-fast-login",
                 "--verify-only",
@@ -1643,6 +1677,19 @@ class PipelineManager:
                     logger.warning("[%s] %s", yid, reason)
                     self._halt_douyin_platform(yid, reason, publication=publication, state="UNCERTAIN")
                     break
+                elif exc.returncode == 7:
+                    reason = (
+                        "抖音作品管理页未能精确确认本次作品状态；"
+                        "转为 UNCERTAIN 等待人工核验，避免误报或重复提交。"
+                    )
+                    self.db.update_douyin_publication_state(
+                        publication_id,
+                        "UNCERTAIN",
+                        error_message=reason,
+                    )
+                    logger.warning("[%s] %s", yid, reason)
+                    self._halt_douyin_platform(yid, reason, publication=publication, state="UNCERTAIN")
+                    break
                 else:
                     reason = f"抖音审核回查未确认状态（exit {exc.returncode}），保留审核中；停止本轮后续自动回查。"
                 logger.warning("[%s] %s", yid, reason)
@@ -1666,7 +1713,9 @@ class PipelineManager:
             return False
         if not self._is_public_publish_window("抖音新片重试"):
             return True
-        claimed = self.db.claim_next_douyin_publication("NEW")
+        claimed = self.db.claim_next_douyin_publication(
+            "NEW", daily_limit=settings.douyin_new_sync_daily_limit,
+        )
         if not claimed:
             return True
         return self._publish_claimed_douyin_publication(claimed)
@@ -1725,7 +1774,9 @@ class PipelineManager:
         self._queue_missing_douyin_new_publications()
         max_per_run = max(1, int(settings.douyin_new_sync_max_per_run or 1))
         for index in range(max_per_run):
-            claimed = self.db.claim_next_douyin_publication("NEW")
+            claimed = self.db.claim_next_douyin_publication(
+                "NEW", daily_limit=settings.douyin_new_sync_daily_limit,
+            )
             if not claimed:
                 return True
             yid = claimed.get("youtube_id", "")
@@ -1785,7 +1836,60 @@ class PipelineManager:
 
     # ── 主处理流程 ────────────────────────────────────────────────────────────
 
-    def _process_single_video(self, video: Dict[str, Any], *, preparation_only: bool = False):
+    def _prepared_submission_checkpoint_error(self, video: Dict[str, Any]) -> Optional[str]:
+        """校验盘中提交所需的既有产物；不修复、不下载、不渲染。"""
+        yid = video["youtube_id"]
+        slice_index = video.get("slice_index", 0)
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        if not self._find_downloaded_video(yid):
+            return "缺少已下载源视频"
+
+        copy_file = self._OUT_DIR / f"{prefix}_copy.txt"
+        title_file = self._OUT_DIR / f"{prefix}_title.txt"
+        label_file = self._OUT_DIR / f"{prefix}_label.txt"
+        try:
+            validate_publishable_generated_content(
+                title_file.read_text(encoding="utf-8"),
+                copy_file.read_text(encoding="utf-8"),
+            )
+        except (OSError, GeneratedContentValidationError) as exc:
+            return f"文案检查点无效：{exc}"
+        if not label_file.is_file():
+            return "缺少文案标签检查点"
+
+        vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
+        if not vertical.is_file() or vertical.stat().st_size <= 1_000_000:
+            return "缺少有效竖版成片"
+        try:
+            vertical_valid, vertical_reason = _validate_rendered_vertical_cache(vertical)
+        except RuntimeError as exc:
+            return str(exc)
+        if not vertical_valid:
+            return f"竖版成片校验失败：{vertical_reason}"
+
+        cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"
+        if not self._is_dedicated_cover(cover_file):
+            return "缺少有效专门生成封面"
+        if settings.enable_content_aware_cover and not (self._OUT_DIR / f"{prefix}_cover_brief.json").is_file():
+            return "缺少内容贴合封面策划检查点"
+        return None
+
+    def _defer_submission_only_video(
+        self, yid: str, reason: str, *, slice_index: int = 0,
+    ) -> None:
+        """盘中轻量提交发现检查点失效时只回队，不进入重加工。"""
+        message = f"盘中仅提交检查点未通过：{reason}；保持待处理，等待盘后修复。"
+        logger.warning("[%s] %s", yid, message)
+        self.db.set_video_preparation_ready(yid, False, slice_index=slice_index)
+        self.db.update_video_status(yid, "PENDING", error_msg=message, slice_index=slice_index)
+
+    def _process_single_video(
+        self,
+        video: Dict[str, Any],
+        *,
+        preparation_only: bool = False,
+        submission_only: bool = False,
+    ):
         # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils.text_utils 并在模块顶部 import，
         # 消除此前 sys.path 注入 scripts/ 反向 import copywriter 的 DAG 违规。
         yid   = video['youtube_id']
@@ -1828,6 +1932,12 @@ class PipelineManager:
                 self.db.update_video_status(yid, "FAILED", error_msg=f"Pipeline lock error: {lock_err}", slice_index=slice_index)
                 self._notify_failed(yid, title, f"Lock error: {lock_err}", slice_index=slice_index)
                 return
+
+            if submission_only:
+                checkpoint_error = self._prepared_submission_checkpoint_error(video)
+                if checkpoint_error:
+                    self._defer_submission_only_video(yid, checkpoint_error, slice_index=slice_index)
+                    return
 
             # ── 0. CENSORSHIP PRE-CHECK ───────────────────────────────────────
             # [Gemini_2.5_Flash_planning] v2.11.0: 手动/自动任务统一走同一套审查流程
@@ -1995,7 +2105,7 @@ class PipelineManager:
                                 temp_trimmed.rename(target_file)
 
                 # ── 1a. CHAPTERS EXTRACTION (仅针对主任务) ────────────────────────
-                if slice_index == 0:
+                if slice_index == 0 and not submission_only:
                     enable_chapters = getattr(settings, "enable_chapters_slicing", True)
                     if video.get("disable_slicing") == 1:
                         enable_chapters = False
@@ -2037,6 +2147,7 @@ class PipelineManager:
                                     "channel_id": video.get("channel_id", ""),
                                     "score": video.get("score", 0),
                                     "source": video.get("source", "AUTO"),
+                                    "content_type": video.get("content_type"),
                                     "duration_sec": int(ch["end_time"] - ch["start_time"]),
                                     "trim_start": f"{ch['start_time']:.3f}",
                                     "trim_end": f"{ch['end_time']:.3f}",
@@ -2459,6 +2570,8 @@ class PipelineManager:
                         return
 
                 if not self._is_public_publish_window("微信", yid, slice_index):
+                    if submission_only:
+                        self.db.set_video_preparation_ready(yid, True, slice_index=slice_index)
                     self.db.update_video_status(yid, "PENDING", slice_index=slice_index)
                     logger.info("[%s] 视频号成片已就绪，等待公开视频提交窗口。", prefix)
                     return

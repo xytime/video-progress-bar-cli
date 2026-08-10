@@ -18,6 +18,7 @@
 | 1.8.0 | 2026-07-05 | Codex | 新增 get_wechat_status()，供 /status 首屏展示发布登录态 |
 | 1.9.0 | 2026-07-05 | Codex | 新增 get_video_page() 返回 total_count，供 /status 展示失败总数与最近失败样例 |
 | 1.10.0 | 2026-07-05 | Codex | 新增 retry_recent_preview()，供 /status 展示 /retry 24 会影响几条 |
+| 1.11.0 | 2026-08-09 | Codex | add_video 透传内容生产类型，支持英语世界短视频的显式入库标识 |
 """
 from __future__ import annotations
 
@@ -53,7 +54,7 @@ class PipelineAPIClient:
 
     # ── 视频管理 ────────────────────────────────────────────────────────
 
-    async def add_video(self, url: str, trim_start: Optional[str] = None, trim_end: Optional[str] = None, disable_slicing: Optional[bool] = None, tts_provider: Optional[str] = None) -> Optional[dict]:  # [Claude_Sonnet_4.6_Thinking_planning]
+    async def add_video(self, url: str, trim_start: Optional[str] = None, trim_end: Optional[str] = None, disable_slicing: Optional[bool] = None, tts_provider: Optional[str] = None, content_type: Optional[str] = None) -> Optional[dict]:  # [Claude_Sonnet_4.6_Thinking_planning]
         """POST /api/videos/add — 手动添加 YouTube 视频到队列。
 
         Returns:
@@ -70,6 +71,8 @@ class PipelineAPIClient:
                     payload["disable_slicing"] = disable_slicing
                 if tts_provider is not None:
                     payload["tts_provider"] = tts_provider  # [Claude_Sonnet_4.6_Thinking_planning]
+                if content_type is not None:
+                    payload["content_type"] = content_type
                 # [Gemini_3.5_Flash_High_planning] yt-dlp 查询元数据可能比较耗时，此处放宽超时限制至 45 秒
                 resp = await c.post("/api/videos/add", json=payload, timeout=45.0)
                 resp.raise_for_status()

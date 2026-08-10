@@ -12,6 +12,7 @@
 | 1.5.0 | 2026-08-04 | Codex | 长文不再以十个微笔记截断，交由视觉层按阅读屏保证学习标记密度。 |
 | 1.6.0 | 2026-08-04 | Codex | 词汇域只提供全部合格候选；真实单屏微笔记上下限延后至模板布局层决定。 |
 | 1.6.1 | 2026-08-04 | Codex | 兼容既有离线词汇模块的 JSON 字段，维持学习卡输入与分级模块的低耦合。 |
+| 1.6.2 | 2026-08-09 | Codex | 学习卡内容自动携带英语世界短视频类型，供 manifest 与数据库记录使用。 |
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from ..content_types import CONTENT_TYPE_ENGLISH_WORLD_SHORT, normalize_content_type
 from .vocabulary import select_vocabulary
 
 
@@ -80,6 +82,7 @@ class StudyCardContent:
     vocabulary: tuple[VocabularyItem, ...]
     paragraphs: tuple[StudyParagraph, ...]
     vocabulary_candidates: tuple[VocabularyItem, ...] = ()
+    content_type: str = CONTENT_TYPE_ENGLISH_WORLD_SHORT
 
     @classmethod
     def from_mapping(cls, payload: Mapping[str, Any]) -> "StudyCardContent":
@@ -132,7 +135,10 @@ class StudyCardContent:
             vocabulary=vocabulary,
             paragraphs=paragraphs,
             vocabulary_candidates=vocabulary,
+            content_type=normalize_content_type(payload.get("content_type", CONTENT_TYPE_ENGLISH_WORLD_SHORT)),
         )
+        if content.content_type != CONTENT_TYPE_ENGLISH_WORLD_SHORT:
+            raise ValueError("新闻精读学习卡只能使用 ENGLISH_WORLD_SHORT 内容类型")
         content.validate_word_order()
         content.validate_paragraphs()
         return content

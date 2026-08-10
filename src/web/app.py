@@ -48,6 +48,8 @@
 | 3.18.3 | 2026-07-31 | Codex                               | 同步删除封面来源清单，防止音轨规格切换后遗留哈希失配的封面证明         |
 | 3.18.4 | 2026-08-04 | Codex                               | 仪表盘列表优先展示真实投递短标题，避免本地 zh_title 与微信后台标题错位 |
 | 3.18.5 | 2026-08-05 | Codex                               | 后台标题翻译拒绝 Error 500 响应并改走 zh_title DAL，防止列表源译名污染 |
+| 3.18.6 | 2026-08-07 | Codex                               | 新增抖音 CANCELED 账本的显式人工重新入队 API，保留原失败记录供审计 |
+| 3.18.7 | 2026-08-09 | Codex                               | 手动入队显式接收内容生产类型，支持英语世界短视频的持久化标识 |
 """
 import hashlib
 import logging
@@ -76,6 +78,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from video_processing.db.database import PipelineDB
+from video_processing.content_types import CONTENT_TYPE_GENERAL, normalize_content_type
 from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning] 统一翻译入口
 from video_processing.utils.generated_content_validation import is_upstream_error_response
@@ -590,6 +593,10 @@ class PlatformBackfillQueueRequest(BaseModel):
     youtube_ids: Optional[list[str]] = None
 
 
+class DouyinPublicationRequeueRequest(BaseModel):
+    publication_id: int
+
+
 _OUT_DIR = Path(__file__).parent.parent.parent / "output"
 
 
@@ -905,6 +912,29 @@ def queue_platform_backfill(req: PlatformBackfillQueueRequest):
     }
 
 
+@app.post("/api/douyin/publications/requeue")
+def requeue_canceled_douyin_publication(req: DouyinPublicationRequeueRequest):
+    """人工确认抖音页面与投递产物已修复后，创建一条新的可审计队列记录。"""
+    publication = db.get_douyin_publication_by_id(req.publication_id)
+    if not publication:
+        return {"success": False, "error": "抖音投递记录不存在"}
+    if publication.get("state") != "CANCELED":
+        return {"success": False, "error": "仅 CANCELED 的抖音记录允许人工重新入队"}
+    video_path = Path(str(publication.get("video_path") or ""))
+    if not video_path.is_file():
+        return {"success": False, "error": "成片不存在，不能重新入队"}
+    try:
+        requeued = db.requeue_canceled_douyin_publication(req.publication_id)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    return {
+        "success": True,
+        "publication_id": requeued["id"],
+        "attempt_number": requeued["attempt_number"],
+        "state": requeued["state"],
+    }
+
+
 @app.get("/api/videos")
 def get_videos(tab: str = "waitlist", page: int = 1, size: int = 20):
     """返回分页和分类后的视频列表，以及各个 Tab 的计数"""
@@ -1059,6 +1089,7 @@ class AddVideoRequest(BaseModel):
     trim_end: Optional[str] = None
     disable_slicing: Optional[bool] = True  # [Gemini_3.5_Flash_planning] 默认不分片 (整片模式)
     tts_provider: Optional[str] = None      # [Claude_Sonnet_4.6_Thinking_planning] TTS 配音引擎，nullable
+    content_type: str = CONTENT_TYPE_GENERAL
 
 
 @app.post("/api/videos/add")
@@ -1080,6 +1111,10 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
     # ── 1. 裁剪时间参数校验与格式清洗 ──────────────────────────────────
     trim_start = req.trim_start.strip() if req.trim_start else None
     trim_end = req.trim_end.strip() if req.trim_end else None
+    try:
+        content_type = normalize_content_type(req.content_type)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
 
     # 正则防注入校验 (只允许数字、冒号、点)
     time_pattern = re.compile(r"^[0-9:.]*$")
@@ -1161,6 +1196,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         trim_start=trim_start, trim_end=trim_end,
         disable_slicing=disable_slicing_val,
         tts_provider=req.tts_provider or None,  # [Claude_Sonnet_4.6_Thinking_planning] 传递 TTS 配音引擎设置
+        content_type=content_type,
     )
     bg_tasks.add_task(_translate_title_task, video_id, title)
     
@@ -1173,6 +1209,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         "trim_end": trim_end,
         "disable_slicing": req.disable_slicing,
         "tts_provider": req.tts_provider,  # [Claude_Sonnet_4.6_Thinking_planning]
+        "content_type": content_type,
     }
 
 

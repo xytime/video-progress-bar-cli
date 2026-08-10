@@ -12,6 +12,7 @@
 | 1.6.0 | 2026-07-29 | Codex | 覆盖含审核反证的快手 PUBLISHED 写入会保守降级且不参与去重 |
 | 1.7.0 | 2026-07-31 | Codex | 缺字幕用例使用带哈希来源清单的封面，隔离封面门禁影响 |
 | 1.8.0 | 2026-08-03 | Codex | 封面夹具携带无大面积遮罩版式来源清单 |
+| 1.9.0 | 2026-08-10 | Codex | 审核中或未确认的快手账本必须阻断同源/同成片重复提交 |
 """
 
 import hashlib
@@ -33,7 +34,7 @@ def _add_video(db: PipelineDB, youtube_id: str) -> None:
     assert db.add_video(youtube_id, "测试视频", "test-channel", score=80)
 
 
-def test_kuaishou_ledger_only_deduplicates_assets_after_published(tmp_path: Path):
+def test_kuaishou_ledger_deduplicates_queued_and_published_assets(tmp_path: Path):
     db = PipelineDB(str(tmp_path / "pipeline.db"))
     _add_video(db, "video-one")
     _add_video(db, "video-two")
@@ -41,7 +42,7 @@ def test_kuaishou_ledger_only_deduplicates_assets_after_published(tmp_path: Path
     digest = "a" * 64
 
     first = db.create_kuaishou_publication("video-one", digest, "/tmp/one.mp4", source_kind="HISTORY")
-    retryable = db.create_kuaishou_publication("video-two", digest, "/tmp/two.mp4", source_kind="HISTORY")
+    retryable = db.create_kuaishou_publication("video-two", "b" * 64, "/tmp/two.mp4", source_kind="HISTORY")
     assert retryable["id"] != first["id"]
 
     assert db.update_kuaishou_publication_state(first["id"], "PUBLISHED")
@@ -54,7 +55,7 @@ def test_kuaishou_ledger_only_deduplicates_assets_after_published(tmp_path: Path
     assert db.get_kuaishou_publication("video-two")["state"] == "QUEUED"
 
 
-def test_kuaishou_published_with_review_evidence_is_not_success_dedup(tmp_path: Path):
+def test_kuaishou_review_evidence_blocks_duplicate_submission(tmp_path: Path):
     db = PipelineDB(str(tmp_path / "pipeline.db"))
     _add_video(db, "video-one")
     _add_video(db, "video-two")
@@ -71,8 +72,8 @@ def test_kuaishou_published_with_review_evidence_is_not_success_dedup(tmp_path: 
     first_row = db.get_kuaishou_publication("video-one")
     assert first_row["state"] == "UNDER_REVIEW"
     assert first_row["published_at"] is None
-    assert second["id"] != first["id"]
-    assert db.get_kuaishou_publication("video-two")["state"] == "QUEUED"
+    assert second["id"] == first["id"]
+    assert db.get_kuaishou_publication("video-two") is None
 
 
 def test_same_video_can_create_a_new_attempt_after_failure(tmp_path: Path):

@@ -1,8 +1,8 @@
 """抖音创作者中心浏览器上传器。
 
-当前文件只提供登录态保存、页面校准快照和安全返回码骨架。抖音发布页尚未在
-真实账号下完成控件校准前，任何 `--publish` 或 `--verify-only` 都会 fail-closed，
-避免页面改版或选择器误判时触发真实发布。
+上传与发布继续采用页面校准和 fail-closed 门禁；`--verify-only` 则只读访问作品管理页，
+必须在同一作品卡片中精确匹配本地文案指纹及“已发布”或“审核中”状态，绝不凭本地账本
+或页面其他作品的状态确认结果。
 
 # Modification History
 | Version | Date | Author | Description |
@@ -41,6 +41,8 @@
 | 1.5.23 | 2026-07-29 | Codex | 横封面步骤优先点击弹窗底部“设置横封面”CTA，避免误点顶部横封面标签后停在双封面缺失 |
 | 1.5.24 | 2026-07-29 | Codex | 上传封面后先校验大预览，已匹配时不再点击候选缩略图，避免相似候选覆盖正确封面 |
 | 1.5.25 | 2026-07-29 | Codex | 封面候选缩略图已匹配但大预览 crop 误判时，交由保存后卡槽与平台封面检测继续兜底 |
+| 1.5.26 | 2026-08-08 | Codex | 实现作品管理页只读回查：本地文案指纹与同卡片状态精确匹配后才确认已发布 |
+| 1.5.27 | 2026-08-08 | Codex | 回查等待作品列表脱离加载态，避免把刚打开的空壳页面误判为未确认 |
 """
 
 from __future__ import annotations
@@ -62,6 +64,7 @@ logger = logging.getLogger("douyin_uploader")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 DOUYIN_UPLOAD_URL = "https://creator.douyin.com/creator-micro/content/upload"
+DOUYIN_MANAGEMENT_URL = "https://creator.douyin.com/creator-micro/content/manage"
 DOUYIN_VIDEO_INPUT_SELECTOR = 'input[type="file"]'
 DOUYIN_TITLE_SELECTOR = 'input[placeholder*="作品标题"]'
 DOUYIN_DESCRIPTION_SELECTOR = '[contenteditable="true"]'
@@ -81,6 +84,8 @@ EXIT_NOT_CALIBRATED = 4
 EXIT_UPLOADED_FOR_CALIBRATION = 5
 EXIT_UNDER_REVIEW = 6
 EXIT_SUBMISSION_UNCONFIRMED = 7
+MANAGEMENT_PUBLISHED = "PUBLISHED"
+MANAGEMENT_UNDER_REVIEW = "UNDER_REVIEW"
 
 
 def is_creator_center_url(url: str) -> bool:
@@ -103,6 +108,66 @@ def get_page_text(page) -> str:
         return page.locator("body").inner_text(timeout=3_000)
     except Exception:
         return ""
+
+
+def _normalize_page_text(text: str) -> str:
+    """压缩页面空白及零宽格式字符，便于稳定匹配作品管理卡片正文。"""
+    return "".join((text or "").replace("\u200b", "").split())
+
+
+def get_management_copy_markers(copy_text: str) -> list[str]:
+    """生成管理页可见的正文指纹；短片段只作兜底，避免跨作品误匹配。"""
+    normalized = _normalize_page_text(copy_text)
+    markers: list[str] = []
+    for size in (96, 64, 40, 24):
+        if len(normalized) < size:
+            continue
+        marker = normalized[:size]
+        if marker not in markers:
+            markers.append(marker)
+    return markers
+
+
+def get_management_publication_state(page_text: str, copy_text: str) -> Optional[str]:
+    """只在匹配到本次正文后的同一作品卡片片段内读取可见发布状态。"""
+    normalized_page = _normalize_page_text(page_text)
+    for marker in get_management_copy_markers(copy_text):
+        marker_index = normalized_page.find(marker)
+        if marker_index < 0:
+            continue
+        status_window = normalized_page[marker_index + len(marker):marker_index + len(marker) + 900]
+        review_index = status_window.find("审核中")
+        published_index = status_window.find("已发布")
+        if review_index >= 0 and (published_index < 0 or review_index < published_index):
+            return MANAGEMENT_UNDER_REVIEW
+        if published_index >= 0:
+            return MANAGEMENT_PUBLISHED
+    return None
+
+
+def wait_for_management_content(page, timeout_ms: int = 15_000) -> str:
+    """等作品管理列表完成首屏加载；超时也只返回最后可见正文，保持未确认。"""
+    deadline = time.monotonic() + timeout_ms / 1000
+    page_text = get_page_text(page)
+    while "加载中" in page_text and time.monotonic() < deadline:
+        page.wait_for_timeout(500)
+        page_text = get_page_text(page)
+    return page_text
+
+
+def verify_management_publication(page, artifact_dir: Path, copy_text: str) -> Optional[str]:
+    """只读进入作品管理页，记录当前页面证据并返回本次作品的明确可见状态。"""
+    try:
+        page.goto(DOUYIN_MANAGEMENT_URL, wait_until="domcontentloaded", timeout=60_000)
+    except Exception as exc:
+        logger.error("进入抖音作品管理页失败: %s", exc)
+        return None
+    page_text = wait_for_management_content(page)
+    if is_login_required(page.url, page_text, [frame.url for frame in page.frames]):
+        logger.error("抖音作品管理页登录态失效")
+        return None
+    capture_controls(page, artifact_dir, "douyin_management_evidence")
+    return get_management_publication_state(page_text, copy_text)
 
 
 def capture_controls(page, artifact_dir: Path, artifact_name: str) -> None:
@@ -1471,6 +1536,9 @@ def main() -> int:
     if args.calibrate_after_upload and not args.video:
         logger.error("--calibrate-after-upload requires --video")
         return EXIT_FAILED
+    if args.verify_only and not args.copy:
+        logger.error("--verify-only requires --copy for an exact work identity check")
+        return EXIT_FAILED
     if args.video and not args.video.is_file():
         logger.error("视频文件不存在: %s", args.video)
         return EXIT_FAILED
@@ -1541,9 +1609,20 @@ def main() -> int:
             return EXIT_UPLOADED_FOR_CALIBRATION if uploaded else EXIT_UNCONFIRMED
 
         if args.verify_only:
-            logger.error("抖音作品管理回查尚未完成页面校准；本次不读取状态、不触发上传")
+            state = verify_management_publication(
+                page,
+                artifact_dir,
+                args.copy.read_text(encoding="utf-8"),
+            )
             browser.close()
-            return EXIT_NOT_CALIBRATED
+            if state == MANAGEMENT_PUBLISHED:
+                logger.info("抖音作品管理页已确认本次作品已发布")
+                return EXIT_OK
+            if state == MANAGEMENT_UNDER_REVIEW:
+                logger.info("抖音作品管理页显示本次作品仍在审核中")
+                return EXIT_UNDER_REVIEW
+            logger.warning("作品管理页未能确认本次作品状态，保守返回未确认")
+            return EXIT_SUBMISSION_UNCONFIRMED
 
         if args.publish:
             if not wait_for_video_upload_input(page):

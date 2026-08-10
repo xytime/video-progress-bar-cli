@@ -1717,6 +1717,15 @@
           </div>
         </div>
 
+        <label style="display:flex; align-items:center; gap:10px; margin-top:6px; font-size:13px; color:var(--text2);">
+          <span>内容类型</span>
+          <select id="video-content-type" class="add-channel-input" style="width:190px; padding:8px 10px;">
+            <option value="GENERAL">通用视频</option>
+            <option value="ENGLISH_WORLD_SHORT">英语世界短视频</option>
+          </select>
+          <span style="font-size:11px; color:var(--text3);">独立于平台分类，用于生产归档与检索</span>
+        </label>
+
         <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
           <button id="btn-add-video" class="btn-add btn-submit-video" style="width: auto; min-width: 150px;"
             onclick="addVideo()">验证并加入队列</button>
@@ -2479,6 +2488,9 @@
 
         // [Gemini_3.5_Flash_planning] 类别展示
         const categoryBadge = v.category ? `<span class="meta-chip category-badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); font-weight: 500;">📂 ${v.category}</span>` : '';
+        const contentTypeBadge = v.content_type === 'ENGLISH_WORLD_SHORT'
+          ? `<span class="meta-chip" style="background: rgba(245, 158, 11, 0.12); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.24); font-weight: 500;">🌍 英语世界短视频</span>`
+          : '';
 
         // [Gemini_3.5_Flash_planning] 敏感词检测展示
         let censorBadge = '';
@@ -2512,6 +2524,7 @@
 
         const badgesPart = [
           categoryBadge,
+          contentTypeBadge,
           censorBadge
         ].filter(Boolean).join(' ');
 
@@ -3804,12 +3817,14 @@
     const input = document.getElementById('video-url-input');
     const trimStartInput = document.getElementById('video-trim-start');
     const trimEndInput = document.getElementById('video-trim-end');
+    const contentTypeInput = document.getElementById('video-content-type');
     const btn   = document.getElementById('btn-add-video');
     const fb    = document.getElementById('add-video-feedback');
     const url   = input.value.trim();
     const enableTrim = document.getElementById('enable-trim-checkbox')?.checked;
     const trim_start = (enableTrim && trimStartInput) ? trimStartInput.value.trim() : '';
     const trim_end   = (enableTrim && trimEndInput) ? trimEndInput.value.trim() : '';
+    const content_type = contentTypeInput ? contentTypeInput.value : 'GENERAL';
 
     if (!url) {
       fb.textContent = '请输入 YouTube 视频 URL';
@@ -3826,7 +3841,7 @@
       const r = await fetch('/api/videos/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, trim_start, trim_end }),
+        body: JSON.stringify({ url, trim_start, trim_end, content_type }),
       });
       const d = await r.json();
 
@@ -3837,6 +3852,7 @@
         input.value = '';
         if (trimStartInput) trimStartInput.value = '';
         if (trimEndInput) trimEndInput.value = '';
+        if (contentTypeInput) contentTypeInput.value = 'GENERAL';
         const checkbox = document.getElementById('enable-trim-checkbox');
         if (checkbox) {
           checkbox.checked = false;

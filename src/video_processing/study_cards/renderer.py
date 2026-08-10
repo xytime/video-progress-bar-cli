@@ -17,6 +17,7 @@
 | 1.6.1 | 2026-08-04 | Codex | 将显式长样片上限扩展到 120 秒，仍保持生产片段 30 秒硬上限。 |
 | 1.7.0 | 2026-08-04 | Codex | 滚动由可见行溢出预测触发，不再只等待下一自然段，确保朗读词与逐词红线始终留在阅读窗内。 |
 | 1.7.1 | 2026-08-05 | Codex | 滚动落点上移一行，避免新阅读屏顶部残留上一段的半行文字。 |
+| 1.7.2 | 2026-08-09 | Codex | 学习卡 manifest 写入内容生产类型，和数据库英语世界短视频标识保持一致。 |
 """
 
 from __future__ import annotations
@@ -356,6 +357,7 @@ class StudyCardRenderer:
     ) -> None:
         manifest = {
             "template": self.template.name,
+            "content_type": content.content_type,
             "source_video": str(source_video),
             "source_start": source_start,
             "source_duration": source_duration,

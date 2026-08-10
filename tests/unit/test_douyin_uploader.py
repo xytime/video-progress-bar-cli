@@ -14,6 +14,7 @@
 | 1.3.5 | 2026-07-29 | Codex | 覆盖自主声明可见唯一控件的 Playwright 点击路径 |
 | 1.3.6 | 2026-07-29 | Codex | 覆盖最终发布点击后未确认与发布前闸门失败的退出码区分 |
 | 1.3.7 | 2026-07-29 | Codex | 覆盖自主声明弹窗单选项及确定按钮的完整确认流程 |
+| 1.3.8 | 2026-08-08 | Codex | 覆盖作品管理页须精确匹配正文指纹后才读取本作品的发布状态 |
 """
 
 from pathlib import Path
@@ -29,6 +30,7 @@ from scripts.douyin_uploader import (
     apply_cover,
     fill_publish_fields,
     get_description_editor,
+    get_management_publication_state,
     get_publish_button,
     get_title_input,
     get_video_upload_input,
@@ -47,6 +49,25 @@ from scripts.douyin_uploader import (
     wait_for_cover_validation,
     wait_for_video_upload_input,
 )
+
+
+def test_management_state_requires_exact_copy_identity_and_local_card_status():
+    copy_text = "这是一段足够长、可唯一识别当前作品的正文内容，用于验证作品管理页状态。"
+    page_text = (
+        "作品管理已发布其他作品 "
+        + copy_text
+        + " 编辑作品 设置权限 2026年08月08日 已发布 播放 12"
+    )
+
+    assert get_management_publication_state(page_text, copy_text) == "PUBLISHED"
+    assert get_management_publication_state("作品管理 已发布其他作品", copy_text) is None
+
+
+def test_management_state_keeps_exactly_matched_work_under_review():
+    copy_text = "这是一段足够长、可唯一识别当前作品的正文内容，用于验证审核状态。"
+    page_text = copy_text + " 编辑作品 设置权限 2026年08月08日 审核中"
+
+    assert get_management_publication_state(page_text, copy_text) == "UNDER_REVIEW"
 
 
 def test_login_detection_includes_passport_and_creator_login_text():

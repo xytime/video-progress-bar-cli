@@ -270,6 +270,8 @@ class Settings(BaseSettings):
     douyin_review_max_per_run: int = 5
     # 每轮最多同步多少条“微信已发布但抖音未建账”的新片漏项。
     douyin_new_sync_max_per_run: int = 10
+    # 新片自动同步的每日领取上限。巡航每分钟运行，必须与单轮上限分开约束。
+    douyin_new_sync_daily_limit: int = 1
     # 仅扫描最近 N 小时内刚完成微信发布的新片，避免把旧历史内容混入 NEW 同步。
     douyin_new_sync_lookback_hours: int = 12
 

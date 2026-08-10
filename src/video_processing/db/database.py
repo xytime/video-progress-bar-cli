@@ -68,7 +68,14 @@
 | 3.25.3  | 2026-08-03 | Codex                               | 配音任务创建时持久化实际 TTS provider，保证频道专属音色可追溯 |
 | 3.25.4  | 2026-08-05 | Codex                               | 新增上传前瞬态失败的原子重入队接口；只允许下载/文案/转录阶段且递增 retry_count |
 | 3.25.5  | 2026-08-05 | Codex                               | 增加 zh_title 定点更新 DAL，移除后台标题翻译路径的裸 SQL |
+| 3.25.6  | 2026-08-07 | Codex                               | 抖音发布前闸门/页面校准失败持久化取消，阻断旧 RETRYABLE_FAILED 记录跨轮重复建账 |
+| 3.25.7  | 2026-08-07 | Codex                               | AI 封面完成回队时原子标记 preparation_ready，允许盘中只提交已验证成片 |
+| 3.25.8  | 2026-08-07 | Codex                               | 新增抖音 CANCELED 账本的显式人工重入队，保留原失败尝试供审计 |
 | 3.25.9  | 2026-08-08 | Codex                               | 评分写入口统一执行频道上限，The Economist 永不写入超过 60 的分数 |
+| 3.25.10 | 2026-08-08 | Codex                               | 缺失抖音投递产物的旧失败一并停在 CANCELED，避免恢复开关后跨轮空转 |
+| 3.25.11 | 2026-08-08 | Codex                               | 持久化抖音浏览器动作节流，并让 NEW 新片领取遵守每日额度，避免每分钟巡航放大投递 |
+| 3.26.0  | 2026-08-09 | Codex                               | 新增内容生产类型字段，区分英语世界短视频与通用视频并保证切片继承 |
+| 3.26.1  | 2026-08-10 | Codex                               | 快手待提交、审核中、上传中或未确认账本均阻断同源或同成片重建尝试，避免重复上传 |
 """
 
 import sqlite3
@@ -76,9 +83,11 @@ import os
 import json
 import logging
 import datetime  # [Claude_Opus_4.6_Thinking_planning] 提升为 top-level import，用于高赞时间窗口计算
+import time
 from pathlib import Path
 from typing import Collection, List, Dict, Any, Optional, Sequence
 
+from ..content_types import CONTENT_TYPE_GENERAL, normalize_content_type
 from ..scoring import CHANNEL_SCORE_CAPS, cap_channel_score
 
 class PipelineDB:
@@ -191,6 +200,7 @@ class PipelineDB:
                             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             zh_title TEXT,
                             source TEXT DEFAULT 'AUTO',
+                            content_type TEXT NOT NULL DEFAULT 'GENERAL',
                             duration_sec INTEGER DEFAULT NULL,
                             view_count INTEGER DEFAULT NULL,
                             like_count INTEGER DEFAULT NULL,
@@ -270,6 +280,7 @@ class PipelineDB:
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         zh_title TEXT,
                         source TEXT DEFAULT 'AUTO',
+                        content_type TEXT NOT NULL DEFAULT 'GENERAL',
                         duration_sec INTEGER DEFAULT NULL,
                         view_count INTEGER DEFAULT NULL,
                         like_count INTEGER DEFAULT NULL,
@@ -313,6 +324,21 @@ class PipelineDB:
                 self._logger.info("[Migration] Adding category column to processed_videos table...")
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN category TEXT DEFAULT NULL;")
                 conn.commit()
+
+            # 内容生产类型独立于平台分类；历史记录兼容为 GENERAL，英语世界短视频显式写入。
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "content_type" not in columns:
+                self._logger.info("[Migration] Adding content_type column to processed_videos table...")
+                cursor.execute(
+                    "ALTER TABLE processed_videos "
+                    "ADD COLUMN content_type TEXT NOT NULL DEFAULT 'GENERAL';"
+                )
+                conn.commit()
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_processed_videos_content_type "
+                "ON processed_videos(content_type)"
+            )
 
             # [Claude_Opus_4.8] v3.6.0: 检查并补足 bypass_censorship 字段（人工复核放行标志）
             cursor.execute("PRAGMA table_info(processed_videos)")
@@ -850,6 +876,15 @@ class PipelineDB:
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_douyin_publications_state_source
                 ON douyin_publications(state, source_kind, claimed_at, created_at)
+            ''')
+            # 浏览器动作节流必须跨巡航进程持久化；仅靠内存时间戳会被每分钟新进程重置。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS platform_browser_action_slots (
+                    platform TEXT PRIMARY KEY,
+                    last_action_at_epoch REAL NOT NULL,
+                    last_reason TEXT NOT NULL DEFAULT '',
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
             ''')
             
             conn.commit()
@@ -1718,9 +1753,11 @@ class PipelineDB:
         disable_slicing: int = 1,                   # [Gemini_3.5_Flash_planning] 新增：禁用分片标识 (默认1=不分片)
         tts_provider: Optional[str] = None,         # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: TTS 配音引擎（nullable）
         category: Optional[str] = None,             # [Gemini_3.5_Flash_planning] 新增：分类字段
+        content_type: str = CONTENT_TYPE_GENERAL,   # 内容生产类型，独立于视频号分类
         censor_tag: Optional[str] = None,           # [Gemini_3.5_Flash_planning] 新增：敏感词标签
         censor_score: Optional[int] = None,         # [Gemini_3.5_Flash_planning] 新增：敏感词得分
     ) -> bool:
+        normalized_content_type = normalize_content_type(content_type)
         # 前置黑名单检查，防止已删除视频被二次拉取
         if self.is_blacklisted(youtube_id):
             if source == 'MANUAL':
@@ -1735,11 +1772,11 @@ class PipelineDB:
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
                         duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
-                        tts_provider, category, censor_tag, censor_score)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        tts_provider, category, content_type, censor_tag, censor_score)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (youtube_id, slice_index, parent_id, title, channel_id, score, zh_title, source,
                      duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
-                     tts_provider, category, censor_tag, censor_score)  # [Gemini_3.5_Flash_planning]
+                     tts_provider, category, normalized_content_type, censor_tag, censor_score)  # [Gemini_3.5_Flash_planning]
                 )
                 conn.commit()
                 return True
@@ -1837,7 +1874,8 @@ class PipelineDB:
                     yid, v.get("slice_index", 0), v.get("parent_id"), v.get("title"), v.get("channel_id"),
                     v.get("score", 0), v.get("zh_title"), source, v.get("duration_sec"), v.get("view_count"),
                     v.get("like_count"), v.get("upload_date"), v.get("trim_start"), v.get("trim_end"),
-                    v.get("disable_slicing", 1)  # [Unknown_Model_planning] 批量插入子任务时传递并持久化 disable_slicing
+                    v.get("disable_slicing", 1),
+                    normalize_content_type(v.get("content_type")),
                 ))
             
             if not insert_data:
@@ -1847,8 +1885,9 @@ class PipelineDB:
                 conn.executemany(
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
-                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
+                        content_type)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     insert_data
                 )
                 conn.commit()
@@ -1929,11 +1968,11 @@ class PipelineDB:
             return cursor.rowcount > 0
 
     def mark_ai_cover_resolved(self, youtube_id: str, slice_index: int = 0) -> bool:
-        """AI 封面任务完成后，仅把仍在 AI_COVER_PENDING 的视频恢复到待发布队列。"""
+        """AI 封面任务完成后，原子恢复待发布并标记此前已完成的成片为可提交。"""
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "UPDATE processed_videos "
-                "SET status = 'PENDING', error_msg = NULL, updated_at = CURRENT_TIMESTAMP "
+                "SET status = 'PENDING', preparation_ready = 1, error_msg = NULL, updated_at = CURRENT_TIMESTAMP "
                 "WHERE youtube_id = ? AND slice_index = ? AND status = 'AI_COVER_PENDING'",
                 (youtube_id, slice_index),
             )
@@ -3122,27 +3161,31 @@ class PipelineDB:
         source_kind: str,
         slice_index: int = 0,
     ) -> Dict[str, Any]:
-        """登记一次快手投递尝试；仅已发布的相同成片摘要会阻止再次投递。"""
+        """登记一次快手投递尝试；已在途、审核或确认发布的同源/同成片均不得重投。"""
         source = (source_kind or "").upper()
         if source not in self._KUAISHOU_SOURCES:
             raise ValueError(f"Unsupported Kuaishou source kind: {source_kind}")
         if len(asset_sha256) != 64:
             raise ValueError("asset_sha256 must be a SHA-256 hex digest")
         with self.get_connection() as conn:
-            published = conn.execute(
-                "SELECT * FROM kuaishou_publications WHERE asset_sha256 = ? AND state = 'PUBLISHED'",
-                (asset_sha256,),
-            ).fetchone()
-            if published and self._derive_platform_display_state(
-                published["state"], published["last_error_message"]
-            ) == "PUBLISHED":
-                return dict(published)
             video = conn.execute(
                 "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
                 (youtube_id, slice_index),
             ).fetchone()
             if not video:
                 raise ValueError("Video or slice does not exist")
+            protected = conn.execute(
+                '''
+                SELECT * FROM kuaishou_publications
+                WHERE state IN ('QUEUED', 'UPLOADING', 'UNDER_REVIEW', 'UNCERTAIN', 'PUBLISHED')
+                  AND (video_id = ? OR asset_sha256 = ?)
+                ORDER BY CASE WHEN video_id = ? THEN 0 ELSE 1 END, id DESC
+                LIMIT 1
+                ''',
+                (video["id"], asset_sha256, video["id"]),
+            ).fetchone()
+            if protected:
+                return dict(protected)
             next_attempt = conn.execute(
                 "SELECT COALESCE(MAX(attempt_number), 0) + 1 AS number FROM kuaishou_publications WHERE video_id = ?",
                 (video["id"],),
@@ -3442,6 +3485,54 @@ class PipelineDB:
             ).fetchone()
             return dict(row) if row else None
 
+    def get_douyin_publication_by_id(self, publication_id: int) -> Optional[Dict[str, Any]]:
+        """按账本 ID 读取抖音投递记录，包含源视频标识，供人工恢复前核验。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''
+                SELECT dp.*, pv.youtube_id, pv.slice_index
+                FROM douyin_publications dp
+                JOIN processed_videos pv ON pv.id = dp.video_id
+                WHERE dp.id = ?
+                ''',
+                (publication_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def requeue_canceled_douyin_publication(self, publication_id: int) -> Dict[str, Any]:
+        """人工确认修复后从 CANCELED 新建一次 QUEUED 尝试，不覆盖历史账本。"""
+        with self.get_connection() as conn:
+            current = conn.execute(
+                "SELECT * FROM douyin_publications WHERE id = ?", (publication_id,)
+            ).fetchone()
+            if not current:
+                raise ValueError("Douyin publication does not exist")
+            if current["state"] != "CANCELED":
+                raise ValueError("Only CANCELED Douyin publications can be requeued")
+            next_attempt = conn.execute(
+                "SELECT COALESCE(MAX(attempt_number), 0) + 1 AS number FROM douyin_publications WHERE video_id = ?",
+                (current["video_id"],),
+            ).fetchone()["number"]
+            conn.execute(
+                '''
+                INSERT INTO douyin_publications (
+                    video_id, asset_sha256, source_kind, video_path, attempt_number
+                ) VALUES (?, ?, ?, ?, ?)
+                ''',
+                (
+                    current["video_id"], current["asset_sha256"], current["source_kind"],
+                    current["video_path"], next_attempt,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM douyin_publications WHERE video_id = ? AND attempt_number = ?",
+                (current["video_id"], next_attempt),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to requeue canceled Douyin publication")
+            return dict(row)
+
     def get_douyin_publications_by_states(self, states: Collection[str]) -> List[Dict[str, Any]]:
         """按状态返回抖音发布账本，包含原视频标识，供审核回查任务使用。"""
         normalized_states = [str(state or "").upper() for state in states]
@@ -3520,15 +3611,18 @@ class PipelineDB:
         if source == "HISTORY" and (daily_limit is None or daily_limit < 1):
             raise ValueError("daily_limit must be at least 1 for HISTORY")
         with self.get_connection() as conn:
-            if source == "HISTORY":
+            if daily_limit is not None:
+                if daily_limit < 1:
+                    return None
                 used = conn.execute(
                     '''
                     SELECT COUNT(*) AS count FROM douyin_publications
-                    WHERE source_kind = 'HISTORY'
+                    WHERE source_kind = ?
                       AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
                       AND claimed_at IS NOT NULL
                       AND date(claimed_at, 'localtime') = date('now', 'localtime')
-                    '''
+                    ''',
+                    (source,),
                 ).fetchone()["count"]
                 if used >= daily_limit:
                     return None
@@ -3573,9 +3667,34 @@ class PipelineDB:
             ).fetchone()
             return dict(row) if row else None
 
-    def claim_douyin_publication(self, publication_id: int) -> Optional[Dict[str, Any]]:
-        """原子领取指定抖音任务，供新片在视频号成功后立即同步投递。"""
+    def claim_douyin_publication(
+        self,
+        publication_id: int,
+        *,
+        daily_limit: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """原子领取指定抖音任务；指定额度时同样受当日领取总数约束。"""
         with self.get_connection() as conn:
+            current = conn.execute(
+                "SELECT source_kind FROM douyin_publications WHERE id = ?", (publication_id,)
+            ).fetchone()
+            if not current:
+                return None
+            if daily_limit is not None:
+                if daily_limit < 1:
+                    return None
+                used = conn.execute(
+                    '''
+                    SELECT COUNT(*) AS count FROM douyin_publications
+                    WHERE source_kind = ?
+                      AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                      AND claimed_at IS NOT NULL
+                      AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                    ''',
+                    (current["source_kind"],),
+                ).fetchone()["count"]
+                if used >= daily_limit:
+                    return None
             cursor = conn.execute(
                 '''
                 UPDATE douyin_publications
@@ -3599,6 +3718,44 @@ class PipelineDB:
                 (publication_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    def reserve_douyin_browser_action_slot(
+        self,
+        minimum_interval_seconds: int,
+        reason: str,
+        *,
+        now_epoch: Optional[float] = None,
+    ) -> float:
+        """原子预留下一次抖音浏览器动作；返回仍需等待的秒数。"""
+        interval = max(0, int(minimum_interval_seconds or 0))
+        if interval == 0:
+            return 0.0
+        current_epoch = float(time.time() if now_epoch is None else now_epoch)
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT last_action_at_epoch FROM platform_browser_action_slots WHERE platform = 'douyin'"
+            ).fetchone()
+            if row:
+                elapsed = max(0.0, current_epoch - float(row["last_action_at_epoch"]))
+                remaining = float(interval) - elapsed
+                if remaining > 0:
+                    conn.commit()
+                    return remaining
+            conn.execute(
+                '''
+                INSERT INTO platform_browser_action_slots (
+                    platform, last_action_at_epoch, last_reason, updated_at
+                ) VALUES ('douyin', ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(platform) DO UPDATE SET
+                    last_action_at_epoch = excluded.last_action_at_epoch,
+                    last_reason = excluded.last_reason,
+                    updated_at = CURRENT_TIMESTAMP
+                ''',
+                (current_epoch, reason),
+            )
+            conn.commit()
+        return 0.0
 
     def claim_next_douyin_history_publication(self, daily_limit: int) -> Optional[Dict[str, Any]]:
         """兼容入口：原子领取一条抖音历史迁移任务并遵守当天上限。"""
@@ -3677,6 +3834,27 @@ class PipelineDB:
             )
             conn.commit()
             return cursor.rowcount == 1
+
+    def cancel_douyin_pre_submit_gate_failures(self) -> int:
+        """将明确未提交的抖音旧失败停在 CANCELED，绝不触碰审核中或不确定记录。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                '''
+                UPDATE douyin_publications
+                SET state = 'CANCELED',
+                    last_error_message = COALESCE(last_error_message, '')
+                        || ' 已停止自动重试，修复后请人工重新入队。',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE state = 'RETRYABLE_FAILED'
+                  AND (
+                      COALESCE(last_error_message, '') LIKE '%发布前元信息、封面或自主声明闸门未能确认%'
+                      OR COALESCE(last_error_message, '') LIKE '%上传器尚未完成页面校准%'
+                      OR COALESCE(last_error_message, '') LIKE '%抖音投递产物缺失%'
+                  )
+                '''
+            )
+            conn.commit()
+            return cursor.rowcount
 
     def mark_douyin_publication_attempted(self, publication_id: int) -> bool:
         """回填一次已实际提交的尝试，用于人工恢复流程也遵守 HISTORY 当日配额。"""
