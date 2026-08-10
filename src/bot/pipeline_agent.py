@@ -25,6 +25,7 @@ based on incoming Telegram messages and commands.
 | 1.13.0  | 2026-07-31 | Codex                               | Telegram 生成和上传均要求非截帧封面来源清单，禁止复用历史帧封面          |
 | 1.14.0  | 2026-08-03 | Codex                               | Telegram 封面生成和上传也执行无大面积遮罩版式来源清单校验                |
 | 1.14.1  | 2026-08-10 | Codex                               | Gemini TLS 瞬断加入有限重试；最终失败仅返回一条可操作提示                |
+| 1.14.2  | 2026-08-10 | Codex                               | Gemini 不可用时以同工具集切换 DeepSeek OpenAI 兼容 Function Calling 兜底 |
 """
 import os
 import sys
@@ -34,11 +35,13 @@ import asyncio
 import subprocess
 import fcntl
 import time
+import inspect
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, get_args, get_origin
 
 from google import genai  # [Claude_Sonnet_4.6_Thinking_planning] 迁移至 google.genai SDK v2.6.0
 from google.genai import types as genai_types  # [Claude_Sonnet_4.6_Thinking_planning]
+from openai import OpenAI
 
 # Ensure src/ is in sys.path
 _src = str(Path(__file__).parent.parent)
@@ -90,6 +93,24 @@ def _is_transient_gemini_error(exc: Exception) -> bool:
     return any(marker in message for marker in _TRANSIENT_GEMINI_ERROR_MARKERS)
 
 
+def _deepseek_json_type(annotation: Any) -> str:
+    """将现有 Python 工具签名保守映射为 OpenAI Function Calling JSON 类型。"""
+    if annotation in (int, float):
+        return "integer" if annotation is int else "number"
+    if annotation is bool:
+        return "boolean"
+    origin = get_origin(annotation)
+    if origin in (list, List):
+        return "array"
+    if origin in (dict, Dict):
+        return "object"
+    args = get_args(annotation)
+    if args:
+        candidates = [item for item in args if item is not type(None)]
+        return _deepseek_json_type(candidates[0]) if candidates else "string"
+    return "string"
+
+
 class PipelineAgent:
     """AI Agent that orchestrates the video processing pipeline using Gemini Function Calling.
 
@@ -119,6 +140,7 @@ class PipelineAgent:
         if not api_key:
             raise ValueError("GEMINI_API_KEY is not configured in settings.")
         self._genai_client = genai.Client(api_key=api_key)  # [Claude_Sonnet_4.6_Thinking_planning] 使用 Client() 替代全局 configure()
+        self._deepseek_client: Optional[OpenAI] = None
 
         # Expose tools for Gemini Function Calling
         self.tools = [
@@ -763,6 +785,125 @@ class PipelineAgent:
         """
         return find_downloaded_video(self.output_dir, yid, self.output_dir / "original_video")
 
+    def _get_deepseek_client(self) -> Optional[OpenAI]:
+        """惰性创建 DeepSeek 客户端；未配置时保留原本的友好降级。"""
+        api_key = (settings.deepseek_api_key or "").strip()
+        if not api_key:
+            return None
+        if self._deepseek_client is None:
+            self._deepseek_client = OpenAI(
+                api_key=api_key,
+                base_url=(settings.deepseek_base_url or "https://api.deepseek.com").rstrip("/"),
+                timeout=60.0,
+                max_retries=1,
+            )
+        return self._deepseek_client
+
+    def _deepseek_tool_schemas(self) -> List[Dict[str, Any]]:
+        """从现有工具签名生成 DeepSeek Function Calling 契约，避免维护第二套工具清单。"""
+        schemas: List[Dict[str, Any]] = []
+        for tool in self.tools:
+            signature = inspect.signature(tool)
+            properties: Dict[str, Any] = {}
+            required: List[str] = []
+            for name, parameter in signature.parameters.items():
+                if name == "self":
+                    continue
+                schema: Dict[str, Any] = {"type": _deepseek_json_type(parameter.annotation)}
+                if parameter.default is not inspect.Parameter.empty:
+                    schema["default"] = parameter.default
+                else:
+                    required.append(name)
+                properties[name] = schema
+            schemas.append({
+                "type": "function",
+                "function": {
+                    "name": tool.__name__,
+                    "description": inspect.getdoc(tool) or tool.__name__,
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": required,
+                        "additionalProperties": False,
+                    },
+                },
+            })
+        return schemas
+
+    def _run_deepseek_fallback(self, prompt: str) -> Optional[str]:
+        """以与 Gemini 相同的工具集运行 DeepSeek 兜底 Agent；失败返回 None。"""
+        client = self._get_deepseek_client()
+        if client is None:
+            logger.warning("DeepSeek fallback skipped: DEEPSEEK_API_KEY is not configured")
+            return None
+
+        tool_map = {tool.__name__: tool for tool in self.tools}
+        messages: List[Dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": (
+                    f"{self.system_prompt}\n\n"
+                    "You are the DeepSeek fallback. Follow all of the above rules exactly. "
+                    "Use the supplied tools when an action or local data lookup is needed. "
+                    "Never claim a platform-visible publication without the required evidence."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        try:
+            for _ in range(10):
+                response = client.chat.completions.create(
+                    model=settings.deepseek_model,
+                    messages=messages,  # type: ignore[arg-type]
+                    tools=self._deepseek_tool_schemas(),  # type: ignore[arg-type]
+                    tool_choice="auto",
+                    temperature=0.2,
+                    max_tokens=1800,
+                )
+                if not response.choices:
+                    raise RuntimeError("DeepSeek returned no choices")
+                message = response.choices[0].message
+                tool_calls = message.tool_calls or []
+                if not tool_calls:
+                    content = (message.content or "").strip()
+                    if content:
+                        return content
+                    raise RuntimeError("DeepSeek returned an empty response")
+
+                messages.append({
+                    "role": "assistant",
+                    "content": message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "type": "function",
+                            "function": {
+                                "name": call.function.name,
+                                "arguments": call.function.arguments,
+                            },
+                        }
+                        for call in tool_calls
+                    ],
+                })
+                for call in tool_calls:
+                    try:
+                        tool = tool_map[call.function.name]
+                        arguments = json.loads(call.function.arguments or "{}")
+                        if not isinstance(arguments, dict):
+                            raise ValueError("tool arguments must be a JSON object")
+                        result = tool(**arguments)
+                    except Exception as exc:  # noqa: BLE001 - 结果交回模型说明而非中断整轮
+                        result = json.dumps({"ok": False, "error": f"Tool failed: {exc}"})
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.id,
+                        "content": result,
+                    })
+            raise RuntimeError("DeepSeek tool-call limit reached")
+        except Exception as exc:  # noqa: BLE001 - 双供应商都失败时才向用户降级
+            logger.warning("DeepSeek fallback failed: %s", exc)
+            return None
+
     # ── Main Run Entrypoint ───────────────────────────────────────────────────
 
     def run(self, prompt: str) -> str:
@@ -796,7 +937,10 @@ class PipelineAgent:
                     )
                     time.sleep(wait_sec)
                     continue
-                logger.exception("Gemini execution failed after %s attempt(s)", attempt + 1)
+                logger.exception("Gemini execution failed after %s attempt(s); trying DeepSeek fallback", attempt + 1)
+                fallback_response = self._run_deepseek_fallback(prompt)
+                if fallback_response:
+                    return fallback_response
                 if _is_transient_gemini_error(e):
-                    return "❌ AI 服务网络暂时不可用，已自动重试 3 次仍未连上。请稍后重试；/status 和“今日简报”不依赖 AI。"
-                return "❌ AI Agent 无法处理这条请求。请改用明确指令（如 /status、/queue），或稍后重试。"
+                    return "❌ Gemini 网络暂时不可用，DeepSeek 兜底也未能完成。请稍后重试；/status 和“今日简报”不依赖 AI。"
+                return "❌ AI Agent 无法处理这条请求，且 DeepSeek 兜底未成功。请改用明确指令（如 /status、/queue），或稍后重试。"

@@ -18,6 +18,7 @@ def _agent_with_chat(chat: MagicMock) -> PipelineAgent:
     agent._genai_client = SimpleNamespace(chats=SimpleNamespace(create=MagicMock(return_value=chat)))
     agent.tools = []
     agent.system_prompt = "test"
+    agent._deepseek_client = None
     return agent
 
 
@@ -43,13 +44,27 @@ def test_pipeline_agent_retries_tls_eof_then_returns_response():
     sleep.assert_called_once_with(1)
 
 
-def test_pipeline_agent_returns_one_safe_message_after_retries_exhausted():
+def test_pipeline_agent_uses_deepseek_after_retries_exhausted():
     chat = MagicMock()
     chat.send_message.side_effect = OSError("[SSL: UNEXPECTED_EOF_WHILE_READING]")
     agent = _agent_with_chat(chat)
+    agent._run_deepseek_fallback = MagicMock(return_value="DeepSeek 已接管")
 
     with patch("bot.pipeline_agent.time.sleep"):
         result = agent.run("测试")
 
-    assert "已自动重试 3 次" in result
+    assert result == "DeepSeek 已接管"
     assert chat.send_message.call_count == 3
+    agent._run_deepseek_fallback.assert_called_once_with("测试")
+
+
+def test_deepseek_fallback_returns_model_text(monkeypatch):
+    message = SimpleNamespace(content="DeepSeek 回答", tool_calls=[])
+    client = MagicMock()
+    client.chat.completions.create.return_value = SimpleNamespace(choices=[SimpleNamespace(message=message)])
+    agent = _agent_with_chat(MagicMock())
+    agent._deepseek_client = client
+    monkeypatch.setattr("bot.pipeline_agent.settings.deepseek_api_key", "fake-key")
+
+    assert agent._run_deepseek_fallback("你好") == "DeepSeek 回答"
+    assert client.chat.completions.create.call_count == 1
