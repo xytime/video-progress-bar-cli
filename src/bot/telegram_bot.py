@@ -31,6 +31,7 @@
 | 1.16.3  | 2026-07-05 | Codex                               | /status 展示 /retry 24/48 数量，并给最近失败标注相对时间 |
 | 1.17.0  | 2026-07-28 | Codex                               | /status 改接只读三秒质检报告，并增加 Telegram 命令菜单和底部快捷键 |
 | 1.17.1  | 2026-08-10 | Codex                               | 今日简报自然语言直连本地只读账本，避免 TLS 波动影响运营查询 |
+| 1.17.2  | 2026-08-10 | Codex                               | Bot 启动前以项目 .env 覆盖 LaunchAgent 继承环境，确保本地模型凭据一致 |
 """
 from __future__ import annotations
 
@@ -41,6 +42,11 @@ import os
 import re
 import sys
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# 必须早于 PipelineAgent / settings 导入：LaunchAgent 可能继承过期的同名变量。
+load_dotenv(Path(__file__).parent.parent.parent / ".env", override=True)
 
 from telegram import BotCommand, ReplyKeyboardMarkup, Update
 from telegram.ext import (
@@ -128,8 +134,6 @@ async def _configure_bot_menu(app: Application) -> None:
 
 def _load_config() -> tuple[str, set[int]]:
     """加载并强验证所有必要配置。Fail-Closed: 任何问题直接 sys.exit。"""
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
