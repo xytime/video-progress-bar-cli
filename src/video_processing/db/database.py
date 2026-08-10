@@ -76,6 +76,7 @@
 | 3.25.11 | 2026-08-08 | Codex                               | 持久化抖音浏览器动作节流，并让 NEW 新片领取遵守每日额度，避免每分钟巡航放大投递 |
 | 3.26.0  | 2026-08-09 | Codex                               | 新增内容生产类型字段，区分英语世界短视频与通用视频并保证切片继承 |
 | 3.26.1  | 2026-08-10 | Codex                               | 快手待提交、审核中、上传中或未确认账本均阻断同源或同成片重建尝试，避免重复上传 |
+| 3.26.2  | 2026-08-10 | Codex                               | 新增北京自然日运营简报只读快照，区分本地视频号完成与快手/抖音已确认发布 |
 """
 
 import sqlite3
@@ -2589,6 +2590,87 @@ class PipelineDB:
             "recent_failures": [dict(row) for row in recent_failures],
             "platform_states": [dict(row) for row in platform_rows],
             "platform_overview": [dict(row) for row in platform_overview_rows],
+        }
+
+    def get_daily_operations_snapshot(
+        self,
+        day: Optional[datetime.date] = None,
+    ) -> Dict[str, Any]:
+        """返回北京自然日运营简报的只读快照，绝不修改视频或平台账本。
+
+        ``processed_videos.PUBLISHED`` 只能说明视频号本地流程完成，不能当作
+        平台可见证明；快手和抖音则只统计其独立账本中已确认的 ``PUBLISHED``。
+        """
+        shanghai = datetime.timezone(datetime.timedelta(hours=8))
+        report_day = day or datetime.datetime.now(shanghai).date()
+        start_local = datetime.datetime.combine(report_day, datetime.time.min, tzinfo=shanghai)
+        end_local = start_local + datetime.timedelta(days=1)
+        start_utc = start_local.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        end_utc = end_local.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        window = (start_utc, end_utc)
+
+        confirmed_platform_sql = """
+            WITH latest_attempt AS (
+                SELECT publication.*, pv.youtube_id, pv.slice_index, pv.title, pv.zh_title,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY publication.video_id
+                           ORDER BY publication.attempt_number DESC, publication.id DESC
+                       ) AS rn
+                FROM {table} AS publication
+                JOIN processed_videos AS pv ON pv.id = publication.video_id
+            )
+            SELECT youtube_id, slice_index, title, zh_title, external_post_id, external_url,
+                   published_at, updated_at
+            FROM latest_attempt
+            WHERE rn = 1
+              AND state = 'PUBLISHED'
+              AND published_at IS NOT NULL
+              AND published_at >= ? AND published_at < ?
+            ORDER BY published_at DESC, youtube_id ASC
+        """
+
+        with self.get_connection() as conn:
+            collected_count = conn.execute(
+                """SELECT COUNT(*) AS count FROM processed_videos
+                   WHERE created_at >= ? AND created_at < ?""",
+                window,
+            ).fetchone()["count"]
+            failed_count = conn.execute(
+                """SELECT COUNT(*) AS count FROM processed_videos
+                   WHERE status = 'FAILED' AND updated_at >= ? AND updated_at < ?""",
+                window,
+            ).fetchone()["count"]
+            sensitive_blocked_count = conn.execute(
+                """SELECT COUNT(DISTINCT youtube_id || ':' || slice_index) AS count
+                   FROM censorship_incidents
+                   WHERE level IN ('P0', 'P1', 'P2')
+                     AND decision LIKE '%REJECT%'
+                     AND created_at >= ? AND created_at < ?""",
+                window,
+            ).fetchone()["count"]
+            wechat_rows = conn.execute(
+                """SELECT youtube_id, slice_index, title, zh_title, updated_at
+                   FROM processed_videos
+                   WHERE status = 'PUBLISHED' AND updated_at >= ? AND updated_at < ?
+                   ORDER BY updated_at DESC, youtube_id ASC""",
+                window,
+            ).fetchall()
+            kuaishou_rows = conn.execute(
+                confirmed_platform_sql.format(table="kuaishou_publications"), window
+            ).fetchall()
+            douyin_rows = conn.execute(
+                confirmed_platform_sql.format(table="douyin_publications"), window
+            ).fetchall()
+
+        return {
+            "date": report_day.isoformat(),
+            "timezone": "Asia/Shanghai",
+            "collected_count": int(collected_count),
+            "failed_count": int(failed_count),
+            "sensitive_blocked_count": int(sensitive_blocked_count),
+            "wechat_local_completed": [dict(row) for row in wechat_rows],
+            "kuaishou_confirmed_published": [dict(row) for row in kuaishou_rows],
+            "douyin_confirmed_published": [dict(row) for row in douyin_rows],
         }
 
     def get_detailed_stats(self) -> Dict[str, Any]:

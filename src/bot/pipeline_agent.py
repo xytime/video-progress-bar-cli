@@ -24,6 +24,7 @@ based on incoming Telegram messages and commands.
 | 1.12.0  | 2026-07-31 | Codex                               | Telegram 触发封面恢复为专门生成图，不再从竖版成片截帧                    |
 | 1.13.0  | 2026-07-31 | Codex                               | Telegram 生成和上传均要求非截帧封面来源清单，禁止复用历史帧封面          |
 | 1.14.0  | 2026-08-03 | Codex                               | Telegram 封面生成和上传也执行无大面积遮罩版式来源清单校验                |
+| 1.14.1  | 2026-08-10 | Codex                               | Gemini TLS 瞬断加入有限重试；最终失败仅返回一条可操作提示                |
 """
 import os
 import sys
@@ -32,6 +33,7 @@ import logging
 import asyncio
 import subprocess
 import fcntl
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -65,6 +67,27 @@ from bot.video_delivery import (
 )
 
 logger = logging.getLogger("pipeline_agent")
+
+_TRANSIENT_GEMINI_ERROR_MARKERS = (
+    "unexpected_eof_while_reading",
+    "eof occurred in violation of protocol",
+    "ssl",
+    "connection reset",
+    "connection aborted",
+    "temporarily unavailable",
+    "timed out",
+    "timeout",
+    "429",
+    "quota",
+    "exhausted",
+)
+_GEMINI_MAX_ATTEMPTS = 3
+
+
+def _is_transient_gemini_error(exc: Exception) -> bool:
+    """仅识别可安全重试的模型传输/限流故障，不吞没业务或工具错误。"""
+    message = str(exc).lower()
+    return any(marker in message for marker in _TRANSIENT_GEMINI_ERROR_MARKERS)
 
 
 class PipelineAgent:
@@ -757,20 +780,23 @@ class PipelineAgent:
             )
         )
         
-        import time
-        max_retries = 3
-        for attempt in range(max_retries):
+        for attempt in range(_GEMINI_MAX_ATTEMPTS):
             try:
                 response = chat.send_message(prompt)
                 return response.text
             except Exception as e:
-                err_str = str(e).lower()
-                if "429" in err_str or "quota" in err_str or "exhausted" in err_str:
-                    if attempt < max_retries - 1:
-                        wait_sec = (attempt + 1) * 5
-                        logger.warning(f"Gemini API 429 rate limit hit, retrying in {wait_sec} seconds (attempt {attempt + 1}/{max_retries})...")
-                        time.sleep(wait_sec)
-                        continue
-                logger.error(f"Gemini execution failed: {e}")
-                self.send_telegram_message(f"❌ <b>AI Agent Error</b>: {e}")
-                return f"Execution failed: {e}"
+                if _is_transient_gemini_error(e) and attempt < _GEMINI_MAX_ATTEMPTS - 1:
+                    wait_sec = 2 ** attempt
+                    logger.warning(
+                        "Gemini transient transport error; retrying in %ss (attempt %s/%s): %s",
+                        wait_sec,
+                        attempt + 1,
+                        _GEMINI_MAX_ATTEMPTS,
+                        e,
+                    )
+                    time.sleep(wait_sec)
+                    continue
+                logger.exception("Gemini execution failed after %s attempt(s)", attempt + 1)
+                if _is_transient_gemini_error(e):
+                    return "❌ AI 服务网络暂时不可用，已自动重试 3 次仍未连上。请稍后重试；/status 和“今日简报”不依赖 AI。"
+                return "❌ AI Agent 无法处理这条请求。请改用明确指令（如 /status、/queue），或稍后重试。"

@@ -30,6 +30,7 @@
 | 1.16.2  | 2026-07-05 | Codex                               | /status 展示 /retry 24 只读预览数量，避免用户发出批量命令后才知道影响范围 |
 | 1.16.3  | 2026-07-05 | Codex                               | /status 展示 /retry 24/48 数量，并给最近失败标注相对时间 |
 | 1.17.0  | 2026-07-28 | Codex                               | /status 改接只读三秒质检报告，并增加 Telegram 命令菜单和底部快捷键 |
+| 1.17.1  | 2026-08-10 | Codex                               | 今日简报自然语言直连本地只读账本，避免 TLS 波动影响运营查询 |
 """
 from __future__ import annotations
 
@@ -66,6 +67,7 @@ from bot.video_delivery import (
     CompressionError,
 )
 from video_processing.quality_report import collect as collect_quality_report
+from video_processing.daily_brief import collect_daily_brief
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,6 +97,28 @@ _BOT_COMMANDS = [
     BotCommand("retry", "重试单条或最近N小时失败"),
     BotCommand("help", "显示快捷菜单"),
 ]
+
+
+def _is_daily_brief_request(text: str) -> bool:
+    """识别今日运营数据问询；命中后绝不转交会产生网络依赖的通用 Agent。"""
+    normalized = re.sub(r"\s+", "", text or "").lower()
+    asks_today = "今天" in normalized or "今日" in normalized
+    asks_operations = any(marker in normalized for marker in (
+        "简报", "采编", "敏感词", "发布数量", "发布视频", "失败数量", "发布情况",
+    ))
+    return asks_today and asks_operations
+
+
+async def _reply_html_chunks(message, text: str, *, max_length: int = 3900) -> None:
+    """按换行切分长 HTML 报告，避免 Telegram 4096 字符上限导致整份日报丢失。"""
+    chunk = ""
+    for line in text.splitlines(keepends=True):
+        if chunk and len(chunk) + len(line) > max_length:
+            await message.reply_text(chunk.rstrip(), parse_mode="HTML")
+            chunk = ""
+        chunk += line
+    if chunk:
+        await message.reply_text(chunk.rstrip(), parse_mode="HTML")
 
 
 async def _configure_bot_menu(app: Application) -> None:
@@ -771,6 +795,18 @@ async def handle_agent_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -
     chat_id = update.effective_chat.id
     user_message = update.message.text or update.message.caption or ""
     if not user_message.strip():
+        return
+
+    if _is_daily_brief_request(user_message):
+        try:
+            report = await asyncio.to_thread(collect_daily_brief)
+            await _reply_html_chunks(update.message, report)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("daily brief generation failed")
+            await update.message.reply_text(
+                fmt.fmt_error(f"今日简报生成失败：{type(e).__name__}"),
+                parse_mode="Markdown",
+            )
         return
 
     # 并发锁：如果该 chat 已经在运行 Agent 任务，提示等待
