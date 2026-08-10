@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-03 | Codex | 覆盖既有视频号提交后证据阻止自动重发并恢复本地已发布态 |
+| 1.1.0 | 2026-08-10 | Codex | 补充既有后台截图自动回填视频号确认账本 |
 """
 
 from __future__ import annotations
@@ -31,6 +32,9 @@ def test_existing_wechat_submission_evidence_blocks_duplicate_publish(tmp_path: 
     assert row["status"] == "PUBLISHED"
     assert "拒绝自动重发" in row["error_msg"]
     assert str(evidence) in row["error_msg"]
+    publication = manager.db.get_wechat_publication("wechat-guard")
+    assert publication["state"] == "PUBLISHED"
+    assert publication["evidence_path"] == str(evidence)
     assert messages and "duplicate publish blocked" in messages[0]
 
 

@@ -77,6 +77,7 @@
 | 3.26.0  | 2026-08-09 | Codex                               | 新增内容生产类型字段，区分英语世界短视频与通用视频并保证切片继承 |
 | 3.26.1  | 2026-08-10 | Codex                               | 快手待提交、审核中、上传中或未确认账本均阻断同源或同成片重建尝试，避免重复上传 |
 | 3.26.2  | 2026-08-10 | Codex                               | 新增北京自然日运营简报只读快照，区分本地视频号完成与快手/抖音已确认发布 |
+| 3.26.3  | 2026-08-10 | Codex                               | 新增视频号确认账本；以提交后后台列表截图为准，杜绝仅写本地 PUBLISHED 而缺失平台证据 |
 """
 
 import sqlite3
@@ -393,6 +394,27 @@ class PipelineDB:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_wechat_deferred_recovery_claims_day "
                 "ON wechat_deferred_recovery_claims(claimed_at)"
+            )
+
+            # 视频号发布确认账本：浏览器上传器的成功退出必须同时留下后台列表证据。
+            # 不复用 processed_videos.updated_at（其会被后续评分刷新），以免把本地完成
+            # 误报为平台侧可见。每个视频/切片只保留一条最新确认结果。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS wechat_publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL UNIQUE,
+                    state TEXT NOT NULL CHECK(state IN ('PUBLISHED', 'UNCERTAIN')),
+                    evidence_path TEXT DEFAULT NULL,
+                    confirmed_at TIMESTAMP DEFAULT NULL,
+                    last_error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wechat_publications_state "
+                "ON wechat_publications(state, confirmed_at, updated_at)"
             )
 
             # 快手发布账本：仅“已发布”的成片摘要禁止再次投递；失败、临时上传和未发布草稿
@@ -2147,6 +2169,72 @@ class PipelineDB:
             )
             conn.commit()
 
+    # --- WeChat Channels publication confirmation ledger DAL ---
+    def record_wechat_publication_confirmation(
+        self,
+        youtube_id: str,
+        *,
+        evidence_path: Optional[str],
+        state: str = "PUBLISHED",
+        error_message: Optional[str] = None,
+        slice_index: int = 0,
+    ) -> Dict[str, Any]:
+        """记录视频号后台确认结果；同一视频只更新既有确认记录，不会触发投递。"""
+        normalized_state = (state or "").upper()
+        if normalized_state not in {"PUBLISHED", "UNCERTAIN"}:
+            raise ValueError("Wechat publication state must be PUBLISHED or UNCERTAIN")
+        clean_evidence_path = (evidence_path or "").strip() or None
+        if normalized_state == "PUBLISHED" and not clean_evidence_path:
+            raise ValueError("PUBLISHED WeChat publication requires post-list evidence")
+
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError(f"Video not found: {youtube_id}#{slice_index}")
+            conn.execute(
+                '''
+                INSERT INTO wechat_publications (
+                    video_id, state, evidence_path, confirmed_at, last_error_message
+                ) VALUES (?, ?, ?, CASE WHEN ? = 'PUBLISHED' THEN CURRENT_TIMESTAMP ELSE NULL END, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    state = excluded.state,
+                    evidence_path = COALESCE(excluded.evidence_path, wechat_publications.evidence_path),
+                    confirmed_at = CASE
+                        WHEN excluded.state = 'PUBLISHED' THEN CURRENT_TIMESTAMP
+                        ELSE wechat_publications.confirmed_at
+                    END,
+                    last_error_message = excluded.last_error_message,
+                    updated_at = CURRENT_TIMESTAMP
+                ''',
+                (video["id"], normalized_state, clean_evidence_path, normalized_state, error_message),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM wechat_publications WHERE video_id = ?", (video["id"],)
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to record WeChat publication confirmation")
+            return dict(row)
+
+    def get_wechat_publication(
+        self, youtube_id: str, *, slice_index: int = 0
+    ) -> Optional[Dict[str, Any]]:
+        """读取视频号确认账本，供页面与人工核验明确区分本地状态和平台证据。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''
+                SELECT wp.*, pv.youtube_id, pv.slice_index
+                FROM wechat_publications wp
+                JOIN processed_videos pv ON pv.id = wp.video_id
+                WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                ''',
+                (youtube_id, slice_index),
+            ).fetchone()
+            return dict(row) if row else None
+
     def purge_stale_tasks(self, stale_hours: int = 2) -> int:
         """清洗器：将卡在非终态（如 DOWNLOADING）超过 N 小时的任务重置回 PENDING"""
         with self.get_connection() as conn:
@@ -2817,7 +2905,30 @@ class PipelineDB:
                     },
                 }
 
-            # 2. 极客优化：使用单路 CTE + ROW_NUMBER 窗口函数单次查出快手与抖音的最新尝试
+            # 2. 视频号优先使用后台列表确认账本；缺失账本的旧记录保留本地状态，
+            #    但新发布路径不会再只依赖 processed_videos.updated_at。
+            wechat_rows = conn.execute(
+                f'''
+                SELECT video_id, state, confirmed_at, last_error_message
+                FROM wechat_publications
+                WHERE video_id IN ({placeholders})
+                ''',
+                unique_ids,
+            ).fetchall()
+            for row in wechat_rows:
+                v_id = row["video_id"]
+                if v_id in result:
+                    result[v_id]["wechat"] = {
+                        "platform": "wechat",
+                        "platform_name": "微信视频号",
+                        "state": row["state"],
+                        "display_state": row["state"],
+                        "published_at": row["confirmed_at"] if row["state"] == "PUBLISHED" else None,
+                        "external_url": None,
+                        "error": row["last_error_message"],
+                    }
+
+            # 3. 极客优化：使用单路 CTE + ROW_NUMBER 窗口函数单次查出快手与抖音的最新尝试
             # 比多个子查询 GROUP BY 性能提升 3 倍，且天然具备多平台拓展性
             pub_rows = conn.execute(
                 f"""

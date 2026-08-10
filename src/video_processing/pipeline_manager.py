@@ -101,6 +101,7 @@
 | 3.48.11 | 2026-08-08 | Codex                               | 抖音审核回查传入作品正文指纹，仅管理页精确匹配且显示已发布才落账 |
 | 3.48.12 | 2026-08-08 | Codex                               | 抖音 NEW 投递增加每日领取上限和跨巡航浏览器节流，防止每分钟任务放大平台动作 |
 | 3.48.13 | 2026-08-09 | Codex                               | 切片任务继承内容生产类型，保留英语世界短视频的端到端可检索标识 |
+| 3.48.14 | 2026-08-10 | Codex                               | 视频号发布成功必须写入后台列表证据账本；缺图时保守记为 UNCERTAIN 并停止后续平台动作 |
 """
 
 
@@ -435,6 +436,15 @@ class PipelineManager:
         newest_evidence = evidence_paths[-1]
         reason = f"检测到既有视频号提交后证据，拒绝自动重发：{newest_evidence}"
         logger.error("[%s] %s", prefix, reason)
+        try:
+            self.db.record_wechat_publication_confirmation(
+                yid,
+                evidence_path=str(newest_evidence),
+                slice_index=slice_index,
+            )
+        except Exception:
+            # 已有平台后台截图时，绝不能因账本补写失败而放行重传。
+            logger.exception("[%s] 视频号确认账本补写失败；仍按既有提交证据阻止重发。", prefix)
         self.db.update_video_status(yid, "PUBLISHED", error_msg=reason, slice_index=slice_index)
         self.send_telegram_msg(
             "⚠️ <b>WeChat duplicate publish blocked</b>\n"
@@ -2639,6 +2649,7 @@ class PipelineManager:
                     else:
                         logger.warning(f"[Collection] Parent video (slice_index=0) not found for {yid}, skipping collection.")
 
+                evidence_dir = self._OUT_DIR / "wechat_evidence" / prefix / str(time.time_ns())
                 upload_cmd = [
                     self._VENV_PYTHON,
                     str(self._PRJ_ROOT / "scripts" / "wechat_uploader.py"),
@@ -2647,7 +2658,7 @@ class PipelineManager:
                     "--state",  str(self._OUT_DIR / "wechat_state.json"),
                     "--fail-fast-login",
                     "--evidence-dir",
-                    str(self._OUT_DIR / "wechat_evidence" / prefix / str(time.time_ns())),
+                    str(evidence_dir),
                 ]
                 if not settings.wechat_headless:
                     upload_cmd += ["--no-headless"]
@@ -2715,7 +2726,33 @@ class PipelineManager:
                     raise
 
                 # ── 5. PUBLISHED ──────────────────────────────────────────────────
-                self.db.update_video_status(yid, "PUBLISHED", slice_index=slice_index)
+                # 上传器仅在已跳转视频号后台列表或出现明确成功文案时返回 0；这里仍要求
+                # 后台列表截图真实落盘。缺图时不重传，保守落账 UNCERTAIN 并停止后续平台动作。
+                evidence_path = evidence_dir / "post_list_after_submission.png"
+                if not evidence_path.is_file():
+                    reason = (
+                        "视频号上传器已确认提交，但提交后后台列表截图未落盘；"
+                        "结果按待核验处理，禁止自动重传。"
+                    )
+                    self.db.record_wechat_publication_confirmation(
+                        yid,
+                        evidence_path=None,
+                        state="UNCERTAIN",
+                        error_message=reason,
+                        slice_index=slice_index,
+                    )
+                    self.db.update_video_status(yid, "PUBLISHED", error_msg=reason, slice_index=slice_index)
+                    self._notify_platform_alert(
+                        "微信视频号", yid, reason, state="UNCERTAIN", action="停止自动重传并人工核验后台",
+                    )
+                    return
+
+                self.db.record_wechat_publication_confirmation(
+                    yid,
+                    evidence_path=str(evidence_path),
+                    slice_index=slice_index,
+                )
+                self.db.update_video_status(yid, "PUBLISHED", error_msg=None, slice_index=slice_index)
                 self.send_telegram_msg(
                     f"✅ <b>Video Published</b>\nTitle: {short_title}\n"
                     f"Platform: WeChat Channels\nScore: {video['score']}"
