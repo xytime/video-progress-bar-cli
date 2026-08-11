@@ -44,6 +44,7 @@
 | 3.8.0   | 2026-07-31 | Codex                               | 上传前强制校验专门生成封面来源清单，历史视频帧截图不得投递 |
 | 3.8.1   | 2026-07-31 | Codex                               | 自动投递必须提供合规封面，禁止平台回退默认视频帧 |
 | 3.9.0   | 2026-08-03 | Codex                               | 上传前追加无大面积遮罩版式来源清单校验，旧遮罩封面不得投递 |
+| 4.0.0   | 2026-08-11 | Codex                               | 跳转作品列表仅视为平台已受理，返回审核中而非发布成功；最终公开状态交由作品管理回查确认 |
 """
 
 import os
@@ -87,6 +88,10 @@ logger = logging.getLogger("wechat_uploader")
 
 # 微信视频号发表地址
 WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
+
+# 提交后跳转作品列表只说明视频号已接收，不代表转码/审核完成或对外可见。
+# 管线收到此退出码后必须保留证据、进入审核中，并禁止自动重传。
+EXIT_SUBMITTED_FOR_REVIEW = 6
 
 
 def _default_cover_provenance_path(cover_file: Path) -> Path:
@@ -448,23 +453,19 @@ def _select_collection(page, collection_name: str) -> bool:
     page.screenshot(path="output/debug_collection_after_create.png")
     return True
 
-# [Claude_Opus_4.8] BUG-2: 发布结果判定抽成纯函数，便于单测，且把「确认成功」的标准集中在一处。
-# 误判后果不对称：假阳性(实际没发却判成功) → 误置 PUBLISHED + GC 删源（数据丢失）；
-# 假阴性(实际发了却判失败) → 重复发布。故仅在【强信号】下判成功：跳转 /post/list，
-# 或出现与当前模式匹配的明确成功文案，且排除「不成功」等报错文案。
+# 发布表单的成功提示或跳转列表，只能证明提交已受理；平台仍可能显示“处理中”。
+# 因此此函数仅用于区分提交结果是否得到平台响应，不能作为公开发布的最终证明。
 def classify_publish_result(redirected: bool, page_content: str, draft: bool = False) -> bool:
-    """判定发表/存草稿是否【确认成功】。
+    """判定发表/存草稿是否已获得提交响应。
 
     Args:
-        redirected: 发表后是否跳转到 /post/list（最可靠信号）。
+        redirected: 发表后是否跳转到 /post/list（仅代表已提交）。
         page_content: 未跳转时的页面文本（降级判据）。
         draft: 是否为存草稿模式（成功文案不同）。
 
     Returns:
-        True 仅当能确认成功；无法确认一律 False（交由调用方按未发布处理）。
+        True 仅当平台给出提交响应；公开视频仍须作品管理页最终确认。
     """
-    if redirected:
-        return True
     content = page_content or ""
     if "不成功" in content:  # 明确的失败文案，直接否决
         return False
@@ -1843,24 +1844,26 @@ def run_uploader(
                 browser.close()
                 return 1
                 
-        # 6. 确认发布/保存成功
-        # [Claude_Opus_4.8] BUG-2: 必须真正确认成功才返回 0。无法确认时返回 UNCONFIRMED(3)，
-        # 由管线视为「未发布」——不置 PUBLISHED、不 GC 删源、可重试/人工复核，杜绝「假成功」。
+        # 6. 确认提交/保存结果
+        # 跳转作品列表仅代表平台接收；严禁在这里声称公开视频已发布。
         page.wait_for_timeout(5000)
         redirected, page_content = False, ""
         try:
             # 成功发布后视频号网页通常跳转到 /post/list（最可靠信号）
             page.wait_for_url("**/post/list**", timeout=15000)
             redirected = True
-            logger.info("Confirmed: Successfully navigated to post list. Publish complete.")
+            logger.info("Submission accepted: navigated to post list; awaiting platform processing/review.")
             page.wait_for_timeout(5000)
             _capture_wechat_evidence(page, evidence_root, "post_list_after_submission")
         except Exception:
             page_content = page.content()  # 未跳转 → 取页面文本走降级判据
 
-        confirmed = classify_publish_result(redirected, page_content, draft=draft)
+        accepted = redirected or classify_publish_result(False, page_content, draft=draft)
         browser.close()
-        if confirmed:
+        if accepted and not draft:
+            logger.info("Submission accepted but not platform-published; returning review state.")
+            return EXIT_SUBMITTED_FOR_REVIEW
+        if accepted:
             return 0
         logger.warning("Publish could NOT be confirmed — returning UNCONFIRMED(3) so pipeline will NOT mark PUBLISHED/GC.")
         return 3

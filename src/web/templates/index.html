@@ -578,6 +578,8 @@
     .badge-dot-COPYWRITING { background: var(--accent2); animation: pulse-purple 1.5s infinite; }
     .badge-PUBLISHING    { background: rgba(249,115,22,0.15); color: var(--orange); }
     .badge-dot-PUBLISHING { background: var(--orange); animation: pulse-orange 1.5s infinite; }
+    .badge-UNDER_REVIEW  { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .badge-dot-UNDER_REVIEW { background: var(--yellow); animation: pulse-yellow 1.5s infinite; }
     .badge-PUBLISHED     { background: rgba(52,211,153,0.15); color: var(--green); }
     .badge-dot-PUBLISHED { background: var(--green); }
     .badge-FAILED        { background: rgba(248,113,113,0.15); color: var(--red); }
@@ -1841,7 +1843,7 @@
     img.outerHTML = '<div class="cover-placeholder">🎬</div>';
   }
 
-  const STEP_ORDER = ["PENDING","DOWNLOADING","TRANSCRIBING","COPYWRITING","PUBLISHING","PUBLISHED"];
+  const STEP_ORDER = ["PENDING","DOWNLOADING","TRANSCRIBING","COPYWRITING","PUBLISHING","UNDER_REVIEW","PUBLISHED"];
 
   function formatTrimTime(secStr) {
     if (!secStr) return '0\'00';

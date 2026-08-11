@@ -102,6 +102,8 @@
 | 3.48.12 | 2026-08-08 | Codex                               | 抖音 NEW 投递增加每日领取上限和跨巡航浏览器节流，防止每分钟任务放大平台动作 |
 | 3.48.13 | 2026-08-09 | Codex                               | 切片任务继承内容生产类型，保留英语世界短视频的端到端可检索标识 |
 | 3.48.14 | 2026-08-10 | Codex                               | 视频号发布成功必须写入后台列表证据账本；缺图时保守记为 UNCERTAIN 并停止后续平台动作 |
+| 3.48.15 | 2026-08-11 | Codex                               | 视频号提交后统一进入 UNDER_REVIEW；禁止以列表跳转或截图写 PUBLISHED，保留证据并阻断自动重传 |
+| 3.48.16 | 2026-08-11 | Codex                               | 视频号未确认公开时取消同源尚未提交的抖音/快手队列，防止旧误判触发跨平台抢跑 |
 """
 
 
@@ -428,30 +430,59 @@ class PipelineManager:
             return []
         return sorted(evidence_root.glob("*/post_list_after_submission.png"))
 
+    def _mark_wechat_submission_under_review(
+        self,
+        yid: str,
+        prefix: str,
+        *,
+        evidence_path: Path | None,
+        reason: str,
+        slice_index: int = 0,
+    ) -> None:
+        """登记视频号已提交但尚无公开证明的状态，保留素材且绝不自动重传。"""
+        ledger_state = "UNDER_REVIEW" if evidence_path and evidence_path.is_file() else "UNCERTAIN"
+        self.db.record_wechat_publication_confirmation(
+            yid,
+            evidence_path=str(evidence_path) if evidence_path else None,
+            state=ledger_state,
+            error_message=reason,
+            slice_index=slice_index,
+        )
+        self.db.update_video_status(yid, "UNDER_REVIEW", error_msg=reason, slice_index=slice_index)
+        canceled = self.db.cancel_queued_downstream_publications_for_unconfirmed_wechat(
+            yid,
+            reason="视频号仅确认提交、尚未确认公开发布；已取消下游未提交队列。",
+            slice_index=slice_index,
+        )
+        if any(canceled.values()):
+            logger.warning("[%s] 已取消下游未提交队列：%s", prefix, canceled)
+        self.send_telegram_msg(
+            "⏳ <b>WeChat submission under review</b>\n"
+            f"ID: <code>{html.escape(prefix)}</code>\n"
+            "平台已接收提交，但尚无公开发布证明；已停止自动重传。"
+        )
+
     def _block_duplicate_wechat_submission_if_needed(self, yid: str, prefix: str, slice_index: int = 0) -> bool:
-        """发现既有视频号提交证据时恢复本地已发布态，并拒绝再次调用上传器。"""
+        """发现既有视频号提交证据时转入审核中，并拒绝再次调用上传器。"""
         evidence_paths = self._wechat_submission_evidence_paths(prefix)
         if not evidence_paths:
             return False
         newest_evidence = evidence_paths[-1]
         reason = f"检测到既有视频号提交后证据，拒绝自动重发：{newest_evidence}"
         logger.error("[%s] %s", prefix, reason)
+        existing = self.db.get_wechat_publication(yid, slice_index=slice_index)
+        if existing and existing.get("state") == "PUBLISHED":
+            logger.info("[%s] 已有人工/回查确认的公开视频账本，保留 PUBLISHED。", prefix)
+            self.db.update_video_status(yid, "PUBLISHED", error_msg=reason, slice_index=slice_index)
+            return True
         try:
-            self.db.record_wechat_publication_confirmation(
-                yid,
-                evidence_path=str(newest_evidence),
-                slice_index=slice_index,
+            self._mark_wechat_submission_under_review(
+                yid, prefix, evidence_path=newest_evidence, reason=reason, slice_index=slice_index,
             )
         except Exception:
             # 已有平台后台截图时，绝不能因账本补写失败而放行重传。
-            logger.exception("[%s] 视频号确认账本补写失败；仍按既有提交证据阻止重发。", prefix)
-        self.db.update_video_status(yid, "PUBLISHED", error_msg=reason, slice_index=slice_index)
-        self.send_telegram_msg(
-            "⚠️ <b>WeChat duplicate publish blocked</b>\n"
-            f"ID: <code>{html.escape(prefix)}</code>\n"
-            f"Evidence: <code>{html.escape(str(newest_evidence))}</code>\n"
-            "Local state restored to PUBLISHED; please verify creator management manually."
-        )
+            logger.exception("[%s] 视频号审核账本补写失败；仍按既有提交证据阻止重发。", prefix)
+            self.db.update_video_status(yid, "UNDER_REVIEW", error_msg=reason, slice_index=slice_index)
         return True
 
     def _is_public_publish_window(self, platform: str, yid: str = "", slice_index: int = 0) -> bool:
@@ -2684,18 +2715,12 @@ class PipelineManager:
                         logger.debug(f"Uploader stderr:\n{res.stderr}")
                 except subprocess.TimeoutExpired:
                     logger.error(f"WeChat publish timed out for {prefix} after {_WECHAT_UPLOAD_TIMEOUT_SEC}s.")
-                    self.db.update_video_status(
-                        yid, "FAILED",
-                        error_msg=(
-                            "微信上传超时（>25分钟）并已被系统终止。"
-                            "通常是页面交互卡住或发布结果迟迟未确认；请先核对视频号后台，"
-                            "确认未发后再点「重试」。"
-                        ),
-                        slice_index=slice_index)
-                    self.send_telegram_msg(
-                        f"⚠️ <b>WeChat publish timed out</b>\n"
-                        f"Title: {short_title}\n"
-                        f"Uploader exceeded {_WECHAT_UPLOAD_TIMEOUT_SEC // 60} minutes and was terminated."
+                    reason = (
+                        "微信上传超时（>25分钟）并已被系统终止；提交结果无法排除已受理。"
+                        "已停止自动重传，等待视频号后台核验。"
+                    )
+                    self._mark_wechat_submission_under_review(
+                        yid, prefix, evidence_path=None, reason=reason, slice_index=slice_index,
                     )
                     return
                 except subprocess.CalledProcessError as upload_err:
@@ -2709,64 +2734,29 @@ class PipelineManager:
                         )
                         return
                     if upload_err.returncode == 3:
-                        # [Claude_Opus_4.8] BUG-2: 发布结果无法确认（可能已发/可能未发）。
-                        # 绝不置 PUBLISHED、绝不 GC 删源（保留产物供核验/重发），也不自动重发（防重复）。
+                        reason = "视频号提交结果无法确认（可能已受理/可能未受理）；已停止自动重传，等待后台核验。"
                         logger.error(f"WeChat publish UNCONFIRMED for {prefix} — keeping artifacts, no GC, no auto-republish.")
-                        self.db.update_video_status(
-                            yid, "FAILED",
-                            error_msg=("发布结果无法确认（可能已发/可能未发）。请到视频号后台核对：\n"
-                                       "· 若【未发布】→ 点「重试」重新发布；\n"
-                                       "· 若【已发布】→ 点「已处理」，切勿重试以免重复发布。"),
-                            slice_index=slice_index)
-                        self.send_telegram_msg(
-                            f"⚠️ <b>发布结果待人工核实</b>\nTitle: {short_title}\n"
-                            f"无法确认是否已发布到视频号，请核对后再操作，避免重复发布。"
+                        self._mark_wechat_submission_under_review(
+                            yid, prefix, evidence_path=None, reason=reason, slice_index=slice_index,
                         )
-                        return  # 关键：不置 PUBLISHED、不 GC
+                        return
+                    if upload_err.returncode == 6:
+                        evidence_path = evidence_dir / "post_list_after_submission.png"
+                        reason = "视频号已受理提交，作品管理页尚未确认公开发布；已转审核中并停止自动重传。"
+                        self._mark_wechat_submission_under_review(
+                            yid, prefix, evidence_path=evidence_path, reason=reason, slice_index=slice_index,
+                        )
+                        return
                     raise
 
-                # ── 5. PUBLISHED ──────────────────────────────────────────────────
-                # 上传器仅在已跳转视频号后台列表或出现明确成功文案时返回 0；这里仍要求
-                # 后台列表截图真实落盘。缺图时不重传，保守落账 UNCERTAIN 并停止后续平台动作。
+                # ── 5. 无法以提交响应确认公开发布 ────────────────────────────────────
+                # 保险边界：即使上传器未来错误返回 0，也不得仅凭表单响应写 PUBLISHED。
                 evidence_path = evidence_dir / "post_list_after_submission.png"
-                if not evidence_path.is_file():
-                    reason = (
-                        "视频号上传器已确认提交，但提交后后台列表截图未落盘；"
-                        "结果按待核验处理，禁止自动重传。"
-                    )
-                    self.db.record_wechat_publication_confirmation(
-                        yid,
-                        evidence_path=None,
-                        state="UNCERTAIN",
-                        error_message=reason,
-                        slice_index=slice_index,
-                    )
-                    self.db.update_video_status(yid, "PUBLISHED", error_msg=reason, slice_index=slice_index)
-                    self._notify_platform_alert(
-                        "微信视频号", yid, reason, state="UNCERTAIN", action="停止自动重传并人工核验后台",
-                    )
-                    return
-
-                self.db.record_wechat_publication_confirmation(
-                    yid,
-                    evidence_path=str(evidence_path),
-                    slice_index=slice_index,
+                reason = "视频号上传器返回提交响应，但尚无作品管理页公开可见证明；已停止自动重传。"
+                self._mark_wechat_submission_under_review(
+                    yid, prefix, evidence_path=evidence_path, reason=reason, slice_index=slice_index,
                 )
-                self.db.update_video_status(yid, "PUBLISHED", error_msg=None, slice_index=slice_index)
-                self.send_telegram_msg(
-                    f"✅ <b>Video Published</b>\nTitle: {short_title}\n"
-                    f"Platform: WeChat Channels\nScore: {video['score']}"
-                )
-
-                if settings.enable_kuaishou_browser_publishing:
-                    if not self._queue_and_publish_new_kuaishou_video(yid, slice_index):
-                        logger.warning("[%s] 视频号已发布；快手未确认成功，将固定重试同一成片", yid)
-                if settings.enable_douyin_browser_publishing:
-                    if not self._queue_and_publish_new_douyin_video(yid, slice_index):
-                        logger.warning("[%s] 视频号已发布；抖音未确认成功，将固定重试同一成片", yid)
-                
-                # 触发 GC 清理该子任务的临时文件
-                self._run_garbage_collection(yid, slice_index, "PUBLISHED")
+                return
 
             except InterruptedError as e:
                 logger.warning(f"[SIGTERM] Clean abort for {prefix}: {e}")

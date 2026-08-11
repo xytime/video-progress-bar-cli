@@ -78,6 +78,8 @@
 | 3.26.1  | 2026-08-10 | Codex                               | 快手待提交、审核中、上传中或未确认账本均阻断同源或同成片重建尝试，避免重复上传 |
 | 3.26.2  | 2026-08-10 | Codex                               | 新增北京自然日运营简报只读快照，区分本地视频号完成与快手/抖音已确认发布 |
 | 3.26.3  | 2026-08-10 | Codex                               | 新增视频号确认账本；以提交后后台列表截图为准，杜绝仅写本地 PUBLISHED 而缺失平台证据 |
+| 3.26.4  | 2026-08-11 | Codex                               | 视频号账本新增 UNDER_REVIEW 并迁移旧约束；提交证据不再等同公开发布，终态确认时间仅写入 PUBLISHED |
+| 3.26.5  | 2026-08-11 | Codex                               | 视频号未最终确认时取消同源尚未提交的抖音/快手队列，保留审计记录且禁止跨平台抢跑 |
 """
 
 import sqlite3
@@ -396,14 +398,22 @@ class PipelineDB:
                 "ON wechat_deferred_recovery_claims(claimed_at)"
             )
 
-            # 视频号发布确认账本：浏览器上传器的成功退出必须同时留下后台列表证据。
+            # 视频号账本：提交截图只能证明平台受理，不能证明公开可见。
             # 不复用 processed_videos.updated_at（其会被后续评分刷新），以免把本地完成
             # 误报为平台侧可见。每个视频/切片只保留一条最新确认结果。
+            cursor.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'wechat_publications'"
+            )
+            wechat_schema = (cursor.fetchone() or [""])[0] or ""
+            if wechat_schema and "UNDER_REVIEW" not in wechat_schema:
+                self._logger.info("[Migration] Expanding wechat_publications state constraint for UNDER_REVIEW")
+                cursor.execute("DROP INDEX IF EXISTS idx_wechat_publications_state")
+                cursor.execute("ALTER TABLE wechat_publications RENAME TO wechat_publications_legacy")
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS wechat_publications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     video_id INTEGER NOT NULL UNIQUE,
-                    state TEXT NOT NULL CHECK(state IN ('PUBLISHED', 'UNCERTAIN')),
+                    state TEXT NOT NULL CHECK(state IN ('PUBLISHED', 'UNDER_REVIEW', 'UNCERTAIN')),
                     evidence_path TEXT DEFAULT NULL,
                     confirmed_at TIMESTAMP DEFAULT NULL,
                     last_error_message TEXT DEFAULT NULL,
@@ -412,6 +422,17 @@ class PipelineDB:
                     FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT
                 )
             ''')
+            if wechat_schema and "UNDER_REVIEW" not in wechat_schema:
+                cursor.execute('''
+                    INSERT INTO wechat_publications (
+                        id, video_id, state, evidence_path, confirmed_at,
+                        last_error_message, created_at, updated_at
+                    )
+                    SELECT id, video_id, state, evidence_path, confirmed_at,
+                           last_error_message, created_at, updated_at
+                    FROM wechat_publications_legacy
+                ''')
+                cursor.execute("DROP TABLE wechat_publications_legacy")
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_wechat_publications_state "
                 "ON wechat_publications(state, confirmed_at, updated_at)"
@@ -2179,13 +2200,13 @@ class PipelineDB:
         error_message: Optional[str] = None,
         slice_index: int = 0,
     ) -> Dict[str, Any]:
-        """记录视频号后台确认结果；同一视频只更新既有确认记录，不会触发投递。"""
+        """记录视频号提交/后台确认结果；同一视频只更新既有记录，不会触发投递。"""
         normalized_state = (state or "").upper()
-        if normalized_state not in {"PUBLISHED", "UNCERTAIN"}:
-            raise ValueError("Wechat publication state must be PUBLISHED or UNCERTAIN")
+        if normalized_state not in {"PUBLISHED", "UNDER_REVIEW", "UNCERTAIN"}:
+            raise ValueError("Wechat publication state must be PUBLISHED, UNDER_REVIEW, or UNCERTAIN")
         clean_evidence_path = (evidence_path or "").strip() or None
-        if normalized_state == "PUBLISHED" and not clean_evidence_path:
-            raise ValueError("PUBLISHED WeChat publication requires post-list evidence")
+        if normalized_state in {"PUBLISHED", "UNDER_REVIEW"} and not clean_evidence_path:
+            raise ValueError(f"{normalized_state} WeChat publication requires post-list evidence")
 
         with self.get_connection() as conn:
             video = conn.execute(
@@ -2204,7 +2225,7 @@ class PipelineDB:
                     evidence_path = COALESCE(excluded.evidence_path, wechat_publications.evidence_path),
                     confirmed_at = CASE
                         WHEN excluded.state = 'PUBLISHED' THEN CURRENT_TIMESTAMP
-                        ELSE wechat_publications.confirmed_at
+                        ELSE NULL
                     END,
                     last_error_message = excluded.last_error_message,
                     updated_at = CURRENT_TIMESTAMP
@@ -2803,7 +2824,7 @@ class PipelineDB:
         elif tab == 'active':
             # [Unknown_Model_planning] 父任务在切片未全部完成且没有失败时，进入 active tab
             condition = """(
-                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'WECHAT_DEFERRED') AND pv.parent_id IS NULL)
+                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'UNDER_REVIEW', 'WECHAT_DEFERRED') AND pv.parent_id IS NULL)
                 OR
                 (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
                  (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
@@ -3012,7 +3033,7 @@ class PipelineDB:
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 AND IFNULL(pv.source,'') != 'DISCOVERY' THEN 1 ELSE 0 END) as waitlist,
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score >= 75 THEN 1 ELSE 0 END) as queue,
                     SUM(CASE WHEN (
-                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'WECHAT_DEFERRED')
+                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'UNDER_REVIEW', 'WECHAT_DEFERRED')
                         OR
                         (pv.status = 'SEGMENTED' AND 
                          (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
@@ -4027,6 +4048,33 @@ class PipelineDB:
             )
             conn.commit()
             return cursor.rowcount == 1
+
+    def cancel_queued_downstream_publications_for_unconfirmed_wechat(
+        self,
+        youtube_id: str,
+        *,
+        reason: str,
+        slice_index: int = 0,
+    ) -> Dict[str, int]:
+        """取消尚未提交的下游投递，防止视频号仅受理时跨平台抢跑。"""
+        clean_reason = (reason or "视频号尚未确认公开发布，停止下游自动投递。").strip()
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError(f"Video not found: {youtube_id}#{slice_index}")
+            counts: Dict[str, int] = {}
+            for platform, table in (("kuaishou", "kuaishou_publications"), ("douyin", "douyin_publications")):
+                cursor = conn.execute(
+                    f"UPDATE {table} SET state = 'CANCELED', last_error_message = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE video_id = ? AND state = 'QUEUED'",
+                    (clean_reason, video["id"]),
+                )
+                counts[platform] = cursor.rowcount
+            conn.commit()
+            return counts
 
     def cancel_douyin_pre_submit_gate_failures(self) -> int:
         """将明确未提交的抖音旧失败停在 CANCELED，绝不触碰审核中或不确定记录。"""

@@ -1,8 +1,8 @@
 """发布确认与防重复发布 (BUG-2 / #11) 单元测试
 
 两部分：
-1. classify_publish_result —— 上传器「确认成功」纯函数判定：仅强信号(跳转/明确成功文案)
-   才算成功，否则一律 False（→ 上传器 return 3 → 管线不置 PUBLISHED、不 GC）。
+1. classify_publish_result —— 上传器「提交响应」纯函数判定：列表跳转不再等同最终发布；
+   公开视频必须另由作品管理页确认。
 2. purge_stale_tasks —— PUBLISHING 不被自动重置回 PENDING（发布是对外不可逆动作，
    崩溃窗口自动重排队会导致重复公开发布）。
 
@@ -10,6 +10,7 @@
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | 初始创建：锁定 BUG-2 发布确认 + 防重复发布行为 |
+| 1.1.0   | 2026-08-11 | Codex | 列表跳转降级为提交受理，锁定不得据此写公开视频成功 |
 """
 
 import os
@@ -27,9 +28,9 @@ from video_processing.db.database import PipelineDB
 
 # ── 1. 发布确认判定（纯函数）──────────────────────────────────────────────
 class TestClassifyPublishResult:
-    def test_redirect_is_definitive_success(self):
-        assert classify_publish_result(True, "", draft=False) is True
-        assert classify_publish_result(True, "任意内容", draft=True) is True
+    def test_redirect_is_not_final_publish_success(self):
+        assert classify_publish_result(True, "", draft=False) is False
+        assert classify_publish_result(True, "任意内容", draft=True) is False
 
     def test_publish_success_text(self):
         assert classify_publish_result(False, "……发表成功……", draft=False) is True

@@ -50,6 +50,7 @@
 | 3.18.5 | 2026-08-05 | Codex                               | 后台标题翻译拒绝 Error 500 响应并改走 zh_title DAL，防止列表源译名污染 |
 | 3.18.6 | 2026-08-07 | Codex                               | 新增抖音 CANCELED 账本的显式人工重新入队 API，保留原失败记录供审计 |
 | 3.18.7 | 2026-08-09 | Codex                               | 手动入队显式接收内容生产类型，支持英语世界短视频的持久化标识 |
+| 3.18.8 | 2026-08-11 | Codex                               | 视频号平台已受理但未公开的任务展示为 UNDER_REVIEW，禁止将其作为可重试或已完成状态 |
 """
 import hashlib
 import logging
@@ -565,12 +566,12 @@ def _is_youtube_url(url: str) -> bool:
 
 
 # 所有处于"活跃"加工中的状态
-ACTIVE_STATUSES = {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
+ACTIVE_STATUSES = {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING", "UNDER_REVIEW"}
 
 # FSM 状态的显示顺序
 STATUS_ORDER = [
     "PENDING", "DOWNLOADING", "TRANSCRIBING",
-    "COPYWRITING", "PUBLISHING", "PUBLISHED", "FAILED", "LOGIN_REQUIRED"
+    "COPYWRITING", "PUBLISHING", "UNDER_REVIEW", "PUBLISHED", "FAILED", "LOGIN_REQUIRED"
 ]
 
 
@@ -2079,7 +2080,7 @@ def respec_video(youtube_id: str, req: RespecVideoRequest):
     status = video.get("status", "")
 
     # ── 1. 终态拒绝 ─────────────────────────────────────────────
-    _TERMINAL_STATUSES = {"PUBLISHED", "SEGMENTED", "IGNORED", "COMPLETED"}
+    _TERMINAL_STATUSES = {"PUBLISHED", "UNDER_REVIEW", "SEGMENTED", "IGNORED", "COMPLETED"}
     if status in _TERMINAL_STATUSES:
         return {
             "success": False,
