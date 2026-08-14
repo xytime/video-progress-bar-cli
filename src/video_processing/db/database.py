@@ -75,6 +75,7 @@
 | 3.25.10 | 2026-08-08 | Codex                               | 缺失抖音投递产物的旧失败一并停在 CANCELED，避免恢复开关后跨轮空转 |
 | 3.25.11 | 2026-08-08 | Codex                               | 持久化抖音浏览器动作节流，并让 NEW 新片领取遵守每日额度，避免每分钟巡航放大投递 |
 | 3.26.0  | 2026-08-09 | Codex                               | 新增内容生产类型字段，区分英语世界短视频与通用视频并保证切片继承 |
+| 3.26.4  | 2026-08-14 | Codex                               | 增加既有任务的内容生产类型更新入口，避免重复入库才能纠正归档类型 |
 | 3.26.1  | 2026-08-10 | Codex                               | 快手待提交、审核中、上传中或未确认账本均阻断同源或同成片重建尝试，避免重复上传 |
 | 3.26.2  | 2026-08-10 | Codex                               | 新增北京自然日运营简报只读快照，区分本地视频号完成与快手/抖音已确认发布 |
 | 3.26.3  | 2026-08-10 | Codex                               | 新增视频号确认账本；以提交后后台列表截图为准，杜绝仅写本地 PUBLISHED 而缺失平台证据 |
@@ -1963,6 +1964,23 @@ class PipelineDB:
                 "    updated_at = CURRENT_TIMESTAMP "
                 "WHERE youtube_id = ? AND slice_index = ?",
                 (trim_start, trim_end, disable_slicing, tts_provider, youtube_id, slice_index),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def update_video_content_type(
+        self,
+        youtube_id: str,
+        content_type: str,
+        slice_index: int = 0,
+    ) -> bool:
+        """更新既有任务的内容生产类型，不改变处理状态或评分。"""
+        normalized_content_type = normalize_content_type(content_type)
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos SET content_type = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (normalized_content_type, youtube_id, slice_index),
             )
             conn.commit()
             return cursor.rowcount > 0
