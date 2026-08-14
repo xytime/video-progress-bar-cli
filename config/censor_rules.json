@@ -1,6 +1,6 @@
 {
   "_comment": "内容审查词库（热加载）。编辑保存后无需重启，由 enable_external_censor_rules 开关控制；P0 层不得为空；action 取值见 censor_engine.ACTION_* 常量。",
-  "version": 1,
+  "version": 2,
   "blocklist": {
     "P0": {
       "tag": "🔴 政治安全违禁",
@@ -243,6 +243,22 @@
         {
           "primary": [
             "中国",
+            "台湾",
+            "台海"
+          ],
+          "context": [
+            "对台野心",
+            "对台意图",
+            "国家安全风险",
+            "出口管制",
+            "限制中国获取"
+          ],
+          "max_gap": 160,
+          "matched": "china_taiwan_geopolitical_security"
+        },
+        {
+          "primary": [
+            "中国",
             "中国政府",
             "中共",
             "中国共产党"
@@ -295,6 +311,26 @@
         }
       ],
       "cooccurrence_en": [
+        {
+          "primary": [
+            "china",
+            "chinese",
+            "beijing",
+            "taiwan"
+          ],
+          "context": [
+            "ambitions towards taiwan",
+            "ambitions toward taiwan",
+            "china's ambitions towards taiwan",
+            "china's ambitions toward taiwan",
+            "us export controls",
+            "u.s. export controls",
+            "export controls limiting china's access",
+            "national security risks"
+          ],
+          "max_gap": 240,
+          "matched": "china_taiwan_geopolitical_security"
+        },
         {
           "primary": [
             "china",

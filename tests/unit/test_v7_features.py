@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date       | Author                                 | Description          |
 |---------|------------|----------------------------------------|----------------------|
+| 1.8.0   | 2026-08-14 | Codex                                  | 新增中台地缘政治与出口管制 P1 人工复核回归 |
 | 1.7.0   | 2026-07-26 | Codex                                  | 中国领导人姓名 P0、“中国/敏感人物+负面新闻”P0、严重负面事件 P1 回归 |
 | 1.6.0   | 2026-07-23 | Codex                                  | 新增“中国+负面政治定性/制裁规避”近距离共现拦截回归 |
 | 1.5.0   | 2026-06-13 | Claude_Opus_4.8                        | 更新 GC 测试以匹配 v3.11.0：发布后保留再发产物（成片/封面/文案/标题/分类），仅删源视频与中间字幕 |
@@ -255,6 +256,27 @@ class TestCensorEngine:
         assert r.hit is True
         assert r.level == "P1"
         assert r.action == ACTION_SUSPEND_MANUAL
+
+    def test_p1_china_taiwan_geopolitical_security_subtitle_is_suspended(self):
+        """中台叙事与出口管制/国家安全组合必须挂起，不能作为英语学习选题放行。"""
+        r = check_text(
+            zh_text="",
+            en_text=(
+                "This dependency poses national security risks, particularly amid "
+                "China's ambitions towards Taiwan and US export controls."
+            ),
+        )
+        assert r.hit is True
+        assert r.level == "P1"
+        assert r.action == ACTION_SUSPEND_MANUAL
+        assert r.matched == "china_taiwan_geopolitical_security"
+
+    def test_semiconductor_supply_chain_without_geopolitical_context_passes(self):
+        r = check_text(
+            zh_text="",
+            en_text="Taiwan produces advanced semiconductors used in global consumer electronics.",
+        )
+        assert r.hit is False
 
     def test_p1_china_negative_political_cooccurrence_zh(self):
         r = check_text(zh_text="这个片段把中国描述为威权阵营并讨论侵略行为", en_text="")

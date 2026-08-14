@@ -23,6 +23,7 @@
 | 2.3.1   | 2026-08-04 | Codex                                  | 整理博彩/赌博/体育投注/赌场玩法双语 P2 词表，补齐平台、网站、APP、赌场游戏等硬命中词 |
 | 2.3.2   | 2026-08-04 | Codex                                  | 回测修正“预测市场”中文歧义：裸预测市场仅配强博彩上下文，Polymarket/Kalshi 平台词保留宽上下文 |
 | 2.3.3   | 2026-08-04 | Codex                                  | 回测收窄博彩误杀：裸赌场改为平台/游戏/广告组合词，并豁免“美元级 gamble”财经隐喻 |
+| 2.4.0   | 2026-08-14 | Codex                                  | P1 增加中台地缘政治与出口管制/国家安全窄组合，供源字幕预检拦截 |
 """
 
 import re
@@ -158,6 +159,12 @@ _DEFAULT_BLOCKLIST: dict = {
         ],
         "cooccurrence_zh": [
             {
+                "primary": ["中国", "台湾", "台海"],
+                "context": ["对台野心", "对台意图", "国家安全风险", "出口管制", "限制中国获取"],
+                "max_gap": 160,
+                "matched": "china_taiwan_geopolitical_security",
+            },
+            {
                 "primary": ["中国", "中国政府", "中共", "中国共产党"],
                 "context": ["独裁", "专制", "威权", "极权", "侵略", "敌对政权", "敌对阵营", "改写国际规则"],
                 "max_gap": 80,
@@ -175,6 +182,17 @@ _DEFAULT_BLOCKLIST: dict = {
             },
         ],
         "cooccurrence_en": [
+            {
+                "primary": ["china", "chinese", "beijing", "taiwan"],
+                "context": [
+                    "ambitions towards taiwan", "ambitions toward taiwan",
+                    "china's ambitions towards taiwan", "china's ambitions toward taiwan",
+                    "us export controls", "u.s. export controls",
+                    "export controls limiting china's access", "national security risks",
+                ],
+                "max_gap": 240,
+                "matched": "china_taiwan_geopolitical_security",
+            },
             {
                 "primary": ["china", "chinese", "beijing", "chinese government", "ccp", "prc"],
                 "context": [
