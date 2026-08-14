@@ -76,6 +76,7 @@
 | 3.25.11 | 2026-08-08 | Codex                               | 持久化抖音浏览器动作节流，并让 NEW 新片领取遵守每日额度，避免每分钟巡航放大投递 |
 | 3.26.0  | 2026-08-09 | Codex                               | 新增内容生产类型字段，区分英语世界短视频与通用视频并保证切片继承 |
 | 3.26.4  | 2026-08-14 | Codex                               | 增加既有任务的内容生产类型更新入口，避免重复入库才能纠正归档类型 |
+| 3.26.5  | 2026-08-14 | Codex                               | 增加单任务发布前人工复核闸，阻止高分候选自动提交 |
 | 3.26.1  | 2026-08-10 | Codex                               | 快手待提交、审核中、上传中或未确认账本均阻断同源或同成片重建尝试，避免重复上传 |
 | 3.26.2  | 2026-08-10 | Codex                               | 新增北京自然日运营简报只读快照，区分本地视频号完成与快手/抖音已确认发布 |
 | 3.26.3  | 2026-08-10 | Codex                               | 新增视频号确认账本；以提交后后台列表截图为准，杜绝仅写本地 PUBLISHED 而缺失平台证据 |
@@ -218,6 +219,7 @@ class PipelineDB:
                             trim_end TEXT DEFAULT NULL,
                             disable_slicing INTEGER DEFAULT 1,
                             bypass_censorship INTEGER DEFAULT 0,
+                            publication_review_required INTEGER NOT NULL DEFAULT 0,
                             preparation_ready INTEGER DEFAULT 0,
                             source_subtitle_status TEXT DEFAULT 'PENDING',
                             source_subtitle_checked_at TIMESTAMP DEFAULT NULL,
@@ -360,6 +362,15 @@ class PipelineDB:
             if columns and "preparation_ready" not in columns:
                 self._logger.info("[Migration] Adding preparation_ready column to processed_videos table...")
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN preparation_ready INTEGER DEFAULT 0;")
+                conn.commit()
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "publication_review_required" not in columns:
+                self._logger.info("[Migration] Adding publication_review_required column to processed_videos table...")
+                cursor.execute(
+                    "ALTER TABLE processed_videos "
+                    "ADD COLUMN publication_review_required INTEGER NOT NULL DEFAULT 0;"
+                )
                 conn.commit()
             cursor.execute("PRAGMA table_info(processed_videos)")
             columns = [col[1] for col in cursor.fetchall()]
@@ -1985,6 +1996,22 @@ class PipelineDB:
             conn.commit()
             return cursor.rowcount > 0
 
+    def set_publication_review_required(
+        self,
+        youtube_id: str,
+        required: bool,
+        slice_index: int = 0,
+    ) -> bool:
+        """设置单任务发布前人工复核闸，不改变制作检查点或评分。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos SET publication_review_required = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (1 if required else 0, youtube_id, slice_index),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
     def update_video_status(self, youtube_id: str, status: str, error_msg: Optional[str] = None, slice_index: int = 0):
         """更新指定联合键 (youtube_id, slice_index) 视频的状态。"""
         # [Gemini_3.5_Flash_planning] 更新定位增加 slice_index = ?
@@ -2442,6 +2469,7 @@ class PipelineDB:
         query = f"""
             SELECT * FROM processed_videos pv
             WHERE pv.status = 'PENDING' AND ({threshold_sql})
+              AND IFNULL(pv.publication_review_required, 0) = 0
               AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
               AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
               AND (
@@ -2479,6 +2507,7 @@ class PipelineDB:
             SELECT pv.* FROM processed_videos pv
             WHERE pv.status = 'PENDING'
               AND pv.source = 'AUTO'
+              AND IFNULL(pv.publication_review_required, 0) = 0
               AND IFNULL(pv.preparation_ready, 0) = 0
               AND ({threshold_sql})
               AND pv.channel_id NOT IN (

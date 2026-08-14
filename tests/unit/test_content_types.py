@@ -6,6 +6,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-08-09 | Codex | 覆盖英语世界短视频标识的默认值、显式写入与切片继承。 |
 | 1.1.0 | 2026-08-14 | Codex | 覆盖既有候选的内容生产类型纠正，不改变处理状态。 |
+| 1.2.0 | 2026-08-14 | Codex | 覆盖发布前人工复核闸的任务级持久化。 |
 """
 
 from __future__ import annotations
@@ -99,3 +100,16 @@ def test_update_video_content_type_reclassifies_existing_video_without_changing_
     assert video["content_type"] == CONTENT_TYPE_ENGLISH_WORLD_SHORT
     assert video["status"] == "PENDING"
     assert video["score"] == 60
+
+
+def test_publication_review_gate_is_persisted_without_changing_score_or_status(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    db.add_video("review-gated-video", "Review Gated", "channel", score=80)
+
+    assert db.set_publication_review_required("review-gated-video", True)
+
+    video = db.get_video_by_youtube_id("review-gated-video")
+    assert video["publication_review_required"] == 1
+    assert video["status"] == "PENDING"
+    assert video["score"] == 80
+    assert db.get_high_score_pending_videos(min_score=75) == []

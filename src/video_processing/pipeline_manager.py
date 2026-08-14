@@ -103,6 +103,7 @@
 | 3.48.13 | 2026-08-09 | Codex                               | 切片任务继承内容生产类型，保留英语世界短视频的端到端可检索标识 |
 | 3.48.14 | 2026-08-10 | Codex                               | 视频号发布成功必须写入后台列表证据账本；缺图时保守记为 UNCERTAIN 并停止后续平台动作 |
 | 3.48.15 | 2026-08-11 | Codex                               | 视频号提交后统一进入 UNDER_REVIEW；禁止以列表跳转或截图写 PUBLISHED，保留证据并阻断自动重传 |
+| 3.48.16 | 2026-08-14 | Codex                               | 发布前人工复核闸在成片与审查完成后阻断全部平台提交 |
 | 3.48.16 | 2026-08-11 | Codex                               | 视频号未确认公开时取消同源尚未提交的抖音/快手队列，防止旧误判触发跨平台抢跑 |
 """
 
@@ -2597,6 +2598,14 @@ class PipelineManager:
                     self.db.set_video_preparation_ready(yid, True, slice_index=slice_index)
                     self.db.update_video_status(yid, "PENDING", error_msg=None, slice_index=slice_index)
                     logger.info("[Preparation] %s 已完成下载、加工、封面和审查，等待发布窗口提交。", prefix)
+                    return
+
+                if video.get("publication_review_required"):
+                    if not self._is_dedicated_cover(cover_file):
+                        raise RuntimeError("人工复核闸前缺少可验证的专门封面，禁止标记为待审核。")
+                    self.db.set_video_preparation_ready(yid, True, slice_index=slice_index)
+                    self.db.update_video_status(yid, "PENDING", error_msg=None, slice_index=slice_index)
+                    logger.info("[ReviewGate] %s 已完成制作与审查，人工复核通过前禁止平台提交。", prefix)
                     return
 
                 # ── 4. PUBLISHING ─────────────────────────────────────────────────
