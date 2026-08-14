@@ -82,6 +82,7 @@
 | 3.26.3  | 2026-08-10 | Codex                               | 新增视频号确认账本；以提交后后台列表截图为准，杜绝仅写本地 PUBLISHED 而缺失平台证据 |
 | 3.26.4  | 2026-08-11 | Codex                               | 视频号账本新增 UNDER_REVIEW 并迁移旧约束；提交证据不再等同公开发布，终态确认时间仅写入 PUBLISHED |
 | 3.26.5  | 2026-08-11 | Codex                               | 视频号未最终确认时取消同源尚未提交的抖音/快手队列，保留审计记录且禁止跨平台抢跑 |
+| 3.26.6  | 2026-08-14 | Codex                               | 仪表盘查询将 UNDER_REVIEW 独立归入待平台确认，不再混入实际加工队列 |
 """
 
 import sqlite3
@@ -2869,14 +2870,17 @@ class PipelineDB:
                  (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) > 0)
             )"""
         elif tab == 'active':
-            # [Unknown_Model_planning] 父任务在切片未全部完成且没有失败时，进入 active tab
+            # 仅展示实际加工中的任务；UNDER_REVIEW 已提交平台、等待确认，属于 review tab。
             condition = """(
-                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'UNDER_REVIEW', 'WECHAT_DEFERRED') AND pv.parent_id IS NULL)
+                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'WECHAT_DEFERRED') AND pv.parent_id IS NULL)
                 OR
                 (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
                  (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
                  (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0)
             )"""
+        elif tab == 'review':
+            # 视频号已受理但未获公开可见证明；不可重试、不可自动重传。
+            condition = "pv.status = 'UNDER_REVIEW' AND pv.parent_id IS NULL"
         elif tab == 'queue':
             condition = "pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL"
         elif tab == 'high_likes':
@@ -3080,12 +3084,13 @@ class PipelineDB:
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 AND IFNULL(pv.source,'') != 'DISCOVERY' THEN 1 ELSE 0 END) as waitlist,
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score >= 75 THEN 1 ELSE 0 END) as queue,
                     SUM(CASE WHEN (
-                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'UNDER_REVIEW', 'WECHAT_DEFERRED')
+                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'WECHAT_DEFERRED')
                         OR
                         (pv.status = 'SEGMENTED' AND 
                          (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
                          (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0)
                     ) THEN 1 ELSE 0 END) as active,
+                    SUM(CASE WHEN pv.status = 'UNDER_REVIEW' THEN 1 ELSE 0 END) as review,
                     SUM(CASE WHEN (
                         pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')
                         OR
@@ -3108,11 +3113,12 @@ class PipelineDB:
                     "waitlist": row["waitlist"] or 0,
                     "queue": row["queue"] or 0,
                     "active": row["active"] or 0,
+                    "review": row["review"] or 0,
                     "completed": row["completed"] or 0,
                     "error": row["error"] or 0,
                     "high_likes": row["high_likes"] or 0,
                 }
-            return {"waitlist": 0, "queue": 0, "active": 0, "completed": 0, "error": 0, "high_likes": 0}
+            return {"waitlist": 0, "queue": 0, "active": 0, "review": 0, "completed": 0, "error": 0, "high_likes": 0}
 
     def delete_channel(self, channel_id: str) -> bool:
         with self.get_connection() as conn:

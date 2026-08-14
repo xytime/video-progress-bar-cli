@@ -7,6 +7,7 @@
 | 1.3.0   | 2026-07-13 | Codex                    | 覆盖 AI 字幕审计运行、provider 尝试与汇总查询 |
 | 1.4.0   | 2026-07-29 | Codex                    | 覆盖发布后日指标、内容身份、视频关系和 AB 实验汇总 |
 | 1.5.0   | 2026-08-05 | Codex                    | 覆盖源标题译文的定点更新 DAL |
+| 1.6.0   | 2026-08-14 | Codex                    | 覆盖平台待确认任务与实际加工队列的 Tab 分离 |
 | 1.1.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证多切片视频在不同子切片状态下的 Tab 归属逻辑 |
 | 1.0.0   | 2026-05-27 | Gemini_3.5_Flash_planning | Initial TDD test creation for database composite keys |
 """
@@ -79,6 +80,24 @@ def test_update_video_zh_title_does_not_change_status(temp_db):
 
     assert row["zh_title"] == "中文源标题"
     assert row["status"] == "COPYWRITING"
+
+
+def test_under_review_is_separate_from_processing_tab(temp_db):
+    """平台待确认不能被显示为仍在下载、转写或上传。"""
+    db = PipelineDB(temp_db)
+    assert db.add_video("review-video", "Review", "channel", score=80)
+    assert db.add_video("processing-video", "Processing", "channel", score=80)
+    db.update_video_status("review-video", "UNDER_REVIEW")
+    db.update_video_status("processing-video", "PUBLISHING")
+
+    active, active_total = db.get_paginated_videos(tab="active")
+    review, review_total = db.get_paginated_videos(tab="review")
+    counts = db.get_tab_counts()
+
+    assert active_total == counts["active"] == 1
+    assert {video["youtube_id"] for video in active} == {"processing-video"}
+    assert review_total == counts["review"] == 1
+    assert {video["youtube_id"] for video in review} == {"review-video"}
 
 def test_batch_insertion_and_cascade(temp_db):
     """测试批量插入与级联删除父子任务关系"""

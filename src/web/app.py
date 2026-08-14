@@ -51,6 +51,7 @@
 | 3.18.6 | 2026-08-07 | Codex                               | 新增抖音 CANCELED 账本的显式人工重新入队 API，保留原失败记录供审计 |
 | 3.18.7 | 2026-08-09 | Codex                               | 手动入队显式接收内容生产类型，支持英语世界短视频的持久化标识 |
 | 3.18.8 | 2026-08-11 | Codex                               | 视频号平台已受理但未公开的任务展示为 UNDER_REVIEW，禁止将其作为可重试或已完成状态 |
+| 3.18.9 | 2026-08-14 | Codex                               | 将平台待确认状态从实际加工计数中分离，避免仪表盘把已提交待回查误报为处理中 |
 """
 import hashlib
 import logging
@@ -565,8 +566,12 @@ def _is_youtube_url(url: str) -> bool:
         return False
 
 
-# 所有处于"活跃"加工中的状态
-ACTIVE_STATUSES = {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING", "UNDER_REVIEW"}
+# 实际占用管线执行资源的状态；平台已受理待确认不属于加工中。
+PROCESSING_STATUSES = {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
+
+# 保留既有安全保护：UNDER_REVIEW 不可被删除/停止接口当作普通终态处理，
+# 以免为修正展示语义而误删已提交的平台作品证据。
+ACTIVE_STATUSES = PROCESSING_STATUSES | {"UNDER_REVIEW"}
 
 # FSM 状态的显示顺序
 STATUS_ORDER = [
@@ -799,7 +804,7 @@ def get_stats():
     """返回各状态视频数量，用于顶部统计卡片"""
     counts = db.get_status_counts()
     total = sum(counts.values())
-    active = sum(v for k, v in counts.items() if k in ACTIVE_STATUSES)
+    active = sum(v for k, v in counts.items() if k in PROCESSING_STATUSES)
     detailed = db.get_detailed_stats()
     return {
         "total": total,

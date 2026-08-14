@@ -340,7 +340,7 @@
     /* ── Stat Cards ── */
     .stats-grid {
       display: grid;
-      grid-template-columns: repeat(5, 1fr);
+      grid-template-columns: repeat(6, 1fr);
       gap: 16px;
       margin-bottom: 28px;
     }
@@ -371,6 +371,7 @@
     .card-total  { --card-accent: var(--accent2); }
     .card-pending { --card-accent: var(--gray); }
     .card-active { --card-accent: var(--yellow); }
+    .card-review { --card-accent: var(--orange); }
     .card-published { --card-accent: var(--green); }
     .card-failed  { --card-accent: var(--red); }
 
@@ -579,7 +580,7 @@
     .badge-PUBLISHING    { background: rgba(249,115,22,0.15); color: var(--orange); }
     .badge-dot-PUBLISHING { background: var(--orange); animation: pulse-orange 1.5s infinite; }
     .badge-UNDER_REVIEW  { background: rgba(251,191,36,0.15); color: var(--yellow); }
-    .badge-dot-UNDER_REVIEW { background: var(--yellow); animation: pulse-yellow 1.5s infinite; }
+    .badge-dot-UNDER_REVIEW { background: var(--yellow); }
     .badge-PUBLISHED     { background: rgba(52,211,153,0.15); color: var(--green); }
     .badge-dot-PUBLISHED { background: var(--green); }
     .badge-FAILED        { background: rgba(248,113,113,0.15); color: var(--red); }
@@ -1442,6 +1443,11 @@
       <div class="stat-value" id="s-active">0</div>
       <div class="stat-sub">正在加工的任务</div>
     </div>
+    <div class="stat-card card-review" onclick="switchTab('review')" style="cursor: pointer;" title="点击查看已提交、等待平台公开确认的任务">
+      <div class="stat-label">待平台确认</div>
+      <div class="stat-value" id="s-review">0</div>
+      <div class="stat-sub">已提交，未获公开证明</div>
+    </div>
     <div class="stat-card card-published" onclick="switchTab('completed')" style="cursor: pointer;" title="点击查看已上架视频">
       <div class="stat-label">已发布</div>
       <div class="stat-value" id="s-published">0</div>
@@ -1531,6 +1537,7 @@
         <button class="tab-btn active" id="tab-waitlist" onclick="switchTab('waitlist')">待筛选</button>
         <button class="tab-btn" id="tab-queue" onclick="switchTab('queue')">待处理</button>
         <button class="tab-btn" id="tab-active" onclick="switchTab('active')">处理中</button>
+        <button class="tab-btn" id="tab-review" onclick="switchTab('review')">待平台确认</button>
         <button class="tab-btn" id="tab-completed" onclick="switchTab('completed')">已完成</button>
         <button class="tab-btn" id="tab-error" onclick="switchTab('error')">出错异常</button>
         <button class="tab-btn" id="tab-high_likes" onclick="switchTab('high_likes')">✨ 高赞内容</button>
@@ -1843,7 +1850,7 @@
     img.outerHTML = '<div class="cover-placeholder">🎬</div>';
   }
 
-  const STEP_ORDER = ["PENDING","DOWNLOADING","TRANSCRIBING","COPYWRITING","PUBLISHING","UNDER_REVIEW","PUBLISHED"];
+  const STEP_ORDER = ["PENDING","DOWNLOADING","TRANSCRIBING","COPYWRITING","PUBLISHING","PUBLISHED"];
 
   function formatTrimTime(secStr) {
     if (!secStr) return '0\'00';
@@ -1884,6 +1891,7 @@
       animateNumber(document.getElementById('s-total'),     d.total);
       animateNumber(document.getElementById('s-pending'),   d.pending);
       animateNumber(document.getElementById('s-active'),    d.active);
+      animateNumber(document.getElementById('s-review'),    d.breakdown?.UNDER_REVIEW || 0);
       animateNumber(document.getElementById('s-published'), d.published);
       animateNumber(document.getElementById('s-failed'),    d.failed);
       document.getElementById('last-update').textContent = d.server_time;
@@ -2215,6 +2223,7 @@
         document.getElementById('tab-waitlist').textContent = `待筛选(${d.tab_counts.waitlist})`;
         document.getElementById('tab-queue').textContent = `待处理(${d.tab_counts.queue})`;
         document.getElementById('tab-active').textContent = `处理中(${d.tab_counts.active})`;
+        document.getElementById('tab-review').textContent = `待平台确认(${d.tab_counts.review || 0})`;
         document.getElementById('tab-completed').textContent = `已完成(${d.tab_counts.completed})`;
         document.getElementById('tab-error').textContent = `出错异常(${d.tab_counts.error})`;
         if (d.tab_counts.high_likes !== undefined) {
@@ -2234,6 +2243,7 @@
         if (currentTab === 'waitlist') emptyMsg = '暂无待筛选记录，等待自动获取...';
         else if (currentTab === 'queue') emptyMsg = '当前没有排队中的任务';
         else if (currentTab === 'active') emptyMsg = '当前没有正在处理的任务';
+        else if (currentTab === 'review') emptyMsg = '当前没有等待平台公开确认的任务';
         else if (currentTab === 'high_likes') emptyMsg = '最近 24 小时暂无高赞发现，等待系统检索...';
         tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><div class="empty-icon">📭</div>${emptyMsg}</td></tr>`;
         return;
