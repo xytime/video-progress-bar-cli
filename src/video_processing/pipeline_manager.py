@@ -101,6 +101,7 @@
 | 3.48.11 | 2026-08-08 | Codex                               | 抖音审核回查传入作品正文指纹，仅管理页精确匹配且显示已发布才落账 |
 | 3.48.12 | 2026-08-08 | Codex                               | 抖音 NEW 投递增加每日领取上限和跨巡航浏览器节流，防止每分钟任务放大平台动作 |
 | 3.48.13 | 2026-08-09 | Codex                               | 切片任务继承内容生产类型，保留英语世界短视频的端到端可检索标识 |
+| 3.48.17 | 2026-08-14 | Codex                               | 修复硬重置缺失 re 导入；YouTube 下载强制 IPv4，curl 0B 后恢复默认网络并降级内置下载器 |
 | 3.48.14 | 2026-08-10 | Codex                               | 视频号发布成功必须写入后台列表证据账本；缺图时保守记为 UNCERTAIN 并停止后续平台动作 |
 | 3.48.15 | 2026-08-11 | Codex                               | 视频号提交后统一进入 UNDER_REVIEW；禁止以列表跳转或截图写 PUBLISHED，保留证据并阻断自动重传 |
 | 3.48.16 | 2026-08-14 | Codex                               | 发布前人工复核闸在成片与审查完成后阻断全部平台提交 |
@@ -109,6 +110,7 @@
 
 
 import os
+import re
 import hashlib
 import json
 import math
@@ -2056,6 +2058,10 @@ class PipelineManager:
                         # 引入 --downloader curl 将大文件下载转交给 curl 处理，其代理兼容性和 TLS 握手比 python ssl 模块更稳定。
                         dl_cmd = [
                             self._VENV_YTDLP,
+                            # 元数据请求在双栈网络中可能拿到绑定 IPv6 的签名媒体 URL，
+                            # 但下载器回落 IPv4 时会被 Googlevideo 拒绝 403；下载链统一 IPv4
+                            # 使元数据与媒体请求使用同一地址族。
+                            "--force-ipv4",
                             # [Claude_Opus_4.8] v3.16.0: 优先 H.264(avc) 视频流，规避 AV1(av01)。
                             # imageio-ffmpeg 内置的 AOM AV1 解码器解码 YouTube AV1 流时会间歇性
                             # SIGSEGV，导致后续 _burn_subtitles(ffmpeg) 渲染崩溃。YouTube ≤720p
@@ -2107,9 +2113,29 @@ class PipelineManager:
                             logger.info(
                                 f"[Clash] 切换到日本节点: {settings.clash_download_node}"
                             )
-                        with settings.clash_switch_node():
-                            self._run_tracked(dl_cmd, yid, slice_index=slice_index, capture_output=True,
-                                              cwd=str(self._PRJ_ROOT), env=subprocess_env)
+                        try:
+                            with settings.clash_switch_node():
+                                self._run_tracked(
+                                    dl_cmd, yid, slice_index=slice_index, capture_output=True,
+                                    cwd=str(self._PRJ_ROOT), env=subprocess_env,
+                                )
+                        except subprocess.CalledProcessError:
+                            # 当前网络下 curl 可返回 0 但仍让 yt-dlp 进入合并，最终报“Invalid data”。
+                            # 仅清理本次下载的 format 分片后，使用 yt-dlp 内置下载器重试同一媒体请求。
+                            for partial in self._OUT_DIR.glob(f"{yid}.f*"):
+                                if partial.is_file():
+                                    partial.unlink()
+                            native_dl_cmd = list(dl_cmd)
+                            for option in ("--downloader-args", "--downloader"):
+                                option_index = native_dl_cmd.index(option)
+                                del native_dl_cmd[option_index:option_index + 2]
+                            logger.warning("[Download] curl 下载失败，降级 yt-dlp 内置下载器重试 %s。", yid)
+                            # 上方 with 已恢复切换前节点；内置下载器的已验证路径走默认网络，
+                            # 避免切换节点导致 Googlevideo 签名流再次 403。
+                            self._run_tracked(
+                                native_dl_cmd, yid, slice_index=slice_index, capture_output=True,
+                                cwd=str(self._PRJ_ROOT), env=subprocess_env,
+                            )
                         target_file = self._find_downloaded_video(yid)
                         if not target_file:
                             raise FileNotFoundError(f"No video file found for {yid} after download")
