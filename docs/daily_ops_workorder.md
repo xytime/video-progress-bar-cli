@@ -77,6 +77,7 @@ cd /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing
 - [ ] **提交**未入库的 `vpanel`(运维加固) / `monitor_channels.py` / `session_ip_probe.py` / `docs/*`
 - [ ] **视频号手删**误发的黑名单频道视频：VSVUMPwwd98 / g2B1bsreLOc / oLiKg1fjCD8 / INtqRqDJO8k / kne_Q-F-KVM / xMGuEyMaPPY
 - [ ] 决定是否按 vpanel 同标准**恢复 bot_daemon 进程管理加固**（曾被还原）
+- [ ] **P0 安全收尾（2026-08-18）**：Bot 的旧传输日志曾记录带鉴权信息的请求 URL。已停止新增记录；仍需在 BotFather 轮换 token、更新本机 Bot 配置、重启并验证轮询，随后按保留策略清理旧 `output/bot.log`。同时审计 LaunchAgent 中的明文凭据，迁移到受控本机配置后再移除旧值。
 
 ---
 
