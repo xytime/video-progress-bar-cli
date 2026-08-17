@@ -6,7 +6,9 @@
 | 1.0.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 初始创建，实现 Telegram URL 路由与裁剪参数提取的 TDD 单元测试 |
 | 1.1.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 新增 /whole 与 /slice 核心指令测试，验证默认不切片与强制切片策略的路由传导 |
 | 1.2.0 | 2026-07-28 | Codex | 覆盖 /status 只读质检报告和 Telegram 快捷菜单 |
+| 1.3.0 | 2026-08-18 | Codex | 覆盖 Bot API 传输日志不写入鉴权 URL |
 """
+import logging
 import re
 import sys
 import unittest
@@ -19,6 +21,12 @@ if _src not in sys.path:
     sys.path.insert(0, _src)
 
 from bot.telegram_bot import _BOT_COMMANDS, _YOUTUBE_RE, cmd_status, handle_youtube_url, parse_trim_params
+
+
+def test_transport_loggers_do_not_emit_bot_api_info_urls():
+    """httpx 的请求 INFO 日志会包含完整 Bot API 鉴权 URL。"""
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
+    assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
 
 
 class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):

@@ -32,6 +32,7 @@
 | 1.17.0  | 2026-07-28 | Codex                               | /status 改接只读三秒质检报告，并增加 Telegram 命令菜单和底部快捷键 |
 | 1.17.1  | 2026-08-10 | Codex                               | 今日简报自然语言直连本地只读账本，避免 TLS 波动影响运营查询 |
 | 1.17.2  | 2026-08-10 | Codex                               | Bot 启动前以项目 .env 覆盖 LaunchAgent 继承环境，确保本地模型凭据一致 |
+| 1.17.3  | 2026-08-18 | Codex                               | 禁用 httpx/httpcore 请求 INFO 日志，避免 Bot API 鉴权 URL 写入本地日志 |
 """
 from __future__ import annotations
 
@@ -79,6 +80,10 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
+# httpx 的 INFO access log 会带完整 Bot API URL，其中包含鉴权 token。
+# 保留本业务模块 INFO，但把传输层降到 WARNING，避免凭据落入可长期保留的 bot.log。
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("telegram_bot")
 
 # [Gemini_3.5_Flash_planning] 优化正则匹配，包含整个带参数的 URL (排除末尾标点)，并支持 live/ 路径

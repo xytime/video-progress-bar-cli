@@ -83,6 +83,7 @@
 | 3.26.4  | 2026-08-11 | Codex                               | 视频号账本新增 UNDER_REVIEW 并迁移旧约束；提交证据不再等同公开发布，终态确认时间仅写入 PUBLISHED |
 | 3.26.5  | 2026-08-11 | Codex                               | 视频号未最终确认时取消同源尚未提交的抖音/快手队列，保留审计记录且禁止跨平台抢跑 |
 | 3.26.6  | 2026-08-14 | Codex                               | 仪表盘查询将 UNDER_REVIEW 独立归入待平台确认，不再混入实际加工队列 |
+| 3.26.7  | 2026-08-18 | Codex                               | get_connection 改为关闭连接的上下文管理器，修复仪表盘长期运行耗尽文件描述符 |
 """
 
 import sqlite3
@@ -91,6 +92,7 @@ import json
 import logging
 import datetime  # [Claude_Opus_4.6_Thinking_planning] 提升为 top-level import，用于高赞时间窗口计算
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Collection, List, Dict, Any, Optional, Sequence
 
@@ -155,10 +157,21 @@ class PipelineDB:
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
         
+    @contextmanager
     def get_connection(self):
+        """提供事务连接，并在 ``with`` 块结束后确定关闭文件描述符。
+
+        sqlite3.Connection 自身的上下文管理器只负责提交或回滚，并不会调用
+        close()。本项目的 DAL 全部以 ``with self.get_connection()`` 访问，
+        因而必须在这里统一关闭，避免常驻仪表盘的轮询逐步耗尽句柄。
+        """
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
         
     def _init_db(self):
         with self.get_connection() as conn:

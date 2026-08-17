@@ -8,6 +8,7 @@
 | 1.4.0   | 2026-07-29 | Codex                    | 覆盖发布后日指标、内容身份、视频关系和 AB 实验汇总 |
 | 1.5.0   | 2026-08-05 | Codex                    | 覆盖源标题译文的定点更新 DAL |
 | 1.6.0   | 2026-08-14 | Codex                    | 覆盖平台待确认任务与实际加工队列的 Tab 分离 |
+| 1.7.0   | 2026-08-18 | Codex                    | 覆盖 DAL 连接上下文退出后关闭 SQLite 文件描述符 |
 | 1.1.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证多切片视频在不同子切片状态下的 Tab 归属逻辑 |
 | 1.0.0   | 2026-05-27 | Gemini_3.5_Flash_planning | Initial TDD test creation for database composite keys |
 """
@@ -29,6 +30,17 @@ def temp_db():
     os.close(fd)
     if os.path.exists(path):
         os.unlink(path)
+
+
+def test_connection_context_closes_sqlite_handle(temp_db):
+    """DAL 的连接上下文必须释放句柄，不能只提交事务。"""
+    db = PipelineDB(temp_db)
+
+    with db.get_connection() as conn:
+        assert conn.execute("SELECT 1").fetchone()[0] == 1
+
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        conn.execute("SELECT 1")
 
 def test_composite_unique_constraint(temp_db):
     """验证 UNIQUE(youtube_id, slice_index) 复合唯一索引约束"""
