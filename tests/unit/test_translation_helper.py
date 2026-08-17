@@ -30,6 +30,16 @@ def test_google_batch_filters_error_pages_and_keeps_length():
         assert th._google_translate_batch(["a", "b"]) == ["", "正常译文"]
 
 
+def test_google_batch_filters_plain_text_google_500_page():
+    translator = MagicMock()
+    translator.translate_batch.return_value = [
+        "Error 500 (Server Error)!!1500. That's an error. There was an error. "
+        "Please try again later. That's all we know.",
+    ]
+    with patch.object(th, "GoogleTranslator", return_value=translator):
+        assert th._google_translate_batch(["His patient, let's call her Anna"]) == [""]
+
+
 def test_google_batch_returns_empty_entries_when_unavailable():
     with patch.object(th, "GoogleTranslator", None):
         assert th._google_translate_batch(["a", "b"]) == ["", ""]

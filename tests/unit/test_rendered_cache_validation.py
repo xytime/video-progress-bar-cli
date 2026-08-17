@@ -4,13 +4,17 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-04 | Codex | 覆盖 cron 最小 PATH 下 ffprobe 定位，以及校验器不可用时保留缓存的 fail-safe 行为 |
+| 1.1.0 | 2026-08-17 | Codex | 覆盖历史 ASS 含上游 HTTP 错误页时的缓存失效判定 |
 """
 
 from types import SimpleNamespace
 
 import pytest
 
-from video_processing.pipeline_manager import _validate_rendered_vertical_cache
+from video_processing.pipeline_manager import (
+    _ass_contains_upstream_error_response,
+    _validate_rendered_vertical_cache,
+)
 from video_processing.utils import video_metadata
 
 
@@ -52,3 +56,13 @@ def test_probe_unavailable_preserves_cache_for_manual_or_later_retry(tmp_path, m
         _validate_rendered_vertical_cache(vertical)
 
     assert vertical.exists()
+
+
+def test_ass_with_google_error_page_is_not_a_reusable_bilingual_cache():
+    ass = (
+        "Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,"
+        "{\\fnGeorgia}English\\N{\\fnHiragino Sans GB}Error 500 (Server Error)!!1500. "
+        "That's an error. There was an error. Please try again later. That's all we know."
+    )
+
+    assert _ass_contains_upstream_error_response(ass)

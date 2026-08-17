@@ -105,6 +105,7 @@
 | 3.48.14 | 2026-08-10 | Codex                               | 视频号发布成功必须写入后台列表证据账本；缺图时保守记为 UNCERTAIN 并停止后续平台动作 |
 | 3.48.15 | 2026-08-11 | Codex                               | 视频号提交后统一进入 UNDER_REVIEW；禁止以列表跳转或截图写 PUBLISHED，保留证据并阻断自动重传 |
 | 3.48.16 | 2026-08-14 | Codex                               | 发布前人工复核闸在成片与审查完成后阻断全部平台提交 |
+| 3.48.18 | 2026-08-17 | Codex                               | 字幕缓存拒绝上游 HTTP 错误页，防止历史污染成片被检查点复用 |
 | 3.48.16 | 2026-08-11 | Codex                               | 视频号未确认公开时取消同源尚未提交的抖音/快手队列，防止旧误判触发跨平台抢跑 |
 """
 
@@ -135,6 +136,7 @@ from .utils.platform_events import PlatformEvent, format_platform_event_html
 from .utils.text_utils import graceful_truncate_title
 from .utils.generated_content_validation import (
     GeneratedContentValidationError,
+    is_upstream_error_response,
     validate_publishable_generated_content,
 )
 from .scoring import compute_auto_score, PUBLISH_SCORE_LINE
@@ -215,6 +217,17 @@ def _validate_rendered_vertical_cache(vertical: Path) -> Tuple[bool, str]:
     if duration <= 0:
         return False, "duration<=0"
     return True, ""
+
+
+def _ass_contains_upstream_error_response(ass_content: str) -> bool:
+    """仅检查中文字幕层，识别被烧录进 ASS 的完整上游错误页。"""
+    for line in ass_content.splitlines():
+        if not line.startswith("Dialogue:"):
+            continue
+        matched = re.search(r"\{\\fnHiragino Sans GB[^}]*\}(.*)$", line)
+        if matched and is_upstream_error_response(matched.group(1).replace("\\N", " ")):
+            return True
+    return False
 
 
 def _build_subprocess_env() -> dict:
@@ -2342,11 +2355,18 @@ class PipelineManager:
                     if _cache_valid and _ass_file.exists():
                         try:
                             _ass_content = _ass_file.read_text(encoding="utf-8", errors="ignore")
-                            # Georgia 字体标签是双语字幕的必要标志（单语版本不含此标签）
+                            # Georgia 字体标签是双语字幕的必要标志（单语版本不含此标签）。
+                            # 还必须排除已经被翻译服务错误页污染的历史 ASS。
                             if "fnGeorgia" not in _ass_content:
                                 logger.warning(
                                     f"[CacheInvalid] {_ass_file.name} missing bilingual marker "
                                     f"(fnGeorgia), forcing re-render for {prefix}"
+                                )
+                                _cache_valid = False
+                            elif _ass_contains_upstream_error_response(_ass_content):
+                                logger.warning(
+                                    f"[CacheInvalid] {_ass_file.name} contains upstream error response, "
+                                    f"forcing re-render for {prefix}"
                                 )
                                 _cache_valid = False
                         except Exception as _e:

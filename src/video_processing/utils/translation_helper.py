@@ -10,10 +10,13 @@
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 初始创建：高内聚翻译模块 |
 | 1.3.0   | 2026-07-17 | Codex                      | 移除阿里云 MT 调用；仅保留 Google 终级翻译接口 |
 | 1.3.1   | 2026-07-26 | Codex                      | 保留字符预算切块纯函数，维持字幕对齐回归保护 |
+| 1.3.2   | 2026-08-17 | Codex                      | 拒绝 Google 返回的纯文本 HTTP 错误页，避免被当作非空字幕译文 |
 """
 
 import logging
 from typing import List
+
+from .generated_content_validation import is_upstream_error_response
 
 try:
     from deep_translator import GoogleTranslator
@@ -94,7 +97,8 @@ def _google_translate_batch(
     results = []
     for value in translated or []:
         text = str(value or "").strip()
-        if any(marker in text.lower() for marker in invalid_markers):
+        if any(marker in text.lower() for marker in invalid_markers) or is_upstream_error_response(text):
+            logger.warning("[TransHelper] Google returned an upstream error response; discarding candidate entry.")
             text = ""
         results.append(text)
     return (results + [""] * len(texts))[:len(texts)]

@@ -60,3 +60,12 @@ def test_candidate_usability_requires_enough_translations():
 def test_candidate_rejects_empty_translations():
     assert not SubtitleTranslationCandidate(provider="Google", translations=["", ""]).is_usable_for(2)
     assert not SubtitleTranslationCandidate(provider="Google", translations=["你好", ""]).is_usable_for(2)
+
+
+def test_candidate_rejects_upstream_error_page_even_when_non_empty():
+    error_page = (
+        "Error 500 (Server Error)!!1500. That's an error. There was an error. "
+        "Please try again later. That's all we know."
+    )
+
+    assert not SubtitleTranslationCandidate(provider="Google", translations=[error_page]).is_usable_for(1)

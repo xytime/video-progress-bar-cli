@@ -10,12 +10,15 @@ Gemini、Google、DeepSeek/OpenAI 等供应商只要产出同一结构，
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：抽象字幕翻译候选结果与应用函数，为多供应商接入预留接口 |
 | 1.1.0   | 2026-07-13 | Codex  | 拒绝全空或中文覆盖率不足的候选，禁止空字幕进入发布链路 |
+| 1.2.0   | 2026-08-17 | Codex  | 拒绝上游 HTTP 错误页候选，确保所有翻译供应商共享同一道底线 |
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, MutableMapping, Sequence
+
+from .generated_content_validation import is_upstream_error_response
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,9 @@ class SubtitleTranslationCandidate:
         non_empty = [text.strip() for text in self.translations[:segment_count] if text and text.strip()]
         # 这是发布安全底线：等长度的空字符串列表不能被视为成功翻译。
         if not non_empty:
+            return False
+        # provider 不可信：即使返回数量正确且非空，也不能把 HTTP 错误页渲染进字幕。
+        if any(is_upstream_error_response(text) for text in non_empty):
             return False
         return len(non_empty) == segment_count
 
