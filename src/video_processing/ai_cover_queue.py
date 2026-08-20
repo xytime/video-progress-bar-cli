@@ -183,6 +183,8 @@ class AICoverQueue:
             return None
         if result.get("uses_video_frame") is not False or completed_at > task.generation_deadline:
             return None
+        if generated_by == "antigravity_imagegen" and result.get("human_visual_review") != "reviewed_no_text":
+            return None
         if not visual.is_file() or visual.parent.resolve() != task.finish_dir.resolve():
             return None
         if result.get("sha256") != _sha256(visual) or not self._valid_visual(visual):

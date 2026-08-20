@@ -120,6 +120,11 @@ def test_accepts_verified_antigravity_visual(tmp_path: Path):
     assert queue.accepted_visual(task) == visual
     assert queue.accepted_source(task) == "antigravity_imagegen"
 
+    result = json.loads((task.finish_dir / "result.json").read_text(encoding="utf-8"))
+    result["human_visual_review"] = "unverified"
+    (task.finish_dir / "result.json").write_text(json.dumps(result), encoding="utf-8")
+    assert queue.accepted_visual(task) is None
+
 
 def test_eligible_task_excludes_completed_expired_and_fresh_claims(tmp_path: Path):
     queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
