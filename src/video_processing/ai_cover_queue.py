@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-07-31 | Codex | 新增 Markdown 任务单、完成物验收与超时降级判定 |
 | 1.1.0 | 2026-07-31 | Codex | 提供无副作用的可领取任务判定，避免空队列唤起外部 Codex 执行器 |
 | 1.2.0 | 2026-08-03 | Codex | 任务协议写明已有底图优先复用与高消耗生成需确认的执行边界 |
+| 1.3.0 | 2026-08-20 | Codex | 接受经过人工视觉验收的 Anti-gravity 底图，并保留来源标识 |
 """
 
 from __future__ import annotations
@@ -156,6 +157,15 @@ class AICoverQueue:
         return tuple(tasks)
 
     def accepted_visual(self, task: AICoverTask) -> Optional[Path]:
+        accepted = self._accepted_result(task)
+        return accepted[0] if accepted else None
+
+    def accepted_source(self, task: AICoverTask) -> Optional[str]:
+        """返回已验收底图的生成器标识，供 resolution.json 记录。"""
+        accepted = self._accepted_result(task)
+        return accepted[1] if accepted else None
+
+    def _accepted_result(self, task: AICoverTask) -> Optional[tuple[Path, str]]:
         result_path = task.finish_dir / "result.json"
         if not result_path.is_file():
             return None
@@ -165,7 +175,11 @@ class AICoverQueue:
             completed_at = _parse_time(str(result["completed_at"]))
         except (KeyError, OSError, ValueError, json.JSONDecodeError):
             return None
-        if result.get("task_id") != task.task_id or result.get("generated_by") != "codex_imagegen":
+        generated_by = result.get("generated_by")
+        if result.get("task_id") != task.task_id or generated_by not in {
+            "codex_imagegen",
+            "antigravity_imagegen",
+        }:
             return None
         if result.get("uses_video_frame") is not False or completed_at > task.generation_deadline:
             return None
@@ -173,7 +187,7 @@ class AICoverQueue:
             return None
         if result.get("sha256") != _sha256(visual) or not self._valid_visual(visual):
             return None
-        return visual
+        return visual, str(generated_by)
 
     def has_eligible_task(self, now: Optional[datetime] = None) -> bool:
         """是否存在尚未完成、未超时且未被有效 claim 占用的任务。"""

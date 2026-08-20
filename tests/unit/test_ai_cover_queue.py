@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-07-31 | Codex | 覆盖任务 Markdown、完成物来源校验和超时降级时点 |
 | 1.1.0 | 2026-07-31 | Codex | 覆盖巡查前可领取任务判定，避免空队列执行外部生成器 |
 | 1.2.0 | 2026-08-03 | Codex | 覆盖已有底图优先复用和高消耗确认规则进入任务协议 |
+| 1.3.0 | 2026-08-20 | Codex | 覆盖 Anti-gravity 完成物来源验收 |
 """
 
 from __future__ import annotations
@@ -92,6 +93,32 @@ def test_fallback_starts_before_forty_minute_sla(tmp_path: Path):
 
     assert queue.should_fallback(task, created + timedelta(minutes=33, seconds=59)) is False
     assert queue.should_fallback(task, created + timedelta(minutes=34)) is True
+
+
+def test_accepts_verified_antigravity_visual(tmp_path: Path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    created = datetime(2026, 7, 31, tzinfo=timezone.utc)
+    task = _new_task(queue, tmp_path, created)
+    visual = task.finish_dir / "visual.png"
+    Image.new("RGB", (896, 1200), "#101522").save(visual)
+    digest = hashlib.sha256(visual.read_bytes()).hexdigest()
+    (task.finish_dir / "result.json").write_text(
+        json.dumps(
+            {
+                "task_id": task.task_id,
+                "generated_by": "antigravity_imagegen",
+                "completed_at": "2026-07-31T00:31:00Z",
+                "visual_filename": "visual.png",
+                "sha256": digest,
+                "uses_video_frame": False,
+                "human_visual_review": "reviewed_no_text",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert queue.accepted_visual(task) == visual
+    assert queue.accepted_source(task) == "antigravity_imagegen"
 
 
 def test_eligible_task_excludes_completed_expired_and_fresh_claims(tmp_path: Path):

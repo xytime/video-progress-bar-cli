@@ -7,6 +7,7 @@
 | 1.0.0 | 2026-07-31 | Codex | 新增两分钟巡查协调器，保证 AI 底图超时后确定性降级 |
 | 1.1.0 | 2026-08-03 | Codex | AI 封面完成物也必须通过无大面积遮罩版式来源清单校验 |
 | 1.2.0 | 2026-08-03 | Codex | 加锁并只允许 AI_COVER_PENDING 任务回到 PENDING，防止旧封面任务重发已发布视频 |
+| 1.3.0 | 2026-08-20 | Codex | 记录 Anti-gravity 底图来源，并对不合格产物继续走确定性降级 |
 """
 
 from __future__ import annotations
@@ -53,7 +54,12 @@ def _write_resolution(task: AICoverTask, source: str, visual_path: Path | None) 
     )
 
 
-def _render(task: AICoverTask, visual_path: Path | None, db: PipelineDB | None = None) -> bool:
+def _render(
+    task: AICoverTask,
+    visual_path: Path | None,
+    db: PipelineDB | None = None,
+    visual_source: str | None = None,
+) -> bool:
     db = db or PipelineDB()
     youtube_id = str(task.payload["youtube_id"])
     slice_index = int(task.payload["slice_index"])
@@ -96,7 +102,11 @@ def _render(task: AICoverTask, visual_path: Path | None, db: PipelineDB | None =
     if result.returncode != 0 or not _is_dedicated_cover(target):
         logger.error("[%s] cover render failed: %s", task.task_id, result.stderr[:400])
         return False
-    _write_resolution(task, "codex_ai_visual" if visual_path else "deterministic_fallback", visual_path)
+    _write_resolution(
+        task,
+        visual_source or ("codex_ai_visual" if visual_path else "deterministic_fallback"),
+        visual_path,
+    )
     if not db.mark_ai_cover_resolved(youtube_id, slice_index=slice_index):
         logger.warning("[%s] cover rendered but video status changed before requeue; leaving row unchanged", task.task_id)
         return False
@@ -129,7 +139,9 @@ def reconcile() -> int:
                 if _is_dedicated_cover(target):
                     continue
                 visual = queue.accepted_visual(task)
-                if visual and _render(task, visual, db):
+                generated_by = queue.accepted_source(task)
+                visual_source = "antigravity_ai_visual" if generated_by == "antigravity_imagegen" else "codex_ai_visual"
+                if visual and _render(task, visual, db, visual_source):
                     resolved += 1
                 elif visual is None and queue.should_fallback(task) and _render(task, None, db):
                     resolved += 1
