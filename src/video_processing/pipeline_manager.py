@@ -3,6 +3,15 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.48.19 | 2026-08-22 | Codex                               | 视频号仅获受理时向 Telegram 附送可播放审核副本；超限时生成轻量审核版，不改变投稿状态或重传边界 |
+| 3.46.0  | 2026-08-21 | Codex                               | 分钟巡航采用评分输入缓存，只重评播放/点赞变化或 TTL 到期候选，消除全量低分空转 |
+| 3.44.0  | 2026-08-21 | Codex                               | 已提交视频号任务遇到中断或子进程异常时保留未绑定账本，不再被通用异常路径降级为 PENDING/FAILED |
+| 3.45.0  | 2026-08-21 | Codex                               | 封面不再向渲染或 AI 主视觉简报传递运营角标，避免告警式装饰污染成品 |
+| 3.43.0  | 2026-08-21 | Codex                               | WECHAT_PUBLISHING_PAUSED 覆盖主上传路径，暂停时转 WECHAT_DEFERRED 而不启动上传器 |
+| 3.42.0  | 2026-08-21 | Codex                               | yt-dlp 下载增加总超时；curl 超时也降级内置下载器，避免代理半关闭连接永久占锁 |
+| 3.41.0  | 2026-08-20 | Codex                               | 已归档历史视频号提交加永久墓碑，重复证据只阻断重发，不再复活为活跃待确认记录 |
+| 3.40.0  | 2026-08-20 | Codex                               | 视频号发布改为同会话原生 post_id 绑定；回查只读已绑定 ID，禁止标题匹配和未找到自动补发 |
+| 3.39.0  | 2026-08-20 | Codex                               | 新增视频号作品管理页回查闭环，将待确认任务终结为已发布、审核中、驳回或后台未找到并受控补发 |
 | 1.0.0   | 2026-05-21 | Gemini_3.1_Pro_High_planning        | 初始创建 PipelineManager，实现完整的 FSM 调度                                   |
 | 1.1.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | 整合 Phase 5：文案生成与视频号全自动发布流                                       |
 | 1.2.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 地基重构：消灭裸 SQL + os.environ 泄漏                                           |
@@ -139,7 +148,7 @@ from .utils.generated_content_validation import (
     is_upstream_error_response,
     validate_publishable_generated_content,
 )
-from .scoring import compute_auto_score, PUBLISH_SCORE_LINE
+from .scoring import compute_auto_score
 from .censorship_service import CensorshipService
 from .ai_cover_queue import AICoverQueue
 from .core.cover_policy import validate_dedicated_cover_file
@@ -198,6 +207,10 @@ _KUAISHOU_UPLOAD_TIMEOUT_SEC = 25 * 60
 _DOUYIN_UPLOAD_TIMEOUT_SEC = 25 * 60
 _AUTO_CAPTION_TIMEOUT_SEC = 45 * 60
 _SOURCE_SUBTITLE_MIN_CHARS = 20
+# Telegram Bot 的媒体直传需要为协议波动留出余量。该上限仅作用于手机审核副本，
+# 不影响视频号成片、提交证据或任何发布状态。
+_TELEGRAM_REVIEW_VIDEO_MAX_BYTES = 49 * 1024 * 1024
+_TELEGRAM_REVIEW_TRANSCODE_TIMEOUT_SEC = 15 * 60
 
 
 def _validate_rendered_vertical_cache(vertical: Path) -> Tuple[bool, str]:
@@ -325,6 +338,138 @@ class PipelineManager:
         except Exception as e:
             logger.error(f"Telegram send failed: {e}")
             return False
+
+    def send_telegram_video(self, video_path: Path, caption: str) -> bool:
+        """发送本地 MP4 供运营在 Telegram 手机端审核，不改变平台投稿事实。"""
+        if not self.telegram_token or not self.telegram_chat_id:
+            logger.debug("Telegram not configured. Would send review video: %s", video_path.name)
+            return False
+        if not video_path.is_file():
+            logger.warning("Telegram review video missing: %s", video_path)
+            return False
+        try:
+            with video_path.open("rb") as video_file:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{self.telegram_token}/sendVideo",
+                    data={
+                        "chat_id": self.telegram_chat_id,
+                        "caption": caption,
+                        "parse_mode": "HTML",
+                        "supports_streaming": "true",
+                    },
+                    files={"video": (video_path.name, video_file, "video/mp4")},
+                    timeout=120,
+                )
+            response.raise_for_status()
+            return True
+        except Exception as exc:
+            logger.error("Telegram review video send failed for %s: %s", video_path.name, exc)
+            return False
+
+    def _build_telegram_review_copy(self, source_video: Path, prefix: str) -> Path | None:
+        """把超限成片降为 Telegram 手机审核副本；失败只告警，绝不触发重新投稿。"""
+        review_dir = self._OUT_DIR / "telegram_review"
+        safe_prefix = re.sub(r"[^A-Za-z0-9_.-]+", "_", prefix)
+        review_video = review_dir / f"{safe_prefix}_review.mp4"
+        try:
+            if (
+                review_video.is_file()
+                and review_video.stat().st_size <= _TELEGRAM_REVIEW_VIDEO_MAX_BYTES
+                and review_video.stat().st_mtime >= source_video.stat().st_mtime
+            ):
+                return review_video
+            review_dir.mkdir(parents=True, exist_ok=True)
+            temporary_video = review_video.with_suffix(".tmp.mp4")
+            ffmpeg_cmd = settings.ffmpeg_path or "ffmpeg"
+            try:
+                from .utils.video_metadata import get_video_duration_ffprobe
+
+                duration_seconds = get_video_duration_ffprobe(source_video)
+            except Exception as exc:
+                logger.warning(
+                    "Cannot determine review-video duration for %s; using conservative bitrate: %s",
+                    source_video.name,
+                    exc,
+                )
+                duration_seconds = 0
+            # 预留音轨和封装开销后，按时长为审核副本分配码率。正常短片最多 1 Mbps；
+            # 超长片会自动下探，避免“转码后仍无法发送”的假降级。
+            if duration_seconds > 0:
+                target_video_kbps = int(
+                    (_TELEGRAM_REVIEW_VIDEO_MAX_BYTES * 8 * 0.88 / duration_seconds / 1000) - 96
+                )
+            else:
+                target_video_kbps = 700
+            target_video_kbps = max(350, min(1000, target_video_kbps))
+            result = subprocess.run(
+                [
+                    ffmpeg_cmd, "-y", "-i", str(source_video),
+                    "-vf", "scale=720:-2:force_original_aspect_ratio=decrease",
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "29",
+                    "-b:v", f"{target_video_kbps}k",
+                    "-maxrate", f"{target_video_kbps}k", "-bufsize", f"{target_video_kbps * 2}k",
+                    "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
+                    str(temporary_video),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=_TELEGRAM_REVIEW_TRANSCODE_TIMEOUT_SEC,
+                env=_build_subprocess_env(),
+            )
+            if result.returncode != 0 or not temporary_video.is_file():
+                logger.warning(
+                    "Telegram review transcode failed for %s: %s",
+                    source_video.name,
+                    (result.stderr or result.stdout or "unknown error").strip()[-500:],
+                )
+                return None
+            temporary_video.replace(review_video)
+            if review_video.stat().st_size > _TELEGRAM_REVIEW_VIDEO_MAX_BYTES:
+                logger.warning("Telegram review copy still exceeds size limit: %s", review_video.name)
+                return None
+            return review_video
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("Telegram review copy unavailable for %s: %s", source_video.name, exc)
+            return None
+
+    def _send_wechat_submission_review_material(self, prefix: str, title: str | None) -> bool:
+        """为“已受理未公开”的视频号任务发送手机审核成片，不改变其审核中账本。"""
+        source_video = self._OUT_DIR / f"{prefix}_vertical.mp4"
+        if not source_video.is_file():
+            self.send_telegram_msg(
+                "⚠️ <b>WeChat review video unavailable</b>\n"
+                f"ID: <code>{html.escape(prefix)}</code>\n"
+                "平台受理状态不受影响；本地未找到可发送的审核成片。"
+            )
+            return False
+
+        review_video = source_video
+        if source_video.stat().st_size > _TELEGRAM_REVIEW_VIDEO_MAX_BYTES:
+            review_video = self._build_telegram_review_copy(source_video, prefix)
+            if review_video is None:
+                self.send_telegram_msg(
+                    "⚠️ <b>WeChat review video unavailable</b>\n"
+                    f"ID: <code>{html.escape(prefix)}</code>\n"
+                    "成片超过 Telegram 审核附件上限，轻量审核副本生成失败；"
+                    f"本地文件：<code>{html.escape(str(source_video))}</code>。"
+                )
+                return False
+
+        safe_title = html.escape(title or "未命名成片")
+        sent = self.send_telegram_video(
+            review_video,
+            "🎬 <b>WeChat mobile review copy</b>\n"
+            f"ID: <code>{html.escape(prefix)}</code>\n"
+            f"标题：{safe_title}\n"
+            "仅供审核；平台仍未取得公开发布证明。",
+        )
+        if not sent:
+            self.send_telegram_msg(
+                "⚠️ <b>WeChat review video send failed</b>\n"
+                f"ID: <code>{html.escape(prefix)}</code>\n"
+                "平台受理状态不受影响；附件未送达 Telegram。"
+            )
+        return sent
 
     def _notify_copy_numeric_warnings(self, yid: str, title: str, prefix: str) -> None:
         """将已接受文案中的金额告警推送 Telegram；告警不改变发布链路。"""
@@ -454,17 +599,71 @@ class PipelineManager:
         evidence_path: Path | None,
         reason: str,
         slice_index: int = 0,
+        submission_confirmed: bool = False,
     ) -> None:
-        """登记视频号已提交但尚无公开证明的状态，保留素材且绝不自动重传。"""
-        ledger_state = "UNDER_REVIEW" if evidence_path and evidence_path.is_file() else "UNCERTAIN"
+        """终结视频号提交路径；未知结果与已受理提交必须保留不同事实状态。"""
+        if not submission_confirmed:
+            self.db.record_wechat_publication_confirmation(
+                yid,
+                evidence_path=None,
+                state="UNCERTAIN",
+                error_message=reason,
+                slice_index=slice_index,
+            )
+            self.db.update_video_status(yid, "UNCERTAIN", error_msg=reason, slice_index=slice_index)
+            canceled = self.db.cancel_queued_downstream_publications_for_unconfirmed_wechat(
+                yid,
+                reason="视频号提交结果不可确认；已取消下游未提交队列并禁止自动重传。",
+                slice_index=slice_index,
+            )
+            if any(canceled.values()):
+                logger.warning("[%s] 已取消下游未提交队列：%s", prefix, canceled)
+            self.send_telegram_msg(
+                "⚠️ <b>WeChat submission uncertain</b>\n"
+                f"ID: <code>{html.escape(prefix)}</code>\n"
+                "未取得平台受理证明；已停止自动重传，等待人工核验。"
+            )
+            return
+
+        # 只有上传器明确返回“已受理”时才记录不可变提交尝试；原生 ID 仍必须
+        # 由同次提交捕获，不能由标题或时间推断。
+        platform_post_id = None
+        platform_url = None
+        if evidence_path:
+            receipt_path = evidence_path.parent / "submission_receipt.json"
+            try:
+                import json
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                platform_post_id = str(receipt.get("platform_post_id") or "").strip() or None
+                platform_url = str(receipt.get("platform_url") or "").strip() or None
+            except (OSError, ValueError, TypeError):
+                pass
+        ledger_state = "SUBMITTED_BOUND" if platform_post_id else "SUBMITTED_UNBOUND"
         self.db.record_wechat_publication_confirmation(
             yid,
             evidence_path=str(evidence_path) if evidence_path else None,
             state=ledger_state,
             error_message=reason,
             slice_index=slice_index,
+            platform_post_id=platform_post_id,
+            platform_url=platform_url,
         )
-        self.db.update_video_status(yid, "UNDER_REVIEW", error_msg=reason, slice_index=slice_index)
+        title_file = self._OUT_DIR / f"{prefix}_title.txt"
+        try:
+            final_title = title_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            final_title = None
+        attempt = self.db.record_wechat_submission_attempt(
+            yid,
+            slice_index=slice_index,
+            evidence_path=str(evidence_path) if evidence_path else None,
+            final_title=final_title,
+        )
+        if platform_post_id:
+            self.db.bind_wechat_submission_attempt_platform_id(
+                attempt["attempt_id"], platform_post_id=platform_post_id, platform_url=platform_url,
+            )
+        self.db.update_video_status(yid, ledger_state, error_msg=reason, slice_index=slice_index)
         canceled = self.db.cancel_queued_downstream_publications_for_unconfirmed_wechat(
             yid,
             reason="视频号仅确认提交、尚未确认公开发布；已取消下游未提交队列。",
@@ -473,10 +672,20 @@ class PipelineManager:
         if any(canceled.values()):
             logger.warning("[%s] 已取消下游未提交队列：%s", prefix, canceled)
         self.send_telegram_msg(
-            "⏳ <b>WeChat submission under review</b>\n"
+            "⏳ <b>WeChat submission accepted</b>\n"
             f"ID: <code>{html.escape(prefix)}</code>\n"
             "平台已接收提交，但尚无公开发布证明；已停止自动重传。"
         )
+        self._send_wechat_submission_review_material(prefix, final_title)
+
+    def _has_wechat_submission_terminal_state(self, yid: str, *, slice_index: int = 0) -> bool:
+        """判断任务是否已经跨过视频号提交边界，之后任何本地异常都不得触发重传。"""
+        current = self.db.get_video_by_youtube_id(yid, slice_index=slice_index)
+        if current and str(current.get("status") or "").upper() in {
+            "PUBLISHED", "UNDER_REVIEW", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNCERTAIN",
+        }:
+            return True
+        return self.db.get_wechat_publication(yid, slice_index=slice_index) is not None
 
     def _block_duplicate_wechat_submission_if_needed(self, yid: str, prefix: str, slice_index: int = 0) -> bool:
         """发现既有视频号提交证据时转入审核中，并拒绝再次调用上传器。"""
@@ -484,6 +693,13 @@ class PipelineManager:
         if not evidence_paths:
             return False
         newest_evidence = evidence_paths[-1]
+        if self.db.is_wechat_publication_historically_archived(yid, slice_index=slice_index):
+            reason = f"历史视频号提交已归档，继续阻止重发但不重建活跃账本：{newest_evidence}"
+            logger.warning("[%s] %s", prefix, reason)
+            self.db.update_video_status(
+                yid, "HISTORICAL_UNRESOLVED", error_msg=reason, slice_index=slice_index,
+            )
+            return True
         reason = f"检测到既有视频号提交后证据，拒绝自动重发：{newest_evidence}"
         logger.error("[%s] %s", prefix, reason)
         existing = self.db.get_wechat_publication(yid, slice_index=slice_index)
@@ -494,12 +710,96 @@ class PipelineManager:
         try:
             self._mark_wechat_submission_under_review(
                 yid, prefix, evidence_path=newest_evidence, reason=reason, slice_index=slice_index,
+                submission_confirmed=True,
             )
         except Exception:
             # 已有平台后台截图时，绝不能因账本补写失败而放行重传。
             logger.exception("[%s] 视频号审核账本补写失败；仍按既有提交证据阻止重发。", prefix)
-            self.db.update_video_status(yid, "UNDER_REVIEW", error_msg=reason, slice_index=slice_index)
+            self.db.update_video_status(yid, "SUBMITTED_UNBOUND", error_msg=reason, slice_index=slice_index)
         return True
+
+    def reconcile_wechat_under_review(self) -> int:
+        """仅按已绑定的视频号原生 ID 回查；无 ID 记录绝不访问平台、绝不改写状态。"""
+        limit = max(0, int(settings.wechat_review_max_per_run or 0))
+        if limit == 0:
+            logger.info("视频号精确回查已关闭（WECHAT_REVIEW_MAX_PER_RUN=0）。")
+            return 0
+        publications = self.db.get_wechat_publications_by_states(["SUBMITTED_BOUND", "UNDER_REVIEW"])
+        bound_publications = [
+            publication for publication in publications
+            if str(publication.get("platform_post_id") or "").strip()
+        ][:limit]
+        settled = 0
+        for publication in bound_publications:
+            publication_id = publication["id"]
+            yid = publication["youtube_id"]
+            slice_index = int(publication.get("slice_index") or 0)
+            prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+            platform_post_id = str(publication["platform_post_id"]).strip()
+            evidence_dir = self._OUT_DIR / "wechat_evidence" / prefix / f"reconcile_{publication_id}"
+            verify_cmd = [
+                self._VENV_PYTHON,
+                str(self._PRJ_ROOT / "scripts" / "wechat_uploader.py"),
+                "--state", str(self._OUT_DIR / "wechat_state.json"),
+                "--evidence-dir", str(evidence_dir),
+                "--fail-fast-login",
+                "--verify-only",
+                "--platform-post-id", platform_post_id,
+            ]
+            if not settings.wechat_headless:
+                verify_cmd.append("--no-headless")
+            try:
+                result = self._run_tracked(
+                    verify_cmd, yid, slice_index=slice_index, text=True, capture_output=True,
+                    cwd=str(self._PRJ_ROOT),
+                    timeout=max(30, int(settings.wechat_review_timeout_seconds or 180)),
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning("[%s] 视频号精确回查超时；保留当前已绑定状态。", prefix)
+                continue
+            return_code = result.returncode
+            evidence_by_code = {
+                0: evidence_dir / "management_published.png",
+                6: evidence_dir / "management_under_review.png",
+                8: evidence_dir / "management_rejected.png",
+            }
+            evidence = evidence_by_code.get(return_code)
+            if not evidence or not evidence.is_file():
+                logger.warning("[%s] 平台 ID 回查无可审计证据；不改写状态。", prefix)
+                continue
+            evidence_path = str(evidence)
+            platform_url = publication.get("platform_url")
+            if return_code == 0:
+                self.db.record_wechat_publication_confirmation(
+                    yid, evidence_path=evidence_path, state="PUBLISHED",
+                    error_message="作品管理页按已绑定平台 ID 明确显示已发布/公开可见。",
+                    slice_index=slice_index, platform_post_id=platform_post_id,
+                    platform_url=platform_url, reconciled=True,
+                )
+                self.db.update_video_status(yid, "PUBLISHED", error_msg=None, slice_index=slice_index)
+                self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: WeChat\nYouTube ID: {yid}")
+                settled += 1
+            elif return_code == 6:
+                self.db.record_wechat_publication_confirmation(
+                    yid, evidence_path=evidence_path, state="UNDER_REVIEW",
+                    error_message="作品管理页按已绑定平台 ID 明确显示仍在审核/处理中。",
+                    slice_index=slice_index, platform_post_id=platform_post_id,
+                    platform_url=platform_url, reconciled=True,
+                )
+                self.db.update_video_status(
+                    yid, "UNDER_REVIEW", error_msg="平台按原生 ID 明确显示审核/处理中。",
+                    slice_index=slice_index,
+                )
+            elif return_code == 8:
+                reason = "作品管理页按已绑定平台 ID 明确显示作品异常、违规或审核未通过；禁止自动重传。"
+                self.db.record_wechat_publication_confirmation(
+                    yid, evidence_path=evidence_path, state="REJECTED", error_message=reason,
+                    slice_index=slice_index, platform_post_id=platform_post_id,
+                    platform_url=platform_url, reconciled=True,
+                )
+                self.db.update_video_status(yid, "FAILED", error_msg=reason, slice_index=slice_index)
+                settled += 1
+        return settled
 
     def _is_public_publish_window(self, platform: str, yid: str = "", slice_index: int = 0) -> bool:
         """公开视频提交窗口守卫；审核回查等只读动作不受此限制。"""
@@ -588,18 +888,21 @@ class PipelineManager:
     # ── 评分 ──────────────────────────────────────────────────────────────────
 
     def score_pending_videos(self):
-        """对 PENDING 且 score < 75 的视频自动评分（不覆盖人工调分）"""
-        # [Claude_Sonnet_4.6_Thinking_planning] LINT-4 修复: math 已移至模块顶层导入
-        pending  = self.db.get_videos_by_status("PENDING")
-        # [Gemini_3.5_Flash_planning] 跳过 DISCOVERY 来源的视频，防止其被自动评分机制提高到 >= 75 分从而触发自动发布
-        to_score = [v for v in pending if v.get('score', 0) < PUBLISH_SCORE_LINE and v.get('source') != 'DISCOVERY']
-        skipped  = len(pending) - len(to_score)
-        if skipped:
-            logger.info(f"Skipping {skipped} already-prioritized or discovery videos.")
+        """只重评评分输入变化或缓存到期的 PENDING 自动候选（不覆盖人工调分）。"""
+        to_score = self.db.get_pending_videos_requiring_score_refresh(
+            settings.score_refresh_interval_minutes,
+        )
         if not to_score:
+            logger.info(
+                "[ScoreCache] 无需重评：候选指标未变化且未到 %s 分钟 TTL。",
+                settings.score_refresh_interval_minutes,
+            )
             return
 
-        logger.info(f"Scoring {len(to_score)} pending videos...")
+        logger.info(
+            "[ScoreCache] Scoring %s pending videos (changed inputs or %s-minute TTL).",
+            len(to_score), settings.score_refresh_interval_minutes,
+        )
         for video in to_score:
             yid        = video['youtube_id']
             views      = max(0, video.get('view_count') or 0)
@@ -2131,10 +2434,12 @@ class PipelineManager:
                                 self._run_tracked(
                                     dl_cmd, yid, slice_index=slice_index, capture_output=True,
                                     cwd=str(self._PRJ_ROOT), env=subprocess_env,
+                                    timeout=settings.youtube_download_timeout_seconds,
                                 )
-                        except subprocess.CalledProcessError:
+                        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                             # 当前网络下 curl 可返回 0 但仍让 yt-dlp 进入合并，最终报“Invalid data”。
-                            # 仅清理本次下载的 format 分片后，使用 yt-dlp 内置下载器重试同一媒体请求。
+                            # curl 也可能卡在代理半关闭连接；两种失败都只清理本次 format 分片后，
+                            # 使用 yt-dlp 内置下载器重试同一媒体请求。
                             for partial in self._OUT_DIR.glob(f"{yid}.f*"):
                                 if partial.is_file():
                                     partial.unlink()
@@ -2142,12 +2447,16 @@ class PipelineManager:
                             for option in ("--downloader-args", "--downloader"):
                                 option_index = native_dl_cmd.index(option)
                                 del native_dl_cmd[option_index:option_index + 2]
-                            logger.warning("[Download] curl 下载失败，降级 yt-dlp 内置下载器重试 %s。", yid)
+                            logger.warning(
+                                "[Download] curl 下载失败或超时（%s），降级 yt-dlp 内置下载器重试 %s。",
+                                type(exc).__name__, yid,
+                            )
                             # 上方 with 已恢复切换前节点；内置下载器的已验证路径走默认网络，
                             # 避免切换节点导致 Googlevideo 签名流再次 403。
                             self._run_tracked(
                                 native_dl_cmd, yid, slice_index=slice_index, capture_output=True,
                                 cwd=str(self._PRJ_ROOT), env=subprocess_env,
+                                timeout=settings.youtube_download_timeout_seconds,
                             )
                         target_file = self._find_downloaded_video(yid)
                         if not target_file:
@@ -2584,13 +2893,6 @@ class PipelineManager:
                             cover_payload["content_hints"] = json.loads(hints_file.read_text(encoding="utf-8"))
                         except Exception:
                             pass
-                    # [Gemini_2.5_Pro_planning] v3.0.0: 读取封面角标标签（label_file 已在 2a 段定义）
-                    if label_file.exists():
-                        try:
-                            cover_payload["content_label"] = label_file.read_text(encoding="utf-8").strip()
-                        except Exception:
-                            pass
-
                     if settings.enable_codex_cover_queue:
                         visual_brief = build_cover_creative_brief(cover_payload).to_dict()
                         task = AICoverQueue(
@@ -2670,6 +2972,11 @@ class PipelineManager:
                         self.db.set_video_preparation_ready(yid, True, slice_index=slice_index)
                     self.db.update_video_status(yid, "PENDING", slice_index=slice_index)
                     logger.info("[%s] 视频号成片已就绪，等待公开视频提交窗口。", prefix)
+                    return
+
+                if settings.wechat_publishing_paused:
+                    logger.info("[%s] WECHAT_PUBLISHING_PAUSED=true，跳过本轮视频号提交。", prefix)
+                    self.db.update_video_status(yid, "WECHAT_DEFERRED", slice_index=slice_index)
                     return
 
                 if not self._is_dedicated_cover(cover_file):
@@ -2800,6 +3107,7 @@ class PipelineManager:
                         reason = "视频号已受理提交，作品管理页尚未确认公开发布；已转审核中并停止自动重传。"
                         self._mark_wechat_submission_under_review(
                             yid, prefix, evidence_path=evidence_path, reason=reason, slice_index=slice_index,
+                            submission_confirmed=True,
                         )
                         return
                     raise
@@ -2810,17 +3118,24 @@ class PipelineManager:
                 reason = "视频号上传器返回提交响应，但尚无作品管理页公开可见证明；已停止自动重传。"
                 self._mark_wechat_submission_under_review(
                     yid, prefix, evidence_path=evidence_path, reason=reason, slice_index=slice_index,
+                    submission_confirmed=True,
                 )
                 return
 
             except InterruptedError as e:
                 logger.warning(f"[SIGTERM] Clean abort for {prefix}: {e}")
+                if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
+                    logger.warning("[%s] 已跨越视频号提交边界；保留现有账本状态，拒绝回写 PENDING。", prefix)
+                    return
                 self.db.update_video_status(yid, "PENDING", error_msg="Aborted by SIGTERM", slice_index=slice_index)
                 self.reset_video_artifacts(prefix)
 
             except subprocess.CalledProcessError as e:
                 err = e.stderr if isinstance(e.stderr, str) else (e.stderr or b"").decode()
                 logger.error(f"Process failed for {prefix}: {err[:500]}")
+                if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
+                    logger.warning("[%s] 子进程异常发生在视频号提交后；保留账本状态，拒绝重试或写 FAILED。", prefix)
+                    return
                 if self._requeue_transient_pre_submission_failure(
                     yid, title, err, slice_index=slice_index,
                 ):
@@ -2831,6 +3146,9 @@ class PipelineManager:
 
             except Exception as e:
                 logger.error(f"Unexpected error for {prefix}: {e}")
+                if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
+                    logger.warning("[%s] 未知异常发生在视频号提交后；保留账本状态，拒绝重试或写 FAILED。", prefix)
+                    return
                 if self._requeue_transient_pre_submission_failure(
                     yid, title, str(e), slice_index=slice_index,
                 ):
@@ -2921,6 +3239,9 @@ class PipelineManager:
 
     def _run_daily_job_unlocked(self) -> None:
         logger.info("--- Starting Daily Pipeline Job ---")
+        reconciled = self.reconcile_wechat_under_review()
+        if reconciled:
+            logger.info("WeChat creator-management reconciliation settled %s publication(s).", reconciled)
         self.score_pending_videos()
         self.process_high_score_videos(limit=5)
         if not settings.wechat_publishing_paused:

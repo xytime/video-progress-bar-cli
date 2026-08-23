@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>龙眼期权 · {{ column_name or "市场研报" }}</title>
+  <style>
+    {{ theme_css }}
+  </style>
+</head>
+<body>
+  <div class="de-poster-container" id="poster-root">
+    <div class="de-ambient-top"></div>
+    <div class="de-ambient-bottom"></div>
+    <div class="de-grid-overlay"></div>
+    
+    <!-- Background Watermark -->
+    {% if watermark_url %}
+    <div class="de-watermark-layer" style="background-image: url('{{ watermark_url }}');"></div>
+    {% else %}
+    <div class="de-watermark-layer"></div>
+    {% endif %}
+
+    <!-- Top Header Banner -->
+    <header class="de-header">
+      {% if header_img_url %}
+        <img src="{{ header_img_url }}" alt="Header Banner">
+      {% else %}
+        <div class="de-header-fallback">
+          <img class="logo-img" src="{{ logo_url or 'assets/brand/01_logos/logo_horiz_dark.png' }}" alt="DragonEye Logo">
+          <div class="de-header-meta">
+            <div class="issue-tag">{{ issue_no or "No.001" }}</div>
+            <div class="date-tag">{{ trading_date or "2026-08-21" }}</div>
+          </div>
+        </div>
+      {% endif %}
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="de-content">
+      <!-- Meta Strip -->
+      <div class="de-meta-strip">
+        <div>
+          <span>📅 交易日：<strong>{{ trading_date or "YYYY-MM-DD" }}</strong></span>
+          <span style="margin-left: 20px;">🔢 编号：<strong>{{ issue_no or "No.001" }}</strong></span>
+        </div>
+        <div>
+          <span class="engine-badge">
+            <span class="pulse"></span>
+            <span>核心引擎：{{ engine_name or "OptionSense V4" }}</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Structured Sections if provided -->
+      {% if sections %}
+        {% for sec in sections %}
+          {% if sec.type == "liquidity" %}
+            <div class="de-card">
+              <div class="de-card-header">
+                <div class="de-header-left">
+                  <div class="de-icon-chip">🎯</div>
+                  <div class="de-card-title">【龙眼定点】<span class="highlight">核心流动性分布</span></div>
+                </div>
+                <div class="de-sub-tag">GAMMA & LIQUIDITY MATRIX</div>
+              </div>
+              <div class="de-metrics-list">
+                {% for item in sec.metrics %}
+                <div class="de-metric-row">
+                  <div class="de-metric-label">
+                    <span class="bullet">◆</span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                  <div class="de-metric-value">{{ item.value | safe }}</div>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+
+          {% elif sec.type == "radar" %}
+            <div class="de-card">
+              <div class="de-card-header">
+                <div class="de-header-left">
+                  <div class="de-icon-chip" style="border-color: #F3BA2F; box-shadow: 0 0 12px rgba(243, 186, 47, 0.25);">⚡</div>
+                  <div class="de-card-title">【异动雷达】<span class="highlight">主力扫单与 IV 追踪</span></div>
+                </div>
+                <div class="de-sub-tag">ORDER FLOW & VOLATILITY</div>
+              </div>
+              <div class="de-metrics-list">
+                {% for item in sec.metrics %}
+                <div class="de-metric-row">
+                  <div class="de-metric-label">
+                    <span class="bullet" style="color: #F3BA2F;">◆</span>
+                    <span>{{ item.label }}</span>
+                  </div>
+                  <div class="de-metric-value">{{ item.value | safe }}</div>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+
+          {% elif sec.type == "scenarios" %}
+            <div class="de-card">
+              <div class="de-card-header">
+                <div class="de-header-left">
+                  <div class="de-icon-chip" style="border-color: #00F0FF; box-shadow: 0 0 12px rgba(0, 240, 255, 0.25);">🗡️</div>
+                  <div class="de-card-title">【剧本推演 / 胜负手】<span class="highlight">战术应对</span></div>
+                </div>
+                <div class="de-sub-tag">TACTICAL SCENARIO TREE</div>
+              </div>
+              <div class="de-scenarios">
+                {% for sc in sec.scenarios %}
+                <div class="de-scenario-box {{ sc.variant or 'bull' }}">
+                  <div class="de-scenario-header">
+                    <span>{{ sc.icon or "⚔️" }}</span>
+                    <span>{{ sc.title }}</span>
+                  </div>
+                  <div class="de-scenario-body">{{ sc.body | safe }}</div>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+
+          {% elif sec.type == "risk" %}
+            <div class="de-card de-risk-card">
+              <div class="de-card-header">
+                <div class="de-header-left">
+                  <div class="de-icon-chip">🛡️</div>
+                  <div class="de-card-title">【风控红线】</div>
+                </div>
+                <div class="de-sub-tag" style="color: #FAAD14;">MANDATORY RISK RULES</div>
+              </div>
+              <div class="de-risk-body">{{ sec.content | safe }}</div>
+            </div>
+
+          {% else %}
+            <!-- Generic Card Section -->
+            <div class="de-card">
+              <div class="de-card-header">
+                <div class="de-header-left">
+                  <div class="de-icon-chip">📌</div>
+                  <div class="de-card-title">{{ sec.title | safe }}</div>
+                </div>
+              </div>
+              <div class="de-card-body">{{ sec.content | safe }}</div>
+            </div>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        <!-- Raw HTML Fallback -->
+        <div class="de-card">
+          <div class="de-card-body">
+            {{ raw_content_html | safe }}
+          </div>
+        </div>
+      {% endif %}
+    </main>
+
+    <!-- Footer Area -->
+    <footer class="de-footer">
+      {% if footer_img_url %}
+        <img src="{{ footer_img_url }}" alt="Footer Card">
+      {% else %}
+        <div class="de-footer-fallback">
+          <div class="motto">🐉 龙眼期权 | 穿透微观流动性 · 捕捉日内确定性</div>
+          <div class="disclaimer">⚠️ 免责声明：本内容基于期权微观量化模型推演，仅供实战交流，不构成直接投资建议。</div>
+        </div>
+      {% endif %}
+    </footer>
+  </div>
+</body>
+</html>

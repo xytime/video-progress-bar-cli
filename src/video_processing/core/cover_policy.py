@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-03 | Codex | 将无大面积遮罩/卡片遮挡底图规则固化为来源清单和模板硬校验 |
 | 1.1.0 | 2026-08-03 | Codex | 将移动端大字可读性纳入封面来源清单和模板静态校验 |
+| 1.2.0 | 2026-08-21 | Codex | 禁止系统告警式运营装饰，防止无关文字破坏封面可信度 |
 """
 
 from __future__ import annotations
@@ -75,6 +76,8 @@ def assert_template_respects_cover_policy(template_text: str, template_path: Pat
         violations.append("visual-layer must not combine a broad linear-gradient overlay with the visual asset")
     if ".glass-card" in template_text:
         violations.append("large glass/text card is prohibited over dedicated cover backgrounds")
+    if "SYS_ALERT" in template_text:
+        violations.append("system-alert marketing decoration is prohibited on production covers")
     title_match = _MAIN_TITLE_BLOCK_RE.search(template_text)
     if title_match:
         title_block = title_match.group("body")

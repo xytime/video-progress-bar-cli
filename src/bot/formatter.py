@@ -15,6 +15,7 @@
 | 1.7.0 | 2026-07-05 | Codex                               | 重设计 /status 为手机值班面板：先给可发布结论、登录态、异常和下一步动作 |
 | 1.7.1 | 2026-07-05 | Codex                               | /status 最近异常展示失败总数、标题、YouTube 链接、原因摘要和单条重试命令 |
 | 1.7.2 | 2026-07-05 | Codex                               | /status 展示 /retry 24 将影响的任务数量，避免批量操作范围不透明 |
+| 1.8.0 | 2026-08-20 | Codex | 增加 Highlight Job 的显式候选分析入口说明，不暗示会自动发布 |
 | 1.7.3 | 2026-07-05 | Codex                               | /status 同时展示 /retry 24/48 影响数量，并给最近失败标注相对时间 |
 """
 from __future__ import annotations
@@ -120,6 +121,9 @@ def fmt_help() -> str:
         "   _例：链接 38 14:43 或 链接 30 (去头) 或 链接 -300 (截前段)_\n\n"
         "🎥 `/whole <url> [开始] [结束]` — 强制以完整整片加入队列\n"
         "🎬 `/slice <url> [开始] [结束]` — 允许切片（若有章节）加入队列\n"
+        "✂️ `/highlight` — 选择已有视频，显式生成金句候选（不会自动发布）\n"
+        "✂️ `/highlight <ID>` — 对指定已有视频确认创建 Highlight Job\n"
+        "📂 `/highlight jobs` — 查看 Highlight Job 状态\n"
         "📋 `/queue` — 查看当前处理队列\n"
         "📊 `/status` — 查看全局宏观状态报告\n"
         "✅ `/published` — 查看最近发布到视频号的视频\n"

@@ -33,6 +33,7 @@
 | 1.25.1  | 2026-08-03 | Codex                                   | 奥德赛类数量标题恢复为自然中文量词，避免“9个加拿大银幕”翻译腔 |
 | 1.25.2  | 2026-08-04 | Codex                                   | 拒绝将上游 HTTP 错误页写入标题/文案 checkpoint，阻断错误内容进入渲染与发布 |
 | 1.25.3  | 2026-08-05 | Codex                                   | 文案金额数量级检查降级为 Telegram 可见告警，不再阻断候选；事件方向和错误页闸门保持严格 |
+| 1.26.0  | 2026-08-21 | Codex                                   | 停用无事实依据的运营角标，并收紧短标题不得编造因果、情绪或受众反应 |
 """
 
 import re
@@ -250,7 +251,7 @@ class WeChatContentSchema(pydantic.BaseModel):  # [Claude_Sonnet_4.6_Thinking_pl
     无需手工 json.loads，消除解析失败风险。
     """
     short_title: str = pydantic.Field(
-        description="纯中文流量型封面标题，6-16字，禁止使用爆款/干货/秘籍/逆天/震惊等廉价营销词"
+        description="纯中文事实型封面标题，6-16字；忠实表达原视频核心对象和事件，不得编造因果、反转、受众反应或结论；禁止使用爆款/干货/秘籍/逆天/震惊等廉价营销词"
     )
     hook_subtitle: str = pydantic.Field(
         description="封面副标题Hook，不超过24字，纯中文，制造悬念或承诺具体利益"
@@ -274,19 +275,7 @@ class WeChatContentSchema(pydantic.BaseModel):  # [Claude_Sonnet_4.6_Thinking_pl
     # [Gemini_2.5_Pro_planning] v1.11.0 内容角标标签
     content_label: str = pydantic.Field(
         description=(
-            "封面角标运营标签，从以下选扨1个（若内容普通则返回空字符串）: "
-            "重磅、突发、独家、最新、深度、解析、揭秘、完整版、专访、警示、局势、首发"
-            "——符合以下任一条才贴标签："
-            "1.重磅/突发→重大政策/紧急事件/大厂崩塑; "
-            "2.独家/首发→第一手信息/专访内容; "
-            "3.最新→新产品发布/新发现/今日更新; "
-            "4.深度/解析→长篇分析/机制拆解; "
-            "5.揭秘→幕后/内幕/反转; "
-            "6.专访→对话/访谈; "
-            "7.完整版→全程/合集; "
-            "8.警示→风险警示/安全警示; "
-            "9.局势→地缘局势/大国博弈; "
-            "不符合以上任一条的正常视频请返回空字符串''"
+            "已废弃的兼容字段：始终返回空字符串。不得生成重磅、突发、揭秘等运营角标。"
         )
     )
 
@@ -676,7 +665,7 @@ def _build_wechat_prompt(title: str, description: str) -> str:
     return (
         f"请根据以下 YouTube 视频信息，生成适合微信视频号发布的完整内容。\n\n"
         f"【硬性约束】\n"
-        f"- short_title：纯中文，6-16字，流量型标题\n"
+        f"- short_title：纯中文，6-16字，准确概括原视频的核心对象与事件；不得编造因果、反转、受众反应或未经原视频支持的结论\n"
         f"- hook_subtitle：纯中文，不超过24字\n"
         f"- copy：100-200字 + 3-5个hashtag + 一句CTA，纯文本无markdown\n"
         f"- category：从以下选1个：{cats}\n"
@@ -686,8 +675,7 @@ def _build_wechat_prompt(title: str, description: str) -> str:
         f"space physics astronomy science news media report "
         f"music song concert film movie drama entertainment gaming esports "
         f"sports fitness travel food lifestyle education course tutorial startup innovation\n"
-        f"- content_label：封面角标（重磅/突发/独家/最新/深度/解析/揭秘/完整版/专访/警示/局势/首发）。"
-        f"内容普通则返回空字符串''\n"
+        f"- content_label：兼容字段，必须返回空字符串\n"
         f"- 禁止：emoji / 广告废话 / 翻译腔 / 政治敏感词\n\n"
         f"【事实与术语上下文】\n"
         f"{translation_constraints}\n\n"
@@ -782,7 +770,8 @@ _SYSTEM_INSTRUCTION = """你是顶级微信视频号内容策划，兼具中文�
 - 廉价营销词：爆款、干货、秘籍、公式、逆天、震惊、绝密、必看、收藏、保姆级、悄悄告诉你
 - 翻译腔残留：Guys/Let's/Epic/Insane 等直译、英式语序、生硬被动句
 - 微信生态违和网络梗：YYDS、绝绝子、xswl（与成熟受众气质不符）
-- 标题党空头支票：与正文不符的夸大承诺"""
+- 标题党空头支票：与正文不符的夸大承诺
+- 凭空推断：不得把来源未明确陈述的因果、反转、消费者/观众反应或预测写进标题和副标题"""
 
 
 def _apply_post_processing(short_title: str, hook_subtitle: str) -> tuple[str, str]:
@@ -870,7 +859,8 @@ def generate_wechat_content(
         copy          = str(parsed.wechat_copy).strip()
         category      = str(parsed.category).strip()
         content_hints = parsed.content_hints if isinstance(parsed.content_hints, list) else []
-        content_label = str(parsed.content_label).strip()
+        # 历史 checkpoint 仍保留该字段，但成品封面不再接受运营角标。
+        content_label = ""
 
         if len(short_title) < 6:
             logger.warning(f"short_title too short ({len(short_title)} chars), using graceful fallback")
@@ -991,9 +981,8 @@ def main():
         )
         logger.info(f"content_hints → {content['content_hints']!r}")
     # [Gemini_2.5_Pro_planning] v1.11.0: 写出封面角标标签
-    if content.get("content_label"):
-        (out / f"{yid}_label.txt").write_text(content["content_label"], encoding="utf-8")
-        logger.info(f"content_label → {content['content_label']!r}")
+    # 保留空文件以兼容既有 copywriter checkpoint；封面渲染层不读取该字段。
+    (out / f"{yid}_label.txt").write_text("", encoding="utf-8")
 
     logger.info(f"short_title → {content['short_title']!r} (len={len(content['short_title'])})")
     logger.info(f"category    → {content['category']!r}")

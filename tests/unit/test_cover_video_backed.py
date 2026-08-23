@@ -12,6 +12,7 @@
 | 1.7.0 | 2026-08-01 | Codex | 覆盖 CoverEngine 成功路径仍会叠加普通话译制角标 |
 | 1.8.0 | 2026-08-03 | Codex | 覆盖无大面积遮罩版式来源清单和模板硬门槛 |
 | 1.9.0 | 2026-08-03 | Codex | 覆盖移动端大字可读性模板硬门槛 |
+| 2.0.0 | 2026-08-21 | Codex | 覆盖系统告警式运营装饰的模板硬门槛 |
 """
 
 from pathlib import Path
@@ -106,6 +107,14 @@ def test_template_policy_rejects_small_or_unoutlined_cover_title(tmp_path):
     template.write_text(".main-title{font-size:64px;color:#fff;}", encoding="utf-8")
 
     with pytest.raises(ValueError, match="mobile cover readability"):
+        assert_template_respects_cover_policy(template.read_text(encoding="utf-8"), template)
+
+
+def test_template_policy_rejects_system_alert_marketing_decoration(tmp_path):
+    template = tmp_path / "cover.html.j2"
+    template.write_text("<span>SYS_ALERT // 揭秘</span>", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="system-alert marketing decoration"):
         assert_template_respects_cover_policy(template.read_text(encoding="utf-8"), template)
 
 

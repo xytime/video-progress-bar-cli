@@ -8,6 +8,7 @@
 | 1.1.0 | 2026-08-03 | Codex | AI 封面完成物也必须通过无大面积遮罩版式来源清单校验 |
 | 1.2.0 | 2026-08-03 | Codex | 加锁并只允许 AI_COVER_PENDING 任务回到 PENDING，防止旧封面任务重发已发布视频 |
 | 1.3.0 | 2026-08-20 | Codex | 记录 Anti-gravity 底图来源，并对不合格产物继续走确定性降级 |
+| 1.4.0 | 2026-08-20 | Codex | 在 Codex deadline 与固定背景 deadline 之间自动调用 Anti-gravity 第一兜底 |
 """
 
 from __future__ import annotations
@@ -52,6 +53,68 @@ def _write_resolution(task: AICoverTask, source: str, visual_path: Path | None) 
     (task.finish_dir / "resolution.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def _write_antigravity_attempt(task: AICoverTask, status: str, error: str) -> None:
+    path = task.finish_dir / "antigravity_attempt.json"
+    if path.is_file():
+        return
+    path.write_text(
+        json.dumps(
+            {
+                "task_id": task.task_id,
+                "provider": "antigravity",
+                "status": status,
+                "failed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "error": error[:500],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _run_antigravity(task: AICoverTask) -> None:
+    runtime_python = Path(settings.antigravity_runtime_dir).expanduser() / "bin" / "python"
+    if not runtime_python.is_file():
+        _write_antigravity_attempt(task, "failed", f"runtime not found: {runtime_python}")
+        return
+    command = [
+        str(runtime_python),
+        str(PROJECT_ROOT / "scripts" / "run_antigravity_cover_doer.py"),
+        "--task-id",
+        task.task_id,
+        "--queue-dir",
+        str(PROJECT_ROOT / settings.ai_cover_queue_dir),
+        "--finish-dir",
+        str(PROJECT_ROOT / settings.ai_cover_finish_dir),
+        "--model",
+        settings.antigravity_model,
+        "--image-model",
+        settings.antigravity_image_model,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=settings.antigravity_timeout_seconds,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        _write_antigravity_attempt(task, "failed", "Anti-gravity timeout")
+        logger.warning("[%s] Anti-gravity timed out; fixed-background fallback remains armed", task.task_id)
+        return
+    if result.returncode != 0:
+        logger.warning(
+            "[%s] Anti-gravity rejected; stderr=%s stdout=%s",
+            task.task_id,
+            result.stderr[-300:],
+            result.stdout[-300:],
+        )
 
 
 def _render(
@@ -140,6 +203,16 @@ def reconcile() -> int:
                     continue
                 visual = queue.accepted_visual(task)
                 generated_by = queue.accepted_source(task)
+                if (
+                    visual is None
+                    and settings.enable_antigravity_cover_fallback
+                    and datetime.now(timezone.utc) >= task.generation_deadline
+                    and datetime.now(timezone.utc) < task.fallback_after
+                    and not (task.finish_dir / "antigravity_attempt.json").is_file()
+                ):
+                    _run_antigravity(task)
+                    visual = queue.accepted_visual(task)
+                    generated_by = queue.accepted_source(task)
                 visual_source = "antigravity_ai_visual" if generated_by == "antigravity_imagegen" else "codex_ai_visual"
                 if visual and _render(task, visual, db, visual_source):
                     resolved += 1

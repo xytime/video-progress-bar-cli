@@ -4,8 +4,11 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.45.0 | 2026-08-21 | Codex | Candidate-score cache TTL prevents minute-by-minute full rescoring. |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.44.0 | 2026-08-21 | Codex | 为 yt-dlp 下载增加总超时配置，避免失效连接无限占用发布巡航锁 |
+| 3.19.0 | 2026-08-20 | Codex | 新增视频号作品管理页回查的单轮上限与超时配置，避免待确认任务无限堆积 |
 | 1.0.0 | 2026-05-20 | Gemini_3.1_Pro_High_planning | 初始创建 Settings 类 |
 | 2.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 重构为 pydantic-settings BaseSettings，收口全部环境变量，消灭散落的 os.getenv |
 | 2.1.0 | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | v7.0 Feature Flags：新功能开关，默认全部关闭，保护生产环境稳定性 |
@@ -95,6 +98,10 @@ class Settings(BaseSettings):
     # 可用环境变量 DASHBOARD_PORT 覆盖
     dashboard_port: int = 9100
 
+    # The minute-level runner only rescans candidates whose metrics changed or whose
+    # cached score is old; this keeps a large low-score waitlist from hot-looping.
+    score_refresh_interval_minutes: int = 180
+
     # [Claude_Opus_4.8] 美股盘中重负载保护：开启后，自动调度器在美股盘中
     # （ET 09:15–16:15，按 America/New_York 自动处理夏/冬令时）暂停一切重型
     # 管线处理（下载/Whisper/渲染），避免抢占与实盘交易行情管线共用的整机 CPU。
@@ -165,6 +172,8 @@ class Settings(BaseSettings):
     # 使用 scripts/refresh_yt_cookies.py 从 Chrome 导出并保存到此文件
     # （2026-06-25：源由 Safari 改 Chrome——本机 Safari 未登录 YouTube，导出的匿名 cookie 触发 bot 风控）
     youtube_cookies_file: str = ""
+    # 单次 yt-dlp 下载的总时限。curl 自身有连接和低速超时，但代理半关闭连接仍可能无限等待。
+    youtube_download_timeout_seconds: int = 900
 
     # YouTube Data API 只用于频道目录和评分元数据；下载仍由 yt-dlp 负责。
     # 留空时监控器自动退到公开 RSS，条目保持 METADATA_PENDING，绝不凭空自动发布。
@@ -308,6 +317,12 @@ class Settings(BaseSettings):
     # Codex 专属底图队列。任务单由项目写入目录，Codex 技能生成底图后写回完成目录；
     # 本地协调器在超时前执行当前确定性封面渲染，绝不等待外部执行器无限期返回。
     enable_codex_cover_queue: bool = False
+    # Codex 底图在截止时间未完成时，先调用本机 Anti-gravity 图像工具；失败后才进入固定背景降级。
+    enable_antigravity_cover_fallback: bool = True
+    antigravity_runtime_dir: str = "~/.local/share/videopipeline-antigravity313"
+    antigravity_model: str = "gemini-3.5-flash"
+    antigravity_image_model: str = "gemini-3.1-flash-image-preview"
+    antigravity_timeout_seconds: int = 90
     ai_cover_queue_dir: str = "ai-cover-queue"
     ai_cover_finish_dir: str = "ai-cover-finish"
     ai_cover_generation_deadline_minutes: int = 32
@@ -316,6 +331,9 @@ class Settings(BaseSettings):
     # 视频号暂停发布时，新视频可先进入 WECHAT_DEFERRED，并按限额在恢复后补发。
     wechat_publishing_paused: bool = False
     wechat_deferred_recovery_daily_limit: int = 10
+    # 默认关闭：必须先完成一对一平台记录匹配校准，才允许运营显式开启后台回查。
+    wechat_review_max_per_run: int = 0
+    wechat_review_timeout_seconds: int = 180
 
     # 源字幕先行：先用 yt-dlp --skip-download 拉取 VTT 并通过安全审查，
     # 才允许下载原视频。非发布窗口的预加工只处理 AUTO 候选，绝不提交平台。

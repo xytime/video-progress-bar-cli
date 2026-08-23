@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="goldLaser" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FFF8D0" />
+      <stop offset="35%" stop-color="#F3BA2F" />
+      <stop offset="80%" stop-color="#E5C07B" />
+      <stop offset="100%" stop-color="#996E1D" />
+    </linearGradient>
+
+    <linearGradient id="cyanLaser" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0066CC" />
+      <stop offset="45%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#E0FFFF" />
+    </linearGradient>
+
+    <radialGradient id="pupilCenter" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="25%" stop-color="#00F0FF" stop-opacity="0.9" />
+      <stop offset="60%" stop-color="#00F0FF" stop-opacity="0.2" />
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0" />
+    </radialGradient>
+
+    <filter id="bloomA" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3.5" result="blur1" />
+      <feGaussianBlur stdDeviation="8.0" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="#0D1117" rx="61.44"/>
+
+  <!-- ================= 0. Polar Radar Graticules ================= -->
+  <circle cx="256.0" cy="256.0" r="210.0" fill="none" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.7" />
+  <circle cx="256.0" cy="256.0" r="185.0" fill="none" stroke="#21262D" stroke-width="1.0" stroke-dasharray="4.0 6.0" />
+  <circle cx="256.0" cy="256.0" r="155.0" fill="none" stroke="#30363D" stroke-width="1.0" stroke-opacity="0.3" />
+
+  <!-- 12-Ray Polar Ticks -->
+  <line x1="451.0" y1="256.0" x2="466.0" y2="256.0" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="424.87495373796554" y1="353.5" x2="437.8653347947321" y2="361.0" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="353.5" y1="424.8749537379655" x2="361.0" y2="437.8653347947321" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="256.0" y1="451.0" x2="256.0" y2="466.0" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="158.50000000000003" y1="424.87495373796554" x2="151.00000000000003" y2="437.8653347947321" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="87.12504626203446" y1="353.5" x2="74.13466520526788" y2="361.0" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="61.0" y1="256.0" x2="46.0" y2="256.0" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="87.12504626203449" y1="158.49999999999997" x2="74.13466520526791" y2="150.99999999999997" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="158.49999999999991" y1="87.12504626203452" x2="150.9999999999999" y2="74.13466520526794" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="255.99999999999997" y1="61.0" x2="255.99999999999997" y2="46.0" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="353.5" y1="87.12504626203449" x2="361.0" y2="74.13466520526791" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/><line x1="424.8749537379655" y1="158.49999999999991" x2="437.86533479473206" y2="150.9999999999999" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.8"/>
+
+  <!-- Cardinal Diamonds -->
+  <polygon points="256.0,46.0 252.0,36.0 256.0,28.0 260.0,36.0" fill="url(#goldLaser)" />
+  <polygon points="256.0,466.0 252.0,476.0 256.0,484.0 260.0,476.0" fill="url(#cyanLaser)" />
+  <polygon points="46.0,256.0 36.0,252.0 28.0,256.0 36.0,260.0" fill="url(#goldLaser)" />
+  <polygon points="466.0,256.0 476.0,252.0 484.0,256.0 476.0,260.0" fill="url(#cyanLaser)" />
+
+  <!-- ================= 1. Triple Call Volatility Skew Curves (Upper Golden Arcs) ================= -->
+  <!-- Outer 10 Delta Call -->
+  <path d="M 86.0 256.0 C 171.0 136.0, 341.0 136.0, 426.0 256.0"
+        fill="none" stroke="url(#goldLaser)" stroke-width="4.0" stroke-linecap="round" filter="url(#bloomA)" />
+  
+  <!-- Middle 25 Delta Call -->
+  <path d="M 111.0 256.0 C 184.0 171.0, 328.0 171.0, 401.0 256.0"
+        fill="none" stroke="url(#goldLaser)" stroke-width="2.5" stroke-linecap="round" opacity="0.85" />
+  
+  <!-- Inner 50 Delta (ATM) Call -->
+  <path d="M 136.0 256.0 C 196.0 204.0, 316.0 204.0, 376.0 256.0"
+        fill="none" stroke="url(#goldLaser)" stroke-width="1.5" stroke-dasharray="3.0 4.0" opacity="0.65" />
+
+  <!-- ================= 2. Triple Put Volatility Skew Curves (Lower Cyan Arcs) ================= -->
+  <!-- Outer 10 Delta Put -->
+  <path d="M 86.0 256.0 C 171.0 376.0, 341.0 376.0, 426.0 256.0"
+        fill="none" stroke="url(#cyanLaser)" stroke-width="4.0" stroke-linecap="round" filter="url(#bloomA)" />
+  
+  <!-- Middle 25 Delta Put -->
+  <path d="M 111.0 256.0 C 184.0 341.0, 328.0 341.0, 401.0 256.0"
+        fill="none" stroke="url(#cyanLaser)" stroke-width="2.5" stroke-linecap="round" opacity="0.85" />
+  
+  <!-- Inner 50 Delta (ATM) Put -->
+  <path d="M 136.0 256.0 C 196.0 308.0, 316.0 308.0, 376.0 256.0"
+        fill="none" stroke="url(#cyanLaser)" stroke-width="1.5" stroke-dasharray="3.0 4.0" opacity="0.65" />
+
+  <!-- ================= 3. Center GEX Singularity & Quantum Pupil ================= -->
+  <circle cx="256.0" cy="256.0" r="52.0" fill="url(#pupilCenter)" />
+  <circle cx="256.0" cy="256.0" r="38.0" fill="#0D1117" stroke="#30363D" stroke-width="2.0" />
+  
+  <!-- Concentric Quantum Laser Calibration Rings -->
+  <circle cx="256.0" cy="256.0" r="30.0" fill="none" stroke="url(#cyanLaser)" stroke-width="2.5" filter="url(#bloomA)" />
+  <circle cx="256.0" cy="256.0" r="20.0" fill="none" stroke="url(#goldLaser)" stroke-width="1.5" stroke-dasharray="2.0 3.0" />
+  <circle cx="256.0" cy="256.0" r="10.0" fill="#FFFFFF" />
+  <circle cx="256.0" cy="256.0" r="4.0" fill="#00F0FF" />
+
+  <!-- Horizontal Equator Line -->
+  <line x1="76.0" y1="256.0" x2="204.0" y2="256.0" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.5" />
+  <line x1="308.0" y1="256.0" x2="436.0" y2="256.0" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.5" />
+</svg>

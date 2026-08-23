@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Master Gradients -->
+    <linearGradient id="goldHelix" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F3BA2F" stop-opacity="0.2" />
+      <stop offset="40%" stop-color="#F3BA2F" stop-opacity="0.9" />
+      <stop offset="100%" stop-color="#E5C07B" stop-opacity="1" />
+    </linearGradient>
+    
+    <linearGradient id="cyanHelix" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="1" />
+      <stop offset="60%" stop-color="#00D2FF" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0.1" />
+    </linearGradient>
+
+    <linearGradient id="eyeLensGrad" x1="0%" y1="50%" x2="100%" y2="50%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.9" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="1" />
+      <stop offset="100%" stop-color="#F3BA2F" stop-opacity="0.9" />
+    </linearGradient>
+
+    <radialGradient id="singularityGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="1" />
+      <stop offset="25%" stop-color="#00F0FF" stop-opacity="0.9" />
+      <stop offset="60%" stop-color="#00F0FF" stop-opacity="0.25" />
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0" />
+    </radialGradient>
+
+    <filter id="laserGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="6.144" result="blur1" />
+      <feGaussianBlur stdDeviation="12.288" result="blur2" />
+      <feMerge>
+        <feMergeNode in="blur2" />
+        <feMergeNode in="blur1" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+
+    <filter id="coreGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="10.24" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" fill="#0D1117" rx="40.96"/>
+
+  <!-- ================= 1. 外层量化标尺与引力轨道 (Polar Gauge & Gauge Ticks) ================= -->
+  <!-- Outer Precision Gauge -->
+  <circle cx="256.0" cy="256.0" r="225.28" fill="none" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.6" />
+  <circle cx="256.0" cy="256.0" r="184.32" fill="none" stroke="#21262D" stroke-width="1" stroke-dasharray="4 8" />
+  
+  <!-- Coordinate Crosshairs (微观订单流引力轴) -->
+  <line x1="20.72" y1="256.0" x2="491.28" y2="256.0" stroke="#30363D" stroke-width="1" stroke-dasharray="2 6" stroke-opacity="0.5" />
+  <line x1="256.0" y1="20.72" x2="256.0" y2="491.28" stroke="#30363D" stroke-width="1" stroke-dasharray="2 6" stroke-opacity="0.5" />
+
+  <!-- Cardinal Angle Tick Markers -->
+  <circle cx="481.28" cy="256.0" r="3" fill="#00F0FF" />
+  <circle cx="30.72" cy="256.0" r="3" fill="#F3BA2F" />
+  <circle cx="256.0" cy="30.72" r="3" fill="#F0F6FC" />
+  <circle cx="256.0" cy="481.28" r="3" fill="#8B949E" />
+
+  <!-- ================= 2. 龙之势能：黄金对数螺旋动量流 (The Dragon's Momentum Helices) ================= -->
+  <!-- Ascending Dragon Momentum Helix (Cyan Vega Streamline) -->
+  <path d="M 62.464 348.15999999999997
+           C 90.112 458.752, 292.864 467.96799999999996, 421.88800000000003 366.592
+           C 477.18399999999997 311.296, 467.96799999999996 145.40800000000002, 348.15999999999997 80.89600000000002
+           C 274.432 44.03200000000001, 145.40800000000002 108.54400000000001, 117.75999999999999 200.704"
+        fill="none" stroke="url(#cyanHelix)" stroke-width="3" stroke-linecap="round" filter="url(#laserGlow)" />
+
+  <!-- Counter Balance Golden Spiral (Gold Theta Streamline) -->
+  <path d="M 421.88800000000003 173.05599999999998
+           C 385.024 62.464, 200.704 53.24799999999999, 90.112 163.84
+           C 34.816 237.568, 53.24799999999999 375.808, 182.272 436.6336
+           C 246.784 462.4384, 375.808 403.456, 399.76959999999997 302.08"
+        fill="none" stroke="url(#goldHelix)" stroke-width="2.5" stroke-linecap="round" opacity="0.9" />
+
+  <!-- ================= 3. 眼之透镜：波动率微笑与概率切面 (The Volatility Lens / Probability Eye) ================= -->
+  <!-- Upper Volatility Smile Arc (Call Skew Surface) -->
+  <path d="M 69.632 256.0
+           Q 256.0 129.536 442.368 256.0"
+        fill="none" stroke="url(#eyeLensGrad)" stroke-width="4.5" stroke-linecap="round" filter="url(#laserGlow)" />
+
+  <!-- Lower Volatility Smile Arc (Put Skew Surface) -->
+  <path d="M 69.632 256.0
+           Q 256.0 382.464 442.368 256.0"
+        fill="none" stroke="url(#eyeLensGrad)" stroke-width="4.5" stroke-linecap="round" filter="url(#laserGlow)" />
+
+  <!-- Probability Density Lens Fill (Subtle Ambient Glow between Skew curves) -->
+  <path d="M 69.632 256.0
+           Q 256.0 129.536 442.368 256.0
+           Q 256.0 382.464 69.632 256.0 Z"
+        fill="url(#cyanHelix)" fill-opacity="0.08" />
+
+  <!-- Inner Gaussian Normal Distribution Curves (内嵌高斯正态钟形分布微结构) -->
+  <path d="M 136.192 256.0
+           Q 256.0 182.784 375.808 256.0"
+        fill="none" stroke="#00F0FF" stroke-width="1.5" stroke-dasharray="3 4" opacity="0.7" />
+  <path d="M 136.192 256.0
+           Q 256.0 329.216 375.808 256.0"
+        fill="none" stroke="#F3BA2F" stroke-width="1.5" stroke-dasharray="3 4" opacity="0.7" />
+
+  <!-- ================= 4. 瞳之奇点：Delta 0.5 价格引力核 (Singularity / The Quantum Pupil) ================= -->
+  <!-- Quantum Aura -->
+  <circle cx="256.0" cy="256.0" r="66.56" fill="url(#singularityGlow)" />
+  
+  <!-- Precision Target Reticle (0DTE/GEX 汇聚环) -->
+  <circle cx="256.0" cy="256.0" r="46.08" fill="#161B22" stroke="#00F0FF" stroke-width="2.5" filter="url(#laserGlow)" />
+  <circle cx="256.0" cy="256.0" r="23.04" fill="none" stroke="#F3BA2F" stroke-width="1.5" />
+  <circle cx="256.0" cy="256.0" r="9.216" fill="#FFFFFF" />
+
+  <!-- 45° Breakthrough Arrow Vector (突破引力向量) -->
+  <line x1="162.816" y1="349.18399999999997" x2="362.496" y2="149.504" 
+        stroke="#00F0FF" stroke-width="2" stroke-linecap="round" filter="url(#laserGlow)" />
+  <polygon points="362.496,149.504 335.872,152.1664 359.8336,176.128" 
+           fill="#00F0FF" filter="url(#laserGlow)" />
+</svg>

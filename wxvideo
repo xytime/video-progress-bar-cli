@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Local shortcut wrapper for the standalone wxvideo transcription tool.
+# Override WXVIDEO_PROJECT_DIR or WXVIDEO_PYTHON when the installation moves.
+set -u
+
+PRJ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WXVIDEO_PROJECT_DIR="${WXVIDEO_PROJECT_DIR:-/Users/ryusei/Documents/Codex/2026-08-21/referenced-chatgpt-conversation-this-is-an/outputs/wxvideo}"
+
+if [ -x "$WXVIDEO_PROJECT_DIR/.venv/bin/wxvideo" ]; then
+    exec "$WXVIDEO_PROJECT_DIR/.venv/bin/wxvideo" "$@"
+fi
+
+WXVIDEO_PYTHON="${WXVIDEO_PYTHON:-$PRJ_ROOT/.venv/bin/python}"
+if [ ! -x "$WXVIDEO_PYTHON" ]; then
+    echo "❌ 找不到 wxvideo Python 环境: $WXVIDEO_PYTHON" >&2
+    echo "   请先运行 wxvideo 项目的 scripts/install_macos.sh，或设置 WXVIDEO_PYTHON。" >&2
+    exit 1
+fi
+if [ ! -d "$WXVIDEO_PROJECT_DIR/src/wxvideo" ]; then
+    echo "❌ 找不到 wxvideo 项目源码: $WXVIDEO_PROJECT_DIR" >&2
+    echo "   请设置 WXVIDEO_PROJECT_DIR 指向 wxvideo 项目目录。" >&2
+    exit 1
+fi
+
+PYTHONPATH="$WXVIDEO_PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}" \
+    exec "$WXVIDEO_PYTHON" -m wxvideo "$@"

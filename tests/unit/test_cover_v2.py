@@ -5,6 +5,7 @@
 |---------|------------|------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，针对语义分析、主题映射、布局装配与 Facade 入口进行单元测试 |
 | 1.1.0 | 2026-07-31 | Codex                         | 覆盖专属主视觉与受控标题位置的布局规划 |
+| 1.2.0 | 2026-08-21 | Codex                         | 验证历史运营角标不会进入最终封面布局 |
 """
 
 import os
@@ -223,6 +224,25 @@ def test_layout_composer_uses_dedicated_visual_and_safe_headline_position():
     assert spec["has_visual_asset"] is True
     assert spec["headline_position"] == "upper_left"
     assert spec["show_metaphor"] is False
+
+
+def test_layout_composer_never_renders_legacy_operating_label():
+    composer = LayoutComposer()
+    signal = ContentSignal(
+        id="default", accent="cyan_pulsing", base_gradient="deep_blue",
+        metaphor="zap", metaphor_placement="top-right",
+        emotion_temperature="neutral", default_badge="科技观察",
+    )
+    theme = {
+        "background_gradient_start": "#020b18", "background_gradient_end": "#041428",
+        "noise_opacity": 0.04, "grid_color": "rgba(56,189,248,0.06)", "orbs": [],
+        "accent_color": "#00f0ff", "accent_glow": "none",
+    }
+
+    spec = composer.compose({"title": "测试", "content_label": "揭秘"}, signal, theme)
+
+    assert spec["content_label"] == ""
+    assert spec["metaphor_placement"] == "top-right"
 
 def test_cover_engine_e2e_mocked(temp_config_paths, tmp_path, monkeypatch):
     """

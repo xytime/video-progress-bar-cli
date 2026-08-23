@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date       | Author                                 | Description          |
 |---------|------------|----------------------------------------|----------------------|
+| 1.9.0   | 2026-08-21 | Codex                                  | 覆盖进程已死的预提交孤儿任务有界回收，不触及发布状态 |
 | 1.8.0   | 2026-08-14 | Codex                                  | 新增中台地缘政治与出口管制 P1 人工复核回归 |
 | 1.7.0   | 2026-07-26 | Codex                                  | 中国领导人姓名 P0、“中国/敏感人物+负面新闻”P0、严重负面事件 P1 回归 |
 | 1.6.0   | 2026-07-23 | Codex                                  | 新增“中国+负面政治定性/制裁规避”近距离共现拦截回归 |
@@ -491,7 +492,7 @@ class TestSecurityBypassFortification:
                 channel_promoted = tmp_db.get_channel_by_id(channel_id)
                 assert channel_promoted["status"] == "APPROVED", "Status should be promoted to APPROVED"
 
-    def test_con1_lock_handle_closed_on_flock_error(self):
+    def test_con1_lock_handle_closed_on_flock_error(self, tmp_path):
         """CON-1: 验证 flock() 抛异常时，lock_file 仍被正确 close，不泄露句柄。"""
         from video_processing.pipeline_manager import PipelineManager
         from unittest.mock import patch, MagicMock
@@ -499,6 +500,7 @@ class TestSecurityBypassFortification:
 
         pm = PipelineManager()
         pm.db = MagicMock()
+        pm._OUT_DIR = tmp_path
         mock_file = MagicMock()
 
         # 模拟 open() 返回 mock_file，以及 fcntl.flock() 在 LOCK_EX 时抛异常
@@ -533,7 +535,7 @@ class TestSecurityBypassFortification:
 class TestCensorEngineIntegration:
     """测试 CensorshipEngine 与 PipelineManager 真实流水线的集成行为。"""
 
-    def test_censor_integration_p0_reject(self, tmp_db):
+    def test_censor_integration_p0_reject(self, tmp_db, tmp_path):
         """P0 违禁词在下载前应触发一票否决：状态设为 FAILED，写入黑名单，清理半成品。"""
         from video_processing.pipeline_manager import PipelineManager
         from unittest.mock import patch, MagicMock
@@ -544,6 +546,7 @@ class TestCensorEngineIntegration:
             
             pm = PipelineManager()
             pm.db = tmp_db
+            pm._OUT_DIR = tmp_path
             
             # 使用包含 P0 违禁词的视频标题
             video = {
@@ -573,7 +576,7 @@ class TestCensorEngineIntegration:
             # 验证已写入黑名单墓碑
             assert tmp_db.is_blacklisted(video['youtube_id']) is True
 
-    def test_censor_integration_p1_suspend(self, tmp_db):
+    def test_censor_integration_p1_suspend(self, tmp_db, tmp_path):
         """P1 违禁词应触发人工挂起：状态设为 FAILED，但不加入黑名单。"""
         from video_processing.pipeline_manager import PipelineManager
         from unittest.mock import patch, MagicMock
@@ -581,6 +584,7 @@ class TestCensorEngineIntegration:
         with patch("config.settings.settings.enable_censorship_engine", True):
             pm = PipelineManager()
             pm.db = tmp_db
+            pm._OUT_DIR = tmp_path
             
             video = {
                 'youtube_id': 'p1censorvid12',
@@ -605,7 +609,7 @@ class TestCensorEngineIntegration:
             # 验证未被黑名单
             assert tmp_db.is_blacklisted(video['youtube_id']) is False
 
-    def test_censor_integration_p2_deprioritize(self, tmp_db):
+    def test_censor_integration_p2_deprioritize(self, tmp_db, tmp_path):
         """P2 违禁词应触发降权：分数设为 0，锁定，状态恢复为 PENDING。"""
         from video_processing.pipeline_manager import PipelineManager
         from unittest.mock import patch, MagicMock
@@ -613,6 +617,7 @@ class TestCensorEngineIntegration:
         with patch("config.settings.settings.enable_censorship_engine", True):
             pm = PipelineManager()
             pm.db = tmp_db
+            pm._OUT_DIR = tmp_path
             
             video = {
                 'youtube_id': 'p2censorvid12',
@@ -790,6 +795,7 @@ class TestStopVideoApi:
     # Modification History
     | Version | Date | Author | Description |
     | --- | --- | --- | --- |
+    | 1.1.0 | 2026-08-21 | Codex | 发布中中止改写为 SUBMITTED_UNBOUND，回归未确认提交的 fail-closed 控制台保护 |
     | 1.0.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 初始创建测试类 |
     """
 
@@ -845,3 +851,154 @@ class TestStopVideoApi:
             data = response.json()
             assert data["success"] is False
             assert "当前不处于运行状态" in data["error"]
+
+    def test_stop_publishing_records_unbound_submission_instead_of_failed(self, tmp_db):
+        """中止发表阶段无法证明平台未受理，必须停止自动重传。"""
+        import unittest.mock as mock
+        import web.app
+        from fastapi.testclient import TestClient
+
+        yid = "stop-publishing-yid"
+        tmp_db.add_video(yid, "Stop Publishing", "channel_1", score=90)
+        tmp_db.update_video_status(yid, "PUBLISHING")
+        client = TestClient(web.app.app)
+
+        with mock.patch.object(web.app, "db", tmp_db), \
+             mock.patch.object(web.app.settings, "enable_sigterm_kill", True):
+            response = client.post(f"/api/videos/{yid}/stop")
+
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        assert tmp_db.get_video_by_youtube_id(yid)["status"] == "SUBMITTED_UNBOUND"
+        assert tmp_db.get_wechat_publication(yid)["state"] == "SUBMITTED_UNBOUND"
+
+    def test_unconfirmed_submission_cannot_be_retried_or_respecced(self, tmp_db):
+        """通用 API 不能把 PUBLISHING 回写 PENDING 后再次触发上传。"""
+        import unittest.mock as mock
+        import web.app
+        from fastapi.testclient import TestClient
+
+        yid = "guard-publishing-yid"
+        tmp_db.add_video(yid, "Guard Publishing", "channel_1", score=90)
+        tmp_db.update_video_status(yid, "PUBLISHING")
+        client = TestClient(web.app.app)
+
+        with mock.patch.object(web.app, "db", tmp_db):
+            retry = client.post(f"/api/videos/{yid}/retry")
+            respec = client.post(f"/api/videos/{yid}/respec", json={"disable_slicing": True})
+            hard_reset = client.post(f"/api/videos/{yid}/reset-hard")
+
+        assert retry.json()["success"] is False
+        assert respec.json()["success"] is False
+        assert hard_reset.json()["success"] is False
+        assert tmp_db.get_video_by_youtube_id(yid)["status"] == "PUBLISHING"
+
+    def test_local_published_without_platform_receipt_cannot_republish(self, tmp_db):
+        """本地 PUBLISHED 不是平台公开证明，不能作为重复发表授权。"""
+        import unittest.mock as mock
+        import web.app
+        from fastapi.testclient import TestClient
+
+        yid = "local-published-yid"
+        tmp_db.add_video(yid, "Local Published", "channel_1", score=90)
+        tmp_db.update_video_status(yid, "PUBLISHED")
+        client = TestClient(web.app.app)
+
+        with mock.patch.object(web.app, "db", tmp_db):
+            response = client.post(f"/api/videos/{yid}/republish")
+
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+        assert tmp_db.get_video_by_youtube_id(yid)["status"] == "PUBLISHED"
+
+    def test_verified_published_record_still_cannot_republish_without_deletion_proof(self, tmp_db, tmp_path):
+        """即使旧作品已确认公开，也不能把“本地仍有账本”当作平台已删除。"""
+        import unittest.mock as mock
+        import web.app
+        from fastapi.testclient import TestClient
+
+        yid = "verified-published-yid"
+        evidence = tmp_path / "management_published.png"
+        evidence.write_bytes(b"png")
+        tmp_db.add_video(yid, "Verified Published", "channel_1", score=90)
+        tmp_db.record_wechat_publication_confirmation(
+            yid, evidence_path=str(evidence), state="PUBLISHED", platform_post_id="native-post-1",
+        )
+        tmp_db.update_video_status(yid, "PUBLISHED")
+        client = TestClient(web.app.app)
+
+        with mock.patch.object(web.app, "db", tmp_db):
+            response = client.post(f"/api/videos/{yid}/republish")
+
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+        assert tmp_db.get_video_by_youtube_id(yid)["status"] == "PUBLISHED"
+
+    def test_retry_recent_skips_failed_row_with_submission_ledger(self, tmp_db):
+        """历史误写 FAILED 的待确认提交也不能被批量重试绕过。"""
+        import unittest.mock as mock
+        import web.app
+        from fastapi.testclient import TestClient
+
+        yid = "failed-with-ledger-yid"
+        tmp_db.add_video(yid, "Failed With Ledger", "channel_1", score=90)
+        tmp_db.record_wechat_publication_confirmation(
+            yid, evidence_path=None, state="SUBMITTED_UNBOUND",
+            error_message="平台结果未知",
+        )
+        tmp_db.update_video_status(yid, "FAILED")
+        client = TestClient(web.app.app)
+
+        with mock.patch.object(web.app, "db", tmp_db):
+            response = client.post("/api/videos/retry-recent?hours=24")
+
+        assert response.status_code == 200
+        assert response.json()["count"] == 0
+        assert response.json()["skipped_platform_guard"] == 1
+        assert tmp_db.get_video_by_youtube_id(yid)["status"] == "FAILED"
+
+    def test_orphaned_publishing_is_recorded_as_unbound_not_failed(self, tmp_db):
+        """发布子进程消失不代表平台未受理，调度器不得写 FAILED。"""
+        import unittest.mock as mock
+        import web.app
+
+        yid = "orphan-publishing-yid"
+        tmp_db.add_video(yid, "Orphan Publishing", "channel_1", score=90)
+        tmp_db.update_video_status(yid, "PUBLISHING")
+        candidate = tmp_db.get_video_by_youtube_id(yid)
+
+        with mock.patch.object(web.app, "db", tmp_db), \
+             mock.patch.object(tmp_db, "get_stale_publishing_videos", return_value=[candidate]), \
+             mock.patch.object(web.app, "_process_group_alive", return_value=False):
+            assert web.app._recover_orphaned_publishing_tasks() == 1
+
+        assert tmp_db.get_video_by_youtube_id(yid)["status"] == "SUBMITTED_UNBOUND"
+        assert tmp_db.get_wechat_publication(yid)["state"] == "SUBMITTED_UNBOUND"
+
+    def test_orphaned_pre_submission_task_is_bounded_and_requeued(self, tmp_db):
+        """下载/转录阶段进程消失可安全回收；不存在平台投递边界。"""
+        import unittest.mock as mock
+        import web.app
+
+        yid = "orphan-pre-submit-yid"
+        tmp_db.add_video(yid, "Orphan Pre Submit", "channel_1", score=90)
+        tmp_db.update_video_status(yid, "DOWNLOADING")
+        candidate = tmp_db.get_video_by_youtube_id(yid)
+
+        with mock.patch.object(web.app, "db", tmp_db), \
+             mock.patch.object(tmp_db, "get_stale_pre_submission_processing_videos", return_value=[candidate]), \
+             mock.patch.object(web.app, "_process_group_alive", return_value=False):
+            assert web.app._recover_orphaned_pre_submission_tasks() == 1
+
+        recovered = tmp_db.get_video_by_youtube_id(yid)
+        assert recovered["status"] == "PENDING"
+        assert recovered["retry_count"] == 1
+        assert tmp_db.get_wechat_publication(yid) is None
+
+    def test_queue_runner_respects_external_pipeline_lock(self):
+        """cron 持有 pipeline.lock 时，仪表盘队列不能再启动第二条管线。"""
+        import unittest.mock as mock
+        import web.app
+
+        with mock.patch.object(web.app, "_is_pipeline_manager_running", return_value=True):
+            assert web.app._queue_pipeline_launch_allowed() is False

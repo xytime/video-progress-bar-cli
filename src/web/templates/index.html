@@ -21,6 +21,7 @@
   | 2026-07-13 | Codex | 头部新增 AI 字幕审计摘要，展示近 7 日运行、失败和降级数量。 |
   | 2026-07-23 | Codex | 新增微信/抖音自动补录计划预览面板。 |
   | 2026-07-24 | Gemini_3.6_Flash_planning | 重构多平台发布矩阵组件，支持微信、快手、抖音 3 平台发布状态徽章、时间线提示及详情弹窗。 |
+  | 2026-08-21 | Codex | 明确展示视频号已提交但未绑定原生 ID 的终态，避免误当处理中或已公开发布。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -581,6 +582,8 @@
     .badge-dot-PUBLISHING { background: var(--orange); animation: pulse-orange 1.5s infinite; }
     .badge-UNDER_REVIEW  { background: rgba(251,191,36,0.15); color: var(--yellow); }
     .badge-dot-UNDER_REVIEW { background: var(--yellow); }
+    .badge-SUBMITTED_UNBOUND, .badge-SUBMITTED_BOUND, .badge-UNCERTAIN { background: rgba(251,191,36,0.15); color: var(--yellow); }
+    .badge-dot-SUBMITTED_UNBOUND, .badge-dot-SUBMITTED_BOUND, .badge-dot-UNCERTAIN { background: var(--yellow); }
     .badge-PUBLISHED     { background: rgba(52,211,153,0.15); color: var(--green); }
     .badge-dot-PUBLISHED { background: var(--green); }
     .badge-FAILED        { background: rgba(248,113,113,0.15); color: var(--red); }
@@ -1537,6 +1540,7 @@
         <button class="tab-btn active" id="tab-waitlist" onclick="switchTab('waitlist')">待筛选</button>
         <button class="tab-btn" id="tab-queue" onclick="switchTab('queue')">待处理</button>
         <button class="tab-btn" id="tab-active" onclick="switchTab('active')">处理中</button>
+        <button class="tab-btn" id="tab-wechat_deferred" onclick="switchTab('wechat_deferred')">待微信恢复</button>
         <button class="tab-btn" id="tab-review" onclick="switchTab('review')">待平台确认</button>
         <button class="tab-btn" id="tab-completed" onclick="switchTab('completed')">已完成</button>
         <button class="tab-btn" id="tab-error" onclick="switchTab('error')">出错异常</button>
@@ -2223,6 +2227,7 @@
         document.getElementById('tab-waitlist').textContent = `待筛选(${d.tab_counts.waitlist})`;
         document.getElementById('tab-queue').textContent = `待处理(${d.tab_counts.queue})`;
         document.getElementById('tab-active').textContent = `处理中(${d.tab_counts.active})`;
+        document.getElementById('tab-wechat_deferred').textContent = `待微信恢复(${d.tab_counts.wechat_deferred || 0})`;
         document.getElementById('tab-review').textContent = `待平台确认(${d.tab_counts.review || 0})`;
         document.getElementById('tab-completed').textContent = `已完成(${d.tab_counts.completed})`;
         document.getElementById('tab-error').textContent = `出错异常(${d.tab_counts.error})`;
@@ -4166,6 +4171,10 @@
         cls = 'st-published';
         stateLabel = '已发布';
         tooltip = `${names[key]}: 已发布 (${info.published_at || '成功'})`;
+      } else if (['SUBMITTED_UNBOUND', 'SUBMITTED_BOUND'].includes(st)) {
+        cls = 'st-review';
+        stateLabel = st === 'SUBMITTED_BOUND' ? '已提交待回查' : '已提交·不可重发';
+        tooltip = `${names[key]}: ${stateLabel}（尚无公开发布证明）`;
       } else if (['UNDER_REVIEW', 'UPLOADING', 'QUEUED', 'PUBLISHING', 'WECHAT_DEFERRED'].includes(st)) {
         cls = 'st-review';
         stateLabel = st === 'UNDER_REVIEW' ? '审核中' : (st === 'WECHAT_DEFERRED' ? '已延后' : '发送中');
@@ -4210,6 +4219,8 @@
       let stateBadge = `<span class="badge badge-UNKNOWN">未队列</span>`;
       if (st === 'PUBLISHED') {
         stateBadge = `<span class="badge badge-PUBLISHED" style="background:rgba(52,211,153,0.15); color:#34d399;">🟢 已发布</span>`;
+      } else if (st === 'SUBMITTED_UNBOUND' || st === 'SUBMITTED_BOUND') {
+        stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">🛑 已提交·禁止重发</span>`;
       } else if (st === 'UNDER_REVIEW') {
         stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">⏳ 平台审核中</span>`;
       } else if (st === 'UNCERTAIN') {

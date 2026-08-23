@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.videopipeline.english-world-daily</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/run_english_world_daily_codex.sh</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/ryusei</string>
+        <key>PATH</key>
+        <string>/Users/ryusei/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PYTHONPATH</key>
+        <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>7</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/ryusei/Library/Logs/VideoPrecessing/english-world-daily.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ryusei/Library/Logs/VideoPrecessing/english-world-daily.launchd.log</string>
+</dict>
+</plist>

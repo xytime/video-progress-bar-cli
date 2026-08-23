@@ -11,6 +11,7 @@
 # | 1.3.0   | 2026-06-04 | Claude_Sonnet_4.6_Thinking_planning | 新增 🩺 开盘前体检 premarket_check 命令  |
 # | 1.4.0   | 2026-06-12 | Claude_Opus_4.8               | 新增 [4] 富途日本代理 (futu-mihomo) 速查板块  |
 # | 1.5.0   | 2026-06-17 | Claude_Opus_4.8               | 新增 [5] 共识中枢 Hub 启停板块 (launchd 永活)  |
+# | 1.6.0   | 2026-08-21 | Codex                         | 新增 wxvideo 本地字幕提取快捷指令              |
 # =======================================================================
 
 # 终端颜色代码
@@ -46,6 +47,11 @@ echo ""
 echo -e "  ${BOLD}流水线任务 (JOB):${RESET}"
 echo -e "    ${CYAN}./vpanel job run${RESET}     - 后台启动单次全自动管线 (抓取 ➡️ 打分 ➡️ 剪辑 ➡️ 发布)"
 echo -e "    ${CYAN}./vpanel job logs${RESET}    - 实时查看管线渲染及发布日志"
+echo ""
+echo -e "  ${BOLD}微信视频号字幕提取快捷指令:${RESET}"
+echo -e "    ${CYAN}wxvideo <微信视频号分享 URL>${RESET}  - 下载/转写并生成 TXT、SRT、VTT"
+echo -e "    ${CYAN}wxvideo <本地视频路径>${RESET}       - 直接处理本地视频，跳过视频号解析"
+echo -e "    ${DIM}可选参数: --summary / --ocr / --keep-video / --keep-audio${RESET}"
 echo ""
 echo -e "  ${BOLD}微信登录/Cookie 失效处理:${RESET}"
 echo -e "    ${RED}./.venv/bin/python scripts/wechat_uploader.py --login-only --no-headless${RESET}"
@@ -235,11 +241,12 @@ echo -e "    ${BLUE}alias batchtest${RESET}=${CYAN}\"python /path/to/OptionSense
 echo -e "    ${BLUE}alias ui${RESET}=${CYAN}\"/path/to/OptionSense/.../web_manager.sh\"${RESET}"
 echo -e "    ${BLUE}alias vhelp${RESET}=${CYAN}\"/path/to/Video-precessing/vhelp\"${RESET}"
 echo -e "    ${BLUE}alias vp${RESET}=${CYAN}\"/path/to/Video-precessing/vpanel\"${RESET}"
+echo -e "    ${BLUE}alias wxvideo${RESET}=${CYAN}\"/path/to/Video-precessing/wxvideo\"${RESET}"
 echo -e "    ${BLUE}live_engine()${RESET} { /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/live_engine_ctl.sh \"\$@\" }"
 echo -e "    ${BLUE}option()${RESET}      { python /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/trade_option.py \"\$@\" }"
 echo -e "    ${BLUE}hub()${RESET}         { bash /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/hub/hub_ctl.sh \"\$@\" }"
 
 echo -e "\n${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.5${RESET}"
+echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.6${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 echo ""

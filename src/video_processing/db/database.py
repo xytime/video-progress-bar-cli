@@ -6,6 +6,16 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
+| 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
+| 3.34.0  | 2026-08-21 | Codex                               | 新增英语世界短视频独立研究、候选与生产请求账本，不接管通用视频或发布状态机 |
+| 3.32.0  | 2026-08-21 | Codex                               | 每个 SQLite DAL 连接显式启用外键；新增进程已死的预提交任务有界回收，发布状态不参与回收 |
+| 3.31.0  | 2026-08-20 | Codex                               | Highlight Clip 增加独立渲染资产、人工审核账本与原子领取接口，源视频状态机保持不变 |
+| 3.30.0  | 2026-08-20 | Codex                               | 引入 Video Item/Highlight Clip 通用发布主体，视频号 post_id 账本可安全关联独立 Clip |
+| 3.29.0  | 2026-08-20 | Codex                               | 新增独立 Highlight Job 与候选切片账本；不复用或改写既有视频处理状态机与发布账本 |
+| 3.28.0  | 2026-08-20 | Codex                               | 视频号历史未解归档升级为永久墓碑；阻止既有提交证据被调度器重新写入活跃账本 |
+| 3.27.0  | 2026-08-20 | Codex                               | 视频号提交尝试记录不可变本地指纹；仅以同次提交捕获的原生 post_id 绑定和回查平台状态 |
+| 3.26.0  | 2026-08-20 | Codex                               | 视频号账本增加后台驳回/未找到终态、平台记录标识和回查时间，支持提交后状态自动终结 |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建数据库与DAL封装                                                         |
 | 2.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | v7.0 架构升级：黑名单表、Pid追踪、手动评分锁                                      |
 | 2.5.0   | 2026-05-27 | Gemini_3.5_Flash_planning           | 一变多升级：复合唯一约束(youtube_id, slice_index)、自关联外键级联删除与批量插入 |
@@ -166,6 +176,9 @@ class PipelineDB:
         因而必须在这里统一关闭，避免常驻仪表盘的轮询逐步耗尽句柄。
         """
         conn = sqlite3.connect(self.db_path, timeout=30.0)
+        # SQLite 的外键开关是连接级而不是数据库级；只在 _init_db() 打开会让
+        # 后续 DAL 连接静默失去 ON DELETE/ON UPDATE 约束。
+        conn.execute("PRAGMA foreign_keys=ON;")
         conn.row_factory = sqlite3.Row
         try:
             with conn:
@@ -400,6 +413,21 @@ class PipelineDB:
                 conn.commit()
 
 
+            # Score cache must not reuse updated_at: scoring itself updates that business
+            # timestamp and would otherwise make every minute look like fresh metadata.
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "score_input_signature" not in columns:
+                self._logger.info("[Migration] Adding score_input_signature to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN score_input_signature TEXT DEFAULT NULL;")
+                conn.commit()
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "score_computed_at" not in columns:
+                self._logger.info("[Migration] Adding score_computed_at to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN score_computed_at TIMESTAMP DEFAULT NULL;")
+                conn.commit()
+
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS blacklisted_videos (
@@ -424,44 +452,283 @@ class PipelineDB:
                 "ON wechat_deferred_recovery_claims(claimed_at)"
             )
 
+            # publication_subjects 对 Highlight Clip 有外键。在旧库首次升级时，这两个
+            # 父表尚不存在；必须先建父表，才能在同一事务内把历史视频号账本迁移到主体层。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS highlight_jobs (
+                    id TEXT PRIMARY KEY,
+                    source_video_id INTEGER NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    state TEXT NOT NULL DEFAULT 'QUEUED'
+                        CHECK(state IN ('QUEUED', 'ANALYZING', 'CANDIDATES_READY', 'RENDERING',
+                                      'ASSETS_READY', 'FAILED', 'CANCELED')),
+                    requested_by TEXT NOT NULL DEFAULT 'manual',
+                    max_clips INTEGER NOT NULL DEFAULT 3,
+                    min_duration_sec REAL NOT NULL DEFAULT 35,
+                    max_duration_sec REAL NOT NULL DEFAULT 90,
+                    workspace_path TEXT DEFAULT NULL,
+                    source_subtitle_sha256 TEXT DEFAULT NULL,
+                    plan_path TEXT DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source_video_id, version),
+                    FOREIGN KEY(source_video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS highlight_clips (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'CANDIDATE'
+                        CHECK(state IN ('CANDIDATE', 'SELECTED', 'RENDERING', 'ASSETS_READY',
+                                      'FAILED', 'CANCELED')),
+                    raw_start_ms INTEGER NOT NULL,
+                    raw_end_ms INTEGER NOT NULL,
+                    snapped_start_ms INTEGER DEFAULT NULL,
+                    snapped_end_ms INTEGER DEFAULT NULL,
+                    virality_score REAL NOT NULL,
+                    core_quote TEXT NOT NULL DEFAULT '',
+                    source_text TEXT NOT NULL DEFAULT '',
+                    score_reason TEXT NOT NULL DEFAULT '',
+                    selected INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(job_id, ordinal),
+                    FOREIGN KEY(job_id) REFERENCES highlight_jobs(id) ON DELETE CASCADE
+                )
+            ''')
+            # Highlight 产物只从独立 Clip 反查。即使源片已存在同名 cover/copy，
+            # 也不能把它们当作这个独立发布主体的资产或证据。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS highlight_clip_assets (
+                    clip_id TEXT PRIMARY KEY,
+                    source_video_path TEXT NOT NULL,
+                    source_video_sha256 TEXT NOT NULL,
+                    source_video_kind TEXT NOT NULL,
+                    rendered_video_path TEXT NOT NULL,
+                    title_path TEXT NOT NULL,
+                    copy_path TEXT NOT NULL,
+                    category_path TEXT DEFAULT NULL,
+                    cover_path TEXT NOT NULL,
+                    cover_provenance_path TEXT NOT NULL,
+                    artifact_manifest_path TEXT NOT NULL,
+                    evidence_dir TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(clip_id) REFERENCES highlight_clips(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS highlight_clip_publication_reviews (
+                    clip_id TEXT PRIMARY KEY,
+                    asset_manifest_sha256 TEXT NOT NULL,
+                    approved_by TEXT NOT NULL,
+                    approved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(clip_id) REFERENCES highlight_clips(id) ON DELETE CASCADE
+                )
+            ''')
+
+            # 发布主体是跨平台身份，不等同于既有 processed_videos 行。普通视频与
+            # Highlight Clip 都先取得稳定主体 ID，随后才允许写入平台账本；这避免把
+            # 多个 Highlight Clip 伪装成源片的 slice_index。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS publication_subjects (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL CHECK(kind IN ('VIDEO_ITEM', 'HIGHLIGHT_CLIP')),
+                    video_id INTEGER DEFAULT NULL UNIQUE,
+                    highlight_clip_id TEXT DEFAULT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CHECK(
+                        (kind = 'VIDEO_ITEM' AND video_id IS NOT NULL AND highlight_clip_id IS NULL)
+                        OR (kind = 'HIGHLIGHT_CLIP' AND video_id IS NULL AND highlight_clip_id IS NOT NULL)
+                    ),
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE,
+                    FOREIGN KEY(highlight_clip_id) REFERENCES highlight_clips(id) ON DELETE CASCADE
+                )
+            ''')
+
             # 视频号账本：提交截图只能证明平台受理，不能证明公开可见。
             # 不复用 processed_videos.updated_at（其会被后续评分刷新），以免把本地完成
-            # 误报为平台侧可见。每个视频/切片只保留一条最新确认结果。
+            # 误报为平台侧可见。每个发布主体只保留一条最新确认结果。
             cursor.execute(
                 "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'wechat_publications'"
             )
             wechat_schema = (cursor.fetchone() or [""])[0] or ""
-            if wechat_schema and "UNDER_REVIEW" not in wechat_schema:
-                self._logger.info("[Migration] Expanding wechat_publications state constraint for UNDER_REVIEW")
+            cursor.execute("PRAGMA table_info(wechat_publications)")
+            wechat_columns = {row[1] for row in cursor.fetchall()}
+            needs_wechat_state_migration = bool(
+                wechat_schema
+                and (
+                    "subject_id" not in wechat_columns
+                    or "VIDEO_ID INTEGER NOT NULL" in wechat_schema.upper()
+                    or any(
+                        state not in wechat_schema
+                        for state in (
+                            "UNDER_REVIEW", "REJECTED", "NOT_FOUND", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND",
+                        )
+                    )
+                )
+            )
+            if needs_wechat_state_migration:
+                self._logger.info("[Migration] Adding publication subject support to wechat_publications")
                 cursor.execute("DROP INDEX IF EXISTS idx_wechat_publications_state")
                 cursor.execute("ALTER TABLE wechat_publications RENAME TO wechat_publications_legacy")
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS wechat_publications (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    video_id INTEGER NOT NULL UNIQUE,
-                    state TEXT NOT NULL CHECK(state IN ('PUBLISHED', 'UNDER_REVIEW', 'UNCERTAIN')),
+                    video_id INTEGER DEFAULT NULL UNIQUE,
+                    subject_id TEXT NOT NULL UNIQUE,
+                    state TEXT NOT NULL CHECK(state IN ('PUBLISHED', 'UNDER_REVIEW', 'REJECTED', 'NOT_FOUND', 'UNCERTAIN', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND')),
                     evidence_path TEXT DEFAULT NULL,
                     confirmed_at TIMESTAMP DEFAULT NULL,
+                    platform_post_id TEXT DEFAULT NULL,
+                    platform_url TEXT DEFAULT NULL,
+                    last_reconciled_at TIMESTAMP DEFAULT NULL,
                     last_error_message TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT,
+                    FOREIGN KEY(subject_id) REFERENCES publication_subjects(id) ON DELETE RESTRICT
+                )
+            ''')
+            if needs_wechat_state_migration:
+                cursor.execute('''
+                    INSERT OR IGNORE INTO publication_subjects (id, kind, video_id)
+                    SELECT 'video:' || video_id, 'VIDEO_ITEM', video_id
+                    FROM wechat_publications_legacy
+                    WHERE video_id IS NOT NULL
+                ''')
+                platform_post_id_expr = "platform_post_id" if "platform_post_id" in wechat_columns else "NULL"
+                platform_url_expr = "platform_url" if "platform_url" in wechat_columns else "NULL"
+                last_reconciled_at_expr = (
+                    "last_reconciled_at" if "last_reconciled_at" in wechat_columns else "NULL"
+                )
+                subject_id_expr = (
+                    "COALESCE(subject_id, CASE WHEN video_id IS NOT NULL THEN 'video:' || video_id END)"
+                    if "subject_id" in wechat_columns else "'video:' || video_id"
+                )
+                cursor.execute('''
+                    INSERT INTO wechat_publications (
+                        id, video_id, subject_id, state, evidence_path, confirmed_at, platform_post_id,
+                        platform_url, last_reconciled_at, last_error_message, created_at, updated_at
+                    ) SELECT id, video_id, {subject_id}, state, evidence_path, confirmed_at, {platform_post_id},
+                        {platform_url}, {last_reconciled_at}, last_error_message, created_at, updated_at
+                    FROM wechat_publications_legacy
+                '''.format(
+                    subject_id=subject_id_expr,
+                    platform_post_id=platform_post_id_expr,
+                    platform_url=platform_url_expr,
+                    last_reconciled_at=last_reconciled_at_expr,
+                ))
+                cursor.execute("DROP TABLE wechat_publications_legacy")
+
+            cursor.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'wechat_submission_attempts'"
+            )
+            attempt_schema = (cursor.fetchone() or [""])[0] or ""
+            cursor.execute("PRAGMA table_info(wechat_submission_attempts)")
+            attempt_columns = {row[1] for row in cursor.fetchall()}
+            migrate_wechat_attempts = bool(
+                attempt_schema
+                and (
+                    "subject_id" not in attempt_columns
+                    or "VIDEO_ID INTEGER NOT NULL" in attempt_schema.upper()
+                )
+            )
+            if migrate_wechat_attempts:
+                cursor.execute("ALTER TABLE wechat_submission_attempts RENAME TO wechat_submission_attempts_legacy")
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS wechat_submission_attempts (
+                    attempt_id TEXT PRIMARY KEY,
+                    video_id INTEGER DEFAULT NULL,
+                    subject_id TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND')),
+                    final_title TEXT NOT NULL,
+                    final_title_sha256 TEXT DEFAULT NULL,
+                    video_sha256 TEXT DEFAULT NULL,
+                    cover_sha256 TEXT DEFAULT NULL,
+                    evidence_path TEXT DEFAULT NULL,
+                    platform_post_id TEXT DEFAULT NULL UNIQUE,
+                    platform_url TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    bound_at TIMESTAMP DEFAULT NULL,
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE,
+                    FOREIGN KEY(subject_id) REFERENCES publication_subjects(id) ON DELETE RESTRICT
+                )
+            ''')
+            if migrate_wechat_attempts:
+                cursor.execute('''
+                    INSERT OR IGNORE INTO publication_subjects (id, kind, video_id)
+                    SELECT 'video:' || video_id, 'VIDEO_ITEM', video_id
+                    FROM wechat_submission_attempts_legacy
+                    WHERE video_id IS NOT NULL
+                ''')
+                attempt_subject_expr = (
+                    "COALESCE(subject_id, CASE WHEN video_id IS NOT NULL THEN 'video:' || video_id END)"
+                    if "subject_id" in attempt_columns else "'video:' || video_id"
+                )
+                cursor.execute('''
+                    INSERT INTO wechat_submission_attempts (
+                        attempt_id, video_id, subject_id, state, final_title, final_title_sha256,
+                        video_sha256, cover_sha256, evidence_path, platform_post_id, platform_url,
+                        created_at, bound_at
+                    ) SELECT attempt_id, video_id, {subject_id}, state, final_title, final_title_sha256,
+                        video_sha256, cover_sha256, evidence_path, platform_post_id, platform_url,
+                        created_at, bound_at
+                    FROM wechat_submission_attempts_legacy
+                '''.format(subject_id=attempt_subject_expr))
+                cursor.execute("DROP TABLE wechat_submission_attempts_legacy")
+            cursor.execute("PRAGMA table_info(wechat_publications_historical_archive)")
+            wechat_archive_columns = {row[1] for row in cursor.fetchall()}
+            migrate_wechat_archive = bool(
+                wechat_archive_columns and "archive_id" not in wechat_archive_columns
+            )
+            if migrate_wechat_archive:
+                cursor.execute(
+                    "ALTER TABLE wechat_publications_historical_archive "
+                    "RENAME TO wechat_publications_historical_archive_legacy"
+                )
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS wechat_publications_historical_archive (
+                    archive_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    original_publication_id INTEGER,
+                    archived_at TIMESTAMP NOT NULL,
+                    archive_reason TEXT NOT NULL,
+                    video_id INTEGER NOT NULL,
+                    state TEXT NOT NULL,
+                    evidence_path TEXT DEFAULT NULL,
+                    confirmed_at TIMESTAMP DEFAULT NULL,
+                    platform_post_id TEXT DEFAULT NULL,
+                    platform_url TEXT DEFAULT NULL,
+                    last_reconciled_at TIMESTAMP DEFAULT NULL,
+                    last_error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT NULL,
+                    updated_at TIMESTAMP DEFAULT NULL,
+                    UNIQUE(video_id, evidence_path),
                     FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT
                 )
             ''')
-            if wechat_schema and "UNDER_REVIEW" not in wechat_schema:
+            if migrate_wechat_archive:
                 cursor.execute('''
-                    INSERT INTO wechat_publications (
-                        id, video_id, state, evidence_path, confirmed_at,
-                        last_error_message, created_at, updated_at
-                    )
-                    SELECT id, video_id, state, evidence_path, confirmed_at,
-                           last_error_message, created_at, updated_at
-                    FROM wechat_publications_legacy
+                    INSERT INTO wechat_publications_historical_archive (
+                        original_publication_id, archived_at, archive_reason, video_id, state,
+                        evidence_path, confirmed_at, platform_post_id, platform_url,
+                        last_reconciled_at, last_error_message, created_at, updated_at
+                    ) SELECT publication_id, archived_at, archive_reason, video_id, state,
+                        evidence_path, confirmed_at, platform_post_id, platform_url,
+                        last_reconciled_at, last_error_message, created_at, updated_at
+                    FROM wechat_publications_historical_archive_legacy
                 ''')
-                cursor.execute("DROP TABLE wechat_publications_legacy")
+                cursor.execute("DROP TABLE wechat_publications_historical_archive_legacy")
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_wechat_publications_state "
                 "ON wechat_publications(state, confirmed_at, updated_at)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wechat_submission_attempts_subject "
+                "ON wechat_submission_attempts(subject_id, created_at DESC)"
             )
 
             # 快手发布账本：仅“已发布”的成片摘要禁止再次投递；失败、临时上传和未发布草稿
@@ -756,6 +1023,112 @@ class PipelineDB:
             ''')
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_dubbing_jobs_source ON dubbing_jobs(source_video_id, updated_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_dubbing_utterances_job ON dubbing_utterances(job_id, ordinal)")
+
+            # Highlight 切片任务是对源视频的显式、独立派生，不允许改写原视频状态、原章节任务或发布账本。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS highlight_jobs (
+                    id TEXT PRIMARY KEY,
+                    source_video_id INTEGER NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    state TEXT NOT NULL DEFAULT 'QUEUED'
+                        CHECK(state IN ('QUEUED', 'ANALYZING', 'CANDIDATES_READY', 'RENDERING',
+                                      'ASSETS_READY', 'FAILED', 'CANCELED')),
+                    requested_by TEXT NOT NULL DEFAULT 'manual',
+                    max_clips INTEGER NOT NULL DEFAULT 3,
+                    min_duration_sec REAL NOT NULL DEFAULT 35,
+                    max_duration_sec REAL NOT NULL DEFAULT 90,
+                    workspace_path TEXT DEFAULT NULL,
+                    source_subtitle_sha256 TEXT DEFAULT NULL,
+                    plan_path TEXT DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source_video_id, version),
+                    FOREIGN KEY(source_video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS highlight_clips (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'CANDIDATE'
+                        CHECK(state IN ('CANDIDATE', 'SELECTED', 'RENDERING', 'ASSETS_READY',
+                                      'FAILED', 'CANCELED')),
+                    raw_start_ms INTEGER NOT NULL,
+                    raw_end_ms INTEGER NOT NULL,
+                    snapped_start_ms INTEGER DEFAULT NULL,
+                    snapped_end_ms INTEGER DEFAULT NULL,
+                    virality_score REAL NOT NULL,
+                    core_quote TEXT NOT NULL DEFAULT '',
+                    source_text TEXT NOT NULL DEFAULT '',
+                    score_reason TEXT NOT NULL DEFAULT '',
+                    selected INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(job_id, ordinal),
+                    FOREIGN KEY(job_id) REFERENCES highlight_jobs(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_highlight_jobs_source "
+                "ON highlight_jobs(source_video_id, updated_at DESC)"
+            )
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_highlight_jobs_one_active_source "
+                "ON highlight_jobs(source_video_id) WHERE state IN ('QUEUED', 'ANALYZING', 'RENDERING')"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_highlight_clips_job ON highlight_clips(job_id, ordinal)"
+            )
+
+            # 英语世界短视频的选题和生产请求是独立学习内容账本。它不把尚未审核的
+            # 外部来源塞进 processed_videos，也不创建发布主体或任何平台账本记录。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS english_world_jobs (
+                    id TEXT PRIMARY KEY,
+                    state TEXT NOT NULL DEFAULT 'RESEARCH_QUEUED'
+                        CHECK(state IN ('RESEARCH_QUEUED', 'RESEARCHING', 'CANDIDATES_READY',
+                                      'CANDIDATE_SELECTED', 'PRODUCTION_REQUESTED', 'FAILED', 'CANCELED')),
+                    requested_by TEXT NOT NULL DEFAULT 'manual',
+                    notification_target TEXT DEFAULT NULL,
+                    source_url TEXT DEFAULT NULL,
+                    selected_candidate_id TEXT DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS english_world_candidates (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT NOT NULL,
+                    ordinal INTEGER NOT NULL,
+                    source_url TEXT NOT NULL,
+                    youtube_id TEXT DEFAULT NULL,
+                    source_title TEXT NOT NULL,
+                    source_channel TEXT DEFAULT NULL,
+                    upload_date TEXT DEFAULT NULL,
+                    duration_sec INTEGER DEFAULT NULL,
+                    topic TEXT NOT NULL,
+                    learning_value TEXT NOT NULL,
+                    safety_note TEXT NOT NULL,
+                    caption_status TEXT NOT NULL,
+                    recommendation_score INTEGER NOT NULL DEFAULT 0,
+                    selected INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(job_id, ordinal),
+                    FOREIGN KEY(job_id) REFERENCES english_world_jobs(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_english_world_jobs_updated "
+                "ON english_world_jobs(updated_at DESC)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_english_world_candidates_job "
+                "ON english_world_candidates(job_id, ordinal)"
+            )
 
             # 发布后数据地基：日粒度指标只记录事实读数，不反推平台发布成功状态。
             cursor.execute('''
@@ -2088,13 +2461,20 @@ class PipelineDB:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_failed_videos_since(self, hours: int) -> List[Dict[str, Any]]:
-        """取最近 N 小时内可批量重试的失败任务（FAILED / LOGIN_REQUIRED）。
+        """取最近 N 小时内无视频号在途/成功账本的可批量重试失败任务。
         updated_at 用 SQLite datetime('now')(UTC) 比较，与 CURRENT_TIMESTAMP(UTC) 对齐，避免时区漂移。"""
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT youtube_id, slice_index, score, title, status FROM processed_videos "
-                "WHERE status IN ('FAILED', 'LOGIN_REQUIRED') AND updated_at >= datetime('now', ?) "
-                "ORDER BY updated_at DESC",
+                '''SELECT pv.youtube_id, pv.slice_index, pv.score, pv.title, pv.status
+                   FROM processed_videos pv
+                   WHERE pv.status IN ('FAILED', 'LOGIN_REQUIRED')
+                     AND pv.updated_at >= datetime('now', ?)
+                     AND NOT EXISTS (
+                        SELECT 1 FROM wechat_publications wp
+                        WHERE wp.video_id = pv.id
+                          AND wp.state IN ('PUBLISHED', 'UNDER_REVIEW', 'UNCERTAIN', 'REJECTED')
+                     )
+                   ORDER BY pv.updated_at DESC''',
                 (f"-{int(hours)} hours",)
             )
             return [dict(row) for row in cursor.fetchall()]
@@ -2155,8 +2535,16 @@ class PipelineDB:
             conn.execute("BEGIN IMMEDIATE")
             if daily_limit is not None:
                 claimed_today = conn.execute(
-                    "SELECT COUNT(*) FROM wechat_deferred_recovery_claims "
-                    "WHERE date(claimed_at, 'localtime') = date('now', 'localtime')"
+                    """
+                    SELECT COUNT(*)
+                    FROM wechat_deferred_recovery_claims claim
+                    WHERE date(claim.claimed_at, 'localtime') = date('now', 'localtime')
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM wechat_publications_historical_archive archive
+                        WHERE archive.video_id = claim.video_id
+                      )
+                    """
                 ).fetchone()[0]
                 if claimed_today >= daily_limit:
                     conn.commit()
@@ -2167,6 +2555,11 @@ class PipelineDB:
                 FROM processed_videos pv
                 {join_channel}
                 WHERE pv.status = 'WECHAT_DEFERRED'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM wechat_publications_historical_archive archive
+                    WHERE archive.video_id = pv.id
+                  )
                   AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
                   AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
                   {rule_filter}
@@ -2205,6 +2598,23 @@ class PipelineDB:
                 )
             conn.commit()
             return dict(candidate)
+
+    def release_deferred_wechat_recovery_claim(self, youtube_id: str, *, slice_index: int = 0) -> bool:
+        """释放尚未启动上传的延后恢复领取，供诊断/调度中止安全回滚额度。"""
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id, status FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video or video["status"] != "WECHAT_DEFERRED":
+                return False
+            cursor = conn.execute(
+                "DELETE FROM wechat_deferred_recovery_claims "
+                "WHERE video_id = ? AND date(claimed_at, 'localtime') = date('now', 'localtime')",
+                (video["id"],),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def set_source_subtitle_preflight(
         self,
@@ -2249,6 +2659,21 @@ class PipelineDB:
             )
             conn.commit()
 
+    @staticmethod
+    def _video_publication_subject_id(video_id: int) -> str:
+        """为既有视频行生成稳定的通用发布主体标识。"""
+        return f"video:{int(video_id)}"
+
+    def _ensure_video_publication_subject(self, conn: sqlite3.Connection, video_id: int) -> str:
+        """在当前事务内确保普通视频已有发布主体，不创建任何平台投递记录。"""
+        subject_id = self._video_publication_subject_id(video_id)
+        conn.execute(
+            '''INSERT OR IGNORE INTO publication_subjects (id, kind, video_id)
+               VALUES (?, 'VIDEO_ITEM', ?)''',
+            (subject_id, video_id),
+        )
+        return subject_id
+
     # --- WeChat Channels publication confirmation ledger DAL ---
     def record_wechat_publication_confirmation(
         self,
@@ -2258,13 +2683,25 @@ class PipelineDB:
         state: str = "PUBLISHED",
         error_message: Optional[str] = None,
         slice_index: int = 0,
+        platform_post_id: Optional[str] = None,
+        platform_url: Optional[str] = None,
+        reconciled: bool = False,
     ) -> Dict[str, Any]:
         """记录视频号提交/后台确认结果；同一视频只更新既有记录，不会触发投递。"""
         normalized_state = (state or "").upper()
-        if normalized_state not in {"PUBLISHED", "UNDER_REVIEW", "UNCERTAIN"}:
-            raise ValueError("Wechat publication state must be PUBLISHED, UNDER_REVIEW, or UNCERTAIN")
+        if normalized_state not in {
+            "PUBLISHED", "UNDER_REVIEW", "REJECTED", "NOT_FOUND", "UNCERTAIN", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND",
+        }:
+            raise ValueError(
+                "Wechat publication state must be PUBLISHED, UNDER_REVIEW, REJECTED, NOT_FOUND, "
+                "UNCERTAIN, or SUBMITTED_UNBOUND"
+            )
         clean_evidence_path = (evidence_path or "").strip() or None
-        if normalized_state in {"PUBLISHED", "UNDER_REVIEW"} and not clean_evidence_path:
+        clean_platform_post_id = (platform_post_id or "").strip() or None
+        clean_platform_url = (platform_url or "").strip() or None
+        if normalized_state == "SUBMITTED_BOUND" and not clean_platform_post_id:
+            raise ValueError("SUBMITTED_BOUND WeChat publication requires platform_post_id")
+        if normalized_state in {"PUBLISHED", "UNDER_REVIEW", "REJECTED", "NOT_FOUND"} and not clean_evidence_path:
             raise ValueError(f"{normalized_state} WeChat publication requires post-list evidence")
 
         with self.get_connection() as conn:
@@ -2274,11 +2711,14 @@ class PipelineDB:
             ).fetchone()
             if not video:
                 raise ValueError(f"Video not found: {youtube_id}#{slice_index}")
+            subject_id = self._ensure_video_publication_subject(conn, int(video["id"]))
             conn.execute(
                 '''
                 INSERT INTO wechat_publications (
-                    video_id, state, evidence_path, confirmed_at, last_error_message
-                ) VALUES (?, ?, ?, CASE WHEN ? = 'PUBLISHED' THEN CURRENT_TIMESTAMP ELSE NULL END, ?)
+                    video_id, subject_id, state, evidence_path, confirmed_at, platform_post_id, platform_url,
+                    last_reconciled_at, last_error_message
+                ) VALUES (?, ?, ?, ?, CASE WHEN ? = 'PUBLISHED' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                          ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END, ?)
                 ON CONFLICT(video_id) DO UPDATE SET
                     state = excluded.state,
                     evidence_path = COALESCE(excluded.evidence_path, wechat_publications.evidence_path),
@@ -2286,10 +2726,21 @@ class PipelineDB:
                         WHEN excluded.state = 'PUBLISHED' THEN CURRENT_TIMESTAMP
                         ELSE NULL
                     END,
+                    platform_post_id = COALESCE(excluded.platform_post_id, wechat_publications.platform_post_id),
+                    platform_url = COALESCE(excluded.platform_url, wechat_publications.platform_url),
+                    last_reconciled_at = CASE
+                        WHEN excluded.last_reconciled_at IS NOT NULL THEN excluded.last_reconciled_at
+                        ELSE wechat_publications.last_reconciled_at
+                    END,
                     last_error_message = excluded.last_error_message,
                     updated_at = CURRENT_TIMESTAMP
                 ''',
-                (video["id"], normalized_state, clean_evidence_path, normalized_state, error_message),
+                (
+                    video["id"], subject_id, normalized_state, clean_evidence_path, normalized_state,
+                    clean_platform_post_id,
+                    clean_platform_url,
+                    bool(reconciled), error_message,
+                ),
             )
             conn.commit()
             row = conn.execute(
@@ -2298,6 +2749,287 @@ class PipelineDB:
             if not row:
                 raise RuntimeError("Failed to record WeChat publication confirmation")
             return dict(row)
+
+    def record_wechat_submission_attempt(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        evidence_path: Optional[str] = None,
+        final_title: Optional[str] = None,
+        video_sha256: Optional[str] = None,
+        cover_sha256: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """记录一次已提交但尚未取得视频号原生 ID 的不可变尝试，不确认平台状态。"""
+        import hashlib
+        from uuid import uuid4
+
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id, title, zh_title FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError(f"Video not found: {youtube_id}#{slice_index}")
+            subject_id = self._ensure_video_publication_subject(conn, int(video["id"]))
+            clean_evidence_path = (evidence_path or "").strip() or None
+            if clean_evidence_path:
+                existing = conn.execute(
+                    "SELECT * FROM wechat_submission_attempts WHERE evidence_path = ? ORDER BY created_at DESC LIMIT 1",
+                    (clean_evidence_path,),
+                ).fetchone()
+                if existing:
+                    return dict(existing)
+            title = (final_title or video["zh_title"] or video["title"] or youtube_id).strip()
+            attempt_id = uuid4().hex
+            conn.execute(
+                '''
+                INSERT INTO wechat_submission_attempts (
+                    attempt_id, video_id, subject_id, state, final_title, final_title_sha256,
+                    video_sha256, cover_sha256, evidence_path
+                ) VALUES (?, ?, ?, 'SUBMITTED_UNBOUND', ?, ?, ?, ?, ?)
+                ''',
+                (
+                    attempt_id, video["id"], subject_id,
+                    title,
+                    hashlib.sha256(title.encode("utf-8")).hexdigest(),
+                    (video_sha256 or "").strip() or None,
+                    (cover_sha256 or "").strip() or None,
+                    clean_evidence_path,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM wechat_submission_attempts WHERE attempt_id = ?", (attempt_id,)
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to record WeChat submission attempt")
+            return dict(row)
+
+    def record_wechat_publication_confirmation_for_subject(
+        self,
+        subject_id: str,
+        *,
+        evidence_path: Optional[str],
+        state: str = "PUBLISHED",
+        error_message: Optional[str] = None,
+        platform_post_id: Optional[str] = None,
+        platform_url: Optional[str] = None,
+        reconciled: bool = False,
+    ) -> Dict[str, Any]:
+        """按通用发布主体记录视频号状态，供 Highlight Clip 复用既有 post_id 审核契约。"""
+        normalized_state = (state or "").upper()
+        supported_states = {
+            "PUBLISHED", "UNDER_REVIEW", "REJECTED", "NOT_FOUND", "UNCERTAIN",
+            "SUBMITTED_UNBOUND", "SUBMITTED_BOUND",
+        }
+        if normalized_state not in supported_states:
+            raise ValueError("Unsupported WeChat publication state")
+        clean_subject_id = (subject_id or "").strip()
+        clean_evidence_path = (evidence_path or "").strip() or None
+        clean_platform_post_id = (platform_post_id or "").strip() or None
+        clean_platform_url = (platform_url or "").strip() or None
+        if not clean_subject_id:
+            raise ValueError("publication subject id is required")
+        if normalized_state == "SUBMITTED_BOUND" and not clean_platform_post_id:
+            raise ValueError("SUBMITTED_BOUND WeChat publication requires platform_post_id")
+        if normalized_state in {"PUBLISHED", "UNDER_REVIEW", "REJECTED", "NOT_FOUND"} and not clean_evidence_path:
+            raise ValueError(f"{normalized_state} WeChat publication requires post-list evidence")
+        with self.get_connection() as conn:
+            subject = conn.execute(
+                "SELECT id, video_id FROM publication_subjects WHERE id = ?", (clean_subject_id,)
+            ).fetchone()
+            if not subject:
+                raise ValueError(f"Publication subject not found: {clean_subject_id}")
+            conn.execute(
+                '''INSERT INTO wechat_publications (
+                       video_id, subject_id, state, evidence_path, confirmed_at, platform_post_id, platform_url,
+                       last_reconciled_at, last_error_message
+                   ) VALUES (?, ?, ?, ?, CASE WHEN ? = 'PUBLISHED' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                             ?, ?, CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END, ?)
+                   ON CONFLICT(subject_id) DO UPDATE SET
+                       state = excluded.state,
+                       evidence_path = COALESCE(excluded.evidence_path, wechat_publications.evidence_path),
+                       confirmed_at = CASE WHEN excluded.state = 'PUBLISHED' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                       platform_post_id = COALESCE(excluded.platform_post_id, wechat_publications.platform_post_id),
+                       platform_url = COALESCE(excluded.platform_url, wechat_publications.platform_url),
+                       last_reconciled_at = CASE
+                           WHEN excluded.last_reconciled_at IS NOT NULL THEN excluded.last_reconciled_at
+                           ELSE wechat_publications.last_reconciled_at
+                       END,
+                       last_error_message = excluded.last_error_message,
+                       updated_at = CURRENT_TIMESTAMP''',
+                (
+                    subject["video_id"], clean_subject_id, normalized_state, clean_evidence_path,
+                    normalized_state, clean_platform_post_id, clean_platform_url, bool(reconciled), error_message,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM wechat_publications WHERE subject_id = ?", (clean_subject_id,)
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to record WeChat publication confirmation")
+            return dict(row)
+
+    def record_wechat_submission_attempt_for_subject(
+        self,
+        subject_id: str,
+        *,
+        final_title: str,
+        evidence_path: Optional[str] = None,
+        video_sha256: Optional[str] = None,
+        cover_sha256: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """为通用发布主体创建不可变提交尝试；绑定原生 post_id 前绝不宣称已发布。"""
+        import hashlib
+        from uuid import uuid4
+
+        clean_subject_id = (subject_id or "").strip()
+        title = (final_title or "").strip()
+        if not clean_subject_id:
+            raise ValueError("publication subject id is required")
+        if not title:
+            raise ValueError("final_title is required for a WeChat submission attempt")
+        clean_evidence_path = (evidence_path or "").strip() or None
+        with self.get_connection() as conn:
+            subject = conn.execute(
+                "SELECT id, video_id FROM publication_subjects WHERE id = ?", (clean_subject_id,)
+            ).fetchone()
+            if not subject:
+                raise ValueError(f"Publication subject not found: {clean_subject_id}")
+            if clean_evidence_path:
+                existing = conn.execute(
+                    "SELECT * FROM wechat_submission_attempts WHERE evidence_path = ? ORDER BY created_at DESC LIMIT 1",
+                    (clean_evidence_path,),
+                ).fetchone()
+                if existing:
+                    return dict(existing)
+            attempt_id = uuid4().hex
+            conn.execute(
+                '''INSERT INTO wechat_submission_attempts (
+                       attempt_id, video_id, subject_id, state, final_title, final_title_sha256,
+                       video_sha256, cover_sha256, evidence_path
+                   ) VALUES (?, ?, ?, 'SUBMITTED_UNBOUND', ?, ?, ?, ?, ?)''',
+                (
+                    attempt_id, subject["video_id"], clean_subject_id, title,
+                    hashlib.sha256(title.encode("utf-8")).hexdigest(),
+                    (video_sha256 or "").strip() or None,
+                    (cover_sha256 or "").strip() or None,
+                    clean_evidence_path,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM wechat_submission_attempts WHERE attempt_id = ?", (attempt_id,)
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to record WeChat submission attempt")
+            return dict(row)
+
+    def get_wechat_publication_for_subject(self, subject_id: str) -> Optional[Dict[str, Any]]:
+        """按发布主体读取视频号账本；供独立 Clip 的后续按 ID 平台回查使用。"""
+        clean_subject_id = (subject_id or "").strip()
+        if not clean_subject_id:
+            return None
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''SELECT wp.*, ps.kind AS subject_kind, ps.highlight_clip_id
+                   FROM wechat_publications wp
+                   JOIN publication_subjects ps ON ps.id = wp.subject_id
+                   WHERE wp.subject_id = ?''',
+                (clean_subject_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def bind_wechat_submission_attempt_platform_id(
+        self, attempt_id: str, *, platform_post_id: str, platform_url: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """仅在取得平台原生唯一 ID 后绑定提交尝试；不由标题或时间推断。"""
+        clean_post_id = (platform_post_id or "").strip()
+        if not clean_post_id:
+            raise ValueError("platform_post_id is required for an exact WeChat binding")
+        with self.get_connection() as conn:
+            existing = conn.execute(
+                "SELECT attempt_id FROM wechat_submission_attempts WHERE platform_post_id = ?",
+                (clean_post_id,),
+            ).fetchone()
+            if existing and existing["attempt_id"] != attempt_id:
+                raise ValueError("platform_post_id is already bound to another submission attempt")
+            cursor = conn.execute(
+                '''
+                UPDATE wechat_submission_attempts
+                SET state = 'PLATFORM_ID_BOUND', platform_post_id = ?, platform_url = ?,
+                    bound_at = CURRENT_TIMESTAMP
+                WHERE attempt_id = ?
+                ''',
+                (clean_post_id, (platform_url or "").strip() or None, attempt_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"Wechat submission attempt not found: {attempt_id}")
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM wechat_submission_attempts WHERE attempt_id = ?", (attempt_id,)
+            ).fetchone()
+            return dict(row)
+
+    def is_wechat_publication_historically_archived(
+        self, youtube_id: str, *, slice_index: int = 0
+    ) -> bool:
+        """历史未解墓碑存在时，禁止任何调度路径重新生成活跃视频号账本。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''
+                SELECT 1
+                FROM wechat_publications_historical_archive archive
+                JOIN processed_videos pv ON pv.id = archive.video_id
+                WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                LIMIT 1
+                ''',
+                (youtube_id, slice_index),
+            ).fetchone()
+            return row is not None
+
+    def archive_wechat_publication_as_historical_unresolved(
+        self, youtube_id: str, *, reason: str, slice_index: int = 0
+    ) -> bool:
+        """无损归档无平台主键的历史记录，并移除活跃账本避免误报待平台确认。"""
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError(f"Video not found: {youtube_id}#{slice_index}")
+            publication = conn.execute(
+                "SELECT * FROM wechat_publications WHERE video_id = ?", (video["id"],)
+            ).fetchone()
+            if not publication:
+                return False
+            conn.execute(
+                '''
+                INSERT OR IGNORE INTO wechat_publications_historical_archive (
+                    original_publication_id, archived_at, archive_reason, video_id, state,
+                    evidence_path, confirmed_at, platform_post_id, platform_url,
+                    last_reconciled_at, last_error_message, created_at, updated_at
+                ) VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    publication["id"], reason, video["id"], publication["state"],
+                    publication["evidence_path"], publication["confirmed_at"],
+                    publication["platform_post_id"], publication["platform_url"],
+                    publication["last_reconciled_at"], publication["last_error_message"],
+                    publication["created_at"], publication["updated_at"],
+                ),
+            )
+            conn.execute("DELETE FROM wechat_publications WHERE video_id = ?", (video["id"],))
+            conn.execute(
+                "UPDATE processed_videos SET status = 'HISTORICAL_UNRESOLVED', updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (video["id"],),
+            )
+            conn.commit()
+            return True
 
     def get_wechat_publication(
         self, youtube_id: str, *, slice_index: int = 0
@@ -2314,6 +3046,27 @@ class PipelineDB:
                 (youtube_id, slice_index),
             ).fetchone()
             return dict(row) if row else None
+
+    def get_wechat_publications_by_states(self, states: Collection[str]) -> List[Dict[str, Any]]:
+        """按状态返回视频号账本及原视频标识，供作品管理页只读回查。"""
+        supported = {
+            "PUBLISHED", "UNDER_REVIEW", "REJECTED", "NOT_FOUND", "UNCERTAIN",
+            "SUBMITTED_UNBOUND", "SUBMITTED_BOUND",
+        }
+        normalized_states = [str(state or "").upper() for state in states]
+        if not normalized_states or any(state not in supported for state in normalized_states):
+            raise ValueError("states must contain supported WeChat publication states")
+        placeholders = ", ".join("?" for _ in normalized_states)
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f'''SELECT wp.*, pv.youtube_id, pv.slice_index
+                    FROM wechat_publications wp
+                    JOIN processed_videos pv ON pv.id = wp.video_id
+                    WHERE wp.state IN ({placeholders})
+                    ORDER BY wp.updated_at ASC, wp.id ASC''',
+                normalized_states,
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def purge_stale_tasks(self, stale_hours: int = 2) -> int:
         """清洗器：将卡在非终态（如 DOWNLOADING）超过 N 小时的任务重置回 PENDING"""
@@ -2352,14 +3105,77 @@ class PipelineDB:
             )
             return [dict(row) for row in cursor.fetchall()]
 
+    def get_stale_pre_submission_processing_videos(
+        self, stale_minutes: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """返回超时的预提交任务候选；发布阶段绝不由此路径回收。"""
+        states = ("DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "AI_COVER_PENDING")
+        placeholders = ", ".join("?" for _ in states)
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""SELECT * FROM processed_videos
+                    WHERE status IN ({placeholders})
+                      AND updated_at < datetime('now', ?)
+                    ORDER BY updated_at ASC""",
+                (*states, f"-{max(1, int(stale_minutes))} minutes"),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def recover_orphaned_pre_submission_task(
+        self,
+        youtube_id: str,
+        *,
+        expected_process_pid: Optional[int],
+        error_msg: str,
+        slice_index: int = 0,
+        max_retry_count: int = 2,
+    ) -> Optional[str]:
+        """有界恢复已死的下载/文案/转录任务，返回 PENDING、FAILED 或 None。
+
+        ``expected_process_pid`` 使进程存活检查与状态写入形成 compare-and-set：
+        若新的子进程已接管任务，此次孤儿回收不会覆盖它。发布阶段没有资格进入此方法。
+        """
+        recoverable_states = ("DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "AI_COVER_PENDING")
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT status, retry_count, process_pid FROM processed_videos
+                   WHERE youtube_id = ? AND slice_index = ?""",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not row or row["status"] not in recoverable_states:
+                return None
+            if row["process_pid"] != expected_process_pid:
+                return None
+
+            retries = int(row["retry_count"] or 0)
+            retry_limit = max(1, int(max_retry_count))
+            next_status = "PENDING" if retries < retry_limit else "FAILED"
+            next_retry_count = retries + 1 if next_status == "PENDING" else retries
+            cursor = conn.execute(
+                """UPDATE processed_videos
+                   SET status = ?, retry_count = ?, process_pid = NULL, error_msg = ?,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE youtube_id = ? AND slice_index = ? AND status = ?
+                     AND process_pid IS ?""",
+                (
+                    next_status, next_retry_count, error_msg, youtube_id, slice_index,
+                    row["status"], expected_process_pid,
+                ),
+            )
+            conn.commit()
+            return next_status if cursor.rowcount == 1 else None
+
     def update_video_score(self, youtube_id: str, score: int, force: bool = False, slice_index: int = 0) -> None:
         """更新特定切片的评分，支持评分锁保护。"""
         # [Gemini_3.5_Flash_planning] 定位增加 slice_index = ?
         with self.get_connection() as conn:
             row = conn.execute(
-                "SELECT channel_id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                "SELECT channel_id, view_count, like_count FROM processed_videos "
+                "WHERE youtube_id = ? AND slice_index = ?",
                 (youtube_id, slice_index),
             ).fetchone()
+            if not row:
+                return
             if row:
                 capped_score = cap_channel_score(row["channel_id"], score)
                 if capped_score != score:
@@ -2375,15 +3191,55 @@ class PipelineDB:
                     (score, youtube_id, slice_index)
                 )
             else:
+                score_input_signature = self._score_input_signature(
+                    row["channel_id"], row["view_count"], row["like_count"],
+                )
                 cursor = conn.execute(
-                    "UPDATE processed_videos SET score = ?, updated_at = CURRENT_TIMESTAMP "
+                    "UPDATE processed_videos SET score = ?, score_input_signature = ?, "
+                    "score_computed_at = CURRENT_TIMESTAMP "
                     "WHERE youtube_id = ? AND slice_index = ? AND is_manually_scored = 0",
-                    (score, youtube_id, slice_index)
+                    (score, score_input_signature, youtube_id, slice_index)
                 )
                 if cursor.rowcount == 0:
                     self._logger.info(f"[ScoreLock] Skipped auto-score for manually-locked video: {youtube_id} (slice {slice_index})")
                     return
             conn.commit()
+
+    @staticmethod
+    def _score_input_signature(
+        channel_id: Optional[str], view_count: Optional[int], like_count: Optional[int],
+    ) -> str:
+        """评分只依赖频道规则、播放量和点赞量；字段变化即失效缓存。"""
+        return f"{channel_id or ''}:{max(0, int(view_count or 0))}:{max(0, int(like_count or 0))}"
+
+    def get_pending_videos_requiring_score_refresh(
+        self, refresh_interval_minutes: int,
+    ) -> List[Dict[str, Any]]:
+        """取指标变更或评分缓存到期的自动候选，不把评分动作当成内容更新。"""
+        safe_interval = max(0, int(refresh_interval_minutes))
+        current_signature = (
+            "COALESCE(pv.channel_id, '') || ':' || "
+            "CAST(COALESCE(pv.view_count, 0) AS TEXT) || ':' || "
+            "CAST(COALESCE(pv.like_count, 0) AS TEXT)"
+        )
+        query = f"""
+            SELECT pv.*
+            FROM processed_videos pv
+            WHERE pv.status = 'PENDING'
+              AND pv.score < 75
+              AND IFNULL(pv.source, '') != 'DISCOVERY'
+              AND IFNULL(pv.is_manually_scored, 0) = 0
+              AND (
+                    pv.score_input_signature IS NULL
+                 OR pv.score_input_signature != ({current_signature})
+                 OR pv.score_computed_at IS NULL
+                 OR pv.score_computed_at <= datetime('now', ?)
+              )
+            ORDER BY pv.created_at ASC, pv.id ASC
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(query, (f"-{safe_interval} minutes",))
+            return [dict(row) for row in cursor.fetchall()]
 
     def enforce_channel_score_caps(self) -> int:
         """将历史记录收敛到当前频道评分上限，不改变状态、锁分标记或更新时间。"""
@@ -2883,17 +3739,28 @@ class PipelineDB:
                  (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) > 0)
             )"""
         elif tab == 'active':
-            # 仅展示实际加工中的任务；UNDER_REVIEW 已提交平台、等待确认，属于 review tab。
+            # 仅展示实际加工中的任务；平台待确认和待微信恢复均有独立队列。
             condition = """(
-                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'WECHAT_DEFERRED') AND pv.parent_id IS NULL)
+                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING') AND pv.parent_id IS NULL)
                 OR
                 (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
                  (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
                  (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0)
             )"""
+        elif tab == 'wechat_deferred':
+            # 暂停期间已完成本地加工、等待限额恢复提交的视频号专属队列；尚未调用上传器。
+            # Archive tombstones are permanent replay blocks, not recoverable work.
+            condition = """pv.status = 'WECHAT_DEFERRED' AND pv.parent_id IS NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM wechat_publications_historical_archive archive
+                    WHERE archive.video_id = pv.id
+                )"""
         elif tab == 'review':
             # 视频号已受理但未获公开可见证明；不可重试、不可自动重传。
-            condition = "pv.status = 'UNDER_REVIEW' AND pv.parent_id IS NULL"
+            condition = (
+                "pv.status IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN') "
+                "AND pv.parent_id IS NULL"
+            )
         elif tab == 'queue':
             condition = "pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL"
         elif tab == 'high_likes':
@@ -3097,13 +3964,17 @@ class PipelineDB:
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 AND IFNULL(pv.source,'') != 'DISCOVERY' THEN 1 ELSE 0 END) as waitlist,
                     SUM(CASE WHEN pv.status = 'PENDING' AND pv.score >= 75 THEN 1 ELSE 0 END) as queue,
                     SUM(CASE WHEN (
-                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING', 'WECHAT_DEFERRED')
+                        pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING')
                         OR
                         (pv.status = 'SEGMENTED' AND 
                          (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
                          (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0)
                     ) THEN 1 ELSE 0 END) as active,
-                    SUM(CASE WHEN pv.status = 'UNDER_REVIEW' THEN 1 ELSE 0 END) as review,
+                    SUM(CASE WHEN pv.status = 'WECHAT_DEFERRED' AND NOT EXISTS (
+                        SELECT 1 FROM wechat_publications_historical_archive archive
+                        WHERE archive.video_id = pv.id
+                    ) THEN 1 ELSE 0 END) as wechat_deferred,
+                    SUM(CASE WHEN pv.status IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN') THEN 1 ELSE 0 END) as review,
                     SUM(CASE WHEN (
                         pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')
                         OR
@@ -3126,12 +3997,13 @@ class PipelineDB:
                     "waitlist": row["waitlist"] or 0,
                     "queue": row["queue"] or 0,
                     "active": row["active"] or 0,
+                    "wechat_deferred": row["wechat_deferred"] or 0,
                     "review": row["review"] or 0,
                     "completed": row["completed"] or 0,
                     "error": row["error"] or 0,
                     "high_likes": row["high_likes"] or 0,
                 }
-            return {"waitlist": 0, "queue": 0, "active": 0, "review": 0, "completed": 0, "error": 0, "high_likes": 0}
+            return {"waitlist": 0, "queue": 0, "active": 0, "wechat_deferred": 0, "review": 0, "completed": 0, "error": 0, "high_likes": 0}
 
     def delete_channel(self, channel_id: str) -> bool:
         with self.get_connection() as conn:
@@ -3165,6 +4037,716 @@ class PipelineDB:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    # --- Generic publication subjects (video item / Highlight Clip) ---
+    @staticmethod
+    def _highlight_clip_publication_subject_id(clip_id: str) -> str:
+        """为独立 Highlight Clip 生成不可与原视频/章节混淆的发布主体标识。"""
+        return f"highlight_clip:{clip_id}"
+
+    def get_publication_subject(self, subject_id: str) -> Optional[Dict[str, Any]]:
+        """读取一个通用发布主体及其可追溯源标识；不读取或推断平台状态。"""
+        clean_subject_id = (subject_id or "").strip()
+        if not clean_subject_id:
+            return None
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''SELECT ps.*, pv.youtube_id, pv.slice_index,
+                          hc.job_id AS highlight_job_id, hc.ordinal AS highlight_ordinal,
+                          source.youtube_id AS source_youtube_id
+                   FROM publication_subjects ps
+                   LEFT JOIN processed_videos pv ON pv.id = ps.video_id
+                   LEFT JOIN highlight_clips hc ON hc.id = ps.highlight_clip_id
+                   LEFT JOIN highlight_jobs hj ON hj.id = hc.job_id
+                   LEFT JOIN processed_videos source ON source.id = hj.source_video_id
+                   WHERE ps.id = ?''',
+                (clean_subject_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def select_highlight_clip_for_publication(self, clip_id: str) -> Dict[str, Any]:
+        """人工选定一个候选并创建发布主体；只改变 Highlight 自身，绝不渲染或发布。"""
+        clean_clip_id = (clip_id or "").strip()
+        if not clean_clip_id:
+            raise ValueError("highlight clip id is required")
+        with self.get_connection() as conn:
+            clip = conn.execute(
+                '''SELECT hc.*, hj.state AS job_state, pv.youtube_id AS source_youtube_id
+                   FROM highlight_clips hc
+                   JOIN highlight_jobs hj ON hj.id = hc.job_id
+                   JOIN processed_videos pv ON pv.id = hj.source_video_id
+                   WHERE hc.id = ?''',
+                (clean_clip_id,),
+            ).fetchone()
+            if not clip:
+                raise ValueError("Highlight Clip does not exist")
+            if clip["job_state"] != "CANDIDATES_READY":
+                raise ValueError("Highlight Job is not ready for clip selection")
+            if clip["state"] not in {"CANDIDATE", "SELECTED"}:
+                raise ValueError("Highlight Clip cannot be selected from its current state")
+            if clip["state"] == "CANDIDATE":
+                conn.execute(
+                    "UPDATE highlight_clips SET selected = 1, state = 'SELECTED', updated_at = CURRENT_TIMESTAMP "
+                    "WHERE id = ? AND state = 'CANDIDATE'",
+                    (clean_clip_id,),
+                )
+            subject_id = self._highlight_clip_publication_subject_id(clean_clip_id)
+            conn.execute(
+                '''INSERT OR IGNORE INTO publication_subjects (id, kind, highlight_clip_id)
+                   VALUES (?, 'HIGHLIGHT_CLIP', ?)''',
+                (subject_id, clean_clip_id),
+            )
+            conn.commit()
+            selected = conn.execute(
+                '''SELECT hc.*, ? AS publication_subject_id
+                   FROM highlight_clips hc WHERE hc.id = ?''',
+                (subject_id, clean_clip_id),
+            ).fetchone()
+            if not selected:
+                raise RuntimeError("Failed to select Highlight Clip")
+            return dict(selected)
+
+    def claim_highlight_clip_for_rendering(self, clip_id: str) -> Optional[Dict[str, Any]]:
+        """原子领取已选 Highlight Clip 的本地渲染，不领取源视频管线任务。"""
+        clean_clip_id = (clip_id or "").strip()
+        if not clean_clip_id:
+            raise ValueError("highlight clip id is required")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE highlight_clips
+                   SET state = 'RENDERING', updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'SELECTED' AND selected = 1""",
+                (clean_clip_id,),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute(
+                '''SELECT hc.*, hj.workspace_path, hj.state AS job_state, hj.source_video_id,
+                          pv.youtube_id AS source_youtube_id, pv.title AS source_title,
+                          pv.zh_title AS source_zh_title
+                   FROM highlight_clips hc
+                   JOIN highlight_jobs hj ON hj.id = hc.job_id
+                   JOIN processed_videos pv ON pv.id = hj.source_video_id
+                   WHERE hc.id = ?''',
+                (clean_clip_id,),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to load claimed Highlight Clip")
+            conn.execute(
+                """UPDATE highlight_jobs
+                   SET state = 'RENDERING', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'CANDIDATES_READY'""",
+                (row["job_id"],),
+            )
+            conn.commit()
+            return dict(row)
+
+    def complete_highlight_clip_rendering(
+        self,
+        clip_id: str,
+        *,
+        source_video_path: str,
+        source_video_sha256: str,
+        source_video_kind: str,
+        rendered_video_path: str,
+        title_path: str,
+        copy_path: str,
+        category_path: Optional[str],
+        cover_path: str,
+        cover_provenance_path: str,
+        artifact_manifest_path: str,
+        evidence_dir: str,
+    ) -> Dict[str, Any]:
+        """保存一个 Clip 的完整本地资产，并只把该 Clip 置为待发布前就绪。"""
+        required = {
+            "source_video_path": source_video_path,
+            "source_video_sha256": source_video_sha256,
+            "source_video_kind": source_video_kind,
+            "rendered_video_path": rendered_video_path,
+            "title_path": title_path,
+            "copy_path": copy_path,
+            "cover_path": cover_path,
+            "cover_provenance_path": cover_provenance_path,
+            "artifact_manifest_path": artifact_manifest_path,
+            "evidence_dir": evidence_dir,
+        }
+        if any(not str(value or "").strip() for value in required.values()):
+            raise ValueError("Complete Highlight rendering requires all mandatory artifact paths")
+        clean_clip_id = (clip_id or "").strip()
+        with self.get_connection() as conn:
+            clip = conn.execute(
+                "SELECT job_id FROM highlight_clips WHERE id = ? AND state = 'RENDERING'",
+                (clean_clip_id,),
+            ).fetchone()
+            if not clip:
+                raise ValueError("Highlight Clip is not being rendered")
+            conn.execute(
+                '''INSERT INTO highlight_clip_assets (
+                       clip_id, source_video_path, source_video_sha256, source_video_kind,
+                       rendered_video_path, title_path, copy_path, category_path, cover_path,
+                       cover_provenance_path, artifact_manifest_path, evidence_dir
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(clip_id) DO UPDATE SET
+                       source_video_path = excluded.source_video_path,
+                       source_video_sha256 = excluded.source_video_sha256,
+                       source_video_kind = excluded.source_video_kind,
+                       rendered_video_path = excluded.rendered_video_path,
+                       title_path = excluded.title_path,
+                       copy_path = excluded.copy_path,
+                       category_path = excluded.category_path,
+                       cover_path = excluded.cover_path,
+                       cover_provenance_path = excluded.cover_provenance_path,
+                       artifact_manifest_path = excluded.artifact_manifest_path,
+                       evidence_dir = excluded.evidence_dir,
+                       updated_at = CURRENT_TIMESTAMP''',
+                (
+                    clean_clip_id, source_video_path, source_video_sha256, source_video_kind,
+                    rendered_video_path, title_path, copy_path, category_path, cover_path,
+                    cover_provenance_path, artifact_manifest_path, evidence_dir,
+                ),
+            )
+            cursor = conn.execute(
+                """UPDATE highlight_clips
+                   SET state = 'ASSETS_READY', updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'RENDERING'""",
+                (clean_clip_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Highlight Clip state changed before assets were recorded")
+            remaining = conn.execute(
+                """SELECT 1 FROM highlight_clips
+                   WHERE job_id = ? AND selected = 1 AND state IN ('SELECTED', 'RENDERING')
+                   LIMIT 1""",
+                (clip["job_id"],),
+            ).fetchone()
+            conn.execute(
+                """UPDATE highlight_jobs
+                   SET state = ?, error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'RENDERING'""",
+                ("RENDERING" if remaining else "ASSETS_READY", clip["job_id"]),
+            )
+            conn.commit()
+            row = conn.execute(
+                '''SELECT hc.*, ps.id AS publication_subject_id, hca.rendered_video_path,
+                          hca.title_path, hca.copy_path, hca.category_path, hca.cover_path,
+                          hca.cover_provenance_path, hca.artifact_manifest_path, hca.evidence_dir,
+                          hca.source_video_path, hca.source_video_kind
+                   FROM highlight_clips hc
+                   LEFT JOIN publication_subjects ps ON ps.highlight_clip_id = hc.id
+                   LEFT JOIN highlight_clip_assets hca ON hca.clip_id = hc.id
+                   WHERE hc.id = ?''',
+                (clean_clip_id,),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to load rendered Highlight Clip")
+            return dict(row)
+
+    def fail_highlight_clip_rendering(self, clip_id: str, reason: str) -> None:
+        """记录 Highlight 本地资产失败；源视频、源任务和平台账本均保持不变。"""
+        clean_clip_id = (clip_id or "").strip()
+        with self.get_connection() as conn:
+            clip = conn.execute(
+                "SELECT job_id FROM highlight_clips WHERE id = ? AND state = 'RENDERING'",
+                (clean_clip_id,),
+            ).fetchone()
+            if not clip:
+                return
+            conn.execute(
+                """UPDATE highlight_clips SET state = 'FAILED', updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'RENDERING'""",
+                (clean_clip_id,),
+            )
+            conn.execute(
+                """UPDATE highlight_jobs
+                   SET state = 'FAILED', error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'RENDERING'""",
+                ((reason or "Highlight rendering failed")[:500], clip["job_id"]),
+            )
+            conn.commit()
+
+    def retry_failed_highlight_clip_rendering(self, clip_id: str) -> bool:
+        """仅把未提交平台的本地渲染失败退回已选定，供修复后显式重试。"""
+        clean_clip_id = (clip_id or "").strip()
+        with self.get_connection() as conn:
+            clip = conn.execute(
+                '''SELECT hc.job_id
+                   FROM highlight_clips hc
+                   LEFT JOIN wechat_publications wp ON wp.subject_id = (
+                       'highlight_clip:' || hc.id
+                   )
+                   WHERE hc.id = ? AND hc.selected = 1 AND hc.state = 'FAILED'
+                     AND wp.id IS NULL''',
+                (clean_clip_id,),
+            ).fetchone()
+            if not clip:
+                return False
+            cursor = conn.execute(
+                """UPDATE highlight_clips
+                   SET state = 'SELECTED', updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'FAILED'""",
+                (clean_clip_id,),
+            )
+            if cursor.rowcount != 1:
+                return False
+            conn.execute(
+                """UPDATE highlight_jobs
+                   SET state = 'CANDIDATES_READY', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'FAILED'""",
+                (clip["job_id"],),
+            )
+            conn.commit()
+            return True
+
+    def get_highlight_clip_assets(self, clip_id: str) -> Optional[Dict[str, Any]]:
+        """读取独立 Clip 的本地资产和发布主体，不推断也不修改平台状态。"""
+        clean_clip_id = (clip_id or "").strip()
+        if not clean_clip_id:
+            return None
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''SELECT hc.*, hj.state AS job_state, hj.workspace_path, pv.youtube_id AS source_youtube_id,
+                          pv.title AS source_title, pv.zh_title AS source_zh_title,
+                          ps.id AS publication_subject_id, hca.source_video_path,
+                          hca.source_video_sha256, hca.source_video_kind, hca.rendered_video_path,
+                          hca.title_path, hca.copy_path, hca.category_path, hca.cover_path,
+                          hca.cover_provenance_path, hca.artifact_manifest_path, hca.evidence_dir,
+                          hcr.asset_manifest_sha256 AS reviewed_manifest_sha256,
+                          hcr.approved_by AS review_approved_by, hcr.approved_at AS review_approved_at
+                   FROM highlight_clips hc
+                   JOIN highlight_jobs hj ON hj.id = hc.job_id
+                   JOIN processed_videos pv ON pv.id = hj.source_video_id
+                   LEFT JOIN publication_subjects ps ON ps.highlight_clip_id = hc.id
+                   LEFT JOIN highlight_clip_assets hca ON hca.clip_id = hc.id
+                   LEFT JOIN highlight_clip_publication_reviews hcr ON hcr.clip_id = hc.id
+                   WHERE hc.id = ?''',
+                (clean_clip_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def approve_highlight_clip_publication(
+        self, clip_id: str, *, asset_manifest_sha256: str, approved_by: str,
+    ) -> Dict[str, Any]:
+        """记录对当前资产版本的人工发布审核；审核并不等同于平台提交。"""
+        clean_clip_id = (clip_id or "").strip()
+        clean_manifest_sha256 = (asset_manifest_sha256 or "").strip().lower()
+        clean_approved_by = (approved_by or "").strip()[:80]
+        if not clean_clip_id or len(clean_manifest_sha256) != 64 or not clean_approved_by:
+            raise ValueError("Highlight publication review requires clip, manifest hash, and reviewer")
+        with self.get_connection() as conn:
+            clip = conn.execute(
+                '''SELECT hc.id
+                   FROM highlight_clips hc
+                   JOIN highlight_clip_assets hca ON hca.clip_id = hc.id
+                   WHERE hc.id = ? AND hc.state = 'ASSETS_READY' AND hc.selected = 1''',
+                (clean_clip_id,),
+            ).fetchone()
+            if not clip:
+                raise ValueError("Highlight Clip is not ready for publication review")
+            conn.execute(
+                '''INSERT INTO highlight_clip_publication_reviews (
+                       clip_id, asset_manifest_sha256, approved_by
+                   ) VALUES (?, ?, ?)
+                   ON CONFLICT(clip_id) DO UPDATE SET
+                       asset_manifest_sha256 = excluded.asset_manifest_sha256,
+                       approved_by = excluded.approved_by,
+                       approved_at = CURRENT_TIMESTAMP''',
+                (clean_clip_id, clean_manifest_sha256, clean_approved_by),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM highlight_clip_publication_reviews WHERE clip_id = ?",
+                (clean_clip_id,),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to record Highlight publication review")
+            return dict(row)
+
+    # --- Highlight slicing (manual-only, isolated from PipelineManager) ---
+    _HIGHLIGHT_JOB_STATES = {
+        "QUEUED", "ANALYZING", "CANDIDATES_READY", "RENDERING", "ASSETS_READY", "FAILED", "CANCELED",
+    }
+    _HIGHLIGHT_CLIP_STATES = {
+        "CANDIDATE", "SELECTED", "RENDERING", "ASSETS_READY", "FAILED", "CANCELED",
+    }
+
+    def list_highlight_source_videos(self, *, limit: int = 10, offset: int = 0) -> List[Dict[str, Any]]:
+        """列出可显式创建 Highlight Job 的源视频；不改变原队列或源状态。"""
+        safe_limit = max(1, min(50, int(limit)))
+        safe_offset = max(0, int(offset))
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT pv.id, pv.youtube_id, pv.title, pv.zh_title, pv.status, pv.duration_sec,
+                          pv.source, pv.created_at, pv.updated_at,
+                          (SELECT COUNT(*) FROM highlight_jobs hj WHERE hj.source_video_id = pv.id) AS highlight_job_count,
+                          (SELECT hj.id FROM highlight_jobs hj
+                           WHERE hj.source_video_id = pv.id
+                             AND hj.state IN ('QUEUED', 'ANALYZING', 'RENDERING')
+                           ORDER BY hj.updated_at DESC LIMIT 1) AS active_highlight_job_id
+                   FROM processed_videos pv
+                   WHERE pv.slice_index = 0 AND pv.parent_id IS NULL
+                     AND IFNULL(pv.source, '') != 'DISCOVERY'
+                     AND NOT EXISTS (
+                         SELECT 1 FROM blacklisted_videos bv WHERE bv.youtube_id = pv.youtube_id
+                     )
+                   ORDER BY pv.updated_at DESC, pv.id DESC
+                   LIMIT ? OFFSET ?""",
+                (safe_limit, safe_offset),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def create_highlight_job(
+        self,
+        youtube_id: str,
+        *,
+        max_clips: int = 3,
+        min_duration_sec: float = 35,
+        max_duration_sec: float = 90,
+        requested_by: str = "manual",
+    ) -> tuple[Dict[str, Any], bool]:
+        """为源视频创建独立 Highlight Job；若已有活动任务则原样返回，绝不影响源片。"""
+        from uuid import uuid4
+
+        clean_yid = (youtube_id or "").strip()
+        if not clean_yid:
+            raise ValueError("youtube_id is required")
+        safe_max_clips = max(1, min(8, int(max_clips)))
+        safe_min_duration = max(10.0, float(min_duration_sec))
+        safe_max_duration = max(safe_min_duration, min(180.0, float(max_duration_sec)))
+        clean_requested_by = (requested_by or "manual").strip()[:80] or "manual"
+        with self.get_connection() as conn:
+            source = conn.execute(
+                """SELECT id FROM processed_videos
+                   WHERE youtube_id = ? AND slice_index = 0 AND parent_id IS NULL""",
+                (clean_yid,),
+            ).fetchone()
+            if not source:
+                raise ValueError("Source video does not exist")
+            source_id = int(source["id"])
+            active = conn.execute(
+                """SELECT * FROM highlight_jobs
+                   WHERE source_video_id = ? AND state IN ('QUEUED', 'ANALYZING', 'RENDERING')
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (source_id,),
+            ).fetchone()
+            if active:
+                return dict(active), False
+            latest = conn.execute(
+                "SELECT COALESCE(MAX(version), 0) AS version FROM highlight_jobs WHERE source_video_id = ?",
+                (source_id,),
+            ).fetchone()
+            version = int(latest["version"] or 0) + 1
+            job_id = uuid4().hex
+            try:
+                conn.execute(
+                    """INSERT INTO highlight_jobs
+                       (id, source_video_id, version, requested_by, max_clips, min_duration_sec, max_duration_sec)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        job_id, source_id, version, clean_requested_by, safe_max_clips,
+                        safe_min_duration, safe_max_duration,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                # 两次 Telegram callback 可能近乎同时到达；唯一活动任务索引胜出后返回赢家。
+                active = conn.execute(
+                    """SELECT * FROM highlight_jobs
+                       WHERE source_video_id = ? AND state IN ('QUEUED', 'ANALYZING', 'RENDERING')
+                       ORDER BY updated_at DESC LIMIT 1""",
+                    (source_id,),
+                ).fetchone()
+                if active:
+                    return dict(active), False
+                raise
+            conn.commit()
+            row = conn.execute("SELECT * FROM highlight_jobs WHERE id = ?", (job_id,)).fetchone()
+            if not row:
+                raise RuntimeError("Failed to create Highlight Job")
+            return dict(row), True
+
+    def claim_highlight_job_for_analysis(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """原子领取一个新 Highlight Job；重复点击不会重复分析。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE highlight_jobs
+                   SET state = 'ANALYZING', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'QUEUED'""",
+                (job_id,),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute(
+                """SELECT hj.*, pv.youtube_id, pv.title AS source_title, pv.zh_title AS source_zh_title,
+                          pv.status AS source_status
+                   FROM highlight_jobs hj JOIN processed_videos pv ON pv.id = hj.source_video_id
+                   WHERE hj.id = ?""",
+                (job_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def complete_highlight_job_analysis(
+        self,
+        job_id: str,
+        *,
+        source_subtitle_sha256: str,
+        workspace_path: str,
+        plan_path: str,
+        clips: Sequence[Dict[str, Any]],
+    ) -> None:
+        """原子保存候选计划并转入 CANDIDATES_READY；只写 Highlight 自身账本。"""
+        with self.get_connection() as conn:
+            job = conn.execute("SELECT state FROM highlight_jobs WHERE id = ?", (job_id,)).fetchone()
+            if not job:
+                raise ValueError("Highlight Job does not exist")
+            if job["state"] != "ANALYZING":
+                raise ValueError("Highlight Job is not being analyzed")
+            conn.execute("DELETE FROM highlight_clips WHERE job_id = ?", (job_id,))
+            for ordinal, clip in enumerate(clips, start=1):
+                conn.execute(
+                    """INSERT INTO highlight_clips
+                       (id, job_id, ordinal, raw_start_ms, raw_end_ms, snapped_start_ms, snapped_end_ms,
+                        virality_score, core_quote, source_text, score_reason)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        str(clip["id"]), job_id, ordinal, int(clip["raw_start_ms"]), int(clip["raw_end_ms"]),
+                        clip.get("snapped_start_ms"), clip.get("snapped_end_ms"), float(clip["virality_score"]),
+                        str(clip.get("core_quote") or ""), str(clip.get("source_text") or ""),
+                        str(clip.get("score_reason") or ""),
+                    ),
+                )
+            cursor = conn.execute(
+                """UPDATE highlight_jobs
+                   SET state = 'CANDIDATES_READY', source_subtitle_sha256 = ?, workspace_path = ?,
+                       plan_path = ?, error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'ANALYZING'""",
+                (source_subtitle_sha256, workspace_path, plan_path, job_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Highlight Job state changed before candidate plan was stored")
+            conn.commit()
+
+    def fail_highlight_job(self, job_id: str, reason: str) -> None:
+        """记录独立任务失败，不改变源视频或其发布状态。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE highlight_jobs
+                   SET state = 'FAILED', error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state IN ('QUEUED', 'ANALYZING')""",
+                ((reason or "Highlight candidate analysis failed")[:500], job_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Highlight Job cannot be marked failed from its current state")
+            conn.commit()
+
+    def get_highlight_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """返回独立 Highlight Job 与只读源片信息。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT hj.*, pv.youtube_id, pv.title AS source_title, pv.zh_title AS source_zh_title,
+                          pv.status AS source_status
+                   FROM highlight_jobs hj JOIN processed_videos pv ON pv.id = hj.source_video_id
+                   WHERE hj.id = ?""",
+                (job_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_highlight_clips(self, job_id: str) -> List[Dict[str, Any]]:
+        """返回一个 Highlight Job 的候选片段，按稳定序号排序。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                '''SELECT hc.*, ps.id AS publication_subject_id
+                   FROM highlight_clips hc
+                   LEFT JOIN publication_subjects ps ON ps.highlight_clip_id = hc.id
+                   WHERE hc.job_id = ? ORDER BY hc.ordinal ASC''',
+                (job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_highlight_jobs(self, *, limit: int = 20) -> List[Dict[str, Any]]:
+        """读取最近 Highlight Job；供 Telegram 和控制台展示，不触发生产动作。"""
+        safe_limit = max(1, min(100, int(limit)))
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT hj.*, pv.youtube_id, pv.title AS source_title, pv.zh_title AS source_zh_title,
+                          (SELECT COUNT(*) FROM highlight_clips hc WHERE hc.job_id = hj.id) AS clip_count
+                   FROM highlight_jobs hj JOIN processed_videos pv ON pv.id = hj.source_video_id
+                   ORDER BY hj.updated_at DESC, hj.id DESC LIMIT ?""",
+                (safe_limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    # --- English World research (manual production, isolated from PipelineManager) ---
+    _ENGLISH_WORLD_JOB_STATES = {
+        "RESEARCH_QUEUED", "RESEARCHING", "CANDIDATES_READY", "CANDIDATE_SELECTED",
+        "PRODUCTION_REQUESTED", "FAILED", "CANCELED",
+    }
+
+    def create_english_world_research_job(
+        self,
+        *,
+        requested_by: str = "manual",
+        notification_target: Optional[str] = None,
+        source_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """创建独立英语世界研究任务；不会下载、入通用队列或创建发布主体。"""
+        from uuid import uuid4
+
+        clean_requested_by = (requested_by or "manual").strip()[:80] or "manual"
+        clean_target = (notification_target or "").strip()[:120] or None
+        clean_url = (source_url or "").strip()[:1000] or None
+        with self.get_connection() as conn:
+            job_id = uuid4().hex
+            conn.execute(
+                """INSERT INTO english_world_jobs (id, requested_by, notification_target, source_url)
+                   VALUES (?, ?, ?, ?)""",
+                (job_id, clean_requested_by, clean_target, clean_url),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_jobs WHERE id = ?", (job_id,)).fetchone()
+            if not row:
+                raise RuntimeError("Failed to create English World research job")
+            return dict(row)
+
+    def claim_english_world_job_for_research(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """原子领取待研究任务；重复调度不会重复搜索或改写已就绪候选。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_jobs
+                   SET state = 'RESEARCHING', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'RESEARCH_QUEUED'""",
+                (job_id,),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute("SELECT * FROM english_world_jobs WHERE id = ?", (job_id,)).fetchone()
+            return dict(row) if row else None
+
+    def complete_english_world_research(
+        self, job_id: str, *, candidates: Sequence[Dict[str, Any]],
+    ) -> None:
+        """原子保存元数据候选并转为待选择；不会生成视频或提交平台。"""
+        if not candidates:
+            raise ValueError("English World research requires candidates")
+        with self.get_connection() as conn:
+            job = conn.execute("SELECT state FROM english_world_jobs WHERE id = ?", (job_id,)).fetchone()
+            if not job:
+                raise ValueError("English World job does not exist")
+            if job["state"] != "RESEARCHING":
+                raise ValueError("English World job is not being researched")
+            conn.execute("DELETE FROM english_world_candidates WHERE job_id = ?", (job_id,))
+            for ordinal, candidate in enumerate(candidates, start=1):
+                conn.execute(
+                    """INSERT INTO english_world_candidates
+                       (id, job_id, ordinal, source_url, youtube_id, source_title, source_channel,
+                        upload_date, duration_sec, topic, learning_value, safety_note, caption_status,
+                        recommendation_score)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        str(candidate["id"]), job_id, ordinal, str(candidate["source_url"]),
+                        candidate.get("youtube_id"), str(candidate["source_title"]),
+                        candidate.get("source_channel"), candidate.get("upload_date"),
+                        candidate.get("duration_sec"), str(candidate["topic"]),
+                        str(candidate["learning_value"]), str(candidate["safety_note"]),
+                        str(candidate["caption_status"]), int(candidate.get("recommendation_score") or 0),
+                    ),
+                )
+            cursor = conn.execute(
+                """UPDATE english_world_jobs
+                   SET state = 'CANDIDATES_READY', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'RESEARCHING'""",
+                (job_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World job state changed before candidates were stored")
+            conn.commit()
+
+    def fail_english_world_job(self, job_id: str, reason: str) -> None:
+        """记录研究失败；不改变已选候选、通用队列或发布账本。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_jobs
+                   SET state = 'FAILED', error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state IN ('RESEARCH_QUEUED', 'RESEARCHING')""",
+                ((reason or "English World research failed")[:500], job_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World job cannot be marked failed from its current state")
+            conn.commit()
+
+    def select_english_world_candidate(self, candidate_id: str) -> Dict[str, Any]:
+        """选定一个已研究候选；只进入待制作确认，不下载、渲染或发布。"""
+        clean_candidate_id = (candidate_id or "").strip()
+        with self.get_connection() as conn:
+            candidate = conn.execute(
+                """SELECT ewc.*, ewj.state AS job_state FROM english_world_candidates ewc
+                   JOIN english_world_jobs ewj ON ewj.id = ewc.job_id
+                   WHERE ewc.id = ?""",
+                (clean_candidate_id,),
+            ).fetchone()
+            if not candidate:
+                raise ValueError("English World candidate does not exist")
+            if candidate["job_state"] not in {"CANDIDATES_READY", "CANDIDATE_SELECTED"}:
+                raise ValueError("English World candidate is not selectable in the current job state")
+            conn.execute("UPDATE english_world_candidates SET selected = 0 WHERE job_id = ?", (candidate["job_id"],))
+            conn.execute("UPDATE english_world_candidates SET selected = 1 WHERE id = ?", (clean_candidate_id,))
+            conn.execute(
+                """UPDATE english_world_jobs
+                   SET state = 'CANDIDATE_SELECTED', selected_candidate_id = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (clean_candidate_id, candidate["job_id"]),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_candidates WHERE id = ?", (clean_candidate_id,)).fetchone()
+            if not row:
+                raise RuntimeError("Failed to select English World candidate")
+            return dict(row)
+
+    def request_english_world_production(self, job_id: str) -> Dict[str, Any]:
+        """记录第二次制作确认；当前仅进入独立协调队列，绝不冒充已渲染。"""
+        with self.get_connection() as conn:
+            job = conn.execute("SELECT * FROM english_world_jobs WHERE id = ?", (job_id,)).fetchone()
+            if not job:
+                raise ValueError("English World job does not exist")
+            if job["state"] != "CANDIDATE_SELECTED" or not job["selected_candidate_id"]:
+                raise ValueError("Select an English World candidate before requesting production")
+            cursor = conn.execute(
+                """UPDATE english_world_jobs
+                   SET state = 'PRODUCTION_REQUESTED', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'CANDIDATE_SELECTED'""",
+                (job_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World production request was not accepted")
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_jobs WHERE id = ?", (job_id,)).fetchone()
+            return dict(row) if row else {}
+
+    def get_english_world_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """读取单个英语世界任务；只读，不触发外部搜索、制作或发布。"""
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM english_world_jobs WHERE id = ?", (job_id,)).fetchone()
+            return dict(row) if row else None
+
+    def get_english_world_candidates(self, job_id: str) -> List[Dict[str, Any]]:
+        """读取按推荐顺序固定的候选列表。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM english_world_candidates WHERE job_id = ? ORDER BY ordinal ASC",
+                (job_id,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_english_world_jobs(self, *, limit: int = 20) -> List[Dict[str, Any]]:
+        """读取最近英语世界任务账本；不触发任何研究、制作或发布动作。"""
+        safe_limit = max(1, min(100, int(limit)))
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT ewj.*, (SELECT COUNT(*) FROM english_world_candidates ewc
+                                      WHERE ewc.job_id = ewj.id) AS candidate_count
+                   FROM english_world_jobs ewj
+                   ORDER BY ewj.updated_at DESC, ewj.id DESC LIMIT ?""",
+                (safe_limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     # --- Dubbing studio DAL (manual-only, isolated from PipelineManager) ---
     _DUBBING_STATES = {

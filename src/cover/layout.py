@@ -9,6 +9,7 @@
 | 1.3.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | icon/丝带角落冲突避免：丝带在右上角时，自动将 top-right icon 切换到 bottom-left |
 | 1.4.0   | 2026-06-02 | Gemini_3.5_Flash_planning    | 修正 LayoutSpec 的 canvas_height 为 6:7 比例 (1260px) |
 | 1.5.0   | 2026-07-31 | Codex                         | 支持专属主视觉图层与标题位置，主视觉存在时移除无关装饰图标 |
+| 1.6.0   | 2026-08-21 | Codex                         | 停用模型运营角标，避免无事实依据的告警式装饰降低封面质量 |
 """
 
 from typing import Dict, Any, List
@@ -63,17 +64,7 @@ class LayoutComposer:
             
             # 隐喻属性
             "metaphor": signal.metaphor,
-            # [Gemini_2.5_Pro_planning] v1.3.0 icon/丝带角落冲突避免
-            # 丝带固定占据右上角(top-right)。
-            # 若 icon 原定位为 top-right 且有丝带，就将 icon 切到 bottom-left。
-            "metaphor_placement": (
-                "bottom-left"
-                if (
-                    str(payload.get("content_label", "") or "").strip()
-                    and getattr(signal, "metaphor_placement", "") == "top-right"
-                )
-                else signal.metaphor_placement
-            ),
+            "metaphor_placement": signal.metaphor_placement,
             
             "show_metaphor": not bool(visual_asset_path),
 
@@ -82,8 +73,8 @@ class LayoutComposer:
             # 可选值：'cover'（默认）/ 'cover_minimal' / 'cover_drama'
             "template_variant": getattr(signal, 'template_variant', 'cover'),
             
-            # [Gemini_2.5_Pro_planning] v1.2.0 封面角标标签，空字符串表示无标签
-            "content_label": str(payload.get("content_label", "") or "").strip(),
+            # 运营标签容易制造与内容无关的告警/揭秘式装饰；保留分类 badge，统一不渲染标签。
+            "content_label": "",
             
             # 安全区参数（按比例，供 CSS 使用）
             "safe_zone": {

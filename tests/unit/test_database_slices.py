@@ -3,10 +3,13 @@
 # Modification History
 | Version | Date       | Author                    | Description                                     |
 |---------|------------|---------------------------|-------------------------------------------------|
+| 2.0.0   | 2026-08-21 | Codex                    | 覆盖评分输入缓存与历史微信墓碑不计入待恢复队列 |
 | 1.2.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证 purge_stale_tasks, batch_add_videos 补齐 disable_slicing 以及 delete_slices_by_parent_id |
 | 1.3.0   | 2026-07-13 | Codex                    | 覆盖 AI 字幕审计运行、provider 尝试与汇总查询 |
 | 1.4.0   | 2026-07-29 | Codex                    | 覆盖发布后日指标、内容身份、视频关系和 AB 实验汇总 |
 | 1.5.0   | 2026-08-05 | Codex                    | 覆盖源标题译文的定点更新 DAL |
+| 1.9.0   | 2026-08-21 | Codex                    | 覆盖视频号待恢复队列不混入实际处理中的仪表盘语义 |
+| 1.8.0   | 2026-08-21 | Codex                    | 锁定每个 DAL 连接启用 SQLite 外键约束 |
 | 1.6.0   | 2026-08-14 | Codex                    | 覆盖平台待确认任务与实际加工队列的 Tab 分离 |
 | 1.7.0   | 2026-08-18 | Codex                    | 覆盖 DAL 连接上下文退出后关闭 SQLite 文件描述符 |
 | 1.1.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证多切片视频在不同子切片状态下的 Tab 归属逻辑 |
@@ -41,6 +44,32 @@ def test_connection_context_closes_sqlite_handle(temp_db):
 
     with pytest.raises(sqlite3.ProgrammingError, match="closed"):
         conn.execute("SELECT 1")
+
+
+def test_connection_context_enables_foreign_keys(temp_db):
+    """SQLite 外键必须在每个 DAL 连接中启用，不能只依赖初始化连接。"""
+    db = PipelineDB(temp_db)
+
+    with db.get_connection() as conn:
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_orphaned_pre_submission_recovery_is_bounded(temp_db):
+    db = PipelineDB(temp_db)
+    assert db.add_video("orphan-bounded", "title", "channel", score=80)
+    db.update_video_status("orphan-bounded", "DOWNLOADING")
+
+    assert db.recover_orphaned_pre_submission_task(
+        "orphan-bounded", expected_process_pid=None, error_msg="worker gone", max_retry_count=1,
+    ) == "PENDING"
+    db.update_video_status("orphan-bounded", "DOWNLOADING")
+    assert db.recover_orphaned_pre_submission_task(
+        "orphan-bounded", expected_process_pid=None, error_msg="worker gone again", max_retry_count=1,
+    ) == "FAILED"
+
+    row = db.get_video_by_youtube_id("orphan-bounded")
+    assert row["status"] == "FAILED"
+    assert row["retry_count"] == 1
 
 def test_composite_unique_constraint(temp_db):
     """验证 UNIQUE(youtube_id, slice_index) 复合唯一索引约束"""
@@ -99,17 +128,56 @@ def test_under_review_is_separate_from_processing_tab(temp_db):
     db = PipelineDB(temp_db)
     assert db.add_video("review-video", "Review", "channel", score=80)
     assert db.add_video("processing-video", "Processing", "channel", score=80)
+    assert db.add_video("deferred-video", "Deferred", "channel", score=80)
     db.update_video_status("review-video", "UNDER_REVIEW")
     db.update_video_status("processing-video", "PUBLISHING")
+    db.update_video_status("deferred-video", "WECHAT_DEFERRED")
 
     active, active_total = db.get_paginated_videos(tab="active")
+    deferred, deferred_total = db.get_paginated_videos(tab="wechat_deferred")
     review, review_total = db.get_paginated_videos(tab="review")
     counts = db.get_tab_counts()
 
     assert active_total == counts["active"] == 1
     assert {video["youtube_id"] for video in active} == {"processing-video"}
+    assert deferred_total == counts["wechat_deferred"] == 1
+    assert {video["youtube_id"] for video in deferred} == {"deferred-video"}
     assert review_total == counts["review"] == 1
     assert {video["youtube_id"] for video in review} == {"review-video"}
+
+
+def test_score_cache_only_refreshes_changed_inputs_or_expired_ttl(temp_db):
+    db = PipelineDB(temp_db)
+    assert db.add_video("score-cache", "Title", "channel", view_count=100, like_count=2)
+
+    assert [row["youtube_id"] for row in db.get_pending_videos_requiring_score_refresh(180)] == ["score-cache"]
+    db.update_video_score("score-cache", 10)
+    assert db.get_pending_videos_requiring_score_refresh(180) == []
+
+    assert db.upsert_monitored_video(
+        "score-cache", "Title", "channel", zh_title=None, duration_sec=60,
+        view_count=200, like_count=6, upload_date="20260821", metadata_complete=True,
+    ) == "refreshed"
+    assert [row["youtube_id"] for row in db.get_pending_videos_requiring_score_refresh(180)] == ["score-cache"]
+    db.update_video_score("score-cache", 20)
+    assert [row["youtube_id"] for row in db.get_pending_videos_requiring_score_refresh(0)] == ["score-cache"]
+
+
+def test_historical_wechat_tombstone_is_not_displayed_as_deferred_recovery(temp_db):
+    db = PipelineDB(temp_db)
+    assert db.add_video("archived-deferred", "Title", "channel", score=80)
+    db.record_wechat_publication_confirmation(
+        "archived-deferred", evidence_path="evidence.png", state="SUBMITTED_UNBOUND",
+    )
+    assert db.archive_wechat_publication_as_historical_unresolved(
+        "archived-deferred", reason="test archive",
+    )
+    db.update_video_status("archived-deferred", "WECHAT_DEFERRED")
+
+    rows, total = db.get_paginated_videos(tab="wechat_deferred")
+    assert total == 0
+    assert rows == []
+    assert db.get_tab_counts()["wechat_deferred"] == 0
 
 def test_batch_insertion_and_cascade(temp_db):
     """测试批量插入与级联删除父子任务关系"""

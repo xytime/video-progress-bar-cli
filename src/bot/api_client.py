@@ -19,6 +19,9 @@
 | 1.9.0 | 2026-07-05 | Codex | 新增 get_video_page() 返回 total_count，供 /status 展示失败总数与最近失败样例 |
 | 1.10.0 | 2026-07-05 | Codex | 新增 retry_recent_preview()，供 /status 展示 /retry 24 会影响几条 |
 | 1.11.0 | 2026-08-09 | Codex | add_video 透传内容生产类型，支持英语世界短视频的显式入库标识 |
+| 1.12.0 | 2026-08-20 | Codex | 新增 Highlight Job 的显式选择、创建和状态查询 API 封装；不包含发布接口 |
+| 1.13.0 | 2026-08-20 | Codex | 新增 Highlight Clip 人工选定与独立发布主体创建接口；不触发发布 |
+| 1.14.0 | 2026-08-21 | Codex | 新增英语世界短视频候选研究、选定和二次制作确认接口；不触发发布 |
 """
 from __future__ import annotations
 
@@ -96,6 +99,117 @@ class PipelineAPIClient:
                 return data.get("videos", [])
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] get_videos failed (API down?): {e}")
+            return None
+
+    async def get_highlight_sources(self, *, limit: int = 10, offset: int = 0) -> Optional[list]:
+        """GET /api/highlights/sources — 读取可显式选择的源视频。"""
+        try:
+            async with self._client() as c:
+                resp = await c.get("/api/highlights/sources", params={"limit": limit, "offset": offset})
+                resp.raise_for_status()
+                return resp.json().get("sources", [])
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] get_highlight_sources failed: {e}")
+            return None
+
+    async def create_highlight_job(
+        self,
+        source_youtube_id: str,
+        *,
+        max_clips: int = 3,
+        min_duration_sec: float = 35,
+        max_duration_sec: float = 90,
+        requested_by: str = "telegram",
+    ) -> Optional[dict]:
+        """POST /api/highlights/jobs — 创建候选分析任务，不会发布。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(
+                    "/api/highlights/jobs",
+                    json={
+                        "source_youtube_id": source_youtube_id,
+                        "max_clips": max_clips,
+                        "min_duration_sec": min_duration_sec,
+                        "max_duration_sec": max_duration_sec,
+                        "requested_by": requested_by,
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] create_highlight_job failed: {e}")
+            return None
+
+    async def get_highlight_jobs(self, *, limit: int = 10) -> Optional[list]:
+        """GET /api/highlights/jobs — 读取独立 Highlight Job 的当前状态。"""
+        try:
+            async with self._client() as c:
+                resp = await c.get("/api/highlights/jobs", params={"limit": limit})
+                resp.raise_for_status()
+                return resp.json().get("jobs", [])
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] get_highlight_jobs failed: {e}")
+            return None
+
+    async def select_highlight_clip(self, clip_id: str) -> Optional[dict]:
+        """POST /api/highlights/clips/{id}/select — 选定候选，不会渲染或发布。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(f"/api/highlights/clips/{clip_id}/select")
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] select_highlight_clip failed: {e}")
+            return None
+
+    async def create_english_world_research(
+        self, *, requested_by: str = "telegram", notification_target: Optional[str] = None,
+        source_url: Optional[str] = None,
+    ) -> Optional[dict]:
+        """POST /api/english-world/research — 只启动候选研究，不下载、制作或发布。"""
+        try:
+            async with self._client() as c:
+                payload = {"requested_by": requested_by, "notification_target": notification_target}
+                if source_url:
+                    payload["source_url"] = source_url
+                resp = await c.post("/api/english-world/research", json=payload, timeout=45.0)
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] create_english_world_research failed: {e}")
+            return None
+
+    async def get_english_world_jobs(self, *, limit: int = 10) -> Optional[list]:
+        """GET /api/english-world/jobs — 读取独立研究/制作请求状态。"""
+        try:
+            async with self._client() as c:
+                resp = await c.get("/api/english-world/jobs", params={"limit": limit})
+                resp.raise_for_status()
+                return resp.json().get("jobs", [])
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] get_english_world_jobs failed: {e}")
+            return None
+
+    async def select_english_world_candidate(self, candidate_id: str) -> Optional[dict]:
+        """POST candidate select — 选题后仍需要独立制作确认。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(f"/api/english-world/candidates/{candidate_id}/select")
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] select_english_world_candidate failed: {e}")
+            return None
+
+    async def request_english_world_production(self, job_id: str) -> Optional[dict]:
+        """POST production request — 仅登记二次确认，绝不触发平台投递。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(f"/api/english-world/jobs/{job_id}/request-production")
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] request_english_world_production failed: {e}")
             return None
 
     async def get_video_page(self, tab: str = "waitlist", page: int = 1, size: int = 10) -> Optional[dict]:

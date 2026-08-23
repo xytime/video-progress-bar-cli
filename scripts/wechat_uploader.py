@@ -45,6 +45,8 @@
 | 3.8.1   | 2026-07-31 | Codex                               | 自动投递必须提供合规封面，禁止平台回退默认视频帧 |
 | 3.9.0   | 2026-08-03 | Codex                               | 上传前追加无大面积遮罩版式来源清单校验，旧遮罩封面不得投递 |
 | 4.0.0   | 2026-08-11 | Codex                               | 跳转作品列表仅视为平台已受理，返回审核中而非发布成功；最终公开状态交由作品管理回查确认 |
+| 4.2.0   | 2026-08-20 | Codex                               | 发布前后比较同会话作品列表原生 ID；唯一新增 ID 且完整标题一致才落绑定回执，标题回查停用 |
+| 4.1.0   | 2026-08-20 | Codex                               | 新增作品管理页只读回查：以标题定位后台作品并输出已发布、审核中、驳回、未找到或不可判定结果 |
 """
 
 import os
@@ -53,6 +55,7 @@ import argparse
 import hashlib
 import json
 import logging
+import re
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 try:
@@ -88,10 +91,20 @@ logger = logging.getLogger("wechat_uploader")
 
 # 微信视频号发表地址
 WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
+WECHAT_POST_LIST_URL = "https://channels.weixin.qq.com/platform/post/list"
 
 # 提交后跳转作品列表只说明视频号已接收，不代表转码/审核完成或对外可见。
 # 管线收到此退出码后必须保留证据、进入审核中，并禁止自动重传。
 EXIT_SUBMITTED_FOR_REVIEW = 6
+EXIT_MANAGEMENT_UNCERTAIN = 7
+EXIT_MANAGEMENT_REJECTED = 8
+EXIT_MANAGEMENT_NOT_FOUND = 9
+
+MANAGEMENT_PUBLISHED = "PUBLISHED"
+MANAGEMENT_UNDER_REVIEW = "UNDER_REVIEW"
+MANAGEMENT_REJECTED = "REJECTED"
+MANAGEMENT_NOT_FOUND = "NOT_FOUND"
+MANAGEMENT_UNCERTAIN = "UNCERTAIN"
 
 
 def _default_cover_provenance_path(cover_file: Path) -> Path:
@@ -122,6 +135,205 @@ def _capture_wechat_evidence(page, evidence_dir: Path, name: str) -> None:
         page.screenshot(path=str(evidence_dir / f"{name}.png"), full_page=True)
     except Exception as exc:
         logger.warning("Failed to capture WeChat evidence %s: %s", name, exc)
+
+
+def _collect_management_cards(page) -> dict[str, dict[str, str]]:
+    """读取作品管理页已暴露的原生记录标识；不以标题搜索或推断记录。"""
+    try:
+        records = page.locator("[data-post-id], [data-id], a[href]").evaluate_all(
+            '''nodes => {
+                const found = new Map();
+                const idFromHref = href => {
+                    try {
+                        const url = new URL(href, window.location.href);
+                        for (const key of ['post_id', 'postId', 'video_id', 'videoId', 'object_id', 'objectId']) {
+                            const value = url.searchParams.get(key);
+                            if (value) return value;
+                        }
+                        const match = url.pathname.match(/\\/(?:post|video|content)\\/(?:detail\\/)?([A-Za-z0-9_-]{6,})/);
+                        return match ? match[1] : '';
+                    } catch (_) { return ''; }
+                };
+                for (const node of nodes) {
+                    const link = node.tagName === 'A' ? node : node.querySelector('a[href]');
+                    const id = node.getAttribute('data-post-id') || node.getAttribute('data-id') ||
+                        node.dataset?.postId || node.dataset?.id || (link ? idFromHref(link.href) : '');
+                    if (!id) continue;
+                    const card = node.closest('[data-post-id], [data-id], [class*=card], li, tr') || node.parentElement;
+                    const text = (card?.innerText || node.innerText || '').trim();
+                    if (!text) continue;
+                    found.set(String(id), {post_id: String(id), url: link?.href || '', text});
+                }
+                return Array.from(found.values());
+            }'''
+        )
+    except Exception as exc:
+        logger.warning("Unable to read platform record identifiers from management page: %s", exc)
+        return {}
+    return {
+        str(record["post_id"]): {
+            "platform_post_id": str(record["post_id"]),
+            "platform_url": str(record.get("url") or ""),
+            "card_text": str(record.get("text") or ""),
+        }
+        for record in records
+        if record.get("post_id")
+    }
+
+
+def resolve_submission_platform_identity(
+    before: dict[str, dict[str, str]], after: dict[str, dict[str, str]], expected_title: str,
+) -> dict[str, str] | None:
+    """仅当同次提交产生唯一新增平台 ID 且完整标题一致时返回精确绑定结果。"""
+    if not expected_title:
+        return None
+    introduced_ids = set(after) - set(before)
+    if len(introduced_ids) != 1:
+        return None
+    record = after[next(iter(introduced_ids))]
+    normalized_title = re.sub(r"\s+", "", expected_title)
+    card_title_lines = {
+        re.sub(r"\s+", "", line)
+        for line in str(record.get("card_text") or "").splitlines()
+        if line.strip()
+    }
+    if normalized_title not in card_title_lines:
+        return None
+    return {
+        "platform_post_id": record["platform_post_id"],
+        "platform_url": record.get("platform_url", ""),
+        "matched_by": "same_session_before_after_platform_id_delta_and_exact_title",
+    }
+
+
+def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> None:
+    """原子写入提交绑定回执，供管线只按平台原生 ID 维护账本。"""
+    try:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        receipt_path = evidence_dir / "submission_receipt.json"
+        temporary_path = receipt_path.with_suffix(".json.tmp")
+        temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        temporary_path.replace(receipt_path)
+    except Exception as exc:
+        logger.warning("Failed to persist WeChat submission identity receipt: %s", exc)
+
+
+def _load_management_cards(page) -> tuple[dict[str, dict[str, str]], bool]:
+    """打开作品管理页并读取已加载卡片；失败返回 false，调用方必须拒绝绑定。"""
+    try:
+        page.goto(WECHAT_POST_LIST_URL, wait_until="domcontentloaded")
+        page.wait_for_load_state("networkidle", timeout=15_000)
+        page.wait_for_timeout(2_000)
+    except Exception as exc:
+        logger.warning("Unable to load management page for exact submission binding: %s", exc)
+        return {}, False
+    if "/post/list" not in page.url:
+        return {}, False
+    return _collect_management_cards(page), True
+
+
+def classify_management_publication(card_text: str) -> str:
+    """将作品管理页卡片文字归一到可终结的平台状态。"""
+    text = re.sub(r"\s+", "", card_text or "")
+    if any(marker in text for marker in ("审核未通过", "审核不通过", "未通过", "已驳回", "违规", "已删除", "不可见")):
+        return MANAGEMENT_REJECTED
+    if any(marker in text for marker in ("已发表", "发表成功", "已发布", "公开可见")):
+        return MANAGEMENT_PUBLISHED
+    if any(marker in text for marker in ("审核中", "审核通过", "处理中", "待审核", "转码中")):
+        return MANAGEMENT_UNDER_REVIEW
+    return MANAGEMENT_UNCERTAIN
+
+
+def _search_management_title(page, expected_title: str) -> bool:
+    """优先使用作品管理页搜索框；找不到搜索控件时不报告“未找到”。"""
+    for selector in (
+        "input[placeholder*='标题']",
+        "input[placeholder*='搜索']",
+        "input[placeholder*='作品']",
+        "input[type='search']",
+    ):
+        try:
+            locator = page.locator(selector)
+            if locator.count() and locator.first.is_visible():
+                locator.first.fill(expected_title)
+                locator.first.press("Enter")
+                page.wait_for_timeout(1800)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _management_card_for_title(page, expected_title: str) -> tuple[str, str, str]:
+    """从命中标题的卡片中提取状态文本及平台记录标识，避免用整页状态误判。"""
+    title_locator = page.get_by_text(expected_title, exact=True)
+    if title_locator.count() == 0:
+        title_locator = page.get_by_text(expected_title, exact=False)
+    for index in range(min(title_locator.count(), 3)):
+        try:
+            record = title_locator.nth(index).evaluate(
+                """node => {
+                    let current = node;
+                    for (let depth = 0; current && depth < 7; depth += 1, current = current.parentElement) {
+                        const text = (current.innerText || '').trim();
+                        if (text.length >= 8 && text.length <= 3000) {
+                            const link = current.querySelector('a[href]');
+                            const postId = current.getAttribute('data-id') ||
+                                current.getAttribute('data-post-id') || current.dataset?.id || current.dataset?.postId || '';
+                            return { text, postId, url: link ? link.href : '' };
+                        }
+                    }
+                    return { text: '', postId: '', url: '' };
+                }"""
+            )
+            if record and expected_title in (record.get("text") or ""):
+                return record.get("text") or "", record.get("postId") or "", record.get("url") or ""
+        except Exception:
+            continue
+    return "", "", ""
+
+
+def verify_management_publication(page, evidence_root: Path, expected_title: str) -> tuple[str, str, str]:
+    """只读核对作品管理页，返回状态、平台记录 ID 与可追溯 URL。"""
+    page.goto(WECHAT_POST_LIST_URL, wait_until="domcontentloaded")
+    try:
+        page.wait_for_load_state("networkidle", timeout=15_000)
+    except Exception:
+        pass
+    page.wait_for_timeout(2500)
+    if "/post/list" not in page.url:
+        _capture_wechat_evidence(page, evidence_root, "management_uncertain")
+        return MANAGEMENT_UNCERTAIN, "", ""
+
+    searched = _search_management_title(page, expected_title)
+    card_text, post_id, post_url = _management_card_for_title(page, expected_title)
+    if card_text:
+        state = classify_management_publication(card_text)
+        _capture_wechat_evidence(page, evidence_root, f"management_{state.lower()}")
+        return state, post_id, post_url
+
+    try:
+        body_text = page.locator("body").inner_text(timeout=3_000)
+    except Exception:
+        body_text = ""
+    if searched and any(marker in body_text for marker in ("暂无数据", "暂无内容", "暂无作品", "未找到", "没有找到")):
+        _capture_wechat_evidence(page, evidence_root, "management_not_found")
+        return MANAGEMENT_NOT_FOUND, "", ""
+
+    _capture_wechat_evidence(page, evidence_root, "management_uncertain")
+    return MANAGEMENT_UNCERTAIN, "", ""
+
+
+def verify_management_publication_by_id(page, evidence_root: Path, platform_post_id: str) -> tuple[str, str]:
+    """只按已绑定的原生记录 ID 回查平台状态；找不到时保持不可判定，不补发。"""
+    cards, loaded = _load_management_cards(page)
+    record = cards.get((platform_post_id or "").strip()) if loaded else None
+    if not record:
+        _capture_wechat_evidence(page, evidence_root, "management_uncertain")
+        return MANAGEMENT_UNCERTAIN, ""
+    state = classify_management_publication(record.get("card_text", ""))
+    _capture_wechat_evidence(page, evidence_root, f"management_{state.lower()}")
+    return state, record.get("platform_url", "")
 
 
 def _find_wechat_cover_dialog(page):
@@ -590,6 +802,8 @@ def run_uploader(
     evidence_dir: str = None,
     cover_manually_verified: bool = False,
     declare_original: bool = True,
+    verify_only: bool = False,
+    platform_post_id: str = None,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -597,7 +811,12 @@ def run_uploader(
     state_file.parent.mkdir(parents=True, exist_ok=True)
     evidence_root = Path(evidence_dir) if evidence_dir else Path("output") / "wechat_evidence"
 
-    if not login_only:
+    if verify_only:
+        if not (platform_post_id or "").strip():
+            logger.error("作品管理页回查必须提供已绑定的平台原生 post_id；标题匹配已永久停用。")
+            return 1
+        video_abs = copy_text = cover_abs = category = collection = None
+    elif not login_only:
         if not video_path or not Path(video_path).exists():
             logger.error(f"Video file not found: {video_path}")
             return 1
@@ -702,8 +921,10 @@ def run_uploader(
 
         page = context.new_page()
 
-        logger.info(f"Navigating to WeChat Channels creation page: {WECHAT_CREATE_URL}")
-        page.goto(WECHAT_CREATE_URL, wait_until="domcontentloaded")
+        target_url = WECHAT_POST_LIST_URL if verify_only else WECHAT_CREATE_URL
+        expected_route = "/post/list" if verify_only else "/post/create"
+        logger.info("Navigating to WeChat Channels page: %s", target_url)
+        page.goto(target_url, wait_until="domcontentloaded")
         # 等待页面完全渲染（Vue SPA 需额外时间）
         try:
             page.wait_for_load_state("networkidle", timeout=15000)
@@ -723,8 +944,8 @@ def run_uploader(
         current_url = page.url
         logger.info(f"Current URL after load: {current_url}")
 
-        # 1st: URL 包含 /post/create → 明确已登录，跳过所有 DOM 检测
-        if "/post/create" in current_url:
+        # 1st: 目标业务页已打开 → 明确已登录，跳过所有 DOM 检测
+        if expected_route in current_url:
             is_login_page = False
             logger.info("Successfully authenticated via saved session (URL confirmed).")
         # 2nd: URL 明确含 login → 未登录
@@ -735,7 +956,7 @@ def run_uploader(
         else:
             page.wait_for_timeout(3000)
             current_url = page.url
-            if "/post/create" in current_url:
+            if expected_route in current_url:
                 is_login_page = False
                 logger.info("Successfully authenticated (URL confirmed after extra wait).")
             elif "login" in current_url:
@@ -855,6 +1076,37 @@ def run_uploader(
             logger.info("Login-only mode completed successfully.")
             browser.close()
             return 0
+
+        if verify_only:
+            state, platform_url = verify_management_publication_by_id(
+                page, evidence_root, platform_post_id,
+            )
+            try:
+                context.storage_state(path=str(state_file))
+                _stamp_login_success(state_file)
+            except Exception as exc:
+                logger.warning("精确平台 ID 回查后保存会话失败: %s", exc)
+            browser.close()
+            if state == MANAGEMENT_PUBLISHED:
+                return 0
+            if state == MANAGEMENT_UNDER_REVIEW:
+                return EXIT_SUBMITTED_FOR_REVIEW
+            if state == MANAGEMENT_REJECTED:
+                return EXIT_MANAGEMENT_REJECTED
+            logger.warning("作品管理页未找到已绑定 ID 或未能判定状态: post_id=%s", platform_post_id)
+            return EXIT_MANAGEMENT_UNCERTAIN
+
+        identity_baseline: dict[str, dict[str, str]] = {}
+        identity_baseline_ready = False
+        identity_page = None
+        try:
+            identity_page = context.new_page()
+            identity_baseline, identity_baseline_ready = _load_management_cards(identity_page)
+        finally:
+            if identity_page:
+                identity_page.close()
+        if not identity_baseline_ready:
+            logger.warning("Pre-submit platform-ID baseline unavailable; submission may proceed but will remain unbound.")
 
         # 2. 上传视频文件 ─ 三段式容错策略
         logger.info(f"Uploading video: {video_abs}")
@@ -1850,11 +2102,28 @@ def run_uploader(
         redirected, page_content = False, ""
         try:
             # 成功发布后视频号网页通常跳转到 /post/list（最可靠信号）
-            page.wait_for_url("**/post/list**", timeout=15000)
-            redirected = True
-            logger.info("Submission accepted: navigated to post list; awaiting platform processing/review.")
-            page.wait_for_timeout(5000)
-            _capture_wechat_evidence(page, evidence_root, "post_list_after_submission")
+              page.wait_for_url("**/post/list**", timeout=15000)
+              redirected = True
+              logger.info("Submission accepted: navigated to post list; awaiting platform processing/review.")
+              page.wait_for_timeout(5000)
+              _capture_wechat_evidence(page, evidence_root, "post_list_after_submission")
+              if identity_baseline_ready:
+                  after_cards = _collect_management_cards(page)
+                  receipt = resolve_submission_platform_identity(identity_baseline, after_cards, short_title)
+                  if receipt:
+                      _write_submission_receipt(evidence_root, receipt)
+                      logger.info(
+                          "Captured exact WeChat platform post identity for this submission: %s",
+                          receipt["platform_post_id"],
+                      )
+                  else:
+                      _write_submission_receipt(
+                          evidence_root,
+                          {
+                              "matched_by": "unbound",
+                              "reason": "No unique before/after platform-ID delta with exact title",
+                          },
+                      )
         except Exception:
             page_content = page.content()  # 未跳转 → 取页面文本走降级判据
 
@@ -1887,6 +2156,9 @@ def main():
                         help="强制重登：忽略现有会话，必出二维码（成功扫码才覆盖 state；未扫旧会话保持有效）")
     parser.add_argument("--fail-fast-login", action="store_true",
                         help="自动发布模式：检测到登录失效立即退出，不等待二维码扫码")
+    parser.add_argument("--verify-only", action="store_true",
+                        help="仅按已绑定的视频号原生 post_id 回查状态，绝不上传或发布")
+    parser.add_argument("--platform-post-id", help="视频号后台的已绑定原生作品 ID；回查时必填")
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--draft",       action="store_true")
     parser.add_argument(
@@ -1914,6 +2186,8 @@ def main():
             evidence_dir = args.evidence_dir,
             cover_manually_verified = args.cover_manually_verified,
             declare_original = args.declare_original,
+            verify_only = args.verify_only,
+            platform_post_id = args.platform_post_id,
         )
     except Exception as exc:
         if not _is_playwright_target_closed(exc):

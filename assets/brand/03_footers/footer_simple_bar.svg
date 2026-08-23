@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 100" width="1080" height="100">
+  <rect width="1080" height="100" fill="#161B22" />
+  <line x1="0" y1="0" x2="1080" y2="0" stroke="#30363D" stroke-width="2" />
+  
+  <text x="40" y="58" font-family="'PingFang SC', sans-serif" font-weight="700" font-size="22" fill="#E5C07B">
+    🐉 龙眼期权
+  </text>
+  <text x="180" y="58" font-family="'PingFang SC', sans-serif" font-weight="500" font-size="18" fill="#8B949E">
+    穿透微观流动性 · 捕捉日内确定性 | 核心引擎：OptionSense
+  </text>
+</svg>

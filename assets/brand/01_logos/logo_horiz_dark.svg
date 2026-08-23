@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300">
+  <defs>
+    <linearGradient id="goldTextGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F3BA2F" />
+      <stop offset="100%" stop-color="#E5C07B" />
+    </linearGradient>
+    <linearGradient id="cyanGrad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#00D2FF" />
+    </linearGradient>
+  </defs>
+
+  <!-- Left Icon Container -->
+  <g transform="translate(40, 25) scale(0.488)">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <!-- Gradients -->
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F3BA2F" />
+      <stop offset="100%" stop-color="#E5C07B" />
+    </linearGradient>
+    <linearGradient id="cyanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00F0FF" />
+      <stop offset="100%" stop-color="#00D2FF" />
+    </linearGradient>
+    <radialGradient id="radarPulse" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00F0FF" stop-opacity="0.8" />
+      <stop offset="40%" stop-color="#00F0FF" stop-opacity="0.25" />
+      <stop offset="100%" stop-color="#00F0FF" stop-opacity="0" />
+    </radialGradient>
+    <filter id="glowCyan" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+    <filter id="glowGold" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="6" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background Dark Circle Accent -->
+  <circle cx="256" cy="256" r="236" fill="#161B22" stroke="#30363D" stroke-width="4" />
+  
+  <!-- Outer Radar Track Rings -->
+  <circle cx="256" cy="256" r="210" fill="none" stroke="#21262D" stroke-width="2" stroke-dasharray="6 8" />
+  <circle cx="256" cy="256" r="175" fill="none" stroke="#30363D" stroke-width="1.5" />
+  <circle cx="256" cy="256" r="140" fill="none" stroke="#21262D" stroke-width="1" stroke-dasharray="4 6" />
+
+  <!-- Radar Crosshairs / Coordinate Axis -->
+  <line x1="256" y1="36" x2="256" y2="476" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.5" />
+  <line x1="36" y1="256" x2="476" y2="256" stroke="#30363D" stroke-width="1.5" stroke-opacity="0.5" />
+
+  <!-- Dynamic Momentum Arc (NE Trend) -->
+  <path d="M 120 380 A 180 180 0 0 1 390 130" fill="none" stroke="url(#cyanGrad)" stroke-width="4" stroke-linecap="round" filter="url(#glowCyan)" />
+
+  <!-- Cyber Dragon Head Geometric Silhouette -->
+  <!-- Upper Crown Horns (Gold) -->
+  <polygon points="256,60 286,130 256,150 226,130" fill="url(#goldGrad)" filter="url(#glowGold)" />
+  <polygon points="286,130 350,90 320,165 270,165" fill="url(#goldGrad)" opacity="0.9" />
+  <polygon points="226,130 162,90 192,165 242,165" fill="url(#goldGrad)" opacity="0.9" />
+
+  <!-- Upper Brow & Temples -->
+  <polygon points="192,165 256,190 320,165 355,220 256,245 157,220" fill="#1C2330" stroke="#30363D" stroke-width="2" />
+
+  <!-- Dragon Nose & Snout Bridge -->
+  <polygon points="256,200 290,270 256,310 222,270" fill="#212A38" stroke="url(#goldGrad)" stroke-width="2" />
+  
+  <!-- Cyber Fangs / Lower Mandible -->
+  <polygon points="222,270 180,330 235,355 256,395 277,355 332,330 290,270 256,310" fill="#161B22" stroke="#30363D" stroke-width="2" />
+  <polygon points="256,395 240,445 256,430 272,445" fill="url(#goldGrad)" />
+
+  <!-- Radar Eye Pupil / Core Focus (Center Cyan) -->
+  <!-- Left Eye -->
+  <polygon points="200,225 240,238 232,252 190,238" fill="url(#cyanGrad)" filter="url(#glowCyan)" />
+  <!-- Right Eye (The Main Radar Aperture) -->
+  <polygon points="312,225 272,238 280,252 322,238" fill="url(#cyanGrad)" filter="url(#glowCyan)" />
+
+  <!-- Central Dragon Eye Pupil Vortex (Target Reticle) -->
+  <circle cx="256" cy="256" r="32" fill="url(#radarPulse)" />
+  <circle cx="256" cy="256" r="16" fill="#0D1117" stroke="#00F0FF" stroke-width="3" filter="url(#glowCyan)" />
+  <circle cx="256" cy="256" r="6" fill="#00F0FF" />
+
+  <!-- Momentum Arrowheads (Top Right & Central Breakthrough) -->
+  <polygon points="390,130 365,135 385,155" fill="#00F0FF" filter="url(#glowCyan)" />
+</svg>
+  </g>
+
+  <!-- Right Typography Section -->
+  <g transform="translate(320, 0)">
+    <!-- English Master Title -->
+    <text x="0" y="115" font-family="'Inter', 'Helvetica Neue', 'Arial', sans-serif" font-weight="900" font-size="64" letter-spacing="4" fill="url(#goldTextGrad)">
+      DRAGONEYE
+      <tspan fill="url(#cyanGrad2)" font-weight="800"> OPTIONS</tspan>
+    </text>
+
+    <!-- Chinese Title & Divider -->
+    <text x="2" y="180" font-family="'PingFang SC', 'Noto Sans SC', sans-serif" font-weight="700" font-size="36" letter-spacing="10" fill="#F0F6FC">
+      龙眼期权
+    </text>
+
+    <!-- Subtitle / Motto -->
+    <text x="4" y="235" font-family="'PingFang SC', 'Noto Sans SC', sans-serif" font-weight="400" font-size="20" letter-spacing="3" fill="#8B949E">
+      穿透微观流动性 · 捕捉日内确定性
+    </text>
+
+    <!-- Decorative Bottom Line -->
+    <line x1="2" y1="260" x2="650" y2="260" stroke="#30363D" stroke-width="2" />
+    <line x1="2" y1="260" x2="180" y2="260" stroke="#00F0FF" stroke-width="3" />
+  </g>
+</svg>

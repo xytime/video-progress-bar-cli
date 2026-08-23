@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """scripts/bot_watchdog.py — Telegram Bot 状态监测守护与看门狗脚本
 
-监测 bot.log 的最后修改时间。如果 Bot 进程在运行但日志在 3 分钟内没有更新（说明轮询挂死），
-或者 Bot 进程根本没有启动，则自动执行重启/启动，确保服务高可用。
+仅以 Bot 进程存活作为自动重启判据。Telegram 的长轮询在没有新消息时可以长期不写
+bot.log，日志静默只能作为诊断信息，不能单独证明轮询挂死。
 
 # Modification History
 | Version | Date       | Author                         | Description |
 | ------- | ---------- | ------------------------------ | ----------- |
+| 1.1.0   | 2026-08-21 | Codex                          | 长轮询空闲时不再因 bot.log 静默误重启；仅进程退出才自动拉起 |
 | 1.0.0   | 2026-05-25 | Gemini_3.5_Flash_High_planning | 初始创建看门狗，实现日志活跃度与进程存活探测 |
 """
 import os
@@ -20,10 +21,6 @@ PRJ_ROOT = Path(__file__).parent.parent.resolve()
 VPANEL = str(PRJ_ROOT / "vpanel")
 LOG_FILE = PRJ_ROOT / "output" / "bot.log"
 PID_FILE = PRJ_ROOT / "output" / "bot.pid"
-
-# 阈值：3 分钟 (180 秒) 无日志写入则判定为挂死
-IDLE_THRESHOLD = 180
-
 
 def _read_pid() -> int | None:
     if not PID_FILE.exists():
@@ -52,22 +49,18 @@ def main() -> None:
         subprocess.run([VPANEL, "bot", "start"], check=True)
         return
 
-    # 进程在运行，检查日志更新时间
+    # 长轮询在没有新消息时不会持续写日志；仅报告日志年龄，不把它当成重启依据。
     if not LOG_FILE.exists():
-        # 如果日志文件不存在，可能是刚启动或被清理，跳过检查
-        print("ℹ️ Bot is running, but bot.log does not exist yet. Skipping watchdog check.")
+        print("🟢 Bot process is running; bot.log does not exist yet.")
         return
 
     mtime = LOG_FILE.stat().st_mtime
     elapsed = time.time() - mtime
 
-    if elapsed > IDLE_THRESHOLD:
-        # [Gemini_3.5_Flash_High_planning] 日志长时间没有更新，判定为网络轮询挂死
-        print(f"🚨 Bot is running (PID: {pid}) but bot.log has not been updated for {elapsed:.1f}s.")
-        print("🚨 Restarting Bot daemon via vpanel...")
-        subprocess.run([VPANEL, "bot", "restart"], check=True)
-    else:
-        print(f"🟢 Bot is running and healthy (last log update: {elapsed:.1f}s ago).")
+    print(
+        f"🟢 Bot process is running (PID: {pid}); "
+        f"last log update: {elapsed:.1f}s ago (long-poll idle is normal)."
+    )
 
 
 if __name__ == "__main__":

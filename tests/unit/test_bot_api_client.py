@@ -8,7 +8,12 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | TDD Red phase: 先写测试定义合约 |
 | 1.1.0 | 2026-06-01 | Gemini_3.5_Flash_planning | 新增 respec_video API 接口调用契约单元测试 |
+| 1.3.0 | 2026-08-20 | Codex | 新增 Highlight Clip 人工选定接口调用契约 |
+| 1.2.0 | 2026-08-20 | Codex | 新增 Highlight Job 选择、创建和状态读取 API 调用契约 |
+| 1.4.0 | 2026-08-21 | Codex | 覆盖英语世界候选研究、选题和二次制作确认接口的发布隔离。 |
 """
+import json
+
 import pytest
 import respx
 import httpx
@@ -98,6 +103,86 @@ class TestGetVideos:
         )
         result = await api_client.get_videos(tab="waitlist")
         assert result is None
+
+
+@pytest.mark.asyncio
+class TestHighlightJobs:
+    """Highlight Job 仅调用候选分析接口，不能出现发布请求。"""
+
+    @respx.mock
+    async def test_get_sources(self, api_client):
+        respx.get(f"{BASE_URL}/api/highlights/sources").mock(
+            return_value=httpx.Response(200, json={"sources": [{"youtube_id": "abc123def45"}]})
+        )
+        result = await api_client.get_highlight_sources(limit=10)
+        assert result == [{"youtube_id": "abc123def45"}]
+
+    @respx.mock
+    async def test_create_job_is_analysis_only(self, api_client):
+        route = respx.post(f"{BASE_URL}/api/highlights/jobs").mock(
+            return_value=httpx.Response(200, json={"success": True, "job": {"id": "a" * 32}})
+        )
+        result = await api_client.create_highlight_job("abc123def45")
+        assert result["success"] is True
+        assert route.called
+        assert json.loads(route.calls.last.request.content)["requested_by"] == "telegram"
+
+    @respx.mock
+    async def test_get_jobs(self, api_client):
+        respx.get(f"{BASE_URL}/api/highlights/jobs").mock(
+            return_value=httpx.Response(200, json={"jobs": [{"id": "a" * 32, "state": "CANDIDATES_READY"}]})
+        )
+        result = await api_client.get_highlight_jobs()
+        assert result[0]["state"] == "CANDIDATES_READY"
+
+    @respx.mock
+    async def test_select_clip_keeps_render_and_publish_out_of_scope(self, api_client):
+        clip_id = "a" * 32
+        route = respx.post(f"{BASE_URL}/api/highlights/clips/{clip_id}/select").mock(
+            return_value=httpx.Response(200, json={
+                "success": True,
+                "clip": {"id": clip_id, "publication_subject_id": f"highlight_clip:{clip_id}"},
+            })
+        )
+
+        result = await api_client.select_highlight_clip(clip_id)
+
+        assert route.called
+        assert result["clip"]["publication_subject_id"] == f"highlight_clip:{clip_id}"
+
+
+@pytest.mark.asyncio
+class TestEnglishWorldJobs:
+    """英语世界接口只研究、选题和登记生产请求，不触发通用视频添加。"""
+
+    @respx.mock
+    async def test_research_request_is_not_generic_video_enqueue(self, api_client):
+        route = respx.post(f"{BASE_URL}/api/english-world/research").mock(
+            return_value=httpx.Response(200, json={"success": True, "job": {"id": "a" * 32}})
+        )
+
+        result = await api_client.create_english_world_research(notification_target="123")
+
+        assert result["success"] is True
+        assert json.loads(route.calls.last.request.content)["notification_target"] == "123"
+
+    @respx.mock
+    async def test_selection_and_production_request_have_separate_endpoints(self, api_client):
+        candidate_id = "a" * 32
+        job_id = "b" * 32
+        respx.post(f"{BASE_URL}/api/english-world/candidates/{candidate_id}/select").mock(
+            return_value=httpx.Response(200, json={"success": True})
+        )
+        route = respx.post(f"{BASE_URL}/api/english-world/jobs/{job_id}/request-production").mock(
+            return_value=httpx.Response(200, json={"success": True, "job": {"state": "PRODUCTION_REQUESTED"}})
+        )
+
+        selected = await api_client.select_english_world_candidate(candidate_id)
+        requested = await api_client.request_english_world_production(job_id)
+
+        assert selected["success"] is True
+        assert requested["job"]["state"] == "PRODUCTION_REQUESTED"
+        assert route.called
 
 
 @pytest.mark.asyncio

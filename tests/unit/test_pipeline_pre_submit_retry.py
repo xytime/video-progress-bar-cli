@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | ------- | ---- | ------ | ----------- |
+| 1.3.0 | 2026-08-22 | Codex | 覆盖 Telegram 手机审核视频的 HTTP 回执与视频上传载荷。 |
 | 1.0.0 | 2026-08-05 | Codex | 覆盖可安全自动重试边界、提交证据保护和 Telegram 数字告警 |
 | 1.1.0 | 2026-08-05 | Codex | 覆盖 curl SSL 超时重试及 Telegram 管理员回退会话 |
 | 1.2.0 | 2026-08-05 | Codex | 验证 Telegram 告警 HTTP 回执，而非将调用本身视作送达 |
@@ -81,6 +82,32 @@ def test_telegram_send_checks_http_success(monkeypatch, tmp_path):
     monkeypatch.setattr("video_processing.pipeline_manager.requests.post", fake_post)
 
     assert manager.send_telegram_msg("测试告警") is True
+    assert calls[-1] == "checked"
+
+
+def test_telegram_review_video_checks_http_success(monkeypatch, tmp_path):
+    manager = _manager(tmp_path, "telegram-review-video")
+    manager.telegram_token = "test-token"
+    manager.telegram_chat_id = "test-chat"
+    video = tmp_path / "telegram-review-video_vertical.mp4"
+    video.write_bytes(b"review-video")
+    calls = []
+
+    class Response:
+        def raise_for_status(self):
+            calls.append("checked")
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Response()
+
+    monkeypatch.setattr("video_processing.pipeline_manager.requests.post", fake_post)
+
+    assert manager.send_telegram_video(video, "审核副本") is True
+    request_args, request_kwargs = calls[0]
+    assert request_args[0].endswith("/sendVideo")
+    assert request_kwargs["data"]["chat_id"] == "test-chat"
+    assert request_kwargs["files"]["video"][0] == video.name
     assert calls[-1] == "checked"
 
 

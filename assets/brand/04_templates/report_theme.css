@@ -1,0 +1,477 @@
+/* ==========================================================================
+   龙眼期权 (DragonEye Options) 统一高阶渲染样式表 (report_theme.css v2.0)
+   Institutional Cyber Quant Aesthetic · High-Frequency Trading HUD
+   ========================================================================== */
+
+:root {
+  /* Canvas Dark (底色/背景) */
+  --bg-canvas: #090C10;
+  --bg-card: #161B22;
+  --bg-card-inner: #0D1117;
+  --bg-card-trans: rgba(22, 27, 34, 0.88);
+  --bg-glass: rgba(13, 17, 23, 0.75);
+
+  /* Gold Dynamic (龙金/主品牌色) */
+  --gold-primary: #F3BA2F;
+  --gold-champagne: #E5C07B;
+  --gold-glow: rgba(243, 186, 47, 0.3);
+  --gold-muted: rgba(229, 192, 123, 0.12);
+
+  /* Cyan Radar (雷达青/动量点睛色) */
+  --cyan-radar: #00F0FF;
+  --cyan-secondary: #00D2FF;
+  --cyan-glow: rgba(0, 240, 255, 0.3);
+  --cyan-muted: rgba(0, 240, 255, 0.12);
+
+  /* Border & Grid (分界/网格) */
+  --border-line: #30363D;
+  --border-subtle: rgba(48, 54, 61, 0.7);
+  --border-cyan: rgba(0, 240, 255, 0.4);
+  --border-gold: rgba(243, 186, 47, 0.4);
+  --grid-dark: #1E232B;
+
+  /* Text Tone (文字层级) */
+  --text-title: #F0F6FC;
+  --text-body: #C9D1D9;
+  --text-muted: #8B949E;
+  --text-dim: #6E7681;
+
+  /* Semantic Status (多空与风控) */
+  --color-bull: #00F0FF;
+  --color-bull-bg: rgba(0, 240, 255, 0.08);
+  --color-bear: #FF5252;
+  --color-bear-bg: rgba(255, 82, 82, 0.08);
+  --color-risk: #FAAD14;
+
+  /* Typography */
+  --font-zh: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --font-en: "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-canvas);
+  color: var(--text-body);
+  font-family: var(--font-zh);
+  font-size: 22px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ==========================================================================
+   Poster Container (1080px 宽度根容器)
+   ========================================================================== */
+.de-poster-container {
+  width: 1080px;
+  margin: 0 auto;
+  background-color: var(--bg-canvas);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ambient Radial Glow Lighting */
+.de-ambient-top {
+  position: absolute;
+  top: -100px;
+  left: -100px;
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, rgba(0, 240, 255, 0.12) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.de-ambient-bottom {
+  position: absolute;
+  bottom: 200px;
+  right: -100px;
+  width: 700px;
+  height: 700px;
+  background: radial-gradient(circle, rgba(243, 186, 47, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Background Cyber Grid */
+.de-grid-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image: 
+    linear-gradient(to right, rgba(33, 38, 45, 0.45) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(33, 38, 45, 0.45) 1px, transparent 1px);
+  background-size: 36px 36px;
+  opacity: 0.6;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Background Watermark */
+.de-watermark-layer {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 750px;
+  height: 750px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.85;
+}
+
+/* Header Area */
+.de-header {
+  position: relative;
+  z-index: 10;
+  width: 1080px;
+}
+
+.de-header img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Fallback Header */
+.de-header-fallback {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 30px 48px;
+  border-bottom: 2px solid var(--border-line);
+  background: linear-gradient(180deg, #161B22 0%, #0D1117 100%);
+}
+
+.de-header-fallback .logo-img {
+  height: 50px;
+  width: auto;
+}
+
+.de-header-meta {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+.de-header-meta .issue-tag {
+  color: var(--cyan-radar);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.de-header-meta .date-tag {
+  color: var(--text-muted);
+  font-size: 16px;
+}
+
+/* ==========================================================================
+   Main Content Area
+   ========================================================================== */
+.de-content {
+  position: relative;
+  z-index: 10;
+  padding: 36px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* Top Meta Strip */
+.de-meta-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: var(--bg-card-trans);
+  border: 1px solid var(--border-subtle);
+  backdrop-filter: blur(16px);
+  border-radius: 10px;
+  font-size: 18px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.de-meta-strip strong {
+  color: var(--text-title);
+}
+
+.de-meta-strip .engine-badge {
+  background: rgba(0, 240, 255, 0.12);
+  color: var(--cyan-radar);
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-cyan);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.de-meta-strip .engine-badge .pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #00F0FF;
+  box-shadow: 0 0 8px #00F0FF;
+}
+
+/* ==========================================================================
+   Glassmorphic Card Modules
+   ========================================================================== */
+.de-card {
+  background: linear-gradient(135deg, rgba(22, 27, 34, 0.9) 0%, rgba(13, 17, 23, 0.95) 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: 16px;
+  padding: 28px 32px;
+  position: relative;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.7), 0 0 1px 1px rgba(255, 255, 255, 0.05) inset;
+}
+
+/* Card Glowing Top Accent */
+.de-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 32px;
+  right: 32px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, var(--cyan-radar) 30%, var(--gold-primary) 70%, transparent 100%);
+  opacity: 0.8;
+}
+
+/* Section Header HUD */
+.de-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 22px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border-line);
+}
+
+.de-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.de-icon-chip {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  background: rgba(13, 17, 23, 0.9);
+  border: 1px solid var(--border-cyan);
+  box-shadow: 0 0 12px rgba(0, 240, 255, 0.25);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 22px;
+}
+
+.de-card-title {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text-title);
+  letter-spacing: 1px;
+}
+
+.de-card-title .highlight {
+  color: var(--gold-primary);
+}
+
+.de-sub-tag {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* Key Metrics List */
+.de-metrics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.de-metric-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(13, 17, 23, 0.65);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 16px 22px;
+  transition: all 0.2s ease;
+}
+
+.de-metric-label {
+  font-weight: 700;
+  color: var(--gold-champagne);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.de-metric-label .bullet {
+  color: var(--cyan-radar);
+  font-size: 14px;
+}
+
+.de-metric-value {
+  color: var(--text-title);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 22px;
+  text-align: right;
+}
+
+/* Number Glows */
+.num-cyan {
+  color: var(--cyan-radar);
+  font-weight: 800;
+  text-shadow: 0 0 12px rgba(0, 240, 255, 0.4);
+}
+
+.num-gold {
+  color: var(--gold-primary);
+  font-weight: 800;
+  text-shadow: 0 0 12px rgba(243, 186, 47, 0.4);
+}
+
+/* ==========================================================================
+   Tactical Scenarios (情境 A / 情境 B)
+   ========================================================================== */
+.de-scenarios {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+
+.de-scenario-box {
+  background: rgba(13, 17, 23, 0.8);
+  border-radius: 12px;
+  padding: 22px;
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.de-scenario-box.bull {
+  border-top: 3px solid var(--color-bull);
+  box-shadow: 0 8px 24px -6px rgba(0, 240, 255, 0.15);
+}
+
+.de-scenario-box.bear {
+  border-top: 3px solid var(--color-bear);
+  box-shadow: 0 8px 24px -6px rgba(255, 82, 82, 0.15);
+}
+
+.de-scenario-header {
+  font-size: 20px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.de-scenario-box.bull .de-scenario-header {
+  color: var(--cyan-radar);
+}
+
+.de-scenario-box.bear .de-scenario-header {
+  color: var(--color-bear);
+}
+
+.de-scenario-body {
+  font-size: 19px;
+  line-height: 1.6;
+  color: var(--text-body);
+}
+
+.de-scenario-body strong {
+  color: var(--text-title);
+}
+
+/* ==========================================================================
+   Risk Control Card
+   ========================================================================== */
+.de-risk-card {
+  border-left: 4px solid var(--color-risk);
+  background: linear-gradient(90deg, rgba(250, 173, 20, 0.1) 0%, rgba(22, 27, 34, 0.95) 100%);
+}
+
+.de-risk-card .de-icon-chip {
+  border-color: var(--color-risk);
+  box-shadow: 0 0 12px rgba(250, 173, 20, 0.3);
+}
+
+.de-risk-card .de-card-title {
+  color: var(--color-risk);
+}
+
+.de-risk-body {
+  font-size: 20px;
+  color: var(--text-body);
+  line-height: 1.6;
+}
+
+.de-risk-body strong {
+  color: var(--text-title);
+}
+
+/* ==========================================================================
+   Footer Area
+   ========================================================================== */
+.de-footer {
+  position: relative;
+  z-index: 10;
+  width: 1080px;
+}
+
+.de-footer img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.de-footer-fallback {
+  background: #161B22;
+  border-top: 1px solid var(--border-line);
+  padding: 28px 48px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.de-footer-fallback .motto {
+  color: var(--gold-champagne);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.de-footer-fallback .disclaimer {
+  color: var(--text-muted);
+  font-size: 15px;
+}

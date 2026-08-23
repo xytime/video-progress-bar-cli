@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-08-20 | Codex | 覆盖 Highlight Job 的显式候选入口帮助文案 |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | TDD Red phase: 先写测试定义合约 |
 """
 import sys
@@ -82,5 +83,5 @@ class TestFormatter:
         """帮助信息应包含所有核心命令"""
         from bot.formatter import fmt_help
         msg = fmt_help()
-        for cmd in ["/queue", "/published", "/delete", "/retry"]:
+        for cmd in ["/queue", "/published", "/delete", "/retry", "/highlight"]:
             assert cmd in msg

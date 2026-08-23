@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 320" width="1080" height="320">
+  <defs>
+    <linearGradient id="ftrBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#161B22" />
+      <stop offset="100%" stop-color="#0D1117" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background Card -->
+  <rect width="1080" height="320" fill="url(#ftrBg)" />
+  <line x1="0" y1="0" x2="1080" y2="0" stroke="#30363D" stroke-width="2" />
+  <line x1="40" y1="0" x2="280" y2="0" stroke="#F3BA2F" stroke-width="3" />
+
+  <!-- Left Content -->
+  <g transform="translate(48, 50)">
+    <!-- Motto -->
+    <text x="0" y="30" font-family="'PingFang SC', sans-serif" font-weight="800" font-size="28" fill="#E5C07B" letter-spacing="2">
+      🐉 龙眼期权 · DRAGONEYE OPTIONS
+    </text>
+    <text x="2" y="66" font-family="'PingFang SC', sans-serif" font-weight="600" font-size="20" fill="#00F0FF" letter-spacing="3">
+      穿透微观流动性 · 捕捉日内确定性
+    </text>
+
+    <!-- Detailed Disclaimer -->
+    <text x="2" y="115" font-family="'PingFang SC', sans-serif" font-weight="400" font-size="17" fill="#8B949E" line-height="1.6">
+      <tspan x="2" dy="0">⚠️ 免责声明：</tspan>
+      <tspan x="2" dy="28">1. 本报告基于 OptionSense 期权微观订单流、伽马暴露 (GEX) 及波动率曲面量化模型推演。</tspan>
+      <tspan x="2" dy="26">2. 报告内容仅供量化实战与学术交流，绝不构成任何要约、证券买卖建议或投资咨询。</tspan>
+      <tspan x="2" dy="26">3. 期权交易具有极高杠杆与时间价值衰减风险，请严格执行风控红线与仓位管理。</tspan>
+    </text>
+  </g>
+
+  <!-- Right QR Code Placeholder Container -->
+  <g transform="translate(860, 48)">
+    <rect width="170" height="170" rx="8" fill="#0D1117" stroke="#30363D" stroke-width="2" />
+    <rect x="8" y="8" width="154" height="154" rx="4" fill="#161B22" stroke="#00F0FF" stroke-dasharray="6 4" />
+    <text x="85" y="78" font-family="'PingFang SC', sans-serif" font-weight="700" font-size="15" fill="#00F0FF" text-anchor="middle">
+      [ 扫码交流 ]
+    </text>
+    <text x="85" y="102" font-family="'PingFang SC', sans-serif" font-weight="500" font-size="13" fill="#8B949E" text-anchor="middle">
+      OptionSense
+    </text>
+    <text x="85" y="196" font-family="'PingFang SC', sans-serif" font-weight="400" font-size="14" fill="#8B949E" text-anchor="middle">
+      关注量化研报
+    </text>
+  </g>
+</svg>

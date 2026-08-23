@@ -33,10 +33,14 @@
 | 1.17.1  | 2026-08-10 | Codex                               | 今日简报自然语言直连本地只读账本，避免 TLS 波动影响运营查询 |
 | 1.17.2  | 2026-08-10 | Codex                               | Bot 启动前以项目 .env 覆盖 LaunchAgent 继承环境，确保本地模型凭据一致 |
 | 1.17.3  | 2026-08-18 | Codex                               | 禁用 httpx/httpcore 请求 INFO 日志，避免 Bot API 鉴权 URL 写入本地日志 |
+| 1.19.0  | 2026-08-20 | Codex                               | Highlight 候选支持显式选定并创建独立发布主体；仍不触发渲染或发布 |
+| 1.18.0  | 2026-08-20 | Codex                               | 新增 /highlight 的显式视频选择与候选分析入口；不触发渲染或发布 |
+| 1.20.0  | 2026-08-21 | Codex                               | 新增 /english_world 候选研究、选题与二次制作确认；不触发通用队列或发布 |
 """
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -49,9 +53,10 @@ from dotenv import load_dotenv
 # 必须早于 PipelineAgent / settings 导入：LaunchAgent 可能继承过期的同名变量。
 load_dotenv(Path(__file__).parent.parent.parent / ".env", override=True)
 
-from telegram import BotCommand, ReplyKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -93,6 +98,7 @@ _COMMAND_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["/status", "/queue"],
         ["/run", "/wechat_login"],
+        ["/highlight", "/english_world"],
         ["/published", "/help"],
     ],
     resize_keyboard=True,
@@ -105,6 +111,8 @@ _BOT_COMMANDS = [
     BotCommand("run", "触发一次管线"),
     BotCommand("wechat_login", "推送微信扫码登录"),
     BotCommand("published", "最近本地发布记录"),
+    BotCommand("highlight", "Highlight Slice：选择视频生成金句候选"),
+    BotCommand("english_world", "英语世界：搜索、选题与制作确认"),
     BotCommand("retry", "重试单条或最近N小时失败"),
     BotCommand("help", "显示快捷菜单"),
 ]
@@ -175,6 +183,376 @@ def _check_admin(update: Update) -> bool:
 
 
 # ── 命令处理器 ───────────────────────────────────────────────────────────
+
+_HIGHLIGHT_SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
+_HIGHLIGHT_CLIP_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+
+
+def _highlight_source_text(source: dict) -> str:
+    """将只读源视频信息安全地收敛为 Telegram HTML 行。"""
+    yid = html.escape(str(source.get("youtube_id") or "?"))
+    title = str(source.get("source_zh_title") or source.get("zh_title") or source.get("title") or "未命名视频")
+    title = html.escape(title[:56])
+    status = html.escape(str(source.get("status") or "UNKNOWN"))
+    subtitle = "字幕可用" if source.get("source_subtitle_available") else "缺带时间轴字幕"
+    video = "源片可用" if source.get("source_video_available") else "源片待补"
+    return f"<code>{yid}</code>｜{title}\n状态：<code>{status}</code> · {subtitle} · {video}"
+
+
+async def _send_highlight_confirmation(message, youtube_id: str, *, title: str = "") -> None:
+    """第二次明确确认后才创建 Highlight Job；此处不产生任何外部发布动作。"""
+    clean_yid = (youtube_id or "").strip()
+    if not _HIGHLIGHT_SOURCE_ID_RE.fullmatch(clean_yid):
+        await message.reply_text("❌ 视频 ID 格式不合法。")
+        return
+    display_title = f"\n标题：{html.escape(title[:80])}" if title else ""
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("确认生成金句候选", callback_data=f"hl:create:{clean_yid}")],
+        [InlineKeyboardButton("取消", callback_data="hl:cancel")],
+    ])
+    await message.reply_text(
+        "✂️ <b>Highlight Slice</b>"
+        f"\n源视频：<code>{html.escape(clean_yid)}</code>{display_title}"
+        "\n\n本操作只创建独立 Highlight Job，读取现有源字幕生成候选；"
+        "不会改动原视频队列、不会下载/渲染，也不会提交发布。",
+        parse_mode="HTML",
+        reply_markup=markup,
+    )
+
+
+async def _reply_highlight_sources(message) -> None:
+    """显示最近源视频，并只为有时间轴字幕的项目提供确认入口。"""
+    assert _api is not None
+    sources = await _api.get_highlight_sources(limit=10)
+    if sources is None:
+        await message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")
+        return
+    if not sources:
+        await message.reply_text("📭 没有可选择的既有源视频。")
+        return
+    lines = ["✂️ <b>Highlight Slice</b>", "选择已有视频后，将再次请求确认。"]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for source in sources:
+        lines.append("")
+        lines.append(_highlight_source_text(source))
+        yid = str(source.get("youtube_id") or "")
+        if source.get("can_analyze") and _HIGHLIGHT_SOURCE_ID_RE.fullmatch(yid):
+            buttons.append([InlineKeyboardButton(f"选择 {yid}", callback_data=f"hl:confirm:{yid}")])
+    if not buttons:
+        lines.extend(["", "当前项目均缺带时间轴源字幕；不会创建无效 Highlight Job。"])
+    await message.reply_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+    )
+
+
+async def _reply_highlight_jobs(message) -> None:
+    """展示独立 Job 账本，不把它们归入现有视频发布队列。"""
+    assert _api is not None
+    jobs = await _api.get_highlight_jobs(limit=10)
+    if jobs is None:
+        await message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")
+        return
+    if not jobs:
+        await message.reply_text("📭 尚无 Highlight Job。发送 /highlight 选择一个已有视频。")
+        return
+    lines = ["✂️ <b>Highlight Jobs</b>"]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for job in jobs:
+        title = html.escape(str(job.get("source_zh_title") or job.get("source_title") or "未命名视频")[:48])
+        yid = html.escape(str(job.get("youtube_id") or "?"))
+        state = html.escape(str(job.get("state") or "UNKNOWN"))
+        clips = int(job.get("clip_count") or 0)
+        lines.append(
+            f"\n<code>{str(job.get('id') or '')[:8]}</code> · <code>{state}</code>"
+            f"\n<code>{yid}</code>｜{title}\n候选数：{clips}"
+        )
+        for clip in (job.get("clips") or [])[:3]:
+            score = html.escape(str(clip.get("virality_score") or "-"))
+            quote = html.escape(str(clip.get("core_quote") or "")[:96])
+            start_ms = int(clip.get("raw_start_ms") or 0)
+            end_ms = int(clip.get("raw_end_ms") or 0)
+            lines.append(f"  • <code>{score}</code> 分 · {_format_highlight_ms(start_ms)}–{_format_highlight_ms(end_ms)}\n    {quote}")
+            clip_id = str(clip.get("id") or "")
+            clip_state = str(clip.get("state") or "")
+            if clip_state == "CANDIDATE" and _HIGHLIGHT_CLIP_ID_RE.fullmatch(clip_id):
+                buttons.append([InlineKeyboardButton(
+                    f"选定候选 {score} 分（{_format_highlight_ms(start_ms)}）",
+                    callback_data=f"hl:select:{clip_id}",
+                )])
+            elif clip.get("publication_subject_id"):
+                lines.append("    已选定为独立发布主体（尚未渲染或发布）")
+    lines.append("\n选定只创建独立发布主体；不会渲染、上传或发布。")
+    await message.reply_text(
+        "\n".join(lines), parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+    )
+
+
+def _format_highlight_ms(value: int) -> str:
+    """将候选时间轴压缩为 Telegram 易读的 H:MM:SS。"""
+    seconds = max(0, int(value) // 1000)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
+
+
+async def cmd_highlight(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/highlight [youtube_id] 或 /highlight jobs — 显式发起独立金句候选分析。"""
+    if not _check_admin(update):
+        return
+    args = [str(item).strip() for item in (ctx.args or []) if str(item).strip()]
+    if not args:
+        await _reply_highlight_sources(update.message)
+        return
+    if args[0].lower() == "jobs" and len(args) == 1:
+        await _reply_highlight_jobs(update.message)
+        return
+    if args[0].lower() == "slice":
+        args = args[1:]
+    if len(args) != 1 or not _HIGHLIGHT_SOURCE_ID_RE.fullmatch(args[0]):
+        await update.message.reply_text(
+            "用法：/highlight\n/highlight <video_id>\n/highlight slice <video_id>\n/highlight jobs"
+        )
+        return
+    await _send_highlight_confirmation(update.message, args[0])
+
+
+async def handle_highlight_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """处理 Highlight 确认和候选选定；callback_data 只承载受限 ID，不承载标题或路径。"""
+    if not _check_admin(update):
+        return
+    assert _api is not None
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    data = str(query.data or "")
+    if data == "hl:cancel":
+        await query.edit_message_text("已取消；未创建 Highlight Job。")
+        return
+    select_match = re.fullmatch(r"hl:select:([a-f0-9]{32})", data)
+    if select_match:
+        result = await _api.select_highlight_clip(select_match.group(1))
+        if result is None:
+            await query.edit_message_text("⚠️ 控制中心暂时不可用，未选定候选。")
+            return
+        if not result.get("success"):
+            await query.edit_message_text(
+                f"❌ 选定失败：{html.escape(str(result.get('error') or '未知错误'))}", parse_mode="HTML",
+            )
+            return
+        clip = result.get("clip") or {}
+        await query.edit_message_text(
+            "✅ <b>Highlight 候选已选定</b>"
+            f"\n片段：<code>{html.escape(str(clip.get('id') or '')[:8])}</code>"
+            f"\n发布主体：<code>{html.escape(str(clip.get('publication_subject_id') or ''))}</code>"
+            "\n\n仅建立独立身份；尚未渲染、上传或发布。",
+            parse_mode="HTML",
+        )
+        return
+    match = re.fullmatch(r"hl:(confirm|create):([A-Za-z0-9_-]{6,64})", data)
+    if not match:
+        await query.edit_message_text("❌ Highlight 操作参数无效。")
+        return
+    action, youtube_id = match.groups()
+    if action == "confirm":
+        await _send_highlight_confirmation(query.message, youtube_id)
+        return
+    result = await _api.create_highlight_job(youtube_id, requested_by="telegram")
+    if result is None:
+        await query.edit_message_text("⚠️ 控制中心暂时不可用，未创建 Highlight Job。")
+        return
+    if not result.get("success"):
+        await query.edit_message_text(f"❌ 创建失败：{html.escape(str(result.get('error') or '未知错误'))}", parse_mode="HTML")
+        return
+    job = result.get("job") or {}
+    job_id = html.escape(str(job.get("id") or "")[:8])
+    state = html.escape(str(job.get("state") or "QUEUED"))
+    await query.edit_message_text(
+        "✅ <b>Highlight Job 已创建</b>"
+        f"\n源视频：<code>{html.escape(youtube_id)}</code>"
+        f"\n任务：<code>{job_id}</code> · <code>{state}</code>"
+        "\n\n正在读取现有源字幕生成候选。不会下载、渲染或发布；稍后可发送 /highlight jobs 查看结果。",
+        parse_mode="HTML",
+    )
+
+
+_ENGLISH_WORLD_JOB_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+_ENGLISH_WORLD_CANDIDATE_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+
+
+def _format_english_world_duration(value: object) -> str:
+    """将候选时长压缩为 Telegram 易读的秒数。"""
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return "时长待核验"
+    return f"{seconds // 60}:{seconds % 60:02d}" if seconds >= 60 else f"{seconds}s"
+
+
+def _english_world_candidate_text(candidate: dict, *, label: str) -> str:
+    """把候选元数据转为安全、短小的 HTML，避免把来源说明伪装成已审核结论。"""
+    title = html.escape(str(candidate.get("source_title") or "未命名视频")[:90])
+    channel = html.escape(str(candidate.get("source_channel") or "未知来源")[:48])
+    topic = html.escape(str(candidate.get("topic") or "life"))
+    value = html.escape(str(candidate.get("learning_value") or "")[:100])
+    safety = html.escape(str(candidate.get("safety_note") or "")[:110])
+    subtitle = html.escape(str(candidate.get("caption_status") or "待核验"))
+    return (
+        f"<b>{label}. {title}</b>\n"
+        f"来源：{channel} · {_format_english_world_duration(candidate.get('duration_sec'))} · {topic}\n"
+        f"学习价值：{value}\n字幕：{subtitle}\n适宜性：{safety}"
+    )
+
+
+async def _reply_english_world_jobs(message) -> None:
+    """只读展示英语世界研究账本；可选候选才附带受限 ID 的按钮。"""
+    assert _api is not None
+    jobs = await _api.get_english_world_jobs(limit=10)
+    if jobs is None:
+        await message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")
+        return
+    if not jobs:
+        await message.reply_text("📭 暂无英语世界任务。发送 /english_world 开始今日候选研究。")
+        return
+    lines = ["🌍 <b>英语世界短视频任务</b>"]
+    buttons: list[list[InlineKeyboardButton]] = []
+    for job in jobs:
+        job_id = str(job.get("id") or "")
+        state = html.escape(str(job.get("state") or "UNKNOWN"))
+        lines.append(f"\n<code>{html.escape(job_id[:8])}</code> · <code>{state}</code>")
+        for index, candidate in enumerate(job.get("candidates") or [], start=1):
+            lines.append(_english_world_candidate_text(candidate, label=chr(64 + index)))
+            candidate_id = str(candidate.get("id") or "")
+            if job.get("state") == "CANDIDATES_READY" and _ENGLISH_WORLD_CANDIDATE_ID_RE.fullmatch(candidate_id):
+                buttons.append([InlineKeyboardButton(
+                    f"选择 {chr(64 + index)}", callback_data=f"ew:s:{candidate_id}",
+                )])
+        if job.get("state") == "CANDIDATE_SELECTED" and _ENGLISH_WORLD_JOB_ID_RE.fullmatch(job_id):
+            buttons.append([InlineKeyboardButton("确认制作此选题", callback_data=f"ew:p:{job_id}")])
+        if job.get("state") == "FAILED":
+            lines.append(f"问题：{html.escape(str(job.get('error_message') or '未知错误')[:180])}")
+    await _reply_html_chunks(
+        message,
+        "\n\n".join(lines),
+    )
+    if buttons:
+        await message.reply_text(
+            "选择候选后，还会再次要求确认制作。研究、制作和发布彼此独立。",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+
+
+async def _wait_for_english_world_research(message, job_id: str) -> None:
+    """在本次 Bot 进程存活期间推送研究完成/失败回执；重启后仍可由 jobs 查询。"""
+    assert _api is not None
+    for _ in range(20):
+        await asyncio.sleep(3)
+        jobs = await _api.get_english_world_jobs(limit=20)
+        if jobs is None:
+            continue
+        job = next((item for item in jobs if item.get("id") == job_id), None)
+        if job is None:
+            return
+        state = str(job.get("state") or "")
+        if state == "CANDIDATES_READY":
+            await message.reply_text("✅ <b>英语世界候选已就绪</b>\n现在可选择 A/B/C；不会自动制作或发布。", parse_mode="HTML")
+            await _reply_english_world_jobs(message)
+            return
+        if state == "FAILED":
+            await message.reply_text(
+                f"❌ <b>英语世界候选研究失败</b>\n{html.escape(str(job.get('error_message') or '未知错误'))}",
+                parse_mode="HTML",
+            )
+            return
+
+
+async def cmd_english_world(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/english_world [jobs|YouTube URL] — 研究候选，且不把 URL 自动推入普通发布队列。"""
+    if not _check_admin(update):
+        return
+    assert _api is not None
+    args = [str(item).strip() for item in (ctx.args or []) if str(item).strip()]
+    if args and args[0].lower() == "jobs" and len(args) == 1:
+        await _reply_english_world_jobs(update.message)
+        return
+    if len(args) > 1 or (args and not _YOUTUBE_RE.fullmatch(args[0])):
+        await update.message.reply_text("用法：/english_world\n/english_world jobs\n/english_world <YouTube URL>")
+        return
+    source_url = args[0] if args else None
+    chat_id = str(update.effective_chat.id) if update.effective_chat else None
+    result = await _api.create_english_world_research(
+        requested_by="telegram", notification_target=chat_id, source_url=source_url,
+    )
+    if result is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")
+        return
+    if not result.get("success"):
+        await update.message.reply_text(f"❌ {result.get('error') or '候选研究未创建'}")
+        return
+    job = result.get("job") or {}
+    job_id = str(job.get("id") or "")
+    await update.message.reply_text(
+        "🔎 <b>英语世界候选研究已启动</b>"
+        f"\n任务：<code>{html.escape(job_id[:8])}</code> · <code>RESEARCHING</code>"
+        "\n将基于公开元数据筛除明显不适宜题材；不会下载、制作、入通用队列或发布。",
+        parse_mode="HTML",
+    )
+    if _ENGLISH_WORLD_JOB_ID_RE.fullmatch(job_id):
+        asyncio.create_task(_wait_for_english_world_research(update.message, job_id))
+
+
+async def handle_english_world_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """处理英语世界选题与第二次制作确认；callback 仅携带受限对象 ID。"""
+    if not _check_admin(update):
+        return
+    assert _api is not None
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    data = str(query.data or "")
+    selected = re.fullmatch(r"ew:s:([a-f0-9]{32})", data)
+    if selected:
+        result = await _api.select_english_world_candidate(selected.group(1))
+        if result is None:
+            await query.edit_message_text("⚠️ 控制中心暂时不可用，未选定候选。")
+            return
+        if not result.get("success"):
+            await query.edit_message_text(f"❌ 选定失败：{html.escape(str(result.get('error') or '未知错误'))}", parse_mode="HTML")
+            return
+        candidate = result.get("candidate") or {}
+        job = result.get("job") or {}
+        job_id = str(job.get("id") or candidate.get("job_id") or "")
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "确认制作", callback_data=f"ew:p:{job_id}",
+        )]]) if _ENGLISH_WORLD_JOB_ID_RE.fullmatch(job_id) else None
+        await query.edit_message_text(
+            "✅ <b>候选已选定</b>\n"
+            + _english_world_candidate_text(candidate, label="已选")
+            + "\n\n请再次确认制作。此动作不会提交视频号。",
+            parse_mode="HTML", reply_markup=markup,
+        )
+        return
+    production = re.fullmatch(r"ew:p:([a-f0-9]{32})", data)
+    if not production:
+        await query.edit_message_text("❌ 英语世界操作参数无效。")
+        return
+    result = await _api.request_english_world_production(production.group(1))
+    if result is None:
+        await query.edit_message_text("⚠️ 控制中心暂时不可用，未登记制作请求。")
+        return
+    if not result.get("success"):
+        await query.edit_message_text(f"❌ 制作确认失败：{html.escape(str(result.get('error') or '未知错误'))}", parse_mode="HTML")
+        return
+    await query.edit_message_text(
+        "✅ <b>制作请求已登记</b>\n"
+        "状态：<code>PRODUCTION_REQUESTED</code>\n"
+        "当前会等待英语学习卡生产协调器接手；尚未下载、渲染或发布，因此不会伪报成片完成。",
+        parse_mode="HTML",
+    )
 
 async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _check_admin(update):
@@ -907,7 +1285,11 @@ def main() -> None:
     app.add_handler(CommandHandler("deploy", cmd_deploy))  # [Claude_Opus_4.8] 手机远程一键 git push 当前分支
     app.add_handler(CommandHandler("whole", cmd_whole))
     app.add_handler(CommandHandler("slice", cmd_slice))
+    app.add_handler(CommandHandler("highlight", cmd_highlight))
+    app.add_handler(CommandHandler("english_world", cmd_english_world))
     app.add_handler(CommandHandler("tts", cmd_tts))  # [Claude_Sonnet_4.6_Thinking_planning] 按需 TTS 配音命令
+    app.add_handler(CallbackQueryHandler(handle_highlight_callback, pattern=r"^hl:"))
+    app.add_handler(CallbackQueryHandler(handle_english_world_callback, pattern=r"^ew:"))
 
     # 监听 YouTube URL 并由程序接管自动提交（不消耗 API 限额）
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(_YOUTUBE_RE), handle_youtube_url))

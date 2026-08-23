@@ -4,8 +4,10 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.5.0   | 2026-08-21 | Codex  | 覆盖 yt-dlp 下载总超时配置 |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕翻译供应商顺序配置解析 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 配置解析 |
+| 1.4.0   | 2026-08-20 | Codex  | 显式隔离宿主环境变量，确保 RSS 默认行为测试不受部署密钥污染。 |
 | 1.3.0   | 2026-07-17 | Codex  | 移除阿里云配置，固定 Gemini→DeepSeek→Google 质量链路 |
 """
 
@@ -51,8 +53,15 @@ def test_translation_provider_env_example_documents_required_keys():
     assert "YOUTUBE_DATA_API_KEY=" in content
 
 
-def test_youtube_catalog_defaults_to_rss_without_an_api_key():
+def test_youtube_catalog_defaults_to_rss_without_an_api_key(monkeypatch):
+    monkeypatch.delenv("YOUTUBE_DATA_API_KEY", raising=False)
     settings = Settings(_env_file=None)
 
     assert settings.youtube_data_api_key == ""
     assert settings.youtube_data_api_timeout_sec == 20
+
+
+def test_youtube_download_timeout_is_bounded_and_configurable():
+    settings = Settings(_env_file=None, youtube_download_timeout_seconds=123)
+
+    assert settings.youtube_download_timeout_seconds == 123

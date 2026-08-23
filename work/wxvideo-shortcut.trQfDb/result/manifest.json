@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "provider": "local",
+  "source": "/Users/ryusei/Documents/Codex/2026-08-21/referenced-chatgpt-conversation-this-is-an/work/wxvideo-smoke.jSfA9P/input.mp4",
+  "segments": 1,
+  "files": [
+    "source.json",
+    "subtitle.srt",
+    "subtitle.vtt",
+    "summary.md",
+    "transcript.txt",
+    "manifest.json"
+  ]
+}

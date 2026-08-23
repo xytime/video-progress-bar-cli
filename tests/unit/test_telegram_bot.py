@@ -7,6 +7,9 @@
 | 1.1.0 | 2026-05-27 | Gemini_3.5_Flash_planning | 新增 /whole 与 /slice 核心指令测试，验证默认不切片与强制切片策略的路由传导 |
 | 1.2.0 | 2026-07-28 | Codex | 覆盖 /status 只读质检报告和 Telegram 快捷菜单 |
 | 1.3.0 | 2026-08-18 | Codex | 覆盖 Bot API 传输日志不写入鉴权 URL |
+| 1.5.0 | 2026-08-20 | Codex | 覆盖 Highlight 候选显式选定及独立发布主体提示 |
+| 1.4.0 | 2026-08-20 | Codex | 覆盖 /highlight 的显式二次确认入口与菜单可见性 |
+| 1.6.0 | 2026-08-21 | Codex | 覆盖英语世界候选研究入口不走普通 URL 自动入队。 |
 """
 import logging
 import re
@@ -201,6 +204,87 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
     def test_bot_command_menu_includes_status_first(self):
         self.assertEqual(_BOT_COMMANDS[0].command, "status")
         self.assertIn("质检", _BOT_COMMANDS[0].description)
+
+    async def test_cmd_highlight_id_requires_confirmation_before_creating_job(self):
+        from bot.telegram_bot import cmd_highlight
+
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = ["dQw4w9WgXcQ"]
+
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await cmd_highlight(update, context)
+
+        update.message.reply_text.assert_awaited_once()
+        _, kwargs = update.message.reply_text.call_args
+        self.assertEqual(kwargs["parse_mode"], "HTML")
+        self.assertEqual(kwargs["reply_markup"].inline_keyboard[0][0].callback_data, "hl:create:dQw4w9WgXcQ")
+
+    def test_bot_command_menu_includes_highlight(self):
+        self.assertIn("highlight", [command.command for command in _BOT_COMMANDS])
+
+    @patch("bot.telegram_bot._api")
+    async def test_english_world_command_starts_research_without_generic_add_video(self, mock_api_client):
+        from bot.telegram_bot import cmd_english_world
+
+        mock_api_client.create_english_world_research = AsyncMock(return_value={
+            "success": True, "job": {"id": "a" * 32},
+        })
+        mock_api_client.add_video = AsyncMock()
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.effective_chat.id = 67890
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = []
+
+        created = []
+
+        def discard_task(coro):
+            created.append(coro)
+            coro.close()
+
+        with patch("bot.telegram_bot._check_admin", return_value=True), patch(
+            "bot.telegram_bot.asyncio.create_task", side_effect=discard_task
+        ) as create_task:
+            await cmd_english_world(update, context)
+
+        mock_api_client.create_english_world_research.assert_awaited_once_with(
+            requested_by="telegram", notification_target="67890", source_url=None,
+        )
+        mock_api_client.add_video.assert_not_called()
+        create_task.assert_called_once()
+        assert len(created) == 1
+
+    def test_bot_command_menu_includes_english_world(self):
+        self.assertIn("english_world", [command.command for command in _BOT_COMMANDS])
+
+    @patch("bot.telegram_bot._api")
+    async def test_highlight_clip_selection_only_creates_subject(self, mock_api_client):
+        from bot.telegram_bot import handle_highlight_callback
+
+        clip_id = "a" * 32
+        mock_api_client.select_highlight_clip = AsyncMock(return_value={
+            "success": True,
+            "clip": {"id": clip_id, "publication_subject_id": f"highlight_clip:{clip_id}"},
+        })
+        query = MagicMock()
+        query.data = f"hl:select:{clip_id}"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.callback_query = query
+
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await handle_highlight_callback(update, MagicMock())
+
+        mock_api_client.select_highlight_clip.assert_awaited_once_with(clip_id)
+        query.edit_message_text.assert_awaited_once()
+        text = query.edit_message_text.call_args.args[0]
+        self.assertIn("尚未渲染、上传或发布", text)
 
 
 if __name__ == "__main__":

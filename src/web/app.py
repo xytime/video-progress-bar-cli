@@ -3,6 +3,13 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.23.0 | 2026-08-21 | Codex | 控制台对视频号生命周期 fail-closed：中止/孤儿发布先落未绑定账本，禁用无删除证明的重发，并阻断通用重试、改规格、删除和硬重置 |
+| 3.24.0 | 2026-08-21 | Codex | 回收无存活进程的预提交孤儿任务；提交后状态继续 fail-closed，且待绑定提交进入待核验而非加工队列 |
+| 3.25.0 | 2026-08-21 | Codex | 新增英语世界短视频候选研究与二次制作确认 API；不接入通用队列或发布入口 |
+| 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
+| 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
+| 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
+| 3.19.0 | 2026-08-20 | Codex | 视频号待确认增加作品管理页受控回查入口；通用重试拒绝绕过在途/成功视频号账本 |
 | 1.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建 Dashboard API 服务 |
 | 1.1.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 新增频道管理 API：add/delete，yt-dlp 验证后入库 |
 | 1.2.0 | 2026-05-22 | Gemini_3.5_Flash_fast | 修复手工添加视频（含 TG Bot 提交）卡在 PENDING 不自动触发的问题 |
@@ -84,6 +91,8 @@ from video_processing.content_types import CONTENT_TYPE_GENERAL, normalize_conte
 from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning] 统一翻译入口
 from video_processing.utils.generated_content_validation import is_upstream_error_response
+from video_processing.highlight import HighlightJobService
+from video_processing.english_world import EnglishWorldResearchService
 from web.listening_transcriber import router as listening_transcriber_router
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
@@ -100,6 +109,31 @@ app.add_middleware(
 db = PipelineDB()
 _wechat_login_thread: Optional[threading.Thread] = None
 _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
+
+
+def _start_highlight_analysis(job_id: str) -> None:
+    """独立启动轻量候选分析；不调用 PipelineManager，也不启动下载/渲染/发布。"""
+    def _run() -> None:
+        service = HighlightJobService(db, Path(__file__).parent.parent.parent)
+        service.analyze(job_id)
+
+    threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"highlight-plan-{job_id[:8]}",
+    ).start()
+
+
+def _start_english_world_research(job_id: str) -> None:
+    """异步进行只读元数据研究；不会下载媒体、渲染学习卡或提交任何平台。"""
+    def _run() -> None:
+        EnglishWorldResearchService(db).research(job_id)
+
+    threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"english-world-research-{job_id[:8]}",
+    ).start()
 
 
 def _wechat_login_env() -> dict:
@@ -301,9 +335,15 @@ def _queue_runner_loop():
         try:
             recovered = _recover_orphaned_publishing_tasks(stale_minutes=30)
             if recovered > 0:
-                import logging
                 logging.getLogger(__name__).warning(
-                    f"[Scheduler] Recovered {recovered} orphaned PUBLISHING task(s) to FAILED"
+                    f"[Scheduler] Recovered {recovered} orphaned PUBLISHING task(s) to SUBMITTED_UNBOUND"
+                )
+
+            recovered_pre_submission = _recover_orphaned_pre_submission_tasks(stale_minutes=20)
+            if recovered_pre_submission > 0:
+                logging.getLogger(__name__).warning(
+                    "[Scheduler] Recovered %s orphaned pre-submission task(s)",
+                    recovered_pre_submission,
                 )
 
             # [Claude_Sonnet_4.6_Thinking_planning] v3.1.0: 每轮先清理卡在非终态的任务
@@ -311,7 +351,6 @@ def _queue_runner_loop():
             # 这解决了历史任务卡死后永久占用队列、幹操新任务调度的问题
             purged = db.purge_stale_tasks(stale_hours=2)
             if purged > 0:
-                import logging
                 logging.getLogger(__name__).info(
                     f"[Scheduler] Purged {purged} stale task(s) back to PENDING"
                 )
@@ -335,20 +374,24 @@ def _queue_runner_loop():
                 channel_min_scores=settings.auto_publish_channel_min_scores,
             )
             if pending_videos:
-                # 2. 检查当前是否有活跃的 pipeline 线程正在运行
-                active_threads = threading.enumerate()
-                is_pipeline_running = any(
-                    t.name in ("full-pipeline", "queue-pipeline") or t.name.startswith("pipeline-")
-                    for t in active_threads
-                )
-
-                if not is_pipeline_running:
+                # 同时检查本进程线程和跨进程 pipeline.lock；cron 的受管巡航不在
+                # 仪表盘线程枚举中，遗漏锁检查会额外拉起一个等待锁的重复管线。
+                if _queue_pipeline_launch_allowed():
                     print(f"[Scheduler] Found pending high-score video {pending_videos[0]['youtube_id']}, auto-triggering queue pipeline...")
                     threading.Thread(target=_run_pipeline_manager, daemon=True, name="queue-pipeline").start()
         except Exception as e:
-            import logging
             logging.getLogger(__name__).error(f"[Scheduler] Queue runner loop error: {e}")
         time.sleep(15)
+
+
+def _queue_pipeline_launch_allowed() -> bool:
+    """仅在本进程及其它进程均没有流水线持锁时允许队列启动新任务。"""
+    active_threads = threading.enumerate()
+    has_local_pipeline = any(
+        thread.name in ("full-pipeline", "queue-pipeline") or thread.name.startswith("pipeline-")
+        for thread in active_threads
+    )
+    return not has_local_pipeline and not _is_pipeline_manager_running()
 
 
 def _process_group_alive(pid: Optional[int]) -> bool:
@@ -384,11 +427,7 @@ def _process_group_alive(pid: Optional[int]) -> bool:
 
 
 def _recover_orphaned_publishing_tasks(stale_minutes: int = 30) -> int:
-    """将“发布进程已死、但状态仍停在 PUBLISHING”的任务保守降级到 FAILED。
-
-    这里绝不自动重置回 PENDING，原因与 BUG-2 一致：发布动作对外不可逆，必须先让人工核对
-    视频号后台，确认未发布后再手动重试，避免重复公开发布。
-    """
+    """将已死发布进程转为未绑定提交，保留平台结果未知的 fail-closed 边界。"""
     recovered = 0
     candidates = db.get_stale_publishing_videos(stale_minutes=stale_minutes)
     for video in candidates:
@@ -398,17 +437,55 @@ def _recover_orphaned_publishing_tasks(stale_minutes: int = 30) -> int:
 
         yid = video.get("youtube_id")
         slice_index = int(video.get("slice_index") or 0)
-        db.update_video_status(
-            yid,
-            "FAILED",
-            error_msg=(
-                "发布进程已结束，但数据库仍停留在 PUBLISHING。"
-                "请先到视频号后台核对：若未发布可点“重试”，若已发布请勿重试以免重复发布。"
-            ),
-            slice_index=slice_index,
+        reason = (
+            "发布进程已结束，但数据库仍停留在 PUBLISHING；平台可能已受理。"
+            "已停止自动重传，等待视频号后台按平台记录核验。"
         )
+        try:
+            db.record_wechat_publication_confirmation(
+                yid, evidence_path=None, state="SUBMITTED_UNBOUND",
+                error_message=reason, slice_index=slice_index,
+            )
+            db.record_wechat_submission_attempt(
+                yid, evidence_path=None, final_title=video.get("title"), slice_index=slice_index,
+            )
+            db.cancel_queued_downstream_publications_for_unconfirmed_wechat(
+                yid, reason=reason, slice_index=slice_index,
+            )
+        except Exception:
+            logger.exception("[Scheduler] 无法为孤儿发布任务写入未确认账本：%s", yid)
+            # 不写 FAILED/PENDING；下一轮仍会尝试补写账本，期间不会放行重传。
+            db.update_process_pid(yid, None, slice_index=slice_index)
+            continue
+        db.update_video_status(yid, "SUBMITTED_UNBOUND", error_msg=reason, slice_index=slice_index)
         db.update_process_pid(yid, None, slice_index=slice_index)
         recovered += 1
+    return recovered
+
+
+def _recover_orphaned_pre_submission_tasks(stale_minutes: int = 20) -> int:
+    """回收无存活进程的预提交孤儿任务；视频号发布阶段绝不走此路径。"""
+    recovered = 0
+    for video in db.get_stale_pre_submission_processing_videos(stale_minutes=stale_minutes):
+        pid = video.get("process_pid")
+        if _process_group_alive(pid):
+            continue
+
+        yid = str(video.get("youtube_id") or "")
+        slice_index = int(video.get("slice_index") or 0)
+        stage = str(video.get("status") or "预提交加工")
+        next_status = db.recover_orphaned_pre_submission_task(
+            yid,
+            expected_process_pid=pid,
+            error_msg=f"{stage} 子进程已不存在；自动有界回收，尚未触发视频号提交。",
+            slice_index=slice_index,
+        )
+        if not next_status:
+            continue
+        recovered += 1
+        logging.getLogger(__name__).warning(
+            "[Scheduler] %s#%s orphaned %s -> %s", yid, slice_index, stage, next_status,
+        )
     return recovered
 
 
@@ -573,10 +650,35 @@ PROCESSING_STATUSES = {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING
 # 以免为修正展示语义而误删已提交的平台作品证据。
 ACTIVE_STATUSES = PROCESSING_STATUSES | {"UNDER_REVIEW"}
 
+# 视频号平台状态是不可逆外部事实：任何本地平台生命周期状态或账本均不能被
+# 通用重试/重置接口回写为 PENDING。只有专用、人工确认的发布流程可另行处理。
+_WECHAT_SUBMISSION_GUARD_STATUSES = frozenset({
+    "PUBLISHING", "UNDER_REVIEW", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNCERTAIN",
+    "PUBLISHED", "REJECTED", "NOT_FOUND", "HISTORICAL_UNRESOLVED",
+})
+
+
+def _wechat_submission_guard_reason(video: dict) -> Optional[str]:
+    """返回阻止通用重试的原因；账本读取失败也按 fail-closed 处理。"""
+    status = str(video.get("status") or "").upper()
+    if status in _WECHAT_SUBMISSION_GUARD_STATUSES:
+        return f"视频号当前为 {status}，提交结果未获公开发布证明，禁止通用重试或重置。"
+    try:
+        publication = db.get_wechat_publication(
+            str(video["youtube_id"]), slice_index=int(video.get("slice_index") or 0),
+        )
+    except Exception as exc:
+        logger.error("读取视频号确认账本失败，拒绝重置 %s: %s", video.get("youtube_id"), exc)
+        return "无法读取视频号确认账本；为防止重复提交，拒绝重试或重置。"
+    if publication:
+        return f"视频号存在 {publication.get('state') or 'UNKNOWN'} 平台账本，禁止通用重试或重置。"
+    return None
+
 # FSM 状态的显示顺序
 STATUS_ORDER = [
-    "PENDING", "DOWNLOADING", "TRANSCRIBING",
-    "COPYWRITING", "PUBLISHING", "UNDER_REVIEW", "PUBLISHED", "FAILED", "LOGIN_REQUIRED"
+    "PENDING", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING",
+    "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNDER_REVIEW", "UNCERTAIN",
+    "PUBLISHED", "FAILED", "LOGIN_REQUIRED",
 ]
 
 
@@ -967,6 +1069,181 @@ def get_slices(youtube_id: str):
     return {"slices": slices}
 
 
+# ── Highlight Job（显式候选与人工选定；不接既有管线或发布）────────────────────
+class CreateHighlightJobRequest(BaseModel):
+    source_youtube_id: str
+    max_clips: int = 3
+    min_duration_sec: float = 35
+    max_duration_sec: float = 90
+    requested_by: str = "manual"
+
+
+def _highlight_job_payload(job: dict) -> dict:
+    """对外仅暴露 Highlight 自身状态与只读源标识，避免伪装成原视频任务。"""
+    payload = dict(job)
+    payload["clips"] = db.get_highlight_clips(str(job["id"]))
+    return payload
+
+
+@app.get("/api/highlights/sources")
+def list_highlight_sources(limit: int = 10, offset: int = 0):
+    """列出最近源视频及本地字幕可用性；接口本身绝不创建任务。"""
+    service = HighlightJobService(db, Path(__file__).parent.parent.parent)
+    return {"sources": service.list_sources(limit=limit, offset=offset)}
+
+
+@app.post("/api/highlights/jobs")
+def create_highlight_job(req: CreateHighlightJobRequest):
+    """显式创建一个独立 Highlight Job，并只启动本地候选分析。"""
+    source_youtube_id = (req.source_youtube_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", source_youtube_id):
+        return {"success": False, "error": "source_youtube_id 格式不合法"}
+    service = HighlightJobService(db, Path(__file__).parent.parent.parent)
+    if not service.has_source_subtitle(source_youtube_id):
+        return {
+            "success": False,
+            "error": "该视频没有可用的带时间轴源字幕，暂不能生成 Highlight 候选",
+        }
+    try:
+        job, created = db.create_highlight_job(
+            source_youtube_id,
+            max_clips=req.max_clips,
+            min_duration_sec=req.min_duration_sec,
+            max_duration_sec=req.max_duration_sec,
+            requested_by=req.requested_by,
+        )
+    except (TypeError, ValueError) as exc:
+        return {"success": False, "error": str(exc)}
+    _start_highlight_analysis(str(job["id"]))
+    return {
+        "success": True,
+        "created": created,
+        "message": "已开始生成金句候选；不会下载、渲染或发布任何视频。" if created
+                   else "该源视频已有进行中的 Highlight Job；已返回现有任务。",
+        "job": _highlight_job_payload(job),
+    }
+
+
+@app.post("/api/highlights/clips/{clip_id}/select")
+def select_highlight_clip(clip_id: str):
+    """显式选定一个 Highlight 候选并创建独立发布主体；不渲染、不上传、不发布。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", clip_id or ""):
+        return {"success": False, "error": "Highlight Clip ID 格式不合法"}
+    try:
+        clip = db.select_highlight_clip_for_publication(clip_id)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    return {
+        "success": True,
+        "message": "已选定候选并创建独立发布主体；尚未渲染、上传或发布。",
+        "clip": clip,
+    }
+
+
+@app.get("/api/highlights/jobs")
+def list_highlight_jobs(limit: int = 20):
+    """读取 Highlight Job 列表；不触发任何分析、渲染或发布。"""
+    return {"jobs": [_highlight_job_payload(job) for job in db.list_highlight_jobs(limit=limit)]}
+
+
+@app.get("/api/highlights/jobs/{job_id}")
+def get_highlight_job(job_id: str):
+    """读取一个独立 Highlight Job 及其候选，不修改其状态。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", job_id or ""):
+        raise HTTPException(status_code=404, detail="Highlight Job 不存在")
+    job = db.get_highlight_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Highlight Job 不存在")
+    return _highlight_job_payload(job)
+
+
+# ── English World research（独立选题/制作请求；不接通用队列或发布）────────────
+class CreateEnglishWorldResearchRequest(BaseModel):
+    requested_by: str = "manual"
+    notification_target: Optional[str] = None
+    source_url: Optional[str] = None
+
+
+def _english_world_job_payload(job: dict) -> dict:
+    """只暴露英语世界自己的候选和状态，避免被误读为普通视频或平台发布任务。"""
+    payload = dict(job)
+    payload["candidates"] = db.get_english_world_candidates(str(job["id"]))
+    return payload
+
+
+@app.post("/api/english-world/research")
+def create_english_world_research(req: CreateEnglishWorldResearchRequest):
+    """创建只读候选研究任务并异步启动；不会下载、制作、入队或发布。"""
+    source_url = (req.source_url or "").strip() or None
+    if source_url and not _is_youtube_url(source_url):
+        return {"success": False, "error": "指定来源必须是 youtube.com 或 youtu.be 视频 URL"}
+    try:
+        job = db.create_english_world_research_job(
+            requested_by=req.requested_by,
+            notification_target=req.notification_target,
+            source_url=source_url,
+        )
+    except (TypeError, ValueError) as exc:
+        return {"success": False, "error": str(exc)}
+    _start_english_world_research(str(job["id"]))
+    return {
+        "success": True,
+        "message": "已开始英语世界候选研究；不会下载、制作或发布。",
+        "job": _english_world_job_payload(job),
+    }
+
+
+@app.get("/api/english-world/jobs")
+def list_english_world_jobs(limit: int = 20):
+    """读取英语世界独立任务账本；不触发网络研究、制作或平台提交。"""
+    return {"jobs": [_english_world_job_payload(job) for job in db.list_english_world_jobs(limit=limit)]}
+
+
+@app.get("/api/english-world/jobs/{job_id}")
+def get_english_world_job(job_id: str):
+    """读取单个英语世界任务及候选；只读。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", job_id or ""):
+        raise HTTPException(status_code=404, detail="英语世界任务不存在")
+    job = db.get_english_world_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="英语世界任务不存在")
+    return _english_world_job_payload(job)
+
+
+@app.post("/api/english-world/candidates/{candidate_id}/select")
+def select_english_world_candidate(candidate_id: str):
+    """选定研究候选；只进入二次制作确认，不下载、渲染或发布。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", candidate_id or ""):
+        return {"success": False, "error": "英语世界候选 ID 格式不合法"}
+    try:
+        candidate = db.select_english_world_candidate(candidate_id)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    job = db.get_english_world_job(str(candidate["job_id"]))
+    return {
+        "success": True,
+        "message": "候选已选定；需要再次确认后才会登记生产请求。",
+        "candidate": candidate,
+        "job": _english_world_job_payload(job) if job else None,
+    }
+
+
+@app.post("/api/english-world/jobs/{job_id}/request-production")
+def request_english_world_production(job_id: str):
+    """登记第二次制作确认；不伪装为自动渲染完成，更不触发平台发布。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", job_id or ""):
+        return {"success": False, "error": "英语世界任务 ID 格式不合法"}
+    try:
+        job = db.request_english_world_production(job_id)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    return {
+        "success": True,
+        "message": "已登记生产请求；当前等待英语学习卡生产协调器接手，尚未下载、渲染或发布。",
+        "job": _english_world_job_payload(job),
+    }
+
+
 # ── 频道管理 API ──────────────────────────────────────────────────────────
 @app.get("/api/channels")
 def get_channels():
@@ -1271,6 +1548,13 @@ def update_video_priority(youtube_id: str, req: PriorityRequest):
     if not video:
         return {"success": False, "error": "视频不存在"}
 
+    wechat_publication = db.get_wechat_publication(youtube_id)
+    if wechat_publication and wechat_publication.get("state") in {"PUBLISHED", "UNDER_REVIEW", "UNCERTAIN", "REJECTED"}:
+        return {
+            "success": False,
+            "error": f"视频号账本当前为 {wechat_publication['state']}；请先运行作品管理页回查，禁止绕过账本直接重传。",
+        }
+
     # [Gemini_2.5_Pro_planning] v3.3.0: DISCOVERY 源视频禁止通过评分按钮触发管线
     # 用户可以在 high_likes tab 浏览，但不能通过调分间接发起下载/发布
     is_discovery = video.get("source") == "DISCOVERY"
@@ -1370,6 +1654,15 @@ def promote_video(youtube_id: str):
         "triggered": triggered,
         "message": "已加入队列并立即开始处理" if triggered
                    else "已加入队列（score=100），等待调度器触发",
+    }
+
+
+@app.post("/api/platforms/wechat/reconcile")
+def reconcile_wechat_publications():
+    """拒绝历史标题回查，避免把不同视频号作品错误关联。"""
+    return {
+        "success": False,
+        "message": "自动回查已停用：必须先绑定视频号平台原生 post_id，禁止按标题或时间匹配。",
     }
 
 
@@ -1628,13 +1921,7 @@ def download_progress(youtube_id: str):
 
 @app.post("/api/videos/{youtube_id}/republish")
 def republish_video(youtube_id: str):
-    """[Claude_Opus_4.8] 再次发布：已发布视频在平台被别的接口删掉后，重新发布一次。
-
-    重置为 PENDING 并立即重新触发管线。由于 GC 已保留成片/封面/文案/标题/分类，
-    管线 checkpoint 会自动跳过下载（源 3 天内从 original_video/ 冷存档命中）、渲染、
-    封面、文案，直奔发布——即「秒级重发」。产物缺失（超存档窗口）则自动回退全量重跑。
-    仅 PUBLISHED / COMPLETED 状态可触发。
-    """
+    """再次发布入口暂时 fail-closed，避免本地状态被误当作平台删除证明。"""
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
@@ -1642,22 +1929,18 @@ def republish_video(youtube_id: str):
         return {"success": False,
                 "error": f"仅已完成/已发布的视频可再次发布（当前状态：{video.get('status')}）"}
 
-    vertical = _OUT_DIR / f"{youtube_id}_vertical.mp4"
-    copy_file = _OUT_DIR / f"{youtube_id}_copy.txt"
-    fast = vertical.exists() and copy_file.exists()
-
-    db.update_video_status(youtube_id, "PENDING", error_msg=None)
-    triggered = False
-    if db.claim_video_for_processing(youtube_id):
-        fresh = db.get_video_by_youtube_id(youtube_id)
-        if fresh:
-            _trigger_video_async(fresh)
-            triggered = True
-
-    msg = "将复用本地成片快速重发" if fast else "本地成片已清理，将重新下载/渲染后再发布"
-    if not triggered:
-        msg += "（等待调度器触发）"
-    return {"success": True, "youtube_id": youtube_id, "fast": fast, "triggered": triggered, "message": msg}
+    publication = db.get_wechat_publication(youtube_id)
+    if not publication or publication.get("state") != "PUBLISHED" or not all(
+        publication.get(field) for field in ("confirmed_at", "evidence_path", "platform_post_id")
+    ):
+        return {
+            "success": False,
+            "error": "缺少按原生平台 ID 确认的公开视频账本，拒绝再次发布以避免重复提交。",
+        }
+    return {
+        "success": False,
+        "error": "平台作品是否已删除尚无按原生 ID 的可审计证明；再次发布入口已暂停，禁止自动重传。",
+    }
 
 
 @app.post("/api/videos/{youtube_id}/retry")
@@ -1665,14 +1948,18 @@ def retry_video(youtube_id: str):
     """
     重试/强制重置视频状态为 PENDING。
     - FAILED / LOGIN_REQUIRED：正常重试，清除错误信息
-    - DOWNLOADING/TRANSCRIBING/COPYWRITING/PUBLISHING：服务器重启后卡死的任务，强制重置
+    - DOWNLOADING/TRANSCRIBING/COPYWRITING：服务器重启后卡死的预提交任务，强制重置
     若当前分数 >= 75，重置后立即自动重新触发。
     """
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
 
-    retryable = {"FAILED", "LOGIN_REQUIRED", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
+    submission_guard = _wechat_submission_guard_reason(video)
+    if submission_guard:
+        return {"success": False, "error": submission_guard}
+
+    retryable = {"FAILED", "LOGIN_REQUIRED", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING"}
     if video.get("status") not in retryable:
         return {
             "success": False,
@@ -1706,8 +1993,9 @@ def retry_recent(hours: int = 24):
     if hours <= 0 or hours > 720:
         return {"success": False, "error": "hours 需在 1~720 之间"}
     rows = db.get_failed_videos_since(hours)
+    safe_rows = [row for row in rows if not _wechat_submission_guard_reason(row)]
     count = 0
-    for r in rows:
+    for r in safe_rows:
         db.update_video_status(
             r["youtube_id"], "PENDING", error_msg=None,
             slice_index=int(r.get("slice_index") or 0),
@@ -1716,8 +2004,9 @@ def retry_recent(hours: int = 24):
     return {
         "success": True,
         "count": count,
+        "skipped_platform_guard": len(rows) - count,
         "hours": hours,
-        "items": [(r.get("title") or "")[:42] for r in rows[:10]],
+        "items": [(r.get("title") or "")[:42] for r in safe_rows[:10]],
     }
 
 
@@ -1727,9 +2016,11 @@ def retry_recent_preview(hours: int = 24):
     if hours <= 0 or hours > 720:
         return {"success": False, "error": "hours 需在 1~720 之间"}
     rows = db.get_failed_videos_since(hours)
+    safe_rows = [row for row in rows if not _wechat_submission_guard_reason(row)]
     return {
         "success": True,
-        "count": len(rows),
+        "count": len(safe_rows),
+        "skipped_platform_guard": len(rows) - len(safe_rows),
         "hours": hours,
         "items": [
             {
@@ -1738,7 +2029,7 @@ def retry_recent_preview(hours: int = 24):
                 "title": (r.get("title") or "")[:80],
                 "status": r.get("status"),
             }
-            for r in rows[:10]
+            for r in safe_rows[:10]
         ],
     }
 
@@ -1750,7 +2041,11 @@ def retry_slice(youtube_id: str, slice_index: int):
     if not video:
         raise HTTPException(status_code=404, detail="切片任务不存在")
 
-    retryable = {"FAILED", "LOGIN_REQUIRED", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
+    submission_guard = _wechat_submission_guard_reason(video)
+    if submission_guard:
+        return {"success": False, "error": submission_guard}
+
+    retryable = {"FAILED", "LOGIN_REQUIRED", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING"}
     if video.get("status") not in retryable:
         return {
             "success": False,
@@ -1837,6 +2132,10 @@ def reset_video_hard(youtube_id: str):
     if not video:
         return {"success": False, "error": "视频不存在"}
 
+    submission_guard = _wechat_submission_guard_reason(video)
+    if submission_guard:
+        return {"success": False, "error": submission_guard}
+
     # 调用 PipelineManager 的硬重置方法删除产物文件
     from video_processing.pipeline_manager import PipelineManager
     pm = PipelineManager()
@@ -1911,12 +2210,21 @@ def batch_delete_videos(req: BatchDeleteRequest):
         return {"success": False, "error": f"非法 ID: {invalid}"}
 
     active_ids = []
+    protected_ids = []
     for yid in req.youtube_ids:
         parent = db.get_video_by_youtube_id(yid, slice_index=0)
         slices = db.get_slices_by_parent_yid(yid)
         targets = ([parent] if parent else []) + slices
+        if any(_wechat_submission_guard_reason(target) for target in targets):
+            protected_ids.append(yid)
         if any(t.get("status") in ACTIVE_STATUSES for t in targets):
             active_ids.append(yid)
+
+    if protected_ids:
+        return {
+            "success": False,
+            "error": f"以下视频存在视频号平台账本，禁止删除以保留防重传审计：{protected_ids}",
+        }
 
     if active_ids:
         return {
@@ -1985,6 +2293,12 @@ def delete_video(youtube_id: str, delete_files: bool = False, slice_index: Optio
     targets = [t for t in targets if t]
     if not targets:
         return {"success": False, "error": "视频不存在"}
+
+    if any(_wechat_submission_guard_reason(target) for target in targets):
+        return {
+            "success": False,
+            "error": "视频号存在平台账本或待确认提交，禁止删除以保留防重传审计。",
+        }
 
     # ── 1. 处理活跃任务：SIGTERM 阶梯强杀 ───────────────────────
     active_targets = [t for t in targets if t.get("status") in ACTIVE_STATUSES]
@@ -2073,7 +2387,8 @@ def respec_video(youtube_id: str, req: RespecVideoRequest):
 
     状态处理规则：
     - PUBLISHED / SEGMENTED / IGNORED / COMPLETED → 拒绝（终态，不可覆盖）
-    - DOWNLOADING / TRANSCRIBING / COPYWRITING / PUBLISHING → kill 进程后更新
+    - DOWNLOADING / TRANSCRIBING / COPYWRITING → kill 进程后更新
+    - PUBLISHING / 视频号待确认账本 → 拒绝，避免中断后自动重传
     - PENDING / FAILED → 直接更新规格，重置 PENDING
     物理文件：通常不删除；但 TTS 音轨规格变化时，会失效竖版成片和封面，
     防止新版本继续复用原声版缓存。
@@ -2083,6 +2398,10 @@ def respec_video(youtube_id: str, req: RespecVideoRequest):
         return {"success": False, "error": "视频不存在"}
 
     status = video.get("status", "")
+
+    submission_guard = _wechat_submission_guard_reason(video)
+    if submission_guard:
+        return {"success": False, "error": submission_guard, "current_status": status}
 
     # ── 1. 终态拒绝 ─────────────────────────────────────────────
     _TERMINAL_STATUSES = {"PUBLISHED", "UNDER_REVIEW", "SEGMENTED", "IGNORED", "COMPLETED"}
@@ -2171,17 +2490,18 @@ def respec_video(youtube_id: str, req: RespecVideoRequest):
 @app.post("/api/videos/{youtube_id}/stop")
 def stop_video(youtube_id: str, slice_index: Optional[int] = None):
     """
-    停止正在运行的任务进程，并将数据库中的状态置为 FAILED (用户手动停止)。
+    停止仍可安全中止的任务；PUBLISHING 一律转入未绑定提交账本，禁止重发。
 
     # Modification History
     | Version | Date | Author | Description |
     | --- | --- | --- | --- |
+    | 1.1.0 | 2026-08-21 | Codex | 发布中手动中止先记 SUBMITTED_UNBOUND；审核中不再误置 FAILED |
     | 1.0.0 | 2026-05-28 | Gemini_3.5_Flash_planning | 初始创建，实现 SIGTERM/SIGKILL 阶梯强杀与状态流转 |
 
     [Gemini_3.5_Flash_planning]:
     - 支持通过 slice_index 定向停止子切片或停止父视频及其所有切片。
     - 使用 SIGTERM -> wait 2s -> SIGKILL 强杀正在运行的进程组。
-    - 将相关任务在数据库中的状态更新为 FAILED，并记录 error_msg 为 "用户手动停止"。
+    - 预提交任务更新为 FAILED；PUBLISHING 先写未绑定提交账本再停止，绝不自动重传。
     """
     if slice_index is not None:
         targets = [db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)]
@@ -2194,13 +2514,44 @@ def stop_video(youtube_id: str, slice_index: Optional[int] = None):
     if not targets:
         return {"success": False, "error": "视频不存在"}
 
-    # 过滤出处于活跃状态的任务 [Gemini_3.5_Flash_planning]
+    # UNDER_REVIEW 没有可安全终止的本地提交动作；把它改为 FAILED 会使通用重试绕过平台核验。
+    protected_targets = [
+        t for t in targets
+        if str(t.get("status") or "").upper() in {"UNDER_REVIEW", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNCERTAIN"}
+    ]
+    if protected_targets:
+        return {
+            "success": False,
+            "error": "相关视频号提交正在等待平台核验，禁止中止或改写为 FAILED。",
+        }
+
+    # 过滤出处于可中止处理阶段的任务；PUBLISHING 仍可停止，但会 fail-closed 落账。
     active_targets = [t for t in targets if t.get("status") in ACTIVE_STATUSES]
     if not active_targets:
         return {"success": False, "error": "相关视频/切片当前不处于运行状态"}
 
     if not settings.enable_sigterm_kill:
         return {"success": False, "error": "未启用进程强杀机制，无法强制停止任务"}
+
+    publishing_targets = [t for t in active_targets if t.get("status") == "PUBLISHING"]
+    if publishing_targets:
+        reason = "用户在 PUBLISHING 阶段中止本地进程；平台可能已受理，已停止自动重传并等待核验。"
+        try:
+            for t in publishing_targets:
+                db.record_wechat_publication_confirmation(
+                    t["youtube_id"], evidence_path=None, state="SUBMITTED_UNBOUND",
+                    error_message=reason, slice_index=t.get("slice_index", 0),
+                )
+                db.record_wechat_submission_attempt(
+                    t["youtube_id"], evidence_path=None, final_title=t.get("title"),
+                    slice_index=t.get("slice_index", 0),
+                )
+                db.cancel_queued_downstream_publications_for_unconfirmed_wechat(
+                    t["youtube_id"], reason=reason, slice_index=t.get("slice_index", 0),
+                )
+        except Exception as exc:
+            logger.exception("停止发布前无法写入视频号未确认账本")
+            return {"success": False, "error": f"无法写入视频号未确认账本，拒绝中止：{exc}"}
 
     pids_to_kill = [t.get("process_pid") for t in active_targets if t.get("process_pid")]
     if pids_to_kill:
@@ -2222,8 +2573,15 @@ def stop_video(youtube_id: str, slice_index: Optional[int] = None):
             except (ProcessLookupError, PermissionError):
                 pass
 
-    # 将数据库状态更新为 FAILED 并设置错误信息
+    # 仅预提交阶段可标记 FAILED；发布中被终止时平台状态未知，必须保持 fail-closed。
     for t in active_targets:
+        if t.get("status") == "PUBLISHING":
+            db.update_video_status(
+                t["youtube_id"], "SUBMITTED_UNBOUND",
+                error_msg="用户在 PUBLISHING 阶段中止；平台可能已受理，禁止自动重传。",
+                slice_index=t.get("slice_index", 0),
+            )
+            continue
         db.update_video_status(
             t["youtube_id"],
             "FAILED",
@@ -2233,7 +2591,7 @@ def stop_video(youtube_id: str, slice_index: Optional[int] = None):
 
     return {
         "success": True,
-        "message": f"成功停止 {len(active_targets)} 个活跃任务，状态已置为 FAILED"
+        "message": f"成功停止 {len(active_targets)} 个活跃任务；发布中任务已转未确认账本，其余已置为 FAILED"
     }
 
 

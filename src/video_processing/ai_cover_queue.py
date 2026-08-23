@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-07-31 | Codex | 提供无副作用的可领取任务判定，避免空队列唤起外部 Codex 执行器 |
 | 1.2.0 | 2026-08-03 | Codex | 任务协议写明已有底图优先复用与高消耗生成需确认的执行边界 |
 | 1.3.0 | 2026-08-20 | Codex | 接受经过人工视觉验收的 Anti-gravity 底图，并保留来源标识 |
+| 1.4.0 | 2026-08-20 | Codex | 接受 Anti-gravity 机器 OCR 无文字验收结果，保留人工验收优先级 |
 """
 
 from __future__ import annotations
@@ -104,6 +105,7 @@ class AICoverQueue:
             "created_at": _iso(created_at),
             "generation_deadline_at": _iso(created_at + timedelta(minutes=generation_deadline_minutes)),
             "fallback_after_at": _iso(created_at + timedelta(minutes=fallback_after_minutes)),
+            "antigravity_deadline_at": _iso(created_at + timedelta(minutes=fallback_after_minutes)),
             "prefix": prefix,
             "youtube_id": youtube_id,
             "slice_index": int(slice_index),
@@ -181,9 +183,19 @@ class AICoverQueue:
             "antigravity_imagegen",
         }:
             return None
-        if result.get("uses_video_frame") is not False or completed_at > task.generation_deadline:
+        if result.get("uses_video_frame") is not False:
             return None
-        if generated_by == "antigravity_imagegen" and result.get("human_visual_review") != "reviewed_no_text":
+        if generated_by == "antigravity_imagegen":
+            if completed_at >= task.fallback_after:
+                return None
+            human_reviewed = result.get("human_visual_review") == "reviewed_no_text"
+            machine_reviewed = (
+                result.get("machine_visual_review") == "ocr_empty"
+                and not str(result.get("ocr_text", "")).strip()
+            )
+            if not human_reviewed and not machine_reviewed:
+                return None
+        elif completed_at > task.generation_deadline:
             return None
         if not visual.is_file() or visual.parent.resolve() != task.finish_dir.resolve():
             return None
