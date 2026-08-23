@@ -11,6 +11,7 @@
 | 1.3.0 | 2026-08-20 | Codex | 新增 Highlight Clip 人工选定接口调用契约 |
 | 1.2.0 | 2026-08-20 | Codex | 新增 Highlight Job 选择、创建和状态读取 API 调用契约 |
 | 1.4.0 | 2026-08-21 | Codex | 覆盖英语世界候选研究、选题和二次制作确认接口的发布隔离。 |
+| 1.5.0 | 2026-08-23 | Codex | 覆盖英语世界审核项的显式投稿批准/搁置 API 合约。 |
 """
 import json
 
@@ -183,6 +184,22 @@ class TestEnglishWorldJobs:
         assert selected["success"] is True
         assert requested["job"]["state"] == "PRODUCTION_REQUESTED"
         assert route.called
+
+    @respx.mock
+    async def test_review_approval_and_hold_use_bound_review_endpoints(self, api_client):
+        review_id = "c" * 32
+        approve_route = respx.post(
+            f"{BASE_URL}/api/english-world/review-items/{review_id}/approve-submission"
+        ).mock(return_value=httpx.Response(200, json={"success": True, "item": {"state": "SUBMISSION_APPROVED"}}))
+        hold_route = respx.post(
+            f"{BASE_URL}/api/english-world/review-items/{review_id}/hold"
+        ).mock(return_value=httpx.Response(200, json={"success": True, "item": {"state": "HELD"}}))
+
+        approved = await api_client.approve_english_world_submission(review_id)
+        held = await api_client.hold_english_world_review_item(review_id)
+
+        assert approve_route.called and approved["item"]["state"] == "SUBMISSION_APPROVED"
+        assert hold_route.called and held["item"]["state"] == "HELD"
 
 
 @pytest.mark.asyncio

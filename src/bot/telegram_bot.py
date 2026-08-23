@@ -36,6 +36,7 @@
 | 1.19.0  | 2026-08-20 | Codex                               | Highlight 候选支持显式选定并创建独立发布主体；仍不触发渲染或发布 |
 | 1.18.0  | 2026-08-20 | Codex                               | 新增 /highlight 的显式视频选择与候选分析入口；不触发渲染或发布 |
 | 1.20.0  | 2026-08-21 | Codex                               | 新增 /english_world 候选研究、选题与二次制作确认；不触发通用队列或发布 |
+| 1.21.0  | 2026-08-23 | Codex                               | 英语世界审核回执增加唯一投稿批准/搁置回调，不接受模糊文字发布指令。 |
 """
 from __future__ import annotations
 
@@ -381,6 +382,7 @@ async def handle_highlight_callback(update: Update, ctx: ContextTypes.DEFAULT_TY
 
 _ENGLISH_WORLD_JOB_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 _ENGLISH_WORLD_CANDIDATE_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+_ENGLISH_WORLD_REVIEW_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 
 def _format_english_world_duration(value: object) -> str:
@@ -408,13 +410,14 @@ def _english_world_candidate_text(candidate: dict, *, label: str) -> str:
 
 
 async def _reply_english_world_jobs(message) -> None:
-    """只读展示英语世界研究账本；可选候选才附带受限 ID 的按钮。"""
+    """只读展示英语世界研究及审核/投稿账本；按钮始终携带受限 ID。"""
     assert _api is not None
     jobs = await _api.get_english_world_jobs(limit=10)
     if jobs is None:
         await message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")
         return
-    if not jobs:
+    review_items = await _api.get_english_world_review_items(limit=10)
+    if not jobs and not review_items:
         await message.reply_text("📭 暂无英语世界任务。发送 /english_world 开始今日候选研究。")
         return
     lines = ["🌍 <b>英语世界短视频任务</b>"]
@@ -434,6 +437,17 @@ async def _reply_english_world_jobs(message) -> None:
             buttons.append([InlineKeyboardButton("确认制作此选题", callback_data=f"ew:p:{job_id}")])
         if job.get("state") == "FAILED":
             lines.append(f"问题：{html.escape(str(job.get('error_message') or '未知错误')[:180])}")
+    if review_items:
+        lines.append("\n<b>审核与投稿回执</b>")
+        for item in review_items:
+            review_id = str(item.get("id") or "")
+            state = html.escape(str(item.get("state") or "UNKNOWN"))
+            title = html.escape(str(item.get("title") or "未命名成片")[:80])
+            lines.append(f"<code>{html.escape(review_id[:8])}</code> · <code>{state}</code>\n{title}")
+            if item.get("state") == "READY_FOR_REVIEW" and _ENGLISH_WORLD_REVIEW_ID_RE.fullmatch(review_id):
+                buttons.append([InlineKeyboardButton(
+                    f"提交视频号 · {review_id[:8]}", callback_data=f"ew:r:{review_id}",
+                )])
     await _reply_html_chunks(
         message,
         "\n\n".join(lines),
@@ -505,7 +519,7 @@ async def cmd_english_world(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def handle_english_world_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """处理英语世界选题与第二次制作确认；callback 仅携带受限对象 ID。"""
+    """处理英语世界选题、制作确认与唯一审核项投稿批准；callback 不携带 URL/路径。"""
     if not _check_admin(update):
         return
     assert _api is not None
@@ -514,6 +528,46 @@ async def handle_english_world_callback(update: Update, ctx: ContextTypes.DEFAUL
         return
     await query.answer()
     data = str(query.data or "")
+    review_approval = re.fullmatch(r"ew:r:([a-f0-9]{32})", data)
+    if review_approval:
+        result = await _api.approve_english_world_submission(review_approval.group(1))
+        if result is None:
+            await query.edit_message_text("⚠️ 控制中心暂时不可用，未记录投稿批准。")
+            return
+        if not result.get("success"):
+            await query.edit_message_text(
+                f"❌ 投稿批准未生效：{html.escape(str(result.get('error') or '未知错误'))}", parse_mode="HTML",
+            )
+            return
+        item = result.get("item") or {}
+        state = html.escape(str(item.get("state") or "SUBMISSION_APPROVED"))
+        await query.edit_message_text(
+            "✅ <b>已接收本条投稿批准</b>\n"
+            f"审核编号：<code>{review_approval.group(1)[:8]}</code>\n"
+            f"当前状态：<code>{state}</code>\n"
+            "正在发起视频号提交；后续将以“已受理 / 审核中 / 未确认”等平台回执为准，"
+            "不会将提交受理误报为公开发布，也不会自动重传。",
+            parse_mode="HTML",
+        )
+        return
+    review_hold = re.fullmatch(r"ew:[mh]:([a-f0-9]{32})", data)
+    if review_hold:
+        result = await _api.hold_english_world_review_item(review_hold.group(1))
+        if result is None:
+            await query.edit_message_text("⚠️ 控制中心暂时不可用，未搁置审核项。")
+            return
+        if not result.get("success"):
+            await query.edit_message_text(
+                f"❌ 操作未生效：{html.escape(str(result.get('error') or '未知错误'))}", parse_mode="HTML",
+            )
+            return
+        await query.edit_message_text(
+            "⏸ <b>审核项已搁置</b>\n"
+            f"审核编号：<code>{review_hold.group(1)[:8]}</code>\n"
+            "未提交视频号。若要修改，请在 Telegram 说明修改点后重新生成审核成片。",
+            parse_mode="HTML",
+        )
+        return
     selected = re.fullmatch(r"ew:s:([a-f0-9]{32})", data)
     if selected:
         result = await _api.select_english_world_candidate(selected.group(1))

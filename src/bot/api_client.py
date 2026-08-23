@@ -22,6 +22,7 @@
 | 1.12.0 | 2026-08-20 | Codex | 新增 Highlight Job 的显式选择、创建和状态查询 API 封装；不包含发布接口 |
 | 1.13.0 | 2026-08-20 | Codex | 新增 Highlight Clip 人工选定与独立发布主体创建接口；不触发发布 |
 | 1.14.0 | 2026-08-21 | Codex | 新增英语世界短视频候选研究、选定和二次制作确认接口；不触发发布 |
+| 1.15.0 | 2026-08-23 | Codex | 新增英语世界审核项的显式视频号投稿批准与搁置接口。 |
 """
 from __future__ import annotations
 
@@ -210,6 +211,39 @@ class PipelineAPIClient:
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] request_english_world_production failed: {e}")
+            return None
+
+    async def approve_english_world_submission(self, review_id: str) -> Optional[dict]:
+        """POST 审核项投稿批准；仅接受服务端绑定的一次性审核 ID。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(f"/api/english-world/review-items/{review_id}/approve-submission")
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] approve_english_world_submission failed: {e}")
+            return None
+
+    async def get_english_world_review_items(self, *, limit: int = 10) -> Optional[list]:
+        """GET 英语世界审核/投稿回执；只读，不触发 worker。"""
+        try:
+            async with self._client() as c:
+                resp = await c.get("/api/english-world/review-items", params={"limit": limit})
+                resp.raise_for_status()
+                return resp.json().get("items", [])
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] get_english_world_review_items failed: {e}")
+            return None
+
+    async def hold_english_world_review_item(self, review_id: str) -> Optional[dict]:
+        """POST 搁置某条待审核学习卡；不触发制作或投稿。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(f"/api/english-world/review-items/{review_id}/hold")
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] hold_english_world_review_item failed: {e}")
             return None
 
     async def get_video_page(self, tab: str = "waitlist", page: int = 1, size: int = 10) -> Optional[dict]:

@@ -7,32 +7,44 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-22 | Codex | 新增每日英语世界短视频的 Telegram 审核材料通知。 |
+| 1.1.0 | 2026-08-23 | Codex | 审核回执绑定独立发布包与一次性 Telegram 审批按钮，避免模糊文字误投。 |
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
+import json
 import logging
 from pathlib import Path
+import subprocess
 import sys
 
 import requests
 
 from config.settings import settings
+from video_processing.core.cover_policy import validate_dedicated_cover_file
+from video_processing.db.database import PipelineDB
 
 logger = logging.getLogger(__name__)
 
 
-def _post_message(text: str) -> None:
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _post_message(text: str, *, reply_markup: dict | None = None) -> None:
     """发送文字回执；凭据只从 settings 读取。"""
     token = (settings.telegram_bot_token or "").strip()
     chat_id = (settings.active_telegram_chat_id or "").strip()
     if not token or not chat_id:
         raise RuntimeError("Telegram 凭据或审核 chat_id 未配置")
+    payload: dict[str, object] = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     response = requests.post(
         f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+        json=payload,
         timeout=20,
     )
     response.raise_for_status()
@@ -50,6 +62,107 @@ def _post_document(path: Path, caption: str) -> None:
             timeout=120,
         )
     response.raise_for_status()
+
+
+def _load_timeline(manifest_path: Path) -> dict:
+    """读取与成片同目录的审核时间线；缺失时仍可用命令行标题建立最小发布包。"""
+    timeline_path = manifest_path.parent / "timeline_final_enriched.json"
+    if not timeline_path.is_file():
+        return {}
+    try:
+        payload = json.loads(timeline_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"无法读取英语世界时间线：{timeline_path}") from exc
+    return payload if isinstance(payload, dict) else {}
+
+
+def _short_wechat_title(title: str) -> str:
+    """视频号短标题保守裁为 16 个字符，避免将下一段文案混入标题字段。"""
+    clean = "".join((title or "").split())
+    return clean[:16] if len(clean) > 16 else clean
+
+
+def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -> dict:
+    """生成可审计的投稿包并登记审核身份；这里不调用上传器或任何平台接口。"""
+    try:
+        manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"无法读取学习卡 manifest：{manifest}") from exc
+    if manifest_payload.get("content_type") != "ENGLISH_WORLD_SHORT":
+        raise ValueError("审核回执只接受 content_type=ENGLISH_WORLD_SHORT 的学习卡")
+
+    timeline = _load_timeline(manifest)
+    provenance = timeline.get("source_provenance") if isinstance(timeline.get("source_provenance"), dict) else {}
+    headline = str(timeline.get("headline_zh") or display_title).strip()
+    if not headline:
+        raise ValueError("英语世界学习卡缺少可显示标题")
+    artifact_hash = hashlib.sha256(mp4.read_bytes()).hexdigest()
+    package_dir = mp4.parent / "wechat_submission"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    title_path = package_dir / "title.txt"
+    copy_path = package_dir / "copy.txt"
+    cover_path = package_dir / "cover.jpg"
+    cover_provenance_path = package_dir / "cover_provenance.json"
+    title_path.write_text(_short_wechat_title(headline), encoding="utf-8")
+    source_publisher = str(provenance.get("publisher") or provenance.get("source_channel") or "").strip()
+    source_url = str(provenance.get("source_url") or "").strip()
+    copy_path.write_text(
+        "英语世界｜每日英文听读\n"
+        f"{headline}\n\n"
+        "本期以英文新闻片段为听读素材，结合逐词跟读、重点词汇与完整中文释义进行学习设计。\n"
+        f"素材来源：{source_publisher or '公开英文新闻素材'}"
+        + (f"（{source_url}）\n" if source_url else "\n")
+        + "#英语学习 #英语听力 #英文阅读\n",
+        encoding="utf-8",
+    )
+    if not validate_dedicated_cover_file(cover_path, cover_provenance_path):
+        payload = {
+            "title": _short_wechat_title(headline),
+            "content_type": "ENGLISH_WORLD_SHORT",
+            "audio_edition": "original_audio_subtitled",
+            "content_hints": [str(provenance.get("selection_reason") or "英语学习")[:80]],
+        }
+        result = subprocess.run(
+            [
+                str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
+                str(_PROJECT_ROOT / "scripts" / "cover_generator.py"),
+                "--payload", json.dumps(payload, ensure_ascii=False),
+                "--output", str(cover_path),
+                "--provenance-output", str(cover_provenance_path),
+            ],
+            cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=180,
+        )
+        if result.returncode != 0 or not validate_dedicated_cover_file(cover_path, cover_provenance_path):
+            raise RuntimeError(f"英语世界投稿封面未通过验证：{result.stderr[-500:]}")
+
+    return PipelineDB().create_english_world_review_item(
+        artifact_sha256=artifact_hash,
+        title=headline,
+        mp4_path=str(mp4.resolve()),
+        manifest_path=str(manifest.resolve()),
+        title_path=str(title_path.resolve()),
+        copy_path=str(copy_path.resolve()),
+        cover_path=str(cover_path.resolve()),
+        cover_provenance_path=str(cover_provenance_path.resolve()),
+        source_url=source_url or None,
+        source_title=str(provenance.get("source_title") or "").strip() or None,
+        source_publisher=source_publisher or None,
+        source_youtube_id=str(provenance.get("youtube_id") or "").strip() or None,
+        notification_target=(settings.active_telegram_chat_id or "").strip() or None,
+    )
+
+
+def _review_keyboard(review_id: str) -> dict:
+    """回调只携带受限审核 ID；禁止把来源 URL 或文件路径暴露给 Telegram callback。"""
+    return {
+        "inline_keyboard": [
+            [{"text": "✅ 确认提交视频号", "callback_data": f"ew:r:{review_id}"}],
+            [
+                {"text": "↩️ 退回修改", "callback_data": f"ew:m:{review_id}"},
+                {"text": "⏸ 暂不发布", "callback_data": f"ew:h:{review_id}"},
+            ],
+        ],
+    }
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -79,11 +192,22 @@ def main() -> int:
         if not artifact.is_file() or artifact.stat().st_size <= 0:
             raise FileNotFoundError(f"审核文件不存在或为空：{artifact}")
 
-    _post_message(
+    review_item = _prepare_publish_package(display_title=args.title.strip(), mp4=args.mp4, manifest=args.manifest)
+    review_id = str(review_item["id"])
+    state = str(review_item["state"])
+    message = (
         "✅ <b>英语世界短视频｜待人工审核</b>\n"
-        f"标题：{safe_title}\n"
-        "已生成学习成片与质检清单；仅发送 Telegram 审核，未提交视频号。"
+        f"标题：{html.escape(str(review_item['title']))}\n"
+        f"审核编号：<code>{review_id[:8]}</code>\n"
+        "已生成学习成片、质检清单与投稿素材包；当前<b>尚未提交视频号</b>。\n\n"
+        "<b>审核通过：</b>点击下方「✅ 确认提交视频号」。\n"
+        "该操作仅提交本条审核编号绑定的成片；提交后会回执“已受理 / 审核中 / 未确认”，不将已受理误报为公开发布，也不会自动重传。\n"
+        "需修改请点“↩️ 退回修改”；不发布请点“⏸ 暂不发布”。"
     )
+    markup = _review_keyboard(review_id) if state == "READY_FOR_REVIEW" else None
+    if state != "READY_FOR_REVIEW":
+        message += f"\n\n当前状态：<code>{html.escape(state)}</code>；为避免重复投稿，已不提供提交按钮。"
+    _post_message(message, reply_markup=markup)
     _post_document(args.mp4, "英语世界短视频成片｜待审核，未提交视频号")
     _post_document(args.manifest, "英语世界短视频 manifest｜审核证据")
     return 0

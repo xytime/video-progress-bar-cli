@@ -6,6 +6,7 @@
 | 3.23.0 | 2026-08-21 | Codex | 控制台对视频号生命周期 fail-closed：中止/孤儿发布先落未绑定账本，禁用无删除证明的重发，并阻断通用重试、改规格、删除和硬重置 |
 | 3.24.0 | 2026-08-21 | Codex | 回收无存活进程的预提交孤儿任务；提交后状态继续 fail-closed，且待绑定提交进入待核验而非加工队列 |
 | 3.25.0 | 2026-08-21 | Codex | 新增英语世界短视频候选研究与二次制作确认 API；不接入通用队列或发布入口 |
+| 3.26.0 | 2026-08-23 | Codex | 新增英语世界 Telegram 审核项的显式投稿批准入口与独立 worker，不复用通用队列 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -133,6 +134,40 @@ def _start_english_world_research(job_id: str) -> None:
         target=_run,
         daemon=True,
         name=f"english-world-research-{job_id[:8]}",
+    ).start()
+
+
+def _start_english_world_submission(review_id: str) -> None:
+    """仅启动某一已批准审核项的专用投稿器；领取动作在子进程内原子完成。"""
+    project_root = Path(__file__).parent.parent.parent
+    python_bin = project_root / ".venv" / "bin" / "python"
+    runner = project_root / "scripts" / "submit_english_world_review.py"
+
+    def _run() -> None:
+        try:
+            result = subprocess.run(
+                [str(python_bin), str(runner), "--review-id", review_id],
+                cwd=str(project_root), timeout=30 * 60, text=True, capture_output=True,
+            )
+            if result.returncode:
+                logging.getLogger(__name__).error(
+                    "[EnglishWorld] submission worker returned %s for %s: %s",
+                    result.returncode, review_id[:8], result.stderr[-500:],
+                )
+        except subprocess.TimeoutExpired:
+            logging.getLogger(__name__).error(
+                "[EnglishWorld] submission worker timed out for %s; inspect its independent review ledger",
+                review_id[:8],
+            )
+        except OSError as exc:
+            logging.getLogger(__name__).exception(
+                "[EnglishWorld] failed to launch submission worker for %s: %s", review_id[:8], exc,
+            )
+
+    threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"english-world-submit-{review_id[:8]}",
     ).start()
 
 
@@ -1242,6 +1277,60 @@ def request_english_world_production(job_id: str):
         "message": "已登记生产请求；当前等待英语学习卡生产协调器接手，尚未下载、渲染或发布。",
         "job": _english_world_job_payload(job),
     }
+
+
+@app.post("/api/english-world/review-items/{review_id}/approve-submission")
+def approve_english_world_submission(review_id: str):
+    """接收 Telegram 对一条审核成片的唯一投稿授权，并启动独立投稿 worker。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", review_id or ""):
+        return {"success": False, "error": "英语世界审核编号格式不合法"}
+    if settings.wechat_publishing_paused:
+        return {"success": False, "error": "视频号投稿当前已暂停；未记录批准，也未启动上传。"}
+    item = db.get_english_world_review_item(review_id)
+    if not item:
+        return {"success": False, "error": "英语世界审核项不存在"}
+    state = str(item.get("state") or "")
+    try:
+        if state == "READY_FOR_REVIEW":
+            item = db.approve_english_world_submission(review_id)
+            _start_english_world_submission(review_id)
+        elif state == "SUBMISSION_APPROVED":
+            # API 进程可能刚好在首次批准后重启；再次点击只允许唤起同一审核项，领取仍原子防重。
+            _start_english_world_submission(review_id)
+            item = db.get_english_world_review_item(review_id) or item
+        elif state in {"SUBMITTING", "UNDER_REVIEW", "UNCERTAIN", "LOGIN_REQUIRED", "FAILED", "HELD"}:
+            return {
+                "success": True,
+                "message": f"该审核项当前为 {state}；未创建新的投稿尝试。",
+                "item": item,
+            }
+        else:
+            return {"success": False, "error": f"审核项状态异常：{state}"}
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    return {
+        "success": True,
+        "message": "已记录本条审核项的投稿批准，正在发起视频号提交；后续以平台回执为准。",
+        "item": item,
+    }
+
+
+@app.get("/api/english-world/review-items")
+def list_english_world_review_items(limit: int = 20):
+    """只读返回英语世界学习卡的审核/投稿状态，不启动任何操作。"""
+    return {"items": db.list_english_world_review_items(limit=limit)}
+
+
+@app.post("/api/english-world/review-items/{review_id}/hold")
+def hold_english_world_review_item(review_id: str):
+    """显式搁置某条待审核学习卡；不触发制作或投稿。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", review_id or ""):
+        return {"success": False, "error": "英语世界审核编号格式不合法"}
+    try:
+        item = db.hold_english_world_review_item(review_id)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    return {"success": True, "message": "已搁置本条审核项，未提交视频号。", "item": item}
 
 
 # ── 频道管理 API ──────────────────────────────────────────────────────────

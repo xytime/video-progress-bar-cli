@@ -7,6 +7,7 @@
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
+| 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
 | 3.34.0  | 2026-08-21 | Codex                               | 新增英语世界短视频独立研究、候选与生产请求账本，不接管通用视频或发布状态机 |
 | 3.32.0  | 2026-08-21 | Codex                               | 每个 SQLite DAL 连接显式启用外键；新增进程已死的预提交任务有界回收，发布状态不参与回收 |
@@ -1128,6 +1129,44 @@ class PipelineDB:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_english_world_candidates_job "
                 "ON english_world_candidates(job_id, ordinal)"
+            )
+
+            # 英语世界学习卡的 Telegram 审核/投稿账本。它与选题账本、通用视频
+            # 状态机和 platform_publications 完全隔离：一个审核项只绑定一个成片
+            # 摘要，审批后才能由专用投稿器领取，任何失败/未确认状态都不会自动重传。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS english_world_review_items (
+                    id TEXT PRIMARY KEY,
+                    state TEXT NOT NULL DEFAULT 'READY_FOR_REVIEW'
+                        CHECK(state IN ('READY_FOR_REVIEW', 'SUBMISSION_APPROVED', 'SUBMITTING',
+                                      'UNDER_REVIEW', 'UNCERTAIN', 'LOGIN_REQUIRED', 'FAILED', 'HELD')),
+                    artifact_sha256 TEXT NOT NULL UNIQUE,
+                    title TEXT NOT NULL,
+                    content_type TEXT NOT NULL DEFAULT 'ENGLISH_WORLD_SHORT',
+                    mp4_path TEXT NOT NULL,
+                    manifest_path TEXT NOT NULL,
+                    title_path TEXT NOT NULL,
+                    copy_path TEXT NOT NULL,
+                    cover_path TEXT NOT NULL,
+                    cover_provenance_path TEXT NOT NULL,
+                    source_url TEXT DEFAULT NULL,
+                    source_title TEXT DEFAULT NULL,
+                    source_publisher TEXT DEFAULT NULL,
+                    source_youtube_id TEXT DEFAULT NULL,
+                    notification_target TEXT DEFAULT NULL,
+                    approved_at TIMESTAMP DEFAULT NULL,
+                    submission_started_at TIMESTAMP DEFAULT NULL,
+                    submission_finished_at TIMESTAMP DEFAULT NULL,
+                    uploader_exit_code INTEGER DEFAULT NULL,
+                    evidence_dir TEXT DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_english_world_review_items_updated "
+                "ON english_world_review_items(updated_at DESC)"
             )
 
             # 发布后数据地基：日粒度指标只记录事实读数，不反推平台发布成功状态。
@@ -4579,6 +4618,10 @@ class PipelineDB:
         "RESEARCH_QUEUED", "RESEARCHING", "CANDIDATES_READY", "CANDIDATE_SELECTED",
         "PRODUCTION_REQUESTED", "FAILED", "CANCELED",
     }
+    _ENGLISH_WORLD_REVIEW_STATES = {
+        "READY_FOR_REVIEW", "SUBMISSION_APPROVED", "SUBMITTING", "UNDER_REVIEW",
+        "UNCERTAIN", "LOGIN_REQUIRED", "FAILED", "HELD",
+    }
 
     def create_english_world_research_job(
         self,
@@ -4744,6 +4787,172 @@ class PipelineDB:
                                       WHERE ewc.job_id = ewj.id) AS candidate_count
                    FROM english_world_jobs ewj
                    ORDER BY ewj.updated_at DESC, ewj.id DESC LIMIT ?""",
+                (safe_limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    # --- English World Telegram review / WeChat submission (isolated from PipelineManager) ---
+    def create_english_world_review_item(
+        self,
+        *,
+        artifact_sha256: str,
+        title: str,
+        mp4_path: str,
+        manifest_path: str,
+        title_path: str,
+        copy_path: str,
+        cover_path: str,
+        cover_provenance_path: str,
+        source_url: Optional[str] = None,
+        source_title: Optional[str] = None,
+        source_publisher: Optional[str] = None,
+        source_youtube_id: Optional[str] = None,
+        notification_target: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """登记一条已完成学习卡的审核项；同一成片只保留一个不可混淆的审批身份。"""
+        from uuid import uuid4
+
+        clean_hash = (artifact_sha256 or "").strip().lower()
+        clean_title = (title or "").strip()[:160]
+        required_paths = (mp4_path, manifest_path, title_path, copy_path, cover_path, cover_provenance_path)
+        if len(clean_hash) != 64 or any(not str(value or "").strip() for value in required_paths):
+            raise ValueError("English World review item requires an artifact hash and complete publish package")
+        if not clean_title:
+            raise ValueError("English World review item requires a title")
+        with self.get_connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM english_world_review_items WHERE artifact_sha256 = ?", (clean_hash,),
+            ).fetchone()
+            if existing:
+                return dict(existing)
+            review_id = uuid4().hex
+            conn.execute(
+                """INSERT INTO english_world_review_items
+                   (id, artifact_sha256, title, mp4_path, manifest_path, title_path, copy_path,
+                    cover_path, cover_provenance_path, source_url, source_title, source_publisher,
+                    source_youtube_id, notification_target)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    review_id, clean_hash, clean_title, str(mp4_path), str(manifest_path), str(title_path),
+                    str(copy_path), str(cover_path), str(cover_provenance_path),
+                    (source_url or "").strip()[:1000] or None,
+                    (source_title or "").strip()[:500] or None,
+                    (source_publisher or "").strip()[:160] or None,
+                    (source_youtube_id or "").strip()[:80] or None,
+                    (notification_target or "").strip()[:120] or None,
+                ),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (review_id,)).fetchone()
+            if not row:
+                raise RuntimeError("Failed to create English World review item")
+            return dict(row)
+
+    def get_english_world_review_item(self, review_id: str) -> Optional[Dict[str, Any]]:
+        """读取英语世界审核项；只读，不触发投稿或重试。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM english_world_review_items WHERE id = ?", ((review_id or "").strip(),),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def approve_english_world_submission(self, review_id: str) -> Dict[str, Any]:
+        """原子记录 Telegram 对某条审核成片的投稿批准；不接受模糊文字匹配。"""
+        clean_id = (review_id or "").strip()
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            if not row:
+                raise ValueError("English World review item does not exist")
+            if row["state"] == "SUBMISSION_APPROVED":
+                return dict(row)
+            if row["state"] != "READY_FOR_REVIEW":
+                raise ValueError(f"English World review item cannot be approved from {row['state']}")
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'SUBMISSION_APPROVED', approved_at = CURRENT_TIMESTAMP,
+                       error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'READY_FOR_REVIEW'""",
+                (clean_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World review item approval was not accepted")
+            conn.commit()
+            updated = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            return dict(updated) if updated else {}
+
+    def claim_english_world_submission(self, review_id: str) -> Optional[Dict[str, Any]]:
+        """专用投稿器原子领取已批准项；重复点击或重复 worker 都不会二次投稿。"""
+        clean_id = (review_id or "").strip()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'SUBMITTING', submission_started_at = CURRENT_TIMESTAMP,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'SUBMISSION_APPROVED'""",
+                (clean_id,),
+            )
+            if cursor.rowcount != 1:
+                return None
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            return dict(row) if row else None
+
+    def complete_english_world_submission(
+        self,
+        review_id: str,
+        *,
+        state: str,
+        uploader_exit_code: int,
+        evidence_dir: Optional[str] = None,
+        message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """写入一次投稿尝试的保守结果；不把已受理或未确认伪装为公开发布。"""
+        target_state = (state or "").strip().upper()
+        allowed = {"UNDER_REVIEW", "UNCERTAIN", "LOGIN_REQUIRED", "FAILED"}
+        if target_state not in allowed:
+            raise ValueError("Invalid English World submission completion state")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = ?, uploader_exit_code = ?, evidence_dir = ?, error_message = ?,
+                       submission_finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'SUBMITTING'""",
+                (
+                    target_state, int(uploader_exit_code), (evidence_dir or "").strip() or None,
+                    (message or "").strip()[:1000] or None, (review_id or "").strip(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World submission result cannot overwrite the current state")
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM english_world_review_items WHERE id = ?", ((review_id or "").strip(),),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def hold_english_world_review_item(self, review_id: str) -> Dict[str, Any]:
+        """将待审核学习卡显式搁置；搁置后任何按钮都不能自动提交。"""
+        clean_id = (review_id or "").strip()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'HELD', updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'READY_FOR_REVIEW'""",
+                (clean_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World review item cannot be held from its current state")
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            return dict(row) if row else {}
+
+    def list_english_world_review_items(self, *, limit: int = 20) -> List[Dict[str, Any]]:
+        """读取最近审核/投稿回执；只读，不触发 worker 或任何平台动作。"""
+        safe_limit = max(1, min(100, int(limit)))
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT * FROM english_world_review_items
+                   ORDER BY updated_at DESC, id DESC LIMIT ?""",
                 (safe_limit,),
             ).fetchall()
             return [dict(row) for row in rows]

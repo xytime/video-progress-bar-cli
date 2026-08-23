@@ -5,12 +5,15 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-21 | Codex | 覆盖候选研究、二次制作确认和通用队列隔离。 |
 | 1.0.1 | 2026-08-21 | Codex | 固化 yt-dlp 搜索提取器兼容性，防止伪 URL 落入 HTTP 路径。 |
+| 1.1.0 | 2026-08-23 | Codex | 覆盖英语世界成片的唯一审核身份、原子批准领取与未确认投稿收尾。 |
 """
 
 from __future__ import annotations
 
 import sys
 import types
+
+import pytest
 
 from video_processing.db.database import PipelineDB
 from video_processing.english_world.research import EnglishWorldResearchService, _youtube_search
@@ -108,3 +111,40 @@ def test_youtube_search_uses_supported_ytsearch_extractor(monkeypatch):
 
     assert list(_youtube_search("BBC Earth wildlife news")) == []
     assert requested_urls == ["ytsearch8:BBC Earth wildlife news"]
+
+
+def test_review_item_is_bound_to_one_artifact_and_cannot_be_auto_retried(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    paths = {name: package_dir / name for name in (
+        "video.mp4", "manifest.json", "title.txt", "copy.txt", "cover.jpg", "cover_provenance.json",
+    )}
+    for path in paths.values():
+        path.write_text("fixture", encoding="utf-8")
+    kwargs = {
+        "artifact_sha256": "a" * 64,
+        "title": "为家庭送上餐桌",
+        "mp4_path": str(paths["video.mp4"]),
+        "manifest_path": str(paths["manifest.json"]),
+        "title_path": str(paths["title.txt"]),
+        "copy_path": str(paths["copy.txt"]),
+        "cover_path": str(paths["cover.jpg"]),
+        "cover_provenance_path": str(paths["cover_provenance.json"]),
+        "source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    }
+
+    ready = db.create_english_world_review_item(**kwargs)
+    assert db.create_english_world_review_item(**kwargs)["id"] == ready["id"]
+    approved = db.approve_english_world_submission(ready["id"])
+    assert approved["state"] == "SUBMISSION_APPROVED"
+    claimed = db.claim_english_world_submission(ready["id"])
+    assert claimed and claimed["state"] == "SUBMITTING"
+    assert db.claim_english_world_submission(ready["id"]) is None
+
+    completed = db.complete_english_world_submission(
+        ready["id"], state="UNCERTAIN", uploader_exit_code=3, message="结果无法确认",
+    )
+    assert completed["state"] == "UNCERTAIN"
+    with pytest.raises(ValueError, match="cannot be approved"):
+        db.approve_english_world_submission(ready["id"])

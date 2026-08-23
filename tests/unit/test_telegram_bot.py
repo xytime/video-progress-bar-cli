@@ -10,6 +10,7 @@
 | 1.5.0 | 2026-08-20 | Codex | 覆盖 Highlight 候选显式选定及独立发布主体提示 |
 | 1.4.0 | 2026-08-20 | Codex | 覆盖 /highlight 的显式二次确认入口与菜单可见性 |
 | 1.6.0 | 2026-08-21 | Codex | 覆盖英语世界候选研究入口不走普通 URL 自动入队。 |
+| 1.7.0 | 2026-08-23 | Codex | 覆盖英语世界审核项的唯一投稿批准按钮不退回通用发布命令。 |
 """
 import logging
 import re
@@ -260,6 +261,30 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
 
     def test_bot_command_menu_includes_english_world(self):
         self.assertIn("english_world", [command.command for command in _BOT_COMMANDS])
+
+    @patch("bot.telegram_bot._api")
+    async def test_english_world_review_approval_uses_bound_review_id(self, mock_api_client):
+        from bot.telegram_bot import handle_english_world_callback
+
+        review_id = "c" * 32
+        mock_api_client.approve_english_world_submission = AsyncMock(return_value={
+            "success": True, "item": {"id": review_id, "state": "SUBMISSION_APPROVED"},
+        })
+        query = MagicMock()
+        query.data = f"ew:r:{review_id}"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.callback_query = query
+
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await handle_english_world_callback(update, MagicMock())
+
+        mock_api_client.approve_english_world_submission.assert_awaited_once_with(review_id)
+        text = query.edit_message_text.call_args.args[0]
+        self.assertIn("已接收本条投稿批准", text)
+        self.assertNotIn("/process", text)
 
     @patch("bot.telegram_bot._api")
     async def test_highlight_clip_selection_only_creates_subject(self, mock_api_client):
