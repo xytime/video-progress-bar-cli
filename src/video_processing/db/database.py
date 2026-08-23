@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.37.0  | 2026-08-23 | Codex                               | 保存源视频 UTC 精确发布时间，支持发布前原创声明 24 小时判定 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -239,6 +240,7 @@ class PipelineDB:
                             view_count INTEGER DEFAULT NULL,
                             like_count INTEGER DEFAULT NULL,
                             upload_date TEXT DEFAULT NULL,
+                            source_published_at TEXT DEFAULT NULL,
                             censor_tag TEXT DEFAULT NULL,
                             censor_score INTEGER DEFAULT NULL,
                             is_manually_scored INTEGER DEFAULT 0,
@@ -320,6 +322,7 @@ class PipelineDB:
                         view_count INTEGER DEFAULT NULL,
                         like_count INTEGER DEFAULT NULL,
                         upload_date TEXT DEFAULT NULL,
+                        source_published_at TEXT DEFAULT NULL,
                         censor_tag TEXT DEFAULT NULL,
                         censor_score INTEGER DEFAULT NULL,
                         is_manually_scored INTEGER DEFAULT 0,
@@ -411,6 +414,13 @@ class PipelineDB:
             if columns and "source_subtitle_checked_at" not in columns:
                 self._logger.info("[Migration] Adding source_subtitle_checked_at column to processed_videos table...")
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN source_subtitle_checked_at TIMESTAMP DEFAULT NULL;")
+                conn.commit()
+
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "source_published_at" not in columns:
+                self._logger.info("[Migration] Adding source_published_at column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN source_published_at TEXT DEFAULT NULL;")
                 conn.commit()
 
 
@@ -2228,6 +2238,7 @@ class PipelineDB:
         view_count: Optional[int] = None,
         like_count: Optional[int] = None,
         upload_date: Optional[str] = None,
+        source_published_at: Optional[str] = None,
         trim_start: Optional[str] = None,
         trim_end: Optional[str] = None,
         slice_index: int = 0,                       # [Gemini_3.5_Flash_planning] 新增：切片索引，默认0 (主视频)
@@ -2253,11 +2264,11 @@ class PipelineDB:
                 conn.execute(
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
-                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
+                        duration_sec, view_count, like_count, upload_date, source_published_at, trim_start, trim_end, disable_slicing,
                         tts_provider, category, content_type, censor_tag, censor_score)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (youtube_id, slice_index, parent_id, title, channel_id, score, zh_title, source,
-                     duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
+                     duration_sec, view_count, like_count, upload_date, source_published_at, trim_start, trim_end, disable_slicing,
                      tts_provider, category, normalized_content_type, censor_tag, censor_score)  # [Gemini_3.5_Flash_planning]
                 )
                 conn.commit()
@@ -2277,6 +2288,7 @@ class PipelineDB:
         like_count: Optional[int],
         upload_date: Optional[str],
         metadata_complete: bool,
+        source_published_at: Optional[str] = None,
     ) -> str:
         """写入或补全白名单监控候选，且不改变既有处理/发布状态。
 
@@ -2301,6 +2313,7 @@ class PipelineDB:
                            view_count = COALESCE(?, view_count),
                            like_count = COALESCE(?, like_count),
                            upload_date = COALESCE(?, upload_date),
+                           source_published_at = COALESCE(?, source_published_at),
                            status = CASE
                                WHEN status = 'METADATA_PENDING' AND ? THEN 'PENDING'
                                ELSE status
@@ -2309,7 +2322,7 @@ class PipelineDB:
                        WHERE youtube_id = ? AND slice_index = 0""",
                     (
                         title, channel_id, zh_title, duration_sec, view_count, like_count,
-                        upload_date, metadata_complete, youtube_id,
+                        upload_date, source_published_at, metadata_complete, youtube_id,
                     ),
                 )
                 conn.commit()
@@ -2319,11 +2332,11 @@ class PipelineDB:
             conn.execute(
                 """INSERT INTO processed_videos
                    (youtube_id, slice_index, title, channel_id, score, status, zh_title, source,
-                    duration_sec, view_count, like_count, upload_date)
-                   VALUES (?, 0, ?, ?, 0, ?, ?, 'AUTO', ?, ?, ?, ?)""",
+                    duration_sec, view_count, like_count, upload_date, source_published_at)
+                   VALUES (?, 0, ?, ?, 0, ?, ?, 'AUTO', ?, ?, ?, ?, ?)""",
                 (
                     youtube_id, title, channel_id, status, zh_title, duration_sec,
-                    view_count, like_count, upload_date,
+                    view_count, like_count, upload_date, source_published_at,
                 ),
             )
             conn.commit()
@@ -2355,7 +2368,7 @@ class PipelineDB:
                 insert_data.append((
                     yid, v.get("slice_index", 0), v.get("parent_id"), v.get("title"), v.get("channel_id"),
                     v.get("score", 0), v.get("zh_title"), source, v.get("duration_sec"), v.get("view_count"),
-                    v.get("like_count"), v.get("upload_date"), v.get("trim_start"), v.get("trim_end"),
+                    v.get("like_count"), v.get("upload_date"), v.get("source_published_at"), v.get("trim_start"), v.get("trim_end"),
                     v.get("disable_slicing", 1),
                     normalize_content_type(v.get("content_type")),
                 ))
@@ -2367,9 +2380,9 @@ class PipelineDB:
                 conn.executemany(
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
-                        duration_sec, view_count, like_count, upload_date, trim_start, trim_end, disable_slicing,
+                        duration_sec, view_count, like_count, upload_date, source_published_at, trim_start, trim_end, disable_slicing,
                         content_type)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     insert_data
                 )
                 conn.commit()

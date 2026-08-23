@@ -21,6 +21,7 @@
 | 2.4.0   | 2026-07-12 | Codex                          | [首次初始化] 增加 --bootstrap：一次性全量轮询批准频道，并将发现窗口放宽到最近5天 |
 | 2.5.0   | 2026-07-12 | Codex                          | [访问减压] 频道最多解析12条；取消被拒后的即时重试；连续拒绝按6/12/24小时逐频道熔断 |
 | 3.0.0   | 2026-07-28 | Codex                          | [断供根治] 官方 Data API 主源、RSS 无密钥降级；发现脱离 yt-dlp，RSS 条目待元数据补全后才可评分 |
+| 3.2.0   | 2026-08-23 | Codex                          | 保留 UTC 精确源发布时间，供发布前原创声明按 24 小时判定 |
 | 3.1.0   | 2026-08-05 | Codex                          | [标题译文防污] 拒绝 Error 500 错误页写入 zh_title，保留原始英文标题待下轮翻译 |
 """
 import sys
@@ -135,6 +136,7 @@ def fetch_latest_videos(db: PipelineDB, channel_id: str, lookback_days: int = 3)
                 view_count=video.view_count,
                 like_count=video.like_count,
                 upload_date=video.upload_date,
+                source_published_at=video.source_published_at,
                 metadata_complete=catalog.metadata_complete,
             )
             if result == "inserted":

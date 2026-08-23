@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 |---------|------------|--------|-------------|
+| 1.1.0 | 2026-08-23 | Codex | 保留 UTC 精确源发布时间，供视频号原创声明按 24 小时判定 |
 | 1.0.0 | 2026-07-28 | Codex | 新增 Data API 主源与 RSS 降级，解除频道发现对 yt-dlp 反爬状态的依赖 |
 """
 
@@ -43,6 +44,7 @@ class ChannelVideo:
     duration_sec: int | None = None
     view_count: int | None = None
     like_count: int | None = None
+    source_published_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -174,14 +176,16 @@ def _fetch_data_api_videos(
         if duration_sec is None or not 120 < duration_sec < 2700:
             continue
         statistics = detail.get("statistics", {})
+        published_at = _published_at(item)
         videos.append(
             ChannelVideo(
                 youtube_id=video_id,
                 title=(item.get("snippet", {}).get("title") or "").strip(),
-                upload_date=_published_at(item).strftime("%Y%m%d"),
+                upload_date=published_at.strftime("%Y%m%d"),
                 duration_sec=duration_sec,
                 view_count=_int_or_none(statistics.get("viewCount")),
                 like_count=_int_or_none(statistics.get("likeCount")),
+                source_published_at=_format_utc(published_at),
             )
         )
     return videos
@@ -226,6 +230,7 @@ def _fetch_rss_videos(
                     youtube_id=video_id,
                     title=title,
                     upload_date=published_at.strftime("%Y%m%d"),
+                    source_published_at=_format_utc(published_at),
                 )
             )
     return videos
@@ -252,6 +257,11 @@ def _published_at(item: dict[str, Any]) -> dt.datetime:
 
 def _parse_datetime(value: str) -> dt.datetime:
     return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _format_utc(value: dt.datetime) -> str:
+    """以稳定 RFC3339 UTC 形式保存源发布时间。"""
+    return value.astimezone(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _is_within_lookback(value: dt.datetime, lookback_days: int, now: dt.datetime) -> bool:

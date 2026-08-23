@@ -42,7 +42,9 @@ def test_fetch_rss_filters_old_entries(monkeypatch):
     )
 
     assert videos == [
-        youtube_catalog.ChannelVideo("recent-id", "Recent title", "20260728")
+        youtube_catalog.ChannelVideo(
+            "recent-id", "Recent title", "20260728", source_published_at="2026-07-28T00:00:00Z"
+        )
     ]
 
 
@@ -69,5 +71,7 @@ def test_data_api_catalog_includes_complete_scoring_metadata(monkeypatch):
     assert catalog.source == "youtube_data_api"
     assert catalog.metadata_complete is True
     assert catalog.videos == [
-        youtube_catalog.ChannelVideo("api-id", "API title", "20260728", 600, 3000, 120)
+        youtube_catalog.ChannelVideo(
+            "api-id", "API title", "20260728", 600, 3000, 120, "2026-07-28T00:00:00Z"
+        )
     ]

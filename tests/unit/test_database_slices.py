@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                    | Description                                     |
 |---------|------------|---------------------------|-------------------------------------------------|
+| 2.1.0 | 2026-08-23 | Codex | 覆盖源视频精确发布时间的插入与非空补齐 |
 | 2.0.0   | 2026-08-21 | Codex                    | 覆盖评分输入缓存与历史微信墓碑不计入待恢复队列 |
 | 1.2.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证 purge_stale_tasks, batch_add_videos 补齐 disable_slicing 以及 delete_slices_by_parent_id |
 | 1.3.0   | 2026-07-13 | Codex                    | 覆盖 AI 字幕审计运行、provider 尝试与汇总查询 |
@@ -52,6 +53,22 @@ def test_connection_context_enables_foreign_keys(temp_db):
 
     with db.get_connection() as conn:
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+
+
+def test_monitored_video_retains_precise_source_publish_time(temp_db):
+    db = PipelineDB(temp_db)
+    assert db.upsert_monitored_video(
+        "precise-published-at", "Title", "channel", zh_title=None, duration_sec=60,
+        view_count=100, like_count=3, upload_date="20260823", metadata_complete=True,
+        source_published_at="2026-08-23T01:02:03Z",
+    ) == "inserted"
+    assert db.upsert_monitored_video(
+        "precise-published-at", "Title", "channel", zh_title=None, duration_sec=60,
+        view_count=100, like_count=3, upload_date="20260823", metadata_complete=True,
+        source_published_at=None,
+    ) == "refreshed"
+
+    assert db.get_video_by_youtube_id("precise-published-at")["source_published_at"] == "2026-08-23T01:02:03Z"
 
 
 def test_orphaned_pre_submission_recovery_is_bounded(temp_db):

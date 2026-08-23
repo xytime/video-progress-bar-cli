@@ -115,6 +115,7 @@
 | 3.48.15 | 2026-08-11 | Codex                               | 视频号提交后统一进入 UNDER_REVIEW；禁止以列表跳转或截图写 PUBLISHED，保留证据并阻断自动重传 |
 | 3.48.16 | 2026-08-14 | Codex                               | 发布前人工复核闸在成片与审查完成后阻断全部平台提交 |
 | 3.48.18 | 2026-08-17 | Codex                               | 字幕缓存拒绝上游 HTTP 错误页，防止历史污染成片被检查点复用 |
+| 3.48.19 | 2026-08-23 | Codex                               | 按源视频精确发布时间控制视频号原创声明，并保留发布前本地决策证据 |
 | 3.48.16 | 2026-08-11 | Codex                               | 视频号未确认公开时取消同源尚未提交的抖音/快手队列，防止旧误判触发跨平台抢跑 |
 """
 
@@ -152,6 +153,7 @@ from .scoring import compute_auto_score
 from .censorship_service import CensorshipService
 from .ai_cover_queue import AICoverQueue
 from .core.cover_policy import validate_dedicated_cover_file
+from .core.original_declaration_policy import decide_original_declaration
 from cover.creative_brief import build_cover_creative_brief
 from config.settings import settings
 
@@ -2243,6 +2245,39 @@ class PipelineManager:
         self.db.set_video_preparation_ready(yid, False, slice_index=slice_index)
         self.db.update_video_status(yid, "PENDING", error_msg=message, slice_index=slice_index)
 
+    def _original_declaration_for_submission(
+        self,
+        video: Dict[str, Any],
+        *,
+        yid: str,
+        slice_index: int,
+        evidence_dir: Path,
+    ) -> bool:
+        """写入发布前决策证据，并返回是否自动声明原创。"""
+        source_published_at = video.get("source_published_at")
+        if slice_index:
+            parent = self.db.get_video_by_youtube_id(yid, 0)
+            source_published_at = parent.get("source_published_at") if parent else None
+
+        decision = decide_original_declaration(source_published_at)
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        policy_path = evidence_dir / "original_declaration_policy.json"
+        temporary_path = evidence_dir / ".original_declaration_policy.tmp"
+        payload = {
+            "source_published_at": decision.source_published_at,
+            "evaluated_at": decision.evaluated_at,
+            "age_seconds": decision.age_seconds,
+            "declare_original": decision.declare_original,
+            "reason": decision.reason,
+        }
+        temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary_path.replace(policy_path)
+        logger.info(
+            "[OriginalDeclaration] %s: declare_original=%s reason=%s source_published_at=%s",
+            yid, decision.declare_original, decision.reason, decision.source_published_at,
+        )
+        return decision.declare_original
+
     def _process_single_video(
         self,
         video: Dict[str, Any],
@@ -3043,6 +3078,12 @@ class PipelineManager:
                         logger.warning(f"[Collection] Parent video (slice_index=0) not found for {yid}, skipping collection.")
 
                 evidence_dir = self._OUT_DIR / "wechat_evidence" / prefix / str(time.time_ns())
+                declare_original = self._original_declaration_for_submission(
+                    video,
+                    yid=yid,
+                    slice_index=slice_index,
+                    evidence_dir=evidence_dir,
+                )
                 upload_cmd = [
                     self._VENV_PYTHON,
                     str(self._PRJ_ROOT / "scripts" / "wechat_uploader.py"),
@@ -3066,6 +3107,8 @@ class PipelineManager:
                 # [Gemini_2.5_Pro_planning] v3.0.0: 对单视频和多切片均传 collection
                 if collection_name:
                     upload_cmd += ["--collection", collection_name]
+                if not declare_original:
+                    upload_cmd.append("--no-original-declaration")
 
                 try:
                     res = self._run_tracked(upload_cmd, yid, slice_index=slice_index, text=True,
