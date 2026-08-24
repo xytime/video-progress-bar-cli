@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-20 | Codex | 新增 Anti-gravity 图像工具第一兜底适配器 |
 | 1.1.0 | 2026-08-20 | Codex | 增加 claim、OCR 无文字验收、超时窗口和原子回执 |
+| 1.2.0 | 2026-08-24 | Codex | 保留图像工具失败诊断，避免将配额等根因误报为无产物 |
 """
 
 from __future__ import annotations
@@ -151,7 +152,23 @@ def _candidate_images(work_dir: Path, started_at: float) -> list[Path]:
     return sorted(candidates, key=lambda path: path.stat().st_mtime, reverse=True)
 
 
-async def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> None:
+def _diagnostic_text(chunks: list[object]) -> str:
+    """提取 SDK 的安全失败摘要，不把根因压缩成“无图片”。"""
+    messages: list[str] = []
+    for chunk in chunks:
+        error = getattr(chunk, "error", None)
+        if error:
+            messages.append(str(error))
+            continue
+        # Thought 是模型过程性推理，常把真正的工具错误挤出 500 字符窗口；
+        # 只保留用户可见的 Text 终态，确保账本留下可行动的失败根因。
+        text = getattr(chunk, "text", None) if type(chunk).__name__ == "Text" else None
+        if text:
+            messages.append(str(text))
+    return " ".join(messages).strip()[:500]
+
+
+async def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> str:
     from google.antigravity import Agent, CapabilitiesConfig, LocalAgentConfig
     from google.antigravity.types import BuiltinTools
 
@@ -182,8 +199,8 @@ async def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path)
     )
     async with Agent(config) as agent:
         response = await agent.chat(prompt)
-        async for _ in response.chunks:
-            pass
+        chunks = [chunk async for chunk in response.chunks]
+    return _diagnostic_text(chunks)
 
 
 def run(args: argparse.Namespace) -> int:
@@ -212,21 +229,22 @@ def run(args: argparse.Namespace) -> int:
     work_dir.mkdir(parents=True, exist_ok=False)
     started_at = time.time()
     try:
-        asyncio.run(_generate(args, task, work_dir))
+        diagnostic = asyncio.run(_generate(args, task, work_dir))
         candidates = _candidate_images(work_dir, started_at)
         if not candidates:
-            raise RuntimeError("generate_image returned no image artifact")
+            suffix = f": {diagnostic}" if diagnostic else ""
+            raise RuntimeError(f"generate_image returned no image artifact{suffix}")
         visual_tmp = task.finish_dir / ".visual.antigravity.tmp.png"
         _sips_png(candidates[0], visual_tmp)
         width, height = _dimensions(visual_tmp)
         ocr_text = _ocr_text(visual_tmp)
         if ocr_text:
             raise RuntimeError(f"OCR detected text: {ocr_text[:160]}")
-        visual = task.finish_dir / "visual.png"
-        visual_tmp.replace(visual)
         completed_at = _now()
         if completed_at >= task.fallback_after:
             raise RuntimeError("generated image arrived after Anti-gravity fallback window")
+        visual = task.finish_dir / "visual.png"
+        visual_tmp.replace(visual)
         _write_json(
             task.finish_dir / "result.json",
             {
