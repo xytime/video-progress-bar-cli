@@ -25,6 +25,7 @@
 | 1.13.0 | 2026-08-05 | Codex | 取消单屏微笔记上限；词下中文释义改为完整多行排版，空间不足通过阅读区提前滚动解决。 |
 | 1.14.0 | 2026-08-05 | Codex | 微笔记按同一英文行分层避让；右栏按每个阅读屏的左侧候选稳定填充五张词卡。 |
 | 1.15.0 | 2026-08-24 | Codex | 末屏仅剩不超过 12 个可见英文词时，允许低于八条微笔记；普通阅读屏继续严格门禁。 |
+| 1.16.0 | 2026-08-24 | Codex | 末屏微笔记改为按可见英文词数分档，避免 13 词等边界内容被八条硬门槛误拦。 |
 """
 
 from __future__ import annotations
@@ -91,15 +92,23 @@ class TemplateAAssets:
     paragraph_bottoms: tuple[int, ...]
 
 
-_MAX_TERMINAL_SCREEN_WORDS_WITHOUT_NOTE_FLOOR = 12
+_TERMINAL_SCREEN_NOTE_TIERS = (
+    (12, 0),
+    (24, 3),
+    (40, 5),
+)
 
 
-def is_short_terminal_screen(*, screen_index: int, screen_count: int, visible_word_count: int) -> bool:
-    """只对确有少量剩余正文的末屏放宽微笔记下限。"""
-    return (
-        screen_index == screen_count - 1
-        and visible_word_count <= _MAX_TERMINAL_SCREEN_WORDS_WITHOUT_NOTE_FLOOR
-    )
+def required_micro_notes_for_screen(
+    *, screen_index: int, screen_count: int, visible_word_count: int,
+) -> int:
+    """返回阅读屏所需的最少微笔记数，末屏按正文密度分档。"""
+    if screen_index != screen_count - 1:
+        return MIN_MICRO_NOTES_PER_SCREEN
+    for maximum_words, minimum_notes in _TERMINAL_SCREEN_NOTE_TIERS:
+        if visible_word_count <= maximum_words:
+            return minimum_notes
+    return MIN_MICRO_NOTES_PER_SCREEN
 
 
 class RecordUnderlineTemplate:
@@ -170,9 +179,10 @@ class RecordUnderlineTemplate:
     ) -> tuple[VocabularyItem, ...]:
         """在真实阅读窗中挑选微笔记，不以全篇词数设隐性上限。
 
-        每个候选按其所有正文出现位置映射到滚动后的各屏；仅保证每屏至少
-        八项，不为全文或单屏施加上限。若某屏没有足够的可审阅候选，直接报错
-        而非静默交付稀疏页面，交由上游补充离线词表或短语 JSON。
+        每个候选按其所有正文出现位置映射到滚动后的各屏；普通屏至少八项，
+        末屏则按可见英文词数分档为 0、3、5 或 8 项，不为全文或单屏施加上限。
+        若某屏没有足够的可审阅候选，直接报错而非静默交付稀疏页面，交由上游
+        补充离线词表或短语 JSON。
         """
         offsets = tuple(dict.fromkeys(int(offset) for offset in screen_offsets))
         if not offsets or not candidates:
@@ -201,13 +211,13 @@ class RecordUnderlineTemplate:
             for key in occurrences
         }
         for screen_index, available in enumerate(screen_items):
-            requires_note_floor = not is_short_terminal_screen(
+            required_notes = required_micro_notes_for_screen(
                 screen_index=screen_index,
                 screen_count=len(screen_items),
                 visible_word_count=screen_word_counts[screen_index],
             )
             for item in ranked:
-                if not requires_note_floor or screen_counts[screen_index] >= MIN_MICRO_NOTES_PER_SCREEN:
+                if screen_counts[screen_index] >= required_notes:
                     break
                 key = _normalise_phrase(item.word)
                 if key in selected_keys or key not in available:
@@ -216,9 +226,10 @@ class RecordUnderlineTemplate:
                 selected_keys.add(key)
                 for index in memberships[key]:
                     screen_counts[index] += 1
-            if requires_note_floor and screen_counts[screen_index] < MIN_MICRO_NOTES_PER_SCREEN:
+            if screen_counts[screen_index] < required_notes:
                 raise ValueError(
                     f"第 {screen_index + 1} 个阅读屏只有 {screen_counts[screen_index]} 个可用微笔记；"
+                    f"该屏可见英文 {screen_word_counts[screen_index]} 词，至少需要 {required_notes} 个；"
                     "需补充离线词表候选或审核短语 JSON"
                 )
         return tuple(selected)

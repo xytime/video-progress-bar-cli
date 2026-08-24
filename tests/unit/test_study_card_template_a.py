@@ -33,7 +33,7 @@ from video_processing.study_cards.template_a import (
     _meaning_line,
     _right_vocabulary_items,
     _vocabulary_anchor_y,
-    is_short_terminal_screen,
+    required_micro_notes_for_screen,
 )
 
 
@@ -230,22 +230,49 @@ def test_scroll_plan_keeps_a_paragraph_translation_inside_the_reading_window():
     assert steps[0].to_offset == 328
 
 
-def test_short_terminal_screen_may_have_fewer_than_eight_micro_notes():
+@pytest.mark.parametrize(
+    ("screen_index", "screen_count", "visible_word_count", "expected"),
+    (
+        (0, 2, 6, 8),
+        (1, 2, 12, 0),
+        (1, 2, 13, 3),
+        (1, 2, 24, 3),
+        (1, 2, 25, 5),
+        (1, 2, 40, 5),
+        (1, 2, 41, 8),
+    ),
+)
+def test_terminal_screen_micro_note_requirement_uses_visible_word_tiers(
+    screen_index: int, screen_count: int, visible_word_count: int, expected: int,
+):
+    assert required_micro_notes_for_screen(
+        screen_index=screen_index,
+        screen_count=screen_count,
+        visible_word_count=visible_word_count,
+    ) == expected
+
+
+def test_terminal_screen_with_thirteen_words_requires_three_micro_notes():
     boxes = tuple(
         [WordBox(f"first{index}", 54, TEXT_TOP + 120, 60) for index in range(8)]
-        + [WordBox(f"last{index}", 54, TEXT_TOP + 1120, 60) for index in range(6)]
+        + [WordBox(f"last{index}", 54, TEXT_TOP + 1120, 60) for index in range(13)]
     )
-    candidates = tuple(
+    first_screen_candidates = tuple(
         [VocabularyItem(f"first{index}", "首屏", level="PET") for index in range(8)]
-        + [VocabularyItem("last0", "末屏", level="PET")]
+    )
+    insufficient_candidates = first_screen_candidates + tuple(
+        VocabularyItem(f"last{index}", "末屏", level="PET") for index in range(2)
+    )
+    with pytest.raises(ValueError, match="至少需要 3 个"):
+        RecordUnderlineTemplate().select_vocabulary_for_screens(insufficient_candidates, boxes, (0, 1000))
+
+    candidates = first_screen_candidates + tuple(
+        VocabularyItem(f"last{index}", "末屏", level="PET") for index in range(3)
     )
 
     selected = RecordUnderlineTemplate().select_vocabulary_for_screens(candidates, boxes, (0, 1000))
 
-    assert len(selected) == 8
-    assert is_short_terminal_screen(screen_index=1, screen_count=2, visible_word_count=6)
-    assert not is_short_terminal_screen(screen_index=0, screen_count=2, visible_word_count=6)
-    assert not is_short_terminal_screen(screen_index=1, screen_count=2, visible_word_count=13)
+    assert len(selected) == 11
 
 
 def test_scroll_offset_for_underlines_matches_piecewise_scroll_plan():
@@ -317,7 +344,7 @@ def test_vocabulary_card_anchor_uses_the_first_matching_body_word(tmp_path: Path
     assert _vocabulary_anchor_y(VocabularyItem("spotted", "发现"), assets.word_boxes) == spotted_box.y - 53
 
 
-def test_visual_vocabulary_selection_uses_a_per_screen_minimum_without_any_cap():
+def test_visual_vocabulary_selection_uses_terminal_screen_tier_without_any_cap():
     template = RecordUnderlineTemplate()
     candidates = tuple(VocabularyItem(f"word{index}", "学习词", level="PET") for index in range(21))
     boxes = tuple(
@@ -331,7 +358,7 @@ def test_visual_vocabulary_selection_uses_a_per_screen_minimum_without_any_cap()
 
     selected = template.select_vocabulary_for_screens(candidates, boxes, (0, 1000))
 
-    assert len(selected) == 16
+    assert len(selected) == 11
     assert MIN_MICRO_NOTES_PER_SCREEN == 8
 
 
