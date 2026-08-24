@@ -6,16 +6,20 @@
 | 1.0.0 | 2026-08-21 | Codex | 覆盖候选研究、二次制作确认和通用队列隔离。 |
 | 1.0.1 | 2026-08-21 | Codex | 固化 yt-dlp 搜索提取器兼容性，防止伪 URL 落入 HTTP 路径。 |
 | 1.1.0 | 2026-08-23 | Codex | 覆盖英语世界成片的唯一审核身份、原子批准领取与未确认投稿收尾。 |
+| 1.1.1 | 2026-08-24 | Codex | 覆盖候选搜索继承 Cookie 配置及单批次失败隔离。 |
+| 1.1.2 | 2026-08-24 | Codex | 覆盖目录降级路径与新闻标题风险词预筛。 |
 """
 
 from __future__ import annotations
 
 import sys
 import types
+from types import SimpleNamespace
 
 import pytest
 
 from video_processing.db.database import PipelineDB
+from video_processing.english_world import research
 from video_processing.english_world.research import EnglishWorldResearchService, _youtube_search
 
 
@@ -80,7 +84,7 @@ def test_selected_candidate_requires_second_confirmation_before_production_reque
 def test_metadata_screening_rejects_explicitly_unsuitable_topics(tmp_path):
     db = PipelineDB(str(tmp_path / "pipeline.db"))
     job = db.create_english_world_research_job(requested_by="telegram")
-    unsafe = _candidate(title="Election war update")
+    unsafe = _candidate(title="Iran tariff victim remains update")
 
     service = EnglishWorldResearchService(db, searcher=lambda _query: [unsafe])
     result = service.research(job["id"])
@@ -91,10 +95,11 @@ def test_metadata_screening_rejects_explicitly_unsuitable_topics(tmp_path):
 
 def test_youtube_search_uses_supported_ytsearch_extractor(monkeypatch):
     requested_urls: list[str] = []
+    requested_options: list[dict] = []
 
     class FakeYoutubeDL:
-        def __init__(self, _options):
-            pass
+        def __init__(self, options):
+            requested_options.append(options)
 
         def __enter__(self):
             return self
@@ -111,6 +116,50 @@ def test_youtube_search_uses_supported_ytsearch_extractor(monkeypatch):
 
     assert list(_youtube_search("BBC Earth wildlife news")) == []
     assert requested_urls == ["ytsearch8:BBC Earth wildlife news"]
+    assert requested_options[0]["ignoreerrors"] is True
+    assert "cookiefile" in requested_options[0] or "cookiesfrombrowser" in requested_options[0]
+
+
+def test_research_continues_after_one_search_batch_is_blocked(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    job = db.create_english_world_research_job(requested_by="telegram")
+    calls: list[str] = []
+
+    def searcher(query: str):
+        calls.append(query)
+        if len(calls) == 1:
+            raise RuntimeError("YouTube risk control")
+        return [_candidate()]
+
+    result = EnglishWorldResearchService(db, searcher=searcher).research(job["id"])
+
+    assert result and result["state"] == "CANDIDATES_READY"
+    assert len(calls) == 5
+
+
+def test_research_falls_back_to_approved_channel_catalog_when_ytsearch_is_blocked(tmp_path, monkeypatch):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    job = db.create_english_world_research_job(requested_by="telegram")
+    requested_channels: list[str] = []
+
+    def fake_catalog(channel_id: str, **_kwargs):
+        requested_channels.append(channel_id)
+        return SimpleNamespace(videos=[SimpleNamespace(
+            youtube_id="catalog-video-1",
+            title="Whales return to the bay",
+            upload_date="20260824",
+            duration_sec=120,
+        )])
+
+    monkeypatch.setattr(research, "fetch_channel_catalog", fake_catalog)
+
+    result = EnglishWorldResearchService(db, searcher=lambda _query: [None]).research(job["id"])
+
+    assert result and result["state"] == "CANDIDATES_READY"
+    assert requested_channels == [channel_id for channel_id, _name in research._APPROVED_SOURCE_CHANNELS]
+    candidates = db.get_english_world_candidates(job["id"])
+    assert candidates[0]["youtube_id"] == "catalog-video-1"
+    assert candidates[0]["source_channel"] == "CBC Kids News"
 
 
 def test_review_item_is_bound_to_one_artifact_and_cannot_be_auto_retried(tmp_path):

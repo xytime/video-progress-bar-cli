@@ -9,6 +9,9 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-21 | Codex | 新增可审计的英语世界候选检索、风险预筛和独立任务完成服务。 |
 | 1.0.1 | 2026-08-21 | Codex | 改用当前 yt-dlp 支持的 ytsearch 提取器，日期仍由元数据排序。 |
+| 1.0.2 | 2026-08-24 | Codex | 候选元数据读取继承已验证的 YouTube Cookie；单个搜索批次受限时跳过并继续其余查询。 |
+| 1.0.3 | 2026-08-24 | Codex | yt-dlp 搜索无可用元数据时，以既有白名单频道的官方 Data API / RSS 目录只读降级。 |
+| 1.0.4 | 2026-08-24 | Codex | 补足新闻标题中的政治、冲突和伤害线索预筛，避免目录降级扩大候选风险面。 |
 """
 
 from __future__ import annotations
@@ -18,7 +21,9 @@ import logging
 from typing import Any, Callable, Iterable
 from uuid import uuid4
 
+from config.settings import settings
 from video_processing.db.database import PipelineDB
+from video_processing.utils.youtube_catalog import YouTubeCatalogError, fetch_channel_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +34,17 @@ _SEARCH_QUERIES = (
     "health education news explained",
     "culture human interest news short",
 )
+_APPROVED_SOURCE_CHANNELS = (
+    ("UCWUA2W6LueNy9BSovivFVvQ", "CBC Kids News"),
+    ("UCAeWdyKJXGWmVAXFpgLNNTg", "CBS Evening News"),
+    ("UCBi2mrWuNuyYy4gbM6fU18Q", "ABC News"),
+)
 _BLOCKED_TERMS = frozenset({
     "war", "military", "missile", "battle", "politic", "election", "president",
     "crime", "murder", "shooting", "terror", "disaster", "earthquake", "flood",
-    "death", "dead", "fatal", "adult", "sex", "drug", "weapon",
+    "death", "dead", "fatal", "victim", "remains", "adult", "sex", "drug", "weapon",
+    "trump", "iran", "tariff", "sanction", "border", "threat", "emergency",
+    "evacuation", "breeding facility",
 })
 _TOPIC_TERMS = {
     "nature": frozenset({"animal", "wildlife", "ocean", "whale", "nature", "species", "forest"}),
@@ -79,20 +91,78 @@ class EnglishWorldResearchService:
         results: list[dict[str, Any]] = []
         seen: set[str] = set()
         for query in _SEARCH_QUERIES:
-            for item in self._searcher(query):
+            try:
+                items = self._searcher(query)
+            except Exception as exc:  # noqa: BLE001 - 外部元数据批次应彼此隔离
+                logger.warning(
+                    "[EnglishWorld] search batch skipped: query=%r error_type=%s",
+                    query,
+                    type(exc).__name__,
+                )
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
                 key = str(item.get("id") or item.get("webpage_url") or "")
                 if not key or key in seen:
                     continue
                 seen.add(key)
                 results.append(item)
-        return results
+        return results or _catalog_fallback_candidates()
+
+
+def _catalog_fallback_candidates() -> list[dict[str, Any]]:
+    """读取既有授权频道目录；仅在 yt-dlp 搜索无可用条目时启用。"""
+    results: list[dict[str, Any]] = []
+    for channel_id, channel_name in _APPROVED_SOURCE_CHANNELS:
+        try:
+            catalog = fetch_channel_catalog(
+                channel_id,
+                lookback_days=14,
+                api_key=settings.youtube_data_api_key,
+                timeout_sec=settings.youtube_data_api_timeout_sec,
+            )
+        except YouTubeCatalogError as exc:
+            logger.warning(
+                "[EnglishWorld] catalog fallback skipped: channel=%s error_type=%s",
+                channel_name,
+                type(exc).__name__,
+            )
+            continue
+        for video in catalog.videos:
+            results.append({
+                "id": video.youtube_id,
+                "webpage_url": f"https://www.youtube.com/watch?v={video.youtube_id}",
+                "title": video.title,
+                "channel": channel_name,
+                "upload_date": video.upload_date,
+                "duration": video.duration_sec,
+            })
+    return results
+
+
+def _youtube_ydl_options() -> dict[str, Any]:
+    """将 settings 的 Cookie 单一真相源适配为 yt-dlp Python API 选项。"""
+    options: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        # 搜索结果中的单条视频受限不应中断其它候选的元数据预筛。
+        "ignoreerrors": True,
+    }
+    cookie_args = settings.get_yt_cookie_args()
+    if cookie_args[:1] == ["--cookies"] and len(cookie_args) == 2:
+        options["cookiefile"] = cookie_args[1]
+    elif cookie_args[:1] == ["--cookies-from-browser"] and len(cookie_args) == 2:
+        options["cookiesfrombrowser"] = (cookie_args[1],)
+    return options
 
 
 def _youtube_search(query: str) -> Iterable[dict[str, Any]]:
     """使用 yt-dlp 的只读搜索提取器，不下载或写入媒体文件。"""
     from yt_dlp import YoutubeDL
 
-    with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+    with YoutubeDL(_youtube_ydl_options()) as ydl:
         info = ydl.extract_info(f"ytsearch8:{query}", download=False)
     return list((info or {}).get("entries") or [])
 
@@ -101,7 +171,7 @@ def _youtube_inspect(source_url: str) -> dict[str, Any]:
     """只读取用户明确提供 URL 的元数据，仍不下载内容。"""
     from yt_dlp import YoutubeDL
 
-    with YoutubeDL({"quiet": True, "no_warnings": True, "skip_download": True}) as ydl:
+    with YoutubeDL(_youtube_ydl_options()) as ydl:
         return ydl.extract_info(source_url, download=False) or {}
 
 
@@ -110,6 +180,8 @@ def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc).date()
     for item in items:
+        if not isinstance(item, dict):
+            continue
         title = str(item.get("title") or "").strip()
         description = str(item.get("description") or "")
         blob = f"{title} {description}".lower()
