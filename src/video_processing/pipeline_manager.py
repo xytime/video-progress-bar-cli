@@ -4,6 +4,7 @@
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.48.19 | 2026-08-22 | Codex                               | 视频号仅获受理时向 Telegram 附送可播放审核副本；超限时生成轻量审核版，不改变投稿状态或重传边界 |
+| 3.48.20 | 2026-08-24 | Codex                               | 双标题检查点绑定展示标题，并在未提交任务标题变更时重建受影响的渲染与封面缓存；提交证据前置保护 |
 | 3.46.0  | 2026-08-21 | Codex                               | 分钟巡航采用评分输入缓存，只重评播放/点赞变化或 TTL 到期候选，消除全量低分空转 |
 | 3.44.0  | 2026-08-21 | Codex                               | 已提交视频号任务遇到中断或子进程异常时保留未绑定账本，不再被通用异常路径降级为 PENDING/FAILED |
 | 3.45.0  | 2026-08-21 | Codex                               | 封面不再向渲染或 AI 主视觉简报传递运营角标，避免告警式装饰污染成品 |
@@ -149,6 +150,7 @@ from .utils.generated_content_validation import (
     is_upstream_error_response,
     validate_publishable_generated_content,
 )
+from .utils.title_contract import TitleContractError, validate_display_title
 from .scoring import compute_auto_score
 from .censorship_service import CensorshipService
 from .ai_cover_queue import AICoverQueue
@@ -2328,6 +2330,14 @@ class PipelineManager:
                 self._notify_failed(yid, title, f"Lock error: {lock_err}", slice_index=slice_index)
                 return
 
+            # 标题/封面升级不得改写任何已跨过视频号提交边界的本地产物。
+            # 旧流程直到加工完成后才发现证据，会无谓改写历史检查点。
+            if self._block_duplicate_wechat_submission_if_needed(yid, prefix, slice_index=slice_index):
+                return
+            if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
+                logger.info("[%s] 已跨越视频号提交边界，保留既有产物，不参与标题升级。", prefix)
+                return
+
             if submission_only:
                 checkpoint_error = self._prepared_submission_checkpoint_error(video)
                 if checkpoint_error:
@@ -2613,6 +2623,18 @@ class PipelineManager:
                 # 原 checkpoint 会跳过 copywriter → cover 生成时读不到 label → 封面无丝带。
                 # 修复：三者同时存在才算命中 checkpoint；任一缺失则强制重跑 copywriter。
                 label_file = self._OUT_DIR / f"{prefix}_label.txt"
+                display_title_file = self._OUT_DIR / f"{prefix}_display_title.txt"
+                previous_title = ""
+                previous_display_title = ""
+                try:
+                    previous_title = title_file.read_text(encoding="utf-8").strip()
+                except OSError:
+                    pass
+                if settings.enable_dual_title_display:
+                    try:
+                        previous_display_title = display_title_file.read_text(encoding="utf-8").strip()
+                    except OSError:
+                        pass
 
                 copy_checkpoint_ready = copy_file.exists() and title_file.exists() and label_file.exists()
                 checkpoint_reason = ""
@@ -2625,6 +2647,14 @@ class PipelineManager:
                     except (OSError, GeneratedContentValidationError) as exc:
                         copy_checkpoint_ready = False
                         checkpoint_reason = f"invalid checkpoint: {exc}"
+                if copy_checkpoint_ready and settings.enable_dual_title_display:
+                    try:
+                        validate_display_title(display_title_file.read_text(encoding="utf-8"))
+                    except (OSError, TitleContractError) as exc:
+                        copy_checkpoint_ready = False
+                        checkpoint_reason = f"dual-title checkpoint invalid: {exc}"
+
+                copy_rebuilt = not copy_checkpoint_ready
 
                 if copy_checkpoint_ready:
                     logger.info(f"[SKIP] Copywriting checkpoint: {copy_file.name} (label ok)")
@@ -2658,6 +2688,19 @@ class PipelineManager:
                     validate_publishable_generated_content(generated_title, generated_copy)
                 except (OSError, GeneratedContentValidationError) as exc:
                     raise RuntimeError(f"[CopyInvalid] {prefix} 文案不满足发布合同: {exc}") from exc
+                generated_display_title = ""
+                if settings.enable_dual_title_display:
+                    try:
+                        generated_display_title = validate_display_title(
+                            display_title_file.read_text(encoding="utf-8")
+                        )
+                    except (OSError, TitleContractError) as exc:
+                        raise RuntimeError(f"[CopyInvalid] {prefix} 缺少有效封面展示标题: {exc}") from exc
+                title_artifacts_changed = copy_rebuilt and (
+                    previous_title != generated_title
+                    or previous_display_title != generated_display_title
+                )
+                render_title_changed = copy_rebuilt and previous_title != generated_title
 
                 # ── 2b. TRANSCRIBING & RENDERING ──────────────────────────────────
                 # [Claude_Sonnet_4.6_Thinking_planning] v2.8.0 读取 copywriter 生成的中文短标题
@@ -2683,7 +2726,9 @@ class PipelineManager:
                 # 若缺失则说明是旧格式单语缓存，强制删除后重新渲染。
                 _ass_file = self._OUT_DIR / f"{prefix}.ass"
                 _cache_valid = False
-                if vertical.exists() and vertical.stat().st_size > 1_000_000:
+                if render_title_changed:
+                    logger.info("[CacheInvalid] %s 平台标题已变更，强制重渲视频头部。", prefix)
+                elif vertical.exists() and vertical.stat().st_size > 1_000_000:
                     _cache_valid = True  # 默认视为有效
                     # [Claude_Opus_4.8] v3.17.0: _vertical.mp4 完整性校验（不止看体积）。
                     # 历史根因：_burn_subtitles 渲染中途崩溃（如 AV1 解码 SIGSEGV）会留下
@@ -2854,9 +2899,11 @@ class PipelineManager:
                 cover_brief_file = self._OUT_DIR / f"{prefix}_cover_brief.json"
                 cover_provenance_file = self._cover_provenance_path(cover_file)
                 content_aware_cover_enabled = settings.enable_content_aware_cover
-                cover_checkpoint_ready = self._is_dedicated_cover(cover_file) and (
+                cover_checkpoint_ready = not title_artifacts_changed and self._is_dedicated_cover(cover_file) and (
                     not content_aware_cover_enabled or cover_brief_file.is_file()
                 )
+                if title_artifacts_changed and cover_file.exists():
+                    logger.info("[CacheInvalid] %s 标题展示面已变更，强制重建封面。", prefix)
                 if not cover_checkpoint_ready:
                     self._report_runtime_stage(
                         yid,
@@ -2871,7 +2918,6 @@ class PipelineManager:
                             cover_title = title_file.read_text(encoding="utf-8").strip()
                         except Exception:
                             pass
-                    display_title_file = self._OUT_DIR / f"{prefix}_display_title.txt"
                     if settings.enable_dual_title_display and display_title_file.exists():
                         try:
                             cover_title = display_title_file.read_text(encoding="utf-8").strip() or cover_title

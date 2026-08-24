@@ -19,6 +19,7 @@
 | 1.13.0  | 2026-08-03 | Codex                      | 回归覆盖：降级标题不得截为“为什么只有 9”，仲裁拒绝语义不完整候选 |
 | 1.14.0  | 2026-08-05 | Codex                      | 覆盖文案金额数量级仅告警、不阻断的运营策略 |
 | 1.15.0  | 2026-08-24 | Codex                      | 覆盖双标题灰度下缺失封面标题的兜底候选必须失败关闭。 |
+| 1.16.0  | 2026-08-24 | Codex                      | 覆盖关闭双标题时 Gemini 缺失或不合规展示标题不影响原有文案合同。 |
 """
 import json
 import sys
@@ -33,7 +34,8 @@ from scripts.copywriter import (
     classify_category, DEFAULT_CATEGORY, graceful_truncate_title,
     extract_headline_workaround, _apply_post_processing,
     _build_wechat_prompt, _guard_wechat_content_quality,
-    _select_wechat_content_candidate, _translate_fallback,
+    _build_gemini_base_content, _select_wechat_content_candidate,
+    _translate_fallback, WeChatContentSchema,
 )
 from video_processing.utils.text_utils import verbatim_overlap_ratio
 
@@ -268,8 +270,9 @@ def test_translate_fallback_recovers_complete_question_headline(monkeypatch):
     assert content["short_title"] == "《奥德赛》加拿大仅9块银幕"
 
 
-def test_copy_candidate_selector_rejects_incomplete_question_fragment(tmp_path):
+def test_copy_candidate_selector_rejects_incomplete_question_fragment(monkeypatch, tmp_path):
     """即使降级候选没有翻译质量告警，也不得覆盖完整的主模型短标题。"""
+    monkeypatch.setattr("scripts.copywriter.settings.enable_dual_title_display", False)
     complete = {
         "short_title": "诺兰《奥德赛》",
         "hook_subtitle": "加拿大仅9块银幕可按导演意图放映",
@@ -317,6 +320,20 @@ def test_copy_candidate_selector_requires_display_title_when_dual_title_enabled(
     report = json.loads((tmp_path / "dual_title_copy_quality.json").read_text(encoding="utf-8"))
     assert report["events"][0]["status"] == "rejected"
     assert "display_title" in report["events"][0]["title_contract"]
+
+
+def test_gemini_base_content_ignores_display_title_when_dual_title_disabled(monkeypatch):
+    """关闭开关必须恢复旧合同，不能被新字段的模型输出阻断。"""
+    monkeypatch.setattr("scripts.copywriter.settings.enable_dual_title_display", False)
+    parsed = WeChatContentSchema(
+        short_title="AI技术发展", display_title="短", hook_subtitle="",
+        wechat_copy="这是一段合规文案。", category="科技", content_hints=[], content_label="",
+    )
+
+    content = _build_gemini_base_content(parsed, "AI development", "A discussion of AI.")
+
+    assert content["short_title"] == "AI技术发展"
+    assert content["display_title"] == ""
 
 
 # ── 文案事实保真守门器 ───────────────────────────────────────────────────────
@@ -470,7 +487,8 @@ def test_copy_guard_writes_quality_report_for_block(tmp_path):
     assert report["blocking_issues"][0]["code"] == "FINANCE_EVENT_DIRECTION_REVERSAL"
 
 
-def test_copy_candidate_selector_prefers_clean_fallback_after_warning(tmp_path):
+def test_copy_candidate_selector_prefers_clean_fallback_after_warning(monkeypatch, tmp_path):
+    monkeypatch.setattr("scripts.copywriter.settings.enable_dual_title_display", False)
     title = "MGX closes $49 billion AI fund"
     description = "MGX announced that it has closed its Fund I at $49 billion."
     warning_content = {
@@ -504,7 +522,8 @@ def test_copy_candidate_selector_prefers_clean_fallback_after_warning(tmp_path):
     assert report["events"][0]["warning_issues"][0]["code"] == "TERM_CONSISTENCY_FUND_CLOSE_DRIFT"
 
 
-def test_copy_candidate_selector_keeps_warning_candidate_when_fallback_blocked(tmp_path):
+def test_copy_candidate_selector_keeps_warning_candidate_when_fallback_blocked(monkeypatch, tmp_path):
+    monkeypatch.setattr("scripts.copywriter.settings.enable_dual_title_display", False)
     title = "MGX closes $49 billion AI fund"
     description = "MGX announced that it has closed its Fund I at $49 billion."
     warning_content = {

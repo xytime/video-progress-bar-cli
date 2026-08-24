@@ -13,6 +13,7 @@
 | Version | Date       | Author                              | Description                                                          |
 |---------|------------|-------------------------------------|----------------------------------------------------------------------|
 | 1.1.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | 新增切片进度标题测试（v2.9.0）: "AI写代码 3/9"                          |
+| 1.2.0   | 2026-08-24 | Codex                               | 双标题缺失触发未提交任务重写文案，并使平台标题重渲、封面展示标题重建。      |
 | 1.0.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | Initial test for pipeline title consistency (v2.8.0 optimization)    |
 """
 
@@ -158,7 +159,9 @@ class TestRenderTitleConsistency:
                 # 生成 title_file，模拟 copywriter 真实行为
                 (tmp_path / f"{prefix}_copy.txt").write_text("测试文案", encoding="utf-8")
                 (tmp_path / f"{prefix}_title.txt").write_text("AI写代码", encoding="utf-8")
+                (tmp_path / f"{prefix}_display_title.txt").write_text("AI写代码正在改变开发", encoding="utf-8")
                 (tmp_path / f"{prefix}_category.txt").write_text("科技", encoding="utf-8")
+                (tmp_path / f"{prefix}_label.txt").write_text("AI", encoding="utf-8")
                 copywriting_called.append(True)
             res = MagicMock()
             res.returncode = 0
@@ -175,23 +178,18 @@ class TestRenderTitleConsistency:
         # Cover 生成也需要 mock（subprocess.run）
         with patch("video_processing.pipeline_manager.subprocess.run") as mock_sub:
             mock_sub.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-            # 也需要 mock upload
-            with patch("video_processing.pipeline_manager.subprocess.CalledProcessError"):
-                try:
-                    video_dict = {
-                        "youtube_id": yid,
-                        "title": "A Computer That Writes Code",
-                        "score": 90,
-                        "slice_index": 0,
-                        "channel_id": "UCtest",
-                        "source": "AUTO",
-                        "disable_slicing": 1,
-                        "trim_start": None,
-                        "trim_end": None,
-                    }
-                    pm._process_single_video(video_dict)
-                except Exception:
-                    pass  # 允许后续步骤失败（如 PUBLISHING），只关心顺序
+            video_dict = {
+                "youtube_id": yid,
+                "title": "A Computer That Writes Code",
+                "score": 90,
+                "slice_index": 0,
+                "channel_id": "UCtest",
+                "source": "AUTO",
+                "disable_slicing": 1,
+                "trim_start": None,
+                "trim_end": None,
+            }
+            pm._process_single_video(video_dict)
 
         # 验证 copywriting 确实被调用
         assert copywriting_called, "Copywriter 应该在流程中被调用"
@@ -209,6 +207,50 @@ class TestRenderTitleConsistency:
         assert copywriting_idx < transcribing_idx, (
             f"COPYWRITING 应在 TRANSCRIBING 之前，实际顺序: {status_call_order}"
         )
+
+    def test_missing_display_title_rebuilds_unsubmitted_render_and_cover(self, monkeypatch, pm_env):
+        """双标题上线时，未提交旧检查点必须更新所有依赖标题的产物。"""
+        pm, db, tmp_path = pm_env
+        yid = "title-migrate"
+        assert db.add_video(yid, "Original title", "channel", score=90)
+        source = tmp_path / f"{yid}.mp4"
+        source.write_bytes(b"source")
+        (tmp_path / f"{yid}_vertical.mp4").write_bytes(b"old-render")
+        (tmp_path / f"{yid}_cover.jpg").write_bytes(b"old-cover")
+        (tmp_path / f"{yid}_copy.txt").write_text("测试文案", encoding="utf-8")
+        (tmp_path / f"{yid}_title.txt").write_text("AI技术发展", encoding="utf-8")
+        (tmp_path / f"{yid}_label.txt").write_text("AI", encoding="utf-8")
+
+        monkeypatch.setattr("video_processing.pipeline_manager.settings.enable_dual_title_display", True)
+        monkeypatch.setattr("video_processing.pipeline_manager.settings.enable_codex_cover_queue", False)
+        pm._check_censorship = MagicMock(return_value=False)
+        pm._find_downloaded_video = MagicMock(return_value=str(source))
+        pm._is_dedicated_cover = MagicMock(return_value=True)
+        pm.send_telegram_msg = MagicMock()
+        tracked_commands = []
+
+        def mock_run_tracked(cmd, *args, **kwargs):
+            tracked_commands.append(cmd)
+            if "copywriter.py" in str(cmd):
+                (tmp_path / f"{yid}_copy.txt").write_text("测试文案", encoding="utf-8")
+                (tmp_path / f"{yid}_title.txt").write_text("AI编程变革", encoding="utf-8")
+                (tmp_path / f"{yid}_display_title.txt").write_text("AI编程正在重塑开发方式", encoding="utf-8")
+                (tmp_path / f"{yid}_label.txt").write_text("AI", encoding="utf-8")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        pm._run_tracked = mock_run_tracked
+        with patch("video_processing.pipeline_manager.subprocess.run") as mock_sub:
+            mock_sub.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
+            pm._process_single_video(
+                {"youtube_id": yid, "title": "Original title", "slice_index": 0, "disable_slicing": 1},
+                preparation_only=True,
+            )
+
+        render_commands = [cmd for cmd in tracked_commands if "auto-caption" in cmd]
+        assert render_commands and "AI编程变革" in render_commands[0]
+        cover_command = mock_sub.call_args.args[0]
+        assert "cover_generator.py" in str(cover_command)
+        assert "AI编程正在重塑开发方式" in cover_command[cover_command.index("--payload") + 1]
 
     def test_title_file_is_read_after_copywriting_for_render(self, pm_env):
         """

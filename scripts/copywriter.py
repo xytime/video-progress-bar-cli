@@ -259,6 +259,7 @@ class WeChatContentSchema(pydantic.BaseModel):  # [Claude_Sonnet_4.6_Thinking_pl
         description="纯中文事实型平台标题，6-16字；忠实表达原视频核心对象和事件，不得编造因果、反转、受众反应或结论；禁止使用爆款/干货/秘籍/逆天/震惊等廉价营销词"
     )
     display_title: str = pydantic.Field(
+        default="",
         description="纯中文封面展示标题，10-18字；必须完整，可表达来源已明确支持的反差或问题；不得添加数字、机构、因果、预测、受众反应或历史纪录"
     )
     hook_subtitle: str = pydantic.Field(
@@ -299,10 +300,15 @@ def _build_gemini_base_content(
         str(parsed.hook_subtitle).strip(),
     )
     display_title, _ = _apply_post_processing(str(parsed.display_title).strip(), "")
+    # 双标题消费关闭时维持既有标题合同：展示标题既不参与候选仲裁，
+    # 也不得因模型缺失/格式不稳而影响原有 Gemini 文案链路。
+    if not settings.enable_dual_title_display:
+        display_title = ""
     title_bundle = validate_title_bundle(
         platform_title=short_title,
         display_title=display_title,
         hook_subtitle=hook_subtitle,
+        require_display_title=settings.enable_dual_title_display,
     )
     copy = str(parsed.wechat_copy).strip()
     category = str(parsed.category).strip()

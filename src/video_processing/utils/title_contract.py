@@ -10,8 +10,8 @@
 | 1.0.0 | 2026-08-24 | Codex | 新增平台标题、封面展示标题和 Hook 的纯函数合同，供多供应商共用。 |
 | 1.1.0 | 2026-08-24 | Codex | 拒绝以 TED/演讲者元信息代替内容主旨的低信息标题，触发供应商降级。 |
 | 1.2.0 | 2026-08-24 | Codex | Hook 同样拒绝纯 TED/讲者元信息，避免封面副标题无信息价值。 |
-| 1.3.0 | 2026-08-24 | Codex | 拒绝将承诺/预测改写为已被打破、兑现或实现的事实方向漂移标题。 |
 | 1.4.0 | 2026-08-24 | Codex | 收紧嘉宾 TED 起句及姓名加演讲的 Hook，统一过滤演讲元信息变体。 |
+| 1.5.0 | 2026-08-24 | Codex | 移除无来源上下文的结果断言，事实方向仍交由来源感知的质量评估器。 |
 """
 
 from __future__ import annotations
@@ -38,9 +38,6 @@ _LOW_INFORMATION_HOOK = re.compile(
 )
 _SPEAKER_METADATA_TITLE = re.compile(r"^(?:嘉宾|讲者|主讲人).*(?:TEDx?|演讲)")
 _SPEAKER_METADATA_HOOK = re.compile(r"^[A-Za-z][A-Za-z.\-]{5,}(?:演讲|分享)$")
-_UNSUPPORTED_OUTCOME_CLAIM = re.compile(
-    r"(?:(?:打破|兑现|实现).*(?:承诺|预测|愿景)|(?:承诺|预测|愿景).*(?:打破|兑现|实现|破灭|落空|崩塌))"
-)
 
 
 @dataclass(frozen=True)
@@ -115,8 +112,6 @@ def _validate_title(value: str, *, field_name: str, min_length: int, max_length:
         raise TitleContractError(f"{field_name} 以演讲者或栏目元信息代替内容主旨")
     if _SPEAKER_METADATA_TITLE.search(normalized):
         raise TitleContractError(f"{field_name} 以嘉宾或栏目元信息作为内容主语")
-    if _UNSUPPORTED_OUTCOME_CLAIM.search(normalized):
-        raise TitleContractError(f"{field_name} 将承诺或预测改写为未经来源支持的结果")
     if normalized.count("“") != normalized.count("”") or normalized.count('"') % 2:
         raise TitleContractError(f"{field_name} 引号未闭合")
     return normalized

@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.6.0 | 2026-08-22 | Codex | 已受理视频号任务须附送 Telegram 手机审核成片，且不改变未公开状态。 |
+| 1.7.0 | 2026-08-24 | Codex | 提交证据闸门须先于仅投递检查点，缺失本地产物不得将已受理任务回写待处理。 |
 | 1.5.0 | 2026-08-21 | Codex | 历史提交墓碑不得占用视频号延后恢复的每日领取额度。 |
 | 1.0.0 | 2026-08-03 | Codex | 覆盖既有视频号提交后证据阻止自动重发并恢复本地已发布态 |
 | 1.1.0 | 2026-08-10 | Codex | 补充既有后台截图自动回填视频号确认账本 |
@@ -52,6 +53,25 @@ def test_missing_wechat_submission_evidence_does_not_change_status(tmp_path: Pat
     assert manager._block_duplicate_wechat_submission_if_needed("wechat-new", "wechat-new") is False
 
     assert manager.db.get_video_by_youtube_id("wechat-new")["status"] == "DOWNLOADING"
+
+
+def test_submission_only_checks_evidence_before_missing_artifacts(tmp_path: Path):
+    """已存在提交证据时，submission_only 不得因产物缺失回写 PENDING。"""
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    assert manager.db.add_video("wechat-submitted", "Title", "channel", score=90)
+    manager.db.update_video_status("wechat-submitted", "WECHAT_DEFERRED")
+    evidence_dir = tmp_path / "wechat_evidence" / "wechat-submitted" / "1785719430000000000"
+    evidence_dir.mkdir(parents=True)
+    (evidence_dir / "post_list_after_submission.png").write_bytes(b"png")
+    manager.send_telegram_msg = lambda _message: None
+
+    manager._process_single_video(
+        {"youtube_id": "wechat-submitted", "title": "Title", "slice_index": 0},
+        submission_only=True,
+    )
+
+    assert manager.db.get_video_by_youtube_id("wechat-submitted")["status"] == "SUBMITTED_UNBOUND"
 
 
 def test_accepted_submission_sends_rendered_video_for_mobile_review(tmp_path: Path):

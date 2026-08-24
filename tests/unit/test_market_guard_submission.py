@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-07 | Codex | 验证盘中只放行 preparation_ready 成片，未完成任务不被领取 |
 | 1.1.0 | 2026-08-07 | Codex | 覆盖 checkpoint-only 失败时不启动下载、转写或渲染 |
+| 1.2.0 | 2026-08-24 | Codex | 显式声明无提交证据的替身，避免 MagicMock 真值绕过仅提交检查点测试。 |
 """
 
 from unittest.mock import MagicMock
@@ -53,6 +54,8 @@ def test_submission_only_invalid_checkpoint_never_starts_heavy_processing(tmp_pa
     manager.db = MagicMock()
     manager.send_telegram_msg = MagicMock()
     manager._run_tracked = MagicMock()
+    manager._block_duplicate_wechat_submission_if_needed = MagicMock(return_value=False)
+    manager._has_wechat_submission_terminal_state = MagicMock(return_value=False)
 
     manager._process_single_video(
         {"youtube_id": "missing-assets", "title": "Missing assets", "slice_index": 0},
