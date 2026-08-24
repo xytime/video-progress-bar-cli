@@ -5,6 +5,7 @@
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.48.19 | 2026-08-22 | Codex                               | 视频号仅获受理时向 Telegram 附送可播放审核副本；超限时生成轻量审核版，不改变投稿状态或重传边界 |
 | 3.48.20 | 2026-08-24 | Codex                               | 双标题检查点绑定展示标题，并在未提交任务标题变更时重建受影响的渲染与封面缓存；提交证据前置保护 |
+| 3.48.21 | 2026-08-24 | Codex                               | P2 管线状态不再刷 Telegram；P1 通知记录 API 回执并按内容去重，异常日志不泄露凭据。 |
 | 3.46.0  | 2026-08-21 | Codex                               | 分钟巡航采用评分输入缓存，只重评播放/点赞变化或 TTL 到期候选，消除全量低分空转 |
 | 3.44.0  | 2026-08-21 | Codex                               | 已提交视频号任务遇到中断或子进程异常时保留未绑定账本，不再被通用异常路径降级为 PENDING/FAILED |
 | 3.45.0  | 2026-08-21 | Codex                               | 封面不再向渲染或 AI 主视觉简报传递运营角标，避免告警式装饰污染成品 |
@@ -150,6 +151,7 @@ from .utils.generated_content_validation import (
     is_upstream_error_response,
     validate_publishable_generated_content,
 )
+from .telegram_delivery import send_text as send_telegram_text, send_video as send_telegram_review_video
 from .utils.title_contract import TitleContractError, validate_display_title
 from .scoring import compute_auto_score
 from .censorship_service import CensorshipService
@@ -327,21 +329,42 @@ class PipelineManager:
 
     # ── Telegram 通知 ─────────────────────────────────────────────────────────
 
+    def _telegram_notification_policy(self, text: str) -> tuple[str, str, int]:
+        """将通用管线通知收敛为行动型 P1；P2 仅写回执账本。"""
+        normalized = " ".join(text.split())
+        event_name = re.sub(r"[^a-z0-9]+", "_", re.sub(r"<[^>]+>", "", normalized.lower())).strip("_")[:72]
+        event_type = f"pipeline.{event_name or 'status'}"
+        p2_markers = (
+            "pipeline batch started", "copy numeric review", "pre_submit auto retry scheduled",
+            "douyin history progress", "douyin new sync", "video segmented",
+        )
+        if any(marker in normalized.lower() for marker in p2_markers):
+            return event_type, "P2", 0
+        return event_type, "P1", 24 * 60 * 60
+
     def send_telegram_msg(self, text: str) -> bool:
-        if not self.telegram_token or not self.telegram_chat_id:
-            logger.debug(f"Telegram not configured. Would send: {text}")
-            return False
-        try:
-            response = requests.post(
-                f"https://api.telegram.org/bot{self.telegram_token}/sendMessage",
-                json={"chat_id": self.telegram_chat_id, "text": text, "parse_mode": "HTML"},
-                timeout=10,
+        """发送 P1 管线提醒；P2 只记录为已抑制，避免状态消息淹没审批。"""
+        event_type, priority, cooldown_seconds = self._telegram_notification_policy(text)
+        fingerprint = hashlib.sha256(f"{event_type}\0{text}".encode("utf-8")).hexdigest()
+        if priority == "P2":
+            self.db.record_telegram_notification_receipt(
+                event_type=event_type, priority="P2", content_sha256=fingerprint,
+                delivery_state="SUPPRESSED", error_kind="POLICY_P2",
             )
-            response.raise_for_status()
+            logger.info("Telegram P2 notification suppressed: %s", event_type)
             return True
-        except Exception as e:
-            logger.error(f"Telegram send failed: {e}")
+        if not self.telegram_token or not self.telegram_chat_id:
+            logger.debug("Telegram not configured. Would send event=%s", event_type)
             return False
+        result = send_telegram_text(
+            event_type=event_type, priority=priority, text=text,
+            cooldown_seconds=cooldown_seconds, timeout_seconds=10, db=self.db,
+            token=self.telegram_token, chat_id=self.telegram_chat_id,
+        )
+        if result.state != "ACCEPTED":
+            logger.error("Telegram send did not receive API acceptance: event=%s state=%s error=%s", event_type, result.state, result.error_kind)
+            return False
+        return True
 
     def send_telegram_video(self, video_path: Path, caption: str) -> bool:
         """发送本地 MP4 供运营在 Telegram 手机端审核，不改变平台投稿事实。"""
@@ -351,24 +374,15 @@ class PipelineManager:
         if not video_path.is_file():
             logger.warning("Telegram review video missing: %s", video_path)
             return False
-        try:
-            with video_path.open("rb") as video_file:
-                response = requests.post(
-                    f"https://api.telegram.org/bot{self.telegram_token}/sendVideo",
-                    data={
-                        "chat_id": self.telegram_chat_id,
-                        "caption": caption,
-                        "parse_mode": "HTML",
-                        "supports_streaming": "true",
-                    },
-                    files={"video": (video_path.name, video_file, "video/mp4")},
-                    timeout=120,
-                )
-            response.raise_for_status()
-            return True
-        except Exception as exc:
-            logger.error("Telegram review video send failed for %s: %s", video_path.name, exc)
+        result = send_telegram_review_video(
+            event_type="pipeline.wechat_review_video", priority="P1", path=video_path,
+            caption=caption, timeout_seconds=120, db=self.db,
+            token=self.telegram_token, chat_id=self.telegram_chat_id,
+        )
+        if result.state != "ACCEPTED":
+            logger.error("Telegram review video did not receive API acceptance: file=%s state=%s error=%s", video_path.name, result.state, result.error_kind)
             return False
+        return True
 
     def _build_telegram_review_copy(self, source_video: Path, prefix: str) -> Path | None:
         """把超限成片降为 Telegram 手机审核副本；失败只告警，绝不触发重新投稿。"""

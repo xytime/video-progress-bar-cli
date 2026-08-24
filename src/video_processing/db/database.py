@@ -1179,6 +1179,26 @@ class PipelineDB:
                 "ON english_world_review_items(updated_at DESC)"
             )
 
+            # Telegram 投递回执与业务状态分开保存。HTTP 超时不能证明未送达，故以
+            # UNKNOWN 保留不确定性，供通知去重和人工排障使用，不反推客户端已读。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS telegram_notification_receipts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    priority TEXT NOT NULL CHECK(priority IN ('P0', 'P1', 'P2')),
+                    content_sha256 TEXT NOT NULL,
+                    delivery_state TEXT NOT NULL
+                        CHECK(delivery_state IN ('ACCEPTED', 'UNKNOWN', 'FAILED', 'SUPPRESSED')),
+                    telegram_message_id TEXT DEFAULT NULL,
+                    error_kind TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_telegram_notification_receipts_dedupe "
+                "ON telegram_notification_receipts(event_type, content_sha256, created_at DESC)"
+            )
+
             # 发布后数据地基：日粒度指标只记录事实读数，不反推平台发布成功状态。
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS published_video_daily_metrics (
@@ -4969,6 +4989,57 @@ class PipelineDB:
                 (safe_limit,),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def record_telegram_notification_receipt(
+        self,
+        *,
+        event_type: str,
+        priority: str,
+        content_sha256: str,
+        delivery_state: str,
+        telegram_message_id: Optional[str] = None,
+        error_kind: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """记录 Telegram API 投递结果；不把 API 接受等同于用户设备已读。"""
+        allowed_priorities = {"P0", "P1", "P2"}
+        allowed_states = {"ACCEPTED", "UNKNOWN", "FAILED", "SUPPRESSED"}
+        if priority not in allowed_priorities:
+            raise ValueError(f"Invalid Telegram notification priority: {priority}")
+        if delivery_state not in allowed_states:
+            raise ValueError(f"Invalid Telegram notification delivery state: {delivery_state}")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """INSERT INTO telegram_notification_receipts
+                   (event_type, priority, content_sha256, delivery_state, telegram_message_id, error_kind)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    (event_type or "unknown")[:120],
+                    priority,
+                    (content_sha256 or "")[:128],
+                    delivery_state,
+                    (telegram_message_id or "")[:80] or None,
+                    (error_kind or "")[:120] or None,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM telegram_notification_receipts WHERE id = ?", (cursor.lastrowid,),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def has_recent_telegram_notification(
+        self, *, event_type: str, content_sha256: str, since_utc: str,
+    ) -> bool:
+        """查询近期同一通知；UNKNOWN 也阻止重发，避免超时后重复刷屏。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM telegram_notification_receipts
+                   WHERE event_type = ? AND content_sha256 = ? AND created_at >= ?
+                     AND delivery_state IN ('ACCEPTED', 'UNKNOWN')
+                   LIMIT 1""",
+                ((event_type or "unknown")[:120], (content_sha256 or "")[:128], since_utc),
+            ).fetchone()
+            return row is not None
 
     # --- Dubbing studio DAL (manual-only, isolated from PipelineManager) ---
     _DUBBING_STATES = {

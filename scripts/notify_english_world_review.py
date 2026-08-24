@@ -10,6 +10,7 @@
 | 1.1.0 | 2026-08-23 | Codex | 审核回执绑定独立发布包与一次性 Telegram 审批按钮，避免模糊文字误投。 |
 | 1.2.0 | 2026-08-24 | Codex | 封面只接受 enriched timeline，并将实际投稿封面发送给人工审核。 |
 | 1.3.0 | 2026-08-24 | Codex | 英语世界审核包优先使用 agy/Gemini 主视觉，失败时回退确定性封面。 |
+| 1.4.0 | 2026-08-24 | Codex | 记录 Telegram API 回执并将失败通知去重，避免无回执重发刷屏。 |
 """
 
 from __future__ import annotations
@@ -23,11 +24,10 @@ from pathlib import Path
 import subprocess
 import sys
 
-import requests
-
 from config.settings import settings
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db.database import PipelineDB
+from video_processing.telegram_delivery import send_document, send_text
 
 logger = logging.getLogger(__name__)
 
@@ -37,33 +37,21 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def _post_message(text: str, *, reply_markup: dict | None = None) -> None:
     """发送文字回执；凭据只从 settings 读取。"""
-    token = (settings.telegram_bot_token or "").strip()
-    chat_id = (settings.active_telegram_chat_id or "").strip()
-    if not token or not chat_id:
-        raise RuntimeError("Telegram 凭据或审核 chat_id 未配置")
-    payload: dict[str, object] = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    response = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json=payload,
-        timeout=20,
+    result = send_text(
+        event_type="english_world.review_ready", priority="P0", text=text,
+        reply_markup=reply_markup, timeout_seconds=20,
     )
-    response.raise_for_status()
+    if result.state != "ACCEPTED":
+        raise RuntimeError(f"Telegram 审核文字回执未获 API 接受：{result.error_kind or result.state}")
 
 
 def _post_document(path: Path, caption: str) -> None:
     """发送审核文件；不把发送成功误作平台发布成功。"""
-    token = (settings.telegram_bot_token or "").strip()
-    chat_id = (settings.active_telegram_chat_id or "").strip()
-    with path.open("rb") as source:
-        response = requests.post(
-            f"https://api.telegram.org/bot{token}/sendDocument",
-            data={"chat_id": chat_id, "caption": caption},
-            files={"document": (path.name, source)},
-            timeout=120,
-        )
-    response.raise_for_status()
+    result = send_document(
+        event_type="english_world.review_attachment", priority="P0", path=path, caption=caption,
+    )
+    if result.state != "ACCEPTED":
+        raise RuntimeError(f"Telegram 审核附件回执未获 API 接受：{result.error_kind or result.state}")
 
 
 def _load_timeline(manifest_path: Path) -> dict:
@@ -230,12 +218,17 @@ def main() -> int:
     args = _parser().parse_args()
     safe_title = html.escape(args.title.strip())
     if args.failure:
-        _post_message(
-            "⚠️ <b>英语世界短视频｜今日未交付</b>\n"
-            f"任务：{safe_title}\n"
-            f"原因：{html.escape(args.failure.strip())}\n"
-            "未生成成片，未触发任何视频号操作。"
+        result = send_text(
+            event_type="english_world.not_delivered", priority="P1", cooldown_seconds=6 * 60 * 60,
+            text=(
+                "⚠️ <b>英语世界短视频｜今日未交付</b>\n"
+                f"任务：{safe_title}\n"
+                f"原因：{html.escape(args.failure.strip())}\n"
+                "未生成成片，未触发任何视频号操作。"
+            ),
         )
+        if result.state not in {"ACCEPTED", "SUPPRESSED"}:
+            raise RuntimeError(f"Telegram 未交付回执未获 API 接受：{result.error_kind or result.state}")
         return 0
 
     if not args.mp4 or not args.manifest:

@@ -1029,9 +1029,10 @@ def run_uploader(
                             if resp.ok:
                                 logger.info("QR code sent to Telegram. Waiting for scan/authorization...")
                             else:
-                                logger.warning(f"Telegram sendPhoto failed: {resp.text}")
-                        except Exception as e_tg:
-                            logger.error(f"Failed to send QR to Telegram: {e_tg}")
+                                logger.warning("Telegram sendPhoto failed: HTTP %s", resp.status_code)
+                        except Exception as exc:
+                            # requests 异常可能包含带 Token 的 URL，日志中只保留错误类别。
+                            logger.error("Failed to send QR to Telegram: %s", type(exc).__name__)
 
                 # [Gemini_2.0_Flash_fast] 无论是否配置 TG，在 headless 模式下均挂起等待扫码（120秒内由 Web UI 扫码完成登录）
                 logger.info("Waiting for WeChat login authorization (Web UI / Telegram / App)...")

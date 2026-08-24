@@ -47,7 +47,8 @@ def _send_ip_change_alert(old_ip: str, new_ip: str) -> None:
                 timeout=10,
             )
     except Exception as exc:
-        print(f"IP change alert failed: {exc}")
+        # 请求异常可能回显带 Token 的 URL，禁止写入日志。
+        print(f"IP change alert failed: {type(exc).__name__}")
 
 # 国内 IP 回显服务（Clash 对 CN 目标走 DIRECT → 反映微信实际看到的直连 IP）
 _CN_IP_URLS = ["https://myip.ipip.net/", "http://cip.cc/"]

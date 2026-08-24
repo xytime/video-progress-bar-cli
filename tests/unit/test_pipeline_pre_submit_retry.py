@@ -7,6 +7,7 @@
 | 1.0.0 | 2026-08-05 | Codex | 覆盖可安全自动重试边界、提交证据保护和 Telegram 数字告警 |
 | 1.1.0 | 2026-08-05 | Codex | 覆盖 curl SSL 超时重试及 Telegram 管理员回退会话 |
 | 1.2.0 | 2026-08-05 | Codex | 验证 Telegram 告警 HTTP 回执，而非将调用本身视作送达 |
+| 1.4.0 | 2026-08-24 | Codex | 验证 Bot API ok/message_id 回执与重复 P1 通知抑制。 |
 """
 
 import json
@@ -72,17 +73,21 @@ def test_telegram_send_checks_http_success(monkeypatch, tmp_path):
     calls = []
 
     class Response:
-        def raise_for_status(self):
-            calls.append("checked")
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": {"message_id": 101}}
 
     def fake_post(*args, **kwargs):
         calls.append((args, kwargs))
         return Response()
 
-    monkeypatch.setattr("video_processing.pipeline_manager.requests.post", fake_post)
+    monkeypatch.setattr("video_processing.telegram_delivery.requests.post", fake_post)
 
     assert manager.send_telegram_msg("测试告警") is True
-    assert calls[-1] == "checked"
+    assert len(calls) == 1
 
 
 def test_telegram_review_video_checks_http_success(monkeypatch, tmp_path):
@@ -94,21 +99,49 @@ def test_telegram_review_video_checks_http_success(monkeypatch, tmp_path):
     calls = []
 
     class Response:
-        def raise_for_status(self):
-            calls.append("checked")
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": {"message_id": 102}}
 
     def fake_post(*args, **kwargs):
         calls.append((args, kwargs))
         return Response()
 
-    monkeypatch.setattr("video_processing.pipeline_manager.requests.post", fake_post)
+    monkeypatch.setattr("video_processing.telegram_delivery.requests.post", fake_post)
 
     assert manager.send_telegram_video(video, "审核副本") is True
     request_args, request_kwargs = calls[0]
     assert request_args[0].endswith("/sendVideo")
     assert request_kwargs["data"]["chat_id"] == "test-chat"
     assert request_kwargs["files"]["video"][0] == video.name
-    assert calls[-1] == "checked"
+
+
+def test_manager_suppresses_duplicate_p1_notification(monkeypatch, tmp_path):
+    manager = _manager(tmp_path, "telegram-dedupe")
+    manager.telegram_token = "test-token"
+    manager.telegram_chat_id = "test-chat"
+    calls = []
+
+    class Response:
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": {"message_id": 103}}
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Response()
+
+    monkeypatch.setattr("video_processing.telegram_delivery.requests.post", fake_post)
+
+    assert manager.send_telegram_msg("❌ <b>Video Failed</b>\\nID: <code>telegram-dedupe</code>")
+    assert not manager.send_telegram_msg("❌ <b>Video Failed</b>\\nID: <code>telegram-dedupe</code>")
+    assert len(calls) == 1
 
 
 def test_transient_retry_refuses_existing_wechat_submission_evidence(tmp_path):

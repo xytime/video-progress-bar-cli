@@ -1,4 +1,4 @@
-"""每日运维工单巡检 — 自动每天执行，推送 Telegram。
+"""每日运维工单巡检 — 自动每天执行，只落本地记录。
 
 固化「每日该盯的循环项」（源自 2026-06-26 自我审查）：
   1. 发布健康：今日发布/失败数、可发队列、在途
@@ -6,7 +6,8 @@
   3. 微信会话：是否失效（~24h 服务端硬上限，几乎每天需重扫）
   4. 限流：discovery/rescore 的 exit-101/取不到 比例
 
-只读巡检，不改任何状态。报告推 Telegram；同时落 output/daily_ops_report.log。
+只读巡检，不改任何状态。默认仅落 output/daily_ops_report.log；人工带 --send
+才发送 Telegram，避免与周期质检及审核提醒争夺注意力。
 
 # Modification History
 | Version | Date       | Author          | Description                          |
@@ -18,9 +19,11 @@
 | 1.4.0   | 2026-07-06 | Codex           | 翻译质量摘要展示最高频 provider-issue 组合，便于定位供应商质量问题 |
 | 1.5.0   | 2026-07-06 | Codex           | 翻译质量摘要展示最终采用 provider 与采用候选告警 |
 | 1.6.0   | 2026-07-17 | Codex           | 日报新增 DeepSeek 余额与近 24 小时翻译 provider 调用审计汇总 |
+| 1.7.0   | 2026-08-24 | Codex           | 自动日报改为本地记录；Telegram 仅允许人工显式发送并记录 API 回执。 |
 """
 from __future__ import annotations
 
+import argparse
 import datetime
 import sqlite3
 import sys
@@ -30,6 +33,7 @@ PRJ = Path(__file__).parent.parent
 sys.path.insert(0, str(PRJ / "src"))
 from config.settings import settings  # noqa: E402
 from video_processing.db.database import PipelineDB  # noqa: E402
+from video_processing.telegram_delivery import send_text  # noqa: E402
 from video_processing.utils.translation_quality_report import aggregate_quality_reports  # noqa: E402
 
 _DB = PRJ / "output" / "pipeline.db"
@@ -253,28 +257,23 @@ def collect() -> str:
 
 
 def push_telegram(text: str) -> bool:
-    token = settings.telegram_bot_token
-    chat = settings.active_telegram_chat_id or (settings.telegram_admin_ids or "").split(",")[0].strip()
-    if not (token and chat):
-        return False
-    try:
-        import urllib.request, urllib.parse, json
-        data = urllib.parse.urlencode({"chat_id": chat, "text": text, "parse_mode": "HTML"}).encode()
-        req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data)
-        r = json.load(urllib.request.urlopen(req, timeout=15))
-        return bool(r.get("ok"))
-    except Exception as e:
-        print("telegram push failed:", e)
-        return False
+    result = send_text(event_type="daily_ops.manual_report", priority="P2", text=text, timeout_seconds=15)
+    return result.state == "ACCEPTED"
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--send", action="store_true", help="人工显式发送本次运维工单到 Telegram")
+    args = parser.parse_args()
     report = collect()
     ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     plain = report.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", "").replace("&gt;", ">")
     print(f"[{ts}]\n{plain}\n")
-    ok = push_telegram(report)
-    print("telegram:", "✅ sent" if ok else "❌ not sent")
+    if args.send:
+        ok = push_telegram(report)
+        print("telegram:", "✅ accepted by API" if ok else "❌ not accepted by API")
+    else:
+        print("telegram: ⏸ suppressed by P2 policy")
 
 
 if __name__ == "__main__":

@@ -62,8 +62,9 @@ def _send_telegram(html: str) -> None:
             json={"chat_id": chat_id, "text": html, "parse_mode": "HTML"},
             timeout=10,
         )
-    except Exception as e:
-        logger.error(f"[Keepalive] Telegram send failed: {e}")
+    except Exception as exc:
+        # requests 异常可能包含带 Bot Token 的请求 URL，日志中只保留错误类别。
+        logger.error("[Keepalive] Telegram send failed: %s", type(exc).__name__)
 
 
 def _stamp_login_if_absent(login_at_path: Path) -> None:

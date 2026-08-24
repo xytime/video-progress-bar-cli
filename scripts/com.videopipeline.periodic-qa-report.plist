@@ -8,7 +8,6 @@
   <array>
     <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python</string>
     <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/periodic_qa_report.py</string>
-    <string>--send</string>
   </array>
   <key>WorkingDirectory</key>
   <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing</string>

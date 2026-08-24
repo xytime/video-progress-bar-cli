@@ -45,7 +45,8 @@ def _post_status(text: str) -> None:
         )
         response.raise_for_status()
     except requests.RequestException as exc:
-        logger.warning("Telegram submission receipt failed: %s", exc)
+        # requests 异常可能包含带 Token 的 URL，日志中只保留错误类别。
+        logger.warning("Telegram submission receipt failed: %s", type(exc).__name__)
 
 
 def _require_publish_package(item: dict) -> None:
