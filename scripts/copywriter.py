@@ -35,6 +35,8 @@
 | 1.25.3  | 2026-08-05 | Codex                                   | 文案金额数量级检查降级为 Telegram 可见告警，不再阻断候选；事件方向和错误页闸门保持严格 |
 | 1.26.0  | 2026-08-21 | Codex                                   | 停用无事实依据的运营角标，并收紧短标题不得编造因果、情绪或受众反应 |
 | 1.27.0  | 2026-08-24 | Codex                                   | 新增平台/封面双标题合同与 AGY→Gemini 标题供应商链；默认配置不改变生产消费面 |
+| 1.27.1  | 2026-08-24 | Codex                                   | 双标题开关启用时，缺少封面展示标题的兜底候选一律失败关闭，禁止品质降级发布。 |
+| 1.27.2  | 2026-08-24 | Codex                                   | Gemini 结构化文案的标题合同失败时仅重试一次，保留其作为 AGY 故障后的合格兜底。 |
 """
 
 import re
@@ -284,6 +286,45 @@ class WeChatContentSchema(pydantic.BaseModel):  # [Claude_Sonnet_4.6_Thinking_pl
             "已废弃的兼容字段：始终返回空字符串。不得生成重磅、突发、揭秘等运营角标。"
         )
     )
+
+
+def _build_gemini_base_content(
+    parsed: WeChatContentSchema,
+    title: str,
+    description: str,
+) -> dict:
+    """把一次 Gemini 结构化响应收敛为可仲裁的既有文案候选。"""
+    short_title, hook_subtitle = _apply_post_processing(
+        str(parsed.short_title).strip(),
+        str(parsed.hook_subtitle).strip(),
+    )
+    display_title, _ = _apply_post_processing(str(parsed.display_title).strip(), "")
+    title_bundle = validate_title_bundle(
+        platform_title=short_title,
+        display_title=display_title,
+        hook_subtitle=hook_subtitle,
+    )
+    copy = str(parsed.wechat_copy).strip()
+    category = str(parsed.category).strip()
+    if category not in WECHAT_CATEGORIES:
+        logger.warning("LLM category %r not in WECHAT_CATEGORIES; using classifier", category)
+        category = classify_category(title, description)
+    if not copy:
+        raise ValueError("google-genai returned empty copy")
+
+    overlap = verbatim_overlap_ratio(copy, description)
+    if overlap >= 0.25:
+        logger.warning("[Originality] copy overlaps source description %.0f%% (>=25%%)", overlap * 100)
+
+    return {
+        "short_title": title_bundle.platform_title,
+        "display_title": title_bundle.display_title,
+        "hook_subtitle": title_bundle.hook_subtitle,
+        "copy": copy,
+        "category": category,
+        "content_hints": parsed.content_hints if isinstance(parsed.content_hints, list) else [],
+        "content_label": "",
+    }
 
 
 # ── 工具函数 ─────────────────────────────────────────────────────────────────
@@ -587,6 +628,8 @@ def _select_wechat_content_candidate(
     """在 Gemini/fallback 文案候选中选择质量更好的结果。"""
     source_text = "\n".join(part for part in (title, description) if part and part.strip())
     if not source_text:
+        if settings.enable_dual_title_display:
+            raise ValueError("WeChat copy quality guard blocked output: dual-title rollout requires source text")
         provider, factory = candidates[0]
         logger.warning("[CopyGuard] Empty source text; using first candidate from %s.", provider)
         return factory()
@@ -616,7 +659,10 @@ def _select_wechat_content_candidate(
                 platform_title=str(content.get("short_title", "")),
                 display_title=str(content.get("display_title", "")),
                 hook_subtitle=str(content.get("hook_subtitle", "")),
-                require_display_title=bool(str(content.get("display_title", "")).strip()),
+                require_display_title=(
+                    settings.enable_dual_title_display
+                    or bool(str(content.get("display_title", "")).strip())
+                ),
             )
         except TitleContractError as exc:
             event = {
@@ -916,61 +962,37 @@ def generate_wechat_content(
             logger.info(f"[v1.8.0] Calling Gemini [{model_name}] with response_schema...")
             client = genai.Client(api_key=api_key)
             fib_delays = [1, 2, 3]
-            response = None
-            for attempt in range(len(fib_delays) + 1):
+            for content_attempt in range(2):
+                response = None
+                for attempt in range(len(fib_delays) + 1):
+                    try:
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config=genai_types.GenerateContentConfig(
+                                system_instruction=_SYSTEM_INSTRUCTION,
+                                response_mime_type="application/json",
+                                response_schema=WeChatContentSchema,
+                            ),
+                        )
+                        break
+                    except Exception as exc:
+                        if attempt == len(fib_delays):
+                            raise
+                        delay = fib_delays[attempt]
+                        logger.warning("Gemini API attempt %s failed: %s. Retrying in %ss...", attempt + 1, type(exc).__name__, delay)
+                        time.sleep(delay)
+
+                parsed: Optional[WeChatContentSchema] = response.parsed
+                if parsed is None:
+                    raise ValueError("google-genai returned no parsed output")
                 try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config=genai_types.GenerateContentConfig(
-                            system_instruction=_SYSTEM_INSTRUCTION,
-                            response_mime_type="application/json",
-                            response_schema=WeChatContentSchema,
-                        ),
-                    )
+                    base_content = _build_gemini_base_content(parsed, title, description)
                     break
-                except Exception as exc:
-                    if attempt == len(fib_delays):
+                except TitleContractError as exc:
+                    if content_attempt == 1:
                         raise
-                    delay = fib_delays[attempt]
-                    logger.warning("Gemini API attempt %s failed: %s. Retrying in %ss...", attempt + 1, type(exc).__name__, delay)
-                    time.sleep(delay)
-
-            parsed: Optional[WeChatContentSchema] = response.parsed
-            if parsed is None:
-                raise ValueError("google-genai returned no parsed output")
-
-            short_title, hook_subtitle = _apply_post_processing(
-                str(parsed.short_title).strip(),
-                str(parsed.hook_subtitle).strip(),
-            )
-            display_title, _ = _apply_post_processing(str(parsed.display_title).strip(), "")
-            title_bundle = validate_title_bundle(
-                platform_title=short_title,
-                display_title=display_title,
-                hook_subtitle=hook_subtitle,
-            )
-            copy = str(parsed.wechat_copy).strip()
-            category = str(parsed.category).strip()
-            if category not in WECHAT_CATEGORIES:
-                logger.warning("LLM category %r not in WECHAT_CATEGORIES; using classifier", category)
-                category = classify_category(title, description)
-            if not copy:
-                raise ValueError("google-genai returned empty copy")
-
-            _overlap = verbatim_overlap_ratio(copy, description)
-            if _overlap >= 0.25:
-                logger.warning("[Originality] copy overlaps source description %.0f%% (>=25%%)", _overlap * 100)
-
-            base_content = {
-                "short_title": title_bundle.platform_title,
-                "display_title": title_bundle.display_title,
-                "hook_subtitle": title_bundle.hook_subtitle,
-                "copy": copy,
-                "category": category,
-                "content_hints": parsed.content_hints if isinstance(parsed.content_hints, list) else [],
-                "content_label": "",
-            }
+                    logger.warning("Gemini title contract rejected; regenerating content once: %s", exc)
         except Exception as exc:
             logger.error("Gemini content base failed: %s", type(exc).__name__)
             base_content = _translate_fallback(title, description)

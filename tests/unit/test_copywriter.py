@@ -18,6 +18,7 @@
 | 1.12.0  | 2026-07-06 | Codex                      | 覆盖文案 prompt 复用共享翻译硬约束且不带字幕段落规则 |
 | 1.13.0  | 2026-08-03 | Codex                      | 回归覆盖：降级标题不得截为“为什么只有 9”，仲裁拒绝语义不完整候选 |
 | 1.14.0  | 2026-08-05 | Codex                      | 覆盖文案金额数量级仅告警、不阻断的运营策略 |
+| 1.15.0  | 2026-08-24 | Codex                      | 覆盖双标题灰度下缺失封面标题的兜底候选必须失败关闭。 |
 """
 import json
 import sys
@@ -288,6 +289,34 @@ def test_copy_candidate_selector_rejects_incomplete_question_fragment(tmp_path):
     report = json.loads((tmp_path / "odyssey_copy_quality.json").read_text(encoding="utf-8"))
     assert report["events"][0]["status"] == "rejected"
     assert "semantic_title_guard" in report["events"][0]
+
+
+def test_copy_candidate_selector_requires_display_title_when_dual_title_enabled(monkeypatch, tmp_path):
+    """双标题灰度中，翻译兜底不得以缺失封面标题的方式通过。"""
+    monkeypatch.setattr("scripts.copywriter.settings.enable_dual_title_display", True)
+    missing_display = {
+        "short_title": "人工智能的虚假承诺",
+        "hook_subtitle": "",
+        "copy": "视频讨论人工智能宣传与现实之间的落差。",
+        "category": "科技",
+    }
+    complete = {
+        **missing_display,
+        "short_title": "AI虚假承诺破灭",
+        "display_title": "人工智能承诺为何频频落空",
+    }
+
+    selected = _select_wechat_content_candidate(
+        "The false promises of AI",
+        "The video examines overhyped claims about artificial intelligence.",
+        [("fallback", lambda: missing_display), ("gemini-test", lambda: complete)],
+        audit_path=tmp_path / "dual_title_copy_quality.json",
+    )
+
+    assert selected["display_title"] == "人工智能承诺为何频频落空"
+    report = json.loads((tmp_path / "dual_title_copy_quality.json").read_text(encoding="utf-8"))
+    assert report["events"][0]["status"] == "rejected"
+    assert "display_title" in report["events"][0]["title_contract"]
 
 
 # ── 文案事实保真守门器 ───────────────────────────────────────────────────────

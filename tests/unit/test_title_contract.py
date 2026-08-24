@@ -4,6 +4,9 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 覆盖双标题局部合同与隔离 AGY 结构化适配。 |
+| 1.1.0 | 2026-08-24 | Codex | 覆盖 AGY 合同失败后的受限重试。 |
+| 1.2.0 | 2026-08-24 | Codex | 覆盖 Hook 不能只保留 TED/讲者元信息。 |
+| 1.3.0 | 2026-08-24 | Codex | 覆盖承诺/预测被误写为已实现结果的方向漂移。 |
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ def test_title_bundle_normalizes_all_surfaces():
         ("美债收益率飙升", "美债收益率飙升重创科技股并引发全球市场资金重新配置"),
         ("美债收益率冲击市场", "AI狂飙抢占芯片产能下"),
         ("演讲者探讨AI未来", "TED演讲谈开启新生活"),
+        ("人工智能打破虚假承诺走向未来", "认清AI虚假承诺，未来将走向何方？"),
     ],
 )
 def test_title_bundle_rejects_residual_fragments(platform_title: str, display_title: str):
@@ -59,6 +63,16 @@ def test_title_bundle_allows_legacy_missing_display_title():
     )
 
     assert bundle.display_title == ""
+
+
+@pytest.mark.parametrize("hook_subtitle", ["TED", "TED演讲：Felix Brooks-church", "剑桥大学TEDx演讲"])
+def test_title_bundle_rejects_low_information_hook(hook_subtitle: str):
+    with pytest.raises(TitleContractError, match="hook_subtitle 不能仅包含"):
+        validate_title_bundle(
+            platform_title="AI重塑律师行业",
+            display_title="20美元AI正在重塑律师行业",
+            hook_subtitle=hook_subtitle,
+        )
 
 
 def test_agy_provider_uses_shared_structured_runner(monkeypatch):
@@ -106,3 +120,35 @@ def test_agy_provider_rejects_invalid_contract(monkeypatch):
             title="Why only 9 Canadian screens",
             description="",
         )
+
+
+def test_agy_provider_retries_once_after_contract_rejection(monkeypatch):
+    calls: list[str] = []
+    invalid = {
+        "platform_title": "演讲者探讨AI未来",
+        "display_title": "TED演讲谈开启新生活",
+        "hook_subtitle": "",
+    }
+    valid = {
+        "platform_title": "AI虚假承诺破灭",
+        "display_title": "人工智能承诺为何频频落空",
+        "hook_subtitle": "投资人与用户需警惕过度营销",
+    }
+
+    def fake_run(prompt, **_kwargs):
+        calls.append(prompt)
+        return invalid if len(calls) == 1 else valid
+
+    monkeypatch.setattr(title_provider, "run_agy_structured", fake_run)
+
+    bundle = generate_agy_title_bundle(
+        agy_bin="agy",
+        model="gemini-test",
+        timeout_seconds=30,
+        title="AI promises",
+        description="The video examines why AI promises can fail.",
+    )
+
+    assert bundle.platform_title == "AI虚假承诺破灭"
+    assert len(calls) == 2
+    assert "上一候选未通过标题合同" in calls[1]
