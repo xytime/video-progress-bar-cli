@@ -6,10 +6,12 @@
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，针对语义分析、主题映射、布局装配与 Facade 入口进行单元测试 |
 | 1.1.0 | 2026-07-31 | Codex                         | 覆盖专属主视觉与受控标题位置的布局规划 |
 | 1.2.0 | 2026-08-21 | Codex                         | 验证历史运营角标不会进入最终封面布局 |
+| 1.3.0 | 2026-08-24 | Codex                         | 锁定默认封面的类别与主标题字号，并确保英语世界模板保持独立 |
 """
 
 import os
 import json
+import re
 import pytest
 from pathlib import Path
 from src.cover.semantic import SemanticAnalyzer, ContentSignal
@@ -288,3 +290,40 @@ def test_cover_engine_e2e_mocked(temp_config_paths, tmp_path, monkeypatch):
     layout_rendered = renders[0][0]
     assert layout_rendered["title"] == "谷歌CEO深度预测"
     assert layout_rendered["badge"] == "安全局势"  # 由 quantum 匹配的 policy_security default_badge
+
+
+@pytest.mark.parametrize(
+    ("template_name", "badge_size", "title_sizes"),
+    [
+        ("cover.html.j2", 54, (100,)),
+        ("cover_minimal.html.j2", 54, (88, 108)),
+        ("cover_drama.html.j2", 56, (112,)),
+    ],
+)
+def test_default_cover_templates_promote_category_and_headline_typography(
+    template_name, badge_size, title_sizes
+):
+    """默认封面应强化类别信息，并仅小幅提高主标题字号。"""
+    template_path = Path(__file__).resolve().parents[2] / "resources" / "cover" / "template" / template_name
+    template = template_path.read_text(encoding="utf-8")
+
+    assert re.search(
+        rf"\.badge-capsule\s*\{{.*?font-size:\s*{badge_size}px;",
+        template,
+        flags=re.DOTALL,
+    )
+    for title_size in title_sizes:
+        assert re.search(
+            rf"\.main-title\s*\{{.*?font-size:\s*{title_size}px;",
+            template,
+            flags=re.DOTALL,
+        )
+
+
+def test_english_world_cover_template_keeps_its_independent_typography():
+    """英语世界短视频走独立报刊模板，不接受默认封面字号变更。"""
+    template_path = Path(__file__).resolve().parents[2] / "resources" / "cover" / "template" / "cover_english_newspaper.html.j2"
+    template = template_path.read_text(encoding="utf-8")
+
+    assert ".brand-badge" in template
+    assert re.search(r"\.main-title\s*\{.*?font-size:\s*84px;", template, flags=re.DOTALL)

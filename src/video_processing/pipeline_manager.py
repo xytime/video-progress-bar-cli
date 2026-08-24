@@ -2871,6 +2871,12 @@ class PipelineManager:
                             cover_title = title_file.read_text(encoding="utf-8").strip()
                         except Exception:
                             pass
+                    display_title_file = self._OUT_DIR / f"{prefix}_display_title.txt"
+                    if settings.enable_dual_title_display and display_title_file.exists():
+                        try:
+                            cover_title = display_title_file.read_text(encoding="utf-8").strip() or cover_title
+                        except Exception:
+                            pass
 
                     import json
                     cover_payload = {

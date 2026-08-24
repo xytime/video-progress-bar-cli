@@ -34,6 +34,7 @@
 | 1.25.2  | 2026-08-04 | Codex                                   | 拒绝将上游 HTTP 错误页写入标题/文案 checkpoint，阻断错误内容进入渲染与发布 |
 | 1.25.3  | 2026-08-05 | Codex                                   | 文案金额数量级检查降级为 Telegram 可见告警，不再阻断候选；事件方向和错误页闸门保持严格 |
 | 1.26.0  | 2026-08-21 | Codex                                   | 停用无事实依据的运营角标，并收紧短标题不得编造因果、情绪或受众反应 |
+| 1.27.0  | 2026-08-24 | Codex                                   | 新增平台/封面双标题合同与 AGY→Gemini 标题供应商链；默认配置不改变生产消费面 |
 """
 
 import re
@@ -71,6 +72,8 @@ from video_processing.utils.translation_quality_evaluator import (
 )
 from video_processing.utils.translation_quality_guard import QualityIssue
 from video_processing.utils.translation_candidate_arbitration import TranslationCandidateArbiter
+from video_processing.utils.title_contract import TitleContractError, validate_title_bundle
+from video_processing.title_provider import generate_agy_title_bundle
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("copywriter")
@@ -251,7 +254,10 @@ class WeChatContentSchema(pydantic.BaseModel):  # [Claude_Sonnet_4.6_Thinking_pl
     无需手工 json.loads，消除解析失败风险。
     """
     short_title: str = pydantic.Field(
-        description="纯中文事实型封面标题，6-16字；忠实表达原视频核心对象和事件，不得编造因果、反转、受众反应或结论；禁止使用爆款/干货/秘籍/逆天/震惊等廉价营销词"
+        description="纯中文事实型平台标题，6-16字；忠实表达原视频核心对象和事件，不得编造因果、反转、受众反应或结论；禁止使用爆款/干货/秘籍/逆天/震惊等廉价营销词"
+    )
+    display_title: str = pydantic.Field(
+        description="纯中文封面展示标题，10-18字；必须完整，可表达来源已明确支持的反差或问题；不得添加数字、机构、因果、预测、受众反应或历史纪录"
     )
     hook_subtitle: str = pydantic.Field(
         description="封面副标题Hook，不超过24字，纯中文，制造悬念或承诺具体利益"
@@ -410,6 +416,7 @@ def _translate_fallback(title: str, description: str) -> dict:
         copy_text += f"{config['tags']}\n🤖 {config['cta']}"
         return {
             "short_title":   short_title,
+            "display_title": "",
             "hook_subtitle": hook_subtitle,
             "copy":          copy_text,
             "category":      cat,
@@ -422,6 +429,7 @@ def _translate_fallback(title: str, description: str) -> dict:
         config = CATEGORY_CONFIG.get(cat, CATEGORY_CONFIG["科技"])
         return {
             "short_title":   graceful_truncate_title(title),  # [Claude_Sonnet_4.6_Thinking_planning] v1.9.0
+            "display_title": "",
             "hook_subtitle": "",
             "copy":          f"{title}\n\n{config['tags']}\n🤖 {config['cta']}",
             "category":      cat,
@@ -469,7 +477,7 @@ def _evaluate_wechat_content_quality(
     """评估标题/文案候选质量，不写文件、不抛异常。"""
     translated_text = "\n".join(
         str(content.get(key, "")).strip()
-        for key in ("short_title", "hook_subtitle", "copy")
+        for key in ("short_title", "display_title", "hook_subtitle", "copy")
         if str(content.get(key, "")).strip()
     )
     if not translated_text:
@@ -561,6 +569,7 @@ def _build_copy_quality_event(
         "source_title": title,
         "content": {
             "short_title": str(content.get("short_title", "")),
+            "display_title": str(content.get("display_title", "")),
             "hook_subtitle": str(content.get("hook_subtitle", "")),
             "category": str(content.get("category", "")),
         },
@@ -587,7 +596,48 @@ def _select_wechat_content_candidate(
     last_failure_summary = ""
     for idx, (provider, factory) in enumerate(candidates):
         final_provider = idx == len(candidates) - 1
-        content = factory()
+        try:
+            content = factory()
+        except Exception as exc:
+            event = {
+                "provider": provider,
+                "status": "unavailable",
+                "action": "fallback",
+                "selected": False,
+                "source_title": title,
+                "provider_error": type(exc).__name__,
+            }
+            events.append(event)
+            last_failure_summary = f"{provider} unavailable: {type(exc).__name__}"
+            logger.warning("[CopyGuard] %s unavailable: %s", provider, type(exc).__name__)
+            continue
+        try:
+            title_bundle = validate_title_bundle(
+                platform_title=str(content.get("short_title", "")),
+                display_title=str(content.get("display_title", "")),
+                hook_subtitle=str(content.get("hook_subtitle", "")),
+                require_display_title=bool(str(content.get("display_title", "")).strip()),
+            )
+        except TitleContractError as exc:
+            event = {
+                "provider": provider,
+                "status": "rejected",
+                "action": "fallback" if not final_provider else "fail",
+                "selected": False,
+                "source_title": title,
+                "title_contract": str(exc),
+            }
+            if "数字疑问残句" in str(exc):
+                event["semantic_title_guard"] = "short_title is an incomplete question/number fragment"
+            events.append(event)
+            last_failure_summary = str(exc)
+            logger.warning("[CopyGuard] Rejecting title contract from %s: %s", provider, exc)
+            continue
+        content = dict(content)
+        content["short_title"] = title_bundle.platform_title
+        content["hook_subtitle"] = title_bundle.hook_subtitle
+        if "display_title" in content or title_bundle.display_title:
+            content["display_title"] = title_bundle.display_title
         short_title = str(content.get("short_title", "")).strip()
         if not _is_semantically_complete_short_title(short_title):
             event = {
@@ -598,6 +648,7 @@ def _select_wechat_content_candidate(
                 "source_title": title,
                 "content": {
                     "short_title": short_title,
+                    "display_title": str(content.get("display_title", "")),
                     "hook_subtitle": str(content.get("hook_subtitle", "")),
                     "category": str(content.get("category", "")),
                 },
@@ -665,7 +716,8 @@ def _build_wechat_prompt(title: str, description: str) -> str:
     return (
         f"请根据以下 YouTube 视频信息，生成适合微信视频号发布的完整内容。\n\n"
         f"【硬性约束】\n"
-        f"- short_title：纯中文，6-16字，准确概括原视频的核心对象与事件；不得编造因果、反转、受众反应或未经原视频支持的结论\n"
+        f"- short_title：纯中文平台标题，6-16字，准确概括原视频的核心对象与事件；不得编造因果、反转、受众反应或未经原视频支持的结论\n"
+        f"- display_title：纯中文封面展示标题，10-18字，必须完整；可表达来源明确支持的反差或问题，不得添加来源未出现的数字、机构、因果、预测、受众反应或历史纪录\n"
         f"- hook_subtitle：纯中文，不超过24字\n"
         f"- copy：100-200字 + 3-5个hashtag + 一句CTA，纯文本无markdown\n"
         f"- category：从以下选1个：{cats}\n"
@@ -786,20 +838,63 @@ def _apply_post_processing(short_title: str, hook_subtitle: str) -> tuple[str, s
     return short_title, hook_subtitle
 
 
+def _apply_agy_title_bundle(base_content: dict, title: str, description: str) -> dict:
+    """用 AGY 候选替换标题三字段，正文和分类始终沿用既有文案链路。"""
+    bundle = generate_agy_title_bundle(
+        agy_bin=settings.copywriter_agy_bin,
+        model=settings.copywriter_agy_model,
+        timeout_seconds=settings.copywriter_agy_timeout_seconds,
+        title=title,
+        description=description,
+    )
+    content = dict(base_content)
+    content.update({
+        "short_title": bundle.platform_title,
+        "display_title": bundle.display_title,
+        "hook_subtitle": bundle.hook_subtitle,
+    })
+    return content
+
+
+def _title_provider_candidates(
+    base_content: dict,
+    title: str,
+    description: str,
+    *,
+    base_provider: str,
+) -> list[tuple[str, Callable[[], dict]]]:
+    """按配置构造标题候选；始终保留当前链路作为 AGY 的安全兜底。"""
+    candidates: list[tuple[str, Callable[[], dict]]] = []
+    configured = settings.copywriter_title_provider_order_list
+    for provider in configured:
+        if provider == "agy":
+            candidates.append((
+                f"agy:{settings.copywriter_agy_model}",
+                lambda: _apply_agy_title_bundle(base_content, title, description),
+            ))
+        elif provider == "gemini":
+            candidates.append((base_provider, lambda: dict(base_content)))
+
+    if "gemini" not in configured:
+        candidates.append((base_provider, lambda: dict(base_content)))
+    return candidates
+
+
 def generate_wechat_content(
     title: str,
     description: str,
     model_name: str = "gemini-2.5-flash",
     audit_path: Optional[Path] = None,
 ) -> dict:
-    """调用 Gemini 生成微信视频号所需的全部内容。
+    """生成微信视频号所需内容，并按配置仲裁标题供应商。
 
     [Claude_Sonnet_4.6_Thinking_planning] v1.8.0 重构：
     使用 google-genai SDK + Pydantic response_schema 强制结构化输出，
     替代手工 json.loads，彻底消除分类不准和解析异常风险。
 
     返回 dict:
-        short_title   : str  — 6-16 字，自媒体流量型标题
+        short_title   : str  — 6-16 字，平台标题
+        display_title : str  — 10-18 字，封面展示标题（历史降级路径可为空）
         hook_subtitle : str  — ≤ 24 字，封面副标题 Hook
         copy          : str  — 文案正文（100-200 字 + hashtag + CTA）
         category      : str  — WECHAT_CATEGORIES 之一
@@ -807,107 +902,89 @@ def generate_wechat_content(
         content_label : str  — 运营标签
     """
     api_key = settings.gemini_api_key
+    base_provider = model_name
     if not api_key:
-        return _select_wechat_content_candidate(
-            title,
-            description,
-            [("fallback", lambda: _translate_fallback(title, description))],
-            audit_path=audit_path,
-        )
+        logger.warning("Gemini API key unavailable; using translation fallback as content base")
+        base_content = _translate_fallback(title, description)
+        base_provider = "fallback"
+    else:
+        try:
+            from google import genai
+            from google.genai import types as genai_types
 
-    try:
-        from google import genai
-        from google.genai import types as genai_types
+            prompt = _build_wechat_prompt(title, description)
+            logger.info(f"[v1.8.0] Calling Gemini [{model_name}] with response_schema...")
+            client = genai.Client(api_key=api_key)
+            fib_delays = [1, 2, 3]
+            response = None
+            for attempt in range(len(fib_delays) + 1):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            system_instruction=_SYSTEM_INSTRUCTION,
+                            response_mime_type="application/json",
+                            response_schema=WeChatContentSchema,
+                        ),
+                    )
+                    break
+                except Exception as exc:
+                    if attempt == len(fib_delays):
+                        raise
+                    delay = fib_delays[attempt]
+                    logger.warning("Gemini API attempt %s failed: %s. Retrying in %ss...", attempt + 1, type(exc).__name__, delay)
+                    time.sleep(delay)
 
-        prompt = _build_wechat_prompt(title, description)
+            parsed: Optional[WeChatContentSchema] = response.parsed
+            if parsed is None:
+                raise ValueError("google-genai returned no parsed output")
 
-        logger.info(f"[v1.8.0] Calling Gemini [{model_name}] with response_schema...")
-        client = genai.Client(api_key=api_key)
-        
-        # [Gemini_3.1_Pro_High_planning] v1.10.0 引入斐波那契重试退避机制
-        fib_delays = [1, 2, 3]
-        max_retries = len(fib_delays)
-        response = None
-        
-        for attempt in range(max_retries + 1):
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=genai_types.GenerateContentConfig(
-                        system_instruction=_SYSTEM_INSTRUCTION,
-                        response_mime_type="application/json",
-                        response_schema=WeChatContentSchema,
-                    ),
-                )
-                break
-            except Exception as e:
-                if attempt == max_retries:
-                    logger.error(f"Gemini API call failed after {max_retries} retries: {e}")
-                    raise e
-                delay = fib_delays[attempt]
-                logger.warning(f"Gemini API attempt {attempt+1} failed: {e}. Retrying in {delay}s...")
-                time.sleep(delay)
+            short_title, hook_subtitle = _apply_post_processing(
+                str(parsed.short_title).strip(),
+                str(parsed.hook_subtitle).strip(),
+            )
+            display_title, _ = _apply_post_processing(str(parsed.display_title).strip(), "")
+            title_bundle = validate_title_bundle(
+                platform_title=short_title,
+                display_title=display_title,
+                hook_subtitle=hook_subtitle,
+            )
+            copy = str(parsed.wechat_copy).strip()
+            category = str(parsed.category).strip()
+            if category not in WECHAT_CATEGORIES:
+                logger.warning("LLM category %r not in WECHAT_CATEGORIES; using classifier", category)
+                category = classify_category(title, description)
+            if not copy:
+                raise ValueError("google-genai returned empty copy")
 
-        parsed: Optional[WeChatContentSchema] = response.parsed
-        if parsed is None:
-            raise ValueError(f"google-genai returned None parsed output. Raw: {response.text!r}")
+            _overlap = verbatim_overlap_ratio(copy, description)
+            if _overlap >= 0.25:
+                logger.warning("[Originality] copy overlaps source description %.0f%% (>=25%%)", _overlap * 100)
 
-        # [Claude_Sonnet_4.6_Thinking_planning] v1.9.0: 优雅截断替换硬截断
-        short_title   = graceful_truncate_title(str(parsed.short_title).strip())
-        hook_subtitle = str(parsed.hook_subtitle).strip()[:24]
-        copy          = str(parsed.wechat_copy).strip()
-        category      = str(parsed.category).strip()
-        content_hints = parsed.content_hints if isinstance(parsed.content_hints, list) else []
-        # 历史 checkpoint 仍保留该字段，但成品封面不再接受运营角标。
-        content_label = ""
+            base_content = {
+                "short_title": title_bundle.platform_title,
+                "display_title": title_bundle.display_title,
+                "hook_subtitle": title_bundle.hook_subtitle,
+                "copy": copy,
+                "category": category,
+                "content_hints": parsed.content_hints if isinstance(parsed.content_hints, list) else [],
+                "content_label": "",
+            }
+        except Exception as exc:
+            logger.error("Gemini content base failed: %s", type(exc).__name__)
+            base_content = _translate_fallback(title, description)
+            base_provider = "fallback"
 
-        if len(short_title) < 6:
-            logger.warning(f"short_title too short ({len(short_title)} chars), using graceful fallback")
-            short_title = graceful_truncate_title(title)
-
-        if category not in WECHAT_CATEGORIES:
-            logger.warning(f"LLM category '{category}' not in WECHAT_CATEGORIES, falling back to classify_category()")
-            category = classify_category(title, description)
-
-        if not copy:
-            raise ValueError("google-genai returned empty copy")
-
-        short_title, hook_subtitle = _apply_post_processing(short_title, hook_subtitle)
-
-        # [Claude_Opus_4.8] 🅴 反搬运·零渲染：检测文案是否大段逐字照搬 YouTube 原始描述。
-        # 高重合 = 低原创度 = 易被微信判搬运。此处为可观测信号（不阻断发布），便于后续调权/复核。
-        _overlap = verbatim_overlap_ratio(copy, description)
-        if _overlap >= 0.25:
-            logger.warning(f"[Originality] copy overlaps source description {_overlap:.0%} "
-                           f"(>=25%) — possible搬运 signal; title={title!r}")
-
-        content = {
-            "short_title":   short_title,
-            "hook_subtitle": hook_subtitle,
-            "copy":          copy,
-            "category":      category,
-            "content_hints": content_hints,
-            "content_label": content_label,
-        }
-    except Exception as e:
-        logger.error(f"google-genai call failed: {e}")
-        return _select_wechat_content_candidate(
-            title,
-            description,
-            [("fallback", lambda: _translate_fallback(title, description))],
-            audit_path=audit_path,
-        )
-
-    selected_content = _select_wechat_content_candidate(
+    candidates = _title_provider_candidates(
+        base_content,
         title,
         description,
-        [
-            (model_name, lambda: content),
-            ("fallback", lambda: _translate_fallback(title, description)),
-        ],
-        audit_path=audit_path,
+        base_provider=base_provider,
     )
+    if base_provider != "fallback":
+        candidates.append(("fallback", lambda: _translate_fallback(title, description)))
+    selected_content = _select_wechat_content_candidate(title, description, candidates, audit_path=audit_path)
     logger.info(
         "AI content candidate selected: category=%r, title=%r, label=%r",
         selected_content.get("category", ""),
@@ -968,6 +1045,8 @@ def main():
     )
     validate_publishable_generated_content(content["short_title"], content["copy"])
     (out / f"{yid}_title.txt"   ).write_text(content["short_title"],   encoding="utf-8")
+    if content.get("display_title"):
+        (out / f"{yid}_display_title.txt").write_text(content["display_title"], encoding="utf-8")
     (out / f"{yid}_copy.txt"    ).write_text(content["copy"],           encoding="utf-8")
     (out / f"{yid}_category.txt").write_text(content["category"],       encoding="utf-8")
 
@@ -985,6 +1064,8 @@ def main():
     (out / f"{yid}_label.txt").write_text("", encoding="utf-8")
 
     logger.info(f"short_title → {content['short_title']!r} (len={len(content['short_title'])})")
+    if content.get("display_title"):
+        logger.info(f"display_title → {content['display_title']!r} (len={len(content['display_title'])})")
     logger.info(f"category    → {content['category']!r}")
     logger.info(f"copy        → output/{yid}_copy.txt")
     print(out / f"{yid}_copy.txt")

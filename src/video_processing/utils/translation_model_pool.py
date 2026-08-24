@@ -13,6 +13,7 @@
 | 1.3.0   | 2026-07-13 | Codex  | 支持外层 provider 忽略冷却，避免遮蔽内部模型级免费容量 |
 | 1.4.0   | 2026-07-13 | Codex  | 锁内 read-merge-write，避免外层旧快照覆盖具体模型冷却状态 |
 | 1.5.0   | 2026-07-17 | Codex  | 移除阿里云 MT profile，避免配置残留重新进入字幕质量链路 |
+| 1.6.0   | 2026-08-24 | Codex  | 增加 agy 首选翻译 profile，保留 DeepSeek 次选与 Google 终级兜底 |
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ class ModelProfile:
 
 
 PROFILES = {
+    "agy": ModelProfile("agy", frozenset({"translate", "vocab"}), 110),
     "gemini": ModelProfile("gemini", frozenset({"translate", "vocab"}), 100),
     "deepseek": ModelProfile("deepseek", frozenset({"translate", "vocab"}), 90),
     "google": ModelProfile("google", frozenset({"translate"}), 20),

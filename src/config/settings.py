@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.46.0 | 2026-08-24 | Codex | 新增标题供应商顺序与 AGY 参数；默认 Gemini 且封面双标题消费关闭。 |
 | 3.45.0 | 2026-08-21 | Codex | Candidate-score cache TTL prevents minute-by-minute full rescoring. |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -49,6 +50,7 @@
 | 3.15.7 | 2026-07-31 | Codex                              | 新增 Codex AI 封面任务队列与本地超时降级配置，默认关闭 |
 | 3.15.9 | 2026-08-03 | Codex                              | 新增人工普通话译制的火山语音凭据与频道音色档案路径；专属档案未命中时保持默认 TTS |
 | 3.16.0 | 2026-08-24 | Codex | 新增英语世界 Gemini agy 首选封面开关；仅用于 Telegram 审核包，不改变投稿人审门禁。 |
+| 3.16.1 | 2026-08-24 | Codex | agy 作为字幕与普通话精修首选，DeepSeek 保留为次选，并固定 CLI 模型/超时配置 |
 """
 import json
 import socket
@@ -135,6 +137,15 @@ class Settings(BaseSettings):
     # Google Gemini API Key
     gemini_api_key: Optional[str] = None
 
+    # 标题供应商顺序。默认仅复用既有 Gemini；完成影子评测后可显式切为 agy,gemini。
+    # 仅改变标题字段，正文仍由现有文案器生成；未知 provider 会被忽略。
+    copywriter_title_provider_order: str = "gemini"
+    copywriter_agy_bin: str = "agy"
+    copywriter_agy_model: str = "gemini-3.7-flash-high"
+    copywriter_agy_timeout_seconds: int = 45
+    # 双标题消费默认关闭：启用后仅封面读取 display_title，平台/视频顶部仍读 title.txt。
+    enable_dual_title_display: bool = False
+
     # 阿里云百炼 (DashScope / Model Studio) API Key — 用于 CosyVoice TTS
     # 获取地址：https://bailian.console.aliyun.com/ → API-KEY 管理
     dashscope_api_key: Optional[str] = None  # [Gemini_2.5_Pro_planning]
@@ -146,15 +157,21 @@ class Settings(BaseSettings):
     aliyun_mt_access_key_id: Optional[str] = None
     aliyun_mt_access_key_secret: Optional[str] = None
 
-    # 字幕翻译供应商顺序，逗号分隔。主链路默认：Gemini → DeepSeek → Google。
-    subtitle_translation_provider_order: str = "gemini,deepseek,google"
+    # 字幕翻译供应商顺序，逗号分隔。主链路默认：agy → DeepSeek → Gemini → Google。
+    subtitle_translation_provider_order: str = "agy,deepseek,gemini,google"
+
+    # agy CLI：只在独立临时目录的 plan/sandbox 模式下调用，生产输出必须满足 JSON Schema。
+    agy_command: str = "agy"
+    agy_timeout_sec: int = 90
+    agy_subtitle_model: str = "gemini-3.7-flash-high"
+    agy_dubbing_model: str = "claude-sonnet-4-6"
 
     # DeepSeek OpenAI-compatible API（默认不启用；需把 deepseek 放入 subtitle_translation_provider_order）
     deepseek_api_key: Optional[str] = None
     deepseek_base_url: str = "https://api.deepseek.com"
     deepseek_model: str = "deepseek-v4-flash"
     # DeepSeek 一体化翻译+vocabulary 候选：完成 A/B 对比前保持关闭。
-    enable_deepseek_vocab_fallback: bool = False
+    enable_deepseek_vocab_fallback: bool = True
 
     # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: Clash Mi 下载节点切换配置
     # 架构背景：Clash Mi 使用 macOS Network Extension，系统扩展不允许动态开放任意端口，
@@ -307,6 +324,9 @@ class Settings(BaseSettings):
     dubbing_deepseek_script_refinement: bool = True
     dubbing_deepseek_thinking_enabled: bool = True
     dubbing_deepseek_refinement_batch_size: int = 6
+    # 普通话精修：agy 首选，DeepSeek thinking 次选；agy 批次更大以保持叙事上下文。
+    dubbing_script_refinement_provider_order: str = "agy,deepseek"
+    dubbing_agy_refinement_batch_size: int = 12
     dubbing_subtitle_font_size: int = 72
     dubbing_subtitle_max_page_chars: int = 28
     dubbing_subtitle_max_line_chars: int = 12
@@ -534,13 +554,35 @@ class Settings(BaseSettings):
     @property
     def subtitle_translation_provider_order_list(self) -> list[str]:
         """字幕翻译供应商顺序（过滤未知值，空配置回退默认顺序）。"""
-        allowed = {"gemini", "deepseek", "google"}
+        allowed = {"agy", "gemini", "deepseek", "google"}
         providers = []
         for item in (self.subtitle_translation_provider_order or "").split(","):
             provider = item.strip().lower()
             if provider in allowed and provider not in providers:
                 providers.append(provider)
-        return providers or ["gemini", "deepseek", "google"]
+        return providers or ["agy", "deepseek", "gemini", "google"]
+
+    @property
+    def dubbing_script_refinement_provider_order_list(self) -> list[str]:
+        """普通话精修 provider 顺序；未知项忽略，空配置保持 agy→DeepSeek。"""
+        allowed = {"agy", "deepseek"}
+        providers = []
+        for item in (self.dubbing_script_refinement_provider_order or "").split(","):
+            provider = item.strip().lower()
+            if provider in allowed and provider not in providers:
+                providers.append(provider)
+        return providers or ["agy", "deepseek"]
+
+    @property
+    def copywriter_title_provider_order_list(self) -> list[str]:
+        """标题供应商顺序；默认 Gemini，AGY 失败时可回落到 Gemini。"""
+        allowed = {"agy", "gemini"}
+        providers = []
+        for item in (self.copywriter_title_provider_order or "").split(","):
+            provider = item.strip().lower()
+            if provider in allowed and provider not in providers:
+                providers.append(provider)
+        return providers or ["gemini"]
 
     @computed_field  # type: ignore[misc]
     @property
