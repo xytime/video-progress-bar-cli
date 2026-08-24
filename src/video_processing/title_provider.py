@@ -8,9 +8,12 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增 agy JSON Schema 标题 provider，与文案和发布链路解耦。 |
 | 1.1.0 | 2026-08-24 | Codex | 对瞬时失败或标题合同拒绝增加一次受限重试，避免直接落到低质量翻译兜底。 |
+| 1.2.0 | 2026-08-24 | Codex | 保留安全分类后的 AGY 失败原因，并在外部短暂失败后退避重试，避免审计仅留下不可用。 |
 """
 
 from __future__ import annotations
+
+import time
 
 from .utils.title_contract import TitleBundle, TitleContractError, validate_title_bundle
 from .utils.agy_provider import AgyProviderError, run_agy_structured
@@ -65,15 +68,26 @@ def generate_agy_title_bundle(
             )
         except retryable_errors as exc:
             last_error = exc
+            if attempt == 0 and isinstance(exc, AgyProviderError):
+                time.sleep(2)
 
     assert last_error is not None
-    raise TitleProviderError(f"agy 标题输出无效：{type(last_error).__name__}") from last_error
+    raise TitleProviderError(f"agy 标题输出无效：{_safe_failure_detail(last_error)}") from last_error
+
+
+def _safe_failure_detail(error: Exception) -> str:
+    """仅透传已脱敏的外部失败分类，或本地合同名称，不记录 prompt/模型原文。"""
+    if isinstance(error, AgyProviderError):
+        return str(error)
+    if isinstance(error, TitleContractError):
+        return f"title contract: {error}"
+    return type(error).__name__
 
 
 def _build_agy_title_prompt(*, title: str, description: str, retrying: bool = False) -> str:
     """构建隔离的标题任务提示，限制模型仅使用明确给出的来源事实。"""
     retry_note = (
-        "\n上一候选未通过标题合同。重新从来源事实生成完整三字段；"
+        "\n上一次调用未产生合格标题。重新从来源事实生成完整三字段；"
         "不得以 TED、演讲、讲者、栏目或人名等元信息代替视频主题。\n"
         if retrying else ""
     )

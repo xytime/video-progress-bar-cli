@@ -75,7 +75,7 @@ from video_processing.utils.translation_quality_evaluator import (
 from video_processing.utils.translation_quality_guard import QualityIssue
 from video_processing.utils.translation_candidate_arbitration import TranslationCandidateArbiter
 from video_processing.utils.title_contract import TitleContractError, validate_title_bundle
-from video_processing.title_provider import generate_agy_title_bundle
+from video_processing.title_provider import TitleProviderError, generate_agy_title_bundle
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("copywriter")
@@ -648,6 +648,7 @@ def _select_wechat_content_candidate(
         try:
             content = factory()
         except Exception as exc:
+            safe_error = str(exc) if isinstance(exc, TitleProviderError) else type(exc).__name__
             event = {
                 "provider": provider,
                 "status": "unavailable",
@@ -655,10 +656,11 @@ def _select_wechat_content_candidate(
                 "selected": False,
                 "source_title": title,
                 "provider_error": type(exc).__name__,
+                "provider_error_detail": safe_error,
             }
             events.append(event)
-            last_failure_summary = f"{provider} unavailable: {type(exc).__name__}"
-            logger.warning("[CopyGuard] %s unavailable: %s", provider, type(exc).__name__)
+            last_failure_summary = f"{provider} unavailable: {safe_error}"
+            logger.warning("[CopyGuard] %s unavailable: %s", provider, safe_error)
             continue
         try:
             title_bundle = validate_title_bundle(

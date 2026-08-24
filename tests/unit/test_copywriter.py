@@ -20,6 +20,7 @@
 | 1.14.0  | 2026-08-05 | Codex                      | 覆盖文案金额数量级仅告警、不阻断的运营策略 |
 | 1.15.0  | 2026-08-24 | Codex                      | 覆盖双标题灰度下缺失封面标题的兜底候选必须失败关闭。 |
 | 1.16.0  | 2026-08-24 | Codex                      | 覆盖关闭双标题时 Gemini 缺失或不合规展示标题不影响原有文案合同。 |
+| 1.17.0  | 2026-08-24 | Codex                      | 审计记录 AGY 的脱敏外部失败分类，而非仅记录不可用类型。 |
 """
 import json
 import sys
@@ -37,6 +38,7 @@ from scripts.copywriter import (
     _build_gemini_base_content, _select_wechat_content_candidate,
     _translate_fallback, WeChatContentSchema,
 )
+from video_processing.title_provider import TitleProviderError
 from video_processing.utils.text_utils import verbatim_overlap_ratio
 
 
@@ -334,6 +336,22 @@ def test_gemini_base_content_ignores_display_title_when_dual_title_disabled(monk
 
     assert content["short_title"] == "AI技术发展"
     assert content["display_title"] == ""
+
+
+def test_copy_candidate_audit_keeps_safe_agy_failure_detail(monkeypatch, tmp_path):
+    monkeypatch.setattr("scripts.copywriter.settings.enable_dual_title_display", False)
+    selected = _select_wechat_content_candidate(
+        "AI helps lawyers", "A safe source description.",
+        [
+            ("agy", lambda: (_ for _ in ()).throw(TitleProviderError("agy exit 1: rate limit"))),
+            ("gemini", lambda: {"short_title": "AI改变法律服务", "hook_subtitle": "", "copy": "合规文案", "category": "科技"}),
+        ],
+        audit_path=tmp_path / "quality.json",
+    )
+
+    report = json.loads((tmp_path / "quality.json").read_text(encoding="utf-8"))
+    assert selected["short_title"] == "AI改变法律服务"
+    assert report["events"][0]["provider_error_detail"] == "agy exit 1: rate limit"
 
 
 # ── 文案事实保真守门器 ───────────────────────────────────────────────────────

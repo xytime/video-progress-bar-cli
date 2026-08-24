@@ -9,6 +9,7 @@
 | 1.4.0 | 2026-08-24 | Codex | 覆盖嘉宾 TED 起句及姓名加演讲的元信息变体。 |
 | 1.5.0 | 2026-08-24 | Codex | 保留来源感知的事实审查职责，表面合同不臆断事件方向。 |
 | 1.6.0 | 2026-08-24 | Codex | 覆盖纯人名、从句残片和孤立尾号的发布标题拒绝。 |
+| 1.7.0 | 2026-08-24 | Codex | 覆盖 AGY 外部失败的脱敏原因可进入供应商降级审计。 |
 """
 
 from __future__ import annotations
@@ -164,4 +165,22 @@ def test_agy_provider_retries_once_after_contract_rejection(monkeypatch):
 
     assert bundle.platform_title == "AI承诺争议"
     assert len(calls) == 2
-    assert "上一候选未通过标题合同" in calls[1]
+    assert "上一次调用未产生合格标题" in calls[1]
+
+
+def test_agy_provider_preserves_safe_external_failure_category(monkeypatch):
+    calls: list[str] = []
+
+    def fail(*_args, **_kwargs):
+        calls.append("attempt")
+        raise title_provider.AgyProviderError("agy exit 1: rate limit")
+
+    monkeypatch.setattr(title_provider, "run_agy_structured", fail)
+    monkeypatch.setattr(title_provider.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(TitleProviderError, match="agy exit 1: rate limit"):
+        generate_agy_title_bundle(
+            agy_bin="agy", model="gemini-test", timeout_seconds=30,
+            title="AI promises", description="Source text.",
+        )
+    assert len(calls) == 2
