@@ -224,6 +224,17 @@ class PipelineAPIClient:
             logger.warning(f"[api_client] approve_english_world_submission failed: {e}")
             return None
 
+    async def reopen_uncertain_english_world_submission(self, review_id: str) -> Optional[dict]:
+        """POST 明确人工确认后的英语世界未确认投稿重传入口。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(f"/api/english-world/review-items/{review_id}/confirm-not-published-retry")
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] reopen_uncertain_english_world_submission failed: {e}")
+            return None
+
     async def get_english_world_review_items(self, *, limit: int = 10) -> Optional[list]:
         """GET 英语世界审核/投稿回执；只读，不触发 worker。"""
         try:

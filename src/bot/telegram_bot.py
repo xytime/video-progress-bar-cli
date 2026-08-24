@@ -448,6 +448,10 @@ async def _reply_english_world_jobs(message) -> None:
                 buttons.append([InlineKeyboardButton(
                     f"提交视频号 · {review_id[:8]}", callback_data=f"ew:r:{review_id}",
                 )])
+            if item.get("state") == "UNCERTAIN" and _ENGLISH_WORLD_REVIEW_ID_RE.fullmatch(review_id):
+                buttons.append([InlineKeyboardButton(
+                    f"核验后重传 · {review_id[:8]}", callback_data=f"ew:rc:{review_id}",
+                )])
     await _reply_html_chunks(
         message,
         "\n\n".join(lines),
@@ -528,6 +532,33 @@ async def handle_english_world_callback(update: Update, ctx: ContextTypes.DEFAUL
         return
     await query.answer()
     data = str(query.data or "")
+    retry_confirm = re.fullmatch(r"ew:rc:([a-f0-9]{32})", data)
+    if retry_confirm:
+        review_id = retry_confirm.group(1)
+        await query.edit_message_text(
+            "⚠️ <b>确认未发布后重传</b>\n"
+            f"审核编号：<code>{review_id[:8]}</code>\n"
+            "仅当你已在视频号后台确认本条未发布时继续；将保留首次未确认证据，"
+            "并只重传这一审核项。",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("确认未发布，重传本条", callback_data=f"ew:rr:{review_id}"),
+            ]]),
+        )
+        return
+    retry_execute = re.fullmatch(r"ew:rr:([a-f0-9]{32})", data)
+    if retry_execute:
+        result = await _api.reopen_uncertain_english_world_submission(retry_execute.group(1))
+        if result is None or not result.get("success"):
+            await query.edit_message_text("⚠️ 重传未启动；请刷新 /english_world jobs 查看状态。")
+            return
+        await query.edit_message_text(
+            "✅ <b>已启动本条人工确认重传</b>\n"
+            f"审核编号：<code>{retry_execute.group(1)[:8]}</code>\n"
+            "仅提交绑定成片；后续以视频号平台回执为准。",
+            parse_mode="HTML",
+        )
+        return
     review_approval = re.fullmatch(r"ew:r:([a-f0-9]{32})", data)
     if review_approval:
         result = await _api.approve_english_world_submission(review_approval.group(1))

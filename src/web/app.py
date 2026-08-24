@@ -1321,6 +1321,19 @@ def list_english_world_review_items(limit: int = 20):
     return {"items": db.list_english_world_review_items(limit=limit)}
 
 
+@app.post("/api/english-world/review-items/{review_id}/confirm-not-published-retry")
+def reopen_uncertain_english_world_submission(review_id: str):
+    """仅在 Telegram 二次确认后重开同一英语世界审核项，绝不走通用视频重试。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", review_id or ""):
+        return {"success": False, "error": "英语世界审核编号格式不合法"}
+    try:
+        item = db.reopen_uncertain_english_world_submission(review_id)
+        _start_english_world_submission(review_id)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    return {"success": True, "message": "已重开同一审核项的一次人工确认重传。", "item": item}
+
+
 @app.post("/api/english-world/review-items/{review_id}/hold")
 def hold_english_world_review_item(review_id: str):
     """显式搁置某条待审核学习卡；不触发制作或投稿。"""
