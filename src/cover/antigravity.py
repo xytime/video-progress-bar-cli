@@ -6,6 +6,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增 agy 主视觉 brief、OCR 门禁与标准化工具。 |
+| 1.1.0 | 2026-08-24 | Codex | 允许把 OCR 疑似纹理标记为 Telegram 人审待决，不自动视为无字通过。 |
 """
 
 from __future__ import annotations
@@ -104,8 +105,9 @@ def accept_and_normalize(
     destination: Path,
     *,
     human_reviewed_no_text: bool = False,
+    allow_ocr_suspect: bool = False,
 ) -> dict[str, Any]:
-    """拒绝可读文本；只有显式人工确认后才允许 OCR 疑似噪声继续。"""
+    """拒绝可读文本；待 Telegram 人审的封面可保留 OCR 疑似纹理。"""
     with Image.open(source) as image:
         image = ImageOps.exif_transpose(image).convert("RGB")
         if image.width < 720 or image.height < 840:
@@ -114,7 +116,7 @@ def accept_and_normalize(
         ImageOps.fit(image, _CANVAS_SIZE, method=Image.Resampling.LANCZOS).save(destination, format="PNG")
     ocr_text = _ocr_text(destination)
     readable_tokens = re.findall(r"[A-Za-z0-9]{3,}", ocr_text)
-    if readable_tokens and not human_reviewed_no_text:
+    if readable_tokens and not human_reviewed_no_text and not allow_ocr_suspect:
         destination.unlink(missing_ok=True)
         raise ValueError(f"OCR 检出可读文字：{' '.join(readable_tokens[:8])}")
     with Image.open(destination) as normalized:
@@ -123,7 +125,13 @@ def accept_and_normalize(
         "source_artifact": str(source.resolve()),
         "sha256": sha256_file(destination),
         "dimensions": {"width": width, "height": height},
-        "machine_visual_review": "ocr_empty" if not ocr_text else "ocr_suspect_human_approved",
+        "machine_visual_review": (
+            "ocr_empty"
+            if not ocr_text
+            else "ocr_suspect_human_approved"
+            if human_reviewed_no_text
+            else "ocr_suspect_requires_human_review"
+        ),
         "ocr_text": ocr_text,
         "human_visual_review": "reviewed_no_text" if human_reviewed_no_text else None,
         "requires_human_visual_review": not human_reviewed_no_text,

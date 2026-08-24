@@ -9,6 +9,7 @@
 | 1.0.0 | 2026-08-22 | Codex | 新增每日英语世界短视频的 Telegram 审核材料通知。 |
 | 1.1.0 | 2026-08-23 | Codex | 审核回执绑定独立发布包与一次性 Telegram 审批按钮，避免模糊文字误投。 |
 | 1.2.0 | 2026-08-24 | Codex | 封面只接受 enriched timeline，并将实际投稿封面发送给人工审核。 |
+| 1.3.0 | 2026-08-24 | Codex | 英语世界审核包优先使用 agy/Gemini 主视觉，失败时回退确定性封面。 |
 """
 
 from __future__ import annotations
@@ -119,14 +120,60 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
         + "#英语学习 #英语听力 #英文阅读\n",
         encoding="utf-8",
     )
+    timeline_path = manifest.parent / "timeline_final_enriched.json"
+    if not timeline_path.is_file():
+        raise ValueError("英语世界审核包缺少 enriched timeline，拒绝生成无来源封面")
+    if not validate_dedicated_cover_file(cover_path, cover_provenance_path) and settings.enable_english_world_antigravity_primary:
+        agy_command = [
+            str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
+            str(_PROJECT_ROOT / "scripts" / "generate_english_agi_cover.py"),
+            "--timeline", str(timeline_path),
+            "--output-dir", str(package_dir / "agi_cover"),
+            "--variants", str(settings.english_world_antigravity_variants),
+            "--model", settings.english_world_antigravity_model,
+            "--timeout-seconds", str(settings.english_world_antigravity_timeout_seconds),
+            "--cover-output", str(cover_path),
+            "--provenance-output", str(cover_provenance_path),
+            "--payload-output", str(cover_payload_path),
+        ]
+        if settings.english_world_antigravity_allow_ocr_suspect:
+            agy_command.append("--allow-ocr-suspect")
+        agy_timeout = settings.english_world_antigravity_variants * (settings.english_world_antigravity_timeout_seconds + 30) + 180
+        try:
+            agy_result = subprocess.run(
+                agy_command,
+                cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=agy_timeout,
+            )
+            attempt = {
+                "returncode": agy_result.returncode,
+                "stdout_tail": agy_result.stdout[-2000:],
+                "stderr_tail": agy_result.stderr[-2000:],
+            }
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            agy_result = None
+            attempt = {"returncode": None, "error": str(exc)[:2000]}
+        (package_dir / "agy_cover_attempt.json").write_text(
+            json.dumps(
+                {
+                    "enabled": True,
+                    "model": settings.english_world_antigravity_model,
+                    "variants": settings.english_world_antigravity_variants,
+                    "allow_ocr_suspect": settings.english_world_antigravity_allow_ocr_suspect,
+                    **attempt,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n",
+            encoding="utf-8",
+        )
+        if agy_result is None or agy_result.returncode != 0 or not validate_dedicated_cover_file(cover_path, cover_provenance_path):
+            logger.warning("英语世界 agy 主视觉未通过验收，回退确定性封面：%s", attempt.get("stderr_tail") or attempt.get("error", ""))
+
     if not validate_dedicated_cover_file(cover_path, cover_provenance_path):
-        timeline_path = manifest.parent / "timeline_final_enriched.json"
         command = [
             str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
             str(_PROJECT_ROOT / "scripts" / "generate_english_cover.py"),
         ]
-        if not timeline_path.is_file():
-            raise ValueError("英语世界审核包缺少 enriched timeline，拒绝生成无来源封面")
         command.extend(["--timeline", str(timeline_path)])
         command.extend([
             "--output", str(cover_path),

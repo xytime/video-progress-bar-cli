@@ -48,6 +48,7 @@
 | 3.15.6 | 2026-07-31 | Codex                              | 新增源字幕先行预检与非窗口预加工配置，阻止未审视频下载 |
 | 3.15.7 | 2026-07-31 | Codex                              | 新增 Codex AI 封面任务队列与本地超时降级配置，默认关闭 |
 | 3.15.9 | 2026-08-03 | Codex                              | 新增人工普通话译制的火山语音凭据与频道音色档案路径；专属档案未命中时保持默认 TTS |
+| 3.16.0 | 2026-08-24 | Codex | 新增英语世界 Gemini agy 首选封面开关；仅用于 Telegram 审核包，不改变投稿人审门禁。 |
 """
 import json
 import socket
@@ -323,6 +324,14 @@ class Settings(BaseSettings):
     antigravity_model: str = "gemini-3.5-flash"
     antigravity_image_model: str = "gemini-3.1-flash-image-preview"
     antigravity_timeout_seconds: int = 90
+
+    # 英语世界审核包的首选无字主视觉。失败时回退确定性报刊封面；任何结果仍须 Telegram 人审。
+    enable_english_world_antigravity_primary: bool = False
+    english_world_antigravity_model: str = "gemini-3.7-flash-high"
+    english_world_antigravity_variants: int = 3
+    english_world_antigravity_timeout_seconds: int = 180
+    # OCR 对插画纹理可能误报；开启后只能作为“待人审”候选，绝不等同机器无字验收。
+    english_world_antigravity_allow_ocr_suspect: bool = False
     ai_cover_queue_dir: str = "ai-cover-queue"
     ai_cover_finish_dir: str = "ai-cover-finish"
     ai_cover_generation_deadline_minutes: int = 32

@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增 agy 首选主视觉干跑入口与本地验收合成链路。 |
+| 1.1.0 | 2026-08-24 | Codex | 支持 Telegram 人审待决主视觉及投稿包指定输出路径。 |
 """
 
 from __future__ import annotations
@@ -75,6 +76,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="gemini-3.7-flash-high")
     parser.add_argument("--agy-bin", default=shutil.which("agy") or "agy")
     parser.add_argument("--timeout-seconds", type=int, default=180)
+    parser.add_argument("--allow-ocr-suspect", action="store_true", help="仅允许标记为待 Telegram 人审，不视为机器无字通过")
+    parser.add_argument("--cover-output", type=Path, help="最终投稿封面输出路径")
+    parser.add_argument("--provenance-output", type=Path, help="最终封面来源审计输出路径")
+    parser.add_argument("--payload-output", type=Path, help="最终规范化封面 payload 输出路径")
     return parser.parse_args()
 
 
@@ -134,7 +139,7 @@ def main() -> int:
             continue
         try:
             normalized = variant_dir / "visual.png"
-            evidence = accept_and_normalize(images[0], normalized)
+            evidence = accept_and_normalize(images[0], normalized, allow_ocr_suspect=args.allow_ocr_suspect)
         except (OSError, RuntimeError, ValueError) as exc:
             manifest["candidates"].append({"variant": label, "status": "rejected", "error": str(exc)[:500]})
             continue
@@ -152,9 +157,9 @@ def main() -> int:
         print(json.dumps({"status": "no_accepted_visual", "manifest": str(manifest_path)}, ensure_ascii=False))
         return 2
 
-    final_cover = output_dir / "cover_agi_primary_sample.jpg"
-    final_provenance = output_dir / "cover_agi_primary_sample_provenance.json"
-    final_payload = output_dir / "cover_agi_primary_sample_payload.json"
+    final_cover = (args.cover_output or output_dir / "cover_agi_primary_sample.jpg").resolve()
+    final_provenance = (args.provenance_output or output_dir / "cover_agi_primary_sample_provenance.json").resolve()
+    final_payload = (args.payload_output or output_dir / "cover_agi_primary_sample_payload.json").resolve()
     command = [
         str(PROJECT_ROOT / ".venv" / "bin" / "python"),
         str(PROJECT_ROOT / "scripts" / "generate_english_cover.py"),

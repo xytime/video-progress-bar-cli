@@ -4,18 +4,23 @@
 | Version | Date       | Author                         | Description                                            |
 |---------|------------|--------------------------------|--------------------------------------------------------|
 | 1.0.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 初始创建：覆盖 ENGLISH_WORLD_SHORT 内容路由、教学字段装配、合规策略与全流程渲染 |
+| 1.1.0 | 2026-08-24 | Codex | 覆盖 agy OCR 人审待决门禁与首选封面审核包集成。 |
 """
 
 import json
+import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import pytest
 from PIL import Image
 from src.cover.semantic import SemanticAnalyzer
 from src.cover.layout import LayoutComposer, _format_quote_en_html
 from src.cover.engine import CoverEngine
 from src.cover.english_world import build_english_world_cover_payload, validate_english_world_cover_payload
+from src.cover import antigravity
 from src.cover.antigravity import accept_and_normalize, build_agy_prompt, build_visual_brief
 from video_processing.core.cover_policy import assert_template_respects_cover_policy, validate_dedicated_cover_file
+from video_processing.core.cover_policy import compliant_cover_layout_policy
 
 
 def test_quote_en_html_highlighting():
@@ -140,6 +145,69 @@ def test_antigravity_visual_contract_is_text_free_and_uses_local_fact(tmp_path):
     evidence = accept_and_normalize(source, tmp_path / "visual.png")
     assert evidence["machine_visual_review"] == "ocr_empty"
     assert evidence["dimensions"] == {"width": 1080, "height": 1260}
+
+
+def test_antigravity_ocr_suspect_is_only_retained_for_human_review(tmp_path, monkeypatch):
+    """OCR 误报可进 Telegram 人审，但默认不会被机器自动放行。"""
+    source = tmp_path / "source.png"
+    Image.new("RGB", (900, 1050), "#1F2937").save(source)
+    monkeypatch.setattr(antigravity, "_ocr_text", lambda _: "fake visual texture")
+    with pytest.raises(ValueError, match="OCR 检出可读文字"):
+        accept_and_normalize(source, tmp_path / "strict.png")
+    evidence = accept_and_normalize(source, tmp_path / "review.png", allow_ocr_suspect=True)
+    assert evidence["machine_visual_review"] == "ocr_suspect_requires_human_review"
+    assert evidence["requires_human_visual_review"] is True
+    assert evidence["human_visual_review"] is None
+
+
+def test_review_package_prefers_agy_and_keeps_human_gate(tmp_path, monkeypatch):
+    """审核包走 agy 时只生成本地材料，不发送 Telegram 或触发平台投稿。"""
+    script_path = Path("scripts/notify_english_world_review.py").resolve()
+    spec = importlib.util.spec_from_file_location("english_world_notifier_test", script_path)
+    assert spec and spec.loader
+    notifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(notifier)
+    timeline = {
+        "headline_zh": "数据中心像一座电脑的房子",
+        "english_text": "Computing power needs storage.",
+        "translation_zh": "算力需要存储。",
+        "source_provenance": {"publisher": "CBC Kids News", "source_url": "https://example.invalid/source"},
+        "vocabulary_candidates": [],
+    }
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"content_type": "ENGLISH_WORLD_SHORT"}), encoding="utf-8")
+    (tmp_path / "timeline_final_enriched.json").write_text(json.dumps(timeline), encoding="utf-8")
+    mp4 = tmp_path / "sample.mp4"
+    mp4.write_bytes(b"not-a-real-video")
+    monkeypatch.setattr(notifier.settings, "enable_english_world_antigravity_primary", True)
+    monkeypatch.setattr(notifier.settings, "english_world_antigravity_model", "gemini-3.7-flash-high")
+    monkeypatch.setattr(notifier.settings, "english_world_antigravity_variants", 3)
+    monkeypatch.setattr(notifier.settings, "english_world_antigravity_timeout_seconds", 30)
+    monkeypatch.setattr(notifier.settings, "english_world_antigravity_allow_ocr_suspect", True)
+
+    def fake_run(command, **_):
+        assert Path(command[1]).name == "generate_english_agi_cover.py"
+        assert "--allow-ocr-suspect" in command
+        cover = Path(command[command.index("--cover-output") + 1])
+        provenance = Path(command[command.index("--provenance-output") + 1])
+        Image.new("RGB", (1080, 1260), "#F5EFE6").save(cover)
+        digest = __import__("hashlib").sha256(cover.read_bytes()).hexdigest()
+        provenance.write_text(json.dumps({
+            "cover_kind": "dedicated_generated_image", "uses_video_frame": False,
+            "cover_filename": cover.name, "cover_sha256": digest,
+            "layout_policy": compliant_cover_layout_policy(),
+        }), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout='{"status":"accepted"}', stderr="")
+
+    class FakeDB:
+        def create_english_world_review_item(self, **kwargs):
+            return {"id": "review-id", "state": "READY_FOR_REVIEW", **kwargs}
+
+    monkeypatch.setattr(notifier.subprocess, "run", fake_run)
+    monkeypatch.setattr(notifier, "PipelineDB", FakeDB)
+    review = notifier._prepare_publish_package(display_title="备用标题", mp4=mp4, manifest=manifest)
+    assert validate_dedicated_cover_file(Path(review["cover_path"]), Path(review["cover_provenance_path"]))
+    assert json.loads((tmp_path / "wechat_submission" / "agy_cover_attempt.json").read_text(encoding="utf-8"))["returncode"] == 0
 
 
 def test_cover_template_policy_compliance():
