@@ -6,6 +6,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 固化英语世界未交付通知必须取得 API 回执，否则保留失败退出码。 |
+| 1.1.0 | 2026-08-24 | Codex | 固化审核包只能接收实测时长严格大于 30 秒且不超过 300 秒的成片。 |
 """
 
 from __future__ import annotations
@@ -54,3 +55,26 @@ def test_failure_notification_records_the_exact_operational_reason(monkeypatch):
     assert sent["event_type"] == "english_world.not_delivered"
     assert sent["priority"] == "P1"
     assert "阅读屏微笔记不足 8 个" in str(sent["text"])
+
+
+@pytest.mark.parametrize("actual_duration", [30.0, 300.1])
+def test_review_package_rejects_mp4_outside_duration_range(monkeypatch, tmp_path, actual_duration):
+    """审核包是独立防线，不能让绕过渲染命令的短片进入 Telegram 审批。"""
+    mp4 = tmp_path / "short.mp4"
+    mp4.write_bytes(b"fixture")
+    monkeypatch.setattr(notifier, "get_video_duration_ffprobe", lambda _path: actual_duration)
+
+    with pytest.raises(ValueError, match="严格大于 30 秒"):
+        notifier._validate_review_duration(
+            mp4=mp4,
+            manifest_payload={"duration": actual_duration},
+        )
+
+
+def test_review_package_requires_manifest_to_match_measured_duration(monkeypatch, tmp_path):
+    mp4 = tmp_path / "study.mp4"
+    mp4.write_bytes(b"fixture")
+    monkeypatch.setattr(notifier, "get_video_duration_ffprobe", lambda _path: 42.0)
+
+    with pytest.raises(ValueError, match="时长与 MP4 不一致"):
+        notifier._validate_review_duration(mp4=mp4, manifest_payload={"duration": 41.0})

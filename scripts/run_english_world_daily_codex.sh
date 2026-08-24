@@ -7,6 +7,7 @@
 # | 1.1.0 | 2026-08-23 | Codex | 固化每日运行日志、状态回执与 EX_CONFIG 三次有界重试；全部失败时主动通知 Telegram。 |
 # | 1.0.0 | 2026-08-22 | Codex | 新增 07:00 专用 Codex 生产唤起与并发防重入保护。 |
 # | 1.0.1 | 2026-08-22 | Codex | 对 launchd 首次 Codex 配置瞬态失败（EX_CONFIG）仅重试一次。 |
+# | 1.2.0 | 2026-08-24 | Codex | 同步英语世界成片严格大于 30 秒且不超过 300 秒的生产边界，保留旧入口仅供兼容。 |
 
 set -uo pipefail
 
@@ -77,7 +78,7 @@ PROMPT=$(cat <<'EOF'
 
 先搜索当天或近期未使用的候选，再检查标题、简介、英文字幕/转写和必要的画面。只能选择适合儿童与家庭学习者的自然、科学、教育、健康、文化、日常生活或正向人文题材。排除政治、战争、暴力、犯罪、成人话题、强时政评论，以及包含真实伤亡、恐慌、疏散或令人不适灾情画面的素材；不确定即放弃当天生产。自然科学与天气科普（包括风暴、闪电、龙卷风的成因）并非关键词禁区，必须结合实际画面和叙事判断。
 
-若找到合格来源，按 make-english-world-short 技能和 production-contract 完整制作一条：自然完整句收尾；逐词红线；每个可见阅读屏至少 8 个微笔记；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。生产默认不超过 30 秒。完成后核验 MP4、音频收尾、manifest 与关键帧。
+若找到合格来源，按 make-english-world-short 技能和 production-contract 完整制作一条：自然完整句收尾；逐词红线；每个可见阅读屏至少 8 个微笔记；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。
 
 质检通过后，必须运行以下命令把 MP4 和 manifest 发到 Telegram 人工审核：
 PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>'

@@ -11,6 +11,7 @@
 | 1.2.0 | 2026-08-24 | Codex | 封面只接受 enriched timeline，并将实际投稿封面发送给人工审核。 |
 | 1.3.0 | 2026-08-24 | Codex | 英语世界审核包优先使用 agy/Gemini 主视觉，失败时回退确定性封面。 |
 | 1.4.0 | 2026-08-24 | Codex | 记录 Telegram API 回执并将失败通知去重，避免无回执重发刷屏。 |
+| 1.5.0 | 2026-08-24 | Codex | 创建审核包前以 manifest 与 ffprobe 双重拒绝非 30–300 秒范围的成片，杜绝短片绕过渲染入口直接投递。 |
 """
 
 from __future__ import annotations
@@ -28,11 +29,14 @@ from config.settings import settings
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db.database import PipelineDB
 from video_processing.telegram_delivery import send_document, send_text
+from video_processing.utils.video_metadata import get_video_duration_ffprobe
 
 logger = logging.getLogger(__name__)
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_MIN_REVIEW_DURATION_SECONDS = 30.0
+_MAX_REVIEW_DURATION_SECONDS = 300.0
 
 
 def _post_message(text: str, *, reply_markup: dict | None = None) -> None:
@@ -66,6 +70,30 @@ def _load_timeline(manifest_path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _validate_review_duration(*, mp4: Path, manifest_payload: dict) -> float:
+    """以最终 MP4 和 manifest 交叉核验英语世界审核成片的实际时长。"""
+    try:
+        manifest_duration = float(manifest_payload["duration"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("英语世界 manifest 缺少可解析的 duration") from exc
+    try:
+        actual_duration = get_video_duration_ffprobe(mp4)
+    except (FileNotFoundError, ValueError, OSError) as exc:
+        raise ValueError(f"无法用 ffprobe 核验英语世界成片时长：{mp4}") from exc
+    if not (_MIN_REVIEW_DURATION_SECONDS < actual_duration <= _MAX_REVIEW_DURATION_SECONDS):
+        raise ValueError(
+            "英语世界审核成片实际时长必须严格大于 "
+            f"{_MIN_REVIEW_DURATION_SECONDS:g} 秒且不超过 {_MAX_REVIEW_DURATION_SECONDS:g} 秒；"
+            f"ffprobe={actual_duration:.3f} 秒"
+        )
+    if abs(manifest_duration - actual_duration) > 0.25:
+        raise ValueError(
+            "英语世界 manifest 时长与 MP4 不一致："
+            f"manifest={manifest_duration:.3f} 秒，ffprobe={actual_duration:.3f} 秒"
+        )
+    return actual_duration
+
+
 def _short_wechat_title(title: str) -> str:
     """视频号短标题保守裁为 16 个字符，避免将下一段文案混入标题字段。"""
     clean = "".join((title or "").split())
@@ -80,6 +108,7 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
         raise ValueError(f"无法读取学习卡 manifest：{manifest}") from exc
     if manifest_payload.get("content_type") != "ENGLISH_WORLD_SHORT":
         raise ValueError("审核回执只接受 content_type=ENGLISH_WORLD_SHORT 的学习卡")
+    _validate_review_duration(mp4=mp4, manifest_payload=manifest_payload)
 
     timeline = _load_timeline(manifest)
     if not timeline:

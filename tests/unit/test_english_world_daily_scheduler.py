@@ -75,6 +75,7 @@ def test_success_does_not_send_failure_notification(tmp_path: Path):
 
 def test_plist_directly_starts_python_coordinator():
     plist_text = PLIST.read_text(encoding="utf-8")
+    runner_text = RUNNER.read_text(encoding="utf-8")
     with PLIST.open("rb") as plist_file:
         configuration = plistlib.load(plist_file)
 
@@ -85,3 +86,4 @@ def test_plist_directly_starts_python_coordinator():
         {"Hour": 7, "Minute": 0},
         {"Hour": 16, "Minute": 30},
     ]
+    assert "严格大于 30 秒且不超过 300 秒" in runner_text

@@ -11,6 +11,7 @@
 | 1.3.1 | 2026-08-04 | Codex | 覆盖长正文右栏兜底词卡组，防止滚动后核心词汇区空白。 |
 | 1.4.0 | 2026-08-04 | Codex | 覆盖长段落溢出前滚动，防止正在朗读的词与红线被阅读窗裁掉。 |
 | 1.5.0 | 2026-08-04 | Codex | 覆盖真实阅读窗的微笔记下限选择，不再依赖全篇或单屏数量上限。 |
+| 1.6.0 | 2026-08-24 | Codex | 固化英语世界最终成片严格大于 30 秒且不超过 300 秒的渲染边界。 |
 """
 
 from pathlib import Path
@@ -86,10 +87,10 @@ def test_rejects_paragraphs_that_rewrite_the_spoken_english():
         StudyCardContent.from_mapping(payload)
 
 
-def test_renderer_rejects_more_than_thirty_seconds_before_touching_source(tmp_path: Path):
+def test_renderer_rejects_final_duration_of_thirty_seconds_or_less_before_touching_source(tmp_path: Path):
     content = StudyCardContent.from_mapping(_payload())
 
-    with pytest.raises(ValueError, match="不超过 30 秒"):
+    with pytest.raises(ValueError, match="严格大于 30 秒"):
         StudyCardRenderer().render(tmp_path / "missing.mp4", content, tmp_path / "out.mp4", duration=30.1)
 
 
@@ -101,13 +102,22 @@ def test_renderer_stops_shortly_after_the_final_included_word():
     assert duration == pytest.approx(2.88)
 
 
-def test_long_duration_is_only_accepted_with_the_explicit_test_flag(tmp_path: Path):
+def test_renderer_rejects_duration_above_three_hundred_seconds_before_touching_source(tmp_path: Path):
     content = StudyCardContent.from_mapping(_payload())
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError, match="不超过 300 秒"):
         StudyCardRenderer().render(
-            tmp_path / "missing.mp4", content, tmp_path / "out.mp4", duration=30.1, allow_long_test=True,
+            tmp_path / "missing.mp4", content, tmp_path / "out.mp4", duration=300.1,
         )
+
+
+def test_renderer_accepts_a_natural_clip_within_the_new_duration_range(tmp_path: Path):
+    payload = _payload()
+    payload["words"][-1]["end"] = 31.0
+    content = StudyCardContent.from_mapping(payload)
+
+    with pytest.raises(FileNotFoundError):
+        StudyCardRenderer().render(tmp_path / "missing.mp4", content, tmp_path / "out.mp4", duration=31.1)
 
 
 def test_scroll_plan_uses_paragraph_boundaries_without_audio_pauses(tmp_path: Path):

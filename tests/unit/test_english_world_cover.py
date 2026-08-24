@@ -175,7 +175,7 @@ def test_review_package_prefers_agy_and_keeps_human_gate(tmp_path, monkeypatch):
         "vocabulary_candidates": [],
     }
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({"content_type": "ENGLISH_WORLD_SHORT"}), encoding="utf-8")
+    manifest.write_text(json.dumps({"content_type": "ENGLISH_WORLD_SHORT", "duration": 42.0}), encoding="utf-8")
     (tmp_path / "timeline_final_enriched.json").write_text(json.dumps(timeline), encoding="utf-8")
     mp4 = tmp_path / "sample.mp4"
     mp4.write_bytes(b"not-a-real-video")
@@ -204,6 +204,7 @@ def test_review_package_prefers_agy_and_keeps_human_gate(tmp_path, monkeypatch):
             return {"id": "review-id", "state": "READY_FOR_REVIEW", **kwargs}
 
     monkeypatch.setattr(notifier.subprocess, "run", fake_run)
+    monkeypatch.setattr(notifier, "get_video_duration_ffprobe", lambda _path: 42.0)
     monkeypatch.setattr(notifier, "PipelineDB", FakeDB)
     review = notifier._prepare_publish_package(display_title="备用标题", mp4=mp4, manifest=manifest)
     assert validate_dedicated_cover_file(Path(review["cover_path"]), Path(review["cover_provenance_path"]))

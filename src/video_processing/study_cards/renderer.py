@@ -18,6 +18,7 @@
 | 1.7.0 | 2026-08-04 | Codex | 滚动由可见行溢出预测触发，不再只等待下一自然段，确保朗读词与逐词红线始终留在阅读窗内。 |
 | 1.7.1 | 2026-08-05 | Codex | 滚动落点上移一行，避免新阅读屏顶部残留上一段的半行文字。 |
 | 1.7.2 | 2026-08-09 | Codex | 学习卡 manifest 写入内容生产类型，和数据库英语世界短视频标识保持一致。 |
+| 1.8.0 | 2026-08-24 | Codex | 英语世界生产成片统一限定为严格大于 30 秒且不超过 300 秒，并按最终自然收尾后的真实时长判定。 |
 """
 
 from __future__ import annotations
@@ -52,8 +53,8 @@ _SCROLL_LEAD_SECONDS = 0.16
 _SCROLL_TRIGGER_Y = READING_VIEWPORT_BOTTOM - 105
 _SCROLL_TARGET_Y = TEXT_TOP + 80
 _MAX_SCROLL_STEPS_PER_30_SECONDS = 4
-_PRODUCTION_MAX_DURATION = 30.0
-_TEST_MAX_DURATION = 120.0
+_PRODUCTION_MIN_DURATION = 30.0
+_PRODUCTION_MAX_DURATION = 300.0
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,7 @@ class StudyCardRenderer:
         keep_assets: bool = False,
         allow_long_test: bool = False,
     ) -> Path:
-        """渲染原声新闻精读卡片；仅显式测试模式允许超过 30 秒。"""
+        """渲染原声新闻精读卡片；最终成片必须严格大于 30 秒且不超过 300 秒。"""
         source_video = source_video.expanduser().resolve()
         output_path = output_path.expanduser().resolve()
         if source_start < 0:
@@ -91,13 +92,16 @@ class StudyCardRenderer:
         if not content.words:
             raise ValueError("新闻精读卡片至少需要一个逐词时间轴")
         requested_duration = duration if duration is not None else content.words[-1].end + _AUDIO_TAIL_SECONDS
-        maximum_duration = _TEST_MAX_DURATION if allow_long_test else _PRODUCTION_MAX_DURATION
-        if requested_duration <= 0 or requested_duration > maximum_duration:
-            mode = "测试模式" if allow_long_test else "生产模式"
-            raise ValueError(f"{mode}新闻精读片段必须大于 0 且不超过 {maximum_duration:g} 秒")
+        if requested_duration <= 0 or requested_duration > _PRODUCTION_MAX_DURATION:
+            raise ValueError(f"新闻精读片段请求时长必须大于 0 且不超过 {_PRODUCTION_MAX_DURATION:g} 秒")
         if content.words[-1].end > requested_duration + 0.05:
             raise ValueError("逐词时间轴超出所截取的视频时长")
         source_clip_duration = self._resolve_render_duration(content, requested_duration)
+        if source_clip_duration <= _PRODUCTION_MIN_DURATION or source_clip_duration > _PRODUCTION_MAX_DURATION:
+            raise ValueError(
+                f"英语世界成片实际时长必须严格大于 {_PRODUCTION_MIN_DURATION:g} 秒且不超过 "
+                f"{_PRODUCTION_MAX_DURATION:g} 秒；当前自然收尾后为 {source_clip_duration:.3f} 秒"
+            )
         if not source_video.is_file():
             raise FileNotFoundError(f"找不到源视频: {source_video}")
         source_duration = self._probe_duration(source_video)
