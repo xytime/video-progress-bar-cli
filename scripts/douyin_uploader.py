@@ -43,6 +43,8 @@
 | 1.5.25 | 2026-07-29 | Codex | 封面候选缩略图已匹配但大预览 crop 误判时，交由保存后卡槽与平台封面检测继续兜底 |
 | 1.5.26 | 2026-08-08 | Codex | 实现作品管理页只读回查：本地文案指纹与同卡片状态精确匹配后才确认已发布 |
 | 1.5.27 | 2026-08-08 | Codex | 回查等待作品列表脱离加载态，避免把刚打开的空壳页面误判为未确认 |
+| 1.5.28 | 2026-08-24 | Codex | 封面“完成”不可用或编辑器未关闭时拒绝进入自主声明，避免仅见卡槽标签便误判横竖封面已保存 |
+| 1.5.29 | 2026-08-24 | Codex | 对齐创作者中心实际封面弹窗 body 选择器，避免未定位弹窗时把整页可见误判为编辑器未关闭 |
 """
 
 from __future__ import annotations
@@ -1167,16 +1169,27 @@ def _click_horizontal_cover_step(page, modal) -> bool:
     return True
 
 
-def _click_cover_confirm(page, modal) -> None:
+def _click_cover_confirm(page, modal, timeout_seconds: int = 90) -> bool:
+    """等待封面编辑器完成生成并点击可用的“完成”；不可用时不得继续发布。"""
     confirm_selectors = [
         "button:has-text('完成')", "span:has-text('完成')", "button.semi-button-primary",
         "text=完成", "text=确定", "text=确认", "text=裁剪并保存"
     ]
-    confirm_btn = _find_visible_element(modal, confirm_selectors)
-    if confirm_btn and confirm_btn.is_enabled():
-        confirm_btn.click(timeout=2000)
-        logger.info("已点击右下角'完成'保存封面！")
-        page.wait_for_timeout(2000)
+    for elapsed in range(timeout_seconds):
+        confirm_btn = _find_visible_element(modal, confirm_selectors)
+        try:
+            if confirm_btn and confirm_btn.is_enabled():
+                confirm_btn.click(timeout=2000)
+                logger.info("已点击右下角'完成'保存封面！")
+                page.wait_for_timeout(2000)
+                return True
+        except Exception as exc:
+            logger.debug("点击抖音封面完成按钮失败，继续等待：%s", exc)
+        if elapsed and elapsed % 15 == 0:
+            logger.info("抖音封面编辑器仍在生成，已等待 %s 秒", elapsed)
+        page.wait_for_timeout(1_000)
+    logger.error("抖音封面编辑器的“完成”按钮在 %s 秒内始终不可用", timeout_seconds)
+    return False
 
 
 def wait_for_cover_validation(page, timeout_seconds: int = 120) -> bool:
@@ -1259,7 +1272,10 @@ def apply_cover(
             capture_cover_evidence(page, artifact_dir, "douyin_cover_entry_opened", cover_path_abs)
 
         # 2. 定位 Modal 并切换“上传封面” / “本地上传” Tab
-        modal = _find_active_modal(page, [".dy-creator-content-modal-wrap", ".semi-modal-wrap", "div[role='dialog']", ".modal-container"])
+        modal = _find_active_modal(page, [
+            ".dy-creator-content-modal-body", ".dy-creator-content-modal-wrap",
+            ".semi-modal-wrap", "div[role='dialog']", ".modal-container",
+        ])
 
         if not _apply_cover_in_current_panel(
             page,
@@ -1286,7 +1302,10 @@ def apply_cover(
             ):
                 return False
 
-        _click_cover_confirm(page, modal)
+        if not _click_cover_confirm(page, modal):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_cover_confirm_unavailable", cover_path_abs)
+            return False
 
         # 若弹窗未自动关闭，尝试 Escape
         try:
@@ -1295,6 +1314,15 @@ def apply_cover(
                 page.wait_for_timeout(1000)
         except Exception:
             pass
+        try:
+            if modal.is_visible(timeout=500):
+                logger.error("抖音封面编辑器未关闭，拒绝继续自主声明或发布")
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_cover_modal_unclosed", cover_path_abs)
+                return False
+        except Exception as exc:
+            logger.error("无法确认抖音封面编辑器是否关闭：%s", exc)
+            return False
         if not _saved_cover_slots_present(page, require_horizontal=bool(horizontal_cover_path_abs)):
             return False
         if not wait_for_cover_validation(page):

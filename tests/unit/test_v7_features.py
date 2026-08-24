@@ -13,6 +13,8 @@
 # Modification History
 | Version | Date       | Author                                 | Description          |
 |---------|------------|----------------------------------------|----------------------|
+| 1.10.1  | 2026-08-24 | Codex                                  | 空或损坏 ASS 快照不得触发热字幕清理，阻止补发时再次因字幕缺失取消。 |
+| 1.10.0  | 2026-08-24 | Codex                                  | 发布后字幕转入独立审查证据目录；热目录可清理但证据不得随 GC 丢失。 |
 | 1.9.0   | 2026-08-21 | Codex                                  | 覆盖进程已死的预提交孤儿任务有界回收，不触及发布状态 |
 | 1.8.0   | 2026-08-14 | Codex                                  | 新增中台地缘政治与出口管制 P1 人工复核回归 |
 | 1.7.0   | 2026-07-26 | Codex                                  | 中国领导人姓名 P0、“中国/敏感人物+负面新闻”P0、严重负面事件 P1 回归 |
@@ -26,6 +28,7 @@
 | 1.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning    | 初始创建 v7.0 TDD 测试套件 |
 """
 
+import json
 import math
 import os
 import sys
@@ -689,16 +692,16 @@ class TestSequenceLockRelaxation:
 
 
 class TestGarbageCollectionOverhaul:
-    def test_garbage_collection_cleanup_files_and_dirs(self, tmp_db):
-        """[Claude_Opus_4.8] v3.11.0: 发布后 GC 仅清理源视频/中间字幕与语音目录，
-        但保留「再次发布」所需产物（成片/封面/文案/短标题/分类），以支撑秒级重发。
-        """
+    def test_garbage_collection_cleanup_files_and_dirs(self, tmp_db, tmp_path):
+        """发布后热字幕可清理，但必须先进入独立审查证据目录。"""
         from pathlib import Path
+        import pysubs2
         from video_processing.pipeline_manager import PipelineManager
 
         pm = PipelineManager()
         pm.db = tmp_db
-        out_dir = Path(pm._OUT_DIR)
+        pm._OUT_DIR = tmp_path
+        out_dir = tmp_path
 
         yid = "gc_test_video"
 
@@ -720,6 +723,9 @@ class TestGarbageCollectionOverhaul:
         ]
         for f_name in should_delete + should_keep:
             (out_dir / f_name).write_text("dummy content", encoding="utf-8")
+        subs = pysubs2.SSAFile()
+        subs.append(pysubs2.SSAEvent(start=0, end=1000, text="可读的审查字幕正文"))
+        subs.save(str(out_dir / f"{yid}.ass"))
 
         audio_dir = out_dir / f"{yid}_audio_gen"
         audio_dir.mkdir(parents=True, exist_ok=True)
@@ -731,16 +737,41 @@ class TestGarbageCollectionOverhaul:
             assert not (out_dir / f_name).exists(), f"File {f_name} should be cleaned up"
         for f_name in should_keep:
             assert (out_dir / f_name).exists(), f"File {f_name} should be RETAINED for republish"
+        evidence_dir = out_dir / "subtitle_evidence" / yid
+        assert (evidence_dir / "ass" / f"{yid}.ass").exists()
+        assert (evidence_dir / "subtitle.txt").exists()
+        manifest = json.loads((evidence_dir / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["retention_days_minimum"] >= 31
         assert not audio_dir.exists(), "Audio gen directory should be cleaned up"
+
+    def test_garbage_collection_keeps_hot_subtitles_when_evidence_has_no_text(self, tmp_db, tmp_path):
+        """空 ASS 不是可审查证据；GC 必须保留热目录的字幕文件。"""
+        from pathlib import Path
+        from video_processing.pipeline_manager import PipelineManager
+
+        pm = PipelineManager()
+        pm.db = tmp_db
+        pm._OUT_DIR = tmp_path
+        out_dir = tmp_path
+        yid = "gc_empty_subtitle_test"
+        (out_dir / f"{yid}.ass").write_text("[Script Info]\n", encoding="utf-8")
+        (out_dir / f"{yid}_subtitle.txt").write_text("可读的热字幕文本", encoding="utf-8")
+
+        pm._run_garbage_collection(yid, slice_index=0, status="PUBLISHED")
+
+        assert (out_dir / f"{yid}.ass").exists()
+        assert (out_dir / f"{yid}_subtitle.txt").exists()
+        assert not (out_dir / "subtitle_evidence" / yid / "manifest.json").exists()
         
-    def test_garbage_collection_parent_cleanup_after_last_slice(self, tmp_db):
-        """[Unknown_Model_planning] 验证当所有兄弟子任务都进入终态（PUBLISHED/FAILED/IGNORED/COMPLETED）时，清理父任务的临时文件"""
+    def test_garbage_collection_parent_cleanup_after_last_slice(self, tmp_db, tmp_path):
+        """所有切片终态后清理父临时文件；无 ASS 证据时保留父字幕文本。"""
         from pathlib import Path
         from video_processing.pipeline_manager import PipelineManager
         
         pm = PipelineManager()
         pm.db = tmp_db
-        out_dir = Path(pm._OUT_DIR)
+        pm._OUT_DIR = tmp_path
+        out_dir = tmp_path
         
         yid = "gc_parent_test"
         
@@ -782,9 +813,10 @@ class TestGarbageCollectionOverhaul:
         tmp_db.update_video_status(yid, "IGNORED", slice_index=2)
         pm._run_garbage_collection(yid, slice_index=2, status="IGNORED")
         
-        # 现在所有切片均进入终态，应该触发父任务清理
-        for f_name in parent_files:
+        # 现在所有切片均进入终态：可重建文件应清理；没有 ASS 快照则字幕文本必须留在热目录。
+        for f_name in [f"{yid}.mp4", f"{yid}.info.json", f"{yid}_copy.txt"]:
             assert not (out_dir / f_name).exists(), f"Parent file {f_name} should be cleaned up now"
+        assert (out_dir / f"{yid}_subtitle.txt").exists(), "Missing ASS evidence must retain the parent subtitle text"
         assert not parent_audio_dir.exists(), "Parent audio gen folder should be cleaned up now"
 
 

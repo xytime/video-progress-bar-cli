@@ -15,6 +15,7 @@
 | 1.3.6 | 2026-07-29 | Codex | 覆盖最终发布点击后未确认与发布前闸门失败的退出码区分 |
 | 1.3.7 | 2026-07-29 | Codex | 覆盖自主声明弹窗单选项及确定按钮的完整确认流程 |
 | 1.3.8 | 2026-08-08 | Codex | 覆盖作品管理页须精确匹配正文指纹后才读取本作品的发布状态 |
+| 1.3.9 | 2026-08-24 | Codex | 覆盖封面完成按钮不可用时 fail-closed，且正常路径必须确认编辑器已关闭。 |
 """
 
 from pathlib import Path
@@ -27,6 +28,7 @@ from scripts.douyin_uploader import (
     DOUYIN_VIDEO_INPUT_SELECTOR,
     EXIT_UNDER_REVIEW,
     EXIT_SUBMISSION_UNCONFIRMED,
+    _click_cover_confirm,
     apply_cover,
     fill_publish_fields,
     get_description_editor,
@@ -506,7 +508,7 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
     modal_locators = MagicMock()
     modal_locators.count.return_value = 1
     modal = MagicMock()
-    modal.is_visible.return_value = True
+    modal.is_visible.side_effect = [True, False, False]
 
     def modal_locator_side_effect(sel):
         if "上传封面" in sel or "本地上传" in sel:
@@ -548,6 +550,18 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
         assert apply_cover(page, str(cover))
     input_el.set_input_files.assert_called_once_with(str(cover.resolve()), timeout=3000)
     confirm_btn.click.assert_called_once()
+    page.locator.assert_any_call(".dy-creator-content-modal-body")
+
+
+def test_douyin_cover_confirm_refuses_disabled_button():
+    page = MagicMock()
+    button = MagicMock()
+    button.is_enabled.return_value = False
+    modal = MagicMock()
+
+    with patch("scripts.douyin_uploader._find_visible_element", return_value=button):
+        assert not _click_cover_confirm(page, modal, timeout_seconds=1)
+    button.click.assert_not_called()
 
 
 def test_douyin_publish_fields_stop_when_required_cover_fails(tmp_path: Path):

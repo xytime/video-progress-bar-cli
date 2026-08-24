@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.16.3 | 2026-08-24 | Codex | 平台发布审查字幕改存为独立证据快照；最短保留 31 天且不受原始视频 3 天归档 TTL 影响。 |
 | 3.16.2 | 2026-08-24 | Codex | AGY 改为三天影子评估；生产默认恢复 Gemini→DeepSeek→Google，正式切换必须人工确认。 |
 | 3.46.0 | 2026-08-24 | Codex | 新增标题供应商顺序与 AGY 参数；默认 Gemini 且封面双标题消费关闭。 |
 | 3.45.0 | 2026-08-21 | Codex | Candidate-score cache TTL prevents minute-by-minute full rescoring. |
@@ -240,6 +241,9 @@ class Settings(BaseSettings):
     # CP 的「国名+冲突词」全文共现在数万字转录上几乎必然误杀，故字幕通道刻意绕开。
     # 默认关闭：开启会对此前「标题干净」的存量视频新增拦截，需先灰度验证再在 .env 置 true。
     enable_subtitle_censorship: bool = False
+    # 跨平台投递所需的字幕审查证据最短保留天数。当前不自动清理证据，
+    # 此值既是可审计下限，也防止未来维护任务错误地把短期缓存当作可删垃圾。
+    subtitle_evidence_retention_days: int = 31
 
     # [临时兜底] 翻译质量守门 fail-open 开关。置 true 时，阻断问题仅留告警，不阻塞发布。
     # TODO：后续继续修复金额单位、事件方向相关误杀后，改回 blocking 语义并关闭该开关。

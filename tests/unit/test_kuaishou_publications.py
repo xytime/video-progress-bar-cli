@@ -12,6 +12,7 @@
 | 1.6.0 | 2026-07-29 | Codex | 覆盖含审核反证的快手 PUBLISHED 写入会保守降级且不参与去重 |
 | 1.7.0 | 2026-07-31 | Codex | 缺字幕用例使用带哈希来源清单的封面，隔离封面门禁影响 |
 | 1.8.0 | 2026-08-03 | Codex | 封面夹具携带无大面积遮罩版式来源清单 |
+| 1.10.0 | 2026-08-24 | Codex | 覆盖发布后热字幕已清理时，平台审查从独立字幕证据快照回退。 |
 | 1.9.0 | 2026-08-10 | Codex | 审核中或未确认的快手账本必须阻断同源/同成片重复提交 |
 """
 
@@ -305,6 +306,38 @@ def test_platform_publish_uses_archived_subtitle_text_for_preflight(tmp_path: Pa
     assert blocked is False
     _, kwargs = manager._check_censorship.call_args
     assert "archived subtitle body" in kwargs["subtitle_text"]
+    manager.db.update_douyin_publication_state.assert_not_called()
+
+
+def test_platform_publish_uses_retained_subtitle_evidence_after_gc(tmp_path: Path, monkeypatch):
+    pysubs2 = pytest.importorskip("pysubs2")
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager._ORIG_VIDEO_DIR = tmp_path / "original_video"
+    manager._ORIG_VIDEO_DIR.mkdir()
+    (tmp_path / "video-id_copy.txt").write_text("普通文案", encoding="utf-8")
+    (tmp_path / "video-id_title.txt").write_text("普通标题", encoding="utf-8")
+    subs = pysubs2.SSAFile()
+    subs.append(pysubs2.SSAEvent(start=0, end=1000, text="retained subtitle body"))
+    subs.save(str(tmp_path / "video-id.ass"))
+
+    manager._run_garbage_collection("video-id", slice_index=0, status="PUBLISHED")
+    assert not (tmp_path / "video-id.ass").exists()
+    assert (tmp_path / "subtitle_evidence" / "video-id" / "ass" / "video-id.ass").exists()
+
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", True)
+    manager.db = MagicMock()
+    manager.db.get_video_by_youtube_id.return_value = {"title": "测试视频", "zh_title": "普通标题"}
+    manager._check_censorship = MagicMock(return_value=False)
+
+    blocked = manager._platform_publication_censorship_blocked(
+        {"id": 194, "youtube_id": "video-id", "slice_index": 0},
+        "抖音", tmp_path / "video-id_copy.txt", tmp_path / "video-id_title.txt",
+    )
+
+    assert blocked is False
+    _, kwargs = manager._check_censorship.call_args
+    assert "retained subtitle body" in kwargs["subtitle_text"]
     manager.db.update_douyin_publication_state.assert_not_called()
 
 

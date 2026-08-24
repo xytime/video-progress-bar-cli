@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.48.24 | 2026-08-24 | Codex                               | 字幕证据快照须可解析出非空正文才允许清理热字幕，避免空或损坏 ASS 使平台补发再次失去审查依据 |
+| 3.48.23 | 2026-08-24 | Codex                               | 发布后将 ASS 字幕保存为独立审查证据；跨平台回查优先读取该快照，证据不再随 3 天原视频归档或热目录 GC 丢失 |
 | 3.48.19 | 2026-08-22 | Codex                               | 视频号仅获受理时向 Telegram 附送可播放审核副本；超限时生成轻量审核版，不改变投稿状态或重传边界 |
 | 3.48.20 | 2026-08-24 | Codex                               | 双标题检查点绑定展示标题，并在未提交任务标题变更时重建受影响的渲染与封面缓存；提交证据前置保护 |
 | 3.48.21 | 2026-08-24 | Codex                               | P2 管线状态不再刷 Telegram；P1 通知记录 API 回执并按内容去重，异常日志不泄露凭据。 |
@@ -1333,16 +1335,17 @@ class PipelineManager:
         # 1. 如果任务发布成功，清理其关联的临时文件
         if status == "PUBLISHED":
             prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+            subtitle_evidence_saved = self._preserve_subtitle_evidence(yid, slice_index)
             # [Claude_Opus_4.8] 保留「再次发布」所需产物——成片(_vertical.mp4)、封面、文案、
             # 短标题、分类，使已发布视频可被「🔁 再次发布」秒级重发（复用本地产物、内容与原版一致）。
-            # 仅清理体积大且可重建的源视频与中间字幕：源视频另有 original_video/ 冷存档（保留 3 天）兜底，
-            # 故热目录源可安全删除；超出存档窗口再次发布时管线会自动回退重新下载/渲染。
+            # 源视频可由 original_video/ 的 3 天归档兜底；字幕则必须先写入独立审查
+            # 证据目录，绝不能随源归档 TTL 一同失效。
             suffixes = [
                 ".mp4",            # 源视频（已归档到 original_video/，热目录副本可删）
-                ".ass",
-                "_subtitle.txt",
                 ".description",
             ]
+            if subtitle_evidence_saved:
+                suffixes.extend([".ass", "_subtitle.txt"])
             
             for suffix in suffixes:
                 file_path = self._OUT_DIR / f"{prefix}{suffix}"
@@ -1367,10 +1370,13 @@ class PipelineManager:
             all_slices = self.db.get_slices_by_parent_yid(yid)
             if all_slices and all(s["status"] in ("PUBLISHED", "FAILED", "IGNORED", "COMPLETED") for s in all_slices):
                 logger.info(f"[GC] All slices for parent {yid} are finished. Cleaning up parent artifacts...")
+                parent_subtitle_evidence_saved = self._preserve_subtitle_evidence(yid, 0)
                 parent_suffixes = [
-                    ".mp4", ".info.json", ".description", "_subtitle.txt", "_copy.txt",
-                    "_title.txt", "_category.txt", "_cover.jpg", "_cover_provenance.json", ".ass",
+                    ".mp4", ".info.json", ".description", "_copy.txt", "_title.txt",
+                    "_category.txt", "_cover.jpg", "_cover_provenance.json",
                 ]
+                if parent_subtitle_evidence_saved:
+                    parent_suffixes.extend(["_subtitle.txt", ".ass"])
                 for suffix in parent_suffixes:
                     file_path = self._OUT_DIR / f"{yid}{suffix}"
                     if file_path.exists():
@@ -1431,6 +1437,84 @@ class PipelineManager:
             logger.warning("[%s] 读取%s失败：%s", yid, label, exc)
             return ""
 
+    def _subtitle_evidence_dir(self, yid: str, slice_index: int) -> Path:
+        """返回跨平台内容审查使用的独立字幕证据目录。"""
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        return self._OUT_DIR / "subtitle_evidence" / prefix
+
+    def _preserve_subtitle_evidence(self, yid: str, slice_index: int) -> bool:
+        """保存 ASS 审查快照；保存失败时，GC 不得删除热字幕。
+
+        原始视频归档只服务下载和重渲，三天 TTL 不具备跨平台审查证据的保存语义。
+        本目录不参与自动清理；配置中的 31 天是最低留存期，而非删除时点。
+        """
+        import shutil
+
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        accepted = re.compile(rf"^{re.escape(prefix)}(\.|$)")
+        ass_sources = sorted(
+            path for path in self._OUT_DIR.glob(f"{prefix}*.ass")
+            if accepted.match(path.stem)
+        )
+        if not ass_sources:
+            logger.error("[%s] 未找到可保存的 ASS 字幕；保留热字幕，拒绝作为 GC 对象。", prefix)
+            return False
+
+        evidence_dir = self._subtitle_evidence_dir(yid, slice_index)
+        ass_dir = evidence_dir / "ass"
+        try:
+            ass_dir.mkdir(parents=True, exist_ok=True)
+            retained_files = []
+            for source in ass_sources:
+                destination = ass_dir / source.name
+                temporary = destination.with_name(f".{destination.name}.tmp")
+                shutil.copy2(source, temporary)
+                temporary.replace(destination)
+                retained_files.append({
+                    "name": source.name,
+                    "sha256": self._sha256_file(source),
+                    "bytes": source.stat().st_size,
+                })
+
+            subtitle_text = self._OUT_DIR / f"{prefix}_subtitle.txt"
+            if subtitle_text.is_file():
+                destination = evidence_dir / "subtitle.txt"
+                temporary = destination.with_name(f".{destination.name}.tmp")
+                shutil.copy2(subtitle_text, temporary)
+                temporary.replace(destination)
+
+            # 文件存在并不代表可用于发布前审查：空 ASS、损坏 ASS 都会令
+            # read_subtitle_text 返回空。此时宁可留下热字幕，也不能让 GC
+            # 把唯一的可读证据删除后，迫使后续平台投递 fail-closed 取消。
+            retained_text = read_subtitle_text(ass_dir, yid, slice_index=slice_index)
+            if not retained_text:
+                logger.error("[%s] 字幕证据快照不可读或无正文；保留热字幕。", prefix)
+                return False
+
+            manifest = evidence_dir / "manifest.json"
+            temporary_manifest = manifest.with_name(f".{manifest.name}.tmp")
+            temporary_manifest.write_text(json.dumps({
+                "youtube_id": yid,
+                "slice_index": slice_index,
+                "retention_days_minimum": max(31, int(settings.subtitle_evidence_retention_days)),
+                "files": retained_files,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            temporary_manifest.replace(manifest)
+        except OSError as exc:
+            logger.error("[%s] 字幕证据快照保存失败：%s；保留热字幕。", prefix, exc)
+            return False
+
+        logger.info("[%s] 已保存 %s 个字幕审查证据文件；不进入自动清理。", prefix, len(ass_sources))
+        return True
+
+    def _read_retained_subtitle_text(self, yid: str, slice_index: int) -> str:
+        """读取独立字幕证据；仅在热目录和原始归档均不可用时回退。"""
+        return read_subtitle_text(
+            self._subtitle_evidence_dir(yid, slice_index) / "ass",
+            yid,
+            slice_index=slice_index,
+        )
+
     def _platform_publication_censorship_blocked(
         self,
         publication: Dict[str, Any],
@@ -1458,6 +1542,9 @@ class PipelineManager:
             if not subtitle_text:
                 subtitle_text = read_subtitle_text(self._ORIG_VIDEO_DIR, yid, slice_index=slice_index)
                 subtitle_source = "original_video"
+            if not subtitle_text:
+                subtitle_text = self._read_retained_subtitle_text(yid, slice_index)
+                subtitle_source = "subtitle_evidence"
             if subtitle_text:
                 logger.info("[%s] %s上传前审查包含字幕正文（%s chars, source=%s）", yid, platform, len(subtitle_text), subtitle_source)
             else:
