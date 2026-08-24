@@ -8,6 +8,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增平台标题、封面展示标题和 Hook 的纯函数合同，供多供应商共用。 |
+| 1.1.0 | 2026-08-24 | Codex | 拒绝以 TED/演讲者元信息代替内容主旨的低信息标题，触发供应商降级。 |
 """
 
 from __future__ import annotations
@@ -25,6 +26,10 @@ _INCOMPLETE_NUMERIC_QUESTION = re.compile(
     r"^(?:为什么|为何|怎么|如何|是否|能否|会不会)(?:只有|仅有|仅)?\s*\d+\s*$"
 )
 _DANGLING_ENDING = re.compile(r"(?:的|得|地|与|和|或|而|将|于|在|以|等|着|了|下)$")
+_LOW_INFORMATION_TITLE = re.compile(
+    r"(?:^|[，,])(?:TEDx?|演讲者|主讲人|讲者)(?:演讲|谈|探讨|分享|在)|"
+    r"TEDx?演讲(?:谈|探讨|分享)|(?:演讲者|主讲人|讲者).*(?:谈|探讨|分享)"
+)
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,8 @@ def _validate_title(value: str, *, field_name: str, min_length: int, max_length:
         raise TitleContractError(f"{field_name} 是不完整的数字疑问残句")
     if _DANGLING_ENDING.search(normalized):
         raise TitleContractError(f"{field_name} 以悬空虚词结尾")
+    if _LOW_INFORMATION_TITLE.search(normalized):
+        raise TitleContractError(f"{field_name} 以演讲者或栏目元信息代替内容主旨")
     if normalized.count("“") != normalized.count("”") or normalized.count('"') % 2:
         raise TitleContractError(f"{field_name} 引号未闭合")
     return normalized

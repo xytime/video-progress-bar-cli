@@ -38,6 +38,7 @@ def test_title_bundle_normalizes_all_surfaces():
         ("为什么只有9", "加拿大仅9块银幕放映新片"),
         ("美债收益率飙升", "美债收益率飙升重创科技股并引发全球市场资金重新配置"),
         ("美债收益率冲击市场", "AI狂飙抢占芯片产能下"),
+        ("演讲者探讨AI未来", "TED演讲谈开启新生活"),
     ],
 )
 def test_title_bundle_rejects_residual_fragments(platform_title: str, display_title: str):
