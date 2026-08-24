@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import plistlib
 from pathlib import Path
 
 
@@ -74,6 +75,13 @@ def test_success_does_not_send_failure_notification(tmp_path: Path):
 
 def test_plist_directly_starts_python_coordinator():
     plist_text = PLIST.read_text(encoding="utf-8")
+    with PLIST.open("rb") as plist_file:
+        configuration = plistlib.load(plist_file)
+
     assert "/Users/ryusei/.pyenv/versions/3.12.4/bin/python" in plist_text
     assert "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/run_english_world_daily.py" in plist_text
     assert "run_english_world_daily_codex.sh" not in plist_text
+    assert configuration["StartCalendarInterval"] == [
+        {"Hour": 7, "Minute": 0},
+        {"Hour": 16, "Minute": 30},
+    ]

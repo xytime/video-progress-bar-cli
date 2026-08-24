@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 安装每日 07:00 英语世界短视频生产调度。
+# 安装每日 07:00、16:30 英语世界短视频生产调度。
 #
 # 该调度只允许制作并发 Telegram 人工审核材料，不能投稿视频号。
 #
@@ -8,6 +8,7 @@
 # | --- | --- | --- | --- |
 # | 1.1.0 | 2026-08-23 | Codex | 为调度器建立系统卷持久日志目录，并在重载后输出实际 LaunchAgent 状态。 |
 # | 2.0.0 | 2026-08-24 | Codex | 改由 LaunchAgent 直接执行 Python 协调器，避免 shell 读取外接盘脚本被系统拦截。 |
+# | 2.1.0 | 2026-08-24 | Codex | 增加 16:30 独立制作机会，仍只推送 Telegram 人工审核。 |
 # | 1.0.0 | 2026-08-22 | Codex | 新增独立英语世界日更 LaunchAgent 安装器。 |
 
 set -euo pipefail
@@ -32,4 +33,4 @@ install -m 644 "$SOURCE_PLIST" "$TARGET_PLIST"
 launchctl bootstrap "gui/$USER_ID" "$TARGET_PLIST"
 launchctl print "gui/$USER_ID/$LABEL" >/dev/null
 
-echo "✅ 已安装：每天 07:00 仅制作英语世界短视频并发送 Telegram 审核；不提交视频号。"
+echo "✅ 已安装：每天 07:00、16:30 仅制作英语世界短视频并发送 Telegram 审核；不提交视频号。"
