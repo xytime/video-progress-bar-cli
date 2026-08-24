@@ -19,6 +19,7 @@
 | 1.7.1 | 2026-08-05 | Codex | 滚动落点上移一行，避免新阅读屏顶部残留上一段的半行文字。 |
 | 1.7.2 | 2026-08-09 | Codex | 学习卡 manifest 写入内容生产类型，和数据库英语世界短视频标识保持一致。 |
 | 1.8.0 | 2026-08-24 | Codex | 英语世界生产成片统一限定为严格大于 30 秒且不超过 300 秒，并按最终自然收尾后的真实时长判定。 |
+| 1.9.0 | 2026-08-24 | Codex | 滚动计划同时覆盖段后完整中文译文，拒绝英文仍可见但中文段译在片尾被阅读窗裁切的假通过。 |
 """
 
 from __future__ import annotations
@@ -115,7 +116,11 @@ class StudyCardRenderer:
         try:
             layout_assets = self.template.render_static(content, work_dir)
             layout_timed_boxes = self.template.map_word_boxes(content.words, layout_assets.word_boxes)
-            scroll_steps = self._build_scroll_steps(content, layout_timed_boxes)
+            scroll_steps = self._build_scroll_steps(
+                content,
+                layout_timed_boxes,
+                paragraph_bottoms=layout_assets.paragraph_bottoms,
+            )
             visible_vocabulary = self.template.select_vocabulary_for_screens(
                 content.vocabulary_candidates or content.vocabulary,
                 layout_assets.word_boxes,
@@ -124,7 +129,11 @@ class StudyCardRenderer:
             render_content = replace(content, vocabulary=visible_vocabulary)
             final_layout = self.template.render_static(render_content, work_dir)
             source_timed_boxes = self.template.map_word_boxes(render_content.words, final_layout.word_boxes)
-            scroll_steps = self._build_scroll_steps(render_content, source_timed_boxes)
+            scroll_steps = self._build_scroll_steps(
+                render_content,
+                source_timed_boxes,
+                paragraph_bottoms=final_layout.paragraph_bottoms,
+            )
             assets = self.template.render_static(
                 render_content,
                 work_dir,
@@ -394,8 +403,10 @@ class StudyCardRenderer:
         self,
         content: StudyCardContent,
         timed_boxes: list[tuple[Any, Any]],
+        *,
+        paragraph_bottoms: tuple[int, ...] = (),
     ) -> list[ScrollStep]:
-        """在下一英文行即将越出阅读窗前滚动，原声音频保持连续。
+        """在英文行或段后中文译文即将越出阅读窗前滚动，原声音频保持连续。
 
         过去只把自然段首词当作触发点：长自然段会先溢出，导致仍在朗读的词
         和红线已经被阅读窗裁掉。这里以每行首词的屏幕 y 坐标预测溢出；一次
@@ -404,15 +415,33 @@ class StudyCardRenderer:
         candidates: list[ScrollStep] = []
         offset = 0
         previous_line_y: int | None = None
-        for word, box in timed_boxes:
+        paragraph_end_indices: dict[int, int] = {}
+        word_index = 0
+        for paragraph_index, paragraph in enumerate(content.paragraphs):
+            word_index += len(paragraph.english_text.split())
+            paragraph_end_indices[word_index - 1] = paragraph_index
+
+        for index, (word, box) in enumerate(timed_boxes):
             if box.y == previous_line_y:
+                pass
+            else:
+                previous_line_y = box.y
+                visible_y = box.y - offset
+                if visible_y > _SCROLL_TRIGGER_Y:
+                    target_offset = max(offset, box.y - _SCROLL_TARGET_Y)
+                    if target_offset != offset:
+                        start = max(0.0, word.start - _SCROLL_LEAD_SECONDS)
+                        end = start + _SCROLL_TRANSITION_SECONDS
+                        candidates.append(ScrollStep(start, end, offset, target_offset))
+                        offset = target_offset
+
+            paragraph_index = paragraph_end_indices.get(index)
+            if paragraph_index is None or paragraph_index >= len(paragraph_bottoms):
                 continue
-            previous_line_y = box.y
-            visible_y = box.y - offset
-            if visible_y <= _SCROLL_TRIGGER_Y:
-                continue
-            target_offset = max(offset, box.y - _SCROLL_TARGET_Y)
-            if target_offset == offset:
+            paragraph_bottom = paragraph_bottoms[paragraph_index]
+            visible_bottom = paragraph_bottom - offset
+            target_offset = max(offset, paragraph_bottom - (READING_VIEWPORT_BOTTOM - 28))
+            if visible_bottom <= READING_VIEWPORT_BOTTOM - 28 or target_offset == offset:
                 continue
             start = max(0.0, word.start - _SCROLL_LEAD_SECONDS)
             end = start + _SCROLL_TRANSITION_SECONDS

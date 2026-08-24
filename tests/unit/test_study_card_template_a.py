@@ -12,6 +12,7 @@
 | 1.4.0 | 2026-08-04 | Codex | 覆盖长段落溢出前滚动，防止正在朗读的词与红线被阅读窗裁掉。 |
 | 1.5.0 | 2026-08-04 | Codex | 覆盖真实阅读窗的微笔记下限选择，不再依赖全篇或单屏数量上限。 |
 | 1.6.0 | 2026-08-24 | Codex | 固化英语世界最终成片严格大于 30 秒且不超过 300 秒的渲染边界。 |
+| 1.7.0 | 2026-08-24 | Codex | 覆盖段后完整中文译文也会驱动滚动，避免片尾中文被阅读窗裁切。 |
 """
 
 from pathlib import Path
@@ -22,6 +23,7 @@ from video_processing.study_cards import StudyCardContent, StudyCardRenderer, Vo
 from video_processing.study_cards.renderer import ScrollStep
 from video_processing.study_cards.template_a import (
     MIN_MICRO_NOTES_PER_SCREEN,
+    READING_VIEWPORT_BOTTOM,
     TEXT_TOP,
     WordBox,
     RIGHT_CARD_TOP,
@@ -31,6 +33,7 @@ from video_processing.study_cards.template_a import (
     _meaning_line,
     _right_vocabulary_items,
     _vocabulary_anchor_y,
+    is_short_terminal_screen,
 )
 
 
@@ -197,6 +200,54 @@ def test_scroll_plans_before_a_long_paragraph_line_leaves_the_reading_window():
     assert steps[0].to_offset > 0
 
 
+def test_scroll_plan_keeps_a_paragraph_translation_inside_the_reading_window():
+    content = StudyCardContent.from_mapping({
+        "headline_zh": "测试新闻标题",
+        "headline_en": "A short test headline",
+        "english_text": "one two three four",
+        "translation_zh": "这是一个足够长的中文译文，用于验证段后翻页。",
+        "words": [
+            {"text": "one", "start": 0.0, "end": 0.3},
+            {"text": "two", "start": 0.3, "end": 0.6},
+            {"text": "three", "start": 0.6, "end": 0.9},
+            {"text": "four", "start": 0.9, "end": 1.2},
+        ],
+        "vocabulary": [{"word": "three", "meaning_zh": "三", "level": "PET"}],
+    })
+    boxes = [
+        (word, WordBox(word.text, 54, TEXT_TOP + 100, 80))
+        for word in content.words
+    ]
+
+    steps = StudyCardRenderer()._build_scroll_steps(
+        content,
+        boxes,
+        paragraph_bottoms=(READING_VIEWPORT_BOTTOM + 300,),
+    )
+
+    assert len(steps) == 1
+    assert steps[0].start == pytest.approx(0.74)
+    assert steps[0].to_offset == 328
+
+
+def test_short_terminal_screen_may_have_fewer_than_eight_micro_notes():
+    boxes = tuple(
+        [WordBox(f"first{index}", 54, TEXT_TOP + 120, 60) for index in range(8)]
+        + [WordBox(f"last{index}", 54, TEXT_TOP + 1120, 60) for index in range(6)]
+    )
+    candidates = tuple(
+        [VocabularyItem(f"first{index}", "首屏", level="PET") for index in range(8)]
+        + [VocabularyItem("last0", "末屏", level="PET")]
+    )
+
+    selected = RecordUnderlineTemplate().select_vocabulary_for_screens(candidates, boxes, (0, 1000))
+
+    assert len(selected) == 8
+    assert is_short_terminal_screen(screen_index=1, screen_count=2, visible_word_count=6)
+    assert not is_short_terminal_screen(screen_index=0, screen_count=2, visible_word_count=6)
+    assert not is_short_terminal_screen(screen_index=1, screen_count=2, visible_word_count=13)
+
+
 def test_scroll_offset_for_underlines_matches_piecewise_scroll_plan():
     steps = [
         ScrollStep(start=10.0, end=10.4, from_offset=0, to_offset=400),
@@ -268,14 +319,14 @@ def test_vocabulary_card_anchor_uses_the_first_matching_body_word(tmp_path: Path
 
 def test_visual_vocabulary_selection_uses_a_per_screen_minimum_without_any_cap():
     template = RecordUnderlineTemplate()
-    candidates = tuple(VocabularyItem(f"word{index}", "学习词", level="PET") for index in range(16))
+    candidates = tuple(VocabularyItem(f"word{index}", "学习词", level="PET") for index in range(21))
     boxes = tuple(
         WordBox(
             f"word{index}", 54,
             TEXT_TOP + 100 if index < 8 else TEXT_TOP + 1100,
             80,
         )
-        for index in range(16)
+            for index in range(21)
     )
 
     selected = template.select_vocabulary_for_screens(candidates, boxes, (0, 1000))

@@ -24,6 +24,7 @@
 | 1.12.0 | 2026-08-04 | Codex | 按真实阅读窗挑选微笔记：不设全篇总量，只保证每屏 8–12 个，避免首屏过密和后屏稀疏。 |
 | 1.13.0 | 2026-08-05 | Codex | 取消单屏微笔记上限；词下中文释义改为完整多行排版，空间不足通过阅读区提前滚动解决。 |
 | 1.14.0 | 2026-08-05 | Codex | 微笔记按同一英文行分层避让；右栏按每个阅读屏的左侧候选稳定填充五张词卡。 |
+| 1.15.0 | 2026-08-24 | Codex | 末屏仅剩不超过 12 个可见英文词时，允许低于八条微笔记；普通阅读屏继续严格门禁。 |
 """
 
 from __future__ import annotations
@@ -87,6 +88,18 @@ class TemplateAAssets:
     reading_image: Path
     feature_image: Path
     word_boxes: tuple[WordBox, ...]
+    paragraph_bottoms: tuple[int, ...]
+
+
+_MAX_TERMINAL_SCREEN_WORDS_WITHOUT_NOTE_FLOOR = 12
+
+
+def is_short_terminal_screen(*, screen_index: int, screen_count: int, visible_word_count: int) -> bool:
+    """只对确有少量剩余正文的末屏放宽微笔记下限。"""
+    return (
+        screen_index == screen_count - 1
+        and visible_word_count <= _MAX_TERMINAL_SCREEN_WORDS_WITHOUT_NOTE_FLOOR
+    )
 
 
 class RecordUnderlineTemplate:
@@ -111,7 +124,7 @@ class RecordUnderlineTemplate:
         )
         reading = Image.new("RGBA", (CANVAS_WIDTH, reading_height), (0, 0, 0, 0))
         reading_draw = ImageDraw.Draw(reading)
-        word_boxes, _ = self._draw_reading_body(reading_draw, content)
+        word_boxes, paragraph_bottoms = self._draw_reading_body(reading_draw, content)
         # 右栏词卡由渲染器按当前阅读屏绘制为独立动态层，避免下一屏卡片
         # 在尚未滚动时提前露到本屏底部。
 
@@ -121,7 +134,13 @@ class RecordUnderlineTemplate:
         reading.save(reading_image)
         feature_image = output_dir / "template_a_feature.png"
         self._draw_feature_banner(feature_image)
-        return TemplateAAssets(base_image, reading_image, feature_image, tuple(word_boxes))
+        return TemplateAAssets(
+            base_image,
+            reading_image,
+            feature_image,
+            tuple(word_boxes),
+            tuple(paragraph_bottoms),
+        )
 
     def map_word_boxes(self, words: Iterable[StudyWord], boxes: tuple[WordBox, ...]) -> list[tuple[StudyWord, WordBox]]:
         """按规范化词面一一匹配时间轴，拒绝静默错位。"""
@@ -163,11 +182,16 @@ class RecordUnderlineTemplate:
             for item in candidates
         }
         screen_items: list[set[str]] = []
+        screen_word_counts: list[int] = []
         for offset in offsets:
             screen_items.append({
                 key for key, ys in occurrences.items()
                 if any(TEXT_TOP <= y - offset <= READING_VIEWPORT_BOTTOM - 80 for y in ys)
             })
+            screen_word_counts.append(sum(
+                1 for box in boxes
+                if TEXT_TOP <= box.y - offset <= READING_VIEWPORT_BOTTOM - 80
+            ))
         ranked = sorted(candidates, key=lambda item: (-difficulty_level(item.level), -len(item.word), item.word.lower()))
         selected: list[VocabularyItem] = []
         selected_keys: set[str] = set()
@@ -177,8 +201,13 @@ class RecordUnderlineTemplate:
             for key in occurrences
         }
         for screen_index, available in enumerate(screen_items):
+            requires_note_floor = not is_short_terminal_screen(
+                screen_index=screen_index,
+                screen_count=len(screen_items),
+                visible_word_count=screen_word_counts[screen_index],
+            )
             for item in ranked:
-                if screen_counts[screen_index] >= MIN_MICRO_NOTES_PER_SCREEN:
+                if not requires_note_floor or screen_counts[screen_index] >= MIN_MICRO_NOTES_PER_SCREEN:
                     break
                 key = _normalise_phrase(item.word)
                 if key in selected_keys or key not in available:
@@ -187,7 +216,7 @@ class RecordUnderlineTemplate:
                 selected_keys.add(key)
                 for index in memberships[key]:
                     screen_counts[index] += 1
-            if screen_counts[screen_index] < MIN_MICRO_NOTES_PER_SCREEN:
+            if requires_note_floor and screen_counts[screen_index] < MIN_MICRO_NOTES_PER_SCREEN:
                 raise ValueError(
                     f"第 {screen_index + 1} 个阅读屏只有 {screen_counts[screen_index]} 个可用微笔记；"
                     "需补充离线词表候选或审核短语 JSON"
@@ -228,13 +257,14 @@ class RecordUnderlineTemplate:
             stroke_width=1, stroke_fill="#6B4914",
         )
 
-    def _draw_reading_body(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> tuple[list[WordBox], int]:
+    def _draw_reading_body(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> tuple[list[WordBox], list[int]]:
         """严格采用参考图的阅读稿：英文意群 → 词下小注 → 本段中文释义。"""
         english_font = _latin_font(40, bold=True)
         gloss_font = _font(22, bold=True)
         translation_font = _font(30)
         y = TEXT_TOP
         boxes: list[WordBox] = []
+        paragraph_bottoms: list[int] = []
         for paragraph in content.paragraphs:
             lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, ENGLISH_LINE_WIDTH)
             translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
@@ -267,8 +297,9 @@ class RecordUnderlineTemplate:
             for line in translation_lines:
                 draw.text((TEXT_LEFT + 10, y), line, font=translation_font, fill=INK)
                 y += translation_line_height
+            paragraph_bottoms.append(y)
             y += 28
-        return boxes, y
+        return boxes, paragraph_bottoms
 
     def _measure_reading_bottom(self, content: StudyCardContent) -> int:
         """用与实际绘制完全相同的字级测量长正文，避免按固定屏高截断内容。"""
