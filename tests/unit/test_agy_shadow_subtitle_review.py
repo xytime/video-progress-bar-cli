@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-08-24 | Codex | 覆盖 output 子目录中的已渲染 ASS 也会进入影子比较。 |
 | 1.0.0 | 2026-08-24 | Codex | 覆盖影子比较的无正文报告、增量去重与手工 Promote 闸门。 |
 """
 
@@ -64,6 +65,28 @@ def test_shadow_rollout_writes_hash_only_report_and_deduplicates(tmp_path, monke
     assert second["already_compared_inputs"] == 1
     assert second["auto_promote"] is False
     assert second["manual_decision_required"] is True
+
+
+def test_shadow_rollout_recursively_discovers_rendered_ass(tmp_path, monkeypatch):
+    module = _load_module()
+    input_dir = tmp_path / "output"
+    ass_path = input_dir / "original_video" / "nested_sample.ass"
+    ass_path.parent.mkdir(parents=True)
+    _write_bilingual_ass(ass_path)
+    report_dir = tmp_path / "shadow"
+    monkeypatch.setattr(module, "_now", lambda: module._parse_utc("2026-08-24T06:00:00Z"))
+
+    summary = module.run_shadow_rollout(
+        input_dir=input_dir,
+        report_dir=report_dir,
+        max_segments=80,
+        start_if_missing=True,
+        candidate_runner=lambda _source, _context: ["基金募集490亿美元。"],
+    )
+
+    report = next((report_dir / "samples").glob("*.json"))
+    assert summary["unique_inputs_compared"] == 1
+    assert "nested_sample.ass" in report.read_text(encoding="utf-8")
 
 
 def test_shadow_review_marks_provider_failure_without_error_body(tmp_path, monkeypatch):

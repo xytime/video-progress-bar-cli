@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-08-24 | Codex | 递归发现 output 下的已渲染 ASS，避免漏掉 original_video 子目录。 |
 | 1.0.0 | 2026-08-24 | Codex | 新增三天 AGY 字幕影子评估与可累积的无正文比较报告。 |
 """
 
@@ -253,7 +254,9 @@ def run_shadow_rollout(
 
     evaluated = 0
     skipped = 0
-    for ass_path in sorted(input_dir.glob("*.ass")):
+    # 成片任务会将 ASS 放在 output/original_video 等子目录；只扫描根目录会
+    # 漏掉已完成的真实候选。仍只读取固定 output 根目录下的常规文件。
+    for ass_path in sorted(path for path in input_dir.rglob("*.ass") if path.is_file()):
         if ass_path.stat().st_mtime < started_at.timestamp():
             continue
         file_hash = _sha256_file(ass_path)
