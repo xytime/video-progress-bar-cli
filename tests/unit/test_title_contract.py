@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-08-24 | Codex | 覆盖 AGY 合同失败后的受限重试。 |
 | 1.2.0 | 2026-08-24 | Codex | 覆盖 Hook 不能只保留 TED/讲者元信息。 |
 | 1.3.0 | 2026-08-24 | Codex | 覆盖承诺/预测被误写为已实现结果的方向漂移。 |
+| 1.4.0 | 2026-08-24 | Codex | 覆盖嘉宾 TED 起句及姓名加演讲的元信息变体。 |
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ def test_title_bundle_normalizes_all_surfaces():
         ("美债收益率冲击市场", "AI狂飙抢占芯片产能下"),
         ("演讲者探讨AI未来", "TED演讲谈开启新生活"),
         ("人工智能打破虚假承诺走向未来", "认清AI虚假承诺，未来将走向何方？"),
+        ("AI虚假承诺正在破灭且未来将至", "AI虚假承诺破灭，未来会发生什么？"),
     ],
 )
 def test_title_bundle_rejects_residual_fragments(platform_title: str, display_title: str):
@@ -65,13 +67,22 @@ def test_title_bundle_allows_legacy_missing_display_title():
     assert bundle.display_title == ""
 
 
-@pytest.mark.parametrize("hook_subtitle", ["TED", "TED演讲：Felix Brooks-church", "剑桥大学TEDx演讲"])
+@pytest.mark.parametrize("hook_subtitle", ["TED", "TED演讲：Felix Brooks-church", "剑桥大学TEDx演讲", "AlvinWangGraylin演讲"])
 def test_title_bundle_rejects_low_information_hook(hook_subtitle: str):
     with pytest.raises(TitleContractError, match="hook_subtitle 不能仅包含"):
         validate_title_bundle(
             platform_title="AI重塑律师行业",
             display_title="20美元AI正在重塑律师行业",
             hook_subtitle=hook_subtitle,
+        )
+
+
+def test_title_bundle_rejects_speaker_metadata_title():
+    with pytest.raises(TitleContractError, match="以嘉宾或栏目元信息作为内容主语"):
+        validate_title_bundle(
+            platform_title="嘉宾在TEDx谈AI虚假承诺",
+            display_title="AI有哪些虚假承诺？接下来会怎样",
+            hook_subtitle="",
         )
 
 
@@ -130,8 +141,8 @@ def test_agy_provider_retries_once_after_contract_rejection(monkeypatch):
         "hook_subtitle": "",
     }
     valid = {
-        "platform_title": "AI虚假承诺破灭",
-        "display_title": "人工智能承诺为何频频落空",
+        "platform_title": "AI承诺争议",
+        "display_title": "人工智能承诺为何受到质疑",
         "hook_subtitle": "投资人与用户需警惕过度营销",
     }
 
@@ -149,6 +160,6 @@ def test_agy_provider_retries_once_after_contract_rejection(monkeypatch):
         description="The video examines why AI promises can fail.",
     )
 
-    assert bundle.platform_title == "AI虚假承诺破灭"
+    assert bundle.platform_title == "AI承诺争议"
     assert len(calls) == 2
     assert "上一候选未通过标题合同" in calls[1]

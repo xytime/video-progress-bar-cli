@@ -302,8 +302,8 @@ def test_copy_candidate_selector_requires_display_title_when_dual_title_enabled(
     }
     complete = {
         **missing_display,
-        "short_title": "AI虚假承诺破灭",
-        "display_title": "人工智能承诺为何频频落空",
+        "short_title": "AI承诺争议",
+        "display_title": "人工智能承诺为何受到质疑",
     }
 
     selected = _select_wechat_content_candidate(
@@ -313,7 +313,7 @@ def test_copy_candidate_selector_requires_display_title_when_dual_title_enabled(
         audit_path=tmp_path / "dual_title_copy_quality.json",
     )
 
-    assert selected["display_title"] == "人工智能承诺为何频频落空"
+    assert selected["display_title"] == "人工智能承诺为何受到质疑"
     report = json.loads((tmp_path / "dual_title_copy_quality.json").read_text(encoding="utf-8"))
     assert report["events"][0]["status"] == "rejected"
     assert "display_title" in report["events"][0]["title_contract"]
