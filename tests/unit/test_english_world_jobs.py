@@ -241,3 +241,6 @@ def test_review_item_is_bound_to_one_artifact_and_cannot_be_auto_retried(tmp_pat
     assert completed["state"] == "UNCERTAIN"
     with pytest.raises(ValueError, match="cannot be approved"):
         db.approve_english_world_submission(ready["id"])
+    reopened = db.reopen_uncertain_english_world_submission(ready["id"])
+    assert reopened["state"] == "SUBMISSION_APPROVED"
+    assert db.claim_english_world_submission(ready["id"])

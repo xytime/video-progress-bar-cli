@@ -8,6 +8,7 @@
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.37.0  | 2026-08-23 | Codex                               | 保存源视频 UTC 精确发布时间，支持发布前原创声明 24 小时判定 |
 | 3.38.0  | 2026-08-24 | Codex                               | 新增 Telegram 投递回执账本；仅 API message_id 证明单次通知获受理。 |
+| 3.39.0  | 2026-08-24 | Codex                               | 英语世界未确认投稿仅可经明确人工确认重开同一审核项，并保留原证据目录。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -4930,6 +4931,28 @@ class PipelineDB:
             conn.commit()
             row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
             return dict(row) if row else None
+
+    def reopen_uncertain_english_world_submission(self, review_id: str) -> Dict[str, Any]:
+        """人工明确确认未发布后，重开同一审核项的一次投稿机会。
+
+        此通道只接受 ``UNCERTAIN``，不会被通用重试或自动调度调用；原证据目录
+        保持不变，以留存首次点击发布但未确认的证据。
+        """
+        clean_id = (review_id or "").strip()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'SUBMISSION_APPROVED', uploader_exit_code = NULL,
+                       error_message = '操作员已明确确认首次投稿未成功；重开同一审核项进行一次人工授权重传。',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'UNCERTAIN'""",
+                (clean_id,),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Only an UNCERTAIN English World submission can be reopened")
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            return dict(row) if row else {}
 
     def complete_english_world_submission(
         self,
