@@ -8,6 +8,7 @@
 | 1.1.0 | 2026-08-23 | Codex | 覆盖英语世界成片的唯一审核身份、原子批准领取与未确认投稿收尾。 |
 | 1.1.1 | 2026-08-24 | Codex | 覆盖候选搜索继承 Cookie 配置及单批次失败隔离。 |
 | 1.1.2 | 2026-08-24 | Codex | 覆盖目录降级路径与新闻标题风险词预筛。 |
+| 1.1.3 | 2026-08-24 | Codex | 覆盖预筛后目录降级、长来源截取边界与天气画面复核语义。 |
 """
 
 from __future__ import annotations
@@ -23,14 +24,14 @@ from video_processing.english_world import research
 from video_processing.english_world.research import EnglishWorldResearchService, _youtube_search
 
 
-def _candidate(*, title: str = "Whales return to the bay") -> dict:
+def _candidate(*, title: str = "Whales return to the bay", duration_sec: int = 42) -> dict:
     return {
         "id": "dQw4w9WgXcQ",
         "webpage_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         "title": title,
         "channel": "Nature Desk",
         "upload_date": "20260821",
-        "duration_sec": 42,
+        "duration": duration_sec,
     }
 
 
@@ -81,16 +82,35 @@ def test_selected_candidate_requires_second_confirmation_before_production_reque
     assert db.get_video_by_youtube_id("dQw4w9WgXcQ") is None
 
 
-def test_metadata_screening_rejects_explicitly_unsuitable_topics(tmp_path):
+def test_metadata_screening_rejects_explicitly_unsuitable_topics(tmp_path, monkeypatch):
     db = PipelineDB(str(tmp_path / "pipeline.db"))
     job = db.create_english_world_research_job(requested_by="telegram")
     unsafe = _candidate(title="Iran tariff victim remains update")
+    monkeypatch.setattr(
+        research,
+        "fetch_channel_catalog",
+        lambda *_args, **_kwargs: SimpleNamespace(videos=[]),
+    )
 
     service = EnglishWorldResearchService(db, searcher=lambda _query: [unsafe])
     result = service.research(job["id"])
 
     assert result and result["state"] == "FAILED"
     assert "没有找到" in result["error_message"]
+
+
+def test_weather_science_candidate_requires_visual_review_but_is_not_keyword_rejected(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    job = db.create_english_world_research_job(requested_by="telegram")
+
+    result = EnglishWorldResearchService(
+        db, searcher=lambda _query: [_candidate(title="How tornadoes form in a weather lab")],
+    ).research(job["id"])
+
+    assert result and result["state"] == "CANDIDATES_READY"
+    candidate = db.get_english_world_candidates(job["id"])[0]
+    assert candidate["topic"] == "science"
+    assert "核对无真实伤亡" in candidate["safety_note"]
 
 
 def test_youtube_search_uses_supported_ytsearch_extractor(monkeypatch):
@@ -160,6 +180,30 @@ def test_research_falls_back_to_approved_channel_catalog_when_ytsearch_is_blocke
     candidates = db.get_english_world_candidates(job["id"])
     assert candidates[0]["youtube_id"] == "catalog-video-1"
     assert candidates[0]["source_channel"] == "CBC Kids News"
+
+
+def test_research_falls_back_after_search_results_fail_pre_screening(tmp_path, monkeypatch):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    job = db.create_english_world_research_job(requested_by="telegram")
+    requested_channels: list[str] = []
+
+    def fake_catalog(channel_id: str, **_kwargs):
+        requested_channels.append(channel_id)
+        return SimpleNamespace(videos=[SimpleNamespace(
+            youtube_id=f"catalog-{channel_id[-4:]}",
+            title="Whales return to the bay",
+            upload_date="20260824",
+            duration_sec=480,
+        )])
+
+    monkeypatch.setattr(research, "fetch_channel_catalog", fake_catalog)
+    result = EnglishWorldResearchService(
+        db, searcher=lambda _query: [_candidate(title="Long science update", duration_sec=601)],
+    ).research(job["id"])
+
+    assert result and result["state"] == "CANDIDATES_READY"
+    assert requested_channels == [channel_id for channel_id, _name in research._APPROVED_SOURCE_CHANNELS]
+    assert all(candidate["duration_sec"] == 480 for candidate in db.get_english_world_candidates(job["id"]))
 
 
 def test_review_item_is_bound_to_one_artifact_and_cannot_be_auto_retried(tmp_path):

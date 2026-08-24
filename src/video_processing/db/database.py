@@ -7,6 +7,7 @@
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.37.0  | 2026-08-23 | Codex                               | 保存源视频 UTC 精确发布时间，支持发布前原创声明 24 小时判定 |
+| 3.38.0  | 2026-08-24 | Codex                               | 新增 Telegram 投递回执账本；仅 API message_id 证明单次通知获受理。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -1180,7 +1181,7 @@ class PipelineDB:
             )
 
             # Telegram 投递回执与业务状态分开保存。HTTP 超时不能证明未送达，故以
-            # UNKNOWN 保留不确定性，供通知去重和人工排障使用，不反推客户端已读。
+            # UNKNOWN 保留不确定性供人工排障；它不能作为已送达依据，更不能抑制重试。
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS telegram_notification_receipts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -5030,12 +5031,12 @@ class PipelineDB:
     def has_recent_telegram_notification(
         self, *, event_type: str, content_sha256: str, since_utc: str,
     ) -> bool:
-        """查询近期同一通知；UNKNOWN 也阻止重发，避免超时后重复刷屏。"""
+        """查询近期已获 API 回执的同一通知；UNKNOWN 不得当作送达。"""
         with self.get_connection() as conn:
             row = conn.execute(
                 """SELECT 1 FROM telegram_notification_receipts
                    WHERE event_type = ? AND content_sha256 = ? AND created_at >= ?
-                     AND delivery_state IN ('ACCEPTED', 'UNKNOWN')
+                     AND delivery_state = 'ACCEPTED'
                    LIMIT 1""",
                 ((event_type or "unknown")[:120], (content_sha256 or "")[:128], since_utc),
             ).fetchone()

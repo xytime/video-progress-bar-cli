@@ -12,6 +12,7 @@
 | 1.0.2 | 2026-08-24 | Codex | 候选元数据读取继承已验证的 YouTube Cookie；单个搜索批次受限时跳过并继续其余查询。 |
 | 1.0.3 | 2026-08-24 | Codex | yt-dlp 搜索无可用元数据时，以既有白名单频道的官方 Data API / RSS 目录只读降级。 |
 | 1.0.4 | 2026-08-24 | Codex | 补足新闻标题中的政治、冲突和伤害线索预筛，避免目录降级扩大候选风险面。 |
+| 1.0.5 | 2026-08-24 | Codex | 目录降级以预筛结果为空为准；天气/灾害线索只标记画面复核，不再关键词误杀。 |
 """
 
 from __future__ import annotations
@@ -39,16 +40,18 @@ _APPROVED_SOURCE_CHANNELS = (
     ("UCAeWdyKJXGWmVAXFpgLNNTg", "CBS Evening News"),
     ("UCBi2mrWuNuyYy4gbM6fU18Q", "ABC News"),
 )
-_BLOCKED_TERMS = frozenset({
+_HARD_BLOCKED_TERMS = frozenset({
     "war", "military", "missile", "battle", "politic", "election", "president",
-    "crime", "murder", "shooting", "terror", "disaster", "earthquake", "flood",
-    "death", "dead", "fatal", "victim", "remains", "adult", "sex", "drug", "weapon",
-    "trump", "iran", "tariff", "sanction", "border", "threat", "emergency",
-    "evacuation", "breeding facility",
+    "crime", "murder", "shooting", "terror", "adult", "sex", "drug", "weapon",
+    "trump", "iran", "tariff", "sanction", "border",
+})
+_VISUAL_REVIEW_TERMS = frozenset({
+    "disaster", "earthquake", "flood", "storm", "tornado", "lightning", "wildfire",
+    "death", "dead", "fatal", "victim", "remains", "evacuation", "emergency", "threat",
 })
 _TOPIC_TERMS = {
     "nature": frozenset({"animal", "wildlife", "ocean", "whale", "nature", "species", "forest"}),
-    "science": frozenset({"science", "space", "research", "study", "discovery", "climate"}),
+    "science": frozenset({"science", "space", "research", "study", "discovery", "climate", "weather", "storm", "tornado", "lightning"}),
     "education": frozenset({"school", "student", "learning", "education", "teacher"}),
     "technology": frozenset({"technology", "robot", "innovation", "science", "ai"}),
     "life": frozenset({"food", "culture", "community", "family", "people", "health"}),
@@ -78,6 +81,8 @@ class EnglishWorldResearchService:
             source_url = str(job.get("source_url") or "").strip()
             raw_items = [self._inspector(source_url)] if source_url else self._find_today_candidates()
             candidates = _rank_candidates(raw_items)
+            if not candidates and not source_url:
+                candidates = _rank_candidates(_catalog_fallback_candidates())
             if not candidates:
                 raise RuntimeError("没有找到通过儿童题材预筛的候选；未创建任何视频任务")
             self.db.complete_english_world_research(job_id, candidates=candidates)
@@ -108,7 +113,7 @@ class EnglishWorldResearchService:
                     continue
                 seen.add(key)
                 results.append(item)
-        return results or _catalog_fallback_candidates()
+        return results
 
 
 def _catalog_fallback_candidates() -> list[dict[str, Any]]:
@@ -185,10 +190,11 @@ def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         title = str(item.get("title") or "").strip()
         description = str(item.get("description") or "")
         blob = f"{title} {description}".lower()
-        if not title or any(term in blob for term in _BLOCKED_TERMS):
+        if not title or any(term in blob for term in _HARD_BLOCKED_TERMS):
             continue
         duration = _as_int(item.get("duration"))
-        if duration is not None and not 15 <= duration <= 150:
+        # 成片最多 30 秒不等于原始报道必须只有 30 秒；较长来源可在制作前选择自然句边界。
+        if duration is not None and not 15 <= duration <= 600:
             continue
         video_id = str(item.get("id") or "").strip()
         url = str(item.get("webpage_url") or item.get("original_url") or "").strip()
@@ -197,6 +203,7 @@ def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         if not url:
             continue
         topic = _topic_for(blob)
+        needs_visual_review = any(term in blob for term in _VISUAL_REVIEW_TERMS)
         upload_date = str(item.get("upload_date") or "") or None
         recency = 1 if upload_date == now.strftime("%Y%m%d") else 0
         score = 20 + recency * 20 + (10 if duration else 0) + _topic_score(topic)
@@ -210,7 +217,11 @@ def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             "duration_sec": duration,
             "topic": topic,
             "learning_value": _learning_value(topic),
-            "safety_note": "已通过标题、简介和时长预筛；制作前仍须核对实际画面与英文字幕。",
+            "safety_note": (
+                "标题/简介含灾害或紧急线索；仅可在核对无真实伤亡、恐慌、疏散或令人不适画面后制作。"
+                if needs_visual_review else
+                "已通过标题、简介和时长预筛；制作前仍须核对实际画面与英文字幕。"
+            ),
             "caption_status": "待制作前核验",
             "recommendation_score": score,
         })

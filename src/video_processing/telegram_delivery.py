@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增自动通知回执、去重与秘密安全的错误分类。 |
+| 1.1.0 | 2026-08-24 | Codex | UNKNOWN 不再被视为已送达；仅有 message_id 的 Bot API 响应可记为 ACCEPTED。 |
 """
 
 from __future__ import annotations
@@ -35,11 +36,11 @@ class TelegramDeliveryResult:
     suppressed: bool = False
 
 
-def _fingerprint(event_type: str, text: str, attachment: Path | None = None) -> str:
+def _fingerprint(event_type: str, dedupe_key: str, attachment: Path | None = None) -> str:
     digest = hashlib.sha256()
     digest.update(event_type.encode("utf-8"))
     digest.update(b"\0")
-    digest.update(text.encode("utf-8"))
+    digest.update(dedupe_key.encode("utf-8"))
     if attachment is not None:
         digest.update(b"\0")
         digest.update(attachment.name.encode("utf-8"))
@@ -88,17 +89,21 @@ def _result_from_response(response: requests.Response) -> tuple[str, str | None,
     if response.ok and payload.get("ok") is True:
         result = payload.get("result")
         message_id = str(result.get("message_id")) if isinstance(result, dict) and result.get("message_id") is not None else None
-        return "ACCEPTED", message_id, None
+        if message_id:
+            return "ACCEPTED", message_id, None
+        # HTTP 200 不是可审计投递回执；没有消息 ID 时无法对照 Telegram 侧事实。
+        return "UNKNOWN", None, "MISSING_MESSAGE_ID"
     return "FAILED", None, f"HTTP_{response.status_code}"
 
 
 def send_text(
     *, event_type: str, priority: str, text: str, cooldown_seconds: int = 0,
     reply_markup: dict[str, Any] | None = None, timeout_seconds: int = 20,
-    db: PipelineDB | None = None, token: str | None = None, chat_id: str | None = None,
+    dedupe_key: str | None = None, db: PipelineDB | None = None,
+    token: str | None = None, chat_id: str | None = None,
 ) -> TelegramDeliveryResult:
     """发送文字并记录回执；不会记录 token、URL、响应正文或消息内容。"""
-    fingerprint = _fingerprint(event_type, text)
+    fingerprint = _fingerprint(event_type, dedupe_key or text)
     if _should_suppress(event_type=event_type, fingerprint=fingerprint, cooldown_seconds=cooldown_seconds, db=db):
         _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state="SUPPRESSED", error_kind="DEDUPE", db=db)
         return TelegramDeliveryResult(state="SUPPRESSED", error_kind="DEDUPE", suppressed=True)

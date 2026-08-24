@@ -8,9 +8,12 @@
 | 1.1.0 | 2026-08-05 | Codex | 覆盖 curl SSL 超时重试及 Telegram 管理员回退会话 |
 | 1.2.0 | 2026-08-05 | Codex | 验证 Telegram 告警 HTTP 回执，而非将调用本身视作送达 |
 | 1.4.0 | 2026-08-24 | Codex | 验证 Bot API ok/message_id 回执与重复 P1 通知抑制。 |
+| 1.5.0 | 2026-08-24 | Codex | UNKNOWN 不能抑制重要通知；同一任务的变动原因仍遵循稳定去重键。 |
 """
 
 import json
+
+import requests
 
 from config.settings import settings
 from video_processing.pipeline_manager import PipelineManager
@@ -142,6 +145,79 @@ def test_manager_suppresses_duplicate_p1_notification(monkeypatch, tmp_path):
     assert manager.send_telegram_msg("❌ <b>Video Failed</b>\\nID: <code>telegram-dedupe</code>")
     assert not manager.send_telegram_msg("❌ <b>Video Failed</b>\\nID: <code>telegram-dedupe</code>")
     assert len(calls) == 1
+
+
+def test_manager_retries_unknown_notification_instead_of_treating_it_as_delivered(monkeypatch, tmp_path):
+    manager = _manager(tmp_path, "telegram-unknown")
+    manager.telegram_token = "test-token"
+    manager.telegram_chat_id = "test-chat"
+    calls = []
+
+    class Response:
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": {"message_id": 104}}
+
+    def fake_post(*_args, **_kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            raise requests.Timeout("network timeout")
+        return Response()
+
+    monkeypatch.setattr("video_processing.telegram_delivery.requests.post", fake_post)
+    message = "❌ <b>Video Failed</b>\\nID: <code>telegram-unknown</code>\\nReason: timeout"
+
+    assert not manager.send_telegram_msg(message)
+    assert manager.send_telegram_msg(message)
+    assert len(calls) == 2
+
+
+def test_manager_dedupes_same_task_when_failure_reason_changes(monkeypatch, tmp_path):
+    manager = _manager(tmp_path, "telegram-stable-key")
+    manager.telegram_token = "test-token"
+    manager.telegram_chat_id = "test-chat"
+    calls = []
+
+    class Response:
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": {"message_id": 105}}
+
+    def fake_post(*_args, **_kwargs):
+        calls.append(True)
+        return Response()
+
+    monkeypatch.setattr("video_processing.telegram_delivery.requests.post", fake_post)
+    first = "❌ <b>Video Failed</b>\\nID: <code>telegram-stable-key</code>\\nReason: timeout"
+    second = "❌ <b>Video Failed</b>\\nID: <code>telegram-stable-key</code>\\nReason: upstream 500"
+
+    assert manager.send_telegram_msg(first)
+    assert not manager.send_telegram_msg(second)
+    assert len(calls) == 1
+
+
+def test_manager_rejects_ok_response_without_message_id(monkeypatch, tmp_path):
+    manager = _manager(tmp_path, "telegram-no-message-id")
+    manager.telegram_token = "test-token"
+    manager.telegram_chat_id = "test-chat"
+
+    class Response:
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": {}}
+
+    monkeypatch.setattr("video_processing.telegram_delivery.requests.post", lambda *_args, **_kwargs: Response())
+
+    assert not manager.send_telegram_msg("❌ <b>Video Failed</b>\\nID: <code>telegram-no-message-id</code>")
 
 
 def test_transient_retry_refuses_existing_wechat_submission_evidence(tmp_path):

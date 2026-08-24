@@ -6,6 +6,7 @@
 | 3.48.19 | 2026-08-22 | Codex                               | 视频号仅获受理时向 Telegram 附送可播放审核副本；超限时生成轻量审核版，不改变投稿状态或重传边界 |
 | 3.48.20 | 2026-08-24 | Codex                               | 双标题检查点绑定展示标题，并在未提交任务标题变更时重建受影响的渲染与封面缓存；提交证据前置保护 |
 | 3.48.21 | 2026-08-24 | Codex                               | P2 管线状态不再刷 Telegram；P1 通知记录 API 回执并按内容去重，异常日志不泄露凭据。 |
+| 3.48.22 | 2026-08-24 | Codex                               | P1 按事件与任务身份去重；UNKNOWN 不视为送达，缺失 message_id 不再伪称回执。 |
 | 3.46.0  | 2026-08-21 | Codex                               | 分钟巡航采用评分输入缓存，只重评播放/点赞变化或 TTL 到期候选，消除全量低分空转 |
 | 3.44.0  | 2026-08-21 | Codex                               | 已提交视频号任务遇到中断或子进程异常时保留未绑定账本，不再被通用异常路径降级为 PENDING/FAILED |
 | 3.45.0  | 2026-08-21 | Codex                               | 封面不再向渲染或 AI 主视觉简报传递运营角标，避免告警式装饰污染成品 |
@@ -131,7 +132,6 @@ import signal
 import time
 import logging
 import subprocess
-import requests
 import fcntl
 import html
 from typing import Callable, Dict, Any, Optional, Tuple
@@ -329,23 +329,44 @@ class PipelineManager:
 
     # ── Telegram 通知 ─────────────────────────────────────────────────────────
 
-    def _telegram_notification_policy(self, text: str) -> tuple[str, str, int]:
-        """将通用管线通知收敛为行动型 P1；P2 仅写回执账本。"""
-        normalized = " ".join(text.split())
-        event_name = re.sub(r"[^a-z0-9]+", "_", re.sub(r"<[^>]+>", "", normalized.lower())).strip("_")[:72]
-        event_type = f"pipeline.{event_name or 'status'}"
-        p2_markers = (
-            "pipeline batch started", "copy numeric review", "pre_submit auto retry scheduled",
-            "douyin history progress", "douyin new sync", "video segmented",
+    def _telegram_notification_policy(self, text: str) -> tuple[str, str, int, str]:
+        """按事件及同一任务身份收敛通知，避免原因文本变化绕过去重。"""
+        normalized = " ".join(html.unescape(re.sub(r"<[^>]+>", "", text)).split())
+        lowered = normalized.lower()
+        policies = (
+            ("pipeline batch started", "batch_started", "P2"),
+            ("copy numeric review", "copy_numeric_review", "P2"),
+            ("pre-submit auto retry scheduled", "pre_submit_retry", "P2"),
+            ("douyin history progress", "douyin_history_progress", "P2"),
+            ("douyin new sync", "douyin_new_sync", "P2"),
+            ("video segmented", "video_segmented", "P2"),
+            ("video failed", "video_failed", "P1"),
+            ("wechat submission uncertain", "wechat_submission_uncertain", "P1"),
+            ("wechat submission accepted", "wechat_submission_accepted", "P1"),
+            ("wechat login required", "wechat_login_required", "P1"),
+            ("auto-caption timed out", "auto_caption_timeout", "P1"),
+            ("video under review", "video_under_review", "P1"),
+            ("video published", "video_published", "P1"),
         )
-        if any(marker in normalized.lower() for marker in p2_markers):
-            return event_type, "P2", 0
-        return event_type, "P1", 24 * 60 * 60
+        event_name, priority = "status", "P1"
+        for marker, candidate_event, candidate_priority in policies:
+            if marker in lowered:
+                event_name, priority = candidate_event, candidate_priority
+                break
+        event_type = f"pipeline.{event_name}"
+        subject = re.search(r"(?:youtube\s+id|id|session expired)\s*:\s*([^\s<]+)", normalized, re.IGNORECASE)
+        platform = re.search(r"platform\s*:\s*([^\s<]+)", normalized, re.IGNORECASE)
+        if subject:
+            dedupe_key = f"{event_type}:{platform.group(1).lower() if platform else 'unknown'}:{subject.group(1)}"
+        else:
+            # 没有可审计任务身份时，不可把不同任务合并为一条提醒。
+            dedupe_key = normalized
+        return event_type, priority, (0 if priority == "P2" else 24 * 60 * 60), dedupe_key
 
     def send_telegram_msg(self, text: str) -> bool:
         """发送 P1 管线提醒；P2 只记录为已抑制，避免状态消息淹没审批。"""
-        event_type, priority, cooldown_seconds = self._telegram_notification_policy(text)
-        fingerprint = hashlib.sha256(f"{event_type}\0{text}".encode("utf-8")).hexdigest()
+        event_type, priority, cooldown_seconds, dedupe_key = self._telegram_notification_policy(text)
+        fingerprint = hashlib.sha256(f"{event_type}\0{dedupe_key}".encode("utf-8")).hexdigest()
         if priority == "P2":
             self.db.record_telegram_notification_receipt(
                 event_type=event_type, priority="P2", content_sha256=fingerprint,
@@ -353,12 +374,9 @@ class PipelineManager:
             )
             logger.info("Telegram P2 notification suppressed: %s", event_type)
             return True
-        if not self.telegram_token or not self.telegram_chat_id:
-            logger.debug("Telegram not configured. Would send event=%s", event_type)
-            return False
         result = send_telegram_text(
             event_type=event_type, priority=priority, text=text,
-            cooldown_seconds=cooldown_seconds, timeout_seconds=10, db=self.db,
+            cooldown_seconds=cooldown_seconds, timeout_seconds=10, dedupe_key=dedupe_key, db=self.db,
             token=self.telegram_token, chat_id=self.telegram_chat_id,
         )
         if result.state != "ACCEPTED":
@@ -368,9 +386,6 @@ class PipelineManager:
 
     def send_telegram_video(self, video_path: Path, caption: str) -> bool:
         """发送本地 MP4 供运营在 Telegram 手机端审核，不改变平台投稿事实。"""
-        if not self.telegram_token or not self.telegram_chat_id:
-            logger.debug("Telegram not configured. Would send review video: %s", video_path.name)
-            return False
         if not video_path.is_file():
             logger.warning("Telegram review video missing: %s", video_path)
             return False

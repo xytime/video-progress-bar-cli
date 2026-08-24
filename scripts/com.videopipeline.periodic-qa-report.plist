@@ -28,8 +28,8 @@
     <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>5</integer></dict>
   </array>
   <key>StandardOutPath</key>
-  <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/periodic_qa_report.log</string>
+  <string>/Users/ryusei/Library/Logs/VideoPrecessing/periodic_qa_report.stdout.log</string>
   <key>StandardErrorPath</key>
-  <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/periodic_qa_report.log</string>
+  <string>/Users/ryusei/Library/Logs/VideoPrecessing/periodic_qa_report.stderr.log</string>
 </dict>
 </plist>
