@@ -1,0 +1,169 @@
+"""英语世界短视频专属报刊封面单元测试 (test_english_world_cover.py)
+
+# Modification History
+| Version | Date       | Author                         | Description                                            |
+|---------|------------|--------------------------------|--------------------------------------------------------|
+| 1.0.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 初始创建：覆盖 ENGLISH_WORLD_SHORT 内容路由、教学字段装配、合规策略与全流程渲染 |
+"""
+
+import json
+from pathlib import Path
+import pytest
+from PIL import Image
+from src.cover.semantic import SemanticAnalyzer
+from src.cover.layout import LayoutComposer, _format_quote_en_html
+from src.cover.engine import CoverEngine
+from src.cover.english_world import build_english_world_cover_payload, validate_english_world_cover_payload
+from src.cover.antigravity import accept_and_normalize, build_agy_prompt, build_visual_brief
+from video_processing.core.cover_policy import assert_template_respects_cover_policy, validate_dedicated_cover_file
+
+
+def test_quote_en_html_highlighting():
+    """测试重点生词的 HTML 安全转义与高亮注入"""
+    quote = "To put it simply, they are houses for computers or computing power and storage."
+    highlights = ["houses", "computing power", "storage"]
+    result = _format_quote_en_html(quote, highlights)
+    assert '<span class="hl">houses</span>' in result
+    assert '<span class="hl">computing power</span>' in result
+    assert '<span class="hl">storage</span>' in result
+
+
+def test_semantic_analyzer_english_world_routing():
+    """测试 content_type=ENGLISH_WORLD_SHORT 优先路由到报刊模板"""
+    rules_path = Path("resources/cover/rules.json")
+    analyzer = SemanticAnalyzer(rules_path)
+
+    # 1. 显式 content_type 触发
+    signal = analyzer.analyze({"content_type": "ENGLISH_WORLD_SHORT", "title": "数据中心科普"})
+    assert signal.id == "english_world_newspaper"
+    assert signal.template_variant == "cover_english_newspaper"
+    assert signal.default_badge == "世界英语新闻精读"
+    assert signal.base_gradient == "newspaper_ivory"
+    assert signal.accent == "crimson_academic"
+
+    # 2. 关键词模糊触发
+    signal_kw = analyzer.analyze({"title": "外刊精读：全球算力底座调查"})
+    assert signal_kw.template_variant == "cover_english_newspaper"
+
+
+def test_layout_composer_english_world_spec():
+    """测试 LayoutComposer 装配完整的英语教学载荷"""
+    payload = {
+        "content_type": "ENGLISH_WORLD_SHORT",
+        "title": "数据中心像一座电脑的房子",
+        "subtitle": "● 科技科普 · 原声双语精读",
+        "quote_en": "To put it simply, they are houses for computers.",
+        "quote_zh": "简单说，它们就像容纳大量电脑的房子。",
+        "highlight_words": ["houses", "computers"],
+        "vocab_items": [
+            {"word": "computing power", "ipa": "/kəmˈpjuːtɪŋ ˈpaʊər/", "meaning": "n. 算力", "level": "CET-4"},
+            {"word": "data center", "ipa": "/ˈdeɪtə ˈsentər/", "meaning": "n. 数据中心", "level": "外刊高频"}
+        ],
+        "difficulty_tag": "★★★☆☆ (中高考 / 四六级)",
+        "audio_source": "CBC Kids News 原声",
+        "date_str": "2026.08.24 今日外刊打卡"
+    }
+
+    analyzer = SemanticAnalyzer(Path("resources/cover/rules.json"))
+    signal = analyzer.analyze(payload)
+    theme_mock = {
+        "accent_color": "#A53C2B",
+        "accent_glow": "0 0 20px rgba(165,60,43,0.4)",
+        "background_gradient_start": "#FBF9F4",
+        "background_gradient_end": "#F5EFE6",
+        "noise_opacity": 0.02,
+        "grid_color": "rgba(165,60,43,0.03)",
+        "orbs": []
+    }
+
+    composer = LayoutComposer()
+    spec = composer.compose(payload, signal, theme_mock)
+
+    assert spec["template_variant"] == "cover_english_newspaper"
+    assert spec["badge"] == "世界英语新闻精读"
+    assert spec["quote_en"] == "To put it simply, they are houses for computers."
+    assert '<span class="hl">houses</span>' in spec["quote_en_html"]
+    assert len(spec["vocab_items"]) >= 2
+    assert spec["difficulty_tag"] == "★★★☆☆ (中高考 / 四六级)"
+    assert spec["audio_source"] == "CBC Kids News 原声"
+
+
+def test_timeline_payload_uses_ranked_words_and_verifiable_stat():
+    """词卡和难度必须来自课程等级，不能取词表的前两项或写死阶段目标。"""
+    timeline = {
+        "headline_zh": "数据中心像一座电脑的房子",
+        "english_text": "Computing power needs storage. The first sentence ends here.",
+        "translation_zh": "算力需要存储。第一句到此结束。",
+        "source_provenance": {"publisher": "CBC Kids News"},
+        "vocabulary_selection": {"lexical_word_count": 37, "selected_count": 10},
+        "vocabulary_candidates": [
+            {"word": "power", "phonetic": "paʊər", "context_meaning_zh": "n. 力量", "recommended_level": "高考", "friendly_tag": "进阶词"},
+            {"word": "computing", "phonetic": "kəmˈpjuːtɪŋ", "context_meaning_zh": "adj. 计算的", "recommended_level": "CET-4", "friendly_tag": "进阶词"},
+            {"word": "storage", "phonetic": "stɔːrɪdʒ", "context_meaning_zh": "n. 存储", "recommended_level": "高考", "friendly_tag": "进阶词"},
+            {"word": "they're", "phonetic": "ðeə", "context_meaning_zh": "他们是", "recommended_level": "Master", "friendly_tag": "新闻高阶词"},
+        ],
+    }
+
+    payload = build_english_world_cover_payload(timeline, date_str="2026.08.24 今日外刊打卡")
+    assert [item["word"] for item in payload["vocab_items"]] == ["computing", "storage"]
+    assert payload["difficulty_tag"] == "★★★☆☆ (中高考 / 四六级)"
+    assert payload["vocab_stat"] == "本篇 37 词 · 10 个重点"
+    assert payload["subtitle"] == "● 英语新闻 · 原声双语精读"
+    assert payload["quote_zh"] == "算力需要存储。"
+    assert validate_english_world_cover_payload(payload)["content_type"] == "ENGLISH_WORLD_SHORT"
+
+
+def test_long_chinese_title_is_balanced_into_two_lines():
+    """长中文标题不能在封面上留下单字孤行。"""
+    composer = LayoutComposer()
+    signal = SemanticAnalyzer(Path("resources/cover/rules.json")).analyze({"content_type": "ENGLISH_WORLD_SHORT"})
+    theme = CoverEngine().registry.resolve(signal)
+    layout = composer.compose({"content_type": "ENGLISH_WORLD_SHORT", "title": "数据中心像一座电脑的房子"}, signal, theme)
+    assert layout["title_lines"] == ["数据中心像一座", "电脑的房子"]
+
+
+def test_antigravity_visual_contract_is_text_free_and_uses_local_fact(tmp_path):
+    """Gemini 只能获得已有事实，候选必须通过 OCR 无字门禁后才可合成。"""
+    timeline = {
+        "source_provenance": {"source_title": "What are data centres?", "publisher": "CBC Kids News"},
+    }
+    payload = {
+        "title": "数据中心像一座电脑的房子",
+        "quote_en": "They are houses for computing power.",
+    }
+    brief = build_visual_brief(timeline, payload)
+    prompt = build_agy_prompt(brief, tmp_path / "candidate.png")
+    assert brief["source_title"] == "What are data centres?"
+    assert "no text" in prompt.lower()
+    source = tmp_path / "source.png"
+    Image.new("RGB", (900, 1050), "#1F2937").save(source)
+    evidence = accept_and_normalize(source, tmp_path / "visual.png")
+    assert evidence["machine_visual_review"] == "ocr_empty"
+    assert evidence["dimensions"] == {"width": 1080, "height": 1260}
+
+
+def test_cover_template_policy_compliance():
+    """验证 cover_english_newspaper.html.j2 满足严格的封面合规门禁"""
+    template_path = Path("resources/cover/template/cover_english_newspaper.html.j2")
+    assert template_path.exists()
+    content = template_path.read_text(encoding="utf-8")
+    # 不抛出 ValueError
+    assert_template_respects_cover_policy(content, template_path)
+    assert "editorial-visual" in content
+    assert "background-image: url" in content
+
+
+def test_cover_engine_e2e_planning():
+    """测试 CoverEngine 完整规划流程"""
+    engine = CoverEngine()
+    payload = {
+        "content_type": "ENGLISH_WORLD_SHORT",
+        "title": "哥伦比亚救援英语精读",
+        "quote_en": "Hope rises in the Colombian rainforest.",
+        "quote_zh": "希望在哥伦比亚雨林中升起。"
+    }
+    layout = engine.plan(payload)
+    assert layout["style_id"] == "english_world_newspaper"
+    assert layout["template_variant"] == "cover_english_newspaper"
+    assert layout["canvas_width"] == 1080
+    assert layout["canvas_height"] == 1260

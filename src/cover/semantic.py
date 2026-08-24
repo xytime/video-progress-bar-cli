@@ -5,6 +5,7 @@
 |---------|------------|------------------------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，根据 content_hints 和标题关键字匹配视觉信号和主题颜色 |
 | 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 将 template_variant 字段加入 ContentSignal，支持 rules.json 自定义模板变体 |
+| 1.2.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 新增 ENGLISH_WORLD_SHORT 内容生产类型优先路由，直通专属报刊精读模板 |
 """
 
 import json
@@ -61,6 +62,32 @@ class SemanticAnalyzer:
         """
         根据标题、副标题和 hints 匹配对应的视觉主题规则
         """
+        # 0. [Gemini_3.7_Flash_High_planning] 优先检查 content_type，ENGLISH_WORLD_SHORT 直通专属报刊模板
+        content_type = str(payload.get("content_type") or "").strip().upper()
+        if content_type == "ENGLISH_WORLD_SHORT" or payload.get("template_variant") == "cover_english_newspaper":
+            for rule in self.rules:
+                if rule.get("id") == "english_world_newspaper":
+                    return ContentSignal(
+                        id=rule["id"],
+                        accent=rule["accent"],
+                        base_gradient=rule["base_gradient"],
+                        metaphor=rule["metaphor"],
+                        metaphor_placement=rule["metaphor_placement"],
+                        emotion_temperature=rule["emotion_temperature"],
+                        default_badge=rule.get("default_badge", "世界英语新闻精读"),
+                        template_variant=rule.get("template_variant", "cover_english_newspaper"),
+                    )
+            return ContentSignal(
+                id="english_world_newspaper",
+                accent="crimson_academic",
+                base_gradient="newspaper_ivory",
+                metaphor="graduation-cap",
+                metaphor_placement="top-right",
+                emotion_temperature="warm",
+                default_badge="世界英语新闻精读",
+                template_variant="cover_english_newspaper",
+            )
+
         title = payload.get("title", "").lower()
         subtitle = payload.get("subtitle", "").lower()
         content_hints = [h.lower() for h in payload.get("content_hints", [])]

@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>English World Newspaper Cover</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    width: {{ canvas_width }}px;
+    height: {{ canvas_height }}px;
+    background: #FBF9F4;
+    font-family: -apple-system, BlinkMacSystemFont, "Source Han Serif CN", "Songti SC", "PingFang SC", serif;
+    color: #1E1A18;
+    padding: 40px 48px;
+    position: relative;
+    border: 14px solid #EFEAE0;
+    overflow: hidden;
+  }
+  
+  /* 顶部报头 */
+  .masthead {
+    border-bottom: 3px double #1E1A18;
+    padding-bottom: 16px;
+    margin-bottom: 22px;
+  }
+  .masthead-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .brand-badge {
+    background: #A53C2B;
+    color: #FFFFFF;
+    font-size: 30px;
+    font-weight: 800;
+    padding: 6px 22px;
+    letter-spacing: 2px;
+    border-radius: 4px;
+    display: inline-block;
+  }
+  .masthead-slogan {
+    font-size: 24px;
+    font-weight: 700;
+    color: #6E625A;
+    letter-spacing: 2px;
+  }
+  .masthead-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 20px;
+    color: #8C7E72;
+    border-top: 1px solid #D8CFC4;
+    padding-top: 8px;
+    font-weight: 600;
+  }
+
+  /* 主标题区 */
+  .title-section {
+    margin-bottom: 18px;
+  }
+  .category-tag {
+    font-size: 24px;
+    color: #A87914;
+    font-weight: 800;
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+  }
+  .main-title {
+    font-size: 84px;
+    font-weight: 900;
+    line-height: 1.16;
+    color: #1E1A18;
+    margin-bottom: 8px;
+    text-shadow: 0 2px 4px rgba(30, 26, 24, 0.12);
+    -webkit-text-stroke: 1px rgba(30, 26, 24, 0.15);
+    letter-spacing: -3px;
+  }
+
+  /* 英文精读引用区 */
+  .quote-container {
+    background: #F3ECE0;
+    border-left: 8px solid #A53C2B;
+    padding: 22px 28px;
+    border-radius: 0 12px 12px 0;
+    margin-bottom: 24px;
+  }
+  .quote-label {
+    font-size: 20px;
+    font-weight: 800;
+    color: #A53C2B;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 8px;
+  }
+  .quote-en {
+    font-family: "Baskerville", "Georgia", serif;
+    font-size: 34px;
+    line-height: 1.32;
+    font-style: italic;
+    color: #2D241E;
+    margin-bottom: 10px;
+  }
+  .quote-en .hl {
+    background: #F8D6CD;
+    color: #A53C2B;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    font-style: normal;
+  }
+  .quote-zh {
+    font-size: 26px;
+    color: #5A4E44;
+    line-height: 1.4;
+  }
+
+  /* 核心生词卡栏 */
+  .vocab-section {
+    background: #FFFFFF;
+    border: 2px solid #E6DDD0;
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+  }
+  .vocab-title {
+    font-size: 20px;
+    font-weight: 800;
+    color: #8C7E72;
+    margin-bottom: 14px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .vocab-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+  .vocab-item {
+    background: #FAF7F0;
+    border-radius: 8px;
+    padding: 12px 14px;
+    border-left: 4px solid #A87914;
+    min-width: 0;
+  }
+  .vocab-word {
+    font-family: "Baskerville", serif;
+    font-size: 26px;
+    font-weight: 700;
+    color: #1E1A18;
+    overflow-wrap: anywhere;
+  }
+  .vocab-ipa {
+    display: block;
+    font-size: 19px;
+    color: #6E625A;
+    margin-top: 2px;
+    overflow-wrap: anywhere;
+  }
+  .vocab-def {
+    font-size: 18px;
+    color: #4A3E34;
+    margin-top: 4px;
+    line-height: 1.32;
+    overflow-wrap: anywhere;
+  }
+  .vocab-level {
+    display: inline-block;
+    font-size: 16px;
+    background: #F1E9DA;
+    color: #785A18;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 700;
+    margin-top: 4px;
+  }
+
+  /* Gemini 无字主视觉：仅占用底部留白，不覆盖任何学习文字。 */
+  .editorial-visual {
+    position: absolute;
+    left: 48px;
+    right: 48px;
+    bottom: 112px;
+    height: 174px;
+    border: 2px solid #E6DDD0;
+    border-radius: 12px;
+    background-position: center 78%;
+    background-repeat: no-repeat;
+    background-size: cover;
+  }
+
+  /* 底部状态栏 */
+  .footer-bar {
+    position: absolute;
+    bottom: 28px;
+    left: 48px;
+    right: 48px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 2px solid #D8CFC4;
+    padding-top: 14px;
+  }
+  .footer-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 22px;
+    font-weight: 700;
+    color: #A53C2B;
+  }
+  .footer-right {
+    font-size: 20px;
+    color: #6E625A;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+  <div class="masthead">
+    <div class="masthead-top">
+      <div class="brand-badge">{{ badge or "世界英语新闻精读" }}</div>
+      <div class="masthead-slogan">DAILY NEWS · SHADOWING STUDY</div>
+    </div>
+    <div class="masthead-meta">
+      <span>{{ date_str or "今日外刊打卡" }}</span>
+      <span>难度：{{ difficulty_tag or "★★★☆☆ (中高考 / 四六级)" }}</span>
+      <span>{{ vocab_stat or "本篇核心词汇" }}</span>
+    </div>
+  </div>
+
+  <div class="title-section">
+    <div class="category-tag">{{ subtitle or "● 英语时事 · 原声双语精读" }}</div>
+    <h1 class="main-title">{% for line in title_lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</h1>
+  </div>
+
+  {% if quote_en %}
+  <div class="quote-container">
+    <div class="quote-label">★ 精选原声金句 / KEY SENTENCE</div>
+    <div class="quote-en">
+      "{{ quote_en_html | safe }}"
+    </div>
+    {% if quote_zh %}
+    <div class="quote-zh">
+      {{ quote_zh }}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if vocab_items %}
+  <div class="vocab-section">
+    <div class="vocab-title">
+      <span>📌 本篇核心词汇卡 (FOCUS VOCABULARY)</span>
+      <span>{{ vocab_items | length }} 个核心词</span>
+    </div>
+    <div class="vocab-grid">
+      {% for item in vocab_items[:2] %}
+      <div class="vocab-item">
+        <span class="vocab-word">{{ item.word }}</span>
+        {% if item.ipa %}<span class="vocab-ipa">{{ item.ipa }}</span>{% endif %}
+        <div class="vocab-def">{{ item.meaning }}</div>
+        <div class="vocab-level">{{ item.level or "外刊高频" }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if has_visual_asset %}
+  <div class="editorial-visual" style="background-image: url('{{ visual_asset_url }}');"></div>
+  {% endif %}
+
+  <div class="footer-bar">
+    <div class="footer-left">
+      <span>🎧 {{ audio_source or "原声精选" }}</span>
+      <span>·</span>
+      <span>逐词红线跟随</span>
+      <span>·</span>
+      <span>微笔记精讲</span>
+    </div>
+    <div class="footer-right">
+      <span>长按点赞 · 每日打卡</span>
+    </div>
+  </div>
+</body>
+</html>

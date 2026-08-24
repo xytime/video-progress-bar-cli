@@ -1,6 +1,18 @@
 {
   "rules": [
     {
+      "id": "english_world_newspaper",
+      "hints": ["english_world", "english_world_short", "study_card", "english_learning", "english_study"],
+      "keywords": ["英语世界", "外刊精读", "原声精读", "时文精读", "英语新闻", "英语打卡"],
+      "accent": "crimson_academic",
+      "base_gradient": "newspaper_ivory",
+      "metaphor": "graduation-cap",
+      "metaphor_placement": "top-right",
+      "emotion_temperature": "warm",
+      "default_badge": "世界英语新闻精读",
+      "template_variant": "cover_english_newspaper"
+    },
+    {
       "id": "policy_security",
       "hints": ["policy", "crypto", "geopolitics", "sanction", "military", "nuclear"],
       "keywords": ["和谈", "政策", "隐私", "加密", "量子", "安全", "监控", "法案", "制裁", "军事", "冲突", "选举", "总统", "峰会", "战争", "地缘"],

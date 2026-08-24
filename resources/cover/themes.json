@@ -79,9 +79,20 @@
         {"cx_pct": -0.2, "cy_pct": 0.2, "radius_pct": 0.7, "color_rgba": [236, 72, 153, 140]},
         {"cx_pct": 1.1, "cy_pct": 0.85, "radius_pct": 0.6, "color_rgba": [168, 85, 247, 130]}
       ]
+    },
+    "newspaper_ivory": {
+      "background_gradient_start": "#FBF9F4",
+      "background_gradient_end": "#F5EFE6",
+      "noise_opacity": 0.02,
+      "grid_color": "rgba(165,60,43,0.03)",
+      "orbs": []
     }
   },
   "accents": {
+    "crimson_academic": {
+      "color": "#A53C2B",
+      "glow": "0 0 20px rgba(165,60,43,0.4)"
+    },
     "cyan_pulsing": {
       "color": "#00f0ff",
       "glow": "0 0 30px rgba(0,240,255,0.6)"

@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-22 | Codex | 新增每日英语世界短视频的 Telegram 审核材料通知。 |
 | 1.1.0 | 2026-08-23 | Codex | 审核回执绑定独立发布包与一次性 Telegram 审批按钮，避免模糊文字误投。 |
+| 1.2.0 | 2026-08-24 | Codex | 封面只接受 enriched timeline，并将实际投稿封面发送给人工审核。 |
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ def _post_document(path: Path, caption: str) -> None:
 
 
 def _load_timeline(manifest_path: Path) -> dict:
-    """读取与成片同目录的审核时间线；缺失时仍可用命令行标题建立最小发布包。"""
+    """读取与成片同目录的 enriched timeline；缺失时由调用方拒绝建立审核包。"""
     timeline_path = manifest_path.parent / "timeline_final_enriched.json"
     if not timeline_path.is_file():
         return {}
@@ -92,6 +93,8 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
         raise ValueError("审核回执只接受 content_type=ENGLISH_WORLD_SHORT 的学习卡")
 
     timeline = _load_timeline(manifest)
+    if not timeline:
+        raise ValueError("英语世界审核包缺少 enriched timeline，拒绝生成无来源封面")
     provenance = timeline.get("source_provenance") if isinstance(timeline.get("source_provenance"), dict) else {}
     headline = str(timeline.get("headline_zh") or display_title).strip()
     if not headline:
@@ -103,6 +106,7 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
     copy_path = package_dir / "copy.txt"
     cover_path = package_dir / "cover.jpg"
     cover_provenance_path = package_dir / "cover_provenance.json"
+    cover_payload_path = package_dir / "cover_payload.json"
     title_path.write_text(_short_wechat_title(headline), encoding="utf-8")
     source_publisher = str(provenance.get("publisher") or provenance.get("source_channel") or "").strip()
     source_url = str(provenance.get("source_url") or "").strip()
@@ -116,20 +120,21 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
         encoding="utf-8",
     )
     if not validate_dedicated_cover_file(cover_path, cover_provenance_path):
-        payload = {
-            "title": _short_wechat_title(headline),
-            "content_type": "ENGLISH_WORLD_SHORT",
-            "audio_edition": "original_audio_subtitled",
-            "content_hints": [str(provenance.get("selection_reason") or "英语学习")[:80]],
-        }
+        timeline_path = manifest.parent / "timeline_final_enriched.json"
+        command = [
+            str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
+            str(_PROJECT_ROOT / "scripts" / "generate_english_cover.py"),
+        ]
+        if not timeline_path.is_file():
+            raise ValueError("英语世界审核包缺少 enriched timeline，拒绝生成无来源封面")
+        command.extend(["--timeline", str(timeline_path)])
+        command.extend([
+            "--output", str(cover_path),
+            "--provenance-output", str(cover_provenance_path),
+            "--payload-output", str(cover_payload_path),
+        ])
         result = subprocess.run(
-            [
-                str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
-                str(_PROJECT_ROOT / "scripts" / "cover_generator.py"),
-                "--payload", json.dumps(payload, ensure_ascii=False),
-                "--output", str(cover_path),
-                "--provenance-output", str(cover_provenance_path),
-            ],
+            command,
             cwd=str(_PROJECT_ROOT), capture_output=True, text=True, timeout=180,
         )
         if result.returncode != 0 or not validate_dedicated_cover_file(cover_path, cover_provenance_path):
@@ -208,6 +213,7 @@ def main() -> int:
     if state != "READY_FOR_REVIEW":
         message += f"\n\n当前状态：<code>{html.escape(state)}</code>；为避免重复投稿，已不提供提交按钮。"
     _post_message(message, reply_markup=markup)
+    _post_document(Path(str(review_item["cover_path"])), "英语世界投稿封面｜请与成片一并审核，尚未提交视频号")
     _post_document(args.mp4, "英语世界短视频成片｜待审核，未提交视频号")
     _post_document(args.manifest, "英语世界短视频 manifest｜审核证据")
     return 0
