@@ -8,6 +8,7 @@
 | 1.2.0 | 2026-08-24 | Codex | 覆盖 Hook 不能只保留 TED/讲者元信息。 |
 | 1.4.0 | 2026-08-24 | Codex | 覆盖嘉宾 TED 起句及姓名加演讲的元信息变体。 |
 | 1.5.0 | 2026-08-24 | Codex | 保留来源感知的事实审查职责，表面合同不臆断事件方向。 |
+| 1.6.0 | 2026-08-24 | Codex | 覆盖纯人名、从句残片和孤立尾号的发布标题拒绝。 |
 """
 
 from __future__ import annotations
@@ -43,6 +44,9 @@ def test_title_bundle_normalizes_all_surfaces():
         ("美债收益率飙升", "美债收益率飙升重创科技股并引发全球市场资金重新配置"),
         ("美债收益率冲击市场", "AI狂飙抢占芯片产能下"),
         ("演讲者探讨AI未来", "TED演讲谈开启新生活"),
+        ("LeAnnFoster", "LeAnnFoster谈人生智慧"),
+        ("尽管存栏量创历史新低", "尽管存栏量创历史新低，市场仍承压"),
+        ("最高法院裁定关税非法1", "最高法院裁定关税非法并启动退税"),
     ],
 )
 def test_title_bundle_rejects_residual_fragments(platform_title: str, display_title: str):

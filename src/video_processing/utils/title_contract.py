@@ -12,6 +12,7 @@
 | 1.2.0 | 2026-08-24 | Codex | Hook 同样拒绝纯 TED/讲者元信息，避免封面副标题无信息价值。 |
 | 1.4.0 | 2026-08-24 | Codex | 收紧嘉宾 TED 起句及姓名加演讲的 Hook，统一过滤演讲元信息变体。 |
 | 1.5.0 | 2026-08-24 | Codex | 移除无来源上下文的结果断言，事实方向仍交由来源感知的质量评估器。 |
+| 1.6.0 | 2026-08-24 | Codex | 拒绝纯外文人名、让步从句残片和中文正文后的孤立数字，避免低信息标题进入发布链路。 |
 """
 
 from __future__ import annotations
@@ -38,6 +39,9 @@ _LOW_INFORMATION_HOOK = re.compile(
 )
 _SPEAKER_METADATA_TITLE = re.compile(r"^(?:嘉宾|讲者|主讲人).*(?:TEDx?|演讲)")
 _SPEAKER_METADATA_HOOK = re.compile(r"^[A-Za-z][A-Za-z.\-]{5,}(?:演讲|分享)$")
+_INCOMPLETE_CLAUSE_PREFIX = re.compile(r"^(?:尽管|虽然|即使|即便|哪怕|因为|由于|如果|随着|当)")
+_CJK = re.compile(r"[\u4e00-\u9fff]")
+_ORPHAN_TRAILING_DIGIT = re.compile(r"(?<=[\u4e00-\u9fff])\d$")
 
 
 @dataclass(frozen=True)
@@ -106,6 +110,12 @@ def _validate_title(value: str, *, field_name: str, min_length: int, max_length:
         raise TitleContractError(f"{field_name} 不能以分隔标点开头或结尾")
     if _INCOMPLETE_NUMERIC_QUESTION.fullmatch(normalized):
         raise TitleContractError(f"{field_name} 是不完整的数字疑问残句")
+    if not _CJK.search(normalized):
+        raise TitleContractError(f"{field_name} 缺少中文内容主旨")
+    if _INCOMPLETE_CLAUSE_PREFIX.match(normalized):
+        raise TitleContractError(f"{field_name} 以从句连接词开头，语义不完整")
+    if _ORPHAN_TRAILING_DIGIT.search(normalized):
+        raise TitleContractError(f"{field_name} 以中文正文后的孤立数字结尾")
     if _DANGLING_ENDING.search(normalized):
         raise TitleContractError(f"{field_name} 以悬空虚词结尾")
     if _LOW_INFORMATION_TITLE.search(normalized):
