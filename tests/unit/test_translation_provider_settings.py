@@ -24,7 +24,7 @@ from config.settings import Settings  # noqa: E402
 def test_default_subtitle_translation_provider_order():
     settings = Settings(_env_file=None)
 
-    assert settings.subtitle_translation_provider_order_list == ["gemini", "deepseek", "google"]
+    assert settings.subtitle_translation_provider_order_list == ["agy", "deepseek", "gemini", "google"]
 
 
 def test_subtitle_translation_provider_order_filters_unknowns_and_duplicates():
@@ -39,7 +39,13 @@ def test_subtitle_translation_provider_order_filters_unknowns_and_duplicates():
 def test_empty_subtitle_translation_provider_order_falls_back_to_default():
     settings = Settings(_env_file=None, subtitle_translation_provider_order="unknown,,")
 
-    assert settings.subtitle_translation_provider_order_list == ["gemini", "deepseek", "google"]
+    assert settings.subtitle_translation_provider_order_list == ["agy", "deepseek", "gemini", "google"]
+
+
+def test_dubbing_refinement_provider_order_defaults_to_agy_then_deepseek():
+    settings = Settings(_env_file=None)
+
+    assert settings.dubbing_script_refinement_provider_order_list == ["agy", "deepseek"]
 
 
 def test_translation_provider_env_example_documents_required_keys():

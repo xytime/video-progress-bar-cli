@@ -17,6 +17,7 @@
 | 1.1.1 | 2026-08-01 | Codex | TTS 时长失配时自动短写一次并重合成，减少人工卡在 NEEDS_REWRITE          |
 | 1.1.2 | 2026-08-03 | Codex | 译制版封面来源清单追加无大面积遮罩版式硬门槛                           |
 | 1.2.0 | 2026-08-03 | Codex | 按源频道选择专属火山声音复刻档案；未命中保持 MiniMax 默认回退            |
+| 1.2.1 | 2026-08-24 | Codex | 持久化 agy/DeepSeek 普通话精修尝试审计，便于上线后质量与降级巡检        |
 """
 
 from __future__ import annotations
@@ -245,7 +246,8 @@ class DubbingService:
             self.db.update_dubbing_job(job["id"], "NEEDS_REWRITE", error_message=f"第 {ordinal} 段无法自然对齐，需改写中文稿。")
             raise RuntimeError("脚本精修未启用，无法自动短写失配片段。")
         try:
-            rewritten = DubbingScriptRefiner().shorten_for_timing(
+            refiner = DubbingScriptRefiner()
+            rewritten = refiner.shorten_for_timing(
                 chunk,
                 video_title=self._display_title(job),
                 actual_ms=actual_ms,
@@ -264,6 +266,7 @@ class DubbingService:
             "source_text": chunk.get("source_text") or "",
             "before": chunk.get("zh_text") or "",
             "after": rewritten,
+            "provider_attempts": refiner.last_attempts,
         }
         path = workspace / "timing_rewrites.json"
         records: List[Dict[str, Any]] = []
@@ -558,10 +561,14 @@ class DubbingService:
         """把历史机器译稿收敛为可直接朗读的普通话稿，并保存版本化审计产物。"""
         if not settings.dubbing_deepseek_script_refinement:
             return chunks
-        refined = DubbingScriptRefiner().refine(chunks, video_title=self._display_title(job))
+        refiner = DubbingScriptRefiner()
+        refined = refiner.refine(chunks, video_title=self._display_title(job))
         path = workspace / "refined_script.json"
         path.write_text(json.dumps(refined, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         self.db.upsert_dubbing_artifact(job["id"], "refined_script", str(path), sha256=self._sha256(path))
+        audit_path = workspace / "script_refinement_attempts.json"
+        audit_path.write_text(json.dumps(refiner.last_attempts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        self.db.upsert_dubbing_artifact(job["id"], "script_refinement_attempts", str(audit_path), sha256=self._sha256(audit_path))
         return refined
 
     def _source_date_stamp(self, job: Dict[str, Any]) -> Optional[str]:

@@ -50,7 +50,7 @@ class DubbingScriptRefiner:
                 rewrites = self._refine_batch_agy(chunks, video_title=video_title) if provider == "agy" else self._refine_batch_deepseek(chunks, video_title=video_title)
             except Exception as exc:  # provider failure must reach the next configured fallback
                 self._record_attempt("refine", provider, started, "FAILED", str(exc))
-                errors.append(f"{provider}: {type(exc).__name__}")
+                errors.append(f"{provider}: {str(exc)[:240]}")
                 continue
             self._record_attempt("refine", provider, started, "SUCCEEDED")
             return rewrites
@@ -121,7 +121,7 @@ class DubbingScriptRefiner:
                 rewritten = self._shorten_with_agy(chunk, video_title, actual_ms, target_ms, budget_chars) if provider == "agy" else self._shorten_with_deepseek(chunk, video_title, actual_ms, target_ms, budget_chars)
             except Exception as exc:
                 self._record_attempt("shorten", provider, started, "FAILED", str(exc))
-                errors.append(f"{provider}: {type(exc).__name__}")
+                errors.append(f"{provider}: {str(exc)[:240]}")
                 continue
             self._record_attempt("shorten", provider, started, "SUCCEEDED")
             return rewritten

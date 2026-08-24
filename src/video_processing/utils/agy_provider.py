@@ -1,7 +1,7 @@
 """agy CLI 的受限结构化文本调用封装。
 
-所有输入经 stdin 传递、在临时空目录内执行，并且只接受 JSON Schema 验证后的
-``structured_output``。本模块不保存 prompt、字幕或账号信息。
+输入作为无 shell 的单个进程参数传递、在临时空目录内执行，并且只接受 JSON
+Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕或账号信息。
 
 # Modification History
 | Version | Date | Author | Description |

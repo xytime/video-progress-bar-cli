@@ -35,6 +35,7 @@ def test_refiner_sends_thinking_request_and_preserves_chunk_order(monkeypatch):
 
     monkeypatch.setattr(settings, "deepseek_api_key", "test-key")
     monkeypatch.setattr(settings, "dubbing_deepseek_thinking_enabled", True)
+    monkeypatch.setattr(settings, "dubbing_script_refinement_provider_order", "deepseek")
     captured = {}
 
     def fake_urlopen(request, timeout):
@@ -56,6 +57,7 @@ def test_refiner_rejects_incomplete_alignment(monkeypatch):
     import video_processing.dubbing.script_refiner as module
 
     monkeypatch.setattr(settings, "deepseek_api_key", "test-key")
+    monkeypatch.setattr(settings, "dubbing_script_refinement_provider_order", "deepseek")
     monkeypatch.setattr(module.urllib.request, "urlopen", Mock(return_value=_Response({"choices": [{"message": {"content": '{"items":[{"id":0,"zh_text":"第一句。"}]}'}}]})))
 
     with pytest.raises(RuntimeError, match="数量或 ID 不完整"):
@@ -70,6 +72,7 @@ def test_refiner_shortens_single_timing_mismatch(monkeypatch):
     import video_processing.dubbing.script_refiner as module
 
     monkeypatch.setattr(settings, "deepseek_api_key", "test-key")
+    monkeypatch.setattr(settings, "dubbing_script_refinement_provider_order", "deepseek")
     captured = {}
 
     def fake_urlopen(request, timeout):
@@ -90,3 +93,39 @@ def test_refiner_shortens_single_timing_mismatch(monkeypatch):
 
     assert rewritten == "每天看华尔街真相炸弹，抢先懂市场。"
     assert "previous synthesized duration ms: 6800" in captured["messages"][1]["content"]
+
+
+def test_refiner_prefers_agy_and_records_success(monkeypatch):
+    from config.settings import settings
+    import video_processing.dubbing.script_refiner as module
+
+    monkeypatch.setattr(settings, "dubbing_script_refinement_provider_order", "agy,deepseek")
+    monkeypatch.setattr(module, "run_agy_structured", lambda *args, **kwargs: {"items": [{"id": 0, "zh_text": "自然口播。"}]})
+
+    refiner = DubbingScriptRefiner()
+    refined = refiner.refine([{"source_text": "Natural narration.", "zh_text": "自然旁白"}], video_title="测试")
+
+    assert refined[0]["zh_text"] == "自然口播。"
+    assert refiner.last_attempts[0]["provider"] == "agy"
+    assert refiner.last_attempts[0]["status"] == "SUCCEEDED"
+
+
+def test_refiner_falls_back_to_deepseek_when_agy_fails(monkeypatch):
+    from config.settings import settings
+    import video_processing.dubbing.script_refiner as module
+
+    monkeypatch.setattr(settings, "deepseek_api_key", "test-key")
+    monkeypatch.setattr(settings, "dubbing_script_refinement_provider_order", "agy,deepseek")
+    monkeypatch.setattr(module, "run_agy_structured", Mock(side_effect=module.AgyProviderError("quota")))
+    monkeypatch.setattr(
+        module.urllib.request,
+        "urlopen",
+        Mock(return_value=_Response({"choices": [{"message": {"content": '{"items":[{"id":0,"zh_text":"DeepSeek次选。"}]}'}}]})),
+    )
+
+    refiner = DubbingScriptRefiner()
+    refined = refiner.refine([{"source_text": "Fallback.", "zh_text": "降级。"}], video_title="测试")
+
+    assert refined[0]["zh_text"] == "DeepSeek次选。"
+    assert [attempt["provider"] for attempt in refiner.last_attempts] == ["agy", "deepseek"]
+    assert [attempt["status"] for attempt in refiner.last_attempts] == ["FAILED", "SUCCEEDED"]
