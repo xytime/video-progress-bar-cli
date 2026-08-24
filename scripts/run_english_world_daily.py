@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""每日英语世界短视频生产协调器：仅制作并发 Telegram 审核，不投稿。
+
+本入口由 LaunchAgent 直接以 Python 程序执行，避免 launchd 通过 shell 读取外接盘
+脚本时受 macOS 文件访问策略拦截。
+
+# Modification History
+# | Version | Date | Author | Description |
+# | --- | --- | --- | --- |
+# | 2.0.0 | 2026-08-24 | Codex | 以直接 Python 入口替代 shell 协调器，保留有界重试、锁、状态及 Telegram 失败回执。 |
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import TextIO
+
+
+DEFAULT_PROJECT_ROOT = Path("/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing")
+DEFAULT_CODEX_HOME = Path("/Users/ryusei/.codex")
+DEFAULT_CODEX_BIN = Path("/Users/ryusei/.local/bin/codex")
+
+PROMPT = """执行今日“英语世界短视频”无人值守制作任务。工作目录是 Video-precessing。
+
+这是独立的 ENGLISH_WORLD_SHORT 生产：不得编辑项目源码、不得修改通用频道白名单、不得调用 PipelineManager、wechat_uploader.py 或任何平台投稿/发布逻辑；绝不提交视频号。只允许生成学习卡素材和发送 Telegram 审核回执。
+
+来源仅限以下频道，并按频道 ID 严格核验：
+- CBC Kids News：UCWUA2W6LueNy9BSovivFVvQ
+- CBS Evening News：UCAeWdyKJXGWmVAXFpgLNNTg
+- ABC News：UCBi2mrWuNuyYy4gbM6fU18Q
+
+先搜索当天或近期未使用的候选，再检查标题、简介、英文字幕/转写和必要的画面。只能选择适合儿童与家庭学习者的自然、科学、教育、健康、文化、日常生活或正向人文题材。排除政治、战争、暴力、犯罪、灾害/疏散、令人不适的疾病画面、成人话题与强时政评论；不确定即放弃当天生产。
+
+若找到合格来源，按 make-english-world-short 技能和 production-contract 完整制作一条：自然完整句收尾；逐词红线；每个可见阅读屏至少 8 个微笔记；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。生产默认不超过 30 秒。完成后核验 MP4、音频收尾、manifest 与关键帧。
+
+质检通过后，必须运行以下命令把 MP4 和 manifest 发到 Telegram 人工审核：
+PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>'
+若当天无合格候选或制作/质检失败，必须运行：
+PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '今日英语世界短视频' --failure '<准确原因>'
+
+最终只报告真实状态、来源、证据路径与 Telegram 发送结果。不得将 Telegram 发送、素材生成或审核回执描述成视频号发布。"""
+
+
+@dataclass(frozen=True)
+class RuntimePaths:
+    project_root: Path
+    codex_home: Path
+    codex_bin: Path
+    python_bin: Path
+    notifier_script: Path
+    log_dir: Path
+    lock_dir: Path
+
+
+def _timestamp() -> str:
+    return datetime.now().strftime("%F %T %z")
+
+
+def _write_status(status_path: Path, phase: str, exit_code: int, attempts: int, run_log: Path, response_path: Path) -> None:
+    content = (
+        f"timestamp={_timestamp()}\nphase={phase}\nexit_code={exit_code}\nattempts={attempts}\n"
+        f"run_log={run_log}\nresponse_path={response_path}\n"
+    )
+    temporary_path = status_path.with_suffix(".tmp")
+    temporary_path.write_text(content, encoding="utf-8")
+    temporary_path.replace(status_path)
+
+
+def _log(stream: TextIO, message: str) -> None:
+    stream.write(f"[{_timestamp()}] {message}\n")
+    stream.flush()
+
+
+def _notify_failure(paths: RuntimePaths, reason: str, stream: TextIO) -> None:
+    if not paths.python_bin.is_file() or not paths.notifier_script.is_file():
+        _log(stream, "ERROR: cannot notify Telegram; notifier unavailable")
+        return
+    result = subprocess.run(
+        [str(paths.python_bin), str(paths.notifier_script), "--title", "今日英语世界短视频", "--failure", reason],
+        stdout=stream,
+        stderr=subprocess.STDOUT,
+        check=False,
+        text=True,
+    )
+    if result.returncode != 0:
+        _log(stream, f"ERROR: Telegram failure notifier exited {result.returncode}")
+
+
+def _run_coordinator(paths: RuntimePaths, response_path: Path, stream: TextIO) -> int:
+    command = [
+        str(paths.codex_bin), "exec", "--cd", str(paths.project_root), "--add-dir", "/Users/ryusei/.codex/skills",
+        "--sandbox", "danger-full-access", "-c", 'approval_policy="never"', "--output-last-message", str(response_path), PROMPT,
+    ]
+    environment = dict(os.environ)
+    environment["CODEX_HOME"] = str(paths.codex_home)
+    return subprocess.run(command, cwd=paths.project_root, env=environment, stdout=stream, stderr=subprocess.STDOUT, check=False, text=True).returncode
+
+
+def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -> int:
+    paths.log_dir.mkdir(parents=True, exist_ok=True)
+    paths.lock_dir.parent.mkdir(parents=True, exist_ok=True)
+    response_path = paths.log_dir / "last_codex_response.md"
+    status_path = paths.log_dir / "last_run_status.txt"
+    run_log = paths.log_dir / f"run_{datetime.now().strftime('%F_%H%M%S')}.log"
+    try:
+        paths.lock_dir.mkdir()
+    except FileExistsError:
+        with run_log.open("a", encoding="utf-8") as stream:
+            _log(stream, "skipped: daily English World run is already active")
+        _write_status(status_path, "SKIPPED_ACTIVE", 0, 0, run_log, response_path)
+        return 0
+
+    try:
+        with run_log.open("a", encoding="utf-8") as stream:
+            if not paths.codex_bin.is_file() or not os.access(paths.codex_bin, os.X_OK):
+                _log(stream, f"ERROR: Codex CLI is not executable: {paths.codex_bin}")
+                _write_status(status_path, "FAILED_BOOTSTRAP", 1, 0, run_log, response_path)
+                _notify_failure(paths, f"生产协调器未启动：Codex CLI 不可执行。运行日志：{run_log}", stream)
+                return 1
+            _log(stream, "starting daily English World production coordinator")
+            exit_code = 0
+            for attempt in range(1, max_attempts + 1):
+                _log(stream, f"coordinator attempt {attempt}/{max_attempts}")
+                exit_code = _run_coordinator(paths, response_path, stream)
+                if exit_code != 78 or attempt == max_attempts:
+                    break
+                _log(stream, f"Codex returned EX_CONFIG; retrying after {retry_delay_seconds:g}s")
+                time.sleep(retry_delay_seconds)
+            if exit_code == 0:
+                _write_status(status_path, "COORDINATOR_FINISHED", 0, attempt, run_log, response_path)
+                _log(stream, "coordinator exited successfully; inspect its Telegram receipt separately")
+                return 0
+            _write_status(status_path, "FAILED_COORDINATOR", exit_code, attempt, run_log, response_path)
+            _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。未生成可确认的今日审核成片，未触发视频号投稿。", stream)
+            return exit_code
+    finally:
+        try:
+            paths.lock_dir.rmdir()
+        except OSError:
+            pass
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--project-root", type=Path, default=DEFAULT_PROJECT_ROOT)
+    parser.add_argument("--codex-home", type=Path, default=DEFAULT_CODEX_HOME)
+    parser.add_argument("--codex-bin", type=Path, default=DEFAULT_CODEX_BIN)
+    parser.add_argument("--python-bin", type=Path)
+    parser.add_argument("--notifier-script", type=Path)
+    parser.add_argument("--log-dir", type=Path)
+    parser.add_argument("--lock-dir", type=Path)
+    parser.add_argument("--max-attempts", type=int, default=3)
+    parser.add_argument("--retry-delay-seconds", type=float, default=15)
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+    if args.max_attempts < 1:
+        raise ValueError("--max-attempts must be at least 1")
+    project_root = args.project_root.resolve()
+    paths = RuntimePaths(
+        project_root=project_root,
+        codex_home=args.codex_home,
+        codex_bin=args.codex_bin,
+        python_bin=args.python_bin or project_root / ".venv/bin/python",
+        notifier_script=args.notifier_script or project_root / "scripts/notify_english_world_review.py",
+        log_dir=args.log_dir or project_root / "output/english_world_daily",
+        lock_dir=args.lock_dir or project_root / "output/locks/english_world_daily.lock",
+    )
+    return run(paths, max_attempts=args.max_attempts, retry_delay_seconds=args.retry_delay_seconds)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

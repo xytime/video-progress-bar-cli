@@ -7,6 +7,7 @@
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 1.1.0 | 2026-08-23 | Codex | 为调度器建立系统卷持久日志目录，并在重载后输出实际 LaunchAgent 状态。 |
+# | 2.0.0 | 2026-08-24 | Codex | 改由 LaunchAgent 直接执行 Python 协调器，避免 shell 读取外接盘脚本被系统拦截。 |
 # | 1.0.0 | 2026-08-22 | Codex | 新增独立英语世界日更 LaunchAgent 安装器。 |
 
 set -euo pipefail
@@ -19,6 +20,10 @@ LAUNCHD_LOG_DIR="$HOME/Library/Logs/VideoPrecessing"
 USER_ID="$(id -u)"
 
 plutil -lint "$SOURCE_PLIST"
+[[ -f "$PROJECT_ROOT/scripts/run_english_world_daily.py" ]] || {
+    echo "英语世界 Python 协调器不存在：$PROJECT_ROOT/scripts/run_english_world_daily.py" >&2
+    exit 1
+}
 mkdir -p "$HOME/Library/LaunchAgents"
 mkdir -p "$PROJECT_ROOT/output/english_world_daily"
 mkdir -p "$LAUNCHD_LOG_DIR"
