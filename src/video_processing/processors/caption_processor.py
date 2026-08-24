@@ -42,6 +42,7 @@
 | 1.29.0 | 2026-07-13 | Codex | 动态模型池接入真实 provider 错误，按限流、权限、网络和解析问题冷却 |
 | 1.30.0 | 2026-07-13 | Codex | 字幕翻译逐视频写入 SQLite AI 审计，记录 provider 尝试、降级、质量和最终结果 |
 | 1.31.0 | 2026-08-24 | Codex | agy 以隔离 JSON Schema 调用作为首选，DeepSeek 保留为质量门后的次选 |
+| 1.32.0 | 2026-08-24 | Codex | 影子期恢复已批准生产顺序；模型池仅负责可用性和冷却筛除，不重排运营回退链。 |
 """
 import logging
 from pathlib import Path
@@ -506,16 +507,14 @@ class AutoCaptionProcessor(VideoProcessorBase):
         configured_providers = settings.subtitle_translation_provider_order_list
         if hasattr(settings, "enable_deepseek_vocab_fallback") and not settings.enable_deepseek_vocab_fallback:
             configured_providers = [provider for provider in configured_providers if provider != "deepseek"]
-        provider_order = pool.order(
+        eligible_providers = pool.order(
             configured_providers,
             required={"translate", "vocab"},
             # Gemini 的限流必须落到具体模型；不可让旧的 provider 冷却掩盖 3.1 Flash Lite 等余量。
             ignore_cooldown={"gemini"},
         )
-        # 用户明确要求 agy 作为首选；只有它正处于持久化冷却时才跳过。
-        if "agy" in configured_providers and "agy" in provider_order:
-            provider_order.remove("agy")
-            provider_order.insert(0, "agy")
+        # 环境配置是运营者批准的故障转移顺序；模型池只负责排除冷却/不兼容 provider。
+        provider_order = [provider for provider in configured_providers if provider in eligible_providers]
         arbiter = TranslationCandidateArbiter()
         for idx, provider in enumerate(provider_order):
             final_provider = idx == len(provider_order) - 1

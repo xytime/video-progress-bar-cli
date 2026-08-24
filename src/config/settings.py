@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.16.2 | 2026-08-24 | Codex | AGY 改为三天影子评估；生产默认恢复 Gemini→DeepSeek→Google，正式切换必须人工确认。 |
 | 3.46.0 | 2026-08-24 | Codex | 新增标题供应商顺序与 AGY 参数；默认 Gemini 且封面双标题消费关闭。 |
 | 3.45.0 | 2026-08-21 | Codex | Candidate-score cache TTL prevents minute-by-minute full rescoring. |
 | Version | Date | Author | Description |
@@ -157,14 +158,18 @@ class Settings(BaseSettings):
     aliyun_mt_access_key_id: Optional[str] = None
     aliyun_mt_access_key_secret: Optional[str] = None
 
-    # 字幕翻译供应商顺序，逗号分隔。主链路默认：agy → DeepSeek → Gemini → Google。
-    subtitle_translation_provider_order: str = "agy,deepseek,gemini,google"
+    # 字幕翻译生产链：影子期固定 Gemini → DeepSeek → Google；AGY 不得影响真实成片。
+    subtitle_translation_provider_order: str = "gemini,deepseek,google"
 
     # agy CLI：只在独立临时目录的 plan/sandbox 模式下调用，生产输出必须满足 JSON Schema。
     agy_command: str = "agy"
     agy_timeout_sec: int = 90
     agy_subtitle_model: str = "gemini-3.7-flash-high"
     agy_dubbing_model: str = "claude-sonnet-4-6"
+    # AGY 影子评估只读取已有双语 ASS 并输出不含字幕正文的比较报告。
+    enable_agy_subtitle_shadow_review: bool = False
+    agy_shadow_report_dir: str = "output/agy_shadow"
+    agy_shadow_max_segments: int = 80
 
     # DeepSeek OpenAI-compatible API（默认不启用；需把 deepseek 放入 subtitle_translation_provider_order）
     deepseek_api_key: Optional[str] = None
@@ -324,8 +329,8 @@ class Settings(BaseSettings):
     dubbing_deepseek_script_refinement: bool = True
     dubbing_deepseek_thinking_enabled: bool = True
     dubbing_deepseek_refinement_batch_size: int = 6
-    # 普通话精修：agy 首选，DeepSeek thinking 次选；agy 批次更大以保持叙事上下文。
-    dubbing_script_refinement_provider_order: str = "agy,deepseek"
+    # 普通话精修生产基线：AGY 影子期不影响已批准的 DeepSeek 路径。
+    dubbing_script_refinement_provider_order: str = "deepseek"
     dubbing_agy_refinement_batch_size: int = 12
     dubbing_subtitle_font_size: int = 72
     dubbing_subtitle_max_page_chars: int = 28
@@ -560,18 +565,18 @@ class Settings(BaseSettings):
             provider = item.strip().lower()
             if provider in allowed and provider not in providers:
                 providers.append(provider)
-        return providers or ["agy", "deepseek", "gemini", "google"]
+        return providers or ["gemini", "deepseek", "google"]
 
     @property
     def dubbing_script_refinement_provider_order_list(self) -> list[str]:
-        """普通话精修 provider 顺序；未知项忽略，空配置保持 agy→DeepSeek。"""
+        """普通话精修 provider 顺序；未知项忽略，空配置保持生产基线 DeepSeek。"""
         allowed = {"agy", "deepseek"}
         providers = []
         for item in (self.dubbing_script_refinement_provider_order or "").split(","):
             provider = item.strip().lower()
             if provider in allowed and provider not in providers:
                 providers.append(provider)
-        return providers or ["agy", "deepseek"]
+        return providers or ["deepseek"]
 
     @property
     def copywriter_title_provider_order_list(self) -> list[str]:
