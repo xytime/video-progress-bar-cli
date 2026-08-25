@@ -2534,6 +2534,33 @@ class PipelineDB:
             cursor = conn.execute("SELECT * FROM processed_videos WHERE status = ? ORDER BY score DESC", (status,))
             return [dict(row) for row in cursor.fetchall()]
 
+    def restore_login_required_videos(self) -> int:
+        """微信登录成功后恢复可安全续跑的登录阻断任务。
+
+        仅恢复仍处于 LOGIN_REQUIRED 且没有视频号提交账本的任务；评分、素材检查点和
+        retry_count 均保持不变，后续仍由正常调度器按发布线领取。已有提交/审核证据的
+        任务不因重新登录而获得重传机会。
+
+        # Modification History
+        | Version | Date       | Author | Description |
+        |---------|------------|--------|-------------|
+        | 1.0.0   | 2026-08-26 | Codex  | 统一微信登录成功后的安全任务恢复 |
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE processed_videos
+                   SET status = 'PENDING', error_msg = NULL, updated_at = CURRENT_TIMESTAMP
+                 WHERE status = 'LOGIN_REQUIRED'
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM wechat_publications wp
+                        WHERE wp.video_id = processed_videos.id
+                          AND wp.state IN ('PUBLISHED', 'UNDER_REVIEW', 'UNCERTAIN', 'REJECTED')
+                   )"""
+            )
+            conn.commit()
+            return cursor.rowcount
+
     def get_failed_videos_since(self, hours: int) -> List[Dict[str, Any]]:
         """取最近 N 小时内无视频号在途/成功账本的可批量重试失败任务。
         updated_at 用 SQLite datetime('now')(UTC) 比较，与 CURRENT_TIMESTAMP(UTC) 对齐，避免时区漂移。"""

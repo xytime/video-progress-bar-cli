@@ -32,3 +32,69 @@ def test_restore_login_required_after_wechat_login_resets_all_rows(monkeypatch):
         ("main-video", "PENDING", None, 0),
         ("slice-video", "PENDING", None, 2),
     ]
+
+
+def test_dal_restore_login_required_skips_submission_evidence(tmp_path):
+    from video_processing.db.database import PipelineDB
+
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    with db.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO processed_videos "
+            "(youtube_id, title, channel_id, status, score) VALUES (?, ?, ?, ?, ?)",
+            ("safe-video", "Safe", "channel", "LOGIN_REQUIRED", 81),
+        )
+        conn.execute(
+            "INSERT INTO processed_videos "
+            "(youtube_id, title, channel_id, status, score) VALUES (?, ?, ?, ?, ?)",
+            ("submitted-video", "Submitted", "channel", "LOGIN_REQUIRED", 90),
+        )
+        submitted_id = conn.execute(
+            "SELECT id FROM processed_videos WHERE youtube_id = 'submitted-video'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO publication_subjects (id, kind, video_id) VALUES (?, ?, ?)",
+            ("submitted-video", "VIDEO_ITEM", submitted_id),
+        )
+        conn.execute(
+            "INSERT INTO wechat_publications "
+            "(video_id, subject_id, state) VALUES (?, ?, ?)",
+            (submitted_id, "submitted-video", "UNDER_REVIEW"),
+        )
+        conn.commit()
+
+    assert db.restore_login_required_videos() == 1
+    with db.get_connection() as conn:
+        statuses = dict(conn.execute(
+            "SELECT youtube_id, status FROM processed_videos ORDER BY youtube_id"
+        ).fetchall())
+    assert statuses == {
+        "safe-video": "PENDING",
+        "submitted-video": "LOGIN_REQUIRED",
+    }
+
+
+def test_uploader_login_only_restores_tasks_after_existing_session_check(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from scripts import wechat_uploader
+
+    page = MagicMock()
+    page.url = wechat_uploader.WECHAT_CREATE_URL
+    context = MagicMock()
+    context.new_page.return_value = page
+    browser = MagicMock()
+    browser.new_context.return_value = context
+    playwright = MagicMock()
+    playwright.__enter__.return_value.chromium.launch.return_value = browser
+    restored = MagicMock(return_value=2)
+
+    monkeypatch.setattr(wechat_uploader, "sync_playwright", lambda: playwright)
+    monkeypatch.setattr(wechat_uploader, "_restore_login_required_tasks_after_login", restored)
+
+    assert wechat_uploader.run_uploader(
+        state_path=str(tmp_path / "wechat_state.json"),
+        login_only=True,
+    ) == 0
+    restored.assert_called_once_with()
+    browser.close.assert_called_once()

@@ -60,6 +60,7 @@
 | 3.18.7 | 2026-08-09 | Codex                               | 手动入队显式接收内容生产类型，支持英语世界短视频的持久化标识 |
 | 3.18.8 | 2026-08-11 | Codex                               | 视频号平台已受理但未公开的任务展示为 UNDER_REVIEW，禁止将其作为可重试或已完成状态 |
 | 3.18.9 | 2026-08-14 | Codex                               | 将平台待确认状态从实际加工计数中分离，避免仪表盘把已提交待回查误报为处理中 |
+| 3.18.10 | 2026-08-26 | Codex                              | 所有微信登录入口统一使用带平台提交证据保护的任务恢复逻辑 |
 """
 import hashlib
 import logging
@@ -192,6 +193,17 @@ def _restore_login_required_after_wechat_login() -> int:
     """微信重登成功后恢复因登录态失效暂停的任务，让既有调度器按分数线重发。"""
     import logging
 
+    restore = getattr(db, "restore_login_required_videos", None)
+    if restore is not None:
+        count = restore()
+        if count:
+            logging.getLogger(__name__).info(
+                "[WeChatLogin] Restored %s LOGIN_REQUIRED task(s) to PENDING after login success.",
+                count,
+            )
+        return count
+
+    # 兼容精简测试替身/旧外部调用者；生产 PipelineDB 始终走上面的原子 DAL 方法。
     rows = db.get_videos_by_status("LOGIN_REQUIRED")
     count = 0
     for row in rows:

@@ -50,6 +50,7 @@
 | 4.3.0   | 2026-08-25 | Codex                               | 修复合集列表选择器；新建后重新回选并校验 active，未确认绑定则阻断发表 |
 | 4.4.0   | 2026-08-25 | Codex                               | 合集绑定失败改为发表硬门禁；新增受限 macOS WeChat 桌面快捷授权与无点击预检入口 |
 | 4.5.0   | 2026-08-25 | Codex                               | 桌面授权监听改在网页快捷登录点击后启动，避免授权弹窗出现前耗尽观察窗口。 |
+| 4.6.0   | 2026-08-26 | Codex                               | 登录成功后统一恢复无提交证据的 LOGIN_REQUIRED 任务，避免 Telegram/直接入口遗漏补发 |
 """
 
 import os
@@ -110,6 +111,24 @@ MANAGEMENT_UNDER_REVIEW = "UNDER_REVIEW"
 MANAGEMENT_REJECTED = "REJECTED"
 MANAGEMENT_NOT_FOUND = "NOT_FOUND"
 MANAGEMENT_UNCERTAIN = "UNCERTAIN"
+
+
+def _restore_login_required_tasks_after_login() -> int:
+    """任何成功登录入口都恢复可安全续跑的微信任务。"""
+    try:
+        from video_processing.db.database import PipelineDB
+
+        restored = PipelineDB().restore_login_required_videos()
+        if restored:
+            logger.info(
+                "[WeChatLogin] Restored %s LOGIN_REQUIRED task(s) to PENDING after login success.",
+                restored,
+            )
+        return restored
+    except Exception:
+        # 登录本身已经成功；恢复失败必须可观测，但不能伪造登录失败或覆盖 state。
+        logger.exception("[WeChatLogin] Failed to restore LOGIN_REQUIRED tasks after login success.")
+        return 0
 
 
 def _default_cover_provenance_path(cover_file: Path) -> Path:
@@ -1144,6 +1163,7 @@ def run_uploader(
                     return 1
 
         if login_only:
+            _restore_login_required_tasks_after_login()
             logger.info("Login-only mode completed successfully.")
             browser.close()
             return 0
