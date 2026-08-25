@@ -14,6 +14,7 @@
 | 1.3.0 | 2026-08-25 | Codex | 递归枚举 WeChat 自绘窗口内容，并同时检查元素名称和值以定位实际申请提示。 |
 | 1.4.0 | 2026-08-25 | Codex | 在同一已确认申请窗口的深层元素中定位精确“允许”按钮，适配自绘按钮层级。 |
 | 1.5.0 | 2026-08-25 | Codex | 辅助功能树不暴露原生许可弹窗时，新增受限视觉定位后备，仅点击唯一的大号微信绿授权按钮。 |
+| 1.6.0 | 2026-08-25 | Codex | 视觉核验前受限激活 WeChat，避免其他前台应用遮挡原生许可框导致错误跳过。 |
 """
 
 from __future__ import annotations
@@ -112,6 +113,12 @@ _DESKTOP_BOUNDS_SCRIPT = r'''
 tell application "Finder" to get bounds of window of desktop
 '''
 
+_ACTIVATE_WECHAT_SCRIPT = r'''
+tell application "System Events"
+    tell process "WeChat" to set frontmost to true
+end tell
+'''
+
 
 @dataclass(frozen=True)
 class DesktopAuthPreflight:
@@ -181,6 +188,21 @@ def _logical_desktop_size() -> tuple[int, int] | None:
     return (width, height) if width > 0 and height > 0 else None
 
 
+def _activate_wechat() -> bool:
+    """只将 WeChat 置前；后续仍须通过视觉候选门禁才会点击。"""
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", _ACTIVATE_WECHAT_SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 def _find_visual_allow_button(image) -> tuple[int, int] | None:
     """返回唯一大号微信绿按钮中心；任何歧义均返回 None。"""
     try:
@@ -214,7 +236,10 @@ def _find_visual_allow_button(image) -> tuple[int, int] | None:
 
 
 def _try_visual_allow_click() -> bool:
-    """在已知 WeChat 前台且唯一视觉候选存在时，才执行一次全局“允许”点击。"""
+    """置前 WeChat 后仅在唯一视觉候选存在时，执行一次全局“允许”点击。"""
+    if not _activate_wechat():
+        return False
+    time.sleep(0.2)
     if _frontmost_process_name() != "WeChat":
         return False
     try:

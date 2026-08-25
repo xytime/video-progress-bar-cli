@@ -18,6 +18,7 @@ import numpy as np
 from scripts.wechat_desktop_auth import (
     WeChatDesktopAuthWatcher,
     _CLICK_AUTH_SCRIPT,
+    _activate_wechat,
     _find_visual_allow_button,
     desktop_auth_preflight,
 )
@@ -96,3 +97,10 @@ def test_visual_fallback_rejects_ambiguous_green_button_candidates():
     image[500:580, 700:1060] = (96, 193, 7)
 
     assert _find_visual_allow_button(image) is None
+
+
+def test_activate_wechat_returns_false_when_osascript_fails():
+    completed = MagicMock(returncode=1, stdout="", stderr="activation failed")
+
+    with patch("scripts.wechat_desktop_auth.subprocess.run", return_value=completed):
+        assert _activate_wechat() is False
