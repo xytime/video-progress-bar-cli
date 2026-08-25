@@ -143,8 +143,8 @@ def test_select_collection_create_new():
 
     assert result is True
 
-    # 触发器被点击
-    mock_trigger.click.assert_called_once()
+    # 新建后会重新展开列表进行回选，因此触发器需要点击两次。
+    assert mock_trigger.click.call_count == 2
     # 创建按钮被点击
     mock_create_btn.click.assert_called_once()
     # 输入框填入清洗并截断后的名称（去掉特殊字符，保留15个字）
