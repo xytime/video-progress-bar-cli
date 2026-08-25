@@ -1050,6 +1050,7 @@ def run_uploader(
                 desktop_quick_attempted = True
                 desktop_auth = WeChatDesktopAuthWatcher(
                     settings.wechat_desktop_quick_login_timeout_seconds,
+                    enable_visual_fallback=settings.enable_wechat_desktop_visual_auth_fallback,
                 )
                 if _try_wechat_quick_login(
                     page,

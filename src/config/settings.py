@@ -8,6 +8,7 @@
 | 3.16.2 | 2026-08-24 | Codex | AGY 改为三天影子评估；生产默认恢复 Gemini→DeepSeek→Google，正式切换必须人工确认。 |
 | 3.46.0 | 2026-08-24 | Codex | 新增标题供应商顺序与 AGY 参数；默认 Gemini 且封面双标题消费关闭。 |
 | 3.47.0 | 2026-08-25 | Codex | 新增受限的视频号桌面快捷授权开关与超时；默认关闭，需经辅助功能预检后显式启用。 |
+| 3.48.0 | 2026-08-25 | Codex | 新增视频号原生许可弹窗的受限视觉后备开关；默认关闭且只在唯一微信绿按钮候选时点击。 |
 | 3.45.0 | 2026-08-21 | Codex | Candidate-score cache TTL prevents minute-by-minute full rescoring. |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -139,6 +140,7 @@ class Settings(BaseSettings):
     # 默认关闭：需要先通过 --desktop-auth-preflight 确认 macOS 辅助功能权限。
     enable_wechat_desktop_quick_login: bool = False
     wechat_desktop_quick_login_timeout_seconds: int = Field(default=15, ge=1, le=60)
+    enable_wechat_desktop_visual_auth_fallback: bool = False
 
 
     # Google Gemini API Key

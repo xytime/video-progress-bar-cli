@@ -13,9 +13,12 @@
 
 from unittest.mock import MagicMock, patch
 
+import numpy as np
+
 from scripts.wechat_desktop_auth import (
     WeChatDesktopAuthWatcher,
     _CLICK_AUTH_SCRIPT,
+    _find_visual_allow_button,
     desktop_auth_preflight,
 )
 
@@ -78,3 +81,18 @@ def test_watcher_allows_allow_only_in_the_explicit_video_account_application_win
     assert "if isVideoAccountApplication then" in _CLICK_AUTH_SCRIPT
     assert 'if elementName is "允许" then' in _CLICK_AUTH_SCRIPT
     assert 'candidateName in {"登录", "授权登录", "确认登录"}' in _CLICK_AUTH_SCRIPT
+
+
+def test_visual_fallback_returns_the_unique_large_wechat_green_button_center():
+    image = np.zeros((900, 1200, 3), dtype=np.uint8)
+    image[500:580, 600:960] = (96, 193, 7)  # BGR for #07C160
+
+    assert _find_visual_allow_button(image) == (780, 540)
+
+
+def test_visual_fallback_rejects_ambiguous_green_button_candidates():
+    image = np.zeros((900, 1200, 3), dtype=np.uint8)
+    image[500:580, 300:660] = (96, 193, 7)
+    image[500:580, 700:1060] = (96, 193, 7)
+
+    assert _find_visual_allow_button(image) is None

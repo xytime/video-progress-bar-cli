@@ -78,10 +78,13 @@ def test_youtube_download_timeout_is_bounded_and_configurable():
 
 def test_wechat_desktop_quick_login_is_opt_in_with_bounded_timeout(monkeypatch, tmp_path):
     monkeypatch.delenv("ENABLE_WECHAT_DESKTOP_QUICK_LOGIN", raising=False)
+    monkeypatch.delenv("WECHAT_DESKTOP_QUICK_LOGIN_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("ENABLE_WECHAT_DESKTOP_VISUAL_AUTH_FALLBACK", raising=False)
     settings = Settings(_env_file=tmp_path / "missing.env")
 
     assert settings.enable_wechat_desktop_quick_login is False
     assert settings.wechat_desktop_quick_login_timeout_seconds == 15
+    assert settings.enable_wechat_desktop_visual_auth_fallback is False
 
     with pytest.raises(ValidationError):
         Settings(_env_file=tmp_path / "missing.env", wechat_desktop_quick_login_timeout_seconds=0)
@@ -93,3 +96,4 @@ def test_env_example_documents_wechat_desktop_quick_login_preflight():
 
     assert "ENABLE_WECHAT_DESKTOP_QUICK_LOGIN=false" in content
     assert "WECHAT_DESKTOP_QUICK_LOGIN_TIMEOUT_SECONDS=15" in content
+    assert "ENABLE_WECHAT_DESKTOP_VISUAL_AUTH_FALLBACK=false" in content

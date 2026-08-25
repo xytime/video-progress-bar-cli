@@ -13,15 +13,19 @@
 | 1.2.0 | 2026-08-25 | Codex | 以辅助功能文本而非窗口标题识别视频号申请弹窗，适配 WeChat 自绘窗口。 |
 | 1.3.0 | 2026-08-25 | Codex | 递归枚举 WeChat 自绘窗口内容，并同时检查元素名称和值以定位实际申请提示。 |
 | 1.4.0 | 2026-08-25 | Codex | 在同一已确认申请窗口的深层元素中定位精确“允许”按钮，适配自绘按钮层级。 |
+| 1.5.0 | 2026-08-25 | Codex | 辅助功能树不暴露原生许可弹窗时，新增受限视觉定位后备，仅点击唯一的大号微信绿授权按钮。 |
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 logger = logging.getLogger("wechat_desktop_auth")
 
@@ -96,6 +100,18 @@ end tell
 return "NO_SCOPED_AUTH_WINDOW"
 '''
 
+_FRONTMOST_PROCESS_SCRIPT = r'''
+tell application "System Events"
+    set frontApps to application processes whose frontmost is true
+    if (count of frontApps) is not 1 then return ""
+    return name of item 1 of frontApps
+end tell
+'''
+
+_DESKTOP_BOUNDS_SCRIPT = r'''
+tell application "Finder" to get bounds of window of desktop
+'''
+
 
 @dataclass(frozen=True)
 class DesktopAuthPreflight:
@@ -130,12 +146,130 @@ def desktop_auth_preflight() -> DesktopAuthPreflight:
     return DesktopAuthPreflight(False, output or "PREFLIGHT_FAILED")
 
 
+def _frontmost_process_name() -> str:
+    """返回当前前台进程名；无法可靠识别时宁可不做视觉点击。"""
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", _FRONTMOST_PROCESS_SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return (result.stdout or "").strip() if result.returncode == 0 else ""
+
+
+def _logical_desktop_size() -> tuple[int, int] | None:
+    """读取逻辑屏幕尺寸，用于把 retina 截图坐标换算为辅助功能坐标。"""
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", _DESKTOP_BOUNDS_SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    values = [int(value) for value in re.findall(r"-?\d+", result.stdout or "")]
+    if result.returncode != 0 or len(values) != 4:
+        return None
+    left, top, right, bottom = values
+    width, height = right - left, bottom - top
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def _find_visual_allow_button(image) -> tuple[int, int] | None:
+    """返回唯一大号微信绿按钮中心；任何歧义均返回 None。"""
+    try:
+        import cv2
+    except ImportError:
+        return None
+    if image is None or getattr(image, "ndim", 0) != 3:
+        return None
+    height, width = image.shape[:2]
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    # 微信绿 #07C160 的 HSV 附近，容纳屏幕色彩配置和抗锯齿造成的小幅偏差。
+    mask = cv2.inRange(hsv, (40, 100, 100), (90, 255, 255))
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates: list[tuple[int, int, int, int]] = []
+    for contour in contours:
+        x, y, button_width, button_height = cv2.boundingRect(contour)
+        ratio = button_width / button_height if button_height else 0
+        if button_width < max(120, width // 25) or button_height < max(30, height // 40):
+            continue
+        if not 1.8 <= ratio <= 6.0:
+            continue
+        if not (width * 0.2 <= x + button_width / 2 <= width * 0.85):
+            continue
+        if not (height * 0.2 <= y + button_height / 2 <= height * 0.9):
+            continue
+        candidates.append((x, y, button_width, button_height))
+    if len(candidates) != 1:
+        return None
+    x, y, button_width, button_height = candidates[0]
+    return (x + button_width // 2, y + button_height // 2)
+
+
+def _try_visual_allow_click() -> bool:
+    """在已知 WeChat 前台且唯一视觉候选存在时，才执行一次全局“允许”点击。"""
+    if _frontmost_process_name() != "WeChat":
+        return False
+    try:
+        import cv2
+    except ImportError:
+        return False
+    with tempfile.TemporaryDirectory(prefix="wechat-desktop-auth-") as temp_dir:
+        screenshot_path = Path(temp_dir) / "screen.png"
+        try:
+            capture = subprocess.run(
+                ["screencapture", "-x", "-t", "png", str(screenshot_path)],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        if capture.returncode != 0:
+            return False
+        image = cv2.imread(str(screenshot_path))
+        screenshot_size = image.shape[1::-1] if image is not None else None
+        center = _find_visual_allow_button(image)
+    desktop_size = _logical_desktop_size()
+    if not center or not desktop_size or not screenshot_size:
+        return False
+    screenshot_x, screenshot_y = center
+    screenshot_width, screenshot_height = screenshot_size
+    logical_width, logical_height = desktop_size
+    # 截图可能是 retina 像素；按比例换算而不是假设固定 2x 缩放。
+    click_x = round(screenshot_x * logical_width / screenshot_width)
+    click_y = round(screenshot_y * logical_height / screenshot_height)
+    if _frontmost_process_name() != "WeChat":
+        return False
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", f'tell application "System Events" to click at {{{click_x}, {click_y}}}'],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
+
+
 class WeChatDesktopAuthWatcher:
     """在受限时间窗内轮询 WeChat 登录/授权窗口；失败不抛异常。"""
 
-    def __init__(self, timeout_seconds: int, poll_interval_seconds: float = 0.5) -> None:
+    def __init__(self, timeout_seconds: int, poll_interval_seconds: float = 0.5,
+                 enable_visual_fallback: bool = False) -> None:
         self.timeout_seconds = max(1, int(timeout_seconds))
         self.poll_interval_seconds = max(0.1, float(poll_interval_seconds))
+        self.enable_visual_fallback = enable_visual_fallback
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self.clicked = False
@@ -169,5 +303,9 @@ class WeChatDesktopAuthWatcher:
                     return
             except (OSError, subprocess.TimeoutExpired):
                 logger.warning("WeChat desktop authorization watcher could not invoke osascript.")
+                return
+            if self.enable_visual_fallback and _try_visual_allow_click():
+                self.clicked = True
+                logger.info("WeChat desktop visual authorization fallback clicked.")
                 return
             self._stop_event.wait(self.poll_interval_seconds)

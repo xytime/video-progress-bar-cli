@@ -88,6 +88,7 @@ def test_fail_fast_attempts_enabled_desktop_quick_login_before_returning_login_r
     desktop_settings = MagicMock(
         enable_wechat_desktop_quick_login=True,
         wechat_desktop_quick_login_timeout_seconds=15,
+        enable_wechat_desktop_visual_auth_fallback=True,
     )
     with (
         patch("scripts.wechat_uploader.sync_playwright", return_value=playwright),
@@ -104,7 +105,7 @@ def test_fail_fast_attempts_enabled_desktop_quick_login_before_returning_login_r
         )
 
     assert result == 2
-    watcher_cls.assert_called_once_with(15)
+    watcher_cls.assert_called_once_with(15, enable_visual_fallback=True)
     quick_login.assert_called_once_with(
         page,
         desktop_auth=watcher_cls.return_value,
