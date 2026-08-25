@@ -43,7 +43,7 @@ def test_select_collection_exists():
     # 触发器：.post-album-display-wrap
     mock_trigger = create_locator_mock(count=1, visible=True)
 
-    # 合集条目：.post-album-wrap .option-item（has= 匹配到目标）
+    # 合集条目：.filter-wrap .option-item（has= 匹配到目标）
     # get_attribute("class") 第一次返回 ""（非active），第二次返回 "option-item active"
     mock_item = create_locator_mock(count=1, visible=True)
     mock_item.get_attribute.side_effect = ["", "option-item active"]
@@ -52,7 +52,7 @@ def test_select_collection_exists():
     def locator_side_effect(selector, **kwargs):
         if ".post-album-display-wrap" in selector:
             return mock_trigger
-        if ".post-album-wrap .option-item" in selector:
+        if ".filter-wrap .option-item" in selector:
             return mock_item
         # 兜底：count=0
         return create_locator_mock(count=0, visible=False)
@@ -80,7 +80,7 @@ def test_select_collection_dedup():
     def locator_side_effect(selector, **kwargs):
         if ".post-album-display-wrap" in selector:
             return mock_trigger
-        if ".post-album-wrap .option-item" in selector:
+        if ".filter-wrap .option-item" in selector:
             return mock_item
         return create_locator_mock(count=0, visible=False)
 
@@ -100,7 +100,10 @@ def test_select_collection_create_new():
     mock_page = MagicMock()
 
     mock_trigger = create_locator_mock(count=1, visible=True)
-    mock_no_item = create_locator_mock(count=0, visible=False)   # 找不到对应合集
+    mock_no_item = create_locator_mock(count=0, visible=False)   # 首次找不到对应合集
+    mock_created_item = create_locator_mock(count=1, visible=True, cls="option-item")
+    mock_created_item.get_attribute.side_effect = ["option-item", "option-item active"]
+    item_lookup_count = 0
 
     # 「创建新合集」按钮
     mock_create_btn = create_locator_mock(count=1, visible=True)
@@ -121,9 +124,13 @@ def test_select_collection_create_new():
     def locator_side_effect(selector, **kwargs):
         if ".post-album-display-wrap" in selector:
             return mock_trigger
-        if ".post-album-wrap .option-item" in selector:
-            return mock_no_item
-        if ".post-album-wrap .create a" in selector:
+        nonlocal_item = selector
+        if ".filter-wrap .option-item" in nonlocal_item:
+            nonlocal item_lookup_count
+            item_lookup_count += 1
+            # 前 10 轮各有精确/模糊两次查询；创建完成后才返回新合集。
+            return mock_no_item if item_lookup_count <= 20 else mock_created_item
+        if ".filter-wrap .create a" in nonlocal_item:
             return mock_create_btn
         if ".weui-desktop-dialog" in selector:
             return mock_modal
@@ -148,6 +155,7 @@ def test_select_collection_create_new():
     assert "?!" not in filled_name, "Special chars not cleaned"
     # 确认按钮被点击
     mock_hc.assert_called_with(mock_page, mock_confirm)
+    mock_created_item.click.assert_called_once()
 
 
 # ── Test 4: 触发器找不到 → 返回 False ────────────────────────────────────────

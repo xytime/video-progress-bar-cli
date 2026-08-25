@@ -530,25 +530,24 @@ def _select_collection(page, collection_name: str) -> bool:
     page.wait_for_timeout(300)  # 等动画稳定
 
     # ── Step 3: 在 .option-item 中查找目标合集 ─────────────────────────────
+    # [BugFix] 列表实际位于 .filter-wrap；旧的 .post-album-wrap 已不在当前 DOM。
+    # 使用 Playwright 的 has/has_text 参数，避免合集名中的引号破坏 CSS 选择器。
+    def _find_item(name: str):
+        exact = page.locator(
+            ".filter-wrap .option-item",
+            has=page.get_by_text(name, exact=True),
+        ).first
+        if exact.count() > 0:
+            return exact
+        return page.locator(
+            ".filter-wrap .option-item",
+            has_text=name,
+        ).first
+
     # [Gemini_3.5_Flash_planning] 循环等待最多 3 秒，防止因为微信异步拉取列表导致误判“合集不存在”
     target_item = None
     for attempt in range(10):
-        # 使用 has= 参数：在 .post-album-wrap 下，找 .option-item 且包含 .name 精确文字
-        temp_item = page.locator(
-            ".post-album-wrap .option-item",
-            has=page.locator(f".name:text-is('{collection_name}')")
-        ).first
-
-        if temp_item.count() > 0:
-            target_item = temp_item
-            break
-
-        # text-is 严格匹配失败，退化为 has-text（包含匹配）
-        temp_item = page.locator(
-            ".post-album-wrap .option-item",
-            has=page.locator(f".name:has-text('{collection_name}')")
-        ).first
-
+        temp_item = _find_item(collection_name)
         if temp_item.count() > 0:
             target_item = temp_item
             break
@@ -568,28 +567,30 @@ def _select_collection(page, collection_name: str) -> bool:
         logger.info(f"Collection {collection_name!r} found. Selecting...")
         try:
             target_item.click(timeout=2000)
-            page.wait_for_timeout(500)
-            item_class_after = target_item.get_attribute("class") or ""
-            if "active" in item_class_after:
-                logger.info(f"Successfully selected collection {collection_name!r}.")
-            else:
-                logger.warning("Clicked but 'active' class not detected (may still work).")
-            return True
         except Exception as e:
             logger.warning(f"Click on collection item failed: {e}, trying JS fallback...")
             try:
                 target_item.evaluate("node => node.click()")
-                page.wait_for_timeout(500)
-                return True
             except Exception as e2:
                 logger.error(f"JS click also failed: {e2}")
                 return False
+
+        # 只有 active 状态被页面确认，才允许后续发表。
+        for _ in range(10):
+            page.wait_for_timeout(200)
+            item_class_after = target_item.get_attribute("class") or ""
+            if "active" in item_class_after:
+                logger.info(f"Successfully selected collection {collection_name!r}.")
+                return True
+        logger.error(f"Collection {collection_name!r} click was not reflected as active.")
+        page.keyboard.press("Escape")
+        return False
 
     # ── Step 4b: 不存在 → 创建新合集 ─────────────────────────────────────
     logger.info(f"Collection {collection_name!r} not in list. Creating new...")
 
     # 实证 HTML: <div class="create"><a data-v-021f92ab="">创建新合集 </a></div>
-    create_btn = page.locator(".post-album-wrap .create a").first
+    create_btn = page.locator(".filter-wrap .create a").first
     if create_btn.count() == 0:
         create_btn = page.get_by_text("创建新合集").first
     if create_btn.count() == 0:
@@ -663,7 +664,48 @@ def _select_collection(page, collection_name: str) -> bool:
     logger.info("Clicked confirm button in new collection dialog.")
     page.wait_for_timeout(1500)
     page.screenshot(path="output/debug_collection_after_create.png")
-    return True
+
+    # ── Step 6: 新建后重新展开并回选，确认合集确实绑定到当前作品 ──────────────
+    # 创建成功并不等于当前发布表单已绑定；先关闭残留面板，再按正常路径重新打开。
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(300)
+    try:
+        trigger.click(timeout=2000)
+        page.wait_for_selector("text=创建新合集", timeout=5000)
+    except Exception as e:
+        logger.error(f"Created collection but could not reopen collection list: {e}")
+        return False
+
+    new_item = None
+    for _ in range(10):
+        new_item = _find_item(cleaned_name)
+        if new_item.count() > 0:
+            break
+        page.wait_for_timeout(300)
+    if not new_item or new_item.count() == 0:
+        logger.error(f"Created collection {cleaned_name!r} was not found in refreshed list.")
+        page.keyboard.press("Escape")
+        return False
+
+    if "active" not in (new_item.get_attribute("class") or ""):
+        try:
+            new_item.click(timeout=2000)
+        except Exception:
+            try:
+                new_item.evaluate("node => node.click()")
+            except Exception as e:
+                logger.error(f"Could not select created collection {cleaned_name!r}: {e}")
+                page.keyboard.press("Escape")
+                return False
+
+    for _ in range(10):
+        page.wait_for_timeout(200)
+        if "active" in (new_item.get_attribute("class") or ""):
+            logger.info(f"Successfully bound newly created collection {cleaned_name!r}.")
+            return True
+    logger.error(f"Created collection {cleaned_name!r} was not reflected as active.")
+    page.keyboard.press("Escape")
+    return False
 
 # 发布表单的成功提示或跳转列表，只能证明提交已受理；平台仍可能显示“处理中”。
 # 因此此函数仅用于区分提交结果是否得到平台响应，不能作为公开发布的最终证明。
