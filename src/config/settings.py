@@ -9,6 +9,8 @@
 | 3.46.0 | 2026-08-24 | Codex | 新增标题供应商顺序与 AGY 参数；默认 Gemini 且封面双标题消费关闭。 |
 | 3.47.0 | 2026-08-25 | Codex | 新增受限的视频号桌面快捷授权开关与超时；默认关闭，需经辅助功能预检后显式启用。 |
 | 3.48.0 | 2026-08-25 | Codex | 新增视频号原生许可弹窗的受限视觉后备开关；默认关闭且只在唯一微信绿按钮候选时点击。 |
+| 3.49.0 | 2026-08-26 | Codex | 新增 YouTube Cookie 真实探针与浏览器来源配置；刷新脚本据此执行原子验收。 |
+| 3.50.0 | 2026-08-26 | Codex | 新增受限 YouTube Cookie 自动恢复开关；仅 bot 校验时刷新并重试一次源字幕预检。 |
 | 3.45.0 | 2026-08-21 | Codex | Candidate-score cache TTL prevents minute-by-minute full rescoring. |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -203,6 +205,12 @@ class Settings(BaseSettings):
     # 使用 scripts/refresh_yt_cookies.py 从 Chrome 导出并保存到此文件
     # （2026-06-25：源由 Safari 改 Chrome——本机 Safari 未登录 YouTube，导出的匿名 cookie 触发 bot 风控）
     youtube_cookies_file: str = ""
+    # Cookie 文件存在不代表仍可用；刷新/巡检以此公开视频做仅元数据验收。
+    youtube_auth_probe_url: str = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+    youtube_cookie_browser: str = "chrome"
+    # 仅在源字幕预检收到 YouTube bot 校验时，运行安全刷新并重试该预检一次。
+    # 默认关闭；刷新从 Chrome 读取会话，但不会下载、入队或发布。
+    enable_youtube_cookie_auto_refresh: bool = False
     # 单次 yt-dlp 下载的总时限。curl 自身有连接和低速超时，但代理半关闭连接仍可能无限等待。
     youtube_download_timeout_seconds: int = 900
 

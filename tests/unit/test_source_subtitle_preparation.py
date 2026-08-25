@@ -4,8 +4,10 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 覆盖 VTT 解析、下载前阻断、AUTO 预加工选择和真实微信补发日限额 |
+| 1.1.0 | 2026-08-26 | Codex | 覆盖 YouTube bot 校验后的受限 Cookie 刷新与单次预检重试。 |
 """
 
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -83,6 +85,32 @@ def test_source_subtitle_security_hit_blocks_before_video_download(tmp_path: Pat
     manager._run_tracked.assert_not_called()
     assert manager.db.get_video_by_youtube_id("source-preflight-blocked")["status"] == "FAILED"
     assert not list(tmp_path.glob("source-preflight-blocked*.mp4"))
+
+
+def test_bot_check_refreshes_cookie_and_retries_source_preflight_once(tmp_path: Path, monkeypatch):
+    manager = _manager(tmp_path)
+    video = _add_candidate(manager.db, "source-preflight-auth")
+    calls = []
+
+    def run_tracked(command, *_args, **_kwargs):
+        calls.append(command)
+        if any(str(part).endswith("refresh_yt_cookies.py") for part in command):
+            return None
+        if sum("--write-auto-subs" in call for call in calls) == 1:
+            raise subprocess.CalledProcessError(1, command, stderr=b"Sign in to confirm you're not a bot")
+        (tmp_path / "source-preflight-auth_source_subtitle.en.vtt").write_text(
+            "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nA safe source transcript.\n",
+            encoding="utf-8",
+        )
+
+    manager._run_tracked = run_tracked
+    monkeypatch.setattr(settings, "enable_youtube_cookie_auto_refresh", True)
+    monkeypatch.setattr(settings, "enable_censorship_engine", True)
+    monkeypatch.setattr(manager, "_check_censorship", MagicMock(return_value=False))
+
+    assert manager._ensure_source_subtitle_preflight(video) is True
+    assert sum("--write-auto-subs" in call for call in calls) == 2
+    assert any(any(str(part).endswith("refresh_yt_cookies.py") for part in call) for call in calls)
 
 
 def test_source_subtitle_preflight_fails_closed_when_censorship_is_disabled(tmp_path: Path, monkeypatch):

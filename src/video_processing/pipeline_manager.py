@@ -121,6 +121,7 @@
 | 3.48.16 | 2026-08-14 | Codex                               | 发布前人工复核闸在成片与审查完成后阻断全部平台提交 |
 | 3.48.18 | 2026-08-17 | Codex                               | 字幕缓存拒绝上游 HTTP 错误页，防止历史污染成片被检查点复用 |
 | 3.48.19 | 2026-08-23 | Codex                               | 按源视频精确发布时间控制视频号原创声明，并保留发布前本地决策证据 |
+| 3.48.20 | 2026-08-26 | Codex                               | YouTube bot 校验时受限刷新 Cookie，并仅重试一次源字幕预检。 |
 | 3.48.16 | 2026-08-11 | Codex                               | 视频号未确认公开时取消同源尚未提交的抖音/快手队列，防止旧误判触发跨平台抢跑 |
 """
 
@@ -192,6 +193,11 @@ _TRANSIENT_PRE_SUBMISSION_FAILURE_MARKERS = (
     "temporarily unavailable",
 )
 _MAX_TRANSIENT_PRE_SUBMISSION_RETRIES = 2
+_YOUTUBE_AUTH_FAILURE_MARKERS = (
+    "sign in to confirm you’re not a bot",
+    "sign in to confirm you're not a bot",
+    "use --cookies for the authentication",
+)
 
 
 def _sigterm_handler(signum: int, frame) -> None:  # noqa: ANN001
@@ -1111,19 +1117,25 @@ class PipelineManager:
                 f"https://youtu.be/{yid}",
                 "-o", str(output_template),
             ]
-            try:
-                logger.info("[SourceSubtitle] 拉取 %s 的源 VTT（不下载视频）。", yid)
-                self._run_tracked(
-                    subtitle_cmd,
-                    yid,
-                    slice_index=slice_index,
-                    text=True,
-                    capture_output=True,
-                    cwd=str(self._PRJ_ROOT),
-                )
-            except subprocess.CalledProcessError as exc:
-                stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(errors="replace")
-                return self._mark_source_subtitle_unavailable(yid, slice_index, stderr or "yt-dlp 未返回可用源字幕")
+            for attempt in range(2):
+                try:
+                    logger.info("[SourceSubtitle] 拉取 %s 的源 VTT（不下载视频）。", yid)
+                    self._run_tracked(
+                        subtitle_cmd,
+                        yid,
+                        slice_index=slice_index,
+                        text=True,
+                        capture_output=True,
+                        cwd=str(self._PRJ_ROOT),
+                    )
+                    break
+                except subprocess.CalledProcessError as exc:
+                    stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode(errors="replace")
+                    if attempt == 0 and self._refresh_youtube_cookie_after_auth_failure(yid, slice_index, stderr):
+                        continue
+                    return self._mark_source_subtitle_unavailable(
+                        yid, slice_index, stderr or "yt-dlp 未返回可用源字幕",
+                    )
 
             subtitle_files = self._source_subtitle_files(yid)
             subtitle_text = read_webvtt_text(subtitle_files)
@@ -1157,6 +1169,30 @@ class PipelineManager:
 
         self.db.set_source_subtitle_preflight(yid, "PASSED", slice_index=slice_index)
         logger.info("[SourceSubtitle] %s 通过安全预检（%s 字符）。", yid, len(subtitle_text))
+        return True
+
+    def _refresh_youtube_cookie_after_auth_failure(self, yid: str, slice_index: int, detail: str) -> bool:
+        """bot 校验时受开关控制地刷新 Cookie；不下载、不入队、不发布。"""
+        if not settings.enable_youtube_cookie_auto_refresh:
+            return False
+        normalized = detail.casefold()
+        if not any(marker in normalized for marker in _YOUTUBE_AUTH_FAILURE_MARKERS):
+            return False
+        refresh_cmd = [self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts" / "refresh_yt_cookies.py")]
+        try:
+            self._run_tracked(
+                refresh_cmd,
+                yid,
+                slice_index=slice_index,
+                text=True,
+                capture_output=True,
+                cwd=str(self._PRJ_ROOT),
+                timeout=75,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+            logger.warning("[YouTubeAuth] %s Cookie 安全刷新失败：%s", yid, exc)
+            return False
+        logger.info("[YouTubeAuth] %s Cookie 已刷新；只重试一次源字幕预检。", yid)
         return True
 
     def _mark_source_subtitle_unavailable(self, yid: str, slice_index: int, detail: str) -> bool:
