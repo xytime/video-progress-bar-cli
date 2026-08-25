@@ -4,6 +4,7 @@
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 2.0.0 | 2026-08-24 | Codex | 覆盖直接 Python 协调器的重试、失败回执与 LaunchAgent 入口。 |
+# | 2.1.0 | 2026-08-25 | Codex | 覆盖 Codex 瞬时传输故障触发有界重试。 |
 """
 
 from __future__ import annotations
@@ -71,6 +72,36 @@ def test_success_does_not_send_failure_notification(tmp_path: Path):
     status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
     assert "phase=COORDINATOR_FINISHED" in status
     assert "exit_code=0" in status
+
+
+def test_transient_transport_failure_retries_before_failure_notification(tmp_path: Path):
+    calls = tmp_path / "calls.log"
+    fake_codex = tmp_path / "codex"
+    fake_python = tmp_path / "python"
+    notifier = tmp_path / "notifier.py"
+    _write_executable(
+        fake_codex,
+        f"#!/usr/bin/env bash\necho codex >> {calls}\necho 'tls handshake eof' >&2\nexit 1\n",
+    )
+    _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier >> {calls}\nexit 0\n")
+    notifier.write_text("# fake notifier\n", encoding="utf-8")
+    log_dir = tmp_path / "logs"
+    arguments = [
+        sys.executable, str(RUNNER), "--project-root", str(PROJECT_ROOT),
+        "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
+        "--notifier-script", str(notifier), "--log-dir", str(log_dir),
+        "--lock-dir", str(tmp_path / "lock"), "--max-attempts", "3",
+        "--retry-delay-seconds", "0",
+    ]
+
+    result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 1
+    call_lines = calls.read_text(encoding="utf-8").splitlines()
+    assert call_lines.count("codex") == 3
+    assert call_lines.count("notifier") == 1
+    run_log = next(log_dir.glob("run_*.log")).read_text(encoding="utf-8")
+    assert "Codex transient transport failure" in run_log
 
 
 def test_plist_directly_starts_python_coordinator():

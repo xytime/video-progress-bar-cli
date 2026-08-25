@@ -9,6 +9,7 @@
 # | --- | --- | --- | --- |
 # | 2.0.0 | 2026-08-24 | Codex | 以直接 Python 入口替代 shell 协调器，保留有界重试、锁、状态及 Telegram 失败回执。 |
 # | 2.1.0 | 2026-08-24 | Codex | 日更生产提示明确英语世界成片必须严格大于 30 秒且不超过 300 秒。 |
+# | 2.2.0 | 2026-08-25 | Codex | 对 Codex 瞬时传输故障和 Telegram 失败回执实施有界重试，避免网络抖动吞掉审核窗口。 |
 """
 
 from __future__ import annotations
@@ -79,19 +80,52 @@ def _log(stream: TextIO, message: str) -> None:
     stream.flush()
 
 
-def _notify_failure(paths: RuntimePaths, reason: str, stream: TextIO) -> None:
+def _is_transient_transport_failure(run_log: Path, start_offset: int = 0) -> bool:
+    """只把明确的网络瞬断归入重试，避免对业务/质量错误盲目重跑。"""
+    try:
+        with run_log.open("rb") as stream:
+            stream.seek(max(0, start_offset))
+            text = stream.read().decode("utf-8", errors="replace").lower()
+    except OSError:
+        return False
+    markers = (
+        "tls handshake eof",
+        "stream disconnected",
+        "connection reset",
+        "connection refused",
+        "timed out",
+        "temporary failure in name resolution",
+        "network is unreachable",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _notify_failure(
+    paths: RuntimePaths,
+    reason: str,
+    stream: TextIO,
+    *,
+    max_attempts: int = 3,
+    retry_delay_seconds: float = 10,
+) -> None:
     if not paths.python_bin.is_file() or not paths.notifier_script.is_file():
         _log(stream, "ERROR: cannot notify Telegram; notifier unavailable")
         return
-    result = subprocess.run(
-        [str(paths.python_bin), str(paths.notifier_script), "--title", "今日英语世界短视频", "--failure", reason],
-        stdout=stream,
-        stderr=subprocess.STDOUT,
-        check=False,
-        text=True,
-    )
-    if result.returncode != 0:
-        _log(stream, f"ERROR: Telegram failure notifier exited {result.returncode}")
+    for attempt in range(1, max_attempts + 1):
+        result = subprocess.run(
+            [str(paths.python_bin), str(paths.notifier_script), "--title", "今日英语世界短视频", "--failure", reason],
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            check=False,
+            text=True,
+        )
+        if result.returncode == 0:
+            _log(stream, f"Telegram failure notifier accepted on attempt {attempt}/{max_attempts}")
+            return
+        _log(stream, f"ERROR: Telegram failure notifier exited {result.returncode} (attempt {attempt}/{max_attempts})")
+        if attempt < max_attempts:
+            time.sleep(retry_delay_seconds)
+    _log(stream, "ERROR: Telegram failure notifier exhausted retries; local run log is the authoritative failure record")
 
 
 def _run_coordinator(paths: RuntimePaths, response_path: Path, stream: TextIO) -> int:
@@ -129,10 +163,14 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
             exit_code = 0
             for attempt in range(1, max_attempts + 1):
                 _log(stream, f"coordinator attempt {attempt}/{max_attempts}")
+                attempt_log_offset = run_log.stat().st_size
                 exit_code = _run_coordinator(paths, response_path, stream)
-                if exit_code != 78 or attempt == max_attempts:
+                transient_failure = exit_code == 78 or (
+                    exit_code != 0 and _is_transient_transport_failure(run_log, attempt_log_offset)
+                )
+                if not transient_failure or attempt == max_attempts:
                     break
-                _log(stream, f"Codex returned EX_CONFIG; retrying after {retry_delay_seconds:g}s")
+                _log(stream, f"Codex transient transport failure (exit={exit_code}); retrying after {retry_delay_seconds:g}s")
                 time.sleep(retry_delay_seconds)
             if exit_code == 0:
                 _write_status(status_path, "COORDINATOR_FINISHED", 0, attempt, run_log, response_path)
