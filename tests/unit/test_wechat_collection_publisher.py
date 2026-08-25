@@ -10,7 +10,7 @@
 
 import pytest
 from unittest.mock import patch, MagicMock, call
-from scripts.wechat_uploader import _select_collection
+from scripts.wechat_uploader import _collection_binding_confirmed, _select_collection
 
 
 # ── 辅助工厂 ─────────────────────────────────────────────────────────────────
@@ -66,6 +66,14 @@ def test_select_collection_exists():
     mock_trigger.click.assert_called_once()
     mock_page.wait_for_selector.assert_called_once_with("text=创建新合集", timeout=5000)
     mock_item.click.assert_called_once()
+    mock_page.get_by_text.assert_called_with("AI内幕", exact=True)
+    assert all(
+        "has_text" not in kwargs
+        for selector, kwargs in (
+            (call.args[0], call.kwargs) for call in mock_page.locator.call_args_list
+        )
+        if selector == ".filter-wrap .option-item"
+    )
 
 
 # ── Test 2: 合集已选中 → 去重返回 ────────────────────────────────────────────
@@ -128,8 +136,8 @@ def test_select_collection_create_new():
         if ".filter-wrap .option-item" in nonlocal_item:
             nonlocal item_lookup_count
             item_lookup_count += 1
-            # 前 10 轮各有精确/模糊两次查询；创建完成后才返回新合集。
-            return mock_no_item if item_lookup_count <= 20 else mock_created_item
+            # 创建前的 10 次严格查询均为空；创建完成后才返回新合集。
+            return mock_no_item if item_lookup_count <= 10 else mock_created_item
         if ".filter-wrap .create a" in nonlocal_item:
             return mock_create_btn
         if ".weui-desktop-dialog" in selector:
@@ -177,3 +185,13 @@ def test_select_collection_empty_name():
     result = _select_collection(mock_page, "")
     assert result is True
     mock_page.locator.assert_not_called()
+
+
+def test_collection_binding_gate_rejects_unconfirmed_selection():
+    """上传器调用点必须能以 False 作为发表前硬门禁。"""
+    mock_page = MagicMock()
+
+    with patch("scripts.wechat_uploader._select_collection", return_value=False) as selector:
+        assert _collection_binding_confirmed(mock_page, "科技") is False
+
+    selector.assert_called_once_with(mock_page, "科技")

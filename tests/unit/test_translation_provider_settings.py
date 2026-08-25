@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.5.0   | 2026-08-21 | Codex  | 覆盖 yt-dlp 下载总超时配置 |
+| 1.6.0   | 2026-08-25 | Codex  | 覆盖受限 WeChat 桌面快捷授权默认关闭及环境模板说明。 |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：覆盖字幕翻译供应商顺序配置解析 |
 | 1.1.0   | 2026-07-05 | Codex  | 覆盖 DeepSeek provider 配置解析 |
 | 1.4.0   | 2026-08-20 | Codex  | 显式隔离宿主环境变量，确保 RSS 默认行为测试不受部署密钥污染。 |
@@ -14,6 +15,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
 _src_root = Path(__file__).parent.parent.parent / "src"
 if str(_src_root) not in sys.path:
     sys.path.insert(0, str(_src_root))
@@ -71,3 +74,21 @@ def test_youtube_download_timeout_is_bounded_and_configurable():
     settings = Settings(_env_file=None, youtube_download_timeout_seconds=123)
 
     assert settings.youtube_download_timeout_seconds == 123
+
+
+def test_wechat_desktop_quick_login_is_opt_in_with_bounded_timeout():
+    settings = Settings(_env_file=None)
+
+    assert settings.enable_wechat_desktop_quick_login is False
+    assert settings.wechat_desktop_quick_login_timeout_seconds == 15
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, wechat_desktop_quick_login_timeout_seconds=0)
+
+
+def test_env_example_documents_wechat_desktop_quick_login_preflight():
+    env_example = Path(__file__).parent.parent.parent / ".env.example"
+    content = env_example.read_text(encoding="utf-8")
+
+    assert "ENABLE_WECHAT_DESKTOP_QUICK_LOGIN=false" in content
+    assert "WECHAT_DESKTOP_QUICK_LOGIN_TIMEOUT_SECONDS=15" in content

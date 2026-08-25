@@ -48,6 +48,7 @@
 | 4.2.0   | 2026-08-20 | Codex                               | 发布前后比较同会话作品列表原生 ID；唯一新增 ID 且完整标题一致才落绑定回执，标题回查停用 |
 | 4.1.0   | 2026-08-20 | Codex                               | 新增作品管理页只读回查：以标题定位后台作品并输出已发布、审核中、驳回、未找到或不可判定结果 |
 | 4.3.0   | 2026-08-25 | Codex                               | 修复合集列表选择器；新建后重新回选并校验 active，未确认绑定则阻断发表 |
+| 4.4.0   | 2026-08-25 | Codex                               | 合集绑定失败改为发表硬门禁；新增受限 macOS WeChat 桌面快捷授权与无点击预检入口 |
 """
 
 import os
@@ -79,6 +80,8 @@ from human_mouse import (
     find_checkbox_near_text, dispatch_human_click_events,
     _human_delay
 )
+from config.settings import settings
+from wechat_desktop_auth import WeChatDesktopAuthWatcher, desktop_auth_preflight
 from copywriter import graceful_truncate_title  # [Claude_Sonnet_4.6_Thinking_planning] v1.6.0
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 
@@ -532,17 +535,11 @@ def _select_collection(page, collection_name: str) -> bool:
 
     # ── Step 3: 在 .option-item 中查找目标合集 ─────────────────────────────
     # [BugFix] 列表实际位于 .filter-wrap；旧的 .post-album-wrap 已不在当前 DOM。
-    # 使用 Playwright 的 has/has_text 参数，避免合集名中的引号破坏 CSS 选择器。
+    # 使用严格文本匹配，避免 "AI" 误命中 "AI如何重塑电网" 等前缀合集。
     def _find_item(name: str):
-        exact = page.locator(
-            ".filter-wrap .option-item",
-            has=page.get_by_text(name, exact=True),
-        ).first
-        if exact.count() > 0:
-            return exact
         return page.locator(
             ".filter-wrap .option-item",
-            has_text=name,
+            has=page.get_by_text(name, exact=True),
         ).first
 
     # [Gemini_3.5_Flash_planning] 循环等待最多 3 秒，防止因为微信异步拉取列表导致误判“合集不存在”
@@ -708,6 +705,11 @@ def _select_collection(page, collection_name: str) -> bool:
     page.keyboard.press("Escape")
     return False
 
+
+def _collection_binding_confirmed(page, collection_name: str | None) -> bool:
+    """合集为可选字段；一旦要求绑定，必须由选择器给出确认结果。"""
+    return not collection_name or _select_collection(page, collection_name)
+
 # 发布表单的成功提示或跳转列表，只能证明提交已受理；平台仍可能显示“处理中”。
 # 因此此函数仅用于区分提交结果是否得到平台响应，不能作为公开发布的最终证明。
 def classify_publish_result(redirected: bool, page_content: str, draft: bool = False) -> bool:
@@ -756,40 +758,47 @@ def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
     return False
 
 
-def _try_wechat_quick_login(page) -> bool:
+def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None = None,
+                            timeout_ms: int = 30_000) -> bool:
     """新版 open.weixin.qq.com 登录 iframe：完成快捷登录及资料授权。"""
-    if not _click_visible_frame_button(page, "微信快捷登录"):
-        return False
-
-    # 点击“微信快捷登录”后，微信会在同一网页 iframe 显示「视频号创作平台
-    # 申请使用你的昵称、头像」的二次确认。它不是手机扫码/手机确认；若不点
-    # 「允许」，旧逻辑会等到超时后错误降级到二维码，导致单手机远程值守卡住。
-    # 限定先确认授权文案存在，再点完全匹配的「允许」，避免误点发布页上无关按钮。
-    for _ in range(20):
-        for fr in page.frames:
-            try:
-                request_text = fr.get_by_text("视频号创作平台申请使用", exact=False)
-                if request_text.count() == 0 or not request_text.first.is_visible():
-                    continue
-                allow = fr.get_by_role("button", name="允许", exact=True)
-                if allow.count() > 0 and allow.first.is_visible():
-                    allow.first.click(timeout=3000)
-                    logger.info("Approved WeChat Channels nickname/avatar authorization.")
-                    break
-            except Exception as e:
-                logger.debug(f"WeChat profile authorization not ready in frame={fr.url[:80]!r}: {e}")
-        else:
-            page.wait_for_timeout(500)
-            continue
-        break
-
+    if desktop_auth:
+        desktop_auth.start()
     try:
-        page.wait_for_url("**/post/create", timeout=30000)
-        logger.info("WeChat quick authorization login succeeded.")
-        return True
-    except Exception as e:
-        logger.warning(f"WeChat quick authorization did not finish within 30s: {e}")
-        return False
+        if not _click_visible_frame_button(page, "微信快捷登录"):
+            return False
+
+        # 点击“微信快捷登录”后，微信会在同一网页 iframe 显示「视频号创作平台
+        # 申请使用你的昵称、头像」的二次确认。它不是手机扫码/手机确认；若不点
+        # 「允许」，旧逻辑会等到超时后错误降级到二维码，导致单手机远程值守卡住。
+        # 限定先确认授权文案存在，再点完全匹配的「允许」，避免误点发布页上无关按钮。
+        for _ in range(20):
+            for fr in page.frames:
+                try:
+                    request_text = fr.get_by_text("视频号创作平台申请使用", exact=False)
+                    if request_text.count() == 0 or not request_text.first.is_visible():
+                        continue
+                    allow = fr.get_by_role("button", name="允许", exact=True)
+                    if allow.count() > 0 and allow.first.is_visible():
+                        allow.first.click(timeout=3000)
+                        logger.info("Approved WeChat Channels nickname/avatar authorization.")
+                        break
+                except Exception as e:
+                    logger.debug(f"WeChat profile authorization not ready in frame={fr.url[:80]!r}: {e}")
+            else:
+                page.wait_for_timeout(500)
+                continue
+            break
+
+        try:
+            page.wait_for_url("**/post/create", timeout=timeout_ms)
+            logger.info("WeChat quick authorization login succeeded.")
+            return True
+        except Exception as e:
+            logger.warning(f"WeChat quick authorization did not finish within {timeout_ms / 1000:.0f}s: {e}")
+            return False
+    finally:
+        if desktop_auth:
+            desktop_auth.stop()
 
 
 def _capture_wechat_login_qr(page, qr_path: Path) -> bool:
@@ -1027,21 +1036,35 @@ def run_uploader(
                     logger.info("Successfully authenticated (DOM check passed).")
 
         if is_login_page:
-            if fail_fast_login and not login_only:
-                logger.error("Login required; fail-fast mode refuses to wait for QR during automatic publish.")
-                browser.close()
-                return 2  # LOGIN_REQUIRED，交由管线回写状态并告警
-
             qr_path = state_file.parent / "login_qr.png"
             page.wait_for_timeout(2000)  # 等登录 iframe 渲染
 
             # 2026-07 新版：open.weixin.qq.com iframe 默认先显示“微信快捷登录”授权按钮。
             # 成功时无需二维码；失败时继续保留传统扫码兜底。
             login_completed = False
-            if _try_wechat_quick_login(page):
+            desktop_quick_attempted = False
+            if settings.enable_wechat_desktop_quick_login:
+                desktop_quick_attempted = True
+                desktop_auth = WeChatDesktopAuthWatcher(
+                    settings.wechat_desktop_quick_login_timeout_seconds,
+                )
+                if _try_wechat_quick_login(
+                    page,
+                    desktop_auth=desktop_auth,
+                    timeout_ms=settings.wechat_desktop_quick_login_timeout_seconds * 1000,
+                ):
+                    _wait_and_save_login(page, context, state_file, qr_path)
+                    login_completed = True
+
+            if not login_completed and fail_fast_login and not login_only:
+                logger.error("Login required; bounded desktop quick-login failed and fail-fast mode refuses QR wait.")
+                browser.close()
+                return 2  # LOGIN_REQUIRED，交由管线回写状态并告警
+
+            if not login_completed and not desktop_quick_attempted and _try_wechat_quick_login(page):
                 _wait_and_save_login(page, context, state_file, qr_path)
                 login_completed = True
-            else:
+            elif not login_completed:
                 _capture_wechat_login_qr(page, qr_path)
 
             if not login_completed and headless:
@@ -2101,8 +2124,10 @@ def run_uploader(
             logger.info(f"Category logic skipped. WeChat Web UI no longer supports category selectors. Relying on hashtags for {category!r}.")
             
         # ── 8. 合集选择与新建 ───────────────────────────────────────────────────
-        if collection:
-            _select_collection(page, collection)
+        if not _collection_binding_confirmed(page, collection):
+            logger.error("Collection binding was not confirmed; refusing to publish this video.")
+            browser.close()
+            return 1
 
         # ── 9. 发表前清理残留遮罩 ────────────────────────────────────────────────
         # [Claude_Sonnet_4.6_Thinking_planning] v2.0.0 bugfix:
@@ -2200,6 +2225,8 @@ def main():
                         help="强制重登：忽略现有会话，必出二维码（成功扫码才覆盖 state；未扫旧会话保持有效）")
     parser.add_argument("--fail-fast-login", action="store_true",
                         help="自动发布模式：检测到登录失效立即退出，不等待二维码扫码")
+    parser.add_argument("--desktop-auth-preflight", action="store_true",
+                        help="只读检查 macOS WeChat 辅助功能权限；不登录、不上传、不发表")
     parser.add_argument("--verify-only", action="store_true",
                         help="仅按已绑定的视频号原生 post_id 回查状态，绝不上传或发布")
     parser.add_argument("--platform-post-id", help="视频号后台的已绑定原生作品 ID；回查时必填")
@@ -2211,6 +2238,11 @@ def main():
     )
     parser.set_defaults(headless=True)
     args = parser.parse_args()
+
+    if args.desktop_auth_preflight:
+        result = desktop_auth_preflight()
+        logger.info("Desktop WeChat authorization preflight: %s", result.code)
+        sys.exit(0 if result.ready else 2)
 
     try:
         code = run_uploader(

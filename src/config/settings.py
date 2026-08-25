@@ -7,6 +7,7 @@
 | 3.16.3 | 2026-08-24 | Codex | 平台发布审查字幕改存为独立证据快照；最短保留 31 天且不受原始视频 3 天归档 TTL 影响。 |
 | 3.16.2 | 2026-08-24 | Codex | AGY 改为三天影子评估；生产默认恢复 Gemini→DeepSeek→Google，正式切换必须人工确认。 |
 | 3.46.0 | 2026-08-24 | Codex | 新增标题供应商顺序与 AGY 参数；默认 Gemini 且封面双标题消费关闭。 |
+| 3.47.0 | 2026-08-25 | Codex | 新增受限的视频号桌面快捷授权开关与超时；默认关闭，需经辅助功能预检后显式启用。 |
 | 3.45.0 | 2026-08-21 | Codex | Candidate-score cache TTL prevents minute-by-minute full rescoring. |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -63,7 +64,7 @@ from pathlib import Path
 from typing import Optional, List
 from zoneinfo import ZoneInfo
 
-from pydantic import computed_field
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # [Claude_Sonnet_4.6_Thinking_planning] 项目根目录的绝对路径，在模块加载时确定
@@ -134,6 +135,10 @@ class Settings(BaseSettings):
     # 临期时自动启动 --login-only --relogin 并把二维码推送到 Telegram。
     # 旧 state 在扫码成功前不覆盖；该开关不能绕过微信扫码，只把人工动作前移。
     wechat_auto_relogin_enabled: bool = False
+    # 仅在网页已触发“微信快捷登录”后，短时间监听本机 WeChat 的登录/授权窗口。
+    # 默认关闭：需要先通过 --desktop-auth-preflight 确认 macOS 辅助功能权限。
+    enable_wechat_desktop_quick_login: bool = False
+    wechat_desktop_quick_login_timeout_seconds: int = Field(default=15, ge=1, le=60)
 
 
     # Google Gemini API Key

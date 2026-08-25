@@ -73,3 +73,26 @@ def test_quick_login_approves_nickname_avatar_authorization_before_waiting_for_p
     assert _try_wechat_quick_login(page) is True
     assert frame.allow_clicked is True
     assert page.waited_for == ("**/post/create", 30000)
+
+
+def test_quick_login_starts_and_stops_scoped_desktop_watcher():
+    frame = _AuthorizationFrame()
+    page = _AuthorizationPage(frame)
+
+    class _Watcher:
+        def __init__(self):
+            self.started = False
+            self.stopped = False
+
+        def start(self):
+            self.started = True
+
+        def stop(self):
+            self.stopped = True
+
+    watcher = _Watcher()
+
+    assert _try_wechat_quick_login(page, desktop_auth=watcher, timeout_ms=15_000) is True
+    assert watcher.started is True
+    assert watcher.stopped is True
+    assert page.waited_for == ("**/post/create", 15_000)
