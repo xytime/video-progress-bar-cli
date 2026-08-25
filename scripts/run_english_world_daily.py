@@ -10,11 +10,13 @@
 # | 2.0.0 | 2026-08-24 | Codex | 以直接 Python 入口替代 shell 协调器，保留有界重试、锁、状态及 Telegram 失败回执。 |
 # | 2.1.0 | 2026-08-24 | Codex | 日更生产提示明确英语世界成片必须严格大于 30 秒且不超过 300 秒。 |
 # | 2.2.0 | 2026-08-25 | Codex | 对 Codex 瞬时传输故障和 Telegram 失败回执实施有界重试，避免网络抖动吞掉审核窗口。 |
+# | 2.3.0 | 2026-08-25 | Codex | 瞬时失败重试前核验本次已获 API 接受的审核回执，阻断可能重复的生产/投递。 |
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -100,6 +102,26 @@ def _is_transient_transport_failure(run_log: Path, start_offset: int = 0) -> boo
     return any(marker in text for marker in markers)
 
 
+def _accepted_review_receipt_snapshots(project_root: Path) -> dict[Path, int]:
+    """读取可审计的 Telegram 审核回执快照；不把本地成片当作投递成功。"""
+    receipt_root = project_root / "output" / "english_world_daily"
+    snapshots: dict[Path, int] = {}
+    for receipt_path in receipt_root.glob("*/*/telegram_receipt.json"):
+        try:
+            payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict) and payload.get("status") == "ACCEPTED":
+                snapshots[receipt_path.resolve()] = receipt_path.stat().st_mtime_ns
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return snapshots
+
+
+def _new_accepted_review_receipts(project_root: Path, before: dict[Path, int]) -> list[Path]:
+    """返回一次协调尝试中新增或更新且已获 Telegram API 接受的审核回执。"""
+    after = _accepted_review_receipt_snapshots(project_root)
+    return sorted(path for path, modified_at in after.items() if before.get(path) != modified_at)
+
+
 def _notify_failure(
     paths: RuntimePaths,
     reason: str,
@@ -161,10 +183,28 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
                 return 1
             _log(stream, "starting daily English World production coordinator")
             exit_code = 0
+            accepted_receipts: list[Path] = []
             for attempt in range(1, max_attempts + 1):
                 _log(stream, f"coordinator attempt {attempt}/{max_attempts}")
                 attempt_log_offset = run_log.stat().st_size
+                receipt_snapshot = _accepted_review_receipt_snapshots(paths.project_root)
                 exit_code = _run_coordinator(paths, response_path, stream)
+                accepted_receipts = _new_accepted_review_receipts(paths.project_root, receipt_snapshot)
+                if exit_code != 0 and accepted_receipts:
+                    _log(
+                        stream,
+                        "accepted Telegram review receipt detected after failed coordinator; "
+                        "stopping without retry: " + ", ".join(str(path) for path in accepted_receipts),
+                    )
+                    _write_status(
+                        status_path,
+                        "COORDINATOR_DELIVERY_UNCERTAIN",
+                        exit_code,
+                        attempt,
+                        run_log,
+                        response_path,
+                    )
+                    return exit_code
                 transient_failure = exit_code == 78 or (
                     exit_code != 0 and _is_transient_transport_failure(run_log, attempt_log_offset)
                 )

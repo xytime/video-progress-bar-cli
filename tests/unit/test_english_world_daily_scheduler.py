@@ -5,6 +5,7 @@
 # | --- | --- | --- | --- |
 # | 2.0.0 | 2026-08-24 | Codex | 覆盖直接 Python 协调器的重试、失败回执与 LaunchAgent 入口。 |
 # | 2.1.0 | 2026-08-25 | Codex | 覆盖 Codex 瞬时传输故障触发有界重试。 |
+# | 2.2.0 | 2026-08-25 | Codex | 覆盖瞬时失败后已获 Telegram 审核回执时禁止重跑。 |
 """
 
 from __future__ import annotations
@@ -102,6 +103,43 @@ def test_transient_transport_failure_retries_before_failure_notification(tmp_pat
     assert call_lines.count("notifier") == 1
     run_log = next(log_dir.glob("run_*.log")).read_text(encoding="utf-8")
     assert "Codex transient transport failure" in run_log
+
+
+def test_transient_failure_with_accepted_review_receipt_does_not_rerun(tmp_path: Path):
+    calls = tmp_path / "calls.log"
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    receipt = project_root / "output" / "english_world_daily" / "2026-08-25" / "example" / "telegram_receipt.json"
+    fake_codex = tmp_path / "codex"
+    fake_python = tmp_path / "python"
+    notifier = tmp_path / "notifier.py"
+    _write_executable(
+        fake_codex,
+        "#!/usr/bin/env bash\n"
+        f"echo codex >> {calls}\n"
+        f"mkdir -p {receipt.parent}\n"
+        f"printf '%s\\n' '{{\"status\": \"ACCEPTED\"}}' > {receipt}\n"
+        "echo 'tls handshake eof' >&2\n"
+        "exit 1\n",
+    )
+    _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier >> {calls}\nexit 0\n")
+    notifier.write_text("# fake notifier\n", encoding="utf-8")
+    log_dir = project_root / "output" / "english_world_daily"
+    arguments = [
+        sys.executable, str(RUNNER), "--project-root", str(project_root),
+        "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
+        "--notifier-script", str(notifier), "--log-dir", str(log_dir),
+        "--lock-dir", str(project_root / "output" / "locks" / "lock"), "--max-attempts", "3",
+        "--retry-delay-seconds", "0",
+    ]
+
+    result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 1
+    assert calls.read_text(encoding="utf-8").splitlines() == ["codex"]
+    status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=COORDINATOR_DELIVERY_UNCERTAIN" in status
+    assert str(receipt) in next(log_dir.glob("run_*.log")).read_text(encoding="utf-8")
 
 
 def test_plist_directly_starts_python_coordinator():
