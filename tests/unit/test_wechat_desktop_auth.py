@@ -4,11 +4,20 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-25 | Codex | 覆盖无点击预检、受限成功信号和失败不抛异常的边界。 |
+| 1.1.0 | 2026-08-25 | Codex | 固化视频号申请窗口的允许按钮白名单，防止扩展为通用允许。 |
+| 1.2.0 | 2026-08-25 | Codex | 断言提示文本由辅助功能树精确匹配，不依赖 WeChat 自绘窗口标题。 |
+| 1.3.0 | 2026-08-25 | Codex | 覆盖 AppleScript 在 System Events 术语作用域内直接枚举 UI 元素的可编译实现。 |
+| 1.4.0 | 2026-08-25 | Codex | 固化深层自绘内容枚举及名称和值双通道匹配。 |
+| 1.5.0 | 2026-08-25 | Codex | 断言允许按钮也从已确认窗口的深层内容精确定位。 |
 """
 
 from unittest.mock import MagicMock, patch
 
-from scripts.wechat_desktop_auth import WeChatDesktopAuthWatcher, desktop_auth_preflight
+from scripts.wechat_desktop_auth import (
+    WeChatDesktopAuthWatcher,
+    _CLICK_AUTH_SCRIPT,
+    desktop_auth_preflight,
+)
 
 
 def test_preflight_reports_ready_only_for_explicit_ready_signal():
@@ -60,3 +69,12 @@ def test_watcher_does_not_promote_unscoped_window_to_success():
             watcher._poll()
 
     assert watcher.clicked is False
+
+
+def test_watcher_allows_allow_only_in_the_explicit_video_account_application_window():
+    assert "repeat with element in entire contents of w" in _CLICK_AUTH_SCRIPT
+    assert 'containsText(elementName, "视频号创作平台") and my containsText(elementName, "申请使用")' in _CLICK_AUTH_SCRIPT
+    assert 'containsText(elementValue, "视频号创作平台") and my containsText(elementValue, "申请使用")' in _CLICK_AUTH_SCRIPT
+    assert "if isVideoAccountApplication then" in _CLICK_AUTH_SCRIPT
+    assert 'if elementName is "允许" then' in _CLICK_AUTH_SCRIPT
+    assert 'candidateName in {"登录", "授权登录", "确认登录"}' in _CLICK_AUTH_SCRIPT

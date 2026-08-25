@@ -49,6 +49,7 @@
 | 4.1.0   | 2026-08-20 | Codex                               | 新增作品管理页只读回查：以标题定位后台作品并输出已发布、审核中、驳回、未找到或不可判定结果 |
 | 4.3.0   | 2026-08-25 | Codex                               | 修复合集列表选择器；新建后重新回选并校验 active，未确认绑定则阻断发表 |
 | 4.4.0   | 2026-08-25 | Codex                               | 合集绑定失败改为发表硬门禁；新增受限 macOS WeChat 桌面快捷授权与无点击预检入口 |
+| 4.5.0   | 2026-08-25 | Codex                               | 桌面授权监听改在网页快捷登录点击后启动，避免授权弹窗出现前耗尽观察窗口。 |
 """
 
 import os
@@ -761,11 +762,13 @@ def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
 def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None = None,
                             timeout_ms: int = 30_000) -> bool:
     """新版 open.weixin.qq.com 登录 iframe：完成快捷登录及资料授权。"""
-    if desktop_auth:
-        desktop_auth.start()
     try:
         if not _click_visible_frame_button(page, "微信快捷登录"):
             return False
+        # 原生 WeChat 授权弹窗由上述网页点击触发；必须随后才启动监听，避免
+        # 把有限超时耗在 iframe 尚未创建授权请求的阶段。
+        if desktop_auth:
+            desktop_auth.start()
 
         # 点击“微信快捷登录”后，微信会在同一网页 iframe 显示「视频号创作平台
         # 申请使用你的昵称、头像」的二次确认。它不是手机扫码/手机确认；若不点

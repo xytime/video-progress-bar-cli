@@ -1,13 +1,18 @@
 """macOS WeChat 桌面快捷授权辅助。
 
 该模块只在网页已主动点击“微信快捷登录”后短时运行。它不会启动微信、不会扫描
-二维码，也不会点击普通聊天窗口中的通用“允许/确认”按钮；没有明确的登录/授权窗口
-或辅助功能权限时返回失败，由调用方回退二维码或 LOGIN_REQUIRED。
+二维码，也不会点击普通聊天窗口中的通用“允许/确认”按钮；仅“视频号创作平台
+申请使用”窗口中的“允许”在白名单内。没有明确的登录/授权窗口或辅助功能权限时
+返回失败，由调用方回退二维码或 LOGIN_REQUIRED。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-25 | Codex | 新增受限 WeChat 桌面登录授权监听、无点击预检与超时退出。 |
+| 1.1.0 | 2026-08-25 | Codex | 仅在“视频号创作平台 申请使用”窗口中允许点击“允许”，覆盖实际快捷登录授权弹窗且不放宽通用确认。 |
+| 1.2.0 | 2026-08-25 | Codex | 以辅助功能文本而非窗口标题识别视频号申请弹窗，适配 WeChat 自绘窗口。 |
+| 1.3.0 | 2026-08-25 | Codex | 递归枚举 WeChat 自绘窗口内容，并同时检查元素名称和值以定位实际申请提示。 |
+| 1.4.0 | 2026-08-25 | Codex | 在同一已确认申请窗口的深层元素中定位精确“允许”按钮，适配自绘按钮层级。 |
 """
 
 from __future__ import annotations
@@ -31,7 +36,7 @@ end tell
 return "READY"
 '''
 
-# 只接受名字明确指向登录动作的窗口和按钮。不要扩大为“允许”“确认”，避免误操作聊天。
+# 只接受名字明确指向登录动作的窗口和按钮。仅视频号申请窗口例外允许“允许”。
 _CLICK_AUTH_SCRIPT = r'''
 on containsText(haystack, needle)
     if haystack is missing value then return false
@@ -46,7 +51,35 @@ tell application "System Events"
             try
                 set windowName to name of w as text
             end try
-            if my containsText(windowName, "登录") or my containsText(windowName, "授权") or my containsText(windowName, "视频号") or my containsText(windowName, "创作平台") then
+            set isVideoAccountApplication to false
+            try
+                repeat with element in entire contents of w
+                    set elementName to ""
+                    set elementValue to ""
+                    try
+                        set elementName to (name of element) as text
+                    end try
+                    try
+                        set elementValue to (value of element) as text
+                    end try
+                    if (my containsText(elementName, "视频号创作平台") and my containsText(elementName, "申请使用")) or (my containsText(elementValue, "视频号创作平台") and my containsText(elementValue, "申请使用")) then
+                        set isVideoAccountApplication to true
+                        exit repeat
+                    end if
+                end repeat
+            end try
+            if isVideoAccountApplication then
+                repeat with element in entire contents of w
+                    set elementName to ""
+                    try
+                        set elementName to (name of element) as text
+                    end try
+                    if elementName is "允许" then
+                        click element
+                        return "CLICKED_LOGIN"
+                    end if
+                end repeat
+            else if my containsText(windowName, "登录") or my containsText(windowName, "授权") or my containsText(windowName, "视频号") or my containsText(windowName, "创作平台") then
                 repeat with candidateName in {"登录", "授权登录", "确认登录"}
                     try
                         set authButton to first button of w whose name is candidateName

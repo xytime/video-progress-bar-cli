@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-29 | Codex | 覆盖快捷登录后自动点击昵称头像授权页的允许按钮 |
+| 1.1.0 | 2026-08-25 | Codex | 断言桌面授权监听仅在网页快捷登录按钮点击后启动。 |
 """
 
 from scripts.wechat_uploader import _try_wechat_quick_login
@@ -96,3 +97,17 @@ def test_quick_login_starts_and_stops_scoped_desktop_watcher():
     assert watcher.started is True
     assert watcher.stopped is True
     assert page.waited_for == ("**/post/create", 15_000)
+
+
+def test_desktop_watcher_starts_only_after_the_web_quick_login_click():
+    frame = _AuthorizationFrame()
+    page = _AuthorizationPage(frame)
+
+    class _Watcher:
+        def start(self):
+            assert frame.quick_clicked is True
+
+        def stop(self):
+            pass
+
+    assert _try_wechat_quick_login(page, desktop_auth=_Watcher()) is True
