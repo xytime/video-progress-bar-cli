@@ -10,6 +10,7 @@
 # | 2.4.0 | 2026-08-26 | Codex | 覆盖可审计锁的失效 PID 回收，避免中断后日更永久被跳过。 |
 # | 2.5.0 | 2026-08-26 | Codex | 覆盖协调器收到 SIGTERM 后的子进程收口、失败状态与锁释放。 |
 # | 2.6.0 | 2026-08-26 | Codex | 固化生产代理的受限工作区和禁止自我监控约束。 |
+# | 2.7.0 | 2026-08-26 | Codex | 固化工作区沙箱中的来源网络访问，避免 DNS 隔离造成日更断供。 |
 """
 
 from __future__ import annotations
@@ -241,4 +242,5 @@ def test_plist_directly_starts_python_coordinator():
     ]
     assert "严格大于 30 秒且不超过 300 秒" in runner_text
     assert '"--sandbox", "workspace-write"' in runner_text
+    assert "sandbox_workspace_write.network_access=true" in runner_text
     assert all(command in runner_text for command in ("`ps`", "`tail`", "`sleep`"))

@@ -16,6 +16,7 @@
 # | 2.6.0 | 2026-08-26 | Codex | SIGTERM/SIGINT 受控收口：终止协调器子进程组、持久化中断状态并释放锁。 |
 # | 2.7.0 | 2026-08-26 | Codex | 明确生产代理不得接管锁、进程或失败通知，防止其越权终止协调器。 |
 # | 2.8.0 | 2026-08-26 | Codex | 生产提示对齐英语世界质检后自动投稿策略，仍禁止代理直接调用平台上传器。 |
+# | 2.9.0 | 2026-08-26 | Codex | 工作区受限协调器显式开启网络访问，修复沙箱 DNS 隔离导致的来源预检全灭。 |
 """
 
 from __future__ import annotations
@@ -244,7 +245,8 @@ def _run_coordinator(paths: RuntimePaths, response_path: Path, stream: TextIO) -
     """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
     command = [
         str(paths.codex_bin), "exec", "--cd", str(paths.project_root), "--add-dir", "/Users/ryusei/.codex/skills",
-        "--sandbox", "workspace-write", "-c", 'approval_policy="never"', "--output-last-message", str(response_path), PROMPT,
+        "--sandbox", "workspace-write", "-c", 'sandbox_workspace_write.network_access=true',
+        "-c", 'approval_policy="never"', "--output-last-message", str(response_path), PROMPT,
     ]
     environment = dict(os.environ)
     environment["CODEX_HOME"] = str(paths.codex_home)
