@@ -17,6 +17,7 @@
 # | 2.7.0 | 2026-08-26 | Codex | 明确生产代理不得接管锁、进程或失败通知，防止其越权终止协调器。 |
 # | 2.8.0 | 2026-08-26 | Codex | 生产提示对齐英语世界质检后自动投稿策略，仍禁止代理直接调用平台上传器。 |
 # | 2.9.0 | 2026-08-26 | Codex | 工作区受限协调器显式开启网络访问，修复沙箱 DNS 隔离导致的来源预检全灭。 |
+# | 2.10.0 | 2026-08-26 | Codex | 明确日更来源预检必须复用项目 Cookie，修复协调器裸 yt-dlp 触发 YouTube 反爬。 |
 """
 
 from __future__ import annotations
@@ -45,6 +46,8 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 协调器进程、锁、重试、失败通知和运行日志均由本入口管理。不得运行 `kill`、`pkill`、`launchctl`、`rm`、`rmdir`、`ps`、`tail`、`sleep` 或任何进程/锁/运行日志监控命令；不得根据既有日志自行发送失败通知、终止进程或干预其他运行。遇到已有素材、旧审核项或运行异常时，只报告事实并继续本次合规素材的研究/制作；本入口会负责收口。
 
 立即开始来源研究、字幕预检、下载或渲染中的一项实际生产动作。不要轮询、等待或反复检查调度状态；若十分钟内无法取得合格候选，按下方失败命令报告准确的选题/来源失败原因并退出。
+
+所有 YouTube 元数据、字幕和下载命令都必须使用项目已验证的 Cookie：在每个 `yt-dlp` 调用后附加 `--cookies output/youtube_cookies.txt`。禁止裸调用 yt-dlp 后把“Sign in to confirm you’re not a bot”误报为无候选；若该 Cookie 文件缺失或明确失效，只能运行一次 `PYTHONPATH=src .venv/bin/python scripts/refresh_yt_cookies.py` 后重试该同一预检。
 
 来源仅限以下频道，并按频道 ID 严格核验：
 - CBC Kids News：UCWUA2W6LueNy9BSovivFVvQ
