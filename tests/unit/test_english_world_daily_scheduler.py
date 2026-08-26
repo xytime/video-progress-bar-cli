@@ -12,6 +12,7 @@
 # | 2.6.0 | 2026-08-26 | Codex | 固化生产代理的受限工作区和禁止自我监控约束。 |
 # | 2.7.0 | 2026-08-26 | Codex | 固化工作区沙箱中的来源网络访问，避免 DNS 隔离造成日更断供。 |
 # | 2.8.0 | 2026-08-26 | Codex | 固化协调器复用项目 YouTube Cookie，避免裸 yt-dlp 被反爬拦截。 |
+# | 2.9.0 | 2026-08-26 | Codex | 固化用户自动投稿策略覆盖旧 R3 人工审核文本的边界。 |
 """
 
 from __future__ import annotations
@@ -245,4 +246,5 @@ def test_plist_directly_starts_python_coordinator():
     assert '"--sandbox", "workspace-write"' in runner_text
     assert "sandbox_workspace_write.network_access=true" in runner_text
     assert "--cookies output/youtube_cookies.txt" in runner_text
+    assert "覆盖任何旧文档中要求 Telegram 人工 R3 审核" in runner_text
     assert all(command in runner_text for command in ("`ps`", "`tail`", "`sleep`"))
