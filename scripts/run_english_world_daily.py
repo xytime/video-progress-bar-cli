@@ -11,6 +11,7 @@
 # | 2.1.0 | 2026-08-24 | Codex | 日更生产提示明确英语世界成片必须严格大于 30 秒且不超过 300 秒。 |
 # | 2.2.0 | 2026-08-25 | Codex | 对 Codex 瞬时传输故障和 Telegram 失败回执实施有界重试，避免网络抖动吞掉审核窗口。 |
 # | 2.3.0 | 2026-08-25 | Codex | 瞬时失败重试前核验本次已获 API 接受的审核回执，阻断可能重复的生产/投递。 |
+# | 2.4.0 | 2026-08-26 | Codex | 为 Codex 协调器增加进程组级超时终止与持久失败状态，卡死不再吞掉当日审核窗口。 |
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -61,6 +63,7 @@ class RuntimePaths:
     notifier_script: Path
     log_dir: Path
     lock_dir: Path
+    coordinator_timeout_seconds: float
 
 
 def _timestamp() -> str:
@@ -151,13 +154,39 @@ def _notify_failure(
 
 
 def _run_coordinator(paths: RuntimePaths, response_path: Path, stream: TextIO) -> int:
+    """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
     command = [
         str(paths.codex_bin), "exec", "--cd", str(paths.project_root), "--add-dir", "/Users/ryusei/.codex/skills",
         "--sandbox", "danger-full-access", "-c", 'approval_policy="never"', "--output-last-message", str(response_path), PROMPT,
     ]
     environment = dict(os.environ)
     environment["CODEX_HOME"] = str(paths.codex_home)
-    return subprocess.run(command, cwd=paths.project_root, env=environment, stdout=stream, stderr=subprocess.STDOUT, check=False, text=True).returncode
+    process = subprocess.Popen(
+        command,
+        cwd=paths.project_root,
+        env=environment,
+        stdout=stream,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        return process.wait(timeout=paths.coordinator_timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _log(
+            stream,
+            "ERROR: coordinator timed out after "
+            f"{paths.coordinator_timeout_seconds:g}s; terminating its process group",
+        )
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
+        except ProcessLookupError:
+            pass
+        raise
 
 
 def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -> int:
@@ -188,7 +217,35 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
                 _log(stream, f"coordinator attempt {attempt}/{max_attempts}")
                 attempt_log_offset = run_log.stat().st_size
                 receipt_snapshot = _accepted_review_receipt_snapshots(paths.project_root)
-                exit_code = _run_coordinator(paths, response_path, stream)
+                try:
+                    exit_code = _run_coordinator(paths, response_path, stream)
+                except subprocess.TimeoutExpired:
+                    exit_code = 124
+                    accepted_receipts = _new_accepted_review_receipts(paths.project_root, receipt_snapshot)
+                    if accepted_receipts:
+                        _log(
+                            stream,
+                            "accepted Telegram review receipt detected after coordinator timeout; "
+                            "stopping without retry: " + ", ".join(str(path) for path in accepted_receipts),
+                        )
+                        _write_status(
+                            status_path,
+                            "COORDINATOR_DELIVERY_UNCERTAIN",
+                            exit_code,
+                            attempt,
+                            run_log,
+                            response_path,
+                        )
+                        return exit_code
+                    _write_status(status_path, "COORDINATOR_TIMED_OUT", exit_code, attempt, run_log, response_path)
+                    _notify_failure(
+                        paths,
+                        f"生产协调器超过 {paths.coordinator_timeout_seconds:g} 秒未退出，已终止其进程组"
+                        f"（尝试={attempt}/{max_attempts}）。运行日志：{run_log}。"
+                        "未生成可确认的今日审核成片，未触发视频号投稿。",
+                        stream,
+                    )
+                    return exit_code
                 accepted_receipts = _new_accepted_review_receipts(paths.project_root, receipt_snapshot)
                 if exit_code != 0 and accepted_receipts:
                     _log(
@@ -237,6 +294,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--lock-dir", type=Path)
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--retry-delay-seconds", type=float, default=15)
+    parser.add_argument(
+        "--coordinator-timeout-seconds",
+        type=float,
+        default=2 * 60 * 60,
+        help="单次 Codex 协调器最长运行时间；超时将终止整个进程组并写入状态账本。",
+    )
     return parser.parse_args(argv)
 
 
@@ -244,6 +307,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     if args.max_attempts < 1:
         raise ValueError("--max-attempts must be at least 1")
+    if args.coordinator_timeout_seconds <= 0:
+        raise ValueError("--coordinator-timeout-seconds must be greater than 0")
     project_root = args.project_root.resolve()
     paths = RuntimePaths(
         project_root=project_root,
@@ -253,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         notifier_script=args.notifier_script or project_root / "scripts/notify_english_world_review.py",
         log_dir=args.log_dir or project_root / "output/english_world_daily",
         lock_dir=args.lock_dir or project_root / "output/locks/english_world_daily.lock",
+        coordinator_timeout_seconds=args.coordinator_timeout_seconds,
     )
     return run(paths, max_attempts=args.max_attempts, retry_delay_seconds=args.retry_delay_seconds)
 

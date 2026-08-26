@@ -22,6 +22,7 @@
   | 2026-07-23 | Codex | 新增微信/抖音自动补录计划预览面板。 |
   | 2026-07-24 | Gemini_3.6_Flash_planning | 重构多平台发布矩阵组件，支持微信、快手、抖音 3 平台发布状态徽章、时间线提示及详情弹窗。 |
   | 2026-08-21 | Codex | 明确展示视频号已提交但未绑定原生 ID 的终态，避免误当处理中或已公开发布。 |
+  | 2026-08-26 | Codex | 本地受理账本与后台待确认分列；关闭原生 ID 回查时仍清楚展示已受理且禁止重发。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -1446,10 +1447,10 @@
       <div class="stat-value" id="s-active">0</div>
       <div class="stat-sub">正在加工的任务</div>
     </div>
-    <div class="stat-card card-review" onclick="switchTab('review')" style="cursor: pointer;" title="点击查看已提交、等待平台公开确认的任务">
-      <div class="stat-label">待平台确认</div>
+    <div class="stat-card card-review" onclick="switchTab('review')" style="cursor: pointer;" title="本地账本已记录平台受理；当前不回查视频号后台，所有条目均禁止重发">
+      <div class="stat-label">本地已受理</div>
       <div class="stat-value" id="s-review">0</div>
-      <div class="stat-sub">已提交，未获公开证明</div>
+      <div class="stat-sub">不回查后台 · 禁止重发</div>
     </div>
     <div class="stat-card card-published" onclick="switchTab('completed')" style="cursor: pointer;" title="点击查看已上架视频">
       <div class="stat-label">已发布</div>
@@ -1895,7 +1896,7 @@
       animateNumber(document.getElementById('s-total'),     d.total);
       animateNumber(document.getElementById('s-pending'),   d.pending);
       animateNumber(document.getElementById('s-active'),    d.active);
-      animateNumber(document.getElementById('s-review'),    d.breakdown?.UNDER_REVIEW || 0);
+      animateNumber(document.getElementById('s-review'),    d.breakdown?.SUBMITTED_UNBOUND || 0);
       animateNumber(document.getElementById('s-published'), d.published);
       animateNumber(document.getElementById('s-failed'),    d.failed);
       document.getElementById('last-update').textContent = d.server_time;
@@ -2228,7 +2229,9 @@
         document.getElementById('tab-queue').textContent = `待处理(${d.tab_counts.queue})`;
         document.getElementById('tab-active').textContent = `处理中(${d.tab_counts.active})`;
         document.getElementById('tab-wechat_deferred').textContent = `待微信恢复(${d.tab_counts.wechat_deferred || 0})`;
-        document.getElementById('tab-review').textContent = `待平台确认(${d.tab_counts.review || 0})`;
+        const localAccepted = d.tab_counts.local_accepted || 0;
+        const pendingConfirmation = d.tab_counts.review || 0;
+        document.getElementById('tab-review').textContent = `本地受理 / 待确认(${localAccepted + pendingConfirmation})`;
         document.getElementById('tab-completed').textContent = `已完成(${d.tab_counts.completed})`;
         document.getElementById('tab-error').textContent = `出错异常(${d.tab_counts.error})`;
         if (d.tab_counts.high_likes !== undefined) {
@@ -4173,8 +4176,8 @@
         tooltip = `${names[key]}: 已发布 (${info.published_at || '成功'})`;
       } else if (['SUBMITTED_UNBOUND', 'SUBMITTED_BOUND'].includes(st)) {
         cls = 'st-review';
-        stateLabel = st === 'SUBMITTED_BOUND' ? '已提交待回查' : '已提交·不可重发';
-        tooltip = `${names[key]}: ${stateLabel}（尚无公开发布证明）`;
+        stateLabel = st === 'SUBMITTED_BOUND' ? '已提交待确认' : '本地已受理';
+        tooltip = `${names[key]}: ${stateLabel}（尚无公开发布证明；禁止重发）`;
       } else if (['UNDER_REVIEW', 'UPLOADING', 'QUEUED', 'PUBLISHING', 'WECHAT_DEFERRED'].includes(st)) {
         cls = 'st-review';
         stateLabel = st === 'UNDER_REVIEW' ? '审核中' : (st === 'WECHAT_DEFERRED' ? '已延后' : '发送中');
@@ -4220,7 +4223,7 @@
       if (st === 'PUBLISHED') {
         stateBadge = `<span class="badge badge-PUBLISHED" style="background:rgba(52,211,153,0.15); color:#34d399;">🟢 已发布</span>`;
       } else if (st === 'SUBMITTED_UNBOUND' || st === 'SUBMITTED_BOUND') {
-        stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">🛑 已提交·禁止重发</span>`;
+        stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">🧾 ${st === 'SUBMITTED_UNBOUND' ? '本地已受理' : '已提交待确认'} · 禁止重发</span>`;
       } else if (st === 'UNDER_REVIEW') {
         stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">⏳ 平台审核中</span>`;
       } else if (st === 'UNCERTAIN') {

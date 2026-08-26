@@ -6,6 +6,7 @@
 # | 2.0.0 | 2026-08-24 | Codex | 覆盖直接 Python 协调器的重试、失败回执与 LaunchAgent 入口。 |
 # | 2.1.0 | 2026-08-25 | Codex | 覆盖 Codex 瞬时传输故障触发有界重试。 |
 # | 2.2.0 | 2026-08-25 | Codex | 覆盖瞬时失败后已获 Telegram 审核回执时禁止重跑。 |
+# | 2.3.0 | 2026-08-26 | Codex | 覆盖协调器卡死时终止进程组、写入超时状态并发送一次失败回执。 |
 """
 
 from __future__ import annotations
@@ -140,6 +141,34 @@ def test_transient_failure_with_accepted_review_receipt_does_not_rerun(tmp_path:
     status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
     assert "phase=COORDINATOR_DELIVERY_UNCERTAIN" in status
     assert str(receipt) in next(log_dir.glob("run_*.log")).read_text(encoding="utf-8")
+
+
+def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path: Path):
+    calls = tmp_path / "calls.log"
+    fake_codex = tmp_path / "codex"
+    fake_python = tmp_path / "python"
+    notifier = tmp_path / "notifier.py"
+    _write_executable(fake_codex, f"#!/usr/bin/env bash\necho codex >> {calls}\nsleep 30\n")
+    _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier >> {calls}\nexit 0\n")
+    notifier.write_text("# fake notifier\n", encoding="utf-8")
+    log_dir = tmp_path / "logs"
+    arguments = [
+        sys.executable, str(RUNNER), "--project-root", str(PROJECT_ROOT),
+        "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
+        "--notifier-script", str(notifier), "--log-dir", str(log_dir),
+        "--lock-dir", str(tmp_path / "lock"), "--max-attempts", "3",
+        "--retry-delay-seconds", "0", "--coordinator-timeout-seconds", "1",
+    ]
+
+    result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False, timeout=15)
+
+    assert result.returncode == 124
+    assert calls.read_text(encoding="utf-8").splitlines() == ["codex", "notifier"]
+    status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=COORDINATOR_TIMED_OUT" in status
+    assert "exit_code=124" in status
+    run_log = next(log_dir.glob("run_*.log")).read_text(encoding="utf-8")
+    assert "terminating its process group" in run_log
 
 
 def test_plist_directly_starts_python_coordinator():

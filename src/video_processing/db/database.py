@@ -9,6 +9,7 @@
 | 3.37.0  | 2026-08-23 | Codex                               | 保存源视频 UTC 精确发布时间，支持发布前原创声明 24 小时判定 |
 | 3.38.0  | 2026-08-24 | Codex                               | 新增 Telegram 投递回执账本；仅 API message_id 证明单次通知获受理。 |
 | 3.39.0  | 2026-08-24 | Codex                               | 英语世界未确认投稿仅可经明确人工确认重开同一审核项，并保留原证据目录。 |
+| 3.40.0  | 2026-08-26 | Codex                               | 将视频号本地受理账本与平台待确认统计分开，原生 ID 回查关闭时仍可明确运营状态。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -4075,7 +4076,8 @@ class PipelineDB:
                         SELECT 1 FROM wechat_publications_historical_archive archive
                         WHERE archive.video_id = pv.id
                     ) THEN 1 ELSE 0 END) as wechat_deferred,
-                    SUM(CASE WHEN pv.status IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN') THEN 1 ELSE 0 END) as review,
+                    SUM(CASE WHEN pv.status = 'SUBMITTED_UNBOUND' THEN 1 ELSE 0 END) as local_accepted,
+                    SUM(CASE WHEN pv.status IN ('UNDER_REVIEW', 'SUBMITTED_BOUND', 'UNCERTAIN') THEN 1 ELSE 0 END) as review,
                     SUM(CASE WHEN (
                         pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')
                         OR
@@ -4099,12 +4101,13 @@ class PipelineDB:
                     "queue": row["queue"] or 0,
                     "active": row["active"] or 0,
                     "wechat_deferred": row["wechat_deferred"] or 0,
+                    "local_accepted": row["local_accepted"] or 0,
                     "review": row["review"] or 0,
                     "completed": row["completed"] or 0,
                     "error": row["error"] or 0,
                     "high_likes": row["high_likes"] or 0,
                 }
-            return {"waitlist": 0, "queue": 0, "active": 0, "wechat_deferred": 0, "review": 0, "completed": 0, "error": 0, "high_likes": 0}
+            return {"waitlist": 0, "queue": 0, "active": 0, "wechat_deferred": 0, "local_accepted": 0, "review": 0, "completed": 0, "error": 0, "high_likes": 0}
 
     def delete_channel(self, channel_id: str) -> bool:
         with self.get_connection() as conn:

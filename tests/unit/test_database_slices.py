@@ -163,6 +163,24 @@ def test_under_review_is_separate_from_processing_tab(temp_db):
     assert {video["youtube_id"] for video in review} == {"review-video"}
 
 
+def test_local_wechat_acceptance_is_counted_without_backend_reconciliation(temp_db):
+    """本地已受理是禁止重发终态，不因关闭原生 ID 回查而被误报为公开发布。"""
+    db = PipelineDB(temp_db)
+    assert db.add_video("local-accepted", "Local Accepted", "channel", score=80)
+    db.record_wechat_publication_confirmation(
+        "local-accepted", evidence_path="local-post-list.png", state="SUBMITTED_UNBOUND",
+    )
+    db.update_video_status("local-accepted", "SUBMITTED_UNBOUND")
+
+    rows, total = db.get_paginated_videos(tab="review")
+    counts = db.get_tab_counts()
+
+    assert total == 1
+    assert rows[0]["youtube_id"] == "local-accepted"
+    assert counts["local_accepted"] == 1
+    assert counts["review"] == 0
+
+
 def test_score_cache_only_refreshes_changed_inputs_or_expired_ttl(temp_db):
     db = PipelineDB(temp_db)
     assert db.add_video("score-cache", "Title", "channel", view_count=100, like_count=2)
