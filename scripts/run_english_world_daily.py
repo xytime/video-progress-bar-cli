@@ -19,6 +19,7 @@
 # | 2.9.0 | 2026-08-26 | Codex | 工作区受限协调器显式开启网络访问，修复沙箱 DNS 隔离导致的来源预检全灭。 |
 # | 2.10.0 | 2026-08-26 | Codex | 明确日更来源预检必须复用项目 Cookie，修复协调器裸 yt-dlp 触发 YouTube 反爬。 |
 # | 2.11.0 | 2026-08-26 | Codex | 明确当前用户自动投稿策略覆盖旧人工 R3 协议，避免代理读取旧文档后拒绝生产闭环。 |
+# | 2.12.0 | 2026-08-26 | Codex | 只有指定的机器可读 Telegram 回执可将协调器标为完成，阻断代理退出码掩盖交付失败。 |
 """
 
 from __future__ import annotations
@@ -62,9 +63,9 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 若找到合格来源，按 make-english-world-short 技能和 production-contract 完整制作一条：自然完整句收尾；逐词红线；每个可见阅读屏至少 8 个微笔记；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。
 
 质检通过后，必须运行以下命令登记 MP4 和 manifest 并发送 Telegram 审计回执：
-PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>'
+PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>' --delivery-receipt '{delivery_receipt_path}'
 若当天无合格候选或制作/质检失败，必须运行：
-PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '今日英语世界短视频' --failure '<准确原因>'
+PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '今日英语世界短视频' --failure '<准确原因>' --delivery-receipt '{delivery_receipt_path}'
 
 若已启用 `ENABLE_ENGLISH_WORLD_AUTO_PUBLISH=true`，上述入口只会对本次新建、完整质检通过的审核项一次性调用独立投稿器；不得自行补调用或重试。最终只报告真实状态、来源、证据路径与 Telegram 发送结果。不得将 Telegram 发送、素材生成或审核回执描述成视频号公开发布。"""
 
@@ -219,6 +220,21 @@ def _new_accepted_review_receipts(project_root: Path, before: dict[Path, int]) -
     return sorted(path for path, modified_at in after.items() if before.get(path) != modified_at)
 
 
+def _read_delivery_receipt(path: Path) -> dict | None:
+    """只接受本次协调器指定路径中的 Telegram API 回执。"""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("status") not in {"ACCEPTED", "SUPPRESSED"}:
+        return None
+    if payload.get("kind") not in {"review", "review_and_auto_submission", "failure_notice"}:
+        return None
+    return payload
+
+
 def _notify_failure(
     paths: RuntimePaths,
     reason: str,
@@ -247,12 +263,13 @@ def _notify_failure(
     _log(stream, "ERROR: Telegram failure notifier exhausted retries; local run log is the authoritative failure record")
 
 
-def _run_coordinator(paths: RuntimePaths, response_path: Path, stream: TextIO) -> int:
+def _run_coordinator(paths: RuntimePaths, response_path: Path, delivery_receipt_path: Path, stream: TextIO) -> int:
     """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
     command = [
         str(paths.codex_bin), "exec", "--cd", str(paths.project_root), "--add-dir", "/Users/ryusei/.codex/skills",
         "--sandbox", "workspace-write", "-c", 'sandbox_workspace_write.network_access=true',
-        "-c", 'approval_policy="never"', "--output-last-message", str(response_path), PROMPT,
+        "-c", 'approval_policy="never"', "--output-last-message", str(response_path),
+        PROMPT.replace("{delivery_receipt_path}", str(delivery_receipt_path)),
     ]
     environment = dict(os.environ)
     environment["CODEX_HOME"] = str(paths.codex_home)
@@ -286,11 +303,13 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
     response_path = paths.log_dir / "last_codex_response.md"
     status_path = paths.log_dir / "last_run_status.txt"
     run_log = paths.log_dir / f"run_{datetime.now().strftime('%F_%H%M%S')}.log"
+    delivery_receipt_path = run_log.with_suffix(".delivery.json")
     if not _acquire_lock(paths.lock_dir):
         with run_log.open("a", encoding="utf-8") as stream:
             _log(stream, "skipped: daily English World run is already active")
         _write_status(status_path, "SKIPPED_ACTIVE", 0, 0, run_log, response_path)
         return 0
+    delivery_receipt_path.write_text('{"status":"PENDING"}\n', encoding="utf-8")
 
     previous_sigterm_handler = signal.signal(signal.SIGTERM, _raise_coordinator_interrupted)
     previous_sigint_handler = signal.signal(signal.SIGINT, _raise_coordinator_interrupted)
@@ -309,7 +328,7 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
                 attempt_log_offset = run_log.stat().st_size
                 receipt_snapshot = _accepted_review_receipt_snapshots(paths.project_root)
                 try:
-                    exit_code = _run_coordinator(paths, response_path, stream)
+                    exit_code = _run_coordinator(paths, response_path, delivery_receipt_path, stream)
                 except subprocess.TimeoutExpired:
                     exit_code = 124
                     accepted_receipts = _new_accepted_review_receipts(paths.project_root, receipt_snapshot)
@@ -360,10 +379,20 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
                     break
                 _log(stream, f"Codex transient transport failure (exit={exit_code}); retrying after {retry_delay_seconds:g}s")
                 time.sleep(retry_delay_seconds)
-            if exit_code == 0:
+            delivery_receipt = _read_delivery_receipt(delivery_receipt_path)
+            if exit_code == 0 and delivery_receipt:
                 _write_status(status_path, "COORDINATOR_FINISHED", 0, attempt, run_log, response_path)
-                _log(stream, "coordinator exited successfully; inspect its Telegram receipt separately")
+                _log(stream, f"coordinator finished with Telegram delivery receipt: {delivery_receipt_path}")
                 return 0
+            if exit_code == 0:
+                _write_status(status_path, "FAILED_DELIVERY_EVIDENCE", 1, attempt, run_log, response_path)
+                _notify_failure(
+                    paths,
+                    f"生产协调器退出成功但未取得本次 Telegram 可审计回执。运行日志：{run_log}。"
+                    "本地成片或代理结论不构成交付/投稿成功证明，未确认视频号投稿。",
+                    stream,
+                )
+                return 1
             _write_status(status_path, "FAILED_COORDINATOR", exit_code, attempt, run_log, response_path)
             _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。未生成可确认的今日审核成片，未触发视频号投稿。", stream)
             return exit_code

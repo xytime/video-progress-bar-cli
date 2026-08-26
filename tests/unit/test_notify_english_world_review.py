@@ -8,11 +8,13 @@
 | 1.0.0 | 2026-08-24 | Codex | 固化英语世界未交付通知必须取得 API 回执，否则保留失败退出码。 |
 | 1.1.0 | 2026-08-24 | Codex | 固化审核包只能接收实测时长严格大于 30 秒且不超过 300 秒的成片。 |
 | 1.2.0 | 2026-08-26 | Codex | 覆盖自动策略只提交本次新建质检包、旧审核项绝不被自动重传。 |
+| 1.3.0 | 2026-08-26 | Codex | 覆盖标准 enriched 时间线兼容和机器可读 Telegram 交付回执。 |
 """
 
 from __future__ import annotations
 
 import sys
+import json
 
 import pytest
 
@@ -56,6 +58,35 @@ def test_failure_notification_records_the_exact_operational_reason(monkeypatch):
     assert sent["event_type"] == "english_world.not_delivered"
     assert sent["priority"] == "P1"
     assert "阅读屏微笔记不足 8 个" in str(sent["text"])
+
+
+def test_failure_notification_writes_machine_delivery_receipt(monkeypatch, tmp_path):
+    receipt_path = tmp_path / "delivery.json"
+    monkeypatch.setattr(
+        notifier,
+        "send_text",
+        lambda **_kwargs: TelegramDeliveryResult(state="ACCEPTED", message_id="102"),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "notify_english_world_review.py", "--title", "天气科普", "--failure", "无合格素材",
+            "--delivery-receipt", str(receipt_path),
+        ],
+    )
+
+    assert notifier.main() == 0
+    assert json.loads(receipt_path.read_text(encoding="utf-8")) == {
+        "kind": "failure_notice", "status": "ACCEPTED", "telegram_message_id": "102",
+    }
+
+
+def test_load_timeline_accepts_renderer_standard_enriched_name(tmp_path):
+    manifest_path = tmp_path / "study_card.manifest.json"
+    (tmp_path / "timeline_enriched.json").write_text('{"headline_zh":"机器人"}', encoding="utf-8")
+
+    assert notifier._load_timeline(manifest_path) == {"headline_zh": "机器人"}
 
 
 @pytest.mark.parametrize("actual_duration", [30.0, 300.1])

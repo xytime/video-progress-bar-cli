@@ -13,6 +13,7 @@
 # | 2.7.0 | 2026-08-26 | Codex | 固化工作区沙箱中的来源网络访问，避免 DNS 隔离造成日更断供。 |
 # | 2.8.0 | 2026-08-26 | Codex | 固化协调器复用项目 YouTube Cookie，避免裸 yt-dlp 被反爬拦截。 |
 # | 2.9.0 | 2026-08-26 | Codex | 固化用户自动投稿策略覆盖旧 R3 人工审核文本的边界。 |
+# | 2.10.0 | 2026-08-26 | Codex | 固化协调器仅凭指定机器回执认定 Telegram 交付成功。 |
 """
 
 from __future__ import annotations
@@ -36,15 +37,25 @@ def _write_executable(path: Path, content: str) -> None:
     path.chmod(0o755)
 
 
-def _runner_arguments(tmp_path: Path, *, codex_exit: int) -> tuple[list[str], Path, Path]:
+def _runner_arguments(
+    tmp_path: Path,
+    *,
+    codex_exit: int,
+    write_delivery_receipt: bool = False,
+) -> tuple[list[str], Path, Path]:
     calls = tmp_path / "calls.log"
     fake_codex = tmp_path / "codex"
     fake_python = tmp_path / "python"
     notifier = tmp_path / "notifier.py"
-    _write_executable(fake_codex, f"#!/usr/bin/env bash\necho codex >> {calls}\nexit {codex_exit}\n")
+    log_dir = tmp_path / "logs"
+    receipt_command = (
+        f"for receipt in {log_dir}/run_*.delivery.json; do "
+        "printf '%s\\n' '{\"kind\":\"review\",\"status\":\"ACCEPTED\"}' > \"$receipt\"; done\n"
+        if write_delivery_receipt else ""
+    )
+    _write_executable(fake_codex, f"#!/usr/bin/env bash\necho codex >> {calls}\n{receipt_command}exit {codex_exit}\n")
     _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier:\"$*\" >> {calls}\n")
     notifier.write_text("# fake notifier\n", encoding="utf-8")
-    log_dir = tmp_path / "logs"
     arguments = [
         sys.executable, str(RUNNER), "--project-root", str(PROJECT_ROOT),
         "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
@@ -74,7 +85,7 @@ def test_ex_config_retries_then_notifies_with_durable_status(tmp_path: Path):
 
 
 def test_success_does_not_send_failure_notification(tmp_path: Path):
-    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0)
+    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0, write_delivery_receipt=True)
 
     result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
 
@@ -83,6 +94,17 @@ def test_success_does_not_send_failure_notification(tmp_path: Path):
     status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
     assert "phase=COORDINATOR_FINISHED" in status
     assert "exit_code=0" in status
+
+
+def test_success_without_machine_delivery_receipt_is_a_durable_failure(tmp_path: Path):
+    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0)
+
+    result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 1
+    assert len([line for line in calls.read_text(encoding="utf-8").splitlines() if line.startswith("notifier:")]) == 1
+    status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=FAILED_DELIVERY_EVIDENCE" in status
 
 
 def test_transient_transport_failure_retries_before_failure_notification(tmp_path: Path):
@@ -181,7 +203,7 @@ def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path
 
 
 def test_stale_pid_lock_is_recovered_before_running_coordinator(tmp_path: Path):
-    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0)
+    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0, write_delivery_receipt=True)
     lock_dir = tmp_path / "lock"
     lock_dir.mkdir()
     (lock_dir / "owner.json").write_text(json.dumps({"pid": 999999, "started_at": "old"}), encoding="utf-8")

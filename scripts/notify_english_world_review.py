@@ -14,6 +14,7 @@
 | 1.4.0 | 2026-08-24 | Codex | 记录 Telegram API 回执并将失败通知去重，避免无回执重发刷屏。 |
 | 1.5.0 | 2026-08-24 | Codex | 创建审核包前以 manifest 与 ffprobe 双重拒绝非 30–300 秒范围的成片，杜绝短片绕过渲染入口直接投递。 |
 | 1.6.0 | 2026-08-26 | Codex | 支持经显式策略授权的质检后自动投稿；只消费本次新建审核项，旧项及终态绝不自动重传。 |
+| 1.7.0 | 2026-08-26 | Codex | 可选写入机器可读的日更投递回执，协调器不得再把代理退出成功误报为 Telegram 交付成功。 |
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ _MAX_REVIEW_DURATION_SECONDS = 300.0
 _AUTO_SUBMIT_SCRIPT = _PROJECT_ROOT / "scripts" / "submit_english_world_review.py"
 
 
-def _post_message(text: str, *, reply_markup: dict | None = None) -> None:
+def _post_message(text: str, *, reply_markup: dict | None = None):
     """发送文字回执；凭据只从 settings 读取。"""
     result = send_text(
         event_type="english_world.review_ready", priority="P0", text=text,
@@ -50,21 +51,42 @@ def _post_message(text: str, *, reply_markup: dict | None = None) -> None:
     )
     if result.state != "ACCEPTED":
         raise RuntimeError(f"Telegram 审核文字回执未获 API 接受：{result.error_kind or result.state}")
+    return result
 
 
-def _post_document(path: Path, caption: str) -> None:
+def _post_document(path: Path, caption: str):
     """发送审核文件；不把发送成功误作平台发布成功。"""
     result = send_document(
         event_type="english_world.review_attachment", priority="P0", path=path, caption=caption,
     )
     if result.state != "ACCEPTED":
         raise RuntimeError(f"Telegram 审核附件回执未获 API 接受：{result.error_kind or result.state}")
+    return result
+
+
+def _resolve_enriched_timeline_path(manifest_path: Path) -> Path | None:
+    """兼容渲染器的标准 enriched 输出名，优先最终复核时间线。"""
+    for name in ("timeline_final_enriched.json", "timeline_enriched.json"):
+        candidate = manifest_path.parent / name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _write_delivery_receipt(path: Path | None, payload: dict) -> None:
+    """仅在 Telegram API 已有可判定结果后原子落盘给日更协调器读取。"""
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary_path.replace(path)
 
 
 def _load_timeline(manifest_path: Path) -> dict:
     """读取与成片同目录的 enriched timeline；缺失时由调用方拒绝建立审核包。"""
-    timeline_path = manifest_path.parent / "timeline_final_enriched.json"
-    if not timeline_path.is_file():
+    timeline_path = _resolve_enriched_timeline_path(manifest_path)
+    if timeline_path is None:
         return {}
     try:
         payload = json.loads(timeline_path.read_text(encoding="utf-8"))
@@ -140,8 +162,8 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
         + "#英语学习 #英语听力 #英文阅读\n",
         encoding="utf-8",
     )
-    timeline_path = manifest.parent / "timeline_final_enriched.json"
-    if not timeline_path.is_file():
+    timeline_path = _resolve_enriched_timeline_path(manifest)
+    if timeline_path is None:
         raise ValueError("英语世界审核包缺少 enriched timeline，拒绝生成无来源封面")
     if not validate_dedicated_cover_file(cover_path, cover_provenance_path) and settings.enable_english_world_antigravity_primary:
         agy_command = [
@@ -264,6 +286,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mp4", type=Path, help="通过质检的成片 MP4")
     parser.add_argument("--manifest", type=Path, help="与成片对应的 manifest JSON")
     parser.add_argument("--failure", help="无合格素材或制作失败时的原因")
+    parser.add_argument("--delivery-receipt", type=Path, help="可选：供日更协调器读取的机器可读 Telegram 回执")
     return parser
 
 
@@ -282,6 +305,14 @@ def main() -> int:
         )
         if result.state not in {"ACCEPTED", "SUPPRESSED"}:
             raise RuntimeError(f"Telegram 未交付回执未获 API 接受：{result.error_kind or result.state}")
+        _write_delivery_receipt(
+            args.delivery_receipt,
+            {
+                "kind": "failure_notice",
+                "status": result.state,
+                "telegram_message_id": result.message_id,
+            },
+        )
         return 0
 
     if not args.mp4 or not args.manifest:
@@ -299,23 +330,37 @@ def main() -> int:
         and not settings.wechat_publishing_paused
     )
     if will_auto_submit:
-        _post_message(
+        text_result = _post_message(
             "✅ <b>英语世界短视频｜自动投稿前审计</b>\n"
             f"标题：{html.escape(str(review_item['title']))}\n"
             f"审核编号：<code>{review_id[:8]}</code>\n"
             "本次新建成片已通过本地质检，正在按自动策略一次性提交视频号；"
             "Telegram 附件为提交前审计材料，不等同公开发布。"
         )
-        _post_document(Path(str(review_item["cover_path"])), "英语世界投稿封面｜自动提交前审计材料")
-        _post_document(args.mp4, "英语世界短视频成片｜自动提交前审计材料")
-        _post_document(args.manifest, "英语世界短视频 manifest｜自动提交前审计材料")
+        cover_result = _post_document(Path(str(review_item["cover_path"])), "英语世界投稿封面｜自动提交前审计材料")
+        mp4_result = _post_document(args.mp4, "英语世界短视频成片｜自动提交前审计材料")
+        manifest_result = _post_document(args.manifest, "英语世界短视频 manifest｜自动提交前审计材料")
         auto_result = _auto_submit_new_review_item(review_item)
-        _post_message(
+        completion_result = _post_message(
             "⏳ <b>英语世界短视频｜自动投稿执行完毕</b>\n"
             f"标题：{html.escape(str(review_item['title']))}\n"
             f"审核编号：<code>{review_id[:8]}</code>\n"
             f"执行结果：<code>{html.escape(auto_result)}</code>。\n"
             "“已受理 / 审核中”不等同公开发布；任何未确认结果均已停止自动重传。"
+        )
+        _write_delivery_receipt(
+            args.delivery_receipt,
+            {
+                "kind": "review_and_auto_submission",
+                "status": "ACCEPTED",
+                "review_id": review_id,
+                "review_state": state,
+                "message_ids": [
+                    text_result.message_id, cover_result.message_id, mp4_result.message_id,
+                    manifest_result.message_id, completion_result.message_id,
+                ],
+                "submission_result": auto_result,
+            },
         )
         return 0
 
@@ -338,11 +383,24 @@ def main() -> int:
         )
     if state != "READY_FOR_REVIEW" and not settings.enable_english_world_auto_publish:
         message += f"\n\n当前状态：<code>{html.escape(state)}</code>；为避免重复投稿，已不提供提交按钮。"
-    _post_message(message, reply_markup=markup)
+    text_result = _post_message(message, reply_markup=markup)
     audit_suffix = "人工审核材料" if not settings.enable_english_world_auto_publish else "待处理审计材料"
-    _post_document(Path(str(review_item["cover_path"])), f"英语世界投稿封面｜{audit_suffix}")
-    _post_document(args.mp4, f"英语世界短视频成片｜{audit_suffix}")
-    _post_document(args.manifest, f"英语世界短视频 manifest｜{audit_suffix}")
+    cover_result = _post_document(Path(str(review_item["cover_path"])), f"英语世界投稿封面｜{audit_suffix}")
+    mp4_result = _post_document(args.mp4, f"英语世界短视频成片｜{audit_suffix}")
+    manifest_result = _post_document(args.manifest, f"英语世界短视频 manifest｜{audit_suffix}")
+    _write_delivery_receipt(
+        args.delivery_receipt,
+        {
+            "kind": "review",
+            "status": "ACCEPTED",
+            "review_id": review_id,
+            "review_state": state,
+            "message_ids": [
+                text_result.message_id, cover_result.message_id, mp4_result.message_id,
+                manifest_result.message_id,
+            ],
+        },
+    )
     return 0
 
 
