@@ -14,6 +14,7 @@
 # | 2.4.0 | 2026-08-26 | Codex | 为 Codex 协调器增加进程组级超时终止与持久失败状态，卡死不再吞掉当日审核窗口。 |
 # | 2.5.0 | 2026-08-26 | Codex | 锁持久化所有者 PID；仅回收已证实进程不存在的陈旧锁，避免中断后永久跳过日更。 |
 # | 2.6.0 | 2026-08-26 | Codex | SIGTERM/SIGINT 受控收口：终止协调器子进程组、持久化中断状态并释放锁。 |
+# | 2.7.0 | 2026-08-26 | Codex | 明确生产代理不得接管锁、进程或失败通知，防止其越权终止协调器。 |
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ DEFAULT_CODEX_BIN = Path("/Users/ryusei/.local/bin/codex")
 PROMPT = """执行今日“英语世界短视频”无人值守制作任务。工作目录是 Video-precessing。
 
 这是独立的 ENGLISH_WORLD_SHORT 生产：不得编辑项目源码、不得修改通用频道白名单、不得调用 PipelineManager、wechat_uploader.py 或任何平台投稿/发布逻辑；绝不提交视频号。只允许生成学习卡素材和发送 Telegram 审核回执。
+
+协调器进程、锁、重试、失败通知和运行日志均由本入口管理。不得运行 `kill`、`pkill`、`launchctl`、`rm`、`rmdir` 或任何进程/锁清理命令；不得根据既有日志自行发送失败通知、终止进程或干预其他运行。遇到已有素材、旧审核项或运行异常时，只报告事实并继续本次合规素材的研究/制作；本入口会负责收口。
 
 来源仅限以下频道，并按频道 ID 严格核验：
 - CBC Kids News：UCWUA2W6LueNy9BSovivFVvQ
