@@ -7,6 +7,7 @@
 # | 2.1.0 | 2026-08-25 | Codex | 覆盖 Codex 瞬时传输故障触发有界重试。 |
 # | 2.2.0 | 2026-08-25 | Codex | 覆盖瞬时失败后已获 Telegram 审核回执时禁止重跑。 |
 # | 2.3.0 | 2026-08-26 | Codex | 覆盖协调器卡死时终止进程组、写入超时状态并发送一次失败回执。 |
+# | 2.4.0 | 2026-08-26 | Codex | 覆盖可审计锁的失效 PID 回收，避免中断后日更永久被跳过。 |
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import subprocess
 import sys
 import plistlib
+import json
 from pathlib import Path
 
 
@@ -169,6 +171,20 @@ def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path
     assert "exit_code=124" in status
     run_log = next(log_dir.glob("run_*.log")).read_text(encoding="utf-8")
     assert "terminating its process group" in run_log
+
+
+def test_stale_pid_lock_is_recovered_before_running_coordinator(tmp_path: Path):
+    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0)
+    lock_dir = tmp_path / "lock"
+    lock_dir.mkdir()
+    (lock_dir / "owner.json").write_text(json.dumps({"pid": 999999, "started_at": "old"}), encoding="utf-8")
+
+    result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0
+    assert calls.read_text(encoding="utf-8").splitlines() == ["codex"]
+    assert not lock_dir.exists()
+    assert "phase=COORDINATOR_FINISHED" in (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
 
 
 def test_plist_directly_starts_python_coordinator():

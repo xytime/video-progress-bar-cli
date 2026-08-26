@@ -12,6 +12,7 @@
 # | 2.2.0 | 2026-08-25 | Codex | 对 Codex 瞬时传输故障和 Telegram 失败回执实施有界重试，避免网络抖动吞掉审核窗口。 |
 # | 2.3.0 | 2026-08-25 | Codex | 瞬时失败重试前核验本次已获 API 接受的审核回执，阻断可能重复的生产/投递。 |
 # | 2.4.0 | 2026-08-26 | Codex | 为 Codex 协调器增加进程组级超时终止与持久失败状态，卡死不再吞掉当日审核窗口。 |
+# | 2.5.0 | 2026-08-26 | Codex | 锁持久化所有者 PID；仅回收已证实进程不存在的陈旧锁，避免中断后永久跳过日更。 |
 """
 
 from __future__ import annotations
@@ -64,6 +65,56 @@ class RuntimePaths:
     log_dir: Path
     lock_dir: Path
     coordinator_timeout_seconds: float
+
+
+def _lock_owner_path(lock_dir: Path) -> Path:
+    return lock_dir / "owner.json"
+
+
+def _pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _acquire_lock(lock_dir: Path) -> bool:
+    """领取日更锁；只回收带失效 PID 的新式锁，旧空锁须由运维显式处理。"""
+    try:
+        lock_dir.mkdir()
+    except FileExistsError:
+        owner_path = _lock_owner_path(lock_dir)
+        try:
+            owner = json.loads(owner_path.read_text(encoding="utf-8"))
+            owner_pid = int(owner.get("pid", 0))
+        except (OSError, ValueError, json.JSONDecodeError, TypeError):
+            return False
+        if _pid_is_running(owner_pid):
+            return False
+        try:
+            owner_path.unlink()
+            lock_dir.rmdir()
+            lock_dir.mkdir()
+        except OSError:
+            return False
+    _lock_owner_path(lock_dir).write_text(
+        json.dumps({"pid": os.getpid(), "started_at": _timestamp()}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return True
+
+
+def _release_lock(lock_dir: Path) -> None:
+    try:
+        _lock_owner_path(lock_dir).unlink()
+        lock_dir.rmdir()
+    except OSError:
+        pass
 
 
 def _timestamp() -> str:
@@ -195,9 +246,7 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
     response_path = paths.log_dir / "last_codex_response.md"
     status_path = paths.log_dir / "last_run_status.txt"
     run_log = paths.log_dir / f"run_{datetime.now().strftime('%F_%H%M%S')}.log"
-    try:
-        paths.lock_dir.mkdir()
-    except FileExistsError:
+    if not _acquire_lock(paths.lock_dir):
         with run_log.open("a", encoding="utf-8") as stream:
             _log(stream, "skipped: daily English World run is already active")
         _write_status(status_path, "SKIPPED_ACTIVE", 0, 0, run_log, response_path)
@@ -277,10 +326,7 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
             _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。未生成可确认的今日审核成片，未触发视频号投稿。", stream)
             return exit_code
     finally:
-        try:
-            paths.lock_dir.rmdir()
-        except OSError:
-            pass
+        _release_lock(paths.lock_dir)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
