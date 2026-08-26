@@ -20,6 +20,7 @@
 | 2.3.0   | 2026-08-02 | Codex | 生词结果可选回传十级难度，供独立新闻精读卡片按全文密度筛选。 |
 | 2.4.0   | 2026-08-02 | Codex | 支持独立学习卡按全文请求更多候选词，并回传 IPA 音标，不改变字幕默认三词限制。 |
 | 2.5.0   | 2026-08-02 | Codex | 学习卡可声明候选词下限，避免模型在长正文中保守少抽。 |
+| 2.6.0   | 2026-08-26 | Codex | 容忍模型在有效 JSON 数组后附加文本或重复片段；仅提取首个语法完整数组，随后仍按 id 对齐校验。 |
 
 # Modification History
 | Version | Date       | Author                              | Description                                                              |
@@ -371,8 +372,43 @@ def _parse_response(text: str, expected_count: int) -> Optional[List[Dict[str, A
         return normalized
 
     _EMPTY = {"translation": "", "vocab": {}}
+
+    def _first_json_array(raw: str) -> Any:
+        """返回首个完整 JSON 数组，忽略模型在其后追加的非协议文本。"""
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+
+        start = raw.find("[")
+        if start < 0:
+            raise ValueError("response contains no JSON array")
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, len(raw)):
+            char = raw[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if depth == 0:
+                    logger.warning("[vocab_helper] Recovered JSON array from response with trailing content.")
+                    return json.loads(raw[start:index + 1])
+        raise ValueError("response contains an incomplete JSON array")
+
     try:
-        result = json.loads(text)
+        result = _first_json_array(text)
         # 兼容部分模型返回顶级 dict 包装
         if isinstance(result, dict) and "translations" in result:
             result = result["translations"]

@@ -18,6 +18,7 @@
 | 1.1.0   | 2026-07-05 | Codex           | 增加 vocab_helper prompt 上下文注入回归测试 |
 | 1.2.0   | 2026-07-13 | Codex           | 覆盖长上下文压缩，防 Gemini TPM 峰值 |
 | 1.3.0   | 2026-08-02 | Codex           | 覆盖词汇难度字段的兼容解析，保证旧调用方不受影响。 |
+| 1.4.0   | 2026-08-26 | Codex           | 覆盖模型在有效数组后追加文本或重复数组时的安全恢复。 |
 """
 
 import json
@@ -79,6 +80,22 @@ class TestParseResponseIdAlignment:
         # 无有效 id → 走无-id 分支，数量(2)==expected(2) → 顺序映射
         out = _parse_response(text, 2)
         assert [o["translation"] for o in out] == ["x", "y"]
+
+    def test_trailing_text_after_valid_array_is_recovered(self):
+        text = json.dumps([_item(0, "零"), _item(1, "一")]) + "\n模型附言：完成"
+        out = _parse_response(text, 2)
+        assert [o["translation"] for o in out] == ["零", "一"]
+
+    def test_repeated_array_keeps_first_complete_aligned_payload(self):
+        first = json.dumps([_item(0, "零"), _item(1, "一")])
+        second = json.dumps([_item(0, "错误"), _item(1, "错误")])
+        out = _parse_response(first + "\n" + second, 2)
+        assert [o["translation"] for o in out] == ["零", "一"]
+
+    def test_brackets_and_escaped_quote_inside_translation_do_not_break_recovery(self):
+        payload = json.dumps([_item(0, '他说“[测试]\\"完成”')], ensure_ascii=False)
+        out = _parse_response(payload + "\n附加文本", 1)
+        assert out[0]["translation"] == '他说“[测试]\\"完成”'
 
     def test_vocab_levels_are_clamped_and_limited_to_returned_vocab(self):
         text = json.dumps([{

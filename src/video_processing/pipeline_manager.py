@@ -9,6 +9,7 @@
 | 3.48.20 | 2026-08-24 | Codex                               | 双标题检查点绑定展示标题，并在未提交任务标题变更时重建受影响的渲染与封面缓存；提交证据前置保护 |
 | 3.48.21 | 2026-08-24 | Codex                               | P2 管线状态不再刷 Telegram；P1 通知记录 API 回执并按内容去重，异常日志不泄露凭据。 |
 | 3.48.22 | 2026-08-24 | Codex                               | P1 按事件与任务身份去重；UNKNOWN 不视为送达，缺失 message_id 不再伪称回执。 |
+| 3.48.25 | 2026-08-26 | Codex                               | 整片视频不再把分类误作必填合集；合集仅用于切片系列，避免当前网页合集创建入口缺失时阻断发表。 |
 | 3.46.0  | 2026-08-21 | Codex                               | 分钟巡航采用评分输入缓存，只重评播放/点赞变化或 TTL 到期候选，消除全量低分空转 |
 | 3.44.0  | 2026-08-21 | Codex                               | 已提交视频号任务遇到中断或子进程异常时保留未绑定账本，不再被通用异常路径降级为 PENDING/FAILED |
 | 3.45.0  | 2026-08-21 | Codex                               | 封面不再向渲染或 AI 主视觉简报传递运营角标，避免告警式装饰污染成品 |
@@ -3226,24 +3227,11 @@ class PipelineManager:
                 logger.info(f"Uploading to WeChat Channels for {prefix}...")
 
                 # ── 合集（Collection）名称决策 ──────────────────────────────────
-                # [Gemini_2.5_Pro_planning] v3.0.0 修复: 微信视频号"分类"已改名为"合集"。
-                # 规则：
-                #   slice_index == 0（整片视频）→ 使用 AI 生成的大分类（如"科技""财经"）作为合集
-                #   slice_index >  0（系列切片）→ 使用父视频短标题作为合集（各切片共享同一合集）
-                # _select_collection 已能处理"选中已有"和"自动新建"两种情况。
+                # 视频号“分类”并不等于“合集”。合集仅用于同一源视频的切片系列；
+                # 整片视频不应为“科技”“生活”等分类强建合集，否则当前网页创建入口
+                # 缺失时，一个可选组织字段会错误地阻断发表。
                 collection_name = ""
-                if slice_index == 0:
-                    # 整片视频：用 AI 分类结果作为大类合集名
-                    if category_file.exists():
-                        try:
-                            collection_name = category_file.read_text(encoding="utf-8").strip()
-                        except Exception:
-                            pass
-                    if collection_name:
-                        logger.info(f"[Collection] Single video → using category as collection: {collection_name!r}")
-                    else:
-                        logger.warning(f"[Collection] Single video: no category_file, skipping collection.")
-                else:
+                if slice_index > 0:
                     # 系列切片：用父视频短标题作为合集名（确保各切片合集一致）
                     import re as _re
                     parent_video_for_coll = self.db.get_video_by_youtube_id(yid, 0)
