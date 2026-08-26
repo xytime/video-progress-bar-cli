@@ -10,6 +10,8 @@
 | 3.38.0  | 2026-08-24 | Codex                               | 新增 Telegram 投递回执账本；仅 API message_id 证明单次通知获受理。 |
 | 3.39.0  | 2026-08-24 | Codex                               | 英语世界未确认投稿仅可经明确人工确认重开同一审核项，并保留原证据目录。 |
 | 3.40.0  | 2026-08-26 | Codex                               | 将视频号本地受理账本与平台待确认统计分开，原生 ID 回查关闭时仍可明确运营状态。 |
+| 3.41.0  | 2026-08-26 | Codex                               | 视频号受理账本、不可变尝试与任务状态同事务落盘，杜绝崩溃后的分叉状态。 |
+| 3.42.0  | 2026-08-26 | Codex                               | 英语世界新增自动投稿授权来源，自动策略只消费本次新建且质检完成的成片。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -1168,6 +1170,7 @@ class PipelineDB:
                     source_youtube_id TEXT DEFAULT NULL,
                     notification_target TEXT DEFAULT NULL,
                     approved_at TIMESTAMP DEFAULT NULL,
+                    approval_source TEXT DEFAULT NULL,
                     submission_started_at TIMESTAMP DEFAULT NULL,
                     submission_finished_at TIMESTAMP DEFAULT NULL,
                     uploader_exit_code INTEGER DEFAULT NULL,
@@ -1181,6 +1184,10 @@ class PipelineDB:
                 "CREATE INDEX IF NOT EXISTS idx_english_world_review_items_updated "
                 "ON english_world_review_items(updated_at DESC)"
             )
+            cursor.execute("PRAGMA table_info(english_world_review_items)")
+            english_world_review_columns = {row[1] for row in cursor.fetchall()}
+            if "approval_source" not in english_world_review_columns:
+                cursor.execute("ALTER TABLE english_world_review_items ADD COLUMN approval_source TEXT DEFAULT NULL")
 
             # Telegram 投递回执与业务状态分开保存。HTTP 超时不能证明未送达，故以
             # UNKNOWN 保留不确定性供人工排障；它不能作为已送达依据，更不能抑制重试。
@@ -2907,6 +2914,130 @@ class PipelineDB:
             if not row:
                 raise RuntimeError("Failed to record WeChat submission attempt")
             return dict(row)
+
+    def record_wechat_submission_acceptance(
+        self,
+        youtube_id: str,
+        *,
+        evidence_path: Optional[str],
+        error_message: Optional[str],
+        final_title: Optional[str],
+        slice_index: int = 0,
+        platform_post_id: Optional[str] = None,
+        platform_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """同事务保存视频号受理事实、一次性尝试和任务停止状态。
+
+        该方法是上传器明确受理后的唯一写入口。任一写入失败会整体回滚，避免
+        ``wechat_publications`` 已阻止重传、而 ``processed_videos`` 却回落 FAILED。
+        """
+        import hashlib
+        from uuid import uuid4
+
+        clean_evidence_path = (evidence_path or "").strip() or None
+        clean_platform_post_id = (platform_post_id or "").strip() or None
+        clean_platform_url = (platform_url or "").strip() or None
+        state = "SUBMITTED_BOUND" if clean_platform_post_id else "SUBMITTED_UNBOUND"
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id, title, zh_title FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError(f"Video not found: {youtube_id}#{slice_index}")
+            subject_id = self._ensure_video_publication_subject(conn, int(video["id"]))
+            conn.execute(
+                '''
+                INSERT INTO wechat_publications (
+                    video_id, subject_id, state, evidence_path, confirmed_at, platform_post_id, platform_url,
+                    last_reconciled_at, last_error_message
+                ) VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    state = excluded.state,
+                    evidence_path = COALESCE(excluded.evidence_path, wechat_publications.evidence_path),
+                    confirmed_at = NULL,
+                    platform_post_id = COALESCE(excluded.platform_post_id, wechat_publications.platform_post_id),
+                    platform_url = COALESCE(excluded.platform_url, wechat_publications.platform_url),
+                    last_error_message = excluded.last_error_message,
+                    updated_at = CURRENT_TIMESTAMP
+                ''',
+                (
+                    video["id"], subject_id, state, clean_evidence_path, clean_platform_post_id,
+                    clean_platform_url, error_message,
+                ),
+            )
+            attempt = None
+            if clean_evidence_path:
+                attempt = conn.execute(
+                    "SELECT * FROM wechat_submission_attempts WHERE evidence_path = ? ORDER BY created_at DESC LIMIT 1",
+                    (clean_evidence_path,),
+                ).fetchone()
+            if attempt is None:
+                title = (final_title or video["zh_title"] or video["title"] or youtube_id).strip()
+                attempt_id = uuid4().hex
+                conn.execute(
+                    '''INSERT INTO wechat_submission_attempts (
+                           attempt_id, video_id, subject_id, state, final_title, final_title_sha256,
+                           evidence_path, platform_post_id, platform_url, bound_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                 CASE WHEN ? IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END)''',
+                    (
+                        attempt_id, video["id"], subject_id,
+                        "PLATFORM_ID_BOUND" if clean_platform_post_id else "SUBMITTED_UNBOUND",
+                        title, hashlib.sha256(title.encode("utf-8")).hexdigest(), clean_evidence_path,
+                        clean_platform_post_id, clean_platform_url, clean_platform_post_id,
+                    ),
+                )
+                attempt = conn.execute(
+                    "SELECT * FROM wechat_submission_attempts WHERE attempt_id = ?", (attempt_id,)
+                ).fetchone()
+            elif clean_platform_post_id and not attempt["platform_post_id"]:
+                conn.execute(
+                    '''UPDATE wechat_submission_attempts
+                       SET state = 'PLATFORM_ID_BOUND', platform_post_id = ?, platform_url = ?,
+                           bound_at = CURRENT_TIMESTAMP
+                       WHERE attempt_id = ?''',
+                    (clean_platform_post_id, clean_platform_url, attempt["attempt_id"]),
+                )
+            cursor = conn.execute(
+                "UPDATE processed_videos SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (state, error_message, video["id"]),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Failed to persist WeChat submission task state")
+            conn.commit()
+            publication = conn.execute(
+                "SELECT * FROM wechat_publications WHERE video_id = ?", (video["id"],)
+            ).fetchone()
+            if not publication:
+                raise RuntimeError("Failed to persist WeChat submission acceptance")
+            return {"publication": dict(publication), "attempt_id": str(attempt["attempt_id"]) if attempt else None}
+
+    def repair_wechat_submission_status_divergence(self) -> int:
+        """仅以不可重传的视频号受理账本修复已分叉的本地任务状态。
+
+        不访问平台、不创建投稿尝试，也不处理 PUBLISHED；此修复只让已经存在的
+        SUBMITTED_* / UNDER_REVIEW / UNCERTAIN 账本重新成为任务状态机的停止状态。
+        """
+        states = ("SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNDER_REVIEW", "UNCERTAIN")
+        placeholders = ", ".join("?" for _ in states)
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                f'''UPDATE processed_videos
+                    SET status = (
+                        SELECT wp.state FROM wechat_publications wp WHERE wp.video_id = processed_videos.id
+                    ),
+                        error_msg = (
+                        SELECT wp.last_error_message FROM wechat_publications wp WHERE wp.video_id = processed_videos.id
+                    ),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id IN (SELECT video_id FROM wechat_publications WHERE state IN ({placeholders}))
+                      AND status NOT IN ({placeholders})''',
+                (*states, *states),
+            )
+            conn.commit()
+            return cursor.rowcount
 
     def record_wechat_publication_confirmation_for_subject(
         self,
@@ -4889,7 +5020,9 @@ class PipelineDB:
                 "SELECT * FROM english_world_review_items WHERE artifact_sha256 = ?", (clean_hash,),
             ).fetchone()
             if existing:
-                return dict(existing)
+                result = dict(existing)
+                result["_created_now"] = False
+                return result
             review_id = uuid4().hex
             conn.execute(
                 """INSERT INTO english_world_review_items
@@ -4911,7 +5044,9 @@ class PipelineDB:
             row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (review_id,)).fetchone()
             if not row:
                 raise RuntimeError("Failed to create English World review item")
-            return dict(row)
+            result = dict(row)
+            result["_created_now"] = True
+            return result
 
     def get_english_world_review_item(self, review_id: str) -> Optional[Dict[str, Any]]:
         """读取英语世界审核项；只读，不触发投稿或重试。"""
@@ -4921,9 +5056,14 @@ class PipelineDB:
             ).fetchone()
             return dict(row) if row else None
 
-    def approve_english_world_submission(self, review_id: str) -> Dict[str, Any]:
-        """原子记录 Telegram 对某条审核成片的投稿批准；不接受模糊文字匹配。"""
+    def approve_english_world_submission(
+        self, review_id: str, *, authorization: str = "TELEGRAM_REVIEW",
+    ) -> Dict[str, Any]:
+        """原子记录一条具名授权；不接受模糊文字匹配或终态重开。"""
         clean_id = (review_id or "").strip()
+        clean_authorization = (authorization or "").strip().upper()
+        if clean_authorization not in {"TELEGRAM_REVIEW", "AUTO_POLICY"}:
+            raise ValueError("Invalid English World submission authorization")
         with self.get_connection() as conn:
             row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
             if not row:
@@ -4935,9 +5075,9 @@ class PipelineDB:
             cursor = conn.execute(
                 """UPDATE english_world_review_items
                    SET state = 'SUBMISSION_APPROVED', approved_at = CURRENT_TIMESTAMP,
-                       error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                       approval_source = ?, error_message = NULL, updated_at = CURRENT_TIMESTAMP
                    WHERE id = ? AND state = 'READY_FOR_REVIEW'""",
-                (clean_id,),
+                (clean_authorization, clean_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("English World review item approval was not accepted")

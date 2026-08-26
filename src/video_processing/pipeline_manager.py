@@ -679,32 +679,20 @@ class PipelineManager:
                 platform_url = str(receipt.get("platform_url") or "").strip() or None
             except (OSError, ValueError, TypeError):
                 pass
-        ledger_state = "SUBMITTED_BOUND" if platform_post_id else "SUBMITTED_UNBOUND"
-        self.db.record_wechat_publication_confirmation(
-            yid,
-            evidence_path=str(evidence_path) if evidence_path else None,
-            state=ledger_state,
-            error_message=reason,
-            slice_index=slice_index,
-            platform_post_id=platform_post_id,
-            platform_url=platform_url,
-        )
         title_file = self._OUT_DIR / f"{prefix}_title.txt"
         try:
             final_title = title_file.read_text(encoding="utf-8").strip()
         except OSError:
             final_title = None
-        attempt = self.db.record_wechat_submission_attempt(
+        self.db.record_wechat_submission_acceptance(
             yid,
-            slice_index=slice_index,
             evidence_path=str(evidence_path) if evidence_path else None,
+            error_message=reason,
             final_title=final_title,
+            slice_index=slice_index,
+            platform_post_id=platform_post_id,
+            platform_url=platform_url,
         )
-        if platform_post_id:
-            self.db.bind_wechat_submission_attempt_platform_id(
-                attempt["attempt_id"], platform_post_id=platform_post_id, platform_url=platform_url,
-            )
-        self.db.update_video_status(yid, ledger_state, error_msg=reason, slice_index=slice_index)
         canceled = self.db.cancel_queued_downstream_publications_for_unconfirmed_wechat(
             yid,
             reason="视频号仅确认提交、尚未确认公开发布；已取消下游未提交队列。",

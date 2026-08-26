@@ -9,6 +9,7 @@
 | 1.4.0 | 2026-08-20 | Codex | 覆盖已提交未绑定、唯一平台 ID 绑定和同一证据幂等尝试记录 |
 | 1.5.0 | 2026-08-20 | Codex | 覆盖旧视频号提交尝试迁移到通用发布主体 |
 | 1.7.0 | 2026-08-21 | Codex | 覆盖未绑定提交在平台矩阵中作为不可重发待核验状态展示 |
+| 1.8.0 | 2026-08-26 | Codex | 覆盖受理账本、尝试与任务状态同事务落盘及历史分叉修复。 |
 | 1.6.0 | 2026-08-20 | Codex | 覆盖旧库缺少 Highlight 表时的发布主体迁移顺序 |
 | 1.3.0 | 2026-08-20 | Codex | 覆盖作品管理页明确驳回和未找到的终结账本状态 |
 """
@@ -112,6 +113,27 @@ def test_unbound_submission_is_visible_but_never_reported_as_published(tmp_path)
 
     assert state["state"] == "SUBMITTED_UNBOUND"
     assert state["published_at"] is None
+
+
+def test_submission_acceptance_is_atomic_and_repairs_prior_status_divergence(tmp_path):
+    """受理后任务状态必须与不可重传账本一起持久化，历史 FAILED 分叉也可原地修复。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "wechat-atomic")
+
+    accepted = db.record_wechat_submission_acceptance(
+        "wechat-atomic",
+        evidence_path="accepted-proof.png",
+        error_message="平台已接收提交；停止自动重传。",
+        final_title="唯一标题",
+    )
+
+    assert accepted["publication"]["state"] == "SUBMITTED_UNBOUND"
+    assert accepted["attempt_id"]
+    assert db.get_video_by_youtube_id("wechat-atomic")["status"] == "SUBMITTED_UNBOUND"
+
+    db.update_video_status("wechat-atomic", "FAILED", "模拟旧版本在账本后崩溃")
+    assert db.repair_wechat_submission_status_divergence() == 1
+    assert db.get_video_by_youtube_id("wechat-atomic")["status"] == "SUBMITTED_UNBOUND"
 
 
 def test_submitted_bound_requires_platform_id_and_attempt_binding_is_idempotent(tmp_path):

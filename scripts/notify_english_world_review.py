@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""向 Telegram 发送英语世界短视频的人工审核回执。
+"""登记英语世界短视频质检包，并发送 Telegram 审计回执。
 
-该脚本只发送人工审核材料，绝不调用任何平台上传或投稿逻辑。
+默认发送人工审核材料；启用显式自动策略后，只提交本次新建且已通过完整本地
+质检的学习卡。既有审核项、失败项和任何未确认投稿都不会由本脚本自动重传。
 
 # Modification History
 | Version | Date | Author | Description |
@@ -12,6 +13,7 @@
 | 1.3.0 | 2026-08-24 | Codex | 英语世界审核包优先使用 agy/Gemini 主视觉，失败时回退确定性封面。 |
 | 1.4.0 | 2026-08-24 | Codex | 记录 Telegram API 回执并将失败通知去重，避免无回执重发刷屏。 |
 | 1.5.0 | 2026-08-24 | Codex | 创建审核包前以 manifest 与 ffprobe 双重拒绝非 30–300 秒范围的成片，杜绝短片绕过渲染入口直接投递。 |
+| 1.6.0 | 2026-08-26 | Codex | 支持经显式策略授权的质检后自动投稿；只消费本次新建审核项，旧项及终态绝不自动重传。 |
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _MIN_REVIEW_DURATION_SECONDS = 30.0
 _MAX_REVIEW_DURATION_SECONDS = 300.0
+_AUTO_SUBMIT_SCRIPT = _PROJECT_ROOT / "scripts" / "submit_english_world_review.py"
 
 
 def _post_message(text: str, *, reply_markup: dict | None = None) -> None:
@@ -234,6 +237,27 @@ def _review_keyboard(review_id: str) -> dict:
     }
 
 
+def _auto_submit_new_review_item(review_item: dict) -> str:
+    """在显式策略开启时提交一条本次新建的质检包；绝不触碰历史审核项。"""
+    if not settings.enable_english_world_auto_publish:
+        return "disabled"
+    if not review_item.get("_created_now"):
+        return "existing_item_not_retried"
+    if settings.wechat_publishing_paused:
+        return "wechat_publishing_paused"
+    review_id = str(review_item["id"])
+    db = PipelineDB()
+    db.approve_english_world_submission(review_id, authorization="AUTO_POLICY")
+    # 投稿器自身有 25 分钟上传超时并持久化 UNDER_REVIEW / UNCERTAIN 等终态；
+    # 此处不另设父超时，以免杀死已领取任务后遗留 SUBMITTING 状态。
+    result = subprocess.run(
+        [str(_PROJECT_ROOT / ".venv" / "bin" / "python"), str(_AUTO_SUBMIT_SCRIPT), "--review-id", review_id],
+        cwd=str(_PROJECT_ROOT), text=True, capture_output=True, check=False,
+    )
+    item = db.get_english_world_review_item(review_id) or review_item
+    return f"submission_worker_exit={result.returncode}; state={item.get('state', 'UNKNOWN')}"
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="发送英语世界短视频 Telegram 审核回执")
     parser.add_argument("--title", required=True, help="成片标题")
@@ -269,22 +293,56 @@ def main() -> int:
     review_item = _prepare_publish_package(display_title=args.title.strip(), mp4=args.mp4, manifest=args.manifest)
     review_id = str(review_item["id"])
     state = str(review_item["state"])
-    message = (
-        "✅ <b>英语世界短视频｜待人工审核</b>\n"
-        f"标题：{html.escape(str(review_item['title']))}\n"
-        f"审核编号：<code>{review_id[:8]}</code>\n"
-        "已生成学习成片、质检清单与投稿素材包；当前<b>尚未提交视频号</b>。\n\n"
-        "<b>审核通过：</b>点击下方「✅ 确认提交视频号」。\n"
-        "该操作仅提交本条审核编号绑定的成片；提交后会回执“已受理 / 审核中 / 未确认”，不将已受理误报为公开发布，也不会自动重传。\n"
-        "需修改请点“↩️ 退回修改”；不发布请点“⏸ 暂不发布”。"
+    will_auto_submit = (
+        settings.enable_english_world_auto_publish
+        and bool(review_item.get("_created_now"))
+        and not settings.wechat_publishing_paused
     )
-    markup = _review_keyboard(review_id) if state == "READY_FOR_REVIEW" else None
-    if state != "READY_FOR_REVIEW":
+    if will_auto_submit:
+        _post_message(
+            "✅ <b>英语世界短视频｜自动投稿前审计</b>\n"
+            f"标题：{html.escape(str(review_item['title']))}\n"
+            f"审核编号：<code>{review_id[:8]}</code>\n"
+            "本次新建成片已通过本地质检，正在按自动策略一次性提交视频号；"
+            "Telegram 附件为提交前审计材料，不等同公开发布。"
+        )
+        _post_document(Path(str(review_item["cover_path"])), "英语世界投稿封面｜自动提交前审计材料")
+        _post_document(args.mp4, "英语世界短视频成片｜自动提交前审计材料")
+        _post_document(args.manifest, "英语世界短视频 manifest｜自动提交前审计材料")
+        auto_result = _auto_submit_new_review_item(review_item)
+        _post_message(
+            "⏳ <b>英语世界短视频｜自动投稿执行完毕</b>\n"
+            f"标题：{html.escape(str(review_item['title']))}\n"
+            f"审核编号：<code>{review_id[:8]}</code>\n"
+            f"执行结果：<code>{html.escape(auto_result)}</code>。\n"
+            "“已受理 / 审核中”不等同公开发布；任何未确认结果均已停止自动重传。"
+        )
+        return 0
+
+    message = "✅ <b>英语世界短视频｜待处理</b>\n"
+    message += f"标题：{html.escape(str(review_item['title']))}\n审核编号：<code>{review_id[:8]}</code>\n"
+    markup = _review_keyboard(review_id) if state == "READY_FOR_REVIEW" and not settings.enable_english_world_auto_publish else None
+    if not settings.enable_english_world_auto_publish:
+        message += (
+            "已生成学习成片、质检清单与投稿素材包；当前<b>尚未提交视频号</b>。\n\n"
+            "<b>审核通过：</b>点击下方「✅ 确认提交视频号」。\n"
+            "该操作仅提交本条审核编号绑定的成片；提交后会回执“已受理 / 审核中 / 未确认”，"
+            "不将已受理误报为公开发布，也不会自动重传。\n"
+            "需修改请点“↩️ 退回修改”；不发布请点“⏸ 暂不发布”。"
+        )
+    else:
+        message += (
+            f"\n\n当前状态：<code>{html.escape(state)}</code>；自动策略结果："
+            "<code>existing_item_not_retried_or_wechat_publishing_paused</code>。"
+            "为避免重复投稿，未触发新提交。"
+        )
+    if state != "READY_FOR_REVIEW" and not settings.enable_english_world_auto_publish:
         message += f"\n\n当前状态：<code>{html.escape(state)}</code>；为避免重复投稿，已不提供提交按钮。"
     _post_message(message, reply_markup=markup)
-    _post_document(Path(str(review_item["cover_path"])), "英语世界投稿封面｜请与成片一并审核，尚未提交视频号")
-    _post_document(args.mp4, "英语世界短视频成片｜待审核，未提交视频号")
-    _post_document(args.manifest, "英语世界短视频 manifest｜审核证据")
+    audit_suffix = "人工审核材料" if not settings.enable_english_world_auto_publish else "待处理审计材料"
+    _post_document(Path(str(review_item["cover_path"])), f"英语世界投稿封面｜{audit_suffix}")
+    _post_document(args.mp4, f"英语世界短视频成片｜{audit_suffix}")
+    _post_document(args.manifest, f"英语世界短视频 manifest｜{audit_suffix}")
     return 0
 
 

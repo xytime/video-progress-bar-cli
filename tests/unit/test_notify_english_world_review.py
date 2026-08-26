@@ -7,6 +7,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 固化英语世界未交付通知必须取得 API 回执，否则保留失败退出码。 |
 | 1.1.0 | 2026-08-24 | Codex | 固化审核包只能接收实测时长严格大于 30 秒且不超过 300 秒的成片。 |
+| 1.2.0 | 2026-08-26 | Codex | 覆盖自动策略只提交本次新建质检包、旧审核项绝不被自动重传。 |
 """
 
 from __future__ import annotations
@@ -78,3 +79,37 @@ def test_review_package_requires_manifest_to_match_measured_duration(monkeypatch
 
     with pytest.raises(ValueError, match="时长与 MP4 不一致"):
         notifier._validate_review_duration(mp4=mp4, manifest_payload={"duration": 41.0})
+
+
+def test_auto_publish_submits_only_a_new_review_item(monkeypatch):
+    """自动策略的授权范围仅限当前调用刚建立的、已完成质检的成片。"""
+    calls: list[object] = []
+
+    class FakeDB:
+        def approve_english_world_submission(self, review_id, *, authorization):
+            calls.append(("approve", review_id, authorization))
+
+        def get_english_world_review_item(self, review_id):
+            calls.append(("read", review_id))
+            return {"id": review_id, "state": "UNDER_REVIEW"}
+
+    monkeypatch.setattr(notifier.settings, "enable_english_world_auto_publish", True)
+    monkeypatch.setattr(notifier.settings, "wechat_publishing_paused", False)
+    monkeypatch.setattr(notifier, "PipelineDB", FakeDB)
+    monkeypatch.setattr(
+        notifier.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 0})(),
+    )
+
+    result = notifier._auto_submit_new_review_item({"id": "new-review", "_created_now": True})
+
+    assert result == "submission_worker_exit=0; state=UNDER_REVIEW"
+    assert calls == [("approve", "new-review", "AUTO_POLICY"), ("read", "new-review")]
+
+
+def test_auto_publish_never_retries_an_existing_review_item(monkeypatch):
+    """开启新策略不能把历史 READY/UNCERTAIN 项重新提交。"""
+    monkeypatch.setattr(notifier.settings, "enable_english_world_auto_publish", True)
+    monkeypatch.setattr(notifier, "PipelineDB", lambda: pytest.fail("历史审核项不得读取或批准"))
+    monkeypatch.setattr(notifier.subprocess, "run", lambda *args, **kwargs: pytest.fail("历史审核项不得启动投稿器"))
+
+    assert notifier._auto_submit_new_review_item({"id": "old-review", "_created_now": False}) == "existing_item_not_retried"

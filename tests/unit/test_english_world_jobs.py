@@ -228,9 +228,13 @@ def test_review_item_is_bound_to_one_artifact_and_cannot_be_auto_retried(tmp_pat
     }
 
     ready = db.create_english_world_review_item(**kwargs)
-    assert db.create_english_world_review_item(**kwargs)["id"] == ready["id"]
+    assert ready["_created_now"] is True
+    duplicate = db.create_english_world_review_item(**kwargs)
+    assert duplicate["id"] == ready["id"]
+    assert duplicate["_created_now"] is False
     approved = db.approve_english_world_submission(ready["id"])
     assert approved["state"] == "SUBMISSION_APPROVED"
+    assert approved["approval_source"] == "TELEGRAM_REVIEW"
     claimed = db.claim_english_world_submission(ready["id"])
     assert claimed and claimed["state"] == "SUBMITTING"
     assert db.claim_english_world_submission(ready["id"]) is None

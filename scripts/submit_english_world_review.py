@@ -8,6 +8,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-23 | Codex | 新增英语世界学习卡的独立、一次性视频号投稿执行器。 |
+| 1.1.0 | 2026-08-26 | Codex | 投稿器在领取前尊重全局微信暂停开关，避免自动策略绕过运营暂停。 |
 """
 
 from __future__ import annotations
@@ -81,6 +82,9 @@ def _completion_for_exit_code(code: int) -> tuple[str, str]:
 
 def submit(review_id: str) -> int:
     """领取并执行一次投稿；即使浏览器异常也保留可审计的终态回执。"""
+    if settings.wechat_publishing_paused:
+        logger.warning("English World submission deferred because WeChat publishing is paused")
+        return 0
     db = PipelineDB()
     item = db.claim_english_world_submission(review_id)
     if item is None:

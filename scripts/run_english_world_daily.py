@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""每日英语世界短视频生产协调器：仅制作并发 Telegram 审核，不投稿。
+"""每日英语世界短视频生产协调器：制作、质检并提交审计回执。
 
 本入口由 LaunchAgent 直接以 Python 程序执行，避免 launchd 通过 shell 读取外接盘
 脚本时受 macOS 文件访问策略拦截。
@@ -15,6 +15,7 @@
 # | 2.5.0 | 2026-08-26 | Codex | 锁持久化所有者 PID；仅回收已证实进程不存在的陈旧锁，避免中断后永久跳过日更。 |
 # | 2.6.0 | 2026-08-26 | Codex | SIGTERM/SIGINT 受控收口：终止协调器子进程组、持久化中断状态并释放锁。 |
 # | 2.7.0 | 2026-08-26 | Codex | 明确生产代理不得接管锁、进程或失败通知，防止其越权终止协调器。 |
+# | 2.8.0 | 2026-08-26 | Codex | 生产提示对齐英语世界质检后自动投稿策略，仍禁止代理直接调用平台上传器。 |
 """
 
 from __future__ import annotations
@@ -38,9 +39,11 @@ DEFAULT_CODEX_BIN = Path("/Users/ryusei/.local/bin/codex")
 
 PROMPT = """执行今日“英语世界短视频”无人值守制作任务。工作目录是 Video-precessing。
 
-这是独立的 ENGLISH_WORLD_SHORT 生产：不得编辑项目源码、不得修改通用频道白名单、不得调用 PipelineManager、wechat_uploader.py 或任何平台投稿/发布逻辑；绝不提交视频号。只允许生成学习卡素材和发送 Telegram 审核回执。
+这是独立的 ENGLISH_WORLD_SHORT 生产：不得编辑项目源码、不得修改通用频道白名单、不得调用 PipelineManager、wechat_uploader.py 或任何平台投稿/发布逻辑。只允许生成学习卡素材和调用指定的 Telegram 审计入口；该入口会依据项目已配置的自动策略决定是否一次性提交视频号，代理不得绕过它直接投稿。
 
-协调器进程、锁、重试、失败通知和运行日志均由本入口管理。不得运行 `kill`、`pkill`、`launchctl`、`rm`、`rmdir` 或任何进程/锁清理命令；不得根据既有日志自行发送失败通知、终止进程或干预其他运行。遇到已有素材、旧审核项或运行异常时，只报告事实并继续本次合规素材的研究/制作；本入口会负责收口。
+协调器进程、锁、重试、失败通知和运行日志均由本入口管理。不得运行 `kill`、`pkill`、`launchctl`、`rm`、`rmdir`、`ps`、`tail`、`sleep` 或任何进程/锁/运行日志监控命令；不得根据既有日志自行发送失败通知、终止进程或干预其他运行。遇到已有素材、旧审核项或运行异常时，只报告事实并继续本次合规素材的研究/制作；本入口会负责收口。
+
+立即开始来源研究、字幕预检、下载或渲染中的一项实际生产动作。不要轮询、等待或反复检查调度状态；若十分钟内无法取得合格候选，按下方失败命令报告准确的选题/来源失败原因并退出。
 
 来源仅限以下频道，并按频道 ID 严格核验：
 - CBC Kids News：UCWUA2W6LueNy9BSovivFVvQ
@@ -51,12 +54,12 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 
 若找到合格来源，按 make-english-world-short 技能和 production-contract 完整制作一条：自然完整句收尾；逐词红线；每个可见阅读屏至少 8 个微笔记；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。
 
-质检通过后，必须运行以下命令把 MP4 和 manifest 发到 Telegram 人工审核：
+质检通过后，必须运行以下命令登记 MP4 和 manifest 并发送 Telegram 审计回执：
 PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>'
 若当天无合格候选或制作/质检失败，必须运行：
 PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '今日英语世界短视频' --failure '<准确原因>'
 
-最终只报告真实状态、来源、证据路径与 Telegram 发送结果。不得将 Telegram 发送、素材生成或审核回执描述成视频号发布。"""
+若已启用 `ENABLE_ENGLISH_WORLD_AUTO_PUBLISH=true`，上述入口只会对本次新建、完整质检通过的审核项一次性调用独立投稿器；不得自行补调用或重试。最终只报告真实状态、来源、证据路径与 Telegram 发送结果。不得将 Telegram 发送、素材生成或审核回执描述成视频号公开发布。"""
 
 
 @dataclass(frozen=True)
@@ -241,7 +244,7 @@ def _run_coordinator(paths: RuntimePaths, response_path: Path, stream: TextIO) -
     """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
     command = [
         str(paths.codex_bin), "exec", "--cd", str(paths.project_root), "--add-dir", "/Users/ryusei/.codex/skills",
-        "--sandbox", "danger-full-access", "-c", 'approval_policy="never"', "--output-last-message", str(response_path), PROMPT,
+        "--sandbox", "workspace-write", "-c", 'approval_policy="never"', "--output-last-message", str(response_path), PROMPT,
     ]
     environment = dict(os.environ)
     environment["CODEX_HOME"] = str(paths.codex_home)
