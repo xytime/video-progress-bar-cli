@@ -13,6 +13,7 @@
 # | 2.3.0 | 2026-08-25 | Codex | 瞬时失败重试前核验本次已获 API 接受的审核回执，阻断可能重复的生产/投递。 |
 # | 2.4.0 | 2026-08-26 | Codex | 为 Codex 协调器增加进程组级超时终止与持久失败状态，卡死不再吞掉当日审核窗口。 |
 # | 2.5.0 | 2026-08-26 | Codex | 锁持久化所有者 PID；仅回收已证实进程不存在的陈旧锁，避免中断后永久跳过日更。 |
+# | 2.6.0 | 2026-08-26 | Codex | SIGTERM/SIGINT 受控收口：终止协调器子进程组、持久化中断状态并释放锁。 |
 """
 
 from __future__ import annotations
@@ -67,6 +68,18 @@ class RuntimePaths:
     coordinator_timeout_seconds: float
 
 
+class CoordinatorInterrupted(RuntimeError):
+    """协调器父进程收到中断信号；必须落盘而不是留下孤儿锁。"""
+
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+        super().__init__(f"coordinator interrupted by signal {signum}")
+
+
+def _raise_coordinator_interrupted(signum: int, _frame: object) -> None:
+    raise CoordinatorInterrupted(signum)
+
+
 def _lock_owner_path(lock_dir: Path) -> Path:
     return lock_dir / "owner.json"
 
@@ -114,6 +127,23 @@ def _release_lock(lock_dir: Path) -> None:
         _lock_owner_path(lock_dir).unlink()
         lock_dir.rmdir()
     except OSError:
+        pass
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """尽力结束独立协调器进程组；进程已退出也视为成功。"""
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
+        except ProcessLookupError:
+            pass
+    except ProcessLookupError:
         pass
 
 
@@ -229,14 +259,10 @@ def _run_coordinator(paths: RuntimePaths, response_path: Path, stream: TextIO) -
             "ERROR: coordinator timed out after "
             f"{paths.coordinator_timeout_seconds:g}s; terminating its process group",
         )
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=10)
-        except ProcessLookupError:
-            pass
+        _terminate_process_group(process)
+        raise
+    except BaseException:
+        _terminate_process_group(process)
         raise
 
 
@@ -252,6 +278,8 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
         _write_status(status_path, "SKIPPED_ACTIVE", 0, 0, run_log, response_path)
         return 0
 
+    previous_sigterm_handler = signal.signal(signal.SIGTERM, _raise_coordinator_interrupted)
+    previous_sigint_handler = signal.signal(signal.SIGINT, _raise_coordinator_interrupted)
     try:
         with run_log.open("a", encoding="utf-8") as stream:
             if not paths.codex_bin.is_file() or not os.access(paths.codex_bin, os.X_OK):
@@ -325,7 +353,21 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
             _write_status(status_path, "FAILED_COORDINATOR", exit_code, attempt, run_log, response_path)
             _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。未生成可确认的今日审核成片，未触发视频号投稿。", stream)
             return exit_code
+    except CoordinatorInterrupted as exc:
+        exit_code = 128 + exc.signum
+        with run_log.open("a", encoding="utf-8") as stream:
+            _log(stream, f"ERROR: coordinator interrupted by signal {exc.signum}; production child group was terminated")
+            _write_status(status_path, "COORDINATOR_INTERRUPTED", exit_code, 0, run_log, response_path)
+            _notify_failure(
+                paths,
+                f"生产协调器被信号 {exc.signum} 中断，已终止其子进程组。运行日志：{run_log}。"
+                "未生成可确认的今日审核成片，未触发视频号投稿。",
+                stream,
+            )
+        return exit_code
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
+        signal.signal(signal.SIGINT, previous_sigint_handler)
         _release_lock(paths.lock_dir)
 
 

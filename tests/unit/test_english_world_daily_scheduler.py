@@ -8,6 +8,7 @@
 # | 2.2.0 | 2026-08-25 | Codex | 覆盖瞬时失败后已获 Telegram 审核回执时禁止重跑。 |
 # | 2.3.0 | 2026-08-26 | Codex | 覆盖协调器卡死时终止进程组、写入超时状态并发送一次失败回执。 |
 # | 2.4.0 | 2026-08-26 | Codex | 覆盖可审计锁的失效 PID 回收，避免中断后日更永久被跳过。 |
+# | 2.5.0 | 2026-08-26 | Codex | 覆盖协调器收到 SIGTERM 后的子进程收口、失败状态与锁释放。 |
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ import subprocess
 import sys
 import plistlib
 import json
+import os
+import time
 from pathlib import Path
 
 
@@ -185,6 +188,41 @@ def test_stale_pid_lock_is_recovered_before_running_coordinator(tmp_path: Path):
     assert calls.read_text(encoding="utf-8").splitlines() == ["codex"]
     assert not lock_dir.exists()
     assert "phase=COORDINATOR_FINISHED" in (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+
+
+def test_signal_interrupt_writes_status_notifies_and_releases_lock(tmp_path: Path):
+    calls = tmp_path / "calls.log"
+    fake_codex = tmp_path / "codex"
+    fake_python = tmp_path / "python"
+    notifier = tmp_path / "notifier.py"
+    _write_executable(fake_codex, f"#!/usr/bin/env bash\necho codex >> {calls}\nsleep 30\n")
+    _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier >> {calls}\nexit 0\n")
+    notifier.write_text("# fake notifier\n", encoding="utf-8")
+    log_dir = tmp_path / "logs"
+    lock_dir = tmp_path / "lock"
+    arguments = [
+        sys.executable, str(RUNNER), "--project-root", str(PROJECT_ROOT),
+        "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
+        "--notifier-script", str(notifier), "--log-dir", str(log_dir),
+        "--lock-dir", str(lock_dir), "--max-attempts", "1",
+        "--retry-delay-seconds", "0", "--coordinator-timeout-seconds", "60",
+    ]
+    process = subprocess.Popen(arguments, cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + 5
+    while (not lock_dir.exists() or not calls.exists()) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert lock_dir.exists()
+    assert calls.read_text(encoding="utf-8").splitlines() == ["codex"]
+
+    os.kill(process.pid, 15)
+    process.communicate(timeout=15)
+
+    assert process.returncode == 143
+    assert calls.read_text(encoding="utf-8").splitlines() == ["codex", "notifier"]
+    assert not lock_dir.exists()
+    status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=COORDINATOR_INTERRUPTED" in status
+    assert "exit_code=143" in status
 
 
 def test_plist_directly_starts_python_coordinator():
