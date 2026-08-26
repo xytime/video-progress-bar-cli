@@ -37,6 +37,7 @@
 | 1.27.0  | 2026-08-24 | Codex                                   | 新增平台/封面双标题合同与 AGY→Gemini 标题供应商链；默认配置不改变生产消费面 |
 | 1.27.1  | 2026-08-24 | Codex                                   | 双标题开关启用时，缺少封面展示标题的兜底候选一律失败关闭，禁止品质降级发布。 |
 | 1.27.2  | 2026-08-24 | Codex                                   | Gemini 结构化文案的标题合同失败时仅重试一次，保留其作为 AGY 故障后的合格兜底。 |
+| 1.28.0  | 2026-08-26 | Codex                                   | Gemini/Google 均失败时，为可识别的涨跌幅财经标题提供事实保守的中文确定性兜底，避免英文标题触发平台合同失败。 |
 """
 
 import re
@@ -424,6 +425,51 @@ def _recover_question_short_title(translated_title: str) -> str:
     return candidate if 6 <= len(candidate) <= 16 else ""
 
 
+_MARKET_MOVE_RE = re.compile(
+    r"^(?P<entity>[A-Z][A-Za-z0-9&.'-]{1,24})\s+"
+    r"(?P<verb>sinks|slumps|falls|drops|surges|soars|rises|gains)\s+"
+    r"(?P<percent>\d+(?:\.\d+)?)%",
+    re.IGNORECASE,
+)
+
+
+def _deterministic_market_fallback(title: str) -> Optional[dict]:
+    """为简单涨跌幅标题生成不依赖外部模型的保守中文候选。"""
+    match = _MARKET_MOVE_RE.match(title.strip())
+    if not match:
+        return None
+
+    entity = match.group("entity")
+    percent = match.group("percent")
+    verb = match.group("verb").lower()
+    direction = "下跌" if verb in {"sinks", "slumps", "falls", "drops"} else "上涨"
+    short_title = f"{entity}股价{direction}{percent}%"
+    if not 6 <= len(short_title) <= 16:
+        return None
+
+    lower_title = title.lower()
+    outlook = "前景疲弱" if "weak outlook" in lower_title or "weak guidance" in lower_title else "市场预期变化"
+    detail = ""
+    if "nvidia" in lower_title and "earning" in lower_title:
+        detail = "本期市场收盘报道还关注英伟达财报临近带来的市场焦点。"
+    else:
+        detail = "本期市场报道聚焦这一价格波动及投资者对企业指引的解读。"
+    copy_text = (
+        f"{entity}因{outlook}，股价{direction}{percent}%。{detail}\n\n"
+        "#财经 #美股 #市场\n"
+        "🤖 关注市场变化，理性看待投资信息。"
+    )
+    return {
+        "short_title": short_title,
+        "display_title": "",
+        "hook_subtitle": f"{outlook}影响股价",
+        "copy": copy_text,
+        "category": "财经",
+        "content_hints": ["market", "stock", "news"],
+        "content_label": "",
+    }
+
+
 def _translate_fallback(title: str, description: str) -> dict:
     """Gemini 不可用时，用 translation_helper（阿里云 MT 优先）作内容兼底翻译。
 
@@ -453,6 +499,12 @@ def _translate_fallback(title: str, description: str) -> dict:
             short_title = graceful_truncate_title(zh_title)
             hook_subtitle = ""
         
+        # Google/模型返回英文原文时，优先使用事实保守的确定性财经候选。
+        deterministic_market = _deterministic_market_fallback(title)
+        if deterministic_market and not re.search(r"[\u4e00-\u9fff]", str(zh_title)):
+            logger.warning("Fallback translation remained English; using deterministic market candidate for %r", title)
+            return deterministic_market
+
         # 动态分类与文案装配 (泛化解决)
         cat = classify_category(title, description)
         config = CATEGORY_CONFIG.get(cat, CATEGORY_CONFIG["科技"])

@@ -21,6 +21,7 @@
 | 1.15.0  | 2026-08-24 | Codex                      | 覆盖双标题灰度下缺失封面标题的兜底候选必须失败关闭。 |
 | 1.16.0  | 2026-08-24 | Codex                      | 覆盖关闭双标题时 Gemini 缺失或不合规展示标题不影响原有文案合同。 |
 | 1.17.0  | 2026-08-24 | Codex                      | 审计记录 AGY 的脱敏外部失败分类，而非仅记录不可用类型。 |
+| 1.18.0  | 2026-08-26 | Codex                      | 回归覆盖：涨跌幅英文标题在翻译服务失败时使用合规中文确定性兜底。 |
 """
 import json
 import sys
@@ -270,6 +271,24 @@ def test_translate_fallback_recovers_complete_question_headline(monkeypatch):
     )
 
     assert content["short_title"] == "《奥德赛》加拿大仅9块银幕"
+
+
+def test_translate_fallback_uses_deterministic_market_candidate(monkeypatch):
+    """翻译服务返回英文原文时，简单财经标题仍应有可发布中文候选。"""
+    monkeypatch.setattr(
+        "scripts.copywriter._translate_text",
+        lambda text, **_kwargs: text,
+    )
+
+    content = _translate_fallback(
+        "Intuit Sinks 11% on Weak Outlook as Nvidia Earnings Loom | Closing Bell",
+        "",
+    )
+
+    assert content["short_title"] == "Intuit股价下跌11%"
+    assert content["category"] == "财经"
+    assert "前景疲弱" in content["copy"]
+    assert "英伟达财报临近" in content["copy"]
 
 
 def test_copy_candidate_selector_rejects_incomplete_question_fragment(monkeypatch, tmp_path):
