@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-27 | Codex | 覆盖微信重登成功后 LOGIN_REQUIRED 自动恢复为 PENDING 的最小行为 |
+| 1.1.0 | 2026-08-26 | Codex | 提交受理未绑定/已绑定账本也必须阻断登录恢复与批量失败重试。 |
 """
 
 
@@ -61,6 +62,23 @@ def test_dal_restore_login_required_skips_submission_evidence(tmp_path):
             "(video_id, subject_id, state) VALUES (?, ?, ?)",
             (submitted_id, "submitted-video", "UNDER_REVIEW"),
         )
+        conn.execute(
+            "INSERT INTO processed_videos "
+            "(youtube_id, title, channel_id, status, score) VALUES (?, ?, ?, ?, ?)",
+            ("unbound-video", "Unbound", "channel", "LOGIN_REQUIRED", 90),
+        )
+        unbound_id = conn.execute(
+            "SELECT id FROM processed_videos WHERE youtube_id = 'unbound-video'"
+        ).fetchone()[0]
+        conn.execute(
+            "INSERT INTO publication_subjects (id, kind, video_id) VALUES (?, ?, ?)",
+            ("unbound-video", "VIDEO_ITEM", unbound_id),
+        )
+        conn.execute(
+            "INSERT INTO wechat_publications "
+            "(video_id, subject_id, state) VALUES (?, ?, ?)",
+            (unbound_id, "unbound-video", "SUBMITTED_UNBOUND"),
+        )
         conn.commit()
 
     assert db.restore_login_required_videos() == 1
@@ -71,9 +89,8 @@ def test_dal_restore_login_required_skips_submission_evidence(tmp_path):
     assert statuses == {
         "safe-video": "PENDING",
         "submitted-video": "LOGIN_REQUIRED",
+        "unbound-video": "LOGIN_REQUIRED",
     }
-
-
 def test_uploader_login_only_restores_tasks_after_existing_session_check(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 

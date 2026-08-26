@@ -12,6 +12,7 @@
 | 3.40.0  | 2026-08-26 | Codex                               | 将视频号本地受理账本与平台待确认统计分开，原生 ID 回查关闭时仍可明确运营状态。 |
 | 3.41.0  | 2026-08-26 | Codex                               | 视频号受理账本、不可变尝试与任务状态同事务落盘，杜绝崩溃后的分叉状态。 |
 | 3.42.0  | 2026-08-26 | Codex                               | 英语世界新增自动投稿授权来源，自动策略只消费本次新建且质检完成的成片。 |
+| 3.43.0  | 2026-08-26 | Codex                               | 登录恢复对任意视频号账本 fail-closed；保留批量重试的账本跳过统计。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -2563,26 +2564,23 @@ class PipelineDB:
                        SELECT 1
                          FROM wechat_publications wp
                         WHERE wp.video_id = processed_videos.id
-                          AND wp.state IN ('PUBLISHED', 'UNDER_REVIEW', 'UNCERTAIN', 'REJECTED')
                    )"""
             )
             conn.commit()
             return cursor.rowcount
 
     def get_failed_videos_since(self, hours: int) -> List[Dict[str, Any]]:
-        """取最近 N 小时内无视频号在途/成功账本的可批量重试失败任务。
-        updated_at 用 SQLite datetime('now')(UTC) 比较，与 CURRENT_TIMESTAMP(UTC) 对齐，避免时区漂移。"""
+        """取最近 N 小时 FAILED / LOGIN_REQUIRED 候选，供调用方应用平台账本保护。
+
+        保留已有账本的候选是为了让 API 明确报告被平台保护跳过的数量；任何实际重置
+        必须先调用提交账本保护，绝不能直接以此结果重试。
+        """
         with self.get_connection() as conn:
             cursor = conn.execute(
                 '''SELECT pv.youtube_id, pv.slice_index, pv.score, pv.title, pv.status
                    FROM processed_videos pv
                    WHERE pv.status IN ('FAILED', 'LOGIN_REQUIRED')
                      AND pv.updated_at >= datetime('now', ?)
-                     AND NOT EXISTS (
-                        SELECT 1 FROM wechat_publications wp
-                        WHERE wp.video_id = pv.id
-                          AND wp.state IN ('PUBLISHED', 'UNDER_REVIEW', 'UNCERTAIN', 'REJECTED')
-                     )
                    ORDER BY pv.updated_at DESC''',
                 (f"-{int(hours)} hours",)
             )
