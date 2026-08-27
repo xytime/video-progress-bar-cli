@@ -15,6 +15,7 @@
 | 1.5.0 | 2026-08-24 | Codex | 创建审核包前以 manifest 与 ffprobe 双重拒绝非 30–300 秒范围的成片，杜绝短片绕过渲染入口直接投递。 |
 | 1.6.0 | 2026-08-26 | Codex | 支持经显式策略授权的质检后自动投稿；只消费本次新建审核项，旧项及终态绝不自动重传。 |
 | 1.7.0 | 2026-08-26 | Codex | 可选写入机器可读的日更投递回执，协调器不得再把代理退出成功误报为 Telegram 交付成功。 |
+| 1.8.0 | 2026-08-27 | Codex | 兼容学习卡生产器的 `timeline.enriched.json` 命名，防止质检通过后在交付入口被拒绝。 |
 """
 
 from __future__ import annotations
@@ -66,7 +67,7 @@ def _post_document(path: Path, caption: str):
 
 def _resolve_enriched_timeline_path(manifest_path: Path) -> Path | None:
     """兼容渲染器的标准 enriched 输出名，优先最终复核时间线。"""
-    for name in ("timeline_final_enriched.json", "timeline_enriched.json"):
+    for name in ("timeline_final_enriched.json", "timeline_enriched.json", "timeline.enriched.json"):
         candidate = manifest_path.parent / name
         if candidate.is_file():
             return candidate

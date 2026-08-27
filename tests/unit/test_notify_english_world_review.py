@@ -9,6 +9,7 @@
 | 1.1.0 | 2026-08-24 | Codex | 固化审核包只能接收实测时长严格大于 30 秒且不超过 300 秒的成片。 |
 | 1.2.0 | 2026-08-26 | Codex | 覆盖自动策略只提交本次新建质检包、旧审核项绝不被自动重传。 |
 | 1.3.0 | 2026-08-26 | Codex | 覆盖标准 enriched 时间线兼容和机器可读 Telegram 交付回执。 |
+| 1.4.0 | 2026-08-27 | Codex | 覆盖学习卡生产器的点分隔 enriched 时间线命名。 |
 """
 
 from __future__ import annotations
@@ -82,9 +83,10 @@ def test_failure_notification_writes_machine_delivery_receipt(monkeypatch, tmp_p
     }
 
 
-def test_load_timeline_accepts_renderer_standard_enriched_name(tmp_path):
+@pytest.mark.parametrize("timeline_name", ["timeline_enriched.json", "timeline.enriched.json"])
+def test_load_timeline_accepts_renderer_standard_enriched_name(tmp_path, timeline_name):
     manifest_path = tmp_path / "study_card.manifest.json"
-    (tmp_path / "timeline_enriched.json").write_text('{"headline_zh":"机器人"}', encoding="utf-8")
+    (tmp_path / timeline_name).write_text('{"headline_zh":"机器人"}', encoding="utf-8")
 
     assert notifier._load_timeline(manifest_path) == {"headline_zh": "机器人"}
 
