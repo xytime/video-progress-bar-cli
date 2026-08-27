@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.6.0   | 2026-08-27 | Codex | 覆盖新标签页作品管理基线失败时的同页回退与创建页恢复。 |
 | 1.5.0   | 2026-08-27 | Codex | 覆盖提交后作品管理卡片异步加载时的同会话原生 ID 轮询绑定 |
 | 1.4.0   | 2026-08-21 | Codex | 提交后异常路径读取账本保护，禁止降级为可自动重传状态 |
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | 初始创建：锁定 BUG-2 发布确认 + 防重复发布行为 |
@@ -34,6 +35,7 @@ from wechat_uploader import (
     MANAGEMENT_UNDER_REVIEW,
     classify_management_publication,
     classify_publish_result,
+    capture_submission_identity_baseline,
     resolve_submission_platform_identity,
     resolve_submission_platform_identity_after_publish,
     run_uploader,
@@ -157,6 +159,51 @@ class TestExactSubmissionIdentity:
 
         assert receipt and receipt["platform_post_id"] == "new-post"
         assert page.waits == [1]
+
+    def test_baseline_falls_back_to_same_page_and_restores_create_page(self, monkeypatch):
+        baseline = {"old-post": {"platform_post_id": "old-post", "card_text": "历史作品"}}
+
+        class SecondaryPage:
+            closed = False
+
+            def close(self):
+                self.closed = True
+
+        class Context:
+            def __init__(self):
+                self.secondary = SecondaryPage()
+
+            def new_page(self):
+                return self.secondary
+
+        class PrimaryPage:
+            def __init__(self):
+                self.url = "https://channels.weixin.qq.com/platform/post/create"
+                self.goto_urls = []
+
+            def goto(self, url, **_kwargs):
+                self.goto_urls.append(url)
+                self.url = url
+
+            def wait_for_load_state(self, *_args, **_kwargs):
+                return None
+
+            def wait_for_timeout(self, *_args, **_kwargs):
+                return None
+
+        context = Context()
+        page = PrimaryPage()
+        monkeypatch.setattr(
+            "wechat_uploader._load_management_cards",
+            lambda candidate: (baseline, candidate is page),
+        )
+
+        actual, ready = capture_submission_identity_baseline(context, page)
+
+        assert ready is True
+        assert actual == baseline
+        assert context.secondary.closed is True
+        assert page.goto_urls == ["https://channels.weixin.qq.com/platform/post/create"]
 
 
 def test_submission_ledger_prevents_post_submit_exception_downgrade(temp_db):

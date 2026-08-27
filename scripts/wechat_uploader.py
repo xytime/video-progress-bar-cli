@@ -52,6 +52,7 @@
 | 4.5.0   | 2026-08-25 | Codex                               | 桌面授权监听改在网页快捷登录点击后启动，避免授权弹窗出现前耗尽观察窗口。 |
 | 4.6.0   | 2026-08-26 | Codex                               | 登录成功后统一恢复无提交证据的 LOGIN_REQUIRED 任务，避免 Telegram/直接入口遗漏补发 |
 | 4.7.0   | 2026-08-27 | Codex                               | 提交跳转作品管理页后轮询同会话原生 ID 差分，避免异步卡片尚未加载即永久记为未绑定。 |
+| 4.8.0   | 2026-08-27 | Codex                               | 新标签页作品管理基线不可用时回退同页采集并安全返回投稿页，避免无基线提交永久未绑定。 |
 """
 
 import os
@@ -285,6 +286,48 @@ def _load_management_cards(page) -> tuple[dict[str, dict[str, str]], bool]:
     if "/post/list" not in page.url:
         return {}, False
     return _collect_management_cards(page), True
+
+
+def _restore_create_page(page) -> bool:
+    """同页读取作品管理基线后，确认已回到可安全投稿的创建页。"""
+    try:
+        page.goto(WECHAT_CREATE_URL, wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state("networkidle", timeout=15_000)
+        except Exception:
+            pass
+        page.wait_for_timeout(2_000)
+    except Exception as exc:
+        logger.warning("Unable to restore create page after identity baseline: %s", exc)
+        return False
+    return "/post/create" in page.url
+
+
+def capture_submission_identity_baseline(context, page) -> tuple[dict[str, dict[str, str]], bool]:
+    """提交前捕获作品管理基线；新页失败时同页降级但必须恢复投稿页。"""
+    identity_page = None
+    try:
+        identity_page = context.new_page()
+        baseline, loaded = _load_management_cards(identity_page)
+        if loaded:
+            return baseline, True
+    except Exception as exc:
+        logger.warning("Dedicated management baseline page unavailable: %s", exc)
+    finally:
+        if identity_page:
+            try:
+                identity_page.close()
+            except Exception:
+                pass
+
+    logger.warning("Falling back to same-page management baseline before submission.")
+    baseline, loaded = _load_management_cards(page)
+    if not loaded:
+        return {}, False
+    if not _restore_create_page(page):
+        logger.error("Could not restore the create page after same-page identity baseline.")
+        return {}, False
+    return baseline, True
 
 
 def classify_management_publication(card_text: str) -> str:
@@ -1218,15 +1261,7 @@ def run_uploader(
             logger.warning("作品管理页未找到已绑定 ID 或未能判定状态: post_id=%s", platform_post_id)
             return EXIT_MANAGEMENT_UNCERTAIN
 
-        identity_baseline: dict[str, dict[str, str]] = {}
-        identity_baseline_ready = False
-        identity_page = None
-        try:
-            identity_page = context.new_page()
-            identity_baseline, identity_baseline_ready = _load_management_cards(identity_page)
-        finally:
-            if identity_page:
-                identity_page.close()
+        identity_baseline, identity_baseline_ready = capture_submission_identity_baseline(context, page)
         if not identity_baseline_ready:
             logger.warning("Pre-submit platform-ID baseline unavailable; submission may proceed but will remain unbound.")
 
