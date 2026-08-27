@@ -14,6 +14,7 @@
 # | 2.8.0 | 2026-08-26 | Codex | 固化协调器复用项目 YouTube Cookie，避免裸 yt-dlp 被反爬拦截。 |
 # | 2.9.0 | 2026-08-26 | Codex | 固化用户自动投稿策略覆盖旧 R3 人工审核文本的边界。 |
 # | 2.10.0 | 2026-08-26 | Codex | 固化协调器仅凭指定机器回执认定 Telegram 交付成功。 |
+# | 2.11.0 | 2026-08-27 | Codex | 固化生产代理必须等待通知回执，不得以 PENDING 结束任务。 |
 """
 
 from __future__ import annotations
@@ -269,4 +270,6 @@ def test_plist_directly_starts_python_coordinator():
     assert "sandbox_workspace_write.network_access=true" in runner_text
     assert "--cookies output/youtube_cookies.txt" in runner_text
     assert "覆盖任何旧文档中要求 Telegram 人工 R3 审核" in runner_text
+    assert "通知命令是本任务的最后一个硬性检查点" in runner_text
+    assert "缺失或不可解析回执都表示本次交付失败" in runner_text
     assert all(command in runner_text for command in ("`ps`", "`tail`", "`sleep`"))

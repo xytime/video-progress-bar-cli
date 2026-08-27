@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.2.0 | 2026-08-27 | Codex | 覆盖无 IPA 候选在富化阶段被排除，避免空音标成片。 |
 | 1.1.0 | 2026-08-20 | Codex | 对齐离线词表实现，覆盖时间线已审核词汇的难度字段保留。 |
 | 1.0.0 | 2026-08-02 | Codex | 覆盖词汇服务结果到候选词契约的转换。 |
 """
@@ -26,5 +27,4 @@ def test_build_candidates_preserves_model_difficulty(monkeypatch, tmp_path):
 
     assert build_candidates(payload, tmp_path, []) == [
         {"word": "liquidity", "meaning_zh": "流动性", "level": "7", "phonetic": "/lɪˈkwɪdəti/"},
-        {"word": "pressured", "meaning_zh": "承压", "level": "4"},
     ]

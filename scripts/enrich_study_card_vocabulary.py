@@ -9,6 +9,7 @@
 | 1.1.0 | 2026-08-02 | Codex | 改为全文抽词并请求 IPA 音标，提高生词覆盖度。 |
 | 1.2.0 | 2026-08-04 | Codex | 改用既有离线词汇分级模块；保留 timeline 中人工维护的固定短语，不调用 LLM/API。 |
 | 1.3.0 | 2026-08-04 | Codex | 支持以独立 JSON 传入已审核的短语候选，保持离线分级与人工短语供给的可替换边界。 |
+| 1.4.0 | 2026-08-27 | Codex | 富化阶段排除缺失 IPA 的候选，避免空音标进入英语世界成片后才在验收阶段失败。 |
 """
 
 from __future__ import annotations
@@ -65,7 +66,11 @@ def build_candidates(
         key = " ".join(word.lower().split())
         if " " in key or key not in candidates:
             candidates[key] = dict(item)
-    return list(candidates.values())
+    # 英语世界右栏要求每张词卡都可跟读；离线词表未给 IPA 的词不能带入成片。
+    return [
+        candidate for candidate in candidates.values()
+        if str(candidate.get("phonetic") or "").strip()
+    ]
 
 
 def load_phrase_candidates(path: Path | None) -> list[dict[str, Any]]:

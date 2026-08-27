@@ -20,6 +20,7 @@
 # | 2.10.0 | 2026-08-26 | Codex | 明确日更来源预检必须复用项目 Cookie，修复协调器裸 yt-dlp 触发 YouTube 反爬。 |
 # | 2.11.0 | 2026-08-26 | Codex | 明确当前用户自动投稿策略覆盖旧人工 R3 协议，避免代理读取旧文档后拒绝生产闭环。 |
 # | 2.12.0 | 2026-08-26 | Codex | 只有指定的机器可读 Telegram 回执可将协调器标为完成，阻断代理退出码掩盖交付失败。 |
+# | 2.13.0 | 2026-08-27 | Codex | 强制生产代理等待通知命令完成并读取指定回执，禁止以 PENDING 回执结束任务。 |
 """
 
 from __future__ import annotations
@@ -66,6 +67,8 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>' --delivery-receipt '{delivery_receipt_path}'
 若当天无合格候选或制作/质检失败，必须运行：
 PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '今日英语世界短视频' --failure '<准确原因>' --delivery-receipt '{delivery_receipt_path}'
+
+通知命令是本任务的最后一个硬性检查点：若终端提示命令仍在运行，必须等待该命令完成；随后只读取上方指定的 `delivery_receipt_path`。只有其中 `status` 为 `ACCEPTED` 或 `SUPPRESSED` 才能报告交付完成。`PENDING`、缺失或不可解析回执都表示本次交付失败，必须如实报告，不能用“已经调用通知器”代替回执。
 
 若已启用 `ENABLE_ENGLISH_WORLD_AUTO_PUBLISH=true`，上述入口只会对本次新建、完整质检通过的审核项一次性调用独立投稿器；不得自行补调用或重试。最终只报告真实状态、来源、证据路径与 Telegram 发送结果。不得将 Telegram 发送、素材生成或审核回执描述成视频号公开发布。"""
 
