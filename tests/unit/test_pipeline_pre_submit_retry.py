@@ -9,6 +9,7 @@
 | 1.2.0 | 2026-08-05 | Codex | 验证 Telegram 告警 HTTP 回执，而非将调用本身视作送达 |
 | 1.4.0 | 2026-08-24 | Codex | 验证 Bot API ok/message_id 回执与重复 P1 通知抑制。 |
 | 1.5.0 | 2026-08-24 | Codex | UNKNOWN 不能抑制重要通知；同一任务的变动原因仍遵循稳定去重键。 |
+| 1.6.0 | 2026-08-27 | Codex | 所有字幕翻译提供方暂时失败应走提交前有界重试，不得直接沉没为 FAILED。 |
 """
 
 import json
@@ -56,6 +57,22 @@ def test_curl_ssl_timeout_is_a_retryable_pre_submit_failure(tmp_path):
     )
 
     row = manager.db.get_video_by_youtube_id("curl-timeout-video")
+    assert row["status"] == "PENDING"
+    assert row["retry_count"] == 1
+
+
+def test_all_subtitle_translation_providers_failure_is_retryable_before_submission(tmp_path):
+    manager = _manager(tmp_path, "subtitle-provider-outage")
+    manager.db.update_video_status("subtitle-provider-outage", "TRANSCRIBING")
+    manager.send_telegram_msg = lambda _message: None
+
+    assert manager._requeue_transient_pre_submission_failure(
+        "subtitle-provider-outage",
+        "测试标题",
+        "All subtitle translation providers failed or were blocked.",
+    )
+
+    row = manager.db.get_video_by_youtube_id("subtitle-provider-outage")
     assert row["status"] == "PENDING"
     assert row["retry_count"] == 1
 

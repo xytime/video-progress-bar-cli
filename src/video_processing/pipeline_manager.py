@@ -11,6 +11,7 @@
 | 3.48.22 | 2026-08-24 | Codex                               | P1 按事件与任务身份去重；UNKNOWN 不视为送达，缺失 message_id 不再伪称回执。 |
 | 3.48.25 | 2026-08-26 | Codex                               | 整片视频不再把分类误作必填合集；合集仅用于切片系列，避免当前网页合集创建入口缺失时阻断发表。 |
 | 3.48.26 | 2026-08-27 | Codex                               | 字幕子进程写入阶段心跳，父管线实时转发阶段并限制 DeepSeek 候选预算。 |
+| 3.48.27 | 2026-08-27 | Codex                               | 全部字幕翻译提供方暂时失败归入提交前有界重试，保持已提交证据任务绝不重传。 |
 | 3.46.0  | 2026-08-21 | Codex                               | 分钟巡航采用评分输入缓存，只重评播放/点赞变化或 TTL 到期候选，消除全量低分空转 |
 | 3.44.0  | 2026-08-21 | Codex                               | 已提交视频号任务遇到中断或子进程异常时保留未绑定账本，不再被通用异常路径降级为 PENDING/FAILED |
 | 3.45.0  | 2026-08-21 | Codex                               | 封面不再向渲染或 AI 主视觉简报传递运营角标，避免告警式装饰污染成品 |
@@ -194,6 +195,7 @@ _TRANSIENT_PRE_SUBMISSION_FAILURE_MARKERS = (
     "that’s an error",
     "please try again later",
     "temporarily unavailable",
+    "all subtitle translation providers failed",
 )
 _MAX_TRANSIENT_PRE_SUBMISSION_RETRIES = 2
 _YOUTUBE_AUTH_FAILURE_MARKERS = (
