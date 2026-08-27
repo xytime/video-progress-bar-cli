@@ -17,6 +17,7 @@
 | 2.0.0   | 2026-07-13 | Codex | PET/B1 改为最低门槛，优先 C1-C2、专业术语和关键专有名词 |
 | 2.1.0   | 2026-07-13 | Codex | Gemini 改为模型级动态池，接入 3.1 Flash Lite 并压缩批量/上下文防 TPM 峰值 |
 | 2.2.0   | 2026-07-25 | Codex | 修正 google-genai HttpOptions.timeout 单位为毫秒，避免 90ms TLS 握手超时导致字幕翻译全失败 |
+| 2.3.0   | 2026-08-27 | Codex | Gemini 字幕候选使用整片 deadline；每批请求和模型重试均不得越过剩余预算。 |
 | 2.3.0   | 2026-08-02 | Codex | 生词结果可选回传十级难度，供独立新闻精读卡片按全文密度筛选。 |
 | 2.4.0   | 2026-08-02 | Codex | 支持独立学习卡按全文请求更多候选词，并回传 IPA 音标，不改变字幕默认三词限制。 |
 | 2.5.0   | 2026-08-02 | Codex | 学习卡可声明候选词下限，避免模型在长正文中保守少抽。 |
@@ -65,6 +66,14 @@ _GENAI_HTTP_TIMEOUT_MS = 90_000
 _INITIAL_RETRY_DELAY_S = 2
 _MAX_RETRY_DELAY_S = 8
 _MAX_RETRIES_PER_MODEL = 3
+
+
+def _remaining_request_timeout_ms(deadline: float) -> int:
+    """将整片 deadline 收紧到 SDK 请求超时，防止最后一批越过总预算。"""
+    remaining_seconds = deadline - time.monotonic()
+    if remaining_seconds <= 0:
+        return 0
+    return min(_GENAI_HTTP_TIMEOUT_MS, max(1_000, int(remaining_seconds * 1000)))
 
 
 def extract_vocab_batch(
@@ -120,15 +129,23 @@ def extract_vocab_batch(
         logger.error("[vocab_helper] google-genai SDK not installed. Cannot extract vocab.")
         return None
 
-    client = _genai.Client(
-        api_key=api_key,
-        http_options=_genai_types.HttpOptions(timeout=_GENAI_HTTP_TIMEOUT_MS),
-    )
-
     # [Claude_Sonnet_4.6_Thinking_planning] v1.1.0: 分批处理，每批 _BATCH_SIZE 段
     all_results: List[Dict[str, Any]] = []
     total = len(english_texts)
+    total_timeout = max(
+        30,
+        int(getattr(settings_obj, "gemini_subtitle_total_timeout_seconds", 300) or 300),
+    )
+    deadline = time.monotonic() + total_timeout
     for batch_start in range(0, total, _BATCH_SIZE):
+        request_timeout_ms = _remaining_request_timeout_ms(deadline)
+        if request_timeout_ms <= 0:
+            logger.warning("[vocab_helper] Gemini subtitle candidate budget exceeded (%ss).", total_timeout)
+            return None
+        client = _genai.Client(
+            api_key=api_key,
+            http_options=_genai_types.HttpOptions(timeout=request_timeout_ms),
+        )
         batch_end = min(batch_start + _BATCH_SIZE, total)
         en_batch = english_texts[batch_start:batch_end]
         zh_batch = chinese_translations[batch_start:batch_end] if chinese_translations else None
@@ -144,7 +161,9 @@ def extract_vocab_batch(
             getattr(settings_obj, "project_root", None) / "output" / "translation_model_pool.json"
             if getattr(settings_obj, "project_root", None) is not None else None
         )
-        call_result = _call_with_retry(client, prompt, _genai_types, state_path=state_path)
+        call_result = _call_with_retry(
+            client, prompt, _genai_types, state_path=state_path, deadline=deadline,
+        )
         if call_result is None:
             logger.warning(f"[vocab_helper] Batch {batch_start//_BATCH_SIZE + 1} failed. Aborting.")
             return None
@@ -276,7 +295,14 @@ def _render_context_block(context_text: str) -> str:
     return f"{render_translation_constraints(normalized)}\n\n"
 
 
-def _call_with_retry(client: Any, prompt: str, genai_types: Any, *, state_path=None) -> Optional[tuple[Any, str]]:
+def _call_with_retry(
+    client: Any,
+    prompt: str,
+    genai_types: Any,
+    *,
+    state_path=None,
+    deadline: Optional[float] = None,
+) -> Optional[tuple[Any, str]]:
     """模型级动态 fallback；429 立即冷却切换，网络问题才短暂重试。"""
     last_err = None
     response = None
@@ -285,6 +311,9 @@ def _call_with_retry(client: Any, prompt: str, genai_types: Any, *, state_path=N
     for model_name in pool.order(_MODELS_TO_TRY, required={"translate", "vocab"}):
         retry_delay = _INITIAL_RETRY_DELAY_S
         for attempt in range(_MAX_RETRIES_PER_MODEL):
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.warning("[vocab_helper] Gemini subtitle candidate budget exhausted before request.")
+                return None
             try:
                 logger.info(f"[vocab_helper] Calling {model_name} (attempt {attempt + 1}/{_MAX_RETRIES_PER_MODEL})...")
                 response = client.models.generate_content(
@@ -321,6 +350,12 @@ def _call_with_retry(client: Any, prompt: str, genai_types: Any, *, state_path=N
                     break
                 if attempt < _MAX_RETRIES_PER_MODEL - 1:
                     wait = min(retry_delay, _MAX_RETRY_DELAY_S)
+                    if deadline is not None:
+                        remaining_seconds = deadline - time.monotonic()
+                        if remaining_seconds <= 0:
+                            logger.warning("[vocab_helper] Gemini subtitle candidate budget exhausted after failure.")
+                            return None
+                        wait = min(wait, remaining_seconds)
                     logger.warning(f"[vocab_helper] {model_name} transient failure. Retry in {wait}s...")
                     time.sleep(wait)
                     retry_delay *= 2
