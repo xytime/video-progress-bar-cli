@@ -13,6 +13,7 @@
 | 3.41.0  | 2026-08-26 | Codex                               | 视频号受理账本、不可变尝试与任务状态同事务落盘，杜绝崩溃后的分叉状态。 |
 | 3.42.0  | 2026-08-26 | Codex                               | 英语世界新增自动投稿授权来源，自动策略只消费本次新建且质检完成的成片。 |
 | 3.43.0  | 2026-08-26 | Codex                               | 登录恢复对任意视频号账本 fail-closed；保留批量重试的账本跳过统计。 |
+| 3.44.0  | 2026-08-27 | Codex                               | 高分与预加工候选在 SQL 层排除活跃视频号账本及历史归档，隔离存量 PENDING 污染。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -3573,6 +3574,11 @@ class PipelineDB:
               AND IFNULL(pv.publication_review_required, 0) = 0
               AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
               AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+              AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
+              AND NOT EXISTS (
+                  SELECT 1 FROM wechat_publications_historical_archive archive
+                  WHERE archive.video_id = pv.id
+              )
               AND (
                 pv.slice_index = 0
                 OR NOT EXISTS (
@@ -3615,6 +3621,11 @@ class PipelineDB:
                   SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
               )
               AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+              AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
+              AND NOT EXISTS (
+                  SELECT 1 FROM wechat_publications_historical_archive archive
+                  WHERE archive.video_id = pv.id
+              )
               AND (
                   COALESCE(pv.source_subtitle_status, 'PENDING') != 'UNAVAILABLE'
                   OR pv.source_subtitle_checked_at <= datetime('now', ?)

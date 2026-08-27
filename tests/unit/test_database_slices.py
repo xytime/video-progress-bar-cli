@@ -5,6 +5,7 @@
 |---------|------------|---------------------------|-------------------------------------------------|
 | 2.1.0 | 2026-08-23 | Codex | 覆盖源视频精确发布时间的插入与非空补齐 |
 | 2.2.0 | 2026-08-27 | Codex | 锁定 stale 清洗器仅回收提交前状态，绝不复活视频号账本任务 |
+| 2.3.0 | 2026-08-27 | Codex | 锁定候选查询对活跃账本和历史归档的硬排除 |
 | 2.0.0   | 2026-08-21 | Codex                    | 覆盖评分输入缓存与历史微信墓碑不计入待恢复队列 |
 | 1.2.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证 purge_stale_tasks, batch_add_videos 补齐 disable_slicing 以及 delete_slices_by_parent_id |
 | 1.3.0   | 2026-07-13 | Codex                    | 覆盖 AI 字幕审计运行、provider 尝试与汇总查询 |
@@ -474,6 +475,29 @@ def test_purge_stale_tasks_never_requeues_submission_or_review_states(temp_db):
     assert db.get_video_by_youtube_id("recoverable-stale")["status"] == "PENDING"
     for index, state in enumerate(protected_states):
         assert db.get_video_by_youtube_id(f"protected-stale-{index}")["status"] == state
+
+
+def test_high_score_selection_excludes_ledger_and_historical_archive_even_if_pending(temp_db):
+    """存量污染为 PENDING 时，候选查询仍必须按提交账本硬排除。"""
+    db = PipelineDB(temp_db)
+    assert db.add_video("fresh-candidate", "Fresh", "channel", score=80)
+    assert db.add_video("active-ledger", "Submitted", "channel", score=90)
+    assert db.add_video("archived-ledger", "Archived", "channel", score=95)
+
+    db.record_wechat_publication_confirmation(
+        "active-ledger", evidence_path="active-post-list.png", state="SUBMITTED_UNBOUND",
+    )
+    db.update_video_status("active-ledger", "PENDING")
+    db.record_wechat_publication_confirmation(
+        "archived-ledger", evidence_path="archived-post-list.png", state="SUBMITTED_UNBOUND",
+    )
+    assert db.archive_wechat_publication_as_historical_unresolved(
+        "archived-ledger", reason="test historical archive",
+    )
+    db.update_video_status("archived-ledger", "PENDING")
+
+    selected = db.get_high_score_pending_videos(min_score=75, limit=10)
+    assert [row["youtube_id"] for row in selected] == ["fresh-candidate"]
 
 
 def test_batch_add_videos_preserves_disable_slicing(temp_db):
