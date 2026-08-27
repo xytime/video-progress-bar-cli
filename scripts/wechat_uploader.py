@@ -53,6 +53,8 @@
 | 4.6.0   | 2026-08-26 | Codex                               | 登录成功后统一恢复无提交证据的 LOGIN_REQUIRED 任务，避免 Telegram/直接入口遗漏补发 |
 | 4.7.0   | 2026-08-27 | Codex                               | 提交跳转作品管理页后轮询同会话原生 ID 差分，避免异步卡片尚未加载即永久记为未绑定。 |
 | 4.8.0   | 2026-08-27 | Codex                               | 新标签页作品管理基线不可用时回退同页采集并安全返回投稿页，避免无基线提交永久未绑定。 |
+| 4.9.0   | 2026-08-27 | Codex                               | 作品管理 SPA 的 networkidle 超时改为非致命，改按业务路由及卡片证据判定页面可用。 |
+| 5.0.0   | 2026-08-27 | Codex                               | 读取作品管理原生 post_list 响应，以同会话唯一新增 objectId 绑定，修复短标题不在列表响应中的漏绑定。 |
 """
 
 import os
@@ -207,6 +209,32 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
     }
 
 
+def _collect_management_cards_from_post_list_payload(payload: object) -> dict[str, dict[str, str]]:
+    """从作品管理原生列表响应提取 objectId，绝不从标题反向寻找历史作品。"""
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    records = data.get("list") if isinstance(data, dict) else None
+    if not isinstance(records, list):
+        return {}
+
+    cards: dict[str, dict[str, str]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        post_id = str(record.get("objectId") or "").strip()
+        if not post_id:
+            continue
+        cards[post_id] = {
+            "platform_post_id": post_id,
+            "platform_url": "",
+            "card_text": str(record.get("desc") or ""),
+            "identity_source": "post_list_api",
+            "platform_status": str(record.get("status") or ""),
+        }
+    return cards
+
+
 def resolve_submission_platform_identity(
     before: dict[str, dict[str, str]], after: dict[str, dict[str, str]], expected_title: str,
 ) -> dict[str, str] | None:
@@ -223,12 +251,18 @@ def resolve_submission_platform_identity(
         for line in str(record.get("card_text") or "").splitlines()
         if line.strip()
     }
-    if normalized_title not in card_title_lines:
+    if normalized_title in card_title_lines:
+        matched_by = "same_session_before_after_platform_id_delta_and_exact_title"
+    elif record.get("identity_source") == "post_list_api":
+        # 平台 post_list 只返回长描述，未返回 6–16 字投稿短标题。
+        # 此处分配的主体仍由提交前后同一会话的唯一新增 objectId 精确限定。
+        matched_by = "same_session_before_after_unique_post_list_object_id_delta"
+    else:
         return None
     return {
         "platform_post_id": record["platform_post_id"],
         "platform_url": record.get("platform_url", ""),
-        "matched_by": "same_session_before_after_platform_id_delta_and_exact_title",
+        "matched_by": matched_by,
     }
 
 
@@ -276,16 +310,52 @@ def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> No
 
 def _load_management_cards(page) -> tuple[dict[str, dict[str, str]], bool]:
     """打开作品管理页并读取已加载卡片；失败返回 false，调用方必须拒绝绑定。"""
+    post_list_responses = []
+
+    def _capture_post_list_response(response) -> None:
+        try:
+            if response.url.split("?", 1)[0].endswith("/post/post_list"):
+                post_list_responses.append(response)
+        except Exception:
+            pass
+
+    add_listener = getattr(page, "on", None)
+    remove_listener = getattr(page, "remove_listener", None)
+
+    def _remove_post_list_listener() -> None:
+        if callable(remove_listener):
+            remove_listener("response", _capture_post_list_response)
+
+    if callable(add_listener):
+        add_listener("response", _capture_post_list_response)
     try:
         page.goto(WECHAT_POST_LIST_URL, wait_until="domcontentloaded")
+    except Exception as exc:
+        logger.warning("Unable to open management page for exact submission binding: %s", exc)
+        _remove_post_list_listener()
+        return {}, False
+    try:
         page.wait_for_load_state("networkidle", timeout=15_000)
+    except Exception as exc:
+        # 作品管理 SPA 会维持长连接；networkidle 超时不能覆盖已到达的路由和卡片证据。
+        logger.info("Management page did not become network-idle; checking route and cards: %s", exc)
+    try:
         page.wait_for_timeout(2_000)
     except Exception as exc:
-        logger.warning("Unable to load management page for exact submission binding: %s", exc)
+        logger.warning("Unable to wait for management cards: %s", exc)
+        _remove_post_list_listener()
         return {}, False
     if "/post/list" not in page.url:
+        _remove_post_list_listener()
         return {}, False
-    return _collect_management_cards(page), True
+    cards = _collect_management_cards(page)
+    if post_list_responses:
+        try:
+            cards.update(_collect_management_cards_from_post_list_payload(post_list_responses[-1].json()))
+        except Exception as exc:
+            logger.warning("Unable to read native post_list response for exact submission binding: %s", exc)
+    _remove_post_list_listener()
+    return cards, True
 
 
 def _restore_create_page(page) -> bool:

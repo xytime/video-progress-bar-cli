@@ -9,6 +9,8 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.8.0   | 2026-08-27 | Codex | 覆盖作品管理原生 post_list 的唯一新增 objectId 绑定，避免长描述与短标题不一致漏绑。 |
+| 1.7.0   | 2026-08-27 | Codex | 锁定作品管理页 networkidle 超时后仍按路由和卡片证据读取。 |
 | 1.6.0   | 2026-08-27 | Codex | 覆盖新标签页作品管理基线失败时的同页回退与创建页恢复。 |
 | 1.5.0   | 2026-08-27 | Codex | 覆盖提交后作品管理卡片异步加载时的同会话原生 ID 轮询绑定 |
 | 1.4.0   | 2026-08-21 | Codex | 提交后异常路径读取账本保护，禁止降级为可自动重传状态 |
@@ -36,6 +38,8 @@ from wechat_uploader import (
     classify_management_publication,
     classify_publish_result,
     capture_submission_identity_baseline,
+    _collect_management_cards_from_post_list_payload,
+    _load_management_cards,
     resolve_submission_platform_identity,
     resolve_submission_platform_identity_after_publish,
     run_uploader,
@@ -131,6 +135,40 @@ class TestExactSubmissionIdentity:
 
         assert resolve_submission_platform_identity({}, after, "本次唯一完整标题") is None
 
+    def test_unique_post_list_object_id_delta_binds_without_short_title_in_long_description(self):
+        after = {
+            "new-post": {
+                "platform_post_id": "new-post",
+                "card_text": "这是一篇不会包含投稿短标题的完整长描述",
+                "identity_source": "post_list_api",
+            },
+        }
+
+        receipt = resolve_submission_platform_identity({}, after, "本次唯一完整标题")
+
+        assert receipt and receipt["platform_post_id"] == "new-post"
+        assert receipt["matched_by"] == "same_session_before_after_unique_post_list_object_id_delta"
+
+    def test_post_list_payload_exposes_only_native_object_ids(self):
+        cards = _collect_management_cards_from_post_list_payload({
+            "data": {
+                "list": [
+                    {"objectId": "native-post-1", "desc": "完整描述", "status": 3},
+                    {"desc": "没有原生 ID，必须忽略"},
+                ],
+            },
+        })
+
+        assert cards == {
+            "native-post-1": {
+                "platform_post_id": "native-post-1",
+                "platform_url": "",
+                "card_text": "完整描述",
+                "identity_source": "post_list_api",
+                "platform_status": "3",
+            },
+        }
+
     def test_post_submit_identity_waits_for_async_management_card(self, monkeypatch):
         before = {"old-post": {"platform_post_id": "old-post", "card_text": "历史作品"}}
         delayed_cards = iter([{
@@ -204,6 +242,28 @@ class TestExactSubmissionIdentity:
         assert actual == baseline
         assert context.secondary.closed is True
         assert page.goto_urls == ["https://channels.weixin.qq.com/platform/post/create"]
+
+    def test_management_cards_remain_usable_after_networkidle_timeout(self, monkeypatch):
+        expected_cards = {"post-1": {"platform_post_id": "post-1", "card_text": "审核中"}}
+
+        class Page:
+            url = "https://channels.weixin.qq.com/platform/post/list"
+
+            def goto(self, _url, **_kwargs):
+                return None
+
+            def wait_for_load_state(self, *_args, **_kwargs):
+                raise RuntimeError("persistent websocket prevents network idle")
+
+            def wait_for_timeout(self, *_args, **_kwargs):
+                return None
+
+        monkeypatch.setattr("wechat_uploader._collect_management_cards", lambda _page: expected_cards)
+
+        actual, ready = _load_management_cards(Page())
+
+        assert ready is True
+        assert actual == expected_cards
 
 
 def test_submission_ledger_prevents_post_submit_exception_downgrade(temp_db):
