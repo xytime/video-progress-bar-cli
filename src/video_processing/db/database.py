@@ -3300,20 +3300,20 @@ class PipelineDB:
             return [dict(row) for row in rows]
 
     def purge_stale_tasks(self, stale_hours: int = 2) -> int:
-        """清洗器：将卡在非终态（如 DOWNLOADING）超过 N 小时的任务重置回 PENDING"""
+        """仅回收提交前卡住的加工任务，绝不重置任何发布/审核账本状态。"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            # [Unknown_Model_planning] 排除已分集(SEGMENTED)父视频和跳过(IGNORED)任务，防止无限循环
-            # [Claude_Opus_4.8] BUG-2/#11: 额外排除 PUBLISHING——发布是对外不可逆动作，若进程在
-            # 「微信已接收发表」与「写 PUBLISHED」之间崩溃，自动重置回 PENDING 会导致重复公开发布。
-            # 卡住的 PUBLISHING 改由人工在面板核对后处理（重试/标记已处理），不自动重排队。
+            # 历史实现用“排除终态”的否定条件，遗漏 SUBMITTED_UNBOUND、UNDER_REVIEW、
+            # UNCERTAIN、HISTORICAL_UNRESOLVED 后会把已有提交证据的任务复活为 PENDING。
+            # 这会挤占新片队列，更严重时可能绕过未来新增账本状态。故改为显式白名单：
+            # 只回收仍在提交前的三个可逆加工阶段。
             cursor.execute(
                 '''
                 UPDATE processed_videos
                 SET status = 'PENDING',
                     retry_count = retry_count + 1,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE status NOT IN ('COMPLETED', 'FAILED', 'PENDING', 'AI_COVER_PENDING', 'PUBLISHED', 'PUBLISHING', 'WECHAT_DEFERRED', 'SEGMENTED', 'IGNORED')
+                WHERE status IN ('DOWNLOADING', 'COPYWRITING', 'TRANSCRIBING')
                 AND updated_at < datetime('now', ?)
                 ''',
                 (f'-{stale_hours} hours',)

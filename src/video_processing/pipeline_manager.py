@@ -10,6 +10,7 @@
 | 3.48.21 | 2026-08-24 | Codex                               | P2 管线状态不再刷 Telegram；P1 通知记录 API 回执并按内容去重，异常日志不泄露凭据。 |
 | 3.48.22 | 2026-08-24 | Codex                               | P1 按事件与任务身份去重；UNKNOWN 不视为送达，缺失 message_id 不再伪称回执。 |
 | 3.48.25 | 2026-08-26 | Codex                               | 整片视频不再把分类误作必填合集；合集仅用于切片系列，避免当前网页合集创建入口缺失时阻断发表。 |
+| 3.48.26 | 2026-08-27 | Codex                               | 字幕子进程写入阶段心跳，父管线实时转发阶段并限制 DeepSeek 候选预算。 |
 | 3.46.0  | 2026-08-21 | Codex                               | 分钟巡航采用评分输入缓存，只重评播放/点赞变化或 TTL 到期候选，消除全量低分空转 |
 | 3.44.0  | 2026-08-21 | Codex                               | 已提交视频号任务遇到中断或子进程异常时保留未绑定账本，不再被通用异常路径降级为 PENDING/FAILED |
 | 3.45.0  | 2026-08-21 | Codex                               | 封面不再向渲染或 AI 主视觉简报传递运营角标，避免告警式装饰污染成品 |
@@ -134,6 +135,7 @@ import json
 import math
 import signal
 import time
+import threading
 import logging
 import subprocess
 import fcntl
@@ -1311,6 +1313,7 @@ class PipelineManager:
         # [Gemini_3.5_Flash_fast] 避免 Popen 收到不支持的 capture_output 和 check 参数
         popen_kwargs = kwargs.copy()
         timeout = popen_kwargs.pop("timeout", None)
+        progress_path = popen_kwargs.pop("progress_path", None)
         if popen_kwargs.pop("capture_output", False):
             popen_kwargs["stdout"] = subprocess.PIPE
             popen_kwargs["stderr"] = subprocess.PIPE
@@ -1331,6 +1334,36 @@ class PipelineManager:
                 self.db.update_process_pid(yid, pgid, slice_index=slice_index)
             except ProcessLookupError:
                 pass  # 进程已极速退出，无需记录
+            monitor_stop = threading.Event() if progress_path else None
+            monitor_thread = None
+            if monitor_stop is not None:
+                progress_file = Path(progress_path)
+
+                def monitor_caption_progress() -> None:
+                    last_stage = None
+                    last_log_at = 0.0
+                    while not monitor_stop.wait(5):
+                        try:
+                            payload = json.loads(progress_file.read_text(encoding="utf-8"))
+                            stage = str(payload.get("stage") or "").strip()
+                            updated_at = float(payload.get("updated_at") or 0)
+                        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                            continue
+                        now = time.time()
+                        if stage and (stage != last_stage or now - last_log_at >= 60):
+                            logger.info(
+                                "[CaptionProgress] %s stage=%s heartbeat_age=%.0fs",
+                                yid, stage, max(0.0, now - updated_at),
+                            )
+                            self._report_runtime_stage(yid, f"CAPTION_{stage}", slice_index=slice_index)
+                            last_stage, last_log_at = stage, now
+
+                monitor_thread = threading.Thread(
+                    target=monitor_caption_progress,
+                    name=f"caption-progress-{yid}",
+                    daemon=True,
+                )
+                monitor_thread.start()
             try:
                 stdout, stderr = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired as e:
@@ -1340,6 +1373,11 @@ class PipelineManager:
                     proc.kill()
                 stdout, stderr = proc.communicate()
                 raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr) from e
+            finally:
+                if monitor_stop is not None:
+                    monitor_stop.set()
+                if monitor_thread is not None:
+                    monitor_thread.join(timeout=1)
             if proc.returncode != 0:
                 raise subprocess.CalledProcessError(
                     proc.returncode, cmd,
@@ -2934,11 +2972,17 @@ class PipelineManager:
                         logger.warning(f"[SIGTERM] Checkpoint before TRANSCRIBING: aborting {prefix}")
                         raise InterruptedError("SIGTERM received before transcription")
                     self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
+                    progress_file = self._OUT_DIR / f"{prefix}_caption_progress.json"
+                    try:
+                        progress_file.unlink(missing_ok=True)
+                    except OSError as exc:
+                        logger.warning("[CaptionProgress] Cannot clear stale progress for %s: %s", prefix, exc)
                     render_cmd = [
                         "nice", "-n", "19",
                         self._VENV_PYTHON, "-m", "cli.main", "auto-caption",
                         str(target_file), "--vertical", "--bilingual", "--title", render_title,
                         "--output", str(vertical),  # [Gemini_3.5_Flash_planning] 指定输出路径，去除可能携带的格式后缀
+                        "--progress-file", str(progress_file),
                     ]
                     # [Claude_Opus_4.8] 源视频「发布日期」毛玻璃戳：仅在开关开启且能取到合法 upload_date 时注入。
                     # 主视频行自带 upload_date；切片行不带 → 回退父行(slice_index=0)。缺失/非法则跳过（不烧戳）。
@@ -2976,6 +3020,7 @@ class PipelineManager:
                             cwd=str(self._PRJ_ROOT),
                             env=render_env,
                             timeout=_AUTO_CAPTION_TIMEOUT_SEC,
+                            progress_path=progress_file,
                         )
                     except subprocess.TimeoutExpired:
                         logger.error(

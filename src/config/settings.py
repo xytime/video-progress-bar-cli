@@ -11,6 +11,7 @@
 | 3.48.0 | 2026-08-25 | Codex | 新增视频号原生许可弹窗的受限视觉后备开关；默认关闭且只在唯一微信绿按钮候选时点击。 |
 | 3.49.0 | 2026-08-26 | Codex | 新增 YouTube Cookie 真实探针与浏览器来源配置；刷新脚本据此执行原子验收。 |
 | 3.50.0 | 2026-08-26 | Codex | 新增受限 YouTube Cookie 自动恢复开关；仅 bot 校验时刷新并重试一次源字幕预检。 |
+| 3.51.0 | 2026-08-27 | Codex | DeepSeek 字幕候选增加全片预算，避免质量比较耗尽发布窗口。 |
 | 3.45.0 | 2026-08-21 | Codex | Candidate-score cache TTL prevents minute-by-minute full rescoring. |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -187,6 +188,8 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-v4-flash"
     # DeepSeek 一体化翻译+vocabulary 候选：完成 A/B 对比前保持关闭。
     enable_deepseek_vocab_fallback: bool = True
+    # 单条字幕任务用于 DeepSeek 对比候选的总预算；超出后保留此前可用候选并继续成片。
+    deepseek_subtitle_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
 
     # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: Clash Mi 下载节点切换配置
     # 架构背景：Clash Mi 使用 macOS Network Extension，系统扩展不允许动态开放任意端口，

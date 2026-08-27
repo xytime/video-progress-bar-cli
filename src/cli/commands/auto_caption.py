@@ -11,15 +11,71 @@
 | 1.3.0   | 2026-05-28 | Gemini_2.5_Pro_planning  | 将 --tts-voice 默认值改为 "auto"，自动从精选播音音色池随机选取，标注 # [Gemini_2.5_Pro_planning] |
 | 1.4.0   | 2026-06-25 | Claude_Opus_4.8 | 新增 --source-date 参数，透传源视频发布日期(YYYY-MM-DD)到 VerticalCaptionProcessor 渲染左上角毛玻璃日期戳 |
 | 1.5.0   | 2026-07-17 | Codex | 当前无配音业务场景，移除全部 TTS CLI 入口 |
+| 1.6.0   | 2026-08-27 | Codex | 增加原子阶段心跳文件，供父管线在子进程运行中报告真实进度 |
 """
 import click
 from pathlib import Path
 import logging
+import json
+import time
+import threading
 from video_processing.processors.caption_processor import AutoCaptionProcessor
 from video_processing.processors.vertical_processor import VerticalCaptionProcessor
 from video_processing.core.base import VideoProcessingError
 
 logger = logging.getLogger(__name__)
+
+
+class _CaptionProgressReporter:
+    """以原子文件持续汇报当前字幕阶段，供父进程辨别存活与停滞。"""
+
+    def __init__(self, progress_file: Path):
+        self._progress_file = progress_file
+        self._stage = "STARTING"
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def __call__(self, stage: str) -> None:
+        with self._lock:
+            self._stage = stage
+        self._write(stage)
+
+    def start(self) -> None:
+        self._write(self._stage)
+        self._thread = threading.Thread(target=self._heartbeat_loop, name="caption-progress", daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+
+    def _heartbeat_loop(self) -> None:
+        while not self._stop.wait(15):
+            with self._lock:
+                stage = self._stage
+            self._write(stage)
+
+    def _write(self, stage: str) -> None:
+        try:
+            self._progress_file.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self._progress_file.with_name(f".{self._progress_file.name}.tmp")
+            temporary.write_text(
+                json.dumps({"stage": stage, "updated_at": time.time()}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            temporary.replace(self._progress_file)
+        except OSError as exc:
+            logger.warning("Unable to write caption progress %s: %s", self._progress_file, exc)
+
+
+def _build_progress_reporter(progress_file: Path | None):
+    """返回可选的原子阶段上报回调；上报失败不影响字幕成片。"""
+    if progress_file is None:
+        return None
+
+    return _CaptionProgressReporter(progress_file)
 
 @click.command()
 @click.argument('input_path', type=click.Path(exists=True, path_type=Path))
@@ -37,10 +93,13 @@ logger = logging.getLogger(__name__)
 @click.option('--font-size', type=int, default=84, show_default=True, help='Subtitle font size (Vertical mode only, default 84)')
 @click.option('--bilingual', is_flag=True, help='Show bilingual subtitles (ZH+EN) in Vertical mode. Default is Chinese only.')
 @click.option('--source-date', default=None, help='Source video publish date (YYYY-MM-DD) for the frosted date stamp in the top-left corner. Vertical mode only.')  # [Claude_Opus_4.8]
-def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, source_date):
+@click.option('--progress-file', type=click.Path(path_type=Path), default=None, help='Optional atomic stage heartbeat file for the parent pipeline.')
+def auto_caption(input_path, model, src_lang, target_lang, device, style, output, vertical, title, bg_blur, font_path, font_size, bilingual, source_date, progress_file):
     """Generate and burn bilingual subtitles for a video."""
+    progress_reporter = _build_progress_reporter(progress_file)
+    if progress_reporter is not None:
+        progress_reporter.start()
     try:
-        
         if vertical:
             processor = VerticalCaptionProcessor(
                 input_path=input_path,
@@ -55,7 +114,8 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
                 font_path=str(font_path),
                 font_size=font_size,
                 bilingual=bilingual,
-                source_date=source_date  # [Claude_Opus_4.8] 源视频发布日期毛玻璃戳
+                source_date=source_date,  # [Claude_Opus_4.8] 源视频发布日期毛玻璃戳
+                progress_reporter=progress_reporter,
             )
             mode_str = "Vertical (9:16)"
         else:
@@ -66,7 +126,8 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
                 src_lang=src_lang,
                 target_lang=target_lang,
                 device=device,
-                style=style
+                style=style,
+                progress_reporter=progress_reporter,
             )
             mode_str = "Standard"
         
@@ -86,3 +147,6 @@ def auto_caption(input_path, model, src_lang, target_lang, device, style, output
         logger.exception("Unexpected error")
         click.echo(f"Unexpected error: {e}", err=True)
         raise click.Abort()
+    finally:
+        if progress_reporter is not None:
+            progress_reporter.close()

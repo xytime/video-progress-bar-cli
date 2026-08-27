@@ -4,6 +4,7 @@
 | Version | Date       | Author                    | Description                                     |
 |---------|------------|---------------------------|-------------------------------------------------|
 | 2.1.0 | 2026-08-23 | Codex | 覆盖源视频精确发布时间的插入与非空补齐 |
+| 2.2.0 | 2026-08-27 | Codex | 锁定 stale 清洗器仅回收提交前状态，绝不复活视频号账本任务 |
 | 2.0.0   | 2026-08-21 | Codex                    | 覆盖评分输入缓存与历史微信墓碑不计入待恢复队列 |
 | 1.2.0   | 2026-05-27 | Unknown_Model_planning    | 新增测试：验证 purge_stale_tasks, batch_add_videos 补齐 disable_slicing 以及 delete_slices_by_parent_id |
 | 1.3.0   | 2026-07-13 | Codex                    | 覆盖 AI 字幕审计运行、provider 尝试与汇总查询 |
@@ -449,6 +450,30 @@ def test_purge_stale_tasks_excludes_segmented(temp_db):
     assert v_ignored["status"] == "IGNORED"
     assert v_dl["status"] == "PENDING"
     assert purged_count == 1
+
+
+def test_purge_stale_tasks_never_requeues_submission_or_review_states(temp_db):
+    """提交证据/审核状态过期也只能保留，不能再次进入自动发布候选池。"""
+    db = PipelineDB(temp_db)
+    protected_states = (
+        "PUBLISHING", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNDER_REVIEW",
+        "UNCERTAIN", "HISTORICAL_UNRESOLVED", "WECHAT_DEFERRED",
+    )
+    for index, state in enumerate(protected_states):
+        yid = f"protected-stale-{index}"
+        assert db.add_video(yid, "title", "channel", score=80)
+        db.update_video_status(yid, state)
+
+    assert db.add_video("recoverable-stale", "title", "channel", score=80)
+    db.update_video_status("recoverable-stale", "TRANSCRIBING")
+    with db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET updated_at = datetime('now', '-3 hours')")
+        conn.commit()
+
+    assert db.purge_stale_tasks(stale_hours=2) == 1
+    assert db.get_video_by_youtube_id("recoverable-stale")["status"] == "PENDING"
+    for index, state in enumerate(protected_states):
+        assert db.get_video_by_youtube_id(f"protected-stale-{index}")["status"] == state
 
 
 def test_batch_add_videos_preserves_disable_slicing(temp_db):

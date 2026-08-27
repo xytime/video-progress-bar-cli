@@ -43,10 +43,11 @@
 | 1.30.0 | 2026-07-13 | Codex | 字幕翻译逐视频写入 SQLite AI 审计，记录 provider 尝试、降级、质量和最终结果 |
 | 1.31.0 | 2026-08-24 | Codex | agy 以隔离 JSON Schema 调用作为首选，DeepSeek 保留为质量门后的次选 |
 | 1.32.0 | 2026-08-24 | Codex | 影子期恢复已批准生产顺序；模型池仅负责可用性和冷却筛除，不重排运营回退链。 |
+| 1.33.0 | 2026-08-27 | Codex | 增加字幕阶段回调，供父管线获得子进程运行中可审计的真实阶段。 |
 """
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Union
+from typing import Callable, Optional, List, Dict, Any, Union
 
 import whisper
 from deep_translator import GoogleTranslator
@@ -176,7 +177,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
         src_lang: str = "en",
         target_lang: str = "zh-CN",
         device: str = "cpu",
-        style: str = "default"
+        style: str = "default",
+        progress_reporter: Optional[Callable[[str], None]] = None,
     ):
         super().__init__(input_path, output_path)
         self.model_size = model_size
@@ -190,6 +192,16 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self.detected_lang = None  # [Gemini_3.5_Flash_planning] 保存 Whisper ASR 检测到的语种
         self._translation_quality_audit: List[Dict[str, Any]] = []
         self._translation_audit_run_id: Optional[int] = None
+        self._progress_reporter = progress_reporter
+
+    def _report_progress(self, stage: str) -> None:
+        """上报阶段心跳；观测失败绝不影响字幕加工。"""
+        if self._progress_reporter is None:
+            return
+        try:
+            self._progress_reporter(stage)
+        except Exception as exc:
+            logger.warning("[CaptionProgress] Failed to report %s: %s", stage, exc)
 
     def process(self, **kwargs) -> Path:
         """
@@ -198,9 +210,11 @@ class AutoCaptionProcessor(VideoProcessorBase):
         logger.info(f"Processing video: {self.input_path} with style: {self.style}")
         
         # 1. 确保模型已加载
+        self._report_progress("MODEL_LOADING")
         self._load_model()
         
         # 2. 提取音频
+        self._report_progress("AUDIO_EXTRACTING")
         audio_path = self._extract_audio()
         if audio_path:
             logger.info(f"Audio extracted to: {audio_path}")
@@ -210,6 +224,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         try:
             # 3. 转录
             if audio_path is not None:
+                self._report_progress("TRANSCRIBING")
                 segments = self._transcribe_audio(audio_path)
             else:
                 logger.info("Skipping transcription since there is no audio track.")
@@ -217,15 +232,19 @@ class AutoCaptionProcessor(VideoProcessorBase):
             
             # 4. 翻译 (如果提供了目标语言且不同于源语言)
             if self.target_lang and self.target_lang != self.src_lang:
+                self._report_progress("TRANSLATING")
                 segments = self._translate_segments(segments)
             
             # 5. 生成 ASS 字幕 (双语样式)
+            self._report_progress("ASS_GENERATING")
             ass_path = self._generate_ass_file(segments)
             logger.info(f"Generated ASS file: {ass_path}")
             
             # 6. 烧录字幕 (使用 ASS 滤镜)
+            self._report_progress("VIDEO_RENDERING")
             final_output = self._burn_subtitles(ass_path)
             logger.info(f"Subtitles burned to: {final_output}")
+            self._report_progress("COMPLETE")
             
             return final_output
             

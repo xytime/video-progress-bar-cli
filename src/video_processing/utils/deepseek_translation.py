@@ -19,12 +19,14 @@
 | 1.8.0   | 2026-07-13 | Codex  | 词汇口径下调至 PET/B1，并要求保留专有名词，统一学习字幕标准 |
 | 1.9.0   | 2026-07-13 | Codex  | 恢复每条字幕最多三项词汇卡，按学习价值排序避免版面拥挤 |
 | 2.0.0   | 2026-07-13 | Codex  | 明确 PET/B1 为最低门槛，优先高难度词汇与关键专有名词 |
+| 2.1.0   | 2026-08-27 | Codex  | DeepSeek 全片候选加入总时间预算，避免长片逐批比较耗尽发布窗口 |
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
@@ -114,8 +116,16 @@ def translate_batch_with_vocab_deepseek(
 
     base_url = (getattr(settings_obj, "deepseek_base_url", "") or "https://api.deepseek.com").rstrip("/")
     model = getattr(settings_obj, "deepseek_model", "") or "deepseek-v4-flash"
+    total_timeout = max(30, int(getattr(settings_obj, "deepseek_subtitle_total_timeout_seconds", 300) or 300))
+    deadline = time.monotonic() + total_timeout
     all_items: List[Dict[str, Any]] = []
     for batch_start in range(0, len(texts), _VOCAB_BATCH_SIZE):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            message = f"DeepSeek subtitle candidate budget exceeded ({total_timeout}s)"
+            logger.warning("[DeepSeek] %s", message)
+            record_error(message)
+            return None
         batch = texts[batch_start: batch_start + _VOCAB_BATCH_SIZE]
         req = urllib.request.Request(
             f"{base_url}/chat/completions",
@@ -124,7 +134,7 @@ def translate_batch_with_vocab_deepseek(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=90) as resp:
+            with urllib.request.urlopen(req, timeout=min(90, max(1, int(remaining)))) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
             logger.warning(f"[DeepSeek] Translation+vocab API call failed: {e}")

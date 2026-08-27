@@ -32,6 +32,7 @@
 | 2.5.0   | 2026-06-25 | Claude_Opus_4.8 | 新增 source_date 参数：字幕烧录后叠加左上角「源视频发布日期」毛玻璃戳(date_stamp 模块)，覆盖源水印；遮罩/边框输入索引按音轨情况动态计算，渲染后清理临时资源 |
 | 2.6.0   | 2026-07-29 | Codex | 优化竖版头部标题：Noto/思源系字体优先、动态两行排版、强调色与 drawtext expansion 防护 |
 | 2.6.1   | 2026-07-29 | Codex | 竖版渲染固定单线程 H.264 输入解码，避免部分 60fps 源在多线程解码时偶发丢宏块 |
+| 2.6.2   | 2026-08-27 | Codex | 透传字幕阶段心跳回调至通用字幕处理器 |
 """
 import logging
 import subprocess
@@ -348,10 +349,12 @@ class VerticalCaptionProcessor(AutoCaptionProcessor):
         mute_original: bool = True,  # [Gemini_3.5_Flash_planning]
         tts_volume: int = 90,  # [Gemini_3.5_Flash_planning]
         tts_speech_rate: float = 1.0,  # [Gemini_3.5_Flash_planning]
-        source_date: Optional[str] = None  # [Claude_Opus_4.8] 源视频发布日期(YYYY-MM-DD)，毛玻璃戳
+        source_date: Optional[str] = None,  # [Claude_Opus_4.8] 源视频发布日期(YYYY-MM-DD)，毛玻璃戳
+        progress_reporter=None,
     ):
         super().__init__(
-            input_path, output_path, model_size, src_lang, target_lang, device, style
+            input_path, output_path, model_size, src_lang, target_lang, device, style,
+            progress_reporter=progress_reporter,
         )
         # [Gemini_3.5_Flash_planning] Try to load title from .info.json if it exists
         detected_title = title
