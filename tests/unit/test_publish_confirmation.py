@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.5.0   | 2026-08-27 | Codex | 覆盖提交后作品管理卡片异步加载时的同会话原生 ID 轮询绑定 |
 | 1.4.0   | 2026-08-21 | Codex | 提交后异常路径读取账本保护，禁止降级为可自动重传状态 |
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | 初始创建：锁定 BUG-2 发布确认 + 防重复发布行为 |
 | 1.1.0   | 2026-08-11 | Codex | 列表跳转降级为提交受理，锁定不得据此写公开视频成功 |
@@ -34,6 +35,7 @@ from wechat_uploader import (
     classify_management_publication,
     classify_publish_result,
     resolve_submission_platform_identity,
+    resolve_submission_platform_identity_after_publish,
     run_uploader,
 )
 from video_processing.db.database import PipelineDB
@@ -126,6 +128,35 @@ class TestExactSubmissionIdentity:
         }
 
         assert resolve_submission_platform_identity({}, after, "本次唯一完整标题") is None
+
+    def test_post_submit_identity_waits_for_async_management_card(self, monkeypatch):
+        before = {"old-post": {"platform_post_id": "old-post", "card_text": "历史作品"}}
+        delayed_cards = iter([{
+            **before,
+            "new-post": {
+                "platform_post_id": "new-post",
+                "platform_url": "https://example.test/post/new-post",
+                "card_text": "本次唯一完整标题\n审核中",
+            },
+        }])
+
+        class Page:
+            def __init__(self):
+                self.waits = []
+
+            def wait_for_timeout(self, milliseconds):
+                self.waits.append(milliseconds)
+
+        page = Page()
+        monkeypatch.setattr("wechat_uploader._load_management_cards", lambda _page: (before, True))
+        monkeypatch.setattr("wechat_uploader._collect_management_cards", lambda _page: next(delayed_cards))
+
+        receipt = resolve_submission_platform_identity_after_publish(
+            page, before, "本次唯一完整标题", attempts=2, retry_delay_ms=1,
+        )
+
+        assert receipt and receipt["platform_post_id"] == "new-post"
+        assert page.waits == [1]
 
 
 def test_submission_ledger_prevents_post_submit_exception_downgrade(temp_db):

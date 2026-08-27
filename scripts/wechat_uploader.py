@@ -51,6 +51,7 @@
 | 4.4.0   | 2026-08-25 | Codex                               | 合集绑定失败改为发表硬门禁；新增受限 macOS WeChat 桌面快捷授权与无点击预检入口 |
 | 4.5.0   | 2026-08-25 | Codex                               | 桌面授权监听改在网页快捷登录点击后启动，避免授权弹窗出现前耗尽观察窗口。 |
 | 4.6.0   | 2026-08-26 | Codex                               | 登录成功后统一恢复无提交证据的 LOGIN_REQUIRED 任务，避免 Telegram/直接入口遗漏补发 |
+| 4.7.0   | 2026-08-27 | Codex                               | 提交跳转作品管理页后轮询同会话原生 ID 差分，避免异步卡片尚未加载即永久记为未绑定。 |
 """
 
 import os
@@ -228,6 +229,36 @@ def resolve_submission_platform_identity(
         "platform_url": record.get("platform_url", ""),
         "matched_by": "same_session_before_after_platform_id_delta_and_exact_title",
     }
+
+
+def resolve_submission_platform_identity_after_publish(
+    page,
+    before: dict[str, dict[str, str]],
+    expected_title: str,
+    *,
+    attempts: int = 5,
+    retry_delay_ms: int = 1500,
+) -> dict[str, str] | None:
+    """在同次提交后的作品列表等待唯一新增原生 ID，绝不按标题补绑。"""
+    after, loaded = _load_management_cards(page)
+    if not loaded:
+        logger.warning("Post-submit management page unavailable; keeping submission unbound.")
+        return None
+
+    for attempt in range(max(1, attempts)):
+        receipt = resolve_submission_platform_identity(before, after, expected_title)
+        if receipt:
+            return receipt
+        if attempt + 1 >= max(1, attempts):
+            break
+        logger.info(
+            "Waiting for post-submit management card identifiers (%s/%s).",
+            attempt + 1,
+            attempts,
+        )
+        page.wait_for_timeout(max(0, retry_delay_ms))
+        after = _collect_management_cards(page)
+    return None
 
 
 def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> None:
@@ -2201,8 +2232,9 @@ def run_uploader(
               page.wait_for_timeout(5000)
               _capture_wechat_evidence(page, evidence_root, "post_list_after_submission")
               if identity_baseline_ready:
-                  after_cards = _collect_management_cards(page)
-                  receipt = resolve_submission_platform_identity(identity_baseline, after_cards, short_title)
+                  receipt = resolve_submission_platform_identity_after_publish(
+                      page, identity_baseline, short_title,
+                  )
                   if receipt:
                       _write_submission_receipt(evidence_root, receipt)
                       logger.info(
