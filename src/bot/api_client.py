@@ -23,6 +23,7 @@
 | 1.13.0 | 2026-08-20 | Codex | 新增 Highlight Clip 人工选定与独立发布主体创建接口；不触发发布 |
 | 1.14.0 | 2026-08-21 | Codex | 新增英语世界短视频候选研究、选定和二次制作确认接口；不触发发布 |
 | 1.15.0 | 2026-08-23 | Codex | 新增英语世界审核项的显式视频号投稿批准与搁置接口。 |
+| 1.16.0 | 2026-08-29 | Codex | 新增 Telegram 单任务微信发布 lease 候选读取与两小时授权启动接口。 |
 """
 from __future__ import annotations
 
@@ -385,6 +386,44 @@ class PipelineAPIClient:
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] process_video failed (API down?): {e}")
+            return None
+
+    async def get_manual_publish_lease_jobs(self, limit: int = 8) -> Optional[dict]:
+        """GET lease jobs — 只读获取可签发候选和当前有效 lease。"""
+        try:
+            async with self._client() as c:
+                resp = await c.get("/api/publication-leases/candidates", params={"limit": limit})
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning("[api_client] get_manual_publish_lease_jobs failed: %s", e)
+            return None
+
+    async def create_manual_publish_lease(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        issued_by: str,
+        ttl_minutes: int = 120,
+    ) -> Optional[dict]:
+        """POST 单任务 lease；成功后由控制中心立即启动既有安全管线。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(
+                    "/api/publication-leases",
+                    json={
+                        "youtube_id": youtube_id,
+                        "slice_index": slice_index,
+                        "issued_by": issued_by,
+                        "issued_via": "telegram",
+                        "ttl_minutes": ttl_minutes,
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning("[api_client] create_manual_publish_lease failed: %s", e)
             return None
 
     async def run_pipeline(self) -> Optional[dict]:

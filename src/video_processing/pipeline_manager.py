@@ -12,6 +12,7 @@
 | 3.48.25 | 2026-08-26 | Codex                               | 整片视频不再把分类误作必填合集；合集仅用于切片系列，避免当前网页合集创建入口缺失时阻断发表。 |
 | 3.48.26 | 2026-08-27 | Codex                               | 字幕子进程写入阶段心跳，父管线实时转发阶段并限制 DeepSeek 候选预算。 |
 | 3.48.27 | 2026-08-27 | Codex                               | 全部字幕翻译提供方暂时失败归入提交前有界重试，保持已提交证据任务绝不重传。 |
+| 3.48.28 | 2026-08-29 | Codex                               | Telegram 单任务微信发布 lease 可在两小时内一次性绕过发布时间窗口；上传启动前消费且不绕过其他安全闸。 |
 | 3.46.0  | 2026-08-21 | Codex                               | 分钟巡航采用评分输入缓存，只重评播放/点赞变化或 TTL 到期候选，消除全量低分空转 |
 | 3.44.0  | 2026-08-21 | Codex                               | 已提交视频号任务遇到中断或子进程异常时保留未绑定账本，不再被通用异常路径降级为 PENDING/FAILED |
 | 3.45.0  | 2026-08-21 | Codex                               | 封面不再向渲染或 AI 主视觉简报传递运营角标，避免告警式装饰污染成品 |
@@ -835,10 +836,30 @@ class PipelineManager:
                 settled += 1
         return settled
 
-    def _is_public_publish_window(self, platform: str, yid: str = "", slice_index: int = 0) -> bool:
-        """公开视频提交窗口守卫；审核回查等只读动作不受此限制。"""
+    def _is_public_publish_window(
+        self,
+        platform: str,
+        yid: str = "",
+        slice_index: int = 0,
+        *,
+        consume_manual_lease: bool = False,
+    ) -> bool:
+        """公开视频窗口守卫；仅微信单任务 lease 可在上传启动前一次性绕过。"""
         if settings.is_public_publish_window():
+            if consume_manual_lease and platform == "微信" and yid:
+                lease = self.db.claim_manual_publish_lease(yid, slice_index=slice_index)
+                if lease:
+                    logger.info("[PublishLease] 窗口内消费单任务 lease %s。", lease["lease_id"])
             return True
+        if consume_manual_lease and platform == "微信" and yid:
+            lease = self.db.claim_manual_publish_lease(yid, slice_index=slice_index)
+            if lease:
+                logger.warning(
+                    "[PublishLease] %s 使用单任务 lease %s 绕过发布时间窗口；授权已一次性消费。",
+                    yid if slice_index == 0 else f"{yid}_s{slice_index}",
+                    lease["lease_id"],
+                )
+                return True
         prefix = f"{yid}_s{slice_index}" if yid and slice_index > 0 else yid
         target = f" {prefix}" if prefix else ""
         logger.info(
@@ -3242,13 +3263,6 @@ class PipelineManager:
                         self.db.update_video_status(yid, "PENDING", slice_index=slice_index)
                         return
 
-                if not self._is_public_publish_window("微信", yid, slice_index):
-                    if submission_only:
-                        self.db.set_video_preparation_ready(yid, True, slice_index=slice_index)
-                    self.db.update_video_status(yid, "PENDING", slice_index=slice_index)
-                    logger.info("[%s] 视频号成片已就绪，等待公开视频提交窗口。", prefix)
-                    return
-
                 if settings.wechat_publishing_paused:
                     logger.info("[%s] WECHAT_PUBLISHING_PAUSED=true，跳过本轮视频号提交。", prefix)
                     self.db.update_video_status(yid, "WECHAT_DEFERRED", slice_index=slice_index)
@@ -3262,6 +3276,15 @@ class PipelineManager:
                     return
 
                 if self._block_duplicate_wechat_submission_if_needed(yid, prefix, slice_index=slice_index):
+                    return
+
+                if not self._is_public_publish_window(
+                    "微信", yid, slice_index, consume_manual_lease=True,
+                ):
+                    if submission_only:
+                        self.db.set_video_preparation_ready(yid, True, slice_index=slice_index)
+                    self.db.update_video_status(yid, "PENDING", slice_index=slice_index)
+                    logger.info("[%s] 视频号成片已就绪，等待公开视频提交窗口。", prefix)
                     return
 
                 self.db.update_video_status(yid, "PUBLISHING", slice_index=slice_index)

@@ -12,6 +12,7 @@
 | 1.2.0 | 2026-08-20 | Codex | 新增 Highlight Job 选择、创建和状态读取 API 调用契约 |
 | 1.4.0 | 2026-08-21 | Codex | 覆盖英语世界候选研究、选题和二次制作确认接口的发布隔离。 |
 | 1.5.0 | 2026-08-23 | Codex | 覆盖英语世界审核项的显式投稿批准/搁置 API 合约。 |
+| 1.6.0 | 2026-08-29 | Codex | 覆盖 Telegram 单任务发布 lease 列表与签发启动 API 合约。 |
 """
 import json
 
@@ -104,6 +105,42 @@ class TestGetVideos:
         )
         result = await api_client.get_videos(tab="waitlist")
         assert result is None
+
+
+@pytest.mark.asyncio
+class TestManualPublishLeases:
+    """lease jobs 只签发明确单任务，并固定两小时 Telegram 来源。"""
+
+    @respx.mock
+    async def test_get_lease_jobs(self, api_client):
+        respx.get(f"{BASE_URL}/api/publication-leases/candidates").mock(
+            return_value=httpx.Response(200, json={
+                "candidates": [{"youtube_id": "lease-api01"}], "active_leases": [],
+            })
+        )
+
+        result = await api_client.get_manual_publish_lease_jobs(limit=8)
+
+        assert result["candidates"][0]["youtube_id"] == "lease-api01"
+
+    @respx.mock
+    async def test_create_lease_binds_single_video(self, api_client):
+        route = respx.post(f"{BASE_URL}/api/publication-leases").mock(
+            return_value=httpx.Response(200, json={
+                "success": True, "lease": {"lease_id": "a" * 32},
+            })
+        )
+
+        result = await api_client.create_manual_publish_lease(
+            "lease-api01", slice_index=0, issued_by="telegram:123", ttl_minutes=120,
+        )
+
+        payload = json.loads(route.calls.last.request.content)
+        assert result["success"] is True
+        assert payload == {
+            "youtube_id": "lease-api01", "slice_index": 0,
+            "issued_by": "telegram:123", "issued_via": "telegram", "ttl_minutes": 120,
+        }
 
 
 @pytest.mark.asyncio

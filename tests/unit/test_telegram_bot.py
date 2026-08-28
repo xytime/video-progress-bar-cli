@@ -11,6 +11,7 @@
 | 1.4.0 | 2026-08-20 | Codex | 覆盖 /highlight 的显式二次确认入口与菜单可见性 |
 | 1.6.0 | 2026-08-21 | Codex | 覆盖英语世界候选研究入口不走普通 URL 自动入队。 |
 | 1.7.0 | 2026-08-23 | Codex | 覆盖英语世界审核项的唯一投稿批准按钮不退回通用发布命令。 |
+| 1.8.0 | 2026-08-29 | Codex | 覆盖 lease jobs 菜单、候选选择、二次确认和两小时单任务授权。 |
 """
 import logging
 import re
@@ -225,6 +226,55 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
 
     def test_bot_command_menu_includes_highlight(self):
         self.assertIn("highlight", [command.command for command in _BOT_COMMANDS])
+
+    def test_bot_command_menu_includes_lease_jobs(self):
+        self.assertIn("lease_jobs", [command.command for command in _BOT_COMMANDS])
+
+    @patch("bot.telegram_bot._api")
+    async def test_lease_jobs_shows_safe_candidate_list(self, mock_api_client):
+        from bot.telegram_bot import cmd_lease_jobs
+
+        mock_api_client.get_manual_publish_lease_jobs = AsyncMock(return_value={
+            "candidates": [{
+                "youtube_id": "dQw4w9WgXcQ", "slice_index": 0, "title": "测试任务",
+                "score": 88, "preparation_ready": True,
+            }],
+            "active_leases": [], "ttl_minutes": 120, "market_guard_active": False,
+        })
+        update = MagicMock()
+        update.message.reply_text = AsyncMock()
+
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await cmd_lease_jobs(update, MagicMock())
+
+        _, kwargs = update.message.reply_text.call_args
+        button = kwargs["reply_markup"].inline_keyboard[0][0]
+        self.assertEqual(button.callback_data, "lease:p:dQw4w9WgXcQ:0")
+        self.assertIn("Lease Jobs", update.message.reply_text.call_args.args[0])
+
+    @patch("bot.telegram_bot._api")
+    async def test_lease_confirmation_signs_bound_task_for_two_hours(self, mock_api_client):
+        from bot.telegram_bot import handle_manual_publish_lease_callback
+
+        mock_api_client.create_manual_publish_lease = AsyncMock(return_value={
+            "success": True,
+            "lease": {"lease_id": "a" * 32, "expires_at": "2026-08-29 14:00:00"},
+        })
+        query = MagicMock()
+        query.data = "lease:c:dQw4w9WgXcQ:0"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.callback_query = query
+
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await handle_manual_publish_lease_callback(update, MagicMock())
+
+        mock_api_client.create_manual_publish_lease.assert_awaited_once_with(
+            "dQw4w9WgXcQ", slice_index=0, issued_by="telegram:12345", ttl_minutes=120,
+        )
+        self.assertIn("已签发并启动", query.edit_message_text.call_args.args[0])
 
     @patch("bot.telegram_bot._api")
     async def test_english_world_command_starts_research_without_generic_add_video(self, mock_api_client):

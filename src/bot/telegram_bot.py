@@ -37,6 +37,7 @@
 | 1.18.0  | 2026-08-20 | Codex                               | 新增 /highlight 的显式视频选择与候选分析入口；不触发渲染或发布 |
 | 1.20.0  | 2026-08-21 | Codex                               | 新增 /english_world 候选研究、选题与二次制作确认；不触发通用队列或发布 |
 | 1.21.0  | 2026-08-23 | Codex                               | 英语世界审核回执增加唯一投稿批准/搁置回调，不接受模糊文字发布指令。 |
+| 1.22.0  | 2026-08-29 | Codex                               | 新增 /lease_jobs 手机菜单：候选列表、二次确认和两小时单任务微信发布授权。 |
 """
 from __future__ import annotations
 
@@ -99,8 +100,9 @@ _COMMAND_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["/status", "/queue"],
         ["/run", "/wechat_login"],
+        ["/lease_jobs", "/published"],
         ["/highlight", "/english_world"],
-        ["/published", "/help"],
+        ["/help"],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -111,6 +113,7 @@ _BOT_COMMANDS = [
     BotCommand("queue", "查看当前队列"),
     BotCommand("run", "触发一次管线"),
     BotCommand("wechat_login", "推送微信扫码登录"),
+    BotCommand("lease_jobs", "单任务发布授权（2小时）"),
     BotCommand("published", "最近本地发布记录"),
     BotCommand("highlight", "Highlight Slice：选择视频生成金句候选"),
     BotCommand("english_world", "英语世界：搜索、选题与制作确认"),
@@ -187,6 +190,126 @@ def _check_admin(update: Update) -> bool:
 
 _HIGHLIGHT_SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 _HIGHLIGHT_CLIP_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+_LEASE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
+
+
+async def _reply_manual_publish_lease_jobs(message) -> None:
+    """展示安全候选和当前 lease；选定后仍需第二次确认才签发并启动。"""
+    assert _api is not None
+    payload = await _api.get_manual_publish_lease_jobs(limit=8)
+    if payload is None:
+        await message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")
+        return
+    candidates = payload.get("candidates") or []
+    active_leases = payload.get("active_leases") or []
+    lines = [
+        "🔐 <b>Lease Jobs</b>",
+        "选择单任务后会再次确认；确认将签发 2 小时微信发布授权并立即启动安全管线。",
+        "授权只绕过发布时间窗口，不绕过审查、登录、封面、顺序锁或重复投稿账本。",
+    ]
+    if payload.get("market_guard_active"):
+        lines.append("\n📈 当前为美股盘中，仅显示已完成预加工的轻量提交任务。")
+    if active_leases:
+        lines.append("\n<b>当前未消费 lease</b>")
+        for lease in active_leases:
+            yid = html.escape(str(lease.get("youtube_id") or "?"))
+            expires = html.escape(str(lease.get("expires_at") or "?"))
+            lines.append(f"• <code>{yid}</code> · 到期 <code>{expires} UTC</code>")
+    buttons: list[list[InlineKeyboardButton]] = []
+    if candidates:
+        lines.append("\n<b>可选择任务</b>")
+    for item in candidates:
+        yid = str(item.get("youtube_id") or "")
+        slice_index = int(item.get("slice_index") or 0)
+        if not _LEASE_VIDEO_ID_RE.fullmatch(yid):
+            continue
+        title = html.escape(str(item.get("zh_title") or item.get("title") or "未命名视频")[:64])
+        score = int(item.get("score") or 0)
+        ready = "已预加工" if item.get("preparation_ready") else "需完整加工"
+        suffix = f" s{slice_index}" if slice_index else ""
+        lines.append(f"\n<code>{html.escape(yid)}{suffix}</code>｜{title}\n分数：{score} · {ready}")
+        buttons.append([InlineKeyboardButton(
+            f"选择 {yid}{suffix}", callback_data=f"lease:p:{yid}:{slice_index}",
+        )])
+    if not candidates:
+        lines.append("\n📭 当前没有符合安全条件的 PENDING 单任务。")
+    await message.reply_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+    )
+
+
+async def cmd_lease_jobs(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """手机端单任务发布授权入口。"""
+    if not _check_admin(update):
+        return
+    await _reply_manual_publish_lease_jobs(update.message)
+
+
+async def handle_manual_publish_lease_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """二次确认后签发一次性 lease；callback 只携带受限视频 ID 与切片号。"""
+    if not _check_admin(update):
+        return
+    assert _api is not None
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    parts = str(query.data or "").split(":")
+    if len(parts) != 4 or parts[0] != "lease" or parts[1] not in {"p", "c", "x"}:
+        await query.edit_message_text("❌ lease 请求格式无效。")
+        return
+    action, yid = parts[1], parts[2]
+    if action == "x":
+        await query.edit_message_text("已取消单任务发布授权。")
+        return
+    try:
+        slice_index = int(parts[3])
+    except ValueError:
+        slice_index = -1
+    if not _LEASE_VIDEO_ID_RE.fullmatch(yid) or slice_index < 0:
+        await query.edit_message_text("❌ lease 任务标识无效。")
+        return
+    suffix = f" s{slice_index}" if slice_index else ""
+    if action == "p":
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "确认：签发并立即执行", callback_data=f"lease:c:{yid}:{slice_index}",
+            )],
+            [InlineKeyboardButton("取消", callback_data="lease:x:cancel:0")],
+        ])
+        await query.edit_message_text(
+            "⚠️ <b>确认单任务发布授权</b>"
+            f"\n任务：<code>{html.escape(yid)}{suffix}</code>"
+            "\n有效期：2 小时；上传器启动前一次性消费。"
+            "\n\n确认后会立即启动既有安全管线，并可能向微信视频号提交作品。",
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+        return
+    user_id = getattr(update.effective_user, "id", None)
+    result = await _api.create_manual_publish_lease(
+        yid, slice_index=slice_index, issued_by=f"telegram:{user_id}", ttl_minutes=120,
+    )
+    if result is None:
+        await query.edit_message_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")
+        return
+    if not result.get("success"):
+        await query.edit_message_text(
+            f"❌ lease 未启动：{html.escape(str(result.get('error') or '未知错误'))}",
+            parse_mode="HTML",
+        )
+        return
+    lease = result.get("lease") or {}
+    await query.edit_message_text(
+        "✅ <b>单任务 lease 已签发并启动</b>"
+        f"\n任务：<code>{html.escape(yid)}{suffix}</code>"
+        f"\nLease：<code>{html.escape(str(lease.get('lease_id') or '')[:8])}</code>"
+        f"\n到期：<code>{html.escape(str(lease.get('expires_at') or '?'))} UTC</code>"
+        "\n\n这只证明本地任务已启动；平台受理和公开可见仍需各自账本证据。",
+        parse_mode="HTML",
+    )
 
 
 def _highlight_source_text(source: dict) -> str:
@@ -1360,6 +1483,7 @@ def main() -> None:
     app.add_handler(CommandHandler("queue", cmd_queue))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("wechat_login", cmd_wechat_login))
+    app.add_handler(CommandHandler("lease_jobs", cmd_lease_jobs))
     app.add_handler(CommandHandler("published", cmd_published))
     app.add_handler(CommandHandler("getvideo", cmd_getvideo))  # [Claude_Opus_4.8] 发回成片（超 50MB 自动压缩）
     app.add_handler(CommandHandler("delete", cmd_delete))
@@ -1375,6 +1499,7 @@ def main() -> None:
     app.add_handler(CommandHandler("tts", cmd_tts))  # [Claude_Sonnet_4.6_Thinking_planning] 按需 TTS 配音命令
     app.add_handler(CallbackQueryHandler(handle_highlight_callback, pattern=r"^hl:"))
     app.add_handler(CallbackQueryHandler(handle_english_world_callback, pattern=r"^ew:"))
+    app.add_handler(CallbackQueryHandler(handle_manual_publish_lease_callback, pattern=r"^lease:"))
 
     # 监听 YouTube URL 并由程序接管自动提交（不消耗 API 限额）
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(_YOUTUBE_RE), handle_youtube_url))

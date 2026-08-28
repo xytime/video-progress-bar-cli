@@ -15,6 +15,7 @@
 | 3.43.0  | 2026-08-26 | Codex                               | 登录恢复对任意视频号账本 fail-closed；保留批量重试的账本跳过统计。 |
 | 3.44.0  | 2026-08-27 | Codex                               | 高分与预加工候选在 SQL 层排除活跃视频号账本及历史归档，隔离存量 PENDING 污染。 |
 | 3.45.0  | 2026-08-28 | Codex                               | 英语世界仅对登录前明确失败的新自动投稿项开放一次登录后续投，其他终态继续 fail-closed。 |
+| 3.46.0  | 2026-08-29 | Codex                               | 新增两小时单任务微信发布 lease；只允许明确候选一次性绕过发布时间窗口并保留签发、领取审计。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -749,6 +750,24 @@ class PipelineDB:
                 "CREATE INDEX IF NOT EXISTS idx_wechat_submission_attempts_subject "
                 "ON wechat_submission_attempts(subject_id, created_at DESC)"
             )
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS manual_publish_leases (
+                    lease_id TEXT PRIMARY KEY,
+                    video_id INTEGER NOT NULL,
+                    platform TEXT NOT NULL CHECK(platform IN ('wechat')),
+                    issued_by TEXT NOT NULL,
+                    issued_via TEXT NOT NULL,
+                    issued_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    expires_at TIMESTAMP NOT NULL,
+                    claimed_at TIMESTAMP DEFAULT NULL,
+                    revoked_at TIMESTAMP DEFAULT NULL,
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_manual_publish_leases_active
+                ON manual_publish_leases(video_id, platform, expires_at, claimed_at, revoked_at)
+            ''')
 
             # 快手发布账本：仅“已发布”的成片摘要禁止再次投递；失败、临时上传和未发布草稿
             # 都保留为独立尝试，允许用户重试。它独立于 processed_videos 的微信状态。
@@ -3306,6 +3325,190 @@ class PipelineDB:
                 normalized_states,
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def list_manual_publish_lease_candidates(self, limit: int = 8) -> List[Dict[str, Any]]:
+        """列出可由管理员签发单任务微信 lease 的候选；不改变队列或发布状态。"""
+        bounded_limit = max(1, min(20, int(limit)))
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                '''SELECT pv.*
+                   FROM processed_videos pv
+                   WHERE pv.status = 'PENDING'
+                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+                     AND COALESCE(pv.publication_review_required, 0) = 0
+                     AND pv.channel_id NOT IN (
+                         SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
+                     )
+                     AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM wechat_publications_historical_archive archive
+                         WHERE archive.video_id = pv.id
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM manual_publish_leases lease
+                         WHERE lease.video_id = pv.id AND lease.platform = 'wechat'
+                           AND lease.claimed_at IS NULL AND lease.revoked_at IS NULL
+                           AND lease.expires_at > CURRENT_TIMESTAMP
+                     )
+                     AND (
+                         pv.slice_index = 0 OR NOT EXISTS (
+                             SELECT 1 FROM processed_videos sibling
+                             WHERE sibling.parent_id = pv.parent_id
+                               AND sibling.slice_index > 0
+                               AND sibling.slice_index < pv.slice_index
+                               AND sibling.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')
+                         )
+                     )
+                   ORDER BY COALESCE(pv.preparation_ready, 0) DESC,
+                            pv.score DESC, pv.updated_at DESC
+                   LIMIT ?''',
+                (bounded_limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def list_active_manual_publish_leases(self, limit: int = 8) -> List[Dict[str, Any]]:
+        """返回尚未消费且未过期的单任务 lease，供手机端审计展示。"""
+        bounded_limit = max(1, min(20, int(limit)))
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                '''SELECT lease.*, pv.youtube_id, pv.slice_index, pv.title, pv.zh_title,
+                          pv.status, pv.score, pv.preparation_ready
+                   FROM manual_publish_leases lease
+                   JOIN processed_videos pv ON pv.id = lease.video_id
+                   WHERE lease.claimed_at IS NULL AND lease.revoked_at IS NULL
+                     AND lease.expires_at > CURRENT_TIMESTAMP
+                   ORDER BY lease.expires_at ASC, lease.issued_at ASC
+                   LIMIT ?''',
+                (bounded_limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def issue_manual_publish_lease(
+        self,
+        youtube_id: str,
+        *,
+        slice_index: int = 0,
+        issued_by: str,
+        issued_via: str,
+        ttl_minutes: int = 120,
+        claim_video: bool = False,
+    ) -> Dict[str, Any]:
+        """签发单任务一次性 lease；可在同一写事务中领取任务，但不接触平台。"""
+        from uuid import uuid4
+
+        clean_issued_by = (issued_by or "").strip()
+        clean_issued_via = (issued_via or "").strip()
+        bounded_ttl = max(1, min(120, int(ttl_minutes)))
+        if not clean_issued_by or not clean_issued_via:
+            raise ValueError("issued_by and issued_via are required")
+
+        with self.get_connection() as conn:
+            # 锁住“候选复核 → 签发 → 可选任务领取”的完整决策，避免 lease 已落库但
+            # PENDING 被另一个调度器抢走，形成悬空授权。
+            conn.execute("BEGIN IMMEDIATE")
+            video = conn.execute(
+                '''SELECT pv.* FROM processed_videos pv
+                   WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                     AND pv.status = 'PENDING'
+                     AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+                     AND COALESCE(pv.publication_review_required, 0) = 0
+                     AND pv.channel_id NOT IN (
+                         SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
+                     )
+                     AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+                     AND NOT EXISTS (
+                         SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id
+                     )
+                     AND NOT EXISTS (
+                         SELECT 1 FROM wechat_publications_historical_archive archive
+                         WHERE archive.video_id = pv.id
+                     )
+                     AND (
+                         pv.slice_index = 0 OR NOT EXISTS (
+                             SELECT 1 FROM processed_videos sibling
+                             WHERE sibling.parent_id = pv.parent_id
+                               AND sibling.slice_index > 0
+                               AND sibling.slice_index < pv.slice_index
+                               AND sibling.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')
+                         )
+                     )''',
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError("任务不在可签发 lease 的安全候选集合中")
+
+            existing = conn.execute(
+                '''SELECT * FROM manual_publish_leases
+                   WHERE video_id = ? AND platform = 'wechat'
+                     AND claimed_at IS NULL AND revoked_at IS NULL
+                     AND expires_at > CURRENT_TIMESTAMP
+                   ORDER BY issued_at DESC LIMIT 1''',
+                (video["id"],),
+            ).fetchone()
+            if existing:
+                lease_id = existing["lease_id"]
+            else:
+                lease_id = uuid4().hex
+                conn.execute(
+                    '''INSERT INTO manual_publish_leases (
+                           lease_id, video_id, platform, issued_by, issued_via, expires_at
+                       ) VALUES (?, ?, 'wechat', ?, ?, datetime('now', ?))''',
+                    (lease_id, video["id"], clean_issued_by, clean_issued_via,
+                     f"+{bounded_ttl} minutes"),
+                )
+            if claim_video:
+                claimed = conn.execute(
+                    '''UPDATE processed_videos
+                       SET status = 'DOWNLOADING', updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ? AND status = 'PENDING' ''',
+                    (video["id"],),
+                )
+                if claimed.rowcount != 1:
+                    raise ValueError("任务已被其他调度器领取，lease 未签发")
+            conn.commit()
+            lease = conn.execute(
+                "SELECT * FROM manual_publish_leases WHERE lease_id = ?", (lease_id,)
+            ).fetchone()
+            if not lease:
+                raise RuntimeError("manual publish lease was not persisted")
+            return {**dict(lease), "youtube_id": video["youtube_id"],
+                    "slice_index": video["slice_index"], "title": video["title"]}
+
+    def claim_manual_publish_lease(
+        self, youtube_id: str, *, slice_index: int = 0, platform: str = "wechat",
+    ) -> Optional[Dict[str, Any]]:
+        """在平台上传器启动前原子消费一次 lease；已领取、撤销或过期后永不复用。"""
+        if platform != "wechat":
+            return None
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''SELECT lease.* FROM manual_publish_leases lease
+                   JOIN processed_videos pv ON pv.id = lease.video_id
+                   WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                     AND lease.platform = ? AND lease.claimed_at IS NULL
+                     AND lease.revoked_at IS NULL AND lease.expires_at > CURRENT_TIMESTAMP
+                   ORDER BY lease.issued_at DESC LIMIT 1''',
+                (youtube_id, slice_index, platform),
+            ).fetchone()
+            if not row:
+                return None
+            cursor = conn.execute(
+                '''UPDATE manual_publish_leases SET claimed_at = CURRENT_TIMESTAMP
+                   WHERE lease_id = ? AND claimed_at IS NULL AND revoked_at IS NULL
+                     AND expires_at > CURRENT_TIMESTAMP''',
+                (row["lease_id"],),
+            )
+            if cursor.rowcount != 1:
+                conn.rollback()
+                return None
+            conn.commit()
+            claimed = conn.execute(
+                "SELECT * FROM manual_publish_leases WHERE lease_id = ?", (row["lease_id"],)
+            ).fetchone()
+            return dict(claimed) if claimed else None
 
     def purge_stale_tasks(self, stale_hours: int = 2) -> int:
         """仅回收提交前卡住的加工任务，绝不重置任何发布/审核账本状态。"""

@@ -8,6 +8,7 @@
 | 3.25.0 | 2026-08-21 | Codex | 新增英语世界短视频候选研究与二次制作确认 API；不接入通用队列或发布入口 |
 | 3.26.0 | 2026-08-23 | Codex | 新增英语世界 Telegram 审核项的显式投稿批准入口与独立 worker，不复用通用队列 |
 | 3.27.0 | 2026-08-28 | Codex | 微信重登后仅续投一条登录前明确失败的自动英语世界项；已受理、未确认和历史项继续禁止自动重传。 |
+| 3.28.0 | 2026-08-29 | Codex | 新增 Telegram 单任务微信发布 lease 候选、签发与立即启动 API；两小时一次性授权不扩散到自动队列。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -1656,6 +1657,14 @@ class PriorityRequest(BaseModel):
     value: Optional[int] = None   # 仅 action="set" 时使用
 
 
+class CreateManualPublishLeaseRequest(BaseModel):
+    youtube_id: str
+    slice_index: int = 0
+    issued_by: str
+    issued_via: str = "telegram"
+    ttl_minutes: int = 120
+
+
 def _trigger_video_async(video: dict) -> None:
     """
     在独立子进程中处理单个视频，避免相对导入和 CWD 问题。
@@ -1690,6 +1699,60 @@ def _trigger_video_async(video: dict) -> None:
     threading.Thread(target=_run, daemon=True,
                      name=f"pipeline-{video.get('youtube_id','?')[:8]}").start()
 
+
+@app.get("/api/publication-leases/candidates")
+def list_manual_publish_lease_candidates(limit: int = 8):
+    """只读返回手机端可选择的单任务候选和当前未消费 lease。"""
+    candidates = db.list_manual_publish_lease_candidates(limit=limit)
+    market_guard_active = settings.is_us_market_guard_window()
+    if market_guard_active:
+        candidates = [item for item in candidates if item.get("preparation_ready")]
+    return {
+        "candidates": candidates,
+        "active_leases": db.list_active_manual_publish_leases(limit=limit),
+        "ttl_minutes": 120,
+        "market_guard_active": market_guard_active,
+    }
+
+
+@app.post("/api/publication-leases")
+def create_manual_publish_lease(req: CreateManualPublishLeaseRequest):
+    """签发两小时单任务微信 lease，并原子领取后启动既有安全管线。"""
+    youtube_id = (req.youtube_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", youtube_id):
+        return {"success": False, "error": "youtube_id 格式不合法"}
+    if req.slice_index < 0:
+        return {"success": False, "error": "slice_index 不能为负数"}
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=req.slice_index)
+    if not video:
+        return {"success": False, "error": "任务不存在"}
+    if settings.is_us_market_guard_window() and not video.get("preparation_ready"):
+        return {
+            "success": False,
+            "error": "美股盘中仅允许已完成预加工的成片签发发布 lease",
+        }
+    try:
+        lease = db.issue_manual_publish_lease(
+            youtube_id,
+            slice_index=req.slice_index,
+            issued_by=req.issued_by,
+            issued_via=req.issued_via,
+            ttl_minutes=req.ttl_minutes,
+            claim_video=True,
+        )
+    except (TypeError, ValueError) as exc:
+        return {"success": False, "error": str(exc)}
+
+    fresh = db.get_video_by_youtube_id(youtube_id, slice_index=req.slice_index)
+    if not fresh:
+        return {"success": False, "error": "任务领取后读取失败；lease 未消费", "lease": lease}
+    _trigger_video_async(fresh)
+    return {
+        "success": True,
+        "message": "两小时单任务 lease 已签发，安全管线已启动",
+        "lease": lease,
+        "video": fresh,
+    }
 
 @app.patch("/api/videos/{youtube_id}/priority")
 def update_video_priority(youtube_id: str, req: PriorityRequest):
