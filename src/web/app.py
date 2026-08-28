@@ -9,6 +9,7 @@
 | 3.26.0 | 2026-08-23 | Codex | 新增英语世界 Telegram 审核项的显式投稿批准入口与独立 worker，不复用通用队列 |
 | 3.27.0 | 2026-08-28 | Codex | 微信重登后仅续投一条登录前明确失败的自动英语世界项；已受理、未确认和历史项继续禁止自动重传。 |
 | 3.28.0 | 2026-08-29 | Codex | 新增 Telegram 单任务微信发布 lease 候选、签发与立即启动 API；两小时一次性授权不扩散到自动队列。 |
+| 3.29.0 | 2026-08-29 | Codex | Lease API 增加独立内部令牌和浏览器来源拒绝，并提供未消费授权撤销；响应区分领取与平台提交。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -68,6 +69,7 @@ import hashlib
 import logging
 import os
 import re  # [Gemini_3.5_Flash_planning] 统一导入正则模块
+import secrets
 import fcntl  # [Claude_Opus_4.6_Thinking_planning] 用于 _is_pipeline_manager_running() 非阻塞锁探测
 import sys
 import signal
@@ -85,7 +87,7 @@ _src = str(Path(__file__).parent.parent)
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -113,6 +115,22 @@ app.add_middleware(
 db = PipelineDB()
 _wechat_login_thread: Optional[threading.Thread] = None
 _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
+
+
+def _require_pipeline_internal_token(
+    x_pipeline_internal_token: Optional[str] = Header(default=None),
+    origin: Optional[str] = Header(default=None),
+) -> None:
+    """高权限 lease 控制面仅接受持有独立令牌的非浏览器本机服务调用。"""
+    expected = settings.pipeline_internal_api_token
+    if not expected or len(expected) < 32:
+        raise HTTPException(status_code=503, detail="lease control token is not configured")
+    if origin:
+        raise HTTPException(status_code=403, detail="browser-origin lease requests are forbidden")
+    if not x_pipeline_internal_token or not secrets.compare_digest(
+        x_pipeline_internal_token, expected,
+    ):
+        raise HTTPException(status_code=403, detail="invalid lease control token")
 
 
 def _start_highlight_analysis(job_id: str) -> None:
@@ -1661,8 +1679,11 @@ class CreateManualPublishLeaseRequest(BaseModel):
     youtube_id: str
     slice_index: int = 0
     issued_by: str
-    issued_via: str = "telegram"
     ttl_minutes: int = 120
+
+
+class RevokeManualPublishLeaseRequest(BaseModel):
+    revoked_by: str
 
 
 def _trigger_video_async(video: dict) -> None:
@@ -1700,7 +1721,10 @@ def _trigger_video_async(video: dict) -> None:
                      name=f"pipeline-{video.get('youtube_id','?')[:8]}").start()
 
 
-@app.get("/api/publication-leases/candidates")
+@app.get(
+    "/api/publication-leases/candidates",
+    dependencies=[Depends(_require_pipeline_internal_token)],
+)
 def list_manual_publish_lease_candidates(limit: int = 8):
     """只读返回手机端可选择的单任务候选和当前未消费 lease。"""
     candidates = db.list_manual_publish_lease_candidates(limit=limit)
@@ -1715,7 +1739,10 @@ def list_manual_publish_lease_candidates(limit: int = 8):
     }
 
 
-@app.post("/api/publication-leases")
+@app.post(
+    "/api/publication-leases",
+    dependencies=[Depends(_require_pipeline_internal_token)],
+)
 def create_manual_publish_lease(req: CreateManualPublishLeaseRequest):
     """签发两小时单任务微信 lease，并原子领取后启动既有安全管线。"""
     youtube_id = (req.youtube_id or "").strip()
@@ -1723,6 +1750,8 @@ def create_manual_publish_lease(req: CreateManualPublishLeaseRequest):
         return {"success": False, "error": "youtube_id 格式不合法"}
     if req.slice_index < 0:
         return {"success": False, "error": "slice_index 不能为负数"}
+    if not re.fullmatch(r"telegram:[1-9][0-9]{0,19}", req.issued_by or ""):
+        return {"success": False, "error": "issued_by 必须绑定 Telegram 管理员 ID"}
     video = db.get_video_by_youtube_id(youtube_id, slice_index=req.slice_index)
     if not video:
         return {"success": False, "error": "任务不存在"}
@@ -1736,7 +1765,7 @@ def create_manual_publish_lease(req: CreateManualPublishLeaseRequest):
             youtube_id,
             slice_index=req.slice_index,
             issued_by=req.issued_by,
-            issued_via=req.issued_via,
+            issued_via="telegram",
             ttl_minutes=req.ttl_minutes,
             claim_video=True,
         )
@@ -1749,9 +1778,38 @@ def create_manual_publish_lease(req: CreateManualPublishLeaseRequest):
     _trigger_video_async(fresh)
     return {
         "success": True,
-        "message": "两小时单任务 lease 已签发，安全管线已启动",
+        "message": "两小时单任务 lease 已签发，任务已领取，本地 worker 调度请求已提交",
+        "dispatch_state": "LOCAL_WORKER_REQUESTED",
         "lease": lease,
         "video": fresh,
+    }
+
+
+@app.post(
+    "/api/publication-leases/{lease_id}/revoke",
+    dependencies=[Depends(_require_pipeline_internal_token)],
+)
+def revoke_manual_publish_lease(
+    lease_id: str, req: RevokeManualPublishLeaseRequest,
+):
+    """撤销尚未消费且未过期的单任务 lease；不伪装成任务停止确认。"""
+    if not re.fullmatch(r"[a-f0-9]{32}", lease_id):
+        return {"success": False, "error": "lease_id 格式不合法"}
+    if not re.fullmatch(r"telegram:[1-9][0-9]{0,19}", req.revoked_by or ""):
+        return {"success": False, "error": "revoked_by 必须绑定 Telegram 管理员 ID"}
+    try:
+        lease = db.revoke_manual_publish_lease(lease_id, revoked_by=req.revoked_by)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
+    if not lease:
+        return {
+            "success": False,
+            "error": "lease 不存在、已过期、已撤销或已被上传器消费",
+        }
+    return {
+        "success": True,
+        "message": "lease 已撤销；这不等同于已停止正在进行的预提交加工",
+        "lease": lease,
     }
 
 @app.patch("/api/videos/{youtube_id}/priority")

@@ -4,9 +4,13 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-29 | Codex | 覆盖安全候选、两小时签发、一次性消费、盘中边界与单任务启动。 |
+| 1.1.0 | 2026-08-29 | Codex | 覆盖内部令牌 fail-closed、精确 TTL、未消费撤销和撤销审计。 |
 """
 
+from datetime import datetime
 from pathlib import Path
+
+from fastapi.testclient import TestClient
 
 from config.settings import Settings
 from video_processing.db.database import PipelineDB
@@ -41,13 +45,63 @@ def test_lease_is_bounded_and_can_only_be_claimed_once(tmp_path: Path):
         "lease-once1", issued_by="telegram:123", issued_via="telegram", ttl_minutes=999,
     )
 
-    assert lease["expires_at"]
+    issued_at = datetime.strptime(lease["issued_at"], "%Y-%m-%d %H:%M:%S")
+    expires_at = datetime.strptime(lease["expires_at"], "%Y-%m-%d %H:%M:%S")
+    assert (expires_at - issued_at).total_seconds() == 120 * 60
     assert db.list_active_manual_publish_leases()[0]["lease_id"] == lease["lease_id"]
     claimed = db.claim_manual_publish_lease("lease-once1")
     assert claimed and claimed["lease_id"] == lease["lease_id"]
     assert claimed["claimed_at"]
     assert db.claim_manual_publish_lease("lease-once1") is None
     assert db.list_active_manual_publish_leases() == []
+
+
+def test_unclaimed_lease_can_be_revoked_once_with_audit(tmp_path: Path):
+    db = _db(tmp_path)
+    assert db.add_video("lease-stop1", "撤销授权", "channel", score=80, source="AUTO")
+    lease = db.issue_manual_publish_lease(
+        "lease-stop1", issued_by="telegram:123", issued_via="telegram",
+    )
+
+    revoked = db.revoke_manual_publish_lease(
+        lease["lease_id"], revoked_by="telegram:123",
+    )
+
+    assert revoked and revoked["revoked_at"]
+    assert revoked["revoked_by"] == "telegram:123"
+    assert db.revoke_manual_publish_lease(
+        lease["lease_id"], revoked_by="telegram:123",
+    ) is None
+    assert db.claim_manual_publish_lease("lease-stop1") is None
+    assert db.list_active_manual_publish_leases() == []
+
+
+def test_lease_http_routes_require_internal_token_and_reject_browser_origin(
+    monkeypatch, tmp_path: Path,
+):
+    import web.app
+
+    monkeypatch.setattr(web.app, "db", _db(tmp_path))
+    monkeypatch.setattr(web.app.settings, "pipeline_internal_api_token", "s" * 32)
+    client = TestClient(web.app.app)
+
+    assert client.get("/api/publication-leases/candidates").status_code == 403
+    assert client.get(
+        "/api/publication-leases/candidates",
+        headers={"X-Pipeline-Internal-Token": "x" * 32},
+    ).status_code == 403
+    assert client.get(
+        "/api/publication-leases/candidates",
+        headers={"X-Pipeline-Internal-Token": "s" * 32, "Origin": "https://example.invalid"},
+    ).status_code == 403
+    assert client.get(
+        "/api/publication-leases/candidates",
+        headers={"X-Pipeline-Internal-Token": "s" * 32},
+    ).status_code == 200
+    assert client.post(
+        "/api/publication-leases",
+        json={"youtube_id": "missing1", "issued_by": "telegram:123"},
+    ).status_code == 403
 
 
 def test_pipeline_lease_bypasses_closed_window_once(monkeypatch, tmp_path: Path):

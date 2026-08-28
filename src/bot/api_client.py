@@ -24,6 +24,7 @@
 | 1.14.0 | 2026-08-21 | Codex | 新增英语世界短视频候选研究、选定和二次制作确认接口；不触发发布 |
 | 1.15.0 | 2026-08-23 | Codex | 新增英语世界审核项的显式视频号投稿批准与搁置接口。 |
 | 1.16.0 | 2026-08-29 | Codex | 新增 Telegram 单任务微信发布 lease 候选读取与两小时授权启动接口。 |
+| 1.17.0 | 2026-08-29 | Codex | Lease API 请求携带独立内部令牌并支持撤销未消费授权；不复用 Bot token。 |
 """
 from __future__ import annotations
 
@@ -47,15 +48,27 @@ class PipelineAPIClient:
         result = await client.add_video(url)
     """
 
-    def __init__(self, base_url: Optional[str] = None):
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        *,
+        internal_api_token: Optional[str] = None,
+    ):
         # 端口单一真相源 settings.dashboard_port（见 PORTS.md，9100-9199 区间）
         self._base_url = (base_url or f"http://localhost:{settings.dashboard_port}").rstrip("/")
+        self._internal_api_token = internal_api_token or settings.pipeline_internal_api_token
 
     # ── 私有辅助 ────────────────────────────────────────────────────────
 
     def _client(self) -> httpx.AsyncClient:
         """每次请求创建新的 AsyncClient（短连接，避免连接池泄漏）"""
         return httpx.AsyncClient(base_url=self._base_url, timeout=_TIMEOUT)
+
+    def _lease_headers(self) -> dict[str, str]:
+        """只向高权限 lease 路由附加独立令牌；未配置时由服务端 fail-closed。"""
+        if not self._internal_api_token:
+            return {}
+        return {"X-Pipeline-Internal-Token": self._internal_api_token}
 
     # ── 视频管理 ────────────────────────────────────────────────────────
 
@@ -392,7 +405,11 @@ class PipelineAPIClient:
         """GET lease jobs — 只读获取可签发候选和当前有效 lease。"""
         try:
             async with self._client() as c:
-                resp = await c.get("/api/publication-leases/candidates", params={"limit": limit})
+                resp = await c.get(
+                    "/api/publication-leases/candidates",
+                    params={"limit": limit},
+                    headers=self._lease_headers(),
+                )
                 resp.raise_for_status()
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
@@ -416,14 +433,31 @@ class PipelineAPIClient:
                         "youtube_id": youtube_id,
                         "slice_index": slice_index,
                         "issued_by": issued_by,
-                        "issued_via": "telegram",
                         "ttl_minutes": ttl_minutes,
                     },
+                    headers=self._lease_headers(),
                 )
                 resp.raise_for_status()
                 return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning("[api_client] create_manual_publish_lease failed: %s", e)
+            return None
+
+    async def revoke_manual_publish_lease(
+        self, lease_id: str, *, revoked_by: str,
+    ) -> Optional[dict]:
+        """POST 撤销尚未消费的单任务 lease。"""
+        try:
+            async with self._client() as c:
+                resp = await c.post(
+                    f"/api/publication-leases/{lease_id}/revoke",
+                    json={"revoked_by": revoked_by},
+                    headers=self._lease_headers(),
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning("[api_client] revoke_manual_publish_lease failed: %s", e)
             return None
 
     async def run_pipeline(self) -> Optional[dict]:

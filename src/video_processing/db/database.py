@@ -16,6 +16,7 @@
 | 3.44.0  | 2026-08-27 | Codex                               | 高分与预加工候选在 SQL 层排除活跃视频号账本及历史归档，隔离存量 PENDING 污染。 |
 | 3.45.0  | 2026-08-28 | Codex                               | 英语世界仅对登录前明确失败的新自动投稿项开放一次登录后续投，其他终态继续 fail-closed。 |
 | 3.46.0  | 2026-08-29 | Codex                               | 新增两小时单任务微信发布 lease；只允许明确候选一次性绕过发布时间窗口并保留签发、领取审计。 |
+| 3.47.0  | 2026-08-29 | Codex                               | 单任务发布 lease 增加未消费撤销与撤销人审计；过期、已领取和重复撤销均 fail-closed。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -761,9 +762,16 @@ class PipelineDB:
                     expires_at TIMESTAMP NOT NULL,
                     claimed_at TIMESTAMP DEFAULT NULL,
                     revoked_at TIMESTAMP DEFAULT NULL,
+                    revoked_by TEXT DEFAULT NULL,
                     FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                 )
             ''')
+            cursor.execute("PRAGMA table_info(manual_publish_leases)")
+            lease_columns = {row[1] for row in cursor.fetchall()}
+            if "revoked_by" not in lease_columns:
+                cursor.execute(
+                    "ALTER TABLE manual_publish_leases ADD COLUMN revoked_by TEXT DEFAULT NULL"
+                )
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_manual_publish_leases_active
                 ON manual_publish_leases(video_id, platform, expires_at, claimed_at, revoked_at)
@@ -3509,6 +3517,31 @@ class PipelineDB:
                 "SELECT * FROM manual_publish_leases WHERE lease_id = ?", (row["lease_id"],)
             ).fetchone()
             return dict(claimed) if claimed else None
+
+    def revoke_manual_publish_lease(
+        self, lease_id: str, *, revoked_by: str,
+    ) -> Optional[Dict[str, Any]]:
+        """撤销尚未消费且未过期的 lease；返回审计行，其他状态不做任何改变。"""
+        clean_lease_id = (lease_id or "").strip()
+        clean_revoked_by = (revoked_by or "").strip()
+        if not clean_lease_id or not clean_revoked_by:
+            raise ValueError("lease_id and revoked_by are required")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                '''UPDATE manual_publish_leases
+                   SET revoked_at = CURRENT_TIMESTAMP, revoked_by = ?
+                   WHERE lease_id = ? AND claimed_at IS NULL AND revoked_at IS NULL
+                     AND expires_at > CURRENT_TIMESTAMP''',
+                (clean_revoked_by, clean_lease_id),
+            )
+            if cursor.rowcount != 1:
+                conn.rollback()
+                return None
+            conn.commit()
+            revoked = conn.execute(
+                "SELECT * FROM manual_publish_leases WHERE lease_id = ?", (clean_lease_id,)
+            ).fetchone()
+            return dict(revoked) if revoked else None
 
     def purge_stale_tasks(self, stale_hours: int = 2) -> int:
         """仅回收提交前卡住的加工任务，绝不重置任何发布/审核账本状态。"""

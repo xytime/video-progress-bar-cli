@@ -12,6 +12,7 @@
 | 1.6.0 | 2026-08-21 | Codex | 覆盖英语世界候选研究入口不走普通 URL 自动入队。 |
 | 1.7.0 | 2026-08-23 | Codex | 覆盖英语世界审核项的唯一投稿批准按钮不退回通用发布命令。 |
 | 1.8.0 | 2026-08-29 | Codex | 覆盖 lease jobs 菜单、候选选择、二次确认和两小时单任务授权。 |
+| 1.9.0 | 2026-08-29 | Codex | 覆盖未消费 lease 撤销按钮、管理员撤销回调和分层启动回执。 |
 """
 import logging
 import re
@@ -239,7 +240,11 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
                 "youtube_id": "dQw4w9WgXcQ", "slice_index": 0, "title": "测试任务",
                 "score": 88, "preparation_ready": True,
             }],
-            "active_leases": [], "ttl_minutes": 120, "market_guard_active": False,
+            "active_leases": [{
+                "lease_id": "a" * 32, "youtube_id": "leaseOld1",
+                "expires_at": "2026-08-29 14:00:00",
+            }],
+            "ttl_minutes": 120, "market_guard_active": False,
         })
         update = MagicMock()
         update.message.reply_text = AsyncMock()
@@ -248,8 +253,9 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
             await cmd_lease_jobs(update, MagicMock())
 
         _, kwargs = update.message.reply_text.call_args
-        button = kwargs["reply_markup"].inline_keyboard[0][0]
-        self.assertEqual(button.callback_data, "lease:p:dQw4w9WgXcQ:0")
+        buttons = [row[0] for row in kwargs["reply_markup"].inline_keyboard]
+        self.assertEqual(buttons[0].callback_data, f"lease:r:{'a' * 32}:0")
+        self.assertEqual(buttons[1].callback_data, "lease:p:dQw4w9WgXcQ:0")
         self.assertIn("Lease Jobs", update.message.reply_text.call_args.args[0])
 
     @patch("bot.telegram_bot._api")
@@ -274,7 +280,32 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
         mock_api_client.create_manual_publish_lease.assert_awaited_once_with(
             "dQw4w9WgXcQ", slice_index=0, issued_by="telegram:12345", ttl_minutes=120,
         )
-        self.assertIn("已签发并启动", query.edit_message_text.call_args.args[0])
+        self.assertIn("任务已领取", query.edit_message_text.call_args.args[0])
+        self.assertIn("worker 调度请求已提交", query.edit_message_text.call_args.args[0])
+
+    @patch("bot.telegram_bot._api")
+    async def test_active_lease_can_be_revoked_by_admin(self, mock_api_client):
+        from bot.telegram_bot import handle_manual_publish_lease_callback
+
+        lease_id = "b" * 32
+        mock_api_client.revoke_manual_publish_lease = AsyncMock(return_value={
+            "success": True, "lease": {"lease_id": lease_id},
+        })
+        query = MagicMock()
+        query.data = f"lease:r:{lease_id}:0"
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.callback_query = query
+
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await handle_manual_publish_lease_callback(update, MagicMock())
+
+        mock_api_client.revoke_manual_publish_lease.assert_awaited_once_with(
+            lease_id, revoked_by="telegram:12345",
+        )
+        self.assertIn("已撤销", query.edit_message_text.call_args.args[0])
 
     @patch("bot.telegram_bot._api")
     async def test_english_world_command_starts_research_without_generic_add_video(self, mock_api_client):

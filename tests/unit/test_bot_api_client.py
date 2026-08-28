@@ -13,6 +13,7 @@
 | 1.4.0 | 2026-08-21 | Codex | 覆盖英语世界候选研究、选题和二次制作确认接口的发布隔离。 |
 | 1.5.0 | 2026-08-23 | Codex | 覆盖英语世界审核项的显式投稿批准/搁置 API 合约。 |
 | 1.6.0 | 2026-08-29 | Codex | 覆盖 Telegram 单任务发布 lease 列表与签发启动 API 合约。 |
+| 1.7.0 | 2026-08-29 | Codex | 覆盖 lease 内部令牌请求头和未消费授权撤销合约。 |
 """
 import json
 
@@ -31,7 +32,7 @@ BASE_URL = "http://localhost:8765"
 def api_client():
     """创建一个指向 localhost:8765 的 API 客户端"""
     from bot.api_client import PipelineAPIClient
-    return PipelineAPIClient(base_url=BASE_URL)
+    return PipelineAPIClient(base_url=BASE_URL, internal_api_token="t" * 32)
 
 
 @pytest.mark.asyncio
@@ -122,6 +123,7 @@ class TestManualPublishLeases:
         result = await api_client.get_manual_publish_lease_jobs(limit=8)
 
         assert result["candidates"][0]["youtube_id"] == "lease-api01"
+        assert respx.calls.last.request.headers["X-Pipeline-Internal-Token"] == "t" * 32
 
     @respx.mock
     async def test_create_lease_binds_single_video(self, api_client):
@@ -139,8 +141,24 @@ class TestManualPublishLeases:
         assert result["success"] is True
         assert payload == {
             "youtube_id": "lease-api01", "slice_index": 0,
-            "issued_by": "telegram:123", "issued_via": "telegram", "ttl_minutes": 120,
+            "issued_by": "telegram:123", "ttl_minutes": 120,
         }
+        assert route.calls.last.request.headers["X-Pipeline-Internal-Token"] == "t" * 32
+
+    @respx.mock
+    async def test_revoke_lease_uses_bound_control_token(self, api_client):
+        lease_id = "a" * 32
+        route = respx.post(
+            f"{BASE_URL}/api/publication-leases/{lease_id}/revoke"
+        ).mock(return_value=httpx.Response(200, json={"success": True}))
+
+        result = await api_client.revoke_manual_publish_lease(
+            lease_id, revoked_by="telegram:123",
+        )
+
+        assert result["success"] is True
+        assert json.loads(route.calls.last.request.content) == {"revoked_by": "telegram:123"}
+        assert route.calls.last.request.headers["X-Pipeline-Internal-Token"] == "t" * 32
 
 
 @pytest.mark.asyncio

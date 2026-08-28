@@ -38,6 +38,7 @@
 | 1.20.0  | 2026-08-21 | Codex                               | 新增 /english_world 候选研究、选题与二次制作确认；不触发通用队列或发布 |
 | 1.21.0  | 2026-08-23 | Codex                               | 英语世界审核回执增加唯一投稿批准/搁置回调，不接受模糊文字发布指令。 |
 | 1.22.0  | 2026-08-29 | Codex                               | 新增 /lease_jobs 手机菜单：候选列表、二次确认和两小时单任务微信发布授权。 |
+| 1.23.0  | 2026-08-29 | Codex                               | Lease Jobs 展示并可撤销未消费授权；签发回执区分任务领取、本地调度、平台受理和公开可见。 |
 """
 from __future__ import annotations
 
@@ -191,6 +192,7 @@ def _check_admin(update: Update) -> bool:
 _HIGHLIGHT_SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 _HIGHLIGHT_CLIP_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 _LEASE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
+_LEASE_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 
 
 async def _reply_manual_publish_lease_jobs(message) -> None:
@@ -202,6 +204,7 @@ async def _reply_manual_publish_lease_jobs(message) -> None:
         return
     candidates = payload.get("candidates") or []
     active_leases = payload.get("active_leases") or []
+    buttons: list[list[InlineKeyboardButton]] = []
     lines = [
         "🔐 <b>Lease Jobs</b>",
         "选择单任务后会再次确认；确认将签发 2 小时微信发布授权并立即启动安全管线。",
@@ -215,7 +218,11 @@ async def _reply_manual_publish_lease_jobs(message) -> None:
             yid = html.escape(str(lease.get("youtube_id") or "?"))
             expires = html.escape(str(lease.get("expires_at") or "?"))
             lines.append(f"• <code>{yid}</code> · 到期 <code>{expires} UTC</code>")
-    buttons: list[list[InlineKeyboardButton]] = []
+            lease_id = str(lease.get("lease_id") or "")
+            if _LEASE_ID_RE.fullmatch(lease_id):
+                buttons.append([InlineKeyboardButton(
+                    f"撤销 {yid}", callback_data=f"lease:r:{lease_id}:0",
+                )])
     if candidates:
         lines.append("\n<b>可选择任务</b>")
     for item in candidates:
@@ -257,12 +264,34 @@ async def handle_manual_publish_lease_callback(update: Update, ctx: ContextTypes
         return
     await query.answer()
     parts = str(query.data or "").split(":")
-    if len(parts) != 4 or parts[0] != "lease" or parts[1] not in {"p", "c", "x"}:
+    if len(parts) != 4 or parts[0] != "lease" or parts[1] not in {"p", "c", "r", "x"}:
         await query.edit_message_text("❌ lease 请求格式无效。")
         return
     action, yid = parts[1], parts[2]
     if action == "x":
         await query.edit_message_text("已取消单任务发布授权。")
+        return
+    user_id = getattr(update.effective_user, "id", None)
+    if action == "r":
+        if not _LEASE_ID_RE.fullmatch(yid):
+            await query.edit_message_text("❌ lease 标识无效。")
+            return
+        result = await _api.revoke_manual_publish_lease(
+            yid, revoked_by=f"telegram:{user_id}",
+        )
+        if result is None:
+            await query.edit_message_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")
+            return
+        if not result.get("success"):
+            await query.edit_message_text(
+                f"❌ lease 未撤销：{html.escape(str(result.get('error') or '未知错误'))}",
+                parse_mode="HTML",
+            )
+            return
+        await query.edit_message_text(
+            "✅ lease 已撤销。若任务仍在预提交加工，它可继续生成成片，"
+            "但窗口外到达微信上传闸时不会再使用该授权。"
+        )
         return
     try:
         slice_index = int(parts[3])
@@ -288,7 +317,6 @@ async def handle_manual_publish_lease_callback(update: Update, ctx: ContextTypes
             reply_markup=markup,
         )
         return
-    user_id = getattr(update.effective_user, "id", None)
     result = await _api.create_manual_publish_lease(
         yid, slice_index=slice_index, issued_by=f"telegram:{user_id}", ttl_minutes=120,
     )
@@ -303,11 +331,11 @@ async def handle_manual_publish_lease_callback(update: Update, ctx: ContextTypes
         return
     lease = result.get("lease") or {}
     await query.edit_message_text(
-        "✅ <b>单任务 lease 已签发并启动</b>"
+        "✅ <b>单任务 lease 已签发，任务已领取</b>"
         f"\n任务：<code>{html.escape(yid)}{suffix}</code>"
         f"\nLease：<code>{html.escape(str(lease.get('lease_id') or '')[:8])}</code>"
         f"\n到期：<code>{html.escape(str(lease.get('expires_at') or '?'))} UTC</code>"
-        "\n\n这只证明本地任务已启动；平台受理和公开可见仍需各自账本证据。",
+        "\n\n当前只证明本地 worker 调度请求已提交；平台受理和公开可见仍需各自账本证据。",
         parse_mode="HTML",
     )
 
