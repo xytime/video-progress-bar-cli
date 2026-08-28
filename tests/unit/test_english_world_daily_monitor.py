@@ -4,12 +4,14 @@
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-08-27 | Codex | 覆盖回执成功、运行中、已失败不重跑和缺席窗口自愈。 |
+# | 1.1.0 | 2026-08-29 | Codex | 测试显式固定窗口后回执 mtime，不再依赖执行测试时是否已过 07:00。 |
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import plistlib
 import sys
 from datetime import datetime, time
@@ -38,16 +40,18 @@ def _paths(tmp_path: Path) -> monitor.MonitorPaths:
     )
 
 
-def _receipt(path: Path) -> None:
+def _receipt(path: Path, changed_at: datetime) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"kind": "review", "status": "ACCEPTED"}), encoding="utf-8")
+    timestamp = changed_at.timestamp()
+    os.utime(path, (timestamp, timestamp))
 
 
 def test_accepted_receipt_marks_slot_delivered_without_recovery(tmp_path: Path):
     paths = _paths(tmp_path)
     now = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
     receipt = paths.log_dir / "manual_recovery.delivery.json"
-    _receipt(receipt)
+    _receipt(receipt, now.replace(hour=8))
 
     exit_code, result = monitor.monitor_slot(paths, slot=time(7, 0), now=now, recover_missing=True)
 
@@ -87,11 +91,14 @@ def test_missing_window_runs_one_recovery_and_requires_new_receipt(tmp_path: Pat
     now = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
     paths.project_root.mkdir()
     receipt = paths.log_dir / "manual_recovery.delivery.json"
+    recovery_timestamp = now.replace(hour=8).timestamp()
     paths.daily_runner.write_text(
+        "import os\n"
         "from pathlib import Path\n"
         f"path = Path({str(receipt)!r})\n"
         "path.parent.mkdir(parents=True, exist_ok=True)\n"
-        "path.write_text('{\\\"kind\\\": \\\"review\\\", \\\"status\\\": \\\"ACCEPTED\\\"}')\n",
+        "path.write_text('{\\\"kind\\\": \\\"review\\\", \\\"status\\\": \\\"ACCEPTED\\\"}')\n"
+        f"os.utime(path, ({recovery_timestamp!r}, {recovery_timestamp!r}))\n",
         encoding="utf-8",
     )
 

@@ -17,6 +17,7 @@
 | 3.45.0  | 2026-08-28 | Codex                               | 英语世界仅对登录前明确失败的新自动投稿项开放一次登录后续投，其他终态继续 fail-closed。 |
 | 3.46.0  | 2026-08-29 | Codex                               | 新增两小时单任务微信发布 lease；只允许明确候选一次性绕过发布时间窗口并保留签发、领取审计。 |
 | 3.47.0  | 2026-08-29 | Codex                               | 单任务发布 lease 增加未消费撤销与撤销人审计；过期、已领取和重复撤销均 fail-closed。 |
+| 3.48.0  | 2026-08-29 | Codex                               | 平台补录预览稳定地优先未尝试候选，再排可重试失败项，避免更新时间跨秒导致批次顺序翻转。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -6556,7 +6557,8 @@ class PipelineDB:
         2. Wall Street Truthbombs 在指定源发布日期之后的视频。
 
         微信补录只看 WECHAT_DEFERRED；抖音补录看已完成成片（PUBLISHED/WECHAT_DEFERRED），
-        并排除抖音已有排队、上传、审核、已发布、待人工核实或封禁记录的视频。
+        并排除抖音已有排队、上传、审核、已发布、待人工核实或封禁记录的视频；
+        未尝试候选稳定排在可重试失败项之前，避免失败重试挤占新候选批次。
         """
         normalized = (platform or "").lower()
         if normalized not in {"wechat", "douyin"}:
@@ -6628,6 +6630,7 @@ class PipelineDB:
               {platform_filter}
             ORDER BY
                 is_recent_wall_street DESC,
+                CASE WHEN platform_state IS NULL THEN 0 ELSE 1 END ASC,
                 pv.upload_date DESC,
                 pv.updated_at DESC,
                 pv.id ASC
