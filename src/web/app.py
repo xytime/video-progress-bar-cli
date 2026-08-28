@@ -10,6 +10,7 @@
 | 3.27.0 | 2026-08-28 | Codex | 微信重登后仅续投一条登录前明确失败的自动英语世界项；已受理、未确认和历史项继续禁止自动重传。 |
 | 3.28.0 | 2026-08-29 | Codex | 新增 Telegram 单任务微信发布 lease 候选、签发与立即启动 API；两小时一次性授权不扩散到自动队列。 |
 | 3.29.0 | 2026-08-29 | Codex | Lease API 增加独立内部令牌和浏览器来源拒绝，并提供未消费授权撤销；响应区分领取与平台提交。 |
+| 3.30.0 | 2026-08-29 | Codex | Dashboard 控制面仅绑定回环地址并拒绝非本机 Origin，消除局域网直连与浏览器 CSRF 写入面。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -88,8 +89,7 @@ if _src not in sys.path:
     sys.path.insert(0, _src)
 
 from fastapi import FastAPI, BackgroundTasks, Depends, Header, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from video_processing.db.database import PipelineDB
@@ -104,12 +104,24 @@ from web.listening_transcriber import router as listening_transcriber_router
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
 app.include_router(listening_transcriber_router)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["GET", "POST", "DELETE"],
-    allow_headers=["*"],
-)
+
+@app.middleware("http")
+async def reject_untrusted_browser_origins(request, call_next):
+    """同源 Dashboard 可正常操作；任何外部网页 Origin 在进入路由前 fail-closed。"""
+    origin = request.headers.get("origin")
+    if origin:
+        port = settings.dashboard_port
+        trusted_origins = {
+            f"http://localhost:{port}",
+            f"http://127.0.0.1:{port}",
+            f"http://[::1]:{port}",
+        }
+        if origin not in trusted_origins:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "untrusted dashboard origin"},
+            )
+    return await call_next(request)
 
 # 使用全局 DB 实例（每次方法调用内部创建新连接，线程安全）
 db = PipelineDB()
@@ -3155,5 +3167,7 @@ if __name__ == "__main__":
     # 9100-9199 为本项目专属区间，避开 :8080（其他项目）等。端口为单一真相源 settings.dashboard_port，
     # 可经环境变量 DASHBOARD_PORT 覆盖（见 src/config/settings.py）。
     port = settings.dashboard_port
-    print(f"\n\U0001f680 Video Pipeline Control Center → http://localhost:{port}\n")
-    uvicorn.run(app, host="0.0.0.0", port=port, reload=False)
+    host = settings.dashboard_bind_host
+    display_host = f"[{host}]" if ":" in host else host
+    print(f"\n\U0001f680 Video Pipeline Control Center → http://{display_host}:{port}\n")
+    uvicorn.run(app, host=host, port=port, reload=False)

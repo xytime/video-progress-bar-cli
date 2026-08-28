@@ -14,6 +14,7 @@
 | 3.51.0 | 2026-08-27 | Codex | DeepSeek 字幕候选增加全片预算，避免质量比较耗尽发布窗口。 |
 | 3.52.0 | 2026-08-27 | Codex | Gemini 字幕候选增加全片预算；每次请求按剩余时间收紧，避免长片多批重试累积失控。 |
 | 3.53.0 | 2026-08-29 | Codex | 新增本机控制面内部令牌；Telegram 单任务发布 lease API 缺失或无效令牌时 fail-closed。 |
+| 3.54.0 | 2026-08-29 | Codex | Dashboard 绑定地址收口为回环白名单，禁止配置回退到 0.0.0.0 暴露生产写接口。 |
 | 3.45.0 | 2026-08-21 | Codex | Candidate-score cache TTL prevents minute-by-minute full rescoring. |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -109,6 +110,10 @@ class Settings(BaseSettings):
     # 仪表盘端口（见 PORTS.md：9100-9199 为本项目专属区间，避开 :8080 等其他项目）
     # 可用环境变量 DASHBOARD_PORT 覆盖
     dashboard_port: int = 9100
+    dashboard_bind_host: str = Field(
+        default="127.0.0.1",
+        pattern=r"^(127\.0\.0\.1|::1)$",
+    )
 
     # Telegram Bot 调用高权限控制面 API 时使用的独立内部令牌。仅本机进程持有，
     # 不复用 Telegram Bot token；缺失时相关 API 必须 fail-closed。
