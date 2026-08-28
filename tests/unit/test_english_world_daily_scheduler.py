@@ -15,6 +15,7 @@
 # | 2.9.0 | 2026-08-26 | Codex | 固化用户自动投稿策略覆盖旧 R3 人工审核文本的边界。 |
 # | 2.10.0 | 2026-08-26 | Codex | 固化协调器仅凭指定机器回执认定 Telegram 交付成功。 |
 # | 2.11.0 | 2026-08-27 | Codex | 固化生产代理必须等待通知回执，不得以 PENDING 结束任务。 |
+# | 2.12.0 | 2026-08-28 | Codex | 固化受限生产代理只写交付请求，宿主负责标准封面、通知与上传。 |
 """
 
 from __future__ import annotations
@@ -43,19 +44,32 @@ def _runner_arguments(
     *,
     codex_exit: int,
     write_delivery_receipt: bool = False,
+    write_delivery_request: bool = False,
 ) -> tuple[list[str], Path, Path]:
     calls = tmp_path / "calls.log"
     fake_codex = tmp_path / "codex"
     fake_python = tmp_path / "python"
     notifier = tmp_path / "notifier.py"
     log_dir = tmp_path / "logs"
+    request_command = (
+        "request=\"$ENGLISH_WORLD_DELIVERY_REQUEST_PATH\"\n"
+        "mkdir -p \"$(dirname \"$request\")\"\n"
+        "printf '%s\\n' '{\"kind\":\"production\",\"title\":\"fixture\",\"mp4\":\""
+        + str(PROJECT_ROOT / "pyproject.toml")
+        + "\",\"manifest\":\""
+        + str(PROJECT_ROOT / "pyproject.toml")
+        + "\"}' > \"$request\"\n"
+        if write_delivery_request else ""
+    )
     receipt_command = (
-        f"for receipt in {log_dir}/run_*.delivery.json; do "
-        "printf '%s\\n' '{\"kind\":\"review\",\"status\":\"ACCEPTED\"}' > \"$receipt\"; done\n"
+        "receipt=''\nwhile [ $# -gt 0 ]; do\n"
+        "  if [ \"$1\" = '--delivery-receipt' ]; then receipt=$2; fi\n"
+        "  shift\ndone\n"
+        "printf '%s\\n' '{\"kind\":\"review\",\"status\":\"ACCEPTED\"}' > \"$receipt\"\n"
         if write_delivery_receipt else ""
     )
-    _write_executable(fake_codex, f"#!/usr/bin/env bash\necho codex >> {calls}\n{receipt_command}exit {codex_exit}\n")
-    _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier:\"$*\" >> {calls}\n")
+    _write_executable(fake_codex, f"#!/usr/bin/env bash\necho codex >> {calls}\n{request_command}exit {codex_exit}\n")
+    _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier:\"$*\" >> {calls}\n{receipt_command}exit 0\n")
     notifier.write_text("# fake notifier\n", encoding="utf-8")
     arguments = [
         sys.executable, str(RUNNER), "--project-root", str(PROJECT_ROOT),
@@ -86,19 +100,21 @@ def test_ex_config_retries_then_notifies_with_durable_status(tmp_path: Path):
 
 
 def test_success_does_not_send_failure_notification(tmp_path: Path):
-    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0, write_delivery_receipt=True)
+    arguments, calls, log_dir = _runner_arguments(
+        tmp_path, codex_exit=0, write_delivery_request=True, write_delivery_receipt=True,
+    )
 
     result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
 
     assert result.returncode == 0
-    assert calls.read_text(encoding="utf-8").splitlines() == ["codex"]
+    assert [line.split(":", 1)[0] for line in calls.read_text(encoding="utf-8").splitlines()] == ["codex", "notifier"]
     status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
     assert "phase=COORDINATOR_FINISHED" in status
     assert "exit_code=0" in status
 
 
 def test_success_without_machine_delivery_receipt_is_a_durable_failure(tmp_path: Path):
-    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0)
+    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0, write_delivery_request=True)
 
     result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
 
@@ -106,6 +122,22 @@ def test_success_without_machine_delivery_receipt_is_a_durable_failure(tmp_path:
     assert len([line for line in calls.read_text(encoding="utf-8").splitlines() if line.startswith("notifier:")]) == 1
     status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
     assert "phase=FAILED_DELIVERY_EVIDENCE" in status
+
+
+def test_host_executes_delivery_after_agent_writes_request(tmp_path: Path):
+    """受限生产代理不再运行封面/通知；协调器宿主只消费一次原子请求。"""
+    arguments, calls, log_dir = _runner_arguments(
+        tmp_path, codex_exit=0, write_delivery_request=True, write_delivery_receipt=True,
+    )
+
+    result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0
+    request = next(log_dir.glob("run_*.delivery-request.json"))
+    assert json.loads(request.read_text(encoding="utf-8"))["kind"] == "production"
+    lines = calls.read_text(encoding="utf-8").splitlines()
+    assert lines[0] == "codex"
+    assert lines[1].startswith("notifier:")
 
 
 def test_transient_transport_failure_retries_before_failure_notification(tmp_path: Path):
@@ -204,7 +236,9 @@ def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path
 
 
 def test_stale_pid_lock_is_recovered_before_running_coordinator(tmp_path: Path):
-    arguments, calls, log_dir = _runner_arguments(tmp_path, codex_exit=0, write_delivery_receipt=True)
+    arguments, calls, log_dir = _runner_arguments(
+        tmp_path, codex_exit=0, write_delivery_request=True, write_delivery_receipt=True,
+    )
     lock_dir = tmp_path / "lock"
     lock_dir.mkdir()
     (lock_dir / "owner.json").write_text(json.dumps({"pid": 999999, "started_at": "old"}), encoding="utf-8")
@@ -212,7 +246,7 @@ def test_stale_pid_lock_is_recovered_before_running_coordinator(tmp_path: Path):
     result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
 
     assert result.returncode == 0
-    assert calls.read_text(encoding="utf-8").splitlines() == ["codex"]
+    assert [line.split(":", 1)[0] for line in calls.read_text(encoding="utf-8").splitlines()] == ["codex", "notifier"]
     assert not lock_dir.exists()
     assert "phase=COORDINATOR_FINISHED" in (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
 
@@ -270,6 +304,6 @@ def test_plist_directly_starts_python_coordinator():
     assert "sandbox_workspace_write.network_access=true" in runner_text
     assert "--cookies output/youtube_cookies.txt" in runner_text
     assert "覆盖任何旧文档中要求 Telegram 人工 R3 审核" in runner_text
-    assert "通知命令是本任务的最后一个硬性检查点" in runner_text
-    assert "缺失或不可解析回执都表示本次交付失败" in runner_text
+    assert "写入请求是本任务的最后一个硬性检查点" in runner_text
+    assert "请求缺失、不可解析或 MP4/manifest 路径不完整都表示本次生产未交付" in runner_text
     assert all(command in runner_text for command in ("`ps`", "`tail`", "`sleep`"))

@@ -21,6 +21,9 @@
 # | 2.11.0 | 2026-08-26 | Codex | 明确当前用户自动投稿策略覆盖旧人工 R3 协议，避免代理读取旧文档后拒绝生产闭环。 |
 # | 2.12.0 | 2026-08-26 | Codex | 只有指定的机器可读 Telegram 回执可将协调器标为完成，阻断代理退出码掩盖交付失败。 |
 # | 2.13.0 | 2026-08-27 | Codex | 强制生产代理等待通知命令完成并读取指定回执，禁止以 PENDING 回执结束任务。 |
+# | 2.14.0 | 2026-08-28 | Codex | 生产代理仅写入已质检交付请求；封面、通知和上传由宿主协调器执行，避免受限工作区启动 Chromium。 |
+# | 2.15.0 | 2026-08-28 | Codex | 将受限生产代理的单次硬截止缩短为 45 分钟，避免无交付请求的卡死长期占用日程锁。 |
+# | 2.16.0 | 2026-08-28 | Codex | 限制一次日常运行只处理首个合格候选，质检未通过即失败收口，禁止同窗换题反复制作。 |
 """
 
 from __future__ import annotations
@@ -44,9 +47,9 @@ DEFAULT_CODEX_BIN = Path("/Users/ryusei/.local/bin/codex")
 
 PROMPT = """执行今日“英语世界短视频”无人值守制作任务。工作目录是 Video-precessing。
 
-这是独立的 ENGLISH_WORLD_SHORT 生产：不得编辑项目源码、不得修改通用频道白名单、不得调用 PipelineManager、wechat_uploader.py 或任何平台投稿/发布逻辑。只允许生成学习卡素材和调用指定的 Telegram 审计入口；该入口会依据项目已配置的自动策略决定是否一次性提交视频号，代理不得绕过它直接投稿。
+这是独立的 ENGLISH_WORLD_SHORT 生产：不得编辑项目源码、不得修改通用频道白名单、不得调用 PipelineManager、wechat_uploader.py、notify_english_world_review.py、generate_english_cover.py 或任何平台投稿/发布逻辑。你只负责生成学习卡素材、质检并写入协调器指定的交付请求；封面、Telegram 审计和一次性视频号上传由协调器宿主进程执行。
 
-当前用户已明确授权：英语世界短视频在完整本地质检通过后可立即发布。此授权覆盖任何旧文档中要求 Telegram 人工 R3 审核的描述，但覆盖范围仅限本次新建、通过质检的英语世界成片。你仍不得直接调用上传器；必须只调用 `notify_english_world_review.py`，由它按账本和开关执行一次性自动投稿。旧审核项、`UNDER_REVIEW`、`UNCERTAIN`、`FAILED`、`LOGIN_REQUIRED` 绝不重传。
+当前用户已明确授权：英语世界短视频在完整本地质检通过后可立即发布。此授权覆盖任何旧文档中要求 Telegram 人工 R3 审核的描述，但覆盖范围仅限本次新建、通过质检的英语世界成片。你不得直接调用上传器或 `notify_english_world_review.py`；协调器宿主会按账本和开关执行一次性自动投稿。旧审核项、`UNDER_REVIEW`、`UNCERTAIN`、`FAILED`、`LOGIN_REQUIRED` 绝不重传。
 
 协调器进程、锁、重试、失败通知和运行日志均由本入口管理。不得运行 `kill`、`pkill`、`launchctl`、`rm`、`rmdir`、`ps`、`tail`、`sleep` 或任何进程/锁/运行日志监控命令；不得根据既有日志自行发送失败通知、终止进程或干预其他运行。遇到已有素材、旧审核项或运行异常时，只报告事实并继续本次合规素材的研究/制作；本入口会负责收口。
 
@@ -61,16 +64,16 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 
 先搜索当天或近期未使用的候选，再检查标题、简介、英文字幕/转写和必要的画面。只能选择适合儿童与家庭学习者的自然、科学、教育、健康、文化、日常生活或正向人文题材。排除政治、战争、暴力、犯罪、成人话题、强时政评论，以及包含真实伤亡、恐慌、疏散或令人不适灾情画面的素材；不确定即放弃当天生产。自然科学与天气科普（包括风暴、闪电、龙卷风的成因）并非关键词禁区，必须结合实际画面和叙事判断。
 
-若找到合格来源，按 make-english-world-short 技能和 production-contract 完整制作一条：自然完整句收尾；逐词红线；每个可见阅读屏至少 8 个微笔记；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。
+选定第一个合格来源后，本次运行只允许处理该一个 `youtube_id`、制作一条成片；不得在下载、渲染或质检后切换到第二个候选、继续搜索或重复制作。按 make-english-world-short 技能和 production-contract 完整制作：自然完整句收尾；逐词红线；每个可见阅读屏至少 8 个微笔记；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。若该唯一候选无法通过任何硬性质量条件，必须写入准确失败请求并立即结束；不得为了补词卡或优化文案而换题。
 
-质检通过后，必须运行以下命令登记 MP4 和 manifest 并发送 Telegram 审计回执：
-PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>' --delivery-receipt '{delivery_receipt_path}'
+质检通过后，必须运行以下命令原子写入交付请求：
+PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>'
 若当天无合格候选或制作/质检失败，必须运行：
-PYTHONPATH=src .venv/bin/python scripts/notify_english_world_review.py --title '今日英语世界短视频' --failure '<准确原因>' --delivery-receipt '{delivery_receipt_path}'
+PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '今日英语世界短视频' --failure '<准确原因>'
 
-通知命令是本任务的最后一个硬性检查点：若终端提示命令仍在运行，必须等待该命令完成；随后只读取上方指定的 `delivery_receipt_path`。只有其中 `status` 为 `ACCEPTED` 或 `SUPPRESSED` 才能报告交付完成。`PENDING`、缺失或不可解析回执都表示本次交付失败，必须如实报告，不能用“已经调用通知器”代替回执。
+写入请求是本任务的最后一个硬性检查点：命令成功后只能报告请求路径和本地质检结果；不得自行读取 Telegram 回执、生成投稿封面或启动上传器。请求缺失、不可解析或 MP4/manifest 路径不完整都表示本次生产未交付，必须如实报告。
 
-若已启用 `ENABLE_ENGLISH_WORLD_AUTO_PUBLISH=true`，上述入口只会对本次新建、完整质检通过的审核项一次性调用独立投稿器；不得自行补调用或重试。最终只报告真实状态、来源、证据路径与 Telegram 发送结果。不得将 Telegram 发送、素材生成或审核回执描述成视频号公开发布。"""
+若已启用 `ENABLE_ENGLISH_WORLD_AUTO_PUBLISH=true`，协调器会在宿主进程中对本次新建、完整质检通过的交付请求进行一次性投稿；不得自行补调用或重试。最终只报告真实状态、来源、证据路径与交付请求路径。"""
 
 
 @dataclass(frozen=True)
@@ -238,6 +241,76 @@ def _read_delivery_receipt(path: Path) -> dict | None:
     return payload
 
 
+def _read_delivery_request(path: Path, project_root: Path) -> dict:
+    """读取生产代理的原子交付请求；所有产物必须留在本项目内。"""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"交付请求不可读取：{type(exc).__name__}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("交付请求必须是 JSON 对象")
+    kind = str(payload.get("kind") or "").strip()
+    title = str(payload.get("title") or "").strip()
+    if kind not in {"production", "failure"} or not title:
+        raise ValueError("交付请求缺少合法 kind 或 title")
+    if kind == "failure":
+        failure = str(payload.get("failure") or "").strip()
+        if not failure:
+            raise ValueError("失败交付请求缺少原因")
+        return {"kind": kind, "title": title, "failure": failure}
+
+    root = project_root.resolve()
+    artifacts: dict[str, str] = {"kind": kind, "title": title}
+    for field in ("mp4", "manifest"):
+        candidate = Path(str(payload.get(field) or "")).expanduser().resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"交付请求 {field} 不在项目目录内") from exc
+        if not candidate.is_file() or candidate.stat().st_size <= 0:
+            raise ValueError(f"交付请求 {field} 不存在或为空")
+        artifacts[field] = str(candidate)
+    return artifacts
+
+
+def _deliver_request_from_host(
+    paths: RuntimePaths,
+    request_path: Path,
+    delivery_receipt_path: Path,
+    stream: TextIO,
+) -> tuple[int, bool]:
+    """由宿主执行封面、审计和上传，返回退出码及是否已发送失败回执。"""
+    request = _read_delivery_request(request_path, paths.project_root)
+    command = [str(paths.python_bin), str(paths.notifier_script), "--title", str(request["title"])]
+    failure_request = request["kind"] == "failure"
+    if failure_request:
+        command.extend(["--failure", str(request["failure"])])
+    else:
+        command.extend(["--mp4", str(request["mp4"]), "--manifest", str(request["manifest"])])
+    command.extend(["--delivery-receipt", str(delivery_receipt_path)])
+    _log(stream, f"executing host delivery for {request['kind']} request")
+    try:
+        result = subprocess.run(
+            command,
+            cwd=paths.project_root,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            check=False,
+            text=True,
+            timeout=35 * 60,
+        )
+    except subprocess.TimeoutExpired:
+        _log(stream, "ERROR: host delivery timed out")
+        return 124, False
+    if result.returncode != 0:
+        _log(stream, f"ERROR: host delivery exited {result.returncode}")
+        return result.returncode, False
+    if failure_request:
+        _log(stream, "production failure was reported through the host notifier")
+        return 1, True
+    return 0, False
+
+
 def _notify_failure(
     paths: RuntimePaths,
     reason: str,
@@ -266,16 +339,17 @@ def _notify_failure(
     _log(stream, "ERROR: Telegram failure notifier exhausted retries; local run log is the authoritative failure record")
 
 
-def _run_coordinator(paths: RuntimePaths, response_path: Path, delivery_receipt_path: Path, stream: TextIO) -> int:
+def _run_coordinator(paths: RuntimePaths, response_path: Path, delivery_request_path: Path, stream: TextIO) -> int:
     """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
     command = [
         str(paths.codex_bin), "exec", "--cd", str(paths.project_root), "--add-dir", "/Users/ryusei/.codex/skills",
         "--sandbox", "workspace-write", "-c", 'sandbox_workspace_write.network_access=true',
         "-c", 'approval_policy="never"', "--output-last-message", str(response_path),
-        PROMPT.replace("{delivery_receipt_path}", str(delivery_receipt_path)),
+        PROMPT.replace("{delivery_request_path}", str(delivery_request_path)),
     ]
     environment = dict(os.environ)
     environment["CODEX_HOME"] = str(paths.codex_home)
+    environment["ENGLISH_WORLD_DELIVERY_REQUEST_PATH"] = str(delivery_request_path)
     process = subprocess.Popen(
         command,
         cwd=paths.project_root,
@@ -307,6 +381,7 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
     status_path = paths.log_dir / "last_run_status.txt"
     run_log = paths.log_dir / f"run_{datetime.now().strftime('%F_%H%M%S')}.log"
     delivery_receipt_path = run_log.with_suffix(".delivery.json")
+    delivery_request_path = run_log.with_suffix(".delivery-request.json")
     if not _acquire_lock(paths.lock_dir):
         with run_log.open("a", encoding="utf-8") as stream:
             _log(stream, "skipped: daily English World run is already active")
@@ -326,12 +401,14 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
             _log(stream, "starting daily English World production coordinator")
             exit_code = 0
             accepted_receipts: list[Path] = []
+            delivery_failure_reported = False
+            delivery_attempted = False
             for attempt in range(1, max_attempts + 1):
                 _log(stream, f"coordinator attempt {attempt}/{max_attempts}")
                 attempt_log_offset = run_log.stat().st_size
                 receipt_snapshot = _accepted_review_receipt_snapshots(paths.project_root)
                 try:
-                    exit_code = _run_coordinator(paths, response_path, delivery_receipt_path, stream)
+                    exit_code = _run_coordinator(paths, response_path, delivery_request_path, stream)
                 except subprocess.TimeoutExpired:
                     exit_code = 124
                     accepted_receipts = _new_accepted_review_receipts(paths.project_root, receipt_snapshot)
@@ -375,6 +452,17 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
                         response_path,
                     )
                     return exit_code
+                if exit_code == 0:
+                    try:
+                        delivery_attempted = True
+                        exit_code, delivery_failure_reported = _deliver_request_from_host(
+                            paths, delivery_request_path, delivery_receipt_path, stream,
+                        )
+                    except ValueError as exc:
+                        _log(stream, f"ERROR: host delivery request rejected: {exc}")
+                        exit_code = 1
+                    # 交付请求已消费；绝不再重跑 Codex 生产以免重复成片或投稿。
+                    break
                 transient_failure = exit_code == 78 or (
                     exit_code != 0 and _is_transient_transport_failure(run_log, attempt_log_offset)
                 )
@@ -389,15 +477,20 @@ def run(paths: RuntimePaths, *, max_attempts: int, retry_delay_seconds: float) -
                 return 0
             if exit_code == 0:
                 _write_status(status_path, "FAILED_DELIVERY_EVIDENCE", 1, attempt, run_log, response_path)
-                _notify_failure(
-                    paths,
-                    f"生产协调器退出成功但未取得本次 Telegram 可审计回执。运行日志：{run_log}。"
-                    "本地成片或代理结论不构成交付/投稿成功证明，未确认视频号投稿。",
-                    stream,
-                )
+                if delivery_attempted:
+                    _log(stream, "ERROR: host delivery exited without a machine receipt; no duplicate failure notification")
+                else:
+                    _notify_failure(
+                        paths,
+                        f"生产协调器退出成功但未取得本次 Telegram 可审计回执。运行日志：{run_log}。"
+                        "本地成片或代理结论不构成交付/投稿成功证明，未确认视频号投稿。",
+                        stream,
+                    )
                 return 1
-            _write_status(status_path, "FAILED_COORDINATOR", exit_code, attempt, run_log, response_path)
-            _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。未生成可确认的今日审核成片，未触发视频号投稿。", stream)
+            phase = "REPORTED_PRODUCTION_FAILURE" if delivery_failure_reported else "FAILED_COORDINATOR"
+            _write_status(status_path, phase, exit_code, attempt, run_log, response_path)
+            if not delivery_failure_reported:
+                _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。未生成可确认的今日审核成片，未触发视频号投稿。", stream)
             return exit_code
     except CoordinatorInterrupted as exc:
         exit_code = 128 + exc.signum
@@ -431,7 +524,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--coordinator-timeout-seconds",
         type=float,
-        default=2 * 60 * 60,
+        default=45 * 60,
         help="单次 Codex 协调器最长运行时间；超时将终止整个进程组并写入状态账本。",
     )
     return parser.parse_args(argv)
