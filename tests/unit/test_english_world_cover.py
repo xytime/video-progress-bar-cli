@@ -5,14 +5,17 @@
 |---------|------------|--------------------------------|--------------------------------------------------------|
 | 1.0.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 初始创建：覆盖 ENGLISH_WORLD_SHORT 内容路由、教学字段装配、合规策略与全流程渲染 |
 | 1.1.0 | 2026-08-24 | Codex | 覆盖 agy OCR 人审待决门禁与首选封面审核包集成。 |
+| 1.2.0 | 2026-08-28 | Codex | 覆盖 Chromium 不可用时的 Pillow 英语封面回退。 |
 """
 
 import json
 import importlib.util
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 import pytest
 from PIL import Image
+from scripts import generate_english_cover as english_cover_cli
 from src.cover.semantic import SemanticAnalyzer
 from src.cover.layout import LayoutComposer, _format_quote_en_html
 from src.cover.engine import CoverEngine
@@ -125,6 +128,49 @@ def test_long_chinese_title_is_balanced_into_two_lines():
     theme = CoverEngine().registry.resolve(signal)
     layout = composer.compose({"content_type": "ENGLISH_WORLD_SHORT", "title": "数据中心像一座电脑的房子"}, signal, theme)
     assert layout["title_lines"] == ["数据中心像一座", "电脑的房子"]
+
+
+def test_english_cover_cli_uses_pillow_when_playwright_is_unavailable(tmp_path, monkeypatch):
+    """浏览器权限被拒绝时，英语封面仍要生成可验证的本地非视频帧封面。"""
+    timeline = {
+        "headline_zh": "注意力也有能量预算",
+        "headline_en": "Your Attention Has an Energy Budget",
+        "english_text": "Attention is a limited resource.",
+        "translation_zh": "注意力是一种有限的资源。",
+        "source_provenance": {"publisher": "CBC Kids News"},
+        "vocabulary_selection": {"lexical_word_count": 12, "selected_count": 2},
+        "vocabulary_candidates": [
+            {"word": "attention", "phonetic": "əˈtenʃən", "context_meaning_zh": "注意力", "recommended_level": "高考", "friendly_tag": "进阶词"},
+            {"word": "resource", "phonetic": "rɪˈsɔːs", "context_meaning_zh": "资源", "recommended_level": "CET-4", "friendly_tag": "进阶词"},
+        ],
+    }
+    timeline_path = tmp_path / "timeline.enriched.json"
+    output = tmp_path / "cover.jpg"
+    provenance = tmp_path / "cover_provenance.json"
+    timeline_path.write_text(json.dumps(timeline, ensure_ascii=False), encoding="utf-8")
+    planner = CoverEngine()
+
+    class BrowserDeniedEngine:
+        def generate(self, _payload, _output):
+            raise PermissionError("Chromium MachPort denied")
+
+        def plan(self, payload):
+            return planner.plan(payload)
+
+    monkeypatch.setattr(english_cover_cli, "CoverEngine", BrowserDeniedEngine)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generate_english_cover.py", "--timeline", str(timeline_path), "--output", str(output),
+            "--provenance-output", str(provenance),
+        ],
+    )
+
+    assert english_cover_cli.main() == 0
+    assert Image.open(output).size == (1080, 1260)
+    assert validate_dedicated_cover_file(output, provenance)
+    assert json.loads(provenance.read_text(encoding="utf-8"))["render_backend"] == "pillow"
 
 
 def test_antigravity_visual_contract_is_text_free_and_uses_local_fact(tmp_path):
