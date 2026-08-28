@@ -14,6 +14,7 @@
 | 3.42.0  | 2026-08-26 | Codex                               | 英语世界新增自动投稿授权来源，自动策略只消费本次新建且质检完成的成片。 |
 | 3.43.0  | 2026-08-26 | Codex                               | 登录恢复对任意视频号账本 fail-closed；保留批量重试的账本跳过统计。 |
 | 3.44.0  | 2026-08-27 | Codex                               | 高分与预加工候选在 SQL 层排除活跃视频号账本及历史归档，隔离存量 PENDING 污染。 |
+| 3.45.0  | 2026-08-28 | Codex                               | 英语世界仅对登录前明确失败的新自动投稿项开放一次登录后续投，其他终态继续 fail-closed。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -1173,6 +1174,7 @@ class PipelineDB:
                     notification_target TEXT DEFAULT NULL,
                     approved_at TIMESTAMP DEFAULT NULL,
                     approval_source TEXT DEFAULT NULL,
+                    login_recovery_attempts INTEGER NOT NULL DEFAULT 0,
                     submission_started_at TIMESTAMP DEFAULT NULL,
                     submission_finished_at TIMESTAMP DEFAULT NULL,
                     uploader_exit_code INTEGER DEFAULT NULL,
@@ -1190,6 +1192,11 @@ class PipelineDB:
             english_world_review_columns = {row[1] for row in cursor.fetchall()}
             if "approval_source" not in english_world_review_columns:
                 cursor.execute("ALTER TABLE english_world_review_items ADD COLUMN approval_source TEXT DEFAULT NULL")
+            if "login_recovery_attempts" not in english_world_review_columns:
+                cursor.execute(
+                    "ALTER TABLE english_world_review_items "
+                    "ADD COLUMN login_recovery_attempts INTEGER NOT NULL DEFAULT 0"
+                )
 
             # Telegram 投递回执与业务状态分开保存。HTTP 超时不能证明未送达，故以
             # UNKNOWN 保留不确定性供人工排障；它不能作为已送达依据，更不能抑制重试。
@@ -5132,6 +5139,48 @@ class PipelineDB:
             conn.commit()
             row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
             return dict(row) if row else {}
+
+    def claim_english_world_login_recovery(self, *, max_age_hours: int = 12) -> Optional[Dict[str, Any]]:
+        """领取一条可证明尚未投稿的英语世界登录恢复项。
+
+        仅接受自动策略创建、上传器在登录前返回 ``exit=2`` 的近期项，且同一
+        审核项只允许一次。``UNCERTAIN``、已受理、人工审核及历史失败全部保留
+        fail-closed，绝不由扫码成功顺带重传。
+        """
+        safe_age_hours = max(1, min(24, int(max_age_hours)))
+        freshness = f"-{safe_age_hours} hours"
+        with self.get_connection() as conn:
+            candidate = conn.execute(
+                """SELECT id FROM english_world_review_items
+                   WHERE state = 'LOGIN_REQUIRED'
+                     AND approval_source = 'AUTO_POLICY'
+                     AND uploader_exit_code = 2
+                     AND login_recovery_attempts = 0
+                     AND submission_finished_at >= datetime('now', ?)
+                   ORDER BY submission_finished_at DESC, id DESC
+                   LIMIT 1""",
+                (freshness,),
+            ).fetchone()
+            if not candidate:
+                return None
+            review_id = str(candidate["id"])
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'SUBMISSION_APPROVED', login_recovery_attempts = login_recovery_attempts + 1,
+                       error_message = '视频号登录已恢复；本项此前在登录前失败，已领取一次自动续投。',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?
+                     AND state = 'LOGIN_REQUIRED'
+                     AND approval_source = 'AUTO_POLICY'
+                     AND uploader_exit_code = 2
+                     AND login_recovery_attempts = 0""",
+                (review_id,),
+            )
+            if cursor.rowcount != 1:
+                return None
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (review_id,)).fetchone()
+            return dict(row) if row else None
 
     def complete_english_world_submission(
         self,

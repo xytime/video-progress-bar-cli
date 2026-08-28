@@ -9,6 +9,7 @@
 | 1.1.1 | 2026-08-24 | Codex | 覆盖候选搜索继承 Cookie 配置及单批次失败隔离。 |
 | 1.1.2 | 2026-08-24 | Codex | 覆盖目录降级路径与新闻标题风险词预筛。 |
 | 1.1.3 | 2026-08-24 | Codex | 覆盖预筛后目录降级、长来源截取边界与天气画面复核语义。 |
+| 1.1.4 | 2026-08-28 | Codex | 覆盖登录前失败项只允许一次登录后自动续投，未确认状态不受影响。 |
 """
 
 from __future__ import annotations
@@ -248,3 +249,38 @@ def test_review_item_is_bound_to_one_artifact_and_cannot_be_auto_retried(tmp_pat
     reopened = db.reopen_uncertain_english_world_submission(ready["id"])
     assert reopened["state"] == "SUBMISSION_APPROVED"
     assert db.claim_english_world_submission(ready["id"])
+
+
+def test_login_recovery_claims_only_one_recent_auto_policy_prelogin_failure(tmp_path):
+    """扫码成功只恢复明确的登录前失败项，且同一项最多一次。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    paths = {name: package_dir / name for name in (
+        "video.mp4", "manifest.json", "title.txt", "copy.txt", "cover.jpg", "cover_provenance.json",
+    )}
+    for path in paths.values():
+        path.write_text("fixture", encoding="utf-8")
+    item = db.create_english_world_review_item(
+        artifact_sha256="b" * 64,
+        title="注意力也有能量预算",
+        mp4_path=str(paths["video.mp4"]),
+        manifest_path=str(paths["manifest.json"]),
+        title_path=str(paths["title.txt"]),
+        copy_path=str(paths["copy.txt"]),
+        cover_path=str(paths["cover.jpg"]),
+        cover_provenance_path=str(paths["cover_provenance.json"]),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+    assert db.claim_english_world_submission(item["id"])
+    failed = db.complete_english_world_submission(
+        item["id"], state="LOGIN_REQUIRED", uploader_exit_code=2, message="登录前失败",
+    )
+    assert failed["state"] == "LOGIN_REQUIRED"
+
+    recovered = db.claim_english_world_login_recovery(max_age_hours=12)
+
+    assert recovered and recovered["id"] == item["id"]
+    assert recovered["state"] == "SUBMISSION_APPROVED"
+    assert recovered["login_recovery_attempts"] == 1
+    assert db.claim_english_world_login_recovery(max_age_hours=12) is None

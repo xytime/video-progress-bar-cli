@@ -7,6 +7,7 @@
 | 3.24.0 | 2026-08-21 | Codex | 回收无存活进程的预提交孤儿任务；提交后状态继续 fail-closed，且待绑定提交进入待核验而非加工队列 |
 | 3.25.0 | 2026-08-21 | Codex | 新增英语世界短视频候选研究与二次制作确认 API；不接入通用队列或发布入口 |
 | 3.26.0 | 2026-08-23 | Codex | 新增英语世界 Telegram 审核项的显式投稿批准入口与独立 worker，不复用通用队列 |
+| 3.27.0 | 2026-08-28 | Codex | 微信重登后仅续投一条登录前明确失败的自动英语世界项；已受理、未确认和历史项继续禁止自动重传。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -222,6 +223,28 @@ def _restore_login_required_after_wechat_login() -> int:
     return count
 
 
+def _resume_eligible_english_world_after_wechat_login() -> Optional[dict]:
+    """登录成功后续投一条可证明未触达平台的英语世界自动任务。
+
+    领取规则在 DAL 内原子执行：仅 ``AUTO_POLICY``、``exit=2``、近期且此前
+    未恢复过一次的记录可通过。此处不扫描历史项，也不触碰 ``UNCERTAIN`` 或
+    已受理记录。
+    """
+    if not settings.enable_english_world_auto_publish or settings.wechat_publishing_paused:
+        return None
+    claim = getattr(db, "claim_english_world_login_recovery", None)
+    if claim is None:
+        return None
+    item = claim(max_age_hours=12)
+    if item:
+        _start_english_world_submission(str(item["id"]))
+        logging.getLogger(__name__).info(
+            "[EnglishWorld] Resuming one pre-login failure after WeChat login: %s",
+            str(item["id"])[:8],
+        )
+    return item
+
+
 def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = False, reason: str = "manual") -> dict:
     """启动单实例微信登录；自动预热时保留旧登录标记和 state，避免提前把现行会话判死。"""
     prj_root = Path(__file__).parent.parent.parent
@@ -268,6 +291,7 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
             result = subprocess.run(args, cwd=str(prj_root), env=_wechat_login_env())
             if result.returncode == 0 and _wechat_login_marker_active(login_at_path):
                 _restore_login_required_after_wechat_login()
+                _resume_eligible_english_world_after_wechat_login()
         except Exception as exc:
             import logging
             logging.getLogger(__name__).error(f"WeChat login subprocess failed ({reason}): {exc}")
@@ -1331,6 +1355,21 @@ def approve_english_world_submission(review_id: str):
 def list_english_world_review_items(limit: int = 20):
     """只读返回英语世界学习卡的审核/投稿状态，不启动任何操作。"""
     return {"items": db.list_english_world_review_items(limit=limit)}
+
+
+@app.post("/api/english-world/recover-login-required")
+def recover_english_world_login_required_submission():
+    """在已确认登录恢复后，领取唯一合格的登录前失败英语世界自动任务。"""
+    if not _wechat_login_marker_active(Path(__file__).parent.parent.parent / "output" / "wechat_login_at.txt"):
+        return {"success": False, "error": "视频号登录尚未确认恢复；未创建投稿尝试"}
+    item = _resume_eligible_english_world_after_wechat_login()
+    if item is None:
+        return {"success": True, "message": "没有可安全自动续投的英语世界登录失败项。"}
+    return {
+        "success": True,
+        "message": "已领取一条登录前失败项并启动一次自动续投；后续以平台回执为准。",
+        "item": item,
+    }
 
 
 @app.post("/api/english-world/review-items/{review_id}/confirm-not-published-retry")

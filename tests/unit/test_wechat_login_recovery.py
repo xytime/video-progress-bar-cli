@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-27 | Codex | 覆盖微信重登成功后 LOGIN_REQUIRED 自动恢复为 PENDING 的最小行为 |
 | 1.1.0 | 2026-08-26 | Codex | 提交受理未绑定/已绑定账本也必须阻断登录恢复与批量失败重试。 |
+| 1.2.0 | 2026-08-28 | Codex | 覆盖英语世界仅恢复一条登录前明确失败的自动投稿项。 |
 """
 
 
@@ -33,6 +34,26 @@ def test_restore_login_required_after_wechat_login_resets_all_rows(monkeypatch):
         ("main-video", "PENDING", None, 0),
         ("slice-video", "PENDING", None, 2),
     ]
+
+
+def test_login_recovery_starts_only_the_dal_claimed_english_world_item(monkeypatch):
+    import web.app
+
+    class FakeDB:
+        def claim_english_world_login_recovery(self, *, max_age_hours):
+            assert max_age_hours == 12
+            return {"id": "a" * 32, "state": "SUBMISSION_APPROVED"}
+
+    started: list[str] = []
+    monkeypatch.setattr(web.app, "db", FakeDB())
+    monkeypatch.setattr(web.app.settings, "enable_english_world_auto_publish", True)
+    monkeypatch.setattr(web.app.settings, "wechat_publishing_paused", False)
+    monkeypatch.setattr(web.app, "_start_english_world_submission", started.append)
+
+    item = web.app._resume_eligible_english_world_after_wechat_login()
+
+    assert item and item["id"] == "a" * 32
+    assert started == ["a" * 32]
 
 
 def test_dal_restore_login_required_skips_submission_evidence(tmp_path):
