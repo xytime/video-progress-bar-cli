@@ -39,6 +39,7 @@
 | 1.21.0  | 2026-08-23 | Codex                               | 英语世界审核回执增加唯一投稿批准/搁置回调，不接受模糊文字发布指令。 |
 | 1.22.0  | 2026-08-29 | Codex                               | 新增 /lease_jobs 手机菜单：候选列表、二次确认和两小时单任务微信发布授权。 |
 | 1.23.0  | 2026-08-29 | Codex                               | Lease Jobs 展示并可撤销未消费授权；签发回执区分任务领取、本地调度、平台受理和公开可见。 |
+| 1.24.0  | 2026-08-29 | Codex                               | 英语世界二次确认后显示真实生产阶段；成片完成只进入人工审核，不继承自动投稿。 |
 """
 from __future__ import annotations
 
@@ -414,7 +415,7 @@ async def _reply_highlight_jobs(message) -> None:
     for job in jobs:
         title = html.escape(str(job.get("source_zh_title") or job.get("source_title") or "未命名视频")[:48])
         yid = html.escape(str(job.get("youtube_id") or "?"))
-        state = html.escape(str(job.get("state") or "UNKNOWN"))
+        state = html.escape(str(job.get("production_state") or job.get("state") or "UNKNOWN"))
         clips = int(job.get("clip_count") or 0)
         lines.append(
             f"\n<code>{str(job.get('id') or '')[:8]}</code> · <code>{state}</code>"
@@ -785,8 +786,9 @@ async def handle_english_world_callback(update: Update, ctx: ContextTypes.DEFAUL
         return
     await query.edit_message_text(
         "✅ <b>制作请求已登记</b>\n"
-        "状态：<code>PRODUCTION_REQUESTED</code>\n"
-        "当前会等待英语学习卡生产协调器接手；尚未下载、渲染或发布，因此不会伪报成片完成。",
+        "状态：<code>REQUESTED</code>\n"
+        "单候选生产协调器已启动或正在等待同一生产锁；完成后只发送人工审核包。"
+        "尚未发布，也不会继承全局自动投稿授权。",
         parse_mode="HTML",
     )
 

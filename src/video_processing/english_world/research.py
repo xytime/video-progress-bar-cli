@@ -13,6 +13,7 @@
 | 1.0.3 | 2026-08-24 | Codex | yt-dlp 搜索无可用元数据时，以既有白名单频道的官方 Data API / RSS 目录只读降级。 |
 | 1.0.4 | 2026-08-24 | Codex | 补足新闻标题中的政治、冲突和伤害线索预筛，避免目录降级扩大候选风险面。 |
 | 1.0.5 | 2026-08-24 | Codex | 目录降级以预筛结果为空为准；天气/灾害线索只标记画面复核，不再关键词误杀。 |
+| 1.0.6 | 2026-08-29 | Codex | 搜索与显式 URL 候选均按频道 ID 严格限制为三家授权来源，拒绝仅凭频道名冒充。 |
 """
 
 from __future__ import annotations
@@ -140,6 +141,7 @@ def _catalog_fallback_candidates() -> list[dict[str, Any]]:
                 "webpage_url": f"https://www.youtube.com/watch?v={video.youtube_id}",
                 "title": video.title,
                 "channel": channel_name,
+                "channel_id": channel_id,
                 "upload_date": video.upload_date,
                 "duration": video.duration_sec,
             })
@@ -188,6 +190,9 @@ def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or "").strip()
+        approved_channel = _approved_channel_name(item)
+        if approved_channel is None:
+            continue
         description = str(item.get("description") or "")
         blob = f"{title} {description}".lower()
         if not title or any(term in blob for term in _HARD_BLOCKED_TERMS):
@@ -212,7 +217,7 @@ def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             "source_url": url,
             "youtube_id": video_id or None,
             "source_title": title,
-            "source_channel": str(item.get("channel") or item.get("uploader") or "未知来源"),
+            "source_channel": approved_channel,
             "upload_date": upload_date,
             "duration_sec": duration,
             "topic": topic,
@@ -227,6 +232,15 @@ def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         })
     candidates.sort(key=lambda item: (-int(item["recommendation_score"]), str(item["source_title"]).lower()))
     return candidates[:5]
+
+
+def _approved_channel_name(item: dict[str, Any]) -> str | None:
+    """只相信 YouTube 的稳定频道 ID；显示名不能授予来源能力。"""
+    channel_id = str(item.get("channel_id") or item.get("uploader_id") or "").strip()
+    for approved_id, approved_name in _APPROVED_SOURCE_CHANNELS:
+        if channel_id == approved_id:
+            return approved_name
+    return None
 
 
 def _topic_for(blob: str) -> str:

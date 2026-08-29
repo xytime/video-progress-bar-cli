@@ -10,6 +10,8 @@
 | 1.1.2 | 2026-08-24 | Codex | 覆盖目录降级路径与新闻标题风险词预筛。 |
 | 1.1.3 | 2026-08-24 | Codex | 覆盖预筛后目录降级、长来源截取边界与天气画面复核语义。 |
 | 1.1.4 | 2026-08-28 | Codex | 覆盖登录前失败项只允许一次登录后自动续投，未确认状态不受影响。 |
+| 1.2.0 | 2026-08-29 | Codex | 覆盖 Telegram 投稿授权两小时失效及 AUTO_POLICY 延后项窗口内再领取。 |
+| 1.3.0 | 2026-08-29 | Codex | 覆盖整包指纹、同源去重及多次投稿尝试的不可覆盖审计记录。 |
 """
 
 from __future__ import annotations
@@ -23,6 +25,17 @@ import pytest
 from video_processing.db.database import PipelineDB
 from video_processing.english_world import research
 from video_processing.english_world.research import EnglishWorldResearchService, _youtube_search
+from video_processing.english_world.package_integrity import calculate_package_hashes, verify_package_hashes
+
+
+def _stored_hashes(seed: str = "a") -> dict[str, str]:
+    return {
+        "manifest_sha256": seed * 64,
+        "title_sha256": seed * 64,
+        "copy_sha256": seed * 64,
+        "cover_sha256": seed * 64,
+        "cover_provenance_sha256": seed * 64,
+    }
 
 
 def _candidate(*, title: str = "Whales return to the bay", duration_sec: int = 42) -> dict:
@@ -30,7 +43,8 @@ def _candidate(*, title: str = "Whales return to the bay", duration_sec: int = 4
         "id": "dQw4w9WgXcQ",
         "webpage_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
         "title": title,
-        "channel": "Nature Desk",
+        "channel": "CBC Kids News",
+        "channel_id": "UCWUA2W6LueNy9BSovivFVvQ",
         "upload_date": "20260821",
         "duration": duration_sec,
     }
@@ -80,7 +94,42 @@ def test_selected_candidate_requires_second_confirmation_before_production_reque
     assert selected["selected"] == 1
     assert before["state"] == "CANDIDATE_SELECTED"
     assert requested["state"] == "PRODUCTION_REQUESTED"
+    assert requested["production_state"] == "REQUESTED"
     assert db.get_video_by_youtube_id("dQw4w9WgXcQ") is None
+
+
+def test_production_request_claims_selected_candidate_and_finishes_at_manual_review(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    job = db.create_english_world_research_job(requested_by="telegram")
+    assert db.claim_english_world_job_for_research(job["id"])
+    db.complete_english_world_research(job["id"], candidates=[_stored_candidate()])
+    candidate_id = db.get_english_world_candidates(job["id"])[0]["id"]
+    db.select_english_world_candidate(candidate_id)
+    requested = db.request_english_world_production(job["id"])
+
+    claimed = db.claim_english_world_job_for_production(job["id"])
+    assert claimed and claimed["production_state"] == "PRODUCING"
+    assert claimed["candidate_youtube_id"] == "dQw4w9WgXcQ"
+    assert db.claim_english_world_job_for_production(job["id"]) is None
+
+    package_paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        package_paths[f"{field}_path"] = str(path)
+    review = db.create_english_world_review_item(
+        title="Telegram 人工审核", source_youtube_id="dQw4w9WgXcQ",
+        **package_paths, **calculate_package_hashes(package_paths),
+    )
+    finished = db.complete_english_world_job_production(
+        job["id"], review_id=review["id"],
+        mp4_path=package_paths["mp4_path"], manifest_path=package_paths["manifest_path"],
+    )
+
+    assert requested["production_state"] == "REQUESTED"
+    assert finished["production_state"] == "READY_FOR_REVIEW"
+    assert finished["review_id"] == review["id"]
+    assert review["state"] == "READY_FOR_REVIEW"
 
 
 def test_metadata_screening_rejects_explicitly_unsuitable_topics(tmp_path, monkeypatch):
@@ -95,6 +144,21 @@ def test_metadata_screening_rejects_explicitly_unsuitable_topics(tmp_path, monke
 
     service = EnglishWorldResearchService(db, searcher=lambda _query: [unsafe])
     result = service.research(job["id"])
+
+    assert result and result["state"] == "FAILED"
+    assert "没有找到" in result["error_message"]
+
+
+def test_research_rejects_unapproved_channel_even_if_display_name_is_spoofed(tmp_path, monkeypatch):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    job = db.create_english_world_research_job(
+        requested_by="telegram", source_url="https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+    spoofed = _candidate()
+    spoofed["channel_id"] = "UC_NOT_APPROVED"
+    spoofed["channel"] = "CBC Kids News"
+
+    result = EnglishWorldResearchService(db, inspector=lambda _url: spoofed).research(job["id"])
 
     assert result and result["state"] == "FAILED"
     assert "没有找到" in result["error_message"]
@@ -218,6 +282,7 @@ def test_review_item_is_bound_to_one_artifact_and_cannot_be_auto_retried(tmp_pat
         path.write_text("fixture", encoding="utf-8")
     kwargs = {
         "artifact_sha256": "a" * 64,
+        **_stored_hashes("a"),
         "title": "为家庭送上餐桌",
         "mp4_path": str(paths["video.mp4"]),
         "manifest_path": str(paths["manifest.json"]),
@@ -236,6 +301,7 @@ def test_review_item_is_bound_to_one_artifact_and_cannot_be_auto_retried(tmp_pat
     approved = db.approve_english_world_submission(ready["id"])
     assert approved["state"] == "SUBMISSION_APPROVED"
     assert approved["approval_source"] == "TELEGRAM_REVIEW"
+    assert approved["authorization_expires_at"] is not None
     claimed = db.claim_english_world_submission(ready["id"])
     assert claimed and claimed["state"] == "SUBMITTING"
     assert db.claim_english_world_submission(ready["id"]) is None
@@ -251,6 +317,47 @@ def test_review_item_is_bound_to_one_artifact_and_cannot_be_auto_retried(tmp_pat
     assert db.claim_english_world_submission(ready["id"])
 
 
+def test_manual_english_world_authorization_expires_but_auto_policy_remains_claimable(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    paths = {name: package_dir / name for name in (
+        "video.mp4", "manifest.json", "title.txt", "copy.txt", "cover.jpg", "cover_provenance.json",
+    )}
+    for path in paths.values():
+        path.write_text("fixture", encoding="utf-8")
+
+    def create(digest: str):
+        return db.create_english_world_review_item(
+            artifact_sha256=digest * 64,
+            **_stored_hashes(digest),
+            title="两小时授权",
+            mp4_path=str(paths["video.mp4"]),
+            manifest_path=str(paths["manifest.json"]),
+            title_path=str(paths["title.txt"]),
+            copy_path=str(paths["copy.txt"]),
+            cover_path=str(paths["cover.jpg"]),
+            cover_provenance_path=str(paths["cover_provenance.json"]),
+        )
+
+    manual = create("c")
+    approved = db.approve_english_world_submission(manual["id"])
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE english_world_review_items SET authorization_expires_at = datetime('now', '-1 minute') WHERE id = ?",
+            (manual["id"],),
+        )
+    assert db.claim_english_world_submission(manual["id"]) is None
+    expired = db.expire_english_world_submission_authorization(manual["id"])
+    assert expired and expired["state"] == "READY_FOR_REVIEW"
+
+    automatic = create("d")
+    auto_approved = db.approve_english_world_submission(automatic["id"], authorization="AUTO_POLICY")
+    assert auto_approved["authorization_expires_at"] is None
+    assert db.get_next_auto_approved_english_world_submission()["id"] == automatic["id"]
+    assert db.claim_english_world_submission(automatic["id"])["state"] == "SUBMITTING"
+
+
 def test_login_recovery_claims_only_one_recent_auto_policy_prelogin_failure(tmp_path):
     """扫码成功只恢复明确的登录前失败项，且同一项最多一次。"""
     db = PipelineDB(str(tmp_path / "pipeline.db"))
@@ -263,6 +370,7 @@ def test_login_recovery_claims_only_one_recent_auto_policy_prelogin_failure(tmp_
         path.write_text("fixture", encoding="utf-8")
     item = db.create_english_world_review_item(
         artifact_sha256="b" * 64,
+        **_stored_hashes("b"),
         title="注意力也有能量预算",
         mp4_path=str(paths["video.mp4"]),
         manifest_path=str(paths["manifest.json"]),
@@ -284,3 +392,81 @@ def test_login_recovery_claims_only_one_recent_auto_policy_prelogin_failure(tmp_
     assert recovered["state"] == "SUBMISSION_APPROVED"
     assert recovered["login_recovery_attempts"] == 1
     assert db.claim_english_world_login_recovery(max_age_hours=12) is None
+
+
+def test_review_item_rejects_same_source_with_different_artifact(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    paths = {name: package_dir / name for name in (
+        "video.mp4", "manifest.json", "title.txt", "copy.txt", "cover.jpg", "cover_provenance.json",
+    )}
+    for path in paths.values():
+        path.write_text("fixture", encoding="utf-8")
+
+    common = {
+        "title": "同一来源",
+        "mp4_path": str(paths["video.mp4"]),
+        "manifest_path": str(paths["manifest.json"]),
+        "title_path": str(paths["title.txt"]),
+        "copy_path": str(paths["copy.txt"]),
+        "cover_path": str(paths["cover.jpg"]),
+        "cover_provenance_path": str(paths["cover_provenance.json"]),
+        "source_youtube_id": "source-123",
+    }
+    db.create_english_world_review_item(
+        artifact_sha256="1" * 64, **_stored_hashes("1"), **common,
+    )
+
+    with pytest.raises(ValueError, match="source already has"):
+        db.create_english_world_review_item(
+            artifact_sha256="2" * 64, **_stored_hashes("2"), **common,
+        )
+
+
+def test_package_integrity_rejects_any_file_mutation(tmp_path):
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    item = {**paths, **calculate_package_hashes(paths)}
+
+    verify_package_hashes(item)
+    (tmp_path / "copy.bin").write_text("changed", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="copy_sha256"):
+        verify_package_hashes(item)
+
+
+def test_submission_attempts_keep_each_retry_evidence_directory(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    hashes = calculate_package_hashes(paths)
+    item = db.create_english_world_review_item(
+        title="不可覆盖尝试", **paths, **hashes,
+    )
+    db.approve_english_world_submission(item["id"])
+    first = db.claim_english_world_submission(item["id"], evidence_dir="/evidence/attempt-1")
+    assert first
+    db.complete_english_world_submission(
+        item["id"], state="UNCERTAIN", uploader_exit_code=3,
+        evidence_dir="/evidence/attempt-1", attempt_id=first["_attempt_id"],
+    )
+    db.reopen_uncertain_english_world_submission(item["id"])
+    second = db.claim_english_world_submission(item["id"], evidence_dir="/evidence/attempt-2")
+    assert second
+    db.complete_english_world_submission(
+        item["id"], state="UNDER_REVIEW", uploader_exit_code=0,
+        evidence_dir="/evidence/attempt-2", attempt_id=second["_attempt_id"],
+    )
+
+    attempts = db.list_english_world_submission_attempts(item["id"])
+    assert len(attempts) == 2
+    assert {attempt["evidence_dir"] for attempt in attempts} == {
+        "/evidence/attempt-1", "/evidence/attempt-2",
+    }

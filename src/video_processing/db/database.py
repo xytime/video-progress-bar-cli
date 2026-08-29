@@ -18,6 +18,9 @@
 | 3.46.0  | 2026-08-29 | Codex                               | 新增两小时单任务微信发布 lease；只允许明确候选一次性绕过发布时间窗口并保留签发、领取审计。 |
 | 3.47.0  | 2026-08-29 | Codex                               | 单任务发布 lease 增加未消费撤销与撤销人审计；过期、已领取和重复撤销均 fail-closed。 |
 | 3.48.0  | 2026-08-29 | Codex                               | 平台补录预览稳定地优先未尝试候选，再排可重试失败项，避免更新时间跨秒导致批次顺序翻转。 |
+| 3.49.0  | 2026-08-29 | Codex                               | 英语世界人工投稿授权限定两小时；自动策略只可在公共窗口领取，过期人工授权原子退回待审核。 |
+| 3.50.0  | 2026-08-29 | Codex                               | 英语世界审核项绑定完整投稿包哈希、同源活动项防重，并为每次投稿保留不可覆盖证据账本。 |
+| 3.51.0  | 2026-08-29 | Codex                               | 英语世界二次确认制作请求新增原子领取、审核项绑定和失败收口状态，不接通用发布队列。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -1172,6 +1175,20 @@ class PipelineDB:
                 "CREATE INDEX IF NOT EXISTS idx_english_world_jobs_updated "
                 "ON english_world_jobs(updated_at DESC)"
             )
+            cursor.execute("PRAGMA table_info(english_world_jobs)")
+            english_world_job_columns = {row[1] for row in cursor.fetchall()}
+            for column_name, column_type in (
+                ("production_state", "TEXT DEFAULT NULL"),
+                ("review_id", "TEXT DEFAULT NULL"),
+                ("mp4_path", "TEXT DEFAULT NULL"),
+                ("manifest_path", "TEXT DEFAULT NULL"),
+                ("production_started_at", "TIMESTAMP DEFAULT NULL"),
+                ("production_finished_at", "TIMESTAMP DEFAULT NULL"),
+            ):
+                if column_name not in english_world_job_columns:
+                    cursor.execute(
+                        f"ALTER TABLE english_world_jobs ADD COLUMN {column_name} {column_type}"
+                    )
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_english_world_candidates_job "
                 "ON english_world_candidates(job_id, ordinal)"
@@ -1187,6 +1204,11 @@ class PipelineDB:
                         CHECK(state IN ('READY_FOR_REVIEW', 'SUBMISSION_APPROVED', 'SUBMITTING',
                                       'UNDER_REVIEW', 'UNCERTAIN', 'LOGIN_REQUIRED', 'FAILED', 'HELD')),
                     artifact_sha256 TEXT NOT NULL UNIQUE,
+                    manifest_sha256 TEXT DEFAULT NULL,
+                    title_sha256 TEXT DEFAULT NULL,
+                    copy_sha256 TEXT DEFAULT NULL,
+                    cover_sha256 TEXT DEFAULT NULL,
+                    cover_provenance_sha256 TEXT DEFAULT NULL,
                     title TEXT NOT NULL,
                     content_type TEXT NOT NULL DEFAULT 'ENGLISH_WORLD_SHORT',
                     mp4_path TEXT NOT NULL,
@@ -1202,6 +1224,7 @@ class PipelineDB:
                     notification_target TEXT DEFAULT NULL,
                     approved_at TIMESTAMP DEFAULT NULL,
                     approval_source TEXT DEFAULT NULL,
+                    authorization_expires_at TIMESTAMP DEFAULT NULL,
                     login_recovery_attempts INTEGER NOT NULL DEFAULT 0,
                     submission_started_at TIMESTAMP DEFAULT NULL,
                     submission_finished_at TIMESTAMP DEFAULT NULL,
@@ -1225,6 +1248,46 @@ class PipelineDB:
                     "ALTER TABLE english_world_review_items "
                     "ADD COLUMN login_recovery_attempts INTEGER NOT NULL DEFAULT 0"
                 )
+            if "authorization_expires_at" not in english_world_review_columns:
+                cursor.execute(
+                    "ALTER TABLE english_world_review_items "
+                    "ADD COLUMN authorization_expires_at TIMESTAMP DEFAULT NULL"
+                )
+            for hash_column in (
+                "manifest_sha256", "title_sha256", "copy_sha256",
+                "cover_sha256", "cover_provenance_sha256",
+            ):
+                if hash_column not in english_world_review_columns:
+                    cursor.execute(
+                        f"ALTER TABLE english_world_review_items ADD COLUMN {hash_column} TEXT DEFAULT NULL"
+                    )
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS english_world_submission_attempts (
+                    attempt_id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'SUBMITTING'
+                        CHECK(state IN ('SUBMITTING', 'UNDER_REVIEW', 'UNCERTAIN',
+                                      'LOGIN_REQUIRED', 'FAILED')),
+                    approval_source TEXT DEFAULT NULL,
+                    artifact_sha256 TEXT NOT NULL,
+                    manifest_sha256 TEXT DEFAULT NULL,
+                    title_sha256 TEXT DEFAULT NULL,
+                    copy_sha256 TEXT DEFAULT NULL,
+                    cover_sha256 TEXT DEFAULT NULL,
+                    cover_provenance_sha256 TEXT DEFAULT NULL,
+                    evidence_dir TEXT DEFAULT NULL,
+                    uploader_exit_code INTEGER DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TIMESTAMP DEFAULT NULL,
+                    FOREIGN KEY(review_id) REFERENCES english_world_review_items(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_english_world_submission_attempts_review "
+                "ON english_world_submission_attempts(review_id, started_at DESC)"
+            )
 
             # Telegram 投递回执与业务状态分开保存。HTTP 超时不能证明未送达，故以
             # UNKNOWN 保留不确定性供人工排障；它不能作为已送达依据，更不能抑制重试。
@@ -5193,16 +5256,19 @@ class PipelineDB:
             return dict(row)
 
     def request_english_world_production(self, job_id: str) -> Dict[str, Any]:
-        """记录第二次制作确认；当前仅进入独立协调队列，绝不冒充已渲染。"""
+        """记录第二次制作确认；进入独立协调队列但不冒充已渲染。"""
         with self.get_connection() as conn:
             job = conn.execute("SELECT * FROM english_world_jobs WHERE id = ?", (job_id,)).fetchone()
             if not job:
                 raise ValueError("English World job does not exist")
+            if job["state"] == "PRODUCTION_REQUESTED" and job["selected_candidate_id"]:
+                return dict(job)
             if job["state"] != "CANDIDATE_SELECTED" or not job["selected_candidate_id"]:
                 raise ValueError("Select an English World candidate before requesting production")
             cursor = conn.execute(
                 """UPDATE english_world_jobs
-                   SET state = 'PRODUCTION_REQUESTED', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   SET state = 'PRODUCTION_REQUESTED', production_state = 'REQUESTED',
+                       error_message = NULL, updated_at = CURRENT_TIMESTAMP
                    WHERE id = ? AND state = 'CANDIDATE_SELECTED'""",
                 (job_id,),
             )
@@ -5210,6 +5276,89 @@ class PipelineDB:
                 raise ValueError("English World production request was not accepted")
             conn.commit()
             row = conn.execute("SELECT * FROM english_world_jobs WHERE id = ?", (job_id,)).fetchone()
+            return dict(row) if row else {}
+
+    def claim_english_world_job_for_production(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """原子领取一条已二次确认的制作请求，并绑定已选候选元数据。"""
+        clean_id = (job_id or "").strip()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_jobs
+                   SET production_state = 'PRODUCING', production_started_at = CURRENT_TIMESTAMP,
+                       production_finished_at = NULL, error_message = NULL,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'PRODUCTION_REQUESTED'
+                     AND COALESCE(production_state, 'REQUESTED') = 'REQUESTED'""",
+                (clean_id,),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute(
+                """SELECT ewj.*, ewc.source_url AS candidate_source_url,
+                          ewc.youtube_id AS candidate_youtube_id,
+                          ewc.source_title AS candidate_source_title,
+                          ewc.source_channel AS candidate_source_channel,
+                          ewc.duration_sec AS candidate_duration_sec,
+                          ewc.safety_note AS candidate_safety_note
+                   FROM english_world_jobs ewj
+                   JOIN english_world_candidates ewc ON ewc.id = ewj.selected_candidate_id
+                   WHERE ewj.id = ? AND ewc.selected = 1""",
+                (clean_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError("English World production request lost its selected candidate")
+            return dict(row)
+
+    def complete_english_world_job_production(
+        self,
+        job_id: str,
+        *,
+        review_id: str,
+        mp4_path: str,
+        manifest_path: str,
+    ) -> Dict[str, Any]:
+        """把人工请求绑定到已登记审核项；不把审核就绪误作平台发布。"""
+        clean_id = (job_id or "").strip()
+        clean_review_id = (review_id or "").strip()
+        if not clean_review_id or not mp4_path or not manifest_path:
+            raise ValueError("English World production completion requires review and artifact identities")
+        with self.get_connection() as conn:
+            review = conn.execute(
+                "SELECT id FROM english_world_review_items WHERE id = ?", (clean_review_id,),
+            ).fetchone()
+            if not review:
+                raise ValueError("English World production review item does not exist")
+            cursor = conn.execute(
+                """UPDATE english_world_jobs
+                   SET production_state = 'READY_FOR_REVIEW', review_id = ?, mp4_path = ?,
+                       manifest_path = ?, production_finished_at = CURRENT_TIMESTAMP,
+                       error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'PRODUCTION_REQUESTED'
+                     AND production_state = 'PRODUCING'""",
+                (clean_review_id, str(mp4_path), str(manifest_path), clean_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World production result cannot overwrite the current job state")
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_jobs WHERE id = ?", (clean_id,)).fetchone()
+            return dict(row) if row else {}
+
+    def fail_english_world_job_production(self, job_id: str, reason: str) -> Dict[str, Any]:
+        """持久化已领取制作请求的失败；不触发候选切换、重制或投稿。"""
+        clean_id = (job_id or "").strip()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_jobs
+                   SET production_state = 'FAILED', production_finished_at = CURRENT_TIMESTAMP,
+                       error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'PRODUCTION_REQUESTED'
+                     AND production_state = 'PRODUCING'""",
+                ((reason or "English World production failed")[:500], clean_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World production cannot be marked failed from its current state")
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_jobs WHERE id = ?", (clean_id,)).fetchone()
             return dict(row) if row else {}
 
     def get_english_world_job(self, job_id: str) -> Optional[Dict[str, Any]]:
@@ -5245,6 +5394,11 @@ class PipelineDB:
         self,
         *,
         artifact_sha256: str,
+        manifest_sha256: Optional[str] = None,
+        title_sha256: Optional[str] = None,
+        copy_sha256: Optional[str] = None,
+        cover_sha256: Optional[str] = None,
+        cover_provenance_sha256: Optional[str] = None,
         title: str,
         mp4_path: str,
         manifest_path: str,
@@ -5262,7 +5416,15 @@ class PipelineDB:
         from uuid import uuid4
 
         clean_hash = (artifact_sha256 or "").strip().lower()
+        package_hashes = tuple(
+            (value or "").strip().lower() for value in (
+                manifest_sha256, title_sha256, copy_sha256, cover_sha256, cover_provenance_sha256,
+            )
+        )
+        if any(package_hashes) and any(len(value) != 64 for value in package_hashes):
+            raise ValueError("English World review item requires the complete immutable package hash set")
         clean_title = (title or "").strip()[:160]
+        clean_source_youtube_id = (source_youtube_id or "").strip()[:80] or None
         required_paths = (mp4_path, manifest_path, title_path, copy_path, cover_path, cover_provenance_path)
         if len(clean_hash) != 64 or any(not str(value or "").strip() for value in required_paths):
             raise ValueError("English World review item requires an artifact hash and complete publish package")
@@ -5276,20 +5438,37 @@ class PipelineDB:
                 result = dict(existing)
                 result["_created_now"] = False
                 return result
+            if clean_source_youtube_id:
+                same_source = conn.execute(
+                    """SELECT id, state FROM english_world_review_items
+                       WHERE source_youtube_id = ?
+                         AND state IN ('READY_FOR_REVIEW', 'SUBMISSION_APPROVED', 'SUBMITTING',
+                                      'UNDER_REVIEW', 'UNCERTAIN', 'LOGIN_REQUIRED', 'FAILED')
+                       ORDER BY updated_at DESC LIMIT 1""",
+                    (clean_source_youtube_id,),
+                ).fetchone()
+                if same_source:
+                    raise ValueError(
+                        "English World source already has an active or submission-protected review item: "
+                        f"{same_source['id']} ({same_source['state']})"
+                    )
             review_id = uuid4().hex
             conn.execute(
                 """INSERT INTO english_world_review_items
-                   (id, artifact_sha256, title, mp4_path, manifest_path, title_path, copy_path,
+                   (id, artifact_sha256, manifest_sha256, title_sha256, copy_sha256,
+                    cover_sha256, cover_provenance_sha256,
+                    title, mp4_path, manifest_path, title_path, copy_path,
                     cover_path, cover_provenance_path, source_url, source_title, source_publisher,
                     source_youtube_id, notification_target)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    review_id, clean_hash, clean_title, str(mp4_path), str(manifest_path), str(title_path),
+                    review_id, clean_hash, *package_hashes,
+                    clean_title, str(mp4_path), str(manifest_path), str(title_path),
                     str(copy_path), str(cover_path), str(cover_provenance_path),
                     (source_url or "").strip()[:1000] or None,
                     (source_title or "").strip()[:500] or None,
                     (source_publisher or "").strip()[:160] or None,
-                    (source_youtube_id or "").strip()[:80] or None,
+                    clean_source_youtube_id,
                     (notification_target or "").strip()[:120] or None,
                 ),
             )
@@ -5308,6 +5487,40 @@ class PipelineDB:
                 "SELECT * FROM english_world_review_items WHERE id = ?", ((review_id or "").strip(),),
             ).fetchone()
             return dict(row) if row else None
+
+    def bind_english_world_review_package_hashes(
+        self, review_id: str, *, hashes: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """在下一次投稿领取前绑定完整包指纹；已绑定值不可改变。"""
+        fields = (
+            "artifact_sha256", "manifest_sha256", "title_sha256", "copy_sha256",
+            "cover_sha256", "cover_provenance_sha256",
+        )
+        normalized = {field: str(hashes.get(field) or "").strip().lower() for field in fields}
+        if any(len(normalized[field]) != 64 for field in fields):
+            raise ValueError("English World package hash set is incomplete")
+        clean_id = (review_id or "").strip()
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            bindable_states = {
+                "READY_FOR_REVIEW", "SUBMISSION_APPROVED", "UNCERTAIN", "LOGIN_REQUIRED",
+            }
+            if not row or row["state"] not in bindable_states:
+                raise ValueError("English World package hashes cannot bind after a submission is in flight")
+            for field in fields:
+                current = str(row[field] or "").strip().lower()
+                if current and current != normalized[field]:
+                    raise ValueError(f"English World package hash changed: {field}")
+            conn.execute(
+                """UPDATE english_world_review_items
+                   SET artifact_sha256 = ?, manifest_sha256 = ?, title_sha256 = ?, copy_sha256 = ?,
+                       cover_sha256 = ?, cover_provenance_sha256 = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state IN ('READY_FOR_REVIEW', 'SUBMISSION_APPROVED',
+                                              'UNCERTAIN', 'LOGIN_REQUIRED')""",
+                tuple(normalized[field] for field in fields) + (clean_id,),
+            )
+            updated = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            return dict(updated) if updated else {}
 
     def approve_english_world_submission(
         self, review_id: str, *, authorization: str = "TELEGRAM_REVIEW",
@@ -5328,9 +5541,14 @@ class PipelineDB:
             cursor = conn.execute(
                 """UPDATE english_world_review_items
                    SET state = 'SUBMISSION_APPROVED', approved_at = CURRENT_TIMESTAMP,
-                       approval_source = ?, error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                       approval_source = ?,
+                       authorization_expires_at = CASE
+                           WHEN ? = 'TELEGRAM_REVIEW' THEN datetime('now', '+120 minutes')
+                           ELSE NULL
+                       END,
+                       error_message = NULL, updated_at = CURRENT_TIMESTAMP
                    WHERE id = ? AND state = 'READY_FOR_REVIEW'""",
-                (clean_authorization, clean_id),
+                (clean_authorization, clean_authorization, clean_id),
             )
             if cursor.rowcount != 1:
                 raise ValueError("English World review item approval was not accepted")
@@ -5338,21 +5556,78 @@ class PipelineDB:
             updated = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
             return dict(updated) if updated else {}
 
-    def claim_english_world_submission(self, review_id: str) -> Optional[Dict[str, Any]]:
-        """专用投稿器原子领取已批准项；重复点击或重复 worker 都不会二次投稿。"""
+    def claim_english_world_submission(
+        self, review_id: str, *, evidence_dir: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """专用投稿器原子领取仍有效的批准项；重复或过期授权不能二次投稿。"""
         clean_id = (review_id or "").strip()
         with self.get_connection() as conn:
             cursor = conn.execute(
                 """UPDATE english_world_review_items
                    SET state = 'SUBMITTING', submission_started_at = CURRENT_TIMESTAMP,
                        updated_at = CURRENT_TIMESTAMP
-                   WHERE id = ? AND state = 'SUBMISSION_APPROVED'""",
+                   WHERE id = ? AND state = 'SUBMISSION_APPROVED'
+                     AND (
+                         approval_source = 'AUTO_POLICY'
+                         OR (
+                             approval_source = 'TELEGRAM_REVIEW'
+                             AND authorization_expires_at > CURRENT_TIMESTAMP
+                         )
+                     )""",
                 (clean_id,),
             )
             if cursor.rowcount != 1:
                 return None
-            conn.commit()
             row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            if not row or any(not row[field] for field in (
+                "artifact_sha256", "manifest_sha256", "title_sha256", "copy_sha256",
+                "cover_sha256", "cover_provenance_sha256",
+            )):
+                raise ValueError("English World submission requires an immutable package hash set")
+            from uuid import uuid4
+            attempt_id = uuid4().hex
+            conn.execute(
+                """INSERT INTO english_world_submission_attempts (
+                       attempt_id, review_id, approval_source, artifact_sha256, manifest_sha256,
+                       title_sha256, copy_sha256, cover_sha256, cover_provenance_sha256, evidence_dir
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    attempt_id, clean_id, row["approval_source"], row["artifact_sha256"],
+                    row["manifest_sha256"], row["title_sha256"], row["copy_sha256"],
+                    row["cover_sha256"], row["cover_provenance_sha256"],
+                    (evidence_dir or "").strip() or None,
+                ),
+            )
+            return {**dict(row), "_attempt_id": attempt_id}
+
+    def expire_english_world_submission_authorization(self, review_id: str) -> Optional[Dict[str, Any]]:
+        """将已过期的两小时人工授权退回待审核；自动策略授权不受影响。"""
+        clean_id = (review_id or "").strip()
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'READY_FOR_REVIEW', approved_at = NULL, approval_source = NULL,
+                       authorization_expires_at = NULL,
+                       error_message = '两小时人工投稿授权已过期；需要重新确认本条成片。',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'SUBMISSION_APPROVED'
+                     AND approval_source = 'TELEGRAM_REVIEW'
+                     AND authorization_expires_at <= CURRENT_TIMESTAMP""",
+                (clean_id,),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            return dict(row) if row else None
+
+    def get_next_auto_approved_english_world_submission(self) -> Optional[Dict[str, Any]]:
+        """读取下一条等待公共窗口的自动授权项；只读且不领取投稿。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT * FROM english_world_review_items
+                   WHERE state = 'SUBMISSION_APPROVED' AND approval_source = 'AUTO_POLICY'
+                   ORDER BY approved_at ASC, id ASC LIMIT 1"""
+            ).fetchone()
             return dict(row) if row else None
 
     def reopen_uncertain_english_world_submission(self, review_id: str) -> Dict[str, Any]:
@@ -5366,6 +5641,8 @@ class PipelineDB:
             cursor = conn.execute(
                 """UPDATE english_world_review_items
                    SET state = 'SUBMISSION_APPROVED', uploader_exit_code = NULL,
+                       approved_at = CURRENT_TIMESTAMP, approval_source = 'TELEGRAM_REVIEW',
+                       authorization_expires_at = datetime('now', '+120 minutes'),
                        error_message = '操作员已明确确认首次投稿未成功；重开同一审核项进行一次人工授权重传。',
                        updated_at = CURRENT_TIMESTAMP
                    WHERE id = ? AND state = 'UNCERTAIN'""",
@@ -5419,6 +5696,24 @@ class PipelineDB:
             row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (review_id,)).fetchone()
             return dict(row) if row else None
 
+    def get_english_world_login_recovery_candidate(
+        self, *, max_age_hours: int = 12,
+    ) -> Optional[Dict[str, Any]]:
+        """只读返回下一条登录恢复候选，供领取前完成投稿包完整性校验。"""
+        safe_age_hours = max(1, min(24, int(max_age_hours)))
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT * FROM english_world_review_items
+                   WHERE state = 'LOGIN_REQUIRED'
+                     AND approval_source = 'AUTO_POLICY'
+                     AND uploader_exit_code = 2
+                     AND login_recovery_attempts = 0
+                     AND submission_finished_at >= datetime('now', ?)
+                   ORDER BY submission_finished_at DESC, id DESC LIMIT 1""",
+                (f"-{safe_age_hours} hours",),
+            ).fetchone()
+            return dict(row) if row else None
+
     def complete_english_world_submission(
         self,
         review_id: str,
@@ -5427,6 +5722,7 @@ class PipelineDB:
         uploader_exit_code: int,
         evidence_dir: Optional[str] = None,
         message: Optional[str] = None,
+        attempt_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """写入一次投稿尝试的保守结果；不把已受理或未确认伪装为公开发布。"""
         target_state = (state or "").strip().upper()
@@ -5434,6 +5730,18 @@ class PipelineDB:
         if target_state not in allowed:
             raise ValueError("Invalid English World submission completion state")
         with self.get_connection() as conn:
+            clean_review_id = (review_id or "").strip()
+            clean_attempt_id = (attempt_id or "").strip()
+            if not clean_attempt_id:
+                attempt = conn.execute(
+                    """SELECT attempt_id FROM english_world_submission_attempts
+                       WHERE review_id = ? AND state = 'SUBMITTING'
+                       ORDER BY started_at DESC LIMIT 1""",
+                    (clean_review_id,),
+                ).fetchone()
+                clean_attempt_id = str(attempt["attempt_id"]) if attempt else ""
+            if not clean_attempt_id:
+                raise ValueError("English World submission attempt is missing")
             cursor = conn.execute(
                 """UPDATE english_world_review_items
                    SET state = ?, uploader_exit_code = ?, evidence_dir = ?, error_message = ?,
@@ -5441,16 +5749,42 @@ class PipelineDB:
                    WHERE id = ? AND state = 'SUBMITTING'""",
                 (
                     target_state, int(uploader_exit_code), (evidence_dir or "").strip() or None,
-                    (message or "").strip()[:1000] or None, (review_id or "").strip(),
+                    (message or "").strip()[:1000] or None, clean_review_id,
                 ),
             )
             if cursor.rowcount != 1:
                 raise ValueError("English World submission result cannot overwrite the current state")
+            attempt_cursor = conn.execute(
+                """UPDATE english_world_submission_attempts
+                   SET state = ?, uploader_exit_code = ?, evidence_dir = COALESCE(?, evidence_dir),
+                       error_message = ?, finished_at = CURRENT_TIMESTAMP
+                   WHERE attempt_id = ? AND review_id = ? AND state = 'SUBMITTING'""",
+                (
+                    target_state, int(uploader_exit_code), (evidence_dir or "").strip() or None,
+                    (message or "").strip()[:1000] or None,
+                    clean_attempt_id, clean_review_id,
+                ),
+            )
+            if attempt_cursor.rowcount != 1:
+                raise ValueError("English World submission attempt cannot be completed")
             conn.commit()
             row = conn.execute(
-                "SELECT * FROM english_world_review_items WHERE id = ?", ((review_id or "").strip(),),
+                "SELECT * FROM english_world_review_items WHERE id = ?", (clean_review_id,),
             ).fetchone()
             return dict(row) if row else {}
+
+    def list_english_world_submission_attempts(
+        self, review_id: str, *, limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """按时间倒序返回不可覆盖的英语世界投稿尝试。"""
+        safe_limit = max(1, min(100, int(limit)))
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT * FROM english_world_submission_attempts
+                   WHERE review_id = ? ORDER BY started_at DESC, attempt_id DESC LIMIT ?""",
+                ((review_id or "").strip(), safe_limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def hold_english_world_review_item(self, review_id: str) -> Dict[str, Any]:
         """将待审核学习卡显式搁置；搁置后任何按钮都不能自动提交。"""

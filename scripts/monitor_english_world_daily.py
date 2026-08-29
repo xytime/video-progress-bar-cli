@@ -9,6 +9,7 @@
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-08-27 | Codex | 新增 07:00/16:30 窗口后的回执监测、缺席自愈和持久健康账本。 |
+# | 1.1.0 | 2026-08-29 | Codex | 监控器按 09:15/19:00 实际触发时刻分别映射 07:00/16:30，修复晚间仍检查早班。 |
 """
 
 from __future__ import annotations
@@ -45,6 +46,11 @@ def _parse_slot(value: str) -> time:
         return datetime.strptime(value, "%H:%M").time()
     except ValueError as exc:
         raise argparse.ArgumentTypeError("--slot must use HH:MM") from exc
+
+
+def _slot_for_observation(observed_at: datetime) -> time:
+    """将两个固定监控触发时刻映射到各自最近的生产窗口。"""
+    return time(7, 0) if observed_at.time() < time(13, 0) else time(16, 30)
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -194,7 +200,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--lock-dir", type=Path)
     parser.add_argument("--python-bin", type=Path)
     parser.add_argument("--daily-runner", type=Path)
-    parser.add_argument("--slot", type=_parse_slot, required=True)
+    parser.add_argument("--slot", type=_parse_slot, help="显式覆盖待核验窗口；计划任务默认按触发时刻推导")
     parser.add_argument("--recover-missing", action="store_true")
     return parser.parse_args(argv)
 
@@ -209,7 +215,11 @@ def main(argv: list[str] | None = None) -> int:
         python_bin=args.python_bin or project_root / ".venv/bin/python",
         daily_runner=args.daily_runner or project_root / "scripts/run_english_world_daily.py",
     )
-    exit_code, payload = monitor_slot(paths, slot=args.slot, recover_missing=args.recover_missing)
+    observed_at = datetime.now().astimezone()
+    slot = args.slot or _slot_for_observation(observed_at)
+    exit_code, payload = monitor_slot(
+        paths, slot=slot, now=observed_at, recover_missing=args.recover_missing,
+    )
     print(json.dumps(payload, ensure_ascii=False))
     return exit_code
 

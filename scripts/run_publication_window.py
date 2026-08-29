@@ -11,6 +11,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 | 1.1.0 | 2026-08-02 | Codex | 改为每分钟自动巡航，不再因发布时段跳过完整流水线 |
 | 1.2.0 | 2026-08-04 | Codex | 记录巡航实例 PID、Git revision 与心跳，区分已推送代码和实际运行版本 |
 | 1.3.0 | 2026-08-04 | Codex | 接收管线阶段回调，状态文件记录当前视频、阶段与阶段开始时间 |
+| 1.4.0 | 2026-08-29 | Codex | 每分钟巡航在公共窗口内先续投一条英语世界 AUTO_POLICY 延后项，仍由专用投稿器原子领取。 |
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from video_processing.pipeline_manager import PipelineManager
+from config.settings import settings
+from video_processing.db.database import PipelineDB
 
 
 LOCK_PATH = PROJECT_ROOT / "output" / "publication_window_runner.lock"
@@ -169,8 +172,46 @@ def run_publication_window() -> int:
     return 0
 
 
+def dispatch_one_deferred_english_world_submission() -> None:
+    """仅在公共窗口内唤起一条自动授权项；不处理人工、失败或未确认状态。"""
+    if (
+        not settings.enable_english_world_auto_publish
+        or settings.wechat_publishing_paused
+        or not settings.is_public_publish_window()
+    ):
+        return
+    item = PipelineDB().get_next_auto_approved_english_world_submission()
+    if not item:
+        return
+    review_id = str(item["id"])
+    result = subprocess.run(
+        [
+            str(PROJECT_ROOT / ".venv/bin/python"),
+            str(PROJECT_ROOT / "scripts/submit_english_world_review.py"),
+            "--review-id",
+            review_id,
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30 * 60,
+    )
+    if result.returncode:
+        logging.error(
+            "[EnglishWorld] deferred submission worker returned %s for %s: %s",
+            result.returncode,
+            review_id[:8],
+            result.stderr[-500:],
+        )
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        dispatch_one_deferred_english_world_submission()
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        logging.error("[EnglishWorld] deferred submission dispatch failed: %s", exc)
     return run_publication_window()
 
 

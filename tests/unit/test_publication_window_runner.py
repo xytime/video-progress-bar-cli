@@ -9,6 +9,7 @@
 | 1.1.0 | 2026-08-02 | Codex | 覆盖关闭发布时段等待后的任意时刻巡航 |
 | 1.2.0 | 2026-08-04 | Codex | 覆盖运行版本和完成状态记录，避免 Git revision 与活动实例混淆 |
 | 1.3.0 | 2026-08-04 | Codex | 覆盖管线阶段回调写入巡航状态 |
+| 1.4.0 | 2026-08-29 | Codex | 覆盖公共窗口巡航只续投一条 AUTO_POLICY 英语世界延后项。 |
 """
 
 import fcntl
@@ -97,3 +98,21 @@ def test_runner_records_pipeline_stage_context(monkeypatch, tmp_path: Path):
     assert status["current_video"] == "video-id"
     assert status["stage"] == "RENDERING"
     assert status["stage_started_at"] <= status["ended_at"]
+
+
+def test_window_dispatches_one_deferred_english_world_auto_item(monkeypatch):
+    class FakeDB:
+        def get_next_auto_approved_english_world_submission(self):
+            return {"id": "b" * 32}
+
+    completed = MagicMock(returncode=0, stderr="")
+    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
+    monkeypatch.setattr(runner.settings, "enable_english_world_auto_publish", True)
+    monkeypatch.setattr(runner.settings, "wechat_publishing_paused", False)
+    monkeypatch.setattr(type(runner.settings), "is_public_publish_window", lambda _self: True)
+    run = MagicMock(return_value=completed)
+    monkeypatch.setattr(runner.subprocess, "run", run)
+
+    runner.dispatch_one_deferred_english_world_submission()
+
+    assert run.call_args.args[0][-2:] == ["--review-id", "b" * 32]

@@ -16,12 +16,13 @@
 | 1.6.0 | 2026-08-26 | Codex | 支持经显式策略授权的质检后自动投稿；只消费本次新建审核项，旧项及终态绝不自动重传。 |
 | 1.7.0 | 2026-08-26 | Codex | 可选写入机器可读的日更投递回执，协调器不得再把代理退出成功误报为 Telegram 交付成功。 |
 | 1.8.0 | 2026-08-27 | Codex | 兼容学习卡生产器的 `timeline.enriched.json` 命名，防止质检通过后在交付入口被拒绝。 |
+| 1.9.0 | 2026-08-29 | Codex | 审核项绑定完整投稿包指纹并按 source_youtube_id 阻断重复审核/投稿。 |
+| 1.10.0 | 2026-08-29 | Codex | Telegram 选题制作请求强制进入人工审核，不受全局自动投稿开关扩权。 |
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import html
 import json
 import logging
@@ -32,6 +33,7 @@ import sys
 from config.settings import settings
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db.database import PipelineDB
+from video_processing.english_world.package_integrity import calculate_package_hashes
 from video_processing.telegram_delivery import send_document, send_text
 from video_processing.utils.video_metadata import get_video_duration_ffprobe
 
@@ -143,7 +145,6 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
     headline = str(timeline.get("headline_zh") or display_title).strip()
     if not headline:
         raise ValueError("英语世界学习卡缺少可显示标题")
-    artifact_hash = hashlib.sha256(mp4.read_bytes()).hexdigest()
     package_dir = mp4.parent / "wechat_submission"
     package_dir.mkdir(parents=True, exist_ok=True)
     title_path = package_dir / "title.txt"
@@ -230,8 +231,16 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
         if result.returncode != 0 or not validate_dedicated_cover_file(cover_path, cover_provenance_path):
             raise RuntimeError(f"英语世界投稿封面未通过验证：{result.stderr[-500:]}")
 
+    package_hashes = calculate_package_hashes({
+        "mp4_path": mp4,
+        "manifest_path": manifest,
+        "title_path": title_path,
+        "copy_path": copy_path,
+        "cover_path": cover_path,
+        "cover_provenance_path": cover_provenance_path,
+    })
     return PipelineDB().create_english_world_review_item(
-        artifact_sha256=artifact_hash,
+        **package_hashes,
         title=headline,
         mp4_path=str(mp4.resolve()),
         manifest_path=str(manifest.resolve()),
@@ -288,6 +297,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", type=Path, help="与成片对应的 manifest JSON")
     parser.add_argument("--failure", help="无合格素材或制作失败时的原因")
     parser.add_argument("--delivery-receipt", type=Path, help="可选：供日更协调器读取的机器可读 Telegram 回执")
+    parser.add_argument(
+        "--manual-review-only", action="store_true",
+        help="强制只发送人工审核包；即使全局自动投稿开启也不得提交平台",
+    )
     return parser
 
 
@@ -326,7 +339,8 @@ def main() -> int:
     review_id = str(review_item["id"])
     state = str(review_item["state"])
     will_auto_submit = (
-        settings.enable_english_world_auto_publish
+        not args.manual_review_only
+        and settings.enable_english_world_auto_publish
         and bool(review_item.get("_created_now"))
         and not settings.wechat_publishing_paused
     )
@@ -367,8 +381,9 @@ def main() -> int:
 
     message = "✅ <b>英语世界短视频｜待处理</b>\n"
     message += f"标题：{html.escape(str(review_item['title']))}\n审核编号：<code>{review_id[:8]}</code>\n"
-    markup = _review_keyboard(review_id) if state == "READY_FOR_REVIEW" and not settings.enable_english_world_auto_publish else None
-    if not settings.enable_english_world_auto_publish:
+    manual_review = args.manual_review_only or not settings.enable_english_world_auto_publish
+    markup = _review_keyboard(review_id) if state == "READY_FOR_REVIEW" and manual_review else None
+    if manual_review:
         message += (
             "已生成学习成片、质检清单与投稿素材包；当前<b>尚未提交视频号</b>。\n\n"
             "<b>审核通过：</b>点击下方「✅ 确认提交视频号」。\n"
@@ -382,10 +397,10 @@ def main() -> int:
             "<code>existing_item_not_retried_or_wechat_publishing_paused</code>。"
             "为避免重复投稿，未触发新提交。"
         )
-    if state != "READY_FOR_REVIEW" and not settings.enable_english_world_auto_publish:
+    if state != "READY_FOR_REVIEW" and manual_review:
         message += f"\n\n当前状态：<code>{html.escape(state)}</code>；为避免重复投稿，已不提供提交按钮。"
     text_result = _post_message(message, reply_markup=markup)
-    audit_suffix = "人工审核材料" if not settings.enable_english_world_auto_publish else "待处理审计材料"
+    audit_suffix = "人工审核材料" if manual_review else "待处理审计材料"
     cover_result = _post_document(Path(str(review_item["cover_path"])), f"英语世界投稿封面｜{audit_suffix}")
     mp4_result = _post_document(args.mp4, f"英语世界短视频成片｜{audit_suffix}")
     manifest_result = _post_document(args.manifest, f"英语世界短视频 manifest｜{audit_suffix}")

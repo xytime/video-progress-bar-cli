@@ -5,6 +5,7 @@
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-08-27 | Codex | 覆盖回执成功、运行中、已失败不重跑和缺席窗口自愈。 |
 # | 1.1.0 | 2026-08-29 | Codex | 测试显式固定窗口后回执 mtime，不再依赖执行测试时是否已过 07:00。 |
+# | 1.2.0 | 2026-08-29 | Codex | 固化计划任务早晚触发分别映射 07:00 与 16:30，禁止单一固定 slot 掩盖下午缺席。 |
 """
 
 from __future__ import annotations
@@ -118,4 +119,13 @@ def test_monitor_plist_runs_after_both_production_windows():
         {"Hour": 9, "Minute": 15},
         {"Hour": 19, "Minute": 0},
     ]
-    assert configuration["ProgramArguments"][-3:] == ["--slot", "07:00", "--recover-missing"]
+    assert configuration["ProgramArguments"][-1:] == ["--recover-missing"]
+    assert "--slot" not in configuration["ProgramArguments"]
+
+
+def test_monitor_infers_each_production_slot_from_observation_time():
+    morning = datetime(2026, 8, 29, 9, 15).astimezone()
+    evening = datetime(2026, 8, 29, 19, 0).astimezone()
+
+    assert monitor._slot_for_observation(morning) == time(7, 0)
+    assert monitor._slot_for_observation(evening) == time(16, 30)

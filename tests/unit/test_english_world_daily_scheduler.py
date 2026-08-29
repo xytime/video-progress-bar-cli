@@ -16,6 +16,7 @@
 # | 2.10.0 | 2026-08-26 | Codex | 固化协调器仅凭指定机器回执认定 Telegram 交付成功。 |
 # | 2.11.0 | 2026-08-27 | Codex | 固化生产代理必须等待通知回执，不得以 PENDING 结束任务。 |
 # | 2.12.0 | 2026-08-28 | Codex | 固化受限生产代理只写交付请求，宿主负责标准封面、通知与上传。 |
+# | 2.13.0 | 2026-08-29 | Codex | 固化 Telegram 已选候选提示边界及宿主 manual-review-only 强制参数。 |
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ import json
 import os
 import time
 from pathlib import Path
+
+from scripts import run_english_world_daily as runner
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -138,6 +141,60 @@ def test_host_executes_delivery_after_agent_writes_request(tmp_path: Path):
     lines = calls.read_text(encoding="utf-8").splitlines()
     assert lines[0] == "codex"
     assert lines[1].startswith("notifier:")
+
+
+def test_manual_production_prompt_binds_selected_candidate_and_forbids_platform_authority(tmp_path: Path):
+    prompt = runner._manual_production_prompt(
+        {
+            "id": "a" * 32,
+            "candidate_source_url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "candidate_youtube_id": "dQw4w9WgXcQ",
+            "candidate_source_title": "untrusted title",
+            "candidate_source_channel": "CBC Kids News",
+            "candidate_duration_sec": 42,
+            "candidate_safety_note": "reviewed",
+        },
+        tmp_path / "delivery.json",
+    )
+
+    assert '"youtube_id": "dQw4w9WgXcQ"' in prompt
+    assert "禁止重新搜索、换题或制作第二条" in prompt
+    assert "不包含视频号投稿授权" in prompt
+    assert "manual-review-only" in prompt
+
+
+def test_manual_host_delivery_forces_notifier_review_only(monkeypatch, tmp_path: Path):
+    request_path = tmp_path / "request.json"
+    mp4 = tmp_path / "video.mp4"
+    manifest = tmp_path / "manifest.json"
+    notifier = tmp_path / "notifier.py"
+    for path in (mp4, manifest, notifier):
+        path.write_text("fixture", encoding="utf-8")
+    request_path.write_text(
+        json.dumps({
+            "kind": "production", "title": "fixture",
+            "mp4": str(mp4), "manifest": str(manifest),
+        }),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_run(command, **_kwargs):
+        captured["command"] = command
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    paths = runner.RuntimePaths(
+        project_root=tmp_path, codex_home=tmp_path, codex_bin=tmp_path / "codex",
+        python_bin=Path(sys.executable), notifier_script=notifier, log_dir=tmp_path,
+        lock_dir=tmp_path / "lock", coordinator_timeout_seconds=1,
+    )
+
+    assert runner._deliver_request_from_host(
+        paths, request_path, tmp_path / "receipt.json", sys.stdout,
+        manual_review_only=True,
+    ) == (0, False)
+    assert "--manual-review-only" in captured["command"]
 
 
 def test_transient_transport_failure_retries_before_failure_notification(tmp_path: Path):

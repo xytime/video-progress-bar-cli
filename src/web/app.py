@@ -11,6 +11,8 @@
 | 3.28.0 | 2026-08-29 | Codex | 新增 Telegram 单任务微信发布 lease 候选、签发与立即启动 API；两小时一次性授权不扩散到自动队列。 |
 | 3.29.0 | 2026-08-29 | Codex | Lease API 增加独立内部令牌和浏览器来源拒绝，并提供未消费授权撤销；响应区分领取与平台提交。 |
 | 3.30.0 | 2026-08-29 | Codex | Dashboard 控制面仅绑定回环地址并拒绝非本机 Origin，消除局域网直连与浏览器 CSRF 写入面。 |
+| 3.31.0 | 2026-08-29 | Codex | 英语世界人工批准、未确认重传和登录恢复在领取前绑定并核验完整投稿包指纹。 |
+| 3.32.0 | 2026-08-29 | Codex | Telegram 二次确认制作启动受锁协调器；只制作已选候选并强制返回人工审核。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -99,6 +101,7 @@ from video_processing.utils.translation_helper import translate_text as _transla
 from video_processing.utils.generated_content_validation import is_upstream_error_response
 from video_processing.highlight import HighlightJobService
 from video_processing.english_world import EnglishWorldResearchService
+from video_processing.english_world.package_integrity import calculate_package_hashes
 from web.listening_transcriber import router as listening_transcriber_router
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
@@ -167,6 +170,43 @@ def _start_english_world_research(job_id: str) -> None:
         target=_run,
         daemon=True,
         name=f"english-world-research-{job_id[:8]}",
+    ).start()
+
+
+def _start_english_world_production(job_id: str) -> None:
+    """启动已二次确认的单候选生产；协调器内部原子领取并强制人工审核。"""
+    project_root = Path(__file__).parent.parent.parent
+    python_bin = project_root / ".venv" / "bin" / "python"
+    runner = project_root / "scripts" / "run_english_world_daily.py"
+
+    def _run() -> None:
+        try:
+            result = subprocess.run(
+                [
+                    str(python_bin), str(runner), "--job-id", job_id,
+                    "--wait-for-lock-seconds", "7200",
+                ],
+                cwd=str(project_root), timeout=4 * 60 * 60, text=True, capture_output=True,
+            )
+            if result.returncode:
+                logging.getLogger(__name__).error(
+                    "[EnglishWorld] production coordinator returned %s for %s: %s",
+                    result.returncode, job_id[:8], result.stderr[-500:],
+                )
+        except subprocess.TimeoutExpired:
+            logging.getLogger(__name__).error(
+                "[EnglishWorld] production coordinator parent timed out for %s; inspect durable run state",
+                job_id[:8],
+            )
+        except OSError as exc:
+            logging.getLogger(__name__).exception(
+                "[EnglishWorld] failed to launch production coordinator for %s: %s", job_id[:8], exc,
+            )
+
+    threading.Thread(
+        target=_run,
+        daemon=True,
+        name=f"english-world-produce-{job_id[:8]}",
     ).start()
 
 
@@ -266,6 +306,19 @@ def _resume_eligible_english_world_after_wechat_login() -> Optional[dict]:
     claim = getattr(db, "claim_english_world_login_recovery", None)
     if claim is None:
         return None
+    candidate = getattr(db, "get_english_world_login_recovery_candidate", lambda **_kwargs: None)(
+        max_age_hours=12,
+    )
+    if candidate:
+        try:
+            hashes = calculate_package_hashes(candidate)
+            db.bind_english_world_review_package_hashes(str(candidate["id"]), hashes=hashes)
+        except (ValueError, OSError) as exc:
+            logging.getLogger(__name__).error(
+                "[EnglishWorld] Refusing login recovery because package verification failed for %s: %s",
+                str(candidate["id"])[:8], exc,
+            )
+            return None
     item = claim(max_age_hours=12)
     if item:
         _start_english_world_submission(str(item["id"]))
@@ -1332,16 +1385,17 @@ def select_english_world_candidate(candidate_id: str):
 
 @app.post("/api/english-world/jobs/{job_id}/request-production")
 def request_english_world_production(job_id: str):
-    """登记第二次制作确认；不伪装为自动渲染完成，更不触发平台发布。"""
+    """登记第二次制作确认并启动单候选协调器；不触发平台发布。"""
     if not re.fullmatch(r"[a-f0-9]{32}", job_id or ""):
         return {"success": False, "error": "英语世界任务 ID 格式不合法"}
     try:
         job = db.request_english_world_production(job_id)
     except ValueError as exc:
         return {"success": False, "error": str(exc)}
+    _start_english_world_production(job_id)
     return {
         "success": True,
-        "message": "已登记生产请求；当前等待英语学习卡生产协调器接手，尚未下载、渲染或发布。",
+        "message": "已登记并启动单候选生产；完成后只进入 Telegram 人工审核，尚未发布。",
         "job": _english_world_job_payload(job),
     }
 
@@ -1359,6 +1413,8 @@ def approve_english_world_submission(review_id: str):
     state = str(item.get("state") or "")
     try:
         if state == "READY_FOR_REVIEW":
+            hashes = calculate_package_hashes(item)
+            db.bind_english_world_review_package_hashes(review_id, hashes=hashes)
             item = db.approve_english_world_submission(review_id)
             _start_english_world_submission(review_id)
         elif state == "SUBMISSION_APPROVED":
@@ -1373,7 +1429,7 @@ def approve_english_world_submission(review_id: str):
             }
         else:
             return {"success": False, "error": f"审核项状态异常：{state}"}
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         return {"success": False, "error": str(exc)}
     return {
         "success": True,
@@ -1409,9 +1465,14 @@ def reopen_uncertain_english_world_submission(review_id: str):
     if not re.fullmatch(r"[a-f0-9]{32}", review_id or ""):
         return {"success": False, "error": "英语世界审核编号格式不合法"}
     try:
+        item = db.get_english_world_review_item(review_id)
+        if not item:
+            return {"success": False, "error": "英语世界审核项不存在"}
+        hashes = calculate_package_hashes(item)
+        db.bind_english_world_review_package_hashes(review_id, hashes=hashes)
         item = db.reopen_uncertain_english_world_submission(review_id)
         _start_english_world_submission(review_id)
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         return {"success": False, "error": str(exc)}
     return {"success": True, "message": "已重开同一审核项的一次人工确认重传。", "item": item}
 
