@@ -57,6 +57,7 @@ def _stored_candidate() -> dict:
         "youtube_id": "dQw4w9WgXcQ",
         "source_title": "Whales return to the bay",
         "source_channel": "Nature Desk",
+        "source_channel_id": "UCWUA2W6LueNy9BSovivFVvQ",
         "upload_date": "20260821",
         "duration_sec": 42,
         "topic": "nature",
@@ -162,6 +163,19 @@ def test_research_rejects_unapproved_channel_even_if_display_name_is_spoofed(tmp
 
     assert result and result["state"] == "FAILED"
     assert "没有找到" in result["error_message"]
+
+
+def test_legacy_candidate_without_channel_id_cannot_be_selected(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    job = db.create_english_world_research_job(requested_by="telegram")
+    assert db.claim_english_world_job_for_research(job["id"])
+    legacy = _stored_candidate()
+    legacy.pop("source_channel_id")
+    db.complete_english_world_research(job["id"], candidates=[legacy])
+    candidate_id = db.get_english_world_candidates(job["id"])[0]["id"]
+
+    with pytest.raises(ValueError, match="approved channel ID"):
+        db.select_english_world_candidate(candidate_id)
 
 
 def test_weather_science_candidate_requires_visual_review_but_is_not_keyword_rejected(tmp_path):

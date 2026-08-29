@@ -21,6 +21,7 @@
 | 3.49.0  | 2026-08-29 | Codex                               | 英语世界人工投稿授权限定两小时；自动策略只可在公共窗口领取，过期人工授权原子退回待审核。 |
 | 3.50.0  | 2026-08-29 | Codex                               | 英语世界审核项绑定完整投稿包哈希、同源活动项防重，并为每次投稿保留不可覆盖证据账本。 |
 | 3.51.0  | 2026-08-29 | Codex                               | 英语世界二次确认制作请求新增原子领取、审核项绑定和失败收口状态，不接通用发布队列。 |
+| 3.52.0  | 2026-08-29 | Codex                               | 英语世界候选持久化授权频道 ID；旧的仅显示名候选在选择阶段 fail-closed。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -1158,6 +1159,7 @@ class PipelineDB:
                     youtube_id TEXT DEFAULT NULL,
                     source_title TEXT NOT NULL,
                     source_channel TEXT DEFAULT NULL,
+                    source_channel_id TEXT DEFAULT NULL,
                     upload_date TEXT DEFAULT NULL,
                     duration_sec INTEGER DEFAULT NULL,
                     topic TEXT NOT NULL,
@@ -1193,6 +1195,12 @@ class PipelineDB:
                 "CREATE INDEX IF NOT EXISTS idx_english_world_candidates_job "
                 "ON english_world_candidates(job_id, ordinal)"
             )
+            cursor.execute("PRAGMA table_info(english_world_candidates)")
+            english_world_candidate_columns = {row[1] for row in cursor.fetchall()}
+            if "source_channel_id" not in english_world_candidate_columns:
+                cursor.execute(
+                    "ALTER TABLE english_world_candidates ADD COLUMN source_channel_id TEXT DEFAULT NULL"
+                )
 
             # 英语世界学习卡的 Telegram 审核/投稿账本。它与选题账本、通用视频
             # 状态机和 platform_publications 完全隔离：一个审核项只绑定一个成片
@@ -5192,13 +5200,14 @@ class PipelineDB:
                 conn.execute(
                     """INSERT INTO english_world_candidates
                        (id, job_id, ordinal, source_url, youtube_id, source_title, source_channel,
-                        upload_date, duration_sec, topic, learning_value, safety_note, caption_status,
-                        recommendation_score)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        source_channel_id, upload_date, duration_sec, topic, learning_value,
+                        safety_note, caption_status, recommendation_score)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         str(candidate["id"]), job_id, ordinal, str(candidate["source_url"]),
                         candidate.get("youtube_id"), str(candidate["source_title"]),
-                        candidate.get("source_channel"), candidate.get("upload_date"),
+                        candidate.get("source_channel"), candidate.get("source_channel_id"),
+                        candidate.get("upload_date"),
                         candidate.get("duration_sec"), str(candidate["topic"]),
                         str(candidate["learning_value"]), str(candidate["safety_note"]),
                         str(candidate["caption_status"]), int(candidate.get("recommendation_score") or 0),
@@ -5239,6 +5248,10 @@ class PipelineDB:
             ).fetchone()
             if not candidate:
                 raise ValueError("English World candidate does not exist")
+            if not str(candidate["source_channel_id"] or "").strip():
+                raise ValueError(
+                    "English World candidate lacks an auditable approved channel ID; research it again"
+                )
             if candidate["job_state"] not in {"CANDIDATES_READY", "CANDIDATE_SELECTED"}:
                 raise ValueError("English World candidate is not selectable in the current job state")
             conn.execute("UPDATE english_world_candidates SET selected = 0 WHERE job_id = ?", (candidate["job_id"],))
