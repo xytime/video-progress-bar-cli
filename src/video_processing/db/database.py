@@ -22,7 +22,7 @@
 | 3.50.0  | 2026-08-29 | Codex                               | 英语世界审核项绑定完整投稿包哈希、同源活动项防重，并为每次投稿保留不可覆盖证据账本。 |
 | 3.51.0  | 2026-08-29 | Codex                               | 英语世界二次确认制作请求新增原子领取、审核项绑定和失败收口状态，不接通用发布队列。 |
 | 3.52.0  | 2026-08-29 | Codex                               | 英语世界候选持久化授权频道 ID；旧的仅显示名候选在选择阶段 fail-closed。 |
-| 3.53.0  | 2026-08-30 | Codex                               | 英语世界新增具名操作员补发授权；仅可领取零尝试的自动延后项并保留两小时审计。 |
+| 3.53.0  | 2026-08-30 | Codex                               | 英语世界新增具名操作员补发授权；仅可领取零尝试的自动延后项，两小时未领取则回归公共窗口队列。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -5677,6 +5677,25 @@ class PipelineDB:
                    ORDER BY approved_at ASC, id ASC LIMIT 1"""
             ).fetchone()
             return dict(row) if row else None
+
+    def restore_expired_english_world_operator_recoveries(self) -> int:
+        """把未领取且已过期的具名补发授权退回 AUTO_POLICY 公共窗口队列。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET approval_source = 'AUTO_POLICY', authorization_expires_at = NULL,
+                       error_message = '具名操作员补发授权未在两小时内领取；已安全退回公共窗口队列。',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE state = 'SUBMISSION_APPROVED'
+                     AND approval_source = 'OPERATOR_RECOVERY'
+                     AND authorization_expires_at <= CURRENT_TIMESTAMP
+                     AND submission_started_at IS NULL
+                     AND NOT EXISTS (
+                         SELECT 1 FROM english_world_submission_attempts attempt
+                         WHERE attempt.review_id = english_world_review_items.id
+                     )""",
+            )
+            return cursor.rowcount
 
     def reopen_uncertain_english_world_submission(self, review_id: str) -> Dict[str, Any]:
         """人工明确确认未发布后，重开同一审核项的一次投稿机会。

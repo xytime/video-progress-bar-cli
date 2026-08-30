@@ -12,6 +12,7 @@
 | 1.1.4 | 2026-08-28 | Codex | 覆盖登录前失败项只允许一次登录后自动续投，未确认状态不受影响。 |
 | 1.2.0 | 2026-08-29 | Codex | 覆盖 Telegram 投稿授权两小时失效及 AUTO_POLICY 延后项窗口内再领取。 |
 | 1.3.0 | 2026-08-29 | Codex | 覆盖整包指纹、同源去重及多次投稿尝试的不可覆盖审计记录。 |
+| 1.4.0 | 2026-08-30 | Codex | 覆盖具名补发仅授权零尝试项，过期未领取授权自动回归公共窗口队列。 |
 """
 
 from __future__ import annotations
@@ -404,6 +405,31 @@ def test_operator_recovery_authorizes_only_unattempted_auto_policy_item(tmp_path
     assert db.claim_english_world_submission(item["id"])["state"] == "SUBMITTING"
     with pytest.raises(ValueError, match="unattempted AUTO_POLICY"):
         db.authorize_english_world_operator_recovery(item["id"], reason="重复授权必须拒绝")
+
+    deferred = db.create_english_world_review_item(
+        artifact_sha256="f" * 64,
+        **_stored_hashes("f"),
+        title="过期授权回归队列",
+        mp4_path=str(paths["video.mp4"]),
+        manifest_path=str(paths["manifest.json"]),
+        title_path=str(paths["title.txt"]),
+        copy_path=str(paths["copy.txt"]),
+        cover_path=str(paths["cover.jpg"]),
+        cover_provenance_path=str(paths["cover_provenance.json"]),
+    )
+    db.approve_english_world_submission(deferred["id"], authorization="AUTO_POLICY")
+    db.authorize_english_world_operator_recovery(deferred["id"], reason="测试未领取授权过期")
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE english_world_review_items SET authorization_expires_at = datetime('now', '-1 minute') WHERE id = ?",
+            (deferred["id"],),
+        )
+
+    assert db.restore_expired_english_world_operator_recoveries() == 1
+    restored = db.get_english_world_review_item(deferred["id"])
+    assert restored["approval_source"] == "AUTO_POLICY"
+    assert restored["authorization_expires_at"] is None
+    assert db.get_next_auto_approved_english_world_submission()["id"] == deferred["id"]
 
 
 def test_login_recovery_claims_only_one_recent_auto_policy_prelogin_failure(tmp_path):

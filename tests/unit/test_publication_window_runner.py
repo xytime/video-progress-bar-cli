@@ -10,6 +10,7 @@
 | 1.2.0 | 2026-08-04 | Codex | 覆盖运行版本和完成状态记录，避免 Git revision 与活动实例混淆 |
 | 1.3.0 | 2026-08-04 | Codex | 覆盖管线阶段回调写入巡航状态 |
 | 1.4.0 | 2026-08-29 | Codex | 覆盖公共窗口巡航只续投一条 AUTO_POLICY 英语世界延后项。 |
+| 1.5.0 | 2026-08-30 | Codex | 覆盖窗口调度前先回收过期未领取的具名补发授权。 |
 """
 
 import fcntl
@@ -102,6 +103,9 @@ def test_runner_records_pipeline_stage_context(monkeypatch, tmp_path: Path):
 
 def test_window_dispatches_one_deferred_english_world_auto_item(monkeypatch):
     class FakeDB:
+        def restore_expired_english_world_operator_recoveries(self):
+            return 0
+
         def get_next_auto_approved_english_world_submission(self):
             return {"id": "b" * 32}
 

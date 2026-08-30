@@ -12,6 +12,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 | 1.2.0 | 2026-08-04 | Codex | 记录巡航实例 PID、Git revision 与心跳，区分已推送代码和实际运行版本 |
 | 1.3.0 | 2026-08-04 | Codex | 接收管线阶段回调，状态文件记录当前视频、阶段与阶段开始时间 |
 | 1.4.0 | 2026-08-29 | Codex | 每分钟巡航在公共窗口内先续投一条英语世界 AUTO_POLICY 延后项，仍由专用投稿器原子领取。 |
+| 1.5.0 | 2026-08-30 | Codex | 公共窗口调度前回收未领取且过期的具名补发授权，避免批准项永久脱离队列。 |
 """
 
 from __future__ import annotations
@@ -180,7 +181,9 @@ def dispatch_one_deferred_english_world_submission() -> None:
         or not settings.is_public_publish_window()
     ):
         return
-    item = PipelineDB().get_next_auto_approved_english_world_submission()
+    db = PipelineDB()
+    db.restore_expired_english_world_operator_recoveries()
+    item = db.get_next_auto_approved_english_world_submission()
     if not item:
         return
     review_id = str(item["id"])
