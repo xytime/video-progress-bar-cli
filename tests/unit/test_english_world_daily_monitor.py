@@ -6,6 +6,7 @@
 # | 1.0.0 | 2026-08-27 | Codex | 覆盖回执成功、运行中、已失败不重跑和缺席窗口自愈。 |
 # | 1.1.0 | 2026-08-29 | Codex | 测试显式固定窗口后回执 mtime，不再依赖执行测试时是否已过 07:00。 |
 # | 1.2.0 | 2026-08-29 | Codex | 固化计划任务早晚触发分别映射 07:00 与 16:30，禁止单一固定 slot 掩盖下午缺席。 |
+# | 1.3.0 | 2026-08-30 | Codex | 覆盖生产失败通知与成片交付的独立监控状态。 |
 """
 
 from __future__ import annotations
@@ -41,9 +42,9 @@ def _paths(tmp_path: Path) -> monitor.MonitorPaths:
     )
 
 
-def _receipt(path: Path, changed_at: datetime) -> None:
+def _receipt(path: Path, changed_at: datetime, *, kind: str = "review") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"kind": "review", "status": "ACCEPTED"}), encoding="utf-8")
+    path.write_text(json.dumps({"kind": kind, "status": "ACCEPTED"}), encoding="utf-8")
     timestamp = changed_at.timestamp()
     os.utime(path, (timestamp, timestamp))
 
@@ -87,6 +88,38 @@ def test_scheduled_run_without_delivery_is_reported_but_not_rerun(tmp_path: Path
     assert result["recovery_attempted"] is False
 
 
+def test_accepted_failure_notice_is_reported_separately_from_missing_delivery(tmp_path: Path):
+    paths = _paths(tmp_path)
+    now = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
+    receipt = paths.log_dir / f"run_{now:%F}_070005.delivery.json"
+    _receipt(receipt, now.replace(hour=7, minute=5), kind="failure_notice")
+
+    exit_code, result = monitor.monitor_slot(paths, slot=time(7, 0), now=now, recover_missing=True)
+
+    assert exit_code == 1
+    assert result["state"] == "PRODUCTION_FAILED_REPORTED"
+    assert result["failure_receipt"] == str(receipt)
+    assert result["recovery_attempted"] is False
+
+
+def test_successful_delivery_takes_precedence_over_earlier_failure_notice(tmp_path: Path):
+    paths = _paths(tmp_path)
+    now = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
+    _receipt(
+        paths.log_dir / f"run_{now:%F}_070005.delivery.json",
+        now.replace(hour=7, minute=5),
+        kind="failure_notice",
+    )
+    delivered = paths.log_dir / "manual_recovery.delivery.json"
+    _receipt(delivered, now.replace(hour=8), kind="review")
+
+    exit_code, result = monitor.monitor_slot(paths, slot=time(7, 0), now=now, recover_missing=True)
+
+    assert exit_code == 0
+    assert result["state"] == "DELIVERED"
+    assert result["delivery_receipt"] == str(delivered)
+
+
 def test_missing_window_runs_one_recovery_and_requires_new_receipt(tmp_path: Path):
     paths = _paths(tmp_path)
     now = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
@@ -108,6 +141,32 @@ def test_missing_window_runs_one_recovery_and_requires_new_receipt(tmp_path: Pat
     assert exit_code == 0
     assert result["state"] == "RECOVERED_DELIVERED"
     assert result["recovery_attempted"] is True
+
+
+def test_missing_window_recovery_that_reports_production_failure_is_not_called_missing(tmp_path: Path):
+    paths = _paths(tmp_path)
+    now = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
+    paths.project_root.mkdir()
+    receipt = paths.log_dir / "recovered_failure.delivery.json"
+    recovery_timestamp = now.replace(hour=8).timestamp()
+    paths.daily_runner.write_text(
+        "import os\n"
+        "from pathlib import Path\n"
+        f"path = Path({str(receipt)!r})\n"
+        "path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "path.write_text('{\\\"kind\\\": \\\"failure_notice\\\", \\\"status\\\": \\\"ACCEPTED\\\"}')\n"
+        f"os.utime(path, ({recovery_timestamp!r}, {recovery_timestamp!r}))\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+
+    exit_code, result = monitor.monitor_slot(paths, slot=time(7, 0), now=now, recover_missing=True)
+
+    assert exit_code == 1
+    assert result["state"] == "RECOVERED_PRODUCTION_FAILED_REPORTED"
+    assert result["failure_receipt"] == str(receipt)
+    assert result["recovery_attempted"] is True
+    assert result["recovery_exit_code"] == 1
 
 
 def test_monitor_plist_runs_after_both_production_windows():

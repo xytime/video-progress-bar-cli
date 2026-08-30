@@ -17,6 +17,7 @@
 # | 2.11.0 | 2026-08-27 | Codex | 固化生产代理必须等待通知回执，不得以 PENDING 结束任务。 |
 # | 2.12.0 | 2026-08-28 | Codex | 固化受限生产代理只写交付请求，宿主负责标准封面、通知与上传。 |
 # | 2.13.0 | 2026-08-29 | Codex | 固化 Telegram 已选候选提示边界及宿主 manual-review-only 强制参数。 |
+# | 2.14.0 | 2026-08-30 | Codex | 固化日更候选在完整来源预检前可有界换题、锁定后禁止换题及末屏微笔记梯度。 |
 """
 
 from __future__ import annotations
@@ -161,6 +162,28 @@ def test_manual_production_prompt_binds_selected_candidate_and_forbids_platform_
     assert "禁止重新搜索、换题或制作第二条" in prompt
     assert "不包含视频号投稿授权" in prompt
     assert "manual-review-only" in prompt
+
+
+def test_daily_prompt_preflights_multiple_candidates_before_locking_one():
+    prompt = runner.PROMPT
+
+    assert "来源预检最多依次检查 5 个不同的 `youtube_id`" in prompt
+    assert "某个候选预检失败不算已经选题，可以继续下一个" in prompt
+    assert "至少一种视频格式可实际下载" in prompt
+    assert "通过接触表或对应片段核验画面适龄" in prompt
+    assert "只有全部来源预检通过后，才锁定第一个合格 `youtube_id`" in prompt
+    assert "锁定后不得切换到第二个候选" in prompt
+    assert "最终仍只允许制作一条成片" in prompt
+
+
+def test_daily_prompt_matches_terminal_screen_micro_note_tiers():
+    prompt = runner.PROMPT
+
+    assert "普通阅读屏至少 8 个微笔记" in prompt
+    assert "不超过 12 词为 0 条" in prompt
+    assert "13–24 词为 3 条" in prompt
+    assert "25–40 词为 5 条" in prompt
+    assert "41 词以上为 8 条" in prompt
 
 
 def test_manual_host_delivery_forces_notifier_review_only(monkeypatch, tmp_path: Path):

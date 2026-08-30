@@ -10,6 +10,7 @@
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-08-27 | Codex | 新增 07:00/16:30 窗口后的回执监测、缺席自愈和持久健康账本。 |
 # | 1.1.0 | 2026-08-29 | Codex | 监控器按 09:15/19:00 实际触发时刻分别映射 07:00/16:30，修复晚间仍检查早班。 |
+# | 1.2.0 | 2026-08-30 | Codex | 单独识别已获 Telegram 接受的生产失败回执，避免误报成未交付。 |
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from typing import Any
 DEFAULT_PROJECT_ROOT = Path("/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing")
 SCHEDULED_LOG_PATTERN = re.compile(r"^run_(?P<date>\d{4}-\d{2}-\d{2})_(?P<clock>\d{6})\.log$")
 ACCEPTED_DELIVERY_KINDS = {"review", "review_and_auto_submission"}
+ACCEPTED_FAILURE_KINDS = {"failure_notice"}
 
 
 @dataclass(frozen=True)
@@ -76,8 +78,14 @@ def _has_active_lock(lock_dir: Path) -> bool:
         return True
 
 
-def _accepted_delivery_receipt(log_dir: Path, day: datetime, slot: time) -> Path | None:
-    """返回当天该窗口之后最新的成片 Telegram API 接受回执。"""
+def _accepted_delivery_receipt(
+    log_dir: Path,
+    day: datetime,
+    slot: time,
+    *,
+    kinds: set[str] = ACCEPTED_DELIVERY_KINDS,
+) -> Path | None:
+    """返回当天该窗口之后、指定类型中最新的 Telegram API 接受回执。"""
     slot_start = datetime.combine(day.date(), slot, tzinfo=day.tzinfo)
     accepted: list[tuple[datetime, Path]] = []
     for receipt_path in log_dir.glob("*.delivery.json"):
@@ -91,7 +99,7 @@ def _accepted_delivery_receipt(log_dir: Path, day: datetime, slot: time) -> Path
             and changed_at >= slot_start
             and isinstance(payload, dict)
             and payload.get("status") == "ACCEPTED"
-            and payload.get("kind") in ACCEPTED_DELIVERY_KINDS
+            and payload.get("kind") in kinds
         ):
             accepted.append((changed_at, receipt_path))
     return max(accepted, default=(None, None), key=lambda item: item[0])[1]
@@ -165,6 +173,17 @@ def monitor_slot(
         _write_health(paths.log_dir, observed_at, slot, payload)
         return 0, payload
 
+    failure_receipt = _accepted_delivery_receipt(
+        paths.log_dir, observed_at, slot, kinds=ACCEPTED_FAILURE_KINDS,
+    )
+    if failure_receipt:
+        payload.update({
+            "state": "PRODUCTION_FAILED_REPORTED",
+            "failure_receipt": str(failure_receipt),
+        })
+        _write_health(paths.log_dir, observed_at, slot, payload)
+        return 1, payload
+
     if _has_active_lock(paths.lock_dir):
         payload.update({"state": "IN_PROGRESS", "lock_dir": str(paths.lock_dir)})
         _write_health(paths.log_dir, observed_at, slot, payload)
@@ -188,6 +207,16 @@ def monitor_slot(
         payload.update({"state": "RECOVERED_DELIVERED", "delivery_receipt": str(delivery_receipt)})
         _write_health(paths.log_dir, observed_at, slot, payload)
         return 0, payload
+    failure_receipt = _accepted_delivery_receipt(
+        paths.log_dir, observed_at, slot, kinds=ACCEPTED_FAILURE_KINDS,
+    )
+    if failure_receipt:
+        payload.update({
+            "state": "RECOVERED_PRODUCTION_FAILED_REPORTED",
+            "failure_receipt": str(failure_receipt),
+        })
+        _write_health(paths.log_dir, observed_at, slot, payload)
+        return 1, payload
     payload.update({"state": "MISSING_RUN_RECOVERY_FAILED"})
     _write_health(paths.log_dir, observed_at, slot, payload)
     return 1, payload
