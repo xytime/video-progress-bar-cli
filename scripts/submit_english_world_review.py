@@ -12,6 +12,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 | 1.2.0 | 2026-08-29 | Codex | 自动投稿遵守公共窗口；Telegram 单项批准仅在两小时 capability 内允许窗口外提交。 |
 | 1.3.0 | 2026-08-29 | Codex | 上传前复核完整投稿包哈希，并将每次尝试绑定独立 evidence_dir 持久化。 |
 | 1.4.0 | 2026-08-29 | Codex | 专用投稿器复用全局 pipeline.lock，避免与通用流水线并发操作微信浏览器会话。 |
+| 1.5.0 | 2026-08-30 | Codex | 窗口外延后返回独立状态码，禁止把“尚未上传”误报为执行成功。 |
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from video_processing.english_world.package_integrity import verify_package_hash
 logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _UPLOAD_TIMEOUT_SECONDS = 25 * 60
+EXIT_DEFERRED = 10
 
 
 def _post_status(text: str) -> None:
@@ -105,7 +107,7 @@ def submit(review_id: str) -> int:
     """领取并执行一次投稿；即使浏览器异常也保留可审计的终态回执。"""
     if settings.wechat_publishing_paused:
         logger.warning("English World submission deferred because WeChat publishing is paused")
-        return 0
+        return EXIT_DEFERRED
     db = PipelineDB()
     pending = db.get_english_world_review_item(review_id)
     if pending is None:
@@ -119,7 +121,7 @@ def submit(review_id: str) -> int:
                 review_id,
                 pending.get("approval_source"),
             )
-            return 0
+            return EXIT_DEFERRED
         logger.warning(
             "English World review %s uses its two-hour Telegram capability outside the public window",
             review_id,

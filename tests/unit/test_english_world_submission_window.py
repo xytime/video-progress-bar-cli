@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-29 | Codex | 固化自动授权窗口外延后，人工两小时授权可单项绕过。 |
+| 1.1.0 | 2026-08-30 | Codex | 固化延后必须返回独立状态码，避免退出码 0 伪装成投稿成功。 |
 """
 
 from datetime import datetime, timedelta, timezone
@@ -45,5 +46,5 @@ def test_auto_policy_submission_is_deferred_outside_public_window(monkeypatch):
     monkeypatch.setattr(submitter.settings, "wechat_publishing_paused", False)
     monkeypatch.setattr(type(submitter.settings), "is_public_publish_window", lambda _self: False)
 
-    assert submitter.submit("a" * 32) == 0
+    assert submitter.submit("a" * 32) == submitter.EXIT_DEFERRED
     assert calls == [("get", "a" * 32), ("expire", "a" * 32)]

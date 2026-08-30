@@ -18,6 +18,7 @@
 | 1.8.0 | 2026-08-27 | Codex | 兼容学习卡生产器的 `timeline.enriched.json` 命名，防止质检通过后在交付入口被拒绝。 |
 | 1.9.0 | 2026-08-29 | Codex | 审核项绑定完整投稿包指纹并按 source_youtube_id 阻断重复审核/投稿。 |
 | 1.10.0 | 2026-08-29 | Codex | Telegram 选题制作请求强制进入人工审核，不受全局自动投稿开关扩权。 |
+| 1.11.0 | 2026-08-30 | Codex | 窗口外批准队列明确回执“已排队、尚未上传”，不再误报自动投稿执行完毕。 |
 """
 
 from __future__ import annotations
@@ -290,6 +291,11 @@ def _auto_submit_new_review_item(review_item: dict) -> str:
     return f"submission_worker_exit={result.returncode}; state={item.get('state', 'UNKNOWN')}"
 
 
+def _auto_submission_is_deferred(result: str) -> bool:
+    """只有仍停在批准态的自动任务才算已排队；不得写成投稿执行完毕。"""
+    return "state=SUBMISSION_APPROVED" in result
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="发送英语世界短视频 Telegram 审核回执")
     parser.add_argument("--title", required=True, help="成片标题")
@@ -356,12 +362,19 @@ def main() -> int:
         mp4_result = _post_document(args.mp4, "英语世界短视频成片｜自动提交前审计材料")
         manifest_result = _post_document(args.manifest, "英语世界短视频 manifest｜自动提交前审计材料")
         auto_result = _auto_submit_new_review_item(review_item)
+        submission_deferred = _auto_submission_is_deferred(auto_result)
+        completion_heading = "自动投稿已排队" if submission_deferred else "自动投稿执行完毕"
+        completion_explanation = (
+            "当前不在公共发布窗口，平台上传尚未开始；任务已保留在批准队列，等待窗口调度。"
+            if submission_deferred
+            else "“已受理 / 审核中”不等同公开发布；任何未确认结果均已停止自动重传。"
+        )
         completion_result = _post_message(
-            "⏳ <b>英语世界短视频｜自动投稿执行完毕</b>\n"
+            f"⏳ <b>英语世界短视频｜{completion_heading}</b>\n"
             f"标题：{html.escape(str(review_item['title']))}\n"
             f"审核编号：<code>{review_id[:8]}</code>\n"
             f"执行结果：<code>{html.escape(auto_result)}</code>。\n"
-            "“已受理 / 审核中”不等同公开发布；任何未确认结果均已停止自动重传。"
+            f"{completion_explanation}"
         )
         _write_delivery_receipt(
             args.delivery_receipt,
@@ -375,6 +388,7 @@ def main() -> int:
                     manifest_result.message_id, completion_result.message_id,
                 ],
                 "submission_result": auto_result,
+                "submission_deferred": submission_deferred,
             },
         )
         return 0

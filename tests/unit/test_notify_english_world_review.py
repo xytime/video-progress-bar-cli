@@ -10,6 +10,7 @@
 | 1.2.0 | 2026-08-26 | Codex | 覆盖自动策略只提交本次新建质检包、旧审核项绝不被自动重传。 |
 | 1.3.0 | 2026-08-26 | Codex | 覆盖标准 enriched 时间线兼容和机器可读 Telegram 交付回执。 |
 | 1.4.0 | 2026-08-27 | Codex | 覆盖学习卡生产器的点分隔 enriched 时间线命名。 |
+| 1.5.0 | 2026-08-30 | Codex | 覆盖窗口外批准队列必须明确标记 deferred。 |
 """
 
 from __future__ import annotations
@@ -136,7 +137,14 @@ def test_auto_publish_submits_only_a_new_review_item(monkeypatch):
     result = notifier._auto_submit_new_review_item({"id": "new-review", "_created_now": True})
 
     assert result == "submission_worker_exit=0; state=UNDER_REVIEW"
+    assert not notifier._auto_submission_is_deferred(result)
     assert calls == [("approve", "new-review", "AUTO_POLICY"), ("read", "new-review")]
+
+
+def test_auto_publish_reports_approved_queue_as_deferred():
+    result = "submission_worker_exit=10; state=SUBMISSION_APPROVED"
+
+    assert notifier._auto_submission_is_deferred(result)
 
 
 def test_auto_publish_never_retries_an_existing_review_item(monkeypatch):
