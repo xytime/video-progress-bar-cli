@@ -19,6 +19,7 @@
 # | 2.13.0 | 2026-08-29 | Codex | 固化 Telegram 已选候选提示边界及宿主 manual-review-only 强制参数。 |
 # | 2.14.0 | 2026-08-30 | Codex | 固化日更候选在完整来源预检前可有界换题、锁定后禁止换题及末屏微笔记梯度。 |
 # | 2.15.0 | 2026-08-30 | Codex | 覆盖跨运行候选淘汰账本、旧失败兼容提取与补发显式排除。 |
+# | 2.16.0 | 2026-08-30 | Codex | 固化密集自动字幕生成逐词时间轴时的词尾单调不越界要求。 |
 """
 
 from __future__ import annotations
@@ -185,6 +186,14 @@ def test_daily_prompt_matches_terminal_screen_micro_note_tiers():
     assert "13–24 词为 3 条" in prompt
     assert "25–40 词为 5 条" in prompt
     assert "41 词以上为 8 条" in prompt
+
+
+def test_daily_prompt_requires_monotonic_word_boundaries_before_enrichment():
+    prompt = runner.PROMPT
+
+    assert "`word.end <= next_word.start`" in prompt
+    assert "不得用固定最短词长覆盖下一词起点" in prompt
+    assert "StudyCardContent.from_mapping" in prompt
 
 
 def test_recent_rejected_candidates_include_structured_and_legacy_failures(tmp_path: Path):
