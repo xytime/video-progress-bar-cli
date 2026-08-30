@@ -21,6 +21,7 @@
 | 1.7.8 | 2026-08-08 | Codex | 覆盖缺失投递产物时不再让新稿跨轮自动重试 |
 | 1.7.9 | 2026-08-08 | Codex | 覆盖跨巡航浏览器节流接口，测试替身明确返回可立即执行 |
 | 1.8.0 | 2026-08-30 | Codex | 覆盖 UI 同阶段失败持久累计与下轮打开浏览器前录屏熔断 |
+| 1.9.0 | 2026-08-30 | Codex | 覆盖抖音 NEW 显式关闭视频号门禁后只为无历史账本新片建队 |
 """
 
 import hashlib
@@ -603,3 +604,33 @@ def test_douyin_new_sync_queues_recent_wechat_published_gap_and_publishes(tmp_pa
     assert manager._publish_claimed_douyin_publication.call_count == 1
     claimed = manager._publish_claimed_douyin_publication.call_args.args[0]
     assert claimed["youtube_id"] == "wechat-only-new"
+
+
+def test_douyin_new_sync_can_queue_unconfirmed_wechat_when_policy_is_disabled(tmp_path: Path):
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.send_telegram_msg = MagicMock()
+    _add_published_video_assets(manager, "wechat-unconfirmed-new")
+    manager.db.record_wechat_submission_acceptance(
+        "wechat-unconfirmed-new",
+        evidence_path=None,
+        error_message="视频号已受理，等待公开确认",
+        final_title="测试标题",
+    )
+    manager._is_public_publish_window = MagicMock(return_value=True)
+    manager._publish_claimed_douyin_publication = MagicMock(return_value=True)
+
+    previous_enabled = settings.enable_douyin_browser_publishing
+    previous_policy = settings.douyin_require_wechat_public_confirmation
+    settings.enable_douyin_browser_publishing = True
+    settings.douyin_require_wechat_public_confirmation = False
+    try:
+        assert manager._run_douyin_new_sync()
+    finally:
+        settings.enable_douyin_browser_publishing = previous_enabled
+        settings.douyin_require_wechat_public_confirmation = previous_policy
+
+    publication = manager.db.get_douyin_publication("wechat-unconfirmed-new")
+    assert publication is not None
+    assert publication["source_kind"] == "NEW"
+    manager._publish_claimed_douyin_publication.assert_called_once()

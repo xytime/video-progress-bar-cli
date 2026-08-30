@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-07-28 | Codex | 覆盖三秒质检首屏结论和下载进度噪声清理 |
 | 1.2.0 | 2026-07-28 | Codex | 覆盖上帝视角总览：最近发布间隔和平台态势 |
 | 1.3.0 | 2026-08-30 | Codex | 覆盖抖音门禁 shadow 计数和未入队提示 |
+| 1.4.0 | 2026-08-30 | Codex | 覆盖门禁关闭后 shadow 不再误报为候选阻塞 |
 """
 import datetime as dt
 
@@ -127,6 +128,43 @@ def test_format_report_surfaces_douyin_upstream_shadow_without_calling_it_queue(
 
     assert "抖音有 2 条候选被视频号公开确认门禁阻塞" in report
     assert "shadow-a(SUBMITTED_BOUND)；shadow-b(SUBMITTED_UNBOUND)（门禁阻塞 2；未入队）" in report
+
+
+def test_format_report_does_not_call_shadow_blocked_when_policy_is_disabled():
+    snapshot = {
+        "hours": 3,
+        "status_counts": {},
+        "eligible_queue": 0,
+        "local_published": 0,
+        "active_count": 0,
+        "active": [],
+        "stale_active": [],
+        "last_local_published": None,
+        "recent_failures": [],
+        "platform_states": [],
+        "platform_overview": [],
+        "douyin_upstream_shadow": {
+            "count": 1,
+            "without_ledger_count": 1,
+            "independent_eligible_count": 1,
+            "policy_active": False,
+            "items": [{"youtube_id": "shadow-a", "wechat_state": "SUBMITTED_BOUND"}],
+        },
+    }
+    monitor = {"state": "健康", "approved": 1, "polled": 1, "summary": {}, "backoffs": 0}
+
+    report = periodic_qa_report.format_report(
+        snapshot,
+        monitor,
+        "状态文件存在",
+        dt.datetime(2026, 8, 30, 12, 0, tzinfo=periodic_qa_report.SHANGHAI),
+    )
+
+    assert "被视频号公开确认门禁阻塞" not in report
+    assert "抖音公开确认门禁已关闭；1 条当前窗口无账本候选可在下一轮独立入队" in report
+    assert "门禁已关闭；当前窗口可独立入队 1；其余 shadow 不在本轮资格 0" in report
+    assert "抖音可独立 1" in report
+    assert "抖音门禁 1" not in report
 
 
 def test_quality_report_snapshot_is_read_only_and_includes_active_rows(tmp_path):

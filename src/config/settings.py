@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.56.0 | 2026-08-30 | Codex | 显式声明抖音 NEW 是否必须等待视频号公开确认；默认 true 保持生产顺序不变。 |
 | 3.55.0 | 2026-08-30 | Codex | 新增抖音同阶段 UI 连续失败录屏熔断阈值；跨巡航累计后在打开浏览器前停止。 |
 | 3.16.3 | 2026-08-24 | Codex | 平台发布审查字幕改存为独立证据快照；最短保留 31 天且不受原始视频 3 天归档 TTL 影响。 |
 | 3.16.2 | 2026-08-24 | Codex | AGY 改为三天影子评估；生产默认恢复 Gemini→DeepSeek→Google，正式切换必须人工确认。 |
@@ -336,6 +337,8 @@ class Settings(BaseSettings):
     douyin_browser_action_interval_sec: int = 180
     # 同一 UI 阶段跨巡航连续失败达到此次数后，停止打开浏览器并请求人工录制操作流程。
     douyin_ui_failure_recording_threshold: int = 2
+    # 默认要求视频号先确认公开；关闭后仅允许无抖音账本的新片独立入队，不复活历史取消/不确定任务。
+    douyin_require_wechat_public_confirmation: bool = True
     # 每轮最多回查多少条 UNDER_REVIEW，避免一次性连续打开作品管理页。
     douyin_review_max_per_run: int = 5
     # 每轮最多同步多少条“微信已发布但抖音未建账”的新片漏项。

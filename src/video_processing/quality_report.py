@@ -10,6 +10,7 @@
 | 1.0.0 | 2026-07-28 | Codex | 抽出三小时质检只读快照和三秒可读 Telegram HTML 渲染 |
 | 1.1.0 | 2026-07-28 | Codex | 增加总览行：最近发布间隔与各平台成功/待核验/失败态势 |
 | 1.2.0 | 2026-08-30 | Codex | 增加抖音上游门禁 shadow 计数和样本，区分候选饥饿与上传器故障 |
+| 1.3.0 | 2026-08-30 | Codex | 抖音 shadow 展示显式门禁开关，关闭时不再把候选误报为被阻塞 |
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from config.settings import settings
 from video_processing.db.database import PipelineDB
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -154,9 +156,14 @@ def _blocker(snapshot: dict[str, Any], monitor: dict[str, Any], manual_review_it
         return f"频道监控{monitor['state']}：{monitor.get('detail') or '检查 monitor_health.json 的异常频道和时间戳。'}"
     if statuses.get("LOGIN_REQUIRED", 0):
         return f"微信登录阻塞：{statuses['LOGIN_REQUIRED']} 条任务等待会话恢复。"
-    shadow_count = int((snapshot.get("douyin_upstream_shadow") or {}).get("count") or 0)
-    if shadow_count:
+    douyin_shadow = snapshot.get("douyin_upstream_shadow") or {}
+    shadow_count = int(douyin_shadow.get("count") or 0)
+    shadow_eligible = int(douyin_shadow.get("independent_eligible_count") or 0)
+    shadow_policy_active = bool(douyin_shadow.get("policy_active", True))
+    if shadow_count and shadow_policy_active:
         return f"抖音有 {shadow_count} 条候选被视频号公开确认门禁阻塞；当前仅 shadow 观测，不会自动入队。"
+    if shadow_eligible and not shadow_policy_active:
+        return f"抖音公开确认门禁已关闭；{shadow_eligible} 条当前窗口无账本候选可在下一轮独立入队。"
     if snapshot["eligible_queue"] == 0 and not snapshot["active"]:
         return "可自动发布队列为空：检查频道监控、评分和候选供给。"
     if snapshot["recent_failures"]:
@@ -252,6 +259,8 @@ def format_report(
     queued_total = _platform_total(snapshot["platform_states"], queued_states)
     douyin_shadow = snapshot.get("douyin_upstream_shadow") or {}
     shadow_count = int(douyin_shadow.get("count") or 0)
+    shadow_eligible = int(douyin_shadow.get("independent_eligible_count") or 0)
+    shadow_policy_active = bool(douyin_shadow.get("policy_active", True))
     shadow_samples = [
         f"{row.get('youtube_id')}({row.get('wechat_state') or row.get('local_state') or 'UNKNOWN'})"
         for row in (douyin_shadow.get("items") or [])
@@ -269,11 +278,16 @@ def format_report(
         f"{row['youtube_id']}: {_short_reason(row.get('error_msg'))}"
         for row in snapshot["recent_failures"][:3]
     ]
+    douyin_signal = (
+        f"抖音门禁 {shadow_count}"
+        if shadow_policy_active
+        else f"抖音可独立 {shadow_eligible}"
+    )
 
     key_line = (
         f"队列 {snapshot['eligible_queue']} | 在途 {snapshot.get('active_count', len(snapshot['active']))} | "
         f"新失败 {len(snapshot['recent_failures'])} | 登录阻塞 {statuses.get('LOGIN_REQUIRED', 0)} | "
-        f"监控异常 {monitor_bad} | 遗留 {manual_total} | 抖音门禁 {shadow_count}"
+        f"监控异常 {monitor_bad} | 遗留 {manual_total} | {douyin_signal}"
     )
     publish_line = (
         f"本地 PUBLISHED {snapshot['local_published']}（近 {snapshot['hours']}h；不等同平台侧可见确认）"
@@ -299,7 +313,17 @@ def format_report(
             f"<b>新失败</b>：{html.escape(_join_or_none(failure_lines))}",
             f"<b>遗留</b>：{html.escape(_join_or_none(manual_review_items, limit=4))}",
             f"<b>待投递</b>：{html.escape(_join_or_none(queued_platform_items))}（合计 {queued_total}）",
-            f"<b>抖音 shadow</b>：{html.escape(_join_or_none(shadow_samples))}（门禁阻塞 {shadow_count}；未入队）",
+            (
+                f"<b>抖音 shadow</b>：{html.escape(_join_or_none(shadow_samples))}"
+                + (
+                    f"（门禁阻塞 {shadow_count}；未入队）"
+                    if shadow_policy_active
+                    else (
+                        f"（门禁已关闭；当前窗口可独立入队 {shadow_eligible}；"
+                        f"其余 shadow 不在本轮资格 {max(0, shadow_count - shadow_eligible)}）"
+                    )
+                )
+            ),
             f"<b>会话</b>：{html.escape(session)}",
         ]
     )
@@ -317,5 +341,9 @@ def collect(
     snapshot = (db or PipelineDB()).get_quality_report_snapshot(
         hours=WINDOW_HOURS,
         active_stale_minutes=ACTIVE_STALE_MINUTES,
+        douyin_new_lookback_hours=settings.douyin_new_sync_lookback_hours,
     )
+    shadow = snapshot.get("douyin_upstream_shadow")
+    if isinstance(shadow, dict):
+        shadow["policy_active"] = settings.douyin_require_wechat_public_confirmation
     return format_report(snapshot, _monitor_summary(current, monitor_path, backoff_path), _session_summary(state_path), current)

@@ -12,6 +12,7 @@
 | 1.6.0 | 2026-08-08 | Codex | 覆盖 NEW 每日领取上限与跨进程浏览器动作节流账本 |
 | 1.7.0 | 2026-08-30 | Codex | 覆盖视频号未确认造成的抖音 shadow 候选且保证不创建任务 |
 | 1.8.0 | 2026-08-30 | Codex | 覆盖同阶段 UI 连续失败跨进程累计、录屏阈值和证据化清除审计 |
+| 1.9.0 | 2026-08-30 | Codex | 覆盖抖音 NEW 门禁开关双模式且解耦模式不复活任何历史账本 |
 """
 
 from pathlib import Path
@@ -239,12 +240,27 @@ def test_douyin_upstream_shadow_is_read_only_and_excludes_other_cancellations(tm
     )
 
     snapshot = db.get_douyin_upstream_shadow_snapshot(limit=5)
+    gated_candidates = db.get_unqueued_douyin_new_videos(
+        lookback_hours=24,
+        limit=5,
+        require_wechat_public_confirmation=True,
+    )
+    independent_candidates = db.get_unqueued_douyin_new_videos(
+        lookback_hours=24,
+        limit=5,
+        require_wechat_public_confirmation=False,
+    )
 
     assert snapshot["count"] == 2
+    assert snapshot["without_ledger_count"] == 1
+    assert snapshot["independent_eligible_count"] == 1
     assert {row["youtube_id"] for row in snapshot["items"]} == {
         "blocked-without-ledger", "blocked-canceled"
     }
     assert db.get_douyin_publication("blocked-without-ledger") is None
+    assert db.get_douyin_publication_by_id(upstream["id"])["state"] == "CANCELED"
+    assert gated_candidates == []
+    assert [row["youtube_id"] for row in independent_candidates] == ["blocked-without-ledger"]
     assert db.get_douyin_publication_by_id(upstream["id"])["state"] == "CANCELED"
 
 

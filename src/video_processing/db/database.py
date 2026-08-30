@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.55.0  | 2026-08-30 | Codex                               | 抖音 NEW 候选和视频号下游取消显式消费公开确认策略；关闭时仍不复活任何既有账本。 |
 | 3.54.0  | 2026-08-30 | Codex                               | 持久化平台同阶段 UI 连续失败；达到阈值后跨巡航熔断，校准证据清除时保留审计。 |
 | 3.37.0  | 2026-08-23 | Codex                               | 保存源视频 UTC 精确发布时间，支持发布前原创声明 24 小时判定 |
 | 3.38.0  | 2026-08-24 | Codex                               | 新增 Telegram 投递回执账本；仅 API message_id 证明单次通知获受理。 |
@@ -4011,6 +4012,7 @@ class PipelineDB:
         hours: int = 3,
         active_stale_minutes: int = 90,
         item_limit: int = 5,
+        douyin_new_lookback_hours: int = 24,
     ) -> Dict[str, Any]:
         """返回定时质检所需的只读快照，不改变任务或平台账本状态。"""
         safe_hours = max(1, int(hours))
@@ -4181,7 +4183,10 @@ class PipelineDB:
                 """
             ).fetchall()
 
-        douyin_upstream_shadow = self.get_douyin_upstream_shadow_snapshot(limit=safe_item_limit)
+        douyin_upstream_shadow = self.get_douyin_upstream_shadow_snapshot(
+            limit=safe_item_limit,
+            lookback_hours=douyin_new_lookback_hours,
+        )
 
         return {
             "hours": safe_hours,
@@ -6619,9 +6624,15 @@ class PipelineDB:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def get_douyin_upstream_shadow_snapshot(self, limit: int = 5) -> Dict[str, Any]:
+    def get_douyin_upstream_shadow_snapshot(
+        self,
+        limit: int = 5,
+        *,
+        lookback_hours: int = 24,
+    ) -> Dict[str, Any]:
         """只读量化被视频号确认门禁挡住的抖音候选，不创建或恢复任何账本。"""
         safe_limit = max(1, min(int(limit), 50))
+        safe_lookback_hours = max(1, int(lookback_hours))
         with self.get_connection() as conn:
             rows = conn.execute(
                 '''
@@ -6662,18 +6673,34 @@ class PipelineDB:
                           )
                       )
                 )
-                SELECT blocked.*, COUNT(*) OVER () AS total_count
+                SELECT blocked.*,
+                       COUNT(*) OVER () AS total_count,
+                       SUM(CASE WHEN douyin_state IS NULL THEN 1 ELSE 0 END) OVER () AS without_ledger_count,
+                       SUM(CASE
+                           WHEN douyin_state IS NULL AND updated_at >= datetime('now', ?) THEN 1
+                           ELSE 0
+                       END) OVER () AS independent_eligible_count
                 FROM blocked
                 ORDER BY updated_at DESC, youtube_id ASC, slice_index ASC
                 LIMIT ?
                 ''',
-                (safe_limit,),
+                (f"-{safe_lookback_hours} hours", safe_limit),
             ).fetchall()
         items = [dict(row) for row in rows]
         total = int(items[0].get("total_count") or 0) if items else 0
+        without_ledger = int(items[0].get("without_ledger_count") or 0) if items else 0
+        independent_eligible = int(items[0].get("independent_eligible_count") or 0) if items else 0
         for item in items:
             item.pop("total_count", None)
-        return {"count": total, "items": items}
+            item.pop("without_ledger_count", None)
+            item.pop("independent_eligible_count", None)
+        return {
+            "count": total,
+            "without_ledger_count": without_ledger,
+            "independent_eligible_count": independent_eligible,
+            "lookback_hours": safe_lookback_hours,
+            "items": items,
+        }
 
     def get_unqueued_douyin_history_videos(self, limit: int = 20) -> List[Dict[str, Any]]:
         """返回微信已发布、尚未登记抖音账本且未被拉黑的历史视频。"""
@@ -6696,19 +6723,44 @@ class PipelineDB:
             ).fetchall()
             return [dict(row) for row in rows]
 
-    def get_unqueued_douyin_new_videos(self, *, lookback_hours: int = 24, limit: int = 10) -> List[Dict[str, Any]]:
-        """返回最近微信已发布、但尚未登记抖音 NEW 账本的新片漏同步项。"""
+    def get_unqueued_douyin_new_videos(
+        self,
+        *,
+        lookback_hours: int = 24,
+        limit: int = 10,
+        require_wechat_public_confirmation: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """返回最近可独立投递且从未登记抖音账本的新片。
+
+        默认只接受视频号已确认公开的 ``PUBLISHED``。显式关闭上游依赖时，可接受已经完成
+        成片但视频号延后、审核中或结果不确定的状态；``NOT EXISTS`` 针对全部抖音历史账本，
+        因此不会复活 CANCELED / UNCERTAIN / UNDER_REVIEW 等既有尝试。
+        """
         if lookback_hours < 1:
             raise ValueError("lookback_hours must be at least 1")
         if limit < 1:
             raise ValueError("limit must be at least 1")
+        allowed_statuses = (
+            ("PUBLISHED",)
+            if require_wechat_public_confirmation
+            else (
+                "PUBLISHED",
+                "WECHAT_DEFERRED",
+                "UNDER_REVIEW",
+                "SUBMITTED_UNBOUND",
+                "SUBMITTED_BOUND",
+                "UNCERTAIN",
+            )
+        )
+        status_placeholders = ", ".join("?" for _ in allowed_statuses)
         with self.get_connection() as conn:
             rows = conn.execute(
-                '''
+                f'''
                 SELECT pv.*
                 FROM processed_videos pv
-                WHERE pv.status = 'PUBLISHED'
+                WHERE pv.status IN ({status_placeholders})
                   AND pv.updated_at >= datetime('now', ?)
+                  AND COALESCE(pv.publication_review_required, 0) = 0
                   AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
                   AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
                   AND NOT EXISTS (
@@ -6717,7 +6769,7 @@ class PipelineDB:
                 ORDER BY pv.updated_at ASC, pv.id ASC
                 LIMIT ?
                 ''',
-                (f"-{int(lookback_hours)} hours", int(limit)),
+                (*allowed_statuses, f"-{int(lookback_hours)} hours", int(limit)),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -7096,8 +7148,9 @@ class PipelineDB:
         *,
         reason: str,
         slice_index: int = 0,
+        cancel_douyin: bool = True,
     ) -> Dict[str, int]:
-        """取消尚未提交的下游投递，防止视频号仅受理时跨平台抢跑。"""
+        """按显式策略取消尚未提交的下游投递；永不触碰已开始或待核验任务。"""
         clean_reason = (reason or "视频号尚未确认公开发布，停止下游自动投递。").strip()
         with self.get_connection() as conn:
             video = conn.execute(
@@ -7106,8 +7159,11 @@ class PipelineDB:
             ).fetchone()
             if not video:
                 raise ValueError(f"Video not found: {youtube_id}#{slice_index}")
-            counts: Dict[str, int] = {}
-            for platform, table in (("kuaishou", "kuaishou_publications"), ("douyin", "douyin_publications")):
+            counts: Dict[str, int] = {"kuaishou": 0, "douyin": 0}
+            targets = [("kuaishou", "kuaishou_publications")]
+            if cancel_douyin:
+                targets.append(("douyin", "douyin_publications"))
+            for platform, table in targets:
                 cursor = conn.execute(
                     f"UPDATE {table} SET state = 'CANCELED', last_error_message = ?, "
                     "updated_at = CURRENT_TIMESTAMP WHERE video_id = ? AND state = 'QUEUED'",

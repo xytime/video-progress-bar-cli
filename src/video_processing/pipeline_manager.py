@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.48.30 | 2026-08-30 | Codex                               | 抖音 NEW 显式消费视频号公开确认策略；默认保持门禁，关闭时不取消或复活既有抖音账本。 |
 | 3.48.29 | 2026-08-30 | Codex                               | 抖音同阶段 UI 失败跨巡航累计；达到阈值后在开浏览器前熔断并请求录制手工流程。 |
 | 3.48.24 | 2026-08-24 | Codex                               | 字幕证据快照须可解析出非空正文才允许清理热字幕，避免空或损坏 ASS 使平台补发再次失去审查依据 |
 | 3.48.23 | 2026-08-24 | Codex                               | 发布后将 ASS 字幕保存为独立审查证据；跨平台回查优先读取该快照，证据不再随 3 天原视频归档或热目录 GC 丢失 |
@@ -661,10 +662,17 @@ class PipelineManager:
                 slice_index=slice_index,
             )
             self.db.update_video_status(yid, "UNCERTAIN", error_msg=reason, slice_index=slice_index)
+            cancel_douyin = settings.douyin_require_wechat_public_confirmation
+            downstream_reason = (
+                "视频号提交结果不可确认；已取消下游未提交队列并禁止自动重传。"
+                if cancel_douyin
+                else "视频号提交结果不可确认；抖音独立投递策略已启用，仅取消快手未提交队列。"
+            )
             canceled = self.db.cancel_queued_downstream_publications_for_unconfirmed_wechat(
                 yid,
-                reason="视频号提交结果不可确认；已取消下游未提交队列并禁止自动重传。",
+                reason=downstream_reason,
                 slice_index=slice_index,
+                cancel_douyin=cancel_douyin,
             )
             if any(canceled.values()):
                 logger.warning("[%s] 已取消下游未提交队列：%s", prefix, canceled)
@@ -702,10 +710,17 @@ class PipelineManager:
             platform_post_id=platform_post_id,
             platform_url=platform_url,
         )
+        cancel_douyin = settings.douyin_require_wechat_public_confirmation
+        downstream_reason = (
+            "视频号仅确认提交、尚未确认公开发布；已取消下游未提交队列。"
+            if cancel_douyin
+            else "视频号仅确认提交、尚未确认公开发布；抖音独立投递策略已启用，仅取消快手未提交队列。"
+        )
         canceled = self.db.cancel_queued_downstream_publications_for_unconfirmed_wechat(
             yid,
-            reason="视频号仅确认提交、尚未确认公开发布；已取消下游未提交队列。",
+            reason=downstream_reason,
             slice_index=slice_index,
+            cancel_douyin=cancel_douyin,
         )
         if any(canceled.values()):
             logger.warning("[%s] 已取消下游未提交队列：%s", prefix, canceled)
@@ -2394,7 +2409,7 @@ class PipelineManager:
         return self._publish_claimed_douyin_publication(claimed)
 
     def _queue_missing_douyin_new_publications(self) -> int:
-        """补齐最近微信已发布但抖音 NEW 账本缺失的新片，防止同步入口漏建任务。"""
+        """按显式视频号确认策略补齐从未登记抖音账本的新片。"""
         if not settings.enable_douyin_browser_publishing:
             return 0
         max_per_run = max(1, int(settings.douyin_new_sync_max_per_run or 1))
@@ -2403,6 +2418,7 @@ class PipelineManager:
         for video in self.db.get_unqueued_douyin_new_videos(
             lookback_hours=lookback_hours,
             limit=max_per_run,
+            require_wechat_public_confirmation=settings.douyin_require_wechat_public_confirmation,
         ):
             yid = video["youtube_id"]
             slice_index = int(video.get("slice_index") or 0)

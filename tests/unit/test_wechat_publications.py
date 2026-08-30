@@ -10,6 +10,7 @@
 | 1.5.0 | 2026-08-20 | Codex | 覆盖旧视频号提交尝试迁移到通用发布主体 |
 | 1.7.0 | 2026-08-21 | Codex | 覆盖未绑定提交在平台矩阵中作为不可重发待核验状态展示 |
 | 1.8.0 | 2026-08-26 | Codex | 覆盖受理账本、尝试与任务状态同事务落盘及历史分叉修复。 |
+| 1.9.0 | 2026-08-30 | Codex | 覆盖视频号未确认时按显式策略保留尚未提交的抖音独立队列 |
 | 1.6.0 | 2026-08-20 | Codex | 覆盖旧库缺少 Highlight 表时的发布主体迁移顺序 |
 | 1.3.0 | 2026-08-20 | Codex | 覆盖作品管理页明确驳回和未找到的终结账本状态 |
 """
@@ -323,3 +324,26 @@ def test_unconfirmed_wechat_cancels_only_queued_downstream_publications(tmp_path
     assert db.get_douyin_publication("wechat-upstream")["id"] == queued["id"]
     assert db.get_douyin_publication("wechat-upstream")["state"] == "CANCELED"
     assert db.get_kuaishou_publication("wechat-upstream")["state"] == "UNDER_REVIEW"
+
+
+def test_unconfirmed_wechat_keeps_douyin_queue_when_independent_policy_is_enabled(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "wechat-independent")
+    douyin = db.create_douyin_publication(
+        "wechat-independent", "f" * 64, "/tmp/douyin.mp4", source_kind="NEW"
+    )
+    kuaishou = db.create_kuaishou_publication(
+        "wechat-independent", "e" * 64, "/tmp/kuaishou.mp4", source_kind="NEW"
+    )
+
+    canceled = db.cancel_queued_downstream_publications_for_unconfirmed_wechat(
+        "wechat-independent",
+        reason="视频号尚未确认公开发布；抖音独立投递策略已启用。",
+        cancel_douyin=False,
+    )
+
+    assert canceled == {"kuaishou": 1, "douyin": 0}
+    assert db.get_douyin_publication("wechat-independent")["id"] == douyin["id"]
+    assert db.get_douyin_publication("wechat-independent")["state"] == "QUEUED"
+    assert db.get_kuaishou_publication("wechat-independent")["id"] == kuaishou["id"]
+    assert db.get_kuaishou_publication("wechat-independent")["state"] == "CANCELED"
