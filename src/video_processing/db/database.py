@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.54.0  | 2026-08-30 | Codex                               | 持久化平台同阶段 UI 连续失败；达到阈值后跨巡航熔断，校准证据清除时保留审计。 |
 | 3.37.0  | 2026-08-23 | Codex                               | 保存源视频 UTC 精确发布时间，支持发布前原创声明 24 小时判定 |
 | 3.38.0  | 2026-08-24 | Codex                               | 新增 Telegram 投递回执账本；仅 API message_id 证明单次通知获受理。 |
 | 3.39.0  | 2026-08-24 | Codex                               | 英语世界未确认投稿仅可经明确人工确认重开同一审核项，并保留原证据目录。 |
@@ -1516,6 +1517,23 @@ class PipelineDB:
                     last_action_at_epoch REAL NOT NULL,
                     last_reason TEXT NOT NULL DEFAULT '',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            # UI 漂移必须跨巡航累计；同阶段连续失败达到阈值后，不再反复打开平台后台。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS platform_ui_failure_streaks (
+                    platform TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    first_failed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_failed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_reason TEXT NOT NULL DEFAULT '',
+                    evidence_path TEXT DEFAULT NULL,
+                    recording_requested_at TIMESTAMP DEFAULT NULL,
+                    cleared_at TIMESTAMP DEFAULT NULL,
+                    clear_evidence_path TEXT DEFAULT NULL,
+                    PRIMARY KEY(platform, stage)
                 )
             ''')
             
@@ -6861,6 +6879,138 @@ class PipelineDB:
             )
             conn.commit()
         return 0.0
+
+    def record_platform_ui_failure(
+        self,
+        platform: str,
+        stage: str,
+        reason: str,
+        *,
+        evidence_path: Optional[str] = None,
+        recording_threshold: int = 2,
+    ) -> Dict[str, Any]:
+        """原子累计同平台同阶段 UI 失败，并在达到阈值时记录录屏请求时间。"""
+        platform_key = str(platform or "").strip().lower()
+        stage_key = str(stage or "").strip()
+        reason_text = str(reason or "").strip()
+        if not platform_key or not stage_key or not reason_text:
+            raise ValueError("platform、stage 和 reason 均不能为空")
+        threshold = max(1, int(recording_threshold or 1))
+        evidence = str(evidence_path).strip() if evidence_path else None
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                '''
+                SELECT consecutive_failures, active
+                FROM platform_ui_failure_streaks
+                WHERE platform = ? AND stage = ?
+                ''',
+                (platform_key, stage_key),
+            ).fetchone()
+            if current and int(current["active"] or 0) == 1:
+                next_count = int(current["consecutive_failures"] or 0) + 1
+                conn.execute(
+                    '''
+                    UPDATE platform_ui_failure_streaks
+                    SET consecutive_failures = ?,
+                        last_failed_at = CURRENT_TIMESTAMP,
+                        last_reason = ?,
+                        evidence_path = COALESCE(?, evidence_path),
+                        recording_requested_at = CASE
+                            WHEN ? >= ? THEN COALESCE(recording_requested_at, CURRENT_TIMESTAMP)
+                            ELSE recording_requested_at
+                        END,
+                        cleared_at = NULL
+                    WHERE platform = ? AND stage = ?
+                    ''',
+                    (
+                        next_count,
+                        reason_text,
+                        evidence,
+                        next_count,
+                        threshold,
+                        platform_key,
+                        stage_key,
+                    ),
+                )
+            elif current:
+                conn.execute(
+                    '''
+                    UPDATE platform_ui_failure_streaks
+                    SET consecutive_failures = 1,
+                        active = 1,
+                        first_failed_at = CURRENT_TIMESTAMP,
+                        last_failed_at = CURRENT_TIMESTAMP,
+                        last_reason = ?,
+                        evidence_path = ?,
+                        recording_requested_at = CASE WHEN 1 >= ? THEN CURRENT_TIMESTAMP ELSE NULL END,
+                        cleared_at = NULL
+                    WHERE platform = ? AND stage = ?
+                    ''',
+                    (reason_text, evidence, threshold, platform_key, stage_key),
+                )
+            else:
+                conn.execute(
+                    '''
+                    INSERT INTO platform_ui_failure_streaks (
+                        platform, stage, consecutive_failures, active, last_reason,
+                        evidence_path, recording_requested_at
+                    ) VALUES (?, ?, 1, 1, ?, ?, CASE WHEN 1 >= ? THEN CURRENT_TIMESTAMP ELSE NULL END)
+                    ''',
+                    (platform_key, stage_key, reason_text, evidence, threshold),
+                )
+            row = conn.execute(
+                '''
+                SELECT * FROM platform_ui_failure_streaks
+                WHERE platform = ? AND stage = ?
+                ''',
+                (platform_key, stage_key),
+            ).fetchone()
+            conn.commit()
+            return dict(row)
+
+    def get_platform_ui_failure_streaks(self, platform: str) -> List[Dict[str, Any]]:
+        """返回一个平台全部 UI 失败阶段，供调度前熔断与运维状态查询。"""
+        platform_key = str(platform or "").strip().lower()
+        if not platform_key:
+            raise ValueError("platform 不能为空")
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                '''
+                SELECT * FROM platform_ui_failure_streaks
+                WHERE platform = ?
+                ORDER BY active DESC, consecutive_failures DESC, last_failed_at DESC, stage ASC
+                ''',
+                (platform_key,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def clear_platform_ui_failure_streak(
+        self,
+        platform: str,
+        stage: str,
+        evidence_reference: str,
+    ) -> bool:
+        """用明确成功或校准证据清除一个阶段；保留旧失败和清除审计，不删除记录。"""
+        platform_key = str(platform or "").strip().lower()
+        stage_key = str(stage or "").strip()
+        evidence = str(evidence_reference or "").strip()
+        if not platform_key or not stage_key or not evidence:
+            raise ValueError("platform、stage 和 evidence_reference 均不能为空")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                '''
+                UPDATE platform_ui_failure_streaks
+                SET consecutive_failures = 0,
+                    active = 0,
+                    cleared_at = CURRENT_TIMESTAMP,
+                    clear_evidence_path = ?
+                WHERE platform = ? AND stage = ?
+                ''',
+                (evidence, platform_key, stage_key),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def claim_next_douyin_history_publication(self, daily_limit: int) -> Optional[Dict[str, Any]]:
         """兼容入口：原子领取一条抖音历史迁移任务并遵守当天上限。"""

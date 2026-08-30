@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.48.29 | 2026-08-30 | Codex                               | 抖音同阶段 UI 失败跨巡航累计；达到阈值后在开浏览器前熔断并请求录制手工流程。 |
 | 3.48.24 | 2026-08-24 | Codex                               | 字幕证据快照须可解析出非空正文才允许清理热字幕，避免空或损坏 ASS 使平台补发再次失去审查依据 |
 | 3.48.23 | 2026-08-24 | Codex                               | 发布后将 ASS 字幕保存为独立审查证据；跨平台回查优先读取该快照，证据不再随 3 天原视频归档或热目录 GC 丢失 |
 | 3.48.19 | 2026-08-22 | Codex                               | 视频号仅获受理时向 Telegram 附送可播放审核副本；超限时生成轻量审核版，不改变投稿状态或重传边界 |
@@ -225,6 +226,8 @@ _PROXY_KEYS = frozenset({
 _WECHAT_UPLOAD_TIMEOUT_SEC = 25 * 60
 _KUAISHOU_UPLOAD_TIMEOUT_SEC = 25 * 60
 _DOUYIN_UPLOAD_TIMEOUT_SEC = 25 * 60
+_DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT = "publish_pre_submit"
+_DOUYIN_UI_STAGE_MANAGEMENT_VERIFY = "management_verify"
 _AUTO_CAPTION_TIMEOUT_SEC = 45 * 60
 _SOURCE_SUBTITLE_MIN_CHARS = 20
 # Telegram Bot 的媒体直传需要为协议波动留出余量。该上限仅作用于手机审核副本，
@@ -935,10 +938,89 @@ class PipelineManager:
         self._last_douyin_browser_action_at = time.monotonic()
 
     def _reset_douyin_run_guard(self) -> None:
-        """新一轮调度开始时重置抖音本轮熔断状态。"""
+        """重置本轮状态，并在打开浏览器前恢复跨巡航 UI 熔断。"""
         self._douyin_platform_halted = False
         self._douyin_halt_reason = ""
         self._last_douyin_browser_action_at = None
+        threshold = max(1, int(settings.douyin_ui_failure_recording_threshold or 1))
+        try:
+            streaks = self.db.get_platform_ui_failure_streaks("douyin")
+        except Exception as exc:
+            self._douyin_platform_halted = True
+            self._douyin_halt_reason = f"无法读取抖音 UI 失败熔断账本：{exc}"
+            logger.exception("[DouyinUiGuard] 读取持久熔断账本失败，禁止打开创作者中心。")
+            return
+        if not isinstance(streaks, list):
+            return
+        blocked = [
+            row for row in streaks
+            if isinstance(row, dict)
+            and int(row.get("active") or 0) == 1
+            and int(row.get("consecutive_failures") or 0) >= threshold
+        ]
+        if not blocked:
+            return
+        row = blocked[0]
+        stage = str(row.get("stage") or "unknown")
+        count = int(row.get("consecutive_failures") or 0)
+        self._douyin_platform_halted = True
+        self._douyin_halt_reason = (
+            f"抖音 UI 阶段 {stage} 已连续失败 {count} 次（阈值 {threshold}）；"
+            "已在打开浏览器前停止。请录制一次完整手工操作流程，完成 selector 校准后再清除熔断。"
+        )
+        logger.error("[DouyinUiGuard] %s", self._douyin_halt_reason)
+
+    def _latest_douyin_ui_evidence(self, stage: str) -> Optional[str]:
+        """返回与失败阶段匹配的最近控件快照；没有证据时不伪造路径。"""
+        calibration_dir = self._OUT_DIR / "douyin_calibration"
+        candidates = [path for path in calibration_dir.glob("*_controls.json") if path.is_file()]
+        if stage == _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY:
+            candidates = [path for path in candidates if path.name.startswith("douyin_management_")]
+        else:
+            candidates = [path for path in candidates if not path.name.startswith("douyin_management_")]
+        if not candidates:
+            return None
+        return str(max(candidates, key=lambda path: path.stat().st_mtime))
+
+    def _record_douyin_ui_failure(
+        self,
+        stage: str,
+        reason: str,
+    ) -> str:
+        """累计 UI 漂移；达到阈值后把录屏交接写入本轮熔断原因。"""
+        threshold = max(1, int(settings.douyin_ui_failure_recording_threshold or 1))
+        try:
+            streak = self.db.record_platform_ui_failure(
+                "douyin",
+                stage,
+                reason,
+                evidence_path=self._latest_douyin_ui_evidence(stage),
+                recording_threshold=threshold,
+            )
+        except Exception:
+            logger.exception("[DouyinUiGuard] 记录 UI 失败失败；本轮仍保持熔断。")
+            return reason
+        if not isinstance(streak, dict):
+            return reason
+        count = int(streak.get("consecutive_failures") or 0)
+        if count < threshold:
+            return reason
+        return (
+            f"{reason} 同一 UI 阶段 {stage} 已跨巡航连续失败 {count} 次；"
+            "后续任务将在打开浏览器前停止。请录制一次从进入创作者中心到完成该阶段的手工流程，"
+            "用于按真实页面重新校准 selector。"
+        )
+
+    def _clear_douyin_ui_failure_on_success(
+        self,
+        stage: str,
+        evidence_reference: str,
+    ) -> None:
+        """明确完成对应 UI 阶段时结束未达阈值的连续失败序列。"""
+        try:
+            self.db.clear_platform_ui_failure_streak("douyin", stage, evidence_reference)
+        except Exception:
+            logger.exception("[DouyinUiGuard] 成功后清除 UI 失败序列失败；下轮将保守读取旧账本。")
 
     # ── 评分 ──────────────────────────────────────────────────────────────────
 
@@ -1998,12 +2080,17 @@ class PipelineManager:
             return False
         except subprocess.CalledProcessError as exc:
             stderr = exc.stderr if isinstance(exc.stderr, str) else (exc.stderr or b"").decode()
+            ui_failure_stage: Optional[str] = None
             if exc.returncode == 2:
                 state = "RETRYABLE_FAILED"
                 reason = "抖音登录态失效，尚未开始公开发布；请重新登录后重试同一视频。"
             elif exc.returncode == 6:
                 reason = "抖音已接受发布提交，当前按审核中处理；等待作品管理回查校准后确认最终发布。"
                 logger.info("[%s] %s", yid, reason)
+                self._clear_douyin_ui_failure_on_success(
+                    _DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT,
+                    f"runtime:publication:{publication_id}:accepted",
+                )
                 self.db.update_douyin_publication_state(publication_id, "UNDER_REVIEW", error_message=reason)
                 self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\nYouTube ID: {yid}")
                 return True
@@ -2013,6 +2100,7 @@ class PipelineManager:
                     "抖音发布前元信息、封面或自主声明闸门未能确认；本次未提交，"
                     "已停止自动重试，修复后请人工重新入队。"
                 )
+                ui_failure_stage = _DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT
             elif exc.returncode == 7:
                 state = "UNCERTAIN"
                 reason = "抖音已点击最终发布但未能在作品管理确认可见；请先人工核对，勿切换视频。"
@@ -2022,14 +2110,21 @@ class PipelineManager:
                     "抖音上传器尚未完成页面校准；本次没有触发发布，"
                     "已停止自动重试，修复后请人工重新入队。"
                 )
+                ui_failure_stage = _DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT
             else:
                 state = "RETRYABLE_FAILED"
                 reason = f"抖音上传器失败（exit {exc.returncode}）：{stderr[:500]}"
+            if ui_failure_stage:
+                reason = self._record_douyin_ui_failure(ui_failure_stage, reason)
             logger.error("[%s] %s", yid, reason)
             self.db.update_douyin_publication_state(publication_id, state, error_message=reason)
             self._halt_douyin_platform(yid, reason, publication=publication, state=state)
             return False
 
+        self._clear_douyin_ui_failure_on_success(
+            _DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT,
+            f"runtime:publication:{publication_id}:accepted",
+        )
         self.db.update_douyin_publication_state(
             publication_id,
             "UNDER_REVIEW",
@@ -2227,6 +2322,10 @@ class PipelineManager:
             except subprocess.CalledProcessError as exc:
                 if exc.returncode == 6:
                     logger.info("[%s] 抖音作品仍在审核中", yid)
+                    self._clear_douyin_ui_failure_on_success(
+                        _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+                        f"runtime:publication:{publication_id}:under_review",
+                    )
                     continue
                 elif exc.returncode == 2:
                     reason = "抖音登录态失效，保留审核中状态；停止本轮后续自动回查。"
@@ -2234,6 +2333,10 @@ class PipelineManager:
                     reason = (
                         "抖音作品已提交但当前机器尚未完成作品管理回查校准；"
                         "转为 UNCERTAIN 等待人工核验，避免每轮重复打开创作者中心。"
+                    )
+                    reason = self._record_douyin_ui_failure(
+                        _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+                        reason,
                     )
                     self.db.update_douyin_publication_state(
                         publication_id,
@@ -2265,6 +2368,10 @@ class PipelineManager:
                 logger.debug("Douyin review verifier stdout:\n%s", result.stdout)
             if result.stderr:
                 logger.debug("Douyin review verifier stderr:\n%s", result.stderr)
+            self._clear_douyin_ui_failure_on_success(
+                _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+                f"runtime:publication:{publication_id}:published",
+            )
             self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
             self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Douyin\nYouTube ID: {yid}")
             reviewed += 1

@@ -20,6 +20,7 @@
 | 1.7.7 | 2026-08-07 | Codex | 覆盖抖音发布前闸门与页面校准失败停止自动重试 |
 | 1.7.8 | 2026-08-08 | Codex | 覆盖缺失投递产物时不再让新稿跨轮自动重试 |
 | 1.7.9 | 2026-08-08 | Codex | 覆盖跨巡航浏览器节流接口，测试替身明确返回可立即执行 |
+| 1.8.0 | 2026-08-30 | Codex | 覆盖 UI 同阶段失败持久累计与下轮打开浏览器前录屏熔断 |
 """
 
 import hashlib
@@ -148,6 +149,7 @@ def test_uncalibrated_douyin_publish_cancels_automatic_retry(tmp_path: Path, mon
     assert args == (18, "CANCELED")
     assert "尚未完成页面校准" in kwargs["error_message"]
     assert "停止自动重试" in kwargs["error_message"]
+    manager.db.record_platform_ui_failure.assert_called_once()
 
 
 def test_pre_submit_unconfirmed_cancels_not_uncertain(tmp_path: Path, monkeypatch):
@@ -161,6 +163,29 @@ def test_pre_submit_unconfirmed_cancels_not_uncertain(tmp_path: Path, monkeypatc
     assert args == (183, "CANCELED")
     assert "本次未提交" in kwargs["error_message"]
     assert "停止自动重试" in kwargs["error_message"]
+    manager.db.record_platform_ui_failure.assert_called_once()
+
+
+def test_persistent_douyin_ui_guard_halts_before_browser_action(tmp_path: Path, monkeypatch):
+    manager = _manager_with_assets(tmp_path)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": "publish_pre_submit",
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+    manager._run_tracked = MagicMock()
+
+    manager._reset_douyin_run_guard()
+    assert manager._douyin_platform_halted
+    assert "打开浏览器前停止" in manager._douyin_halt_reason
+    assert "录制一次完整手工操作流程" in manager._douyin_halt_reason
+    assert not manager._publish_claimed_douyin_publication(
+        {"id": 185, "youtube_id": "video-id", "slice_index": 0}
+    )
+    manager._run_tracked.assert_not_called()
+    manager.db.reserve_douyin_browser_action_slot.assert_not_called()
 
 
 def test_post_submit_unconfirmed_is_uncertain(tmp_path: Path, monkeypatch):

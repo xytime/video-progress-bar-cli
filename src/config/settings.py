@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.55.0 | 2026-08-30 | Codex | 新增抖音同阶段 UI 连续失败录屏熔断阈值；跨巡航累计后在打开浏览器前停止。 |
 | 3.16.3 | 2026-08-24 | Codex | 平台发布审查字幕改存为独立证据快照；最短保留 31 天且不受原始视频 3 天归档 TTL 影响。 |
 | 3.16.2 | 2026-08-24 | Codex | AGY 改为三天影子评估；生产默认恢复 Gemini→DeepSeek→Google，正式切换必须人工确认。 |
 | 3.46.0 | 2026-08-24 | Codex | 新增标题供应商顺序与 AGY 参数；默认 Gemini 且封面双标题消费关闭。 |
@@ -333,6 +334,8 @@ class Settings(BaseSettings):
     douyin_history_daily_limit: int = 5
     # 任意两次抖音创作者中心浏览器动作之间的最小间隔；覆盖审核回查、新片同步与历史补录。
     douyin_browser_action_interval_sec: int = 180
+    # 同一 UI 阶段跨巡航连续失败达到此次数后，停止打开浏览器并请求人工录制操作流程。
+    douyin_ui_failure_recording_threshold: int = 2
     # 每轮最多回查多少条 UNDER_REVIEW，避免一次性连续打开作品管理页。
     douyin_review_max_per_run: int = 5
     # 每轮最多同步多少条“微信已发布但抖音未建账”的新片漏项。

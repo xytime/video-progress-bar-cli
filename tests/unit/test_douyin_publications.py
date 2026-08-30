@@ -11,6 +11,7 @@
 | 1.5.0 | 2026-08-08 | Codex | 覆盖缺失抖音投递产物的旧失败在恢复前安全停用 |
 | 1.6.0 | 2026-08-08 | Codex | 覆盖 NEW 每日领取上限与跨进程浏览器动作节流账本 |
 | 1.7.0 | 2026-08-30 | Codex | 覆盖视频号未确认造成的抖音 shadow 候选且保证不创建任务 |
+| 1.8.0 | 2026-08-30 | Codex | 覆盖同阶段 UI 连续失败跨进程累计、录屏阈值和证据化清除审计 |
 """
 
 from pathlib import Path
@@ -253,3 +254,40 @@ def test_douyin_browser_action_slot_persists_the_interval(tmp_path: Path):
     assert db.reserve_douyin_browser_action_slot(120, "first", now_epoch=1_000) == 0
     assert db.reserve_douyin_browser_action_slot(120, "second", now_epoch=1_050) == 70
     assert db.reserve_douyin_browser_action_slot(120, "third", now_epoch=1_120) == 0
+
+
+def test_douyin_ui_failure_streak_persists_and_clears_with_evidence(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+
+    first = db.record_platform_ui_failure(
+        "douyin", "publish_pre_submit", "未定位自主声明", recording_threshold=2
+    )
+    second = db.record_platform_ui_failure(
+        "douyin",
+        "publish_pre_submit",
+        "未定位自主声明",
+        evidence_path="/tmp/douyin_self_declaration_failed_controls.json",
+        recording_threshold=2,
+    )
+
+    assert first["consecutive_failures"] == 1
+    assert first["recording_requested_at"] is None
+    assert second["consecutive_failures"] == 2
+    assert second["active"] == 1
+    assert second["recording_requested_at"] is not None
+    assert second["evidence_path"].endswith("douyin_self_declaration_failed_controls.json")
+
+    assert db.clear_platform_ui_failure_streak(
+        "douyin", "publish_pre_submit", "/tmp/douyin_ready_to_submit_controls.json"
+    )
+    cleared = db.get_platform_ui_failure_streaks("douyin")[0]
+    assert cleared["active"] == 0
+    assert cleared["consecutive_failures"] == 0
+    assert cleared["cleared_at"] is not None
+    assert cleared["clear_evidence_path"].endswith("douyin_ready_to_submit_controls.json")
+
+    restarted = db.record_platform_ui_failure(
+        "douyin", "publish_pre_submit", "页面再次漂移", recording_threshold=2
+    )
+    assert restarted["active"] == 1
+    assert restarted["consecutive_failures"] == 1
