@@ -28,6 +28,7 @@
 # | 2.18.0 | 2026-08-30 | Codex | 将唯一候选锁定推迟到完整来源预检之后，允许预检失败时有界换题，并同步末屏微笔记梯度。 |
 # | 2.19.0 | 2026-08-30 | Codex | 跨运行读取结构化及旧式候选淘汰记录，并支持补发时显式排除来源 ID。 |
 # | 2.20.0 | 2026-08-30 | Codex | 明确逐词时间轴必须满足词尾不越过下一词起点，防止密集自动字幕触发渲染前倒退。 |
+# | 2.21.0 | 2026-08-30 | Codex | 宿主先验收 Cookie、媒体 URL 与 CDN 字节通路；认证失败安全刷新一次，通路失败尝试配置的 Clash 下载节点。 |
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TextIO
+from typing import Any, TextIO
 
 
 DEFAULT_PROJECT_ROOT = Path("/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing")
@@ -54,6 +55,7 @@ LEGACY_REJECTED_ID_PATTERN = re.compile(
     r"(?:候选|youtube_id\s*[=:：]?)[^A-Za-z0-9_-]{0,12}([A-Za-z0-9_-]{11})",
     re.IGNORECASE,
 )
+_PROXY_ENV_KEYS = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"})
 
 PROMPT = """执行今日“英语世界短视频”无人值守制作任务。工作目录是 Video-precessing。
 
@@ -74,9 +76,11 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 
 先搜索当天或近期未使用的候选，再检查标题、简介、英文字幕/转写和必要的画面。只能选择适合儿童与家庭学习者的自然、科学、教育、健康、文化、日常生活或正向人文题材。排除政治、战争、暴力、犯罪、成人话题、强时政评论，以及包含真实伤亡、恐慌、疏散或令人不适灾情画面的素材；不确定即放弃该候选并继续预检下一候选。自然科学与天气科普（包括风暴、闪电、龙卷风的成因）并非关键词禁区，必须结合实际画面和叙事判断。
 
-候选筛选必须分成“来源预检”和“锁定制作”两个阶段。来源预检最多依次检查 5 个不同的 `youtube_id`；某个候选预检失败不算已经选题，可以继续下一个。每个候选必须依次确认：频道 ID 与未使用状态；英文字幕/转写可取得；至少一种视频格式可实际下载；通过接触表或对应片段核验画面适龄；存在一段严格大于 30 秒且不超过 300 秒、以完整自然句结束、没有靠静音/循环/长音乐空档凑时长的连续自然语音。HTTP 403、字幕不可用、画面不适龄或找不到合格片段都只淘汰当前候选；记录 `youtube_id` 和原因后立即预检下一候选。来源预检期间禁止开始时间轴、翻译、词汇富化或正式渲染。
+候选筛选必须分成“来源预检”和“锁定制作”两个阶段。来源预检最多依次检查 5 个不同的 `youtube_id`；某个候选预检失败不算已经选题，可以继续下一个。每个候选必须依次确认：频道 ID 与未使用状态；英文字幕/转写可取得；至少一种视频格式可实际下载；针对拟使用的连续片段生成接触表并确认画面适龄；存在一段严格大于 30 秒且不超过 300 秒、以完整自然句结束、没有靠静音/循环/长音乐空档凑时长的连续自然语音。字幕不可用、画面不适龄或找不到合格片段才淘汰当前候选；记录 `youtube_id` 和原因后立即预检下一候选。来源预检期间禁止开始时间轴、翻译、词汇富化或正式渲染。
 
-只有全部来源预检通过后，才锁定第一个合格 `youtube_id` 并进入制作；本次运行最终仍只允许制作一条成片。锁定后不得切换到第二个候选、继续搜索或重复制作。按 make-english-world-short 技能和 production-contract 完整制作：自然完整句收尾；逐词红线；普通阅读屏至少 8 个微笔记；最后一屏按可见英文词数采用现有梯度（不超过 12 词为 0 条、13–24 词为 3 条、25–40 词为 5 条、41 词以上为 8 条）；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。由 YouTube json3 等密集自动字幕生成逐词时间轴时，必须先按绝对起点排序并保证每个 `word.end <= next_word.start`；不得用固定最短词长覆盖下一词起点，词汇富化前必须先通过 `StudyCardContent.from_mapping` 的单调时间轴校验。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。若锁定候选在时间轴、渲染或成片质检阶段失败，必须写入准确失败请求并立即结束；不得为了补词卡或优化文案而换题。
+HTTP 403 不是自动“换题”信号：先对同一候选仅重试一次，并且只在出现 YouTube 认证/风控征兆时执行一次 Cookie 刷新；若仍是 403，立即用另一个未使用候选做同样的轻量格式访问预检以做对照。两个独立候选都出现 403、DNS、TLS 或超时，属于来源通路降级而不是两个候选同时不合格：停止候选淘汰，写入“来源通路降级”的失败请求，**不要追加 `--rejected-youtube-id`**，也不要靠继续换题掩盖网络故障。只有对照候选可下载时，才将最初 403 归为单候选访问失败并排除它。
+
+只有完整来源预检已经覆盖“拟用片段的画面与自然语音”后，才锁定第一个合格 `youtube_id` 并进入制作；本次运行最终仍只允许制作一条成片。若尚未开始时间轴、翻译、词汇富化或正式渲染，却发现拟用片段含不适画面、语音不连续或不满足时长，说明来源预检出现假阳性：立即撤销该候选的暂定资格、记录 `youtube_id` 和原因，并继续预检剩余候选；这不属于换题重做。只有开始时间轴、翻译、词汇富化或正式渲染后，才构成不可切换的制作承诺。按 make-english-world-short 技能和 production-contract 完整制作：自然完整句收尾；逐词红线；普通阅读屏至少 8 个微笔记；最后一屏按可见英文词数采用现有梯度（不超过 12 词为 0 条、13–24 词为 3 条、25–40 词为 5 条、41 词以上为 8 条）；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。由 YouTube json3 等密集自动字幕生成逐词时间轴时，必须先按绝对起点排序并保证每个 `word.end <= next_word.start`；不得用固定最短词长覆盖下一词起点，词汇富化前必须先通过 `StudyCardContent.from_mapping` 的单调时间轴校验。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。若制作承诺后在时间轴、渲染或成片质检阶段失败，必须写入准确失败请求并立即结束；不得为了补词卡或优化文案而换题。
 
 质检通过后，必须运行以下命令原子写入交付请求：
 PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>'
@@ -229,6 +233,96 @@ def _is_transient_transport_failure(run_log: Path, start_offset: int = 0) -> boo
         "network is unreachable",
     )
     return any(marker in text for marker in markers)
+
+
+def _load_youtube_runtime_dependencies(paths: RuntimePaths) -> tuple[Any, Any, Any]:
+    """延迟加载配置与来源工具，兼容 LaunchAgent 直接执行 scripts/ 入口。"""
+    source_root = str(paths.project_root / "src")
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+    from config.settings import settings
+    from video_processing.utils.youtube_access import probe_youtube_media_access
+    from video_processing.utils.youtube_auth import refresh_youtube_cookie_file
+
+    return settings, probe_youtube_media_access, refresh_youtube_cookie_file
+
+
+def _build_coordinator_environment(paths: RuntimePaths, settings: Any) -> dict[str, str]:
+    """让 LaunchAgent、Cookie 刷新与受限协调器共享同一可验收来源通路。"""
+    environment = {key: value for key, value in os.environ.items() if key not in _PROXY_ENV_KEYS}
+    environment.update(settings.get_active_proxies())
+    required_paths = [
+        str(paths.project_root / ".venv" / "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+    ]
+    existing = environment.get("PATH", "").split(":") if environment.get("PATH") else []
+    environment["PATH"] = ":".join(dict.fromkeys(required_paths + existing))
+    return environment
+
+
+def _preflight_youtube_source_access(
+    paths: RuntimePaths,
+    stream: TextIO,
+) -> tuple[Any, Any, dict[str, str], bool]:
+    """宿主先验证真实媒体字节通路，失败时走一次授权或指定下载节点恢复。"""
+    settings, probe_access, refresh_cookies = _load_youtube_runtime_dependencies(paths)
+    environment = _build_coordinator_environment(paths, settings)
+
+    def probe(current_environment: dict[str, str]) -> Any:
+        return probe_access(
+            ytdlp_path=settings.ytdlp_path,
+            cookie_args=settings.get_yt_cookie_args(),
+            probe_url=settings.youtube_auth_probe_url,
+            environment=current_environment,
+        )
+
+    result = probe(environment)
+    _log(stream, f"YouTube source access preflight: code={result.code}")
+    if result.ok:
+        return result, settings, environment, False
+
+    if result.code == "AUTH_REQUIRED" and settings.enable_youtube_cookie_auto_refresh:
+        cookie_file = Path(settings.youtube_cookies_file or paths.project_root / "output/youtube_cookies.txt")
+        refreshed = refresh_cookies(
+            cookie_file,
+            browser=settings.youtube_cookie_browser,
+            probe_url=settings.youtube_auth_probe_url,
+            ytdlp_path=settings.ytdlp_path,
+            environment=environment,
+        )
+        _log(stream, f"YouTube Cookie recovery: code={refreshed.code}")
+        if refreshed.ok:
+            result = probe(environment)
+            _log(stream, f"YouTube source access after Cookie recovery: code={result.code}")
+            if result.ok:
+                return result, settings, environment, False
+
+    if result.code in {"TRANSPORT_UNAVAILABLE", "MEDIA_ACCESS_REJECTED"} and settings.clash_download_node:
+        _log(stream, "YouTube source access failed; trying configured Clash download node once")
+        with settings.clash_switch_node():
+            fallback_environment = _build_coordinator_environment(paths, settings)
+            fallback = probe(fallback_environment)
+        _log(stream, f"YouTube source access after Clash fallback: code={fallback.code}")
+        if fallback.ok:
+            return fallback, settings, fallback_environment, True
+
+    return result, settings, environment, False
+
+
+def _write_source_access_failure_request(request_path: Path, result: Any) -> None:
+    """原子落盘通路故障，不把它写成“无合格候选”或候选黑名单。"""
+    reason = (
+        f"YouTube 来源通路不可用（{result.code}）：{result.detail}。"
+        "已完成 Cookie/媒体 URL/CDN 字节级预检与受控恢复；未开始候选筛选，"
+        "因此不是候选质量或换题问题，未触发任何投稿。"
+    )
+    payload = {"kind": "failure", "title": "今日英语世界短视频", "failure": reason}
+    temporary_path = request_path.with_suffix(request_path.suffix + ".tmp")
+    temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary_path.replace(request_path)
 
 
 def _accepted_review_receipt_snapshots(project_root: Path) -> dict[Path, int]:
@@ -459,6 +553,7 @@ def _run_coordinator(
     stream: TextIO,
     *,
     prompt: str | None = None,
+    environment: dict[str, str] | None = None,
 ) -> int:
     """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
     command = [
@@ -467,13 +562,13 @@ def _run_coordinator(
         "-c", 'approval_policy="never"', "--output-last-message", str(response_path),
         prompt or PROMPT.replace("{delivery_request_path}", str(delivery_request_path)),
     ]
-    environment = dict(os.environ)
-    environment["CODEX_HOME"] = str(paths.codex_home)
-    environment["ENGLISH_WORLD_DELIVERY_REQUEST_PATH"] = str(delivery_request_path)
+    child_environment = dict(environment) if environment is not None else dict(os.environ)
+    child_environment["CODEX_HOME"] = str(paths.codex_home)
+    child_environment["ENGLISH_WORLD_DELIVERY_REQUEST_PATH"] = str(delivery_request_path)
     process = subprocess.Popen(
         command,
         cwd=paths.project_root,
-        env=environment,
+        env=child_environment,
         stdout=stream,
         stderr=subprocess.STDOUT,
         text=True,
@@ -502,6 +597,7 @@ def run(
     job_id: str | None = None,
     wait_for_lock_seconds: float = 0,
     excluded_youtube_ids: tuple[str, ...] = (),
+    source_access_preflight: bool = True,
 ) -> int:
     paths.log_dir.mkdir(parents=True, exist_ok=True)
     paths.lock_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -557,6 +653,23 @@ def run(
                 _notify_failure(paths, f"生产协调器未启动：Codex CLI 不可执行。运行日志：{run_log}", stream)
                 return 1
             _log(stream, "starting daily English World production coordinator")
+            source_access_settings = None
+            source_access_environment = None
+            use_clash_download_node = False
+            if source_access_preflight:
+                source_access, source_access_settings, source_access_environment, use_clash_download_node = (
+                    _preflight_youtube_source_access(paths, stream)
+                )
+                if not source_access.ok:
+                    _write_source_access_failure_request(delivery_request_path, source_access)
+                    delivery_exit, failure_reported = _deliver_request_from_host(
+                        paths, delivery_request_path, delivery_receipt_path, stream,
+                        manual_review_only=bool(production_job),
+                    )
+                    phase = "REPORTED_SOURCE_ACCESS_FAILURE" if failure_reported else "SOURCE_ACCESS_BLOCKED"
+                    _write_status(status_path, phase, delivery_exit or 1, 0, run_log, response_path)
+                    fail_requested_job(f"YouTube 来源通路不可用：{source_access.code}")
+                    return delivery_exit or 1
             exit_code = 0
             accepted_receipts: list[Path] = []
             delivery_failure_reported = False
@@ -575,9 +688,26 @@ def run(
                             ))),
                         )
                     )
-                    exit_code = _run_coordinator(
-                        paths, response_path, delivery_request_path, stream, prompt=prompt,
-                    )
+                    if use_clash_download_node:
+                        _log(stream, "running coordinator through verified Clash download-node fallback")
+                        with source_access_settings.clash_switch_node():
+                            exit_code = _run_coordinator(
+                                paths,
+                                response_path,
+                                delivery_request_path,
+                                stream,
+                                prompt=prompt,
+                                environment=_build_coordinator_environment(paths, source_access_settings),
+                            )
+                    else:
+                        exit_code = _run_coordinator(
+                            paths,
+                            response_path,
+                            delivery_request_path,
+                            stream,
+                            prompt=prompt,
+                            environment=source_access_environment,
+                        )
                 except subprocess.TimeoutExpired:
                     exit_code = 124
                     accepted_receipts = _new_accepted_review_receipts(paths.project_root, receipt_snapshot)
@@ -723,6 +853,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--retry-delay-seconds", type=float, default=15)
     parser.add_argument(
+        "--skip-source-access-preflight",
+        action="store_true",
+        help="仅用于离线单元测试；生产 LaunchAgent 必须执行来源通路预检。",
+    )
+    parser.add_argument(
         "--coordinator-timeout-seconds",
         type=float,
         default=45 * 60,
@@ -762,6 +897,7 @@ def main(argv: list[str] | None = None) -> int:
         job_id=args.job_id,
         wait_for_lock_seconds=args.wait_for_lock_seconds,
         excluded_youtube_ids=excluded_youtube_ids,
+        source_access_preflight=not args.skip_source_access_preflight,
     )
 
 

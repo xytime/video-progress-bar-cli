@@ -20,6 +20,7 @@
 # | 2.14.0 | 2026-08-30 | Codex | 固化日更候选在完整来源预检前可有界换题、锁定后禁止换题及末屏微笔记梯度。 |
 # | 2.15.0 | 2026-08-30 | Codex | 覆盖跨运行候选淘汰账本、旧失败兼容提取与补发显式排除。 |
 # | 2.16.0 | 2026-08-30 | Codex | 固化密集自动字幕生成逐词时间轴时的词尾单调不越界要求。 |
+# | 2.17.0 | 2026-08-30 | Codex | 覆盖宿主媒体通路预检、Cookie/Clash 恢复分支及预检假阳性候选回退语义。 |
 """
 
 from __future__ import annotations
@@ -30,9 +31,14 @@ import plistlib
 import json
 import os
 import time
+from contextlib import contextmanager
+from io import StringIO
 from pathlib import Path
 
+import pytest
+
 from scripts import run_english_world_daily as runner
+from video_processing.utils.youtube_access import YoutubeAccessResult
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -82,7 +88,7 @@ def _runner_arguments(
         "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
         "--notifier-script", str(notifier), "--log-dir", str(log_dir),
         "--lock-dir", str(tmp_path / "lock"), "--max-attempts", "3",
-        "--retry-delay-seconds", "0",
+        "--retry-delay-seconds", "0", "--skip-source-access-preflight",
     ]
     return arguments, calls, log_dir
 
@@ -146,6 +152,151 @@ def test_host_executes_delivery_after_agent_writes_request(tmp_path: Path):
     assert lines[1].startswith("notifier:")
 
 
+def test_source_access_failure_is_reported_without_launching_candidate_coordinator(monkeypatch, tmp_path: Path):
+    codex = tmp_path / "codex"
+    notifier = tmp_path / "notifier.py"
+    _write_executable(codex, "#!/usr/bin/env bash\nexit 0\n")
+    notifier.write_text("# fake notifier\n", encoding="utf-8")
+    paths = runner.RuntimePaths(
+        project_root=tmp_path,
+        codex_home=tmp_path,
+        codex_bin=codex,
+        python_bin=Path(sys.executable),
+        notifier_script=notifier,
+        log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock",
+        coordinator_timeout_seconds=60,
+    )
+    blocked = YoutubeAccessResult(False, "MEDIA_ACCESS_REJECTED", "HTTP error 403")
+    monkeypatch.setattr(
+        runner,
+        "_preflight_youtube_source_access",
+        lambda *_args: (blocked, object(), {"PATH": "/bin"}, False),
+    )
+    delivered = []
+    monkeypatch.setattr(
+        runner,
+        "_deliver_request_from_host",
+        lambda _paths, request, *_args, **_kwargs: (delivered.append(json.loads(request.read_text())) or (1, True)),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_coordinator",
+        lambda *_args, **_kwargs: pytest.fail("source access failure must not launch candidate coordinator"),
+    )
+
+    exit_code = runner.run(
+        paths,
+        max_attempts=1,
+        retry_delay_seconds=0,
+        source_access_preflight=True,
+    )
+
+    assert exit_code == 1
+    assert delivered and delivered[0]["kind"] == "failure"
+    assert "不是候选质量或换题问题" in delivered[0]["failure"]
+    status = (paths.log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=REPORTED_SOURCE_ACCESS_FAILURE" in status
+
+
+def test_source_access_auth_failure_refreshes_cookie_once_then_reprobes(monkeypatch, tmp_path: Path):
+    paths = runner.RuntimePaths(
+        project_root=tmp_path,
+        codex_home=tmp_path,
+        codex_bin=tmp_path / "codex",
+        python_bin=Path(sys.executable),
+        notifier_script=tmp_path / "notifier.py",
+        log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock",
+        coordinator_timeout_seconds=60,
+    )
+
+    class Settings:
+        ytdlp_path = "yt-dlp"
+        youtube_auth_probe_url = "https://example.test/probe"
+        enable_youtube_cookie_auto_refresh = True
+        youtube_cookies_file = ""
+        youtube_cookie_browser = "chrome"
+        clash_download_node = None
+
+        def get_active_proxies(self):
+            return {"HTTPS_PROXY": "http://127.0.0.1:7890"}
+
+        def get_yt_cookie_args(self):
+            return ["--cookies", "cookies.txt"]
+
+    attempts = iter([
+        YoutubeAccessResult(False, "AUTH_REQUIRED", "bot challenge"),
+        YoutubeAccessResult(True, "READY"),
+    ])
+    refresh_calls = []
+    monkeypatch.setattr(
+        runner,
+        "_load_youtube_runtime_dependencies",
+        lambda _paths: (
+            Settings(),
+            lambda **_kwargs: next(attempts),
+            lambda *args, **kwargs: refresh_calls.append((args, kwargs)) or type("Result", (), {"ok": True, "code": "REFRESHED"})(),
+        ),
+    )
+
+    result, _settings, environment, use_clash = runner._preflight_youtube_source_access(paths, StringIO())
+
+    assert result.ok is True
+    assert use_clash is False
+    assert refresh_calls and refresh_calls[0][1]["environment"] == environment
+
+
+def test_source_access_media_failure_uses_configured_clash_fallback_once(monkeypatch, tmp_path: Path):
+    paths = runner.RuntimePaths(
+        project_root=tmp_path,
+        codex_home=tmp_path,
+        codex_bin=tmp_path / "codex",
+        python_bin=Path(sys.executable),
+        notifier_script=tmp_path / "notifier.py",
+        log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock",
+        coordinator_timeout_seconds=60,
+    )
+    switches = []
+
+    class Settings:
+        ytdlp_path = "yt-dlp"
+        youtube_auth_probe_url = "https://example.test/probe"
+        enable_youtube_cookie_auto_refresh = False
+        youtube_cookies_file = ""
+        youtube_cookie_browser = "chrome"
+        clash_download_node = "Japan"
+
+        def get_active_proxies(self):
+            return {}
+
+        def get_yt_cookie_args(self):
+            return ["--cookies", "cookies.txt"]
+
+        @contextmanager
+        def clash_switch_node(self):
+            switches.append("entered")
+            yield
+            switches.append("restored")
+
+    attempts = iter([
+        YoutubeAccessResult(False, "MEDIA_ACCESS_REJECTED", "HTTP 403"),
+        YoutubeAccessResult(True, "READY"),
+    ])
+    monkeypatch.setattr(
+        runner,
+        "_load_youtube_runtime_dependencies",
+        lambda _paths: (Settings(), lambda **_kwargs: next(attempts), lambda *_args, **_kwargs: None),
+    )
+
+    result, _settings, _environment, use_clash = runner._preflight_youtube_source_access(paths, StringIO())
+
+    assert result.ok is True
+    assert use_clash is True
+    assert switches == ["entered", "restored"]
+
+
 def test_manual_production_prompt_binds_selected_candidate_and_forbids_platform_authority(tmp_path: Path):
     prompt = runner._manual_production_prompt(
         {
@@ -172,10 +323,15 @@ def test_daily_prompt_preflights_multiple_candidates_before_locking_one():
     assert "来源预检最多依次检查 5 个不同的 `youtube_id`" in prompt
     assert "某个候选预检失败不算已经选题，可以继续下一个" in prompt
     assert "至少一种视频格式可实际下载" in prompt
-    assert "通过接触表或对应片段核验画面适龄" in prompt
-    assert "只有全部来源预检通过后，才锁定第一个合格 `youtube_id`" in prompt
-    assert "锁定后不得切换到第二个候选" in prompt
+    assert "针对拟使用的连续片段生成接触表并确认画面适龄" in prompt
+    assert "只有完整来源预检已经覆盖“拟用片段的画面与自然语音”后，才锁定第一个合格 `youtube_id`" in prompt
+    assert "才构成不可切换的制作承诺" in prompt
     assert "最终仍只允许制作一条成片" in prompt
+    assert "来源预检出现假阳性" in prompt
+    assert "继续预检剩余候选" in prompt
+    assert "HTTP 403 不是自动“换题”信号" in prompt
+    assert "两个独立候选都出现 403、DNS、TLS 或超时" in prompt
+    assert "不要追加 `--rejected-youtube-id`" in prompt
 
 
 def test_daily_prompt_matches_terminal_screen_micro_note_tiers():
@@ -301,7 +457,7 @@ def test_transient_transport_failure_retries_before_failure_notification(tmp_pat
         "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
         "--notifier-script", str(notifier), "--log-dir", str(log_dir),
         "--lock-dir", str(tmp_path / "lock"), "--max-attempts", "3",
-        "--retry-delay-seconds", "0",
+        "--retry-delay-seconds", "0", "--skip-source-access-preflight",
     ]
 
     result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
@@ -339,7 +495,7 @@ def test_transient_failure_with_accepted_review_receipt_does_not_rerun(tmp_path:
         "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
         "--notifier-script", str(notifier), "--log-dir", str(log_dir),
         "--lock-dir", str(project_root / "output" / "locks" / "lock"), "--max-attempts", "3",
-        "--retry-delay-seconds", "0",
+        "--retry-delay-seconds", "0", "--skip-source-access-preflight",
     ]
 
     result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False)
@@ -366,6 +522,7 @@ def test_coordinator_timeout_records_durable_failure_and_does_not_retry(tmp_path
         "--notifier-script", str(notifier), "--log-dir", str(log_dir),
         "--lock-dir", str(tmp_path / "lock"), "--max-attempts", "3",
         "--retry-delay-seconds", "0", "--coordinator-timeout-seconds", "1",
+        "--skip-source-access-preflight",
     ]
 
     result = subprocess.run(arguments, cwd=PROJECT_ROOT, capture_output=True, text=True, check=False, timeout=15)
@@ -411,6 +568,7 @@ def test_signal_interrupt_writes_status_notifies_and_releases_lock(tmp_path: Pat
         "--notifier-script", str(notifier), "--log-dir", str(log_dir),
         "--lock-dir", str(lock_dir), "--max-attempts", "1",
         "--retry-delay-seconds", "0", "--coordinator-timeout-seconds", "60",
+        "--skip-source-access-preflight",
     ]
     process = subprocess.Popen(arguments, cwd=PROJECT_ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     deadline = time.monotonic() + 5

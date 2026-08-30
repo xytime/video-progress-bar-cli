@@ -18,6 +18,7 @@ import tempfile
 import fcntl
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 
 _REQUIRED_AUTH_COOKIES = frozenset({"SID", "SAPISID", "__Secure-3PSID"})
@@ -38,6 +39,7 @@ def validate_youtube_cookie_file(
     probe_url: str,
     ytdlp_path: str,
     timeout_seconds: int = 45,
+    environment: Mapping[str, str] | None = None,
 ) -> YoutubeAuthResult:
     """用临时副本验收 Cookie，避免 yt-dlp 回写生产文件。"""
     if not cookie_file.is_file() or cookie_file.stat().st_size <= 100:
@@ -63,6 +65,7 @@ def validate_youtube_cookie_file(
             text=True,
             timeout=timeout_seconds,
             check=False,
+            env=dict(environment) if environment is not None else None,
         )
     except subprocess.TimeoutExpired:
         return YoutubeAuthResult(False, "PROBE_TIMEOUT")
@@ -84,6 +87,7 @@ def refresh_youtube_cookie_file(
     probe_url: str,
     ytdlp_path: str,
     timeout_seconds: int = 60,
+    environment: Mapping[str, str] | None = None,
 ) -> YoutubeAuthResult:
     """从浏览器安全刷新 Cookie；只有独立复验成功才原子替换生产文件。"""
     cookie_file.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +118,7 @@ def refresh_youtube_cookie_file(
             text=True,
             timeout=timeout_seconds,
             check=False,
+            env=dict(environment) if environment is not None else None,
         )
         if result.returncode != 0 or not result.stdout.strip():
             detail = " ".join((result.stderr or result.stdout or "browser export failed").split())[:300]
@@ -128,6 +133,7 @@ def refresh_youtube_cookie_file(
             probe_url=probe_url,
             ytdlp_path=ytdlp_path,
             timeout_seconds=timeout_seconds,
+            environment=environment,
         )
         if not validation.ok:
             return YoutubeAuthResult(False, f"REFRESH_{validation.code}", validation.detail)

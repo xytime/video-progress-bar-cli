@@ -73,6 +73,27 @@ def test_validate_uses_copy_and_leaves_production_cookie_unchanged(tmp_path: Pat
     assert not list(tmp_path.glob(".youtube_cookie_check_*"))
 
 
+def test_cookie_validation_forwards_controlled_network_environment(tmp_path: Path, monkeypatch):
+    target = tmp_path / "youtube_cookies.txt"
+    target.write_text(_cookie_text("SID", "SAPISID", "__Secure-3PSID"), encoding="utf-8")
+    captured = {}
+
+    def fake_run(_command, **kwargs):
+        captured["env"] = kwargs["env"]
+        return SimpleNamespace(returncode=0, stdout="probe-id\n", stderr="")
+
+    monkeypatch.setattr(youtube_auth.subprocess, "run", fake_run)
+    result = youtube_auth.validate_youtube_cookie_file(
+        target,
+        probe_url="https://example.test/watch",
+        ytdlp_path="yt-dlp",
+        environment={"HTTPS_PROXY": "http://127.0.0.1:7890"},
+    )
+
+    assert result.ok is True
+    assert captured["env"] == {"HTTPS_PROXY": "http://127.0.0.1:7890"}
+
+
 def test_refresh_returns_busy_without_replacing_cookie(tmp_path: Path):
     target = tmp_path / "youtube_cookies.txt"
     target.write_text("old-cookie", encoding="utf-8")
