@@ -55,6 +55,7 @@
 | 4.8.0   | 2026-08-27 | Codex                               | 新标签页作品管理基线不可用时回退同页采集并安全返回投稿页，避免无基线提交永久未绑定。 |
 | 4.9.0   | 2026-08-27 | Codex                               | 作品管理 SPA 的 networkidle 超时改为非致命，改按业务路由及卡片证据判定页面可用。 |
 | 5.0.0   | 2026-08-27 | Codex                               | 读取作品管理原生 post_list 响应，以同会话唯一新增 objectId 绑定，修复短标题不在列表响应中的漏绑定。 |
+| 5.1.0   | 2026-08-30 | Codex                               | 已绑定原生 ID 的只读回查在 SPA 卡片短暂未稳定时做一次有界重试；不可判定仍禁止重传。 |
 """
 
 import os
@@ -115,6 +116,11 @@ MANAGEMENT_UNDER_REVIEW = "UNDER_REVIEW"
 MANAGEMENT_REJECTED = "REJECTED"
 MANAGEMENT_NOT_FOUND = "NOT_FOUND"
 MANAGEMENT_UNCERTAIN = "UNCERTAIN"
+
+# 仅用于已经绑定平台原生 ID 的只读核验。页面短暂加载异常不应触发上传重试，
+# 但也不应因一次 SPA 卡片延迟而把已有提交长期误留在不可判定状态。
+MANAGEMENT_VERIFY_ATTEMPTS = 2
+MANAGEMENT_VERIFY_RETRY_DELAY_MS = 1_500
 
 
 def _restore_login_required_tasks_after_login() -> int:
@@ -493,15 +499,28 @@ def verify_management_publication(page, evidence_root: Path, expected_title: str
 
 
 def verify_management_publication_by_id(page, evidence_root: Path, platform_post_id: str) -> tuple[str, str]:
-    """只按已绑定的原生记录 ID 回查平台状态；找不到时保持不可判定，不补发。"""
-    cards, loaded = _load_management_cards(page)
-    record = cards.get((platform_post_id or "").strip()) if loaded else None
-    if not record:
-        _capture_wechat_evidence(page, evidence_root, "management_uncertain")
-        return MANAGEMENT_UNCERTAIN, ""
-    state = classify_management_publication(record.get("card_text", ""))
-    _capture_wechat_evidence(page, evidence_root, f"management_{state.lower()}")
-    return state, record.get("platform_url", "")
+    """只按已绑定的原生记录 ID 回查平台状态；有界重读后仍不可判定时绝不补发。"""
+    normalized_post_id = (platform_post_id or "").strip()
+    for attempt in range(MANAGEMENT_VERIFY_ATTEMPTS):
+        cards, loaded = _load_management_cards(page)
+        record = cards.get(normalized_post_id) if loaded else None
+        if record:
+            state = classify_management_publication(record.get("card_text", ""))
+            _capture_wechat_evidence(page, evidence_root, f"management_{state.lower()}")
+            return state, record.get("platform_url", "")
+        if attempt + 1 < MANAGEMENT_VERIFY_ATTEMPTS:
+            logger.info(
+                "Management page has no bound post record yet; retrying read-only check (%s/%s): post_id=%s",
+                attempt + 1,
+                MANAGEMENT_VERIFY_ATTEMPTS,
+                normalized_post_id,
+            )
+            try:
+                page.wait_for_timeout(MANAGEMENT_VERIFY_RETRY_DELAY_MS)
+            except Exception as exc:
+                logger.info("Unable to wait before management readback retry: %s", exc)
+    _capture_wechat_evidence(page, evidence_root, "management_uncertain")
+    return MANAGEMENT_UNCERTAIN, ""
 
 
 def _find_wechat_cover_dialog(page):

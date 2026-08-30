@@ -43,6 +43,7 @@ from wechat_uploader import (
     resolve_submission_platform_identity,
     resolve_submission_platform_identity_after_publish,
     run_uploader,
+    verify_management_publication_by_id,
 )
 from video_processing.db.database import PipelineDB
 from video_processing.pipeline_manager import PipelineManager
@@ -264,6 +265,32 @@ class TestExactSubmissionIdentity:
 
         assert ready is True
         assert actual == expected_cards
+
+    def test_bound_id_readback_retries_once_before_staying_uncertain(self, monkeypatch, tmp_path):
+        waits = []
+
+        class Page:
+            def wait_for_timeout(self, milliseconds):
+                waits.append(milliseconds)
+
+        delayed_cards = iter([
+            ({}, False),
+            ({"native-post": {
+                "platform_post_id": "native-post",
+                "platform_url": "https://example.test/post/native-post",
+                "card_text": "审核中",
+            }}, True),
+        ])
+        monkeypatch.setattr("wechat_uploader._load_management_cards", lambda _page: next(delayed_cards))
+        monkeypatch.setattr("wechat_uploader._capture_wechat_evidence", lambda *_args: None)
+
+        state, platform_url = verify_management_publication_by_id(
+            Page(), tmp_path, "native-post",
+        )
+
+        assert state == MANAGEMENT_UNDER_REVIEW
+        assert platform_url == "https://example.test/post/native-post"
+        assert len(waits) == 1
 
 
 def test_submission_ledger_prevents_post_submit_exception_downgrade(temp_db):

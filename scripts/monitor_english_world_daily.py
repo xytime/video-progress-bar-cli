@@ -11,6 +11,7 @@
 # | 1.0.0 | 2026-08-27 | Codex | 新增 07:00/16:30 窗口后的回执监测、缺席自愈和持久健康账本。 |
 # | 1.1.0 | 2026-08-29 | Codex | 监控器按 09:15/19:00 实际触发时刻分别映射 07:00/16:30，修复晚间仍检查早班。 |
 # | 1.2.0 | 2026-08-30 | Codex | 单独识别已获 Telegram 接受的生产失败回执，避免误报成未交付。 |
+# | 1.3.0 | 2026-08-30 | Codex | 健康账本固定输出调度、产物、Telegram、平台提交、公开可见五层证据，禁止将已受理写成已公开。 |
 """
 
 from __future__ import annotations
@@ -126,10 +127,71 @@ def _scheduled_run_logs(log_dir: Path, day: datetime, slot: time) -> list[Path]:
     return sorted(matches)
 
 
+def _receipt_payload(receipt_path: Path | None) -> dict[str, Any]:
+    """读取已被筛选过的回执摘要；读不到时保持未知而非补造成功。"""
+    if receipt_path is None:
+        return {}
+    try:
+        payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _five_layer_evidence(payload: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """把窗口事实拆成不可互相越级的五层证据，供人和机器安全阅读。"""
+    state = str(payload.get("state") or "")
+    receipt_path = payload.get("delivery_receipt") or payload.get("failure_receipt")
+    receipt = _receipt_payload(Path(str(receipt_path))) if receipt_path else {}
+    is_delivery = state in {"DELIVERED", "RECOVERED_DELIVERED"}
+    is_failure = state in {"PRODUCTION_FAILED_REPORTED", "RECOVERED_PRODUCTION_FAILED_REPORTED"}
+
+    if state == "IN_PROGRESS":
+        scheduled = "RUNNING"
+    elif state.startswith("MISSING"):
+        scheduled = "MISSING"
+    elif state.startswith("RECOVERED"):
+        scheduled = "RECOVERED_RUN"
+    elif state:
+        scheduled = "EXECUTED"
+    else:
+        scheduled = "UNKNOWN"
+
+    if is_delivery:
+        artifact = "REVIEW_PACKAGE_REPORTED"
+        telegram = "API_ACCEPTED"
+    elif is_failure:
+        artifact = "FAILED_REPORTED"
+        telegram = "API_ACCEPTED"
+    else:
+        artifact = "UNKNOWN"
+        telegram = "NOT_ACCEPTED"
+
+    submission_result = str(receipt.get("submission_result") or "").strip()
+    if submission_result:
+        submission = "LOCAL_WORKER_REPORTED"
+    elif is_delivery:
+        submission = "NOT_SUBMITTED_OR_UNVERIFIED"
+    else:
+        submission = "UNKNOWN"
+
+    evidence = {
+        "scheduled_window": {"state": scheduled},
+        "artifact": {"state": artifact},
+        "telegram": {"state": telegram},
+        "platform_submission": {"state": submission},
+        "public_visibility": {"state": "NOT_VERIFIED"},
+    }
+    if submission_result:
+        evidence["platform_submission"]["detail"] = submission_result
+    return evidence
+
+
 def _write_health(log_dir: Path, day: datetime, slot: time, payload: dict[str, Any]) -> Path:
     log_dir.mkdir(parents=True, exist_ok=True)
     target = log_dir / f"monitor_{day.strftime('%F')}_{slot.strftime('%H%M')}.json"
     temporary = target.with_suffix(".tmp")
+    payload["evidence_layers"] = _five_layer_evidence(payload)
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary.replace(target)
     return target

@@ -7,6 +7,7 @@
 # | 1.1.0 | 2026-08-29 | Codex | 测试显式固定窗口后回执 mtime，不再依赖执行测试时是否已过 07:00。 |
 # | 1.2.0 | 2026-08-29 | Codex | 固化计划任务早晚触发分别映射 07:00 与 16:30，禁止单一固定 slot 掩盖下午缺席。 |
 # | 1.3.0 | 2026-08-30 | Codex | 覆盖生产失败通知与成片交付的独立监控状态。 |
+# | 1.4.0 | 2026-08-30 | Codex | 覆盖五层证据输出，锁定 Telegram 接受、提交执行与公开可见不得互相越级。 |
 """
 
 from __future__ import annotations
@@ -60,6 +61,15 @@ def test_accepted_receipt_marks_slot_delivered_without_recovery(tmp_path: Path):
     assert exit_code == 0
     assert result["state"] == "DELIVERED"
     assert result["delivery_receipt"] == str(receipt)
+    assert result["evidence_layers"]["public_visibility"] == {"state": "NOT_VERIFIED"}
+    persisted = json.loads((paths.log_dir / f"monitor_{now:%F}_0700.json").read_text(encoding="utf-8"))
+    assert persisted["evidence_layers"] == {
+        "scheduled_window": {"state": "EXECUTED"},
+        "artifact": {"state": "REVIEW_PACKAGE_REPORTED"},
+        "telegram": {"state": "API_ACCEPTED"},
+        "platform_submission": {"state": "NOT_SUBMITTED_OR_UNVERIFIED"},
+        "public_visibility": {"state": "NOT_VERIFIED"},
+    }
 
 
 def test_active_lock_marks_slot_in_progress_and_never_recovers(tmp_path: Path):
@@ -100,6 +110,33 @@ def test_accepted_failure_notice_is_reported_separately_from_missing_delivery(tm
     assert result["state"] == "PRODUCTION_FAILED_REPORTED"
     assert result["failure_receipt"] == str(receipt)
     assert result["recovery_attempted"] is False
+    persisted = json.loads((paths.log_dir / f"monitor_{now:%F}_0700.json").read_text(encoding="utf-8"))
+    assert persisted["evidence_layers"]["artifact"]["state"] == "FAILED_REPORTED"
+    assert persisted["evidence_layers"]["public_visibility"]["state"] == "NOT_VERIFIED"
+
+
+def test_monitor_keeps_local_submission_report_separate_from_public_visibility(tmp_path: Path):
+    paths = _paths(tmp_path)
+    now = datetime.now().astimezone().replace(hour=10, minute=0, second=0, microsecond=0)
+    receipt = paths.log_dir / "auto_submission.delivery.json"
+    _receipt(receipt, now.replace(hour=8), kind="review_and_auto_submission")
+    receipt.write_text(json.dumps({
+        "kind": "review_and_auto_submission",
+        "status": "ACCEPTED",
+        "submission_result": "submission_worker_exit=0; state=UNDER_REVIEW",
+    }), encoding="utf-8")
+    timestamp = now.replace(hour=8).timestamp()
+    os.utime(receipt, (timestamp, timestamp))
+
+    exit_code, _ = monitor.monitor_slot(paths, slot=time(7, 0), now=now, recover_missing=True)
+
+    assert exit_code == 0
+    persisted = json.loads((paths.log_dir / f"monitor_{now:%F}_0700.json").read_text(encoding="utf-8"))
+    assert persisted["evidence_layers"]["platform_submission"] == {
+        "state": "LOCAL_WORKER_REPORTED",
+        "detail": "submission_worker_exit=0; state=UNDER_REVIEW",
+    }
+    assert persisted["evidence_layers"]["public_visibility"] == {"state": "NOT_VERIFIED"}
 
 
 def test_successful_delivery_takes_precedence_over_earlier_failure_notice(tmp_path: Path):
