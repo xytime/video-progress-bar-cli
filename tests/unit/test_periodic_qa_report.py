@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-07-28 | Codex | 覆盖阻塞判定、平台待确认语义和只读快照 |
 | 1.1.0 | 2026-07-28 | Codex | 覆盖三秒质检首屏结论和下载进度噪声清理 |
 | 1.2.0 | 2026-07-28 | Codex | 覆盖上帝视角总览：最近发布间隔和平台态势 |
+| 1.3.0 | 2026-08-30 | Codex | 覆盖抖音门禁 shadow 计数和未入队提示 |
 """
 import datetime as dt
 
@@ -92,6 +93,40 @@ def test_format_report_surfaces_recent_failure_without_curl_noise():
     assert report.startswith("<b>🟠 异常：近3h 有新失败</b>")
     assert "timeout-id: Download timed out" in report
     assert "--:--:--" not in report
+
+
+def test_format_report_surfaces_douyin_upstream_shadow_without_calling_it_queue():
+    snapshot = {
+        "hours": 3,
+        "status_counts": {"SUBMITTED_BOUND": 2},
+        "eligible_queue": 1,
+        "local_published": 0,
+        "active_count": 0,
+        "active": [],
+        "stale_active": [],
+        "last_local_published": None,
+        "recent_failures": [],
+        "platform_states": [],
+        "platform_overview": [],
+        "douyin_upstream_shadow": {
+            "count": 2,
+            "items": [
+                {"youtube_id": "shadow-a", "wechat_state": "SUBMITTED_BOUND"},
+                {"youtube_id": "shadow-b", "wechat_state": "SUBMITTED_UNBOUND"},
+            ],
+        },
+    }
+    monitor = {"state": "健康", "approved": 1, "polled": 1, "summary": {}, "backoffs": 0}
+
+    report = periodic_qa_report.format_report(
+        snapshot,
+        monitor,
+        "状态文件存在",
+        dt.datetime(2026, 8, 30, 12, 0, tzinfo=periodic_qa_report.SHANGHAI),
+    )
+
+    assert "抖音有 2 条候选被视频号公开确认门禁阻塞" in report
+    assert "shadow-a(SUBMITTED_BOUND)；shadow-b(SUBMITTED_UNBOUND)（门禁阻塞 2；未入队）" in report
 
 
 def test_quality_report_snapshot_is_read_only_and_includes_active_rows(tmp_path):

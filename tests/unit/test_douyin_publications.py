@@ -10,6 +10,7 @@
 | 1.4.0 | 2026-08-07 | Codex | 覆盖 CANCELED 抖音账本人工重入队且保留历史记录 |
 | 1.5.0 | 2026-08-08 | Codex | 覆盖缺失抖音投递产物的旧失败在恢复前安全停用 |
 | 1.6.0 | 2026-08-08 | Codex | 覆盖 NEW 每日领取上限与跨进程浏览器动作节流账本 |
+| 1.7.0 | 2026-08-30 | Codex | 覆盖视频号未确认造成的抖音 shadow 候选且保证不创建任务 |
 """
 
 from pathlib import Path
@@ -211,6 +212,39 @@ def test_douyin_new_video_claim_respects_its_own_daily_quota(tmp_path: Path):
 
     assert first is not None
     assert db.claim_next_douyin_publication("NEW", daily_limit=1) is None
+
+
+def test_douyin_upstream_shadow_is_read_only_and_excludes_other_cancellations(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    for yid in ("blocked-without-ledger", "blocked-canceled", "content-canceled"):
+        _add_video(db, yid)
+        db.record_wechat_submission_acceptance(
+            yid,
+            evidence_path=None,
+            error_message="视频号已受理，等待公开确认",
+            final_title="测试标题",
+        )
+    upstream = db.create_douyin_publication(
+        "blocked-canceled", "8" * 64, "/tmp/upstream.mp4", source_kind="NEW"
+    )
+    db.update_douyin_publication_state(
+        upstream["id"], "CANCELED", error_message="视频号仅确认提交、尚未确认公开发布；已取消下游未提交队列。"
+    )
+    content = db.create_douyin_publication(
+        "content-canceled", "9" * 64, "/tmp/content.mp4", source_kind="NEW"
+    )
+    db.update_douyin_publication_state(
+        content["id"], "CANCELED", error_message="抖音上传前内容安全审查缺少可读字幕正文。"
+    )
+
+    snapshot = db.get_douyin_upstream_shadow_snapshot(limit=5)
+
+    assert snapshot["count"] == 2
+    assert {row["youtube_id"] for row in snapshot["items"]} == {
+        "blocked-without-ledger", "blocked-canceled"
+    }
+    assert db.get_douyin_publication("blocked-without-ledger") is None
+    assert db.get_douyin_publication_by_id(upstream["id"])["state"] == "CANCELED"
 
 
 def test_douyin_browser_action_slot_persists_the_interval(tmp_path: Path):

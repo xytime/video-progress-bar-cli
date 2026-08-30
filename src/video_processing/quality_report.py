@@ -9,6 +9,7 @@
 |---------|------------|--------|-------------|
 | 1.0.0 | 2026-07-28 | Codex | 抽出三小时质检只读快照和三秒可读 Telegram HTML 渲染 |
 | 1.1.0 | 2026-07-28 | Codex | 增加总览行：最近发布间隔与各平台成功/待核验/失败态势 |
+| 1.2.0 | 2026-08-30 | Codex | 增加抖音上游门禁 shadow 计数和样本，区分候选饥饿与上传器故障 |
 """
 from __future__ import annotations
 
@@ -153,6 +154,9 @@ def _blocker(snapshot: dict[str, Any], monitor: dict[str, Any], manual_review_it
         return f"频道监控{monitor['state']}：{monitor.get('detail') or '检查 monitor_health.json 的异常频道和时间戳。'}"
     if statuses.get("LOGIN_REQUIRED", 0):
         return f"微信登录阻塞：{statuses['LOGIN_REQUIRED']} 条任务等待会话恢复。"
+    shadow_count = int((snapshot.get("douyin_upstream_shadow") or {}).get("count") or 0)
+    if shadow_count:
+        return f"抖音有 {shadow_count} 条候选被视频号公开确认门禁阻塞；当前仅 shadow 观测，不会自动入队。"
     if snapshot["eligible_queue"] == 0 and not snapshot["active"]:
         return "可自动发布队列为空：检查频道监控、评分和候选供给。"
     if snapshot["recent_failures"]:
@@ -208,7 +212,7 @@ def _platform_overview(snapshot: dict[str, Any], now: dt.datetime) -> str:
         queued_count = int(row.get("queued_count") or 0)
         if published_count:
             parts.append(
-                f"{label} 最近平台成功 {_format_time(row.get('last_published_at'))}"
+                f"{label} 最近确认已发布 {_format_time(row.get('last_published_at'))}"
                 f"（{_age_text(row.get('last_published_at'), now)}前）"
             )
         elif failed_count and not review_count and not queued_count:
@@ -246,6 +250,12 @@ def format_report(
     queued_platform_items = _platform_items(snapshot["platform_states"], queued_states)
     manual_total = _platform_total(snapshot["platform_states"], manual_states)
     queued_total = _platform_total(snapshot["platform_states"], queued_states)
+    douyin_shadow = snapshot.get("douyin_upstream_shadow") or {}
+    shadow_count = int(douyin_shadow.get("count") or 0)
+    shadow_samples = [
+        f"{row.get('youtube_id')}({row.get('wechat_state') or row.get('local_state') or 'UNKNOWN'})"
+        for row in (douyin_shadow.get("items") or [])
+    ]
     icon, headline = _verdict(snapshot, monitor, manual_total)
     blocker = _blocker(snapshot, monitor, manual_review_items)
 
@@ -263,7 +273,7 @@ def format_report(
     key_line = (
         f"队列 {snapshot['eligible_queue']} | 在途 {snapshot.get('active_count', len(snapshot['active']))} | "
         f"新失败 {len(snapshot['recent_failures'])} | 登录阻塞 {statuses.get('LOGIN_REQUIRED', 0)} | "
-        f"监控异常 {monitor_bad} | 遗留 {manual_total}"
+        f"监控异常 {monitor_bad} | 遗留 {manual_total} | 抖音门禁 {shadow_count}"
     )
     publish_line = (
         f"本地 PUBLISHED {snapshot['local_published']}（近 {snapshot['hours']}h；不等同平台侧可见确认）"
@@ -289,6 +299,7 @@ def format_report(
             f"<b>新失败</b>：{html.escape(_join_or_none(failure_lines))}",
             f"<b>遗留</b>：{html.escape(_join_or_none(manual_review_items, limit=4))}",
             f"<b>待投递</b>：{html.escape(_join_or_none(queued_platform_items))}（合计 {queued_total}）",
+            f"<b>抖音 shadow</b>：{html.escape(_join_or_none(shadow_samples))}（门禁阻塞 {shadow_count}；未入队）",
             f"<b>会话</b>：{html.escape(session)}",
         ]
     )

@@ -5,6 +5,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-30 | Codex | 对齐历史账本、当前调度、创作者中心证据，记录首批修复和剩余策略边界 |
+| 1.1.0 | 2026-08-30 | Codex | 固化单条只读回查和上游门禁 shadow 观测，并记录第二条精确回账证据 |
 
 ## 结论
 
@@ -47,6 +48,11 @@
   `output/douyin_calibration/douyin_management_evidence.png` 显示该作品“已发布”，并显示播放数据。
 - 只对有上述创作者中心证据的 `douyin_publications.id=263` 执行了
   `UNCERTAIN -> PUBLISHED` 单条回账；没有批量修改其他历史记录。
+- 新增 `scripts/reconcile_douyin_publication.py` 后，以默认只读模式回查 `id=254 / 6rSA7A80MVw`；
+  完整标题在创作者中心精确匹配“已发布”，随后只对该记录执行 `UNCERTAIN -> PUBLISHED`，
+  没有再次打开浏览器或触发提交。
+- 生产 shadow 快照显示 11 条候选因视频号 `SUBMITTED_BOUND/SUBMITTED_UNBOUND` 门禁未进入抖音账本；
+  快照前后目标记录均不存在，证明观测没有创建发布任务。
 
 ## 已完成的第一批修复
 
@@ -73,6 +79,7 @@
 | 新视频自动进入抖音队列 | **仍受视频号公开确认门禁阻塞** |
 | 新视频端到端真实提交 | 本轮未执行，不能据本地测试宣称已验证 |
 | 历史 `UNCERTAIN` 批量恢复 | 未授权也不安全；必须逐条只读核验 |
+| 上游门禁 shadow 观测 | 已落入三小时质检快照；只报告数量和样本，不创建账本 |
 
 ## 分批解决方案
 
@@ -80,12 +87,12 @@
 
 先确保登录、页面入口、回查和账本不再互相说谎；保留所有提交证据，禁止不确定任务自动重发。
 
-### P1：解除抖音任务供给的单点依赖（需策略批准）
+### P1：解除抖音任务供给的单点依赖（shadow 已完成；放行仍需策略批准）
 
 建议把“视频号必须先确认公开”改成显式配置，而不是隐藏在 SQL 状态条件中：
 
 - 默认保持 `DOUYIN_REQUIRE_WECHAT_PUBLIC_CONFIRMATION=true`，不改变当前生产行为；
-- shadow 模式报告“素材和内容审查均通过、但被视频号状态阻塞”的候选；
+- shadow 模式已报告“被视频号状态阻塞”的候选数量和样本，且明确标记“未入队”；
 - 经人工审核后再把目标环境设为 `false`，允许抖音凭自己的素材、审查和独立账本发布；
 - 切换后只处理新任务，不复活历史 `CANCELED/UNCERTAIN/UNDER_REVIEW`。
 
@@ -93,6 +100,8 @@
 
 ### P2：有界回查历史不确定记录
 
+- 已提供 `PYTHONPATH=src .venv/bin/python scripts/reconcile_douyin_publication.py --publication-id <ID>`；
+  默认只读，显式 `--apply-ledger` 也只会回写明确的 `PUBLISHED/UNDER_REVIEW`；
 - 每轮最多只读核验 1 条，不上传、不点击发布；
 - 优先完整标题，标题冲突时停止并请求人工截图/录屏；
 - 只有创作者中心精确显示“已发布/审核中”才回账；

@@ -112,6 +112,7 @@
 | 3.26.5  | 2026-08-11 | Codex                               | 视频号未最终确认时取消同源尚未提交的抖音/快手队列，保留审计记录且禁止跨平台抢跑 |
 | 3.26.6  | 2026-08-14 | Codex                               | 仪表盘查询将 UNDER_REVIEW 独立归入待平台确认，不再混入实际加工队列 |
 | 3.26.7  | 2026-08-18 | Codex                               | get_connection 改为关闭连接的上下文管理器，修复仪表盘长期运行耗尽文件描述符 |
+| 3.26.8  | 2026-08-30 | Codex                               | 新增抖音上游门禁 shadow 快照，量化视频号未确认导致的候选饥饿而不创建发布任务 |
 """
 
 import sqlite3
@@ -4162,6 +4163,8 @@ class PipelineDB:
                 """
             ).fetchall()
 
+        douyin_upstream_shadow = self.get_douyin_upstream_shadow_snapshot(limit=safe_item_limit)
+
         return {
             "hours": safe_hours,
             "status_counts": status_counts,
@@ -4174,6 +4177,7 @@ class PipelineDB:
             "recent_failures": [dict(row) for row in recent_failures],
             "platform_states": [dict(row) for row in platform_rows],
             "platform_overview": [dict(row) for row in platform_overview_rows],
+            "douyin_upstream_shadow": douyin_upstream_shadow,
         }
 
     def get_daily_operations_snapshot(
@@ -6596,6 +6600,62 @@ class PipelineDB:
                 normalized_states,
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def get_douyin_upstream_shadow_snapshot(self, limit: int = 5) -> Dict[str, Any]:
+        """只读量化被视频号确认门禁挡住的抖音候选，不创建或恢复任何账本。"""
+        safe_limit = max(1, min(int(limit), 50))
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                '''
+                WITH latest_douyin AS (
+                    SELECT dp.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY dp.video_id
+                               ORDER BY dp.attempt_number DESC, dp.id DESC
+                           ) AS rn
+                    FROM douyin_publications dp
+                ), blocked AS (
+                    SELECT pv.youtube_id, pv.slice_index, pv.title, pv.zh_title,
+                           pv.status AS local_state, pv.updated_at,
+                           (
+                               SELECT wp.state FROM wechat_publications wp
+                               WHERE wp.video_id = pv.id
+                               ORDER BY wp.updated_at DESC, wp.id DESC LIMIT 1
+                           ) AS wechat_state,
+                           ld.state AS douyin_state,
+                           ld.last_error_message AS douyin_error
+                    FROM processed_videos pv
+                    LEFT JOIN latest_douyin ld ON ld.video_id = pv.id AND ld.rn = 1
+                    WHERE pv.status IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN')
+                      AND COALESCE(pv.publication_review_required, 0) = 0
+                      AND EXISTS (
+                          SELECT 1 FROM wechat_publications wp
+                          WHERE wp.video_id = pv.id
+                            AND wp.state IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN')
+                      )
+                      AND (
+                          ld.id IS NULL
+                          OR (
+                              ld.state = 'CANCELED'
+                              AND (
+                                  COALESCE(ld.last_error_message, '') LIKE '视频号仅确认提交%'
+                                  OR COALESCE(ld.last_error_message, '') LIKE '视频号提交结果不可确认%'
+                              )
+                          )
+                      )
+                )
+                SELECT blocked.*, COUNT(*) OVER () AS total_count
+                FROM blocked
+                ORDER BY updated_at DESC, youtube_id ASC, slice_index ASC
+                LIMIT ?
+                ''',
+                (safe_limit,),
+            ).fetchall()
+        items = [dict(row) for row in rows]
+        total = int(items[0].get("total_count") or 0) if items else 0
+        for item in items:
+            item.pop("total_count", None)
+        return {"count": total, "items": items}
 
     def get_unqueued_douyin_history_videos(self, limit: int = 20) -> List[Dict[str, Any]]:
         """返回微信已发布、尚未登记抖音账本且未被拉黑的历史视频。"""
