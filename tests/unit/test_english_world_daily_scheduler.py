@@ -18,6 +18,7 @@
 # | 2.12.0 | 2026-08-28 | Codex | 固化受限生产代理只写交付请求，宿主负责标准封面、通知与上传。 |
 # | 2.13.0 | 2026-08-29 | Codex | 固化 Telegram 已选候选提示边界及宿主 manual-review-only 强制参数。 |
 # | 2.14.0 | 2026-08-30 | Codex | 固化日更候选在完整来源预检前可有界换题、锁定后禁止换题及末屏微笔记梯度。 |
+# | 2.15.0 | 2026-08-30 | Codex | 覆盖跨运行候选淘汰账本、旧失败兼容提取与补发显式排除。 |
 """
 
 from __future__ import annotations
@@ -184,6 +185,60 @@ def test_daily_prompt_matches_terminal_screen_micro_note_tiers():
     assert "13–24 词为 3 条" in prompt
     assert "25–40 词为 5 条" in prompt
     assert "41 词以上为 8 条" in prompt
+
+
+def test_recent_rejected_candidates_include_structured_and_legacy_failures(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "structured.delivery-request.json").write_text(
+        json.dumps({"kind": "production", "rejected_youtube_ids": ["EJ5Sqku_fYc"]}),
+        encoding="utf-8",
+    )
+    (log_dir / "legacy.delivery-request.json").write_text(
+        json.dumps({"kind": "failure", "failure": "唯一锁定候选 xewivZQgBMQ 内容级质检失败"}),
+        encoding="utf-8",
+    )
+    (log_dir / "invalid.delivery-request.json").write_text(
+        json.dumps({"rejected_youtube_ids": ["not-valid"]}),
+        encoding="utf-8",
+    )
+
+    assert runner._recent_rejected_youtube_ids(log_dir) == ("EJ5Sqku_fYc", "xewivZQgBMQ")
+
+
+def test_daily_prompt_injects_machine_exclusions_and_requires_rejection_persistence(tmp_path: Path):
+    prompt = runner._daily_production_prompt(
+        tmp_path / "delivery.json",
+        ("EJ5Sqku_fYc", "xewivZQgBMQ"),
+    )
+
+    assert "--rejected-youtube-id '<实际youtube_id>'" in prompt
+    assert '["EJ5Sqku_fYc", "xewivZQgBMQ"]' in prompt
+    assert "禁止再次下载、锁定或制作" in prompt
+
+
+def test_delivery_request_recorder_persists_deduplicated_rejected_ids(tmp_path: Path):
+    request = tmp_path / "delivery.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts/record_english_world_delivery_request.py"),
+            "--request", str(request),
+            "--title", "fixture",
+            "--failure", "no source",
+            "--rejected-youtube-id", "EJ5Sqku_fYc",
+            "--rejected-youtube-id", "EJ5Sqku_fYc",
+            "--rejected-youtube-id", "xewivZQgBMQ",
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    payload = json.loads(request.read_text(encoding="utf-8"))
+    assert payload["rejected_youtube_ids"] == ["EJ5Sqku_fYc", "xewivZQgBMQ"]
 
 
 def test_manual_host_delivery_forces_notifier_review_only(monkeypatch, tmp_path: Path):

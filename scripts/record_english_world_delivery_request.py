@@ -9,13 +9,18 @@
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-08-28 | Codex | 新增生产代理到宿主交付器的原子请求协议，隔离 Chromium 权限边界。 |
+# | 1.1.0 | 2026-08-30 | Codex | 在成功或失败请求中持久化本轮已淘汰候选 ID，供后续运行机器化避让。 |
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
+
+
+YOUTUBE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -25,6 +30,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mp4", type=Path, help="已质检 MP4 的绝对路径")
     parser.add_argument("--manifest", type=Path, help="与 MP4 对应的 manifest 绝对路径")
     parser.add_argument("--failure", help="无可交付成片时的准确失败原因")
+    parser.add_argument(
+        "--rejected-youtube-id",
+        action="append",
+        default=[],
+        help="本轮来源预检已淘汰的 YouTube ID；可重复，最多五个",
+    )
     return parser
 
 
@@ -39,7 +50,16 @@ def main() -> int:
     if not failure and (args.mp4 is None or args.manifest is None):
         raise ValueError("successful delivery request requires --mp4 and --manifest")
 
-    payload: dict[str, str] = {"title": title}
+    rejected_youtube_ids = list(dict.fromkeys(str(value).strip() for value in args.rejected_youtube_id))
+    if len(rejected_youtube_ids) > 5:
+        raise ValueError("at most five --rejected-youtube-id values are allowed")
+    if any(not YOUTUBE_ID_PATTERN.fullmatch(value) for value in rejected_youtube_ids):
+        raise ValueError("every --rejected-youtube-id must be an 11-character YouTube ID")
+
+    payload: dict[str, object] = {
+        "title": title,
+        "rejected_youtube_ids": rejected_youtube_ids,
+    }
     if failure:
         payload.update({"kind": "failure", "failure": failure})
     else:
