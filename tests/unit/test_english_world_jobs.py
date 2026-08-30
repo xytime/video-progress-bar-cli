@@ -13,6 +13,7 @@
 | 1.2.0 | 2026-08-29 | Codex | 覆盖 Telegram 投稿授权两小时失效及 AUTO_POLICY 延后项窗口内再领取。 |
 | 1.3.0 | 2026-08-29 | Codex | 覆盖整包指纹、同源去重及多次投稿尝试的不可覆盖审计记录。 |
 | 1.4.0 | 2026-08-30 | Codex | 覆盖具名补发仅授权零尝试项，过期未领取授权自动回归公共窗口队列。 |
+| 1.5.0 | 2026-08-30 | Codex | 覆盖英语世界原生作品 ID 入账、节流领取与平台终态停止回查。 |
 """
 
 from __future__ import annotations
@@ -544,3 +545,51 @@ def test_submission_attempts_keep_each_retry_evidence_directory(tmp_path):
     assert {attempt["evidence_dir"] for attempt in attempts} == {
         "/evidence/attempt-1", "/evidence/attempt-2",
     }
+
+
+def test_english_world_platform_identity_enables_throttled_exact_reconciliation(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    item = db.create_english_world_review_item(
+        title="原生 ID 精确回查", **paths, **calculate_package_hashes(paths),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+    claimed = db.claim_english_world_submission(item["id"], evidence_dir="/evidence/submission")
+    assert claimed
+    completed = db.complete_english_world_submission(
+        item["id"],
+        state="UNDER_REVIEW",
+        uploader_exit_code=6,
+        evidence_dir="/evidence/submission",
+        attempt_id=claimed["_attempt_id"],
+        platform_post_id="export/native-item-id",
+    )
+
+    assert completed["platform_post_id"] == "export/native-item-id"
+    attempts = db.list_english_world_submission_attempts(item["id"])
+    assert attempts[0]["platform_post_id"] == "export/native-item-id"
+
+    reconciliation = db.claim_next_english_world_reconciliation(
+        min_interval_minutes=30, max_age_hours=72,
+    )
+    assert reconciliation and reconciliation["id"] == item["id"]
+    assert db.claim_next_english_world_reconciliation(
+        min_interval_minutes=30, max_age_hours=72,
+    ) is None
+
+    published = db.record_english_world_reconciliation(
+        item["id"],
+        platform_state="PUBLISHED",
+        evidence_dir="/evidence/reconciliation",
+        message="作品管理页按原生 ID 明确显示已发布。",
+    )
+    assert published["state"] == "UNDER_REVIEW"
+    assert published["platform_state"] == "PUBLISHED"
+    assert published["reconciliation_evidence_dir"] == "/evidence/reconciliation"
+    assert db.claim_next_english_world_reconciliation(
+        min_interval_minutes=5, max_age_hours=72,
+    ) is None

@@ -11,6 +11,7 @@
 | 1.3.0 | 2026-08-04 | Codex | 覆盖管线阶段回调写入巡航状态 |
 | 1.4.0 | 2026-08-29 | Codex | 覆盖公共窗口巡航只续投一条 AUTO_POLICY 英语世界延后项。 |
 | 1.5.0 | 2026-08-30 | Codex | 覆盖窗口调度前先回收过期未领取的具名补发授权。 |
+| 1.6.0 | 2026-08-30 | Codex | 覆盖英语世界按原生 ID 只读回查并写回独立平台状态。 |
 """
 
 import fcntl
@@ -120,3 +121,44 @@ def test_window_dispatches_one_deferred_english_world_auto_item(monkeypatch):
     runner.dispatch_one_deferred_english_world_submission()
 
     assert run.call_args.args[0][-2:] == ["--review-id", "b" * 32]
+
+
+def test_runner_reconciles_one_bound_english_world_item_without_upload(monkeypatch, tmp_path):
+    recorded = {}
+
+    class FakeDB:
+        def claim_next_english_world_reconciliation(self, **_kwargs):
+            return {
+                "id": "c" * 32,
+                "platform_post_id": "export/native-id",
+                "platform_url": None,
+                "evidence_dir": str(tmp_path / "submission"),
+            }
+
+        def record_english_world_reconciliation(self, review_id, **kwargs):
+            recorded.update({"review_id": review_id, **kwargs})
+
+    def fake_run(command, **_kwargs):
+        recorded["command"] = command
+        evidence_dir = Path(command[command.index("--evidence-dir") + 1])
+        evidence_dir.mkdir(parents=True)
+        (evidence_dir / "management_under_review.png").write_bytes(b"png")
+        return type("Result", (), {"returncode": 6})()
+
+    monkeypatch.setattr(runner, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner.settings, "english_world_reconcile_interval_minutes", 30)
+    monkeypatch.setattr(runner.settings, "english_world_reconcile_max_age_hours", 72)
+    monkeypatch.setattr(runner.settings, "english_world_reconcile_failure_limit", 2)
+    monkeypatch.setattr(runner.settings, "wechat_headless", True)
+    monkeypatch.setattr(runner.settings, "wechat_review_timeout_seconds", 180)
+
+    runner.reconcile_one_english_world_submission()
+
+    assert recorded["review_id"] == "c" * 32
+    assert recorded["platform_state"] == "UNDER_REVIEW"
+    command_text = " ".join(str(part) for part in recorded["command"])
+    assert "--video" not in command_text
+    assert "--verify-only" in command_text
+    assert "export/native-id" in command_text

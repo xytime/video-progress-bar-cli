@@ -40,6 +40,7 @@
 | 1.22.0  | 2026-08-29 | Codex                               | 新增 /lease_jobs 手机菜单：候选列表、二次确认和两小时单任务微信发布授权。 |
 | 1.23.0  | 2026-08-29 | Codex                               | Lease Jobs 展示并可撤销未消费授权；签发回执区分任务领取、本地调度、平台受理和公开可见。 |
 | 1.24.0  | 2026-08-29 | Codex                               | 英语世界二次确认后显示真实生产阶段；成片完成只进入人工审核，不继承自动投稿。 |
+| 1.25.0  | 2026-08-30 | Codex                               | 英语世界回执区分本地提交状态与视频号原生 ID 回查状态。 |
 """
 from __future__ import annotations
 
@@ -594,8 +595,12 @@ async def _reply_english_world_jobs(message) -> None:
         for item in review_items:
             review_id = str(item.get("id") or "")
             state = html.escape(str(item.get("state") or "UNKNOWN"))
+            platform_state = html.escape(str(item.get("platform_state") or "未回查"))
             title = html.escape(str(item.get("title") or "未命名成片")[:80])
-            lines.append(f"<code>{html.escape(review_id[:8])}</code> · <code>{state}</code>\n{title}")
+            lines.append(
+                f"<code>{html.escape(review_id[:8])}</code> · 投稿 <code>{state}</code>"
+                f" · 平台 <code>{platform_state}</code>\n{title}"
+            )
             if item.get("state") == "READY_FOR_REVIEW" and _ENGLISH_WORLD_REVIEW_ID_RE.fullmatch(review_id):
                 buttons.append([InlineKeyboardButton(
                     f"提交视频号 · {review_id[:8]}", callback_data=f"ew:r:{review_id}",

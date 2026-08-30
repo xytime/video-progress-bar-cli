@@ -13,6 +13,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 | 1.3.0 | 2026-08-04 | Codex | 接收管线阶段回调，状态文件记录当前视频、阶段与阶段开始时间 |
 | 1.4.0 | 2026-08-29 | Codex | 每分钟巡航在公共窗口内先续投一条英语世界 AUTO_POLICY 延后项，仍由专用投稿器原子领取。 |
 | 1.5.0 | 2026-08-30 | Codex | 公共窗口调度前回收未领取且过期的具名补发授权，避免批准项永久脱离队列。 |
+| 1.6.0 | 2026-08-30 | Codex | 已受理英语世界作品按原生 ID 节流回查；全程复用 pipeline.lock 且绝不触发重传。 |
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ if str(SRC_ROOT) not in sys.path:
 from video_processing.pipeline_manager import PipelineManager
 from config.settings import settings
 from video_processing.db.database import PipelineDB
+from video_processing.telegram_delivery import send_text
 
 
 LOCK_PATH = PROJECT_ROOT / "output" / "publication_window_runner.lock"
@@ -209,8 +211,128 @@ def dispatch_one_deferred_english_world_submission() -> None:
         )
 
 
+def reconcile_one_english_world_submission() -> None:
+    """按同次提交绑定的原生 ID 回查一条英语世界作品；不上传、不按标题匹配。"""
+    pipeline_lock = PROJECT_ROOT / "output" / "pipeline.lock"
+    pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
+    with pipeline_lock.open("a+") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logging.info("[EnglishWorld] pipeline.lock 正忙，本轮跳过只读作品回查。")
+            return
+        try:
+            db = PipelineDB()
+            item = db.claim_next_english_world_reconciliation(
+                min_interval_minutes=settings.english_world_reconcile_interval_minutes,
+                max_age_hours=settings.english_world_reconcile_max_age_hours,
+                failure_limit=settings.english_world_reconcile_failure_limit,
+            )
+            if not item:
+                return
+            review_id = str(item["id"])
+            platform_post_id = str(item["platform_post_id"])
+            evidence_root = Path(str(item.get("evidence_dir") or PROJECT_ROOT / "output"))
+            evidence_dir = evidence_root / "reconciliation" / str(time.time_ns())
+            command = [
+                str(PROJECT_ROOT / ".venv/bin/python"),
+                str(PROJECT_ROOT / "scripts/wechat_uploader.py"),
+                "--state", str(PROJECT_ROOT / "output/wechat_state.json"),
+                "--evidence-dir", str(evidence_dir),
+                "--fail-fast-login",
+                "--verify-only",
+                "--platform-post-id", platform_post_id,
+            ]
+            if not settings.wechat_headless:
+                command.append("--no-headless")
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=max(30, int(settings.wechat_review_timeout_seconds or 180)),
+                )
+            except subprocess.TimeoutExpired:
+                db.record_english_world_reconciliation(
+                    review_id,
+                    platform_state="UNCERTAIN",
+                    evidence_dir=str(evidence_dir),
+                    message="视频号原生 ID 只读回查超时；保留已受理状态并等待下一次节流回查。",
+                )
+                return
+
+            outcomes = {
+                0: ("PUBLISHED", "management_published.png", "作品管理页按原生 ID 明确显示已发布。"),
+                6: ("UNDER_REVIEW", "management_under_review.png", "作品管理页按原生 ID 明确显示仍在审核/处理中。"),
+                8: ("REJECTED", "management_rejected.png", "作品管理页按原生 ID 明确显示审核未通过；禁止自动重传。"),
+                9: ("NOT_FOUND", "management_not_found.png", "作品管理页按原生 ID 未找到记录；保留提交事实且禁止自动重传。"),
+            }
+            platform_state, evidence_name, message = outcomes.get(
+                result.returncode,
+                ("UNCERTAIN", "management_uncertain.png", "视频号原生 ID 只读回查暂不可判定；保留已受理状态。"),
+            )
+            evidence_path = evidence_dir / evidence_name
+            if not evidence_path.is_file():
+                platform_state = "UNCERTAIN"
+                message = "视频号原生 ID 回查缺少对应页面证据；不改变已受理事实。"
+            updated = db.record_english_world_reconciliation(
+                review_id,
+                platform_state=platform_state,
+                evidence_dir=str(evidence_dir),
+                message=message,
+                platform_url=item.get("platform_url"),
+            )
+            if platform_state == "PUBLISHED":
+                send_text(
+                    event_type="english_world.platform_published",
+                    priority="P1",
+                    text=f"✅ 英语世界视频号已公开\n标题：{item.get('title') or review_id[:8]}\n审核编号：{review_id[:8]}",
+                    cooldown_seconds=24 * 60 * 60,
+                    dedupe_key=review_id,
+                    db=db,
+                )
+            elif platform_state == "REJECTED":
+                send_text(
+                    event_type="english_world.platform_rejected",
+                    priority="P0",
+                    text=f"⛔ 英语世界视频号审核未通过，已禁止重传\n标题：{item.get('title') or review_id[:8]}\n审核编号：{review_id[:8]}",
+                    cooldown_seconds=24 * 60 * 60,
+                    dedupe_key=review_id,
+                    db=db,
+                )
+            elif (
+                platform_state in {"UNCERTAIN", "NOT_FOUND"}
+                and int(updated.get("reconciliation_failures") or 0)
+                >= max(1, int(settings.english_world_reconcile_failure_limit))
+            ):
+                send_text(
+                    event_type="english_world.reconciliation_recording_required",
+                    priority="P1",
+                    text=(
+                        "⚠️ 英语世界视频号精确回查已连续失败并自动熔断，不会重传。\n"
+                        f"标题：{item.get('title') or review_id[:8]}\n审核编号：{review_id[:8]}\n"
+                        "请录制一次从视频号作品管理打开并查看该作品状态的流程，供定位页面变化。"
+                    ),
+                    cooldown_seconds=24 * 60 * 60,
+                    dedupe_key=review_id,
+                    db=db,
+                )
+            logging.info(
+                "[EnglishWorld] 原生 ID 回查完成 review=%s platform_state=%s",
+                review_id[:8], platform_state,
+            )
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        reconcile_one_english_world_submission()
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        logging.error("[EnglishWorld] accepted submission reconciliation failed: %s", exc)
     try:
         dispatch_one_deferred_english_world_submission()
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:

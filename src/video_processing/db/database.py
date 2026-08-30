@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.56.0  | 2026-08-30 | Codex                               | 英语世界投稿账本持久化视频号原生 ID，并提供节流的精确作品管理回查状态。 |
 | 3.55.0  | 2026-08-30 | Codex                               | 抖音 NEW 候选和视频号下游取消显式消费公开确认策略；关闭时仍不复活任何既有账本。 |
 | 3.54.0  | 2026-08-30 | Codex                               | 持久化平台同阶段 UI 连续失败；达到阈值后跨巡航熔断，校准证据清除时保留审计。 |
 | 3.37.0  | 2026-08-23 | Codex                               | 保存源视频 UTC 精确发布时间，支持发布前原创声明 24 小时判定 |
@@ -1242,6 +1243,13 @@ class PipelineDB:
                     submission_finished_at TIMESTAMP DEFAULT NULL,
                     uploader_exit_code INTEGER DEFAULT NULL,
                     evidence_dir TEXT DEFAULT NULL,
+                    platform_post_id TEXT DEFAULT NULL,
+                    platform_url TEXT DEFAULT NULL,
+                    platform_state TEXT DEFAULT NULL,
+                    reconciliation_evidence_dir TEXT DEFAULT NULL,
+                    last_reconciled_at TIMESTAMP DEFAULT NULL,
+                    reconciliation_failures INTEGER NOT NULL DEFAULT 0,
+                    reconciliation_error TEXT DEFAULT NULL,
                     error_message TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -1273,6 +1281,23 @@ class PipelineDB:
                     cursor.execute(
                         f"ALTER TABLE english_world_review_items ADD COLUMN {hash_column} TEXT DEFAULT NULL"
                     )
+            for column_name, column_type in (
+                ("platform_post_id", "TEXT DEFAULT NULL"),
+                ("platform_url", "TEXT DEFAULT NULL"),
+                ("platform_state", "TEXT DEFAULT NULL"),
+                ("reconciliation_evidence_dir", "TEXT DEFAULT NULL"),
+                ("last_reconciled_at", "TIMESTAMP DEFAULT NULL"),
+                ("reconciliation_failures", "INTEGER NOT NULL DEFAULT 0"),
+                ("reconciliation_error", "TEXT DEFAULT NULL"),
+            ):
+                if column_name not in english_world_review_columns:
+                    cursor.execute(
+                        f"ALTER TABLE english_world_review_items ADD COLUMN {column_name} {column_type}"
+                    )
+            cursor.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_english_world_review_platform_post "
+                "ON english_world_review_items(platform_post_id) WHERE platform_post_id IS NOT NULL"
+            )
 
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS english_world_submission_attempts (
@@ -1289,6 +1314,8 @@ class PipelineDB:
                     cover_sha256 TEXT DEFAULT NULL,
                     cover_provenance_sha256 TEXT DEFAULT NULL,
                     evidence_dir TEXT DEFAULT NULL,
+                    platform_post_id TEXT DEFAULT NULL,
+                    platform_url TEXT DEFAULT NULL,
                     uploader_exit_code INTEGER DEFAULT NULL,
                     error_message TEXT DEFAULT NULL,
                     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1300,6 +1327,13 @@ class PipelineDB:
                 "CREATE INDEX IF NOT EXISTS idx_english_world_submission_attempts_review "
                 "ON english_world_submission_attempts(review_id, started_at DESC)"
             )
+            cursor.execute("PRAGMA table_info(english_world_submission_attempts)")
+            english_world_attempt_columns = {row[1] for row in cursor.fetchall()}
+            for column_name in ("platform_post_id", "platform_url"):
+                if column_name not in english_world_attempt_columns:
+                    cursor.execute(
+                        f"ALTER TABLE english_world_submission_attempts ADD COLUMN {column_name} TEXT DEFAULT NULL"
+                    )
 
             # Telegram 投递回执与业务状态分开保存。HTTP 超时不能证明未送达，故以
             # UNKNOWN 保留不确定性供人工排障；它不能作为已送达依据，更不能抑制重试。
@@ -5817,12 +5851,18 @@ class PipelineDB:
         evidence_dir: Optional[str] = None,
         message: Optional[str] = None,
         attempt_id: Optional[str] = None,
+        platform_post_id: Optional[str] = None,
+        platform_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """写入一次投稿尝试的保守结果；不把已受理或未确认伪装为公开发布。"""
         target_state = (state or "").strip().upper()
         allowed = {"UNDER_REVIEW", "UNCERTAIN", "LOGIN_REQUIRED", "FAILED"}
         if target_state not in allowed:
             raise ValueError("Invalid English World submission completion state")
+        clean_platform_post_id = (platform_post_id or "").strip() or None
+        clean_platform_url = (platform_url or "").strip() or None
+        if clean_platform_post_id and target_state != "UNDER_REVIEW":
+            raise ValueError("English World platform identity requires an accepted submission")
         with self.get_connection() as conn:
             clean_review_id = (review_id or "").strip()
             clean_attempt_id = (attempt_id or "").strip()
@@ -5839,11 +5879,14 @@ class PipelineDB:
             cursor = conn.execute(
                 """UPDATE english_world_review_items
                    SET state = ?, uploader_exit_code = ?, evidence_dir = ?, error_message = ?,
+                       platform_post_id = COALESCE(?, platform_post_id),
+                       platform_url = COALESCE(?, platform_url),
                        submission_finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
                    WHERE id = ? AND state = 'SUBMITTING'""",
                 (
                     target_state, int(uploader_exit_code), (evidence_dir or "").strip() or None,
-                    (message or "").strip()[:1000] or None, clean_review_id,
+                    (message or "").strip()[:1000] or None,
+                    clean_platform_post_id, clean_platform_url, clean_review_id,
                 ),
             )
             if cursor.rowcount != 1:
@@ -5851,16 +5894,160 @@ class PipelineDB:
             attempt_cursor = conn.execute(
                 """UPDATE english_world_submission_attempts
                    SET state = ?, uploader_exit_code = ?, evidence_dir = COALESCE(?, evidence_dir),
-                       error_message = ?, finished_at = CURRENT_TIMESTAMP
+                       error_message = ?, platform_post_id = COALESCE(?, platform_post_id),
+                       platform_url = COALESCE(?, platform_url), finished_at = CURRENT_TIMESTAMP
                    WHERE attempt_id = ? AND review_id = ? AND state = 'SUBMITTING'""",
                 (
                     target_state, int(uploader_exit_code), (evidence_dir or "").strip() or None,
                     (message or "").strip()[:1000] or None,
-                    clean_attempt_id, clean_review_id,
+                    clean_platform_post_id, clean_platform_url, clean_attempt_id, clean_review_id,
                 ),
             )
             if attempt_cursor.rowcount != 1:
                 raise ValueError("English World submission attempt cannot be completed")
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM english_world_review_items WHERE id = ?", (clean_review_id,),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def bind_english_world_submission_platform_identity(
+        self,
+        review_id: str,
+        *,
+        attempt_id: str,
+        platform_post_id: str,
+        platform_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """把同次提交回执中的原生 ID 绑定到已受理审核项；不接受标题或时间推断。"""
+        clean_review_id = (review_id or "").strip()
+        clean_attempt_id = (attempt_id or "").strip()
+        clean_platform_post_id = (platform_post_id or "").strip()
+        clean_platform_url = (platform_url or "").strip() or None
+        if not clean_platform_post_id:
+            raise ValueError("English World platform_post_id is required")
+        with self.get_connection() as conn:
+            existing = conn.execute(
+                "SELECT id FROM english_world_review_items WHERE platform_post_id = ?",
+                (clean_platform_post_id,),
+            ).fetchone()
+            if existing and existing["id"] != clean_review_id:
+                raise ValueError("English World platform_post_id is already bound")
+            attempt = conn.execute(
+                """SELECT attempt_id FROM english_world_submission_attempts
+                   WHERE attempt_id = ? AND review_id = ? AND state = 'UNDER_REVIEW'""",
+                (clean_attempt_id, clean_review_id),
+            ).fetchone()
+            if not attempt:
+                raise ValueError("English World accepted submission attempt is missing")
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET platform_post_id = ?, platform_url = COALESCE(?, platform_url),
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'UNDER_REVIEW'""",
+                (clean_platform_post_id, clean_platform_url, clean_review_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World review item is not bindable")
+            conn.execute(
+                """UPDATE english_world_submission_attempts
+                   SET platform_post_id = ?, platform_url = COALESCE(?, platform_url)
+                   WHERE attempt_id = ? AND review_id = ?""",
+                (clean_platform_post_id, clean_platform_url, clean_attempt_id, clean_review_id),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM english_world_review_items WHERE id = ?", (clean_review_id,),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def claim_next_english_world_reconciliation(
+        self,
+        *,
+        min_interval_minutes: int = 30,
+        max_age_hours: int = 72,
+        failure_limit: int = 2,
+    ) -> Optional[Dict[str, Any]]:
+        """原子领取一条已绑定审核项做只读回查；节流且绝不产生投稿尝试。"""
+        safe_interval = max(5, min(24 * 60, int(min_interval_minutes)))
+        safe_max_age = max(1, min(24 * 30, int(max_age_hours)))
+        safe_failure_limit = max(1, min(10, int(failure_limit)))
+        interval = f"-{safe_interval} minutes"
+        max_age = f"-{safe_max_age} hours"
+        with self.get_connection() as conn:
+            candidate = conn.execute(
+                """SELECT id FROM english_world_review_items
+                   WHERE state = 'UNDER_REVIEW'
+                     AND platform_post_id IS NOT NULL AND platform_post_id != ''
+                     AND COALESCE(platform_state, '') NOT IN ('PUBLISHED', 'REJECTED')
+                     AND reconciliation_failures < ?
+                     AND submission_finished_at >= datetime('now', ?)
+                     AND (last_reconciled_at IS NULL OR last_reconciled_at <= datetime('now', ?))
+                   ORDER BY COALESCE(last_reconciled_at, submission_finished_at) ASC, id ASC
+                   LIMIT 1""",
+                (safe_failure_limit, max_age, interval),
+            ).fetchone()
+            if not candidate:
+                return None
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET last_reconciled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'UNDER_REVIEW'
+                     AND platform_post_id IS NOT NULL AND platform_post_id != ''
+                     AND COALESCE(platform_state, '') NOT IN ('PUBLISHED', 'REJECTED')
+                     AND reconciliation_failures < ?
+                     AND (last_reconciled_at IS NULL OR last_reconciled_at <= datetime('now', ?))""",
+                (candidate["id"], safe_failure_limit, interval),
+            )
+            if cursor.rowcount != 1:
+                return None
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM english_world_review_items WHERE id = ?", (candidate["id"],),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def record_english_world_reconciliation(
+        self,
+        review_id: str,
+        *,
+        platform_state: str,
+        evidence_dir: Optional[str],
+        message: str,
+        platform_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """记录按原生 ID 得到的平台状态；不重开、不重传，也不覆盖受理事实。"""
+        normalized_state = (platform_state or "").strip().upper()
+        if normalized_state not in {"PUBLISHED", "UNDER_REVIEW", "REJECTED", "UNCERTAIN", "NOT_FOUND"}:
+            raise ValueError("Invalid English World platform state")
+        clean_review_id = (review_id or "").strip()
+        clean_evidence_dir = (evidence_dir or "").strip() or None
+        clean_message = " ".join((message or "").split())[:1000] or None
+        clean_platform_url = (platform_url or "").strip() or None
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET platform_state = ?, reconciliation_evidence_dir = ?,
+                       reconciliation_error = ?, platform_url = COALESCE(?, platform_url),
+                       reconciliation_failures = CASE
+                           WHEN ? IN ('UNCERTAIN', 'NOT_FOUND') THEN reconciliation_failures + 1
+                           ELSE 0
+                       END,
+                       last_reconciled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'UNDER_REVIEW' AND platform_post_id IS NOT NULL""",
+                (
+                    normalized_state, clean_evidence_dir,
+                    clean_message if normalized_state in {"UNCERTAIN", "NOT_FOUND"} else None,
+                    clean_platform_url, normalized_state, clean_review_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World review item cannot be reconciled")
+            if clean_message and normalized_state not in {"UNCERTAIN", "NOT_FOUND"}:
+                conn.execute(
+                    "UPDATE english_world_review_items SET error_message = ? WHERE id = ?",
+                    (clean_message, clean_review_id),
+                )
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM english_world_review_items WHERE id = ?", (clean_review_id,),

@@ -6,9 +6,11 @@
 | 1.0.0 | 2026-08-29 | Codex | 固化自动授权窗口外延后，人工两小时授权可单项绕过。 |
 | 1.1.0 | 2026-08-30 | Codex | 固化延后必须返回独立状态码，避免退出码 0 伪装成投稿成功。 |
 | 1.2.0 | 2026-08-30 | Codex | 固化具名操作员补发 capability 与人工授权使用相同的两小时边界。 |
+| 1.3.0 | 2026-08-30 | Codex | 固化仅接受同次唯一原生 ID 差分回执，拒绝模糊或未绑定身份。 |
 """
 
 from datetime import datetime, timedelta, timezone
+import json
 
 from scripts import submit_english_world_review as submitter
 
@@ -52,3 +54,21 @@ def test_auto_policy_submission_is_deferred_outside_public_window(monkeypatch):
 
     assert submitter.submit("a" * 32) == submitter.EXIT_DEFERRED
     assert calls == [("get", "a" * 32), ("expire", "a" * 32)]
+
+
+def test_submission_identity_requires_same_session_unique_native_id_delta(tmp_path):
+    receipt = tmp_path / "submission_receipt.json"
+    receipt.write_text(json.dumps({
+        "matched_by": "same_session_before_after_unique_post_list_object_id_delta",
+        "platform_post_id": "export/native-id",
+        "platform_url": "https://channels.weixin.qq.com/platform/post/list",
+    }), encoding="utf-8")
+
+    assert submitter._read_submission_identity(tmp_path) == (
+        "export/native-id", "https://channels.weixin.qq.com/platform/post/list",
+    )
+
+    receipt.write_text(json.dumps({
+        "matched_by": "title_guess", "platform_post_id": "export/wrong",
+    }), encoding="utf-8")
+    assert submitter._read_submission_identity(tmp_path) == (None, None)

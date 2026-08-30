@@ -14,6 +14,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 | 1.4.0 | 2026-08-29 | Codex | 专用投稿器复用全局 pipeline.lock，避免与通用流水线并发操作微信浏览器会话。 |
 | 1.5.0 | 2026-08-30 | Codex | 窗口外延后返回独立状态码，禁止把“尚未上传”误报为执行成功。 |
 | 1.6.0 | 2026-08-30 | Codex | 支持具名操作员对零尝试自动延后项签发两小时单项补发授权。 |
+| 1.7.0 | 2026-08-30 | Codex | 将同次提交回执中的视频号原生 ID 原子写入英语世界审核与尝试账本。 |
 """
 
 from __future__ import annotations
@@ -88,6 +89,20 @@ def _completion_for_exit_code(code: int) -> tuple[str, str]:
     if code == 3:
         return "UNCERTAIN", "投稿结果无法确认，可能已受理；已停止自动重传，需在视频号后台核验。"
     return "FAILED", f"投稿器返回 exit={code}，未自动重传。请先核验视频号后台再决定后续动作。"
+
+
+def _read_submission_identity(evidence_dir: Path) -> tuple[str | None, str | None]:
+    """只读取本次证据目录的原生 ID 回执；不按标题或时间猜测历史作品。"""
+    receipt_path = evidence_dir / "submission_receipt.json"
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None, None
+    if str(receipt.get("matched_by") or "") != "same_session_before_after_unique_post_list_object_id_delta":
+        return None, None
+    platform_post_id = str(receipt.get("platform_post_id") or "").strip() or None
+    platform_url = str(receipt.get("platform_url") or "").strip() or None
+    return platform_post_id, platform_url
 
 
 def _manual_authorization_active(item: dict) -> bool:
@@ -166,11 +181,15 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
         state, message = _completion_for_exit_code(result.returncode)
+        platform_post_id, platform_url = _read_submission_identity(evidence_dir)
+        if state != "UNDER_REVIEW":
+            platform_post_id = platform_url = None
         if result.stderr:
             message = f"{message}\n执行摘要：{result.stderr[-500:].strip()}"
         db.complete_english_world_submission(
             review_id, state=state, uploader_exit_code=result.returncode,
             evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
+            platform_post_id=platform_post_id, platform_url=platform_url,
         )
     except subprocess.TimeoutExpired:
         state = "UNCERTAIN"

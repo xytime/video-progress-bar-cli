@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.57.0 | 2026-08-30 | Codex | 英语世界视频号原生 ID 回查增加独立节流与最大自动巡检时长。 |
 | 3.56.0 | 2026-08-30 | Codex | 显式声明抖音 NEW 是否必须等待视频号公开确认；默认 true 保持生产顺序不变。 |
 | 3.55.0 | 2026-08-30 | Codex | 新增抖音同阶段 UI 连续失败录屏熔断阈值；跨巡航累计后在打开浏览器前停止。 |
 | 3.16.3 | 2026-08-24 | Codex | 平台发布审查字幕改存为独立证据快照；最短保留 31 天且不受原始视频 3 天归档 TTL 影响。 |
@@ -401,6 +402,10 @@ class Settings(BaseSettings):
     # 英语世界成片通过本地质检后，可由独立账本一次性自动提交视频号。默认关闭，
     # 开启也不会触碰既有待审核/未确认项，更不会为任何终态自动重传。
     enable_english_world_auto_publish: bool = False
+    # 已受理英语世界作品仅按同次提交绑定的原生 ID 回查；节流避免每分钟打开后台。
+    english_world_reconcile_interval_minutes: int = 30
+    english_world_reconcile_max_age_hours: int = 72
+    english_world_reconcile_failure_limit: int = 2
     ai_cover_queue_dir: str = "ai-cover-queue"
     ai_cover_finish_dir: str = "ai-cover-finish"
     ai_cover_generation_deadline_minutes: int = 32
