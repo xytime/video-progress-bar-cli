@@ -16,6 +16,7 @@
 | 1.3.7 | 2026-07-29 | Codex | 覆盖自主声明弹窗单选项及确定按钮的完整确认流程 |
 | 1.3.8 | 2026-08-08 | Codex | 覆盖作品管理页须精确匹配正文指纹后才读取本作品的发布状态 |
 | 1.3.9 | 2026-08-24 | Codex | 覆盖封面完成按钮不可用时 fail-closed，且正常路径必须确认编辑器已关闭。 |
+| 1.3.10 | 2026-08-30 | Codex | 覆盖作品列表标题回查、真实加载等待、原表单不算提交回执及最终按钮单次点击 |
 """
 
 from pathlib import Path
@@ -46,6 +47,7 @@ from scripts.douyin_uploader import (
     select_self_declaration,
     upload_for_calibration,
     upload_and_publish,
+    wait_for_management_content,
     wait_for_upload_completion,
     wait_for_publish_submission,
     wait_for_cover_validation,
@@ -70,6 +72,35 @@ def test_management_state_keeps_exactly_matched_work_under_review():
     page_text = copy_text + " 编辑作品 设置权限 2026年08月08日 审核中"
 
     assert get_management_publication_state(page_text, copy_text) == "UNDER_REVIEW"
+
+
+def test_management_state_uses_exact_title_when_current_list_hides_copy():
+    title = "AI短片人物不连戏？这招帮你搞定"
+    copy_text = "管理页当前不展示的长正文内容。" * 8
+    page_text = (
+        "作品(114)全部已发布审核中不通过 "
+        + title
+        + " 编辑作品 设置权限 2026年08月24日 22:00 审核中 播放 -"
+    )
+
+    assert get_management_publication_state(page_text, copy_text, title) == "UNDER_REVIEW"
+    assert get_management_publication_state(page_text, copy_text, title + "不同") is None
+
+
+def test_management_wait_ignores_empty_shell_until_list_or_target_loads():
+    page = MagicMock()
+    body = MagicMock()
+    body.inner_text.side_effect = [
+        "作品发布 首页 内容管理 数据中心",
+        "作品发布 首页 内容管理 加载中",
+        "作品(114) 全部 已发布 审核中 搜索作品 精确标题",
+    ]
+    page.locator.return_value = body
+
+    text = wait_for_management_content(page, timeout_ms=2_000, expected_markers=["精确标题"])
+
+    assert "精确标题" in text
+    assert page.wait_for_timeout.call_count == 2
 
 
 def test_login_detection_includes_passport_and_creator_login_text():
@@ -373,7 +404,7 @@ def test_douyin_publish_wait_ignores_old_work_status_until_current_marker_appear
     body.inner_text.side_effect = [
         "作品上传中，请勿关闭页面 78% 已发布 旧作品标题",
         "已发布 旧作品标题",
-        "审核中 一个测试标题",
+        "提交成功 一个测试标题",
     ]
     controls = MagicMock()
     controls.evaluate_all.return_value = []
@@ -391,6 +422,39 @@ def test_douyin_publish_wait_accepts_manage_page_success_toast():
     page.locator.return_value = body
 
     assert wait_for_publish_submission(page, title_text="标题", description_text="描述", timeout_seconds=1)
+
+
+def test_douyin_publish_wait_does_not_treat_unchanged_form_as_submission():
+    page = MagicMock()
+    page.url = "https://creator.douyin.com/creator-micro/content/upload"
+    body = MagicMock()
+    body.inner_text.return_value = "作品描述 一个测试标题 一段测试描述 发布"
+    page.locator.return_value = body
+
+    assert not wait_for_publish_submission(
+        page,
+        title_text="一个测试标题",
+        description_text="一段测试描述",
+        timeout_seconds=2,
+    )
+    assert page.wait_for_timeout.call_count == 2
+
+
+def test_douyin_publish_click_failure_is_not_force_retried(tmp_path: Path):
+    page = MagicMock()
+    page.evaluate.return_value = True
+    button = MagicMock()
+    button.count.return_value = 1
+    button.is_enabled.return_value = True
+    button.click.side_effect = RuntimeError("overlay changed")
+    page.get_by_text.return_value = button
+    controls = MagicMock()
+    controls.evaluate_all.return_value = []
+    page.locator.return_value = controls
+
+    assert not publish_after_review(page, tmp_path, title_text="标题", description_text="描述")
+    button.click.assert_called_once_with(timeout=5000)
+    assert (tmp_path / "douyin_submit_click_failed_controls.json").exists()
 
 
 def test_douyin_upload_and_publish_returns_under_review(tmp_path: Path):

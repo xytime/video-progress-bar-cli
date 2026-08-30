@@ -1,8 +1,8 @@
 """抖音创作者中心浏览器上传器。
 
 上传与发布继续采用页面校准和 fail-closed 门禁；`--verify-only` 则只读访问作品管理页，
-必须在同一作品卡片中精确匹配本地文案指纹及“已发布”或“审核中”状态，绝不凭本地账本
-或页面其他作品的状态确认结果。
+必须在同一作品卡片中精确匹配本地标题或文案指纹及“已发布”或“审核中”状态，绝不凭
+本地账本或页面其他作品的状态确认结果。
 
 # Modification History
 | Version | Date | Author | Description |
@@ -45,6 +45,7 @@
 | 1.5.27 | 2026-08-08 | Codex | 回查等待作品列表脱离加载态，避免把刚打开的空壳页面误判为未确认 |
 | 1.5.28 | 2026-08-24 | Codex | 封面“完成”不可用或编辑器未关闭时拒绝进入自主声明，避免仅见卡槽标签便误判横竖封面已保存 |
 | 1.5.29 | 2026-08-24 | Codex | 对齐创作者中心实际封面弹窗 body 选择器，避免未定位弹窗时把整页可见误判为编辑器未关闭 |
+| 1.5.30 | 2026-08-30 | Codex | 作品管理回查等待列表真实加载并优先精确匹配标题；发布受理只认跳转或明确回执，最终按钮异常不再强制重点击 |
 """
 
 from __future__ import annotations
@@ -130,46 +131,83 @@ def get_management_copy_markers(copy_text: str) -> list[str]:
     return markers
 
 
-def get_management_publication_state(page_text: str, copy_text: str) -> Optional[str]:
-    """只在匹配到本次正文后的同一作品卡片片段内读取可见发布状态。"""
+def get_management_publication_state(
+    page_text: str,
+    copy_text: str,
+    title_text: str = "",
+) -> Optional[str]:
+    """只在精确身份锚点后的同一作品卡片片段内读取可见发布状态。"""
     normalized_page = _normalize_page_text(page_text)
-    for marker in get_management_copy_markers(copy_text):
-        marker_index = normalized_page.find(marker)
-        if marker_index < 0:
-            continue
-        status_window = normalized_page[marker_index + len(marker):marker_index + len(marker) + 900]
-        review_index = status_window.find("审核中")
-        published_index = status_window.find("已发布")
-        if review_index >= 0 and (published_index < 0 or review_index < published_index):
-            return MANAGEMENT_UNDER_REVIEW
-        if published_index >= 0:
-            return MANAGEMENT_PUBLISHED
+    normalized_title = _normalize_page_text(title_text)
+    markers = [normalized_title] if len(normalized_title) >= 6 else []
+    markers.extend(marker for marker in get_management_copy_markers(copy_text) if marker not in markers)
+    matched_states: set[str] = set()
+    for marker in markers:
+        start = 0
+        while True:
+            marker_index = normalized_page.find(marker, start)
+            if marker_index < 0:
+                break
+            # 当前作品管理列表只展示标题、日期和状态；收窄窗口，避免读到下一张作品卡片。
+            status_window = normalized_page[marker_index + len(marker):marker_index + len(marker) + 320]
+            review_index = status_window.find("审核中")
+            published_index = status_window.find("已发布")
+            if review_index >= 0 and (published_index < 0 or review_index < published_index):
+                matched_states.add(MANAGEMENT_UNDER_REVIEW)
+            elif published_index >= 0:
+                matched_states.add(MANAGEMENT_PUBLISHED)
+            start = marker_index + len(marker)
+    if len(matched_states) == 1:
+        return next(iter(matched_states))
     return None
 
 
-def wait_for_management_content(page, timeout_ms: int = 15_000) -> str:
-    """等作品管理列表完成首屏加载；超时也只返回最后可见正文，保持未确认。"""
+def wait_for_management_content(
+    page,
+    timeout_ms: int = 15_000,
+    *,
+    expected_markers: Iterable[str] = (),
+) -> str:
+    """等作品列表骨架或目标身份出现；超时仍保持未确认。"""
     deadline = time.monotonic() + timeout_ms / 1000
-    page_text = get_page_text(page)
-    while "加载中" in page_text and time.monotonic() < deadline:
-        page.wait_for_timeout(500)
+    markers = tuple(marker for marker in expected_markers if marker)
+    page_text = ""
+    while time.monotonic() < deadline:
         page_text = get_page_text(page)
+        normalized = _normalize_page_text(page_text)
+        target_visible = any(marker in normalized for marker in markers)
+        list_ready = (
+            "搜索作品" in page_text
+            and "已发布" in page_text
+            and ("审核中" in page_text or "不通过" in page_text)
+        )
+        if "加载中" not in page_text and (target_visible or list_ready):
+            return page_text
+        page.wait_for_timeout(500)
     return page_text
 
 
-def verify_management_publication(page, artifact_dir: Path, copy_text: str) -> Optional[str]:
+def verify_management_publication(
+    page,
+    artifact_dir: Path,
+    copy_text: str,
+    title_text: str = "",
+) -> Optional[str]:
     """只读进入作品管理页，记录当前页面证据并返回本次作品的明确可见状态。"""
     try:
         page.goto(DOUYIN_MANAGEMENT_URL, wait_until="domcontentloaded", timeout=60_000)
     except Exception as exc:
         logger.error("进入抖音作品管理页失败: %s", exc)
         return None
-    page_text = wait_for_management_content(page)
+    normalized_title = _normalize_page_text(title_text)
+    expected_markers = [normalized_title] if len(normalized_title) >= 6 else []
+    expected_markers.extend(get_management_copy_markers(copy_text))
+    page_text = wait_for_management_content(page, expected_markers=expected_markers)
     if is_login_required(page.url, page_text, [frame.url for frame in page.frames]):
         logger.error("抖音作品管理页登录态失效")
         return None
     capture_controls(page, artifact_dir, "douyin_management_evidence")
-    return get_management_publication_state(page_text, copy_text)
+    return get_management_publication_state(page_text, copy_text, title_text)
 
 
 def capture_controls(page, artifact_dir: Path, artifact_name: str) -> None:
@@ -1419,22 +1457,15 @@ def _normalize_page_text(text: str) -> str:
     return "".join((text or "").split())
 
 
-def _current_work_visible(page_text: str, title_text: str, description_text: str) -> bool:
-    normalized_page = _normalize_page_text(page_text)
-    title_marker = _normalize_page_text(title_text)[:20]
-    desc_marker = _normalize_page_text(description_text)[:30]
-    return bool(title_marker and title_marker in normalized_page) or bool(desc_marker and desc_marker in normalized_page)
-
-
 def wait_for_publish_submission(
     page,
     *,
     title_text: str,
     description_text: str,
-    timeout_seconds: int = 900,
+    timeout_seconds: int = 180,
 ) -> bool:
     """等待抖音接受提交；最终可见状态仍交给作品管理回查确认。"""
-    success_markers = ("发布成功", "提交成功", "作品发布成功", "等待审核", "审核中", "发布完成", "管理作品")
+    success_markers = ("发布成功", "提交成功", "作品发布成功", "等待审核", "发布完成")
     failure_markers = ("发布失败", "提交失败", "不成功")
     upload_markers = ("作品上传中", "上传完成后将自动发布", "请勿关闭页面")
     for elapsed in range(timeout_seconds):
@@ -1453,8 +1484,6 @@ def wait_for_publish_submission(
                 logger.info("抖音发布后仍在上传，已等待 %s 秒", elapsed)
             page.wait_for_timeout(1_000)
             continue
-        if _current_work_visible(text, title_text, description_text):
-            return True
         if any(marker in text for marker in failure_markers):
             logger.error("抖音页面提示提交失败: %s", " ".join(text.split())[:500])
             return False
@@ -1483,8 +1512,9 @@ def publish_after_review(page, artifact_dir: Path, *, title_text: str, descripti
     try:
         button.click(timeout=5000)
     except Exception as exc:
-        logger.warning("普通点击发布按钮受阻 (%s)，使用 force=True 强制点击发布", exc)
-        button.click(force=True)
+        logger.error("抖音最终发布按钮点击未确认，拒绝强制重点击: %s", exc)
+        capture_controls(page, artifact_dir, "douyin_submit_click_failed")
+        return False
     page.wait_for_timeout(1_000)
     capture_controls(page, artifact_dir, "douyin_post_submit")
     if wait_for_publish_submission(page, title_text=title_text, description_text=description_text):
@@ -1637,10 +1667,12 @@ def main() -> int:
             return EXIT_UPLOADED_FOR_CALIBRATION if uploaded else EXIT_UNCONFIRMED
 
         if args.verify_only:
+            title_text = args.title_file.read_text(encoding="utf-8") if args.title_file else ""
             state = verify_management_publication(
                 page,
                 artifact_dir,
                 args.copy.read_text(encoding="utf-8"),
+                title_text,
             )
             browser.close()
             if state == MANAGEMENT_PUBLISHED:
