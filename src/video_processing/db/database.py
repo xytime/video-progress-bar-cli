@@ -22,6 +22,7 @@
 | 3.50.0  | 2026-08-29 | Codex                               | 英语世界审核项绑定完整投稿包哈希、同源活动项防重，并为每次投稿保留不可覆盖证据账本。 |
 | 3.51.0  | 2026-08-29 | Codex                               | 英语世界二次确认制作请求新增原子领取、审核项绑定和失败收口状态，不接通用发布队列。 |
 | 3.52.0  | 2026-08-29 | Codex                               | 英语世界候选持久化授权频道 ID；旧的仅显示名候选在选择阶段 fail-closed。 |
+| 3.53.0  | 2026-08-30 | Codex                               | 英语世界新增具名操作员补发授权；仅可领取零尝试的自动延后项并保留两小时审计。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
 | 3.33.0  | 2026-08-21 | Codex                               | 视频号延后恢复领取排除历史提交墓碑，且仪表盘将待恢复队列与实际处理中状态分离 |
@@ -5583,7 +5584,7 @@ class PipelineDB:
                      AND (
                          approval_source = 'AUTO_POLICY'
                          OR (
-                             approval_source = 'TELEGRAM_REVIEW'
+                             approval_source IN ('TELEGRAM_REVIEW', 'OPERATOR_RECOVERY')
                              AND authorization_expires_at > CURRENT_TIMESTAMP
                          )
                      )""",
@@ -5612,6 +5613,40 @@ class PipelineDB:
                 ),
             )
             return {**dict(row), "_attempt_id": attempt_id}
+
+    def authorize_english_world_operator_recovery(
+        self, review_id: str, *, reason: str,
+    ) -> Dict[str, Any]:
+        """为一条可证明从未提交的自动延后项签发两小时具名补发授权。
+
+        该入口只允许从 ``AUTO_POLICY/SUBMISSION_APPROVED`` 转换，且必须没有
+        submission_started_at 和不可变尝试记录；任何在途、失败或未确认项均拒绝。
+        """
+        clean_id = (review_id or "").strip()
+        clean_reason = " ".join((reason or "").split())
+        if not clean_reason or len(clean_reason) > 240:
+            raise ValueError("English World operator recovery requires a concise reason")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET approval_source = 'OPERATOR_RECOVERY',
+                       authorization_expires_at = datetime('now', '+120 minutes'),
+                       error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'SUBMISSION_APPROVED'
+                     AND approval_source = 'AUTO_POLICY'
+                     AND submission_started_at IS NULL
+                     AND NOT EXISTS (
+                         SELECT 1 FROM english_world_submission_attempts attempt
+                         WHERE attempt.review_id = english_world_review_items.id
+                     )""",
+                (f"操作员具名补发授权：{clean_reason}", clean_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Only an unattempted AUTO_POLICY item can receive operator recovery")
+            row = conn.execute(
+                "SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,),
+            ).fetchone()
+            return dict(row) if row else {}
 
     def expire_english_world_submission_authorization(self, review_id: str) -> Optional[Dict[str, Any]]:
         """将已过期的两小时人工授权退回待审核；自动策略授权不受影响。"""

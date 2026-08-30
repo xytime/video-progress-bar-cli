@@ -13,6 +13,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 | 1.3.0 | 2026-08-29 | Codex | 上传前复核完整投稿包哈希，并将每次尝试绑定独立 evidence_dir 持久化。 |
 | 1.4.0 | 2026-08-29 | Codex | 专用投稿器复用全局 pipeline.lock，避免与通用流水线并发操作微信浏览器会话。 |
 | 1.5.0 | 2026-08-30 | Codex | 窗口外延后返回独立状态码，禁止把“尚未上传”误报为执行成功。 |
+| 1.6.0 | 2026-08-30 | Codex | 支持具名操作员对零尝试自动延后项签发两小时单项补发授权。 |
 """
 
 from __future__ import annotations
@@ -90,8 +91,8 @@ def _completion_for_exit_code(code: int) -> tuple[str, str]:
 
 
 def _manual_authorization_active(item: dict) -> bool:
-    """Telegram 审核项只有在两小时 capability 有效期内才可绕过公共窗口。"""
-    if str(item.get("approval_source") or "") != "TELEGRAM_REVIEW":
+    """人工或具名补发项只有在两小时 capability 有效期内才可绕过公共窗口。"""
+    if str(item.get("approval_source") or "") not in {"TELEGRAM_REVIEW", "OPERATOR_RECOVERY"}:
         return False
     raw_expiry = str(item.get("authorization_expires_at") or "").strip()
     if not raw_expiry:
@@ -103,13 +104,17 @@ def _manual_authorization_active(item: dict) -> bool:
     return expires_at > datetime.now(timezone.utc)
 
 
-def submit(review_id: str) -> int:
+def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> int:
     """领取并执行一次投稿；即使浏览器异常也保留可审计的终态回执。"""
     if settings.wechat_publishing_paused:
         logger.warning("English World submission deferred because WeChat publishing is paused")
         return EXIT_DEFERRED
     db = PipelineDB()
-    pending = db.get_english_world_review_item(review_id)
+    pending = (
+        db.authorize_english_world_operator_recovery(review_id, reason=operator_recovery_reason)
+        if operator_recovery_reason
+        else db.get_english_world_review_item(review_id)
+    )
     if pending is None:
         logger.info("English World review item does not exist: %s", review_id)
         return 0
@@ -123,8 +128,8 @@ def submit(review_id: str) -> int:
             )
             return EXIT_DEFERRED
         logger.warning(
-            "English World review %s uses its two-hour Telegram capability outside the public window",
-            review_id,
+            "English World review %s uses its two-hour bounded capability outside the public window source=%s",
+            review_id, pending.get("approval_source"),
         )
     evidence_dir = Path(str(pending["mp4_path"])).parent / "wechat_evidence" / str(time.time_ns())
     item = db.claim_english_world_submission(review_id, evidence_dir=str(evidence_dir))
@@ -199,8 +204,12 @@ def submit(review_id: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="提交已批准的英语世界学习卡到视频号")
     parser.add_argument("--review-id", required=True, help="Telegram 审核项 ID")
+    parser.add_argument(
+        "--operator-recovery-reason",
+        help="具名补发原因；仅可授权零尝试的 AUTO_POLICY 延后项并在两小时内提交",
+    )
     args = parser.parse_args()
-    return submit(args.review_id)
+    return submit(args.review_id, operator_recovery_reason=args.operator_recovery_reason)
 
 
 if __name__ == "__main__":

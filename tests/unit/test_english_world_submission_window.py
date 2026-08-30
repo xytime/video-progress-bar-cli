@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-29 | Codex | 固化自动授权窗口外延后，人工两小时授权可单项绕过。 |
 | 1.1.0 | 2026-08-30 | Codex | 固化延后必须返回独立状态码，避免退出码 0 伪装成投稿成功。 |
+| 1.2.0 | 2026-08-30 | Codex | 固化具名操作员补发 capability 与人工授权使用相同的两小时边界。 |
 """
 
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,9 @@ def test_manual_capability_is_active_only_before_utc_expiry():
     })
     assert not submitter._manual_authorization_active({
         "approval_source": "AUTO_POLICY", "authorization_expires_at": active,
+    })
+    assert submitter._manual_authorization_active({
+        "approval_source": "OPERATOR_RECOVERY", "authorization_expires_at": active,
     })
 
 

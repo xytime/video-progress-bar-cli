@@ -372,6 +372,40 @@ def test_manual_english_world_authorization_expires_but_auto_policy_remains_clai
     assert db.claim_english_world_submission(automatic["id"])["state"] == "SUBMITTING"
 
 
+def test_operator_recovery_authorizes_only_unattempted_auto_policy_item(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    paths = {name: package_dir / name for name in (
+        "video.mp4", "manifest.json", "title.txt", "copy.txt", "cover.jpg", "cover_provenance.json",
+    )}
+    for path in paths.values():
+        path.write_text("fixture", encoding="utf-8")
+    item = db.create_english_world_review_item(
+        artifact_sha256="e" * 64,
+        **_stored_hashes("e"),
+        title="操作员具名补发",
+        mp4_path=str(paths["video.mp4"]),
+        manifest_path=str(paths["manifest.json"]),
+        title_path=str(paths["title.txt"]),
+        copy_path=str(paths["copy.txt"]),
+        cover_path=str(paths["cover.jpg"]),
+        cover_provenance_path=str(paths["cover_provenance.json"]),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+
+    authorized = db.authorize_english_world_operator_recovery(
+        item["id"], reason="用户明确要求补发本条漏发内容",
+    )
+
+    assert authorized["approval_source"] == "OPERATOR_RECOVERY"
+    assert authorized["authorization_expires_at"] is not None
+    assert "用户明确要求" in authorized["error_message"]
+    assert db.claim_english_world_submission(item["id"])["state"] == "SUBMITTING"
+    with pytest.raises(ValueError, match="unattempted AUTO_POLICY"):
+        db.authorize_english_world_operator_recovery(item["id"], reason="重复授权必须拒绝")
+
+
 def test_login_recovery_claims_only_one_recent_auto_policy_prelogin_failure(tmp_path):
     """扫码成功只恢复明确的登录前失败项，且同一项最多一次。"""
     db = PipelineDB(str(tmp_path / "pipeline.db"))
