@@ -11,6 +11,7 @@
 # | 2.0.0 | 2026-08-24 | Codex | 改由 LaunchAgent 直接执行 Python 协调器，避免 shell 读取外接盘脚本被系统拦截。 |
 # | 2.1.0 | 2026-08-24 | Codex | 增加 16:30 独立制作机会，仍只推送 Telegram 人工审核。 |
 # | 2.2.0 | 2026-08-27 | Codex | 同时安装窗口后回执监测器；仅在原窗口完全缺席时补发起一次协调器。 |
+# | 2.3.0 | 2026-08-30 | Codex | 安装前强制验证项目 venv 解释器及配置依赖，拒绝 pyenv Python 运行时漂移。 |
 # | 1.0.0 | 2026-08-22 | Codex | 新增独立英语世界日更 LaunchAgent 安装器。 |
 
 set -euo pipefail
@@ -24,6 +25,7 @@ TARGET_PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 MONITOR_TARGET_PLIST="$HOME/Library/LaunchAgents/$MONITOR_LABEL.plist"
 LAUNCHD_LOG_DIR="$HOME/Library/Logs/VideoPrecessing"
 USER_ID="$(id -u)"
+VENV_PYTHON="$PROJECT_ROOT/.venv/bin/python"
 
 plutil -lint "$SOURCE_PLIST"
 plutil -lint "$MONITOR_SOURCE_PLIST"
@@ -35,6 +37,15 @@ plutil -lint "$MONITOR_SOURCE_PLIST"
     echo "英语世界窗口后监测器不存在：$PROJECT_ROOT/scripts/monitor_english_world_daily.py" >&2
     exit 1
 }
+[[ -x "$VENV_PYTHON" ]] || {
+    echo "项目 venv Python 不可执行：$VENV_PYTHON" >&2
+    exit 1
+}
+env -i \
+    HOME="$HOME" \
+    PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+    PYTHONPATH="$PROJECT_ROOT/src" \
+    "$VENV_PYTHON" -c "from config.settings import settings; print(type(settings).__name__)" >/dev/null
 mkdir -p "$HOME/Library/LaunchAgents"
 mkdir -p "$PROJECT_ROOT/output/english_world_daily"
 mkdir -p "$LAUNCHD_LOG_DIR"

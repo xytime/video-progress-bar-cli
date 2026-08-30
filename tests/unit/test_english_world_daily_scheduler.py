@@ -21,6 +21,7 @@
 # | 2.15.0 | 2026-08-30 | Codex | 覆盖跨运行候选淘汰账本、旧失败兼容提取与补发显式排除。 |
 # | 2.16.0 | 2026-08-30 | Codex | 固化密集自动字幕生成逐词时间轴时的词尾单调不越界要求。 |
 # | 2.17.0 | 2026-08-30 | Codex | 覆盖宿主媒体通路预检、Cookie/Clash 恢复分支及预检假阳性候选回退语义。 |
+# | 2.18.0 | 2026-08-30 | Codex | 固化 LaunchAgent 必须使用项目 venv，避免调度器缺失生产依赖。 |
 """
 
 from __future__ import annotations
@@ -594,7 +595,8 @@ def test_plist_directly_starts_python_coordinator():
     with PLIST.open("rb") as plist_file:
         configuration = plistlib.load(plist_file)
 
-    assert "/Users/ryusei/.pyenv/versions/3.12.4/bin/python" in plist_text
+    assert "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python" in plist_text
+    assert "/Users/ryusei/.pyenv/versions/3.12.4/bin/python" not in plist_text
     assert "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/run_english_world_daily.py" in plist_text
     assert "run_english_world_daily_codex.sh" not in plist_text
     assert configuration["StartCalendarInterval"] == [

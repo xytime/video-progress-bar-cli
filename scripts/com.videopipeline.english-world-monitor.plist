@@ -6,7 +6,7 @@
     <string>com.videopipeline.english-world-monitor</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/ryusei/.pyenv/versions/3.12.4/bin/python</string>
+        <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python</string>
         <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/monitor_english_world_daily.py</string>
         <string>--recover-missing</string>
     </array>
