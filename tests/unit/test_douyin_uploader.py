@@ -16,6 +16,7 @@
 | 1.3.7 | 2026-07-29 | Codex | 覆盖自主声明弹窗单选项及确定按钮的完整确认流程 |
 | 1.3.8 | 2026-08-08 | Codex | 覆盖作品管理页须精确匹配正文指纹后才读取本作品的发布状态 |
 | 1.3.9 | 2026-08-24 | Codex | 覆盖封面完成按钮不可用时 fail-closed，且正常路径必须确认编辑器已关闭。 |
+| 1.3.11 | 2026-08-30 | Codex | 覆盖含话题文案填充后关闭标签建议浮层，避免遮挡封面入口。 |
 | 1.3.10 | 2026-08-30 | Codex | 覆盖作品列表标题回查、真实加载等待、原表单不算提交回执及最终按钮单次点击 |
 """
 
@@ -274,6 +275,9 @@ def test_douyin_publish_fields_are_filled_without_submit(tmp_path: Path):
         assert fill_publish_fields(page, "一个测试标题", "一段测试描述", tmp_path, cover_path=str(cover))
     title.fill.assert_called_once_with("一个测试标题")
     editor.fill.assert_called_once_with("一段测试描述")
+    editor.press.assert_called_once_with("Escape")
+    editor.evaluate.assert_called_once_with("element => element.blur()")
+    page.keyboard.press.assert_called_once_with("Escape")
     assert (tmp_path / "douyin_ready_to_submit_controls.json").exists()
 
 

@@ -12,10 +12,12 @@
 | 1.4.0 | 2026-08-29 | Codex | 覆盖公共窗口巡航只续投一条 AUTO_POLICY 英语世界延后项。 |
 | 1.5.0 | 2026-08-30 | Codex | 覆盖窗口调度前先回收过期未领取的具名补发授权。 |
 | 1.6.0 | 2026-08-30 | Codex | 覆盖英语世界按原生 ID 只读回查并写回独立平台状态。 |
+| 1.7.0 | 2026-08-30 | Codex | 覆盖回查超时熔断通知和英语世界到抖音的单条隔离调度。 |
 """
 
 import fcntl
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import ANY, MagicMock
 
@@ -123,6 +125,24 @@ def test_window_dispatches_one_deferred_english_world_auto_item(monkeypatch):
     assert run.call_args.args[0][-2:] == ["--review-id", "b" * 32]
 
 
+def test_window_dispatches_one_accepted_english_world_item_to_douyin(monkeypatch):
+    class FakeDB:
+        def get_next_english_world_douyin_sync_candidate(self):
+            return {"id": "e" * 32}
+
+    completed = MagicMock(returncode=0, stderr="")
+    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
+    monkeypatch.setattr(runner.settings, "enable_english_world_douyin_sync", True)
+    monkeypatch.setattr(runner.settings, "enable_douyin_browser_publishing", True)
+    run = MagicMock(return_value=completed)
+    monkeypatch.setattr(runner.subprocess, "run", run)
+
+    runner.dispatch_one_english_world_douyin_submission()
+
+    assert run.call_args.args[0][-2:] == ["--review-id", "e" * 32]
+    assert "submit_english_world_douyin.py" in str(run.call_args.args[0][1])
+
+
 def test_runner_reconciles_one_bound_english_world_item_without_upload(monkeypatch, tmp_path):
     recorded = {}
 
@@ -162,3 +182,46 @@ def test_runner_reconciles_one_bound_english_world_item_without_upload(monkeypat
     assert "--video" not in command_text
     assert "--verify-only" in command_text
     assert "export/native-id" in command_text
+
+
+def test_reconciliation_timeout_reaches_fuse_and_escapes_notification(monkeypatch, tmp_path):
+    failures = 0
+    notifications = []
+
+    class FakeDB:
+        def claim_next_english_world_reconciliation(self, **_kwargs):
+            return {
+                "id": "d" * 32,
+                "title": "A&B <成长>",
+                "platform_post_id": "export/native-id",
+                "platform_url": None,
+                "evidence_dir": str(tmp_path / "submission"),
+            }
+
+        def record_english_world_reconciliation(self, _review_id, **_kwargs):
+            nonlocal failures
+            failures += 1
+            return {"reconciliation_failures": failures}
+
+    monkeypatch.setattr(runner, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        MagicMock(side_effect=subprocess.TimeoutExpired(["wechat_uploader"], 30)),
+    )
+    monkeypatch.setattr(runner, "send_text", lambda **kwargs: notifications.append(kwargs))
+    monkeypatch.setattr(runner.settings, "english_world_reconcile_interval_minutes", 30)
+    monkeypatch.setattr(runner.settings, "english_world_reconcile_max_age_hours", 72)
+    monkeypatch.setattr(runner.settings, "english_world_reconcile_failure_limit", 2)
+    monkeypatch.setattr(runner.settings, "wechat_headless", True)
+    monkeypatch.setattr(runner.settings, "wechat_review_timeout_seconds", 30)
+
+    runner.reconcile_one_english_world_submission()
+    runner.reconcile_one_english_world_submission()
+
+    assert failures == 2
+    assert len(notifications) == 1
+    assert notifications[0]["event_type"] == "english_world.reconciliation_recording_required"
+    assert "A&amp;B &lt;成长&gt;" in notifications[0]["text"]
+    assert "A&B <成长>" not in notifications[0]["text"]

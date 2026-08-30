@@ -46,6 +46,8 @@
 | 1.5.28 | 2026-08-24 | Codex | 封面“完成”不可用或编辑器未关闭时拒绝进入自主声明，避免仅见卡槽标签便误判横竖封面已保存 |
 | 1.5.29 | 2026-08-24 | Codex | 对齐创作者中心实际封面弹窗 body 选择器，避免未定位弹窗时把整页可见误判为编辑器未关闭 |
 | 1.5.30 | 2026-08-30 | Codex | 作品管理回查等待列表真实加载并优先精确匹配标题；发布受理只认跳转或明确回执，最终按钮异常不再强制重点击 |
+| 1.5.32 | 2026-08-30 | Codex | 填写含话题文案后先关闭标签建议浮层，并收窄封面入口避免宽容器点击被遮挡。 |
+| 1.5.31 | 2026-08-30 | Codex | 支持为单次隔离投稿指定独立证据目录，避免校准与投稿证据互相覆盖。 |
 """
 
 from __future__ import annotations
@@ -1296,8 +1298,11 @@ def apply_cover(
 
         # 1. 寻找并点击“选择封面” / “设置封面” 入口按钮
         entry_selectors = [
+            "[class*='coverControl']:has-text('选择封面')",
+            "[class*='coverControl']:has-text('设置封面')",
+            "button:has-text('选择封面')", "button:has-text('设置封面')",
             "text=选择封面", "text=设置封面", "text=编辑封面", "text=更改封面", "text=更换封面",
-            "div:has-text('选择封面')", "div:has-text('设置封面')", ".cover-edit-btn", "[class*='cover'] button"
+            ".cover-edit-btn", "[class*='cover'] button"
         ]
         cover_entry = _find_visible_element(page, entry_selectors)
         if not cover_entry:
@@ -1371,6 +1376,8 @@ def apply_cover(
 
     except Exception as e:
         logger.warning("抖音封面应用过程发生异常: %s", e)
+        if artifact_dir:
+            capture_cover_evidence(page, artifact_dir, "douyin_cover_interaction_failed", cover_path)
 
     return False
 
@@ -1411,6 +1418,14 @@ def fill_publish_fields(page, title_text: str, description_text: str, artifact_d
     title = title[:50]
     title_input.fill(title)
     editor.fill(description)
+    # 话题/好友语法会打开 publish-mention 标签建议层；若保持焦点，该浮层可能覆盖下方
+    # 封面卡片并拦截 Playwright 点击。先关闭建议、失焦，再做逐字回读和封面动作。
+    try:
+        editor.press("Escape")
+        editor.evaluate("element => element.blur()")
+        page.keyboard.press("Escape")
+    except Exception as exc:
+        logger.debug("关闭抖音作品描述建议浮层失败，继续由后续点击闸门验证: %s", exc)
     page.wait_for_timeout(500)
     if not _filled_text_matches(title_input, title, is_title=True):
         return False
@@ -1574,6 +1589,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--copy", type=Path, help="发布文案路径")
     parser.add_argument("--title-file", type=Path, help="发布标题路径")
     parser.add_argument("--state", type=Path, default=Path("output/douyin_state.json"), help="Playwright 登录态文件")
+    parser.add_argument("--evidence-dir", type=Path, help="本次动作的独立页面证据目录")
     parser.add_argument("--no-headless", action="store_true", help="显示浏览器窗口")
     parser.add_argument("--fail-fast-login", action="store_true", help="登录失效时立即退出，不等待扫码")
     parser.add_argument("--login-only", action="store_true", help="仅打开创作者中心并保存登录态")
@@ -1607,7 +1623,7 @@ def main() -> int:
         logger.error("标题文件不存在: %s", args.title_file)
         return EXIT_FAILED
 
-    artifact_dir = args.state.parent / "douyin_calibration"
+    artifact_dir = args.evidence_dir or args.state.parent / "douyin_calibration"
     try:
         playwright_context = sync_playwright()
         playwright = playwright_context.__enter__()

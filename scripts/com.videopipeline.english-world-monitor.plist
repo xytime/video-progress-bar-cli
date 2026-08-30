@@ -6,20 +6,20 @@
     <string>com.videopipeline.english-world-monitor</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python</string>
-        <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/monitor_english_world_daily.py</string>
+        <string>__VENV_PYTHON__</string>
+        <string>__PROJECT_ROOT__/scripts/monitor_english_world_daily.py</string>
         <string>--recover-missing</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing</string>
+    <string>__PROJECT_ROOT__</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key>
-        <string>/Users/ryusei</string>
+        <string>__USER_HOME__</string>
         <key>PATH</key>
-        <string>/Users/ryusei/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>__USER_HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>PYTHONPATH</key>
-        <string>/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src</string>
+        <string>__PROJECT_ROOT__/src</string>
     </dict>
     <key>StartCalendarInterval</key>
     <array>
@@ -37,8 +37,8 @@
         </dict>
     </array>
     <key>StandardOutPath</key>
-    <string>/Users/ryusei/Library/Logs/VideoPrecessing/english-world-monitor.launchd.log</string>
+    <string>__LAUNCHD_LOG_DIR__/english-world-monitor.launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ryusei/Library/Logs/VideoPrecessing/english-world-monitor.launchd.log</string>
+    <string>__LAUNCHD_LOG_DIR__/english-world-monitor.launchd.log</string>
 </dict>
 </plist>

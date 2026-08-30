@@ -4,6 +4,8 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.58.0 | 2026-08-30 | Codex | 新增英语世界与视频号受理项同步到独立抖音账本的生产开关。 |
+| 3.57.1 | 2026-08-30 | Codex | 抖音 NEW 默认每日领取上限调整为 10，与生产每日总量策略一致。 |
 | 3.57.0 | 2026-08-30 | Codex | 英语世界视频号原生 ID 回查增加独立节流与最大自动巡检时长。 |
 | 3.56.0 | 2026-08-30 | Codex | 显式声明抖音 NEW 是否必须等待视频号公开确认；默认 true 保持生产顺序不变。 |
 | 3.55.0 | 2026-08-30 | Codex | 新增抖音同阶段 UI 连续失败录屏熔断阈值；跨巡航累计后在打开浏览器前停止。 |
@@ -345,9 +347,11 @@ class Settings(BaseSettings):
     # 每轮最多同步多少条“微信已发布但抖音未建账”的新片漏项。
     douyin_new_sync_max_per_run: int = 10
     # 新片自动同步的每日领取上限。巡航每分钟运行，必须与单轮上限分开约束。
-    douyin_new_sync_daily_limit: int = 1
+    douyin_new_sync_daily_limit: int = 10
     # 仅扫描最近 N 小时内刚完成微信发布的新片，避免把旧历史内容混入 NEW 同步。
     douyin_new_sync_lookback_hours: int = 12
+    # 英语世界仅在视频号已受理并绑定原生 ID 后建立独立抖音账本；不进入通用视频队列。
+    enable_english_world_douyin_sync: bool = False
 
     # 配音再制中心：仅由 ./vpanel dubbing 显式调用，日常 PipelineManager 不读取这些配置。
     # API Key 只允许保存在本机 .env，禁止写入任务报告、数据库或日志。

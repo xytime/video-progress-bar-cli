@@ -14,6 +14,8 @@
 | 1.3.0 | 2026-08-29 | Codex | 覆盖整包指纹、同源去重及多次投稿尝试的不可覆盖审计记录。 |
 | 1.4.0 | 2026-08-30 | Codex | 覆盖具名补发仅授权零尝试项，过期未领取授权自动回归公共窗口队列。 |
 | 1.5.0 | 2026-08-30 | Codex | 覆盖英语世界原生作品 ID 入账、节流领取与平台终态停止回查。 |
+| 1.6.0 | 2026-08-30 | Codex | 覆盖英语世界独立抖音账本、不可重传尝试和与通用 NEW 共用每日额度。 |
+| 1.5.1 | 2026-08-30 | Codex | 固化英语世界原生作品 ID 只能首次绑定或相同 ID 幂等绑定。 |
 """
 
 from __future__ import annotations
@@ -593,3 +595,89 @@ def test_english_world_platform_identity_enables_throttled_exact_reconciliation(
     assert db.claim_next_english_world_reconciliation(
         min_interval_minutes=5, max_age_hours=72,
     ) is None
+
+
+def test_english_world_platform_identity_cannot_be_rebound(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    item = db.create_english_world_review_item(
+        title="不可覆盖原生 ID", **paths, **calculate_package_hashes(paths),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+    claimed = db.claim_english_world_submission(item["id"], evidence_dir="/evidence/submission")
+    db.complete_english_world_submission(
+        item["id"], state="UNDER_REVIEW", uploader_exit_code=6,
+        evidence_dir="/evidence/submission", attempt_id=claimed["_attempt_id"],
+    )
+
+    first = db.bind_english_world_submission_platform_identity(
+        item["id"], attempt_id=claimed["_attempt_id"], platform_post_id="export/native-a",
+    )
+    same = db.bind_english_world_submission_platform_identity(
+        item["id"], attempt_id=claimed["_attempt_id"], platform_post_id="export/native-a",
+    )
+    with pytest.raises(ValueError, match="already bound to another"):
+        db.bind_english_world_submission_platform_identity(
+            item["id"], attempt_id=claimed["_attempt_id"], platform_post_id="export/native-b",
+        )
+
+    attempts = db.list_english_world_submission_attempts(item["id"])
+    assert first["platform_post_id"] == same["platform_post_id"] == "export/native-a"
+    assert attempts[0]["platform_post_id"] == "export/native-a"
+
+
+def test_english_world_douyin_sync_is_isolated_single_attempt_and_shares_new_limit(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    item = db.create_english_world_review_item(
+        title="英语世界抖音同步", source_youtube_id="english-world-source",
+        **paths, **calculate_package_hashes(paths),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+    wechat_attempt = db.claim_english_world_submission(item["id"], evidence_dir="/wechat")
+    db.complete_english_world_submission(
+        item["id"], state="UNDER_REVIEW", uploader_exit_code=6,
+        evidence_dir="/wechat", attempt_id=wechat_attempt["_attempt_id"],
+        platform_post_id="export/wechat-native",
+    )
+
+    candidate = db.get_next_english_world_douyin_sync_candidate()
+    publication = db.ensure_english_world_douyin_publication(item["id"])
+    claimed = db.claim_english_world_douyin_publication(
+        item["id"], daily_limit=1, evidence_dir="/douyin/attempt-1",
+    )
+    completed = db.complete_english_world_douyin_publication(
+        item["id"], attempt_id=claimed["_attempt_id"], state="UNDER_REVIEW",
+        uploader_exit_code=6, evidence_dir="/douyin/attempt-1", message="抖音已受理",
+    )
+
+    assert candidate and candidate["id"] == item["id"]
+    assert publication["state"] == "QUEUED"
+    assert completed["state"] == "UNDER_REVIEW"
+    assert db.claim_english_world_douyin_publication(
+        item["id"], daily_limit=2, evidence_dir="/douyin/attempt-2",
+    ) is None
+    assert len(db.list_english_world_douyin_attempts(item["id"])) == 1
+    assert db.get_video_by_youtube_id("english-world-source") is None
+
+    assert db.add_video("generic-new", "通用新片", "channel", score=80)
+    db.create_douyin_publication(
+        "generic-new", "f" * 64, "/tmp/generic.mp4", source_kind="NEW",
+    )
+    assert db.claim_next_douyin_publication("NEW", daily_limit=1) is None
+
+    reconciled = db.record_english_world_douyin_reconciliation(
+        item["id"], platform_state="PUBLISHED", evidence_dir="/douyin/reconcile",
+        message="作品管理页确认已发布",
+    )
+    assert reconciled["state"] == "PUBLISHED"
+    assert reconciled["platform_state"] == "PUBLISHED"
+    assert db.list_english_world_douyin_attempts(item["id"])[0]["state"] == "PUBLISHED"

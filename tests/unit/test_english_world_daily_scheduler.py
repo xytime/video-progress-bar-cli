@@ -22,6 +22,7 @@
 # | 2.16.0 | 2026-08-30 | Codex | 固化密集自动字幕生成逐词时间轴时的词尾单调不越界要求。 |
 # | 2.17.0 | 2026-08-30 | Codex | 覆盖宿主媒体通路预检、Cookie/Clash 恢复分支及预检假阳性候选回退语义。 |
 # | 2.18.0 | 2026-08-30 | Codex | 固化 LaunchAgent 必须使用项目 venv，避免调度器缺失生产依赖。 |
+# | 2.19.0 | 2026-08-30 | Codex | 固化 LaunchAgent plist 为可迁移模板并由安装器逐字段核验渲染路径。 |
 """
 
 from __future__ import annotations
@@ -595,10 +596,16 @@ def test_plist_directly_starts_python_coordinator():
     with PLIST.open("rb") as plist_file:
         configuration = plistlib.load(plist_file)
 
-    assert "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/python" in plist_text
+    assert "__VENV_PYTHON__" in plist_text
+    assert "__PROJECT_ROOT__/scripts/run_english_world_daily.py" in plist_text
+    assert "__PROJECT_ROOT__/src" in plist_text
+    assert str(PROJECT_ROOT) not in plist_text
+    assert "/Users/ryusei" not in plist_text
     assert "/Users/ryusei/.pyenv/versions/3.12.4/bin/python" not in plist_text
-    assert "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/run_english_world_daily.py" in plist_text
     assert "run_english_world_daily_codex.sh" not in plist_text
+    assert configuration["ProgramArguments"][:2] == [
+        "__VENV_PYTHON__", "__PROJECT_ROOT__/scripts/run_english_world_daily.py",
+    ]
     assert configuration["StartCalendarInterval"] == [
         {"Hour": 7, "Minute": 0},
         {"Hour": 16, "Minute": 30},
@@ -611,3 +618,8 @@ def test_plist_directly_starts_python_coordinator():
     assert "写入请求是本任务的最后一个硬性检查点" in runner_text
     assert "请求缺失、不可解析或 MP4/manifest 路径不完整都表示本次生产未交付" in runner_text
     assert all(command in runner_text for command in ("`ps`", "`tail`", "`sleep`"))
+
+    installer = (PROJECT_ROOT / "scripts/install_english_world_daily_schedule.sh").read_text(encoding="utf-8")
+    assert "render_plist" in installer
+    assert "validate_rendered_plist" in installer
+    assert '"pythonpath": project_root + "/src"' in installer

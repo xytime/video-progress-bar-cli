@@ -6,6 +6,8 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.57.0  | 2026-08-30 | Codex                               | 新增英语世界独立抖音投稿与尝试账本，并与通用 NEW 共用每日领取额度。 |
+| 3.56.1  | 2026-08-30 | Codex                               | 英语世界平台原生 ID 只允许首次绑定或同 ID 幂等写入，拒绝覆盖审核项和尝试证据锚点。 |
 | 3.56.0  | 2026-08-30 | Codex                               | 英语世界投稿账本持久化视频号原生 ID，并提供节流的精确作品管理回查状态。 |
 | 3.55.0  | 2026-08-30 | Codex                               | 抖音 NEW 候选和视频号下游取消显式消费公开确认策略；关闭时仍不复活任何既有账本。 |
 | 3.54.0  | 2026-08-30 | Codex                               | 持久化平台同阶段 UI 连续失败；达到阈值后跨巡航熔断，校准证据清除时保留审计。 |
@@ -1334,6 +1336,64 @@ class PipelineDB:
                     cursor.execute(
                         f"ALTER TABLE english_world_submission_attempts ADD COLUMN {column_name} TEXT DEFAULT NULL"
                     )
+
+            # 英语世界保持独立于 processed_videos；抖音同步用自己的单条账本和不可变尝试，
+            # 仅以视频号同一审核项已受理为上游资格，不复用通用队列或视频状态机。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS english_world_douyin_publications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    review_id TEXT NOT NULL UNIQUE,
+                    state TEXT NOT NULL DEFAULT 'QUEUED'
+                        CHECK(state IN ('QUEUED', 'SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED',
+                                        'LOGIN_REQUIRED', 'UNCERTAIN', 'CANCELED', 'FAILED')),
+                    artifact_sha256 TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    claimed_at TIMESTAMP DEFAULT NULL,
+                    submitted_at TIMESTAMP DEFAULT NULL,
+                    published_at TIMESTAMP DEFAULT NULL,
+                    evidence_dir TEXT DEFAULT NULL,
+                    platform_state TEXT DEFAULT NULL,
+                    last_reconciled_at TIMESTAMP DEFAULT NULL,
+                    reconciliation_failures INTEGER NOT NULL DEFAULT 0,
+                    recovery_authorized_at TIMESTAMP DEFAULT NULL,
+                    recovery_reason TEXT DEFAULT NULL,
+                    last_error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(review_id) REFERENCES english_world_review_items(id) ON DELETE RESTRICT
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_english_world_douyin_state "
+                "ON english_world_douyin_publications(state, claimed_at, created_at)"
+            )
+            cursor.execute("PRAGMA table_info(english_world_douyin_publications)")
+            english_world_douyin_columns = {row[1] for row in cursor.fetchall()}
+            for column_name in ("recovery_authorized_at", "recovery_reason"):
+                if column_name not in english_world_douyin_columns:
+                    cursor.execute(
+                        f"ALTER TABLE english_world_douyin_publications ADD COLUMN {column_name} TEXT DEFAULT NULL"
+                    )
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS english_world_douyin_attempts (
+                    attempt_id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'SUBMITTING'
+                        CHECK(state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED',
+                                        'LOGIN_REQUIRED', 'UNCERTAIN', 'CANCELED', 'FAILED')),
+                    artifact_sha256 TEXT NOT NULL,
+                    evidence_dir TEXT DEFAULT NULL,
+                    uploader_exit_code INTEGER DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TIMESTAMP DEFAULT NULL,
+                    FOREIGN KEY(review_id) REFERENCES english_world_review_items(id) ON DELETE RESTRICT
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_english_world_douyin_attempts_review "
+                "ON english_world_douyin_attempts(review_id, started_at DESC)"
+            )
 
             # Telegram 投递回执与业务状态分开保存。HTTP 超时不能证明未送达，故以
             # UNKNOWN 保留不确定性供人工排障；它不能作为已送达依据，更不能抑制重试。
@@ -5919,7 +5979,7 @@ class PipelineDB:
         platform_post_id: str,
         platform_url: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """把同次提交回执中的原生 ID 绑定到已受理审核项；不接受标题或时间推断。"""
+        """把同次提交回执中的原生 ID 绑定到已受理审核项；只允许首次绑定或同 ID 幂等写入。"""
         clean_review_id = (review_id or "").strip()
         clean_attempt_id = (attempt_id or "").strip()
         clean_platform_post_id = (platform_post_id or "").strip()
@@ -5927,6 +5987,15 @@ class PipelineDB:
         if not clean_platform_post_id:
             raise ValueError("English World platform_post_id is required")
         with self.get_connection() as conn:
+            review = conn.execute(
+                """SELECT id, platform_post_id FROM english_world_review_items
+                   WHERE id = ? AND state = 'UNDER_REVIEW'""",
+                (clean_review_id,),
+            ).fetchone()
+            if not review:
+                raise ValueError("English World review item is not bindable")
+            if review["platform_post_id"] not in (None, "", clean_platform_post_id):
+                raise ValueError("English World review item is already bound to another platform_post_id")
             existing = conn.execute(
                 "SELECT id FROM english_world_review_items WHERE platform_post_id = ?",
                 (clean_platform_post_id,),
@@ -5934,27 +6003,39 @@ class PipelineDB:
             if existing and existing["id"] != clean_review_id:
                 raise ValueError("English World platform_post_id is already bound")
             attempt = conn.execute(
-                """SELECT attempt_id FROM english_world_submission_attempts
+                """SELECT attempt_id, platform_post_id FROM english_world_submission_attempts
                    WHERE attempt_id = ? AND review_id = ? AND state = 'UNDER_REVIEW'""",
                 (clean_attempt_id, clean_review_id),
             ).fetchone()
             if not attempt:
                 raise ValueError("English World accepted submission attempt is missing")
+            if attempt["platform_post_id"] not in (None, "", clean_platform_post_id):
+                raise ValueError("English World submission attempt is already bound to another platform_post_id")
             cursor = conn.execute(
                 """UPDATE english_world_review_items
                    SET platform_post_id = ?, platform_url = COALESCE(?, platform_url),
                        updated_at = CURRENT_TIMESTAMP
-                   WHERE id = ? AND state = 'UNDER_REVIEW'""",
-                (clean_platform_post_id, clean_platform_url, clean_review_id),
+                   WHERE id = ? AND state = 'UNDER_REVIEW'
+                     AND (platform_post_id IS NULL OR platform_post_id = '' OR platform_post_id = ?)""",
+                (
+                    clean_platform_post_id, clean_platform_url, clean_review_id,
+                    clean_platform_post_id,
+                ),
             )
             if cursor.rowcount != 1:
                 raise ValueError("English World review item is not bindable")
-            conn.execute(
+            attempt_cursor = conn.execute(
                 """UPDATE english_world_submission_attempts
                    SET platform_post_id = ?, platform_url = COALESCE(?, platform_url)
-                   WHERE attempt_id = ? AND review_id = ?""",
-                (clean_platform_post_id, clean_platform_url, clean_attempt_id, clean_review_id),
+                   WHERE attempt_id = ? AND review_id = ?
+                     AND (platform_post_id IS NULL OR platform_post_id = '' OR platform_post_id = ?)""",
+                (
+                    clean_platform_post_id, clean_platform_url, clean_attempt_id,
+                    clean_review_id, clean_platform_post_id,
+                ),
             )
+            if attempt_cursor.rowcount != 1:
+                raise ValueError("English World submission attempt is not bindable")
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM english_world_review_items WHERE id = ?", (clean_review_id,),
@@ -6064,6 +6145,283 @@ class PipelineDB:
                 """SELECT * FROM english_world_submission_attempts
                    WHERE review_id = ? ORDER BY started_at DESC, attempt_id DESC LIMIT ?""",
                 ((review_id or "").strip(), safe_limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def get_next_english_world_douyin_sync_candidate(self) -> Optional[Dict[str, Any]]:
+        """读取近 24 小时视频号已受理且抖音建账遗漏的英语世界审核项。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT review.* FROM english_world_review_items review
+                   WHERE review.state = 'UNDER_REVIEW'
+                     AND review.platform_post_id IS NOT NULL AND review.platform_post_id != ''
+                     AND review.submission_finished_at >= datetime('now', '-24 hours')
+                     AND NOT EXISTS (
+                         SELECT 1 FROM english_world_douyin_publications publication
+                         WHERE publication.review_id = review.id
+                     )
+                   ORDER BY review.submission_finished_at ASC, review.id ASC LIMIT 1"""
+            ).fetchone()
+            return dict(row) if row else None
+
+    def ensure_english_world_douyin_publication(self, review_id: str) -> Dict[str, Any]:
+        """为一条视频号已受理审核项建立唯一抖音同步账本；重复调用保持幂等。"""
+        clean_review_id = (review_id or "").strip()
+        with self.get_connection() as conn:
+            review = conn.execute(
+                """SELECT id, state, platform_post_id, artifact_sha256
+                   FROM english_world_review_items WHERE id = ?""",
+                (clean_review_id,),
+            ).fetchone()
+            if not review:
+                raise ValueError("English World review item does not exist")
+            if review["state"] != "UNDER_REVIEW" or not str(review["platform_post_id"] or "").strip():
+                raise ValueError("English World Douyin sync requires an accepted WeChat submission")
+            artifact_sha256 = str(review["artifact_sha256"] or "").strip().lower()
+            if len(artifact_sha256) != 64:
+                raise ValueError("English World Douyin sync requires an immutable artifact hash")
+            conn.execute(
+                """INSERT INTO english_world_douyin_publications (review_id, artifact_sha256)
+                   VALUES (?, ?) ON CONFLICT(review_id) DO NOTHING""",
+                (clean_review_id, artifact_sha256),
+            )
+            conn.commit()
+            row = conn.execute(
+                """SELECT publication.*, review.title, review.mp4_path, review.manifest_path,
+                          review.title_path, review.copy_path, review.cover_path,
+                          review.cover_provenance_path, review.manifest_sha256,
+                          review.title_sha256, review.copy_sha256, review.cover_sha256,
+                          review.cover_provenance_sha256
+                   FROM english_world_douyin_publications publication
+                   JOIN english_world_review_items review ON review.id = publication.review_id
+                   WHERE publication.review_id = ?""",
+                (clean_review_id,),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def get_english_world_douyin_publication(self, review_id: str) -> Optional[Dict[str, Any]]:
+        """返回一条英语世界抖音同步账本及其不可变投稿包路径。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT publication.*, review.title, review.mp4_path, review.manifest_path,
+                          review.title_path, review.copy_path, review.cover_path,
+                          review.cover_provenance_path, review.manifest_sha256,
+                          review.title_sha256, review.copy_sha256, review.cover_sha256,
+                          review.cover_provenance_sha256
+                   FROM english_world_douyin_publications publication
+                   JOIN english_world_review_items review ON review.id = publication.review_id
+                   WHERE publication.review_id = ?""",
+                ((review_id or "").strip(),),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def authorize_english_world_douyin_pre_submit_recovery(
+        self, review_id: str, *, reason: str,
+    ) -> Dict[str, Any]:
+        """只为一次可证明未提交的首轮页面闸门失败授权一次修复后重试。"""
+        clean_review_id = (review_id or "").strip()
+        clean_reason = " ".join((reason or "").split())[:500]
+        if not clean_reason:
+            raise ValueError("English World Douyin recovery requires an explicit reason")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_douyin_publications
+                   SET state = 'QUEUED', recovery_authorized_at = CURRENT_TIMESTAMP,
+                       recovery_reason = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE review_id = ? AND state = 'CANCELED' AND attempt_count = 1
+                     AND recovery_authorized_at IS NULL
+                     AND COALESCE(last_error_message, '') LIKE '%发布前%'""",
+                (clean_reason, clean_review_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Only one proven pre-submit failure can receive Douyin recovery")
+            conn.commit()
+            return self.get_english_world_douyin_publication(clean_review_id) or {}
+
+    def claim_english_world_douyin_publication(
+        self, review_id: str, *, daily_limit: int, evidence_dir: str,
+    ) -> Optional[Dict[str, Any]]:
+        """原子领取一条英语世界抖音同步，并与通用 NEW 共用北京自然日额度。"""
+        clean_review_id = (review_id or "").strip()
+        safe_limit = int(daily_limit)
+        if safe_limit < 1:
+            return None
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            generic_used = conn.execute(
+                """SELECT COUNT(*) AS count FROM douyin_publications
+                   WHERE source_kind = 'NEW'
+                     AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                     AND claimed_at IS NOT NULL
+                     AND date(claimed_at, 'localtime') = date('now', 'localtime')"""
+            ).fetchone()["count"]
+            english_world_used = conn.execute(
+                """SELECT COUNT(*) AS count FROM english_world_douyin_publications
+                   WHERE state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                     AND claimed_at IS NOT NULL
+                     AND date(claimed_at, 'localtime') = date('now', 'localtime')"""
+            ).fetchone()["count"]
+            if int(generic_used) + int(english_world_used) >= safe_limit:
+                conn.commit()
+                return None
+            cursor = conn.execute(
+                """UPDATE english_world_douyin_publications
+                   SET state = 'SUBMITTING', attempt_count = attempt_count + 1,
+                       claimed_at = CURRENT_TIMESTAMP, evidence_dir = ?,
+                       last_error_message = NULL, recovery_authorized_at = NULL,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE review_id = ? AND state = 'QUEUED'
+                     AND (attempt_count = 0 OR recovery_authorized_at IS NOT NULL)""",
+                ((evidence_dir or "").strip() or None, clean_review_id),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                return None
+            from uuid import uuid4
+            attempt_id = uuid4().hex
+            row = conn.execute(
+                "SELECT artifact_sha256 FROM english_world_douyin_publications WHERE review_id = ?",
+                (clean_review_id,),
+            ).fetchone()
+            conn.execute(
+                """INSERT INTO english_world_douyin_attempts (
+                       attempt_id, review_id, artifact_sha256, evidence_dir
+                   ) VALUES (?, ?, ?, ?)""",
+                (attempt_id, clean_review_id, row["artifact_sha256"], (evidence_dir or "").strip() or None),
+            )
+            conn.commit()
+            claimed = self.get_english_world_douyin_publication(clean_review_id)
+            return {**(claimed or {}), "_attempt_id": attempt_id}
+
+    def complete_english_world_douyin_publication(
+        self,
+        review_id: str,
+        *,
+        attempt_id: str,
+        state: str,
+        uploader_exit_code: int,
+        evidence_dir: str,
+        message: str,
+    ) -> Dict[str, Any]:
+        """将一次英语世界抖音投稿保守收口；已受理不等同公开。"""
+        target_state = (state or "").strip().upper()
+        if target_state not in {
+            "UNDER_REVIEW", "LOGIN_REQUIRED", "UNCERTAIN", "CANCELED", "FAILED",
+        }:
+            raise ValueError("Invalid English World Douyin submission state")
+        clean_review_id = (review_id or "").strip()
+        clean_attempt_id = (attempt_id or "").strip()
+        clean_message = " ".join((message or "").split())[:1000] or None
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_douyin_publications
+                   SET state = ?, evidence_dir = ?, last_error_message = ?,
+                       submitted_at = CASE WHEN ? = 'UNDER_REVIEW' THEN CURRENT_TIMESTAMP ELSE submitted_at END,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE review_id = ? AND state = 'SUBMITTING'""",
+                (
+                    target_state, (evidence_dir or "").strip() or None, clean_message,
+                    target_state, clean_review_id,
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World Douyin publication cannot be completed")
+            attempt_cursor = conn.execute(
+                """UPDATE english_world_douyin_attempts
+                   SET state = ?, uploader_exit_code = ?, evidence_dir = ?, error_message = ?,
+                       finished_at = CURRENT_TIMESTAMP
+                   WHERE attempt_id = ? AND review_id = ? AND state = 'SUBMITTING'""",
+                (
+                    target_state, int(uploader_exit_code), (evidence_dir or "").strip() or None,
+                    clean_message, clean_attempt_id, clean_review_id,
+                ),
+            )
+            if attempt_cursor.rowcount != 1:
+                raise ValueError("English World Douyin attempt cannot be completed")
+            conn.commit()
+            return self.get_english_world_douyin_publication(clean_review_id) or {}
+
+    def record_english_world_douyin_reconciliation(
+        self,
+        review_id: str,
+        *,
+        platform_state: str,
+        evidence_dir: str,
+        message: str,
+    ) -> Dict[str, Any]:
+        """写入按完整标题/文案得到的抖音管理页状态；只有 PUBLISHED 才落公开终态。"""
+        observed = (platform_state or "").strip().upper()
+        if observed not in {"PUBLISHED", "UNDER_REVIEW", "UNCERTAIN"}:
+            raise ValueError("Invalid English World Douyin reconciliation state")
+        next_state = "PUBLISHED" if observed == "PUBLISHED" else "UNDER_REVIEW"
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_douyin_publications
+                   SET state = ?, platform_state = ?, evidence_dir = ?, last_error_message = ?,
+                       reconciliation_failures = CASE WHEN ? = 'UNCERTAIN'
+                           THEN reconciliation_failures + 1 ELSE 0 END,
+                       last_reconciled_at = CURRENT_TIMESTAMP,
+                       published_at = CASE WHEN ? = 'PUBLISHED'
+                           THEN COALESCE(published_at, CURRENT_TIMESTAMP) ELSE published_at END,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE review_id = ? AND state = 'UNDER_REVIEW'""",
+                (
+                    next_state, observed, (evidence_dir or "").strip() or None,
+                    " ".join((message or "").split())[:1000] or None,
+                    observed, observed, (review_id or "").strip(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("English World Douyin publication cannot be reconciled")
+            if observed == "PUBLISHED":
+                conn.execute(
+                    """UPDATE english_world_douyin_attempts
+                       SET state = 'PUBLISHED'
+                       WHERE review_id = ? AND state = 'UNDER_REVIEW'""",
+                    ((review_id or "").strip(),),
+                )
+            conn.commit()
+            return self.get_english_world_douyin_publication(review_id) or {}
+
+    def claim_next_english_world_douyin_reconciliation(
+        self, *, min_interval_minutes: int = 30, failure_limit: int = 2,
+    ) -> Optional[Dict[str, Any]]:
+        """节流领取一条英语世界抖音审核中记录做只读管理页回查。"""
+        safe_interval = max(5, min(24 * 60, int(min_interval_minutes)))
+        safe_failure_limit = max(1, min(10, int(failure_limit)))
+        interval = f"-{safe_interval} minutes"
+        with self.get_connection() as conn:
+            candidate = conn.execute(
+                """SELECT review_id FROM english_world_douyin_publications
+                   WHERE state = 'UNDER_REVIEW' AND reconciliation_failures < ?
+                     AND (last_reconciled_at IS NULL OR last_reconciled_at <= datetime('now', ?))
+                   ORDER BY COALESCE(last_reconciled_at, submitted_at) ASC, id ASC LIMIT 1""",
+                (safe_failure_limit, interval),
+            ).fetchone()
+            if not candidate:
+                return None
+            cursor = conn.execute(
+                """UPDATE english_world_douyin_publications
+                   SET last_reconciled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                   WHERE review_id = ? AND state = 'UNDER_REVIEW'
+                     AND reconciliation_failures < ?
+                     AND (last_reconciled_at IS NULL OR last_reconciled_at <= datetime('now', ?))""",
+                (candidate["review_id"], safe_failure_limit, interval),
+            )
+            if cursor.rowcount != 1:
+                return None
+            conn.commit()
+            return self.get_english_world_douyin_publication(str(candidate["review_id"]))
+
+    def list_english_world_douyin_attempts(
+        self, review_id: str, *, limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """按时间倒序返回英语世界抖音不可变投稿尝试。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT * FROM english_world_douyin_attempts
+                   WHERE review_id = ? ORDER BY started_at DESC, attempt_id DESC LIMIT ?""",
+                ((review_id or "").strip(), max(1, min(100, int(limit)))),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -6978,13 +7336,20 @@ class PipelineDB:
                     return None
                 used = conn.execute(
                     '''
-                    SELECT COUNT(*) AS count FROM douyin_publications
-                    WHERE source_kind = ?
-                      AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
-                      AND claimed_at IS NOT NULL
-                      AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                    SELECT (
+                        SELECT COUNT(*) FROM douyin_publications
+                        WHERE source_kind = ?
+                          AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                          AND claimed_at IS NOT NULL
+                          AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                    ) + CASE WHEN ? = 'NEW' THEN (
+                        SELECT COUNT(*) FROM english_world_douyin_publications
+                        WHERE state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                          AND claimed_at IS NOT NULL
+                          AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                    ) ELSE 0 END AS count
                     ''',
-                    (source,),
+                    (source, source),
                 ).fetchone()["count"]
                 if used >= daily_limit:
                     return None
@@ -7047,13 +7412,20 @@ class PipelineDB:
                     return None
                 used = conn.execute(
                     '''
-                    SELECT COUNT(*) AS count FROM douyin_publications
-                    WHERE source_kind = ?
-                      AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
-                      AND claimed_at IS NOT NULL
-                      AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                    SELECT (
+                        SELECT COUNT(*) FROM douyin_publications
+                        WHERE source_kind = ?
+                          AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                          AND claimed_at IS NOT NULL
+                          AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                    ) + CASE WHEN ? = 'NEW' THEN (
+                        SELECT COUNT(*) FROM english_world_douyin_publications
+                        WHERE state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                          AND claimed_at IS NOT NULL
+                          AND date(claimed_at, 'localtime') = date('now', 'localtime')
+                    ) ELSE 0 END AS count
                     ''',
-                    (current["source_kind"],),
+                    (current["source_kind"], current["source_kind"]),
                 ).fetchone()["count"]
                 if used >= daily_limit:
                     return None

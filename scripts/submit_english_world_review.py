@@ -15,6 +15,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 | 1.5.0 | 2026-08-30 | Codex | 窗口外延后返回独立状态码，禁止把“尚未上传”误报为执行成功。 |
 | 1.6.0 | 2026-08-30 | Codex | 支持具名操作员对零尝试自动延后项签发两小时单项补发授权。 |
 | 1.7.0 | 2026-08-30 | Codex | 将同次提交回执中的视频号原生 ID 原子写入英语世界审核与尝试账本。 |
+| 1.8.0 | 2026-08-30 | Codex | 视频号受理并绑定原生 ID 后，为启用的英语世界抖音同步立即建立独立队列。 |
 """
 
 from __future__ import annotations
@@ -191,6 +192,12 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
             platform_post_id=platform_post_id, platform_url=platform_url,
         )
+        if (
+            state == "UNDER_REVIEW"
+            and platform_post_id
+            and settings.enable_english_world_douyin_sync
+        ):
+            db.ensure_english_world_douyin_publication(review_id)
     except subprocess.TimeoutExpired:
         state = "UNCERTAIN"
         message = "视频号上传超时，无法排除平台已受理；已停止自动重传，需在后台核验。"

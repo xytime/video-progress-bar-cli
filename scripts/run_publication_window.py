@@ -14,11 +14,14 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 | 1.4.0 | 2026-08-29 | Codex | 每分钟巡航在公共窗口内先续投一条英语世界 AUTO_POLICY 延后项，仍由专用投稿器原子领取。 |
 | 1.5.0 | 2026-08-30 | Codex | 公共窗口调度前回收未领取且过期的具名补发授权，避免批准项永久脱离队列。 |
 | 1.6.0 | 2026-08-30 | Codex | 已受理英语世界作品按原生 ID 节流回查；全程复用 pipeline.lock 且绝不触发重传。 |
+| 1.6.1 | 2026-08-30 | Codex | 统一回查超时与普通失败的熔断通知收口，并转义 Telegram HTML 动态字段。 |
+| 1.7.0 | 2026-08-30 | Codex | 视频号已受理的英语世界审核项按独立账本同步到抖音，并节流回查公开状态。 |
 """
 
 from __future__ import annotations
 
 import fcntl
+import html
 import json
 import logging
 import os
@@ -211,6 +214,204 @@ def dispatch_one_deferred_english_world_submission() -> None:
         )
 
 
+def dispatch_one_english_world_douyin_submission() -> None:
+    """同步一条视频号已受理且从未建抖音账本的英语世界审核项。"""
+    if (
+        not settings.enable_english_world_douyin_sync
+        or not settings.enable_douyin_browser_publishing
+    ):
+        return
+    db = PipelineDB()
+    item = db.get_next_english_world_douyin_sync_candidate()
+    if not item:
+        return
+    review_id = str(item["id"])
+    result = subprocess.run(
+        [
+            str(PROJECT_ROOT / ".venv/bin/python"),
+            str(PROJECT_ROOT / "scripts/submit_english_world_douyin.py"),
+            "--review-id", review_id,
+        ],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30 * 60,
+    )
+    if result.returncode:
+        logging.error(
+            "[EnglishWorld][Douyin] sync worker returned %s for %s: %s",
+            result.returncode,
+            review_id[:8],
+            result.stderr[-500:],
+        )
+
+
+def reconcile_one_english_world_douyin_submission() -> None:
+    """按完整标题和文案只读回查一条英语世界抖音审核项；绝不上传。"""
+    if (
+        not settings.enable_english_world_douyin_sync
+        or not settings.enable_douyin_browser_publishing
+    ):
+        return
+    db = PipelineDB()
+    item = db.claim_next_english_world_douyin_reconciliation(
+        min_interval_minutes=settings.english_world_reconcile_interval_minutes,
+        failure_limit=settings.douyin_ui_failure_recording_threshold,
+    )
+    if not item:
+        return
+    review_id = str(item["review_id"])
+    remaining = db.reserve_douyin_browser_action_slot(
+        settings.douyin_browser_action_interval_sec,
+        f"english-world:{review_id}:management-verify",
+    )
+    if remaining > 0:
+        logging.info(
+            "[EnglishWorld][Douyin] browser action throttled for %.1fs; skip this reconciliation.",
+            remaining,
+        )
+        return
+    evidence_dir = (
+        PROJECT_ROOT / "output/english_world_douyin/reconciliation"
+        / review_id / str(time.time_ns())
+    )
+    command = [
+        str(PROJECT_ROOT / ".venv/bin/python"),
+        str(PROJECT_ROOT / "scripts/douyin_uploader.py"),
+        "--copy", str(item["copy_path"]),
+        "--title-file", str(item["title_path"]),
+        "--state", str(PROJECT_ROOT / "output/douyin_state.json"),
+        "--evidence-dir", str(evidence_dir),
+        "--fail-fast-login",
+        "--verify-only",
+    ]
+    if not settings.douyin_browser_headless:
+        command.append("--no-headless")
+    pipeline_lock = PROJECT_ROOT / "output/pipeline.lock"
+    pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
+    with pipeline_lock.open("a+") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logging.info("[EnglishWorld][Douyin] pipeline.lock 正忙，本轮跳过只读回查。")
+            return
+        try:
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=PROJECT_ROOT,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=180,
+                )
+                observed = {0: "PUBLISHED", 6: "UNDER_REVIEW"}.get(
+                    result.returncode, "UNCERTAIN",
+                )
+                message = {
+                    "PUBLISHED": "抖音作品管理页按完整标题/文案确认已发布。",
+                    "UNDER_REVIEW": "抖音作品管理页按完整标题/文案确认仍在审核。",
+                    "UNCERTAIN": f"抖音作品管理页回查未确认，exit={result.returncode}。",
+                }[observed]
+            except subprocess.TimeoutExpired:
+                observed = "UNCERTAIN"
+                message = "抖音作品管理页只读回查超时；保留已受理状态。"
+            updated = db.record_english_world_douyin_reconciliation(
+                review_id,
+                platform_state=observed,
+                evidence_dir=str(evidence_dir),
+                message=message,
+            )
+            title = html.escape(str(item.get("title") or review_id[:8]))
+            short_review_id = html.escape(review_id[:8])
+            if observed == "PUBLISHED":
+                send_text(
+                    event_type="english_world.douyin_published",
+                    priority="P1",
+                    text=f"✅ 英语世界抖音已公开\n标题：{title}\n审核编号：{short_review_id}",
+                    cooldown_seconds=24 * 60 * 60,
+                    dedupe_key=review_id,
+                    db=db,
+                )
+            elif (
+                observed == "UNCERTAIN"
+                and int(updated.get("reconciliation_failures") or 0)
+                >= max(1, int(settings.douyin_ui_failure_recording_threshold))
+            ):
+                send_text(
+                    event_type="english_world.douyin_recording_required",
+                    priority="P1",
+                    text=(
+                        "⚠️ 英语世界抖音回查已连续失败并熔断，不会重传。\n"
+                        f"标题：{title}\n审核编号：{short_review_id}\n"
+                        "请录制一次从抖音创作者中心进入作品管理并查看该作品状态的流程。"
+                    ),
+                    cooldown_seconds=24 * 60 * 60,
+                    dedupe_key=review_id,
+                    db=db,
+                )
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _record_english_world_reconciliation_result(
+    db: PipelineDB,
+    item: dict[str, Any],
+    *,
+    review_id: str,
+    platform_state: str,
+    evidence_dir: Path,
+    message: str,
+) -> dict[str, Any]:
+    """统一记录回查结果并在终态或失败阈值到达时发送一次通知。"""
+    updated = db.record_english_world_reconciliation(
+        review_id,
+        platform_state=platform_state,
+        evidence_dir=str(evidence_dir),
+        message=message,
+        platform_url=item.get("platform_url"),
+    )
+    title = html.escape(str(item.get("title") or review_id[:8]))
+    short_review_id = html.escape(review_id[:8])
+    if platform_state == "PUBLISHED":
+        send_text(
+            event_type="english_world.platform_published",
+            priority="P1",
+            text=f"✅ 英语世界视频号已公开\n标题：{title}\n审核编号：{short_review_id}",
+            cooldown_seconds=24 * 60 * 60,
+            dedupe_key=review_id,
+            db=db,
+        )
+    elif platform_state == "REJECTED":
+        send_text(
+            event_type="english_world.platform_rejected",
+            priority="P0",
+            text=f"⛔ 英语世界视频号审核未通过，已禁止重传\n标题：{title}\n审核编号：{short_review_id}",
+            cooldown_seconds=24 * 60 * 60,
+            dedupe_key=review_id,
+            db=db,
+        )
+    elif (
+        platform_state in {"UNCERTAIN", "NOT_FOUND"}
+        and int(updated.get("reconciliation_failures") or 0)
+        >= max(1, int(settings.english_world_reconcile_failure_limit))
+    ):
+        send_text(
+            event_type="english_world.reconciliation_recording_required",
+            priority="P1",
+            text=(
+                "⚠️ 英语世界视频号精确回查已连续失败并自动熔断，不会重传。\n"
+                f"标题：{title}\n审核编号：{short_review_id}\n"
+                "请录制一次从视频号作品管理打开并查看该作品状态的流程，供定位页面变化。"
+            ),
+            cooldown_seconds=24 * 60 * 60,
+            dedupe_key=review_id,
+            db=db,
+        )
+    return updated
+
+
 def reconcile_one_english_world_submission() -> None:
     """按同次提交绑定的原生 ID 回查一条英语世界作品；不上传、不按标题匹配。"""
     pipeline_lock = PROJECT_ROOT / "output" / "pipeline.lock"
@@ -255,10 +456,12 @@ def reconcile_one_english_world_submission() -> None:
                     timeout=max(30, int(settings.wechat_review_timeout_seconds or 180)),
                 )
             except subprocess.TimeoutExpired:
-                db.record_english_world_reconciliation(
-                    review_id,
+                _record_english_world_reconciliation_result(
+                    db,
+                    item,
+                    review_id=review_id,
                     platform_state="UNCERTAIN",
-                    evidence_dir=str(evidence_dir),
+                    evidence_dir=evidence_dir,
                     message="视频号原生 ID 只读回查超时；保留已受理状态并等待下一次节流回查。",
                 )
                 return
@@ -277,48 +480,14 @@ def reconcile_one_english_world_submission() -> None:
             if not evidence_path.is_file():
                 platform_state = "UNCERTAIN"
                 message = "视频号原生 ID 回查缺少对应页面证据；不改变已受理事实。"
-            updated = db.record_english_world_reconciliation(
-                review_id,
+            _record_english_world_reconciliation_result(
+                db,
+                item,
+                review_id=review_id,
                 platform_state=platform_state,
-                evidence_dir=str(evidence_dir),
+                evidence_dir=evidence_dir,
                 message=message,
-                platform_url=item.get("platform_url"),
             )
-            if platform_state == "PUBLISHED":
-                send_text(
-                    event_type="english_world.platform_published",
-                    priority="P1",
-                    text=f"✅ 英语世界视频号已公开\n标题：{item.get('title') or review_id[:8]}\n审核编号：{review_id[:8]}",
-                    cooldown_seconds=24 * 60 * 60,
-                    dedupe_key=review_id,
-                    db=db,
-                )
-            elif platform_state == "REJECTED":
-                send_text(
-                    event_type="english_world.platform_rejected",
-                    priority="P0",
-                    text=f"⛔ 英语世界视频号审核未通过，已禁止重传\n标题：{item.get('title') or review_id[:8]}\n审核编号：{review_id[:8]}",
-                    cooldown_seconds=24 * 60 * 60,
-                    dedupe_key=review_id,
-                    db=db,
-                )
-            elif (
-                platform_state in {"UNCERTAIN", "NOT_FOUND"}
-                and int(updated.get("reconciliation_failures") or 0)
-                >= max(1, int(settings.english_world_reconcile_failure_limit))
-            ):
-                send_text(
-                    event_type="english_world.reconciliation_recording_required",
-                    priority="P1",
-                    text=(
-                        "⚠️ 英语世界视频号精确回查已连续失败并自动熔断，不会重传。\n"
-                        f"标题：{item.get('title') or review_id[:8]}\n审核编号：{review_id[:8]}\n"
-                        "请录制一次从视频号作品管理打开并查看该作品状态的流程，供定位页面变化。"
-                    ),
-                    cooldown_seconds=24 * 60 * 60,
-                    dedupe_key=review_id,
-                    db=db,
-                )
             logging.info(
                 "[EnglishWorld] 原生 ID 回查完成 review=%s platform_state=%s",
                 review_id[:8], platform_state,
@@ -334,9 +503,17 @@ def main() -> int:
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         logging.error("[EnglishWorld] accepted submission reconciliation failed: %s", exc)
     try:
+        reconcile_one_english_world_douyin_submission()
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        logging.error("[EnglishWorld][Douyin] accepted submission reconciliation failed: %s", exc)
+    try:
         dispatch_one_deferred_english_world_submission()
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         logging.error("[EnglishWorld] deferred submission dispatch failed: %s", exc)
+    try:
+        dispatch_one_english_world_douyin_submission()
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        logging.error("[EnglishWorld][Douyin] sync dispatch failed: %s", exc)
     return run_publication_window()
 
 

@@ -9,6 +9,7 @@
 # | 1.3.0 | 2026-08-30 | Codex | 覆盖生产失败通知与成片交付的独立监控状态。 |
 # | 1.4.0 | 2026-08-30 | Codex | 覆盖五层证据输出，锁定 Telegram 接受、提交执行与公开可见不得互相越级。 |
 # | 1.5.0 | 2026-08-30 | Codex | 固化监测 LaunchAgent 使用项目 venv，而非缺依赖的宿主 pyenv。 |
+# | 1.6.0 | 2026-08-30 | Codex | 固化监测 LaunchAgent 使用安装时渲染的可迁移路径模板。 |
 """
 
 from __future__ import annotations
@@ -212,7 +213,11 @@ def test_monitor_plist_runs_after_both_production_windows():
         configuration = plistlib.load(stream)
 
     assert configuration["Label"] == "com.videopipeline.english-world-monitor"
-    assert configuration["ProgramArguments"][0] == str(PROJECT_ROOT / ".venv/bin/python")
+    assert configuration["ProgramArguments"][:2] == [
+        "__VENV_PYTHON__", "__PROJECT_ROOT__/scripts/monitor_english_world_daily.py",
+    ]
+    assert configuration["WorkingDirectory"] == "__PROJECT_ROOT__"
+    assert configuration["EnvironmentVariables"]["PYTHONPATH"] == "__PROJECT_ROOT__/src"
     assert configuration["StartCalendarInterval"] == [
         {"Hour": 9, "Minute": 15},
         {"Hour": 19, "Minute": 0},
