@@ -4,6 +4,11 @@
 必须在同一作品卡片中精确匹配本地标题或文案指纹及“已发布”或“审核中”状态，绝不凭
 本地账本或页面其他作品的状态确认结果。
 
+本脚本是低层浏览器原语，但对会上传、预检、发布或访问作品管理页的动作，会在启动浏览器
+前复核持久 UI 熔断账本。自动调度和常规业务入口仍必须先由上层共享熔断守卫放行；这里是
+跨进程的最后一道防线。熔断期间只允许带阶段、理由和独立证据目录的非最终人工恢复校准，
+`--publish` 永远不能用恢复参数绕过熔断，也不得把本地退出码伪装为平台公开发布。
+
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
@@ -48,6 +53,19 @@
 | 1.5.30 | 2026-08-30 | Codex | 作品管理回查等待列表真实加载并优先精确匹配标题；发布受理只认跳转或明确回执，最终按钮异常不再强制重点击 |
 | 1.5.32 | 2026-08-30 | Codex | 填写含话题文案后先关闭标签建议浮层，并收窄封面入口避免宽容器点击被遮挡。 |
 | 1.5.31 | 2026-08-30 | Codex | 支持为单次隔离投稿指定独立证据目录，避免校准与投稿证据互相覆盖。 |
+| 1.5.33 | 2026-08-31 | Codex | 支持独立横封面，按竖后横顺序分别保存；抖音专用中间封面使用 RGB JPEG 以适配实际上传控件，并在最终提交前拦截快速检测的红黄风险提示。 |
+| 1.5.34 | 2026-08-31 | Codex | 适配竖封面后的“设置横封面获更多流量”前置确认：先确认弹窗并进入横封面面板，再注入横图；禁止把横图写入被遮住的竖封面面板。 |
+| 1.5.35 | 2026-08-31 | Codex | 封面上传改为仅向当前面板图片 input 直接写入绝对路径；无可用 input 即停止，避免点击上传区打开 Finder 干扰自动化。 |
+| 1.5.36 | 2026-08-31 | Codex | 新增仅预检模式：完成上传、文案、双封面、自主声明与快速检测后停止，供最终发布前单独取得确认。 |
+| 1.5.37 | 2026-08-31 | Codex | 快速检测新增“检测中”状态门禁：机器检测未完成、120 秒超时或不可读时均不得视为可发布。 |
+| 1.5.38 | 2026-08-31 | Codex | 封面确认仅接受具名完成/保存/确认控件，移除无文本通用主按钮兜底以防误点。 |
+| 1.5.39 | 2026-08-31 | Codex | 对平台检测服务拥堵的完整固定报错设立窄例外；任何并存的封面或其他风险仍拒绝提交。 |
+| 1.5.40 | 2026-09-02 | Codex | 明确低层上传器仅作获授权的人工校准原语；自动路径必须先通过共享 UI 熔断守卫。 |
+| 1.5.41 | 2026-09-02 | Codex | 上传器在启动浏览器前复核持久熔断；恢复仅允许受审计的非最终校准，禁止 `--publish` 绕过。 |
+| 1.5.42 | 2026-09-02 | Codex | 管理页熔断活动时，低层最终提交也要求明确 `source_kind=NEW`，避免 HISTORY 在跨进程窗口穿透。 |
+| 1.5.43 | 2026-09-02 | Codex | 投稿页动作改为消费数据库签发的一次性启动凭据，绑定完整投稿包并在浏览器前原子消费。 |
+| 1.5.44 | 2026-09-02 | Codex | 所有投稿页访问均纳入熔断；无凭据旧进程安全停止，管理页熔断保留无上传的登录恢复。 |
+| 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 """
 
 from __future__ import annotations
@@ -56,6 +74,7 @@ import argparse
 import hashlib
 import json
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -63,6 +82,27 @@ from typing import Iterable, Optional
 from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
+from config.settings import settings  # noqa: E402
+from video_processing.core.douyin_ui_guard_policy import (  # noqa: E402
+    DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+    DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT,
+    active_douyin_ui_failure_stages,
+    douyin_management_verify_is_blocked,
+    douyin_publish_is_blocked,
+)
+from video_processing.core.douyin_launch_context import (  # noqa: E402
+    canonical_local_path,
+    douyin_submission_payload_sha256,
+    sha256_file as launch_sha256_file,
+)
+from video_processing.db.database import PipelineDB  # noqa: E402
 
 
 logger = logging.getLogger("douyin_uploader")
@@ -91,6 +131,277 @@ EXIT_UNDER_REVIEW = 6
 EXIT_SUBMISSION_UNCONFIRMED = 7
 MANAGEMENT_PUBLISHED = "PUBLISHED"
 MANAGEMENT_UNDER_REVIEW = "UNDER_REVIEW"
+DOUYIN_BLOCKING_QUICK_CHECK_MARKERS = (
+    "作品检测失败",
+    "当前检测人数过多",
+    "检测失败",
+    "横/竖双封面缺失",
+    "横竖双封面缺失",
+    "建议同时设置横版和竖版的封面",
+    "封面检测未通过",
+    "封面不合格",
+    "封面违规",
+    "封面异常",
+)
+DOUYIN_CAPACITY_CONGESTION_REQUIRED_TEXT = (
+    "作品检测失败",
+    "当前检测人数过多",
+    "请稍后再试",
+)
+DOUYIN_CAPACITY_CONGESTION_COMPATIBLE_MARKERS = (
+    "作品检测失败",
+    "当前检测人数过多",
+    "检测失败",
+)
+DOUYIN_PENDING_QUICK_CHECK_MARKERS = (
+    "检测中",
+    "正在检测",
+    "检查中",
+    "正在检查",
+)
+DOUYIN_QUICK_CHECK_TIMEOUT_SECONDS = 120
+DOUYIN_CALIBRATION_ROOT = PROJECT_ROOT / "output" / "douyin_calibration"
+_UI_GUARD_ACTION_PUBLISH = "publish"
+_UI_GUARD_ACTION_MANAGEMENT_VERIFY = "management_verify"
+_UI_GUARD_ACTION_AUTH = "auth"
+
+
+def _guarded_ui_action(args: argparse.Namespace) -> Optional[str]:
+    """返回本次会打开的受保护页面；默认快照和登录页也必须过熔断。"""
+    if getattr(args, "verify_only", False):
+        return _UI_GUARD_ACTION_MANAGEMENT_VERIFY
+    if getattr(args, "login_only", False):
+        return _UI_GUARD_ACTION_AUTH
+    # 除 ``--verify-only`` 外，main() 都会导航到投稿页；因此不能把登录、快照
+    # 校准或默认动作当作“不打开浏览器”的旁路。
+    return _UI_GUARD_ACTION_PUBLISH
+
+
+def _read_active_persistent_douyin_ui_failure_stages(
+    *,
+    db: Optional[PipelineDB] = None,
+) -> Optional[set[str]]:
+    """读取跨进程熔断账本；不可判定时返回 None，调用者必须 fail-closed。"""
+    try:
+        ledger = db if db is not None else PipelineDB(str(PROJECT_ROOT / "output" / "pipeline.db"))
+        streaks = ledger.get_platform_ui_failure_streaks("douyin")
+    except Exception:  # noqa: BLE001 - 账本不可读时不得启动浏览器
+        logger.exception("无法读取抖音 UI 熔断账本，拒绝启动浏览器")
+        return None
+    if not isinstance(streaks, list):
+        logger.error("抖音 UI 熔断账本格式异常（期待 list），拒绝启动浏览器")
+        return None
+    try:
+        return active_douyin_ui_failure_stages(
+            streaks,
+            recording_threshold=settings.douyin_ui_failure_recording_threshold,
+        )
+    except Exception:  # noqa: BLE001 - 策略无法判定时宁可停止
+        logger.exception("抖音 UI 熔断账本无法判定，拒绝启动浏览器")
+        return None
+
+
+def _validate_operator_recovery_request(
+    args: argparse.Namespace,
+    *,
+    calibration_root: Path,
+) -> Optional[int]:
+    """恢复授权只可用于非最终校准，且证据必须落到既有清熔断可信目录。"""
+    stage = getattr(args, "operator_recovery_stage", None)
+    reason = (getattr(args, "operator_recovery_reason", None) or "").strip()
+    if bool(stage) != bool(reason):
+        logger.error("操作员恢复校准必须同时提供 --operator-recovery-stage 与非空 --operator-recovery-reason")
+        return EXIT_FAILED
+    if not stage:
+        return None
+    if args.publish:
+        logger.error("--operator-recovery-* 仅用于校准证据，不能与 --publish 合用")
+        return EXIT_FAILED
+    if not (
+        getattr(args, "verify_only", False)
+        or getattr(args, "preflight_only", False)
+        or getattr(args, "calibrate_after_upload", False)
+        or getattr(args, "calibrate", False)
+    ):
+        logger.error("操作员恢复校准仅允许 --verify-only、--calibrate、--preflight-only 或 --calibrate-after-upload")
+        return EXIT_FAILED
+    expected_stage = (
+        DOUYIN_UI_STAGE_MANAGEMENT_VERIFY
+        if args.verify_only
+        else DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT
+    )
+    if stage != expected_stage:
+        logger.error("恢复阶段 %s 与当前非最终校准动作不匹配，期望 %s", stage, expected_stage)
+        return EXIT_FAILED
+    if not args.evidence_dir:
+        logger.error("操作员恢复校准必须提供 --evidence-dir 以保存独立审计证据")
+        return EXIT_FAILED
+    try:
+        Path(args.evidence_dir).resolve().relative_to(calibration_root.resolve())
+    except ValueError:
+        logger.error("操作员恢复校准证据必须位于 %s", calibration_root)
+        return EXIT_FAILED
+    return None
+
+
+def _operator_recovery_matches_active_stages(
+    args: argparse.Namespace,
+    action: str,
+    active_stages: set[str],
+) -> bool:
+    """未知阶段不得被恢复旗标放行；已知阶段只允许采集其自身的校准证据。"""
+    stage = getattr(args, "operator_recovery_stage", None)
+    known_stages = {
+        DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT,
+        DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+    }
+    if not active_stages or not active_stages.issubset(known_stages):
+        return False
+    if action == _UI_GUARD_ACTION_MANAGEMENT_VERIFY:
+        return (
+            stage == DOUYIN_UI_STAGE_MANAGEMENT_VERIFY
+            and active_stages == {DOUYIN_UI_STAGE_MANAGEMENT_VERIFY}
+        )
+    return (
+        stage == DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT
+        and DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT in active_stages
+    )
+
+
+def _write_operator_recovery_audit(
+    args: argparse.Namespace,
+    *,
+    action: str,
+    active_stages: set[str],
+) -> bool:
+    """在浏览器启动前留下受控恢复请求；失败则不允许打开页面。"""
+    evidence_dir = Path(args.evidence_dir)
+    payload = {
+        "event": "operator_recovery_calibration",
+        "recorded_at_epoch": time.time(),
+        "stage": args.operator_recovery_stage,
+        "reason": args.operator_recovery_reason.strip(),
+        "guarded_action": action,
+        "active_stages": sorted(active_stages),
+        "final_publish": False,
+    }
+    try:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        (evidence_dir / "operator_recovery_calibration.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        logger.error("无法写入操作员恢复校准审计证据：%s", exc)
+        return False
+    return True
+
+
+def _submission_launch_payload(args: argparse.Namespace) -> Optional[tuple[str, str, str]]:
+    """从真实本地投稿包重算启动绑定；任一文件不完整均不能打开浏览器。"""
+    video = getattr(args, "video", None)
+    payload_sha256 = douyin_submission_payload_sha256(
+        video_path=video,
+        copy_path=getattr(args, "copy", None),
+        title_path=getattr(args, "title_file", None),
+        cover_path=getattr(args, "cover", None),
+        horizontal_cover_path=getattr(args, "horizontal_cover", None),
+    )
+    video_sha256 = launch_sha256_file(video)
+    if not video or not payload_sha256 or not video_sha256:
+        return None
+    return canonical_local_path(video), video_sha256, payload_sha256
+
+
+def _ticket_fields(args: argparse.Namespace) -> tuple[str, str]:
+    """兼容直接单元调用的 Namespace；空/半填均由守卫 fail-closed。"""
+    return (
+        str(getattr(args, "douyin_launch_ticket_id", "") or "").strip(),
+        str(getattr(args, "douyin_launch_token", "") or "").strip(),
+    )
+
+
+def _guard_before_browser(
+    args: argparse.Namespace,
+    *,
+    db: Optional[PipelineDB] = None,
+    calibration_root: Optional[Path] = None,
+) -> Optional[int]:
+    """在 Playwright 启动前执行最后一道跨进程 UI 熔断守卫。"""
+    recovery_validation = _validate_operator_recovery_request(
+        args,
+        calibration_root=calibration_root or DOUYIN_CALIBRATION_ROOT,
+    )
+    if recovery_validation is not None:
+        return recovery_validation
+    action = _guarded_ui_action(args)
+    if action is None:
+        return None
+    ticket_id, launch_token = _ticket_fields(args)
+    if bool(ticket_id) != bool(launch_token):
+        logger.error("抖音浏览器启动凭据必须同时提供 ticket 与 token")
+        return EXIT_NOT_CALIBRATED
+    if bool(getattr(args, "publish", False)) and not ticket_id:
+        logger.error("抖音最终投稿必须持有已领取账本签发的一次性启动凭据")
+        return EXIT_NOT_CALIBRATED
+    if ticket_id and not args.publish:
+        logger.error("一次性抖音启动凭据仅绑定 --publish，不能拿去执行管理页或预检动作")
+        return EXIT_NOT_CALIBRATED
+    active_stages = _read_active_persistent_douyin_ui_failure_stages(db=db)
+    if active_stages is None:
+        return EXIT_NOT_CALIBRATED
+    blocked = (
+        douyin_management_verify_is_blocked(active_stages)
+        if action == _UI_GUARD_ACTION_MANAGEMENT_VERIFY
+        else douyin_publish_is_blocked(active_stages)
+    )
+    if blocked and _operator_recovery_matches_active_stages(args, action, active_stages):
+        if _write_operator_recovery_audit(args, action=action, active_stages=active_stages):
+            logger.warning(
+                "抖音 UI 熔断阶段 %s 活动；仅放行受审计的非最终 %s 校准，"
+                "完成证据化清熔断前绝不允许发布。",
+                ", ".join(sorted(active_stages)),
+                action,
+            )
+            return None
+        return EXIT_NOT_CALIBRATED
+    if blocked:
+        logger.error(
+            "抖音 UI 熔断阶段 %s 活动，拒绝在启动浏览器前执行 %s。",
+            ", ".join(sorted(active_stages)),
+            action,
+        )
+        return EXIT_NOT_CALIBRATED
+    if action == _UI_GUARD_ACTION_PUBLISH and ticket_id:
+        payload = _submission_launch_payload(args)
+        if not payload:
+            logger.error("抖音启动凭据无法绑定完整本地投稿包，拒绝启动浏览器")
+            return EXIT_NOT_CALIBRATED
+        video_path, asset_sha256, payload_sha256 = payload
+        try:
+            ledger = db if db is not None else PipelineDB(str(PROJECT_ROOT / "output" / "pipeline.db"))
+            allowed = ledger.begin_douyin_browser_launch(
+                ticket_id,
+                launch_token,
+                video_path=video_path,
+                asset_sha256=asset_sha256,
+                payload_sha256=payload_sha256,
+                require_new_source=bool(active_stages),
+            )
+        except Exception:  # noqa: BLE001 - ticket 不可判定时不允许开浏览器
+            logger.exception("无法消费抖音一次性浏览器启动凭据，拒绝启动浏览器")
+            return EXIT_NOT_CALIBRATED
+        if not allowed:
+            logger.error("抖音启动凭据、投稿包或领取状态不匹配，拒绝启动浏览器")
+            return EXIT_NOT_CALIBRATED
+        return None
+    if action == _UI_GUARD_ACTION_PUBLISH and active_stages:
+        # 旧父进程没有不可伪造的完整投稿包绑定。即使留下 NEW+UPLOADING 账本，也
+        # 不能据此推断其后续命令可安全发布；预检、登录和默认快照同样不能绕过
+        # 管理页熔断。必须让旧进程安全停止，再由新领取签发 ticket。
+        logger.error("抖音 UI 熔断活动时，投稿页动作必须由受审计恢复校准或已绑定启动凭据授权")
+        return EXIT_NOT_CALIBRATED
+    return None
 
 
 def is_creator_center_url(url: str) -> bool:
@@ -597,6 +908,7 @@ def upload_for_calibration(
     title_text: Optional[str] = None,
     description_text: Optional[str] = None,
     cover_path: Optional[str] = None,
+    horizontal_cover_path: Optional[str] = None,
 ) -> bool:
     """只上传一个已授权视频并保存表单结构；不填写、不保存草稿、不发布。"""
     upload_input = get_video_upload_input(page)
@@ -613,7 +925,14 @@ def upload_for_calibration(
         return False
     capture_controls(page, artifact_dir, "douyin_post_upload")
     if title_text is not None or description_text is not None or cover_path is not None:
-        if not fill_publish_fields(page, title_text or "", description_text or "", artifact_dir, cover_path=cover_path):
+        if not fill_publish_fields(
+            page,
+            title_text or "",
+            description_text or "",
+            artifact_dir,
+            cover_path=cover_path,
+            horizontal_cover_path=horizontal_cover_path,
+        ):
             return False
     logger.info("已上传文件并保存抖音上传后表单控件；未保存草稿、未发布")
     return True
@@ -667,10 +986,10 @@ def _prepare_cover_upload_file(
             (target_height - foreground.height) // 2,
         )
         background.paste(foreground, paste_at)
-        target = source.with_name(f"{source.stem}_{suffix}.png")
-        background.save(target, format="PNG")
+        target = source.with_name(f"{source.stem}_{suffix}.jpg")
+        background.save(target, format="JPEG", quality=95, optimize=True)
         logger.info(
-            "已生成抖音专用封面副本: %s (%sx%s -> %sx%s)",
+            "已生成抖音专用 JPEG 封面副本: %s (%sx%s -> %sx%s)",
             target,
             width,
             height,
@@ -903,7 +1222,9 @@ def _cover_file_input_score(file_input) -> int:
     if "semi-upload-hidden-input" in class_name:
         score += 20
     if "replace" in class_name:
-        score += 5
+        # 未选中封面时应优先使用初始上传 input；replace input 只作为后备，
+        # 否则某些页面会把文件投递到上一张竖封面的替换控件。
+        score -= 5
     if "upload-btn-input" in class_name and not parent_text:
         score -= 30
     return score
@@ -1113,26 +1434,7 @@ def _open_cover_upload_tab(page, modal) -> None:
 
 
 def _inject_cover_file_in_modal(page, modal, cover_path_abs: str) -> bool:
-    """在当前封面面板注入图片文件；优先走可见 file chooser，隐藏 input 仅兜底。"""
-    btn_selectors = [
-        ".upload-ZOJTUA",
-        ".upload-BvM5FF",
-        ".semi-upload-drag-area:has-text('点击上传文件')",
-        "div:has-text('点击上传文件')",
-        ".upload-tips-KomyJM",
-        "text=+ 上传封面",
-    ]
-    upload_btn = _find_visible_element(modal, btn_selectors)
-    if upload_btn:
-        try:
-            with page.expect_file_chooser(timeout=4000) as fc_info:
-                upload_btn.click(timeout=2000, force=True)
-            fc_info.value.set_files(cover_path_abs)
-            logger.info("已通过抖音可见上传区域 file chooser 注入封面图片！")
-            return True
-        except Exception as fc_err:
-            logger.debug("点击抖音封面上传区触发 file chooser 失败: %s", fc_err)
-
+    """仅通过当前封面面板的图片 input 注入绝对路径，绝不打开 Finder。"""
     try:
         file_inputs = modal.locator("input[type='file']")
         candidates = []
@@ -1142,12 +1444,19 @@ def _inject_cover_file_in_modal(page, modal, cover_path_abs: str) -> bool:
                 logger.warning("跳过疑似抖音视频 input，accept=%s", _get_file_accept(candidate))
                 continue
             candidates.append((_cover_file_input_score(candidate), candidate))
-        for _, file_input in sorted(candidates, key=lambda item: item[0], reverse=True):
-            file_input.set_input_files(cover_path_abs, timeout=3000)
-            logger.info("已通过 modal 内图片 input 兜底注入抖音封面图片！")
-            return True
+        if not candidates:
+            logger.error("当前抖音封面面板不存在可用图片 input；拒绝打开 Finder 兜底")
+            return False
+        for score, file_input in sorted(candidates, key=lambda item: item[0], reverse=True):
+            try:
+                file_input.set_input_files(cover_path_abs, timeout=3_000)
+                logger.info("已通过当前抖音封面面板图片 input 直接注入封面，score=%s", score)
+                return True
+            except Exception as exc:
+                logger.debug("当前抖音图片 input 注入失败，尝试下一个候选：%s", exc)
     except Exception as exc:
-        logger.debug("直接 set_input_files 注入失败: %s", exc)
+        logger.debug("定位当前抖音封面图片 input 失败: %s", exc)
+    logger.error("当前抖音封面图片无法直接注入；拒绝打开 Finder 兜底")
     return False
 
 
@@ -1209,10 +1518,81 @@ def _click_horizontal_cover_step(page, modal) -> bool:
     return True
 
 
+def _accept_horizontal_cover_recommendation(page, *, timeout_seconds: int = 8) -> bool:
+    """确认已观测到的双封面推荐弹窗，且只点击弹窗自身的横封面 CTA。
+
+    竖封面上传后，编辑器的“设置横封面”会先打开一层说明弹窗。若在该
+    弹窗仍覆盖编辑器时向 hidden input 注入文件，平台会把文件投递给错误的
+    面板并报出误导性的图片格式错误。因此弹窗一旦出现，必须先等待其关闭。
+    """
+    state_script = """shouldClick => {
+        const normalize = value => (value || '').replace(/\\s+/g, '');
+        const visible = element => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0
+                && style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        const dialogs = Array.from(document.querySelectorAll(
+            '.dy-creator-content-modal-content, .dy-creator-content-modal-wrap, .semi-modal-wrap, [role="dialog"]'
+        )).filter(visible);
+        const dialog = dialogs.find(element => normalize(element.innerText).includes('设置横封面获更多流量'));
+        if (!dialog) return { visible: false, clicked: false };
+        if (!shouldClick) return { visible: true, clicked: false };
+        const target = Array.from(dialog.querySelectorAll('button, [role="button"]')).find(button => {
+            const text = normalize(button.innerText || button.textContent);
+            return text === '设置横封面' && visible(button)
+                && !button.disabled && button.getAttribute('aria-disabled') !== 'true';
+        });
+        if (!target) return { visible: true, clicked: false };
+        target.click();
+        return { visible: true, clicked: true };
+    }"""
+
+    popup_seen = False
+    for elapsed in range(max(1, timeout_seconds)):
+        try:
+            state = page.evaluate(state_script, True) or {}
+        except Exception as exc:
+            logger.error("读取抖音横封面推荐弹窗失败：%s", exc)
+            return False
+        if not state.get("visible"):
+            # 平台有两种界面：一种直接切换横封面 Tab，另一种先给说明弹窗。
+            # 未出现弹窗时，给 Tab 一小段稳定时间后继续即可。
+            if elapsed >= 2:
+                return True
+            page.wait_for_timeout(1_000)
+            continue
+
+        popup_seen = True
+        if not state.get("clicked"):
+            logger.error("抖音横封面推荐弹窗出现，但未找到可用的“设置横封面”按钮")
+            return False
+        logger.info("已确认抖音“设置横封面获更多流量”弹窗，等待进入横封面面板")
+        for close_elapsed in range(max(1, timeout_seconds)):
+            try:
+                remaining = page.evaluate(state_script, False) or {}
+            except Exception as exc:
+                logger.error("确认抖音横封面推荐弹窗是否关闭失败：%s", exc)
+                return False
+            if not remaining.get("visible"):
+                return True
+            if close_elapsed and close_elapsed % 3 == 0:
+                logger.info("抖音横封面推荐弹窗仍在切换，已等待 %s 秒", close_elapsed)
+            page.wait_for_timeout(1_000)
+        logger.error("抖音横封面推荐弹窗未在 %s 秒内关闭", timeout_seconds)
+        return False
+
+    if popup_seen:
+        logger.error("抖音横封面推荐弹窗状态未确认，拒绝继续上传横封面")
+        return False
+    return True
+
+
 def _click_cover_confirm(page, modal, timeout_seconds: int = 90) -> bool:
     """等待封面编辑器完成生成并点击可用的“完成”；不可用时不得继续发布。"""
     confirm_selectors = [
-        "button:has-text('完成')", "span:has-text('完成')", "button.semi-button-primary",
+        "button:has-text('完成')", "span:has-text('完成')", "button:has-text('保存')", "text=保存",
         "text=完成", "text=确定", "text=确认", "text=裁剪并保存"
     ]
     for elapsed in range(timeout_seconds):
@@ -1230,6 +1610,81 @@ def _click_cover_confirm(page, modal, timeout_seconds: int = 90) -> bool:
         page.wait_for_timeout(1_000)
     logger.error("抖音封面编辑器的“完成”按钮在 %s 秒内始终不可用", timeout_seconds)
     return False
+
+
+def _wait_for_cover_editor_closed(page, modal, *, timeout_seconds: int = 10) -> bool:
+    """等待当前封面编辑器保存落地；不能用 Escape 取消平台的异步保存。"""
+    editor_still_open = True
+    try:
+        for elapsed in range(timeout_seconds):
+            editor_still_open = (
+                _find_visible_element(page, ["button:has-text('保存')", "button:has-text('取消')"], timeout_ms=500) is not None
+                if modal is page
+                else modal.is_visible(timeout=500)
+            )
+            if not editor_still_open:
+                return True
+            if elapsed and elapsed % 3 == 0:
+                logger.info("抖音封面仍在保存，已等待 %s 秒", elapsed)
+            page.wait_for_timeout(1_000)
+    except Exception as exc:
+        logger.error("无法确认抖音封面编辑器是否关闭：%s", exc)
+        return False
+    logger.error("抖音封面编辑器在保存后仍未关闭，拒绝继续自主声明或发布")
+    return False
+
+
+def _accept_set_vertical_cover_recommendation(page) -> bool:
+    """仅处理已观测的“设置封面获更多流量”弹窗中的“设置竖封面”下一步。"""
+    try:
+        return bool(page.evaluate(
+            """() => {
+                const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+                const matches = buttons.map(button => {
+                    const text = (button.innerText || button.textContent || '').trim().replace(/\\s+/g, '');
+                    const rect = button.getBoundingClientRect();
+                    return { button, text, rect };
+                }).filter(item => item.text === '设置竖封面' && item.rect.width > 0 && item.rect.height > 0)
+                    .sort((left, right) => left.rect.y - right.rect.y);
+                const target = matches[0]?.button;
+                if (!target) return false;
+                target.click();
+                return true;
+            }"""
+        ))
+    except Exception as exc:
+        logger.debug("读取抖音“设置竖封面”推荐弹窗失败：%s", exc)
+        return False
+
+
+def _click_cover_entry(page, selectors: Iterable[str], *, artifact_dir: Optional[Path], artifact_name: str, cover_path_abs: str):
+    """将指定比例的封面卡槽滚入视口并打开编辑器；不猜测其它比例的入口。"""
+    cover_entry = _find_visible_element(page, selectors)
+    if not cover_entry:
+        logger.warning("未找到抖音%s封面设置入口", artifact_name)
+        return None
+    try:
+        cover_entry.scroll_into_view_if_needed(timeout=2_000)
+    except Exception as exc:
+        logger.debug("抖音%s封面入口滚动到视口失败，继续由点击闸门确认：%s", artifact_name, exc)
+    try:
+        cover_entry.click(timeout=2_000)
+    except Exception as exc:
+        logger.debug("抖音%s封面入口普通点击受阻，尝试同一入口 force 点击：%s", artifact_name, exc)
+        try:
+            cover_entry.click(timeout=2_000, force=True)
+        except Exception as force_exc:
+            logger.error("抖音%s封面入口无法点击：%s", artifact_name, force_exc)
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, f"douyin_{artifact_name}_cover_entry_click_failed", cover_path_abs)
+            return None
+    page.wait_for_timeout(2_000)
+    if artifact_dir:
+        capture_cover_evidence(page, artifact_dir, f"douyin_{artifact_name}_cover_entry_opened", cover_path_abs)
+    return _find_active_modal(page, [
+        ".dy-creator-content-modal-body", ".dy-creator-content-modal-wrap",
+        ".semi-modal-wrap", "div[role='dialog']", ".modal-container",
+    ])
 
 
 def wait_for_cover_validation(page, timeout_seconds: int = 120) -> bool:
@@ -1296,29 +1751,17 @@ def apply_cover(
         cover_path_abs = str(Path(cover_path).resolve())
         horizontal_cover_path_abs = str(Path(horizontal_cover_path).resolve()) if horizontal_cover_path else None
 
-        # 1. 寻找并点击“选择封面” / “设置封面” 入口按钮
-        entry_selectors = [
-            "[class*='coverControl']:has-text('选择封面')",
-            "[class*='coverControl']:has-text('设置封面')",
-            "button:has-text('选择封面')", "button:has-text('设置封面')",
-            "text=选择封面", "text=设置封面", "text=编辑封面", "text=更改封面", "text=更换封面",
-            ".cover-edit-btn", "[class*='cover'] button"
-        ]
-        cover_entry = _find_visible_element(page, entry_selectors)
-        if not cover_entry:
-            logger.warning("未找到抖音封面设置入口（选择封面/设置封面）")
+        # 平台当前每次弹窗只保存一种比例。必须先保存竖封面并等待弹窗关闭，
+        # 再打开横封面卡槽；在同一弹窗内切换比例会丢失前一种封面。
+        modal = _click_cover_entry(
+            page,
+            ["[class*='coverControl']:has-text('竖封面3:4')", "text=竖封面3:4"],
+            artifact_dir=artifact_dir,
+            artifact_name="vertical",
+            cover_path_abs=cover_path_abs,
+        )
+        if not modal:
             return False
-
-        cover_entry.click(timeout=2000)
-        page.wait_for_timeout(2000)
-        if artifact_dir:
-            capture_cover_evidence(page, artifact_dir, "douyin_cover_entry_opened", cover_path_abs)
-
-        # 2. 定位 Modal 并切换“上传封面” / “本地上传” Tab
-        modal = _find_active_modal(page, [
-            ".dy-creator-content-modal-body", ".dy-creator-content-modal-wrap",
-            ".semi-modal-wrap", "div[role='dialog']", ".modal-container",
-        ])
 
         if not _apply_cover_in_current_panel(
             page,
@@ -1328,11 +1771,25 @@ def apply_cover(
             artifact_prefix="douyin_cover",
             allow_thumbnail_match_fallback=True,
         ):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_unconfirmed", cover_path_abs)
             return False
 
         if horizontal_cover_path_abs:
+            # 此处“完成”有意保持不可用，直到横封面也设置完毕。不可先等它
+            # 变为可用；必须先进入横封面步骤，并处理其可能弹出的前置说明层。
             if not _click_horizontal_cover_step(page, modal):
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_entry_failed", horizontal_cover_path_abs)
                 return False
+            if not _accept_horizontal_cover_recommendation(page):
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_recommendation_unconfirmed", horizontal_cover_path_abs)
+                return False
+            modal = _find_active_modal(page, [
+                ".dy-creator-content-modal-body", ".dy-creator-content-modal-wrap",
+                ".semi-modal-wrap", "div[role='dialog']", ".modal-container",
+            ])
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_entry_opened", horizontal_cover_path_abs)
             if not _apply_cover_in_current_panel(
@@ -1343,32 +1800,27 @@ def apply_cover(
                 artifact_prefix="douyin_horizontal_cover",
                 allow_thumbnail_match_fallback=True,
             ):
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_unconfirmed", horizontal_cover_path_abs)
                 return False
 
         if not _click_cover_confirm(page, modal):
             if artifact_dir:
-                capture_cover_evidence(page, artifact_dir, "douyin_cover_confirm_unavailable", cover_path_abs)
+                capture_cover_evidence(page, artifact_dir, "douyin_cover_confirm_unavailable", horizontal_cover_path_abs or cover_path_abs)
+            return False
+        if not _wait_for_cover_editor_closed(page, modal):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_cover_modal_unclosed", horizontal_cover_path_abs or cover_path_abs)
             return False
 
-        # 若弹窗未自动关闭，尝试 Escape
-        try:
-            if modal.is_visible(timeout=500):
-                page.keyboard.press("Escape")
-                page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        try:
-            if modal.is_visible(timeout=500):
-                logger.error("抖音封面编辑器未关闭，拒绝继续自主声明或发布")
-                if artifact_dir:
-                    capture_cover_evidence(page, artifact_dir, "douyin_cover_modal_unclosed", cover_path_abs)
-                return False
-        except Exception as exc:
-            logger.error("无法确认抖音封面编辑器是否关闭：%s", exc)
-            return False
         if not _saved_cover_slots_present(page, require_horizontal=bool(horizontal_cover_path_abs)):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_cover_slots_unconfirmed", cover_path_abs)
+            return False
             return False
         if not wait_for_cover_validation(page):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_cover_validation_blocked", cover_path_abs)
             return False
         if artifact_dir:
             capture_cover_evidence(page, artifact_dir, "douyin_cover_applied", cover_path_abs)
@@ -1404,7 +1856,51 @@ def _filled_text_matches(control, expected: str, *, is_title: bool) -> bool:
     return True
 
 
-def fill_publish_fields(page, title_text: str, description_text: str, artifact_dir: Path, cover_path: Optional[str] = None) -> bool:
+def _select_exact_final_hashtag(page, description: str) -> None:
+    """若抖音弹出末尾话题建议，只选择与原文完全相同的候选，拒绝自动替换。"""
+    hashtags = re.findall(r"(?<!\S)#[^\s#]+", description or "")
+    if not hashtags:
+        return
+    expected_tag = hashtags[-1]
+    try:
+        for _ in range(5):
+            candidate = page.get_by_text(expected_tag, exact=True)
+            for index in range(candidate.count() - 1, -1, -1):
+                visible_candidate = candidate.nth(index)
+                if visible_candidate.is_visible(timeout=1_000) is not True:
+                    continue
+                visible_candidate.click(timeout=2_000)
+                logger.info("已选择与原文一致的抖音话题候选：%s", expected_tag)
+                return
+            page.wait_for_timeout(1_000)
+    except Exception as exc:
+        logger.debug("未出现或无法选择精确抖音话题候选 %s：%s", expected_tag, exc)
+
+
+def final_metadata_matches(page, title_text: str, description_text: str) -> bool:
+    """最终点击前回读元信息，防止平台异步替换标题或话题。"""
+    title_input = get_title_input(page)
+    editor = get_description_editor(page)
+    if not title_input or not editor:
+        logger.error("抖音最终提交前无法定位标题或正文，拒绝发布")
+        return False
+    title = " ".join((title_text or "").split()).strip()[:50]
+    description = (description_text or "").strip()
+    return _filled_text_matches(title_input, title, is_title=True) and _filled_text_matches(
+        editor,
+        description,
+        is_title=False,
+    )
+
+
+def fill_publish_fields(
+    page,
+    title_text: str,
+    description_text: str,
+    artifact_dir: Path,
+    cover_path: Optional[str] = None,
+    horizontal_cover_path: Optional[str] = None,
+) -> bool:
     """填入作品标题和描述并应用封面，停在提交前页面；不保存草稿、不发布。"""
     title_input = get_title_input(page)
     editor = get_description_editor(page)
@@ -1415,9 +1911,13 @@ def fill_publish_fields(page, title_text: str, description_text: str, artifact_d
     if not title or not description or not cover_path or not Path(cover_path).is_file():
         logger.error("抖音发布元信息不完整：title=%s description=%s cover=%s", bool(title), bool(description), bool(cover_path and Path(cover_path).is_file()))
         return False
+    if horizontal_cover_path and not Path(horizontal_cover_path).is_file():
+        logger.error("抖音横封面文件不存在: %s", horizontal_cover_path)
+        return False
     title = title[:50]
     title_input.fill(title)
     editor.fill(description)
+    _select_exact_final_hashtag(page, description)
     # 话题/好友语法会打开 publish-mention 标签建议层；若保持焦点，该浮层可能覆盖下方
     # 封面卡片并拦截 Playwright 点击。先关闭建议、失焦，再做逐字回读和封面动作。
     try:
@@ -1434,7 +1934,8 @@ def fill_publish_fields(page, title_text: str, description_text: str, artifact_d
 
     logger.info("开始应用抖音封面: %s", cover_path)
     cover_upload_path = prepare_douyin_cover_upload_file(cover_path)
-    horizontal_cover_upload_path = prepare_douyin_horizontal_cover_upload_file(cover_path)
+    horizontal_source = horizontal_cover_path or cover_path
+    horizontal_cover_upload_path = prepare_douyin_horizontal_cover_upload_file(horizontal_source)
     if not cover_upload_path or not horizontal_cover_upload_path:
         return False
     if not apply_cover(
@@ -1472,6 +1973,63 @@ def _normalize_page_text(text: str) -> str:
     return "".join((text or "").split())
 
 
+def _is_capacity_congestion_only_quick_check(text: str) -> bool:
+    """仅识别平台检测服务拥堵的完整固定提示，绝不吞掉其它风险。"""
+    if not all(marker in text for marker in DOUYIN_CAPACITY_CONGESTION_REQUIRED_TEXT):
+        return False
+    return not any(
+        marker in text
+        for marker in DOUYIN_BLOCKING_QUICK_CHECK_MARKERS
+        if marker not in DOUYIN_CAPACITY_CONGESTION_COMPATIBLE_MARKERS
+    )
+
+
+def quick_detection_allows_submission(page, timeout_seconds: int = DOUYIN_QUICK_CHECK_TIMEOUT_SECONDS) -> bool:
+    """刷新并读取最终提交前的快速检测区；仅服务拥堵固定提示可受控放行。"""
+    refresh_requested = False
+    try:
+        refresh_button = page.get_by_text("重新检测", exact=True)
+        if (
+            refresh_button.count() == 1
+            and refresh_button.is_visible(timeout=1_000) is True
+            and refresh_button.is_enabled() is True
+        ):
+            refresh_button.click(timeout=2_000)
+            refresh_requested = True
+            logger.info("已点击抖音快速检测“重新检测”，等待本次封面状态刷新")
+            page.wait_for_timeout(1_000)
+    except Exception as exc:
+        logger.debug("抖音快速检测重新检测按钮不可用，读取当前结果：%s", exc)
+    try:
+        for elapsed in range(max(1, timeout_seconds)):
+            text = _normalize_page_text(get_page_text(page))
+            if not text:
+                logger.error("抖音快速检测区域为空或不可读，拒绝发布")
+                return False
+            if _is_capacity_congestion_only_quick_check(text):
+                logger.warning("抖音快速检测服务拥堵；其它发布前闸门已通过，按受控例外继续提交")
+                return True
+            matched = tuple(marker for marker in DOUYIN_BLOCKING_QUICK_CHECK_MARKERS if marker in text)
+            pending = tuple(marker for marker in DOUYIN_PENDING_QUICK_CHECK_MARKERS if marker in text)
+            if not matched and not pending:
+                logger.info("抖音快速检测未发现已知红黄阻断提示")
+                return True
+            if matched and (not refresh_requested or elapsed == max(1, timeout_seconds) - 1):
+                logger.error("抖音快速检测出现阻断提示 %s，停止最终发布", "、".join(matched))
+                return False
+            if pending and elapsed == max(1, timeout_seconds) - 1:
+                logger.error("抖音快速检测仍在进行 %s，超时后停止最终发布", "、".join(pending))
+                return False
+            if elapsed and elapsed % 10 == 0:
+                waiting_for = "、".join(matched or pending)
+                logger.info("抖音快速检测仍在刷新（%s），已等待 %s 秒", waiting_for, elapsed)
+            page.wait_for_timeout(1_000)
+    except Exception as exc:
+        logger.error("抖音快速检测区域无法读取，拒绝发布：%s", exc)
+        return False
+    return False
+
+
 def wait_for_publish_submission(
     page,
     *,
@@ -1506,9 +2064,10 @@ def wait_for_publish_submission(
     return False
 
 
-def publish_after_review(page, artifact_dir: Path, *, title_text: str, description_text: str) -> bool:
-    """点击最终发布并采集提交后页面；只表示提交已被平台接受，不直接记 PUBLISHED。"""
-    # 填发表单后若有模态弹窗拦截（如 Douyin / Semi Design 封面弹窗），主动尝试清理
+def submission_preflight_allows_publish(page, artifact_dir: Path, *, title_text: str, description_text: str) -> bool:
+    """在最终点击前复核声明、元信息和快速检测；通过也不点击发布。"""
+    # 填发表单后若有模态弹窗拦截（如 Douyin / Semi Design 封面弹窗），主动尝试清理。
+    # 这只处理已完成的残留遮罩，不把 Escape 当成封面保存手段。
     try:
         modal = page.locator(".dy-creator-content-modal-wrap, .semi-modal-wrap").first
         if modal.count() > 0 and modal.is_visible(timeout=500):
@@ -1519,6 +2078,29 @@ def publish_after_review(page, artifact_dir: Path, *, title_text: str, descripti
         pass
 
     if not select_self_declaration(page, artifact_dir):
+        return False
+
+    if not final_metadata_matches(page, title_text, description_text):
+        capture_controls(page, artifact_dir, "douyin_final_metadata_mismatch")
+        return False
+
+    if not quick_detection_allows_submission(page):
+        capture_controls(page, artifact_dir, "douyin_quick_detection_blocked")
+        return False
+
+    capture_controls(page, artifact_dir, "douyin_preflight_ready")
+    logger.info("抖音最终提交前核验通过；尚未点击发布")
+    return True
+
+
+def publish_after_review(page, artifact_dir: Path, *, title_text: str, description_text: str) -> bool:
+    """点击最终发布并采集提交后页面；只表示提交已被平台接受，不直接记 PUBLISHED。"""
+    if not submission_preflight_allows_publish(
+        page,
+        artifact_dir,
+        title_text=title_text,
+        description_text=description_text,
+    ):
         return False
 
     button = get_publish_button(page)
@@ -1548,6 +2130,7 @@ def upload_and_publish(
     title_text: str,
     description_text: str,
     cover_path: Optional[str] = None,
+    horizontal_cover_path: Optional[str] = None,
 ) -> int:
     """上传、填写标题描述并显式发布；返回审核中而非最终已发布。"""
     if not upload_for_calibration(
@@ -1558,6 +2141,7 @@ def upload_and_publish(
         title_text=title_text,
         description_text=description_text,
         cover_path=cover_path,
+        horizontal_cover_path=horizontal_cover_path,
     ):
         return EXIT_UNCONFIRMED
     if publish_after_review(page, artifact_dir, title_text=title_text, description_text=description_text):
@@ -1586,26 +2170,47 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Douyin creator-center uploader")
     parser.add_argument("--video", type=Path, help="竖屏成片路径")
     parser.add_argument("--cover", type=Path, help="封面图片路径")
+    parser.add_argument("--horizontal-cover", type=Path, help="横版封面图片路径；省略时由竖版封面生成")
     parser.add_argument("--copy", type=Path, help="发布文案路径")
     parser.add_argument("--title-file", type=Path, help="发布标题路径")
+    parser.add_argument(
+        "--douyin-launch-ticket",
+        dest="douyin_launch_ticket_id",
+        help="由已领取账本签发的一次性浏览器启动 ticket；不能由来源文本替代",
+    )
+    parser.add_argument(
+        "--douyin-launch-token",
+        help="与 --douyin-launch-ticket 成对的单次启动 token；不写入日志或账本明文",
+    )
     parser.add_argument("--state", type=Path, default=Path("output/douyin_state.json"), help="Playwright 登录态文件")
     parser.add_argument("--evidence-dir", type=Path, help="本次动作的独立页面证据目录")
     parser.add_argument("--no-headless", action="store_true", help="显示浏览器窗口")
     parser.add_argument("--fail-fast-login", action="store_true", help="登录失效时立即退出，不等待扫码")
-    parser.add_argument("--login-only", action="store_true", help="仅打开创作者中心并保存登录态")
-    parser.add_argument("--calibrate", action="store_true", help="采集当前发布页控件快照，不上传、不发布")
-    parser.add_argument("--calibrate-after-upload", action="store_true", help="仅上传并采集表单控件，绝不填写或发布")
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--login-only", action="store_true", help="仅打开创作者中心并保存登录态")
+    actions.add_argument("--calibrate", action="store_true", help="采集当前发布页控件快照，不上传、不发布")
+    actions.add_argument("--calibrate-after-upload", action="store_true", help="仅上传并采集表单控件，绝不填写或发布")
     parser.add_argument("--upload-wait-seconds", type=int, default=900, help="等待抖音文件上传完成的最长秒数")
     parser.add_argument("--prepare-description", action="store_true", help="仅填入标题和作品描述，停在提交前页面")
-    parser.add_argument("--publish", action="store_true", help="发布视频；校准完成前会安全拒绝")
-    parser.add_argument("--verify-only", action="store_true", help="仅核对作品状态；校准完成前会安全拒绝")
+    actions.add_argument("--preflight-only", action="store_true", help="上传并完成最终提交前核验，但绝不点击发布")
+    actions.add_argument("--publish", action="store_true", help="发布视频；校准完成前会安全拒绝")
+    actions.add_argument("--verify-only", action="store_true", help="仅核对作品状态；校准完成前会安全拒绝")
+    parser.add_argument(
+        "--operator-recovery-stage",
+        choices=[DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT, DOUYIN_UI_STAGE_MANAGEMENT_VERIFY],
+        help="仅人工恢复校准：声明本次采集的熔断阶段；不能与 --publish 合用",
+    )
+    parser.add_argument(
+        "--operator-recovery-reason",
+        help="仅人工恢复校准：本次非最终校准的具体原因，连同证据目录写入审计记录",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.publish and (not args.video or not args.copy or not args.title_file or not args.cover):
-        logger.error("--publish requires --video, --copy, --title-file and --cover")
+    if (args.publish or args.preflight_only) and (not args.video or not args.copy or not args.title_file or not args.cover):
+        logger.error("--publish/--preflight-only requires --video, --copy, --title-file and --cover")
         return EXIT_FAILED
     if args.calibrate_after_upload and not args.video:
         logger.error("--calibrate-after-upload requires --video")
@@ -1622,6 +2227,16 @@ def main() -> int:
     if args.title_file and not args.title_file.is_file():
         logger.error("标题文件不存在: %s", args.title_file)
         return EXIT_FAILED
+    if args.cover and not args.cover.is_file():
+        logger.error("封面文件不存在: %s", args.cover)
+        return EXIT_FAILED
+    if args.horizontal_cover and not args.horizontal_cover.is_file():
+        logger.error("横版封面文件不存在: %s", args.horizontal_cover)
+        return EXIT_FAILED
+
+    guard_exit = _guard_before_browser(args)
+    if guard_exit is not None:
+        return guard_exit
 
     artifact_dir = args.evidence_dir or args.state.parent / "douyin_calibration"
     try:
@@ -1678,6 +2293,7 @@ def main() -> int:
                 title_text=title_text if args.prepare_description else None,
                 description_text=description_text if args.prepare_description else None,
                 cover_path=str(args.cover) if args.prepare_description and args.cover else None,
+                horizontal_cover_path=str(args.horizontal_cover) if args.prepare_description and args.horizontal_cover else None,
             )
             browser.close()
             return EXIT_UPLOADED_FOR_CALIBRATION if uploaded else EXIT_UNCONFIRMED
@@ -1700,6 +2316,37 @@ def main() -> int:
             logger.warning("作品管理页未能确认本次作品状态，保守返回未确认")
             return EXIT_SUBMISSION_UNCONFIRMED
 
+        if args.preflight_only:
+            if not wait_for_video_upload_input(page):
+                browser.close()
+                return EXIT_UNCONFIRMED
+            title_text = args.title_file.read_text(encoding="utf-8") if args.title_file else ""
+            description_text = args.copy.read_text(encoding="utf-8") if args.copy else ""
+            if not title_text.strip() or not description_text.strip():
+                logger.error("抖音预检标题或文案为空，拒绝上传")
+                browser.close()
+                return EXIT_UNCONFIRMED
+            prepared = upload_for_calibration(
+                page,
+                str(args.video),
+                artifact_dir,
+                upload_wait_seconds=args.upload_wait_seconds,
+                title_text=title_text,
+                description_text=description_text,
+                cover_path=str(args.cover),
+                horizontal_cover_path=str(args.horizontal_cover) if args.horizontal_cover else None,
+            )
+            if not prepared or not submission_preflight_allows_publish(
+                page,
+                artifact_dir,
+                title_text=title_text,
+                description_text=description_text,
+            ):
+                browser.close()
+                return EXIT_UNCONFIRMED
+            browser.close()
+            return EXIT_OK
+
         if args.publish:
             if not wait_for_video_upload_input(page):
                 browser.close()
@@ -1718,6 +2365,7 @@ def main() -> int:
                 title_text=title_text,
                 description_text=description_text,
                 cover_path=str(args.cover) if args.cover else None,
+                horizontal_cover_path=str(args.horizontal_cover) if args.horizontal_cover else None,
             )
             browser.close()
             return result

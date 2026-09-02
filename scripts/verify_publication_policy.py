@@ -10,6 +10,7 @@
 | 1.0.1 | 2026-07-31 | Codex | 巡航命令校验改为前缀匹配，允许保留 crontab 日志重定向 |
 | 1.0.2 | 2026-07-31 | Codex | 校验进程环境覆盖与后台预加工巡航，避免规则只在文件层面一致 |
 | 1.1.0 | 2026-08-02 | Codex | 校验关闭窗口限制后的每分钟自动发布巡航 |
+| 1.1.1 | 2026-08-31 | Codex | 允许本机 .env 的显式受控策略覆盖，同时校验运行进程未被未受管环境变量篡改。 |
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import sys
 from pathlib import Path
 
 from dotenv import dotenv_values
+from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -49,24 +51,43 @@ def _settings_value(value: object) -> str:
     return str(value).lower() if isinstance(value, bool) else str(value)
 
 
+def _configured_policy_value(field_name: str, configured_value: str | None) -> str:
+    """将单个 .env 值按 Settings 的真实类型规则规范化。"""
+    if configured_value is None:
+        return _settings_default(field_name)
+    configured_settings = Settings.model_validate({field_name: configured_value})
+    return _settings_value(getattr(configured_settings, field_name))
+
+
 def _check_policy_sources() -> list[str]:
+    """校验示例基线、受管本机覆盖和当前进程有效值三者的边界。"""
     errors: list[str] = []
     env_example = dotenv_values(PROJECT_ROOT / ".env.example")
     production_env = dotenv_values(PROJECT_ROOT / ".env")
     effective_settings = Settings()
 
     for env_name, field_name in POLICY_FIELDS.items():
-        expected = _settings_default(field_name)
-        for source_name, source_values in ((".env.example", env_example), (".env", production_env)):
-            actual = source_values.get(env_name)
-            if actual != expected:
-                errors.append(
-                    f"{env_name}: Settings 默认值为 {expected!r}，{source_name} 为 {actual!r}"
-                )
-        effective = _settings_value(getattr(effective_settings, field_name))
-        if effective != expected:
+        default_value = _settings_default(field_name)
+        example_value = env_example.get(env_name)
+        if example_value != default_value:
             errors.append(
-                f"{env_name}: 当前进程有效值为 {effective!r}，覆盖了批准默认值 {expected!r}"
+                f"{env_name}: Settings 默认值为 {default_value!r}，.env.example 为 {example_value!r}"
+            )
+
+        if env_name in production_env and production_env[env_name] is None:
+            errors.append(f"{env_name}: .env 配置为空，无法确定受管发布策略")
+            continue
+        try:
+            expected_effective = _configured_policy_value(field_name, production_env.get(env_name))
+        except ValidationError as exc:
+            errors.append(f"{env_name}: .env 配置无法按 Settings 解析：{exc.errors()[0]['msg']}")
+            continue
+
+        effective = _settings_value(getattr(effective_settings, field_name))
+        if effective != expected_effective:
+            source_name = ".env 显式配置" if env_name in production_env else "Settings 默认值"
+            errors.append(
+                f"{env_name}: 当前进程有效值为 {effective!r}，与{source_name} {expected_effective!r} 不一致"
             )
     return errors
 

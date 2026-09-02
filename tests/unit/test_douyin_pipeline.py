@@ -22,6 +22,16 @@
 | 1.7.9 | 2026-08-08 | Codex | 覆盖跨巡航浏览器节流接口，测试替身明确返回可立即执行 |
 | 1.8.0 | 2026-08-30 | Codex | 覆盖 UI 同阶段失败持久累计与下轮打开浏览器前录屏熔断 |
 | 1.9.0 | 2026-08-30 | Codex | 覆盖抖音 NEW 显式关闭视频号门禁后只为无历史账本新片建队 |
+| 2.0.0 | 2026-09-01 | Codex | 覆盖无数量、日额和来源公开确认限制时，一轮同步全部合格新片。 |
+| 2.0.1 | 2026-09-01 | Codex | 覆盖作品管理页无法精确匹配时纳入持久 UI 熔断，避免跨轮污染审核中队列。 |
+| 2.0.2 | 2026-09-02 | Codex | 覆盖管理页熔断仅冻结回查与历史回填，不阻断独立投稿前闸门保护的新片同步。 |
+| 2.0.3 | 2026-09-02 | Codex | 覆盖每日补发、直接回查与直接入队均在账本熔断前停止，禁止绕过浏览器前守卫。 |
+| 2.0.4 | 2026-09-02 | Codex | 覆盖管理页熔断下补发/重试 NEW 的阶段放行，以及任一活动熔断在 HISTORY 与回查领取前停止。 |
+| 2.0.5 | 2026-09-02 | Codex | 覆盖损坏的持久熔断账本仍能稳定 fail-closed，不让告警格式化中断整轮任务。 |
+| 2.0.6 | 2026-09-02 | Codex | 覆盖通用抖音领取必须把一次性 ticket 与完整投稿包绑定后才启动低层浏览器。 |
+| 2.0.7 | 2026-09-02 | Codex | 覆盖 NEW 自动发现的安全边界与缺素材聚合告警跨巡航去重。 |
+| 2.0.8 | 2026-09-02 | Codex | 覆盖自动 NEW 的零额度安全停用，防止发现边界存在但实际浏览器动作仍无限。 |
+| 2.0.9 | 2026-09-02 | Codex | 覆盖通用 ticket 绑定失败或子进程超时且凭据未启动时立即原子取消，禁止遗留可消费领取。 |
 """
 
 import hashlib
@@ -29,6 +39,8 @@ import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from config.settings import settings
 from video_processing.core.cover_policy import compliant_cover_layout_policy
@@ -63,6 +75,8 @@ def _manager_with_assets(tmp_path: Path) -> PipelineManager:
     )
     manager.db = MagicMock()
     manager.db.reserve_douyin_browser_action_slot.return_value = 0.0
+    manager.db.get_platform_ui_failure_streaks.return_value = []
+    manager.db.cancel_douyin_publication_pre_launch_failure.return_value = False
     manager.db.get_video_by_youtube_id.return_value = {
         "title": "测试视频",
         "zh_title": "测试标题",
@@ -119,7 +133,10 @@ def test_claimed_douyin_publication_runs_publish_and_marks_under_review(tmp_path
     )
 
     assert manager._publish_claimed_douyin_publication(
-        {"id": 17, "youtube_id": "video-id", "slice_index": 0}
+        {
+            "id": 17, "youtube_id": "video-id", "slice_index": 0, "source_kind": "NEW",
+            "_douyin_launch_ticket_id": "ticket-17", "_douyin_launch_token": "token-17",
+        }
     )
 
     command = manager._run_tracked.call_args.args[0]
@@ -129,6 +146,9 @@ def test_claimed_douyin_publication_runs_publish_and_marks_under_review(tmp_path
     assert "--prepare-description" in command
     assert "--title-file" in command
     assert "--cover" in command
+    assert command[command.index("--douyin-launch-ticket") + 1] == "ticket-17"
+    assert command[command.index("--douyin-launch-token") + 1] == "token-17"
+    manager.db.bind_douyin_browser_launch_ticket_payload.assert_called_once()
     manager.db.update_douyin_publication_state.assert_called_once()
     args, kwargs = manager.db.update_douyin_publication_state.call_args
     assert args == (17, "UNDER_REVIEW")
@@ -142,7 +162,10 @@ def test_uncalibrated_douyin_publish_cancels_automatic_retry(tmp_path: Path, mon
     manager._run_tracked = MagicMock(side_effect=error)
 
     assert not manager._publish_claimed_douyin_publication(
-        {"id": 18, "youtube_id": "video-id", "slice_index": 0}
+        {
+            "id": 18, "youtube_id": "video-id", "slice_index": 0,
+            "_douyin_launch_ticket_id": "ticket-18", "_douyin_launch_token": "token-18",
+        }
     )
 
     manager.db.update_douyin_publication_state.assert_called_once()
@@ -158,13 +181,64 @@ def test_pre_submit_unconfirmed_cancels_not_uncertain(tmp_path: Path, monkeypatc
     monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
     manager._run_tracked = MagicMock(side_effect=subprocess.CalledProcessError(3, ["douyin"]))
 
-    assert not manager._publish_claimed_douyin_publication({"id": 183, "youtube_id": "video-id", "slice_index": 0})
+    assert not manager._publish_claimed_douyin_publication(
+        {
+            "id": 183, "youtube_id": "video-id", "slice_index": 0,
+            "_douyin_launch_ticket_id": "ticket-183", "_douyin_launch_token": "token-183",
+        }
+    )
 
     args, kwargs = manager.db.update_douyin_publication_state.call_args
     assert args == (183, "CANCELED")
     assert "本次未提交" in kwargs["error_message"]
     assert "停止自动重试" in kwargs["error_message"]
     manager.db.record_platform_ui_failure.assert_called_once()
+
+
+def test_ticket_bind_failure_immediately_cancels_unstarted_ticket(tmp_path: Path, monkeypatch):
+    """父进程尚未启动上传器时，失败必须注销当前 ticket 而非等待 TTL 巡航。"""
+    manager = _manager_with_assets(tmp_path)
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
+    manager.db.bind_douyin_browser_launch_ticket_payload.return_value = False
+    manager.db.cancel_douyin_publication_pre_launch_failure.return_value = True
+    manager._run_tracked = MagicMock()
+
+    assert not manager._publish_claimed_douyin_publication(
+        {
+            "id": 187, "youtube_id": "video-id", "slice_index": 0,
+            "_douyin_launch_ticket_id": "ticket-187", "_douyin_launch_token": "token-187",
+        }
+    )
+
+    manager._run_tracked.assert_not_called()
+    manager.db.cancel_douyin_publication_pre_launch_failure.assert_called_once()
+    args, kwargs = manager.db.cancel_douyin_publication_pre_launch_failure.call_args
+    assert args == (187,)
+    assert kwargs["ticket_id"] == "ticket-187"
+    assert "完整投稿包不匹配" in kwargs["reason"]
+    manager.db.update_douyin_publication_state.assert_not_called()
+
+
+def test_timeout_immediately_cancels_only_when_ticket_proves_browser_never_started(tmp_path: Path, monkeypatch):
+    """进程超时不是天然 UNCERTAIN；未消费 ticket 可证实时必须先安全收口。"""
+    manager = _manager_with_assets(tmp_path)
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
+    manager._run_tracked = MagicMock(side_effect=subprocess.TimeoutExpired(["douyin"], 1500))
+    manager.db.cancel_douyin_publication_pre_launch_failure.return_value = True
+
+    assert not manager._publish_claimed_douyin_publication(
+        {
+            "id": 188, "youtube_id": "video-id", "slice_index": 0,
+            "_douyin_launch_ticket_id": "ticket-188", "_douyin_launch_token": "token-188",
+        }
+    )
+
+    manager.db.cancel_douyin_publication_pre_launch_failure.assert_called_once()
+    args, kwargs = manager.db.cancel_douyin_publication_pre_launch_failure.call_args
+    assert args == (188,)
+    assert kwargs["ticket_id"] == "ticket-188"
+    assert "超时" in kwargs["reason"]
+    manager.db.update_douyin_publication_state.assert_not_called()
 
 
 def test_persistent_douyin_ui_guard_halts_before_browser_action(tmp_path: Path, monkeypatch):
@@ -189,12 +263,313 @@ def test_persistent_douyin_ui_guard_halts_before_browser_action(tmp_path: Path, 
     manager.db.reserve_douyin_browser_action_slot.assert_not_called()
 
 
+def test_malformed_persistent_douyin_ui_guard_stably_halts_before_browser_action(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """账本损坏必须 fail-closed，且不能在构造告警文本时令整轮任务崩溃。"""
+    manager = _manager_with_assets(tmp_path)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": "__malformed_ui_guard_record__",
+        "consecutive_failures": "not-an-integer",
+        "active": 1,
+    }]
+    manager._run_tracked = MagicMock()
+
+    manager._reset_douyin_run_guard()
+
+    assert manager._douyin_platform_halted
+    assert "打开浏览器前停止" in manager._douyin_halt_reason
+    assert not manager._publish_claimed_douyin_publication(
+        {"id": 186, "youtube_id": "video-id", "slice_index": 0}
+    )
+    manager._run_tracked.assert_not_called()
+    manager.db.reserve_douyin_browser_action_slot.assert_not_called()
+
+
+def test_management_verify_guard_skips_review_but_allows_independently_gated_new_submission(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """管理页 selector 漂移不能阻断仍受投稿前闸门约束的新片。"""
+    manager = _manager_with_assets(tmp_path)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": "management_verify",
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+    manager.db.get_douyin_publications_by_states.return_value = [
+        {"id": 19, "youtube_id": "video-id", "slice_index": 0, "source_kind": "HISTORY"},
+    ]
+    manager._run_tracked = MagicMock(
+        return_value=subprocess.CompletedProcess(["douyin"], 0, stdout="accepted", stderr="")
+    )
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
+
+    manager._reset_douyin_run_guard()
+
+    assert not manager._douyin_platform_halted
+    assert manager._douyin_management_verify_halted
+    assert manager.reconcile_douyin_under_review() == 0
+    manager._run_tracked.assert_not_called()
+    manager.db.reserve_douyin_browser_action_slot.assert_not_called()
+
+    assert manager._publish_claimed_douyin_publication(
+        {
+            "id": 185, "youtube_id": "video-id", "slice_index": 0, "source_kind": "NEW",
+            "_douyin_launch_ticket_id": "ticket-185", "_douyin_launch_token": "token-185",
+        }
+    )
+    command = manager._run_tracked.call_args.args[0]
+    assert "--publish" in command
+    assert "--verify-only" not in command
+
+
+def test_daily_job_runs_new_sync_but_freezes_history_when_management_guard_is_active(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """持久管理页熔断不能让正常 NEW 同步与旧 HISTORY 回填混为一谈。"""
+    manager = _manager_with_assets(tmp_path)
+    manager.score_pending_videos = MagicMock()
+    manager.process_high_score_videos = MagicMock()
+    manager.reconcile_douyin_under_review = MagicMock()
+    manager._run_douyin_new_sync = MagicMock(return_value=True)
+    manager._run_douyin_history_migration = MagicMock()
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": "management_verify",
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "enable_kuaishou_browser_publishing", False)
+    monkeypatch.setattr(settings, "wechat_publishing_paused", True)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+
+    manager.run_daily_job()
+
+    manager.reconcile_douyin_under_review.assert_called_once()
+    manager._run_douyin_new_sync.assert_called_once()
+    manager._run_douyin_history_migration.assert_not_called()
+
+
+def test_daily_job_loads_publish_guard_before_deferred_wechat_recovery(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """视频号补发不能在每日任务恢复持久投稿熔断前抢先创建抖音 NEW。"""
+    manager = _manager_with_assets(tmp_path)
+    manager.reconcile_wechat_under_review = MagicMock()
+    manager.score_pending_videos = MagicMock()
+    manager.process_high_score_videos = MagicMock()
+    manager.reconcile_douyin_under_review = MagicMock()
+    manager._run_douyin_new_sync = MagicMock(return_value=True)
+    manager._run_douyin_history_migration = MagicMock()
+    manager._run_garbage_collection = MagicMock()
+    manager._queue_and_publish_new_douyin_video = MagicMock(return_value=True)
+    manager.db.get_douyin_publication.return_value = None
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": "publish_pre_submit",
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+
+    def recover_one_deferred_video() -> int:
+        manager._defer_wechat_and_publish_kuaishou("video-id")
+        return 1
+
+    manager.recover_deferred_wechat_publications = MagicMock(side_effect=recover_one_deferred_video)
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "enable_kuaishou_browser_publishing", False)
+    monkeypatch.setattr(settings, "wechat_publishing_paused", False)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+
+    manager.run_daily_job()
+
+    manager.recover_deferred_wechat_publications.assert_called_once()
+    manager._queue_and_publish_new_douyin_video.assert_not_called()
+    manager._run_douyin_new_sync.assert_not_called()
+    manager._run_douyin_history_migration.assert_not_called()
+
+
+def test_deferred_wechat_management_guard_still_dispatches_new_douyin(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """管理页 selector 漂移不得阻断独立投稿前闸门仍会检查的 NEW 补发。"""
+    manager = _manager_with_assets(tmp_path)
+    manager._queue_and_publish_new_douyin_video = MagicMock(return_value=True)
+    manager._run_garbage_collection = MagicMock()
+    manager.db.get_douyin_publication.return_value = None
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": "management_verify",
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "enable_kuaishou_browser_publishing", False)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+
+    manager._defer_wechat_and_publish_kuaishou("video-id")
+
+    assert manager._douyin_management_verify_halted
+    assert not manager._douyin_platform_halted
+    manager._queue_and_publish_new_douyin_video.assert_called_once_with("video-id", slice_index=0)
+
+
+@pytest.mark.parametrize("stage", ["publish_pre_submit", "future_ui_stage"])
+def test_direct_new_retry_stops_before_claim_for_publish_blocking_guard(
+    tmp_path: Path,
+    monkeypatch,
+    stage: str,
+):
+    """投稿页或未知 UI 熔断不能让遗留 NEW 重试先领取账本。"""
+    manager = _manager_with_assets(tmp_path)
+    manager._publish_claimed_douyin_publication = MagicMock(return_value=True)
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": stage,
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+
+    assert not manager._retry_one_douyin_new_video()
+
+    manager.db.claim_next_douyin_publication.assert_not_called()
+    manager._publish_claimed_douyin_publication.assert_not_called()
+
+
+def test_direct_new_retry_allows_management_verify_guard(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """管理页熔断不应将独立投稿前闸门保护的 NEW 重试整体关闭。"""
+    manager = _manager_with_assets(tmp_path)
+    claimed = {"id": 186, "youtube_id": "video-id", "slice_index": 0, "source_kind": "NEW"}
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": "management_verify",
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+    manager.db.claim_next_douyin_publication.return_value = claimed
+    manager._publish_claimed_douyin_publication = MagicMock(return_value=True)
+    manager._is_public_publish_window = MagicMock(return_value=True)
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+
+    assert manager._retry_one_douyin_new_video()
+
+    assert manager._douyin_management_verify_halted
+    assert not manager._douyin_platform_halted
+    manager.db.claim_next_douyin_publication.assert_called_once()
+    manager._publish_claimed_douyin_publication.assert_called_once_with(claimed)
+
+
+@pytest.mark.parametrize("stage", ["management_verify", "publish_pre_submit", "future_ui_stage"])
+def test_direct_history_migration_stops_before_preview_create_or_claim_for_active_guard(
+    tmp_path: Path,
+    monkeypatch,
+    stage: str,
+):
+    """任一达到阈值的 UI 熔断都必须在 HISTORY 的账本写入和浏览器动作前停止。"""
+    manager = _manager_with_assets(tmp_path)
+    manager._publish_claimed_douyin_publication = MagicMock(return_value=True)
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": stage,
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+    manager._is_public_publish_window = MagicMock(return_value=True)
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+
+    manager._run_douyin_history_migration()
+
+    manager.db.get_platform_backfill_preview_candidates.assert_not_called()
+    manager.db.create_douyin_publication.assert_not_called()
+    manager.db.claim_next_douyin_history_publication.assert_not_called()
+    manager._publish_claimed_douyin_publication.assert_not_called()
+
+
+@pytest.mark.parametrize("stage", ["management_verify", "publish_pre_submit", "future_ui_stage"])
+def test_direct_douyin_review_loads_persistent_guard_before_browser(
+    tmp_path: Path,
+    monkeypatch,
+    stage: str,
+):
+    """任一活动 UI 熔断都必须在独立审核回查查询和浏览器槽位前停止。"""
+    manager = _manager_with_assets(tmp_path)
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": stage,
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+    manager.db.get_douyin_publications_by_states.return_value = [{
+        "id": 20,
+        "youtube_id": "video-id",
+        "slice_index": 0,
+        "source_kind": "HISTORY",
+    }]
+    manager._run_tracked = MagicMock(
+        return_value=subprocess.CompletedProcess(["douyin"], 0, stdout="published", stderr="")
+    )
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+
+    assert manager.reconcile_douyin_under_review() == 0
+
+    manager.db.get_douyin_publications_by_states.assert_not_called()
+    manager.db.reserve_douyin_browser_action_slot.assert_not_called()
+    manager._run_tracked.assert_not_called()
+
+
+def test_direct_new_queue_loads_publish_guard_before_ledger_mutation(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """非每日入口也不能在投稿前熔断活动时先创建或领取 NEW 账本。"""
+    manager = _manager_with_assets(tmp_path)
+    manager.db.get_platform_ui_failure_streaks.return_value = [{
+        "platform": "douyin",
+        "stage": "publish_pre_submit",
+        "consecutive_failures": 2,
+        "active": 1,
+    }]
+    manager.db.get_douyin_publication.return_value = None
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+    monkeypatch.setattr(manager, "_is_public_publish_window", MagicMock(return_value=False))
+
+    assert not manager._queue_and_publish_new_douyin_video("video-id")
+
+    manager.db.create_douyin_publication.assert_not_called()
+    manager.db.claim_douyin_publication.assert_not_called()
+
+
 def test_post_submit_unconfirmed_is_uncertain(tmp_path: Path, monkeypatch):
     manager = _manager_with_assets(tmp_path)
     monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
     manager._run_tracked = MagicMock(side_effect=subprocess.CalledProcessError(7, ["douyin"]))
 
-    assert not manager._publish_claimed_douyin_publication({"id": 184, "youtube_id": "video-id", "slice_index": 0})
+    assert not manager._publish_claimed_douyin_publication(
+        {
+            "id": 184, "youtube_id": "video-id", "slice_index": 0,
+            "_douyin_launch_ticket_id": "ticket-184", "_douyin_launch_token": "token-184",
+        }
+    )
 
     args, kwargs = manager.db.update_douyin_publication_state.call_args
     assert args == (184, "UNCERTAIN")
@@ -286,7 +661,31 @@ def test_douyin_review_reconciliation_marks_uncertain_when_not_calibrated(tmp_pa
     assert args == (19, "UNCERTAIN")
     assert "尚未完成作品管理回查校准" in kwargs["error_message"]
     manager.send_telegram_msg.assert_called_once()
-    assert manager._douyin_platform_halted
+    assert manager._douyin_management_verify_halted
+    assert not manager._douyin_platform_halted
+
+
+def test_douyin_review_reconciliation_records_ui_failure_when_match_is_unknown(tmp_path: Path):
+    manager = _manager_with_assets(tmp_path)
+    manager.db.get_douyin_publications_by_states.return_value = [
+        {"id": 19, "youtube_id": "video-id", "slice_index": 0, "source_kind": "NEW"},
+    ]
+    manager._run_tracked = MagicMock(side_effect=subprocess.CalledProcessError(7, ["douyin"]))
+    manager._throttle_douyin_browser_action = MagicMock()
+
+    previous = settings.enable_douyin_browser_publishing
+    settings.enable_douyin_browser_publishing = True
+    try:
+        assert manager.reconcile_douyin_under_review() == 0
+    finally:
+        settings.enable_douyin_browser_publishing = previous
+
+    manager.db.record_platform_ui_failure.assert_called_once()
+    args, kwargs = manager.db.update_douyin_publication_state.call_args
+    assert args == (19, "UNCERTAIN")
+    assert "未能精确确认" in kwargs["error_message"]
+    assert manager._douyin_management_verify_halted
+    assert not manager._douyin_platform_halted
 
 
 def test_douyin_review_reconciliation_respects_per_run_limit(tmp_path: Path):
@@ -314,8 +713,10 @@ def test_douyin_review_reconciliation_respects_per_run_limit(tmp_path: Path):
     manager.send_telegram_msg.assert_not_called()
 
 
-def test_douyin_review_limit_is_applied_after_skipping_history(tmp_path: Path):
+def test_douyin_review_limit_is_applied_to_history_and_new_items(tmp_path: Path):
     manager = _manager_with_assets(tmp_path)
+    (tmp_path / "history-id_copy.txt").write_text("历史文案", encoding="utf-8")
+    (tmp_path / "history-id_title.txt").write_text("历史标题", encoding="utf-8")
     manager.db.get_douyin_publications_by_states.return_value = [
         {"id": 18, "youtube_id": "history-id", "slice_index": 0, "source_kind": "HISTORY"},
         {"id": 19, "youtube_id": "video-id", "slice_index": 0, "source_kind": "NEW"},
@@ -336,9 +737,9 @@ def test_douyin_review_limit_is_applied_after_skipping_history(tmp_path: Path):
         settings.douyin_review_max_per_run = previous_max
 
     command = manager._run_tracked.call_args.args[0]
-    assert str(tmp_path / "video-id_copy.txt") in command
-    assert "history-id" not in " ".join(command)
-    manager.db.update_douyin_publication_state.assert_called_once_with(19, "PUBLISHED")
+    assert str(tmp_path / "history-id_copy.txt") in command
+    assert "video-id" not in " ".join(command)
+    manager.db.update_douyin_publication_state.assert_called_once_with(18, "PUBLISHED")
 
 
 def test_douyin_browser_actions_are_throttled_between_visits(tmp_path: Path, monkeypatch):
@@ -499,6 +900,25 @@ def test_douyin_history_migration_auto_queues_only_rule_candidates(tmp_path: Pat
     assert "待发队列" in first_message
 
 
+def test_douyin_history_migration_zero_limit_is_disabled_before_reading_candidates(tmp_path: Path):
+    """历史回填没有正数上限时宁可停用，不能在解除熔断后无界投稿。"""
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.db.get_platform_backfill_preview_candidates = MagicMock()
+
+    previous_enabled = settings.enable_douyin_browser_publishing
+    previous_limit = settings.douyin_history_daily_limit
+    settings.enable_douyin_browser_publishing = True
+    settings.douyin_history_daily_limit = 0
+    try:
+        manager._run_douyin_history_migration()
+    finally:
+        settings.enable_douyin_browser_publishing = previous_enabled
+        settings.douyin_history_daily_limit = previous_limit
+
+    manager.db.get_platform_backfill_preview_candidates.assert_not_called()
+
+
 def test_douyin_history_migration_continues_after_canceling_missing_assets(tmp_path: Path):
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     manager._OUT_DIR = tmp_path
@@ -634,3 +1054,151 @@ def test_douyin_new_sync_can_queue_unconfirmed_wechat_when_policy_is_disabled(tm
     assert publication is not None
     assert publication["source_kind"] == "NEW"
     manager._publish_claimed_douyin_publication.assert_called_once()
+
+
+def test_douyin_new_sync_with_explicit_caps_publishes_all_eligible_items(tmp_path: Path):
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.send_telegram_msg = MagicMock()
+    _add_published_video_assets(manager, "wechat-published-new")
+    _add_published_video_assets(manager, "wechat-accepted-new")
+    manager.db.record_wechat_submission_acceptance(
+        "wechat-accepted-new",
+        evidence_path=None,
+        error_message="视频号已受理，等待公开确认",
+        final_title="测试标题",
+    )
+    manager._is_public_publish_window = MagicMock(return_value=True)
+    manager._publish_claimed_douyin_publication = MagicMock(return_value=True)
+
+    original = {
+        "enabled": settings.enable_douyin_browser_publishing,
+        "require_public": settings.douyin_require_wechat_public_confirmation,
+        "lookback": settings.douyin_new_sync_lookback_hours,
+        "per_run": settings.douyin_new_sync_max_per_run,
+        "daily": settings.douyin_new_sync_daily_limit,
+    }
+    settings.enable_douyin_browser_publishing = True
+    settings.douyin_require_wechat_public_confirmation = False
+    settings.douyin_new_sync_lookback_hours = 72
+    settings.douyin_new_sync_max_per_run = 2
+    settings.douyin_new_sync_daily_limit = 10
+    try:
+        assert manager._run_douyin_new_sync()
+    finally:
+        settings.enable_douyin_browser_publishing = original["enabled"]
+        settings.douyin_require_wechat_public_confirmation = original["require_public"]
+        settings.douyin_new_sync_lookback_hours = original["lookback"]
+        settings.douyin_new_sync_max_per_run = original["per_run"]
+        settings.douyin_new_sync_daily_limit = original["daily"]
+
+    assert manager._publish_claimed_douyin_publication.call_count == 2
+    claimed_ids = {
+        call.args[0]["youtube_id"]
+        for call in manager._publish_claimed_douyin_publication.call_args_list
+    }
+    assert claimed_ids == {"wechat-published-new", "wechat-accepted-new"}
+
+
+def test_douyin_new_sync_aggregates_missing_asset_notifications_with_action_cap(tmp_path: Path):
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.send_telegram_msg = MagicMock()
+    for yid in ("missing-one", "missing-two", "missing-three"):
+        assert manager.db.add_video(yid, "缺素材视频", "channel", score=80)
+        manager.db.update_video_status(yid, "PUBLISHED")
+
+    original = {
+        "enabled": settings.enable_douyin_browser_publishing,
+        "lookback": settings.douyin_new_sync_lookback_hours,
+        "per_run": settings.douyin_new_sync_max_per_run,
+        "daily": settings.douyin_new_sync_daily_limit,
+    }
+    settings.enable_douyin_browser_publishing = True
+    settings.douyin_new_sync_lookback_hours = 72
+    settings.douyin_new_sync_max_per_run = 1
+    settings.douyin_new_sync_daily_limit = 10
+    try:
+        assert manager._queue_missing_douyin_new_publications() == 0
+    finally:
+        settings.enable_douyin_browser_publishing = original["enabled"]
+        settings.douyin_new_sync_lookback_hours = original["lookback"]
+        settings.douyin_new_sync_max_per_run = original["per_run"]
+        settings.douyin_new_sync_daily_limit = original["daily"]
+
+    manager.send_telegram_msg.assert_called_once()
+    assert "3 条" in manager.send_telegram_msg.call_args.args[0]
+
+
+def test_douyin_new_sync_uses_safe_discovery_boundaries_behind_action_caps(tmp_path: Path, monkeypatch):
+    """自动投稿受限时，发现仍可越过缺素材项检查有限候选集。"""
+    manager = _manager_with_assets(tmp_path)
+    manager.db.get_unqueued_douyin_new_videos.return_value = []
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_new_sync_lookback_hours", 0)
+    monkeypatch.setattr(settings, "douyin_new_sync_max_per_run", 1)
+    monkeypatch.setattr(settings, "douyin_new_sync_daily_limit", 10)
+
+    assert manager._queue_missing_douyin_new_publications() == 0
+
+    manager.db.get_unqueued_douyin_new_videos.assert_called_once_with(
+        lookback_hours=72,
+        limit=100,
+        require_wechat_public_confirmation=False,
+    )
+
+
+def test_douyin_new_sync_zero_action_limits_disable_automatic_scan(tmp_path: Path, monkeypatch):
+    """0 不得再表示自动 NEW 无限领取、建账或浏览器提交。"""
+    manager = _manager_with_assets(tmp_path)
+    manager.db.get_unqueued_douyin_new_videos.return_value = []
+    manager.db.claim_next_douyin_publication.return_value = None
+    manager._is_public_publish_window = MagicMock(return_value=True)
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_new_sync_max_per_run", 0)
+    monkeypatch.setattr(settings, "douyin_new_sync_daily_limit", 0)
+
+    assert manager._run_douyin_new_sync()
+
+    manager.db.get_unqueued_douyin_new_videos.assert_not_called()
+    manager.db.claim_next_douyin_publication.assert_not_called()
+
+
+def test_douyin_new_sync_material_gap_alert_is_persistently_deduplicated(tmp_path: Path, monkeypatch):
+    """同一缺素材 NEW 集合可告警一次，但绝不每分钟重复发送或建取消账本。"""
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    for yid in ("missing-one", "missing-two"):
+        assert manager.db.add_video(yid, "缺素材视频", "channel", score=80)
+        manager.db.update_video_status(yid, "PUBLISHED")
+    manager.telegram_token = "test-token"
+    manager.telegram_chat_id = "test-chat"
+
+    calls = []
+
+    class Response:
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": {"message_id": 2401}}
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Response()
+
+    monkeypatch.setattr("video_processing.telegram_delivery.requests.post", fake_post)
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_new_sync_lookback_hours", 0)
+    monkeypatch.setattr(settings, "douyin_new_sync_max_per_run", 1)
+    monkeypatch.setattr(settings, "douyin_new_sync_daily_limit", 10)
+
+    assert manager._queue_missing_douyin_new_publications() == 0
+    assert manager._queue_missing_douyin_new_publications() == 0
+
+    assert len(calls) == 1
+    assert "Douyin NEW material gap" in calls[0][1]["json"]["text"]
+    assert "2 条" in calls[0][1]["json"]["text"]
+    assert manager.db.get_douyin_publication("missing-one") is None
+    assert manager.db.get_douyin_publication("missing-two") is None

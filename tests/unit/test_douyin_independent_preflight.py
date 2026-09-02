@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-08-31 | Codex | 覆盖 ASS 缺失时同源 VTT 的只读预检回退。 |
 | 1.0.0 | 2026-08-30 | Codex | 覆盖完整候选、素材缺失、历史账本排除和前后不建账证明 |
 """
 from __future__ import annotations
@@ -26,7 +27,14 @@ def _accepted_video(db: PipelineDB, youtube_id: str) -> None:
     )
 
 
-def _assets(output_dir: Path, youtube_id: str, *, include_title: bool = True) -> None:
+def _assets(
+    output_dir: Path,
+    youtube_id: str,
+    *,
+    include_title: bool = True,
+    include_ass: bool = True,
+    include_source_vtt: bool = False,
+) -> None:
     vertical = output_dir / f"{youtube_id}_vertical.mp4"
     vertical.write_bytes(b"video")
     (output_dir / f"{youtube_id}_copy.txt").write_text("测试文案", encoding="utf-8")
@@ -44,17 +52,23 @@ def _assets(output_dir: Path, youtube_id: str, *, include_title: bool = True) ->
         }),
         encoding="utf-8",
     )
-    (output_dir / f"{youtube_id}.ass").write_text(
-        "[Script Info]\nScriptType: v4.00+\n[V4+ Styles]\n"
-        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
-        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
-        "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1\n"
-        "[Events]\n"
-        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-        "Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,subtitle body\n",
-        encoding="utf-8",
-    )
+    if include_ass:
+        (output_dir / f"{youtube_id}.ass").write_text(
+            "[Script Info]\nScriptType: v4.00+\n[V4+ Styles]\n"
+            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+            "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+            "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+            "Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,1,0,2,10,10,10,1\n"
+            "[Events]\n"
+            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+            "Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,subtitle body\n",
+            encoding="utf-8",
+        )
+    if include_source_vtt:
+        (output_dir / f"{youtube_id}_source_subtitle.en.vtt").write_text(
+            "WEBVTT\n\n00:00.000 --> 00:01.000\nsource subtitle body\n",
+            encoding="utf-8",
+        )
 
 
 def test_preflight_proves_complete_candidate_without_creating_ledger(tmp_path: Path):
@@ -101,3 +115,20 @@ def test_preflight_reports_missing_assets_and_excludes_any_historical_ledger(tmp
     assert "抖音标题缺失或为空" in result["items"][0]["failures"]
     assert db.get_douyin_publication("missing-title") is None
     assert db.get_douyin_publication("historical")["state"] == "CANCELED"
+
+
+def test_preflight_uses_source_vtt_when_ass_is_absent(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _accepted_video(db, "source-vtt")
+    _assets(tmp_path, "source-vtt", include_ass=False, include_source_vtt=True)
+
+    result = inspect_independent_candidates(
+        db,
+        output_dir=tmp_path,
+        lookback_hours=24,
+        video_probe=lambda _path: (True, 30.0, None),
+    )
+
+    assert result["local_preflight_ready_count"] == 1
+    assert result["items"][0]["subtitle_source"] == "source_vtt"
+    assert result["items"][0]["local_preflight_ready"] is True

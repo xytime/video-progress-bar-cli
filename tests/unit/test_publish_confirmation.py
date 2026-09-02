@@ -10,6 +10,8 @@
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
 | 1.8.0   | 2026-08-27 | Codex | 覆盖作品管理原生 post_list 的唯一新增 objectId 绑定，避免长描述与短标题不一致漏绑。 |
+| 1.9.0   | 2026-08-31 | Codex | 覆盖管理卡片标题/正文中的普通“不可见”等词不得伪造平台审核驳回。 |
+| 1.10.0  | 2026-08-31 | Codex | 覆盖管理状态仅接受独立状态行或具名状态标签，正文中的发布/审核词保持未判定。 |
 | 1.7.0   | 2026-08-27 | Codex | 锁定作品管理页 networkidle 超时后仍按路由和卡片证据读取。 |
 | 1.6.0   | 2026-08-27 | Codex | 覆盖新标签页作品管理基线失败时的同页回退与创建页恢复。 |
 | 1.5.0   | 2026-08-27 | Codex | 覆盖提交后作品管理卡片异步加载时的同会话原生 ID 轮询绑定 |
@@ -85,6 +87,17 @@ class TestClassifyManagementPublication:
     def test_review_and_rejection_are_distinct(self):
         assert classify_management_publication("当前状态：审核中") == MANAGEMENT_UNDER_REVIEW
         assert classify_management_publication("审核未通过，请修改后重试") == MANAGEMENT_REJECTED
+
+    def test_content_words_do_not_override_an_explicit_review_state(self):
+        card = "英语世界｜新望远镜如何看见不可见的宇宙？\n当前状态：审核中"
+        assert classify_management_publication(card) == MANAGEMENT_UNDER_REVIEW
+
+    def test_content_words_without_a_status_line_stay_uncertain(self):
+        card = "一篇讨论已发布内容为何仍在审核中的科普正文"
+        assert classify_management_publication(card) == MANAGEMENT_UNCERTAIN
+
+    def test_wrapped_original_review_status_is_recognized(self):
+        assert classify_management_publication("标题\n原创审核\n中") == MANAGEMENT_UNDER_REVIEW
 
     def test_unknown_management_text_stays_uncertain(self):
         assert classify_management_publication("作品详情") == MANAGEMENT_UNCERTAIN

@@ -19,6 +19,7 @@
 | 1.9.0 | 2026-08-29 | Codex | 审核项绑定完整投稿包指纹并按 source_youtube_id 阻断重复审核/投稿。 |
 | 1.10.0 | 2026-08-29 | Codex | Telegram 选题制作请求强制进入人工审核，不受全局自动投稿开关扩权。 |
 | 1.11.0 | 2026-08-30 | Codex | 窗口外批准队列明确回执“已排队、尚未上传”，不再误报自动投稿执行完毕。 |
+| 1.12.0 | 2026-09-01 | Codex | 交付前复用源字幕边界守卫，阻断末词时间跨入下一句。 |
 | 1.13.0 | 2026-09-02 | Codex | 兼容渲染器实际输出的连字符 enriched 时间线名，避免本地质检通过后交付入口误拒绝。 |
 | 1.14.0 | 2026-09-02 | Codex | 同目录存在多份时间线时按 manifest 来源起点匹配，拒绝错绑失败重做的片段。 |
 """
@@ -37,6 +38,8 @@ from config.settings import settings
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db.database import PipelineDB
 from video_processing.english_world.package_integrity import calculate_package_hashes
+from video_processing.study_cards.audio_qa import analyse_audio_tail
+from video_processing.study_cards.timeline_guard import validate_source_caption_boundary
 from video_processing.telegram_delivery import send_document, send_text
 from video_processing.utils.video_metadata import get_video_duration_ffprobe
 
@@ -125,7 +128,15 @@ def _load_timeline(manifest_path: Path, *, manifest_payload: dict | None = None)
         payload = json.loads(timeline_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"无法读取英语世界时间线：{timeline_path}") from exc
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return {}
+    validate_source_caption_boundary(payload, timeline_path=timeline_path)
+    return payload
+
+
+def _analyse_audio_tail(expected_words, observed_words, *, output_duration):
+    """保留通知器的窄适配层，供最终音频 QA 与交付测试复用同一规则。"""
+    return analyse_audio_tail(expected_words, observed_words, output_duration=output_duration)
 
 
 def _validate_review_duration(*, mp4: Path, manifest_payload: dict) -> float:

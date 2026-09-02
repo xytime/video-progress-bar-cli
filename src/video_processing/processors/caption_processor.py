@@ -44,30 +44,17 @@
 | 1.31.0 | 2026-08-24 | Codex | agy 以隔离 JSON Schema 调用作为首选，DeepSeek 保留为质量门后的次选 |
 | 1.32.0 | 2026-08-24 | Codex | 影子期恢复已批准生产顺序；模型池仅负责可用性和冷却筛除，不重排运营回退链。 |
 | 1.33.0 | 2026-08-27 | Codex | 增加字幕阶段回调，供父管线获得子进程运行中可审计的真实阶段。 |
+| 1.34.0 | 2026-08-31 | Codex | 移除导入期全局 TLS 绕过；Google 终级翻译的受限超时改由 translation_helper 管理。 |
 """
 import logging
 from pathlib import Path
 from typing import Callable, Optional, List, Dict, Any, Union
 
 import whisper
-from deep_translator import GoogleTranslator
 import pysubs2
-import requests
 import os
 import json  # [Claude_Sonnet_4.6_Thinking_planning] moved from function body (P2 fix)
 import time  # [Claude_Sonnet_4.6_Thinking_planning] moved from function body (P2 fix)
-
-# [Gemini_3.1_Pro_High_planning] Monkeypatch requests to bypass VPN SSL interception
-old_request = requests.Session.request
-def new_request(*args, **kwargs):
-    kwargs['verify'] = False
-    kwargs.setdefault('timeout', (20, 90))
-    return old_request(*args, **kwargs)
-requests.Session.request = new_request
-
-# Suppress InsecureRequestWarning
-import urllib3
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from ..core.base import VideoProcessorBase, VideoProcessingError
 from ..utils.translation_helper import translate_batch as _google_batch_fallback

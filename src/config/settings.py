@@ -4,7 +4,14 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.61.3 | 2026-09-02 | Codex | 自动 NEW 投稿额度改为显式安全上限；零值停用自动入口，保留独立人工路径的单独授权语义。 |
+| 3.61.2 | 2026-09-02 | Codex | NEW 自动发现与实际投稿额度解耦；无限额度下仍强制保留有限的候选时间和批次边界。 |
+| 3.61.1 | 2026-09-02 | Codex | 抖音 NEW 候选与 HISTORY 回填恢复正数边界；0 不再打开无界历史自动投稿。 |
+| 3.61.0 | 2026-09-02 | Codex | 为一次性抖音浏览器启动凭据增加发布前失联恢复等待期；仅未启动且超过该期的尝试可安全取消。 |
+| 3.60.1 | 2026-09-01 | Codex | 抖音与视频号统一发布策略：曾将 0 解释为无限，现仅保留独立投递顺序，不再用于自动候选或历史回填。 |
+| 3.60.0 | 2026-09-01 | Codex | 美股盘中加工守卫改按 NYSE 常规交易日判断，节假日不再误禁。 |
 | 3.58.0 | 2026-08-30 | Codex | 新增英语世界与视频号受理项同步到独立抖音账本的生产开关。 |
+| 3.59.0 | 2026-08-31 | Codex | 为 Google 字幕终级兜底声明受信 TLS 请求与整片总时限，避免全局 requests 改写或逐段超时累积。 |
 | 3.57.1 | 2026-08-30 | Codex | 抖音 NEW 默认每日领取上限调整为 10，与生产每日总量策略一致。 |
 | 3.57.0 | 2026-08-30 | Codex | 英语世界视频号原生 ID 回查增加独立节流与最大自动巡检时长。 |
 | 3.56.0 | 2026-08-30 | Codex | 显式声明抖音 NEW 是否必须等待视频号公开确认；默认 true 保持生产顺序不变。 |
@@ -71,7 +78,7 @@ import json
 import socket
 import urllib.request
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional, List
 from zoneinfo import ZoneInfo
@@ -187,6 +194,9 @@ class Settings(BaseSettings):
 
     # 字幕翻译生产链：影子期固定 Gemini → DeepSeek → Google；AGY 不得影响真实成片。
     subtitle_translation_provider_order: str = "gemini,deepseek,google"
+    # Google 仅作终级兜底；请求保持系统 CA 验证，超时后返回空候选并交给现有质量门处理。
+    google_translate_request_timeout_seconds: int = Field(default=90, ge=5, le=300)
+    google_translate_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
 
     # agy CLI：只在独立临时目录的 plan/sandbox 模式下调用，生产输出必须满足 JSON Schema。
     agy_command: str = "agy"
@@ -334,22 +344,24 @@ class Settings(BaseSettings):
     # 抖音创作者中心浏览器上传。默认关闭；启用后使用本地 Playwright 会话文件扫码登录。
     enable_douyin_browser_publishing: bool = False
     douyin_browser_headless: bool = True
-    # 历史视频迁移到抖音的每日上限；新视频双平台投递不受此上限限制。
+    # HISTORY 只能按正数日上限回填；0 表示停用自动历史回填，避免解除熔断后批量投稿。
     douyin_history_daily_limit: int = 5
-    # 任意两次抖音创作者中心浏览器动作之间的最小间隔；覆盖审核回查、新片同步与历史补录。
-    douyin_browser_action_interval_sec: int = 180
+    douyin_browser_action_interval_sec: int = 0
     # 同一 UI 阶段跨巡航连续失败达到此次数后，停止打开浏览器并请求人工录制操作流程。
     douyin_ui_failure_recording_threshold: int = 2
-    # 默认要求视频号先确认公开；关闭后仅允许无抖音账本的新片独立入队，不复活历史取消/不确定任务。
-    douyin_require_wechat_public_confirmation: bool = True
-    # 每轮最多回查多少条 UNDER_REVIEW，避免一次性连续打开作品管理页。
-    douyin_review_max_per_run: int = 5
-    # 每轮最多同步多少条“微信已发布但抖音未建账”的新片漏项。
-    douyin_new_sync_max_per_run: int = 10
-    # 新片自动同步的每日领取上限。巡航每分钟运行，必须与单轮上限分开约束。
+    # 领取后若进程在打开浏览器前消失，只有超过此等待期且 ticket 从未启动的记录才可安全取消。
+    douyin_prelaunch_ticket_recovery_ttl_seconds: int = 900
+    # 视频号受理后即可同步；仍只为无抖音历史账本的成片建队，不复活不确定/审核中记录。
+    douyin_require_wechat_public_confirmation: bool = False
+    douyin_review_max_per_run: int = 0
+    # 自动 NEW 投稿必须有明确上限；任一值设为 0 时安全停用该自动入口，不解释为无限。
+    douyin_new_sync_max_per_run: int = 1
     douyin_new_sync_daily_limit: int = 10
-    # 仅扫描最近 N 小时内刚完成微信发布的新片，避免把旧历史内容混入 NEW 同步。
-    douyin_new_sync_lookback_hours: int = 12
+    douyin_new_sync_lookback_hours: int = 72
+    # NEW 自动发现的安全范围独立于实际投稿额度；即使额度被停用，也不得扫描整段历史。
+    # 配置为非正数时运行时回退到字段默认值，避免错误配置导致巡航退出或重新全表扫描。
+    douyin_new_sync_discovery_lookback_hours: int = 72
+    douyin_new_sync_discovery_limit: int = 100
     # 英语世界仅在视频号已受理并绑定原生 ID 后建立独立抖音账本；不进入通用视频队列。
     enable_english_world_douyin_sync: bool = False
 
@@ -687,20 +699,84 @@ class Settings(BaseSettings):
         self.default_output_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-    def is_us_market_guard_window(self) -> bool:
+    @staticmethod
+    def _nth_weekday_of_month(year: int, month: int, weekday: int, occurrence: int) -> date:
+        first = date(year, month, 1)
+        offset = (weekday - first.weekday()) % 7
+        return first + timedelta(days=offset + 7 * (occurrence - 1))
+
+    @staticmethod
+    def _last_weekday_of_month(year: int, month: int, weekday: int) -> date:
+        if month == 12:
+            next_month = date(year + 1, 1, 1)
+        else:
+            next_month = date(year, month + 1, 1)
+        last = next_month - timedelta(days=1)
+        return last - timedelta(days=(last.weekday() - weekday) % 7)
+
+    @staticmethod
+    def _observed_us_market_holiday(value: date) -> date:
+        if value.weekday() == 5:
+            return value - timedelta(days=1)
+        if value.weekday() == 6:
+            return value + timedelta(days=1)
+        return value
+
+    @staticmethod
+    def _western_easter_sunday(year: int) -> date:
+        a = year % 19
+        b, c = divmod(year, 100)
+        d, e = divmod(b, 4)
+        f = (b + 8) // 25
+        g = (b - f + 1) // 3
+        h = (19 * a + b - d - g + 15) % 30
+        i, k = divmod(c, 4)
+        l = (32 + 2 * e + 2 * i - h - k) % 7
+        m = (a + 11 * h + 22 * l) // 451
+        month = (h + l - 7 * m + 114) // 31
+        day = (h + l - 7 * m + 114) % 31 + 1
+        return date(year, month, day)
+
+    def is_us_market_trading_day(self, value: date) -> bool:
+        """按 NYSE 常规全日休市规则判断日期是否为交易日。"""
+        if value.weekday() >= 5:
+            return False
+        year = value.year
+        holidays = {
+            self._observed_us_market_holiday(date(year, 1, 1)),
+            self._observed_us_market_holiday(date(year + 1, 1, 1)),
+            self._nth_weekday_of_month(year, 1, 0, 3),
+            self._nth_weekday_of_month(year, 2, 0, 3),
+            self._western_easter_sunday(year) - timedelta(days=2),
+            self._last_weekday_of_month(year, 5, 0),
+            self._observed_us_market_holiday(date(year, 7, 4)),
+            self._nth_weekday_of_month(year, 9, 0, 1),
+            self._nth_weekday_of_month(year, 11, 3, 4),
+            self._observed_us_market_holiday(date(year, 12, 25)),
+        }
+        if year >= 2022:
+            holidays.add(self._observed_us_market_holiday(date(year, 6, 19)))
+        return value not in holidays
+
+    def is_us_market_guard_window(self, now: Optional[datetime] = None) -> bool:
         """[Claude_Opus_4.8] 是否处于美股盘中重负载保护窗口（单一真相源）。
 
         共享主机同时运行实盘交易行情管线，盘中 CPU 被抢会导致行情积压 → 实盘用过期价格
-        （已确认失效模式）。窗口 = ET 09:15–16:15 工作日，用 America/New_York 时区自动适配
-        夏/冬令时；非交易时段（含周末）返回 False。可经 enable_market_hours_guard 关闭。
+        （已确认失效模式）。窗口 = ET 09:15–16:15 的 NYSE 常规交易日，用 America/New_York
+        自动适配夏/冬令时；非交易时段、周末和常规全日休市日返回 False。可经
+        enable_market_hours_guard 关闭。
         供 web 调度器与 pipeline_manager 共用，避免重复实现。
         """
         if not self.enable_market_hours_guard:
             return False
         from zoneinfo import ZoneInfo
-        from datetime import datetime
-        et = datetime.now(ZoneInfo("America/New_York"))
-        if et.weekday() >= 5:  # 周六/日：美股休市
+        eastern = ZoneInfo("America/New_York")
+        et = datetime.now(eastern) if now is None else now
+        if et.tzinfo is None:
+            et = et.replace(tzinfo=eastern)
+        else:
+            et = et.astimezone(eastern)
+        if not self.is_us_market_trading_day(et.date()):
             return False
         minutes = et.hour * 60 + et.minute
         return (9 * 60 + 15) <= minutes < (16 * 60 + 15)

@@ -18,6 +18,9 @@
 | 1.1.2 | 2026-08-03 | Codex | 译制版封面来源清单追加无大面积遮罩版式硬门槛                           |
 | 1.2.0 | 2026-08-03 | Codex | 按源频道选择专属火山声音复刻档案；未命中保持 MiniMax 默认回退            |
 | 1.2.1 | 2026-08-24 | Codex | 持久化 agy/DeepSeek 普通话精修尝试审计，便于上线后质量与降级巡检        |
+| 1.2.2 | 2026-09-02 | Codex | 配音投递复用抖音阶段熔断，纠正提交后未确认状态，并禁止审核中/未确认盲重传。 |
+| 1.2.3 | 2026-09-02 | Codex | 配音抖音投递先原子领取一次性浏览器启动凭据，完成同一次尝试不再双增计数。 |
+| 1.2.4 | 2026-09-02 | Codex | 配音领取若超时仍未启动浏览器，仅安全取消原尝试并恢复人工显式确认入口。 |
 """
 
 from __future__ import annotations
@@ -34,6 +37,12 @@ import pysubs2
 
 from config.settings import settings
 from ..core.cover_policy import validate_dedicated_cover_file
+from ..core.douyin_ui_guard_policy import (
+    DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+    active_douyin_ui_failure_stages,
+    douyin_publish_is_blocked,
+)
+from ..core.douyin_launch_context import douyin_submission_payload_sha256
 from ..censor_engine import check_text
 from ..db.database import PipelineDB
 from ..processors.date_stamp import format_upload_date
@@ -131,9 +140,14 @@ class DubbingService:
         if not confirm:
             raise ValueError("发布需要显式 --confirm，未执行任何平台动作。")
         job = self._require_latest_job(youtube_id, slice_index)
+        if job["state"] == "PUBLISHING":
+            job = self._recover_stale_douyin_prelaunch_publish(job)
         if job["state"] not in {"READY_TO_PUBLISH", "UNDER_REVIEW"}:
             raise ValueError(f"任务当前状态为 {job['state']}，请先完成人工质检批准。")
         selected = self._normalize_platforms(platforms, job)
+        if "douyin" in selected:
+            self._assert_douyin_publish_guard_allows()
+        self._assert_selected_platforms_republishable(job["id"], selected)
         self.db.update_dubbing_job(job["id"], "PUBLISHING")
         for platform in selected:
             self._publish_one(job, platform)
@@ -142,6 +156,9 @@ class DubbingService:
         if publications and all(item["state"] == "PUBLISHED" for item in publications):
             final_state = "PUBLISHED"
             final_error = None
+        elif any(item["state"] == "UNCERTAIN" for item in publications):
+            final_state = "UNDER_REVIEW"
+            final_error = "存在提交后未确认的抖音记录；请先人工核对创作者中心，禁止重传。"
         elif any(item["state"] in submitted_states for item in publications):
             final_state = "UNDER_REVIEW"
             final_error = None
@@ -150,6 +167,83 @@ class DubbingService:
             final_error = "平台投递未提交成功；请修正平台闸门失败后再重试。"
         self.db.update_dubbing_job(job["id"], final_state, error_message=final_error)
         return self._job_view(job["id"])
+
+    def _recover_stale_douyin_prelaunch_publish(self, job: Dict[str, Any]) -> Dict[str, Any]:
+        """只解除可证明未启动浏览器的配音领取；其余 PUBLISHING 状态继续 fail-closed。"""
+        recovery_ttl = max(
+            1, int(settings.douyin_prelaunch_ticket_recovery_ttl_seconds or 0),
+        )
+        try:
+            canceled = self.db.cancel_stale_dubbing_douyin_prelaunch_attempts(
+                min_age_seconds=recovery_ttl,
+                reason=(
+                    "人工配音投稿进程超过恢复等待期仍未启动浏览器；"
+                    "未发生平台提交。"
+                ),
+                job_id=job["id"],
+            )
+        except Exception as exc:
+            raise RuntimeError("无法确认配音抖音领取是否在浏览器前停止，拒绝重新提交。") from exc
+        if not canceled:
+            return job
+        publications = self.db.get_dubbing_publications(job["id"])
+        if any(item.get("state") == "UPLOADING" for item in publications):
+            return job
+        submitted_states = {"UNDER_REVIEW", "PUBLISHED", "UNCERTAIN"}
+        target_state = "UNDER_REVIEW" if any(
+            item.get("state") in submitted_states for item in publications
+        ) else "READY_TO_PUBLISH"
+        self.db.update_dubbing_job(
+            job["id"],
+            target_state,
+            error_message=(
+                "上次抖音领取在浏览器启动前失联，已安全取消；"
+                "后续投稿仍需本次显式 --confirm。"
+            ),
+        )
+        refreshed = self.db.get_dubbing_job(job["id"])
+        return refreshed or {**job, "state": target_state}
+
+    def _assert_douyin_publish_guard_allows(self) -> None:
+        """人工配音的显式确认也不能绕过投稿页或未知 UI 熔断。"""
+        threshold = max(1, int(settings.douyin_ui_failure_recording_threshold or 1))
+        try:
+            streaks = self.db.get_platform_ui_failure_streaks("douyin")
+        except Exception as exc:
+            raise RuntimeError("无法读取抖音 UI 熔断账本，拒绝改变配音投稿状态或打开上传器。") from exc
+        if not isinstance(streaks, list):
+            raise RuntimeError("抖音 UI 熔断账本格式异常，拒绝改变配音投稿状态或打开上传器。")
+        active_stages = active_douyin_ui_failure_stages(
+            streaks,
+            recording_threshold=threshold,
+        )
+        if not douyin_publish_is_blocked(active_stages):
+            return
+        blocked_stage = next(
+            stage for stage in sorted(active_stages)
+            if stage != DOUYIN_UI_STAGE_MANAGEMENT_VERIFY
+        )
+        raise RuntimeError(
+            f"抖音 UI 阶段 {blocked_stage} 已熔断；请先完成对应页面校准并清除熔断，"
+            "本次不会改变配音投稿状态或打开上传器。"
+        )
+
+    def _assert_selected_platforms_republishable(self, job_id: int, selected: Sequence[str]) -> None:
+        """已提交、未确认或封禁的平台记录必须先人工核验，不能被 --confirm 盲重传。"""
+        protected_states = {"UPLOADING", "UNDER_REVIEW", "PUBLISHED", "UNCERTAIN", "BANNED"}
+        existing = {
+            str(item.get("platform") or "").lower(): str(item.get("state") or "").upper()
+            for item in self.db.get_dubbing_publications(job_id)
+            if isinstance(item, dict)
+        }
+        blocked = {
+            platform: existing[platform]
+            for platform in selected
+            if existing.get(platform) in protected_states
+        }
+        if blocked:
+            details = ", ".join(f"{platform}={state}" for platform, state in sorted(blocked.items()))
+            raise ValueError(f"配音投递已存在不可重试状态（{details}），请先人工核验，禁止重传。")
 
     def run_selected(
         self, youtube_id: str, *, platforms: Sequence[str], slice_index: int = 0,
@@ -472,11 +566,32 @@ class DubbingService:
         workspace = self._workspace(job)
         title, copy, cover, category, horizontal_cover = self._variant_publish_assets(job, workspace)
         evidence_dir = workspace / "publish" / "evidence" / platform
+        douyin_launch: Optional[Dict[str, Any]] = None
+        if platform == "douyin":
+            payload_sha256 = douyin_submission_payload_sha256(
+                video_path=output,
+                copy_path=copy,
+                title_path=title,
+                cover_path=cover,
+            )
+            if not payload_sha256:
+                raise RuntimeError("配音抖音投稿包不完整，拒绝领取或启动浏览器。")
+            douyin_launch = self.db.claim_dubbing_douyin_publication_launch(
+                job["id"],
+                payload_sha256=payload_sha256,
+            )
+            if not douyin_launch:
+                raise RuntimeError("配音抖音领取状态或一次性启动凭据无效，拒绝启动浏览器。")
         commands = {
             "wechat": ["scripts/wechat_uploader.py", "--video", str(output), "--copy", str(copy), "--title-file", str(title), "--cover", str(cover), "--cover-provenance", str(self._cover_provenance_path(cover)), "--category-file", str(category), "--fail-fast-login", "--evidence-dir", str(evidence_dir)],
-            "douyin": ["scripts/douyin_uploader.py", "--video", str(output), "--copy", str(copy), "--title-file", str(title), "--cover", str(cover), "--publish", "--fail-fast-login"],
+            "douyin": ["scripts/douyin_uploader.py", "--video", str(output), "--copy", str(copy), "--title-file", str(title), "--cover", str(cover), "--publish", "--fail-fast-login", "--evidence-dir", str(evidence_dir)],
             "kuaishou": ["scripts/kuaishou_uploader.py", "--video", str(output), "--copy", str(copy), "--cover", str(cover), "--publish", "--fail-fast-login"],
         }
+        if douyin_launch:
+            commands["douyin"].extend([
+                "--douyin-launch-ticket", str(douyin_launch["_douyin_launch_ticket_id"]),
+                "--douyin-launch-token", str(douyin_launch["_douyin_launch_token"]),
+            ])
         result = subprocess.run(
             [str(self.project_root / ".venv" / "bin" / "python"), *commands[platform]],
             cwd=self.project_root,
@@ -490,16 +605,33 @@ class DubbingService:
             logger.warning("归档 %s 投递证据失败: %s", platform, exc)
         if result.returncode in {0, 6}:
             # 上传器本地成功只表示已提交/已接受，仍需创作者后台可见证据，故保守记为待核验。
-            self.db.update_dubbing_publication(job["id"], platform, "UNDER_REVIEW", error_message="已提交，等待平台作品管理页确认可见。")
+            if platform == "douyin":
+                self.db.complete_dubbing_douyin_publication_launch(
+                    douyin_launch["id"],
+                    "UNDER_REVIEW",
+                    error_message="已提交，等待平台作品管理页确认可见。",
+                )
+            else:
+                self.db.update_dubbing_publication(job["id"], platform, "UNDER_REVIEW", error_message="已提交，等待平台作品管理页确认可见。")
             return
-        if result.returncode == 7:
+        if platform == "douyin" and result.returncode in {3, 4}:
+            # 3/4 均发生在最终发布前，不能伪装成提交后未确认。
+            state = "CANCELED"
+        elif platform == "douyin" and result.returncode == 7:
+            # 最终点击后未能由作品管理页确认，必须保留为不可盲重传的未确认状态。
+            state = "UNCERTAIN"
+        elif result.returncode == 7:
             state = "BANNED"
         elif result.returncode == 3:
             state = "UNCERTAIN"
         else:
             state = "RETRYABLE_FAILED"
         detail = (result.stderr or result.stdout or f"uploader exit {result.returncode}").strip()[-1000:]
-        self.db.update_dubbing_publication(job["id"], platform, state, error_message=detail)
+        if platform == "douyin":
+            self.db.complete_dubbing_douyin_publication_launch(
+                douyin_launch["id"], state, error_message=detail)
+        else:
+            self.db.update_dubbing_publication(job["id"], platform, state, error_message=detail)
 
     def _record_publish_evidence(self, job_id: int, platform: str, workspace: Path, result, evidence_dir: Path) -> None:
         """归档本次人工投递的上传器输出和页面截图，供审核使用。"""

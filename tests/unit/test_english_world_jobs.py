@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.0 | 2026-08-31 | Codex | 覆盖作品管理页确认已发布时对 CANCELED 抖音账本的受控修正及原尝试不可变。 |
 | 1.0.0 | 2026-08-21 | Codex | 覆盖候选研究、二次制作确认和通用队列隔离。 |
 | 1.0.1 | 2026-08-21 | Codex | 固化 yt-dlp 搜索提取器兼容性，防止伪 URL 落入 HTTP 路径。 |
 | 1.1.0 | 2026-08-23 | Codex | 覆盖英语世界成片的唯一审核身份、原子批准领取与未确认投稿收尾。 |
@@ -14,8 +15,9 @@
 | 1.3.0 | 2026-08-29 | Codex | 覆盖整包指纹、同源去重及多次投稿尝试的不可覆盖审计记录。 |
 | 1.4.0 | 2026-08-30 | Codex | 覆盖具名补发仅授权零尝试项，过期未领取授权自动回归公共窗口队列。 |
 | 1.5.0 | 2026-08-30 | Codex | 覆盖英语世界原生作品 ID 入账、节流领取与平台终态停止回查。 |
-| 1.6.0 | 2026-08-30 | Codex | 覆盖英语世界独立抖音账本、不可重传尝试和与通用 NEW 共用每日额度。 |
+| 1.6.0 | 2026-08-30 | Codex | 覆盖英语世界独立抖音账本、不可重传尝试和可选的通用 NEW 额度兼容。 |
 | 1.5.1 | 2026-08-30 | Codex | 固化英语世界原生作品 ID 只能首次绑定或相同 ID 幂等绑定。 |
+| 1.8.0 | 2026-09-01 | Codex | 覆盖英语世界抖音同步可在无日额度模式下领取，仍保持单次不可重传账本。 |
 | 1.9.0 | 2026-09-02 | Codex | 覆盖日更选题前读取同源投稿保护账本，避免制作后才因重复审核被拒绝。 |
 """
 
@@ -680,7 +682,7 @@ def test_english_world_douyin_sync_is_isolated_single_attempt_and_shares_new_lim
     candidate = db.get_next_english_world_douyin_sync_candidate()
     publication = db.ensure_english_world_douyin_publication(item["id"])
     claimed = db.claim_english_world_douyin_publication(
-        item["id"], daily_limit=1, evidence_dir="/douyin/attempt-1",
+        item["id"], daily_limit=None, evidence_dir="/douyin/attempt-1",
     )
     completed = db.complete_english_world_douyin_publication(
         item["id"], attempt_id=claimed["_attempt_id"], state="UNDER_REVIEW",
@@ -709,3 +711,46 @@ def test_english_world_douyin_sync_is_isolated_single_attempt_and_shares_new_lim
     assert reconciled["state"] == "PUBLISHED"
     assert reconciled["platform_state"] == "PUBLISHED"
     assert db.list_english_world_douyin_attempts(item["id"])[0]["state"] == "PUBLISHED"
+
+
+def test_english_world_douyin_management_evidence_can_correct_canceled_publication(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    item = db.create_english_world_review_item(
+        title="管理页外部已发布", source_youtube_id="external-published-source",
+        **paths, **calculate_package_hashes(paths),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+    wechat_attempt = db.claim_english_world_submission(item["id"], evidence_dir="/wechat")
+    db.complete_english_world_submission(
+        item["id"], state="UNDER_REVIEW", uploader_exit_code=6,
+        evidence_dir="/wechat", attempt_id=wechat_attempt["_attempt_id"],
+        platform_post_id="export/wechat-native",
+    )
+    db.ensure_english_world_douyin_publication(item["id"])
+    claimed = db.claim_english_world_douyin_publication(
+        item["id"], daily_limit=1, evidence_dir="/douyin/attempt-1",
+    )
+    db.complete_english_world_douyin_publication(
+        item["id"], attempt_id=claimed["_attempt_id"], state="CANCELED",
+        uploader_exit_code=3, evidence_dir="/douyin/attempt-1", message="提交前闸门未通过",
+    )
+
+    reconciled = db.record_english_world_douyin_canceled_published_reconciliation(
+        item["id"], evidence_dir="/douyin/management-evidence",
+        message="作品管理页按完整标题和来源链接确认已发布",
+    )
+
+    assert reconciled["state"] == "PUBLISHED"
+    assert reconciled["platform_state"] == "PUBLISHED"
+    assert reconciled["published_at"] is not None
+    attempts = db.list_english_world_douyin_attempts(item["id"])
+    assert attempts[0]["state"] == "CANCELED"
+    with pytest.raises(ValueError, match="Only an attempted CANCELED"):
+        db.record_english_world_douyin_canceled_published_reconciliation(
+            item["id"], evidence_dir="/douyin/management-evidence", message="重复对账",
+        )

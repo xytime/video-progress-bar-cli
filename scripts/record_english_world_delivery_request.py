@@ -10,6 +10,8 @@
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-08-28 | Codex | 新增生产代理到宿主交付器的原子请求协议，隔离 Chromium 权限边界。 |
 # | 1.1.0 | 2026-08-30 | Codex | 在成功或失败请求中持久化本轮已淘汰候选 ID，供后续运行机器化避让。 |
+# | 1.2.0 | 2026-09-01 | Codex | 成功请求绑定 state=PASS 的最终音频 QA 报告，避免绕过末尾泄漏门禁。 |
+# | 1.3.0 | 2026-09-01 | Codex | 要求 PASS 报告精确绑定本次 MP4 与 manifest，阻断复用旧成片 QA。 |
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--title", required=True, help="学习成片标题")
     parser.add_argument("--mp4", type=Path, help="已质检 MP4 的绝对路径")
     parser.add_argument("--manifest", type=Path, help="与 MP4 对应的 manifest 绝对路径")
+    parser.add_argument("--audio-qa-report", type=Path, help="最终音频 QA 报告；必须为 state=PASS")
     parser.add_argument("--failure", help="无可交付成片时的准确失败原因")
     parser.add_argument(
         "--rejected-youtube-id",
@@ -49,6 +52,21 @@ def main() -> int:
         raise ValueError("provide either --failure or both --mp4 and --manifest")
     if not failure and (args.mp4 is None or args.manifest is None):
         raise ValueError("successful delivery request requires --mp4 and --manifest")
+    if not failure and args.audio_qa_report is None:
+        raise ValueError("successful delivery request requires --audio-qa-report")
+    if not failure:
+        report_path = args.audio_qa_report.expanduser().resolve()
+        if not report_path.is_file() or report_path.stat().st_size <= 0:
+            raise ValueError("audio QA report does not exist or is empty")
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("audio QA report is not valid JSON") from exc
+        if not isinstance(report, dict) or report.get("state") != "PASS" or report.get("passed") is not True:
+            raise ValueError("audio QA report is not PASS")
+        for field, artifact in (("mp4", args.mp4), ("manifest", args.manifest)):
+            if not report.get(field) or Path(str(report[field])).expanduser().resolve() != artifact.expanduser().resolve():
+                raise ValueError(f"audio QA report does not match the current {field}")
 
     rejected_youtube_ids = list(dict.fromkeys(str(value).strip() for value in args.rejected_youtube_id))
     if len(rejected_youtube_ids) > 5:
@@ -68,6 +86,7 @@ def main() -> int:
                 "kind": "production",
                 "mp4": str(args.mp4.resolve()),
                 "manifest": str(args.manifest.resolve()),
+                "audio_qa_report": str(args.audio_qa_report.expanduser().resolve()),
             }
         )
 

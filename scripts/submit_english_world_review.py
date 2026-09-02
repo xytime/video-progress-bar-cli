@@ -16,6 +16,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 | 1.6.0 | 2026-08-30 | Codex | 支持具名操作员对零尝试自动延后项签发两小时单项补发授权。 |
 | 1.7.0 | 2026-08-30 | Codex | 将同次提交回执中的视频号原生 ID 原子写入英语世界审核与尝试账本。 |
 | 1.8.0 | 2026-08-30 | Codex | 视频号受理并绑定原生 ID 后，为启用的英语世界抖音同步立即建立独立队列。 |
+| 1.9.0 | 2026-08-31 | Codex | 投稿前先非阻塞取得全局微信锁；锁忙时保持批准态延后，避免领取后被父进程超时中断。 |
 """
 
 from __future__ import annotations
@@ -147,72 +148,77 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             "English World review %s uses its two-hour bounded capability outside the public window source=%s",
             review_id, pending.get("approval_source"),
         )
-    evidence_dir = Path(str(pending["mp4_path"])).parent / "wechat_evidence" / str(time.time_ns())
-    item = db.claim_english_world_submission(review_id, evidence_dir=str(evidence_dir))
-    if item is None:
-        logger.info("English World review item is not claimable: %s", review_id)
-        return 0
+    pipeline_lock = _PROJECT_ROOT / "output" / "pipeline.lock"
+    pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
+    with pipeline_lock.open("a+") as lock_file:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            logger.info("English World submission deferred because pipeline.lock is busy: %s", review_id)
+            return EXIT_DEFERRED
 
-    title = str(item.get("title") or "英语世界短视频")
-    attempt_id = str(item["_attempt_id"])
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        _require_publish_package(item)
-        command = [
-            str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
-            str(_PROJECT_ROOT / "scripts" / "wechat_uploader.py"),
-            "--video", str(item["mp4_path"]),
-            "--copy", str(item["copy_path"]),
-            "--title-file", str(item["title_path"]),
-            "--cover", str(item["cover_path"]),
-            "--cover-provenance", str(item["cover_provenance_path"]),
-            "--state", str(_PROJECT_ROOT / "output" / "wechat_state.json"),
-            "--evidence-dir", str(evidence_dir),
-            "--fail-fast-login",
-            "--no-original-declaration",
-        ]
-        if not settings.wechat_headless:
-            command.append("--no-headless")
-        pipeline_lock = _PROJECT_ROOT / "output" / "pipeline.lock"
-        pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
-        with pipeline_lock.open("a+") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        evidence_dir = Path(str(pending["mp4_path"])).parent / "wechat_evidence" / str(time.time_ns())
+        item = db.claim_english_world_submission(review_id, evidence_dir=str(evidence_dir))
+        if item is None:
+            logger.info("English World review item is not claimable: %s", review_id)
+            return 0
+
+        title = str(item.get("title") or "英语世界短视频")
+        attempt_id = str(item["_attempt_id"])
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            _require_publish_package(item)
+            command = [
+                str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
+                str(_PROJECT_ROOT / "scripts" / "wechat_uploader.py"),
+                "--video", str(item["mp4_path"]),
+                "--copy", str(item["copy_path"]),
+                "--title-file", str(item["title_path"]),
+                "--cover", str(item["cover_path"]),
+                "--cover-provenance", str(item["cover_provenance_path"]),
+                "--state", str(_PROJECT_ROOT / "output" / "wechat_state.json"),
+                "--evidence-dir", str(evidence_dir),
+                "--fail-fast-login",
+                "--no-original-declaration",
+            ]
+            if not settings.wechat_headless:
+                command.append("--no-headless")
             result = subprocess.run(
                 command, cwd=str(_PROJECT_ROOT), text=True, capture_output=True,
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
-        state, message = _completion_for_exit_code(result.returncode)
-        platform_post_id, platform_url = _read_submission_identity(evidence_dir)
-        if state != "UNDER_REVIEW":
-            platform_post_id = platform_url = None
-        if result.stderr:
-            message = f"{message}\n执行摘要：{result.stderr[-500:].strip()}"
-        db.complete_english_world_submission(
-            review_id, state=state, uploader_exit_code=result.returncode,
-            evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
-            platform_post_id=platform_post_id, platform_url=platform_url,
-        )
-        if (
-            state == "UNDER_REVIEW"
-            and platform_post_id
-            and settings.enable_english_world_douyin_sync
-        ):
-            db.ensure_english_world_douyin_publication(review_id)
-    except subprocess.TimeoutExpired:
-        state = "UNCERTAIN"
-        message = "视频号上传超时，无法排除平台已受理；已停止自动重传，需在后台核验。"
-        db.complete_english_world_submission(
-            review_id, state=state, uploader_exit_code=124,
-            evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
-        )
-    except Exception as exc:  # noqa: BLE001 - worker must persist its own failure receipt
-        logger.exception("English World WeChat submission failed: %s", exc)
-        state = "FAILED"
-        message = f"投稿前校验或执行失败：{exc}。未自动重传。"
-        db.complete_english_world_submission(
-            review_id, state=state, uploader_exit_code=1,
-            evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
-        )
+            state, message = _completion_for_exit_code(result.returncode)
+            platform_post_id, platform_url = _read_submission_identity(evidence_dir)
+            if state != "UNDER_REVIEW":
+                platform_post_id = platform_url = None
+            if result.stderr:
+                message = f"{message}\n执行摘要：{result.stderr[-500:].strip()}"
+            db.complete_english_world_submission(
+                review_id, state=state, uploader_exit_code=result.returncode,
+                evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
+                platform_post_id=platform_post_id, platform_url=platform_url,
+            )
+            if (
+                state == "UNDER_REVIEW"
+                and platform_post_id
+                and settings.enable_english_world_douyin_sync
+            ):
+                db.ensure_english_world_douyin_publication(review_id)
+        except subprocess.TimeoutExpired:
+            state = "UNCERTAIN"
+            message = "视频号上传超时，无法排除平台已受理；已停止自动重传，需在后台核验。"
+            db.complete_english_world_submission(
+                review_id, state=state, uploader_exit_code=124,
+                evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - worker must persist its own failure receipt
+            logger.exception("English World WeChat submission failed: %s", exc)
+            state = "FAILED"
+            message = f"投稿前校验或执行失败：{exc}。未自动重传。"
+            db.complete_english_world_submission(
+                review_id, state=state, uploader_exit_code=1,
+                evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
+            )
 
     labels = {
         "UNDER_REVIEW": "⏳ <b>视频号已受理｜等待审核</b>",

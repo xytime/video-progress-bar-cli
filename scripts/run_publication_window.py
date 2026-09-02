@@ -16,6 +16,9 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 | 1.6.0 | 2026-08-30 | Codex | 已受理英语世界作品按原生 ID 节流回查；全程复用 pipeline.lock 且绝不触发重传。 |
 | 1.6.1 | 2026-08-30 | Codex | 统一回查超时与普通失败的熔断通知收口，并转义 Telegram HTML 动态字段。 |
 | 1.7.0 | 2026-08-30 | Codex | 视频号已受理的英语世界审核项按独立账本同步到抖音，并节流回查公开状态。 |
+| 1.8.0 | 2026-09-01 | Codex | 英语世界抖音同步取消单轮和 24 小时来源限制，按不可重复账本逐条清空可投队列。 |
+| 1.8.1 | 2026-09-01 | Codex | 每轮输出抖音发布策略实效指纹，定位 cron 与源码载入偏差。 |
+| 1.8.2 | 2026-09-02 | Codex | 英语世界抖音管理页回查在领取账本前遵循持久阶段熔断，避免无效访问消耗回查窗口。 |
 """
 
 from __future__ import annotations
@@ -39,6 +42,10 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from video_processing.pipeline_manager import PipelineManager
+from video_processing.core.douyin_ui_guard_policy import (
+    active_douyin_ui_failure_stages,
+    douyin_management_verify_is_blocked,
+)
 from config.settings import settings
 from video_processing.db.database import PipelineDB
 from video_processing.telegram_delivery import send_text
@@ -158,6 +165,17 @@ def run_publication_window() -> int:
                 status["run_id"],
                 status["git_revision"],
             )
+            logging.info(
+                "[DouyinPolicy] history_limit=%s action_interval=%s review_limit=%s "
+                "new_batch_limit=%s new_daily_limit=%s new_lookback=%s require_wechat_public=%s",
+                settings.douyin_history_daily_limit,
+                settings.douyin_browser_action_interval_sec,
+                settings.douyin_review_max_per_run,
+                settings.douyin_new_sync_max_per_run,
+                settings.douyin_new_sync_daily_limit,
+                settings.douyin_new_sync_lookback_hours,
+                settings.douyin_require_wechat_public_confirmation,
+            )
             PipelineManager(status_reporter=report_pipeline_stage).run_daily_job()
             _update_run_status(status, status_lock, state="COMPLETED")
         except Exception as exc:
@@ -215,36 +233,35 @@ def dispatch_one_deferred_english_world_submission() -> None:
 
 
 def dispatch_one_english_world_douyin_submission() -> None:
-    """同步一条视频号已受理且从未建抖音账本的英语世界审核项。"""
+    """同步全部视频号已受理且从未建抖音账本的英语世界审核项。"""
     if (
         not settings.enable_english_world_douyin_sync
         or not settings.enable_douyin_browser_publishing
     ):
         return
     db = PipelineDB()
-    item = db.get_next_english_world_douyin_sync_candidate()
-    if not item:
-        return
-    review_id = str(item["id"])
-    result = subprocess.run(
-        [
-            str(PROJECT_ROOT / ".venv/bin/python"),
-            str(PROJECT_ROOT / "scripts/submit_english_world_douyin.py"),
-            "--review-id", review_id,
-        ],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30 * 60,
-    )
-    if result.returncode:
-        logging.error(
-            "[EnglishWorld][Douyin] sync worker returned %s for %s: %s",
-            result.returncode,
-            review_id[:8],
-            result.stderr[-500:],
+    while item := db.get_next_english_world_douyin_sync_candidate():
+        review_id = str(item["id"])
+        result = subprocess.run(
+            [
+                str(PROJECT_ROOT / ".venv/bin/python"),
+                str(PROJECT_ROOT / "scripts/submit_english_world_douyin.py"),
+                "--review-id", review_id,
+            ],
+            cwd=PROJECT_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30 * 60,
         )
+        if result.returncode:
+            logging.error(
+                "[EnglishWorld][Douyin] sync worker returned %s for %s: %s",
+                result.returncode,
+                review_id[:8],
+                result.stderr[-500:],
+            )
+            return
 
 
 def reconcile_one_english_world_douyin_submission() -> None:
@@ -255,6 +272,20 @@ def reconcile_one_english_world_douyin_submission() -> None:
     ):
         return
     db = PipelineDB()
+    try:
+        active_stages = active_douyin_ui_failure_stages(
+            db.get_platform_ui_failure_streaks("douyin"),
+            recording_threshold=settings.douyin_ui_failure_recording_threshold,
+        )
+    except Exception:  # noqa: BLE001 - 熔断账本不可读时不能打开创作者中心
+        logging.exception("[EnglishWorld][Douyin] 无法读取 UI 熔断账本，跳过管理页回查。")
+        return
+    if douyin_management_verify_is_blocked(active_stages):
+        logging.warning(
+            "[EnglishWorld][Douyin] UI 熔断阶段 %s 已激活，领取前跳过管理页回查。",
+            ", ".join(sorted(active_stages)),
+        )
+        return
     item = db.claim_next_english_world_douyin_reconciliation(
         min_interval_minutes=settings.english_world_reconcile_interval_minutes,
         failure_limit=settings.douyin_ui_failure_recording_threshold,

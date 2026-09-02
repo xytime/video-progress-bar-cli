@@ -13,6 +13,8 @@
 | 1.5.0 | 2026-08-30 | Codex | 覆盖窗口调度前先回收过期未领取的具名补发授权。 |
 | 1.6.0 | 2026-08-30 | Codex | 覆盖英语世界按原生 ID 只读回查并写回独立平台状态。 |
 | 1.7.0 | 2026-08-30 | Codex | 覆盖回查超时熔断通知和英语世界到抖音的单条隔离调度。 |
+| 1.8.0 | 2026-09-01 | Codex | 覆盖英语世界抖音队列无每轮条数限制，逐条提交直到队列耗尽或出现阻断。 |
+| 1.8.1 | 2026-09-02 | Codex | 覆盖抖音管理页熔断必须先于英语世界回查领取、浏览器槽位与页面访问。 |
 """
 
 import fcntl
@@ -20,6 +22,8 @@ import json
 import subprocess
 from pathlib import Path
 from unittest.mock import ANY, MagicMock
+
+import pytest
 
 import scripts.run_publication_window as runner
 
@@ -127,8 +131,11 @@ def test_window_dispatches_one_deferred_english_world_auto_item(monkeypatch):
 
 def test_window_dispatches_one_accepted_english_world_item_to_douyin(monkeypatch):
     class FakeDB:
+        def __init__(self):
+            self.items = [{"id": "e" * 32}]
+
         def get_next_english_world_douyin_sync_candidate(self):
-            return {"id": "e" * 32}
+            return self.items.pop(0) if self.items else None
 
     completed = MagicMock(returncode=0, stderr="")
     monkeypatch.setattr(runner, "PipelineDB", FakeDB)
@@ -141,6 +148,53 @@ def test_window_dispatches_one_accepted_english_world_item_to_douyin(monkeypatch
 
     assert run.call_args.args[0][-2:] == ["--review-id", "e" * 32]
     assert "submit_english_world_douyin.py" in str(run.call_args.args[0][1])
+
+
+def test_window_dispatches_all_accepted_english_world_items_to_douyin(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.items = [{"id": "e" * 32}, {"id": "f" * 32}]
+
+        def get_next_english_world_douyin_sync_candidate(self):
+            return self.items.pop(0) if self.items else None
+
+    completed = MagicMock(returncode=0, stderr="")
+    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
+    monkeypatch.setattr(runner.settings, "enable_english_world_douyin_sync", True)
+    monkeypatch.setattr(runner.settings, "enable_douyin_browser_publishing", True)
+    run = MagicMock(return_value=completed)
+    monkeypatch.setattr(runner.subprocess, "run", run)
+
+    runner.dispatch_one_english_world_douyin_submission()
+
+    assert run.call_count == 2
+    assert [call.args[0][-1] for call in run.call_args_list] == ["e" * 32, "f" * 32]
+
+
+@pytest.mark.parametrize("stage", ["management_verify", "publish_pre_submit", "future_ui_stage"])
+def test_english_world_douyin_management_guard_stops_before_claim_or_browser(monkeypatch, stage):
+    """管理页熔断时，回查不能先写领取时间再决定跳过。"""
+    class FakeDB:
+        def get_platform_ui_failure_streaks(self, platform):
+            assert platform == "douyin"
+            return [{"stage": stage, "active": 1, "consecutive_failures": 2}]
+
+        def claim_next_english_world_douyin_reconciliation(self, **_kwargs):
+            raise AssertionError("active management guard must stop before reconciliation claim")
+
+        def reserve_douyin_browser_action_slot(self, *_args, **_kwargs):
+            raise AssertionError("active management guard must not reserve a browser slot")
+
+    browser = MagicMock()
+    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
+    monkeypatch.setattr(runner.subprocess, "run", browser)
+    monkeypatch.setattr(runner.settings, "enable_english_world_douyin_sync", True)
+    monkeypatch.setattr(runner.settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(runner.settings, "douyin_ui_failure_recording_threshold", 2)
+
+    runner.reconcile_one_english_world_douyin_submission()
+
+    browser.assert_not_called()
 
 
 def test_runner_reconciles_one_bound_english_world_item_without_upload(monkeypatch, tmp_path):

@@ -24,6 +24,9 @@
 # | 2.18.0 | 2026-08-30 | Codex | 固化 LaunchAgent 必须使用项目 venv，避免调度器缺失生产依赖。 |
 # | 2.19.0 | 2026-08-30 | Codex | 固化 LaunchAgent plist 为可迁移模板并由安装器逐字段核验渲染路径。 |
 # | 2.20.0 | 2026-08-31 | Codex | 覆盖来源预检自身异常的失败请求、持久状态与禁止启动候选协调器边界。 |
+# | 2.21.0 | 2026-09-01 | Codex | 固化 json3 绝对/相对时间换算与本地 Whisper 末尾泄漏门禁。 |
+# | 2.22.0 | 2026-09-01 | Codex | 成功交付请求必须绑定通过的最终音频 QA 报告。 |
+# | 2.23.0 | 2026-09-01 | Codex | 拒绝与当前 MP4/manifest 不匹配的 PASS 音频 QA 报告。 |
 # | 2.24.0 | 2026-09-02 | Codex | 覆盖日更提示注入投稿保护来源，避免同源 UNDER_REVIEW 项被再次制作。 |
 """
 
@@ -67,13 +70,27 @@ def _runner_arguments(
     fake_python = tmp_path / "python"
     notifier = tmp_path / "notifier.py"
     log_dir = tmp_path / "logs"
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    fixture_mp4 = project_root / "video.mp4"
+    fixture_manifest = project_root / "manifest.json"
+    fixture_audio_qa = project_root / "qa" / "final_audio_qa.json"
+    fixture_mp4.write_text("fixture", encoding="utf-8")
+    fixture_manifest.write_text("fixture", encoding="utf-8")
+    fixture_audio_qa.parent.mkdir()
+    fixture_audio_qa.write_text(json.dumps({
+        "state": "PASS", "passed": True,
+        "mp4": str(fixture_mp4), "manifest": str(fixture_manifest),
+    }), encoding="utf-8")
     request_command = (
         "request=\"$ENGLISH_WORLD_DELIVERY_REQUEST_PATH\"\n"
         "mkdir -p \"$(dirname \"$request\")\"\n"
         "printf '%s\\n' '{\"kind\":\"production\",\"title\":\"fixture\",\"mp4\":\""
-        + str(PROJECT_ROOT / "pyproject.toml")
+        + str(fixture_mp4)
         + "\",\"manifest\":\""
-        + str(PROJECT_ROOT / "pyproject.toml")
+        + str(fixture_manifest)
+        + "\",\"audio_qa_report\":\""
+        + str(fixture_audio_qa)
         + "\"}' > \"$request\"\n"
         if write_delivery_request else ""
     )
@@ -88,7 +105,7 @@ def _runner_arguments(
     _write_executable(fake_python, f"#!/usr/bin/env bash\necho notifier:\"$*\" >> {calls}\n{receipt_command}exit 0\n")
     notifier.write_text("# fake notifier\n", encoding="utf-8")
     arguments = [
-        sys.executable, str(RUNNER), "--project-root", str(PROJECT_ROOT),
+        sys.executable, str(RUNNER), "--project-root", str(project_root),
         "--codex-bin", str(fake_codex), "--python-bin", str(fake_python),
         "--notifier-script", str(notifier), "--log-dir", str(log_dir),
         "--lock-dir", str(tmp_path / "lock"), "--max-attempts", "3",
@@ -403,6 +420,17 @@ def test_daily_prompt_requires_monotonic_word_boundaries_before_enrichment():
     assert "StudyCardContent.from_mapping" in prompt
 
 
+def test_daily_prompt_requires_relative_boundary_and_whisper_audio_gate():
+    prompt = runner.PROMPT
+
+    assert "absolute_time - source_start" in prompt
+    assert "不得把绝对 `spoken_end` 直接写入相对时间轴" in prompt
+    assert "scripts/render_study_card.py" in prompt
+    assert "scripts/validate_study_card_audio.py" in prompt
+    assert "16kHz 单声道" in prompt
+    assert "只有报告 `state=PASS` 才能写入成功交付请求" in prompt
+
+
 def test_recent_rejected_candidates_include_structured_and_legacy_failures(tmp_path: Path):
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
@@ -522,13 +550,20 @@ def test_manual_host_delivery_forces_notifier_review_only(monkeypatch, tmp_path:
     request_path = tmp_path / "request.json"
     mp4 = tmp_path / "video.mp4"
     manifest = tmp_path / "manifest.json"
+    audio_qa_report = tmp_path / "qa" / "final_audio_qa.json"
     notifier = tmp_path / "notifier.py"
     for path in (mp4, manifest, notifier):
         path.write_text("fixture", encoding="utf-8")
+    audio_qa_report.parent.mkdir()
+    audio_qa_report.write_text(json.dumps({
+        "state": "PASS", "passed": True,
+        "mp4": str(mp4), "manifest": str(manifest),
+    }), encoding="utf-8")
     request_path.write_text(
         json.dumps({
             "kind": "production", "title": "fixture",
             "mp4": str(mp4), "manifest": str(manifest),
+            "audio_qa_report": str(audio_qa_report),
         }),
         encoding="utf-8",
     )
@@ -550,6 +585,45 @@ def test_manual_host_delivery_forces_notifier_review_only(monkeypatch, tmp_path:
         manual_review_only=True,
     ) == (0, False)
     assert "--manual-review-only" in captured["command"]
+
+
+def test_production_delivery_request_requires_passing_audio_qa_report(tmp_path: Path):
+    request_path = tmp_path / "request.json"
+    mp4 = tmp_path / "video.mp4"
+    manifest = tmp_path / "manifest.json"
+    mp4.write_text("fixture", encoding="utf-8")
+    manifest.write_text("fixture", encoding="utf-8")
+    request_path.write_text(json.dumps({
+        "kind": "production", "title": "fixture",
+        "mp4": str(mp4), "manifest": str(manifest),
+    }), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="音频 QA"):
+        runner._read_delivery_request(request_path, tmp_path)
+
+
+def test_production_delivery_request_rejects_qa_report_for_different_artifacts(tmp_path: Path):
+    mp4 = tmp_path / "video.mp4"
+    manifest = tmp_path / "manifest.json"
+    other_mp4 = tmp_path / "other.mp4"
+    other_manifest = tmp_path / "other-manifest.json"
+    audio_qa_report = tmp_path / "qa" / "final_audio_qa.json"
+    for path in (mp4, manifest, other_mp4, other_manifest):
+        path.write_text("fixture", encoding="utf-8")
+    audio_qa_report.parent.mkdir()
+    audio_qa_report.write_text(json.dumps({
+        "state": "PASS", "passed": True,
+        "mp4": str(other_mp4), "manifest": str(other_manifest),
+    }), encoding="utf-8")
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps({
+        "kind": "production", "title": "fixture",
+        "mp4": str(mp4), "manifest": str(manifest),
+        "audio_qa_report": str(audio_qa_report),
+    }), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="音频 QA.*产物"):
+        runner._read_delivery_request(request_path, tmp_path)
 
 
 def test_transient_transport_failure_retries_before_failure_notification(tmp_path: Path):

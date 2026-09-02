@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-08-31 | Codex | ASS 证据缺失时使用同源 VTT 进行只读预检，与平台上传前字幕回退保持一致。 |
 | 1.0.0 | 2026-08-30 | Codex | 新增抖音独立 NEW 候选只读素材预检与前后无建账证明 |
 """
 from __future__ import annotations
@@ -23,7 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from config.settings import settings  # noqa: E402
 from video_processing.core.cover_policy import validate_dedicated_cover_file  # noqa: E402
 from video_processing.db.database import PipelineDB  # noqa: E402
-from video_processing.utils.file_utils import read_subtitle_text  # noqa: E402
+from video_processing.utils.file_utils import read_subtitle_text, read_webvtt_text  # noqa: E402
 from video_processing.utils.video_metadata import get_video_duration_ffprobe  # noqa: E402
 
 
@@ -72,6 +73,14 @@ def _subtitle_source(output_dir: Path, youtube_id: str, slice_index: int) -> tup
         text = read_subtitle_text(directory, youtube_id, slice_index=slice_index)
         if text:
             return label, text
+    prefix = f"{youtube_id}_source_subtitle"
+    source_vtt_files = sorted(
+        path for path in output_dir.glob(f"{prefix}*.vtt")
+        if path.name == f"{prefix}.vtt" or path.name.startswith(f"{prefix}.")
+    )
+    source_vtt_text = read_webvtt_text(source_vtt_files)
+    if source_vtt_text:
+        return "source_vtt", source_vtt_text
     return "missing", ""
 
 

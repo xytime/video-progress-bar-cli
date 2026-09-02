@@ -12,6 +12,7 @@
 # | 1.4.0   | 2026-06-12 | Claude_Opus_4.8               | 新增 [4] 富途日本代理 (futu-mihomo) 速查板块  |
 # | 1.5.0   | 2026-06-17 | Claude_Opus_4.8               | 新增 [5] 共识中枢 Hub 启停板块 (launchd 永活)  |
 # | 1.6.0   | 2026-08-21 | Codex                         | 新增 wxvideo 本地字幕提取快捷指令              |
+# | 1.7.0   | 2026-08-30 | Codex                         | 新增 BGMScout 本地服务管理速查                 |
 # =======================================================================
 
 # 终端颜色代码
@@ -28,7 +29,7 @@ RESET="\033[0m"
 SEP="${DIM}──────────────────────────────────────────────────────────────────────${RESET}"
 
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.5  ${RESET}"
+echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.7  ${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 
 # ================================================================
@@ -231,9 +232,29 @@ echo -e "    ${CYAN}launchctl kickstart -k gui/501/com.optionsense.hub${RESET}  
 echo -e "\n${SEP}"
 
 # ================================================================
-# [6] 推荐本地 Shell 配置
+# [6] BGMScout 本地音频服务
 # ================================================================
-echo -e "\n${BOLD}${YELLOW}[6] 推荐本地 Shell 配置 (~/.zshrc)${RESET}"
+echo -e "\n${BOLD}${YELLOW}[6] BGMScout 本地音频服务${RESET}"
+echo -e "${DIM}项目路径: /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/BGMScout${RESET}"
+echo -e "${DIM}公共地址: http://127.0.0.1:7866/ · 守护服务: com.bgmscout.server${RESET}"
+echo ""
+echo -e "  ${BOLD}服务管理:${RESET}"
+echo -e "    ${GREEN}bgm install${RESET}   ${DIM}# 安装登录自启服务${RESET}"
+echo -e "    ${GREEN}bgm start${RESET}     ${DIM}# 启动服务${RESET}"
+echo -e "    ${RED}bgm stop${RESET}      ${DIM}# 停止并卸载服务${RESET}"
+echo -e "    ${CYAN}bgm restart${RESET}   ${DIM}# 重启服务${RESET}"
+echo -e "    ${CYAN}bgm status${RESET}    ${DIM}# 查看 launchd 状态${RESET}"
+echo -e "    ${CYAN}bgm logs${RESET}      ${DIM}# 实时查看日志${RESET}"
+echo ""
+echo -e "  ${BOLD}故障恢复:${RESET}"
+echo -e "    ${DIM}访问地址无法连接时，先执行 start；服务已安装但后端失败时，7866 的守护页会提供恢复提示。${RESET}"
+
+echo -e "\n${SEP}"
+
+# ================================================================
+# [7] 推荐本地 Shell 配置
+# ================================================================
+echo -e "\n${BOLD}${YELLOW}[7] 推荐本地 Shell 配置 (~/.zshrc)${RESET}"
 echo -e "${DIM}如需保持上述全局别名，请确认 ~/.zshrc 中包含以下内容：${RESET}"
 echo ""
 echo -e "    ${BLUE}alias backtest${RESET}=${CYAN}\"python /path/to/OptionSense/.../lab/run_backtest_v4.py\"${RESET}"
@@ -247,6 +268,6 @@ echo -e "    ${BLUE}option()${RESET}      { python /Volumes/EXT2T/MacMini4_SSD/P
 echo -e "    ${BLUE}hub()${RESET}         { bash /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/hub/hub_ctl.sh \"\$@\" }"
 
 echo -e "\n${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · OptionSense 核心操作速查 v1.6${RESET}"
+echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · 项目服务操作速查 v1.7${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 echo ""

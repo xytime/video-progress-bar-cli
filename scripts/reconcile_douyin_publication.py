@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-02 | Codex | 手工只读回查在启动浏览器前遵守持久阶段熔断，防止绕过录屏校准边界。 |
 | 1.0.0 | 2026-08-30 | Codex | 新增单记录、单浏览器动作、默认只读的抖音人工回查入口 |
 """
 from __future__ import annotations
@@ -21,6 +22,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from config.settings import settings  # noqa: E402
+from video_processing.core.douyin_ui_guard_policy import (  # noqa: E402
+    active_douyin_ui_failure_stages,
+    douyin_management_verify_is_blocked,
+)
 from video_processing.db.database import PipelineDB  # noqa: E402
 from video_processing.pipeline_manager import _build_subprocess_env  # noqa: E402
 
@@ -54,6 +59,19 @@ def reconcile_publication(
     original_state = str(publication.get("state") or "").upper()
     if original_state not in VERIFYABLE_STATES:
         raise ValueError(f"仅允许回查 {sorted(VERIFYABLE_STATES)}，当前状态为 {original_state}")
+    try:
+        active_stages = active_douyin_ui_failure_stages(
+            db.get_platform_ui_failure_streaks("douyin"),
+            recording_threshold=settings.douyin_ui_failure_recording_threshold,
+        )
+    except Exception as exc:  # noqa: BLE001 - 账本不可读时不能绕过浏览器熔断
+        raise ValueError(f"无法读取抖音 UI 熔断账本，拒绝打开管理页：{exc}") from exc
+    if douyin_management_verify_is_blocked(active_stages):
+        raise ValueError(
+            "抖音 UI 熔断已激活（"
+            + ", ".join(sorted(active_stages))
+            + "），请先录制并完成对应 selector 校准后再回查"
+        )
 
     artifact_root = output_dir or project_root / "output"
     prefix = _artifact_prefix(publication)

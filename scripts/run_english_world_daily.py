@@ -30,6 +30,7 @@
 # | 2.20.0 | 2026-08-30 | Codex | 明确逐词时间轴必须满足词尾不越过下一词起点，防止密集自动字幕触发渲染前倒退。 |
 # | 2.21.0 | 2026-08-30 | Codex | 宿主先验收 Cookie、媒体 URL 与 CDN 字节通路；认证失败安全刷新一次，通路失败尝试配置的 Clash 下载节点。 |
 # | 2.22.0 | 2026-08-31 | Codex | 来源预检自身异常也写入受控失败请求和持久状态，避免启动依赖缺失绕过当日回执。 |
+# | 2.23.0 | 2026-09-01 | Codex | 固化 json3 绝对/相对时间换算、本地 Whisper 末尾泄漏门禁及通过报告绑定。 |
 # | 2.24.0 | 2026-09-02 | Codex | 日更选题前读取投稿保护账本并排除同源审核项；账本异常时不启动制作。 |
 """
 
@@ -84,8 +85,10 @@ HTTP 403 不是自动“换题”信号：先对同一候选仅重试一次，�
 
 只有完整来源预检已经覆盖“拟用片段的画面与自然语音”后，才锁定第一个合格 `youtube_id` 并进入制作；本次运行最终仍只允许制作一条成片。若尚未开始时间轴、翻译、词汇富化或正式渲染，却发现拟用片段含不适画面、语音不连续或不满足时长，说明来源预检出现假阳性：立即撤销该候选的暂定资格、记录 `youtube_id` 和原因，并继续预检剩余候选；这不属于换题重做。只有开始时间轴、翻译、词汇富化或正式渲染后，才构成不可切换的制作承诺。按 make-english-world-short 技能和 production-contract 完整制作：自然完整句收尾；逐词红线；普通阅读屏至少 8 个微笔记；最后一屏按可见英文词数采用现有梯度（不超过 12 词为 0 条、13–24 词为 3 条、25–40 词为 5 条、41 词以上为 8 条）；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。由 YouTube json3 等密集自动字幕生成逐词时间轴时，必须先按绝对起点排序并保证每个 `word.end <= next_word.start`；不得用固定最短词长覆盖下一词起点，词汇富化前必须先通过 `StudyCardContent.from_mapping` 的单调时间轴校验。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。若制作承诺后在时间轴、渲染或成片质检阶段失败，必须写入准确失败请求并立即结束；不得为了补词卡或优化文案而换题。
 
+时间轴完成后，必须明确把 json3 的绝对 `tStartMs` 转成 `absolute_time - source_start` 的相对 `words.start/end`，不得把绝对 `spoken_end` 直接写入相对时间轴；`scripts/render_study_card.py` 的渲染入口会校验 `caption_artifact` 的下一字幕边界。渲染后必须使用项目 venv 执行 `scripts/validate_study_card_audio.py --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`，该命令会提取 16kHz 单声道音频并用本地 Whisper 检查末词完整性和下一词泄漏；只有报告 `state=PASS` 才能写入成功交付请求。
+
 质检通过后，必须运行以下命令原子写入交付请求：
-PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>'
+PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>' --audio-qa-report '<绝对qa/final_audio_qa.json路径>'
 若当天无合格候选或制作/质检失败，必须运行：
 PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '今日英语世界短视频' --failure '<准确原因>'
 
@@ -430,6 +433,30 @@ def _read_delivery_request(path: Path, project_root: Path) -> dict:
         if not candidate.is_file() or candidate.stat().st_size <= 0:
             raise ValueError(f"交付请求 {field} 不存在或为空")
         artifacts[field] = str(candidate)
+    audio_qa_ref = str(payload.get("audio_qa_report") or "").strip()
+    if not audio_qa_ref:
+        raise ValueError("交付请求缺少音频 QA 报告")
+    audio_qa_report = Path(audio_qa_ref).expanduser().resolve()
+    try:
+        audio_qa_report.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("交付请求 audio_qa_report 不在项目目录内") from exc
+    if not audio_qa_report.is_file() or audio_qa_report.stat().st_size <= 0:
+        raise ValueError("交付请求 audio_qa_report 不存在或为空")
+    try:
+        audio_qa = json.loads(audio_qa_report.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("交付请求 audio_qa_report 不可读取") from exc
+    if not isinstance(audio_qa, dict) or audio_qa.get("state") != "PASS" or audio_qa.get("passed") is not True:
+        raise ValueError("交付请求的音频 QA 未通过")
+    for field in ("mp4", "manifest"):
+        try:
+            report_artifact = Path(str(audio_qa[field])).expanduser().resolve()
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("交付请求的音频 QA 缺少对应产物绑定") from exc
+        if report_artifact != Path(str(artifacts[field])).resolve():
+            raise ValueError(f"交付请求的音频 QA 与当前 {field} 产物不匹配")
+    artifacts["audio_qa_report"] = str(audio_qa_report)
     return artifacts
 
 

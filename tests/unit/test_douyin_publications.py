@@ -13,15 +13,45 @@
 | 1.7.0 | 2026-08-30 | Codex | 覆盖视频号未确认造成的抖音 shadow 候选且保证不创建任务 |
 | 1.8.0 | 2026-08-30 | Codex | 覆盖同阶段 UI 连续失败跨进程累计、录屏阈值和证据化清除审计 |
 | 1.9.0 | 2026-08-30 | Codex | 覆盖抖音 NEW 门禁开关双模式且解耦模式不复活任何历史账本 |
+| 2.0.0 | 2026-09-01 | Codex | 覆盖 HISTORY 在无日额度时仍可安全逐条领取，保留不可重传终态。 |
+| 2.0.2 | 2026-09-02 | Codex | 覆盖通用、英语世界和配音投稿的数据库签发一次性浏览器启动凭据，拒绝来源伪造与重复启动。 |
+| 2.0.3 | 2026-09-02 | Codex | 覆盖启动凭据一旦绑定完整投稿包即不可改写，替换标题、文案或封面都会在浏览器前拒绝。 |
+| 2.0.4 | 2026-09-02 | Codex | 覆盖领取后浏览器未启动的票据仅可超时安全取消；已启动记录绝不自动回收或重传。 |
+| 2.0.5 | 2026-09-02 | Codex | 覆盖已知子进程在浏览器前失败时可立即撤销通用票据，避免超时误卡 UNCERTAIN。 |
+| 2.0.5 | 2026-09-02 | Codex | 覆盖 NEW 候选查询拒绝无时间或无批次边界的调用，防止未来绕过巡航守卫扫描历史。 |
 """
 
+import hashlib
 from pathlib import Path
 
+import pytest
+
+from video_processing.core.douyin_launch_context import douyin_submission_payload_sha256
 from video_processing.db.database import PipelineDB
 
 
 def _add_video(db: PipelineDB, youtube_id: str) -> None:
     assert db.add_video(youtube_id, "测试视频", "test-channel", score=80)
+
+
+@pytest.mark.parametrize(
+    ("lookback_hours", "limit"),
+    ((None, 10), (24, None)),
+)
+def test_douyin_new_candidate_query_rejects_unbounded_discovery(
+    tmp_path: Path,
+    lookback_hours: int | None,
+    limit: int | None,
+):
+    """NEW 查询没有有限的时间和批次边界时，必须在 DAL 处 fail closed。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+
+    with pytest.raises(ValueError):
+        db.get_unqueued_douyin_new_videos(
+            lookback_hours=lookback_hours,
+            limit=limit,
+            require_wechat_public_confirmation=False,
+        )
 
 
 def test_douyin_ledger_only_deduplicates_assets_after_published(tmp_path: Path):
@@ -92,6 +122,23 @@ def test_douyin_history_claim_respects_daily_limit_and_uncertain_never_requeues(
     assert db.update_douyin_publication_state(claimed["id"], "UNCERTAIN", error_message="页面关闭前未确认")
     assert db.claim_next_douyin_history_publication(daily_limit=2) is not None
     assert db.claim_next_douyin_history_publication(daily_limit=2) is None
+
+
+def test_douyin_history_claim_has_no_daily_cap_when_limit_is_none(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "history-one")
+    _add_video(db, "history-two")
+    db.create_douyin_publication("history-one", "b" * 64, "/tmp/one.mp4", source_kind="HISTORY")
+    db.create_douyin_publication("history-two", "c" * 64, "/tmp/two.mp4", source_kind="HISTORY")
+
+    first = db.claim_next_douyin_publication("HISTORY", daily_limit=None)
+    assert first is not None
+    assert db.update_douyin_publication_state(first["id"], "UNDER_REVIEW")
+
+    second = db.claim_next_douyin_publication("HISTORY", daily_limit=None)
+
+    assert second is not None
+    assert second["youtube_id"] == "history-two"
 
 
 def test_douyin_history_candidates_only_include_wechat_published_and_non_blacklisted(tmp_path: Path):
@@ -201,6 +248,332 @@ def test_douyin_new_video_claim_is_not_limited_by_historical_daily_quota(tmp_pat
     assert claimed is not None
     assert claimed["id"] == publication["id"]
     assert claimed["youtube_id"] == "new-video"
+
+
+def test_new_douyin_claim_issues_one_time_browser_ticket_and_history_cannot_consume_it(tmp_path: Path):
+    """浏览器启动能力必须来自 NEW 领取账本，而不是 CLI 的 source_kind 文本。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "new-video")
+    _add_video(db, "history-video")
+    new_video = tmp_path / "new.mp4"
+    history_video = tmp_path / "history.mp4"
+    new_video.write_bytes(b"new-video")
+    history_video.write_bytes(b"history-video")
+    new_copy = tmp_path / "new-copy.txt"
+    new_title = tmp_path / "new-title.txt"
+    new_cover = tmp_path / "new-cover.jpg"
+    history_copy = tmp_path / "history-copy.txt"
+    history_title = tmp_path / "history-title.txt"
+    history_cover = tmp_path / "history-cover.jpg"
+    for path, content in (
+        (new_copy, b"new-copy"), (new_title, b"new-title"), (new_cover, b"new-cover"),
+        (history_copy, b"history-copy"), (history_title, b"history-title"), (history_cover, b"history-cover"),
+    ):
+        path.write_bytes(content)
+    new_digest = hashlib.sha256(new_video.read_bytes()).hexdigest()
+    history_digest = hashlib.sha256(history_video.read_bytes()).hexdigest()
+    new_publication = db.create_douyin_publication(
+        "new-video", new_digest, str(new_video.resolve()), source_kind="NEW",
+    )
+    history_publication = db.create_douyin_publication(
+        "history-video", history_digest, str(history_video.resolve()), source_kind="HISTORY",
+    )
+
+    new_claim = db.claim_douyin_publication(new_publication["id"])
+    history_claim = db.claim_douyin_publication(history_publication["id"])
+
+    assert new_claim is not None
+    assert history_claim is not None
+    new_payload = douyin_submission_payload_sha256(
+        video_path=new_video, copy_path=new_copy, title_path=new_title, cover_path=new_cover,
+    )
+    history_payload = douyin_submission_payload_sha256(
+        video_path=history_video, copy_path=history_copy, title_path=history_title, cover_path=history_cover,
+    )
+    assert new_payload and history_payload
+    assert db.bind_douyin_browser_launch_ticket_payload(
+        new_claim["_douyin_launch_ticket_id"],
+        new_claim["_douyin_launch_token"],
+        payload_sha256=new_payload,
+    )
+    assert db.bind_douyin_browser_launch_ticket_payload(
+        history_claim["_douyin_launch_ticket_id"],
+        history_claim["_douyin_launch_token"],
+        payload_sha256=history_payload,
+    )
+    history_title.write_bytes(b"history-title-tampered")
+    tampered_history_payload = douyin_submission_payload_sha256(
+        video_path=history_video,
+        copy_path=history_copy,
+        title_path=history_title,
+        cover_path=history_cover,
+    )
+    assert tampered_history_payload and tampered_history_payload != history_payload
+    # 签发后既不能把 ticket 重绑到新的包，也不能携带替换后的包启动浏览器。
+    assert not db.bind_douyin_browser_launch_ticket_payload(
+        history_claim["_douyin_launch_ticket_id"],
+        history_claim["_douyin_launch_token"],
+        payload_sha256=tampered_history_payload,
+    )
+    assert not db.begin_douyin_browser_launch(
+        history_claim["_douyin_launch_ticket_id"],
+        history_claim["_douyin_launch_token"],
+        video_path=str(history_video.resolve()),
+        asset_sha256=history_digest,
+        payload_sha256=tampered_history_payload,
+        require_new_source=False,
+    )
+    assert db.begin_douyin_browser_launch(
+        new_claim["_douyin_launch_ticket_id"],
+        new_claim["_douyin_launch_token"],
+        video_path=str(new_video.resolve()),
+        asset_sha256=new_digest,
+        payload_sha256=new_payload,
+        require_new_source=True,
+    )
+    # 一次性 ticket 不可重放；没有可执行的第二次浏览器启动。
+    assert not db.begin_douyin_browser_launch(
+        new_claim["_douyin_launch_ticket_id"],
+        new_claim["_douyin_launch_token"],
+        video_path=str(new_video.resolve()),
+        asset_sha256=new_digest,
+        payload_sha256=new_payload,
+        require_new_source=True,
+    )
+    # HISTORY 即使持有其自身签发的 ticket，也绝不能跨过纯管理页熔断。
+    assert not db.begin_douyin_browser_launch(
+        history_claim["_douyin_launch_ticket_id"],
+        history_claim["_douyin_launch_token"],
+        video_path=str(history_video.resolve()),
+        asset_sha256=history_digest,
+        payload_sha256=history_payload,
+        require_new_source=True,
+    )
+
+
+def test_stale_unstarted_generic_douyin_ticket_is_canceled_but_started_ticket_is_preserved(
+    tmp_path: Path,
+):
+    """父进程在打开浏览器前消失可恢复；任何已开始记录仍必须留在不确定边界。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    for youtube_id in ("prelaunch-generic", "started-generic"):
+        _add_video(db, youtube_id)
+    fixtures = []
+    for stem in ("prelaunch", "started"):
+        video = tmp_path / f"{stem}.mp4"
+        copy = tmp_path / f"{stem}-copy.txt"
+        title = tmp_path / f"{stem}-title.txt"
+        cover = tmp_path / f"{stem}-cover.jpg"
+        for path, content in (
+            (video, f"{stem}-video".encode()),
+            (copy, b"copy"),
+            (title, b"title"),
+            (cover, b"cover"),
+        ):
+            path.write_bytes(content)
+        digest = hashlib.sha256(video.read_bytes()).hexdigest()
+        publication = db.create_douyin_publication(
+            f"{stem}-generic", digest, str(video.resolve()), source_kind="NEW",
+        )
+        claim = db.claim_douyin_publication(publication["id"])
+        payload = douyin_submission_payload_sha256(
+            video_path=video, copy_path=copy, title_path=title, cover_path=cover,
+        )
+        assert claim and payload
+        assert db.bind_douyin_browser_launch_ticket_payload(
+            claim["_douyin_launch_ticket_id"], claim["_douyin_launch_token"], payload_sha256=payload,
+        )
+        fixtures.append((video, digest, payload, publication, claim))
+
+    started_video, started_digest, started_payload, _, started_claim = fixtures[1]
+    assert db.begin_douyin_browser_launch(
+        started_claim["_douyin_launch_ticket_id"],
+        started_claim["_douyin_launch_token"],
+        video_path=str(started_video.resolve()),
+        asset_sha256=started_digest,
+        payload_sha256=started_payload,
+        require_new_source=True,
+    )
+
+    assert db.cancel_stale_generic_douyin_prelaunch_attempts(
+        min_age_seconds=0,
+        reason="父进程已退出，浏览器从未启动。",
+    ) == 1
+    prelaunch_video, prelaunch_digest, prelaunch_payload, prelaunch_publication, prelaunch_claim = fixtures[0]
+    canceled = db.get_douyin_publication_by_id(prelaunch_publication["id"])
+    assert canceled["state"] == "CANCELED"
+    assert "浏览器从未启动" in str(canceled["last_error_message"])
+    assert not db.begin_douyin_browser_launch(
+        prelaunch_claim["_douyin_launch_ticket_id"],
+        prelaunch_claim["_douyin_launch_token"],
+        video_path=str(prelaunch_video.resolve()),
+        asset_sha256=prelaunch_digest,
+        payload_sha256=prelaunch_payload,
+        require_new_source=True,
+    )
+    assert db.get_douyin_publication_by_id(fixtures[1][3]["id"])["state"] == "UPLOADING"
+    assert db.cancel_stale_generic_douyin_prelaunch_attempts(
+        min_age_seconds=0,
+        reason="重复回收不得改变已启动记录。",
+    ) == 0
+
+
+def test_known_generic_prelaunch_failure_cancels_ticket_before_marking_submission_uncertain(
+    tmp_path: Path,
+):
+    """父进程掌握 ticket 时无需等 TTL；只要未启动即可精确取消，而非错误保留 UNCERTAIN。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "known-prelaunch")
+    video = tmp_path / "known-prelaunch.mp4"
+    copy = tmp_path / "known-prelaunch-copy.txt"
+    title = tmp_path / "known-prelaunch-title.txt"
+    cover = tmp_path / "known-prelaunch-cover.jpg"
+    for path, content in ((video, b"video"), (copy, b"copy"), (title, b"title"), (cover, b"cover")):
+        path.write_bytes(content)
+    digest = hashlib.sha256(video.read_bytes()).hexdigest()
+    payload = douyin_submission_payload_sha256(
+        video_path=video, copy_path=copy, title_path=title, cover_path=cover,
+    )
+    assert payload
+    publication = db.create_douyin_publication(
+        "known-prelaunch", digest, str(video.resolve()), source_kind="NEW",
+    )
+    claim = db.claim_douyin_publication(publication["id"])
+    assert claim
+    assert db.bind_douyin_browser_launch_ticket_payload(
+        claim["_douyin_launch_ticket_id"], claim["_douyin_launch_token"], payload_sha256=payload,
+    )
+
+    assert db.cancel_douyin_publication_pre_launch_failure(
+        publication["id"],
+        ticket_id=claim["_douyin_launch_ticket_id"],
+        reason="子进程在进入上传器前超时。",
+    )
+    canceled = db.get_douyin_publication_by_id(publication["id"])
+    assert canceled["state"] == "CANCELED"
+    assert "浏览器未启动" in str(canceled["last_error_message"])
+    assert not db.begin_douyin_browser_launch(
+        claim["_douyin_launch_ticket_id"],
+        claim["_douyin_launch_token"],
+        video_path=str(video.resolve()),
+        asset_sha256=digest,
+        payload_sha256=payload,
+        require_new_source=True,
+    )
+
+
+def test_dubbing_douyin_launch_ticket_claims_once_and_completes_without_double_count(tmp_path: Path):
+    """配音必须先原子领取平台账本；启动/完成同一次尝试不能被记成两次上传。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "dubbing-source")
+    db.update_video_status("dubbing-source", "PUBLISHED")
+    video = tmp_path / "dubbing.mp4"
+    video.write_bytes(b"dubbing-video")
+    digest = hashlib.sha256(video.read_bytes()).hexdigest()
+    copy = tmp_path / "copy.txt"
+    title = tmp_path / "title.txt"
+    cover = tmp_path / "cover.jpg"
+    for path, content in ((copy, b"copy"), (title, b"title"), (cover, b"cover")):
+        path.write_bytes(content)
+    payload = douyin_submission_payload_sha256(
+        video_path=video, copy_path=copy, title_path=title, cover_path=cover,
+    )
+    assert payload
+    job = db.create_dubbing_job(
+        "dubbing-source",
+        model="test-model",
+        voice_id="test-voice",
+        requested_platforms=["douyin"],
+    )
+    db.update_dubbing_job(
+        job["id"],
+        "PUBLISHING",
+        output_video_path=str(video.resolve()),
+        asset_sha256=digest,
+    )
+
+    claim = db.claim_dubbing_douyin_publication_launch(job["id"], payload_sha256=payload)
+
+    assert claim is not None
+    assert claim["state"] == "UPLOADING"
+    assert claim["attempt_count"] == 1
+    assert not db.begin_douyin_browser_launch(
+        claim["_douyin_launch_ticket_id"],
+        "wrong-token",
+        video_path=str(video.resolve()),
+        asset_sha256=digest,
+        payload_sha256=payload,
+        require_new_source=True,
+    )
+    assert db.begin_douyin_browser_launch(
+        claim["_douyin_launch_ticket_id"],
+        claim["_douyin_launch_token"],
+        video_path=str(video.resolve()),
+        asset_sha256=digest,
+        payload_sha256=payload,
+        require_new_source=True,
+    )
+    completed = db.complete_dubbing_douyin_publication_launch(
+        claim["id"],
+        "CANCELED",
+        error_message="发布前闸门未通过",
+    )
+
+    assert completed["state"] == "CANCELED"
+    assert completed["attempt_count"] == 1
+    assert not db.begin_douyin_browser_launch(
+        claim["_douyin_launch_ticket_id"],
+        claim["_douyin_launch_token"],
+        video_path=str(video.resolve()),
+        asset_sha256=digest,
+        payload_sha256=payload,
+        require_new_source=True,
+    )
+
+
+def test_stale_unstarted_dubbing_douyin_ticket_is_canceled_without_touching_started_launch(
+    tmp_path: Path,
+):
+    """配音同样只回收可证明未打开浏览器的领取，保留原尝试审计。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "dubbing-prelaunch")
+    db.update_video_status("dubbing-prelaunch", "PUBLISHED")
+    video = tmp_path / "dubbing-prelaunch.mp4"
+    copy = tmp_path / "dubbing-prelaunch-copy.txt"
+    title = tmp_path / "dubbing-prelaunch-title.txt"
+    cover = tmp_path / "dubbing-prelaunch-cover.jpg"
+    for path, content in ((video, b"video"), (copy, b"copy"), (title, b"title"), (cover, b"cover")):
+        path.write_bytes(content)
+    digest = hashlib.sha256(video.read_bytes()).hexdigest()
+    payload = douyin_submission_payload_sha256(
+        video_path=video, copy_path=copy, title_path=title, cover_path=cover,
+    )
+    assert payload
+    job = db.create_dubbing_job(
+        "dubbing-prelaunch", model="test-model", voice_id="test-voice", requested_platforms=["douyin"],
+    )
+    db.update_dubbing_job(
+        job["id"], "PUBLISHING", output_video_path=str(video.resolve()), asset_sha256=digest,
+    )
+    claim = db.claim_dubbing_douyin_publication_launch(job["id"], payload_sha256=payload)
+    assert claim
+
+    assert db.cancel_stale_dubbing_douyin_prelaunch_attempts(
+        min_age_seconds=0,
+        reason="人工投稿进程在浏览器启动前中断。",
+    ) == 1
+    publications = db.get_dubbing_publications(job["id"])
+    assert len(publications) == 1
+    assert publications[0]["state"] == "CANCELED"
+    assert "浏览器启动前" in str(publications[0]["last_error_message"])
+    assert not db.begin_douyin_browser_launch(
+        claim["_douyin_launch_ticket_id"],
+        claim["_douyin_launch_token"],
+        video_path=str(video.resolve()),
+        asset_sha256=digest,
+        payload_sha256=payload,
+        require_new_source=True,
+    )
 
 
 def test_douyin_new_video_claim_respects_its_own_daily_quota(tmp_path: Path):

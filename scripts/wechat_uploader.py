@@ -56,6 +56,8 @@
 | 4.9.0   | 2026-08-27 | Codex                               | 作品管理 SPA 的 networkidle 超时改为非致命，改按业务路由及卡片证据判定页面可用。 |
 | 5.0.0   | 2026-08-27 | Codex                               | 读取作品管理原生 post_list 响应，以同会话唯一新增 objectId 绑定，修复短标题不在列表响应中的漏绑定。 |
 | 5.1.0   | 2026-08-30 | Codex                               | 已绑定原生 ID 的只读回查在 SPA 卡片短暂未稳定时做一次有界重试；不可判定仍禁止重传。 |
+| 5.2.0   | 2026-08-31 | Codex                               | 回查拒绝词只接受明确平台状态短语，避免标题或正文中的“不可见/违规”等内容词被误判为审核驳回。 |
+| 5.3.0   | 2026-08-31 | Codex                               | 管理页状态只从独立状态行或具名状态标签读取；标题/正文中的发布、审核等普通词一律保持未判定。 |
 """
 
 import os
@@ -406,14 +408,36 @@ def capture_submission_identity_baseline(context, page) -> tuple[dict[str, dict[
     return baseline, True
 
 
+def _management_status_candidates(card_text: str) -> set[str]:
+    """保留卡片的行边界，只组合相邻短状态行，绝不把整段正文当状态。"""
+    lines = [re.sub(r"\s+", "", line) for line in (card_text or "").splitlines()]
+    lines = [line for line in lines if line]
+    candidates = set(lines)
+    candidates.update(left + right for left, right in zip(lines, lines[1:]))
+    return candidates
+
+
+def _has_labeled_management_status(candidates: set[str], markers: tuple[str, ...]) -> bool:
+    """接受独立状态词或明确的“状态：…”标签，不从标题/正文子串推断。"""
+    prefixes = ("状态：", "当前状态：", "作品状态：", "审核状态：")
+    return any(
+        candidate in markers
+        or any(candidate.startswith(prefix + marker) for prefix in prefixes for marker in markers)
+        for candidate in candidates
+    )
+
+
 def classify_management_publication(card_text: str) -> str:
     """将作品管理页卡片文字归一到可终结的平台状态。"""
-    text = re.sub(r"\s+", "", card_text or "")
-    if any(marker in text for marker in ("审核未通过", "审核不通过", "未通过", "已驳回", "违规", "已删除", "不可见")):
+    candidates = _management_status_candidates(card_text)
+    rejection_markers = ("审核未通过", "审核不通过", "审核驳回", "已驳回")
+    if any(candidate.startswith(marker) for candidate in candidates for marker in rejection_markers) or _has_labeled_management_status(
+        candidates, ("作品已删除", "视频已删除", "内容已删除", "不可见"),
+    ):
         return MANAGEMENT_REJECTED
-    if any(marker in text for marker in ("已发表", "发表成功", "已发布", "公开可见")):
+    if _has_labeled_management_status(candidates, ("已发表", "发表成功", "已发布", "公开可见")):
         return MANAGEMENT_PUBLISHED
-    if any(marker in text for marker in ("审核中", "审核通过", "处理中", "待审核", "转码中")):
+    if _has_labeled_management_status(candidates, ("审核中", "原创审核中", "审核通过", "处理中", "待审核", "转码中")):
         return MANAGEMENT_UNDER_REVIEW
     return MANAGEMENT_UNCERTAIN
 

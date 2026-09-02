@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.1 | 2026-06-08 | Gemini_3.5_Flash_planning | 修复 test_translation_html_filtering 未 mock 阿里云翻译方法导致真实调用 API 断言失败的问题，标注 # [Gemini_3.5_Flash_planning] |
 | 1.0.2 | 2026-06-08 | Claude_Sonnet_4.6_planning | 适配 v1.11.0 caption_processor 重构：_translate_segments_aliyun 已删除，改 mock translation_helper.translate_batch_aliyun |
+| 1.0.3 | 2026-08-31 | Codex | 移除对字幕模块旧全局 GoogleTranslator 导入的测试耦合。 |
 """
 import os
 import sqlite3
@@ -100,15 +101,14 @@ def test_bot_config_fail_closed():
 # ==============================================================================
 # Round 5: 翻译引擎异常拦截验证 (Regex HTML filter)
 # ==============================================================================
-@patch('src.video_processing.processors.caption_processor.GoogleTranslator')
-def test_translation_html_filtering(mock_translator_class, tmp_path):
+def test_translation_html_filtering(tmp_path):
     """Test that HTML/Captcha responses from Google Translate are filtered out."""
     fake_mp4 = tmp_path / "fake.mp4"
     fake_mp4.touch()
     processor = AutoCaptionProcessor(str(fake_mp4))
     
     # Mock translator to return HTML garbage
-    mock_instance = mock_translator_class.return_value
+    mock_instance = MagicMock()
     mock_instance.translate_batch.return_value = [
         "正常翻译", 
         "<!DOCTYPE html><html><body>Error 502</body></html>",

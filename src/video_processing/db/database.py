@@ -6,7 +6,13 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.58.6  | 2026-09-02 | Codex                               | 强制抖音 NEW 候选查询使用正数时间与批次边界，杜绝任意调用者绕过巡航范围扫描历史。 |
+| 3.58.5  | 2026-09-02 | Codex                               | 为未启动的一次性抖音浏览器凭据增加超时取消审计；已启动尝试保持不可自动重传。       |
+| 3.58.4  | 2026-09-02 | Codex                               | 移除旧进程按 UPLOADING 推断投稿包的回退；无完整凭据的遗留动作一律安全停止。       |
+| 3.58.3  | 2026-09-02 | Codex                               | 新增抖音一次性浏览器启动凭据，令跨进程投稿只消费已领取且不可重放的账本上下文。 |
 | 3.58.2  | 2026-09-02 | Codex                               | 提供英语世界同源审核/投稿保护来源的只读查询，供日更在制作前排除重复来源。       |
+| 3.58.0  | 2026-09-01 | Codex                               | 抖音发布领取可显式取消日额度和候选时间/批次上限；不可重传账本终态不变。 |
+| 3.57.1  | 2026-08-31 | Codex                               | 英语世界抖音取消账本可凭作品管理页已发布证据受控对账；失败尝试保持不可变。 |
 | 3.57.0  | 2026-08-30 | Codex                               | 新增英语世界独立抖音投稿与尝试账本，并与通用 NEW 共用每日领取额度。 |
 | 3.56.1  | 2026-08-30 | Codex                               | 英语世界平台原生 ID 只允许首次绑定或同 ID 幂等写入，拒绝覆盖审核项和尝试证据锚点。 |
 | 3.56.0  | 2026-08-30 | Codex                               | 英语世界投稿账本持久化视频号原生 ID，并提供节流的精确作品管理回查状态。 |
@@ -127,6 +133,9 @@ import json
 import logging
 import datetime  # [Claude_Opus_4.6_Thinking_planning] 提升为 top-level import，用于高赞时间窗口计算
 import time
+import hashlib
+import hmac
+import secrets
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Collection, List, Dict, Any, Optional, Sequence
@@ -1632,6 +1641,49 @@ class PipelineDB:
                     PRIMARY KEY(platform, stage)
                 )
             ''')
+            # 低层上传器不能信任 CLI 的来源文本。每次自动投稿都由上层账本签发一个
+            # 一次性启动凭据；上传器在打开浏览器前原子消费它，避免 HISTORY 伪装成 NEW
+            # 或同一领取在并发/重放时重复上传。旧进程无凭据时宁可停止，绝不从未
+            # 绑定的 UPLOADING 账本推断可发布的投稿包。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS douyin_browser_launch_tickets (
+                    ticket_id TEXT PRIMARY KEY,
+                    source_type TEXT NOT NULL
+                        CHECK(source_type IN ('GENERIC', 'ENGLISH_WORLD', 'DUBBING')),
+                    source_ref TEXT NOT NULL,
+                    video_path TEXT NOT NULL,
+                    asset_sha256 TEXT NOT NULL,
+                    payload_sha256 TEXT NOT NULL,
+                    action_scope TEXT NOT NULL DEFAULT 'publish'
+                        CHECK(action_scope IN ('publish')),
+                    token_sha256 TEXT DEFAULT NULL,
+                    issued_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    launch_started_at TIMESTAMP DEFAULT NULL,
+                    prelaunch_canceled_at TIMESTAMP DEFAULT NULL,
+                    prelaunch_cancel_reason TEXT DEFAULT NULL,
+                    UNIQUE(source_type, source_ref)
+                )
+            ''')
+            cursor.execute("PRAGMA table_info(douyin_browser_launch_tickets)")
+            douyin_launch_ticket_columns = {row[1] for row in cursor.fetchall()}
+            for column_name, column_type in {
+                "payload_sha256": "TEXT DEFAULT NULL",
+                "action_scope": "TEXT DEFAULT NULL",
+                "prelaunch_canceled_at": "TIMESTAMP DEFAULT NULL",
+                "prelaunch_cancel_reason": "TEXT DEFAULT NULL",
+            }.items():
+                if column_name not in douyin_launch_ticket_columns:
+                    cursor.execute(
+                        f"ALTER TABLE douyin_browser_launch_tickets ADD COLUMN {column_name} {column_type}"
+                    )
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_douyin_browser_launch_tickets_pending
+                ON douyin_browser_launch_tickets(source_type, source_ref, launch_started_at)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_douyin_browser_launch_tickets_prelaunch_recovery
+                ON douyin_browser_launch_tickets(source_type, launch_started_at, prelaunch_canceled_at, issued_at)
+            ''')
             
             conn.commit()
 
@@ -1949,7 +2001,6 @@ class PipelineDB:
                     payload["completion_rate"], (source or "manual")[:80], self._json_blob(raw),
                 ),
             )
-            conn.commit()
             row = conn.execute(
                 """SELECT m.*, pv.youtube_id, pv.slice_index
                    FROM published_video_daily_metrics m
@@ -6165,13 +6216,12 @@ class PipelineDB:
             return [dict(row) for row in rows]
 
     def get_next_english_world_douyin_sync_candidate(self) -> Optional[Dict[str, Any]]:
-        """读取近 24 小时视频号已受理且抖音建账遗漏的英语世界审核项。"""
+        """读取视频号已受理且抖音建账遗漏的英语世界审核项。"""
         with self.get_connection() as conn:
             row = conn.execute(
                 """SELECT review.* FROM english_world_review_items review
                    WHERE review.state = 'UNDER_REVIEW'
                      AND review.platform_post_id IS NOT NULL AND review.platform_post_id != ''
-                     AND review.submission_finished_at >= datetime('now', '-24 hours')
                      AND NOT EXISTS (
                          SELECT 1 FROM english_world_douyin_publications publication
                          WHERE publication.review_id = review.id
@@ -6255,31 +6305,32 @@ class PipelineDB:
             return self.get_english_world_douyin_publication(clean_review_id) or {}
 
     def claim_english_world_douyin_publication(
-        self, review_id: str, *, daily_limit: int, evidence_dir: str,
+        self, review_id: str, *, daily_limit: Optional[int], evidence_dir: str,
     ) -> Optional[Dict[str, Any]]:
-        """原子领取一条英语世界抖音同步，并与通用 NEW 共用北京自然日额度。"""
+        """原子领取一条英语世界抖音同步；配置额度时才与通用 NEW 共享计数。"""
         clean_review_id = (review_id or "").strip()
-        safe_limit = int(daily_limit)
-        if safe_limit < 1:
+        safe_limit = int(daily_limit) if daily_limit is not None else None
+        if safe_limit is not None and safe_limit < 1:
             return None
         with self.get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            generic_used = conn.execute(
-                """SELECT COUNT(*) AS count FROM douyin_publications
-                   WHERE source_kind = 'NEW'
-                     AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
-                     AND claimed_at IS NOT NULL
-                     AND date(claimed_at, 'localtime') = date('now', 'localtime')"""
-            ).fetchone()["count"]
-            english_world_used = conn.execute(
-                """SELECT COUNT(*) AS count FROM english_world_douyin_publications
-                   WHERE state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
-                     AND claimed_at IS NOT NULL
-                     AND date(claimed_at, 'localtime') = date('now', 'localtime')"""
-            ).fetchone()["count"]
-            if int(generic_used) + int(english_world_used) >= safe_limit:
-                conn.commit()
-                return None
+            if safe_limit is not None:
+                generic_used = conn.execute(
+                    """SELECT COUNT(*) AS count FROM douyin_publications
+                       WHERE source_kind = 'NEW'
+                         AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                         AND claimed_at IS NOT NULL
+                         AND date(claimed_at, 'localtime') = date('now', 'localtime')"""
+                ).fetchone()["count"]
+                english_world_used = conn.execute(
+                    """SELECT COUNT(*) AS count FROM english_world_douyin_publications
+                       WHERE state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                         AND claimed_at IS NOT NULL
+                         AND date(claimed_at, 'localtime') = date('now', 'localtime')"""
+                ).fetchone()["count"]
+                if int(generic_used) + int(english_world_used) >= safe_limit:
+                    conn.commit()
+                    return None
             cursor = conn.execute(
                 """UPDATE english_world_douyin_publications
                    SET state = 'SUBMITTING', attempt_count = attempt_count + 1,
@@ -6305,9 +6356,26 @@ class PipelineDB:
                    ) VALUES (?, ?, ?, ?)""",
                 (attempt_id, clean_review_id, row["artifact_sha256"], (evidence_dir or "").strip() or None),
             )
+            ticket_source = conn.execute(
+                """SELECT publication.artifact_sha256, review.mp4_path
+                   FROM english_world_douyin_publications publication
+                   JOIN english_world_review_items review ON review.id = publication.review_id
+                   WHERE publication.review_id = ? AND publication.state = 'SUBMITTING'""",
+                (clean_review_id,),
+            ).fetchone()
+            if not ticket_source:
+                conn.rollback()
+                return None
+            ticket = self._insert_douyin_browser_launch_ticket(
+                conn,
+                source_type="ENGLISH_WORLD",
+                source_ref=attempt_id,
+                video_path=str(ticket_source["mp4_path"]),
+                asset_sha256=str(ticket_source["artifact_sha256"]),
+            )
             conn.commit()
             claimed = self.get_english_world_douyin_publication(clean_review_id)
-            return {**(claimed or {}), "_attempt_id": attempt_id}
+            return {**(claimed or {}), "_attempt_id": attempt_id, **ticket}
 
     def complete_english_world_douyin_publication(
         self,
@@ -6357,6 +6425,166 @@ class PipelineDB:
             conn.commit()
             return self.get_english_world_douyin_publication(clean_review_id) or {}
 
+    def _cancel_english_world_douyin_pre_launch_failure_in_transaction(
+        self,
+        conn,
+        *,
+        review_id: str,
+        attempt_id: str,
+        ticket_id: str,
+        evidence_dir: str,
+        message: str,
+        uploader_exit_code: Optional[int],
+        stale_after_seconds: Optional[int] = None,
+    ) -> bool:
+        """只在当前英语世界票据从未启动时原子收口，调用方必须已持有写事务。"""
+        stale_clause = ""
+        ticket_params: list[Any] = [ticket_id, attempt_id, review_id, review_id]
+        if stale_after_seconds is not None:
+            stale_clause = " AND datetime(ticket.issued_at) <= datetime('now', ?)"
+            ticket_params.append(f"-{stale_after_seconds} seconds")
+        ticket = conn.execute(
+            f'''SELECT ticket.ticket_id
+                FROM douyin_browser_launch_tickets ticket
+                JOIN english_world_douyin_attempts attempt
+                  ON attempt.attempt_id = ticket.source_ref
+                JOIN english_world_douyin_publications publication
+                  ON publication.review_id = attempt.review_id
+                WHERE ticket.ticket_id = ?
+                  AND ticket.source_type = 'ENGLISH_WORLD'
+                  AND ticket.action_scope = 'publish'
+                  AND ticket.source_ref = ?
+                  AND ticket.launch_started_at IS NULL
+                  AND ticket.prelaunch_canceled_at IS NULL
+                  AND attempt.review_id = ? AND attempt.state = 'SUBMITTING'
+                  AND publication.review_id = ? AND publication.state = 'SUBMITTING'
+                  {stale_clause}''',
+            ticket_params,
+        ).fetchone()
+        if not ticket:
+            return False
+        if not self._cancel_unstarted_douyin_browser_ticket(conn, ticket_id, message):
+            return False
+        publication_cursor = conn.execute(
+            '''UPDATE english_world_douyin_publications
+               SET state = 'CANCELED', evidence_dir = ?, last_error_message = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE review_id = ? AND state = 'SUBMITTING' ''',
+            (evidence_dir or None, message, review_id),
+        )
+        if publication_cursor.rowcount != 1:
+            return False
+        attempt_cursor = conn.execute(
+            '''UPDATE english_world_douyin_attempts
+               SET state = 'CANCELED', uploader_exit_code = ?, evidence_dir = ?,
+                   error_message = ?, finished_at = CURRENT_TIMESTAMP
+               WHERE attempt_id = ? AND review_id = ? AND state = 'SUBMITTING' ''',
+            (uploader_exit_code, evidence_dir or None, message, attempt_id, review_id),
+        )
+        return attempt_cursor.rowcount == 1
+
+    def cancel_english_world_douyin_pre_launch_failure(
+        self,
+        review_id: str,
+        *,
+        attempt_id: str,
+        ticket_id: str,
+        evidence_dir: str,
+        message: str,
+    ) -> Optional[Dict[str, Any]]:
+        """收口本进程已确认未启动浏览器的英语世界投稿失败。
+
+        票据、尝试和发布账本必须仍是同一个 ``SUBMITTING`` 领取，且 ticket 未写入
+        ``launch_started_at``；否则返回 ``None``，调用方不得把可能已执行的投稿降级为
+        可恢复取消。
+        """
+        clean_review_id = (review_id or "").strip()
+        clean_attempt_id = (attempt_id or "").strip()
+        clean_ticket_id = (ticket_id or "").strip()
+        detail = " ".join((message or "").split())[:850]
+        if not clean_review_id or not clean_attempt_id or not clean_ticket_id:
+            return None
+        audit_message = (
+            "发布前浏览器未启动；"
+            f"{detail or '投稿包准备或子进程启动失败'}。未确认提交，禁止自动重投。"
+        )[:1000]
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            canceled = self._cancel_english_world_douyin_pre_launch_failure_in_transaction(
+                conn,
+                review_id=clean_review_id,
+                attempt_id=clean_attempt_id,
+                ticket_id=clean_ticket_id,
+                evidence_dir=(evidence_dir or "").strip(),
+                message=audit_message,
+                uploader_exit_code=1,
+            )
+            if not canceled:
+                conn.rollback()
+                return None
+            conn.commit()
+        return self.get_english_world_douyin_publication(clean_review_id)
+
+    def cancel_stale_english_world_douyin_pre_launch_failure(
+        self,
+        review_id: str,
+        *,
+        stale_after_seconds: int,
+        evidence_dir: str,
+    ) -> Optional[Dict[str, Any]]:
+        """回收进程中断遗留的未启动英语世界票据；只收口为 CANCELED。
+
+        该入口不创建新尝试也不转回 ``QUEUED``。超过 TTL 仅说明原 worker 已失去
+        启动机会；后续仍必须经既有具名恢复入口重新授权。
+        """
+        clean_review_id = (review_id or "").strip()
+        safe_ttl = max(1, min(24 * 60 * 60, int(stale_after_seconds)))
+        if not clean_review_id:
+            return None
+        audit_message = (
+            f"发布前浏览器未启动超过 {safe_ttl} 秒；投稿进程可能在启动上传器前中断。"
+            "未确认提交，禁止自动重投。"
+        )
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            candidate = conn.execute(
+                '''SELECT attempt.attempt_id, ticket.ticket_id
+                   FROM english_world_douyin_publications publication
+                   JOIN english_world_douyin_attempts attempt
+                     ON attempt.review_id = publication.review_id
+                   JOIN douyin_browser_launch_tickets ticket
+                     ON ticket.source_type = 'ENGLISH_WORLD'
+                    AND ticket.source_ref = attempt.attempt_id
+                   WHERE publication.review_id = ?
+                     AND publication.state = 'SUBMITTING'
+                     AND attempt.state = 'SUBMITTING'
+                     AND ticket.action_scope = 'publish'
+                     AND ticket.launch_started_at IS NULL
+                     AND ticket.prelaunch_canceled_at IS NULL
+                     AND datetime(ticket.issued_at) <= datetime('now', ?)
+                   ORDER BY ticket.issued_at ASC, ticket.ticket_id ASC
+                   LIMIT 1''',
+                (clean_review_id, f"-{safe_ttl} seconds"),
+            ).fetchone()
+            if not candidate:
+                conn.rollback()
+                return None
+            canceled = self._cancel_english_world_douyin_pre_launch_failure_in_transaction(
+                conn,
+                review_id=clean_review_id,
+                attempt_id=str(candidate["attempt_id"]),
+                ticket_id=str(candidate["ticket_id"]),
+                evidence_dir=(evidence_dir or "").strip(),
+                message=audit_message,
+                uploader_exit_code=None,
+                stale_after_seconds=safe_ttl,
+            )
+            if not canceled:
+                conn.rollback()
+                return None
+            conn.commit()
+        return self.get_english_world_douyin_publication(clean_review_id)
+
     def record_english_world_douyin_reconciliation(
         self,
         review_id: str,
@@ -6398,6 +6626,45 @@ class PipelineDB:
                 )
             conn.commit()
             return self.get_english_world_douyin_publication(review_id) or {}
+
+    def record_english_world_douyin_canceled_published_reconciliation(
+        self,
+        review_id: str,
+        *,
+        evidence_dir: str,
+        message: str,
+    ) -> Dict[str, Any]:
+        """凭作品管理页已发布证据修正取消账本，绝不覆盖原始投稿尝试。
+
+        此入口只处理“提交前闸门曾判定 CANCELED，但之后由外部操作或平台异步完成
+        投稿”的稀有分叉。它必须由人工/管理页精确匹配调用，且必须携带证据目录；
+        调度器的常规审核回查不调用本方法。原先 ``CANCELED`` 的 attempts 保持原样，
+        防止将未确认提交历史伪造成成功回执。
+        """
+        clean_review_id = (review_id or "").strip()
+        clean_evidence_dir = (evidence_dir or "").strip()
+        clean_message = " ".join((message or "").split())[:1000]
+        if not clean_review_id:
+            raise ValueError("English World Douyin review_id is required")
+        if not clean_evidence_dir:
+            raise ValueError("English World canceled reconciliation requires evidence_dir")
+        if not clean_message:
+            raise ValueError("English World canceled reconciliation requires message")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_douyin_publications
+                   SET state = 'PUBLISHED', platform_state = 'PUBLISHED', evidence_dir = ?,
+                       last_error_message = ?, reconciliation_failures = 0,
+                       last_reconciled_at = CURRENT_TIMESTAMP,
+                       published_at = COALESCE(published_at, CURRENT_TIMESTAMP),
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE review_id = ? AND state = 'CANCELED' AND attempt_count > 0""",
+                (clean_evidence_dir, clean_message, clean_review_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Only an attempted CANCELED English World Douyin publication can be reconciled")
+            conn.commit()
+            return self.get_english_world_douyin_publication(clean_review_id) or {}
 
     def claim_next_english_world_douyin_reconciliation(
         self, *, min_interval_minutes: int = 30, failure_limit: int = 2,
@@ -6734,6 +7001,144 @@ class PipelineDB:
                 raise RuntimeError("Failed to update dubbing publication")
             return dict(row)
 
+    def claim_dubbing_douyin_publication_launch(
+        self,
+        job_id: int,
+        *,
+        payload_sha256: str,
+    ) -> Optional[Dict[str, Any]]:
+        """原子领取一条配音抖音上传并签发一次性浏览器启动凭据。"""
+        normalized_payload = str(payload_sha256 or "").strip().lower()
+        if not self._is_sha256_digest(normalized_payload):
+            return None
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            job = conn.execute(
+                """SELECT id, state, output_video_path, asset_sha256
+                   FROM dubbing_jobs WHERE id = ?""",
+                (job_id,),
+            ).fetchone()
+            if not job:
+                conn.commit()
+                return None
+            job_data = dict(job)
+            canonical_path = self._canonical_douyin_launch_path(
+                str(job_data.get("output_video_path") or "")
+            )
+            asset_sha256 = str(job_data.get("asset_sha256") or "").strip().lower()
+            if (
+                job_data.get("state") != "PUBLISHING"
+                or not canonical_path
+                or not self._is_sha256_digest(asset_sha256)
+            ):
+                conn.commit()
+                return None
+            existing = conn.execute(
+                "SELECT * FROM dubbing_publications WHERE job_id = ? AND platform = 'douyin'",
+                (job_id,),
+            ).fetchone()
+            if existing:
+                existing_data = dict(existing)
+                if existing_data.get("state") not in {"QUEUED", "RETRYABLE_FAILED", "CANCELED"}:
+                    conn.commit()
+                    return None
+                cursor = conn.execute(
+                    '''UPDATE dubbing_publications
+                       SET state = 'UPLOADING', attempt_count = attempt_count + 1,
+                           last_error_message = NULL, external_url = NULL,
+                           external_post_id = NULL, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ? AND state IN ('QUEUED', 'RETRYABLE_FAILED', 'CANCELED')''',
+                    (existing_data["id"],),
+                )
+                if cursor.rowcount != 1:
+                    conn.commit()
+                    return None
+                publication_id = int(existing_data["id"])
+            else:
+                cursor = conn.execute(
+                    '''INSERT INTO dubbing_publications (
+                           job_id, platform, state, attempt_count
+                       ) VALUES (?, 'douyin', 'UPLOADING', 1)''',
+                    (job_id,),
+                )
+                publication_id = int(cursor.lastrowid)
+            publication = conn.execute(
+                "SELECT * FROM dubbing_publications WHERE id = ?", (publication_id,)
+            ).fetchone()
+            if not publication:
+                conn.rollback()
+                return None
+            publication_data = dict(publication)
+            ticket = self._insert_douyin_browser_launch_ticket(
+                conn,
+                source_type="DUBBING",
+                source_ref=self._douyin_launch_source_ref(
+                    publication_data["id"], publication_data["attempt_count"],
+                ),
+                video_path=canonical_path,
+                asset_sha256=asset_sha256,
+                payload_sha256=normalized_payload,
+            )
+            conn.commit()
+            return {**publication_data, **ticket}
+
+    def complete_dubbing_douyin_publication_launch(
+        self,
+        publication_id: int,
+        state: str,
+        *,
+        error_message: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """收口一次已领取的配音抖音尝试，不再次增加 attempt_count。"""
+        target_state = str(state or "").strip().upper()
+        allowed_states = {
+            "UNDER_REVIEW", "PUBLISHED", "RETRYABLE_FAILED", "UNCERTAIN", "BANNED", "CANCELED",
+        }
+        if target_state not in allowed_states:
+            raise ValueError("Unsupported dubbing Douyin launch completion state")
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            publication = conn.execute(
+                "SELECT * FROM dubbing_publications WHERE id = ? AND platform = 'douyin'",
+                (publication_id,),
+            ).fetchone()
+            if not publication:
+                conn.commit()
+                raise ValueError("Dubbing Douyin publication does not exist")
+            publication_data = dict(publication)
+            if publication_data.get("state") != "UPLOADING":
+                conn.commit()
+                raise ValueError("Dubbing Douyin publication is not an active launch")
+            source_ref = self._douyin_launch_source_ref(
+                publication_data["id"], publication_data["attempt_count"],
+            )
+            ticket = conn.execute(
+                '''SELECT launch_started_at FROM douyin_browser_launch_tickets
+                   WHERE source_type = 'DUBBING' AND source_ref = ?''',
+                (source_ref,),
+            ).fetchone()
+            # ticket 未启动时只允许收口为 CANCELED：这表示 guard 在浏览器前拒绝，
+            # 绝不能伪装成已提交/未确认。
+            if not ticket or (ticket["launch_started_at"] is None and target_state != "CANCELED"):
+                conn.commit()
+                raise ValueError("Dubbing Douyin browser launch was not started")
+            cursor = conn.execute(
+                '''UPDATE dubbing_publications
+                   SET state = ?, last_error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND platform = 'douyin' AND state = 'UPLOADING' ''',
+                (target_state, error_message, publication_id),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                raise ValueError("Dubbing Douyin publication cannot be completed")
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM dubbing_publications WHERE id = ?", (publication_id,)
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to read completed Dubbing Douyin publication")
+            return dict(row)
+
     def get_dubbing_publications(self, job_id: int) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
             rows = conn.execute(
@@ -6961,7 +7366,11 @@ class PipelineDB:
                 ''',
                 (candidate["id"],),
             ).fetchone()
-            return dict(row) if row else None
+            if not row:
+                conn.rollback()
+                return None
+            conn.commit()
+            return dict(row)
 
     def claim_kuaishou_publication(self, publication_id: int) -> Optional[Dict[str, Any]]:
         """原子领取指定快手任务，供新片在视频号成功后立即同步投递。"""
@@ -6978,7 +7387,6 @@ class PipelineDB:
             if cursor.rowcount != 1:
                 conn.commit()
                 return None
-            conn.commit()
             row = conn.execute(
                 '''
                 SELECT kp.*, pv.youtube_id, pv.slice_index
@@ -6988,7 +7396,11 @@ class PipelineDB:
                 ''',
                 (publication_id,),
             ).fetchone()
-            return dict(row) if row else None
+            if not row:
+                conn.rollback()
+                return None
+            conn.commit()
+            return dict(row)
 
     def claim_next_kuaishou_history_publication(self, daily_limit: int) -> Optional[Dict[str, Any]]:
         """兼容入口：原子领取一条历史迁移任务并遵守当天上限。"""
@@ -7131,6 +7543,456 @@ class PipelineDB:
                 (publication_id,),
             ).fetchone()
             return dict(row) if row else None
+
+    # --- Douyin one-time browser launch ticket DAL ---
+    @staticmethod
+    def _canonical_douyin_launch_path(value: str) -> str:
+        """规范化本地路径；空值不可用于浏览器启动凭据。"""
+        clean_value = str(value or "").strip()
+        return str(Path(clean_value).expanduser().resolve()) if clean_value else ""
+
+    @staticmethod
+    def _is_sha256_digest(value: str) -> bool:
+        """仅接受小写或大写 64 位十六进制摘要，避免把任意 CLI 文本写入凭据。"""
+        clean_value = str(value or "").strip()
+        if len(clean_value) != 64:
+            return False
+        return all(character in "0123456789abcdefABCDEF" for character in clean_value)
+
+    @staticmethod
+    def _douyin_launch_source_ref(identifier: Any, attempt: Any) -> str:
+        """将可重领记录和其当前尝试绑定为不可复用的凭据来源。"""
+        return f"{int(identifier)}:{int(attempt)}"
+
+    def _insert_douyin_browser_launch_ticket(
+        self,
+        conn,
+        *,
+        source_type: str,
+        source_ref: str,
+        video_path: str,
+        asset_sha256: str,
+        payload_sha256: str = "",
+    ) -> Dict[str, str]:
+        """在既有领取事务内签发一次性凭据；明文 token 只返回给当前父进程。"""
+        canonical_path = self._canonical_douyin_launch_path(video_path)
+        normalized_asset = str(asset_sha256 or "").strip().lower()
+        normalized_payload = str(payload_sha256 or "").strip().lower()
+        if (
+            source_type not in {"GENERIC", "ENGLISH_WORLD", "DUBBING"}
+            or not source_ref
+            or not canonical_path
+            or not self._is_sha256_digest(normalized_asset)
+            or (normalized_payload and not self._is_sha256_digest(normalized_payload))
+        ):
+            raise ValueError("Invalid Douyin browser launch ticket source")
+        ticket_id = secrets.token_urlsafe(24)
+        token = secrets.token_urlsafe(32)
+        token_sha256 = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        conn.execute(
+            '''INSERT INTO douyin_browser_launch_tickets (
+                   ticket_id, source_type, source_ref, video_path, asset_sha256,
+                   payload_sha256, action_scope, token_sha256
+               ) VALUES (?, ?, ?, ?, ?, ?, 'publish', ?)''',
+            (
+                ticket_id,
+                source_type,
+                source_ref,
+                canonical_path,
+                normalized_asset,
+                normalized_payload,
+                token_sha256,
+            ),
+        )
+        return {
+            "_douyin_launch_ticket_id": ticket_id,
+            "_douyin_launch_token": token,
+        }
+
+    @staticmethod
+    def _parse_douyin_launch_source_ref(source_ref: str) -> Optional[tuple[int, int]]:
+        """解析 ``record_id:attempt_count``；任一异常都不得推断为当前领取。"""
+        try:
+            identifier, attempt = str(source_ref or "").split(":", 1)
+            parsed_identifier = int(identifier)
+            parsed_attempt = int(attempt)
+        except (TypeError, ValueError):
+            return None
+        if parsed_identifier < 1 or parsed_attempt < 1:
+            return None
+        return parsed_identifier, parsed_attempt
+
+    def _ticket_source_matches_current_launch(
+        self,
+        conn,
+        ticket: Dict[str, Any],
+        *,
+        canonical_path: str,
+        asset_sha256: str,
+        require_new_source: bool,
+    ) -> bool:
+        """在同一事务复核 ticket 对应的真实状态、尝试号、路径与成片哈希。"""
+        source_type = str(ticket.get("source_type") or "")
+        source_ref = str(ticket.get("source_ref") or "")
+        if source_type == "GENERIC":
+            parsed_ref = self._parse_douyin_launch_source_ref(source_ref)
+            if not parsed_ref:
+                return False
+            publication_id, attempt_count = parsed_ref
+            row = conn.execute(
+                "SELECT * FROM douyin_publications WHERE id = ?", (publication_id,)
+            ).fetchone()
+            if not row:
+                return False
+            row_data = dict(row)
+            return (
+                row_data.get("state") == "UPLOADING"
+                and int(row_data.get("attempt_count") or 0) == attempt_count
+                and (not require_new_source or row_data.get("source_kind") == "NEW")
+                and self._canonical_douyin_launch_path(str(row_data.get("video_path") or "")) == canonical_path
+                and str(row_data.get("asset_sha256") or "").lower() == asset_sha256
+            )
+        if source_type == "ENGLISH_WORLD":
+            row = conn.execute(
+                '''SELECT publication.state AS publication_state,
+                          publication.artifact_sha256 AS publication_sha256,
+                          attempt.state AS attempt_state,
+                          attempt.artifact_sha256 AS attempt_sha256,
+                          review.mp4_path AS video_path
+                   FROM english_world_douyin_attempts attempt
+                   JOIN english_world_douyin_publications publication
+                     ON publication.review_id = attempt.review_id
+                   JOIN english_world_review_items review ON review.id = attempt.review_id
+                   WHERE attempt.attempt_id = ?''',
+                (source_ref,),
+            ).fetchone()
+            if not row:
+                return False
+            row_data = dict(row)
+            return (
+                row_data.get("publication_state") == "SUBMITTING"
+                and row_data.get("attempt_state") == "SUBMITTING"
+                and str(row_data.get("publication_sha256") or "").lower() == asset_sha256
+                and str(row_data.get("attempt_sha256") or "").lower() == asset_sha256
+                and self._canonical_douyin_launch_path(str(row_data.get("video_path") or "")) == canonical_path
+            )
+        if source_type == "DUBBING":
+            parsed_ref = self._parse_douyin_launch_source_ref(source_ref)
+            if not parsed_ref:
+                return False
+            publication_id, attempt_count = parsed_ref
+            row = conn.execute(
+                '''SELECT publication.state AS publication_state, publication.platform,
+                          publication.attempt_count, job.state AS job_state,
+                          job.output_video_path, job.asset_sha256
+                   FROM dubbing_publications publication
+                   JOIN dubbing_jobs job ON job.id = publication.job_id
+                   WHERE publication.id = ?''',
+                (publication_id,),
+            ).fetchone()
+            if not row:
+                return False
+            row_data = dict(row)
+            return (
+                row_data.get("platform") == "douyin"
+                and row_data.get("publication_state") == "UPLOADING"
+                and int(row_data.get("attempt_count") or 0) == attempt_count
+                and row_data.get("job_state") == "PUBLISHING"
+                and self._canonical_douyin_launch_path(str(row_data.get("output_video_path") or "")) == canonical_path
+                and str(row_data.get("asset_sha256") or "").lower() == asset_sha256
+            )
+        return False
+
+    def bind_douyin_browser_launch_ticket_payload(
+        self,
+        ticket_id: str,
+        token: str,
+        *,
+        payload_sha256: str,
+    ) -> bool:
+        """在启动前把完整投稿包绑定到已领取的 ticket；不得覆盖或重放已绑定内容。"""
+        clean_ticket_id = str(ticket_id or "").strip()
+        clean_token = str(token or "").strip()
+        clean_payload = str(payload_sha256 or "").strip().lower()
+        if not clean_ticket_id or not clean_token or not self._is_sha256_digest(clean_payload):
+            return False
+        token_sha256 = hashlib.sha256(clean_token.encode("utf-8")).hexdigest()
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM douyin_browser_launch_tickets WHERE ticket_id = ?", (clean_ticket_id,)
+            ).fetchone()
+            if not row:
+                conn.commit()
+                return False
+            ticket = dict(row)
+            stored_token = str(ticket.get("token_sha256") or "")
+            if (
+                not stored_token
+                or not hmac.compare_digest(stored_token, token_sha256)
+                or ticket.get("launch_started_at") is not None
+                or ticket.get("prelaunch_canceled_at") is not None
+                or str(ticket.get("action_scope") or "") != "publish"
+            ):
+                conn.commit()
+                return False
+            canonical_path = self._canonical_douyin_launch_path(str(ticket.get("video_path") or ""))
+            asset_sha256 = str(ticket.get("asset_sha256") or "").lower()
+            if not self._ticket_source_matches_current_launch(
+                conn,
+                ticket,
+                canonical_path=canonical_path,
+                asset_sha256=asset_sha256,
+                require_new_source=False,
+            ):
+                conn.commit()
+                return False
+            existing_payload = str(ticket.get("payload_sha256") or "").lower()
+            if existing_payload and existing_payload != clean_payload:
+                conn.commit()
+                return False
+            cursor = conn.execute(
+                '''UPDATE douyin_browser_launch_tickets
+                   SET payload_sha256 = ?
+                   WHERE ticket_id = ? AND launch_started_at IS NULL
+                     AND prelaunch_canceled_at IS NULL
+                     AND (payload_sha256 IS NULL OR payload_sha256 = '' OR payload_sha256 = ?)''',
+                (clean_payload, clean_ticket_id, clean_payload),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def begin_douyin_browser_launch(
+        self,
+        ticket_id: str,
+        token: str,
+        *,
+        video_path: str,
+        asset_sha256: str,
+        payload_sha256: str,
+        require_new_source: bool,
+    ) -> bool:
+        """原子消费一次 ticket；成功才允许低层上传器启动 Playwright。"""
+        clean_ticket_id = str(ticket_id or "").strip()
+        clean_token = str(token or "").strip()
+        canonical_path = self._canonical_douyin_launch_path(video_path)
+        normalized_asset = str(asset_sha256 or "").strip().lower()
+        normalized_payload = str(payload_sha256 or "").strip().lower()
+        if (
+            not clean_ticket_id
+            or not clean_token
+            or not canonical_path
+            or not self._is_sha256_digest(normalized_asset)
+            or not self._is_sha256_digest(normalized_payload)
+        ):
+            return False
+        token_sha256 = hashlib.sha256(clean_token.encode("utf-8")).hexdigest()
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM douyin_browser_launch_tickets WHERE ticket_id = ?", (clean_ticket_id,)
+            ).fetchone()
+            if not row:
+                conn.commit()
+                return False
+            ticket = dict(row)
+            stored_token = str(ticket.get("token_sha256") or "")
+            if (
+                not stored_token
+                or not hmac.compare_digest(stored_token, token_sha256)
+                or ticket.get("launch_started_at") is not None
+                or ticket.get("prelaunch_canceled_at") is not None
+                or str(ticket.get("action_scope") or "") != "publish"
+                or self._canonical_douyin_launch_path(str(ticket.get("video_path") or "")) != canonical_path
+                or str(ticket.get("asset_sha256") or "").lower() != normalized_asset
+                or str(ticket.get("payload_sha256") or "").lower() != normalized_payload
+                or not self._ticket_source_matches_current_launch(
+                    conn,
+                    ticket,
+                    canonical_path=canonical_path,
+                    asset_sha256=normalized_asset,
+                    require_new_source=bool(require_new_source),
+                )
+            ):
+                conn.commit()
+                return False
+            cursor = conn.execute(
+                '''UPDATE douyin_browser_launch_tickets
+                   SET launch_started_at = CURRENT_TIMESTAMP
+                   WHERE ticket_id = ? AND launch_started_at IS NULL
+                     AND prelaunch_canceled_at IS NULL''',
+                (clean_ticket_id,),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    @staticmethod
+    def _douyin_prelaunch_cancel_message(reason: str) -> str:
+        """规范化“浏览器尚未启动”审计原因，避免把可恢复事实写成投稿不确定。"""
+        clean_reason = " ".join(str(reason or "").split())[:800]
+        if not clean_reason:
+            clean_reason = "领取后的父进程未能在恢复等待期内启动浏览器。"
+        return (
+            "抖音发布前浏览器未启动；"
+            f"{clean_reason} 已安全取消本次尝试，需人工新建尝试。"
+        )
+
+    @staticmethod
+    def _cancel_unstarted_douyin_browser_ticket(conn, ticket_id: str, message: str) -> bool:
+        """撤销尚未启动的 ticket；与源账本同事务调用，避免持票旧进程晚到启动。"""
+        cursor = conn.execute(
+            '''UPDATE douyin_browser_launch_tickets
+               SET prelaunch_canceled_at = CURRENT_TIMESTAMP,
+                   prelaunch_cancel_reason = ?
+               WHERE ticket_id = ? AND launch_started_at IS NULL
+                 AND prelaunch_canceled_at IS NULL''',
+            (message, ticket_id),
+        )
+        return cursor.rowcount == 1
+
+    def cancel_stale_generic_douyin_prelaunch_attempts(
+        self,
+        *,
+        min_age_seconds: int,
+        reason: str,
+    ) -> int:
+        """取消超时仍未打开浏览器的通用抖音领取；绝不触碰已启动或未知提交。"""
+        minimum_age = int(min_age_seconds)
+        if minimum_age < 0:
+            raise ValueError("min_age_seconds must be non-negative")
+        message = self._douyin_prelaunch_cancel_message(reason)
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            tickets = conn.execute(
+                '''SELECT ticket_id, source_ref
+                   FROM douyin_browser_launch_tickets
+                   WHERE source_type = 'GENERIC' AND launch_started_at IS NULL
+                     AND prelaunch_canceled_at IS NULL
+                     AND datetime(issued_at) <= datetime('now', ?)''',
+                (f"-{minimum_age} seconds",),
+            ).fetchall()
+            canceled = 0
+            for ticket in tickets:
+                ticket_data = dict(ticket)
+                parsed_ref = self._parse_douyin_launch_source_ref(ticket_data["source_ref"])
+                if not parsed_ref:
+                    self._cancel_unstarted_douyin_browser_ticket(
+                        conn, ticket_data["ticket_id"], message,
+                    )
+                    continue
+                publication_id, attempt_count = parsed_ref
+                cursor = conn.execute(
+                    '''UPDATE douyin_publications
+                       SET state = 'CANCELED', last_error_message = ?, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ? AND state = 'UPLOADING' AND attempt_count = ?''',
+                    (message, publication_id, attempt_count),
+                )
+                if self._cancel_unstarted_douyin_browser_ticket(
+                    conn, ticket_data["ticket_id"], message,
+                ) and cursor.rowcount == 1:
+                    canceled += 1
+            conn.commit()
+            return canceled
+
+    def cancel_douyin_publication_pre_launch_failure(
+        self,
+        publication_id: int,
+        *,
+        ticket_id: str,
+        reason: str,
+    ) -> bool:
+        """按当前父进程已知 ticket 立即收口通用发布前失败，拒绝碰任何已启动尝试。"""
+        clean_ticket_id = str(ticket_id or "").strip()
+        if not clean_ticket_id:
+            return False
+        message = self._douyin_prelaunch_cancel_message(reason)
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            publication = conn.execute(
+                "SELECT id, state, attempt_count FROM douyin_publications WHERE id = ?",
+                (publication_id,),
+            ).fetchone()
+            if not publication or publication["state"] != "UPLOADING":
+                conn.rollback()
+                return False
+            source_ref = self._douyin_launch_source_ref(
+                publication["id"], publication["attempt_count"],
+            )
+            ticket = conn.execute(
+                '''SELECT ticket_id FROM douyin_browser_launch_tickets
+                   WHERE ticket_id = ? AND source_type = 'GENERIC' AND source_ref = ?
+                     AND launch_started_at IS NULL AND prelaunch_canceled_at IS NULL''',
+                (clean_ticket_id, source_ref),
+            ).fetchone()
+            if not ticket:
+                conn.rollback()
+                return False
+            cursor = conn.execute(
+                '''UPDATE douyin_publications
+                   SET state = 'CANCELED', last_error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'UPLOADING' AND attempt_count = ?''',
+                (message, publication["id"], publication["attempt_count"]),
+            )
+            if cursor.rowcount != 1 or not self._cancel_unstarted_douyin_browser_ticket(
+                conn, clean_ticket_id, message,
+            ):
+                conn.rollback()
+                return False
+            conn.commit()
+            return True
+
+    def cancel_stale_dubbing_douyin_prelaunch_attempts(
+        self,
+        *,
+        min_age_seconds: int,
+        reason: str,
+        job_id: Optional[int] = None,
+    ) -> int:
+        """取消超时仍未启动的配音抖音领取；已启动记录永远留给人工核验。"""
+        minimum_age = int(min_age_seconds)
+        if minimum_age < 0:
+            raise ValueError("min_age_seconds must be non-negative")
+        message = self._douyin_prelaunch_cancel_message(reason)
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            tickets = conn.execute(
+                '''SELECT ticket_id, source_ref
+                   FROM douyin_browser_launch_tickets
+                   WHERE source_type = 'DUBBING' AND launch_started_at IS NULL
+                     AND prelaunch_canceled_at IS NULL
+                     AND datetime(issued_at) <= datetime('now', ?)''',
+                (f"-{minimum_age} seconds",),
+            ).fetchall()
+            canceled = 0
+            for ticket in tickets:
+                ticket_data = dict(ticket)
+                parsed_ref = self._parse_douyin_launch_source_ref(ticket_data["source_ref"])
+                if not parsed_ref:
+                    self._cancel_unstarted_douyin_browser_ticket(
+                        conn, ticket_data["ticket_id"], message,
+                    )
+                    continue
+                publication_id, attempt_count = parsed_ref
+                if job_id is not None:
+                    publication = conn.execute(
+                        "SELECT job_id FROM dubbing_publications WHERE id = ? AND platform = 'douyin'",
+                        (publication_id,),
+                    ).fetchone()
+                    if not publication or int(publication["job_id"]) != int(job_id):
+                        continue
+                cursor = conn.execute(
+                    '''UPDATE dubbing_publications
+                       SET state = 'CANCELED', last_error_message = ?, updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ? AND platform = 'douyin' AND state = 'UPLOADING'
+                         AND attempt_count = ?''',
+                    (message, publication_id, attempt_count),
+                )
+                if self._cancel_unstarted_douyin_browser_ticket(
+                    conn, ticket_data["ticket_id"], message,
+                ) and cursor.rowcount == 1:
+                    canceled += 1
+            conn.commit()
+            return canceled
 
     def requeue_canceled_douyin_publication(self, publication_id: int) -> Dict[str, Any]:
         """人工确认修复后从 CANCELED 新建一次 QUEUED 尝试，不覆盖历史账本。"""
@@ -7295,12 +8157,13 @@ class PipelineDB:
 
         默认只接受视频号已确认公开的 ``PUBLISHED``。显式关闭上游依赖时，可接受已经完成
         成片但视频号延后、审核中或结果不确定的状态；``NOT EXISTS`` 针对全部抖音历史账本，
-        因此不会复活 CANCELED / UNCERTAIN / UNDER_REVIEW 等既有尝试。
+        因此不会复活 CANCELED / UNCERTAIN / UNDER_REVIEW 等既有尝试。候选发现必须提供
+        正数的时间和批次边界；不能以 ``None`` 旁路 NEW 与 HISTORY 的隔离。
         """
-        if lookback_hours < 1:
-            raise ValueError("lookback_hours must be at least 1")
-        if limit < 1:
-            raise ValueError("limit must be at least 1")
+        if isinstance(lookback_hours, bool) or not isinstance(lookback_hours, int) or lookback_hours < 1:
+            raise ValueError("lookback_hours must be a positive integer")
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("limit must be a positive integer")
         allowed_statuses = (
             ("PUBLISHED",)
             if require_wechat_public_confirmation
@@ -7314,6 +8177,7 @@ class PipelineDB:
             )
         )
         status_placeholders = ", ".join("?" for _ in allowed_statuses)
+        params: List[Any] = [*allowed_statuses, f"-{lookback_hours} hours", limit]
         with self.get_connection() as conn:
             rows = conn.execute(
                 f'''
@@ -7326,11 +8190,11 @@ class PipelineDB:
                   AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
                   AND NOT EXISTS (
                       SELECT 1 FROM douyin_publications dp WHERE dp.video_id = pv.id
-                  )
+                )
                 ORDER BY pv.updated_at ASC, pv.id ASC
                 LIMIT ?
                 ''',
-                (*allowed_statuses, f"-{int(lookback_hours)} hours", int(limit)),
+                params,
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -7344,8 +8208,6 @@ class PipelineDB:
         source = (source_kind or "").upper()
         if source not in self._DOUYIN_SOURCES:
             raise ValueError(f"Unsupported Douyin source kind: {source_kind}")
-        if source == "HISTORY" and (daily_limit is None or daily_limit < 1):
-            raise ValueError("daily_limit must be at least 1 for HISTORY")
         with self.get_connection() as conn:
             if daily_limit is not None:
                 if daily_limit < 1:
@@ -7398,7 +8260,6 @@ class PipelineDB:
             if cursor.rowcount != 1:
                 conn.commit()
                 return None
-            conn.commit()
             row = conn.execute(
                 '''
                 SELECT dp.*, pv.youtube_id, pv.slice_index
@@ -7408,7 +8269,21 @@ class PipelineDB:
                 ''',
                 (candidate["id"],),
             ).fetchone()
-            return dict(row) if row else None
+            if not row:
+                conn.rollback()
+                return None
+            row_data = dict(row)
+            ticket = self._insert_douyin_browser_launch_ticket(
+                conn,
+                source_type="GENERIC",
+                source_ref=self._douyin_launch_source_ref(
+                    row_data["id"], row_data["attempt_count"],
+                ),
+                video_path=str(row_data["video_path"]),
+                asset_sha256=str(row_data["asset_sha256"]),
+            )
+            conn.commit()
+            return {**row_data, **ticket}
 
     def claim_douyin_publication(
         self,
@@ -7457,7 +8332,6 @@ class PipelineDB:
             if cursor.rowcount != 1:
                 conn.commit()
                 return None
-            conn.commit()
             row = conn.execute(
                 '''
                 SELECT dp.*, pv.youtube_id, pv.slice_index
@@ -7467,7 +8341,21 @@ class PipelineDB:
                 ''',
                 (publication_id,),
             ).fetchone()
-            return dict(row) if row else None
+            if not row:
+                conn.rollback()
+                return None
+            row_data = dict(row)
+            ticket = self._insert_douyin_browser_launch_ticket(
+                conn,
+                source_type="GENERIC",
+                source_ref=self._douyin_launch_source_ref(
+                    row_data["id"], row_data["attempt_count"],
+                ),
+                video_path=str(row_data["video_path"]),
+                asset_sha256=str(row_data["asset_sha256"]),
+            )
+            conn.commit()
+            return {**row_data, **ticket}
 
     def reserve_douyin_browser_action_slot(
         self,
@@ -7639,8 +8527,8 @@ class PipelineDB:
             conn.commit()
             return cursor.rowcount > 0
 
-    def claim_next_douyin_history_publication(self, daily_limit: int) -> Optional[Dict[str, Any]]:
-        """兼容入口：原子领取一条抖音历史迁移任务并遵守当天上限。"""
+    def claim_next_douyin_history_publication(self, daily_limit: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """兼容入口：原子领取一条抖音历史迁移任务；可不设当日上限。"""
         return self.claim_next_douyin_publication("HISTORY", daily_limit=daily_limit)
 
     def get_douyin_history_progress_snapshot(self, daily_limit: int) -> Dict[str, int]:
@@ -7790,7 +8678,7 @@ class PipelineDB:
         platform: str,
         *,
         wall_street_since_upload_date: str,
-        limit: int = 500,
+        limit: Optional[int] = 500,
     ) -> List[Dict[str, Any]]:
         """只读返回平台补录预览候选；不创建发布账本，也不改变视频状态。
 
@@ -7807,7 +8695,9 @@ class PipelineDB:
             raise ValueError("platform must be one of: wechat, douyin")
         if not wall_street_since_upload_date or len(wall_street_since_upload_date) != 8:
             raise ValueError("wall_street_since_upload_date must be YYYYMMDD")
-        safe_limit = max(1, min(int(limit), 5000))
+        if limit is not None and int(limit) < 1:
+            raise ValueError("limit must be at least 1 when specified")
+        safe_limit = min(int(limit), 5000) if limit is not None else None
 
         text_expr = (
             "lower(COALESCE(pv.title, '') || ' ' || COALESCE(pv.zh_title, '') || ' ' || "
@@ -7876,15 +8766,16 @@ class PipelineDB:
                 pv.upload_date DESC,
                 pv.updated_at DESC,
                 pv.id ASC
-            LIMIT ?
+            {"LIMIT ?" if safe_limit is not None else ""}
         """
         params: List[Any] = [
             *speech_params,
             wall_street_since_upload_date,
             *speech_params,
             wall_street_since_upload_date,
-            safe_limit,
         ]
+        if safe_limit is not None:
+            params.append(safe_limit)
         with self.get_connection() as conn:
             rows = conn.execute(query, params).fetchall()
             return [dict(row) for row in rows]

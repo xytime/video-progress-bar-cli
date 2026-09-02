@@ -2,12 +2,16 @@
 """将一条视频号已受理的英语世界短视频同步提交到抖音。
 
 该入口只消费 ``english_world_douyin_publications`` 的零尝试 QUEUED 记录；完整投稿包
-位级校验、共享每日额度、pipeline.lock 和不可变尝试账本全部在打开浏览器前建立。
+位级校验、pipeline.lock 和不可变尝试账本全部在打开浏览器前建立。
 已受理、未确认或失败记录均不会自动重传。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.2 | 2026-09-02 | Codex | 未启动票据的包校验/启动失败及超时遗留仅收口为 CANCELED，需显式恢复才可重投。 |
+| 1.3.1 | 2026-09-02 | Codex | 投稿 worker 将不可变英语世界尝试绑定到一次性抖音浏览器启动凭据，拒绝借用来源参数。 |
+| 1.3.0 | 2026-09-02 | Codex | 投稿同步复用阶段熔断策略：管理页故障不阻断新片，未知 UI 阶段保持 fail-closed。 |
+| 1.2.0 | 2026-09-01 | Codex | 与视频号统一为不设抖音日额度；仍只领取唯一 QUEUED 尝试。 |
 | 1.1.0 | 2026-08-30 | Codex | 投稿前页面失败接入持久 UI 熔断；一次证据化修复后只允许一轮显式恢复。 |
 | 1.0.0 | 2026-08-30 | Codex | 新增英语世界到抖音的隔离、账本安全单次同步执行器。 |
 """
@@ -28,6 +32,11 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from config.settings import settings  # noqa: E402
+from video_processing.core.douyin_ui_guard_policy import (  # noqa: E402
+    active_douyin_ui_failure_stages,
+    douyin_publish_is_blocked,
+)
+from video_processing.core.douyin_launch_context import douyin_submission_payload_sha256  # noqa: E402
 from video_processing.db.database import PipelineDB  # noqa: E402
 from video_processing.english_world.package_integrity import verify_package_hashes  # noqa: E402
 from video_processing.pipeline_manager import _build_subprocess_env  # noqa: E402
@@ -35,7 +44,7 @@ from video_processing.pipeline_manager import _build_subprocess_env  # noqa: E40
 
 logger = logging.getLogger(__name__)
 UPLOAD_TIMEOUT_SECONDS = 25 * 60
-EXIT_DAILY_LIMIT = 10
+EXIT_NOT_CLAIMABLE = 10
 
 
 def _completion_for_exit_code(exit_code: int) -> tuple[str, str]:
@@ -51,24 +60,67 @@ def _completion_for_exit_code(exit_code: int) -> tuple[str, str]:
     return "FAILED", f"抖音上传器返回 exit={exit_code}；未获得受理证据，不自动重试。"
 
 
+def _cancel_unstarted_english_world_ticket(
+    db: PipelineDB,
+    *,
+    review_id: str,
+    attempt_id: str,
+    ticket_id: str,
+    evidence_dir: Path,
+    message: str,
+) -> bool:
+    """只有 DAL 证明 ticket 未启动时才把本次领取收口为可显式恢复的取消。"""
+    try:
+        canceled = db.cancel_english_world_douyin_pre_launch_failure(
+            review_id,
+            attempt_id=attempt_id,
+            ticket_id=ticket_id,
+            evidence_dir=str(evidence_dir),
+            message=message,
+        )
+    except Exception:  # noqa: BLE001 - 取消审计不可写时保守保持不可恢复失败
+        logger.exception("English World Douyin pre-launch cancellation could not be recorded")
+        return False
+    return bool(canceled)
+
+
 def submit(review_id: str) -> int:
-    """建立唯一账本、领取每日额度并执行一次抖音投稿。"""
+    """建立唯一账本、领取一次投稿并执行抖音同步。"""
     if not settings.enable_douyin_browser_publishing:
         logger.error("Douyin browser publishing is disabled")
         return 1
     db = PipelineDB()
-    active_failures = [
-        failure for failure in db.get_platform_ui_failure_streaks("douyin")
-        if failure.get("stage") == "publish_pre_submit" and int(failure.get("active") or 0) == 1
-    ]
-    if active_failures and int(active_failures[0].get("consecutive_failures") or 0) >= max(
-        1, int(settings.douyin_ui_failure_recording_threshold),
-    ):
+    try:
+        active_stages = active_douyin_ui_failure_stages(
+            db.get_platform_ui_failure_streaks("douyin"),
+            recording_threshold=settings.douyin_ui_failure_recording_threshold,
+        )
+    except Exception:  # noqa: BLE001 - 账本不可读时不能开始新的公开提交
+        logger.exception("Douyin UI failure ledger cannot be read; stop before ledger claim or browser")
+        return 4
+    if douyin_publish_is_blocked(active_stages):
         logger.error(
-            "Douyin publish_pre_submit UI failure fuse is active; record and calibrate the flow before retrying"
+            "Douyin UI failure fuse is active for %s; record and calibrate before retrying",
+            ", ".join(sorted(active_stages)),
         )
         return 4
     publication = db.ensure_english_world_douyin_publication(review_id)
+    if publication.get("state") == "SUBMITTING":
+        try:
+            stale_canceled = db.cancel_stale_english_world_douyin_pre_launch_failure(
+                review_id,
+                stale_after_seconds=settings.douyin_prelaunch_ticket_recovery_ttl_seconds,
+                evidence_dir=str(publication.get("evidence_dir") or ""),
+            )
+        except Exception:  # noqa: BLE001 - 无法证明未启动时不能领取或重投
+            logger.exception("English World Douyin stale pre-launch ticket cannot be inspected")
+            return 4
+        if stale_canceled:
+            logger.error(
+                "English World Douyin stale unstarted ticket canceled: review=%s; explicit recovery required",
+                review_id[:8],
+            )
+            return 1
     if publication.get("state") != "QUEUED":
         logger.info(
             "English World Douyin publication already exists: review=%s state=%s",
@@ -82,16 +134,32 @@ def submit(review_id: str) -> int:
     )
     claimed = db.claim_english_world_douyin_publication(
         review_id,
-        daily_limit=settings.douyin_new_sync_daily_limit,
+        daily_limit=max(0, int(settings.douyin_new_sync_daily_limit or 0)) or None,
         evidence_dir=str(evidence_dir),
     )
     if not claimed:
-        logger.warning("English World Douyin daily limit reached or item is not claimable")
-        return EXIT_DAILY_LIMIT
+        logger.warning("English World Douyin item is not claimable")
+        return EXIT_NOT_CLAIMABLE
     attempt_id = str(claimed["_attempt_id"])
-    evidence_dir.mkdir(parents=True, exist_ok=True)
+    ticket_id = str(claimed.get("_douyin_launch_ticket_id") or "").strip()
+    launch_token = str(claimed.get("_douyin_launch_token") or "").strip()
     try:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
         verify_package_hashes(claimed)
+        payload_sha256 = douyin_submission_payload_sha256(
+            video_path=claimed["mp4_path"],
+            copy_path=claimed["copy_path"],
+            title_path=claimed["title_path"],
+            cover_path=claimed["cover_path"],
+        )
+        if not payload_sha256 or not ticket_id or not launch_token:
+            raise RuntimeError("英语世界抖音领取缺少一次性浏览器启动凭据或完整投稿包摘要")
+        if not db.bind_douyin_browser_launch_ticket_payload(
+            ticket_id,
+            launch_token,
+            payload_sha256=payload_sha256,
+        ):
+            raise RuntimeError("英语世界抖音启动凭据、领取状态或完整投稿包不匹配")
         command = [
             str(PROJECT_ROOT / ".venv/bin/python"),
             str(PROJECT_ROOT / "scripts/douyin_uploader.py"),
@@ -104,6 +172,8 @@ def submit(review_id: str) -> int:
             "--fail-fast-login",
             "--prepare-description",
             "--publish",
+            "--douyin-launch-ticket", ticket_id,
+            "--douyin-launch-token", launch_token,
         ]
         if not settings.douyin_browser_headless:
             command.append("--no-headless")
@@ -123,6 +193,19 @@ def submit(review_id: str) -> int:
         state, message = _completion_for_exit_code(int(result.returncode))
         if result.stderr:
             message = f"{message} 执行摘要：{result.stderr[-500:].strip()}"
+        if state == "FAILED" and _cancel_unstarted_english_world_ticket(
+            db,
+            review_id=review_id,
+            attempt_id=attempt_id,
+            ticket_id=ticket_id,
+            evidence_dir=evidence_dir,
+            message=f"上传器在启动浏览器前结束：{message}",
+        ):
+            logger.warning(
+                "English World Douyin uploader ended before browser launch: review=%s",
+                review_id[:8],
+            )
+            return int(result.returncode or 1)
         if result.returncode in {3, 4}:
             failure = db.record_platform_ui_failure(
                 "douyin",
@@ -155,6 +238,19 @@ def submit(review_id: str) -> int:
         )
         return 0 if state == "UNDER_REVIEW" else int(result.returncode or 1)
     except subprocess.TimeoutExpired:
+        if _cancel_unstarted_english_world_ticket(
+            db,
+            review_id=review_id,
+            attempt_id=attempt_id,
+            ticket_id=ticket_id,
+            evidence_dir=evidence_dir,
+            message="投稿超时，但上传器尚未消费浏览器启动票据",
+        ):
+            logger.warning(
+                "English World Douyin timeout canceled before browser launch: review=%s",
+                review_id[:8],
+            )
+            return 124
         db.complete_english_world_douyin_publication(
             review_id,
             attempt_id=attempt_id,
@@ -166,6 +262,19 @@ def submit(review_id: str) -> int:
         return 124
     except Exception as exc:  # noqa: BLE001 - worker must persist an auditable stop state
         logger.exception("English World Douyin submission failed: %s", exc)
+        if _cancel_unstarted_english_world_ticket(
+            db,
+            review_id=review_id,
+            attempt_id=attempt_id,
+            ticket_id=ticket_id,
+            evidence_dir=evidence_dir,
+            message=f"投稿包校验或子进程启动失败：{exc}",
+        ):
+            logger.warning(
+                "English World Douyin failure canceled before browser launch: review=%s",
+                review_id[:8],
+            )
+            return 1
         db.complete_english_world_douyin_publication(
             review_id,
             attempt_id=attempt_id,

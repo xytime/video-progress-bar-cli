@@ -8,6 +8,7 @@
 | 1.2.0 | 2026-07-29 | Codex | 覆盖中国大陆节假日、周末和补班日窗口选择 |
 | 1.3.0 | 2026-07-31 | Codex | 更新休息日早窗为 07:30-11:00，并覆盖开始边界 |
 | 1.4.0 | 2026-08-02 | Codex | 覆盖默认关闭发布时段时，任意时刻均可提交 |
+| 1.5.0 | 2026-09-01 | Codex | 覆盖 NYSE 全日休市日不触发视频加工盘中守卫。 |
 """
 
 from datetime import date, datetime
@@ -15,7 +16,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
-from config.settings import settings
+from config.settings import Settings, settings
 from video_processing.pipeline_manager import PipelineManager
 
 
@@ -73,6 +74,21 @@ def test_public_publish_window_is_unrestricted_when_disabled():
         assert settings.is_public_publish_window(datetime(2026, 8, 2, 3, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
     finally:
         settings.enable_public_publish_windows = previous_enabled
+
+
+def test_market_guard_uses_nyse_trading_day_not_weekday_only():
+    guarded = Settings(enable_market_hours_guard=True)
+    eastern = ZoneInfo("America/New_York")
+
+    assert guarded.is_us_market_guard_window(
+        datetime(2026, 7, 2, 12, 0, tzinfo=eastern)
+    )
+    assert not guarded.is_us_market_guard_window(
+        datetime(2026, 7, 3, 12, 0, tzinfo=eastern)
+    )
+    assert not guarded.is_us_market_guard_window(
+        datetime(2026, 4, 3, 12, 0, tzinfo=eastern)
+    )
 
 
 def test_kuaishou_new_video_queues_without_upload_outside_publish_window(tmp_path: Path, monkeypatch):

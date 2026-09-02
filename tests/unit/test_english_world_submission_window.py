@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-08-30 | Codex | 固化延后必须返回独立状态码，避免退出码 0 伪装成投稿成功。 |
 | 1.2.0 | 2026-08-30 | Codex | 固化具名操作员补发 capability 与人工授权使用相同的两小时边界。 |
 | 1.3.0 | 2026-08-30 | Codex | 固化仅接受同次唯一原生 ID 差分回执，拒绝模糊或未绑定身份。 |
+| 1.4.0 | 2026-08-31 | Codex | 固化全局微信锁忙时不得领取审核项，保持批准态等待下一轮调度。 |
 """
 
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,32 @@ def test_auto_policy_submission_is_deferred_outside_public_window(monkeypatch):
 
     assert submitter.submit("a" * 32) == submitter.EXIT_DEFERRED
     assert calls == [("get", "a" * 32), ("expire", "a" * 32)]
+
+
+def test_submission_defers_without_claiming_when_pipeline_lock_is_busy(monkeypatch, tmp_path):
+    calls: list[object] = []
+
+    class FakeDB:
+        def get_english_world_review_item(self, review_id):
+            calls.append(("get", review_id))
+            return {
+                "id": review_id,
+                "approval_source": "AUTO_POLICY",
+                "state": "SUBMISSION_APPROVED",
+                "mp4_path": str(tmp_path / "study-card.mp4"),
+            }
+
+        def claim_english_world_submission(self, *_args, **_kwargs):
+            raise AssertionError("busy pipeline lock must not claim or upload")
+
+    monkeypatch.setattr(submitter, "PipelineDB", FakeDB)
+    monkeypatch.setattr(submitter, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(submitter.settings, "wechat_publishing_paused", False)
+    monkeypatch.setattr(type(submitter.settings), "is_public_publish_window", lambda _self: True)
+    monkeypatch.setattr(submitter.fcntl, "flock", lambda *_args: (_ for _ in ()).throw(BlockingIOError()))
+
+    assert submitter.submit("b" * 32) == submitter.EXIT_DEFERRED
+    assert calls == [("get", "b" * 32)]
 
 
 def test_submission_identity_requires_same_session_unique_native_id_delta(tmp_path):

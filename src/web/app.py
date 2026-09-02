@@ -13,6 +13,7 @@
 | 3.30.0 | 2026-08-29 | Codex | Dashboard 控制面仅绑定回环地址并拒绝非本机 Origin，消除局域网直连与浏览器 CSRF 写入面。 |
 | 3.31.0 | 2026-08-29 | Codex | 英语世界人工批准、未确认重传和登录恢复在领取前绑定并核验完整投稿包指纹。 |
 | 3.32.0 | 2026-08-29 | Codex | Telegram 二次确认制作启动受锁协调器；只制作已选候选并强制返回人工审核。 |
+| 3.33.0 | 2026-09-02 | Codex | 抖音 HISTORY 补录与 CANCELED 重入队在写账本前读取阶段化 UI 熔断，读取异常或格式异常 fail-closed。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -80,6 +81,7 @@ import time
 import shutil
 import subprocess
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional
@@ -96,6 +98,11 @@ from pydantic import BaseModel
 
 from video_processing.db.database import PipelineDB
 from video_processing.content_types import CONTENT_TYPE_GENERAL, normalize_content_type
+from video_processing.core.douyin_ui_guard_policy import (
+    active_douyin_ui_failure_stages,
+    douyin_management_verify_is_blocked,
+    douyin_publish_is_blocked,
+)
 from config.settings import settings  # [Claude_Sonnet_4.6_Thinking_planning] v7.0: 模块顶层导入，避免函数体内重复 import
 from video_processing.utils.translation_helper import translate_text as _translate_text  # [Claude_Sonnet_4.6_planning] 统一翻译入口
 from video_processing.utils.generated_content_validation import is_upstream_error_response
@@ -889,6 +896,47 @@ def _normalize_backfill_since(since_upload_date: Optional[str], wall_street_days
     return since
 
 
+def _active_douyin_ui_failure_stages_for_dashboard() -> tuple[Optional[set[str]], Optional[str]]:
+    """读取并严格校验抖音 UI 熔断账本；任何不可判定状态均拒绝控制面写入。"""
+    try:
+        streaks = db.get_platform_ui_failure_streaks("douyin")
+    except Exception as exc:
+        logging.getLogger(__name__).exception("读取抖音 UI 熔断账本失败，拒绝仪表盘写入: %s", exc)
+        return None, "无法读取抖音 UI 熔断账本；为防止绕过熔断，拒绝写入投递队列。"
+
+    if not isinstance(streaks, list):
+        logging.getLogger(__name__).error(
+            "抖音 UI 熔断账本格式异常（期待列表，实际 %s），拒绝仪表盘写入",
+            type(streaks).__name__,
+        )
+        return None, "抖音 UI 熔断账本格式异常；为防止绕过熔断，拒绝写入投递队列。"
+
+    try:
+        for row in streaks:
+            if not isinstance(row, Mapping):
+                raise ValueError(f"记录不是映射：{type(row).__name__}")
+            stage = row.get("stage")
+            active = row.get("active")
+            consecutive_failures = row.get("consecutive_failures")
+            if not isinstance(stage, str) or not stage.strip():
+                raise ValueError("stage 为空或不是字符串")
+            if isinstance(active, bool) or not isinstance(active, int) or active not in {0, 1}:
+                raise ValueError("active 不是 0 或 1")
+            if (
+                isinstance(consecutive_failures, bool)
+                or not isinstance(consecutive_failures, int)
+                or consecutive_failures < 0
+            ):
+                raise ValueError("consecutive_failures 不是非负整数")
+        return active_douyin_ui_failure_stages(
+            streaks,
+            recording_threshold=settings.douyin_ui_failure_recording_threshold,
+        ), None
+    except (TypeError, ValueError) as exc:
+        logging.getLogger(__name__).error("抖音 UI 熔断账本格式异常，拒绝仪表盘写入: %s", exc)
+        return None, "抖音 UI 熔断账本格式异常；为防止绕过熔断，拒绝写入投递队列。"
+
+
 def _backfill_asset_paths(youtube_id: str, slice_index: int) -> dict[str, Path]:
     prefix = f"{youtube_id}_s{slice_index}" if slice_index > 0 else youtube_id
     return {
@@ -1105,6 +1153,16 @@ def queue_platform_backfill(req: PlatformBackfillQueueRequest):
     platform = (req.platform or "").lower()
     if platform not in {"wechat", "douyin"}:
         return {"success": False, "error": "platform 仅支持 wechat / douyin"}
+    if platform == "douyin":
+        active_stages, guard_error = _active_douyin_ui_failure_stages_for_dashboard()
+        if guard_error:
+            return {"success": False, "error": guard_error}
+        if douyin_management_verify_is_blocked(active_stages or set()):
+            stages = ", ".join(sorted(active_stages or set()))
+            return {
+                "success": False,
+                "error": f"抖音 UI 熔断活动（{stages}），已拒绝 HISTORY 补录入队。",
+            }
     since = _normalize_backfill_since(req.since_upload_date, req.wall_street_days)
     daily_limit = max(1, min(int(req.daily_limit), 50))
     requested_ids = set(req.youtube_ids or [])
@@ -1178,11 +1236,27 @@ def queue_platform_backfill(req: PlatformBackfillQueueRequest):
 @app.post("/api/douyin/publications/requeue")
 def requeue_canceled_douyin_publication(req: DouyinPublicationRequeueRequest):
     """人工确认抖音页面与投递产物已修复后，创建一条新的可审计队列记录。"""
+    active_stages, guard_error = _active_douyin_ui_failure_stages_for_dashboard()
+    if guard_error:
+        return {"success": False, "error": guard_error}
     publication = db.get_douyin_publication_by_id(req.publication_id)
     if not publication:
         return {"success": False, "error": "抖音投递记录不存在"}
     if publication.get("state") != "CANCELED":
         return {"success": False, "error": "仅 CANCELED 的抖音记录允许人工重新入队"}
+    source_kind = str(publication.get("source_kind") or "").upper()
+    if source_kind == "HISTORY":
+        blocked = douyin_management_verify_is_blocked(active_stages or set())
+    elif source_kind == "NEW":
+        blocked = douyin_publish_is_blocked(active_stages or set())
+    else:
+        return {"success": False, "error": "抖音投递来源异常；为防止绕过熔断，拒绝重新入队。"}
+    if blocked:
+        stages = ", ".join(sorted(active_stages or set()))
+        return {
+            "success": False,
+            "error": f"抖音 UI 熔断活动（{stages}），已拒绝 {source_kind} CANCELED 重新入队。",
+        }
     video_path = Path(str(publication.get("video_path") or ""))
     if not video_path.is_file():
         return {"success": False, "error": "成片不存在，不能重新入队"}

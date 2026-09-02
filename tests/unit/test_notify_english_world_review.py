@@ -11,6 +11,7 @@
 | 1.3.0 | 2026-08-26 | Codex | 覆盖标准 enriched 时间线兼容和机器可读 Telegram 交付回执。 |
 | 1.4.0 | 2026-08-27 | Codex | 覆盖学习卡生产器的点分隔 enriched 时间线命名。 |
 | 1.5.0 | 2026-08-30 | Codex | 覆盖窗口外批准队列必须明确标记 deferred。 |
+| 1.6.0 | 2026-09-01 | Codex | 覆盖时间线末词越过源字幕下一句时必须在交付前拒绝。 |
 | 1.7.0 | 2026-09-02 | Codex | 覆盖连字符 enriched 时间线命名，防止本地质检通过后交付入口误拒绝。 |
 | 1.8.0 | 2026-09-02 | Codex | 覆盖同目录多份时间线时必须按 manifest 来源起点绑定，拒绝错配补录。 |
 """
@@ -112,6 +113,59 @@ def test_resolve_timeline_uses_manifest_source_start_to_avoid_stale_sibling(tmp_
         manifest_path,
         manifest_payload={"source_start": 23.28},
     ) == expected
+
+
+def test_load_timeline_rejects_terminal_word_that_overlaps_next_caption(tmp_path):
+    """防止把绝对 spoken_end 当成相对时间，令下一句进入成片。"""
+    manifest_path = tmp_path / "study_card.manifest.json"
+    caption_path = tmp_path / "source.en-orig.json3"
+    caption_path.write_text(json.dumps({
+        "events": [
+            {"tStartMs": 1000, "segs": [{"utf8": "done"}]},
+            {"tStartMs": 3000, "segs": [{"utf8": "next"}]},
+        ],
+    }), encoding="utf-8")
+    timeline_path = tmp_path / "timeline.enriched.json"
+    timeline_path.write_text(json.dumps({
+        "headline_zh": "测试",
+        "source_provenance": {
+            "source_start_seconds": 0.0,
+            "caption_artifact": str(caption_path),
+        },
+        "words": [
+            {"text": "done", "start": 1.0, "end": 3.2},
+        ],
+    }), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="字幕边界"):
+        notifier._load_timeline(manifest_path)
+
+
+def test_audio_tail_analysis_rejects_next_sentence_after_final_word():
+    """最终词结束后仍识别到下一句时，不允许把成片送入审核。"""
+    expected_words = [{"text": "right", "start": 2.8, "end": 3.0}, {"text": "away.", "start": 3.0, "end": 3.18}]
+    observed_words = [
+        {"word": "right", "start": 2.78, "end": 3.0, "probability": 0.95},
+        {"word": "away.", "start": 3.0, "end": 3.18, "probability": 0.99},
+        {"word": "Mark", "start": 3.48, "end": 3.78, "probability": 0.89},
+    ]
+
+    report = notifier._analyse_audio_tail(expected_words, observed_words, output_duration=3.88)
+
+    assert report["passed"] is False
+    assert report["failure_kind"] == "next_word_leak"
+    assert report["trailing_words"][0]["word"] == "Mark"
+
+
+def test_audio_tail_analysis_accepts_short_safe_tail():
+    expected_words = [{"text": "away.", "start": 3.0, "end": 3.18}]
+    observed_words = [{"word": "away.", "start": 3.0, "end": 3.18, "probability": 0.99}]
+
+    report = notifier._analyse_audio_tail(expected_words, observed_words, output_duration=3.36)
+
+    assert report["passed"] is True
+    assert report["trailing_words"] == []
+
 
 @pytest.mark.parametrize("actual_duration", [30.0, 300.1])
 def test_review_package_rejects_mp4_outside_duration_range(monkeypatch, tmp_path, actual_duration):

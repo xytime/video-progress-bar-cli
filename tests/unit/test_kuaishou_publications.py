@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.12.0 | 2026-09-02 | Codex | 断言快手领取不会误签抖音浏览器启动凭据，隔离跨平台发布账本。 |
+| 1.11.0 | 2026-08-31 | Codex | 覆盖平台上传前 ASS 缺失时回退同源 VTT，且仍按字幕正文走 fail-closed 审查。 |
 | 1.0.0 | 2026-07-15 | Codex | 覆盖快手账本去重、迁移限额和审核状态 |
 | 1.1.0 | 2026-07-16 | Codex | 覆盖视频号延后发布任务的原子领取与黑名单保护 |
 | 1.2.0 | 2026-07-25 | Codex | 覆盖取消状态为历史补录自动重试终态与多尝试账本迁移 |
@@ -133,6 +135,8 @@ def test_new_video_claim_is_not_limited_by_historical_daily_quota(tmp_path: Path
     assert claimed is not None
     assert claimed["id"] == publication["id"]
     assert claimed["youtube_id"] == "new-video"
+    assert "_douyin_launch_ticket_id" not in claimed
+    assert "_douyin_launch_token" not in claimed
 
 
 def test_failed_claim_waits_until_the_next_day_instead_of_reclicking_same_day(tmp_path: Path):
@@ -306,6 +310,34 @@ def test_platform_publish_uses_archived_subtitle_text_for_preflight(tmp_path: Pa
     assert blocked is False
     _, kwargs = manager._check_censorship.call_args
     assert "archived subtitle body" in kwargs["subtitle_text"]
+    manager.db.update_douyin_publication_state.assert_not_called()
+
+
+def test_platform_publish_uses_source_vtt_when_ass_evidence_is_absent(tmp_path: Path, monkeypatch):
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager._ORIG_VIDEO_DIR = tmp_path / "original_video"
+    manager._ORIG_VIDEO_DIR.mkdir()
+    (tmp_path / "video-id_copy.txt").write_text("普通文案", encoding="utf-8")
+    (tmp_path / "video-id_title.txt").write_text("普通标题", encoding="utf-8")
+    (tmp_path / "video-id_source_subtitle.en.vtt").write_text(
+        "WEBVTT\n\n00:00.000 --> 00:02.000\nsource subtitle body\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", True)
+    manager.db = MagicMock()
+    manager.db.get_video_by_youtube_id.return_value = {"title": "测试视频", "zh_title": "普通标题"}
+    manager._check_censorship = MagicMock(return_value=False)
+
+    blocked = manager._platform_publication_censorship_blocked(
+        {"id": 195, "youtube_id": "video-id", "slice_index": 0},
+        "抖音", tmp_path / "video-id_copy.txt", tmp_path / "video-id_title.txt",
+    )
+
+    assert blocked is False
+    _, kwargs = manager._check_censorship.call_args
+    assert "source subtitle body" in kwargs["subtitle_text"]
     manager.db.update_douyin_publication_state.assert_not_called()
 
 

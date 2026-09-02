@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-30 | Codex | 覆盖只读命令边界、显式回账和非明确结果不改账 |
+| 1.1.0 | 2026-09-02 | Codex | 覆盖持久 UI 熔断在手工只读回查打开浏览器前生效。 |
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from config.settings import settings
 from scripts.reconcile_douyin_publication import reconcile_publication
 from video_processing.db.database import PipelineDB
 
@@ -85,3 +87,26 @@ def test_reconcile_refuses_non_review_state_before_browser(tmp_path: Path):
         )
 
     runner.assert_not_called()
+
+
+@pytest.mark.parametrize("stage", ["management_verify", "publish_pre_submit", "future_ui_stage"])
+def test_reconcile_respects_active_ui_guard_before_browser(tmp_path: Path, monkeypatch, stage: str):
+    """即使显式 --apply-ledger，也不能绕过已达到阈值的 UI 熔断。"""
+    db, publication = _fixture(tmp_path)
+    db.record_platform_ui_failure("douyin", stage, "selector drift", recording_threshold=2)
+    db.record_platform_ui_failure("douyin", stage, "selector drift", recording_threshold=2)
+    runner = MagicMock()
+    monkeypatch.setattr(settings, "douyin_ui_failure_recording_threshold", 2)
+
+    with pytest.raises(ValueError, match=stage):
+        reconcile_publication(
+            db,
+            publication["id"],
+            apply_ledger=True,
+            project_root=tmp_path,
+            output_dir=tmp_path,
+            runner=runner,
+        )
+
+    runner.assert_not_called()
+    assert db.get_douyin_publication_by_id(publication["id"])["state"] == "UNCERTAIN"

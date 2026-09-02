@@ -7,9 +7,12 @@
 | 1.1.0 | 2026-07-23 | Codex | 覆盖后台补录预览与确认入队 API |
 | 1.2.0 | 2026-07-23 | Codex | 覆盖视频号延后补发领取同样受补录规则约束 |
 | 1.3.0 | 2026-08-07 | Codex | 覆盖抖音 CANCELED 账本经显式 API 新建人工恢复尝试 |
+| 1.4.0 | 2026-09-02 | Codex | 覆盖仪表盘补录与 CANCELED 重入队遵守阶段化 UI 熔断并 fail-closed |
 """
 
 from pathlib import Path
+
+import pytest
 
 from video_processing.db.database import PipelineDB
 
@@ -173,6 +176,51 @@ def test_douyin_backfill_queue_api_creates_history_publication(tmp_path: Path, m
     assert publication["state"] == "QUEUED"
 
 
+def _activate_douyin_ui_guard(db: PipelineDB, stage: str) -> None:
+    for _ in range(2):
+        db.record_platform_ui_failure(
+            "douyin",
+            stage,
+            "selector drift",
+            recording_threshold=2,
+        )
+
+
+@pytest.mark.parametrize("stage", ["management_verify", "publish_pre_submit", "future_ui_stage"])
+def test_douyin_backfill_queue_api_refuses_any_active_ui_guard_before_ledger_write(
+    tmp_path: Path,
+    monkeypatch,
+    stage: str,
+):
+    """HISTORY 补录会触及作品管理页，任一活动熔断均不得先建账。"""
+    import web.app
+    from fastapi.testclient import TestClient
+
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "api-guarded-history", "A full speech about markets", upload_date="20260720")
+    (tmp_path / "api-guarded-history_vertical.mp4").write_bytes(b"video")
+    (tmp_path / "api-guarded-history_copy.txt").write_text("文案", encoding="utf-8")
+    (tmp_path / "api-guarded-history_title.txt").write_text("标题", encoding="utf-8")
+    _activate_douyin_ui_guard(db, stage)
+
+    client = TestClient(web.app.app)
+    monkeypatch.setattr(web.app, "db", db)
+    monkeypatch.setattr(web.app, "_OUT_DIR", tmp_path)
+    monkeypatch.setattr(web.app.settings, "douyin_ui_failure_recording_threshold", 2)
+
+    response = client.post(
+        "/api/platform-backfill/queue",
+        json={"platform": "douyin", "since_upload_date": "20260713", "daily_limit": 5},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is False
+    assert "熔断" in data["error"]
+    assert stage in data["error"]
+    assert db.get_douyin_publication("api-guarded-history") is None
+
+
 def test_douyin_requeue_api_creates_new_attempt_from_canceled_record(tmp_path: Path, monkeypatch):
     import web.app
     from fastapi.testclient import TestClient
@@ -195,6 +243,122 @@ def test_douyin_requeue_api_creates_new_attempt_from_canceled_record(tmp_path: P
     assert data["success"] is True
     assert data["attempt_number"] == 2
     assert data["state"] == "QUEUED"
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "stage", "allowed"),
+    [
+        ("NEW", "management_verify", True),
+        ("NEW", "publish_pre_submit", False),
+        ("NEW", "future_ui_stage", False),
+        ("HISTORY", "management_verify", False),
+    ],
+)
+def test_douyin_requeue_api_applies_stage_scoped_ui_guard_before_ledger_write(
+    tmp_path: Path,
+    monkeypatch,
+    source_kind: str,
+    stage: str,
+    allowed: bool,
+):
+    """NEW 仅可绕过纯管理页熔断；HISTORY 遇任一活动阶段均停止。"""
+    import web.app
+    from fastapi.testclient import TestClient
+
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "api-guarded-requeue", "A full speech about markets", upload_date="20260720")
+    video_path = tmp_path / "api-guarded-requeue_vertical.mp4"
+    video_path.write_bytes(b"video")
+    publication = db.create_douyin_publication(
+        "api-guarded-requeue", "8" * 64, str(video_path), source_kind=source_kind
+    )
+    assert db.update_douyin_publication_state(publication["id"], "CANCELED")
+    _activate_douyin_ui_guard(db, stage)
+
+    client = TestClient(web.app.app)
+    monkeypatch.setattr(web.app, "db", db)
+    monkeypatch.setattr(web.app.settings, "douyin_ui_failure_recording_threshold", 2)
+
+    response = client.post(
+        "/api/douyin/publications/requeue",
+        json={"publication_id": publication["id"]},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    current = db.get_douyin_publication("api-guarded-requeue")
+    if allowed:
+        assert data["success"] is True
+        assert current["attempt_number"] == 2
+        assert current["state"] == "QUEUED"
+    else:
+        assert data["success"] is False
+        assert "熔断" in data["error"]
+        assert stage in data["error"]
+        assert current["attempt_number"] == 1
+        assert current["state"] == "CANCELED"
+
+
+def test_douyin_backfill_queue_api_fails_closed_when_ui_guard_read_errors(tmp_path: Path, monkeypatch):
+    """熔断账本无法读取时，不得以不可知状态继续创建 HISTORY 记录。"""
+    import web.app
+    from fastapi.testclient import TestClient
+
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "api-guard-read-error", "A full speech about markets", upload_date="20260720")
+    (tmp_path / "api-guard-read-error_vertical.mp4").write_bytes(b"video")
+    (tmp_path / "api-guard-read-error_copy.txt").write_text("文案", encoding="utf-8")
+    (tmp_path / "api-guard-read-error_title.txt").write_text("标题", encoding="utf-8")
+
+    def fail_read(_platform: str):
+        raise RuntimeError("temporary database failure")
+
+    monkeypatch.setattr(db, "get_platform_ui_failure_streaks", fail_read)
+    client = TestClient(web.app.app)
+    monkeypatch.setattr(web.app, "db", db)
+    monkeypatch.setattr(web.app, "_OUT_DIR", tmp_path)
+
+    response = client.post(
+        "/api/platform-backfill/queue",
+        json={"platform": "douyin", "since_upload_date": "20260713", "daily_limit": 5},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is False
+    assert "无法读取" in data["error"]
+    assert db.get_douyin_publication("api-guard-read-error") is None
+
+
+def test_douyin_requeue_api_fails_closed_when_ui_guard_format_is_invalid(tmp_path: Path, monkeypatch):
+    """熔断账本格式异常时，不得新建 CANCELED 的下一次尝试。"""
+    import web.app
+    from fastapi.testclient import TestClient
+
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_video(db, "api-guard-malformed", "A full speech about markets", upload_date="20260720")
+    video_path = tmp_path / "api-guard-malformed_vertical.mp4"
+    video_path.write_bytes(b"video")
+    publication = db.create_douyin_publication(
+        "api-guard-malformed", "9" * 64, str(video_path), source_kind="NEW"
+    )
+    assert db.update_douyin_publication_state(publication["id"], "CANCELED")
+    monkeypatch.setattr(db, "get_platform_ui_failure_streaks", lambda _platform: {"stage": "bad"})
+    client = TestClient(web.app.app)
+    monkeypatch.setattr(web.app, "db", db)
+
+    response = client.post(
+        "/api/douyin/publications/requeue",
+        json={"publication_id": publication["id"]},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is False
+    assert "格式" in data["error"]
+    current = db.get_douyin_publication("api-guard-malformed")
+    assert current["attempt_number"] == 1
+    assert current["state"] == "CANCELED"
 
 
 def test_douyin_backfill_queue_api_skips_missing_assets(tmp_path: Path, monkeypatch):

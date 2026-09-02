@@ -11,6 +11,7 @@
 | 1.3.0 | 2026-08-03 | Codex | 移除小程序码入口，改为支持右上影子跟读 Banner 参考图。 |
 | 1.3.1 | 2026-08-04 | Codex | 文案同步显式长样片 120 秒上限，生产 30 秒限制不变。 |
 | 1.4.0 | 2026-08-24 | Codex | 英语世界生产成片改为严格大于 30 秒且不超过 300 秒，旧长样片参数保留兼容但不放宽边界。 |
+| 1.5.0 | 2026-09-01 | Codex | 渲染前校验相对时间线不能越过源字幕下一句，阻断绝对/相对秒数混用。 |
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from video_processing.study_cards import StudyCardContent, StudyCardRenderer  # noqa: E402
 from video_processing.study_cards.template_a import RecordUnderlineTemplate  # noqa: E402
+from video_processing.study_cards.timeline_guard import validate_source_caption_boundary  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,6 +50,7 @@ def main() -> int:
     args = parse_args()
     try:
         payload = json.loads(args.timeline.read_text(encoding="utf-8"))
+        validate_source_caption_boundary(payload, timeline_path=args.timeline)
         content = StudyCardContent.from_mapping(payload)
         StudyCardRenderer(RecordUnderlineTemplate(args.feature_reference)).render(
             args.source,

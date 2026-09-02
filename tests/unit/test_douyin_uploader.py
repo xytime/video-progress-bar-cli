@@ -18,21 +18,43 @@
 | 1.3.9 | 2026-08-24 | Codex | 覆盖封面完成按钮不可用时 fail-closed，且正常路径必须确认编辑器已关闭。 |
 | 1.3.11 | 2026-08-30 | Codex | 覆盖含话题文案填充后关闭标签建议浮层，避免遮挡封面入口。 |
 | 1.3.10 | 2026-08-30 | Codex | 覆盖作品列表标题回查、真实加载等待、原表单不算提交回执及最终按钮单次点击 |
+| 1.3.12 | 2026-08-31 | Codex | 覆盖独立横封面传入与快速检测风险提示的提交前阻断。 |
+| 1.3.13 | 2026-08-31 | Codex | 覆盖无 modal 类名时封面保存后的整页回退，避免错误调用 page.is_visible。 |
+| 1.3.14 | 2026-08-31 | Codex | 覆盖横封面推荐弹窗必须先确认关闭，且竖封面阶段不得提前等待“完成”。 |
+| 1.3.15 | 2026-08-31 | Codex | 覆盖封面图片仅通过当前 input 直接注入，禁止回退打开 Finder。 |
+| 1.3.16 | 2026-08-31 | Codex | 覆盖最终提交前预检通过仅生成证据，绝不触发发布按钮。 |
+| 1.3.17 | 2026-08-31 | Codex | 覆盖快速检测“检测中”不能被当作通过，必须等待至终态。 |
+| 1.3.18 | 2026-08-31 | Codex | 固化封面确认拒绝无文本通用主按钮，避免误触非保存动作。 |
+| 1.3.19 | 2026-08-31 | Codex | 覆盖检测服务拥堵的精确例外，且任何并存的封面风险仍阻断提交。 |
+| 1.3.20 | 2026-09-02 | Codex | 覆盖底层上传器在启动浏览器前复核持久 UI 熔断，恢复校准只允许非最终提交的显式证据采集。 |
+| 1.3.21 | 2026-09-02 | Codex | 覆盖管理页熔断期间最终提交必须显式标识 NEW，阻断 HISTORY/未知来源穿透低层守卫。 |
+| 1.3.22 | 2026-09-02 | Codex | 覆盖管理页熔断下仅接受数据库签发的一次性投稿启动凭据，拒绝来源参数伪造、历史预检和重放。 |
+| 1.3.23 | 2026-09-02 | Codex | 覆盖无凭据旧进程、默认快照和普通校准均不能绕过活动 UI 熔断。 |
+| 1.3.24 | 2026-09-02 | Codex | 保留管理页熔断下无上传动作的登录恢复，避免 NEW 领取因过期会话被永久封死。 |
+| 1.3.25 | 2026-09-02 | Codex | 覆盖缺失封面在 Playwright 启动前停止，避免无意义投稿页动作。 |
 """
 
+import json
+import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from video_processing.core.douyin_launch_context import douyin_submission_payload_sha256
 from scripts.douyin_uploader import (
     DOUYIN_DESCRIPTION_SELECTOR,
     DOUYIN_SELF_DECLARATION_OPTION_TEXT,
     DOUYIN_TITLE_SELECTOR,
     DOUYIN_VIDEO_INPUT_SELECTOR,
+    EXIT_FAILED,
+    EXIT_NOT_CALIBRATED,
     EXIT_UNDER_REVIEW,
     EXIT_SUBMISSION_UNCONFIRMED,
+    _guard_before_browser,
     _click_cover_confirm,
     apply_cover,
     fill_publish_fields,
+    final_metadata_matches,
     get_description_editor,
     get_management_publication_state,
     get_publish_button,
@@ -42,10 +64,13 @@ from scripts.douyin_uploader import (
     has_post_upload_form,
     is_login_required,
     is_upload_in_progress,
+    main,
     prepare_douyin_cover_upload_file,
     prepare_douyin_horizontal_cover_upload_file,
     publish_after_review,
+    quick_detection_allows_submission,
     select_self_declaration,
+    submission_preflight_allows_publish,
     upload_for_calibration,
     upload_and_publish,
     wait_for_management_content,
@@ -54,6 +79,283 @@ from scripts.douyin_uploader import (
     wait_for_cover_validation,
     wait_for_video_upload_input,
 )
+
+
+def _raw_uploader_args(*, tmp_path: Path, verify_only: bool = False) -> SimpleNamespace:
+    """构造仅供 main() 守卫测试的完整命令参数，避免调用真实浏览器。"""
+    copy_file = tmp_path / "copy.txt"
+    copy_file.write_text("用于精确回查的足够长文案", encoding="utf-8")
+    return SimpleNamespace(
+        video=None,
+        cover=None,
+        horizontal_cover=None,
+        copy=copy_file,
+        title_file=None,
+        state=tmp_path / "douyin_state.json",
+        evidence_dir=None,
+        no_headless=False,
+        fail_fast_login=True,
+        login_only=False,
+        calibrate=False,
+        calibrate_after_upload=False,
+        upload_wait_seconds=900,
+        prepare_description=False,
+        preflight_only=False,
+        publish=False,
+        verify_only=verify_only,
+        douyin_launch_ticket_id=None,
+        douyin_launch_token=None,
+        operator_recovery_stage=None,
+        operator_recovery_reason=None,
+    )
+
+
+def test_raw_uploader_verify_guard_stops_before_playwright(tmp_path: Path):
+    """低层脚本不能仅靠调用方约定；管理熔断时必须在 Chromium 前返回。"""
+    args = _raw_uploader_args(tmp_path=tmp_path, verify_only=True)
+    with patch("scripts.douyin_uploader.parse_args", return_value=args), patch(
+        "scripts.douyin_uploader._read_active_persistent_douyin_ui_failure_stages",
+        return_value={"management_verify"},
+    ), patch("scripts.douyin_uploader.sync_playwright") as playwright:
+        assert main() == EXIT_NOT_CALIBRATED
+
+    playwright.assert_not_called()
+
+
+def test_raw_uploader_missing_cover_stops_before_playwright(tmp_path: Path):
+    """直接调用也必须在浏览器前验证必需封面，不能依赖页面内失败。"""
+    args = _raw_uploader_args(tmp_path=tmp_path)
+    video = tmp_path / "video.mp4"
+    title = tmp_path / "title.txt"
+    video.write_bytes(b"video")
+    title.write_text("标题", encoding="utf-8")
+    args.video = video
+    args.title_file = title
+    args.cover = tmp_path / "missing-cover.jpg"
+    args.publish = True
+    with patch("scripts.douyin_uploader.parse_args", return_value=args), patch(
+        "scripts.douyin_uploader.sync_playwright"
+    ) as playwright:
+        assert main() == EXIT_FAILED
+
+    playwright.assert_not_called()
+
+
+def test_raw_uploader_publish_always_requires_a_ticket_even_without_an_active_fuse(
+    tmp_path: Path,
+):
+    """熔断为空不能把低层 CLI 退回为可匿名最终投稿的旁路。"""
+    args = _raw_uploader_args(tmp_path=tmp_path)
+    video = tmp_path / "ticketless.mp4"
+    title = tmp_path / "title.txt"
+    cover = tmp_path / "cover.jpg"
+    video.write_bytes(b"ticketless-video")
+    title.write_text("无凭据投稿", encoding="utf-8")
+    cover.write_bytes(b"cover")
+    args.video = video
+    args.title_file = title
+    args.cover = cover
+    args.publish = True
+    db = MagicMock()
+    db.get_platform_ui_failure_streaks.return_value = []
+
+    assert _guard_before_browser(args, db=db) == EXIT_NOT_CALIBRATED
+    db.begin_douyin_browser_launch.assert_not_called()
+
+
+def test_raw_uploader_guard_keeps_management_failure_out_of_new_submission(tmp_path: Path):
+    """管理页熔断仍不应误停独立投稿前闸门保护的新稿。"""
+    video = tmp_path / "new-submission.mp4"
+    video.write_bytes(b"new-submission")
+    copy = tmp_path / "copy.txt"
+    title = tmp_path / "title.txt"
+    cover = tmp_path / "cover.jpg"
+    for path, content in ((copy, b"copy"), (title, b"title"), (cover, b"cover")):
+        path.write_bytes(content)
+    args = SimpleNamespace(
+        video=video,
+        copy=copy,
+        title_file=title,
+        cover=cover,
+        horizontal_cover=None,
+        publish=True,
+        preflight_only=False,
+        calibrate_after_upload=False,
+        verify_only=False,
+        douyin_launch_ticket_id="ticket-1",
+        douyin_launch_token="launch-token-1",
+        operator_recovery_stage=None,
+        operator_recovery_reason=None,
+        evidence_dir=None,
+    )
+    db = MagicMock()
+    db.get_platform_ui_failure_streaks.return_value = [{
+        "stage": "management_verify", "active": 1, "consecutive_failures": 99,
+    }]
+    db.begin_douyin_browser_launch.return_value = True
+    payload = douyin_submission_payload_sha256(
+        video_path=video, copy_path=copy, title_path=title, cover_path=cover,
+    )
+    assert payload
+
+    assert _guard_before_browser(args, db=db) is None
+    db.begin_douyin_browser_launch.assert_called_once_with(
+        "ticket-1",
+        "launch-token-1",
+            video_path=str(video.resolve()),
+            asset_sha256=hashlib.sha256(video.read_bytes()).hexdigest(),
+            payload_sha256=payload,
+            require_new_source=True,
+    )
+    # 即使外部调用者仍偷偷附带已废弃的 source_kind=NEW，也不能替代账本凭据。
+    args.source_kind = "NEW"
+    db.begin_douyin_browser_launch.return_value = False
+    assert _guard_before_browser(args, db=db) == EXIT_NOT_CALIBRATED
+
+
+def test_raw_uploader_management_guard_rejects_history_preflight_without_ticket(tmp_path: Path):
+    """管理页熔断必须同时阻断 HISTORY 的上传式预检，不能只挡最终按钮。"""
+    video = tmp_path / "history.mp4"
+    video.write_bytes(b"history")
+    args = SimpleNamespace(
+        video=video,
+        publish=False,
+        preflight_only=True,
+        calibrate_after_upload=False,
+        verify_only=False,
+        douyin_launch_ticket_id=None,
+        douyin_launch_token=None,
+        operator_recovery_stage=None,
+        operator_recovery_reason=None,
+        evidence_dir=None,
+    )
+    db = MagicMock()
+    db.get_platform_ui_failure_streaks.return_value = [{
+        "stage": "management_verify", "active": 1, "consecutive_failures": 99,
+    }]
+    assert _guard_before_browser(args, db=db) == EXIT_NOT_CALIBRATED
+    db.begin_douyin_browser_launch.assert_not_called()
+
+
+def test_raw_uploader_management_guard_rejects_ticketless_old_publish(tmp_path: Path):
+    """遗留的 NEW+UPLOADING 行不等于可信投稿包，不能成为无限期发布桥。"""
+    args = _raw_uploader_args(tmp_path=tmp_path)
+    video = tmp_path / "old-new.mp4"
+    title = tmp_path / "old-title.txt"
+    cover = tmp_path / "old-cover.jpg"
+    video.write_bytes(b"old-new")
+    title.write_text("旧父进程标题", encoding="utf-8")
+    cover.write_bytes(b"old-cover")
+    args.video = video
+    args.title_file = title
+    args.cover = cover
+    args.publish = True
+    args.source_kind = "NEW"  # 已废弃参数即使被旧调用者带上，也没有任何授权作用。
+    db = MagicMock()
+    db.get_platform_ui_failure_streaks.return_value = [{
+        "stage": "management_verify", "active": 1, "consecutive_failures": 99,
+    }]
+
+    assert _guard_before_browser(args, db=db) == EXIT_NOT_CALIBRATED
+    db.begin_douyin_browser_launch.assert_not_called()
+
+
+def test_raw_uploader_publish_fuse_blocks_ordinary_calibration_and_default_snapshot(tmp_path: Path):
+    """所有会打开投稿页的动作都要过熔断，不能让无 action 的默认快照成为旁路。"""
+    db = MagicMock()
+    db.get_platform_ui_failure_streaks.return_value = [{
+        "stage": "publish_pre_submit", "active": 1, "consecutive_failures": 99,
+    }]
+    calibration_args = _raw_uploader_args(tmp_path=tmp_path)
+    calibration_args.calibrate = True
+    default_args = _raw_uploader_args(tmp_path=tmp_path)
+
+    assert _guard_before_browser(calibration_args, db=db) == EXIT_NOT_CALIBRATED
+    assert _guard_before_browser(default_args, db=db) == EXIT_NOT_CALIBRATED
+
+
+def test_raw_uploader_management_fuse_keeps_login_only_available_for_new_ticket_recovery(tmp_path: Path):
+    """管理页 selector 漂移不能阻止无上传的会话恢复，否则新片无法再使用已签 ticket。"""
+    args = _raw_uploader_args(tmp_path=tmp_path)
+    args.login_only = True
+    db = MagicMock()
+    db.get_platform_ui_failure_streaks.return_value = [{
+        "stage": "management_verify", "active": 1, "consecutive_failures": 99,
+    }]
+
+    assert _guard_before_browser(args, db=db) is None
+
+
+def test_raw_uploader_unreadable_or_malformed_guard_refuses_before_browser():
+    """账本读取异常和损坏条目都必须收敛到同一个无浏览器 fail-closed 结果。"""
+    args = SimpleNamespace(
+        publish=False,
+        preflight_only=False,
+        calibrate_after_upload=False,
+        verify_only=True,
+        operator_recovery_stage=None,
+        operator_recovery_reason=None,
+        evidence_dir=None,
+    )
+    unreadable_db = MagicMock()
+    unreadable_db.get_platform_ui_failure_streaks.side_effect = RuntimeError("db unavailable")
+    malformed_db = MagicMock()
+    malformed_db.get_platform_ui_failure_streaks.return_value = [{
+        "stage": "management_verify", "active": True, "consecutive_failures": 99,
+    }]
+
+    assert _guard_before_browser(args, db=unreadable_db) == EXIT_NOT_CALIBRATED
+    assert _guard_before_browser(args, db=malformed_db) == EXIT_NOT_CALIBRATED
+
+
+def test_raw_uploader_recovery_calibration_is_audited_but_never_bypasses_publish(
+    tmp_path: Path,
+):
+    """恢复只放行带阶段、理由和独立证据目录的非最终校准动作。"""
+    evidence_dir = tmp_path / "output" / "douyin_calibration" / "recovery-1"
+    db = MagicMock()
+    db.get_platform_ui_failure_streaks.return_value = [{
+        "stage": "publish_pre_submit", "active": 1, "consecutive_failures": 99,
+    }]
+    recovery_args = SimpleNamespace(
+        publish=False,
+        preflight_only=True,
+        calibrate_after_upload=False,
+        verify_only=False,
+        operator_recovery_stage="publish_pre_submit",
+        operator_recovery_reason="修复投稿页控件校准",
+        evidence_dir=evidence_dir,
+    )
+
+    assert _guard_before_browser(
+        recovery_args,
+        db=db,
+        calibration_root=evidence_dir.parent,
+    ) is None
+    audit = json.loads((evidence_dir / "operator_recovery_calibration.json").read_text(encoding="utf-8"))
+    assert audit["stage"] == "publish_pre_submit"
+    assert audit["final_publish"] is False
+
+    recovery_args.publish = True
+    recovery_args.preflight_only = False
+    assert _guard_before_browser(recovery_args, db=db) == EXIT_FAILED
+
+
+def test_raw_uploader_recovery_allows_audited_publish_page_snapshot(tmp_path: Path):
+    """被熔断的投稿页可用带阶段和证据目录的 --calibrate 受控采集。"""
+    evidence_dir = tmp_path / "output" / "douyin_calibration" / "snapshot-recovery"
+    db = MagicMock()
+    db.get_platform_ui_failure_streaks.return_value = [{
+        "stage": "publish_pre_submit", "active": 1, "consecutive_failures": 99,
+    }]
+    args = _raw_uploader_args(tmp_path=tmp_path)
+    args.calibrate = True
+    args.operator_recovery_stage = "publish_pre_submit"
+    args.operator_recovery_reason = "重新采集投稿页控件证据"
+    args.evidence_dir = evidence_dir
+
+    assert _guard_before_browser(args, db=db, calibration_root=evidence_dir.parent) is None
+    assert (evidence_dir / "operator_recovery_calibration.json").is_file()
 
 
 def test_management_state_requires_exact_copy_identity_and_local_card_status():
@@ -281,6 +583,90 @@ def test_douyin_publish_fields_are_filled_without_submit(tmp_path: Path):
     assert (tmp_path / "douyin_ready_to_submit_controls.json").exists()
 
 
+def test_douyin_publish_fields_use_independent_horizontal_cover(tmp_path: Path):
+    vertical_cover = tmp_path / "vertical.png"
+    horizontal_cover = tmp_path / "horizontal.png"
+    vertical_cover.write_bytes(b"vertical")
+    horizontal_cover.write_bytes(b"horizontal")
+    title = MagicMock()
+    title.count.return_value = 1
+    title.input_value.return_value = "标题"
+    editor = MagicMock()
+    editor.count.return_value = 1
+    editor.inner_text.return_value = "描述"
+    controls = MagicMock()
+    controls.evaluate_all.return_value = []
+    page = MagicMock()
+    page.evaluate.return_value = True
+    page.locator.side_effect = lambda selector: (
+        title if selector == DOUYIN_TITLE_SELECTOR else editor if selector == DOUYIN_DESCRIPTION_SELECTOR else controls
+    )
+
+    with patch("scripts.douyin_uploader.prepare_douyin_cover_upload_file", return_value=str(vertical_cover)), patch(
+        "scripts.douyin_uploader.prepare_douyin_horizontal_cover_upload_file", return_value=str(horizontal_cover)
+    ) as prepare_horizontal, patch("scripts.douyin_uploader.apply_cover", return_value=True) as apply_cover_mock:
+        assert fill_publish_fields(
+            page,
+            "标题",
+            "描述",
+            tmp_path,
+            cover_path=str(vertical_cover),
+            horizontal_cover_path=str(horizontal_cover),
+        )
+
+    prepare_horizontal.assert_called_once_with(str(horizontal_cover))
+    apply_cover_mock.assert_called_once_with(
+        page,
+        str(vertical_cover),
+        artifact_dir=tmp_path,
+        horizontal_cover_path=str(horizontal_cover),
+    )
+
+
+def test_douyin_fill_fields_selects_only_exact_final_hashtag_suggestion(tmp_path: Path):
+    cover = tmp_path / "cover.png"
+    cover.write_bytes(b"cover")
+    title = MagicMock()
+    title.count.return_value = 1
+    title.input_value.return_value = "标题"
+    editor = MagicMock()
+    editor.count.return_value = 1
+    editor.inner_text.return_value = "正文 #英文阅读"
+    candidate = MagicMock()
+    candidate.count.return_value = 1
+    candidate.is_visible.return_value = True
+    candidate.nth.return_value = candidate
+    controls = MagicMock()
+    controls.evaluate_all.return_value = []
+    page = MagicMock()
+    page.evaluate.return_value = True
+    page.get_by_text.return_value = candidate
+    page.locator.side_effect = lambda selector: (
+        title if selector == DOUYIN_TITLE_SELECTOR else editor if selector == DOUYIN_DESCRIPTION_SELECTOR else controls
+    )
+
+    with patch("scripts.douyin_uploader.prepare_douyin_cover_upload_file", return_value=str(cover)), patch(
+        "scripts.douyin_uploader.prepare_douyin_horizontal_cover_upload_file", return_value=str(cover)
+    ), patch("scripts.douyin_uploader.apply_cover", return_value=True):
+        assert fill_publish_fields(page, "标题", "正文 #英文阅读", tmp_path, cover_path=str(cover))
+
+    page.get_by_text.assert_called_with("#英文阅读", exact=True)
+    candidate.click.assert_called_once_with(timeout=2_000)
+
+
+def test_final_metadata_rejects_platform_replaced_hashtag():
+    title = MagicMock()
+    title.count.return_value = 1
+    title.input_value.return_value = "标题"
+    editor = MagicMock()
+    editor.count.return_value = 1
+    editor.inner_text.return_value = "正文 #英文阅读书单"
+    page = MagicMock()
+    page.locator.side_effect = lambda selector: title if selector == DOUYIN_TITLE_SELECTOR else editor
+
+    assert not final_metadata_matches(page, "标题", "正文 #英文阅读")
+
+
 def test_douyin_self_declaration_passes_when_already_selected(tmp_path: Path):
     page = MagicMock()
     page.evaluate.return_value = True
@@ -392,9 +778,97 @@ def test_douyin_publish_after_review_returns_submission_not_final_publish(tmp_pa
     controls.evaluate_all.return_value = []
     page.locator.side_effect = lambda selector: body if selector == "body" else controls
 
-    assert publish_after_review(page, tmp_path, title_text="一个测试标题", description_text="一段测试描述")
+    with patch("scripts.douyin_uploader.final_metadata_matches", return_value=True):
+        assert publish_after_review(page, tmp_path, title_text="一个测试标题", description_text="一段测试描述")
     button.click.assert_called_once()
     assert (tmp_path / "douyin_post_submit_controls.json").exists()
+
+
+def test_douyin_quick_detection_allows_exact_capacity_congestion_failure():
+    page = MagicMock()
+    body = MagicMock()
+    body.inner_text.return_value = "快速检测 作品检测失败 抱歉，当前检测人数过多，请稍后再试"
+    page.locator.return_value = body
+
+    assert quick_detection_allows_submission(page)
+
+
+def test_douyin_quick_detection_blocks_capacity_failure_when_cover_risk_coexists():
+    page = MagicMock()
+    body = MagicMock()
+    body.inner_text.return_value = (
+        "快速检测 作品检测失败 抱歉，当前检测人数过多，请稍后再试 封面检测未通过"
+    )
+    page.locator.return_value = body
+
+    assert not quick_detection_allows_submission(page)
+
+
+def test_douyin_quick_detection_retests_before_accepting_clean_result():
+    page = MagicMock()
+    retry_button = MagicMock()
+    retry_button.count.return_value = 1
+    retry_button.is_visible.return_value = True
+    retry_button.is_enabled.return_value = True
+    body = MagicMock()
+    body.inner_text.side_effect = [
+        "快速检测 横/竖双封面缺失",
+        "快速检测 作品未见异常",
+    ]
+    page.get_by_text.return_value = retry_button
+    page.locator.return_value = body
+
+    assert quick_detection_allows_submission(page, timeout_seconds=2)
+    retry_button.click.assert_called_once_with(timeout=2_000)
+
+
+def test_douyin_quick_detection_waits_for_running_state_to_finish():
+    page = MagicMock()
+    retry_button = MagicMock()
+    retry_button.count.return_value = 0
+    body = MagicMock()
+    body.inner_text.side_effect = [
+        "快速检测 检测中 1%",
+        "快速检测 作品未见异常",
+    ]
+    page.get_by_text.return_value = retry_button
+    page.locator.return_value = body
+
+    assert quick_detection_allows_submission(page, timeout_seconds=2)
+    page.wait_for_timeout.assert_called_once_with(1_000)
+
+
+def test_douyin_publish_after_review_stops_before_click_when_quick_detection_blocks(tmp_path: Path):
+    page = MagicMock()
+    page.evaluate.return_value = True
+    body = MagicMock()
+    body.inner_text.return_value = "快速检测 横/竖双封面缺失"
+    controls = MagicMock()
+    controls.evaluate_all.return_value = []
+    page.locator.side_effect = lambda selector: body if selector == "body" else controls
+
+    with patch("scripts.douyin_uploader.final_metadata_matches", return_value=True):
+        assert not publish_after_review(page, tmp_path, title_text="标题", description_text="描述")
+    page.get_by_text.assert_called_once_with("重新检测", exact=True)
+    assert (tmp_path / "douyin_quick_detection_blocked_controls.json").exists()
+
+
+def test_douyin_submission_preflight_passes_without_clicking_publish(tmp_path: Path):
+    page = MagicMock()
+    with patch("scripts.douyin_uploader.select_self_declaration", return_value=True), patch(
+        "scripts.douyin_uploader.final_metadata_matches", return_value=True
+    ), patch("scripts.douyin_uploader.quick_detection_allows_submission", return_value=True), patch(
+        "scripts.douyin_uploader.capture_controls"
+    ) as capture:
+        assert submission_preflight_allows_publish(
+            page,
+            tmp_path,
+            title_text="标题",
+            description_text="描述",
+        )
+
+    capture.assert_called_once_with(page, tmp_path, "douyin_preflight_ready")
+    page.get_by_text.assert_not_called()
 
 
 def test_douyin_publish_wait_ignores_old_work_status_until_current_marker_appears(tmp_path: Path):
@@ -414,7 +888,8 @@ def test_douyin_publish_wait_ignores_old_work_status_until_current_marker_appear
     controls.evaluate_all.return_value = []
     page.locator.side_effect = lambda selector: body if selector == "body" else controls
 
-    assert publish_after_review(page, tmp_path, title_text="一个测试标题", description_text="一段测试描述")
+    with patch("scripts.douyin_uploader.final_metadata_matches", return_value=True):
+        assert publish_after_review(page, tmp_path, title_text="一个测试标题", description_text="一段测试描述")
     assert body.inner_text.call_count == 3
 
 
@@ -454,9 +929,12 @@ def test_douyin_publish_click_failure_is_not_force_retried(tmp_path: Path):
     page.get_by_text.return_value = button
     controls = MagicMock()
     controls.evaluate_all.return_value = []
-    page.locator.return_value = controls
+    body = MagicMock()
+    body.inner_text.return_value = "快速检测正常 标题 描述"
+    page.locator.side_effect = lambda selector: body if selector == "body" else controls
 
-    assert not publish_after_review(page, tmp_path, title_text="标题", description_text="描述")
+    with patch("scripts.douyin_uploader.final_metadata_matches", return_value=True):
+        assert not publish_after_review(page, tmp_path, title_text="标题", description_text="描述")
     button.click.assert_called_once_with(timeout=5000)
     assert (tmp_path / "douyin_submit_click_failed_controls.json").exists()
 
@@ -540,7 +1018,7 @@ def test_prepare_douyin_cover_upload_file_creates_vertical_safe_cover(tmp_path: 
     assert prepared is not None
     with Image.open(prepared) as image:
         assert image.size == (1080, 1440)
-    assert Path(prepared).name == "cover_douyin.png"
+    assert Path(prepared).name == "cover_douyin.jpg"
 
 
 def test_prepare_douyin_horizontal_cover_upload_file_creates_4x3_safe_cover(tmp_path: Path):
@@ -553,7 +1031,7 @@ def test_prepare_douyin_horizontal_cover_upload_file_creates_4x3_safe_cover(tmp_
     assert prepared is not None
     with Image.open(prepared) as image:
         assert image.size == (1280, 960)
-    assert Path(prepared).name == "cover_douyin_horizontal.png"
+    assert Path(prepared).name == "cover_douyin_horizontal.jpg"
 
 
 def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
@@ -598,7 +1076,7 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
     modal_locators.nth.return_value = modal
 
     def page_locator_side_effect(sel):
-        if "选择封面" in sel or "设置封面" in sel:
+        if "封面" in sel:
             m = MagicMock()
             m.first = entry_el
             return m
@@ -617,8 +1095,81 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
     ):
         assert apply_cover(page, str(cover))
     input_el.set_input_files.assert_called_once_with(str(cover.resolve()), timeout=3000)
+    page.expect_file_chooser.assert_not_called()
+    entry_el.scroll_into_view_if_needed.assert_called_once_with(timeout=2_000)
     confirm_btn.click.assert_called_once()
     page.locator.assert_any_call(".dy-creator-content-modal-body")
+
+
+def test_douyin_apply_cover_page_fallback_does_not_call_page_is_visible(tmp_path: Path):
+    cover = tmp_path / "cover.jpg"
+    cover.write_bytes(b"cover_bytes")
+    page = MagicMock()
+    page.is_visible = MagicMock()
+    page.locator.side_effect = lambda selector: MagicMock()
+    page.expect_file_chooser.side_effect = RuntimeError("no chooser")
+
+    with patch("scripts.douyin_uploader._find_visible_element", side_effect=[MagicMock(), None, None, MagicMock(), None, None]), patch(
+        "scripts.douyin_uploader._find_active_modal", return_value=page
+    ), patch("scripts.douyin_uploader._apply_cover_in_current_panel", return_value=True), patch(
+        "scripts.douyin_uploader._click_cover_confirm", return_value=True), patch(
+        "scripts.douyin_uploader._saved_cover_slots_present", return_value=True), patch(
+        "scripts.douyin_uploader.wait_for_cover_validation", return_value=True):
+        assert apply_cover(page, str(cover))
+
+    page.is_visible.assert_not_called()
+
+
+def test_douyin_apply_cover_confirms_horizontal_recommendation_before_uploading_horizontal(tmp_path: Path):
+    vertical_cover = tmp_path / "vertical.jpg"
+    horizontal_cover = tmp_path / "horizontal.jpg"
+    vertical_cover.write_bytes(b"vertical")
+    horizontal_cover.write_bytes(b"horizontal")
+    page = MagicMock()
+    modal = MagicMock()
+
+    with patch("scripts.douyin_uploader._click_cover_entry", return_value=modal), patch(
+        "scripts.douyin_uploader._apply_cover_in_current_panel", side_effect=[True, True]
+    ) as apply_panel, patch(
+        "scripts.douyin_uploader._click_horizontal_cover_step", return_value=True
+    ) as click_horizontal, patch(
+        "scripts.douyin_uploader._accept_horizontal_cover_recommendation", return_value=True
+    ) as accept_recommendation, patch(
+        "scripts.douyin_uploader._find_active_modal", return_value=modal
+    ), patch("scripts.douyin_uploader._click_cover_confirm", return_value=True) as confirm, patch(
+        "scripts.douyin_uploader._wait_for_cover_editor_closed", return_value=True
+    ), patch("scripts.douyin_uploader._saved_cover_slots_present", return_value=True), patch(
+        "scripts.douyin_uploader.wait_for_cover_validation", return_value=True
+    ):
+        assert apply_cover(page, str(vertical_cover), horizontal_cover_path=str(horizontal_cover))
+
+    assert apply_panel.call_args_list[0].args[2] == str(vertical_cover.resolve())
+    assert apply_panel.call_args_list[1].args[2] == str(horizontal_cover.resolve())
+    click_horizontal.assert_called_once_with(page, modal)
+    accept_recommendation.assert_called_once_with(page)
+    # “完成”只在横封面也设置完成后调用一次，不能在竖封面阶段空等。
+    confirm.assert_called_once_with(page, modal)
+
+
+def test_douyin_apply_cover_stops_when_horizontal_recommendation_cannot_be_confirmed(tmp_path: Path):
+    vertical_cover = tmp_path / "vertical.jpg"
+    horizontal_cover = tmp_path / "horizontal.jpg"
+    vertical_cover.write_bytes(b"vertical")
+    horizontal_cover.write_bytes(b"horizontal")
+    page = MagicMock()
+    modal = MagicMock()
+
+    with patch("scripts.douyin_uploader._click_cover_entry", return_value=modal), patch(
+        "scripts.douyin_uploader._apply_cover_in_current_panel", return_value=True
+    ) as apply_panel, patch(
+        "scripts.douyin_uploader._click_horizontal_cover_step", return_value=True
+    ), patch(
+        "scripts.douyin_uploader._accept_horizontal_cover_recommendation", return_value=False
+    ), patch("scripts.douyin_uploader._click_cover_confirm") as confirm:
+        assert not apply_cover(page, str(vertical_cover), horizontal_cover_path=str(horizontal_cover))
+
+    assert apply_panel.call_count == 1
+    confirm.assert_not_called()
 
 
 def test_douyin_cover_confirm_refuses_disabled_button():
@@ -630,6 +1181,21 @@ def test_douyin_cover_confirm_refuses_disabled_button():
     with patch("scripts.douyin_uploader._find_visible_element", return_value=button):
         assert not _click_cover_confirm(page, modal, timeout_seconds=1)
     button.click.assert_not_called()
+
+
+def test_douyin_cover_confirm_recognizes_observed_save_button():
+    page = MagicMock()
+    button = MagicMock()
+    button.is_enabled.return_value = True
+    modal = MagicMock()
+
+    with patch("scripts.douyin_uploader._find_visible_element", return_value=button) as find_visible:
+        assert _click_cover_confirm(page, modal, timeout_seconds=1)
+
+    selectors = find_visible.call_args.args[1]
+    assert "button:has-text('保存')" in selectors
+    assert "button.semi-button-primary" not in selectors
+    button.click.assert_called_once_with(timeout=2000)
 
 
 def test_douyin_publish_fields_stop_when_required_cover_fails(tmp_path: Path):
