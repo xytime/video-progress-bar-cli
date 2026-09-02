@@ -23,6 +23,8 @@
 # | 2.17.0 | 2026-08-30 | Codex | 覆盖宿主媒体通路预检、Cookie/Clash 恢复分支及预检假阳性候选回退语义。 |
 # | 2.18.0 | 2026-08-30 | Codex | 固化 LaunchAgent 必须使用项目 venv，避免调度器缺失生产依赖。 |
 # | 2.19.0 | 2026-08-30 | Codex | 固化 LaunchAgent plist 为可迁移模板并由安装器逐字段核验渲染路径。 |
+# | 2.20.0 | 2026-08-31 | Codex | 覆盖来源预检自身异常的失败请求、持久状态与禁止启动候选协调器边界。 |
+# | 2.24.0 | 2026-09-02 | Codex | 覆盖日更提示注入投稿保护来源，避免同源 UNDER_REVIEW 项被再次制作。 |
 """
 
 from __future__ import annotations
@@ -199,6 +201,53 @@ def test_source_access_failure_is_reported_without_launching_candidate_coordinat
     assert "不是候选质量或换题问题" in delivered[0]["failure"]
     status = (paths.log_dir / "last_run_status.txt").read_text(encoding="utf-8")
     assert "phase=REPORTED_SOURCE_ACCESS_FAILURE" in status
+
+
+def test_source_access_preflight_exception_is_reported_without_launching_candidate_coordinator(monkeypatch, tmp_path: Path):
+    codex = tmp_path / "codex"
+    notifier = tmp_path / "notifier.py"
+    _write_executable(codex, "#!/usr/bin/env bash\nexit 0\n")
+    notifier.write_text("# fake notifier\n", encoding="utf-8")
+    paths = runner.RuntimePaths(
+        project_root=tmp_path,
+        codex_home=tmp_path,
+        codex_bin=codex,
+        python_bin=Path(sys.executable),
+        notifier_script=notifier,
+        log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock",
+        coordinator_timeout_seconds=60,
+    )
+
+    def raise_missing_dependency(*_args):
+        raise ModuleNotFoundError("pydantic_settings")
+
+    monkeypatch.setattr(runner, "_preflight_youtube_source_access", raise_missing_dependency)
+    delivered = []
+    monkeypatch.setattr(
+        runner,
+        "_deliver_request_from_host",
+        lambda _paths, request, *_args, **_kwargs: (delivered.append(json.loads(request.read_text())) or (1, True)),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_coordinator",
+        lambda *_args, **_kwargs: pytest.fail("preflight exception must not launch candidate coordinator"),
+    )
+
+    exit_code = runner.run(
+        paths,
+        max_attempts=1,
+        retry_delay_seconds=0,
+        source_access_preflight=True,
+    )
+
+    assert exit_code == 1
+    assert delivered and delivered[0]["kind"] == "failure"
+    assert "ModuleNotFoundError" in delivered[0]["failure"]
+    assert "未开始候选筛选" in delivered[0]["failure"]
+    status = (paths.log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=REPORTED_SOURCE_ACCESS_PREFLIGHT_EXCEPTION" in status
 
 
 def test_source_access_auth_failure_refreshes_cookie_once_then_reprobes(monkeypatch, tmp_path: Path):
@@ -382,6 +431,67 @@ def test_daily_prompt_injects_machine_exclusions_and_requires_rejection_persiste
     assert "--rejected-youtube-id '<实际youtube_id>'" in prompt
     assert '["EJ5Sqku_fYc", "xewivZQgBMQ"]' in prompt
     assert "禁止再次下载、锁定或制作" in prompt
+
+
+def test_daily_prompt_blocks_submission_protected_sources_before_production(tmp_path: Path):
+    prompt = runner._daily_production_prompt(
+        tmp_path / "delivery.json",
+        (),
+        ("QsR-ga0OTiY",),
+    )
+
+    assert '["QsR-ga0OTiY"]' in prompt
+    assert "审核或投稿保护" in prompt
+    assert "禁止再次下载、锁定或制作" in prompt
+
+
+def test_submission_protection_ledger_failure_is_reported_without_launching_coordinator(monkeypatch, tmp_path: Path):
+    codex = tmp_path / "codex"
+    notifier = tmp_path / "notifier.py"
+    _write_executable(codex, "#!/usr/bin/env bash\nexit 0\n")
+    notifier.write_text("# fake notifier\n", encoding="utf-8")
+    paths = runner.RuntimePaths(
+        project_root=tmp_path,
+        codex_home=tmp_path,
+        codex_bin=codex,
+        python_bin=Path(sys.executable),
+        notifier_script=notifier,
+        log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock",
+        coordinator_timeout_seconds=60,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_submission_protected_youtube_ids",
+        lambda _project_root: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+        raising=False,
+    )
+    delivered: list[dict] = []
+    monkeypatch.setattr(
+        runner,
+        "_deliver_request_from_host",
+        lambda _paths, request, *_args, **_kwargs: (
+            delivered.append(json.loads(request.read_text(encoding="utf-8"))) or (1, True)
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "_run_coordinator",
+        lambda *_args, **_kwargs: pytest.fail("protection-ledger failure must not launch production"),
+    )
+
+    exit_code = runner.run(
+        paths,
+        max_attempts=1,
+        retry_delay_seconds=0,
+        source_access_preflight=False,
+    )
+
+    assert exit_code == 1
+    assert delivered and delivered[0]["kind"] == "failure"
+    assert "投稿保护账本不可读取" in delivered[0]["failure"]
+    status = (paths.log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=REPORTED_SUBMISSION_PROTECTION_LEDGER_FAILURE" in status
 
 
 def test_delivery_request_recorder_persists_deduplicated_rejected_ids(tmp_path: Path):

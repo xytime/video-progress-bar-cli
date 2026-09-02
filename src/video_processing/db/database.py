@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.58.2  | 2026-09-02 | Codex                               | 提供英语世界同源审核/投稿保护来源的只读查询，供日更在制作前排除重复来源。       |
 | 3.57.0  | 2026-08-30 | Codex                               | 新增英语世界独立抖音投稿与尝试账本，并与通用 NEW 共用每日领取额度。 |
 | 3.56.1  | 2026-08-30 | Codex                               | 英语世界平台原生 ID 只允许首次绑定或同 ID 幂等写入，拒绝覆盖审核项和尝试证据锚点。 |
 | 3.56.0  | 2026-08-30 | Codex                               | 英语世界投稿账本持久化视频号原生 ID，并提供节流的精确作品管理回查状态。 |
@@ -5525,6 +5526,21 @@ class PipelineDB:
             return [dict(row) for row in rows]
 
     # --- English World Telegram review / WeChat submission (isolated from PipelineManager) ---
+
+    def list_english_world_submission_protected_source_ids(self) -> List[str]:
+        """读取禁止日更再次制作的同源审核/投稿保护来源；只读且不改变历史项状态。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT DISTINCT source_youtube_id
+                   FROM english_world_review_items
+                   WHERE source_youtube_id IS NOT NULL
+                     AND TRIM(source_youtube_id) != ''
+                     AND state IN ('READY_FOR_REVIEW', 'SUBMISSION_APPROVED', 'SUBMITTING',
+                                   'UNDER_REVIEW', 'UNCERTAIN', 'LOGIN_REQUIRED', 'FAILED')
+                   ORDER BY source_youtube_id ASC"""
+            ).fetchall()
+            return [str(row["source_youtube_id"]) for row in rows]
+
     def create_english_world_review_item(
         self,
         *,

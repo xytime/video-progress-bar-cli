@@ -16,6 +16,7 @@
 | 1.5.0 | 2026-08-30 | Codex | 覆盖英语世界原生作品 ID 入账、节流领取与平台终态停止回查。 |
 | 1.6.0 | 2026-08-30 | Codex | 覆盖英语世界独立抖音账本、不可重传尝试和与通用 NEW 共用每日额度。 |
 | 1.5.1 | 2026-08-30 | Codex | 固化英语世界原生作品 ID 只能首次绑定或相同 ID 幂等绑定。 |
+| 1.9.0 | 2026-09-02 | Codex | 覆盖日更选题前读取同源投稿保护账本，避免制作后才因重复审核被拒绝。 |
 """
 
 from __future__ import annotations
@@ -499,6 +500,33 @@ def test_review_item_rejects_same_source_with_different_artifact(tmp_path):
         db.create_english_world_review_item(
             artifact_sha256="2" * 64, **_stored_hashes("2"), **common,
         )
+
+
+def test_list_submission_protected_source_ids_returns_review_protected_source(tmp_path):
+    """日更选题必须在渲染前看到与创建审核项相同的同源保护范围。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    paths = {name: package_dir / name for name in (
+        "video.mp4", "manifest.json", "title.txt", "copy.txt", "cover.jpg", "cover_provenance.json",
+    )}
+    for path in paths.values():
+        path.write_text("fixture", encoding="utf-8")
+
+    db.create_english_world_review_item(
+        artifact_sha256="3" * 64,
+        **_stored_hashes("3"),
+        title="受保护的同源审核项",
+        mp4_path=str(paths["video.mp4"]),
+        manifest_path=str(paths["manifest.json"]),
+        title_path=str(paths["title.txt"]),
+        copy_path=str(paths["copy.txt"]),
+        cover_path=str(paths["cover.jpg"]),
+        cover_provenance_path=str(paths["cover_provenance.json"]),
+        source_youtube_id="dQw4w9WgXcQ",
+    )
+
+    assert db.list_english_world_submission_protected_source_ids() == ["dQw4w9WgXcQ"]
 
 
 def test_package_integrity_rejects_any_file_mutation(tmp_path):

@@ -11,6 +11,8 @@
 | 1.3.0 | 2026-08-26 | Codex | 覆盖标准 enriched 时间线兼容和机器可读 Telegram 交付回执。 |
 | 1.4.0 | 2026-08-27 | Codex | 覆盖学习卡生产器的点分隔 enriched 时间线命名。 |
 | 1.5.0 | 2026-08-30 | Codex | 覆盖窗口外批准队列必须明确标记 deferred。 |
+| 1.7.0 | 2026-09-02 | Codex | 覆盖连字符 enriched 时间线命名，防止本地质检通过后交付入口误拒绝。 |
+| 1.8.0 | 2026-09-02 | Codex | 覆盖同目录多份时间线时必须按 manifest 来源起点绑定，拒绝错配补录。 |
 """
 
 from __future__ import annotations
@@ -84,13 +86,32 @@ def test_failure_notification_writes_machine_delivery_receipt(monkeypatch, tmp_p
     }
 
 
-@pytest.mark.parametrize("timeline_name", ["timeline_enriched.json", "timeline.enriched.json"])
+@pytest.mark.parametrize(
+    "timeline_name",
+    ["timeline_enriched.json", "timeline.enriched.json", "timeline-enriched.json"],
+)
 def test_load_timeline_accepts_renderer_standard_enriched_name(tmp_path, timeline_name):
     manifest_path = tmp_path / "study_card.manifest.json"
     (tmp_path / timeline_name).write_text('{"headline_zh":"机器人"}', encoding="utf-8")
 
     assert notifier._load_timeline(manifest_path) == {"headline_zh": "机器人"}
 
+
+def test_resolve_timeline_uses_manifest_source_start_to_avoid_stale_sibling(tmp_path):
+    """同一来源的后续失败重做不能将另一片段时间线绑定到既有成片。"""
+    manifest_path = tmp_path / "study_card.manifest.json"
+    (tmp_path / "timeline_enriched.json").write_text(json.dumps({
+        "source_provenance": {"source_start_seconds": 34.12},
+    }), encoding="utf-8")
+    expected = tmp_path / "timeline-enriched.json"
+    expected.write_text(json.dumps({
+        "source_provenance": {"source_start_sec": 23.28},
+    }), encoding="utf-8")
+
+    assert notifier._resolve_enriched_timeline_path(
+        manifest_path,
+        manifest_payload={"source_start": 23.28},
+    ) == expected
 
 @pytest.mark.parametrize("actual_duration", [30.0, 300.1])
 def test_review_package_rejects_mp4_outside_duration_range(monkeypatch, tmp_path, actual_duration):

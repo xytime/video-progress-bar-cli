@@ -19,6 +19,8 @@
 | 1.9.0 | 2026-08-29 | Codex | 审核项绑定完整投稿包指纹并按 source_youtube_id 阻断重复审核/投稿。 |
 | 1.10.0 | 2026-08-29 | Codex | Telegram 选题制作请求强制进入人工审核，不受全局自动投稿开关扩权。 |
 | 1.11.0 | 2026-08-30 | Codex | 窗口外批准队列明确回执“已排队、尚未上传”，不再误报自动投稿执行完毕。 |
+| 1.13.0 | 2026-09-02 | Codex | 兼容渲染器实际输出的连字符 enriched 时间线名，避免本地质检通过后交付入口误拒绝。 |
+| 1.14.0 | 2026-09-02 | Codex | 同目录存在多份时间线时按 manifest 来源起点匹配，拒绝错绑失败重做的片段。 |
 """
 
 from __future__ import annotations
@@ -68,13 +70,40 @@ def _post_document(path: Path, caption: str):
     return result
 
 
-def _resolve_enriched_timeline_path(manifest_path: Path) -> Path | None:
-    """兼容渲染器的标准 enriched 输出名，优先最终复核时间线。"""
-    for name in ("timeline_final_enriched.json", "timeline_enriched.json", "timeline.enriched.json"):
+def _resolve_enriched_timeline_path(
+    manifest_path: Path,
+    *,
+    manifest_payload: dict | None = None,
+) -> Path | None:
+    """兼容标准命名；多份时间线时只绑定与 manifest 片段起点相同的那一份。"""
+    try:
+        manifest_source_start = float((manifest_payload or {})["source_start"])
+    except (KeyError, TypeError, ValueError):
+        manifest_source_start = None
+    fallback: Path | None = None
+    for name in (
+        "timeline_final_enriched.json",
+        "timeline_enriched.json",
+        "timeline.enriched.json",
+        "timeline-enriched.json",
+    ):
         candidate = manifest_path.parent / name
-        if candidate.is_file():
+        if not candidate.is_file():
+            continue
+        if manifest_source_start is None:
             return candidate
-    return None
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+            provenance = payload.get("source_provenance", {}) if isinstance(payload, dict) else {}
+            timeline_source_start = float(
+                provenance.get("source_start_seconds", provenance.get("source_start_sec"))
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            fallback = fallback or candidate
+            continue
+        if abs(timeline_source_start - manifest_source_start) <= 0.25:
+            return candidate
+    return fallback
 
 
 def _write_delivery_receipt(path: Path | None, payload: dict) -> None:
@@ -87,9 +116,9 @@ def _write_delivery_receipt(path: Path | None, payload: dict) -> None:
     temporary_path.replace(path)
 
 
-def _load_timeline(manifest_path: Path) -> dict:
+def _load_timeline(manifest_path: Path, *, manifest_payload: dict | None = None) -> dict:
     """读取与成片同目录的 enriched timeline；缺失时由调用方拒绝建立审核包。"""
-    timeline_path = _resolve_enriched_timeline_path(manifest_path)
+    timeline_path = _resolve_enriched_timeline_path(manifest_path, manifest_payload=manifest_payload)
     if timeline_path is None:
         return {}
     try:
@@ -139,7 +168,7 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
         raise ValueError("审核回执只接受 content_type=ENGLISH_WORLD_SHORT 的学习卡")
     _validate_review_duration(mp4=mp4, manifest_payload=manifest_payload)
 
-    timeline = _load_timeline(manifest)
+    timeline = _load_timeline(manifest, manifest_payload=manifest_payload)
     if not timeline:
         raise ValueError("英语世界审核包缺少 enriched timeline，拒绝生成无来源封面")
     provenance = timeline.get("source_provenance") if isinstance(timeline.get("source_provenance"), dict) else {}
@@ -165,7 +194,7 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
         + "#英语学习 #英语听力 #英文阅读\n",
         encoding="utf-8",
     )
-    timeline_path = _resolve_enriched_timeline_path(manifest)
+    timeline_path = _resolve_enriched_timeline_path(manifest, manifest_payload=manifest_payload)
     if timeline_path is None:
         raise ValueError("英语世界审核包缺少 enriched timeline，拒绝生成无来源封面")
     if not validate_dedicated_cover_file(cover_path, cover_provenance_path) and settings.enable_english_world_antigravity_primary:
