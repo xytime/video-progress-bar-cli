@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.59.4  | 2026-09-04 | Codex                               | 兼容双封面闸门的新旧等价错误文本，避免受控第五次恢复被文案升级错误拦截。           |
 | 3.59.3  | 2026-09-04 | Codex                               | 对四次均被发布前双封面闸门停止、从未提交的英语世界项开放一次保存落库修复验证。   |
 | 3.59.2  | 2026-09-04 | Codex                               | 对第三次由平台明确双封面缺失而停止、且全程未提交的英语世界项开放最后一次人工恢复。 |
 | 3.59.1  | 2026-09-04 | Codex                               | 对两次均有“未发布”原始证据的英语世界抖音页面闸门失败，只开放最后一次人工恢复。  |
@@ -6601,7 +6602,10 @@ class PipelineDB:
                 """SELECT review_id FROM english_world_douyin_publications
                    WHERE review_id = ? AND state = 'CANCELED' AND attempt_count = 4
                      AND submitted_at IS NULL AND recovery_authorized_at IS NULL
-                     AND COALESCE(last_error_message, '') LIKE '%横/竖双封面缺失%'""",
+                     AND (
+                        COALESCE(last_error_message, '') LIKE '%横/竖双封面缺失%'
+                        OR COALESCE(last_error_message, '') LIKE '%横竖封面未能完整确认应用%'
+                     )""",
                 (clean_review_id,),
             ).fetchone()
             attempts = conn.execute(
@@ -6611,8 +6615,10 @@ class PipelineDB:
                           SUM(CASE WHEN uploader_exit_code = 3 THEN 1 ELSE 0 END) AS pre_submit_exit_three,
                           SUM(CASE WHEN COALESCE(error_message, '') LIKE '%未保存草稿、未发布%'
                                    THEN 1 ELSE 0 END) AS explicitly_not_submitted,
-                          SUM(CASE WHEN COALESCE(error_message, '') LIKE '%横/竖双封面缺失%'
-                                   THEN 1 ELSE 0 END) AS dual_cover_missing
+                          SUM(CASE WHEN (
+                                  COALESCE(error_message, '') LIKE '%横/竖双封面缺失%'
+                                  OR COALESCE(error_message, '') LIKE '%横竖封面未能完整确认应用%'
+                              ) THEN 1 ELSE 0 END) AS dual_cover_missing
                    FROM english_world_douyin_attempts WHERE review_id = ?""",
                 (clean_review_id,),
             ).fetchone()
