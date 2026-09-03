@@ -73,6 +73,7 @@
 | 1.5.51 | 2026-09-04 | Codex | 每次封面保存后须等待对应卡槽缩略图地址实际变化，禁止用弹窗关闭代替平台落库证据。 |
 | 1.5.52 | 2026-09-04 | Codex | 上传后优先选中当前封面弹窗中新生成的候选缩略图，适配大预览匹配但未落选的新版页面。 |
 | 1.5.53 | 2026-09-04 | Codex | 横封面编辑器关闭后主页面不再被误当弹窗；从 4:3 卡槽重开并在双封面保存后统一验收。 |
+| 1.5.56 | 2026-09-04 | Codex | 横封面保存后平台要求设置竖封面时，在同一编辑器中重填竖图，避免“暂不设置”导致单侧缺失。 |
 | 1.5.54 | 2026-09-04 | Codex | 横封面保存后的“设置竖封面”确认层仅点击“暂不设置”收口，随后仍以双卡槽变更为准。 |
 | 1.5.55 | 2026-09-04 | Codex | 快速检测明确报告单侧横/竖封面缺失时同样阻断，不能因卡槽缩略图存在而误放行。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
@@ -1664,8 +1665,8 @@ def _accept_horizontal_cover_recommendation(page, *, timeout_seconds: int = 8) -
     return True
 
 
-def _dismiss_saved_horizontal_vertical_recommendation(page, *, timeout_seconds: int = 8) -> bool:
-    """收口横封面保存后精确出现的“设置竖封面”建议层，不覆盖已保存的竖封面。"""
+def _continue_saved_horizontal_to_vertical_cover(page, *, timeout_seconds: int = 8) -> Optional[bool]:
+    """在横封面保存后按平台要求切回竖封面；无该建议层时返回 ``False``。"""
     state_script = """shouldClick => {
         const normalize = value => (value || '').replace(/\\s+/g, '');
         const visible = element => {
@@ -1682,7 +1683,7 @@ def _dismiss_saved_horizontal_vertical_recommendation(page, *, timeout_seconds: 
         if (!shouldClick) return { visible: true, clicked: false };
         const target = Array.from(dialog.querySelectorAll('button, [role="button"]')).find(button => {
             const text = normalize(button.innerText || button.textContent);
-            return text === '暂不设置' && visible(button)
+            return text === '设置竖封面' && visible(button)
                 && !button.disabled && button.getAttribute('aria-disabled') !== 'true';
         });
         if (!target) return { visible: true, clicked: false };
@@ -1693,26 +1694,26 @@ def _dismiss_saved_horizontal_vertical_recommendation(page, *, timeout_seconds: 
         state = page.evaluate(state_script, True) or {}
     except Exception as exc:
         logger.error("读取抖音横封面保存后的竖封面建议层失败：%s", exc)
-        return False
+        return None
     if not state.get("visible"):
-        return True
-    if not state.get("clicked"):
-        logger.error("抖音竖封面建议层出现，但未找到精确的“暂不设置”按钮")
         return False
-    logger.info("已确认抖音横封面保存后的“暂不设置”建议层")
+    if not state.get("clicked"):
+        logger.error("抖音竖封面建议层出现，但未找到精确的“设置竖封面”按钮")
+        return None
+    logger.info("已确认抖音横封面保存后的“设置竖封面”建议层")
     for elapsed in range(max(1, timeout_seconds)):
         try:
             remaining = page.evaluate(state_script, False) or {}
         except Exception as exc:
             logger.error("确认抖音竖封面建议层是否关闭失败：%s", exc)
-            return False
+            return None
         if not remaining.get("visible"):
             return True
         if elapsed and elapsed % 3 == 0:
             logger.info("抖音竖封面建议层仍在关闭，已等待 %s 秒", elapsed)
         page.wait_for_timeout(1_000)
     logger.error("抖音竖封面建议层未在 %s 秒内关闭", timeout_seconds)
-    return False
+    return None
 
 
 def _click_cover_confirm(page, modal, timeout_seconds: int = 90) -> bool:
@@ -1990,10 +1991,36 @@ def apply_cover(
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_confirm_unavailable", horizontal_cover_path_abs)
                 return False
-            if not _dismiss_saved_horizontal_vertical_recommendation(page):
+            needs_vertical_cover = _continue_saved_horizontal_to_vertical_cover(page)
+            if needs_vertical_cover is None:
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_recommendation_unconfirmed", horizontal_cover_path_abs)
                 return False
+            if needs_vertical_cover:
+                modal = _find_active_modal(page, [
+                    ".dy-creator-content-modal-body", ".dy-creator-content-modal-wrap",
+                    ".semi-modal-wrap", "div[role='dialog']", ".modal-container",
+                ])
+                if modal is page:
+                    logger.error("抖音要求设置竖封面后未保留封面编辑器，拒绝猜测页面控件")
+                    if artifact_dir:
+                        capture_cover_evidence(page, artifact_dir, "douyin_required_vertical_editor_missing", cover_path_abs)
+                    return False
+                if not _apply_cover_in_current_panel(
+                    page,
+                    modal,
+                    cover_path_abs,
+                    artifact_dir=artifact_dir,
+                    artifact_prefix="douyin_required_vertical_cover",
+                    allow_thumbnail_match_fallback=True,
+                ):
+                    if artifact_dir:
+                        capture_cover_evidence(page, artifact_dir, "douyin_required_vertical_cover_unconfirmed", cover_path_abs)
+                    return False
+                if not _click_cover_confirm(page, modal):
+                    if artifact_dir:
+                        capture_cover_evidence(page, artifact_dir, "douyin_required_vertical_cover_confirm_unavailable", cover_path_abs)
+                    return False
             if not _wait_for_cover_editor_closed(page, modal):
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_modal_unclosed", horizontal_cover_path_abs)

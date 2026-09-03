@@ -11,6 +11,7 @@
 | 1.5.51 | 2026-09-04 | Codex | 覆盖保存后卡槽缩略图必须切换，弹窗关闭不能作为封面落库证据。 |
 | 1.5.52 | 2026-09-04 | Codex | 覆盖新上传封面候选图必须在当前弹窗内选中，不误点发布页预览。 |
 | 1.5.53 | 2026-09-04 | Codex | 覆盖竖封面保存后返回主页面时，横封面必须从 4:3 卡槽重新打开。 |
+| 1.5.56 | 2026-09-04 | Codex | 覆盖横封面保存后平台要求设置竖封面时，必须重入同一编辑器而非选择暂不设置。 |
 | 1.5.54 | 2026-09-04 | Codex | 覆盖横封面保存后的竖封面建议层必须精确以“暂不设置”收口。 |
 | 1.5.55 | 2026-09-04 | Codex | 覆盖平台快速检测单侧横/竖封面缺失必须阻断最终发布。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
@@ -1214,8 +1215,8 @@ def test_douyin_apply_cover_reopens_horizontal_slot_after_vertical_editor_closes
     ) as accept_recommendation, patch(
         "scripts.douyin_uploader._find_active_modal", return_value=page
     ), patch("scripts.douyin_uploader._click_cover_confirm", return_value=True) as confirm, patch(
-        "scripts.douyin_uploader._dismiss_saved_horizontal_vertical_recommendation", return_value=True
-    ) as dismiss_vertical_recommendation, patch(
+        "scripts.douyin_uploader._continue_saved_horizontal_to_vertical_cover", return_value=False
+    ) as continue_vertical_recommendation, patch(
         "scripts.douyin_uploader._wait_for_cover_editor_closed", return_value=True
     ), patch("scripts.douyin_uploader._visible_cover_slot_image_sources", side_effect=[
         {"vertical": "before-vertical", "horizontal": "before-horizontal"},
@@ -1231,9 +1232,47 @@ def test_douyin_apply_cover_reopens_horizontal_slot_after_vertical_editor_closes
     assert apply_panel.call_args_list[1].args[2] == str(horizontal_cover.resolve())
     accept_recommendation.assert_called_once_with(page)
     assert confirm.call_args_list == [call(page, vertical_modal), call(page, horizontal_modal)]
-    dismiss_vertical_recommendation.assert_called_once_with(page)
+    continue_vertical_recommendation.assert_called_once_with(page)
     assert click_entry.call_count == 2
     assert "横封面4:3" in click_entry.call_args_list[1].args[1][0]
+
+
+def test_douyin_apply_cover_reapplies_vertical_when_platform_requires_it(tmp_path: Path):
+    """横封面保存后的明确竖封面建议，必须在保留的编辑器中完成而非忽略。"""
+    vertical_cover = tmp_path / "vertical.jpg"
+    horizontal_cover = tmp_path / "horizontal.jpg"
+    vertical_cover.write_bytes(b"vertical")
+    horizontal_cover.write_bytes(b"horizontal")
+    page = MagicMock()
+    vertical_modal = MagicMock()
+    horizontal_modal = MagicMock()
+    required_vertical_modal = MagicMock()
+
+    with patch(
+        "scripts.douyin_uploader._click_cover_entry",
+        side_effect=[vertical_modal, horizontal_modal],
+    ) as click_entry, patch(
+        "scripts.douyin_uploader._apply_cover_in_current_panel", side_effect=[True, True, True]
+    ) as apply_panel, patch(
+        "scripts.douyin_uploader._accept_horizontal_cover_recommendation", return_value=True
+    ), patch(
+        "scripts.douyin_uploader._find_active_modal", side_effect=[page, required_vertical_modal]
+    ), patch("scripts.douyin_uploader._click_cover_confirm", return_value=True) as confirm, patch(
+        "scripts.douyin_uploader._continue_saved_horizontal_to_vertical_cover", return_value=True
+    ), patch("scripts.douyin_uploader._wait_for_cover_editor_closed", return_value=True), patch(
+        "scripts.douyin_uploader._visible_cover_slot_image_sources", side_effect=[
+            {"vertical": "before-vertical", "horizontal": "before-horizontal"},
+            {"vertical": "after-vertical", "horizontal": "before-horizontal"},
+            {"vertical": "after-vertical", "horizontal": "after-horizontal"},
+            {"vertical": "after-vertical", "horizontal": "after-horizontal"},
+        ]
+    ), patch("scripts.douyin_uploader.wait_for_cover_validation", return_value=True):
+        assert apply_cover(page, str(vertical_cover), horizontal_cover_path=str(horizontal_cover))
+
+    assert click_entry.call_count == 2
+    assert apply_panel.call_args_list[2].args[1] is required_vertical_modal
+    assert apply_panel.call_args_list[2].args[2] == str(vertical_cover.resolve())
+    assert confirm.call_count == 3
 
 
 def test_douyin_apply_cover_stops_when_horizontal_recommendation_cannot_be_confirmed(tmp_path: Path):
