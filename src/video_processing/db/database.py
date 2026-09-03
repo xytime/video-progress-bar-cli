@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.59.3  | 2026-09-04 | Codex                               | 对四次均被发布前双封面闸门停止、从未提交的英语世界项开放一次保存落库修复验证。   |
 | 3.59.2  | 2026-09-04 | Codex                               | 对第三次由平台明确双封面缺失而停止、且全程未提交的英语世界项开放最后一次人工恢复。 |
 | 3.59.1  | 2026-09-04 | Codex                               | 对两次均有“未发布”原始证据的英语世界抖音页面闸门失败，只开放最后一次人工恢复。  |
 | 3.59.0  | 2026-09-04 | Codex                               | 仅为有明确发布前拒绝证据却曾被误记为 UNCERTAIN 的首轮抖音尝试受控恢复一次。      |
@@ -6576,6 +6577,68 @@ class PipelineDB:
             if cursor.rowcount != 1:
                 conn.rollback()
                 raise ValueError("English World Douyin cover repair recovery changed concurrently")
+            conn.commit()
+            return self.get_english_world_douyin_publication(clean_review_id) or {}
+
+    def authorize_english_world_douyin_persisted_cover_recovery(
+        self, review_id: str, *, reason: str,
+    ) -> Dict[str, Any]:
+        """为四次双封面发布前停止签发一次“卡槽已落库”修复验证。
+
+        这不是通用重试开关：仅允许首轮旧 ``exit=7`` 明确未提交、其后三轮
+        ``exit=3`` 且均为双封面缺失的同一审核项。第五次领取只用于验证最新的
+        卡槽缩略图落库闸门；一旦再失败、已有提交或账本证据不全，永久停止。
+        """
+        clean_review_id = (review_id or "").strip()
+        clean_reason = " ".join((reason or "").split())[:500]
+        if not clean_review_id:
+            raise ValueError("English World Douyin review_id is required")
+        if not clean_reason:
+            raise ValueError("English World Douyin recovery requires an explicit reason")
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            publication = conn.execute(
+                """SELECT review_id FROM english_world_douyin_publications
+                   WHERE review_id = ? AND state = 'CANCELED' AND attempt_count = 4
+                     AND submitted_at IS NULL AND recovery_authorized_at IS NULL
+                     AND COALESCE(last_error_message, '') LIKE '%横/竖双封面缺失%'""",
+                (clean_review_id,),
+            ).fetchone()
+            attempts = conn.execute(
+                """SELECT COUNT(*) AS total,
+                          SUM(CASE WHEN state = 'CANCELED' THEN 1 ELSE 0 END) AS canceled,
+                          SUM(CASE WHEN uploader_exit_code = 7 THEN 1 ELSE 0 END) AS legacy_exit_seven,
+                          SUM(CASE WHEN uploader_exit_code = 3 THEN 1 ELSE 0 END) AS pre_submit_exit_three,
+                          SUM(CASE WHEN COALESCE(error_message, '') LIKE '%未保存草稿、未发布%'
+                                   THEN 1 ELSE 0 END) AS explicitly_not_submitted,
+                          SUM(CASE WHEN COALESCE(error_message, '') LIKE '%横/竖双封面缺失%'
+                                   THEN 1 ELSE 0 END) AS dual_cover_missing
+                   FROM english_world_douyin_attempts WHERE review_id = ?""",
+                (clean_review_id,),
+            ).fetchone()
+            if not publication or not attempts or not (
+                int(attempts["total"] or 0) == 4
+                and int(attempts["canceled"] or 0) == 4
+                and int(attempts["legacy_exit_seven"] or 0) == 1
+                and int(attempts["pre_submit_exit_three"] or 0) == 3
+                and int(attempts["explicitly_not_submitted"] or 0) >= 1
+                and int(attempts["dual_cover_missing"] or 0) >= 2
+            ):
+                conn.rollback()
+                raise ValueError(
+                    "Only four proven pre-submit English World Douyin stops can receive persisted cover recovery",
+                )
+            cursor = conn.execute(
+                """UPDATE english_world_douyin_publications
+                   SET state = 'QUEUED', recovery_authorized_at = CURRENT_TIMESTAMP,
+                       recovery_reason = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE review_id = ? AND state = 'CANCELED' AND attempt_count = 4
+                     AND submitted_at IS NULL AND recovery_authorized_at IS NULL""",
+                (clean_reason, clean_review_id),
+            )
+            if cursor.rowcount != 1:
+                conn.rollback()
+                raise ValueError("English World Douyin persisted cover recovery changed concurrently")
             conn.commit()
             return self.get_english_world_douyin_publication(clean_review_id) or {}
 
