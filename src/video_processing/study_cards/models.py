@@ -13,6 +13,7 @@
 | 1.6.0 | 2026-08-04 | Codex | 词汇域只提供全部合格候选；真实单屏微笔记上下限延后至模板布局层决定。 |
 | 1.6.1 | 2026-08-04 | Codex | 兼容既有离线词汇模块的 JSON 字段，维持学习卡输入与分级模块的低耦合。 |
 | 1.6.2 | 2026-08-09 | Codex | 学习卡内容自动携带英语世界短视频类型，供 manifest 与数据库记录使用。 |
+| 1.6.3 | 2026-09-03 | Codex | 保留有可靠离线证据的 KET 候选供真实阅读屏补足微笔记密度，正文默认学习词仍从 PET 起。 |
 """
 
 from __future__ import annotations
@@ -126,6 +127,9 @@ class StudyCardContent:
             else (StudyParagraph(english_text=english_text, translation_zh=translation_zh),)
         )
         vocabulary = tuple(select_vocabulary(english_text, vocabulary_candidates).items)
+        screen_vocabulary_candidates = tuple(
+            select_vocabulary(english_text, vocabulary_candidates, minimum_level=1).items
+        )
         content = cls(
             headline_zh=_required_text(payload, "headline_zh"),
             headline_en=_required_text(payload, "headline_en"),
@@ -134,7 +138,7 @@ class StudyCardContent:
             words=words,
             vocabulary=vocabulary,
             paragraphs=paragraphs,
-            vocabulary_candidates=vocabulary,
+            vocabulary_candidates=screen_vocabulary_candidates,
             content_type=normalize_content_type(payload.get("content_type", CONTENT_TYPE_ENGLISH_WORLD_SHORT)),
         )
         if content.content_type != CONTENT_TYPE_ENGLISH_WORLD_SHORT:

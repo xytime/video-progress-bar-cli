@@ -20,6 +20,7 @@
 | 1.7.2 | 2026-08-09 | Codex | 学习卡 manifest 写入内容生产类型，和数据库英语世界短视频标识保持一致。 |
 | 1.8.0 | 2026-08-24 | Codex | 英语世界生产成片统一限定为严格大于 30 秒且不超过 300 秒，并按最终自然收尾后的真实时长判定。 |
 | 1.9.0 | 2026-08-24 | Codex | 滚动计划同时覆盖段后完整中文译文，拒绝英文仍可见但中文段译在片尾被阅读窗裁切的假通过。 |
+| 1.10.0 | 2026-09-03 | Codex | FFmpeg 先写同目录暂存 MP4，确认容器可解析后才原子替换最终成片，避免外接盘收尾窗口被质检读到半成品。 |
 """
 
 from __future__ import annotations
@@ -27,10 +28,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 import math
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Any
 
 import imageio_ffmpeg
@@ -56,6 +59,8 @@ _SCROLL_TARGET_Y = TEXT_TOP + 80
 _MAX_SCROLL_STEPS_PER_30_SECONDS = 4
 _PRODUCTION_MIN_DURATION = 30.0
 _PRODUCTION_MAX_DURATION = 300.0
+_MP4_CONTAINER_VALIDATION_ATTEMPTS = 3
+_MP4_CONTAINER_VALIDATION_RETRY_SECONDS = 0.2
 
 
 @dataclass(frozen=True)
@@ -112,6 +117,11 @@ class StudyCardRenderer:
             )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        staged_file_descriptor, staged_file_name = tempfile.mkstemp(
+            prefix=f".{output_path.stem}.", suffix=".staged.mp4", dir=output_path.parent,
+        )
+        os.close(staged_file_descriptor)
+        staged_output_path = Path(staged_file_name)
         work_dir = Path(tempfile.mkdtemp(prefix="study_card_"))
         try:
             layout_assets = self.template.render_static(content, work_dir)
@@ -159,12 +169,13 @@ class StudyCardRenderer:
                 reading_image=assets.reading_image,
                 feature_image=assets.feature_image,
                 underline_video=underline_video,
-                output_path=output_path,
+                output_path=staged_output_path,
                 source_start=source_start,
                 source_duration=source_clip_duration,
                 output_duration=output_duration,
                 scroll_steps=scroll_steps,
             )
+            self._validate_and_publish_mp4(staged_output_path, output_path)
             self._write_manifest(
                 output_path, render_content, source_video, source_start, source_clip_duration,
                 output_duration, source_timed_boxes, scroll_steps,
@@ -173,6 +184,7 @@ class StudyCardRenderer:
                 assets_dir = output_path.with_suffix("").with_name(output_path.stem + "_assets")
                 shutil.copytree(work_dir, assets_dir, dirs_exist_ok=True)
         finally:
+            staged_output_path.unlink(missing_ok=True)
             shutil.rmtree(work_dir, ignore_errors=True)
         return output_path
 
@@ -202,6 +214,23 @@ class StudyCardRenderer:
         if duration <= 0:
             raise RuntimeError("源视频时长必须大于 0")
         return duration
+
+    @staticmethod
+    def _validate_and_publish_mp4(staged_output_path: Path, output_path: Path) -> None:
+        """仅在 FFprobe 读到完整容器后原子替换最终成片。"""
+        failure: RuntimeError | None = None
+        for attempt in range(_MP4_CONTAINER_VALIDATION_ATTEMPTS):
+            try:
+                StudyCardRenderer._probe_duration(staged_output_path)
+            except RuntimeError as exc:
+                failure = exc
+                if attempt + 1 < _MP4_CONTAINER_VALIDATION_ATTEMPTS:
+                    time.sleep(_MP4_CONTAINER_VALIDATION_RETRY_SECONDS)
+                continue
+            staged_output_path.replace(output_path)
+            return
+        detail = str(failure) if failure is not None else "未知 ffprobe 失败"
+        raise RuntimeError(f"渲染后 MP4 容器未完成或不可解析：{detail}")
 
     def _run_ffmpeg(
         self,

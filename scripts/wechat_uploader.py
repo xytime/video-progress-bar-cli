@@ -58,6 +58,7 @@
 | 5.1.0   | 2026-08-30 | Codex                               | 已绑定原生 ID 的只读回查在 SPA 卡片短暂未稳定时做一次有界重试；不可判定仍禁止重传。 |
 | 5.2.0   | 2026-08-31 | Codex                               | 回查拒绝词只接受明确平台状态短语，避免标题或正文中的“不可见/违规”等内容词被误判为审核驳回。 |
 | 5.3.0   | 2026-08-31 | Codex                               | 管理页状态只从独立状态行或具名状态标签读取；标题/正文中的发布、审核等普通词一律保持未判定。 |
+| 5.5.0   | 2026-09-03 | Codex                               | 支持强制原创声明；未取得界面确认时保留证据并禁止发表。 |
 """
 
 import os
@@ -123,6 +124,67 @@ MANAGEMENT_UNCERTAIN = "UNCERTAIN"
 # 但也不应因一次 SPA 卡片延迟而把已有提交长期误留在不可判定状态。
 MANAGEMENT_VERIFY_ATTEMPTS = 2
 MANAGEMENT_VERIFY_RETRY_DELAY_MS = 1_500
+
+
+def _original_declaration_publish_allowed(
+    *,
+    declare_original: bool,
+    require_original_declaration: bool,
+    declaration_applied: bool,
+) -> bool:
+    """严格原创模式仅在声明开关及其确认流程均完成后允许发表。"""
+    if not require_original_declaration:
+        return True
+    return declare_original and declaration_applied
+
+
+def _original_declaration_ui_is_confirmed(page) -> bool:
+    """读取声明原创控件的已选状态；无法客观确认时按未声明处理。"""
+    try:
+        return bool(page.evaluate("""() => {
+            const label = /(?:声明原创|原创声明)/;
+            const controls = document.querySelectorAll(
+                'input[type="checkbox"], [role="switch"], [role="checkbox"], [aria-checked]'
+            );
+            for (const control of controls) {
+                const scope = control.closest('label, div, li, section') || control.parentElement;
+                const text = (scope?.innerText || control.getAttribute('aria-label') || '').trim();
+                if (!label.test(text)) continue;
+                const className = String(control.className || '');
+                if (
+                    control.checked === true
+                    || control.getAttribute('aria-checked') === 'true'
+                    || /(?:checked|selected|active|is-on)/i.test(className)
+                ) return true;
+            }
+            return false;
+        }"""))
+    except Exception as exc:
+        logger.warning("Original declaration UI state could not be verified: %s", type(exc).__name__)
+        return False
+
+
+def _write_original_declaration_receipt(
+    evidence_root: Path,
+    *,
+    required: bool,
+    requested: bool,
+    applied: bool,
+) -> None:
+    """原子记录本次原创声明界面结果；它不是平台审核或公开发布证明。"""
+    payload = {
+        "required": required,
+        "requested": requested,
+        "applied_in_ui": applied,
+    }
+    try:
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        receipt_path = evidence_root / "original_declaration_receipt.json"
+        temporary_path = receipt_path.with_suffix(".json.tmp")
+        temporary_path.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        temporary_path.replace(receipt_path)
+    except OSError as exc:
+        logger.warning("Failed to persist original declaration receipt: %s", type(exc).__name__)
 
 
 def _restore_login_required_tasks_after_login() -> int:
@@ -1063,6 +1125,7 @@ def run_uploader(
     evidence_dir: str = None,
     cover_manually_verified: bool = False,
     declare_original: bool = True,
+    require_original_declaration: bool = False,
     verify_only: bool = False,
     platform_post_id: str = None,
 ) -> int:
@@ -1071,6 +1134,16 @@ def run_uploader(
     state_file = Path(state_path)
     state_file.parent.mkdir(parents=True, exist_ok=True)
     evidence_root = Path(evidence_dir) if evidence_dir else Path("output") / "wechat_evidence"
+
+    if require_original_declaration and not declare_original and not verify_only:
+        logger.error("Original declaration is required for this submission but was explicitly disabled.")
+        _write_original_declaration_receipt(
+            evidence_root,
+            required=True,
+            requested=False,
+            applied=False,
+        )
+        return 1
 
     if verify_only:
         if not (platform_post_id or "").strip():
@@ -2307,20 +2380,40 @@ def run_uploader(
         # ── 执行原创声明流程 ───────────────────────────────────────────────────
         page.screenshot(path="output/debug_original_before.png")
 
+        declaration_applied = False
         if declare_original:
             toggle_ok = _click_original_toggle(page)
             if toggle_ok:
                 dialog_ok = _handle_original_rights_dialog(page)
                 if dialog_ok:
-                    logger.info("✅ Original declaration completed successfully")
+                    declaration_applied = _original_declaration_ui_is_confirmed(page)
+                    if declaration_applied:
+                        logger.info("✅ Original declaration completed and UI-confirmed")
+                    else:
+                        logger.warning("⚠️ Original declaration click completed but UI state was not confirmed")
                 else:
-                    logger.warning("⚠️ Original declaration dialog handling failed — proceeding anyway")
+                    logger.warning("⚠️ Original declaration dialog handling failed")
             else:
-                logger.warning("⚠️ Original declaration toggle not found — proceeding anyway")
+                logger.warning("⚠️ Original declaration toggle not found")
         else:
             logger.info("Skipping original declaration by explicit operator choice.")
 
         page.screenshot(path="output/debug_original_after.png")
+        _write_original_declaration_receipt(
+            evidence_root,
+            required=require_original_declaration,
+            requested=declare_original,
+            applied=declaration_applied,
+        )
+        if not _original_declaration_publish_allowed(
+            declare_original=declare_original,
+            require_original_declaration=require_original_declaration,
+            declaration_applied=declaration_applied,
+        ):
+            logger.error("Original declaration was not confirmed; refusing to publish this video.")
+            _capture_wechat_evidence(page, evidence_root, "original_declaration_required_failed")
+            browser.close()
+            return 1
 
         # ── 7. 分类选择 (已弃用) ──────────────────────────────────────────────────────
         if category:
@@ -2440,6 +2533,10 @@ def main():
         "--no-original-declaration", dest="declare_original", action="store_false",
         help="明确不声明原创；适用于转载或获授权素材",
     )
+    parser.add_argument(
+        "--require-original-declaration", action="store_true",
+        help="原创声明必须由界面确认；否则停止在发表前",
+    )
     parser.set_defaults(headless=True)
     args = parser.parse_args()
 
@@ -2466,6 +2563,7 @@ def main():
             evidence_dir = args.evidence_dir,
             cover_manually_verified = args.cover_manually_verified,
             declare_original = args.declare_original,
+            require_original_declaration = args.require_original_declaration,
             verify_only = args.verify_only,
             platform_post_id = args.platform_post_id,
         )

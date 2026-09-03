@@ -32,6 +32,10 @@
 # | 2.22.0 | 2026-08-31 | Codex | 来源预检自身异常也写入受控失败请求和持久状态，避免启动依赖缺失绕过当日回执。 |
 # | 2.23.0 | 2026-09-01 | Codex | 固化 json3 绝对/相对时间换算、本地 Whisper 末尾泄漏门禁及通过报告绑定。 |
 # | 2.24.0 | 2026-09-02 | Codex | 日更选题前读取投稿保护账本并排除同源审核项；账本异常时不启动制作。 |
+# | 2.26.0 | 2026-09-03 | Codex | 锁题后确定性内容或质检失败也持久排除该来源，避免后续窗口重复消耗。 |
+# | 2.28.0 | 2026-09-03 | Codex | 旧式失败文本仅在明确质量门禁时淘汰来源，来源通路错误一律保留。 |
+# | 2.29.0 | 2026-09-03 | Codex | 收紧旧式质量模板，避免“渲染”等宽泛词触发误淘汰。 |
+# | 2.30.0 | 2026-09-03 | Codex | 旧式冲突文本优先识别来源通路错误，宁可保留也不误淘汰来源。 |
 """
 
 from __future__ import annotations
@@ -54,8 +58,23 @@ DEFAULT_PROJECT_ROOT = Path("/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-p
 DEFAULT_CODEX_HOME = Path("/Users/ryusei/.codex")
 DEFAULT_CODEX_BIN = Path("/Users/ryusei/.local/bin/codex")
 YOUTUBE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
-LEGACY_REJECTED_ID_PATTERN = re.compile(
-    r"(?:候选|youtube_id\s*[=:：]?)[^A-Za-z0-9_-]{0,12}([A-Za-z0-9_-]{11})",
+LEGACY_CANDIDATE_ID_PATTERN = re.compile(
+    r"(?:候选|锁定来源|youtube_id\s*[=:：]?)[^A-Za-z0-9_-]{0,12}([A-Za-z0-9_-]{11})",
+    re.IGNORECASE,
+)
+LEGACY_DETERMINISTIC_QUALITY_FAILURE_PATTERN = re.compile(
+    r"(?:"
+    r"内容(?:级)?(?:质检|审核|不适龄|不合格|失败)|"
+    r"(?:真实)?屏幕(?:词汇|微笔记)?(?:门禁|质检|不合格|失败|不足)|"
+    r"渲染封装(?:质检|门禁|不合格)失败|"
+    r"MP4(?:容器)?[^\n]{0,80}(?:不可解析|ffprobe[^\n]{0,20}解析|moov atom[^\n]{0,20}not found)|"
+    r"音频\s*(?:质检|qa)(?:\s*(?:门禁|不合格|失败|截断))"
+    r")",
+    re.IGNORECASE,
+)
+LEGACY_SOURCE_ACCESS_FAILURE_PATTERN = re.compile(
+    r"(?:dns|cookie|tls|network|proxy|(?:http\s*)?403|"
+    r"网络|来源通路|认证|下载|超时|代理|连接被重置)",
     re.IGNORECASE,
 )
 _PROXY_ENV_KEYS = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"})
@@ -92,7 +111,7 @@ PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py
 若当天无合格候选或制作/质检失败，必须运行：
 PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '今日英语世界短视频' --failure '<准确原因>'
 
-无论成功还是失败，只要来源预检淘汰过候选，就必须为每个淘汰项在上述对应命令末尾追加一次 `--rejected-youtube-id '<实际youtube_id>'`；没有淘汰项时不追加。协调器会跨运行读取该机器字段，防止内容不适龄或来源不可用的候选反复消耗后续窗口。
+无论成功还是失败，只要来源预检淘汰过候选，就必须为每个淘汰项在上述对应命令末尾追加一次 `--rejected-youtube-id '<实际youtube_id>'`；没有淘汰项时不追加。协调器会跨运行读取该机器字段，防止内容不适龄或来源不可用的候选反复消耗后续窗口。锁定来源后若出现可重复的内容、屏幕词汇、渲染封装或音频质检失败，也必须在失败请求追加该锁定来源的 `--rejected-youtube-id '<实际youtube_id>'`，让下次运行排除它；这不允许在同一运行内换题。仅网络、Cookie、DNS、TLS、403 或其他来源通路故障仍不得追加，因为它们不是候选质量失败。
 
 写入请求是本任务的最后一个硬性检查点：命令成功后只能报告请求路径和本地质检结果；不得自行读取 Telegram 回执、生成投稿封面或启动上传器。请求缺失、不可解析或 MP4/manifest 路径不完整都表示本次生产未交付，必须如实报告。
 
@@ -466,7 +485,7 @@ def _recent_rejected_youtube_ids(
     now: datetime | None = None,
     max_age_days: int = 7,
 ) -> tuple[str, ...]:
-    """汇总近期机器字段，并兼容提取旧失败文本中的明确候选 ID。"""
+    """汇总机器字段；旧文本仅兼容提取明确的确定性质检淘汰。"""
     observed_at = now or datetime.now().astimezone()
     cutoff = observed_at.timestamp() - max_age_days * 24 * 60 * 60
     rejected: set[str] = set()
@@ -486,8 +505,12 @@ def _recent_rejected_youtube_ids(
                 if isinstance(value, str) and YOUTUBE_ID_PATTERN.fullmatch(value)
             )
         failure = payload.get("failure")
-        if isinstance(failure, str):
-            rejected.update(LEGACY_REJECTED_ID_PATTERN.findall(failure))
+        if (
+            isinstance(failure, str)
+            and not LEGACY_SOURCE_ACCESS_FAILURE_PATTERN.search(failure)
+            and LEGACY_DETERMINISTIC_QUALITY_FAILURE_PATTERN.search(failure)
+        ):
+            rejected.update(LEGACY_CANDIDATE_ID_PATTERN.findall(failure))
     return tuple(sorted(rejected))
 
 

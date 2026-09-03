@@ -17,6 +17,8 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 | 1.7.0 | 2026-08-30 | Codex | 将同次提交回执中的视频号原生 ID 原子写入英语世界审核与尝试账本。 |
 | 1.8.0 | 2026-08-30 | Codex | 视频号受理并绑定原生 ID 后，为启用的英语世界抖音同步立即建立独立队列。 |
 | 1.9.0 | 2026-08-31 | Codex | 投稿前先非阻塞取得全局微信锁；锁忙时保持批准态延后，避免领取后被父进程超时中断。 |
+| 1.10.0 | 2026-09-03 | Codex | 英语世界投稿强制申请原创；界面未确认声明时禁止进入发表。 |
+| 1.11.0 | 2026-09-03 | Codex | 仅在原创声明回执完整确认后记录视频号受理，缺失证据安全失败。 |
 """
 
 from __future__ import annotations
@@ -42,6 +44,39 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _UPLOAD_TIMEOUT_SECONDS = 25 * 60
 EXIT_DEFERRED = 10
+
+
+def _english_world_uploader_command(item: dict, evidence_dir: Path) -> list[str]:
+    """构造英语世界专用投稿命令，永远要求视频号确认原创声明。"""
+    return [
+        str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
+        str(_PROJECT_ROOT / "scripts" / "wechat_uploader.py"),
+        "--video", str(item["mp4_path"]),
+        "--copy", str(item["copy_path"]),
+        "--title-file", str(item["title_path"]),
+        "--cover", str(item["cover_path"]),
+        "--cover-provenance", str(item["cover_provenance_path"]),
+        "--state", str(_PROJECT_ROOT / "output" / "wechat_state.json"),
+        "--evidence-dir", str(evidence_dir),
+        "--fail-fast-login",
+        "--require-original-declaration",
+    ]
+
+
+def _original_declaration_receipt_is_confirmed(evidence_dir: Path) -> bool:
+    """只接受本次证据目录内完整的原创声明界面回执。"""
+    try:
+        payload = json.loads(
+            (evidence_dir / "original_declaration_receipt.json").read_text(encoding="utf-8"),
+        )
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.get("required") is True
+        and payload.get("requested") is True
+        and payload.get("applied_in_ui") is True
+    )
 
 
 def _post_status(text: str) -> None:
@@ -168,19 +203,7 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
         evidence_dir.mkdir(parents=True, exist_ok=True)
         try:
             _require_publish_package(item)
-            command = [
-                str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
-                str(_PROJECT_ROOT / "scripts" / "wechat_uploader.py"),
-                "--video", str(item["mp4_path"]),
-                "--copy", str(item["copy_path"]),
-                "--title-file", str(item["title_path"]),
-                "--cover", str(item["cover_path"]),
-                "--cover-provenance", str(item["cover_provenance_path"]),
-                "--state", str(_PROJECT_ROOT / "output" / "wechat_state.json"),
-                "--evidence-dir", str(evidence_dir),
-                "--fail-fast-login",
-                "--no-original-declaration",
-            ]
+            command = _english_world_uploader_command(item, evidence_dir)
             if not settings.wechat_headless:
                 command.append("--no-headless")
             result = subprocess.run(
@@ -188,6 +211,9 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
             state, message = _completion_for_exit_code(result.returncode)
+            if state == "UNDER_REVIEW" and not _original_declaration_receipt_is_confirmed(evidence_dir):
+                state = "FAILED"
+                message = "原创声明未取得完整界面确认回执，已停止并禁止将本次投稿记为受理。"
             platform_post_id, platform_url = _read_submission_identity(evidence_dir)
             if state != "UNDER_REVIEW":
                 platform_post_id = platform_url = None

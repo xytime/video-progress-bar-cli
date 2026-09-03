@@ -13,6 +13,8 @@
 | 1.5.0 | 2026-08-04 | Codex | 覆盖真实阅读窗的微笔记下限选择，不再依赖全篇或单屏数量上限。 |
 | 1.6.0 | 2026-08-24 | Codex | 固化英语世界最终成片严格大于 30 秒且不超过 300 秒的渲染边界。 |
 | 1.7.0 | 2026-08-24 | Codex | 覆盖段后完整中文译文也会驱动滚动，避免片尾中文被阅读窗裁切。 |
+| 1.8.0 | 2026-09-03 | Codex | 覆盖可靠 KET 词汇保留给真实阅读屏的密度选择。 |
+| 1.9.0 | 2026-09-03 | Codex | 覆盖未完成 MP4 容器不能覆盖已可用成片的原子交付边界。 |
 """
 
 from pathlib import Path
@@ -55,6 +57,39 @@ def _payload():
         ],
         "vocabulary": [{"word": "species", "meaning_zh": "物种", "phonetic": "/ˈspiːʃiːz/"}],
     }
+
+
+def test_content_keeps_reliable_ket_candidates_for_screen_density_selection():
+    words = "alpha beta gamma delta epsilon zeta eta theta".split()
+    content = StudyCardContent.from_mapping({
+        "headline_zh": "测试新闻标题",
+        "headline_en": "A short test headline",
+        "english_text": " ".join(words),
+        "translation_zh": "测试。",
+        "words": [
+            {"text": word, "start": index * 0.4, "end": index * 0.4 + 0.3}
+            for index, word in enumerate(words)
+        ],
+        "vocabulary_candidates": [
+            {
+                "word": word,
+                "meaning_zh": "可靠基础词",
+                "level": "KET",
+                "source": "exam-wordlists",
+                "confidence": 0.95,
+            }
+            for word in words
+        ] + [{
+            "word": "fallback",
+            "meaning_zh": "不可靠词典项",
+            "level": "KET",
+            "source": "ecdict-fallback",
+            "confidence": 0.55,
+        }],
+    })
+
+    assert content.vocabulary == ()
+    assert {item.word for item in content.vocabulary_candidates} == set(words)
 
 
 def test_template_maps_each_timeline_word_to_a_page_coordinate(tmp_path: Path):
@@ -103,6 +138,18 @@ def test_renderer_stops_shortly_after_the_final_included_word():
     duration = StudyCardRenderer._resolve_render_duration(content, requested_duration=5.0)
 
     assert duration == pytest.approx(2.88)
+
+
+def test_renderer_keeps_existing_final_mp4_when_staged_container_is_invalid(tmp_path: Path):
+    staged = tmp_path / ".study-card.mp4"
+    final = tmp_path / "study-card.mp4"
+    staged.write_bytes(b"partial-container")
+    final.write_bytes(b"prior-verified-container")
+
+    with pytest.raises(RuntimeError, match="MP4 容器"):
+        StudyCardRenderer._validate_and_publish_mp4(staged, final)
+
+    assert final.read_bytes() == b"prior-verified-container"
 
 
 def test_renderer_rejects_duration_above_three_hundred_seconds_before_touching_source(tmp_path: Path):
