@@ -12,6 +12,7 @@
 | 1.5.52 | 2026-09-04 | Codex | 覆盖新上传封面候选图必须在当前弹窗内选中，不误点发布页预览。 |
 | 1.5.53 | 2026-09-04 | Codex | 覆盖竖封面保存后返回主页面时，横封面必须从 4:3 卡槽重新打开。 |
 | 1.5.54 | 2026-09-04 | Codex | 覆盖横封面保存后的竖封面建议层必须精确以“暂不设置”收口。 |
+| 1.5.55 | 2026-09-04 | Codex | 覆盖平台快速检测单侧横/竖封面缺失必须阻断最终发布。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -1263,6 +1264,15 @@ def test_douyin_cover_validation_rejects_missing_dual_cover_before_final_preflig
     page = MagicMock()
     body = MagicMock()
     body.inner_text.return_value = "快速检测 横/竖双封面缺失 建议同时设置横版和竖版的封面"
+    page.locator.return_value = body
+
+    assert not wait_for_cover_validation(page, timeout_seconds=1)
+
+
+def test_douyin_cover_validation_rejects_single_vertical_cover_missing_before_final_preflight():
+    page = MagicMock()
+    body = MagicMock()
+    body.inner_text.return_value = "快速检测 封面优化建议 竖封面缺失"
     page.locator.return_value = body
 
     assert not wait_for_cover_validation(page, timeout_seconds=1)
