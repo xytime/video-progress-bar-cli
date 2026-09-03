@@ -9,6 +9,7 @@
 | 1.5.49 | 2026-09-04 | Codex | 覆盖末尾同源话题的平台限定词扩写，标题或正文改写继续拒绝。 |
 | 1.5.50 | 2026-09-04 | Codex | 覆盖横竖封面各自保存闭窗的次序和双封面缺失的封面阶段阻断。 |
 | 1.5.51 | 2026-09-04 | Codex | 覆盖保存后卡槽缩略图必须切换，弹窗关闭不能作为封面落库证据。 |
+| 1.5.52 | 2026-09-04 | Codex | 覆盖新上传封面候选图必须在当前弹窗内选中，不误点发布页预览。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -59,6 +60,7 @@ from scripts.douyin_uploader import (
     EXIT_SUBMISSION_UNCONFIRMED,
     _guard_before_browser,
     _click_cover_confirm,
+    _select_new_cover_candidate,
     _wait_for_cover_slot_source_change,
     apply_cover,
     fill_publish_fields,
@@ -1139,6 +1141,8 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
     with patch("scripts.douyin_uploader._visible_cover_slot_image_sources", side_effect=[
         {"vertical": "before-vertical"}, {"vertical": "after-vertical"}, {"vertical": "after-vertical"},
     ]), patch("scripts.douyin_uploader._click_matching_cover_thumbnail", return_value=True), patch(
+        "scripts.douyin_uploader._select_new_cover_candidate", return_value=True
+    ) as select_new_candidate, patch(
         "scripts.douyin_uploader._is_cover_preview_matched", return_value=True
     ), patch(
         "scripts.douyin_uploader.wait_for_cover_validation", return_value=True
@@ -1148,7 +1152,23 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
     page.expect_file_chooser.assert_not_called()
     entry_el.scroll_into_view_if_needed.assert_called_once_with(timeout=2_000)
     confirm_btn.click.assert_called_once()
+    select_new_candidate.assert_called_once()
     page.locator.assert_any_call(".dy-creator-content-modal-body")
+
+
+def test_douyin_new_cover_candidate_uses_only_new_small_modal_thumbnail():
+    """大裁剪预览与页面预览均不应被当作本次上传候选图。"""
+    page = MagicMock()
+    modal = MagicMock()
+    modal.evaluate.return_value = [
+        {"source": "old", "x": 500, "y": 300, "width": 200, "height": 300, "visible": True},
+        {"source": "new-large", "x": 440, "y": 260, "width": 265, "height": 375, "visible": True},
+        {"source": "new-small", "x": 770, "y": 310, "width": 94, "height": 110, "visible": True},
+    ]
+
+    assert _select_new_cover_candidate(page, modal, {"old"})
+
+    page.mouse.click.assert_called_once_with(817.0, 365.0)
 
 
 def test_douyin_apply_cover_page_fallback_does_not_call_page_is_visible(tmp_path: Path):

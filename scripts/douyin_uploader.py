@@ -71,6 +71,7 @@
 | 1.5.49 | 2026-09-04 | Codex | 仅接受平台对末尾同源话题的中文限定词扩写；标题和正文其余字符仍必须逐字一致。 |
 | 1.5.50 | 2026-09-04 | Codex | 横竖封面改为各自保存并闭窗后再切换，平台双封面缺失在封面阶段即阻断。 |
 | 1.5.51 | 2026-09-04 | Codex | 每次封面保存后须等待对应卡槽缩略图地址实际变化，禁止用弹窗关闭代替平台落库证据。 |
+| 1.5.52 | 2026-09-04 | Codex | 上传后优先选中当前封面弹窗中新生成的候选缩略图，适配大预览匹配但未落选的新版页面。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 """
 
@@ -1488,6 +1489,66 @@ def _inject_cover_file_in_modal(page, modal, cover_path_abs: str) -> bool:
     return False
 
 
+def _visible_modal_cover_images(modal) -> list[dict[str, object]]:
+    """返回当前封面弹窗的可见图片与几何信息，避免误点发布页预览图。"""
+    try:
+        images = modal.evaluate(
+            """root => Array.from(root.querySelectorAll('img')).map(image => {
+                const rect = image.getBoundingClientRect();
+                const style = getComputedStyle(image);
+                return {
+                    source: image.currentSrc || image.src || '',
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                    visible: rect.width > 0 && rect.height > 0
+                        && style.visibility !== 'hidden' && style.display !== 'none',
+                };
+            }).filter(item => item.visible && item.source)"""
+        )
+    except Exception as exc:
+        logger.debug("读取当前抖音封面弹窗候选图失败: %s", exc)
+        return []
+    return [item for item in (images or []) if isinstance(item, dict)]
+
+
+def _select_new_cover_candidate(page, modal, known_sources: set[str]) -> bool:
+    """点击刚由本地上传产生的小候选图，确保平台真正选中而不只显示大预览。"""
+    candidates = []
+    for image in _visible_modal_cover_images(modal):
+        source = str(image.get("source") or "").strip()
+        width = float(image.get("width") or 0)
+        height = float(image.get("height") or 0)
+        if (
+            not source
+            or source in known_sources
+            or width < 40 or height < 40
+            or width > 240 or height > 240
+        ):
+            continue
+        candidates.append(image)
+    if not candidates:
+        return False
+    # 候选图通常位于大裁剪预览右侧；同尺寸时优先最靠右者，避免选回主预览。
+    candidate = sorted(
+        candidates,
+        key=lambda item: (float(item.get("x") or 0), -(float(item.get("width") or 0) * float(item.get("height") or 0))),
+        reverse=True,
+    )[0]
+    try:
+        page.mouse.click(
+            float(candidate["x"]) + float(candidate["width"]) / 2,
+            float(candidate["y"]) + float(candidate["height"]) / 2,
+        )
+        page.wait_for_timeout(1_000)
+        logger.info("已选中抖音本地上传后新生成的封面候选缩略图")
+        return True
+    except Exception as exc:
+        logger.error("点击抖音新生成封面候选缩略图失败: %s", exc)
+        return False
+
+
 def _apply_cover_in_current_panel(
     page,
     modal,
@@ -1497,6 +1558,11 @@ def _apply_cover_in_current_panel(
     artifact_prefix: str,
     allow_thumbnail_match_fallback: bool = False,
 ) -> bool:
+    known_sources = {
+        str(image.get("source") or "").strip()
+        for image in _visible_modal_cover_images(modal)
+        if str(image.get("source") or "").strip()
+    }
     _open_cover_upload_tab(page, modal)
     if not _inject_cover_file_in_modal(page, modal, cover_path_abs):
         logger.error("抖音封面图片未能注入当前封面面板: %s", cover_path_abs)
@@ -1504,8 +1570,12 @@ def _apply_cover_in_current_panel(
     page.wait_for_timeout(2000)
     if artifact_dir:
         capture_cover_evidence(page, artifact_dir, f"{artifact_prefix}_after_input_injection", cover_path_abs)
+    candidate_selected = _select_new_cover_candidate(page, modal, known_sources)
     if _is_cover_preview_matched(page, cover_path_abs):
-        logger.info("抖音封面注入后大预览已匹配，无需再选择候选缩略图")
+        if candidate_selected:
+            logger.info("抖音封面候选已选中且大预览匹配")
+        else:
+            logger.info("抖音封面注入后大预览已匹配，未出现新候选缩略图")
         return True
     if not _click_matching_cover_thumbnail(page, cover_path_abs):
         return False
