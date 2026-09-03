@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-09-04 | Codex | 抖音投稿改用独立横竖英语视觉短视频海报封面，并把两图一同绑定至启动凭据。 |
 | 1.3.2 | 2026-09-02 | Codex | 未启动票据的包校验/启动失败及超时遗留仅收口为 CANCELED，需显式恢复才可重投。 |
 | 1.3.1 | 2026-09-02 | Codex | 投稿 worker 将不可变英语世界尝试绑定到一次性抖音浏览器启动凭据，拒绝借用来源参数。 |
 | 1.3.0 | 2026-09-02 | Codex | 投稿同步复用阶段熔断策略：管理页故障不阻断新片，未知 UI 阶段保持 fail-closed。 |
@@ -38,6 +39,7 @@ from video_processing.core.douyin_ui_guard_policy import (  # noqa: E402
 )
 from video_processing.core.douyin_launch_context import douyin_submission_payload_sha256  # noqa: E402
 from video_processing.db.database import PipelineDB  # noqa: E402
+from video_processing.english_world.douyin_cover import prepare_douyin_cover_package  # noqa: E402
 from video_processing.english_world.package_integrity import verify_package_hashes  # noqa: E402
 from video_processing.pipeline_manager import _build_subprocess_env  # noqa: E402
 
@@ -146,11 +148,15 @@ def submit(review_id: str) -> int:
     try:
         evidence_dir.mkdir(parents=True, exist_ok=True)
         verify_package_hashes(claimed)
+        douyin_covers = prepare_douyin_cover_package(claimed)
+        vertical_cover_path = str(douyin_covers["vertical_cover_path"])
+        horizontal_cover_path = str(douyin_covers["horizontal_cover_path"])
         payload_sha256 = douyin_submission_payload_sha256(
             video_path=claimed["mp4_path"],
             copy_path=claimed["copy_path"],
             title_path=claimed["title_path"],
-            cover_path=claimed["cover_path"],
+            cover_path=vertical_cover_path,
+            horizontal_cover_path=horizontal_cover_path,
         )
         if not payload_sha256 or not ticket_id or not launch_token:
             raise RuntimeError("英语世界抖音领取缺少一次性浏览器启动凭据或完整投稿包摘要")
@@ -166,7 +172,8 @@ def submit(review_id: str) -> int:
             "--video", str(claimed["mp4_path"]),
             "--copy", str(claimed["copy_path"]),
             "--title-file", str(claimed["title_path"]),
-            "--cover", str(claimed["cover_path"]),
+            "--cover", vertical_cover_path,
+            "--horizontal-cover", horizontal_cover_path,
             "--state", str(PROJECT_ROOT / "output/douyin_state.json"),
             "--evidence-dir", str(evidence_dir),
             "--fail-fast-login",

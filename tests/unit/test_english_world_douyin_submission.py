@@ -7,12 +7,29 @@
 | 1.1.0 | 2026-09-02 | Codex | 覆盖未知 UI 阶段 fail-closed，且管理页熔断不阻断独立新片投稿。 |
 | 1.2.0 | 2026-09-02 | Codex | 覆盖英语世界独立投稿携带一次性浏览器启动凭据，拒绝再以 source_kind 文本授权。 |
 | 1.3.0 | 2026-09-02 | Codex | 覆盖包校验、子进程退出或超时在浏览器启动前以未启动票据收口为可显式恢复的取消账本。 |
+| 1.4.0 | 2026-09-04 | Codex | 隔离抖音专属封面生成，验证横竖封面均绑定到最终浏览器启动凭据。 |
 """
 
 import subprocess
 from unittest.mock import MagicMock
 
+import pytest
+
 from scripts import submit_english_world_douyin as submitter
+
+
+@pytest.fixture(autouse=True)
+def _replace_douyin_cover_generator(monkeypatch):
+    """投稿器控制流测试不重复渲染封面，专属封面另由独立单测覆盖。"""
+    monkeypatch.setattr(
+        submitter,
+        "prepare_douyin_cover_package",
+        lambda item: {
+            "vertical_cover_path": str(item["cover_path"]),
+            "horizontal_cover_path": str(item["cover_path"]),
+            "provenance_path": "",
+        },
+    )
 
 
 def test_douyin_exit_codes_never_call_acceptance_published():
@@ -133,6 +150,7 @@ def test_management_verify_fuse_allows_claim_and_publish_worker(monkeypatch, tmp
     assert db.claimed == [review_id]
     command = worker.call_args.args[0]
     assert "--publish" in command
+    assert command[command.index("--horizontal-cover") + 1] == str(tmp_path / "cover.jpg")
     assert command[command.index("--douyin-launch-ticket") + 1] == "ew-ticket-1"
     assert command[command.index("--douyin-launch-token") + 1] == "ew-token-1"
     assert db.completed[0][0] == review_id
