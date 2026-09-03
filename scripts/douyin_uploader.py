@@ -73,6 +73,7 @@
 | 1.5.51 | 2026-09-04 | Codex | 每次封面保存后须等待对应卡槽缩略图地址实际变化，禁止用弹窗关闭代替平台落库证据。 |
 | 1.5.52 | 2026-09-04 | Codex | 上传后优先选中当前封面弹窗中新生成的候选缩略图，适配大预览匹配但未落选的新版页面。 |
 | 1.5.53 | 2026-09-04 | Codex | 横封面编辑器关闭后主页面不再被误当弹窗；从 4:3 卡槽重开并在双封面保存后统一验收。 |
+| 1.5.54 | 2026-09-04 | Codex | 横封面保存后的“设置竖封面”确认层仅点击“暂不设置”收口，随后仍以双卡槽变更为准。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 """
 
@@ -1662,6 +1663,57 @@ def _accept_horizontal_cover_recommendation(page, *, timeout_seconds: int = 8) -
     return True
 
 
+def _dismiss_saved_horizontal_vertical_recommendation(page, *, timeout_seconds: int = 8) -> bool:
+    """收口横封面保存后精确出现的“设置竖封面”建议层，不覆盖已保存的竖封面。"""
+    state_script = """shouldClick => {
+        const normalize = value => (value || '').replace(/\\s+/g, '');
+        const visible = element => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0
+                && style.visibility !== 'hidden' && style.display !== 'none';
+        };
+        const dialogs = Array.from(document.querySelectorAll(
+            '.dy-creator-content-modal-content, .dy-creator-content-modal-wrap, .semi-modal-wrap, [role="dialog"]'
+        )).filter(visible);
+        const dialog = dialogs.find(element => normalize(element.innerText).includes('设置竖封面获更多流量'));
+        if (!dialog) return { visible: false, clicked: false };
+        if (!shouldClick) return { visible: true, clicked: false };
+        const target = Array.from(dialog.querySelectorAll('button, [role="button"]')).find(button => {
+            const text = normalize(button.innerText || button.textContent);
+            return text === '暂不设置' && visible(button)
+                && !button.disabled && button.getAttribute('aria-disabled') !== 'true';
+        });
+        if (!target) return { visible: true, clicked: false };
+        target.click();
+        return { visible: true, clicked: true };
+    }"""
+    try:
+        state = page.evaluate(state_script, True) or {}
+    except Exception as exc:
+        logger.error("读取抖音横封面保存后的竖封面建议层失败：%s", exc)
+        return False
+    if not state.get("visible"):
+        return True
+    if not state.get("clicked"):
+        logger.error("抖音竖封面建议层出现，但未找到精确的“暂不设置”按钮")
+        return False
+    logger.info("已确认抖音横封面保存后的“暂不设置”建议层")
+    for elapsed in range(max(1, timeout_seconds)):
+        try:
+            remaining = page.evaluate(state_script, False) or {}
+        except Exception as exc:
+            logger.error("确认抖音竖封面建议层是否关闭失败：%s", exc)
+            return False
+        if not remaining.get("visible"):
+            return True
+        if elapsed and elapsed % 3 == 0:
+            logger.info("抖音竖封面建议层仍在关闭，已等待 %s 秒", elapsed)
+        page.wait_for_timeout(1_000)
+    logger.error("抖音竖封面建议层未在 %s 秒内关闭", timeout_seconds)
+    return False
+
+
 def _click_cover_confirm(page, modal, timeout_seconds: int = 90) -> bool:
     """等待封面编辑器完成生成并点击可用的“完成”；不可用时不得继续发布。"""
     confirm_selectors = [
@@ -1935,6 +1987,10 @@ def apply_cover(
             if not _click_cover_confirm(page, modal):
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_confirm_unavailable", horizontal_cover_path_abs)
+                return False
+            if not _dismiss_saved_horizontal_vertical_recommendation(page):
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_recommendation_unconfirmed", horizontal_cover_path_abs)
                 return False
             if not _wait_for_cover_editor_closed(page, modal):
                 if artifact_dir:

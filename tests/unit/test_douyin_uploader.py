@@ -11,6 +11,7 @@
 | 1.5.51 | 2026-09-04 | Codex | 覆盖保存后卡槽缩略图必须切换，弹窗关闭不能作为封面落库证据。 |
 | 1.5.52 | 2026-09-04 | Codex | 覆盖新上传封面候选图必须在当前弹窗内选中，不误点发布页预览。 |
 | 1.5.53 | 2026-09-04 | Codex | 覆盖竖封面保存后返回主页面时，横封面必须从 4:3 卡槽重新打开。 |
+| 1.5.54 | 2026-09-04 | Codex | 覆盖横封面保存后的竖封面建议层必须精确以“暂不设置”收口。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -1212,6 +1213,8 @@ def test_douyin_apply_cover_reopens_horizontal_slot_after_vertical_editor_closes
     ) as accept_recommendation, patch(
         "scripts.douyin_uploader._find_active_modal", return_value=page
     ), patch("scripts.douyin_uploader._click_cover_confirm", return_value=True) as confirm, patch(
+        "scripts.douyin_uploader._dismiss_saved_horizontal_vertical_recommendation", return_value=True
+    ) as dismiss_vertical_recommendation, patch(
         "scripts.douyin_uploader._wait_for_cover_editor_closed", return_value=True
     ), patch("scripts.douyin_uploader._visible_cover_slot_image_sources", side_effect=[
         {"vertical": "before-vertical", "horizontal": "before-horizontal"},
@@ -1227,6 +1230,7 @@ def test_douyin_apply_cover_reopens_horizontal_slot_after_vertical_editor_closes
     assert apply_panel.call_args_list[1].args[2] == str(horizontal_cover.resolve())
     accept_recommendation.assert_called_once_with(page)
     assert confirm.call_args_list == [call(page, vertical_modal), call(page, horizontal_modal)]
+    dismiss_vertical_recommendation.assert_called_once_with(page)
     assert click_entry.call_count == 2
     assert "横封面4:3" in click_entry.call_args_list[1].args[1][0]
 
