@@ -67,6 +67,7 @@
 | 1.5.44 | 2026-09-02 | Codex | 所有投稿页访问均纳入熔断；无凭据旧进程安全停止，管理页熔断保留无上传的登录恢复。 |
 | 1.5.46 | 2026-09-04 | Codex | 发布前元信息或检测闸门失败返回未提交，只有已通过闸门后的点击/回读未确认才记提交不确定。 |
 | 1.5.47 | 2026-09-04 | Codex | 管理页回读先按精确标题检索可见输入，避免新作品被首屏列表截断而长期保留未确认。 |
+| 1.5.48 | 2026-09-04 | Codex | 不再点选平台话题候选，避免候选扩写原文；提交前仍逐字回读原始文案。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 """
 
@@ -76,7 +77,6 @@ import argparse
 import hashlib
 import json
 import logging
-import re
 import sys
 import time
 from pathlib import Path
@@ -1881,27 +1881,6 @@ def _filled_text_matches(control, expected: str, *, is_title: bool) -> bool:
     return True
 
 
-def _select_exact_final_hashtag(page, description: str) -> None:
-    """若抖音弹出末尾话题建议，只选择与原文完全相同的候选，拒绝自动替换。"""
-    hashtags = re.findall(r"(?<!\S)#[^\s#]+", description or "")
-    if not hashtags:
-        return
-    expected_tag = hashtags[-1]
-    try:
-        for _ in range(5):
-            candidate = page.get_by_text(expected_tag, exact=True)
-            for index in range(candidate.count() - 1, -1, -1):
-                visible_candidate = candidate.nth(index)
-                if visible_candidate.is_visible(timeout=1_000) is not True:
-                    continue
-                visible_candidate.click(timeout=2_000)
-                logger.info("已选择与原文一致的抖音话题候选：%s", expected_tag)
-                return
-            page.wait_for_timeout(1_000)
-    except Exception as exc:
-        logger.debug("未出现或无法选择精确抖音话题候选 %s：%s", expected_tag, exc)
-
-
 def final_metadata_matches(page, title_text: str, description_text: str) -> bool:
     """最终点击前回读元信息，防止平台异步替换标题或话题。"""
     title_input = get_title_input(page)
@@ -1942,9 +1921,8 @@ def fill_publish_fields(
     title = title[:50]
     title_input.fill(title)
     editor.fill(description)
-    _select_exact_final_hashtag(page, description)
-    # 话题/好友语法会打开 publish-mention 标签建议层；若保持焦点，该浮层可能覆盖下方
-    # 封面卡片并拦截 Playwright 点击。先关闭建议、失焦，再做逐字回读和封面动作。
+    # 平台候选可能把原话题扩写为另一个话题；不得点击候选或让它替换本地审计包。
+    # 仅关闭浮层、失焦，再做逐字回读和封面动作。
     try:
         editor.press("Escape")
         editor.evaluate("element => element.blur()")

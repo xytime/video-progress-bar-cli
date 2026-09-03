@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.5.46 | 2026-09-04 | Codex | 覆盖发布前闸门与发布后不确定退出码的状态边界。 |
 | 1.5.47 | 2026-09-04 | Codex | 覆盖内容管理页精确标题检索的只读回查路径。 |
+| 1.5.48 | 2026-09-04 | Codex | 覆盖含话题的原文填写不点击平台候选，防止候选扩写文案。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -640,7 +641,7 @@ def test_douyin_publish_fields_use_independent_horizontal_cover(tmp_path: Path):
     )
 
 
-def test_douyin_fill_fields_selects_only_exact_final_hashtag_suggestion(tmp_path: Path):
+def test_douyin_fill_fields_never_clicks_hashtag_suggestion(tmp_path: Path):
     cover = tmp_path / "cover.png"
     cover.write_bytes(b"cover")
     title = MagicMock()
@@ -649,15 +650,10 @@ def test_douyin_fill_fields_selects_only_exact_final_hashtag_suggestion(tmp_path
     editor = MagicMock()
     editor.count.return_value = 1
     editor.inner_text.return_value = "正文 #英文阅读"
-    candidate = MagicMock()
-    candidate.count.return_value = 1
-    candidate.is_visible.return_value = True
-    candidate.nth.return_value = candidate
     controls = MagicMock()
     controls.evaluate_all.return_value = []
     page = MagicMock()
     page.evaluate.return_value = True
-    page.get_by_text.return_value = candidate
     page.locator.side_effect = lambda selector: (
         title if selector == DOUYIN_TITLE_SELECTOR else editor if selector == DOUYIN_DESCRIPTION_SELECTOR else controls
     )
@@ -667,8 +663,7 @@ def test_douyin_fill_fields_selects_only_exact_final_hashtag_suggestion(tmp_path
     ), patch("scripts.douyin_uploader.apply_cover", return_value=True):
         assert fill_publish_fields(page, "标题", "正文 #英文阅读", tmp_path, cover_path=str(cover))
 
-    page.get_by_text.assert_called_with("#英文阅读", exact=True)
-    candidate.click.assert_called_once_with(timeout=2_000)
+    page.get_by_text.assert_not_called()
 
 
 def test_final_metadata_rejects_platform_replaced_hashtag():
