@@ -72,6 +72,7 @@
 | 1.5.50 | 2026-09-04 | Codex | 横竖封面改为各自保存并闭窗后再切换，平台双封面缺失在封面阶段即阻断。 |
 | 1.5.51 | 2026-09-04 | Codex | 每次封面保存后须等待对应卡槽缩略图地址实际变化，禁止用弹窗关闭代替平台落库证据。 |
 | 1.5.52 | 2026-09-04 | Codex | 上传后优先选中当前封面弹窗中新生成的候选缩略图，适配大预览匹配但未落选的新版页面。 |
+| 1.5.53 | 2026-09-04 | Codex | 横封面编辑器关闭后主页面不再被误当弹窗；从 4:3 卡槽重开并在双封面保存后统一验收。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 """
 
@@ -1893,22 +1894,15 @@ def apply_cover(
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_modal_unclosed", cover_path_abs)
             return False
-        if not _wait_for_cover_slot_source_change(
-            page, slot="vertical", original_source=initial_slot_sources["vertical"],
-        ):
-            if artifact_dir:
-                capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_persistence_unconfirmed", cover_path_abs)
-            return False
-
         if horizontal_cover_path_abs:
-            if not _accept_horizontal_cover_recommendation(page):
-                if artifact_dir:
-                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_recommendation_unconfirmed", horizontal_cover_path_abs)
-                return False
             modal = _find_active_modal(page, [
                 ".dy-creator-content-modal-body", ".dy-creator-content-modal-wrap",
                 ".semi-modal-wrap", "div[role='dialog']", ".modal-container",
             ])
+            # `_find_active_modal` 为单封面页面保留 page 回退；此处竖封面
+            # 编辑器已经关闭，主页面不是横封面面板，必须重新点 4:3 卡槽。
+            if modal is page:
+                modal = None
             if not modal:
                 modal = _click_cover_entry(
                     page,
@@ -1920,6 +1914,10 @@ def apply_cover(
             if not modal:
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_entry_failed", horizontal_cover_path_abs)
+                return False
+            if not _accept_horizontal_cover_recommendation(page):
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_recommendation_unconfirmed", horizontal_cover_path_abs)
                 return False
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_entry_opened", horizontal_cover_path_abs)
@@ -1942,12 +1940,19 @@ def apply_cover(
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_modal_unclosed", horizontal_cover_path_abs)
                 return False
-            if not _wait_for_cover_slot_source_change(
-                page, slot="horizontal", original_source=initial_slot_sources["horizontal"],
-            ):
-                if artifact_dir:
-                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_persistence_unconfirmed", horizontal_cover_path_abs)
-                return False
+
+        if not _wait_for_cover_slot_source_change(
+            page, slot="vertical", original_source=initial_slot_sources["vertical"],
+        ):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_persistence_unconfirmed", cover_path_abs)
+            return False
+        if horizontal_cover_path_abs and not _wait_for_cover_slot_source_change(
+            page, slot="horizontal", original_source=initial_slot_sources["horizontal"],
+        ):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_persistence_unconfirmed", horizontal_cover_path_abs)
+            return False
 
         saved_slot_sources = _visible_cover_slot_image_sources(page)
         if saved_slot_sources.get("vertical") == initial_slot_sources.get("vertical") or (
