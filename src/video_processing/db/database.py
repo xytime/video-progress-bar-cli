@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.59.0  | 2026-09-04 | Codex                               | 仅为有明确发布前拒绝证据却曾被误记为 UNCERTAIN 的首轮抖音尝试受控恢复一次。      |
 | 3.58.9  | 2026-09-03 | Codex                               | 将原创声明界面回读失败的受控恢复次数持久化为一次，阻止失败链路反复重开。         |
 | 3.58.8  | 2026-09-03 | Codex                               | 原创声明已操作但界面回读失败、且无平台回执时，只允许受控签发一次重试授权。       |
 | 3.58.7  | 2026-09-03 | Codex                               | 仅在作品管理页明确确认原记录已删除后，受控重开英语世界同一审核项的一次重投机会并保留旧尝试。 |
@@ -6389,6 +6390,64 @@ class PipelineDB:
             )
             if cursor.rowcount != 1:
                 raise ValueError("Only one proven pre-submit failure can receive Douyin recovery")
+            conn.commit()
+            return self.get_english_world_douyin_publication(clean_review_id) or {}
+
+    def recover_english_world_douyin_proven_pre_submit_uncertain(
+        self, review_id: str, *, reason: str,
+    ) -> Dict[str, Any]:
+        """将被旧退出码误归类的首轮发布前拒绝受控恢复为一次可重投状态。
+
+        仅接受有原始 ``拒绝发布`` 错误、无 ``submitted_at`` 的首轮 ``UNCERTAIN``：
+        这证明浏览器在最终点击前停止，而非“已点发布但平台回执丢失”。原尝试的
+        错误文本和证据目录保持不变，仅将其最终分类修正为 ``CANCELED``；新的领取
+        仍由既有一次性恢复授权闸门消费，不能由调度器自动触发。
+        """
+        clean_review_id = (review_id or "").strip()
+        clean_reason = " ".join((reason or "").split())[:500]
+        if not clean_review_id:
+            raise ValueError("English World Douyin review_id is required")
+        if not clean_reason:
+            raise ValueError("English World Douyin recovery requires an explicit reason")
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            publication = conn.execute(
+                """SELECT review_id FROM english_world_douyin_publications
+                   WHERE review_id = ? AND state = 'UNCERTAIN' AND attempt_count = 1
+                     AND submitted_at IS NULL AND recovery_authorized_at IS NULL
+                     AND COALESCE(last_error_message, '') LIKE '%拒绝发布%'""",
+                (clean_review_id,),
+            ).fetchone()
+            attempt = conn.execute(
+                """SELECT attempt_id FROM english_world_douyin_attempts
+                   WHERE review_id = ? AND state = 'UNCERTAIN' AND uploader_exit_code = 7
+                     AND COALESCE(error_message, '') LIKE '%拒绝发布%'
+                   ORDER BY started_at ASC, attempt_id ASC LIMIT 1""",
+                (clean_review_id,),
+            ).fetchone()
+            if not publication or not attempt:
+                conn.rollback()
+                raise ValueError(
+                    "Only one proven pre-submit UNCERTAIN English World Douyin attempt can be recovered",
+                )
+            publication_cursor = conn.execute(
+                """UPDATE english_world_douyin_publications
+                   SET state = 'QUEUED', recovery_authorized_at = CURRENT_TIMESTAMP,
+                       recovery_reason = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE review_id = ? AND state = 'UNCERTAIN' AND attempt_count = 1
+                     AND submitted_at IS NULL AND recovery_authorized_at IS NULL""",
+                (clean_reason, clean_review_id),
+            )
+            attempt_cursor = conn.execute(
+                """UPDATE english_world_douyin_attempts
+                   SET state = 'CANCELED'
+                   WHERE attempt_id = ? AND review_id = ? AND state = 'UNCERTAIN'
+                     AND uploader_exit_code = 7""",
+                (attempt["attempt_id"], clean_review_id),
+            )
+            if publication_cursor.rowcount != 1 or attempt_cursor.rowcount != 1:
+                conn.rollback()
+                raise ValueError("English World Douyin pre-submit recovery changed concurrently")
             conn.commit()
             return self.get_english_world_douyin_publication(clean_review_id) or {}
 

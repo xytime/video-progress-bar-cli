@@ -65,6 +65,8 @@
 | 1.5.42 | 2026-09-02 | Codex | 管理页熔断活动时，低层最终提交也要求明确 `source_kind=NEW`，避免 HISTORY 在跨进程窗口穿透。 |
 | 1.5.43 | 2026-09-02 | Codex | 投稿页动作改为消费数据库签发的一次性启动凭据，绑定完整投稿包并在浏览器前原子消费。 |
 | 1.5.44 | 2026-09-02 | Codex | 所有投稿页访问均纳入熔断；无凭据旧进程安全停止，管理页熔断保留无上传的登录恢复。 |
+| 1.5.46 | 2026-09-04 | Codex | 发布前元信息或检测闸门失败返回未提交，只有已通过闸门后的点击/回读未确认才记提交不确定。 |
+| 1.5.47 | 2026-09-04 | Codex | 管理页回读先按精确标题检索可见输入，避免新作品被首屏列表截断而长期保留未确认。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 """
 
@@ -500,6 +502,28 @@ def wait_for_management_content(
     return page_text
 
 
+def _search_management_title(page, title_text: str) -> bool:
+    """用内容管理页的精确标题搜索缩小只读回查范围；找不到控件则保留全表回读。"""
+    title = " ".join((title_text or "").split()).strip()
+    if len(title) < 6:
+        return False
+    try:
+        fields = page.locator('input[placeholder="搜索作品"]')
+        for index in range(fields.count()):
+            search = fields.nth(index)
+            if search.is_visible(timeout=1_000) is not True:
+                continue
+            search.fill(title, timeout=3_000)
+            search.press("Enter", timeout=3_000)
+            page.wait_for_timeout(1_000)
+            logger.info("已按精确标题检索抖音内容管理页：%s", title)
+            return True
+        return False
+    except Exception as exc:
+        logger.debug("抖音内容管理页标题检索不可用，继续只读全表回查：%s", exc)
+        return False
+
+
 def verify_management_publication(
     page,
     artifact_dir: Path,
@@ -515,6 +539,7 @@ def verify_management_publication(
     normalized_title = _normalize_page_text(title_text)
     expected_markers = [normalized_title] if len(normalized_title) >= 6 else []
     expected_markers.extend(get_management_copy_markers(copy_text))
+    _search_management_title(page, title_text)
     page_text = wait_for_management_content(page, expected_markers=expected_markers)
     if is_login_required(page.url, page_text, [frame.url for frame in page.frames]):
         logger.error("抖音作品管理页登录态失效")
@@ -2093,9 +2118,16 @@ def submission_preflight_allows_publish(page, artifact_dir: Path, *, title_text:
     return True
 
 
-def publish_after_review(page, artifact_dir: Path, *, title_text: str, description_text: str) -> bool:
+def publish_after_review(
+    page,
+    artifact_dir: Path,
+    *,
+    title_text: str,
+    description_text: str,
+    preflight_checked: bool = False,
+) -> bool:
     """点击最终发布并采集提交后页面；只表示提交已被平台接受，不直接记 PUBLISHED。"""
-    if not submission_preflight_allows_publish(
+    if not preflight_checked and not submission_preflight_allows_publish(
         page,
         artifact_dir,
         title_text=title_text,
@@ -2144,7 +2176,20 @@ def upload_and_publish(
         horizontal_cover_path=horizontal_cover_path,
     ):
         return EXIT_UNCONFIRMED
-    if publish_after_review(page, artifact_dir, title_text=title_text, description_text=description_text):
+    if not submission_preflight_allows_publish(
+        page,
+        artifact_dir,
+        title_text=title_text,
+        description_text=description_text,
+    ):
+        return EXIT_UNCONFIRMED
+    if publish_after_review(
+        page,
+        artifact_dir,
+        title_text=title_text,
+        description_text=description_text,
+        preflight_checked=True,
+    ):
         return EXIT_UNDER_REVIEW
     return EXIT_SUBMISSION_UNCONFIRMED
 

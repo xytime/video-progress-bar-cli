@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.2 | 2026-09-04 | Codex | 覆盖首轮明确发布前拒绝被旧退出码误记为 UNCERTAIN 时的一次受控恢复。 |
 | 1.7.0 | 2026-08-31 | Codex | 覆盖作品管理页确认已发布时对 CANCELED 抖音账本的受控修正及原尝试不可变。 |
 | 1.0.0 | 2026-08-21 | Codex | 覆盖候选研究、二次制作确认和通用队列隔离。 |
 | 1.0.1 | 2026-08-21 | Codex | 固化 yt-dlp 搜索提取器兼容性，防止伪 URL 落入 HTTP 路径。 |
@@ -831,4 +832,53 @@ def test_english_world_douyin_management_evidence_can_correct_canceled_publicati
     with pytest.raises(ValueError, match="Only an attempted CANCELED"):
         db.record_english_world_douyin_canceled_published_reconciliation(
             item["id"], evidence_dir="/douyin/management-evidence", message="重复对账",
+        )
+
+
+def test_english_world_douyin_proven_pre_submit_uncertain_can_recover_once(tmp_path):
+    """旧上传器在点击前拒绝却返回 7 时，只能凭原始证据恢复一次。"""
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    item = db.create_english_world_review_item(
+        title="发布前拒绝恢复", source_youtube_id="pre-submit-uncertain-source",
+        **paths, **calculate_package_hashes(paths),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+    wechat_attempt = db.claim_english_world_submission(item["id"], evidence_dir="/wechat")
+    db.complete_english_world_submission(
+        item["id"], state="UNDER_REVIEW", uploader_exit_code=6,
+        evidence_dir="/wechat", attempt_id=wechat_attempt["_attempt_id"],
+        platform_post_id="export/wechat-native",
+    )
+    db.ensure_english_world_douyin_publication(item["id"])
+    claimed = db.claim_english_world_douyin_publication(
+        item["id"], daily_limit=None, evidence_dir="/douyin/attempt-1",
+    )
+    db.complete_english_world_douyin_publication(
+        item["id"], attempt_id=claimed["_attempt_id"], state="UNCERTAIN",
+        uploader_exit_code=7, evidence_dir="/douyin/attempt-1",
+        message="抖音作品描述填写后回读不一致，拒绝发布",
+    )
+
+    recovered = db.recover_english_world_douyin_proven_pre_submit_uncertain(
+        item["id"], reason="原始证据显示最终提交前文案回读拒绝。",
+    )
+
+    assert recovered["state"] == "QUEUED"
+    assert recovered["submitted_at"] is None
+    assert recovered["recovery_authorized_at"] is not None
+    first_attempt = db.list_english_world_douyin_attempts(item["id"])[0]
+    assert first_attempt["state"] == "CANCELED"
+    assert first_attempt["error_message"] == "抖音作品描述填写后回读不一致，拒绝发布"
+    second_claim = db.claim_english_world_douyin_publication(
+        item["id"], daily_limit=None, evidence_dir="/douyin/attempt-2",
+    )
+    assert second_claim is not None
+    with pytest.raises(ValueError, match="Only one proven pre-submit UNCERTAIN"):
+        db.recover_english_world_douyin_proven_pre_submit_uncertain(
+            item["id"], reason="不得重复恢复。",
         )

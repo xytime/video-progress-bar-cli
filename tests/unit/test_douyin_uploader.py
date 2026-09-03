@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.46 | 2026-09-04 | Codex | 覆盖发布前闸门与发布后不确定退出码的状态边界。 |
+| 1.5.47 | 2026-09-04 | Codex | 覆盖内容管理页精确标题检索的只读回查路径。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -42,6 +44,7 @@ from unittest.mock import MagicMock, patch
 
 from video_processing.core.douyin_launch_context import douyin_submission_payload_sha256
 from scripts.douyin_uploader import (
+    _search_management_title,
     DOUYIN_DESCRIPTION_SELECTOR,
     DOUYIN_SELF_DECLARATION_OPTION_TEXT,
     DOUYIN_TITLE_SELECTOR,
@@ -404,6 +407,20 @@ def test_management_wait_ignores_empty_shell_until_list_or_target_loads():
 
     assert "精确标题" in text
     assert page.wait_for_timeout.call_count == 2
+
+
+def test_management_title_search_is_exact_and_read_only():
+    page = MagicMock()
+    search = MagicMock()
+    search.count.return_value = 1
+    search.is_visible.return_value = True
+    search.nth.return_value = search
+    page.locator.return_value = search
+
+    assert _search_management_title(page, "北极运动：一场跨越世代的平衡挑战")
+    search.fill.assert_called_once_with("北极运动：一场跨越世代的平衡挑战", timeout=3_000)
+    search.press.assert_called_once_with("Enter", timeout=3_000)
+    page.wait_for_timeout.assert_called_once_with(1_000)
 
 
 def test_login_detection_includes_passport_and_creator_login_text():
@@ -989,8 +1006,8 @@ def test_douyin_upload_and_publish_marks_post_click_unconfirmed_separately(tmp_p
     video.write_bytes(b"video")
     page = MagicMock()
     with patch("scripts.douyin_uploader.upload_for_calibration", return_value=True), patch(
-        "scripts.douyin_uploader.publish_after_review", return_value=False
-    ):
+        "scripts.douyin_uploader.submission_preflight_allows_publish", return_value=True
+    ), patch("scripts.douyin_uploader.publish_after_review", return_value=False):
         assert upload_and_publish(
             page,
             str(video),
@@ -1000,6 +1017,25 @@ def test_douyin_upload_and_publish_marks_post_click_unconfirmed_separately(tmp_p
             description_text="描述",
             cover_path="cover.jpg",
         ) == EXIT_SUBMISSION_UNCONFIRMED
+
+
+def test_douyin_upload_and_publish_returns_pre_submit_unconfirmed_without_click(tmp_path: Path):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"video")
+    page = MagicMock()
+    with patch("scripts.douyin_uploader.upload_for_calibration", return_value=True), patch(
+        "scripts.douyin_uploader.submission_preflight_allows_publish", return_value=False
+    ), patch("scripts.douyin_uploader.publish_after_review") as publish_after_review:
+        assert upload_and_publish(
+            page,
+            str(video),
+            tmp_path,
+            upload_wait_seconds=1,
+            title_text="标题",
+            description_text="描述",
+            cover_path="cover.jpg",
+        ) == 3
+    publish_after_review.assert_not_called()
 
 
 def test_douyin_apply_cover_returns_false_when_cover_file_missing(tmp_path: Path):
