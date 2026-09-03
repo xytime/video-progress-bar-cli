@@ -7,6 +7,7 @@
 | 1.5.47 | 2026-09-04 | Codex | 覆盖内容管理页精确标题检索的只读回查路径。 |
 | 1.5.48 | 2026-09-04 | Codex | 覆盖含话题的原文填写不点击平台候选，防止候选扩写文案。 |
 | 1.5.49 | 2026-09-04 | Codex | 覆盖末尾同源话题的平台限定词扩写，标题或正文改写继续拒绝。 |
+| 1.5.50 | 2026-09-04 | Codex | 覆盖横竖封面各自保存闭窗的次序和双封面缺失的封面阶段阻断。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -42,7 +43,7 @@ import json
 import hashlib
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from video_processing.core.douyin_launch_context import douyin_submission_payload_sha256
 from scripts.douyin_uploader import (
@@ -1165,22 +1166,24 @@ def test_douyin_apply_cover_page_fallback_does_not_call_page_is_visible(tmp_path
     page.is_visible.assert_not_called()
 
 
-def test_douyin_apply_cover_confirms_horizontal_recommendation_before_uploading_horizontal(tmp_path: Path):
+def test_douyin_apply_cover_saves_vertical_before_opening_horizontal_editor(tmp_path: Path):
     vertical_cover = tmp_path / "vertical.jpg"
     horizontal_cover = tmp_path / "horizontal.jpg"
     vertical_cover.write_bytes(b"vertical")
     horizontal_cover.write_bytes(b"horizontal")
     page = MagicMock()
-    modal = MagicMock()
+    vertical_modal = MagicMock()
+    horizontal_modal = MagicMock()
 
-    with patch("scripts.douyin_uploader._click_cover_entry", return_value=modal), patch(
+    with patch(
+        "scripts.douyin_uploader._click_cover_entry",
+        side_effect=[vertical_modal, horizontal_modal],
+    ) as click_entry, patch(
         "scripts.douyin_uploader._apply_cover_in_current_panel", side_effect=[True, True]
     ) as apply_panel, patch(
-        "scripts.douyin_uploader._click_horizontal_cover_step", return_value=True
-    ) as click_horizontal, patch(
         "scripts.douyin_uploader._accept_horizontal_cover_recommendation", return_value=True
     ) as accept_recommendation, patch(
-        "scripts.douyin_uploader._find_active_modal", return_value=modal
+        "scripts.douyin_uploader._find_active_modal", return_value=None
     ), patch("scripts.douyin_uploader._click_cover_confirm", return_value=True) as confirm, patch(
         "scripts.douyin_uploader._wait_for_cover_editor_closed", return_value=True
     ), patch("scripts.douyin_uploader._saved_cover_slots_present", return_value=True), patch(
@@ -1190,10 +1193,10 @@ def test_douyin_apply_cover_confirms_horizontal_recommendation_before_uploading_
 
     assert apply_panel.call_args_list[0].args[2] == str(vertical_cover.resolve())
     assert apply_panel.call_args_list[1].args[2] == str(horizontal_cover.resolve())
-    click_horizontal.assert_called_once_with(page, modal)
     accept_recommendation.assert_called_once_with(page)
-    # “完成”只在横封面也设置完成后调用一次，不能在竖封面阶段空等。
-    confirm.assert_called_once_with(page, modal)
+    assert confirm.call_args_list == [call(page, vertical_modal), call(page, horizontal_modal)]
+    assert click_entry.call_count == 2
+    assert "横封面4:3" in click_entry.call_args_list[1].args[1][0]
 
 
 def test_douyin_apply_cover_stops_when_horizontal_recommendation_cannot_be_confirmed(tmp_path: Path):
@@ -1207,14 +1210,23 @@ def test_douyin_apply_cover_stops_when_horizontal_recommendation_cannot_be_confi
     with patch("scripts.douyin_uploader._click_cover_entry", return_value=modal), patch(
         "scripts.douyin_uploader._apply_cover_in_current_panel", return_value=True
     ) as apply_panel, patch(
-        "scripts.douyin_uploader._click_horizontal_cover_step", return_value=True
-    ), patch(
         "scripts.douyin_uploader._accept_horizontal_cover_recommendation", return_value=False
-    ), patch("scripts.douyin_uploader._click_cover_confirm") as confirm:
+    ), patch("scripts.douyin_uploader._click_cover_confirm", return_value=True) as confirm, patch(
+        "scripts.douyin_uploader._wait_for_cover_editor_closed", return_value=True,
+    ):
         assert not apply_cover(page, str(vertical_cover), horizontal_cover_path=str(horizontal_cover))
 
     assert apply_panel.call_count == 1
-    confirm.assert_not_called()
+    confirm.assert_called_once_with(page, modal)
+
+
+def test_douyin_cover_validation_rejects_missing_dual_cover_before_final_preflight():
+    page = MagicMock()
+    body = MagicMock()
+    body.inner_text.return_value = "快速检测 横/竖双封面缺失 建议同时设置横版和竖版的封面"
+    page.locator.return_value = body
+
+    assert not wait_for_cover_validation(page, timeout_seconds=1)
 
 
 def test_douyin_cover_confirm_refuses_disabled_button():

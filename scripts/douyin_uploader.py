@@ -69,6 +69,7 @@
 | 1.5.47 | 2026-09-04 | Codex | 管理页回读先按精确标题检索可见输入，避免新作品被首屏列表截断而长期保留未确认。 |
 | 1.5.48 | 2026-09-04 | Codex | 不再点选平台话题候选，避免候选扩写原文；提交前仍逐字回读原始文案。 |
 | 1.5.49 | 2026-09-04 | Codex | 仅接受平台对末尾同源话题的中文限定词扩写；标题和正文其余字符仍必须逐字一致。 |
+| 1.5.50 | 2026-09-04 | Codex | 横竖封面改为各自保存并闭窗后再切换，平台双封面缺失在封面阶段即阻断。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 """
 
@@ -1518,32 +1519,6 @@ def _apply_cover_in_current_panel(
     return True
 
 
-def _click_horizontal_cover_step(page, modal) -> bool:
-    if _click_bottom_text_button(page, ["设置横封面"]):
-        logger.info("已进入抖音横封面设置面板")
-        return True
-    horizontal_selectors = [
-        "button:has-text('设置横封面')",
-        "span:has-text('设置横封面')",
-        "text=设置横封面",
-        "button:has-text('横封面')",
-        "span:has-text('横封面')",
-        "text=横封面",
-    ]
-    horizontal_btn = _find_visible_element(modal, horizontal_selectors)
-    if not horizontal_btn:
-        logger.error("未找到抖音横封面设置入口，不能确认横竖双封面完整")
-        return False
-    try:
-        horizontal_btn.click(timeout=2000)
-    except Exception as exc:
-        logger.debug("普通点击抖音横封面入口失败，尝试 force 点击: %s", exc)
-        horizontal_btn.click(timeout=2000, force=True)
-    page.wait_for_timeout(1500)
-    logger.info("已进入抖音横封面设置面板")
-    return True
-
-
 def _accept_horizontal_cover_recommendation(page, *, timeout_seconds: int = 8) -> bool:
     """确认已观测到的双封面推荐弹窗，且只点击弹窗自身的横封面 CTA。
 
@@ -1715,7 +1690,10 @@ def _click_cover_entry(page, selectors: Iterable[str], *, artifact_dir: Optional
 
 def wait_for_cover_validation(page, timeout_seconds: int = 120) -> bool:
     """等待平台封面检测完成；失败、超时或页面不可读都不允许进入发布。"""
-    failed_markers = ("封面检测未通过", "封面不合格", "封面违规", "封面异常")
+    failed_markers = (
+        "封面检测未通过", "封面不合格", "封面违规", "封面异常",
+        "横/竖双封面缺失", "横竖双封面缺失", "建议同时设置横版和竖版的封面",
+    )
     try:
         for elapsed in range(timeout_seconds):
             text = get_page_text(page)
@@ -1801,13 +1779,16 @@ def apply_cover(
                 capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_unconfirmed", cover_path_abs)
             return False
 
+        if not _click_cover_confirm(page, modal):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_confirm_unavailable", cover_path_abs)
+            return False
+        if not _wait_for_cover_editor_closed(page, modal):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_modal_unclosed", cover_path_abs)
+            return False
+
         if horizontal_cover_path_abs:
-            # 此处“完成”有意保持不可用，直到横封面也设置完毕。不可先等它
-            # 变为可用；必须先进入横封面步骤，并处理其可能弹出的前置说明层。
-            if not _click_horizontal_cover_step(page, modal):
-                if artifact_dir:
-                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_entry_failed", horizontal_cover_path_abs)
-                return False
             if not _accept_horizontal_cover_recommendation(page):
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_recommendation_unconfirmed", horizontal_cover_path_abs)
@@ -1816,6 +1797,18 @@ def apply_cover(
                 ".dy-creator-content-modal-body", ".dy-creator-content-modal-wrap",
                 ".semi-modal-wrap", "div[role='dialog']", ".modal-container",
             ])
+            if not modal:
+                modal = _click_cover_entry(
+                    page,
+                    ["[class*='coverControl']:has-text('横封面4:3')", "text=横封面4:3"],
+                    artifact_dir=artifact_dir,
+                    artifact_name="horizontal",
+                    cover_path_abs=horizontal_cover_path_abs,
+                )
+            if not modal:
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_entry_failed", horizontal_cover_path_abs)
+                return False
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_entry_opened", horizontal_cover_path_abs)
             if not _apply_cover_in_current_panel(
@@ -1829,20 +1822,18 @@ def apply_cover(
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_unconfirmed", horizontal_cover_path_abs)
                 return False
-
-        if not _click_cover_confirm(page, modal):
-            if artifact_dir:
-                capture_cover_evidence(page, artifact_dir, "douyin_cover_confirm_unavailable", horizontal_cover_path_abs or cover_path_abs)
-            return False
-        if not _wait_for_cover_editor_closed(page, modal):
-            if artifact_dir:
-                capture_cover_evidence(page, artifact_dir, "douyin_cover_modal_unclosed", horizontal_cover_path_abs or cover_path_abs)
-            return False
+            if not _click_cover_confirm(page, modal):
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_confirm_unavailable", horizontal_cover_path_abs)
+                return False
+            if not _wait_for_cover_editor_closed(page, modal):
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_modal_unclosed", horizontal_cover_path_abs)
+                return False
 
         if not _saved_cover_slots_present(page, require_horizontal=bool(horizontal_cover_path_abs)):
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, "douyin_cover_slots_unconfirmed", cover_path_abs)
-            return False
             return False
         if not wait_for_cover_validation(page):
             if artifact_dir:

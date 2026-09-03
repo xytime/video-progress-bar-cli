@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.4 | 2026-09-04 | Codex | 覆盖第三次平台明确双封面缺失、全程未提交的英语世界抖音项仅作封面修复后最后恢复。 |
 | 1.10.3 | 2026-09-04 | Codex | 覆盖两次均有未发布证据的英语世界抖音页面闸门停止仅可作最后一次人工恢复。 |
 | 1.10.2 | 2026-09-04 | Codex | 覆盖首轮明确发布前拒绝被旧退出码误记为 UNCERTAIN 时的一次受控恢复。 |
 | 1.7.0 | 2026-08-31 | Codex | 覆盖作品管理页确认已发布时对 CANCELED 抖音账本的受控修正及原尝试不可变。 |
@@ -885,8 +886,8 @@ def test_english_world_douyin_proven_pre_submit_uncertain_can_recover_once(tmp_p
         )
 
 
-def test_english_world_douyin_two_proven_pre_submit_stops_can_recover_once(tmp_path):
-    """历史错误退出码和一次正确取消都证明未发布时，才可签发最后一次人工恢复。"""
+def test_english_world_douyin_proven_pre_submit_stops_can_recover_after_cover_repair(tmp_path):
+    """三轮均未提交且最后一轮是双封面缺失时，才可作封面修复后的最后恢复。"""
     db = PipelineDB(str(tmp_path / "pipeline.db"))
     paths = {}
     for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
@@ -932,10 +933,30 @@ def test_english_world_douyin_two_proven_pre_submit_stops_can_recover_once(tmp_p
     assert recovered["state"] == "QUEUED"
     assert recovered["submitted_at"] is None
     assert recovered["recovery_authorized_at"] is not None
-    assert db.claim_english_world_douyin_publication(
+    third_claim = db.claim_english_world_douyin_publication(
         item["id"], daily_limit=None, evidence_dir="/douyin/attempt-3",
-    ) is not None
+    )
+    assert third_claim is not None
     with pytest.raises(ValueError, match="Only two proven pre-submit"):
         db.authorize_english_world_douyin_second_pre_submit_recovery(
+            item["id"], reason="不得重复恢复。",
+        )
+    db.complete_english_world_douyin_publication(
+        item["id"], attempt_id=third_claim["_attempt_id"], state="CANCELED",
+        uploader_exit_code=3, evidence_dir="/douyin/attempt-3",
+        message="抖音发布前页面闸门：横/竖双封面缺失，停止最终发布",
+    )
+
+    cover_recovered = db.authorize_english_world_douyin_cover_repair_recovery(
+        item["id"], reason="两种封面已改为分别保存后再提交。",
+    )
+
+    assert cover_recovered["state"] == "QUEUED"
+    assert cover_recovered["submitted_at"] is None
+    assert db.claim_english_world_douyin_publication(
+        item["id"], daily_limit=None, evidence_dir="/douyin/attempt-4",
+    ) is not None
+    with pytest.raises(ValueError, match="Only three proven pre-submit"):
+        db.authorize_english_world_douyin_cover_repair_recovery(
             item["id"], reason="不得重复恢复。",
         )
