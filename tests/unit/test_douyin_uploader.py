@@ -8,6 +8,7 @@
 | 1.5.48 | 2026-09-04 | Codex | 覆盖含话题的原文填写不点击平台候选，防止候选扩写文案。 |
 | 1.5.49 | 2026-09-04 | Codex | 覆盖末尾同源话题的平台限定词扩写，标题或正文改写继续拒绝。 |
 | 1.5.50 | 2026-09-04 | Codex | 覆盖横竖封面各自保存闭窗的次序和双封面缺失的封面阶段阻断。 |
+| 1.5.51 | 2026-09-04 | Codex | 覆盖保存后卡槽缩略图必须切换，弹窗关闭不能作为封面落库证据。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -58,6 +59,7 @@ from scripts.douyin_uploader import (
     EXIT_SUBMISSION_UNCONFIRMED,
     _guard_before_browser,
     _click_cover_confirm,
+    _wait_for_cover_slot_source_change,
     apply_cover,
     fill_publish_fields,
     final_metadata_matches,
@@ -1134,9 +1136,11 @@ def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
     page.locator.side_effect = page_locator_side_effect
     page.expect_file_chooser.side_effect = RuntimeError("no chooser")
 
-    with patch("scripts.douyin_uploader._click_matching_cover_thumbnail", return_value=True), patch(
+    with patch("scripts.douyin_uploader._visible_cover_slot_image_sources", side_effect=[
+        {"vertical": "before-vertical"}, {"vertical": "after-vertical"}, {"vertical": "after-vertical"},
+    ]), patch("scripts.douyin_uploader._click_matching_cover_thumbnail", return_value=True), patch(
         "scripts.douyin_uploader._is_cover_preview_matched", return_value=True
-    ), patch("scripts.douyin_uploader._saved_cover_slots_present", return_value=True), patch(
+    ), patch(
         "scripts.douyin_uploader.wait_for_cover_validation", return_value=True
     ):
         assert apply_cover(page, str(cover))
@@ -1159,7 +1163,9 @@ def test_douyin_apply_cover_page_fallback_does_not_call_page_is_visible(tmp_path
         "scripts.douyin_uploader._find_active_modal", return_value=page
     ), patch("scripts.douyin_uploader._apply_cover_in_current_panel", return_value=True), patch(
         "scripts.douyin_uploader._click_cover_confirm", return_value=True), patch(
-        "scripts.douyin_uploader._saved_cover_slots_present", return_value=True), patch(
+        "scripts.douyin_uploader._visible_cover_slot_image_sources", side_effect=[
+            {"vertical": "before-vertical"}, {"vertical": "after-vertical"}, {"vertical": "after-vertical"},
+        ]), patch(
         "scripts.douyin_uploader.wait_for_cover_validation", return_value=True):
         assert apply_cover(page, str(cover))
 
@@ -1186,7 +1192,12 @@ def test_douyin_apply_cover_saves_vertical_before_opening_horizontal_editor(tmp_
         "scripts.douyin_uploader._find_active_modal", return_value=None
     ), patch("scripts.douyin_uploader._click_cover_confirm", return_value=True) as confirm, patch(
         "scripts.douyin_uploader._wait_for_cover_editor_closed", return_value=True
-    ), patch("scripts.douyin_uploader._saved_cover_slots_present", return_value=True), patch(
+    ), patch("scripts.douyin_uploader._visible_cover_slot_image_sources", side_effect=[
+        {"vertical": "before-vertical", "horizontal": "before-horizontal"},
+        {"vertical": "after-vertical", "horizontal": "before-horizontal"},
+        {"vertical": "after-vertical", "horizontal": "after-horizontal"},
+        {"vertical": "after-vertical", "horizontal": "after-horizontal"},
+    ]), patch(
         "scripts.douyin_uploader.wait_for_cover_validation", return_value=True
     ):
         assert apply_cover(page, str(vertical_cover), horizontal_cover_path=str(horizontal_cover))
@@ -1213,7 +1224,10 @@ def test_douyin_apply_cover_stops_when_horizontal_recommendation_cannot_be_confi
         "scripts.douyin_uploader._accept_horizontal_cover_recommendation", return_value=False
     ), patch("scripts.douyin_uploader._click_cover_confirm", return_value=True) as confirm, patch(
         "scripts.douyin_uploader._wait_for_cover_editor_closed", return_value=True,
-    ):
+    ), patch("scripts.douyin_uploader._visible_cover_slot_image_sources", side_effect=[
+        {"vertical": "before-vertical", "horizontal": "before-horizontal"},
+        {"vertical": "after-vertical", "horizontal": "before-horizontal"},
+    ]):
         assert not apply_cover(page, str(vertical_cover), horizontal_cover_path=str(horizontal_cover))
 
     assert apply_panel.call_count == 1
@@ -1227,6 +1241,19 @@ def test_douyin_cover_validation_rejects_missing_dual_cover_before_final_preflig
     page.locator.return_value = body
 
     assert not wait_for_cover_validation(page, timeout_seconds=1)
+
+
+def test_douyin_cover_slot_persistence_requires_a_changed_thumbnail_source():
+    page = MagicMock()
+    with patch(
+        "scripts.douyin_uploader._visible_cover_slot_image_sources",
+        side_effect=[{"vertical": "before"}, {"vertical": "before"}],
+    ):
+        assert not _wait_for_cover_slot_source_change(
+            page, slot="vertical", original_source="before", timeout_seconds=2,
+        )
+
+    assert page.wait_for_timeout.call_count == 2
 
 
 def test_douyin_cover_confirm_refuses_disabled_button():

@@ -70,6 +70,7 @@
 | 1.5.48 | 2026-09-04 | Codex | 不再点选平台话题候选，避免候选扩写原文；提交前仍逐字回读原始文案。 |
 | 1.5.49 | 2026-09-04 | Codex | 仅接受平台对末尾同源话题的中文限定词扩写；标题和正文其余字符仍必须逐字一致。 |
 | 1.5.50 | 2026-09-04 | Codex | 横竖封面改为各自保存并闭窗后再切换，平台双封面缺失在封面阶段即阻断。 |
+| 1.5.51 | 2026-09-04 | Codex | 每次封面保存后须等待对应卡槽缩略图地址实际变化，禁止用弹窗关闭代替平台落库证据。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 """
 
@@ -1713,27 +1714,56 @@ def wait_for_cover_validation(page, timeout_seconds: int = 120) -> bool:
     return False
 
 
-def _saved_cover_slots_present(page, *, require_horizontal: bool) -> bool:
-    """确认封面弹窗保存后，作品页仍展示对应横竖封面卡槽。"""
+def _visible_cover_slot_image_sources(page) -> dict[str, str]:
+    """读取可见横竖卡槽的缩略图地址，供保存后证明平台确已替换默认图。"""
     try:
         slots = page.evaluate(
-            """() => Array.from(document.querySelectorAll('[class*="coverControl"]'))
+            """() => Object.fromEntries(Array.from(document.querySelectorAll('[class*="coverControl"]'))
                 .filter(element => {
                     const rect = element.getBoundingClientRect();
                     return rect.width > 0 && rect.height > 0;
                 })
-                .map(element => (element.innerText || element.textContent || '').replace(/\\s+/g, ''))"""
+                .map(element => {
+                    const text = (element.innerText || element.textContent || '').replace(/\\s+/g, '');
+                    const image = element.querySelector('img');
+                    const source = image?.currentSrc || image?.src || '';
+                    const slot = text.includes('竖封面3:4') ? 'vertical'
+                        : text.includes('横封面4:3') ? 'horizontal' : '';
+                    return [slot, source];
+                }).filter(([slot, source]) => slot && source))"""
         )
     except Exception as exc:
-        logger.error("抖音封面保存后无法读取封面卡槽：%s", exc)
+        logger.error("抖音封面保存后无法读取卡槽缩略图：%s", exc)
+        return {}
+    return {
+        str(slot): str(source)
+        for slot, source in (slots or {}).items()
+        if str(slot) in {"vertical", "horizontal"} and str(source).strip()
+    }
+
+
+def _wait_for_cover_slot_source_change(
+    page,
+    *,
+    slot: str,
+    original_source: str,
+    timeout_seconds: int = 20,
+) -> bool:
+    """等待指定封面卡槽从原视频默认缩略图切换到平台已保存的新图。"""
+    original = (original_source or "").strip()
+    if not original:
+        logger.error("抖音%s封面卡槽缺少保存前缩略图，不能确认平台已落库", slot)
         return False
-    normalized = " ".join(str(slot) for slot in (slots or ()))
-    has_vertical = "竖封面3:4" in normalized
-    has_horizontal = "横封面4:3" in normalized
-    if not has_vertical or (require_horizontal and not has_horizontal):
-        logger.error("抖音封面保存后缺少必要卡槽：vertical=%s horizontal=%s", has_vertical, has_horizontal)
-        return False
-    return True
+    for elapsed in range(max(1, timeout_seconds)):
+        current = _visible_cover_slot_image_sources(page).get(slot, "").strip()
+        if current and current != original:
+            logger.info("抖音%s封面卡槽缩略图已变更，平台保存已落库", slot)
+            return True
+        if elapsed and elapsed % 5 == 0:
+            logger.info("抖音%s封面卡槽仍未替换缩略图，已等待 %s 秒", slot, elapsed)
+        page.wait_for_timeout(1_000)
+    logger.error("抖音%s封面保存后卡槽缩略图未变化，拒绝后续发布", slot)
+    return False
 
 
 def apply_cover(
@@ -1754,6 +1784,12 @@ def apply_cover(
         logger.info("开始应用抖音封面: %s", cover_path)
         cover_path_abs = str(Path(cover_path).resolve())
         horizontal_cover_path_abs = str(Path(horizontal_cover_path).resolve()) if horizontal_cover_path else None
+        initial_slot_sources = _visible_cover_slot_image_sources(page)
+        if not initial_slot_sources.get("vertical") or (
+            horizontal_cover_path_abs and not initial_slot_sources.get("horizontal")
+        ):
+            logger.error("抖音横竖封面卡槽初始缩略图不完整，不能证明后续保存已落库")
+            return False
 
         # 平台当前每次弹窗只保存一种比例。必须先保存竖封面并等待弹窗关闭，
         # 再打开横封面卡槽；在同一弹窗内切换比例会丢失前一种封面。
@@ -1786,6 +1822,12 @@ def apply_cover(
         if not _wait_for_cover_editor_closed(page, modal):
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_modal_unclosed", cover_path_abs)
+            return False
+        if not _wait_for_cover_slot_source_change(
+            page, slot="vertical", original_source=initial_slot_sources["vertical"],
+        ):
+            if artifact_dir:
+                capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_persistence_unconfirmed", cover_path_abs)
             return False
 
         if horizontal_cover_path_abs:
@@ -1830,8 +1872,18 @@ def apply_cover(
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_modal_unclosed", horizontal_cover_path_abs)
                 return False
+            if not _wait_for_cover_slot_source_change(
+                page, slot="horizontal", original_source=initial_slot_sources["horizontal"],
+            ):
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_persistence_unconfirmed", horizontal_cover_path_abs)
+                return False
 
-        if not _saved_cover_slots_present(page, require_horizontal=bool(horizontal_cover_path_abs)):
+        saved_slot_sources = _visible_cover_slot_image_sources(page)
+        if saved_slot_sources.get("vertical") == initial_slot_sources.get("vertical") or (
+            horizontal_cover_path_abs
+            and saved_slot_sources.get("horizontal") == initial_slot_sources.get("horizontal")
+        ):
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, "douyin_cover_slots_unconfirmed", cover_path_abs)
             return False
