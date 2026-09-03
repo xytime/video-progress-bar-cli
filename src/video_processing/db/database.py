@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.58.9  | 2026-09-03 | Codex                               | 将原创声明界面回读失败的受控恢复次数持久化为一次，阻止失败链路反复重开。         |
 | 3.58.8  | 2026-09-03 | Codex                               | 原创声明已操作但界面回读失败、且无平台回执时，只允许受控签发一次重试授权。       |
 | 3.58.7  | 2026-09-03 | Codex                               | 仅在作品管理页明确确认原记录已删除后，受控重开英语世界同一审核项的一次重投机会并保留旧尝试。 |
 | 3.58.6  | 2026-09-02 | Codex                               | 强制抖音 NEW 候选查询使用正数时间与批次边界，杜绝任意调用者绕过巡航范围扫描历史。 |
@@ -1253,6 +1254,7 @@ class PipelineDB:
                     approval_source TEXT DEFAULT NULL,
                     authorization_expires_at TIMESTAMP DEFAULT NULL,
                     login_recovery_attempts INTEGER NOT NULL DEFAULT 0,
+                    original_declaration_recovery_attempts INTEGER NOT NULL DEFAULT 0,
                     submission_started_at TIMESTAMP DEFAULT NULL,
                     submission_finished_at TIMESTAMP DEFAULT NULL,
                     uploader_exit_code INTEGER DEFAULT NULL,
@@ -1281,6 +1283,11 @@ class PipelineDB:
                 cursor.execute(
                     "ALTER TABLE english_world_review_items "
                     "ADD COLUMN login_recovery_attempts INTEGER NOT NULL DEFAULT 0"
+                )
+            if "original_declaration_recovery_attempts" not in english_world_review_columns:
+                cursor.execute(
+                    "ALTER TABLE english_world_review_items "
+                    "ADD COLUMN original_declaration_recovery_attempts INTEGER NOT NULL DEFAULT 0"
                 )
             if "authorization_expires_at" not in english_world_review_columns:
                 cursor.execute(
@@ -5957,7 +5964,11 @@ class PipelineDB:
         *,
         failure_evidence_dir: str,
     ) -> Dict[str, Any]:
-        """仅重开未发表且原创界面回读失败的英语世界尝试一次。"""
+        """仅重开未发表且原创界面回读失败的英语世界尝试一次。
+
+        次数写入审核项，而不是仅由当前状态推断；重试再次失败后即使仍无平台
+        回执，也不得再次签发，避免界面选择器异常触发无界上传循环。
+        """
         clean_id = (review_id or "").strip()
         clean_evidence_dir = (failure_evidence_dir or "").strip()
         if not clean_evidence_dir:
@@ -5968,11 +5979,13 @@ class PipelineDB:
                    SET state = 'SUBMISSION_APPROVED', approved_at = CURRENT_TIMESTAMP,
                        approval_source = 'OPERATOR_RECOVERY',
                        authorization_expires_at = datetime('now', '+120 minutes'),
+                       original_declaration_recovery_attempts = original_declaration_recovery_attempts + 1,
                        error_message = '原创声明界面已操作但回读未确认，且未产生平台回执；已签发一次两小时重试授权。',
                        updated_at = CURRENT_TIMESTAMP
                    WHERE id = ? AND state = 'FAILED' AND uploader_exit_code = 1
                      AND platform_post_id IS NULL AND platform_state IS NULL
                      AND evidence_dir = ?
+                     AND original_declaration_recovery_attempts = 0
                      AND (error_message LIKE '%原创声明%' OR error_message LIKE '%Original declaration%')""",
                 (clean_id, clean_evidence_dir),
             )

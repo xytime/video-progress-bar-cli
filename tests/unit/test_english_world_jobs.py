@@ -20,6 +20,7 @@
 | 1.8.0 | 2026-09-01 | Codex | 覆盖英语世界抖音同步可在无日额度模式下领取，仍保持单次不可重传账本。 |
 | 1.9.0 | 2026-09-02 | Codex | 覆盖日更选题前读取同源投稿保护账本，避免制作后才因重复审核被拒绝。 |
 | 1.10.0 | 2026-09-03 | Codex | 覆盖管理页确认删除及原创界面回读失败的受控重投资格。 |
+| 1.10.1 | 2026-09-03 | Codex | 验证原创声明恢复额度持久化为一次，二次失败不得再次领取投稿授权。 |
 """
 
 from __future__ import annotations
@@ -689,7 +690,19 @@ def test_unpublished_original_declaration_readback_failure_can_reopen_once(tmp_p
 
     assert reopened["state"] == "SUBMISSION_APPROVED"
     assert reopened["approval_source"] == "OPERATOR_RECOVERY"
-    assert db.claim_english_world_submission(item["id"], evidence_dir="/evidence/retry")
+    assert reopened["original_declaration_recovery_attempts"] == 1
+    retried = db.claim_english_world_submission(item["id"], evidence_dir="/evidence/retry")
+    assert retried
+    db.complete_english_world_submission(
+        item["id"], state="FAILED", uploader_exit_code=1,
+        evidence_dir="/evidence/retry", attempt_id=retried["_attempt_id"],
+        message="Original declaration click completed but UI state was not confirmed; 未进入发表。",
+    )
+
+    with pytest.raises(ValueError, match="original-declaration readback failure"):
+        db.reopen_failed_english_world_original_declaration(
+            item["id"], failure_evidence_dir="/evidence/retry",
+        )
 
 
 def test_english_world_platform_identity_cannot_be_rebound(tmp_path):
