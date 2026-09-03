@@ -6,6 +6,7 @@
 | 1.5.46 | 2026-09-04 | Codex | 覆盖发布前闸门与发布后不确定退出码的状态边界。 |
 | 1.5.47 | 2026-09-04 | Codex | 覆盖内容管理页精确标题检索的只读回查路径。 |
 | 1.5.48 | 2026-09-04 | Codex | 覆盖含话题的原文填写不点击平台候选，防止候选扩写文案。 |
+| 1.5.49 | 2026-09-04 | Codex | 覆盖末尾同源话题的平台限定词扩写，标题或正文改写继续拒绝。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -666,13 +667,26 @@ def test_douyin_fill_fields_never_clicks_hashtag_suggestion(tmp_path: Path):
     page.get_by_text.assert_not_called()
 
 
-def test_final_metadata_rejects_platform_replaced_hashtag():
+def test_final_metadata_accepts_platform_terminal_hashtag_expansion_only():
     title = MagicMock()
     title.count.return_value = 1
     title.input_value.return_value = "标题"
     editor = MagicMock()
     editor.count.return_value = 1
     editor.inner_text.return_value = "正文 #英文阅读书单"
+    page = MagicMock()
+    page.locator.side_effect = lambda selector: title if selector == DOUYIN_TITLE_SELECTOR else editor
+
+    assert final_metadata_matches(page, "标题", "正文 #英文阅读")
+
+
+def test_final_metadata_rejects_platform_replaced_hashtag_with_new_base_topic():
+    title = MagicMock()
+    title.count.return_value = 1
+    title.input_value.return_value = "标题"
+    editor = MagicMock()
+    editor.count.return_value = 1
+    editor.inner_text.return_value = "正文 #英语书写"
     page = MagicMock()
     page.locator.side_effect = lambda selector: title if selector == DOUYIN_TITLE_SELECTOR else editor
 

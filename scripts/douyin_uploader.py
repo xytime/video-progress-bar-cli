@@ -68,6 +68,7 @@
 | 1.5.46 | 2026-09-04 | Codex | 发布前元信息或检测闸门失败返回未提交，只有已通过闸门后的点击/回读未确认才记提交不确定。 |
 | 1.5.47 | 2026-09-04 | Codex | 管理页回读先按精确标题检索可见输入，避免新作品被首屏列表截断而长期保留未确认。 |
 | 1.5.48 | 2026-09-04 | Codex | 不再点选平台话题候选，避免候选扩写原文；提交前仍逐字回读原始文案。 |
+| 1.5.49 | 2026-09-04 | Codex | 仅接受平台对末尾同源话题的中文限定词扩写；标题和正文其余字符仍必须逐字一致。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 """
 
@@ -1859,9 +1860,32 @@ def apply_cover(
     return False
 
 
+def _normalized_metadata_text(text: str) -> str:
+    """移除平台编辑器用于排版的不可见字符后比较可见元信息。"""
+    return "".join(
+        (text or "").replace("\u200b", "").replace("\ufeff", "").replace("\u2060", "").split(),
+    )
+
+
+def _is_terminal_hashtag_platform_expansion(expected: str, actual: str) -> bool:
+    """只接受末尾同源话题被平台加 1--6 个中文限定字的规范化。
+
+    平台会把 ``#英文阅读`` 显示为 ``#英文阅读书单`` 一类推荐话题。正文及此前
+    所有话题必须完全相同，且标题永远不走本例外，避免把平台改写误当作原文一致。
+    """
+    expected_prefix, expected_marker, expected_tag = expected.rpartition("#")
+    actual_prefix, actual_marker, actual_tag = actual.rpartition("#")
+    if not expected_marker or not actual_marker or expected_prefix != actual_prefix:
+        return False
+    if not expected_tag or not actual_tag.startswith(expected_tag):
+        return False
+    extension = actual_tag[len(expected_tag):]
+    return 1 <= len(extension) <= 6 and all("\u4e00" <= char <= "\u9fff" for char in extension)
+
+
 def _filled_text_matches(control, expected: str, *, is_title: bool) -> bool:
     """回读已填写的作品元信息；任何无法读取或不一致均按失败处理。"""
-    expected_normalized = _normalize_page_text(expected).replace("\u200b", "").replace("\ufeff", "").replace("\u2060", "")
+    expected_normalized = _normalized_metadata_text(expected)
     if not expected_normalized:
         return False
     try:
@@ -1869,7 +1893,16 @@ def _filled_text_matches(control, expected: str, *, is_title: bool) -> bool:
     except Exception as exc:
         logger.error("抖音%s填写后无法回读：%s", "标题" if is_title else "作品描述", exc)
         return False
-    actual_normalized = _normalize_page_text(actual).replace("\u200b", "").replace("\ufeff", "").replace("\u2060", "")
+    actual_normalized = _normalized_metadata_text(actual)
+    if (
+        not is_title
+        and _is_terminal_hashtag_platform_expansion(expected_normalized, actual_normalized)
+    ):
+        logger.warning(
+            "抖音仅将末尾话题规范化扩写，正文与此前话题保持一致：expected=%r actual=%r",
+            expected[-80:], str(actual)[-80:],
+        )
+        return True
     if actual_normalized != expected_normalized:
         logger.error(
             "抖音%s填写后回读不一致，拒绝发布：expected=%r actual=%r",
