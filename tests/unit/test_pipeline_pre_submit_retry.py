@@ -10,6 +10,7 @@
 | 1.4.0 | 2026-08-24 | Codex | 验证 Bot API ok/message_id 回执与重复 P1 通知抑制。 |
 | 1.5.0 | 2026-08-24 | Codex | UNKNOWN 不能抑制重要通知；同一任务的变动原因仍遵循稳定去重键。 |
 | 1.6.0 | 2026-08-27 | Codex | 所有字幕翻译提供方暂时失败应走提交前有界重试，不得直接沉没为 FAILED。 |
+| 1.7.0 | 2026-09-04 | Codex | 字幕渲染看门狗超时属于未提交瞬态故障，可受限自动恢复。 |
 """
 
 import json
@@ -73,6 +74,22 @@ def test_all_subtitle_translation_providers_failure_is_retryable_before_submissi
     )
 
     row = manager.db.get_video_by_youtube_id("subtitle-provider-outage")
+    assert row["status"] == "PENDING"
+    assert row["retry_count"] == 1
+
+
+def test_caption_watchdog_timeout_is_retryable_before_submission(tmp_path):
+    manager = _manager(tmp_path, "caption-watchdog-timeout")
+    manager.db.update_video_status("caption-watchdog-timeout", "TRANSCRIBING")
+    manager.send_telegram_msg = lambda _message: None
+
+    assert manager._requeue_transient_pre_submission_failure(
+        "caption-watchdog-timeout",
+        "测试标题",
+        "字幕阶段看门狗终止：字幕阶段 VIDEO_RENDERING 持续 2401s 未完成（上限 2400s）。",
+    )
+
+    row = manager.db.get_video_by_youtube_id("caption-watchdog-timeout")
     assert row["status"] == "PENDING"
     assert row["retry_count"] == 1
 

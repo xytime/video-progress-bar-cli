@@ -80,6 +80,7 @@
 | 3.15.0  | 2026-06-15 | Claude_Opus_4.8                     | [BUG-2] 上传器返回 3(UNCONFIRMED) 时不置 PUBLISHED、不 GC，转 FAILED 并告警人工核验，杜绝「假成功」误删源 |
 | 3.16.0  | 2026-06-18 | Claude_Opus_4.8                     | [崩溃根治] 下载格式优先 H.264(avc) 而非 AV1(av01)：imageio-ffmpeg 内置 AOM AV1 解码器解码 YouTube AV1 流时间歇性 SIGSEGV，导致 _burn_subtitles 渲染崩溃；新增 vcodec^=avc 选择器分支 + -S vcodec:h264 排序，无 avc 时回退原行为 |
 | 3.17.0  | 2026-06-18 | Claude_Opus_4.8                     | [假成片防护] 渲染 checkpoint 增加 ffprobe 完整性校验：渲染中途崩溃会留下 >1MB 但缺 moov 的截断 _vertical.mp4，旧校验仅看体积 → 误判有效 → 跳过重渲并发布损坏视频；现用 get_video_duration_ffprobe 验证可解析 |
+| 3.17.1  | 2026-09-04 | Codex                                | [缺尾自愈] 缓存校验增加相对源片时长下限；渲染看门狗为正常慢速编码保留 40 分钟，并将未提交的瞬态字幕超时限次回队 |
 | 3.18.0  | 2026-06-18 | Claude_Opus_4.8                     | [盘中重负载保护] process_high_score_videos 在美股盘中（settings.is_us_market_guard_window：ET 09:15–16:15 工作日）暂停批处理与逐视频处理，剩余任务保持 PENDING 待盘后；共享主机避免抢占实盘行情管线 CPU |
 | 3.19.0  | 2026-06-22 | Claude_Opus_4.8                     | [症结 8 修复] 闭合「字幕正文从未过审」漏洞：2c 检查点在渲染后读取 .ass 转录全文，经 enable_subtitle_censorship 开关并入违法层 P0/P1/P2 复检；刻意绕开 CP 共现层避免长转录误杀；字幕读取下沉 utils.file_utils.read_subtitle_text 单一真相源（与 app.py 复核 UI 共用） |
 | 3.20.0  | 2026-06-22 | Claude_Opus_4.8                     | [架构 C·DAG 修复] graceful_truncate_title 改从 utils.text_utils 顶层 import，移除 _process_single_video 内 sys.path 注入 scripts/ 反向 import copywriter 的 DAG 违规 |
@@ -220,6 +221,9 @@ _TRANSIENT_PRE_SUBMISSION_FAILURE_MARKERS = (
     "please try again later",
     "temporarily unavailable",
     "all subtitle translation providers failed",
+    "字幕阶段看门狗终止",
+    "auto-caption timed out",
+    "字幕转录/翻译/渲染超时",
 )
 _MAX_TRANSIENT_PRE_SUBMISSION_RETRIES = 2
 _YOUTUBE_AUTH_FAILURE_MARKERS = (
@@ -258,7 +262,7 @@ _CAPTION_STAGE_TIMEOUT_SEC = {
     "TRANSCRIBING": 30 * 60,
     "TRANSLATING": 12 * 60,
     "ASS_GENERATING": 6 * 60,
-    "VIDEO_RENDERING": 30 * 60,
+    "VIDEO_RENDERING": 40 * 60,
     "COMPLETE": 60,
 }
 _CAPTION_DEFAULT_STAGE_TIMEOUT_SEC = 6 * 60
@@ -383,8 +387,12 @@ class _CaptionProgressTimeout(subprocess.TimeoutExpired):
         self.breach = breach
 
 
-def _validate_rendered_vertical_cache(vertical: Path) -> Tuple[bool, str]:
-    """验证竖版成片可解析性，校验器不可用时拒绝删除缓存。"""
+def _validate_rendered_vertical_cache(
+    vertical: Path,
+    *,
+    expected_duration_seconds: Optional[float] = None,
+) -> Tuple[bool, str]:
+    """验证竖版成片可解析且没有被中断时丢失尾部。"""
     from .utils.video_metadata import get_video_duration_ffprobe
 
     try:
@@ -399,6 +407,14 @@ def _validate_rendered_vertical_cache(vertical: Path) -> Tuple[bool, str]:
 
     if duration <= 0:
         return False, "duration<=0"
+    if expected_duration_seconds and expected_duration_seconds > 0:
+        tolerance_seconds = max(3.0, expected_duration_seconds * 0.015)
+        minimum_duration = expected_duration_seconds - tolerance_seconds
+        if duration < minimum_duration:
+            return False, (
+                f"时长不足：成片 {duration:.2f}s，源片 {expected_duration_seconds:.2f}s，"
+                f"允许误差 {tolerance_seconds:.2f}s"
+            )
     return True, ""
 
 
@@ -3008,7 +3024,8 @@ class PipelineManager:
         yid = video["youtube_id"]
         slice_index = video.get("slice_index", 0)
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
-        if not self._find_downloaded_video(yid):
+        source_video = self._find_downloaded_video(yid)
+        if not source_video:
             return "缺少已下载源视频"
 
         copy_file = self._OUT_DIR / f"{prefix}_copy.txt"
@@ -3028,8 +3045,14 @@ class PipelineManager:
         if not vertical.is_file() or vertical.stat().st_size <= 1_000_000:
             return "缺少有效竖版成片"
         try:
-            vertical_valid, vertical_reason = _validate_rendered_vertical_cache(vertical)
-        except RuntimeError as exc:
+            from .utils.video_metadata import get_video_duration_ffprobe
+
+            expected_duration = get_video_duration_ffprobe(Path(source_video))
+            vertical_valid, vertical_reason = _validate_rendered_vertical_cache(
+                vertical,
+                expected_duration_seconds=expected_duration,
+            )
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
             return str(exc)
         if not vertical_valid:
             return f"竖版成片校验失败：{vertical_reason}"
@@ -3529,6 +3552,17 @@ class PipelineManager:
                 # 若缺失则说明是旧格式单语缓存，强制删除后重新渲染。
                 _ass_file = self._OUT_DIR / f"{prefix}.ass"
                 _cache_valid = False
+                try:
+                    from .utils.video_metadata import get_video_duration_ffprobe
+
+                    _expected_duration = get_video_duration_ffprobe(Path(target_file))
+                except (FileNotFoundError, ValueError) as _duration_error:
+                    logger.warning(
+                        "[CacheCheck] 无法读取 %s 源片时长，拒绝复用竖版缓存：%s",
+                        prefix,
+                        _duration_error,
+                    )
+                    _expected_duration = None
                 if render_title_changed:
                     logger.info("[CacheInvalid] %s 平台标题已变更，强制重渲视频头部。", prefix)
                 elif vertical.exists() and vertical.stat().st_size > 1_000_000:
@@ -3538,7 +3572,13 @@ class PipelineManager:
                     # 体积 >1MB 但缺失 moov atom 的截断文件，旧校验仅看体积 → 误判为有效缓存 →
                     # 跳过重渲并把损坏视频直接送入发布。此处用 ffprobe 读取 duration 验证文件可解析，
                     # 不可解析（截断/损坏）则判缓存失效，强制重渲。
-                    _cache_valid, _cache_reason = _validate_rendered_vertical_cache(vertical)
+                    if _expected_duration is None:
+                        _cache_valid, _cache_reason = False, "源片时长不可验证"
+                    else:
+                        _cache_valid, _cache_reason = _validate_rendered_vertical_cache(
+                            vertical,
+                            expected_duration_seconds=_expected_duration,
+                        )
                     if not _cache_valid:
                         logger.warning(
                             f"[CacheInvalid] {vertical.name} 无法解析（疑似截断/损坏: {_cache_reason}），强制重渲 {prefix}"
@@ -3653,6 +3693,10 @@ class PipelineManager:
                             "子进程已终止；请检查该阶段的 Whisper、翻译或 FFmpeg 日志后再点「重试」。"
                         )
                         logger.error("[CaptionWatchdog] %s: %s", prefix, reason)
+                        if self._requeue_transient_pre_submission_failure(
+                            yid, title, reason, slice_index=slice_index,
+                        ):
+                            return
                         self.db.update_video_status(
                             yid, "FAILED", error_msg=reason, slice_index=slice_index,
                         )
@@ -3662,17 +3706,20 @@ class PipelineManager:
                         )
                         return
                     except subprocess.TimeoutExpired:
-                        logger.error(
-                            f"Auto-caption timed out for {prefix} after {_AUTO_CAPTION_TIMEOUT_SEC}s."
+                        reason = (
+                            f"字幕转录/翻译/渲染超时（>{_AUTO_CAPTION_TIMEOUT_SEC // 60}分钟）并已被系统终止。"
+                            "通常是 Whisper、翻译质量守卫或 FFmpeg 渲染阶段异常拖长；"
+                            "请查看 translation_quality 报告与 pipeline.log 后再点「重试」。"
                         )
+                        logger.error("Auto-caption timed out for %s after %ss.", prefix, _AUTO_CAPTION_TIMEOUT_SEC)
+                        if self._requeue_transient_pre_submission_failure(
+                            yid, title, reason, slice_index=slice_index,
+                        ):
+                            return
                         self.db.update_video_status(
                             yid,
                             "FAILED",
-                            error_msg=(
-                                "字幕转录/翻译/渲染超时（>45分钟）并已被系统终止。"
-                                "通常是 Whisper、翻译质量守卫或 FFmpeg 渲染阶段异常拖长；"
-                                "请查看 translation_quality 报告与 pipeline.log 后再点「重试」。"
-                            ),
+                            error_msg=reason,
                             slice_index=slice_index,
                         )
                         self.send_telegram_msg(

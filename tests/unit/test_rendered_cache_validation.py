@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-04 | Codex | 覆盖 cron 最小 PATH 下 ffprobe 定位，以及校验器不可用时保留缓存的 fail-safe 行为 |
 | 1.1.0 | 2026-08-17 | Codex | 覆盖历史 ASS 含上游 HTTP 错误页时的缓存失效判定 |
+| 1.2.0 | 2026-09-04 | Codex | 覆盖看门狗中断后可播放但尾部缺失的竖版成片不得复用 |
 """
 
 from types import SimpleNamespace
@@ -41,6 +42,20 @@ def test_invalid_rendered_cache_is_marked_for_rerender(tmp_path, monkeypatch):
     )
 
     assert _validate_rendered_vertical_cache(vertical) == (False, "moov atom not found")
+
+
+def test_rendered_cache_rejects_playable_file_with_missing_tail(tmp_path, monkeypatch):
+    vertical = tmp_path / "truncated_vertical.mp4"
+    vertical.write_bytes(b"playable but incomplete media")
+    monkeypatch.setattr(video_metadata, "get_video_duration_ffprobe", lambda _: 711.9)
+
+    valid, reason = _validate_rendered_vertical_cache(
+        vertical,
+        expected_duration_seconds=768.86,
+    )
+
+    assert not valid
+    assert "时长不足" in reason
 
 
 def test_probe_unavailable_preserves_cache_for_manual_or_later_retry(tmp_path, monkeypatch):
