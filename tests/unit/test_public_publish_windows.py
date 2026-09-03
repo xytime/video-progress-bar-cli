@@ -9,6 +9,8 @@
 | 1.3.0 | 2026-07-31 | Codex | 更新休息日早窗为 07:30-11:00，并覆盖开始边界 |
 | 1.4.0 | 2026-08-02 | Codex | 覆盖默认关闭发布时段时，任意时刻均可提交 |
 | 1.5.0 | 2026-09-01 | Codex | 覆盖 NYSE 全日休市日不触发视频加工盘中守卫。 |
+| 1.6.0 | 2026-09-03 | Codex | 守卫严格限于 NYSE 常规盘中，盘前与收盘后恢复视频加工。 |
+| 1.7.0 | 2026-09-03 | Codex | 覆盖 NYSE 提前收市日，避免实际收盘后仍错误阻断加工。 |
 """
 
 from datetime import date, datetime
@@ -89,6 +91,24 @@ def test_market_guard_uses_nyse_trading_day_not_weekday_only():
     assert not guarded.is_us_market_guard_window(
         datetime(2026, 4, 3, 12, 0, tzinfo=eastern)
     )
+
+
+def test_market_guard_is_limited_to_regular_nyse_session():
+    guarded = Settings(enable_market_hours_guard=True)
+    eastern = ZoneInfo("America/New_York")
+
+    assert not guarded.is_us_market_guard_window(datetime(2026, 7, 1, 9, 29, tzinfo=eastern))
+    assert guarded.is_us_market_guard_window(datetime(2026, 7, 1, 9, 30, tzinfo=eastern))
+    assert guarded.is_us_market_guard_window(datetime(2026, 7, 1, 15, 59, tzinfo=eastern))
+    assert not guarded.is_us_market_guard_window(datetime(2026, 7, 1, 16, 0, tzinfo=eastern))
+
+
+def test_market_guard_ends_at_nyse_early_close():
+    guarded = Settings(enable_market_hours_guard=True)
+    eastern = ZoneInfo("America/New_York")
+
+    assert guarded.is_us_market_guard_window(datetime(2026, 11, 27, 12, 59, tzinfo=eastern))
+    assert not guarded.is_us_market_guard_window(datetime(2026, 11, 27, 13, 0, tzinfo=eastern))
 
 
 def test_kuaishou_new_video_queues_without_upload_outside_publish_window(tmp_path: Path, monkeypatch):

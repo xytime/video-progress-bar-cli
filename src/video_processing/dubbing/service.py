@@ -21,6 +21,7 @@
 | 1.2.2 | 2026-09-02 | Codex | 配音投递复用抖音阶段熔断，纠正提交后未确认状态，并禁止审核中/未确认盲重传。 |
 | 1.2.3 | 2026-09-02 | Codex | 配音抖音投递先原子领取一次性浏览器启动凭据，完成同一次尝试不再双增计数。 |
 | 1.2.4 | 2026-09-02 | Codex | 配音领取若超时仍未启动浏览器，仅安全取消原尝试并恢复人工显式确认入口。 |
+| 1.2.5 | 2026-09-02 | Codex | 所有选定平台先完成本地投稿包预检；失败不进入 PUBLISHING 或领取抖音凭据。 |
 """
 
 from __future__ import annotations
@@ -148,9 +149,20 @@ class DubbingService:
         if "douyin" in selected:
             self._assert_douyin_publish_guard_allows()
         self._assert_selected_platforms_republishable(job["id"], selected)
+        try:
+            prepared_by_platform = {
+                platform: self._prepare_publish_one(job, platform)
+                for platform in selected
+            }
+        except Exception as exc:
+            # 这里尚未调用上传器、也尚未领取抖音 ticket；保留原状态并让人工修复本地产物。
+            detail = str(exc).strip() or exc.__class__.__name__
+            message = f"本地投稿预检未通过，未打开平台上传器：{detail}"
+            self.db.update_dubbing_job(job["id"], job["state"], error_message=message)
+            raise RuntimeError(message) from exc
         self.db.update_dubbing_job(job["id"], "PUBLISHING")
         for platform in selected:
-            self._publish_one(job, platform)
+            self._publish_one(job, platform, prepared=prepared_by_platform[platform])
         publications = self.db.get_dubbing_publications(job["id"])
         submitted_states = {"UNDER_REVIEW", "PUBLISHED"}
         if publications and all(item["state"] == "PUBLISHED" for item in publications):
@@ -559,14 +571,21 @@ class DubbingService:
         path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         self.db.upsert_dubbing_artifact(job["id"], "source_snapshot", str(path), sha256=self._sha256(path), metadata=snapshot)
 
-    def _publish_one(self, job: Dict[str, Any], platform: str) -> None:
+    def _prepare_publish_one(self, job: Dict[str, Any], platform: str) -> Dict[str, Any]:
+        """只核验和生成本地投稿包；此阶段不得领取 ticket 或启动上传器。"""
         output = Path(str(job.get("output_video_path") or ""))
         if not output.is_file():
             raise RuntimeError("成片不存在，拒绝投递。")
         workspace = self._workspace(job)
-        title, copy, cover, category, horizontal_cover = self._variant_publish_assets(job, workspace)
-        evidence_dir = workspace / "publish" / "evidence" / platform
-        douyin_launch: Optional[Dict[str, Any]] = None
+        title, copy, cover, category, _horizontal_cover = self._variant_publish_assets(job, workspace)
+        prepared: Dict[str, Any] = {
+            "output": output,
+            "workspace": workspace,
+            "title": title,
+            "copy": copy,
+            "cover": cover,
+            "category": category,
+        }
         if platform == "douyin":
             payload_sha256 = douyin_submission_payload_sha256(
                 video_path=output,
@@ -576,6 +595,27 @@ class DubbingService:
             )
             if not payload_sha256:
                 raise RuntimeError("配音抖音投稿包不完整，拒绝领取或启动浏览器。")
+            prepared["payload_sha256"] = payload_sha256
+        return prepared
+
+    def _publish_one(
+        self,
+        job: Dict[str, Any],
+        platform: str,
+        *,
+        prepared: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        prepared = prepared or self._prepare_publish_one(job, platform)
+        output = prepared["output"]
+        workspace = prepared["workspace"]
+        title = prepared["title"]
+        copy = prepared["copy"]
+        cover = prepared["cover"]
+        category = prepared["category"]
+        evidence_dir = workspace / "publish" / "evidence" / platform
+        douyin_launch: Optional[Dict[str, Any]] = None
+        if platform == "douyin":
+            payload_sha256 = str(prepared["payload_sha256"])
             douyin_launch = self.db.claim_dubbing_douyin_publication_launch(
                 job["id"],
                 payload_sha256=payload_sha256,

@@ -58,6 +58,7 @@
 | 5.1.0   | 2026-08-30 | Codex                               | 已绑定原生 ID 的只读回查在 SPA 卡片短暂未稳定时做一次有界重试；不可判定仍禁止重传。 |
 | 5.2.0   | 2026-08-31 | Codex                               | 回查拒绝词只接受明确平台状态短语，避免标题或正文中的“不可见/违规”等内容词被误判为审核驳回。 |
 | 5.3.0   | 2026-08-31 | Codex                               | 管理页状态只从独立状态行或具名状态标签读取；标题/正文中的发布、审核等普通词一律保持未判定。 |
+| 5.4.0   | 2026-09-03 | Codex                               | Telegram 或本地扫码成功后，续投唯一合格的英语世界登录前失败自动投稿项。 |
 | 5.5.0   | 2026-09-03 | Codex                               | 支持强制原创声明；未取得界面确认时保留证据并禁止发表。 |
 | 5.5.1   | 2026-09-03 | Codex                               | 原创声明按标签局部的控件状态回读，兼容视频号已勾选但隐藏 input 未带状态的页面结构。 |
 | 5.5.2   | 2026-09-03 | Codex                               | 声明原创标签可经短文本容器及近邻 checkbox 状态确认，避免页面结构未使用 label 语义时漏报。 |
@@ -71,6 +72,7 @@ import hashlib
 import json
 import logging
 import re
+import subprocess
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 try:
@@ -224,17 +226,63 @@ def _write_original_declaration_receipt(
         logger.warning("Failed to persist original declaration receipt: %s", type(exc).__name__)
 
 
+def _calculate_english_world_package_hashes(item: dict) -> dict:
+    """延迟导入，避免普通上传和登录页加载英语世界依赖。"""
+    from video_processing.english_world.package_integrity import calculate_package_hashes
+
+    return calculate_package_hashes(item)
+
+
+def _launch_english_world_login_recovery_submission(review_id: str) -> None:
+    """启动已由 DAL 原子领取的唯一续投；领取之外不接受任何旧项。"""
+    project_root = Path(__file__).resolve().parent.parent
+    subprocess.Popen(
+        [
+            str(project_root / ".venv" / "bin" / "python"),
+            str(project_root / "scripts" / "submit_english_world_review.py"),
+            "--review-id", review_id,
+        ],
+        cwd=str(project_root),
+        start_new_session=True,
+    )
+
+
+def _resume_eligible_english_world_after_login(db: object) -> str | None:
+    """扫码成功后只续投一条尚未触达平台的 AUTO_POLICY 登录失败项。"""
+    if not settings.enable_english_world_auto_publish or settings.wechat_publishing_paused:
+        return None
+    try:
+        candidate = db.get_english_world_login_recovery_candidate(max_age_hours=12)
+        if candidate is None:
+            return None
+        db.bind_english_world_review_package_hashes(
+            str(candidate["id"]), hashes=_calculate_english_world_package_hashes(candidate),
+        )
+        claimed = db.claim_english_world_login_recovery(max_age_hours=12)
+        if claimed is None:
+            return None
+        review_id = str(claimed["id"])
+        _launch_english_world_login_recovery_submission(review_id)
+        logger.info("[EnglishWorld] Resuming one pre-login submission after successful scan: %s", review_id[:8])
+        return review_id
+    except (KeyError, OSError, ValueError, subprocess.SubprocessError):
+        logger.exception("[EnglishWorld] Failed to resume eligible login recovery after scan.")
+        return None
+
+
 def _restore_login_required_tasks_after_login() -> int:
-    """任何成功登录入口都恢复可安全续跑的微信任务。"""
+    """任何成功登录入口都恢复可安全续跑的微信任务与一条受限英语世界续投。"""
     try:
         from video_processing.db.database import PipelineDB
 
-        restored = PipelineDB().restore_login_required_videos()
+        db = PipelineDB()
+        restored = db.restore_login_required_videos()
         if restored:
             logger.info(
                 "[WeChatLogin] Restored %s LOGIN_REQUIRED task(s) to PENDING after login success.",
                 restored,
             )
+        _resume_eligible_english_world_after_login(db)
         return restored
     except Exception:
         # 登录本身已经成功；恢复失败必须可观测，但不能伪造登录失败或覆盖 state。

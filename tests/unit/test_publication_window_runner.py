@@ -15,6 +15,7 @@
 | 1.7.0 | 2026-08-30 | Codex | 覆盖回查超时熔断通知和英语世界到抖音的单条隔离调度。 |
 | 1.8.0 | 2026-09-01 | Codex | 覆盖英语世界抖音队列无每轮条数限制，逐条提交直到队列耗尽或出现阻断。 |
 | 1.8.1 | 2026-09-02 | Codex | 覆盖抖音管理页熔断必须先于英语世界回查领取、浏览器槽位与页面访问。 |
+| 1.8.2 | 2026-09-02 | Codex | 覆盖英语世界抖音同步独立正数单轮上限；零值不得领取或打开浏览器。 |
 """
 
 import fcntl
@@ -150,7 +151,7 @@ def test_window_dispatches_one_accepted_english_world_item_to_douyin(monkeypatch
     assert "submit_english_world_douyin.py" in str(run.call_args.args[0][1])
 
 
-def test_window_dispatches_all_accepted_english_world_items_to_douyin(monkeypatch):
+def test_window_dispatches_at_most_configured_english_world_douyin_items(monkeypatch):
     class FakeDB:
         def __init__(self):
             self.items = [{"id": "e" * 32}, {"id": "f" * 32}]
@@ -162,13 +163,31 @@ def test_window_dispatches_all_accepted_english_world_items_to_douyin(monkeypatc
     monkeypatch.setattr(runner, "PipelineDB", FakeDB)
     monkeypatch.setattr(runner.settings, "enable_english_world_douyin_sync", True)
     monkeypatch.setattr(runner.settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(runner.settings, "english_world_douyin_sync_max_per_run", 1)
     run = MagicMock(return_value=completed)
     monkeypatch.setattr(runner.subprocess, "run", run)
 
     runner.dispatch_one_english_world_douyin_submission()
 
-    assert run.call_count == 2
-    assert [call.args[0][-1] for call in run.call_args_list] == ["e" * 32, "f" * 32]
+    assert run.call_count == 1
+    assert [call.args[0][-1] for call in run.call_args_list] == ["e" * 32]
+
+
+def test_window_does_not_claim_english_world_douyin_items_when_batch_limit_is_disabled(monkeypatch):
+    class FakeDB:
+        def get_next_english_world_douyin_sync_candidate(self):
+            raise AssertionError("zero batch limit must stop before candidate claim")
+
+    browser = MagicMock()
+    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
+    monkeypatch.setattr(runner.settings, "enable_english_world_douyin_sync", True)
+    monkeypatch.setattr(runner.settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(runner.settings, "english_world_douyin_sync_max_per_run", 0)
+    monkeypatch.setattr(runner.subprocess, "run", browser)
+
+    runner.dispatch_one_english_world_douyin_submission()
+
+    browser.assert_not_called()
 
 
 @pytest.mark.parametrize("stage", ["management_verify", "publish_pre_submit", "future_ui_stage"])

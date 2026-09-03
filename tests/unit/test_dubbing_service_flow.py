@@ -13,6 +13,7 @@
 | 1.7.0 | 2026-09-02 | Codex | 覆盖配音抖音发布复用 UI 熔断、提交后未确认语义和禁止审核中盲重传。 |
 | 1.8.0 | 2026-09-02 | Codex | 覆盖配音抖音先签发一次性浏览器凭据，并以同一尝试收口避免双计数。 |
 | 1.8.1 | 2026-09-02 | Codex | 覆盖配音领取超时但浏览器未启动时恢复为人工显式确认入口，已启动尝试不自动恢复。 |
+| 1.8.2 | 2026-09-02 | Codex | 覆盖本地投稿预检失败不会把配音任务卡在 PUBLISHING。 |
 """
 
 import hashlib
@@ -299,6 +300,7 @@ def test_publish_keeps_job_ready_when_platform_gate_fails():
         return_value={"id": 42, "state": "READY_TO_PUBLISH", "requested_platforms": "[\"wechat\"]"}
     )
     service._normalize_platforms = Mock(return_value=["wechat"])
+    service._prepare_publish_one = Mock(return_value={"platform": "wechat"})
     service._publish_one = Mock()
     service.db.get_dubbing_publications.return_value = [
         {"platform": "wechat", "state": "RETRYABLE_FAILED", "last_error_message": "封面未验证"}
@@ -312,6 +314,31 @@ def test_publish_keeps_job_ready_when_platform_gate_fails():
         call(42, "PUBLISHING"),
         call(42, "READY_TO_PUBLISH", error_message="平台投递未提交成功；请修正平台闸门失败后再重试。"),
     ])
+
+
+def test_dubbing_local_preflight_failure_restores_ready_before_any_douyin_ticket():
+    """缺本地产物时必须在启动浏览器和领取 ticket 前回到可人工修复状态。"""
+    service = DubbingService.__new__(DubbingService)
+    service.db = Mock()
+    service._require_latest_job = Mock(return_value={
+        "id": 42,
+        "state": "READY_TO_PUBLISH",
+        "requested_platforms": '["douyin"]',
+        "output_video_path": "",
+    })
+    service._normalize_platforms = Mock(return_value=["douyin"])
+    service.db.get_platform_ui_failure_streaks.return_value = []
+    service.db.get_dubbing_publications.return_value = []
+
+    with pytest.raises(RuntimeError, match="本地投稿预检未通过"):
+        service.publish("video-id", platforms=["douyin"], confirm=True)
+
+    assert call(42, "PUBLISHING") not in service.db.update_dubbing_job.call_args_list
+    service.db.update_dubbing_job.assert_called_once()
+    update_args, update_kwargs = service.db.update_dubbing_job.call_args
+    assert update_args == (42, "READY_TO_PUBLISH")
+    assert "本地投稿预检未通过" in update_kwargs["error_message"]
+    service.db.claim_dubbing_douyin_publication_launch.assert_not_called()
 
 
 @pytest.mark.parametrize("stage", ["publish_pre_submit", "future_douyin_ui_stage"])
@@ -351,6 +378,7 @@ def test_dubbing_management_guard_allows_independently_gated_new_publish(monkeyp
         return_value={"id": 42, "state": "READY_TO_PUBLISH", "requested_platforms": "[\"douyin\"]"}
     )
     service._normalize_platforms = Mock(return_value=["douyin"])
+    service._prepare_publish_one = Mock(return_value={"platform": "douyin"})
     service._publish_one = Mock()
     service.db.get_platform_ui_failure_streaks.return_value = [{
         "platform": "douyin",

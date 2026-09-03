@@ -36,7 +36,7 @@ def _add_video(db: PipelineDB, youtube_id: str) -> None:
 
 @pytest.mark.parametrize(
     ("lookback_hours", "limit"),
-    ((None, 10), (24, None)),
+    ((None, 10), (0, 10), (24, None), (24, 0)),
 )
 def test_douyin_new_candidate_query_rejects_unbounded_discovery(
     tmp_path: Path,

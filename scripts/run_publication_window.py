@@ -19,6 +19,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 | 1.8.0 | 2026-09-01 | Codex | 英语世界抖音同步取消单轮和 24 小时来源限制，按不可重复账本逐条清空可投队列。 |
 | 1.8.1 | 2026-09-01 | Codex | 每轮输出抖音发布策略实效指纹，定位 cron 与源码载入偏差。 |
 | 1.8.2 | 2026-09-02 | Codex | 英语世界抖音管理页回查在领取账本前遵循持久阶段熔断，避免无效访问消耗回查窗口。 |
+| 1.8.3 | 2026-09-02 | Codex | 英语世界抖音同步恢复独立正数单轮上限；零值不领取，避免历史受理项被连续提交。 |
 """
 
 from __future__ import annotations
@@ -167,13 +168,15 @@ def run_publication_window() -> int:
             )
             logging.info(
                 "[DouyinPolicy] history_limit=%s action_interval=%s review_limit=%s "
-                "new_batch_limit=%s new_daily_limit=%s new_lookback=%s require_wechat_public=%s",
+                "new_batch_limit=%s new_daily_limit=%s new_lookback=%s "
+                "english_world_batch_limit=%s require_wechat_public=%s",
                 settings.douyin_history_daily_limit,
                 settings.douyin_browser_action_interval_sec,
                 settings.douyin_review_max_per_run,
                 settings.douyin_new_sync_max_per_run,
                 settings.douyin_new_sync_daily_limit,
                 settings.douyin_new_sync_lookback_hours,
+                settings.english_world_douyin_sync_max_per_run,
                 settings.douyin_require_wechat_public_confirmation,
             )
             PipelineManager(status_reporter=report_pipeline_stage).run_daily_job()
@@ -233,14 +236,21 @@ def dispatch_one_deferred_english_world_submission() -> None:
 
 
 def dispatch_one_english_world_douyin_submission() -> None:
-    """同步全部视频号已受理且从未建抖音账本的英语世界审核项。"""
+    """按独立正数上限同步视频号已受理且从未建抖音账本的英语世界审核项。"""
     if (
         not settings.enable_english_world_douyin_sync
         or not settings.enable_douyin_browser_publishing
     ):
         return
+    max_per_run = max(0, int(settings.english_world_douyin_sync_max_per_run))
+    if max_per_run < 1:
+        logging.info("[EnglishWorld][Douyin] sync dispatch disabled: max_per_run=%s", max_per_run)
+        return
     db = PipelineDB()
-    while item := db.get_next_english_world_douyin_sync_candidate():
+    for _ in range(max_per_run):
+        item = db.get_next_english_world_douyin_sync_candidate()
+        if not item:
+            return
         review_id = str(item["id"])
         result = subprocess.run(
             [

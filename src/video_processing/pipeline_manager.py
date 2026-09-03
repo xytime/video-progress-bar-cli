@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.48.43 | 2026-09-03 | Codex                               | 字幕进度区分阶段起点与存活心跳；按阶段和失联边界终止卡住的子进程。 |
+| 3.48.42 | 2026-09-02 | Codex                               | 视频号补发的 NEW 只建 QUEUED 账本；重试与统一同步共享每轮浏览器动作预算，禁止跨入口越过上限。 |
 | 3.48.41 | 2026-09-02 | Codex                               | ticket 绑定失败、低层提前失败或超时仅在账本证明浏览器未启动时原子取消，已启动/未知提交继续保留 UNCERTAIN。 |
 | 3.48.40 | 2026-09-02 | Codex                               | 自动 NEW 的零额度安全停用；发现可有限探测素材缺口，但单轮/每日浏览器领取始终受正数额度约束。 |
 | 3.48.39 | 2026-09-02 | Codex                               | NEW 自动发现即使额度设为无限仍受近期候选边界保护；缺素材改为持久去重的聚合告警，避免历史扫描与日志风暴。 |
@@ -155,7 +157,8 @@ import logging
 import subprocess
 import fcntl
 import html
-from typing import Callable, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+from typing import Callable, Dict, Any, Mapping, Optional, Tuple
 from pathlib import Path
 
 from .db import PipelineDB
@@ -246,11 +249,138 @@ _WECHAT_UPLOAD_TIMEOUT_SEC = 25 * 60
 _KUAISHOU_UPLOAD_TIMEOUT_SEC = 25 * 60
 _DOUYIN_UPLOAD_TIMEOUT_SEC = 25 * 60
 _AUTO_CAPTION_TIMEOUT_SEC = 45 * 60
+_CAPTION_STARTUP_TIMEOUT_SEC = 3 * 60
+_CAPTION_HEARTBEAT_TIMEOUT_SEC = 90
+_CAPTION_STAGE_TIMEOUT_SEC = {
+    "STARTING": 3 * 60,
+    "MODEL_LOADING": 12 * 60,
+    "AUDIO_EXTRACTING": 6 * 60,
+    "TRANSCRIBING": 30 * 60,
+    "TRANSLATING": 12 * 60,
+    "ASS_GENERATING": 6 * 60,
+    "VIDEO_RENDERING": 30 * 60,
+    "COMPLETE": 60,
+}
+_CAPTION_DEFAULT_STAGE_TIMEOUT_SEC = 6 * 60
 _SOURCE_SUBTITLE_MIN_CHARS = 20
 # Telegram Bot 的媒体直传需要为协议波动留出余量。该上限仅作用于手机审核副本，
 # 不影响视频号成片、提交证据或任何发布状态。
 _TELEGRAM_REVIEW_VIDEO_MAX_BYTES = 49 * 1024 * 1024
 _TELEGRAM_REVIEW_TRANSCODE_TIMEOUT_SEC = 15 * 60
+
+
+@dataclass(frozen=True)
+class _CaptionProgressBreach:
+    """字幕子进程被看门狗终止的明确原因。"""
+
+    kind: str
+    stage: str
+    elapsed_seconds: float
+    limit_seconds: int
+
+    def description(self) -> str:
+        if self.kind == "STARTUP_HEARTBEAT_MISSING":
+            return f"字幕子进程启动后 {self.elapsed_seconds:.0f}s 未报告首个阶段心跳"
+        if self.kind == "HEARTBEAT_STALE":
+            return f"字幕阶段 {self.stage} 的存活心跳已中断 {self.elapsed_seconds:.0f}s"
+        return f"字幕阶段 {self.stage} 持续 {self.elapsed_seconds:.0f}s 未完成"
+
+
+class _CaptionProgressWatchdog:
+    """从原子进度文件判断字幕子进程是否失联或长期停留在同一阶段。"""
+
+    def __init__(
+        self,
+        *,
+        started_at: float,
+        startup_timeout_seconds: int,
+        heartbeat_timeout_seconds: int,
+        stage_timeout_seconds: Mapping[str, int],
+        default_stage_timeout_seconds: int,
+    ) -> None:
+        self._started_at = started_at
+        self._startup_timeout_seconds = max(1, int(startup_timeout_seconds))
+        self._heartbeat_timeout_seconds = max(1, int(heartbeat_timeout_seconds))
+        self._stage_timeout_seconds = {
+            str(stage).strip(): max(1, int(timeout))
+            for stage, timeout in stage_timeout_seconds.items()
+            if str(stage).strip()
+        }
+        self._default_stage_timeout_seconds = max(1, int(default_stage_timeout_seconds))
+        self._last_heartbeat_at: Optional[float] = None
+        self._stage = "STARTING"
+        self._stage_started_at = started_at
+
+    def check(self, progress_path: Path, *, now: Optional[float] = None) -> Optional[_CaptionProgressBreach]:
+        """返回首个超限原因；没有超限时返回 ``None``。"""
+        current = time.time() if now is None else now
+        try:
+            payload = json.loads(progress_path.read_text(encoding="utf-8"))
+            stage = str(payload.get("stage") or "").strip()
+            heartbeat_at = float(payload.get("updated_at") or 0)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return self._missing_heartbeat_breach(current)
+
+        if not stage or heartbeat_at <= 0:
+            return self._missing_heartbeat_breach(current)
+
+        heartbeat_at = min(heartbeat_at, current)
+        if self._last_heartbeat_at is None or heartbeat_at > self._last_heartbeat_at:
+            self._last_heartbeat_at = heartbeat_at
+        if stage != self._stage:
+            self._stage = stage
+            try:
+                reported_stage_started_at = float(payload.get("stage_started_at") or 0)
+            except (TypeError, ValueError):
+                reported_stage_started_at = 0
+            self._stage_started_at = (
+                min(reported_stage_started_at, current)
+                if reported_stage_started_at > 0
+                else current
+            )
+
+        heartbeat_age = max(0.0, current - self._last_heartbeat_at)
+        if heartbeat_age > self._heartbeat_timeout_seconds:
+            return _CaptionProgressBreach(
+                "HEARTBEAT_STALE", self._stage, heartbeat_age, self._heartbeat_timeout_seconds,
+            )
+
+        stage_limit = self._stage_timeout_seconds.get(self._stage, self._default_stage_timeout_seconds)
+        stage_age = max(0.0, current - self._stage_started_at)
+        if stage_age > stage_limit:
+            return _CaptionProgressBreach("STAGE_TIMEOUT", self._stage, stage_age, stage_limit)
+        return None
+
+    def _missing_heartbeat_breach(self, current: float) -> Optional[_CaptionProgressBreach]:
+        if self._last_heartbeat_at is None:
+            startup_age = max(0.0, current - self._started_at)
+            if startup_age > self._startup_timeout_seconds:
+                return _CaptionProgressBreach(
+                    "STARTUP_HEARTBEAT_MISSING", "STARTING", startup_age,
+                    self._startup_timeout_seconds,
+                )
+            return None
+        heartbeat_age = max(0.0, current - self._last_heartbeat_at)
+        if heartbeat_age > self._heartbeat_timeout_seconds:
+            return _CaptionProgressBreach(
+                "HEARTBEAT_STALE", self._stage, heartbeat_age, self._heartbeat_timeout_seconds,
+            )
+        return None
+
+
+class _CaptionProgressTimeout(subprocess.TimeoutExpired):
+    """保存字幕进度看门狗的阶段级超时语义。"""
+
+    def __init__(
+        self,
+        cmd: list,
+        breach: _CaptionProgressBreach,
+        *,
+        output: Any = None,
+        stderr: Any = None,
+    ) -> None:
+        super().__init__(cmd, breach.limit_seconds, output=output, stderr=stderr)
+        self.breach = breach
 
 
 def _validate_rendered_vertical_cache(vertical: Path) -> Tuple[bool, str]:
@@ -337,6 +467,7 @@ class PipelineManager:
         self.telegram_token   = settings.telegram_bot_token
         self.telegram_chat_id = settings.active_telegram_chat_id
         self._last_douyin_browser_action_at: Optional[float] = None
+        self._douyin_new_actions_claimed = 0
         self._douyin_platform_halted = False
         self._douyin_halt_reason = ""
         self._douyin_management_verify_halted = False
@@ -1065,6 +1196,20 @@ class PipelineManager:
             return None
         return max_per_run, daily_limit
 
+    def _remaining_douyin_new_actions(self, max_per_run: int) -> int:
+        """返回当前每日巡航还能领取的 NEW 浏览器动作数量。"""
+        claimed = getattr(self, "_douyin_new_actions_claimed", 0)
+        if isinstance(claimed, bool) or not isinstance(claimed, int) or claimed < 0:
+            claimed = 0
+        return max(0, max_per_run - claimed)
+
+    def _record_douyin_new_action_claim(self) -> None:
+        """记录本轮已领取的 NEW；领取即计入额度，失败也不得同轮放大浏览器动作。"""
+        claimed = getattr(self, "_douyin_new_actions_claimed", 0)
+        if isinstance(claimed, bool) or not isinstance(claimed, int) or claimed < 0:
+            claimed = 0
+        self._douyin_new_actions_claimed = claimed + 1
+
     @staticmethod
     def _douyin_ui_guard_failure_count(row: Any, threshold: int) -> int:
         """告警只显示已校验的计数；损坏账本退回阈值，不能破坏 fail-closed。"""
@@ -1082,6 +1227,7 @@ class PipelineManager:
         self._douyin_management_verify_halted = False
         self._douyin_management_verify_halt_reason = ""
         self._last_douyin_browser_action_at = None
+        self._douyin_new_actions_claimed = 0
         # 同一轮只恢复一次。若账本读取失败，保留下面的 fail-closed 结果，不能被后续入口重置。
         self._douyin_ui_guard_loaded = True
         threshold = max(1, int(settings.douyin_ui_failure_recording_threshold or 1))
@@ -1604,26 +1750,54 @@ class PipelineManager:
         if "env" not in popen_kwargs:
             popen_kwargs["env"] = _build_subprocess_env()
 
-        if settings.enable_sigterm_kill:
+        # 字幕阶段看门狗需要可靠地终止整棵子进程树，因此即使常规 PID 追踪
+        # 关闭，只要调用方提供 progress_path 也创建独立进程组。
+        use_isolated_process_group = settings.enable_sigterm_kill or progress_path is not None
+        if use_isolated_process_group:
             proc = subprocess.Popen(
                 cmd,
                 preexec_fn=os.setsid,  # 建立独立进程组
                 **popen_kwargs
             )
-            try:
-                pgid = os.getpgid(proc.pid)
-                self.db.update_process_pid(yid, pgid, slice_index=slice_index)
-            except ProcessLookupError:
-                pass  # 进程已极速退出，无需记录
+            if settings.enable_sigterm_kill:
+                try:
+                    pgid = os.getpgid(proc.pid)
+                    self.db.update_process_pid(yid, pgid, slice_index=slice_index)
+                except ProcessLookupError:
+                    pass  # 进程已极速退出，无需记录
+
+            def terminate_process_group() -> None:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    proc.kill()
+
             monitor_stop = threading.Event() if progress_path else None
             monitor_thread = None
+            watchdog_breaches: list[_CaptionProgressBreach] = []
             if monitor_stop is not None:
                 progress_file = Path(progress_path)
+                watchdog = _CaptionProgressWatchdog(
+                    started_at=time.time(),
+                    startup_timeout_seconds=_CAPTION_STARTUP_TIMEOUT_SEC,
+                    heartbeat_timeout_seconds=_CAPTION_HEARTBEAT_TIMEOUT_SEC,
+                    stage_timeout_seconds=_CAPTION_STAGE_TIMEOUT_SEC,
+                    default_stage_timeout_seconds=_CAPTION_DEFAULT_STAGE_TIMEOUT_SEC,
+                )
 
                 def monitor_caption_progress() -> None:
                     last_stage = None
                     last_log_at = 0.0
                     while not monitor_stop.wait(5):
+                        breach = watchdog.check(progress_file)
+                        if breach is not None:
+                            watchdog_breaches.append(breach)
+                            logger.error(
+                                "[CaptionWatchdog] %s kind=%s stage=%s elapsed=%.0fs limit=%ss; terminating process group.",
+                                yid, breach.kind, breach.stage, breach.elapsed_seconds, breach.limit_seconds,
+                            )
+                            terminate_process_group()
+                            return
                         try:
                             payload = json.loads(progress_file.read_text(encoding="utf-8"))
                             stage = str(payload.get("stage") or "").strip()
@@ -1648,10 +1822,7 @@ class PipelineManager:
             try:
                 stdout, stderr = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired as e:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except Exception:
-                    proc.kill()
+                terminate_process_group()
                 stdout, stderr = proc.communicate()
                 raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr) from e
             finally:
@@ -1659,6 +1830,10 @@ class PipelineManager:
                     monitor_stop.set()
                 if monitor_thread is not None:
                     monitor_thread.join(timeout=1)
+            if watchdog_breaches:
+                raise _CaptionProgressTimeout(
+                    cmd, watchdog_breaches[0], output=stdout, stderr=stderr,
+                )
             if proc.returncode != 0:
                 raise subprocess.CalledProcessError(
                     proc.returncode, cmd,
@@ -2377,11 +2552,9 @@ class PipelineManager:
         return True
 
     def _queue_and_publish_new_douyin_video(self, yid: str, slice_index: int = 0) -> bool:
-        """为成片入库一条 NEW 抖音发布任务，并当即触发发布。"""
-        action_limits = self._douyin_new_sync_action_limits()
-        if action_limits is None:
+        """为视频号补发成片入 NEW 队列，由统一同步入口按额度领取发布。"""
+        if self._douyin_new_sync_action_limits() is None:
             return True
-        _max_per_run, daily_limit = action_limits
         self._ensure_douyin_run_guard_loaded()
         if self._douyin_platform_halted:
             logger.warning("[%s] 抖音自动动作已熔断，跳过新片同步：%s", yid, self._douyin_halt_reason)
@@ -2390,7 +2563,7 @@ class PipelineManager:
         vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
         title_file = self._douyin_title_path(yid, slice_index)
         if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file():
-            logger.error("[%s] 无法入库抖音任务：投递产物不全", prefix)
+            logger.warning("[%s] 跳过抖音 NEW 入队：投递产物不全", prefix)
             return False
         publication = self.db.get_douyin_publication(yid, slice_index=slice_index)
         if not publication:
@@ -2404,18 +2577,8 @@ class PipelineManager:
         if publication["state"] == "PUBLISHED":
             logger.info("[%s] 相同成片已在抖音确认发布，跳过重复投递", prefix)
             return True
-        if not self._is_public_publish_window("抖音", yid, slice_index):
-            logger.info("[%s] 抖音新片已入队，等待公开视频提交窗口。", prefix)
-            return True
-        publication_id = publication["id"]
-        claimed = self.db.claim_douyin_publication(
-            publication_id,
-            daily_limit=daily_limit,
-        )
-        if not claimed:
-            logger.info("[%s] 抖音新片达到当天领取上限或当前无法 claim，保持队列等待下一窗口。", prefix)
-            return True
-        return self._publish_claimed_douyin_publication(claimed)
+        logger.info("[%s] 抖音 NEW 已入队，交由统一同步入口按额度和窗口领取。", prefix)
+        return True
 
     def _run_douyin_history_migration(self) -> None:
         """迁移历史作品到抖音；任一失败后固定在同一视频等待人工状态核验。"""
@@ -2664,7 +2827,10 @@ class PipelineManager:
         action_limits = self._douyin_new_sync_action_limits()
         if action_limits is None:
             return True
-        _max_per_run, daily_limit = action_limits
+        max_per_run, daily_limit = action_limits
+        if self._remaining_douyin_new_actions(max_per_run) < 1:
+            logger.info("[DouyinNewSync] 本轮 NEW 动作额度已用尽，跳过直接重试。")
+            return True
         self._ensure_douyin_run_guard_loaded()
         if self._douyin_platform_halted:
             logger.warning("[DouyinHalt] 已停止本轮抖音新片重试：%s", self._douyin_halt_reason)
@@ -2676,6 +2842,7 @@ class PipelineManager:
         )
         if not claimed:
             return True
+        self._record_douyin_new_action_claim()
         return self._publish_claimed_douyin_publication(claimed)
 
     def _queue_missing_douyin_new_publications(self) -> int:
@@ -2689,6 +2856,10 @@ class PipelineManager:
         self._ensure_douyin_run_guard_loaded()
         if self._douyin_platform_halted:
             logger.warning("[DouyinHalt] 已停止本轮抖音 NEW 入队：%s", self._douyin_halt_reason)
+            return 0
+        remaining_actions = self._remaining_douyin_new_actions(max_per_run)
+        if remaining_actions < 1:
+            logger.info("[DouyinNewSync] 本轮 NEW 动作额度已用尽，跳过候选发现与建队。")
             return 0
         lookback_hours, candidate_limit = self._bounded_douyin_new_sync_discovery_limits()
         queued = 0
@@ -2726,7 +2897,7 @@ class PipelineManager:
             )
             queued += 1
             logger.info("[%s] 已补齐抖音 NEW 同步队列。", prefix)
-            if queued >= max_per_run:
+            if queued >= remaining_actions:
                 break
         if missing_asset_prefixes:
             sample = ", ".join(html.escape(prefix) for prefix in missing_asset_prefixes[:5])
@@ -2763,20 +2934,23 @@ class PipelineManager:
             return False
         if not self._is_public_publish_window("抖音新片同步"):
             return True
+        if self._remaining_douyin_new_actions(max_per_run) < 1:
+            logger.info("[DouyinNewSync] 本轮 NEW 动作额度已用尽，跳过候选发现和领取。")
+            return True
         self._queue_missing_douyin_new_publications()
-        index = 0
-        while index < max_per_run:
+        while self._remaining_douyin_new_actions(max_per_run) > 0:
             claimed = self.db.claim_next_douyin_publication(
                 "NEW", daily_limit=daily_limit,
             )
             if not claimed:
                 return True
             yid = claimed.get("youtube_id", "")
-            index += 1
+            self._record_douyin_new_action_claim()
+            claimed_count = max_per_run - self._remaining_douyin_new_actions(max_per_run)
             logger.info(
                 "[DouyinNewSync] 当前发送 %s；本轮第 %s 条%s",
                 yid,
-                index,
+                claimed_count,
                 f"（上限 {max_per_run}）",
             )
             if not self._publish_claimed_douyin_publication(claimed):
@@ -3472,6 +3646,21 @@ class PipelineManager:
                             timeout=_AUTO_CAPTION_TIMEOUT_SEC,
                             progress_path=progress_file,
                         )
+                    except _CaptionProgressTimeout as exc:
+                        breach = exc.breach
+                        reason = (
+                            f"字幕阶段看门狗终止：{breach.description()}（上限 {breach.limit_seconds}s）。"
+                            "子进程已终止；请检查该阶段的 Whisper、翻译或 FFmpeg 日志后再点「重试」。"
+                        )
+                        logger.error("[CaptionWatchdog] %s: %s", prefix, reason)
+                        self.db.update_video_status(
+                            yid, "FAILED", error_msg=reason, slice_index=slice_index,
+                        )
+                        self.send_telegram_msg(
+                            f"⚠️ <b>字幕阶段超时</b>\nTitle: {render_title}\n"
+                            f"Stage: {breach.stage}\nReason: {breach.description()}"
+                        )
+                        return
                     except subprocess.TimeoutExpired:
                         logger.error(
                             f"Auto-caption timed out for {prefix} after {_AUTO_CAPTION_TIMEOUT_SEC}s."

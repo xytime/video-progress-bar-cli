@@ -12,6 +12,7 @@
 | 1.4.0   | 2026-06-25 | Claude_Opus_4.8 | 新增 --source-date 参数，透传源视频发布日期(YYYY-MM-DD)到 VerticalCaptionProcessor 渲染左上角毛玻璃日期戳 |
 | 1.5.0   | 2026-07-17 | Codex | 当前无配音业务场景，移除全部 TTS CLI 入口 |
 | 1.6.0   | 2026-08-27 | Codex | 增加原子阶段心跳文件，供父管线在子进程运行中报告真实进度 |
+| 1.7.0   | 2026-09-03 | Codex | 心跳载荷记录阶段起点，允许父进程区分存活心跳与同阶段停滞。 |
 """
 import click
 from pathlib import Path
@@ -32,17 +33,20 @@ class _CaptionProgressReporter:
     def __init__(self, progress_file: Path):
         self._progress_file = progress_file
         self._stage = "STARTING"
+        self._stage_started_at = time.time()
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
     def __call__(self, stage: str) -> None:
         with self._lock:
+            if stage != self._stage:
+                self._stage_started_at = time.time()
             self._stage = stage
-        self._write(stage)
+        self._write_current()
 
     def start(self) -> None:
-        self._write(self._stage)
+        self._write_current()
         self._thread = threading.Thread(target=self._heartbeat_loop, name="caption-progress", daemon=True)
         self._thread.start()
 
@@ -53,16 +57,21 @@ class _CaptionProgressReporter:
 
     def _heartbeat_loop(self) -> None:
         while not self._stop.wait(15):
+            self._write_current()
+
+    def _write_current(self) -> None:
+        try:
             with self._lock:
                 stage = self._stage
-            self._write(stage)
-
-    def _write(self, stage: str) -> None:
-        try:
+                stage_started_at = self._stage_started_at
             self._progress_file.parent.mkdir(parents=True, exist_ok=True)
             temporary = self._progress_file.with_name(f".{self._progress_file.name}.tmp")
             temporary.write_text(
-                json.dumps({"stage": stage, "updated_at": time.time()}, ensure_ascii=False),
+                json.dumps({
+                    "stage": stage,
+                    "stage_started_at": stage_started_at,
+                    "updated_at": time.time(),
+                }, ensure_ascii=False),
                 encoding="utf-8",
             )
             temporary.replace(self._progress_file)

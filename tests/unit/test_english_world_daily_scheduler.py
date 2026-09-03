@@ -28,6 +28,12 @@
 # | 2.22.0 | 2026-09-01 | Codex | 成功交付请求必须绑定通过的最终音频 QA 报告。 |
 # | 2.23.0 | 2026-09-01 | Codex | 拒绝与当前 MP4/manifest 不匹配的 PASS 音频 QA 报告。 |
 # | 2.24.0 | 2026-09-02 | Codex | 覆盖日更提示注入投稿保护来源，避免同源 UNDER_REVIEW 项被再次制作。 |
+# | 2.25.0 | 2026-09-02 | Codex | 覆盖宿主消费交付请求时机械阻断投稿保护同源，避免通知器触碰旧审核项。 |
+# | 2.26.0 | 2026-09-03 | Codex | 覆盖锁题后确定性质量失败的跨运行来源排除。 |
+# | 2.28.0 | 2026-09-03 | Codex | 旧式失败文本仅在明确质量门禁时淘汰来源，来源通路错误一律保留。 |
+# | 2.29.0 | 2026-09-03 | Codex | 收紧旧式质量模板，阻断混合来源通路错误误淘汰。 |
+# | 2.30.0 | 2026-09-03 | Codex | 来源通路错误优先于旧式质量文本，冲突记录不得淘汰候选。 |
+# | 2.31.0 | 2026-09-03 | Codex | 固化旧兼容入口的末屏微笔记梯度，避免误施加普通屏八条门禁。 |
 """
 
 from __future__ import annotations
@@ -50,6 +56,7 @@ from video_processing.utils.youtube_access import YoutubeAccessResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = PROJECT_ROOT / "scripts" / "run_english_world_daily.py"
+LEGACY_RUNNER = PROJECT_ROOT / "scripts" / "run_english_world_daily_codex.sh"
 PLIST = PROJECT_ROOT / "scripts" / "com.videopipeline.english-world-daily.plist"
 
 
@@ -76,7 +83,10 @@ def _runner_arguments(
     fixture_manifest = project_root / "manifest.json"
     fixture_audio_qa = project_root / "qa" / "final_audio_qa.json"
     fixture_mp4.write_text("fixture", encoding="utf-8")
-    fixture_manifest.write_text("fixture", encoding="utf-8")
+    fixture_manifest.write_text(
+        json.dumps({"source_provenance": {"youtube_id": "dQw4w9WgXcQ"}, "source_start": 12.0}),
+        encoding="utf-8",
+    )
     fixture_audio_qa.parent.mkdir()
     fixture_audio_qa.write_text(json.dumps({
         "state": "PASS", "passed": True,
@@ -412,6 +422,14 @@ def test_daily_prompt_matches_terminal_screen_micro_note_tiers():
     assert "41 词以上为 8 条" in prompt
 
 
+def test_legacy_daily_prompt_keeps_terminal_screen_out_of_eight_note_gate():
+    prompt = LEGACY_RUNNER.read_text(encoding="utf-8")
+
+    assert "每个可见阅读屏至少 8 个微笔记" not in prompt
+    assert "普通阅读屏至少 8 个微笔记" in prompt
+    assert "最后一屏按可见英文词数分档" in prompt
+
+
 def test_daily_prompt_requires_monotonic_word_boundaries_before_enrichment():
     prompt = runner.PROMPT
 
@@ -431,6 +449,13 @@ def test_daily_prompt_requires_relative_boundary_and_whisper_audio_gate():
     assert "只有报告 `state=PASS` 才能写入成功交付请求" in prompt
 
 
+def test_daily_prompt_persists_deterministic_locked_source_failures():
+    prompt = runner.PROMPT
+
+    assert "锁定来源后若出现可重复的内容、屏幕词汇、渲染封装或音频质检失败" in prompt
+    assert "追加 `--rejected-youtube-id`" in prompt
+
+
 def test_recent_rejected_candidates_include_structured_and_legacy_failures(tmp_path: Path):
     log_dir = tmp_path / "logs"
     log_dir.mkdir()
@@ -442,12 +467,74 @@ def test_recent_rejected_candidates_include_structured_and_legacy_failures(tmp_p
         json.dumps({"kind": "failure", "failure": "唯一锁定候选 xewivZQgBMQ 内容级质检失败"}),
         encoding="utf-8",
     )
+    (log_dir / "locked-source.delivery-request.json").write_text(
+        json.dumps({"kind": "failure", "failure": "锁定来源 UIJ1PrQOyLM 后，学习卡正式渲染的真实屏幕门禁失败"}),
+        encoding="utf-8",
+    )
     (log_dir / "invalid.delivery-request.json").write_text(
         json.dumps({"rejected_youtube_ids": ["not-valid"]}),
         encoding="utf-8",
     )
 
-    assert runner._recent_rejected_youtube_ids(log_dir) == ("EJ5Sqku_fYc", "xewivZQgBMQ")
+    assert runner._recent_rejected_youtube_ids(log_dir) == (
+        "EJ5Sqku_fYc", "UIJ1PrQOyLM", "xewivZQgBMQ",
+    )
+
+
+@pytest.mark.parametrize(
+    "failure",
+    (
+        "锁定来源 UIJ1PrQOyLM 后下载时 DNS解析失败，未进入正式渲染。",
+        "锁定来源 UIJ1PrQOyLM 后 Cookie失效，未进入正式渲染。",
+        "锁定来源 UIJ1PrQOyLM 后 TLS握手失败，未进入正式渲染。",
+        "锁定来源 UIJ1PrQOyLM 后下载超时，未进入正式渲染。",
+        "锁定来源 UIJ1PrQOyLM 后代理连接被重置，未进入正式渲染。",
+        "锁定来源 UIJ1PrQOyLM 后渲染时下载源视频 TLS握手失败。",
+        "锁定来源 UIJ1PrQOyLM 后学习卡制作下载字幕 DNS解析失败。",
+        "锁定来源 UIJ1PrQOyLM 后 MP4下载源视频 TLS握手失败。",
+        "锁定来源 UIJ1PrQOyLM 后音频 QA 下载字幕 DNS解析失败。",
+        "锁定来源 UIJ1PrQOyLM 后真实屏幕微笔记门禁失败：词典下载 DNS解析失败。",
+        "锁定来源 UIJ1PrQOyLM 后 MP4 无法由 ffprobe 解析：原片下载超时。",
+        "锁定来源 UIJ1PrQOyLM 后音频 QA 门禁失败：下载字幕时代理连接被重置。",
+    ),
+)
+def test_recent_rejected_candidates_exclude_locked_source_access_failures(
+    tmp_path: Path,
+    failure: str,
+):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "source-access.delivery-request.json").write_text(
+        json.dumps({
+            "kind": "failure",
+            "failure": failure,
+        }),
+        encoding="utf-8",
+    )
+
+    assert runner._recent_rejected_youtube_ids(log_dir) == ()
+
+
+@pytest.mark.parametrize(
+    ("failure", "source_id"),
+    (
+        ("锁定来源 UIJ1PrQOyLM 后音频 QA 门禁失败。", "UIJ1PrQOyLM"),
+        ("锁定来源 xewivZQgBMQ 后 MP4 无法由 ffprobe 解析。", "xewivZQgBMQ"),
+    ),
+)
+def test_recent_rejected_candidates_include_explicit_legacy_quality_templates(
+    tmp_path: Path,
+    failure: str,
+    source_id: str,
+):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "quality-gate.delivery-request.json").write_text(
+        json.dumps({"kind": "failure", "failure": failure}),
+        encoding="utf-8",
+    )
+
+    assert runner._recent_rejected_youtube_ids(log_dir) == (source_id,)
 
 
 def test_daily_prompt_injects_machine_exclusions_and_requires_rejection_persistence(tmp_path: Path):
@@ -522,6 +609,132 @@ def test_submission_protection_ledger_failure_is_reported_without_launching_coor
     assert "phase=REPORTED_SUBMISSION_PROTECTION_LEDGER_FAILURE" in status
 
 
+def test_host_safely_skips_protected_delivery_source_without_notifier_or_failure(monkeypatch, tmp_path: Path):
+    """代理忽略提示仍制作同源时，宿主必须在封面/通知/上传前机械拒绝。"""
+    source_id = "B9gI1_WL4Hg"
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    mp4 = project_root / "video.mp4"
+    manifest = project_root / "manifest.json"
+    audio_qa_report = project_root / "qa" / "final_audio_qa.json"
+    request_path = project_root / "delivery-request.json"
+    receipt_path = project_root / "delivery.json"
+    notifier = tmp_path / "notifier.py"
+    python_bin = tmp_path / "python"
+    for path in (mp4, notifier):
+        path.write_text("fixture", encoding="utf-8")
+    _write_executable(python_bin, "#!/usr/bin/env bash\nexit 99\n")
+    manifest.write_text(
+        json.dumps({"source_provenance": {"youtube_id": source_id}, "source_start": 12.0}),
+        encoding="utf-8",
+    )
+    audio_qa_report.parent.mkdir()
+    audio_qa_report.write_text(
+        json.dumps({"state": "PASS", "passed": True, "mp4": str(mp4), "manifest": str(manifest)}),
+        encoding="utf-8",
+    )
+    request_path.write_text(
+        json.dumps({
+            "kind": "production", "title": "already protected", "mp4": str(mp4),
+            "manifest": str(manifest), "audio_qa_report": str(audio_qa_report),
+        }),
+        encoding="utf-8",
+    )
+    paths = runner.RuntimePaths(
+        project_root=project_root, codex_home=tmp_path, codex_bin=tmp_path / "codex",
+        python_bin=python_bin, notifier_script=notifier, log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock", coordinator_timeout_seconds=1,
+    )
+    monkeypatch.setattr(runner, "_submission_protected_youtube_ids", lambda _root: (source_id,))
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("protected source must not invoke notifier/cover/upload"),
+    )
+
+    assert runner._deliver_request_from_host(paths, request_path, receipt_path, StringIO()) == (0, False)
+    assert json.loads(receipt_path.read_text(encoding="utf-8")) == {
+        "kind": "review",
+        "status": "SUPPRESSED",
+        "reason": "SOURCE_ALREADY_SUBMISSION_PROTECTED",
+        "source_youtube_id": source_id,
+    }
+
+
+def test_host_reads_bound_enriched_timeline_for_legacy_manifest_without_provenance(tmp_path: Path):
+    """旧渲染 manifest 没有 provenance 时，只接受同 source_start 的 enriched 时间线。"""
+    manifest = tmp_path / "manifest.json"
+    timeline = tmp_path / "timeline.enriched.json"
+    manifest.write_text(json.dumps({"source_start": 209.4}), encoding="utf-8")
+    timeline.write_text(
+        json.dumps({
+            "source_provenance": {
+                "youtube_id": "B9gI1_WL4Hg",
+                "source_start_seconds": 209.4,
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    assert runner._delivery_request_source_youtube_id(manifest) == "B9gI1_WL4Hg"
+
+
+def test_daily_run_closes_protected_source_as_safe_skip_without_failure_notification(monkeypatch, tmp_path: Path):
+    """同一次 coordinator 已经制作时，不重跑它；本轮安全收口，下一次正常选题。"""
+    source_id = "B9gI1_WL4Hg"
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    codex = tmp_path / "codex"
+    python_bin = tmp_path / "python"
+    notifier = tmp_path / "notifier.py"
+    _write_executable(codex, "#!/usr/bin/env bash\nexit 99\n")
+    _write_executable(python_bin, "#!/usr/bin/env bash\nexit 99\n")
+    notifier.write_text("fixture", encoding="utf-8")
+    paths = runner.RuntimePaths(
+        project_root=project_root, codex_home=tmp_path, codex_bin=codex,
+        python_bin=python_bin, notifier_script=notifier, log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock", coordinator_timeout_seconds=1,
+    )
+    monkeypatch.setattr(runner, "_submission_protected_youtube_ids", lambda _root: (source_id,))
+    monkeypatch.setattr(runner, "_notify_failure", lambda *_args, **_kwargs: pytest.fail("safe skip must not notify failure"))
+
+    def write_ignored_protected_request(_paths, _response_path, request_path, _stream, **_kwargs):
+        mp4 = project_root / "video.mp4"
+        manifest = project_root / "manifest.json"
+        audio_qa_report = project_root / "qa" / "final_audio_qa.json"
+        mp4.write_text("fixture", encoding="utf-8")
+        manifest.write_text(
+            json.dumps({"source_provenance": {"youtube_id": source_id}, "source_start": 12.0}),
+            encoding="utf-8",
+        )
+        audio_qa_report.parent.mkdir()
+        audio_qa_report.write_text(
+            json.dumps({"state": "PASS", "passed": True, "mp4": str(mp4), "manifest": str(manifest)}),
+            encoding="utf-8",
+        )
+        request_path.write_text(
+            json.dumps({
+                "kind": "production", "title": "already protected", "mp4": str(mp4),
+                "manifest": str(manifest), "audio_qa_report": str(audio_qa_report),
+            }),
+            encoding="utf-8",
+        )
+        return 0
+
+    monkeypatch.setattr(runner, "_run_coordinator", write_ignored_protected_request)
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("safe skip must not invoke notifier/cover/upload"),
+    )
+
+    assert runner.run(paths, max_attempts=1, retry_delay_seconds=0, source_access_preflight=False) == 0
+    status = (paths.log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=SKIPPED_PROTECTED_SOURCE" in status
+    receipt = next(paths.log_dir.glob("run_*.delivery.json"))
+    assert json.loads(receipt.read_text(encoding="utf-8"))["source_youtube_id"] == source_id
+
+
 def test_delivery_request_recorder_persists_deduplicated_rejected_ids(tmp_path: Path):
     request = tmp_path / "delivery.json"
     result = subprocess.run(
@@ -552,8 +765,12 @@ def test_manual_host_delivery_forces_notifier_review_only(monkeypatch, tmp_path:
     manifest = tmp_path / "manifest.json"
     audio_qa_report = tmp_path / "qa" / "final_audio_qa.json"
     notifier = tmp_path / "notifier.py"
-    for path in (mp4, manifest, notifier):
+    for path in (mp4, notifier):
         path.write_text("fixture", encoding="utf-8")
+    manifest.write_text(
+        json.dumps({"source_provenance": {"youtube_id": "dQw4w9WgXcQ"}, "source_start": 12.0}),
+        encoding="utf-8",
+    )
     audio_qa_report.parent.mkdir()
     audio_qa_report.write_text(json.dumps({
         "state": "PASS", "passed": True,

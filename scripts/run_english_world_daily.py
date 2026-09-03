@@ -32,7 +32,9 @@
 # | 2.22.0 | 2026-08-31 | Codex | 来源预检自身异常也写入受控失败请求和持久状态，避免启动依赖缺失绕过当日回执。 |
 # | 2.23.0 | 2026-09-01 | Codex | 固化 json3 绝对/相对时间换算、本地 Whisper 末尾泄漏门禁及通过报告绑定。 |
 # | 2.24.0 | 2026-09-02 | Codex | 日更选题前读取投稿保护账本并排除同源审核项；账本异常时不启动制作。 |
+# | 2.25.0 | 2026-09-02 | Codex | 宿主消费成功交付请求时重新核验来源账本；命中旧审核源安全跳过且不触发通知器。 |
 # | 2.26.0 | 2026-09-03 | Codex | 锁题后确定性内容或质检失败也持久排除该来源，避免后续窗口重复消耗。 |
+# | 2.27.0 | 2026-09-03 | Codex | 对 json3 末词缺失结束锚点导致的无泄漏时间轴误差加入一次性受限本地恢复。 |
 # | 2.28.0 | 2026-09-03 | Codex | 旧式失败文本仅在明确质量门禁时淘汰来源，来源通路错误一律保留。 |
 # | 2.29.0 | 2026-09-03 | Codex | 收紧旧式质量模板，避免“渲染”等宽泛词触发误淘汰。 |
 # | 2.30.0 | 2026-09-03 | Codex | 旧式冲突文本优先识别来源通路错误，宁可保留也不误淘汰来源。 |
@@ -78,6 +80,13 @@ LEGACY_SOURCE_ACCESS_FAILURE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _PROXY_ENV_KEYS = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"})
+_ENRICHED_TIMELINE_NAMES = (
+    "timeline_final_enriched.json",
+    "timeline_enriched.json",
+    "timeline.enriched.json",
+    "timeline-enriched.json",
+)
+_PROTECTED_SOURCE_SUPPRESSION_REASON = "SOURCE_ALREADY_SUBMISSION_PROTECTED"
 
 PROMPT = """执行今日“英语世界短视频”无人值守制作任务。工作目录是 Video-precessing。
 
@@ -102,16 +111,16 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 
 HTTP 403 不是自动“换题”信号：先对同一候选仅重试一次，并且只在出现 YouTube 认证/风控征兆时执行一次 Cookie 刷新；若仍是 403，立即用另一个未使用候选做同样的轻量格式访问预检以做对照。两个独立候选都出现 403、DNS、TLS 或超时，属于来源通路降级而不是两个候选同时不合格：停止候选淘汰，写入“来源通路降级”的失败请求，**不要追加 `--rejected-youtube-id`**，也不要靠继续换题掩盖网络故障。只有对照候选可下载时，才将最初 403 归为单候选访问失败并排除它。
 
-只有完整来源预检已经覆盖“拟用片段的画面与自然语音”后，才锁定第一个合格 `youtube_id` 并进入制作；本次运行最终仍只允许制作一条成片。若尚未开始时间轴、翻译、词汇富化或正式渲染，却发现拟用片段含不适画面、语音不连续或不满足时长，说明来源预检出现假阳性：立即撤销该候选的暂定资格、记录 `youtube_id` 和原因，并继续预检剩余候选；这不属于换题重做。只有开始时间轴、翻译、词汇富化或正式渲染后，才构成不可切换的制作承诺。按 make-english-world-short 技能和 production-contract 完整制作：自然完整句收尾；逐词红线；普通阅读屏至少 8 个微笔记；最后一屏按可见英文词数采用现有梯度（不超过 12 词为 0 条、13–24 词为 3 条、25–40 词为 5 条、41 词以上为 8 条）；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。由 YouTube json3 等密集自动字幕生成逐词时间轴时，必须先按绝对起点排序并保证每个 `word.end <= next_word.start`；不得用固定最短词长覆盖下一词起点，词汇富化前必须先通过 `StudyCardContent.from_mapping` 的单调时间轴校验。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。若制作承诺后在时间轴、渲染或成片质检阶段失败，必须写入准确失败请求并立即结束；不得为了补词卡或优化文案而换题。
+只有完整来源预检已经覆盖“拟用片段的画面与自然语音”后，才锁定第一个合格 `youtube_id` 并进入制作；本次运行最终仍只允许制作一条成片。若尚未开始时间轴、翻译、词汇富化或正式渲染，却发现拟用片段含不适画面、语音不连续或不满足时长，说明来源预检出现假阳性：立即撤销该候选的暂定资格、记录 `youtube_id` 和原因，并继续预检剩余候选；这不属于换题重做。只有开始时间轴、翻译、词汇富化或正式渲染后，才构成不可切换的制作承诺。按 make-english-world-short 技能和 production-contract 完整制作：自然完整句收尾；逐词红线；普通阅读屏至少 8 个微笔记；最后一屏按可见英文词数采用现有梯度（不超过 12 词为 0 条、13–24 词为 3 条、25–40 词为 5 条、41 词以上为 8 条）；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。由 YouTube json3 等密集自动字幕生成逐词时间轴时，必须先按绝对起点排序并保证每个 `word.end <= next_word.start`；不得用固定最短词长覆盖下一词起点，词汇富化前必须先通过 `StudyCardContent.from_mapping` 的单调时间轴校验。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。除下述唯一末词锚点恢复外，制作承诺后的时间轴、渲染或成片质检失败必须写入准确失败请求并立即结束；不得为了补词卡或优化文案而换题。
 
-时间轴完成后，必须明确把 json3 的绝对 `tStartMs` 转成 `absolute_time - source_start` 的相对 `words.start/end`，不得把绝对 `spoken_end` 直接写入相对时间轴；`scripts/render_study_card.py` 的渲染入口会校验 `caption_artifact` 的下一字幕边界。渲染后必须使用项目 venv 执行 `scripts/validate_study_card_audio.py --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`，该命令会提取 16kHz 单声道音频并用本地 Whisper 检查末词完整性和下一词泄漏；只有报告 `state=PASS` 才能写入成功交付请求。
+时间轴完成后，必须明确把 json3 的绝对 `tStartMs` 转成 `absolute_time - source_start` 的相对 `words.start/end`，不得把绝对 `spoken_end` 直接写入相对时间轴；`scripts/render_study_card.py` 的渲染入口会校验 `caption_artifact` 的下一字幕边界。渲染后必须使用项目 venv 执行 `scripts/validate_study_card_audio.py --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`，该命令会提取 16kHz 单声道音频并用本地 Whisper 检查末词完整性和下一词泄漏；只有报告 `state=PASS` 才能写入成功交付请求。唯一可恢复例外是报告同时满足 `state=FAIL`、`failure_kind=final_word_boundary_mismatch`、末词文本一致且 `trailing_words=[]`：这说明 json3 把没有显式终点的末词错误延长到字幕框尾部，而不是下一句漏入。此时只允许对同一锁定来源执行一次 `scripts/repair_study_card_final_boundary.py --timeline <timeline> --audio-qa-report <失败报告> --output <修正时间线>`，用修正时间线重新渲染一次，再完整执行一次音频 QA。不得改变正文、译文、词汇、来源起点或选择另一候选；若第二次 QA 不为 PASS，立即写失败请求。修正后仍必须严格大于 30 秒，且不得存在长静音或下一词泄漏。
 
 质检通过后，必须运行以下命令原子写入交付请求：
 PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>' --audio-qa-report '<绝对qa/final_audio_qa.json路径>'
 若当天无合格候选或制作/质检失败，必须运行：
 PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '今日英语世界短视频' --failure '<准确原因>'
 
-无论成功还是失败，只要来源预检淘汰过候选，就必须为每个淘汰项在上述对应命令末尾追加一次 `--rejected-youtube-id '<实际youtube_id>'`；没有淘汰项时不追加。协调器会跨运行读取该机器字段，防止内容不适龄或来源不可用的候选反复消耗后续窗口。锁定来源后若出现可重复的内容、屏幕词汇、渲染封装或音频质检失败，也必须在失败请求追加该锁定来源的 `--rejected-youtube-id '<实际youtube_id>'`，让下次运行排除它；这不允许在同一运行内换题。仅网络、Cookie、DNS、TLS、403 或其他来源通路故障仍不得追加，因为它们不是候选质量失败。
+无论成功还是失败，只要来源预检淘汰过候选，就必须为每个淘汰项在上述对应命令末尾追加一次 `--rejected-youtube-id '<实际youtube_id>'`；没有淘汰项时不追加。协调器会跨运行读取该机器字段，防止内容不适龄或来源不可用的候选反复消耗后续窗口。锁定来源后若出现可重复的内容、屏幕词汇、渲染封装或音频质检失败，也必须在失败请求追加该锁定来源的 `--rejected-youtube-id '<实际youtube_id>'`，让下次运行排除它；这不允许在同一运行内换题。前述一次性末词锚点恢复在第二次 QA 仍失败时才按音频质检失败处理。仅网络、Cookie、DNS、TLS、403 或其他来源通路故障仍不得追加，因为它们不是候选质量失败。
 
 写入请求是本任务的最后一个硬性检查点：命令成功后只能报告请求路径和本地质检结果；不得自行读取 Telegram 回执、生成投稿封面或启动上传器。请求缺失、不可解析或 MP4/manifest 路径不完整都表示本次生产未交付，必须如实报告。
 
@@ -394,7 +403,7 @@ def _new_accepted_review_receipts(project_root: Path, before: dict[Path, int]) -
 
 
 def _read_delivery_receipt(path: Path) -> dict | None:
-    """只接受本次协调器指定路径中的 Telegram API 回执。"""
+    """只接受本次路径中的 Telegram API 回执或宿主的安全压制回执。"""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
@@ -479,6 +488,84 @@ def _read_delivery_request(path: Path, project_root: Path) -> dict:
     return artifacts
 
 
+def _validated_youtube_id(value: object) -> str | None:
+    """仅把严格的 11 位 YouTube ID 当作同源投稿身份。"""
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    return candidate if YOUTUBE_ID_PATTERN.fullmatch(candidate) else None
+
+
+def _delivery_request_source_youtube_id(manifest_path: Path) -> str:
+    """读取成功交付包的来源 ID；旧 manifest 仅可回退到同起点 enriched 时间线。"""
+    try:
+        manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(f"成功交付请求的 manifest 不可读取：{manifest_path}") from exc
+    if not isinstance(manifest_payload, dict):
+        raise ValueError("成功交付请求的 manifest 必须是 JSON 对象")
+
+    provenance = manifest_payload.get("source_provenance")
+    if isinstance(provenance, dict):
+        manifest_source_id = provenance.get("youtube_id")
+        source_id = _validated_youtube_id(manifest_source_id)
+        if source_id:
+            return source_id
+        if manifest_source_id not in (None, ""):
+            raise ValueError("成功交付请求的 manifest 含非法 source_provenance.youtube_id")
+
+    try:
+        manifest_source_start = float(manifest_payload["source_start"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("成功交付请求的 manifest 缺少可绑定的 source_provenance.youtube_id") from exc
+    for name in _ENRICHED_TIMELINE_NAMES:
+        timeline_path = manifest_path.parent / name
+        if not timeline_path.is_file():
+            continue
+        try:
+            timeline_payload = json.loads(timeline_path.read_text(encoding="utf-8"))
+            timeline_provenance = (
+                timeline_payload.get("source_provenance") if isinstance(timeline_payload, dict) else None
+            )
+            if not isinstance(timeline_provenance, dict):
+                continue
+            timeline_source_start = float(
+                timeline_provenance.get("source_start_seconds", timeline_provenance.get("source_start_sec"))
+            )
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        if abs(timeline_source_start - manifest_source_start) > 0.25:
+            continue
+        source_id = _validated_youtube_id(timeline_provenance.get("youtube_id"))
+        if source_id:
+            return source_id
+        raise ValueError("成功交付请求的绑定 enriched 时间线含非法 source_provenance.youtube_id")
+    raise ValueError("成功交付请求缺少可验证的 source_provenance.youtube_id；宿主已拒绝交付")
+
+
+def _write_protected_source_suppression_receipt(path: Path, source_youtube_id: str) -> None:
+    """原子记录宿主安全跳过；它不是 Telegram 或平台受理回执。"""
+    payload = {
+        "kind": "review",
+        "status": "SUPPRESSED",
+        "reason": _PROTECTED_SOURCE_SUPPRESSION_REASON,
+        "source_youtube_id": source_youtube_id,
+    }
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary_path.replace(path)
+
+
+def _is_protected_source_suppression_receipt(receipt: dict) -> bool:
+    """识别本进程写入的压制回执，避免把它误作 Telegram 交付成功。"""
+    return (
+        receipt.get("kind") == "review"
+        and receipt.get("status") == "SUPPRESSED"
+        and receipt.get("reason") == _PROTECTED_SOURCE_SUPPRESSION_REASON
+        and bool(_validated_youtube_id(receipt.get("source_youtube_id")))
+    )
+
+
 def _recent_rejected_youtube_ids(
     log_dir: Path,
     *,
@@ -561,8 +648,23 @@ def _deliver_request_from_host(
 ) -> tuple[int, bool]:
     """由宿主执行封面、审计和上传，返回退出码及是否已发送失败回执。"""
     request = _read_delivery_request(request_path, paths.project_root)
-    command = [str(paths.python_bin), str(paths.notifier_script), "--title", str(request["title"])]
     failure_request = request["kind"] == "failure"
+    if not failure_request:
+        source_youtube_id = _delivery_request_source_youtube_id(Path(str(request["manifest"])))
+        try:
+            protected_source_ids = set(_submission_protected_youtube_ids(paths.project_root))
+        except Exception as exc:  # noqa: BLE001 - unreadable live ledger must fail closed before notifier/browser work
+            raise ValueError(f"交付前投稿保护账本不可读取：{type(exc).__name__}") from exc
+        if source_youtube_id in protected_source_ids:
+            _write_protected_source_suppression_receipt(delivery_receipt_path, source_youtube_id)
+            _log(
+                stream,
+                "SAFE SKIP: delivery source is already submission-protected; "
+                f"notifier/cover/upload were not invoked: {source_youtube_id}",
+            )
+            return 0, False
+
+    command = [str(paths.python_bin), str(paths.notifier_script), "--title", str(request["title"])]
     if failure_request:
         command.extend(["--failure", str(request["failure"])])
     else:
@@ -905,6 +1007,17 @@ def run(
                 time.sleep(retry_delay_seconds)
             delivery_receipt = _read_delivery_receipt(delivery_receipt_path)
             if exit_code == 0 and delivery_receipt:
+                if _is_protected_source_suppression_receipt(delivery_receipt):
+                    source_youtube_id = str(delivery_receipt["source_youtube_id"])
+                    if production_db and production_job:
+                        fail_requested_job(f"交付源 {source_youtube_id} 已受投稿保护，宿主安全跳过。")
+                    _write_status(status_path, "SKIPPED_PROTECTED_SOURCE", 0, attempt, run_log, response_path)
+                    _log(
+                        stream,
+                        "coordinator produced a protected source; host safely skipped delivery without retry: "
+                        + source_youtube_id,
+                    )
+                    return 0
                 if production_db and production_job:
                     delivered = _read_delivery_request(delivery_request_path, paths.project_root)
                     review_id = str(delivery_receipt.get("review_id") or "")

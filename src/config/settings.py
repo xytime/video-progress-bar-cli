@@ -4,6 +4,9 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.61.6 | 2026-09-03 | Codex | 盘中加工守卫识别 NYSE 提前收市日，在实际 13:00 ET 收盘后立即恢复加工。 |
+| 3.61.5 | 2026-09-03 | Codex | 按用户发布策略把重型加工守卫收窄到 NYSE 常规盘中 09:30–16:00 ET。 |
+| 3.61.4 | 2026-09-02 | Codex | 英语世界抖音同步新增独立正数单轮上限；零值安全停用，禁止分钟巡航连续清空历史受理项。 |
 | 3.61.3 | 2026-09-02 | Codex | 自动 NEW 投稿额度改为显式安全上限；零值停用自动入口，保留独立人工路径的单独授权语义。 |
 | 3.61.2 | 2026-09-02 | Codex | NEW 自动发现与实际投稿额度解耦；无限额度下仍强制保留有限的候选时间和批次边界。 |
 | 3.61.1 | 2026-09-02 | Codex | 抖音 NEW 候选与 HISTORY 回填恢复正数边界；0 不再打开无界历史自动投稿。 |
@@ -136,7 +139,7 @@ class Settings(BaseSettings):
     score_refresh_interval_minutes: int = 180
 
     # [Claude_Opus_4.8] 美股盘中重负载保护：开启后，自动调度器在美股盘中
-    # （ET 09:15–16:15，按 America/New_York 自动处理夏/冬令时）暂停一切重型
+    # （ET 09:30–16:00，按 America/New_York 自动处理夏/冬令时）暂停一切重型
     # 管线处理（下载/Whisper/渲染），避免抢占与实盘交易行情管线共用的整机 CPU。
     # 本机为共享主机，已确认「盘中过载 → 富途行情积压 → 实盘用过期价格」的失效模式。
     enable_market_hours_guard: bool = True
@@ -363,7 +366,9 @@ class Settings(BaseSettings):
     douyin_new_sync_discovery_lookback_hours: int = 72
     douyin_new_sync_discovery_limit: int = 100
     # 英语世界仅在视频号已受理并绑定原生 ID 后建立独立抖音账本；不进入通用视频队列。
+    # 仅正数允许自动领取；0 表示安全停用，避免分钟巡航连续消费历史受理项。
     enable_english_world_douyin_sync: bool = False
+    english_world_douyin_sync_max_per_run: int = 1
 
     # 配音再制中心：仅由 ./vpanel dubbing 显式调用，日常 PipelineManager 不读取这些配置。
     # API Key 只允许保存在本机 .env，禁止写入任务报告、数据库或日志。
@@ -758,11 +763,32 @@ class Settings(BaseSettings):
             holidays.add(self._observed_us_market_holiday(date(year, 6, 19)))
         return value not in holidays
 
+    @staticmethod
+    def _previous_weekday(value: date) -> date:
+        """返回给定日期前最近的工作日，用于 NYSE 节前提前收市规则。"""
+        candidate = value - timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate -= timedelta(days=1)
+        return candidate
+
+    def us_market_session_close_minutes(self, value: date) -> int:
+        """返回 NYSE 当日计划收盘分钟；常规 16:00，节前提前收市为 13:00 ET。"""
+        year = value.year
+        thanksgiving = self._nth_weekday_of_month(year, 11, 3, 4)
+        early_closes = {
+            thanksgiving + timedelta(days=1),
+            self._previous_weekday(self._observed_us_market_holiday(date(year, 7, 4))),
+            self._previous_weekday(self._observed_us_market_holiday(date(year, 12, 25))),
+        }
+        if value in early_closes and self.is_us_market_trading_day(value):
+            return 13 * 60
+        return 16 * 60
+
     def is_us_market_guard_window(self, now: Optional[datetime] = None) -> bool:
         """[Claude_Opus_4.8] 是否处于美股盘中重负载保护窗口（单一真相源）。
 
         共享主机同时运行实盘交易行情管线，盘中 CPU 被抢会导致行情积压 → 实盘用过期价格
-        （已确认失效模式）。窗口 = ET 09:15–16:15 的 NYSE 常规交易日，用 America/New_York
+        （已确认失效模式）。窗口 = ET 09:30 至当日 NYSE 收盘（常规 16:00、提前收市 13:00），用 America/New_York
         自动适配夏/冬令时；非交易时段、周末和常规全日休市日返回 False。可经
         enable_market_hours_guard 关闭。
         供 web 调度器与 pipeline_manager 共用，避免重复实现。
@@ -779,7 +805,7 @@ class Settings(BaseSettings):
         if not self.is_us_market_trading_day(et.date()):
             return False
         minutes = et.hour * 60 + et.minute
-        return (9 * 60 + 15) <= minutes < (16 * 60 + 15)
+        return (9 * 60 + 30) <= minutes < self.us_market_session_close_minutes(et.date())
 
     def get_yt_cookie_args(self) -> list[str]:
         """返回 yt-dlp 的 Cookie 参数列表。

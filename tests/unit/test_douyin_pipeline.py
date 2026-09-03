@@ -32,6 +32,8 @@
 | 2.0.7 | 2026-09-02 | Codex | 覆盖 NEW 自动发现的安全边界与缺素材聚合告警跨巡航去重。 |
 | 2.0.8 | 2026-09-02 | Codex | 覆盖自动 NEW 的零额度安全停用，防止发现边界存在但实际浏览器动作仍无限。 |
 | 2.0.9 | 2026-09-02 | Codex | 覆盖通用 ticket 绑定失败或子进程超时且凭据未启动时立即原子取消，禁止遗留可消费领取。 |
+| 2.0.10 | 2026-09-02 | Codex | 覆盖视频号补发只入 NEW 队列，并与重试路径共享每轮浏览器动作预算。 |
+| 2.0.11 | 2026-09-02 | Codex | 覆盖每个每日任务运行先重置 NEW 动作预算，避免常驻管理器跨轮永久耗尽。 |
 """
 
 import hashlib
@@ -557,6 +559,107 @@ def test_direct_new_queue_loads_publish_guard_before_ledger_mutation(
 
     manager.db.create_douyin_publication.assert_not_called()
     manager.db.claim_douyin_publication.assert_not_called()
+
+
+def test_deferred_new_queue_is_consumed_once_by_the_capped_sync_runner(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """视频号补发只入队，由统一 NEW 消费器按每轮上限领取一次。"""
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.send_telegram_msg = MagicMock()
+    _add_published_video_assets(manager, "first-new")
+    _add_published_video_assets(manager, "second-new")
+    manager._is_public_publish_window = MagicMock(return_value=True)
+    manager._publish_claimed_douyin_publication = MagicMock(return_value=True)
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_require_wechat_public_confirmation", False)
+    monkeypatch.setattr(settings, "douyin_new_sync_max_per_run", 1)
+    monkeypatch.setattr(settings, "douyin_new_sync_daily_limit", 10)
+
+    assert manager._queue_and_publish_new_douyin_video("first-new")
+    assert manager._queue_and_publish_new_douyin_video("second-new")
+
+    manager._publish_claimed_douyin_publication.assert_not_called()
+    assert manager.db.get_douyin_publication("first-new")["state"] == "QUEUED"
+    second = manager.db.get_douyin_publication("second-new")
+    assert second is not None
+    assert second["state"] == "QUEUED"
+
+    assert manager._run_douyin_new_sync()
+
+    assert manager._publish_claimed_douyin_publication.call_count == 1
+    assert manager.db.get_douyin_publication("first-new")["state"] == "UPLOADING"
+    assert manager.db.get_douyin_publication("second-new")["state"] == "QUEUED"
+
+
+def test_new_retry_and_sync_share_per_run_action_budget(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """独立 NEW 重试已领取一条后，同轮同步不得再领取第二条。"""
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.send_telegram_msg = MagicMock()
+    _add_published_video_assets(manager, "retry-first")
+    _add_published_video_assets(manager, "retry-second")
+    for youtube_id in ("retry-first", "retry-second"):
+        vertical = manager._OUT_DIR / f"{youtube_id}_vertical.mp4"
+        manager.db.create_douyin_publication(
+            youtube_id,
+            manager._sha256_file(vertical),
+            str(vertical),
+            source_kind="NEW",
+        )
+    manager._is_public_publish_window = MagicMock(return_value=True)
+    manager._publish_claimed_douyin_publication = MagicMock(return_value=True)
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_new_sync_max_per_run", 1)
+    monkeypatch.setattr(settings, "douyin_new_sync_daily_limit", 10)
+
+    assert manager._retry_one_douyin_new_video()
+    assert manager._run_douyin_new_sync()
+
+    assert manager._publish_claimed_douyin_publication.call_count == 1
+    assert manager.db.get_douyin_publication("retry-first")["state"] == "UPLOADING"
+    assert manager.db.get_douyin_publication("retry-second")["state"] == "QUEUED"
+
+
+def test_daily_run_resets_new_action_budget_before_sync(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """常驻管理器的下一次 daily run 必须重新获得本轮 NEW 动作额度。"""
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    manager.send_telegram_msg = MagicMock()
+    _add_published_video_assets(manager, "next-run-new")
+    vertical = manager._OUT_DIR / "next-run-new_vertical.mp4"
+    manager.db.create_douyin_publication(
+        "next-run-new",
+        manager._sha256_file(vertical),
+        str(vertical),
+        source_kind="NEW",
+    )
+    manager._douyin_new_actions_claimed = 1
+    manager._is_public_publish_window = MagicMock(return_value=True)
+    manager._publish_claimed_douyin_publication = MagicMock(return_value=True)
+    manager._recover_stale_douyin_prelaunch_attempts = MagicMock(return_value=0)
+    manager.reconcile_wechat_under_review = MagicMock(return_value=0)
+    manager.score_pending_videos = MagicMock()
+    manager.process_high_score_videos = MagicMock()
+    manager.reconcile_douyin_under_review = MagicMock(return_value=0)
+    manager._run_douyin_history_migration = MagicMock()
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "enable_kuaishou_browser_publishing", False)
+    monkeypatch.setattr(settings, "wechat_publishing_paused", True)
+    monkeypatch.setattr(settings, "douyin_new_sync_max_per_run", 1)
+    monkeypatch.setattr(settings, "douyin_new_sync_daily_limit", 10)
+
+    manager._run_daily_job_unlocked()
+
+    assert manager._publish_claimed_douyin_publication.call_count == 1
 
 
 def test_post_submit_unconfirmed_is_uncertain(tmp_path: Path, monkeypatch):

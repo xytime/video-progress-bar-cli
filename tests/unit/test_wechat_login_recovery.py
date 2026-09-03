@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-07-27 | Codex | 覆盖微信重登成功后 LOGIN_REQUIRED 自动恢复为 PENDING 的最小行为 |
 | 1.1.0 | 2026-08-26 | Codex | 提交受理未绑定/已绑定账本也必须阻断登录恢复与批量失败重试。 |
 | 1.2.0 | 2026-08-28 | Codex | 覆盖英语世界仅恢复一条登录前明确失败的自动投稿项。 |
+| 1.3.0 | 2026-09-03 | Codex | 覆盖 Telegram 触发的扫码成功后也续投唯一合格英语世界登录失败项。 |
 """
 
 
@@ -136,3 +137,37 @@ def test_uploader_login_only_restores_tasks_after_existing_session_check(tmp_pat
     ) == 0
     restored.assert_called_once_with()
     browser.close.assert_called_once()
+
+
+def test_uploader_login_recovery_resumes_only_dal_claimed_english_world_item(monkeypatch):
+    from scripts import wechat_uploader
+
+    class FakeDB:
+        def get_english_world_login_recovery_candidate(self, *, max_age_hours):
+            assert max_age_hours == 12
+            return {"id": "a" * 32, "mp4_path": "fixture.mp4"}
+
+        def bind_english_world_review_package_hashes(self, review_id, *, hashes):
+            assert review_id == "a" * 32
+            assert hashes == {"artifact_sha256": "f" * 64}
+
+        def claim_english_world_login_recovery(self, *, max_age_hours):
+            assert max_age_hours == 12
+            return {"id": "a" * 32, "state": "SUBMISSION_APPROVED"}
+
+    launched: list[list[str]] = []
+    monkeypatch.setattr(wechat_uploader.settings, "enable_english_world_auto_publish", True)
+    monkeypatch.setattr(wechat_uploader.settings, "wechat_publishing_paused", False)
+    monkeypatch.setattr(
+        wechat_uploader,
+        "_calculate_english_world_package_hashes",
+        lambda _item: {"artifact_sha256": "f" * 64},
+    )
+    monkeypatch.setattr(
+        wechat_uploader,
+        "_launch_english_world_login_recovery_submission",
+        lambda review_id: launched.append([review_id]),
+    )
+
+    assert wechat_uploader._resume_eligible_english_world_after_login(FakeDB()) == "a" * 32
+    assert launched == [["a" * 32]]
