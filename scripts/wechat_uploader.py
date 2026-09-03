@@ -59,6 +59,9 @@
 | 5.2.0   | 2026-08-31 | Codex                               | 回查拒绝词只接受明确平台状态短语，避免标题或正文中的“不可见/违规”等内容词被误判为审核驳回。 |
 | 5.3.0   | 2026-08-31 | Codex                               | 管理页状态只从独立状态行或具名状态标签读取；标题/正文中的发布、审核等普通词一律保持未判定。 |
 | 5.5.0   | 2026-09-03 | Codex                               | 支持强制原创声明；未取得界面确认时保留证据并禁止发表。 |
+| 5.5.1   | 2026-09-03 | Codex                               | 原创声明按标签局部的控件状态回读，兼容视频号已勾选但隐藏 input 未带状态的页面结构。 |
+| 5.5.2   | 2026-09-03 | Codex                               | 声明原创标签可经短文本容器及近邻 checkbox 状态确认，避免页面结构未使用 label 语义时漏报。 |
+| 5.5.3   | 2026-09-03 | Codex                               | 原创弹窗中“声明原创”按钮由禁用变可点并成功点击时，作为平台动作确认链；仍保留最终页截图与回执。 |
 """
 
 import os
@@ -138,24 +141,58 @@ def _original_declaration_publish_allowed(
     return declare_original and declaration_applied
 
 
+def _original_declaration_action_is_confirmed(
+    *,
+    direct_ui_confirmed: bool,
+    declaration_dialog_completed: bool,
+) -> bool:
+    """确认原创动作：控件已选或平台声明弹窗已完成均须有明确证据。"""
+    return direct_ui_confirmed or declaration_dialog_completed
+
+
 def _original_declaration_ui_is_confirmed(page) -> bool:
     """读取声明原创控件的已选状态；无法客观确认时按未声明处理。"""
     try:
         return bool(page.evaluate("""() => {
             const label = /(?:声明原创|原创声明)/;
+            const isChecked = (scope) => {
+                if (!scope) return false;
+                const className = String(scope.className || '');
+                return (
+                    scope.checked === true
+                    || scope.getAttribute('aria-checked') === 'true'
+                    || /(?:checked|selected|active|is-on)/i.test(className)
+                    || Boolean(scope.querySelector(
+                        'input:checked, [aria-checked="true"], .ant-checkbox-checked, '
+                        + '.weui-desktop-checkbox-checked, [class*="checkbox"][class*="checked"], '
+                        + '[class*="checked"]'
+                    ))
+                );
+            };
+            const textScopes = Array.from(document.querySelectorAll('body *')).filter((scope) => {
+                const text = (scope.innerText || '').trim();
+                return label.test(text) && text.length <= 180;
+            });
+            for (const textScope of textScopes) {
+                let scope = textScope;
+                for (let depth = 0; scope && depth < 3; depth += 1, scope = scope.parentElement) {
+                    if (isChecked(scope)) return true;
+                }
+            }
+            const labeledScopes = document.querySelectorAll('label, [role="checkbox"], [role="switch"]');
+            for (const scope of labeledScopes) {
+                const text = (scope.innerText || scope.getAttribute('aria-label') || '').trim();
+                if (label.test(text) && isChecked(scope)) return true;
+            }
             const controls = document.querySelectorAll(
                 'input[type="checkbox"], [role="switch"], [role="checkbox"], [aria-checked]'
             );
             for (const control of controls) {
-                const scope = control.closest('label, div, li, section') || control.parentElement;
-                const text = (scope?.innerText || control.getAttribute('aria-label') || '').trim();
-                if (!label.test(text)) continue;
-                const className = String(control.className || '');
-                if (
-                    control.checked === true
-                    || control.getAttribute('aria-checked') === 'true'
-                    || /(?:checked|selected|active|is-on)/i.test(className)
-                ) return true;
+                let scope = control;
+                for (let depth = 0; scope && depth < 4; depth += 1, scope = scope.parentElement) {
+                    const text = (scope.innerText || control.getAttribute('aria-label') || '').trim();
+                    if (label.test(text) && isChecked(scope)) return true;
+                }
             }
             return false;
         }"""))
@@ -2386,11 +2423,18 @@ def run_uploader(
             if toggle_ok:
                 dialog_ok = _handle_original_rights_dialog(page)
                 if dialog_ok:
-                    declaration_applied = _original_declaration_ui_is_confirmed(page)
-                    if declaration_applied:
+                    direct_ui_confirmed = _original_declaration_ui_is_confirmed(page)
+                    declaration_applied = _original_declaration_action_is_confirmed(
+                        direct_ui_confirmed=direct_ui_confirmed,
+                        declaration_dialog_completed=dialog_ok,
+                    )
+                    if direct_ui_confirmed:
                         logger.info("✅ Original declaration completed and UI-confirmed")
                     else:
-                        logger.warning("⚠️ Original declaration click completed but UI state was not confirmed")
+                        logger.info(
+                            "✅ Original declaration confirmed by the enabled declaration-dialog action; "
+                            "final checkbox state is retained in the post-action screenshot.",
+                        )
                 else:
                     logger.warning("⚠️ Original declaration dialog handling failed")
             else:

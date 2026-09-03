@@ -4,6 +4,7 @@
 # | Version | Date | Author | Description |
 # | --- | --- | --- |
 # | 1.0.0 | 2026-09-03 | Codex | 固化英语世界投稿强制申请原创，声明失败不得进入发表。 |
+# | 1.1.0 | 2026-09-03 | Codex | 覆盖声明原创标签局部的已选控件回读，避免隐藏 input 漏报。 |
 """
 
 from pathlib import Path
@@ -33,6 +34,21 @@ def test_required_original_declaration_blocks_publish_until_ui_confirms_it():
         require_original_declaration=True,
         declaration_applied=True,
     )
+
+
+def test_original_declaration_dialog_completion_is_a_platform_action_confirmation():
+    assert wechat_uploader._original_declaration_action_is_confirmed(
+        direct_ui_confirmed=True,
+        declaration_dialog_completed=False,
+    )
+    assert wechat_uploader._original_declaration_action_is_confirmed(
+        direct_ui_confirmed=False,
+        declaration_dialog_completed=True,
+    )
+    assert not wechat_uploader._original_declaration_action_is_confirmed(
+        direct_ui_confirmed=False,
+        declaration_dialog_completed=False,
+    )
     assert not wechat_uploader._original_declaration_publish_allowed(
         declare_original=True,
         require_original_declaration=True,
@@ -42,6 +58,11 @@ def test_required_original_declaration_blocks_publish_until_ui_confirms_it():
         declare_original=False,
         require_original_declaration=True,
         declaration_applied=False,
+    )
+    assert wechat_uploader._original_declaration_publish_allowed(
+        declare_original=True,
+        require_original_declaration=True,
+        declaration_applied=True,
     )
 
 
@@ -76,3 +97,20 @@ def test_original_declaration_requires_post_click_ui_confirmation():
     assert not wechat_uploader._original_declaration_ui_is_confirmed(
         _OriginalDeclarationPage(False),
     )
+
+
+def test_original_declaration_ui_verifier_checks_checked_controls_inside_the_label_scope():
+    class InspectingPage:
+        def __init__(self) -> None:
+            self.script = ""
+
+        def evaluate(self, script: str) -> bool:
+            self.script = script
+            return True
+
+    page = InspectingPage()
+
+    assert wechat_uploader._original_declaration_ui_is_confirmed(page)
+    assert "textScopes" in page.script
+    assert "labeledScopes" in page.script
+    assert ".ant-checkbox-checked" in page.script

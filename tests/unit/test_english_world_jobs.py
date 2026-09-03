@@ -19,6 +19,7 @@
 | 1.5.1 | 2026-08-30 | Codex | 固化英语世界原生作品 ID 只能首次绑定或相同 ID 幂等绑定。 |
 | 1.8.0 | 2026-09-01 | Codex | 覆盖英语世界抖音同步可在无日额度模式下领取，仍保持单次不可重传账本。 |
 | 1.9.0 | 2026-09-02 | Codex | 覆盖日更选题前读取同源投稿保护账本，避免制作后才因重复审核被拒绝。 |
+| 1.10.0 | 2026-09-03 | Codex | 覆盖管理页确认删除及原创界面回读失败的受控重投资格。 |
 """
 
 from __future__ import annotations
@@ -625,6 +626,70 @@ def test_english_world_platform_identity_enables_throttled_exact_reconciliation(
     assert db.claim_next_english_world_reconciliation(
         min_interval_minutes=5, max_age_hours=72,
     ) is None
+
+
+def test_confirmed_deleted_english_world_item_can_reopen_once_with_new_identity(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    item = db.create_english_world_review_item(
+        title="删除后重投", **paths, **calculate_package_hashes(paths),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+    first = db.claim_english_world_submission(item["id"], evidence_dir="/evidence/original")
+    assert first
+    db.complete_english_world_submission(
+        item["id"], state="UNDER_REVIEW", uploader_exit_code=0,
+        evidence_dir="/evidence/original", attempt_id=first["_attempt_id"],
+        platform_post_id="export/deleted-original",
+    )
+    db.record_english_world_reconciliation(
+        item["id"], platform_state="NOT_FOUND", evidence_dir="/evidence/deleted",
+        message="作品管理页按精确标题搜索显示暂无相关视频。",
+    )
+
+    reopened = db.reopen_deleted_english_world_submission(
+        item["id"], deletion_evidence_dir="/evidence/deleted",
+    )
+
+    assert reopened["state"] == "SUBMISSION_APPROVED"
+    assert reopened["approval_source"] == "OPERATOR_RECOVERY"
+    assert reopened["platform_post_id"] is None
+    assert reopened["platform_state"] is None
+    assert reopened["reconciliation_evidence_dir"] == "/evidence/deleted"
+    assert db.list_english_world_submission_attempts(item["id"])[0]["platform_post_id"] == "export/deleted-original"
+    assert db.claim_english_world_submission(item["id"], evidence_dir="/evidence/reupload")
+
+
+def test_unpublished_original_declaration_readback_failure_can_reopen_once(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    item = db.create_english_world_review_item(
+        title="原创回读失败", **paths, **calculate_package_hashes(paths),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+    failed = db.claim_english_world_submission(item["id"], evidence_dir="/evidence/original-readback")
+    assert failed
+    db.complete_english_world_submission(
+        item["id"], state="FAILED", uploader_exit_code=1,
+        evidence_dir="/evidence/original-readback", attempt_id=failed["_attempt_id"],
+        message="Original declaration click completed but UI state was not confirmed; 未进入发表。",
+    )
+
+    reopened = db.reopen_failed_english_world_original_declaration(
+        item["id"], failure_evidence_dir="/evidence/original-readback",
+    )
+
+    assert reopened["state"] == "SUBMISSION_APPROVED"
+    assert reopened["approval_source"] == "OPERATOR_RECOVERY"
+    assert db.claim_english_world_submission(item["id"], evidence_dir="/evidence/retry")
 
 
 def test_english_world_platform_identity_cannot_be_rebound(tmp_path):

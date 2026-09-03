@@ -6,6 +6,8 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.58.8  | 2026-09-03 | Codex                               | 原创声明已操作但界面回读失败、且无平台回执时，只允许受控签发一次重试授权。       |
+| 3.58.7  | 2026-09-03 | Codex                               | 仅在作品管理页明确确认原记录已删除后，受控重开英语世界同一审核项的一次重投机会并保留旧尝试。 |
 | 3.58.6  | 2026-09-02 | Codex                               | 强制抖音 NEW 候选查询使用正数时间与批次边界，杜绝任意调用者绕过巡航范围扫描历史。 |
 | 3.58.5  | 2026-09-02 | Codex                               | 为未启动的一次性抖音浏览器凭据增加超时取消审计；已启动尝试保持不可自动重传。       |
 | 3.58.4  | 2026-09-02 | Codex                               | 移除旧进程按 UPLOADING 推断投稿包的回退；无完整凭据的遗留动作一律安全停止。       |
@@ -5905,6 +5907,79 @@ class PipelineDB:
             )
             if cursor.rowcount != 1:
                 raise ValueError("Only an UNCERTAIN English World submission can be reopened")
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            return dict(row) if row else {}
+
+    def reopen_deleted_english_world_submission(
+        self,
+        review_id: str,
+        *,
+        deletion_evidence_dir: str,
+    ) -> Dict[str, Any]:
+        """仅凭精确回查的 NOT_FOUND 证据重开一次已删除作品的投稿机会。
+
+        旧的 ``english_world_submission_attempts`` 行保持不可变，审核项解绑已
+        删除的原生 ID 后才允许下一次尝试绑定新 ID。此入口不接受“不可判定”、
+        审核驳回或单纯人工文字声明，避免把仍可能存在的平台作品重复投稿。
+        """
+        clean_id = (review_id or "").strip()
+        clean_evidence_dir = (deletion_evidence_dir or "").strip()
+        if not clean_evidence_dir:
+            raise ValueError("English World deleted-submission recovery requires evidence_dir")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'SUBMISSION_APPROVED', approved_at = CURRENT_TIMESTAMP,
+                       approval_source = 'OPERATOR_RECOVERY',
+                       authorization_expires_at = datetime('now', '+120 minutes'),
+                       platform_post_id = NULL, platform_url = NULL, platform_state = NULL,
+                       reconciliation_evidence_dir = ?, reconciliation_failures = 0,
+                       reconciliation_error = NULL,
+                       error_message = '作品管理页已确认旧原生记录不存在；已签发一次两小时重投授权。',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'UNDER_REVIEW'
+                     AND platform_state = 'NOT_FOUND'
+                     AND platform_post_id IS NOT NULL AND platform_post_id != ''""",
+                (clean_evidence_dir, clean_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    "Only an UNDER_REVIEW English World item with exact NOT_FOUND evidence can be reopened",
+                )
+            conn.commit()
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
+            return dict(row) if row else {}
+
+    def reopen_failed_english_world_original_declaration(
+        self,
+        review_id: str,
+        *,
+        failure_evidence_dir: str,
+    ) -> Dict[str, Any]:
+        """仅重开未发表且原创界面回读失败的英语世界尝试一次。"""
+        clean_id = (review_id or "").strip()
+        clean_evidence_dir = (failure_evidence_dir or "").strip()
+        if not clean_evidence_dir:
+            raise ValueError("English World original-declaration recovery requires evidence_dir")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'SUBMISSION_APPROVED', approved_at = CURRENT_TIMESTAMP,
+                       approval_source = 'OPERATOR_RECOVERY',
+                       authorization_expires_at = datetime('now', '+120 minutes'),
+                       error_message = '原创声明界面已操作但回读未确认，且未产生平台回执；已签发一次两小时重试授权。',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'FAILED' AND uploader_exit_code = 1
+                     AND platform_post_id IS NULL AND platform_state IS NULL
+                     AND evidence_dir = ?
+                     AND (error_message LIKE '%原创声明%' OR error_message LIKE '%Original declaration%')""",
+                (clean_id, clean_evidence_dir),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(
+                    "Only an unpublished original-declaration readback failure can be reopened",
+                )
             conn.commit()
             row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
             return dict(row) if row else {}
