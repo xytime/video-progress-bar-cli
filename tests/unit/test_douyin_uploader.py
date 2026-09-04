@@ -14,6 +14,7 @@
 | 1.5.56 | 2026-09-04 | Codex | 覆盖横封面保存后平台要求设置竖封面时，必须重入同一编辑器而非选择暂不设置。 |
 | 1.5.54 | 2026-09-04 | Codex | 覆盖横封面保存后的竖封面建议层必须精确以“暂不设置”收口。 |
 | 1.5.55 | 2026-09-04 | Codex | 覆盖平台快速检测单侧横/竖封面缺失必须阻断最终发布。 |
+| 1.5.57 | 2026-09-04 | Codex | 覆盖空投稿页的标题/发布静态表单不得被误认作视频上传完成。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -490,7 +491,11 @@ def test_wait_for_douyin_video_input_retries_until_spa_has_rendered():
 def test_douyin_upload_completion_waits_for_progress_to_disappear():
     page = MagicMock()
     body = MagicMock()
-    body.inner_text.side_effect = ["上传中 90%", "当前速度：5.4MB/s 剩余时间：8秒", "发布设置"]
+    body.inner_text.side_effect = [
+        "上传中 90%",
+        "当前速度：5.4MB/s 剩余时间：8秒",
+        "预览视频 重新上传 发布设置",
+    ]
     page.locator.return_value = body
 
     assert is_upload_in_progress(page)
@@ -498,27 +503,33 @@ def test_douyin_upload_completion_waits_for_progress_to_disappear():
     page.wait_for_timeout.assert_called_once_with(1_000)
 
 
-def test_douyin_upload_is_complete_when_post_upload_form_is_visible():
+def test_douyin_upload_is_complete_only_when_video_preview_is_visible():
     page = MagicMock()
     body = MagicMock()
-    body.inner_text.return_value = "发布设置"
-    controls = MagicMock()
-    controls.evaluate_all.return_value = [{"placeholder": "请输入标题", "text": ""}]
-    page.locator.side_effect = lambda selector: body if selector == "body" else controls
+    body.inner_text.return_value = "预览视频 重新上传 发布设置"
+    page.locator.return_value = body
 
     assert has_post_upload_form(page)
     assert not is_upload_in_progress(page)
+
+
+def test_douyin_empty_publish_form_is_not_video_upload_completion():
+    page = MagicMock()
+    body = MagicMock()
+    body.inner_text.return_value = "填写作品标题 发布设置 点击上传 或直接将视频文件拖入此区域"
+    page.locator.return_value = body
+
+    assert not has_post_upload_form(page)
+    assert is_upload_in_progress(page)
 
 
 def test_douyin_upload_still_in_progress_when_percent_visible_with_form():
     page = MagicMock()
     body = MagicMock()
     body.inner_text.return_value = "发布设置 已上传：26.4MB/65.1MB 当前速度：5.4MB/s 剩余时间：8秒 40%"
-    controls = MagicMock()
-    controls.evaluate_all.return_value = [{"placeholder": "请输入标题", "text": "发布"}]
-    page.locator.side_effect = lambda selector: body if selector == "body" else controls
+    page.locator.return_value = body
 
-    assert has_post_upload_form(page)
+    assert not has_post_upload_form(page)
     assert is_upload_in_progress(page)
 
 
@@ -570,7 +581,7 @@ def test_douyin_calibration_upload_collects_controls_without_submitting(tmp_path
     upload_input.count.return_value = 1
     controls = MagicMock()
     controls.evaluate_all.return_value = [{"tag": "textarea", "placeholder": "请输入标题"}]
-    controls.inner_text.return_value = "发布设置"
+    controls.inner_text.return_value = "预览视频 重新上传 发布设置"
     page = MagicMock()
     page.locator.side_effect = lambda selector: upload_input if selector == DOUYIN_VIDEO_INPUT_SELECTOR else controls
 
@@ -991,7 +1002,7 @@ def test_douyin_upload_and_publish_returns_under_review(tmp_path: Path):
     controls = MagicMock()
     controls.evaluate_all.return_value = [{"placeholder": "请输入标题", "text": ""}]
     body = MagicMock()
-    body.inner_text.return_value = "发布成功 等待审核 标题"
+    body.inner_text.return_value = "预览视频 重新上传 发布成功 等待审核 标题"
     page = MagicMock()
     page.evaluate.return_value = True
     page.locator.side_effect = lambda selector: (

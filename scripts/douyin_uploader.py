@@ -77,6 +77,7 @@
 | 1.5.54 | 2026-09-04 | Codex | 横封面保存后的“设置竖封面”确认层仅点击“暂不设置”收口，随后仍以双卡槽变更为准。 |
 | 1.5.55 | 2026-09-04 | Codex | 快速检测明确报告单侧横/竖封面缺失时同样阻断，不能因卡槽缩略图存在而误放行。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
+| 1.5.57 | 2026-09-04 | Codex | 上传完成仅接受真实视频预览与重新上传控件并存，避免空上传页的静态表单被误判为上传完成。 |
 """
 
 from __future__ import annotations
@@ -866,9 +867,11 @@ def is_upload_in_progress(page) -> bool:
         return True
     if has_active_upload_progress(visible_text):
         return True
-    if has_post_upload_form(page):
+    if has_post_upload_form(page, visible_text=visible_text):
         return False
-    return False
+    # 标题、正文和“发布”在尚未选择视频时已经存在；没有真实预览不能证明
+    # 平台已接受文件，继续等待而不是提前进入封面/声明步骤。
+    return True
 
 
 def has_active_upload_progress(visible_text: str) -> bool:
@@ -896,25 +899,15 @@ def has_active_upload_progress(visible_text: str) -> bool:
     return False
 
 
-def has_post_upload_form(page) -> bool:
-    """上传后表单出现时即可采集控件；不需要继续等待静态上传文案消失。"""
-    try:
-        controls = page.locator('input, textarea, button, [contenteditable="true"], [role="button"]').evaluate_all(
-            """elements => elements.map(element => ({
-                tag: element.tagName.toLowerCase(),
-                type: element.getAttribute('type') || '',
-                placeholder: element.getAttribute('placeholder') || '',
-                text: (element.textContent || '').trim(),
-                contentEditable: element.getAttribute('contenteditable') || '',
-            })).slice(0, 120)"""
-        )
-    except Exception:
-        return False
-    for control in controls:
-        text = f"{control.get('placeholder', '')} {control.get('text', '')}"
-        if any(marker in text for marker in ("标题", "作品描述", "简介", "发布", "定时发布", "发布设置")):
-            return True
-    return False
+def has_post_upload_form(page, *, visible_text: Optional[str] = None) -> bool:
+    """只在真实视频预览已出现时确认上传完成，拒绝空投稿页的静态表单。"""
+    if visible_text is None:
+        try:
+            visible_text = page.locator("body").inner_text(timeout=3_000)
+        except Exception:
+            return False
+    compact = "".join((visible_text or "").split())
+    return "预览视频" in compact and "重新上传" in compact
 
 
 def wait_for_upload_completion(page, timeout_seconds: int = 900) -> bool:
