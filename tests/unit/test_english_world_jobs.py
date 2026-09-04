@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.7 | 2026-09-04 | Codex | 覆盖五次均未提交后，只有绑定双封面原创预检摘要时才能领取最终一次恢复。 |
 | 1.10.6 | 2026-09-04 | Codex | 覆盖新上传器规范化的双封面确认失败文本仍可触发唯一落库修复验证。 |
 | 1.10.5 | 2026-09-04 | Codex | 覆盖四次双封面发布前停止且无提交时，只能验证一次卡槽缩略图落库修复。 |
 | 1.10.4 | 2026-09-04 | Codex | 覆盖第三次平台明确双封面缺失、全程未提交的英语世界抖音项仅作封面修复后最后恢复。 |
@@ -975,10 +976,34 @@ def test_english_world_douyin_proven_pre_submit_stops_can_recover_after_cover_re
 
     assert persisted_recovered["state"] == "QUEUED"
     assert persisted_recovered["submitted_at"] is None
-    assert db.claim_english_world_douyin_publication(
+    fifth_claim = db.claim_english_world_douyin_publication(
         item["id"], daily_limit=None, evidence_dir="/douyin/attempt-5",
-    ) is not None
+    )
+    assert fifth_claim is not None
     with pytest.raises(ValueError, match="Only four proven pre-submit"):
         db.authorize_english_world_douyin_persisted_cover_recovery(
             item["id"], reason="不得重复恢复。",
+        )
+    db.complete_english_world_douyin_publication(
+        item["id"], attempt_id=fifth_claim["_attempt_id"], state="CANCELED",
+        uploader_exit_code=3, evidence_dir="/douyin/attempt-5",
+        message="抖音横竖封面未能完整确认应用，停止后续发布以避免默认封面作品",
+    )
+    calibrated_recovered = db.authorize_english_world_douyin_calibrated_cover_recovery(
+        item["id"],
+        preflight_evidence_dir="/douyin/calibration",
+        preflight_evidence_sha256="a" * 64,
+        reason="非最终预检已证明双封面、原创声明与快速检测通过。",
+    )
+
+    assert calibrated_recovered["state"] == "QUEUED"
+    assert db.claim_english_world_douyin_publication(
+        item["id"], daily_limit=None, evidence_dir="/douyin/attempt-6",
+    ) is not None
+    with pytest.raises(ValueError, match="Only five proven pre-submit"):
+        db.authorize_english_world_douyin_calibrated_cover_recovery(
+            item["id"],
+            preflight_evidence_dir="/douyin/calibration",
+            preflight_evidence_sha256="a" * 64,
+            reason="不得重复恢复。",
         )

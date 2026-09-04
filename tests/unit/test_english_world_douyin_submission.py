@@ -7,9 +7,11 @@
 | 1.1.0 | 2026-09-02 | Codex | 覆盖未知 UI 阶段 fail-closed，且管理页熔断不阻断独立新片投稿。 |
 | 1.2.0 | 2026-09-02 | Codex | 覆盖英语世界独立投稿携带一次性浏览器启动凭据，拒绝再以 source_kind 文本授权。 |
 | 1.3.0 | 2026-09-02 | Codex | 覆盖包校验、子进程退出或超时在浏览器启动前以未启动票据收口为可显式恢复的取消账本。 |
+| 1.4.1 | 2026-09-04 | Codex | 覆盖双封面、原创声明和快速检测均通过的非最终预检证据摘要。 |
 | 1.4.0 | 2026-09-04 | Codex | 隔离抖音专属封面生成，验证横竖封面均绑定到最终浏览器启动凭据。 |
 """
 
+import json
 import subprocess
 from unittest.mock import MagicMock
 
@@ -38,6 +40,19 @@ def test_douyin_exit_codes_never_call_acceptance_published():
     assert submitter._completion_for_exit_code(3)[0] == "CANCELED"
     assert submitter._completion_for_exit_code(4)[0] == "CANCELED"
     assert submitter._completion_for_exit_code(2)[0] == "LOGIN_REQUIRED"
+
+
+def test_verified_douyin_preflight_evidence_requires_all_platform_pass_markers(tmp_path):
+    controls = tmp_path / "douyin_preflight_ready_controls.json"
+    text = "竖封面3:4 横封面4:3 内容为个人观点或见解 封面效果检测通过 封面检测通过 作品未见异常"
+    controls.write_text(json.dumps({"page": {"bodyTextPreview": text}}), encoding="utf-8")
+
+    digest = submitter.verified_douyin_preflight_evidence_sha256(tmp_path)
+
+    assert len(digest) == 64
+    controls.write_text(json.dumps({"page": {"bodyTextPreview": f"{text} 竖封面缺失"}}), encoding="utf-8")
+    with pytest.raises(ValueError, match="cover failure"):
+        submitter.verified_douyin_preflight_evidence_sha256(tmp_path)
 
 
 def test_active_ui_fuse_stops_before_douyin_ledger_or_browser(monkeypatch):

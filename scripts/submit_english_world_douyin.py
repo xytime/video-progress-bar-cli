@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.1 | 2026-09-04 | Codex | 提供双封面、原创声明与快速检测均通过的非最终预检证据摘要，供受控恢复绑定审计。 |
 | 1.4.0 | 2026-09-04 | Codex | 抖音投稿改用独立横竖英语视觉短视频海报封面，并把两图一同绑定至启动凭据。 |
 | 1.3.2 | 2026-09-02 | Codex | 未启动票据的包校验/启动失败及超时遗留仅收口为 CANCELED，需显式恢复才可重投。 |
 | 1.3.1 | 2026-09-02 | Codex | 投稿 worker 将不可变英语世界尝试绑定到一次性抖音浏览器启动凭据，拒绝借用来源参数。 |
@@ -21,6 +22,8 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
+import json
 import logging
 from pathlib import Path
 import subprocess
@@ -47,6 +50,32 @@ from video_processing.pipeline_manager import _build_subprocess_env  # noqa: E40
 logger = logging.getLogger(__name__)
 UPLOAD_TIMEOUT_SECONDS = 25 * 60
 EXIT_NOT_CLAIMABLE = 10
+
+
+def verified_douyin_preflight_evidence_sha256(evidence_dir: str | Path) -> str:
+    """校验非最终预检已覆盖双封面、原创声明和平台快速检测，并返回不可变摘要。"""
+    evidence_path = Path(evidence_dir).resolve()
+    controls_path = evidence_path / "douyin_preflight_ready_controls.json"
+    try:
+        payload = json.loads(controls_path.read_text(encoding="utf-8"))
+        page = payload.get("page") if isinstance(payload, dict) else None
+        text = str((page or {}).get("bodyTextPreview") or "")
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Douyin preflight evidence cannot be read: {controls_path}") from exc
+    required_markers = (
+        "竖封面3:4",
+        "横封面4:3",
+        "内容为个人观点或见解",
+        "封面效果检测通过",
+        "封面检测通过",
+        "作品未见异常",
+    )
+    if any(marker not in text for marker in required_markers):
+        raise ValueError("Douyin preflight evidence lacks required cover, declaration, or detection proof")
+    blocked_markers = ("横/竖双封面缺失", "横封面缺失", "竖封面缺失", "封面检测未通过")
+    if any(marker in text for marker in blocked_markers):
+        raise ValueError("Douyin preflight evidence still contains a cover failure")
+    return hashlib.sha256(controls_path.read_bytes()).hexdigest()
 
 
 def _completion_for_exit_code(exit_code: int) -> tuple[str, str]:

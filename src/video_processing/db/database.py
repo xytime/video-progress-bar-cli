@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.59.5  | 2026-09-04 | Codex                               | 仅为五次均可证明未提交且有双封面原创预检摘要的记录签发一次最终受控恢复。          |
 | 3.59.4  | 2026-09-04 | Codex                               | 兼容双封面闸门的新旧等价错误文本，避免受控第五次恢复被文案升级错误拦截。           |
 | 3.59.3  | 2026-09-04 | Codex                               | 对四次均被发布前双封面闸门停止、从未提交的英语世界项开放一次保存落库修复验证。   |
 | 3.59.2  | 2026-09-04 | Codex                               | 对第三次由平台明确双封面缺失而停止、且全程未提交的英语世界项开放最后一次人工恢复。 |
@@ -6645,6 +6646,82 @@ class PipelineDB:
             if cursor.rowcount != 1:
                 conn.rollback()
                 raise ValueError("English World Douyin persisted cover recovery changed concurrently")
+            conn.commit()
+            return self.get_english_world_douyin_publication(clean_review_id) or {}
+
+    def authorize_english_world_douyin_calibrated_cover_recovery(
+        self,
+        review_id: str,
+        *,
+        preflight_evidence_dir: str,
+        preflight_evidence_sha256: str,
+        reason: str,
+    ) -> Dict[str, Any]:
+        """为五次均未提交且有通过预检摘要的同一项签发唯一的最终恢复。
+
+        这不是失败重试：必须先由非最终校准证明双封面、原创声明与快速检测
+        均已通过，再以证据目录和摘要绑定这一次领取。任何已受理、未确认、
+        缺失摘要、不同失败链或第六次后再次失败均无法重新开启。
+        """
+        clean_review_id = (review_id or "").strip()
+        clean_evidence_dir = str(preflight_evidence_dir or "").strip()
+        clean_evidence_sha256 = (preflight_evidence_sha256 or "").strip().lower()
+        clean_reason = " ".join((reason or "").split())[:350]
+        if not clean_review_id:
+            raise ValueError("English World Douyin review_id is required")
+        if not clean_evidence_dir or not clean_evidence_sha256 or len(clean_evidence_sha256) != 64:
+            raise ValueError("English World Douyin calibrated recovery requires preflight evidence and SHA-256")
+        if any(char not in "0123456789abcdef" for char in clean_evidence_sha256):
+            raise ValueError("English World Douyin calibrated recovery requires a hexadecimal SHA-256")
+        if not clean_reason:
+            raise ValueError("English World Douyin recovery requires an explicit reason")
+        audit_reason = f"{clean_reason} preflight={clean_evidence_dir} sha256={clean_evidence_sha256}"
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            publication = conn.execute(
+                """SELECT review_id FROM english_world_douyin_publications
+                   WHERE review_id = ? AND state = 'CANCELED' AND attempt_count = 5
+                     AND submitted_at IS NULL AND recovery_authorized_at IS NULL
+                     AND COALESCE(last_error_message, '') LIKE '%横竖封面未能完整确认应用%'""",
+                (clean_review_id,),
+            ).fetchone()
+            attempts = conn.execute(
+                """SELECT COUNT(*) AS total,
+                          SUM(CASE WHEN state = 'CANCELED' THEN 1 ELSE 0 END) AS canceled,
+                          SUM(CASE WHEN uploader_exit_code = 7 THEN 1 ELSE 0 END) AS legacy_exit_seven,
+                          SUM(CASE WHEN uploader_exit_code = 3 THEN 1 ELSE 0 END) AS pre_submit_exit_three,
+                          SUM(CASE WHEN COALESCE(error_message, '') LIKE '%未保存草稿、未发布%'
+                                   THEN 1 ELSE 0 END) AS explicitly_not_submitted,
+                          SUM(CASE WHEN (
+                                  COALESCE(error_message, '') LIKE '%横/竖双封面缺失%'
+                                  OR COALESCE(error_message, '') LIKE '%横竖封面未能完整确认应用%'
+                              ) THEN 1 ELSE 0 END) AS dual_cover_missing
+                   FROM english_world_douyin_attempts WHERE review_id = ?""",
+                (clean_review_id,),
+            ).fetchone()
+            if not publication or not attempts or not (
+                int(attempts["total"] or 0) == 5
+                and int(attempts["canceled"] or 0) == 5
+                and int(attempts["legacy_exit_seven"] or 0) == 1
+                and int(attempts["pre_submit_exit_three"] or 0) == 4
+                and int(attempts["explicitly_not_submitted"] or 0) >= 1
+                and int(attempts["dual_cover_missing"] or 0) >= 3
+            ):
+                conn.rollback()
+                raise ValueError(
+                    "Only five proven pre-submit English World Douyin stops with calibrated cover proof can recover",
+                )
+            cursor = conn.execute(
+                """UPDATE english_world_douyin_publications
+                   SET state = 'QUEUED', recovery_authorized_at = CURRENT_TIMESTAMP,
+                       recovery_reason = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE review_id = ? AND state = 'CANCELED' AND attempt_count = 5
+                     AND submitted_at IS NULL AND recovery_authorized_at IS NULL""",
+                (audit_reason[:1000], clean_review_id),
+            )
+            if cursor.rowcount != 1:
+                conn.rollback()
+                raise ValueError("English World Douyin calibrated cover recovery changed concurrently")
             conn.commit()
             return self.get_english_world_douyin_publication(clean_review_id) or {}
 
