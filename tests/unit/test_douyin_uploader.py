@@ -15,6 +15,7 @@
 | 1.5.54 | 2026-09-04 | Codex | 覆盖横封面保存后的竖封面建议层必须精确以“暂不设置”收口。 |
 | 1.5.55 | 2026-09-04 | Codex | 覆盖平台快速检测单侧横/竖封面缺失必须阻断最终发布。 |
 | 1.5.57 | 2026-09-04 | Codex | 覆盖空投稿页的标题/发布静态表单不得被误认作视频上传完成。 |
+| 1.5.58 | 2026-09-04 | Codex | 覆盖封面卡槽点击异常后已实际打开编辑器的结果态回读。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -64,6 +65,7 @@ from scripts.douyin_uploader import (
     EXIT_UNDER_REVIEW,
     EXIT_SUBMISSION_UNCONFIRMED,
     _guard_before_browser,
+    _click_cover_entry,
     _click_cover_confirm,
     _select_new_cover_candidate,
     _wait_for_cover_slot_source_change,
@@ -1071,6 +1073,27 @@ def test_douyin_apply_cover_returns_false_when_cover_file_missing(tmp_path: Path
     page = MagicMock()
     missing_file = str(tmp_path / "non_existent_cover.jpg")
     assert not apply_cover(page, missing_file)
+
+
+def test_douyin_cover_entry_accepts_editor_already_open_after_click_timeout():
+    """平台重绘可让点击报超时，但不能覆盖已经打开的编辑器结果态。"""
+    page = MagicMock()
+    entry = MagicMock()
+    entry.click.side_effect = RuntimeError("element detached after click")
+    editor = MagicMock()
+
+    with patch("scripts.douyin_uploader._find_visible_element", return_value=entry), patch(
+        "scripts.douyin_uploader._find_active_modal", return_value=editor
+    ):
+        assert _click_cover_entry(
+            page,
+            ["text=竖封面3:4"],
+            artifact_dir=None,
+            artifact_name="vertical",
+            cover_path_abs="/tmp/cover.jpg",
+        ) is editor
+
+    entry.click.assert_called_once_with(timeout=2_000)
 
 
 def test_prepare_douyin_cover_upload_file_creates_vertical_safe_cover(tmp_path: Path):

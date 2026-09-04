@@ -78,6 +78,7 @@
 | 1.5.55 | 2026-09-04 | Codex | 快速检测明确报告单侧横/竖封面缺失时同样阻断，不能因卡槽缩略图存在而误放行。 |
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 | 1.5.57 | 2026-09-04 | Codex | 上传完成仅接受真实视频预览与重新上传控件并存，避免空上传页的静态表单被误判为上传完成。 |
+| 1.5.58 | 2026-09-04 | Codex | 封面卡槽点击超时后先回读已打开的编辑器，避免平台已受理点击却被当作失败。 |
 """
 
 from __future__ import annotations
@@ -1777,6 +1778,15 @@ def _accept_set_vertical_cover_recommendation(page) -> bool:
         return False
 
 
+def _opened_cover_editor(page):
+    """返回已实际打开的封面编辑器；主页面回退不算一次成功点击。"""
+    modal = _find_active_modal(page, [
+        ".dy-creator-content-modal-body", ".dy-creator-content-modal-wrap",
+        ".semi-modal-wrap", "div[role='dialog']", ".modal-container",
+    ])
+    return None if modal is page else modal
+
+
 def _click_cover_entry(page, selectors: Iterable[str], *, artifact_dir: Optional[Path], artifact_name: str, cover_path_abs: str):
     """将指定比例的封面卡槽滚入视口并打开编辑器；不猜测其它比例的入口。"""
     cover_entry = _find_visible_element(page, selectors)
@@ -1790,10 +1800,23 @@ def _click_cover_entry(page, selectors: Iterable[str], *, artifact_dir: Optional
     try:
         cover_entry.click(timeout=2_000)
     except Exception as exc:
+        # 新版创作者中心会先打开编辑器，再让 Playwright 因底层节点重绘报
+        # timeout。截图证据表明该异常不是可靠的失败信号，必须先读取结果态，
+        # 否则第二次点击会把已经打开的编辑器误报为失败。
+        page.wait_for_timeout(300)
+        opened_editor = _opened_cover_editor(page)
+        if opened_editor:
+            logger.info("抖音%s封面入口点击返回异常，但编辑器已实际打开", artifact_name)
+            return opened_editor
         logger.debug("抖音%s封面入口普通点击受阻，尝试同一入口 force 点击：%s", artifact_name, exc)
         try:
             cover_entry.click(timeout=2_000, force=True)
         except Exception as force_exc:
+            page.wait_for_timeout(300)
+            opened_editor = _opened_cover_editor(page)
+            if opened_editor:
+                logger.info("抖音%s封面入口 force 点击返回异常，但编辑器已实际打开", artifact_name)
+                return opened_editor
             logger.error("抖音%s封面入口无法点击：%s", artifact_name, force_exc)
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, f"douyin_{artifact_name}_cover_entry_click_failed", cover_path_abs)
