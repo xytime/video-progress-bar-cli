@@ -17,6 +17,7 @@
 | 1.5.57 | 2026-09-04 | Codex | 覆盖空投稿页的标题/发布静态表单不得被误认作视频上传完成。 |
 | 1.5.58 | 2026-09-04 | Codex | 覆盖封面卡槽点击异常后已实际打开编辑器的结果态回读。 |
 | 1.5.59 | 2026-09-04 | Codex | 覆盖竖封面保存后同一编辑器内的横封面推荐切换。 |
+| 1.5.60 | 2026-09-04 | Codex | 覆盖上传完成后固定预览说明中的“已上传”不触发动态进度。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -544,6 +545,15 @@ def test_douyin_upload_static_publish_notice_is_not_active_progress():
 
 def test_douyin_preview_transcoding_notice_does_not_block_submit():
     text = "预览转码中，请稍后 转码过程也可以发布作品 发布设置 点击发布后，如作品还在上传中，请勿关闭页面"
+
+    assert not has_active_upload_progress(text)
+
+
+def test_douyin_uploaded_preview_explanation_is_not_active_progress():
+    text = (
+        "预览视频 重新上传 视频素材已按原始分辨率上传，为保证预览体验，"
+        "视频会被压缩预览，实际播放时根据环境自动选组最佳分辨率播放。"
+    )
 
     assert not has_active_upload_progress(text)
 
