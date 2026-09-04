@@ -16,6 +16,7 @@
 | 1.5.55 | 2026-09-04 | Codex | 覆盖平台快速检测单侧横/竖封面缺失必须阻断最终发布。 |
 | 1.5.57 | 2026-09-04 | Codex | 覆盖空投稿页的标题/发布静态表单不得被误认作视频上传完成。 |
 | 1.5.58 | 2026-09-04 | Codex | 覆盖封面卡槽点击异常后已实际打开编辑器的结果态回读。 |
+| 1.5.59 | 2026-09-04 | Codex | 覆盖竖封面保存后同一编辑器内的横封面推荐切换。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -1269,6 +1270,39 @@ def test_douyin_apply_cover_reopens_horizontal_slot_after_vertical_editor_closes
     continue_vertical_recommendation.assert_called_once_with(page)
     assert click_entry.call_count == 2
     assert "横封面4:3" in click_entry.call_args_list[1].args[1][0]
+
+
+def test_douyin_apply_cover_uses_same_editor_after_vertical_cover_recommendation(tmp_path: Path):
+    """竖封面保存后的推荐层关闭后，横封面要复用仍打开的编辑器。"""
+    vertical_cover = tmp_path / "vertical.jpg"
+    horizontal_cover = tmp_path / "horizontal.jpg"
+    vertical_cover.write_bytes(b"vertical")
+    horizontal_cover.write_bytes(b"horizontal")
+    page = MagicMock()
+    shared_editor = MagicMock()
+
+    with patch("scripts.douyin_uploader._click_cover_entry", return_value=shared_editor) as click_entry, patch(
+        "scripts.douyin_uploader._apply_cover_in_current_panel", side_effect=[True, True]
+    ) as apply_panel, patch(
+        "scripts.douyin_uploader._accept_horizontal_cover_recommendation", return_value=True
+    ) as accept_recommendation, patch(
+        "scripts.douyin_uploader._find_active_modal", return_value=shared_editor
+    ), patch("scripts.douyin_uploader._click_cover_confirm", return_value=True), patch(
+        "scripts.douyin_uploader._continue_saved_horizontal_to_vertical_cover", return_value=False
+    ), patch("scripts.douyin_uploader._wait_for_cover_editor_closed", return_value=True), patch(
+        "scripts.douyin_uploader._visible_cover_slot_image_sources", side_effect=[
+            {"vertical": "before-vertical", "horizontal": "before-horizontal"},
+            {"vertical": "after-vertical", "horizontal": "before-horizontal"},
+            {"vertical": "after-vertical", "horizontal": "after-horizontal"},
+            {"vertical": "after-vertical", "horizontal": "after-horizontal"},
+        ]
+    ), patch("scripts.douyin_uploader.wait_for_cover_validation", return_value=True):
+        assert apply_cover(page, str(vertical_cover), horizontal_cover_path=str(horizontal_cover))
+
+    click_entry.assert_called_once()
+    accept_recommendation.assert_called_once_with(page)
+    assert apply_panel.call_args_list[1].args[1] is shared_editor
+    assert apply_panel.call_args_list[1].args[2] == str(horizontal_cover.resolve())
 
 
 def test_douyin_apply_cover_reapplies_vertical_when_platform_requires_it(tmp_path: Path):

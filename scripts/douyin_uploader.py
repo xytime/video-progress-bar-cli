@@ -79,6 +79,7 @@
 | 1.5.45 | 2026-09-02 | Codex | 无论熔断是否活动，最终投稿均强制要求完整一次性启动凭据，禁止低层 CLI 匿名提交。 |
 | 1.5.57 | 2026-09-04 | Codex | 上传完成仅接受真实视频预览与重新上传控件并存，避免空上传页的静态表单被误判为上传完成。 |
 | 1.5.58 | 2026-09-04 | Codex | 封面卡槽点击超时后先回读已打开的编辑器，避免平台已受理点击却被当作失败。 |
+| 1.5.59 | 2026-09-04 | Codex | 竖封面保存后的横封面推荐层在同一编辑器内即时确认，避免误等编辑器关闭。 |
 """
 
 from __future__ import annotations
@@ -1961,11 +1962,14 @@ def apply_cover(
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_confirm_unavailable", cover_path_abs)
             return False
-        if not _wait_for_cover_editor_closed(page, modal):
-            if artifact_dir:
-                capture_cover_evidence(page, artifact_dir, "douyin_vertical_cover_modal_unclosed", cover_path_abs)
-            return False
         if horizontal_cover_path_abs:
+            # 新版页面在保存竖封面后弹出“设置横封面获更多流量”说明层，
+            # 其关闭后仍保留同一个封面编辑器，并已切换到横封面面板。若此处
+            # 先等编辑器关闭，会把平台期待的下一步误判为超时。
+            if not _accept_horizontal_cover_recommendation(page):
+                if artifact_dir:
+                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_recommendation_unconfirmed", horizontal_cover_path_abs)
+                return False
             modal = _find_active_modal(page, [
                 ".dy-creator-content-modal-body", ".dy-creator-content-modal-wrap",
                 ".semi-modal-wrap", "div[role='dialog']", ".modal-container",
@@ -1985,10 +1989,6 @@ def apply_cover(
             if not modal:
                 if artifact_dir:
                     capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_entry_failed", horizontal_cover_path_abs)
-                return False
-            if not _accept_horizontal_cover_recommendation(page):
-                if artifact_dir:
-                    capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_recommendation_unconfirmed", horizontal_cover_path_abs)
                 return False
             if artifact_dir:
                 capture_cover_evidence(page, artifact_dir, "douyin_horizontal_cover_entry_opened", horizontal_cover_path_abs)
