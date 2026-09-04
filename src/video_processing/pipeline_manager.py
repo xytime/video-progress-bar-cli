@@ -143,6 +143,7 @@
 | 3.48.19 | 2026-08-23 | Codex                               | 按源视频精确发布时间控制视频号原创声明，并保留发布前本地决策证据 |
 | 3.48.20 | 2026-08-26 | Codex                               | YouTube bot 校验时受限刷新 Cookie，并仅重试一次源字幕预检。 |
 | 3.48.16 | 2026-08-11 | Codex                               | 视频号未确认公开时取消同源尚未提交的抖音/快手队列，防止旧误判触发跨平台抢跑 |
+| 3.48.21 | 2026-09-04 | Codex                               | 通用抖音投稿透传独立横封面并按账本尝试隔离浏览器证据，避免封面退化和失败根因被覆盖。 |
 """
 
 
@@ -1964,6 +1965,22 @@ class PipelineManager:
             return fallback
         return None
 
+    def _resolve_douyin_horizontal_cover_file(self, yid: str, slice_index: int = 0) -> Optional[Path]:
+        """优先使用已由发布包生成的抖音横封面；缺失时交给上传器从已验证竖图生成。"""
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        for candidate in (
+            self._OUT_DIR / f"{prefix}_cover_douyin_horizontal.jpg",
+            self._OUT_DIR / f"{yid}_cover_douyin_horizontal.jpg",
+        ):
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _douyin_attempt_evidence_dir(self, publication_id: int, yid: str, slice_index: int) -> Path:
+        """每次通用抖音尝试使用独立证据目录，禁止不同视频互相覆盖控件快照。"""
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        return self._OUT_DIR / "douyin_evidence" / prefix / str(publication_id)
+
     def _read_publication_text_file(self, path: Path, yid: str, label: str) -> str:
         """读取平台投递文本；读取失败时返回空串，由审查层按已有内容继续判断。"""
         try:
@@ -2390,6 +2407,7 @@ class PipelineManager:
         vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
         title_file = self._douyin_title_path(yid, slice_index)
         cover_file = self._resolve_cover_file(yid, slice_index)
+        horizontal_cover_file = self._resolve_douyin_horizontal_cover_file(yid, slice_index)
         if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file() or not cover_file:
             reason = (
                 f"抖音投递产物缺失：video={vertical.is_file()} "
@@ -2420,6 +2438,7 @@ class PipelineManager:
             copy_path=copy_file,
             title_path=title_file,
             cover_path=cover_file,
+            horizontal_cover_path=horizontal_cover_file,
         )
         ticket_id = str(publication.get("_douyin_launch_ticket_id") or "").strip()
         launch_token = str(publication.get("_douyin_launch_token") or "").strip()
@@ -2464,6 +2483,7 @@ class PipelineManager:
             "--copy", str(copy_file),
             "--title-file", str(title_file),
             "--state", str(self._OUT_DIR / "douyin_state.json"),
+            "--evidence-dir", str(self._douyin_attempt_evidence_dir(publication_id, yid, slice_index)),
             "--fail-fast-login",
             "--prepare-description",
             "--publish",
@@ -2471,6 +2491,8 @@ class PipelineManager:
             "--douyin-launch-token", launch_token,
             "--cover", str(cover_file),
         ]
+        if horizontal_cover_file:
+            upload_cmd += ["--horizontal-cover", str(horizontal_cover_file)]
 
         if not settings.douyin_browser_headless:
             upload_cmd.append("--no-headless")

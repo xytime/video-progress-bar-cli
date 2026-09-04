@@ -34,6 +34,7 @@
 | 2.0.9 | 2026-09-02 | Codex | 覆盖通用 ticket 绑定失败或子进程超时且凭据未启动时立即原子取消，禁止遗留可消费领取。 |
 | 2.0.10 | 2026-09-02 | Codex | 覆盖视频号补发只入 NEW 队列，并与重试路径共享每轮浏览器动作预算。 |
 | 2.0.11 | 2026-09-02 | Codex | 覆盖每个每日任务运行先重置 NEW 动作预算，避免常驻管理器跨轮永久耗尽。 |
+| 2.0.12 | 2026-09-04 | Codex | 覆盖通用投稿透传独立横封面和单次证据目录，避免双封面退化且失败证据互相覆盖。 |
 """
 
 import hashlib
@@ -148,6 +149,10 @@ def test_claimed_douyin_publication_runs_publish_and_marks_under_review(tmp_path
     assert "--prepare-description" in command
     assert "--title-file" in command
     assert "--cover" in command
+    assert "--evidence-dir" in command
+    assert command[command.index("--evidence-dir") + 1] == str(
+        tmp_path / "douyin_evidence" / "video-id" / "17"
+    )
     assert command[command.index("--douyin-launch-ticket") + 1] == "ticket-17"
     assert command[command.index("--douyin-launch-token") + 1] == "token-17"
     manager.db.bind_douyin_browser_launch_ticket_payload.assert_called_once()
@@ -155,6 +160,29 @@ def test_claimed_douyin_publication_runs_publish_and_marks_under_review(tmp_path
     args, kwargs = manager.db.update_douyin_publication_state.call_args
     assert args == (17, "UNDER_REVIEW")
     assert "等待作品管理页" in kwargs["error_message"]
+
+
+def test_claimed_douyin_publication_prefers_generated_horizontal_cover(tmp_path: Path, monkeypatch):
+    """通用投稿也必须透传已生成的横封面，而非从竖图重新裁切。"""
+    manager = _manager_with_assets(tmp_path)
+    horizontal = tmp_path / "video-id_cover_douyin_horizontal.jpg"
+    horizontal.write_bytes(b"horizontal-cover")
+    monkeypatch.setattr(settings, "enable_subtitle_censorship", False)
+    manager._run_tracked = MagicMock(
+        return_value=subprocess.CompletedProcess(["douyin"], 0, stdout="ok", stderr="")
+    )
+
+    assert manager._publish_claimed_douyin_publication(
+        {
+            "id": 171, "youtube_id": "video-id", "slice_index": 0, "source_kind": "NEW",
+            "_douyin_launch_ticket_id": "ticket-171", "_douyin_launch_token": "token-171",
+        }
+    )
+
+    command = manager._run_tracked.call_args.args[0]
+    assert command[command.index("--horizontal-cover") + 1] == str(horizontal)
+    bind_kwargs = manager.db.bind_douyin_browser_launch_ticket_payload.call_args.kwargs
+    assert bind_kwargs["payload_sha256"]
 
 
 def test_uncalibrated_douyin_publish_cancels_automatic_retry(tmp_path: Path, monkeypatch):
