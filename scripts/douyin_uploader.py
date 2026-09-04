@@ -81,6 +81,7 @@
 | 1.5.58 | 2026-09-04 | Codex | 封面卡槽点击超时后先回读已打开的编辑器，避免平台已受理点击却被当作失败。 |
 | 1.5.59 | 2026-09-04 | Codex | 竖封面保存后的横封面推荐层在同一编辑器内即时确认，避免误等编辑器关闭。 |
 | 1.5.60 | 2026-09-04 | Codex | 上传完成后的视频预览说明不再被“已上传”关键词误判为动态进度。 |
+| 1.5.61 | 2026-09-04 | Codex | 封面成功态优先于异步遗留的双封面缺失文案，避免已通过检测被旧提示阻断。 |
 """
 
 from __future__ import annotations
@@ -1837,6 +1838,11 @@ def _click_cover_entry(page, selectors: Iterable[str], *, artifact_dir: Optional
 
 def wait_for_cover_validation(page, timeout_seconds: int = 120) -> bool:
     """等待平台封面检测完成；失败、超时或页面不可读都不允许进入发布。"""
+    success_markers = (
+        "封面效果检测通过",
+        "封面检测通过",
+        "暂未发现封面低质问题",
+    )
     failed_markers = (
         "封面检测未通过", "封面不合格", "封面违规", "封面异常",
         "横/竖双封面缺失", "横竖双封面缺失", "横封面缺失", "竖封面缺失",
@@ -1845,6 +1851,11 @@ def wait_for_cover_validation(page, timeout_seconds: int = 120) -> bool:
     try:
         for elapsed in range(timeout_seconds):
             text = get_page_text(page)
+            # 保存双封面时平台会短暂保留前一轮“横/竖双封面缺失”提示；
+            # 同一页面已经给出具名成功态时，成功态才是当前检测结果。
+            if any(marker in text for marker in success_markers):
+                logger.info("抖音封面检测已明确通过")
+                return True
             if any(marker in text for marker in failed_markers):
                 logger.error("抖音封面检测未通过：%s", text[:300])
                 return False

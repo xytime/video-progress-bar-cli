@@ -18,6 +18,7 @@
 | 1.5.58 | 2026-09-04 | Codex | 覆盖封面卡槽点击异常后已实际打开编辑器的结果态回读。 |
 | 1.5.59 | 2026-09-04 | Codex | 覆盖竖封面保存后同一编辑器内的横封面推荐切换。 |
 | 1.5.60 | 2026-09-04 | Codex | 覆盖上传完成后固定预览说明中的“已上传”不触发动态进度。 |
+| 1.5.61 | 2026-09-04 | Codex | 覆盖封面成功态与异步遗留缺失提示并存时优先采用成功态。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音登录判定、唯一上传控件、上传校准与未校准发布保护 |
 | 1.1.0 | 2026-07-23 | Codex | 覆盖上传校准期间页面关闭的未确认返回 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖抖音自主声明选择、确认与失败阻断发布 |
@@ -575,6 +576,15 @@ def test_douyin_cover_validation_fails_closed_on_rejection():
     page.locator.return_value = body
 
     assert not wait_for_cover_validation(page, timeout_seconds=1)
+
+
+def test_douyin_cover_validation_accepts_explicit_success_over_stale_missing_notice():
+    page = MagicMock()
+    body = MagicMock()
+    body.inner_text.return_value = "横/竖双封面缺失 封面效果检测通过 暂未发现封面低质问题"
+    page.locator.return_value = body
+
+    assert wait_for_cover_validation(page, timeout_seconds=1)
 
 
 def test_douyin_upload_completion_returns_false_when_page_closes():
