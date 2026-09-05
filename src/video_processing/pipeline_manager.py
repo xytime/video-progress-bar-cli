@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.48.44 | 2026-09-05 | Codex | 投稿熔断绑定本次尝试的独立页面证据，避免误引用旧校准快照。 |
 | 3.48.43 | 2026-09-03 | Codex                               | 字幕进度区分阶段起点与存活心跳；按阶段和失联边界终止卡住的子进程。 |
 | 3.48.42 | 2026-09-02 | Codex                               | 视频号补发的 NEW 只建 QUEUED 账本；重试与统一同步共享每轮浏览器动作预算，禁止跨入口越过上限。 |
 | 3.48.41 | 2026-09-02 | Codex                               | ticket 绑定失败、低层提前失败或超时仅在账本证明浏览器未启动时原子取消，已启动/未知提交继续保留 UNCERTAIN。 |
@@ -1309,10 +1310,10 @@ class PipelineManager:
         if not self._douyin_ui_guard_loaded:
             self._reset_douyin_run_guard()
 
-    def _latest_douyin_ui_evidence(self, stage: str) -> Optional[str]:
+    def _latest_douyin_ui_evidence(self, stage: str, evidence_dir: Optional[Path] = None) -> Optional[str]:
         """返回与失败阶段匹配的最近控件快照；没有证据时不伪造路径。"""
-        calibration_dir = self._OUT_DIR / "douyin_calibration"
-        candidates = [path for path in calibration_dir.glob("*_controls.json") if path.is_file()]
+        calibration_dir = evidence_dir or self._OUT_DIR / "douyin_calibration"
+        candidates = [path for path in calibration_dir.glob("*.json") if path.is_file()]
         if stage == _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY:
             candidates = [path for path in candidates if path.name.startswith("douyin_management_")]
         else:
@@ -1325,6 +1326,8 @@ class PipelineManager:
         self,
         stage: str,
         reason: str,
+        *,
+        evidence_dir: Optional[Path] = None,
     ) -> str:
         """累计 UI 漂移；达到阈值后把录屏交接写入本轮熔断原因。"""
         threshold = max(1, int(settings.douyin_ui_failure_recording_threshold or 1))
@@ -1333,7 +1336,7 @@ class PipelineManager:
                 "douyin",
                 stage,
                 reason,
-                evidence_path=self._latest_douyin_ui_evidence(stage),
+                evidence_path=self._latest_douyin_ui_evidence(stage, evidence_dir),
                 recording_threshold=threshold,
             )
         except Exception:
@@ -2560,7 +2563,10 @@ class PipelineManager:
                 state = "RETRYABLE_FAILED"
                 reason = f"抖音上传器失败（exit {exc.returncode}）：{stderr[:500]}"
             if ui_failure_stage:
-                reason = self._record_douyin_ui_failure(ui_failure_stage, reason)
+                reason = self._record_douyin_ui_failure(
+                    ui_failure_stage, reason,
+                    evidence_dir=self._douyin_attempt_evidence_dir(publication_id, yid, slice_index),
+                )
             logger.error("[%s] %s", yid, reason)
             canceled_prelaunch = False
             if state in {"CANCELED", "RETRYABLE_FAILED"}:

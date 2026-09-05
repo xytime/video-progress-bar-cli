@@ -562,7 +562,7 @@ def test_douyin_uploaded_preview_explanation_is_not_active_progress():
 def test_douyin_cover_validation_waits_for_detection_to_finish():
     page = MagicMock()
     body = MagicMock()
-    body.inner_text.side_effect = ["设置封面 封面检测中40%", "设置封面"]
+    body.inner_text.side_effect = ["设置封面 封面检测中40%", "封面效果检测通过"]
     page.locator.return_value = body
 
     assert wait_for_cover_validation(page, timeout_seconds=2)
@@ -576,6 +576,23 @@ def test_douyin_cover_validation_fails_closed_on_rejection():
     page.locator.return_value = body
 
     assert not wait_for_cover_validation(page, timeout_seconds=1)
+
+
+def test_cover_validation_refreshes_stale_missing_once_then_waits():
+    page = MagicMock()
+    body = MagicMock()
+    body.inner_text.side_effect = ["横封面缺失"] * 5 + ["封面效果检测通过"]
+    page.locator.return_value = body
+    refresh = MagicMock()
+    with patch("scripts.douyin_uploader._find_visible_element", return_value=refresh):
+        assert wait_for_cover_validation(page, timeout_seconds=6)
+    refresh.click.assert_called_once()
+
+
+def test_cover_validation_absent_result_does_not_mean_success():
+    page = MagicMock()
+    page.locator.return_value.inner_text.return_value = "设置封面 Ai智能推荐封面生成中"
+    assert not wait_for_cover_validation(page, timeout_seconds=2)
 
 
 def test_douyin_cover_validation_accepts_explicit_success_over_stale_missing_notice():

@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.0 | 2026-09-05 | Codex | 双封面保存后等待检测刷新；旧缺失提示仅触发一次重新检测，超时仍阻断。 |
 | 1.0.0 | 2026-07-23 | Codex | 新增抖音创作者中心登录、校准快照与未校准发布保护骨架 |
 | 1.1.0 | 2026-07-23 | Codex | 基于已登录发布页校准唯一视频输入控件，新增仅上传采集表单模式 |
 | 1.1.1 | 2026-07-23 | Codex | 上传校准期间页面关闭时返回未确认，避免堆栈冒泡误导调度器 |
@@ -1845,23 +1846,31 @@ def wait_for_cover_validation(page, timeout_seconds: int = 120) -> bool:
     )
     failed_markers = (
         "封面检测未通过", "封面不合格", "封面违规", "封面异常",
+    )
+    missing_markers = (
         "横/竖双封面缺失", "横竖双封面缺失", "横封面缺失", "竖封面缺失",
         "建议同时设置横版和竖版的封面",
     )
+    refreshed = False
     try:
         for elapsed in range(timeout_seconds):
             text = get_page_text(page)
+            if any(marker in text for marker in failed_markers):
+                logger.error("抖音封面检测明确拒绝")
+                return False
             # 保存双封面时平台会短暂保留前一轮“横/竖双封面缺失”提示；
             # 同一页面已经给出具名成功态时，成功态才是当前检测结果。
             if any(marker in text for marker in success_markers):
                 logger.info("抖音封面检测已明确通过")
                 return True
-            if any(marker in text for marker in failed_markers):
-                logger.error("抖音封面检测未通过：%s", text[:300])
-                return False
-            if "封面检测中" not in text:
-                logger.info("抖音封面检测已完成")
-                return True
+            # 卡槽已完成持久化后，检测区域仍可能保留上传前的缺失结果。
+            # 给异步保存短暂收敛时间，然后仅重新检测一次；不可因旧提示立即熔断。
+            if elapsed >= 3 and not refreshed and any(marker in text for marker in missing_markers):
+                refresh = _find_visible_element(page, ['button:has-text("重新检测")'])
+                if refresh:
+                    refresh.click(timeout=2_000)
+                    refreshed = True
+                    logger.info("双封面保存后已请求一次重新检测，等待最新结果")
             if elapsed and elapsed % 15 == 0:
                 logger.info("抖音封面仍在检测，已等待 %s 秒", elapsed)
             page.wait_for_timeout(1_000)
