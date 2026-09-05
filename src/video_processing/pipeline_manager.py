@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.48.45 | 2026-09-05 | Codex | 从哈希绑定底图重排 4:3 横封面；自动管理页回查固定后台运行，避免反复抢占桌面。 |
 | 3.48.44 | 2026-09-05 | Codex | 投稿熔断绑定本次尝试的独立页面证据，避免误引用旧校准快照。 |
 | 3.48.43 | 2026-09-03 | Codex                               | 字幕进度区分阶段起点与存活心跳；按阶段和失联边界终止卡住的子进程。 |
 | 3.48.42 | 2026-09-02 | Codex                               | 视频号补发的 NEW 只建 QUEUED 账本；重试与统一同步共享每轮浏览器动作预算，禁止跨入口越过上限。 |
@@ -1969,7 +1970,7 @@ class PipelineManager:
         return None
 
     def _resolve_douyin_horizontal_cover_file(self, yid: str, slice_index: int = 0) -> Optional[Path]:
-        """优先使用已由发布包生成的抖音横封面；缺失时交给上传器从已验证竖图生成。"""
+        """优先使用独立横封面；缺失时从已验收无字底图重新排版，不给竖海报补边。"""
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
         for candidate in (
             self._OUT_DIR / f"{prefix}_cover_douyin_horizontal.jpg",
@@ -1977,6 +1978,16 @@ class PipelineManager:
         ):
             if candidate.is_file():
                 return candidate
+        source = self._resolve_cover_file(yid, slice_index)
+        title_path = self._douyin_title_path(yid, slice_index)
+        if source and title_path.is_file():
+            from cover.douyin import render_horizontal_cover
+
+            return render_horizontal_cover(
+                source, title_path.read_text(encoding="utf-8"),
+                self._PRJ_ROOT / settings.ai_cover_finish_dir,
+                self._OUT_DIR / f"{prefix}_cover_douyin_horizontal.jpg",
+            )
         return None
 
     def _douyin_attempt_evidence_dir(self, publication_id: int, yid: str, slice_index: int) -> Path:
@@ -2774,8 +2785,7 @@ class PipelineManager:
                 "--fail-fast-login",
                 "--verify-only",
             ]
-            if not settings.douyin_browser_headless:
-                verify_cmd.append("--no-headless")
+            # 自动只读回查始终后台运行；投稿页可视化配置不应反复抢占用户桌面。
             try:
                 self._throttle_douyin_browser_action(f"{yid} 审核回查")
                 result = self._run_tracked(

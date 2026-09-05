@@ -758,7 +758,8 @@ def test_douyin_missing_cover_cancels_without_upload(tmp_path: Path, monkeypatch
     assert "cover=False" in kwargs["error_message"]
 
 
-def test_douyin_review_reconciliation_only_checks_management(tmp_path: Path):
+def test_douyin_review_reconciliation_only_checks_management(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(settings, "douyin_browser_headless", False)
     manager = _manager_with_assets(tmp_path)
     manager.db.get_douyin_publications_by_states.return_value = [
         {"id": 19, "youtube_id": "video-id", "slice_index": 0}
@@ -776,6 +777,7 @@ def test_douyin_review_reconciliation_only_checks_management(tmp_path: Path):
 
     command = manager._run_tracked.call_args.args[0]
     assert "--verify-only" in command
+    assert "--no-headless" not in command
     assert "--publish" not in command
     assert "--video" not in command
     manager.db.update_douyin_publication_state.assert_called_once_with(19, "PUBLISHED")

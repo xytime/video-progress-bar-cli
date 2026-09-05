@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.4 | 2026-09-05 | Codex | 自动抖音只读回查固定后台运行，避免投稿可视化配置导致桌面窗口风暴。 |
 | 1.0.0 | 2026-07-31 | Codex | 新增窗口内巡航入口，以 Settings 作为唯一窗口判定并避免定时任务重叠 |
 | 1.1.0 | 2026-08-02 | Codex | 改为每分钟自动巡航，不再因发布时段跳过完整流水线 |
 | 1.2.0 | 2026-08-04 | Codex | 记录巡航实例 PID、Git revision 与心跳，区分已推送代码和实际运行版本 |
@@ -327,8 +328,7 @@ def reconcile_one_english_world_douyin_submission() -> None:
         "--fail-fast-login",
         "--verify-only",
     ]
-    if not settings.douyin_browser_headless:
-        command.append("--no-headless")
+    # 自动只读回查始终后台运行，独立于投稿页是否展示浏览器。
     pipeline_lock = PROJECT_ROOT / "output/pipeline.lock"
     pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
     with pipeline_lock.open("a+") as lock_file:

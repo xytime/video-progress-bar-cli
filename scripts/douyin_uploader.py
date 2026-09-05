@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.1 | 2026-09-05 | Codex | 按作品编辑操作、日期和紧邻状态读取回查结果，修复长简介超过 320 字被误判。 |
 | 1.7.0 | 2026-09-05 | Codex | 双封面保存后等待检测刷新；旧缺失提示仅触发一次重新检测；管理页等待搜索框加载后再检索。 |
 | 1.0.0 | 2026-07-23 | Codex | 新增抖音创作者中心登录、校准快照与未校准发布保护骨架 |
 | 1.1.0 | 2026-07-23 | Codex | 基于已登录发布页校准唯一视频输入控件，新增仅上传采集表单模式 |
@@ -91,6 +92,7 @@ import argparse
 import hashlib
 import json
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -477,14 +479,20 @@ def get_management_publication_state(
             marker_index = normalized_page.find(marker, start)
             if marker_index < 0:
                 break
-            # 当前作品管理列表只展示标题、日期和状态；收窄窗口，避免读到下一张作品卡片。
-            status_window = normalized_page[marker_index + len(marker):marker_index + len(marker) + 320]
-            review_index = status_window.find("审核中")
-            published_index = status_window.find("已发布")
-            if review_index >= 0 and (published_index < 0 or review_index < published_index):
-                matched_states.add(MANAGEMENT_UNDER_REVIEW)
-            elif published_index >= 0:
-                matched_states.add(MANAGEMENT_PUBLISHED)
+            # 简介可能超过 320 字；状态属于其后编辑菜单+日期，不属于简介文字或下一作品。
+            tail = normalized_page[marker_index + len(marker):]
+            edit_index = tail.find("编辑作品")
+            if edit_index >= 0:
+                state_match = re.match(
+                    r"编辑作品设置权限(?:作品置顶)?(?:删除作品)?"
+                    r"\d{4}年\d{2}月\d{2}日(?:\d{2}:\d{2})?(已发布|审核中)",
+                    tail[edit_index:],
+                )
+                if state_match:
+                    matched_states.add(
+                        MANAGEMENT_PUBLISHED if state_match.group(1) == "已发布"
+                        else MANAGEMENT_UNDER_REVIEW
+                    )
             start = marker_index + len(marker)
     if len(matched_states) == 1:
         return next(iter(matched_states))

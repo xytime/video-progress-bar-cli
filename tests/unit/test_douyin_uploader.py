@@ -410,6 +410,15 @@ def test_management_state_uses_exact_title_when_current_list_hides_copy():
     assert get_management_publication_state(page_text, copy_text, title + "不同") is None
 
 
+def test_management_state_reads_long_description_but_not_next_card():
+    title = "这是一条足够独特的完整标题"
+    copy = "这段长简介包含审核中一词但不是平台状态。" * 40
+    card = title + copy + "编辑作品 设置权限 作品置顶 删除作品 2026年09月05日 10:58 "
+    assert get_management_publication_state(card + "已发布", copy, title) == "PUBLISHED"
+    next_card = "另一作品 编辑作品 设置权限 2026年09月05日 已发布"
+    assert get_management_publication_state(card + "流量减少 播放 3 " + next_card, copy, title) is None
+
+
 def test_management_wait_ignores_empty_shell_until_list_or_target_loads():
     page = MagicMock()
     body = MagicMock()

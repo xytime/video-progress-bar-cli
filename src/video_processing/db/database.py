@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.59.7 | 2026-09-05 | Codex | 暴露不含凭据秘密的当前投稿启动审计，区分未启动领取与启动后未知状态。 |
 | 3.59.6 | 2026-09-05 | Codex | 英语世界抖音调度同时发现未建账和已排队任务，保持已提交/失败状态不可重领。 |
 | 3.59.5  | 2026-09-04 | Codex                               | 仅为五次均可证明未提交且有双封面原创预检摘要的记录签发一次最终受控恢复。          |
 | 3.59.4  | 2026-09-04 | Codex                               | 兼容双封面闸门的新旧等价错误文本，避免受控第五次恢复被文案升级错误拦截。           |
@@ -8318,6 +8319,20 @@ class PipelineDB:
                     canceled += 1
             conn.commit()
             return canceled
+
+    def get_douyin_publication_launch_status(self, publication_id: int) -> List[Dict[str, Any]]:
+        """只读返回当前尝试的启动审计；不暴露 token 或 token 摘要。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT t.ticket_id, t.source_ref, t.issued_at,
+                          t.launch_started_at, t.prelaunch_canceled_at, t.prelaunch_cancel_reason
+                   FROM douyin_browser_launch_tickets t
+                   JOIN douyin_publications p
+                     ON t.source_ref = CAST(p.id AS TEXT) || ':' || CAST(p.attempt_count AS TEXT)
+                   WHERE t.source_type = 'GENERIC' AND p.id = ?""",
+                (int(publication_id),),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def cancel_douyin_publication_pre_launch_failure(
         self,

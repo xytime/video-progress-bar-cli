@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.6 | 2026-09-05 | Codex | 验证启动审计可区分已启动与已取消且不返回凭据秘密。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音账本去重、迁移限额和审核状态 |
 | 1.1.0 | 2026-07-25 | Codex | 覆盖提交后未确认的遗留失败不会被自动重投 |
 | 1.2.0 | 2026-07-29 | Codex | 覆盖含未确认反证的抖音 PUBLISHED 写入会保守降级且不参与去重 |
@@ -412,6 +413,14 @@ def test_stale_unstarted_generic_douyin_ticket_is_canceled_but_started_ticket_is
         require_new_source=True,
     )
     assert db.get_douyin_publication_by_id(fixtures[1][3]["id"])["state"] == "UPLOADING"
+    launch_status = db.get_douyin_publication_launch_status(fixtures[1][3]["id"])
+    assert len(launch_status) == 1
+    assert launch_status[0]["launch_started_at"]
+    assert "token_sha256" not in launch_status[0]
+    assert "_douyin_launch_token" not in launch_status[0]
+    canceled_status = db.get_douyin_publication_launch_status(prelaunch_publication["id"])
+    assert canceled_status[0]["prelaunch_canceled_at"]
+    assert canceled_status[0]["launch_started_at"] is None
     assert db.cancel_stale_generic_douyin_prelaunch_attempts(
         min_age_seconds=0,
         reason="重复回收不得改变已启动记录。",

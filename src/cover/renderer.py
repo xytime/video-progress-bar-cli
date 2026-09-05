@@ -8,6 +8,7 @@
 | 1.2.0   | 2026-06-02 | Gemini_3.5_Flash_planning    | 修正截图视口为 6:7 比例 (1080x1260) |
 | 1.3.0 | 2026-07-31 | Codex                         | 将已验证的独立主视觉图像嵌入模板，不允许把视频文件当作背景 |
 | 1.4.0 | 2026-08-03 | Codex                         | 渲染前拒绝含全屏暗遮罩或大文字卡片的封面模板 |
+| 1.5.0 | 2026-09-05 | Codex | 按布局画布输出原生横封面，避免将竖海报补边后上传抖音。 |
 """
 
 import os
@@ -92,7 +93,10 @@ class HTMLRenderer:
                 page = browser.new_page()
                 
                 # [Gemini_3.5_Flash_planning] 微信视频号竖版封面标准比例：6:7 (1080x1260)
-                page.set_viewport_size({"width": 1080, "height": 1260})
+                page.set_viewport_size({
+                    "width": int(layout_spec.get("canvas_width", 1080)),
+                    "height": int(layout_spec.get("canvas_height", 1260)),
+                })
                 
                 # 导航到临时文件 URL
                 file_url = temp_html_path.resolve().as_uri()
