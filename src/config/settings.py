@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.61.7 | 2026-09-05 | Codex | 自动回查默认每轮两条，单作品十分钟冷却；发布额度与回查频率分离。 |
 | 3.61.6 | 2026-09-03 | Codex | 盘中加工守卫识别 NYSE 提前收市日，在实际 13:00 ET 收盘后立即恢复加工。 |
 | 3.61.5 | 2026-09-03 | Codex | 按用户发布策略把重型加工守卫收窄到 NYSE 常规盘中 09:30–16:00 ET。 |
 | 3.61.4 | 2026-09-02 | Codex | 英语世界抖音同步新增独立正数单轮上限；零值安全停用，禁止分钟巡航连续清空历史受理项。 |
@@ -356,7 +357,9 @@ class Settings(BaseSettings):
     douyin_prelaunch_ticket_recovery_ttl_seconds: int = 900
     # 视频号受理后即可同步；仍只为无抖音历史账本的成片建队，不复活不确定/审核中记录。
     douyin_require_wechat_public_confirmation: bool = False
-    douyin_review_max_per_run: int = 0
+    # 仅控制只读回查；非正数回退安全默认值，不解释为无限。
+    douyin_review_max_per_run: int = 2
+    douyin_review_interval_seconds: int = 600
     # 自动 NEW 投稿必须有明确上限；任一值设为 0 时安全停用该自动入口，不解释为无限。
     douyin_new_sync_max_per_run: int = 1
     douyin_new_sync_daily_limit: int = 10

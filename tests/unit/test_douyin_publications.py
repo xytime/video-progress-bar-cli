@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.7 | 2026-09-05 | Codex | 回查预约跨实例冷却，时钟回拨不忙循环，终态和未知态禁止自动领取。 |
 | 2.0.6 | 2026-09-05 | Codex | 验证启动审计可区分已启动与已取消且不返回凭据秘密。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音账本去重、迁移限额和审核状态 |
 | 1.1.0 | 2026-07-25 | Codex | 覆盖提交后未确认的遗留失败不会被自动重投 |
@@ -33,6 +34,25 @@ from video_processing.db.database import PipelineDB
 
 def _add_video(db: PipelineDB, youtube_id: str) -> None:
     assert db.add_video(youtube_id, "测试视频", "test-channel", score=80)
+
+
+def test_reconciliation_cooldown_survives_restart_and_preserves_state(tmp_path):
+    path = str(tmp_path / "pipeline.db")
+    db = PipelineDB(path)
+    _add_video(db, "cooldown")
+    item = db.create_douyin_publication("cooldown", "a" * 64, "/tmp/cooldown.mp4", source_kind="NEW")
+    pid = item["id"]
+    assert not db.reserve_douyin_reconciliation_slot(pid, 600, now_epoch=1000)
+    db.update_douyin_publication_state(pid, "UNDER_REVIEW")
+    assert db.reserve_douyin_reconciliation_slot(pid, 600, now_epoch=1000)
+    restarted = PipelineDB(path)
+    assert not restarted.reserve_douyin_reconciliation_slot(pid, 600, now_epoch=1599)
+    assert not restarted.reserve_douyin_reconciliation_slot(pid, 600, now_epoch=900)
+    assert restarted.reserve_douyin_reconciliation_slot(pid, 600, now_epoch=1600)
+    assert restarted.get_douyin_publication_by_id(pid)["state"] == "UNDER_REVIEW"
+    for state in ("UNCERTAIN", "PUBLISHED", "CANCELED"):
+        db.update_douyin_publication_state(pid, state)
+        assert not db.reserve_douyin_reconciliation_slot(pid, 600, now_epoch=3000)
 
 
 @pytest.mark.parametrize(

@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.59.8 | 2026-09-05 | Codex | 持久化单作品只读回查预约，跨进程原子冷却且不改变投稿状态。 |
 | 3.59.7 | 2026-09-05 | Codex | 暴露不含凭据秘密的当前投稿启动审计，区分未启动领取与启动后未知状态。 |
 | 3.59.6 | 2026-09-05 | Codex | 英语世界抖音调度同时发现未建账和已排队任务，保持已提交/失败状态不可重领。 |
 | 3.59.5  | 2026-09-04 | Codex                               | 仅为五次均可证明未提交且有双封面原创预检摘要的记录签发一次最终受控恢复。          |
@@ -1639,6 +1640,12 @@ class PipelineDB:
                     last_action_at_epoch REAL NOT NULL,
                     last_reason TEXT NOT NULL DEFAULT '',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS douyin_reconciliation_slots (
+                    publication_id INTEGER PRIMARY KEY REFERENCES douyin_publications(id) ON DELETE CASCADE,
+                    last_attempt_at_epoch REAL NOT NULL
                 )
             ''')
             # UI 漂移必须跨巡航累计；同阶段连续失败达到阈值后，不再反复打开平台后台。
@@ -8796,6 +8803,32 @@ class PipelineDB:
             )
             conn.commit()
             return {**row_data, **ticket}
+
+    def reserve_douyin_reconciliation_slot(
+        self, publication_id: int, minimum_interval_seconds: int, *,
+        now_epoch: Optional[float] = None,
+    ) -> bool:
+        """只为审核中作品预约只读回查；重启/多进程不能绕过同作品冷却。"""
+        interval = max(60, int(minimum_interval_seconds))
+        current = float(time.time() if now_epoch is None else now_epoch)
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT state FROM douyin_publications WHERE id = ?", (int(publication_id),),
+            ).fetchone()
+            if not row or row["state"] != "UNDER_REVIEW":
+                conn.rollback()
+                return False
+            cursor = conn.execute(
+                """INSERT INTO douyin_reconciliation_slots(publication_id, last_attempt_at_epoch)
+                   VALUES (?, ?) ON CONFLICT(publication_id) DO UPDATE SET
+                   last_attempt_at_epoch = excluded.last_attempt_at_epoch
+                   WHERE douyin_reconciliation_slots.last_attempt_at_epoch <= ?""",
+                (int(publication_id), current, current - interval),
+            )
+            reserved = cursor.rowcount == 1
+            conn.commit()
+            return reserved
 
     def reserve_douyin_browser_action_slot(
         self,

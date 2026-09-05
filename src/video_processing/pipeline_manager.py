@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.48.46 | 2026-09-05 | Codex | 回查按单作品持久冷却和实际访问预算执行，每次独立证据目录，冷却项不占预算。 |
 | 3.48.45 | 2026-09-05 | Codex | 从哈希绑定底图重排 4:3 横封面；自动管理页回查固定后台运行，避免反复抢占桌面。 |
 | 3.48.44 | 2026-09-05 | Codex | 投稿熔断绑定本次尝试的独立页面证据，避免误引用旧校准快照。 |
 | 3.48.43 | 2026-09-03 | Codex                               | 字幕进度区分阶段起点与存活心跳；按阶段和失联边界终止卡住的子进程。 |
@@ -2421,7 +2422,20 @@ class PipelineManager:
         vertical, copy_file = self._douyin_asset_paths(yid, slice_index)
         title_file = self._douyin_title_path(yid, slice_index)
         cover_file = self._resolve_cover_file(yid, slice_index)
-        horizontal_cover_file = self._resolve_douyin_horizontal_cover_file(yid, slice_index)
+        try:
+            horizontal_cover_file = self._resolve_douyin_horizontal_cover_file(yid, slice_index)
+        except Exception as exc:
+            reason = f"横封面准备异常，本轮未调用上传器：{type(exc).__name__}；需检查素材与磁盘。"
+            canceled = self._cancel_douyin_prelaunch_failure(
+                publication_id, str(publication.get("_douyin_launch_ticket_id") or ""), reason,
+            )
+            state = "CANCELED" if canceled else "UNCERTAIN"
+            if not canceled:
+                self.db.update_douyin_publication_state(
+                    publication_id, state, error_message=f"{reason} 启动凭据未能核实，禁止自动重传。",
+                )
+            self._halt_douyin_platform(yid, reason, publication=publication, state=state)
+            return False
         if not vertical.is_file() or not copy_file.is_file() or not title_file.is_file() or not cover_file:
             reason = (
                 f"抖音投递产物缺失：video={vertical.is_file()} "
@@ -2759,15 +2773,25 @@ class PipelineManager:
         reviewed = 0
         publications = self.db.get_douyin_publications_by_states(["UNDER_REVIEW"])
         reviewable_publications = publications
-        max_per_run = max(0, int(settings.douyin_review_max_per_run or 0))
+        max_per_run = int(settings.douyin_review_max_per_run or 2)
+        if max_per_run < 1:
+            max_per_run = 2
         if max_per_run and len(reviewable_publications) > max_per_run:
             logger.warning(
                 "抖音 UNDER_REVIEW 待回查 %s 条，本轮仅检查前 %s 条，避免连续访问创作者中心。",
                 len(reviewable_publications),
                 max_per_run,
             )
-        for publication in reviewable_publications[:max_per_run or len(reviewable_publications)]:
+        attempted = 0
+        for publication in reviewable_publications:
+            if attempted >= max_per_run:
+                break
             publication_id = publication["id"]
+            if not self.db.reserve_douyin_reconciliation_slot(
+                publication_id, max(60, int(settings.douyin_review_interval_seconds or 600)),
+            ):
+                continue
+            attempted += 1
             yid = publication["youtube_id"]
             slice_index = publication.get("slice_index", 0)
             _, copy_file = self._douyin_asset_paths(yid, slice_index)
@@ -2776,6 +2800,7 @@ class PipelineManager:
                 logger.error("[%s] %s", yid, reason)
                 self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
                 break
+            evidence_dir = self._OUT_DIR / "douyin_reconciliation" / str(publication_id) / str(time.time_ns())
             verify_cmd = [
                 self._VENV_PYTHON,
                 str(self._PRJ_ROOT / "scripts" / "douyin_uploader.py"),
@@ -2784,6 +2809,7 @@ class PipelineManager:
                 "--state", str(self._OUT_DIR / "douyin_state.json"),
                 "--fail-fast-login",
                 "--verify-only",
+                "--evidence-dir", str(evidence_dir),
             ]
             # 自动只读回查始终后台运行；投稿页可视化配置不应反复抢占用户桌面。
             try:
@@ -2820,6 +2846,7 @@ class PipelineManager:
                     reason = self._record_douyin_ui_failure(
                         _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
                         reason,
+                        evidence_dir=evidence_dir,
                     )
                     self.db.update_douyin_publication_state(
                         publication_id,
@@ -2842,6 +2869,7 @@ class PipelineManager:
                     reason = self._record_douyin_ui_failure(
                         _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
                         reason,
+                        evidence_dir=evidence_dir,
                     )
                     self.db.update_douyin_publication_state(
                         publication_id,

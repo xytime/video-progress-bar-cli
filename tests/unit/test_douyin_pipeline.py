@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.14 | 2026-09-05 | Codex | 回查冷却项不消耗批次预算，零值安全回退，每次证据按作品隔离。 |
 | 2.0.13 | 2026-09-05 | Codex | 本次投稿失败不得引用旧校准目录证据。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音发布器 fail-closed、审核回查和每日入口衔接 |
 | 1.1.0 | 2026-07-23 | Codex | 每日入口在新片重试正常后继续处理抖音补录队列 |
@@ -781,6 +782,44 @@ def test_douyin_review_reconciliation_only_checks_management(tmp_path: Path, mon
     assert "--publish" not in command
     assert "--video" not in command
     manager.db.update_douyin_publication_state.assert_called_once_with(19, "PUBLISHED")
+
+
+def test_review_skips_cooldown_without_starving_later_items(tmp_path, monkeypatch):
+    manager = _manager_with_assets(tmp_path)
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    monkeypatch.setattr(settings, "douyin_review_max_per_run", 0)
+    manager.db.get_douyin_publications_by_states.return_value = [
+        {"id": pid, "youtube_id": "video-id", "slice_index": 0} for pid in (19, 20, 21, 22)
+    ]
+    manager.db.reserve_douyin_reconciliation_slot.side_effect = [False, True, True]
+    manager._run_tracked = MagicMock(return_value=subprocess.CompletedProcess([], 0, stdout="", stderr=""))
+    assert manager.reconcile_douyin_under_review() == 2
+    assert manager._run_tracked.call_count == 2
+    assert manager.db.reserve_douyin_reconciliation_slot.call_count == 3
+    for call, pid in zip(manager._run_tracked.call_args_list, (20, 21)):
+        command = call.args[0]
+        evidence = Path(command[command.index("--evidence-dir") + 1])
+        assert evidence.parent == tmp_path / "douyin_reconciliation" / str(pid)
+        assert "--no-headless" not in command
+        assert "--publish" not in command
+
+
+@pytest.mark.parametrize("unstarted", [True, False])
+def test_horizontal_prepare_error_never_launches_or_blindly_requeues(tmp_path, unstarted):
+    manager = _manager_with_assets(tmp_path)
+    manager._resolve_douyin_horizontal_cover_file = MagicMock(side_effect=OSError("disk revoked"))
+    manager.db.cancel_douyin_publication_pre_launch_failure.return_value = unstarted
+    manager._run_tracked = MagicMock()
+    assert not manager._publish_claimed_douyin_publication({
+        "id": 19, "youtube_id": "video-id", "source_kind": "NEW",
+        "_douyin_launch_ticket_id": "ticket-19",
+    })
+    manager._run_tracked.assert_not_called()
+    manager.db.cancel_douyin_publication_pre_launch_failure.assert_called_once()
+    if unstarted:
+        manager.db.update_douyin_publication_state.assert_not_called()
+    else:
+        assert manager.db.update_douyin_publication_state.call_args.args == (19, "UNCERTAIN")
 
 
 def test_douyin_review_reconciliation_marks_uncertain_when_not_calibrated(tmp_path: Path):
