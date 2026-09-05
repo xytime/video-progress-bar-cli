@@ -12,7 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
-| 1.7.0 | 2026-09-05 | Codex | 双封面保存后等待检测刷新；旧缺失提示仅触发一次重新检测，超时仍阻断。 |
+| 1.7.0 | 2026-09-05 | Codex | 双封面保存后等待检测刷新；旧缺失提示仅触发一次重新检测；管理页等待搜索框加载后再检索。 |
 | 1.0.0 | 2026-07-23 | Codex | 新增抖音创作者中心登录、校准快照与未校准发布保护骨架 |
 | 1.1.0 | 2026-07-23 | Codex | 基于已登录发布页校准唯一视频输入控件，新增仅上传采集表单模式 |
 | 1.1.1 | 2026-07-23 | Codex | 上传校准期间页面关闭时返回未确认，避免堆栈冒泡误导调度器 |
@@ -523,6 +523,7 @@ def _search_management_title(page, title_text: str) -> bool:
         return False
     try:
         fields = page.locator('input[placeholder="搜索作品"]')
+        fields.first.wait_for(state="visible", timeout=15_000)
         for index in range(fields.count()):
             search = fields.nth(index)
             if search.is_visible(timeout=1_000) is not True:

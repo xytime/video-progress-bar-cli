@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.59.6 | 2026-09-05 | Codex | 英语世界抖音调度同时发现未建账和已排队任务，保持已提交/失败状态不可重领。 |
 | 3.59.5  | 2026-09-04 | Codex                               | 仅为五次均可证明未提交且有双封面原创预检摘要的记录签发一次最终受控恢复。          |
 | 3.59.4  | 2026-09-04 | Codex                               | 兼容双封面闸门的新旧等价错误文本，避免受控第五次恢复被文案升级错误拦截。           |
 | 3.59.3  | 2026-09-04 | Codex                               | 对四次均被发布前双封面闸门停止、从未提交的英语世界项开放一次保存落库修复验证。   |
@@ -6310,16 +6311,19 @@ class PipelineDB:
             return [dict(row) for row in rows]
 
     def get_next_english_world_douyin_sync_candidate(self) -> Optional[Dict[str, Any]]:
-        """读取视频号已受理且抖音建账遗漏的英语世界审核项。"""
+        """读取视频号已受理、抖音尚未建账或已排队的审核项。"""
         with self.get_connection() as conn:
             row = conn.execute(
                 """SELECT review.* FROM english_world_review_items review
                    WHERE review.state = 'UNDER_REVIEW'
                      AND review.platform_post_id IS NOT NULL AND review.platform_post_id != ''
-                     AND NOT EXISTS (
+                     AND (NOT EXISTS (
                          SELECT 1 FROM english_world_douyin_publications publication
                          WHERE publication.review_id = review.id
-                     )
+                     ) OR EXISTS (
+                         SELECT 1 FROM english_world_douyin_publications publication
+                         WHERE publication.review_id = review.id AND publication.state = 'QUEUED'
+                     ))
                    ORDER BY review.submission_finished_at ASC, review.id ASC LIMIT 1"""
             ).fetchone()
             return dict(row) if row else None

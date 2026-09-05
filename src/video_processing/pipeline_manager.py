@@ -1313,7 +1313,7 @@ class PipelineManager:
     def _latest_douyin_ui_evidence(self, stage: str, evidence_dir: Optional[Path] = None) -> Optional[str]:
         """返回与失败阶段匹配的最近控件快照；没有证据时不伪造路径。"""
         calibration_dir = evidence_dir or self._OUT_DIR / "douyin_calibration"
-        candidates = [path for path in calibration_dir.glob("*.json") if path.is_file()]
+        candidates = [path for path in calibration_dir.glob("douyin_*.json") if path.is_file()]
         if stage == _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY:
             candidates = [path for path in candidates if path.name.startswith("douyin_management_")]
         else:

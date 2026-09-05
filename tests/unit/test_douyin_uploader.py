@@ -435,6 +435,7 @@ def test_management_title_search_is_exact_and_read_only():
     page.locator.return_value = search
 
     assert _search_management_title(page, "北极运动：一场跨越世代的平衡挑战")
+    search.first.wait_for.assert_called_once_with(state="visible", timeout=15_000)
     search.fill.assert_called_once_with("北极运动：一场跨越世代的平衡挑战", timeout=3_000)
     search.press.assert_called_once_with("Enter", timeout=3_000)
     page.wait_for_timeout.assert_called_once_with(1_000)

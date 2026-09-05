@@ -765,6 +765,7 @@ def test_english_world_douyin_sync_is_isolated_single_attempt_and_shares_new_lim
 
     candidate = db.get_next_english_world_douyin_sync_candidate()
     publication = db.ensure_english_world_douyin_publication(item["id"])
+    assert db.get_next_english_world_douyin_sync_candidate()["id"] == item["id"]
     claimed = db.claim_english_world_douyin_publication(
         item["id"], daily_limit=None, evidence_dir="/douyin/attempt-1",
     )
@@ -776,6 +777,7 @@ def test_english_world_douyin_sync_is_isolated_single_attempt_and_shares_new_lim
     assert candidate and candidate["id"] == item["id"]
     assert publication["state"] == "QUEUED"
     assert completed["state"] == "UNDER_REVIEW"
+    assert db.get_next_english_world_douyin_sync_candidate() is None
     assert db.claim_english_world_douyin_publication(
         item["id"], daily_limit=2, evidence_dir="/douyin/attempt-2",
     ) is None

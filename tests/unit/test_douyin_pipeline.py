@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.13 | 2026-09-05 | Codex | 本次投稿失败不得引用旧校准目录证据。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音发布器 fail-closed、审核回查和每日入口衔接 |
 | 1.1.0 | 2026-07-23 | Codex | 每日入口在新片重试正常后继续处理抖音补录队列 |
 | 1.2.0 | 2026-07-23 | Codex | 覆盖抖音历史补录每日自动领取仅限补录规则候选 |
@@ -48,6 +49,21 @@ import pytest
 from config.settings import settings
 from video_processing.core.cover_policy import compliant_cover_layout_policy
 from video_processing.pipeline_manager import PipelineManager
+
+
+def test_ui_failure_evidence_stays_with_current_attempt(tmp_path):
+    manager = PipelineManager.__new__(PipelineManager)
+    manager._OUT_DIR = tmp_path
+    old = tmp_path / "douyin_calibration"
+    old.mkdir()
+    (old / "douyin_ready_to_submit_controls.json").write_text("{}")
+    attempt = tmp_path / "attempt"
+    attempt.mkdir()
+    evidence = attempt / "douyin_cover_validation_blocked.json"
+    evidence.write_text("{}")
+    assert manager._latest_douyin_ui_evidence("publish_pre_submit", attempt) == str(evidence)
+    evidence.unlink()
+    assert manager._latest_douyin_ui_evidence("publish_pre_submit", attempt) is None
 
 
 def _manager_with_assets(tmp_path: Path) -> PipelineManager:
