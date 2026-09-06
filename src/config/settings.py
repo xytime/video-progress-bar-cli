@@ -77,6 +77,7 @@
 | 3.15.9 | 2026-08-03 | Codex                              | 新增人工普通话译制的火山语音凭据与频道音色档案路径；专属档案未命中时保持默认 TTS |
 | 3.16.0 | 2026-08-24 | Codex | 新增英语世界 Gemini agy 首选封面开关；仅用于 Telegram 审核包，不改变投稿人审门禁。 |
 | 3.16.1 | 2026-08-24 | Codex | agy 作为字幕与普通话精修首选，DeepSeek 保留为次选，并固定 CLI 模型/超时配置 |
+| 3.61.8 | 2026-09-06 | Codex | 增加安装器与监控共用的英语世界生产时刻配置。 |
 """
 import json
 import socket
@@ -427,6 +428,7 @@ class Settings(BaseSettings):
     # 开启也不会触碰既有待审核/未确认项，更不会为任何终态自动重传。
     enable_english_world_auto_publish: bool = False
     # 已受理英语世界作品仅按同次提交绑定的原生 ID 回查；节流避免每分钟打开后台。
+    english_world_daily_slots: str = "05:30,16:30"
     english_world_reconcile_interval_minutes: int = 30
     english_world_reconcile_max_age_hours: int = 72
     english_world_reconcile_failure_limit: int = 2

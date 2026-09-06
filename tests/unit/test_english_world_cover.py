@@ -6,6 +6,7 @@
 | 1.0.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 初始创建：覆盖 ENGLISH_WORLD_SHORT 内容路由、教学字段装配、合规策略与全流程渲染 |
 | 1.1.0 | 2026-08-24 | Codex | 覆盖 agy OCR 人审待决门禁与首选封面审核包集成。 |
 | 1.2.0 | 2026-08-28 | Codex | 覆盖 Chromium 不可用时的 Pillow 英语封面回退。 |
+| 1.2.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
 """
 
 import json
@@ -246,12 +247,22 @@ def test_review_package_prefers_agy_and_keeps_human_gate(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0, stdout='{"status":"accepted"}', stderr="")
 
     class FakeDB:
+        def get_english_world_review_by_artifact(self, _digest):
+            return None
+
         def create_english_world_review_item(self, **kwargs):
             return {"id": "review-id", "state": "READY_FOR_REVIEW", **kwargs}
 
     monkeypatch.setattr(notifier.subprocess, "run", fake_run)
     monkeypatch.setattr(notifier, "get_video_duration_ffprobe", lambda _path: 42.0)
     monkeypatch.setattr(notifier, "PipelineDB", FakeDB)
+    from video_processing.study_cards.qa_integrity import artifact_fingerprints
+    qa = tmp_path / "qa/final_audio_qa.json"
+    qa.parent.mkdir()
+    timeline_path = tmp_path / "timeline_final_enriched.json"
+    qa.write_text(json.dumps({"state": "PASS", "passed": True,
+        "mp4": str(mp4), "manifest": str(manifest), "timeline": str(timeline_path),
+        **artifact_fingerprints(mp4=mp4, manifest=manifest, timeline=timeline_path)}))
     review = notifier._prepare_publish_package(display_title="备用标题", mp4=mp4, manifest=manifest)
     assert validate_dedicated_cover_file(Path(review["cover_path"]), Path(review["cover_provenance_path"]))
     assert json.loads((tmp_path / "wechat_submission" / "agy_cover_attempt.json").read_text(encoding="utf-8"))["returncode"] == 0

@@ -26,6 +26,7 @@
 | 1.14.0 | 2026-08-05 | Codex | 微笔记按同一英文行分层避让；右栏按每个阅读屏的左侧候选稳定填充五张词卡。 |
 | 1.15.0 | 2026-08-24 | Codex | 末屏仅剩不超过 12 个可见英文词时，允许低于八条微笔记；普通阅读屏继续严格门禁。 |
 | 1.16.0 | 2026-08-24 | Codex | 末屏微笔记改为按可见英文词数分档，避免 13 词等边界内容被八条硬门槛误拦。 |
+| 1.16.1 | 2026-09-06 | Codex | 与输入契约复用 Unicode 撇号归一化，保留真实缺词拒绝。 |
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from typing import Iterable
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from .models import StudyCardContent, StudyWord, VocabularyItem
+from .text_normalization import normalise_word
 from .vocabulary import difficulty_level
 
 CANVAS_WIDTH = 1080
@@ -644,7 +646,7 @@ def _vocabulary_occurrence_y_positions(item: VocabularyItem, boxes: tuple[WordBo
 
 
 def _normalise_word(value: str) -> str:
-    return re.sub(r"[^a-z0-9']+", "", value.lower())
+    return normalise_word(value)
 
 
 def _highlighted_token_indices(

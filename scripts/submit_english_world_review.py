@@ -19,6 +19,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 | 1.9.0 | 2026-08-31 | Codex | 投稿前先非阻塞取得全局微信锁；锁忙时保持批准态延后，避免领取后被父进程超时中断。 |
 | 1.10.0 | 2026-09-03 | Codex | 英语世界投稿强制申请原创；界面未确认声明时禁止进入发表。 |
 | 1.11.0 | 2026-09-03 | Codex | 仅在原创声明回执完整确认后记录视频号受理，缺失证据安全失败。 |
+| 1.11.1 | 2026-09-06 | Codex | 领取前复核最终音频 QA 的内容指纹，防止旧 PASS 掩盖文件覆盖。 |
 """
 
 from __future__ import annotations
@@ -115,6 +116,9 @@ def _require_publish_package(item: dict) -> None:
     ):
         raise ValueError("English World publish cover is not a verified dedicated cover")
     verify_package_hashes(item)
+    from video_processing.study_cards.qa_integrity import validate_audio_qa
+    report = Path(str(item.get("audio_qa_report_path") or Path(item["mp4_path"]).parent / "qa" / "final_audio_qa.json"))
+    validate_audio_qa(report, mp4=Path(item["mp4_path"]), manifest=Path(item["manifest_path"]))
 
 
 def _completion_for_exit_code(code: int) -> tuple[str, str]:
@@ -192,6 +196,9 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             logger.info("English World submission deferred because pipeline.lock is busy: %s", review_id)
             return EXIT_DEFERRED
 
+        if pending["state"] != "SUBMISSION_APPROVED":
+            return 0
+        _require_publish_package(pending)
         evidence_dir = Path(str(pending["mp4_path"])).parent / "wechat_evidence" / str(time.time_ns())
         item = db.claim_english_world_submission(review_id, evidence_dir=str(evidence_dir))
         if item is None:

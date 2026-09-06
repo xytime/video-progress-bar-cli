@@ -15,6 +15,7 @@
 | 1.7.0 | 2026-08-24 | Codex | 覆盖段后完整中文译文也会驱动滚动，避免片尾中文被阅读窗裁切。 |
 | 1.8.0 | 2026-09-03 | Codex | 覆盖可靠 KET 词汇保留给真实阅读屏的密度选择。 |
 | 1.9.0 | 2026-09-03 | Codex | 覆盖未完成 MP4 容器不能覆盖已可用成片的原子交付边界。 |
+| 1.9.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
 """
 
 from pathlib import Path
@@ -106,12 +107,8 @@ def test_template_maps_each_timeline_word_to_a_page_coordinate(tmp_path: Path):
 def test_rejects_time_axis_that_does_not_match_page_text(tmp_path: Path):
     payload = _payload()
     payload["words"][2]["text"] = "dolphin"
-    content = StudyCardContent.from_mapping(payload)
-    template = RecordUnderlineTemplate()
-    assets = template.render_static(content, tmp_path)
-
     with pytest.raises(ValueError, match="不一致"):
-        template.map_word_boxes(content.words, assets.word_boxes)
+        StudyCardContent.from_mapping(payload)
 
 
 def test_rejects_paragraphs_that_rewrite_the_spoken_english():

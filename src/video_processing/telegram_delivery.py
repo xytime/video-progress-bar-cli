@@ -8,12 +8,14 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增自动通知回执、去重与秘密安全的错误分类。 |
 | 1.1.0 | 2026-08-24 | Codex | UNKNOWN 不再被视为已送达；仅有 message_id 的 Bot API 响应可记为 ACCEPTED。 |
+| 1.1.1 | 2026-09-06 | Codex | 仅对建连超时有界重试并回卷附件；保留秘密安全的 SSL 异常链类别。 |
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -55,7 +57,7 @@ def _record(
     try:
         (db or PipelineDB()).record_telegram_notification_receipt(
             event_type=event_type, priority=priority, content_sha256=fingerprint,
-            delivery_state=state, telegram_message_id=message_id, error_kind=error_kind,
+            delivery_state="FAILED" if state == "NOT_SENT" else state, telegram_message_id=message_id, error_kind=error_kind,
         )
     except Exception as exc:  # 回执故障不能影响主业务，但不得记录可能含 URL 的异常文本。
         logger.error("Telegram receipt recording failed: %s", type(exc).__name__)
@@ -96,6 +98,43 @@ def _result_from_response(response: requests.Response) -> tuple[str, str | None,
     return "FAILED", None, f"HTTP_{response.status_code}"
 
 
+def _post_with_connect_retry(url: str, **kwargs):
+    """仅重试 requests 明确保证尚未发送的建连超时；读超时/SSL 不盲重发。"""
+    files = kwargs.get("files", {})
+    positions = [(value[1], value[1].tell()) for value in files.values()]
+    for attempt in range(3):
+        for stream, position in positions:
+            stream.seek(position)
+        try:
+            return requests.post(url, **kwargs)
+        except requests.ConnectTimeout:
+            if attempt == 2:
+                raise
+            time.sleep(attempt + 1)
+
+
+def _transport_error(exc: Exception) -> tuple[str, str]:
+    # ConnectTimeout 明确未发出；其他传输异常可能发生在服务器接受之后。
+    state = "NOT_SENT" if isinstance(exc, requests.ConnectTimeout) else "UNKNOWN"
+    # 不输出带 bot token 的 URL；记录 SSL 底层类别便于下次区分证书和 EOF。
+    kinds = [type(exc).__name__]
+    pending = [exc]
+    seen = set()
+    while pending and len(seen) < 12:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        for child in (getattr(current, "reason", None), getattr(current, "__cause__", None),
+                      getattr(current, "__context__", None), *getattr(current, "args", ())):
+            if isinstance(child, BaseException):
+                kind = type(child).__name__
+                if kind not in kinds:
+                    kinds.append(kind)
+                pending.append(child)
+    return state, ":".join(kinds)
+
+
 def send_text(
     *, event_type: str, priority: str, text: str, cooldown_seconds: int = 0,
     reply_markup: dict[str, Any] | None = None, timeout_seconds: int = 20,
@@ -118,10 +157,11 @@ def send_text(
     if reply_markup:
         payload["reply_markup"] = reply_markup
     try:
-        response = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=timeout_seconds)
+        response = _post_with_connect_retry(f"https://api.telegram.org/bot{token}/sendMessage", json=payload, timeout=timeout_seconds)
         state, message_id, error_kind = _result_from_response(response)
     except requests.RequestException as exc:
-        state, message_id, error_kind = "UNKNOWN", None, type(exc).__name__
+        state, error_kind = _transport_error(exc)
+        message_id = None
     _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state=state, message_id=message_id, error_kind=error_kind, db=db)
     return TelegramDeliveryResult(state=state, message_id=message_id, error_kind=error_kind)
 
@@ -140,14 +180,15 @@ def send_document(
         return TelegramDeliveryResult(state="FAILED", error_kind="CONFIG_MISSING")
     try:
         with path.open("rb") as source:
-            response = requests.post(
+            response = _post_with_connect_retry(
                 f"https://api.telegram.org/bot{token}/sendDocument",
                 data={"chat_id": chat_id, "caption": caption},
                 files={"document": (path.name, source)}, timeout=timeout_seconds,
             )
         state, message_id, error_kind = _result_from_response(response)
     except (OSError, requests.RequestException) as exc:
-        state, message_id, error_kind = "UNKNOWN", None, type(exc).__name__
+        state, error_kind = _transport_error(exc)
+        message_id = None
     _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state=state, message_id=message_id, error_kind=error_kind, db=db)
     return TelegramDeliveryResult(state=state, message_id=message_id, error_kind=error_kind)
 
@@ -166,13 +207,14 @@ def send_video(
         return TelegramDeliveryResult(state="FAILED", error_kind="CONFIG_MISSING")
     try:
         with path.open("rb") as source:
-            response = requests.post(
+            response = _post_with_connect_retry(
                 f"https://api.telegram.org/bot{token}/sendVideo",
                 data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML", "supports_streaming": "true"},
                 files={"video": (path.name, source, "video/mp4")}, timeout=timeout_seconds,
             )
         state, message_id, error_kind = _result_from_response(response)
     except (OSError, requests.RequestException) as exc:
-        state, message_id, error_kind = "UNKNOWN", None, type(exc).__name__
+        state, error_kind = _transport_error(exc)
+        message_id = None
     _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state=state, message_id=message_id, error_kind=error_kind, db=db)
     return TelegramDeliveryResult(state=state, message_id=message_id, error_kind=error_kind)

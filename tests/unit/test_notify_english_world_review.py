@@ -14,6 +14,7 @@
 | 1.6.0 | 2026-09-01 | Codex | 覆盖时间线末词越过源字幕下一句时必须在交付前拒绝。 |
 | 1.7.0 | 2026-09-02 | Codex | 覆盖连字符 enriched 时间线命名，防止本地质检通过后交付入口误拒绝。 |
 | 1.8.0 | 2026-09-02 | Codex | 覆盖同目录多份时间线时必须按 manifest 来源起点绑定，拒绝错配补录。 |
+| 1.8.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
 """
 
 from __future__ import annotations
@@ -209,7 +210,7 @@ def test_auto_publish_submits_only_a_new_review_item(monkeypatch):
         notifier.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 0})(),
     )
 
-    result = notifier._auto_submit_new_review_item({"id": "new-review", "_created_now": True})
+    result = notifier._auto_submit_new_review_item({"id": "new-review", "_created_now": True, "delivery_policy": "AUTO_POLICY"})
 
     assert result == "submission_worker_exit=0; state=UNDER_REVIEW"
     assert not notifier._auto_submission_is_deferred(result)

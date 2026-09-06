@@ -12,6 +12,7 @@
 # | 1.1.0 | 2026-08-29 | Codex | 监控器按 09:15/19:00 实际触发时刻分别映射 07:00/16:30，修复晚间仍检查早班。 |
 # | 1.2.0 | 2026-08-30 | Codex | 单独识别已获 Telegram 接受的生产失败回执，避免误报成未交付。 |
 # | 1.3.0 | 2026-08-30 | Codex | 健康账本固定输出调度、产物、Telegram、平台提交、公开可见五层证据，禁止将已受理写成已公开。 |
+# | 1.3.1 | 2026-09-06 | Codex | 读取共享生产时刻、拒绝调度漂移，并独立报告成片就绪后的交付中断。 |
 """
 
 from __future__ import annotations
@@ -53,7 +54,9 @@ def _parse_slot(value: str) -> time:
 
 def _slot_for_observation(observed_at: datetime) -> time:
     """将两个固定监控触发时刻映射到各自最近的生产窗口。"""
-    return time(7, 0) if observed_at.time() < time(13, 0) else time(16, 30)
+    from video_processing.english_world.daily_schedule import production_slots
+    slots = production_slots()
+    return max((slot for slot in slots if slot <= observed_at.time().replace(tzinfo=None)), default=slots[0])
 
 
 def _pid_is_running(pid: int) -> bool:
@@ -127,6 +130,18 @@ def _scheduled_run_logs(log_dir: Path, day: datetime, slot: time) -> list[Path]:
     return sorted(matches)
 
 
+def _incomplete_delivery_receipt(log_dir: Path, day: datetime, slot: time) -> Path | None:
+    slot_start = datetime.combine(day.date(), slot, tzinfo=day.tzinfo).timestamp()
+    for path in sorted(log_dir.glob("*.delivery.json"), reverse=True):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if path.stat().st_mtime >= slot_start and payload.get("status") == "INCOMPLETE":
+                return path
+        except (OSError, ValueError, AttributeError):
+            continue
+    return None
+
+
 def _receipt_payload(receipt_path: Path | None) -> dict[str, Any]:
     """读取已被筛选过的回执摘要；读不到时保持未知而非补造成功。"""
     if receipt_path is None:
@@ -167,6 +182,9 @@ def _five_layer_evidence(payload: dict[str, Any]) -> dict[str, dict[str, str]]:
         artifact = "UNKNOWN"
         telegram = "NOT_ACCEPTED"
 
+    if receipt.get("artifact_state") == "QA_PASSED":
+        artifact = "READY"
+        telegram = "PARTIAL_OR_UNKNOWN" if receipt.get("status") != "ACCEPTED" else "API_ACCEPTED"
     submission_result = str(receipt.get("submission_result") or "").strip()
     if submission_result:
         submission = "LOCAL_WORKER_REPORTED"
@@ -234,6 +252,12 @@ def monitor_slot(
         payload.update({"state": "DELIVERED", "delivery_receipt": str(delivery_receipt)})
         _write_health(paths.log_dir, observed_at, slot, payload)
         return 0, payload
+
+    incomplete = _incomplete_delivery_receipt(paths.log_dir, observed_at, slot)
+    if incomplete:
+        payload.update(state="HOST_DELIVERY_INCOMPLETE", delivery_receipt=str(incomplete))
+        _write_health(paths.log_dir, observed_at, slot, payload)
+        return 1, payload
 
     failure_receipt = _accepted_delivery_receipt(
         paths.log_dir, observed_at, slot, kinds=ACCEPTED_FAILURE_KINDS,
@@ -307,6 +331,11 @@ def main(argv: list[str] | None = None) -> int:
         daily_runner=args.daily_runner or project_root / "scripts/run_english_world_daily.py",
     )
     observed_at = datetime.now().astimezone()
+    if not args.slot:
+        from video_processing.english_world.daily_schedule import validate_installed_schedule
+        installed = Path.home() / "Library/LaunchAgents/com.videopipeline.english-world-daily.plist"
+        if installed.is_file():
+            validate_installed_schedule(installed)
     slot = args.slot or _slot_for_observation(observed_at)
     exit_code, payload = monitor_slot(
         paths, slot=slot, now=observed_at, recover_missing=args.recover_missing,

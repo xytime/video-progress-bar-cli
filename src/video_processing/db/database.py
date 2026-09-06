@@ -137,6 +137,7 @@
 | 3.26.6  | 2026-08-14 | Codex                               | 仪表盘查询将 UNDER_REVIEW 独立归入待平台确认，不再混入实际加工队列 |
 | 3.26.7  | 2026-08-18 | Codex                               | get_connection 改为关闭连接的上下文管理器，修复仪表盘长期运行耗尽文件描述符 |
 | 3.26.8  | 2026-08-30 | Codex                               | 新增抖音上游门禁 shadow 快照，量化视频号未确认导致的候选饥饿而不创建发布任务 |
+| 3.59.9 | 2026-09-06 | Codex | 增加持久交付策略及通知步骤原子领取账本，恢复不扩权、不重传。 |
 """
 
 import sqlite3
@@ -1286,6 +1287,21 @@ class PipelineDB:
             )
             cursor.execute("PRAGMA table_info(english_world_review_items)")
             english_world_review_columns = {row[1] for row in cursor.fetchall()}
+            for column, definition in (
+                ("delivery_policy", "TEXT DEFAULT NULL"),
+                ("audio_qa_report_path", "TEXT DEFAULT NULL"),
+            ):
+                if column not in english_world_review_columns:
+                    cursor.execute(f"ALTER TABLE english_world_review_items ADD COLUMN {column} {definition}")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS english_world_delivery_stages (
+                review_id TEXT NOT NULL REFERENCES english_world_review_items(id),
+                stage TEXT NOT NULL,
+                state TEXT NOT NULL,
+                message_id TEXT,
+                error_kind TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (review_id, stage)
+            )""")
             if "approval_source" not in english_world_review_columns:
                 cursor.execute("ALTER TABLE english_world_review_items ADD COLUMN approval_source TEXT DEFAULT NULL")
             if "login_recovery_attempts" not in english_world_review_columns:
@@ -5637,10 +5653,14 @@ class PipelineDB:
         source_publisher: Optional[str] = None,
         source_youtube_id: Optional[str] = None,
         notification_target: Optional[str] = None,
+        delivery_policy: Optional[str] = None,
+        audio_qa_report_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """登记一条已完成学习卡的审核项；同一成片只保留一个不可混淆的审批身份。"""
         from uuid import uuid4
 
+        if delivery_policy not in {None, "MANUAL", "AUTO_POLICY"}:
+            raise ValueError("Invalid English World delivery policy")
         clean_hash = (artifact_sha256 or "").strip().lower()
         package_hashes = tuple(
             (value or "").strip().lower() for value in (
@@ -5685,8 +5705,8 @@ class PipelineDB:
                     cover_sha256, cover_provenance_sha256,
                     title, mp4_path, manifest_path, title_path, copy_path,
                     cover_path, cover_provenance_path, source_url, source_title, source_publisher,
-                    source_youtube_id, notification_target)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    source_youtube_id, notification_target, delivery_policy, audio_qa_report_path)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     review_id, clean_hash, *package_hashes,
                     clean_title, str(mp4_path), str(manifest_path), str(title_path),
@@ -5696,6 +5716,7 @@ class PipelineDB:
                     (source_publisher or "").strip()[:160] or None,
                     clean_source_youtube_id,
                     (notification_target or "").strip()[:120] or None,
+                    delivery_policy, audio_qa_report_path,
                 ),
             )
             conn.commit()
@@ -5705,6 +5726,44 @@ class PipelineDB:
             result = dict(row)
             result["_created_now"] = True
             return result
+
+    def get_english_world_review_by_artifact(self, artifact_sha256: str) -> Optional[Dict[str, Any]]:
+        """同一不可变成片续接，不能借 source ID 重建包或扩大历史授权。"""
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM english_world_review_items WHERE artifact_sha256 = ?",
+                               (artifact_sha256,)).fetchone()
+            return dict(row) if row else None
+
+    def get_english_world_delivery_stages(self, review_id: str) -> Dict[str, Any]:
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM english_world_delivery_stages WHERE review_id = ?",
+                                (review_id,)).fetchall()
+            return {row["stage"]: dict(row) for row in rows}
+
+    def claim_english_world_delivery_stage(self, review_id: str, stage: str) -> bool:
+        """发送前先持久化 IN_FLIGHT；崩溃或结果不明不能被后继进程重发。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute("""INSERT INTO english_world_delivery_stages (review_id, stage, state)
+                VALUES (?, ?, 'IN_FLIGHT') ON CONFLICT(review_id, stage) DO UPDATE
+                SET state = 'IN_FLIGHT', error_kind = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE english_world_delivery_stages.state = 'NOT_SENT'""", (review_id, stage))
+            return cursor.rowcount == 1
+
+    def finish_english_world_delivery_stage(
+        self, review_id: str, stage: str, *, state: str,
+        message_id: Optional[str] = None, error_kind: Optional[str] = None,
+    ) -> None:
+        if state not in {"ACCEPTED", "NOT_SENT", "UNKNOWN", "FAILED"}:
+            raise ValueError("Invalid English World delivery stage state")
+        if state == "ACCEPTED" and not message_id:
+            raise ValueError("Accepted delivery stage requires message_id")
+        with self.get_connection() as conn:
+            cursor = conn.execute("""UPDATE english_world_delivery_stages
+                SET state = ?, message_id = ?, error_kind = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE review_id = ? AND stage = ? AND state = 'IN_FLIGHT'""",
+                (state, message_id, error_kind, review_id, stage))
+            if cursor.rowcount != 1:
+                raise ValueError("English World delivery stage is not claimed")
 
     def get_english_world_review_item(self, review_id: str) -> Optional[Dict[str, Any]]:
         """读取英语世界审核项；只读，不触发投稿或重试。"""

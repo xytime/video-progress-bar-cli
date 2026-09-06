@@ -38,6 +38,7 @@
 # | 2.28.0 | 2026-09-03 | Codex | 旧式失败文本仅在明确质量门禁时淘汰来源，来源通路错误一律保留。 |
 # | 2.29.0 | 2026-09-03 | Codex | 收紧旧式质量模板，避免“渲染”等宽泛词触发误淘汰。 |
 # | 2.30.0 | 2026-09-03 | Codex | 旧式冲突文本优先识别来源通路错误，宁可保留也不误淘汰来源。 |
+# | 2.30.1 | 2026-09-06 | Codex | 正文序列化预检、分类淘汰、具名交付续接及宿主失败独立归因。 |
 """
 
 from __future__ import annotations
@@ -111,7 +112,9 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 
 HTTP 403 不是自动“换题”信号：先对同一候选仅重试一次，并且只在出现 YouTube 认证/风控征兆时执行一次 Cookie 刷新；若仍是 403，立即用另一个未使用候选做同样的轻量格式访问预检以做对照。两个独立候选都出现 403、DNS、TLS 或超时，属于来源通路降级而不是两个候选同时不合格：停止候选淘汰，写入“来源通路降级”的失败请求，**不要追加 `--rejected-youtube-id`**，也不要靠继续换题掩盖网络故障。只有对照候选可下载时，才将最初 403 归为单候选访问失败并排除它。
 
-只有完整来源预检已经覆盖“拟用片段的画面与自然语音”后，才锁定第一个合格 `youtube_id` 并进入制作；本次运行最终仍只允许制作一条成片。若尚未开始时间轴、翻译、词汇富化或正式渲染，却发现拟用片段含不适画面、语音不连续或不满足时长，说明来源预检出现假阳性：立即撤销该候选的暂定资格、记录 `youtube_id` 和原因，并继续预检剩余候选；这不属于换题重做。只有开始时间轴、翻译、词汇富化或正式渲染后，才构成不可切换的制作承诺。按 make-english-world-short 技能和 production-contract 完整制作：自然完整句收尾；逐词红线；普通阅读屏至少 8 个微笔记；最后一屏按可见英文词数采用现有梯度（不超过 12 词为 0 条、13–24 词为 3 条、25–40 词为 5 条、41 词以上为 8 条）；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。由 YouTube json3 等密集自动字幕生成逐词时间轴时，必须先按绝对起点排序并保证每个 `word.end <= next_word.start`；不得用固定最短词长覆盖下一词起点，词汇富化前必须先通过 `StudyCardContent.from_mapping` 的单调时间轴校验。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。除下述唯一末词锚点恢复外，制作承诺后的时间轴、渲染或成片质检失败必须写入准确失败请求并立即结束；不得为了补词卡或优化文案而换题。
+只有完整来源预检已经覆盖“拟用片段的画面与自然语音”后，才锁定第一个合格 `youtube_id` 并进入制作；本次运行最终仍只允许制作一条成片。若尚未开始时间轴、翻译、词汇富化或正式渲染，却发现拟用片段含不适画面、语音不连续或不满足时长，说明来源预检出现假阳性：立即撤销该候选的暂定资格、记录 `youtube_id` 和原因，并继续预检剩余候选；这不属于换题重做。只有开始时间轴、翻译、词汇富化或正式渲染后，才构成不可切换的制作承诺。按 make-english-world-short 技能和 production-contract 完整制作：自然完整句收尾；逐词红线；普通阅读屏至少 8 个微笔记；最后一屏按可见英文词数采用现有梯度（不超过 12 词为 0 条、13–24 词为 3 条、25–40 词为 5 条、41 词以上为 8 条）；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。由 YouTube json3 等密集自动字幕生成逐词时间轴时，必须先按绝对起点排序并保证每个 `word.end <= next_word.start`；不得用固定最短词长覆盖下一词起点，词汇富化前必须先通过 `StudyCardContent.from_mapping` 的单调时间轴校验。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。除下述正文序列化修复与末词锚点恢复外，制作承诺后的时间轴、渲染或成片质检失败必须写入准确失败请求并立即结束；不得为了补词卡或优化文案而换题。
+
+写入包含美元、反引号、撇号的正文时，必须使用单引号 heredoc（如 <<'PY'）或 JSON 文件；禁止把正文插入 shell 双引号的 python -c 命令。正式渲染前必须通过 StudyCardContent.from_mapping 的正文与 words 一致性检查。若失败原因是序列化损坏或排印撇号差异，允许从同一来源字幕修复一次并重新运行全部门禁；不得修改或忽略真实词差异，不得换题。
 
 时间轴完成后，必须明确把 json3 的绝对 `tStartMs` 转成 `absolute_time - source_start` 的相对 `words.start/end`，不得把绝对 `spoken_end` 直接写入相对时间轴；`scripts/render_study_card.py` 的渲染入口会校验 `caption_artifact` 的下一字幕边界。渲染后必须使用项目 venv 执行 `scripts/validate_study_card_audio.py --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`，该命令会提取 16kHz 单声道音频并用本地 Whisper 检查末词完整性和下一词泄漏；只有报告 `state=PASS` 才能写入成功交付请求。唯一可恢复例外是报告同时满足 `state=FAIL`、`failure_kind=final_word_boundary_mismatch`、末词文本一致且 `trailing_words=[]`：这说明 json3 把没有显式终点的末词错误延长到字幕框尾部，而不是下一句漏入。此时只允许对同一锁定来源执行一次 `scripts/repair_study_card_final_boundary.py --timeline <timeline> --audio-qa-report <失败报告> --output <修正时间线>`，用修正时间线重新渲染一次，再完整执行一次音频 QA。不得改变正文、译文、词汇、来源起点或选择另一候选；若第二次 QA 不为 PASS，立即写失败请求。修正后仍必须严格大于 30 秒，且不得存在长静音或下一词泄漏。
 
@@ -120,7 +123,7 @@ PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py
 若当天无合格候选或制作/质检失败，必须运行：
 PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '今日英语世界短视频' --failure '<准确原因>'
 
-无论成功还是失败，只要来源预检淘汰过候选，就必须为每个淘汰项在上述对应命令末尾追加一次 `--rejected-youtube-id '<实际youtube_id>'`；没有淘汰项时不追加。协调器会跨运行读取该机器字段，防止内容不适龄或来源不可用的候选反复消耗后续窗口。锁定来源后若出现可重复的内容、屏幕词汇、渲染封装或音频质检失败，也必须在失败请求追加该锁定来源的 `--rejected-youtube-id '<实际youtube_id>'`，让下次运行排除它；这不允许在同一运行内换题。前述一次性末词锚点恢复在第二次 QA 仍失败时才按音频质检失败处理。仅网络、Cookie、DNS、TLS、403 或其他来源通路故障仍不得追加，因为它们不是候选质量失败。
+无论成功还是失败，只要来源预检淘汰过候选，就必须为每个淘汰项在上述对应命令末尾追加一次 `--rejected-youtube-id '<实际youtube_id>'`；没有淘汰项时不追加。协调器会跨运行读取该机器字段，防止内容不适龄或来源不可用的候选反复消耗后续窗口。仅原始来源内容本身不合格才能追加 `--rejected-youtube-id`；程序异常、正文序列化损坏、排版词汇不足、渲染封装失败均使用 `--failure-kind internal_error`，不得把有效来源加入七天排除。网络通路故障使用 `--failure-kind transport`。前述一次性末词锚点恢复在第二次 QA 仍失败时才按音频质检失败处理。仅网络、Cookie、DNS、TLS、403 或其他来源通路故障仍不得追加，因为它们不是候选质量失败。
 
 写入请求是本任务的最后一个硬性检查点：命令成功后只能报告请求路径和本地质检结果；不得自行读取 Telegram 回执、生成投稿封面或启动上传器。请求缺失、不可解析或 MP4/manifest 路径不完整都表示本次生产未交付，必须如实报告。
 
@@ -484,6 +487,13 @@ def _read_delivery_request(path: Path, project_root: Path) -> dict:
             raise ValueError("交付请求的音频 QA 缺少对应产物绑定") from exc
         if report_artifact != Path(str(artifacts[field])).resolve():
             raise ValueError(f"交付请求的音频 QA 与当前 {field} 产物不匹配")
+    if audio_qa.get("timeline"):
+        try:
+            Path(str(audio_qa["timeline"])).resolve().relative_to(root)
+        except ValueError as exc:
+            raise ValueError("音频 QA 的 timeline 不在项目目录内") from exc
+    from video_processing.study_cards.qa_integrity import validate_audio_qa
+    validate_audio_qa(audio_qa_report, mp4=Path(str(artifacts["mp4"])), manifest=Path(str(artifacts["manifest"])))
     artifacts["audio_qa_report"] = str(audio_qa_report)
     return artifacts
 
@@ -585,6 +595,12 @@ def _recent_rejected_youtube_ids(
             continue
         if not isinstance(payload, dict):
             continue
+        classified = payload.get("source_rejections")
+        if isinstance(classified, list):
+            rejected.update(str(item["youtube_id"]) for item in classified
+                            if isinstance(item, dict) and item.get("kind") == "source_quality"
+                            and _validated_youtube_id(item.get("youtube_id")))
+            continue
         values = payload.get("rejected_youtube_ids", [])
         if isinstance(values, list):
             rejected.update(
@@ -655,7 +671,17 @@ def _deliver_request_from_host(
             protected_source_ids = set(_submission_protected_youtube_ids(paths.project_root))
         except Exception as exc:  # noqa: BLE001 - unreadable live ledger must fail closed before notifier/browser work
             raise ValueError(f"交付前投稿保护账本不可读取：{type(exc).__name__}") from exc
+        resumable = False
         if source_youtube_id in protected_source_ids:
+            from video_processing.db.database import PipelineDB
+            from video_processing.english_world.package_integrity import sha256_file, verify_package_hashes
+            item = PipelineDB(str(paths.project_root / "output/pipeline.db")).get_english_world_review_by_artifact(
+                sha256_file(Path(str(request["mp4"]))))
+            resumable = bool(item and item.get("delivery_policy") in {"AUTO_POLICY", "MANUAL"}
+                             and item.get("source_youtube_id") == source_youtube_id)
+            if resumable:
+                verify_package_hashes(item)
+        if source_youtube_id in protected_source_ids and not resumable:
             _write_protected_source_suppression_receipt(delivery_receipt_path, source_youtube_id)
             _log(
                 stream,
@@ -668,7 +694,8 @@ def _deliver_request_from_host(
     if failure_request:
         command.extend(["--failure", str(request["failure"])])
     else:
-        command.extend(["--mp4", str(request["mp4"]), "--manifest", str(request["manifest"])])
+        command.extend(["--mp4", str(request["mp4"]), "--manifest", str(request["manifest"]),
+                        "--audio-qa-report", str(request["audio_qa_report"])])
         if manual_review_only:
             command.append("--manual-review-only")
     command.extend(["--delivery-receipt", str(delivery_receipt_path)])
@@ -788,6 +815,34 @@ def _run_coordinator(
         raise
 
 
+def _pending_auto_delivery_request(paths: RuntimePaths) -> Path | None:
+    """仅续接有持久自动策略的新协议包；未知通知结果仍由步骤账本阻止重发。"""
+    from video_processing.db.database import PipelineDB
+    from video_processing.english_world.package_integrity import sha256_file
+    db_path = paths.project_root / "output/pipeline.db"
+    if not db_path.is_file():
+        return None
+    db = PipelineDB(str(db_path))
+    cutoff = datetime.now().timestamp() - 24 * 60 * 60
+    for path in sorted(paths.log_dir.glob("*.delivery-request.json")):
+        if path.stat().st_mtime < cutoff:
+            continue
+        receipt_path = path.with_name(path.name.replace(".delivery-request.json", ".delivery.json"))
+        receipt = _read_delivery_receipt(receipt_path)
+        try:
+            request = _read_delivery_request(path, paths.project_root)
+            if request["kind"] != "production":
+                continue
+            item = db.get_english_world_review_by_artifact(sha256_file(Path(str(request["mp4"]))))
+        except (OSError, ValueError):
+            continue
+        if item and item.get("delivery_policy") == "AUTO_POLICY":
+            if receipt and not (item["state"] == "READY_FOR_REVIEW" and receipt.get("submission_deferred")):
+                continue
+            return path
+    return None
+
+
 def run(
     paths: RuntimePaths,
     *,
@@ -797,6 +852,7 @@ def run(
     wait_for_lock_seconds: float = 0,
     excluded_youtube_ids: tuple[str, ...] = (),
     source_access_preflight: bool = True,
+    resume_delivery_request: Path | None = None,
 ) -> int:
     paths.log_dir.mkdir(parents=True, exist_ok=True)
     paths.lock_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -845,6 +901,18 @@ def run(
     previous_sigint_handler = signal.signal(signal.SIGINT, _raise_coordinator_interrupted)
     try:
         with run_log.open("a", encoding="utf-8") as stream:
+            if not job_id and resume_delivery_request is None:
+                resume_delivery_request = _pending_auto_delivery_request(paths)
+            if resume_delivery_request is not None:
+                original = resume_delivery_request.resolve()
+                if not original.name.endswith(".delivery-request.json"):
+                    raise ValueError("续接入口只接受 .delivery-request.json 请求文件")
+                original.relative_to(paths.log_dir.resolve())
+                receipt = original.with_name(original.name.replace(".delivery-request.json", ".delivery.json"))
+                code, _ = _deliver_request_from_host(paths, original, receipt, stream)
+                _write_status(status_path, "DELIVERY_RESUMED" if code == 0 else "FAILED_HOST_DELIVERY",
+                              code, 0, run_log, response_path)
+                return code
             if not paths.codex_bin.is_file() or not os.access(paths.codex_bin, os.X_OK):
                 _log(stream, f"ERROR: Codex CLI is not executable: {paths.codex_bin}")
                 _write_status(status_path, "FAILED_BOOTSTRAP", 1, 0, run_log, response_path)
@@ -965,7 +1033,7 @@ def run(
                         paths,
                         f"生产协调器超过 {paths.coordinator_timeout_seconds:g} 秒未退出，已终止其进程组"
                         f"（尝试={attempt}/{max_attempts}）。运行日志：{run_log}。"
-                        "未生成可确认的今日审核成片，未触发视频号投稿。",
+                        "制作、通知和平台状态需分别核验；已有成片或投稿不得因本次中断自动重做。",
                         stream,
                     )
                     return exit_code
@@ -1045,21 +1113,21 @@ def run(
                         stream,
                     )
                 return 1
-            phase = "REPORTED_PRODUCTION_FAILURE" if delivery_failure_reported else "FAILED_COORDINATOR"
+            phase = "REPORTED_PRODUCTION_FAILURE" if delivery_failure_reported else ("FAILED_HOST_DELIVERY" if delivery_attempted else "FAILED_COORDINATOR")
             fail_requested_job(f"生产协调器失败：phase={phase}, exit={exit_code}")
             _write_status(status_path, phase, exit_code, attempt, run_log, response_path)
-            if not delivery_failure_reported:
-                _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。未生成可确认的今日审核成片，未触发视频号投稿。", stream)
+            if not delivery_failure_reported and not delivery_attempted:
+                _notify_failure(paths, f"生产协调器异常退出（exit={exit_code}，尝试={attempt}/{max_attempts}）。运行日志：{run_log}。制作与平台状态需要分别核验。", stream)
             return exit_code
     except CoordinatorInterrupted as exc:
         exit_code = 128 + exc.signum
         with run_log.open("a", encoding="utf-8") as stream:
-            _log(stream, f"ERROR: coordinator interrupted by signal {exc.signum}; production child group was terminated")
+            _log(stream, f"ERROR: coordinator interrupted by signal {exc.signum}; inspect durable delivery stages before any recovery")
             _write_status(status_path, "COORDINATOR_INTERRUPTED", exit_code, 0, run_log, response_path)
             _notify_failure(
                 paths,
-                f"生产协调器被信号 {exc.signum} 中断，已终止其子进程组。运行日志：{run_log}。"
-                "未生成可确认的今日审核成片，未触发视频号投稿。",
+                f"生产协调器被信号 {exc.signum} 中断。运行日志：{run_log}。"
+                "制作、通知和平台状态需分别核验；已有成片或投稿不得因本次中断自动重做。",
                 stream,
             )
         fail_requested_job(f"生产协调器被信号 {exc.signum} 中断。")
@@ -1082,6 +1150,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--notifier-script", type=Path)
     parser.add_argument("--log-dir", type=Path)
     parser.add_argument("--lock-dir", type=Path)
+    parser.add_argument("--resume-delivery-request", type=Path, help="仅续接具名交付请求，绝不重跑制作")
     parser.add_argument("--job-id", help="可选：消费一条 Telegram 已二次确认的制作请求")
     parser.add_argument(
         "--wait-for-lock-seconds", type=float, default=0,
@@ -1111,6 +1180,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
+    if args.resume_delivery_request and args.job_id:
+        raise ValueError("resume delivery cannot be combined with a production job")
     if args.max_attempts < 1:
         raise ValueError("--max-attempts must be at least 1")
     if args.coordinator_timeout_seconds <= 0:
@@ -1141,6 +1212,7 @@ def main(argv: list[str] | None = None) -> int:
         wait_for_lock_seconds=args.wait_for_lock_seconds,
         excluded_youtube_ids=excluded_youtube_ids,
         source_access_preflight=not args.skip_source_access_preflight,
+        resume_delivery_request=args.resume_delivery_request,
     )
 
 

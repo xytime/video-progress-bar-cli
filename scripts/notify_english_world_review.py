@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """登记英语世界短视频质检包，并发送 Telegram 审计回执。
 
-默认发送人工审核材料；启用显式自动策略后，只提交本次新建且已通过完整本地
-质检的学习卡。既有审核项、失败项和任何未确认投稿都不会由本脚本自动重传。
+默认发送人工审核材料；启用显式自动策略后，持久化本次新建学习卡的交付意图。
+同一完整质检包可以续接未发送的通知；既有投稿尝试或未确认状态不会自动重传。
 
 # Modification History
 | Version | Date | Author | Description |
@@ -22,6 +22,7 @@
 | 1.12.0 | 2026-09-01 | Codex | 交付前复用源字幕边界守卫，阻断末词时间跨入下一句。 |
 | 1.13.0 | 2026-09-02 | Codex | 兼容渲染器实际输出的连字符 enriched 时间线名，避免本地质检通过后交付入口误拒绝。 |
 | 1.14.0 | 2026-09-02 | Codex | 同目录存在多份时间线时按 manifest 来源起点匹配，拒绝错绑失败重做的片段。 |
+| 1.14.1 | 2026-09-06 | Codex | 持久化交付意图与各通知步骤，复用完整包续接；完成通知失败保留投稿事实。 |
 """
 
 from __future__ import annotations
@@ -37,7 +38,9 @@ import sys
 from config.settings import settings
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db.database import PipelineDB
-from video_processing.english_world.package_integrity import calculate_package_hashes
+from video_processing.english_world.package_integrity import calculate_package_hashes, sha256_file, verify_package_hashes
+from video_processing.english_world.delivery_progress import ReviewDelivery
+from video_processing.study_cards.qa_integrity import validate_audio_qa
 from video_processing.study_cards.audio_qa import analyse_audio_tail
 from video_processing.study_cards.timeline_guard import validate_source_caption_boundary
 from video_processing.telegram_delivery import send_document, send_text
@@ -169,7 +172,8 @@ def _short_wechat_title(title: str) -> str:
     return clean[:16] if len(clean) > 16 else clean
 
 
-def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -> dict:
+def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path,
+                             manual_review_only: bool = False, audio_qa_report: Path | None = None) -> dict:
     """生成可审计的投稿包并登记审核身份；这里不调用上传器或任何平台接口。"""
     try:
         manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
@@ -178,6 +182,17 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
     if manifest_payload.get("content_type") != "ENGLISH_WORLD_SHORT":
         raise ValueError("审核回执只接受 content_type=ENGLISH_WORLD_SHORT 的学习卡")
     _validate_review_duration(mp4=mp4, manifest_payload=manifest_payload)
+    timeline_path = _resolve_enriched_timeline_path(manifest, manifest_payload=manifest_payload)
+    report_path = audio_qa_report or mp4.parent / "qa" / "final_audio_qa.json"
+    validate_audio_qa(report_path, mp4=mp4, manifest=manifest, timeline=timeline_path)
+    db = PipelineDB()
+    existing = db.get_english_world_review_by_artifact(sha256_file(mp4))
+    if existing:
+        verify_package_hashes(existing)
+        if Path(existing["manifest_path"]).resolve() != manifest.resolve():
+            raise ValueError("既有审核项 manifest 路径不匹配，拒绝续接")
+        existing["_created_now"] = False
+        return existing
 
     timeline = _load_timeline(manifest, manifest_payload=manifest_payload)
     if not timeline:
@@ -280,8 +295,10 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path) -
         "cover_path": cover_path,
         "cover_provenance_path": cover_provenance_path,
     })
-    return PipelineDB().create_english_world_review_item(
+    return db.create_english_world_review_item(
         **package_hashes,
+        delivery_policy="AUTO_POLICY" if settings.enable_english_world_auto_publish and not manual_review_only else "MANUAL",
+        audio_qa_report_path=str(report_path.resolve()),
         title=headline,
         mp4_path=str(mp4.resolve()),
         manifest_path=str(manifest.resolve()),
@@ -311,16 +328,20 @@ def _review_keyboard(review_id: str) -> dict:
 
 
 def _auto_submit_new_review_item(review_item: dict) -> str:
-    """在显式策略开启时提交一条本次新建的质检包；绝不触碰历史审核项。"""
+    """仅消费持久 AUTO_POLICY 意图；领取与终态防重继续由投稿账本负责。"""
     if not settings.enable_english_world_auto_publish:
         return "disabled"
-    if not review_item.get("_created_now"):
+    if review_item.get("delivery_policy") != "AUTO_POLICY":
         return "existing_item_not_retried"
     if settings.wechat_publishing_paused:
         return "wechat_publishing_paused"
     review_id = str(review_item["id"])
     db = PipelineDB()
-    db.approve_english_world_submission(review_id, authorization="AUTO_POLICY")
+    state = str(review_item.get("state") or "READY_FOR_REVIEW")
+    if state not in {"READY_FOR_REVIEW", "SUBMISSION_APPROVED"}:
+        return f"submission_not_retried; state={state}"
+    if state == "READY_FOR_REVIEW":
+        db.approve_english_world_submission(review_id, authorization="AUTO_POLICY")
     # 投稿器自身有 25 分钟上传超时并持久化 UNDER_REVIEW / UNCERTAIN 等终态；
     # 此处不另设父超时，以免杀死已领取任务后遗留 SUBMITTING 状态。
     result = subprocess.run(
@@ -341,6 +362,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--title", required=True, help="成片标题")
     parser.add_argument("--mp4", type=Path, help="通过质检的成片 MP4")
     parser.add_argument("--manifest", type=Path, help="与成片对应的 manifest JSON")
+    parser.add_argument("--audio-qa-report", type=Path, help="绑定三份文件内容指纹的最终音频 QA")
     parser.add_argument("--failure", help="无合格素材或制作失败时的原因")
     parser.add_argument("--delivery-receipt", type=Path, help="可选：供日更协调器读取的机器可读 Telegram 回执")
     parser.add_argument(
@@ -360,11 +382,9 @@ def main() -> int:
                 "⚠️ <b>英语世界短视频｜今日未交付</b>\n"
                 f"任务：{safe_title}\n"
                 f"原因：{html.escape(args.failure.strip())}\n"
-                "未生成成片，未触发任何视频号操作。"
+                "制作、通知与平台状态以对应阶段账本为准；本通知不推断成片缺失或未投稿。"
             ),
         )
-        if result.state not in {"ACCEPTED", "SUPPRESSED"}:
-            raise RuntimeError(f"Telegram 未交付回执未获 API 接受：{result.error_kind or result.state}")
         _write_delivery_receipt(
             args.delivery_receipt,
             {
@@ -373,6 +393,8 @@ def main() -> int:
                 "telegram_message_id": result.message_id,
             },
         )
+        if result.state not in {"ACCEPTED", "SUPPRESSED"}:
+            raise RuntimeError(f"Telegram 未交付回执未获 API 接受：{result.error_kind or result.state}")
         return 0
 
     if not args.mp4 or not args.manifest:
@@ -381,97 +403,80 @@ def main() -> int:
         if not artifact.is_file() or artifact.stat().st_size <= 0:
             raise FileNotFoundError(f"审核文件不存在或为空：{artifact}")
 
-    review_item = _prepare_publish_package(display_title=args.title.strip(), mp4=args.mp4, manifest=args.manifest)
-    review_id = str(review_item["id"])
-    state = str(review_item["state"])
-    will_auto_submit = (
-        not args.manual_review_only
-        and settings.enable_english_world_auto_publish
-        and bool(review_item.get("_created_now"))
-        and not settings.wechat_publishing_paused
+    review_item = _prepare_publish_package(
+        display_title=args.title.strip(), mp4=args.mp4, manifest=args.manifest,
+        manual_review_only=args.manual_review_only, audio_qa_report=args.audio_qa_report,
     )
-    if will_auto_submit:
-        text_result = _post_message(
-            "✅ <b>英语世界短视频｜自动投稿前审计</b>\n"
-            f"标题：{html.escape(str(review_item['title']))}\n"
-            f"审核编号：<code>{review_id[:8]}</code>\n"
-            "本次新建成片已通过本地质检，正在按自动策略一次性提交视频号；"
-            "Telegram 附件为提交前审计材料，不等同公开发布。"
-        )
-        cover_result = _post_document(Path(str(review_item["cover_path"])), "英语世界投稿封面｜自动提交前审计材料")
-        mp4_result = _post_document(args.mp4, "英语世界短视频成片｜自动提交前审计材料")
-        manifest_result = _post_document(args.manifest, "英语世界短视频 manifest｜自动提交前审计材料")
-        auto_result = _auto_submit_new_review_item(review_item)
-        submission_deferred = _auto_submission_is_deferred(auto_result)
-        completion_heading = "自动投稿已排队" if submission_deferred else "自动投稿执行完毕"
-        completion_explanation = (
-            "当前不在公共发布窗口，平台上传尚未开始；任务已保留在批准队列，等待窗口调度。"
-            if submission_deferred
-            else "“已受理 / 审核中”不等同公开发布；任何未确认结果均已停止自动重传。"
-        )
-        completion_result = _post_message(
-            f"⏳ <b>英语世界短视频｜{completion_heading}</b>\n"
-            f"标题：{html.escape(str(review_item['title']))}\n"
-            f"审核编号：<code>{review_id[:8]}</code>\n"
-            f"执行结果：<code>{html.escape(auto_result)}</code>。\n"
-            f"{completion_explanation}"
-        )
-        _write_delivery_receipt(
-            args.delivery_receipt,
-            {
-                "kind": "review_and_auto_submission",
-                "status": "ACCEPTED",
-                "review_id": review_id,
-                "review_state": state,
-                "message_ids": [
-                    text_result.message_id, cover_result.message_id, mp4_result.message_id,
-                    manifest_result.message_id, completion_result.message_id,
-                ],
-                "submission_result": auto_result,
-                "submission_deferred": submission_deferred,
-            },
-        )
-        return 0
+    return _deliver_review(args, review_item)
 
-    message = "✅ <b>英语世界短视频｜待处理</b>\n"
-    message += f"标题：{html.escape(str(review_item['title']))}\n审核编号：<code>{review_id[:8]}</code>\n"
-    manual_review = args.manual_review_only or not settings.enable_english_world_auto_publish
-    markup = _review_keyboard(review_id) if state == "READY_FOR_REVIEW" and manual_review else None
-    if manual_review:
-        message += (
-            "已生成学习成片、质检清单与投稿素材包；当前<b>尚未提交视频号</b>。\n\n"
-            "<b>审核通过：</b>点击下方「✅ 确认提交视频号」。\n"
-            "该操作仅提交本条审核编号绑定的成片；提交后会回执“已受理 / 审核中 / 未确认”，"
-            "不将已受理误报为公开发布，也不会自动重传。\n"
-            "需修改请点“↩️ 退回修改”；不发布请点“⏸ 暂不发布”。"
-        )
-    else:
-        message += (
-            f"\n\n当前状态：<code>{html.escape(state)}</code>；自动策略结果："
-            "<code>existing_item_not_retried_or_wechat_publishing_paused</code>。"
-            "为避免重复投稿，未触发新提交。"
-        )
-    if state != "READY_FOR_REVIEW" and manual_review:
-        message += f"\n\n当前状态：<code>{html.escape(state)}</code>；为避免重复投稿，已不提供提交按钮。"
-    text_result = _post_message(message, reply_markup=markup)
-    audit_suffix = "人工审核材料" if manual_review else "待处理审计材料"
-    cover_result = _post_document(Path(str(review_item["cover_path"])), f"英语世界投稿封面｜{audit_suffix}")
-    mp4_result = _post_document(args.mp4, f"英语世界短视频成片｜{audit_suffix}")
-    manifest_result = _post_document(args.manifest, f"英语世界短视频 manifest｜{audit_suffix}")
-    _write_delivery_receipt(
-        args.delivery_receipt,
-        {
-            "kind": "review",
-            "status": "ACCEPTED",
-            "review_id": review_id,
-            "review_state": state,
-            "message_ids": [
-                text_result.message_id, cover_result.message_id, mp4_result.message_id,
-                manifest_result.message_id,
-            ],
-        },
-    )
-    return 0
+
+def _deliver_review(args, review_item: dict) -> int:
+    """通知步骤与投稿状态分别持久化，重进时复用完整包和已接受消息。"""
+    db = PipelineDB()
+    review_id = str(review_item["id"])
+    delivery = ReviewDelivery(db, review_id)
+    auto = (not args.manual_review_only and settings.enable_english_world_auto_publish
+            and review_item.get("delivery_policy") == "AUTO_POLICY")
+    payload = {
+        "kind": "review_and_auto_submission" if auto else "review",
+        "status": "INCOMPLETE", "artifact_state": "QA_PASSED",
+        "review_id": review_id, "phase": "REVIEW_REGISTERED",
+    }
+
+    def checkpoint():
+        current = db.get_english_world_review_item(review_id) or review_item
+        payload["review_state"] = current["state"]
+        payload["platform_state"] = current.get("platform_state")
+        payload["platform_post_id"] = current.get("platform_post_id")
+        payload["stages"] = db.get_english_world_delivery_stages(review_id)
+        payload["message_ids"] = [value["message_id"] for value in payload["stages"].values()
+                                  if value["state"] == "ACCEPTED"]
+        _write_delivery_receipt(args.delivery_receipt, payload)
+
+    def message(stage, text, markup=None):
+        return delivery.send(stage, lambda: send_text(
+            event_type="english_world.review_ready", priority="P0", text=text,
+            reply_markup=markup, timeout_seconds=20,
+        ))
+
+    try:
+        checkpoint()
+        state = review_item["state"]
+        heading = "自动投稿前审计" if auto else "人工审核材料"
+        markup = _review_keyboard(review_id) if not auto and state == "READY_FOR_REVIEW" else None
+        message("audit_text", f"英语世界｜{heading}\n标题：{html.escape(str(review_item['title']))}\n"
+                f"审核编号：<code>{review_id}</code>\n当前账本状态：{state}；本地质检不代表公开发布。", markup)
+        for stage, field, caption in (
+            ("cover", "cover_path", "英语世界投稿封面"),
+            ("mp4", "mp4_path", "英语世界学习成片"),
+            ("manifest", "manifest_path", "英语世界 manifest"),
+        ):
+            delivery.send(stage, lambda field=field, caption=caption: send_document(
+                event_type="english_world.review_attachment", priority="P0",
+                path=Path(review_item[field]), caption=caption,
+            ))
+            checkpoint()
+        payload["phase"] = "AUDIT_ACCEPTED"
+        checkpoint()
+        if auto:
+            # 每次进入前读取最新状态。SUBMITTING/终态只回报，不再次调用上传器。
+            current = db.get_english_world_review_item(review_id)
+            auto_result = _auto_submit_new_review_item(current)
+            payload.update(submission_result=auto_result,
+                           submission_deferred=(_auto_submission_is_deferred(auto_result) or auto_result == "wechat_publishing_paused"),
+                           phase="SUBMISSION_RECORDED")
+            checkpoint()  # 完成通知失败也保留平台事实，不能退回“制作失败”。
+            message("completion_" + str(payload["review_state"]), "英语世界｜投稿阶段回执\n"
+                    f"审核编号：<code>{review_id}</code>\n"
+                    f"执行结果：{html.escape(auto_result)}\n"
+                    "批准队列表示尚未上传；已受理/审核中也不等同公开发布。")
+        payload.update(status="ACCEPTED", phase="DELIVERY_COMPLETE")
+        checkpoint()
+        return 0
+    except Exception as exc:
+        payload["error_kind"] = type(exc).__name__
+        checkpoint()
+        raise
 
 
 if __name__ == "__main__":

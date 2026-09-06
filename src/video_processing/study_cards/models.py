@@ -14,6 +14,7 @@
 | 1.6.1 | 2026-08-04 | Codex | 兼容既有离线词汇模块的 JSON 字段，维持学习卡输入与分级模块的低耦合。 |
 | 1.6.2 | 2026-08-09 | Codex | 学习卡内容自动携带英语世界短视频类型，供 manifest 与数据库记录使用。 |
 | 1.6.3 | 2026-09-03 | Codex | 保留有可靠离线证据的 KET 候选供真实阅读屏补足微笔记密度，正文默认学习词仍从 PET 起。 |
+| 1.6.4 | 2026-09-06 | Codex | 在富化和渲染前阻断逐词正文缺词，兼容排印撇号。 |
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from typing import Any, Mapping, Sequence
 
 from ..content_types import CONTENT_TYPE_ENGLISH_WORLD_SHORT, normalize_content_type
 from .vocabulary import select_vocabulary
+from .text_normalization import normalise_words
 
 
 @dataclass(frozen=True)
@@ -145,6 +147,8 @@ class StudyCardContent:
             raise ValueError("新闻精读学习卡只能使用 ENGLISH_WORLD_SHORT 内容类型")
         content.validate_word_order()
         content.validate_paragraphs()
+        if normalise_words(" ".join(word.text for word in content.words)) != normalise_words(content.english_text):
+            raise ValueError("逐词时间轴与 english_text 不一致；请从原字幕核对缺词或序列化损坏")
         return content
 
     def validate_word_order(self) -> None:

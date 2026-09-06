@@ -6,6 +6,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-09-01 | Codex | 新增 16kHz 单声道 Whisper 末词完整性与下一词泄漏门禁。 |
+| 1.0.1 | 2026-09-06 | Codex | 质检前后交叉核验三份文件指纹，将 PASS 绑定实际参与质检的字节。 |
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import imageio_ffmpeg  # noqa: E402
 
+from video_processing.study_cards.qa_integrity import artifact_fingerprints
 from video_processing.study_cards.audio_qa import analyse_audio_tail  # noqa: E402
 from video_processing.study_cards.timeline_guard import validate_source_caption_boundary  # noqa: E402
 from video_processing.utils.video_metadata import get_video_duration_ffprobe  # noqa: E402
@@ -67,6 +69,7 @@ def _write_report(path: Path, report: Mapping[str, Any]) -> None:
 def main() -> int:
     args = _parser().parse_args()
     try:
+        fingerprints = artifact_fingerprints(mp4=args.mp4, manifest=args.manifest, timeline=args.timeline)
         timeline = json.loads(args.timeline.read_text(encoding="utf-8"))
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
         if not isinstance(timeline, dict) or not isinstance(manifest, dict):
@@ -93,7 +96,10 @@ def main() -> int:
             _flatten_whisper_words(transcription),
             output_duration=actual_duration,
         )
+        if fingerprints != artifact_fingerprints(mp4=args.mp4, manifest=args.manifest, timeline=args.timeline):
+            raise ValueError("音频 QA 期间文件已变化，拒绝记录 PASS")
         report = {
+            **fingerprints,
             "state": "PASS" if report.get("passed") else "FAIL",
             "mp4": str(args.mp4.resolve()),
             "timeline": str(args.timeline.resolve()),

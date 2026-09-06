@@ -12,6 +12,7 @@
 # | 1.1.0 | 2026-08-30 | Codex | 在成功或失败请求中持久化本轮已淘汰候选 ID，供后续运行机器化避让。 |
 # | 1.2.0 | 2026-09-01 | Codex | 成功请求绑定 state=PASS 的最终音频 QA 报告，避免绕过末尾泄漏门禁。 |
 # | 1.3.0 | 2026-09-01 | Codex | 要求 PASS 报告精确绑定本次 MP4 与 manifest，阻断复用旧成片 QA。 |
+# | 1.3.1 | 2026-09-06 | Codex | 请求绑定三份产物内容指纹并区分来源质量与程序故障。 |
 """
 
 from __future__ import annotations
@@ -20,6 +21,9 @@ import argparse
 import json
 import re
 from pathlib import Path
+
+
+from video_processing.study_cards.qa_integrity import validate_audio_qa
 
 
 YOUTUBE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
@@ -39,6 +43,7 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         help="本轮来源预检已淘汰的 YouTube ID；可重复，最多五个",
     )
+    parser.add_argument("--failure-kind", choices=("source_quality", "internal_error", "transport"), default="internal_error")
     return parser
 
 
@@ -68,6 +73,8 @@ def main() -> int:
             if not report.get(field) or Path(str(report[field])).expanduser().resolve() != artifact.expanduser().resolve():
                 raise ValueError(f"audio QA report does not match the current {field}")
 
+        validate_audio_qa(report_path, mp4=args.mp4, manifest=args.manifest)
+
     rejected_youtube_ids = list(dict.fromkeys(str(value).strip() for value in args.rejected_youtube_id))
     if len(rejected_youtube_ids) > 5:
         raise ValueError("at most five --rejected-youtube-id values are allowed")
@@ -77,9 +84,10 @@ def main() -> int:
     payload: dict[str, object] = {
         "title": title,
         "rejected_youtube_ids": rejected_youtube_ids,
+        "source_rejections": [{"youtube_id": value, "kind": "source_quality"} for value in rejected_youtube_ids],
     }
     if failure:
-        payload.update({"kind": "failure", "failure": failure})
+        payload.update({"kind": "failure", "failure": failure, "failure_kind": args.failure_kind})
     else:
         payload.update(
             {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 安装每日 07:00、16:30 英语世界短视频生产调度。
+# 安装每日 05:30、16:30 英语世界短视频生产调度。
 #
 # 该调度只负责制作并调用独立 Telegram 审计入口；视频号动作仅可由该入口已配置的
 # 单次、账本受控策略执行，安装器本身不调用上传器。
@@ -14,6 +14,7 @@
 # | 2.3.0 | 2026-08-30 | Codex | 安装前强制验证项目 venv 解释器及配置依赖，拒绝 pyenv Python 运行时漂移。 |
 # | 2.4.0 | 2026-08-30 | Codex | 安装时按当前项目根目录和用户目录渲染 plist，安装后逐字段核验运行路径。 |
 # | 1.0.0 | 2026-08-22 | Codex | 新增独立英语世界日更 LaunchAgent 安装器。 |
+# | 2.4.1 | 2026-09-06 | Codex | 安装与监控共享生产时刻，并核验已安装 LaunchAgent 的运行路径和时刻。 |
 
 set -euo pipefail
 
@@ -61,6 +62,8 @@ import plistlib
 import sys
 
 source, target, project_root, user_home, venv_python, log_dir = sys.argv[1:]
+sys.path.insert(0, project_root + "/src")
+from video_processing.english_world.daily_schedule import calendar_intervals
 replacements = {
     "__PROJECT_ROOT__": project_root,
     "__USER_HOME__": user_home,
@@ -81,6 +84,8 @@ def replace(value):
 
 with open(source, "rb") as stream:
     configuration = replace(plistlib.load(stream))
+if configuration.get("Label") == "com.videopipeline.english-world-daily":
+    configuration["StartCalendarInterval"] = calendar_intervals()
 with open(target, "wb") as stream:
     plistlib.dump(configuration, stream, sort_keys=False)
 PY
@@ -94,8 +99,12 @@ import plistlib
 import sys
 
 path, project_root, venv_python, expected_script = sys.argv[1:]
+sys.path.insert(0, project_root + "/src")
+from video_processing.english_world.daily_schedule import validate_installed_schedule
 with open(path, "rb") as stream:
     configuration = plistlib.load(stream)
+if configuration.get("Label") == "com.videopipeline.english-world-daily":
+    validate_installed_schedule(__import__("pathlib").Path(path))
 arguments = configuration.get("ProgramArguments", [])
 environment = configuration.get("EnvironmentVariables", {})
 expected = {
@@ -132,5 +141,7 @@ launchctl bootstrap "gui/$USER_ID" "$TARGET_PLIST"
 launchctl bootstrap "gui/$USER_ID" "$MONITOR_TARGET_PLIST"
 launchctl print "gui/$USER_ID/$LABEL" >/dev/null
 launchctl print "gui/$USER_ID/$MONITOR_LABEL" >/dev/null
+validate_rendered_plist "$TARGET_PLIST" "$PROJECT_ROOT/scripts/run_english_world_daily.py"
+validate_rendered_plist "$MONITOR_TARGET_PLIST" "$PROJECT_ROOT/scripts/monitor_english_world_daily.py"
 
-echo "✅ 已安装：每天 07:00、16:30 生产英语世界短视频；09:15、19:00 核验本次 Telegram 回执，并仅对完全缺席窗口补发起一次。视频号动作仍只走既有的独立受控入口。"
+echo "✅ 已安装：每天 05:30、16:30 生产英语世界短视频；09:15、19:00 核验本次 Telegram 回执，并仅对完全缺席窗口补发起一次。视频号动作仍只走既有的独立受控入口。"

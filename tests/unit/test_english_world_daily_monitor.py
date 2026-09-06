@@ -10,6 +10,7 @@
 # | 1.4.0 | 2026-08-30 | Codex | 覆盖五层证据输出，锁定 Telegram 接受、提交执行与公开可见不得互相越级。 |
 # | 1.5.0 | 2026-08-30 | Codex | 固化监测 LaunchAgent 使用项目 venv，而非缺依赖的宿主 pyenv。 |
 # | 1.6.0 | 2026-08-30 | Codex | 固化监测 LaunchAgent 使用安装时渲染的可迁移路径模板。 |
+# | 1.6.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
 """
 
 from __future__ import annotations
@@ -230,5 +231,5 @@ def test_monitor_infers_each_production_slot_from_observation_time():
     morning = datetime(2026, 8, 29, 9, 15).astimezone()
     evening = datetime(2026, 8, 29, 19, 0).astimezone()
 
-    assert monitor._slot_for_observation(morning) == time(7, 0)
+    assert monitor._slot_for_observation(morning) == time(5, 30)
     assert monitor._slot_for_observation(evening) == time(16, 30)

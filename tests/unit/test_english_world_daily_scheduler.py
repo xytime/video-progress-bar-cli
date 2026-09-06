@@ -34,6 +34,7 @@
 # | 2.29.0 | 2026-09-03 | Codex | 收紧旧式质量模板，阻断混合来源通路错误误淘汰。 |
 # | 2.30.0 | 2026-09-03 | Codex | 来源通路错误优先于旧式质量文本，冲突记录不得淘汰候选。 |
 # | 2.31.0 | 2026-09-03 | Codex | 固化旧兼容入口的末屏微笔记梯度，避免误施加普通屏八条门禁。 |
+# | 2.31.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
 """
 
 from __future__ import annotations
@@ -58,6 +59,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNNER = PROJECT_ROOT / "scripts" / "run_english_world_daily.py"
 LEGACY_RUNNER = PROJECT_ROOT / "scripts" / "run_english_world_daily_codex.sh"
 PLIST = PROJECT_ROOT / "scripts" / "com.videopipeline.english-world-daily.plist"
+
+
+def _qa_payload(mp4, manifest):
+    import hashlib
+    timeline = mp4.parent / "timeline_enriched.json"
+    timeline.write_text('{"words": []}')
+    paths = {"mp4": mp4, "manifest": manifest, "timeline": timeline}
+    return {"state": "PASS", "passed": True,
+            **{key: str(path.resolve()) for key, path in paths.items()},
+            **{key + "_sha256": hashlib.sha256(path.read_bytes()).hexdigest() for key, path in paths.items()}}
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -88,10 +99,7 @@ def _runner_arguments(
         encoding="utf-8",
     )
     fixture_audio_qa.parent.mkdir()
-    fixture_audio_qa.write_text(json.dumps({
-        "state": "PASS", "passed": True,
-        "mp4": str(fixture_mp4), "manifest": str(fixture_manifest),
-    }), encoding="utf-8")
+    fixture_audio_qa.write_text(json.dumps(_qa_payload(fixture_mp4, fixture_manifest)), encoding="utf-8")
     request_command = (
         "request=\"$ENGLISH_WORLD_DELIVERY_REQUEST_PATH\"\n"
         "mkdir -p \"$(dirname \"$request\")\"\n"
@@ -452,7 +460,7 @@ def test_daily_prompt_requires_relative_boundary_and_whisper_audio_gate():
 def test_daily_prompt_persists_deterministic_locked_source_failures():
     prompt = runner.PROMPT
 
-    assert "锁定来源后若出现可重复的内容、屏幕词汇、渲染封装或音频质检失败" in prompt
+    assert "渲染封装失败均使用 `--failure-kind internal_error`" in prompt
     assert "追加 `--rejected-youtube-id`" in prompt
 
 
@@ -630,7 +638,7 @@ def test_host_safely_skips_protected_delivery_source_without_notifier_or_failure
     )
     audio_qa_report.parent.mkdir()
     audio_qa_report.write_text(
-        json.dumps({"state": "PASS", "passed": True, "mp4": str(mp4), "manifest": str(manifest)}),
+        json.dumps(_qa_payload(mp4, manifest)),
         encoding="utf-8",
     )
     request_path.write_text(
@@ -709,7 +717,7 @@ def test_daily_run_closes_protected_source_as_safe_skip_without_failure_notifica
         )
         audio_qa_report.parent.mkdir()
         audio_qa_report.write_text(
-            json.dumps({"state": "PASS", "passed": True, "mp4": str(mp4), "manifest": str(manifest)}),
+            json.dumps(_qa_payload(mp4, manifest)),
             encoding="utf-8",
         )
         request_path.write_text(
@@ -772,10 +780,7 @@ def test_manual_host_delivery_forces_notifier_review_only(monkeypatch, tmp_path:
         encoding="utf-8",
     )
     audio_qa_report.parent.mkdir()
-    audio_qa_report.write_text(json.dumps({
-        "state": "PASS", "passed": True,
-        "mp4": str(mp4), "manifest": str(manifest),
-    }), encoding="utf-8")
+    audio_qa_report.write_text(json.dumps(_qa_payload(mp4, manifest)), encoding="utf-8")
     request_path.write_text(
         json.dumps({
             "kind": "production", "title": "fixture",
@@ -1008,7 +1013,7 @@ def test_plist_directly_starts_python_coordinator():
         "__VENV_PYTHON__", "__PROJECT_ROOT__/scripts/run_english_world_daily.py",
     ]
     assert configuration["StartCalendarInterval"] == [
-        {"Hour": 7, "Minute": 0},
+        {"Hour": 5, "Minute": 30},
         {"Hour": 16, "Minute": 30},
     ]
     assert "严格大于 30 秒且不超过 300 秒" in runner_text
