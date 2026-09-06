@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.48.47 | 2026-09-07 | Codex | 失败通知与日志摘要保留 stderr 末尾异常，防止 INFO 前缀掩盖真实失败原因。 |
 | 3.48.46 | 2026-09-05 | Codex | 回查按单作品持久冷却和实际访问预算执行，每次独立证据目录，冷却项不占预算。 |
 | 3.48.45 | 2026-09-05 | Codex | 从哈希绑定底图重排 4:3 横封面；自动管理页回查固定后台运行，避免反复抢占桌面。 |
 | 3.48.44 | 2026-09-05 | Codex | 投稿熔断绑定本次尝试的独立页面证据，避免误引用旧校准快照。 |
@@ -805,7 +806,9 @@ class PipelineManager:
         safe_title = html.escape(title or "")
         msg = f"❌ <b>Video Failed</b>\nTitle: {safe_title}\nID: <code>{prefix}</code>"
         if reason:
-            snippet = html.escape(" ".join(reason.split())[:200])  # 折叠空白/换行，截断防刷屏
+            # 子进程 stderr 常以 INFO 开头，末尾才是异常；通知保留最后一个非空行。
+            terminal_line = next((line.strip() for line in reversed(reason.splitlines()) if line.strip()), "")
+            snippet = html.escape(" ".join(terminal_line.split())[:200])
             msg += f"\nReason: {snippet}"
         self.send_telegram_msg(msg)
 
@@ -4154,7 +4157,7 @@ class PipelineManager:
 
             except subprocess.CalledProcessError as e:
                 err = e.stderr if isinstance(e.stderr, str) else (e.stderr or b"").decode()
-                logger.error(f"Process failed for {prefix}: {err[:500]}")
+                logger.error(f"Process failed for {prefix}: {err[-500:]}")
                 if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
                     logger.warning("[%s] 子进程异常发生在视频号提交后；保留账本状态，拒绝重试或写 FAILED。", prefix)
                     return

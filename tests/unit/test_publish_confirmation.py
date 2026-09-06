@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.11.0 | 2026-09-07 | Codex | 覆盖接口正文与页面状态隔离，以及失败通知保留末尾异常。 |
 | 1.8.0   | 2026-08-27 | Codex | 覆盖作品管理原生 post_list 的唯一新增 objectId 绑定，避免长描述与短标题不一致漏绑。 |
 | 1.9.0   | 2026-08-31 | Codex | 覆盖管理卡片标题/正文中的普通“不可见”等词不得伪造平台审核驳回。 |
 | 1.10.0  | 2026-08-31 | Codex | 覆盖管理状态仅接受独立状态行或具名状态标签，正文中的发布/审核词保持未判定。 |
@@ -80,7 +81,67 @@ class TestClassifyPublishResult:
         assert classify_publish_result(False, "发表成功", draft=True) is False
 
 
+@pytest.mark.parametrize("reason, expected", [
+    ("INFO request started\n" * 30 + "Traceback (most recent call last):\nValueError: title contract blocked <invalid>\n", "ValueError: title contract blocked &lt;invalid&gt;"),
+    ("download failed <403>", "download failed &lt;403&gt;"),
+    ("   \n", ""),
+], ids=["traceback-after-info", "single-line", "whitespace"])
+def test_failure_notification_keeps_terminal_error_instead_of_info_prefix(reason, expected):
+    from types import SimpleNamespace
+    messages = []
+    manager = SimpleNamespace(send_telegram_msg=messages.append)
+    PipelineManager._notify_failed(manager, "test-video", "测试标题", reason)
+    assert expected in messages[0]
+    assert "INFO request started" not in messages[0]
+
+
 class TestClassifyManagementPublication:
+    @pytest.mark.parametrize("description", ["已发布", "审核未通过", "审核中"])
+    def test_api_description_is_never_publication_status(self, monkeypatch, tmp_path, description):
+        cards = _collect_management_cards_from_post_list_payload({
+            "data": {"list": [{"objectId": "native-post", "desc": description, "status": 0}]},
+        })
+        monkeypatch.setattr("wechat_uploader._load_management_cards", lambda _: (cards, True))
+        monkeypatch.setattr("wechat_uploader._capture_wechat_evidence", lambda *_: None)
+        state, _ = verify_management_publication_by_id(object(), tmp_path, "native-post")
+        assert state == MANAGEMENT_UNCERTAIN
+        import json
+        evidence = json.loads((tmp_path / "management_readback.json").read_text())
+        assert evidence["platform_status"] == "0"
+        assert evidence["reason"] == "API_STATUS_UNMAPPED"
+
+    def test_api_card_does_not_replace_same_id_dom_status(self, monkeypatch, tmp_path):
+        from types import SimpleNamespace
+
+        class Page:
+            url = "https://channels.weixin.qq.com/platform/post/list"
+
+            def on(self, _event, callback):
+                self.callback = callback
+
+            def remove_listener(self, *_args):
+                pass
+
+            def goto(self, *_args, **_kwargs):
+                self.callback(SimpleNamespace(
+                    url="https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/post/post_list",
+                    json=lambda: {"data": {"list": [{"objectId": "native-post", "desc": "普通正文", "status": 3}]}},
+                ))
+
+            def wait_for_load_state(self, *_args, **_kwargs):
+                pass
+
+            def wait_for_timeout(self, *_args):
+                pass
+
+        monkeypatch.setattr("wechat_uploader._collect_management_cards", lambda _: {
+            "native-post": {"platform_post_id": "native-post", "card_text": "普通正文\n作品状态：审核中", "platform_url": "https://example.test/post/native-post"},
+        })
+        monkeypatch.setattr("wechat_uploader._capture_wechat_evidence", lambda *_: None)
+        state, url = verify_management_publication_by_id(Page(), tmp_path, "native-post")
+        assert state == MANAGEMENT_UNDER_REVIEW
+        assert url == "https://example.test/post/native-post"
+
     def test_explicit_published_status(self):
         assert classify_management_publication("作品状态：已发布") == MANAGEMENT_PUBLISHED
 

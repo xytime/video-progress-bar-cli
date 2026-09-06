@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.5 | 2026-09-07 | Codex | 投稿器退出码 10 按正常延后记录，避免锁忙被误报为失败。 |
 | 1.8.4 | 2026-09-05 | Codex | 自动抖音只读回查固定后台运行，避免投稿可视化配置导致桌面窗口风暴。 |
 | 1.0.0 | 2026-07-31 | Codex | 新增窗口内巡航入口，以 Settings 作为唯一窗口判定并避免定时任务重叠 |
 | 1.1.0 | 2026-08-02 | Codex | 改为每分钟自动巡航，不再因发布时段跳过完整流水线 |
@@ -227,7 +228,9 @@ def dispatch_one_deferred_english_world_submission() -> None:
         check=False,
         timeout=30 * 60,
     )
-    if result.returncode:
+    if result.returncode == 10:  # submit_english_world_review.EXIT_DEFERRED：未领取，等待原策略续投。
+        logging.info("[EnglishWorld] submission deferred; keep approved item queued: %s", review_id[:8])
+    elif result.returncode:
         logging.error(
             "[EnglishWorld] deferred submission worker returned %s for %s: %s",
             result.returncode,

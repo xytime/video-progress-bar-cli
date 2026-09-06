@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.3 | 2026-09-07 | Codex | 区分投稿器正常延后退出码与真实失败，防止锁忙刷 ERROR。 |
 | 1.0.0 | 2026-07-31 | Codex | 覆盖窗口外跳过与窗口内单次完整流水线调用 |
 | 1.0.1 | 2026-07-31 | Codex | 按 Pydantic Settings 的类方法替身方式隔离窗口判定 |
 | 1.0.2 | 2026-07-31 | Codex | 覆盖已有巡航任务持锁时跳过重叠完整流水线 |
@@ -27,6 +28,25 @@ from unittest.mock import ANY, MagicMock
 import pytest
 
 import scripts.run_publication_window as runner
+
+
+@pytest.mark.parametrize("returncode, expected_level", [(0, None), (10, "INFO"), (1, "ERROR")])
+def test_deferred_submission_exit_is_not_reported_as_failure(monkeypatch, caplog, returncode, expected_level):
+    from types import SimpleNamespace
+
+    db = SimpleNamespace(
+        restore_expired_english_world_operator_recoveries=lambda: 0,
+        get_next_auto_approved_english_world_submission=lambda: {"id": "b" * 32},
+    )
+    monkeypatch.setattr(runner, "PipelineDB", lambda: db)
+    monkeypatch.setattr(runner.settings, "enable_english_world_auto_publish", True)
+    monkeypatch.setattr(runner.settings, "wechat_publishing_paused", False)
+    monkeypatch.setattr(type(runner.settings), "is_public_publish_window", lambda _: True)
+    monkeypatch.setattr(runner.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=returncode, stderr=""))
+    with caplog.at_level("INFO"):
+        runner.dispatch_one_deferred_english_world_submission()
+    levels = [record.levelname for record in caplog.records]
+    assert levels == ([] if expected_level is None else [expected_level])
 
 
 def _configure_runner_paths(monkeypatch, tmp_path: Path) -> None:

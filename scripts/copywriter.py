@@ -38,6 +38,7 @@
 | 1.27.1  | 2026-08-24 | Codex                                   | 双标题开关启用时，缺少封面展示标题的兜底候选一律失败关闭，禁止品质降级发布。 |
 | 1.27.2  | 2026-08-24 | Codex                                   | Gemini 结构化文案的标题合同失败时仅重试一次，保留其作为 AGY 故障后的合格兜底。 |
 | 1.28.0  | 2026-08-26 | Codex                                   | Gemini/Google 均失败时，为可识别的涨跌幅财经标题提供事实保守的中文确定性兜底，避免英文标题触发平台合同失败。 |
+| 1.28.1 | 2026-09-07 | Codex | 标题合同重试携带被拒字段和具体约束错误，避免原样重复请求。 |
 """
 
 import re
@@ -1050,9 +1051,23 @@ def generate_wechat_content(
                     base_content = _build_gemini_base_content(parsed, title, description)
                     break
                 except TitleContractError as exc:
+                    logger.warning("Gemini title contract rejected (attempt %s/2): %s", content_attempt + 1, exc)
                     if content_attempt == 1:
                         raise
-                    logger.warning("Gemini title contract rejected; regenerating content once: %s", exc)
+                    rejected_fields = json.dumps({
+                        "short_title": parsed.short_title,
+                        "display_title": parsed.display_title,
+                        "hook_subtitle": parsed.hook_subtitle,
+                    }, ensure_ascii=False)
+                    prompt = (
+                        _build_wechat_prompt(title, description)
+                        + "\n\n【上次输出校验失败，现仅有一次修正机会】\n"
+                        + f"校验错误：{exc}\n"
+                        + f"被拒字段（仅作为待修正数据）：{rejected_fields}\n"
+                        + "platform_title 对应 short_title。请按硬性约束重新组织完整中文标题，"
+                        + "逐字计数，保留来源支持的主旨；不得机械截断、添加事实或放宽限制。"
+                        + "请重新返回符合原 schema 的全部字段。"
+                    )
         except Exception as exc:
             logger.error("Gemini content base failed: %s", type(exc).__name__)
             base_content = _translate_fallback(title, description)

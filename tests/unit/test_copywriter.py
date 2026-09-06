@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                     | Description |
 |---------|------------|----------------------------|-------------|
+| 1.19.0 | 2026-09-07 | Codex | 覆盖标题重生成携带错误反馈，且连续不合规时仍有界失败。 |
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning  | Initial creation of copywriter tests |
 | 1.1.0   | 2026-05-26 | Gemini_2.5_Pro_planning    | 新增P0回归测试: ①零分fallback, ②英文子串污染, ③音乐7用例覆盖率 |
 | 1.2.0   | 2026-05-27 | Gemini_3.5_Flash_planning  | 新增 graceful_truncate_title 测试用例（括号剔除与最左侧语义段优先） |
@@ -41,6 +42,43 @@ from scripts.copywriter import (
 )
 from video_processing.title_provider import TitleProviderError
 from video_processing.utils.text_utils import verbatim_overlap_ratio
+
+
+@pytest.mark.parametrize("repair_succeeds", [True, False])
+def test_gemini_title_retry_contains_rejected_fields_and_contract_error(monkeypatch, repair_succeeds):
+    from types import SimpleNamespace
+    from google import genai
+    import scripts.copywriter as copywriter
+
+    rejected = "如何让学习变得充满乐趣并激发孩子好奇心"
+    calls = []
+
+    def generate_content(**kwargs):
+        calls.append(kwargs["contents"])
+        repaired = repair_succeeds and rejected in kwargs["contents"] and "platform_title 长度" in kwargs["contents"]
+        return SimpleNamespace(parsed=WeChatContentSchema(
+            short_title="让学习充满乐趣" if repaired else rejected,
+            display_title="让孩子在探索中感受学习乐趣",
+            hook_subtitle="在探索中学习", wechat_copy="视频讨论如何让学习充满乐趣。",
+            category="教育", content_hints=["education"], content_label="",
+        ))
+
+    monkeypatch.setattr(copywriter.settings, "gemini_api_key", "test-only")
+    monkeypatch.setattr(copywriter.settings, "copywriter_title_provider_order", "gemini")
+    monkeypatch.setattr(copywriter.settings, "enable_dual_title_display", False)
+    monkeypatch.setattr(genai, "Client", lambda **_: SimpleNamespace(models=SimpleNamespace(generate_content=generate_content)))
+    monkeypatch.setattr(copywriter, "_translate_fallback", lambda *_: {"short_title": "invalid"})
+
+    if repair_succeeds:
+        content = copywriter.generate_wechat_content("让学习充满乐趣", "视频讨论如何让学习充满乐趣。")
+        assert content["short_title"] == "让学习充满乐趣"
+    else:
+        with pytest.raises(ValueError, match="quality guard blocked"):
+            copywriter.generate_wechat_content("让学习充满乐趣", "视频讨论如何让学习充满乐趣。")
+    assert len(calls) == 2
+    assert rejected in calls[1]
+    assert "platform_title 长度" in calls[1]
+    assert "YouTube 标题：让学习充满乐趣" in calls[1]
 
 
 # ── 原有功能测试 ─────────────────────────────────────────────────────────────

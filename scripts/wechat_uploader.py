@@ -63,6 +63,7 @@
 | 5.5.1   | 2026-09-03 | Codex                               | 原创声明按标签局部的控件状态回读，兼容视频号已勾选但隐藏 input 未带状态的页面结构。 |
 | 5.5.2   | 2026-09-03 | Codex                               | 声明原创标签可经短文本容器及近邻 checkbox 状态确认，避免页面结构未使用 label 语义时漏报。 |
 | 5.5.3   | 2026-09-03 | Codex                               | 原创弹窗中“声明原创”按钮由禁用变可点并成功点击时，作为平台动作确认链；仍保留最终页截图与回执。 |
+| 5.6.0 | 2026-09-07 | Codex | 原生接口正文与页面状态分离，同 ID 合并保留状态证据；未知数值状态只落诊断且不推断公开。 |
 """
 
 import os
@@ -385,7 +386,7 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
             "platform_url": "",
             "card_text": str(record.get("desc") or ""),
             "identity_source": "post_list_api",
-            "platform_status": str(record.get("status") or ""),
+            "platform_status": str(record["status"]) if record.get("status") is not None else "",
         }
     return cards
 
@@ -506,7 +507,14 @@ def _load_management_cards(page) -> tuple[dict[str, dict[str, str]], bool]:
     cards = _collect_management_cards(page)
     if post_list_responses:
         try:
-            cards.update(_collect_management_cards_from_post_list_payload(post_list_responses[-1].json()))
+            api_cards = _collect_management_cards_from_post_list_payload(post_list_responses[-1].json())
+            for post_id, api_record in api_cards.items():
+                # 接口 desc 是用户正文，只用于提交绑定；同 ID 的页面状态必须单独保留。
+                dom_record = cards.get(post_id)
+                if dom_record:
+                    api_record["status_text"] = dom_record.get("card_text", "")
+                    api_record["platform_url"] = dom_record.get("platform_url", "")
+                cards[post_id] = api_record
         except Exception as exc:
             logger.warning("Unable to read native post_list response for exact submission binding: %s", exc)
     _remove_post_list_listener()
@@ -676,7 +684,22 @@ def verify_management_publication_by_id(page, evidence_root: Path, platform_post
         cards, loaded = _load_management_cards(page)
         record = cards.get(normalized_post_id) if loaded else None
         if record:
-            state = classify_management_publication(record.get("card_text", ""))
+            api_identity = record.get("identity_source") == "post_list_api"
+            status_text = record.get("status_text", "") if api_identity else record.get("card_text", "")
+            state = classify_management_publication(status_text)
+            # 原生 status 数值尚无经核验的语义映射，不能按 desc、播放量或截图猜公开状态。
+            reason = "API_STATUS_UNMAPPED" if api_identity and not status_text else "DOM_STATUS_TEXT"
+            try:
+                evidence_root.mkdir(parents=True, exist_ok=True)
+                (evidence_root / "management_readback.json").write_text(json.dumps({
+                    "platform_post_id": normalized_post_id,
+                    "identity_source": record.get("identity_source", "dom"),
+                    "platform_status": record.get("platform_status", ""),
+                    "state": state,
+                    "reason": reason,
+                }, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError as exc:
+                logger.warning("Unable to persist management readback diagnostics: %s", type(exc).__name__)
             _capture_wechat_evidence(page, evidence_root, f"management_{state.lower()}")
             return state, record.get("platform_url", "")
         if attempt + 1 < MANAGEMENT_VERIFY_ATTEMPTS:
