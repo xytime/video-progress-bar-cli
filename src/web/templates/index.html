@@ -27,6 +27,7 @@
   | 2026-09-07 | Codex | 恢复 P0 复核放行入口；必须勾选内容复核和恢复管线两项确认，后端同步写入审计台账。 |
   | 2026-09-07 | Codex | 新增服务端筛选、稳定排序和近期高互动浏览标记；分页总数与当前筛选一致。 |
   | 2026-09-07 | Codex | 默认按来源发布日期排序；纠正把源视频发布日期误标为平台上传时间的展示，并增加 80 分以上筛选。 |
+  | 2026-09-08 | Codex | 同步当前页批量选择与具名删除确认；统一中文状态；取消过期列表请求并阻止跨筛选回写。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -1594,7 +1595,7 @@
           <select id="video-filter-error" onchange="applyVideoFilters()"><option value="all">全部异常</option><option value="channel_policy">频道策略拦截</option><option value="login">Cookie / 登录</option><option value="youtube_403">YouTube 403</option><option value="copy_quality">文案质量门禁</option><option value="censorship_p0">审查 P0</option><option value="other">其他</option></select>
         </span>
         <span class="filter-context" id="filter-engagement-context" hidden>
-          <select id="video-filter-status" onchange="applyVideoFilters()"><option value="all">全部处理阶段</option><option value="PENDING">待处理</option><option value="FAILED">失败</option><option value="SUBMITTED_BOUND">已绑定待确认</option><option value="UNDER_REVIEW">审核中</option><option value="UNCERTAIN">状态未知</option></select>
+          <select id="video-filter-status" onchange="applyVideoFilters()"><option value="all">全部处理阶段</option><option value="PENDING">待处理</option><option value="FAILED">失败</option><option value="SUBMITTED_BOUND">已提交，待确认发布</option><option value="UNDER_REVIEW">审核中</option><option value="UNCERTAIN">待核验</option></select>
           <select id="video-filter-window" onchange="applyVideoFilters()"><option value="1">近 1 天</option><option value="3">近 3 天</option><option value="7">近 7 天</option><option value="30">近 30 天</option></select>
         </span>
         <button class="btn-filter-clear" onclick="clearVideoFilters()">清除筛选</button>
@@ -1923,9 +1924,52 @@
     return `${mins}'${secs.toString().padStart(2, '0')}`;
   }
 
-  function statusBadge(s) {
-    const safe = (s || 'UNKNOWN').replace(/[^A-Z_]/g,'');
-    return `<span class="badge badge-${safe}"><span class="badge-dot badge-dot-${safe}"></span>${s}</span>`;
+  // 展示层统一词典：只翻译文案，不改变账本状态或重发规则。
+  const STATUS_PRESENTATIONS = {
+    PENDING: ['待处理', 'PENDING'],
+    NOT_QUEUED: ['未入队', 'PENDING', '尚未加入该平台发布队列'],
+    QUEUED: ['排队中', 'PENDING', '已入队，尚未开始上传'],
+    DOWNLOADING: ['下载中', 'DOWNLOADING'],
+    TRANSCRIBING: ['转录中', 'TRANSCRIBING'],
+    COPYWRITING: ['文案生成中', 'COPYWRITING'],
+    RENDERING: ['渲染中', 'RENDERING'],
+    AI_COVER_PENDING: ['待生成封面', 'PENDING'],
+    UPLOADING: ['上传中', 'PUBLISHING'],
+    PUBLISHING: ['提交中', 'PUBLISHING'],
+    PUBLISHED: ['已发布', 'PUBLISHED'],
+    COMPLETED: ['处理完成', 'COMPLETED', '本地流程完成；各平台发布结果请查看平台状态'],
+    SEGMENTED: ['已分集', 'COMPLETED'],
+    IGNORED: ['已忽略', 'PENDING'],
+    WECHAT_DEFERRED: ['待微信恢复', 'SUBMITTED_BOUND'],
+    UNDER_REVIEW: ['审核中', 'SUBMITTED_BOUND', '平台审核中，尚未确认公开发布'],
+    SUBMITTED_BOUND: ['已提交，待确认发布', 'SUBMITTED_BOUND', '已记录平台作品 ID，但尚无公开发布证明；禁止重发'],
+    SUBMITTED_UNBOUND: ['本地已受理，待关联作品', 'SUBMITTED_UNBOUND', '本地已受理，尚未绑定平台作品 ID，也无公开发布证明；禁止重发'],
+    UNCERTAIN: ['待核验', 'UNCERTAIN', '状态不确定，须先核验；不得盲目重发'],
+    NOT_FOUND: ['平台未找到作品', 'UNCERTAIN', '回查未找到作品，不代表可以重新提交；须先核验'],
+    REJECTED: ['审核未通过', 'FAILED'],
+    FAILED: ['失败', 'FAILED'],
+    RETRYABLE_FAILED: ['失败，可重试', 'FAILED'],
+    LOGIN_REQUIRED: ['需要登录', 'LOGIN_REQUIRED'],
+    BANNED: ['禁止发布', 'FAILED'],
+    CANCELED: ['已取消', 'PENDING'],
+    DRAFT: ['草稿', 'PENDING'],
+    APPROVED: ['已批准', 'PUBLISHED'],
+    UNKNOWN: ['待核验', 'UNCERTAIN', '未识别的状态，须先核验；不得盲目重发'],
+  };
+
+  function statusPresentation(state) {
+    const raw = String(state || 'UNKNOWN');
+    const [label, badge, description] = Object.prototype.hasOwnProperty.call(STATUS_PRESENTATIONS, raw)
+      ? STATUS_PRESENTATIONS[raw] : STATUS_PRESENTATIONS.UNKNOWN;
+    const tone = ['FAILED', 'LOGIN_REQUIRED'].includes(badge) ? 'st-failed'
+      : ['PUBLISHED', 'COMPLETED'].includes(badge) ? 'st-published'
+      : badge === 'PENDING' ? 'st-none' : 'st-review';
+    return {label, badge, tone, description: description || label, tooltip: `${description || label}（${raw}）`};
+  }
+
+  function statusBadge(state) {
+    const info = statusPresentation(state);
+    return `<span class="badge badge-${info.badge}" title="${escapeAttr(info.tooltip)}"><span class="badge-dot badge-dot-${info.badge}"></span>${escapeHtml(info.label)}</span>`;
   }
 
   function relativeTime(ts) {
@@ -1970,7 +2014,7 @@
 
       const hint = document.getElementById('pipeline-active-hint');
       if (activeIdx >= 0) {
-        hint.textContent = `当前阶段：${STEP_ORDER[activeIdx]} (${breakdown[STEP_ORDER[activeIdx]]} 个任务)`;
+        hint.textContent = `当前阶段：${statusPresentation(STEP_ORDER[activeIdx]).label} (${breakdown[STEP_ORDER[activeIdx]]} 个任务)`;
         hint.style.color = 'var(--yellow)';
       } else if (d.published > 0) {
         hint.textContent = '✅ 所有任务已完成';
@@ -2083,9 +2127,30 @@
     search: '', channel: '', sort: 'source_published_at_desc', size: Number(localStorage.getItem('video_pipeline_page_size')) || 20,
     scoreBand: 'all', errorType: 'all', status: 'all', engagementWindowDays: 3, includeProcessed: false,
   };
+  let _selectedYids = new Set();
+  let _currentVideosMap = {};
+  let _videoRequestId = 0;
+  let _videoAbortController = null;
+  let _renderedVideoQuery = null;
+
+  function videoQueryKey() {
+    return new URLSearchParams({
+      tab: currentTab, page: String(currentPage), size: String(filterState.size), search: filterState.search,
+      channel: filterState.channel, sort: filterState.sort, score_band: filterState.scoreBand,
+      error_type: filterState.errorType, status: filterState.status,
+      engagement_window_days: String(filterState.engagementWindowDays), include_processed: String(filterState.includeProcessed),
+    }).toString();
+  }
+
+  function invalidateVideoRequest() {
+    _videoAbortController?.abort();
+    _videoAbortController = null;
+    return ++_videoRequestId;
+  }
 
   function syncFilterControls() {
     document.getElementById('video-filter-search').value = filterState.search;
+    document.getElementById('video-filter-channel').value = filterState.channel;
     document.getElementById('video-filter-sort').value = filterState.sort;
     document.getElementById('video-filter-size').value = String(filterState.size);
     document.getElementById('video-filter-score').value = filterState.scoreBand;
@@ -2105,11 +2170,12 @@
   function updateChannelOptions(channels) {
     const select = document.getElementById('video-filter-channel');
     const selected = filterState.channel;
-    select.innerHTML = '<option value="">全部频道</option>' + (channels || []).map(channel =>
+    // 频道消失时保留已选条件，不能把“该频道无结果”偷偷改为“全部频道”。
+    const options = [...new Set([...(channels || []), ...(selected ? [selected] : [])])];
+    select.innerHTML = '<option value="">全部频道</option>' + options.map(channel =>
       `<option value="${escapeAttr(channel)}">${escapeHtml(channel)}</option>`
     ).join('');
     select.value = selected;
-    if (select.value !== selected) filterState.channel = '';
   }
 
   function applyVideoFilters() {
@@ -2254,6 +2320,10 @@
     exitEditMode(false);
 
     if (tab === 'hotwords') {
+      invalidateVideoRequest();
+      _renderedVideoQuery = null;
+      _currentVideosMap = {};
+      document.getElementById('activity-body').removeAttribute('aria-busy');
       if (hwPanel)  hwPanel.style.display  = 'block';
       if (mainBody) mainBody.style.display = 'none';
       if (pgn)      pgn.style.display      = 'none';
@@ -2304,16 +2374,31 @@
       document.getElementById('new-data-hint').style.display = 'none';
     }
 
+    if (currentTab === 'hotwords') return;
+    const query = videoQueryKey();
+    const requestId = invalidateVideoRequest();
+    const controller = new AbortController();
+    _videoAbortController = controller;
+    const tbody = document.getElementById('activity-body');
+    const queryChanged = _renderedVideoQuery !== query;
+    if (queryChanged) {
+      clearSelection();
+      _renderedVideoQuery = null;
+      _currentVideosMap = {};
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-state">加载中…</td></tr>';
+      ['activity-count', 'total-count-display', 'page-display'].forEach(id => document.getElementById(id).textContent = '—');
+      ['btn-prev-page', 'btn-next-page'].forEach(id => document.getElementById(id).disabled = true);
+    }
+    tbody.setAttribute('aria-busy', 'true');
+
     try {
-      const query = new URLSearchParams({
-        tab: currentTab, page: String(currentPage), size: String(filterState.size), search: filterState.search,
-        channel: filterState.channel, sort: filterState.sort, score_band: filterState.scoreBand,
-        error_type: filterState.errorType, status: filterState.status,
-        engagement_window_days: String(filterState.engagementWindowDays), include_processed: String(filterState.includeProcessed),
-      });
-      const r = await fetch(`/api/videos?${query.toString()}`);
+      const r = await fetch(`/api/videos?${query}`, {signal: controller.signal});
       const d = await r.json();
+      // 即使取消未能阻止响应，也只有最新且仍匹配当前筛选的请求可以回写。
+      if (requestId !== _videoRequestId || query !== videoQueryKey()) return;
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+
+      _renderedVideoQuery = query;
 
       updateChannelOptions(d.filter_options?.channels);
 
@@ -2338,8 +2423,9 @@
       document.getElementById('btn-prev-page').disabled = d.page <= 1;
       document.getElementById('btn-next-page').disabled = d.page >= (d.total_pages || 1);
 
-      const tbody = document.getElementById('activity-body');
       if (!d.videos || d.videos.length === 0) {
+        _currentVideosMap = {};
+        clearSelection();
         let emptyMsg = '暂无数据';
         if (currentTab === 'waitlist') emptyMsg = '暂无待筛选记录，等待自动获取...';
         else if (currentTab === 'queue') emptyMsg = '当前没有排队中的任务';
@@ -2703,9 +2789,11 @@
           ${errorRow}`;
       }).join('');
 
-      // 同步 checkbox 状态
-      syncHeaderCheckbox();
-      updateBatchBar();
+      // 同条件刷新保留当前页仍存在的选择；消失的行不再保留隐藏选中项。
+      document.querySelectorAll('#activity-body .row-cb').forEach(cb => {
+        cb.checked = _selectedYids.has(cb.dataset.yid);
+      });
+      onRowCbChange();
 
       // 恢复之前展开的错误行
       expanded.forEach(yid => {
@@ -2717,13 +2805,21 @@
         }
       });
 
-    } catch(e) { console.warn('videos fetch error', e); }
+    } catch(e) {
+      if (requestId !== _videoRequestId || e.name === 'AbortError') return;
+      if (queryChanged) tbody.innerHTML = '<tr><td colspan="8" class="empty-state">列表加载失败，请重试刷新。</td></tr>';
+      console.warn('videos fetch error', e);
+    } finally {
+      if (requestId === _videoRequestId) {
+        tbody.removeAttribute('aria-busy');
+        _videoAbortController = null;
+      }
+    }
   }
 
   // ── [Gemini_2.5_Pro_planning] Multi-select & Batch Delete ─────────────────
-  let _selectedYids = new Set();
-
   function toggleRowCb(yid) {
+    if (!document.querySelector('.activity-table.in-edit-mode')) return;
     const cb = document.querySelector(`.row-cb[data-yid="${yid}"]`);
     if (!cb) return;
     cb.checked = !cb.checked;
@@ -2732,9 +2828,12 @@
 
   function onRowCbChange() {
     _selectedYids.clear();
-    document.querySelectorAll('.row-cb:checked').forEach(cb => _selectedYids.add(cb.dataset.yid));
+    const canSelect = currentTab === 'waitlist' && _renderedVideoQuery === videoQueryKey()
+      && document.querySelector('.activity-table.in-edit-mode');
     // 更新行选中高亮
-    document.querySelectorAll('.row-cb').forEach(cb => {
+    document.querySelectorAll('#activity-body .row-cb').forEach(cb => {
+      cb.checked = Boolean(cb.checked && canSelect && _currentVideosMap[cb.dataset.yid]);
+      if (cb.checked) _selectedYids.add(cb.dataset.yid);
       const row = document.getElementById(`row-${cb.dataset.yid}`);
       if (row) row.classList.toggle('row-selected', cb.checked);
     });
@@ -2774,14 +2873,26 @@
   }
 
   async function batchDelete() {
-    navigator.vibrate(15);
+    if (navigator.vibrate) navigator.vibrate(15);
+    // 发起确认前以当前页实际勾选项为准，绝不删除不可见的历史选择。
+    onRowCbChange();
     if (_selectedYids.size === 0) return;
     const ids = [..._selectedYids];
+    const selectedTitles = ids.map((id, index) => {
+      const video = _currentVideosMap[id];
+      const title = video.display_title || video.published_title || video.zh_title || video.title || id;
+      return `${index + 1}. ${title} [${id}]`;
+    }).join('\n');
 
     // 安全验证 (Gemini_2.0_Flash_fast)
-    const confirmInput = prompt(`⚠️ 确定要批量删除所选 ${ids.length} 条视频吗？\n删除后将计入黑名单，不再自动爬取。\n请输入 "delete" 以确认执行批量删除：`);
+    const confirmInput = prompt(`⚠️ 确定要批量删除所选 ${ids.length} 条视频吗？\n${selectedTitles}\n\n删除后将计入黑名单，不再自动爬取。\n请输入 "delete" 以确认执行批量删除：`);
     if (confirmInput !== 'delete') {
       showToast('❌ 批量删除取消，安全验证不匹配');
+      return;
+    }
+    onRowCbChange();
+    if (ids.length !== _selectedYids.size || ids.some(id => !_selectedYids.has(id))) {
+      showToast('所选视频已变化，请重新核对后删除', 'error');
       return;
     }
     try {
@@ -4265,9 +4376,6 @@
 </div>
 
 <script>
-  // [Gemini_3.6_Flash_planning] 存储全局可访问的当前页视频数据映射
-  let _currentVideosMap = {};
-
   function renderPlatformBadges(v) {
     if (!v || !v.platforms) return '';
     const plats = ['wechat', 'kuaishou', 'douyin'];
@@ -4278,35 +4386,12 @@
 
     plats.forEach(key => {
       const info = v.platforms[key] || { state: 'NOT_QUEUED' };
-      const st = info.display_state || info.state || 'NOT_QUEUED';
-      let cls = 'st-none';
-      let stateLabel = '未队列';
-      let tooltip = `${names[key]}: 未投递`;
+      const st = info.display_state || info.state || 'UNKNOWN';
+      const presentation = statusPresentation(st);
+      const tooltip = `${names[key]}: ${presentation.tooltip}${info.published_at ? ` · 发布时间：${info.published_at}` : ''}${info.error ? ` · ${info.error}` : ''}`;
 
-      if (st === 'PUBLISHED') {
-        cls = 'st-published';
-        stateLabel = '已发布';
-        tooltip = `${names[key]}: 已发布 (${info.published_at || '成功'})`;
-      } else if (['SUBMITTED_UNBOUND', 'SUBMITTED_BOUND'].includes(st)) {
-        cls = 'st-review';
-        stateLabel = st === 'SUBMITTED_BOUND' ? '已提交待确认' : '本地已受理';
-        tooltip = `${names[key]}: ${stateLabel}（尚无公开发布证明；禁止重发）`;
-      } else if (['UNDER_REVIEW', 'UPLOADING', 'QUEUED', 'PUBLISHING', 'WECHAT_DEFERRED'].includes(st)) {
-        cls = 'st-review';
-        stateLabel = st === 'UNDER_REVIEW' ? '审核中' : (st === 'WECHAT_DEFERRED' ? '已延后' : '发送中');
-        tooltip = `${names[key]}: ${stateLabel}`;
-      } else if (st === 'UNCERTAIN') {
-        cls = 'st-review';
-        stateLabel = '待核验';
-        tooltip = `${names[key]}: 待人工核验 (${info.error || '无平台可见证明'})`;
-      } else if (['RETRYABLE_FAILED', 'BANNED', 'FAILED', 'LOGIN_REQUIRED'].includes(st)) {
-        cls = 'st-failed';
-        stateLabel = '异常';
-        tooltip = `${names[key]}: 发布失败 (${info.error || '失败'})`;
-      }
-
-      html += `<span class="platform-badge plat-${key} ${cls}" title="${escapeAttr(tooltip)}" onclick="event.stopPropagation(); openPlatformDetailsModal('${v.youtube_id}')">
-        <span class="plat-icon">${icons[key]}</span> ${names[key]}·${stateLabel}
+      html += `<span class="platform-badge plat-${key} ${presentation.tone}" title="${escapeAttr(tooltip)}" onclick="event.stopPropagation(); openPlatformDetailsModal('${v.youtube_id}')">
+        <span class="plat-icon">${icons[key]}</span> ${names[key]}·${escapeHtml(presentation.label)}
       </span>`;
     });
 
@@ -4330,22 +4415,11 @@
 
     const rows = plats.map(key => {
       const info = (video.platforms && video.platforms[key]) || { state: 'NOT_QUEUED' };
-      const st = info.display_state || info.state || 'NOT_QUEUED';
-
-      let stateBadge = `<span class="badge badge-UNKNOWN">未队列</span>`;
-      if (st === 'PUBLISHED') {
-        stateBadge = `<span class="badge badge-PUBLISHED" style="background:rgba(52,211,153,0.15); color:#34d399;">🟢 已发布</span>`;
-      } else if (st === 'SUBMITTED_UNBOUND' || st === 'SUBMITTED_BOUND') {
-        stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">🧾 ${st === 'SUBMITTED_UNBOUND' ? '本地已受理' : '已提交待确认'} · 禁止重发</span>`;
-      } else if (st === 'UNDER_REVIEW') {
-        stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">⏳ 平台审核中</span>`;
-      } else if (st === 'UNCERTAIN') {
-        stateBadge = `<span class="badge" style="background:rgba(245,158,11,0.15); color:#fbbf24;">⏳ 待人工核验</span>`;
-      } else if (['QUEUED', 'UPLOADING', 'PUBLISHING', 'WECHAT_DEFERRED'].includes(st)) {
-        stateBadge = `<span class="badge badge-PUBLISHING">⚡ 正在发送/队列</span>`;
-      } else if (['RETRYABLE_FAILED', 'BANNED', 'FAILED', 'LOGIN_REQUIRED'].includes(st)) {
-        stateBadge = `<span class="badge badge-FAILED">🔴 投递失败 / 异常</span>`;
-      }
+      const st = info.display_state || info.state || 'UNKNOWN';
+      const stateBadge = statusBadge(st);
+      const stateNote = ['SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'UNCERTAIN', 'NOT_FOUND'].includes(st)
+        || !Object.prototype.hasOwnProperty.call(STATUS_PRESENTATIONS, st)
+        ? `<div style="font-size:11px; color:var(--yellow); margin-top:5px;">${escapeHtml(statusPresentation(st).description)}</div>` : '';
 
       const timeStr = info.published_at ? info.published_at : '—';
       const attemptsStr = info.attempt_count ? `(尝试 ${info.attempt_count} 次)` : '';
@@ -4361,7 +4435,7 @@
         <td style="font-weight:600; color:var(--text1); display:flex; align-items:center; gap:6px;">
           <span>${icons[key]}</span> ${names[key]}
         </td>
-        <td>${stateBadge}</td>
+        <td>${stateBadge}${stateNote}</td>
         <td><span style="font-family:'JetBrains Mono',monospace;">${timeStr}</span> ${attemptsStr}</td>
         <td>${linkOrLog}</td>
       </tr>`;
