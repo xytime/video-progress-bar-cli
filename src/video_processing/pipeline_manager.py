@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.49.1 | 2026-09-07 | Codex | 互动帖随视频号受理回执发送；公开回查只报告状态，避免重复互动文案。 |
 | 3.49.0 | 2026-09-07 | Codex | 视频号确认公开回执合并互动帖建议，按分片读取独立产物，不自动发评论。 |
 | 3.48.47 | 2026-09-07 | Codex | 失败通知与日志摘要保留 stderr 末尾异常，防止 INFO 前缀掩盖真实失败原因。 |
 | 3.48.46 | 2026-09-05 | Codex | 回查按单作品持久冷却和实际访问预算执行，每次独立证据目录，冷却项不占预算。 |
@@ -907,6 +908,7 @@ class PipelineManager:
             "⏳ <b>WeChat submission accepted</b>\n"
             f"ID: <code>{html.escape(prefix)}</code>\n"
             "平台已接收提交，但尚无公开发布证明；已停止自动重传。"
+            + engagement_receipt_section(self._OUT_DIR / f"{prefix}_engagement.txt")
         )
         self._send_wechat_submission_review_material(prefix, final_title)
 
@@ -1011,7 +1013,6 @@ class PipelineManager:
                 self.db.update_video_status(yid, "PUBLISHED", error_msg=None, slice_index=slice_index)
                 self.send_telegram_msg(
                     f"✅ <b>Video Published</b>\nPlatform: WeChat\nYouTube ID: {html.escape(prefix)}"
-                    + engagement_receipt_section(self._OUT_DIR / f"{prefix}_engagement.txt")
                 )
                 settled += 1
             elif return_code == 6:

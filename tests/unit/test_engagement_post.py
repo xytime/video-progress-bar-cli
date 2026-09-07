@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 |---------|------|--------|-------------|
+| 1.1.0 | 2026-09-07 | Codex | 互动帖改随视频号受理回执发送，公开确认不重复发送。 |
 | 1.0.0 | 2026-09-07 | Codex | 覆盖选择题、转义、缺失降级与公开状态单条通知。 |
 """
 from types import SimpleNamespace
@@ -45,7 +46,7 @@ def test_missing_and_corrupt_artifacts_do_not_break_receipt(tmp_path):
 
 
 @pytest.mark.parametrize('code, expected', [(0, 1), (6, 0), (8, 0), (3, 0)])
-def test_only_confirmed_publication_sends_one_combined_receipt(tmp_path, monkeypatch, code, expected):
+def test_publication_confirmation_does_not_repeat_engagement_post(tmp_path, monkeypatch, code, expected):
     from video_processing.pipeline_manager import PipelineManager, settings
     monkeypatch.setattr(settings, 'wechat_review_max_per_run', 1)
     manager = PipelineManager.__new__(PipelineManager)
@@ -66,11 +67,33 @@ def test_only_confirmed_publication_sends_one_combined_receipt(tmp_path, monkeyp
     assert manager.send_telegram_msg.call_count == expected
     if expected:
         text = manager.send_telegram_msg.call_args.args[0]
-        assert POST in text
         assert 'YouTube ID: video123_s2' in text
-        assert 'wrong parent' not in text
+        assert '评论区互动帖建议' not in text
     assert '--verify-only' in manager._run_tracked.call_args.args[0]
     assert '--publish' not in manager._run_tracked.call_args.args[0]
+
+
+def test_submission_acceptance_receipt_includes_slice_suggestion(tmp_path, monkeypatch):
+    from video_processing.pipeline_manager import PipelineManager, settings
+    monkeypatch.setattr(settings, 'douyin_require_wechat_public_confirmation', False)
+    manager = PipelineManager.__new__(PipelineManager)
+    manager._OUT_DIR = tmp_path
+    manager.db = Mock()
+    manager.db.cancel_queued_downstream_publications_for_unconfirmed_wechat.return_value = {}
+    manager.send_telegram_msg = Mock()
+    manager._send_wechat_submission_review_material = Mock()
+    (tmp_path / 'video123_s2_title.txt').write_text('测试标题')
+    (tmp_path / 'video123_s2_engagement.txt').write_text(POST)
+
+    manager._mark_wechat_submission_under_review(
+        'video123', 'video123_s2', evidence_path=None, reason='已受理',
+        slice_index=2, submission_confirmed=True,
+    )
+
+    text = manager.send_telegram_msg.call_args.args[0]
+    assert 'WeChat submission accepted' in text
+    assert POST in text
+    assert '人工选用，未自动发布' in text
 
 
 def test_copywriter_preserves_generated_suggestion_and_prompt():
