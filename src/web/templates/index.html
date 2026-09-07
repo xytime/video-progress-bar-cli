@@ -26,6 +26,7 @@
   | 2026-09-07 | Codex | P0 政治安全违禁不再展示复核放行入口；复核页标明源 VTT/ASS 证据来源，避免假放行与空字幕误导。 |
   | 2026-09-07 | Codex | 恢复 P0 复核放行入口；必须勾选内容复核和恢复管线两项确认，后端同步写入审计台账。 |
   | 2026-09-07 | Codex | 新增服务端筛选、稳定排序和近期高互动浏览标记；分页总数与当前筛选一致。 |
+  | 2026-09-07 | Codex | 默认按来源发布日期排序；纠正把源视频发布日期误标为平台上传时间的展示，并增加 80 分以上筛选。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -968,9 +969,9 @@
     .lr-low  { color: var(--orange); }
     .lr-poor { color: var(--red);    }
     /* ── 新鲜度点 ── */
-    .upload-age-fresh { color: var(--green) !important; font-weight: 600; }
-    .upload-age-today { color: var(--teal)  !important; }
-    .upload-age-week  { color: var(--yellow)!important; }
+    .source-published-age-fresh { color: var(--green) !important; font-weight: 600; }
+    .source-published-age-today { color: var(--teal)  !important; }
+    .source-published-age-week  { color: var(--yellow)!important; }
     /* ── 观看数/点赞率列固定宽度 — 防止占用所有剩余空间 ── */
     .activity-table td.vt-cell,
     .activity-table th.col-views-hd {
@@ -1578,18 +1579,16 @@
         <input id="video-filter-search" type="search" placeholder="搜索中文/英文标题或 YouTube ID" onkeydown="if(event.key === 'Enter') applyVideoFilters()" />
         <select id="video-filter-channel" onchange="applyVideoFilters()"><option value="">全部频道</option></select>
         <select id="video-filter-sort" onchange="applyVideoFilters()">
-          <option value="default">当前默认排序</option>
+          <option value="source_published_at_desc">来源发布日期：新到旧</option>
           <option value="score_desc">分数：高到低</option>
           <option value="views_desc">观看数：高到低</option>
           <option value="like_rate_desc">点赞率：高到低</option>
-          <option value="source_published_at_desc">来源发布日期：新到旧</option>
-          <option value="upload_date_desc">上传日期：新到旧</option>
         </select>
         <select id="video-filter-size" onchange="applyVideoFilters()">
           <option value="20">每页 20</option><option value="50">每页 50</option><option value="100">每页 100</option>
         </select>
         <span class="filter-context" id="filter-score-context">
-          <select id="video-filter-score" onchange="applyVideoFilters()"><option value="all">全部分数</option><option value="unscored">未评分</option><option value="below_50">1–49 分</option><option value="50_74">50–74 分</option></select>
+          <select id="video-filter-score" onchange="applyVideoFilters()"><option value="all">全部分数</option><option value="unscored">未评分</option><option value="below_50">1–49 分</option><option value="50_74">50–74 分</option><option value="80_plus">80 以上</option></select>
         </span>
         <span class="filter-context" id="filter-error-context" hidden>
           <select id="video-filter-error" onchange="applyVideoFilters()"><option value="all">全部异常</option><option value="channel_policy">频道策略拦截</option><option value="login">Cookie / 登录</option><option value="youtube_403">YouTube 403</option><option value="copy_quality">文案质量门禁</option><option value="censorship_p0">审查 P0</option><option value="other">其他</option></select>
@@ -2081,7 +2080,7 @@
   let currentTab = localStorage.getItem('video_pipeline_active_tab') || 'waitlist';
   let currentPage = 1;
   const filterState = {
-    search: '', channel: '', sort: 'default', size: Number(localStorage.getItem('video_pipeline_page_size')) || 20,
+    search: '', channel: '', sort: 'source_published_at_desc', size: Number(localStorage.getItem('video_pipeline_page_size')) || 20,
     scoreBand: 'all', errorType: 'all', status: 'all', engagementWindowDays: 3, includeProcessed: false,
   };
 
@@ -2098,7 +2097,7 @@
     const score = document.getElementById('filter-score-context');
     const error = document.getElementById('filter-error-context');
     const engagement = document.getElementById('filter-engagement-context');
-    score.hidden = currentTab !== 'waitlist';
+    score.hidden = false;
     error.hidden = currentTab !== 'error';
     engagement.hidden = currentTab !== 'high_likes';
   }
@@ -2128,7 +2127,7 @@
   }
 
   function clearVideoFilters() {
-    filterState.search = ''; filterState.channel = ''; filterState.sort = 'default';
+    filterState.search = ''; filterState.channel = ''; filterState.sort = 'source_published_at_desc';
     filterState.scoreBand = 'all'; filterState.errorType = 'all'; filterState.status = 'all';
     filterState.engagementWindowDays = 3; filterState.includeProcessed = false;
     syncFilterControls();
@@ -2512,11 +2511,16 @@
           if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
           return String(n);
         };
-        // 视频发布距今多久 (upload_date 格式 YYYYMMDD)
-        const fmtUploadAge = (d) => {
-          if (!d || d.length !== 8) return null;
-          const y = d.slice(0,4), mo = d.slice(4,6), da = d.slice(6,8);
-          const pub = new Date(`${y}-${mo}-${da}`);
+        // 源视频发布日期距今多久。upload_date 是 yt-dlp 的来源字段，不是任一平台的上传时间。
+        const normalizeSourcePublishedDate = (d) => {
+          const raw = String(d || '').trim();
+          if (/^\d{8}$/.test(raw)) return `${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`;
+          return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : null;
+        };
+        const fmtSourcePublishedAge = (d) => {
+          const sourceDate = normalizeSourcePublishedDate(d);
+          if (!sourceDate) return null;
+          const pub = new Date(`${sourceDate}T00:00:00`);
           const days = Math.floor((Date.now() - pub) / 86400000);
           if (days < 1)  return '今天';
           if (days < 7)  return `${days}天前`;
@@ -2524,10 +2528,10 @@
           if (days < 365) return `${Math.floor(days/30)}个月前`;
           return `${Math.floor(days/365)}年前`;
         };
-        // [Claude_Sonnet_4.6_Thinking_planning] CSS class for upload freshness
-        const uploadAgeCls = (d) => {
-          if (!d || d.length !== 8) return '';
-          const days = Math.floor((Date.now() - new Date(`${d.slice(0,4)}-${d.slice(4,6)}-${d.slice(6,8)}`)) / 86400000);
+        const sourcePublishedAgeCls = (d) => {
+          const sourceDate = normalizeSourcePublishedDate(d);
+          if (!sourceDate) return '';
+          const days = Math.floor((Date.now() - new Date(`${sourceDate}T00:00:00`)) / 86400000);
           if (days < 1) return 'fresh';
           if (days < 3) return 'today';
           if (days < 7) return 'week';
@@ -2575,15 +2579,14 @@
 
         const dur       = fmtDuration(v.duration_sec);
         const views     = fmtNum(v.view_count);
-        const uploadAge = fmtUploadAge(v.upload_date);
-        const sourcePublished = v.source_published_at ? String(v.source_published_at).slice(0, 10) : '未知';
-        const uploadLabel = v.upload_date || '未知';
+        const sourceDate = v.source_published_at || v.upload_date;
+        const sourcePublishAge = fmtSourcePublishedAge(sourceDate);
+        const sourcePublished = normalizeSourcePublishedDate(sourceDate) || '未知';
 
         // [Claude_Sonnet_4.6_Thinking_planning] metaChips: 移除 views/likeRatio（已有独立列）
         const metaChips = [
           dur       ? `<span class="meta-chip">⏱ ${dur}</span>` : '',
-          `<span class="meta-chip upload-age-${uploadAgeCls(v.upload_date)}">上传：${uploadAge || uploadLabel}</span>`,
-          `<span class="meta-chip">来源发布：${escapeHtml(sourcePublished)}</span>`,
+          `<span class="meta-chip source-published-age-${sourcePublishedAgeCls(sourceDate)}" title="来源发布日期：${escapeAttr(sourcePublished)}">来源发布：${sourcePublishAge || escapeHtml(sourcePublished)}</span>`,
         ].join('');
 
         // [Unknown_Model_planning] 显示 已完成集数/全部集数 状态标签，按全部完成与否区分颜色

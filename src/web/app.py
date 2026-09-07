@@ -17,6 +17,7 @@
 | 3.34.0 | 2026-09-07 | Codex | P0 审查红线在复核接口写库前 fail-closed 拒绝；复核证据优先读取触发预检的源 VTT，消除界面假放行与空字幕误导。 |
 | 3.35.0 | 2026-09-07 | Codex | 恢复 P0 人工复核放行，要求双重确认并写入审计台账；管线只认可该审计记录对应的 P0 放行。 |
 | 3.34.1 | 2026-09-07 | Codex | 列表筛选排序改为服务端分页前执行，并新增独立近期高互动浏览标记 API。 |
+| 3.34.2 | 2026-09-07 | Codex | 默认按来源发布日期倒序；分数筛选支持跨任务 Tab 的 80 分以上候选。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -143,7 +144,7 @@ _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
 
 _VIDEO_TABS = {"waitlist", "queue", "active", "wechat_deferred", "review", "completed", "error", "high_likes"}
 _VIDEO_SORTS = {"default", "score_desc", "views_desc", "like_rate_desc", "source_published_at_desc", "upload_date_desc"}
-_SCORE_BANDS = {"all", "unscored", "below_50", "50_74"}
+_SCORE_BANDS = {"all", "unscored", "below_50", "50_74", "80_plus"}
 _ERROR_TYPES = {"all", "channel_policy", "login", "youtube_403", "copy_quality", "censorship_p0", "other"}
 _ENGAGEMENT_WINDOWS = {1, 3, 7, 30}
 _VIDEO_STATUSES = {
@@ -1325,8 +1326,6 @@ def _validate_video_list_query(
         raise HTTPException(status_code=422, detail="unknown status")
     if engagement_window_days not in _ENGAGEMENT_WINDOWS:
         raise HTTPException(status_code=422, detail="unsupported engagement window")
-    if tab != "waitlist" and score_band != "all":
-        raise HTTPException(status_code=422, detail="score band only applies to waitlist")
     if tab != "error" and error_type != "all":
         raise HTTPException(status_code=422, detail="error type only applies to error tab")
     if tab != "high_likes" and status != "all":
@@ -1340,7 +1339,7 @@ def get_videos(
     size: int = 20,
     search: str = "",
     channel: str = "",
-    sort: str = "default",
+    sort: str = "source_published_at_desc",
     score_band: str = "all",
     error_type: str = "all",
     status: str = "all",

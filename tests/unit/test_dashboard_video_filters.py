@@ -7,9 +7,11 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-07 | Codex | 初始创建：覆盖 DAL 筛选排序、准确分页、API 参数和浏览标记隔离。 |
+| 1.1.0 | 2026-09-07 | Codex | 覆盖来源发布日期默认排序与跨 Tab 的 80 分以上筛选。 |
 """
 
 from datetime import datetime
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -19,9 +21,10 @@ from web import app as web_app
 
 def _seed(db: PipelineDB) -> None:
     today = datetime.now().strftime("%Y%m%d")
-    db.add_video("wait-alpha", "Climate Futures", "TEDx Talks", score=20, zh_title="气候未来")
-    db.add_video("wait-beta", "Markets", "Bloomberg Television", score=70, zh_title="市场观察")
+    db.add_video("wait-alpha", "Climate Futures", "TEDx Talks", score=20, zh_title="气候未来", source_published_at="2026-09-02T10:00:00Z")
+    db.add_video("wait-beta", "Markets", "Bloomberg Television", score=70, zh_title="市场观察", source_published_at="2026-09-04T10:00:00Z")
     db.add_video("wait-gamma", "Other", "TEDx Talks", score=10)
+    db.add_video("queue-80", "Priority", "Bloomberg Television", score=80)
     db.add_video("eng-reviewed", "Reviewed story", "TEDx Talks", score=10, view_count=2000, like_count=100, upload_date=today)
     db.add_video("eng-review", "Fresh story", "Bloomberg Television", score=30, view_count=1000, like_count=90, upload_date=today)
     db.add_video("eng-submitted", "Bound story", "Bloomberg Television", score=40, view_count=800, like_count=None, upload_date=today)
@@ -50,6 +53,14 @@ def test_dal_filters_before_pagination_and_uses_stable_sort(tmp_path):
     videos, total = db.get_paginated_videos("waitlist", 1, 20, score_band="50_74")
     assert total == 1
     assert videos[0]["youtube_id"] == "wait-beta"
+
+    videos, total = db.get_paginated_videos("queue", 1, 20, score_band="80_plus")
+    assert total == 1
+    assert videos[0]["youtube_id"] == "queue-80"
+
+    videos, total = db.get_paginated_videos("waitlist", 1, 20)
+    assert total == 5
+    assert [video["youtube_id"] for video in videos[:2]] == ["wait-beta", "wait-alpha"]
 
 
 def test_dal_error_categories_and_engagement_mark_are_state_isolated(tmp_path):
@@ -94,9 +105,23 @@ def test_api_validates_filters_and_returns_filtered_pagination(tmp_path, monkeyp
     assert payload["videos"][0]["youtube_id"] == "wait-beta"
     assert "Bloomberg Television" in payload["filter_options"]["channels"]
 
+    response = client.get("/api/videos", params={"tab": "waitlist", "size": 20})
+    assert [video["youtube_id"] for video in response.json()["videos"][:2]] == ["wait-beta", "wait-alpha"]
+
     assert client.get("/api/videos", params={"tab": "waitlist", "sort": "untrusted"}).status_code == 422
-    assert client.get("/api/videos", params={"tab": "error", "score_band": "below_50"}).status_code == 422
+    response = client.get("/api/videos", params={"tab": "queue", "score_band": "80_plus"})
+    assert response.status_code == 200
+    assert response.json()["videos"][0]["youtube_id"] == "queue-80"
 
     response = client.post("/api/videos/eng-review/engagement-reviewed", json={"reviewed": True})
     assert response.status_code == 200
     assert db.get_video_by_youtube_id("eng-review")["status"] == "PENDING"
+
+
+def test_dashboard_template_labels_source_dates_without_claiming_platform_upload():
+    template = (Path(web_app.__file__).parent / "templates" / "index.html").read_text(encoding="utf-8")
+
+    assert "sort: 'source_published_at_desc'" in template
+    assert '<option value="80_plus">80 以上</option>' in template
+    assert "来源发布：${sourcePublishAge" in template
+    assert "上传：${uploadAge" not in template

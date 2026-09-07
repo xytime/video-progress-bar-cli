@@ -4587,7 +4587,7 @@ class PipelineDB:
         *,
         search: str = '',
         channel: str = '',
-        sort: str = 'default',
+        sort: str = 'source_published_at_desc',
         score_band: str = 'all',
         error_type: str = 'all',
         status: str = 'all',
@@ -4611,6 +4611,7 @@ class PipelineDB:
                 'unscored': 'pv.score = 0',
                 'below_50': 'pv.score BETWEEN 1 AND 49',
                 '50_74': 'pv.score BETWEEN 50 AND 74',
+                '80_plus': 'pv.score >= 80',
             }
             if score_band not in score_conditions:
                 raise ValueError(f"Unknown score band: {score_band}")
