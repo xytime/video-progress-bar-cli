@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-07 | Codex | 初始创建：覆盖 DAL 筛选排序、准确分页、API 参数和浏览标记隔离。 |
 | 1.1.0 | 2026-09-07 | Codex | 覆盖来源发布日期默认排序与跨 Tab 的 80 分以上筛选。 |
-| 1.2.0 | 2026-09-07 | Codex | 覆盖仅含旧 upload_date 的历史记录按来源日期参与默认排序。 |
+| 1.2.0 | 2026-09-07 | Codex | 覆盖仅含旧 upload_date 的历史记录按来源日期参与默认排序，并保留同日内的来源时间顺序。 |
 """
 
 from datetime import datetime
@@ -24,7 +24,8 @@ def _seed(db: PipelineDB) -> None:
     today = datetime.now().strftime("%Y%m%d")
     db.add_video("wait-alpha", "Climate Futures", "TEDx Talks", score=20, zh_title="气候未来", source_published_at="2026-09-02T10:00:00Z")
     db.add_video("wait-beta", "Markets", "Bloomberg Television", score=70, zh_title="市场观察", source_published_at="2026-09-04T10:00:00Z")
-    db.add_video("wait-legacy-latest", "Legacy latest", "TEDx Talks", score=15, upload_date="20260907")
+    db.add_video("wait-legacy-latest", "Legacy latest", "TEDx Talks", score=15, upload_date="20260905")
+    db.add_video("wait-source-latest", "Source latest", "TEDx Talks", score=18, source_published_at="2026-09-05T12:00:00Z")
     db.add_video("wait-gamma", "Other", "TEDx Talks", score=10)
     db.add_video("queue-80", "Priority", "Bloomberg Television", score=80)
     db.add_video("eng-reviewed", "Reviewed story", "High Likes Channel", score=10, view_count=2000, like_count=100, upload_date=today)
@@ -45,7 +46,7 @@ def test_dal_filters_before_pagination_and_uses_stable_sort(tmp_path):
     videos, total = db.get_paginated_videos(
         "waitlist", 1, 1, channel="TEDx Talks", sort="score_desc",
     )
-    assert total == 3
+    assert total == 4
     assert [video["youtube_id"] for video in videos] == ["wait-alpha"]
 
     videos, total = db.get_paginated_videos("waitlist", 1, 20, search="气候")
@@ -61,8 +62,8 @@ def test_dal_filters_before_pagination_and_uses_stable_sort(tmp_path):
     assert videos[0]["youtube_id"] == "queue-80"
 
     videos, total = db.get_paginated_videos("waitlist", 1, 20, channel="TEDx Talks")
-    assert total == 3
-    assert [video["youtube_id"] for video in videos[:2]] == ["wait-legacy-latest", "wait-alpha"]
+    assert total == 4
+    assert [video["youtube_id"] for video in videos[:3]] == ["wait-source-latest", "wait-legacy-latest", "wait-alpha"]
 
 
 def test_dal_error_categories_and_engagement_mark_are_state_isolated(tmp_path):
@@ -108,7 +109,7 @@ def test_api_validates_filters_and_returns_filtered_pagination(tmp_path, monkeyp
     assert "Bloomberg Television" in payload["filter_options"]["channels"]
 
     response = client.get("/api/videos", params={"tab": "waitlist", "channel": "TEDx Talks", "size": 20})
-    assert [video["youtube_id"] for video in response.json()["videos"][:2]] == ["wait-legacy-latest", "wait-alpha"]
+    assert [video["youtube_id"] for video in response.json()["videos"][:3]] == ["wait-source-latest", "wait-legacy-latest", "wait-alpha"]
 
     assert client.get("/api/videos", params={"tab": "waitlist", "sort": "untrusted"}).status_code == 422
     response = client.get("/api/videos", params={"tab": "queue", "score_band": "80_plus"})
