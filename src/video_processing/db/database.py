@@ -102,6 +102,7 @@
 | 3.18.1  | 2026-07-25 | Codex                               | 抖音提交后未确认的遗留失败不再进入自动领取，避免可能已提交作品被盲重投 |
 | 3.19.0  | 2026-07-26 | Codex                               | 新增 censorship_incidents 独立违规台账，记录审查命中、上下文和处置决策供专项复盘 |
 | 3.20.0  | 2026-07-27 | Codex                               | censorship_incidents 增补规则版本、规则 ID、输入来源、流程阶段、平台和输入 hash 复盘字段 |
+| 3.20.1  | 2026-09-07 | Codex                               | 增加 P0 双重人工确认审计查询；管线只接受带 MANUAL_P0_APPROVED 台账的 P0 放行。 |
 | 3.21.0  | 2026-07-28 | Codex                               | 新增监控候选入库/补全接口；RSS 降级条目保持 METADATA_PENDING，完整官方元数据到位才转 PENDING |
 | 3.22.0  | 2026-07-28 | Codex                               | 新增只读运维质检快照接口，集中队列、失败、在途和多平台账本查询 |
 | 3.22.1  | 2026-07-28 | Codex                               | 质检快照增加最近本地发布和各平台账本总览，支撑 Telegram 上帝视角状态行 |
@@ -1931,6 +1932,18 @@ class PipelineDB:
                 (*params, max(1, min(int(limit), 500))),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def has_manual_p0_approval(self, youtube_id: str, slice_index: int = 0) -> bool:
+        """确认视频/切片是否已完成可审计的 P0 双重人工复核。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM censorship_incidents
+                   WHERE youtube_id = ? AND slice_index = ?
+                     AND decision = 'MANUAL_P0_APPROVED'
+                   ORDER BY id DESC LIMIT 1""",
+                (youtube_id, slice_index),
+            ).fetchone()
+            return row is not None
 
     # --- Published metrics / content identity / AB-test DAL ---
     @classmethod

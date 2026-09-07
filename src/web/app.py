@@ -15,6 +15,7 @@
 | 3.32.0 | 2026-08-29 | Codex | Telegram 二次确认制作启动受锁协调器；只制作已选候选并强制返回人工审核。 |
 | 3.33.0 | 2026-09-02 | Codex | 抖音 HISTORY 补录与 CANCELED 重入队在写账本前读取阶段化 UI 熔断，读取异常或格式异常 fail-closed。 |
 | 3.34.0 | 2026-09-07 | Codex | P0 审查红线在复核接口写库前 fail-closed 拒绝；复核证据优先读取触发预检的源 VTT，消除界面假放行与空字幕误导。 |
+| 3.35.0 | 2026-09-07 | Codex | 恢复 P0 人工复核放行，要求双重确认并写入审计台账；管线只认可该审计记录对应的 P0 放行。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -854,6 +855,12 @@ class AddChannelRequest(BaseModel):
 class BatchDeleteRequest(BaseModel):  # [Gemini_2.5_Pro_planning]
     youtube_ids: list[str]
     delete_files: bool = False
+
+
+class CensorshipBypassRequest(BaseModel):
+    """P0 放行必须由界面提交两项独立确认；非 P0 可省略请求体。"""
+    confirm_p0_review: bool = False
+    confirm_pipeline_resume: bool = False
 
 
 class PlatformBackfillQueueRequest(BaseModel):
@@ -2237,12 +2244,16 @@ def censor_keywords(youtube_id: str, slice_index: int = 0):
 
 
 @app.post("/api/videos/{youtube_id}/bypass-censor")
-def bypass_censor(youtube_id: str, slice_index: int = 0):
+def bypass_censor(
+    youtube_id: str,
+    request: Optional[CensorshipBypassRequest] = None,
+    slice_index: int = 0,
+):
     """[Claude_Opus_4.8] 人工复核放行：对审查类失败视频置 bypass 标志，解黑名单、过线、重置并重新触发。
 
-    仅 FAILED 且失败原因为非 P0 审查（P1/P2 或 Channel Policy）的视频可放行。
-    P0 是不可绕过的安全红线；必须在写入 bypass 标志、解除黑名单或触发管线前拒绝。
-    其他层放行后管线会跳过对应审查层（用户已知情确认）。
+    仅 FAILED 且失败原因为审查（P0/P1/P2 或 Channel Policy）的视频可放行。
+    P0 放行必须提交内容复核和恢复管线两项确认，并先写入独立审计台账；
+    非 P0 保持既有的单击人工复核流程。
 
     [Claude_Opus_4.8] BUG-1 配套：bypass 现按 (youtube_id, slice_index) 粒度放行——
     与管线侧 _check_censorship 透传 slice_index 对齐，避免「放行父视频即静默放行全部切片」。
@@ -2260,13 +2271,36 @@ def bypass_censor(youtube_id: str, slice_index: int = 0):
 
     layer, _label, _sev = _censor_layer_from_error(em)
     is_p0_redline = layer == "P0" or video.get("censor_tag") == "🔴 政治安全违禁"
-    if is_p0_redline:
+    if is_p0_redline and not (
+        request and request.confirm_p0_review and request.confirm_pipeline_resume
+    ):
         return {
             "success": False,
-            "error": "P0 政治安全违禁为不可绕过的安全红线，无法复核放行。",
+            "error": "P0 放行需要完成“已复核内容”与“确认恢复管线”两项确认。",
         }
 
-    # 1) 置放行标志（管线据此跳过 P1/P2/CP）——按当前 (yid, slice_index) 粒度
+    if is_p0_redline:
+        db.record_censorship_incident(
+            youtube_id,
+            slice_index=slice_index,
+            stage="manual_review",
+            level="P0",
+            action="MANUAL_BYPASS",
+            tag=video.get("censor_tag") or "🔴 政治安全违禁",
+            score=None,
+            matched=em,
+            channel="operator",
+            decision="MANUAL_P0_APPROVED",
+            rule_id="dashboard.p0_double_confirm",
+            source_field="dashboard",
+            review_stage="manual_p0_double_confirm",
+            platform="预加工",
+            title=video.get("title") or "",
+            zh_title=video.get("zh_title") or "",
+            text_excerpt="Operator confirmed content review and pipeline resume in dashboard.",
+        )
+
+    # 1) 置放行标志。P0 还须由上方 MANUAL_P0_APPROVED 审计记录配对认可。
     db.set_bypass_censorship(youtube_id, True, slice_index=slice_index)
     # 2) 若 P0 曾写入黑名单墓碑，移除以允许继续处理（黑名单按视频 ID 维度，无切片粒度）
     db.remove_from_blacklist(youtube_id)

@@ -17,6 +17,7 @@
 | 1.4.0   | 2026-07-26 | Codex | 审查命中写入 censorship_incidents 独立台账，沉淀规则、上下文和处置决策供专项复盘 |
 | 1.5.0   | 2026-07-26 | Codex | 收紧绕过口：频道白名单只跳过 CP，人工复核放行不能绕过 P0 红线 |
 | 1.6.0   | 2026-07-27 | Codex | 发布前审查支持 fail-closed，CP fail-open 仅保留给非发布阶段，并补充规则证据与流程阶段字段 |
+| 1.7.0   | 2026-09-07 | Codex | 恢复 P0 人工复核放行，但仅接受已写入双重确认审计的同视频/切片；遗留 bypass 标志不能静默绕过 P0。 |
 """
 import re
 import html
@@ -137,8 +138,15 @@ class CensorshipService:
             return False
 
         manual_bypass = self.db.is_censorship_bypassed(yid, slice_index=slice_index)
+        manual_p0_approved = bool(
+            manual_bypass and self.db.has_manual_p0_approval(yid, slice_index=slice_index)
+        )
         if manual_bypass:
-            logger.warning(f"[Censor] Video {yid} BYPASSED by manual review — P0 redlines still enforced.")
+            logger.warning(
+                "[Censor] Video %s bypassed by manual review — P0 approval audit=%s.",
+                yid,
+                manual_p0_approved,
+            )
 
         # 受信任频道白名单只豁免 CP 运营边界；违法层 P0/P1/P2 永远先跑。
         bypass_chs = settings.censorship_bypass_channel_set
@@ -165,10 +173,11 @@ class CensorshipService:
                     en_for_censor = f"{en_for_censor} {subtitle_text}".strip()
                 result = censor_engine.check_text(zh_text=zh_for_censor, en_text=en_for_censor)
                 if result.hit:
-                    if manual_bypass and result.level != "P0":
+                    if manual_bypass and (result.level != "P0" or manual_p0_approved):
                         logger.warning(
-                            "[Censor] Video %s manual bypass allowed non-P0 hit: %s",
+                            "[Censor] Video %s manual bypass allowed %s hit: %s",
                             yid,
+                            result.level,
                             result,
                         )
                         return False
