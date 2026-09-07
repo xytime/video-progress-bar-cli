@@ -14,6 +14,7 @@
 | 3.31.0 | 2026-08-29 | Codex | 英语世界人工批准、未确认重传和登录恢复在领取前绑定并核验完整投稿包指纹。 |
 | 3.32.0 | 2026-08-29 | Codex | Telegram 二次确认制作启动受锁协调器；只制作已选候选并强制返回人工审核。 |
 | 3.33.0 | 2026-09-02 | Codex | 抖音 HISTORY 补录与 CANCELED 重入队在写账本前读取阶段化 UI 熔断，读取异常或格式异常 fail-closed。 |
+| 3.34.0 | 2026-09-07 | Codex | P0 审查红线在复核接口写库前 fail-closed 拒绝；复核证据优先读取触发预检的源 VTT，消除界面假放行与空字幕误导。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -2111,6 +2112,33 @@ def _read_subtitle_text(youtube_id: str, slice_index: int = 0, max_chars: int = 
     return read_subtitle_text(_OUT_DIR, youtube_id, slice_index=slice_index, max_chars=max_chars)
 
 
+def _read_censorship_review_subtitle(
+    youtube_id: str, slice_index: int = 0, max_chars: int = 40000,
+) -> tuple[str, str]:
+    """读取人工复核所对应的字幕证据，优先源字幕预检实际使用的 VTT。
+
+    源字幕预检发生在渲染 ASS 之前；若复核页只读取 ASS，会把真实触发审查的
+    内容误报为“无字幕”。源 VTT 不存在时才回退已渲染的双语 ASS。
+    """
+    from video_processing.utils.file_utils import read_webvtt_text
+
+    prefix = f"{youtube_id}_source_subtitle"
+    source_files = sorted(
+        path for path in _OUT_DIR.glob(f"{prefix}*.vtt")
+        if path.name == f"{prefix}.vtt" or path.name.startswith(f"{prefix}.")
+    )
+    source_text = read_webvtt_text(source_files, max_chars=max_chars)
+    if source_text:
+        return source_text, "源 VTT 字幕预检"
+
+    rendered_text = _read_subtitle_text(
+        youtube_id, slice_index=slice_index, max_chars=max_chars,
+    )
+    if rendered_text:
+        return rendered_text, "渲染 ASS 字幕"
+    return "", "无可用字幕"
+
+
 def _censor_layer_from_error(error_msg: str):
     """从 error_msg 反推审查层级与告警严重度。返回 (layer, label, severity)。"""
     em = error_msg or ""
@@ -2177,7 +2205,9 @@ def censor_keywords(youtube_id: str, slice_index: int = 0):
 
     title = video.get("title") or ""
     zh_title = video.get("zh_title") or ""
-    subtitle = _read_subtitle_text(youtube_id, slice_index=slice_index)
+    subtitle, subtitle_source = _read_censorship_review_subtitle(
+        youtube_id, slice_index=slice_index,
+    )
 
     has_zh = bool(re.search(r"[一-龥]", title))
     text_zh = "\n".join(filter(None, [zh_title or (title if has_zh else ""), subtitle]))
@@ -2202,6 +2232,7 @@ def censor_keywords(youtube_id: str, slice_index: int = 0):
         "keywords": keywords,
         "has_subtitle": bool(subtitle),
         "subtitle_chars": len(subtitle),
+        "subtitle_source": subtitle_source,
     }
 
 
@@ -2209,8 +2240,9 @@ def censor_keywords(youtube_id: str, slice_index: int = 0):
 def bypass_censor(youtube_id: str, slice_index: int = 0):
     """[Claude_Opus_4.8] 人工复核放行：对审查类失败视频置 bypass 标志，解黑名单、过线、重置并重新触发。
 
-    仅 FAILED 且失败原因为审查（Censorship P0/P1 或 Channel Policy）的视频可放行。
-    放行后管线 _check_censorship 会跳过全部审查层（用户已知情确认）。
+    仅 FAILED 且失败原因为非 P0 审查（P1/P2 或 Channel Policy）的视频可放行。
+    P0 是不可绕过的安全红线；必须在写入 bypass 标志、解除黑名单或触发管线前拒绝。
+    其他层放行后管线会跳过对应审查层（用户已知情确认）。
 
     [Claude_Opus_4.8] BUG-1 配套：bypass 现按 (youtube_id, slice_index) 粒度放行——
     与管线侧 _check_censorship 透传 slice_index 对齐，避免「放行父视频即静默放行全部切片」。
@@ -2227,8 +2259,14 @@ def bypass_censor(youtube_id: str, slice_index: int = 0):
                 "error": f"仅审查类失败(FAILED)的视频可复核放行（当前状态：{video.get('status')}）"}
 
     layer, _label, _sev = _censor_layer_from_error(em)
+    is_p0_redline = layer == "P0" or video.get("censor_tag") == "🔴 政治安全违禁"
+    if is_p0_redline:
+        return {
+            "success": False,
+            "error": "P0 政治安全违禁为不可绕过的安全红线，无法复核放行。",
+        }
 
-    # 1) 置放行标志（管线据此跳过全部审查层）——按当前 (yid, slice_index) 粒度
+    # 1) 置放行标志（管线据此跳过 P1/P2/CP）——按当前 (yid, slice_index) 粒度
     db.set_bypass_censorship(youtube_id, True, slice_index=slice_index)
     # 2) 若 P0 曾写入黑名单墓碑，移除以允许继续处理（黑名单按视频 ID 维度，无切片粒度）
     db.remove_from_blacklist(youtube_id)

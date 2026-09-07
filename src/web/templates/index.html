@@ -23,6 +23,7 @@
   | 2026-07-24 | Gemini_3.6_Flash_planning | 重构多平台发布矩阵组件，支持微信、快手、抖音 3 平台发布状态徽章、时间线提示及详情弹窗。 |
   | 2026-08-21 | Codex | 明确展示视频号已提交但未绑定原生 ID 的终态，避免误当处理中或已公开发布。 |
   | 2026-08-26 | Codex | 本地受理账本与后台待确认分列；关闭原生 ID 回查时仍清楚展示已受理且禁止重发。 |
+  | 2026-09-07 | Codex | P0 政治安全违禁不再展示复核放行入口；复核页标明源 VTT/ASS 证据来源，避免假放行与空字幕误导。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -1784,7 +1785,7 @@
     <div style="background:var(--bg2); padding:22px; border-radius:12px; width:calc(100% - 32px); max-width:560px; max-height:86vh; overflow-y:auto; box-sizing:border-box; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5);">
       <h3 style="margin-top:0; color:var(--text1); font-size:16px;">🔓 复核放行 — 绕过内容审查</h3>
       <p style="color:var(--text3); font-size:12px; line-height:1.5; margin:-4px 0 14px;">
-        审查命中的内容默认拒绝发布。请先核对下方命中词与字幕关键词，确认无问题后再放行——放行后本视频将跳过<strong>全部</strong>审查层继续发布。
+        审查命中的内容默认拒绝处理。请先核对下方命中词与字幕关键词；仅 P1/P2/频道策略可人工复核放行，<strong>P0 政治安全违禁不可绕过</strong>。
       </p>
 
       <!-- 层级警示横幅 -->
@@ -1800,15 +1801,13 @@
       </div>
       <div id="bypass-cloud" style="display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; padding:14px; background:var(--bg3); border-radius:8px; margin-bottom:16px; min-height:52px; line-height:1.3;"></div>
 
-      <!-- P0 政治安全违禁：二次强确认 -->
-      <label id="bypass-p0-confirm" style="display:none; align-items:flex-start; gap:8px; font-size:13px; color:var(--red); margin-bottom:16px; cursor:pointer; background:rgba(248,113,113,0.08); padding:10px; border-radius:8px;">
-        <input type="checkbox" id="bypass-p0-checkbox" style="width:16px; height:16px; margin-top:2px; cursor:pointer; flex-shrink:0;">
-        <span>我已知晓此为<strong>政治安全违禁(P0)</strong>内容，发布到视频号可能导致<strong>账号封禁</strong>，我自行承担风险并坚持发布。</span>
-      </label>
+      <div id="bypass-p0-confirm" style="display:none; align-items:flex-start; gap:8px; font-size:13px; color:var(--red); margin-bottom:16px; background:rgba(248,113,113,0.08); padding:10px; border-radius:8px;">
+        <span><strong>P0 政治安全违禁是不可绕过的安全红线。</strong>该视频将保持拦截状态，不能在此放行或触发处理。</span>
+      </div>
 
       <div style="display:flex; justify-content:flex-end; gap:10px;">
         <button onclick="closeBypassModal()" style="padding:8px 16px; border-radius:6px; background:transparent; border:1px solid var(--border); color:var(--text2); cursor:pointer;">取消</button>
-        <button id="btn-confirm-bypass" onclick="confirmBypass()" style="padding:8px 16px; border-radius:6px; background:var(--orange); border:none; color:#fff; font-weight:600; cursor:pointer;">确认放行并发布</button>
+        <button id="btn-confirm-bypass" onclick="confirmBypass()" style="padding:8px 16px; border-radius:6px; background:var(--orange); border:none; color:#fff; font-weight:600; cursor:pointer;">确认放行并继续处理</button>
       </div>
     </div>
   </div>
@@ -2346,7 +2345,8 @@
         // [Claude_Opus_4.8] 审查类失败：提供「🔓 复核放行」一键绕过（带警示弹窗 + 关键词标签云）
         const _emForBypass = v.error_msg || '';
         const isCensorFail = isRetryable && (/Censorship|Channel Policy/.test(_emForBypass) || !!v.censor_tag);
-        const bypassBtn = isCensorFail
+        const isP0CensorFail = /Censorship\s+P0/.test(_emForBypass) || v.censor_tag === '🔴 政治安全违禁';
+        const bypassBtn = isCensorFail && !isP0CensorFail
           ? `<button class="btn-bypass" onclick="openBypassModal('${v.youtube_id}')" title="人工复核字幕内容后，绕过审查并继续发布">🔓 复核放行</button>`
           : '';
         const retryBtn = isDiscovery
@@ -2953,7 +2953,8 @@
           // [Claude_Opus_4.8] BUG-1 配套：分集审查类失败也提供「🔓 复核放行」（按 slice_index 粒度放行）
           const _emSlice = s.error_msg || '';
           const sliceIsCensorFail = isRetryable && (/Censorship|Channel Policy/.test(_emSlice) || !!s.censor_tag);
-          const sliceBypassBtn = sliceIsCensorFail
+          const sliceIsP0CensorFail = /Censorship\s+P0/.test(_emSlice) || s.censor_tag === '🔴 政治安全违禁';
+          const sliceBypassBtn = sliceIsCensorFail && !sliceIsP0CensorFail
             ? `<button class="btn-bypass" onclick="openBypassModal('${s.youtube_id}', ${s.slice_index})" title="人工复核后绕过审查并继续发布该分集">🔓 复核放行</button>`
             : '';
           const retryBtn = s.status === 'LOGIN_REQUIRED'
@@ -3114,7 +3115,6 @@
     const cloudEl = document.getElementById('bypass-cloud');
     const srcEl = document.getElementById('bypass-cloud-src');
     const p0Wrap = document.getElementById('bypass-p0-confirm');
-    const p0Chk = document.getElementById('bypass-p0-checkbox');
     const confirmBtn = document.getElementById('btn-confirm-bypass');
 
     // 重置弹窗状态
@@ -3125,8 +3125,8 @@
     cloudEl.innerHTML = '<span style="color:var(--text3); font-size:12px;">加载中…</span>';
     srcEl.textContent = '';
     p0Wrap.style.display = 'none';
-    p0Chk.checked = false;
     confirmBtn.disabled = false;
+    confirmBtn.textContent = '确认放行并继续处理';
     modal.style.display = 'flex';
 
     try {
@@ -3152,7 +3152,9 @@
       }
 
       // 关键词标签云：按权重映射字号/不透明度，命中词红色加粗下划线
-      srcEl.textContent = d.has_subtitle ? `（标题 + 字幕约 ${d.subtitle_chars} 字）` : '（仅标题/文案，字幕未生成）';
+      srcEl.textContent = d.has_subtitle
+        ? `（标题 + ${d.subtitle_source || '字幕'}约 ${d.subtitle_chars} 字）`
+        : '（仅标题/文案，无可用字幕）';
       const kws = d.keywords || [];
       if (kws.length) {
         const weights = kws.map(k => k.weight);
@@ -3171,11 +3173,11 @@
         cloudEl.innerHTML = '<span style="color:var(--text3); font-size:12px;">无可提取的关键词</span>';
       }
 
-      // P0 政治安全违禁：强制二次确认
+      // P0 政治安全违禁：只展示证据，禁止放行。
       if (_bypassSeverity === 'critical') {
         p0Wrap.style.display = 'flex';
         confirmBtn.disabled = true;
-        p0Chk.onchange = () => { confirmBtn.disabled = !p0Chk.checked; };
+        confirmBtn.textContent = 'P0 不可放行';
       }
     } catch (e) {
       banner.textContent = '❌ 网络错误: ' + e.message;
@@ -3184,8 +3186,8 @@
 
   async function confirmBypass() {
     if (!_bypassYid) return;
-    if (_bypassSeverity === 'critical' && !document.getElementById('bypass-p0-checkbox').checked) {
-      showToast('请先勾选 P0 风险确认项', 'error'); return;
+    if (_bypassSeverity === 'critical') {
+      showToast('P0 政治安全违禁不可复核放行', 'error'); return;
     }
     const btn = document.getElementById('btn-confirm-bypass');
     const oldText = btn.innerHTML;
