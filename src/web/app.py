@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 # Modification History
+| 3.35.1 | 2026-09-08 | Codex | 仪表盘允许局域网 IPv4 绑定；浏览器 Origin 必须与当前请求地址同源，保留轻量 CSRF 边界。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 3.23.0 | 2026-08-21 | Codex | 控制台对视频号生命周期 fail-closed：中止/孤儿发布先落未绑定账本，禁用无删除证明的重发，并阻断通用重试、改规格、删除和硬重置 |
@@ -121,7 +122,7 @@ app.include_router(listening_transcriber_router)
 
 @app.middleware("http")
 async def reject_untrusted_browser_origins(request, call_next):
-    """同源 Dashboard 可正常操作；任何外部网页 Origin 在进入路由前 fail-closed。"""
+    """只允许当前 Dashboard 地址的同源浏览器请求，阻止第三方网页跨站写入。"""
     origin = request.headers.get("origin")
     if origin:
         port = settings.dashboard_port
@@ -129,6 +130,7 @@ async def reject_untrusted_browser_origins(request, call_next):
             f"http://localhost:{port}",
             f"http://127.0.0.1:{port}",
             f"http://[::1]:{port}",
+            f"{request.url.scheme}://{request.url.netloc}",
         }
         if origin not in trusted_origins:
             return JSONResponse(

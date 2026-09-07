@@ -7,6 +7,7 @@ created_at: 2026-05-21T17:58:00+08:00
 
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-09-08 | Codex | 仪表盘改为可绑定局域网 IPv4；浏览器请求保持同源校验。 |
 | 1.0.0 | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建端口注册中心 |
 | 1.1.0 | 2026-06-18 | Claude_Opus_4.8 | Video-precessing 仪表盘端口 8765 → 9100；本项目专属区间改为 `9100–9199`，避开 :8080（其他项目股票服务） |
 | 1.2.0 | 2026-08-29 | Codex | 9100 控制面默认且仅允许绑定回环地址；手机写操作统一经鉴权 Telegram 入口。 |
@@ -21,7 +22,7 @@ created_at: 2026-05-21T17:58:00+08:00
 | 端口 | 项目 | 服务名称 | 启动命令 |
 | --- | --- | --- | --- |
 | `8000` | **OptionSense** | Web UI 控制台 | `ui start` (OptionSense) |
-| `9100` | **Video-precessing** | Pipeline 仪表盘（仅本机回环） | `./vpanel ui start`（端口可经 `DASHBOARD_PORT` 覆盖，绑定地址仅允许 `127.0.0.1`/`::1`） |
+| `9100` | **Video-precessing** | Pipeline 仪表盘（局域网可访问） | `./vpanel ui start`（端口可经 `DASHBOARD_PORT` 覆盖；默认绑定 `0.0.0.0`，浏览器请求必须与当前访问地址同源） |
 
 ## 保留/禁用端口（勿占）
 
