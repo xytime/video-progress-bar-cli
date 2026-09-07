@@ -4626,11 +4626,17 @@ class PipelineDB:
         if tab == 'high_likes' and not include_processed:
             clauses.append("NOT EXISTS (SELECT 1 FROM video_browser_marks marks WHERE marks.video_id = pv.id AND marks.mark_type = 'ENGAGEMENT_REVIEWED')")
 
+        # 历史记录可能只有 YYYYMMDD 的 upload_date；控制面把它作为来源发布日期回退展示，
+        # 所以默认排序也必须使用同一字段并归一为可比较的日期键。
+        source_published_date_key = (
+            "REPLACE(SUBSTR(COALESCE(NULLIF(pv.source_published_at, ''), "
+            "NULLIF(pv.upload_date, '')), 1, 10), '-', '')"
+        )
         order_by = {
             'score_desc': 'pv.score DESC, pv.id ASC',
             'views_desc': '(pv.view_count IS NULL) ASC, pv.view_count DESC, pv.id ASC',
             'like_rate_desc': '(pv.like_count IS NULL OR pv.view_count IS NULL OR pv.view_count <= 0) ASC, CAST(pv.like_count AS REAL) / NULLIF(pv.view_count, 0) DESC, pv.id ASC',
-            'source_published_at_desc': "(pv.source_published_at IS NULL OR pv.source_published_at = '') ASC, pv.source_published_at DESC, pv.id ASC",
+            'source_published_at_desc': f"({source_published_date_key} IS NULL OR {source_published_date_key} = '') ASC, {source_published_date_key} DESC, pv.id ASC",
             'upload_date_desc': "(pv.upload_date IS NULL OR pv.upload_date = '') ASC, pv.upload_date DESC, pv.id ASC",
         }
         if sort == 'default':
