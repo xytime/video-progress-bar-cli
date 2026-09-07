@@ -25,6 +25,7 @@
   | 2026-08-26 | Codex | 本地受理账本与后台待确认分列；关闭原生 ID 回查时仍清楚展示已受理且禁止重发。 |
   | 2026-09-07 | Codex | P0 政治安全违禁不再展示复核放行入口；复核页标明源 VTT/ASS 证据来源，避免假放行与空字幕误导。 |
   | 2026-09-07 | Codex | 恢复 P0 复核放行入口；必须勾选内容复核和恢复管线两项确认，后端同步写入审计台账。 |
+  | 2026-09-07 | Codex | 新增服务端筛选、稳定排序和近期高互动浏览标记；分页总数与当前筛选一致。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -170,6 +171,28 @@
     #high-likes-bar.visible { display: flex; }
     #high-likes-bar label { display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none; }
     #high-likes-bar input[type=checkbox] { width:14px; height:14px; accent-color:#34d399; cursor:pointer; }
+    #video-filter-bar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+      padding: 10px 22px; border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.015);
+    }
+    #video-filter-bar input, #video-filter-bar select {
+      min-height: 32px; padding: 5px 8px; border-radius: 6px;
+      color: var(--text); background: rgba(15,23,42,0.72); border: 1px solid var(--border);
+      font: inherit; font-size: 12px;
+    }
+    #video-filter-search { width: min(270px, 100%); }
+    #video-filter-bar select { max-width: 180px; }
+    .filter-context { display: contents; }
+    .filter-context[hidden] { display: none; }
+    .btn-filter-clear { min-height: 32px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); color: var(--text2); background: transparent; cursor: pointer; font: inherit; font-size: 12px; }
+    .btn-filter-clear:hover { color: var(--text); border-color: var(--accent); }
+    @media (max-width: 700px) {
+      #video-filter-bar { padding: 10px 12px; gap: 6px; }
+      #video-filter-search { width: 100%; }
+      #video-filter-bar input, #video-filter-bar select { flex: 1 1 130px; max-width: none; }
+      #high-likes-bar { align-items: flex-start; flex-wrap: wrap; padding: 8px 12px; }
+    }
     /* [Gemini_2.5_Pro_planning] 已处理行样式 */
     .discovery-done td { opacity: 0.35; }
     .discovery-done .video-zh-title,
@@ -1547,8 +1570,35 @@
         <button class="tab-btn" id="tab-review" onclick="switchTab('review')">待平台确认</button>
         <button class="tab-btn" id="tab-completed" onclick="switchTab('completed')">已完成</button>
         <button class="tab-btn" id="tab-error" onclick="switchTab('error')">出错异常</button>
-        <button class="tab-btn" id="tab-high_likes" onclick="switchTab('high_likes')">✨ 高赞内容</button>
+        <button class="tab-btn" id="tab-high_likes" onclick="switchTab('high_likes')">✨ 近期高互动</button>
         <button class="tab-btn" id="tab-hotwords" onclick="switchTab('hotwords')">🔥 热词监控</button>
+      </div>
+
+      <div id="video-filter-bar" aria-label="视频列表筛选与排序">
+        <input id="video-filter-search" type="search" placeholder="搜索中文/英文标题或 YouTube ID" onkeydown="if(event.key === 'Enter') applyVideoFilters()" />
+        <select id="video-filter-channel" onchange="applyVideoFilters()"><option value="">全部频道</option></select>
+        <select id="video-filter-sort" onchange="applyVideoFilters()">
+          <option value="default">当前默认排序</option>
+          <option value="score_desc">分数：高到低</option>
+          <option value="views_desc">观看数：高到低</option>
+          <option value="like_rate_desc">点赞率：高到低</option>
+          <option value="source_published_at_desc">来源发布日期：新到旧</option>
+          <option value="upload_date_desc">上传日期：新到旧</option>
+        </select>
+        <select id="video-filter-size" onchange="applyVideoFilters()">
+          <option value="20">每页 20</option><option value="50">每页 50</option><option value="100">每页 100</option>
+        </select>
+        <span class="filter-context" id="filter-score-context">
+          <select id="video-filter-score" onchange="applyVideoFilters()"><option value="all">全部分数</option><option value="unscored">未评分</option><option value="below_50">1–49 分</option><option value="50_74">50–74 分</option></select>
+        </span>
+        <span class="filter-context" id="filter-error-context" hidden>
+          <select id="video-filter-error" onchange="applyVideoFilters()"><option value="all">全部异常</option><option value="channel_policy">频道策略拦截</option><option value="login">Cookie / 登录</option><option value="youtube_403">YouTube 403</option><option value="copy_quality">文案质量门禁</option><option value="censorship_p0">审查 P0</option><option value="other">其他</option></select>
+        </span>
+        <span class="filter-context" id="filter-engagement-context" hidden>
+          <select id="video-filter-status" onchange="applyVideoFilters()"><option value="all">全部处理阶段</option><option value="PENDING">待处理</option><option value="FAILED">失败</option><option value="SUBMITTED_BOUND">已绑定待确认</option><option value="UNDER_REVIEW">审核中</option><option value="UNCERTAIN">状态未知</option></select>
+          <select id="video-filter-window" onchange="applyVideoFilters()"><option value="1">近 1 天</option><option value="3">近 3 天</option><option value="7">近 7 天</option><option value="30">近 30 天</option></select>
+        </span>
+        <button class="btn-filter-clear" onclick="clearVideoFilters()">清除筛选</button>
       </div>
 
       <!-- [Gemini_2.5_Pro_planning] 批量操作栏（仅待筛选 tab 显示） -->
@@ -1569,10 +1619,10 @@
         </div>
       </div>
 
-      <!-- [Gemini_2.5_Pro_planning] 高赞内容专属工具栏 -->
+      <!-- 近期高互动专属工具栏：浏览标记由服务端持久化，但不改变投稿状态。 -->
       <div id="high-likes-bar">
-        <span style="color:#34d399; font-weight:600;">✨ 高赞发现</span>
-        <span style="color:var(--text3); font-size:11px;">点击"✓ 已处理"标记看过的内容，默认隐藏</span>
+        <span style="color:#34d399; font-weight:600;">✨ 近期高互动</span>
+        <span style="color:var(--text3); font-size:11px;">近上传日期窗口、观看数大于 500；浏览标记默认隐藏</span>
         <label style="margin-left:auto;">
           <input type="checkbox" id="cb-show-processed" onchange="toggleShowProcessed(this.checked)" />
           显示已处理
@@ -2030,61 +2080,78 @@
 
   let currentTab = localStorage.getItem('video_pipeline_active_tab') || 'waitlist';
   let currentPage = 1;
-  const pageSize = 20;
+  const filterState = {
+    search: '', channel: '', sort: 'default', size: Number(localStorage.getItem('video_pipeline_page_size')) || 20,
+    scoreBand: 'all', errorType: 'all', status: 'all', engagementWindowDays: 3, includeProcessed: false,
+  };
 
-  // [Gemini_2.5_Pro_planning] 已处理状态（localStorage 持久化，仅高赞 Tab 使用）
-  const _PROCESSED_KEY = 'discovery_processed_ids_v1';
-  let showProcessed = false;  // 默认不显示已处理
+  function syncFilterControls() {
+    document.getElementById('video-filter-search').value = filterState.search;
+    document.getElementById('video-filter-sort').value = filterState.sort;
+    document.getElementById('video-filter-size').value = String(filterState.size);
+    document.getElementById('video-filter-score').value = filterState.scoreBand;
+    document.getElementById('video-filter-error').value = filterState.errorType;
+    document.getElementById('video-filter-status').value = filterState.status;
+    document.getElementById('video-filter-window').value = String(filterState.engagementWindowDays);
+    const showProcessed = document.getElementById('cb-show-processed');
+    if (showProcessed) showProcessed.checked = filterState.includeProcessed;
+    const score = document.getElementById('filter-score-context');
+    const error = document.getElementById('filter-error-context');
+    const engagement = document.getElementById('filter-engagement-context');
+    score.hidden = currentTab !== 'waitlist';
+    error.hidden = currentTab !== 'error';
+    engagement.hidden = currentTab !== 'high_likes';
+  }
 
-  function _getProcessedSet() {
+  function updateChannelOptions(channels) {
+    const select = document.getElementById('video-filter-channel');
+    const selected = filterState.channel;
+    select.innerHTML = '<option value="">全部频道</option>' + (channels || []).map(channel =>
+      `<option value="${escapeAttr(channel)}">${escapeHtml(channel)}</option>`
+    ).join('');
+    select.value = selected;
+    if (select.value !== selected) filterState.channel = '';
+  }
+
+  function applyVideoFilters() {
+    filterState.search = document.getElementById('video-filter-search').value.trim();
+    filterState.channel = document.getElementById('video-filter-channel').value;
+    filterState.sort = document.getElementById('video-filter-sort').value;
+    filterState.size = Number(document.getElementById('video-filter-size').value);
+    filterState.scoreBand = document.getElementById('video-filter-score').value;
+    filterState.errorType = document.getElementById('video-filter-error').value;
+    filterState.status = document.getElementById('video-filter-status').value;
+    filterState.engagementWindowDays = Number(document.getElementById('video-filter-window').value);
+    localStorage.setItem('video_pipeline_page_size', String(filterState.size));
+    currentPage = 1;
+    loadVideos();
+  }
+
+  function clearVideoFilters() {
+    filterState.search = ''; filterState.channel = ''; filterState.sort = 'default';
+    filterState.scoreBand = 'all'; filterState.errorType = 'all'; filterState.status = 'all';
+    filterState.engagementWindowDays = 3; filterState.includeProcessed = false;
+    syncFilterControls();
+    currentPage = 1;
+    loadVideos();
+  }
+
+  async function markProcessed(youtubeId, done) {
     try {
-      const raw = localStorage.getItem(_PROCESSED_KEY);
-      return new Set(raw ? JSON.parse(raw) : []);
-    } catch { return new Set(); }
-  }
-
-  function _saveProcessedSet(set) {
-    try { localStorage.setItem(_PROCESSED_KEY, JSON.stringify([...set])); }
-    catch (e) { console.warn('[Processed] localStorage write failed:', e); }
-  }
-
-  function markProcessed(youtubeId, done) {
-    const set = _getProcessedSet();
-    if (done) set.add(youtubeId); else set.delete(youtubeId);
-    _saveProcessedSet(set);
-
-    if (done && !showProcessed) {
-      // 淡出该行，无需重新请求
-      const row = document.getElementById('row-' + youtubeId);
-      if (row) {
-        row.style.transition = 'opacity 0.35s';
-        row.style.opacity = '0';
-        setTimeout(() => { if (row.parentNode) row.parentNode.removeChild(row); }, 360);
-      }
-    } else {
-      // 撤销或显示模式：直接切换 class 和按钮
-      const row = document.getElementById('row-' + youtubeId);
-      if (row) {
-        row.classList.toggle('discovery-done', done);
-        const btn = row.querySelector('.btn-mark-done, .btn-mark-undone');
-        if (btn) {
-          btn.className = done ? 'btn-mark-undone' : 'btn-mark-done';
-          btn.title = done ? '撤销已处理标记' : '标记为已处理';
-          btn.innerHTML = done ? '&#x21A9; 撤销' : '&#x2713; 已处理';
-          btn.onclick = () => markProcessed(youtubeId, !done);
-        }
-      }
-    }
-    // 更新计数徽章
-    const badge = document.getElementById('processed-count-badge');
-    if (badge) {
-      const cnt = _getProcessedSet().size;
-      badge.textContent = cnt > 0 ? `（已处理 ${cnt} 条）` : '';
+      const response = await fetch(`/api/videos/${encodeURIComponent(youtubeId)}/engagement-reviewed`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({reviewed: done}),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      loadVideos();
+    } catch (error) {
+      showToast('❌ 浏览标记保存失败', 'error');
+      console.warn('engagement reviewed update failed', error);
     }
   }
 
   function toggleShowProcessed(checked) {
-    showProcessed = checked;
+    filterState.includeProcessed = checked;
+    currentPage = 1;
     loadVideos();
   }
 
@@ -2176,6 +2243,11 @@
       currentTab = tab;
       localStorage.setItem('video_pipeline_active_tab', tab);
       currentPage = 1;
+      // 全局搜索、频道、排序和每页条数跨 Tab 保留；仅清除不适用的场景筛选。
+      filterState.scoreBand = 'all';
+      filterState.errorType = 'all';
+      filterState.status = 'all';
+      filterState.includeProcessed = false;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.getElementById('tab-' + tab).classList.add('active');
     }
@@ -2187,6 +2259,8 @@
       if (mainBody) mainBody.style.display = 'none';
       if (pgn)      pgn.style.display      = 'none';
       if (batchBar) batchBar.classList.remove('visible');
+      const filterBar = document.getElementById('video-filter-bar');
+      if (filterBar) filterBar.style.display = 'none';
       const _hlBar0 = document.getElementById('high-likes-bar');
       if (_hlBar0) _hlBar0.classList.remove('visible');
       loadHotwords();
@@ -2197,6 +2271,9 @@
     if (hwPanel)  hwPanel.style.display  = 'none';
     if (mainBody) mainBody.style.display = '';
     if (pgn)      pgn.style.display      = '';
+    const filterBar = document.getElementById('video-filter-bar');
+    if (filterBar) filterBar.style.display = '';
+    syncFilterControls();
 
     const _hlBar = document.getElementById('high-likes-bar');
     if (tab === 'waitlist') {
@@ -2207,7 +2284,7 @@
       if (batchBar) batchBar.classList.remove('visible');
       if (_hlBar) _hlBar.classList.add('visible');
       const cbShow = document.getElementById('cb-show-processed');
-      if (cbShow) cbShow.checked = showProcessed;
+      if (cbShow) cbShow.checked = filterState.includeProcessed;
     } else {
       if (batchBar) batchBar.classList.remove('visible');
       if (_hlBar) _hlBar.classList.remove('visible');
@@ -2229,8 +2306,17 @@
     }
 
     try {
-      const r = await fetch(`/api/videos?tab=${currentTab}&page=${currentPage}&size=${pageSize}`);
+      const query = new URLSearchParams({
+        tab: currentTab, page: String(currentPage), size: String(filterState.size), search: filterState.search,
+        channel: filterState.channel, sort: filterState.sort, score_band: filterState.scoreBand,
+        error_type: filterState.errorType, status: filterState.status,
+        engagement_window_days: String(filterState.engagementWindowDays), include_processed: String(filterState.includeProcessed),
+      });
+      const r = await fetch(`/api/videos?${query.toString()}`);
       const d = await r.json();
+      if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
+
+      updateChannelOptions(d.filter_options?.channels);
 
       if (d.tab_counts) {
         document.getElementById('tab-waitlist').textContent = `待筛选(${d.tab_counts.waitlist})`;
@@ -2243,7 +2329,7 @@
         document.getElementById('tab-completed').textContent = `已完成(${d.tab_counts.completed})`;
         document.getElementById('tab-error').textContent = `出错异常(${d.tab_counts.error})`;
         if (d.tab_counts.high_likes !== undefined) {
-          document.getElementById('tab-high_likes').textContent = `✨ 高赞内容(${d.tab_counts.high_likes})`;
+          document.getElementById('tab-high_likes').textContent = `✨ 近期高互动(${d.tab_counts.high_likes})`;
         }
       }
 
@@ -2260,7 +2346,7 @@
         else if (currentTab === 'queue') emptyMsg = '当前没有排队中的任务';
         else if (currentTab === 'active') emptyMsg = '当前没有正在处理的任务';
         else if (currentTab === 'review') emptyMsg = '当前没有等待平台公开确认的任务';
-        else if (currentTab === 'high_likes') emptyMsg = '最近 24 小时暂无高赞发现，等待系统检索...';
+        else if (currentTab === 'high_likes') emptyMsg = filterState.includeProcessed ? '当前条件下没有近期高互动记录' : '当前条件下没有未浏览的近期高互动记录；可勾选“显示已处理”查看历史';
         tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><div class="empty-icon">📭</div>${emptyMsg}</td></tr>`;
         return;
       }
@@ -2280,24 +2366,11 @@
       const wechatBtn = document.getElementById('btn-wechat-login');
       if (wechatBtn) wechatBtn.classList.toggle('btn-wechat-alert', hasLoginRequired);
 
-      // [Gemini_2.5_Pro_planning] 已处理过滤（high_likes tab 专属）
-      const _processedSet = _getProcessedSet();
-      let videos = d.videos;
-      if (currentTab === 'high_likes' && !showProcessed) {
-        videos = videos.filter(v => !_processedSet.has(v.youtube_id));
-      }
-      // 更新已处理计数徽章
+      // 浏览标记已在服务端过滤；总数、页数和当前页始终使用同一份查询结果。
+      const videos = d.videos;
       if (currentTab === 'high_likes') {
         const _badge = document.getElementById('processed-count-badge');
-        if (_badge) {
-          const _cnt = _processedSet.size;
-          _badge.textContent = _cnt > 0 ? `（已处理 ${_cnt} 条）` : '';
-        }
-      }
-      // 客户端过滤后全部已处理
-      if (videos.length === 0 && currentTab === 'high_likes') {
-        tbody.innerHTML = `<tr><td colspan="8" class="empty-state"><div class="empty-icon">🎉</div>未处理的高赞视频已全部看完！勾选上方"显示已处理"可查看历史</td></tr>`;
-        return;
+        if (_badge) _badge.textContent = filterState.includeProcessed ? '（含已浏览）' : '（已浏览默认隐藏）';
       }
 
       _currentVideosMap = {};
@@ -2313,18 +2386,21 @@
         // [Gemini_2.5_Pro_planning] DISCOVERY 源视频：只读，不展示评分按钮（防止误触发管线）
         const isDiscovery = v.source === 'DISCOVERY';
         // [Gemini_2.5_Pro_planning] high_likes tab: 已处理行标记
-        const isDone = isDiscovery && _getProcessedSet().has(v.youtube_id);
+        const isDone = Boolean(v.browser_processed);
         let scoreControls = '';
         if (isDiscovery) {
           // 高赞发现视频：展示点赞率而非评分，提示只读
           const likeRatePct = (v.like_count != null && v.view_count > 0)
             ? (v.like_count / v.view_count * 100).toFixed(2) + '%'
-            : '—';
+            : '未知';
           scoreControls = `<div style="text-align:center; line-height:1.4;">
             <span style="font-size:11px; color:var(--text3);">点赞率</span><br>
             <span style="font-size:14px; font-weight:600; color:#34d399;">${likeRatePct}</span>
             <div style="font-size:9px; color:var(--text3); margin-top:2px;">👁 仅浏览</div>
           </div>`;
+        } else if (currentTab === 'high_likes') {
+          // 近期高互动是浏览面：显示既有评分，但绝不在此改变生产优先级。
+          scoreControls = `<span class="video-score">${score || '未评分'}</span>${score ? ' 分' : ''}`;
         } else if (!isTerminal || isRetryable) {
           const thresholdWarn = isPending && score < 75 ? `<div style="font-size:9px;color:var(--orange);margin-top:2px;">⚠️ 低于75分暂停</div>` : '';
           scoreControls = `
@@ -2343,7 +2419,7 @@
         }
 
         const deleteBtn = `<button class="btn-hard-reset" onclick="deleteVideo('${v.youtube_id}')" title="彻底清除任务记录" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
-        // [Gemini_2.5_Pro_planning] DISCOVERY 源：不显示⚡执行按钮；已处理显示"↩ 撤销"
+        // 近期高互动只提供浏览标记/外链；不因筛选页新增重试、重传或发布入口。
         const markDoneBtn = isDone
           ? `<button class="btn-mark-undone" onclick="markProcessed('${v.youtube_id}', false)" title="撤销已处理标记">↩ 撤销</button>`
           : `<button class="btn-mark-done" onclick="markProcessed('${v.youtube_id}', true)" title="标记为已处理">✓ 已处理</button>`;
@@ -2357,7 +2433,12 @@
         const bypassBtn = isCensorFail
           ? `<button class="btn-bypass" onclick="openBypassModal('${v.youtube_id}')" title="人工复核字幕内容后，绕过审查并继续发布">🔓 复核放行</button>`
           : '';
-        const retryBtn = isDiscovery
+        const engagementBrowseBtn = isDone
+          ? markDoneBtn + ytLinkBtn
+          : markDoneBtn + ytLinkBtn;
+        const retryBtn = currentTab === 'high_likes'
+          ? (isDiscovery ? promoteBtn : '') + engagementBrowseBtn
+          : isDiscovery
           ? promoteBtn + markDoneBtn + ytLinkBtn + deleteBtn
           : v.status === 'LOGIN_REQUIRED'
           ? `<button class="btn-wechat btn-wechat-row" onclick="wechatLogin()" title="扫码登录">📱 扫码</button>
@@ -2494,13 +2575,15 @@
 
         const dur       = fmtDuration(v.duration_sec);
         const views     = fmtNum(v.view_count);
-        const likes     = fmtNum(v.like_count);
         const uploadAge = fmtUploadAge(v.upload_date);
+        const sourcePublished = v.source_published_at ? String(v.source_published_at).slice(0, 10) : '未知';
+        const uploadLabel = v.upload_date || '未知';
 
         // [Claude_Sonnet_4.6_Thinking_planning] metaChips: 移除 views/likeRatio（已有独立列）
         const metaChips = [
           dur       ? `<span class="meta-chip">⏱ ${dur}</span>` : '',
-          uploadAge ? `<span class="meta-chip upload-age-${uploadAgeCls(v.upload_date)}">📅 ${uploadAge}</span>` : '',
+          `<span class="meta-chip upload-age-${uploadAgeCls(v.upload_date)}">上传：${uploadAge || uploadLabel}</span>`,
+          `<span class="meta-chip">来源发布：${escapeHtml(sourcePublished)}</span>`,
         ].join('');
 
         // [Unknown_Model_planning] 显示 已完成集数/全部集数 状态标签，按全部完成与否区分颜色
@@ -2589,8 +2672,8 @@
         const viewsCls = !v.view_count ? '' : v.view_count >= 1e6 ? 'vt-mega' : v.view_count >= 1e5 ? 'vt-big' : v.view_count >= 1e4 ? 'vt-mid' : 'vt-small';
         const likeRawPct = (v.like_count != null && v.view_count > 0) ? v.like_count / v.view_count * 100 : null;
         const lrCls = likeRawPct == null ? '' : likeRawPct >= 5 ? 'lr-great' : likeRawPct >= 3 ? 'lr-ok' : likeRawPct >= 1 ? 'lr-low' : 'lr-poor';
-        const lrStr = likeRawPct != null ? likeRawPct.toFixed(2) + '%' : '—';
-        const viewsStr = views || '—';
+        const lrStr = likeRawPct != null ? likeRawPct.toFixed(2) + '%' : '未知';
+        const viewsStr = views != null ? views : '未知';
 
         return `
           <tr id="row-${v.youtube_id}" class="${isDone ? 'discovery-done' : ''}" onclick="${isWaitlist ? `toggleRowCb('${v.youtube_id}')` : ''}"

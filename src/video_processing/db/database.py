@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.59.9 | 2026-09-07 | Codex | 服务端分页前完成控制面筛选、排序与近期高互动浏览标记，平台状态保持不变。 |
 | 3.59.8 | 2026-09-05 | Codex | 持久化单作品只读回查预约，跨进程原子冷却且不改变投稿状态。 |
 | 3.59.7 | 2026-09-05 | Codex | 暴露不含凭据秘密的当前投稿启动审计，区分未启动领取与启动后未知状态。 |
 | 3.59.6 | 2026-09-05 | Codex | 英语世界抖音调度同时发现未建账和已排队任务，保持已提交/失败状态不可重领。 |
@@ -491,6 +492,18 @@ class PipelineDB:
                     youtube_id TEXT PRIMARY KEY,
                     reason     TEXT DEFAULT 'user_deleted',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 控制面浏览标记与生产/平台状态严格分离：它只记录运营者是否已经
+            # 看过候选，绝不能作为重试、重传或公开状态的依据。
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS video_browser_marks (
+                    video_id INTEGER NOT NULL,
+                    mark_type TEXT NOT NULL,
+                    marked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(video_id, mark_type),
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                 )
             ''')
 
@@ -4501,85 +4514,155 @@ class PipelineDB:
                 "children": children
             }
 
-    def get_paginated_videos(self, tab: str = 'waitlist', page: int = 1, size: int = 20) -> tuple[List[Dict[str, Any]], int]:
-        """按分页和 Tab 类型返回视频列表和总数。
-        为了在折叠树中优雅呈现，在此查询时，主列表仅返回主任务（parent_id IS NULL 且 slice_index = 0）。
-        """
-        # [Gemini_3.5_Flash_planning] 增加了 parent_id IS NULL 的前置过滤，实现主列表仅展现主任务，切片在树形中折叠
+    def _build_video_tab_condition(self, tab: str, engagement_window_days: int) -> tuple[str, List[Any]]:
+        """返回列表 Tab 的基础谓词；调用方再安全叠加筛选且始终在分页前执行。"""
         if tab == 'completed':
-            # [Unknown_Model_planning] 父任务在所有切片都完成后才能进入 completed
-            condition = """(
-                (pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') AND pv.parent_id IS NULL)
-                OR
-                (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
-                 (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) = 0)
-            )"""
-        elif tab == 'error':
-            # [Unknown_Model_planning] 父任务下有任何切片失败时，进入 error tab
-            condition = """(
-                (pv.status IN ('FAILED', 'LOGIN_REQUIRED') AND pv.parent_id IS NULL)
-                OR
-                (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
-                 (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) > 0)
-            )"""
-        elif tab == 'active':
-            # 仅展示实际加工中的任务；平台待确认和待微信恢复均有独立队列。
-            condition = """(
-                (pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING') AND pv.parent_id IS NULL)
-                OR
-                (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND 
-                 (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
-                 (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0)
-            )"""
-        elif tab == 'wechat_deferred':
-            # 暂停期间已完成本地加工、等待限额恢复提交的视频号专属队列；尚未调用上传器。
-            # Archive tombstones are permanent replay blocks, not recoverable work.
-            condition = """pv.status = 'WECHAT_DEFERRED' AND pv.parent_id IS NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM wechat_publications_historical_archive archive
-                    WHERE archive.video_id = pv.id
-                )"""
-        elif tab == 'review':
-            # 视频号已受理但未获公开可见证明；不可重试、不可自动重传。
-            condition = (
-                "pv.status IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN') "
-                "AND pv.parent_id IS NULL"
-            )
-        elif tab == 'queue':
-            condition = "pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL"
-        elif tab == 'high_likes':
-            # [Gemini_3.5_Flash_planning] 最近 3 天发布且观看量>500的高赞视频
-            three_days_ago = (datetime.datetime.now() - datetime.timedelta(days=3)).strftime("%Y%m%d")
-            condition = f"pv.upload_date >= '{three_days_ago}' AND pv.view_count > 500 AND pv.like_count IS NOT NULL AND pv.view_count IS NOT NULL AND pv.parent_id IS NULL"
-        else:
-            # [Claude_Opus_4.8] BUG-5: 待筛选排除 DISCOVERY（发现条目仅在「高赞」tab 浏览，受发现防火墙保护）
-            condition = "pv.status = 'PENDING' AND pv.score < 75 AND pv.parent_id IS NULL AND IFNULL(pv.source,'') != 'DISCOVERY'"
-
-        # [Gemini_3.5_Flash_planning] 高赞列表按发布时间倒序排列，同一天内按点赞率降序排列，保证新视频置顶
+            return """((pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') AND pv.parent_id IS NULL)
+                OR (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND
+                    (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id
+                     AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) = 0))""", []
+        if tab == 'error':
+            return """((pv.status IN ('FAILED', 'LOGIN_REQUIRED') AND pv.parent_id IS NULL)
+                OR (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND
+                    (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id
+                     AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) > 0))""", []
+        if tab == 'active':
+            return """((pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING') AND pv.parent_id IS NULL)
+                OR (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND
+                    (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
+                    (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0))""", []
+        if tab == 'wechat_deferred':
+            return """pv.status = 'WECHAT_DEFERRED' AND pv.parent_id IS NULL AND NOT EXISTS (
+                SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = pv.id)""", []
+        if tab == 'review':
+            return "pv.status IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN') AND pv.parent_id IS NULL", []
+        if tab == 'queue':
+            return "pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL", []
         if tab == 'high_likes':
-            order_col = "pv.upload_date DESC, CAST(pv.like_count AS FLOAT) / pv.view_count"
-        else:
-            order_col = "pv.created_at" if tab == 'waitlist' else "pv.updated_at"
-        offset = (page - 1) * size
-        
-        with self.get_connection() as conn:
-            cursor = conn.execute(
-                f"SELECT COUNT(*) as cnt FROM processed_videos pv WHERE {condition}"
-            )
-            total_count = cursor.fetchone()["cnt"]
+            since = (datetime.datetime.now() - datetime.timedelta(days=engagement_window_days)).strftime("%Y%m%d")
+            return "pv.upload_date >= ? AND pv.view_count > 500 AND pv.parent_id IS NULL", [since]
+        if tab == 'waitlist':
+            return "pv.status = 'PENDING' AND pv.score < 75 AND pv.parent_id IS NULL AND IFNULL(pv.source,'') != 'DISCOVERY'", []
+        raise ValueError(f"Unknown video tab: {tab}")
 
-            # [Unknown_Model_planning] 查询时，利用子查询带出子切片数量 count 和已完成子切片数量 completed_slices_count
-            cursor = conn.execute(
+    @staticmethod
+    def _error_type_condition(error_type: str) -> tuple[str, List[Any]]:
+        """将控制面异常分类映射为只读 SQL 谓词，覆盖父任务及其失败切片。"""
+        error_text = "(COALESCE(pv.error_msg, '') || ' ' || COALESCE(pv.censor_tag, '') || ' ' || COALESCE((SELECT group_concat(COALESCE(sub.error_msg, '') || ' ' || COALESCE(sub.censor_tag, '')) FROM processed_videos sub WHERE sub.parent_id = pv.id), ''))"
+        categories = {
+            'channel_policy': (f"{error_text} LIKE '%Channel Policy%' OR {error_text} LIKE '%频道策略%'", []),
+            'login': (f"{error_text} LIKE '%LOGIN_REQUIRED%' OR {error_text} LIKE '%cookie%' OR {error_text} LIKE '%登录%'", []),
+            'youtube_403': (f"{error_text} LIKE '%403%' AND {error_text} LIKE '%YouTube%'", []),
+            'copy_quality': (f"{error_text} LIKE '%COPYWRITING%' OR {error_text} LIKE '%文案%' OR {error_text} LIKE '%quality gate%'", []),
+            'censorship_p0': (f"{error_text} LIKE '%Censorship P0%' OR {error_text} LIKE '%政治安全违禁%'", []),
+        }
+        if error_type == 'all':
+            return '1 = 1', []
+        if error_type == 'other':
+            known = ' OR '.join(f"({clause})" for clause, _ in categories.values())
+            return f"NOT ({known})", []
+        if error_type not in categories:
+            raise ValueError(f"Unknown error type: {error_type}")
+        return categories[error_type]
+
+    def get_video_filter_channels(self, tab: str, engagement_window_days: int = 3) -> List[str]:
+        """返回当前场景可选频道，供控制面下拉框使用，不改变任何视频状态。"""
+        condition, params = self._build_video_tab_condition(tab, engagement_window_days)
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""SELECT DISTINCT COALESCE(NULLIF(rc.channel_name, ''), pv.channel_id) AS channel_name
+                    FROM processed_videos pv
+                    LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id
+                    WHERE {condition} AND COALESCE(NULLIF(rc.channel_name, ''), pv.channel_id) != ''
+                    ORDER BY channel_name COLLATE NOCASE ASC""",
+                params,
+            ).fetchall()
+        return [str(row['channel_name']) for row in rows]
+
+    def get_paginated_videos(
+        self,
+        tab: str = 'waitlist',
+        page: int = 1,
+        size: int = 20,
+        *,
+        search: str = '',
+        channel: str = '',
+        sort: str = 'default',
+        score_band: str = 'all',
+        error_type: str = 'all',
+        status: str = 'all',
+        engagement_window_days: int = 3,
+        include_processed: bool = False,
+    ) -> tuple[List[Dict[str, Any]], int]:
+        """在 SQL 层先筛选、稳定排序，再返回当前页及同一谓词下的准确总数。"""
+        condition, params = self._build_video_tab_condition(tab, engagement_window_days)
+        clauses = [condition]
+        query_params: List[Any] = list(params)
+
+        if search:
+            escaped = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+            clauses.append("(pv.youtube_id LIKE ? ESCAPE '\\' OR pv.title LIKE ? ESCAPE '\\' OR COALESCE(pv.zh_title, '') LIKE ? ESCAPE '\\')")
+            query_params.extend([f"%{escaped}%"] * 3)
+        if channel:
+            clauses.append("(pv.channel_id = ? OR COALESCE(rc.channel_name, pv.channel_id) = ?)")
+            query_params.extend([channel, channel])
+        if score_band != 'all':
+            score_conditions = {
+                'unscored': 'pv.score = 0',
+                'below_50': 'pv.score BETWEEN 1 AND 49',
+                '50_74': 'pv.score BETWEEN 50 AND 74',
+            }
+            if score_band not in score_conditions:
+                raise ValueError(f"Unknown score band: {score_band}")
+            clauses.append(score_conditions[score_band])
+        if error_type != 'all':
+            error_clause, error_params = self._error_type_condition(error_type)
+            clauses.append(f"({error_clause})")
+            query_params.extend(error_params)
+        if status != 'all':
+            clauses.append('pv.status = ?')
+            query_params.append(status)
+        if tab == 'high_likes' and not include_processed:
+            clauses.append("NOT EXISTS (SELECT 1 FROM video_browser_marks marks WHERE marks.video_id = pv.id AND marks.mark_type = 'ENGAGEMENT_REVIEWED')")
+
+        order_by = {
+            'score_desc': 'pv.score DESC, pv.id ASC',
+            'views_desc': '(pv.view_count IS NULL) ASC, pv.view_count DESC, pv.id ASC',
+            'like_rate_desc': '(pv.like_count IS NULL OR pv.view_count IS NULL OR pv.view_count <= 0) ASC, CAST(pv.like_count AS REAL) / NULLIF(pv.view_count, 0) DESC, pv.id ASC',
+            'source_published_at_desc': "(pv.source_published_at IS NULL OR pv.source_published_at = '') ASC, pv.source_published_at DESC, pv.id ASC",
+            'upload_date_desc': "(pv.upload_date IS NULL OR pv.upload_date = '') ASC, pv.upload_date DESC, pv.id ASC",
+        }
+        if sort == 'default':
+            if tab == 'high_likes':
+                order_clause = "(pv.upload_date IS NULL OR pv.upload_date = '') ASC, pv.upload_date DESC, (pv.like_count IS NULL OR pv.view_count IS NULL OR pv.view_count <= 0) ASC, CAST(pv.like_count AS REAL) / NULLIF(pv.view_count, 0) DESC, pv.id ASC"
+            elif tab == 'waitlist':
+                order_clause = 'pv.created_at DESC, pv.id ASC'
+            else:
+                order_clause = 'pv.updated_at DESC, pv.id ASC'
+        elif sort in order_by:
+            order_clause = order_by[sort]
+        else:
+            raise ValueError(f"Unknown video sort: {sort}")
+
+        where = ' AND '.join(f'({clause})' for clause in clauses)
+        offset = (page - 1) * size
+        with self.get_connection() as conn:
+            total_count = conn.execute(
+                f"SELECT COUNT(*) AS cnt FROM processed_videos pv LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id WHERE {where}",
+                query_params,
+            ).fetchone()['cnt']
+            rows = conn.execute(
                 f"""SELECT pv.*, COALESCE(rc.channel_name, pv.channel_id) AS channel_name,
+                           EXISTS(SELECT 1 FROM video_browser_marks marks WHERE marks.video_id = pv.id AND marks.mark_type = 'ENGAGEMENT_REVIEWED') AS browser_processed,
                            (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id) AS slices_count,
                            (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) AS completed_slices_count
                     FROM processed_videos pv
                     LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id
-                    WHERE {condition}
-                    ORDER BY {order_col} DESC LIMIT ? OFFSET ?""",
-                (size, offset)
-            )
-            videos = [dict(row) for row in cursor.fetchall()]
+                    WHERE {where}
+                    ORDER BY {order_clause} LIMIT ? OFFSET ?""",
+                [*query_params, size, offset],
+            ).fetchall()
+            videos = [dict(row) for row in rows]
 
         # [Gemini_3.6_Flash_planning] 挂载多平台发布状态字典 (wechat, kuaishou, douyin)
         v_ids = [v["id"] for v in videos]
@@ -4588,6 +4671,28 @@ class PipelineDB:
             v["platforms"] = pub_map.get(v["id"], {})
 
         return videos, total_count
+
+    def set_engagement_reviewed(self, youtube_id: str, reviewed: bool, slice_index: int = 0) -> bool:
+        """设置近期高互动候选的本地浏览标记；不写入视频或平台状态。"""
+        with self.get_connection() as conn:
+            video = conn.execute(
+                'SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?',
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                return False
+            if reviewed:
+                conn.execute(
+                    "INSERT OR IGNORE INTO video_browser_marks(video_id, mark_type) VALUES (?, 'ENGAGEMENT_REVIEWED')",
+                    (video['id'],),
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM video_browser_marks WHERE video_id = ? AND mark_type = 'ENGAGEMENT_REVIEWED'",
+                    (video['id'],),
+                )
+            conn.commit()
+        return True
 
     def get_video_publications_map(self, video_ids: Sequence[int]) -> Dict[int, Dict[str, Dict[str, Any]]]:
         """[Gemini_3.6_Flash_planning] 批量聚合获取视频在微信视频号、快手、抖音 3 个平台的发布状态字典。"""
@@ -4772,7 +4877,7 @@ class PipelineDB:
                         (pv.status = 'SEGMENTED' AND 
                          (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) > 0)
                     ) THEN 1 ELSE 0 END) as error,
-                    SUM(CASE WHEN (pv.upload_date >= ? AND pv.view_count > 500 AND pv.like_count IS NOT NULL AND pv.view_count IS NOT NULL) THEN 1 ELSE 0 END) as high_likes
+                    SUM(CASE WHEN (pv.upload_date >= ? AND pv.view_count > 500) THEN 1 ELSE 0 END) as high_likes
                 FROM processed_videos pv
                 WHERE pv.parent_id IS NULL
             """, (three_days_ago,))

@@ -16,6 +16,7 @@
 | 3.33.0 | 2026-09-02 | Codex | 抖音 HISTORY 补录与 CANCELED 重入队在写账本前读取阶段化 UI 熔断，读取异常或格式异常 fail-closed。 |
 | 3.34.0 | 2026-09-07 | Codex | P0 审查红线在复核接口写库前 fail-closed 拒绝；复核证据优先读取触发预检的源 VTT，消除界面假放行与空字幕误导。 |
 | 3.35.0 | 2026-09-07 | Codex | 恢复 P0 人工复核放行，要求双重确认并写入审计台账；管线只认可该审计记录对应的 P0 放行。 |
+| 3.34.1 | 2026-09-07 | Codex | 列表筛选排序改为服务端分页前执行，并新增独立近期高互动浏览标记 API。 |
 | 3.22.0 | 2026-08-20 | Codex | 新增 Highlight 候选人工选定 API，并创建独立发布主体但不触发渲染或发布 |
 | 3.21.0 | 2026-08-20 | Codex | 新增手动 Highlight Job 候选分析 API；独立于既有视频状态机和任何发布入口 |
 | 3.20.0 | 2026-08-20 | Codex | 禁止视频号标题回查接口启动浏览器；仅允许发布链写入平台原生 ID 后进入精确确认流程 |
@@ -139,6 +140,17 @@ async def reject_untrusted_browser_origins(request, call_next):
 db = PipelineDB()
 _wechat_login_thread: Optional[threading.Thread] = None
 _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
+
+_VIDEO_TABS = {"waitlist", "queue", "active", "wechat_deferred", "review", "completed", "error", "high_likes"}
+_VIDEO_SORTS = {"default", "score_desc", "views_desc", "like_rate_desc", "source_published_at_desc", "upload_date_desc"}
+_SCORE_BANDS = {"all", "unscored", "below_50", "50_74"}
+_ERROR_TYPES = {"all", "channel_policy", "login", "youtube_403", "copy_quality", "censorship_p0", "other"}
+_ENGAGEMENT_WINDOWS = {1, 3, 7, 30}
+_VIDEO_STATUSES = {
+    "PENDING", "METADATA_PENDING", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "AI_COVER_PENDING",
+    "PUBLISHING", "PUBLISHED", "COMPLETED", "IGNORED", "FAILED", "LOGIN_REQUIRED", "SEGMENTED",
+    "WECHAT_DEFERRED", "UNDER_REVIEW", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNCERTAIN",
+}
 
 
 def _require_pipeline_internal_token(
@@ -1280,12 +1292,69 @@ def requeue_canceled_douyin_publication(req: DouyinPublicationRequeueRequest):
     }
 
 
+class EngagementReviewedRequest(BaseModel):
+    """仅记录控制面浏览状态；与生产和平台投递状态完全隔离。"""
+
+    reviewed: bool
+
+
+def _validate_video_list_query(
+    tab: str,
+    size: int,
+    search: str,
+    sort: str,
+    score_band: str,
+    error_type: str,
+    status: str,
+    engagement_window_days: int,
+) -> None:
+    """在进入 DAL 前拒绝未知控制面参数，避免静默退化为错误列表。"""
+    if tab not in _VIDEO_TABS:
+        raise HTTPException(status_code=422, detail="unknown tab")
+    if not 1 <= size <= 100:
+        raise HTTPException(status_code=422, detail="size must be between 1 and 100")
+    if len(search) > 200:
+        raise HTTPException(status_code=422, detail="search is too long")
+    if sort not in _VIDEO_SORTS:
+        raise HTTPException(status_code=422, detail="unknown sort")
+    if score_band not in _SCORE_BANDS:
+        raise HTTPException(status_code=422, detail="unknown score band")
+    if error_type not in _ERROR_TYPES:
+        raise HTTPException(status_code=422, detail="unknown error type")
+    if status != "all" and status not in _VIDEO_STATUSES:
+        raise HTTPException(status_code=422, detail="unknown status")
+    if engagement_window_days not in _ENGAGEMENT_WINDOWS:
+        raise HTTPException(status_code=422, detail="unsupported engagement window")
+    if tab != "waitlist" and score_band != "all":
+        raise HTTPException(status_code=422, detail="score band only applies to waitlist")
+    if tab != "error" and error_type != "all":
+        raise HTTPException(status_code=422, detail="error type only applies to error tab")
+    if tab != "high_likes" and status != "all":
+        raise HTTPException(status_code=422, detail="status filter only applies to recent engagement")
+
+
 @app.get("/api/videos")
-def get_videos(tab: str = "waitlist", page: int = 1, size: int = 20):
-    """返回分页和分类后的视频列表，以及各个 Tab 的计数"""
+def get_videos(
+    tab: str = "waitlist",
+    page: int = 1,
+    size: int = 20,
+    search: str = "",
+    channel: str = "",
+    sort: str = "default",
+    score_band: str = "all",
+    error_type: str = "all",
+    status: str = "all",
+    engagement_window_days: int = 3,
+    include_processed: bool = False,
+):
+    """在服务端筛选和稳定排序后分页返回列表及准确总数。"""
+    _validate_video_list_query(tab, size, search, sort, score_band, error_type, status, engagement_window_days)
     page = max(1, page)
-    size = max(1, min(100, size))
-    videos, total_count = db.get_paginated_videos(tab, page, size)
+    videos, total_count = db.get_paginated_videos(
+        tab, page, size, search=search.strip(), channel=channel.strip(), sort=sort,
+        score_band=score_band, error_type=error_type, status=status,
+        engagement_window_days=engagement_window_days, include_processed=include_processed,
+    )
     _attach_publish_display_fields(videos)
     tab_counts = db.get_tab_counts()
     return {
@@ -1294,8 +1363,19 @@ def get_videos(tab: str = "waitlist", page: int = 1, size: int = 20):
         "page": page,
         "size": size,
         "total_pages": (total_count + size - 1) // size,
-        "tab_counts": tab_counts
+        "tab_counts": tab_counts,
+        "filter_options": {"channels": db.get_video_filter_channels(tab, engagement_window_days)},
     }
+
+
+@app.post("/api/videos/{youtube_id}/engagement-reviewed")
+def set_engagement_reviewed(youtube_id: str, req: EngagementReviewedRequest, slice_index: int = 0):
+    """持久化近期高互动的只读浏览标记，不改变任务或任何平台账本。"""
+    if not re.match(r'^[A-Za-z0-9_-]+$', youtube_id):
+        raise HTTPException(status_code=400, detail="invalid youtube_id")
+    if not db.set_engagement_reviewed(youtube_id, req.reviewed, slice_index):
+        raise HTTPException(status_code=404, detail="video not found")
+    return {"success": True, "youtube_id": youtube_id, "reviewed": req.reviewed}
 
 
 @app.get("/api/videos/{youtube_id}/slices")
