@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.49.0 | 2026-09-07 | Codex | 视频号确认公开回执合并互动帖建议，按分片读取独立产物，不自动发评论。 |
 | 3.48.47 | 2026-09-07 | Codex | 失败通知与日志摘要保留 stderr 末尾异常，防止 INFO 前缀掩盖真实失败原因。 |
 | 3.48.46 | 2026-09-05 | Codex | 回查按单作品持久冷却和实际访问预算执行，每次独立证据目录，冷却项不占预算。 |
 | 3.48.45 | 2026-09-05 | Codex | 从哈希绑定底图重排 4:3 横封面；自动管理页回查固定后台运行，避免反复抢占桌面。 |
@@ -181,6 +182,7 @@ from .utils.generated_content_validation import (
     is_upstream_error_response,
     validate_publishable_generated_content,
 )
+from .utils.engagement_post import engagement_receipt_section
 from .telegram_delivery import send_text as send_telegram_text, send_video as send_telegram_review_video
 from .utils.title_contract import TitleContractError, validate_display_title
 from .scoring import compute_auto_score
@@ -1007,7 +1009,10 @@ class PipelineManager:
                     platform_url=platform_url, reconciled=True,
                 )
                 self.db.update_video_status(yid, "PUBLISHED", error_msg=None, slice_index=slice_index)
-                self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: WeChat\nYouTube ID: {yid}")
+                self.send_telegram_msg(
+                    f"✅ <b>Video Published</b>\nPlatform: WeChat\nYouTube ID: {html.escape(prefix)}"
+                    + engagement_receipt_section(self._OUT_DIR / f"{prefix}_engagement.txt")
+                )
                 settled += 1
             elif return_code == 6:
                 self.db.record_wechat_publication_confirmation(

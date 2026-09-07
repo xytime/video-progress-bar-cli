@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                                  | Description                                      |
 |---------|------------|-----------------------------------------|--------------------------------------------------|
+| 2.0.1 | 2026-09-07 | Codex | 同次文案请求生成评论区选择题，独立保存且失败不阻断主文案。 |
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning               | Initial creation with Gemini API + translator fallback |
 | 1.1.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning     | 移除 os.getenv/load_dotenv，通过 settings 注入   |
 | 1.2.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning     | 结构化输出：短标题/文案/分类三文件；加原创/分类 LLM 推断 |
@@ -66,6 +67,7 @@ from video_processing.utils.translation_helper import translate_text as _transla
 # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils（单一真相源）；此处 re-import 保持
 # `from copywriter import graceful_truncate_title` 的既有调用方（wechat_uploader、测试）零改动。
 from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
+from video_processing.utils.engagement_post import ENGAGEMENT_PROMPT, normalize_engagement_post
 from video_processing.utils.generated_content_validation import validate_publishable_generated_content
 from video_processing.utils.translation_context import build_translation_context
 from video_processing.utils.translation_prompt_constraints import render_translation_constraints
@@ -270,6 +272,9 @@ class WeChatContentSchema(pydantic.BaseModel):  # [Claude_Sonnet_4.6_Thinking_pl
     wechat_copy: str = pydantic.Field(
         description="视频号文案正文，约100-200字，含3-5个hashtag和一句引导关注CTA，纯文本无markdown"
     )
+    engagement_post: str = pydantic.Field(
+        default="", description="评论区互动建议：背景、A-D四个独立选项、证据追问；来源不足时为空"
+    )
     category: str = pydantic.Field(
         description="视频分类，必须从10个选项中选1个：科技、财经、教育、生活、娱乐、游戏、体育、时事、资讯、健康"
     )
@@ -329,6 +334,7 @@ def _build_gemini_base_content(
         "display_title": title_bundle.display_title,
         "hook_subtitle": title_bundle.hook_subtitle,
         "copy": copy,
+        "engagement_post": normalize_engagement_post(parsed.engagement_post),
         "category": category,
         "content_hints": parsed.content_hints if isinstance(parsed.content_hints, list) else [],
         "content_label": "",
@@ -827,6 +833,7 @@ def _build_wechat_prompt(title: str, description: str) -> str:
         f"- display_title：纯中文封面展示标题，10-18字，必须完整；可表达来源明确支持的反差或问题，不得添加来源未出现的数字、机构、因果、预测、受众反应或历史纪录\n"
         f"- hook_subtitle：纯中文，不超过24字\n"
         f"- copy：100-200字 + 3-5个hashtag + 一句CTA，纯文本无markdown\n"
+        f"{ENGAGEMENT_PROMPT}"
         f"- category：从以下选1个：{cats}\n"
         f"- content_hints：从备选词选2-5个: "
         f"policy market capital stock robot ai llm coding software algorithm chip hardware "
@@ -839,7 +846,7 @@ def _build_wechat_prompt(title: str, description: str) -> str:
         f"【事实与术语上下文】\n"
         f"{translation_constraints}\n\n"
         f"YouTube 标题：{title}\n"
-        f"YouTube 简介（节选）：\n{description[:800]}"
+        f"YouTube 简介（节选）：\n{description[:8000]}"
     )
 
 
@@ -1088,6 +1095,8 @@ def generate_wechat_content(
         selected_content.get("short_title", ""),
         selected_content.get("content_label", ""),
     )
+    # 互动建议独立于标题供应商仲裁，缺失或无效不会触发文案重试。
+    selected_content["engagement_post"] = normalize_engagement_post(base_content.get("engagement_post"))
     return selected_content
 
 
@@ -1145,6 +1154,7 @@ def main():
     if content.get("display_title"):
         (out / f"{yid}_display_title.txt").write_text(content["display_title"], encoding="utf-8")
     (out / f"{yid}_copy.txt"    ).write_text(content["copy"],           encoding="utf-8")
+    (out / f"{yid}_engagement.txt").write_text(content.get("engagement_post", ""), encoding="utf-8")
     (out / f"{yid}_category.txt").write_text(content["category"],       encoding="utf-8")
 
     # [Claude_Sonnet_4.6_Thinking_fast] v1.5.0 新增：写出封面引擎依赖的两个文件
