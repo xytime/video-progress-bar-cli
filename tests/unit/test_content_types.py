@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.3.0 | 2026-09-08 | Codex | 类型默认值样本补齐 word 的真实时间轴，满足既有完整性闸门 |
 | 1.0.0 | 2026-08-09 | Codex | 覆盖英语世界短视频标识的默认值、显式写入与切片继承。 |
 | 1.1.0 | 2026-08-14 | Codex | 覆盖既有候选的内容生产类型纠正，不改变处理状态。 |
 | 1.2.0 | 2026-08-14 | Codex | 覆盖发布前人工复核闸的任务级持久化。 |
@@ -83,7 +84,10 @@ def test_study_card_content_defaults_to_english_world_short_type():
         "headline_en": "Test headline",
         "english_text": "Test word",
         "translation_zh": "测试正文",
-        "words": [{"text": "Test", "start": 0.0, "end": 0.5}],
+        "words": [
+            {"text": "Test", "start": 0.0, "end": 0.5},
+            {"text": "word", "start": 0.5, "end": 1.0},
+        ],
         "vocabulary": [{"word": "test", "meaning_zh": "测试"}],
     })
 

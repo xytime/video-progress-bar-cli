@@ -235,8 +235,11 @@ python src/cli/main.py auto-caption ~/Downloads/帝王蝶.mp4 --vertical --title
 ### 运行测试
 
 ```bash
-pytest
+.venv/bin/python scripts/run_isolated_tests.py -- -q tests/unit --ignore=tests/unit/test_dashboard_interactions.py
+.venv/bin/python scripts/run_isolated_tests.py -- --collect-only -q
 ```
+
+测试在一次性源码副本和 macOS 沙盒中执行，收集前拒绝加载正式配置及数据库。每次运行打印源码 SHA 清单、日志和退出收据所在目录。浏览器交互与媒体集成测试需要独立依赖验收，不能把它们计入上述单测通过数。详见 [测试隔离说明](docs/testing-isolation.md)。
 
 ### 效果图
 #### Captioned subtitle
@@ -256,4 +259,3 @@ MIT License
 ## 贡献
 
 欢迎提交Issue和Pull Request。
-

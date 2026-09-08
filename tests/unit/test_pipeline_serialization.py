@@ -1,4 +1,11 @@
-import os
+"""真实文件锁串行契约；使用显式测试配置，不依赖宿主密钥。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-09-08 | Codex | 在客户端构造前注入配置单例；去除未使用的 bot/loop mock |
+"""
+
 import sys
 import time
 import fcntl
@@ -90,13 +97,10 @@ def test_pipeline_manager_flock_serialization(tmp_path):
 @pytest.mark.asyncio
 async def test_pipeline_agent_tools_serialization(tmp_path):
     """验证 PipelineAgent 核心处理工具在并发调用时依然能够通过 fcntl 文件锁实现排队。"""
-    # 构造 mock bot 与 event loop
-    mock_bot = MagicMock()
-    mock_loop = MagicMock()
-    
-    # 临时配置环境变量以通过初始化
-    with patch.dict(os.environ, {"GEMINI_API_KEY": "fake_key"}):
-        agent = PipelineAgent(bot=mock_bot, loop=mock_loop, chat_id=123)
+    # 单例已在收集阶段构造；后置修改 environ 不会更新它。
+    # download_video 不使用 bot/loop，保留真实客户端构造但不请求模型。
+    with patch("bot.pipeline_agent.settings.gemini_api_key", "fake_key"):
+        agent = PipelineAgent(bot=None, loop=None, chat_id=123)
     
     agent.output_dir = tmp_path
     

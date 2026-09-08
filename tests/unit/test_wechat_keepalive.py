@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                              |
 |---------|------------|-------------------------------------|------------------------------------------|
+| 1.1.0   | 2026-09-08 | Codex | 注入实际被业务读取的 settings 单例，报警单测不依赖宿主 Telegram 配置 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | Initial creation: 5 unit tests covering  |
 |         |            |                                     | logged-in, session-expired, missing-file,|
 |         |            |                                     | ambiguous-URL, and DOM-fallback scenarios|
@@ -85,10 +86,8 @@ def test_keepalive_session_expired(tmp_path):
 
     with patch("scripts.wechat_keepalive.sync_playwright", return_value=playwright_ctx), \
          patch("scripts.wechat_keepalive._requests", mock_requests), \
-         patch.dict("os.environ", {
-             "TELEGRAM_BOT_TOKEN": "fake_token",
-             "TELEGRAM_CHAT_ID": "12345"
-         }):
+         patch.multiple("scripts.wechat_keepalive.settings",
+                        telegram_bot_token="fake_token", telegram_chat_id="12345"):
         from scripts.wechat_keepalive import run_keepalive
         result = run_keepalive(state_path=str(state_file), dwell=1)
 
