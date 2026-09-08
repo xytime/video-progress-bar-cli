@@ -237,9 +237,10 @@ python src/cli/main.py auto-caption ~/Downloads/帝王蝶.mp4 --vertical --title
 ```bash
 .venv/bin/python scripts/run_isolated_tests.py -- -q tests/unit --ignore=tests/unit/test_dashboard_interactions.py
 .venv/bin/python scripts/run_isolated_tests.py -- --collect-only -q
+.venv/bin/python scripts/run_isolated_tests.py --browser -- -q tests/unit/test_dashboard_interactions.py tests/browser
 ```
 
-测试在一次性源码副本和 macOS 沙盒中执行，收集前拒绝加载正式配置及数据库。每次运行打印源码 SHA 清单、日志和退出收据所在目录。浏览器交互与媒体集成测试需要独立依赖验收，不能把它们计入上述单测通过数。详见 [测试隔离说明](docs/testing-isolation.md)。
+测试在一次性源码副本和 macOS 沙盒中执行，收集前拒绝加载正式配置及数据库。每次运行打印源码 SHA 清单、日志和退出收据所在目录。第三条命令使用已安装 Chromium 的临时副本验证页面和浏览器边界，并保存截图；缺少依赖明确失败。媒体集成仍需独立验收。详见 [测试隔离说明](docs/testing-isolation.md)。
 
 ### 效果图
 #### Captioned subtitle

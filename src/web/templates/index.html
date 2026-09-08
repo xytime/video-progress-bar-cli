@@ -28,6 +28,7 @@
   | 2026-09-07 | Codex | 新增服务端筛选、稳定排序和近期高互动浏览标记；分页总数与当前筛选一致。 |
   | 2026-09-07 | Codex | 默认按来源发布日期排序；纠正把源视频发布日期误标为平台上传时间的展示，并增加 80 分以上筛选。 |
   | 2026-09-08 | Codex | 同步当前页批量选择与具名删除确认；统一中文状态；取消过期列表请求并阻止跨筛选回写。 |
+  | 2026-09-08 | Codex | 修正窄屏编辑模式复选框显示规则优先级，恢复可见勾选与退出后的隐藏。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -1214,7 +1215,7 @@
       .activity-table td.cb-cell {
         display: none !important;
       }
-      .in-edit-mode .cb-cell {
+      .activity-table.in-edit-mode td.cb-cell {
         display: inline-flex !important;
         align-self: center;
         padding: 0 !important;

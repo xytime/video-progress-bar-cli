@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-08 | Codex | 收集前隔离配置、源码、输出、网络和子进程；保留快照与真实退出收据 |
+| 1.1.0 | 2026-09-08 | Codex | 显式浏览器模式复制运行依赖，保留版本收据与原有默认隔离 |
 """
 
 import argparse
@@ -170,14 +171,20 @@ def prepare_run(source):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--browser", action="store_true", help="复制本机 Chromium 并允许其内部 rendezvous IPC")
     parser.add_argument("pytest_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.timeout <= 0:
         parser.error("timeout 必须为正数")
     source = Path(__file__).resolve().parents[1]
+    browser = None
     try:
         evidence, run_root, repo, canary, profile = prepare_run(source)
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        if args.browser:
+            from test_browser_runtime import prepare_browser
+
+            browser = prepare_browser(run_root, repo, profile, evidence)
+    except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
         print(f"ISOLATION_REFUSED: {exc}", file=sys.stderr)
         return 2
     environment = child_environment(repo, run_root)
@@ -193,6 +200,12 @@ def main(argv=None):
         "pytest_arguments": test_args, "timeout_seconds": args.timeout,
         "source_manifest_sha256": hashlib.sha256((evidence / "source-manifest.json").read_bytes()).hexdigest(),
         "profile_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
+        "browser_runtime": None if browser is None else {
+            key: browser[key] for key in ("revision", "version", "executable")
+        },
+        "browser_runtime_sha256": None if browser is None else hashlib.sha256(
+            (evidence / "browser-runtime.json").read_bytes()
+        ).hexdigest(),
     }
     if probe["exit_code"] == 0:
         result = run_child(prefix + ["-m", "pytest", "-p", "no:cacheprovider", "-p", "pytest_asyncio.plugin",
