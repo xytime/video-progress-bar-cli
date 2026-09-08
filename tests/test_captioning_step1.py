@@ -1,79 +1,45 @@
-import os
-import subprocess
-from pathlib import Path
-import logging
-import sys
+"""真实 base ASR 与无翻译字幕烧录验收，不访问翻译供应商。
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-09-08 | Codex | 固定语音、实际字幕内容/时序、成片音轨和字幕像素验收 |
+"""
+
+from PIL import Image, ImageChops
 
 from video_processing.processors.caption_processor import AutoCaptionProcessor
+from tests.media_fixtures import (
+    assert_subtitles, capture_frame, offline_models, probe_media, run_media, save_media_evidence, speech_video,
+)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("test_captioning")
 
-def create_test_video(path: Path):
-    """Generate a test video with speech using macOS 'say' and ffmpeg"""
-    try:
-        # 1. Generate Audio
-        audio_path = path.parent / "test_audio.aiff"
-        text = "Welcome to the automatic captioning system test."
-        subprocess.run(["say", text, "-o", str(audio_path)], check=True)
-        
-        # 2. Merge with black video
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "lavfi", "-i", "color=c=black:s=640x480:d=4",
-            "-i", str(audio_path),
-            "-c:v", "libx264", "-c:a", "aac",
-            "-shortest",
-            str(path)
-        ]
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # Clean up audio
-        os.remove(audio_path)
-        logger.info(f"Created test video at: {path}")
-        
-    except Exception as e:
-        logger.error(f"Failed to create test video: {e}")
-        # Build a fallback dummy file just to test extraction flow if say fails? 
-        # But 'say' should work on mac.
-        raise
-
-def test_transcription():
-    test_dir = Path("draft-code/test_data")
-    test_dir.mkdir(parents=True, exist_ok=True)
-    video_path = test_dir / "test_speech.mp4"
-    
-    if not video_path.exists():
-        create_test_video(video_path)
-        
-    processor = AutoCaptionProcessor(
-        input_path=video_path,
-        model_size="base", # Use base for speed in test
-        src_lang="en"
-    )
-    
-    try:
-        processor.process()
-        logger.info("Test passed: Transcribe ran without error.")
-        
-        # Verify ASS file
-        ass_path = video_path.with_suffix('.ass')
-        if ass_path.exists():
-            logger.info(f"ASS file generated at: {ass_path}")
-            with open(ass_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                logger.info("ASS Content Preview:")
-                logger.info(content[:500])  # Print first 500 chars
-        else:
-            logger.error(f"ASS file NOT found at: {ass_path}")
-            raise FileNotFoundError("ASS file not generated")
-            
-    except Exception as e:
-        logger.error(f"Test failed: {e}")
-        raise
-
-if __name__ == "__main__":
-    test_transcription()
+def test_transcription(speech_video, tmp_path):
+    video, record, metadata = speech_video("caption_speech")
+    stages = []
+    processor = AutoCaptionProcessor(input_path=video, model_size="base", src_lang="en",
+                                     target_lang=None, device="cpu", progress_reporter=stages.append)
+    output = processor.process()
+    subs = assert_subtitles(video.with_suffix(".ass"), record["text"],
+                            float(metadata["format"]["duration"]))
+    rendered = probe_media(output)
+    assert {s["codec_type"] for s in rendered["streams"]} == {"video", "audio"}
+    assert abs(float(rendered["format"]["duration"]) - float(metadata["format"]["duration"])) <= .08
+    audio_hashes = [run_media(["ffmpeg", "-v", "error", "-i", str(path), "-map", "0:a:0",
+                              "-c", "copy", "-f", "hash", "-hash", "sha256", "-"]).stdout.strip()
+                    for path in (video, output)]
+    assert audio_hashes[0].startswith("SHA256=") and audio_hashes[0] == audio_hashes[1]
+    assert stages == ["MODEL_LOADING", "AUDIO_EXTRACTING", "TRANSCRIBING", "ASS_GENERATING",
+                      "VIDEO_RENDERING", "COMPLETE"]
+    midpoint = (subs[0].start + subs[0].end) / 2000
+    before = capture_frame(video, midpoint, tmp_path / "before.png")
+    after = capture_frame(output, midpoint, tmp_path / "captioned.png")
+    with Image.open(before) as a, Image.open(after) as b:
+        difference = ImageChops.difference(a.convert("RGB"), b.convert("RGB"))
+        box = difference.getbbox()
+        assert box and box[1] > b.height / 2, "未在画面下方发现实际烧录的字幕"
+    save_media_evidence("auto-caption", [video, output, video.with_suffix(".ass"), before, after],
+                        {"model": "base", "source_text": record["text"], "stages": stages,
+                         "source_audio_sha256": record["sha256"], "subtitle_bbox": box,
+                         "audio_packet_hash": audio_hashes[0],
+                         "streams": rendered["streams"]})

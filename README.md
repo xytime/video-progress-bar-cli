@@ -238,9 +238,10 @@ python src/cli/main.py auto-caption ~/Downloads/帝王蝶.mp4 --vertical --title
 .venv/bin/python scripts/run_isolated_tests.py -- -q tests/unit --ignore=tests/unit/test_dashboard_interactions.py
 .venv/bin/python scripts/run_isolated_tests.py -- --collect-only -q
 .venv/bin/python scripts/run_isolated_tests.py --browser -- -q tests/unit/test_dashboard_interactions.py tests/browser
+.venv/bin/python scripts/run_isolated_tests.py --browser --media -- -q tests
 ```
 
-测试在一次性源码副本和 macOS 沙盒中执行，收集前拒绝加载正式配置及数据库。每次运行打印源码 SHA 清单、日志和退出收据所在目录。第三条命令使用已安装 Chromium 的临时副本验证页面和浏览器边界，并保存截图；缺少依赖明确失败。媒体集成仍需独立验收。详见 [测试隔离说明](docs/testing-isolation.md)。
+测试在一次性源码副本和 macOS 沙盒中执行，收集前拒绝加载正式配置及数据库。每次运行打印源码 SHA 清单、日志和退出收据所在目录。第三条命令使用已安装 Chromium 的临时副本验证页面和浏览器边界，并保存截图；缺少依赖明确失败。第四条命令包含真实离线 Whisper、FFmpeg 烧录和研报 PNG/PDF；只复制已校验 tiny/base 模型，使用固定合成语音，不联网下载或翻译。详见 [测试隔离说明](docs/testing-isolation.md)。
 
 ### 效果图
 #### Captioned subtitle

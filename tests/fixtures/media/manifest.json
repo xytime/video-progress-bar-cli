@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "purpose": "Original synthetic speech for offline regression tests; no user or production recording.",
+  "generated_at": "2026-09-08",
+  "files": {
+    "extract_speech.wav": {
+      "text": "This is a test for subtitle extraction. No translation is needed.",
+      "voice": "Daniel",
+      "generator": "macOS say",
+      "rate_words_per_minute": 145,
+      "sample_rate": 16000,
+      "channels": 1,
+      "sample_width": 2,
+      "frames": 75729,
+      "duration_seconds": 4.7330625,
+      "sha256": "8fcdcc3988d101fcf02f92d26747eb4de5eaefb896da0ee72e050a14defb8dfd"
+    },
+    "caption_speech.wav": {
+      "text": "Welcome to the automatic captioning system test.",
+      "voice": "Daniel",
+      "generator": "macOS say",
+      "rate_words_per_minute": 145,
+      "sample_rate": 16000,
+      "channels": 1,
+      "sample_width": 2,
+      "frames": 50729,
+      "duration_seconds": 3.1705625,
+      "sha256": "39197fe9e7aa365c72ce01085ba45e471dc0f20ecaec115e0aa235cbf3a59c68"
+    }
+  }
+}

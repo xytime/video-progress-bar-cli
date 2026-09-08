@@ -97,9 +97,10 @@ If you hit `Error: No such option: -t`, you are running a stale installed copy â
 .venv/bin/python scripts/run_isolated_tests.py -- -q tests/unit/test_database_slices.py
 .venv/bin/python scripts/run_isolated_tests.py -- --collect-only -q
 .venv/bin/python scripts/run_isolated_tests.py --browser -- -q tests/unit/test_dashboard_interactions.py tests/browser
+.venv/bin/python scripts/run_isolated_tests.py --browser --media -- -q tests
 ```
 
-Do not invoke bare pytest against the live checkout: collection imports settings and initializes default databases. The runner snapshots maintained source into a temporary root and verifies OS denial of external reads/writes, networking, and signals before pytest starts. Explicit browser mode copies the installed Chromium runtime, permits only its rendezvous Mach namespace, and records UI screenshots plus actual browser boundary tests. Missing browser dependencies fail rather than skip. Media integration remains a separate acceptance scope; see `docs/testing-isolation.md` for evidence and limitations.
+Do not invoke bare pytest against the live checkout: collection imports settings and initializes default databases. The runner snapshots maintained source into a temporary root and verifies OS denial of external reads/writes, networking, and signals before pytest starts. Explicit browser mode copies the installed Chromium runtime, permits only its rendezvous Mach namespace, and records UI screenshots plus actual browser boundary tests. Missing browser dependencies fail rather than skip. Explicit media mode also copies hash-verified local tiny/base models and validates synthetic speech through real ASR, subtitle burn-in, and report PNG/PDF rendering; see `docs/testing-isolation.md` for evidence and limitations.
 
 ## Non-negotiable conventions (the "constitution" â€” `CONTRIBUTING.md`)
 

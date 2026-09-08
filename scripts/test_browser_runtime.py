@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-08 | Codex | 按已安装 Playwright 版本复制 headless shell，散列依赖并声明最小 IPC 例外 |
+| 1.1.0 | 2026-09-08 | Codex | 保留 Playwright 标准缓存子目录，允许生产渲染器使用快照中的默认浏览器 |
 """
 
 import hashlib
@@ -67,7 +68,7 @@ def copy_browser(source, destination):
 
 def prepare_browser(run_root, repo, profile, evidence):
     source, relative_executable, metadata = installed_browser()
-    destination = run_root / "browser"
+    destination = run_root / "browser" / f"chromium_headless_shell-{metadata['revision']}"
     files = copy_browser(source, destination)
     runtime = {**metadata, "source": str(source), "snapshot": str(destination),
                "executable": str(destination / relative_executable), "files": files}

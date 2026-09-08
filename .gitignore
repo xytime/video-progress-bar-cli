@@ -99,3 +99,7 @@ wechat_state.json
 
 *.db
 *.sqlite3
+
+# Versioned synthetic speech fixtures for isolated media regression tests
+!tests/fixtures/media/extract_speech.wav
+!tests/fixtures/media/caption_speech.wav

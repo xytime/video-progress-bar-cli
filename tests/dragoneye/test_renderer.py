@@ -4,16 +4,19 @@
 | Version | Date       | Author                       | Description |
 |---------|------------|------------------------------|-------------|
 | 1.0.0   | 2026-08-21 | Gemini_3.7_Flash_High_planning | 初始创建 DragonEye 模块测试集 |
+| 1.1.0 | 2026-09-08 | Codex | 检查真实 DOM、图片载入、PDF 文本/页数与水印差异，并保留合成产物 |
 """
 
 import os
 from pathlib import Path
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
+from pypdf import PdfReader
 
 from dragoneye.tokens import COLORS, LAYOUT
 from dragoneye.parser import parse_dragon_eye_markdown
 from dragoneye.renderer import DragonEyeRenderer
+from tests.media_fixtures import save_media_evidence
 
 SAMPLE_STANDARD_MD = """🐉 **龙眼期权 · DRAGONEYE OPTIONS** | **[栏目名称：盘前剧本]**
 📅 交易日：2026-08-21 | 编号：No.088 | 核心引擎：OptionSense
@@ -99,7 +102,7 @@ def test_brand_assets_exist():
         assert f.stat().st_size > 0, f"Asset file is empty: {rel_path}"
 
 
-def test_render_poster_e2e(tmp_path):
+def test_render_poster_e2e(tmp_path, render_audit):
     """端到端测试：从 Markdown 渲染出 1080px 高清长图"""
     output_png = tmp_path / "test_poster.png"
     renderer = DragonEyeRenderer()
@@ -116,9 +119,14 @@ def test_render_poster_e2e(tmp_path):
         width, height = img.size
         assert width == 1080
         assert height > 500
+    assert len(render_audit) == 1
+    for text in ("Gamma Wall", "602.50", "VWAP", "605", "风控红线", "OptionSense"):
+        assert text in render_audit[0]["text"]
+    assert not list(tmp_path.glob("temp_*.html"))
+    save_media_evidence("poster", [res_path], {"synthetic": True, "dom": render_audit})
 
 
-def test_render_cover_e2e(tmp_path):
+def test_render_cover_e2e(tmp_path, render_audit):
     """端到端测试：渲染研报封面 PNG 与 PDF"""
     output_png = tmp_path / "test_cover.png"
     output_pdf = tmp_path / "test_cover.pdf"
@@ -142,6 +150,17 @@ def test_render_cover_e2e(tmp_path):
     res_pdf = renderer.render_report_cover(meta, output_pdf, as_pdf=True)
     assert res_pdf.exists()
     assert res_pdf.stat().st_size > 1000
+    reader = PdfReader(res_pdf)
+    assert len(reader.pages) == 1
+    assert tuple(float(n) for n in reader.pages[0].mediabox) == (0, 0, 810, 1080)
+    extracted = reader.pages[0].extract_text()
+    assert meta["report_title"] in extracted
+    assert meta["doc_id"] in extracted
+    assert len(render_audit) == 2
+    assert all(meta["report_title"] in page["text"] for page in render_audit)
+    assert not list(tmp_path.glob("temp_*.html"))
+    save_media_evidence("cover", [res_png, res_pdf],
+                        {"synthetic": True, "dom": render_audit, "pdf_text": extracted})
 
 
 def test_chart_helper_theme_and_watermark(tmp_path):
@@ -169,4 +188,5 @@ def test_chart_helper_theme_and_watermark(tmp_path):
     assert out_path.exists()
     with Image.open(out_path) as out_im:
         assert out_im.size == (800, 600)
-
+        assert ImageChops.difference(im.convert("RGB"), out_im.convert("RGB")).getbbox()
+    save_media_evidence("watermark", [dummy_chart, out_path], {"synthetic": True, "changed_pixels": True})

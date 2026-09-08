@@ -45,6 +45,7 @@
 | 1.32.0 | 2026-08-24 | Codex | 影子期恢复已批准生产顺序；模型池仅负责可用性和冷却筛除，不重排运营回退链。 |
 | 1.33.0 | 2026-08-27 | Codex | 增加字幕阶段回调，供父管线获得子进程运行中可审计的真实阶段。 |
 | 1.34.0 | 2026-08-31 | Codex | 移除导入期全局 TLS 绕过；Google 终级翻译的受限超时改由 translation_helper 管理。 |
+| 1.35.0 | 2026-09-08 | Codex | 委托纯函数补齐明确关闭翻译时的原文字幕，翻译失败不静默回退。 |
 """
 import logging
 from pathlib import Path
@@ -60,6 +61,7 @@ from ..core.base import VideoProcessorBase, VideoProcessingError
 from ..utils.translation_helper import translate_batch as _google_batch_fallback
 from ..utils.vocab_helper import extract_vocab_batch  # [Claude_Sonnet_4.6_Thinking_planning]
 from ..utils.translation_context import build_translation_context
+from ..utils.source_caption import build_source_caption_event
 from ..utils.subtitle_translation_provider import (
     SubtitleTranslationCandidate,
     apply_translation_candidate,
@@ -398,6 +400,12 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 evt_zh = pysubs2.SSAEvent(start=start_ms, end=end_ms, text=zh_text)
                 evt_zh.marginv = base_marginv
                 subs.events.append(evt_zh)
+            else:
+                event = build_source_caption_event(
+                    seg, self.src_lang, self.target_lang, en_fontsize, base_marginv, en_wrap_width
+                )
+                if event is not None:
+                    subs.events.append(event)
             
         # 保存到与输入同一目录
         ass_path = self.input_path.with_suffix('.ass')

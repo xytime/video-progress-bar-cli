@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-08 | Codex | 收集前隔离配置、源码、输出、网络和子进程；保留快照与真实退出收据 |
 | 1.1.0 | 2026-09-08 | Codex | 显式浏览器模式复制运行依赖，保留版本收据与原有默认隔离 |
+| 1.2.0 | 2026-09-08 | Codex | 显式媒体模式复制已校验离线模型，浏览器使用标准快照缓存布局 |
 """
 
 import argparse
@@ -168,26 +169,39 @@ def prepare_run(source):
     return evidence, run_root, repo, canary, profile
 
 
-def main(argv=None):
+def parse_arguments(argv):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--browser", action="store_true", help="复制本机 Chromium 并允许其内部 rendezvous IPC")
+    parser.add_argument("--media", action="store_true", help="校验并复制本机 Whisper tiny/base；不联网下载")
     parser.add_argument("pytest_args", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     if args.timeout <= 0:
         parser.error("timeout 必须为正数")
+    return args
+
+
+def main(argv=None):
+    args = parse_arguments(argv)
     source = Path(__file__).resolve().parents[1]
     browser = None
+    media = None
     try:
         evidence, run_root, repo, canary, profile = prepare_run(source)
         if args.browser:
             from test_browser_runtime import prepare_browser
 
             browser = prepare_browser(run_root, repo, profile, evidence)
+        if args.media:
+            from test_media_runtime import prepare_media
+
+            media = prepare_media(run_root, repo, evidence)
     except (ValueError, OSError, KeyError, StopIteration, subprocess.SubprocessError) as exc:
         print(f"ISOLATION_REFUSED: {exc}", file=sys.stderr)
         return 2
     environment = child_environment(repo, run_root)
+    if browser is not None:
+        environment["PLAYWRIGHT_BROWSERS_PATH"] = str(run_root / "browser")
     prefix = ["/usr/bin/sandbox-exec", "-f", str(profile), sys.executable]
     print(f"隔离测试证据: {evidence}", flush=True)
     probe = run_child(prefix + ["-I", "-c", boundary_probe(canary)], repo, environment,
@@ -205,6 +219,10 @@ def main(argv=None):
         },
         "browser_runtime_sha256": None if browser is None else hashlib.sha256(
             (evidence / "browser-runtime.json").read_bytes()
+        ).hexdigest(),
+        "media_runtime": media,
+        "media_runtime_sha256": None if media is None else hashlib.sha256(
+            (evidence / "media-runtime.json").read_bytes()
         ).hexdigest(),
     }
     if probe["exit_code"] == 0:
