@@ -16,6 +16,7 @@
 | 1.8.0 | 2026-09-03 | Codex | 覆盖可靠 KET 词汇保留给真实阅读屏的密度选择。 |
 | 1.9.0 | 2026-09-03 | Codex | 覆盖未完成 MP4 容器不能覆盖已可用成片的原子交付边界。 |
 | 1.9.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
+| 1.9.2 | 2026-09-10 | Codex | 覆盖空暂存 MP4 拒绝及 FFmpeg 诊断旁车日志。 |
 """
 
 from pathlib import Path
@@ -147,6 +148,38 @@ def test_renderer_keeps_existing_final_mp4_when_staged_container_is_invalid(tmp_
         StudyCardRenderer._validate_and_publish_mp4(staged, final)
 
     assert final.read_bytes() == b"prior-verified-container"
+
+
+def test_renderer_rejects_empty_staged_mp4_without_overwriting_final(tmp_path: Path):
+    staged = tmp_path / ".study-card.mp4"
+    final = tmp_path / "study-card.mp4"
+    staged.touch()
+    final.write_bytes(b"prior-verified-container")
+
+    with pytest.raises(RuntimeError, match="0 字节"):
+        StudyCardRenderer._validate_and_publish_mp4(staged, final)
+
+    assert final.read_bytes() == b"prior-verified-container"
+
+
+def test_renderer_persists_ffmpeg_diagnostics(tmp_path: Path):
+    log_path = tmp_path / "study-card.render.log"
+    output_path = tmp_path / "out.mp4"
+
+    StudyCardRenderer._append_process_log(
+        log_path,
+        stage="main_ffmpeg",
+        command=["ffmpeg", "-i", "input.mp4"],
+        returncode=7,
+        output_path=output_path,
+        stderr="filter failed",
+    )
+
+    diagnostics = log_path.read_text(encoding="utf-8")
+    assert "stage=main_ffmpeg" in diagnostics
+    assert "returncode=7" in diagnostics
+    assert "command=ffmpeg -i input.mp4" in diagnostics
+    assert "filter failed" in diagnostics
 
 
 def test_renderer_rejects_duration_above_three_hundred_seconds_before_touching_source(tmp_path: Path):

@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.11.0 | 2026-09-10 | Codex | 持久保存主合成与透明层 FFmpeg 的命令、退出码和 stderr，并拒绝空暂存 MP4。 |
 | language-v1 | 2026-09-09 | Codex | 消费审校展示计划并绑定成片指纹；透明层错误日志避免管道死锁。 |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：独立合成原片小窗、旋转唱片与逐词红线，输出 manifest。 |
 | 1.1.0 | 2026-08-02 | Codex | 以最后一个已纳入正文的单词为硬终点，音视频同步裁切并淡出，杜绝露出后续导语。 |
@@ -31,6 +32,7 @@ from dataclasses import dataclass, replace
 import math
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -138,6 +140,8 @@ class StudyCardRenderer:
             )
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        diagnostics_path = output_path.with_suffix(".render.log")
+        diagnostics_path.write_text("English World study-card render diagnostics\n", encoding="utf-8")
         staged_file_descriptor, staged_file_name = tempfile.mkstemp(
             prefix=f".{output_path.stem}.", suffix=".staged.mp4", dir=output_path.parent,
         )
@@ -192,6 +196,7 @@ class StudyCardRenderer:
                 scroll_steps,
                 output_duration,
                 right_vocabulary_screens,
+                diagnostics_path=diagnostics_path,
             )
             self._run_ffmpeg(
                 source_video=source_video,
@@ -204,6 +209,7 @@ class StudyCardRenderer:
                 source_duration=source_clip_duration,
                 output_duration=output_duration,
                 scroll_steps=scroll_steps,
+                diagnostics_path=diagnostics_path,
             )
             self._validate_and_publish_mp4(staged_output_path, output_path)
             self._write_manifest(
@@ -264,6 +270,11 @@ class StudyCardRenderer:
         """仅在 FFprobe 读到完整容器后原子替换最终成片。"""
         failure: RuntimeError | None = None
         for attempt in range(_MP4_CONTAINER_VALIDATION_ATTEMPTS):
+            if not staged_output_path.is_file() or staged_output_path.stat().st_size <= 0:
+                failure = RuntimeError("暂存 MP4 不存在或为 0 字节")
+                if attempt + 1 < _MP4_CONTAINER_VALIDATION_ATTEMPTS:
+                    time.sleep(_MP4_CONTAINER_VALIDATION_RETRY_SECONDS)
+                continue
             try:
                 StudyCardRenderer._probe_duration(staged_output_path)
             except RuntimeError as exc:
@@ -275,6 +286,47 @@ class StudyCardRenderer:
             return
         detail = str(failure) if failure is not None else "未知 ffprobe 失败"
         raise RuntimeError(f"渲染后 MP4 容器未完成或不可解析：{detail}")
+
+    @staticmethod
+    def _append_process_log(
+        diagnostics_path: Path | None,
+        *,
+        stage: str,
+        command: list[str],
+        returncode: int | str,
+        output_path: Path,
+        stdout: str = "",
+        stderr: str = "",
+    ) -> None:
+        """将子进程的可复现诊断持久化为成片旁车文件。"""
+        if diagnostics_path is None:
+            return
+        try:
+            output_exists = output_path.is_file()
+            output_bytes = output_path.stat().st_size if output_exists else 0
+        except OSError:
+            output_exists = False
+            output_bytes = "unavailable"
+        block = [
+            f"stage={stage}",
+            f"returncode={returncode}",
+            f"output_path={output_path}",
+            f"output_exists={output_exists}",
+            f"output_bytes={output_bytes}",
+            f"command={shlex.join(command)}",
+            "--- stdout ---",
+            stdout.rstrip(),
+            "--- stderr ---",
+            stderr.rstrip(),
+            "",
+        ]
+        try:
+            diagnostics_path.parent.mkdir(parents=True, exist_ok=True)
+            with diagnostics_path.open("a", encoding="utf-8") as stream:
+                stream.write("\n".join(block))
+        except OSError:
+            # 诊断日志不能掩盖真实渲染异常，也不能改变成功/失败判定。
+            return
 
     def _run_ffmpeg(
         self,
@@ -289,6 +341,7 @@ class StudyCardRenderer:
         source_duration: float,
         output_duration: float,
         scroll_steps: list[ScrollStep],
+        diagnostics_path: Path | None = None,
     ) -> None:
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         video_w = VIDEO_BOX[2] - VIDEO_BOX[0]
@@ -341,9 +394,32 @@ class StudyCardRenderer:
         if has_audio:
             command.extend(["-map", "[trimmed_audio]", "-c:a", "aac"])
         command.append(str(output_path))
-        completed = subprocess.run(command, capture_output=True, text=True)
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True)
+        except OSError as exc:
+            self._append_process_log(
+                diagnostics_path,
+                stage="main_ffmpeg",
+                command=command,
+                returncode="not-started",
+                output_path=output_path,
+                stderr=f"{type(exc).__name__}: {exc}",
+            )
+            raise RuntimeError(f"新闻精读卡片渲染进程启动失败；详情见 {diagnostics_path}") from exc
+        self._append_process_log(
+            diagnostics_path,
+            stage="main_ffmpeg",
+            command=command,
+            returncode=completed.returncode,
+            output_path=output_path,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
         if completed.returncode != 0:
-            raise RuntimeError(f"新闻精读卡片渲染失败: {completed.stderr[-2000:]}")
+            detail = completed.stderr.strip() or completed.stdout.strip() or "无 stderr/stdout"
+            raise RuntimeError(
+                f"新闻精读卡片渲染失败（exit={completed.returncode}）；详情见 {diagnostics_path}：{detail[-2000:]}"
+            )
 
     def _render_underline_overlay(
         self,
@@ -352,6 +428,7 @@ class StudyCardRenderer:
         scroll_steps: list[ScrollStep],
         duration: float,
         right_vocabulary_screens: dict[int, tuple[Any, ...]],
+        diagnostics_path: Path | None = None,
     ) -> None:
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
         viewport_height = READING_VIEWPORT_BOTTOM - TEXT_TOP
@@ -365,7 +442,19 @@ class StudyCardRenderer:
         ]
         # 边写大帧边延迟读取 stderr 会互相堵塞；错误流落临时文件而非有界管道。
         error_log = tempfile.TemporaryFile()
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=error_log)
+        try:
+            process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=error_log)
+        except OSError as exc:
+            self._append_process_log(
+                diagnostics_path,
+                stage="underline_overlay",
+                command=command,
+                returncode="not-started",
+                output_path=output_path,
+                stderr=f"{type(exc).__name__}: {exc}",
+            )
+            error_log.close()
+            raise RuntimeError(f"红线透明层渲染进程启动失败；详情见 {diagnostics_path}") from exc
         assert process.stdin is not None
         active_index = 0
         try:
@@ -401,8 +490,19 @@ class StudyCardRenderer:
             returncode = process.wait()
             error_log.seek(0)
             stderr = error_log.read().decode("utf-8", errors="replace")
+            self._append_process_log(
+                diagnostics_path,
+                stage="underline_overlay",
+                command=command,
+                returncode=returncode,
+                output_path=output_path,
+                stderr=stderr,
+            )
             if returncode != 0:
-                raise RuntimeError(f"红线透明层渲染失败: {stderr[-2000:]}")
+                detail = stderr.strip() or "无 stderr"
+                raise RuntimeError(
+                    f"红线透明层渲染失败（exit={returncode}）；详情见 {diagnostics_path}：{detail[-2000:]}"
+                )
         finally:
             error_log.close()
 

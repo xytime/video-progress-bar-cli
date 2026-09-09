@@ -9,7 +9,7 @@
 5. 在 `editorial_changes.json` 保存 `version`、`revision`（0或1）、`changes`，每项含 kind、before、after、evidence（含来源绝对时间段）。不因 ASR 一致就省略实质修改的依据。
 6. 先运行项目 venv 的 `scripts/english_world_language.py lexicon --timeline ...` 绑定本机词典证据，再 `source`，仅加载已下载 Whisper 模型；然后 `prepare` 冻结实际屏幕。词形缺音标时只允许词典证明的词元，并明确标注词元。审核失败不得删除计数器、换目录或改源区间重试。
 7. `review` 用 AGY Gemini 3.8 Flash High 独立审校。首次发现内容错误只允许修订一次，再 source/prepare/review；复审未通过立即保留失败报告并结束。不得自行生成或改写审校 PASS。
-8. `render_study_card.py` 消费冻结计划；渲染后仍跑音频、结构、关键帧检查。所有新生成封面、标题与投稿文案必须纳入审校或新增独立文案审校证据。
+8. `render_study_card.py` 消费冻结计划；渲染后仍跑音频、结构、关键帧检查。日更允许的自然长片段（严格大于30秒且不超过300秒）必须在渲染命令使用 `--allow-long-test`，在结构校验命令使用 `--allow-long`；两者只声明该契约，不绕过实际时长和语音硬门禁。所有新生成封面、标题与投稿文案必须纳入审校或新增独立文案审校证据。
 
 供应商失败不转付费 API；未知额度记录 unknown。已经投稿或状态不确定的旧片不重传。
 

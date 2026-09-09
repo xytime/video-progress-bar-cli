@@ -26,6 +26,7 @@
 # | 2.20.0 | 2026-08-31 | Codex | 覆盖来源预检自身异常的失败请求、持久状态与禁止启动候选协调器边界。 |
 # | 2.21.0 | 2026-09-01 | Codex | 固化 json3 绝对/相对时间换算与本地 Whisper 末尾泄漏门禁。 |
 # | 2.22.0 | 2026-09-01 | Codex | 成功交付请求必须绑定通过的最终音频 QA 报告。 |
+# | 2.31.2 | 2026-09-10 | Codex | 固化日更长片调用渲染与结构校验所需的显式时长参数。 |
 # | 2.23.0 | 2026-09-01 | Codex | 拒绝与当前 MP4/manifest 不匹配的 PASS 音频 QA 报告。 |
 # | 2.24.0 | 2026-09-02 | Codex | 覆盖日更提示注入投稿保护来源，避免同源 UNDER_REVIEW 项被再次制作。 |
 # | 2.25.0 | 2026-09-02 | Codex | 覆盖宿主消费交付请求时机械阻断投稿保护同源，避免通知器触碰旧审核项。 |
@@ -452,7 +453,9 @@ def test_daily_prompt_requires_relative_boundary_and_whisper_audio_gate():
     assert "absolute_time - source_start" in prompt
     assert "不得把绝对 `spoken_end` 直接写入相对时间轴" in prompt
     assert "scripts/render_study_card.py" in prompt
+    assert "`--allow-long-test`" in prompt
     assert "scripts/validate_study_card_audio.py" in prompt
+    assert "`--allow-long`" in prompt
     assert "16kHz 单声道" in prompt
     assert "只有报告 `state=PASS` 才能写入成功交付请求" in prompt
 
