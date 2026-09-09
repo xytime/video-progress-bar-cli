@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | 七项覆盖门禁、路径无关缓存键和绑定校验。 |
+| 1.0.1 | 2026-09-09 | Codex | 强制逐项裁决转录差异和编辑修改，并以来源区间隔离任务账本。 |
 """
 import hashlib
 import json
@@ -62,7 +63,20 @@ def review_schema():
             "properties": {"findings": {"type": "array", "items": item}}}
 
 
-def expected_checks(plan):
+def task_identity(evidence):
+    """同一来源的不同自然片段不能共享修订和尝试预算。"""
+    fields = ("source_sha256", "caption_sha256", "source_start", "source_end")
+    if not isinstance(evidence, dict) or any(not evidence.get(field) for field in fields[:2]):
+        raise ValueError("任务身份缺少来源或字幕指纹")
+    start, end = evidence["source_start"], evidence["source_end"]
+    if isinstance(start, bool) or isinstance(end, bool) or not all(isinstance(value, (int, float)) for value in (start, end)) or end <= start:
+        raise ValueError("任务身份缺少有效来源区间")
+    return digest({"contract": VERSION, "source_sha256": evidence["source_sha256"],
+                   "caption_sha256": evidence["caption_sha256"],
+                   "source_start": start, "source_end": end})
+
+
+def expected_checks(plan, evidence=None, editorial=None):
     expected = set() if plan.get("scope") == "publication" else {(check, "document") for check in CHECKS}
     for index, _ in enumerate(plan["content"]["paragraphs"]):
         expected |= {(check, f"paragraph:{index}") for check in CHECKS[:2] + (CHECKS[4],)}
@@ -74,13 +88,24 @@ def expected_checks(plan):
         expected.add((CHECKS[5], "presentation_text"))
     for i, _ in enumerate(plan.get("publication_text", {}).get("cover_payload", {}).get("vocab_items", [])):
         expected |= {(check, f"cover_word:{i}") for check in (CHECKS[2], CHECKS[3], CHECKS[6])}
+    if plan.get("scope") != "publication" and isinstance(evidence, dict):
+        for family in ("caption_differences", "timeline_differences"):
+            differences = evidence.get(family, [])
+            if not isinstance(differences, list):
+                raise ValueError(f"{family} 必须是差异列表")
+            expected |= {(CHECKS[0], f"{family}:{index}") for index, _ in enumerate(differences)}
+    if plan.get("scope") != "publication" and isinstance(editorial, dict):
+        changes = editorial.get("changes", [])
+        if not isinstance(changes, list):
+            raise ValueError("editorial_changes.changes 必须是列表")
+        expected |= {(CHECKS[5], f"editorial_change:{index}") for index, _ in enumerate(changes)}
     return expected
 
 
-def evaluate(result, plan):
+def evaluate(result, plan, *, evidence=None, editorial=None):
     import jsonschema
     jsonschema.validate(result, review_schema())
-    required = expected_checks(plan)
+    required = expected_checks(plan, evidence, editorial)
     found = [(x["check"], x["target"]) for x in result["findings"]]
     if set(found) != required or len(found) != len(required):
         raise ValueError("语言审校覆盖缺失、重复或目标不匹配")
@@ -103,7 +128,7 @@ def review_input(plan, evidence, editorial, *, projection="compact-v1"):
         return value
     value = {"audience": "A2-B1 family learners", "plan": scrub(semantic_plan),
              "source_evidence": evidence, "editorial_changes": editorial,
-             "required_checks": [list(x) for x in sorted(expected_checks(plan))]}
+             "required_checks": [list(x) for x in sorted(expected_checks(plan, evidence, editorial))]}
     if projection == "legacy":
         return value
     if projection != "compact-v1":
@@ -150,7 +175,7 @@ def validate_language_qa(timeline, *, manifest=None, required=True):
     editorial = read_json(root / "editorial_changes.json")
     if report.get("input_key") != cache_key(review_input(plan, evidence, editorial, projection=report.get("input_projection", "legacy")), report["model"]):
         raise ValueError("来源或编辑证据已经变化")
-    if evaluate(report["result"], plan) != "PASS":
+    if evaluate(report["result"], plan, evidence=evidence, editorial=editorial) != "PASS":
         raise ValueError("语言审校存在未解决问题")
     provenance = payload["source_provenance"]
     if evidence.get("source_start") != provenance["source_start_seconds"] or evidence.get("source_end") != provenance["source_end_seconds"]:

@@ -258,7 +258,7 @@
       {% for item in vocab_items[:2] %}
       <div class="vocab-item">
         <span class="vocab-word">{{ item.word }}</span>
-        {% if item.ipa %}<span class="vocab-ipa">{{ item.ipa }}</span>{% endif %}
+        {% if item.ipa %}<span class="vocab-ipa">{% if item.phonetic_word and item.phonetic_word|lower != item.word|lower %}{{ item.phonetic_word }}: {% endif %}{{ item.ipa }}</span>{% endif %}
         <div class="vocab-def">{{ item.meaning }}</div>
         <div class="vocab-level">{{ item.level or "外刊高频" }}</div>
       </div>

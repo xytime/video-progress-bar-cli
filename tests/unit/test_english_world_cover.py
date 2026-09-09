@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-08-24 | Codex | 覆盖 agy OCR 人审待决门禁与首选封面审核包集成。 |
 | 1.2.0 | 2026-08-28 | Codex | 覆盖 Chromium 不可用时的 Pillow 英语封面回退。 |
 | 1.2.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
+| 1.2.2 | 2026-09-09 | Codex | 验证封面保留音标对应词形或词元标签。 |
 """
 
 import json
@@ -120,6 +121,17 @@ def test_timeline_payload_uses_ranked_words_and_verifiable_stat():
     assert payload["subtitle"] == "● 英语新闻 · 原声双语精读"
     assert payload["quote_zh"] == "算力需要存储。"
     assert validate_english_world_cover_payload(payload)["content_type"] == "ENGLISH_WORLD_SHORT"
+
+
+def test_cover_payload_keeps_explicit_lemma_for_inflected_display_word():
+    timeline = {
+        "headline_zh": "阅读排名", "english_text": "It ranks 13th.", "translation_zh": "它排在第13位。",
+        "vocabulary_candidates": [{"word": "ranks", "phonetic": "ræŋk", "phonetic_word": "rank",
+                                     "context_meaning_zh": "排名", "recommended_level": "CET-4"}],
+    }
+    payload = build_english_world_cover_payload(timeline)
+    assert payload["vocab_items"] == [{"word": "ranks", "ipa": "/ræŋk/", "phonetic_word": "rank",
+                                        "meaning": "排名", "level": "CET-4"}]
 
 
 def test_long_chinese_title_is_balanced_into_two_lines():

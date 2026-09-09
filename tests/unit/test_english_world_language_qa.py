@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | JSON3 完整词、逐目标审校覆盖及重启缓存测试。 |
+| 1.0.1 | 2026-09-09 | Codex | 覆盖转录差异逐项裁决、片段任务隔离和词元音标标签。 |
 """
 from pathlib import Path
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from video_processing.study_cards.caption_evidence import parse_json3, transcript_differences
 from video_processing.study_cards.language_qa import (
     VERSION, atomic_json, cache_key, digest, evaluate, expected_checks, file_digest, read_json, review_input,
+    task_identity,
 )
 from video_processing.study_cards.language_review_service import review
 from video_processing.utils.agy_provider import AgyProviderError
@@ -40,6 +42,29 @@ def test_publication_fields_need_explicit_coverage():
     assert ("SEMANTIC_CONSISTENCY", "publication:cover_payload") in expected_checks(p)
 
 
+def test_source_differences_and_editorial_changes_need_individual_findings():
+    p = plan()
+    evidence = {"caption_differences": [{"kind": "missing_suffix"}],
+                "timeline_differences": [{"kind": "ordinal"}]}
+    editorial = {"changes": [{"kind": "parser_repair"}]}
+    result = good(p)
+    with pytest.raises(ValueError, match="覆盖"):
+        evaluate(result, p, evidence=evidence, editorial=editorial)
+    result = good(p, evidence, editorial)
+    assert evaluate(result, p, evidence=evidence, editorial=editorial) == "PASS"
+    targets = {(item["check"], item["target"]) for item in result["findings"]}
+    assert ("TRANSCRIPT_ACCURACY", "caption_differences:0") in targets
+    assert ("TRANSCRIPT_ACCURACY", "timeline_differences:0") in targets
+    assert ("SEMANTIC_CONSISTENCY", "editorial_change:0") in targets
+
+
+def test_task_identity_separates_source_windows_without_path_entropy():
+    base = {"source_sha256": "source", "caption_sha256": "caption", "source_start": 7.9, "source_end": 30.0}
+    later = {**base, "source_start": 30.0, "source_end": 52.1}
+    assert task_identity(base) != task_identity(later)
+    assert task_identity(base) == task_identity(dict(base))
+
+
 def test_incremental_publication_shares_budget_and_binds_approved_body(tmp_path, monkeypatch):
     from video_processing.study_cards import publication_qa as module
     timeline, p = setup_review(tmp_path)
@@ -66,6 +91,27 @@ def test_incremental_publication_shares_budget_and_binds_approved_body(tmp_path,
     p["content"]["headline_en"] = "Changed"
     atomic_json(tmp_path / "display_plan.json", p)
     with pytest.raises(ValueError): module.approved_publication(timeline)
+
+
+def test_cover_lemma_ipa_requires_explicit_phonetic_word(tmp_path, monkeypatch):
+    from video_processing.study_cards import publication_qa as module
+    timeline, p = setup_review(tmp_path)
+    p["content"].update(headline_en="Reading", headline_zh="阅读", vocabulary=[{
+        "item_id": "word:2:1", "word": "ranks", "meaning_zh": "排名", "phonetic": "/ræŋk/",
+        "phonetic_word": "rank", "level": "CET-4",
+    }])
+    atomic_json(tmp_path / "display_plan.json", p)
+    monkeypatch.setattr(module, "validate_language_qa", lambda _: {"input_key": "base-pass"})
+    publication = {"title": "阅读成绩", "copy": "阅读成绩令人警醒", "cover_payload": {
+        "title": "阅读成绩", "quote_en": "It ranks 13th.", "quote_zh": "它排在第13位。",
+        "difficulty_tag": "A2–B1", "audio_source": "ABC News", "date_str": "2026.09.09",
+        "vocab_items": [{"word": "ranks", "meaning": "排名", "ipa": "/ræŋk/",
+                         "phonetic_word": "rank", "level": "CET-4"}],
+    }}
+    assert module.inputs_for(timeline, publication)[1]["publication_text"]["cover_payload"]["vocab_items"]
+    publication["cover_payload"]["vocab_items"][0].pop("phonetic_word")
+    with pytest.raises(ValueError, match="新增封面词汇"):
+        module.inputs_for(timeline, publication)
 
 
 @pytest.mark.parametrize("message", ["permission", "model not found", "invalid JSON envelope", "quota exhausted"])
@@ -214,9 +260,10 @@ def plan():
                         "vocabulary": [{"item_id": "word:3:1", "word": "sobering", "meaning_zh": "令人警醒的"}]}}
 
 
-def good(p):
+def good(p, evidence=None, editorial=None):
     return {"findings": [{"check": c, "target": t, "status": "PASS", "severity": "NONE",
-                           "evidence": "当前句法和上下文一致", "suggestion": ""} for c, t in sorted(expected_checks(p))]}
+                           "evidence": "当前句法和上下文一致", "suggestion": ""}
+                         for c, t in sorted(expected_checks(p, evidence, editorial))]}
 
 
 @pytest.mark.parametrize("status,severity", [("FAIL", "P0"), ("FAIL", "P1"), ("UNCERTAIN", "NONE"), ("PASS", "P1")])

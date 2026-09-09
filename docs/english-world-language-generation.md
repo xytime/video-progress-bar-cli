@@ -4,7 +4,7 @@
 
 1. 来源 JSON3 通过 `caption_evidence.parse_json3` 解析；多词 seg 未能逐词定位时，以全片本地 ASR 对齐，不平均分配时长。不得自行重写截词正则。
 2. 完整保存英文、逐词时间线和段落。中文忠实保留否定、比较、日期、数量、限定范围和观点归属；全文中文等于按序连接段译。新闻事实的真实性与转录忠实性分别说明。
-3. `language_contract` 固定为 `english-world-language-v1`。原词典池 `vocabulary_candidates` 保留溯源但不直接上屏。独立 `learning_points` 数组每项包含：`word`、0-based `word_index`、`context_meaning_zh`、`pos`、`phonetic`、`phonetic_word`、`dictionary_source`、`dictionary_senses`、`level`。词性和中文义仅对应本次出现位置；等级/音标来自离线词表；释义一个简明语境义，不堆多义项。当前渲染支持展示词形音标；词元与屈折词形音标不混用。
+3. `language_contract` 固定为 `english-world-language-v1`。原词典池 `vocabulary_candidates` 保留溯源但不直接上屏。独立 `learning_points` 数组每项包含：`word`、0-based `word_index`、`context_meaning_zh`、`pos`、`phonetic`、`phonetic_word`、`dictionary_source`、`dictionary_senses`、`level`。词性和中文义仅对应本次出现位置；等级/音标来自离线词表；释义一个简明语境义，不堆多义项。主卡与封面都展示词形音标；若使用词元音标，必须在音标旁明确标注词元，绝不把词元冒充为展示词形。
 4. 普通阅读屏3–5个有效学习点，末屏0–3个；优先必要语境和常见搭配，不为数量补专名或功能词。不足时只允许重新分屏一次，仍不合格写制作失败。
 5. 在 `editorial_changes.json` 保存 `version`、`revision`（0或1）、`changes`，每项含 kind、before、after、evidence（含来源绝对时间段）。不因 ASR 一致就省略实质修改的依据。
 6. 先运行项目 venv 的 `scripts/english_world_language.py lexicon --timeline ...` 绑定本机词典证据，再 `source`，仅加载已下载 Whisper 模型；然后 `prepare` 冻结实际屏幕。词形缺音标时只允许词典证明的词元，并明确标注词元。审核失败不得删除计数器、换目录或改源区间重试。

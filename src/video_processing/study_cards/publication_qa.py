@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | 增量文案审校不继承正文结论，仍绑定原正文及不可变封装。 |
+| 1.0.1 | 2026-09-09 | Codex | 封面音标明确绑定展示词形或显式标注的词元。 |
 """
 import json
 from pathlib import Path
@@ -35,7 +36,8 @@ def inputs_for(timeline, publication):
     for item in publication["cover_payload"].get("vocab_items", []):
         word = reviewed.get(str(item.get("word", "")).lower())
         if (not word or item.get("meaning") != word["meaning_zh"]
-                or word.get("phonetic_word", word["word"]).lower() != word["word"].lower()
+                or str(item.get("phonetic_word", word["word"])).lower()
+                != word.get("phonetic_word", word["word"]).lower()
                 or str(item.get("ipa", "")).strip("/") != word["phonetic"].strip("/")
                 or item.get("level") != word["level"]):
             raise ValueError("新增封面词汇必须来自已审校学习点及其词典证据；新增学习点须重审正文")

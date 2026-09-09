@@ -11,6 +11,7 @@
 | 1.1.0   | 2026-08-24 | Codex | 改用共享载荷构建器，并输出 payload/timeline 哈希审计信息。 |
 | 1.2.0   | 2026-08-24 | Codex | 支持绑定已验收的无字 Antigravity 主视觉。 |
 | 1.3.0   | 2026-08-28 | Codex | Chromium 不可启动时改用本地 Pillow 渲染英语报刊封面，避免回退路径仍依赖浏览器。 |
+| 1.3.1 | 2026-09-09 | Codex | Pillow 回退展示与词形/词元明确对应的音标。 |
 """
 
 from __future__ import annotations
@@ -128,8 +129,12 @@ def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
         draw.rounded_rectangle((x0, cards_y + 38, x0 + 468, cards_y + 198), radius=12, fill="#FFFFFF", outline="#E6DDD0", width=2)
         draw.rectangle((x0, cards_y + 38, x0 + 6, cards_y + 198), fill="#A87914")
         draw.text((x0 + 24, cards_y + 56), str(card.get("word") or ""), font=_font(29, bold=True), fill="#1E1A18")
-        draw.text((x0 + 24, cards_y + 97), str(card.get("meaning") or ""), font=_font(23), fill="#4A3E34")
-        draw.text((x0 + 24, cards_y + 132), str(card.get("level") or "英语学习"), font=_font(20, bold=True), fill="#785A18")
+        phonetic_word = str(card.get("phonetic_word") or card.get("word") or "")
+        ipa = str(card.get("ipa") or "")
+        ipa_label = f"{phonetic_word}: {ipa}" if ipa and phonetic_word.lower() != str(card.get("word") or "").lower() else ipa
+        draw.text((x0 + 24, cards_y + 94), ipa_label, font=_font(17), fill="#6E625A")
+        draw.text((x0 + 24, cards_y + 120), str(card.get("meaning") or ""), font=_font(21), fill="#4A3E34")
+        draw.text((x0 + 24, cards_y + 150), str(card.get("level") or "英语学习"), font=_font(18, bold=True), fill="#785A18")
 
     # 纯抽象编辑插画：不使用原视频帧，也不使用网页截图。
     illustration = Image.new("RGBA", (width - 96, 250), (0, 0, 0, 0))

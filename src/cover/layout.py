@@ -12,6 +12,7 @@
 | 1.6.0   | 2026-08-21 | Codex                         | 停用模型运营角标，避免无事实依据的告警式装饰降低封面质量 |
 | 1.7.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 支持 ENGLISH_WORLD_SHORT 英语报刊封面载荷（双语金句、高亮、词汇卡、难度分级） |
 | 1.8.0   | 2026-08-24 | Codex | 为英语封面补充真实词汇统计与长中文标题的双行排版数据。 |
+| 1.8.1 | 2026-09-09 | Codex | 保留封面音标对应的词形或词元标签。 |
 """
 
 import html
@@ -86,6 +87,7 @@ class LayoutComposer:
                 vocab_items.append({
                     "word": word,
                     "ipa": str(item.get("ipa") or item.get("phonetic") or "").strip(),
+                    "phonetic_word": str(item.get("phonetic_word") or word).strip(),
                     "meaning": str(item.get("meaning") or item.get("context_meaning_zh") or item.get("meaning_zh") or "").strip(),
                     "level": str(item.get("level") or item.get("friendly_tag") or item.get("recommended_level") or "外刊高频").strip(),
                 })

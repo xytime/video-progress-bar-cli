@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | 跨重启三次尝试、一次修订和同键合并。 |
+| 1.0.1 | 2026-09-09 | Codex | 将转录差异和编辑修改纳入逐目标审校覆盖。 |
 """
 from contextlib import contextmanager
 import fcntl
@@ -65,7 +66,7 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
         hit = cache.exists()
         if hit:
             result = read_json(cache)["result"]
-            evaluate(result, plan)
+            evaluate(result, plan, evidence=evidence, editorial=editorial)
         else:
             while True:
                 if ledger["attempts"] >= 3 or ledger.get("terminal") or ledger.get("inflight"):
@@ -79,7 +80,7 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
                                     include_usage=True)
                     usage = result.get("usage") if "structured_result" in result else None
                     result = result.get("structured_result", result)
-                    evaluate(result, plan)
+                    evaluate(result, plan, evidence=evidence, editorial=editorial)
                     atomic_json(cache, {"result": result, "model": model, "key": key, "usage": usage})
                     ledger["inflight"] = False
                     atomic_json(ledger_path, ledger)
@@ -103,7 +104,7 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
                                read_json(root / "editorial_changes.json"))
         if file_digest(timeline) != before or cache_key(current, model) != key:
             raise ValueError("审校期间输入已变化")
-        report = {"version": VERSION, "state": evaluate(result, plan), "model": model,
+        report = {"version": VERSION, "state": evaluate(result, plan, evidence=evidence, editorial=editorial), "model": model,
                   "prompt_version": VERSION, "schema_version": 1, "rules_version": VERSION,
                   "input_projection": "compact-v1",
                   "input_key": key, "timeline_sha256": before, "plan_sha256": digest(plan),

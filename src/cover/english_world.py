@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增确定性时间线提取、词汇排序与封面载荷校验。 |
+| 1.0.1 | 2026-09-09 | Codex | 封面音标携带并呈现词形或显式词元标签。 |
 """
 
 from __future__ import annotations
@@ -73,6 +74,7 @@ def _candidate_items(timeline: Mapping[str, Any], quote_en: str) -> list[dict[st
             {
                 "word": word,
                 "ipa": _normalise_ipa(raw_item.get("phonetic") or raw_item.get("ipa")),
+                "phonetic_word": str(raw_item.get("phonetic_word") or word).strip(),
                 "meaning": meaning,
                 "level": " · ".join(part for part in (level, friendly_tag) if part),
                 "_rank": _LEVEL_ORDER.get(level, 0),

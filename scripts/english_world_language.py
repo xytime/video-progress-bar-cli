@@ -5,6 +5,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | source/prepare/review/validate 阶段独立执行，不接触投稿账本。 |
+| 1.0.1 | 2026-09-09 | Codex | 以来源+字幕+自然片段隔离布局和审校预算。 |
 """
 import argparse
 from pathlib import Path
@@ -16,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from video_processing.study_cards.language_qa import (
-    VERSION, atomic_json, digest, file_digest, read_json, validate_language_qa,
+    VERSION, atomic_json, digest, file_digest, read_json, task_identity, validate_language_qa,
 )
 from video_processing.study_cards.caption_evidence import parse_json3, transcript_differences, align_json3
 
@@ -103,7 +104,7 @@ def prepare(timeline, wordlist_dir=None):
         if any(not change.get(k) for k in ("kind", "before", "after", "evidence")):
             raise ValueError("编辑修改必须有前后文本和来源依据")
     from video_processing.study_cards.language_review_service import locked
-    layout_ledger = ROOT / "output/english_world_language/tasks" / digest({"source": evidence["source_sha256"]}) / "layout_attempts.json"
+    layout_ledger = ROOT / "output/english_world_language/tasks" / task_identity(evidence) / "layout_attempts.json"
     with locked(layout_ledger.with_suffix(".lock")):
         state = read_json(layout_ledger) if layout_ledger.exists() else {"failed_layouts": []}
         if state.get("terminal"):
@@ -145,9 +146,8 @@ def main():
             from video_processing.study_cards.language_review_service import review
             if args.stage == "review":
                 prepare(timeline, args.wordlist_dir.expanduser())  # 本地检查失败时不消耗模型额度
-            p = read_json(timeline)["source_provenance"]
             evidence = read_json(timeline.parent / "qa/source_evidence.json")
-            task_key = digest({"source": evidence["source_sha256"]})
+            task_key = task_identity(evidence)
             kwargs = {}
             if args.stage == "publication":
                 from video_processing.study_cards.publication_qa import review_publication
