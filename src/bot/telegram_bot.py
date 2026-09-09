@@ -41,6 +41,9 @@
 | 1.23.0  | 2026-08-29 | Codex                               | Lease Jobs 展示并可撤销未消费授权；签发回执区分任务领取、本地调度、平台受理和公开可见。 |
 | 1.24.0  | 2026-08-29 | Codex                               | 英语世界二次确认后显示真实生产阶段；成片完成只进入人工审核，不继承自动投稿。 |
 | 1.25.0  | 2026-08-30 | Codex                               | 英语世界回执区分本地提交状态与视频号原生 ID 回查状态。 |
+| 1.25.1  | 2026-09-09 | Codex                               | /getvideo 与 Highlight 来源信息补充安全的可点击 YouTube 原视频链接。 |
+| 1.26.0  | 2026-09-09 | Codex                               | 新增 /last 平台确认发布历史命令，支持范围参数、卡片分包和安全 YouTube 链接。 |
+| 1.26.1  | 2026-09-09 | Codex                               | /last 在解析前限制位置范围，拒绝超长数字和 SQLite 不可表示的偏移。 |
 """
 from __future__ import annotations
 
@@ -85,6 +88,10 @@ from bot.video_delivery import (
 )
 from video_processing.quality_report import collect as collect_quality_report
 from video_processing.daily_brief import collect_daily_brief
+from video_processing.utils.platform_events import (
+    format_youtube_source_link_html,
+    youtube_source_url,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,8 +110,9 @@ _COMMAND_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["/status", "/queue"],
         ["/run", "/wechat_login"],
-        ["/lease_jobs", "/published"],
-        ["/highlight", "/english_world"],
+        ["/lease_jobs", "/last"],
+        ["/published", "/highlight"],
+        ["/english_world"],
         ["/help"],
     ],
     resize_keyboard=True,
@@ -118,6 +126,7 @@ _BOT_COMMANDS = [
     BotCommand("wechat_login", "推送微信扫码登录"),
     BotCommand("lease_jobs", "单任务发布授权（2小时）"),
     BotCommand("published", "最近本地发布记录"),
+    BotCommand("last", "最近平台确认发布"),
     BotCommand("highlight", "Highlight Slice：选择视频生成金句候选"),
     BotCommand("english_world", "英语世界：搜索、选题与制作确认"),
     BotCommand("retry", "重试单条或最近N小时失败"),
@@ -145,6 +154,48 @@ async def _reply_html_chunks(message, text: str, *, max_length: int = 3900) -> N
         chunk += line
     if chunk:
         await message.reply_text(chunk.rstrip(), parse_mode="HTML")
+
+
+async def _reply_last_published_chunks(
+    message,
+    videos: list[dict],
+    start: int,
+    *,
+    max_length: int = 3900,
+) -> None:
+    """按完整发布卡片分包，绝不把一条视频拆到两条 Telegram 消息。"""
+    entries = [(start + offset, fmt.fmt_last_published_entry(start + offset, video)) for offset, video in enumerate(videos)]
+    chunk_entries: list[str] = []
+    chunk_start = start
+    include_summary = True
+
+    async def send_chunk() -> None:
+        nonlocal include_summary
+        if not chunk_entries:
+            return
+        chunk_end = chunk_start + len(chunk_entries) - 1
+        header = fmt.fmt_last_published_header(
+            chunk_start, chunk_end, videos, include_summary=include_summary,
+        )
+        await message.reply_text(
+            f"{header}\n\n" + "\n\n".join(chunk_entries),
+            parse_mode="HTML",
+        )
+        include_summary = False
+
+    for index, entry in entries:
+        if not chunk_entries:
+            chunk_start = index
+        candidate_header = fmt.fmt_last_published_header(
+            chunk_start, index, videos, include_summary=include_summary,
+        )
+        candidate_length = len(candidate_header) + 2 + len("\n\n".join([*chunk_entries, entry]))
+        if chunk_entries and candidate_length > max_length:
+            await send_chunk()
+            chunk_entries = []
+            chunk_start = index
+        chunk_entries.append(entry)
+    await send_chunk()
 
 
 async def _configure_bot_menu(app: Application) -> None:
@@ -195,6 +246,33 @@ _HIGHLIGHT_SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 _HIGHLIGHT_CLIP_ID_RE = re.compile(r"^[a-f0-9]{32}$")
 _LEASE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 _LEASE_ID_RE = re.compile(r"^[a-f0-9]{32}$")
+_LAST_RANGE_RE = re.compile(r"^(?:(\d+)|(\d+)-(\d+))$")
+_LAST_MAX_POSITION = 9_223_372_036_854_775_807
+
+
+def parse_last_range(args: list[object]) -> tuple[int, int] | None:
+    """解析 /last 的单数字或闭区间参数；编号从最新的 1 开始。"""
+    cleaned = [str(arg).strip() for arg in args if str(arg).strip()]
+    if not cleaned:
+        return 1, 10
+    if len(cleaned) != 1:
+        return None
+    match = _LAST_RANGE_RE.fullmatch(cleaned[0])
+    if not match:
+        return None
+    numeric_parts = tuple(part for part in match.groups() if part is not None)
+    if any(len(part) > 19 for part in numeric_parts):
+        return None
+    try:
+        if match.group(1):
+            start, end = 1, int(match.group(1))
+        else:
+            start, end = int(match.group(2)), int(match.group(3))
+    except ValueError:
+        return None
+    if start < 1 or end < start or end > _LAST_MAX_POSITION or end - start + 1 > 100:
+        return None
+    return start, end
 
 
 async def _reply_manual_publish_lease_jobs(message) -> None:
@@ -350,7 +428,11 @@ def _highlight_source_text(source: dict) -> str:
     status = html.escape(str(source.get("status") or "UNKNOWN"))
     subtitle = "字幕可用" if source.get("source_subtitle_available") else "缺带时间轴字幕"
     video = "源片可用" if source.get("source_video_available") else "源片待补"
-    return f"<code>{yid}</code>｜{title}\n状态：<code>{status}</code> · {subtitle} · {video}"
+    source_link = format_youtube_source_link_html(str(source.get("youtube_id") or ""))
+    return (
+        f"<code>{yid}</code>｜{title}\n状态：<code>{status}</code> · {subtitle} · {video}"
+        + (f"\n{source_link}" if source_link else "")
+    )
 
 
 async def _send_highlight_confirmation(message, youtube_id: str, *, title: str = "") -> None:
@@ -875,6 +957,26 @@ async def cmd_published(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(fmt.fmt_published(videos), parse_mode="Markdown")  # type: ignore
 
 
+async def cmd_last(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/last [N|A-B] — 查看由平台账本明确确认的最近发布视频。"""
+    if not _check_admin(update):
+        return
+    requested_range = parse_last_range(list(ctx.args or []))
+    if requested_range is None:
+        await update.message.reply_text(fmt.fmt_last_published_usage(), parse_mode="HTML")  # type: ignore
+        return
+    assert _api is not None
+    start, end = requested_range
+    videos = await _api.get_confirmed_published_videos(start, end)
+    if videos is None:
+        await update.message.reply_text(fmt.fmt_api_unavailable(), parse_mode="Markdown")  # type: ignore
+        return
+    if not videos:
+        await update.message.reply_text(fmt.fmt_last_published_empty(), parse_mode="HTML")  # type: ignore
+        return
+    await _reply_last_published_chunks(update.message, videos, start)  # type: ignore
+
+
 async def cmd_getvideo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """/getvideo <youtube_id> [slice_index] — 把制作好的成片发回当前对话。
 
@@ -923,7 +1025,17 @@ async def cmd_getvideo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     tag = f"{youtube_id}" + (f"_s{slice_index}" if slice_index else "")
-    caption = f"🎬 <b>{tag}</b> 成片　{prepared.size_mb:.1f}MB"
+    title_path = Path(__file__).resolve().parents[2] / "output" / f"{tag}_title.txt"
+    try:
+        title = await asyncio.to_thread(title_path.read_text, encoding="utf-8")
+        title = title.strip()
+    except OSError:
+        title = ""
+    caption = f"🎬 <b>{html.escape(title or tag)}</b> 成片　{prepared.size_mb:.1f}MB"
+    caption += f"\nYouTube ID: <code>{html.escape(tag)}</code>"
+    source_url = youtube_source_url(youtube_id)
+    if source_url:
+        caption += f'\n原视频：<a href="{source_url}">打开 YouTube 原视频</a>'
     if prepared.compressed:
         caption += "（已压缩）"
 
@@ -1520,6 +1632,7 @@ def main() -> None:
     app.add_handler(CommandHandler("wechat_login", cmd_wechat_login))
     app.add_handler(CommandHandler("lease_jobs", cmd_lease_jobs))
     app.add_handler(CommandHandler("published", cmd_published))
+    app.add_handler(CommandHandler("last", cmd_last))
     app.add_handler(CommandHandler("getvideo", cmd_getvideo))  # [Claude_Opus_4.8] 发回成片（超 50MB 自动压缩）
     app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CommandHandler("retry", cmd_retry))

@@ -11,6 +11,7 @@
 | 1.5.0 | 2026-08-24 | Codex | UNKNOWN 不能抑制重要通知；同一任务的变动原因仍遵循稳定去重键。 |
 | 1.6.0 | 2026-08-27 | Codex | 所有字幕翻译提供方暂时失败应走提交前有界重试，不得直接沉没为 FAILED。 |
 | 1.7.0 | 2026-09-04 | Codex | 字幕渲染看门狗超时属于未提交瞬态故障，可受限自动恢复。 |
+| 1.8.0 | 2026-09-09 | Codex | 回执与审核成片标题补全、来源链接和分片身份可审计。 |
 """
 
 import json
@@ -154,6 +155,41 @@ def test_telegram_review_video_checks_http_success(monkeypatch, tmp_path):
     assert request_args[0].endswith("/sendVideo")
     assert request_kwargs["data"]["chat_id"] == "test-chat"
     assert request_kwargs["files"]["video"][0] == video.name
+
+
+def test_per_video_telegram_receipts_include_title_and_clickable_source(monkeypatch, tmp_path):
+    youtube_id = "ODhae8RmBIc"
+    manager = _manager(tmp_path, youtube_id)
+    manager.telegram_token = "test-token"
+    manager.telegram_chat_id = "test-chat"
+    calls = []
+
+    class Response:
+        ok = True
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True, "result": {"message_id": 103}}
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return Response()
+
+    monkeypatch.setattr("video_processing.telegram_delivery.requests.post", fake_post)
+    message = f"✅ <b>Video Published</b>\nPlatform: Douyin\nYouTube ID: {youtube_id}"
+
+    assert manager.send_telegram_msg(message)
+    sent_text = calls[0][1]["json"]["text"]
+    assert "标题：测试标题" in sent_text
+    assert 'href="https://www.youtube.com/watch?v=ODhae8RmBIc"' in sent_text
+
+    video = tmp_path / f"{youtube_id}_vertical.mp4"
+    video.write_bytes(b"review-video")
+    assert manager.send_telegram_video(video, f"审核副本\nID: <code>{youtube_id}</code>")
+    sent_caption = calls[1][1]["data"]["caption"]
+    assert "标题：测试标题" in sent_caption
+    assert 'href="https://www.youtube.com/watch?v=ODhae8RmBIc"' in sent_caption
 
 
 def test_manager_suppresses_duplicate_p1_notification(monkeypatch, tmp_path):

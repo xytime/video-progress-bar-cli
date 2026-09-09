@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.60.0 | 2026-09-09 | Codex | 新增 /last 已确认公开发布跨平台账本查询，并限制 SQLite 安全偏移。 |
 | 3.59.9 | 2026-09-07 | Codex | 服务端分页前完成控制面筛选、排序与近期高互动浏览标记，平台状态保持不变。 |
 | 3.59.8 | 2026-09-05 | Codex | 持久化单作品只读回查预约，跨进程原子冷却且不改变投稿状态。 |
 | 3.59.7 | 2026-09-05 | Codex | 暴露不含凭据秘密的当前投稿启动审计，区分未启动领取与启动后未知状态。 |
@@ -157,6 +158,10 @@ from typing import Collection, List, Dict, Any, Optional, Sequence
 
 from ..content_types import CONTENT_TYPE_GENERAL, normalize_content_type
 from ..scoring import CHANNEL_SCORE_CAPS, cap_channel_score
+
+
+MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
+
 
 class PipelineDB:
     """视频管线数据访问层。
@@ -4678,6 +4683,127 @@ class PipelineDB:
             v["platforms"] = pub_map.get(v["id"], {})
 
         return videos, total_count
+
+    def get_recent_confirmed_published_videos(
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """按平台账本中明确确认的发布时间，返回去重后的实际发布视频。
+
+        ``processed_videos.status``、提交记录和 ``updated_at`` 均不是公开发布事实，
+        因此本方法只读取三张平台账本的 ``PUBLISHED`` 确认时间。视频号还必须有
+        作品管理证据和原生作品 ID；抖音、快手使用各自已确认的 ``published_at``。
+        """
+        if not 0 <= offset <= MAX_SQLITE_INTEGER:
+            raise ValueError("offset must be a SQLite-safe non-negative integer")
+        if not 1 <= limit <= 100:
+            raise ValueError("limit must be between 1 and 100")
+
+        markers = self._PLATFORM_REVIEW_MARKERS + self._PLATFORM_UNCONFIRMED_MARKERS
+        marker_predicate = " AND ".join(
+            "COALESCE(last_error_message, '') NOT LIKE ?" for _ in markers
+        )
+        marker_params = [f"%{marker}%" for marker in markers]
+
+        query = f"""
+            WITH confirmed_publications AS (
+                SELECT video_id, 'wechat' AS platform, confirmed_at
+                FROM wechat_publications
+                WHERE state = 'PUBLISHED'
+                  AND confirmed_at IS NOT NULL
+                  AND COALESCE(evidence_path, '') != ''
+                  AND COALESCE(platform_post_id, '') != ''
+                UNION ALL
+                SELECT video_id, 'douyin' AS platform, published_at AS confirmed_at
+                FROM douyin_publications
+                WHERE state = 'PUBLISHED'
+                  AND published_at IS NOT NULL
+                  AND {marker_predicate}
+                UNION ALL
+                SELECT video_id, 'kuaishou' AS platform, published_at AS confirmed_at
+                FROM kuaishou_publications
+                WHERE state = 'PUBLISHED'
+                  AND published_at IS NOT NULL
+                  AND {marker_predicate}
+            ),
+            confirmed_by_video AS (
+                SELECT
+                    video_id,
+                    MAX(confirmed_at) AS last_confirmed_publish_at,
+                    MAX(CASE WHEN platform = 'wechat' THEN confirmed_at END) AS wechat_confirmed_at,
+                    MAX(CASE WHEN platform = 'douyin' THEN confirmed_at END) AS douyin_confirmed_at,
+                    MAX(CASE WHEN platform = 'kuaishou' THEN confirmed_at END) AS kuaishou_confirmed_at
+                FROM confirmed_publications
+                GROUP BY video_id
+            ),
+            latest_douyin AS (
+                SELECT video_id, state, last_error_message,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY video_id ORDER BY attempt_number DESC, id DESC
+                       ) AS rn
+                FROM douyin_publications
+            ),
+            latest_kuaishou AS (
+                SELECT video_id, state, last_error_message,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY video_id ORDER BY attempt_number DESC, id DESC
+                       ) AS rn
+                FROM kuaishou_publications
+            )
+            SELECT
+                pv.id AS video_id,
+                pv.youtube_id,
+                pv.slice_index,
+                pv.zh_title,
+                pv.source_published_at,
+                pv.upload_date,
+                cbv.last_confirmed_publish_at,
+                wp.state AS wechat_state,
+                wp.last_error_message AS wechat_error,
+                cbv.wechat_confirmed_at,
+                ld.state AS douyin_state,
+                ld.last_error_message AS douyin_error,
+                cbv.douyin_confirmed_at,
+                lk.state AS kuaishou_state,
+                lk.last_error_message AS kuaishou_error,
+                cbv.kuaishou_confirmed_at
+            FROM confirmed_by_video cbv
+            JOIN processed_videos pv ON pv.id = cbv.video_id
+            LEFT JOIN wechat_publications wp ON wp.video_id = pv.id
+            LEFT JOIN latest_douyin ld ON ld.video_id = pv.id AND ld.rn = 1
+            LEFT JOIN latest_kuaishou lk ON lk.video_id = pv.id AND lk.rn = 1
+            ORDER BY cbv.last_confirmed_publish_at DESC, pv.id DESC
+            LIMIT ? OFFSET ?
+        """
+        params: List[Any] = [*marker_params, *marker_params, limit, offset]
+        with self.get_connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+
+        videos: List[Dict[str, Any]] = []
+        for row in rows:
+            def _platform(state: Optional[str], error: Optional[str], confirmed_at: Optional[str]) -> Dict[str, Any]:
+                return {
+                    "state": self._derive_platform_display_state(state, error),
+                    "confirmed_at": confirmed_at,
+                }
+
+            videos.append({
+                "video_id": row["video_id"],
+                "youtube_id": row["youtube_id"],
+                "slice_index": row["slice_index"],
+                "zh_title": row["zh_title"],
+                "source_published_at": row["source_published_at"],
+                "upload_date": row["upload_date"],
+                "last_confirmed_publish_at": row["last_confirmed_publish_at"],
+                "platforms": {
+                    "wechat": _platform(row["wechat_state"], row["wechat_error"], row["wechat_confirmed_at"]),
+                    "douyin": _platform(row["douyin_state"], row["douyin_error"], row["douyin_confirmed_at"]),
+                    "kuaishou": _platform(row["kuaishou_state"], row["kuaishou_error"], row["kuaishou_confirmed_at"]),
+                },
+            })
+        return videos
 
     def set_engagement_reviewed(self, youtube_id: str, reviewed: bool, slice_index: int = 0) -> bool:
         """设置近期高互动候选的本地浏览标记；不写入视频或平台状态。"""

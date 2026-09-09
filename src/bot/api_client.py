@@ -25,6 +25,7 @@
 | 1.15.0 | 2026-08-23 | Codex | 新增英语世界审核项的显式视频号投稿批准与搁置接口。 |
 | 1.16.0 | 2026-08-29 | Codex | 新增 Telegram 单任务微信发布 lease 候选读取与两小时授权启动接口。 |
 | 1.17.0 | 2026-08-29 | Codex | Lease API 请求携带独立内部令牌并支持撤销未消费授权；不复用 Bot token。 |
+| 1.18.0 | 2026-09-09 | Codex | 新增已确认公开发布账本读取接口，供 Telegram /last 使用。 |
 """
 from __future__ import annotations
 
@@ -114,6 +115,17 @@ class PipelineAPIClient:
                 return data.get("videos", [])
         except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
             logger.warning(f"[api_client] get_videos failed (API down?): {e}")
+            return None
+
+    async def get_confirmed_published_videos(self, start: int, end: int) -> Optional[list]:
+        """GET /api/published-videos — 读取平台账本已明确确认的发布记录。"""
+        try:
+            async with self._client() as c:
+                resp = await c.get("/api/published-videos", params={"start": start, "end": end})
+                resp.raise_for_status()
+                return resp.json().get("videos", [])
+        except (httpx.RequestError, httpx.HTTPStatusError, ValueError) as e:
+            logger.warning(f"[api_client] get_confirmed_published_videos failed: {e}")
             return None
 
     async def get_highlight_sources(self, *, limit: int = 10, offset: int = 0) -> Optional[list]:

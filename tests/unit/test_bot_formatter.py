@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-09-09 | Codex | 覆盖队列和已发布列表的安全 YouTube 原视频链接。 |
 | 1.1.0 | 2026-08-20 | Codex | 覆盖 Highlight Job 的显式候选入口帮助文案 |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | TDD Red phase: 先写测试定义合约 |
 """
@@ -40,24 +41,26 @@ class TestFormatter:
         """队列有视频时应按状态展示每条记录"""
         from bot.formatter import fmt_queue
         videos = [
-            {"youtube_id": "abc123", "title": "测试视频一", "status": "PENDING"},
+            {"youtube_id": "ODhae8RmBIc", "title": "测试视频一", "status": "PENDING"},
             {"youtube_id": "def456", "title": "Test Video Two", "status": "DOWNLOADING"},
         ]
         msg = fmt_queue(videos=videos)
-        assert "abc123" in msg
+        assert "ODhae8RmBIc" in msg
         assert "测试视频一" in msg
         assert "PENDING" in msg
         assert "DOWNLOADING" in msg
+        assert "https://www.youtube.com/watch?v=ODhae8RmBIc" in msg
 
     def test_format_published_list(self):
         """最近发布的视频列表格式"""
         from bot.formatter import fmt_published
         videos = [
-            {"youtube_id": "xyz789", "title": "已发布视频", "status": "PUBLISHED"},
+            {"youtube_id": "ODhae8RmBIc", "title": "已发布视频", "status": "PUBLISHED"},
         ]
         msg = fmt_published(videos=videos)
         assert "已发布视频" in msg
         assert "✅" in msg or "PUBLISHED" in msg
+        assert "https://www.youtube.com/watch?v=ODhae8RmBIc" in msg
 
     def test_format_delete_success(self):
         """删除成功的回复"""

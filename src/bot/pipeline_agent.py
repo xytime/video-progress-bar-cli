@@ -26,7 +26,9 @@ based on incoming Telegram messages and commands.
 | 1.14.0  | 2026-08-03 | Codex                               | Telegram 封面生成和上传也执行无大面积遮罩版式来源清单校验                |
 | 1.14.1  | 2026-08-10 | Codex                               | Gemini TLS 瞬断加入有限重试；最终失败仅返回一条可操作提示                |
 | 1.14.2  | 2026-08-10 | Codex                               | Gemini 不可用时以同工具集切换 DeepSeek OpenAI 兼容 Function Calling 兜底 |
+| 1.14.3  | 2026-09-09 | Codex                               | Telegram 回传成片补充标题、任务 ID 与可点击的原 YouTube 视频链接        |
 """
+import html
 import os
 import sys
 import json
@@ -60,7 +62,11 @@ def _cover_provenance_path(cover_file: Path) -> Path:
 def _is_dedicated_cover(cover_file: Path) -> bool:
     provenance_file = _cover_provenance_path(cover_file)
     return validate_dedicated_cover_file(cover_file, provenance_file)
-from video_processing.utils.platform_events import PlatformEvent, format_platform_event_html
+from video_processing.utils.platform_events import (
+    PlatformEvent,
+    format_platform_event_html,
+    format_youtube_source_link_html,
+)
 from video_processing.utils.file_utils import find_downloaded_video
 from bot.api_client import PipelineAPIClient
 from bot.video_delivery import (
@@ -271,7 +277,18 @@ class PipelineAgent:
             return json.dumps({"ok": False, "error": str(e)})
 
         tag = youtube_id + (f"_s{slice_index}" if slice_index else "")
-        caption = f"🎬 <b>{tag}</b> 成片　{prepared.size_mb:.1f}MB"
+        title = ""
+        try:
+            video = self.db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+            title = str((video or {}).get("zh_title") or (video or {}).get("title") or "").strip()
+        except Exception as exc:  # 成片已准备好时，标题查询不能阻断发送。
+            logger.debug("Finished-video title lookup failed for %s: %s", tag, type(exc).__name__)
+
+        caption = f"🎬 <b>{html.escape(title or tag)}</b> 成片　{prepared.size_mb:.1f}MB"
+        caption += f"\nYouTube ID: <code>{html.escape(tag)}</code>"
+        source_link = format_youtube_source_link_html(youtube_id)
+        if source_link:
+            caption += f"\n{source_link}"
         if prepared.compressed:
             caption += "（已压缩）"
 

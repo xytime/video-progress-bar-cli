@@ -1,6 +1,6 @@
 """src/bot/formatter.py — Telegram 消息格式化模块
 
-高内聚：只负责将数据结构渲染为 Markdown 字符串，不依赖任何外部 I/O。
+高内聚：只负责将数据结构渲染为 Telegram Markdown/HTML 字符串，不依赖任何外部 I/O。
 
 # Modification History
 | Version | Date | Author | Description |
@@ -17,12 +17,18 @@
 | 1.7.2 | 2026-07-05 | Codex                               | /status 展示 /retry 24 将影响的任务数量，避免批量操作范围不透明 |
 | 1.8.0 | 2026-08-20 | Codex | 增加 Highlight Job 的显式候选分析入口说明，不暗示会自动发布 |
 | 1.7.3 | 2026-07-05 | Codex                               | /status 同时展示 /retry 24/48 影响数量，并给最近失败标注相对时间 |
+| 1.8.1 | 2026-09-09 | Codex | 队列、发布列表与入队回执补充经校验的可点击 YouTube 原视频链接。 |
+| 1.9.0 | 2026-09-09 | Codex | 新增 /last 的移动端发布账本卡片、时区展示和 HTML 安全链接格式化。 |
+| 1.9.1 | 2026-09-09 | Codex | 限制 /last 异常历史 ID 的显示长度，确保单卡可由 Telegram 投递。 |
 """
 from __future__ import annotations
-from datetime import datetime
-from typing import List
+from datetime import datetime, timezone
+import html
+from typing import List, Optional
+from zoneinfo import ZoneInfo
 
 from config.settings import settings
+from video_processing.utils.platform_events import youtube_source_url
 
 
 # 状态 → Emoji 映射
@@ -45,11 +51,13 @@ def _status_icon(status: str) -> str:
 def fmt_video_added(title: str, video_id: str, trim_start: Optional[str] = None, trim_end: Optional[str] = None) -> str:
     """视频成功加入加急队列"""
     trim_info = f"\n✂️ *裁剪区间*：`{trim_start or '0'}` 至 `{trim_end or 'End'}`" if (trim_start or trim_end) else ""
+    source_url = youtube_source_url(video_id)
+    source_line = f"\n🔗 原视频：[打开 YouTube 原视频]({source_url})" if source_url else ""
     return (
         f"✅ *已加入加急队列！*{trim_info}\n"
         f"📌 标题：`{title}`\n"
         f"🆔 ID：`{video_id}`\n"
-        f"_管线将自动处理：下载 → 字幕 → 翻译 → 发布_"
+        f"_管线将自动处理：下载 → 字幕 → 翻译 → 发布_{source_line}"
     )
 
 
@@ -74,7 +82,9 @@ def fmt_queue(videos: List[dict]) -> str:
         vid = v.get("youtube_id", "?")
         title = v.get("title", "未知标题")[:30]
         status = v.get("status", "?")
-        lines.append(f"{icon} `{vid}` — {title}\n   状态：`{status}`")
+        source_url = youtube_source_url(str(vid))
+        source_line = f"\n   🔗 [打开原视频]({source_url})" if source_url else ""
+        lines.append(f"{icon} `{vid}` — {title}\n   状态：`{status}`{source_line}")
 
     return "\n".join(lines)
 
@@ -88,9 +98,156 @@ def fmt_published(videos: List[dict]) -> str:
     for v in videos:
         vid = v.get("youtube_id", "?")
         title = v.get("title", "未知标题")[:30]
-        lines.append(f"✅ `{vid}` — {title}")
+        source_url = youtube_source_url(str(vid))
+        source_line = f"\n   🔗 [打开原视频]({source_url})" if source_url else ""
+        lines.append(f"✅ `{vid}` — {title}{source_line}")
 
     return "\n".join(lines)
+
+
+_LAST_PLATFORMS = ("wechat", "douyin", "kuaishou")
+_LAST_PLATFORM_LABELS = {
+    "wechat": "微信",
+    "douyin": "抖音",
+    "kuaishou": "快手",
+}
+_LAST_BJT = ZoneInfo("Asia/Shanghai")
+_LAST_DISPLAY_ID_MAX_CHARS = 96
+
+
+def _last_platform_status(platform: dict) -> str:
+    """将账本状态保守地压缩成 /last 卡片的单个平台标签。"""
+    if platform.get("confirmed_at"):
+        return "✅ 已发布"
+    state = str(platform.get("state") or "NOT_QUEUED").upper()
+    if state in {"QUEUED", "UPLOADING", "DRAFT", "SUBMITTING"}:
+        return "⏳ 已排队"
+    if state in {"PUBLISHED", "UNDER_REVIEW", "UNCERTAIN", "SUBMITTED_BOUND", "SUBMITTED_UNBOUND", "NOT_FOUND"}:
+        return "⚠️ 待核验"
+    if state in {"REJECTED", "RETRYABLE_FAILED", "BANNED", "FAILED"}:
+        return "❌ 发布失败"
+    if state == "CANCELED":
+        return "⏹ 已取消"
+    if state in {"", "NOT_QUEUED", "NONE", "NULL"}:
+        return "○ 未排队"
+    return "? 未知"
+
+
+def _format_last_timestamp(value: object) -> str:
+    """将账本时间统一按 UTC 解析并转换为北京时间；无法解析时不猜测。"""
+    text = str(value or "").strip()
+    if not text:
+        return "未知"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return "未知"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local = parsed.astimezone(_LAST_BJT)
+    if local.year == datetime.now(_LAST_BJT).year:
+        return local.strftime("%m-%d %H:%M")
+    return local.strftime("%Y-%m-%d %H:%M")
+
+
+def _format_last_source_time(video: dict) -> str:
+    """显示来源视频发布时间；仅日期元数据不虚构时分。"""
+    source_published_at = str(video.get("source_published_at") or "").strip()
+    if source_published_at:
+        formatted = _format_last_timestamp(source_published_at)
+        if formatted != "未知":
+            return formatted
+        for date_format in ("%Y%m%d", "%Y-%m-%d"):
+            try:
+                parsed = datetime.strptime(source_published_at, date_format).replace(tzinfo=_LAST_BJT)
+            except ValueError:
+                continue
+            return parsed.strftime("%m-%d") if parsed.year == datetime.now(_LAST_BJT).year else parsed.strftime("%Y-%m-%d")
+
+    upload_date = str(video.get("upload_date") or "").strip()
+    for date_format in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(upload_date, date_format).replace(tzinfo=_LAST_BJT)
+        except ValueError:
+            continue
+        return parsed.strftime("%m-%d") if parsed.year == datetime.now(_LAST_BJT).year else parsed.strftime("%Y-%m-%d")
+    return "未知"
+
+
+def _last_display_id(video: dict) -> str:
+    """制作主体 ID 保留切片索引，避免同源切片在历史中混淆。"""
+    youtube_id = str(video.get("youtube_id") or "?")
+    try:
+        slice_index = int(video.get("slice_index") or 0)
+    except (TypeError, ValueError):
+        slice_index = 0
+    display_id = youtube_id if slice_index == 0 else f"{youtube_id}_s{slice_index}"
+    if len(display_id) <= _LAST_DISPLAY_ID_MAX_CHARS:
+        return display_id
+    return f"{display_id[:80]}…{display_id[-12:]}"
+
+
+def _last_overall_status(video: dict) -> tuple[str, str]:
+    """基于三平台确认时间给出聚合状态，绝不从工作流状态推断。"""
+    platforms = video.get("platforms") or {}
+    confirmed_count = sum(bool((platforms.get(name) or {}).get("confirmed_at")) for name in _LAST_PLATFORMS)
+    if confirmed_count == len(_LAST_PLATFORMS):
+        return "🟢 全平台已发布", "PUBLISHED_ALL"
+    return "🟡 部分发布", "PUBLISHED_PARTIAL"
+
+
+def fmt_last_published_entry(index: int, video: dict) -> str:
+    """渲染一个不可拆分的 /last 发布卡片，返回 Telegram HTML。"""
+    raw_title = str(video.get("zh_title") or "(无中文标题)")
+    title = html.escape(raw_title[:120] + ("…" if len(raw_title) > 120 else ""))
+    platforms = video.get("platforms") or {}
+    platform_line = "　".join(
+        f"{_LAST_PLATFORM_LABELS[name]} {_last_platform_status(platforms.get(name) or {})}"
+        for name in _LAST_PLATFORMS
+    )
+    overall_label, overall_code = _last_overall_status(video)
+    source_url = youtube_source_url(str(video.get("youtube_id") or ""))
+    source_line = (
+        f"🔗 <a href=\"{html.escape(source_url, quote=True)}\">YouTube</a>"
+        if source_url else "YouTube：不可用"
+    )
+    return (
+        f"{index}. <b>{title}</b>\n"
+        f"{overall_label} · {_format_last_timestamp(video.get('last_confirmed_publish_at'))}\n"
+        f"{platform_line}\n"
+        f"原片：{html.escape(_format_last_source_time(video))}\n"
+        f"ID：<code>{html.escape(_last_display_id(video))}</code> · <code>{overall_code}</code>\n"
+        f"{source_line}"
+    )
+
+
+def fmt_last_published_header(start: int, end: int, videos: List[dict], *, include_summary: bool) -> str:
+    """渲染 /last 分包标题；摘要仅覆盖当前请求中实际返回的视频。"""
+    lines = [f"📚 <b>最近发布｜第 {start}–{end} 条</b>"]
+    if include_summary:
+        all_published = sum(_last_overall_status(video)[1] == "PUBLISHED_ALL" for video in videos)
+        partial = len(videos) - all_published
+        lines.append(f"✅ {all_published} 全平台正常　⚠️ {partial} 部分发布")
+    lines.append("最新在前")
+    return "\n".join(lines)
+
+
+def fmt_last_published_empty() -> str:
+    """/last 没有任何已确认公开发布记录时的保守回复。"""
+    return "📭 暂无平台账本已确认发布的视频。"
+
+
+def fmt_last_published_usage() -> str:
+    """/last 参数错误说明；不泄露服务端异常或查询细节。"""
+    return (
+        "⚠️ <b>/last 参数格式错误</b>\n"
+        "用法：\n"
+        "<code>/last</code>          最近 10 条\n"
+        "<code>/last 30</code>       最近 30 条\n"
+        "<code>/last 10-30</code>    第 10–30 条\n"
+        "编号 1 表示最新发布的视频。\n"
+        "单次最多返回 100 条。"
+    )
 
 
 def fmt_delete_success(youtube_id: str) -> str:
@@ -127,6 +284,7 @@ def fmt_help() -> str:
         "📋 `/queue` — 查看当前处理队列\n"
         "📊 `/status` — 查看全局宏观状态报告\n"
         "✅ `/published` — 查看最近发布到视频号的视频\n"
+        "📚 `/last [N|A-B]` — 查看平台确认发布记录，如 `/last 30` 或 `/last 10-30`\n"
         "📥 `/getvideo <ID> [slice_index]` — 把成片发回给你（超 50MB 自动压缩）\n"
         "🗑 `/delete <ID> [slice_index]` — 删除指定视频或分集任务\n"
         "♻️ `/retry <ID> [slice_index]` — 重试失败的视频或分集任务\n"

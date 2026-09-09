@@ -18,6 +18,7 @@
 | 1.1.0   | 2026-07-26 | Codex           | 新增 censorship_incidents 台账写入回归，确保违规命中可复盘 |
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | 初始创建：锁定 BUG-1 审查 slice_index 透传行为 |
 | 1.3.0   | 2026-07-27 | Codex           | 覆盖发布前 fail-closed：CP fail-open 不生效，审查异常不放行 |
+| 1.4.0   | 2026-09-09 | Codex           | 审查拦截回执包含切片身份和可点击的上游 YouTube 原视频。 |
 """
 
 import os
@@ -76,6 +77,8 @@ def test_p0_hit_on_slice_fails_slice_not_parent(temp_db, monkeypatch):
     monkeypatch.setattr(censor_engine, "check_text", lambda zh_text="", en_text="": hit)
 
     pm = _make_pm(db)
+    messages = []
+    pm.send_telegram_msg = messages.append
     assert pm._check_censorship("vid12345678", "Slice One", slice_index=1) is True
 
     parent = db.get_video_by_youtube_id("vid12345678", slice_index=0)
@@ -88,6 +91,8 @@ def test_p0_hit_on_slice_fails_slice_not_parent(temp_db, monkeypatch):
     assert incidents[0]["matched"] == "iran"
     assert incidents[0]["decision"] == "REJECT_FAILED"
     assert incidents[0]["title"] == "Slice One"
+    assert "YouTube ID: <code>vid12345678_s1</code>" in messages[0]
+    assert 'href="https://www.youtube.com/watch?v=vid12345678"' in messages[0]
 
 
 def test_p2_deprioritizes_slice_not_parent(temp_db, monkeypatch):

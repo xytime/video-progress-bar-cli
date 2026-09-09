@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.50.1 | 2026-09-09 | Codex | 所有携带合法 YouTube ID 的 P1 Telegram 回执统一补充标题和可点击的原视频链接。 |
 | 3.50.0 | 2026-09-09 | Codex | 中文正文硬合同与真实源路径 ASS 缓存/提交校验；缺失字幕不再默认信任成片 |
 | 3.49.1 | 2026-09-07 | Codex | 互动帖随视频号受理回执发送；公开回查只报告状态，避免重复互动文案。 |
 | 3.49.0 | 2026-09-07 | Codex | 视频号确认公开回执合并互动帖建议，按分片读取独立产物，不自动发评论。 |
@@ -177,7 +178,11 @@ from .utils.file_utils import (
     read_subtitle_text,
     read_webvtt_text,
 )
-from .utils.platform_events import PlatformEvent, format_platform_event_html
+from .utils.platform_events import (
+    PlatformEvent,
+    format_platform_event_html,
+    format_youtube_source_link_html,
+)
 from .utils.text_utils import graceful_truncate_title
 from .utils.generated_content_validation import (
     GeneratedContentValidationError,
@@ -236,6 +241,12 @@ _TRANSIENT_PRE_SUBMISSION_FAILURE_MARKERS = (
     "字幕转录/翻译/渲染超时",
 )
 _MAX_TRANSIENT_PRE_SUBMISSION_RETRIES = 2
+_TELEGRAM_YOUTUBE_SUBJECT_RE = re.compile(
+    r"(?:youtube\s+id|id|session expired)\s*:\s*(?:<[^>]+>)*"
+    r"(?P<youtube_id>[A-Za-z0-9_-]{11})"
+    r"(?:(?:_s|_part|#)(?P<slice_index>\d+))?(?![A-Za-z0-9_-])",
+    re.IGNORECASE,
+)
 _YOUTUBE_AUTH_FAILURE_MARKERS = (
     "sign in to confirm you’re not a bot",
     "sign in to confirm you're not a bot",
@@ -558,6 +569,33 @@ class PipelineManager:
             dedupe_key = normalized
         return event_type, priority, (0 if priority == "P2" else 24 * 60 * 60), dedupe_key
 
+    def _enrich_telegram_video_context(self, text: str) -> str:
+        """为每条可识别的原视频回执补充标题和安全来源链接；查库失败不阻断告警。"""
+        match = _TELEGRAM_YOUTUBE_SUBJECT_RE.search(text)
+        if not match:
+            return text
+        youtube_id = match.group("youtube_id")
+        slice_index = int(match.group("slice_index") or 0)
+        source_link = format_youtube_source_link_html(youtube_id)
+        if not source_link:
+            return text
+
+        title = ""
+        try:
+            video = self.db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
+            if isinstance(video, Mapping):
+                title = str(video.get("zh_title") or video.get("title") or "").strip()
+        except Exception as exc:  # 告警本身不可因辅助标题查询失败而丢失。
+            logger.debug("Telegram video-context lookup failed for %s: %s", youtube_id, type(exc).__name__)
+
+        plain_text = html.unescape(re.sub(r"<[^>]+>", "", text))
+        additions: list[str] = []
+        if title and not re.search(r"(?:^|\n)(?:title|标题)\s*:", plain_text, re.IGNORECASE):
+            additions.append(f"标题：{html.escape(title[:200])}")
+        if source_link not in text:
+            additions.append(source_link)
+        return f"{text.rstrip()}\n" + "\n".join(additions) if additions else text
+
     def send_telegram_msg(self, text: str) -> bool:
         """发送 P1 管线提醒；P2 只记录为已抑制，避免状态消息淹没审批。"""
         event_type, priority, cooldown_seconds, dedupe_key = self._telegram_notification_policy(text)
@@ -569,6 +607,7 @@ class PipelineManager:
             )
             logger.info("Telegram P2 notification suppressed: %s", event_type)
             return True
+        text = self._enrich_telegram_video_context(text)
         result = send_telegram_text(
             event_type=event_type, priority=priority, text=text,
             cooldown_seconds=cooldown_seconds, timeout_seconds=10, dedupe_key=dedupe_key, db=self.db,
@@ -587,6 +626,7 @@ class PipelineManager:
         if not video_path.is_file():
             logger.warning("Telegram review video missing: %s", video_path)
             return False
+        caption = self._enrich_telegram_video_context(caption)
         result = send_telegram_review_video(
             event_type="pipeline.wechat_review_video", priority="P1", path=video_path,
             caption=caption, timeout_seconds=120, db=self.db,
@@ -2169,6 +2209,7 @@ class PipelineManager:
         publication_id = publication["id"]
         yid = publication["youtube_id"]
         slice_index = publication.get("slice_index", 0)
+        prefix = f"{yid}_s{slice_index}" if slice_index else yid
         if not self._is_public_publish_window("快手", yid, slice_index):
             self.db.update_kuaishou_publication_state(
                 publication_id,
@@ -2232,7 +2273,10 @@ class PipelineManager:
                 reason = "快手作品管理已可见，当前审核中；等待平台审核结果，不重新上传。"
                 logger.info("[%s] %s", yid, reason)
                 self.db.update_kuaishou_publication_state(publication_id, "UNDER_REVIEW", error_message=reason)
-                self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Kuaishou\nYouTube ID: {yid}")
+                self.send_telegram_msg(
+                    f"⏳ <b>Video Under Review</b>\nPlatform: Kuaishou\n"
+                    f"YouTube ID: {html.escape(prefix)}"
+                )
                 return True
             elif exc.returncode == 7:
                 state = "BANNED"
@@ -2252,7 +2296,10 @@ class PipelineManager:
             "PUBLISHED",
             error_message="快手作品管理已确认本次作品为已发布。",
         )
-        self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Kuaishou\nYouTube ID: {yid}")
+        self.send_telegram_msg(
+            f"✅ <b>Video Published</b>\nPlatform: Kuaishou\n"
+            f"YouTube ID: {html.escape(prefix)}"
+        )
         return True
 
     def _queue_and_publish_new_kuaishou_video(self, yid: str, slice_index: int) -> bool:
@@ -2337,6 +2384,7 @@ class PipelineManager:
             publication_id = publication["id"]
             yid = publication["youtube_id"]
             slice_index = publication.get("slice_index", 0)
+            prefix = f"{yid}_s{slice_index}" if slice_index else yid
             _, copy_file = self._kuaishou_asset_paths(yid, slice_index)
             if not copy_file.is_file():
                 logger.error("[%s] 快手审核回查缺少文案文件：%s", yid, copy_file)
@@ -2389,7 +2437,10 @@ class PipelineManager:
                 "PUBLISHED",
                 error_message="快手作品管理已确认本次作品为已发布。",
             )
-            self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Kuaishou\nYouTube ID: {yid}")
+            self.send_telegram_msg(
+                f"✅ <b>Video Published</b>\nPlatform: Kuaishou\n"
+                f"YouTube ID: {html.escape(prefix)}"
+            )
             reviewed += 1
         return reviewed
 
@@ -2423,6 +2474,7 @@ class PipelineManager:
         publication_id = publication["id"]
         yid = publication["youtube_id"]
         slice_index = publication.get("slice_index", 0)
+        prefix = f"{yid}_s{slice_index}" if slice_index else yid
         if not self._is_public_publish_window("抖音", yid, slice_index):
             self.db.update_douyin_publication_state(
                 publication_id,
@@ -2576,7 +2628,10 @@ class PipelineManager:
                     f"runtime:publication:{publication_id}:accepted",
                 )
                 self.db.update_douyin_publication_state(publication_id, "UNDER_REVIEW", error_message=reason)
-                self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+                self.send_telegram_msg(
+                    f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\n"
+                    f"YouTube ID: {html.escape(prefix)}"
+                )
                 return True
             elif exc.returncode == 3:
                 state = "CANCELED"
@@ -2628,7 +2683,10 @@ class PipelineManager:
             "UNDER_REVIEW",
             error_message="抖音浏览器已完成最终提交；等待作品管理页显示已发布后再确认最终成功。",
         )
-        self.send_telegram_msg(f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+        self.send_telegram_msg(
+            f"⏳ <b>Video Under Review</b>\nPlatform: Douyin\n"
+            f"YouTube ID: {html.escape(prefix)}"
+        )
         return True
 
     def _queue_and_publish_new_douyin_video(self, yid: str, slice_index: int = 0) -> bool:
@@ -2805,6 +2863,7 @@ class PipelineManager:
             attempted += 1
             yid = publication["youtube_id"]
             slice_index = publication.get("slice_index", 0)
+            prefix = f"{yid}_s{slice_index}" if slice_index else yid
             _, copy_file = self._douyin_asset_paths(yid, slice_index)
             if not copy_file.is_file():
                 reason = f"抖音审核回查缺少文案文件：{copy_file}"
@@ -2909,7 +2968,10 @@ class PipelineManager:
                 f"runtime:publication:{publication_id}:published",
             )
             self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
-            self.send_telegram_msg(f"✅ <b>Video Published</b>\nPlatform: Douyin\nYouTube ID: {yid}")
+            self.send_telegram_msg(
+                f"✅ <b>Video Published</b>\nPlatform: Douyin\n"
+                f"YouTube ID: {html.escape(prefix)}"
+            )
             reviewed += 1
         return reviewed
 
@@ -2956,7 +3018,7 @@ class PipelineManager:
             return 0
         lookback_hours, candidate_limit = self._bounded_douyin_new_sync_discovery_limits()
         queued = 0
-        missing_asset_prefixes: list[str] = []
+        missing_asset_videos: list[tuple[str, int, str]] = []
         missing_asset_parts: Dict[str, int] = {}
         for video in self.db.get_unqueued_douyin_new_videos(
             lookback_hours=lookback_hours,
@@ -2977,7 +3039,8 @@ class PipelineManager:
             }
             missing_parts = [name for name, available in asset_states.items() if not available]
             if missing_parts:
-                missing_asset_prefixes.append(prefix)
+                title = str(video.get("zh_title") or video.get("title") or prefix).strip()
+                missing_asset_videos.append((yid, slice_index, title))
                 for part in missing_parts:
                     missing_asset_parts[part] = missing_asset_parts.get(part, 0) + 1
                 continue
@@ -2992,21 +3055,30 @@ class PipelineManager:
             logger.info("[%s] 已补齐抖音 NEW 同步队列。", prefix)
             if queued >= remaining_actions:
                 break
-        if missing_asset_prefixes:
-            sample = ", ".join(html.escape(prefix) for prefix in missing_asset_prefixes[:5])
-            more = "" if len(missing_asset_prefixes) <= 5 else " …"
+        if missing_asset_videos:
+            sample_lines = []
+            for yid, slice_index, title in missing_asset_videos[:5]:
+                prefix = f"{yid}_s{slice_index}" if slice_index else yid
+                source_link = format_youtube_source_link_html(yid)
+                sample_lines.append(
+                    f"• 标题：{html.escape(title[:120])}\n"
+                    f"  YouTube ID: <code>{html.escape(prefix)}</code>"
+                    + (f"\n  {source_link}" if source_link else "")
+                )
+            sample = "\n".join(sample_lines)
+            more = "" if len(missing_asset_videos) <= 5 else "\n…其余任务请在面板查看"
             parts = "，".join(f"{name}={count}" for name, count in sorted(missing_asset_parts.items()))
             delivered = self.send_telegram_msg(
                 "⚠️ <b>Douyin NEW material gap</b>\n"
                 "ID: <code>douyin-new-material-gap</code>\n"
-                f"缺少完整投递素材：{len(missing_asset_prefixes)} 条\n"
+                f"缺少完整投递素材：{len(missing_asset_videos)} 条\n"
                 f"缺失汇总：{parts}\n"
                 f"示例：{sample}{more}"
             )
             log = logger.warning if delivered else logger.info
             log(
                 "[DouyinNewSync] 本轮跳过缺素材 NEW 候选 %s 条（%s）；详情已聚合并按回执限频。",
-                len(missing_asset_prefixes),
+                len(missing_asset_videos),
                 parts,
             )
         if queued:
@@ -3504,7 +3576,9 @@ class PipelineManager:
                                 
                             self.db.update_video_status(yid, "SEGMENTED", slice_index=0)
                             self.send_telegram_msg(
-                                f"📦 <b>Video Segmented</b>\nParent: {title}\n"
+                                "📦 <b>Video Segmented</b>\n"
+                                f"YouTube ID: <code>{html.escape(yid)}</code>\n"
+                                f"标题：{html.escape(title)}\n"
                                 f"Generated {len(slice_tasks)} slices to publish."
                             )
                             return
@@ -3768,8 +3842,11 @@ class PipelineManager:
                             yid, "FAILED", error_msg=reason, slice_index=slice_index,
                         )
                         self.send_telegram_msg(
-                            f"⚠️ <b>字幕阶段超时</b>\nTitle: {render_title}\n"
-                            f"Stage: {breach.stage}\nReason: {breach.description()}"
+                            "⚠️ <b>字幕阶段超时</b>\n"
+                            f"YouTube ID: <code>{html.escape(prefix)}</code>\n"
+                            f"Title: {html.escape(render_title)}\n"
+                            f"Stage: {html.escape(breach.stage)}\n"
+                            f"Reason: {html.escape(breach.description())}"
                         )
                         return
                     except subprocess.TimeoutExpired:
@@ -3791,7 +3868,8 @@ class PipelineManager:
                         )
                         self.send_telegram_msg(
                             f"⚠️ <b>Auto-caption timed out</b>\n"
-                            f"Title: {render_title}\n"
+                            f"YouTube ID: <code>{html.escape(prefix)}</code>\n"
+                            f"Title: {html.escape(render_title)}\n"
                             f"Renderer exceeded {_AUTO_CAPTION_TIMEOUT_SEC // 60} minutes and was terminated."
                         )
                         return
@@ -4118,7 +4196,8 @@ class PipelineManager:
                         self.db.update_video_status(yid, "LOGIN_REQUIRED", slice_index=slice_index)
                         self.send_telegram_msg(
                             f"⚠️ <b>WeChat Login Required</b>\n"
-                            f"Session expired: <b>{prefix}</b>\n"
+                            f"YouTube ID: <code>{html.escape(prefix)}</code>\n"
+                            "微信登录会话已失效；请重新登录后重试同一视频。\n"
                             f"<code>python scripts/wechat_uploader.py --login-only --no-headless</code>"
                         )
                         return

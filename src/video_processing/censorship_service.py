@@ -10,6 +10,7 @@
 # Modification History
 | Version | Date       | Author          | Description                                                    |
 |---------|------------|-----------------|---------------------------------------------------------------|
+| 1.8.0   | 2026-09-09 | Codex | 审查回执统一带来源视频 ID 与安全可点击链接，并转义动态字段。 |
 | 1.0.0   | 2026-06-22 | Claude_Opus_4.8 | 从 pipeline_manager._check_censorship 抽出 CensorshipService（行为逐字保留） |
 | 1.1.0   | 2026-06-25 | Claude_Opus_4.8 | P2 命中手动锁定(is_manually_scored=1)视频时改为挂起人工复核(FAILED+TG)而非 force 清零回弹——根治"调分后反复弹回待筛选且分数归0"的困惑；非锁定视频仍按原 deprioritize |
 | 1.2.0   | 2026-06-28 | Claude_Opus_4.8 | 受信任频道白名单：channel_id 在 settings.censorship_bypass_channel_set 中→跳过全部审查层(P0/P1/P2/CP)。供运营对自审过的优质频道整体开绿灯（如财经频道的地缘共现词不再误杀） |
@@ -27,6 +28,7 @@ from typing import Callable
 
 from config.settings import settings
 from . import censor_engine
+from .utils.platform_events import format_youtube_source_link_html
 # 动作常量在 import 时绑定即可（不会被运行时替换）；判定函数 check_text/check_channel_policy
 # 通过 censor_engine.<fn> 在调用时查找，保证测试 monkeypatch censor_engine.check_text 生效。
 from .censor_engine import (
@@ -48,6 +50,14 @@ class CensorshipService:
     def __init__(self, db, notify: Callable[[str], None]):
         self.db = db
         self.notify = notify
+
+    @staticmethod
+    def _notification_video_context(yid: str, slice_index: int) -> str:
+        """为审查告警保留可识别任务身份与可安全打开的上游视频。"""
+        display_id = yid if slice_index == 0 else f"{yid}_s{slice_index}"
+        source_link = format_youtube_source_link_html(yid)
+        context = f"\nYouTube ID: <code>{html.escape(display_id)}</code>"
+        return f"{context}\n{source_link}" if source_link else context
 
     @staticmethod
     def _excerpt_for_match(*texts: str, matched: str = "") -> str:
@@ -200,7 +210,10 @@ class CensorshipService:
                             self.db.add_to_blacklist(yid, reason=f"censor_p0_{result.matched}")
                         self.notify(
                             f"\U0001f534 <b>Censorship P0 Reject</b>"
-                            f"\nTitle: {title}\nMatched: <code>{result.matched}</code> (via {result.channel})"
+                            f"\nTitle: {html.escape(str(title or ''))}"
+                            f"\nMatched: <code>{html.escape(str(result.matched or ''))}</code>"
+                            f" (via {html.escape(str(result.channel or ''))})"
+                            f"{self._notification_video_context(yid, slice_index)}"
                         )
                         return True
 
@@ -218,7 +231,10 @@ class CensorshipService:
                         self.db.update_video_status(yid, "FAILED", error_msg=f"Censorship P1 Suspend: {result.tag} (matched: '{result.matched}')", slice_index=slice_index)
                         self.notify(
                             f"\U0001f7e1 <b>Censorship P1 Suspend</b>"
-                            f"\nTitle: {title}\nMatched: <code>{result.matched}</code> (via {result.channel})"
+                            f"\nTitle: {html.escape(str(title or ''))}"
+                            f"\nMatched: <code>{html.escape(str(result.matched or ''))}</code>"
+                            f" (via {html.escape(str(result.channel or ''))})"
+                            f"{self._notification_video_context(yid, slice_index)}"
                         )
                         return True
 
@@ -248,6 +264,7 @@ class CensorshipService:
                                 f"\nTitle: {html.escape(title or '')}\nMatched: <code>{html.escape(str(result.matched or ''))}</code>"
                                 f"\n\n⚠️ 手动锁定视频命中 P2 商业合规预警，已挂起等待人工裁决"
                                 f"（分数保留，未清零）。确认安全后可在面板「\U0001f513 复核放行」后重试。"
+                                f"{self._notification_video_context(yid, slice_index)}"
                             )
                             return True
                         self._record_incident(
@@ -264,7 +281,9 @@ class CensorshipService:
                         self.db.update_video_status(yid, "PENDING", error_msg=f"Censorship P2 Deprioritized: {result.tag}", slice_index=slice_index)
                         self.notify(
                             f"\U0001f535 <b>Censorship P2 Deprioritized</b>"
-                            f"\nTitle: {title}\nMatched: <code>{result.matched}</code>"
+                            f"\nTitle: {html.escape(str(title or ''))}"
+                            f"\nMatched: <code>{html.escape(str(result.matched or ''))}</code>"
+                            f"{self._notification_video_context(yid, slice_index)}"
                         )
                         return True
 
@@ -307,9 +326,11 @@ class CensorshipService:
                     )
                     self.notify(
                         f"\U0001f6ab <b>Channel Policy Reject</b>"
-                        f"\nTitle: {title}"
-                        f"\nMatched: <code>{cp_result.matched}</code> (via {cp_result.channel})"
+                        f"\nTitle: {html.escape(str(title or ''))}"
+                        f"\nMatched: <code>{html.escape(str(cp_result.matched or ''))}</code>"
+                        f" (via {html.escape(str(cp_result.channel or ''))})"
                         f"\n\n⚠️ 此视频超出频道内容定位边界，已拒绝处理。"
+                        f"{self._notification_video_context(yid, slice_index)}"
                     )
                     return True
 
@@ -337,6 +358,7 @@ class CensorshipService:
                     f"⛔ <b>Censorship Fail-Closed</b>"
                     f"\nTitle: {html.escape(title or '')}"
                     f"\nError: <code>{html.escape(str(e))}</code>"
+                    f"{self._notification_video_context(yid, slice_index)}"
                 )
                 return True
 

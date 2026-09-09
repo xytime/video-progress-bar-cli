@@ -13,6 +13,7 @@
 | 1.7.0 | 2026-08-23 | Codex | 覆盖英语世界审核项的唯一投稿批准按钮不退回通用发布命令。 |
 | 1.8.0 | 2026-08-29 | Codex | 覆盖 lease jobs 菜单、候选选择、二次确认和两小时单任务授权。 |
 | 1.9.0 | 2026-08-29 | Codex | 覆盖未消费 lease 撤销按钮、管理员撤销回调和分层启动回执。 |
+| 1.10.0 | 2026-09-09 | Codex | Highlight 源视频列表保留安全可点击的 YouTube 原视频链接。 |
 """
 import logging
 import re
@@ -26,13 +27,33 @@ _src = str(Path(__file__).parent.parent.parent / "src")
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-from bot.telegram_bot import _BOT_COMMANDS, _YOUTUBE_RE, cmd_status, handle_youtube_url, parse_trim_params
+from bot.telegram_bot import (
+    _BOT_COMMANDS,
+    _YOUTUBE_RE,
+    _highlight_source_text,
+    cmd_status,
+    handle_youtube_url,
+    parse_trim_params,
+)
 
 
 def test_transport_loggers_do_not_emit_bot_api_info_urls():
     """httpx 的请求 INFO 日志会包含完整 Bot API 鉴权 URL。"""
     assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING
     assert logging.getLogger("httpcore").getEffectiveLevel() >= logging.WARNING
+
+
+def test_highlight_source_text_links_to_valid_youtube_source():
+    message = _highlight_source_text({
+        "youtube_id": "ODhae8RmBIc",
+        "title": "测试来源视频",
+        "status": "PUBLISHED",
+        "source_subtitle_available": True,
+        "source_video_available": True,
+    })
+
+    assert "测试来源视频" in message
+    assert 'href="https://www.youtube.com/watch?v=ODhae8RmBIc"' in message
 
 
 class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):

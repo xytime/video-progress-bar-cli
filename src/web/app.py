@@ -2,6 +2,8 @@
 
 # Modification History
 | 3.35.1 | 2026-09-08 | Codex | 仪表盘允许局域网 IPv4 绑定；浏览器 Origin 必须与当前请求地址同源，保留轻量 CSRF 边界。 |
+| 3.36.0 | 2026-09-09 | Codex | 新增已确认公开发布账本只读接口，供 Telegram /last 查询；拒绝本地工作流状态回退。 |
+| 3.36.1 | 2026-09-09 | Codex | /last API 拒绝 SQLite 不可表示的位置参数，避免将异常暴露给 Telegram。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 3.23.0 | 2026-08-21 | Codex | 控制台对视频号生命周期 fail-closed：中止/孤儿发布先落未绑定账本，禁用无删除证明的重发，并阻断通用重试、改规格、删除和硬重置 |
@@ -101,7 +103,7 @@ from fastapi import FastAPI, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from video_processing.db.database import PipelineDB
+from video_processing.db.database import MAX_SQLITE_INTEGER, PipelineDB
 from video_processing.content_types import CONTENT_TYPE_GENERAL, normalize_content_type
 from video_processing.core.douyin_ui_guard_policy import (
     active_douyin_ui_failure_stages,
@@ -1366,6 +1368,19 @@ def get_videos(
         "total_pages": (total_count + size - 1) // size,
         "tab_counts": tab_counts,
         "filter_options": {"channels": db.get_video_filter_channels(tab, engagement_window_days)},
+    }
+
+
+@app.get("/api/published-videos")
+def get_confirmed_published_videos(start: int = 1, end: int = 10):
+    """返回指定名次范围内、至少一个平台已明确确认发布的视频。"""
+    if start < 1 or end < start or end > MAX_SQLITE_INTEGER or end - start + 1 > 100:
+        raise HTTPException(status_code=422, detail="invalid published-video range")
+    videos = db.get_recent_confirmed_published_videos(offset=start - 1, limit=end - start + 1)
+    return {
+        "videos": videos,
+        "start": start,
+        "end": end,
     }
 
 
