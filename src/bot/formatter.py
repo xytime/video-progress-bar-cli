@@ -20,6 +20,7 @@
 | 1.8.1 | 2026-09-09 | Codex | 队列、发布列表与入队回执补充经校验的可点击 YouTube 原视频链接。 |
 | 1.9.0 | 2026-09-09 | Codex | 新增 /last 的移动端发布账本卡片、时区展示和 HTML 安全链接格式化。 |
 | 1.9.1 | 2026-09-09 | Codex | 限制 /last 异常历史 ID 的显示长度，确保单卡可由 Telegram 投递。 |
+| 1.9.2 | 2026-09-09 | Codex | /last 的平台确认和原片发布时间均直接标注 BJ 时区。 |
 """
 from __future__ import annotations
 from datetime import datetime, timezone
@@ -112,6 +113,7 @@ _LAST_PLATFORM_LABELS = {
     "kuaishou": "快手",
 }
 _LAST_BJT = ZoneInfo("Asia/Shanghai")
+_LAST_TIMEZONE_LABEL = "BJ"
 _LAST_DISPLAY_ID_MAX_CHARS = 96
 
 
@@ -146,8 +148,8 @@ def _format_last_timestamp(value: object) -> str:
         parsed = parsed.replace(tzinfo=timezone.utc)
     local = parsed.astimezone(_LAST_BJT)
     if local.year == datetime.now(_LAST_BJT).year:
-        return local.strftime("%m-%d %H:%M")
-    return local.strftime("%Y-%m-%d %H:%M")
+        return f"{local.strftime('%m-%d %H:%M')} {_LAST_TIMEZONE_LABEL}"
+    return f"{local.strftime('%Y-%m-%d %H:%M')} {_LAST_TIMEZONE_LABEL}"
 
 
 def _format_last_source_time(video: dict) -> str:
@@ -162,7 +164,8 @@ def _format_last_source_time(video: dict) -> str:
                 parsed = datetime.strptime(source_published_at, date_format).replace(tzinfo=_LAST_BJT)
             except ValueError:
                 continue
-            return parsed.strftime("%m-%d") if parsed.year == datetime.now(_LAST_BJT).year else parsed.strftime("%Y-%m-%d")
+            date_text = parsed.strftime("%m-%d") if parsed.year == datetime.now(_LAST_BJT).year else parsed.strftime("%Y-%m-%d")
+            return f"{date_text} {_LAST_TIMEZONE_LABEL}"
 
     upload_date = str(video.get("upload_date") or "").strip()
     for date_format in ("%Y%m%d", "%Y-%m-%d"):
@@ -170,7 +173,8 @@ def _format_last_source_time(video: dict) -> str:
             parsed = datetime.strptime(upload_date, date_format).replace(tzinfo=_LAST_BJT)
         except ValueError:
             continue
-        return parsed.strftime("%m-%d") if parsed.year == datetime.now(_LAST_BJT).year else parsed.strftime("%Y-%m-%d")
+        date_text = parsed.strftime("%m-%d") if parsed.year == datetime.now(_LAST_BJT).year else parsed.strftime("%Y-%m-%d")
+        return f"{date_text} {_LAST_TIMEZONE_LABEL}"
     return "未知"
 
 

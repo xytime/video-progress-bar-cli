@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | 覆盖 /last 账本筛选、范围校验、卡片链接及分包边界。 |
+| 1.0.1 | 2026-09-09 | Codex | 断言平台确认及原片时间均标注 BJ 时区。 |
 """
 from __future__ import annotations
 
@@ -96,6 +97,8 @@ def test_last_formatter_uses_base_youtube_link_and_caps_bad_legacy_id():
 
     card = fmt_last_published_entry(10, video)
     assert "&lt;喜悦&gt; 的涟漪" in card
+    assert "部分发布 · 09-09 11:38 BJ" in card
+    assert "原片：09-09 07:15 BJ" in card
     assert "ODhae8RmBIc_s2" in card
     assert 'href="https://www.youtube.com/watch?v=ODhae8RmBIc"' in card
     assert "watch?v=ODhae8RmBIc_s2" not in card
