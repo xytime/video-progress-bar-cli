@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | 确定性解析、规范化记录和 ASR 差异证据。 |
+| 1.0.1 | 2026-09-09 | Codex | 保留片段边界跨越的原字幕，并仅以 ASR 确定边界内词序。 |
 """
 import difflib
 import math
@@ -21,6 +22,7 @@ def parse_json3(payload, start, end):
     if not all(math.isfinite(x) for x in (start, end)) or not 0 <= start < end:
         raise ValueError("非法来源区间")
     segments, changes, seen = [], [], set()
+    boundary_clipped = {"start": False, "end": False}
     for ei, event in enumerate(payload.get("events", [])):
         base = event.get("tStartMs", 0) / 1000
         stop = base + event.get("dDurationMs", 0) / 1000
@@ -28,7 +30,7 @@ def parse_json3(payload, start, end):
             absolute = base + (seg.get("tOffsetMs") or 0) / 1000
             raw = seg.get("utf8", "")
             words = tokens(raw)
-            if not words or absolute < start or absolute >= end:
+            if not words or stop <= start or absolute >= end:
                 continue
             key = (absolute, tuple(words))
             if key in seen:
@@ -39,8 +41,12 @@ def parse_json3(payload, start, end):
             if normalized != words:
                 changes.append({"kind": "typography", "before": words, "after": normalized,
                                 "source_ref": ref, "source_start": absolute})
+            starts_before, ends_after = absolute < start, stop > end
+            boundary_clipped["start"] |= starts_before
+            boundary_clipped["end"] |= ends_after
             segments.append({"tokens": normalized, "raw": raw, "source_ref": ref,
-                             "start": absolute - start, "event_end": min(stop, end) - start})
+                             "start": max(absolute, start) - start, "event_end": min(stop, end) - start,
+                             "clipped_start": starts_before, "clipped_end": ends_after})
     segments.sort(key=lambda x: x["start"])
     if not segments:
         raise ValueError("选定区间没有字幕")
@@ -54,7 +60,7 @@ def parse_json3(payload, start, end):
     return {"schema_version": 1, "segments": segments, "changes": changes,
             "english_text": " ".join(w for s in segments for w in s["tokens"]),
             "words": words if not unresolved else [], "requires_alignment": unresolved,
-            "source_start": start, "source_end": end}
+            "source_start": start, "source_end": end, "boundary_clipped": boundary_clipped}
 
 
 def transcript_differences(expected, observed):
@@ -67,7 +73,7 @@ def transcript_differences(expected, observed):
 
 
 def align_json3(parsed, asr_words):
-    """多词字幕仅在全文词序完全吻合时采用真实 ASR 锚点，绝不均分片段。"""
+    """多词字幕以真实 ASR 锚点对齐；仅允许裁去已记录的片段边界残词。"""
     expected = tokens(parsed["english_text"])
     observed = []
     for word in asr_words:
@@ -75,10 +81,20 @@ def align_json3(parsed, asr_words):
         if len(parts) != 1:
             raise ValueError("UNCERTAIN: ASR 词片不能唯一绑定字幕词")
         observed.append(parts[0])
-    if [w.lower() for w in expected] != [w.lower() for w in observed]:
-        raise ValueError("UNCERTAIN: ASR 与字幕词序不一致，不自动覆盖字幕")
+    expected_lower, observed_lower = [w.lower() for w in expected], [w.lower() for w in observed]
+    offset = 0
+    if expected_lower != observed_lower:
+        matches = [i for i in range(len(expected_lower) - len(observed_lower) + 1)
+                   if expected_lower[i:i + len(observed_lower)] == observed_lower]
+        if len(matches) != 1:
+            raise ValueError("UNCERTAIN: ASR 与字幕词序不一致，不自动覆盖字幕")
+        offset = matches[0]
+        boundary = parsed.get("boundary_clipped", {})
+        if (offset and not boundary.get("start")) or (offset + len(observed_lower) < len(expected_lower)
+                                                       and not boundary.get("end")):
+            raise ValueError("UNCERTAIN: ASR 与字幕词序不一致，不自动覆盖字幕")
     result, previous = [], 0.0
-    for text, word in zip(expected, asr_words):
+    for text, word in zip(expected[offset:offset + len(observed)], asr_words):
         start, end = round(float(word["start"]), 3), round(float(word["end"]), 3)
         if not math.isfinite(start + end) or start < previous or not start < end <= parsed["source_end"] - parsed["source_start"]:
             raise ValueError("UNCERTAIN: ASR 锚点重叠或越界")

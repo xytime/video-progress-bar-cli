@@ -6,6 +6,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | source/prepare/review/validate 阶段独立执行，不接触投稿账本。 |
 | 1.0.1 | 2026-09-09 | Codex | 以来源+字幕+自然片段隔离布局和审校预算。 |
+| 1.0.2 | 2026-09-09 | Codex | 保存边界跨越字幕的 ASR 对齐文本，禁止静默丢词。 |
 """
 import argparse
 from pathlib import Path
@@ -62,6 +63,9 @@ def source_evidence(timeline, model_path):
         try:
             evidence["aligned_words"] = align_json3(parsed, words)
             evidence["alignment_status"] = "PASS"
+            evidence["aligned_caption_text"] = " ".join(word["text"] for word in evidence["aligned_words"])
+            evidence["caption_boundary_trim"] = transcript_differences(
+                parsed["english_text"], evidence["aligned_caption_text"])
         except ValueError as exc:
             evidence["alignment_status"] = "UNCERTAIN"
             evidence["alignment_error"] = str(exc)

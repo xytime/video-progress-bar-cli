@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | JSON3 完整词、逐目标审校覆盖及重启缓存测试。 |
 | 1.0.1 | 2026-09-09 | Codex | 覆盖转录差异逐项裁决、片段任务隔离和词元音标标签。 |
+| 1.0.2 | 2026-09-09 | Codex | 覆盖边界跨越 JSON3 片段只能以 ASR 裁决。 |
 """
 from pathlib import Path
 import pytest
@@ -239,6 +240,14 @@ def test_multitoken_alignment_uses_real_asr_times_and_rejects_differences():
     assert aligned[1] == {"text": "results", "start": .2, "end": .3}
     observed[-1]["word"] = "sober"
     with pytest.raises(ValueError, match="UNCERTAIN"): align_json3(parsed, observed)
+
+
+def test_boundary_clipped_multitoken_uses_only_the_audio_confirmed_subsequence():
+    from video_processing.study_cards.caption_evidence import align_json3
+    parsed = parse_json3(caption("one two three"), .2, .8)
+    observed = [{"word": "two", "start": .1, "end": .2}]
+    assert parsed["boundary_clipped"] == {"start": True, "end": True}
+    assert align_json3(parsed, observed) == [{"text": "two", "start": .1, "end": .2}]
 
 
 def test_duplicate_event_and_overlapping_end():
