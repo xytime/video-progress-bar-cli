@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-04 | Codex | 拒绝被翻译 fallback 误当作发布文案的 HTTP 错误页，供文案器与管线双重调用 |
 | 1.1.0 | 2026-08-05 | Codex | 将完整 Error 500 页面识别为无效标题翻译，供发现与后台入库层复用 |
+| 1.2.0 | 2026-09-09 | Codex | 视频号中文模式单独检查正文，拒绝英文 fallback 被中文标题或标签掩盖 |
 """
 
 from __future__ import annotations
@@ -59,7 +60,9 @@ def is_upstream_error_response(text: str) -> bool:
     return bool(error_prefix) and len(marker_hits) >= 3
 
 
-def validate_publishable_generated_content(short_title: str, copy: str) -> None:
+def validate_publishable_generated_content(
+    short_title: str, copy: str, *, require_chinese: bool = False,
+) -> None:
     """拒绝空内容、纯 HTTP 错误标题及错误页正文。
 
     标题只在自身完全等于通用错误信息时阻断，避免误伤“如何修复 Error 500”这类
@@ -80,3 +83,13 @@ def validate_publishable_generated_content(short_title: str, copy: str) -> None:
         raise GeneratedContentValidationError(
             "发布文案疑似上游 HTTP 错误页，命中特征: " + ", ".join(marker_hits)
         )
+    if require_chinese:
+        # 正文独立计算：去掉链接、话题标签及模板标题，保留 AI/产品名等正常中英混写。
+        prose = re.sub(r"https?://\S+|#[^\s#]+", "", body)
+        prose = re.sub(r"^【双语精选】[^\n]*", "", prose).strip()
+        chinese = len(re.findall(r"[\u3400-\u9fff]", prose))
+        latin = len(re.findall(r"[A-Za-z]", prose))
+        if not chinese or (latin >= 40 and latin > chinese):
+            raise GeneratedContentValidationError(
+                f"发布正文未满足中文合同：中文字符={chinese}, 拉丁字母={latin}"
+            )

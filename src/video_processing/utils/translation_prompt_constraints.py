@@ -9,6 +9,7 @@
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0   | 2026-07-06 | Codex  | 初始创建：统一渲染全局上下文与金融翻译硬约束 |
 | 1.1.0   | 2026-07-06 | Codex  | 支持按调用场景关闭字幕段落顺序约束，便于文案链路复用 |
+| 1.2.0   | 2026-09-09 | Codex  | 强调每段时间槽与语义归属，禁止跨段搬移译文与承接占位符 |
 """
 
 from __future__ import annotations
@@ -35,6 +36,11 @@ def render_translation_constraints(
     ]
     if include_subtitle_segment_rule:
         lines.append("Do not merge, split, omit, or reorder subtitle segments.")
+        lines.append(
+            "Each segment owns its original time slot: translate only the words in that segment. "
+            "Use context to interpret fragments, never move a later segment's meaning into an earlier slot. "
+            "Preserve every segment id; never fill a slot with 承接上文, 同上, or any continuation placeholder."
+        )
     rendered = "\n".join(lines)
     if context_text and context_text.strip():
         rendered = f"{rendered}\nGlobal context:\n{context_text.strip()}"

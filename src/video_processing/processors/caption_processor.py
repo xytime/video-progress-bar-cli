@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.36.0 | 2026-09-09 | Codex | 翻译硬合同先于软质量开关；占位符和段数错误留审计后回退 |
 | 1.1.0 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复未导入 os 引发异常，修复硬编码 ffmpeg 导致无 libass 问题 |
 | 1.1.1 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复深层翻译API风控导致将500报错信息输出为中文字幕的重大缺陷 |
 | 1.2.0 | 2026-05-22 | Gemini_3.1_Pro_High_planning | [红蓝博弈] 引入正则彻底熔断 HTML 注入，修正 default 金色描边样式 |
@@ -72,6 +73,7 @@ from ..utils.subtitle_translation_quality import (
     evaluate_subtitle_translation_candidate,
 )
 from ..utils.translation_candidate_arbitration import TranslationCandidateArbiter
+from ..utils.translation_quality_guard import QualityIssue
 from ..utils.translation_model_pool import DynamicTranslationModelPool, PROFILES, classify_error
 from ..utils.deepseek_translation import (
     translate_batch_deepseek,
@@ -536,14 +538,29 @@ class AutoCaptionProcessor(VideoProcessorBase):
             attempt_started = time.monotonic()
             candidate = self._build_translation_candidate(provider, texts, translation_prompt_context)
             duration_ms = int((time.monotonic() - attempt_started) * 1000)
-            if not candidate or not candidate.is_usable_for(len(segments)):
+            contract_error = candidate.contract_error_for(len(segments)) if candidate else "missing_translation_candidate"
+            if contract_error:
                 logger.warning("[Translate] Provider %s produced no usable candidate.", provider)
-                error = self._last_provider_error or "empty_or_insufficient_translation"
+                error = self._last_provider_error or contract_error
                 error_class = classify_error(error)
                 pool.record_failure(provider, error, category=error_class)
                 self._record_translation_attempt(
                     provider, idx + 1, "FAILED", duration_ms, error_class=error_class, error_message=error,
                 )
+                if candidate:
+                    self._record_translation_quality_decision(
+                        SubtitleTranslationQualityDecision(
+                            provider=candidate.provider, accepted=False, status="blocked",
+                            action="fail" if final_provider else "fallback",
+                            blocking_issues=[QualityIssue(
+                                severity="P1", code=contract_error.split(":", 1)[0].upper(),
+                                message=contract_error, source_signal=f"segments={len(segments)}",
+                                translation_signal="structural_contract_failed",
+                            )],
+                        ),
+                        provider=candidate.provider, final_provider=final_provider, selected=False,
+                    )
+                    self._write_translation_quality_report()
                 continue
 
             decision = self._evaluate_translation_quality(

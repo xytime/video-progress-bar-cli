@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                          |
 |---------|------------|-------------------------------------|----------------------------------------------------------------------|
+| 1.3.0 | 2026-09-09 | Codex | 渲染替身生成真实 ASS；坏字幕须在封面/发布前被拒绝 |
 | 1.1.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | 新增切片进度标题测试（v2.9.0）: "AI写代码 3/9"                          |
 | 1.2.0   | 2026-08-24 | Codex                               | 双标题缺失触发未提交任务重写文案，并使平台标题重渲、封面展示标题重建。      |
 | 1.0.0   | 2026-05-28 | Claude_Sonnet_4.6_Thinking_planning | Initial test for pipeline title consistency (v2.8.0 optimization)    |
@@ -20,6 +21,7 @@
 import os
 import sys
 import pytest
+import pysubs2
 from pathlib import Path
 from unittest.mock import patch, MagicMock, call
 
@@ -208,7 +210,8 @@ class TestRenderTitleConsistency:
             f"COPYWRITING 应在 TRANSCRIBING 之前，实际顺序: {status_call_order}"
         )
 
-    def test_missing_display_title_rebuilds_unsubmitted_render_and_cover(self, monkeypatch, pm_env):
+    @pytest.mark.parametrize("valid_subtitles", [True, False])
+    def test_missing_display_title_rebuilds_unsubmitted_render_and_cover(self, monkeypatch, pm_env, valid_subtitles):
         """双标题上线时，未提交旧检查点必须更新所有依赖标题的产物。"""
         pm, db, tmp_path = pm_env
         yid = "title-migrate"
@@ -236,6 +239,11 @@ class TestRenderTitleConsistency:
                 (tmp_path / f"{yid}_title.txt").write_text("AI编程变革", encoding="utf-8")
                 (tmp_path / f"{yid}_display_title.txt").write_text("AI编程正在重塑开发方式", encoding="utf-8")
                 (tmp_path / f"{yid}_label.txt").write_text("AI", encoding="utf-8")
+            if "auto-caption" in cmd:
+                subs = pysubs2.SSAFile()
+                chinese = "正常译文" if valid_subtitles else "（承接上文）"
+                subs.append(pysubs2.SSAEvent(start=0, end=1000, text=r"{\fnGeorgia}English\N{\fnHiragino Sans GB}" + chinese))
+                subs.save(str(source.with_suffix(".ass")))
             return MagicMock(returncode=0, stdout="", stderr="")
 
         pm._run_tracked = mock_run_tracked
@@ -248,6 +256,11 @@ class TestRenderTitleConsistency:
 
         render_commands = [cmd for cmd in tracked_commands if "auto-caption" in cmd]
         assert render_commands and "AI编程变革" in render_commands[0]
+        if not valid_subtitles:
+            assert not any("cover_generator.py" in str(call.args[0]) for call in mock_sub.call_args_list)
+            assert not any("wechat_uploader.py" in str(cmd) for cmd in tracked_commands)
+            assert db.get_video_by_youtube_id(yid, 0)["status"] == "FAILED"
+            return
         cover_command = mock_sub.call_args.args[0]
         assert "cover_generator.py" in str(cover_command)
         assert "AI编程正在重塑开发方式" in cover_command[cover_command.index("--payload") + 1]

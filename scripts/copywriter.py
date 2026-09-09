@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                                  | Description                                      |
 |---------|------------|-----------------------------------------|--------------------------------------------------|
+| 2.0.2 | 2026-09-09 | Codex | 候选仲裁前执行中文正文硬合同，阻断英文 fallback 并继续供应商回退 |
 | 2.0.1 | 2026-09-07 | Codex | 同次文案请求生成评论区选择题，独立保存且失败不阻断主文案。 |
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning               | Initial creation with Gemini API + translator fallback |
 | 1.1.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning     | 移除 os.getenv/load_dotenv，通过 settings 注入   |
@@ -68,7 +69,10 @@ from video_processing.utils.translation_helper import translate_text as _transla
 # `from copywriter import graceful_truncate_title` 的既有调用方（wechat_uploader、测试）零改动。
 from video_processing.utils.text_utils import graceful_truncate_title, verbatim_overlap_ratio
 from video_processing.utils.engagement_post import ENGAGEMENT_PROMPT, normalize_engagement_post
-from video_processing.utils.generated_content_validation import validate_publishable_generated_content
+from video_processing.utils.generated_content_validation import (
+    GeneratedContentValidationError,
+    validate_publishable_generated_content,
+)
 from video_processing.utils.translation_context import build_translation_context
 from video_processing.utils.translation_prompt_constraints import render_translation_constraints
 from video_processing.utils.translation_quality_evaluator import (
@@ -722,6 +726,10 @@ def _select_wechat_content_candidate(
             logger.warning("[CopyGuard] %s unavailable: %s", provider, safe_error)
             continue
         try:
+            validate_publishable_generated_content(
+                str(content.get("short_title", "")), str(content.get("copy", "")),
+                require_chinese=True,
+            )
             title_bundle = validate_title_bundle(
                 platform_title=str(content.get("short_title", "")),
                 display_title=str(content.get("display_title", "")),
@@ -731,7 +739,7 @@ def _select_wechat_content_candidate(
                     or bool(str(content.get("display_title", "")).strip())
                 ),
             )
-        except TitleContractError as exc:
+        except (TitleContractError, GeneratedContentValidationError) as exc:
             event = {
                 "provider": provider,
                 "status": "rejected",
@@ -1149,7 +1157,7 @@ def main():
         description,
         audit_path=out / f"{yid}_copy_quality.json",
     )
-    validate_publishable_generated_content(content["short_title"], content["copy"])
+    validate_publishable_generated_content(content["short_title"], content["copy"], require_chinese=True)
     (out / f"{yid}_title.txt"   ).write_text(content["short_title"],   encoding="utf-8")
     if content.get("display_title"):
         (out / f"{yid}_display_title.txt").write_text(content["display_title"], encoding="utf-8")

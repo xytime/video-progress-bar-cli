@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-04 | Codex | 覆盖 HTTP 错误页阻断及正常技术标题不误伤 |
 | 1.1.0 | 2026-08-05 | Codex | 覆盖完整 Error 500 错误页不能作为标题翻译入库 |
+| 1.2.0 | 2026-09-09 | Codex | 中文正文检查排除模板/链接/标签，保留通用英文工作流 |
 """
 
 import pytest
@@ -53,3 +54,20 @@ def test_allows_normal_technical_error_500_topic():
 def test_rejects_empty_required_content(title, copy):
     with pytest.raises(GeneratedContentValidationError):
         validate_publishable_generated_content(title, copy)
+
+
+def test_chinese_heading_and_tags_cannot_hide_english_body():
+    body = "【双语精选】财政部回购国债\n\nWashington is quietly buying back its own long bonds this coming week.\n#国债 #财经 #双语"
+    with pytest.raises(GeneratedContentValidationError, match="中文合同"):
+        validate_publishable_generated_content("财政部回购国债", body, require_chinese=True)
+
+
+def test_chinese_copy_allows_product_names_and_source_links():
+    validate_publishable_generated_content(
+        "AI改变法律服务", "OpenAI 与 MGX 合作，讨论人工智能对法律服务流程的影响。https://example.com/english-source #AI",
+        require_chinese=True,
+    )
+
+
+def test_non_chinese_workflows_keep_generic_contract():
+    validate_publishable_generated_content("English World", "This is an English learning video.")

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                     | Description |
 |---------|------------|----------------------------|-------------|
+| 1.20.0 | 2026-09-09 | Codex | 英文正文候选必须被拒绝，正常中文后备可用且全失败时禁止放行 |
 | 1.19.0 | 2026-09-07 | Codex | 覆盖标题重生成携带错误反馈，且连续不合规时仍有界失败。 |
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning  | Initial creation of copywriter tests |
 | 1.1.0   | 2026-05-26 | Gemini_2.5_Pro_planning    | 新增P0回归测试: ①零分fallback, ②英文子串污染, ③音乐7用例覆盖率 |
@@ -412,6 +413,21 @@ def test_copy_candidate_audit_keeps_safe_agy_failure_detail(monkeypatch, tmp_pat
 
 
 # ── 文案事实保真守门器 ───────────────────────────────────────────────────────
+
+def test_copy_candidate_rejects_english_body_before_arbitration(tmp_path):
+    bad = {"short_title": "财政部回购国债", "copy": "【双语精选】财政部回购国债\n\nWashington is quietly buying back its own long bonds this coming week.", "hook_subtitle": ""}
+    good = dict(bad, copy="视频讨论财政部回购国债的操作及其背景。")
+    path = tmp_path / "copy_quality.json"
+    selected = _select_wechat_content_candidate(
+        "Treasury buys back bonds", "", [("bad", lambda: bad), ("good", lambda: good)], audit_path=path,
+    )
+    assert selected["copy"] == good["copy"]
+    report = json.loads(path.read_text())
+    assert report["events"][0]["selected"] is False
+    assert "中文合同" in report["events"][0]["title_contract"]
+    with pytest.raises(ValueError, match="中文合同"):
+        _select_wechat_content_candidate("Treasury buys back bonds", "", [("bad", lambda: bad)])
+
 
 def test_copy_guard_blocks_fundraising_as_market_exit():
     title = "The Money Just SOUNDED Its FINAL ALARM!"

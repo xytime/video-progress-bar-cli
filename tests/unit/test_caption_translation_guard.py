@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""字幕翻译质量守门器回归测试。"""
+"""字幕翻译质量守门器回归测试。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-09-09 | Codex | 硬合同在 fail-open 下仍回退或失败，审计记录占位符段号 |
+"""
 
 import json
 from pathlib import Path
@@ -99,3 +105,31 @@ def test_report_records_gemini_then_google(mock_gemini, mock_google, _mock_valid
     assert [event["provider"] for event in report["events"]] == ["Gemini", "Google"]
     assert report["events"][0]["action"] == "fallback"
     assert report["events"][1]["action"] == "accept"
+
+
+@pytest.mark.parametrize("fallback_valid", [True, False])
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
+def test_placeholder_hard_gate_survives_fail_open(_validate, tmp_path, monkeypatch, fallback_valid):
+    import video_processing.processors.caption_processor as module
+    from video_processing.utils.subtitle_translation_provider import SubtitleTranslationCandidate
+
+    module.settings.enable_translation_quality_fail_open = True
+    processor = _processor(tmp_path / "video.mp4")
+    def candidate(provider, texts, context):
+        text = "但通过这段视频，你会理解这一问题。" if provider == "google" and fallback_valid else "（承接上文）"
+        return SubtitleTranslationCandidate(provider, [text], supports_vocab=True)
+    monkeypatch.setattr(processor, "_build_translation_candidate", candidate)
+    segments = [{"text": "But in this video, you will understand why.", "start": 7.2, "end": 11.6}]
+    if fallback_valid:
+        result = processor._translate_segments(segments)
+        assert result[0]["zh_text"].startswith("但通过")
+        assert (result[0]["start"], result[0]["end"]) == (7.2, 11.6)
+    else:
+        with pytest.raises(VideoProcessingError, match="All subtitle translation providers failed"):
+            processor._translate_segments(segments)
+        assert "zh_text" not in segments[0]
+    report = json.loads((tmp_path / "video.translation_quality.json").read_text())
+    event = report["events"][0]
+    assert event["selected"] is False
+    assert event["blocking_issues"][0]["code"] == "TRANSLATION_PLACEHOLDER"
+    assert "index=0" in event["blocking_issues"][0]["message"]

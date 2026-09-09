@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.50.0 | 2026-09-09 | Codex | 中文正文硬合同与真实源路径 ASS 缓存/提交校验；缺失字幕不再默认信任成片 |
 | 3.49.1 | 2026-09-07 | Codex | 互动帖随视频号受理回执发送；公开回查只报告状态，避免重复互动文案。 |
 | 3.49.0 | 2026-09-07 | Codex | 视频号确认公开回执合并互动帖建议，按分片读取独立产物，不自动发评论。 |
 | 3.48.47 | 2026-09-07 | Codex | 失败通知与日志摘要保留 stderr 末尾异常，防止 INFO 前缀掩盖真实失败原因。 |
@@ -184,6 +185,7 @@ from .utils.generated_content_validation import (
     validate_publishable_generated_content,
 )
 from .utils.engagement_post import engagement_receipt_section
+from .utils.subtitle_content_contract import bilingual_ass_contract_error
 from .telegram_delivery import send_text as send_telegram_text, send_video as send_telegram_review_video
 from .utils.title_contract import TitleContractError, validate_display_title
 from .scoring import compute_auto_score
@@ -3110,11 +3112,17 @@ class PipelineManager:
             validate_publishable_generated_content(
                 title_file.read_text(encoding="utf-8"),
                 copy_file.read_text(encoding="utf-8"),
+                require_chinese=True,
             )
         except (OSError, GeneratedContentValidationError) as exc:
             return f"文案检查点无效：{exc}"
         if not label_file.is_file():
             return "缺少文案标签检查点"
+
+        target_file = self._OUT_DIR / f"{prefix}.mp4" if slice_index > 0 else Path(source_video)
+        subtitle_error = bilingual_ass_contract_error(target_file.with_suffix(".ass"))
+        if subtitle_error:
+            return subtitle_error
 
         vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
         if not vertical.is_file() or vertical.stat().st_size <= 1_000_000:
@@ -3122,7 +3130,7 @@ class PipelineManager:
         try:
             from .utils.video_metadata import get_video_duration_ffprobe
 
-            expected_duration = get_video_duration_ffprobe(Path(source_video))
+            expected_duration = get_video_duration_ffprobe(target_file)
             vertical_valid, vertical_reason = _validate_rendered_vertical_cache(
                 vertical,
                 expected_duration_seconds=expected_duration,
@@ -3544,6 +3552,7 @@ class PipelineManager:
                         validate_publishable_generated_content(
                             title_file.read_text(encoding="utf-8"),
                             copy_file.read_text(encoding="utf-8"),
+                            require_chinese=True,
                         )
                     except (OSError, GeneratedContentValidationError) as exc:
                         copy_checkpoint_ready = False
@@ -3586,7 +3595,7 @@ class PipelineManager:
                 try:
                     generated_title = title_file.read_text(encoding="utf-8").strip()
                     generated_copy = copy_file.read_text(encoding="utf-8").strip()
-                    validate_publishable_generated_content(generated_title, generated_copy)
+                    validate_publishable_generated_content(generated_title, generated_copy, require_chinese=True)
                 except (OSError, GeneratedContentValidationError) as exc:
                     raise RuntimeError(f"[CopyInvalid] {prefix} 文案不满足发布合同: {exc}") from exc
                 generated_display_title = ""
@@ -3625,7 +3634,8 @@ class PipelineManager:
                 # 仅检测 _vertical.mp4 存在不够，当字幕渲染代码升级后旧格式视频会被错误地复用。
                 # 策略：检查关联的 .ass 文件是否包含双语标记（Georgia 字体标签），
                 # 若缺失则说明是旧格式单语缓存，强制删除后重新渲染。
-                _ass_file = self._OUT_DIR / f"{prefix}.ass"
+                # 字幕生成器使用 input_path.with_suffix，必须与真实输入路径一致（含切片）。
+                _ass_file = Path(target_file).with_suffix(".ass")
                 _cache_valid = False
                 try:
                     from .utils.video_metadata import get_video_duration_ffprobe
@@ -3659,32 +3669,14 @@ class PipelineManager:
                             f"[CacheInvalid] {vertical.name} 无法解析（疑似截断/损坏: {_cache_reason}），强制重渲 {prefix}"
                         )
                         _cache_valid = False
-                    if _cache_valid and _ass_file.exists():
-                        try:
-                            _ass_content = _ass_file.read_text(encoding="utf-8", errors="ignore")
-                            # Georgia 字体标签是双语字幕的必要标志（单语版本不含此标签）。
-                            # 还必须排除已经被翻译服务错误页污染的历史 ASS。
-                            if "fnGeorgia" not in _ass_content:
-                                logger.warning(
-                                    f"[CacheInvalid] {_ass_file.name} missing bilingual marker "
-                                    f"(fnGeorgia), forcing re-render for {prefix}"
-                                )
-                                _cache_valid = False
-                            elif _ass_contains_upstream_error_response(_ass_content):
-                                logger.warning(
-                                    f"[CacheInvalid] {_ass_file.name} contains upstream error response, "
-                                    f"forcing re-render for {prefix}"
-                                )
-                                _cache_valid = False
-                        except Exception as _e:
-                            logger.warning(f"[CacheCheck] Failed to read {_ass_file.name}: {_e}")
-                    else:
-                        # .ass 文件不存在但 _vertical.mp4 存在，说明 .ass 已被清理或历史遗留
-                        # 保守起见：若 .ass 不存在则信任 _vertical.mp4（可能是手动渲染）
-                        pass
+                    if _cache_valid:
+                        _subtitle_error = bilingual_ass_contract_error(_ass_file)
+                        if _subtitle_error:
+                            logger.warning("[CacheInvalid] %s", _subtitle_error)
+                            _cache_valid = False
 
                 if _cache_valid:
-                    logger.info(f"[SKIP] Transcribe checkpoint (bilingual verified): {vertical.name}")
+                    logger.info(f"[SKIP] Transcribe checkpoint (subtitle contract verified): {vertical.name}")
                     self.db.update_video_status(yid, "TRANSCRIBING", slice_index=slice_index)
                 else:
                     self._report_runtime_stage(
@@ -3830,6 +3822,10 @@ class PipelineManager:
                 # [Claude_Opus_4.8] v3.19.0 症结 8 修复：此处已在 2b 渲染之后，.ass 字幕正文就绪。
                 # 当 enable_subtitle_censorship 开启时，读取转录字幕全文一并送审，闭合
                 # 「标题/文案干净但语音内容敏感」的发布漏洞。读取失败返回空串则退化为原行为。
+                # 无论新渲染还是复用缓存，进入发布链前再次检查实际烧录字幕。
+                subtitle_error = bilingual_ass_contract_error(_ass_file)
+                if subtitle_error:
+                    raise RuntimeError(f"[SubtitleInvalid] {subtitle_error}")
                 subtitle_text = ""
                 if settings.enable_subtitle_censorship:
                     subtitle_text = read_subtitle_text(self._OUT_DIR, yid, slice_index=slice_index)
