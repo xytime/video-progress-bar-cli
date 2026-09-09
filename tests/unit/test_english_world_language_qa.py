@@ -8,13 +8,15 @@
 | 1.0.2 | 2026-09-09 | Codex | 覆盖边界跨越 JSON3 片段只能以 ASR 裁决。 |
 | 1.0.3 | 2026-09-09 | Codex | 覆盖边界残留、U.S. 与数字年龄 ASR 拆词的受限对齐。 |
 | 1.0.4 | 2026-09-09 | Codex | 覆盖零宽 Whisper 时间戳的受限、逐组修复与审校覆盖。 |
+| 1.0.5 | 2026-09-10 | Codex | 覆盖带来源的 P1 误报裁决和 P0/非 P1 禁止放行。 |
 """
 from pathlib import Path
 import pytest
 
 from video_processing.study_cards.caption_evidence import parse_json3, transcript_differences
 from video_processing.study_cards.language_qa import (
-    VERSION, atomic_json, cache_key, digest, evaluate, expected_checks, file_digest, read_json, review_input,
+    VERSION, apply_adjudications, atomic_json, cache_key, digest, evaluate, expected_checks, file_digest,
+    read_json, review_input,
     task_identity,
 )
 from video_processing.study_cards.language_review_service import review
@@ -340,6 +342,21 @@ def test_style_suggestion_is_not_semantic_failure():
     assert evaluate(result, p) == "PASS"
 
 
+def test_p1_false_positive_adjudication_requires_source_and_preserves_scope():
+    p = plan()
+    result = good(p)
+    result["findings"][0].update(status="FAIL", severity="P1")
+    adjudication = [{"check": result["findings"][0]["check"], "target": result["findings"][0]["target"],
+                     "from_status": "FAIL", "from_severity": "P1",
+                     "decision": "OVERRULE_P1_FALSE_POSITIVE", "reason": "权威词典确认当前读音为合法变体",
+                     "source_url": "https://dictionary.cambridge.org/us/pronunciation/english/repeat"}]
+    effective = apply_adjudications(result, adjudication)
+    assert evaluate(effective, p) == "PASS"
+    bad = [{**adjudication[0], "from_severity": "P0"}]
+    with pytest.raises(ValueError):
+        apply_adjudications(result, bad)
+
+
 def setup_review(tmp_path):
     timeline = tmp_path / "timeline.json"
     atomic_json(timeline, {"english_text": "test"})
@@ -375,6 +392,26 @@ def test_transient_failure_only_retries_once(tmp_path):
     with pytest.raises(AgyProviderError): review(timeline, **kwargs)
     with pytest.raises(ValueError): review(timeline, **kwargs)
     assert len(calls) == 2
+
+
+def test_historical_empty_structured_output_can_recover_once(tmp_path):
+    timeline, p = setup_review(tmp_path)
+    task_dir = tmp_path / "task"
+    task_dir.mkdir()
+    atomic_json(task_dir / "language_attempts.json", {
+        "attempts": 1, "retries": 0, "keys": ["old-key"],
+        "terminal": True, "last_error": "agy returned no structured_output",
+    })
+    calls = []
+    def caller(*args, **kwargs):
+        calls.append(1)
+        return good(p)
+    kwargs = dict(cache_dir=tmp_path / "cache", task_dir=task_dir, caller=caller, model="test")
+    assert review(timeline, **kwargs)["state"] == "PASS"
+    assert len(calls) == 1
+    ledger = read_json(task_dir / "language_attempts.json")
+    assert ledger["attempts"] == 2
+    assert ledger["recovered_transient_failure"] is True
 
 
 def test_permission_failure_is_terminal(tmp_path):

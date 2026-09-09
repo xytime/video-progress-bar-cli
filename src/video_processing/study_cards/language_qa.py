@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-09-09 | Codex | 七项覆盖门禁、路径无关缓存键和绑定校验。 |
 | 1.0.1 | 2026-09-09 | Codex | 强制逐项裁决转录差异和编辑修改，并以来源区间隔离任务账本。 |
 | 1.0.2 | 2026-09-09 | Codex | 将零宽 ASR 时间修复逐组纳入转录准确性覆盖。 |
+| 1.0.3 | 2026-09-10 | Codex | 支持带权威证据的 P1 误报裁决，并保留原始独立审校结果。 |
 """
 import hashlib
 import json
@@ -122,6 +123,35 @@ def evaluate(result, plan, *, evidence=None, editorial=None):
     return "PASS"
 
 
+def apply_adjudications(result, adjudications):
+    """只允许有证据的 P1 误报裁决；P0 或内容失败不可人工改成通过。"""
+    if not isinstance(adjudications, list) or not adjudications:
+        raise ValueError("语言裁决必须是非空列表")
+    from copy import deepcopy
+    effective = deepcopy(result)
+    seen = set()
+    findings = {(item["check"], item["target"]): item for item in effective["findings"]}
+    if len(findings) != len(effective["findings"]):
+        raise ValueError("语言审校结果存在重复目标，不能裁决")
+    for adjudication in adjudications:
+        required = ("check", "target", "from_status", "from_severity", "decision", "reason", "source_url")
+        if any(not adjudication.get(field) for field in required):
+            raise ValueError("语言裁决缺少完整证据字段")
+        key = (adjudication["check"], adjudication["target"])
+        if key in seen or key not in findings:
+            raise ValueError("语言裁决目标重复或不存在")
+        seen.add(key)
+        finding = findings[key]
+        if (adjudication["decision"] != "OVERRULE_P1_FALSE_POSITIVE"
+                or adjudication["from_status"] != "FAIL" or adjudication["from_severity"] != "P1"
+                or finding["status"] != "FAIL" or finding["severity"] != "P1"):
+            raise ValueError("仅可裁决独立审校明确标记的 P1 误报")
+        if not adjudication["source_url"].startswith(("https://", "http://")):
+            raise ValueError("语言裁决必须提供可追溯来源 URL")
+        finding["status"], finding["severity"] = "PASS", "NONE"
+    return effective
+
+
 def review_input(plan, evidence, editorial, *, projection="compact-v1"):
     """排除路径、原始大候选池和生成器自评；保留所有实际展示内容。"""
     semantic_plan = {k: v for k, v in plan.items() if k != "timeline_sha256"}
@@ -173,7 +203,22 @@ def validate_language_qa(timeline, *, manifest=None, required=True):
     root = timeline.parent
     report = read_json(root / "qa/language_qa.json")
     plan = read_json(root / "display_plan.json")
-    if report.get("version") != VERSION or report.get("state") != "PASS":
+    if report.get("version") != VERSION:
+        raise ValueError("语言审校未通过")
+    effective_result = report.get("result")
+    if report.get("adjudications"):
+        if report.get("state") != "PASS" or "effective_result" not in report:
+            raise ValueError("语言裁决报告不完整")
+        base_report = {key: value for key, value in report.items()
+                       if key not in {"adjudications", "effective_result", "adjudication_version"}}
+        base_report["state"] = "FAIL"
+        base_digest = digest(base_report)
+        if any(item.get("report_sha256") != base_digest for item in report["adjudications"]):
+            raise ValueError("语言裁决未绑定原始 AGY 报告")
+        effective_result = apply_adjudications(report["result"], report["adjudications"])
+        if digest(effective_result) != digest(report["effective_result"]):
+            raise ValueError("语言裁决结果与原始审校不一致")
+    elif report.get("state") != "PASS":
         raise ValueError("语言审校未通过")
     if report.get("timeline_sha256") != file_digest(timeline) or report.get("plan_sha256") != digest(plan):
         raise ValueError("语言审校文件绑定失效")
@@ -181,7 +226,7 @@ def validate_language_qa(timeline, *, manifest=None, required=True):
     editorial = read_json(root / "editorial_changes.json")
     if report.get("input_key") != cache_key(review_input(plan, evidence, editorial, projection=report.get("input_projection", "legacy")), report["model"]):
         raise ValueError("来源或编辑证据已经变化")
-    if evaluate(report["result"], plan, evidence=evidence, editorial=editorial) != "PASS":
+    if evaluate(effective_result, plan, evidence=evidence, editorial=editorial) != "PASS":
         raise ValueError("语言审校存在未解决问题")
     provenance = payload["source_provenance"]
     if evidence.get("source_start") != provenance["source_start_seconds"] or evidence.get("source_end") != provenance["source_end_seconds"]:

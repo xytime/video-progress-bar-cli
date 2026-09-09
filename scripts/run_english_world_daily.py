@@ -5,6 +5,7 @@
 脚本时受 macOS 文件访问策略拦截。
 
 # Modification History
+# | 2.31.3 | 2026-09-10 | Codex | 对齐日更契约与实际存在的语言、结构和音频验证命令，移除不存在的 allow-long 参数。 |
 # | 2.31.2 | 2026-09-10 | Codex | 将日更长片的渲染与结构校验参数显式写入生产契约，避免超过30秒的合法片段被验证命令拒绝。 |
 # | language-v1 | 2026-09-09 | Codex | 新契约生产任务强制独立语言审校与低密度冻结展示。 |
 # | Version | Date | Author | Description |
@@ -116,11 +117,11 @@ HTTP 403 不是自动“换题”信号：先对同一候选仅重试一次，�
 
 只有完整来源预检已经覆盖“拟用片段的画面与自然语音”后，才锁定第一个合格 `youtube_id` 并进入制作；本次运行最终仍只允许制作一条成片。若尚未开始时间轴、翻译、词汇富化或正式渲染，却发现拟用片段含不适画面、语音不连续或不满足时长，说明来源预检出现假阳性：立即撤销该候选的暂定资格、记录 `youtube_id` 和原因，并继续预检剩余候选；这不属于换题重做。只有开始时间轴、翻译、词汇富化或正式渲染后，才构成不可切换的制作承诺。按 make-english-world-short 技能和 production-contract 完整制作：自然完整句收尾；逐词红线；普通阅读屏至少 8 个微笔记；最后一屏按可见英文词数采用现有梯度（不超过 12 词为 0 条、13–24 词为 3 条、25–40 词为 5 条、41 词以上为 8 条）；右栏随左侧同步且可用时至少 5 张词卡；中文完整；词汇只用已有离线 Hermes 分级；`content_type=ENGLISH_WORLD_SHORT`；保留 source_provenance、timeline、manifest、质检材料。由 YouTube json3 等密集自动字幕生成逐词时间轴时，必须先按绝对起点排序并保证每个 `word.end <= next_word.start`；不得用固定最短词长覆盖下一词起点，词汇富化前必须先通过 `StudyCardContent.from_mapping` 的单调时间轴校验。最终 MP4 实测时长必须严格大于 30 秒且不超过 300 秒；不得用静音、循环或无语音尾段凑时长，必须覆盖完整自然语句。完成后核验 MP4、音频收尾、manifest 与关键帧。除下述正文序列化修复与末词锚点恢复外，制作承诺后的时间轴、渲染或成片质检失败必须写入准确失败请求并立即结束；不得为了补词卡或优化文案而换题。
 
-本日长片契约已明确允许自然语音片段超过30秒，因此正式调用 `scripts/render_study_card.py` 必须显式使用 `--allow-long-test`，调用 `scripts/validate_study_card.py` 必须显式使用 `--allow-long`；这两个参数只承认本日 30–300 秒契约，不绕过渲染器和验证器的真实时长、连续语音、末词和音频硬门禁，也不得用静音、循环或无语音尾段凑时长。
+本日长片契约已明确允许自然语音片段超过30秒，因此正式调用 `scripts/render_study_card.py` 可显式使用其兼容参数 `--allow-long-test`；结构门禁使用 `scripts/english_world_language.py validate --timeline <timeline> --manifest <manifest>`，音频门禁使用 `scripts/validate_study_card_audio.py --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`。结构和音频验证器不接受 `--allow-long`，均自行硬性检查实际时长、连续语音、末词和音频边界；不得用不存在的参数、静音、循环或无语音尾段凑时长。
 
 写入包含美元、反引号、撇号的正文时，必须使用单引号 heredoc（如 <<'PY'）或 JSON 文件；禁止把正文插入 shell 双引号的 python -c 命令。正式渲染前必须通过 StudyCardContent.from_mapping 的正文与 words 一致性检查。若失败原因是序列化损坏或排印撇号差异，允许从同一来源字幕修复一次并重新运行全部门禁；不得修改或忽略真实词差异，不得换题。
 
-时间轴完成后，必须明确把 json3 的绝对 `tStartMs` 转成 `absolute_time - source_start` 的相对 `words.start/end`，不得把绝对 `spoken_end` 直接写入相对时间轴；`scripts/render_study_card.py` 的渲染入口会校验 `caption_artifact` 的下一字幕边界。渲染后必须使用项目 venv 执行 `scripts/validate_study_card_audio.py --allow-long --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`，该命令会提取 16kHz 单声道音频并用本地 Whisper 检查末词完整性和下一词泄漏；只有报告 `state=PASS` 才能写入成功交付请求。唯一可恢复例外是报告同时满足 `state=FAIL`、`failure_kind=final_word_boundary_mismatch`、末词文本一致且 `trailing_words=[]`：这说明 json3 把没有显式终点的末词错误延长到字幕框尾部，而不是下一句漏入。此时只允许对同一锁定来源执行一次 `scripts/repair_study_card_final_boundary.py --timeline <timeline> --audio-qa-report <失败报告> --output <修正时间线>`，用修正时间线重新渲染一次，再完整执行一次音频 QA。不得改变正文、译文、词汇、来源起点或选择另一候选；若第二次 QA 不为 PASS，立即写失败请求。修正后仍必须严格大于 30 秒，且不得存在长静音或下一词泄漏。
+时间轴完成后，必须明确把 json3 的绝对 `tStartMs` 转成 `absolute_time - source_start` 的相对 `words.start/end`，不得把绝对 `spoken_end` 直接写入相对时间轴；`scripts/render_study_card.py` 的渲染入口会校验 `caption_artifact` 的下一字幕边界。渲染后必须使用项目 venv 执行 `scripts/validate_study_card_audio.py --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`，该命令会提取 16kHz 单声道音频并用本地 Whisper 检查末词完整性和下一词泄漏；另运行 `scripts/english_world_language.py validate --timeline <timeline> --manifest <manifest>` 完成语言/展示与 manifest 绑定检查，只有两个报告均为 `PASS` 才能写入成功交付请求。唯一可恢复例外是音频报告同时满足 `state=FAIL`、`failure_kind=final_word_boundary_mismatch`、末词文本一致且 `trailing_words=[]`：这说明 json3 把没有显式终点的末词错误延长到字幕框尾部，而不是下一句漏入。此时只允许对同一锁定来源执行一次 `scripts/repair_study_card_final_boundary.py --timeline <timeline> --audio-qa-report <失败报告> --output <修正时间线>`，用修正时间线重新渲染一次，再完整执行一次音频 QA。不得改变正文、译文、词汇、来源起点或选择另一候选；若第二次 QA 不为 PASS，立即写失败请求。修正后仍必须严格大于 30 秒，且不得存在长静音或下一词泄漏。
 
 质检通过后，必须运行以下命令原子写入交付请求：
 PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py --request '{delivery_request_path}' --title '<实际标题>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>' --audio-qa-report '<绝对qa/final_audio_qa.json路径>'

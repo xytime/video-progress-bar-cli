@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | 跨重启三次尝试、一次修订和同键合并。 |
 | 1.0.1 | 2026-09-09 | Codex | 将转录差异和编辑修改纳入逐目标审校覆盖。 |
+| 1.0.2 | 2026-09-10 | Codex | 将 AGY 部分成功/空结构化输出归入一次性暂时故障，允许当前任务恢复重试。 |
 """
 from contextlib import contextmanager
 import fcntl
@@ -40,6 +41,14 @@ def locked(path):
         yield
 
 
+def _is_transient_provider_error(message):
+    """agy 进程成功退出但未完成结构化回传时，只允许一次恢复重试。"""
+    text = str(message or "").lower()
+    return any(marker in text for marker in (
+        "timed out", "timeout", "rate limit", "no structured_output",
+    ))
+
+
 def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
            caller=run_agy_structured):
     timeline, cache_dir, task_dir = Path(timeline), Path(cache_dir), Path(task_dir)
@@ -55,6 +64,13 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
     ledger_path = task_dir / "language_attempts.json"
     with locked(task_dir / "language.lock"), locked(cache_dir / f"{key}.lock"):
         ledger = read_json(ledger_path) if ledger_path.exists() else {"attempts": 0, "retries": 0, "keys": []}
+        # 1.0.1 曾把空 structured_output 直接记为 terminal；兼容该历史收据，
+        # 仅在尚未使用恢复重试时重新打开一次，内容/Schema 失败仍保持终止。
+        if (ledger.get("terminal") and _is_transient_provider_error(ledger.get("last_error"))
+                and ledger.get("retries", 0) < 1):
+            ledger["terminal"] = False
+            ledger["recovered_transient_failure"] = True
+            atomic_json(ledger_path, ledger)
         if ledger.get("content_terminal"):
             raise ValueError("唯一修订仍未通过，本任务已停止")
         if key not in ledger["keys"]:
@@ -87,7 +103,7 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
                     break
                 except AgyProviderError as exc:
                     ledger["inflight"] = False
-                    transient = any(s in str(exc) for s in ("timed out", "timeout", "rate limit"))
+                    transient = _is_transient_provider_error(exc)
                     ledger["last_error"] = str(exc)
                     if not transient or ledger["retries"] >= 1:
                         ledger["terminal"] = True
