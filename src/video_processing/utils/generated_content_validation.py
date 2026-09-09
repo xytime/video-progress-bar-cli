@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-08-04 | Codex | 拒绝被翻译 fallback 误当作发布文案的 HTTP 错误页，供文案器与管线双重调用 |
 | 1.1.0 | 2026-08-05 | Codex | 将完整 Error 500 页面识别为无效标题翻译，供发现与后台入库层复用 |
 | 1.2.0 | 2026-09-09 | Codex | 视频号中文模式单独检查正文，拒绝英文 fallback 被中文标题或标签掩盖 |
+| 1.3.0 | 2026-09-09 | Codex | 中文检查只剥离整行模板，按连续英文词组拦截英文正文并保留 C# 与产品名 |
 """
 
 from __future__ import annotations
@@ -36,6 +37,10 @@ _ERROR_PAGE_MARKERS = (
     "gateway timeout",
     "service unavailable",
 )
+_TOPIC_TAG_LINE = re.compile(r"(?:#[^\s#]+\s*)+")
+_ENGLISH_PROSE_RUN = re.compile(
+    r"\b[A-Za-z][A-Za-z0-9+#'’.-]*(?:\s+[A-Za-z][A-Za-z0-9+#'’.-]*){4,}\b",
+)
 
 
 def is_upstream_error_response(text: str) -> bool:
@@ -58,6 +63,20 @@ def is_upstream_error_response(text: str) -> bool:
         normalized,
     )
     return bool(error_prefix) and len(marker_hits) >= 3
+
+
+def _chinese_publishable_prose(body: str) -> str:
+    """移除视频号模板脚手架，保留正文内的技术名词和正常中英混写。"""
+    prose_lines: list[str] = []
+    for raw_line in body.splitlines():
+        line = re.sub(r"https?://\S+", "", raw_line).strip()
+        if not line or line.startswith("【双语精选】") or line.startswith("🤖"):
+            continue
+        # 仅跳过整行话题，不能全局删除 #，否则会把 C# 截为 C。
+        if _TOPIC_TAG_LINE.fullmatch(line):
+            continue
+        prose_lines.append(line)
+    return "\n".join(prose_lines)
 
 
 def validate_publishable_generated_content(
@@ -84,12 +103,11 @@ def validate_publishable_generated_content(
             "发布文案疑似上游 HTTP 错误页，命中特征: " + ", ".join(marker_hits)
         )
     if require_chinese:
-        # 正文独立计算：去掉链接、话题标签及模板标题，保留 AI/产品名等正常中英混写。
-        prose = re.sub(r"https?://\S+|#[^\s#]+", "", body)
-        prose = re.sub(r"^【双语精选】[^\n]*", "", prose).strip()
+        prose = _chinese_publishable_prose(body)
         chinese = len(re.findall(r"[\u3400-\u9fff]", prose))
-        latin = len(re.findall(r"[A-Za-z]", prose))
-        if not chinese or (latin >= 40 and latin > chinese):
+        english_prose_runs = len(_ENGLISH_PROSE_RUN.findall(prose))
+        if not chinese or english_prose_runs:
             raise GeneratedContentValidationError(
-                f"发布正文未满足中文合同：中文字符={chinese}, 拉丁字母={latin}"
+                "发布正文未满足中文合同："
+                f"中文字符={chinese}, 英文连续词组={english_prose_runs}"
             )

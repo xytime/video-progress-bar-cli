@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-08-04 | Codex | 覆盖 HTTP 错误页阻断及正常技术标题不误伤 |
 | 1.1.0 | 2026-08-05 | Codex | 覆盖完整 Error 500 错误页不能作为标题翻译入库 |
 | 1.2.0 | 2026-09-09 | Codex | 中文正文检查排除模板/链接/标签，保留通用英文工作流 |
+| 1.3.0 | 2026-09-09 | Codex | 覆盖 C#、多产品名混写和中文夹带英文正文的判定边界 |
 """
 
 import pytest
@@ -67,6 +68,28 @@ def test_chinese_copy_allows_product_names_and_source_links():
         "AI改变法律服务", "OpenAI 与 MGX 合作，讨论人工智能对法律服务流程的影响。https://example.com/english-source #AI",
         require_chinese=True,
     )
+
+
+def test_chinese_copy_allows_csharp_without_treating_hash_as_topic_tag():
+    validate_publishable_generated_content(
+        "C# 异步编程",
+        "C#支持异步编程，本期介绍如何使用异步方法优化接口性能。\n#编程 #后端",
+        require_chinese=True,
+    )
+
+
+def test_chinese_copy_allows_multiple_product_names():
+    validate_publishable_generated_content(
+        "AI 工具协作",
+        "ChatGPT、Claude、Gemini、DeepSeek 与 Microsoft Copilot 可以协助整理研究材料。",
+        require_chinese=True,
+    )
+
+
+def test_chinese_framing_cannot_hide_embedded_english_prose():
+    body = "简要说明：\nWashington is quietly buying back its own long bonds this coming week.\n#国债 #财经"
+    with pytest.raises(GeneratedContentValidationError, match="英文连续词组=1"):
+        validate_publishable_generated_content("财政部回购国债", body, require_chinese=True)
 
 
 def test_non_chinese_workflows_keep_generic_contract():

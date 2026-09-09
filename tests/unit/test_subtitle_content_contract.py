@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-09 | Codex | 覆盖被 ASS 换行拆开的错误页及英文原文主题不误杀 |
 | 1.0.0 | 2026-09-09 | Codex | 覆盖占位、误伤、ASS 缺失及烧录路径校验 |
 """
 
@@ -57,6 +58,28 @@ def test_real_failure_slot_rejected_from_ass(tmp_path, chinese):
 def test_valid_ass_accepted(tmp_path):
     path = tmp_path / "good.ass"
     write_ass(path, "但通过这段视频，你会明白十年期国债为何处于这一水平")
+    assert bilingual_ass_contract_error(path) is None
+
+
+def test_error_page_split_by_ass_line_breaks_is_rejected(tmp_path):
+    path = tmp_path / "split-error-page.ass"
+    write_ass(
+        path,
+        r"Error 500 (Server Error)\NThat's an error. There was an error.\N"
+        r"Please try again later. That's all we know.",
+    )
+    assert "上游错误响应" in bilingual_ass_contract_error(path)
+
+
+def test_english_source_error_topic_is_not_treated_as_chinese_translation_error(tmp_path):
+    path = tmp_path / "bad-gateway-topic.ass"
+    subs = pysubs2.SSAFile()
+    subs.append(pysubs2.SSAEvent(
+        start=7200,
+        end=11600,
+        text=r"{\fnGeorgia}Bad Gateway\N{\fnHiragino Sans GB}网关错误",
+    ))
+    subs.save(str(path))
     assert bilingual_ass_contract_error(path) is None
 
 
