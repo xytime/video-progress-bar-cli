@@ -6,6 +6,8 @@
 | 1.0.0 | 2026-09-09 | Codex | JSON3 完整词、逐目标审校覆盖及重启缓存测试。 |
 | 1.0.1 | 2026-09-09 | Codex | 覆盖转录差异逐项裁决、片段任务隔离和词元音标标签。 |
 | 1.0.2 | 2026-09-09 | Codex | 覆盖边界跨越 JSON3 片段只能以 ASR 裁决。 |
+| 1.0.3 | 2026-09-09 | Codex | 覆盖边界残留、U.S. 与数字年龄 ASR 拆词的受限对齐。 |
+| 1.0.4 | 2026-09-09 | Codex | 覆盖零宽 Whisper 时间戳的受限、逐组修复与审校覆盖。 |
 """
 from pathlib import Path
 import pytest
@@ -57,6 +59,16 @@ def test_source_differences_and_editorial_changes_need_individual_findings():
     assert ("TRANSCRIPT_ACCURACY", "caption_differences:0") in targets
     assert ("TRANSCRIPT_ACCURACY", "timeline_differences:0") in targets
     assert ("SEMANTIC_CONSISTENCY", "editorial_change:0") in targets
+
+
+def test_zero_width_asr_timing_repair_needs_individual_review_coverage():
+    p = plan()
+    evidence = {"caption_differences": [], "timeline_differences": [],
+                "asr_timing_repairs": [{"kind": "zero_width_asr_anchor"}]}
+    result = good(p, evidence=evidence)
+    assert ("TRANSCRIPT_ACCURACY", "asr_timing_repair:0") in {
+        (item["check"], item["target"]) for item in result["findings"]
+    }
 
 
 def test_task_identity_separates_source_windows_without_path_entropy():
@@ -248,6 +260,36 @@ def test_boundary_clipped_multitoken_uses_only_the_audio_confirmed_subsequence()
     observed = [{"word": "two", "start": .1, "end": .2}]
     assert parsed["boundary_clipped"] == {"start": True, "end": True}
     assert align_json3(parsed, observed) == [{"text": "two", "start": .1, "end": .2}]
+
+
+def test_boundary_prefix_and_known_typography_splits_need_explicit_asr_equivalence():
+    from video_processing.study_cards.caption_evidence import align_json3
+    value = caption("Here with the results Good morning Elizabeth", "Good morning to you The US has 15-year-olds")
+    value["events"][0]["dDurationMs"] = 1500
+    parsed = parse_json3(value, .5, 2)
+    observed = [{"word": word, "start": index * .1, "end": index * .1 + .05}
+                for index, word in enumerate("Good morning to you The U S has 15 -year -olds".split())]
+    aligned = align_json3(parsed, observed)
+    assert [item["text"] for item in aligned] == "Good morning to you The US has 15-year-olds".split()
+    assert aligned[-3] == {"text": "US", "start": .5, "end": .65}
+    assert aligned[-1] == {"text": "15-year-olds", "start": .8, "end": 1.05}
+
+
+def test_zero_width_asr_times_are_repaired_only_inside_the_shared_anchor_group():
+    from video_processing.study_cards.caption_evidence import repair_asr_word_timestamps
+    raw = [
+        {"word": "Before", "start": .0, "end": .4},
+        {"word": "The", "start": 1.0, "end": 1.0},
+        {"word": "U", "start": 1.0, "end": 1.3},
+        {"word": "S", "start": 1.3, "end": 1.5},
+    ]
+    repaired, records = repair_asr_word_timestamps(raw, 2.0)
+    assert repaired[1:3] == [
+        {"word": "The", "start": 1.0, "end": 1.15},
+        {"word": "U", "start": 1.15, "end": 1.3},
+    ]
+    assert records[0]["word_indexes"] == [1, 2]
+    assert raw[1] == {"word": "The", "start": 1.0, "end": 1.0}
 
 
 def test_duplicate_event_and_overlapping_end():

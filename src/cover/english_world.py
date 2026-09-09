@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增确定性时间线提取、词汇排序与封面载荷校验。 |
 | 1.0.1 | 2026-09-09 | Codex | 封面音标携带并呈现词形或显式词元标签。 |
+| 1.0.2 | 2026-09-09 | Codex | 优先消费已冻结且经语言审校绑定的封面载荷，杜绝从旧候选池二次选词。 |
 """
 
 from __future__ import annotations
@@ -109,6 +110,16 @@ def build_english_world_cover_payload(timeline: Mapping[str, Any], *, date_str: 
     """从已富集时间线构建英语世界封面 payload。"""
     if not isinstance(timeline, Mapping):
         raise ValueError("timeline 必须是 JSON object")
+
+    # 语言 QA 新流程在冻结展示计划时会写入此精确载荷。封面是最终教学
+    # 内容的一部分，绝不能在渲染前又根据旧 vocabulary_candidates 重新选词。
+    publication = timeline.get("publication_text")
+    if isinstance(publication, Mapping) and isinstance(publication.get("cover_payload"), Mapping):
+        payload = dict(publication["cover_payload"])
+        if date_str is not None:
+            payload["date_str"] = date_str
+        return validate_english_world_cover_payload(payload)
+
     title = str(timeline.get("headline_zh") or "英语时事精读").strip()
     quote_en = _first_sentence(timeline.get("english_text"))
     quote_zh = _first_sentence(timeline.get("translation_zh"))

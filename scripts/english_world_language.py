@@ -7,6 +7,8 @@
 | 1.0.0 | 2026-09-09 | Codex | source/prepare/review/validate 阶段独立执行，不接触投稿账本。 |
 | 1.0.1 | 2026-09-09 | Codex | 以来源+字幕+自然片段隔离布局和审校预算。 |
 | 1.0.2 | 2026-09-09 | Codex | 保存边界跨越字幕的 ASR 对齐文本，禁止静默丢词。 |
+| 1.0.3 | 2026-09-09 | Codex | 将 JSON3/ASR 对齐器版本纳入来源证据缓存绑定。 |
+| 1.0.4 | 2026-09-09 | Codex | 保存零宽 Whisper 词时间的确定性修复依据，不接受未锚定时间线。 |
 """
 import argparse
 from pathlib import Path
@@ -20,7 +22,9 @@ sys.path.insert(0, str(ROOT / "src"))
 from video_processing.study_cards.language_qa import (
     VERSION, atomic_json, digest, file_digest, read_json, task_identity, validate_language_qa,
 )
-from video_processing.study_cards.caption_evidence import parse_json3, transcript_differences, align_json3
+from video_processing.study_cards.caption_evidence import (
+    PARSER_VERSION, align_json3, parse_json3, repair_asr_word_timestamps, transcript_differences,
+)
 
 
 def source_evidence(timeline, model_path):
@@ -38,7 +42,8 @@ def source_evidence(timeline, model_path):
     if not model_path.is_file():
         raise ValueError("Whisper 模型必须是已下载的本地文件；不自动下载")
     binding = {"source_sha256": file_digest(source), "caption_sha256": file_digest(caption),
-               "model_sha256": file_digest(model_path), "source_start": start, "source_end": end}
+               "model_sha256": file_digest(model_path), "caption_parser_version": PARSER_VERSION,
+               "source_start": start, "source_end": end}
     cached_path = root / "qa/source_evidence.json"
     if cached_path.exists():
         old = read_json(cached_path)
@@ -54,9 +59,11 @@ def source_evidence(timeline, model_path):
         result = whisper.load_model(str(model_path)).transcribe(str(audio), language="en", word_timestamps=True, fp16=False)
     if file_digest(source) != binding["source_sha256"] or file_digest(caption) != binding["caption_sha256"]:
         raise ValueError("转写期间来源改变")
-    words = [w for segment in result["segments"] for w in segment.get("words", [])]
+    raw_words = [w for segment in result["segments"] for w in segment.get("words", [])]
+    words, timing_repairs = repair_asr_word_timestamps(raw_words, end - start)
     evidence = {"version": VERSION, **binding, "parsed": parsed, "asr_text": result["text"],
-                "asr_words": words, "sample_rate": 16000, "channels": 1,
+                "asr_words_raw": raw_words, "asr_words": words, "asr_timing_repairs": timing_repairs,
+                "sample_rate": 16000, "channels": 1,
                 "caption_differences": transcript_differences(parsed["english_text"], result["text"]),
                 "timeline_differences": transcript_differences(payload["english_text"], result["text"])}
     if parsed["requires_alignment"]:

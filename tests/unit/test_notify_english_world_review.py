@@ -16,6 +16,7 @@
 | 1.7.0 | 2026-09-02 | Codex | 覆盖连字符 enriched 时间线命名，防止本地质检通过后交付入口误拒绝。 |
 | 1.8.0 | 2026-09-02 | Codex | 覆盖同目录多份时间线时必须按 manifest 来源起点绑定，拒绝错配补录。 |
 | 1.8.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
+| 1.8.2 | 2026-09-09 | Codex | 覆盖冻结来源边界优先于同词 JSON3 seg 起点。 |
 """
 
 from __future__ import annotations
@@ -152,6 +153,24 @@ def test_load_timeline_rejects_terminal_word_that_overlaps_next_caption(tmp_path
 
     with pytest.raises(ValueError, match="字幕边界"):
         notifier._load_timeline(manifest_path)
+
+
+def test_frozen_source_end_prevents_same_word_json3_offset_false_positive(tmp_path):
+    """ASR 的 ``scores`` 起点可早于 JSON3 同词 seg；来源终点才是截取边界。"""
+    from video_processing.study_cards.timeline_guard import validate_source_caption_boundary
+    caption_path = tmp_path / "source.en-orig.json3"
+    caption_path.write_text(json.dumps({"events": [{
+        "tStartMs": 3000, "dDurationMs": 2000,
+        "segs": [{"utf8": "scores", "tOffsetMs": 200}, {"utf8": " next", "tOffsetMs": 1000}],
+    }]}), encoding="utf-8")
+    timeline = tmp_path / "timeline.json"
+    payload = {"source_provenance": {"source_start_seconds": 0.0, "source_end_seconds": 4.0,
+              "caption_artifact": str(caption_path)},
+               "words": [{"text": "scores", "start": 3.1, "end": 3.5}]}
+    validate_source_caption_boundary(payload, timeline_path=timeline)
+    payload["words"][-1]["end"] = 4.1
+    with pytest.raises(ValueError, match="冻结来源边界"):
+        validate_source_caption_boundary(payload, timeline_path=timeline)
 
 
 def test_audio_tail_analysis_rejects_next_sentence_after_final_word():

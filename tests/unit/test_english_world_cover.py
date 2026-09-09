@@ -134,6 +134,29 @@ def test_cover_payload_keeps_explicit_lemma_for_inflected_display_word():
                                         "meaning": "排名", "level": "CET-4"}]
 
 
+def test_timeline_uses_frozen_language_reviewed_cover_payload():
+    """冻结后的实际封面不能退回旧候选池，避免显示 0 个词或错误词义。"""
+    frozen = {
+        "content_type": "ENGLISH_WORLD_SHORT",
+        "title": "美国阅读成绩下滑",
+        "quote_en": "The results for reading are sobering.",
+        "quote_zh": "阅读方面的结果令人警醒。",
+        "highlight_words": ["sobering"],
+        "vocab_items": [{"word": "sobering", "ipa": "/ˈsoʊbərɪŋ/", "phonetic_word": "sobering",
+                           "meaning": "令人警醒的", "level": "A2–B1"}],
+        "difficulty_tag": "A2–B1 家庭精读",
+        "vocab_stat": "本篇 9 个重点学习点",
+        "audio_source": "ABC News 原声",
+        "date_str": "2026.09.09 本地审看样片",
+    }
+    timeline = {
+        "headline_zh": "旧标题", "english_text": "Old text.", "translation_zh": "旧译文。",
+        "vocabulary_candidates": [], "publication_text": {"cover_payload": frozen},
+    }
+
+    assert build_english_world_cover_payload(timeline) == frozen
+
+
 def test_long_chinese_title_is_balanced_into_two_lines():
     """长中文标题不能在封面上留下单字孤行。"""
     composer = LayoutComposer()

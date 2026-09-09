@@ -5,6 +5,7 @@
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
 | 1.0.0 | 2026-09-01 | Codex | 校验相对时间轴的末词不能越过源字幕中的下一句。 |
+| 1.0.1 | 2026-09-09 | Codex | 对已冻结来源区间以 source_end 为硬边界，避免 JSON3 同词起点误判为下一词。 |
 """
 
 from __future__ import annotations
@@ -48,6 +49,23 @@ def validate_source_caption_boundary(
         caption_payload = json.loads(caption_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ValueError(f"源字幕边界校验无法读取 caption_artifact: {caption_path}") from exc
+    try:
+        source_end = float(provenance.get("source_end_seconds"))
+    except (TypeError, ValueError):
+        source_end = None
+    if source_end is not None:
+        if source_end <= source_start:
+            raise ValueError("源字幕边界校验需要有效的 source_end_seconds")
+        if final_end > source_end + 0.05:
+            raise ValueError(
+                "时间线末词越过冻结来源边界："
+                f"末词结束={final_end:.3f}s，来源结束={source_end:.3f}s；"
+                "请重新选择自然片段并完成来源核对"
+            )
+        # JSON3 的 seg 起点常晚于实际发声（或与同词的 ASR 起点交错）。
+        # 已有 source_end 的 v1 产物以显式片段边界约束，末词之后的泄漏仍由
+        # 成片 Whisper 门禁拦截；不可再将同一词的 JSON3 起点误当下一词。
+        return
     next_caption_start = _next_caption_start(caption_payload, final_start)
     if next_caption_start is not None and final_end > next_caption_start + 0.05:
         raise ValueError(

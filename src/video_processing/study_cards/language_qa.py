@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | 七项覆盖门禁、路径无关缓存键和绑定校验。 |
 | 1.0.1 | 2026-09-09 | Codex | 强制逐项裁决转录差异和编辑修改，并以来源区间隔离任务账本。 |
+| 1.0.2 | 2026-09-09 | Codex | 将零宽 ASR 时间修复逐组纳入转录准确性覆盖。 |
 """
 import hashlib
 import json
@@ -94,6 +95,10 @@ def expected_checks(plan, evidence=None, editorial=None):
             if not isinstance(differences, list):
                 raise ValueError(f"{family} 必须是差异列表")
             expected |= {(CHECKS[0], f"{family}:{index}") for index, _ in enumerate(differences)}
+        timing_repairs = evidence.get("asr_timing_repairs", [])
+        if not isinstance(timing_repairs, list):
+            raise ValueError("asr_timing_repairs 必须是列表")
+        expected |= {(CHECKS[0], f"asr_timing_repair:{index}") for index, _ in enumerate(timing_repairs)}
     if plan.get("scope") != "publication" and isinstance(editorial, dict):
         changes = editorial.get("changes", [])
         if not isinstance(changes, list):
@@ -148,6 +153,7 @@ def review_input(plan, evidence, editorial, *, projection="compact-v1"):
             point.pop(field, None)  # 同一 item 已在最终 vocabulary 中提供
     source = value["source_evidence"]
     source.pop("asr_words", None)  # 留存本地；审校收到全文、差异、修复依据与完整证据指纹
+    source.pop("asr_words_raw", None)
     for key in ("words", "segments"):
         source.get("parsed", {}).pop(key, None)
     return value
