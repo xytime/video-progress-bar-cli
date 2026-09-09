@@ -4,6 +4,7 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| language-v1 | 2026-09-09 | Codex | 英语世界独立语言审校专用开关、模型与超时，默认影子关闭。 |
 | 3.61.9 | 2026-09-08 | Codex | 仪表盘可显式绑定全部 IPv4 网卡，便于局域网直接访问；浏览器来源仍由控制面同源守卫校验。 |
 | 3.61.7 | 2026-09-05 | Codex | 自动回查默认每轮两条，单作品十分钟冷却；发布额度与回查频率分离。 |
 | 3.61.6 | 2026-09-03 | Codex | 盘中加工守卫识别 NYSE 提前收市日，在实际 13:00 ET 收盘后立即恢复加工。 |
@@ -208,6 +209,9 @@ class Settings(BaseSettings):
 
     # agy CLI：只在独立临时目录的 plan/sandbox 模式下调用，生产输出必须满足 JSON Schema。
     agy_command: str = "agy"
+    enable_english_world_language_qa: bool = False  # 完成影子验收后开启；v2 输入始终强制门禁
+    english_world_language_model: str = "gemini-3.8-flash-high"
+    english_world_language_timeout_seconds: int = Field(default=180, ge=30, le=300)
     agy_timeout_sec: int = 90
     agy_subtitle_model: str = "gemini-3.7-flash-high"
     agy_dubbing_model: str = "claude-sonnet-4-6"

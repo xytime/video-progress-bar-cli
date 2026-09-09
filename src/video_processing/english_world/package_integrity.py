@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| language-v1 | 2026-09-09 | Codex | 投稿前核验语言报告及冻结标题、文案和封面载荷。 |
 | 1.0.0 | 2026-08-29 | Codex | 统一计算和核验 MP4、manifest、标题、文案、封面及封面来源指纹。 |
 """
 
@@ -52,4 +53,16 @@ def verify_package_hashes(item: Mapping[str, object]) -> dict[str, str]:
             raise ValueError(f"English World review item missing immutable hash: {field}")
         if digest != expected:
             raise ValueError(f"English World publish package changed after review: {field}")
+    # 所有平台共享此入口，因此抖音等下游不能绕开新语言门禁。
+    import json
+    from config.settings import settings
+    from ..study_cards.language_qa import VERSION, validate_publication
+    try:
+        manifest = json.loads(Path(str(item["manifest_path"])).read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        if settings.enable_english_world_language_qa:
+            raise ValueError("新语言门禁要求有效 manifest")
+        manifest = {}
+    if settings.enable_english_world_language_qa or manifest.get("language_contract") == VERSION:
+        validate_publication(item)
     return actual

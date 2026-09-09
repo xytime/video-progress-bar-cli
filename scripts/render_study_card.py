@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| language-v1 | 2026-09-09 | Codex | 新语言契约或开关启用时传递审校时间线。 |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：提供不接入发布流程的独立渲染命令。 |
 | 1.1.0 | 2026-08-02 | Codex | 增加显式长样片测试开关，仅用于验收正文滚动，不改变生产 30 秒上限。 |
 | 1.2.0 | 2026-08-02 | Codex | 支持传入六维时空真实小程序码，独立渲染支路不依赖发布系统。 |
@@ -52,6 +53,9 @@ def main() -> int:
         payload = json.loads(args.timeline.read_text(encoding="utf-8"))
         validate_source_caption_boundary(payload, timeline_path=args.timeline)
         content = StudyCardContent.from_mapping(payload)
+        from config.settings import settings
+        from video_processing.study_cards.language_qa import VERSION
+        needs_language = settings.enable_english_world_language_qa or payload.get("language_contract") == VERSION
         StudyCardRenderer(RecordUnderlineTemplate(args.feature_reference)).render(
             args.source,
             content,
@@ -60,6 +64,7 @@ def main() -> int:
             duration=args.duration,
             keep_assets=args.keep_assets,
             allow_long_test=args.allow_long_test,
+            language_timeline=args.timeline.resolve() if needs_language else None,
         )
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"render_study_card: {exc}", file=sys.stderr)

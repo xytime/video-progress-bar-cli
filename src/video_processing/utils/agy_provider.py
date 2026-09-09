@@ -6,6 +6,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| language-v1 | 2026-09-09 | Codex | 可选返回供应商原始用量，不改变现有结构化调用返回合同。 |
 | 1.1.0 | 2026-08-24 | Codex | 禁用 print-mode 指令扩展，并将外部错误压缩为非敏感分类。 |
 | 1.0.0 | 2026-08-24 | Codex | 新增 agy 受限结构化调用，供字幕与普通话配音精修共享 |
 """
@@ -29,6 +30,7 @@ def run_agy_structured(
     model: str,
     command: str,
     timeout_sec: int,
+    include_usage: bool = False,
 ) -> Dict[str, Any]:
     """在无业务工作区、无危险权限下调用 agy 并提取结构化输出。"""
     args = [
@@ -68,6 +70,8 @@ def run_agy_structured(
     structured = envelope.get("structured_output") if isinstance(envelope, dict) else None
     if not isinstance(structured, dict):
         raise AgyProviderError("agy returned no structured_output")
+    if include_usage:
+        return {"structured_result": structured, "usage": envelope.get("usage")}
     return structured
 
 

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| language-v1 | 2026-09-09 | Codex | 音频通过之外检查版本化语言门禁，不为旧片补写 PASS。 |
 | 1.0.0 | 2026-09-06 | Codex | 以三份文件 SHA256 拒绝同路径覆盖、旧 PASS 和质检中途修改。 |
 """
 from pathlib import Path
@@ -31,4 +32,7 @@ def validate_audio_qa(report_path: Path, *, mp4: Path, manifest: Path, timeline:
     for key, digest in artifact_fingerprints(mp4=mp4, manifest=manifest, timeline=timeline).items():
         if report.get(key) != digest:
             raise ValueError(f"音频 QA 内容指纹不匹配或缺失：{key}；必须重新质检")
+    from config.settings import settings
+    from .language_qa import validate_language_qa
+    validate_language_qa(timeline, manifest=manifest, required=settings.enable_english_world_language_qa)
     return report

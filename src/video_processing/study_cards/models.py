@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.7.0 | 2026-09-09 | Codex | 独立语境学习点携带出现位置，冻结后不按词面复用。 |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：定义独立于采集、AI 与发布流程的新闻精读卡片数据契约。 |
 | 1.1.0 | 2026-08-02 | Codex | 增加阅读段落契约，使英文意群、词注与中文段译可严格同步。 |
 | 1.2.0 | 2026-08-02 | Codex | 增加全篇生词候选筛选：十级难度从 3 级起，并限制正文标记密度为 25%。 |
@@ -55,6 +56,9 @@ class VocabularyItem:
     covered_syllabi: tuple[str, ...] = ()
     source: str = ""
     confidence: float = 1.0
+    word_index: int | None = None
+    item_id: str = ""
+    phonetic_word: str = ""
 
     def __post_init__(self) -> None:
         if not self.word.strip() or not self.meaning_zh.strip():

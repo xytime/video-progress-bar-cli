@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| language-v1 | 2026-09-09 | Codex | 新契约封装直接消费已审校投稿文本和封面载荷。 |
 | 1.0.0 | 2026-08-22 | Codex | 新增每日英语世界短视频的 Telegram 审核材料通知。 |
 | 1.1.0 | 2026-08-23 | Codex | 审核回执绑定独立发布包与一次性 Telegram 审批按钮，避免模糊文字误投。 |
 | 1.2.0 | 2026-08-24 | Codex | 封面只接受 enriched timeline，并将实际投稿封面发送给人工审核。 |
@@ -82,6 +83,11 @@ def _resolve_enriched_timeline_path(
     manifest_payload: dict | None = None,
 ) -> Path | None:
     """兼容标准命名；多份时间线时只绑定与 manifest 片段起点相同的那一份。"""
+    if (manifest_payload or {}).get("language_contract") == "english-world-language-v1":
+        value = (manifest_payload or {}).get("timeline")
+        if not value or not Path(value).is_absolute() or not Path(value).is_file():
+            raise ValueError("语言契约 manifest 缺少已绑定的绝对 timeline 路径")
+        return Path(value)
     try:
         manifest_source_start = float((manifest_payload or {})["source_start"])
     except (KeyError, TypeError, ValueError):
@@ -197,6 +203,12 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path,
     timeline = _load_timeline(manifest, manifest_payload=manifest_payload)
     if not timeline:
         raise ValueError("英语世界审核包缺少 enriched timeline，拒绝生成无来源封面")
+    from video_processing.study_cards.language_qa import VERSION, read_json, atomic_json
+    language_v2 = timeline.get("language_contract") == VERSION
+    from video_processing.study_cards.publication_qa import approved_publication as load_approved_publication
+    approved_publication, supplement = load_approved_publication(timeline_path) if language_v2 else (None, None)
+    if approved_publication and display_title != approved_publication["title"]:
+        raise ValueError("交付标题与已审校投稿标题不一致")
     provenance = timeline.get("source_provenance") if isinstance(timeline.get("source_provenance"), dict) else {}
     headline = str(timeline.get("headline_zh") or display_title).strip()
     if not headline:
@@ -223,7 +235,11 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path,
     timeline_path = _resolve_enriched_timeline_path(manifest, manifest_payload=manifest_payload)
     if timeline_path is None:
         raise ValueError("英语世界审核包缺少 enriched timeline，拒绝生成无来源封面")
-    if not validate_dedicated_cover_file(cover_path, cover_provenance_path) and settings.enable_english_world_antigravity_primary:
+    if approved_publication:
+        title_path.write_text(approved_publication["title"], encoding="utf-8")
+        copy_path.write_text(approved_publication["copy"], encoding="utf-8")
+        atomic_json(package_dir / "approved_cover_payload.json", approved_publication["cover_payload"])
+    if not language_v2 and not validate_dedicated_cover_file(cover_path, cover_provenance_path) and settings.enable_english_world_antigravity_primary:
         agy_command = [
             str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
             str(_PROJECT_ROOT / "scripts" / "generate_english_agi_cover.py"),
@@ -274,7 +290,8 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path,
             str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
             str(_PROJECT_ROOT / "scripts" / "generate_english_cover.py"),
         ]
-        command.extend(["--timeline", str(timeline_path)])
+        command.extend(["--payload-file", str(package_dir / "approved_cover_payload.json")] if language_v2
+                       else ["--timeline", str(timeline_path)])
         command.extend([
             "--output", str(cover_path),
             "--provenance-output", str(cover_provenance_path),
@@ -287,6 +304,15 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path,
         if result.returncode != 0 or not validate_dedicated_cover_file(cover_path, cover_provenance_path):
             raise RuntimeError(f"英语世界投稿封面未通过验证：{result.stderr[-500:]}")
 
+    if language_v2:
+        if supplement:
+            provenance = read_json(cover_provenance_path)
+            provenance["language_supplement_sha256"] = supplement
+            atomic_json(cover_provenance_path, provenance)
+        from video_processing.study_cards.language_qa import validate_publication
+        validate_publication({"manifest_path": manifest, "title_path": title_path,
+                              "copy_path": copy_path, "cover_path": cover_path,
+                              "cover_provenance_path": cover_provenance_path})
     package_hashes = calculate_package_hashes({
         "mp4_path": mp4,
         "manifest_path": manifest,

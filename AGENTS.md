@@ -140,6 +140,15 @@ These encode hard-won failures — violating them silently corrupts subtitles:
 
 ## Feature flags
 
+### English World language contract
+
+New `english-world-language-v1` timelines must follow `docs/english-world-language-generation.md`:
+Codex contextual drafts, local dictionary/Whisper evidence, independent bounded AGY CLI review,
+and host-computed fail-closed gates before render/package/submission. No paid API fallback.
+For this contract ordinary screens require 3–5 learning points and terminal screens 0–3,
+overriding legacy eight-note rules. Do not rewrite old QA or retry historical publication.
+Keep `enable_english_world_language_qa=false` until benchmark, human review and three shadow runs pass.
+
 `src/config/settings.py` defines v7.0 feature flags that **default to `False`** for production safety; enable per-flag in `.env`: `enable_blacklist_tombstone`, `enable_manual_score_lock`, `enable_censorship_engine`, `enable_channel_policy_filter`, `enable_sigterm_kill`, `enable_dynamic_keywords`.
 
 ## Repo hygiene note

@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.0 | 2026-09-09 | Codex | 新语言契约必须消费 manifest 绑定的精确时间线路径。 |
 | 1.0.0 | 2026-08-24 | Codex | 固化英语世界未交付通知必须取得 API 回执，否则保留失败退出码。 |
 | 1.1.0 | 2026-08-24 | Codex | 固化审核包只能接收实测时长严格大于 30 秒且不超过 300 秒的成片。 |
 | 1.2.0 | 2026-08-26 | Codex | 覆盖自动策略只提交本次新建质检包、旧审核项绝不被自动重传。 |
@@ -26,6 +27,17 @@ import pytest
 
 from scripts import notify_english_world_review as notifier
 from video_processing.telegram_delivery import TelegramDeliveryResult
+
+
+def test_language_manifest_uses_exact_timeline_not_filename_guess(tmp_path):
+    timeline = tmp_path / "reviewed.json"
+    timeline.write_text("{}")
+    (tmp_path / "timeline_enriched.json").write_text("{}")
+    payload = {"language_contract": "english-world-language-v1", "timeline": str(timeline)}
+    assert notifier._resolve_enriched_timeline_path(tmp_path / "video.manifest.json", manifest_payload=payload) == timeline
+    payload["timeline"] = "reviewed.json"
+    with pytest.raises(ValueError):
+        notifier._resolve_enriched_timeline_path(tmp_path / "video.manifest.json", manifest_payload=payload)
 
 
 def test_failure_notification_requires_api_receipt(monkeypatch):

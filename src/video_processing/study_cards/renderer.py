@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| language-v1 | 2026-09-09 | Codex | 消费审校展示计划并绑定成片指纹；透明层错误日志避免管道死锁。 |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：独立合成原片小窗、旋转唱片与逐词红线，输出 manifest。 |
 | 1.1.0 | 2026-08-02 | Codex | 以最后一个已纳入正文的单词为硬终点，音视频同步裁切并淡出，杜绝露出后续导语。 |
 | 1.2.0 | 2026-08-02 | Codex | 将正文与红线合成为同一透明长图层，按语音进度分段滚动；测试模式可显式放宽时长上限。 |
@@ -89,10 +90,30 @@ class StudyCardRenderer:
         duration: float | None = None,
         keep_assets: bool = False,
         allow_long_test: bool = False,
+        language_timeline: Path | None = None,
     ) -> Path:
         """渲染原声新闻精读卡片；最终成片必须严格大于 30 秒且不超过 300 秒。"""
         source_video = source_video.expanduser().resolve()
         output_path = output_path.expanduser().resolve()
+        frozen_plan = None
+        self.template.language_reviewed = language_timeline is not None
+        from config.settings import settings
+        if settings.enable_english_world_language_qa and language_timeline is None:
+            raise ValueError("启用语言门禁后，渲染必须提供已审校时间线")
+        if language_timeline is not None:
+            from .language_qa import read_json, file_digest, validate_language_qa
+            from .display_plan import verify_plan
+            validate_language_qa(language_timeline)
+            frozen_plan = read_json(language_timeline.parent / "display_plan.json")
+            payload = read_json(language_timeline)
+            content = verify_plan(payload, frozen_plan, file_digest(language_timeline), self.template)
+            provenance = payload["source_provenance"]
+            if abs(source_start - provenance["source_start_seconds"]) > 0.001:
+                raise ValueError("渲染起点与语言审校来源区间不一致")
+            if duration is None or abs(float(duration) - (provenance["source_end_seconds"] - source_start)) > 0.001:
+                raise ValueError("渲染时长与语言审校来源区间不一致")
+            if file_digest(source_video) != read_json(language_timeline.parent / "qa/source_evidence.json")["source_sha256"]:
+                raise ValueError("渲染视频与审校来源不一致")
         if source_start < 0:
             raise ValueError("source_start 不能小于 0")
         if not content.words:
@@ -131,7 +152,7 @@ class StudyCardRenderer:
                 layout_timed_boxes,
                 paragraph_bottoms=layout_assets.paragraph_bottoms,
             )
-            visible_vocabulary = self.template.select_vocabulary_for_screens(
+            visible_vocabulary = content.vocabulary if frozen_plan else self.template.select_vocabulary_for_screens(
                 content.vocabulary_candidates or content.vocabulary,
                 layout_assets.word_boxes,
                 (0, *(step.to_offset for step in scroll_steps)),
@@ -151,11 +172,20 @@ class StudyCardRenderer:
             source_timed_boxes = self.template.map_word_boxes(render_content.words, assets.word_boxes)
             output_duration = source_clip_duration
             underline_video = work_dir / "template_a_underlines.mov"
-            right_vocabulary_screens = self.template.right_vocabulary_for_screens(
+            right_vocabulary_screens = {} if frozen_plan else self.template.right_vocabulary_for_screens(
                 render_content.vocabulary,
                 assets.word_boxes,
                 (0, *(step.to_offset for step in scroll_steps)),
             )
+            if frozen_plan:
+                from .display_plan import layout
+                from .language_qa import digest
+                _, _, verified_steps, verified_screens = layout(render_content, self.template, work_dir)
+                if digest(verified_screens) != digest(frozen_plan["screens"]):
+                    raise ValueError("渲染布局偏离已审校展示计划")
+                by_id = {v.item_id: v for v in render_content.vocabulary}
+                right_vocabulary_screens = {s["offset"]: tuple(by_id[x] for x in s["right_cards"])
+                                           for s in frozen_plan["screens"]}
             self._render_underline_overlay(
                 underline_video,
                 source_timed_boxes,
@@ -180,6 +210,20 @@ class StudyCardRenderer:
                 output_path, render_content, source_video, source_start, source_clip_duration,
                 output_duration, source_timed_boxes, scroll_steps,
             )
+            if frozen_plan:
+                from .language_qa import atomic_json, digest, file_digest, read_json, validate_language_qa
+                validate_language_qa(language_timeline)
+                manifest_path = output_path.with_suffix(".manifest.json")
+                manifest = read_json(manifest_path)
+                cards = [v for s in frozen_plan["screens"] for v in s["right_cards"]]
+                manifest.update({"language_contract": frozen_plan["version"],
+                                 "display_plan_sha256": digest(frozen_plan),
+                                 "language_qa_sha256": file_digest(language_timeline.parent / "qa/language_qa.json"),
+                                 "candidate_count": len(payload.get("vocabulary_candidates", [])),
+                                 "micro_note_unique_count": len(content.vocabulary),
+                                 "right_card_display_count": len(cards), "right_card_unique_count": len(set(cards)),
+                                 "display_screens": frozen_plan["screens"], "timeline": str(language_timeline.resolve())})
+                atomic_json(manifest_path, manifest)
             if keep_assets:
                 assets_dir = output_path.with_suffix("").with_name(output_path.stem + "_assets")
                 shutil.copytree(work_dir, assets_dir, dirs_exist_ok=True)
@@ -313,13 +357,15 @@ class StudyCardRenderer:
         viewport_height = READING_VIEWPORT_BOTTOM - TEXT_TOP
         frame_count = max(1, int(math.ceil(duration * 30)) + 15)
         command = [
-            ffmpeg, "-y",
+            ffmpeg, "-y", "-loglevel", "error", "-nostats",
             "-f", "rawvideo", "-pix_fmt", "rgba",
             "-s", f"{CANVAS_WIDTH}x{viewport_height}", "-r", "30",
             "-i", "pipe:0",
             "-an", "-c:v", "qtrle", str(output_path),
         ]
-        process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+        # 边写大帧边延迟读取 stderr 会互相堵塞；错误流落临时文件而非有界管道。
+        error_log = tempfile.TemporaryFile()
+        process = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=error_log)
         assert process.stdin is not None
         active_index = 0
         try:
@@ -345,10 +391,20 @@ class StudyCardRenderer:
                 process.stdin.write(frame.tobytes())
             process.stdin.close()
         except BrokenPipeError:
-            pass
-        stderr = process.stderr.read().decode("utf-8", errors="replace") if process.stderr else ""
-        if process.wait() != 0:
-            raise RuntimeError(f"红线透明层渲染失败: {stderr[-2000:]}")
+            process.stdin.close()
+        except BaseException:
+            process.kill()
+            process.wait()
+            error_log.close()
+            raise
+        try:
+            returncode = process.wait()
+            error_log.seek(0)
+            stderr = error_log.read().decode("utf-8", errors="replace")
+            if returncode != 0:
+                raise RuntimeError(f"红线透明层渲染失败: {stderr[-2000:]}")
+        finally:
+            error_log.close()
 
     @staticmethod
     def _source_video_filter(

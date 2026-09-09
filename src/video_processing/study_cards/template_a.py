@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| language-v1 | 2026-09-09 | Codex | 按具体出现位置标注教学词，词元音标明确标注。 |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：输出模板 A 静态画布、唱片素材和逐词下划线坐标。 |
 | 1.1.0 | 2026-08-02 | Codex | 正文严格对齐新闻精读参考图：意群英文、词下小注、段后中文释义和右栏词卡。 |
 | 1.2.0 | 2026-08-02 | Codex | 正文改为透明长画布，供渲染器逐段滚动；同时提升手机端词注、段译及头部信息层级。 |
@@ -144,7 +145,7 @@ class RecordUnderlineTemplate:
         reading_image = output_dir / "template_a_reading.png"
         reading.save(reading_image)
         feature_image = output_dir / "template_a_feature.png"
-        self._draw_feature_banner(feature_image)
+        self._draw_feature_banner(feature_image, reviewed=getattr(self, "language_reviewed", False) or any(v.word_index is not None for v in content.vocabulary))
         return TemplateAAssets(
             base_image,
             reading_image,
@@ -256,7 +257,8 @@ class RecordUnderlineTemplate:
         )
         draw.text(
             (160, 123),
-            "每日打卡 / 时文时报 / 高效突破8000词汇量",
+            "A2–B1 家庭精读 / 原声 · 语境 · 跟读" if getattr(self, "language_reviewed", False) or any(v.word_index is not None for v in content.vocabulary)
+            else "每日打卡 / 时文时报 / 高效突破8000词汇量",
             font=sub_font,
             fill=INK,
         )
@@ -282,7 +284,7 @@ class RecordUnderlineTemplate:
             lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, ENGLISH_LINE_WIDTH)
             translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
             for line in lines:
-                highlights = _highlighted_token_indices(line, content.vocabulary)
+                highlights = _highlighted_token_indices(line, content.vocabulary, start_index=len(boxes))
                 note_layout, line_height = _layout_line_notes(line, highlights, english_font, gloss_font)
                 x = TEXT_LEFT
                 for token_index, token in enumerate(line):
@@ -319,11 +321,13 @@ class RecordUnderlineTemplate:
         english_font = _latin_font(40, bold=True)
         translation_font = _font(30)
         y = TEXT_TOP
+        token_offset = 0
         for paragraph in content.paragraphs:
             lines = _wrap_words(re.findall(r"\S+", paragraph.english_text), english_font, ENGLISH_LINE_WIDTH)
             translation_lines = _wrap_chinese(paragraph.translation_zh, translation_font, TEXT_WIDTH - 10)
             for line in lines:
-                highlights = _highlighted_token_indices(line, content.vocabulary)
+                highlights = _highlighted_token_indices(line, content.vocabulary, start_index=token_offset)
+                token_offset += len(line)
                 _, line_height = _layout_line_notes(line, highlights, english_font, _font(22, bold=True))
                 y += line_height
             y += 13 + len(translation_lines) * 43 + 28
@@ -364,9 +368,9 @@ class RecordUnderlineTemplate:
                 viewport_y + index * (RIGHT_CARD_HEIGHT + RIGHT_CARD_GAP),
             )
 
-    def _draw_feature_banner(self, output_path: Path) -> None:
+    def _draw_feature_banner(self, output_path: Path, *, reviewed: bool = False) -> None:
         size = (FEATURE_BOX[2] - FEATURE_BOX[0], FEATURE_BOX[3] - FEATURE_BOX[1])
-        if self.feature_reference.is_file():
+        if not reviewed and self.feature_reference.is_file():
             with Image.open(self.feature_reference) as source:
                 ImageOps.fit(
                     source.convert("RGB"),
@@ -531,6 +535,8 @@ def _draw_vocabulary_card(
         )
     detail_y = card[1] + 14 + len(word_lines) * word_line_height
     detail = item.phonetic.strip()
+    if item.phonetic_word and item.phonetic_word.lower() != item.word.lower():
+        detail = f"{item.phonetic_word}: {detail}"
     if detail:
         ipa_font = _ipa_font(17)
         draw.text((card[0] + 15, detail_y), _ellipsize(detail, ipa_font, 250), font=ipa_font, fill=text_color)
@@ -642,6 +648,7 @@ def _vocabulary_occurrence_y_positions(item: VocabularyItem, boxes: tuple[WordBo
         boxes[index].y - 53
         for index in range(0, len(page_words) - len(phrase) + 1)
         if page_words[index:index + len(phrase)] == phrase
+        and (item.word_index is None or item.word_index == index)
     )
 
 
@@ -650,12 +657,12 @@ def _normalise_word(value: str) -> str:
 
 
 def _highlighted_token_indices(
-    tokens: list[str], items: tuple[VocabularyItem, ...],
+    tokens: list[str], items: tuple[VocabularyItem, ...], *, start_index: int = 0,
 ) -> dict[int, tuple[str, bool]]:
     """贪心匹配最长词组，确保 ``heat wave`` 等词卡在正文有完整红底对应。"""
     phrase_items = sorted(
         (
-            (tuple(_normalise_word(part) for part in item.word.split()), _micro_note_text(item))
+            (tuple(_normalise_word(part) for part in item.word.split()), _micro_note_text(item), item.word_index)
             for item in items
         ),
         key=lambda item: len(item[0]),
@@ -665,9 +672,9 @@ def _highlighted_token_indices(
     matched: dict[int, tuple[str, bool]] = {}
     index = 0
     while index < len(tokens):
-        for phrase, meaning in phrase_items:
+        for phrase, meaning, occurrence in phrase_items:
             end = index + len(phrase)
-            if phrase and normalized_tokens[index:end] == phrase:
+            if phrase and normalized_tokens[index:end] == phrase and (occurrence is None or occurrence == start_index + index):
                 matched[index] = (meaning, True)
                 for nested_index in range(index + 1, end):
                     matched[nested_index] = (meaning, False)

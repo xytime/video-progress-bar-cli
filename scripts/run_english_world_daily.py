@@ -5,6 +5,7 @@
 脚本时受 macOS 文件访问策略拦截。
 
 # Modification History
+# | language-v1 | 2026-09-09 | Codex | 新契约生产任务强制独立语言审校与低密度冻结展示。 |
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 2.0.0 | 2026-08-24 | Codex | 以直接 Python 入口替代 shell 协调器，保留有界重试、锁、状态及 Telegram 失败回执。 |
@@ -782,6 +783,14 @@ def _run_coordinator(
     environment: dict[str, str] | None = None,
 ) -> int:
     """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
+    from config.settings import settings
+    prompt = prompt or PROMPT.replace("{delivery_request_path}", str(delivery_request_path))
+    if settings.enable_english_world_language_qa:
+        prompt += ("\n\n新英语世界语言协议已启用。本段覆盖上文旧8条密度及仅离线释义规则："
+                   "先完整阅读 docs/english-world-language-generation.md 并执行 source/prepare/review。"
+                   "生成器负责初稿，AGY Gemini 3.8 Flash High CLI 独立审校；禁止自写 PASS 或 API 兜底。"
+                   "普通屏3–5个有效学习点，末屏0–3个；最多一次内容修订及一次分屏调整。"
+                   "title/copy/cover_payload 在审校前冻结，宿主直接消费。全部门禁通过才可交付。")
     command = [
         str(paths.codex_bin), "exec", "--cd", str(paths.project_root), "--add-dir", "/Users/ryusei/.codex/skills",
         "--sandbox", "workspace-write", "-c", 'sandbox_workspace_write.network_access=true',

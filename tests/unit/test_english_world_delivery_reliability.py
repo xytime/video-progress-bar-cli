@@ -47,7 +47,7 @@ def _package(tmp_path, policy="AUTO_POLICY"):
 def _qa(tmp_path):
     paths = {key: tmp_path / key for key in ("mp4", "manifest", "timeline")}
     for path in paths.values():
-        path.write_text("original")
+        path.write_text(json.dumps({"fixture": "original"}))
     report = {"state": "PASS", "passed": True,
               **{key: str(path) for key, path in paths.items()},
               **{key + "_sha256": hashlib.sha256(path.read_bytes()).hexdigest()
