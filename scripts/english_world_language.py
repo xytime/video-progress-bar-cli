@@ -9,6 +9,7 @@
 | 1.0.2 | 2026-09-09 | Codex | 保存边界跨越字幕的 ASR 对齐文本，禁止静默丢词。 |
 | 1.0.3 | 2026-09-09 | Codex | 将 JSON3/ASR 对齐器版本纳入来源证据缓存绑定。 |
 | 1.0.4 | 2026-09-09 | Codex | 保存零宽 Whisper 词时间的确定性修复依据，不接受未锚定时间线。 |
+| 1.0.5 | 2026-09-11 | Codex | 留存有限文本归一化审计，不把同值数字和连字符拆分当作实义差异。 |
 """
 import argparse
 from pathlib import Path
@@ -24,6 +25,7 @@ from video_processing.study_cards.language_qa import (
 )
 from video_processing.study_cards.caption_evidence import (
     PARSER_VERSION, align_json3, parse_json3, repair_asr_word_timestamps, transcript_differences,
+    transcript_normalizations,
 )
 
 
@@ -65,7 +67,9 @@ def source_evidence(timeline, model_path):
                 "asr_words_raw": raw_words, "asr_words": words, "asr_timing_repairs": timing_repairs,
                 "sample_rate": 16000, "channels": 1,
                 "caption_differences": transcript_differences(parsed["english_text"], result["text"]),
-                "timeline_differences": transcript_differences(payload["english_text"], result["text"])}
+                "caption_normalizations": transcript_normalizations(parsed["english_text"], result["text"]),
+                "timeline_differences": transcript_differences(payload["english_text"], result["text"]),
+                "timeline_normalizations": transcript_normalizations(payload["english_text"], result["text"])}
     if parsed["requires_alignment"]:
         try:
             evidence["aligned_words"] = align_json3(parsed, words)

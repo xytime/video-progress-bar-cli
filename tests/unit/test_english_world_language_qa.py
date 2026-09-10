@@ -10,6 +10,7 @@
 | 1.0.4 | 2026-09-09 | Codex | 覆盖零宽 Whisper 时间戳的受限、逐组修复与审校覆盖。 |
 | 1.0.5 | 2026-09-10 | Codex | 覆盖带来源的 P1 误报裁决和 P0/非 P1 禁止放行。 |
 | 1.0.6 | 2026-09-11 | Codex | 覆盖并列相邻学习点的词典义串线预检。 |
+| 1.0.7 | 2026-09-11 | Codex | 覆盖同值数字、连字符拆分和冠词差异的受限来源对齐。 |
 """
 from pathlib import Path
 import pytest
@@ -294,6 +295,40 @@ def test_boundary_prefix_and_known_typography_splits_need_explicit_asr_equivalen
     assert [item["text"] for item in aligned] == "Good morning to you The US has 15-year-olds".split()
     assert aligned[-3] == {"text": "US", "start": .5, "end": .65}
     assert aligned[-1] == {"text": "15-year-olds", "start": .8, "end": 1.05}
+
+
+def test_source_alignment_allows_only_auditable_orthographic_and_article_equivalences():
+    from video_processing.study_cards.caption_evidence import align_json3, transcript_normalizations
+
+    parsed = {"english_text": "Dress-up after 2 minutes", "source_start": 0, "source_end": 2,
+              "boundary_clipped": {"start": False, "end": False}}
+    observed = [
+        {"word": "dress", "start": 0, "end": .15},
+        {"word": "up", "start": .15, "end": .3},
+        {"word": "after", "start": .3, "end": .45},
+        {"word": "two", "start": .45, "end": .6},
+        {"word": "minutes", "start": .6, "end": .8},
+    ]
+    assert align_json3(parsed, observed) == [
+        {"text": "Dress-up", "start": 0.0, "end": 0.3},
+        {"text": "after", "start": 0.3, "end": 0.45},
+        {"text": "2", "start": 0.45, "end": 0.6},
+        {"text": "minutes", "start": 0.6, "end": 0.8},
+    ]
+    normalizations = transcript_normalizations("dress-up after 2 minutes", "dress up after two minutes")
+    assert {item["normalization"] for item in normalizations} == {
+        "hyphenated_compound_split", "same_numeric_value",
+    }
+
+    article_parsed = {"english_text": "A passkey works", "source_start": 0, "source_end": 1,
+                      "boundary_clipped": {"start": False, "end": False}}
+    assert align_json3(article_parsed, [
+        {"word": "the", "start": 0, "end": .2},
+        {"word": "passkey", "start": .2, "end": .5},
+        {"word": "works", "start": .5, "end": .8},
+    ])[0] == {"text": "A", "start": 0.0, "end": 0.2}
+    assert transcript_differences("a passkey", "the passkey") == []
+    assert transcript_differences("in the app", "on the app")
 
 
 def test_zero_width_asr_times_are_repaired_only_inside_the_shared_anchor_group():

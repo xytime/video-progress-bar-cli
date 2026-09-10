@@ -7,13 +7,22 @@
 | 1.0.1 | 2026-09-09 | Codex | 保留片段边界跨越的原字幕，并仅以 ASR 确定边界内词序。 |
 | 1.0.2 | 2026-09-09 | Codex | 仅将 ASR 的 U S 和数字年龄拆词作受限排印等价，保留原文词形与全部差异。 |
 | 1.0.3 | 2026-09-09 | Codex | 仅修复同一锚点堆叠的零宽 ASR 词时长，并逐组保留审计证据。 |
+| 1.0.4 | 2026-09-11 | Codex | 允许同值数字、连字符拆分和有真实 ASR 锚点的冠词差异，保留其他词义差异。 |
 """
 import difflib
 import math
 import re
 
 TOKEN = re.compile(r"[+-]?[$£€]?[A-Za-z0-9]+(?:[’'][A-Za-z0-9]+)*(?:[.,]\d+)*(?:[-–][A-Za-z0-9]+)*%?")
-PARSER_VERSION = "json3-asr-v1.3"
+PARSER_VERSION = "json3-asr-v1.4"
+_ARTICLES = frozenset({"a", "an", "the"})
+_NUMBER_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
+    "nineteen": 19, "twenty": 20,
+}
 
 
 def tokens(text):
@@ -67,12 +76,54 @@ def parse_json3(payload, start, end):
 
 
 def transcript_differences(expected, observed):
-    """只记录差异；自动 ASR 不是正文修改授权。"""
+    """只记录实义差异；被允许的排印/冠词归一化另存为审计记录。"""
     left, right = [x.lower() for x in tokens(expected)], [x.lower() for x in tokens(observed)]
-    return [{"kind": tag, "expected_span": [a, b], "observed_span": [c, d],
-             "expected": left[a:b], "observed": right[c:d]}
-            for tag, a, b, c, d in difflib.SequenceMatcher(None, left, right, autojunk=False).get_opcodes()
-            if tag != "equal"]
+    return [record for record in _transcript_comparison(left, right) if "normalization" not in record]
+
+
+def transcript_normalizations(expected, observed):
+    """返回已放行的受限等价项，供来源证据审计，不掩盖正文差异。"""
+    left, right = [x.lower() for x in tokens(expected)], [x.lower() for x in tokens(observed)]
+    return [record for record in _transcript_comparison(left, right) if "normalization" in record]
+
+
+def _transcript_comparison(left, right):
+    records = []
+    for tag, a, b, c, d in difflib.SequenceMatcher(None, left, right, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        expected, observed = left[a:b], right[c:d]
+        normalization = _normalization_kind(expected, observed)
+        record = {"kind": tag, "expected_span": [a, b], "observed_span": [c, d],
+                  "expected": expected, "observed": observed}
+        if normalization:
+            record["normalization"] = normalization
+        records.append(record)
+    return records
+
+
+def _normalization_kind(expected, observed):
+    if len(expected) == len(observed) == 1:
+        if _comparison_key(expected[0]) == _comparison_key(observed[0]) and expected[0] != observed[0]:
+            return "same_numeric_value"
+        if expected[0] in _ARTICLES and observed[0] in _ARTICLES:
+            return "article_substitution"
+    if len(expected) == 1 and ("-" in expected[0] or "–" in expected[0]):
+        canonical_expected = expected[0].replace("–", "-")
+        if "-".join(observed) == canonical_expected:
+            return "hyphenated_compound_split"
+    if not expected and observed and all(word in _ARTICLES for word in observed):
+        return "asr_extra_article"
+    return ""
+
+
+def _comparison_key(value):
+    lowered = value.lower().replace("’", "'")
+    if lowered.isdigit():
+        return f"number:{int(lowered)}"
+    if lowered in _NUMBER_WORDS:
+        return f"number:{_NUMBER_WORDS[lowered]}"
+    return lowered
 
 
 def repair_asr_word_timestamps(words, duration):
@@ -139,7 +190,7 @@ def repair_asr_word_timestamps(words, duration):
 
 
 def align_json3(parsed, asr_words):
-    """多词字幕以真实 ASR 锚点对齐；仅允许裁去已记录的片段边界残词。"""
+    """多词字幕以真实 ASR 锚点对齐；只放行已审计的有限文本等价。"""
     expected = tokens(parsed["english_text"])
     observed = []
     for word in asr_words:
@@ -147,25 +198,14 @@ def align_json3(parsed, asr_words):
         if len(parts) != 1:
             raise ValueError("UNCERTAIN: ASR 词片不能唯一绑定字幕词")
         observed.append(parts[0])
-    expected_units = [(word.lower(), index, index + 1) for index, word in enumerate(expected)]
-    observed_units = _asr_comparison_units(observed)
-    expected_lower = [unit[0] for unit in expected_units]
-    observed_lower = [unit[0] for unit in observed_units]
-    unit_offset = 0
-    if expected_lower != observed_lower:
-        matches = [i for i in range(len(expected_lower) - len(observed_lower) + 1)
-                   if expected_lower[i:i + len(observed_lower)] == observed_lower]
-        if len(matches) != 1:
-            raise ValueError("UNCERTAIN: ASR 与字幕词序不一致，不自动覆盖字幕")
-        unit_offset = matches[0]
-        expected_start = expected_units[unit_offset][1]
-        expected_end = expected_units[unit_offset + len(observed_units) - 1][2]
-        boundary = parsed.get("boundary_clipped", {})
-        if (expected_start and not boundary.get("start")) or (expected_end < len(expected)
-                                                               and not boundary.get("end")):
-            raise ValueError("UNCERTAIN: ASR 与字幕词序不一致，不自动覆盖字幕")
+    expected_units = [(_comparison_key(word), index, index + 1) for index, word in enumerate(expected)]
+    observed_units = [(_comparison_key(word), start, end)
+                      for word, start, end in _asr_comparison_units(observed, expected)]
+    matched_units = _align_comparison_units(
+        expected_units, observed_units, parsed.get("boundary_clipped", {}), len(expected),
+    )
     result, previous = [], 0.0
-    for expected_unit, observed_unit in zip(expected_units[unit_offset:unit_offset + len(observed_units)], observed_units):
+    for expected_unit, observed_unit in matched_units:
         _, expected_start, expected_end = expected_unit
         _, observed_start, observed_end = observed_unit
         if expected_end - expected_start != 1:
@@ -179,9 +219,45 @@ def align_json3(parsed, asr_words):
     return result
 
 
-def _asr_comparison_units(words):
-    """只接受 U.S. 与 ``15-year-olds`` 的常见 ASR 拆词，不放宽一般词差异。"""
+def _align_comparison_units(expected_units, observed_units, boundary, expected_count):
+    """在不推断缺失字幕词时间的前提下，对齐有限文本等价。"""
+    start_offsets = range(len(expected_units) + 1) if boundary.get("start") else (0,)
+    matches = []
+    for offset in start_offsets:
+        expected_index, observed_index, current = offset, 0, []
+        while expected_index < len(expected_units) and observed_index < len(observed_units):
+            expected = expected_units[expected_index]
+            observed = observed_units[observed_index]
+            if expected[0] == observed[0] or (expected[0] in _ARTICLES and observed[0] in _ARTICLES):
+                current.append((expected, observed))
+                expected_index += 1
+                observed_index += 1
+            elif observed[0] in _ARTICLES:
+                observed_index += 1  # ASR 多出的冠词没有进入来源正文，无需制造时间锚点。
+            else:
+                break
+        while observed_index < len(observed_units) and observed_units[observed_index][0] in _ARTICLES:
+            observed_index += 1
+        if observed_index != len(observed_units):
+            continue
+        if expected_index != len(expected_units) and not boundary.get("end"):
+            continue
+        if not current:
+            continue
+        if offset and not boundary.get("start"):
+            continue
+        if expected_index < expected_count and not boundary.get("end"):
+            continue
+        matches.append(current)
+    if len(matches) != 1:
+        raise ValueError("UNCERTAIN: ASR 与字幕词序不一致，不自动覆盖字幕")
+    return matches[0]
+
+
+def _asr_comparison_units(words, expected=()):
+    """只接受受限的缩写、数字年龄和已出现连字符词的 ASR 拆词。"""
     units, index = [], 0
+    hyphenated = {word.lower().replace("–", "-") for word in expected if "-" in word or "–" in word}
     while index < len(words):
         current = words[index].lower()
         if (re.fullmatch(r"\d+", current) and index + 2 < len(words)
@@ -192,6 +268,12 @@ def _asr_comparison_units(words):
             units.append(("us", index, index + 2))
             index += 2
         else:
-            units.append((current, index, index + 1))
-            index += 1
+            compound_end = next((end for end in range(min(len(words), index + 4), index + 1, -1)
+                                 if "-".join(word.lower() for word in words[index:end]) in hyphenated), None)
+            if compound_end:
+                units.append(("-".join(word.lower() for word in words[index:compound_end]), index, compound_end))
+                index = compound_end
+            else:
+                units.append((current, index, index + 1))
+                index += 1
     return units
