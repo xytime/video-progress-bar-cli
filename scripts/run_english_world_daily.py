@@ -5,6 +5,7 @@
 脚本时受 macOS 文件访问策略拦截。
 
 # Modification History
+# | 2.31.4 | 2026-09-10 | Codex | 兼容英语世界时间线的 source_youtube_id 规范字段，修复合法成片在宿主续接前被误拒。 |
 # | 2.31.3 | 2026-09-10 | Codex | 对齐日更契约与实际存在的语言、结构和音频验证命令，移除不存在的 allow-long 参数。 |
 # | 2.31.2 | 2026-09-10 | Codex | 将日更长片的渲染与结构校验参数显式写入生产契约，避免超过30秒的合法片段被验证命令拒绝。 |
 # | language-v1 | 2026-09-09 | Codex | 新契约生产任务强制独立语言审校与低密度冻结展示。 |
@@ -522,12 +523,15 @@ def _delivery_request_source_youtube_id(manifest_path: Path) -> str:
 
     provenance = manifest_payload.get("source_provenance")
     if isinstance(provenance, dict):
-        manifest_source_id = provenance.get("youtube_id")
-        source_id = _validated_youtube_id(manifest_source_id)
-        if source_id:
-            return source_id
-        if manifest_source_id not in (None, ""):
-            raise ValueError("成功交付请求的 manifest 含非法 source_provenance.youtube_id")
+        for field in ("youtube_id", "source_youtube_id"):
+            if field not in provenance:
+                continue
+            manifest_source_id = provenance.get(field)
+            source_id = _validated_youtube_id(manifest_source_id)
+            if source_id:
+                return source_id
+            if manifest_source_id not in (None, ""):
+                raise ValueError(f"成功交付请求的 manifest 含非法 source_provenance.{field}")
 
     try:
         manifest_source_start = float(manifest_payload["source_start"])
@@ -551,10 +555,16 @@ def _delivery_request_source_youtube_id(manifest_path: Path) -> str:
             continue
         if abs(timeline_source_start - manifest_source_start) > 0.25:
             continue
-        source_id = _validated_youtube_id(timeline_provenance.get("youtube_id"))
-        if source_id:
-            return source_id
-        raise ValueError("成功交付请求的绑定 enriched 时间线含非法 source_provenance.youtube_id")
+        for field in ("youtube_id", "source_youtube_id"):
+            if field not in timeline_provenance:
+                continue
+            source_id = _validated_youtube_id(timeline_provenance.get(field))
+            if source_id:
+                return source_id
+            if timeline_provenance.get(field) not in (None, ""):
+                raise ValueError(
+                    f"成功交付请求的绑定 enriched 时间线含非法 source_provenance.{field}"
+                )
     raise ValueError("成功交付请求缺少可验证的 source_provenance.youtube_id；宿主已拒绝交付")
 
 
