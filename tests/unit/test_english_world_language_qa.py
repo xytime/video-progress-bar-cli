@@ -9,6 +9,7 @@
 | 1.0.3 | 2026-09-09 | Codex | 覆盖边界残留、U.S. 与数字年龄 ASR 拆词的受限对齐。 |
 | 1.0.4 | 2026-09-09 | Codex | 覆盖零宽 Whisper 时间戳的受限、逐组修复与审校覆盖。 |
 | 1.0.5 | 2026-09-10 | Codex | 覆盖带来源的 P1 误报裁决和 P0/非 P1 禁止放行。 |
+| 1.0.6 | 2026-09-11 | Codex | 覆盖并列相邻学习点的词典义串线预检。 |
 """
 from pathlib import Path
 import pytest
@@ -21,6 +22,24 @@ from video_processing.study_cards.language_qa import (
 )
 from video_processing.study_cards.language_review_service import review
 from video_processing.utils.agy_provider import AgyProviderError
+
+
+def test_local_dictionary_gate_rejects_adjacent_sense_leakage_before_review():
+    from video_processing.study_cards.learning_dictionary import validate_context_meaning_separation
+
+    points = [
+        {"word_index": 0, "word": "current", "context_meaning_zh": "当前流行的",
+         "dictionary_senses": {"translation": "a. 流通的, 现在的, 当前的, 流行的"}},
+        {"word_index": 2, "word": "trendy", "context_meaning_zh": "时下流行的",
+         "dictionary_senses": {"translation": "a. 时髦的, 流行的"}},
+    ]
+    words = [{"text": "current"}, {"text": "and"}, {"text": "trendy"}]
+
+    with pytest.raises(ValueError, match="current.*trendy.*流行"):
+        validate_context_meaning_separation(points, words)
+
+    points[0]["context_meaning_zh"] = "当前的"
+    assert validate_context_meaning_separation(points, words) is None
 
 
 def test_benchmark_has_independent_sources_and_labeled_coverage():
