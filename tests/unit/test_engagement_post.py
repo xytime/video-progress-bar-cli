@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 |---------|------|--------|-------------|
+| 1.2.0 | 2026-09-11 | Codex | 覆盖视频名称单独展示与互动帖四段结构约束。 |
 | 1.1.0 | 2026-09-07 | Codex | 互动帖改随视频号受理回执发送，公开确认不重复发送。 |
 | 1.0.0 | 2026-09-07 | Codex | 覆盖选择题、转义、缺失降级与公开状态单条通知。 |
 """
@@ -14,11 +15,14 @@ import pytest
 from video_processing.utils.engagement_post import normalize_engagement_post, engagement_receipt_section
 
 POST = """视频讨论消费品牌客流下降后，如何区分短期需求波动和长期吸引力变化。单次业绩不能回答所有问题，持续观察消费者的选择更有意义。
+
 你更倾向于哪种解释？
+
 A. 短期消费需求波动
 B. 产品创新暂时放缓
 C. 品牌吸引力持续下降
 D. 证据还不足，需要继续观察
+
 什么数据出现，才会让你确认或改变自己的判断？"""
 
 
@@ -27,8 +31,10 @@ def test_post_and_html_receipt(tmp_path):
     path = tmp_path / 'engagement.txt'
     path.write_text(post)
     assert normalize_engagement_post(post) == post
-    receipt = engagement_receipt_section(path)
+    receipt = engagement_receipt_section(path, video_title='消费品牌客流变化')
     assert '&lt;需求&gt; &amp; 波动' in receipt
+    assert '视频名称' in receipt
+    assert '消费品牌客流变化' in receipt
     assert '未自动发布' in receipt
     assert len(receipt) < 4096
 
@@ -92,6 +98,8 @@ def test_submission_acceptance_receipt_includes_slice_suggestion(tmp_path, monke
 
     text = manager.send_telegram_msg.call_args.args[0]
     assert 'WeChat submission accepted' in text
+    assert '视频名称' in text
+    assert '测试标题' in text
     assert POST in text
     assert '人工选用，未自动发布' in text
 

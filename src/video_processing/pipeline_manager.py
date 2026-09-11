@@ -5,6 +5,7 @@
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.50.1 | 2026-09-09 | Codex | 所有携带合法 YouTube ID 的 P1 Telegram 回执统一补充标题和可点击的原视频链接。 |
 | 3.50.0 | 2026-09-09 | Codex | 中文正文硬合同与真实源路径 ASS 缓存/提交校验；缺失字幕不再默认信任成片 |
+| 3.49.2 | 2026-09-11 | Codex | Telegram 互动建议回执单独展示视频名称，正文直接保留可发帖内容。 |
 | 3.49.1 | 2026-09-07 | Codex | 互动帖随视频号受理回执发送；公开回查只报告状态，避免重复互动文案。 |
 | 3.49.0 | 2026-09-07 | Codex | 视频号确认公开回执合并互动帖建议，按分片读取独立产物，不自动发评论。 |
 | 3.48.47 | 2026-09-07 | Codex | 失败通知与日志摘要保留 stderr 末尾异常，防止 INFO 前缀掩盖真实失败原因。 |
@@ -950,7 +951,10 @@ class PipelineManager:
             "⏳ <b>WeChat submission accepted</b>\n"
             f"ID: <code>{html.escape(prefix)}</code>\n"
             "平台已接收提交，但尚无公开发布证明；已停止自动重传。"
-            + engagement_receipt_section(self._OUT_DIR / f"{prefix}_engagement.txt")
+            + engagement_receipt_section(
+                self._OUT_DIR / f"{prefix}_engagement.txt",
+                video_title=final_title,
+            )
         )
         self._send_wechat_submission_review_material(prefix, final_title)
 

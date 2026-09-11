@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                                  | Description                                      |
 |---------|------------|-----------------------------------------|--------------------------------------------------|
+| 2.0.3 | 2026-09-11 | Codex | 收紧评论区互动帖为标题独立展示、正文四段结构，禁止机器人套话。 |
 | 2.0.2 | 2026-09-09 | Codex | 候选仲裁前执行中文正文硬合同，阻断英文 fallback 并继续供应商回退 |
 | 2.0.1 | 2026-09-07 | Codex | 同次文案请求生成评论区选择题，独立保存且失败不阻断主文案。 |
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning               | Initial creation with Gemini API + translator fallback |
@@ -277,7 +278,7 @@ class WeChatContentSchema(pydantic.BaseModel):  # [Claude_Sonnet_4.6_Thinking_pl
         description="视频号文案正文，约100-200字，含3-5个hashtag和一句引导关注CTA，纯文本无markdown"
     )
     engagement_post: str = pydantic.Field(
-        default="", description="评论区互动建议：背景、A-D四个独立选项、证据追问；来源不足时为空"
+        default="", description="仅评论区帖子正文：背景、核心提问、A-D四个独立选项、追问；不含标题或系统提示语，来源不足时为空"
     )
     category: str = pydantic.Field(
         description="视频分类，必须从10个选项中选1个：科技、财经、教育、生活、娱乐、游戏、体育、时事、资讯、健康"
