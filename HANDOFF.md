@@ -2,7 +2,7 @@
 
 ## Current task
 
-`Video-precessing` 重构尚未开始实施。2026-09-12 已完成一次只读的独立架构 / Red-Team 审计，结论为 **REVISE BEFORE IMPLEMENTATION**：保留账本优先、隔离测试和单事务等安全骨架，但将路线改为“先封已知生产旁路与候选防火墙，再做最小 Harness，最后渐进拆分”。预计最快下周继续。
+`Video-precessing` 重构工程代号已定为 **北辰（`VP-POLARIS`）**，尚未开始实施。2026-09-12 已完成一次只读的独立架构 / Red-Team 审计，结论为 **REVISE BEFORE IMPLEMENTATION**：保留账本优先、隔离测试和单事务等安全骨架，但将路线改为“先封已知生产旁路与候选防火墙，再做最小 Harness，最后渐进拆分”。预计最快下周继续。
 
 ## Completed
 
@@ -13,11 +13,13 @@
 - 确认当前 Golden Replay 实质为 6 个 DAL micro-contract 场景：Run A/B 是同一实现运行两次，没有覆盖完整 workflow、真实 stage runner、10 类故障或点击边界注入。Gate M6 不应标为已通过。
 - 确认三个平台都不应描述为 exactly-once：微信接近 `at-most-once automatic retry + manual reconciliation`；抖音是 `at-most-once browser launch per ticket + manual reconciliation`；快手是 `best-effort idempotent + manual reconciliation`。
 - 已明确推荐 Hybrid Plan B：先 containment，后契约修订和最小 Harness，再按域拆 PipelineDB、按阶段拆 PipelineManager、逐个平台迁移 publication。
+- 已建立总工单 `VP-POLARIS`，将首批工作拆为 `POLARIS-000` 至 `POLARIS-105`；当前均未实施，入口项 `POLARIS-000` 为 READY。
 - 本轮没有改源码、测试、数据库、运行配置，没有重启服务，没有调用上传器、Telegram 或任何创作者平台。
 
 ## Evidence and artifacts
 
 - 权威计划文档目前只存在于生产 checkout：`/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/`。
+- 北辰总工单：`docs/refactor/video-processing/VP-POLARIS-WORK-ORDER.md`。下次口令为“继续北辰重构”。
 - 关键源码证据：
   - `src/bot/pipeline_agent.py:151-170,178-206,637-752`
   - `src/bot/telegram_bot.py:1562-1572`
@@ -43,7 +45,7 @@
 
 ## Next steps
 
-1. 在生产 checkout 开工：先只读运行 `git status --short --branch`、核对 `main`/`origin/main`、确认流水线和浏览器任务空闲；阅读本 HANDOFF 及 `docs/refactor/video-processing/`。不要在 detached worktree 实施线上改动。
+1. 用户说“继续北辰重构”后，在生产 checkout 执行 `POLARIS-000`：先只读运行 `git status --short --branch`、核对 `main`/`origin/main`、确认流水线和浏览器任务空闲；阅读本 HANDOFF 与 `VP-POLARIS-WORK-ORDER.md`。不要在 detached worktree 实施线上改动。
 2. 将首批范围冻结为两个安全修复：A) Bot 不再直接持有 uploader、任意 status、delete、retry；统一走 canonical application service；B) 在中心 DAL 候选咽喉排除 DISCOVERY，仅允许原子 promotion 后进入 MANUAL。
 3. 先补能真实击中入口的回归测试：Bot 退出码 6、Bot 已有账本时的 mutation、score>=75 DISCOVERY 不进入自动候选、promotion 后可进入。
 4. 实施上述最小修复；安全回滚应关闭 Bot 写操作，不能通过 feature flag 恢复已知不安全透传。
@@ -65,10 +67,14 @@
 
 ## Resume prompt
 
-下周可直接发送：
+下周最短可直接发送：
+
+> 继续北辰重构。按 `VP-POLARIS` 工单从第一个未完成项开始；先复核现场，再实施，不做任何真实外部操作。
+
+若需要显式重申全部约束，可发送：
 
 > 请先读取当前项目根目录 `HANDOFF.md`，并完整复核生产 checkout `/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing` 的 `git status`、`main/origin/main`、流水线是否空闲，以及 `docs/refactor/video-processing/` 当前状态。继续 2026-09-12 的独立架构审计结论，采用 Hybrid Plan B；不要重做全库审计。首批只处理两个已确认安全问题：① Telegram PipelineAgent 的直接 uploader/任意状态/删除/重试旁路及退出码 6 误判；② `get_high_score_pending_videos()` 未排除 DISCOVERY，且 Golden fixture 固化错误契约。先补真实入口级隔离回归测试，再做最小实现，随后修订 M6/INV/RISK/Golden 文档。保护现有无关 dirty changes，不真实投稿、不发 Telegram、不改生产数据库、不重启运行态；每一步分别报告 diff、测试、提交、推送和运行采用状态。若当前源码或工作树与 HANDOFF 不一致，以现场证据为准并先说明差异。
 
 ## Updated
 
-2026-09-12 18:47 CST
+2026-09-12 18:57 CST
