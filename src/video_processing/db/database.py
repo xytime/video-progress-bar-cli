@@ -48,6 +48,7 @@
 | 3.50.0  | 2026-08-29 | Codex                               | 英语世界审核项绑定完整投稿包哈希、同源活动项防重，并为每次投稿保留不可覆盖证据账本。 |
 | 3.51.0  | 2026-08-29 | Codex                               | 英语世界二次确认制作请求新增原子领取、审核项绑定和失败收口状态，不接通用发布队列。 |
 | 3.52.0  | 2026-08-29 | Codex                               | 英语世界候选持久化授权频道 ID；旧的仅显示名候选在选择阶段 fail-closed。 |
+| 3.54.0  | 2026-09-12 | Codex                               | 高分加工候选复用源字幕预检冷却，防止暂时不可用字幕被同一轮无限重新领取。 |
 | 3.53.0  | 2026-08-30 | Codex                               | 英语世界新增具名操作员补发授权；仅可领取零尝试的自动延后项，两小时未领取则回归公共窗口队列。 |
 | 3.35.0  | 2026-08-21 | Codex                               | Cache candidate scoring inputs and hide archived WeChat tombstones from recovery queue |
 | 3.36.0  | 2026-08-23 | Codex                               | 为英语世界学习卡增加独立 Telegram 审核与视频号投稿账本，禁止复用通用队列 |
@@ -4103,7 +4104,8 @@ class PipelineDB:
 
     def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5,
                                       channel_min_scores: Optional[Dict[str, int]] = None,
-                                      allow_deferred_predecessors: bool = False) -> List[Dict[str, Any]]:
+                                      allow_deferred_predecessors: bool = False,
+                                      source_subtitle_retry_hours: int = 6) -> List[Dict[str, Any]]:
         """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。
         [Gemini_3.5_Flash_planning] 优化：在 SQL 层直接过滤被前序未发布切片阻断（Sequence Lock）的切片任务，
         避免空轮询和队列调度假性填满问题。
@@ -4133,6 +4135,10 @@ class PipelineDB:
                   WHERE archive.video_id = pv.id
               )
               AND (
+                  COALESCE(pv.source_subtitle_status, 'PENDING') != 'UNAVAILABLE'
+                  OR pv.source_subtitle_checked_at <= datetime('now', ?)
+              )
+              AND (
                 pv.slice_index = 0
                 OR NOT EXISTS (
                   SELECT 1 FROM processed_videos sib
@@ -4145,7 +4151,10 @@ class PipelineDB:
             ORDER BY COALESCE(pv.preparation_ready, 0) DESC, pv.score DESC LIMIT ?
         """
         with self.get_connection() as conn:
-            cursor = conn.execute(query, (*threshold_params, *terminal_states, limit))
+            cursor = conn.execute(
+                query,
+                (*threshold_params, f"-{max(1, int(source_subtitle_retry_hours))} hours", *terminal_states, limit),
+            )
             return [dict(row) for row in cursor.fetchall()]
 
     def get_high_score_preparation_candidates(

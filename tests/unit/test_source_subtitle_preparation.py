@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 覆盖 VTT 解析、下载前阻断、AUTO 预加工选择和真实微信补发日限额 |
 | 1.1.0 | 2026-08-26 | Codex | 覆盖 YouTube bot 校验后的受限 Cookie 刷新与单次预检重试。 |
+| 1.2.0 | 2026-09-12 | Codex | 覆盖源字幕暂不可用候选的高分加工冷却，防止同轮热循环。 |
 """
 
 import subprocess
@@ -129,6 +130,21 @@ def test_source_subtitle_preflight_fails_closed_when_censorship_is_disabled(tmp_
     stored = manager.db.get_video_by_youtube_id("source-preflight-no-engine")
     assert stored["status"] == "PENDING"
     assert stored["source_subtitle_status"] == "UNAVAILABLE"
+
+
+def test_high_score_queue_cools_down_fresh_unavailable_source_subtitles(tmp_path: Path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    _add_candidate(db, "fresh-source-unavailable", score=90)
+    _add_candidate(db, "ordinary-pending", score=80)
+    db.set_source_subtitle_preflight(
+        "fresh-source-unavailable",
+        "UNAVAILABLE",
+        error_msg="YouTube temporary rate limit",
+    )
+
+    selected = db.get_high_score_pending_videos(min_score=75, limit=10)
+
+    assert [row["youtube_id"] for row in selected] == ["ordinary-pending"]
 
 
 def test_preparation_worker_claims_only_auto_candidates(tmp_path: Path, monkeypatch):
