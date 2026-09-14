@@ -41,7 +41,7 @@ def _parser() -> argparse.ArgumentParser:
         "--rejected-youtube-id",
         action="append",
         default=[],
-        help="本轮来源预检已淘汰的 YouTube ID；可重复，最多五个",
+        help="本轮来源预检已淘汰的 YouTube ID；可重复，最多八个",
     )
     parser.add_argument("--failure-kind", choices=("source_quality", "internal_error", "transport"), default="internal_error")
     return parser
@@ -76,8 +76,8 @@ def main() -> int:
         validate_audio_qa(report_path, mp4=args.mp4, manifest=args.manifest)
 
     rejected_youtube_ids = list(dict.fromkeys(str(value).strip() for value in args.rejected_youtube_id))
-    if len(rejected_youtube_ids) > 5:
-        raise ValueError("at most five --rejected-youtube-id values are allowed")
+    if len(rejected_youtube_ids) > 8:
+        raise ValueError("at most eight --rejected-youtube-id values are allowed")
     if any(not YOUTUBE_ID_PATTERN.fullmatch(value) for value in rejected_youtube_ids):
         raise ValueError("every --rejected-youtube-id must be an 11-character YouTube ID")
 

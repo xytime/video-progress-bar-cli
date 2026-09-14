@@ -409,8 +409,12 @@ def test_manual_production_prompt_binds_selected_candidate_and_forbids_platform_
 def test_daily_prompt_preflights_multiple_candidates_before_locking_one():
     prompt = runner.PROMPT
 
-    assert "来源预检最多依次检查 5 个不同的 `youtube_id`" in prompt
+    assert "来源预检最多依次检查 8 个不同且未使用的 `youtube_id`" in prompt
     assert "某个候选预检失败不算已经选题，可以继续下一个" in prompt
+    assert "不占 8 个名额" in prompt
+    assert "medium.pt" in prompt
+    assert "P2 风格建议不阻断发布" in prompt
+    assert "第二次实际 FAIL 才终止" in prompt
     assert "至少一种视频格式可实际下载" in prompt
     assert "针对拟使用的连续片段生成接触表并确认画面适龄" in prompt
     assert "只有完整来源预检已经覆盖“拟用片段的画面与自然语音”后，才锁定第一个合格 `youtube_id`" in prompt

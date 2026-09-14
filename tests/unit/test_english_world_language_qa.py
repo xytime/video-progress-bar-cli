@@ -11,6 +11,7 @@
 | 1.0.5 | 2026-09-10 | Codex | 覆盖带来源的 P1 误报裁决和 P0/非 P1 禁止放行。 |
 | 1.0.6 | 2026-09-11 | Codex | 覆盖并列相邻学习点的词典义串线预检。 |
 | 1.0.7 | 2026-09-11 | Codex | 覆盖同值数字、连字符拆分和冠词差异的受限来源对齐。 |
+| 1.0.8 | 2026-09-14 | Codex | 覆盖时间修复后的真实修订、旧误终止迁移和二次内容失败阻断。 |
 """
 from pathlib import Path
 import pytest
@@ -202,6 +203,50 @@ def test_second_content_failure_cannot_reopen_old_pass(tmp_path):
     kw["caller"] = lambda *a, **k: failure
     assert review(timeline, model="revision", **kw)["state"] == "FAIL"
     with pytest.raises(ValueError, match="已停止"): review(timeline, model="first", **kw)
+
+
+def test_timing_review_does_not_consume_first_content_revision(tmp_path):
+    timeline, p = setup_review(tmp_path)
+    kw = dict(cache_dir=tmp_path / "cache", task_dir=tmp_path / "task", model="m")
+    review(timeline, caller=lambda *a, **k: good(p), **kw)
+    p["content"]["words"] = [{"text": "test", "start": 0, "end": .9}]
+    atomic_json(tmp_path / "display_plan.json", p)
+    bad = good(p)
+    bad["findings"][0].update(status="FAIL", severity="P1")
+    assert review(timeline, caller=lambda *a, **k: bad, **kw)["state"] == "FAIL"
+    ledger_path = tmp_path / "task/language_attempts.json"
+    ledger = read_json(ledger_path)
+    assert not ledger.get("content_terminal")
+    # 模拟已上线旧版本在 PASS -> FAIL 后写下的误终止，不重置任何计数。
+    ledger["content_terminal"] = True
+    atomic_json(ledger_path, ledger)
+    p["content"]["paragraphs"][0]["translation_zh"] = "审校后的完整译文"
+    atomic_json(tmp_path / "display_plan.json", p)
+    report = review(timeline, caller=lambda *a, **k: good(p), **kw)
+    assert report["state"] == "PASS" and report["attempts"] == 3 and report["revision"] == 1
+    assert read_json(ledger_path)["budget_migration"]["preserved_attempts"] == 2
+    assert review(timeline, caller=lambda *a, **k: pytest.fail("cached revision"), **kw)["cache_hit"]
+
+
+def test_two_actual_content_failures_remain_terminal(tmp_path):
+    timeline, p = setup_review(tmp_path)
+    bad = good(p)
+    bad["findings"][0].update(status="FAIL", severity="P1")
+    kw = dict(cache_dir=tmp_path / "cache", task_dir=tmp_path / "task", caller=lambda *a, **k: bad)
+    assert review(timeline, model="first", **kw)["state"] == "FAIL"
+    assert review(timeline, model="revision", **kw)["state"] == "FAIL"
+    with pytest.raises(ValueError, match="已停止"):
+        review(timeline, model="third", **kw)
+    assert read_json(tmp_path / "task/language_attempts.json")["attempts"] == 2
+
+
+def test_legacy_terminal_without_complete_cache_cannot_reopen(tmp_path):
+    timeline, p = setup_review(tmp_path)
+    atomic_json(tmp_path / "task/language_attempts.json", {
+        "attempts": 2, "retries": 0, "keys": ["missing"], "content_terminal": True})
+    with pytest.raises(ValueError, match="已停止"):
+        review(timeline, cache_dir=tmp_path / "cache", task_dir=tmp_path / "task", model="m",
+               caller=lambda *a, **k: pytest.fail("must not call provider"))
 
 
 def test_one_retry_is_shared_across_revision_and_restart(tmp_path):
@@ -432,8 +477,9 @@ def test_cache_restart_and_model_invalidation(tmp_path):
     assert review(timeline, model="model-a", **kwargs)["cache_hit"]
     assert review(timeline, model="model-b", **kwargs)["state"] == "PASS"
     assert calls == ["model-a", "model-b"]
-    with pytest.raises(ValueError, match="最多一次"):
-        review(timeline, model="model-c", **kwargs)
+    assert review(timeline, model="model-c", **kwargs)["state"] == "PASS"
+    with pytest.raises(ValueError, match="最多三个"):
+        review(timeline, model="model-d", **kwargs)
 
 
 def test_transient_failure_only_retries_once(tmp_path):

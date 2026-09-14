@@ -8,9 +8,11 @@
 4. 普通阅读屏3–5个有效学习点，末屏0–3个；优先必要语境和常见搭配，不为数量补专名或功能词。不足时只允许重新分屏一次，仍不合格写制作失败。
 5. 在 `editorial_changes.json` 保存 `version`、`revision`（0或1）、`changes`，每项含 kind、before、after、evidence（含来源绝对时间段）。不因 ASR 一致就省略实质修改的依据。
 6. 先运行项目 venv 的 `scripts/english_world_language.py lexicon --timeline ...` 绑定本机词典证据，再 `source`，仅加载已下载 Whisper 模型；然后 `prepare` 冻结实际屏幕。词形缺音标时只允许词典证明的词元，并明确标注词元。审核失败不得删除计数器、换目录或改源区间重试。
-7. `review` 用 AGY Gemini 3.8 Flash High 独立审校。首次发现内容错误只允许修订一次，再 source/prepare/review；复审未通过立即保留失败报告并结束。不得自行生成或改写审校 PASS。
+7. `review` 用 AGY Gemini 3.8 Flash High 独立审校。首次实际内容 FAIL 后允许修订一次，再 source/prepare/review；第二次实际内容 FAIL 结束。输入变化、时间修复和此前的 PASS 不算内容失败。全文与增量文案共享最多三个输入、三次模型调用（包括供应商故障重试）；不通过回读旧 PASS 撤销新 FAIL。旧误终止仅在全部原始缓存可验证、恰好一次实际 FAIL 且总调用有余量时由程序迁移，保留原次数、缓存和迁移证据；不得手工清除账本或制造 PASS。P2 风格建议可 PASS，P0/P1 实质错误仍阻断。
 8. `render_study_card.py` 消费冻结计划；渲染后仍跑音频、结构、关键帧检查。日更允许的自然长片段（严格大于30秒且不超过300秒）可在渲染命令使用兼容参数 `--allow-long-test`；结构校验使用 `scripts/english_world_language.py validate --timeline ... --manifest ...`，音频校验使用 `scripts/validate_study_card_audio.py --mp4 ... --timeline ... --manifest ... --report ...`，二者不接受 `--allow-long`，自行执行真实时长和语音硬门禁。所有新生成封面、标题与投稿文案必须纳入审校或新增独立文案审校证据。
 
 供应商失败不转付费 API；未知额度记录 unknown。已经投稿或状态不确定的旧片不重传。
 
 冻结前必须提供 `publication_text.title`、`publication_text.copy` 和完整 `publication_text.cover_payload`，封面生成使用该载荷，禁止再次自动选词或改写。后续仅改投稿字段时用 `publication --timeline ... --publication-file ...` 做增量审校，绑定已审校正文，仍共享任务三次总尝试和一次修订预算。新增封面学习词必须来自已审校词条，否则重新走正文审校；增量 FAIL 同样阻断封装。创建交付请求的 `--title` 必须与实际审校投稿标题一致。
+
+日更候选最多预检八个未使用来源，二十分钟内有界执行；重复或已投稿的来源不占预检名额。优先使用本地解析器的受限排印等价。small ASR 对齐失败时，可保留其报告并用已下载 medium 模型复核同一片段一次；后续保持通过的模型。不下载模型、不转付费 API、不猜测缺词锚点。封面难度默认与 A2–B1 家庭学习定位一致，不因单个高阶词改变全片受众等级。

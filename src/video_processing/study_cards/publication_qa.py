@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | 增量文案审校不继承正文结论，仍绑定原正文及不可变封装。 |
 | 1.0.1 | 2026-09-09 | Codex | 封面音标明确绑定展示词形或显式标注的词元。 |
+| 1.0.2 | 2026-09-14 | Codex | 增量审校与正文共享实际内容失败预算，技术输入变化不算修订。 |
 """
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ import time
 import jsonschema
 from .language_qa import (VERSION, atomic_json, cache_key, digest, evaluate, file_digest,
                           read_json, review_input, review_schema, validate_language_qa)
-from .language_review_service import locked
+from .language_review_service import locked, check_content_budget, content_failure_keys
 from ..utils.agy_provider import AgyProviderError, run_agy_structured
 
 PROMPT = """你是独立英语教学编辑。正文已通过独立审校，但新增投稿字段尚未通过。
@@ -58,12 +59,11 @@ def review_publication(timeline, publication, *, cache_dir, task_dir, model, com
     cache, ledger_path = cache_dir / f"{key}.json", task_dir / "language_attempts.json"
     with locked(task_dir / "language.lock"), locked(cache_dir / f"{key}.lock"):
         ledger = read_json(ledger_path)  # 无主审校账本不得创建新的额度起点
-        if ledger.get("content_terminal"):
-            raise ValueError("主任务已经停止")
+        check_content_budget(ledger, cache_dir, key)
         keys = ledger.setdefault("publication_keys", [])
         if key not in keys:
-            if len(keys) + max(0, len(ledger["keys"]) - 1) >= 2:
-                raise ValueError("全文及文案合计最多一次修订")
+            if len(keys) + len(ledger["keys"]) >= 3:
+                raise ValueError("全文及文案合计最多三个审校输入，内容最多一次修订")
             keys.append(key)
             atomic_json(ledger_path, ledger)
         hit, started = cache.exists(), time.monotonic()
@@ -102,7 +102,7 @@ def review_publication(timeline, publication, *, cache_dir, task_dir, model, com
             atomic_json(ledger_path, ledger)
             raise ValueError("增量审校期间正文已改变")
         state = evaluate(saved["result"], plan)
-        if state != "PASS" and len(keys) + max(0, len(ledger["keys"]) - 1) >= 2:
+        if len(content_failure_keys(ledger, cache_dir)) >= 2:
             ledger["content_terminal"] = True
         ledger["cache_hits"] = ledger.get("cache_hits", 0) + int(hit)
         atomic_json(ledger_path, ledger)

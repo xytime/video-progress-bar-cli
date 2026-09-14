@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-09-09 | Codex | 跨重启三次尝试、一次修订和同键合并。 |
 | 1.0.1 | 2026-09-09 | Codex | 将转录差异和编辑修改纳入逐目标审校覆盖。 |
 | 1.0.2 | 2026-09-10 | Codex | 将 AGY 部分成功/空结构化输出归入一次性暂时故障，允许当前任务恢复重试。 |
+| 1.0.3 | 2026-09-14 | Codex | 按实际内容失败计修订，保留三次总预算及旧缓存审计，避免时间修复误耗修订。 |
 """
 from contextlib import contextmanager
 import fcntl
@@ -49,6 +50,41 @@ def _is_transient_provider_error(message):
     ))
 
 
+def content_failure_keys(ledger, cache_dir):
+    """只读已完成的独立审校缓存；输入变化或模型变化本身不是内容失败。"""
+    failures = []
+    for key in dict.fromkeys(ledger.get("keys", []) + ledger.get("publication_keys", [])):
+        path = Path(cache_dir) / f"{key}.json"
+        if not path.exists():
+            continue  # 供应商失败没有内容结论，仍消耗 attempts。
+        result = read_json(path)["result"]
+        jsonschema.validate(result, review_schema())
+        if any(x["status"] != "PASS" or x["severity"] in {"P0", "P1"}
+               for x in result["findings"]):
+            failures.append(key)
+    return failures
+
+
+def check_content_budget(ledger, cache_dir, key):
+    failures = content_failure_keys(ledger, cache_dir)
+    if ledger.get("content_terminal"):
+        # 只迁移可证明的旧 PASS -> FAIL 误终止；缺缓存、两次 FAIL 均不恢复。
+        keys = ledger.get("keys", []) + ledger.get("publication_keys", [])
+        complete = bool(keys) and all((Path(cache_dir) / f"{k}.json").exists() for k in keys)
+        if not (complete and len(failures) == 1 and ledger["attempts"] < 3):
+            raise ValueError("唯一修订仍未通过，本任务已停止")
+        ledger["content_terminal"] = False
+        ledger["budget_migration"] = {"version": 2, "reason": "input_change_is_not_content_failure",
+                                      "preserved_attempts": ledger["attempts"], "failure_keys": failures}
+    if len(failures) >= 2:
+        raise ValueError("唯一修订仍未通过，本任务已停止")
+    # 发现错误后不能通过回读旧 PASS 撤销失败；必须审校实际修订的新输入。
+    ordered = ledger.get("keys", []) + ledger.get("publication_keys", [])
+    if failures and key in ordered and ordered.index(key) < max(ordered.index(k) for k in failures):
+        raise ValueError("内容失败后不能回退到旧 PASS，本任务已停止旧缓存回读")
+    return failures
+
+
 def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
            caller=run_agy_structured):
     timeline, cache_dir, task_dir = Path(timeline), Path(cache_dir), Path(task_dir)
@@ -71,11 +107,10 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
             ledger["terminal"] = False
             ledger["recovered_transient_failure"] = True
             atomic_json(ledger_path, ledger)
-        if ledger.get("content_terminal"):
-            raise ValueError("唯一修订仍未通过，本任务已停止")
+        failures = check_content_budget(ledger, cache_dir, key)
         if key not in ledger["keys"]:
-            if len(ledger["keys"]) + max(0, len(ledger.get("publication_keys", [])) - 1) >= 2:
-                raise ValueError("同一任务最多一次内容修订")
+            if len(ledger["keys"]) + len(ledger.get("publication_keys", [])) >= 3:
+                raise ValueError("同一任务最多三个审校输入，内容最多一次修订")
             ledger["keys"].append(key)
             atomic_json(ledger_path, ledger)
         started = time.monotonic()
@@ -125,7 +160,7 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
                   "input_projection": "compact-v1",
                   "input_key": key, "timeline_sha256": before, "plan_sha256": digest(plan),
                   "result": result, "cache_hit": hit, "attempts": ledger["attempts"],
-                  "revision": len(ledger["keys"]) - 1, "elapsed_seconds": round(time.monotonic() - started, 3),
+                  "revision": len([k for k in failures if k != key]), "elapsed_seconds": round(time.monotonic() - started, 3),
                   "usage": read_json(cache).get("usage"), "usage_incurred_this_call": not hit}
         report_path = root / "qa/language_qa.json"
         previous = read_json(report_path) if report_path.exists() else {}
@@ -133,7 +168,7 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
                            ("input_key", "timeline_sha256", "plan_sha256", "state", "result"))
         # 缓存读回不改写已绑定成片的审校报告；调用统计另存，避免无意义重渲染。
         ledger["cache_hits"] = ledger.get("cache_hits", 0) + int(hit)
-        if report["state"] != "PASS" and len(ledger["keys"]) >= 2:
+        if len(content_failure_keys(ledger, cache_dir)) >= 2:
             ledger["content_terminal"] = True
         atomic_json(ledger_path, ledger)
         if not same_binding:

@@ -101,7 +101,7 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 
 协调器进程、锁、重试、失败通知和运行日志均由本入口管理。不得运行 `kill`、`pkill`、`launchctl`、`rm`、`rmdir`、`ps`、`tail`、`sleep` 或任何进程/锁/运行日志监控命令；不得根据既有日志自行发送失败通知、终止进程或干预其他运行。遇到已有素材、旧审核项或运行异常时，只报告事实并继续本次合规素材的研究/制作；本入口会负责收口。
 
-立即开始来源研究、字幕预检或候选预览下载中的一项实际生产动作。不要轮询、等待或反复检查调度状态；若十分钟内无法取得通过完整来源预检的合格候选，按下方失败命令汇总已检查候选及各自准确失败原因并退出。
+立即开始来源研究、字幕预检或候选预览下载中的一项实际生产动作。不要轮询、等待或反复检查调度状态；若二十分钟内无法取得通过完整来源预检的合格候选，按下方失败命令汇总已检查候选及各自准确失败原因并退出。
 
 所有 YouTube 元数据、字幕和下载命令都必须使用项目已验证的 Cookie：在每个 `yt-dlp` 调用后附加 `--cookies output/youtube_cookies.txt`。禁止裸调用 yt-dlp 后把“Sign in to confirm you’re not a bot”误报为无候选；若该 Cookie 文件缺失或明确失效，只能运行一次 `PYTHONPATH=src .venv/bin/python scripts/refresh_yt_cookies.py` 后重试该同一预检。
 
@@ -112,7 +112,9 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 
 先搜索当天或近期未使用的候选，再检查标题、简介、英文字幕/转写和必要的画面。只能选择适合儿童与家庭学习者的自然、科学、教育、健康、文化、日常生活或正向人文题材。排除政治、战争、暴力、犯罪、成人话题、强时政评论，以及包含真实伤亡、恐慌、疏散或令人不适灾情画面的素材；不确定即放弃该候选并继续预检下一候选。自然科学与天气科普（包括风暴、闪电、龙卷风的成因）并非关键词禁区，必须结合实际画面和叙事判断。
 
-候选筛选必须分成“来源预检”和“锁定制作”两个阶段。来源预检最多依次检查 5 个不同的 `youtube_id`；某个候选预检失败不算已经选题，可以继续下一个。每个候选必须依次确认：频道 ID 与未使用状态；英文字幕/转写可取得；至少一种视频格式可实际下载；针对拟使用的连续片段生成接触表并确认画面适龄；存在一段严格大于 30 秒且不超过 300 秒、以完整自然句结束、没有靠静音/循环/长音乐空档凑时长的连续自然语音。字幕不可用、画面不适龄或找不到合格片段才淘汰当前候选；记录 `youtube_id` 和原因后立即预检下一候选。来源预检期间禁止开始时间轴、翻译、词汇富化或正式渲染。
+候选筛选必须分成“来源预检”和“锁定制作”两个阶段。来源预检最多依次检查 8 个不同且未使用的 `youtube_id`；某个候选预检失败不算已经选题，可以继续下一个。每个候选必须依次确认：频道 ID 与未使用状态；英文字幕/转写可取得；至少一种视频格式可实际下载；针对拟使用的连续片段生成接触表并确认画面适龄；存在一段严格大于 30 秒且不超过 300 秒、以完整自然句结束、没有靠静音/循环/长音乐空档凑时长的连续自然语音。字幕不可用、画面不适龄或找不到合格片段才淘汰当前候选；记录 `youtube_id` 和原因后立即预检下一候选。来源预检期间禁止开始时间轴、翻译、词汇富化或正式渲染。
+
+候选额度只统计通过频道与未使用检查、实际进入来源预检的候选；已制作或投稿保护的来源直接跳过，不占 8 个名额。字幕对齐先使用项目 caption_evidence 的同值数字、连字符与受限冠词归一化，不自行把排印差异判为真实词义差异。若 small ASR 仍出现零宽时间或 alignment_status=UNCERTAIN，保留原报告为 qa/source_evidence.small.json（存在时），仅允许用已下载的 ~/.cache/whisper/medium.pt 对同一片段再运行一次 source --whisper-model ~/.cache/whisper/medium.pt；不得下载模型或调用付费 API。medium 不存在或复核仍失败才淘汰。通过后后续 source 必须沿用通过的模型，避免切回 small 使来源证据倒退。不得放行否定、数字数值、实义词差异或猜测缺词时间。
 
 HTTP 403 不是自动“换题”信号：先对同一候选仅重试一次，并且只在出现 YouTube 认证/风控征兆时执行一次 Cookie 刷新；若仍是 403，立即用另一个未使用候选做同样的轻量格式访问预检以做对照。两个独立候选都出现 403、DNS、TLS 或超时，属于来源通路降级而不是两个候选同时不合格：停止候选淘汰，写入“来源通路降级”的失败请求，**不要追加 `--rejected-youtube-id`**，也不要靠继续换题掩盖网络故障。只有对照候选可下载时，才将最初 403 归为单候选访问失败并排除它。
 
@@ -121,6 +123,8 @@ HTTP 403 不是自动“换题”信号：先对同一候选仅重试一次，�
 本日长片契约已明确允许自然语音片段超过30秒，因此正式调用 `scripts/render_study_card.py` 可显式使用其兼容参数 `--allow-long-test`；结构门禁使用 `scripts/english_world_language.py validate --timeline <timeline> --manifest <manifest>`，音频门禁使用 `scripts/validate_study_card_audio.py --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`。结构和音频验证器不接受 `--allow-long`，均自行硬性检查实际时长、连续语音、末词和音频边界；不得用不存在的参数、静音、循环或无语音尾段凑时长。
 
 写入包含美元、反引号、撇号的正文时，必须使用单引号 heredoc（如 <<'PY'）或 JSON 文件；禁止把正文插入 shell 双引号的 python -c 命令。正式渲染前必须通过 StudyCardContent.from_mapping 的正文与 words 一致性检查。若失败原因是序列化损坏或排印撇号差异，允许从同一来源字幕修复一次并重新运行全部门禁；不得修改或忽略真实词差异，不得换题。
+
+审校输入变化不等于内容修订失败：首次 PASS 后的时间修复仍需重新审校，但不消耗内容纠错机会；第一次实际内容 FAIL 后允许一次精确修订，第二次实际 FAIL 才终止，全文与文案共享最多三次模型调用。P2 风格建议不阻断发布。封面难度须与 A2–B1 定位一致，默认使用“★★☆☆☆ (A2–B1 家庭精读)”，不要根据单个难词自动标成六级/考研/雅思。末词修复引起新输入时仍按此规则审校，由程序账本决定剩余额度，不得手动重置。
 
 时间轴完成后，必须明确把 json3 的绝对 `tStartMs` 转成 `absolute_time - source_start` 的相对 `words.start/end`，不得把绝对 `spoken_end` 直接写入相对时间轴；`scripts/render_study_card.py` 的渲染入口会校验 `caption_artifact` 的下一字幕边界。渲染后必须使用项目 venv 执行 `scripts/validate_study_card_audio.py --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`，该命令会提取 16kHz 单声道音频并用本地 Whisper 检查末词完整性和下一词泄漏；另运行 `scripts/english_world_language.py validate --timeline <timeline> --manifest <manifest>` 完成语言/展示与 manifest 绑定检查，只有两个报告均为 `PASS` 才能写入成功交付请求。唯一可恢复例外是音频报告同时满足 `state=FAIL`、`failure_kind=final_word_boundary_mismatch`、末词文本一致且 `trailing_words=[]`：这说明 json3 把没有显式终点的末词错误延长到字幕框尾部，而不是下一句漏入。此时只允许对同一锁定来源执行一次 `scripts/repair_study_card_final_boundary.py --timeline <timeline> --audio-qa-report <失败报告> --output <修正时间线>`，用修正时间线重新渲染一次，再完整执行一次音频 QA。不得改变正文、译文、词汇、来源起点或选择另一候选；若第二次 QA 不为 PASS，立即写失败请求。修正后仍必须严格大于 30 秒，且不得存在长静音或下一词泄漏。
 
@@ -439,8 +443,8 @@ def _read_delivery_request(path: Path, project_root: Path) -> dict:
     if kind not in {"production", "failure"} or not title:
         raise ValueError("交付请求缺少合法 kind 或 title")
     rejected_youtube_ids = payload.get("rejected_youtube_ids", [])
-    if not isinstance(rejected_youtube_ids, list) or len(rejected_youtube_ids) > 5:
-        raise ValueError("交付请求 rejected_youtube_ids 必须是最多五项的列表")
+    if not isinstance(rejected_youtube_ids, list) or len(rejected_youtube_ids) > 8:
+        raise ValueError("交付请求 rejected_youtube_ids 必须是最多八项的列表")
     if any(not isinstance(value, str) or not YOUTUBE_ID_PATTERN.fullmatch(value) for value in rejected_youtube_ids):
         raise ValueError("交付请求包含非法 rejected_youtube_ids")
     rejected_youtube_ids = list(dict.fromkeys(rejected_youtube_ids))
