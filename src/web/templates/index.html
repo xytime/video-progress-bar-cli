@@ -29,12 +29,51 @@
   | 2026-09-07 | Codex | 默认按来源发布日期排序；纠正把源视频发布日期误标为平台上传时间的展示，并增加 80 分以上筛选。 |
   | 2026-09-08 | Codex | 同步当前页批量选择与具名删除确认；统一中文状态；取消过期列表请求并阻止跨筛选回写。 |
   | 2026-09-08 | Codex | 修正窄屏编辑模式复选框显示规则优先级，恢复可见勾选与退出后的隐藏。 |
+  | 2026-09-15 | Codex | 添加主题与持久化字号设置；提高文字对比度并适配笔记本及窄屏布局。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <script>
+    // 首次绘制前恢复偏好；存储不可用时仍可切换，且不阻断仪表盘。
+    (() => {
+      const root = document.documentElement;
+      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+      let theme = 'system';
+      let size = 'large';
+      try {
+        const saved = JSON.parse(localStorage.getItem('vp-display-preferences') || 'null');
+        if (['system', 'light', 'dark', 'contrast'].includes(saved?.theme)) theme = saved.theme;
+        if (['standard', 'large', 'xlarge'].includes(saved?.size)) size = saved.size;
+      } catch (_) { /* 损坏或受限的存储使用默认设置。 */ }
+      function apply() {
+        root.dataset.theme = theme === 'system' ? (systemTheme.matches ? 'dark' : 'light') : theme;
+        root.dataset.textSize = size;
+      }
+      apply();
+      systemTheme.addEventListener('change', apply);
+      document.addEventListener('DOMContentLoaded', () => {
+        const themeSelect = document.getElementById('display-theme');
+        const sizeSelect = document.getElementById('display-size');
+        themeSelect.value = theme;
+        sizeSelect.value = size;
+        function update() {
+          theme = themeSelect.value;
+          size = sizeSelect.value;
+          apply();
+          let stored = true;
+          try { localStorage.setItem('vp-display-preferences', JSON.stringify({theme, size})); }
+          catch (_) { stored = false; }
+          document.getElementById('display-feedback').textContent = stored
+            ? '已保存到此浏览器' : '已应用；浏览器未允许保存';
+        }
+        themeSelect.addEventListener('change', update);
+        sizeSelect.addEventListener('change', update);
+      });
+    })();
+  </script>
   <style>
     /* ── Reset & Base ── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -86,7 +125,7 @@
     }
     .logo { display: flex; align-items: center; gap: 12px; }
     .logo-icon {
-      font-size: 28px;
+      font-size: 1.75rem;
       filter: drop-shadow(0 0 12px rgba(124,110,247,0.8));
       animation: float 3s ease-in-out infinite;
     }
@@ -94,13 +133,13 @@
       0%,100% { transform: translateY(0); }
       50% { transform: translateY(-4px); }
     }
-    .logo-text { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
-    .logo-sub { font-size: 12px; color: var(--text2); margin-top: 2px; }
+    .logo-text { font-size: 1.125rem; font-weight: 700; letter-spacing: -0.3px; }
+    .logo-sub { font-size: 0.75rem; color: var(--text2); margin-top: 2px; }
 
     .header-right { display: flex; align-items: center; gap: 16px; }
     .live-badge {
       display: flex; align-items: center; gap: 6px;
-      font-size: 12px; font-weight: 600; color: var(--green);
+      font-size: 0.75rem; font-weight: 600; color: var(--green);
       padding: 5px 12px; border-radius: 20px;
       background: rgba(52,211,153,0.1);
       border: 1px solid rgba(52,211,153,0.2);
@@ -114,7 +153,7 @@
       0%,100% { box-shadow: 0 0 0 0 rgba(52,211,153,0.5); }
       50% { box-shadow: 0 0 0 6px rgba(52,211,153,0); }
     }
-    #last-update { font-size: 12px; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+    #last-update { font-size: 0.75rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
 
     /* ── Cover Thumbnail ── */
     .cover-thumb-cell { width: 52px; padding: 8px 8px 8px 16px !important; vertical-align: middle; }
@@ -138,7 +177,7 @@
       background: rgba(255,255,255,0.04);
       border: 1px dashed rgba(255,255,255,0.12);
       display: flex; align-items: center; justify-content: center;
-      font-size: 18px; color: rgba(255,255,255,0.15);
+      font-size: 1.125rem; color: rgba(255,255,255,0.15);
       cursor: default;
     }
 
@@ -159,7 +198,7 @@
       padding: 8px 22px;
       background: rgba(124,110,247,0.08);
       border-bottom: 1px solid rgba(124,110,247,0.2);
-      font-size: 12px; color: var(--text2);
+      font-size: 0.75rem; color: var(--text2);
     }
     #batch-action-bar.visible { display: flex; }
     /* [Gemini_2.5_Pro_planning] 高赞专属工具栏 */
@@ -169,7 +208,7 @@
       padding: 8px 22px;
       background: rgba(16,185,129,0.06);
       border-bottom: 1px solid rgba(16,185,129,0.15);
-      font-size: 12px; color: var(--text2);
+      font-size: 0.75rem; color: var(--text2);
     }
     #high-likes-bar.visible { display: flex; }
     #high-likes-bar label { display:flex; align-items:center; gap:6px; cursor:pointer; user-select:none; }
@@ -181,14 +220,14 @@
     }
     #video-filter-bar input, #video-filter-bar select {
       min-height: 32px; padding: 5px 8px; border-radius: 6px;
-      color: var(--text); background: rgba(15,23,42,0.72); border: 1px solid var(--border);
-      font: inherit; font-size: 12px;
+      color: var(--text); background: var(--bg2); border: 1px solid var(--border);
+      font: inherit; font-size: 0.75rem;
     }
     #video-filter-search { width: min(270px, 100%); }
     #video-filter-bar select { max-width: 180px; }
     .filter-context { display: contents; }
     .filter-context[hidden] { display: none; }
-    .btn-filter-clear { min-height: 32px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); color: var(--text2); background: transparent; cursor: pointer; font: inherit; font-size: 12px; }
+    .btn-filter-clear { min-height: 32px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--border); color: var(--text2); background: transparent; cursor: pointer; font: inherit; font-size: 0.75rem; }
     .btn-filter-clear:hover { color: var(--text); border-color: var(--accent); }
     @media (max-width: 700px) {
       #video-filter-bar { padding: 10px 12px; gap: 6px; }
@@ -197,39 +236,39 @@
       #high-likes-bar { align-items: flex-start; flex-wrap: wrap; padding: 8px 12px; }
     }
     /* [Gemini_2.5_Pro_planning] 已处理行样式 */
-    .discovery-done td { opacity: 0.35; }
+    .discovery-done td { background: var(--glass); }
     .discovery-done .video-zh-title,
     .discovery-done .video-title-link { text-decoration: line-through; }
     .btn-mark-done {
       background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.3);
-      color: #34d399; padding: 3px 9px; border-radius: 6px;
-      cursor: pointer; font-size: 10px; font-family: inherit;
+      color: var(--green); padding: 3px 9px; border-radius: 6px;
+      cursor: pointer; font-size: 0.75rem; font-family: inherit;
       transition: background 0.15s; white-space: nowrap;
     }
     .btn-mark-done:hover { background: rgba(16,185,129,0.25); }
     .btn-mark-undone {
       background: rgba(255,255,255,0.05); border: 1px solid var(--border);
       color: var(--text3); padding: 3px 9px; border-radius: 6px;
-      cursor: pointer; font-size: 10px; font-family: inherit;
+      cursor: pointer; font-size: 0.75rem; font-family: inherit;
       transition: background 0.15s; white-space: nowrap;
     }
     .btn-mark-undone:hover { background: rgba(255,255,255,0.1); color: var(--text2); }
     .btn-batch-del {
       background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.3);
       color: var(--red); padding: 4px 12px; border-radius: 6px;
-      cursor: pointer; font-size: 11px; font-family: inherit;
+      cursor: pointer; font-size: 0.75rem; font-family: inherit;
       transition: background 0.15s;
     }
     .btn-batch-del:hover { background: rgba(239,68,68,0.22); }
     .btn-clear-all {
       background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
       color: var(--text3); padding: 4px 12px; border-radius: 6px;
-      cursor: pointer; font-size: 11px; font-family: inherit; margin-left: auto;
+      cursor: pointer; font-size: 0.75rem; font-family: inherit; margin-left: auto;
       transition: background 0.15s;
     }
     .btn-clear-all:hover { background: rgba(255,80,80,0.12); border-color: rgba(239,68,68,0.3); color: var(--red); }
     .batch-deselect {
-      cursor: pointer; color: var(--accent); font-size: 11px; text-decoration: underline; text-underline-offset: 2px;
+      cursor: pointer; color: var(--accent); font-size: 0.75rem; text-decoration: underline; text-underline-offset: 2px;
     }
 
     /* ── [Gemini_3.6_Flash_planning] 多平台发布状态矩阵 CSS ── */
@@ -246,7 +285,7 @@
       gap: 3px;
       padding: 2px 7px;
       border-radius: 6px;
-      font-size: 10px;
+      font-size: 0.75rem;
       font-weight: 500;
       line-height: 1.2;
       transition: all 0.2s ease;
@@ -259,35 +298,35 @@
     }
     .platform-badge.plat-wechat {
       background: rgba(7, 193, 96, 0.12);
-      color: #07C160;
+      color: var(--green);
       border: 1px solid rgba(7, 193, 96, 0.25);
     }
     .platform-badge.plat-kuaishou {
       background: rgba(255, 80, 0, 0.12);
-      color: #FF5000;
+      color: var(--orange);
       border: 1px solid rgba(255, 80, 0, 0.25);
     }
     .platform-badge.plat-douyin {
       background: rgba(254, 44, 85, 0.12);
-      color: #FF2C55;
+      color: var(--red);
       border: 1px solid rgba(254, 44, 85, 0.25);
     }
     .platform-badge.st-published {
       font-weight: 600;
     }
     .platform-badge.st-review {
-      color: #fbbf24;
+      color: var(--yellow);
       background: rgba(245, 158, 11, 0.12);
       border-color: rgba(245, 158, 11, 0.25);
-      animation: plat-pulse 2s infinite ease-in-out;
+      /* 待核验状态持续可读，不通过降低文字透明度闪烁。 */
     }
     .platform-badge.st-failed {
-      color: #f87171;
+      color: var(--red);
       background: rgba(239, 68, 68, 0.12);
       border-color: rgba(239, 68, 68, 0.25);
     }
     .platform-badge.st-none {
-      opacity: 0.45;
+      opacity: 1;
       background: rgba(255, 255, 255, 0.05);
       color: var(--text3);
       border: 1px solid rgba(255, 255, 255, 0.08);
@@ -306,7 +345,7 @@
     }
     #platform-detail-modal.active { display: flex; }
     .plat-modal-content {
-      background: #141724;
+      background: var(--bg2);
       border: 1px solid var(--border);
       border-radius: 12px;
       width: min(680px, 92vw);
@@ -318,7 +357,7 @@
       width: 100%;
       border-collapse: collapse;
       margin-top: 16px;
-      font-size: 12px;
+      font-size: 0.75rem;
     }
     .plat-table th, .plat-table td {
       padding: 10px 12px;
@@ -354,7 +393,7 @@
     }
     #lb-close {
       position: absolute; top: 18px; right: 22px;
-      font-size: 28px; color: rgba(255,255,255,0.6);
+      font-size: 1.75rem; color: rgba(255,255,255,0.6);
       cursor: pointer; line-height: 1;
       transition: color 0.15s;
     }
@@ -362,7 +401,7 @@
     #lb-caption {
       position: absolute; bottom: 24px;
       left: 50%; transform: translateX(-50%);
-      font-size: 12px; color: rgba(255,255,255,0.45);
+      font-size: 0.75rem; color: rgba(255,255,255,0.45);
       font-family: 'JetBrains Mono', monospace;
       white-space: nowrap;
     }
@@ -390,13 +429,13 @@
       opacity: 0.8;
     }
     .stat-card:hover { transform: translateY(-2px); border-color: rgba(255,255,255,0.15); }
-    .stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text2); margin-bottom: 10px; }
+    .stat-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text2); margin-bottom: 10px; }
     .stat-value {
-      font-size: 40px; font-weight: 700; letter-spacing: -2px;
+      font-size: 2.5rem; font-weight: 700; letter-spacing: -2px;
       color: var(--text);
       transition: all 0.4s ease;
     }
-    .stat-sub { font-size: 11px; color: var(--text3); margin-top: 6px; }
+    .stat-sub { font-size: 0.75rem; color: var(--text3); margin-top: 6px; }
 
     .card-total  { --card-accent: var(--accent2); }
     .card-pending { --card-accent: var(--gray); }
@@ -426,9 +465,9 @@
       padding: 18px 22px;
       border-bottom: 1px solid var(--border);
     }
-    .panel-title { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+    .panel-title { font-size: 0.8125rem; font-weight: 600; display: flex; align-items: center; gap: 8px; }
     .panel-badge {
-      font-size: 11px; font-weight: 600;
+      font-size: 0.75rem; font-weight: 600;
       padding: 2px 8px; border-radius: 20px;
       background: rgba(124,110,247,0.15);
       color: var(--accent2);
@@ -444,7 +483,7 @@
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
       color: var(--text);
-      font-size: 12px;
+      font-size: 0.75rem;
       font-family: 'JetBrains Mono', monospace;
       padding: 7px 9px;
       outline: none;
@@ -470,8 +509,8 @@
       padding: 12px 14px;
       border-bottom: 1px solid rgba(255,255,255,0.06);
     }
-    .backfill-platform-title { font-size: 13px; font-weight: 700; }
-    .backfill-platform-meta { font-size: 11px; color: var(--text3); }
+    .backfill-platform-title { font-size: 0.8125rem; font-weight: 700; }
+    .backfill-platform-meta { font-size: 0.75rem; color: var(--text3); }
     .backfill-list { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 7px; }
     .backfill-item {
       display: grid;
@@ -479,7 +518,7 @@
       gap: 10px;
       align-items: center;
       min-width: 0;
-      font-size: 11px;
+      font-size: 0.75rem;
       color: var(--text2);
     }
     .backfill-yid { font-family: 'JetBrains Mono', monospace; color: var(--text3); white-space: nowrap; }
@@ -492,10 +531,10 @@
       gap: 10px;
       padding: 10px 14px 12px;
       border-top: 1px solid rgba(255,255,255,0.06);
-      font-size: 11px;
+      font-size: 0.75rem;
       color: var(--text3);
     }
-    .backfill-empty { padding: 18px 14px; color: var(--text3); font-size: 12px; text-align: center; }
+    .backfill-empty { padding: 18px 14px; color: var(--text3); font-size: 0.75rem; text-align: center; }
 
     /* ── Tabs ── */
     .tabs-header {
@@ -505,7 +544,7 @@
     }
     .tab-btn {
       background: none; border: none; color: var(--text3);
-      padding: 14px 4px; font-size: 13px; font-weight: 500;
+      padding: 14px 4px; font-size: 0.8125rem; font-weight: 500;
       cursor: pointer; position: relative; font-family: inherit;
       transition: color 0.2s;
     }
@@ -521,13 +560,13 @@
       display: flex; align-items: center; justify-content: space-between;
       padding: 12px 22px; border-top: 1px solid var(--border);
       background: rgba(0,0,0,0.1);
-      font-size: 12px; color: var(--text3);
+      font-size: 0.75rem; color: var(--text3);
     }
     .page-controls { display: flex; gap: 8px; align-items: center; }
     .btn-page {
       background: rgba(255,255,255,0.05); border: 1px solid var(--border);
       color: var(--text2); padding: 4px 10px; border-radius: 6px;
-      cursor: pointer; font-family: inherit; font-size: 11px;
+      cursor: pointer; font-family: inherit; font-size: 0.75rem;
       transition: all 0.2s;
     }
     .btn-page:hover:not(:disabled) { background: rgba(255,255,255,0.1); color: var(--text); }
@@ -536,13 +575,13 @@
     /* ── Activity Table ── */
     .activity-table { width: 100%; border-collapse: collapse; table-layout: auto; }
     .activity-table th {
-      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.7px;
+      font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.7px;
       color: var(--text3); text-align: left;
       padding: 12px 12px; border-bottom: 1px solid var(--border);
       white-space: nowrap;
     }
     .activity-table td {
-      padding: 13px 12px; font-size: 13px;
+      padding: 13px 12px; font-size: 0.8125rem;
       border-bottom: 1px solid rgba(255,255,255,0.03);
       vertical-align: middle;
     }
@@ -551,28 +590,28 @@
     .activity-table tr:hover td { background: rgba(255,255,255,0.03); }
 
     .video-title { font-weight: 500; color: var(--text); max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
-    .video-zh-title { font-weight: 600; color: var(--accent); max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; margin-bottom: 2px; font-size: 13px; }
+    .video-zh-title { font-weight: 600; color: var(--accent); max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; margin-bottom: 2px; font-size: 0.8125rem; }
     .video-title-link {
-      text-decoration: none; color: var(--text); font-size: 13px; font-weight: 500;
+      text-decoration: none; color: var(--text); font-size: 0.8125rem; font-weight: 500;
       display: block; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       transition: color 0.15s;
     }
     .video-title-link:hover { color: var(--accent2); text-decoration: underline; text-decoration-color: rgba(167,139,250,0.4); text-underline-offset: 3px; }
-    .video-title-dim { opacity: 0.45; }
-    .video-score { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--text); font-weight: 600; display: inline-block; width: 30px; }
-    .video-time { font-size: 11px; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
+    .video-title-dim { color: var(--text2); }
+    .video-score { font-family: 'JetBrains Mono', monospace; font-size: 0.8125rem; color: var(--text); font-weight: 600; display: inline-block; width: 30px; }
+    .video-time { font-size: 0.75rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; }
 
-    .video-meta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 5px; font-size: 11px; color: var(--text3); }
+    .video-meta-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; margin-top: 5px; font-size: 0.75rem; color: var(--text3); }
     .video-meta-row strong { color: var(--text2); }
     .meta-chip {
       display: inline-flex; align-items: center; gap: 2px;
       background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.07);
-      border-radius: 10px; padding: 1px 7px; font-size: 10px; color: var(--text3);
+      border-radius: 10px; padding: 1px 7px; font-size: 0.75rem; color: var(--text3);
       font-family: 'JetBrains Mono', monospace; white-space: nowrap;
     }
 
     .source-badge {
-      display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 4px;
+      display: inline-block; font-size: 0.75rem; padding: 1px 5px; border-radius: 4px;
       font-weight: 600; text-transform: uppercase;
     }
     .source-auto { background: rgba(52,211,153,0.1); color: var(--green); }
@@ -581,19 +620,19 @@
     .score-btn-group { display: flex; gap: 4px; margin-top: 4px; }
     .btn-score {
       background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
-      color: var(--text3); font-size: 10px; padding: 2px 6px; border-radius: 4px;
+      color: var(--text3); font-size: 0.75rem; padding: 2px 6px; border-radius: 4px;
       cursor: pointer; font-family: 'JetBrains Mono', monospace;
     }
     .btn-score:hover { background: rgba(255,255,255,0.1); color: var(--text); }
     .btn-score:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .video-link { text-decoration: none; color: inherit; display: inline-flex; align-items: center; gap: 5px; }
-    .btn-play { color: var(--accent); font-size: 16px; margin-right: 4px; }
+    .btn-play { color: var(--accent); font-size: 1rem; margin-right: 4px; }
 
     /* ── Status Badge ── */
     .badge {
       display: inline-flex; align-items: center; gap: 5px;
-      font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+      font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
       padding: 3px 9px; border-radius: 20px;
       white-space: nowrap;
     }
@@ -601,7 +640,7 @@
 
     .badge-PENDING       { background: rgba(100,116,139,0.15); color: var(--gray);   }
     .badge-dot-PENDING   { background: var(--gray); }
-    .badge-DOWNLOADING   { background: rgba(96,165,250,0.15); color: #60a5fa; }
+    .badge-DOWNLOADING   { background: rgba(96,165,250,0.15); color: var(--blue); }
     .badge-dot-DOWNLOADING { background: #60a5fa; animation: pulse-blue 1.5s infinite; }
     .badge-TRANSCRIBING  { background: rgba(251,191,36,0.15); color: var(--yellow); }
     .badge-dot-TRANSCRIBING { background: var(--yellow); animation: pulse-yellow 1.5s infinite; }
@@ -619,7 +658,7 @@
     .badge-dot-FAILED    { background: var(--red); }
     .badge-LOGIN_REQUIRED { background: rgba(248,113,113,0.15); color: var(--red); }
     .badge-dot-LOGIN_REQUIRED { background: var(--red); animation: pulse-red 1s infinite; }
-    .badge-COMPLETED     { background: rgba(52,211,153,0.1); color: #6ee7b7; }
+    .badge-COMPLETED     { background: rgba(52,211,153,0.1); color: var(--green); }
     .badge-dot-COMPLETED { background: #6ee7b7; }
     .badge-SEGMENTED     { background: rgba(167,139,250,0.15); color: var(--accent2); }
     .badge-dot-SEGMENTED { background: var(--accent2); }
@@ -636,12 +675,12 @@
       border-bottom: 1px solid rgba(255,255,255,0.04);
     }
     .channel-item:last-child { border-bottom: none; }
-    .channel-name { font-size: 13px; font-weight: 500; }
-    .channel-id { font-size: 11px; color: var(--text3); font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
+    .channel-name { font-size: 0.8125rem; font-weight: 500; }
+    .channel-id { font-size: 0.75rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
     .channel-actions { display: flex; align-items: center; gap: 8px; }
     .btn-delete {
       background: none; border: 1px solid rgba(248,113,113,0.25); color: var(--red);
-      font-size: 11px; font-weight: 600; cursor: pointer;
+      font-size: 0.75rem; font-weight: 600; cursor: pointer;
       padding: 3px 9px; border-radius: 6px;
       transition: all 0.15s;
       font-family: inherit;
@@ -655,14 +694,14 @@
       background: rgba(0,0,0,0.15);
     }
     .add-channel-form-title {
-      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
       letter-spacing: 0.7px; color: var(--text3); margin-bottom: 10px;
     }
     .add-channel-row { display: flex; gap: 8px; }
     .add-channel-input {
       flex: 1; background: rgba(255,255,255,0.05);
       border: 1px solid var(--border); border-radius: var(--radius-sm);
-      color: var(--text); font-size: 12px; font-family: inherit;
+      color: var(--text); font-size: 0.75rem; font-family: inherit;
       padding: 8px 12px; outline: none;
       transition: border-color 0.2s;
     }
@@ -670,7 +709,7 @@
     .add-channel-input:focus { border-color: var(--accent); }
     .btn-add {
       background: rgba(124,110,247,0.15); border: 1px solid rgba(124,110,247,0.3);
-      color: var(--accent2); font-size: 12px; font-weight: 600;
+      color: var(--accent2); font-size: 0.75rem; font-weight: 600;
       padding: 8px 16px; border-radius: var(--radius-sm); cursor: pointer;
       font-family: inherit; white-space: nowrap;
       transition: all 0.15s;
@@ -678,7 +717,7 @@
     .btn-add:hover:not(:disabled) { background: rgba(124,110,247,0.25); }
     .btn-add:disabled { opacity: 0.5; cursor: not-allowed; }
     .add-channel-feedback {
-      font-size: 11px; margin-top: 8px; min-height: 16px;
+      font-size: 0.75rem; margin-top: 8px; min-height: 16px;
       transition: all 0.3s;
     }
     .add-channel-feedback.ok  { color: var(--green); }
@@ -687,9 +726,9 @@
 
     .empty-state {
       padding: 32px 22px; text-align: center;
-      color: var(--text3); font-size: 13px;
+      color: var(--text3); font-size: 0.8125rem;
     }
-    .empty-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
+    .empty-icon { font-size: 2rem; margin-bottom: 8px; opacity: 0.4; }
 
     /* ── Pipeline Progress ── */
     .pipeline-panel { margin-bottom: 20px; }
@@ -716,7 +755,7 @@
     .step-circle {
       width: 32px; height: 32px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      font-size: 13px; font-weight: 700;
+      font-size: 0.8125rem; font-weight: 700;
       border: 2px solid var(--border);
       background: var(--bg2); color: var(--text3);
       transition: all 0.4s;
@@ -736,29 +775,29 @@
       0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,0.4)}
       50%{box-shadow:0 0 0 8px rgba(251,191,36,0)}
     }
-    .step-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text3); text-align: center; }
+    .step-label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text3); text-align: center; }
     .step.active .step-label { color: var(--yellow); }
     .step.done  .step-label { color: var(--green); }
     .step-desc {
-      font-size: 9px; color: var(--text3); text-align: center;
+      font-size: 0.75rem; color: var(--text3); text-align: center;
       margin-top: 4px; line-height: 1.4; max-width: 80px;
     }
-    .step.active .step-desc { color: rgba(251,191,36,0.7); }
-    .step.done  .step-desc  { color: rgba(52,211,153,0.7); }
+    .step.active .step-desc { color: var(--yellow); }
+    .step.done  .step-desc  { color: var(--green); }
 
     /* ── Priority Badge ── */
     .priority-badge {
       display: inline-flex; align-items: center; gap: 4px;
-      font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem; font-weight: 700; font-family: 'JetBrains Mono', monospace;
       padding: 2px 7px; border-radius: 6px;
     }
     .priority-high  { background: rgba(52,211,153,0.15);  color: var(--green); }
     .priority-mid   { background: rgba(251,191,36,0.15);  color: var(--yellow); }
     .priority-low   { background: rgba(100,116,139,0.15); color: var(--gray); }
-    .priority-threshold { font-size: 9px; color: var(--red); display: block; margin-top: 2px; }
+    .priority-threshold { font-size: 0.75rem; color: var(--red); display: block; margin-top: 2px; }
     .btn-pri {
       background: none; border: 1px solid var(--border);
-      color: var(--text2); font-size: 12px; cursor: pointer;
+      color: var(--text2); font-size: 0.75rem; cursor: pointer;
       width: 22px; height: 22px; border-radius: 4px; line-height: 1;
       transition: all 0.15s; font-family: inherit; padding: 0;
       display: inline-flex; align-items: center; justify-content: center;
@@ -767,7 +806,7 @@
     .pri-controls { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
     .btn-retry {
       background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3);
-      color: var(--red); font-size: 11px; font-weight: 600; cursor: pointer;
+      color: var(--red); font-size: 0.75rem; font-weight: 600; cursor: pointer;
       padding: 3px 10px; border-radius: 20px; font-family: inherit;
       transition: all 0.15s; white-space: nowrap;
       display: inline-flex; align-items: center; gap: 3px;
@@ -781,20 +820,20 @@
     /* [Claude_Opus_4.8] 审查复核放行按钮（紫色，区别于重试/重置） */
     .btn-bypass {
       display: inline-flex; align-items: center; gap: 3px;
-      font-size: 10px; font-weight: 600; font-family: inherit; white-space: nowrap;
+      font-size: 0.75rem; font-weight: 600; font-family: inherit; white-space: nowrap;
       padding: 3px 8px; border-radius: 4px; cursor: pointer; margin-right: 4px;
       border: 1px solid rgba(167,139,250,0.45);
-      color: #a78bfa; background: rgba(167,139,250,0.10);
+      color: var(--accent2); background: rgba(167,139,250,0.10);
       transition: all 0.2s;
     }
     .btn-bypass:hover { background: rgba(167,139,250,0.22); border-color: #a78bfa; }
     /* [Claude_Opus_4.8] 再次发布按钮（青绿色，区别于重试/绕过） */
     .btn-republish {
       display: inline-flex; align-items: center; gap: 3px;
-      font-size: 10px; font-weight: 600; font-family: inherit; white-space: nowrap;
+      font-size: 0.75rem; font-weight: 600; font-family: inherit; white-space: nowrap;
       padding: 3px 8px; border-radius: 4px; cursor: pointer; margin-right: 4px;
       border: 1px solid rgba(34,211,238,0.45);
-      color: #22d3ee; background: rgba(34,211,238,0.10);
+      color: var(--teal); background: rgba(34,211,238,0.10);
       transition: all 0.2s;
     }
     .btn-republish:hover { background: rgba(34,211,238,0.22); border-color: #22d3ee; }
@@ -811,22 +850,22 @@
       animation: dl-slide 1.3s ease-in-out infinite;
     }
     @keyframes dl-slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
-    .dl-meta { font-size: 10px; color: var(--text3); margin-top: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .dl-meta { font-size: 0.75rem; color: var(--text3); margin-top: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; }
     .btn-hard-reset {
       display: inline-flex; align-items: center; gap: 3px;
-      font-size: 10px; font-weight: 600; font-family: inherit;
+      font-size: 0.75rem; font-weight: 600; font-family: inherit;
       padding: 3px 8px; border-radius: 4px; cursor: pointer;
       border: 1px solid rgba(220,38,38,0.35);
-      color: #f87171; background: rgba(220,38,38,0.08);
+      color: var(--red); background: rgba(220,38,38,0.08);
       transition: all 0.2s;
     }
     .btn-hard-reset:hover { background: rgba(220,38,38,0.22); border-color: #dc2626; }
     .btn-stop {
       display: inline-flex; align-items: center; gap: 3px;
-      font-size: 10px; font-weight: 600; font-family: inherit;
+      font-size: 0.75rem; font-weight: 600; font-family: inherit;
       padding: 3px 8px; border-radius: 4px; cursor: pointer;
       border: 1px solid rgba(239, 68, 68, 0.45);
-      color: #ef4444; background: rgba(239, 68, 68, 0.08);
+      color: var(--red); background: rgba(239, 68, 68, 0.08);
       transition: all 0.2s;
     }
     .btn-stop:hover { background: rgba(239, 68, 68, 0.22); border-color: #dc2626; }
@@ -840,7 +879,7 @@
     }
     .error-detail {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 10.5px; color: var(--red);
+      font-size: 0.75rem; color: var(--red);
       background: rgba(248,113,113,0.08); border: 1px solid rgba(248,113,113,0.2);
       border-radius: 6px; padding: 10px 12px;
       white-space: pre-wrap; word-break: break-all;
@@ -851,7 +890,7 @@
     .btn-copy-err {
       position: absolute; top: 8px; right: 8px;
       background: rgba(248,113,113,0.15); border: 1px solid rgba(248,113,113,0.3);
-      color: var(--red); font-size: 10px; font-weight: 600;
+      color: var(--red); font-size: 0.75rem; font-weight: 600;
       padding: 2px 8px; border-radius: 4px; cursor: pointer;
       font-family: inherit; transition: all 0.2s;
     }
@@ -859,7 +898,7 @@
     .btn-copy-err.copied { color: var(--green); border-color: var(--green); background: rgba(52,211,153,0.12); }
 
     .toggle-error {
-      font-size: 10px; color: var(--red); cursor: pointer;
+      font-size: 0.75rem; color: var(--red); cursor: pointer;
       text-decoration: underline; text-underline-offset: 2px;
       opacity: 0.75; margin-left: 6px; white-space: nowrap;
     }
@@ -874,7 +913,7 @@
       border-radius: var(--radius-sm);
       background: rgba(251,191,36,0.07);
       border: 1px solid rgba(251,191,36,0.2);
-      font-size: 12px; color: var(--yellow);
+      font-size: 0.75rem; color: var(--yellow);
       display: flex; align-items: center; gap: 10px;
     }
 
@@ -882,7 +921,7 @@
     .btn-run {
       display: flex; align-items: center; gap: 6px;
       background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.3);
-      color: var(--green); font-size: 12px; font-weight: 600;
+      color: var(--green); font-size: 0.75rem; font-weight: 600;
       padding: 7px 16px; border-radius: 20px; cursor: pointer;
       font-family: inherit; transition: all 0.2s;
     }
@@ -893,7 +932,7 @@
     .btn-wechat {
       display: flex; align-items: center; gap: 6px;
       background: rgba(7,193,96,0.1); border: 1px solid rgba(7,193,96,0.35);
-      color: #07c160; font-size: 12px; font-weight: 600;
+      color: var(--green); font-size: 0.75rem; font-weight: 600;
       padding: 7px 16px; border-radius: 20px; cursor: pointer;
       font-family: inherit; transition: all 0.25s;
     }
@@ -908,7 +947,7 @@
       50%      { box-shadow: 0 0 0 6px rgba(248,113,113,0.25); }
     }
     .btn-wechat-row {
-      font-size: 10px; padding: 3px 10px; border-radius: 4px; display: inline-flex;
+      font-size: 0.75rem; padding: 3px 10px; border-radius: 4px; display: inline-flex;
     }
 
     /* ── Toast Queue (Gemini_2.0_Flash_fast) ── */
@@ -919,7 +958,7 @@
     }
     .toast-item {
       background: rgba(30,30,60,0.95); border: 1px solid var(--accent);
-      color: var(--text); font-size: 13px; font-weight: 500;
+      color: var(--text); font-size: 0.8125rem; font-weight: 500;
       padding: 11px 22px; border-radius: 10px;
       backdrop-filter: blur(20px);
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
@@ -947,7 +986,7 @@
 
     /* ── Footer ── */
     footer {
-      text-align: center; font-size: 11px; color: var(--text3);
+      text-align: center; font-size: 0.75rem; color: var(--text3);
       padding: 20px 0 10px;
     }
 
@@ -961,8 +1000,8 @@
     .stat-value.updated { color: var(--accent2); }
 
     /* ── [Claude_Sonnet_4.6_Thinking_planning] 观看数颜色分级 (ref: keyword_report.html) ── */
-    .vt-mega { color: #bc8cff; font-weight: 700; }
-    .vt-big  { color: #58a6ff; font-weight: 600; }
+    .vt-mega { color: var(--accent2); font-weight: 700; }
+    .vt-big  { color: var(--blue); font-weight: 600; }
     .vt-mid  { color: var(--text); }
     .vt-small{ color: var(--text3); }
     /* ── 点赞率颜色分级 ── */
@@ -1015,10 +1054,10 @@
     /* ── [Claude_Sonnet_4.6_Thinking_planning] Hotwords Tab Badges ── */
     .hw-badge {
       display: inline-flex; align-items: center;
-      font-size: 11px; font-weight: 600;
+      font-size: 0.75rem; font-weight: 600;
       padding: 3px 10px; border-radius: 20px;
     }
-    .hw-badge-cache  { background: rgba(100,116,139,.15); color: #94a3b8; border: 1px solid rgba(100,116,139,.3); }
+    .hw-badge-cache  { background: rgba(100,116,139,.15); color: var(--text2); border: 1px solid rgba(100,116,139,.3); }
     .hw-badge-live   { background: rgba(52,211,153,.15);  color: var(--green); border: 1px solid rgba(52,211,153,.3); }
     .hw-badge-static { background: rgba(124,110,247,.12); color: var(--accent2); border: 1px solid rgba(124,110,247,.25); }
     .hw-badge-error  { background: rgba(248,113,113,.12); color: var(--red); border: 1px solid rgba(248,113,113,.3); }
@@ -1035,7 +1074,7 @@
       align-items: center;
     }
     .add-video-url-input {
-      font-size: 13px;
+      font-size: 0.8125rem;
       padding: 10px 14px;
       flex: 1;
     }
@@ -1051,19 +1090,19 @@
       align-items: center;
     }
     .trim-input {
-      font-size: 12px;
+      font-size: 0.75rem;
       padding: 6px 10px;
       width: 100px;
       text-align: center;
       margin: 0;
     }
     .trim-hint {
-      font-size: 11px;
+      font-size: 0.75rem;
       color: var(--text3);
     }
     .btn-submit-video {
       padding: 8px 20px;
-      font-size: 13px;
+      font-size: 0.8125rem;
       white-space: nowrap;
       margin-left: auto;
     }
@@ -1090,7 +1129,7 @@
         width: 100%;
         justify-content: center;
         padding: 10px 12px;
-        font-size: 13px;
+        font-size: 0.8125rem;
         min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
       }
       .live-badge {
@@ -1113,7 +1152,7 @@
         padding: 16px 14px;
       }
       .stat-value {
-        font-size: 28px;
+        font-size: 1.75rem;
       }
       .card-failed {
         grid-column: span 2;
@@ -1128,7 +1167,7 @@
       .step-circle {
         width: 28px;
         height: 28px;
-        font-size: 12px;
+        font-size: 0.75rem;
       }
       .step-desc {
         display: none;
@@ -1136,7 +1175,7 @@
       .whisper-warn {
         margin: 0 16px 16px;
         padding: 10px 12px;
-        font-size: 11px;
+        font-size: 0.75rem;
       }
 
       .main-grid {
@@ -1180,7 +1219,7 @@
       }
       .btn-batch-del, .btn-clear-all {
         padding: 8px 14px !important;
-        font-size: 12px !important;
+        font-size: 0.75rem !important;
         min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
       }
       .btn-clear-all {
@@ -1264,7 +1303,7 @@
       }
       .btn-retry, .btn-hard-reset, .btn-wechat-row {
         padding: 8px 12px !important;
-        font-size: 11px !important;
+        font-size: 0.75rem !important;
         min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
         display: inline-flex;
         align-items: center;
@@ -1285,7 +1324,7 @@
       }
       .btn-score {
         padding: 6px 12px !important;
-        font-size: 11px !important;
+        font-size: 0.75rem !important;
         min-width: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
         min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
         border-radius: 6px !important;
@@ -1296,7 +1335,7 @@
         position: absolute;
         top: 14px;
         right: 14px;
-        font-size: 11px;
+        font-size: 0.75rem;
         color: var(--text3);
         padding: 0 !important;
       }
@@ -1325,11 +1364,11 @@
         padding: 12px 16px;
         flex-direction: row;
         justify-content: space-between;
-        font-size: 11px;
+        font-size: 0.75rem;
       }
       .btn-page {
         padding: 8px 14px !important;
-        font-size: 12px !important;
+        font-size: 0.75rem !important;
         min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
       }
 
@@ -1346,7 +1385,7 @@
       }
       .btn-delete {
         padding: 8px 14px !important;
-        font-size: 12px !important;
+        font-size: 0.75rem !important;
         min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
       }
       .add-channel-row {
@@ -1356,7 +1395,7 @@
       .btn-add {
         width: 100%;
         padding: 10px 16px !important;
-        font-size: 13px !important;
+        font-size: 0.8125rem !important;
         justify-content: center;
         display: inline-flex;
         align-items: center;
@@ -1389,7 +1428,7 @@
         margin-left: 0;
         width: 100%;
         padding: 10px 20px;
-        font-size: 14px;
+        font-size: 0.875rem;
         min-height: 44px; /* [Gemini_2.0_Flash_fast] 触控区域优化到 44px */
       }
     }
@@ -1400,7 +1439,7 @@
       border: 1px solid var(--border);
       border-radius: 6px;
       color: var(--text2);
-      font-size: 11px;
+      font-size: 0.75rem;
       font-family: inherit;
       padding: 4px 10px;
       cursor: pointer;
@@ -1431,6 +1470,154 @@
       border-radius: 3px;
       overflow: hidden;
     }
+
+    /* ── 显示偏好：语义色保持状态含义；字号独立于视口宽度 ── */
+    :root {
+      color-scheme: dark;
+      font-size: 112.5%;
+      --bg: #0c1020;
+      --bg2: #151c2e;
+      --glass: #151c2e;
+      --glass-b: #202a40;
+      --border: #46536d;
+      --accent: #b1a5ff;
+      --accent2: #c4b5fd;
+      --text: #f1f5f9;
+      --text2: #c2cde0;
+      --text3: #aab8ce;
+      --gray: #aab8ce;
+      --blue: #93c5fd;
+      --orange: #fdba74;
+      --text1: var(--text);
+      --bg3: var(--glass-b);
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f3f5fa;
+      --bg2: #ffffff;
+      --glass: #ffffff;
+      --glass-b: #e8edf5;
+      --border: #b8c3d3;
+      --accent: #5140b0;
+      --accent2: #6043a7;
+      --text: #182339;
+      --text2: #394962;
+      --text3: #4a5b73;
+      --gray: #4a5b73;
+      --teal: #006b62;
+      --yellow: #785000;
+      --orange: #963b06;
+      --red: #b42336;
+      --green: #006b48;
+      --blue: #2359a1;
+    }
+    :root[data-theme="contrast"] {
+      color-scheme: dark;
+      --bg: #000000;
+      --bg2: #080808;
+      --glass: #080808;
+      --glass-b: #202020;
+      --border: #a3a3a3;
+      --accent: #d8caff;
+      --accent2: #e6daff;
+      --text: #ffffff;
+      --text2: #eeeeee;
+      --text3: #dddddd;
+      --gray: #dddddd;
+      --teal: #7fffea;
+      --yellow: #ffe270;
+      --orange: #ffc48c;
+      --red: #ffaaaa;
+      --green: #85ffc8;
+      --blue: #b3d8ff;
+    }
+    :root[data-text-size="standard"] { font-size: 100%; }
+    :root[data-text-size="large"] { font-size: 112.5%; }
+    :root[data-text-size="xlarge"] { font-size: 125%; }
+    body { background-image: none; line-height: 1.55; }
+    /* 主题切换同步前景与背景，避免颜色渐变途中短暂不可读。 */
+    body * { transition-property: transform, box-shadow !important; }
+    button, input, select, textarea { font-family: inherit; }
+    input::placeholder, textarea::placeholder { color: var(--text3); opacity: 1; }
+    select option { color: var(--text); background: var(--bg2); }
+    :root :where(button, a, input, select, textarea, summary):focus-visible {
+      outline: 3px solid var(--accent); outline-offset: 3px;
+    }
+    header { flex-wrap: wrap; gap: 16px; margin-bottom: 14px; }
+    .header-right { flex-wrap: wrap; gap: 10px; }
+    .display-preferences {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px;
+      padding: 12px 18px; margin-bottom: 24px;
+      border: 1px solid var(--border); border-radius: var(--radius);
+      background: var(--bg2); font-size: .8125rem;
+    }
+    .display-preferences label { display: flex; align-items: center; gap: 8px; }
+    .display-preferences select {
+      font: inherit; color: var(--text); background: var(--bg2);
+      border: 1px solid var(--border); border-radius: 8px;
+      padding: 6px 10px; min-height: 40px; max-width: 100%;
+    }
+    .display-heading { font-weight: 700; }
+    #display-feedback { color: var(--text2); font-size: .75rem; margin-left: auto; }
+    .main-grid { grid-template-columns: minmax(0, 1fr) 340px; }
+    .main-grid > *, .logo > div { min-width: 0; }
+    .panel-header, .backfill-controls, .pagination { flex-wrap: wrap; gap: 10px; }
+    .tabs-header { overflow-x: auto; background: var(--bg2); }
+    .tab-btn { flex-shrink: 0; }
+    .video-title, .video-zh-title, .video-title-link {
+      font-size: .875rem; white-space: normal; overflow-wrap: anywhere; word-break: normal;
+    }
+    .channel-name, .channel-id { overflow-wrap: anywhere; }
+    .video-score { width: auto; min-width: 2ch; }
+    .pipeline-steps { overflow-x: auto; align-items: flex-start; }
+    .panel-body { overflow-x: auto; }
+    .add-channel-input { min-width: 0; }
+    .channel-actions { flex-shrink: 0; }
+    .backfill-platform, .backfill-footer, .pagination, .add-channel-form { background: var(--bg2); }
+    #hotwords-panel th { background: var(--glass-b) !important; }
+    #batch-normal-view { flex-wrap: wrap; }
+    #batch-normal-view .btn-batch-del { color: var(--bg) !important; }
+    .step { flex-shrink: 0; }
+    .step-desc { max-width: 140px; }
+    .activity-table:not(.in-edit-mode) td.cb-cell { display: none; }
+    .cover-placeholder { color: var(--text3); border-color: var(--border); }
+    .platform-matrix-bar { flex-wrap: wrap; }
+    .platform-badge.st-none { border-color: var(--border); }
+    .plat-modal-content { max-height: 88vh; overflow: auto; }
+    #btn-confirm-delete, #btn-confirm-bypass { color: var(--bg) !important; }
+    :root[data-theme="contrast"] .logo-icon,
+    :root[data-theme="contrast"] .step-circle { animation: none; }
+    @media (max-width: 1440px) {
+      .main-grid { grid-template-columns: minmax(0, 1fr); }
+    }
+    @media (max-width: 1200px) {
+      .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      header { align-items: flex-start; }
+    }
+    @media (max-width: 768px) {
+      .app { padding: 12px; }
+      .header-right { display: flex; }
+      .header-right > * { max-width: 100%; }
+      #ai-audit-mini { white-space: normal !important; }
+      .display-preferences { align-items: stretch; gap: 10px; padding: 12px; }
+      .display-heading, #display-feedback { flex-basis: 100%; margin-left: 0; }
+      .display-preferences label { flex: 1 1 140px; flex-wrap: wrap; }
+      .display-preferences select { width: 100%; min-height: 44px; }
+      .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .card-failed { grid-column: auto; }
+      .activity-table tr { grid-template-columns: auto minmax(0, 1fr); }
+      .activity-table.in-edit-mode tr { grid-template-columns: auto auto minmax(0, 1fr); }
+      .activity-table td.info-cell { padding-right: 0 !important; }
+      .activity-table td.time-cell { position: static; grid-column: 1 / -1; }
+      .meta-chip, .badge, .platform-badge { white-space: normal; overflow-wrap: anywhere; }
+      .backfill-controls { display: flex; }
+      .backfill-input { max-width: 120px; }
+      .pagination { align-items: flex-start; }
+      .step { min-width: 90px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
   </style>
 </head>
 <body>
@@ -1446,7 +1633,7 @@
       </div>
     </div>
     <div class="header-right">
-      <a id="ai-audit-mini" href="/api/ai-audit/summary" target="_blank" title="打开 AI 处理审计数据" style="font-size:11px;color:var(--text2);text-decoration:none;padding:5px 9px;border:1px solid var(--border);border-radius:8px;white-space:nowrap;">🤖 AI 审计加载中…</a>
+      <a id="ai-audit-mini" href="/api/ai-audit/summary" target="_blank" title="打开 AI 处理审计数据" style="font-size:0.75rem;color:var(--text2);text-decoration:none;padding:5px 9px;border:1px solid var(--border);border-radius:8px;white-space:nowrap;">🤖 AI 审计加载中…</a>
       <button id="btn-wechat-login" class="btn-wechat" onclick="wechatLogin()" title="微信 Session 过期时点击，弹出浏览器扫码">
         📱 微信登录
       </button>
@@ -1457,6 +1644,26 @@
       <div id="last-update">--:--:--</div>
     </div>
   </header>
+
+  <section class="display-preferences" aria-label="显示设置">
+    <span class="display-heading">显示设置</span>
+    <label for="display-theme">外观
+      <select id="display-theme">
+        <option value="system">跟随系统</option>
+        <option value="light">浅色 · 清晰</option>
+        <option value="dark">深色 · 柔和</option>
+        <option value="contrast">高对比度</option>
+      </select>
+    </label>
+    <label for="display-size">字号
+      <select id="display-size">
+        <option value="standard">标准</option>
+        <option value="large" selected>较大 · 推荐笔记本</option>
+        <option value="xlarge">特大</option>
+      </select>
+    </label>
+    <span id="display-feedback" role="status" aria-live="polite">设置保存在此浏览器</span>
+  </section>
 
   <!-- Stats Cards -->
   <div class="stats-grid">
@@ -1496,7 +1703,7 @@
   <div class="panel pipeline-panel">
     <div class="panel-header">
       <div class="panel-title">🔄 管线流转进度</div>
-      <div id="pipeline-active-hint" style="font-size:12px;color:var(--text3);">等待任务中…</div>
+      <div id="pipeline-active-hint" style="font-size:0.75rem;color:var(--text3);">等待任务中…</div>
     </div>
     <div class="pipeline-steps" id="pipeline-steps">
       <div class="step" data-s="PENDING" onclick="switchTab('queue')" style="cursor: pointer;" title="点击切换到待处理队列">
@@ -1540,7 +1747,7 @@
     <div class="panel-header">
       <div class="panel-title">📦 平台补录批次 <span class="panel-badge" id="backfill-total">0</span></div>
       <div class="backfill-controls">
-        <span style="font-size:11px;color:var(--text3);">WST 起始</span>
+        <span style="font-size:0.75rem;color:var(--text3);">WST 起始</span>
         <input id="backfill-since" class="backfill-input" maxlength="8" value="20260713" />
         <button id="btn-backfill-refresh" class="btn-add" style="padding:7px 12px;" onclick="loadBackfillPreview(true)">刷新预览</button>
       </div>
@@ -1561,7 +1768,7 @@
     <div class="panel">
       <div class="panel-header" style="border-bottom:none; padding-bottom:0;">
         <div class="panel-title">⚡ 任务数据中心 <span class="panel-badge" id="activity-count">0</span></div>
-        <div id="new-data-hint" style="font-size:11px;color:var(--accent);cursor:pointer;display:none;" onclick="loadVideos(1)">✨ 有新动态，点击刷新</div>
+        <div id="new-data-hint" style="font-size:0.75rem;color:var(--accent);cursor:pointer;display:none;" onclick="loadVideos(1)">✨ 有新动态，点击刷新</div>
       </div>
 
       <!-- Tabs -->
@@ -1622,24 +1829,24 @@
 
       <!-- 近期高互动专属工具栏：浏览标记由服务端持久化，但不改变投稿状态。 -->
       <div id="high-likes-bar">
-        <span style="color:#34d399; font-weight:600;">✨ 近期高互动</span>
-        <span style="color:var(--text3); font-size:11px;">近上传日期窗口、观看数大于 500；浏览标记默认隐藏</span>
+        <span style="color:var(--green); font-weight:600;">✨ 近期高互动</span>
+        <span style="color:var(--text3); font-size:0.75rem;">近上传日期窗口、观看数大于 500；浏览标记默认隐藏</span>
         <label style="margin-left:auto;">
           <input type="checkbox" id="cb-show-processed" onchange="toggleShowProcessed(this.checked)" />
           显示已处理
         </label>
-        <span id="processed-count-badge" style="font-size:11px; color:var(--text3);"></span>
+        <span id="processed-count-badge" style="font-size:0.75rem; color:var(--text3);"></span>
         <!-- [Claude_Sonnet_4.6_Thinking_planning] v3.4.0: 手动刷新按钮 -->
         <button id="btn-refresh-high-likes" onclick="refreshHighLikes()"
           style="display:flex;align-items:center;gap:5px;
                  background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.3);
-                 color:var(--green);font-size:11px;font-weight:600;
+                 color:var(--green);font-size:0.75rem;font-weight:600;
                  padding:5px 12px;border-radius:16px;cursor:pointer;
                  font-family:inherit;transition:all 0.2s;white-space:nowrap;"
           title="立即搜索最新高赞视频（yt-dlp 约需 1~3 分钟）">
           🔄 立即刷新
         </button>
-        <span id="high-likes-refresh-status" style="font-size:10px;color:var(--text3);"></span>
+        <span id="high-likes-refresh-status" style="font-size:0.75rem;color:var(--text3);"></span>
       </div>
 
       <div class="panel-body">
@@ -1678,9 +1885,9 @@
         <div id="hw-status-bar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
           <div style="display:flex;align-items:center;gap:10px;">
             <span id="hw-source-badge" class="hw-badge hw-badge-cache">⏳ 加载中</span>
-            <span id="hw-updated-at" style="font-size:11px;color:var(--text3);"></span>
+            <span id="hw-updated-at" style="font-size:0.75rem;color:var(--text3);"></span>
           </div>
-          <button onclick="refreshHotwords()" id="hw-refresh-btn" class="btn-run" style="padding:5px 14px;font-size:12px;">
+          <button onclick="refreshHotwords()" id="hw-refresh-btn" class="btn-run" style="padding:5px 14px;font-size:0.75rem;">
             🔄 立即刷新 HN 热榜
           </button>
         </div>
@@ -1691,9 +1898,9 @@
           <table style="width:100%;border-collapse:collapse;white-space:nowrap;">
             <thead>
               <tr>
-                <th style="background:rgba(0,0,0,0.3);color:var(--text3);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);">类型</th>
-                <th style="background:rgba(0,0,0,0.3);color:var(--text3);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);">搜索词</th>
-                <th style="background:rgba(0,0,0,0.3);color:var(--text3);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);">YouTube 搜索</th>
+                <th style="background:rgba(0,0,0,0.3);color:var(--text3);font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);">类型</th>
+                <th style="background:rgba(0,0,0,0.3);color:var(--text3);font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);">搜索词</th>
+                <th style="background:rgba(0,0,0,0.3);color:var(--text3);font-size:0.75rem;font-weight:600;text-transform:uppercase;letter-spacing:.5px;padding:9px 14px;text-align:left;border-bottom:1px solid var(--border);">YouTube 搜索</th>
               </tr>
             </thead>
             <tbody id="hw-table-body">
@@ -1701,7 +1908,7 @@
             </tbody>
           </table>
         </div>
-        <p style="font-size:11px;color:var(--text3);margin-top:12px;">⚠ 只读展示，未影响任何生产数据。点击 YouTube 链接将在新标签页打开搜索结果。</p>
+        <p style="font-size:0.75rem;color:var(--text3);margin-top:12px;">⚠ 只读展示，未影响任何生产数据。点击 YouTube 链接将在新标签页打开搜索结果。</p>
       </div>
     </div>
 
@@ -1732,7 +1939,7 @@
   <div class="panel" style="margin-bottom:20px;">
     <div class="panel-header">
       <div class="panel-title">🎬 手动添加视频到队列</div>
-      <div style="font-size:11px;color:var(--text3);">粘贴 YouTube 链接 → yt-dlp 验证 → 自动入队 PENDING</div>
+      <div style="font-size:0.75rem;color:var(--text3);">粘贴 YouTube 链接 → yt-dlp 验证 → 自动入队 PENDING</div>
     </div>
     <div class="panel-body" style="padding:20px 22px;">
       <!-- 输入行 -->
@@ -1742,7 +1949,7 @@
             type="text"
             placeholder="例：https://www.youtube.com/watch?v=dQw4w9WgXcQ 或 https://youtu.be/dQw4w9WgXcQ" />
           <!-- Clipboard smart paste (Gemini_2.0_Flash_fast) -->
-          <div id="clipboard-smart-paste-prompt" style="display:none; margin-top:8px; font-size:12px; color:var(--accent2); background:rgba(0,180,216,0.1); border:1px dashed var(--accent2); padding:10px 14px; border-radius:8px; align-items:center; justify-content:space-between; cursor:pointer;">
+          <div id="clipboard-smart-paste-prompt" style="display:none; margin-top:8px; font-size:0.75rem; color:var(--accent2); background:rgba(0,180,216,0.1); border:1px dashed var(--accent2); padding:10px 14px; border-radius:8px; align-items:center; justify-content:space-between; cursor:pointer;">
             <span id="clipboard-detected-text">📋 检测到剪贴板有 YouTube 链接：</span>
             <span style="font-weight:bold; text-decoration:underline;">[一键填入]</span>
           </div>
@@ -1751,20 +1958,20 @@
         <!-- Toggle switch for trim panel (Gemini_3.5_Flash_planning) -->
         <div class="trim-toggle-row" onclick="toggleTrimPanelCheckbox()" style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none; margin-top: 4px; width: fit-content;">
           <input type="checkbox" id="enable-trim-checkbox" style="cursor: pointer; width:16px; height:16px; accent-color:var(--accent2);" onclick="event.stopPropagation(); toggleTrimPanel();" />
-          <span style="font-size: 13px; color: var(--text2); font-weight: 500; display: flex; align-items: center; gap: 4px;">✂️ 启用片段截取 (Enable Segment Clip)</span>
+          <span style="font-size: 0.8125rem; color: var(--text2); font-weight: 500; display: flex; align-items: center; gap: 4px;">✂️ 启用片段截取 (Enable Segment Clip)</span>
         </div>
 
         <div id="video-trim-container" style="display: none; margin-top: 10px; border-left: 2px solid var(--border); padding-left: 14px; flex-direction: column; gap: 10px;">
           <div class="add-video-trim-row" style="margin-top: 0;">
             <div class="trim-input-group">
-              <span style="font-size:12px; color:var(--text2); white-space:nowrap;">开始时间 (Start):</span>
+              <span style="font-size:0.75rem; color:var(--text2); white-space:nowrap;">开始时间 (Start):</span>
               <input id="video-trim-start" class="add-channel-input trim-input"
                 type="text"
                 placeholder="00:00:38"
                 oninput="validateTrimInputs()" />
             </div>
             <div class="trim-input-group">
-              <span style="font-size:12px; color:var(--text2); white-space:nowrap;">结束时间 (End):</span>
+              <span style="font-size:0.75rem; color:var(--text2); white-space:nowrap;">结束时间 (End):</span>
               <input id="video-trim-end" class="add-channel-input trim-input"
                 type="text"
                 placeholder="00:14:43"
@@ -1780,17 +1987,17 @@
               <button type="button" class="preset-chip" onclick="setTrimPreset(0, 180)">前3m</button>
               <button type="button" class="preset-chip reset" onclick="clearTrimInputs()">重置</button>
             </div>
-            <div id="trim-validation-output" style="font-size: 11px; color: var(--accent2); font-weight: 500;"></div>
+            <div id="trim-validation-output" style="font-size: 0.75rem; color: var(--accent2); font-weight: 500;"></div>
           </div>
         </div>
 
-        <label style="display:flex; align-items:center; gap:10px; margin-top:6px; font-size:13px; color:var(--text2);">
+        <label style="display:flex; align-items:center; gap:10px; margin-top:6px; font-size:0.8125rem; color:var(--text2);">
           <span>内容类型</span>
           <select id="video-content-type" class="add-channel-input" style="width:190px; padding:8px 10px;">
             <option value="GENERAL">通用视频</option>
             <option value="ENGLISH_WORLD_SHORT">英语世界短视频</option>
           </select>
-          <span style="font-size:11px; color:var(--text3);">独立于平台分类，用于生产归档与检索</span>
+          <span style="font-size:0.75rem; color:var(--text3);">独立于平台分类，用于生产归档与检索</span>
         </label>
 
         <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
@@ -1798,7 +2005,7 @@
             onclick="addVideo()">验证并加入队列</button>
         </div>
       </div>
-      <div id="add-video-feedback" class="add-channel-feedback" style="margin-top:10px; font-size:12px;"></div>
+      <div id="add-video-feedback" class="add-channel-feedback" style="margin-top:10px; font-size:0.75rem;"></div>
     </div>
   </div>
 
@@ -1808,21 +2015,21 @@
   <!-- Delete Modal -->
   <div id="delete-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
     <div style="background:var(--bg2); padding:24px; border-radius:12px; width:calc(100% - 32px); max-width:400px; box-sizing:border-box; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5);">
-      <h3 style="margin-top:0; color:var(--text1); font-size:16px;">⚠️ 确认删除任务</h3>
-      <p style="color:var(--text2); font-size:13px; line-height:1.5; margin-bottom:16px;">
+      <h3 style="margin-top:0; color:var(--text1); font-size:1rem;">⚠️ 确认删除任务</h3>
+      <p style="color:var(--text2); font-size:0.8125rem; line-height:1.5; margin-bottom:16px;">
         您正在删除该任务记录。默认情况下只会从数据库中清除记录。
       </p>
-      <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text1); margin-bottom:16px; cursor:pointer; background:rgba(255,255,255,0.05); padding:10px; border-radius:8px;">
+      <label style="display:flex; align-items:center; gap:8px; font-size:0.8125rem; color:var(--text1); margin-bottom:16px; cursor:pointer; background:rgba(255,255,255,0.05); padding:10px; border-radius:8px;">
         <input type="checkbox" id="delete-files-checkbox" style="width:16px; height:16px; cursor:pointer;">
         同时删除相关的物理产物文件（视频、文案等）以释放空间
       </label>
 
       <!-- 安全锁校验 (Gemini_2.0_Flash_fast) -->
       <div id="delete-safety-lock-container" style="margin-bottom: 20px;">
-        <label for="delete-confirm-code-input" style="display:block; font-size:13px; color:var(--text2); margin-bottom:8px;">
-          安全校验：请输入验证码 <strong id="delete-safety-code" style="color:var(--red); font-size:15px; letter-spacing:2px;"></strong>
+        <label for="delete-confirm-code-input" style="display:block; font-size:0.8125rem; color:var(--text2); margin-bottom:8px;">
+          安全校验：请输入验证码 <strong id="delete-safety-code" style="color:var(--red); font-size:0.9375rem; letter-spacing:2px;"></strong>
         </label>
-        <input type="text" id="delete-confirm-code-input" placeholder="输入4位验证码" maxlength="4" style="width:100%; box-sizing:border-box; padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--bg3); color:var(--text1); text-align:center; font-size:16px; font-weight:bold; letter-spacing:4px;">
+        <input type="text" id="delete-confirm-code-input" placeholder="输入4位验证码" maxlength="4" style="width:100%; box-sizing:border-box; padding:10px; border-radius:8px; border:1px solid var(--border); background:var(--bg3); color:var(--text1); text-align:center; font-size:1rem; font-weight:bold; letter-spacing:4px;">
       </div>
 
       <div style="display:flex; justify-content:flex-end; gap:10px;">
@@ -1835,25 +2042,25 @@
   <!-- [Claude_Opus_4.8] Censorship Bypass Review Modal -->
   <div id="bypass-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
     <div style="background:var(--bg2); padding:22px; border-radius:12px; width:calc(100% - 32px); max-width:560px; max-height:86vh; overflow-y:auto; box-sizing:border-box; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5);">
-      <h3 style="margin-top:0; color:var(--text1); font-size:16px;">🔓 复核放行 — 绕过内容审查</h3>
-      <p style="color:var(--text3); font-size:12px; line-height:1.5; margin:-4px 0 14px;">
+      <h3 style="margin-top:0; color:var(--text1); font-size:1rem;">🔓 复核放行 — 绕过内容审查</h3>
+      <p style="color:var(--text3); font-size:0.75rem; line-height:1.5; margin:-4px 0 14px;">
         审查命中的内容默认拒绝处理。请先核对下方命中词与字幕关键词；P0 放行必须完成下方两项确认，确认后才恢复既有处理管线。
       </p>
 
       <!-- 层级警示横幅 -->
-      <div id="bypass-banner" style="border-radius:8px; padding:10px 12px; margin-bottom:14px; font-size:13px; line-height:1.5;"></div>
+      <div id="bypass-banner" style="border-radius:8px; padding:10px 12px; margin-bottom:14px; font-size:0.8125rem; line-height:1.5;"></div>
 
       <!-- 命中词 -->
-      <div style="font-size:12px; color:var(--text3); margin-bottom:6px;">⛔ 触发审查的命中词</div>
+      <div style="font-size:0.75rem; color:var(--text3); margin-bottom:6px;">⛔ 触发审查的命中词</div>
       <div id="bypass-matched" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px;"></div>
 
       <!-- 关键词标签云 -->
-      <div style="font-size:12px; color:var(--text3); margin-bottom:6px;">
+      <div style="font-size:0.75rem; color:var(--text3); margin-bottom:6px;">
         ☁️ 内容关键词标签云 <span id="bypass-cloud-src" style="color:var(--text3);"></span>
       </div>
       <div id="bypass-cloud" style="display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; padding:14px; background:var(--bg3); border-radius:8px; margin-bottom:16px; min-height:52px; line-height:1.3;"></div>
 
-      <div id="bypass-p0-confirm" style="display:none; flex-direction:column; align-items:flex-start; gap:9px; font-size:13px; color:var(--red); margin-bottom:16px; background:rgba(248,113,113,0.08); padding:10px; border-radius:8px;">
+      <div id="bypass-p0-confirm" style="display:none; flex-direction:column; align-items:flex-start; gap:9px; font-size:0.8125rem; color:var(--red); margin-bottom:16px; background:rgba(248,113,113,0.08); padding:10px; border-radius:8px;">
         <strong>P0 政治安全违禁：必须完成双重人工确认</strong>
         <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; color:var(--text2);">
           <input type="checkbox" id="bypass-p0-review-checkbox" style="width:16px; height:16px; margin-top:2px; cursor:pointer; flex-shrink:0;">
@@ -1875,29 +2082,29 @@
   <!-- WeChat Login Modal (Gemini_2.0_Flash_fast) -->
   <div id="wechat-login-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
     <div style="background:var(--bg2); padding:24px; border-radius:12px; width:calc(100% - 32px); max-width:400px; box-sizing:border-box; border:1px solid var(--border); box-shadow:0 10px 25px rgba(0,0,0,0.5); text-align:center;">
-      <h3 style="margin-top:0; color:var(--text1); font-size:16px; display:flex; align-items:center; justify-content:center; gap:8px;">
+      <h3 style="margin-top:0; color:var(--text1); font-size:1rem; display:flex; align-items:center; justify-content:center; gap:8px;">
         <span>📱 微信视频号登录</span>
       </h3>
-      <p style="color:var(--text2); font-size:12px; line-height:1.5; margin-bottom:16px;">
+      <p style="color:var(--text2); font-size:0.75rem; line-height:1.5; margin-bottom:16px;">
         请在手机端微信扫码授权登录。你可以长按保存二维码。
       </p>
 
       <!-- 二维码显示区 -->
       <div id="wechat-qr-container" style="background:#fff; padding:12px; border-radius:8px; display:inline-block; margin-bottom:16px; position:relative; min-width:200px; min-height:200px;">
-        <div id="wechat-qr-loading" style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:#333; font-size:14px; background:rgba(255,255,255,0.9); border-radius:8px;">
+        <div id="wechat-qr-loading" style="position:absolute; top:0; left:0; width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:#333; font-size:0.875rem; background:rgba(255,255,255,0.9); border-radius:8px;">
           <span>⏳ 正在获取登录二维码...</span>
         </div>
         <img id="wechat-qr-image" style="width:200px; height:200px; display:none; border-radius:4px;" src="" alt="微信登录二维码">
       </div>
 
       <div style="margin-bottom:20px; display:flex; flex-direction:column; gap:8px;">
-        <a id="btn-save-qr" href="" download="wechat_login_qr.png" style="display:none; padding:10px; border-radius:8px; background:var(--bg3); border:1px solid var(--border); color:var(--text1); text-decoration:none; font-size:13px; font-weight:600; cursor:pointer; align-items:center; justify-content:center; gap:6px;" onclick="navigator.vibrate(15)">
+        <a id="btn-save-qr" href="" download="wechat_login_qr.png" style="display:none; padding:10px; border-radius:8px; background:var(--bg3); border:1px solid var(--border); color:var(--text1); text-decoration:none; font-size:0.8125rem; font-weight:600; cursor:pointer; align-items:center; justify-content:center; gap:6px;" onclick="navigator.vibrate(15)">
           📥 保存二维码到相册
         </a>
-        <a href="weixin://" style="padding:10px; border-radius:8px; background:#07c160; border:none; color:#fff; text-decoration:none; font-size:13px; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px;" onclick="navigator.vibrate(15)">
+        <a href="weixin://" style="padding:10px; border-radius:8px; background:#07c160; border:none; color:#fff; text-decoration:none; font-size:0.8125rem; font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:6px;" onclick="navigator.vibrate(15)">
           🟢 打开微信 (Deep Link)
         </a>
-        <div style="font-size:11px; color:var(--text3); margin-top:4px;">
+        <div style="font-size:0.75rem; color:var(--text3); margin-top:4px;">
           保存二维码后，点击跳转微信可在相册中进行识别。
         </div>
       </div>
@@ -2480,15 +2687,15 @@
             ? (v.like_count / v.view_count * 100).toFixed(2) + '%'
             : '未知';
           scoreControls = `<div style="text-align:center; line-height:1.4;">
-            <span style="font-size:11px; color:var(--text3);">点赞率</span><br>
-            <span style="font-size:14px; font-weight:600; color:#34d399;">${likeRatePct}</span>
-            <div style="font-size:9px; color:var(--text3); margin-top:2px;">👁 仅浏览</div>
+            <span style="font-size:0.75rem; color:var(--text3);">点赞率</span><br>
+            <span style="font-size:0.875rem; font-weight:600; color:var(--green);">${likeRatePct}</span>
+            <div style="font-size:0.75rem; color:var(--text3); margin-top:2px;">👁 仅浏览</div>
           </div>`;
         } else if (currentTab === 'high_likes') {
           // 近期高互动是浏览面：显示既有评分，但绝不在此改变生产优先级。
           scoreControls = `<span class="video-score">${score || '未评分'}</span>${score ? ' 分' : ''}`;
         } else if (!isTerminal || isRetryable) {
-          const thresholdWarn = isPending && score < 75 ? `<div style="font-size:9px;color:var(--orange);margin-top:2px;">⚠️ 低于75分暂停</div>` : '';
+          const thresholdWarn = isPending && score < 75 ? `<div style="font-size:0.75rem;color:var(--orange);margin-top:2px;">⚠️ 低于75分暂停</div>` : '';
           scoreControls = `
             <div>
               <span class="video-score" id="score-${v.youtube_id}">${score}</span> 分
@@ -2510,7 +2717,7 @@
           ? `<button class="btn-mark-undone" onclick="markProcessed('${v.youtube_id}', false)" title="撤销已处理标记">↩ 撤销</button>`
           : `<button class="btn-mark-done" onclick="markProcessed('${v.youtube_id}', true)" title="标记为已处理">✓ 已处理</button>`;
         const ytLinkBtn = `<a href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
-             class="btn-score" style="text-decoration:none; padding:3px 8px; font-size:10px;" title="在 YouTube 中查看">▶ 查看</a>`;
+             class="btn-score" style="text-decoration:none; padding:3px 8px; font-size:0.75rem;" title="在 YouTube 中查看">▶ 查看</a>`;
         // [Claude_Opus_4.8] 高赞发现专属：一键转 MANUAL 并立即下载/发布
         const promoteBtn = `<button class="btn-retry btn-reset" onclick="promoteVideo('${v.youtube_id}')" title="转为手动加急任务并立即下载、生成字幕/封面并发布到视频号">📥 加入队列</button>`;
         // [Claude_Opus_4.8] 审查类失败：提供「🔓 复核放行」一键绕过（带警示弹窗 + 关键词标签云）
@@ -2551,7 +2758,7 @@
           <tr id="err-${v.youtube_id}" class="error-row" style="display:none" data-err="${escapeAttr(errMsg)}">
             <td colspan="8">
               <div class="error-detail">
-                <button class="btn-copy-err" onclick="copyError('${v.youtube_id}')" id="copy-${v.youtube_id}" style="min-height: 32px; padding: 4px 10px; font-size: 11px;">📋 复制日志 (Copy Logs)</button>
+                <button class="btn-copy-err" onclick="copyError('${v.youtube_id}')" id="copy-${v.youtube_id}" style="min-height: 32px; padding: 4px 10px; font-size: 0.75rem;">📋 复制日志 (Copy Logs)</button>
                 ${escapeHtml(errMsg)}
               </div>
             </td>
@@ -2559,7 +2766,7 @@
 
         // 双标题与来源
         const treeToggle = v.slices_count > 0
-          ? `<button class="btn-pri" style="margin-right: 6px; border:none; background:none; font-size:12px; cursor:pointer;" onclick="toggleSlices(event, '${v.youtube_id}')" id="btn-toggle-${v.youtube_id}">▶</button>`
+          ? `<button class="btn-pri" style="margin-right: 6px; border:none; background:none; font-size:0.75rem; cursor:pointer;" onclick="toggleSlices(event, '${v.youtube_id}')" id="btn-toggle-${v.youtube_id}">▶</button>`
           : '';
         const displayTitle = v.display_title || v.published_title || v.zh_title || v.title || '—';
         const zhTitleHtml = `<div class="video-zh-title" style="display:flex; align-items:center;">${treeToggle}${escapeHtml(displayTitle)}</div>`;
@@ -2649,7 +2856,7 @@
 
           trimTimelineHtml = `
             <div class="trim-timeline-wrapper" style="margin-top: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-              <span style="font-size:11px; color:var(--accent2); font-weight:500; display:flex; align-items:center; gap:3px; white-space:nowrap;">
+              <span style="font-size:0.75rem; color:var(--accent2); font-weight:500; display:flex; align-items:center; gap:3px; white-space:nowrap;">
                 ✂️ 裁剪区间: ${formatTrimTime(v.trim_start || '0')} - ${formatTrimTime(v.trim_end || 'End')}
               </span>
               <div style="flex:1; min-width: 100px; max-width: 180px;">
@@ -2657,7 +2864,7 @@
                   <div style="position:absolute; left:${startPercent}%; width:${widthPercent}%; height:100%; background:linear-gradient(90deg, var(--accent2), #52b788); border-radius:2px;"></div>
                 </div>
               </div>
-              <span style="font-size:10px; color:var(--text3); white-space:nowrap;">
+              <span style="font-size:0.75rem; color:var(--text3); white-space:nowrap;">
                 (截取 ${trimmedDurationText || '—'} / 共 ${fmtDuration(totalSec) || '—'})
               </span>
             </div>
@@ -2683,14 +2890,14 @@
           const totalCount = v.slices_count;
           const isAllCompleted = completedCount === totalCount;
           const badgeBg = isAllCompleted ? 'rgba(52,211,153,0.15)' : 'rgba(124,110,247,0.15)';
-          const badgeColor = isAllCompleted ? '#6ee7b7' : 'var(--accent2)';
-          sliceBadge = `<span class="panel-badge" style="margin-left: 8px; font-size:9px; padding:1px 5px; background:${badgeBg}; color:${badgeColor}; font-weight:500;">已完成 ${completedCount}/${totalCount} 集</span>`;
+          const badgeColor = isAllCompleted ? 'var(--green)' : 'var(--accent2)';
+          sliceBadge = `<span class="panel-badge" style="margin-left: 8px; font-size:0.75rem; padding:1px 5px; background:${badgeBg}; color:${badgeColor}; font-weight:500;">已完成 ${completedCount}/${totalCount} 集</span>`;
         }
 
         // [Gemini_3.5_Flash_planning] 类别展示
-        const categoryBadge = v.category ? `<span class="meta-chip category-badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.2); font-weight: 500;">📂 ${v.category}</span>` : '';
+        const categoryBadge = v.category ? `<span class="meta-chip category-badge" style="background: rgba(16, 185, 129, 0.1); color: var(--green); border: 1px solid rgba(16, 185, 129, 0.2); font-weight: 500;">📂 ${v.category}</span>` : '';
         const contentTypeBadge = v.content_type === 'ENGLISH_WORLD_SHORT'
-          ? `<span class="meta-chip" style="background: rgba(245, 158, 11, 0.12); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.24); font-weight: 500;">🌍 英语世界短视频</span>`
+          ? `<span class="meta-chip" style="background: rgba(245, 158, 11, 0.12); color: var(--yellow); border: 1px solid rgba(245, 158, 11, 0.24); font-weight: 500;">🌍 英语世界短视频</span>`
           : '';
 
         // [Gemini_3.5_Flash_planning] 敏感词检测展示
@@ -2700,26 +2907,26 @@
           let censorBg = 'rgba(255,255,255,0.05)';
           let censorBorder = 'rgba(255,255,255,0.1)';
           if (v.censor_tag.includes('🔴') || v.censor_tag.includes('政治')) {
-            censorColor = '#f87171';
+            censorColor = 'var(--red)';
             censorBg = 'rgba(239, 68, 68, 0.15)';
             censorBorder = 'rgba(239, 68, 68, 0.25)';
           } else if (v.censor_tag.includes('🟡') || v.censor_tag.includes('敏感') || v.censor_tag.includes('政策')) {
-            censorColor = '#fbbf24';
+            censorColor = 'var(--yellow)';
             censorBg = 'rgba(245, 158, 11, 0.15)';
             censorBorder = 'rgba(245, 158, 11, 0.25)';
           } else if (v.censor_tag.includes('🚫') || v.censor_tag.includes('限制') || v.censor_tag.includes('策略')) {
-            censorColor = '#60a5fa';
+            censorColor = 'var(--blue)';
             censorBg = 'rgba(59, 130, 246, 0.15)';
             censorBorder = 'rgba(59, 130, 246, 0.25)';
           } else if (v.censor_tag.includes('🔵') || v.censor_tag.includes('预警') || v.censor_tag.includes('合规')) {
-            censorColor = '#a78bfa';
+            censorColor = 'var(--accent2)';
             censorBg = 'rgba(139, 92, 246, 0.15)';
             censorBorder = 'rgba(139, 92, 246, 0.25)';
           }
           censorBadge = `<span class="meta-chip censor-badge censor-hit" style="background: ${censorBg}; color: ${censorColor}; border: 1px solid ${censorBorder}; font-weight: 500;">⚠️ ${v.censor_tag}</span>`;
         } else {
           if (currentTab === 'high_likes' || v.source === 'DISCOVERY') {
-            censorBadge = `<span class="meta-chip censor-badge censor-safe" style="background: rgba(16, 185, 129, 0.1); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.15); font-weight: 500;">✅ 未命中敏感词</span>`;
+            censorBadge = `<span class="meta-chip censor-badge censor-safe" style="background: rgba(16, 185, 129, 0.1); color: var(--green); border: 1px solid rgba(16, 185, 129, 0.15); font-weight: 500;">✅ 未命中敏感词</span>`;
           }
         }
 
@@ -3192,7 +3399,7 @@
             <tr id="err-${s.youtube_id}_s${s.slice_index}" class="error-row child-row-${parentYid}" style="display:none" data-err="${escapeAttr(s.error_msg)}">
               <td colspan="8">
                 <div class="error-detail" style="margin-left: 20px;">
-                  <button class="btn-copy-err" onclick="copyError('${s.youtube_id}_s${s.slice_index}')" id="copy-${s.youtube_id}_s${s.slice_index}" style="min-height: 32px; padding: 4px 10px; font-size: 11px;">📋 复制日志</button>
+                  <button class="btn-copy-err" onclick="copyError('${s.youtube_id}_s${s.slice_index}')" id="copy-${s.youtube_id}_s${s.slice_index}" style="min-height: 32px; padding: 4px 10px; font-size: 0.75rem;">📋 复制日志</button>
                   ${escapeHtml(s.error_msg)}
                 </div>
               </td>
@@ -3201,7 +3408,7 @@
           return `
             <tr id="row-${s.youtube_id}_s${s.slice_index}" class="child-row-${parentYid}" style="background: rgba(255,255,255,0.015); border-left: 3px solid var(--accent);">
               <td class="cb-cell" style="${currentTab === 'waitlist' ? '' : 'display:none'}"></td>
-              <td class="cover-thumb-cell"><div class="cover-placeholder" style="width:36px; height:64px; font-size:14px;">✂️</div></td>
+              <td class="cover-thumb-cell"><div class="cover-placeholder" style="width:36px; height:64px; font-size:0.875rem;">✂️</div></td>
               <td class="info-cell" style="padding-left: 24px;">
                 <div class="video-zh-title" style="padding-left: 20px;">${escapeHtml(sliceDisplayTitle)}</div>
                 <div class="video-meta-row" style="padding-left: 20px;">
@@ -3329,7 +3536,7 @@
     banner.style.background = 'rgba(255,255,255,0.05)';
     banner.style.color = 'var(--text2)';
     matchedEl.innerHTML = '';
-    cloudEl.innerHTML = '<span style="color:var(--text3); font-size:12px;">加载中…</span>';
+    cloudEl.innerHTML = '<span style="color:var(--text3); font-size:0.75rem;">加载中…</span>';
     srcEl.textContent = '';
     p0Wrap.style.display = 'none';
     p0ReviewChk.checked = false;
@@ -3344,7 +3551,7 @@
       if (!d.success) { banner.textContent = '❌ ' + (d.error || '加载失败'); return; }
 
       _bypassSeverity = d.severity || 'low';
-      const sevColor = { critical:'var(--red)', high:'#f59e0b', medium:'#f59e0b', low:'#eab308' }[_bypassSeverity] || 'var(--text2)';
+      const sevColor = { critical:'var(--red)', high:'var(--yellow)', medium:'var(--yellow)', low:'var(--yellow)' }[_bypassSeverity] || 'var(--text2)';
       const sevBg = { critical:'rgba(248,113,113,0.12)', high:'rgba(245,158,11,0.12)', medium:'rgba(245,158,11,0.10)', low:'rgba(234,179,8,0.10)' }[_bypassSeverity] || 'rgba(255,255,255,0.05)';
       banner.style.background = sevBg;
       banner.style.color = sevColor;
@@ -3354,10 +3561,10 @@
       // 命中词
       if (d.matched && d.matched.length) {
         matchedEl.innerHTML = d.matched.map(m =>
-          `<span style="background:rgba(248,113,113,0.18); color:var(--red); border:1px solid rgba(248,113,113,0.3); border-radius:6px; padding:2px 8px; font-size:12px; font-weight:600;">${escapeHtml(m.term)} <span style="opacity:0.6; font-weight:400;">${escapeHtml(m.layer)}</span></span>`
+          `<span style="background:rgba(248,113,113,0.18); color:var(--red); border:1px solid rgba(248,113,113,0.3); border-radius:6px; padding:2px 8px; font-size:0.75rem; font-weight:600;">${escapeHtml(m.term)} <span style="opacity:0.6; font-weight:400;">${escapeHtml(m.layer)}</span></span>`
         ).join('');
       } else {
-        matchedEl.innerHTML = '<span style="color:var(--text3); font-size:12px;">（标题/字幕中未再扫描到命中词，可能来自历史评分或已修改）</span>';
+        matchedEl.innerHTML = '<span style="color:var(--text3); font-size:0.75rem;">（标题/字幕中未再扫描到命中词，可能来自历史评分或已修改）</span>';
       }
 
       // 关键词标签云：按权重映射字号/不透明度，命中词红色加粗下划线
@@ -3376,10 +3583,10 @@
           const fw = k.flagged ? 700 : 500;
           const deco = k.flagged ? 'border-bottom:2px solid var(--red);' : '';
           const tip = k.flagged ? '命中审查词' : ('权重 ' + k.weight);
-          return `<span title="${tip}" style="font-size:${size}px; opacity:${op}; color:${color}; font-weight:${fw}; ${deco}">${escapeHtml(k.word)}</span>`;
+          return `<span title="${tip}" style="font-size:${size / 16}rem; opacity:${op}; color:${color}; font-weight:${fw}; ${deco}">${escapeHtml(k.word)}</span>`;
         }).join('');
       } else {
-        cloudEl.innerHTML = '<span style="color:var(--text3); font-size:12px;">无可提取的关键词</span>';
+        cloudEl.innerHTML = '<span style="color:var(--text3); font-size:0.75rem;">无可提取的关键词</span>';
       }
 
       // P0 政治安全违禁：双重确认后才允许提交受控人工放行。
@@ -3910,7 +4117,7 @@
 
       if (text && (text.includes('youtube.com/') || text.includes('youtu.be/'))) {
         if (prompt && detectedText) {
-          detectedText.innerHTML = `📋 检测到剪贴板有 YouTube 链接：<code style="background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px; font-family:monospace; font-size:11px;">${escapeHtml(text.substring(0, 45))}...</code>`;
+          detectedText.innerHTML = `📋 检测到剪贴板有 YouTube 链接：<code style="background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.75rem;">${escapeHtml(text.substring(0, 45))}...</code>`;
           prompt.style.display = 'flex';
           prompt.onclick = () => {
             navigator.vibrate(15);
@@ -4249,14 +4456,14 @@
       const dyn = (d.keywords || []).filter(k => k.type === 'dynamic').length;
       const sta = (d.keywords || []).filter(k => k.type === 'static').length;
       stats.innerHTML = [
-        ['动态热词', dyn, '#f97316'],
-        ['静态兜底', sta, '#7c6ef7'],
-        ['合并总词', dyn + sta, '#34d399'],
-        ['覆盖提升', sta ? '+' + Math.round(dyn/sta*100) + '%' : '—', '#2dd4bf'],
+        ['动态热词', dyn, 'var(--orange)'],
+        ['静态兜底', sta, 'var(--accent)'],
+        ['合并总词', dyn + sta, 'var(--green)'],
+        ['覆盖提升', sta ? '+' + Math.round(dyn/sta*100) + '%' : '—', 'var(--teal)'],
       ].map(([label, val, color]) => `
         <div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:8px;padding:12px 14px;">
-          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;">${label}</div>
-          <div style="font-size:22px;font-weight:700;color:${color};margin-top:4px;">${val}</div>
+          <div style="font-size:0.75rem;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;">${label}</div>
+          <div style="font-size:1.375rem;font-weight:700;color:${color};margin-top:4px;">${val}</div>
         </div>`).join('');
     }
 
@@ -4271,17 +4478,17 @@
     tbody.innerHTML = kws.map((k, i) => {
       const isDyn  = k.type === 'dynamic';
       const typeBadge = isDyn
-        ? '<span style="background:rgba(249,115,22,.15);color:#f97316;border:1px solid rgba(249,115,22,.3);font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;">🔥 HN今日</span>'
-        : '<span style="background:rgba(124,110,247,.12);color:#a78bfa;border:1px solid rgba(124,110,247,.25);font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;">📌 固定</span>';
+        ? '<span style="background:rgba(249,115,22,.15);color:var(--orange);border:1px solid rgba(249,115,22,.3);font-size:0.75rem;font-weight:600;padding:2px 7px;border-radius:10px;">🔥 HN今日</span>'
+        : '<span style="background:rgba(124,110,247,.12);color:var(--accent2);border:1px solid rgba(124,110,247,.25);font-size:0.75rem;font-weight:600;padding:2px 7px;border-radius:10px;">📌 固定</span>';
       const ytLink = k.yt_url
-        ? `<a href="${k.yt_url}" target="_blank" style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:5px;background:rgba(255,68,68,.12);color:#ff4444;border:1px solid rgba(255,68,68,.25);text-decoration:none;font-size:11px;font-weight:500;">
+        ? `<a href="${k.yt_url}" target="_blank" style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:5px;background:rgba(255,68,68,.12);color:var(--red);border:1px solid rgba(255,68,68,.25);text-decoration:none;font-size:0.75rem;font-weight:500;">
              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2 31.5 31.5 0 0 0 0 12a31.5 31.5 0 0 0 .5 5.8 3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1A31.5 31.5 0 0 0 24 12a31.5 31.5 0 0 0-.5-5.8zM9.7 15.5V8.5l6.3 3.5-6.3 3.5z"/></svg>
              搜索视频
            </a>`
         : '—';
       return `<tr style="border-bottom:1px solid rgba(255,255,255,0.04);transition:background .12s;" onmouseover="this.style.background='rgba(255,255,255,0.03)'" onmouseout="this.style.background=''">
         <td style="padding:10px 14px;">${typeBadge}</td>
-        <td style="padding:10px 14px;font-size:13px;color:var(--text);max-width:300px;white-space:normal;">${k.keyword}</td>
+        <td style="padding:10px 14px;font-size:0.8125rem;color:var(--text);max-width:300px;white-space:normal;">${k.keyword}</td>
         <td style="padding:10px 14px;">${ytLink}</td>
       </tr>`;
     }).join('');
@@ -4348,13 +4555,13 @@
 <div id="platform-detail-modal" onclick="closePlatformDetailsModal()">
   <div class="plat-modal-content" onclick="event.stopPropagation()">
     <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.08); padding-bottom:12px;">
-      <h3 style="margin:0; font-size:16px; color:var(--text1); font-weight:600; display:flex; align-items:center; gap:8px;">
+      <h3 style="margin:0; font-size:1rem; color:var(--text1); font-weight:600; display:flex; align-items:center; gap:8px;">
         🌐 视频多平台发布状态明细 (Multi-Platform Publishing)
       </h3>
-      <span style="cursor:pointer; font-size:20px; color:var(--text3);" onclick="closePlatformDetailsModal()">✕</span>
+      <span style="cursor:pointer; font-size:1.25rem; color:var(--text3);" onclick="closePlatformDetailsModal()">✕</span>
     </div>
 
-    <div id="plat-modal-video-title" style="margin-top:12px; font-size:13px; color:var(--accent2); font-weight:500;"></div>
+    <div id="plat-modal-video-title" style="margin-top:12px; font-size:0.8125rem; color:var(--accent2); font-weight:500;"></div>
 
     <table class="plat-table">
       <thead>
@@ -4420,7 +4627,7 @@
       const stateBadge = statusBadge(st);
       const stateNote = ['SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'UNCERTAIN', 'NOT_FOUND'].includes(st)
         || !Object.prototype.hasOwnProperty.call(STATUS_PRESENTATIONS, st)
-        ? `<div style="font-size:11px; color:var(--yellow); margin-top:5px;">${escapeHtml(statusPresentation(st).description)}</div>` : '';
+        ? `<div style="font-size:0.75rem; color:var(--yellow); margin-top:5px;">${escapeHtml(statusPresentation(st).description)}</div>` : '';
 
       const timeStr = info.published_at ? info.published_at : '—';
       const attemptsStr = info.attempt_count ? `(尝试 ${info.attempt_count} 次)` : '';
@@ -4429,7 +4636,7 @@
       if (info.external_url) {
         linkOrLog = `<a href="${escapeAttr(info.external_url)}" target="_blank" rel="noopener" style="color:var(--accent); text-decoration:none;">🔗 打开作品</a>`;
       } else if (info.error) {
-        linkOrLog = `<span style="color:#f87171;" title="${escapeAttr(info.error)}">⚠️ ${escapeHtml(info.error.slice(0, 30))}...</span>`;
+        linkOrLog = `<span style="color:var(--red);" title="${escapeAttr(info.error)}">⚠️ ${escapeHtml(info.error.slice(0, 30))}...</span>`;
       }
 
       return `<tr>
