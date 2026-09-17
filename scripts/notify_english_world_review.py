@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.15.0 | 2026-09-18 | Antigravity | 自动审批延后项在通知中附带撤回/暂不发布按钮，并提示排入专属窗口。 |
 | language-v1 | 2026-09-09 | Codex | 新契约封装直接消费已审校投稿文本和封面载荷。 |
 | 1.0.0 | 2026-08-22 | Codex | 新增每日英语世界短视频的 Telegram 审核材料通知。 |
 | 1.1.0 | 2026-08-23 | Codex | 审核回执绑定独立发布包与一次性 Telegram 审批按钮，避免模糊文字误投。 |
@@ -353,6 +354,18 @@ def _review_keyboard(review_id: str) -> dict:
     }
 
 
+def _deferred_review_keyboard(review_id: str) -> dict:
+    """延后待发卡片仅提供撤回与暂不发布按钮。"""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "↩️ 退回修改", "callback_data": f"ew:m:{review_id}"},
+                {"text": "⏸ 暂不发布", "callback_data": f"ew:h:{review_id}"},
+            ],
+        ],
+    }
+
+
 def _auto_submit_new_review_item(review_item: dict) -> str:
     """仅消费持久 AUTO_POLICY 意图；领取与终态防重继续由投稿账本负责。"""
     if not settings.enable_english_world_auto_publish:
@@ -492,10 +505,16 @@ def _deliver_review(args, review_item: dict) -> int:
                            submission_deferred=(_auto_submission_is_deferred(auto_result) or auto_result == "wechat_publishing_paused"),
                            phase="SUBMISSION_RECORDED")
             checkpoint()  # 完成通知失败也保留平台事实，不能退回“制作失败”。
+            deferred_markup = _deferred_review_keyboard(review_id) if payload.get("submission_deferred") else None
+            deferred_notice = (
+                "已自动准入待发池（将在 05:30 / 16:30 专属发布窗口自动投放）；如需拦截可点击下方按钮。"
+                if payload.get("submission_deferred")
+                else "批准队列表示尚未上传；已受理/审核中也不等同公开发布。"
+            )
             message("completion_" + str(payload["review_state"]), "英语世界｜投稿阶段回执\n"
                     f"审核编号：<code>{review_id}</code>\n"
                     f"执行结果：{html.escape(auto_result)}\n"
-                    "批准队列表示尚未上传；已受理/审核中也不等同公开发布。")
+                    f"{deferred_notice}", deferred_markup)
         payload.update(status="ACCEPTED", phase="DELIVERY_COMPLETE")
         checkpoint()
         return 0

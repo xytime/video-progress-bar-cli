@@ -5,9 +5,12 @@
 脚本时受 macOS 文件访问策略拦截。
 
 # Modification History
+# | Version | Date | Author | Description |
+# | --- | --- | --- | --- |
+# | 2.39.0 | 2026-09-18 | Antigravity | 生产前增加待发库存水位与每日上限门禁，并在超限或满仓时安全跳过；支持 --force。 |
 # | 2.38.1 | 2026-09-17 | Codex | 将影子运行确认的来源质量淘汰纳入七天机器排除，避免反复预检同一候选。 |
-# | 2.37.4 | 2026-09-17 | Codex | AGY isolates its working directory from the project root. |
 # | 2.38.0 | 2026-09-17 | Codex | 增加程序化协调器入口，AGY 仅保留受限结构化审校。 |
+# | 2.37.4 | 2026-09-17 | Codex | AGY isolates its working directory from the project root. |
 # | 2.37.3 | 2026-09-17 | Codex | AGY 协调器每次创建隔离项目，避免继承无关工作区上下文及后台委派。 |
 # | 2.37.2 | 2026-09-17 | Codex | 生产协调器可切换至 AGY Gemini 3.8 Flash High；保留宿主交付边界。 |
 # | 2.37.1 | 2026-09-17 | Codex | 增加 AGY 只影子制作入口：强制安全门、绝不通知或投稿。 |
@@ -21,8 +24,6 @@
 # | 2.31.3 | 2026-09-10 | Codex | 对齐日更契约与实际存在的语言、结构和音频验证命令，移除不存在的 allow-long 参数。 |
 # | 2.31.2 | 2026-09-10 | Codex | 将日更长片的渲染与结构校验参数显式写入生产契约，避免超过30秒的合法片段被验证命令拒绝。 |
 # | language-v1 | 2026-09-09 | Codex | 新契约生产任务强制独立语言审校与低密度冻结展示。 |
-# | Version | Date | Author | Description |
-# | --- | --- | --- | --- |
 # | 2.0.0 | 2026-08-24 | Codex | 以直接 Python 入口替代 shell 协调器，保留有界重试、锁、状态及 Telegram 失败回执。 |
 # | 2.1.0 | 2026-08-24 | Codex | 日更生产提示明确英语世界成片必须严格大于 30 秒且不超过 300 秒。 |
 # | 2.2.0 | 2026-08-25 | Codex | 对 Codex 瞬时传输故障和 Telegram 失败回执实施有界重试，避免网络抖动吞掉审核窗口。 |
@@ -1044,6 +1045,7 @@ def run(
     source_access_preflight: bool = True,
     resume_delivery_request: Path | None = None,
     shadow_only: bool = False,
+    force: bool = False,
 ) -> int:
     if shadow_only and (job_id or resume_delivery_request is not None):
         raise ValueError("shadow-only run cannot consume production jobs or delivery requests")
@@ -1061,6 +1063,35 @@ def run(
             _log(stream, "skipped: daily English World run is already active")
         _write_status(status_path, "SKIPPED_ACTIVE", 0, 0, run_log, response_path)
         return 0
+
+    if not shadow_only and not job_id and not forced_youtube_id and not force and resume_delivery_request is None:
+        src_path = str(paths.project_root / "src")
+        if src_path not in sys.path:
+            sys.path.insert(0, src_path)
+        from config.settings import settings
+        from video_processing.db.database import PipelineDB
+        try:
+            check_db = PipelineDB()
+            inventory_count = check_db.get_english_world_inventory_count()
+            stock_target = getattr(settings, "english_world_stock_target", 2)
+            if inventory_count >= stock_target:
+                with run_log.open("a", encoding="utf-8") as stream:
+                    _log(stream, f"SAFE SKIP: English World inventory target satisfied: count={inventory_count} >= target={stock_target}")
+                _write_status(status_path, "SKIPPED_STOCK_FULL", 0, 0, run_log, response_path)
+                _release_lock(paths.lock_dir)
+                return 0
+            today_published = check_db.get_english_world_today_published_count()
+            daily_limit = getattr(settings, "english_world_daily_publish_limit", 10)
+            if today_published >= daily_limit:
+                with run_log.open("a", encoding="utf-8") as stream:
+                    _log(stream, f"SAFE SKIP: English World daily publish limit reached: {today_published} >= {daily_limit}")
+                _write_status(status_path, "SKIPPED_LIMIT_REACHED", 0, 0, run_log, response_path)
+                _release_lock(paths.lock_dir)
+                return 0
+        except Exception as exc:
+            with run_log.open("a", encoding="utf-8") as stream:
+                _log(stream, f"WARNING: inventory check failed, proceeding to production: {exc}")
+
     if not shadow_only:
         delivery_receipt_path.write_text('{"status":"PENDING"}\n', encoding="utf-8")
 
@@ -1472,6 +1503,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=45 * 60,
         help="单次协调器最长运行时间；超时将终止整个进程组并写入状态账本。",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="强制生产，跳过待发库存水位与每日发布上限检查",
+    )
     return parser.parse_args(argv)
 
 
@@ -1525,6 +1561,7 @@ def main(argv: list[str] | None = None) -> int:
         source_access_preflight=not args.skip_source_access_preflight,
         resume_delivery_request=args.resume_delivery_request,
         shadow_only=args.shadow_only,
+        force=args.force,
     )
 
 

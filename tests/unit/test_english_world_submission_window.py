@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-09-18 | Antigravity | 自动授权延后窗口改用 is_english_world_publish_window 判定。 |
 | 1.0.0 | 2026-08-29 | Codex | 固化自动授权窗口外延后，人工两小时授权可单项绕过。 |
 | 1.1.0 | 2026-08-30 | Codex | 固化延后必须返回独立状态码，避免退出码 0 伪装成投稿成功。 |
 | 1.2.0 | 2026-08-30 | Codex | 固化具名操作员补发 capability 与人工授权使用相同的两小时边界。 |
@@ -51,7 +52,7 @@ def test_auto_policy_submission_is_deferred_outside_public_window(monkeypatch):
 
     monkeypatch.setattr(submitter, "PipelineDB", FakeDB)
     monkeypatch.setattr(submitter.settings, "wechat_publishing_paused", False)
-    monkeypatch.setattr(type(submitter.settings), "is_public_publish_window", lambda _self: False)
+    monkeypatch.setattr(type(submitter.settings), "is_english_world_publish_window", lambda _self: False)
 
     assert submitter.submit("a" * 32) == submitter.EXIT_DEFERRED
     assert calls == [("get", "a" * 32), ("expire", "a" * 32)]
@@ -76,7 +77,7 @@ def test_submission_defers_without_claiming_when_pipeline_lock_is_busy(monkeypat
     monkeypatch.setattr(submitter, "PipelineDB", FakeDB)
     monkeypatch.setattr(submitter, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(submitter.settings, "wechat_publishing_paused", False)
-    monkeypatch.setattr(type(submitter.settings), "is_public_publish_window", lambda _self: True)
+    monkeypatch.setattr(type(submitter.settings), "is_english_world_publish_window", lambda _self: True)
     monkeypatch.setattr(submitter.fcntl, "flock", lambda *_args: (_ for _ in ()).throw(BlockingIOError()))
 
     assert submitter.submit("b" * 32) == submitter.EXIT_DEFERRED

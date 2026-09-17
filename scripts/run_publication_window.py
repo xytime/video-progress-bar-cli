@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.6 | 2026-09-18 | Antigravity | 英语世界延后项巡航派发改用专属发布窗口判定 is_english_world_publish_window。 |
 | 1.8.5 | 2026-09-07 | Codex | 投稿器退出码 10 按正常延后记录，避免锁忙被误报为失败。 |
 | 1.8.4 | 2026-09-05 | Codex | 自动抖音只读回查固定后台运行，避免投稿可视化配置导致桌面窗口风暴。 |
 | 1.0.0 | 2026-07-31 | Codex | 新增窗口内巡航入口，以 Settings 作为唯一窗口判定并避免定时任务重叠 |
@@ -202,11 +203,11 @@ def run_publication_window() -> int:
 
 
 def dispatch_one_deferred_english_world_submission() -> None:
-    """仅在公共窗口内唤起一条自动授权项；不处理人工、失败或未确认状态。"""
+    """仅在专属发布窗口内唤起一条自动授权项；不处理人工、失败或未确认状态。"""
     if (
         not settings.enable_english_world_auto_publish
         or settings.wechat_publishing_paused
-        or not settings.is_public_publish_window()
+        or not settings.is_english_world_publish_window()
     ):
         return
     db = PipelineDB()

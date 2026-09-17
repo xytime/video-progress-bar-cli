@@ -11,6 +11,7 @@
 # | 1.5.0 | 2026-08-30 | Codex | 固化监测 LaunchAgent 使用项目 venv，而非缺依赖的宿主 pyenv。 |
 # | 1.6.0 | 2026-08-30 | Codex | 固化监测 LaunchAgent 使用安装时渲染的可迁移路径模板。 |
 # | 1.6.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
+# | 1.7.0 | 2026-09-18 | Antigravity | 适应多时段生产配置，早晚监控分别推断最近的生产时刻（04:30 与 16:00），并兼容旧双时段配置。 |
 """
 
 from __future__ import annotations
@@ -228,9 +229,16 @@ def test_monitor_plist_runs_after_both_production_windows():
     assert "--slot" not in configuration["ProgramArguments"]
 
 
-def test_monitor_infers_each_production_slot_from_observation_time():
+def test_monitor_infers_each_production_slot_from_observation_time(monkeypatch):
     morning = datetime(2026, 8, 29, 9, 15).astimezone()
     evening = datetime(2026, 8, 29, 19, 0).astimezone()
 
+    # 当前多时段配置下，09:15 与 19:00 分别推断出最近的 04:30 与 16:00 槽位
+    assert monitor._slot_for_observation(morning) == time(4, 30)
+    assert monitor._slot_for_observation(evening) == time(16, 0)
+
+    # 兼容旧两槽位配置 ("05:30,16:30")
+    from config.settings import settings
+    monkeypatch.setattr(settings, "english_world_production_slots", "05:30,16:30")
     assert monitor._slot_for_observation(morning) == time(5, 30)
     assert monitor._slot_for_observation(evening) == time(16, 30)

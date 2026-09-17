@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.18.0 | 2026-09-18 | Antigravity | 新加坡打卡日期支持显式 target_date 传入，并为晚间预制成片自动顺延一天对齐次日早班。 |
 | 1.17.0 | 2026-09-17 | Antigravity | 头部标题采用正规视频黑体深墨黑风格，视频窗口下移增加呼吸感，右上角补全新加坡时区制作日期。 |
 | language-v1 | 2026-09-09 | Codex | 按具体出现位置标注教学词，词元音标明确标注。 |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：输出模板 A 静态画布、唱片素材和逐词下划线坐标。 |
@@ -121,8 +122,9 @@ class RecordUnderlineTemplate:
 
     name = "record_underline"
 
-    def __init__(self, feature_reference: Path | None = None) -> None:
+    def __init__(self, feature_reference: Path | None = None, target_date: str | None = None) -> None:
         self.feature_reference = feature_reference or FEATURE_REFERENCE
+        self.target_date = target_date
 
     def render_static(self, content: StudyCardContent, output_dir: Path) -> TemplateAAssets:
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -266,7 +268,7 @@ class RecordUnderlineTemplate:
         )
         draw.rectangle((54, 182, 1025, 214), fill="#B73520")
         draw.text((66, 187), f"单词数 · {len(content.words)}个", font=_font(18, bold=True), fill="#FFFDF8")
-        date_str = _singapore_date_str()
+        date_str = _singapore_date_str(getattr(self, "target_date", None))
         latin_font = _latin_font(17, bold=True)
         date_width = int(draw.textlength(date_str, font=latin_font))
         draw.text((1012 - date_width, 187), date_str, font=latin_font, fill="#FFFDF8")
@@ -446,10 +448,22 @@ SANS_FONT_CANDIDATES = (
 )
 
 
-def _singapore_date_str() -> str:
-    """按新加坡时区 (UTC+8) 生成视频制作打卡日期。"""
+def _singapore_date_str(target_date: str | None = None) -> str:
+    """按新加坡时区 (UTC+8) 生成视频制作打卡日期。
+    若未指定 target_date 且当前新加坡时间 >= 18:00，自动顺延一天以对齐次日早班发布日期。
+    """
+    if target_date:
+        clean = target_date.strip().replace("-", ".")
+        if not clean.startswith("DATE:"):
+            clean = f"DATE: {clean}"
+        return clean
     tz = timezone(timedelta(hours=8))
-    return datetime.now(tz).strftime("DATE: %Y.%m.%d")
+    now_sg = datetime.now(tz)
+    if now_sg.hour >= 18:
+        display_date = now_sg.date() + timedelta(days=1)
+    else:
+        display_date = now_sg.date()
+    return display_date.strftime("DATE: %Y.%m.%d")
 
 
 def _title_sans_font(size: int, *, bold: bool = True) -> ImageFont.FreeTypeFont:

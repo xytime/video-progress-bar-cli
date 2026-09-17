@@ -4,6 +4,9 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 3.62.0 | 2026-09-18 | Antigravity | 解耦英语世界生产触发与发布窗口，增加专属发布窗口与库存水位控制。 |
 | 3.61.11 | 2026-09-17 | Antigravity | 新增英语世界每日发布上限 english_world_daily_publish_limit，默认 10。 |
 | 3.61.10 | 2026-09-17 | Antigravity | 默认 YouTube 认证探针改为白名单稳定视频，避免历史样例被 bot 风控误杀。 |
 | language-v1 | 2026-09-09 | Codex | 英语世界独立语言审校专用开关、模型与超时，默认影子关闭。 |
@@ -436,12 +439,18 @@ class Settings(BaseSettings):
     english_world_antigravity_timeout_seconds: int = 180
     # OCR 对插画纹理可能误报；开启后只能作为“待人审”候选，绝不等同机器无字验收。
     english_world_antigravity_allow_ocr_suspect: bool = False
-    # 英语世界成片通过本地质检后，可由独立账本一次性自动提交视频号。默认关闭，
+    # 英语世界成片通过本地质检后，可由独立账本一次性自动提交视频号。
     # 开启也不会触碰既有待审核/未确认项，更不会为任何终态自动重传。
-    enable_english_world_auto_publish: bool = False
+    enable_english_world_auto_publish: bool = True
     english_world_daily_publish_limit: int = 10
+    # 英语世界专属发布窗口：固定在 05:30 与 16:30（各预留 90 分钟供轮询领取与网络重试）。
+    english_world_publish_windows: str = "05:30-07:00,16:30-18:00"
+    # 英语世界生产触发时刻（多班次触发与库存水位按需补仓）。
+    english_world_production_slots: str = "02:00,04:30,10:00,14:00,16:00,21:00"
+    english_world_daily_slots: str = "02:00,04:30,10:00,14:00,16:00,21:00"
+    # 英语世界安全库存目标：待发池中合格成片达到该数量时，自动跳过生产以节省算力与 Token。
+    english_world_stock_target: int = 2
     # 已受理英语世界作品仅按同次提交绑定的原生 ID 回查；节流避免每分钟打开后台。
-    english_world_daily_slots: str = "05:30,16:30"
     english_world_reconcile_interval_minutes: int = 30
     english_world_reconcile_max_age_hours: int = 72
     english_world_reconcile_failure_limit: int = 2
@@ -598,6 +607,23 @@ class Settings(BaseSettings):
         local_now = self._local_public_publish_datetime(now)
         minute = local_now.hour * 60 + local_now.minute
         for start, end in self.selected_public_publish_window_ranges(local_now):
+            if start < end and start <= minute < end:
+                return True
+            if start > end and (minute >= start or minute < end):
+                return True
+        return False
+
+    def selected_english_world_publish_window_ranges(
+        self, now: Optional[datetime] = None,
+    ) -> list[tuple[int, int]]:
+        """英语世界发布窗口范围列表；格式 HH:MM-HH:MM，逗号分隔。"""
+        return self._parse_publish_window_ranges(self.english_world_publish_windows)
+
+    def is_english_world_publish_window(self, now: Optional[datetime] = None) -> bool:
+        """判定当前时间是否处于英语世界专属发布窗口（默认 05:30 与 16:30）。"""
+        local_now = self._local_public_publish_datetime(now)
+        minute = local_now.hour * 60 + local_now.minute
+        for start, end in self.selected_english_world_publish_window_ranges(local_now):
             if start < end and start <= minute < end:
                 return True
             if start > end and (minute >= start or minute < end):

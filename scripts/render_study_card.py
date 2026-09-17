@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.6.0 | 2026-09-18 | Antigravity | 支持 --target-date 参数透传至模板 A 标题红条。 |
 | language-v1 | 2026-09-09 | Codex | 新语言契约或开关启用时传递审校时间线。 |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：提供不接入发布流程的独立渲染命令。 |
 | 1.1.0 | 2026-08-02 | Codex | 增加显式长样片测试开关，仅用于验收正文滚动，不改变生产 30 秒上限。 |
@@ -44,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--keep-assets", action="store_true", help="保留静态底图与 Banner 资产，便于人工验收")
     parser.add_argument("--feature-reference", type=Path, help="右上影子跟读 Banner 参考图；不传则使用项目内置素材")
+    parser.add_argument("--target-date", type=str, help="视频右上角制作打卡日期 (YYYY.MM.DD 或 YYYY-MM-DD)")
     return parser.parse_args()
 
 
@@ -56,7 +58,7 @@ def main() -> int:
         from config.settings import settings
         from video_processing.study_cards.language_qa import VERSION
         needs_language = settings.enable_english_world_language_qa or payload.get("language_contract") == VERSION
-        StudyCardRenderer(RecordUnderlineTemplate(args.feature_reference)).render(
+        StudyCardRenderer(RecordUnderlineTemplate(args.feature_reference, target_date=args.target_date)).render(
             args.source,
             content,
             args.output,

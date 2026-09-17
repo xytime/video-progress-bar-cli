@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.61.0 | 2026-09-18 | Antigravity | 新增英语世界待发池库存统计与今日发布数量统计方法。 |
 | 3.60.0 | 2026-09-09 | Codex | 新增 /last 已确认公开发布跨平台账本查询，并限制 SQLite 安全偏移。 |
 | 3.59.9 | 2026-09-07 | Codex | 服务端分页前完成控制面筛选、排序与近期高互动浏览标记，平台状态保持不变。 |
 | 3.59.8 | 2026-09-05 | Codex | 持久化单作品只读回查预约，跨进程原子冷却且不改变投稿状态。 |
@@ -7486,6 +7487,25 @@ class PipelineDB:
                 (safe_limit,),
             ).fetchall()
             return [dict(row) for row in rows]
+
+    def get_english_world_inventory_count(self) -> int:
+        """读取当前待发布池（READY_FOR_REVIEW 或 SUBMISSION_APPROVED）的合格成片数量。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) AS cnt FROM english_world_review_items
+                   WHERE state IN ('READY_FOR_REVIEW', 'SUBMISSION_APPROVED')"""
+            ).fetchone()
+            return int(row["cnt"]) if row else 0
+
+    def get_english_world_today_published_count(self) -> int:
+        """统计今日已进入 SUBMITTING/UNDER_REVIEW/PUBLISHED 状态的成片数量（按 UTC+8 日期判定）。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) AS cnt FROM english_world_review_items
+                   WHERE state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED')
+                     AND datetime(COALESCE(submission_started_at, created_at), '+8 hours') >= datetime('now', '+8 hours', 'start of day')"""
+            ).fetchone()
+            return int(row["cnt"]) if row else 0
 
     def record_telegram_notification_receipt(
         self,

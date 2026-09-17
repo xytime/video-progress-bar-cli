@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.12.0 | 2026-09-18 | Antigravity | 自动投稿窗口改用英语世界专属发布窗口判定 is_english_world_publish_window。 |
 | 1.0.0 | 2026-08-23 | Codex | 新增英语世界学习卡的独立、一次性视频号投稿执行器。 |
 | 1.1.0 | 2026-08-26 | Codex | 投稿器在领取前尊重全局微信暂停开关，避免自动策略绕过运营暂停。 |
 | 1.2.0 | 2026-08-29 | Codex | 自动投稿遵守公共窗口；Telegram 单项批准仅在两小时 capability 内允许窗口外提交。 |
@@ -174,17 +175,17 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
     if pending is None:
         logger.info("English World review item does not exist: %s", review_id)
         return 0
-    if not settings.is_public_publish_window():
+    if not settings.is_english_world_publish_window():
         if not _manual_authorization_active(pending):
             db.expire_english_world_submission_authorization(review_id)
             logger.info(
-                "English World submission deferred outside public window: %s source=%s",
+                "English World submission deferred outside English World publish window: %s source=%s",
                 review_id,
                 pending.get("approval_source"),
             )
             return EXIT_DEFERRED
         logger.warning(
-            "English World review %s uses its two-hour bounded capability outside the public window source=%s",
+            "English World review %s uses its two-hour bounded capability outside the publish window source=%s",
             review_id, pending.get("approval_source"),
         )
     pipeline_lock = _PROJECT_ROOT / "output" / "pipeline.lock"

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.4 | 2026-09-18 | Antigravity | 覆盖英语世界专属发布窗口 is_english_world_publish_window 派发判定。 |
 | 1.8.3 | 2026-09-07 | Codex | 区分投稿器正常延后退出码与真实失败，防止锁忙刷 ERROR。 |
 | 1.0.0 | 2026-07-31 | Codex | 覆盖窗口外跳过与窗口内单次完整流水线调用 |
 | 1.0.1 | 2026-07-31 | Codex | 按 Pydantic Settings 的类方法替身方式隔离窗口判定 |
@@ -42,6 +43,7 @@ def test_deferred_submission_exit_is_not_reported_as_failure(monkeypatch, caplog
     monkeypatch.setattr(runner.settings, "enable_english_world_auto_publish", True)
     monkeypatch.setattr(runner.settings, "wechat_publishing_paused", False)
     monkeypatch.setattr(type(runner.settings), "is_public_publish_window", lambda _: True)
+    monkeypatch.setattr(type(runner.settings), "is_english_world_publish_window", lambda _: True)
     monkeypatch.setattr(runner.subprocess, "run", lambda *_args, **_kwargs: SimpleNamespace(returncode=returncode, stderr=""))
     with caplog.at_level("INFO"):
         runner.dispatch_one_deferred_english_world_submission()
@@ -141,7 +143,7 @@ def test_window_dispatches_one_deferred_english_world_auto_item(monkeypatch):
     monkeypatch.setattr(runner, "PipelineDB", FakeDB)
     monkeypatch.setattr(runner.settings, "enable_english_world_auto_publish", True)
     monkeypatch.setattr(runner.settings, "wechat_publishing_paused", False)
-    monkeypatch.setattr(type(runner.settings), "is_public_publish_window", lambda _self: True)
+    monkeypatch.setattr(type(runner.settings), "is_english_world_publish_window", lambda _self: True)
     run = MagicMock(return_value=completed)
     monkeypatch.setattr(runner.subprocess, "run", run)
 

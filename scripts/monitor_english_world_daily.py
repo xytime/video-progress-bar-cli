@@ -6,14 +6,15 @@
 活跃锁时，才补发起一次同一协调器。已有失败记录绝不重跑，避免重复内容或投稿。
 
 # Modification History
-# | 1.3.2 | 2026-09-17 | Codex | 缺席窗口恢复显式沿用 AGY 协调器参数，避免监控补跑回退到 Codex。 |
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
-# | 1.0.0 | 2026-08-27 | Codex | 新增 07:00/16:30 窗口后的回执监测、缺席自愈和持久健康账本。 |
-# | 1.1.0 | 2026-08-29 | Codex | 监控器按 09:15/19:00 实际触发时刻分别映射 07:00/16:30，修复晚间仍检查早班。 |
-# | 1.2.0 | 2026-08-30 | Codex | 单独识别已获 Telegram 接受的生产失败回执，避免误报成未交付。 |
-# | 1.3.0 | 2026-08-30 | Codex | 健康账本固定输出调度、产物、Telegram、平台提交、公开可见五层证据，禁止将已受理写成已公开。 |
+# | 1.3.3 | 2026-09-18 | Antigravity | 识别正常库存满仓与限额达成的跳过状态，不误报为未交付。 |
+# | 1.3.2 | 2026-09-17 | Codex | 缺席窗口恢复显式沿用 AGY 协调器参数，避免监控补跑回退到 Codex。 |
 # | 1.3.1 | 2026-09-06 | Codex | 读取共享生产时刻、拒绝调度漂移，并独立报告成片就绪后的交付中断。 |
+# | 1.3.0 | 2026-08-30 | Codex | 健康账本固定输出调度、产物、Telegram、平台提交、公开可见五层证据，禁止将已受理写成已公开。 |
+# | 1.2.0 | 2026-08-30 | Codex | 单独识别已获 Telegram 接受的生产失败回执，避免误报成未交付。 |
+# | 1.1.0 | 2026-08-29 | Codex | 监控器按 09:15/19:00 实际触发时刻分别映射 07:00/16:30，修复晚间仍检查早班。 |
+# | 1.0.0 | 2026-08-27 | Codex | 新增 07:00/16:30 窗口后的回执监测、缺席自愈和持久健康账本。 |
 """
 
 from __future__ import annotations
@@ -180,6 +181,12 @@ def _five_layer_evidence(payload: dict[str, Any]) -> dict[str, dict[str, str]]:
     elif is_failure:
         artifact = "FAILED_REPORTED"
         telegram = "API_ACCEPTED"
+    elif state == "STOCK_TARGET_SATISFIED":
+        artifact = "STOCK_BUFFER_READY"
+        telegram = "SKIPPED_BUFFER_SATISFIED"
+    elif state == "DAILY_LIMIT_REACHED":
+        artifact = "DAILY_LIMIT_MET"
+        telegram = "SKIPPED_LIMIT_MET"
     else:
         artifact = "UNKNOWN"
         telegram = "NOT_ACCEPTED"
@@ -279,6 +286,19 @@ def monitor_slot(
 
     run_logs = _scheduled_run_logs(paths.log_dir, observed_at, slot)
     if run_logs:
+        for log in run_logs:
+            try:
+                content = log.read_text(encoding="utf-8")
+                if "SKIPPED_STOCK_FULL" in content or "inventory target satisfied" in content:
+                    payload.update({"state": "STOCK_TARGET_SATISFIED", "run_logs": [str(path) for path in run_logs]})
+                    _write_health(paths.log_dir, observed_at, slot, payload)
+                    return 0, payload
+                if "SKIPPED_LIMIT_REACHED" in content or "daily publish limit reached" in content:
+                    payload.update({"state": "DAILY_LIMIT_REACHED", "run_logs": [str(path) for path in run_logs]})
+                    _write_health(paths.log_dir, observed_at, slot, payload)
+                    return 0, payload
+            except OSError:
+                pass
         payload.update({"state": "RUN_COMPLETED_WITHOUT_DELIVERY", "run_logs": [str(path) for path in run_logs]})
         _write_health(paths.log_dir, observed_at, slot, payload)
         return 1, payload
