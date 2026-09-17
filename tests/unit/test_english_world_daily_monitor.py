@@ -223,7 +223,8 @@ def test_monitor_plist_runs_after_both_production_windows():
         {"Hour": 9, "Minute": 15},
         {"Hour": 19, "Minute": 0},
     ]
-    assert configuration["ProgramArguments"][-1:] == ["--recover-missing"]
+    assert "--recover-missing" in configuration["ProgramArguments"]
+    assert configuration["ProgramArguments"][-2:] == ["--coordinator-provider", "programmatic"]
     assert "--slot" not in configuration["ProgramArguments"]
 
 

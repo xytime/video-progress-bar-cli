@@ -8,6 +8,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 | --- | --- | --- | --- |
 | language-v1 | 2026-09-09 | Codex | 可选返回供应商原始用量，不改变现有结构化调用返回合同。 |
 | 1.1.0 | 2026-08-24 | Codex | 禁用 print-mode 指令扩展，并将外部错误压缩为非敏感分类。 |
+| 1.2.0 | 2026-09-17 | Codex | 支持显式传递 low/medium/high effort，避免模型名被误当作推理强度。 |
 | 1.0.0 | 2026-08-24 | Codex | 新增 agy 受限结构化调用，供字幕与普通话配音精修共享 |
 """
 
@@ -30,15 +31,20 @@ def run_agy_structured(
     model: str,
     command: str,
     timeout_sec: int,
+    effort: str = "medium",
     include_usage: bool = False,
 ) -> Dict[str, Any]:
     """在无业务工作区、无危险权限下调用 agy 并提取结构化输出。"""
+    effort = str(effort).lower()
+    if effort not in {"low", "medium", "high"}:
+        raise ValueError("agy effort 必须是 low、medium 或 high")
     args = [
         command,
         "--mode", "plan",
         "--sandbox",
         "--disable-slash-commands",
         "--model", model,
+        "--effort", effort,
         "--json-schema", json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
         "--output-format", "json",
         "--print-timeout", f"{max(1, int(timeout_sec))}s",
@@ -51,6 +57,8 @@ def run_agy_structured(
                 cwd=workdir,
                 input="",
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 capture_output=True,
                 timeout=max(1, int(timeout_sec)) + 15,
                 check=False,

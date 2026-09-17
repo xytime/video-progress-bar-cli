@@ -7,6 +7,7 @@
 | 1.0.1 | 2026-09-09 | Codex | 将转录差异和编辑修改纳入逐目标审校覆盖。 |
 | 1.0.2 | 2026-09-10 | Codex | 将 AGY 部分成功/空结构化输出归入一次性暂时故障，允许当前任务恢复重试。 |
 | 1.0.3 | 2026-09-14 | Codex | 按实际内容失败计修订，保留三次总预算及旧缓存审计，避免时间修复误耗修订。 |
+| 1.0.4 | 2026-09-17 | Codex | 将 AGY effort 写入调用、缓存键和审校回执，禁止将模型名称误作 effort 审计。 |
 """
 from contextlib import contextmanager
 import fcntl
@@ -85,14 +86,14 @@ def check_content_budget(ledger, cache_dir, key):
     return failures
 
 
-def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
+def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180, effort="high",
            caller=run_agy_structured):
     timeline, cache_dir, task_dir = Path(timeline), Path(cache_dir), Path(task_dir)
     root = timeline.parent
     plan, evidence, editorial = (read_json(root / p) for p in
                                 ("display_plan.json", "qa/source_evidence.json", "editorial_changes.json"))
     inputs = review_input(plan, evidence, editorial)
-    key = cache_key(inputs, model)
+    key = cache_key(inputs, model, effort)
     before = file_digest(timeline)
     if plan["timeline_sha256"] != before:
         raise ValueError("展示计划已经过期")
@@ -128,7 +129,7 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
                 try:
                     result = caller(PROMPT + "\nDATA:\n" + json.dumps(inputs, ensure_ascii=False),
                                     schema=review_schema(), model=model, command=command, timeout_sec=timeout,
-                                    include_usage=True)
+                                    effort=effort, include_usage=True)
                     usage = result.get("usage") if "structured_result" in result else None
                     result = result.get("structured_result", result)
                     evaluate(result, plan, evidence=evidence, editorial=editorial)
@@ -153,9 +154,10 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180,
         # 模型运行期间内容或依据发生变化时，不能保存 PASS。
         current = review_input(read_json(root / "display_plan.json"), read_json(root / "qa/source_evidence.json"),
                                read_json(root / "editorial_changes.json"))
-        if file_digest(timeline) != before or cache_key(current, model) != key:
+        if file_digest(timeline) != before or cache_key(current, model, effort) != key:
             raise ValueError("审校期间输入已变化")
         report = {"version": VERSION, "state": evaluate(result, plan, evidence=evidence, editorial=editorial), "model": model,
+                  "effort": effort,
                   "prompt_version": VERSION, "schema_version": 1, "rules_version": VERSION,
                   "input_projection": "compact-v1",
                   "input_key": key, "timeline_sha256": before, "plan_sha256": digest(plan),

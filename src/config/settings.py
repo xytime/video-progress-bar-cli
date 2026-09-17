@@ -4,6 +4,8 @@
 禁止在业务模块中直接调用 os.getenv / os.environ。
 
 # Modification History
+| 3.61.11 | 2026-09-17 | Antigravity | 新增英语世界每日发布上限 english_world_daily_publish_limit，默认 10。 |
+| 3.61.10 | 2026-09-17 | Antigravity | 默认 YouTube 认证探针改为白名单稳定视频，避免历史样例被 bot 风控误杀。 |
 | language-v1 | 2026-09-09 | Codex | 英语世界独立语言审校专用开关、模型与超时，默认影子关闭。 |
 | 3.61.9 | 2026-09-08 | Codex | 仪表盘可显式绑定全部 IPv4 网卡，便于局域网直接访问；浏览器来源仍由控制面同源守卫校验。 |
 | 3.61.7 | 2026-09-05 | Codex | 自动回查默认每轮两条，单作品十分钟冷却；发布额度与回查频率分离。 |
@@ -211,7 +213,10 @@ class Settings(BaseSettings):
     agy_command: str = "agy"
     enable_english_world_language_qa: bool = False  # 完成影子验收后开启；v2 输入始终强制门禁
     english_world_language_model: str = "gemini-3.8-flash-high"
+    english_world_language_effort: str = Field(default="high", pattern=r"^(low|medium|high)$")
     english_world_language_timeout_seconds: int = Field(default=180, ge=30, le=300)
+    # 英语世界安全回执在影子期由命令显式生成；启用后交付记录器不接受无回执成片。
+    enable_english_world_safety_gate: bool = False
     agy_timeout_sec: int = 90
     agy_subtitle_model: str = "gemini-3.7-flash-high"
     agy_dubbing_model: str = "claude-sonnet-4-6"
@@ -249,7 +254,7 @@ class Settings(BaseSettings):
     # （2026-06-25：源由 Safari 改 Chrome——本机 Safari 未登录 YouTube，导出的匿名 cookie 触发 bot 风控）
     youtube_cookies_file: str = ""
     # Cookie 文件存在不代表仍可用；刷新/巡检以此公开视频做仅元数据验收。
-    youtube_auth_probe_url: str = "https://www.youtube.com/watch?v=jNQXAC9IVRw"
+    youtube_auth_probe_url: str = "https://www.youtube.com/watch?v=qVuP6XmSKHI"
     youtube_cookie_browser: str = "chrome"
     # 仅在源字幕预检收到 YouTube bot 校验时，运行安全刷新并重试该预检一次。
     # 默认关闭；刷新从 Chrome 读取会话，但不会下载、入队或发布。
@@ -434,6 +439,7 @@ class Settings(BaseSettings):
     # 英语世界成片通过本地质检后，可由独立账本一次性自动提交视频号。默认关闭，
     # 开启也不会触碰既有待审核/未确认项，更不会为任何终态自动重传。
     enable_english_world_auto_publish: bool = False
+    english_world_daily_publish_limit: int = 10
     # 已受理英语世界作品仅按同次提交绑定的原生 ID 回查；节流避免每分钟打开后台。
     english_world_daily_slots: str = "05:30,16:30"
     english_world_reconcile_interval_minutes: int = 30

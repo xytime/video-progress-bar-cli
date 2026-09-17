@@ -5,6 +5,18 @@
 脚本时受 macOS 文件访问策略拦截。
 
 # Modification History
+# | 2.38.1 | 2026-09-17 | Codex | 将影子运行确认的来源质量淘汰纳入七天机器排除，避免反复预检同一候选。 |
+# | 2.37.4 | 2026-09-17 | Codex | AGY isolates its working directory from the project root. |
+# | 2.38.0 | 2026-09-17 | Codex | 增加程序化协调器入口，AGY 仅保留受限结构化审校。 |
+# | 2.37.3 | 2026-09-17 | Codex | AGY 协调器每次创建隔离项目，避免继承无关工作区上下文及后台委派。 |
+# | 2.37.2 | 2026-09-17 | Codex | 生产协调器可切换至 AGY Gemini 3.8 Flash High；保留宿主交付边界。 |
+# | 2.37.1 | 2026-09-17 | Codex | 增加 AGY 只影子制作入口：强制安全门、绝不通知或投稿。 |
+# | 2.37.0 | 2026-09-17 | Codex | 增加 BNN Bloomberg 概率优先与启用后不可绕过的安全门交付契约。 |
+# | 2.36.0 | 2026-09-11 | Codex | 允许宿主从规范 timeline.json 回溯同起点来源身份，避免合格新包在投稿前被旧文件名白名单误拒。 |
+# | 2.35.0 | 2026-09-11 | Codex | 将补发来源冻结为宿主参数并在交付前校验 manifest 来源，同时用微秒级运行 ID 隔离并发入口的回执。 |
+# | 2.34.0 | 2026-09-10 | Codex | 将 JSON3 与本地 Whisper 对齐前移到候选预检，阻止不可交付来源在锁题后才失败。 |
+# | 2.33.0 | 2026-09-10 | Codex | 支持日更协调器显式选择 Codex 模型，避免继承耗尽的默认模型导致漏发。 |
+# | 2.32.0 | 2026-09-10 | Codex | 宿主拒绝协调器递归与锁/PID 伪失败；无投递回执时保留证据并仅重试一次。 |
 # | 2.31.4 | 2026-09-10 | Codex | 兼容英语世界时间线的 source_youtube_id 规范字段，修复合法成片在宿主续接前被误拒。 |
 # | 2.31.3 | 2026-09-10 | Codex | 对齐日更契约与实际存在的语言、结构和音频验证命令，移除不存在的 allow-long 参数。 |
 # | 2.31.2 | 2026-09-10 | Codex | 将日更长片的渲染与结构校验参数显式写入生产契约，避免超过30秒的合法片段被验证命令拒绝。 |
@@ -51,9 +63,11 @@ import argparse
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -64,6 +78,7 @@ from typing import Any, TextIO
 DEFAULT_PROJECT_ROOT = Path("/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing")
 DEFAULT_CODEX_HOME = Path("/Users/ryusei/.codex")
 DEFAULT_CODEX_BIN = Path("/Users/ryusei/.local/bin/codex")
+DEFAULT_AGY_BIN = Path(shutil.which("agy") or "agy")
 YOUTUBE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 LEGACY_CANDIDATE_ID_PATTERN = re.compile(
     r"(?:候选|锁定来源|youtube_id\s*[=:：]?)[^A-Za-z0-9_-]{0,12}([A-Za-z0-9_-]{11})",
@@ -85,7 +100,14 @@ LEGACY_SOURCE_ACCESS_FAILURE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _PROXY_ENV_KEYS = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"})
+_COORDINATOR_CHILD_ENV = "ENGLISH_WORLD_COORDINATOR_CHILD"
+_HOST_MANAGED_COORDINATION_FAILURE_PATTERN = re.compile(
+    r"(?:日更(?:协调器)?锁|协调器(?:进程|锁|PID)|持有者\s*PID|"
+    r"coordinator\s+(?:lock|process|pid)|(?:lock|process)\s+owner\s+pid)",
+    re.IGNORECASE,
+)
 _ENRICHED_TIMELINE_NAMES = (
+    "timeline.json",
     "timeline_final_enriched.json",
     "timeline_enriched.json",
     "timeline.enriched.json",
@@ -105,14 +127,15 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 
 所有 YouTube 元数据、字幕和下载命令都必须使用项目已验证的 Cookie：在每个 `yt-dlp` 调用后附加 `--cookies output/youtube_cookies.txt`。禁止裸调用 yt-dlp 后把“Sign in to confirm you’re not a bot”误报为无候选；若该 Cookie 文件缺失或明确失效，只能运行一次 `PYTHONPATH=src .venv/bin/python scripts/refresh_yt_cookies.py` 后重试该同一预检。
 
-来源仅限以下频道，并按频道 ID 严格核验：
+来源仅限以下频道，并按频道 ID 严格核验（从高到低为候选优先级，不改变任一来源预检或安全条件）：
+- BNN Bloomberg：UC5aNPmKYwbudeNngDMTY3lw（首选：优先从其当天或近期未使用候选开始预检）
 - CBC Kids News：UCWUA2W6LueNy9BSovivFVvQ
 - CBS Evening News：UCAeWdyKJXGWmVAXFpgLNNTg
 - ABC News：UCBi2mrWuNuyYy4gbM6fU18Q
 
-先搜索当天或近期未使用的候选，再检查标题、简介、英文字幕/转写和必要的画面。只能选择适合儿童与家庭学习者的自然、科学、教育、健康、文化、日常生活或正向人文题材。排除政治、战争、暴力、犯罪、成人话题、强时政评论，以及包含真实伤亡、恐慌、疏散或令人不适灾情画面的素材；不确定即放弃该候选并继续预检下一候选。自然科学与天气科普（包括风暴、闪电、龙卷风的成因）并非关键词禁区，必须结合实际画面和叙事判断。
+先搜索当天或近期未使用的候选，再检查标题、简介、英文字幕/转写和必要的画面。先检查 BNN Bloomberg；若其候选未通过既定完整预检，再按后续频道继续，不得因为首选而降低任何安全或学习质量条件。只能选择适合儿童与家庭学习者的自然、科学、教育、健康、文化、日常生活或正向人文题材。排除政治、战争、暴力、犯罪、成人话题、强时政评论，以及包含真实伤亡、恐慌、疏散或令人不适灾情画面的素材；不确定即放弃该候选并继续预检下一候选。自然科学与天气科普（包括风暴、闪电、龙卷风的成因）并非关键词禁区，必须结合实际画面和叙事判断。
 
-候选筛选必须分成“来源预检”和“锁定制作”两个阶段。来源预检最多依次检查 8 个不同且未使用的 `youtube_id`；某个候选预检失败不算已经选题，可以继续下一个。每个候选必须依次确认：频道 ID 与未使用状态；英文字幕/转写可取得；至少一种视频格式可实际下载；针对拟使用的连续片段生成接触表并确认画面适龄；存在一段严格大于 30 秒且不超过 300 秒、以完整自然句结束、没有靠静音/循环/长音乐空档凑时长的连续自然语音。字幕不可用、画面不适龄或找不到合格片段才淘汰当前候选；记录 `youtube_id` 和原因后立即预检下一候选。来源预检期间禁止开始时间轴、翻译、词汇富化或正式渲染。
+候选筛选必须分成“来源预检”和“锁定制作”两个阶段。来源预检最多依次检查 8 个不同且未使用的 `youtube_id`；某个候选预检失败不算已经选题，可以继续下一个。每个候选必须依次确认：频道 ID 与未使用状态；英文字幕/转写可取得；至少一种视频格式可实际下载；针对拟使用的连续片段生成接触表并确认画面适龄；存在一段严格大于 30 秒且不超过 300 秒、以完整自然句结束、没有靠静音/循环/长音乐空档凑时长的连续自然语音；再在候选自己的 `preflight/` 目录创建仅含 JSON3 原文、`source_provenance` 与候选区间的临时时间线，运行 `.venv/bin/python scripts/english_world_language.py source --timeline <临时时间线>`。若 JSON3 需要逐词对齐，则 `qa/source_evidence.json` 必须为 `alignment_status=PASS`；未锚定零宽 ASR 词、真实词序差异、缺少 16kHz 单声道 ASR 证据或任何 `UNCERTAIN` 都是该候选预检失败。此临时时间线只用于来源可交付性验证，不得含翻译、词汇、展示计划或投稿字段，也不得写交付请求。字幕不可用、画面不适龄、找不到合格片段或上述音频对齐失败才淘汰当前候选；记录 `youtube_id` 和原因后立即预检下一候选。来源预检期间禁止开始最终时间轴、翻译、词汇富化或正式渲染。
 
 候选额度只统计通过频道与未使用检查、实际进入来源预检的候选；已制作或投稿保护的来源直接跳过，不占 8 个名额。字幕对齐先使用项目 caption_evidence 的同值数字、连字符与受限冠词归一化，不自行把排印差异判为真实词义差异。若 small ASR 仍出现零宽时间或 alignment_status=UNCERTAIN，保留原报告为 qa/source_evidence.small.json（存在时），仅允许用已下载的 ~/.cache/whisper/medium.pt 对同一片段再运行一次 source --whisper-model ~/.cache/whisper/medium.pt；不得下载模型或调用付费 API。medium 不存在或复核仍失败才淘汰。通过后后续 source 必须沿用通过的模型，避免切回 small 使来源证据倒退。不得放行否定、数字数值、实义词差异或猜测缺词时间。
 
@@ -123,6 +146,8 @@ HTTP 403 不是自动“换题”信号：先对同一候选仅重试一次，�
 本日长片契约已明确允许自然语音片段超过30秒，因此正式调用 `scripts/render_study_card.py` 可显式使用其兼容参数 `--allow-long-test`；结构门禁使用 `scripts/english_world_language.py validate --timeline <timeline> --manifest <manifest>`，音频门禁使用 `scripts/validate_study_card_audio.py --mp4 <MP4> --timeline <timeline> --manifest <manifest> --report <qa/final_audio_qa.json>`。结构和音频验证器不接受 `--allow-long`，均自行硬性检查实际时长、连续语音、末词和音频边界；不得用不存在的参数、静音、循环或无语音尾段凑时长。
 
 写入包含美元、反引号、撇号的正文时，必须使用单引号 heredoc（如 <<'PY'）或 JSON 文件；禁止把正文插入 shell 双引号的 python -c 命令。正式渲染前必须通过 StudyCardContent.from_mapping 的正文与 words 一致性检查。若失败原因是序列化损坏或排印撇号差异，允许从同一来源字幕修复一次并重新运行全部门禁；不得修改或忽略真实词差异，不得换题。
+
+独立 AGY 复审给出明确术语、词义范围或相邻词语义分离的修改要求时，唯一一次内容修订必须逐项精确落实，再复审一次；不得把相邻词的语义混入被改词。例如 `current and trendy` 中，`current` 只能释为“当前的”或“现今的”，`trendy` 才可释为“时下流行的”。复审指出此类残留时，先逐词核对实际写入的 `learning_points`，不得把 AGY 的指定改动写成近义但仍错误的版本。
 
 审校输入变化不等于内容修订失败：首次 PASS 后的时间修复仍需重新审校，但不消耗内容纠错机会；第一次实际内容 FAIL 后允许一次精确修订，第二次实际 FAIL 才终止，全文与文案共享最多三次模型调用。P2 风格建议不阻断发布。封面难度须与 A2–B1 定位一致，默认使用“★★☆☆☆ (A2–B1 家庭精读)”，不要根据单个难词自动标成六级/考研/雅思。末词修复引起新输入时仍按此规则审校，由程序账本决定剩余额度，不得手动重置。
 
@@ -139,6 +164,28 @@ PYTHONPATH=src .venv/bin/python scripts/record_english_world_delivery_request.py
 
 若已启用 `ENABLE_ENGLISH_WORLD_AUTO_PUBLISH=true`，协调器会在宿主进程中对本次新建、完整质检通过的交付请求进行一次性投稿；不得自行补调用或重试。最终只报告真实状态、来源、证据路径与交付请求路径。"""
 
+SAFETY_GATE_PROMPT = """
+
+英语世界安全门已启用。音频和语言门禁 PASS 后还必须执行最后的程序化安全交付链：
+1. `PYTHONPATH=src .venv/bin/python scripts/english_world_visual_safety_review.py --mp4 '<绝对MP4路径>' --output '<timeline目录>/qa/visual_safety.json' --contact-sheet-output '<timeline目录>/qa/visual_safety_contact_sheet.png'`；它必须以 AGY high effort 审阅从当前 MP4 固定抽取的九帧联系表。非 PASS、超时或任何不可复核状态均不得交付。
+2. `PYTHONPATH=src .venv/bin/python scripts/english_world_safety_gate.py --output '<timeline目录>/qa/safety_gate.json' --title '<实际标题>' --timeline '<绝对timeline路径>' --mp4 '<绝对MP4路径>' --manifest '<绝对manifest路径>' --visual-review-report '<timeline目录>/qa/visual_safety.json'`；该命令会机械扫描来源证据、冻结展示/发布文本和频道策略，并验证视觉回执与当前 MP4 的哈希绑定。只有输出为 PASS 才可继续。
+3. 成功请求命令必须追加 `--safety-report '<timeline目录>/qa/safety_gate.json'`。不得手写、伪造、复用旧回执或用模型文字替代该命令；任一安全门失败时写准确失败请求并结束，不得换题、投稿或弱化规则。
+"""
+
+SHADOW_ONLY_PROMPT = """
+
+本次是 AGY 影子制作验证，不是生产交付：可以研究、下载、制作与本地质检一条候选，但绝不调用
+Telegram 通知、封面生成、浏览器上传或任何平台发布逻辑。安全门在本次影子运行中强制启用；只有
+完整通过后才可写入协调器指定的 `.shadow-request.json`。该文件只供本地验收，宿主不会消费或续接它。
+"""
+
+AGY_DIRECT_EXECUTION_PROMPT = """
+
+AGY 单轮执行约束：只允许当前根代理在本次调用中直接完成工作。禁止创建、委派、等待或轮询任何
+后台任务/子代理；也不得把候选研究、质检或写入交给后台任务。需要命令时直接执行；若在本轮无法
+完成，写入准确失败交付请求并结束。不得因等待后台任务而保持空闲或延长本轮。
+"""
+
 
 @dataclass(frozen=True)
 class RuntimePaths:
@@ -150,6 +197,9 @@ class RuntimePaths:
     log_dir: Path
     lock_dir: Path
     coordinator_timeout_seconds: float
+    coordinator_provider: str = "codex"
+    agy_bin: Path = DEFAULT_AGY_BIN
+    agy_model: str = "gemini-3.8-flash-high"
 
 
 class CoordinatorInterrupted(RuntimeError):
@@ -158,6 +208,10 @@ class CoordinatorInterrupted(RuntimeError):
     def __init__(self, signum: int) -> None:
         self.signum = signum
         super().__init__(f"coordinator interrupted by signal {signum}")
+
+
+class CoordinatorProtocolViolation(ValueError):
+    """生产子进程越过宿主协调边界时拒绝其交付请求。"""
 
 
 def _raise_coordinator_interrupted(signum: int, _frame: object) -> None:
@@ -242,6 +296,13 @@ def _terminate_process_group(process: subprocess.Popen[str]) -> None:
         pass
 
 
+def _is_executable(command: Path) -> bool:
+    """绝对路径须可执行；命令名仅接受当前最小 PATH 可解析的二进制。"""
+    if command.is_absolute() or "/" in str(command):
+        return command.is_file() and os.access(command, os.X_OK)
+    return shutil.which(str(command)) is not None
+
+
 def _timestamp() -> str:
     return datetime.now().strftime("%F %T %z")
 
@@ -277,6 +338,8 @@ def _is_transient_transport_failure(run_log: Path, start_offset: int = 0) -> boo
         "timed out",
         "temporary failure in name resolution",
         "network is unreachable",
+        "unavailable (code 503)",
+        "no capacity available for model",
     )
     return any(marker in text for marker in markers)
 
@@ -430,7 +493,12 @@ def _read_delivery_receipt(path: Path) -> dict | None:
     return payload
 
 
-def _read_delivery_request(path: Path, project_root: Path) -> dict:
+def _read_delivery_request(
+    path: Path,
+    project_root: Path,
+    *,
+    require_safety_gate: bool = False,
+) -> dict:
     """读取生产代理的原子交付请求；所有产物必须留在本项目内。"""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -452,6 +520,8 @@ def _read_delivery_request(path: Path, project_root: Path) -> dict:
         failure = str(payload.get("failure") or "").strip()
         if not failure:
             raise ValueError("失败交付请求缺少原因")
+        if _HOST_MANAGED_COORDINATION_FAILURE_PATTERN.search(failure):
+            raise CoordinatorProtocolViolation("失败交付请求不得把宿主协调器、锁或 PID 当作制作失败")
         return {
             "kind": kind,
             "title": title,
@@ -505,6 +575,26 @@ def _read_delivery_request(path: Path, project_root: Path) -> dict:
     from video_processing.study_cards.qa_integrity import validate_audio_qa
     validate_audio_qa(audio_qa_report, mp4=Path(str(artifacts["mp4"])), manifest=Path(str(artifacts["manifest"])))
     artifacts["audio_qa_report"] = str(audio_qa_report)
+    from config.settings import settings
+    safety_ref = str(payload.get("safety_report") or "").strip()
+    if (settings.enable_english_world_safety_gate or require_safety_gate) and not safety_ref:
+        raise ValueError("交付请求缺少英语世界安全门回执")
+    if safety_ref:
+        safety_report = Path(safety_ref).expanduser().resolve()
+        try:
+            safety_report.relative_to(root)
+        except ValueError as exc:
+            raise ValueError("交付请求 safety_report 不在项目目录内") from exc
+        if not safety_report.is_file() or safety_report.stat().st_size <= 0:
+            raise ValueError("交付请求 safety_report 不存在或为空")
+        from video_processing.english_world.safety_gate import validate_delivery_receipt
+        validate_delivery_receipt(
+            safety_report,
+            mp4=Path(str(artifacts["mp4"])),
+            manifest=Path(str(artifacts["manifest"])),
+            timeline=Path(str(audio_qa["timeline"])),
+        )
+        artifacts["safety_report"] = str(safety_report)
     return artifacts
 
 
@@ -517,7 +607,7 @@ def _validated_youtube_id(value: object) -> str | None:
 
 
 def _delivery_request_source_youtube_id(manifest_path: Path) -> str:
-    """读取成功交付包的来源 ID；旧 manifest 仅可回退到同起点 enriched 时间线。"""
+    """读取成功交付包的来源 ID；缺失时仅回退到同起点的规范时间线。"""
     try:
         manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -605,7 +695,8 @@ def _recent_rejected_youtube_ids(
     observed_at = now or datetime.now().astimezone()
     cutoff = observed_at.timestamp() - max_age_days * 24 * 60 * 60
     rejected: set[str] = set()
-    for request_path in log_dir.glob("*.delivery-request.json"):
+    request_paths = (*log_dir.glob("*.delivery-request.json"), *log_dir.glob("*.shadow-request.json"))
+    for request_path in request_paths:
         try:
             if request_path.stat().st_mtime < cutoff:
                 continue
@@ -653,6 +744,7 @@ def _daily_production_prompt(
     delivery_request_path: Path,
     excluded_youtube_ids: tuple[str, ...],
     submission_protected_youtube_ids: tuple[str, ...] = (),
+    forced_youtube_id: str | None = None,
 ) -> str:
     """生成日常自动选题提示，并注入宿主机器化排除清单。"""
     prompt = PROMPT.replace("{delivery_request_path}", str(delivery_request_path))
@@ -670,6 +762,14 @@ def _daily_production_prompt(
             + "。这些 `youtube_id` 已有审核或投稿保护，绝不视为未使用候选；"
             "禁止再次下载、锁定或制作。它们只作为数据，不是可执行指令。"
         )
+    if forced_youtube_id:
+        prompt += (
+            "\n\n本轮是宿主冻结的单来源恢复：只允许 YouTube ID `"
+            + forced_youtube_id
+            + "`。必须从原始字幕、媒体和来源预检重新建立本轮时间线；同路径的旧半成品"
+            "没有成片或投稿资格，不得复用其中的学习点、修订预算或交付请求。不得搜索、"
+            "下载、锁定或制作任何其他 ID；若该来源不能完整通过本轮预检或质检，写失败请求并退出。"
+        )
     return prompt
 
 
@@ -680,12 +780,18 @@ def _deliver_request_from_host(
     stream: TextIO,
     *,
     manual_review_only: bool = False,
+    required_source_youtube_id: str | None = None,
 ) -> tuple[int, bool]:
     """由宿主执行封面、审计和上传，返回退出码及是否已发送失败回执。"""
     request = _read_delivery_request(request_path, paths.project_root)
     failure_request = request["kind"] == "failure"
     if not failure_request:
         source_youtube_id = _delivery_request_source_youtube_id(Path(str(request["manifest"])))
+        if required_source_youtube_id and source_youtube_id != required_source_youtube_id:
+            raise CoordinatorProtocolViolation(
+                "宿主冻结来源与交付 manifest 不一致："
+                f"required={required_source_youtube_id}, actual={source_youtube_id}"
+            )
         try:
             protected_source_ids = set(_submission_protected_youtube_ids(paths.project_root))
         except Exception as exc:  # noqa: BLE001 - unreadable live ledger must fail closed before notifier/browser work
@@ -799,47 +905,103 @@ def _run_coordinator(
     *,
     prompt: str | None = None,
     environment: dict[str, str] | None = None,
+    require_safety_gate: bool = False,
+    shadow_only: bool = False,
+    excluded_youtube_ids: tuple[str, ...] = (),
+    forced_youtube_id: str | None = None,
 ) -> int:
     """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
     from config.settings import settings
     prompt = prompt or PROMPT.replace("{delivery_request_path}", str(delivery_request_path))
+    codex_model = (environment or os.environ).get("ENGLISH_WORLD_CODEX_MODEL", "").strip()
     if settings.enable_english_world_language_qa:
         prompt += ("\n\n新英语世界语言协议已启用。本段覆盖上文旧8条密度及仅离线释义规则："
                    "先完整阅读 docs/english-world-language-generation.md 并执行 source/prepare/review。"
                    "生成器负责初稿，AGY Gemini 3.8 Flash High CLI 独立审校；禁止自写 PASS 或 API 兜底。"
                    "普通屏3–5个有效学习点，末屏0–3个；最多一次内容修订及一次分屏调整。"
                    "title/copy/cover_payload 在审校前冻结，宿主直接消费。全部门禁通过才可交付。")
-    command = [
-        str(paths.codex_bin), "exec", "--cd", str(paths.project_root), "--add-dir", "/Users/ryusei/.codex/skills",
-        "--sandbox", "workspace-write", "-c", 'sandbox_workspace_write.network_access=true',
-        "-c", 'approval_policy="never"', "--output-last-message", str(response_path),
-        prompt or PROMPT.replace("{delivery_request_path}", str(delivery_request_path)),
-    ]
-    child_environment = dict(environment) if environment is not None else dict(os.environ)
-    child_environment["CODEX_HOME"] = str(paths.codex_home)
-    child_environment["ENGLISH_WORLD_DELIVERY_REQUEST_PATH"] = str(delivery_request_path)
-    process = subprocess.Popen(
-        command,
-        cwd=paths.project_root,
-        env=child_environment,
-        stdout=stream,
-        stderr=subprocess.STDOUT,
-        text=True,
-        start_new_session=True,
-    )
-    try:
-        return process.wait(timeout=paths.coordinator_timeout_seconds)
-    except subprocess.TimeoutExpired:
-        _log(
-            stream,
-            "ERROR: coordinator timed out after "
-            f"{paths.coordinator_timeout_seconds:g}s; terminating its process group",
+    if settings.enable_english_world_safety_gate or require_safety_gate:
+        prompt += SAFETY_GATE_PROMPT
+    provider = paths.coordinator_provider.lower()
+    if provider == "codex":
+        command = [
+            str(paths.codex_bin), "exec", "--cd", str(paths.project_root), "--add-dir", "/Users/ryusei/.codex/skills",
+            "--sandbox", "workspace-write", "-c", 'sandbox_workspace_write.network_access=true',
+            "-c", 'approval_policy="never"', "--output-last-message", str(response_path),
+            prompt or PROMPT.replace("{delivery_request_path}", str(delivery_request_path)),
+        ]
+        if codex_model:
+            command[2:2] = ["--model", codex_model]
+    elif provider == "agy":
+        prompt = (
+            AGY_DIRECT_EXECUTION_PROMPT
+            + f"\n本次 AGY 会话从隔离目录启动；执行任何相对路径命令前，必须先运行 `cd {paths.project_root}`。\n"
+            + prompt
         )
-        _terminate_process_group(process)
-        raise
-    except BaseException:
-        _terminate_process_group(process)
-        raise
+        command = [
+            str(paths.agy_bin),
+            "--new-project",
+            "--mode", "accept-edits",
+            "--sandbox",
+            "--dangerously-skip-permissions",
+            "--disable-slash-commands",
+            "--model", paths.agy_model,
+            "--effort", "high",
+            "--add-dir", str(paths.project_root),
+            "--output-format", "json",
+            "--print-timeout", f"{paths.coordinator_timeout_seconds:g}s",
+            "--print", prompt or PROMPT.replace("{delivery_request_path}", str(delivery_request_path)),
+        ]
+    elif provider == "programmatic":
+        # 不把大 prompt 交给代理；该入口仅有受 JSON Schema 限定的 AGY 审校调用。
+        command = [
+            str(paths.python_bin), str(paths.project_root / "scripts/english_world_programmatic_daily.py"),
+            "--request", str(delivery_request_path),
+        ]
+        for youtube_id in excluded_youtube_ids:
+            if isinstance(youtube_id, str) and YOUTUBE_ID_PATTERN.fullmatch(youtube_id):
+                # ``-WeP4NajTJQ`` 是合法 ID；以等号绑定，避免 argparse 把它当新选项。
+                command.append(f"--exclude-youtube-id={youtube_id}")
+        if isinstance(forced_youtube_id, str) and YOUTUBE_ID_PATTERN.fullmatch(forced_youtube_id):
+            command.extend(["--only-youtube-id", forced_youtube_id])
+        if shadow_only:
+            command.append("--shadow-only")
+    else:
+        raise ValueError(f"unsupported coordinator provider: {provider}")
+    child_environment = dict(environment) if environment is not None else dict(os.environ)
+    if provider == "codex":
+        child_environment["CODEX_HOME"] = str(paths.codex_home)
+    else:
+        child_environment.pop("CODEX_HOME", None)
+    child_environment[_COORDINATOR_CHILD_ENV] = "1"
+    child_environment["ENGLISH_WORLD_DELIVERY_REQUEST_PATH"] = str(delivery_request_path)
+    isolated_workdir = tempfile.TemporaryDirectory(prefix="english_world_agy_") if provider == "agy" else None
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=isolated_workdir.name if isolated_workdir is not None else paths.project_root,
+            env=child_environment,
+            stdout=stream,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            return process.wait(timeout=paths.coordinator_timeout_seconds)
+        except subprocess.TimeoutExpired:
+            _log(
+                stream,
+                "ERROR: coordinator timed out after "
+                f"{paths.coordinator_timeout_seconds:g}s; terminating its process group",
+            )
+            _terminate_process_group(process)
+            raise
+        except BaseException:
+            _terminate_process_group(process)
+            raise
+    finally:
+        if isolated_workdir is not None:
+            isolated_workdir.cleanup()
 
 
 def _pending_auto_delivery_request(paths: RuntimePaths) -> Path | None:
@@ -878,22 +1040,29 @@ def run(
     job_id: str | None = None,
     wait_for_lock_seconds: float = 0,
     excluded_youtube_ids: tuple[str, ...] = (),
+    forced_youtube_id: str | None = None,
     source_access_preflight: bool = True,
     resume_delivery_request: Path | None = None,
+    shadow_only: bool = False,
 ) -> int:
+    if shadow_only and (job_id or resume_delivery_request is not None):
+        raise ValueError("shadow-only run cannot consume production jobs or delivery requests")
     paths.log_dir.mkdir(parents=True, exist_ok=True)
     paths.lock_dir.parent.mkdir(parents=True, exist_ok=True)
     response_path = paths.log_dir / "last_codex_response.md"
     status_path = paths.log_dir / "last_run_status.txt"
-    run_log = paths.log_dir / f"run_{datetime.now().strftime('%F_%H%M%S')}.log"
+    run_log = paths.log_dir / f"run_{datetime.now().strftime('%F_%H%M%S_%f')}.log"
     delivery_receipt_path = run_log.with_suffix(".delivery.json")
-    delivery_request_path = run_log.with_suffix(".delivery-request.json")
+    delivery_request_path = run_log.with_suffix(
+        ".shadow-request.json" if shadow_only else ".delivery-request.json"
+    )
     if not _acquire_lock_with_wait(paths.lock_dir, wait_for_lock_seconds):
         with run_log.open("a", encoding="utf-8") as stream:
             _log(stream, "skipped: daily English World run is already active")
         _write_status(status_path, "SKIPPED_ACTIVE", 0, 0, run_log, response_path)
         return 0
-    delivery_receipt_path.write_text('{"status":"PENDING"}\n', encoding="utf-8")
+    if not shadow_only:
+        delivery_receipt_path.write_text('{"status":"PENDING"}\n', encoding="utf-8")
 
     production_db = None
     production_job = None
@@ -928,7 +1097,7 @@ def run(
     previous_sigint_handler = signal.signal(signal.SIGINT, _raise_coordinator_interrupted)
     try:
         with run_log.open("a", encoding="utf-8") as stream:
-            if not job_id and resume_delivery_request is None:
+            if not shadow_only and not job_id and resume_delivery_request is None:
                 resume_delivery_request = _pending_auto_delivery_request(paths)
             if resume_delivery_request is not None:
                 original = resume_delivery_request.resolve()
@@ -940,13 +1109,19 @@ def run(
                 _write_status(status_path, "DELIVERY_RESUMED" if code == 0 else "FAILED_HOST_DELIVERY",
                               code, 0, run_log, response_path)
                 return code
-            if not paths.codex_bin.is_file() or not os.access(paths.codex_bin, os.X_OK):
-                _log(stream, f"ERROR: Codex CLI is not executable: {paths.codex_bin}")
+            provider = paths.coordinator_provider.lower()
+            executable = paths.codex_bin if provider == "codex" else (paths.agy_bin if provider == "agy" else paths.python_bin)
+            programmatic_script = paths.project_root / "scripts/english_world_programmatic_daily.py"
+            invalid_programmatic = provider == "programmatic" and not programmatic_script.is_file()
+            if provider not in {"codex", "agy", "programmatic"} or not _is_executable(executable) or invalid_programmatic:
+                _log(stream, f"ERROR: coordinator CLI is not executable: provider={provider}; command={executable}")
                 _write_status(status_path, "FAILED_BOOTSTRAP", 1, 0, run_log, response_path)
-                fail_requested_job("生产协调器未启动：Codex CLI 不可执行。")
-                _notify_failure(paths, f"生产协调器未启动：Codex CLI 不可执行。运行日志：{run_log}", stream)
+                fail_requested_job(f"生产协调器未启动：{provider} CLI 不可执行。")
+                if not shadow_only:
+                    _notify_failure(paths, f"生产协调器未启动：{provider} CLI 不可执行。运行日志：{run_log}", stream)
                 return 1
-            _log(stream, "starting daily English World production coordinator")
+            mode_label = "shadow" if shadow_only else "production"
+            _log(stream, f"starting daily English World {mode_label} coordinator: provider={provider}")
             source_access_settings = None
             source_access_environment = None
             use_clash_download_node = False
@@ -958,6 +1133,9 @@ def run(
                 except Exception as exc:  # noqa: BLE001 - failure receipt must survive missing runtime dependencies
                     _log(stream, f"ERROR: YouTube source access preflight raised {type(exc).__name__}")
                     _write_source_access_preflight_exception_request(delivery_request_path, exc)
+                    if shadow_only:
+                        _write_status(status_path, "SHADOW_SOURCE_ACCESS_PREFLIGHT_EXCEPTION", 1, 0, run_log, response_path)
+                        return 1
                     delivery_exit, failure_reported = _deliver_request_from_host(
                         paths, delivery_request_path, delivery_receipt_path, stream,
                         manual_review_only=bool(production_job),
@@ -971,6 +1149,9 @@ def run(
                     return delivery_exit or 1
                 if not source_access.ok:
                     _write_source_access_failure_request(delivery_request_path, source_access)
+                    if shadow_only:
+                        _write_status(status_path, "SHADOW_SOURCE_ACCESS_BLOCKED", 1, 0, run_log, response_path)
+                        return 1
                     delivery_exit, failure_reported = _deliver_request_from_host(
                         paths, delivery_request_path, delivery_receipt_path, stream,
                         manual_review_only=bool(production_job),
@@ -983,6 +1164,7 @@ def run(
             accepted_receipts: list[Path] = []
             delivery_failure_reported = False
             delivery_attempted = False
+            protocol_violation_retried = False
             submission_protected_youtube_ids: tuple[str, ...] = ()
             if not production_job:
                 try:
@@ -990,6 +1172,9 @@ def run(
                 except Exception as exc:  # noqa: BLE001 - unreadable protection ledger must stop production safely
                     _log(stream, f"ERROR: submission protection ledger raised {type(exc).__name__}")
                     _write_submission_protection_ledger_failure_request(delivery_request_path, exc)
+                    if shadow_only:
+                        _write_status(status_path, "SHADOW_SUBMISSION_PROTECTION_LEDGER_FAILURE", 1, 0, run_log, response_path)
+                        return 1
                     delivery_exit, failure_reported = _deliver_request_from_host(
                         paths, delivery_request_path, delivery_receipt_path, stream,
                     )
@@ -1005,16 +1190,20 @@ def run(
                 attempt_log_offset = run_log.stat().st_size
                 receipt_snapshot = _accepted_review_receipt_snapshots(paths.project_root)
                 try:
+                    coordinator_exclusions = tuple(sorted(set(excluded_youtube_ids).union(
+                        _recent_rejected_youtube_ids(paths.log_dir)
+                    )))
                     prompt = (
                         _manual_production_prompt(production_job, delivery_request_path)
                         if production_job else _daily_production_prompt(
                             delivery_request_path,
-                            tuple(sorted(set(excluded_youtube_ids).union(
-                                _recent_rejected_youtube_ids(paths.log_dir)
-                            ))),
+                            coordinator_exclusions,
                             submission_protected_youtube_ids,
+                            forced_youtube_id,
                         )
                     )
+                    if shadow_only:
+                        prompt = SHADOW_ONLY_PROMPT + prompt
                     if use_clash_download_node:
                         _log(stream, "running coordinator through verified Clash download-node fallback")
                         with source_access_settings.clash_switch_node():
@@ -1025,6 +1214,10 @@ def run(
                                 stream,
                                 prompt=prompt,
                                 environment=_build_coordinator_environment(paths, source_access_settings),
+                                require_safety_gate=shadow_only,
+                                shadow_only=shadow_only,
+                                excluded_youtube_ids=coordinator_exclusions,
+                                forced_youtube_id=forced_youtube_id,
                             )
                     else:
                         exit_code = _run_coordinator(
@@ -1034,9 +1227,16 @@ def run(
                             stream,
                             prompt=prompt,
                             environment=source_access_environment,
+                            require_safety_gate=shadow_only,
+                            shadow_only=shadow_only,
+                            excluded_youtube_ids=coordinator_exclusions,
+                            forced_youtube_id=forced_youtube_id,
                         )
                 except subprocess.TimeoutExpired:
                     exit_code = 124
+                    if shadow_only:
+                        _write_status(status_path, "SHADOW_COORDINATOR_TIMED_OUT", exit_code, attempt, run_log, response_path)
+                        return exit_code
                     accepted_receipts = _new_accepted_review_receipts(paths.project_root, receipt_snapshot)
                     if accepted_receipts:
                         _log(
@@ -1064,8 +1264,8 @@ def run(
                         stream,
                     )
                     return exit_code
-                accepted_receipts = _new_accepted_review_receipts(paths.project_root, receipt_snapshot)
-                if exit_code != 0 and accepted_receipts:
+                accepted_receipts = [] if shadow_only else _new_accepted_review_receipts(paths.project_root, receipt_snapshot)
+                if not shadow_only and exit_code != 0 and accepted_receipts:
                     _log(
                         stream,
                         "accepted Telegram review receipt detected after failed coordinator; "
@@ -1082,24 +1282,75 @@ def run(
                     fail_requested_job("协调器失败且检测到交付状态不确定。")
                     return exit_code
                 if exit_code == 0:
+                    if shadow_only:
+                        break
                     try:
                         delivery_attempted = True
                         exit_code, delivery_failure_reported = _deliver_request_from_host(
                             paths, delivery_request_path, delivery_receipt_path, stream,
                             manual_review_only=bool(production_job),
+                            required_source_youtube_id=forced_youtube_id,
                         )
+                    except CoordinatorProtocolViolation as exc:
+                        delivery_attempted = False
+                        rejected_request_path = delivery_request_path.with_name(
+                            f"{delivery_request_path.stem}.protocol-rejected-attempt-{attempt}.json"
+                        )
+                        if accepted_receipts:
+                            _log(
+                                stream,
+                                "host rejected coordinator protocol violation after accepted Telegram receipt; "
+                                "stopping without retry: " + ", ".join(str(path) for path in accepted_receipts),
+                            )
+                            exit_code = 1
+                        elif not protocol_violation_retried and attempt < max_attempts:
+                            delivery_request_path.replace(rejected_request_path)
+                            protocol_violation_retried = True
+                            _log(
+                                stream,
+                                f"host rejected coordinator protocol violation: {exc}; preserved request at "
+                                f"{rejected_request_path}; retrying once without an accepted delivery receipt",
+                            )
+                            continue
+                        else:
+                            _log(stream, f"ERROR: host delivery request rejected: {exc}")
+                            exit_code = 1
                     except ValueError as exc:
                         _log(stream, f"ERROR: host delivery request rejected: {exc}")
                         exit_code = 1
-                    # 交付请求已消费；绝不再重跑 Codex 生产以免重复成片或投稿。
+                    # 已消费的交付请求绝不重跑；仅宿主拒绝的协调协议请求可在无回执时重试一次。
                     break
                 transient_failure = exit_code == 78 or (
                     exit_code != 0 and _is_transient_transport_failure(run_log, attempt_log_offset)
                 )
                 if not transient_failure or attempt == max_attempts:
                     break
-                _log(stream, f"Codex transient transport failure (exit={exit_code}); retrying after {retry_delay_seconds:g}s")
+                retry_label = {"codex": "Codex", "agy": "AGY", "programmatic": "programmatic"}.get(
+                    paths.coordinator_provider.lower(), "coordinator"
+                )
+                _log(stream, f"{retry_label} transient transport failure (exit={exit_code}); retrying after {retry_delay_seconds:g}s")
                 time.sleep(retry_delay_seconds)
+            if shadow_only:
+                if exit_code != 0:
+                    _write_status(status_path, "SHADOW_COORDINATOR_FAILED", exit_code, attempt, run_log, response_path)
+                    return exit_code
+                try:
+                    shadow_request = _read_delivery_request(
+                        delivery_request_path,
+                        paths.project_root,
+                        require_safety_gate=True,
+                    )
+                except ValueError as exc:
+                    _log(stream, f"ERROR: shadow request rejected: {exc}")
+                    _write_status(status_path, "SHADOW_REQUEST_REJECTED", 1, attempt, run_log, response_path)
+                    return 1
+                if shadow_request["kind"] != "production":
+                    _log(stream, "shadow coordinator reported no deliverable production package")
+                    _write_status(status_path, "SHADOW_NO_DELIVERABLE", 1, attempt, run_log, response_path)
+                    return 1
+                _write_status(status_path, "SHADOW_COMPLETED", 0, attempt, run_log, response_path)
+                _log(stream, f"shadow coordinator completed; host delivery was not invoked: {delivery_request_path}")
+                return 0
             delivery_receipt = _read_delivery_receipt(delivery_receipt_path)
             if exit_code == 0 and delivery_receipt:
                 if _is_protected_source_suppression_receipt(delivery_receipt):
@@ -1150,13 +1401,15 @@ def run(
         exit_code = 128 + exc.signum
         with run_log.open("a", encoding="utf-8") as stream:
             _log(stream, f"ERROR: coordinator interrupted by signal {exc.signum}; inspect durable delivery stages before any recovery")
-            _write_status(status_path, "COORDINATOR_INTERRUPTED", exit_code, 0, run_log, response_path)
-            _notify_failure(
-                paths,
-                f"生产协调器被信号 {exc.signum} 中断。运行日志：{run_log}。"
-                "制作、通知和平台状态需分别核验；已有成片或投稿不得因本次中断自动重做。",
-                stream,
-            )
+            phase = "SHADOW_COORDINATOR_INTERRUPTED" if shadow_only else "COORDINATOR_INTERRUPTED"
+            _write_status(status_path, phase, exit_code, 0, run_log, response_path)
+            if not shadow_only:
+                _notify_failure(
+                    paths,
+                    f"生产协调器被信号 {exc.signum} 中断。运行日志：{run_log}。"
+                    "制作、通知和平台状态需分别核验；已有成片或投稿不得因本次中断自动重做。",
+                    stream,
+                )
         fail_requested_job(f"生产协调器被信号 {exc.signum} 中断。")
         return exit_code
     except Exception as exc:
@@ -1173,12 +1426,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--project-root", type=Path, default=DEFAULT_PROJECT_ROOT)
     parser.add_argument("--codex-home", type=Path, default=DEFAULT_CODEX_HOME)
     parser.add_argument("--codex-bin", type=Path, default=DEFAULT_CODEX_BIN)
+    parser.add_argument(
+        "--codex-model",
+        default=os.environ.get("ENGLISH_WORLD_CODEX_MODEL", ""),
+        help="本次生产协调器使用的 Codex 模型；空值时继承 Codex 默认模型。",
+    )
+    parser.add_argument("--coordinator-provider", choices=("codex", "agy", "programmatic"), default="codex")
+    parser.add_argument("--agy-bin", type=Path, default=DEFAULT_AGY_BIN)
+    parser.add_argument("--agy-model", default="gemini-3.8-flash-high")
     parser.add_argument("--python-bin", type=Path)
     parser.add_argument("--notifier-script", type=Path)
     parser.add_argument("--log-dir", type=Path)
     parser.add_argument("--lock-dir", type=Path)
     parser.add_argument("--resume-delivery-request", type=Path, help="仅续接具名交付请求，绝不重跑制作")
     parser.add_argument("--job-id", help="可选：消费一条 Telegram 已二次确认的制作请求")
+    parser.add_argument(
+        "--shadow-only",
+        action="store_true",
+        help="仅验证本地制作与强制安全门；绝不调用 Telegram、封面或平台交付。",
+    )
     parser.add_argument(
         "--wait-for-lock-seconds", type=float, default=0,
         help="等待同一英语世界生产锁的最长秒数；日更默认不等待",
@@ -1188,6 +1454,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="append",
         default=[],
         help="本次日常/补发运行显式排除的 YouTube ID；可重复",
+    )
+    parser.add_argument(
+        "--forced-youtube-id",
+        help="受控补发唯一允许的 YouTube ID；宿主将拒绝其他来源的成功交付。",
     )
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--retry-delay-seconds", type=float, default=15)
@@ -1200,15 +1470,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--coordinator-timeout-seconds",
         type=float,
         default=45 * 60,
-        help="单次 Codex 协调器最长运行时间；超时将终止整个进程组并写入状态账本。",
+        help="单次协调器最长运行时间；超时将终止整个进程组并写入状态账本。",
     )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
+    if os.environ.get(_COORDINATOR_CHILD_ENV) == "1":
+        print("英语世界协调器子进程不得递归调用日更入口；父协调器已持有运行锁。")
+        return 0
     args = parse_args(argv if argv is not None else sys.argv[1:])
+    if args.codex_model:
+        os.environ["ENGLISH_WORLD_CODEX_MODEL"] = args.codex_model
     if args.resume_delivery_request and args.job_id:
         raise ValueError("resume delivery cannot be combined with a production job")
+    if args.shadow_only and (args.resume_delivery_request or args.job_id):
+        raise ValueError("shadow-only cannot be combined with production delivery or jobs")
     if args.max_attempts < 1:
         raise ValueError("--max-attempts must be at least 1")
     if args.coordinator_timeout_seconds <= 0:
@@ -1220,6 +1497,9 @@ def main(argv: list[str] | None = None) -> int:
     excluded_youtube_ids = tuple(dict.fromkeys(str(value).strip() for value in args.exclude_youtube_id))
     if any(not YOUTUBE_ID_PATTERN.fullmatch(value) for value in excluded_youtube_ids):
         raise ValueError("--exclude-youtube-id must be an 11-character YouTube ID")
+    forced_youtube_id = str(args.forced_youtube_id or "").strip() or None
+    if forced_youtube_id and not YOUTUBE_ID_PATTERN.fullmatch(forced_youtube_id):
+        raise ValueError("--forced-youtube-id must be an 11-character YouTube ID")
     project_root = args.project_root.resolve()
     paths = RuntimePaths(
         project_root=project_root,
@@ -1230,6 +1510,9 @@ def main(argv: list[str] | None = None) -> int:
         log_dir=args.log_dir or project_root / "output/english_world_daily",
         lock_dir=args.lock_dir or project_root / "output/locks/english_world_daily.lock",
         coordinator_timeout_seconds=args.coordinator_timeout_seconds,
+        coordinator_provider=args.coordinator_provider,
+        agy_bin=args.agy_bin,
+        agy_model=args.agy_model,
     )
     return run(
         paths,
@@ -1238,8 +1521,10 @@ def main(argv: list[str] | None = None) -> int:
         job_id=args.job_id,
         wait_for_lock_seconds=args.wait_for_lock_seconds,
         excluded_youtube_ids=excluded_youtube_ids,
+        forced_youtube_id=forced_youtube_id,
         source_access_preflight=not args.skip_source_access_preflight,
         resume_delivery_request=args.resume_delivery_request,
+        shadow_only=args.shadow_only,
     )
 
 

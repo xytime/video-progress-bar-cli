@@ -189,9 +189,12 @@ def review_input(plan, evidence, editorial, *, projection="compact-v1"):
     return value
 
 
-def cache_key(inputs, model=MODEL):
-    return digest({"inputs": inputs, "model": model, "prompt": VERSION,
-                   "schema": review_schema(), "rules": VERSION})
+def cache_key(inputs, model=MODEL, effort=None):
+    payload = {"inputs": inputs, "model": model, "prompt": VERSION,
+               "schema": review_schema(), "rules": VERSION}
+    if effort is not None:
+        payload["effort"] = effort
+    return digest(payload)
 
 
 def validate_language_qa(timeline, *, manifest=None, required=True):
@@ -224,7 +227,9 @@ def validate_language_qa(timeline, *, manifest=None, required=True):
         raise ValueError("语言审校文件绑定失效")
     evidence = read_json(root / "qa/source_evidence.json")
     editorial = read_json(root / "editorial_changes.json")
-    if report.get("input_key") != cache_key(review_input(plan, evidence, editorial, projection=report.get("input_projection", "legacy")), report["model"]):
+    if report.get("input_key") != cache_key(
+            review_input(plan, evidence, editorial, projection=report.get("input_projection", "legacy")),
+            report["model"], report.get("effort")):
         raise ValueError("来源或编辑证据已经变化")
     if evaluate(effective_result, plan, evidence=evidence, editorial=editorial) != "PASS":
         raise ValueError("语言审校存在未解决问题")

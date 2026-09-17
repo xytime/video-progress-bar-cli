@@ -14,6 +14,8 @@
 # | 2.3.0 | 2026-08-30 | Codex | 安装前强制验证项目 venv 解释器及配置依赖，拒绝 pyenv Python 运行时漂移。 |
 # | 2.4.0 | 2026-08-30 | Codex | 安装时按当前项目根目录和用户目录渲染 plist，安装后逐字段核验运行路径。 |
 # | 1.0.0 | 2026-08-22 | Codex | 新增独立英语世界日更 LaunchAgent 安装器。 |
+# | 2.5.0 | 2026-09-17 | Codex | 安装后核验日更和补跑都显式使用 AGY high-effort 协调器，防止回退消耗 Codex。 |
+# | 2.6.0 | 2026-09-17 | Codex | 改为核验程序化主链；AGY 只在其受限审校步骤中调用。 |
 # | 2.4.1 | 2026-09-06 | Codex | 安装与监控共享生产时刻，并核验已安装 LaunchAgent 的运行路径和时刻。 |
 
 set -euo pipefail
@@ -121,6 +123,14 @@ required = {
 }
 if expected != required:
     raise SystemExit(f"LaunchAgent 路径渲染错误: expected={required!r} actual={expected!r}")
+label = configuration.get("Label")
+required_suffix = (
+    ["--coordinator-provider", "programmatic"]
+    if label == "com.videopipeline.english-world-daily"
+    else ["--recover-missing", "--coordinator-provider", "programmatic"]
+)
+if arguments[2:] != required_suffix:
+    raise SystemExit(f"LaunchAgent 协调器参数错误: expected={required_suffix!r} actual={arguments[2:]!r}")
 PY
 }
 

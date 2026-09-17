@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-09 | Codex | 表面词优先，缺音标时显式标注经词典证明的词元。 |
+| 1.0.2 | 2026-09-17 | Codex | 词典查找规范化来源词两端标点，保留屏显原词与词轴不变，避免安全候选因逗号误判无词条。 |
 | 1.0.1 | 2026-09-11 | Codex | 在第二次独立复审前阻断相邻学习点之间的词典义串线。 |
 """
 import csv
@@ -15,6 +16,11 @@ def _chinese_key(value):
     """仅保留可比对的中文语义字，忽略词性、标点和“的”等语法尾缀。"""
     chars = [char for char in str(value) if "\u4e00" <= char <= "\u9fff"]
     return "".join(chars).rstrip("的地得")
+
+
+def _dictionary_key(value):
+    """把词轴表面词映射为词典键；只移除两端标点，不改写中间拼写。"""
+    return re.sub(r"^[^a-z]+|[^a-z]+$", "", str(value).casefold())
 
 
 def _dictionary_sense_keys(translation):
@@ -64,22 +70,26 @@ def attach_evidence(payload, directory):
     from ..vocabulary.leveler import VocabularyLeveler
     leveler = VocabularyLeveler(directory)
     points = payload["learning_points"]
-    targets = {p["word"].lower() for p in points}
+    targets = {_dictionary_key(p["word"]) for p in points}
+    if "" in targets:
+        raise ValueError("学习点必须包含可查询的英文词，不能编造音标")
     path = directory / "ecdict.csv"
     rows = {}
     with path.open(encoding="utf-8", newline="") as stream:
         for row in csv.DictReader(stream):
-            if row["word"].lower() in targets:
-                rows[row["word"].lower()] = row
+            key = _dictionary_key(row["word"])
+            if key in targets:
+                rows[key] = row
     missing_lemmas = {part[2:] for row in rows.values() for part in row.get("exchange", "").split("/")
                       if part.startswith("0:")} - rows.keys()
     if missing_lemmas:
         with path.open(encoding="utf-8", newline="") as stream:
             for row in csv.DictReader(stream):
-                if row["word"] in missing_lemmas:
-                    rows[row["word"]] = row
+                key = _dictionary_key(row["word"])
+                if key in missing_lemmas:
+                    rows[key] = row
     for point in points:
-        key = point["word"].lower()
+        key = _dictionary_key(point["word"])
         row = rows.get(key)
         if not row:
             raise ValueError(f"本机词典没有学习点 {key}，不能编造音标")

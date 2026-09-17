@@ -29,10 +29,11 @@ def test_agy_provider_uses_isolated_schema_command_and_extracts_structured_outpu
     result = run_agy_structured("translate", schema={"type": "object"}, model="test-model", command="agy", timeout_sec=17)
 
     assert result == {"items": []}
-    assert captured["args"][:8] == [
-        "agy", "--mode", "plan", "--sandbox", "--disable-slash-commands", "--model", "test-model", "--json-schema",
+    assert captured["args"][:7] == [
+        "agy", "--mode", "plan", "--sandbox", "--disable-slash-commands", "--model", "test-model",
     ]
     assert "--disable-slash-commands" in captured["args"]
+    assert captured["args"][captured["args"].index("--effort") + 1] == "medium"
     assert "--print=translate" in captured["args"]
     assert captured["kwargs"]["cwd"] != "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing"
 

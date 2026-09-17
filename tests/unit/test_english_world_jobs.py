@@ -65,6 +65,18 @@ def _candidate(*, title: str = "Whales return to the bay", duration_sec: int = 4
     }
 
 
+def _bnn_candidate(*, title: str = "Clean energy innovation", duration_sec: int = 42) -> dict:
+    return {
+        "id": "9bZkp7q19f0",
+        "webpage_url": "https://www.youtube.com/watch?v=9bZkp7q19f0",
+        "title": title,
+        "channel": "BNN Bloomberg",
+        "channel_id": "UC5aNPmKYwbudeNngDMTY3lw",
+        "upload_date": "20260917",
+        "duration": duration_sec,
+    }
+
+
 def _stored_candidate() -> dict:
     return {
         "id": "a" * 32,
@@ -180,6 +192,15 @@ def test_research_rejects_unapproved_channel_even_if_display_name_is_spoofed(tmp
     assert "没有找到" in result["error_message"]
 
 
+def test_bnn_bloomberg_uses_exact_channel_id_and_receives_priority_weight():
+    candidates = research._rank_candidates([_candidate(title="Clean energy innovation"), _bnn_candidate()])
+
+    assert research._SEARCH_QUERIES[0] == "BNN Bloomberg technology business innovation"
+    assert candidates[0]["source_channel"] == "BNN Bloomberg"
+    assert candidates[0]["source_channel_id"] == "UC5aNPmKYwbudeNngDMTY3lw"
+    assert candidates[0]["recommendation_score"] > candidates[1]["recommendation_score"]
+
+
 def test_legacy_candidate_without_channel_id_cannot_be_selected(tmp_path):
     db = PipelineDB(str(tmp_path / "pipeline.db"))
     job = db.create_english_world_research_job(requested_by="telegram")
@@ -248,7 +269,7 @@ def test_research_continues_after_one_search_batch_is_blocked(tmp_path):
     result = EnglishWorldResearchService(db, searcher=searcher).research(job["id"])
 
     assert result and result["state"] == "CANDIDATES_READY"
-    assert len(calls) == 5
+    assert len(calls) == len(research._SEARCH_QUERIES)
 
 
 def test_research_falls_back_to_approved_channel_catalog_when_ytsearch_is_blocked(tmp_path, monkeypatch):
@@ -273,7 +294,7 @@ def test_research_falls_back_to_approved_channel_catalog_when_ytsearch_is_blocke
     assert requested_channels == [channel_id for channel_id, _name in research._APPROVED_SOURCE_CHANNELS]
     candidates = db.get_english_world_candidates(job["id"])
     assert candidates[0]["youtube_id"] == "catalog-video-1"
-    assert candidates[0]["source_channel"] == "CBC Kids News"
+    assert candidates[0]["source_channel"] == "BNN Bloomberg"
 
 
 def test_research_falls_back_after_search_results_fail_pre_screening(tmp_path, monkeypatch):

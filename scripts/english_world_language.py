@@ -173,7 +173,8 @@ def main():
             report = review(timeline, **kwargs, cache_dir=ROOT / "output/english_world_language/cache",
                             task_dir=ROOT / "output/english_world_language/tasks" / task_key,
                             model=settings.english_world_language_model, command=settings.agy_command,
-                            timeout=settings.english_world_language_timeout_seconds)
+                            timeout=settings.english_world_language_timeout_seconds,
+                            effort=settings.english_world_language_effort)
             print(f"language QA: {report['state']}; cache_hit={report['cache_hit']}; attempts={report['attempts']}")
             return 0 if report["state"] == "PASS" else 2
         else:

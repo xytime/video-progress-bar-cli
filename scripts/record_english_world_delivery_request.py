@@ -13,6 +13,7 @@
 # | 1.2.0 | 2026-09-01 | Codex | 成功请求绑定 state=PASS 的最终音频 QA 报告，避免绕过末尾泄漏门禁。 |
 # | 1.3.0 | 2026-09-01 | Codex | 要求 PASS 报告精确绑定本次 MP4 与 manifest，阻断复用旧成片 QA。 |
 # | 1.3.1 | 2026-09-06 | Codex | 请求绑定三份产物内容指纹并区分来源质量与程序故障。 |
+# | 1.4.0 | 2026-09-17 | Codex | 安全门开关启用后，成功交付必须绑定本次成片、来源证据和 high-effort 视觉审核回执。 |
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--mp4", type=Path, help="已质检 MP4 的绝对路径")
     parser.add_argument("--manifest", type=Path, help="与 MP4 对应的 manifest 绝对路径")
     parser.add_argument("--audio-qa-report", type=Path, help="最终音频 QA 报告；必须为 state=PASS")
+    parser.add_argument("--safety-report", type=Path, help="英语世界安全门回执；启用安全门后成功交付必填")
     parser.add_argument("--failure", help="无可交付成片时的准确失败原因")
     parser.add_argument(
         "--rejected-youtube-id",
@@ -74,6 +76,14 @@ def main() -> int:
                 raise ValueError(f"audio QA report does not match the current {field}")
 
         validate_audio_qa(report_path, mp4=args.mp4, manifest=args.manifest)
+        from config.settings import settings
+        from video_processing.english_world.safety_gate import validate_delivery_receipt
+        safety_report = args.safety_report.expanduser().resolve() if args.safety_report else None
+        if settings.enable_english_world_safety_gate and safety_report is None:
+            raise ValueError("英语世界安全门已启用；成功交付必须提供 --safety-report")
+        if safety_report is not None:
+            timeline = Path(str(report["timeline"])).expanduser().resolve()
+            validate_delivery_receipt(safety_report, mp4=args.mp4, manifest=args.manifest, timeline=timeline)
 
     rejected_youtube_ids = list(dict.fromkeys(str(value).strip() for value in args.rejected_youtube_id))
     if len(rejected_youtube_ids) > 8:
@@ -95,6 +105,7 @@ def main() -> int:
                 "mp4": str(args.mp4.resolve()),
                 "manifest": str(args.manifest.resolve()),
                 "audio_qa_report": str(args.audio_qa_report.expanduser().resolve()),
+                **({"safety_report": str(args.safety_report.expanduser().resolve())} if args.safety_report else {}),
             }
         )
 

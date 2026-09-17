@@ -6,6 +6,7 @@
 活跃锁时，才补发起一次同一协调器。已有失败记录绝不重跑，避免重复内容或投稿。
 
 # Modification History
+# | 1.3.2 | 2026-09-17 | Codex | 缺席窗口恢复显式沿用 AGY 协调器参数，避免监控补跑回退到 Codex。 |
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
 # | 1.0.0 | 2026-08-27 | Codex | 新增 07:00/16:30 窗口后的回执监测、缺席自愈和持久健康账本。 |
@@ -31,7 +32,7 @@ from typing import Any
 
 
 DEFAULT_PROJECT_ROOT = Path("/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing")
-SCHEDULED_LOG_PATTERN = re.compile(r"^run_(?P<date>\d{4}-\d{2}-\d{2})_(?P<clock>\d{6})\.log$")
+SCHEDULED_LOG_PATTERN = re.compile(r"^run_(?P<date>\d{4}-\d{2}-\d{2})_(?P<clock>\d{6})(?:_\d{1,6})?\.log$")
 ACCEPTED_DELIVERY_KINDS = {"review", "review_and_auto_submission"}
 ACCEPTED_FAILURE_KINDS = {"failure_notice"}
 
@@ -43,6 +44,7 @@ class MonitorPaths:
     lock_dir: Path
     python_bin: Path
     daily_runner: Path
+    coordinator_args: tuple[str, ...] = ()
 
 
 def _parse_slot(value: str) -> time:
@@ -221,7 +223,7 @@ def _run_missing_window_recovery(paths: MonitorPaths) -> int:
         return 127
     try:
         result = subprocess.run(
-            [str(paths.python_bin), str(paths.daily_runner)],
+            [str(paths.python_bin), str(paths.daily_runner), *paths.coordinator_args],
             cwd=paths.project_root,
             env=dict(os.environ),
             check=False,
@@ -315,6 +317,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--lock-dir", type=Path)
     parser.add_argument("--python-bin", type=Path)
     parser.add_argument("--daily-runner", type=Path)
+    parser.add_argument("--coordinator-provider", choices=("codex", "agy", "programmatic"), default="codex")
+    parser.add_argument("--agy-bin", type=Path)
+    parser.add_argument("--agy-model")
     parser.add_argument("--slot", type=_parse_slot, help="显式覆盖待核验窗口；计划任务默认按触发时刻推导")
     parser.add_argument("--recover-missing", action="store_true")
     return parser.parse_args(argv)
@@ -329,6 +334,14 @@ def main(argv: list[str] | None = None) -> int:
         lock_dir=args.lock_dir or project_root / "output/locks/english_world_daily.lock",
         python_bin=args.python_bin or project_root / ".venv/bin/python",
         daily_runner=args.daily_runner or project_root / "scripts/run_english_world_daily.py",
+        coordinator_args=tuple(
+            value
+            for value in (
+                "--coordinator-provider", args.coordinator_provider,
+                *( ("--agy-bin", str(args.agy_bin)) if args.agy_bin else () ),
+                *( ("--agy-model", args.agy_model) if args.agy_model else () ),
+            )
+        ),
     )
     observed_at = datetime.now().astimezone()
     if not args.slot:

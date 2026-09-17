@@ -8,6 +8,8 @@
     <array>
         <string>__VENV_PYTHON__</string>
         <string>__PROJECT_ROOT__/scripts/run_english_world_daily.py</string>
+        <string>--coordinator-provider</string>
+        <string>programmatic</string>
     </array>
     <key>WorkingDirectory</key>
     <string>__PROJECT_ROOT__</string>

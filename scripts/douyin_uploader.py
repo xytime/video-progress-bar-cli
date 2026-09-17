@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.2 | 2026-09-09 | Codex | 横封面改用全幅裁切，消除竖版封面缩放后形成的大面积内框；投稿页控件证据补充实际输入值。 |
 | 1.7.1 | 2026-09-05 | Codex | 按作品编辑操作、日期和紧邻状态读取回查结果，修复长简介超过 320 字被误判。 |
 | 1.7.0 | 2026-09-05 | Codex | 双封面保存后等待检测刷新；旧缺失提示仅触发一次重新检测；管理页等待搜索框加载后再检索。 |
 | 1.0.0 | 2026-07-23 | Codex | 新增抖音创作者中心登录、校准快照与未校准发布保护骨架 |
@@ -608,6 +609,8 @@ def capture_controls(page, artifact_dir: Path, artifact_name: str) -> None:
             contentEditable: element.getAttribute('contenteditable'),
             className: String(element.className || '').slice(0, 160),
             text: (element.textContent || '').trim().slice(0, 80),
+            value: (element.tagName === 'INPUT' || element.tagName === 'TEXTAREA')
+                ? String(element.value || '').slice(0, 1000) : null,
             parentText: (element.parentElement?.textContent || '').trim().slice(0, 120),
             rect: (() => {
                 const rect = element.getBoundingClientRect();
@@ -1000,8 +1003,13 @@ def _prepare_cover_upload_file(
     target_width: int,
     target_height: int,
     suffix: str,
+    full_bleed: bool = False,
 ) -> Optional[str]:
-    """按指定宽高生成安全封面副本；原始封面不改动。"""
+    """按指定宽高生成安全封面副本；原始封面不改动。
+
+    横版必须全幅填满，不能把竖版主图嵌进模糊底图形成内框；该构图会被
+    创作者中心的封面质量检测识别为“大面积边框”。
+    """
     source = Path(cover_path)
     if not source.is_file():
         logger.error("抖音封面文件不存在: %s", cover_path)
@@ -1019,6 +1027,18 @@ def _prepare_cover_upload_file(
         left = (background.width - target_width) // 2
         top = (background.height - target_height) // 2
         background = background.crop((left, top, left + target_width, top + target_height))
+        if full_bleed:
+            target = source.with_name(f"{source.stem}_{suffix}.jpg")
+            background.save(target, format="JPEG", quality=95, optimize=True)
+            logger.info(
+                "已生成无内框的全幅抖音封面副本: %s (%sx%s -> %sx%s)",
+                target,
+                width,
+                height,
+                target_width,
+                target_height,
+            )
+            return str(target.resolve())
         background = ImageEnhance.Brightness(background.filter(ImageFilter.GaussianBlur(18))).enhance(0.45)
 
         foreground_scale = min(target_width / width, target_height / height)
@@ -1056,12 +1076,13 @@ def prepare_douyin_cover_upload_file(cover_path: str) -> Optional[str]:
 
 
 def prepare_douyin_horizontal_cover_upload_file(cover_path: str) -> Optional[str]:
-    """生成抖音横封面 4:3 安全副本；原始封面不改动。"""
+    """生成无内框的抖音横封面 4:3 安全副本；原始封面不改动。"""
     return _prepare_cover_upload_file(
         cover_path,
         target_width=DOUYIN_HORIZONTAL_COVER_TARGET_WIDTH,
         target_height=DOUYIN_HORIZONTAL_COVER_TARGET_HEIGHT,
         suffix="douyin_horizontal",
+        full_bleed=True,
     )
 
 

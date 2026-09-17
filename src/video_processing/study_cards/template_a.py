@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.17.0 | 2026-09-17 | Antigravity | 头部标题采用正规视频黑体深墨黑风格，视频窗口下移增加呼吸感，右上角补全新加坡时区制作日期。 |
 | language-v1 | 2026-09-09 | Codex | 按具体出现位置标注教学词，词元音标明确标注。 |
 | 1.0.0 | 2026-08-02 | Codex | 初始创建：输出模板 A 静态画布、唱片素材和逐词下划线坐标。 |
 | 1.1.0 | 2026-08-02 | Codex | 正文严格对齐新闻精读参考图：意群英文、词下小注、段后中文释义和右栏词卡。 |
@@ -33,6 +34,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 from typing import Iterable
@@ -45,7 +47,7 @@ from .vocabulary import difficulty_level
 
 CANVAS_WIDTH = 1080
 CANVAS_HEIGHT = 1920
-VIDEO_BOX = (54, 274, 700, 637)
+VIDEO_BOX = (54, 288, 700, 651)
 FEATURE_BOX = (760, 248, 1018, 568)
 TEXT_LEFT = 54
 TEXT_TOP = 720
@@ -264,12 +266,14 @@ class RecordUnderlineTemplate:
         )
         draw.rectangle((54, 182, 1025, 214), fill="#B73520")
         draw.text((66, 187), f"单词数 · {len(content.words)}个", font=_font(18, bold=True), fill="#FFFDF8")
-        draw.text((916, 187), "DATE:", font=_latin_font(17, bold=True), fill="#FFFDF8")
-        headline_font = _font(40, bold=True)
+        date_str = _singapore_date_str()
+        latin_font = _latin_font(17, bold=True)
+        date_width = int(draw.textlength(date_str, font=latin_font))
+        draw.text((1012 - date_width, 187), date_str, font=latin_font, fill="#FFFDF8")
+        headline_font = _title_sans_font(38, bold=True)
         headline = _ellipsize(content.headline_zh, headline_font, 640)
         draw.text(
-            (54, 225), headline, font=headline_font, fill=GOLD,
-            stroke_width=1, stroke_fill="#6B4914",
+            (54, 230), headline, font=headline_font, fill=INK,
         )
 
     def _draw_reading_body(self, draw: ImageDraw.ImageDraw, content: StudyCardContent) -> tuple[list[WordBox], list[int]]:
@@ -433,6 +437,30 @@ def _latin_font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont:
 def _ipa_font(size: int) -> ImageFont.FreeTypeFont:
     """音标必须使用已实测覆盖 /ˈspiːʃiːz/ 等 IPA 字形的字体。"""
     return ImageFont.truetype(ARIAL, size)
+
+
+SANS_FONT_CANDIDATES = (
+    Path("/System/Library/Fonts/Hiragino Sans GB.ttc"),
+    Path("/Library/Fonts/Hiragino Sans GB.ttc"),
+    Path("/System/Library/Fonts/PingFang.ttc"),
+)
+
+
+def _singapore_date_str() -> str:
+    """按新加坡时区 (UTC+8) 生成视频制作打卡日期。"""
+    tz = timezone(timedelta(hours=8))
+    return datetime.now(tz).strftime("DATE: %Y.%m.%d")
+
+
+def _title_sans_font(size: int, *, bold: bool = True) -> ImageFont.FreeTypeFont:
+    """头部标题优先使用正规视频标准黑体（Hiragino Sans GB / PingFang），确保清晰新闻质感。"""
+    for candidate in SANS_FONT_CANDIDATES:
+        if candidate.is_file():
+            try:
+                return ImageFont.truetype(candidate, size, index=2 if bold else 0)
+            except Exception:
+                continue
+    return _font(size, bold=bold)
 
 
 def _ellipsize(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:

@@ -103,3 +103,9 @@ wechat_state.json
 # Versioned synthetic speech fixtures for isolated media regression tests
 !tests/fixtures/media/extract_speech.wav
 !tests/fixtures/media/caption_speech.wav
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# Scratch & debug directories
+/scratch/

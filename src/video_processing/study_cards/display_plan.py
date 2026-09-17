@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-09-17 | Antigravity | 规范化比较表面词两端标点，避免原形词因标点误触发词元依据检查与多余音标前缀。 |
 | 1.0.0 | 2026-09-09 | Codex | A2-B1 展示计划、出现位置校验和共享布局验证。 |
 """
 from dataclasses import asdict, replace
@@ -10,6 +11,7 @@ from pathlib import Path
 import tempfile
 
 from .language_qa import VERSION, digest
+from .learning_dictionary import _dictionary_key
 from .models import StudyCardContent, VocabularyItem
 from .template_a import (RecordUnderlineTemplate, TEXT_TOP, READING_VIEWPORT_BOTTOM,
                           _vocabulary_occurrence_y_positions, _normalise_phrase,
@@ -36,7 +38,9 @@ def reviewed_content(payload):
         for field in ("context_meaning_zh", "pos", "phonetic", "dictionary_source", "phonetic_word"):
             if not isinstance(raw.get(field), str) or not raw[field].strip():
                 raise ValueError(f"学习点缺少 {field}")
-        if raw["phonetic_word"].lower() != word.lower():
+        word_key = _dictionary_key(word)
+        phonetic_key = _dictionary_key(raw["phonetic_word"])
+        if phonetic_key != word_key:
             if f"0:{raw['phonetic_word']}" not in raw.get("dictionary_senses", {}).get("exchange", "").split("/"):
                 raise ValueError("词元音标缺少词典词形依据")
         meaning = raw["context_meaning_zh"]
@@ -48,7 +52,7 @@ def reviewed_content(payload):
                               item_id=f"word:{index}:{size}", phonetic_word=raw["phonetic_word"])
         if len(_wrap_chinese(_meaning_line(item), _font(19), 250)) > 2:
             raise ValueError("右栏释义过长，请编辑后重新审校")
-        detail = item.phonetic if item.phonetic_word.lower() == item.word.lower() else f"{item.phonetic_word}: {item.phonetic}"
+        detail = item.phonetic if phonetic_key == word_key else f"{item.phonetic_word}: {item.phonetic}"
         if _ipa_font(17).getlength(detail) > 250:
             raise ValueError("右栏音标溢出")
         items.append(item)

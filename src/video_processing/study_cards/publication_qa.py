@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-09-09 | Codex | 增量文案审校不继承正文结论，仍绑定原正文及不可变封装。 |
 | 1.0.1 | 2026-09-09 | Codex | 封面音标明确绑定展示词形或显式标注的词元。 |
 | 1.0.2 | 2026-09-14 | Codex | 增量审校与正文共享实际内容失败预算，技术输入变化不算修订。 |
+| 1.0.3 | 2026-09-17 | Codex | 增量投稿审校显式绑定 AGY effort，避免不同推理强度复用同一缓存。 |
 """
 import json
 from pathlib import Path
@@ -50,11 +51,11 @@ def inputs_for(timeline, publication):
     return review_input(projected, evidence, {}), projected, evidence
 
 
-def review_publication(timeline, publication, *, cache_dir, task_dir, model, command="agy", timeout=180,
+def review_publication(timeline, publication, *, cache_dir, task_dir, model, command="agy", timeout=180, effort="high",
                        caller=run_agy_structured):
     timeline = Path(timeline).resolve()
     inputs, plan, evidence = inputs_for(timeline, publication)
-    key = cache_key(inputs, model)
+    key = cache_key(inputs, model, effort)
     cache_dir, task_dir = Path(cache_dir), Path(task_dir)
     cache, ledger_path = cache_dir / f"{key}.json", task_dir / "language_attempts.json"
     with locked(task_dir / "language.lock"), locked(cache_dir / f"{key}.lock"):
@@ -77,7 +78,7 @@ def review_publication(timeline, publication, *, cache_dir, task_dir, model, com
                 atomic_json(ledger_path, ledger)
                 try:
                     response = caller(PROMPT + json.dumps(inputs, ensure_ascii=False), schema=review_schema(),
-                        model=model, command=command, timeout_sec=timeout, include_usage=True)
+                        model=model, command=command, timeout_sec=timeout, effort=effort, include_usage=True)
                     saved = {"result": response.get("structured_result", response), "usage": response.get("usage")}
                     evaluate(saved["result"], plan)
                     atomic_json(cache, saved)
@@ -106,7 +107,7 @@ def review_publication(timeline, publication, *, cache_dir, task_dir, model, com
             ledger["content_terminal"] = True
         ledger["cache_hits"] = ledger.get("cache_hits", 0) + int(hit)
         atomic_json(ledger_path, ledger)
-        report = {"version": VERSION, "scope": "publication", "state": state, "model": model,
+        report = {"version": VERSION, "scope": "publication", "state": state, "model": model, "effort": effort,
             "prompt_version": VERSION, "schema_version": VERSION, "rules_version": VERSION,
             "input_key": key, "base_binding": evidence, "publication_text": plan["publication_text"],
             "result": saved["result"], "attempts": ledger["attempts"], "cache_hit": hit,
@@ -126,7 +127,8 @@ def approved_publication(timeline):
     report = read_json(path)
     inputs, plan, evidence = inputs_for(timeline, report["publication_text"])
     if (report.get("version") != VERSION or report.get("state") != "PASS"
-            or report.get("base_binding") != evidence or report.get("input_key") != cache_key(inputs, report["model"])
+            or report.get("base_binding") != evidence
+            or report.get("input_key") != cache_key(inputs, report["model"], report.get("effort"))
             or evaluate(report["result"], plan) != "PASS"):
         raise ValueError("新增投稿文案未通过独立审校或正文绑定失效")
     return report["publication_text"], file_digest(path)

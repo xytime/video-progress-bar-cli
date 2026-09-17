@@ -13,6 +13,7 @@
 # | 1.5.0   | 2026-06-17 | Claude_Opus_4.8               | 新增 [5] 共识中枢 Hub 启停板块 (launchd 永活)  |
 # | 1.6.0   | 2026-08-21 | Codex                         | 新增 wxvideo 本地字幕提取快捷指令              |
 # | 1.7.0   | 2026-08-30 | Codex                         | 新增 BGMScout 本地服务管理速查                 |
+# | 1.8.0   | 2026-09-15 | Codex                         | 新增 FutuWeb 前端常驻服务快捷指令              |
 # =======================================================================
 
 # 终端颜色代码
@@ -29,7 +30,7 @@ RESET="\033[0m"
 SEP="${DIM}──────────────────────────────────────────────────────────────────────${RESET}"
 
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.7  ${RESET}"
+echo -e "${BOLD}${BLUE}  🚀 个人项目自动化快捷指令速查手册 (Cheat Sheet) v1.8  ${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 
 # ================================================================
@@ -127,6 +128,17 @@ echo -e "    ${DIM}职责: 随身查询 (/status /gex_check /backtest) & 告警�
 echo -e "    ${GREEN}启动: ./start_data_services.sh start   bot${RESET}"
 echo -e "    ${RED}停止: ./start_data_services.sh stop    bot${RESET}"
 echo -e "    ${CYAN}重启: ./start_data_services.sh restart bot${RESET}"
+echo ""
+
+echo -e "  ${BOLD}  ⑨ FutuWeb 本地交易看板前端${RESET}  ${DIM}[端口 :5174]${RESET}"
+echo -e "    ${DIM}职责: 独立 React/Vite 页面；launchd 登录自启 + 崩溃自动拉起。${RESET}"
+echo -e "    ${DIM}页面: http://localhost:5174 · 只管理前端，不启动/停止交易后端 (:18081)。${RESET}"
+echo -e "    ${GREEN}fw start${RESET}      - 启动或恢复前端服务"
+echo -e "    ${CYAN}fw status${RESET}     - 查看 launchd 与 HTTP 状态"
+echo -e "    ${CYAN}fw restart${RESET}    - 重启前端服务"
+echo -e "    ${RED}fw stop${RESET}       - 停止并卸载前端服务"
+echo -e "    ${CYAN}fw open${RESET}       - 在浏览器打开页面"
+echo -e "    ${DIM}↳ 完整命令同为 futuweb <start|status|restart|stop|open>。${RESET}"
 echo ""
 
 echo -e "  ${BOLD}📋 一键控制 (全栈启停):${RESET}"
@@ -263,11 +275,13 @@ echo -e "    ${BLUE}alias ui${RESET}=${CYAN}\"/path/to/OptionSense/.../web_manag
 echo -e "    ${BLUE}alias vhelp${RESET}=${CYAN}\"/path/to/Video-precessing/vhelp\"${RESET}"
 echo -e "    ${BLUE}alias vp${RESET}=${CYAN}\"/path/to/Video-precessing/vpanel\"${RESET}"
 echo -e "    ${BLUE}alias wxvideo${RESET}=${CYAN}\"/path/to/Video-precessing/wxvideo\"${RESET}"
+echo -e "    ${BLUE}futuweb()${RESET}    { launchctl 管理 com.optionsense.futu-web-frontend; }"
+echo -e "    ${BLUE}fw()${RESET}          { futuweb \"\$@\"; }"
 echo -e "    ${BLUE}live_engine()${RESET} { /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/live_engine_ctl.sh \"\$@\" }"
 echo -e "    ${BLUE}option()${RESET}      { python /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/scripts/trade_option.py \"\$@\" }"
 echo -e "    ${BLUE}hub()${RESET}         { bash /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/OptionSense/study/smart_subscription_mvp/hub/hub_ctl.sh \"\$@\" }"
 
 echo -e "\n${BOLD}${CYAN}======================================================================${RESET}"
-echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · 项目服务操作速查 v1.7${RESET}"
+echo -e "${DIM}  输入 ${GREEN}vhelp${RESET}${DIM} 随时唤出此菜单 · 项目服务操作速查 v1.8${RESET}"
 echo -e "${BOLD}${CYAN}======================================================================${RESET}"
 echo ""

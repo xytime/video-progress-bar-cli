@@ -3,6 +3,8 @@
 # Modification History
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
+# | 2.33.0 | 2026-09-10 | Codex | 覆盖日更协调器显式模型参数，避免回退至耗尽默认模型。 |
+# | 2.32.0 | 2026-09-10 | Codex | 覆盖协调器递归入口与宿主运行态伪失败请求的拒绝边界。 |
 # | 2.31.4 | 2026-09-10 | Codex | 覆盖正式时间线 source_youtube_id 与宿主交付绑定兼容。 |
 # | 2.0.0 | 2026-08-24 | Codex | 覆盖直接 Python 协调器的重试、失败回执与 LaunchAgent 入口。 |
 # | 2.1.0 | 2026-08-25 | Codex | 覆盖 Codex 瞬时传输故障触发有界重试。 |
@@ -38,6 +40,7 @@
 # | 2.30.0 | 2026-09-03 | Codex | 来源通路错误优先于旧式质量文本，冲突记录不得淘汰候选。 |
 # | 2.31.0 | 2026-09-03 | Codex | 固化旧兼容入口的末屏微笔记梯度，避免误施加普通屏八条门禁。 |
 # | 2.31.1 | 2026-09-06 | Codex | 回归覆盖新 QA 指纹、调度时刻与可续接交付契约。 |
+# | 2.38.0 | 2026-09-17 | Codex | 覆盖程序化协调器不启动完整代理或读取 Codex 环境。 |
 """
 
 from __future__ import annotations
@@ -54,6 +57,7 @@ from pathlib import Path
 
 import pytest
 
+from config.settings import settings
 from scripts import run_english_world_daily as runner
 from video_processing.utils.youtube_access import YoutubeAccessResult
 
@@ -176,6 +180,35 @@ def test_success_without_machine_delivery_receipt_is_a_durable_failure(tmp_path:
     assert len([line for line in calls.read_text(encoding="utf-8").splitlines() if line.startswith("notifier:")]) == 1
     status = (log_dir / "last_run_status.txt").read_text(encoding="utf-8")
     assert "phase=FAILED_DELIVERY_EVIDENCE" in status
+
+
+def test_coordinator_child_cannot_recursively_invoke_daily_runner(monkeypatch) -> None:
+    monkeypatch.setenv(runner._COORDINATOR_CHILD_ENV, "1")
+
+    assert runner.main([]) == 0
+
+
+def test_parse_args_accepts_explicit_codex_model() -> None:
+    args = runner.parse_args(["--codex-model", "gpt-5.6-sol"])
+
+    assert args.codex_model == "gpt-5.6-sol"
+
+
+def test_failure_delivery_request_rejects_host_coordination_state(tmp_path: Path) -> None:
+    request_path = tmp_path / "invalid.delivery-request.json"
+    request_path.write_text(
+        json.dumps(
+            {
+                "kind": "failure",
+                "title": "fixture",
+                "failure": "日更协调器锁长时间未释放，持有者 PID 74439",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(runner.CoordinatorProtocolViolation, match="宿主协调器、锁或 PID"):
+        runner._read_delivery_request(request_path, tmp_path)
 
 
 def test_host_executes_delivery_after_agent_writes_request(tmp_path: Path):
@@ -469,6 +502,185 @@ def test_daily_prompt_requires_relative_boundary_and_whisper_audio_gate():
     assert "只有两个报告均为 `PASS` 才能写入成功交付请求" in prompt
 
 
+def test_daily_prompt_prioritizes_bnn_without_relaxing_preflight_or_safety():
+    prompt = runner.PROMPT
+
+    assert "BNN Bloomberg：UC5aNPmKYwbudeNngDMTY3lw" in prompt
+    assert "先检查 BNN Bloomberg" in prompt
+    assert "不得因为首选而降低任何安全或学习质量条件" in prompt
+    assert "scripts/english_world_visual_safety_review.py" in runner.SAFETY_GATE_PROMPT
+    assert "scripts/english_world_safety_gate.py" in runner.SAFETY_GATE_PROMPT
+
+
+def test_agy_coordinator_uses_high_effort_without_a_codex_process(monkeypatch, tmp_path: Path):
+    agy = tmp_path / "agy"
+    agy.write_text("fixture", encoding="utf-8")
+    captured = {}
+
+    class Process:
+        pid = 123
+
+        def wait(self, timeout):
+            captured["timeout"] = timeout
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return Process()
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    paths = runner.RuntimePaths(
+        project_root=tmp_path,
+        codex_home=tmp_path / "codex-home",
+        codex_bin=tmp_path / "codex",
+        python_bin=Path(sys.executable),
+        notifier_script=tmp_path / "notifier.py",
+        log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock",
+        coordinator_timeout_seconds=60,
+        coordinator_provider="agy",
+        agy_bin=agy,
+        agy_model="gemini-3.8-flash-high",
+    )
+
+    assert runner._run_coordinator(
+        paths, tmp_path / "response.md", tmp_path / "request.json", StringIO(),
+        prompt="safe coordinator fixture", environment={"CODEX_HOME": "must-not-reach-agy"},
+    ) == 0
+    command = captured["command"]
+    assert command[0] == str(agy)
+    assert "codex" not in command
+    assert "--new-project" in command
+    assert command[command.index("--model") + 1] == "gemini-3.8-flash-high"
+    assert command[command.index("--effort") + 1] == "high"
+    assert "--sandbox" in command and "--dangerously-skip-permissions" in command
+    assert "--disable-slash-commands" in command
+    assert "禁止创建、委派、等待或轮询任何" in command[-1]
+    assert f"cd {tmp_path}" in command[-1]
+    assert "CODEX_HOME" not in captured["kwargs"]["env"]
+    assert captured["kwargs"]["cwd"] != tmp_path
+
+
+def test_programmatic_coordinator_has_no_full_agent_command(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    class Process:
+        pid = 123
+
+        def wait(self, timeout):
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return Process()
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    paths = runner.RuntimePaths(
+        project_root=tmp_path, codex_home=tmp_path / "codex-home", codex_bin=tmp_path / "codex",
+        python_bin=Path(sys.executable), notifier_script=tmp_path / "notifier.py", log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock", coordinator_timeout_seconds=60, coordinator_provider="programmatic",
+    )
+
+    assert runner._run_coordinator(
+        paths, tmp_path / "response.md", tmp_path / "request.json", StringIO(), shadow_only=True,
+        environment={"CODEX_HOME": "must-not-reach-programmatic"},
+    ) == 0
+    command = captured["command"]
+    assert command[:2] == [str(Path(sys.executable)), str(tmp_path / "scripts/english_world_programmatic_daily.py")]
+    assert "--shadow-only" in command
+    assert "codex" not in " ".join(command).lower()
+    assert "agy" not in " ".join(command).lower()
+    assert "CODEX_HOME" not in captured["kwargs"]["env"]
+
+
+def test_programmatic_coordinator_receives_host_exclusions_and_forced_source(monkeypatch, tmp_path: Path):
+    captured = {}
+
+    class Process:
+        pid = 124
+
+        def wait(self, timeout):
+            return 0
+
+    def fake_popen(command, **_kwargs):
+        captured["command"] = command
+        return Process()
+
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    paths = runner.RuntimePaths(
+        project_root=tmp_path, codex_home=tmp_path / "codex-home", codex_bin=tmp_path / "codex",
+        python_bin=Path(sys.executable), notifier_script=tmp_path / "notifier.py", log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock", coordinator_timeout_seconds=60, coordinator_provider="programmatic",
+    )
+    assert runner._run_coordinator(
+        paths, tmp_path / "response.md", tmp_path / "request.json", StringIO(),
+        excluded_youtube_ids=("abcDEF_1234",), forced_youtube_id="Zyx987_6543",
+    ) == 0
+    assert captured["command"][-3:] == ["--exclude-youtube-id=abcDEF_1234", "--only-youtube-id", "Zyx987_6543"]
+
+
+def test_shadow_only_agy_run_requires_safety_and_never_invokes_host_delivery(monkeypatch, tmp_path: Path):
+    agy = tmp_path / "agy"
+    _write_executable(agy, "#!/usr/bin/env bash\nexit 0\n")
+    paths = runner.RuntimePaths(
+        project_root=tmp_path,
+        codex_home=tmp_path / "codex-home",
+        codex_bin=tmp_path / "codex",
+        python_bin=Path(sys.executable),
+        notifier_script=tmp_path / "notifier.py",
+        log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock",
+        coordinator_timeout_seconds=60,
+        coordinator_provider="agy",
+        agy_bin=agy,
+    )
+    calls = {}
+    monkeypatch.setattr(runner, "_submission_protected_youtube_ids", lambda _root: ())
+    monkeypatch.setattr(runner, "_run_coordinator", lambda *_args, **kwargs: (calls.update(kwargs) or 0))
+    monkeypatch.setattr(
+        runner,
+        "_read_delivery_request",
+        lambda path, _root, **kwargs: (calls.update({"request_path": path, **kwargs}) or {"kind": "production"}),
+    )
+    monkeypatch.setattr(runner, "_deliver_request_from_host", lambda *_args, **_kwargs: pytest.fail("shadow-only must not invoke host delivery"))
+    monkeypatch.setattr(runner, "_notify_failure", lambda *_args, **_kwargs: pytest.fail("shadow-only must not notify Telegram"))
+
+    assert runner.run(paths, max_attempts=1, retry_delay_seconds=0, source_access_preflight=False, shadow_only=True) == 0
+
+    assert calls["require_safety_gate"] is True
+    assert calls["request_path"].name.endswith(".shadow-request.json")
+    assert not list(paths.log_dir.glob("*.delivery-request.json"))
+    status = (paths.log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=SHADOW_COMPLETED" in status
+
+
+def test_shadow_only_source_access_failure_does_not_invoke_host_delivery(monkeypatch, tmp_path: Path):
+    agy = tmp_path / "agy"
+    _write_executable(agy, "#!/usr/bin/env bash\nexit 0\n")
+    paths = runner.RuntimePaths(
+        project_root=tmp_path,
+        codex_home=tmp_path / "codex-home",
+        codex_bin=tmp_path / "codex",
+        python_bin=Path(sys.executable),
+        notifier_script=tmp_path / "notifier.py",
+        log_dir=tmp_path / "logs",
+        lock_dir=tmp_path / "lock",
+        coordinator_timeout_seconds=60,
+        coordinator_provider="agy",
+        agy_bin=agy,
+    )
+    blocked = YoutubeAccessResult(False, "MEDIA_ACCESS_REJECTED", "HTTP error 403")
+    monkeypatch.setattr(runner, "_preflight_youtube_source_access", lambda *_args: (blocked, object(), {"PATH": "/bin"}, False))
+    monkeypatch.setattr(runner, "_deliver_request_from_host", lambda *_args, **_kwargs: pytest.fail("shadow-only source failure must not invoke host delivery"))
+
+    assert runner.run(paths, max_attempts=1, retry_delay_seconds=0, source_access_preflight=True, shadow_only=True) == 1
+
+    status = (paths.log_dir / "last_run_status.txt").read_text(encoding="utf-8")
+    assert "phase=SHADOW_SOURCE_ACCESS_BLOCKED" in status
+
+
 def test_daily_prompt_persists_deterministic_locked_source_failures():
     prompt = runner.PROMPT
 
@@ -499,6 +711,16 @@ def test_recent_rejected_candidates_include_structured_and_legacy_failures(tmp_p
     assert runner._recent_rejected_youtube_ids(log_dir) == (
         "EJ5Sqku_fYc", "UIJ1PrQOyLM", "xewivZQgBMQ",
     )
+
+
+def test_recent_rejected_candidates_include_shadow_source_quality(tmp_path: Path):
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    (log_dir / "shadow.shadow-request.json").write_text(
+        json.dumps({"kind": "failure", "failure_kind": "source_quality",
+                    "rejected_youtube_ids": ["EJ5Sqku_fYc"]}), encoding="utf-8")
+
+    assert runner._recent_rejected_youtube_ids(log_dir) == ("EJ5Sqku_fYc",)
 
 
 @pytest.mark.parametrize(
@@ -854,6 +1076,25 @@ def test_production_delivery_request_requires_passing_audio_qa_report(tmp_path: 
         runner._read_delivery_request(request_path, tmp_path)
 
 
+def test_enabled_safety_gate_rejects_production_request_without_current_receipt(monkeypatch, tmp_path: Path):
+    mp4 = tmp_path / "video.mp4"
+    manifest = tmp_path / "manifest.json"
+    mp4.write_text("fixture", encoding="utf-8")
+    manifest.write_text("{}", encoding="utf-8")
+    audio_qa_report = tmp_path / "qa/final_audio_qa.json"
+    audio_qa_report.parent.mkdir()
+    audio_qa_report.write_text(json.dumps(_qa_payload(mp4, manifest)), encoding="utf-8")
+    request_path = tmp_path / "request.json"
+    request_path.write_text(json.dumps({
+        "kind": "production", "title": "fixture", "mp4": str(mp4), "manifest": str(manifest),
+        "audio_qa_report": str(audio_qa_report),
+    }), encoding="utf-8")
+    monkeypatch.setattr(settings, "enable_english_world_safety_gate", True)
+
+    with pytest.raises(ValueError, match="安全门回执"):
+        runner._read_delivery_request(request_path, tmp_path)
+
+
 def test_production_delivery_request_rejects_qa_report_for_different_artifacts(tmp_path: Path):
     mp4 = tmp_path / "video.mp4"
     manifest = tmp_path / "manifest.json"
@@ -906,6 +1147,13 @@ def test_transient_transport_failure_retries_before_failure_notification(tmp_pat
     assert call_lines.count("notifier") == 1
     run_log = next(log_dir.glob("run_*.log")).read_text(encoding="utf-8")
     assert "Codex transient transport failure" in run_log
+
+
+def test_agy_capacity_unavailable_is_bounded_as_a_transient_provider_failure(tmp_path: Path):
+    run_log = tmp_path / "run.log"
+    run_log.write_text("API error: UNAVAILABLE (code 503): No capacity available for model", encoding="utf-8")
+
+    assert runner._is_transient_transport_failure(run_log)
 
 
 def test_transient_failure_with_accepted_review_receipt_does_not_rerun(tmp_path: Path):

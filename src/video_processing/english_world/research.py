@@ -14,6 +14,8 @@
 | 1.0.4 | 2026-08-24 | Codex | 补足新闻标题中的政治、冲突和伤害线索预筛，避免目录降级扩大候选风险面。 |
 | 1.0.5 | 2026-08-24 | Codex | 目录降级以预筛结果为空为准；天气/灾害线索只标记画面复核，不再关键词误杀。 |
 | 1.0.6 | 2026-08-29 | Codex | 搜索与显式 URL 候选均按频道 ID 严格限制为三家授权来源，并将稳定 ID 写入候选账本。 |
+| 1.0.8 | 2026-09-17 | Codex | 导出来源硬排除词表，供运行时安全门复用，避免研究预筛与交付前检查漂移。 |
+| 1.0.7 | 2026-09-17 | Codex | 新增 BNN Bloomberg 严格频道 ID、首位检索与透明候选优先权重。 |
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from video_processing.utils.youtube_catalog import YouTubeCatalogError, fetch_ch
 logger = logging.getLogger(__name__)
 
 _SEARCH_QUERIES = (
+    "BNN Bloomberg technology business innovation",
     "BBC Earth wildlife news",
     "science news explained for kids",
     "positive technology news explained",
@@ -37,15 +40,18 @@ _SEARCH_QUERIES = (
     "culture human interest news short",
 )
 _APPROVED_SOURCE_CHANNELS = (
+    ("UC5aNPmKYwbudeNngDMTY3lw", "BNN Bloomberg"),
     ("UCWUA2W6LueNy9BSovivFVvQ", "CBC Kids News"),
     ("UCAeWdyKJXGWmVAXFpgLNNTg", "CBS Evening News"),
     ("UCBi2mrWuNuyYy4gbM6fU18Q", "ABC News"),
 )
-_HARD_BLOCKED_TERMS = frozenset({
+HARD_BLOCKED_TERMS = frozenset({
     "war", "military", "missile", "battle", "politic", "election", "president",
     "crime", "murder", "shooting", "terror", "adult", "sex", "drug", "weapon",
     "trump", "iran", "tariff", "sanction", "border",
 })
+# 兼容既有研究服务私有名称；运行时安全门只使用公开常量。
+_HARD_BLOCKED_TERMS = HARD_BLOCKED_TERMS
 _VISUAL_REVIEW_TERMS = frozenset({
     "disaster", "earthquake", "flood", "storm", "tornado", "lightning", "wildfire",
     "death", "dead", "fatal", "victim", "remains", "evacuation", "emergency", "threat",
@@ -182,7 +188,7 @@ def _youtube_inspect(source_url: str) -> dict[str, Any]:
         return ydl.extract_info(source_url, download=False) or {}
 
 
-def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def _rank_candidates(items: Iterable[dict[str, Any]], *, limit: int = 5) -> list[dict[str, Any]]:
     """用透明的关键词与时长规则预筛；不将预筛误称为内容审查。"""
     candidates: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc).date()
@@ -212,7 +218,8 @@ def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
         needs_visual_review = any(term in blob for term in _VISUAL_REVIEW_TERMS)
         upload_date = str(item.get("upload_date") or "") or None
         recency = 1 if upload_date == now.strftime("%Y%m%d") else 0
-        score = 20 + recency * 20 + (10 if duration else 0) + _topic_score(topic)
+        channel_priority = 30 if approved_channel_id == "UC5aNPmKYwbudeNngDMTY3lw" else 0
+        score = 20 + recency * 20 + (10 if duration else 0) + _topic_score(topic) + channel_priority
         candidates.append({
             "id": uuid4().hex,
             "source_url": url,
@@ -233,7 +240,7 @@ def _rank_candidates(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             "recommendation_score": score,
         })
     candidates.sort(key=lambda item: (-int(item["recommendation_score"]), str(item["source_title"]).lower()))
-    return candidates[:5]
+    return candidates[:max(0, limit)]
 
 
 def _approved_channel_identity(item: dict[str, Any]) -> tuple[str, str] | None:

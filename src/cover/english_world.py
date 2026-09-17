@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-08-24 | Codex | 新增确定性时间线提取、词汇排序与封面载荷校验。 |
 | 1.0.1 | 2026-09-09 | Codex | 封面音标携带并呈现词形或显式词元标签。 |
+| 1.0.3 | 2026-09-17 | Antigravity | 修复首句无词导致封面词汇统计误判 0 词及词汇项留空缺陷，优先引用全文实际学习点。 |
 | 1.0.2 | 2026-09-09 | Codex | 优先消费已冻结且经语言审校绑定的封面载荷，杜绝从旧候选池二次选词。 |
 """
 
@@ -50,15 +51,21 @@ def _normalise_ipa(value: object) -> str:
 
 def _candidate_items(timeline: Mapping[str, Any], quote_en: str) -> list[dict[str, Any]]:
     """筛掉不可教学展示的伪词条，并按真实课程等级排序。"""
-    raw_candidates = timeline.get("vocabulary_candidates") or timeline.get("vocabulary") or []
+    raw_candidates = (
+        timeline.get("learning_points")
+        or timeline.get("vocabulary_candidates")
+        or timeline.get("vocabulary")
+        or []
+    )
     if not isinstance(raw_candidates, list):
         return []
 
-    candidates: list[dict[str, Any]] = []
+    in_quote: list[dict[str, Any]] = []
+    all_valid: list[dict[str, Any]] = []
     for index, raw_item in enumerate(raw_candidates):
         if not isinstance(raw_item, Mapping):
             continue
-        word = str(raw_item.get("word") or "").strip()
+        word = str(raw_item.get("word") or "").strip().strip(".,;:!?\"'“”‘’")
         meaning = str(raw_item.get("context_meaning_zh") or raw_item.get("meaning_zh") or raw_item.get("meaning") or "").strip()
         level = str(raw_item.get("recommended_level") or "外刊高频").strip()
         friendly_tag = str(raw_item.get("friendly_tag") or "").strip()
@@ -68,23 +75,24 @@ def _candidate_items(timeline: Mapping[str, Any], quote_en: str) -> list[dict[st
             or "'" in word
             or "’" in word
             or not re.search(r"[A-Za-z]", word)
-            or not re.search(rf"\b{re.escape(word)}\b", quote_en, re.IGNORECASE)
         ):
             continue
-        candidates.append(
-            {
-                "word": word,
-                "ipa": _normalise_ipa(raw_item.get("phonetic") or raw_item.get("ipa")),
-                "phonetic_word": str(raw_item.get("phonetic_word") or word).strip(),
-                "meaning": meaning,
-                "level": " · ".join(part for part in (level, friendly_tag) if part),
-                "_rank": _LEVEL_ORDER.get(level, 0),
-                "_index": index,
-            }
-        )
+        item = {
+            "word": word,
+            "ipa": _normalise_ipa(raw_item.get("phonetic") or raw_item.get("ipa")),
+            "phonetic_word": str(raw_item.get("phonetic_word") or word).strip(),
+            "meaning": meaning,
+            "level": " · ".join(part for part in (level, friendly_tag) if part),
+            "_rank": _LEVEL_ORDER.get(level, 0),
+            "_index": index,
+        }
+        all_valid.append(item)
+        if re.search(rf"\b{re.escape(word)}\b", quote_en, re.IGNORECASE):
+            in_quote.append(item)
 
-    candidates.sort(key=lambda item: (-item["_rank"], -len(item["word"]), item["_index"]))
-    return candidates
+    chosen = in_quote if in_quote else all_valid
+    chosen.sort(key=lambda item: (-item["_rank"], -len(item["word"]), item["_index"]))
+    return chosen
 
 
 def _difficulty_tag(candidates: list[dict[str, Any]]) -> str:
@@ -103,6 +111,14 @@ def _vocab_stat(timeline: Mapping[str, Any], candidates: list[dict[str, Any]]) -
         selected_count = selection.get("selected_count")
         if isinstance(lexical_word_count, int) and isinstance(selected_count, int):
             return f"本篇 {lexical_word_count} 词 · {selected_count} 个重点"
+    total_points = (
+        timeline.get("learning_points")
+        or timeline.get("vocabulary_candidates")
+        or timeline.get("vocabulary")
+        or []
+    )
+    if isinstance(total_points, list) and total_points:
+        return f"本篇 {len(total_points)} 个可学词"
     return f"本篇 {len(candidates)} 个可学词"
 
 
@@ -138,7 +154,10 @@ def build_english_world_cover_payload(timeline: Mapping[str, Any], *, date_str: 
         "subtitle": "● 英语新闻 · 原声双语精读",
         "quote_en": quote_en,
         "quote_zh": quote_zh,
-        "highlight_words": [item["word"] for item in vocab_items],
+        "highlight_words": [
+            item["word"] for item in vocab_items
+            if re.search(rf"\b{re.escape(item['word'])}\b", quote_en, re.IGNORECASE)
+        ],
         "vocab_items": vocab_items,
         "difficulty_tag": _difficulty_tag(ranked_candidates),
         "vocab_stat": _vocab_stat(timeline, ranked_candidates),

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.62 | 2026-09-09 | Codex | 覆盖横封面全幅裁切，防止竖版内容缩小后产生可被平台识别的大面积内框。 |
 | 1.5.46 | 2026-09-04 | Codex | 覆盖发布前闸门与发布后不确定退出码的状态边界。 |
 | 1.5.47 | 2026-09-04 | Codex | 覆盖内容管理页精确标题检索的只读回查路径。 |
 | 1.5.48 | 2026-09-04 | Codex | 覆盖含话题的原文填写不点击平台候选，防止候选扩写文案。 |
@@ -1168,6 +1169,28 @@ def test_prepare_douyin_horizontal_cover_upload_file_creates_4x3_safe_cover(tmp_
     with Image.open(prepared) as image:
         assert image.size == (1280, 960)
     assert Path(prepared).name == "cover_douyin_horizontal.jpg"
+
+
+def test_prepare_douyin_horizontal_cover_is_full_bleed_without_side_borders(tmp_path: Path):
+    """4:3 横封面不得把原图缩小贴进模糊背景，避免被平台判为大面积边框。"""
+    from PIL import Image
+
+    cover = tmp_path / "cover.jpg"
+    source = Image.new("RGB", (400, 700), (0, 0, 255))
+    for x in range(80):
+        for y in range(700):
+            source.putpixel((x, y), (255, 0, 0))
+    source.save(cover, quality=100, subsampling=0)
+
+    prepared = prepare_douyin_horizontal_cover_upload_file(str(cover))
+    assert prepared is not None
+    with Image.open(prepared) as image:
+        assert image.size == (1280, 960)
+        # 全幅裁切保留了原图的左缘高饱和红色；旧实现会在此生成变暗的模糊底图。
+        red, green, blue = image.getpixel((0, 480))
+    assert red > 180
+    assert red > green * 3
+    assert red > blue * 3
 
 
 def test_douyin_apply_cover_success_with_modal_input(tmp_path: Path):
