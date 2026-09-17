@@ -6,8 +6,9 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
-| 1.0.0 | 2026-08-24 | Codex | 新增 agy 首选主视觉干跑入口与本地验收合成链路。 |
+| 1.2.0 | 2026-09-18 | Antigravity | 支持直接消费 --payload-file，对齐已审校的封面载荷与发音分级。 |
 | 1.1.0 | 2026-08-24 | Codex | 支持 Telegram 人审待决主视觉及投稿包指定输出路径。 |
+| 1.0.0 | 2026-08-24 | Codex | 新增 agy 首选主视觉干跑入口与本地验收合成链路。 |
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--cover-output", type=Path, help="最终投稿封面输出路径")
     parser.add_argument("--provenance-output", type=Path, help="最终封面来源审计输出路径")
     parser.add_argument("--payload-output", type=Path, help="最终规范化封面 payload 输出路径")
+    parser.add_argument("--payload-file", type=Path, help="可选：直接消费已审校批准的封面 payload JSON")
     return parser.parse_args()
 
 
@@ -93,7 +95,10 @@ def main() -> int:
         raise FileNotFoundError(args.timeline)
 
     timeline = json.loads(args.timeline.read_text(encoding="utf-8"))
-    payload = build_english_world_cover_payload(timeline)
+    if args.payload_file and args.payload_file.is_file():
+        payload = json.loads(args.payload_file.read_text(encoding="utf-8"))
+    else:
+        payload = build_english_world_cover_payload(timeline)
     output_dir = args.output_dir.resolve()
     run_dir = output_dir / f"agy-run-{datetime.now().strftime('%Y%m%dT%H%M%SZ')}"
     run_dir.mkdir(parents=True, exist_ok=False)

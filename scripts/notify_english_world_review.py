@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.16.0 | 2026-09-18 | Antigravity | 解除 language_v2 对 AGY 首选封面的跳过限制，透传 approved_cover_payload 生成高质量封面。 |
 | 1.15.0 | 2026-09-18 | Antigravity | 自动审批延后项在通知中附带撤回/暂不发布按钮，并提示排入专属窗口。 |
 | language-v1 | 2026-09-09 | Codex | 新契约封装直接消费已审校投稿文本和封面载荷。 |
 | 1.0.0 | 2026-08-22 | Codex | 新增每日英语世界短视频的 Telegram 审核材料通知。 |
@@ -240,7 +241,7 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path,
         title_path.write_text(approved_publication["title"], encoding="utf-8")
         copy_path.write_text(approved_publication["copy"], encoding="utf-8")
         atomic_json(package_dir / "approved_cover_payload.json", approved_publication["cover_payload"])
-    if not language_v2 and not validate_dedicated_cover_file(cover_path, cover_provenance_path) and settings.enable_english_world_antigravity_primary:
+    if not validate_dedicated_cover_file(cover_path, cover_provenance_path) and settings.enable_english_world_antigravity_primary:
         agy_command = [
             str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
             str(_PROJECT_ROOT / "scripts" / "generate_english_agi_cover.py"),
@@ -253,6 +254,8 @@ def _prepare_publish_package(*, display_title: str, mp4: Path, manifest: Path,
             "--provenance-output", str(cover_provenance_path),
             "--payload-output", str(cover_payload_path),
         ]
+        if language_v2 and (package_dir / "approved_cover_payload.json").is_file():
+            agy_command.extend(["--payload-file", str(package_dir / "approved_cover_payload.json")])
         if settings.english_world_antigravity_allow_ocr_suspect:
             agy_command.append("--allow-ocr-suspect")
         agy_timeout = settings.english_world_antigravity_variants * (settings.english_world_antigravity_timeout_seconds + 30) + 180

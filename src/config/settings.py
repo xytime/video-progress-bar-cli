@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.63.0 | 2026-09-18 | Antigravity | 默认启用英语世界 AGY 高质量主视觉封面与 OCR 人审候选通道。 |
 | 3.62.0 | 2026-09-18 | Antigravity | 解耦英语世界生产触发与发布窗口，增加专属发布窗口与库存水位控制。 |
 | 3.61.11 | 2026-09-17 | Antigravity | 新增英语世界每日发布上限 english_world_daily_publish_limit，默认 10。 |
 | 3.61.10 | 2026-09-17 | Antigravity | 默认 YouTube 认证探针改为白名单稳定视频，避免历史样例被 bot 风控误杀。 |
@@ -433,12 +434,12 @@ class Settings(BaseSettings):
     antigravity_timeout_seconds: int = 90
 
     # 英语世界审核包的首选无字主视觉。失败时回退确定性报刊封面。
-    enable_english_world_antigravity_primary: bool = False
+    enable_english_world_antigravity_primary: bool = True
     english_world_antigravity_model: str = "gemini-3.7-flash-high"
     english_world_antigravity_variants: int = 3
     english_world_antigravity_timeout_seconds: int = 180
-    # OCR 对插画纹理可能误报；开启后只能作为“待人审”候选，绝不等同机器无字验收。
-    english_world_antigravity_allow_ocr_suspect: bool = False
+    # OCR 对插画纹理可能误报；开启后允许作为“待人审”候选并合成封面。
+    english_world_antigravity_allow_ocr_suspect: bool = True
     # 英语世界成片通过本地质检后，可由独立账本一次性自动提交视频号。
     # 开启也不会触碰既有待审核/未确认项，更不会为任何终态自动重传。
     enable_english_world_auto_publish: bool = True

@@ -7,11 +7,12 @@
 # Modification History
 | Version | Date       | Author                         | Description                                            |
 |---------|------------|--------------------------------|--------------------------------------------------------|
+| 1.3.2   | 2026-09-18 | Antigravity                    | 隔离渲染载荷与审校语义载荷，防止 visual_asset_path 破坏封面载荷一致性质检。 |
+| 1.3.1   | 2026-09-09 | Codex                          | Pillow 回退展示与词形/词元明确对应的音标。 |
+| 1.3.0   | 2026-08-28 | Codex                          | Chromium 不可启动时改用本地 Pillow 渲染英语报刊封面，避免回退路径仍依赖浏览器。 |
+| 1.2.0   | 2026-08-24 | Codex                          | 支持绑定已验收的无字 Antigravity 主视觉。 |
+| 1.1.0   | 2026-08-24 | Codex                          | 改用共享载荷构建器，并输出 payload/timeline 哈希审计信息。 |
 | 1.0.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 初始创建：提供确定性 Prompt/JSON/Timeline 的多模式命令行封面生成入口 |
-| 1.1.0   | 2026-08-24 | Codex | 改用共享载荷构建器，并输出 payload/timeline 哈希审计信息。 |
-| 1.2.0   | 2026-08-24 | Codex | 支持绑定已验收的无字 Antigravity 主视觉。 |
-| 1.3.0   | 2026-08-28 | Codex | Chromium 不可启动时改用本地 Pillow 渲染英语报刊封面，避免回退路径仍依赖浏览器。 |
-| 1.3.1 | 2026-09-09 | Codex | Pillow 回退展示与词形/词元明确对应的音标。 |
 """
 
 from __future__ import annotations
@@ -228,25 +229,26 @@ def main() -> int:
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
+    render_payload = dict(payload)
     visual_asset = None
     if args.visual_asset:
         visual_asset = args.visual_asset.expanduser().resolve()
         if not visual_asset.is_file():
             print(f"Error: visual asset file not found: {visual_asset}", file=sys.stderr)
             return 1
-        payload["visual_asset_path"] = str(visual_asset)
+        render_payload["visual_asset_path"] = str(visual_asset)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     engine = CoverEngine()
     try:
         with _browser_render_deadline(args.browser_timeout_seconds):
-            layout = engine.generate(payload, str(args.output))
+            layout = engine.generate(render_payload, str(args.output))
         render_backend = "playwright"
     except Exception as exc:
         # launchd/Codex 沙箱下 Chromium 可能被 macOS MachPort 策略拒绝；
         # 备用封面必须真正脱离浏览器，不能把同一故障伪装成“回退”。
         print(f"Playwright cover render unavailable; using Pillow fallback: {exc}", file=sys.stderr)
-        layout = engine.plan(payload)
+        layout = engine.plan(render_payload)
         _render_with_pillow_fallback(layout, args.output)
         render_backend = "pillow"
     payload_sha256 = hashlib.sha256(

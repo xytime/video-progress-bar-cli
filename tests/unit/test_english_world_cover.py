@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                         | Description                                            |
 |---------|------------|--------------------------------|--------------------------------------------------------|
+| 1.3.0   | 2026-09-18 | Antigravity                    | 覆盖新语言契约下 AGY 封面生成与 approved_cover_payload 透传，以及封面渲染载荷隔离校验。 |
 | 1.0.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 初始创建：覆盖 ENGLISH_WORLD_SHORT 内容路由、教学字段装配、合规策略与全流程渲染 |
 | 1.1.0 | 2026-08-24 | Codex | 覆盖 agy OCR 人审待决门禁与首选封面审核包集成。 |
 | 1.2.0 | 2026-08-28 | Codex | 覆盖 Chromium 不可用时的 Pillow 英语封面回退。 |
@@ -209,6 +210,53 @@ def test_english_cover_cli_uses_pillow_when_playwright_is_unavailable(tmp_path, 
     assert json.loads(provenance.read_text(encoding="utf-8"))["render_backend"] == "pillow"
 
 
+def test_generate_english_cover_isolates_visual_asset_from_payload_output(tmp_path, monkeypatch):
+    """验证 visual_asset 不会污染导出的 payload_output JSON 或改变 payload_sha256。"""
+    payload = {
+        "content_type": "ENGLISH_WORLD_SHORT",
+        "title": "测试标题",
+        "quote_en": "Learning English is fun.",
+        "quote_zh": "学习英语很有趣。",
+        "difficulty_tag": "★★☆☆☆",
+        "audio_source": "原声",
+        "date_str": "2026.09.18",
+        "highlight_words": ["fun"],
+        "vocab_items": [],
+    }
+    payload_in = tmp_path / "payload_in.json"
+    payload_in.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    payload_out = tmp_path / "payload_out.json"
+    provenance_out = tmp_path / "provenance_out.json"
+    cover_out = tmp_path / "cover.jpg"
+    visual_png = tmp_path / "visual.png"
+    Image.new("RGB", (1080, 1260), "#F5EFE6").save(visual_png)
+
+    class DummyEngine:
+        def generate(self, render_payload, output_path):
+            assert render_payload.get("visual_asset_path") == str(visual_png)
+            Image.new("RGB", (1080, 1260), "#F5EFE6").save(output_path)
+            return {"template_variant": "cover_english_newspaper"}
+
+    monkeypatch.setattr(english_cover_cli, "CoverEngine", DummyEngine)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generate_english_cover.py",
+            "--payload-file", str(payload_in),
+            "--visual-asset", str(visual_png),
+            "--output", str(cover_out),
+            "--provenance-output", str(provenance_out),
+            "--payload-output", str(payload_out),
+        ],
+    )
+    assert english_cover_cli.main() == 0
+    exported_payload = json.loads(payload_out.read_text(encoding="utf-8"))
+    assert "visual_asset_path" not in exported_payload
+    from video_processing.study_cards.language_qa import digest
+    assert digest(exported_payload) == digest(payload)
+
+
 def test_antigravity_visual_contract_is_text_free_and_uses_local_fact(tmp_path):
     """Gemini 只能获得已有事实，候选必须通过 OCR 无字门禁后才可合成。"""
     timeline = {
@@ -299,6 +347,85 @@ def test_review_package_prefers_agy_and_keeps_human_gate(tmp_path, monkeypatch):
         "mp4": str(mp4), "manifest": str(manifest), "timeline": str(timeline_path),
         **artifact_fingerprints(mp4=mp4, manifest=manifest, timeline=timeline_path)}))
     review = notifier._prepare_publish_package(display_title="备用标题", mp4=mp4, manifest=manifest)
+    assert validate_dedicated_cover_file(Path(review["cover_path"]), Path(review["cover_provenance_path"]))
+    assert json.loads((tmp_path / "wechat_submission" / "agy_cover_attempt.json").read_text(encoding="utf-8"))["returncode"] == 0
+
+
+def test_review_package_prefers_agy_with_language_v2_and_passes_payload_file(tmp_path, monkeypatch):
+    """验证 language-v1 契约下审核包依然调用 agy 且透传 approved_cover_payload。"""
+    script_path = Path("scripts/notify_english_world_review.py").resolve()
+    spec = importlib.util.spec_from_file_location("english_world_notifier_test", script_path)
+    assert spec and spec.loader
+    notifier = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(notifier)
+    timeline = {
+        "language_contract": "english-world-language-v1",
+        "headline_zh": "地震科普精读",
+        "english_text": "Earthquakes shake the ground.",
+        "translation_zh": "地震撼动地面。",
+        "source_provenance": {"publisher": "CBC Kids News", "source_url": "https://example.invalid/source"},
+        "publication_text": {
+            "title": "英语世界｜地震科普精读",
+            "copy": "跟随原声学习。",
+            "cover_payload": {
+                "content_type": "ENGLISH_WORLD_SHORT",
+                "title": "地震科普精读",
+                "quote_en": "Earthquakes shake the ground.",
+                "quote_zh": "地震撼动地面。",
+            },
+        },
+    }
+    manifest = tmp_path / "manifest.json"
+    timeline_path = tmp_path / "timeline.json"
+    timeline_path.write_text(json.dumps(timeline), encoding="utf-8")
+    manifest.write_text(json.dumps({
+        "content_type": "ENGLISH_WORLD_SHORT",
+        "language_contract": "english-world-language-v1",
+        "timeline": str(timeline_path.resolve()),
+        "duration": 42.0,
+    }), encoding="utf-8")
+    mp4 = tmp_path / "sample.mp4"
+    mp4.write_bytes(b"not-a-real-video")
+    monkeypatch.setattr(notifier.settings, "enable_english_world_antigravity_primary", True)
+    monkeypatch.setattr(notifier.settings, "enable_english_world_language_qa", False)
+    monkeypatch.setattr(notifier, "validate_audio_qa", lambda *a, **k: None)
+    import video_processing.study_cards.publication_qa as pub_qa
+    monkeypatch.setattr(pub_qa, "approved_publication", lambda _path: (timeline["publication_text"], "dummy-sha256"))
+    import video_processing.study_cards.language_qa as lang_qa
+    monkeypatch.setattr(lang_qa, "validate_publication", lambda *a, **k: None)
+
+    passed_command = []
+
+    def fake_run(command, **_):
+        passed_command.extend(command)
+        cover = Path(command[command.index("--cover-output") + 1])
+        provenance = Path(command[command.index("--provenance-output") + 1])
+        payload_out = Path(command[command.index("--payload-output") + 1])
+        payload_in = Path(command[command.index("--payload-file") + 1])
+        payload_out.write_text(payload_in.read_text(encoding="utf-8"), encoding="utf-8")
+        Image.new("RGB", (1080, 1260), "#F5EFE6").save(cover)
+        digest = __import__("hashlib").sha256(cover.read_bytes()).hexdigest()
+        provenance.write_text(json.dumps({
+            "cover_kind": "dedicated_generated_image", "uses_video_frame": False,
+            "cover_filename": cover.name, "cover_sha256": digest,
+            "layout_policy": compliant_cover_layout_policy(),
+        }), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout='{"status":"accepted"}', stderr="")
+
+    class FakeDB:
+        def get_english_world_review_by_artifact(self, _digest):
+            return None
+
+        def create_english_world_review_item(self, **kwargs):
+            return {"id": "review-id-2", "state": "READY_FOR_REVIEW", **kwargs}
+
+    monkeypatch.setattr(notifier.subprocess, "run", fake_run)
+    monkeypatch.setattr(notifier, "get_video_duration_ffprobe", lambda _path: 42.0)
+    monkeypatch.setattr(notifier, "PipelineDB", FakeDB)
+
+    review = notifier._prepare_publish_package(display_title="英语世界｜地震科普精读", mp4=mp4, manifest=manifest)
+    assert Path(passed_command[1]).name == "generate_english_agi_cover.py"
+    assert "--payload-file" in passed_command
     assert validate_dedicated_cover_file(Path(review["cover_path"]), Path(review["cover_provenance_path"]))
     assert json.loads((tmp_path / "wechat_submission" / "agy_cover_attempt.json").read_text(encoding="utf-8"))["returncode"] == 0
 
