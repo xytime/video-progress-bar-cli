@@ -15,6 +15,7 @@
 # | 2.4.0 | 2026-08-30 | Codex | 安装时按当前项目根目录和用户目录渲染 plist，安装后逐字段核验运行路径。 |
 # | 1.0.0 | 2026-08-22 | Codex | 新增独立英语世界日更 LaunchAgent 安装器。 |
 # | 2.5.0 | 2026-09-17 | Codex | 安装后核验日更和补跑都显式使用 AGY high-effort 协调器，防止回退消耗 Codex。 |
+# | 2.7.0 | 2026-09-18 | Antigravity | 安装器动态反映多生产时刻调度配置。 |
 # | 2.6.0 | 2026-09-17 | Codex | 改为核验程序化主链；AGY 只在其受限审校步骤中调用。 |
 # | 2.4.1 | 2026-09-06 | Codex | 安装与监控共享生产时刻，并核验已安装 LaunchAgent 的运行路径和时刻。 |
 
@@ -154,4 +155,4 @@ launchctl print "gui/$USER_ID/$MONITOR_LABEL" >/dev/null
 validate_rendered_plist "$TARGET_PLIST" "$PROJECT_ROOT/scripts/run_english_world_daily.py"
 validate_rendered_plist "$MONITOR_TARGET_PLIST" "$PROJECT_ROOT/scripts/monitor_english_world_daily.py"
 
-echo "✅ 已安装：每天 05:30、16:30 生产英语世界短视频；09:15、19:00 核验本次 Telegram 回执，并仅对完全缺席窗口补发起一次。视频号动作仍只走既有的独立受控入口。"
+echo "✅ 已安装英语世界 LaunchAgent：按配置时刻生产短视频；09:15、19:00 核验本次 Telegram 回执，并仅对完全缺席窗口补发起一次。视频号动作仍只走既有的独立受控入口。"
