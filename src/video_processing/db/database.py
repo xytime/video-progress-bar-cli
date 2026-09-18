@@ -5,7 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
-|---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.62.0 | 2026-09-18 | Antigravity | 新增未确认英语世界通知步骤的安全重置方法，支持网络异常后受控重发。 |
 | 3.61.0 | 2026-09-18 | Antigravity | 新增英语世界待发池库存统计与今日发布数量统计方法。 |
 | 3.60.0 | 2026-09-09 | Codex | 新增 /last 已确认公开发布跨平台账本查询，并限制 SQLite 安全偏移。 |
 | 3.59.9 | 2026-09-07 | Codex | 服务端分页前完成控制面筛选、排序与近期高互动浏览标记，平台状态保持不变。 |
@@ -6025,6 +6025,15 @@ class PipelineDB:
                 (state, message_id, error_kind, review_id, stage))
             if cursor.rowcount != 1:
                 raise ValueError("English World delivery stage is not claimed")
+
+    def reset_english_world_delivery_stage(self, review_id: str, stage: str) -> bool:
+        """当通知阶段未被 API 确认且无消息 ID 时，允许安全重置为 NOT_SENT 供受控重试。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute("""UPDATE english_world_delivery_stages
+                SET state = 'NOT_SENT', error_kind = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE review_id = ? AND stage = ? AND state != 'ACCEPTED' AND message_id IS NULL""",
+                (review_id, stage))
+            return cursor.rowcount == 1
 
     def get_english_world_review_item(self, review_id: str) -> Optional[Dict[str, Any]]:
         """读取英语世界审核项；只读，不触发投稿或重试。"""
