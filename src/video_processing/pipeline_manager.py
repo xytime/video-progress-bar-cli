@@ -143,6 +143,7 @@
 | 3.48.10 | 2026-08-08 | Codex                               | 抖音投递产物缺失改为终态取消，修复产物后才允许显式新建尝试，杜绝自动空转 |
 | 3.48.11 | 2026-08-08 | Codex                               | 抖音审核回查传入作品正文指纹，仅管理页精确匹配且显示已发布才落账 |
 | 3.48.12 | 2026-08-08 | Codex                               | 抖音 NEW 投递增加每日领取上限和跨巡航浏览器节流，防止每分钟任务放大平台动作 |
+| 3.49.0  | 2026-09-18 | Antigravity                         | [架构治理·子进程环境收拢] _build_subprocess_env 抽取至 utils.subprocess_env 单一真相源，消除外围脚本无法复用的 DAG 违规并统一环境变量注入 |
 | 3.48.13 | 2026-08-09 | Codex                               | 切片任务继承内容生产类型，保留英语世界短视频的端到端可检索标识 |
 | 3.48.17 | 2026-08-14 | Codex                               | 修复硬重置缺失 re 导入；YouTube 下载强制 IPv4，curl 0B 后恢复默认网络并降级内置下载器 |
 | 3.48.14 | 2026-08-10 | Codex                               | 视频号发布成功必须写入后台列表证据账本；缺图时保守记为 UNCERTAIN 并停止后续平台动作 |
@@ -173,6 +174,7 @@ from typing import Callable, Dict, Any, Mapping, Optional, Tuple
 from pathlib import Path
 
 from .db import PipelineDB
+from .utils.subprocess_env import build_subprocess_env, PROXY_KEYS as _PROXY_KEYS
 from .utils.file_utils import (
     find_downloaded_video,
     VIDEO_CONTAINER_SUFFIXES,
@@ -266,11 +268,6 @@ _NON_VIDEO_SUFFIXES = {'.description', '.json', '.ytdl', '.part', '.jpg', '.png'
 # [Claude_Opus_4.8] 源视频识别改用「白名单」：仅这些容器扩展名才会被当作源视频。
 # 单一真相源已上移至 utils.file_utils.VIDEO_CONTAINER_SUFFIXES（bot 与管线共用）；此处保留别名兼容旧引用。
 _VIDEO_SUFFIXES = VIDEO_CONTAINER_SUFFIXES
-# [Claude_Sonnet_4.6_Thinking_planning] v3.3.0: 代理环境变量选集，用于清除或替换
-_PROXY_KEYS = frozenset({
-    'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY',
-    'http_proxy', 'https_proxy', 'all_proxy',
-})
 _WECHAT_UPLOAD_TIMEOUT_SEC = 25 * 60
 _KUAISHOU_UPLOAD_TIMEOUT_SEC = 25 * 60
 _DOUYIN_UPLOAD_TIMEOUT_SEC = 25 * 60
@@ -452,35 +449,8 @@ def _ass_contains_upstream_error_response(ass_content: str) -> bool:
 
 
 def _build_subprocess_env() -> dict:
-    """[Claude_Sonnet_4.6_Thinking_planning] v3.3.0: 构建 subprocess 环境字典。
-
-    策略：动态检测系统代理可用性，自动决定是否注入代理。
-    - 若代理可达：将代理变量注入子进程，让 curl/yt-dlp 通过代理高速下载。
-    - 若代理不可达：清除代理变量，避免 connection refused 导致进程卡死。
-
-    这起到了两个作用：
-    1. 免除旧日代理已关闭时直连 192.168.1.5:7890 导致 connection refused 的问题
-    2. 在代理服务正常时，自动利用代理高速下载，避免直连 CDN 丢包/限速导致 curl exit 18
-    """
-    active_proxies = settings.get_active_proxies()  # TCP 测试：就绣注入，不就绣不注入
-    # 从当前进程环境中展开，然后用 active_proxies 覆盖到/不到变量
-    env = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
-    # [Gemini_3.5_Flash_planning] v3.4.0: 注入 Telegram 配置环境变量，使 wechat_uploader 能够推送二维码
-    if settings.telegram_bot_token:
-        env["TELEGRAM_BOT_TOKEN"] = settings.telegram_bot_token
-    if settings.active_telegram_chat_id:
-        env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
-    if settings.telegram_admin_ids:
-        env["TELEGRAM_ADMIN_IDS"] = settings.telegram_admin_ids
-    env.update(active_proxies)  # 若 active_proxies 为空字典，则不注入任何代理
-    # [Claude_Opus_4.8] 保证子进程 PATH 含 deno/node(yt-dlp 解 YouTube n-sig 挑战的 JS 运行时)
-    # 与 .venv/bin。根因：cron 以 .venv/bin/python 直跑时**不激活 venv**，最小 PATH(/usr/bin:/bin)
-    # 既无 /opt/homebrew/bin 也无 .venv/bin → yt-dlp 的 ejs 挑战求解器找不到 deno →
-    # "n challenge solving failed" → 所有格式失效 → 高分视频下载整体失败（与发现路径裸 yt-dlp 同类）。
-    # 此处自给自足，无论父进程(cron/dashboard/交互shell)的 PATH 如何，下载链路均能解挑战。
-    _extra_path = [str(settings.project_root / ".venv" / "bin"), "/opt/homebrew/bin", "/usr/local/bin"]
-    env["PATH"] = ":".join(_extra_path + ([env["PATH"]] if env.get("PATH") else []))
-    return env
+    """构建 subprocess 环境字典。单一真相源已下沉至 utils.subprocess_env.build_subprocess_env。"""
+    return build_subprocess_env()
 
 
 class PipelineManager:

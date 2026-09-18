@@ -21,6 +21,7 @@ from .time_utils import (
     seconds_to_time_string,
 )
 from .progress_parser import FFmpegProgressParser
+from .subprocess_env import build_subprocess_env
 
 __all__ = [
     "ensure_directory",
@@ -35,5 +36,6 @@ __all__ = [
     "time_string_to_seconds",
     "seconds_to_time_string",
     "FFmpegProgressParser",
+    "build_subprocess_env",
 ]
 

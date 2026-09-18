@@ -10,6 +10,7 @@
 | 1.3.0 | 2026-08-20 | Codex | 记录 Anti-gravity 底图来源，并对不合格产物继续走确定性降级 |
 | 1.4.0 | 2026-08-20 | Codex | 在 Codex deadline 与固定背景 deadline 之间自动调用 Anti-gravity 第一兜底 |
 | 1.5.0 | 2026-09-18 | Antigravity | 传递 GEMINI_API_KEY 与 PATH 环境变量，并在非零退出时兜底写回失败记录 |
+| 1.6.0 | 2026-09-18 | Antigravity | 接入统一子进程环境工厂 build_subprocess_env，统一管理子进程凭据与 PATH |
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from config.settings import settings
 from video_processing.ai_cover_queue import AICoverQueue, AICoverTask
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db import PipelineDB
+from video_processing.utils.subprocess_env import build_subprocess_env
 
 
 logger = logging.getLogger(__name__)
@@ -97,16 +99,7 @@ def _run_antigravity(task: AICoverTask) -> None:
         "--image-model",
         settings.antigravity_image_model,
     ]
-    env = os.environ.copy()
-    if settings.gemini_api_key:
-        env["GEMINI_API_KEY"] = settings.gemini_api_key
-    _extra_path = [
-        str(settings.project_root / ".venv" / "bin"),
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        str(Path.home() / ".local" / "bin"),
-    ]
-    env["PATH"] = ":".join(_extra_path + ([env["PATH"]] if env.get("PATH") else []))
+    env = build_subprocess_env()
     try:
         result = subprocess.run(
             command,
@@ -180,7 +173,15 @@ def _render(
     ]
     if task.payload.get("content_aware"):
         command.extend(["--content-aware", "--brief-output", str(brief)])
-    result = subprocess.run(command, cwd=str(PROJECT_ROOT), capture_output=True, text=True, timeout=90, check=False)
+    result = subprocess.run(
+        command,
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+        env=build_subprocess_env(),
+    )
     if result.returncode != 0 or not _is_dedicated_cover(target):
         logger.error("[%s] cover render failed: %s", task.task_id, result.stderr[:400])
         return False

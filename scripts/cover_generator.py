@@ -15,6 +15,7 @@
 | 2.5.0   | 2026-07-31 | Codex                        | 支持独立主视觉资产，并将实际渲染语义写回可审计封面简报                |
 | 2.6.0   | 2026-07-31 | Codex                        | 独立主视觉合成失败时禁止静默回退，避免默认图伪装为已使用 AI 底图       |
 | 2.7.0   | 2026-08-03 | Codex                        | 来源清单写入无大面积遮罩版式硬门槛，旧缓存不得继续复用且 Pillow 兜底去卡片 |
+| 2.8.0   | 2026-09-18 | Antigravity                  | 增加 --payload-file 参数，消除 CLI 长 JSON 字符串转义脆弱性 |
 """
 
 import os
@@ -318,13 +319,20 @@ def main():
     parser = argparse.ArgumentParser(description="Generate a dedicated non-frame video cover.")
     parser.add_argument("--title", help="Video title (fallback Pillow generator)")
     parser.add_argument("--payload", help="JSON payload for Cover Engine v2.0")
+    parser.add_argument("--payload-file", help="Path to JSON file containing payload for Cover Engine v2.0")
     parser.add_argument("--content-aware", action="store_true", help="Apply the deterministic content-aware creative brief")
     parser.add_argument("--brief-output", help="Write the applied creative brief JSON after a successful render")
     parser.add_argument("--provenance-output", help="Write dedicated-cover provenance JSON")
     parser.add_argument("--output", required=True, help="Output image path (.jpg)")
     args = parser.parse_args()
     payload = {}
-    if args.payload:
+    if args.payload_file:
+        try:
+            payload = json.loads(Path(args.payload_file).read_text(encoding="utf-8"))
+        except Exception as e:
+            print(f"Error reading payload file {args.payload_file}: {e}")
+            payload = {}
+    elif args.payload:
         try:
             payload = json.loads(args.payload)
         except json.JSONDecodeError:
@@ -353,7 +361,7 @@ def main():
             brief_path.parent.mkdir(parents=True, exist_ok=True)
             brief_path.write_text(json.dumps(creative_brief, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    if args.payload:
+    if args.payload or args.payload_file:
         try:
             # 引入项目 src 目录
             sys.path.append(str(Path(__file__).parent.parent / "src"))
@@ -380,14 +388,14 @@ def main():
             
     # Pillow 渲染流程
     title_to_use = args.title
-    if not title_to_use and args.payload:
+    if not title_to_use and (args.payload or args.payload_file):
         try:
             title_to_use = payload.get("title", "Untitled")
         except Exception:
             title_to_use = "Untitled"
             
     if not title_to_use:
-        parser.error("Either --title or --payload is required")
+        parser.error("Either --title, --payload, or --payload-file is required")
         
     generate_cover(title_to_use, args.output)
     persist_creative_brief()
