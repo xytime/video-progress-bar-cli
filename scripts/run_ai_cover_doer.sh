@@ -15,6 +15,7 @@
 # | 1.8.0 | 2026-08-01 | Codex | 将默认推理强度降为 low，降低 AI 封面巡查 token 成本 |
 # | 1.9.0 | 2026-08-18 | Codex | 临时将封面巡查默认模型切换为 gpt-5.3-codex-spark |
 # | 2.0.0 | 2026-08-20 | Codex | 恢复封面巡查默认模型为已验证可用的 gpt-5.6-terra |
+# | 2.1.0 | 2026-09-18 | Antigravity | 解析 generated_images 真实物理路径，解除 Codex 沙箱软链接阻断 |
 
 set -euo pipefail
 
@@ -128,12 +129,16 @@ PROMPT='执行 /ai-cover-doer 技能。仅处理 /Volumes/EXT2T/MacMini4_SSD/Pyc
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '%s ai-cover-doer started\n' "$started_at"
 set +e
+IMAGES_DIR="$HOME/.codex/generated_images"
+if [[ -e "$IMAGES_DIR" || -L "$IMAGES_DIR" ]]; then
+    IMAGES_DIR="$("$PYTHON_BIN" -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).expanduser().resolve())' "$IMAGES_DIR" 2>/dev/null || echo "$IMAGES_DIR")"
+fi
 "$CODEX_BIN" exec \
     --cd "$PROJECT_ROOT" \
     --model "$CODEX_MODEL" \
     --config "model_reasoning_effort=\"$CODEX_REASONING_EFFORT\"" \
     --sandbox workspace-write \
-    --add-dir "$HOME/.codex/generated_images" \
+    --add-dir "$IMAGES_DIR" \
     --output-last-message "$LAST_MESSAGE" \
     "$PROMPT" < /dev/null
 exit_code=$?

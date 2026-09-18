@@ -9,6 +9,7 @@
 | 1.2.0 | 2026-08-03 | Codex | 加锁并只允许 AI_COVER_PENDING 任务回到 PENDING，防止旧封面任务重发已发布视频 |
 | 1.3.0 | 2026-08-20 | Codex | 记录 Anti-gravity 底图来源，并对不合格产物继续走确定性降级 |
 | 1.4.0 | 2026-08-20 | Codex | 在 Codex deadline 与固定背景 deadline 之间自动调用 Anti-gravity 第一兜底 |
+| 1.5.0 | 2026-09-18 | Antigravity | 传递 GEMINI_API_KEY 与 PATH 环境变量，并在非零退出时兜底写回失败记录 |
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
+import os
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -95,6 +97,16 @@ def _run_antigravity(task: AICoverTask) -> None:
         "--image-model",
         settings.antigravity_image_model,
     ]
+    env = os.environ.copy()
+    if settings.gemini_api_key:
+        env["GEMINI_API_KEY"] = settings.gemini_api_key
+    _extra_path = [
+        str(settings.project_root / ".venv" / "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        str(Path.home() / ".local" / "bin"),
+    ]
+    env["PATH"] = ":".join(_extra_path + ([env["PATH"]] if env.get("PATH") else []))
     try:
         result = subprocess.run(
             command,
@@ -103,6 +115,7 @@ def _run_antigravity(task: AICoverTask) -> None:
             text=True,
             timeout=settings.antigravity_timeout_seconds,
             check=False,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         _write_antigravity_attempt(task, "failed", "Anti-gravity timeout")
@@ -115,6 +128,12 @@ def _run_antigravity(task: AICoverTask) -> None:
             result.stderr[-300:],
             result.stdout[-300:],
         )
+        if not (task.finish_dir / "antigravity_attempt.json").is_file():
+            _write_antigravity_attempt(
+                task,
+                "failed",
+                (result.stderr or result.stdout)[-500:] or "unknown rejection",
+            )
 
 
 def _render(

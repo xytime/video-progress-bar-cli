@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-07-31 | Codex | 覆盖巡查前可领取任务判定，避免空队列执行外部生成器 |
 | 1.2.0 | 2026-08-03 | Codex | 覆盖已有底图优先复用和高消耗确认规则进入任务协议 |
 | 1.3.0 | 2026-08-20 | Codex | 覆盖 Anti-gravity 完成物来源验收 |
+| 1.4.0 | 2026-09-18 | Antigravity | 覆盖 Anti-gravity 兜底环境注入与非零退出记录 |
 """
 
 from __future__ import annotations
@@ -151,3 +152,58 @@ def test_eligible_task_excludes_completed_expired_and_fresh_claims(tmp_path: Pat
 
     (task.finish_dir / "resolution.json").unlink()
     assert queue.has_eligible_task(created + timedelta(minutes=32)) is False
+
+
+def test_run_antigravity_injects_env_and_records_failure(tmp_path: Path, monkeypatch):
+    import scripts.reconcile_ai_cover_queue as reconciler
+    from src.config.settings import settings
+
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    now = datetime(2026, 7, 31, tzinfo=timezone.utc)
+    task = _new_task(queue, tmp_path, now)
+
+    (tmp_path / "bin").mkdir()
+    py_path = tmp_path / "bin" / "python"
+    py_path.write_text("#!/bin/sh\nexit 1\n")
+    py_path.chmod(0o755)
+
+    monkeypatch.setattr(reconciler.settings, "antigravity_runtime_dir", str(tmp_path))
+    monkeypatch.setattr(reconciler.settings, "gemini_api_key", "test_gemini_key_123")
+
+    captured_kwargs = {}
+
+    def fake_run(command, **kwargs):
+        captured_kwargs.update(kwargs)
+
+        class DummyResult:
+            returncode = 1
+            stderr = "Simulated Anti-gravity rejection"
+            stdout = ""
+
+        return DummyResult()
+
+    monkeypatch.setattr(reconciler.subprocess, "run", fake_run)
+
+    reconciler._run_antigravity(task)
+
+    assert captured_kwargs["env"]["GEMINI_API_KEY"] == "test_gemini_key_123"
+    assert "/opt/homebrew/bin" in captured_kwargs["env"]["PATH"]
+    attempt_file = task.finish_dir / "antigravity_attempt.json"
+    assert attempt_file.is_file()
+    attempt = json.loads(attempt_file.read_text(encoding="utf-8"))
+    assert attempt["status"] == "failed"
+    assert "Simulated Anti-gravity rejection" in attempt["error"]
+
+
+def test_generated_images_symlink_resolves_to_real_path(tmp_path: Path):
+    real_target = tmp_path / "real_storage" / "generated_images"
+    real_target.mkdir(parents=True)
+    symlink_path = tmp_path / "fake_home" / ".codex" / "generated_images"
+    symlink_path.parent.mkdir(parents=True)
+    symlink_path.symlink_to(real_target)
+
+    resolved = symlink_path.expanduser().resolve()
+    assert resolved == real_target
+    assert not resolved.is_symlink()
+
+
