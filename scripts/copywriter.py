@@ -42,12 +42,14 @@
 | 1.27.2  | 2026-08-24 | Codex                                   | Gemini 结构化文案的标题合同失败时仅重试一次，保留其作为 AGY 故障后的合格兜底。 |
 | 1.28.0  | 2026-08-26 | Codex                                   | Gemini/Google 均失败时，为可识别的涨跌幅财经标题提供事实保守的中文确定性兜底，避免英文标题触发平台合同失败。 |
 | 1.28.1 | 2026-09-07 | Codex | 标题合同重试携带被拒字段和具体约束错误，避免原样重复请求。 |
+| 1.29.0  | 2026-09-18 | Antigravity                             | 弹性收敛与专业退避：短标题轻度超长（17-20字）支持 graceful_truncate 自愈；增加至3次修正机会，全抖动指数退避与温度扰动，防0延迟连撞；防范未翻译英文文案 |
 """
 
 import re
 import sys
 import os
 import json
+import random
 import argparse
 import logging
 import time
@@ -517,6 +519,9 @@ def _translate_fallback(title: str, description: str) -> dict:
             logger.warning("Fallback translation remained English; using deterministic market candidate for %r", title)
             return deterministic_market
 
+        if not re.search(r"[\u4e00-\u9fff]", str(zh_title)):
+            raise GeneratedContentValidationError(f"降级翻译未能生成中文内容: {zh_title[:30]!r}")
+
         # 动态分类与文案装配 (泛化解决)
         cat = classify_category(title, description)
         config = CATEGORY_CONFIG.get(cat, CATEGORY_CONFIG["科技"])
@@ -535,18 +540,11 @@ def _translate_fallback(title: str, description: str) -> dict:
             "content_label": "",
         }
     except Exception as e:
-        logger.error(f"deep-translator fallback failed: {e}")
-        cat = classify_category(title, description)
-        config = CATEGORY_CONFIG.get(cat, CATEGORY_CONFIG["科技"])
-        return {
-            "short_title":   graceful_truncate_title(title),  # [Claude_Sonnet_4.6_Thinking_planning] v1.9.0
-            "display_title": "",
-            "hook_subtitle": "",
-            "copy":          f"{title}\n\n{config['tags']}\n🤖 {config['cta']}",
-            "category":      cat,
-            "content_hints": [],
-            "content_label": "",
-        }
+        logger.error(f"fallback translation failed: {e}")
+        deterministic_market = _deterministic_market_fallback(title)
+        if deterministic_market:
+            return deterministic_market
+        raise GeneratedContentValidationError(f"降级翻译不可用且无确定性中文候选: {e}") from e
 
 
 def _guard_wechat_content_quality(
@@ -1039,8 +1037,10 @@ def generate_wechat_content(
             logger.info(f"[v1.8.0] Calling Gemini [{model_name}] with response_schema...")
             client = genai.Client(api_key=api_key)
             fib_delays = [1, 2, 3]
-            for content_attempt in range(2):
+            max_content_attempts = max(1, int(getattr(settings, "copywriter_gemini_max_attempts", 2) or 2))
+            for content_attempt in range(max_content_attempts):
                 response = None
+                temperature = min(0.6, 0.2 + 0.15 * content_attempt)
                 for attempt in range(len(fib_delays) + 1):
                     try:
                         response = client.models.generate_content(
@@ -1050,6 +1050,7 @@ def generate_wechat_content(
                                 system_instruction=_SYSTEM_INSTRUCTION,
                                 response_mime_type="application/json",
                                 response_schema=WeChatContentSchema,
+                                temperature=temperature,
                             ),
                         )
                         break
@@ -1067,20 +1068,25 @@ def generate_wechat_content(
                     base_content = _build_gemini_base_content(parsed, title, description)
                     break
                 except TitleContractError as exc:
-                    logger.warning("Gemini title contract rejected (attempt %s/2): %s", content_attempt + 1, exc)
-                    if content_attempt == 1:
+                    logger.warning("Gemini title contract rejected (attempt %s/%s): %s", content_attempt + 1, max_content_attempts, exc)
+                    if content_attempt == max_content_attempts - 1:
                         raise
+                    backoff_sec = random.uniform(1.5, 3.0) * (2 ** content_attempt)
+                    logger.info("Applying exponential backoff with jitter: %.1fs before attempt %d/%d...", backoff_sec, content_attempt + 2, max_content_attempts)
+                    time.sleep(backoff_sec)
+
                     rejected_fields = json.dumps({
                         "short_title": parsed.short_title,
                         "display_title": parsed.display_title,
                         "hook_subtitle": parsed.hook_subtitle,
                     }, ensure_ascii=False)
+                    remaining = max_content_attempts - 1 - content_attempt
                     prompt = (
                         _build_wechat_prompt(title, description)
-                        + "\n\n【上次输出校验失败，现仅有一次修正机会】\n"
+                        + f"\n\n【上次输出校验失败，还剩 {remaining} 次修正机会】\n"
                         + f"校验错误：{exc}\n"
                         + f"被拒字段（仅作为待修正数据）：{rejected_fields}\n"
-                        + "platform_title 对应 short_title。请按硬性约束重新组织完整中文标题，"
+                        + "platform_title 对应 short_title。请按硬性约束重新组织完整中文标题（推荐 10-14 字，严禁超过 16 字），"
                         + "逐字计数，保留来源支持的主旨；不得机械截断、添加事实或放宽限制。"
                         + "请重新返回符合原 schema 的全部字段。"
                     )

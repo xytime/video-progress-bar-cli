@@ -6,6 +6,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-09-18 | Antigravity | 支持根据模型后缀(-high/-low)自动推断 effort，避免参数冲突 |
 | language-v1 | 2026-09-09 | Codex | 可选返回供应商原始用量，不改变现有结构化调用返回合同。 |
 | 1.1.0 | 2026-08-24 | Codex | 禁用 print-mode 指令扩展，并将外部错误压缩为非敏感分类。 |
 | 1.2.0 | 2026-09-17 | Codex | 支持显式传递 low/medium/high effort，避免模型名被误当作推理强度。 |
@@ -17,7 +18,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 class AgyProviderError(RuntimeError):
@@ -31,10 +32,17 @@ def run_agy_structured(
     model: str,
     command: str,
     timeout_sec: int,
-    effort: str = "medium",
+    effort: Optional[str] = None,
     include_usage: bool = False,
 ) -> Dict[str, Any]:
     """在无业务工作区、无危险权限下调用 agy 并提取结构化输出。"""
+    if effort is None:
+        if str(model).endswith("-high"):
+            effort = "high"
+        elif str(model).endswith("-low"):
+            effort = "low"
+        else:
+            effort = "medium"
     effort = str(effort).lower()
     if effort not in {"low", "medium", "high"}:
         raise ValueError("agy effort 必须是 low、medium 或 high")

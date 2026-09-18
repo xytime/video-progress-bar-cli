@@ -86,6 +86,7 @@
 | 3.16.0 | 2026-08-24 | Codex | 新增英语世界 Gemini agy 首选封面开关；仅用于 Telegram 审核包，不改变投稿人审门禁。 |
 | 3.16.1 | 2026-08-24 | Codex | agy 作为字幕与普通话精修首选，DeepSeek 保留为次选，并固定 CLI 模型/超时配置 |
 | 3.61.8 | 2026-09-06 | Codex | 增加安装器与监控共用的英语世界生产时刻配置。 |
+| 3.62.0 | 2026-09-18 | Antigravity | copywriter_title_provider_order 默认启用 agy,gemini；梯队首选高阶思考模型 |
 """
 import json
 import socket
@@ -187,12 +188,13 @@ class Settings(BaseSettings):
     # Google Gemini API Key
     gemini_api_key: Optional[str] = None
 
-    # 标题供应商顺序。默认仅复用既有 Gemini；完成影子评测后可显式切为 agy,gemini。
+    # 标题供应商顺序。默认启用高阶思考模型 agy，既有 Gemini 作为严格合同兜底。
     # 仅改变标题字段，正文仍由现有文案器生成；未知 provider 会被忽略。
-    copywriter_title_provider_order: str = "gemini"
+    copywriter_title_provider_order: str = "agy,gemini"
     copywriter_agy_bin: str = "agy"
     copywriter_agy_model: str = "gemini-3.7-flash-high"
     copywriter_agy_timeout_seconds: int = 45
+    copywriter_gemini_max_attempts: int = 2
     # 双标题消费默认关闭：启用后仅封面读取 display_title，平台/视频顶部仍读 title.txt。
     enable_dual_title_display: bool = False
 
