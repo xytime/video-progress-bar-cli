@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-18 | Antigravity | 增加系统基础路径 /usr/bin 与 /bin 断言 |
 | 1.0.0 | 2026-09-18 | Antigravity | 覆盖 build_subprocess_env 代理过滤、密钥注入、PATH/PYTHONPATH 保证及 cover_generator --payload-file 参数 |
 """
 
@@ -37,6 +38,8 @@ def test_build_subprocess_env_default_injections(monkeypatch):
     assert str(settings.project_root / ".venv" / "bin") in path_segments
     assert "/opt/homebrew/bin" in path_segments
     assert "/usr/local/bin" in path_segments
+    assert "/usr/bin" in path_segments
+    assert "/bin" in path_segments
 
     # PYTHONPATH 保证
     assert str(settings.project_root / "src") in env["PYTHONPATH"]
@@ -90,3 +93,22 @@ def test_cover_generator_payload_file(tmp_path: Path):
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0
     assert output_cover.is_file()
+
+
+def test_english_world_coordinator_environment_delegation(monkeypatch):
+    import types
+    from scripts import run_english_world_daily as ew_runner
+
+    called = False
+
+    def fake_builder(**kwargs):
+        nonlocal called
+        called = True
+        return {"COORDINATOR_TEST": "delegated"}
+
+    monkeypatch.setattr("video_processing.utils.subprocess_env.build_subprocess_env", fake_builder)
+    paths = types.SimpleNamespace(project_root=settings.project_root)
+    env = ew_runner._build_coordinator_environment(paths, settings)
+    assert called is True
+    assert env == {"COORDINATOR_TEST": "delegated"}
+

@@ -8,6 +8,7 @@
 # Modification History
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
+# | 1.3.4 | 2026-09-18 | Antigravity | 缺席自愈子进程接入统一环境工厂 build_subprocess_env，保障 cron 下凭证与 PATH 完备 |
 # | 1.3.3 | 2026-09-18 | Antigravity | 识别正常库存满仓与限额达成的跳过状态，不误报为未交付。 |
 # | 1.3.2 | 2026-09-17 | Codex | 缺席窗口恢复显式沿用 AGY 协调器参数，避免监控补跑回退到 Codex。 |
 # | 1.3.1 | 2026-09-06 | Codex | 读取共享生产时刻、拒绝调度漂移，并独立报告成片就绪后的交付中断。 |
@@ -228,11 +229,20 @@ def _run_missing_window_recovery(paths: MonitorPaths) -> int:
     """仅补跑完全缺席的窗口；协调器本身继续负责锁、回执和有界重试。"""
     if not paths.python_bin.is_file() or not paths.daily_runner.is_file():
         return 127
+    source_root = str(paths.project_root / "src")
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+    try:
+        from video_processing.utils.subprocess_env import build_subprocess_env
+        env = build_subprocess_env()
+    except Exception:
+        env = dict(os.environ)
+
     try:
         result = subprocess.run(
             [str(paths.python_bin), str(paths.daily_runner), *paths.coordinator_args],
             cwd=paths.project_root,
-            env=dict(os.environ),
+            env=env,
             check=False,
             timeout=2 * 60 * 60 + 5 * 60,
         )

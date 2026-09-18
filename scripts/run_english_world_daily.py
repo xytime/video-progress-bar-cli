@@ -7,6 +7,7 @@
 # Modification History
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
+# | 2.40.0 | 2026-09-18 | Antigravity | 接入统一子进程环境工厂 build_subprocess_env，统一管理子进程凭据、代理与 PATH |
 # | 2.39.0 | 2026-09-18 | Antigravity | 生产前增加待发库存水位与每日上限门禁，并在超限或满仓时安全跳过；支持 --force。 |
 # | 2.38.1 | 2026-09-17 | Codex | 将影子运行确认的来源质量淘汰纳入七天机器排除，避免反复预检同一候选。 |
 # | 2.38.0 | 2026-09-17 | Codex | 增加程序化协调器入口，AGY 仅保留受限结构化审校。 |
@@ -100,7 +101,14 @@ LEGACY_SOURCE_ACCESS_FAILURE_PATTERN = re.compile(
     r"网络|来源通路|认证|下载|超时|代理|连接被重置)",
     re.IGNORECASE,
 )
-_PROXY_ENV_KEYS = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"})
+_PROXY_ENV_KEYS = frozenset({
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+})
 _COORDINATOR_CHILD_ENV = "ENGLISH_WORLD_COORDINATOR_CHILD"
 _HOST_MANAGED_COORDINATION_FAILURE_PATTERN = re.compile(
     r"(?:日更(?:协调器)?锁|协调器(?:进程|锁|PID)|持有者\s*PID|"
@@ -359,18 +367,12 @@ def _load_youtube_runtime_dependencies(paths: RuntimePaths) -> tuple[Any, Any, A
 
 def _build_coordinator_environment(paths: RuntimePaths, settings: Any) -> dict[str, str]:
     """让 LaunchAgent、Cookie 刷新与受限协调器共享同一可验收来源通路。"""
-    environment = {key: value for key, value in os.environ.items() if key not in _PROXY_ENV_KEYS}
-    environment.update(settings.get_active_proxies())
-    required_paths = [
-        str(paths.project_root / ".venv" / "bin"),
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-    ]
-    existing = environment.get("PATH", "").split(":") if environment.get("PATH") else []
-    environment["PATH"] = ":".join(dict.fromkeys(required_paths + existing))
-    return environment
+    source_root = str(paths.project_root / "src")
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+    from video_processing.utils.subprocess_env import build_subprocess_env
+
+    return build_subprocess_env()
 
 
 def _preflight_youtube_source_access(
@@ -827,6 +829,11 @@ def _deliver_request_from_host(
     command.extend(["--delivery-receipt", str(delivery_receipt_path)])
     _log(stream, f"executing host delivery for {request['kind']} request")
     try:
+        source_root = str(paths.project_root / "src")
+        if source_root not in sys.path:
+            sys.path.insert(0, source_root)
+        from video_processing.utils.subprocess_env import build_subprocess_env
+
         result = subprocess.run(
             command,
             cwd=paths.project_root,
@@ -835,6 +842,7 @@ def _deliver_request_from_host(
             check=False,
             text=True,
             timeout=35 * 60,
+            env=build_subprocess_env(),
         )
     except subprocess.TimeoutExpired:
         _log(stream, "ERROR: host delivery timed out")
@@ -859,6 +867,12 @@ def _notify_failure(
     if not paths.python_bin.is_file() or not paths.notifier_script.is_file():
         _log(stream, "ERROR: cannot notify Telegram; notifier unavailable")
         return
+    source_root = str(paths.project_root / "src")
+    if source_root not in sys.path:
+        sys.path.insert(0, source_root)
+    from video_processing.utils.subprocess_env import build_subprocess_env
+    env = build_subprocess_env()
+
     for attempt in range(1, max_attempts + 1):
         result = subprocess.run(
             [str(paths.python_bin), str(paths.notifier_script), "--title", "今日英语世界短视频", "--failure", reason],
@@ -866,6 +880,7 @@ def _notify_failure(
             stderr=subprocess.STDOUT,
             check=False,
             text=True,
+            env=env,
         )
         if result.returncode == 0:
             _log(stream, f"Telegram failure notifier accepted on attempt {attempt}/{max_attempts}")

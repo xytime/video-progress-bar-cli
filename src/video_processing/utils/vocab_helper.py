@@ -22,11 +22,7 @@
 | 2.4.0   | 2026-08-02 | Codex | 支持独立学习卡按全文请求更多候选词，并回传 IPA 音标，不改变字幕默认三词限制。 |
 | 2.5.0   | 2026-08-02 | Codex | 学习卡可声明候选词下限，避免模型在长正文中保守少抽。 |
 | 2.6.0   | 2026-08-26 | Codex | 容忍模型在有效 JSON 数组后附加文本或重复片段；仅提取首个语法完整数组，随后仍按 id 对齐校验。 |
-
-# Modification History
-| Version | Date       | Author                              | Description                                                              |
-| ------- | ---------- | ----------------------------------- | ------------------------------------------------------------------------ |
-| 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：从 caption_processor.py 抽取 Gemini 生词提取与对齐职责，实现高内聚低耦合 |
+| 2.7.0   | 2026-09-18 | Antigravity | 移除违反架构宪法的 os.getenv，统一依托 settings.gemini_api_key 单一真相源 |
 
 职责边界：
 - 负责：Gemini SDK 初始化、多模型 Fallback、指数退避重试、提示词构造、JSON 解析
@@ -113,10 +109,6 @@ def extract_vocab_batch(
     except Exception:
         settings_obj = None
         api_key = ""
-
-    if not api_key:
-        import os
-        api_key = os.getenv("GEMINI_API_KEY", "")
 
     if not api_key:
         logger.warning("[vocab_helper] GEMINI_API_KEY not configured. Skipping vocab extraction.")

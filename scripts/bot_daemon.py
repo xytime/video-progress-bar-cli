@@ -14,8 +14,9 @@ vpanel 的 bot 命令组通过 CLI 参数调用本脚本（透传网关）。
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
-| 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建 |
+| 1.2.0 | 2026-09-18 | Antigravity | 进程启动接入 build_subprocess_env 统一注入代理、PATH 与 Telegram 凭据 |
 | 1.1.0 | 2026-06-27 | Claude_Opus_4.8 | [进程加固·按 vpanel 标准] 新增 _bot_pids()：以命令模式(pgrep -f BOT_SCRIPT 绝对路径，精确匹配防误杀)为权威，start/stop/status 不再仅信易漂移的 PID 文件——根治「PID 漂移→start 重复起→双 poller→Telegram 409→对话无响应」；status 预警多实例 |
+| 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 初始创建 |
 """
 from __future__ import annotations
 
@@ -87,10 +88,12 @@ def start() -> None:
         PID_FILE.write_text(str(running[0]))  # 回填可能漂移的 PID 文件
         return
 
-    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    # 接入统一子进程环境工厂，自动保证 PYTHONPATH、代理探测、PATH 与 Telegram 凭据
+    if str(PRJ_ROOT / "src") not in sys.path:
+        sys.path.insert(0, str(PRJ_ROOT / "src"))
+    from video_processing.utils.subprocess_env import build_subprocess_env
 
-    # [Claude_Sonnet_4.6_Thinking_planning] PYTHONPATH 确保 src/bot 包可被正确导入
-    env = {**os.environ, "PYTHONPATH": str(PRJ_ROOT / "src")}
+    env = build_subprocess_env()
 
     with open(LOG_FILE, "a") as log:
         proc = subprocess.Popen(

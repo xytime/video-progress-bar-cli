@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-18 | Antigravity | 候选 PATH 补齐 /usr/bin 与 /bin 基础系统路径，支持系统命令与守护进程保底 |
 | 1.0.0 | 2026-09-18 | Antigravity | 建立子进程环境工厂单一真相源，支持代理探测、PATH 补齐、GEMINI 密钥注入与 PYTHONPATH 保障 |
 """
 
@@ -67,6 +68,8 @@ def build_subprocess_env(
         "/opt/homebrew/bin",
         "/usr/local/bin",
         str(Path.home() / ".local" / "bin"),
+        "/usr/bin",
+        "/bin",
     ]
     current_paths = env.get("PATH", "").split(":") if env.get("PATH") else []
     merged_paths: list[str] = []
