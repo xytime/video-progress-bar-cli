@@ -7,6 +7,7 @@
 # Modification History
 # | Version | Date | Author | Description |
 # | --- | --- | --- | --- |
+# | 2.41.0 | 2026-09-19 | Antigravity | 生产前注入 is_us_market_guard_window 避让门禁；增强语言审校失败模式排除。 |
 # | 2.40.0 | 2026-09-18 | Antigravity | 接入统一子进程环境工厂 build_subprocess_env，统一管理子进程凭据、代理与 PATH |
 # | 2.39.0 | 2026-09-18 | Antigravity | 生产前增加待发库存水位与每日上限门禁，并在超限或满仓时安全跳过；支持 --force。 |
 # | 2.38.1 | 2026-09-17 | Codex | 将影子运行确认的来源质量淘汰纳入七天机器排除，避免反复预检同一候选。 |
@@ -83,11 +84,13 @@ DEFAULT_CODEX_BIN = Path("/Users/ryusei/.local/bin/codex")
 DEFAULT_AGY_BIN = Path(shutil.which("agy") or "agy")
 YOUTUBE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{11}$")
 LEGACY_CANDIDATE_ID_PATTERN = re.compile(
-    r"(?:候选|锁定来源|youtube_id\s*[=:：]?)[^A-Za-z0-9_-]{0,12}([A-Za-z0-9_-]{11})",
+    r"(?:^|候选|锁定来源|youtube_id\s*[=:：]?)[^A-Za-z0-9_-]{0,12}([A-Za-z0-9_-]{11})",
     re.IGNORECASE,
 )
 LEGACY_DETERMINISTIC_QUALITY_FAILURE_PATTERN = re.compile(
     r"(?:"
+    r"language_review|语言审校|"
+    r"子步骤失败[：:]\s*python\s*exit=2|"
     r"内容(?:级)?(?:质检|审核|不适龄|不合格|失败)|"
     r"(?:真实)?屏幕(?:词汇|微笔记)?(?:门禁|质检|不合格|失败|不足)|"
     r"渲染封装(?:质检|门禁|不合格)失败|"
@@ -1086,6 +1089,12 @@ def run(
         from config.settings import settings
         from video_processing.db.database import PipelineDB
         try:
+            if settings.is_us_market_guard_window():
+                with run_log.open("a", encoding="utf-8") as stream:
+                    _log(stream, "SAFE SKIP: [MarketGuard] 当前处于 OptionSense/美股重度运行避让窗口，跳过英语世界制作以保护实盘算力。")
+                _write_status(status_path, "SKIPPED_MARKET_GUARD", 0, 0, run_log, response_path)
+                _release_lock(paths.lock_dir)
+                return 0
             check_db = PipelineDB()
             inventory_count = check_db.get_english_world_inventory_count()
             stock_target = getattr(settings, "english_world_stock_target", 2)

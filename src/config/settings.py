@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.64.0 | 2026-09-19 | Antigravity | 配置化 OptionSense ET 物理避让策略，支持交易日夜间 20:30-04:15 与周末 58.5h 连续安全窗口。 |
 | 3.63.0 | 2026-09-18 | Antigravity | 默认启用英语世界 AGY 高质量主视觉封面与 OCR 人审候选通道。 |
 | 3.62.0 | 2026-09-18 | Antigravity | 解耦英语世界生产触发与发布窗口，增加专属发布窗口与库存水位控制。 |
 | 3.61.11 | 2026-09-17 | Antigravity | 新增英语世界每日发布上限 english_world_daily_publish_limit，默认 10。 |
@@ -151,11 +152,19 @@ class Settings(BaseSettings):
     # cached score is old; this keeps a large low-score waitlist from hot-looping.
     score_refresh_interval_minutes: int = 180
 
-    # [Claude_Opus_4.8] 美股盘中重负载保护：开启后，自动调度器在美股盘中
-    # （ET 09:30–16:00，按 America/New_York 自动处理夏/冬令时）暂停一切重型
-    # 管线处理（下载/Whisper/渲染），避免抢占与实盘交易行情管线共用的整机 CPU。
-    # 本机为共享主机，已确认「盘中过载 → 富途行情积压 → 实盘用过期价格」的失效模式。
+    # [Claude_Opus_4.8 / Antigravity] 美股盘中及 OptionSense 物理交易时钟重负载保护：
+    # 统一以 America/New_York (ET) 为唯一绝对基准，自适应夏令时 (EDT) 与冬令时 (EST) 切换。
+    # 开启后，自动调度器在 OptionSense 重度任务运行时段暂停一切重型管线处理（下载/Whisper/渲染），
+    # 避免抢占与实盘交易行情管线共用的整机 CPU。
     enable_market_hours_guard: bool = True
+    market_guard_policy: str = "optionsense"  # "optionsense" (推荐，避让 04:15-20:30 ET) 或 "nyse_regular" (仅避让常规盘 09:30-16:00 ET)
+    optionsense_timezone: str = "America/New_York"
+    # 交易日夜间可用安全窗口（ET，周一至周五）：20:30 ET 至次日 04:15 ET（连续 7h45m 可用）
+    optionsense_safe_window_trading_day_start: str = "20:30"
+    optionsense_safe_window_trading_day_end: str = "04:15"
+    # 周末可用安全窗口（ET）：周五 20:30 ET 至周一 07:00 ET（连续约 58.5 小时全马力可用）
+    optionsense_safe_window_weekend_start_time: str = "20:30"
+    optionsense_safe_window_weekend_end_time: str = "07:00"
 
     # Telegram 通知 Bot 配置
     telegram_bot_token: Optional[str] = None
@@ -831,19 +840,67 @@ class Settings(BaseSettings):
             return 13 * 60
         return 16 * 60
 
-    def is_us_market_guard_window(self, now: Optional[datetime] = None) -> bool:
-        """[Claude_Opus_4.8] 是否处于美股盘中重负载保护窗口（单一真相源）。
+    def is_optionsense_safe_window(self, now: Optional[datetime] = None) -> bool:
+        """[Antigravity] 判定当前时间是否处于 OptionSense 算力闲置安全窗口（单一真相源）。
 
-        共享主机同时运行实盘交易行情管线，盘中 CPU 被抢会导致行情积压 → 实盘用过期价格
-        （已确认失效模式）。窗口 = ET 09:30 至当日 NYSE 收盘（常规 16:00、提前收市 13:00），用 America/New_York
-        自动适配夏/冬令时；非交易时段、周末和常规全日休市日返回 False。可经
-        enable_market_hours_guard 关闭。
-        供 web 调度器与 pipeline_manager 共用，避免重复实现。
+        时区基准：America/New_York (ET)，免疫夏令时 (EDT) 与冬令时 (EST) 漂移。
+        可用窗口定义：
+        1. 交易日夜间：ET 周一至周五 20:30 ET ~ 次日 04:15 ET（连续 7 小时 45 分钟）；
+        2. 非交易日（周末）：周五 20:30 ET ~ 周一 07:00 ET（连续约 58.5 小时全马力可用）；
+        3. NYSE 全日法定休市日（Holidays）：全天处于可用状态。
+        """
+        from zoneinfo import ZoneInfo
+        eastern = ZoneInfo(self.optionsense_timezone or "America/New_York")
+        et = datetime.now(eastern) if now is None else now
+        if et.tzinfo is None:
+            et = et.replace(tzinfo=eastern)
+        else:
+            et = et.astimezone(eastern)
+
+        def _parse_hhmm(spec: str) -> int:
+            parts = spec.strip().split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+
+        td_start_min = _parse_hhmm(self.optionsense_safe_window_trading_day_start)
+        td_end_min = _parse_hhmm(self.optionsense_safe_window_trading_day_end)
+        we_start_min = _parse_hhmm(self.optionsense_safe_window_weekend_start_time)
+        we_end_min = _parse_hhmm(self.optionsense_safe_window_weekend_end_time)
+
+        weekday = et.weekday()  # 0=Monday, ..., 4=Friday, 5=Saturday, 6=Sunday
+        time_min = et.hour * 60 + et.minute
+
+        # 1. 周末全马力判定 (周五 20:30 ET ~ 周一 07:00 ET)
+        if weekday == 4 and time_min >= we_start_min:
+            return True
+        if weekday in (5, 6):
+            return True
+        if weekday == 0 and time_min < we_end_min:
+            return True
+
+        # 2. 法定假日判定 (若当天全天休市，视为非交易日，处于可用状态)
+        if not self.is_us_market_trading_day(et.date()):
+            return True
+
+        # 3. 交易日夜间判定 (20:30 ET ~ 次日 04:15 ET)
+        if time_min >= td_start_min or time_min < td_end_min:
+            return True
+
+        return False
+
+    def is_us_market_guard_window(self, now: Optional[datetime] = None) -> bool:
+        """[Claude_Opus_4.8 / Antigravity] 是否处于美股/OptionSense 重负载保护窗口（单一真相源）。
+
+        开启 enable_market_hours_guard 时：
+        - market_guard_policy == 'optionsense'：基于 OptionSense 可用窗口取反（非安全时段即避让）；
+        - market_guard_policy == 'nyse_regular'：基于 NYSE 常规盘中 09:30 至收盘避让（Legacy）。
         """
         if not self.enable_market_hours_guard:
             return False
+        if self.market_guard_policy == "optionsense":
+            return not self.is_optionsense_safe_window(now)
+
         from zoneinfo import ZoneInfo
-        eastern = ZoneInfo("America/New_York")
+        eastern = ZoneInfo(self.optionsense_timezone or "America/New_York")
         et = datetime.now(eastern) if now is None else now
         if et.tzinfo is None:
             et = et.replace(tzinfo=eastern)

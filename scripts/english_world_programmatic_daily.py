@@ -9,6 +9,7 @@ JSON Schema 约束的一次调用中补全中文段译、标题和 3--5 个学�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-09-19 | Antigravity | 修复锁题后质检或渲染失败时排除列表遗漏 candidate ID 的问题，防止跨槽位死锁。 |
 | 1.3.8 | 2026-09-17 | Antigravity | 扩充预检候选池上限至 10，保持与每日 10 条发布目标一致。 |
 | 1.3.7 | 2026-09-17 | Antigravity | 初稿 prompt 明确 A2-B1 核心实词要求并禁止选取极浅 A1 词及缺乏有效音标的简单屈折词。 |
 | 1.3.6 | 2026-09-17 | Antigravity | 搜索查询候选被排除或耗尽时只读降级至授权频道 Catalog Fallback，严格保持 BNN 优先与白名单回退。 |
@@ -609,9 +610,9 @@ def run(
             # 编程错误与未知外部异常绝不可伪装成候选质量问题，避免错误地把
             # 合格来源写入排除账本；它们同样必须有可审计的失败请求。
             known_source_failure = isinstance(exc, (OSError, ValueError, ProgrammaticDailyError, subprocess.TimeoutExpired))
-            if video_id and not locked_source and known_source_failure:
+            if video_id and known_source_failure:
                 rejected.append(video_id)
-            # 锁定后失败不是来源质量淘汰；不可换题掩盖内容、渲染或安全问题。
+            # 锁定后失败不可在同轮换题掩盖问题；中断循环，但已将该 ID 记入 rejected 供后续轮次排除。
             if locked_source or not known_source_failure:
                 break
             continue

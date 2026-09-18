@@ -94,7 +94,7 @@ def test_market_guard_uses_nyse_trading_day_not_weekday_only():
 
 
 def test_market_guard_is_limited_to_regular_nyse_session():
-    guarded = Settings(enable_market_hours_guard=True)
+    guarded = Settings(enable_market_hours_guard=True, market_guard_policy="nyse_regular")
     eastern = ZoneInfo("America/New_York")
 
     assert not guarded.is_us_market_guard_window(datetime(2026, 7, 1, 9, 29, tzinfo=eastern))
@@ -104,7 +104,7 @@ def test_market_guard_is_limited_to_regular_nyse_session():
 
 
 def test_market_guard_ends_at_nyse_early_close():
-    guarded = Settings(enable_market_hours_guard=True)
+    guarded = Settings(enable_market_hours_guard=True, market_guard_policy="nyse_regular")
     eastern = ZoneInfo("America/New_York")
 
     assert guarded.is_us_market_guard_window(datetime(2026, 11, 27, 12, 59, tzinfo=eastern))
