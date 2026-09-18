@@ -43,6 +43,7 @@
 | 1.28.0  | 2026-08-26 | Codex                                   | Gemini/Google 均失败时，为可识别的涨跌幅财经标题提供事实保守的中文确定性兜底，避免英文标题触发平台合同失败。 |
 | 1.28.1 | 2026-09-07 | Codex | 标题合同重试携带被拒字段和具体约束错误，避免原样重复请求。 |
 | 1.29.0  | 2026-09-18 | Antigravity                             | 弹性收敛与专业退避：短标题轻度超长（17-20字）支持 graceful_truncate 自愈；增加至3次修正机会，全抖动指数退避与温度扰动，防0延迟连撞；防范未翻译英文文案 |
+| 1.29.1  | 2026-09-19 | Antigravity                             | 确立 Fail-Closed 哲学并补齐降级翻译异常审计链路；清理 copywriter_gemini_max_attempts 的 getattr 冗余 |
 """
 
 import re
@@ -1026,8 +1027,12 @@ def generate_wechat_content(
     base_provider = model_name
     if not api_key:
         logger.warning("Gemini API key unavailable; using translation fallback as content base")
-        base_content = _translate_fallback(title, description)
-        base_provider = "fallback"
+        try:
+            base_content = _translate_fallback(title, description)
+            base_provider = "fallback"
+        except GeneratedContentValidationError as exc:
+            logger.error("Fail-closed: API key missing and translation fallback failed validation: %s", exc)
+            raise
     else:
         try:
             from google import genai
@@ -1037,7 +1042,7 @@ def generate_wechat_content(
             logger.info(f"[v1.8.0] Calling Gemini [{model_name}] with response_schema...")
             client = genai.Client(api_key=api_key)
             fib_delays = [1, 2, 3]
-            max_content_attempts = max(1, int(getattr(settings, "copywriter_gemini_max_attempts", 2) or 2))
+            max_content_attempts = max(1, settings.copywriter_gemini_max_attempts)
             for content_attempt in range(max_content_attempts):
                 response = None
                 temperature = min(0.6, 0.2 + 0.15 * content_attempt)
@@ -1092,8 +1097,15 @@ def generate_wechat_content(
                     )
         except Exception as exc:
             logger.error("Gemini content base failed: %s", type(exc).__name__)
-            base_content = _translate_fallback(title, description)
-            base_provider = "fallback"
+            try:
+                base_content = _translate_fallback(title, description)
+                base_provider = "fallback"
+            except GeneratedContentValidationError as fb_err:
+                logger.error(
+                    "Fail-closed: both Gemini and translation fallback failed; refusing to publish unverified content: %s",
+                    fb_err,
+                )
+                raise
 
     candidates = _title_provider_candidates(
         base_content,

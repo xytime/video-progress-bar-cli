@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                     | Description |
 |---------|------------|----------------------------|-------------|
+| 1.21.0 | 2026-09-19 | Antigravity | 覆盖文案生成 Fail-Closed 闸门：API 缺失或模型失败且兜底无效时阻断发布 |
 | 1.20.0 | 2026-09-09 | Codex | 英文正文候选必须被拒绝，正常中文后备可用且全失败时禁止放行 |
 | 1.19.0 | 2026-09-07 | Codex | 覆盖标题重生成携带错误反馈，且连续不合规时仍有界失败。 |
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning  | Initial creation of copywriter tests |
@@ -647,3 +648,41 @@ def test_copy_candidate_selector_keeps_warning_candidate_when_fallback_blocked(m
     assert [event["selected"] for event in report["events"]] == [True, False]
     assert report["events"][1]["action"] == "fail"
     assert report["events"][1]["blocking_issues"][0]["code"] == "FINANCE_EVENT_DIRECTION_REVERSAL"
+
+
+def test_generate_wechat_content_fails_closed_when_api_key_missing_and_fallback_invalid(monkeypatch):
+    import scripts.copywriter as copywriter
+    from video_processing.utils.generated_content_validation import GeneratedContentValidationError
+
+    monkeypatch.setattr(copywriter.settings, "gemini_api_key", None)
+
+    def mock_fallback(*_):
+        raise GeneratedContentValidationError("降级翻译不可用且无确定性中文候选: HTTP 429")
+
+    monkeypatch.setattr(copywriter, "_translate_fallback", mock_fallback)
+
+    with pytest.raises(GeneratedContentValidationError, match="降级翻译不可用且无确定性中文候选"):
+        copywriter.generate_wechat_content("Random Title", "Some description")
+
+
+def test_generate_wechat_content_fails_closed_when_gemini_and_fallback_fail(monkeypatch):
+    import scripts.copywriter as copywriter
+    from google import genai
+    from types import SimpleNamespace
+    from video_processing.utils.generated_content_validation import GeneratedContentValidationError
+
+    monkeypatch.setattr(copywriter.settings, "gemini_api_key", "test-key")
+    monkeypatch.setattr(copywriter.settings, "copywriter_gemini_max_attempts", 1)
+
+    def fail_generate_content(**_):
+        raise RuntimeError("Gemini quota exceeded 429")
+
+    monkeypatch.setattr(genai, "Client", lambda **_: SimpleNamespace(models=SimpleNamespace(generate_content=fail_generate_content)))
+
+    def mock_fallback(*_):
+        raise GeneratedContentValidationError("降级翻译不可用且无确定性中文候选: translation timeout")
+
+    monkeypatch.setattr(copywriter, "_translate_fallback", mock_fallback)
+
+    with pytest.raises(GeneratedContentValidationError, match="降级翻译不可用且无确定性中文候选"):
+        copywriter.generate_wechat_content("Random Title", "Some description")
