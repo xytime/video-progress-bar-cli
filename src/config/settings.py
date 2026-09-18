@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.65.0 | 2026-09-19 | Antigravity | 扩展 OptionSense 交易日安全窗口为 16:15-17:50 与 19:00-08:30 ET。 |
 | 3.64.0 | 2026-09-19 | Antigravity | 配置化 OptionSense ET 物理避让策略，支持交易日夜间 20:30-04:15 与周末 58.5h 连续安全窗口。 |
 | 3.63.0 | 2026-09-18 | Antigravity | 默认启用英语世界 AGY 高质量主视觉封面与 OCR 人审候选通道。 |
 | 3.62.0 | 2026-09-18 | Antigravity | 解耦英语世界生产触发与发布窗口，增加专属发布窗口与库存水位控制。 |
@@ -157,14 +158,13 @@ class Settings(BaseSettings):
     # 开启后，自动调度器在 OptionSense 重度任务运行时段暂停一切重型管线处理（下载/Whisper/渲染），
     # 避免抢占与实盘交易行情管线共用的整机 CPU。
     enable_market_hours_guard: bool = True
-    market_guard_policy: str = "optionsense"  # "optionsense" (推荐，避让 04:15-20:30 ET) 或 "nyse_regular" (仅避让常规盘 09:30-16:00 ET)
+    market_guard_policy: str = "optionsense"  # "optionsense" (推荐，按配置避让) 或 "nyse_regular" (仅避让常规盘 09:30-16:00 ET)
     optionsense_timezone: str = "America/New_York"
-    # 交易日夜间可用安全窗口（ET，周一至周五）：20:30 ET 至次日 04:15 ET（连续 7h45m 可用）
-    optionsense_safe_window_trading_day_start: str = "20:30"
-    optionsense_safe_window_trading_day_end: str = "04:15"
-    # 周末可用安全窗口（ET）：周五 20:30 ET 至周一 07:00 ET（连续约 58.5 小时全马力可用）
-    optionsense_safe_window_weekend_start_time: str = "20:30"
-    optionsense_safe_window_weekend_end_time: str = "07:00"
+    # 交易日可用安全窗口（ET，周一至周五）：16:15~17:50 与 19:00~08:30（跨午夜，连续 13h30m + 1h35m）
+    optionsense_trading_day_safe_windows: str = "16:15-17:50,19:00-08:30"
+    # 周末可用安全窗口（ET）：周五 19:00 ET 至周一 08:30 ET（连续约 61.5 小时全马力可用）
+    optionsense_safe_window_weekend_start_time: str = "19:00"
+    optionsense_safe_window_weekend_end_time: str = "08:30"
 
     # Telegram 通知 Bot 配置
     telegram_bot_token: Optional[str] = None
@@ -599,9 +599,10 @@ class Settings(BaseSettings):
 
     @staticmethod
     def _parse_publish_window_ranges(value: str) -> list[tuple[int, int]]:
-        """解析发布时间窗口；格式 HH:MM-HH:MM，逗号分隔。"""
+        """解析时间窗口；格式 HH:MM-HH:MM，逗号/顿号/分号分隔，支持 - 或 ~。"""
         ranges: list[tuple[int, int]] = []
-        for item in (value or "").split(","):
+        normalized = (value or "").replace("~", "-").replace("、", ",").replace(";", ",")
+        for item in normalized.split(","):
             start_raw, sep, end_raw = item.strip().partition("-")
             if not sep:
                 continue
@@ -857,33 +858,24 @@ class Settings(BaseSettings):
         else:
             et = et.astimezone(eastern)
 
-        def _parse_hhmm(spec: str) -> int:
-            parts = spec.strip().split(":")
-            return int(parts[0]) * 60 + int(parts[1])
-
-        td_start_min = _parse_hhmm(self.optionsense_safe_window_trading_day_start)
-        td_end_min = _parse_hhmm(self.optionsense_safe_window_trading_day_end)
-        we_start_min = _parse_hhmm(self.optionsense_safe_window_weekend_start_time)
-        we_end_min = _parse_hhmm(self.optionsense_safe_window_weekend_end_time)
-
         weekday = et.weekday()  # 0=Monday, ..., 4=Friday, 5=Saturday, 6=Sunday
         time_min = et.hour * 60 + et.minute
 
-        # 1. 周末全马力判定 (周五 20:30 ET ~ 周一 07:00 ET)
-        if weekday == 4 and time_min >= we_start_min:
-            return True
+        # 1. 周末全马力判定 (周六与周日全天可用)
         if weekday in (5, 6):
-            return True
-        if weekday == 0 and time_min < we_end_min:
             return True
 
         # 2. 法定假日判定 (若当天全天休市，视为非交易日，处于可用状态)
         if not self.is_us_market_trading_day(et.date()):
             return True
 
-        # 3. 交易日夜间判定 (20:30 ET ~ 次日 04:15 ET)
-        if time_min >= td_start_min or time_min < td_end_min:
-            return True
+        # 3. 交易日可用时段判定 (默认为 16:15~17:50 与 19:00~08:30 ET)
+        ranges = self._parse_publish_window_ranges(self.optionsense_trading_day_safe_windows)
+        for start, end in ranges:
+            if start < end and start <= time_min < end:
+                return True
+            if start > end and (time_min >= start or time_min < end):
+                return True
 
         return False
 
