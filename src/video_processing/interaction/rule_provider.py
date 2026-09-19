@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-19 | Codex | 使用合同受控渲染，避免模板字段与实际文本漂移 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：实现基于自生长知识库的程序化兜底生成器 |
 """
 
@@ -13,9 +14,14 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional
+from typing import Optional
 
-from .contract import InteractionDraft, InteractionType, validate_interaction_draft
+from .contract import (
+    InteractionDraft,
+    InteractionType,
+    render_interaction_comment,
+    validate_interaction_draft,
+)
 from .strategy_store import StrategyStore
 
 logger = logging.getLogger(__name__)
@@ -61,7 +67,7 @@ class RuleInteractionProvider:
             interaction_type = chosen_type
 
         # 组装高可读性格式化评论
-        formatted_comment = self._format_comment(
+        formatted_comment = render_interaction_comment(
             topic=topic,
             interaction_type=interaction_type,
             poll_options=poll_options,
@@ -109,40 +115,3 @@ class RuleInteractionProvider:
 
         # 默认站队投票
         return InteractionType.POLL_STAND
-
-    def _format_comment(
-        self,
-        *,
-        topic: str,
-        interaction_type: InteractionType,
-        poll_options: List[str],
-        share_hook: str,
-    ) -> str:
-        """格式化为带 Emoji 视觉块的高可读性文本。"""
-        lines = []
-
-        if interaction_type == InteractionType.WARNING_SHARE:
-            lines.append(f"⚠️【避坑提示】{topic}")
-        elif interaction_type == InteractionType.MEMO_COLLECTION:
-            lines.append(f"📦【干货备忘】{topic}")
-        elif interaction_type == InteractionType.VOICE_RESONANCE:
-            lines.append(f"💡【深度思考】{topic}")
-        else:
-            lines.append(f"📌【互动话题】{topic}")
-
-        if poll_options:
-            lines.append("🗳️【站队表态】")
-            letters = ["🅰️", "🅱️", "🅲", "🅳"]
-            for i, opt in enumerate(poll_options[:4]):
-                clean_opt = opt.strip()
-                # 避免已有前缀导致重复 (如 '🅰️ 🅰️ ...')
-                if any(clean_opt.startswith(e) for e in ["🅰️", "🅱️", "🅲", "🅳", "A.", "B.", "C.", "D."]):
-                    lines.append(clean_opt)
-                else:
-                    prefix = letters[i] if i < len(letters) else f"{i+1}."
-                    lines.append(f"{prefix} {clean_opt}")
-            lines.append("💬 直接在评论区打出你的选择或留言！")
-
-        lines.append(f"📢 {share_hook}")
-
-        return "\n".join(lines)

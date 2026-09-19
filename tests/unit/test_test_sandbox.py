@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-08 | Codex | 验证收集前拒绝、默认数据库位置、配置清除、网络与子进程拒绝 |
+| 1.1.0 | 2026-09-19 | Codex | 评论策略只读种子精确白名单，禁止放宽到全部 data |
 """
 
 import importlib.util
@@ -112,14 +113,15 @@ def test_uncontained_collection_refuses_before_config_import(tmp_path, fake_mark
 
 def test_snapshot_excludes_runtime_and_env_variants(tmp_path, monkeypatch):
     source, destination = tmp_path / "source", tmp_path / "destination"
-    names = ["src/example.py", "config/.env.production", ".env", "output/pipeline.db", ".env.example"]
+    names = ["src/example.py", "config/.env.production", ".env", "output/pipeline.db", ".env.example",
+             "data/comment_strategies.json", "data/private-runtime.json"]
     for name in names:
         path = source / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fixture")
     monkeypatch.setattr(runner.subprocess, "check_output", lambda *a, **kw: "\0".join(names).encode())
     manifest = runner.snapshot(source, destination)
-    assert set(manifest) == {"src/example.py", ".env.example"}
+    assert set(manifest) == {"src/example.py", ".env.example", "data/comment_strategies.json"}
     assert set(p.relative_to(destination).as_posix() for p in destination.rglob("*") if p.is_file()) == set(manifest)
 
 

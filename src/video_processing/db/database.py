@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.65.0 | 2026-09-19 | Codex | 将视频号互动账本升级为可恢复 lease/提交意图状态机，固化评论文本、有界退避与 UNCERTAIN 只读回查边界。 |
 | 3.64.0 | 2026-09-19 | Antigravity | 还原 idx_douyin_browser_launch_tickets_prelaunch_recovery 索引；增加严格限定 PUBLISHED 的 post_id/video_id 互动前置查询 DAL 方法与重试追踪。 |
 | 3.63.0 | 2026-09-19 | Antigravity | 新增 wechat_interactions 账本表及 DAL 方法，支持视频号评论区引导与状态追踪。 |
 | 3.62.0 | 2026-09-18 | Antigravity | 新增未确认英语世界通知步骤的安全重置方法，支持网络异常后受控重发。 |
@@ -212,7 +213,7 @@ class PipelineDB:
             return "UNCERTAIN"
         return normalized_state
 
-    def __init__(self, db_path: str = "pipeline.db"):
+    def __init__(self, db_path: str = "pipeline.db", *, read_only: bool = False):
         # 默认在项目根目录的 output 文件夹内创建数据库
         # 如果是绝对路径则直接使用
         if not os.path.isabs(db_path):
@@ -221,9 +222,20 @@ class PipelineDB:
         else:
             self.db_path = db_path
             
-        # 确保目录存在
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        self._init_db()
+        self._read_only = bool(read_only)
+        if self._read_only:
+            db_file = Path(self.db_path)
+            wal_file = Path(f"{self.db_path}-wal")
+            if not db_file.is_file():
+                raise FileNotFoundError(f"Read-only database does not exist: {db_file}")
+            if wal_file.is_file() and wal_file.stat().st_size > 0:
+                raise RuntimeError(
+                    "Read-only preview refused an active non-empty WAL; use a checkpointed copy"
+                )
+        else:
+            # 确保目录存在
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+            self._init_db()
         
     @contextmanager
     def get_connection(self):
@@ -233,7 +245,14 @@ class PipelineDB:
         close()。本项目的 DAL 全部以 ``with self.get_connection()`` 访问，
         因而必须在这里统一关闭，避免常驻仪表盘的轮询逐步耗尽句柄。
         """
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        if self._read_only:
+            conn = sqlite3.connect(
+                f"{Path(self.db_path).resolve().as_uri()}?mode=ro&immutable=1",
+                uri=True,
+                timeout=30.0,
+            )
+        else:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
         # SQLite 的外键开关是连接级而不是数据库级；只在 _init_db() 打开会让
         # 后续 DAL 连接静默失去 ON DELETE/ON UPDATE 约束。
         conn.execute("PRAGMA foreign_keys=ON;")
@@ -1747,16 +1766,24 @@ class PipelineDB:
                 CREATE INDEX IF NOT EXISTS idx_douyin_browser_launch_tickets_prelaunch_recovery
                 ON douyin_browser_launch_tickets(source_type, launch_started_at, prelaunch_canceled_at, issued_at)
             ''')
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS wechat_interactions (
+            interaction_table_sql = '''
+                CREATE TABLE wechat_interactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     publication_id INTEGER NOT NULL,
                     platform_post_id TEXT NOT NULL,
                     interaction_type TEXT NOT NULL,
                     provider TEXT NOT NULL,
                     comment_text TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('PENDING', 'COMMENTED', 'SKIPPED_EXISTS', 'PENDING_REVIEW', 'FAILED')),
-                    attempt_count INTEGER DEFAULT 1,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'QUEUED', 'CLAIMED', 'SUBMIT_INTENT', 'RETRY_WAIT',
+                        'UNCERTAIN', 'COMMENTED', 'SKIPPED_EXISTS', 'FAILED'
+                    )),
+                    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+                    max_attempts INTEGER NOT NULL DEFAULT 5 CHECK(max_attempts BETWEEN 1 AND 5),
+                    next_attempt_at TEXT DEFAULT NULL,
+                    lease_token TEXT DEFAULT NULL,
+                    lease_expires_at TEXT DEFAULT NULL,
+                    submit_intent_at TEXT DEFAULT NULL,
                     evidence_path TEXT DEFAULT NULL,
                     error_message TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1765,16 +1792,81 @@ class PipelineDB:
                     FOREIGN KEY(publication_id) REFERENCES wechat_publications(id) ON DELETE CASCADE,
                     UNIQUE(platform_post_id)
                 )
-            ''')
-            cursor.execute("PRAGMA table_info(wechat_interactions)")
-            interaction_cols = {row[1] for row in cursor.fetchall()}
-            if "attempt_count" not in interaction_cols and interaction_cols:
-                cursor.execute("ALTER TABLE wechat_interactions ADD COLUMN attempt_count INTEGER DEFAULT 1")
-            if "updated_at" not in interaction_cols and interaction_cols:
-                cursor.execute("ALTER TABLE wechat_interactions ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            '''
+            cursor.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'wechat_interactions'"
+            )
+            existing_interaction_table = cursor.fetchone()
+            if not existing_interaction_table:
+                cursor.execute(interaction_table_sql)
+            else:
+                cursor.execute("PRAGMA table_info(wechat_interactions)")
+                interaction_cols = {row[1] for row in cursor.fetchall()}
+                required_cols = {
+                    "max_attempts", "next_attempt_at", "lease_token",
+                    "lease_expires_at", "submit_intent_at",
+                }
+                if not required_cols.issubset(interaction_cols):
+                    # SQLite 无法就地修改 CHECK 约束；使用同一事务重建，
+                    # 同时保留旧表非空数据、外键语义及所有显式索引。
+                    cursor.execute("SAVEPOINT migrate_wechat_interactions")
+                    cursor.execute('''
+                        SELECT name, sql FROM sqlite_master
+                        WHERE type = 'index' AND tbl_name = 'wechat_interactions' AND sql IS NOT NULL
+                    ''')
+                    legacy_indices = [(row[0], row[1]) for row in cursor.fetchall()]
+                    for index_name, _ in legacy_indices:
+                        quoted_name = index_name.replace('"', '""')
+                        cursor.execute(f'DROP INDEX "{quoted_name}"')
+                    cursor.execute("ALTER TABLE wechat_interactions RENAME TO wechat_interactions_legacy")
+                    cursor.execute(interaction_table_sql)
+                    attempt_expr = (
+                        "MAX(0, COALESCE(attempt_count, 0))"
+                        if "attempt_count" in interaction_cols else "0"
+                    )
+                    updated_expr = (
+                        "COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)"
+                        if "updated_at" in interaction_cols
+                        else "COALESCE(created_at, CURRENT_TIMESTAMP)"
+                    )
+                    cursor.execute(f'''
+                        INSERT INTO wechat_interactions (
+                            id, publication_id, platform_post_id, interaction_type,
+                            provider, comment_text, status, attempt_count, max_attempts,
+                            next_attempt_at, evidence_path, error_message,
+                            created_at, updated_at, commented_at
+                        )
+                        SELECT id, publication_id, platform_post_id, interaction_type,
+                               provider, comment_text,
+                               CASE status
+                                   WHEN 'PENDING' THEN 'QUEUED'
+                                   WHEN 'PENDING_REVIEW' THEN 'UNCERTAIN'
+                                   WHEN 'COMMENTED' THEN 'COMMENTED'
+                                   WHEN 'SKIPPED_EXISTS' THEN 'SKIPPED_EXISTS'
+                                   ELSE 'FAILED'
+                               END,
+                               {attempt_expr}, 5,
+                               CASE
+                                   WHEN status IN ('PENDING', 'PENDING_REVIEW')
+                                   THEN {updated_expr}
+                                   ELSE NULL
+                               END,
+                               evidence_path, error_message, created_at,
+                               {updated_expr}, commented_at
+                        FROM wechat_interactions_legacy
+                    ''')
+                    cursor.execute("DROP TABLE wechat_interactions_legacy")
+                    for _, index_sql in legacy_indices:
+                        cursor.execute(index_sql)
+                    cursor.execute("RELEASE SAVEPOINT migrate_wechat_interactions")
 
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_wechat_interactions_status ON wechat_interactions(status)
+                CREATE INDEX IF NOT EXISTS idx_wechat_interactions_status
+                ON wechat_interactions(status)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_wechat_interactions_due
+                ON wechat_interactions(status, next_attempt_at, lease_expires_at)
             ''')
             
             conn.commit()
@@ -9763,6 +9855,293 @@ class PipelineDB:
             conn.commit()
 
     # --- WeChat Interactions DAL ---
+    _WECHAT_INTERACTION_TERMINAL_STATES = {"COMMENTED", "SKIPPED_EXISTS", "FAILED"}
+
+    @staticmethod
+    def _wechat_interaction_timestamp(value: Optional[datetime.datetime] = None) -> str:
+        """返回可注入时钟的 UTC ISO 时刻，供 lease 与退避边界比较。"""
+        moment = value or datetime.datetime.now(datetime.timezone.utc)
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=datetime.timezone.utc)
+        return moment.astimezone(datetime.timezone.utc).isoformat()
+
+    def queue_wechat_interaction(
+        self,
+        *,
+        publication_id: int,
+        platform_post_id: str,
+        interaction_type: str,
+        provider: str,
+        comment_text: str,
+        now: Optional[datetime.datetime] = None,
+        max_attempts: int = 5,
+    ) -> dict:
+        """幂等建立互动任务；既有评论文本和终态永不被后续生成覆盖。"""
+        clean_post_id = str(platform_post_id or "").strip()
+        clean_comment = str(comment_text or "").strip()
+        if not clean_post_id or not clean_comment:
+            raise ValueError("platform_post_id and comment_text are required")
+        bounded_attempts = max(1, min(5, int(max_attempts)))
+        now_text = self._wechat_interaction_timestamp(now)
+        with self.get_connection() as conn:
+            conn.execute(
+                '''
+                INSERT INTO wechat_interactions (
+                    publication_id, platform_post_id, interaction_type, provider,
+                    comment_text, status, attempt_count, max_attempts,
+                    next_attempt_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'QUEUED', 0, ?, ?, ?, ?)
+                ON CONFLICT(platform_post_id) DO NOTHING
+                ''',
+                (
+                    int(publication_id), clean_post_id, interaction_type, provider,
+                    clean_comment, bounded_attempts, now_text, now_text, now_text,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM wechat_interactions WHERE platform_post_id = ?",
+                (clean_post_id,),
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to queue WeChat interaction")
+            return dict(row)
+
+    @staticmethod
+    def _recover_expired_wechat_interactions_conn(
+        conn: sqlite3.Connection,
+        *,
+        now_text: str,
+    ) -> None:
+        """在领取写事务中恢复过期 lease；提交意图后只能进 UNCERTAIN。"""
+        conn.execute(
+            '''
+            UPDATE wechat_interactions
+            SET status = 'RETRY_WAIT', lease_token = NULL, lease_expires_at = NULL,
+                next_attempt_at = ?, updated_at = ?,
+                error_message = COALESCE(error_message, '预提交 lease 过期，可安全重试')
+            WHERE status = 'CLAIMED' AND lease_expires_at IS NOT NULL
+              AND lease_expires_at <= ?
+            ''',
+            (now_text, now_text, now_text),
+        )
+        conn.execute(
+            '''
+            UPDATE wechat_interactions
+            SET status = 'UNCERTAIN', lease_token = NULL, lease_expires_at = NULL,
+                next_attempt_at = CASE WHEN attempt_count < max_attempts THEN ? ELSE NULL END,
+                updated_at = ?,
+                error_message = COALESCE(error_message, '提交意图后 lease 过期，必须只读回查')
+            WHERE status = 'SUBMIT_INTENT' AND lease_expires_at IS NOT NULL
+              AND lease_expires_at <= ?
+            ''',
+            (now_text, now_text, now_text),
+        )
+        conn.execute(
+            '''
+            UPDATE wechat_interactions
+            SET lease_token = NULL, lease_expires_at = NULL,
+                next_attempt_at = CASE WHEN attempt_count < max_attempts THEN ? ELSE NULL END,
+                updated_at = ?
+            WHERE status = 'UNCERTAIN' AND lease_token IS NOT NULL
+              AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?
+            ''',
+            (now_text, now_text, now_text),
+        )
+
+    def recover_expired_wechat_interactions(
+        self, *, now: Optional[datetime.datetime] = None
+    ) -> None:
+        """原子恢复过期互动 lease，不执行任何平台操作。"""
+        now_text = self._wechat_interaction_timestamp(now)
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._recover_expired_wechat_interactions_conn(conn, now_text=now_text)
+
+    def claim_due_wechat_interaction(
+        self,
+        *,
+        now: Optional[datetime.datetime] = None,
+        lease_seconds: int = 180,
+        platform_post_id: Optional[str] = None,
+        video_id: Optional[int] = None,
+        verify_only_only: bool = False,
+    ) -> Optional[dict]:
+        """原子领取一条到期任务；显式目标不会回退领取其他作品。"""
+        if platform_post_id and video_id is not None:
+            raise ValueError("platform_post_id and video_id are mutually exclusive")
+        now_value = now or datetime.datetime.now(datetime.timezone.utc)
+        if now_value.tzinfo is None:
+            now_value = now_value.replace(tzinfo=datetime.timezone.utc)
+        now_text = self._wechat_interaction_timestamp(now_value)
+        expires_text = self._wechat_interaction_timestamp(
+            now_value + datetime.timedelta(seconds=max(30, int(lease_seconds)))
+        )
+        lease_token = secrets.token_urlsafe(24)
+        target_clause = ""
+        params: List[Any] = [now_text]
+        if platform_post_id:
+            target_clause = " AND i.platform_post_id = ?"
+            params.append(str(platform_post_id).strip())
+        elif video_id is not None:
+            target_clause = " AND w.video_id = ?"
+            params.append(int(video_id))
+        if verify_only_only:
+            target_clause += " AND i.status = 'UNCERTAIN'"
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._recover_expired_wechat_interactions_conn(conn, now_text=now_text)
+            row = conn.execute(
+                f'''
+                SELECT i.id, i.status
+                FROM wechat_interactions i
+                JOIN wechat_publications w ON w.id = i.publication_id
+                WHERE w.state = 'PUBLISHED'
+                  AND i.attempt_count < i.max_attempts
+                  AND i.lease_token IS NULL
+                  AND (
+                    (i.status IN ('QUEUED', 'RETRY_WAIT')
+                     AND (i.next_attempt_at IS NULL OR i.next_attempt_at <= ?))
+                    OR
+                    (i.status = 'UNCERTAIN'
+                     AND i.next_attempt_at IS NOT NULL AND i.next_attempt_at <= ?)
+                  )
+                  {target_clause}
+                ORDER BY CASE WHEN i.status = 'UNCERTAIN' THEN 0 ELSE 1 END,
+                         i.next_attempt_at ASC, i.id ASC
+                LIMIT 1
+                ''',
+                [now_text, *params],
+            ).fetchone()
+            if not row:
+                return None
+            prior_status = str(row["status"])
+            claimed_status = "UNCERTAIN" if prior_status == "UNCERTAIN" else "CLAIMED"
+            conn.execute(
+                '''
+                UPDATE wechat_interactions
+                SET status = ?, attempt_count = attempt_count + 1,
+                    lease_token = ?, lease_expires_at = ?, next_attempt_at = NULL,
+                    updated_at = ?
+                WHERE id = ? AND lease_token IS NULL
+                ''',
+                (claimed_status, lease_token, expires_text, now_text, int(row["id"])),
+            )
+            claimed = conn.execute(
+                '''
+                SELECT i.*, w.video_id, p.youtube_id, p.slice_index, p.title,
+                       p.zh_title, p.category
+                FROM wechat_interactions i
+                JOIN wechat_publications w ON w.id = i.publication_id
+                JOIN processed_videos p ON p.id = w.video_id
+                WHERE i.id = ?
+                ''',
+                (int(row["id"]),),
+            ).fetchone()
+            result = dict(claimed) if claimed else None
+            if result is not None:
+                result["verify_only"] = prior_status == "UNCERTAIN"
+            return result
+
+    def mark_wechat_interaction_submit_intent(
+        self,
+        interaction_id: int,
+        lease_token: str,
+        *,
+        now: Optional[datetime.datetime] = None,
+    ) -> bool:
+        """在浏览器点击提交前持久化不可重发边界。"""
+        now_text = self._wechat_interaction_timestamp(now)
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                '''
+                UPDATE wechat_interactions
+                SET status = 'SUBMIT_INTENT', submit_intent_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'CLAIMED' AND lease_token = ?
+                  AND lease_expires_at > ?
+                ''',
+                (now_text, now_text, int(interaction_id), lease_token, now_text),
+            )
+            return cursor.rowcount == 1
+
+    def finish_wechat_interaction_attempt(
+        self,
+        interaction_id: int,
+        lease_token: str,
+        *,
+        result_status: str,
+        evidence_path: Optional[str] = None,
+        error_message: Optional[str] = None,
+        now: Optional[datetime.datetime] = None,
+    ) -> dict:
+        """收口当次尝试；提交意图后失败以及 UNCERTAIN 永不转普通重试。"""
+        normalized = str(result_status or "FAILED").upper()
+        if normalized == "PENDING_REVIEW":
+            normalized = "UNCERTAIN"
+        if normalized not in {"COMMENTED", "SKIPPED_EXISTS", "UNCERTAIN", "FAILED"}:
+            raise ValueError("Unsupported WeChat interaction result status")
+        now_value = now or datetime.datetime.now(datetime.timezone.utc)
+        if now_value.tzinfo is None:
+            now_value = now_value.replace(tzinfo=datetime.timezone.utc)
+        now_text = self._wechat_interaction_timestamp(now_value)
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM wechat_interactions WHERE id = ?",
+                (int(interaction_id),),
+            ).fetchone()
+            if not row:
+                raise ValueError("Unknown WeChat interaction")
+            current = dict(row)
+            if current["status"] in self._WECHAT_INTERACTION_TERMINAL_STATES:
+                return current
+            if current.get("lease_token") != lease_token:
+                raise ValueError("WeChat interaction lease does not match")
+
+            if normalized == "COMMENTED" and current["status"] == "CLAIMED":
+                # 浏览器声称成功却未执行 before_submit，无法证明未点击。
+                normalized = "UNCERTAIN"
+                error_message = error_message or "缺少持久化提交意图，成功回执不可信，只读回查"
+
+            if normalized in {"COMMENTED", "SKIPPED_EXISTS"}:
+                final_status = normalized
+                next_attempt_at = None
+            elif current["status"] in {"SUBMIT_INTENT", "UNCERTAIN"} or normalized == "UNCERTAIN":
+                final_status = "UNCERTAIN"
+                if int(current["attempt_count"]) < int(current["max_attempts"]):
+                    delay = min(3600, 60 * (2 ** max(0, int(current["attempt_count"]) - 1)))
+                    next_attempt_at = self._wechat_interaction_timestamp(
+                        now_value + datetime.timedelta(seconds=delay)
+                    )
+                else:
+                    next_attempt_at = None
+            else:
+                exhausted = int(current["attempt_count"]) >= int(current["max_attempts"])
+                final_status = "FAILED" if exhausted else "RETRY_WAIT"
+                delay = min(3600, 60 * (2 ** max(0, int(current["attempt_count"]) - 1)))
+                next_attempt_at = None if exhausted else self._wechat_interaction_timestamp(
+                    now_value + datetime.timedelta(seconds=delay)
+                )
+            commented_at = now_text if final_status == "COMMENTED" else None
+            conn.execute(
+                '''
+                UPDATE wechat_interactions
+                SET status = ?, next_attempt_at = ?, lease_token = NULL,
+                    lease_expires_at = NULL,
+                    evidence_path = COALESCE(?, evidence_path),
+                    error_message = ?, commented_at = COALESCE(?, commented_at),
+                    updated_at = ?
+                WHERE id = ?
+                ''',
+                (
+                    final_status, next_attempt_at, evidence_path, error_message,
+                    commented_at, now_text, int(interaction_id),
+                ),
+            )
+            updated = conn.execute(
+                "SELECT * FROM wechat_interactions WHERE id = ?", (int(interaction_id),)
+            ).fetchone()
+            return dict(updated)
+
     def record_wechat_interaction(
         self,
         *,
@@ -9776,33 +10155,37 @@ class PipelineDB:
         error_message: Optional[str] = None,
         commented_at: Optional[str] = None,
     ) -> int:
-        """记录或更新视频号评论互动账本。"""
+        """兼容旧调用的幂等记录入口；禁止覆盖既有文本或终态。"""
+        status_map = {"PENDING": "QUEUED", "PENDING_REVIEW": "UNCERTAIN"}
+        normalized = status_map.get(status, status)
+        if normalized not in {
+            "QUEUED", "UNCERTAIN", "COMMENTED", "SKIPPED_EXISTS", "FAILED"
+        }:
+            raise ValueError("Unsupported WeChat interaction status")
         with self.get_connection() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO wechat_interactions (
                     publication_id, platform_post_id, interaction_type, provider,
                     comment_text, status, evidence_path, error_message, commented_at,
-                    attempt_count, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
-                ON CONFLICT(platform_post_id) DO UPDATE SET
-                    interaction_type = excluded.interaction_type,
-                    provider = excluded.provider,
-                    comment_text = excluded.comment_text,
-                    status = excluded.status,
-                    evidence_path = COALESCE(excluded.evidence_path, wechat_interactions.evidence_path),
-                    error_message = excluded.error_message,
-                    commented_at = COALESCE(excluded.commented_at, wechat_interactions.commented_at),
-                    attempt_count = COALESCE(wechat_interactions.attempt_count, 1) + 1,
-                    updated_at = CURRENT_TIMESTAMP
+                    attempt_count, max_attempts, next_attempt_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 5,
+                          CASE WHEN ? IN ('QUEUED', 'UNCERTAIN') THEN CURRENT_TIMESTAMP ELSE NULL END,
+                          CURRENT_TIMESTAMP)
+                ON CONFLICT(platform_post_id) DO NOTHING
                 """,
                 (
                     publication_id, platform_post_id, interaction_type, provider,
-                    comment_text, status, evidence_path, error_message, commented_at
+                    comment_text, normalized, evidence_path, error_message, commented_at,
+                    normalized,
                 )
             )
             conn.commit()
-            return int(cursor.lastrowid or 0)
+            row = conn.execute(
+                "SELECT id FROM wechat_interactions WHERE platform_post_id = ?",
+                (platform_post_id,),
+            ).fetchone()
+            return int(row["id"]) if row else int(cursor.lastrowid or 0)
 
     def get_wechat_interaction_by_post_id(self, platform_post_id: str) -> Optional[dict]:
         """根据原生 post_id 获取已有的互动记录。"""
@@ -9871,6 +10254,25 @@ class PipelineDB:
             ).fetchone()
             return dict(row) if row else None
 
+    def get_wechat_interaction_discovery_candidate(self) -> Optional[dict]:
+        """只读发现尚未建立互动账本的最近 PUBLISHED 作品。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                '''
+                SELECT w.id AS publication_id, w.video_id, w.platform_post_id,
+                       w.state AS wechat_state, w.created_at AS publication_created_at,
+                       p.youtube_id, p.slice_index, p.title, p.zh_title, p.category
+                FROM wechat_publications w
+                JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN wechat_interactions i ON i.platform_post_id = w.platform_post_id
+                WHERE w.state = 'PUBLISHED' AND w.platform_post_id IS NOT NULL
+                  AND i.id IS NULL
+                ORDER BY w.id DESC
+                LIMIT 1
+                '''
+            ).fetchone()
+            return dict(row) if row else None
+
     def get_recent_published_wechat_posts_without_interaction(
         self,
         limit: int = 5,
@@ -9882,12 +10284,12 @@ class PipelineDB:
             if include_pending_review:
                 condition = """
                     (i.id IS NULL 
-                     OR i.status = 'PENDING'
-                     OR (i.status = 'PENDING_REVIEW' AND COALESCE(i.attempt_count, 1) < ?))
+                     OR i.status IN ('QUEUED', 'RETRY_WAIT')
+                     OR (i.status = 'UNCERTAIN' AND COALESCE(i.attempt_count, 0) < ?))
                 """
                 params = [max_attempts, max(1, int(limit))]
             else:
-                condition = "(i.id IS NULL OR i.status = 'PENDING')"
+                condition = "(i.id IS NULL OR i.status IN ('QUEUED', 'RETRY_WAIT'))"
                 params = [max(1, int(limit))]
 
             rows = conn.execute(
@@ -9919,7 +10321,7 @@ class PipelineDB:
             return [dict(r) for r in rows]
 
     def get_pending_review_wechat_interactions(self, max_attempts: int = 5, limit: int = 10) -> List[dict]:
-        """专门查询处于 PENDING_REVIEW 且未超限的待回查作品。"""
+        """查询 UNCERTAIN 只读回查任务；到限仍保留人工复核可见性。"""
         with self.get_connection() as conn:
             rows = conn.execute(
                 """
@@ -9940,8 +10342,9 @@ class PipelineDB:
                 JOIN wechat_publications w ON i.platform_post_id = w.platform_post_id
                 JOIN processed_videos p ON w.video_id = p.id
                 WHERE w.state = 'PUBLISHED'
-                  AND i.status = 'PENDING_REVIEW'
-                  AND COALESCE(i.attempt_count, 1) < ?
+                  AND i.status = 'UNCERTAIN'
+                  AND COALESCE(i.attempt_count, 0) < ?
+                  AND i.next_attempt_at IS NOT NULL
                 ORDER BY i.updated_at ASC
                 LIMIT ?
                 """,
@@ -9954,23 +10357,28 @@ class PipelineDB:
         platform_post_id: str,
         status: str,
         *,
+        lease_token: Optional[str] = None,
         evidence_path: Optional[str] = None,
         error_message: Optional[str] = None,
         commented_at: Optional[str] = None,
     ) -> None:
-        """更新互动状态、重试次数与审计证据。"""
+        """兼容旧入口；仅允许非终态记录进入保守终态/未确认态。"""
+        normalized = {"PENDING_REVIEW": "UNCERTAIN"}.get(status, status)
+        if normalized not in {"COMMENTED", "SKIPPED_EXISTS", "UNCERTAIN", "FAILED"}:
+            raise ValueError("Unsupported WeChat interaction status")
         with self.get_connection() as conn:
-            conn.execute(
-                """
-                UPDATE wechat_interactions
-                SET status = ?,
-                    attempt_count = COALESCE(attempt_count, 1) + 1,
-                    updated_at = CURRENT_TIMESTAMP,
-                    evidence_path = COALESCE(?, evidence_path),
-                    error_message = ?,
-                    commented_at = COALESCE(?, commented_at)
-                WHERE platform_post_id = ?
-                """,
-                (status, evidence_path, error_message, commented_at, platform_post_id)
-            )
-            conn.commit()
+            row = conn.execute(
+                "SELECT id, status, lease_token FROM wechat_interactions WHERE platform_post_id = ?",
+                (platform_post_id,),
+            ).fetchone()
+            if not row or row["status"] in self._WECHAT_INTERACTION_TERMINAL_STATES:
+                return
+            if not lease_token:
+                raise ValueError(
+                    "Non-terminal WeChat interaction updates require the caller's lease_token"
+                )
+            interaction_id = int(row["id"])
+        self.finish_wechat_interaction_attempt(
+            interaction_id, lease_token, result_status=normalized,
+            evidence_path=evidence_path, error_message=error_message,
+        )

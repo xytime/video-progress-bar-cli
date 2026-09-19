@@ -195,8 +195,8 @@ class Settings(BaseSettings):
     wechat_desktop_quick_login_timeout_seconds: int = Field(default=15, ge=1, le=60)
     enable_wechat_desktop_visual_auth_fallback: bool = False
 
-    # 视频号评论区首评引导开关。默认关闭以确保生产隔离与零副作用。
-    # 仅在开发验证完毕并在 .env 显式设置为 True 时，流水线发布成功后才自动触发发评。
+    # 视频号评论区首评引导开关。默认关闭；关闭时不得派发评论任务。
+    # 共享代码/DB 变更仍须隔离回归，实际平台验收及启用需要另行授权。
     enable_wechat_comment_interaction: bool = False
 
 

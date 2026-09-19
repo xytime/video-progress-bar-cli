@@ -17,7 +17,7 @@ created_at: 2026-09-08T11:46:30+08:00
 
 影子工作区可以使用正式工作区的 `.venv/bin/python`，依赖只读，源码来自当前 runner 所在工作区。`--timeout 180` 放在分隔符 `--` 之前，后面传 pytest 参数。返回值保留 pytest 退出码；超时为 124、启动失败 127、隔离不可用为 2。禁止降级为裸 pytest。
 
-每次创建 `/private/tmp/video-pytest-*/`，保留 `source-manifest.json`、`sandbox.sb`、`boundary-probe.log`、`pytest.log`、`receipt.json` 和 `sandbox/pytest.xml`。快照包含受维护的源码、测试与资源，也包含未提交且未被忽略的新文件；不复制正式 output、.env 及其变体、secrets。仅 `.env.example` 是公开模板例外。源链接被拒绝，依赖 venv 是工具显式创建的只读映射。不要把生成目录加入仓库；测试完成后按需人工清理指定运行目录。
+每次创建 `/private/tmp/video-pytest-*/`，保留 `source-manifest.json`、`sandbox.sb`、`boundary-probe.log`、`pytest.log`、`receipt.json` 和 `sandbox/pytest.xml`。快照包含受维护的源码、测试与资源，也包含未提交且未被忽略的新文件；不复制正式 output、.env 及其变体、secrets。仅 `.env.example` 是公开模板例外；`data/` 仅精确纳入版本化公开种子 `data/comment_strategies.json`，不复制其余运行数据。源链接被拒绝，依赖 venv 是工具显式创建的只读映射。不要把生成目录加入仓库；测试完成后按需人工清理指定运行目录。
 
 测试子进程使用明确的环境允许清单，业务密钥、代理、PYTEST_ADDOPTS 和自动插件不会继承。显式加载现有 pytest-asyncio 插件。HOME 保持真实路径，供 Path.home() 常量解析，沙盒仍禁止读取或修改用户数据。系统目录、Python 和虚拟环境依赖只读；写入仅在本次 sandbox 根与 /dev/null。网络、向其他沙盒外进程发信号均被拒绝。默认模式拒绝所有 Mach lookup；浏览器模式只有下述 Chromium 名称例外。正式项目 output 的内容不在读取允许清单内。
 
@@ -52,3 +52,4 @@ Mach 许可仅匹配 `org.chromium.Chromium.MachPortRendezvousServer.<数字PID>
 | 1.0 | 2026-09-08 | Unknown_Model_fast | 记录隔离入口、证据、测试分层和明确限制 |
 | 1.1 | 2026-09-08 | Unknown_Model_fast | 增加明确浏览器模式、依赖快照、IPC 例外和真实边界/截图验收 |
 | 1.2 | 2026-09-08 | Unknown_Model_fast | 补齐离线模型、固定语音、真实字幕烧录及研报产物验收 |
+| 1.3 | 2026-09-19 | Codex | 精确纳入评论策略公开种子，继续拒绝其余 data 运行内容 |

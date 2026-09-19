@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-19 | Codex | 区分不确定及待重试状态，转义动态字段，不将 JSON 回执作为照片 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：实现互动引导结果与证据截图的图文汇报 |
 """
 
@@ -46,8 +47,10 @@ class InteractionNotifier:
             "SKIPPED_EXISTS": "ℹ️ <b>视频号互动已存在（跳过）</b>",
             "PENDING_REVIEW": "⏳ <b>视频号互动待回查（转码/审核中）</b>",
             "FAILED": "⚠️ <b>视频号互动发评失败</b>",
+            "UNCERTAIN": "🔎 <b>视频号互动结果不确定（仅回读，禁止重发）</b>",
+            "RETRY_WAIT": "⏳ <b>视频号互动等待到期重试</b>",
         }
-        title_line = status_icons.get(status, f"🔔 <b>视频号互动通知: {status}</b>")
+        title_line = status_icons.get(status, f"🔔 <b>视频号互动通知: {html.escape(status)}</b>")
 
         lines = [
             title_line,
@@ -66,7 +69,7 @@ class InteractionNotifier:
             }
             type_label = type_names.get(draft.interaction_type.value, draft.interaction_type.value)
             lines.extend([
-                f"🧠 <b>生成方式</b>: {provider_badge} ({draft.provider})",
+                f"🧠 <b>生成方式</b>: {provider_badge} ({html.escape(draft.provider)})",
                 f"🎯 <b>互动类型</b>: {type_label}",
                 "📝 <b>首评排版预览</b>:",
                 f"<blockquote>{html.escape(draft.formatted_comment)}</blockquote>",
@@ -78,7 +81,7 @@ class InteractionNotifier:
         text = "\n".join(lines)
         photo_path = Path(evidence_path) if evidence_path else None
 
-        if photo_path and photo_path.is_file():
+        if photo_path and photo_path.is_file() and photo_path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
             res = send_photo(
                 event_type="interaction.wechat_comment",
                 priority="P1",

@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-09-08 | Codex | 收集前隔离配置、源码、输出、网络和子进程；保留快照与真实退出收据 |
 | 1.1.0 | 2026-09-08 | Codex | 显式浏览器模式复制运行依赖，保留版本收据与原有默认隔离 |
 | 1.2.0 | 2026-09-08 | Codex | 显式媒体模式复制已校验离线模型，浏览器使用标准快照缓存布局 |
+| 1.3.0 | 2026-09-19 | Codex | 精确纳入评论策略只读种子，仍排除 data 中的运行数据 |
 """
 
 import argparse
@@ -22,7 +23,7 @@ import time
 
 
 SOURCE_DIRS = {"src", "scripts", "tests", "resources", "assets", "config", "docs"}
-SOURCE_FILES = {"pyproject.toml", "setup.py", "requirements.txt", ".env.example"}
+SOURCE_FILES = {"pyproject.toml", "setup.py", "requirements.txt", ".env.example", "data/comment_strategies.json"}
 MARKER = ".test-sandbox.json"
 
 

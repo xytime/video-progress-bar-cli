@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-19 | Codex | 对齐既有全视口普通模式隐藏复选框合同，并验证程序化选择也被门禁清除 |
 | 1.0.0 | 2026-09-08 | Codex | 验证实际浏览器网络/文件拒绝，保存桌面及窄屏截图 |
 """
 
@@ -53,12 +54,11 @@ def test_dashboard_render_and_selection_evidence(dashboard, viewport):
         "document_width": page.evaluate("document.documentElement.scrollWidth"),
     }, ensure_ascii=False, indent=2))
     page.get_by_role("button", name="退出编辑", exact=True).click()
-    # 窄屏退出后隐藏；桌面既有设计保留待筛选复选框，但禁止在普通模式选中。
+    # 既有 CSS 在所有视口的普通模式隐藏选择列，不点击不可见控件。
     checkbox = page.locator("#row-first .row-cb")
-    if viewport["width"] <= 768:
-        assert not checkbox.is_visible()
-    else:
-        checkbox.click()
+    assert not checkbox.is_visible()
+    # 即便脚本试图勾选隐藏控件，业务门禁也必须清空选择；不是 force-click 绕过 UI。
+    checkbox.evaluate("element => { element.checked = true; element.dispatchEvent(new Event('change', {bubbles: true})); }")
     assert not checkbox.is_checked()
     assert not page.locator("#batch-edit-view").is_visible()
     assert page.evaluate("[..._selectedYids]") == []

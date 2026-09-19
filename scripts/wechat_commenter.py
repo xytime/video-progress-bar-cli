@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""WeChat Channels Automated Interaction Commenter CLI.
+"""视频号互动有界 worker CLI。
 
-独立 CLI 脚本，用于为近期发布的视频号作品发表互动引导首评。
-支持动态选题决策、自生长兜底机制、浏览器防重发评及 Telegram 审计图文通知。
+特性开关默认关闭；开启后每次最多发现并处理一条已确认 PUBLISHED 作品。
+浏览器提交前必须由 DAL 回调持久化提交意图；之后任何不确定结果都只读回查。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.0 | 2026-09-19 | Codex | 改为默认关闭、单次有界、持久状态机驱动的安全 worker。 |
 | 1.1.0 | 2026-09-19 | Antigravity | 阻断性修复：严禁构造伪目标，增加已发布精准校验、pipeline.lock避让互斥、发评成功后才触发自生长学习 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：实现低耦合高内聚的独立发评 CLI |
 """
@@ -16,29 +17,115 @@ from __future__ import annotations
 import argparse
 import fcntl
 import logging
+import signal
 import sys
-from datetime import datetime, timezone
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any, Mapping, Optional
 
-# 确保 src 在模块搜索路径内
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from config.settings import settings
-from video_processing.db.database import PipelineDB
-from video_processing.interaction import (
-    BrowserCommenter,
-    CensorshipViolationError,
-    InteractionDraft,
-    InteractionNotifier,
-    InteractionService,
-)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("wechat_commenter")
+
+WORKER_LOCK = PROJECT_ROOT / "output" / ".wechat_interaction_worker.lock"
+DEFAULT_WORKER_TIMEOUT_SECONDS = 240
+
+
+class _LiveServices:
+    """将生成、浏览器和通知收口到 runner 的一个注入点。"""
+
+    def __init__(self, db: Any, *, headless: bool, notify_tg: bool) -> None:
+        from video_processing.interaction import InteractionService
+
+        self.db = db
+        self.headless = headless
+        self.notify_tg = notify_tg
+        self.generator = InteractionService()
+        self.last_draft = None
+
+    def generate_comment(self, target: Mapping[str, Any], *, force_rule: bool) -> Any:
+        yid = str(target.get("youtube_id") or "")
+        slice_index = int(target.get("slice_index") or 0)
+        prefix = f"{yid}_s{slice_index}" if slice_index else yid
+        copy_path = PROJECT_ROOT / "output" / f"{prefix}_copy.txt"
+        title = str(target.get("zh_title") or target.get("title") or "精选视频")
+        description = copy_path.read_text(encoding="utf-8") if copy_path.is_file() else title
+        self.last_draft = self.generator.generate_comment(
+            title=title,
+            description=description,
+            category=str(target.get("category") or "General"),
+            force_rule=force_rule,
+        )
+        return self.last_draft
+
+    def post_comment(self, **kwargs: Any) -> tuple[str, Optional[str], Optional[str]]:
+        if not bool(kwargs.get("verify_only")):
+            try:
+                self.generator.validate_comment_for_submission(
+                    str(kwargs.get("comment_text") or "")
+                )
+            except Exception as exc:
+                logger.error("互动评论提交前复审拒绝: %s", exc)
+                return "FAILED", None, f"提交前内容审查拒绝: {exc}"
+        from video_processing.interaction import BrowserCommenter
+
+        return BrowserCommenter(headless=self.headless).post_comment(**kwargs)
+
+    def notify_result(
+        self,
+        target: Mapping[str, Any],
+        interaction: Mapping[str, Any],
+        final_record: Mapping[str, Any],
+    ) -> None:
+        matching_draft = self.last_draft
+        if (
+            matching_draft is not None
+            and matching_draft.formatted_comment != str(interaction.get("comment_text") or "")
+        ):
+            matching_draft = None
+        if str(final_record["status"]) == "COMMENTED" and matching_draft is not None:
+            try:
+                self.generator.store.learn_from_success(
+                    matching_draft,
+                    str(target.get("zh_title") or target.get("title") or "精选视频"),
+                )
+            except Exception as exc:
+                logger.warning("互动成功样例学习失败，不改写平台结果: %s", exc)
+        if not self.notify_tg:
+            return
+        from video_processing.interaction import InteractionNotifier
+
+        InteractionNotifier(db=self.db).notify_interaction_result(
+            video_title=str(target.get("zh_title") or target.get("title") or "精选视频"),
+            platform_post_id=str(interaction["platform_post_id"]),
+            status=str(final_record["status"]),
+            draft=matching_draft,
+            evidence_path=final_record.get("evidence_path"),
+            error_message=final_record.get("error_message"),
+        )
+
+
+class _WorkerDeadline(BaseException):
+    """不能被生成器/浏览器的 ``except Exception`` 吞掉的总时限中断。"""
+
+
+def _timeout_handler(_signum: int, _frame: Any) -> None:
+    raise _WorkerDeadline("视频号互动 worker 超过有界运行时间")
+
+
+@contextmanager
+def _worker_deadline(seconds: int):
+    previous_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+    signal.alarm(max(30, min(600, int(seconds))))
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def run_interaction(
@@ -50,158 +137,83 @@ def run_interaction(
     dry_run: bool = False,
     headless: bool = True,
     notify_tg: bool = True,
+    worker_timeout_seconds: int = DEFAULT_WORKER_TIMEOUT_SECONDS,
 ) -> int:
-    """运行一次互动发评任务。"""
-    db = PipelineDB()
-    service = InteractionService()
-    notifier = InteractionNotifier(db=db)
-
-    # 1. 解析目标视频（严格限定已由平台确认公开发布的作品）
-    target = None
-
-    if platform_post_id:
-        target = db.get_published_wechat_post_by_platform_id(platform_post_id)
-        if not target:
-            logger.error("【Fail-Closed】未在数据库中找到平台状态为 PUBLISHED 的作品: %s", platform_post_id)
-            return 1
-    elif video_id:
-        target = db.get_published_wechat_post_by_video_id(video_id)
-        if not target:
-            logger.error("【Fail-Closed】未在数据库中找到对应 video_id=%s 且状态为 PUBLISHED 的作品", video_id)
-            return 1
-    elif reconcile_pending:
-        pending_candidates = db.get_pending_review_wechat_interactions(max_attempts=5, limit=5)
-        if pending_candidates:
-            target = pending_candidates[0]
-            logger.info("选中处于 PENDING_REVIEW 的待回查作品: %s", target.get("platform_post_id"))
-    else:
-        candidates = db.get_recent_published_wechat_posts_without_interaction(limit=5)
-        if candidates:
-            target = candidates[0]
-
-    if not target:
-        logger.info("未发现待发表互动的视频号作品。")
+    """运行一次有界 tick；禁用 live 时在构造 DB/生成器前立即返回。"""
+    if not settings.enable_wechat_comment_interaction and not dry_run:
+        logger.info("enable_wechat_comment_interaction 未开启，未构造账本、生成器或浏览器。")
         return 0
 
-    post_id = str(target["platform_post_id"])
-    pub_id = int(target.get("publication_id") or 0)
-    title = str(target.get("zh_title") or target.get("title") or "精选视频")
-    category = str(target.get("category") or "General")
+    if reconcile_pending and (platform_post_id or video_id is not None or dry_run):
+        logger.error("--reconcile-pending 不能与显式目标或 --dry-run 同时使用")
+        return 2
 
-    # 尝试从本地 output 目录读取更详尽的摘要描述
-    yid = target.get("youtube_id", "")
-    s_idx = target.get("slice_index", 0)
-    prefix = f"{yid}_s{s_idx}" if s_idx else yid
-    copy_path = PROJECT_ROOT / "output" / f"{prefix}_copy.txt"
-    description = copy_path.read_text(encoding="utf-8") if copy_path.is_file() else title
-
-    logger.info("目标视频: [%s] %s (类别: %s)", post_id[:16], title, category)
-
-    # 2. 检查流水线排他锁（如果主流程正在上传或转码，主动避让退出）
-    if not dry_run:
-        pipeline_lock_path = PROJECT_ROOT / "output" / "pipeline.lock"
-        if pipeline_lock_path.is_file():
-            try:
-                with open(pipeline_lock_path, "r") as pf:
-                    fcntl.flock(pf, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    fcntl.flock(pf, fcntl.LOCK_UN)
-            except (BlockingIOError, OSError):
-                logger.warning("[wechat_commenter] 主流水线当前正持有 pipeline.lock（正在上传或处理），主动避让退出。")
-                return 0
-
-    # 3. 生成互动评论（优先 AGY，失败自动降级自生长规则；全程受内容审查保护）
     try:
-        draft = service.generate_comment(
-            title=title,
-            description=description,
-            category=category,
-            force_rule=force_rule,
-        )
-    except CensorshipViolationError as exc:
-        logger.error("【内容安全阻断】互动内容生成未能通过合规审查: %s", exc)
+        with _worker_deadline(worker_timeout_seconds):
+            from video_processing.db.database import PipelineDB
+            from video_processing.interaction.runner import run_interaction_tick
+
+            if dry_run and not (PROJECT_ROOT / "output" / "pipeline.db").is_file():
+                logger.info("[Dry Run] 账本文件不存在，受控返回 NO_WORK，不创建数据库。")
+                return 0
+            try:
+                db = PipelineDB(read_only=dry_run)
+            except (FileNotFoundError, RuntimeError) as exc:
+                if dry_run:
+                    logger.error("[Dry Run] 只读账本不可用: %s", exc)
+                    return 1
+                raise
+            services = _LiveServices(db, headless=headless, notify_tg=notify_tg and not dry_run)
+            if dry_run:
+                result = run_interaction_tick(
+                    db, services, platform_post_id=platform_post_id, video_id=video_id,
+                    force_rule=True, dry_run=True,
+                )
+                logger.info("[Dry Run] %s: %s", result.status, result.detail or "")
+                return 0 if result.status in {"DRY_RUN", "NO_WORK"} else 1
+
+            WORKER_LOCK.parent.mkdir(parents=True, exist_ok=True)
+            with WORKER_LOCK.open("a+") as lock_file:
+                try:
+                    fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except (BlockingIOError, OSError):
+                    logger.info("已有互动 worker 运行；本次有界退出，PUBLISHED 目标保持可发现。")
+                    return 0
+                try:
+                    result = run_interaction_tick(
+                        db, services, platform_post_id=platform_post_id, video_id=video_id,
+                        force_rule=force_rule, reconcile_only=reconcile_pending,
+                    )
+                    logger.info(
+                        "视频号互动 tick 结束: status=%s post_id=%s detail=%s",
+                        result.status, result.platform_post_id, result.detail or "",
+                    )
+                    return 0 if result.status in {
+                        "NO_WORK", "NOT_DUE", "COMMENTED", "SKIPPED_EXISTS", "UNCERTAIN"
+                    } else 1
+                finally:
+                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+    except _WorkerDeadline as exc:
+        logger.error("%s", exc)
         return 1
-
-    logger.info("选用策略: %s (%s)", draft.interaction_type.value, draft.provider)
-    logger.info("评论全文:\n%s", draft.formatted_comment)
-
-    if dry_run:
-        logger.info("[Dry Run] 演练完成，不执行浏览器提交、数据库落库与策略库沉淀。")
-        return 0
-
-    # 4. 浏览器自动化提交与平台回读
-    evidence_dir = PROJECT_ROOT / "output" / "wechat_evidence" / "interactions" / prefix
-    commenter = BrowserCommenter(headless=headless)
-    status, evidence_path, error_msg = commenter.post_comment(
-        comment_text=draft.formatted_comment,
-        platform_post_id=post_id,
-        video_title=title,
-        evidence_dir=evidence_dir,
-    )
-
-    # 5. 记录账本
-    now_str = datetime.now(timezone.utc).isoformat() if status == "COMMENTED" else None
-    if pub_id > 0:
-        db.record_wechat_interaction(
-            publication_id=pub_id,
-            platform_post_id=post_id,
-            interaction_type=draft.interaction_type.value,
-            provider=draft.provider,
-            comment_text=draft.formatted_comment,
-            status=status,
-            evidence_path=evidence_path,
-            error_message=error_msg,
-            commented_at=now_str,
-        )
-
-    # 6. 自生长学习沉淀（严格限定：仅在真实发评成功且回读确认后才沉淀！）
-    if status == "COMMENTED":
-        try:
-            learned = service.store.learn_from_success(draft, title)
-            if learned:
-                logger.info("已从本次发表成功的互动中提炼模式并沉淀入自生长库。")
-        except Exception as exc:
-            logger.warning("自生长经验沉淀异常: %s", exc)
-
-    # 7. Telegram 图文汇报
-    if notify_tg:
-        try:
-            notifier.notify_interaction_result(
-                video_title=title,
-                platform_post_id=post_id,
-                status=status,
-                draft=draft,
-                evidence_path=evidence_path,
-                error_message=error_msg,
-            )
-        except Exception as exc:
-            logger.warning("Telegram 通知发送异常: %s", exc)
-
-    logger.info("互动任务结束，状态: %s (证据: %s)", status, evidence_path)
-    return 0 if status in {"COMMENTED", "SKIPPED_EXISTS"} else 1
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="微信视频号自动化评论互动引导工具")
-    parser.add_argument("--post-id", type=str, help="指定微信原生 platform_post_id（严格校验已发布）")
-    parser.add_argument("--video-id", type=int, help="指定数据库 video_id（严格校验已发布）")
-    parser.add_argument("--latest", action="store_true", help="处理最近一条未互动的已发布视频")
-    parser.add_argument("--reconcile-pending", action="store_true", help="回查处于 PENDING_REVIEW 的待复核作品")
-    parser.add_argument("--force-rule", action="store_true", help="强制使用自生长规则兜底生成（跳过 AGY）")
-    parser.add_argument("--dry-run", action="store_true", help="仅生成文案演练，不启动浏览器发评且不改写知识库")
-    parser.add_argument("--no-headless", action="store_true", help="以有头浏览器模式运行")
-    parser.add_argument("--no-tg", action="store_true", help="跳过 Telegram 消息汇报")
+    parser = argparse.ArgumentParser(description="微信视频号互动有界 worker")
+    parser.add_argument("--post-id", type=str, help="指定已确认 PUBLISHED 的微信原生 ID")
+    parser.add_argument("--video-id", type=int, help="指定已确认 PUBLISHED 的内部 video_id")
+    parser.add_argument("--latest", action="store_true", help="处理最近一条到期作品")
+    parser.add_argument("--reconcile-pending", action="store_true", help="优先处理 UNCERTAIN 只读回查")
+    parser.add_argument("--force-rule", action="store_true", help="强制使用本地规则生成")
+    parser.add_argument("--dry-run", action="store_true", help="不受 live 开关限制的本地规则预览；数据库只读，不启动 AGY/浏览器/通知")
+    parser.add_argument("--no-headless", action="store_true", help="以有头浏览器运行")
+    parser.add_argument("--no-tg", action="store_true", help="跳过 Telegram 结果通知")
     args = parser.parse_args()
-
-    exit_code = run_interaction(
-        platform_post_id=args.post_id,
-        video_id=args.video_id,
-        reconcile_pending=args.reconcile_pending,
-        force_rule=args.force_rule,
-        dry_run=args.dry_run,
-        headless=not args.no_headless,
-        notify_tg=not args.no_tg,
-    )
-    sys.exit(exit_code)
+    sys.exit(run_interaction(
+        platform_post_id=args.post_id, video_id=args.video_id,
+        reconcile_pending=args.reconcile_pending, force_rule=args.force_rule,
+        dry_run=args.dry_run, headless=not args.no_headless, notify_tg=not args.no_tg,
+    ))
 
 
 if __name__ == "__main__":

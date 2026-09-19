@@ -64,6 +64,7 @@
 | 5.5.2   | 2026-09-03 | Codex                               | 声明原创标签可经短文本容器及近邻 checkbox 状态确认，避免页面结构未使用 label 语义时漏报。 |
 | 5.5.3   | 2026-09-03 | Codex                               | 原创弹窗中“声明原创”按钮由禁用变可点并成功点击时，作为平台动作确认链；仍保留最终页截图与回执。 |
 | 5.6.0 | 2026-09-07 | Codex | 原生接口正文与页面状态分离，同 ID 合并保留状态证据；未知数值状态只落诊断且不推断公开。 |
+| 5.7.0 | 2026-09-19 | Codex | 评论互动开关启用时，以登录态派生共享锁覆盖完整浏览器会话。 |
 """
 
 import os
@@ -100,6 +101,7 @@ from config.settings import settings
 from wechat_desktop_auth import WeChatDesktopAuthWatcher, desktop_auth_preflight
 from copywriter import graceful_truncate_title  # [Claude_Sonnet_4.6_Thinking_planning] v1.6.0
 from video_processing.core.cover_policy import validate_dedicated_cover_file
+from video_processing.core.wechat_session_lock import guarded_wechat_browser_session
 
 try:
     import requests as _requests
@@ -1216,6 +1218,12 @@ def _capture_wechat_login_qr(page, qr_path: Path) -> bool:
     return False
 
 
+@guarded_wechat_browser_session(
+    enabled=lambda: settings.enable_wechat_comment_interaction,
+    state_parameter="state_path",
+    timeout_seconds=0.0,
+    busy_result=1,
+)
 def run_uploader(
     video_path: str = None,
     copy_path: str = None,
