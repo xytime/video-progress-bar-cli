@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.63.0 | 2026-09-19 | Antigravity | 新增 wechat_interactions 账本表及 DAL 方法，支持视频号评论区引导与状态追踪。 |
 | 3.62.0 | 2026-09-18 | Antigravity | 新增未确认英语世界通知步骤的安全重置方法，支持网络异常后受控重发。 |
 | 3.61.0 | 2026-09-18 | Antigravity | 新增英语世界待发池库存统计与今日发布数量统计方法。 |
 | 3.60.0 | 2026-09-09 | Codex | 新增 /last 已确认公开发布跨平台账本查询，并限制 SQLite 安全偏移。 |
@@ -1742,8 +1743,24 @@ class PipelineDB:
                 ON douyin_browser_launch_tickets(source_type, source_ref, launch_started_at)
             ''')
             cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_douyin_browser_launch_tickets_prelaunch_recovery
-                ON douyin_browser_launch_tickets(source_type, launch_started_at, prelaunch_canceled_at, issued_at)
+                CREATE TABLE IF NOT EXISTS wechat_interactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    publication_id INTEGER NOT NULL,
+                    platform_post_id TEXT NOT NULL,
+                    interaction_type TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    comment_text TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('PENDING', 'COMMENTED', 'SKIPPED_EXISTS', 'PENDING_REVIEW', 'FAILED')),
+                    evidence_path TEXT DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    commented_at TIMESTAMP DEFAULT NULL,
+                    FOREIGN KEY(publication_id) REFERENCES wechat_publications(id) ON DELETE CASCADE,
+                    UNIQUE(platform_post_id)
+                )
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_wechat_interactions_status ON wechat_interactions(status)
             ''')
             
             conn.commit()
@@ -9728,5 +9745,106 @@ class PipelineDB:
                 "UPDATE processed_videos SET is_manually_scored = ?, "
                 "updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ? AND slice_index = ?",
                 (1 if locked else 0, youtube_id, slice_index)
+            )
+            conn.commit()
+
+    # --- WeChat Interactions DAL ---
+    def record_wechat_interaction(
+        self,
+        *,
+        publication_id: int,
+        platform_post_id: str,
+        interaction_type: str,
+        provider: str,
+        comment_text: str,
+        status: str,
+        evidence_path: Optional[str] = None,
+        error_message: Optional[str] = None,
+        commented_at: Optional[str] = None,
+    ) -> int:
+        """记录或更新视频号评论互动账本。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO wechat_interactions (
+                    publication_id, platform_post_id, interaction_type, provider,
+                    comment_text, status, evidence_path, error_message, commented_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform_post_id) DO UPDATE SET
+                    interaction_type = excluded.interaction_type,
+                    provider = excluded.provider,
+                    comment_text = excluded.comment_text,
+                    status = excluded.status,
+                    evidence_path = COALESCE(excluded.evidence_path, wechat_interactions.evidence_path),
+                    error_message = excluded.error_message,
+                    commented_at = COALESCE(excluded.commented_at, wechat_interactions.commented_at)
+                """,
+                (
+                    publication_id, platform_post_id, interaction_type, provider,
+                    comment_text, status, evidence_path, error_message, commented_at
+                )
+            )
+            conn.commit()
+            return int(cursor.lastrowid or 0)
+
+    def get_wechat_interaction_by_post_id(self, platform_post_id: str) -> Optional[dict]:
+        """根据原生 post_id 获取已有的互动记录。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM wechat_interactions WHERE platform_post_id = ?",
+                (platform_post_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_recent_published_wechat_posts_without_interaction(self, limit: int = 5) -> List[dict]:
+        """查询近期已发布或已确认但尚未发评的视频号作品。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT 
+                    w.id as publication_id,
+                    w.video_id,
+                    w.platform_post_id,
+                    w.state as wechat_state,
+                    w.created_at as publication_created_at,
+                    p.youtube_id,
+                    p.slice_index,
+                    p.title,
+                    p.zh_title,
+                    p.category
+                FROM wechat_publications w
+                JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
+                WHERE w.platform_post_id IS NOT NULL
+                  AND (w.state IN ('SUBMITTED_BOUND', 'PUBLISHED', 'UNDER_REVIEW'))
+                  AND (i.id IS NULL OR i.status IN ('PENDING', 'PENDING_REVIEW'))
+                ORDER BY w.id DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),)
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def update_wechat_interaction_status(
+        self,
+        platform_post_id: str,
+        status: str,
+        *,
+        evidence_path: Optional[str] = None,
+        error_message: Optional[str] = None,
+        commented_at: Optional[str] = None,
+    ) -> None:
+        """更新互动状态与审计证据。"""
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE wechat_interactions
+                SET status = ?,
+                    evidence_path = COALESCE(?, evidence_path),
+                    error_message = ?,
+                    commented_at = COALESCE(?, commented_at)
+                WHERE platform_post_id = ?
+                """,
+                (status, evidence_path, error_message, commented_at, platform_post_id)
             )
             conn.commit()

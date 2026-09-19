@@ -9,6 +9,7 @@
 | 1.0.0 | 2026-08-24 | Codex | 新增自动通知回执、去重与秘密安全的错误分类。 |
 | 1.1.0 | 2026-08-24 | Codex | UNKNOWN 不再被视为已送达；仅有 message_id 的 Bot API 响应可记为 ACCEPTED。 |
 | 1.1.1 | 2026-09-06 | Codex | 仅对建连超时有界重试并回卷附件；保留秘密安全的 SSL 异常链类别。 |
+| 1.2.0 | 2026-09-19 | Antigravity | 新增 send_photo 支持，用于发送互动评论带证据大图的图文通知。 |
 """
 
 from __future__ import annotations
@@ -211,6 +212,33 @@ def send_video(
                 f"https://api.telegram.org/bot{token}/sendVideo",
                 data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML", "supports_streaming": "true"},
                 files={"video": (path.name, source, "video/mp4")}, timeout=timeout_seconds,
+            )
+        state, message_id, error_kind = _result_from_response(response)
+    except (OSError, requests.RequestException) as exc:
+        state, error_kind = _transport_error(exc)
+        message_id = None
+    _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state=state, message_id=message_id, error_kind=error_kind, db=db)
+    return TelegramDeliveryResult(state=state, message_id=message_id, error_kind=error_kind)
+
+
+def send_photo(
+    *, event_type: str, priority: str, path: Path, caption: str, timeout_seconds: int = 60,
+    db: PipelineDB | None = None, token: str | None = None, chat_id: str | None = None,
+) -> TelegramDeliveryResult:
+    """发送图片照片并记录 API 回执。"""
+    fingerprint = _fingerprint(event_type, caption, path)
+    token, chat_id = (token or "").strip(), (chat_id or "").strip()
+    if not token or not chat_id:
+        token, chat_id = _credentials()
+    if not token or not chat_id:
+        _record(event_type=event_type, priority=priority, fingerprint=fingerprint, state="FAILED", error_kind="CONFIG_MISSING", db=db)
+        return TelegramDeliveryResult(state="FAILED", error_kind="CONFIG_MISSING")
+    try:
+        with path.open("rb") as source:
+            response = _post_with_connect_retry(
+                f"https://api.telegram.org/bot{token}/sendPhoto",
+                data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                files={"photo": (path.name, source, "image/png")}, timeout=timeout_seconds,
             )
         state, message_id, error_kind = _result_from_response(response)
     except (OSError, requests.RequestException) as exc:

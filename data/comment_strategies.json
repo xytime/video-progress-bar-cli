@@ -1,0 +1,122 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-09-19T07:11:14.509956+00:00",
+  "categories": {
+    "AI/Tech": [
+      {
+        "id": "tech_poll_future",
+        "interaction_type": "POLL_STAND",
+        "topic_template": "AI技术迭代飞快，面对{core_subject}的颠覆性变革，你怎么看？",
+        "poll_options": [
+          "坚定看好，未来1-2年全面普及",
+          "持怀疑态度，实际落地困难重重",
+          "继续观望，等头部跑通再说"
+        ],
+        "share_hook": "💬 这个话题在圈内争议极大，转到你的技术群/工作群，测测看同行们是站A还是站B？",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "tech_warning_safety",
+        "interaction_type": "WARNING_SHARE",
+        "topic_template": "视频中关于{core_subject}的这几个核心坑点，很多同行和团队都还没意识到！",
+        "poll_options": [
+          "已经踩过类似的坑",
+          "刚刚了解到，及时避险"
+        ],
+        "share_hook": "⚠️ 随手转发给身边做技术或用AI的朋友提个醒，关键时刻能少走弯路！",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "tech_memo_guide",
+        "interaction_type": "MEMO_COLLECTION",
+        "topic_template": "关于{core_subject}的干货逻辑梳理，一次性吸收压力大？",
+        "poll_options": [
+          "已理解核心逻辑",
+          "先收藏/转发慢啃"
+        ],
+        "share_hook": "📦 知识点密集建议先转发给‘文件传输助手’或收藏，闲暇时慢慢复盘！",
+        "weight": 0.9,
+        "learned_count": 0
+      }
+    ],
+    "Finance": [
+      {
+        "id": "finance_warning_risk",
+        "interaction_type": "WARNING_SHARE",
+        "topic_template": "市场剧烈波动下，{core_subject}传达的风险信号远比表面更严峻！",
+        "poll_options": [
+          "早已减仓防御",
+          "逆向看多布局",
+          "看不清暂时躺平"
+        ],
+        "share_hook": "⚠️ 涉及真金白银的决策，转发给身边的投资朋友提个醒，注意仓位风险！",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "finance_poll_trend",
+        "interaction_type": "POLL_STAND",
+        "topic_template": "面对{core_subject}的走向，你认为接下来会发生什么？",
+        "poll_options": [
+          "短期承压，长期震荡向上",
+          "趋势彻底反转，风险加剧"
+        ],
+        "share_hook": "💬 转到你的投资讨论群，看看老手们的真实持仓态度！",
+        "weight": 0.95,
+        "learned_count": 0
+      }
+    ],
+    "General": [
+      {
+        "id": "learned_20260919_071114",
+        "interaction_type": "POLL_STAND",
+        "topic_template": "白宫拉黑特定媒体，你支持总统行使准入权还是捍卫新闻自由？",
+        "poll_options": [
+          "🅰️ 赞同总统：白宫享有准入管理权",
+          "🅱️ 捍卫媒体：监督权力不可设门槛",
+          "🔄 围观中立：各有立场，各说各话"
+        ],
+        "share_hook": "转发到群聊，测测身边的朋友更支持总统权威还是新闻自由！",
+        "formatted_comment_sample": "📌【今日互动】\n白宫拉黑特定媒体，总统权力边界与新闻自由的碰撞，你怎么看？\n\n🗳️【立场站队】\n🅰️ 赞同总统：白宫享有准入管理权\n🅱️ 捍卫媒体：监督权力不可设门槛\n🔄 围观中立：各有立场，各说各话\n\n💬 评论区扣【A】或【B】留下你的态度！\n📢 转发到群聊，测测好友们会站哪一边？👇",
+        "weight": 1.1,
+        "learned_count": 1,
+        "created_at": "2026-09-19T07:11:14.509895+00:00"
+      },
+      {
+        "id": "general_poll_stand",
+        "interaction_type": "POLL_STAND",
+        "topic_template": "针对视频中关于{core_subject}的核心争议，你怎么看？",
+        "poll_options": [
+          "认同视频观点，合情合理",
+          "持保留意见，有不同看法"
+        ],
+        "share_hook": "💬 你的看法是什么？直接在评论区留下 A 或 B，转给好友一起探讨！",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "general_voice_resonance",
+        "interaction_type": "VOICE_RESONANCE",
+        "topic_template": "关于{core_subject}，他说出了很多人的真实心声与思考。",
+        "poll_options": [
+          "感同身受，深有体会",
+          "角度新颖，带来新启发"
+        ],
+        "share_hook": "🔥 认同作者观点的点赞集合👍！随手转发给懂你的同频朋友。",
+        "weight": 0.9,
+        "learned_count": 0
+      }
+    ]
+  },
+  "learned_exemplars": [
+    {
+      "title": "Trump Bans CNN, MS NOW, Politico From White House",
+      "category": "General",
+      "type": "POLL_STAND",
+      "comment": "📌【今日互动】\n白宫拉黑特定媒体，总统权力边界与新闻自由的碰撞，你怎么看？\n\n🗳️【立场站队】\n🅰️ 赞同总统：白宫享有准入管理权\n🅱️ 捍卫媒体：监督权力不可设门槛\n🔄 围观中立：各有立场，各说各话\n\n💬 评论区扣【A】或【B】留下你的态度！\n📢 转发到群聊，测测好友们会站哪一边？👇",
+      "timestamp": "2026-09-19T07:11:14.509945+00:00"
+    }
+  ]
+}

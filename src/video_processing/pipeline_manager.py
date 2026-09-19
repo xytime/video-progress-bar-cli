@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.51.0 | 2026-09-19 | Antigravity | 视频号发布成功后异步触发独立的评论区互动引导任务，与主流水线解耦。 |
 | 3.50.1 | 2026-09-09 | Codex | 所有携带合法 YouTube ID 的 P1 Telegram 回执统一补充标题和可点击的原视频链接。 |
 | 3.50.0 | 2026-09-09 | Codex | 中文正文硬合同与真实源路径 ASS 缓存/提交校验；缺失字幕不再默认信任成片 |
 | 3.49.2 | 2026-09-11 | Codex | Telegram 互动建议回执单独展示视频名称，正文直接保留可发帖内容。 |
@@ -1030,6 +1031,7 @@ class PipelineManager:
                 self.send_telegram_msg(
                     f"✅ <b>Video Published</b>\nPlatform: WeChat\nYouTube ID: {html.escape(prefix)}"
                 )
+                self._trigger_wechat_interaction(platform_post_id, yid=yid, slice_index=slice_index)
                 settled += 1
             elif return_code == 6:
                 self.db.record_wechat_publication_confirmation(
@@ -1052,6 +1054,29 @@ class PipelineManager:
                 self.db.update_video_status(yid, "FAILED", error_msg=reason, slice_index=slice_index)
                 settled += 1
         return settled
+
+    def _trigger_wechat_interaction(self, platform_post_id: str, yid: str = "", slice_index: int = 0) -> None:
+        """触发视频号发布后的评论区互动引导（独立子进程，完全解耦且不阻塞主流程）。"""
+        if not platform_post_id:
+            return
+        prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        cmd = [
+            self._VENV_PYTHON,
+            str(self._PRJ_ROOT / "scripts" / "wechat_commenter.py"),
+            "--post-id",
+            platform_post_id,
+        ]
+        try:
+            subprocess.Popen(
+                cmd,
+                cwd=str(self._PRJ_ROOT),
+                env=self._build_subprocess_env(),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logger.info("[%s] 已异步触发视频号首评互动任务: %s", prefix or "wechat", platform_post_id[:16])
+        except Exception as exc:
+            logger.warning("[%s] 触发视频号互动任务失败（不影响发布结果）: %s", prefix or "wechat", exc)
 
     def _is_public_publish_window(
         self,
