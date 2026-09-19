@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.66.0 | 2026-09-19 | Codex | 新增严格最新 PUBLISHED 视频号作品查询，人工单次互动不得在已有账本时回退旧作品。 |
 | 3.65.0 | 2026-09-19 | Codex | 将视频号互动账本升级为可恢复 lease/提交意图状态机，固化评论文本、有界退避与 UNCERTAIN 只读回查边界。 |
 | 3.64.0 | 2026-09-19 | Antigravity | 还原 idx_douyin_browser_launch_tickets_prelaunch_recovery 索引；增加严格限定 PUBLISHED 的 post_id/video_id 互动前置查询 DAL 方法与重试追踪。 |
 | 3.63.0 | 2026-09-19 | Antigravity | 新增 wechat_interactions 账本表及 DAL 方法，支持视频号评论区引导与状态追踪。 |
@@ -10251,6 +10252,41 @@ class PipelineDB:
                 LIMIT 1
                 """,
                 (video_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_latest_published_wechat_post(self) -> Optional[dict]:
+        """只读返回最新严格 ``PUBLISHED`` 的视频号作品及其互动账本状态。
+
+        人工指定“最新视频”时不得复用“最新未建账候选”的过滤条件，否则最新
+        作品已有评论账本时会静默回退到更旧作品。
+        """
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    w.id AS publication_id,
+                    w.video_id,
+                    w.platform_post_id,
+                    w.state AS wechat_state,
+                    w.created_at AS publication_created_at,
+                    p.youtube_id,
+                    p.slice_index,
+                    p.title,
+                    p.zh_title,
+                    p.category,
+                    i.id AS interaction_id,
+                    i.status AS interaction_status,
+                    i.attempt_count AS interaction_attempt_count,
+                    i.comment_text AS interaction_comment_text
+                FROM wechat_publications w
+                JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN wechat_interactions i ON i.platform_post_id = w.platform_post_id
+                WHERE w.state = 'PUBLISHED'
+                  AND w.platform_post_id IS NOT NULL
+                ORDER BY w.id DESC
+                LIMIT 1
+                """
             ).fetchone()
             return dict(row) if row else None
 

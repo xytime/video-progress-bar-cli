@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-19 | Codex | 固定人工“最新视频”查询不因已有互动账本回退到旧作品。 |
 | 1.0.0 | 2026-09-19 | Codex | 覆盖非空旧表迁移、原子 lease、提交意图、终态和有界退避。 |
 """
 
@@ -281,3 +282,26 @@ def test_pre_submit_failure_uses_exponential_due_time_and_stops_at_five(tmp_path
     assert db.claim_due_wechat_interaction(
         now=now + datetime.timedelta(days=1), platform_post_id="export/post_backoff"
     ) is None
+
+
+def test_latest_published_post_does_not_fall_back_when_latest_has_interaction(
+    tmp_path: Path,
+) -> None:
+    db = PipelineDB(db_path=str(tmp_path / "latest.db"))
+    older = _published_target(db, tmp_path, "older")
+    newer = _published_target(db, tmp_path, "newer")
+    db.queue_wechat_interaction(
+        publication_id=newer["id"],
+        platform_post_id="export/post_newer",
+        interaction_type="POLL_STAND",
+        provider="rule",
+        comment_text="already persisted for newest",
+    )
+
+    latest = db.get_latest_published_wechat_post()
+
+    assert latest is not None
+    assert latest["publication_id"] == newer["id"]
+    assert latest["platform_post_id"] == "export/post_newer"
+    assert latest["interaction_status"] == "QUEUED"
+    assert latest["publication_id"] != older["id"]
