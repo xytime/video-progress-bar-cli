@@ -1,0 +1,14 @@
+{
+  "processed_videos": [
+    {
+      "youtube_id": "synth-golden-wechat-003",
+      "slice_index": 0,
+      "title": "Synthetic Golden WeChat Video",
+      "channel_id": "SyntheticChannel_001",
+      "score": 90,
+      "status": "PENDING",
+      "duration_sec": 300,
+      "source": "DISCOVERY"
+    }
+  ]
+}

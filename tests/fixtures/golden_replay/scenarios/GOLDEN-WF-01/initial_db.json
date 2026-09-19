@@ -1,0 +1,14 @@
+{
+  "processed_videos": [
+    {
+      "youtube_id": "synth-golden-std-001",
+      "slice_index": 0,
+      "title": "Synthetic Golden Test Video - Standard",
+      "channel_id": "SyntheticChannel_001",
+      "score": 88,
+      "status": "PENDING",
+      "duration_sec": 180,
+      "source": "DISCOVERY"
+    }
+  ]
+}

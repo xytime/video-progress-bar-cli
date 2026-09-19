@@ -1,0 +1,35 @@
+{
+  "scenario_id": "GOLDEN-WF-01",
+  "scenario_version": "1.0.0",
+  "purpose": "标准单视频生命周期与候选排重基线验证：验证高分未发布视频被调度候选查询纳入，而在记录发布受理后被 SQL NOT EXISTS 严格排除",
+  "classification": "CONTRACT",
+  "relevant_invariants": ["INV-001", "INV-003"],
+  "initial_db_state": "单一高分(88分)待处理视频，无任何发布记录",
+  "initial_filesystem_state": "EMPTY",
+  "external_dependency_mode": "OFFLINE_HERMETIC",
+  "action": {
+    "type": "WORKFLOW_CANDIDATE_LIFECYCLE",
+    "step_1": "get_high_score_pending_videos(min_score=75)",
+    "step_2": "record_wechat_submission_acceptance",
+    "step_3": "get_high_score_pending_videos(min_score=75)"
+  },
+  "expected_observation": {
+    "step_1_candidate_found": true,
+    "step_2_final_status": "SUBMITTED_UNBOUND",
+    "step_2_wechat_pub_state": "SUBMITTED_UNBOUND",
+    "step_3_candidate_found": false
+  },
+  "forbidden_side_effects": [
+    "real_uploader_launch",
+    "real_network_call",
+    "production_db_touch"
+  ],
+  "normalization_rules": {
+    "step_1_candidate_found": "EXACT",
+    "step_2_final_status": "EXACT",
+    "step_2_wechat_pub_state": "EXACT",
+    "step_3_candidate_found": "EXACT"
+  },
+  "sensitive_data": "NONE",
+  "source_evidence": "PipelineDB.get_high_score_pending_videos:L4130, PipelineDB.record_wechat_submission_acceptance:L3261"
+}

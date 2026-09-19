@@ -1,0 +1,24 @@
+{
+  "processed_videos": [
+    {
+      "youtube_id": "synth-golden-kuaishou-005",
+      "slice_index": 0,
+      "title": "Synthetic Golden Kuaishou Video",
+      "channel_id": "SyntheticChannel_001",
+      "score": 87,
+      "status": "PUBLISHED",
+      "duration_sec": 240,
+      "source": "DISCOVERY"
+    },
+    {
+      "youtube_id": "synth-golden-kuaishou-005-dup",
+      "slice_index": 0,
+      "title": "Synthetic Golden Kuaishou Video Duplicate Asset",
+      "channel_id": "SyntheticChannel_001",
+      "score": 86,
+      "status": "PUBLISHED",
+      "duration_sec": 240,
+      "source": "DISCOVERY"
+    }
+  ]
+}

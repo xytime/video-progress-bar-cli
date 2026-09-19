@@ -1,0 +1,40 @@
+{
+  "scenario_id": "GOLDEN-PUB-WC",
+  "scenario_version": "1.0.0",
+  "purpose": "微信三表原子受理与本地物理截图探针熔断基线验证：验证三表原子持久化、物理证据检测前置拦截及控制面 Fail-Closed 守卫",
+  "classification": "CONTRACT_AND_SAFETY_REGRESSION",
+  "relevant_invariants": ["INV-002", "INV-007", "INV-008"],
+  "initial_db_state": "单一待发布视频",
+  "initial_filesystem_state": "包含 wechat_evidence/{prefix}/timestamp/post_list_after_submission.png 物理截图",
+  "external_dependency_mode": "OFFLINE_HERMETIC",
+  "action": {
+    "type": "WECHAT_ACCEPTANCE_AND_PHYSICAL_GUARD",
+    "step_1": "record_wechat_submission_acceptance",
+    "step_2": "_block_duplicate_wechat_submission_if_needed",
+    "step_3": "_wechat_submission_guard_reason"
+  },
+  "expected_observation": {
+    "step_1_wechat_pub_state": "SUBMITTED_BOUND",
+    "step_1_platform_post_id": "post_synthetic_wx_12345",
+    "step_1_attempts_count": 1,
+    "step_1_final_status": "SUBMITTED_BOUND",
+    "step_2_fs_guard_blocked": true,
+    "step_3_control_plane_blocked": true
+  },
+  "forbidden_side_effects": [
+    "real_uploader_launch",
+    "real_browser_launch",
+    "real_telegram_notification",
+    "production_db_touch"
+  ],
+  "normalization_rules": {
+    "step_1_wechat_pub_state": "EXACT",
+    "step_1_platform_post_id": "EXACT",
+    "step_1_attempts_count": "EXACT",
+    "step_1_final_status": "EXACT",
+    "step_2_fs_guard_blocked": "EXACT",
+    "step_3_control_plane_blocked": "EXACT"
+  },
+  "sensitive_data": "NONE",
+  "source_evidence": "PipelineDB.record_wechat_submission_acceptance:L3261, PipelineManager._block_duplicate_wechat_submission_if_needed:L972"
+}

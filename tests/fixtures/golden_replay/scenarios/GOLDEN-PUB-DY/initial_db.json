@@ -1,0 +1,14 @@
+{
+  "processed_videos": [
+    {
+      "youtube_id": "synth-golden-douyin-004",
+      "slice_index": 0,
+      "title": "Synthetic Golden Douyin Video",
+      "channel_id": "SyntheticChannel_001",
+      "score": 85,
+      "status": "PENDING",
+      "duration_sec": 120,
+      "source": "DISCOVERY"
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "scenario_id": "GOLDEN-PUB-DY",
+  "scenario_version": "1.0.0",
+  "purpose": "抖音单次浏览器凭据绑定与成片 SHA256 排重基线验证：验证凭据单次消费置 launch_started_at、二次重放拒绝及成片媒体指纹查重折叠",
+  "classification": "CONTRACT",
+  "relevant_invariants": ["INV-004", "INV-005"],
+  "initial_db_state": "单一待发布视频",
+  "initial_filesystem_state": "包含合成 payload 校验文件",
+  "external_dependency_mode": "OFFLINE_HERMETIC",
+  "action": {
+    "type": "DOUYIN_TICKET_AND_DEDUP",
+    "step_1": "create_douyin_publication",
+    "step_2": "claim_douyin_publication -> ticket issued",
+    "step_3": "bind_douyin_browser_launch_ticket_payload",
+    "step_4": "begin_douyin_browser_launch (first consumption)",
+    "step_5": "begin_douyin_browser_launch (replay consumption)",
+    "step_6": "update state to PUBLISHED, call create_douyin_publication with duplicate asset_sha256"
+  },
+  "expected_observation": {
+    "ticket_issued": true,
+    "first_launch_allowed": true,
+    "replay_launch_allowed": false,
+    "asset_dedup_folded": true
+  },
+  "forbidden_side_effects": [
+    "real_browser_launch",
+    "real_uploader_launch",
+    "production_db_touch"
+  ],
+  "normalization_rules": {
+    "ticket_issued": "EXACT",
+    "first_launch_allowed": "EXACT",
+    "replay_launch_allowed": "EXACT",
+    "asset_dedup_folded": "EXACT"
+  },
+  "sensitive_data": "NONE",
+  "source_evidence": "PipelineDB.begin_douyin_browser_launch:L9050, PipelineDB.create_douyin_publication:L8227"
+}

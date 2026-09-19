@@ -1,0 +1,36 @@
+{
+  "scenario_id": "GOLDEN-RISK-BOT",
+  "scenario_version": "1.0.0",
+  "purpose": "Telegram Bot 状态无约束改写不安全基线验证：忠实复现已知重大安全风险 (RISK-STATE-001)，记录 Bot 直连无锁 DAL 强制刷写 PENDING 造成主状态与发布账本分叉的缺陷行为",
+  "classification": "KNOWN-UNSAFE-BASELINE",
+  "relevant_invariants": ["INV-001", "INV-008"],
+  "associated_risk": "RISK-STATE-001",
+  "initial_db_state": "已提交至微信(SUBMITTED_UNBOUND)且持有有效发布账本的视频",
+  "initial_filesystem_state": "EMPTY",
+  "external_dependency_mode": "OFFLINE_HERMETIC",
+  "action": {
+    "type": "SIMULATED_BOT_UNCONSTRAINED_RETRY",
+    "step_1": "observe pre-state (status=SUBMITTED_UNBOUND, wechat_pub exists)",
+    "step_2": "execute update_video_status(yid, 'PENDING') without guard",
+    "step_3": "observe post-state (status=PENDING, wechat_pub still exists -> state forked)"
+  },
+  "expected_observation": {
+    "pre_status": "SUBMITTED_UNBOUND",
+    "post_status": "PENDING",
+    "wechat_pub_persists": true,
+    "state_forked": true
+  },
+  "forbidden_side_effects": [
+    "real_telegram_notification",
+    "real_uploader_launch",
+    "production_db_touch"
+  ],
+  "normalization_rules": {
+    "pre_status": "EXACT",
+    "post_status": "EXACT",
+    "wechat_pub_persists": "EXACT",
+    "state_forked": "EXACT"
+  },
+  "sensitive_data": "NONE",
+  "source_evidence": "src/bot/pipeline_agent.py:L714, PipelineDB.update_video_status:L2830"
+}

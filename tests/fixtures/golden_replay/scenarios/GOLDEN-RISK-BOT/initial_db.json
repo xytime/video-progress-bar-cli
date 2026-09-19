@@ -1,0 +1,14 @@
+{
+  "processed_videos": [
+    {
+      "youtube_id": "synth-golden-risk-006",
+      "slice_index": 0,
+      "title": "Synthetic Golden Risk Video",
+      "channel_id": "SyntheticChannel_001",
+      "score": 91,
+      "status": "SUBMITTED_UNBOUND",
+      "duration_sec": 180,
+      "source": "DISCOVERY"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "./schema/golden_replay_manifest.schema.json",
+  "dataset_version": "1.0.0",
+  "schema_version": "1.0.0",
+  "created_at": "2026-09-12T16:25:00+08:00",
+  "author": "Gemini_3.8_Flash_planning",
+  "description": "Video-precessing M6.2 Executable Golden Replay Dataset",
+  "scenarios": [
+    {
+      "scenario_id": "GOLDEN-WF-01",
+      "path": "scenarios/GOLDEN-WF-01",
+      "classification": "CONTRACT",
+      "priority": "P0",
+      "relevant_invariants": ["INV-001", "INV-003"]
+    },
+    {
+      "scenario_id": "GOLDEN-WF-02",
+      "path": "scenarios/GOLDEN-WF-02",
+      "classification": "CONTRACT",
+      "priority": "P1",
+      "relevant_invariants": ["INV-001"]
+    },
+    {
+      "scenario_id": "GOLDEN-PUB-WC",
+      "path": "scenarios/GOLDEN-PUB-WC",
+      "classification": "CONTRACT_AND_SAFETY_REGRESSION",
+      "priority": "P0",
+      "relevant_invariants": ["INV-002", "INV-007", "INV-008"]
+    },
+    {
+      "scenario_id": "GOLDEN-PUB-DY",
+      "path": "scenarios/GOLDEN-PUB-DY",
+      "classification": "CONTRACT",
+      "priority": "P0",
+      "relevant_invariants": ["INV-004", "INV-005"]
+    },
+    {
+      "scenario_id": "GOLDEN-PUB-KS",
+      "path": "scenarios/GOLDEN-PUB-KS",
+      "classification": "CONTRACT_AND_SAFETY_REGRESSION",
+      "priority": "P0",
+      "relevant_invariants": ["INV-002", "INV-004"]
+    },
+    {
+      "scenario_id": "GOLDEN-RISK-BOT",
+      "path": "scenarios/GOLDEN-RISK-BOT",
+      "classification": "KNOWN-UNSAFE-BASELINE",
+      "priority": "P0",
+      "relevant_invariants": ["INV-001", "INV-008"],
+      "associated_risk": "RISK-STATE-001"
+    }
+  ]
+}

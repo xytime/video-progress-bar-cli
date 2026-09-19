@@ -1,0 +1,14 @@
+{
+  "processed_videos": [
+    {
+      "youtube_id": "synth-golden-parent-002",
+      "slice_index": 0,
+      "title": "Synthetic Golden Parent Long Video",
+      "channel_id": "SyntheticChannel_001",
+      "score": 92,
+      "status": "DOWNLOADING",
+      "duration_sec": 3600,
+      "source": "DISCOVERY"
+    }
+  ]
+}

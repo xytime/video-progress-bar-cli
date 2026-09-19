@@ -1,0 +1,38 @@
+{
+  "scenario_id": "GOLDEN-PUB-KS",
+  "scenario_version": "1.0.0",
+  "purpose": "快手双维度排重与审核中折叠基线验证：验证基于同一条 SQL 同时以 (video_id = ? OR asset_sha256 = ?) 在 UNDER_REVIEW 状态下自动折叠至既有记录，防止重复入队",
+  "classification": "CONTRACT_AND_SAFETY_REGRESSION",
+  "relevant_invariants": ["INV-002", "INV-004"],
+  "initial_db_state": "两个已在微信发布的视频（用于同视频及同素材异视频测试）",
+  "initial_filesystem_state": "EMPTY",
+  "external_dependency_mode": "OFFLINE_HERMETIC",
+  "action": {
+    "type": "KUAISHOU_DUAL_KEY_DEDUP",
+    "step_1": "create_kuaishou_publication",
+    "step_2": "update state to UNDER_REVIEW",
+    "step_3": "create_kuaishou_publication with same video_id",
+    "step_4": "create_kuaishou_publication with different video_id but same asset_sha256"
+  },
+  "expected_observation": {
+    "step_1_created": true,
+    "step_2_state": "UNDER_REVIEW",
+    "step_3_same_video_folded": true,
+    "step_4_same_asset_folded": true,
+    "total_publications_count": 1
+  },
+  "forbidden_side_effects": [
+    "real_browser_launch",
+    "real_uploader_launch",
+    "production_db_touch"
+  ],
+  "normalization_rules": {
+    "step_1_created": "EXACT",
+    "step_2_state": "EXACT",
+    "step_3_same_video_folded": "EXACT",
+    "step_4_same_asset_folded": "EXACT",
+    "total_publications_count": "EXACT"
+  },
+  "sensitive_data": "NONE",
+  "source_evidence": "PipelineDB.create_kuaishou_publication:L7961"
+}

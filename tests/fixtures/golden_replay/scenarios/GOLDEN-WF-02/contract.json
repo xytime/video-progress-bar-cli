@@ -1,0 +1,35 @@
+{
+  "scenario_id": "GOLDEN-WF-02",
+  "scenario_version": "1.0.0",
+  "purpose": "长视频切片父子关系流转基线验证：验证切片派生后父视频标记为 SEGMENTED，且切片继承父级关系与级联约束完整性",
+  "classification": "CONTRACT",
+  "relevant_invariants": ["INV-001"],
+  "initial_db_state": "单一处于 DOWNLOADING 状态的父长视频",
+  "initial_filesystem_state": "EMPTY",
+  "external_dependency_mode": "OFFLINE_HERMETIC",
+  "action": {
+    "type": "LONG_VIDEO_SLICING",
+    "step_1": "add_video_slice for slice 1 and slice 2",
+    "step_2": "update_video_status(parent, 'SEGMENTED')",
+    "step_3": "get_video_slices(parent_id)"
+  },
+  "expected_observation": {
+    "parent_status": "SEGMENTED",
+    "slice_count": 2,
+    "slice_indices": [1, 2],
+    "slices_parent_id_linked": true
+  },
+  "forbidden_side_effects": [
+    "real_ffmpeg_exec",
+    "real_uploader_launch",
+    "production_db_touch"
+  ],
+  "normalization_rules": {
+    "parent_status": "EXACT",
+    "slice_count": "EXACT",
+    "slice_indices": "EXACT",
+    "slices_parent_id_linked": "EXACT"
+  },
+  "sensitive_data": "NONE",
+  "source_evidence": "PipelineDB.add_video:L2605, PipelineDB.get_video_slices:L5120"
+}
