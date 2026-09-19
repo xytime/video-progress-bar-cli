@@ -4,15 +4,18 @@
 为视频号竖屏全自动发布流水线开发广播级互动引导组件：
 - 中央视平线三联微动胶囊 [ 👍 点赞 | 关注 | 💬 评论 ] (Y=820)
 - 尾部转化钩子顶栏标语 [ • 觉得有收获？点赞关注防走丢 • ] (Y=760)
-- 左下角黑曜石磨砂胶囊 [ + 关注创作者 ] (X=85, Y=1680)
-- 三级 45° 跑道级流光航标（行波脉冲指向视频号原生左下角关注区域）
+- 左下角黑曜石磨砂胶囊 [ + 订阅更新 ] (X=70, Y=1460) ← v2.0 大幅上移，避开视频号系统区域
+- 胶囊规格 390×94px (42px 加粗字体，v1 的 2x)，红圈直径 56px (v1 的 2x)
+- 三级垂直向下 ↓ 跑道微标（10px 实心圆角 + 24px 光晕，指引底部原生关注按钮）
+- 总时长 8.0s (v1 为 5.5s)，黄金钩子触发时机自适应短/长视频
 - 双频 Pop 交互音效（标准 wave 模块兜底合成，毫秒级音画同步）
-- 100% 避让中英双语字幕区（Y=1040~1260）
+- 100% 避让中英双语字幕区（Y=1040~1260）与生词卡区（Y=1380~1440）
 
 # Modification History
 | Version | Date       | Author      | Description |
 | ------- | ---------- | ----------- | ----------- |
 | 1.0.0   | 2026-09-19 | Antigravity | 初始创建：跑道级流光互动处理器 InteractionOverlayProcessor，支持 4x 超采样、跨平台字体回退、PTS 时延编排与双频 Pop 音效合成 |
+| 2.0.0   | 2026-09-19 | Antigravity | 用户审核通过 v2 规格：文案→「订阅更新」，Y=1680→1460 上移彻底清空视频号系统区，字体 21px→42px(2x)，胶囊 196×54→390×94px，箭头改垂直向下 ↓(10px+光晕)，总时长 5.5s→8.0s，触发时机黄金区间自适应 |
 """
 from __future__ import annotations
 
@@ -245,99 +248,132 @@ def create_hook_banner(scale: float = 1.0, text: str = "觉得有收获？点赞
 
 
 def render_option_c_pointer(scale: int = 4, phase: float = 0.0, alpha: float = 1.0) -> Image.Image:
-    """渲染 Option C Refined 左下角黑曜石磨砂胶囊与三级 45° 跑道微标（无内置文本箭头）。"""
-    w, h = 360 * scale, 180 * scale
+    """渲染 v2.0 左下角引导组件：「订阅更新」大号黑曜石胶囊 + 垂直向下 ↓ 跑道微标。
+
+    规格（v2.0 用户验收通过 2026-09-19）：
+    - 胶囊尺寸: 390px × 94px (v1 为 196×54, 2x 放大)
+    - 字体: 42px 加粗「订阅更新」(v1 为 21px)
+    - 红色加号圆圈: 直径 56px (v1 为 30px, 2x 放大)
+    - 箭头类型: 三级垂直向下 ↓（v1 为 45° 斜向 ↙）
+    - 箭头笔宽: 10px 实心 + 24px 光晕（v1 为 3.5px）
+    - 粘贴位置: (X=70, Y=1460) (v1 为 (85, 1680))，已彻底清空视频号原生 UI 区域
+    """
+    w, h = 540 * scale, 340 * scale
     canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
 
     if alpha <= 0.01:
         return canvas.resize((w // scale, h // scale), Image.Resampling.LANCZOS)
 
-    bx, by = 48 * scale, 16 * scale
-    bw, bh = 196 * scale, 54 * scale
-    r = 27 * scale
+    bx, by = 48 * scale, 18 * scale
+    bw, bh = 390 * scale, 94 * scale
+    r = 47 * scale
 
-    # 1. 投影
+    # 1. 3D 投影
     shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     s_draw = ImageDraw.Draw(shadow)
-    s_draw.rounded_rectangle((bx, by + 8 * scale, bx + bw, by + bh + 8 * scale), radius=r, fill=(0, 0, 0, int(160 * alpha)))
-    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=8 * scale))
+    s_draw.rounded_rectangle(
+        (bx, by + 12 * scale, bx + bw, by + bh + 12 * scale),
+        radius=r, fill=(0, 0, 0, int(185 * alpha)),
+    )
+    shadow = shadow.filter(ImageFilter.GaussianBlur(radius=14 * scale))
     canvas.paste(shadow, (0, 0), shadow)
 
     draw = ImageDraw.Draw(canvas)
 
     # 2. 黑曜石磨砂胶囊
     draw.rounded_rectangle(
-        (bx, by, bx + bw, by + bh),
-        radius=r,
-        fill=(18, 22, 30, int(242 * alpha)),
-        outline=(255, 255, 255, int(45 * alpha)),
-        width=int(1.8 * scale),
+        (bx, by, bx + bw, by + bh), radius=r,
+        fill=(16, 20, 28, int(246 * alpha)),
+        outline=(255, 255, 255, int(54 * alpha)), width=int(2.2 * scale),
     )
 
-    # 顶缘弧线高光
-    rim_col = (255, 255, 255, int(75 * alpha))
-    rw = int(1.5 * scale)
+    # 顶缘弧线高光（镜面折射效果）
+    rim_col = (255, 255, 255, int(95 * alpha))
+    rw = int(2.0 * scale)
     draw.arc((bx, by, bx + 2 * r, by + 2 * r), start=205, end=270, fill=rim_col, width=rw)
     draw.line([(bx + r, by), (bx + bw - r, by)], fill=rim_col, width=rw)
     draw.arc((bx + bw - 2 * r, by, bx + bw, by + 2 * r), start=270, end=335, fill=rim_col, width=rw)
 
-    # 红色加号微标
-    p_cx = bx + 32 * scale
+    # 3. 红色加号圆圈（直径 56px → scale 后 28px 半径）
+    p_cx = bx + 50 * scale
     p_cy = by + bh // 2
-    draw.ellipse((p_cx - 15 * scale, p_cy - 15 * scale, p_cx + 15 * scale, p_cy + 15 * scale), fill=(255, 48, 64, int(255 * alpha)))
-    draw_plus_icon(draw, p_cx, p_cy, size=13 * scale, color=(255, 255, 255, int(255 * alpha)), stroke=int(3 * scale))
+    p_r = 28 * scale
+    draw.ellipse((p_cx - p_r, p_cy - p_r, p_cx + p_r, p_cy + p_r), fill=(255, 45, 65, int(255 * alpha)))
+    draw_plus_icon(draw, p_cx, p_cy, size=24 * scale, color=(255, 255, 255, int(255 * alpha)), stroke=int(5.5 * scale))
 
-    # 居中文案：关注创作者
-    font_main = resolve_render_font(21 * scale, bold=True)
-    draw.text((bx + 60 * scale, p_cy), "关注创作者", font=font_main, fill=(255, 255, 255, int(255 * alpha)), anchor="lm")
+    # 4. 文案：「订阅更新」42px 加粗（v1 为 21px 关注创作者）
+    font_main = resolve_render_font(42 * scale, bold=True)
+    draw.text((bx + 96 * scale, p_cy), "订阅更新", font=font_main, fill=(255, 255, 255, int(255 * alpha)), anchor="lm")
 
-    # 3. 三级 45° 跑道微标
-    start_x = bx + 36 * scale
-    start_y = by + bh + 18 * scale
-    step_d = 20 * scale
-    dir_x = -math.sqrt(2) / 2
-    dir_y = math.sqrt(2) / 2
+    # 5. 三级垂直向下 ↓ 跑道微标
+    # 轴心对准红圈中心 X，从胶囊底部往下展开
+    start_x = p_cx
+    start_y = by + bh + 26 * scale
+    step_d = 42 * scale        # 三个箭头间距
+    arm_len = 36 * scale       # 翼臂长度
+    half_angle = 38 * (math.pi / 180)
+    dx = arm_len * math.sin(half_angle)   # 翼臂横向展开距离
+    dy = arm_len * math.cos(half_angle)   # 翼臂纵向回溯距离
 
-    arm_len = 16 * scale
-    ang_center = 45 * (math.pi / 180)
-    spread = 34 * (math.pi / 180)
-    ang1 = ang_center + spread
-    ang2 = ang_center - spread
-
+    # 外层霓虹光晕（高斯模糊叠加）
+    glow_canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    g_draw = ImageDraw.Draw(glow_canvas)
     for i in range(3):
-        cur_phase = (phase - i * 0.3) % 1.0
-        pulse = 0.30 + 0.70 * math.sin(cur_phase * math.pi)
-        dist = i * step_d + int(cur_phase * 4 * scale)
-        apex = (start_x + dir_x * dist, start_y + dir_y * dist)
-
+        cur_phase = (phase - i * 0.28) % 1.0
+        pulse = 0.35 + 0.65 * math.pow(math.sin(cur_phase * math.pi), 1.5)
+        advance = cur_phase * 10 * scale
+        apex_y = start_y + i * step_d + advance
         s_factor = 1.0 - i * 0.12
-        cur_arm = arm_len * s_factor
-        w1 = (apex[0] + cur_arm * math.cos(ang1), apex[1] - cur_arm * math.sin(ang1))
-        w2 = (apex[0] + cur_arm * math.cos(ang2), apex[1] - cur_arm * math.sin(ang2))
+        cur_dx = dx * s_factor
+        cur_dy = dy * s_factor
+        w1 = (start_x - cur_dx, apex_y - cur_dy)
+        w2 = (start_x + cur_dx, apex_y - cur_dy)
+        glow_col = (255, 45, 75, int(180 * pulse * alpha))
+        gw = int(24 * scale * s_factor)
+        g_draw.line([w1, (start_x, apex_y)], fill=glow_col, width=gw)
+        g_draw.line([(start_x, apex_y), w2], fill=glow_col, width=gw)
+    glow_canvas = glow_canvas.filter(ImageFilter.GaussianBlur(radius=8 * scale))
+    canvas.paste(glow_canvas, (0, 0), glow_canvas)
 
-        col = (255, 55, 75, int(255 * pulse * alpha))
-        sw = int(3.5 * scale * s_factor)
-        draw.line([w1, apex], fill=col, width=sw)
-        draw.line([apex, w2], fill=col, width=sw)
+    # 实心核心线（10px 圆头）
+    for i in range(3):
+        cur_phase = (phase - i * 0.28) % 1.0
+        pulse = 0.35 + 0.65 * math.pow(math.sin(cur_phase * math.pi), 1.5)
+        advance = cur_phase * 10 * scale
+        apex_y = start_y + i * step_d + advance
+        s_factor = 1.0 - i * 0.12
+        cur_dx = dx * s_factor
+        cur_dy = dy * s_factor
+        w1 = (start_x - cur_dx, apex_y - cur_dy)
+        w2 = (start_x + cur_dx, apex_y - cur_dy)
+        core_col = (255, 80, 100, int(255 * pulse * alpha))
+        cw = int(10.0 * scale * s_factor)
+        draw.line([w1, (start_x, apex_y)], fill=core_col, width=cw)
+        draw.line([(start_x, apex_y), w2], fill=core_col, width=cw)
+        # 顶点与翼端圆角帽
+        draw.ellipse((start_x - cw // 2, apex_y - cw // 2, start_x + cw // 2, apex_y + cw // 2), fill=core_col)
+        draw.ellipse((w1[0] - cw // 2, w1[1] - cw // 2, w1[0] + cw // 2, w1[1] + cw // 2), fill=core_col)
+        draw.ellipse((w2[0] - cw // 2, w2[1] - cw // 2, w2[0] + cw // 2, w2[1] + cw // 2), fill=core_col)
 
     return canvas.resize((w // scale, h // scale), Image.Resampling.LANCZOS)
 
 
+
 def build_overlay_frame(
     t: float,
-    duration: float = 5.5,
+    duration: float = 8.0,
     with_hook: bool = False,
     hook_text: str = "觉得有收获？点赞关注防走丢",
 ) -> Image.Image:
     """
-    单帧渲染工厂函数：
-    - 0.0s~0.4s: 中央胶囊弹出 (scale 0.7 -> 1.06 -> 1.0)
-    - 0.4s~1.0s: 光标移向点赞并在 t=0.8s 点击 (+1 粒子浮空消散)
-    - 1.0s~1.6s: 光标移向关注并在 t=1.4s 点击 (状态切换为 ✓已关注)
-    - 1.6s~2.0s: 光标淡出
-    - 2.0s (错峰延时 2.0s): 左下角角标淡入 (alpha 0.0 -> 1.0)
-    - 2.0s~5.2s: 三级 45° 跑道微标持续执行 2 个波纹周期 (单周期 1.6s)
-    - 5.0s~5.5s: 全局淡出
+    单帧渲染工厂函数（v2.0，用户验收通过 2026-09-19）：
+    - 0.0s~0.5s: 中央胶囊弹出 (scale 0.7 -> 1.0)
+    - 0.5s~1.2s: 光标移向点赞并在 t=1.0s 点击 (+1 粒子浮空消散)
+    - 1.2s~2.0s: 光标移向关注并在 t=1.7s 点击 (状态切换为 ✓已关注)
+    - 2.0s~2.5s: 光标淡出
+    - 2.0s (错峰延时 2.0s): 左下角角标淡入 (alpha 0.0 -> 1.0)，位置 (70, 1460)
+    - 2.0s~7.3s: 三级垂直 ↓ 跑道微标持续执行 3+ 波纹周期 (单周期 1.5s)
+    - 7.3s~8.0s: 全局淡出
     """
     overlay = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
 
@@ -352,53 +388,55 @@ def build_overlay_frame(
     corner_alpha = 0.0
     corner_phase = 0.0
 
-    if t < 0.4:
-        prog = t / 0.4
-        alpha = min(1.0, prog * 1.5)
-        scale = 0.7 + 0.36 * math.sin(prog * math.pi * 0.7)
-        dy = int(12 * (1.0 - prog))
-    elif t < 1.0:
-        c_prog = (t - 0.4) / 0.6
-        start_cx, start_cy = 700, 1000
-        target_cx, target_cy = 320, 875
+    if t < 0.5:
+        prog = t / 0.5
+        alpha = min(1.0, prog * 1.4)
+        scale = 0.7 + 0.35 * math.sin(prog * math.pi * 0.7)
+        dy = int(14 * (1.0 - prog))
+    elif t < 1.2:
+        c_prog = (t - 0.5) / 0.7
+        start_cx, start_cy = 720, 1020
+        target_cx, target_cy = 330, 875
         cur_x = int(start_cx + (target_cx - start_cx) * c_prog)
         cur_y = int(start_cy + (target_cy - start_cy) * c_prog)
         cursor_pos = (cur_x, cur_y)
-        if t >= 0.8:
+        if t >= 1.0:
             liked = True
-            like_pop = 1.18
-    elif t < 1.6:
-        liked = True
-        c_prog = (t - 1.0) / 0.6
-        start_cx, start_cy = 320, 875
-        target_cx, target_cy = 540, 875
-        cur_x = int(start_cx + (target_cx - start_cx) * c_prog)
-        cur_y = int(start_cy + (target_cy - start_cy) * c_prog)
-        cursor_pos = (cur_x, cur_y)
-        if t >= 1.4:
-            followed = True
-        p_prog = (t - 0.8) / 0.8
-        if p_prog < 1.0:
-            plus_one_pos = (310, int(840 - 35 * p_prog), max(0.0, 1.0 - p_prog))
+            like_pop = 1.20
     elif t < 2.0:
         liked = True
-        followed = True
-        c_alpha = max(0.0, 1.0 - (t - 1.6) / 0.3)
-        if c_alpha > 0.05:
-            cursor_pos = (540, 875)
-    elif t < 5.0:
+        c_prog = (t - 1.2) / 0.8
+        start_cx, start_cy = 330, 875
+        target_cx, target_cy = 550, 875
+        cur_x = int(start_cx + (target_cx - start_cx) * c_prog)
+        cur_y = int(start_cy + (target_cy - start_cy) * c_prog)
+        cursor_pos = (cur_x, cur_y)
+        if t >= 1.7:
+            followed = True
+        p_prog = (t - 1.0) / 0.9
+        if p_prog < 1.0:
+            plus_one_pos = (315, int(830 - 40 * p_prog), max(0.0, 1.0 - p_prog))
+    elif t < 2.5:
         liked = True
         followed = True
-        corner_alpha = min(1.0, (t - 2.0) / 0.3)
-        corner_phase = (t - 2.0) / 1.6
+        c_alpha = max(0.0, 1.0 - (t - 2.0) / 0.4)
+        if c_alpha > 0.05:
+            cursor_pos = (550, 875)
+        corner_alpha = min(1.0, (t - 2.0) / 0.4)
+        corner_phase = (t - 2.0) / 1.5
+    elif t < 7.3:
+        liked = True
+        followed = True
+        corner_alpha = 1.0
+        corner_phase = (t - 2.0) / 1.5
     else:
         liked = True
         followed = True
-        out_prog = (t - 5.0) / 0.5
+        out_prog = (t - 7.3) / 0.7
         alpha = max(0.0, 1.0 - out_prog)
         corner_alpha = alpha
-        corner_phase = (t - 2.0) / 1.6
-        dy = int(20 * out_prog)
+        corner_phase = (t - 2.0) / 1.5
+        dy = int(22 * out_prog)
 
     # 1. 中央三联胶囊 (Y=820)
     badge = create_badge_a(scale=scale, liked=liked, followed=followed, like_pop=like_pop)
@@ -430,55 +468,62 @@ def build_overlay_frame(
         o_draw.text((px, py), "+1", font=font_p, fill=(245, 50, 65, int(255 * pa)), anchor="mm")
 
     # 4. 手势光标
-    if cursor_pos and alpha > 0.3 and t < 1.9:
+    if cursor_pos and alpha > 0.3 and t < 2.4:
         draw_cursor(o_draw, cursor_pos[0], cursor_pos[1], scale=1.0)
 
-    # 5. 左下角角标 (X=85, Y=1680)
+    # 5. 左下角角标 (X=70, Y=1460) ← v2.0 上移至生词卡下方，彻底清空微信视频号系统区域
     if corner_alpha > 0.01:
         c_guide = render_option_c_pointer(scale=4, phase=corner_phase, alpha=corner_alpha)
-        overlay.paste(c_guide, (85, 1680), c_guide)
+        overlay.paste(c_guide, (70, 1460), c_guide)
 
     return overlay
+
 
 
 @dataclass(frozen=True)
 class InteractionTrigger:
     """互动引导触发点定义"""
     start_sec: float
-    duration_sec: float = 5.5
+    duration_sec: float = 8.0   # v2.0 延长至 8.0s（v1 为 5.5s）
     with_hook: bool = False
     hook_text: str = "觉得有收获？点赞关注防走丢"
 
 
 def compute_triggers(
     video_duration: float,
-    early_ratio: float = 0.18,
-    end_offset: float = 14.0,
+    early_ratio: float = 0.12,
+    end_offset: float = 16.0,
     min_video_duration: float = 22.0,
 ) -> List[InteractionTrigger]:
     """
-    计算视频触发时机：
+    计算视频触发时机（v2.0）：
     - 短于 min_video_duration (22s) 则降级为 0 或 1 处触发，杜绝覆盖与密集干扰；
-    - 常规视频返回 [Trigger 1 (黄金认知点), Trigger 2 (尾部转化点)]。
+    - 常规视频返回 [Trigger 1 (黄金留存钩子点), Trigger 2 (尾部转化点)]。
+
+    v2.0 黄金触发公式（解决长视频前几十秒看不到互动层的问题）：
+    - t1 = clamp(duration * early_ratio, 10.0, 15.0)   → 黄金认知钩子（开播 10~15s 内必触发）
+    - t2 = max(t1 + 12.0, duration - end_offset)       → 尾部转化钩子（距结尾 16s 或 t1 后 12s）
     """
     if video_duration < 12.0:
         return []
 
     if video_duration < min_video_duration:
         # 短视频仅在中间触发一次单组件
-        mid_time = max(2.0, video_duration * 0.5 - 2.75)
-        return [InteractionTrigger(start_sec=mid_time, duration_sec=min(5.5, video_duration - mid_time))]
+        mid_time = max(2.0, video_duration * 0.5 - 4.0)
+        dur = min(8.0, video_duration - mid_time - 1.0)
+        return [InteractionTrigger(start_sec=mid_time, duration_sec=max(5.0, dur))]
 
-    t1_start = max(6.0, video_duration * early_ratio)
-    t2_start = max(t1_start + 8.0, video_duration - end_offset)
+    # 黄金钩子时机：10~15s 黄金留存窗口，避免超长视频前段漏看
+    t1_start = min(15.0, max(10.0, video_duration * early_ratio))
+    t2_start = max(t1_start + 12.0, video_duration - end_offset)
 
-    # 保证 t2 不溢出视频长度
-    if t2_start + 5.5 > video_duration:
-        t2_start = max(t1_start + 6.0, video_duration - 5.8)
+    # 保证 t2 不溢出视频长度（保留 8.5s 尾余量）
+    if t2_start + 8.5 > video_duration:
+        t2_start = max(t1_start + 10.0, video_duration - 8.5)
 
     return [
-        InteractionTrigger(start_sec=round(t1_start, 2), duration_sec=5.5, with_hook=False),
-        InteractionTrigger(start_sec=round(t2_start, 2), duration_sec=5.5, with_hook=True),
+        InteractionTrigger(start_sec=round(t1_start, 2), duration_sec=8.0, with_hook=False),
+        InteractionTrigger(start_sec=round(t2_start, 2), duration_sec=8.0, with_hook=True),
     ]
 
 

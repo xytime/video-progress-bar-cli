@@ -105,21 +105,21 @@ class TestVisualComponents:
         assert banner.width > 500
 
     def test_render_option_c_pointer_dimensions_and_alpha(self):
-        # 正常渲染
+        # v2.0 尺寸: 540x340 (v1 为 360x180, 胶囊 390×94px + 箭头区域)
         p1 = render_option_c_pointer(scale=4, phase=0.25, alpha=1.0)
-        assert p1.size == (360, 180)
+        assert p1.size == (540, 340)
         assert p1.mode == "RGBA"
 
         # alpha 为 0 时的空白透明画布
         p_zero = render_option_c_pointer(scale=4, phase=0.0, alpha=0.0)
-        assert p_zero.size == (360, 180)
+        assert p_zero.size == (540, 340)
         # 检查是否全透明
         assert max(p_zero.getchannel("A").getextrema()) == 0
 
 
 class TestOverlayFrameAndZeroCollision:
     def test_build_overlay_frame_dimensions(self):
-        frame = build_overlay_frame(t=2.5, duration=5.5, with_hook=True)
+        frame = build_overlay_frame(t=2.5, duration=8.0, with_hook=True)
         assert frame.size == (1080, 1920)
         assert frame.mode == "RGBA"
 
@@ -128,9 +128,9 @@ class TestOverlayFrameAndZeroCollision:
         核心物理防线验收：
         中英双语字幕区（Y=1040~1260）在整个动画生命周期中必须 100% 洁净，不能有任何非透明像素。
         """
-        test_times = [0.2, 0.8, 1.4, 2.0, 3.0, 4.0, 5.2]
+        test_times = [0.2, 0.8, 1.4, 2.0, 3.0, 5.0, 7.0]
         for t in test_times:
-            frame = build_overlay_frame(t=t, duration=5.5, with_hook=True)
+            frame = build_overlay_frame(t=t, duration=8.0, with_hook=True)
             # 裁剪字幕敏感带: X=0~1080, Y=1040~1260
             subtitle_zone = frame.crop((0, 1040, 1080, 1260))
             alpha_extrema = subtitle_zone.getchannel("A").getextrema()
@@ -138,17 +138,17 @@ class TestOverlayFrameAndZeroCollision:
 
     def test_staggered_corner_delay(self):
         """
-        错峰延时验收：
-        左下角组件必须在 t=2.0s 之前完全隐藏（Alpha=0），在 t > 2.0s 之后才开始显现。
+        错峰延时验收（v2.0）：
+        左下角组件 (X=70, Y=1460) 必须在 t=2.0s 之前完全隐藏（Alpha=0），在 t > 2.0s 之后才开始显现。
         """
         # t=1.8s (延时期间)
-        frame_before = build_overlay_frame(t=1.8, duration=5.5)
-        corner_zone_before = frame_before.crop((85, 1680, 85 + 360, 1680 + 180))
+        frame_before = build_overlay_frame(t=1.8, duration=8.0)
+        corner_zone_before = frame_before.crop((70, 1460, 70 + 540, 1460 + 340))
         assert corner_zone_before.getchannel("A").getextrema()[1] == 0
 
         # t=2.5s (延时已过，波纹脉冲中)
-        frame_after = build_overlay_frame(t=2.5, duration=5.5)
-        corner_zone_after = frame_after.crop((85, 1680, 85 + 360, 1680 + 180))
+        frame_after = build_overlay_frame(t=2.5, duration=8.0)
+        corner_zone_after = frame_after.crop((70, 1460, 70 + 540, 1460 + 340))
         assert corner_zone_after.getchannel("A").getextrema()[1] > 0
 
 
@@ -163,14 +163,21 @@ class TestComputeTriggers:
         assert triggers[0].start_sec + triggers[0].duration_sec <= 18.0
 
     def test_standard_60s_video_dual_triggers(self):
-        triggers = compute_triggers(60.0, early_ratio=0.18, end_offset=14.0)
+        triggers = compute_triggers(60.0)
         assert len(triggers) == 2
-        # Trigger 1: ~10.8s
-        assert 6.0 <= triggers[0].start_sec <= 15.0
+        # Trigger 1: 黄金钩子 10~15s 之间
+        assert 10.0 <= triggers[0].start_sec <= 15.0
         assert not triggers[0].with_hook
-        # Trigger 2: ~46.0s
-        assert triggers[1].start_sec >= triggers[0].start_sec + 8.0
+        # Trigger 2: t1 之后至少 12s 且不溢出
+        assert triggers[1].start_sec >= triggers[0].start_sec + 12.0
         assert triggers[1].start_sec + triggers[1].duration_sec <= 60.0
+        assert triggers[1].with_hook
+
+    def test_long_video_golden_hook_timing(self):
+        """验收：15 分钟长视频的 T1 触发时机在黄金 10~15s 窗口内，不再是 2 分 39 秒"""
+        triggers = compute_triggers(885.0)  # iJEhc52SBMw: 885.77s
+        assert len(triggers) == 2
+        assert 10.0 <= triggers[0].start_sec <= 15.0, f"长视频 T1 超出黄金窗口: {triggers[0].start_sec}s"
         assert triggers[1].with_hook
 
 
