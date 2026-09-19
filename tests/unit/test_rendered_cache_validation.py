@@ -32,6 +32,19 @@ def test_ffprobe_resolver_uses_homebrew_path_when_cron_path_is_minimal(monkeypat
     assert video_metadata._resolve_ffprobe_cmd() == "/opt/homebrew/bin/ffprobe"
 
 
+def test_ffmpeg_resolver_uses_homebrew_path_when_cron_path_is_minimal(monkeypatch):
+    """Runway CTA 编码不应因 cron 未继承 Homebrew PATH 而降级。"""
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setattr(video_metadata, "settings", SimpleNamespace(ffmpeg_path=None))
+
+    def fake_exists(path):
+        return str(path) == "/opt/homebrew/bin/ffmpeg"
+
+    monkeypatch.setattr(video_metadata.Path, "exists", fake_exists)
+
+    assert video_metadata.resolve_ffmpeg_cmd() == "/opt/homebrew/bin/ffmpeg"
+
+
 def test_invalid_rendered_cache_is_marked_for_rerender(tmp_path, monkeypatch):
     vertical = tmp_path / "broken_vertical.mp4"
     vertical.write_bytes(b"partial media")

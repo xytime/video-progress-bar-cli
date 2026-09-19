@@ -17,6 +17,7 @@
 | 1.0.0   | 2026-09-19 | Antigravity | 初始创建：跑道级流光互动处理器 InteractionOverlayProcessor，支持 4x 超采样、跨平台字体回退、PTS 时延编排与双频 Pop 音效合成 |
 | 2.0.0   | 2026-09-19 | Antigravity | 用户审核通过 v2 规格：文案→「订阅更新」，Y=1680→1460 上移彻底清空视频号系统区，字体 21px→42px(2x)，胶囊 196×54→390×94px，箭头改垂直向下 ↓(10px+光晕)，总时长 5.5s→8.0s，触发时机黄金区间自适应 |
 | 2.0.1   | 2026-09-19 | Codex       | 统一画面与 Pop 点击时刻，并在完整性校验通过后原子替换互动成片，避免失败渲染破坏旧文件 |
+| 2.0.2   | 2026-09-20 | Codex       | 复用 cron 安全的 ffmpeg 解析器，修复后台巡航找不到 Homebrew FFmpeg 后静默降级的问题 |
 """
 from __future__ import annotations
 
@@ -35,7 +36,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from config.settings import settings
 from ..core.base import VideoProcessorBase, VideoProcessingError
-from ..utils.video_metadata import get_video_duration_ffprobe
+from ..utils.video_metadata import get_video_duration_ffprobe, resolve_ffmpeg_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -596,6 +597,7 @@ class InteractionOverlayProcessor(VideoProcessorBase):
                 return self.output_path
 
             fps = 30
+            ffmpeg_executable = resolve_ffmpeg_cmd()
             mov_files: List[Path] = []
             filter_chunks: List[str] = []
             input_args: List[str] = ["-i", str(self.input_path)]
@@ -607,7 +609,7 @@ class InteractionOverlayProcessor(VideoProcessorBase):
                 mov_path = work_dir / f"trigger_{idx}.mov"
 
                 cmd_enc = [
-                    "ffmpeg", "-y", "-framerate", str(fps),
+                    ffmpeg_executable, "-y", "-framerate", str(fps),
                     "-i", str(seq_dir / "frame_%04d.png"),
                     "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le",
                     str(mov_path),
@@ -673,7 +675,7 @@ class InteractionOverlayProcessor(VideoProcessorBase):
 
             filter_complex = ";".join(filter_chunks)
             ffmpeg_cmd = [
-                "ffmpeg", "-y",
+                ffmpeg_executable, "-y",
                 *input_args,
                 "-filter_complex", filter_complex,
                 *map_args,

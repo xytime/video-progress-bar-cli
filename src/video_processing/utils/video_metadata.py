@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-05-20 | Gemini_3.1_Pro_High_planning | 初始创建视频元数据工具 |
 | 1.1.0 | 2026-08-04 | Codex | ffprobe 解析支持 cron 最小 PATH 下的 Homebrew/配置路径回退，避免误判缓存成片损坏 |
+| 1.2.0 | 2026-09-20 | Codex | 补充与 ffprobe 对称的 ffmpeg 解析，供 Runway CTA 在 cron 最小 PATH 下稳定编码 |
 """
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -25,6 +26,18 @@ def _resolve_ffprobe_cmd(ffprobe_path: Optional[str] = None) -> str:
         if Path(candidate).exists():
             return candidate
     return "ffprobe"
+
+
+def resolve_ffmpeg_cmd(ffmpeg_path: Optional[str] = None) -> str:
+    """返回可用于编码的 ffmpeg；cron 未继承 Homebrew PATH 时优先绝对路径。"""
+    if ffmpeg_path:
+        return ffmpeg_path
+    if settings.ffmpeg_path:
+        return settings.ffmpeg_path
+    for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"):
+        if Path(candidate).exists():
+            return candidate
+    return "ffmpeg"
 
 
 def get_video_info(video_path: Path) -> Dict[str, any]:
