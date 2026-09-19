@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.65.1 | 2026-09-19 | Codex | Runway-CTA v2 生产默认触发参数对齐审核公式：首段比例 0.12、尾段距片尾 16 秒。 |
 | 3.65.0 | 2026-09-19 | Antigravity | 扩展 OptionSense 交易日安全窗口为 16:15-17:50 与 19:00-08:30 ET。 |
 | 3.65.0 | 2026-09-19 | Antigravity | Project Runway-CTA: 新增 enable_interaction_overlay 及触发比例/音量配置，生产默认 False。 |
 | 3.64.0 | 2026-09-19 | Antigravity | 配置化 OptionSense ET 物理避让策略，支持交易日夜间 20:30-04:15 与周末 58.5h 连续安全窗口。 |
@@ -376,8 +377,8 @@ class Settings(BaseSettings):
     # 默认关闭，确保生产零风险。启用后在 {prefix}_vertical.mp4 基础上叠加互动图层与双频 Pop 音效，
     # 产出 {prefix}_vertical_interactive.mp4 并动态优先用于发布。
     enable_interaction_overlay: bool = False
-    interaction_trigger_early_ratio: float = 0.18  # 黄金认知点时间比例
-    interaction_trigger_end_seconds: float = 14.0  # 尾部转化点距片尾秒数
+    interaction_trigger_early_ratio: float = 0.12  # 黄金认知点时间比例
+    interaction_trigger_end_seconds: float = 16.0  # 尾部转化点距片尾秒数
     interaction_sound_enabled: bool = True          # 是否开启互动 Pop 音效
     interaction_sound_volume: float = 0.40          # 互动音效音量
 

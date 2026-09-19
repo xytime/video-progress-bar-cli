@@ -16,6 +16,7 @@
 | ------- | ---------- | ----------- | ----------- |
 | 1.0.0   | 2026-09-19 | Antigravity | 初始创建：跑道级流光互动处理器 InteractionOverlayProcessor，支持 4x 超采样、跨平台字体回退、PTS 时延编排与双频 Pop 音效合成 |
 | 2.0.0   | 2026-09-19 | Antigravity | 用户审核通过 v2 规格：文案→「订阅更新」，Y=1680→1460 上移彻底清空视频号系统区，字体 21px→42px(2x)，胶囊 196×54→390×94px，箭头改垂直向下 ↓(10px+光晕)，总时长 5.5s→8.0s，触发时机黄金区间自适应 |
+| 2.0.1   | 2026-09-19 | Codex       | 统一画面与 Pop 点击时刻，并在完整性校验通过后原子替换互动成片，避免失败渲染破坏旧文件 |
 """
 from __future__ import annotations
 
@@ -40,6 +41,8 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 ASSETS_SOUNDS = PROJECT_ROOT / "assets" / "sounds"
+LIKE_CLICK_OFFSET_SEC = 1.0
+FOLLOW_CLICK_OFFSET_SEC = 1.7
 
 
 def resolve_render_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -400,7 +403,7 @@ def build_overlay_frame(
         cur_x = int(start_cx + (target_cx - start_cx) * c_prog)
         cur_y = int(start_cy + (target_cy - start_cy) * c_prog)
         cursor_pos = (cur_x, cur_y)
-        if t >= 1.0:
+        if t >= LIKE_CLICK_OFFSET_SEC:
             liked = True
             like_pop = 1.20
     elif t < 2.0:
@@ -411,7 +414,7 @@ def build_overlay_frame(
         cur_x = int(start_cx + (target_cx - start_cx) * c_prog)
         cur_y = int(start_cy + (target_cy - start_cy) * c_prog)
         cursor_pos = (cur_x, cur_y)
-        if t >= 1.7:
+        if t >= FOLLOW_CLICK_OFFSET_SEC:
             followed = True
         p_prog = (t - 1.0) / 0.9
         if p_prog < 1.0:
@@ -568,6 +571,10 @@ class InteractionOverlayProcessor(VideoProcessorBase):
         self._ensure_output_dir()
         work_dir = kwargs.get("work_dir")
         cleanup_temp = False
+        output_candidate = self.output_path.with_name(
+            f".{self.output_path.stem}.{os.getpid()}.tmp{self.output_path.suffix or '.mp4'}"
+        )
+        output_candidate.unlink(missing_ok=True)
 
         if work_dir is None:
             work_dir = Path(tempfile.mkdtemp(prefix="runway_cta_proc_"))
@@ -578,13 +585,14 @@ class InteractionOverlayProcessor(VideoProcessorBase):
 
         try:
             duration = get_video_duration_ffprobe(self.input_path)
-            early_ratio = kwargs.get("early_ratio", getattr(settings, "interaction_trigger_early_ratio", 0.18))
-            end_seconds = kwargs.get("end_seconds", getattr(settings, "interaction_trigger_end_seconds", 14.0))
+            early_ratio = kwargs.get("early_ratio", getattr(settings, "interaction_trigger_early_ratio", 0.12))
+            end_seconds = kwargs.get("end_seconds", getattr(settings, "interaction_trigger_end_seconds", 16.0))
 
             triggers = compute_triggers(duration, early_ratio=early_ratio, end_offset=end_seconds)
             if not triggers:
                 logger.warning("[RunwayCTA] 视频时长过短 (%.1fs)，跳过互动图层合成，拷贝原片。", duration)
-                shutil.copy2(self.input_path, self.output_path)
+                shutil.copy2(self.input_path, output_candidate)
+                output_candidate.replace(self.output_path)
                 return self.output_path
 
             fps = 30
@@ -638,9 +646,9 @@ class InteractionOverlayProcessor(VideoProcessorBase):
                 audio_cues: List[str] = []
                 p_idx = 0
                 for trigger in triggers:
-                    # 点赞 click @ +0.8s, 关注 click @ +1.4s
-                    t_like_ms = int((trigger.start_sec + 0.8) * 1000)
-                    t_follow_ms = int((trigger.start_sec + 1.4) * 1000)
+                    # 与画面状态切换严格同步：点赞 @ +1.0s，关注 @ +1.7s
+                    t_like_ms = int((trigger.start_sec + LIKE_CLICK_OFFSET_SEC) * 1000)
+                    t_follow_ms = int((trigger.start_sec + FOLLOW_CLICK_OFFSET_SEC) * 1000)
 
                     p1_label = f"p_{p_idx}"
                     filter_chunks.append(
@@ -674,22 +682,23 @@ class InteractionOverlayProcessor(VideoProcessorBase):
                 "-crf", "20",
                 "-c:a", "aac",
                 "-b:a", "192k",
-                str(self.output_path),
+                str(output_candidate),
             ]
 
             logger.info("[RunwayCTA] 开始合成互动视频: %s -> %s", self.input_path.name, self.output_path.name)
             subprocess.run(ffmpeg_cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
             # 5. 校验成片完整性
-            if not self.output_path.is_file() or self.output_path.stat().st_size <= 1_000_000:
-                raise VideoProcessingError(f"成片文件无效或体积异常: {self.output_path}")
+            if not output_candidate.is_file() or output_candidate.stat().st_size <= 1_000_000:
+                raise VideoProcessingError(f"成片文件无效或体积异常: {output_candidate}")
 
-            out_duration = get_video_duration_ffprobe(self.output_path)
+            out_duration = get_video_duration_ffprobe(output_candidate)
             if abs(out_duration - duration) > 0.8:
                 raise VideoProcessingError(
                     f"合成后时长偏差异常: 源片 {duration:.2f}s, 成片 {out_duration:.2f}s"
                 )
 
+            output_candidate.replace(self.output_path)
             logger.info("[RunwayCTA] 成功生成跑道互动成片: %s (时长 %.2fs)", self.output_path.name, out_duration)
             return self.output_path
 
@@ -697,5 +706,6 @@ class InteractionOverlayProcessor(VideoProcessorBase):
             logger.error("[RunwayCTA] 互动图层处理失败: %s", exc, exc_info=True)
             raise VideoProcessingError(f"互动图层处理失败: {exc}") from exc
         finally:
+            output_candidate.unlink(missing_ok=True)
             if cleanup_temp and work_dir and work_dir.exists():
                 shutil.rmtree(work_dir, ignore_errors=True)

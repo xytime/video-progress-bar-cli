@@ -8,11 +8,11 @@
 4. 核心视效组件：
    - create_badge_a (中央白瓷三联胶囊，点赞/关注状态)
    - create_hook_banner (尾部转化顶栏横幅)
-   - render_option_c_pointer (左下角黑曜石磨砂胶囊 + 45° 跑道微标，无内置箭头)
+   - render_option_c_pointer (左下角黑曜石磨砂胶囊 + 垂直向下跑道微标)
 5. 单帧合成 build_overlay_frame：
    - 画布尺寸 1080x1920，RGBA 格式
    - 中央胶囊定位在 Y=820
-   - 左下角组件定位在 X=85, Y=1680
+   - 左下角组件定位在 X=70, Y=1460
    - 双语字幕区 (Y=1040~1260) 100% 洁净，无任何像素遮挡
 6. 触发时机计算 compute_triggers：
    - 极短视频 (<12s) 安全跳过
@@ -30,6 +30,7 @@
 | Version | Date       | Author      | Description |
 | ------- | ---------- | ----------- | ----------- |
 | 1.0.0   | 2026-09-19 | Antigravity | 初始创建：Project Runway-CTA 完整单元测试集，覆盖图形、时序、音频、避让与发布选片路由 |
+| 2.0.1   | 2026-09-19 | Codex       | 补充长视频精确触发公式与生产默认参数回归测试 |
 """
 import os
 import sys
@@ -175,10 +176,15 @@ class TestComputeTriggers:
 
     def test_long_video_golden_hook_timing(self):
         """验收：15 分钟长视频的 T1 触发时机在黄金 10~15s 窗口内，不再是 2 分 39 秒"""
-        triggers = compute_triggers(885.0)  # iJEhc52SBMw: 885.77s
+        triggers = compute_triggers(885.770998)  # iJEhc52SBMw
         assert len(triggers) == 2
-        assert 10.0 <= triggers[0].start_sec <= 15.0, f"长视频 T1 超出黄金窗口: {triggers[0].start_sec}s"
+        assert triggers[0].start_sec == 15.0
+        assert triggers[1].start_sec == 869.77
         assert triggers[1].with_hook
+
+    def test_production_defaults_match_v2_formula(self):
+        assert settings.interaction_trigger_early_ratio == pytest.approx(0.12)
+        assert settings.interaction_trigger_end_seconds == pytest.approx(16.0)
 
 
 class TestInteractionOverlayProcessorUnit:
