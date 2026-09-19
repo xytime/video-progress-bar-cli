@@ -12,6 +12,7 @@
 | 3.62.0 | 2026-09-18 | Antigravity | 解耦英语世界生产触发与发布窗口，增加专属发布窗口与库存水位控制。 |
 | 3.61.11 | 2026-09-17 | Antigravity | 新增英语世界每日发布上限 english_world_daily_publish_limit，默认 10。 |
 | 3.61.10 | 2026-09-17 | Antigravity | 默认 YouTube 认证探针改为白名单稳定视频，避免历史样例被 bot 风控误杀。 |
+| 3.63.0 | 2026-09-19 | Antigravity | 新增 enable_wechat_comment_interaction 特性开关，默认关闭确保生产零风险与开发隔离。 |
 | language-v1 | 2026-09-09 | Codex | 英语世界独立语言审校专用开关、模型与超时，默认影子关闭。 |
 | 3.61.9 | 2026-09-08 | Codex | 仪表盘可显式绑定全部 IPv4 网卡，便于局域网直接访问；浏览器来源仍由控制面同源守卫校验。 |
 | 3.61.7 | 2026-09-05 | Codex | 自动回查默认每轮两条，单作品十分钟冷却；发布额度与回查频率分离。 |
@@ -192,6 +193,10 @@ class Settings(BaseSettings):
     enable_wechat_desktop_quick_login: bool = False
     wechat_desktop_quick_login_timeout_seconds: int = Field(default=15, ge=1, le=60)
     enable_wechat_desktop_visual_auth_fallback: bool = False
+
+    # 视频号评论区首评引导开关。默认关闭以确保生产隔离与零副作用。
+    # 仅在开发验证完毕并在 .env 显式设置为 True 时，流水线发布成功后才自动触发发评。
+    enable_wechat_comment_interaction: bool = False
 
 
     # Google Gemini API Key

@@ -1060,6 +1060,9 @@ class PipelineManager:
         if not platform_post_id:
             return
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        if not settings.enable_wechat_comment_interaction:
+            logger.debug("[%s] enable_wechat_comment_interaction 未开启，跳过自动评论引导。", prefix or "wechat")
+            return
         cmd = [
             self._VENV_PYTHON,
             str(self._PRJ_ROOT / "scripts" / "wechat_commenter.py"),
