@@ -6,13 +6,16 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-19 | Antigravity | 加固安全：引入 fcntl 文件锁、原子写盘、槽位抽象强校验与学习前审查门禁 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：实现自生长沉淀、经验滑动窗口与模板检索 |
 """
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +34,7 @@ class StrategyStore:
 
     def __init__(self, storage_path: Path | str = DEFAULT_STRATEGY_FILE) -> None:
         self.path = Path(storage_path)
+        self.lock_path = self.path.with_suffix(".lock")
         self._data: Dict[str, Any] = {}
         self.load()
 
@@ -99,56 +103,90 @@ class StrategyStore:
         self.save()
 
     def save(self) -> None:
-        """持久化策略库。"""
+        """持久化策略库（带进程排他锁与临时文件原子重命名）。"""
         self._data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.path.write_text(json.dumps(self._data, indent=2, ensure_ascii=False), encoding="utf-8")
-        except Exception as exc:
-            logger.error("Failed to save strategy file %s: %s", self.path, exc)
+        content = json.dumps(self._data, indent=2, ensure_ascii=False)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
 
-    def learn_from_success(self, draft: InteractionDraft, video_title: str) -> None:
-        """从 AGY 成功的互动生成中提取高分模式并沉淀自生长库。"""
+        with open(self.lock_path, "w") as lock_f:
+            fcntl.flock(lock_f, fcntl.LOCK_EX)
+            try:
+                temp_path = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+                temp_path.write_text(content, encoding="utf-8")
+                temp_path.replace(self.path)
+            finally:
+                try:
+                    fcntl.flock(lock_f, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+
+    def learn_from_success(self, draft: InteractionDraft, video_title: str) -> bool:
+        """从已成功发表的互动中提取模式并沉淀自生长库。
+
+        Returns:
+            bool: 是否成功完成沉淀
+        """
+        # 1. 学习前敏感词与策略审查（Fail-Closed 绝不沉淀任何潜在违规内容）
+        try:
+            from video_processing.censor_engine import check_text, check_channel_policy
+            c1 = check_text(zh_text=draft.formatted_comment)
+            c2 = check_channel_policy(zh_text=draft.formatted_comment)
+            c3 = check_text(zh_text=draft.topic)
+            c4 = check_channel_policy(zh_text=draft.topic)
+            if c1.hit or c2.hit or c3.hit or c4.hit:
+                logger.warning("[StrategyStore] 拒绝沉淀学习：内容命中违禁规则 (c1=%s, c2=%s)", c1.hit, c2.hit)
+                return False
+        except Exception as exc:
+            logger.warning("[StrategyStore] 学习前审查异常 (%s)，fail-closed 拒绝沉淀。", exc)
+            return False
+
+        # 2. 重新加载最新存储，避免覆盖其它进程更新
+        self.load()
+
         category = draft.category if draft.category in self._data.get("categories", {}) else "General"
         if category not in self._data["categories"]:
             self._data["categories"][category] = []
 
         cat_list = self._data["categories"][category]
 
-        # 尝试抽象 topic 中的核心词
-        clean_title = re.sub(r"[#＃\[\]【】\s]+", " ", video_title).strip()
+        # 3. 槽位抽象提炼（必须成功生成带有 {core_subject} 的通用句式）
         topic_pattern = draft.topic
+        clean_title = re.sub(r"[#＃\[\]【】\s]+", " ", video_title).strip()
         if clean_title and clean_title in topic_pattern:
             topic_pattern = topic_pattern.replace(clean_title, "{core_subject}")
 
-        new_entry = {
-            "id": f"learned_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
-            "interaction_type": draft.interaction_type.value,
-            "topic_template": topic_pattern,
-            "poll_options": draft.poll_options,
-            "share_hook": draft.share_hook,
-            "formatted_comment_sample": draft.formatted_comment,
-            "weight": 1.1,
-            "learned_count": 1,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+        # 仅当 topic_pattern 成功包含 {core_subject} 槽位时，才允许进入 categories 通用模版库
+        # 绝不允许具体事件（如“白宫拉黑特定媒体”）无槽位污染通用模版
+        if "{core_subject}" in topic_pattern:
+            new_entry = {
+                "id": f"learned_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
+                "interaction_type": draft.interaction_type.value,
+                "topic_template": topic_pattern,
+                "poll_options": draft.poll_options,
+                "share_hook": draft.share_hook,
+                "formatted_comment_sample": draft.formatted_comment,
+                "weight": 1.1,
+                "learned_count": 1,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
 
-        # 检查是否已存在高度相似的模板
-        similar = next(
-            (t for t in cat_list if t.get("share_hook") == draft.share_hook and t.get("interaction_type") == draft.interaction_type.value),
-            None,
-        )
-        if similar:
-            similar["weight"] = round(similar.get("weight", 1.0) + 0.1, 2)
-            similar["learned_count"] = similar.get("learned_count", 0) + 1
-        else:
-            cat_list.append(new_entry)
+            # 检查是否已存在高度相似的模板
+            similar = next(
+                (t for t in cat_list if t.get("share_hook") == draft.share_hook and t.get("interaction_type") == draft.interaction_type.value),
+                None,
+            )
+            if similar:
+                similar["weight"] = round(similar.get("weight", 1.0) + 0.1, 2)
+                similar["learned_count"] = similar.get("learned_count", 0) + 1
+            else:
+                cat_list.append(new_entry)
 
-        # 保持滑动窗口容量限制，按权重和学习频次排序保留 Top N
-        cat_list.sort(key=lambda x: (x.get("weight", 1.0) * (x.get("learned_count", 0) + 1)), reverse=True)
-        self._data["categories"][category] = cat_list[:MAX_TEMPLATES_PER_CATEGORY]
+            # 保持滑动窗口容量限制，按权重和学习频次排序保留 Top N
+            cat_list.sort(key=lambda x: (x.get("weight", 1.0) * (x.get("learned_count", 0) + 1)), reverse=True)
+            self._data["categories"][category] = cat_list[:MAX_TEMPLATES_PER_CATEGORY]
 
-        # 记录精选 Exemplars
+        # 4. 记录精选 Exemplars（仅保留已发表且审查通过的样本）
         exemplars = self._data.setdefault("learned_exemplars", [])
         exemplars.append({
             "title": video_title,
@@ -157,10 +195,11 @@ class StrategyStore:
             "comment": draft.formatted_comment,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        self._data["learned_exemplars"] = exemplars[-30:]  # 保留最近 30 条样本
+        self._data["learned_exemplars"] = exemplars[-30:]
 
         self.save()
-        logger.info("[StrategyStore] Successfully learned new pattern for category '%s'", category)
+        logger.info("[StrategyStore] 成功完成经验沉淀，当前类目 '%s' 模版数: %d", category, len(cat_list))
+        return True
 
     def get_templates(self, category: str = "General", interaction_type: Optional[InteractionType] = None) -> List[Dict[str, Any]]:
         """按类目和互动类型检索最匹配的模板。"""

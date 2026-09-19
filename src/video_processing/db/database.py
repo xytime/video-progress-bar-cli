@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.64.0 | 2026-09-19 | Antigravity | 还原 idx_douyin_browser_launch_tickets_prelaunch_recovery 索引；增加严格限定 PUBLISHED 的 post_id/video_id 互动前置查询 DAL 方法与重试追踪。 |
 | 3.63.0 | 2026-09-19 | Antigravity | 新增 wechat_interactions 账本表及 DAL 方法，支持视频号评论区引导与状态追踪。 |
 | 3.62.0 | 2026-09-18 | Antigravity | 新增未确认英语世界通知步骤的安全重置方法，支持网络异常后受控重发。 |
 | 3.61.0 | 2026-09-18 | Antigravity | 新增英语世界待发池库存统计与今日发布数量统计方法。 |
@@ -1743,6 +1744,10 @@ class PipelineDB:
                 ON douyin_browser_launch_tickets(source_type, source_ref, launch_started_at)
             ''')
             cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_douyin_browser_launch_tickets_prelaunch_recovery
+                ON douyin_browser_launch_tickets(source_type, launch_started_at, prelaunch_canceled_at, issued_at)
+            ''')
+            cursor.execute('''
                 CREATE TABLE IF NOT EXISTS wechat_interactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     publication_id INTEGER NOT NULL,
@@ -1751,14 +1756,23 @@ class PipelineDB:
                     provider TEXT NOT NULL,
                     comment_text TEXT NOT NULL,
                     status TEXT NOT NULL CHECK(status IN ('PENDING', 'COMMENTED', 'SKIPPED_EXISTS', 'PENDING_REVIEW', 'FAILED')),
+                    attempt_count INTEGER DEFAULT 1,
                     evidence_path TEXT DEFAULT NULL,
                     error_message TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     commented_at TIMESTAMP DEFAULT NULL,
                     FOREIGN KEY(publication_id) REFERENCES wechat_publications(id) ON DELETE CASCADE,
                     UNIQUE(platform_post_id)
                 )
             ''')
+            cursor.execute("PRAGMA table_info(wechat_interactions)")
+            interaction_cols = {row[1] for row in cursor.fetchall()}
+            if "attempt_count" not in interaction_cols and interaction_cols:
+                cursor.execute("ALTER TABLE wechat_interactions ADD COLUMN attempt_count INTEGER DEFAULT 1")
+            if "updated_at" not in interaction_cols and interaction_cols:
+                cursor.execute("ALTER TABLE wechat_interactions ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_wechat_interactions_status ON wechat_interactions(status)
             ''')
@@ -9768,8 +9782,9 @@ class PipelineDB:
                 """
                 INSERT INTO wechat_interactions (
                     publication_id, platform_post_id, interaction_type, provider,
-                    comment_text, status, evidence_path, error_message, commented_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    comment_text, status, evidence_path, error_message, commented_at,
+                    attempt_count, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)
                 ON CONFLICT(platform_post_id) DO UPDATE SET
                     interaction_type = excluded.interaction_type,
                     provider = excluded.provider,
@@ -9777,7 +9792,9 @@ class PipelineDB:
                     status = excluded.status,
                     evidence_path = COALESCE(excluded.evidence_path, wechat_interactions.evidence_path),
                     error_message = excluded.error_message,
-                    commented_at = COALESCE(excluded.commented_at, wechat_interactions.commented_at)
+                    commented_at = COALESCE(excluded.commented_at, wechat_interactions.commented_at),
+                    attempt_count = COALESCE(wechat_interactions.attempt_count, 1) + 1,
+                    updated_at = CURRENT_TIMESTAMP
                 """,
                 (
                     publication_id, platform_post_id, interaction_type, provider,
@@ -9796,10 +9813,10 @@ class PipelineDB:
             ).fetchone()
             return dict(row) if row else None
 
-    def get_recent_published_wechat_posts_without_interaction(self, limit: int = 5) -> List[dict]:
-        """查询近期已发布或已确认但尚未发评的视频号作品。"""
+    def get_published_wechat_post_by_platform_id(self, platform_post_id: str) -> Optional[dict]:
+        """根据原生 platform_post_id 查询已公开发布的视频号作品（严格限定 state='PUBLISHED'）。"""
         with self.get_connection() as conn:
-            rows = conn.execute(
+            row = conn.execute(
                 """
                 SELECT 
                     w.id as publication_id,
@@ -9811,17 +9828,124 @@ class PipelineDB:
                     p.slice_index,
                     p.title,
                     p.zh_title,
-                    p.category
+                    p.category,
+                    i.status as interaction_status,
+                    i.attempt_count as interaction_attempt_count
+                FROM wechat_publications w
+                JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
+                WHERE w.platform_post_id = ?
+                  AND w.state = 'PUBLISHED'
+                """,
+                (platform_post_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_published_wechat_post_by_video_id(self, video_id: int) -> Optional[dict]:
+        """根据内部 video_id 查询已公开发布的视频号作品（严格限定 state='PUBLISHED'）。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT 
+                    w.id as publication_id,
+                    w.video_id,
+                    w.platform_post_id,
+                    w.state as wechat_state,
+                    w.created_at as publication_created_at,
+                    p.youtube_id,
+                    p.slice_index,
+                    p.title,
+                    p.zh_title,
+                    p.category,
+                    i.status as interaction_status,
+                    i.attempt_count as interaction_attempt_count
+                FROM wechat_publications w
+                JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
+                WHERE w.video_id = ?
+                  AND w.state = 'PUBLISHED'
+                ORDER BY w.id DESC
+                LIMIT 1
+                """,
+                (video_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_recent_published_wechat_posts_without_interaction(
+        self,
+        limit: int = 5,
+        include_pending_review: bool = True,
+        max_attempts: int = 5,
+    ) -> List[dict]:
+        """查询近期已公开发布但尚未发评或处于允许重试的视频号作品（严格限定 state='PUBLISHED'）。"""
+        with self.get_connection() as conn:
+            if include_pending_review:
+                condition = """
+                    (i.id IS NULL 
+                     OR i.status = 'PENDING'
+                     OR (i.status = 'PENDING_REVIEW' AND COALESCE(i.attempt_count, 1) < ?))
+                """
+                params = [max_attempts, max(1, int(limit))]
+            else:
+                condition = "(i.id IS NULL OR i.status = 'PENDING')"
+                params = [max(1, int(limit))]
+
+            rows = conn.execute(
+                f"""
+                SELECT 
+                    w.id as publication_id,
+                    w.video_id,
+                    w.platform_post_id,
+                    w.state as wechat_state,
+                    w.created_at as publication_created_at,
+                    p.youtube_id,
+                    p.slice_index,
+                    p.title,
+                    p.zh_title,
+                    p.category,
+                    i.status as interaction_status,
+                    COALESCE(i.attempt_count, 0) as interaction_attempt_count
                 FROM wechat_publications w
                 JOIN processed_videos p ON w.video_id = p.id
                 LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
                 WHERE w.platform_post_id IS NOT NULL
-                  AND (w.state IN ('SUBMITTED_BOUND', 'PUBLISHED', 'UNDER_REVIEW'))
-                  AND (i.id IS NULL OR i.status IN ('PENDING', 'PENDING_REVIEW'))
+                  AND w.state = 'PUBLISHED'
+                  AND {condition}
                 ORDER BY w.id DESC
                 LIMIT ?
                 """,
-                (max(1, int(limit)),)
+                params
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_pending_review_wechat_interactions(self, max_attempts: int = 5, limit: int = 10) -> List[dict]:
+        """专门查询处于 PENDING_REVIEW 且未超限的待回查作品。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT 
+                    w.id as publication_id,
+                    w.video_id,
+                    w.platform_post_id,
+                    w.state as wechat_state,
+                    p.youtube_id,
+                    p.slice_index,
+                    p.title,
+                    p.zh_title,
+                    p.category,
+                    i.status as interaction_status,
+                    COALESCE(i.attempt_count, 1) as interaction_attempt_count,
+                    i.updated_at as interaction_updated_at
+                FROM wechat_interactions i
+                JOIN wechat_publications w ON i.platform_post_id = w.platform_post_id
+                JOIN processed_videos p ON w.video_id = p.id
+                WHERE w.state = 'PUBLISHED'
+                  AND i.status = 'PENDING_REVIEW'
+                  AND COALESCE(i.attempt_count, 1) < ?
+                ORDER BY i.updated_at ASC
+                LIMIT ?
+                """,
+                (max_attempts, max(1, int(limit)))
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -9834,12 +9958,14 @@ class PipelineDB:
         error_message: Optional[str] = None,
         commented_at: Optional[str] = None,
     ) -> None:
-        """更新互动状态与审计证据。"""
+        """更新互动状态、重试次数与审计证据。"""
         with self.get_connection() as conn:
             conn.execute(
                 """
                 UPDATE wechat_interactions
                 SET status = ?,
+                    attempt_count = COALESCE(attempt_count, 1) + 1,
+                    updated_at = CURRENT_TIMESTAMP,
                     evidence_path = COALESCE(?, evidence_path),
                     error_message = ?,
                     commented_at = COALESCE(?, commented_at)

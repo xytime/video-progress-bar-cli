@@ -70,21 +70,6 @@
     ],
     "General": [
       {
-        "id": "learned_20260919_071114",
-        "interaction_type": "POLL_STAND",
-        "topic_template": "白宫拉黑特定媒体，你支持总统行使准入权还是捍卫新闻自由？",
-        "poll_options": [
-          "🅰️ 赞同总统：白宫享有准入管理权",
-          "🅱️ 捍卫媒体：监督权力不可设门槛",
-          "🔄 围观中立：各有立场，各说各话"
-        ],
-        "share_hook": "转发到群聊，测测身边的朋友更支持总统权威还是新闻自由！",
-        "formatted_comment_sample": "📌【今日互动】\n白宫拉黑特定媒体，总统权力边界与新闻自由的碰撞，你怎么看？\n\n🗳️【立场站队】\n🅰️ 赞同总统：白宫享有准入管理权\n🅱️ 捍卫媒体：监督权力不可设门槛\n🔄 围观中立：各有立场，各说各话\n\n💬 评论区扣【A】或【B】留下你的态度！\n📢 转发到群聊，测测好友们会站哪一边？👇",
-        "weight": 1.1,
-        "learned_count": 1,
-        "created_at": "2026-09-19T07:11:14.509895+00:00"
-      },
-      {
         "id": "general_poll_stand",
         "interaction_type": "POLL_STAND",
         "topic_template": "针对视频中关于{core_subject}的核心争议，你怎么看？",
@@ -94,6 +79,42 @@
         ],
         "share_hook": "💬 你的看法是什么？直接在评论区留下 A 或 B，转给好友一起探讨！",
         "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "general_warning_share",
+        "interaction_type": "WARNING_SHARE",
+        "topic_template": "视频中关于{core_subject}的风险警示与关键要点，很多朋友容易忽视！",
+        "poll_options": [
+          "已经注意防范",
+          "刚了解到及时避险"
+        ],
+        "share_hook": "⚠️ 随手转发给身边经常涉及的朋友提个醒，注意防范风险！",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "general_group_discussion",
+        "interaction_type": "GROUP_DISCUSSION",
+        "topic_template": "关于{core_subject}的最新动态与讨论，圈内各方各抒己见！",
+        "poll_options": [
+          "支持这一发展方向",
+          "持保留观望态度"
+        ],
+        "share_hook": "💬 转到你的工作群/讨论群，测测大家怎么看？",
+        "weight": 1.0,
+        "learned_count": 0
+      },
+      {
+        "id": "general_memo_collection",
+        "interaction_type": "MEMO_COLLECTION",
+        "topic_template": "关于{core_subject}的核心逻辑与复盘，一次性吸收压力大？",
+        "poll_options": [
+          "已抓住核心逻辑",
+          "先收藏慢慢复盘"
+        ],
+        "share_hook": "📦 知识点密集建议先转发给‘文件传输助手’或收藏，闲暇时慢慢复盘！",
+        "weight": 0.9,
         "learned_count": 0
       },
       {
@@ -110,13 +131,5 @@
       }
     ]
   },
-  "learned_exemplars": [
-    {
-      "title": "Trump Bans CNN, MS NOW, Politico From White House",
-      "category": "General",
-      "type": "POLL_STAND",
-      "comment": "📌【今日互动】\n白宫拉黑特定媒体，总统权力边界与新闻自由的碰撞，你怎么看？\n\n🗳️【立场站队】\n🅰️ 赞同总统：白宫享有准入管理权\n🅱️ 捍卫媒体：监督权力不可设门槛\n🔄 围观中立：各有立场，各说各话\n\n💬 评论区扣【A】或【B】留下你的态度！\n📢 转发到群聊，测测好友们会站哪一边？👇",
-      "timestamp": "2026-09-19T07:11:14.509945+00:00"
-    }
-  ]
+  "learned_exemplars": []
 }

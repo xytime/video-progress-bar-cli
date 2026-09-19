@@ -28,6 +28,10 @@ class InteractionContractError(ValueError):
     """互动评论内容不满足质量或平台格式合同。"""
 
 
+class CensorshipViolationError(InteractionContractError):
+    """互动评论内容命中安全审查敏感违规词，一票否决。"""
+
+
 @dataclass(frozen=True)
 class InteractionDraft:
     """互动评论待发表草稿。"""

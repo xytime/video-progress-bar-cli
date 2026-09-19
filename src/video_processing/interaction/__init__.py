@@ -9,19 +9,44 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-19 | Antigravity | 架构解耦：轻量导出数据合同，对重型依赖（Playwright, Notifier）采用 __getattr__ 懒加载 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：独立微内核包 |
 """
 
-from .contract import InteractionDraft, InteractionResult, InteractionType
-from .service import InteractionService
-from .browser_commenter import BrowserCommenter
-from .notifier import InteractionNotifier
+from .contract import (
+    CensorshipViolationError,
+    InteractionContractError,
+    InteractionDraft,
+    InteractionResult,
+    InteractionType,
+    validate_interaction_draft,
+)
 
 __all__ = [
+    "CensorshipViolationError",
+    "InteractionContractError",
     "InteractionDraft",
     "InteractionResult",
     "InteractionType",
+    "validate_interaction_draft",
     "InteractionService",
     "BrowserCommenter",
     "InteractionNotifier",
 ]
+
+
+def __getattr__(name: str):
+    if name == "InteractionService":
+        from .service import InteractionService
+        return InteractionService
+    if name == "BrowserCommenter":
+        from .browser_commenter import BrowserCommenter
+        return BrowserCommenter
+    if name == "InteractionNotifier":
+        from .notifier import InteractionNotifier
+        return InteractionNotifier
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return __all__
