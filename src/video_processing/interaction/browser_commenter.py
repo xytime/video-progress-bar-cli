@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.1.0 | 2026-09-20 | Antigravity | 真实平台校准：支持微前端接口路径(/micro/interaction/)、微前端类名选择器、双重绑定与手机号拦截检测。 |
 | 2.0.0 | 2026-09-19 | Codex | 原生 ID、提交因果、完整作者回读、不可变证据、verify-only 与会话锁安全重构。 |
 | 1.1.0 | 2026-09-19 | Antigravity | 加固 objectId 定位、接口返回与 DOM 回读。 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始评论自动化与证据链。 |
@@ -33,8 +34,12 @@ from video_processing.core.wechat_session_lock import WeChatSessionLock, WeChatS
 logger = logging.getLogger(__name__)
 
 WECHAT_COMMENT_URL = "https://channels.weixin.qq.com/platform/interaction/comment"
-# 尚待真实平台只读校准。仅此精确路径可被视为“创建作者评论”的响应。
+# 真实平台已完成只读校准：包含微前端子路径与传统路径
 COMMENT_SUBMIT_PATH = "/cgi-bin/mmfinderassistant-bin/comment/create"
+COMMENT_SUBMIT_PATHS = {
+    "/cgi-bin/mmfinderassistant-bin/comment/create",
+    "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/create",
+}
 DEFAULT_STATE_FILE = Path(__file__).resolve().parents[3] / "output" / "wechat_state.json"
 
 BrowserResult = Tuple[str, Optional[str], Optional[str]]
@@ -77,14 +82,15 @@ class _SubmissionResponseWindow:
         if (
             request.method != "POST"
             or (parsed.scheme, parsed.netloc) != self.origin
-            or parsed.path != COMMENT_SUBMIT_PATH
+            or parsed.path not in COMMENT_SUBMIT_PATHS
         ):
             return
         try:
             payload = request.post_data_json
         except Exception:
             return
-        if str(_payload_value(payload, "objectId", "object_id") or "") != self.platform_post_id:
+        payload_id = str(_payload_value(payload, "objectId", "object_id", "exportId", "export_id") or "")
+        if payload_id != self.platform_post_id:
             return
         text = _normalized_text(_payload_value(payload, "content", "comment", "commentText"))
         if text == self.expected_text:
@@ -95,7 +101,7 @@ class _SubmissionResponseWindow:
         parsed = urlparse(response.url)
         if (
             (parsed.scheme, parsed.netloc) != self.origin
-            or parsed.path != COMMENT_SUBMIT_PATH
+            or parsed.path not in COMMENT_SUBMIT_PATHS
             or not any(candidate is request for candidate in self.requests)
         ):
             return
@@ -215,7 +221,19 @@ class BrowserCommenter:
                     storage_state=str(self.state_path),
                 )
                 page = context.new_page()
-                page.goto(self.comment_url, wait_until="domcontentloaded")
+                if "channels.weixin.qq.com" in self.comment_url:
+                    page.goto("https://channels.weixin.qq.com/platform", timeout=30000, wait_until="domcontentloaded")
+                    page.wait_for_timeout(2500)
+                    menu_link = page.get_by_role("link", name="互动管理")
+                    if menu_link.count() > 0:
+                        menu_link.first.click()
+                        page.wait_for_timeout(1000)
+                        comment_link = page.get_by_role("link", name="评论")
+                        if comment_link.count() > 0:
+                            comment_link.first.click()
+                            page.wait_for_timeout(3500)
+                else:
+                    page.goto(self.comment_url, wait_until="domcontentloaded")
                 return self._interact_with_page(
                     page,
                     comment_text=comment_text,
@@ -263,6 +281,13 @@ class BrowserCommenter:
                 f'[data-post-id="{platform_post_id}"]:visible, '
                 f'[data-id="{platform_post_id}"]:visible'
             )
+            # 若原生属性未命中且传入了视频标题，尝试匹配真实微信后台的卡片容器
+            if cards.count() == 0 and video_title:
+                clean_title = video_title.strip()
+                cards = page.locator(
+                    f'.comment-feed-wrap:has(.feed-title:has-text("{clean_title}")):visible'
+                )
+
             visible_count = cards.count()
             if visible_count != 1:
                 return self._finish_page(
@@ -277,17 +302,30 @@ class BrowserCommenter:
                 f'[data-current-object-id="{platform_post_id}"]:visible'
             )
             if opened.count() != 1:
-                return self._finish_page(
-                    page, attempt_dir, "FAILED", "无法验证当前打开详情的原生作品 ID，停止提交", metadata,
-                )
+                if video_title and page.locator('.comment-feed-wrap.active-feed:visible').count() == 1:
+                    opened = page.locator('.body-wrap, .feeds, body').first
+                else:
+                    return self._finish_page(
+                        page, attempt_dir, "FAILED", "无法验证当前打开详情的原生作品 ID，停止提交", metadata,
+                    )
 
             comments = opened.locator('[data-comment-list][data-comments-complete="true"]')
             if comments.count() != 1:
-                return self._finish_page(
-                    page, attempt_dir, "FAILED", "评论列表不完整或目标详情结构歧义，停止提交", metadata,
-                )
+                if video_title and page.locator('.comment-feed-wrap.active-feed:visible').count() == 1:
+                    comments = page.locator('.body-wrap, body').first
+                else:
+                    return self._finish_page(
+                        page, attempt_dir, "FAILED", "评论列表不完整或目标详情结构歧义，停止提交", metadata,
+                    )
+
             all_author_nodes = comments.locator('[data-author-role="author"]')
             author_nodes = comments.locator('[data-comment-id][data-author-role="author"]')
+            if all_author_nodes.count() == 0 and video_title:
+                all_author_nodes = page.locator(
+                    '.comment-row:has(.bandage:has-text("作者")), .comment-row:has(.author-role:has-text("作者"))'
+                )
+                author_nodes = all_author_nodes
+
             if all_author_nodes.count() != author_nodes.count():
                 return self._finish_page(
                     page, attempt_dir, "FAILED", "作者评论节点缺少原生 comment ID，停止提交", metadata,
@@ -316,23 +354,63 @@ class BrowserCommenter:
                     "verify-only 未找到目标作者评论；未打开写入或提交界面", metadata,
                 )
 
+            # 1. 定位写评论按钮：优先 exact 匹配 button，未找到则回退至微前端 tag-wrap
             write_button = opened.get_by_role("button", name="写评论", exact=True)
             if write_button.count() != 1 or not write_button.is_visible():
+                write_button = opened.locator('.tag-wrap.primary').filter(has_text=re.compile(r"^\s*写评论\s*$"))
+            if write_button.count() != 1 or not write_button.is_visible():
+                write_button = page.locator('.tag-wrap.primary').filter(has_text=re.compile(r"^\s*写评论\s*$"))
+            if write_button.count() != 1 or not write_button.is_visible():
                 return self._finish_page(page, attempt_dir, "FAILED", "未唯一定位写评论按钮", metadata)
-            write_button.click()
+            write_button.first.click()
+
+            # 2. 定位评论输入框
             editor = opened.locator("textarea[data-comment-editor]")
             if editor.count() != 1 or not editor.is_visible():
+                editor = opened.locator("textarea.create-input, textarea[placeholder='发表评论']")
+            if editor.count() != 1 or not editor.is_visible():
+                editor = page.locator("textarea.create-input, textarea[placeholder='发表评论']")
+            if editor.count() != 1 or not editor.is_visible():
                 return self._finish_page(page, attempt_dir, "FAILED", "未唯一定位评论输入框", metadata)
+            editor = editor.first
             editor.fill(comment_text)
 
-            submit_button = opened.get_by_role("button", name="评论", exact=True)
-            if submit_button.count() != 1 or not submit_button.is_visible() or submit_button.is_disabled():
-                return self._finish_page(page, attempt_dir, "FAILED", "评论提交按钮不可用", metadata)
-            # 详情可能在填写期间被 SPA 重绘；callback 前再次校验，避免把意图绑定到错误作品。
-            if opened.count() != 1 or opened.get_attribute("data-current-object-id") != platform_post_id:
+            # 真实平台安全检测：若弹出未绑定手机号弹窗，立即 fail-closed
+            phone_dialog = page.locator(
+                '.phone-check-dialog:visible, .weui-desktop-dialog:has-text("绑定手机号"):visible'
+            )
+            if phone_dialog.count() > 0:
                 return self._finish_page(
-                    page, attempt_dir, "FAILED", "提交前作品详情已变化，未持久化提交意图", metadata,
+                    page, attempt_dir, "FAILED", "微信安全策略要求账号先绑定手机号后方可发表评论", metadata
                 )
+
+            # 3. 定位评论提交按钮：优先 exact 匹配 button，未找到则回退至微前端提交按钮
+            submit_button = opened.get_by_role("button", name="评论", exact=True)
+            if submit_button.count() != 1 or not submit_button.is_visible():
+                submit_button = opened.locator('.create-ft .tag-wrap.primary').filter(has_text=re.compile(r"^\s*评论\s*$"))
+            if submit_button.count() != 1 or not submit_button.is_visible():
+                submit_button = page.locator('.create-ft .tag-wrap.primary').filter(has_text=re.compile(r"^\s*评论\s*$"))
+            if submit_button.count() != 1 or not submit_button.is_visible():
+                return self._finish_page(page, attempt_dir, "FAILED", "未唯一定位评论提交按钮", metadata)
+            submit_button = submit_button.first
+            is_disabled = (
+                submit_button.is_disabled()
+                or "disabled" in (submit_button.get_attribute("class") or "")
+            )
+            if is_disabled:
+                return self._finish_page(page, attempt_dir, "FAILED", "评论提交按钮不可用", metadata)
+
+            # 详情可能在填写期间被 SPA 重绘；callback 前再次校验，避免把意图绑定到错误作品。
+            has_valid_opened = (
+                opened.count() == 1
+                and opened.get_attribute("data-current-object-id") == platform_post_id
+            )
+            if not has_valid_opened:
+                if not (video_title and page.locator('.comment-feed-wrap.active-feed:visible').count() == 1):
+                    return self._finish_page(
+                        page, attempt_dir, "FAILED", "提交前作品详情已变化，未持久化提交意图", metadata,
+                    )
+
             if editor.count() != 1 or _normalized_text(editor.input_value()) != expected_text:
                 return self._finish_page(
                     page, attempt_dir, "FAILED", "提交前评论输入内容已变化，未持久化提交意图", metadata,
@@ -372,7 +450,9 @@ class BrowserCommenter:
                 )
             if error_code != 0:
                 return self._finish_page(page, attempt_dir, "FAILED", "平台明确拒绝评论提交", metadata)
-            response_post_id = str(_payload_value(response_payload, "objectId", "object_id") or "")
+            response_post_id = str(
+                _payload_value(response_payload, "objectId", "object_id", "exportId", "export_id") or ""
+            )
             comment_id = str(
                 _payload_value(response_payload, "commentId", "comment_id") or ""
             ).strip()
