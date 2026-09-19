@@ -67,9 +67,9 @@ def _select_target(
     video_id: Optional[int],
 ) -> Optional[dict]:
     if platform_post_id:
-        return db.get_published_wechat_post_by_platform_id(platform_post_id)
+        return db.get_commentable_wechat_post_by_platform_id(platform_post_id)
     if video_id is not None:
-        return db.get_published_wechat_post_by_video_id(video_id)
+        return db.get_commentable_wechat_post_by_video_id(video_id)
     return db.get_wechat_interaction_discovery_candidate()
 
 
@@ -109,7 +109,7 @@ def run_interaction_tick(
         return InteractionTickResult(
             status="NO_WORK",
             platform_post_id=platform_post_id,
-            detail="无严格 PUBLISHED 目标或显式目标不可用",
+            detail="无已公开或已绑定原生 ID 的可评论目标，或显式目标不可用",
         )
 
     post_id = str(target["platform_post_id"])

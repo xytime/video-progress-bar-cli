@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-09-19 | Codex | 区分严格发布确认与可评论已绑定原生 ID 候选，防止互动放宽污染发布事实。 |
 | 1.1.0 | 2026-09-19 | Antigravity | 依据 Codex 审查加固：补充审查一票否决、精准状态绑定、无裸 SQL 规范与 dry-run 幂等测试 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：对互动引导各模块进行隔离单元测试 |
 """
@@ -390,3 +391,17 @@ class TestInteractionDAL:
         assert target_ok is not None
         assert target_ok["platform_post_id"] == "export/post_published_ok"
         assert target_ok["wechat_state"] == "PUBLISHED"
+
+        # SUBMITTED_BOUND 已有原生平台 ID，供互动系统按明确运营策略使用；
+        # 它仍不应污染严格 PUBLISHED 的发布确认查询。
+        db.add_video("yt_bound", "Bound Video", "ch_test_1", score=80)
+        db.record_wechat_publication_confirmation(
+            "yt_bound",
+            evidence_path=str(evidence),
+            state="SUBMITTED_BOUND",
+            platform_post_id="export/post_bound_ok",
+        )
+        assert db.get_published_wechat_post_by_platform_id("export/post_bound_ok") is None
+        commentable = db.get_commentable_wechat_post_by_platform_id("export/post_bound_ok")
+        assert commentable is not None
+        assert commentable["wechat_state"] == "SUBMITTED_BOUND"

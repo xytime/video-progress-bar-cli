@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.67.0 | 2026-09-19 | Codex | 互动任务的可评论候选扩展到已绑定原生作品 ID 的 SUBMITTED_BOUND，保留发布账本原状态。 |
 | 3.66.0 | 2026-09-19 | Codex | 新增严格最新 PUBLISHED 视频号作品查询，人工单次互动不得在已有账本时回退旧作品。 |
 | 3.65.0 | 2026-09-19 | Codex | 将视频号互动账本升级为可恢复 lease/提交意图状态机，固化评论文本、有界退避与 UNCERTAIN 只读回查边界。 |
 | 3.64.0 | 2026-09-19 | Antigravity | 还原 idx_douyin_browser_launch_tickets_prelaunch_recovery 索引；增加严格限定 PUBLISHED 的 post_id/video_id 互动前置查询 DAL 方法与重试追踪。 |
@@ -9996,7 +9997,7 @@ class PipelineDB:
                 SELECT i.id, i.status
                 FROM wechat_interactions i
                 JOIN wechat_publications w ON w.id = i.publication_id
-                WHERE w.state = 'PUBLISHED'
+                WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND i.attempt_count < i.max_attempts
                   AND i.lease_token IS NULL
                   AND (
@@ -10225,6 +10226,38 @@ class PipelineDB:
             ).fetchone()
             return dict(row) if row else None
 
+    def get_commentable_wechat_post_by_platform_id(self, platform_post_id: str) -> Optional[dict]:
+        """按原生 ID 返回可评论作品，不把历史回查缺失误判为未发布。
+
+        ``SUBMITTED_BOUND`` 代表提交时已取得并绑定平台原生作品 ID。互动系统可在
+        用户认可该状态等同已发布时使用它，但不会改写发布账本的真实回查状态。
+        """
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    w.id as publication_id,
+                    w.video_id,
+                    w.platform_post_id,
+                    w.state as wechat_state,
+                    w.created_at as publication_created_at,
+                    p.youtube_id,
+                    p.slice_index,
+                    p.title,
+                    p.zh_title,
+                    p.category,
+                    i.status as interaction_status,
+                    i.attempt_count as interaction_attempt_count
+                FROM wechat_publications w
+                JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
+                WHERE w.platform_post_id = ?
+                  AND w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
+                """,
+                (platform_post_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
     def get_published_wechat_post_by_video_id(self, video_id: int) -> Optional[dict]:
         """根据内部 video_id 查询已公开发布的视频号作品（严格限定 state='PUBLISHED'）。"""
         with self.get_connection() as conn:
@@ -10252,6 +10285,36 @@ class PipelineDB:
                 LIMIT 1
                 """,
                 (video_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_commentable_wechat_post_by_video_id(self, video_id: int) -> Optional[dict]:
+        """按内部视频 ID 返回可评论的已公开或已绑定作品。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    w.id as publication_id,
+                    w.video_id,
+                    w.platform_post_id,
+                    w.state as wechat_state,
+                    w.created_at as publication_created_at,
+                    p.youtube_id,
+                    p.slice_index,
+                    p.title,
+                    p.zh_title,
+                    p.category,
+                    i.status as interaction_status,
+                    i.attempt_count as interaction_attempt_count
+                FROM wechat_publications w
+                JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
+                WHERE w.video_id = ?
+                  AND w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
+                ORDER BY w.id DESC
+                LIMIT 1
+                """,
+                (video_id,),
             ).fetchone()
             return dict(row) if row else None
 
@@ -10290,8 +10353,39 @@ class PipelineDB:
             ).fetchone()
             return dict(row) if row else None
 
+    def get_latest_commentable_wechat_post(self) -> Optional[dict]:
+        """返回最新可评论作品，保留其原始发布状态供审计展示。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    w.id AS publication_id,
+                    w.video_id,
+                    w.platform_post_id,
+                    w.state AS wechat_state,
+                    w.created_at AS publication_created_at,
+                    p.youtube_id,
+                    p.slice_index,
+                    p.title,
+                    p.zh_title,
+                    p.category,
+                    i.id AS interaction_id,
+                    i.status AS interaction_status,
+                    i.attempt_count AS interaction_attempt_count,
+                    i.comment_text AS interaction_comment_text
+                FROM wechat_publications w
+                JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN wechat_interactions i ON i.platform_post_id = w.platform_post_id
+                WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
+                  AND w.platform_post_id IS NOT NULL
+                ORDER BY w.id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            return dict(row) if row else None
+
     def get_wechat_interaction_discovery_candidate(self) -> Optional[dict]:
-        """只读发现尚未建立互动账本的最近 PUBLISHED 作品。"""
+        """只读发现尚未建立互动账本的最近可评论作品。"""
         with self.get_connection() as conn:
             row = conn.execute(
                 '''
@@ -10301,7 +10395,8 @@ class PipelineDB:
                 FROM wechat_publications w
                 JOIN processed_videos p ON p.id = w.video_id
                 LEFT JOIN wechat_interactions i ON i.platform_post_id = w.platform_post_id
-                WHERE w.state = 'PUBLISHED' AND w.platform_post_id IS NOT NULL
+                WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
+                  AND w.platform_post_id IS NOT NULL
                   AND i.id IS NULL
                 ORDER BY w.id DESC
                 LIMIT 1
@@ -10315,7 +10410,11 @@ class PipelineDB:
         include_pending_review: bool = True,
         max_attempts: int = 5,
     ) -> List[dict]:
-        """查询近期已公开发布但尚未发评或处于允许重试的视频号作品（严格限定 state='PUBLISHED'）。"""
+        """查询近期可评论但尚未发评或处于允许重试的视频号作品。
+
+        发布账本仍保留严格的 ``PUBLISHED`` 语义；这里仅为互动候选视图，允许
+        已绑定平台原生 ID 的 ``SUBMITTED_BOUND`` 作品进入人工认可的互动流程。
+        """
         with self.get_connection() as conn:
             if include_pending_review:
                 condition = """
@@ -10347,7 +10446,7 @@ class PipelineDB:
                 JOIN processed_videos p ON w.video_id = p.id
                 LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
                 WHERE w.platform_post_id IS NOT NULL
-                  AND w.state = 'PUBLISHED'
+                  AND w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND {condition}
                 ORDER BY w.id DESC
                 LIMIT ?
@@ -10377,7 +10476,7 @@ class PipelineDB:
                 FROM wechat_interactions i
                 JOIN wechat_publications w ON i.platform_post_id = w.platform_post_id
                 JOIN processed_videos p ON w.video_id = p.id
-                WHERE w.state = 'PUBLISHED'
+                WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND i.status = 'UNCERTAIN'
                   AND COALESCE(i.attempt_count, 0) < ?
                   AND i.next_attempt_at IS NOT NULL

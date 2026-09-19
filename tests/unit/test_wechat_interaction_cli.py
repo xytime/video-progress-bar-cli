@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-19 | Codex | 覆盖 SUBMITTED_BOUND 原生 ID 的显式互动执行，避免历史回查延迟阻断已发布作品。 |
 | 1.0.0 | 2026-09-19 | Codex | 覆盖默认关闭、只读 dry-run、提交 callback 与 UNCERTAIN 核验协议。 |
 """
 
@@ -62,6 +63,16 @@ def _seed_published(db: PipelineDB, tmp_path: Path) -> None:
     )
 
 
+def _seed_submitted_bound(db: PipelineDB, tmp_path: Path) -> None:
+    db.add_video("yt_bound", "Bound Test", "channel", score=90)
+    evidence = tmp_path / "bound.png"
+    evidence.write_bytes(b"bound proof")
+    db.record_wechat_publication_confirmation(
+        "yt_bound", evidence_path=str(evidence), state="SUBMITTED_BOUND",
+        platform_post_id="export/bound_post",
+    )
+
+
 def test_runner_never_resends_uncertain_and_reuses_persisted_text(tmp_path: Path) -> None:
     db = PipelineDB(db_path=str(tmp_path / "runner.db"))
     _seed_published(db, tmp_path)
@@ -90,6 +101,22 @@ def test_runner_dry_run_does_not_create_interaction_ledger(tmp_path: Path) -> No
     assert result.status == "DRY_RUN"
     assert db.get_wechat_interaction_by_post_id("export/cli_post") is None
     assert services.calls == []
+
+
+def test_runner_accepts_explicit_submitted_bound_native_post_id(tmp_path: Path) -> None:
+    db = PipelineDB(db_path=str(tmp_path / "bound.db"))
+    _seed_submitted_bound(db, tmp_path)
+    services = _FakeServices(["COMMENTED"])
+
+    result = run_interaction_tick(
+        db,
+        services,
+        platform_post_id="export/bound_post",
+        evidence_root=tmp_path,
+    )
+
+    assert result.status == "COMMENTED"
+    assert services.calls[0]["platform_post_id"] == "export/bound_post"
 
 
 def test_reconcile_only_does_not_generate_or_click_for_new_publication(tmp_path: Path) -> None:
