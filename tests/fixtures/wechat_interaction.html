@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>隔离视频号评论夹具</title></head>
+<body>
+  <main id="cards">
+    <!-- 标题故意重复且目标排在第二位，证明实现不依赖标题或列表索引。 -->
+    <button class="post-card" data-object-id="post-other">重复标题</button>
+    <button class="post-card" data-object-id="post-target">重复标题</button>
+  </main>
+  <section id="detail-host"></section>
+  <script>
+    window.fixtureState = {mode: 'success', writeOpened: 0, submitClicked: 0};
+    const host = document.querySelector('#detail-host');
+    document.querySelectorAll('.post-card').forEach(card => card.addEventListener('click', () => {
+      const id = card.dataset.objectId;
+      host.innerHTML = `
+        <article data-current-object-id="${id}">
+          <div data-comment-list data-comments-complete="true"></div>
+          <button type="button" data-write>写评论</button>
+          <div data-compose hidden>
+            <textarea data-comment-editor></textarea>
+            <button type="button" data-submit>评论</button>
+          </div>
+        </article>`;
+      const detail = host.firstElementChild;
+      detail.querySelector('[data-write]').addEventListener('click', () => {
+        window.fixtureState.writeOpened++;
+        detail.querySelector('[data-compose]').hidden = false;
+      });
+      detail.querySelector('[data-submit]').addEventListener('click', async () => {
+        window.fixtureState.submitClicked++;
+        const content = detail.querySelector('textarea').value;
+        const mode = window.fixtureState.mode;
+        if (mode === 'no-api') return;
+        if (mode === 'unrelated-only') {
+          await fetch('/cgi-bin/mmfinderassistant-bin/comment/list', {
+            method: 'POST', headers: {'content-type': 'application/json'},
+            body: JSON.stringify({objectId: id, content})
+          });
+          return;
+        }
+        if (mode === 'cross-origin-only') {
+          await fetch('http://wrong-origin.invalid/cgi-bin/mmfinderassistant-bin/comment/create', {
+            method: 'POST', headers: {'content-type': 'text/plain'},
+            body: JSON.stringify({objectId: id, content})
+          });
+          return;
+        }
+        const response = await fetch('/cgi-bin/mmfinderassistant-bin/comment/create', {
+          method: 'POST', headers: {'content-type': 'application/json'},
+          body: JSON.stringify({objectId: id, content})
+        });
+        const payload = await response.json();
+        if (payload.errCode !== 0) return;
+        const delay = mode === 'delayed' ? 250 : 0;
+        setTimeout(() => {
+          const node = document.createElement('div');
+          node.dataset.commentId = payload.data.commentId;
+          node.dataset.authorRole = mode === 'author-mismatch' ? 'viewer' : 'author';
+          node.textContent = mode === 'partial' ? content.slice(0, 5) : content;
+          detail.querySelector('[data-comment-list]').appendChild(node);
+        }, delay);
+      });
+      detail.querySelector('textarea').addEventListener('input', () => {
+        if (window.fixtureState.mode === 'reorder-before-submit') {
+          detail.dataset.currentObjectId = 'post-other';
+        }
+      });
+    }));
+  </script>
+</body>
+</html>

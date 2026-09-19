@@ -9,6 +9,7 @@
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 初始创建：WeChat Session 看门狗脚本，仅访问发布页刷新 Cookie |
 | 1.1.0   | 2026-06-27 | Claude_Opus_4.8 | [无痛重登·预警] 会话龄追踪(标记文件，刷新不重置、过期清零) + 临期预警：龄超 settings.wechat_session_warn_hours(默认22h) 即推 Telegram「该重扫」，在 ~24h 服务端硬上限断档前提醒；Telegram 凭据迁移至 settings（消除 os.environ 违规） |
 | 1.2.0   | 2026-06-27 | Claude_Opus_4.8 | 临期预警/过期告警话术改为引导「发 /wechat_login 取二维码到 Telegram 手机扫码」，与 pipeline_agent 无头 QR 推送闭环（替代原终端 --no-headless 命令） |
+| 1.3.0   | 2026-09-19 | Codex | 评论互动开关启用时，以登录态派生共享锁覆盖完整保活会话。 |
 
 Exit Codes:
     0 - Session 活跃，Cookie 已刷新
@@ -27,6 +28,7 @@ from playwright.sync_api import sync_playwright
 # [Claude_Opus_4.8] 接入 settings 单一真相源（临期预警阈值 + Telegram 凭据，消除 os.environ 违规）
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from config.settings import settings
+from video_processing.core.wechat_session_lock import guarded_wechat_browser_session
 
 try:
     import requests as _requests
@@ -108,6 +110,12 @@ def _maybe_warn_expiry(login_at_path: Path, warned_path: Path) -> None:
         logger.info(f"[Keepalive] Sent pre-expiry warning (age={age_h:.1f}h >= {warn_h}h).")
 
 
+@guarded_wechat_browser_session(
+    enabled=lambda: settings.enable_wechat_comment_interaction,
+    state_parameter="state_path",
+    timeout_seconds=0.0,
+    busy_result=1,
+)
 def run_keepalive(
     state_path: str = "output/wechat_state.json",
     dwell: int = 15,

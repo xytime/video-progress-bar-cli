@@ -24,11 +24,36 @@ from video_processing.interaction.contract import (
     InteractionContractError,
     InteractionDraft,
     InteractionType,
+    render_interaction_comment,
     validate_interaction_draft,
 )
 from video_processing.interaction.rule_provider import RuleInteractionProvider
 from video_processing.interaction.service import InteractionService
 from video_processing.interaction.strategy_store import StrategyStore
+
+
+def _draft(
+    *,
+    topic: str = "关于技术迭代的思考，你怎么看？",
+    interaction_type: InteractionType = InteractionType.POLL_STAND,
+    poll_options: list[str] | None = None,
+    share_hook: str = "转发到群聊测测大家态度！",
+    provider: str = "test_provider",
+    category: str = "General",
+) -> InteractionDraft:
+    """构造与受控渲染合同一致的测试草稿。"""
+    options = poll_options or ["坚定看好", "持保留意见"]
+    return InteractionDraft(
+        topic=topic,
+        interaction_type=interaction_type,
+        poll_options=options,
+        share_hook=share_hook,
+        formatted_comment=render_interaction_comment(
+            topic=topic, interaction_type=interaction_type, poll_options=options, share_hook=share_hook
+        ),
+        provider=provider,
+        category=category,
+    )
 
 
 class TestInteractionContract:
@@ -40,7 +65,12 @@ class TestInteractionContract:
             interaction_type="POLL_STAND",
             poll_options=["坚定看好", "持保留意见"],
             share_hook="转发到群聊测测大家态度！",
-            formatted_comment="📌【今日互动】关于技术迭代的思考\n🗳️【立场站队】\n🅰️ 坚定看好\n🅱️ 持保留意见\n📢 转发到群聊！",
+            formatted_comment=render_interaction_comment(
+                topic="关于技术迭代的思考，你怎么看？",
+                interaction_type=InteractionType.POLL_STAND,
+                poll_options=["坚定看好", "持保留意见"],
+                share_hook="转发到群聊测测大家态度！",
+            ),
             provider="test_provider",
             category="Tech",
         )
@@ -60,8 +90,8 @@ class TestInteractionContract:
                 provider="test",
             )
 
-    def test_poll_stand_requires_options(self):
-        with pytest.raises(InteractionContractError, match="投票型互动必须提供至少 2 个有效选项"):
+    def test_options_require_two_to_four_items(self):
+        with pytest.raises(InteractionContractError, match="投票选项必须为 2-4 项"):
             validate_interaction_draft(
                 topic="测试话题",
                 interaction_type="POLL_STAND",
@@ -71,8 +101,8 @@ class TestInteractionContract:
                 provider="test",
             )
 
-    def test_too_short_comment_raises(self):
-        with pytest.raises(InteractionContractError, match="排版评论过短"):
+    def test_options_required_for_every_interaction_type(self):
+        with pytest.raises(InteractionContractError, match="投票选项必须为 2-4 项"):
             validate_interaction_draft(
                 topic="测试话题",
                 interaction_type="WARNING_SHARE",
@@ -90,38 +120,36 @@ class TestStrategyStore:
         store_file = tmp_path / "strategies.json"
         store = StrategyStore(storage_path=store_file)
 
-        # 带有可抽象标题的草稿
-        draft = InteractionDraft(
+        draft = _draft(
             topic="针对视频中关于AI智能体的核心思考，你怎么看？",
             interaction_type=InteractionType.POLL_STAND,
             poll_options=["1-2年内普及", "短期不可能"],
             share_hook="转到技术群，测测同行怎么看！",
-            formatted_comment="📌【互动】关于AI智能体的核心思考\n🗳️【投票】\n🅰️ 1-2年内普及\n🅱️ 短期不可能\n📢 转到技术群！",
             provider="agy:test",
             category="AI/Tech",
         )
 
-        # 学习成功且提取了 {core_subject}
+        # 学习成功，但具体事件只能作为 exemplar，不能提升为跨主题模板。
         learned = store.learn_from_success(draft, "AI智能体")
         assert learned is True
+        assert store_file.exists()
 
-        # 重新加载验证
         reloaded_store = StrategyStore(storage_path=store_file)
         templates = reloaded_store.get_templates(category="AI/Tech", interaction_type=InteractionType.POLL_STAND)
         assert len(templates) >= 1
-        assert any("{core_subject}" in t.get("topic_template", "") for t in templates)
+        assert not any("核心思考" in t.get("topic_template", "") for t in templates)
+        assert reloaded_store._data["learned_exemplars"][-1]["title"] == "AI智能体"
 
     def test_store_learning_rejects_censorship_violation(self, tmp_path: Path):
         store_file = tmp_path / "strategies.json"
         store = StrategyStore(storage_path=store_file)
 
         # 包含违禁词的草稿
-        bad_draft = InteractionDraft(
+        bad_draft = _draft(
             topic="关于台独势力的讨论",
             interaction_type=InteractionType.POLL_STAND,
             poll_options=["A", "B"],
             share_hook="转到群聊！",
-            formatted_comment="📌【今日互动】关于台独势力的讨论内容，这是一段包含明显违禁词的内容！",
             provider="agy:test",
             category="General",
         )
@@ -136,12 +164,11 @@ class TestStrategyStore:
         store = StrategyStore(storage_path=store_file)
 
         # 话题无法与标题产生槽位替换（具体事件）
-        concrete_draft = InteractionDraft(
+        concrete_draft = _draft(
             topic="具体不可复用的孤立事件讨论，你怎么看？",
             interaction_type=InteractionType.POLL_STAND,
             poll_options=["支持", "反对"],
             share_hook="转给朋友！",
-            formatted_comment="📌【互动】具体不可复用的孤立事件讨论\n🗳️ 投票\n🅰️ 支持\n🅱️ 反对\n📢 转给朋友！这是一段足够长的合法文本。",
             provider="agy:test",
             category="General",
         )
@@ -185,12 +212,11 @@ class TestInteractionService:
 
     def test_service_agy_success(self):
         mock_agy = MagicMock()
-        mock_agy.generate.return_value = InteractionDraft(
+        mock_agy.generate.return_value = _draft(
             topic="AGY测试议题",
             interaction_type=InteractionType.GROUP_DISCUSSION,
             poll_options=["A", "B"],
             share_hook="转到群聊看看！",
-            formatted_comment="📌【议题】AGY测试议题\n🗳️ 站队：A 或 B\n📢 转到群聊看看！这是一段合规且足够长度的有效评论文字。",
             provider="agy:test-model",
             category="General",
         )
@@ -212,12 +238,11 @@ class TestInteractionService:
     def test_service_censorship_blocks_sensitive_agy_and_falls_back(self):
         mock_agy = MagicMock()
         # AGY 生成了敏感词“台独”
-        mock_agy.generate.return_value = InteractionDraft(
+        mock_agy.generate.return_value = _draft(
             topic="台独势力分析",
             interaction_type=InteractionType.POLL_STAND,
             poll_options=["A", "B"],
             share_hook="转发！",
-            formatted_comment="📌【今日互动】关于台独势力的分析，支持还是反对？这是一段违规内容！",
             provider="agy:test-model",
             category="General",
         )
@@ -246,15 +271,14 @@ class TestInteractionService:
     def test_dry_run_does_not_mutate_strategy_store(self, tmp_path: Path):
         store_file = tmp_path / "strategies.json"
         store = StrategyStore(storage_path=store_file)
-        mtime_before = store_file.stat().st_mtime_ns
+        assert not store_file.exists()
 
         service = InteractionService(store=store)
         draft = service.generate_comment(title="测试标题", description="测试描述", force_rule=True)
         assert draft is not None
 
-        # 验证文件完全未被修改
-        mtime_after = store_file.stat().st_mtime_ns
-        assert mtime_before == mtime_after
+        # 生成期不初始化或写入运行学习文件。
+        assert not store_file.exists()
 
 
 class TestBrowserCommenter:
@@ -330,8 +354,9 @@ class TestInteractionDAL:
             status="SKIPPED_EXISTS",
         )
         record_updated = db.get_wechat_interaction_by_post_id("export/test_post_123")
-        assert record_updated["status"] == "SKIPPED_EXISTS"
-        assert record_updated["interaction_type"] == "WARNING_SHARE"
+        # 已确认 COMMENTED 是终态，后来的去重观察不能覆盖原始提交证据。
+        assert record_updated["status"] == "COMMENTED"
+        assert record_updated["interaction_type"] == "POLL_STAND"
 
     def test_get_published_wechat_post_strictly_filters_published_state(self, tmp_path: Path):
         db_path = tmp_path / "test_pipeline.db"

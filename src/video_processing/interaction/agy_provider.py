@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：封装 AGY 结构化交互生成与受限重试 |
+| 1.1.0 | 2026-09-19 | Codex | 拒绝字段强制转换及额外字段，宿主确定性生成实际待审评论 |
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ from typing import Optional
 from config.settings import settings
 from video_processing.utils.agy_provider import AgyProviderError, run_agy_structured
 
-from .contract import InteractionContractError, InteractionDraft, validate_interaction_draft
+from .contract import (InteractionContractError, InteractionDraft, InteractionType,
+                       render_interaction_comment, validate_interaction_draft)
 from .prompt import INTERACTION_JSON_SCHEMA, build_interaction_prompt
 
 logger = logging.getLogger(__name__)
@@ -67,12 +69,19 @@ class AgyInteractionProvider:
                     command=self.command,
                     timeout_sec=self.timeout_seconds,
                 )
+                if not isinstance(payload, dict) or set(payload) != {"topic", "interaction_type", "poll_options", "share_hook"}:
+                    raise InteractionContractError("AGY 输出字段与合同不符")
+                kind = InteractionType(payload["interaction_type"])
+                rendered = render_interaction_comment(
+                    topic=payload["topic"], interaction_type=kind,
+                    poll_options=payload["poll_options"], share_hook=payload["share_hook"],
+                )
                 return validate_interaction_draft(
-                    topic=str(payload["topic"]),
-                    interaction_type=str(payload["interaction_type"]),
-                    poll_options=list(payload.get("poll_options") or []),
-                    share_hook=str(payload["share_hook"]),
-                    formatted_comment=str(payload["formatted_comment"]),
+                    topic=payload["topic"],
+                    interaction_type=kind,
+                    poll_options=payload["poll_options"],
+                    share_hook=payload["share_hook"],
+                    formatted_comment=rendered,
                     provider=f"agy:{self.model}",
                     category=category,
                 )

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.52.0 | 2026-09-19 | Codex | 视频号互动改为默认关闭的通用有界 worker 派发，保留可观测日志并优先恢复持久到期任务。 |
 | 3.51.0 | 2026-09-19 | Antigravity | 视频号发布成功后异步触发独立的评论区互动引导任务，与主流水线解耦。 |
 | 3.50.1 | 2026-09-09 | Codex | 所有携带合法 YouTube ID 的 P1 Telegram 回执统一补充标题和可点击的原视频链接。 |
 | 3.50.0 | 2026-09-09 | Codex | 中文正文硬合同与真实源路径 ASS 缓存/提交校验；缺失字幕不再默认信任成片 |
@@ -1056,30 +1057,39 @@ class PipelineManager:
         return settled
 
     def _trigger_wechat_interaction(self, platform_post_id: str, yid: str = "", slice_index: int = 0) -> None:
-        """触发视频号发布后的评论区互动引导（独立子进程，完全解耦且不阻塞主流程）。"""
+        """发布确认后派发通用 worker；平台 ID 只用于日志，不越过持久队列。"""
         if not platform_post_id:
             return
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
+        self._dispatch_wechat_interaction_worker(log_prefix=prefix or "wechat")
+
+    def _dispatch_wechat_interaction_worker(self, *, log_prefix: str = "wechat") -> None:
+        """异步启动一个单次有界 worker；不在主管线内生成文案或访问平台。"""
         if not settings.enable_wechat_comment_interaction:
-            logger.debug("[%s] enable_wechat_comment_interaction 未开启，跳过自动评论引导。", prefix or "wechat")
+            logger.debug("[%s] enable_wechat_comment_interaction 未开启，跳过互动 worker。", log_prefix)
             return
         cmd = [
             self._VENV_PYTHON,
             str(self._PRJ_ROOT / "scripts" / "wechat_commenter.py"),
-            "--post-id",
-            platform_post_id,
         ]
+        worker_log = self._OUT_DIR / "wechat_interaction_worker.log"
         try:
-            subprocess.Popen(
-                cmd,
-                cwd=str(self._PRJ_ROOT),
-                env=self._build_subprocess_env(),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            worker_log.parent.mkdir(parents=True, exist_ok=True)
+            with worker_log.open("ab") as log_file:
+                process = subprocess.Popen(
+                    cmd,
+                    cwd=str(self._PRJ_ROOT),
+                    env=self._build_subprocess_env(),
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            logger.info(
+                "[%s] 已派发视频号互动 worker pid=%s log=%s",
+                log_prefix, process.pid, worker_log,
             )
-            logger.info("[%s] 已异步触发视频号首评互动任务: %s", prefix or "wechat", platform_post_id[:16])
         except Exception as exc:
-            logger.warning("[%s] 触发视频号互动任务失败（不影响发布结果）: %s", prefix or "wechat", exc)
+            logger.warning("[%s] 派发视频号互动 worker 失败（不影响发布结果）: %s", log_prefix, exc)
 
     def _is_public_publish_window(
         self,
@@ -4378,6 +4388,7 @@ class PipelineManager:
                 logger.warning("抖音管理页回查触发阶段熔断，跳过本轮 HISTORY 回填。")
             else:
                 self._run_douyin_history_migration()
+        self._dispatch_wechat_interaction_worker(log_prefix="daily")
         logger.info("--- Daily Pipeline Job Completed ---")
 
 

@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-09-19 | Codex | 公开提交前复审门禁，持久化文案重试同样遵循当前审查策略 |
 | 1.1.0 | 2026-09-19 | Antigravity | 修复审查门禁：接入真实 censor_engine，实现双通道 Fail-Closed 一票否决并移除生成期写盘副作用 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：实现高内聚业务门面、敏感词门禁与自动沉淀机制 |
 """
@@ -87,6 +88,11 @@ class InteractionService:
             draft = rule_draft
 
         return draft
+
+    def validate_comment_for_submission(self, text: str) -> None:
+        """提交前复审实际正文；已保存的草稿不能绕过更新后的内容策略。"""
+        if not self._check_censorship(text):
+            raise CensorshipViolationError("实际提交评论未通过当前安全审查，禁止发表")
 
     def _check_censorship(self, text: str) -> bool:
         """检查评论文本是否符合内容安全红线与频道策略。
