@@ -3,7 +3,8 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
-| 3.51.0 | 2026-09-19 | Antigravity | 视频号发布成功后异步触发独立的评论区互动引导任务，与主流水线解耦。 |
+| 3.52.0  | 2026-09-19 | Antigravity                         | Project Runway-CTA: 接入互动图层处理器与发布中央选片协议，实现切片编号继承、mtime失效与安全降级。 |
+| 3.51.0  | 2026-09-19 | Antigravity                         | 视频号发布成功后异步触发独立的评论区互动引导任务，与主流水线解耦。 |
 | 3.50.1 | 2026-09-09 | Codex | 所有携带合法 YouTube ID 的 P1 Telegram 回执统一补充标题和可点击的原视频链接。 |
 | 3.50.0 | 2026-09-09 | Codex | 中文正文硬合同与真实源路径 ASS 缓存/提交校验；缺失字幕不再默认信任成片 |
 | 3.49.2 | 2026-09-11 | Codex | Telegram 互动建议回执单独展示视频名称，正文直接保留可发帖内容。 |
@@ -677,7 +678,7 @@ class PipelineManager:
 
     def _send_wechat_submission_review_material(self, prefix: str, title: str | None) -> bool:
         """为“已受理未公开”的视频号任务发送手机审核成片，不改变其审核中账本。"""
-        source_video = self._OUT_DIR / f"{prefix}_vertical.mp4"
+        source_video = self._get_published_video_path(prefix)
         if not source_video.is_file():
             self.send_telegram_msg(
                 "⚠️ <b>WeChat review video unavailable</b>\n"
@@ -1998,11 +1999,71 @@ class PipelineManager:
                 digest.update(chunk)
         return digest.hexdigest()
 
+    def _get_published_video_path(self, prefix: str, expected_duration: Optional[float] = None) -> Path:
+        """
+        [Project Runway-CTA] 返回最终发布的视频文件：
+        开启互动层且成片有效时使用 interactive，否则平滑降级为 vertical。
+        """
+        vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
+        if settings.enable_interaction_overlay:
+            interactive = self._OUT_DIR / f"{prefix}_vertical_interactive.mp4"
+            if interactive.is_file() and interactive.stat().st_size > 1_000_000:
+                if not vertical.is_file() or interactive.stat().st_mtime >= vertical.stat().st_mtime:
+                    try:
+                        is_valid, _ = _validate_rendered_vertical_cache(
+                            interactive, expected_duration_seconds=expected_duration
+                        )
+                        if is_valid:
+                            return interactive
+                    except Exception:
+                        pass
+        return vertical
+
+    def _process_interaction_overlay(self, prefix: str, yid: str, slice_index: int = 0) -> Optional[Path]:
+        """
+        [Project Runway-CTA] 在竖屏成片基础上叠加互动引导图层与音效。
+        产出 {prefix}_vertical_interactive.mp4；若未开启或生成失败则安全降级。
+        """
+        if not settings.enable_interaction_overlay:
+            return None
+
+        vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
+        if not vertical.is_file():
+            logger.warning("[RunwayCTA] 基础成片不存在，跳过互动图层处理: %s", vertical)
+            return None
+
+        interactive = self._OUT_DIR / f"{prefix}_vertical_interactive.mp4"
+
+        # Checkpoint 与缓存失效校验 (上游成片更新或损坏则重渲)
+        if interactive.is_file() and interactive.stat().st_size > 1_000_000:
+            if interactive.stat().st_mtime >= vertical.stat().st_mtime:
+                is_valid, _ = _validate_rendered_vertical_cache(interactive)
+                if is_valid:
+                    logger.info("[RunwayCTA] 复用有效互动图层成片: %s", interactive.name)
+                    return interactive
+            logger.info("[RunwayCTA] 基础视频已更新或互动缓存失效，重新合成: %s", interactive.name)
+
+        try:
+            from .processors.interaction_overlay import InteractionOverlayProcessor
+
+            logger.info("[RunwayCTA] 正在合成互动图层: %s -> %s", vertical.name, interactive.name)
+            processor = InteractionOverlayProcessor(
+                input_path=vertical,
+                output_path=interactive,
+                sound_enabled=settings.interaction_sound_enabled,
+                sound_volume=settings.interaction_sound_volume,
+            )
+            processor.process()
+            return interactive
+        except Exception as exc:
+            logger.error("[RunwayCTA] 互动图层合成异常，平滑降级使用基础成片: %s", exc)
+            return None
+
     def _kuaishou_asset_paths(self, yid: str, slice_index: int) -> tuple[Path, Path]:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
         kuaishou_copy = self._OUT_DIR / f"{prefix}_kuaishou_copy.txt"
         copy_file = kuaishou_copy if kuaishou_copy.is_file() else self._OUT_DIR / f"{prefix}_copy.txt"
-        return self._OUT_DIR / f"{prefix}_vertical.mp4", copy_file
+        return self._get_published_video_path(prefix), copy_file
 
     @staticmethod
     def _cover_provenance_path(cover_file: Path) -> Path:
@@ -2461,7 +2522,7 @@ class PipelineManager:
 
     def _douyin_asset_paths(self, yid: str, slice_index: int) -> tuple[Path, Path]:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
-        return self._OUT_DIR / f"{prefix}_vertical.mp4", self._OUT_DIR / f"{prefix}_copy.txt"
+        return self._get_published_video_path(prefix), self._OUT_DIR / f"{prefix}_copy.txt"
 
     def _douyin_title_path(self, yid: str, slice_index: int) -> Path:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
@@ -3214,6 +3275,9 @@ class PipelineManager:
         if not vertical_valid:
             return f"竖版成片校验失败：{vertical_reason}"
 
+        if settings.enable_interaction_overlay:
+            self._process_interaction_overlay(prefix, yid, slice_index=slice_index)
+
         cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"
         if not self._is_dedicated_cover(cover_file):
             return "缺少有效专门生成封面"
@@ -3916,6 +3980,9 @@ class PipelineManager:
                                           stage="wechat_publish", fail_closed=True, platform="微信"):
                     return
 
+                # ── 2d. INTERACTION OVERLAY (Project Runway-CTA) ──────────────────
+                if settings.enable_interaction_overlay:
+                    self._process_interaction_overlay(prefix, yid, slice_index=slice_index)
 
                 # ── 3. 封面生成 ──────────────────────────────────────────────────
                 cover_file = self._OUT_DIR / f"{prefix}_cover.jpg"
@@ -4148,10 +4215,11 @@ class PipelineManager:
                     slice_index=slice_index,
                     evidence_dir=evidence_dir,
                 )
+                published_video = self._get_published_video_path(prefix)
                 upload_cmd = [
                     self._VENV_PYTHON,
                     str(self._PRJ_ROOT / "scripts" / "wechat_uploader.py"),
-                    "--video",  str(vertical),
+                    "--video",  str(published_video),
                     "--copy",   str(copy_file),
                     "--state",  str(self._OUT_DIR / "wechat_state.json"),
                     "--fail-fast-login",

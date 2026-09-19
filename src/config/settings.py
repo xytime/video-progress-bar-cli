@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 3.65.0 | 2026-09-19 | Antigravity | 扩展 OptionSense 交易日安全窗口为 16:15-17:50 与 19:00-08:30 ET。 |
+| 3.65.0 | 2026-09-19 | Antigravity | Project Runway-CTA: 新增 enable_interaction_overlay 及触发比例/音量配置，生产默认 False。 |
 | 3.64.0 | 2026-09-19 | Antigravity | 配置化 OptionSense ET 物理避让策略，支持交易日夜间 20:30-04:15 与周末 58.5h 连续安全窗口。 |
 | 3.63.0 | 2026-09-18 | Antigravity | 默认启用英语世界 AGY 高质量主视觉封面与 OCR 人审候选通道。 |
 | 3.62.0 | 2026-09-18 | Antigravity | 解耦英语世界生产触发与发布窗口，增加专属发布窗口与库存水位控制。 |
@@ -370,6 +371,15 @@ class Settings(BaseSettings):
     # 日期戳文字前缀（与日期拼接，如「发布日期：2026-06-25」）。
     # 使用全角冒号「：」而非半角「:」，避免与 ffmpeg filtergraph 选项分隔符冲突。
     source_date_stamp_label: str = "发布日期："
+
+    # Project Runway-CTA: 跑道级流光互动转化系统 (中央三联胶囊 + 左下角45°跑道流光航标)
+    # 默认关闭，确保生产零风险。启用后在 {prefix}_vertical.mp4 基础上叠加互动图层与双频 Pop 音效，
+    # 产出 {prefix}_vertical_interactive.mp4 并动态优先用于发布。
+    enable_interaction_overlay: bool = False
+    interaction_trigger_early_ratio: float = 0.18  # 黄金认知点时间比例
+    interaction_trigger_end_seconds: float = 14.0  # 尾部转化点距片尾秒数
+    interaction_sound_enabled: bool = True          # 是否开启互动 Pop 音效
+    interaction_sound_volume: float = 0.40          # 互动音效音量
 
     # 快手创作者中心浏览器上传。默认关闭；启用后使用本地 Playwright 会话文件扫码登录，
     # 不需要快手开放平台 App ID、密钥或 OAuth 授权。

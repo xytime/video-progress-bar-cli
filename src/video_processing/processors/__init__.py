@@ -4,8 +4,10 @@
 """
 
 from .progress_bar import ProgressBarProcessor
+from .interaction_overlay import InteractionOverlayProcessor
 
 __all__ = [
     "ProgressBarProcessor",
+    "InteractionOverlayProcessor",
 ]
 
