@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-07-31 | Codex                         | 覆盖专属主视觉与受控标题位置的布局规划 |
 | 1.2.0 | 2026-08-21 | Codex                         | 验证历史运营角标不会进入最终封面布局 |
 | 1.3.0 | 2026-08-24 | Codex                         | 锁定默认封面的类别与主标题字号，并确保英语世界模板保持独立 |
+| 1.4.0 | 2026-09-19 | Codex                         | 锁定普通封面的高对比副标题信息条与内容区上移规则 |
 """
 
 import os
@@ -327,3 +328,28 @@ def test_english_world_cover_template_keeps_its_independent_typography():
 
     assert ".brand-badge" in template
     assert re.search(r"\.main-title\s*\{.*?font-size:\s*84px;", template, flags=re.DOTALL)
+
+
+@pytest.mark.parametrize(
+    ("template_name", "position_rule"),
+    [
+        ("cover.html.j2", "top: calc(50% - 36px);"),
+        ("cover_minimal.html.j2", "top: calc(50% - 84px);"),
+        ("cover_drama.html.j2", "bottom: calc(22% + 84px);"),
+    ],
+)
+def test_default_cover_subtitle_uses_high_contrast_strip_and_raised_content(
+    template_name, position_rule
+):
+    """普通封面副标题应使用方案 B，并将主副标题组上移。"""
+    template_path = Path(__file__).resolve().parents[2] / "resources" / "cover" / "template" / template_name
+    template = template_path.read_text(encoding="utf-8")
+
+    assert position_rule in template
+    assert "background: rgba(255, 248, 233, 0.94);" in template
+    assert "border-left: 10px solid #ef4444;" in template
+    assert re.search(r"\.sub-title\s*\{.*?font-weight:\s*800;", template, flags=re.DOTALL)
+    if template_name == "cover.html.j2":
+        assert "top: 20.2%;" in template
+    if template_name == "cover_minimal.html.j2":
+        assert "top: max(22%, calc(23% - 84px));" in template

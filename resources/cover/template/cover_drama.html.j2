@@ -125,7 +125,7 @@
         /* 主内容区 — 左对齐冲击感排版 */
         .content-area {
             position: absolute;
-            bottom: 22%;
+            bottom: calc(22% + 84px);
             left: 8%;
             right: 8%;
             z-index: 10;
@@ -152,12 +152,18 @@
         /* 副标题 */
         .sub-title {
             font-size: 52px;
-            font-weight: 400;
-            color: var(--accent-color);
+            font-weight: 800;
+            color: #11151a;
             text-align: left;
             line-height: 1.45;
-            text-shadow: var(--accent-glow);
-            -webkit-text-stroke: 2px rgba(3, 8, 13, 0.68);
+            width: fit-content;
+            max-width: 100%;
+            padding: 16px 24px 18px 28px;
+            background: rgba(255, 248, 233, 0.94);
+            border-left: 10px solid #ef4444;
+            border-radius: 3px 12px 12px 3px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.42);
+            box-sizing: border-box;
             word-break: break-all;
             display: -webkit-box;
             -webkit-line-clamp: 2;
