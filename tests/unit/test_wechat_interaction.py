@@ -5,6 +5,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-09-20 | Codex | 以实际待提交评论为审查对象，覆盖短模板下兜底草稿仍会被 Fail-Closed 拦截。 |
+| 1.3.0 | 2026-09-20 | Codex | 覆盖短评论受控排版，移除栏目 Emoji 与重复行动号召。 |
 | 1.2.0 | 2026-09-19 | Codex | 区分严格发布确认与可评论已绑定原生 ID 候选，防止互动放宽污染发布事实。 |
 | 1.1.0 | 2026-09-19 | Antigravity | 依据 Codex 审查加固：补充审查一票否决、精准状态绑定、无裸 SQL 规范与 dry-run 幂等测试 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：对互动引导各模块进行隔离单元测试 |
@@ -91,8 +93,8 @@ class TestInteractionContract:
                 provider="test",
             )
 
-    def test_options_require_two_to_four_items(self):
-        with pytest.raises(InteractionContractError, match="投票选项必须为 2-4 项"):
+    def test_options_require_two_to_three_items(self):
+        with pytest.raises(InteractionContractError, match="投票选项必须为 2-3 项"):
             validate_interaction_draft(
                 topic="测试话题",
                 interaction_type="POLL_STAND",
@@ -103,7 +105,7 @@ class TestInteractionContract:
             )
 
     def test_options_required_for_every_interaction_type(self):
-        with pytest.raises(InteractionContractError, match="投票选项必须为 2-4 项"):
+        with pytest.raises(InteractionContractError, match="投票选项必须为 2-3 项"):
             validate_interaction_draft(
                 topic="测试话题",
                 interaction_type="WARNING_SHARE",
@@ -112,6 +114,24 @@ class TestInteractionContract:
                 formatted_comment="太短了",
                 provider="test",
             )
+
+    def test_rendered_comment_uses_compact_single_call_to_action(self):
+        comment = render_interaction_comment(
+            topic="面对新挑战，你通常会怎么做？",
+            interaction_type=InteractionType.POLL_STAND,
+            poll_options=["先准备充分", "先开始再调整"],
+            share_hook="说说你为什么这样选。",
+        )
+
+        assert comment.splitlines() == [
+            "面对新挑战，你通常会怎么做？",
+            "A 先准备充分",
+            "B 先开始再调整",
+            "说说你为什么这样选。",
+        ]
+        assert "【" not in comment
+        assert "🗳️" not in comment
+        assert "📢" not in comment
 
 
 class TestStrategyStore:
@@ -192,7 +212,7 @@ class TestRuleProvider:
             category="Finance",
         )
         assert draft.interaction_type == InteractionType.WARNING_SHARE
-        assert "⚠️" in draft.formatted_comment
+        assert "⚠️" not in draft.formatted_comment
         assert "避险" in draft.formatted_comment or "风险" in draft.formatted_comment
         assert draft.provider == "self_growing_rule"
 
@@ -203,8 +223,8 @@ class TestRuleProvider:
             description="引发行业关于推理成本与落地的激烈辩论",
             category="General",
         )
-        assert "🗳️" in draft.formatted_comment
-        assert "🅰️" in draft.formatted_comment
+        assert "A " in draft.formatted_comment
+        assert "【" not in draft.formatted_comment
         assert len(draft.poll_options) >= 2
 
 
@@ -254,12 +274,20 @@ class TestInteractionService:
         assert "台独" not in draft.formatted_comment
 
     def test_service_censorship_fail_closed_raises_when_all_fail(self):
-        service = InteractionService()
-        # 传入包含极度敏感词的标题，兜底规则也会包含该违规词
+        rule_provider = MagicMock()
+        rule_provider.generate.return_value = _draft(
+            topic="支持台独与分裂国家的重要讲话",
+            interaction_type=InteractionType.POLL_STAND,
+            poll_options=["A", "B"],
+            share_hook="说说原因。",
+            provider="rule:test",
+        )
+        service = InteractionService(rule_provider=rule_provider)
+        # 即使来源标题被短模板省略，实际兜底正文命中红线仍必须 Fail-Closed。
         with pytest.raises(CensorshipViolationError, match="未能通过安全审查"):
             service.generate_comment(
-                title="支持台独与分裂国家的重要讲话",
-                description="涉及政治敏感内容",
+                title="任意标题",
+                description="任意描述",
                 force_rule=True,
             )
 

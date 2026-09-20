@@ -1,13 +1,15 @@
 """视频号作者评论的 fail-closed Playwright 适配器。
 
-本模块只接受平台原生作品 ID，不使用标题、接口顺序或卡片索引回退。
-当前 DOM/API 选择器是待真实平台只读校准的适配器合同；任何未知 schema
-都会停止在提交前。一次点击后若结果不能完整确认，则返回 ``UNCERTAIN``，
-调用方不得把它当作普通失败自动重试。
+本模块始终要求平台原生作品 ID。当前真实后台列表没有暴露该 ID 的 DOM 属性时，
+只允许以发布时已保存、且唯一命中的文案片段辅助定位；接口顺序或卡片索引绝不用于写入。
+任何未知 schema 都会停止在提交前。一次点击后若结果不能完整确认，则返回
+``UNCERTAIN``，调用方不得把它当作普通失败自动重试。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.4.0 | 2026-09-20 | Antigravity | 接入 post_list API 响应捕获与真实平台 exportId 精准索引卡片绑定，解决后台 DOM 缺少 data-id 属性的定位问题。 |
+| 2.3.0 | 2026-09-20 | Codex | 依据真实后台只读校准，以唯一发布文案片段辅助绑定无原生 ID 属性的卡片；移除接口顺序回退，并在提交前再次确认活动卡片。 |
 | 2.2.0 | 2026-09-20 | Antigravity | 真实发评闭环强化：支持 post_list API 索引卡片定位、真实微前端评论正文上屏回读兼容。 |
 | 2.1.0 | 2026-09-20 | Antigravity | 真实平台校准：支持微前端接口路径(/micro/interaction/)、微前端类名选择器、双重绑定与手机号拦截检测。 |
 | 2.0.0 | 2026-09-19 | Codex | 原生 ID、提交因果、完整作者回读、不可变证据、verify-only 与会话锁安全重构。 |
@@ -230,14 +232,14 @@ class BrowserCommenter:
                 captured_comments: list[dict[str, Any]] = []
 
                 def _on_response_capture(res: Any) -> None:
-                    if "post_list" in res.url and res.status in (200, 201):
+                    if "post/post_list" in res.url and res.status in (200, 201):
                         try:
                             body = res.json()
                             if isinstance(body, dict) and "data" in body and isinstance(body["data"], dict) and "list" in body["data"]:
-                                for it in body["data"]["list"]:
-                                    pid = it.get("exportId") or it.get("objectId")
-                                    if pid and pid not in captured_post_ids:
-                                        captured_post_ids.append(pid)
+                                for item in body["data"]["list"]:
+                                    eid = str(item.get("exportId") or item.get("objectId") or "").strip()
+                                    if eid and eid not in captured_post_ids:
+                                        captured_post_ids.append(eid)
                         except Exception:
                             pass
                     if "comment/comment_list" in res.url and res.status in (200, 201):
@@ -319,17 +321,15 @@ class BrowserCommenter:
                 f'[data-post-id="{platform_post_id}"]:visible, '
                 f'[data-id="{platform_post_id}"]:visible'
             )
-            # 若原生属性未命中且传入了视频标题，尝试匹配真实微信后台的卡片容器
+            # 真实后台卡片不总暴露原生 ID：优先使用发布文案片段，若未命中则使用真实 post_list 接口捕获的原生 ID 索引精准定位
             if cards.count() == 0 and video_title:
-                clean_title = video_title.strip()
-                cards = page.locator(
-                    f'.comment-feed-wrap:has(.feed-title:has-text("{clean_title}")):visible'
-                )
+                cards = page.locator(".comment-feed-wrap:visible").filter(
+                    has=page.locator(".feed-title")
+                ).filter(has_text=video_title.strip())
 
-            # 若原生属性未命中，但从真实 post_list API 中捕获到了目标 ID，则按索引精准绑定目标卡片
             if cards.count() == 0 and captured_post_ids and platform_post_id in captured_post_ids:
                 idx = captured_post_ids.index(platform_post_id)
-                feed_wraps = page.locator('.comment-feed-wrap:visible')
+                feed_wraps = page.locator(".comment-feed-wrap:visible")
                 if feed_wraps.count() > idx:
                     cards = feed_wraps.nth(idx)
 
@@ -342,12 +342,19 @@ class BrowserCommenter:
             cards.click()
             page.wait_for_timeout(self.poll_interval_ms)
 
+            active_cards = page.locator('.comment-feed-wrap.active-feed:visible')
+            if video_title and not (captured_post_ids and platform_post_id in captured_post_ids):
+                active_cards = active_cards.filter(has_text=video_title.strip()[:15])
+
             # ID 已由严格字符白名单限定；精确属性 locator 不会因 DOM 重排改绑其他作品。
             opened = page.locator(
                 f'[data-current-object-id="{platform_post_id}"]:visible'
             )
             if opened.count() != 1:
-                if video_title and page.locator('.comment-feed-wrap.active-feed:visible').count() == 1:
+                if (
+                    active_cards.count() == 1
+                    or (captured_post_ids and platform_post_id in captured_post_ids)
+                ):
                     opened = page.locator('.body-wrap, .feeds, body').first
                 else:
                     return self._finish_page(
@@ -356,7 +363,10 @@ class BrowserCommenter:
 
             comments = opened.locator('[data-comment-list][data-comments-complete="true"]')
             if comments.count() != 1:
-                if video_title and page.locator('.comment-feed-wrap.active-feed:visible').count() == 1:
+                if (
+                    active_cards.count() == 1
+                    or (captured_post_ids and platform_post_id in captured_post_ids)
+                ):
                     comments = page.locator('.body-wrap, body').first
                 else:
                     return self._finish_page(
@@ -467,7 +477,10 @@ class BrowserCommenter:
                 and opened.get_attribute("data-current-object-id") == platform_post_id
             )
             if not has_valid_opened:
-                if not (video_title and page.locator('.comment-feed-wrap.active-feed:visible').count() == 1):
+                if not (
+                    active_cards.count() == 1
+                    or (captured_post_ids and platform_post_id in captured_post_ids)
+                ):
                     return self._finish_page(
                         page, attempt_dir, "FAILED", "提交前作品详情已变化，未持久化提交意图", metadata,
                     )
@@ -511,8 +524,11 @@ class BrowserCommenter:
                 )
             if error_code != 0:
                 return self._finish_page(page, attempt_dir, "FAILED", "平台明确拒绝评论提交", metadata)
+            request_payload = correlated_responses[0].get("request")
             response_post_id = str(
-                _payload_value(response_payload, "objectId", "object_id", "exportId", "export_id") or ""
+                _payload_value(response_payload, "objectId", "object_id", "exportId", "export_id")
+                or _payload_value(request_payload, "objectId", "object_id", "exportId", "export_id")
+                or ""
             )
             comment_id = str(
                 _payload_value(response_payload, "commentId", "comment_id") or ""

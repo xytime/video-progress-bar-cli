@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-09-20 | Codex | 英文原标题时优先取中文简介主题，避免兜底文案截断或生硬复述。 |
 | 1.1.0 | 2026-09-19 | Codex | 使用合同受控渲染，避免模板字段与实际文本漂移 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：实现基于自生长知识库的程序化兜底生成器 |
 """
@@ -55,15 +56,15 @@ class RuleInteractionProvider:
         template = templates[0] if templates else None
 
         if template and template.get("interaction_type") == chosen_type.value:
-            raw_topic = template.get("topic_template", "针对视频中关于{core_subject}的核心探讨，你怎么看？")
+            raw_topic = template.get("topic_template", "你认同视频里的判断吗？")
             topic = raw_topic.replace("{core_subject}", core_subject)
             poll_options = list(template.get("poll_options", ["支持并看好", "持保留意见"]))
-            share_hook = template.get("share_hook", "💬 你的看法是什么？在评论区留下你的观点，转给好友一起探讨！")
+            share_hook = template.get("share_hook", "说说你为什么这样选。")
             interaction_type = chosen_type
         else:
-            topic = f"针对视频中关于{core_subject}的核心探讨，你怎么看？"
-            poll_options = ["支持并看好", "持保留意见"]
-            share_hook = "💬 你的看法是什么？在评论区留下你的观点，转给好友一起探讨！"
+            topic = "你认同视频里的判断吗？"
+            poll_options = ["认同", "保留意见"]
+            share_hook = "说说你为什么这样选。"
             interaction_type = chosen_type
 
         # 组装高可读性格式化评论
@@ -86,11 +87,14 @@ class RuleInteractionProvider:
 
     def _extract_core_subject(self, title: str, description: str) -> str:
         """从标题中提取核心对象或主题。"""
-        # 截取标题前缀或破折号、冒号前的核心主体
+        # 优先使用中文标题；英文原题容易在定长截断后变成无意义片段。
         parts = re.split(r"[:：|｜\-—_！？!?,，]", title)
         candidate = (parts[0] if parts else title).strip()
-        if len(candidate) > 20:
-            candidate = candidate[:20]
+        if not re.search(r"[\u4e00-\u9fff]", candidate):
+            description_lead = re.split(r"[。！？!?#\n]", description, maxsplit=1)[0]
+            candidate = re.sub(r"\s+", " ", description_lead).strip()
+        if len(candidate) > 28:
+            candidate = candidate[:28].rstrip("，、：:；; ")
         return candidate or "本期话题"
 
     def _infer_interaction_type(self, title: str, description: str, category: str) -> InteractionType:

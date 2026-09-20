@@ -7,6 +7,9 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-09-20 | Codex | 使种子策略的选项数上限与首评短格式合同一致。 |
+| 1.4.0 | 2026-09-20 | Codex | 允许审阅策略使用完整的短问句，避免标题截断后破坏评论可读性。 |
+| 1.3.0 | 2026-09-20 | Codex | 内存兜底模板改为单句收束，避免在短评论中重复要求留言和转发。 |
 | 1.2.0 | 2026-09-19 | Codex | 分离只读种子与运行学习，锁定完整读改写事务并拒绝损坏覆盖 |
 | 1.1.0 | 2026-09-19 | Antigravity | 加固安全：引入 fcntl 文件锁、原子写盘、槽位抽象强校验与学习前审查门禁 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：实现自生长沉淀、经验滑动窗口与模板检索 |
@@ -24,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .contract import InteractionDraft, InteractionType
+from .contract import MAX_OPTIONS, InteractionDraft, InteractionType
 
 logger = logging.getLogger(__name__)
 
@@ -176,13 +179,13 @@ class StrategyStore:
                     raise ValueError("策略模板必须是对象")
                 if item.get("interaction_type") not in {kind.value for kind in InteractionType}:
                     raise ValueError("策略模板互动类型无效")
-                if not isinstance(item.get("topic_template"), str) or "{core_subject}" not in item["topic_template"]:
-                    raise ValueError("策略模板必须含 {core_subject} 槽位")
+                if not isinstance(item.get("topic_template"), str) or not item["topic_template"].strip():
+                    raise ValueError("策略模板必须包含非空话题模板")
                 options = item.get("poll_options")
-                if not isinstance(options, list) or not 2 <= len(options) <= 4 or not all(
+                if not isinstance(options, list) or not 2 <= len(options) <= MAX_OPTIONS or not all(
                     isinstance(option, str) and option.strip() for option in options
                 ):
-                    raise ValueError("策略模板选项必须为 2-4 个非空字符串")
+                    raise ValueError(f"策略模板选项必须为 2-{MAX_OPTIONS} 个非空字符串")
                 if not isinstance(item.get("share_hook"), str) or not item["share_hook"].strip():
                     raise ValueError("策略模板缺少转发引导")
 
@@ -227,11 +230,11 @@ class StrategyStore:
         """种子文件缺失时的最小通用策略；仅在内存使用。"""
         templates = []
         rows = (
-            (InteractionType.POLL_STAND, "针对视频中关于{core_subject}的核心争议，你怎么看？", ["认同视频观点", "持保留意见"], "💬 评论区留下你的选择，转给好友一起讨论！"),
-            (InteractionType.WARNING_SHARE, "视频中关于{core_subject}的风险提醒，值得多留意。", ["已注意防范", "刚了解到"], "⚠️ 转给可能需要这条提醒的朋友。"),
-            (InteractionType.GROUP_DISCUSSION, "关于{core_subject}的最新讨论，你更认同哪种看法？", ["支持这一方向", "继续观察"], "💬 转到讨论群，听听大家的观点。"),
-            (InteractionType.MEMO_COLLECTION, "关于{core_subject}的知识要点，哪些最值得记下？", ["已抓住重点", "先收藏复盘"], "📦 收藏或转发，方便之后复盘。"),
-            (InteractionType.VOICE_RESONANCE, "关于{core_subject}，这段分享带来了哪些启发？", ["很有共鸣", "提供了新角度"], "🔥 转给同样关注这个话题的朋友。"),
+            (InteractionType.POLL_STAND, "你认同视频里的判断吗？", ["认同", "保留意见"], "说说你的理由。"),
+            (InteractionType.WARNING_SHARE, "视频里的风险提示，你怎么看？", ["需要重视", "继续观察"], "说说你的判断。"),
+            (InteractionType.GROUP_DISCUSSION, "视频里的观点，你认同吗？", ["比较认同", "仍有保留"], "说说你的看法。"),
+            (InteractionType.MEMO_COLLECTION, "视频里的哪个要点最值得记下？", ["核心逻辑", "实践方法"], "说说你的答案。"),
+            (InteractionType.VOICE_RESONANCE, "视频里哪一点最打动你？", ["很有共鸣", "带来启发"], "说说你的感受。"),
         )
         for index, (kind, topic, options, hook) in enumerate(rows):
             templates.append({"id": f"memory_{index}", "interaction_type": kind.value, "topic_template": topic, "poll_options": options, "share_hook": hook, "weight": 1.0, "learned_count": 0})

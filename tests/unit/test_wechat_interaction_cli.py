@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-09-20 | Codex | 覆盖人工三条批量评论在不确定结果后停止，避免继续提交更旧作品。 |
 | 1.1.0 | 2026-09-19 | Codex | 覆盖 SUBMITTED_BOUND 原生 ID 的显式互动执行，避免历史回查延迟阻断已发布作品。 |
 | 1.0.0 | 2026-09-19 | Codex | 覆盖默认关闭、只读 dry-run、提交 callback 与 UNCERTAIN 核验协议。 |
 """
@@ -200,3 +201,39 @@ def test_worker_deadline_cannot_be_swallowed_by_except_exception() -> None:
     except wechat_commenter._WorkerDeadline:
         pass
     assert swallowed is False
+
+
+def test_manual_batch_stops_after_uncertain_result(monkeypatch, tmp_path: Path) -> None:
+    """批量入口保持候选顺序，首条结果不确定时不得继续提交更旧作品。"""
+    candidates = [
+        {"platform_post_id": "export/newest"},
+        {"platform_post_id": "export/older"},
+        {"platform_post_id": "export/oldest"},
+    ]
+    calls: list[str] = []
+
+    class _BatchDB:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        def get_recent_wechat_posts_without_interaction(self, *, limit: int) -> list[dict[str, str]]:
+            assert limit == 3
+            return candidates
+
+    def fake_tick(_db: Any, _services: Any, **kwargs: Any) -> Any:
+        post_id = str(kwargs["platform_post_id"])
+        calls.append(post_id)
+        return SimpleNamespace(
+            status="UNCERTAIN" if post_id == "export/newest" else "COMMENTED",
+            platform_post_id=post_id,
+            detail=None,
+        )
+
+    monkeypatch.setattr(wechat_commenter.settings, "enable_wechat_comment_interaction", True)
+    monkeypatch.setattr(wechat_commenter, "_LiveServices", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(wechat_commenter, "WORKER_LOCK", tmp_path / "worker.lock")
+    monkeypatch.setattr("video_processing.db.database.PipelineDB", _BatchDB)
+    monkeypatch.setattr("video_processing.interaction.runner.run_interaction_tick", fake_tick)
+
+    assert wechat_commenter.run_interaction(count=3, notify_tg=False) == 0
+    assert calls == ["export/newest"]

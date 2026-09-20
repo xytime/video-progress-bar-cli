@@ -33,6 +33,8 @@ class InteractionWorkerServices(Protocol):
         comment_text: str,
         platform_post_id: str,
         video_title: Optional[str],
+        source_youtube_id: Optional[str],
+        source_slice_index: int,
         evidence_dir: Path,
         before_submit: Optional[Callable[[], bool]],
         verify_only: bool,
@@ -80,6 +82,7 @@ def run_interaction_tick(
     platform_post_id: Optional[str] = None,
     video_id: Optional[int] = None,
     force_rule: bool = False,
+    refresh_draft: bool = False,
     dry_run: bool = False,
     reconcile_only: bool = False,
     clock: Callable[[], datetime.datetime] = _utc_now,
@@ -130,6 +133,22 @@ def run_interaction_tick(
             comment_text=comment_text,
             now=clock(),
         )
+    elif refresh_draft:
+        draft = services.generate_comment(target, force_rule=force_rule)
+        refreshed = db.revise_wechat_interaction_before_submit(
+            platform_post_id=post_id,
+            interaction_type=str(draft.interaction_type.value),
+            provider=str(draft.provider),
+            comment_text=str(draft.formatted_comment).strip(),
+            reason="人工确认短格式修订",
+            now=clock(),
+        )
+        if refreshed is None:
+            return InteractionTickResult(
+                status="NOT_DUE", platform_post_id=post_id,
+                detail="已有互动不满足提交前草稿修订条件",
+            )
+        existing = refreshed
     elif dry_run:
         return InteractionTickResult(
             status="DRY_RUN",
@@ -168,7 +187,9 @@ def run_interaction_tick(
     status, evidence_path, error_message = services.post_comment(
         comment_text=str(claimed["comment_text"]),
         platform_post_id=post_id,
-        video_title=str(claimed.get("zh_title") or claimed.get("title") or "") or None,
+        video_title=str(target.get("zh_title") or target.get("title") or "") or None,
+        source_youtube_id=str(target.get("youtube_id") or "") or None,
+        source_slice_index=int(target.get("slice_index") or 0),
         evidence_dir=root / prefix,
         before_submit=None if verify_only else persist_submit_intent,
         verify_only=verify_only,

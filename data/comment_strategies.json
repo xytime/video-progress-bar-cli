@@ -1,42 +1,42 @@
 {
-  "version": "1.0.0",
-  "updated_at": "2026-09-19T07:11:14.509956+00:00",
+  "version": "1.2.0",
+  "updated_at": "2026-09-20T02:30:00+00:00",
   "categories": {
     "AI/Tech": [
       {
         "id": "tech_poll_future",
         "interaction_type": "POLL_STAND",
-        "topic_template": "AI技术迭代飞快，面对{core_subject}的颠覆性变革，你怎么看？",
+        "topic_template": "面对这项变化，你更认同哪种看法？",
         "poll_options": [
-          "坚定看好，未来1-2年全面普及",
-          "持怀疑态度，实际落地困难重重",
-          "继续观望，等头部跑通再说"
+          "会很快普及",
+          "落地仍有难度",
+          "先继续观察"
         ],
-        "share_hook": "💬 这个话题在圈内争议极大，转到你的技术群/工作群，测测看同行们是站A还是站B？",
+        "share_hook": "说说你的理由。",
         "weight": 1.0,
         "learned_count": 0
       },
       {
         "id": "tech_warning_safety",
         "interaction_type": "WARNING_SHARE",
-        "topic_template": "视频中关于{core_subject}的这几个核心坑点，很多同行和团队都还没意识到！",
+        "topic_template": "视频里的风险提示，你怎么看？",
         "poll_options": [
-          "已经踩过类似的坑",
-          "刚刚了解到，及时避险"
+          "已经遇到过",
+          "需要及时防范"
         ],
-        "share_hook": "⚠️ 随手转发给身边做技术或用AI的朋友提个醒，关键时刻能少走弯路！",
+        "share_hook": "你遇到过吗？",
         "weight": 1.0,
         "learned_count": 0
       },
       {
         "id": "tech_memo_guide",
         "interaction_type": "MEMO_COLLECTION",
-        "topic_template": "关于{core_subject}的干货逻辑梳理，一次性吸收压力大？",
+        "topic_template": "视频里的哪个要点最值得记下？",
         "poll_options": [
-          "已理解核心逻辑",
-          "先收藏/转发慢啃"
+          "核心逻辑",
+          "实践方法"
         ],
-        "share_hook": "📦 知识点密集建议先转发给‘文件传输助手’或收藏，闲暇时慢慢复盘！",
+        "share_hook": "你会先看哪一点？",
         "weight": 0.9,
         "learned_count": 0
       }
@@ -45,25 +45,25 @@
       {
         "id": "finance_warning_risk",
         "interaction_type": "WARNING_SHARE",
-        "topic_template": "市场剧烈波动下，{core_subject}传达的风险信号远比表面更严峻！",
+        "topic_template": "这个风险信号，你怎么看？",
         "poll_options": [
-          "早已减仓防御",
-          "逆向看多布局",
-          "看不清暂时躺平"
+          "主动防御",
+          "逆向布局",
+          "继续观察"
         ],
-        "share_hook": "⚠️ 涉及真金白银的决策，转发给身边的投资朋友提个醒，注意仓位风险！",
+        "share_hook": "说说依据。",
         "weight": 1.0,
         "learned_count": 0
       },
       {
         "id": "finance_poll_trend",
         "interaction_type": "POLL_STAND",
-        "topic_template": "面对{core_subject}的走向，你认为接下来会发生什么？",
+        "topic_template": "面对这个市场信号，你会怎么判断？",
         "poll_options": [
-          "短期承压，长期震荡向上",
-          "趋势彻底反转，风险加剧"
+          "短期承压",
+          "趋势转弱"
         ],
-        "share_hook": "💬 转到你的投资讨论群，看看老手们的真实持仓态度！",
+        "share_hook": "说说依据。",
         "weight": 0.95,
         "learned_count": 0
       }
@@ -72,60 +72,60 @@
       {
         "id": "general_poll_stand",
         "interaction_type": "POLL_STAND",
-        "topic_template": "针对视频中关于{core_subject}的核心争议，你怎么看？",
+        "topic_template": "你认同视频里的判断吗？",
         "poll_options": [
-          "认同视频观点，合情合理",
-          "持保留意见，有不同看法"
+          "认同",
+          "保留意见"
         ],
-        "share_hook": "💬 你的看法是什么？直接在评论区留下 A 或 B，转给好友一起探讨！",
+        "share_hook": "说说你的理由。",
         "weight": 1.0,
         "learned_count": 0
       },
       {
         "id": "general_warning_share",
         "interaction_type": "WARNING_SHARE",
-        "topic_template": "视频中关于{core_subject}的风险警示与关键要点，很多朋友容易忽视！",
+        "topic_template": "视频里的风险提示，你怎么看？",
         "poll_options": [
-          "已经注意防范",
-          "刚了解到及时避险"
+          "需要重视",
+          "继续观察"
         ],
-        "share_hook": "⚠️ 随手转发给身边经常涉及的朋友提个醒，注意防范风险！",
+        "share_hook": "说说你的判断。",
         "weight": 1.0,
         "learned_count": 0
       },
       {
         "id": "general_group_discussion",
         "interaction_type": "GROUP_DISCUSSION",
-        "topic_template": "关于{core_subject}的最新动态与讨论，圈内各方各抒己见！",
+        "topic_template": "视频里的观点，你认同吗？",
         "poll_options": [
-          "支持这一发展方向",
-          "持保留观望态度"
+          "比较认同",
+          "仍有保留"
         ],
-        "share_hook": "💬 转到你的工作群/讨论群，测测大家怎么看？",
+        "share_hook": "说说看法。",
         "weight": 1.0,
         "learned_count": 0
       },
       {
         "id": "general_memo_collection",
         "interaction_type": "MEMO_COLLECTION",
-        "topic_template": "关于{core_subject}的核心逻辑与复盘，一次性吸收压力大？",
+        "topic_template": "视频里的哪个要点最值得记下？",
         "poll_options": [
-          "已抓住核心逻辑",
-          "先收藏慢慢复盘"
+          "核心逻辑",
+          "实践方法"
         ],
-        "share_hook": "📦 知识点密集建议先转发给‘文件传输助手’或收藏，闲暇时慢慢复盘！",
+        "share_hook": "说说答案。",
         "weight": 0.9,
         "learned_count": 0
       },
       {
         "id": "general_voice_resonance",
         "interaction_type": "VOICE_RESONANCE",
-        "topic_template": "关于{core_subject}，他说出了很多人的真实心声与思考。",
+        "topic_template": "视频里哪一点最打动你？",
         "poll_options": [
-          "感同身受，深有体会",
-          "角度新颖，带来新启发"
+          "很有共鸣",
+          "带来启发"
         ],
-        "share_hook": "🔥 认同作者观点的点赞集合👍！随手转发给懂你的同频朋友。",
+        "share_hook": "说说你的理由。",
         "weight": 0.9,
         "learned_count": 0
       }

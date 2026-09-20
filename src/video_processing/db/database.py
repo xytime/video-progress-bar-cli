@@ -5,6 +5,9 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.70.0 | 2026-09-20 | Antigravity | 新增 bind_wechat_publication_platform_post_id DAL 方法，用于对齐平台真实 exportId。 |
+| 3.69.0 | 2026-09-20 | Codex | 记录未提交互动草稿的受控修订，并只允许无提交意图的预提交失败任务更新文案。 |
+| 3.68.0 | 2026-09-20 | Codex | 评论互动候选按视频号上传记录时间排序，并提供严格排除已有互动账本的批量候选查询。 |
 | 3.67.0 | 2026-09-19 | Codex | 互动任务的可评论候选扩展到已绑定原生作品 ID 的 SUBMITTED_BOUND，保留发布账本原状态。 |
 | 3.66.0 | 2026-09-19 | Codex | 新增严格最新 PUBLISHED 视频号作品查询，人工单次互动不得在已有账本时回退旧作品。 |
 | 3.65.0 | 2026-09-19 | Codex | 将视频号互动账本升级为可恢复 lease/提交意图状态机，固化评论文本、有界退避与 UNCERTAIN 只读回查边界。 |
@@ -1869,6 +1872,21 @@ class PipelineDB:
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_wechat_interactions_due
                 ON wechat_interactions(status, next_attempt_at, lease_expires_at)
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS wechat_interaction_draft_revisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    interaction_id INTEGER NOT NULL,
+                    reason TEXT NOT NULL,
+                    previous_comment_text TEXT NOT NULL,
+                    replacement_comment_text TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(interaction_id) REFERENCES wechat_interactions(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_wechat_interaction_draft_revisions_interaction
+                ON wechat_interaction_draft_revisions(interaction_id, id)
             ''')
             
             conn.commit()
@@ -9908,6 +9926,61 @@ class PipelineDB:
                 raise RuntimeError("Failed to queue WeChat interaction")
             return dict(row)
 
+    def revise_wechat_interaction_before_submit(
+        self,
+        *,
+        platform_post_id: str,
+        interaction_type: str,
+        provider: str,
+        comment_text: str,
+        reason: str,
+        now: Optional[datetime.datetime] = None,
+    ) -> Optional[dict]:
+        """受控修订一次从未点击提交的失败草稿，并保留前后正文审计记录。"""
+        clean_post_id = str(platform_post_id or "").strip()
+        clean_comment = str(comment_text or "").strip()
+        clean_reason = str(reason or "").strip()
+        if not clean_post_id or not clean_comment or not clean_reason:
+            raise ValueError("platform_post_id, comment_text and reason are required")
+        now_text = self._wechat_interaction_timestamp(now)
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                "SELECT * FROM wechat_interactions WHERE platform_post_id = ?",
+                (clean_post_id,),
+            ).fetchone()
+            if (
+                current is None
+                or current["status"] not in {"QUEUED", "RETRY_WAIT"}
+                or current["submit_intent_at"] is not None
+                or current["lease_token"] is not None
+            ):
+                return None
+            previous_comment = str(current["comment_text"])
+            if previous_comment == clean_comment:
+                return dict(current)
+            conn.execute(
+                """INSERT INTO wechat_interaction_draft_revisions (
+                       interaction_id, reason, previous_comment_text, replacement_comment_text, created_at
+                   ) VALUES (?, ?, ?, ?, ?)""",
+                (int(current["id"]), clean_reason, previous_comment, clean_comment, now_text),
+            )
+            conn.execute(
+                """UPDATE wechat_interactions
+                   SET interaction_type = ?, provider = ?, comment_text = ?, status = 'QUEUED',
+                       next_attempt_at = ?, updated_at = ?
+                   WHERE id = ? AND status IN ('QUEUED', 'RETRY_WAIT')
+                     AND submit_intent_at IS NULL AND lease_token IS NULL""",
+                (
+                    str(interaction_type or "").strip(), str(provider or "").strip(), clean_comment,
+                    now_text, now_text, int(current["id"]),
+                ),
+            )
+            revised = conn.execute(
+                "SELECT * FROM wechat_interactions WHERE id = ?", (int(current["id"]),)
+            ).fetchone()
+            return dict(revised) if revised else None
+
     @staticmethod
     def _recover_expired_wechat_interactions_conn(
         conn: sqlite3.Connection,
@@ -10398,11 +10471,36 @@ class PipelineDB:
                 WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND w.platform_post_id IS NOT NULL
                   AND i.id IS NULL
-                ORDER BY w.id DESC
+                ORDER BY w.created_at DESC, w.id DESC
                 LIMIT 1
                 '''
             ).fetchone()
             return dict(row) if row else None
+
+    def get_recent_wechat_posts_without_interaction(self, limit: int = 3) -> List[dict]:
+        """按视频号上传记录时间返回尚未建立互动账本的有限候选。
+
+        这不是重试或回查队列：一旦已存在互动账本，即使当前没有终态，也不会被
+        本查询再次选中，避免人工批量任务与已有提交意图交叉。
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT w.id AS publication_id, w.video_id, w.platform_post_id,
+                       w.state AS wechat_state, w.created_at AS publication_created_at,
+                       p.youtube_id, p.slice_index, p.title, p.zh_title, p.category
+                FROM wechat_publications w
+                JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN wechat_interactions i ON i.platform_post_id = w.platform_post_id
+                WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
+                  AND w.platform_post_id IS NOT NULL
+                  AND i.id IS NULL
+                ORDER BY w.created_at DESC, w.id DESC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def get_recent_published_wechat_posts_without_interaction(
         self,
@@ -10448,7 +10546,7 @@ class PipelineDB:
                 WHERE w.platform_post_id IS NOT NULL
                   AND w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND {condition}
-                ORDER BY w.id DESC
+                ORDER BY w.created_at DESC, w.id DESC
                 LIMIT ?
                 """,
                 params
@@ -10517,3 +10615,34 @@ class PipelineDB:
             interaction_id, lease_token, result_status=normalized,
             evidence_path=evidence_path, error_message=error_message,
         )
+
+    def bind_wechat_publication_platform_post_id(
+        self,
+        *,
+        video_id: int,
+        platform_post_id: str,
+        state: str = "PUBLISHED",
+    ) -> Dict[str, Any]:
+        """将平台真实 exportId 绑定或更新到发布账本中。"""
+        with self.get_connection() as conn:
+            subject_id = self._ensure_video_publication_subject(conn, int(video_id))
+            conn.execute(
+                """
+                INSERT INTO wechat_publications (
+                    video_id, subject_id, state, platform_post_id, confirmed_at, updated_at
+                ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    platform_post_id = excluded.platform_post_id,
+                    state = excluded.state,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (int(video_id), subject_id, state, platform_post_id.strip()),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM wechat_publications WHERE video_id = ?", (int(video_id),)
+            ).fetchone()
+            if not row:
+                raise RuntimeError(f"未能更新 video_id={video_id} 的 wechat_publications")
+            return dict(row)
+

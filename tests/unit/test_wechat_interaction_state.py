@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-09-20 | Codex | 覆盖无提交意图的草稿修订审计，并拒绝修改已进入提交边界的评论。 |
+| 1.2.0 | 2026-09-20 | Codex | 覆盖人工批量候选按上传记录时间排序，并严格排除已有互动账本。 |
 | 1.1.0 | 2026-09-19 | Codex | 固定人工“最新视频”查询不因已有互动账本回退到旧作品。 |
 | 1.0.0 | 2026-09-19 | Codex | 覆盖非空旧表迁移、原子 lease、提交意图、终态和有界退避。 |
 """
@@ -186,6 +188,50 @@ def test_submit_intent_expiry_becomes_verify_only_and_terminal_is_immutable(tmp_
     assert immutable["comment_text"] == "persisted comment"
 
 
+def test_pre_submit_draft_revision_keeps_audit_and_refuses_submit_intent(tmp_path: Path) -> None:
+    db = PipelineDB(db_path=str(tmp_path / "revision.db"))
+    publication = _published_target(db, tmp_path, "revision")
+    start = datetime.datetime(2026, 9, 20, 1, 0, tzinfo=UTC)
+    queued = db.queue_wechat_interaction(
+        publication_id=publication["id"],
+        platform_post_id="export/revision_post",
+        interaction_type="POLL_STAND",
+        provider="agy:old",
+        comment_text="原始草稿",
+        now=start,
+    )
+
+    revised = db.revise_wechat_interaction_before_submit(
+        platform_post_id="export/revision_post",
+        interaction_type="POLL_STAND",
+        provider="rule:current",
+        comment_text="新的短草稿",
+        reason="人工确认短格式修订",
+        now=start,
+    )
+    assert revised and revised["comment_text"] == "新的短草稿"
+    assert revised["provider"] == "rule:current"
+    with db.get_connection() as conn:
+        revision = conn.execute(
+            """SELECT previous_comment_text, replacement_comment_text
+               FROM wechat_interaction_draft_revisions WHERE interaction_id = ?""",
+            (queued["id"],),
+        ).fetchone()
+    assert tuple(revision) == ("原始草稿", "新的短草稿")
+
+    claimed = db.claim_due_wechat_interaction(now=start, platform_post_id="export/revision_post")
+    assert claimed
+    assert db.mark_wechat_interaction_submit_intent(queued["id"], claimed["lease_token"], now=start)
+    assert db.revise_wechat_interaction_before_submit(
+        platform_post_id="export/revision_post",
+        interaction_type="POLL_STAND",
+        provider="rule:later",
+        comment_text="不得替换",
+        reason="必须拒绝",
+        now=start,
+    ) is None
+
+
 def test_claim_is_atomic_and_expired_pre_submit_lease_is_safely_reclaimable(tmp_path: Path) -> None:
     db_path = tmp_path / "atomic.db"
     db = PipelineDB(db_path=str(db_path))
@@ -305,3 +351,37 @@ def test_latest_published_post_does_not_fall_back_when_latest_has_interaction(
     assert latest["platform_post_id"] == "export/post_newer"
     assert latest["interaction_status"] == "QUEUED"
     assert latest["publication_id"] != older["id"]
+
+
+def test_recent_uninteracted_candidates_follow_upload_record_time(tmp_path: Path) -> None:
+    db_path = tmp_path / "batch_candidates.db"
+    db = PipelineDB(db_path=str(db_path))
+    older = _published_target(db, tmp_path, "batch_older")
+    newest = _published_target(db, tmp_path, "batch_newest")
+    already_queued = _published_target(db, tmp_path, "batch_queued")
+    db.queue_wechat_interaction(
+        publication_id=already_queued["id"],
+        platform_post_id="export/post_batch_queued",
+        interaction_type="POLL_STAND",
+        provider="rule",
+        comment_text="已有账本的评论不得进入人工批量候选",
+    )
+
+    # 造出与自增主键相反的上传记录时间，验证排序不依赖 publication id。
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE wechat_publications SET created_at = ? WHERE id = ?",
+            ("2026-09-19 01:00:00", older["id"]),
+        )
+        conn.execute(
+            "UPDATE wechat_publications SET created_at = ? WHERE id = ?",
+            ("2026-09-19 03:00:00", newest["id"]),
+        )
+        conn.execute(
+            "UPDATE wechat_publications SET created_at = ? WHERE id = ?",
+            ("2026-09-19 04:00:00", already_queued["id"]),
+        )
+
+    candidates = db.get_recent_wechat_posts_without_interaction(limit=3)
+
+    assert [item["publication_id"] for item in candidates] == [newest["id"], older["id"]]

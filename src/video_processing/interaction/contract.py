@@ -5,6 +5,9 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-09-20 | Antigravity | 放宽 share_hook 上限至 30 字，支持启发式开放反问句，优化评论区真实互动。 |
+| 1.3.0 | 2026-09-20 | Codex | 将短评论长度上限收口到宿主合同，模型超长输出自动降级为规则草稿。 |
+| 1.2.0 | 2026-09-20 | Codex | 评论采用问题、选项与单句收束的短格式，移除重复栏目标题和多重号召。 |
 | 1.1.0 | 2026-09-19 | Codex | 收紧字段边界，并由受控渲染器绑定结构化字段与最终文本 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：定义 InteractionType, InteractionDraft, InteractionResult 及合同校验 |
 """
@@ -33,12 +36,12 @@ class CensorshipViolationError(InteractionContractError):
     """互动评论内容命中安全审查敏感违规词，一票否决。"""
 
 
-MAX_TOPIC_LENGTH = 100
-MAX_SHARE_HOOK_LENGTH = 100
-MAX_OPTION_LENGTH = 40
+MAX_TOPIC_LENGTH = 24
+MAX_SHARE_HOOK_LENGTH = 30
+MAX_OPTION_LENGTH = 14
 MIN_OPTIONS = 2
-MAX_OPTIONS = 4
-MAX_FORMATTED_COMMENT_LENGTH = 350
+MAX_OPTIONS = 3
+MAX_FORMATTED_COMMENT_LENGTH = 140
 
 
 @dataclass(frozen=True)
@@ -114,7 +117,7 @@ def validate_interaction_draft(
     if not formatted_comment:
         raise InteractionContractError("最终排版文本 (formatted_comment) 不能为空")
 
-    # 微信评论字数限制合同（建议 50-300 字，太短无价值，太长移动端不友好）
+    # 手机端首评合同：太短缺乏语境，太长会遮蔽原视频讨论。
     if len(formatted_comment) < 30:
         raise InteractionContractError(f"排版评论过短 ({len(formatted_comment)} < 30 字)")
     if len(formatted_comment) > MAX_FORMATTED_COMMENT_LENGTH:
@@ -163,16 +166,8 @@ def render_interaction_comment(
     if not isinstance(share_hook, str) or not share_hook.strip() or len(share_hook.strip()) > MAX_SHARE_HOOK_LENGTH:
         raise InteractionContractError("转发引导语必须是受限的非空字符串")
 
-    labels = {
-        InteractionType.POLL_STAND: "📌【互动话题】",
-        InteractionType.WARNING_SHARE: "⚠️【避坑提示】",
-        InteractionType.GROUP_DISCUSSION: "📌【群聊讨论】",
-        InteractionType.MEMO_COLLECTION: "📦【干货备忘】",
-        InteractionType.VOICE_RESONANCE: "💡【深度思考】",
-    }
-    letters = ("🅰️", "🅱️", "🅲", "🅳")
-    lines = [f"{labels[interaction_type]}{topic.strip()}", "🗳️【站队表态】"]
+    letters = ("A", "B", "C", "D")
+    lines = [topic.strip()]
     lines.extend(f"{letters[index]} {option.strip()}" for index, option in enumerate(poll_options))
-    lines.append("💬 直接在评论区打出你的选择或留言！")
-    lines.append(f"📢 {share_hook.strip()}")
+    lines.append(share_hook.strip())
     return "\n".join(lines)

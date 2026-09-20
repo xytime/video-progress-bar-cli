@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-20 | Codex | 覆盖短模板下结构化生成失败后，危险兜底正文仍不能越过审查门禁。 |
 | 1.0.0 | 2026-09-19 | Codex | 验证无写生成、锁定事务、原子失败与结构化 AGY 合同 |
 """
 
@@ -11,7 +12,7 @@ from __future__ import annotations
 import json
 import multiprocessing
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -29,7 +30,7 @@ from video_processing.interaction.strategy_store import StrategyStore
 
 def _draft(subject: str, *, category: str = "General") -> InteractionDraft:
     options = ["认同这个方向", "还想继续观察"]
-    hook = "转给也在关注这个话题的朋友，一起讨论。"
+    hook = "说说原因。"
     topic = f"关于{subject}，你怎么看？"
     return InteractionDraft(
         topic=topic,
@@ -142,9 +143,11 @@ class TestAgyStructuredSafety:
 
     def test_malformed_agy_output_cannot_bypass_censorship_fallback(self) -> None:
         malformed = {"topic": "话题", "interaction_type": "POLL_STAND", "poll_options": ["A"], "share_hook": "引导"}
-        service = InteractionService(agy_provider=AgyInteractionProvider())
+        rule_provider = MagicMock()
+        rule_provider.generate.return_value = _draft("支持台独的重要讲话")
+        service = InteractionService(agy_provider=AgyInteractionProvider(), rule_provider=rule_provider)
         with patch("video_processing.interaction.agy_provider.run_agy_structured", return_value=malformed), patch(
             "video_processing.interaction.agy_provider.time.sleep"
         ):
-            with pytest.raises(CensorshipViolationError):
-                service.generate_comment(title="支持台独的重要讲话", description="敏感内容")
+            with pytest.raises(CensorshipViolationError, match="未能通过安全审查"):
+                service.generate_comment(title="普通标题", description="普通描述")
