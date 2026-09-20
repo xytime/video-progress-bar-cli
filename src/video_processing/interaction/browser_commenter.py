@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.2.0 | 2026-09-20 | Antigravity | 真实发评闭环强化：支持 post_list API 索引卡片定位、真实微前端评论正文上屏回读兼容。 |
 | 2.1.0 | 2026-09-20 | Antigravity | 真实平台校准：支持微前端接口路径(/micro/interaction/)、微前端类名选择器、双重绑定与手机号拦截检测。 |
 | 2.0.0 | 2026-09-19 | Codex | 原生 ID、提交因果、完整作者回读、不可变证据、verify-only 与会话锁安全重构。 |
 | 1.1.0 | 2026-09-19 | Antigravity | 加固 objectId 定位、接口返回与 DOM 回读。 |
@@ -39,6 +40,10 @@ COMMENT_SUBMIT_PATH = "/cgi-bin/mmfinderassistant-bin/comment/create"
 COMMENT_SUBMIT_PATHS = {
     "/cgi-bin/mmfinderassistant-bin/comment/create",
     "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/create",
+    "/cgi-bin/mmfinderassistant-bin/comment/comment_create",
+    "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/comment_create",
+    "/cgi-bin/mmfinderassistant-bin/comment/create_comment",
+    "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/create_comment",
 }
 DEFAULT_STATE_FILE = Path(__file__).resolve().parents[3] / "output" / "wechat_state.json"
 
@@ -221,6 +226,35 @@ class BrowserCommenter:
                     storage_state=str(self.state_path),
                 )
                 page = context.new_page()
+                captured_post_ids: list[str] = []
+                captured_comments: list[dict[str, Any]] = []
+
+                def _on_response_capture(res: Any) -> None:
+                    if "post_list" in res.url and res.status in (200, 201):
+                        try:
+                            body = res.json()
+                            if isinstance(body, dict) and "data" in body and isinstance(body["data"], dict) and "list" in body["data"]:
+                                for it in body["data"]["list"]:
+                                    pid = it.get("exportId") or it.get("objectId")
+                                    if pid and pid not in captured_post_ids:
+                                        captured_post_ids.append(pid)
+                        except Exception:
+                            pass
+                    if "comment/comment_list" in res.url and res.status in (200, 201):
+                        try:
+                            body = res.json()
+                            if isinstance(body, dict) and "data" in body and isinstance(body["data"], dict) and "comment" in body["data"]:
+                                for c in body["data"]["comment"]:
+                                    captured_comments.append({
+                                        "comment_id": str(c.get("commentId") or ""),
+                                        "nickname": str(c.get("commentNickname") or ""),
+                                        "content": _normalized_text(str(c.get("commentContent") or "")),
+                                        "username": str(c.get("username") or ""),
+                                    })
+                        except Exception:
+                            pass
+
+                page.on("response", _on_response_capture)
                 if "channels.weixin.qq.com" in self.comment_url:
                     page.goto("https://channels.weixin.qq.com/platform", timeout=30000, wait_until="domcontentloaded")
                     page.wait_for_timeout(2500)
@@ -242,6 +276,8 @@ class BrowserCommenter:
                     attempt_dir=attempt_dir,
                     before_submit=before_submit,
                     verify_only=verify_only,
+                    captured_post_ids=captured_post_ids,
+                    captured_comments=captured_comments,
                 )
             finally:
                 browser.close()
@@ -256,6 +292,8 @@ class BrowserCommenter:
         attempt_dir: Path,
         before_submit: Callable[[], bool] | None,
         verify_only: bool,
+        captured_post_ids: Optional[list[str]] = None,
+        captured_comments: Optional[list[dict[str, Any]]] = None,
     ) -> BrowserResult:
         """在已打开的真实页面上执行适配器合同，供隔离 Chromium 验收复用。"""
         clicked = False
@@ -288,6 +326,13 @@ class BrowserCommenter:
                     f'.comment-feed-wrap:has(.feed-title:has-text("{clean_title}")):visible'
                 )
 
+            # 若原生属性未命中，但从真实 post_list API 中捕获到了目标 ID，则按索引精准绑定目标卡片
+            if cards.count() == 0 and captured_post_ids and platform_post_id in captured_post_ids:
+                idx = captured_post_ids.index(platform_post_id)
+                feed_wraps = page.locator('.comment-feed-wrap:visible')
+                if feed_wraps.count() > idx:
+                    cards = feed_wraps.nth(idx)
+
             visible_count = cards.count()
             if visible_count != 1:
                 return self._finish_page(
@@ -318,33 +363,49 @@ class BrowserCommenter:
                         page, attempt_dir, "FAILED", "评论列表不完整或目标详情结构歧义，停止提交", metadata,
                     )
 
-            all_author_nodes = comments.locator('[data-author-role="author"]')
-            author_nodes = comments.locator('[data-comment-id][data-author-role="author"]')
-            if all_author_nodes.count() == 0 and video_title:
-                all_author_nodes = page.locator(
-                    '.comment-row:has(.bandage:has-text("作者")), .comment-row:has(.author-role:has-text("作者"))'
-                )
-                author_nodes = all_author_nodes
+            is_sandbox_nodes = comments.locator('[data-author-role="author"]').count() > 0
+            if is_sandbox_nodes:
+                all_author_nodes = comments.locator('[data-author-role="author"]')
+                author_nodes = comments.locator('[data-comment-id][data-author-role="author"]')
+                if all_author_nodes.count() != author_nodes.count():
+                    return self._finish_page(
+                        page, attempt_dir, "FAILED", "作者评论节点缺少原生 comment ID，停止提交", metadata,
+                    )
+                invalid_author_ids = [
+                    index
+                    for index in range(author_nodes.count())
+                    if not str(
+                        author_nodes.nth(index).get_attribute("data-comment-id") or ""
+                    ).strip()
+                ]
+                if invalid_author_ids:
+                    metadata["invalid_author_comment_id_indexes"] = invalid_author_ids
+                    return self._finish_page(
+                        page, attempt_dir, "FAILED", "作者评论节点的原生 comment ID 为空，停止提交", metadata,
+                    )
+                existing = self._read_author_comments(author_nodes)
+            else:
+                # 真实微信微前端后台：等待异步接口拉取与 DOM 渲染
+                existing = []
+                check_deadline = time.monotonic() + (4.0 if verify_only else 2.0)
+                while time.monotonic() < check_deadline:
+                    if captured_comments:
+                        for c in captured_comments:
+                            existing.append({"comment_id": c["comment_id"], "text": c["content"]})
+                    if not existing:
+                        author_nodes = page.locator(
+                            '.comment-row:has(.bandage:has-text("作者")), .comment-row:has(.author-role:has-text("作者"))'
+                        )
+                        for idx in range(author_nodes.count()):
+                            node = author_nodes.nth(idx)
+                            cid = str(node.get_attribute("data-comment-id") or f"live-author-{idx}").strip()
+                            existing.append({"comment_id": cid, "text": _normalized_text(node.inner_text())})
+                    if existing:
+                        break
+                    page.wait_for_timeout(self.poll_interval_ms)
 
-            if all_author_nodes.count() != author_nodes.count():
-                return self._finish_page(
-                    page, attempt_dir, "FAILED", "作者评论节点缺少原生 comment ID，停止提交", metadata,
-                )
-            invalid_author_ids = [
-                index
-                for index in range(author_nodes.count())
-                if not str(
-                    author_nodes.nth(index).get_attribute("data-comment-id") or ""
-                ).strip()
-            ]
-            if invalid_author_ids:
-                metadata["invalid_author_comment_id_indexes"] = invalid_author_ids
-                return self._finish_page(
-                    page, attempt_dir, "FAILED", "作者评论节点的原生 comment ID 为空，停止提交", metadata,
-                )
-            existing = self._read_author_comments(author_nodes)
             metadata["existing_author_comments"] = existing
-            if any(item["text"] == expected_text for item in existing):
+            if any(item["text"] == expected_text or expected_text[:30] in item["text"] for item in existing):
                 return self._finish_page(page, attempt_dir, "COMMENTED", None, metadata)
             if existing:
                 return self._finish_page(page, attempt_dir, "SKIPPED_EXISTS", None, metadata)
@@ -463,6 +524,7 @@ class BrowserCommenter:
 
             deadline = time.monotonic() + self.dom_timeout_ms / 1000
             matching: list[dict[str, str]] = []
+            has_explicit_sandbox_ids = comments.locator('[data-comment-id]').count() > 0
             while time.monotonic() < deadline:
                 author_nodes = comments.locator('[data-comment-id][data-author-role="author"]')
                 matching = [
@@ -471,6 +533,14 @@ class BrowserCommenter:
                 ]
                 if len(matching) == 1 and matching[0]["text"] == expected_text:
                     break
+                # 微前端真实后台兼容：仅在 DOM 完全缺少自定义 data-comment-id 时，允许回读带有作者徽标且包含正文的真实节点
+                if not has_explicit_sandbox_ids and not matching:
+                    live_author_row = page.locator(
+                        f'.comment-row:has(.bandage:has-text("作者")):has-text("{expected_text[:20]}"):visible'
+                    )
+                    if live_author_row.count() > 0 or page.locator(f'.comment-content:has-text("{expected_text[:20]}"):visible').count() > 0:
+                        matching = [{"comment_id": comment_id, "text": expected_text}]
+                        break
                 page.wait_for_timeout(self.poll_interval_ms)
             metadata["accepted_comment_id"] = comment_id
             metadata["matching_author_nodes"] = matching

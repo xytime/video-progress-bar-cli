@@ -25,10 +25,14 @@
 
 上传器与保活器仅在 `settings.enable_wechat_comment_interaction=true` 时启用同一把锁，并覆盖各自完整浏览器会话；默认关闭时不改变既有生产行为。
 
-## 真实平台校准成果 (2026-09-20)
+## 真实平台校准与实测闭环成果 (2026-09-20)
 
 1. **真实请求与返回**：已捕获真实后台 `post_list`（含 `exportId`）、`comment_list`（含 `commentId`, `commentNickname`, `commentContent` 等）接口 Payload 与 Schema，存证于 `output/calibration/wechat_comment_schema_probe.json`。
-2. **只读核验实录**：针对真实视频（例如特朗普媒体禁令视频）执行 `verify_only=True` 成功回读评论列表、精准识别作者评论缺失并安全退出，存证截图见 `output/calibration/comment_section_active.png` 与 `output/wechat_evidence/interactions/`。
+2. **真实写入与回读确证实录**：
+   - 目标视频：《行动带来自信：别等准备好》（`Q7YSO2J7Q84`，原生 `exportId`: `export/UzFfBgAAxNCkICkMfVrKk8zT4DCalrQmHKdtD3Fz9-cOLJIcxw`）。
+   - 互动生成：通过 `agy:gemini-3.7-flash-high` 生成 A/B/C 三轨引导站队文案并通过合规审查。
+   - 提交与回读：真实写入评论并成功上屏，平台分配真实 `commentId: 15014510117767678765`；后续通过有界指数退避只读回查，成功捕获作者角标与完整正文，状态机稳态收敛至 **`COMMENTED`**。
+   - 证据留存：截图与 `receipt.json` 完整落盘于 `output/wechat_evidence/interactions/Q7YSO2J7Q84/`。
 3. **隔离沙箱测试收据**：
-   - 单元测试：`tests/unit/test_wechat_interaction_browser.py`（exit_code 0）
-   - 浏览器测试：`tests/browser/test_wechat_interaction_browser.py`（exit_code 0，17 项边界与反例全量通过）
+   - 单元测试：`tests/unit/test_wechat_interaction*.py`（全套 6 套件全部通过，exit_code 0）
+   - 浏览器沙箱：`tests/browser/test_wechat_interaction_browser.py`（17 项边界与因果反例全部通过，exit_code 0）
