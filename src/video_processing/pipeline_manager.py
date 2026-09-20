@@ -1080,7 +1080,7 @@ class PipelineManager:
                 process = subprocess.Popen(
                     cmd,
                     cwd=str(self._PRJ_ROOT),
-                    env=self._build_subprocess_env(),
+                    env=_build_subprocess_env(),
                     stdout=log_file,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,

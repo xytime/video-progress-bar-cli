@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.0 | 2026-09-20 | Antigravity | 增加巡航日志高频熔断信息跨分钟持久化降频，并在启动时修剪保留最近 N 日日志 |
 | 1.8.6 | 2026-09-18 | Antigravity | 英语世界延后项巡航派发改用专属发布窗口判定 is_english_world_publish_window。 |
 | 1.8.5 | 2026-09-07 | Codex | 投稿器退出码 10 按正常延后记录，避免锁忙被误报为失败。 |
 | 1.8.4 | 2026-09-05 | Codex | 自动抖音只读回查固定后台运行，避免投稿可视化配置导致桌面窗口风暴。 |
@@ -36,7 +37,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,9 @@ from video_processing.telegram_delivery import send_text
 
 LOCK_PATH = PROJECT_ROOT / "output" / "publication_window_runner.lock"
 RUN_STATUS_PATH = PROJECT_ROOT / "output" / "publication_window_status.json"
+LOG_PATH = PROJECT_ROOT / "output" / "pipeline_window.log"
+SUPPRESSION_STATE_PATH = PROJECT_ROOT / "output" / "publication_window_log_suppression.json"
+TRIM_STATE_PATH = PROJECT_ROOT / "output" / "publication_window_last_trim.json"
 _HEARTBEAT_INTERVAL_SEC = 60
 
 
@@ -541,8 +545,153 @@ def reconcile_one_english_world_submission() -> None:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+class _PersistentDeduplicatingFilter(logging.Filter):
+    """同一类高频熔断/警告提示在抑制窗口内（默认 1 小时）只输出一次。
+    通过文件持久化状态，支持 cron 每分钟独立启动新 Python 进程的场景。
+    """
+    _PATTERNS = (
+        "[DouyinUiGuard]",
+        "[DouyinManagementHalt]",
+        "[DouyinHalt]",
+        "[EnglishWorld][Douyin] UI 熔断",
+        "抖音管理页回查触发阶段熔断",
+        "抖音审核回查触发熔断",
+    )
+
+    def __init__(self, state_path: Path, suppression_window_sec: int = 3600) -> None:
+        super().__init__()
+        self._state_path = state_path
+        self._suppression_window_sec = max(60, suppression_window_sec)
+        self._state: dict[str, float] = self._load_state()
+
+    def _load_state(self) -> dict[str, float]:
+        if not self._state_path.is_file():
+            return {}
+        try:
+            data = json.loads(self._state_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {k: float(v) for k, v in data.items() if isinstance(v, (int, float))}
+        except Exception:
+            pass
+        return {}
+
+    def _save_state(self) -> None:
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            temp = self._state_path.with_suffix(".tmp")
+            temp.write_text(json.dumps(self._state, ensure_ascii=False) + "\n", encoding="utf-8")
+            temp.replace(self._state_path)
+        except Exception:
+            pass
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        now = time.time()
+        for pat in self._PATTERNS:
+            if pat in msg:
+                last_time = self._state.get(pat, 0.0)
+                if now - last_time < self._suppression_window_sec:
+                    return False
+                self._state[pat] = now
+                self._save_state()
+                break
+        return True
+
+
+def _trim_log_to_recent_days(
+    log_path: Path,
+    keep_days: int = 7,
+    max_size_mb: int = 30,
+    throttle_hours: float = 12.0,
+) -> bool:
+    """保留最近 N 天的日志行，清理过旧日志（无需外部 logrotate）。
+    带有大小阈值与节流保护，避免每分钟巡航频繁读写大文件。
+    """
+    if not log_path.is_file():
+        return False
+
+    stat = log_path.stat()
+    file_size_mb = stat.st_size / (1024 * 1024)
+    now = time.time()
+
+    # 检查上次修剪时间
+    last_trim_time = 0.0
+    if TRIM_STATE_PATH.is_file():
+        try:
+            state = json.loads(TRIM_STATE_PATH.read_text(encoding="utf-8"))
+            last_trim_time = float(state.get("last_trim_time", 0.0))
+        except Exception:
+            pass
+
+    # 仅当超过大小阈值且距离上次修剪超过节流时间（或首次）时执行
+    if file_size_mb < max_size_mb and (now - last_trim_time < throttle_hours * 3600):
+        return False
+    if (now - last_trim_time < throttle_hours * 3600) and file_size_mb < max_size_mb * 2:
+        return False
+
+    cutoff_str = (datetime.now() - timedelta(days=max(1, keep_days))).strftime("%Y-%m-%d")
+    temp_path = log_path.with_suffix(".trimming")
+
+    try:
+        found_start = False
+        with log_path.open("r", encoding="utf-8", errors="ignore") as src, \
+             temp_path.open("w", encoding="utf-8") as dst:
+            for line in src:
+                if not found_start:
+                    if len(line) >= 10 and line[4] == "-" and line[7] == "-":
+                        if line[:10] >= cutoff_str:
+                            found_start = True
+                            dst.write(line)
+                else:
+                    dst.write(line)
+
+        if found_start:
+            temp_path.replace(log_path)
+            # 将当前进程 stdout/stderr 重定向到新修剪的文件，保证无缝追加
+            try:
+                new_fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+                os.dup2(new_fd, 1)
+                os.dup2(new_fd, 2)
+                os.close(new_fd)
+            except Exception:
+                pass
+        else:
+            if temp_path.is_file():
+                temp_path.unlink(missing_ok=True)
+
+        TRIM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        TRIM_STATE_PATH.write_text(
+            json.dumps({"last_trim_time": now, "cutoff_date": cutoff_str}, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        return True
+    except Exception as exc:
+        logging.warning("[PublicationWindow] 日志自动修剪失败（不影响主流程）: %s", exc)
+        if temp_path.is_file():
+            temp_path.unlink(missing_ok=True)
+        return False
+
+
 def main() -> int:
+    try:
+        _trim_log_to_recent_days(
+            LOG_PATH,
+            keep_days=settings.pipeline_window_log_keep_days,
+        )
+    except Exception:
+        pass
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    root_logger = logging.getLogger()
+    suppression_filter = _PersistentDeduplicatingFilter(
+        SUPPRESSION_STATE_PATH,
+        suppression_window_sec=settings.pipeline_window_log_suppression_window_sec,
+    )
+    root_logger.addFilter(suppression_filter)
+    for handler in root_logger.handlers:
+        handler.addFilter(suppression_filter)
+
     try:
         reconcile_one_english_world_submission()
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:

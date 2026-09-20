@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.66.0 | 2026-09-20 | Antigravity | 新增 pipeline_window_log_keep_days 与 pipeline_window_log_suppression_window_sec 配置，用于巡航日志降频与保留天数治理 |
 | 3.65.1 | 2026-09-19 | Codex | Runway-CTA v2 生产默认触发参数对齐审核公式：首段比例 0.12、尾段距片尾 16 秒。 |
 | 3.65.0 | 2026-09-19 | Antigravity | 扩展 OptionSense 交易日安全窗口为 16:15-17:50 与 19:00-08:30 ET。 |
 | 3.65.0 | 2026-09-19 | Antigravity | Project Runway-CTA: 新增 enable_interaction_overlay 及触发比例/音量配置，生产默认 False。 |
@@ -134,6 +135,10 @@ class Settings(BaseSettings):
 
     # 日志级别
     log_level: str = "INFO"
+
+    # 巡航日志治理：pipeline_window.log 保留天数与高频熔断日志抑制窗口(秒)
+    pipeline_window_log_keep_days: int = Field(default=7, ge=1, le=365)
+    pipeline_window_log_suppression_window_sec: int = Field(default=3600, ge=60)
 
     # FFmpeg 可执行文件路径（留空则使用系统 PATH 中的默认值）
     ffmpeg_path: Optional[str] = None

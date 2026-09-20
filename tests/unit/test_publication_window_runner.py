@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.5 | 2026-09-20 | Antigravity | 覆盖持久化日志降频过滤器与保留 N 日日志修剪功能。 |
 | 1.8.4 | 2026-09-18 | Antigravity | 覆盖英语世界专属发布窗口 is_english_world_publish_window 派发判定。 |
 | 1.8.3 | 2026-09-07 | Codex | 区分投稿器正常延后退出码与真实失败，防止锁忙刷 ERROR。 |
 | 1.0.0 | 2026-07-31 | Codex | 覆盖窗口外跳过与窗口内单次完整流水线调用 |
@@ -320,3 +321,56 @@ def test_reconciliation_timeout_reaches_fuse_and_escapes_notification(monkeypatc
     assert notifications[0]["event_type"] == "english_world.reconciliation_recording_required"
     assert "A&amp;B &lt;成长&gt;" in notifications[0]["text"]
     assert "A&B <成长>" not in notifications[0]["text"]
+
+
+def test_persistent_deduplicating_filter(tmp_path: Path):
+    import logging
+    state_file = tmp_path / "suppression.json"
+    dedup_filter = runner._PersistentDeduplicatingFilter(state_file, suppression_window_sec=100)
+
+    record1 = logging.LogRecord("test", logging.WARNING, "test.py", 10, "[DouyinUiGuard] 发生熔断", (), None)
+    # 第一次输出，应当放行
+    assert dedup_filter.filter(record1) is True
+
+    # 立即再次输出同一模式，应当被抑制 (返回 False)
+    record2 = logging.LogRecord("test", logging.WARNING, "test.py", 11, "[DouyinUiGuard] 再次发生熔断", (), None)
+    assert dedup_filter.filter(record2) is False
+
+    # 普通非熔断日志不受影响
+    record3 = logging.LogRecord("test", logging.INFO, "test.py", 12, "普通信息", (), None)
+    assert dedup_filter.filter(record3) is True
+
+    # 新实例加载同一状态文件，依然应当受抑制
+    dedup_filter2 = runner._PersistentDeduplicatingFilter(state_file, suppression_window_sec=100)
+    assert dedup_filter2.filter(record2) is False
+
+
+def test_trim_log_to_recent_days(tmp_path: Path, monkeypatch):
+    log_file = tmp_path / "test_window.log"
+    state_file = tmp_path / "last_trim.json"
+    monkeypatch.setattr(runner, "TRIM_STATE_PATH", state_file)
+
+    # 写入包含过旧日期和近期日期的日志
+    content = (
+        "2026-08-01 10:00:00 INFO Old log line 1\n"
+        "2026-08-02 10:00:00 INFO Old log line 2\n"
+        "2026-09-18 10:00:00 INFO Recent log line 1\n"
+        "2026-09-19 10:00:00 INFO Recent log line 2\n"
+    )
+    log_file.write_text(content, encoding="utf-8")
+
+    # 执行修剪，设置大小阈值 0MB 确保触发，保留 3 天（今天是 2026-09-20，3 天前是 2026-09-17）
+    result = runner._trim_log_to_recent_days(
+        log_file,
+        keep_days=3,
+        max_size_mb=0,
+        throttle_hours=0,
+    )
+    assert result is True
+
+    trimmed = log_file.read_text(encoding="utf-8")
+    assert "Old log line 1" not in trimmed
+    assert "Old log line 2" not in trimmed
+    assert "Recent log line 1" in trimmed
+    assert "Recent log line 2" in trimmed
+
