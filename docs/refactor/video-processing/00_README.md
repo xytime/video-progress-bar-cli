@@ -2,7 +2,7 @@
 created_by: Gemini_3.8_Flash_planning
 created_at: 2026-09-12
 last_updated_at: 2026-09-20
-version: 2.1.0
+version: 2.2.0
 ---
 
 # Video-precessing 架构治理与重构接手总指南
@@ -10,6 +10,7 @@ version: 2.1.0
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.2.0 | 2026-09-20 | Antigravity | M6.2+ 第五轮架构终审 3 项 P1 缺口彻底闭环：① 消除文档间矛盾，全面更新 Section 6.1 实操回滚命令与恢复步骤（实装 crontab 宿主物理静音 # QUIESCE_DISABLED、真实锁探测 canonical_wechat_session_lock_path 对应 output/.wechat_state.json.browser.lock、与反向恢复调度命令）；② 确立外键兼容的原子领取事务顺序（BEGIN IMMEDIATE 内严格执行：4 表联合前置阻断检查 → 先插入 Attempt 满足 active_attempt_id 外键 → 随后插入活跃租约实现主键互斥 → COMMIT，任一步失败全量回滚零残留）；③ 恢复历史 Attempt 联合阻断（检查租约表、Publication 表与历史 Attempt 表，杜绝存量独立 Attempt 重复发帖入口，并增设单测验证） |
 | 2.1.0 | 2026-09-20 | Antigravity | M6.2+ 第四轮架构终审 3 项 P1 缺口深度闭环：① 规范会话锁路径探测（canonical_wechat_session_lock_path 探测 output/.wechat_state.json.browser.lock）并在 POLARIS-101 增设真实持锁反例测试；② 确立租约方案 A 完整契约（废除方案 B，补齐 Attempt 表 CHECK 扩展迁移与 active claims 独立表创建、同事务 CAS 领取与按 active_attempt_id 条件精确释放）；③ 升级启动源封闭为宿主级 crontab 物理静音（# QUIESCE_DISABLED 前缀与活跃项清空核验），静音覆盖全回滚与沙箱测试窗口 |
 | 2.0.0 | 2026-09-20 | Antigravity | M6.2+ 架构终审 4 项缺陷闭环与基线漂移归属：① 彻底封堵 UNCERTAIN 状态 CAS 领取穿透漏洞（多表联合阻断，单测物理验证拒绝重发）；② 消除历史数据唯一索引冲突风险（独立原子租约表 A 方案与去重归档 B 方案）；③ 升级全系统受控停写与零消费物理核验（pipeline_freeze.lock 封闭启动源、PGID 整树清理、Chromium 孤儿清理与会话锁释放验证）；④ 根除 WAL 备份覆写隐患（微秒时间戳+UUID 熵、拒绝覆盖、完整性校验与恢复点登记）；⑤ 明确 Git HEAD e897eb2 基线与 9b0eb71 业务提交归属，严格分离【协议已落盘】/【实现待完成】/【测试已验证】 |
 | 1.9.0 | 2026-09-20 | Antigravity | M6.2+ 第三轮架构复审协议与剧本深度闭环：确立全局停写与在途执行进程零消费物理核验门禁、SQLite WAL 模式一致性在线备份（conn.backup()）与完整性校验、Attempt 增量表迁移与部分唯一活跃索引 CAS 原子领取、回滚验证绑定 POLARIS-101 防线单测（失败保持暂停）、影子比对显式开启读事务快照（BEGIN DEFERRED 消除 with conn 假读事务）并验收并发隔离、定点纠偏全面收敛至受测 DAL 接口（根绝生产裸 SQL） |

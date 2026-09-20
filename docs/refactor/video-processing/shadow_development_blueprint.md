@@ -6,18 +6,19 @@ version: 2.1.0
 title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指南
 ---
 
-# VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指南
+# VP-POLARIS「北辰」重构工程多角色影子开发实施指南 (Shadow Development Blueprint)
 
-> **工单代号**：`VP-POLARIS`（北辰）  
-> **关联总工单**：[`docs/refactor/video-processing/VP-POLARIS-WORK-ORDER.md`](./VP-POLARIS-WORK-ORDER.md)  
-> **红蓝博弈对抗报告**：[`docs/refactor/video-processing/adversarial_red_blue_game_2026-09-20.md`](./adversarial_red_blue_game_2026-09-20.md)  
-> **核心战略**：Hybrid Plan B（Containment 旁路收口 → Contract/Harness 契约修正与失败测试 → Incremental Extraction 渐进影子解耦）  
-> **当前阶段**：`Phase M6.2+`（黄金回放数据集建设与红蓝对抗加固完毕，第四轮架构终审 3 项 P1 缺口深度闭环完毕，待启动 `Phase M6.5A`）  
-> **协作范式**：全面借鉴 `/teamwork-preview` 的多角色分工机制（Objective Verification / Acceptance Criteria = Guardrails / Specify What, Not How）
+> **文档定位**：本指南借鉴 `/teamwork-preview` 的多角色协作范式，在 `VP-POLARIS-WORK-ORDER.md` 确立的 **Hybrid Plan B（Containment 旁路收口 → Contract/Harness 契约修正与失败测试 → Incremental Extraction 渐进解耦）** 战略指导下，细化为五个具有严格工程制衡关系角色的实操手册。  
+> **核心铁律**：在 `POLARIS-101` ~ `POLARIS-105` 推进期间，**严禁修改任何生产运行代码**，所有安全与契约必须通过双轨隔离回归证据（先行失败与基线保绿）进行物理闭环。
+> **当前阶段**：`Phase M6.2+`（黄金回放数据集建设与红蓝对抗加固完毕，第五轮架构终审 3 项 P1 缺口彻底闭环，待启动 `Phase M6.5A`）  
 
-## Version History
-| Version | Date | Author | Description |
-| --- | --- | --- | --- |
+---
+
+## 变更历史 (Change Log)
+
+| 版本 | 日期 | 作者 | 说明 |
+| :--- | :---: | :---: | :--- |
+| 2.2.0 | 2026-09-20 | Antigravity | M6.2+ 第五轮架构终审 3 项 P1 缺口深度闭环：① 回滚剧本彻底消除文档间矛盾，实操命令全量更新为宿主 crontab 物理静音（# QUIESCE_DISABLED）、真实锁探测（canonical_wechat_session_lock_path）与反向恢复步骤；② 纠正领取事务外键顺序为 BEGIN IMMEDIATE -> 4 表联合阻断 -> 先 Attempt 后活跃租约 -> COMMIT，杜绝外键与主键冲突；③ 领取条件补齐历史 Attempt 联合阻断，增设历史 Attempt 独占拒绝与外键回滚无残留单测 |
 | 2.1.0 | 2026-09-20 | Antigravity | M6.2+ 第四轮架构终审 3 项 P1 缺口终极闭环：① 纠正会话锁核验路径：调用 canonical_wechat_session_lock_path 解析真实锁文件 output/.wechat_state.json.browser.lock，并在 POLARIS-101 增加持锁反例测试；② 确立租约方案 A 完整契约：废弃方案 B，补齐 Attempt 表 CHECK 扩展迁移与 wechat_submission_active_claims 独立表创建、同事务 CAS 领取与按 active_attempt_id 条件释放；③ 升级启动源宿主级停用：引入 crontab 物理静音（# QUIESCE_DISABLED 注释与核验），彻底摆脱对可能被 revert 业务代码的依赖，静音窗口覆盖全回滚与沙箱测试 |
 | 2.0.0 | 2026-09-20 | Antigravity | M6.2+ 架构终审 4 项缺陷闭环与基线漂移归属：① 彻底封堵 UNCERTAIN 领取 SQL 穿透漏洞（Attempt 与 Publication 联合阻断，补齐禁止重领单测）；② 消除历史数据唯一索引冲突风险（提出独立原子租约表 A 方案与同表去重归档 B 方案，避免 IntegrityError 崩溃）；③ 升级全系统受控停写与零消费物理核验（引入 pipeline_freeze.lock 封闭启动源、PGID 整树清理、Chromium 孤儿清理与会话锁释放验证）；④ 根除 WAL 备份覆写隐患（微秒时间戳+UUID 熵、拒绝覆盖、完整性校验与恢复点登记）；⑤ 明确 Git HEAD e897eb2 基线与 9b0eb71 业务提交归属，严格分离【协议已落盘】/【实现待完成】/【测试已验证】 |
 | 1.3.0 | 2026-09-20 | Antigravity | M6.2 复审闭环加固：建立 BUSY 锁忙与普通退出码 1 区分协议；修正退出码 3 为结果未确认；补齐 QUEUED 响应前持久化与 At-Most-Once 提交前 Attempt 租约协议；确立受控安全回滚五步法（前置暂停+回滚后防线验证）；规范 SQLite 定点差异纠偏剧本（排除 PUBLISHED 终态）；明确共享读事务快照与超时物理中断释放 |
@@ -195,8 +196,10 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
      - **外部执行退出码 3 (`EXIT_RESULT_UNCERTAIN`) 结果映射**：断言退出码 3 精准识别为“发布结果未确认”（网络超时或页面未确认），系统必须保留现场素材与日志，标记为待人工核验，绝对不得触发自动重试，也不得误判为登录凭证失效（退出码 2）；
      - **子进程超时保护与资源清理**：模拟浏览器自动化长时间挂起，断言系统能否在配置超时后正常回收进程组并安全处理；
      - **外部已受理但本地写账本失败的崩溃窗口与租约恢复**：模拟在调用上传器前写入持久化 Attempt 租约；模拟在微信平台点击发表后、本地写入 Publication 账本前发生进程 SIGKILL，断言系统重启后检测到未确认的 `IN_PROGRESS` 尝试，强制 Fail-Closed 进入 `UNCERTAIN` 并阻止自动重复提交；
-     - **转入 UNCERTAIN 后再次领取任务仍被拒绝的阻断测试 (`test_claim_attempt_rejected_when_prior_attempt_is_uncertain`)**：构建场景：前序任务因未决超时或崩溃恢复被标记为 `UNCERTAIN`（无论在 `wechat_submission_active_claims` 还是 `wechat_publications` 中），断言调用发布任务原子领取 CAS 接口时**必须 100% 被拒绝**（受影响行数为 0 且抛出或返回 `SubmissionClaimRejectedUncertain` 结构化拒绝原因），且无任何新 Attempt 行插入，物理验证无法穿透阻断；
+     - **转入 UNCERTAIN 后再次领取任务仍被拒绝的阻断测试 (`test_claim_attempt_rejected_when_prior_attempt_is_uncertain`)**：构建场景：前序任务因未决超时或崩溃恢复被标记为 `UNCERTAIN`（无论在 `wechat_submission_active_claims`、`wechat_submission_attempts` 还是 `wechat_publications` 中），断言调用发布任务原子领取 CAS 接口时**必须 100% 被拒绝**（抛出或返回 `SubmissionClaimRejectedUncertain` 结构化拒绝原因），且无任何新 Attempt 行插入，物理验证无法穿透阻断；
      - **独立活跃租约生命周期与条件释放测试 (`test_active_claims_lease_lifecycle`)**：在沙箱内断言 `wechat_submission_active_claims` 与 `wechat_submission_attempts` 在单事务内的原子创建；断言并发冲突时第二个领取被拒绝；断言携带匹配的 `active_attempt_id` 时可正常释放或更新状态，携带不匹配 ID 时无法篡改或删除他人租约；
+     - **历史 Attempt 存在时的独立阻断测试 (`test_claim_attempt_rejected_when_only_historical_attempt_exists`)**：断言当某视频仅存在历史 `wechat_submission_attempts`（状态为 `SUBMITTED_UNBOUND` / `PLATFORM_ID_BOUND` / `UNCERTAIN`），且租约表 `wechat_submission_active_claims` 与 Publication 账本尚无记录时，调用原子领取接口**必须坚决被拒绝**（抛出或返回已发布/未决错误），绝不重复领取与重复发帖；
+     - **外键兼容与领取失败原子回滚无残留测试 (`test_claim_attempt_rollback_leaves_no_residual_on_failure`)**：断言在 `BEGIN IMMEDIATE` 事务中，若步骤 3（插入租约表）遭遇主键冲突或外部异常失败，整个事务干净回滚，步骤 2 先行写入的 Attempt 审计行**必须完全回滚，数据库无任何残留孤儿数据**；
      - **微信真实会话锁规范化探测与持锁反例测试 (`test_wechat_session_lock_probe_detects_real_hold_and_release`)**：调用 `canonical_wechat_session_lock_path("output/wechat_state.json")` 解析出真实锁文件（`.wechat_state.json.browser.lock`）；断言当后台线程通过 `WeChatSessionLock` 持有该真实锁时，探测脚本**必须捕获 `BlockingIOError` 并判定为锁忙失败（非零退出码反例）**；持锁线程释放后，探测脚本必须成功断言为 FREE（返回码 0）。
 - **验收护栏 (Guardrails)**：
   - [ ] **严禁修改任何生产代码**。
@@ -234,39 +237,50 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
              );
              ```
              `subject_id` 为主键，物理上天然保证每个发布主体全局仅存在至多一条活跃租约，彻底杜绝历史数据与高频互斥的耦合。
-      - **同事务联合 CAS 原子领取契约 (Atomic Claim Protocol in Single Transaction)**：
-        - 拉起 `wechat_uploader.py` 之前，必须在单个 SQLite 写入事务（`BEGIN IMMEDIATE`）内完成两步：
-          - *步骤 1：原子抢占活跃租约并执行多表联合阻断*：
+      - **外键兼容与四表联合原子领取契约 (FK-Compatible Joint Atomic Claim in Single Transaction)**：
+        - 拉起 `wechat_uploader.py` 之前，必须在单个 SQLite 写入事务（`BEGIN IMMEDIATE`）内严格按外键依赖与防御顺序执行：
+          - *步骤 1：多表联合前置阻断判定 (Pre-Claim Joint Blocking Check)*：
+            在事务内查询当前 `subject_id` 是否满足所有阻断条件（租约表、历史 Attempt 表、Publication 事实表、主表状态）：
             ```sql
-            INSERT INTO wechat_submission_active_claims (subject_id, video_id, active_attempt_id, claim_state)
-            SELECT ?, ?, ?, 'IN_PROGRESS'
-            WHERE NOT EXISTS (
+            SELECT 
                 -- 阻断 1: 租约表中已存在活跃租约（IN_PROGRESS / SUBMITTED_UNBOUND / PLATFORM_ID_BOUND / UNCERTAIN）
-                SELECT 1 FROM wechat_submission_active_claims WHERE subject_id = ?
-            )
-            AND NOT EXISTS (
-                -- 阻断 2: Publication 事实表中已存在未结或已发布记录
-                SELECT 1 FROM wechat_publications 
-                WHERE subject_id = ? AND state IN ('SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNDER_REVIEW', 'UNCERTAIN', 'PUBLISHED')
-            )
-            AND NOT EXISTS (
-                -- 阻断 3: 对应视频主表状态处于已受理或已发布终态
-                SELECT 1 FROM processed_videos 
-                WHERE id = ? AND status IN ('SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNDER_REVIEW', 'UNCERTAIN', 'PUBLISHED')
-            );
+                (SELECT claim_state FROM wechat_submission_active_claims WHERE subject_id = ? LIMIT 1) AS active_claim_state,
+                -- 阻断 2: 历史 Attempt 表中已存在记录（保留历史 Attempt 的联合阻断，杜绝存量独立 Attempt 漏网）
+                (SELECT state FROM wechat_submission_attempts 
+                 WHERE subject_id = ? AND state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN') 
+                 ORDER BY created_at DESC LIMIT 1) AS latest_attempt_state,
+                -- 阻断 3: Publication 事实表中已存在未结或已发布记录
+                (SELECT state FROM wechat_publications 
+                 WHERE subject_id = ? AND state IN ('SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNDER_REVIEW', 'UNCERTAIN', 'PUBLISHED') 
+                 ORDER BY created_at DESC LIMIT 1) AS pub_state,
+                -- 阻断 4: 对应视频主表状态处于已受理或已发布终态
+                (SELECT status FROM processed_videos 
+                 WHERE id = ? AND status IN ('SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNDER_REVIEW', 'UNCERTAIN', 'PUBLISHED') 
+                 LIMIT 1) AS main_status;
             ```
-          - *步骤 1 阻断判定与原子回滚*：
-            若受影响行数为 0，说明被已有活跃/受理/已发布记录或 UNCERTAIN 记录拦截，立即执行 `ROLLBACK`：
-            - 查询冲突源状态；若冲突源处于 `UNCERTAIN`，直接抛出 `SubmissionClaimRejectedUncertain("任务处于未决 UNCERTAIN 状态，禁止自动重领重发，必须人工核对微信后台后线下核销")`；
-            - 若处于已受理或已发布终态，返回 `SubmissionClaimRejectedAlreadyPublished`；
-            - 若被并发执行者占用（`IN_PROGRESS`），返回 `SubmissionClaimRejectedBusy`。
-          - *步骤 2：同事务持久化 Attempt 历史审计行*：
-            若步骤 1 成功插入 1 行，在同一事务中向 `wechat_submission_attempts` 插入历史审计记录：
+            *阻断判定与原子回滚*：
+            若上述任一阻断字段非空，说明存在在途、未决或已发布冲突，立即执行 `ROLLBACK`：
+            - 若任一冲突源状态为 `UNCERTAIN`，直接抛出 `SubmissionClaimRejectedUncertain("任务处于未决 UNCERTAIN 状态，禁止自动重领重发，必须人工核对微信后台后线下核销")`；
+            - 若处于已受理或已发布终态（`SUBMITTED_*`, `PLATFORM_ID_BOUND`, `UNDER_REVIEW`, `PUBLISHED`），返回 `SubmissionClaimRejectedAlreadyPublished`；
+            - 若处于 `IN_PROGRESS`，返回 `SubmissionClaimRejectedBusy`。
+          - *步骤 2：同事务优先插入 Attempt 历史审计行 (Satisfies Foreign Key)*：
+            若步骤 1 阻断检查完全通过，**必须先向 `wechat_submission_attempts` 插入新 Attempt**：
             ```sql
             INSERT INTO wechat_submission_attempts (attempt_id, video_id, subject_id, state, final_title, ...)
             VALUES (?, ?, ?, 'IN_PROGRESS', ?, ...);
             ```
-            随后执行 `COMMIT`。执行者原子获得排他性租约，物理杜绝多执行者并发与重复重发。
+            *设计原由*：`wechat_submission_active_claims.active_attempt_id` 外键引用 `wechat_submission_attempts.attempt_id`。SQLite 在默认开启外键检查（`PRAGMA foreign_keys = ON;`）且未声明延迟检查时，要求被引用的主表行必须先于外键行存在。因此必须先写 Attempt，杜绝 `FOREIGN KEY constraint failed` 异常。
+          - *步骤 3：同事务插入活跃租约表 (Foreign Key Guaranteed & PK Mutex)*：
+            紧接着向 `wechat_submission_active_claims` 插入活跃租约：
+            ```sql
+            INSERT INTO wechat_submission_active_claims (subject_id, video_id, active_attempt_id, claim_state)
+            VALUES (?, ?, ?, 'IN_PROGRESS');
+            ```
+            *外键与主键双重互斥保证*：
+            ① 由于步骤 2 已先行写入 `wechat_submission_attempts`，步骤 3 的 `FOREIGN KEY(active_attempt_id)` 立即满足约束，绝不触发外键失败；
+            ② `subject_id` 为 `PRIMARY KEY`，若有并发事务抢先写入，步骤 3 将触发 `sqlite3.IntegrityError: UNIQUE constraint failed`，事务捕获异常后立即执行 `ROLLBACK`，步骤 2 插入的 Attempt 随之原子清除，绝不留存孤儿数据。
+          - *步骤 4：原子提交 (Atomic Commit)*：
+            执行 `COMMIT`。执行者原子获得排他性租约，物理杜绝多执行者并发与历史/在途重复发布。
       - **按 `active_attempt_id` 条件释放与生命周期闭环契约 (Conditional Release & Terminal Rules)**：
         - **BUSY 退出条件释放**：当子进程因会话锁争用退出并携带明确 BUSY 凭证（`[SESSION_LOCK_BUSY]`）时，调度系统在单一事务中执行：
           ```sql
@@ -374,12 +388,22 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
 1. **第一步：前置全局停写、任务启动源封闭、在途任务清空与执行进程零消费物理核验 (Pre-Rollback Quiesce, Trigger Sealing & Zero-Consumer Verification)**：
    > [!IMPORTANT]
    > 运行 `./vpanel ui restart` 或 `ui stop` 仅仅管理 FastAPI 控制中心（`:8765`），**绝对无法停止**通过 cron 定时拉起、手动 `job run` 启动的独立 `PipelineManager` 进程、`Bot` 守护进程、以独立会话启动的互动 Worker (`pipeline_manager.py:1086` `start_new_session=True`) 以及正在执行的 `wechat_uploader.py` 浏览器进程！修改 `.env` 也无法使已经在运行中的进程自动热重载！若不在启动源头加锁，cron 会在回滚窗口内随时拉起新任务！必须执行以下七小步严格停写：
-   - **第一小步（封闭任务启动源，防定时任务/重入复活）**：
-     创建全局调度冻结锁文件：
+   - **第一小步（封闭宿主任务启动源，防定时任务/重入秒级复活）**：
+     彻底脱离对应用层可被 `git revert` 代码的依赖，提升为 OS 宿主级物理静音：
      ```bash
+     # 1. 导出当前宿主 crontab 备份
+     crontab -l > "output/crontab_backup_$(date +%Y%m%d_%H%M%S).txt"
+
+     # 2. 物理静音所有 Video-precessing 调度任务（加 # QUIESCE_DISABLED 前缀）
+     crontab -l | sed -E '/Video-precessing/s/^([^#])/# QUIESCE_DISABLED \1/' | crontab -
+
+     # 3. 严格核验活跃调度已清空（必须输出为空，否则立即人工排查）
+     crontab -l | grep -v '^[[:space:]]*#' | grep 'Video-precessing'
+
+     # 4. 创建本地调度冻结锁文件（双重进程内硬短路防线）
      touch output/pipeline_freeze.lock
      ```
-     *规范约束*：所有管线与调度入口（`monitor_channels.py`、`pipeline_manager.py`、`run_publication_window.py`、`vpanel job run` 等）在启动前置检查 `output/pipeline_freeze.lock`；若文件存在，立即记入日志 `[FROZEN] 调度已全局冻结，跳过执行` 并以退出码 0 安全退出，彻底杜绝回滚窗口内 cron（每 30 分钟 monitor、每天 09:00/21:00 定时发布）拉起新任务；
+     *规范约束*：所有管线与调度入口（`monitor_channels.py`、`pipeline_manager.py`、`run_publication_window.py`、`vpanel job run` 等）在启动前置检查 `output/pipeline_freeze.lock`；若文件存在，立即记入日志 `[FROZEN] 调度已全局冻结，跳过执行` 并以退出码 0 安全退出；配合宿主 crontab 物理静音，彻底杜绝回滚窗口内 cron（每分钟 `run_publication_window`、每 30 分钟 monitor、每天 09:00/21:00 定时发布）拉起新任务；
    - **第二小步（置环境变量与配置双重防护）**：在 `.env` 中将发布总开关置为暂停：`WECHAT_PUBLISHING_PAUSED=true`，双重阻止任何新拉起的进程消费外部发布；
    - **第三小步（停常驻服务）**：
      ```bash
@@ -397,17 +421,24 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
        `pgrep -fl "chromium.*wechat" | awk '{print $1}' | xargs -r kill -TERM`
      - 等待 30 秒；若仍有存活，执行强行终止：`kill -KILL -<PGID>` 及 `kill -KILL <PID>`；
    - **第五小步（会话排他锁与物理资源释放核验）**：
-     通过 Python 脚本对 `output/wechat_session.lock` 进行非阻塞 flock 探测，确保文件锁已被物理操作系统释放：
+     通过 Python 脚本调用 `canonical_wechat_session_lock_path` 对实际派生的锁文件 `output/.wechat_state.json.browser.lock` 进行非阻塞 flock 探测，确保真实文件锁已被物理操作系统释放：
      ```bash
      PYTHONPATH=src .venv/bin/python -c "
      import fcntl
+     from pathlib import Path
+     from video_processing.core.wechat_session_lock import canonical_wechat_session_lock_path
+     from config.settings import settings
+
+     lock_path = canonical_wechat_session_lock_path(settings.wechat_state_path)
+     print(f'正在探测真实会话锁: {lock_path}')
+     lock_path.parent.mkdir(parents=True, exist_ok=True)
      try:
-         with open('output/wechat_session.lock', 'a') as f:
+         with open(lock_path, 'a') as f:
              fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
              fcntl.flock(f, fcntl.LOCK_UN)
-         print('✓ 微信会话锁已安全释放 (Lock is FREE)')
+         print('✓ 微信真实会话锁已安全释放 (Lock is FREE)')
      except BlockingIOError:
-         print('✗ 严重警告：微信会话锁仍被占用！')
+         print('✗ 严重警告：微信真实会话锁仍被占用！')
          exit(1)
      "
      ```
@@ -420,7 +451,7 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
      ```
      **物理核验输出必须完全为空**，且确认 `./vpanel ui status` 和 `./vpanel bot status` 均处于停止状态。
    > [!CAUTION]
-   > **在上述“启动源已封闭、进程树已整树终结、会话锁已释放、在途任务已置 UNCERTAIN、全局零活跃消费”的物理核验证实完成之前，绝对禁止执行任何 `git revert` 操作！冻结锁与暂停配置必须持续覆盖整个回滚与沙箱测试验证窗口！**
+   > **在上述“宿主 crontab 已静音、启动源已封闭、进程树已整树终结、真实会话锁已释放、在途任务已置 UNCERTAIN、全局零活跃消费”的物理核验证实完成之前，绝对禁止执行任何 `git revert` 操作！crontab 静音、冻结锁与暂停配置必须持续覆盖整个回滚与沙箱测试验证窗口！**
 
 2. **第二步：绑定具体目标提交原子回滚 (Targeted Atomic Revert)**：
    确定引发异常的精确 Commit SHA，执行非编辑回滚：
@@ -433,7 +464,7 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
      1) `PipelineDB.get_high_score_pending_videos()` 对 `source='DISCOVERY'` 的硬性排除依然生效；
      2) Bot 入口对已受理（`SUBMITTED_*`）与已发布（`PUBLISHED`）视频的状态重置守卫依然有效拦截；
      3) 正常 AUTO 任务依然能正常流转。
-   - **门禁铁律**：如果防线测试失败（证明回滚操作把安全防线撤掉了），**系统必须保持 `output/pipeline_freeze.lock` 存在与 `WECHAT_PUBLISHING_PAUSED=true` 暂停状态，严禁解除暂停，严禁恢复调度！** 必须先在暂停状态下由工程师介入排查，修复代码后方可恢复。
+   - **门禁铁律**：如果防线测试失败（证明回滚操作把安全防线撤掉了），**系统必须保持 crontab 静音、`output/pipeline_freeze.lock` 存在与 `WECHAT_PUBLISHING_PAUSED=true` 暂停状态，严禁解除暂停，严禁恢复调度！** 必须先在暂停状态下由工程师介入排查，修复代码后方可恢复。
 
 4. **第四步：推送与常驻服务热重启 (Push & Process Restart)**：
    ```bash
@@ -443,11 +474,22 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
    检查进程状态：`./vpanel ui status && ./vpanel bot status`，确认进程采用最新回滚代码。
 
 5. **第五步：解除暂停与恢复观测 (Unpause & Active Observation)**：
-   在确认错误消除且防线完好后，移除冻结锁并恢复配置：
+   在确认错误消除且防线完好后，恢复 crontab 调度并移除冻结锁：
    ```bash
+   # 1. 恢复宿主 crontab 调度（移除 # QUIESCE_DISABLED 前缀）
+   crontab -l | sed -E 's/^# QUIESCE_DISABLED (.*)$/\1/' | crontab -
+
+   # 2. 物理核验调度已恢复生效
+   crontab -l | grep -v '^[[:space:]]*#' | grep 'Video-precessing'
+
+   # 3. 移除本地调度冻结锁
    rm -f output/pipeline_freeze.lock
    ```
-   在 `.env` 中恢复 `WECHAT_PUBLISHING_PAUSED=false` 并重启服务，持续观测 15 分钟日志。
+   在 `.env` 中恢复 `WECHAT_PUBLISHING_PAUSED=false` 并重启服务：
+   ```bash
+   ./vpanel ui restart && ./vpanel bot restart
+   ```
+   持续观测 15 分钟日志。
 
 ---
 

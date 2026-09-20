@@ -4,8 +4,8 @@ project: Video-precessing (YouTube → 微信视频号/多平台流水线)
 date: 2026-09-20
 author: Gemini_3.8_Flash_planning
 companion: shadow_development_blueprint.md, VP-POLARIS-WORK-ORDER.md
-status: 评审与基准终审签署稿 (FINAL ARCHITECT REVIEW - REVISED V2.1)
-version: 2.1.0
+status: 评审与基准终审签署稿 (FINAL ARCHITECT REVIEW - REVISED V2.2)
+version: 2.2.0
 ---
 
 # VP-POLARIS「北辰」架构重构红蓝对抗博弈推演与设计加固报告
@@ -245,42 +245,44 @@ version: 2.1.0
 
 ---
 
-## 战役七：第四轮架构终审 3 项 P1 缺口深度渗透与终极硬化 (Round 7: Deep Penetration on Fourth Review Vulnerabilities)
+## 战役七：第五轮架构终审 3 项 P1 缺口深度渗透与终极硬化 (Round 7: Deep Penetration on Fifth Review Vulnerabilities)
 
 ### ⚪ 白·命题
-架构师与 Codex 在第四轮终审中指出：方案在细节闭环上仍有 3 项 P1 级缺陷尚未闭合：
-1. 会话锁核验探测了错误的文件名（探测 `output/wechat_session.lock`），未调用真实规范派生逻辑，真实锁被占用时仍会输出 FREE 假象；且缺少持锁反例测试；
-2. 租约方案 B 试图在迁移事务中先更新状态为 `SUBMITTED_UNBOUND_ARCHIVED`，触发旧 CHECK 约束报错；且相同 `created_at` 无法去重导致后续唯一索引创建失败；
-3. 全局停写依赖应用层 `output/pipeline_freeze.lock`，一旦执行 `git revert`，代码回滚会撤销该检查，导致宿主机器每分钟执行一次的 crontab 立即拉起发帖！
+架构师与 Codex 在第五轮终审中指出：方案在细节闭环上仍有 3 项关键 P1 缺陷：
+1. 剧本实操命令矛盾：文字总结提出 crontab 静音与真实锁，但实际运维剧本命令仍是旧的 `touch pipeline_freeze.lock` 和错误的 `open('output/wechat_session.lock')`，且缺少恢复命令，运维按命令执行必踩坑；
+2. 外键时序违规：`wechat_submission_active_claims.active_attempt_id` 外键引用 Attempt 表。若先写租约表，SQLite 即时外键检查会立即触发 `FOREIGN KEY constraint failed` 崩溃；
+3. 历史 Attempt 漏判：新领取检查仅排查活跃租约、Publication 和主表，遗漏了历史 Attempt 检查。存量已存在独立 Attempt 但无租约或 Publication 的记录会被重新放行发帖！
 
 ---
 
 ### 🔴 红·进攻（极限渗透）
-1. **虚假锁探测与并发冲突渗透**：`wechat_uploader.py` 内部实际持有的锁是 `output/.wechat_state.json.browser.lock`。红队启动一个后台进程持有该锁执行发帖，运维剧本却探测 `output/wechat_session.lock`。因该文件未被占用，脚本误报 `FREE`，运维误以为无任务并发执行而强行拉起新发布，导致两个 Chromium 共享同一用户目录并发写入，登录态直接被腾讯封禁！
-2. **方案 B 迁移死锁与崩溃渗透**：红队在历史数据库中构造了 3 条相同 `created_at` 的 `SUBMITTED_UNBOUND` 记录。方案 B 在执行迁移时，首先尝试执行 `UPDATE ... SET state = 'SUBMITTED_UNBOUND_ARCHIVED'`，原表已有 CHECK 约束立即报错抛出 `sqlite3.IntegrityError: CHECK constraint failed`；即便绕过 CHECK，按 `a.created_at < b.created_at` 过滤保留的仍有多条相同时间戳记录，后续 `CREATE UNIQUE INDEX` 必然抛出 `UNIQUE constraint failed` 炸库崩溃！
-3. **Revert 撤销业务锁与 Cron 幽灵秒级复活**：运维在异常回滚时创建了 `output/pipeline_freeze.lock`。随后运维执行 `git revert`，应用代码被回滚到重构前。重构前的旧代码根本没有检查 `output/pipeline_freeze.lock` 的逻辑！宿主机器 crontab 每 1 分钟拉起一次 `run_publication_window.py`，代码刚 revert 完成不到 30 秒，cron 带着旧代码和未决环境直接在后台拉起，向平台重复发帖！
+1. **剧本命令矛盾渗透**：运维在发生严重故障时紧急回滚，直接复制蓝图 6.1 节命令行执行。因命令仍是 `touch output/pipeline_freeze.lock`，没有执行宿主 crontab 静音，`git revert` 撤销业务代码后，宿主 cron 依然在 60 秒内拉起旧代码发起发帖！且由于第 5 小步探测的是错误的 `output/wechat_session.lock`，真实持有锁的 Chromium 进程未被探测到，误报 FREE 后强行继续，引发双进程写冲突！
+2. **外键时序致死崩溃**：系统开启外键约束（`PRAGMA foreign_keys = ON;`），红队在发布任务原子领取时触发伪代码执行：第一步先执行 `INSERT INTO wechat_submission_active_claims (...) VALUES (..., active_attempt_id, ...)`。由于此时 `active_attempt_id` 尚未写入 `wechat_submission_attempts`，SQLite 立即抛出 `sqlite3.IntegrityError: FOREIGN KEY constraint failed`，所有正常任务在领取时 100% 崩溃，流水线彻底瘫痪！
+3. **存量 Attempt 穿透重复发帖**：历史生产库中通过 `record_wechat_submission_attempt` 留存了只有 Attempt 记录而无 Publication 账本的视频。红队发起调度，因新 CAS 过滤条件排查了活跃租约表（无记录）、Publication 表（无记录）和主表（可调度），历史 Attempt 检查被遗漏！该视频成功领取并被新 Attempt 再次提交给外部平台，导致线上重复发帖直接被封号！
 
 ---
 
 ### 🔵 蓝·防守（硬化防御）
-1. **规范化派生路径与持锁反例测试**：
-   - 剧本统一调用 `canonical_wechat_session_lock_path("output/wechat_state.json")` 解析真实锁文件 `output/.wechat_state.json.browser.lock`；
-   - 在 `POLARIS-101` 中增设单测 `test_wechat_session_lock_probe_detects_real_hold_and_release`，后台线程持锁时断言探测逻辑捕获 `BlockingIOError` 并判定为失败（非零退出码反例），释放后断言探测成功（返回 0）。
-2. **确立方案 A 完整契约，废除方案 B**：
-   - 技术裁决彻底废除方案 B；
-   - 方案 A 平滑扩展 Attempt 表 CHECK 约束为 `CHECK(state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN', 'RELEASED_BUSY'))`，新表不建任何唯一索引，纯追加历史审计，存量数据零冲突；
-   - 创建独立表 `wechat_submission_active_claims`（`subject_id TEXT PRIMARY KEY`）；
-   - 单事务内 CAS 领取活跃租约并插入 Attempt 记录；按 `active_attempt_id` 条件精确释放（BUSY 释放重领，退出码 6 原子四表落账持续占位，崩溃恢复 Fail-Closed 转入 UNCERTAIN 物理锁定）。
-3. **升级为宿主级 crontab 物理静音**：
-   - 彻底摆脱对应用层可被 revert 代码的依赖，上升到 OS 宿主级停写；
-   - 导出 crontab 备份，执行 `sed -E '/Video-precessing/s/^([^#])/# QUIESCE_DISABLED \1/'` 物理静音所有任务；
-   - 检查 `crontab -l | grep -v '^[[:space:]]*#' | grep 'Video-precessing'` 确认活跃调度为空；
-   - 静音覆盖整个回滚与沙箱测试验证窗口，验证通过后方可反向恢复。
+1. **实操命令 100% 同步更新与反向恢复闭环**：
+   - 蓝图 6.1 节实操命令全量更新：第一步第一小步实装 crontab 备份、`sed -E ... # QUIESCE_DISABLED` 物理静音及活跃清空 grep 核验；
+   - 第五小步实装 `canonical_wechat_session_lock_path` 真实派生锁探测；
+   - 第五步实装反向恢复 crontab 调度命令（`sed -E 's/^# QUIESCE_DISABLED (.*)$/\1/'`）与核验，彻底消除文档与实操的矛盾。
+2. **外键兼容顺序：先 Attempt 后活跃租约 (FK-Compatible Atomic Order)**：
+   - 在单个 `BEGIN IMMEDIATE` 写入事务内：
+     ① 4 表联合前置阻断查询（租约、历史 Attempt、Publication 事实表与主表状态）；
+     ② 先向 `wechat_submission_attempts` 插入新 Attempt，物理满足外键前置约束；
+     ③ 随后向 `wechat_submission_active_claims` 插入活跃租约行，外键完全合法；`subject_id PRIMARY KEY` 强保证排他互斥，若并发冲突触发异常则自动 `ROLLBACK`，步骤 ② 的 Attempt 原子清除零残留；
+     ④ `COMMIT`。
+   - `POLARIS-101` 增设 `test_claim_attempt_rollback_leaves_no_residual_on_failure` 验证外键正常与失败回滚零残留。
+3. **恢复历史 Attempt 联合阻断 (Historical Attempt Joint Guard)**：
+   - 领取前置阻断必须包含对 `wechat_submission_attempts` 的排查：
+     `WHERE subject_id = ? AND state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN')`；
+   - `POLARIS-101` 增设 `test_claim_attempt_rejected_when_only_historical_attempt_exists`，断言仅存历史 Attempt 时必须 100% 拒绝领取，彻底消除存量重复发布入口。
 
 ---
 
 ### ⚖️ 白·裁决（审议签署闭环）
-- **定级**：🔴 **P1 立即硬化闭环**。红队指出的 3 项漏洞直击方案物理盲区，蓝队加固策略从根本上杜绝了隐患。
+- **定级**：🔴 **P1 立即硬化闭环**。3 项漏洞全部具备致命杀伤力，蓝队防御方案修正了外键时序、阻断范围与实操命令行，逻辑无懈可击。
 - **加固指令**：全部加固项 100% 同步更新至 `shadow_development_blueprint.md`、`VP-POLARIS-WORK-ORDER.md`、`work_orders.md` 与 `qa_and_architecture_review.md`。
 
 ---
@@ -293,18 +295,20 @@ version: 2.1.0
 ┌───────────────────────────────────────────────────────────────────────────────┐
 │                       红蓝博弈最终加固决议 (Adversarial Hardening Mandates)   │
 ├───────────────────────────────────────────────────────────────────────────────┤
-│ 1. [Bot 闭环、方案 A 租约、UNCERTAIN 联合阻断与历史数据兼容迁移]              │
+│ 1. [Bot 闭环、方案 A 外键兼容租约、历史 Attempt 联合阻断与历史兼容迁移]         │
 │    - Bot 严格定位为具名任务分发客户端，响应前持久化分发记录，统一返回 QUEUED； │
 │    - 全面确立方案 A 独立原子租约表完整契约，彻底废除方案 B；                  │
 │    - Attempt 表平滑扩展 CHECK 约束（纯追加历史，零迁移冲突）；                 │
 │    - 创建独立表 wechat_submission_active_claims (subject_id PRIMARY KEY)；    │
-│    - 单事务 CAS 领取活跃租约并落 Attempt；按 active_attempt_id 条件精确释放； │
-│    - 锁由子进程内部自洽持锁，依赖明确 BUSY 凭证有限退避，退出码 3 明确为 UNCERTAIN；│
-│    - 应用服务负责四表原子落账；确立本地强事务与外部 At-Most-Once 边界。       │
+│    - 领取事务严格外键顺序：BEGIN IMMEDIATE -> 4表联合阻断 -> 先插入 Attempt    │
+│      满足外键依赖 -> 再插入活跃租约主键互斥 -> COMMIT (失败全量回滚无残留)；    │
+│    - 阻断条件必须包含历史 Attempt 状态排查，杜绝存量独立 Attempt 重复发帖；    │
+│    - 按 active_attempt_id 条件精确释放；应用服务负责四表原子落账。            │
 ├───────────────────────────────────────────────────────────────────────────────┤
 │ 2. [会话锁真实路径探测与持锁反例测试]                                         │
 │    - 必须调用 canonical_wechat_session_lock_path 解析出真实浏览器锁文件        │
 │      output/.wechat_state.json.browser.lock，严禁探测错误锁路径；              │
+│    - 运维剧本实操命令与自动化工具 100% 统一使用真实派生函数；                  │
 │    - POLARIS-101 必须包含真实持锁时的失败反例断言（非零返回码）。             │
 ├───────────────────────────────────────────────────────────────────────────────┤
 │ 3. [DAL 候选与测试双轨]                                                       │
@@ -321,12 +325,12 @@ version: 2.1.0
 │    - 实施有界队列（上限100）、并发限制（2线程）、200ms 超时底层中断与连接释放；│
 │    - 接入美股盘中交易避让（Market Guard），交易时段硬短路。                   │
 ├───────────────────────────────────────────────────────────────────────────────┤
-│ 6. [宿主级停写、零消费物理核验与 WAL 备份防覆写]                              │
-│    - 回滚必须前置在宿主 crontab 中使用 # QUIESCE_DISABLED 物理静音调度任务；  │
-│    - 按 PGID 整树清理进程组并 kill 残留 Chromium 孤儿，非阻塞 flock 核验真实会话锁；│
+│ 6. [宿主级停写、实操命令一致性、零消费物理核验与 WAL 备份防覆写]              │
+│    - 回滚实操命令全量同步为宿主 crontab 使用 # QUIESCE_DISABLED 物理静音调度；│
+│    - 按 PGID 整树清理进程组并 kill 残留 Chromium 孤儿，非阻塞 flock 核验真实锁；│
 │    - 在途任务置 UNCERTAIN，物理证实 zero consumers 后方可执行原子 git revert； │
 │    - 回滚后沙箱必须运行 POLARIS-101 新增防线测试（防线测试失败保持暂停禁恢复）；│
-│    - crontab 静音覆盖整个回滚与沙箱测试窗口，稳定后方可反向恢复；              │
+│    - 恢复步骤必须包含反向 sed 恢复 crontab 调度并核验生效，杜绝文档与实操脱节；│
 │    - SQLite 在线备份采用高精度微秒 UTC 时间戳 + UUID 随机熵，拒绝覆写抛异常； │
 │    - 独立连接校验 PRAGMA integrity_check; 为 ok，登记恢复点元数据；            │
 │    - 账本纠偏严禁裸写 SQL 与全库盲跑：统一通过排除 PUBLISHED 的受测 DAL 接口。 │

@@ -4,8 +4,8 @@ project: Video-precessing (YouTube → 微信视频号/多平台流水线)
 date: 2026-09-20
 author: Gemini_3.8_Flash_planning
 companion: shadow_development_blueprint.md, adversarial_red_blue_game_2026-09-20.md, VP-POLARIS-WORK-ORDER.md
-status: 架构师审议终审修订归档 (FOR ARCHITECT REVIEW - REVISED V2.1)
-version: 2.1.0
+status: 架构师审议终审修订归档 (FOR ARCHITECT REVIEW - REVISED V2.2)
+version: 2.2.0
 ---
 
 # VP-POLARIS「北辰」架构重构与治理深度问答档案 (Q&A Review Compendium)
@@ -26,7 +26,7 @@ version: 2.1.0
 9. [Q9: 再次红蓝博弈（5 场极限对抗）推导出了哪些必须落地的硬化加固措施？](#q9)
 10. [Q10: 为什么明明做了“有限止损”，`PipelineDB` 依然在过去 48 小时从 9.7k 暴涨至 10.6k？如何从物理机制上彻底终结反复？](#q10)
 11. [Q11: 架构复审第三轮意见指出的 4 项具体技术缺陷（UNCERTAIN 穿透、历史数据索引冲突、零消费核验盲区、备份覆写）是如何彻底闭环的？基线漂移事实如何澄清？](#q11)
-12. [Q12: 第四轮架构终审 3 项 P1 缺口（真实锁路径与反例、方案 A 一致性契约与方案 B 废弃、宿主级 crontab 静音）是如何彻底闭环的？](#q12)
+12. [Q12: 第五轮架构终审 3 项 P1 缺口（回滚剧本实操一致性、外键兼容领取顺序、历史 Attempt 联合阻断）是如何彻底闭环的？](#q12)
 
 ---
 
@@ -258,41 +258,53 @@ version: 2.1.0
 ---
 
 <a id="q12"></a>
-### Q12: 第四轮架构终审 3 项 P1 缺口（真实锁路径与反例、方案 A 一致性契约与方案 B 废弃、宿主级 crontab 静音）是如何彻底闭环的？
+### Q12: 第五轮架构终审 3 项 P1 缺口（回滚剧本实操一致性、外键兼容领取顺序、历史 Attempt 联合阻断）是如何彻底闭环的？
 
-**答：针对架构师与 Codex 第四轮终审指出的 3 项 P1 方案内部未闭合缺陷，本版已在技术方案、契约规范与测试定义上完成彻底闭环：**
+**答：针对架构师与 Codex 第五轮终审指出的 3 项方案内部未闭合与矛盾缺陷，本版已在实操剧本、事务外键顺序与历史 Attempt 阻断逻辑上完成彻底闭环：**
 
-#### 1. [P1] 纠正会话锁核验路径并增加持锁失败反例测试
-- **缺陷本质**：[蓝图第 381 行](./shadow_development_blueprint.md) 运维剧本探测的是 `output/wechat_session.lock`，但系统[真实实现](../../src/video_processing/core/wechat_session_lock.py#L30) 是从登录态文件路径派生真实锁文件。生产配置为 `output/wechat_state.json`，派生出的真实锁文件为 `output/.wechat_state.json.browser.lock`。若探测错误路径，当真实锁被后台浏览器进程占用时，剧本依然会输出 `FREE` 假象，导致并发拉起冲突！
+#### 1. [P1] 消除文档间矛盾，全面同步 Section 6.1 实操回滚命令与恢复步骤
+- **缺陷本质**：上一轮总结与问答中虽提出宿主 crontab 静音与真实锁路径，但[蓝图第 6.1 节实操剧本](./shadow_development_blueprint.md#61-受控安全回滚五步机制-controlled-safe-rollback-protocol) 的命令依然残留了 `touch output/pipeline_freeze.lock` 和错误的 `open('output/wechat_session.lock')`，且未提供第五步 crontab 的反向恢复命令。若直接按剧本命令行复制执行，仍会触发锁误判与 cron 秒级复活。
 - **闭环方案**：
-  1) **规范化路径解析**：剧本与运维工具统一调用 `canonical_wechat_session_lock_path("output/wechat_state.json")` 解析真实锁文件 `output/.wechat_state.json.browser.lock`；
-  2) **持锁反例测试入驻 POLARIS-101**：在沙箱测试套件中增设用例 `test_wechat_session_lock_probe_detects_real_hold_and_release`。启动后台线程通过 `WeChatSessionLock` 持有真实锁，断言探测逻辑**必须捕获 `BlockingIOError` 并判定为锁忙失败（非零退出码反例）**；持锁线程释放后，断言探测脚本成功返回 0（FREE）。
+  1) **第一步第一小步实操命令全面更新**：
+     - 导出宿主 crontab 备份：`crontab -l > "output/crontab_backup_$(date +%Y%m%d_%H%M%S).txt"`；
+     - 物理静音：`crontab -l | sed -E '/Video-precessing/s/^([^#])/# QUIESCE_DISABLED \1/' | crontab -`；
+     - 活跃核验：`crontab -l | grep -v '^[[:space:]]*#' | grep 'Video-precessing'` 断言必须输出为空；
+     - 创建本地 `touch output/pipeline_freeze.lock` 作为进程内双重防御；
+  2) **第一步第五小步实操命令全面更新**：
+     调用 `canonical_wechat_session_lock_path(settings.wechat_state_path)` 规范解析出真实锁文件 `output/.wechat_state.json.browser.lock` 并进行非阻塞 flock 探测，持锁时严格判定为非零失败；
+  3) **第五步恢复步骤全面补齐**：
+     执行反向 sed 恢复 crontab（`crontab -l | sed -E 's/^# QUIESCE_DISABLED (.*)$/\1/' | crontab -`），核验恢复生效，随后安全移除 `pipeline_freeze.lock`，彻底消除文档间冲突。
 
-#### 2. [P1] 确立租约方案 A 完整一致契约，废除方案 B
-- **方案 B 废弃技术裁决**：
-  方案 B 试图在迁移事务中先将重复记录更新为 `'SUBMITTED_UNBOUND_ARCHIVED'`，但原表已有的 `CHECK(state IN ('SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND'))` 约束尚未放开，该 `UPDATE` 会直接抛出 `CHECK constraint failed` 异常；且若历史数据存在相同的 `created_at`（如同一秒内重试写入），`a.created_at < b.created_at` 无法消除重复项，后续 `CREATE UNIQUE INDEX` 仍将触发 `IntegrityError` 导致迁移崩溃。方案 B 物理上不可行，**正式废弃，禁止作为备选剧本**。
-- **方案 A 完整物理闭环**：
-  1) **Attempt 历史表 CHECK 约束平滑扩展**：
-     在 `PipelineDB._migrate_database()` 增量迁移事务中检测表定义。若约束未扩展，单事务内重构表将 CHECK 约束扩展为：
-     `CHECK(state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN', 'RELEASED_BUSY'))`；
-     新表**不建任何 `subject_id` 唯一约束**，保持为纯追加审计历史账本，存量所有重复 Attempt 100% 无损保留，零迁移冲突；
-  2) **创建独立原子活跃租约表 `wechat_submission_active_claims`**：
-     以 `subject_id TEXT PRIMARY KEY` 物理保证全局唯一活跃租约；
-  3) **单事务联合 CAS 原子领取**：
-     步骤 1 向 `wechat_submission_active_claims` 执行 `INSERT INTO ... SELECT ... WHERE NOT EXISTS (...)` 插入活跃租约；若成功插入 1 行，步骤 2 在同一事务中插入 Attempt 审计记录，随后原子 `COMMIT`；
-  4) **按 `active_attempt_id` 条件精确释放与流转**：
-     - **BUSY 退出条件释放**：携带明确 BUSY 凭证时，在单事务中执行 `DELETE FROM wechat_submission_active_claims WHERE subject_id = ? AND active_attempt_id = ? AND claim_state = 'IN_PROGRESS';`，并更新 Attempt 为 `RELEASED_BUSY`；退避后申请全新 ID 重领；
-     - **正常受理落账**：退出码 6 时，单事务更新租约状态为 `SUBMITTED_UNBOUND`（持续占位防止重领），落账 Publication 与主表；
-     - **崩溃恢复与禁止重领**：重启扫描到悬空租约，Fail-Closed 将活跃租约、Attempt 与主表均置为 `UNCERTAIN`，因活跃表主键持续占用，后续所有领取请求 100% 被拒，物理锁定，闭环 At-Most-Once；
-  5) **POLARIS-101 单测验收**：增设 `test_active_claims_lease_lifecycle` 严格验证租约创建、并发冲突互斥、按 `active_attempt_id` 条件释放与非法 ID 拒绝篡改。
-
-#### 3. [P1] 升级启动源封闭为宿主级 crontab 物理静音
-- **缺陷本质**：原蓝图仅在工作区创建 `output/pipeline_freeze.lock` 标记文件。但宿主机器每分钟都在通过 crontab 执行 `scripts/run_publication_window.py`。一旦运维执行 `git revert`，Git 会将带有该标记文件检查的应用代码撤销为旧代码，此时宿主 cron 会在 60 秒内拉起被回滚的旧版本代码直接发起发帖！
+#### 2. [P1] 解决外键约束冲突，确立外键兼容的原子领取事务顺序
+- **缺陷本质**：`wechat_submission_active_claims.active_attempt_id` 外键严格引用 `wechat_submission_attempts.attempt_id`。SQLite 连接默认开启外键检查（`PRAGMA foreign_keys = ON;`）且未声明延迟检查。若按原伪代码先向租约表插入引用尚不存在的 `active_attempt_id`，即使在同一事务内也会立即抛出 `sqlite3.IntegrityError: FOREIGN KEY constraint failed` 崩溃！
 - **闭环方案**：
-  1) **彻底脱离对应用层可被 revert 代码的依赖，提升为 OS 宿主级物理静音**：
-     - 导出当前 crontab 备份：`crontab -l > "output/crontab_backup_$(date +%Y%m%d_%H%M%S).txt"`；
-     - 对包含 `Video-precessing` 的活跃项添加注释前缀：`crontab -l | sed -E '/Video-precessing/s/^([^#])/# QUIESCE_DISABLED \1/' | crontab -`；
-     - 物理核验活跃项已清空：`crontab -l | grep -v '^[[:space:]]*#' | grep 'Video-precessing'` 断言无输出；
-  2) **静音窗口全覆盖**：宿主级 crontab 静音覆盖整个受控安全回滚、沙箱测试验证的全过程；
-  3) **仅在沙箱测试 100% 绿灯且确认稳定后**：方可执行反向 sed 恢复 crontab 调度（`crontab -l | sed -E 's/^# QUIESCE_DISABLED (.*)$/\1/' | crontab -`）。
+  在单个 `BEGIN IMMEDIATE` 强原子写入事务内，严格按照**依赖先于引用**的顺序执行：
+  - *步骤 1：4 表联合前置阻断查询*：一次性查询租约表、历史 Attempt 表、Publication 事实表与主表状态；若存在冲突立即 `ROLLBACK` 并抛出结构化拒绝；
+  - *步骤 2：先插入 Attempt 审计记录 (Satisfies Foreign Key)*：
+    ```sql
+    INSERT INTO wechat_submission_attempts (attempt_id, video_id, subject_id, state, final_title, ...)
+    VALUES (?, ?, ?, 'IN_PROGRESS', ?, ...);
+    ```
+    首先写入 Attempt，使新 `attempt_id` 在主表中物理存在，完全满足外键前置约束；
+  - *步骤 3：随后插入活跃租约 (Foreign Key Guaranteed & PK Mutex)*：
+    ```sql
+    INSERT INTO wechat_submission_active_claims (subject_id, video_id, active_attempt_id, claim_state)
+    VALUES (?, ?, ?, 'IN_PROGRESS');
+    ```
+    此时外键完全满足；`subject_id` 为 `PRIMARY KEY`，若有并发冲突则触发主键异常并自动 `ROLLBACK`，步骤 2 插入的 Attempt 随之原子清除，绝无残留孤儿数据；
+  - *步骤 4：原子提交*：执行 `COMMIT`。
+- **单测验收入驻 POLARIS-101**：增设 `test_claim_attempt_rollback_leaves_no_residual_on_failure`，断言正常领取成功与步骤 3 失败后的事务干净回滚零残留。
+
+#### 3. [P1] 恢复历史 Attempt 联合阻断，杜绝存量重复发布入口
+- **缺陷本质**：现有生产代码 `database.py:3404` (`record_wechat_submission_attempt`) 可以独立提交 `SUBMITTED_UNBOUND` Attempt。如果新的领取检查只排查活跃租约、Publication 和主表，而存量数据未回填租约，则“历史 Attempt 已存在、Publication 缺失、主表可调度”的视频将穿透检查被重复领取并二次发帖！
+- **闭环方案**：
+  1) **保留历史 Attempt 的联合阻断**：前置阻断检查 SQL 必须显式排查 `wechat_submission_attempts`：
+     ```sql
+     (SELECT state FROM wechat_submission_attempts 
+      WHERE subject_id = ? AND state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN') 
+      ORDER BY created_at DESC LIMIT 1) AS latest_attempt_state
+     ```
+     若存在历史不可重试记录，坚决拒绝领取并抛出异常；
+  2) **单测验收入驻 POLARIS-101**：增设独立单测 `test_claim_attempt_rejected_when_only_historical_attempt_exists`，断言当仅存在历史 Attempt（无租约、无 Publication）时，领取请求必须 100% 被拒绝，物理死守 At-Most-Once 边界。
+
 
