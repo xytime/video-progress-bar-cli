@@ -6,10 +6,11 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
-| 1.0.0 | 2026-09-07 | Codex | 初始创建：覆盖 DAL 筛选排序、准确分页、API 参数和浏览标记隔离。 |
-| 1.1.0 | 2026-09-07 | Codex | 覆盖来源发布日期默认排序与跨 Tab 的 80 分以上筛选。 |
+| 1.4.0 | 2026-09-20 | Gemini | 增加非法/非标 upload_date 容错排序测试，验证脏数据不抢占来源发布最新位。 |
 | 1.3.0 | 2026-09-20 | Gemini | 断言来源发布显式标注 ET 时区 (来源发布 (ET)：)。 |
 | 1.2.0 | 2026-09-07 | Codex | 覆盖仅含旧 upload_date 的历史记录按来源日期参与默认排序，并保留同日内的来源时间顺序。 |
+| 1.1.0 | 2026-09-07 | Codex | 覆盖来源发布日期默认排序与跨 Tab 的 80 分以上筛选。 |
+| 1.0.0 | 2026-09-07 | Codex | 初始创建：覆盖 DAL 筛选排序、准确分页、API 参数和浏览标记隔离。 |
 """
 
 from datetime import datetime
@@ -129,3 +130,22 @@ def test_dashboard_template_labels_source_dates_without_claiming_platform_upload
     assert '<option value="80_plus">80 以上</option>' in template
     assert "来源发布 (ET)：${sourcePublishAge" in template
     assert "上传：${uploadAge" not in template
+
+
+def test_dal_source_published_sort_immune_to_corrupted_dates(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    # 模拟历史脏数据（如 9435|20250729），不能因字符串 '9' > '2' 而被排在最新
+    db.add_video("corrupted-date", "Corrupted Date", "Test Channel", score=50, upload_date="9435|20250729")
+    db.add_video("valid-2026", "Valid 2026", "Test Channel", score=50, source_published_at="2026-09-20T12:00:00Z")
+    db.add_video("valid-2025", "Valid 2025", "Test Channel", score=50, upload_date="20250729")
+    db.add_video("no-date", "No Date", "Test Channel", score=50)
+
+    videos, total = db.get_paginated_videos("waitlist", 1, 10, sort="source_published_at_desc")
+    ids = [v["youtube_id"] for v in videos]
+    assert total == 4
+    # 合法年份降序排列排在前面
+    assert ids[0] == "valid-2026"
+    assert ids[1] == "valid-2025"
+    # 非法或无日期的记录沉底
+    assert ids[2:] == ["corrupted-date", "no-date"] or set(ids[2:]) == {"corrupted-date", "no-date"}
+

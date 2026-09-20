@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.76.2 | 2026-09-20 | Gemini | 强化 source_published_sort_key 与 upload_date 排序的合法年份校验，防御非标准日期排在顶部。 |
 | 3.76.1 | 2026-09-20 | Gemini | get_channel_funnel_metrics 统一约束 parent_id IS NULL，排除切片重复统计，与下钻列表保持绝对同构。 |
 | 3.76.0 | 2026-09-20 | Gemini | get_paginated_videos 新增 funnel_stage 参数，支持大盘各生产转化阶段（采集/入围/制作/发布/失败/拦截）精准穿透查询。 |
 | 3.75.0 | 2026-09-20 | Gemini | 漏斗指标与视频分页查询新增 24h 与 today_bj (北京时间今日) 时间窗口过滤支持。 |
@@ -4990,20 +4991,25 @@ class PipelineDB:
 
         # 历史记录可能只有 YYYYMMDD 的 upload_date；控制面把它作为来源发布日期回退展示，
         # 所以默认排序也必须使用同一字段，并保留 ISO 时间以实现同日内的新到旧排序。
+        # 使用 GLOB 校验确保必须以 19xx 或 20xx 等合规年份开头，防止非标准日期（如带编号前缀）被字符串降序排在最前。
         source_published_sort_key = (
-            "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(COALESCE(NULLIF(pv.source_published_at, ''), "
-            "NULLIF(pv.upload_date, '')), '-', ''), ':', ''), 'T', ''), 'Z', ''), '+', '')"
+            "CASE "
+            "WHEN pv.source_published_at GLOB '[12][0-9][0-9][0-9]*' THEN "
+            "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(pv.source_published_at, '-', ''), ':', ''), 'T', ''), 'Z', ''), '+', '') "
+            "WHEN pv.upload_date GLOB '[12][0-9][0-9][0-9]*' THEN "
+            "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(pv.upload_date, '-', ''), ':', ''), 'T', ''), 'Z', ''), '+', '') "
+            "ELSE NULL END"
         )
         order_by = {
             'score_desc': 'pv.score DESC, pv.id ASC',
             'views_desc': '(pv.view_count IS NULL) ASC, pv.view_count DESC, pv.id ASC',
             'like_rate_desc': '(pv.like_count IS NULL OR pv.view_count IS NULL OR pv.view_count <= 0) ASC, CAST(pv.like_count AS REAL) / NULLIF(pv.view_count, 0) DESC, pv.id ASC',
             'source_published_at_desc': f"({source_published_sort_key} IS NULL OR {source_published_sort_key} = '') ASC, {source_published_sort_key} DESC, pv.id ASC",
-            'upload_date_desc': "(pv.upload_date IS NULL OR pv.upload_date = '') ASC, pv.upload_date DESC, pv.id ASC",
+            'upload_date_desc': "(pv.upload_date IS NULL OR pv.upload_date = '' OR pv.upload_date NOT GLOB '[12][0-9][0-9][0-9]*') ASC, pv.upload_date DESC, pv.id ASC",
         }
         if sort == 'default':
             if tab == 'high_likes':
-                order_clause = "(pv.upload_date IS NULL OR pv.upload_date = '') ASC, pv.upload_date DESC, (pv.like_count IS NULL OR pv.view_count IS NULL OR pv.view_count <= 0) ASC, CAST(pv.like_count AS REAL) / NULLIF(pv.view_count, 0) DESC, pv.id ASC"
+                order_clause = "(pv.upload_date IS NULL OR pv.upload_date = '' OR pv.upload_date NOT GLOB '[12][0-9][0-9][0-9]*') ASC, pv.upload_date DESC, (pv.like_count IS NULL OR pv.view_count IS NULL OR pv.view_count <= 0) ASC, CAST(pv.like_count AS REAL) / NULLIF(pv.view_count, 0) DESC, pv.id ASC"
             elif tab == 'waitlist':
                 order_clause = 'pv.created_at DESC, pv.id ASC'
             else:

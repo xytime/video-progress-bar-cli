@@ -32,6 +32,7 @@
   | 2026-09-15 | Codex | 添加主题与持久化字号设置；提高文字对比度并适配笔记本及窄屏布局。 |
   | 2026-09-20 | Gemini | 全量解耦内联样式至 /static/css/dashboard.css，解耦频道与漏斗管理至 /static/js/channel_manager.js；refresh() 与 Enter 键防御性守卫 fetchChannels 与 addChannel 调用。 |
   | 2026-09-20 | Gemini | 首页 UI/UE/UX 重构：上线全局生产转化漏斗大盘（7d/30d/all）；处理中状态（active>0）红光呼吸动效与网页标题动态提示；移除静态流程介绍；平台补录改折叠；显示设置收纳进 Header。 |
+  | 2026-09-20 | Gemini | 增强 normalizeSourcePublishedDate 容错提取能力，防御历史非标格式导致发布时间显示为未知。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
@@ -1478,7 +1479,13 @@
         const normalizeSourcePublishedDate = (d) => {
           const raw = String(d || '').trim();
           if (/^\d{8}$/.test(raw)) return `${raw.slice(0,4)}-${raw.slice(4,6)}-${raw.slice(6,8)}`;
-          return /^\d{4}-\d{2}-\d{2}/.test(raw) ? raw.slice(0, 10) : null;
+          if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+          const match8 = raw.match(/\b(20\d{2}[01]\d[0-3]\d)\b/);
+          if (match8) {
+            const s = match8[1];
+            return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
+          }
+          return null;
         };
         const fmtSourcePublishedAge = (d) => {
           const sourceDate = normalizeSourcePublishedDate(d);
