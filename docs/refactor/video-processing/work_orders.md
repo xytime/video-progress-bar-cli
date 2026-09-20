@@ -71,14 +71,14 @@ version: 1.5.0
 - **治理问题**: 管理员若在 Telegram 群组内对正处于 `PUBLISHED` 或 `UNDER_REVIEW` 的视频执行状态修改或重试指令，会绕过 Web 控制台的防重投 Guard，将视频打回 `PENDING`，带来二次重复发布与封号隐患；且 Bot 缺少对退出码 6 的正确处理，会造成假失败与无账本鬼魂状态。
 - **实施范围**: 
   1. 将 Bot 严格收口为具名任务分发客户端：执行**响应前强制持久化**（先在 SQLite 原子写入分发记录，随后返回 `QUEUED` 异步受理语义包含 task_id 与时间戳），对活跃中任务执行幂等复用，严禁 LLM 擅自向用户宣称“已发布完成”。
-  2. 外部物理调用前执行 `wechat_submission_attempts` 增量表迁移、建立部分唯一活跃索引（`idx_wechat_active_attempt`）并执行条件 CAS 原子领取不可重试 Attempt 租约（状态 `IN_PROGRESS`）；BUSY 退出时标记 `RELEASED_BUSY` 释放重领；若外部平台受理后本地崩溃，重启强制 Fail-Closed 进入 `UNCERTAIN` 绝不自动重领，物理阻断并发与重复提交，闭环 At-Most-Once。
+  2. 外部物理调用前执行 `wechat_submission_attempts` 历史数据兼容与增量迁移（推荐独立原子租约表或同表去重归档为 `SUBMITTED_UNBOUND_ARCHIVED` 后建条件唯一索引，杜绝表迁移 `IntegrityError` 崩溃）；执行 Attempt、Publication 与主表状态多表联合 CAS 原子领取不可重试 Attempt 租约（状态 `IN_PROGRESS`）；BUSY 退出时标记 `RELEASED_BUSY` 释放重领；若外部平台受理后本地崩溃或超时未决，Fail-Closed 进 `UNCERTAIN` 严格联合阻断再次重领，物理阻断并发与重复提交，闭环 At-Most-Once。
   3. 由核心应用服务统一负责发布账本守卫校验，阻断对已发布/在途视频的非法回写与删除。
   4. 捕获退出码 6 并原子调用事务方法写入 Publication 账本、Attempt 记录与 `SUBMITTED_UNBOUND` 状态，明确本地三表强一致性 vs 外部 At-Most-Once 边界。
   5. 接入 `_build_subprocess_env`；会话锁由子进程内部自洽持有（严禁父进程外置重复加锁，防止超时 0 秒产生锁争用立即锁忙失败）；仅对明确 BUSY 凭证有限退避（最多 3 次），通用退出码 1 判定为永久失败，退出码 3 明确为发布结果未确认（`EXIT_RESULT_UNCERTAIN`），绝不可自动重传。
 - **明确非目标**: 重构 Telegram Bot 的长轮询网络通信机制。
-- **安全 Harness 要求**: 编写自动化回归测试，验证退出码 6 的原子账本写入、针对已发布视频执行 Bot 重置与删除命令被明确拒绝、并发重置互斥、退出码 3 告警、子进程超时回收及平台受理后本地崩溃窗口（未决 Attempt 租约恢复与禁止重领）。
+- **安全 Harness 要求**: 编写自动化回归测试，验证退出码 6 的原子账本写入、针对已发布视频执行 Bot 重置与删除命令被明确拒绝、并发重置互斥、退出码 3 告警、子进程超时回收、转入 UNCERTAIN 后再次领取仍被拒绝的阻断测试，以及历史多条活跃记录平滑迁移测试。
 - **验收标准**: 任何通过 Bot 指令重置或删除已存在平台账本的视频均被拒绝并返回明确报错；未受阻任务仍可正常重置；退出码 6 正确转入审核中并记录三表原子账本。
-- **回滚方案**: 实行**受控安全回滚五步法**：① 全局停写、终止在途执行进程并严格核验零活跃消费（未完成核验前严禁 revert）；② 绑定具体目标 Commit 执行原子回滚；③ 沙箱运行 `POLARIS-101` 新增防线测试（严禁运行包含不安全基线的历史单测，防线测试若失败必须保持暂停、严禁恢复调度）；④ 推送并重启全套守护进程；⑤ 确认无误后解除暂停。若已发生状态分叉，严禁全库盲跑与裸写生产 SQL，按专用剧本执行：SQLite 在线备份 API（`conn.backup()`）并验证完整性（`PRAGMA integrity_check;`） → 排除 `PUBLISHED` 的受测 DAL 只读差异预览 → 针对指定 `video_id` 的受测 DAL 定点纠偏。
+- **回滚方案**: 实行**受控安全回滚五步法**：① 全局停写（创建 `output/pipeline_freeze.lock` 封闭启动源、置 `WECHAT_PUBLISHING_PAUSED=true`、终止常驻服务与关联进程组 PGID 及 Chromium 孤儿、核验微信会话锁释放并标记在途任务为 `UNCERTAIN`，未证实零消费前严禁 revert）；② 绑定具体目标 Commit 执行原子回滚；③ 沙箱运行 `POLARIS-101` 新增防线测试（严禁运行包含不安全基线的历史单测，防线测试若失败必须保持暂停与冻结锁、严禁恢复调度）；④ 推送并重启全套守护进程；⑤ 确认无误后移除冻结锁并解除暂停。若已发生状态分叉，严禁全库盲跑与裸写生产 SQL，按专用剧本执行：SQLite 在线备份 API（`conn.backup()`，采用高精度微秒 UTC 时间戳与 UUID 随机熵拒绝覆盖，并验证 `PRAGMA integrity_check;` 登记恢复点） → 排除 `PUBLISHED` 的受测 DAL 只读差异预览 → 针对指定 `video_id` 的受测 DAL 定点纠偏。
 
 ---
 

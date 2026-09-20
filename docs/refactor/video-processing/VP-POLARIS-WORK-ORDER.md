@@ -26,9 +26,9 @@ last_updated_at: 2026-09-20
 
 | 编号 | 内容 | 状态 | 前置条件 | 完成证据 |
 | --- | --- | --- | --- | --- |
-| `POLARIS-000` | 生产 checkout、Git、运行空闲和文档漂移复核 | READY | 用户发出启动口令 | 记录 `git status`、`main/origin/main`、流水线/浏览器任务状态和文档差异 |
-| `POLARIS-101` | 补真实入口级隔离回归测试（双轨红绿断言与扩展边界覆盖） | BLOCKED | `POLARIS-000` | 漏洞复现用例先红后绿，现有正常基线用例全程保绿；覆盖 Bot 退出码 6、状态与删除越权、DISCOVERY 候选硬排除与 promotion 纳入、并发重置、退出码 3（结果未确认）、超时及平台受理后本地崩溃窗口（未决 Attempt 租约恢复） |
-| `POLARIS-102` | 封闭 Telegram PipelineAgent 直接 uploader、任意状态、删除与重试旁路 | BLOCKED | `POLARIS-101` 红灯证据 | Bot 收口为具名任务分发客户端（执行 QUEUED 响应前持久化与活跃任务幂等复用）；提供 `wechat_submission_attempts` 表结构增量迁移与部分唯一活跃索引（`idx_wechat_active_attempt`）；执行条件 CAS 原子领取不可重试 Attempt 租约（状态 IN_PROGRESS，BUSY 退出时标记 RELEASED_BUSY 释放重领，平台受理后本地崩溃在重启后 Fail-Closed 进 UNCERTAIN 绝不自动重领，物理阻断并发与重复提交，闭环 At-Most-Once）；核心应用服务负责安全拦截与退出码 6 原子三表落账；子进程自洽持锁（防止锁超时为 0 导致立即 busy），仅对明确 BUSY 凭证有限退避，通用退出码 1 判定为永久失败，退出码 3 强制置为 UNCERTAIN 绝不自动重试 |
+| `POLARIS-000` | 生产 checkout、Git、运行空闲和文档漂移复核 | READY | 用户发出启动口令 | 记录 `git status`、`main/origin/main`（当前锚定 `e897eb2`）、流水线/浏览器任务状态和文档差异，确认生产代码零修改 |
+| `POLARIS-101` | 补真实入口级隔离回归测试（双轨红绿断言与扩展边界覆盖） | BLOCKED | `POLARIS-000` | 漏洞复现用例先红后绿，现有正常基线用例全程保绿；覆盖 Bot 退出码 6、状态与删除越权、DISCOVERY 候选硬排除与 promotion 纳入、并发重置、退出码 3（结果未确认）、超时及平台受理后本地崩溃窗口（未决 Attempt 租约恢复）、转入 UNCERTAIN 后再次领取仍被拒绝的阻断测试、历史多条活跃记录平滑迁移与归档测试 |
+| `POLARIS-102` | 封闭 Telegram PipelineAgent 直接 uploader、任意状态、删除与重试旁路 | BLOCKED | `POLARIS-101` 红灯证据 | Bot 收口为具名任务分发客户端（执行 QUEUED 响应前持久化与活跃任务幂等复用）；提供 `wechat_submission_attempts` 历史数据兼容与增量迁移（推荐独立原子租约表或同表去重归档为 SUBMITTED_UNBOUND_ARCHIVED 后建条件唯一索引，杜绝 IntegrityError）；执行 Attempt、Publication 与主表状态多表联合 CAS 原子领取不可重试 Attempt 租约（状态 IN_PROGRESS，BUSY 退出时标记 RELEASED_BUSY 释放重领，平台受理后本地崩溃在重启后 Fail-Closed 进 UNCERTAIN 绝不自动重领，物理阻断并发与重复提交，闭环 At-Most-Once）；核心应用服务负责安全拦截与退出码 6 原子三表落账；子进程自洽持锁（防止锁超时为 0 导致立即 busy），仅对明确 BUSY 凭证有限退避，通用退出码 1 判定为永久失败，退出码 3 强制置为 UNCERTAIN 绝不自动重试 |
 | `POLARIS-103` | 在中心 DAL 候选咽喉 `get_high_score_pending_videos()` 排除 `source='DISCOVERY'`，并修正错误 Golden 契约 | BLOCKED | `POLARIS-101` 红灯证据 | 高分 DISCOVERY 不进入自动候选（UPPER/TRIM 防护）；原子 promotion 为 MANUAL 后可进入；GOLDEN-WF-01 修正为 AUTO |
 | `POLARIS-104` | 修订 M6、INV、RISK、Golden 和既有工单语义 | BLOCKED | `POLARIS-102/103` | M6 不再虚称完整回放通过；平台语义和风险边界一致；登记册对齐 RISK-STATE-001/003；吸收红蓝博弈加固结论 |
 | `POLARIS-105` | 隔离验证、目标提交与推送 | BLOCKED | `POLARIS-104` | 目标测试及完整非浏览器单测通过；仅目标文件提交并推送 `main` |
@@ -38,14 +38,14 @@ last_updated_at: 2026-09-20
 ## 4. 验收标准
 
 1. Telegram Bot 不再拥有可绕过统一安全策略的直接发布或任意状态 mutation 路径；微信 uploader 的“已受理待审核”退出码 6 不得被写成普通失败并触发自动重试语义，且状态流转必须原子落盘 Publication 账本，杜绝鬼魂状态。
-2. Bot 严格收口为具名任务分发客户端，执行响应前持久化协议与幂等复用，统一返回 `QUEUED` 异步受理语义及任务凭证，提示词对齐，严禁在后台执行中向用户宣称“已发布完成”；执行环境复用 `_build_subprocess_env`。外部拉起前完成 Attempt 增量表迁移、建立部分唯一活跃索引并执行条件 CAS 原子领取不可重试 Attempt 租约（BUSY 释放重领，崩溃恢复强制进入终态 `UNCERTAIN` 绝不自动重领，闭环 At-Most-Once）。
+2. Bot 严格收口为具名任务分发客户端，执行响应前持久化协议与幂等复用，统一返回 `QUEUED` 异步受理语义及任务凭证，提示词对齐，严禁在后台执行中向用户宣称“已发布完成”；执行环境复用 `_build_subprocess_env`。外部拉起前完成历史数据兼容处理与增量迁移（独立租约表或去重归档，杜绝表迁移 IntegrityError），执行 Attempt 与 Publication 联合条件 CAS 原子领取不可重试 Attempt 租约（BUSY 释放重领，未决或崩溃恢复转入 `UNCERTAIN` 物理阻断再次重领，闭环 At-Most-Once）。
 3. 会话锁由子进程内部自洽持有（严禁父进程外置重复持锁，杜绝因超时 0 秒导致锁争用立即锁忙失败）；仅对明确 BUSY 凭证有限退避（最多 3 次），通用退出码 1 判定为永久失败，退出码 3 明确为发布结果未确认（`EXIT_RESULT_UNCERTAIN`），绝不可自动重传。
 4. `get_high_score_pending_videos()` 从中心候选层排除 DISCOVERY（加固 `UPPER(TRIM(COALESCE(pv.source, ''))) != 'DISCOVERY'`）；只有显式、原子 promotion 后的 MANUAL 记录可进入后续处理。
 5. `GOLDEN-WF-01` 不再把高分 DISCOVERY 自动入队当作正确契约；由独立的正反双轨回归套件死守 DISCOVERY 防火墙。
 6. 使用项目 `.venv` 与 isolated runner；先通过目标测试，再通过完整非浏览器单元套件。除非另获明确授权，不运行会触碰真实平台的测试或命令。
-7. 遇异常回滚时，实行**受控安全回滚五步法**：① 全局停写、终止在途执行进程并严格核验零活跃消费（未完成核验前严禁 revert）；② 绑定具体目标 Commit 执行原子回滚；③ 沙箱运行 `POLARIS-101` 新增防线测试（严禁运行包含不安全基线的历史单测，防线测试若失败必须保持暂停、严禁恢复调度）；④ 推送并重启全套守护进程；⑤ 确认无误后解除暂停。账本纠偏严禁全库盲跑与裸写生产 SQL，必须采用 SQLite 在线备份 API（`conn.backup()`）并验证完整性（`PRAGMA integrity_check;`），通过 DAL 封装接口进行只读差异预览（排除 `PUBLISHED`）与受控定点纠偏。
-8. 分别报告文件变更、测试、提交、推送、运行采用与外部平台状态；未验证层级保持 UNKNOWN/NOT PERFORMED。
-9. 不夹带、不覆盖生产 checkout 中已有无关改动。
+7. 遇异常回滚时，实行**受控安全回滚五步法**：① 全局停写（创建 `output/pipeline_freeze.lock` 封闭启动源、置 `WECHAT_PUBLISHING_PAUSED=true`、终止常驻服务与关联进程组 PGID 及 Chromium 孤儿、核验微信会话锁释放并标记在途任务为 `UNCERTAIN`，未证实零消费前严禁 revert）；② 绑定具体目标 Commit 执行原子回滚；③ 沙箱运行 `POLARIS-101` 新增防线测试（严禁运行包含不安全基线的历史单测，防线测试若失败必须保持暂停与冻结锁、严禁恢复调度）；④ 推送并重启全套守护进程；⑤ 确认无误后移除冻结锁并解除暂停。账本纠偏严禁全库盲跑与裸写生产 SQL，备份必须采用 SQLite 在线备份 API（`conn.backup()`），命名采用高精度微秒 UTC 时间戳与 UUID 随机熵拒绝覆盖，验证完整性（`PRAGMA integrity_check;`）并登记恢复点元数据，通过 DAL 封装接口进行只读差异预览（排除 `PUBLISHED`）与受控定点纠偏。
+8. 分别报告文件变更、测试、提交、推送、运行采用与外部平台状态；严格遵守【协议已落盘】、【实现待完成】与【测试已验证】三层状态分离，未验证层级保持 UNKNOWN/NOT PERFORMED。
+9. 不夹带、不覆盖生产 checkout 中已有无关改动。确认前序提交 `9b0eb71` 属于正交业务演进，重构工单生产代码严格保持 100% 只读冻结。
 
 ## 5. 明确非目标
 

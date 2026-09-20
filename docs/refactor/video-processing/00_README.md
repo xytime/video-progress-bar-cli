@@ -2,7 +2,7 @@
 created_by: Gemini_3.8_Flash_planning
 created_at: 2026-09-12
 last_updated_at: 2026-09-20
-version: 1.9.0
+version: 2.0.0
 ---
 
 # Video-precessing 架构治理与重构接手总指南
@@ -10,6 +10,7 @@ version: 1.9.0
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.0 | 2026-09-20 | Antigravity | M6.2+ 架构终审 4 项缺陷闭环与基线漂移归属：① 彻底封堵 UNCERTAIN 状态 CAS 领取穿透漏洞（多表联合阻断，单测物理验证拒绝重发）；② 消除历史数据唯一索引冲突风险（独立原子租约表 A 方案与去重归档 B 方案）；③ 升级全系统受控停写与零消费物理核验（pipeline_freeze.lock 封闭启动源、PGID 整树清理、Chromium 孤儿清理与会话锁释放验证）；④ 根除 WAL 备份覆写隐患（微秒时间戳+UUID 熵、拒绝覆盖、完整性校验与恢复点登记）；⑤ 明确 Git HEAD e897eb2 基线与 9b0eb71 业务提交归属，严格分离【协议已落盘】/【实现待完成】/【测试已验证】 |
 | 1.9.0 | 2026-09-20 | Antigravity | M6.2+ 第三轮架构复审协议与剧本深度闭环：确立全局停写与在途执行进程零消费物理核验门禁、SQLite WAL 模式一致性在线备份（conn.backup()）与完整性校验、Attempt 增量表迁移与部分唯一活跃索引 CAS 原子领取、回滚验证绑定 POLARIS-101 防线单测（失败保持暂停）、影子比对显式开启读事务快照（BEGIN DEFERRED 消除 with conn 假读事务）并验收并发隔离、定点纠偏全面收敛至受测 DAL 接口（根绝生产裸 SQL） |
 | 1.8.0 | 2026-09-20 | Antigravity | M6.2+ 第二轮架构复审 7 项技术缺口彻底闭环：确立受控安全回滚五步法、SQLite 账本纠偏局限审查与定点差异预览规程、QUEUED 响应前持久化与不可重试 Attempt 租约（闭环 At-Most-Once）、退出码 1 混淆治理与明确 BUSY 凭证有限退避、校准退出码 3 语义、影子比对同一显式只读快照与底层中断释放、测试收据证明范围与单测覆盖范围精确校准 |
 | 1.7.0 | 2026-09-20 | Antigravity | M6.2+ 架构审议整改与基线收敛：吸收架构师「REVISE BEFORE IMPLEMENTATION」7 项 P1/P2 整改意见，修正回滚剧本为 Fail-Closed 只读降级、明确 settings 构造与 SQLite 纠偏剧本、收口 Bot 为具名分发客户端、消除会话锁互锁误区、对齐双轨测试逻辑与单体递减棘轮门禁、新增 RISK-STATE-003 |

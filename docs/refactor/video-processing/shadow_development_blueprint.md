@@ -2,7 +2,7 @@
 created_by: Gemini_3.8_Flash_planning
 created_at: 2026-09-20
 last_updated_at: 2026-09-20
-version: 1.3.0
+version: 2.0.0
 title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指南
 ---
 
@@ -12,12 +12,13 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
 > **关联总工单**：[`docs/refactor/video-processing/VP-POLARIS-WORK-ORDER.md`](./VP-POLARIS-WORK-ORDER.md)  
 > **红蓝博弈对抗报告**：[`docs/refactor/video-processing/adversarial_red_blue_game_2026-09-20.md`](./adversarial_red_blue_game_2026-09-20.md)  
 > **核心战略**：Hybrid Plan B（Containment 旁路收口 → Contract/Harness 契约修正与失败测试 → Incremental Extraction 渐进影子解耦）  
-> **当前阶段**：`Phase M6.2+`（黄金回放数据集建设与红蓝对抗加固完毕，吸收架构复审整改意见修订中，待启动 `Phase M6.5A`）  
+> **当前阶段**：`Phase M6.2+`（黄金回放数据集建设与红蓝对抗加固完毕，第三轮架构复审 4 项缺陷闭环与基线校准完毕，待启动 `Phase M6.5A`）  
 > **协作范式**：全面借鉴 `/teamwork-preview` 的多角色分工机制（Objective Verification / Acceptance Criteria = Guardrails / Specify What, Not How）
 
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.0 | 2026-09-20 | Antigravity | M6.2+ 架构终审 4 项缺陷闭环与基线漂移归属：① 彻底封堵 UNCERTAIN 领取 SQL 穿透漏洞（Attempt 与 Publication 联合阻断，补齐禁止重领单测）；② 消除历史数据唯一索引冲突风险（提出独立原子租约表 A 方案与同表去重归档 B 方案，避免 IntegrityError 崩溃）；③ 升级全系统受控停写与零消费物理核验（引入 pipeline_freeze.lock 封闭启动源、PGID 整树清理、Chromium 孤儿清理与会话锁释放验证）；④ 根除 WAL 备份覆写隐患（微秒时间戳+UUID 熵、拒绝覆盖、完整性校验与恢复点登记）；⑤ 明确 Git HEAD e897eb2 基线与 9b0eb71 业务提交归属，严格分离【协议已落盘】/【实现待完成】/【测试已验证】 |
 | 1.3.0 | 2026-09-20 | Antigravity | M6.2 复审闭环加固：建立 BUSY 锁忙与普通退出码 1 区分协议；修正退出码 3 为结果未确认；补齐 QUEUED 响应前持久化与 At-Most-Once 提交前 Attempt 租约协议；确立受控安全回滚五步法（前置暂停+回滚后防线验证）；规范 SQLite 定点差异纠偏剧本（排除 PUBLISHED 终态）；明确共享读事务快照与超时物理中断释放 |
 | 1.2.0 | 2026-09-20 | Antigravity | M6.2 架构审议整改：修正第 6 节回滚剧本为 Fail-Closed 只读降级与常驻进程重启 RTO、澄清 settings 构造机理与 SQLite 账本纠偏命令；收口 Bot 为单一具名任务分发客户端并扩展测试范围；纠偏会话锁互锁误区；补充影子比较器同一快照/时钟/排序/有界资源前置条件；对齐 RISK-STATE-003 与双轨红绿测试逻辑 |
 | 1.1.0 | 2026-09-20 | Gemini_3.8_Flash_planning | M6.2+ 红蓝博弈迭代升级：注入 5 场红蓝博弈加固指令（防鬼魂状态、QUEUED 异步语义、正反双轨候选测试、会话共享锁对齐与美股盘中避让短路）；更新 2026-09-20 源码快照基线 |
@@ -192,7 +193,9 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
      - **并发重置与重复触发幂等性**：模拟并发调用调度接口，断言系统能否幂等拦截重复请求并复用已有 `task_id`；
      - **外部执行退出码 3 (`EXIT_RESULT_UNCERTAIN`) 结果映射**：断言退出码 3 精准识别为“发布结果未确认”（网络超时或页面未确认），系统必须保留现场素材与日志，标记为待人工核验，绝对不得触发自动重试，也不得误判为登录凭证失效（退出码 2）；
      - **子进程超时保护与资源清理**：模拟浏览器自动化长时间挂起，断言系统能否在配置超时后正常回收进程组并安全处理；
-     - **外部已受理但本地写账本失败的崩溃窗口与租约恢复**：模拟在调用上传器前写入持久化 Attempt 租约；模拟在微信平台点击发表后、本地写入 Publication 账本前发生进程 SIGKILL，断言系统重启后检测到未确认的 `IN_PROGRESS` 尝试，强制 Fail-Closed 进入 `UNCERTAIN` 并阻止自动重复提交。
+     - **外部已受理但本地写账本失败的崩溃窗口与租约恢复**：模拟在调用上传器前写入持久化 Attempt 租约；模拟在微信平台点击发表后、本地写入 Publication 账本前发生进程 SIGKILL，断言系统重启后检测到未确认的 `IN_PROGRESS` 尝试，强制 Fail-Closed 进入 `UNCERTAIN` 并阻止自动重复提交；
+     - **转入 UNCERTAIN 后再次领取任务仍被拒绝的阻断测试 (`test_claim_attempt_rejected_when_prior_attempt_is_uncertain`)**：构建场景：前序任务因未决超时或崩溃恢复被标记为 `UNCERTAIN`（无论在 `wechat_submission_attempts` 还是 `wechat_publications` 中），断言调用发布任务原子领取 CAS 接口时**必须 100% 被拒绝**（受影响行数为 0 且抛出或返回 `SubmissionClaimRejectedUncertain` 结构化拒绝原因），且无任何新 Attempt 行插入，物理验证无法穿透阻断；
+     - **历史重复活跃记录去重归档与平滑迁移测试 (`test_migration_with_duplicate_historical_attempts`)**：在包含同一 `subject_id` 存在多条历史 `SUBMITTED_UNBOUND` 记录（如旧版本不同 `evidence_path` 写入）的测试夹具数据库上运行增量迁移，断言迁移平滑通过且不发生 `sqlite3.IntegrityError: UNIQUE constraint failed`，重复记录被安全归档为 `SUBMITTED_UNBOUND_ARCHIVED` 且全部历史证据路径与时间戳无损保留。
 - **验收护栏 (Guardrails)**：
   - [ ] **严禁修改任何生产代码**。
   - [ ] 漏洞用例红灯证据归档，正常基线用例全绿通过。
@@ -206,27 +209,87 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
      - **响应前强制持久化 (Pre-Dispatch Durable Record)**：收到调度请求后，先在 SQLite 中原子持久化写入分发任务记录（包含 `task_id`、排队时间戳及目标视频状态），**随后**才向客户端返回 `QUEUED` 异步受理语义，杜绝内存丢单；
      - **重复请求幂等复用**：对处于活跃状态（`DISPATCHED` / `DOWNLOADING` / `PUBLISHING` / `UNDER_REVIEW`）的视频，幂等拦截并返回既有 `task_id` 与 `ALREADY_QUEUED`，杜绝重复创建并发流水线。
   2. **外部提交前不可自动重试 Attempt 租约、数据库迁移与原子领取规则 (Pre-Submission Non-Retryable Lease & Atomic Claim Protocol)**：
-      - **表结构平滑增量迁移方案 (Schema Migration & Backwards Compatibility)**：
-        - 现有 `wechat_submission_attempts` 表 CHECK 约束为 `CHECK(state IN ('SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND'))`（位于 `database.py:750`），直接插入 `IN_PROGRESS` 会抛出 `CHECK constraint failed` 异常；
-        - 在 `POLARIS-102` 中，`PipelineDB._migrate_database()` 增加自动迁移守卫：检测 `wechat_submission_attempts` 建表 DDL 是否包含 `'IN_PROGRESS'`；若无，执行标准 SQLite 表迁移（重命名旧表 -> 创建包含扩展状态的新表 -> 复制历史数据 -> 建立部分唯一索引 -> 清理旧表），平滑将约束升级为：
-          `CHECK(state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN', 'RELEASED_BUSY'))`；
-      - **任务/Attempt 唯一键与原子领取规则 (Atomic Claim & Unique Active Attempt Constraint)**：
-        - 为根绝多执行者并发领取，物理建立部分唯一索引：
-          `CREATE UNIQUE INDEX IF NOT EXISTS idx_wechat_active_attempt ON wechat_submission_attempts(subject_id) WHERE state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND');`
+      - **表结构平滑增量迁移与历史数据兼容方案 (Schema Migration & Historical Data Compatibility)**：
+        - *历史数据冲突风险核验*：现有生产代码 `database.py:3424` (`record_wechat_submission_attempt`) 允许针对同一 `subject_id` 多次调用写入多条 `SUBMITTED_UNBOUND` 记录（如不同 `evidence_path` 或重试留下的历史痕迹）。如果直接无差别执行 `CREATE UNIQUE INDEX ... WHERE state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', ...)`，存量数据库在执行 `PipelineDB.__init__` 时将直接因唯一约束冲突抛出 `sqlite3.IntegrityError: UNIQUE constraint failed` 崩溃并阻断流水线启动；
+        - *架构双轨方案设计*：
+          - **推荐方案 A（独立原子活跃租约表 - 架构首选推荐）**：
+            将并发互斥控制与历史只读审计彻底解耦。新建独立表 `wechat_submission_active_claims`：
+            ```sql
+            CREATE TABLE IF NOT EXISTS wechat_submission_active_claims (
+                subject_id TEXT PRIMARY KEY,
+                video_id INTEGER NOT NULL,
+                active_attempt_id TEXT NOT NULL,
+                claimed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                claim_state TEXT NOT NULL CHECK(claim_state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN')),
+                FOREIGN KEY(subject_id) REFERENCES publication_subjects(id) ON DELETE RESTRICT,
+                FOREIGN KEY(active_attempt_id) REFERENCES wechat_submission_attempts(attempt_id) ON DELETE RESTRICT
+            );
+            ```
+            由于 `subject_id` 为天然 PRIMARY KEY，物理保证每个发布主体全局仅有一条活跃租约。`wechat_submission_attempts` 保留为纯追加审计账本，零历史数据冲突风险。
+          - **备选方案 B（单表归档去重与条件唯一索引迁移 - 单表兼容方案）**：
+            若保持在 `wechat_submission_attempts` 单表上实施条件唯一索引，`PipelineDB._migrate_database()` 迁移脚本必须在**单个显式事务**内按严格顺序执行：
+            ① *冲突预检*：
+               ```sql
+               SELECT subject_id, COUNT(*) as cnt 
+               FROM wechat_submission_attempts 
+               WHERE state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN') 
+               GROUP BY subject_id HAVING cnt > 1;
+               ```
+            ② *历史重复数据安全归档（保留审计与取证，杜绝物理删数）*：
+               保留按 `created_at DESC` 排序最新的 1 条作为活跃记录，将其余历史旧记录的状态安全更新为 `'SUBMITTED_UNBOUND_ARCHIVED'`：
+               ```sql
+               UPDATE wechat_submission_attempts 
+               SET state = 'SUBMITTED_UNBOUND_ARCHIVED' 
+               WHERE attempt_id IN (
+                   SELECT a.attempt_id 
+                   FROM wechat_submission_attempts a
+                   JOIN wechat_submission_attempts b ON a.subject_id = b.subject_id
+                   WHERE a.state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN')
+                     AND b.state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN')
+                     AND a.created_at < b.created_at
+               );
+               ```
+            ③ *更新 CHECK 约束并建立扩展状态条件唯一索引*：
+               重命名旧表 -> 创建扩展 CHECK 约束（包含 `'SUBMITTED_UNBOUND_ARCHIVED'` 与扩展状态）的新表 -> 复制数据 -> 执行：
+               ```sql
+               CREATE UNIQUE INDEX IF NOT EXISTS idx_wechat_active_attempt 
+               ON wechat_submission_attempts(subject_id) 
+               WHERE state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN');
+               ```
+               全过程单事务执行，失败自动 ROLLBACK，彻底杜绝半迁移脏状态与启动崩溃。
+      - **多表联合阻断与 CAS 原子领取规则 (Multi-Table Joint Atomic Claim Protocol)**：
+        - 彻底根除 `UNCERTAIN` 穿透漏洞：原方案仅检查 `('IN_PROGRESS', 'SUBMITTED_UNBOUND')`，导致崩溃恢复转入 `UNCERTAIN` 后阻拦条件失效。修正为：**Attempt 层、Publication 层与主表状态联合全量阻断**；
         - 拉起 `wechat_uploader.py` 之前，必须执行条件 CAS 原子领取：
           ```sql
           INSERT INTO wechat_submission_attempts (attempt_id, video_id, subject_id, state, final_title, ...)
           SELECT ?, ?, ?, 'IN_PROGRESS', ?, ...
           WHERE NOT EXISTS (
+              -- 阻断 1: 存在任何正在执行、已受理未绑定、已绑定或未确认的 Attempt
               SELECT 1 FROM wechat_submission_attempts 
-              WHERE subject_id = ? AND state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND')
+              WHERE subject_id = ? 
+                AND state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN')
+          )
+          AND NOT EXISTS (
+              -- 阻断 2: 存在任何已受理、已绑定、审核中、未确认或已发布的 Publication 事实记录
+              SELECT 1 FROM wechat_publications 
+              WHERE subject_id = ? 
+                AND state IN ('SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNDER_REVIEW', 'UNCERTAIN', 'PUBLISHED')
+          )
+          AND NOT EXISTS (
+              -- 阻断 3: 对应视频主表状态已处于已受理或已发布终态
+              SELECT 1 FROM processed_videos 
+              WHERE id = ? 
+                AND status IN ('SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNDER_REVIEW', 'UNCERTAIN', 'PUBLISHED')
           );
           ```
-          若受影响行数为 0，说明已被其他执行者抢占或存在未决活跃任务，原子拒绝并发领取，物理排除多执行者重投风险；
+          若受影响行数为 0，说明被已有活跃/受理/已发布记录或 UNCERTAIN 记录拦截：
+          - 查询具体冲突状态；若冲突源处于 `UNCERTAIN`，直接抛出 `SubmissionClaimRejectedUncertain("任务处于未决 UNCERTAIN 状态，禁止自动重领重发，必须人工核对微信后台后线下核销")`；
+          - 若处于已受理或已发布终态，返回 `SubmissionClaimRejectedAlreadyPublished`；
+          - **物理上杜绝任何并发、重复或 UNCERTAIN 状态下的重新领取与重复发帖**。
       - **生命周期流转与租约闭环 (Lease Lifecycle & Terminal Rules)**：
-        - **BUSY 释放与退避重领**：当子进程因会话锁争用退出并携带明确 BUSY 凭证（`[SESSION_LOCK_BUSY]`）时，调度系统在独立事务中将该 attempt 标记为 `RELEASED_BUSY`（释放部分唯一索引占用），随后进入有限指数退避（最多 3 次），退避到期后生成新 attempt 重新原子领取；
+        - **BUSY 释放与退避重领**：当子进程因会话锁争用退出并携带明确 BUSY 凭证（`[SESSION_LOCK_BUSY]`）时，调度系统在独立事务中将该 attempt 标记为 `RELEASED_BUSY`（释放联合阻断占用），随后进入有限指数退避（最多 3 次），退避到期后生成新 attempt 重新原子领取；
         - **正常受理落账**：退出码 6 时，在三表强原子事务内将 attempt 状态更新为 `SUBMITTED_UNBOUND`，写入 `wechat_publications` 账本和主表状态；
-        - **崩溃恢复与禁止重领 (Fail-Closed Crash Recovery)**：若进程在外部发布被微信受理与本地事务完成之间遭遇崩溃（`SIGKILL`），系统重启扫描到悬空 `IN_PROGRESS` attempt，**强制 Fail-Closed 转入 `UNCERTAIN`**。`UNCERTAIN` 状态代表发布结果未确认，严禁自动重新领取或重试，必须由人工核验微信后台后线下核销，真正物理闭环 At-Most-Once。
+        - **崩溃恢复与禁止重领 (Fail-Closed Crash Recovery)**：若进程在外部发布被微信受理与本地事务完成之间遭遇崩溃（`SIGKILL`），系统重启扫描到悬空 `IN_PROGRESS` attempt，**强制 Fail-Closed 转入 `UNCERTAIN`**。由于领取 SQL 联合排除了 `UNCERTAIN`，新尝试无法领取，系统物理锁定，必须由人工核验微信后台后线下核销，真正物理闭环 At-Most-Once。
   3. **前置接入发布账本守卫**：在 `update_video_status` 与 `retry_video_in_db` 前置引入发布账本守卫，拒绝将已受理/已发布记录打回 `PENDING`。
   4. **退出码 6 原子三表落账**：在任务执行落地层捕获退出码 6 时，调用复合原子事务方法写入 Publication 账本、更新 Attempt 记录与 `SUBMITTED_UNBOUND` 状态，彻底杜绝无账本鬼魂状态。
   5. **锁忙与普通错误严格区分及会话锁协作**：
@@ -289,23 +352,56 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
 > [!CAUTION]
 > **严禁裸 Revert 撤销安全防线**：若仅简单执行 `git revert`，虽然能消除新引入的代码语法错误，但同时会撤掉对已知严重漏洞（如 DISCOVERY 误发微信、Bot 任意重置已受理任务）的安全拦截，导致系统裸奔于不设防状态。凡触及安全防线的回滚，必须严格执行以下五步：
 
-1. **第一步：前置全局停写、在途任务清空与执行进程零消费物理核验 (Pre-Rollback Quiesce & Zero-Consumer Verification)**：
+1. **第一步：前置全局停写、任务启动源封闭、在途任务清空与执行进程零消费物理核验 (Pre-Rollback Quiesce, Trigger Sealing & Zero-Consumer Verification)**：
    > [!IMPORTANT]
-   > 运行 `./vpanel ui restart` 或 `ui stop` 仅仅管理 FastAPI 控制中心（`:8765`），**绝对无法停止**通过 cron 定时拉起、手动 `job run` 启动的独立 `PipelineManager` 进程、`Bot` 守护进程以及正在执行的 `wechat_uploader.py` 浏览器进程！修改 `.env` 也无法使已经在运行中的进程自动热重载！
-   - **第一小步（置暂停标记）**：在 `.env` 中将发布总开关置为暂停：`WECHAT_PUBLISHING_PAUSED=true`，阻止任何新拉起的进程消费外部发布；
-   - **第二小步（停常驻服务）**：
+   > 运行 `./vpanel ui restart` 或 `ui stop` 仅仅管理 FastAPI 控制中心（`:8765`），**绝对无法停止**通过 cron 定时拉起、手动 `job run` 启动的独立 `PipelineManager` 进程、`Bot` 守护进程、以独立会话启动的互动 Worker (`pipeline_manager.py:1086` `start_new_session=True`) 以及正在执行的 `wechat_uploader.py` 浏览器进程！修改 `.env` 也无法使已经在运行中的进程自动热重载！若不在启动源头加锁，cron 会在回滚窗口内随时拉起新任务！必须执行以下七小步严格停写：
+   - **第一小步（封闭任务启动源，防定时任务/重入复活）**：
+     创建全局调度冻结锁文件：
+     ```bash
+     touch output/pipeline_freeze.lock
+     ```
+     *规范约束*：所有管线与调度入口（`monitor_channels.py`、`pipeline_manager.py`、`run_publication_window.py`、`vpanel job run` 等）在启动前置检查 `output/pipeline_freeze.lock`；若文件存在，立即记入日志 `[FROZEN] 调度已全局冻结，跳过执行` 并以退出码 0 安全退出，彻底杜绝回滚窗口内 cron（每 30 分钟 monitor、每天 09:00/21:00 定时发布）拉起新任务；
+   - **第二小步（置环境变量与配置双重防护）**：在 `.env` 中将发布总开关置为暂停：`WECHAT_PUBLISHING_PAUSED=true`，双重阻止任何新拉起的进程消费外部发布；
+   - **第三小步（停常驻服务）**：
      ```bash
      ./vpanel ui stop
      ./vpanel bot stop
      ```
-   - **第三小步（清查并终结在途执行进程）**：检索所有涉及视频处理与发布的独立进程：
+   - **第四小步（整树扫描与进程组彻底清理，含 setsid worker 与 Chromium 孤儿）**：
+     - 检索所有关联进程及其 PGID（进程组 ID）：
+       ```bash
+       ps -eo pid,pgid,ppid,command | grep -E "pipeline_manager|wechat_uploader|wechat_commenter|bot_daemon|web.app" | grep -v grep
+       ```
+     - 向各活跃进程组发送终止信号（涵盖 `pipeline_manager.py:1086` 以 `start_new_session=True` 启动的独立进程组）：
+       `kill -TERM -<PGID>`
+     - 清理残留的 Playwright Chromium 孤儿浏览器进程：
+       `pgrep -fl "chromium.*wechat" | awk '{print $1}' | xargs -r kill -TERM`
+     - 等待 30 秒；若仍有存活，执行强行终止：`kill -KILL -<PGID>` 及 `kill -KILL <PID>`；
+   - **第五小步（会话排他锁与物理资源释放核验）**：
+     通过 Python 脚本对 `output/wechat_session.lock` 进行非阻塞 flock 探测，确保文件锁已被物理操作系统释放：
      ```bash
-     ps aux | grep -E "pipeline_manager|wechat_uploader|bot_daemon|app.py" | grep -v grep
+     PYTHONPATH=src .venv/bin/python -c "
+     import fcntl
+     try:
+         with open('output/wechat_session.lock', 'a') as f:
+             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+             fcntl.flock(f, fcntl.LOCK_UN)
+         print('✓ 微信会话锁已安全释放 (Lock is FREE)')
+     except BlockingIOError:
+         print('✗ 严重警告：微信会话锁仍被占用！')
+         exit(1)
+     "
      ```
-     若发现仍在运行的 `pipeline_manager` 或 `wechat_uploader` 进程，立即发送 `SIGTERM` 请求优雅停止；若超过 30 秒仍未退出，发送 `SIGKILL` 强行终止，坚决阻断在途网络发帖；
-   - **第四小步（零消费物理核验门禁）**：再次运行上述 grep 命令，**物理核验输出必须完全为空**，且确认 `./vpanel ui status` 和 `./vpanel bot status` 均处于停止状态。
+   - **第六小步（在途中断任务安全收敛）**：
+     对被强行终止且状态停留在 `IN_PROGRESS` 的在途 Attempt，运行收敛脚本将其置为 `UNCERTAIN`，保留现场日志与取证路径，严禁直接丢弃或自动重置为待发布；
+   - **第七小步（全局零消费物理核验门禁）**：
+     再次执行：
+     ```bash
+     ps aux | grep -E "pipeline_manager|wechat_uploader|wechat_commenter|bot_daemon|web.app|chromium.*wechat" | grep -v grep
+     ```
+     **物理核验输出必须完全为空**，且确认 `./vpanel ui status` 和 `./vpanel bot status` 均处于停止状态。
    > [!CAUTION]
-   > **在上述“在途任务已终结、无活跃执行进程、零消费”的物理核验证实完成之前，绝对禁止执行任何 `git revert` 操作！**
+   > **在上述“启动源已封闭、进程树已整树终结、会话锁已释放、在途任务已置 UNCERTAIN、全局零活跃消费”的物理核验证实完成之前，绝对禁止执行任何 `git revert` 操作！冻结锁与暂停配置必须持续覆盖整个回滚与沙箱测试验证窗口！**
 
 2. **第二步：绑定具体目标提交原子回滚 (Targeted Atomic Revert)**：
    确定引发异常的精确 Commit SHA，执行非编辑回滚：
@@ -318,7 +414,7 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
      1) `PipelineDB.get_high_score_pending_videos()` 对 `source='DISCOVERY'` 的硬性排除依然生效；
      2) Bot 入口对已受理（`SUBMITTED_*`）与已发布（`PUBLISHED`）视频的状态重置守卫依然有效拦截；
      3) 正常 AUTO 任务依然能正常流转。
-   - **门禁铁律**：如果防线测试失败（证明回滚操作把安全防线撤掉了），**系统必须保持 `WECHAT_PUBLISHING_PAUSED=true` 暂停状态，严禁解除暂停，严禁恢复调度！** 必须先在暂停状态下由工程师介入排查，修复代码后方可恢复。
+   - **门禁铁律**：如果防线测试失败（证明回滚操作把安全防线撤掉了），**系统必须保持 `output/pipeline_freeze.lock` 存在与 `WECHAT_PUBLISHING_PAUSED=true` 暂停状态，严禁解除暂停，严禁恢复调度！** 必须先在暂停状态下由工程师介入排查，修复代码后方可恢复。
 
 4. **第四步：推送与常驻服务热重启 (Push & Process Restart)**：
    ```bash
@@ -328,7 +424,11 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
    检查进程状态：`./vpanel ui status && ./vpanel bot status`，确认进程采用最新回滚代码。
 
 5. **第五步：解除暂停与恢复观测 (Unpause & Active Observation)**：
-   在确认错误消除且防线完好后，在 `.env` 中恢复 `WECHAT_PUBLISHING_PAUSED=false` 并重启服务，持续观测 15 分钟日志。
+   在确认错误消除且防线完好后，移除冻结锁并恢复配置：
+   ```bash
+   rm -f output/pipeline_freeze.lock
+   ```
+   在 `.env` 中恢复 `WECHAT_PUBLISHING_PAUSED=false` 并重启服务，持续观测 15 分钟日志。
 
 ---
 
@@ -344,21 +444,50 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
 
 #### 步骤一：SQLite WAL 模式一致性在线备份与完整性验证 (Consistent Online Backup & Integrity Verification)
 > [!IMPORTANT]
-> 项目启用了 WAL 模式（`PRAGMA journal_mode=WAL;`），最新的读写事务可能仍在 `-wal` 文件或内存中。单纯使用 shell `cp output/pipeline.db ...` **物理上无法保证获取完整一致的已提交 publication 账本**！必须使用 SQLite 官方提供的在线备份 API (`sqlite3.Connection.backup()`)，由底层 C 引擎获取一致性读锁、同步 WAL 检查点并原子输出独立快照文件，随后立即验证：
+> 1. **WAL 模式写入特性与 mtime 覆盖风险**：项目启用了 WAL 模式（`PRAGMA journal_mode=WAL;`），写事务直接追加到 `pipeline.db-wal`，主库文件 `pipeline.db` 的 mtime 不会随普通事务发生变化。若使用 `os.path.getmtime()` 命名备份，多次备份文件名完全相同，将导致已有备份被静默覆写！
+> 2. **一致性保证**：单纯使用 shell `cp` 无法保证获取完整一致的 WAL 检查点。必须使用 SQLite 官方提供的在线备份 API (`sqlite3.Connection.backup()`)，由底层 C 引擎获取一致性读锁、同步 WAL 检查点并原子输出独立快照文件，且备份文件采用高精度微秒 UTC 时间戳与 UUID 随机熵命名，拒绝覆盖，并通过 `PRAGMA integrity_check;` 严格核验后将元数据登记为有效恢复点：
 ```bash
 PYTHONPATH=src .venv/bin/python -c "
-import sqlite3, os
-bak_path = f'output/pipeline.db.bak_{int(os.path.getmtime(\"output/pipeline.db\"))}.bak'
+import sqlite3, os, uuid, json, hashlib
+from datetime import datetime, timezone
+
+os.makedirs('output/backups', exist_ok=True)
+ts = datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')
+entropy = uuid.uuid4().hex[:8]
+bak_path = f'output/backups/pipeline_recovery_{ts}_{entropy}.sqlite3'
+
+if os.path.exists(bak_path):
+    raise FileExistsError(f'备份文件冲突，拒绝覆盖: {bak_path}')
+
+# SQLite 官方在线备份 API 同步 WAL 检查点
 src = sqlite3.connect('output/pipeline.db')
 dst = sqlite3.connect(bak_path)
 src.backup(dst)
 dst.close()
 src.close()
+
+# 物理完整性验证
 v_conn = sqlite3.connect(bak_path)
 res = v_conn.execute('PRAGMA integrity_check;').fetchone()[0]
 v_conn.close()
 assert res == 'ok', f'备份完整性校验失败: {res}'
+
+# 计算校验和并写入恢复点元数据
+with open(bak_path, 'rb') as f:
+    sha256 = hashlib.sha256(f.read()).hexdigest()
+
+meta = {
+    'recovery_file': bak_path,
+    'sha256': sha256,
+    'created_at_utc': ts,
+    'integrity': 'ok'
+}
+meta_path = 'output/backups/latest_recovery_point.json'
+with open(meta_path, 'w') as f:
+    json.dump(meta, f, indent=2)
+
 print(f'一致性备份成功且验证通过: {bak_path}')
+print(f'恢复点元数据已落盘: {meta_path} (SHA256: {sha256[:16]}...)')
 "
 ```
 
@@ -404,3 +533,11 @@ print(f'成功安全纠偏分叉记录: {result}')
 3. **严禁外部发布真实双跑**：任何带有 `EXTERNAL_SIDE_EFFECT` 的外部平台发布绝对禁止在影子模式下发起网络提交，必须保持 Dry-Run。
 4. **禁止跨事务拆分**：严禁破坏 `record_wechat_submission_acceptance` 内部的 3 表同连接强原子事务。
 5. **区分汇报状态**：严格区分“文件已改、测试通过、Git 已提交、已推送、线上采用”；任何层级未经实测确认前，一律标为 `UNKNOWN / NOT PERFORMED`。
+6. **基线漂移归属与三层状态严格分离纪律**：
+   - **基线 Commit 锚定**：当前 Git HEAD 物理锚定在 `e897eb2c2bf514b0f4505de8d51e88a137379100`。
+   - **业务基线漂移说明**：前序提交 `9b0eb71` 打通了 English World 视频号账本发布并按原生 ID 索引定位发评，涉及 5 个生产文件及 1 个测试文件变动（+397/-78 行），属于正交业务功能落地。在 `VP-POLARIS` 架构治理期间，生产代码（`src/`、`scripts/`）严格保持 100% 只读冻结（零修改）。
+   - **三层状态报告规程**：任何交接与审计报告必须严格物理切分：
+     - **【协议已落盘】**：治理文档、工单架构、蓝图设计、回滚与备份剧本已在 Git 中物理落盘生效；
+     - **【实现待完成】**：生产代码目前保持 0 修改，等待口令放行后在 `POLARIS-101` ~ `105` 中逐个工单实施；
+     - **【测试已验证】**：在当前 `e897eb2` 快照下通过 `scripts/run_isolated_tests.py` 验证基线测试 100% 绿灯。
+

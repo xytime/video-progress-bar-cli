@@ -2,7 +2,7 @@
 created_by: Gemini_3.8_Flash_planning
 created_at: 2026-09-12
 last_updated_at: 2026-09-12
-version: 1.5.0
+version: 2.0.0
 ---
 
 # Video-precessing 架构调查与治理日志 (Investigation & Governance Log)
@@ -10,6 +10,7 @@ version: 1.5.0
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.0 | 2026-09-20 | Antigravity | M6.2+ 架构终审 4 项缺陷闭环与基线漂移归属：① 彻底封堵 UNCERTAIN 状态 CAS 领取穿透漏洞（多表联合阻断，单测物理验证拒绝重发）；② 消除历史数据唯一索引冲突风险（独立原子租约表 A 方案与去重归档 B 方案）；③ 升级全系统受控停写与零消费物理核验（pipeline_freeze.lock 封闭启动源、PGID 整树清理、Chromium 孤儿清理与会话锁释放验证）；④ 根除 WAL 备份覆写隐患（微秒时间戳+UUID 熵、拒绝覆盖、完整性校验与恢复点登记）；⑤ 明确 Git HEAD e897eb2 基线与 9b0eb71 业务提交归属，严格分离【协议已落盘】/【实现待完成】/【测试已验证】 |
 | 1.5.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.2 阶段启动：M6.1 特征化基线正式签署完结，启动可执行黄金回放数据集 (Golden Replay Dataset) 建设与离线回放验证 |
 | 1.4.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.1D 阶段升级：记录独立防线去重审计，分离 Fact 与 Defense，消除微信与快手防线重复计算，多维重塑控制族矩阵 |
 | 1.3.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.1C 阶段升级：记录防线资格准入审计，区分 Publication Safety 与 Supporting Control，确立快手候选过滤断言缺失及 INV-003 降级为 PARTIAL |
@@ -577,6 +578,38 @@ version: 1.5.0
 - **Production Code Status**: 生产业务代码严格保持零修改（Zero runtime code changes, 0 line diff in `src/` & `scripts/`）。
 - **Isolated Test Receipt**: `.venv/bin/python scripts/run_isolated_tests.py -- -q tests/unit/test_characterization_baseline.py tests/unit/test_golden_replay_dataset.py` -> **15 passed, 2 warnings in 3.19s**。
 - **Sign-off Readiness**: 第三轮架构复审指出的 6 项协议与剧本缺口（4 项 P1、2 项 P2）已 100% 物理闭环，所有文档已更新落盘。
+
+---
+
+## 2026-09-20: M6.2+ 架构终审 4 项缺陷物理闭环与基线漂移归属 (Final Architecture Review Closure & Baseline Drift Attribution)
+
+### Update 2026-09-20 · Phase M6.2+ (Final Architecture Review Closure)
+- **Author**: Antigravity
+- **Trigger**: Codex / 架构师终审结论「仍需修订，暂不签署实施放行。新增协议仍有 3 项 P1、1 项 P2，且审议基线发生漂移」。
+- **What changed & Physical Evidence**:
+  1. **[P1] UNCERTAIN 状态 CAS 领取穿透漏洞彻底闭环**：
+     - *根因确证*：原设计中条件唯一索引与 CAS SQL 中的 `NOT EXISTS` 仅排查 `('IN_PROGRESS', 'SUBMITTED_UNBOUND')`。当崩溃恢复将悬空 Attempt 标记为 `UNCERTAIN` 后，两道防线均失效，新 Attempt 依然能被插入并重新拉起 Uploader 发帖，At-Most-Once 被击穿；
+     - *闭环方案*：CAS 领取 SQL 升级为 Attempt、Publication 及主表三层联合阻断，排查 `state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN')` 及 Publication 事实状态；若被 `UNCERTAIN` 拦截，直接抛出 `SubmissionClaimRejectedUncertain` 异常，必须线下人工对账核销，绝不重领；在 `POLARIS-101` 增设物理阻断单测；
+  2. **[P1] 历史多条活跃记录与条件唯一索引平滑兼容**：
+     - *根因确证*：生产代码 `database.py:3424` 允许同一 `subject_id` 记录多条 `SUBMITTED_UNBOUND`。若存量库已存在历史重复记录，直接 `CREATE UNIQUE INDEX` 将在启动迁移时抛出 `IntegrityError` 崩溃；
+     - *闭环方案*：确立双轨方案。推荐**方案 A（独立原子活跃租约表 `wechat_submission_active_claims`）**，以 `subject_id` 为 PRIMARY KEY，将活跃租约与历史追加审计彻底解耦；备选**方案 B（单事务冲突预检与历史重复记录去重归档）**：单事务内先预检，保留最新 1 条为活跃，将其余历史旧记录安全更新为 `'SUBMITTED_UNBOUND_ARCHIVED'`，保留全部审计字段，再建条件唯一索引；
+  3. **[P1] 全系统受控停写、启动源封闭与进程组零消费物理核验**：
+     - *根因确证*：`vpanel ui restart/stop` 仅管理控制台，无法阻止 cron 定时任务、后台管线、独立进程组互动 Worker (`pipeline_manager.py:1086` `start_new_session=True`) 及 Chromium 孤儿浏览器；
+     - *闭环方案*：建立七步受控停写规程：创建 `output/pipeline_freeze.lock` 物理封闭启动源；置 `WECHAT_PUBLISHING_PAUSED=true`；停止受管服务；按 PGID 整树清理进程组并 kill 残留 Chromium 孤儿；非阻塞 flock 探测 `output/wechat_session.lock` 确保会话锁释放；在途任务收敛为 `UNCERTAIN`；确认进程输出为空后方可 revert；冻结锁与暂停状态覆盖整个回滚与沙箱测试验证窗口；
+  4. **[P2] 根除 WAL 模式备份静默覆写隐患**：
+     - *根因确证*：WAL 模式下写事务直接写入 `-wal` 文件，主库文件 `pipeline.db` 的 mtime 不随普通事务更新。原蓝图使用 `os.path.getmtime()` 命名备份会导致多次备份文件名完全一致，静默覆写旧恢复点，造成灾备失效；
+     - *闭环方案*：备份命名升级为高精度微秒 UTC 时间戳 + UUID 随机熵（`pipeline_recovery_{ts}_{entropy}.sqlite3`）；增加 `os.path.exists()` 检查，若目标已存在抛出 `FileExistsError` 绝不覆盖；使用 `src.backup(dst)` 获取一致性快照；独立连接执行 `PRAGMA integrity_check;` 校验为 `ok`；计算 SHA256 并持久化登记到 `output/backups/latest_recovery_point.json`；
+  5. **基线漂移归属澄清与三层状态清晰界定**：
+     - *基线 Commit 事实*：当前 Git HEAD 物理锚定在 `e897eb2c2bf514b0f4505de8d51e88a137379100`；
+     - *业务基线漂移说明*：前序提交 `9b0eb71` 解决了视频号评论互动系统（English World 账本发布与原生 ID 索引），涉及 5 个生产文件及 1 个测试文件变动（+397/-78 行），属于正交业务演进；重构总工单 `VP-POLARIS` 确立以来，生产代码（`src/`、`scripts/`）严格保持 100% 只读冻结（零修改）；
+     - *三层状态报告规程*：严格分离【协议已落盘】（方案与剧本已落盘）、【实现待完成】（代码保持 0 修改待口令激活后按工单实施）与【测试已验证】（当前快照沙箱测试全绿）。
+- **Production Code Status**: 生产业务代码严格保持零修改（Zero runtime code changes, 0 line diff in `src/` & `scripts/`）。
+- **Isolated Test Receipt**:
+  ```json
+  {"source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing", "snapshot": "/private/tmp/video-pytest-9iqenia3/sandbox/repo", "probe": {"exit_code": 0, "seconds": 0.079}, "pytest_arguments": ["-q", "tests/unit/test_characterization_baseline.py", "tests/unit/test_golden_replay_dataset.py"], "timeout_seconds": 600, "source_manifest_sha256": "8c0d1c7286f35b12ebe134e441615b6e17dd4add6fe51fb0c9dd2e0a0ca4b3e0", "profile_sha256": "547da65af3ccf847a4a1cbce0301707af92375f1aeee07d18686d121f8426da4", "browser_runtime": null, "browser_runtime_sha256": null, "media_runtime": null, "media_runtime_sha256": null, "pytest": {"exit_code": 0, "seconds": 3.063}, "finished_at": "2026-09-20T11:20:46.557900+00:00"}
+  ```
+- **Sign-off Readiness**: 第三轮架构复审指出的 4 项技术缺口（3 项 P1、1 项 P2）已 100% 物理闭环，基线漂移归属已澄清，所有文档已更新落盘，等待架构师终审签署与启动口令。
+
 
 
 

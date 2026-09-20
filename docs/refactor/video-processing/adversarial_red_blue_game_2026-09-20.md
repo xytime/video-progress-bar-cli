@@ -4,8 +4,8 @@ project: Video-precessing (YouTube → 微信视频号/多平台流水线)
 date: 2026-09-20
 author: Gemini_3.8_Flash_planning
 companion: shadow_development_blueprint.md, VP-POLARIS-WORK-ORDER.md
-status: 评审与基准签署稿 (FINAL REVIEW)
-version: 1.0.0
+status: 评审与基准终审签署稿 (FINAL ARCHITECT REVIEW - REVISED V2.0)
+version: 2.0.0
 ---
 
 # VP-POLARIS「北辰」架构重构红蓝对抗博弈推演与设计加固报告
@@ -212,6 +212,39 @@ version: 1.0.0
 
 ---
 
+## 战役六：第三轮架构终审 4 项技术盲区深度渗透与终极硬化 (Round 6: Deep Penetration on Final Review Vulnerabilities)
+
+### ⚪ 白·命题
+架构师与评审员在第三轮终审中指出：虽然已建立了 BUSY 判别、退出码 3 与回滚防线测试，但仍存在 4 项物理技术缺口：
+1. 崩溃恢复置为 `UNCERTAIN` 后，原有 CAS SQL 阻断失效，新任务依然能领取重发；
+2. 存量生产库若已有重复的 `SUBMITTED_UNBOUND` 记录，直接建唯一索引将抛出 `IntegrityError` 崩溃；
+3. 全局停写若只关控制台，独立管线、cron 与 `os.setsid` 启动的互动 Worker 仍会并发执行；
+4. WAL 模式下主库 mtime 不变，导致在线备份静默覆写已有恢复点。
+
+---
+
+### 🔴 红·进攻（极限渗透）
+1. **UNCERTAIN 穿透重复发帖**：当子进程因断网或崩溃导致 Attempt 停留在悬空状态，崩溃恢复将其置为 `state = 'UNCERTAIN'`。由于原 CAS 语句中 `NOT EXISTS` 仅过滤 `('IN_PROGRESS', 'SUBMITTED_UNBOUND')`，原部分唯一索引也只覆盖这两态。红队立即发起重新调度，`NOT EXISTS` 返回 True，新的 `IN_PROGRESS` Attempt 成功插入并拉起 Uploader 再次发帖，直接封号！
+2. **存量数据致死异常**：生产库 `database.py:3424` 允许不同 `evidence_path` 写入多条 `SUBMITTED_UNBOUND`。若存量库已存在历史重复数据，`CREATE UNIQUE INDEX` 直接抛出 `UNIQUE constraint failed`，导致生产部署或表迁移在启动时直接炸库！
+3. **假停写与 cron 幽灵复活**：运维在回滚时仅执行 `./vpanel ui stop` 并更新 `.env`。但系统 cron 依然每 30 分钟拉起 `monitor_channels.py`、每天定时拉起 `pipeline_manager.py`，且已启动的后台互动 Worker (`start_new_session=True`) 拥有独立进程组。在运维执行 `git revert` 的瞬间，cron 再次拉起流水线，带着旧代码或未决环境直接向平台发帖！
+4. **备份覆写摧毁恢复点**：WAL 模式下写事务全在 `pipeline.db-wal`，主库文件 `pipeline.db` 的 mtime 不变。运维在纠偏前两次执行备份，由于文件名基于秒级 mtime，第二次备份直接无情覆写第一次备份。若第二次备份是在数据已被污染时触发，唯一的冷恢复点被永久销毁！
+
+---
+
+### 🔵 蓝·防守（硬化防御）
+1. **多表联合 CAS 阻断**：CAS 领取 SQL 不仅排查 Attempt 表（排除 `IN_PROGRESS`, `SUBMITTED_UNBOUND`, `PLATFORM_ID_BOUND`, `UNCERTAIN`），更排查 Publication 事实表与主表状态；若被 `UNCERTAIN` 拦截，直接硬性抛出 `SubmissionClaimRejectedUncertain` 拒绝并报警，禁止自动重领。
+2. **迁移双轨兼容与历史归档**：架构推荐**方案 A（独立原子活跃租约表）**，通过 `subject_id PRIMARY KEY` 物理保证单活跃，历史 Attempt 纯追加不加唯一约束；备选**方案 B（单事务冲突预检与旧记录归档）**：预检重复记录，保留最新 1 条为活跃，将其余旧记录安全置为 `'SUBMITTED_UNBOUND_ARCHIVED'`，保留全部证据与时间戳，再建唯一索引。
+3. **七步受控停写与零消费物理核验**：创建全局物理调度冻结锁 `output/pipeline_freeze.lock`，所有管线入口前置硬短路退出；按 PGID 整树清理进程组；清理残留 Chromium 孤儿；非阻塞 flock 探测 `wechat_session.lock` 确保会话锁释放；在途任务收敛为 `UNCERTAIN`；确认进程输出为空后方可 revert。
+4. **高精度微秒时间戳 + UUID 随机熵 + 覆写拒绝**：备份文件命名为 `pipeline_recovery_{ts_microsecond}_{uuid_entropy}.sqlite3`；目标文件已存在抛出 `FileExistsError`；独立连接运行 `PRAGMA integrity_check;` 断言为 `ok`；计算 SHA256 登记至元数据。
+
+---
+
+### ⚖️ 白·裁决（审议签署闭环）
+- **定级**：🔴 **P1 立即硬化闭环**。4 项漏洞均具备物理可触发性，蓝队防御方案逻辑完备、工程扎实。
+- **加固指令**：全部 4 项防御方案必须 100% 同步落盘至 `shadow_development_blueprint.md`、`VP-POLARIS-WORK-ORDER.md` 与 `qa_and_architecture_review.md`，并在当前基线 commit `e897eb2` 下生成机器收据。
+
+---
+
 ## 战役总结：博弈对重构计划的加固修订决议（Revisions Mandate）
 
 经过本次深度红蓝对抗，**完全确立了首批安全收口（Hybrid Plan B）的必要性与紧迫性**，同时将原本粗粒度的工单计划全面加固，形成以下**必须落盘的修正案**：
@@ -220,9 +253,10 @@ version: 1.0.0
 ┌───────────────────────────────────────────────────────────────────────────────┐
 │                       红蓝博弈最终加固决议 (Adversarial Hardening Mandates)   │
 ├───────────────────────────────────────────────────────────────────────────────┤
-│ 1. [Bot 闭环、Attempt 租约与会话锁协作]                                       │
+│ 1. [Bot 闭环、Attempt 租约、UNCERTAIN 联合阻断与历史数据兼容迁移]            │
 │    - Bot 严格定位为具名任务分发客户端，响应前持久化分发记录，统一返回 QUEUED； │
-│    - 增量迁移 Attempt 表并建部分唯一活跃索引，CAS 原子领取不可重试 Attempt 租约； │
+│    - 兼容历史多条活跃记录：推荐方案 A 独立原子租约表；备选方案 B 预检去重归档； │
+│    - CAS 领取联合排查 Attempt/Publication/主表，UNCERTAIN 状态硬锁定禁止重领；   │
 │    - 锁由子进程内部自洽持锁，依赖明确 BUSY 凭证有限退避，退出码 3 明确为 UNCERTAIN；│
 │    - 应用服务负责三表原子落账；确立本地强事务与外部 At-Most-Once 边界。       │
 ├───────────────────────────────────────────────────────────────────────────────┤
@@ -240,9 +274,14 @@ version: 1.0.0
 │    - 实施有界队列（上限100）、并发限制（2线程）、200ms 超时底层中断与连接释放；│
 │    - 接入美股盘中交易避让（Market Guard），交易时段硬短路。                   │
 ├───────────────────────────────────────────────────────────────────────────────┤
-│ 5. [受控安全回滚与 DAL 封装定点纠偏]                                          │
-│    - 回滚必须前置停写并物理核验 zero consumers，未核验前严禁 git revert；     │
+│ 5. [受控安全回滚、零消费物理核验与 WAL 备份防覆写]                            │
+│    - 回滚必须前置创建 output/pipeline_freeze.lock 封闭启动源，阻断 cron 任务； │
+│    - 按 PGID 整树清理进程组并 kill 残留 Chromium 孤儿，非阻塞 flock 核验会话锁；│
+│    - 在途任务置 UNCERTAIN，物理证实 zero consumers 后方可执行原子 git revert； │
 │    - 回滚后沙箱必须运行 POLARIS-101 新增防线测试（防线测试失败保持暂停禁恢复）；│
-│    - SQLite 纠偏严禁裸写 SQL 与全库盲跑：统一走一致性在线备份与受测 DAL 接口。│
+│    - SQLite 在线备份采用高精度微秒 UTC 时间戳 + UUID 随机熵，拒绝覆写抛异常； │
+│    - 独立连接校验 PRAGMA integrity_check; 为 ok，登记恢复点元数据；            │
+│    - 账本纠偏严禁裸写 SQL 与全库盲跑：统一通过排除 PUBLISHED 的受测 DAL 接口。 │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
+

@@ -4,8 +4,8 @@ project: Video-precessing (YouTube → 微信视频号/多平台流水线)
 date: 2026-09-20
 author: Gemini_3.8_Flash_planning
 companion: shadow_development_blueprint.md, adversarial_red_blue_game_2026-09-20.md, VP-POLARIS-WORK-ORDER.md
-status: 架构师审议修订归档 (FOR ARCHITECT REVIEW - REVISED)
-version: 1.1.0
+status: 架构师审议终审修订归档 (FOR ARCHITECT REVIEW - REVISED V2.0)
+version: 2.0.0
 ---
 
 # VP-POLARIS「北辰」架构重构与治理深度问答档案 (Q&A Review Compendium)
@@ -25,6 +25,7 @@ version: 1.1.0
 8. [Q8: 工单制定于一周前，近期的一系列业务迭代（25 次提交）是否影响了重构计划？做出了哪些修订？](#q8)
 9. [Q9: 再次红蓝博弈（5 场极限对抗）推导出了哪些必须落地的硬化加固措施？](#q9)
 10. [Q10: 为什么明明做了“有限止损”，`PipelineDB` 依然在过去 48 小时从 9.7k 暴涨至 10.6k？如何从物理机制上彻底终结反复？](#q10)
+11. [Q11: 架构复审第三轮意见指出的 4 项具体技术缺陷（UNCERTAIN 穿透、历史数据索引冲突、零消费核验盲区、备份覆写）是如何彻底闭环的？基线漂移事实如何澄清？](#q11)
 
 ---
 
@@ -35,9 +36,9 @@ version: 1.1.0
 - **重构总工单**：代号为 **`VP-POLARIS`「北辰」**，主文件为 [`docs/refactor/video-processing/VP-POLARIS-WORK-ORDER.md`](./VP-POLARIS-WORK-ORDER.md)，关联根目录交接备忘录 [`HANDOFF.md`](../../HANDOFF.md) 以及待办工单池 [`work_orders.md`](./work_orders.md)（`WO-STATE-001` ~ `WO-PUB-001`）。
 - **工程战略**：确立为 **Hybrid Plan B（Containment 旁路收口 → Contract/Harness 契约修正与失败测试 → Incremental Extraction 渐进解耦）**。
 - **当前物理状态（2026-09-20 快照）**：
-  1. **Git 分支**：处于 `main` 主干，与 `origin/main` 保持最新（commit `83acb41`），工作区绝对干净（`working tree clean`）。
+  1. **Git 分支**：处于 `main` 主干，与 `origin/main` 保持最新（物理锚定 commit `e897eb2`），工作区绝对干净（`working tree clean`）。
   2. **生产代码权限**：严格处于只读冻结状态，**零业务代码修改**。
-  3. **测试沙箱验证**：使用隔离运行器 `.venv/bin/python scripts/run_isolated_tests.py` 执行，特征化测试套件（`test_characterization_baseline.py`）与黄金回放套件（`test_golden_replay_dataset.py`）共 15 项测试在 2.35 秒内全绿通过，无任何生产写操作。
+  3. **测试沙箱验证**：使用隔离运行器 `.venv/bin/python scripts/run_isolated_tests.py` 执行，特征化测试套件（`test_characterization_baseline.py`）与黄金回放套件（`test_golden_replay_dataset.py`）共 15 项测试在 2.96 秒内全绿通过，无任何生产写操作。
 
 ---
 
@@ -199,3 +200,57 @@ version: 1.1.0
    彻底废弃静态绝对上限（如 10,700 行留有巨大反弹空间的虚假门禁）。在单测门禁中建立**单调递减棘轮**：以当前代码库真实行数（10,649 行）为初始基线，任何针对 `database.py` 的 PR 其净行数**只许减少或持平（`current_loc <= baseline_loc`）**，若有净增则 CI 立即抛出 `AssertionError` 红灯阻断，逼迫所有新增领域方法物理写入独立子模块。
 3. **第三斧：跨域事务回滚实测与双重防护（Cross-Domain Rollback Verification & AST Dual-Gate）**：
    鉴于互动表与发布事实表存在跨域业务关联，仅靠 AST 扫描“禁止调用 `get_connection()`”并不足以证明业务正确性。必须在测试套件中建立**跨域事务级联回滚测试**（模拟跨表操作异常时，断言互动表与发布表均干净回滚、零局部持久化），配合 AST 静态语法扫描，形成动静态双重防护网。在 `WO-DB-001` 实施时，通过将该模块解耦外移，直接削减近千行单体体积。
+
+---
+
+<a id="q11"></a>
+### Q11: 架构复审第三轮意见指出的 4 项具体技术缺陷（UNCERTAIN 穿透、历史数据索引冲突、零消费核验盲区、备份覆写）是如何彻底闭环的？基线漂移事实如何澄清？
+
+**答：针对架构师终审指出的 3 项 P1 与 1 项 P2 缺陷，本版已在技术方案上完成物理闭环，并对基线漂移做出了明确归属划分：**
+
+#### 1. [P1] 彻底封堵 `UNCERTAIN` 状态领取穿透漏洞
+- **缺陷本质**：原蓝图与工单中的 CAS 原子领取 SQL 和条件唯一索引仅检查 `('IN_PROGRESS', 'SUBMITTED_UNBOUND')`。当系统因崩溃恢复或超时将悬空任务置为 `UNCERTAIN` 状态后，原有的 `NOT EXISTS` 阻断失效，新任务依然能领取并生成新的 Attempt，再次拉起 Uploader 造成灾难性重复发帖！
+- **闭环方案**：
+  1) **CAS 阻断条件全面扩充为多表联合阻断**：
+     领取 CAS SQL 必须同时联合检查 `wechat_submission_attempts`（排除 `IN_PROGRESS`, `SUBMITTED_UNBOUND`, `PLATFORM_ID_BOUND`, `UNCERTAIN`）、`wechat_publications`（排除 `SUBMITTED_UNBOUND`, `SUBMITTED_BOUND`, `UNDER_REVIEW`, `UNCERTAIN`, `PUBLISHED`）及主表状态。
+  2) **阻断结果精准抛出**：受影响行数为 0 时，若冲突原因为 `UNCERTAIN`，直接抛出 `SubmissionClaimRejectedUncertain`，物理锁定该视频；必须经人工核验微信后台后线下核销，绝不重领。
+  3) **防线单测**：在 `POLARIS-101` 增设用例 `test_claim_attempt_rejected_when_prior_attempt_is_uncertain`，严格验证处于 `UNCERTAIN` 状态时再次领取必须 100% 被拒。
+
+#### 2. [P1] 历史多条活跃记录与条件唯一索引平滑兼容
+- **缺陷本质**：当前生产代码 `database.py:3424` 允许同一 `subject_id` 存在多条 `SUBMITTED_UNBOUND` 记录（如不同 `evidence_path` 写入）。若直接执行 `CREATE UNIQUE INDEX`，已有存量生产库在启动迁移时将直接抛出 `sqlite3.IntegrityError: UNIQUE constraint failed` 崩溃！
+- **闭环方案**：
+  - **架构推荐方案 A（独立原子活跃租约表 `wechat_submission_active_claims`）**：
+    将高频并发互斥控制与只读历史审计解耦。以 `subject_id` 为天然 PRIMARY KEY，物理保证每个发布主体全局仅有一条活跃租约，原 `wechat_submission_attempts` 保留为纯追加审计账本，零历史数据冲突风险。
+  - **单表备选方案 B（单表冲突预检与历史重复数据安全归档迁移）**：
+    在单事务内先执行预检；针对存在多条活跃状态的历史记录，保留按 `created_at DESC` 排序最新的 1 条作为活跃记录，将其余历史旧记录的状态安全更新为 `'SUBMITTED_UNBOUND_ARCHIVED'`，保留全部审计字段，再建立条件唯一索引。迁移过程包裹在单事务内，失败自动回滚。
+
+#### 3. [P1] 全系统受控停写、启动源封闭与进程组零消费物理核验
+- **缺陷本质**：`vpanel ui restart/stop` 仅管理 FastAPI 控制台，无法终止独立 `PipelineManager`、cron 定时任务（每 30 分钟 monitor、每天 09:00/21:00 定时发布）、Bot 守护进程、以 `start_new_session=True` (`os.setsid`) 启动的独立进程组互动 Worker 以及残留的 Chromium 孤儿；修改 `.env` 无法被静态常驻进程热重载。
+- **闭环方案**：
+  - 制定**七步停写与零消费核验规程**：
+    ① 创建全局调度冻结锁 `output/pipeline_freeze.lock`，所有调度入口前置拦截直接退出，彻底阻断 cron 复活；
+    ② 配置 `WECHAT_PUBLISHING_PAUSED=true`；
+    ③ 停止受管服务（`./vpanel ui stop && ./vpanel bot stop`）；
+    ④ 按 PGID 整树清理进程组并 kill 残留 Chromium 孤儿；
+    ⑤ Python 脚本非阻塞 flock 探测 `output/wechat_session.lock` 确保会话排他锁已物理释放；
+    ⑥ 将在途 `IN_PROGRESS` 任务收敛为 `UNCERTAIN` 保留现场；
+    ⑦ 物理核验进程列表严格为空。
+  - **门禁铁律**：未证实零消费前，严禁执行 `git revert`！冻结锁与暂停状态必须覆盖整个回滚与沙箱测试验证窗口。
+
+#### 4. [P2] 根除 WAL 模式备份静默覆写隐患
+- **缺陷本质**：WAL 模式下写事务直接写入 `-wal` 文件，主库文件 `pipeline.db` 的 mtime 不随普通写事务变化。原蓝图使用 `os.path.getmtime()` 命名备份，导致多次备份文件名完全一致，直接静默覆写旧恢复点，造成灾备失效。
+- **闭环方案**：
+  - 备份命名升级为：`output/backups/pipeline_recovery_{UTC微秒时间戳}_{UUID随机熵}.sqlite3`；
+  - 增加 `os.path.exists()` 防护，若目标已存在直接抛出 `FileExistsError`，坚决拒绝覆盖；
+  - 采用 SQLite 官方在线备份 API（`src.backup(dst)`）保证获取一致性 WAL 检查点；
+  - 独立连接执行 `PRAGMA integrity_check;` 严格断言为 `'ok'`；
+  - 计算 SHA256 校验和并将元数据持久化登记到 `output/backups/latest_recovery_point.json`。
+
+#### 5. 审议基线漂移归属说明与三层状态清晰界定
+- **基线 Commit 事实**：当前 Git HEAD 物理锚定在 `e897eb2c2bf514b0f4505de8d51e88a137379100`。
+- **业务基线漂移说明**：前序提交 `9b0eb71` 解决了视频号评论互动系统（English World 账本发布与原生 ID 索引），涉及 5 个生产文件及 1 个测试文件变动（+397/-78 行），属于正交业务演进。重构总工单 `VP-POLARIS` 确立以来，生产代码（`src/`、`scripts/`）严格保持 100% 只读冻结（零修改）。
+- **三层状态报告规程**：
+  - **【协议已落盘】**：上述 4 项技术方案与剧本已在治理文档中物理落盘；
+  - **【实现待完成】**：生产代码目前保持 0 修改，等待口令放行后在 `POLARIS-101` ~ `105` 中实施；
+  - **【测试已验证】**：在当前 `e897eb2` 快照下通过 `scripts/run_isolated_tests.py` 验证基线测试 100% 绿灯。
+
