@@ -142,32 +142,32 @@
       </div>
     </div>
     <div class="global-funnel-body">
-      <div class="gf-stage-card gf-stage-ingested" onclick="onFunnelStageClick('waitlist')" title="点击查看当前漏斗时间范围内的采集入库">
+      <div class="gf-stage-card gf-stage-ingested" id="gf-card-ingested" onclick="onFunnelCardClick('ingested', 'waitlist', '1. 采集入库')" title="点击下钻查看当前漏斗时间范围内的采集入库">
         <div class="gf-stage-num" id="gf-ingested">0</div>
         <div class="gf-stage-title">📥 1. 采集入库</div>
         <div class="gf-stage-sub">全网监控抓取基准 100%</div>
       </div>
-      <div class="gf-stage-card gf-stage-qualified" onclick="onFunnelStageClick('queue')" title="点击查看当前漏斗时间范围评分≥75待处理队列">
+      <div class="gf-stage-card gf-stage-qualified" id="gf-card-qualified" onclick="onFunnelCardClick('qualified', 'queue', '2. 评分入围 (≥75分)')" title="点击下钻查看当前漏斗时间范围评分≥75入围视频">
         <div class="gf-stage-num" id="gf-qualified">0</div>
         <div class="gf-stage-title">⭐ 2. 评分入围</div>
         <div class="gf-stage-sub">入围率 <b id="gf-qual-rate">0.0%</b></div>
       </div>
-      <div class="gf-stage-card gf-stage-processed" id="gf-card-processed" onclick="onFunnelStageClick('active')" title="点击查看当前漏斗时间范围内的制作中任务">
+      <div class="gf-stage-card gf-stage-processed" id="gf-card-processed" onclick="onFunnelCardClick('processed', 'active', '3. 制作加工')" title="点击下钻查看当前漏斗时间范围内的制作加工任务">
         <div class="gf-stage-num" id="gf-processed">0</div>
         <div class="gf-stage-title">⚙️ 3. 制作加工</div>
         <div class="gf-stage-sub">制作率 <b id="gf-proc-rate">0.0%</b></div>
       </div>
-      <div class="gf-stage-card gf-stage-published" onclick="onFunnelStageClick('completed')" title="点击查看当前漏斗时间范围内已公开发布视频">
+      <div class="gf-stage-card gf-stage-published" id="gf-card-published" onclick="onFunnelCardClick('published', 'completed', '4. 终审发布')" title="点击下钻查看当前漏斗时间范围内已公开发布视频">
         <div class="gf-stage-num" id="gf-published">0</div>
         <div class="gf-stage-title">🚀 4. 终审发布</div>
         <div class="gf-stage-sub">发布率 <b id="gf-pub-rate">0.0%</b> · 总转化 <b id="gf-overall-rate" style="color:var(--green)">0.0%</b></div>
       </div>
-      <div class="gf-diag-card" title="点击按当前漏斗时间范围查看异常或策略拦截">
-        <div class="gf-diag-item" onclick="onFunnelErrorClick('failed')" style="cursor:pointer;" title="点击按当前漏斗时间范围查看异常失败">
+      <div class="gf-diag-card" id="gf-card-diag" title="点击按当前漏斗时间范围查看异常或策略拦截">
+        <div class="gf-diag-item" id="gf-diag-failed" onclick="onFunnelCardClick('failed', 'error', '异常失败')" style="cursor:pointer;" title="点击下钻查看当前漏斗时间范围异常失败记录">
           <span class="gf-diag-label">异常失败:</span>
           <span class="gf-diag-val gf-val-failed" id="gf-failed">0</span>
         </div>
-        <div class="gf-diag-item" onclick="onFunnelErrorClick('channel_policy')" style="cursor:pointer;" title="点击按当前漏斗时间范围查看策略拦截">
+        <div class="gf-diag-item" id="gf-diag-blocked" onclick="onFunnelCardClick('blocked', 'error', '策略/敏感词拦截')" style="cursor:pointer;" title="点击下钻查看当前漏斗时间范围策略拦截记录">
           <span class="gf-diag-label">策略拦截:</span>
           <span class="gf-diag-val gf-val-blocked" id="gf-blocked">0</span>
         </div>
@@ -257,6 +257,16 @@
         <button class="tab-btn" id="tab-error" onclick="switchTab('error')">出错异常</button>
         <button class="tab-btn" id="tab-high_likes" onclick="switchTab('high_likes')">✨ 近期高互动</button>
         <button class="tab-btn" id="tab-hotwords" onclick="switchTab('hotwords')">🔥 热词监控</button>
+      </div>
+
+      <!-- 漏斗大盘下钻联动指示横幅 -->
+      <div id="funnel-active-banner" class="funnel-active-banner" style="display:none;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="funnel-banner-icon">🎯</span>
+          <span>已联动大盘透视：<strong id="banner-window-text" style="color:var(--accent2);">近 7 天</strong> · <strong id="banner-stage-text" style="color:#fff;">终审发布</strong></span>
+          <span id="banner-count-badge" class="panel-badge" style="background:rgba(52,211,153,0.15); color:var(--green); font-size:0.75rem; padding:2px 8px;">共 0 条</span>
+        </div>
+        <button class="btn-clear-funnel" onclick="clearFunnelDrilldown()" title="退出大盘联动筛选，恢复常规视图">✕ 退出大盘透视</button>
       </div>
 
       <div id="video-filter-bar" aria-label="视频列表筛选与排序">
@@ -684,6 +694,14 @@
   }
 
   let currentGlobalFunnelWindow = '7d';
+  let currentFunnelStage = null;
+  const _windowLabels = {
+    '24h': '最近 24 小时',
+    'today_bj': '今日 (BJ)',
+    '7d': '近 7 天',
+    '30d': '近 30 天',
+    'all': '全生命周期',
+  };
 
   async function switchGlobalFunnelWindow(win) {
     currentGlobalFunnelWindow = win;
@@ -691,22 +709,71 @@
       const btn = document.getElementById(`gf-tab-${w}`);
       if (btn) btn.classList.toggle('active', w === win);
     });
+    // 若当前正在大盘下钻透视，同步更新时间切片并重载列表
+    if (currentFunnelStage) {
+      filterState.createdWindow = win;
+      updateFunnelBannerText();
+      const cwEl = document.getElementById('video-filter-created-window');
+      if (cwEl) cwEl.value = win;
+      loadVideos(1);
+    }
     await fetchGlobalFunnel(win);
   }
 
-  function onFunnelErrorClick(errorKind) {
-    const overrides = {
-      createdWindow: currentGlobalFunnelWindow,
-      errorType: errorKind === 'channel_policy' ? 'channel_policy' : 'all',
-    };
-    switchTab('error', overrides);
+  function updateFunnelBannerText(customLabel = null) {
+    const banner = document.getElementById('funnel-active-banner');
+    if (!banner) return;
+    const winText = _windowLabels[currentGlobalFunnelWindow] || currentGlobalFunnelWindow;
+    const winEl = document.getElementById('banner-window-text');
+    if (winEl) winEl.textContent = winText;
+    if (customLabel) {
+      const stageEl = document.getElementById('banner-stage-text');
+      if (stageEl) stageEl.textContent = customLabel;
+    }
   }
 
-  function onFunnelStageClick(targetTab) {
+  function onFunnelCardClick(stage, targetTab, stageLabel) {
+    // 若点击已激活的卡片，视为取消下钻，恢复全量
+    if (currentFunnelStage === stage) {
+      clearFunnelDrilldown(true);
+      return;
+    }
+
+    currentFunnelStage = stage;
+
+    // 清除既有卡片高亮，激活当前卡片
+    document.querySelectorAll('.gf-stage-card, .gf-diag-item').forEach(el => el.classList.remove('active-funnel-card'));
+    const cardEl = document.getElementById(stage === 'failed' ? 'gf-diag-failed' : stage === 'blocked' ? 'gf-diag-blocked' : `gf-card-${stage}`);
+    if (cardEl) cardEl.classList.add('active-funnel-card');
+
+    // 显示下钻横幅
+    const banner = document.getElementById('funnel-active-banner');
+    if (banner) banner.style.display = 'flex';
+    updateFunnelBannerText(stageLabel);
+
+    // 联动筛选状态
     const overrides = {
       createdWindow: currentGlobalFunnelWindow,
+      funnelStage: stage,
     };
+    if (stage === 'failed') {
+      overrides.errorType = 'all';
+    } else if (stage === 'blocked') {
+      overrides.errorType = 'channel_policy';
+    }
     switchTab(targetTab, overrides);
+  }
+
+  function clearFunnelDrilldown(triggerReload = true) {
+    if (!currentFunnelStage) return;
+    currentFunnelStage = null;
+    document.querySelectorAll('.gf-stage-card, .gf-diag-item').forEach(el => el.classList.remove('active-funnel-card'));
+    const banner = document.getElementById('funnel-active-banner');
+    if (banner) banner.style.display = 'none';
+    filterState.funnelStage = null;
+    if (triggerReload) {
+      loadVideos(1);
+    }
   }
 
   async function fetchGlobalFunnel(win = currentGlobalFunnelWindow) {
@@ -908,6 +975,7 @@
     search: '', channel: '', sort: 'source_published_at_desc', size: Number(localStorage.getItem('video_pipeline_page_size')) || 20,
     scoreBand: 'all', errorType: 'all', status: 'all', engagementWindowDays: 3, includeProcessed: false,
     createdWindow: 'all',
+    funnelStage: null,
   };
   let _selectedYids = new Set();
   let _currentVideosMap = {};
@@ -916,13 +984,17 @@
   let _renderedVideoQuery = null;
 
   function videoQueryKey() {
-    return new URLSearchParams({
+    const params = {
       tab: currentTab, page: String(currentPage), size: String(filterState.size), search: filterState.search,
       channel: filterState.channel, sort: filterState.sort, score_band: filterState.scoreBand,
       error_type: filterState.errorType, status: filterState.status,
       engagement_window_days: String(filterState.engagementWindowDays), include_processed: String(filterState.includeProcessed),
       created_window: filterState.createdWindow || 'all',
-    }).toString();
+    };
+    if (filterState.funnelStage) {
+      params.funnel_stage = filterState.funnelStage;
+    }
+    return new URLSearchParams(params).toString();
   }
 
   function invalidateVideoRequest() {
@@ -984,6 +1056,7 @@
     filterState.scoreBand = 'all'; filterState.errorType = 'all'; filterState.status = 'all';
     filterState.engagementWindowDays = 3; filterState.includeProcessed = false;
     filterState.createdWindow = 'all';
+    clearFunnelDrilldown(false);
     syncFilterControls();
     currentPage = 1;
     loadVideos();
@@ -1091,6 +1164,12 @@
     const mainBody = document.querySelector('.panel-body');
     const pgn      = document.querySelector('.pagination');
     const batchBar = document.getElementById('batch-action-bar');
+
+    if (overrides.funnelStage !== undefined) {
+      filterState.funnelStage = overrides.funnelStage;
+    } else if (currentFunnelStage) {
+      clearFunnelDrilldown(false);
+    }
 
     const hasOverrides = overrides && Object.keys(overrides).length > 0;
     if (currentTab !== tab || hasOverrides) {
@@ -1213,6 +1292,13 @@
       document.getElementById('page-display').textContent = `${d.page} / ${d.total_pages || 1}`;
       document.getElementById('btn-prev-page').disabled = d.page <= 1;
       document.getElementById('btn-next-page').disabled = d.page >= (d.total_pages || 1);
+
+      if (filterState.funnelStage) {
+        const bannerBadge = document.getElementById('banner-count-badge');
+        if (bannerBadge) {
+          bannerBadge.textContent = `共 ${d.total_count} 条记录`;
+        }
+      }
 
       if (!d.videos || d.videos.length === 0) {
         _currentVideosMap = {};

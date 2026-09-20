@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-20 | Gemini | 补充大盘漏斗各阶段（ingested/qualified/processed/published/failed/blocked）下钻透视单元测试。 |
 | 1.0.0 | 2026-09-20 | Gemini | 初始创建：覆盖频道 PAUSED/APPROVED 状态切换、受管白名单查询以及多时间窗口漏斗统计。 |
 """
 
@@ -211,4 +212,90 @@ def test_get_paginated_videos_created_window_filter(tmp_path):
     # 3. all (默认)
     videos_all, count_all = db.get_paginated_videos(tab="error", page=1, size=20, created_window="all")
     assert count_all == 3
+
+
+def test_get_paginated_videos_funnel_stage(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    cid = "UC_STAGE"
+    db.add_channel(cid, "Stage Test", status="APPROVED")
+
+    # 1. 采集但未达标: score=40, PENDING
+    db.add_video("vid_low", "Low Score", cid, score=40)
+
+    # 2. 达标排队中: score=80, PENDING
+    db.add_video("vid_qual", "Qualified Pending", cid, score=80)
+
+    # 3. 处理中 (DOWNLOADING): score=82
+    db.add_video("vid_proc", "Processing", cid, score=82)
+    db.update_video_status("vid_proc", "DOWNLOADING")
+
+    # 4. 发布成功 (PUBLISHED): score=90
+    db.add_video("vid_pub", "Published", cid, score=90)
+    db.update_video_status("vid_pub", "PUBLISHED")
+
+    # 5. 微信已受理 (SUBMITTED_BOUND): score=88
+    db.add_video("vid_sub", "Submitted Bound", cid, score=88)
+    db.update_video_status("vid_sub", "SUBMITTED_BOUND")
+
+    # 6. 普通失败 (FAILED): score=76
+    db.add_video("vid_fail", "Failed Normal", cid, score=76)
+    db.update_video_status("vid_fail", "FAILED", error_msg="Network timeout")
+
+    # 7. 策略拦截 (FAILED + censor_tag): score=85
+    db.add_video("vid_censor", "Censor Blocked", cid, score=85, censor_tag="🔴 涉及政治敏感人物")
+    db.update_video_status("vid_censor", "FAILED", error_msg="Censorship blocked")
+
+    # 8. 切片子视频 (parent_id 不为空，不应进入顶层统计)
+    parent_vid = db.get_video_by_youtube_id("vid_pub")
+    with db.get_connection() as conn:
+        conn.execute(
+            "INSERT INTO processed_videos (youtube_id, title, channel_id, status, score, parent_id) "
+            "VALUES ('vid_slice', 'Slice Child', 'UC_STAGE', 'PUBLISHED', 90, ?)",
+            (parent_vid["id"],)
+        )
+
+    # 对比全局漏斗大盘
+    global_m = db.get_global_funnel_metrics(window="all")
+    assert global_m["total_ingested"] == 7
+    assert global_m["qualified"] == 6
+    assert global_m["processed"] == 3  # DOWNLOADING + PUBLISHED + SUBMITTED_BOUND
+    assert global_m["published"] == 2  # PUBLISHED + SUBMITTED_BOUND
+    assert global_m["failed"] == 2     # vid_fail + vid_censor
+    assert global_m["censor_blocked"] == 1  # vid_censor
+
+    # 验证各阶段下钻查询与大盘数字 100% 绝对一致
+    # 阶段 1: ingested
+    v_ingested, c_ingested = db.get_paginated_videos(funnel_stage="ingested")
+    assert c_ingested == global_m["total_ingested"] == 7
+    assert "vid_slice" not in {v["youtube_id"] for v in v_ingested}
+
+    # 阶段 2: qualified
+    v_qual, c_qual = db.get_paginated_videos(funnel_stage="qualified")
+    assert c_qual == global_m["qualified"] == 6
+    assert "vid_low" not in {v["youtube_id"] for v in v_qual}
+
+    # 阶段 3: processed
+    v_proc, c_proc = db.get_paginated_videos(funnel_stage="processed")
+    assert c_proc == global_m["processed"] == 3
+    assert {v["youtube_id"] for v in v_proc} == {"vid_proc", "vid_pub", "vid_sub"}
+
+    # 阶段 4: published
+    v_pub, c_pub = db.get_paginated_videos(funnel_stage="published")
+    assert c_pub == global_m["published"] == 2
+    assert {v["youtube_id"] for v in v_pub} == {"vid_pub", "vid_sub"}
+
+    # 阶段 5: failed
+    v_failed, c_failed = db.get_paginated_videos(funnel_stage="failed")
+    assert c_failed == global_m["failed"] == 2
+    assert {v["youtube_id"] for v in v_failed} == {"vid_fail", "vid_censor"}
+
+    # 阶段 6: blocked
+    v_blocked, c_blocked = db.get_paginated_videos(funnel_stage="blocked")
+    assert c_blocked == global_m["censor_blocked"] == 1
+    assert {v["youtube_id"] for v in v_blocked} == {"vid_censor"}
+
+    # 非法阶段入参防御校验
+    with pytest.raises(ValueError, match="Unknown funnel stage"):
+        db.get_paginated_videos(funnel_stage="invalid_stage_xyz")
+
 

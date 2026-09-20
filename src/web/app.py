@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 # Modification History
+| 3.41.0 | 2026-09-20 | Gemini | GET /api/videos 新增 funnel_stage 参数，支持大盘漏斗各阶段穿透查询与数据严格联动。 |
 | 3.40.0 | 2026-09-20 | Gemini | 全局漏斗与频道漏斗端点新增 24h 与 today_bj 窗口支持；视频分页查询透传 created_window 时间过滤。 |
 | 3.39.0 | 2026-09-20 | Gemini | 新增 GET /api/funnel 全站流转漏斗数据 API，支持 7d/30d/all 三维时间切片。 |
 | 3.38.0 | 2026-09-20 | Gemini | 挂载 /static 静态资源目录 (StaticFiles)；_check_dashboard_origin 中间件放行 /static 路径，杜绝静态资源跨源加载 403。 |
@@ -164,6 +165,7 @@ _SCORE_BANDS = {"all", "unscored", "below_50", "50_74", "80_plus"}
 _ERROR_TYPES = {"all", "channel_policy", "login", "youtube_403", "copy_quality", "censorship_p0", "other"}
 _ENGAGEMENT_WINDOWS = {1, 3, 7, 30}
 _CREATED_WINDOWS = {"all", "24h", "today_bj", "7d", "30d"}
+_FUNNEL_STAGES = {"", "ingested", "qualified", "processed", "published", "failed", "blocked"}
 _VIDEO_STATUSES = {
     "PENDING", "METADATA_PENDING", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "AI_COVER_PENDING",
     "PUBLISHING", "PUBLISHED", "COMPLETED", "IGNORED", "FAILED", "LOGIN_REQUIRED", "SEGMENTED",
@@ -1326,6 +1328,7 @@ def _validate_video_list_query(
     status: str,
     engagement_window_days: int,
     created_window: str = "all",
+    funnel_stage: Optional[str] = None,
 ) -> None:
     """在进入 DAL 前拒绝未知控制面参数，避免静默退化为错误列表。"""
     if tab not in _VIDEO_TABS:
@@ -1346,7 +1349,9 @@ def _validate_video_list_query(
         raise HTTPException(status_code=422, detail="unsupported engagement window")
     if created_window not in _CREATED_WINDOWS:
         raise HTTPException(status_code=422, detail="unknown created window")
-    if tab != "error" and error_type != "all":
+    if funnel_stage and funnel_stage not in _FUNNEL_STAGES:
+        raise HTTPException(status_code=422, detail="unknown funnel stage")
+    if not funnel_stage and tab != "error" and error_type != "all":
         raise HTTPException(status_code=422, detail="error type only applies to error tab")
     if tab != "high_likes" and status != "all":
         raise HTTPException(status_code=422, detail="status filter only applies to recent engagement")
@@ -1366,15 +1371,17 @@ def get_videos(
     engagement_window_days: int = 3,
     include_processed: bool = False,
     created_window: str = "all",
+    funnel_stage: Optional[str] = None,
 ):
     """在服务端筛选和稳定排序后分页返回列表及准确总数。"""
-    _validate_video_list_query(tab, size, search, sort, score_band, error_type, status, engagement_window_days, created_window)
+    _validate_video_list_query(tab, size, search, sort, score_band, error_type, status, engagement_window_days, created_window, funnel_stage)
     page = max(1, page)
     videos, total_count = db.get_paginated_videos(
         tab, page, size, search=search.strip(), channel=channel.strip(), sort=sort,
         score_band=score_band, error_type=error_type, status=status,
         engagement_window_days=engagement_window_days, include_processed=include_processed,
         created_window=created_window,
+        funnel_stage=funnel_stage,
     )
     _attach_publish_display_fields(videos)
     tab_counts = db.get_tab_counts()

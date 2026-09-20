@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-20 | Gemini | 补充 /api/videos?funnel_stage=... 穿透参数校验与下钻接口测试。 |
 | 1.0.0 | 2026-09-20 | Gemini | 初始创建：覆盖受管白名单列表聚合、频道暂停与恢复端点、多时间窗口漏斗统计 API。 |
 """
 
@@ -144,4 +145,26 @@ def test_get_videos_created_window_api(tmp_path):
         res_bad = client.get("/api/videos?tab=error&created_window=invalid_win")
         assert res_bad.status_code == 422
         assert "unknown created window" in res_bad.text
+
+
+def test_get_videos_funnel_stage_api(tmp_path):
+    test_db = PipelineDB(str(tmp_path / "pipeline.db"))
+    test_db.add_channel("UC_API2", "API Channel 2", status="APPROVED")
+    test_db.add_video("vid_qual", "Qualified Video", "UC_API2", score=80)
+    test_db.add_video("vid_low", "Low Score Video", "UC_API2", score=50)
+
+    with patch.object(web_app, "db", test_db):
+        client = TestClient(web_app.app)
+        # 1. 正常入参 funnel_stage=qualified
+        res = client.get("/api/videos?funnel_stage=qualified")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["total_count"] == 1
+        assert data["videos"][0]["youtube_id"] == "vid_qual"
+
+        # 2. 非法漏斗阶段应抛出 422
+        res_bad = client.get("/api/videos?funnel_stage=invalid_stage_xyz")
+        assert res_bad.status_code == 422
+        assert "unknown funnel stage" in res_bad.text
+
 

@@ -5,6 +5,8 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.76.1 | 2026-09-20 | Gemini | get_channel_funnel_metrics 统一约束 parent_id IS NULL，排除切片重复统计，与下钻列表保持绝对同构。 |
+| 3.76.0 | 2026-09-20 | Gemini | get_paginated_videos 新增 funnel_stage 参数，支持大盘各生产转化阶段（采集/入围/制作/发布/失败/拦截）精准穿透查询。 |
 | 3.75.0 | 2026-09-20 | Gemini | 漏斗指标与视频分页查询新增 24h 与 today_bj (北京时间今日) 时间窗口过滤支持。 |
 | 3.74.0 | 2026-09-20 | Gemini | 新增 get_global_funnel_metrics DAL 方法，并支持 get_channel_funnel_metrics 在未指定频道时回落为全站漏斗聚合。 |
 | 3.73.0 | 2026-09-20 | Gemini | 新增 get_managed_channels、set_channel_paused 与 get_channel_funnel_metrics DAL 方法，支持白名单暂停与漏斗统计。 |
@@ -2846,7 +2848,7 @@ class PipelineDB:
         window: Optional[str] = None,
     ) -> Dict[str, Any]:
         """获取指定频道或全局的内容生产漏斗指标（支持 24h、today_bj、7d、30d 或全生命周期）。"""
-        where_clauses: List[str] = []
+        where_clauses: List[str] = ["parent_id IS NULL"]
         params: List[Any] = []
         if channel_id and channel_id not in ("all", "*", ""):
             where_clauses.append("channel_id = ?")
@@ -4930,11 +4932,26 @@ class PipelineDB:
         engagement_window_days: int = 3,
         include_processed: bool = False,
         created_window: str = 'all',
+        funnel_stage: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         """在 SQL 层先筛选、稳定排序，再返回当前页及同一谓词下的准确总数。"""
-        condition, params = self._build_video_tab_condition(tab, engagement_window_days)
-        clauses = [condition]
-        query_params: List[Any] = list(params)
+        if funnel_stage:
+            stage_conditions = {
+                'ingested': "pv.parent_id IS NULL",
+                'qualified': "pv.score >= 75 AND pv.parent_id IS NULL",
+                'processed': "pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'PUBLISHED', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'WECHAT_DEFERRED', 'LOCAL_ACCEPTED') AND pv.parent_id IS NULL",
+                'published': "pv.status IN ('PUBLISHED', 'SUBMITTED_BOUND') AND pv.parent_id IS NULL",
+                'failed': "pv.status = 'FAILED' AND pv.parent_id IS NULL",
+                'blocked': "pv.censor_tag IS NOT NULL AND pv.censor_tag != '' AND pv.parent_id IS NULL",
+            }
+            if funnel_stage not in stage_conditions:
+                raise ValueError(f"Unknown funnel stage: {funnel_stage}")
+            clauses = [stage_conditions[funnel_stage]]
+            query_params: List[Any] = []
+        else:
+            condition, params = self._build_video_tab_condition(tab, engagement_window_days)
+            clauses = [condition]
+            query_params: List[Any] = list(params)
 
         if search:
             escaped = search.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
