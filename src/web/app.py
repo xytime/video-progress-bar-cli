@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 # Modification History
+| 3.38.0 | 2026-09-20 | Gemini | 挂载 /static 静态资源目录 (StaticFiles)；_check_dashboard_origin 中间件放行 /static 路径，杜绝静态资源跨源加载 403。 |
 | 3.37.0 | 2026-09-20 | Gemini | 新增白名单频道暂停/恢复 (/pause, /resume) 与多时间切片漏斗数据 (/funnel) API；list_channels 支持全量受管状态聚合。 |
 | 3.36.2 | 2026-09-20 | Gemini | 修复添加频道时 yt-dlp --flat-playlist 导致 channel_id 为 NA 的 Bug；优先提取播放列表级/多候选元数据 |
 | 3.35.1 | 2026-09-08 | Codex | 仪表盘允许局域网 IPv4 绑定；浏览器 Origin 必须与当前请求地址同源，保留轻量 CSRF 边界。 |
@@ -103,6 +104,7 @@ if _src not in sys.path:
 
 from fastapi import FastAPI, BackgroundTasks, Depends, Header, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from video_processing.db.database import MAX_SQLITE_INTEGER, PipelineDB
@@ -123,10 +125,16 @@ from web.listening_transcriber import router as listening_transcriber_router
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
 app.include_router(listening_transcriber_router)
 
+_static_dir = Path(__file__).parent / "static"
+_static_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
 
 @app.middleware("http")
 async def reject_untrusted_browser_origins(request, call_next):
     """只允许当前 Dashboard 地址的同源浏览器请求，阻止第三方网页跨站写入。"""
+    if request.url.path == "/static" or request.url.path.startswith("/static/"):
+        return await call_next(request)
     origin = request.headers.get("origin")
     if origin:
         port = settings.dashboard_port

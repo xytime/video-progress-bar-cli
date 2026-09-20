@@ -109,3 +109,7 @@ wechat_state.json
 
 # Scratch & debug directories
 /scratch/
+
+# Agent coordination scratch directories
+.agents/*
+!.agents/skills/

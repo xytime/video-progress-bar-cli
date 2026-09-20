@@ -8,6 +8,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-08 | Codex | 覆盖刷新选择、具名删除确认、状态一致性和过期响应隔离。 |
 | 1.1.0 | 2026-09-08 | Codex | 使用显式 Chromium 快照，清理异常路径，禁止缺失依赖伪装验收。 |
+| 1.2.0 | 2026-09-20 | Codex | 支持静态资源 (/static/*) 本地文件映射与 Content-Type 分发。 |
 """
 
 import json
@@ -18,6 +19,11 @@ import pytest
 
 
 TEMPLATE = Path(__file__).resolve().parents[1] / "src/web/templates/index.html"
+STATIC_DIR = Path(__file__).resolve().parents[1] / "src/web/static"
+STATIC_CONTENT_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+}
 
 
 def _video(yid, status="PENDING"):
@@ -83,6 +89,14 @@ def dashboard(chromium):
             route.fulfill(json={"approved": [], "total_approved": 0})
         elif parsed.path.startswith("/api/"):
             route.fulfill(json={"success": True, "platforms": {}})
+        elif parsed.path.startswith("/static/"):
+            rel_path = parsed.path.removeprefix("/static/").lstrip("/")
+            static_file = (STATIC_DIR / rel_path).resolve()
+            if static_file.is_file() and static_file.is_relative_to(STATIC_DIR.resolve()):
+                content_type = STATIC_CONTENT_TYPES.get(static_file.suffix, "text/plain")
+                route.fulfill(content_type=content_type, body=static_file.read_text(encoding="utf-8"))
+            else:
+                route.fulfill(status=404, body="Not Found")
         else:
             route.fulfill(body="")
 
