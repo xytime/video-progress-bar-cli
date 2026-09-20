@@ -4,8 +4,8 @@ project: Video-precessing (YouTube → 微信视频号/多平台流水线)
 date: 2026-09-20
 author: Gemini_3.8_Flash_planning
 companion: shadow_development_blueprint.md, adversarial_red_blue_game_2026-09-20.md, VP-POLARIS-WORK-ORDER.md
-status: 架构师审议终审修订归档 (FOR ARCHITECT REVIEW - REVISED V2.0)
-version: 2.0.0
+status: 架构师审议终审修订归档 (FOR ARCHITECT REVIEW - REVISED V2.1)
+version: 2.1.0
 ---
 
 # VP-POLARIS「北辰」架构重构与治理深度问答档案 (Q&A Review Compendium)
@@ -26,6 +26,7 @@ version: 2.0.0
 9. [Q9: 再次红蓝博弈（5 场极限对抗）推导出了哪些必须落地的硬化加固措施？](#q9)
 10. [Q10: 为什么明明做了“有限止损”，`PipelineDB` 依然在过去 48 小时从 9.7k 暴涨至 10.6k？如何从物理机制上彻底终结反复？](#q10)
 11. [Q11: 架构复审第三轮意见指出的 4 项具体技术缺陷（UNCERTAIN 穿透、历史数据索引冲突、零消费核验盲区、备份覆写）是如何彻底闭环的？基线漂移事实如何澄清？](#q11)
+12. [Q12: 第四轮架构终审 3 项 P1 缺口（真实锁路径与反例、方案 A 一致性契约与方案 B 废弃、宿主级 crontab 静音）是如何彻底闭环的？](#q12)
 
 ---
 
@@ -253,4 +254,45 @@ version: 2.0.0
   - **【协议已落盘】**：上述 4 项技术方案与剧本已在治理文档中物理落盘；
   - **【实现待完成】**：生产代码目前保持 0 修改，等待口令放行后在 `POLARIS-101` ~ `105` 中实施；
   - **【测试已验证】**：在当前 `e897eb2` 快照下通过 `scripts/run_isolated_tests.py` 验证基线测试 100% 绿灯。
+
+---
+
+<a id="q12"></a>
+### Q12: 第四轮架构终审 3 项 P1 缺口（真实锁路径与反例、方案 A 一致性契约与方案 B 废弃、宿主级 crontab 静音）是如何彻底闭环的？
+
+**答：针对架构师与 Codex 第四轮终审指出的 3 项 P1 方案内部未闭合缺陷，本版已在技术方案、契约规范与测试定义上完成彻底闭环：**
+
+#### 1. [P1] 纠正会话锁核验路径并增加持锁失败反例测试
+- **缺陷本质**：[蓝图第 381 行](./shadow_development_blueprint.md) 运维剧本探测的是 `output/wechat_session.lock`，但系统[真实实现](../../src/video_processing/core/wechat_session_lock.py#L30) 是从登录态文件路径派生真实锁文件。生产配置为 `output/wechat_state.json`，派生出的真实锁文件为 `output/.wechat_state.json.browser.lock`。若探测错误路径，当真实锁被后台浏览器进程占用时，剧本依然会输出 `FREE` 假象，导致并发拉起冲突！
+- **闭环方案**：
+  1) **规范化路径解析**：剧本与运维工具统一调用 `canonical_wechat_session_lock_path("output/wechat_state.json")` 解析真实锁文件 `output/.wechat_state.json.browser.lock`；
+  2) **持锁反例测试入驻 POLARIS-101**：在沙箱测试套件中增设用例 `test_wechat_session_lock_probe_detects_real_hold_and_release`。启动后台线程通过 `WeChatSessionLock` 持有真实锁，断言探测逻辑**必须捕获 `BlockingIOError` 并判定为锁忙失败（非零退出码反例）**；持锁线程释放后，断言探测脚本成功返回 0（FREE）。
+
+#### 2. [P1] 确立租约方案 A 完整一致契约，废除方案 B
+- **方案 B 废弃技术裁决**：
+  方案 B 试图在迁移事务中先将重复记录更新为 `'SUBMITTED_UNBOUND_ARCHIVED'`，但原表已有的 `CHECK(state IN ('SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND'))` 约束尚未放开，该 `UPDATE` 会直接抛出 `CHECK constraint failed` 异常；且若历史数据存在相同的 `created_at`（如同一秒内重试写入），`a.created_at < b.created_at` 无法消除重复项，后续 `CREATE UNIQUE INDEX` 仍将触发 `IntegrityError` 导致迁移崩溃。方案 B 物理上不可行，**正式废弃，禁止作为备选剧本**。
+- **方案 A 完整物理闭环**：
+  1) **Attempt 历史表 CHECK 约束平滑扩展**：
+     在 `PipelineDB._migrate_database()` 增量迁移事务中检测表定义。若约束未扩展，单事务内重构表将 CHECK 约束扩展为：
+     `CHECK(state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN', 'RELEASED_BUSY'))`；
+     新表**不建任何 `subject_id` 唯一约束**，保持为纯追加审计历史账本，存量所有重复 Attempt 100% 无损保留，零迁移冲突；
+  2) **创建独立原子活跃租约表 `wechat_submission_active_claims`**：
+     以 `subject_id TEXT PRIMARY KEY` 物理保证全局唯一活跃租约；
+  3) **单事务联合 CAS 原子领取**：
+     步骤 1 向 `wechat_submission_active_claims` 执行 `INSERT INTO ... SELECT ... WHERE NOT EXISTS (...)` 插入活跃租约；若成功插入 1 行，步骤 2 在同一事务中插入 Attempt 审计记录，随后原子 `COMMIT`；
+  4) **按 `active_attempt_id` 条件精确释放与流转**：
+     - **BUSY 退出条件释放**：携带明确 BUSY 凭证时，在单事务中执行 `DELETE FROM wechat_submission_active_claims WHERE subject_id = ? AND active_attempt_id = ? AND claim_state = 'IN_PROGRESS';`，并更新 Attempt 为 `RELEASED_BUSY`；退避后申请全新 ID 重领；
+     - **正常受理落账**：退出码 6 时，单事务更新租约状态为 `SUBMITTED_UNBOUND`（持续占位防止重领），落账 Publication 与主表；
+     - **崩溃恢复与禁止重领**：重启扫描到悬空租约，Fail-Closed 将活跃租约、Attempt 与主表均置为 `UNCERTAIN`，因活跃表主键持续占用，后续所有领取请求 100% 被拒，物理锁定，闭环 At-Most-Once；
+  5) **POLARIS-101 单测验收**：增设 `test_active_claims_lease_lifecycle` 严格验证租约创建、并发冲突互斥、按 `active_attempt_id` 条件释放与非法 ID 拒绝篡改。
+
+#### 3. [P1] 升级启动源封闭为宿主级 crontab 物理静音
+- **缺陷本质**：原蓝图仅在工作区创建 `output/pipeline_freeze.lock` 标记文件。但宿主机器每分钟都在通过 crontab 执行 `scripts/run_publication_window.py`。一旦运维执行 `git revert`，Git 会将带有该标记文件检查的应用代码撤销为旧代码，此时宿主 cron 会在 60 秒内拉起被回滚的旧版本代码直接发起发帖！
+- **闭环方案**：
+  1) **彻底脱离对应用层可被 revert 代码的依赖，提升为 OS 宿主级物理静音**：
+     - 导出当前 crontab 备份：`crontab -l > "output/crontab_backup_$(date +%Y%m%d_%H%M%S).txt"`；
+     - 对包含 `Video-precessing` 的活跃项添加注释前缀：`crontab -l | sed -E '/Video-precessing/s/^([^#])/# QUIESCE_DISABLED \1/' | crontab -`；
+     - 物理核验活跃项已清空：`crontab -l | grep -v '^[[:space:]]*#' | grep 'Video-precessing'` 断言无输出；
+  2) **静音窗口全覆盖**：宿主级 crontab 静音覆盖整个受控安全回滚、沙箱测试验证的全过程；
+  3) **仅在沙箱测试 100% 绿灯且确认稳定后**：方可执行反向 sed 恢复 crontab 调度（`crontab -l | sed -E 's/^# QUIESCE_DISABLED (.*)$/\1/' | crontab -`）。
 

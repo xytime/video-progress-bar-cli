@@ -10,6 +10,7 @@ version: 1.5.0
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.0 | 2026-09-20 | Antigravity | M6.2+ 第四轮终审 P1 缺口闭环：确立租约方案 A 契约（废除方案 B）、引入宿主级 crontab 静音与真实会话锁路径探测及持锁反例单测 |
 | 1.5.0 | 2026-09-20 | Antigravity | M6.2 架构审议校准：修补 WO-STATE-001 回滚方案为 Fail-Closed 只读降级与常驻进程重启，澄清子进程持锁与退避契约，扩展入口边界测试 |
 | 1.4.0 | 2026-09-20 | Gemini_3.8_Flash_planning | M6.2+ 红蓝博弈加固：将 Bot 退出码 6 事务闭环（防鬼魂状态）、微信会话锁遵循与 QUEUED 异步语义注入 WO-STATE-001 |
 | 1.3.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.2 阶段升级：重申 M6.2 黄金数据集建设期间全部 7 项重构工单保持严格 BLOCKED |
@@ -71,14 +72,14 @@ version: 1.5.0
 - **治理问题**: 管理员若在 Telegram 群组内对正处于 `PUBLISHED` 或 `UNDER_REVIEW` 的视频执行状态修改或重试指令，会绕过 Web 控制台的防重投 Guard，将视频打回 `PENDING`，带来二次重复发布与封号隐患；且 Bot 缺少对退出码 6 的正确处理，会造成假失败与无账本鬼魂状态。
 - **实施范围**: 
   1. 将 Bot 严格收口为具名任务分发客户端：执行**响应前强制持久化**（先在 SQLite 原子写入分发记录，随后返回 `QUEUED` 异步受理语义包含 task_id 与时间戳），对活跃中任务执行幂等复用，严禁 LLM 擅自向用户宣称“已发布完成”。
-  2. 外部物理调用前执行 `wechat_submission_attempts` 历史数据兼容与增量迁移（推荐独立原子租约表或同表去重归档为 `SUBMITTED_UNBOUND_ARCHIVED` 后建条件唯一索引，杜绝表迁移 `IntegrityError` 崩溃）；执行 Attempt、Publication 与主表状态多表联合 CAS 原子领取不可重试 Attempt 租约（状态 `IN_PROGRESS`）；BUSY 退出时标记 `RELEASED_BUSY` 释放重领；若外部平台受理后本地崩溃或超时未决，Fail-Closed 进 `UNCERTAIN` 严格联合阻断再次重领，物理阻断并发与重复提交，闭环 At-Most-Once。
+  2. 确立方案 A 完整契约并废除方案 B：外部物理调用前执行 `wechat_submission_attempts` 历史表 CHECK 约束扩展迁移（纯追加审计历史无唯一约束，杜绝表迁移 `IntegrityError` 崩溃），创建独立原子活跃租约表 `wechat_submission_active_claims`（`subject_id TEXT PRIMARY KEY`）；在单事务内原子 CAS 领取活跃租约并持久化 Attempt 记录（状态 `IN_PROGRESS`）；按 `active_attempt_id` 条件精确释放与流转：BUSY 退出时标记 `RELEASED_BUSY` 并从活跃租约表精确删除；若外部平台受理后本地崩溃或超时未决，Fail-Closed 进 `UNCERTAIN` 物理阻断再次重领，彻底闭环 At-Most-Once。
   3. 由核心应用服务统一负责发布账本守卫校验，阻断对已发布/在途视频的非法回写与删除。
-  4. 捕获退出码 6 并原子调用事务方法写入 Publication 账本、Attempt 记录与 `SUBMITTED_UNBOUND` 状态，明确本地三表强一致性 vs 外部 At-Most-Once 边界。
-  5. 接入 `_build_subprocess_env`；会话锁由子进程内部自洽持有（严禁父进程外置重复加锁，防止超时 0 秒产生锁争用立即锁忙失败）；仅对明确 BUSY 凭证有限退避（最多 3 次），通用退出码 1 判定为永久失败，退出码 3 明确为发布结果未确认（`EXIT_RESULT_UNCERTAIN`），绝不可自动重传。
+  4. 捕获退出码 6 并原子调用事务方法更新活跃租约、写入 Publication 账本、Attempt 记录与主表 `SUBMITTED_UNBOUND` 状态，明确本地四表强一致性 vs 外部 At-Most-Once 边界。
+  5. 接入 `_build_subprocess_env`；会话锁由子进程内部自洽持有（严禁父进程外置重复加锁，防止超时 0 秒产生锁争用立即锁忙失败）；会话锁探测使用 `canonical_wechat_session_lock_path` 探测真实锁文件 `output/.wechat_state.json.browser.lock`；仅对明确 BUSY 凭证有限退避（最多 3 次），通用退出码 1 判定为永久失败，退出码 3 明确为发布结果未确认（`EXIT_RESULT_UNCERTAIN`），绝不可自动重传。
 - **明确非目标**: 重构 Telegram Bot 的长轮询网络通信机制。
-- **安全 Harness 要求**: 编写自动化回归测试，验证退出码 6 的原子账本写入、针对已发布视频执行 Bot 重置与删除命令被明确拒绝、并发重置互斥、退出码 3 告警、子进程超时回收、转入 UNCERTAIN 后再次领取仍被拒绝的阻断测试，以及历史多条活跃记录平滑迁移测试。
-- **验收标准**: 任何通过 Bot 指令重置或删除已存在平台账本的视频均被拒绝并返回明确报错；未受阻任务仍可正常重置；退出码 6 正确转入审核中并记录三表原子账本。
-- **回滚方案**: 实行**受控安全回滚五步法**：① 全局停写（创建 `output/pipeline_freeze.lock` 封闭启动源、置 `WECHAT_PUBLISHING_PAUSED=true`、终止常驻服务与关联进程组 PGID 及 Chromium 孤儿、核验微信会话锁释放并标记在途任务为 `UNCERTAIN`，未证实零消费前严禁 revert）；② 绑定具体目标 Commit 执行原子回滚；③ 沙箱运行 `POLARIS-101` 新增防线测试（严禁运行包含不安全基线的历史单测，防线测试若失败必须保持暂停与冻结锁、严禁恢复调度）；④ 推送并重启全套守护进程；⑤ 确认无误后移除冻结锁并解除暂停。若已发生状态分叉，严禁全库盲跑与裸写生产 SQL，按专用剧本执行：SQLite 在线备份 API（`conn.backup()`，采用高精度微秒 UTC 时间戳与 UUID 随机熵拒绝覆盖，并验证 `PRAGMA integrity_check;` 登记恢复点） → 排除 `PUBLISHED` 的受测 DAL 只读差异预览 → 针对指定 `video_id` 的受测 DAL 定点纠偏。
+- **安全 Harness 要求**: 编写自动化回归测试，验证退出码 6 的原子账本写入、针对已发布视频执行 Bot 重置与删除命令被明确拒绝、并发重置互斥、退出码 3 告警、子进程超时回收、转入 UNCERTAIN 后再次领取仍被拒绝的阻断测试（`test_claim_attempt_rejected_when_prior_attempt_is_uncertain`）、独立活跃租约生命周期与条件释放测试（`test_active_claims_lease_lifecycle`）、真实会话锁探测与持锁反例测试（`test_wechat_session_lock_probe_detects_real_hold_and_release`，持锁时断言非零失败，释放后断言返回 0），以及 Attempt 历史表扩展 CHECK 约束迁移平滑性测试。
+- **验收标准**: 任何通过 Bot 指令重置或删除已存在平台账本的视频均被拒绝并返回明确报错；未受阻任务仍可正常重置；退出码 6 正确转入审核中并记录四表原子账本；方案 A 独立租约表原子 CAS 与条件释放完整通过；真实会话锁反例测试通过。
+- **回滚方案**: 实行**受控安全回滚五步法**：① 宿主级停写（导出 crontab 备份并执行 `sed -E '/Video-precessing/s/^([^#])/# QUIESCE_DISABLED \1/'` 物理注释调度，核验活跃 crontab 为空彻底阻断 cron 复活；置 `WECHAT_PUBLISHING_PAUSED=true`；终止常驻服务与关联进程组 PGID 及 Chromium 孤儿；通过 `canonical_wechat_session_lock_path` 探测 `output/.wechat_state.json.browser.lock` 核验真实会话锁释放并标记在途任务为 `UNCERTAIN`，未证实零消费前严禁 revert）；② 绑定具体目标 Commit 执行原子回滚；③ 沙箱运行 `POLARIS-101` 新增防线测试（严禁运行包含不安全基线的历史单测，防线测试若失败必须保持暂停与 crontab 静音、严禁恢复调度）；④ 推送并重启全套守护进程；⑤ 确认无误后恢复 crontab 调度并解除暂停。若已发生状态分叉，严禁全库盲跑与裸写生产 SQL，按专用剧本执行：SQLite 在线备份 API（`conn.backup()`，采用高精度微秒 UTC 时间戳与 UUID 随机熵拒绝覆盖，并验证 `PRAGMA integrity_check;` 登记恢复点） → 排除 `PUBLISHED` 的受测 DAL 只读差异预览 → 针对指定 `video_id` 的受测 DAL 定点纠偏。
 
 ---
 

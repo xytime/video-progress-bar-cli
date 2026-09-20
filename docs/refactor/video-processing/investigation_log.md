@@ -608,7 +608,36 @@ version: 2.0.0
   ```json
   {"source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing", "snapshot": "/private/tmp/video-pytest-9iqenia3/sandbox/repo", "probe": {"exit_code": 0, "seconds": 0.079}, "pytest_arguments": ["-q", "tests/unit/test_characterization_baseline.py", "tests/unit/test_golden_replay_dataset.py"], "timeout_seconds": 600, "source_manifest_sha256": "8c0d1c7286f35b12ebe134e441615b6e17dd4add6fe51fb0c9dd2e0a0ca4b3e0", "profile_sha256": "547da65af3ccf847a4a1cbce0301707af92375f1aeee07d18686d121f8426da4", "browser_runtime": null, "browser_runtime_sha256": null, "media_runtime": null, "media_runtime_sha256": null, "pytest": {"exit_code": 0, "seconds": 3.063}, "finished_at": "2026-09-20T11:20:46.557900+00:00"}
   ```
-- **Sign-off Readiness**: 第三轮架构复审指出的 4 项技术缺口（3 项 P1、1 项 P2）已 100% 物理闭环，基线漂移归属已澄清，所有文档已更新落盘，等待架构师终审签署与启动口令。
+- **Sign-off Readiness**: 第三轮架构复审指出的 4 项技术缺口（3 项 P1、1 项 P2）已 100% 物理闭环，基线漂移归属已澄清，所有文档已更新落盘。
+
+---
+
+## 2026-09-20: M6.2+ 第四轮架构终审 3 项 P1 缺口深度闭环 (Round 4 Architecture Review Final Closure)
+
+### Update 2026-09-20 · Phase M6.2+ (Round 4 Architecture Review Closure)
+- **Author**: Antigravity
+- **Trigger**: Codex / 系统架构师第四轮复审结论「本轮有实质进展，但仍有 3 项 P1，暂不签署整体实施放行，也不发出启动口令」，指出方案内部尚未闭合的 3 项 P1 技术缺口。
+- **What changed & Physical Evidence**:
+  1. **[P1] 纠正会话锁核验路径并增加真实持锁失败反例测试**：
+     - *根因确证*：蓝图与剧本此前探测 `output/wechat_session.lock`，但系统源码 `src/video_processing/core/wechat_session_lock.py:30` 的真实实现是通过 `canonical_wechat_session_lock_path` 从登录态路径派生出的 `output/.wechat_state.json.browser.lock`。探测错误路径导致真实持锁时误报 FREE；
+     - *闭环方案*：剧本与运维工具统一调用 `canonical_wechat_session_lock_path("output/wechat_state.json")` 解析真实锁文件；在 `POLARIS-101` 增设单测 `test_wechat_session_lock_probe_detects_real_hold_and_release`，验证后台线程持锁时探测逻辑捕获 `BlockingIOError` 并判定为失败（非零退出码反例），释放后断言探测成功（返回 0）；
+  2. **[P1] 确立租约方案 A 完整一致契约，废除方案 B**：
+     - *方案 B 废弃技术裁决*：方案 B 试图在迁移事务中先将重复 Attempt 置为 `SUBMITTED_UNBOUND_ARCHIVED`，但在原表 CHECK 约束尚未放开时会直接抛出 `CHECK constraint failed` 异常；且若历史数据存在相同 `created_at` 时间戳（同一秒多次重试），`a.created_at < b.created_at` 无法消除重复项，后续建唯一索引仍将因重复项触发 `IntegrityError` 崩溃。方案 B 物理上不可行，正式废弃，禁止作为备选剧本；
+     - *方案 A 完整物理闭环*：
+       - Attempt 历史表 CHECK 约束平滑扩展为 `CHECK(state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN', 'RELEASED_BUSY'))`，新表不建唯一约束，纯追加审计历史无损保留；
+       - 创建独立活跃租约表 `wechat_submission_active_claims`（`subject_id TEXT PRIMARY KEY`）；
+       - 单事务联合 CAS 领取：步骤 1 插入活跃租约表，步骤 2 同事务持久化 Attempt 记录；
+       - 按 `active_attempt_id` 条件精确释放：BUSY 退出时按 `active_attempt_id` 条件删除租约并更新 Attempt 为 `RELEASED_BUSY`；退出码 6 原子四表落账（更新租约为 `SUBMITTED_UNBOUND` 持续占位）；崩溃恢复 Fail-Closed 转入 `UNCERTAIN` 物理锁定，严禁自动重领，闭环 At-Most-Once；在 `POLARIS-101` 增设 `test_active_claims_lease_lifecycle` 单测；
+  3. **[P1] 升级启动源封闭为不受业务回滚影响的宿主级 crontab 物理静音**：
+     - *根因确证*：原方案仅在应用层创建 `output/pipeline_freeze.lock` 标记文件。但宿主机器每分钟都在通过 crontab 执行 `scripts/run_publication_window.py`。一旦运维执行 `git revert`，Git 会将带有该标记文件检查的应用代码撤销为旧代码，此时宿主 cron 会在 60 秒内拉起被回滚的旧版本代码直接发起发帖！
+     - *闭环方案*：彻底脱离对应用层可被 revert 代码的依赖，提升为 OS 宿主级停写。导出 crontab 备份，执行 `sed -E '/Video-precessing/s/^([^#])/# QUIESCE_DISABLED \1/'` 物理注释所有任务，核验活跃调度项为空。静音覆盖整个回滚与沙箱测试验证窗口，验证通过后方可反向恢复。
+- **Production Code Status**: 生产业务代码严格保持零修改（Zero runtime code changes, 0 line diff in `src/` & `scripts/`）。
+- **Isolated Test Receipt**:
+  ```json
+  {"source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing", "snapshot": "/private/tmp/video-pytest-1f1k6c21/sandbox/repo", "probe": {"exit_code": 0, "seconds": 0.073}, "pytest_arguments": ["-q", "tests/unit/test_characterization_baseline.py", "tests/unit/test_golden_replay_dataset.py"], "timeout_seconds": 600, "source_manifest_sha256": "b75be5580efb5b264f115b3702eee776546a371df7ed117c5dec3228cf161ac9", "profile_sha256": "6267654d877fecd3abf3645b05a6f005439603a72cd26f78fc5e09e7df77a58c", "browser_runtime": null, "browser_runtime_sha256": null, "media_runtime": null, "media_runtime_sha256": null, "pytest": {"exit_code": 0, "seconds": 3.094}, "finished_at": "2026-09-20T11:30:01.016369+00:00"}
+  ```
+- **Sign-off Readiness**: 第四轮架构终审指出的 3 项 P1 技术缺口已 100% 物理闭环，所有文档已落盘，沙箱测试 15 用例全绿（3.09s），等待系统架构师签署与口令 `继续北辰重构`。
+
 
 
 
