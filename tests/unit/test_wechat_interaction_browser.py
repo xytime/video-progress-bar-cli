@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-20 | Antigravity | 增加评论置顶单元测试，验证已置顶跳过、无按钮跳过以及成功置顶与弹窗确认分支。 |
 | 1.0.0 | 2026-09-19 | Codex | 覆盖前置门禁、规范锁路径、进程争用与崩溃释放。 |
 """
 
@@ -176,10 +177,20 @@ def test_guard_busy_returns_sentinel_without_calling_function(tmp_path: Path):
 
 
 class _FakeLocator:
-    def __init__(self, count: int = 0, items: list | None = None, text: str = ""):
-        self._count = count
+    def __init__(
+        self,
+        count: int = 0,
+        items: list | None = None,
+        text: str = "",
+        sub_locators: dict[str, Any] | None = None,
+        attrs: dict[str, str] | None = None,
+    ):
+        self._count = count if items is None else len(items)
         self._items = items or []
         self._text = text
+        self._sub_locators = sub_locators or {}
+        self._attrs = attrs or {}
+        self.clicked = 0
 
     def count(self) -> int:
         if self._items:
@@ -189,17 +200,51 @@ class _FakeLocator:
     def nth(self, idx: int):
         if idx < len(self._items):
             return self._items[idx]
+        if idx < self._count:
+            return self
         return _FakeLocator(count=0)
 
-    def filter(self, has=None, has_text: str | None = None):
+    def filter(self, has=None, has_text: Any = None):
         if has_text is not None:
-            filtered = [item for item in self._items if has_text in item._text]
+            candidates = self._items if self._items else ([self] if self._count > 0 else [])
+            if hasattr(has_text, "search"):  # regex
+                filtered = [item for item in candidates if has_text.search(item._text)]
+            else:
+                filtered = [item for item in candidates if str(has_text) in item._text]
             return _FakeLocator(items=filtered)
         return self
 
+    def is_visible(self) -> bool:
+        return self.count() > 0
+
+    def click(self) -> None:
+        self.clicked += 1
+
+    def hover(self) -> None:
+        pass
+
+    def get_attribute(self, name: str) -> str:
+        return self._attrs.get(name, "")
+
+    @property
+    def first(self):
+        if self._items:
+            return self._items[0]
+        return self
+
+    def locator(self, selector: str):
+        for k, loc in self._sub_locators.items():
+            if k in selector or selector in k:
+                return loc
+        return _FakeLocator(count=0)
+
 
 class _FakePage:
-    def __init__(self, locators: dict[str, _FakeLocator] | None = None, url: str = "https://channels.weixin.qq.com/platform/interaction/comment"):
+    def __init__(
+        self,
+        locators: dict[str, _FakeLocator] | None = None,
+        url: str = "https://channels.weixin.qq.com/platform/interaction/comment",
+    ):
         self._locators = locators or {}
         self.url = url
 
@@ -208,6 +253,9 @@ class _FakePage:
             if k in selector or selector in k:
                 return loc
         return _FakeLocator(count=0)
+
+    def wait_for_timeout(self, ms: int) -> None:
+        pass
 
 
 def test_resolve_target_card_by_direct_id_attribute():
@@ -252,4 +300,69 @@ def test_resolve_target_card_falls_back_to_title_when_id_not_captured():
     )
     assert resolved.count() == 1
     assert resolved._items[0] == card_1
+
+
+def test_ensure_comment_pinned_already_pinned_skips_action(tmp_path: Path):
+    commenter = BrowserCommenter(state_path=tmp_path / "unused.json")
+    pinned_tag = _FakeLocator(count=1, text="置顶")
+    page = _FakePage({
+        ".comment-tags:has-text(\"置顶\")": pinned_tag,
+    })
+    result = commenter._ensure_comment_pinned(page, _FakeLocator())
+    assert result is True
+
+
+def test_ensure_comment_pinned_missing_more_button_returns_false(tmp_path: Path):
+    commenter = BrowserCommenter(state_path=tmp_path / "unused.json")
+    page = _FakePage()  # 无任何定位器
+    result = commenter._ensure_comment_pinned(page, _FakeLocator())
+    assert result is False
+
+
+def test_ensure_comment_pinned_success_with_dialog_confirmation(tmp_path: Path):
+    commenter = BrowserCommenter(
+        state_path=tmp_path / "unused.json",
+        dom_timeout_ms=500,
+        poll_interval_ms=10,
+    )
+    more_btn = _FakeLocator(count=1)
+    menu_item = _FakeLocator(count=1, text="置顶")
+    popover_menu = _FakeLocator(items=[menu_item])
+    confirm_btn = _FakeLocator(count=1, text="替换置顶")
+    dialog = _FakeLocator(count=1, text="仅能置顶一条评论", sub_locators={
+        "替换置顶": confirm_btn,
+        ".weui-desktop-btn_primary": confirm_btn,
+    })
+    pinned_tag = _FakeLocator(count=1, text="置顶")
+
+    # 动态页面：点击确认后置顶标签显现
+    class _DynamicPage(_FakePage):
+        def __init__(self):
+            super().__init__({
+                "weui-icon-outlined-more": more_btn,
+                ".weui-desktop-popover": popover_menu,
+                ".menu-item": popover_menu,
+                "common-dialog": dialog,
+                "weui-desktop-dialog": dialog,
+            })
+            self._pinned = False
+
+        def locator(self, selector: str):
+            if "置顶" in selector and ("tag" in selector or "pinned" in selector):
+                return pinned_tag if self._pinned else _FakeLocator(count=0)
+            return super().locator(selector)
+
+    dyn_page = _DynamicPage()
+    # 当 confirm_btn 被点击时设置 pinned = True
+    def _on_confirm_click():
+        confirm_btn.clicked += 1
+        dyn_page._pinned = True
+    confirm_btn.click = _on_confirm_click
+
+    result = commenter._ensure_comment_pinned(dyn_page, _FakeLocator())
+    assert result is True
+    assert more_btn.clicked == 1
+    assert menu_item.clicked == 1
+    assert confirm_btn.clicked == 1
+
 

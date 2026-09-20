@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.8.0 | 2026-09-20 | Antigravity | 新增首评自动置顶与替换确认逻辑，记录 is_pinned 证据。 |
 | 2.7.0 | 2026-09-20 | Antigravity | 提取 resolve_target_card 纯逻辑，支持离线单元测试卡片索引消歧义与降级分支。 |
 | 2.6.0 | 2026-09-20 | Antigravity | 遵循 AGENTS.md 规范优先以 post_list 原生 ID 精准索引绑定卡片，文本片段退为兜底，消除前缀重复卡片歧义。 |
 | 2.5.0 | 2026-09-20 | Antigravity | 视口升级至1920x1080防响应式折叠，增强展开/折叠双模态菜单导航并引入评论路由守门断言。 |
@@ -49,6 +50,11 @@ COMMENT_SUBMIT_PATHS = {
     "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/comment_create",
     "/cgi-bin/mmfinderassistant-bin/comment/create_comment",
     "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/create_comment",
+}
+SET_TOP_COMMENT_PATH = "/cgi-bin/mmfinderassistant-bin/comment/set_top_comment"
+SET_TOP_COMMENT_PATHS = {
+    "/cgi-bin/mmfinderassistant-bin/comment/set_top_comment",
+    "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/set_top_comment",
 }
 DEFAULT_STATE_FILE = Path(__file__).resolve().parents[3] / "output" / "wechat_state.json"
 
@@ -453,6 +459,12 @@ class BrowserCommenter:
 
             metadata["existing_author_comments"] = existing
             if any(item["text"] == expected_text or expected_text[:30] in item["text"] for item in existing):
+                if not verify_only:
+                    try:
+                        metadata["is_pinned"] = self._ensure_comment_pinned(page, comments)
+                    except Exception as exc:
+                        logger.warning("已有首评补齐置顶异常: %s", exc)
+                        metadata["is_pinned"] = False
                 return self._finish_page(page, attempt_dir, "COMMENTED", None, metadata)
             if existing:
                 return self._finish_page(page, attempt_dir, "SKIPPED_EXISTS", None, metadata)
@@ -602,6 +614,12 @@ class BrowserCommenter:
                     page, attempt_dir, "UNCERTAIN",
                     "平台已受理但未回读到同 ID、同作者、完整同文评论节点", metadata,
                 )
+            if not verify_only:
+                try:
+                    metadata["is_pinned"] = self._ensure_comment_pinned(page, comments)
+                except Exception as exc:
+                    logger.warning("新发首评置顶异常（不影响发评成功）: %s", exc)
+                    metadata["is_pinned"] = False
             return self._finish_page(page, attempt_dir, "COMMENTED", None, metadata)
         except Exception as exc:
             status = "UNCERTAIN" if clicked else "FAILED"
@@ -609,6 +627,96 @@ class BrowserCommenter:
                 page, attempt_dir, status,
                 f"浏览器适配器异常: {type(exc).__name__}: {exc}", metadata,
             )
+
+    def _ensure_comment_pinned(self, page, comments_locator) -> bool:
+        """检查并确保作者评论处于置顶状态，若未置顶则自动展开更多菜单执行置顶及替换确认。"""
+        try:
+            # 1. 检查是否已经置顶
+            pinned_tags = page.locator(
+                '.comment-tags:has-text("置顶"), .tag:has-text("置顶"), [data-pinned="true"]'
+            )
+            if pinned_tags.count() > 0 and any(pinned_tags.nth(i).is_visible() for i in range(pinned_tags.count())):
+                logger.info("目标作者评论已处于置顶状态，无需重复置顶。")
+                return True
+
+            # 2. 唤起操作栏并定位更多操作按钮 (...)
+            more_btn = page.locator(
+                '.comment-actions .action-icon.weui-icon-outlined-more, '
+                '.action-icon.weui-icon-outlined-more, '
+                '.action-item:has(.weui-icon-outlined-more), '
+                '[data-action="more"], [data-action="pin"]'
+            )
+            if more_btn.count() == 0:
+                author_row = page.locator(
+                    '.comment-row:has(.bandage:has-text("作者")), '
+                    '.comment-row:has(.author-role:has-text("作者")), '
+                    '.comment-main-content'
+                )
+                if author_row.count() > 0:
+                    try:
+                        author_row.first.hover()
+                        page.wait_for_timeout(200)
+                    except Exception:
+                        pass
+                    more_btn = page.locator(
+                        '.comment-actions .action-icon.weui-icon-outlined-more, '
+                        '.action-icon.weui-icon-outlined-more, '
+                        '.action-item:has(.weui-icon-outlined-more), '
+                        '[data-action="more"], [data-action="pin"]'
+                    )
+
+            if more_btn.count() == 0 or not more_btn.first.is_visible():
+                logger.info("页面未渲染评论更多操作按钮或暂不支持置顶控件，跳过置顶。")
+                return False
+
+            # 若直接是置顶按钮（测试简化夹具）
+            if "pin" in str(more_btn.first.get_attribute("data-action") or "").lower():
+                more_btn.first.click()
+                page.wait_for_timeout(300)
+                return True
+
+            # 点击展开更多下拉菜单
+            more_btn.first.click()
+            page.wait_for_timeout(300)
+
+            # 3. 菜单中查找「置顶」
+            popover_item = page.locator(
+                '.weui-desktop-popover:visible .menu-item, '
+                '[role="menu"]:visible [role="menuitem"], '
+                '[data-menu-item="pin"]'
+            ).filter(has_text=re.compile(r"^\s*置顶\s*$"))
+            if popover_item.count() == 0 or not popover_item.first.is_visible():
+                logger.info("更多菜单中未出现置顶选项，跳过。")
+                return False
+
+            popover_item.first.click()
+            page.wait_for_timeout(500)
+
+            # 4. 检测并确认替换已有置顶弹窗
+            dialog = page.locator(
+                '.common-dialog:visible, .weui-desktop-dialog:visible'
+            ).filter(has_text=re.compile(r"置顶"))
+            if dialog.count() > 0 and dialog.first.is_visible():
+                confirm_btn = dialog.first.locator(
+                    '.weui-desktop-btn_primary, button:has-text("替换置顶"), button:has-text("确定")'
+                )
+                if confirm_btn.count() > 0 and confirm_btn.first.is_visible():
+                    confirm_btn.first.click()
+                    page.wait_for_timeout(500)
+
+            # 5. 等待置顶状态生效
+            check_deadline = time.monotonic() + min(3.0, self.dom_timeout_ms / 1000)
+            while time.monotonic() < check_deadline:
+                if page.locator('.comment-tags:has-text("置顶"), .tag:has-text("置顶"), [data-pinned="true"]').count() > 0:
+                    logger.info("首评作者评论已成功置顶。")
+                    return True
+                page.wait_for_timeout(self.poll_interval_ms)
+
+            logger.warning("置顶请求已发出，但超时未回读到置顶标识。")
+            return False
+        except Exception as exc:
+            logger.warning("执行评论置顶流程异常: %s", exc)
+            return False
 
     @staticmethod
     def _read_author_comments(locator) -> list[dict[str, str]]:
