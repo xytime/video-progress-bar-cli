@@ -114,3 +114,34 @@ def test_global_funnel_endpoint(tmp_path):
         assert data["metrics"]["qualification_rate"] == 50.0
         assert data["metrics"]["overall_conversion_rate"] == 50.0
 
+        # 测试 24h 窗口
+        res_24h = client.get("/api/funnel?window=24h")
+        assert res_24h.status_code == 200
+        assert res_24h.json()["window"] == "24h"
+
+        # 测试 today_bj 窗口
+        res_today = client.get("/api/funnel?window=today_bj")
+        assert res_today.status_code == 200
+        assert res_today.json()["window"] == "today_bj"
+
+
+def test_get_videos_created_window_api(tmp_path):
+    test_db = PipelineDB(str(tmp_path / "pipeline.db"))
+    test_db.add_channel("UC_API", "API Channel", status="APPROVED")
+    test_db.add_video("vid_err", "Error Video", "UC_API", score=60)
+    test_db.update_video_status("vid_err", "FAILED", error_msg="policy reject")
+
+    with patch.object(web_app, "db", test_db):
+        client = TestClient(web_app.app)
+        # 1. 正常入参
+        res = client.get("/api/videos?tab=error&created_window=7d")
+        assert res.status_code == 200
+        data = res.json()
+        assert "videos" in data
+        assert data["total_count"] == 1
+
+        # 2. 非法时间窗口应抛出 422
+        res_bad = client.get("/api/videos?tab=error&created_window=invalid_win")
+        assert res_bad.status_code == 422
+        assert "unknown created window" in res_bad.text
+

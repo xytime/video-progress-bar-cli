@@ -140,3 +140,75 @@ def test_get_global_funnel_metrics(tmp_path):
     assert global_m["processing_rate"] == 100.0
     assert global_m["publishing_rate"] == 50.0
 
+
+def test_funnel_metrics_24h_and_today_bj_windows(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    cid = "UC_HOURLY"
+    db.add_channel(cid, "Hourly Test", status="APPROVED")
+
+    now = datetime.utcnow()
+    t_2h = (now - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    t_36h = (now - timedelta(hours=36)).strftime("%Y-%m-%d %H:%M:%S")
+
+    # 2小时前录入并发布
+    db.add_video("vid_2h", "2h Ago", cid, score=85)
+    db.update_video_status("vid_2h", "PUBLISHED")
+    with db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET created_at = ? WHERE youtube_id = ?", (t_2h, "vid_2h"))
+
+    # 36小时前录入
+    db.add_video("vid_36h", "36h Ago", cid, score=85)
+    with db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET created_at = ? WHERE youtube_id = ?", (t_36h, "vid_36h"))
+
+    # 24h 窗口
+    m24 = db.get_channel_funnel_metrics(cid, window="24h")
+    assert m24["total_ingested"] == 1
+    assert m24["qualified"] == 1
+    assert m24["published"] == 1
+
+    # all 窗口
+    m_all = db.get_channel_funnel_metrics(cid, window="all")
+    assert m_all["total_ingested"] == 2
+
+
+def test_get_paginated_videos_created_window_filter(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    cid = "UC_FILTER"
+    db.add_channel(cid, "Filter Test", status="APPROVED")
+
+    now = datetime.utcnow()
+    t_1h = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    t_3d = (now - timedelta(days=3)).strftime("%Y-%m-%d %H:%M:%S")
+    t_10d = (now - timedelta(days=10)).strftime("%Y-%m-%d %H:%M:%S")
+
+    db.add_video("vid_1h", "1h ago", cid, score=80)
+    db.update_video_status("vid_1h", "FAILED", error_msg="Channel Policy blocked")
+    with db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET created_at = ? WHERE youtube_id = ?", (t_1h, "vid_1h"))
+
+    db.add_video("vid_3d", "3d ago", cid, score=80)
+    db.update_video_status("vid_3d", "FAILED", error_msg="Channel Policy blocked")
+    with db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET created_at = ? WHERE youtube_id = ?", (t_3d, "vid_3d"))
+
+    db.add_video("vid_10d", "10d ago", cid, score=80)
+    db.update_video_status("vid_10d", "FAILED", error_msg="Channel Policy blocked")
+    with db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET created_at = ? WHERE youtube_id = ?", (t_10d, "vid_10d"))
+
+    # 1. 24h 过滤
+    videos_24h, count_24h = db.get_paginated_videos(tab="error", page=1, size=20, created_window="24h")
+    assert count_24h == 1
+    assert videos_24h[0]["youtube_id"] == "vid_1h"
+
+    # 2. 7d 过滤
+    videos_7d, count_7d = db.get_paginated_videos(tab="error", page=1, size=20, created_window="7d")
+    assert count_7d == 2
+    yids_7d = {v["youtube_id"] for v in videos_7d}
+    assert yids_7d == {"vid_1h", "vid_3d"}
+
+    # 3. all (默认)
+    videos_all, count_all = db.get_paginated_videos(tab="error", page=1, size=20, created_window="all")
+    assert count_all == 3
+

@@ -230,6 +230,8 @@
         <button class="funnel-popover-close" onclick="closeFunnelPopover()">✕</button>
       </div>
       <div class="funnel-tabs">
+        <button class="funnel-tab ${win === '24h' ? 'active' : ''}" onclick="switchFunnelWindow('24h')">最近 24 小时</button>
+        <button class="funnel-tab ${win === 'today_bj' ? 'active' : ''}" onclick="switchFunnelWindow('today_bj')">今日 (BJ)</button>
         <button class="funnel-tab ${win === '7d' ? 'active' : ''}" onclick="switchFunnelWindow('7d')">近 7 天</button>
         <button class="funnel-tab ${win === '30d' ? 'active' : ''}" onclick="switchFunnelWindow('30d')">近 30 天</button>
         <button class="funnel-tab ${win === 'all' ? 'active' : ''}" onclick="switchFunnelWindow('all')">全生命周期</button>

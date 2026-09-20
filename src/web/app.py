@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 # Modification History
+| 3.40.0 | 2026-09-20 | Gemini | 全局漏斗与频道漏斗端点新增 24h 与 today_bj 窗口支持；视频分页查询透传 created_window 时间过滤。 |
 | 3.39.0 | 2026-09-20 | Gemini | 新增 GET /api/funnel 全站流转漏斗数据 API，支持 7d/30d/all 三维时间切片。 |
 | 3.38.0 | 2026-09-20 | Gemini | 挂载 /static 静态资源目录 (StaticFiles)；_check_dashboard_origin 中间件放行 /static 路径，杜绝静态资源跨源加载 403。 |
 | 3.37.0 | 2026-09-20 | Gemini | 新增白名单频道暂停/恢复 (/pause, /resume) 与多时间切片漏斗数据 (/funnel) API；list_channels 支持全量受管状态聚合。 |
@@ -162,6 +163,7 @@ _VIDEO_SORTS = {"default", "score_desc", "views_desc", "like_rate_desc", "source
 _SCORE_BANDS = {"all", "unscored", "below_50", "50_74", "80_plus"}
 _ERROR_TYPES = {"all", "channel_policy", "login", "youtube_403", "copy_quality", "censorship_p0", "other"}
 _ENGAGEMENT_WINDOWS = {1, 3, 7, 30}
+_CREATED_WINDOWS = {"all", "24h", "today_bj", "7d", "30d"}
 _VIDEO_STATUSES = {
     "PENDING", "METADATA_PENDING", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "AI_COVER_PENDING",
     "PUBLISHING", "PUBLISHED", "COMPLETED", "IGNORED", "FAILED", "LOGIN_REQUIRED", "SEGMENTED",
@@ -1323,6 +1325,7 @@ def _validate_video_list_query(
     error_type: str,
     status: str,
     engagement_window_days: int,
+    created_window: str = "all",
 ) -> None:
     """在进入 DAL 前拒绝未知控制面参数，避免静默退化为错误列表。"""
     if tab not in _VIDEO_TABS:
@@ -1341,6 +1344,8 @@ def _validate_video_list_query(
         raise HTTPException(status_code=422, detail="unknown status")
     if engagement_window_days not in _ENGAGEMENT_WINDOWS:
         raise HTTPException(status_code=422, detail="unsupported engagement window")
+    if created_window not in _CREATED_WINDOWS:
+        raise HTTPException(status_code=422, detail="unknown created window")
     if tab != "error" and error_type != "all":
         raise HTTPException(status_code=422, detail="error type only applies to error tab")
     if tab != "high_likes" and status != "all":
@@ -1360,14 +1365,16 @@ def get_videos(
     status: str = "all",
     engagement_window_days: int = 3,
     include_processed: bool = False,
+    created_window: str = "all",
 ):
     """在服务端筛选和稳定排序后分页返回列表及准确总数。"""
-    _validate_video_list_query(tab, size, search, sort, score_band, error_type, status, engagement_window_days)
+    _validate_video_list_query(tab, size, search, sort, score_band, error_type, status, engagement_window_days, created_window)
     page = max(1, page)
     videos, total_count = db.get_paginated_videos(
         tab, page, size, search=search.strip(), channel=channel.strip(), sort=sort,
         score_band=score_band, error_type=error_type, status=status,
         engagement_window_days=engagement_window_days, include_processed=include_processed,
+        created_window=created_window,
     )
     _attach_publish_display_fields(videos)
     tab_counts = db.get_tab_counts()
@@ -1837,30 +1844,30 @@ def resume_channel(channel_id: str):
 
 @app.get("/api/funnel")
 def get_global_funnel(window: str = "7d"):
-    """获取全站视频生产流转全局漏斗指标（支持 7d, 30d, all）"""
-    days_map = {"7d": 7, "30d": 30, "all": None}
-    days = days_map.get(window, 7)
-    metrics = db.get_global_funnel_metrics(days=days)
+    """获取全站视频生产流转全局漏斗指标（支持 24h, today_bj, 7d, 30d, all）"""
+    valid_windows = {"24h", "today_bj", "7d", "30d", "all"}
+    win = window if window in valid_windows else "7d"
+    metrics = db.get_global_funnel_metrics(window=win)
     return {
         "success": True,
-        "window": window if window in days_map else "7d",
+        "window": win,
         "metrics": metrics,
     }
 
 
 @app.get("/api/channels/{channel_id}/funnel")
 def get_channel_funnel(channel_id: str, window: str = "7d"):
-    """获取频道的生产转化漏斗（支持 7d, 30d, all）"""
-    days_map = {"7d": 7, "30d": 30, "all": None}
-    days = days_map.get(window, 7)
-    metrics = db.get_channel_funnel_metrics(channel_id, days=days)
+    """获取频道的生产转化漏斗（支持 24h, today_bj, 7d, 30d, all）"""
+    valid_windows = {"24h", "today_bj", "7d", "30d", "all"}
+    win = window if window in valid_windows else "7d"
+    metrics = db.get_channel_funnel_metrics(channel_id, window=win)
     channel = db.get_channel_by_id(channel_id)
     channel_name = channel.get("channel_name", "") if channel else ""
     return {
         "success": True,
         "channel_id": channel_id,
         "channel_name": channel_name,
-        "window": window if window in days_map else "7d",
+        "window": win,
         "metrics": metrics,
     }
 

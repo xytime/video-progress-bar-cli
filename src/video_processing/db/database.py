@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.75.0 | 2026-09-20 | Gemini | 漏斗指标与视频分页查询新增 24h 与 today_bj (北京时间今日) 时间窗口过滤支持。 |
 | 3.74.0 | 2026-09-20 | Gemini | 新增 get_global_funnel_metrics DAL 方法，并支持 get_channel_funnel_metrics 在未指定频道时回落为全站漏斗聚合。 |
 | 3.73.0 | 2026-09-20 | Gemini | 新增 get_managed_channels、set_channel_paused 与 get_channel_funnel_metrics DAL 方法，支持白名单暂停与漏斗统计。 |
 | 3.72.0 | 2026-09-20 | Antigravity | ensure_english_world_wechat_publication 加入状态单调性保护，防止重入将 PUBLISHED 刷回 SUBMITTED_BOUND。 |
@@ -2834,18 +2835,34 @@ class PipelineDB:
             conn.commit()
             return True
 
-    def get_global_funnel_metrics(self, days: Optional[int] = None) -> Dict[str, Any]:
-        """获取全站全局视频生产漏斗指标（可选 7 天、30 天或全生命周期）。"""
-        return self.get_channel_funnel_metrics(channel_id=None, days=days)
+    def get_global_funnel_metrics(self, days: Optional[int] = None, window: Optional[str] = None) -> Dict[str, Any]:
+        """获取全站全局视频生产漏斗指标（支持 24h、today_bj、7d、30d 或全生命周期）。"""
+        return self.get_channel_funnel_metrics(channel_id=None, days=days, window=window)
 
-    def get_channel_funnel_metrics(self, channel_id: Optional[str] = None, days: Optional[int] = None) -> Dict[str, Any]:
-        """获取指定频道或全局的内容生产漏斗指标（可选 7 天、30 天或全生命周期）。"""
+    def get_channel_funnel_metrics(
+        self,
+        channel_id: Optional[str] = None,
+        days: Optional[int] = None,
+        window: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """获取指定频道或全局的内容生产漏斗指标（支持 24h、today_bj、7d、30d 或全生命周期）。"""
         where_clauses: List[str] = []
         params: List[Any] = []
         if channel_id and channel_id not in ("all", "*", ""):
             where_clauses.append("channel_id = ?")
             params.append(channel_id)
-        if days is not None and days > 0:
+
+        if window == "24h":
+            where_clauses.append("created_at >= datetime('now', '-24 hours')")
+        elif window == "today_bj":
+            where_clauses.append("created_at >= datetime(date('now', '+8 hours'), '-8 hours')")
+        elif window == "7d":
+            where_clauses.append("created_at >= datetime('now', '-7 days')")
+        elif window == "30d":
+            where_clauses.append("created_at >= datetime('now', '-30 days')")
+        elif window == "all":
+            pass
+        elif days is not None and days > 0:
             where_clauses.append(f"created_at >= datetime('now', '-{int(days)} days')")
         where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
@@ -4912,6 +4929,7 @@ class PipelineDB:
         status: str = 'all',
         engagement_window_days: int = 3,
         include_processed: bool = False,
+        created_window: str = 'all',
     ) -> tuple[List[Dict[str, Any]], int]:
         """在 SQL 层先筛选、稳定排序，再返回当前页及同一谓词下的准确总数。"""
         condition, params = self._build_video_tab_condition(tab, engagement_window_days)
@@ -4942,6 +4960,14 @@ class PipelineDB:
         if status != 'all':
             clauses.append('pv.status = ?')
             query_params.append(status)
+        if created_window == '24h':
+            clauses.append("pv.created_at >= datetime('now', '-24 hours')")
+        elif created_window == 'today_bj':
+            clauses.append("pv.created_at >= datetime(date('now', '+8 hours'), '-8 hours')")
+        elif created_window == '7d':
+            clauses.append("pv.created_at >= datetime('now', '-7 days')")
+        elif created_window == '30d':
+            clauses.append("pv.created_at >= datetime('now', '-30 days')")
         if tab == 'high_likes' and not include_processed:
             clauses.append("NOT EXISTS (SELECT 1 FROM video_browser_marks marks WHERE marks.video_id = pv.id AND marks.mark_type = 'ENGAGEMENT_REVIEWED')")
 
