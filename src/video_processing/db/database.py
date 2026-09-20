@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.73.0 | 2026-09-20 | Gemini | 新增 get_managed_channels、set_channel_paused 与 get_channel_funnel_metrics DAL 方法，支持白名单暂停与漏斗统计。 |
 | 3.72.0 | 2026-09-20 | Antigravity | ensure_english_world_wechat_publication 加入状态单调性保护，防止重入将 PUBLISHED 刷回 SUBMITTED_BOUND。 |
 | 3.71.0 | 2026-09-20 | Antigravity | publication_subjects 支持 ENGLISH_WORLD，打通发布账本与评论区互动发现，并增加候选 72 小时调度截断与防饥饿清理。 |
 | 3.70.0 | 2026-09-20 | Antigravity | 新增 bind_wechat_publication_platform_post_id DAL 方法，用于对齐平台真实 exportId。 |
@@ -2799,6 +2800,104 @@ class PipelineDB:
         with self.get_connection() as conn:
             conn.execute("UPDATE recommended_channels SET status = ? WHERE channel_id = ?", (status, channel_id))
             conn.commit()
+
+    def get_managed_channels(self) -> List[Dict[str, Any]]:
+        """返回受管的白名单频道（状态为 APPROVED 或 PAUSED），按添加时间倒序。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM recommended_channels WHERE status IN ('APPROVED', 'PAUSED') ORDER BY added_at DESC"
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def set_channel_paused(self, channel_id: str, paused: bool) -> bool:
+        """将白名单频道在 APPROVED 与 PAUSED 状态之间切换。非白名单频道（如 BLACKLISTED/MANUAL_ONLY）拒绝操作。"""
+        target_status = 'PAUSED' if paused else 'APPROVED'
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT status FROM recommended_channels WHERE channel_id = ?",
+                (channel_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+            curr_status = row["status"] if isinstance(row, dict) else row[0]
+            # 仅允许在 APPROVED 和 PAUSED 之间切换
+            if curr_status not in ('APPROVED', 'PAUSED'):
+                return False
+            if curr_status == target_status:
+                return True
+            conn.execute(
+                "UPDATE recommended_channels SET status = ? WHERE channel_id = ?",
+                (target_status, channel_id)
+            )
+            conn.commit()
+            return True
+
+    def get_channel_funnel_metrics(self, channel_id: str, days: Optional[int] = None) -> Dict[str, Any]:
+        """获取指定频道的内容生产漏斗指标（可选 7 天、30 天或全生命周期）。"""
+        where_clauses = ["channel_id = ?"]
+        params: List[Any] = [channel_id]
+        if days is not None and days > 0:
+            where_clauses.append(f"created_at >= datetime('now', '-{int(days)} days')")
+        where_sql = " AND ".join(where_clauses)
+
+        query = f"""
+            SELECT 
+                COUNT(*) as total_ingested,
+                SUM(CASE WHEN score >= 75 THEN 1 ELSE 0 END) as qualified,
+                SUM(CASE WHEN status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'PUBLISHED', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'WECHAT_DEFERRED', 'LOCAL_ACCEPTED') THEN 1 ELSE 0 END) as processed,
+                SUM(CASE WHEN status IN ('PUBLISHED', 'SUBMITTED_BOUND') THEN 1 ELSE 0 END) as published,
+                SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed,
+                SUM(CASE WHEN censor_tag IS NOT NULL THEN 1 ELSE 0 END) as censor_blocked,
+                MAX(created_at) as latest_ingested_at,
+                MAX(CASE WHEN status IN ('PUBLISHED', 'SUBMITTED_BOUND') THEN updated_at ELSE NULL END) as latest_published_at
+            FROM processed_videos
+            WHERE {where_sql}
+        """
+        with self.get_connection() as conn:
+            row = conn.execute(query, params).fetchone()
+            if not row:
+                return {
+                    "total_ingested": 0,
+                    "qualified": 0,
+                    "processed": 0,
+                    "published": 0,
+                    "failed": 0,
+                    "censor_blocked": 0,
+                    "qualification_rate": 0.0,
+                    "processing_rate": 0.0,
+                    "publishing_rate": 0.0,
+                    "overall_conversion_rate": 0.0,
+                    "latest_ingested_at": None,
+                    "latest_published_at": None,
+                }
+            ingested = row["total_ingested"] or 0
+            qualified = row["qualified"] or 0
+            processed = row["processed"] or 0
+            published = row["published"] or 0
+            failed = row["failed"] or 0
+            censor_blocked = row["censor_blocked"] or 0
+
+            qual_rate = (qualified / ingested * 100) if ingested > 0 else 0.0
+            proc_rate = (processed / qualified * 100) if qualified > 0 else 0.0
+            pub_rate = (published / qualified * 100) if qualified > 0 else 0.0
+            overall_rate = (published / ingested * 100) if ingested > 0 else 0.0
+
+            return {
+                "total_ingested": ingested,
+                "qualified": qualified,
+                "processed": processed,
+                "published": published,
+                "failed": failed,
+                "censor_blocked": censor_blocked,
+                "qualification_rate": round(qual_rate, 2),
+                "processing_rate": round(proc_rate, 2),
+                "publishing_rate": round(pub_rate, 2),
+                "overall_conversion_rate": round(overall_rate, 2),
+                "latest_ingested_at": row["latest_ingested_at"],
+                "latest_published_at": row["latest_published_at"],
+            }
+
 
     # --- Video DAL ---
     def add_video(

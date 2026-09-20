@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 # Modification History
+| 3.37.0 | 2026-09-20 | Gemini | 新增白名单频道暂停/恢复 (/pause, /resume) 与多时间切片漏斗数据 (/funnel) API；list_channels 支持全量受管状态聚合。 |
 | 3.36.2 | 2026-09-20 | Gemini | 修复添加频道时 yt-dlp --flat-playlist 导致 channel_id 为 NA 的 Bug；优先提取播放列表级/多候选元数据 |
 | 3.35.1 | 2026-09-08 | Codex | 仪表盘允许局域网 IPv4 绑定；浏览器 Origin 必须与当前请求地址同源，保留轻量 CSRF 边界。 |
 | 3.36.0 | 2026-09-09 | Codex | 新增已确认公开发布账本只读接口，供 Telegram /last 查询；拒绝本地工作流状态回退。 |
@@ -1671,13 +1672,19 @@ def hold_english_world_review_item(review_id: str):
 # ── 频道管理 API ──────────────────────────────────────────────────────────
 @app.get("/api/channels")
 def get_channels():
-    """返回频道白名单"""
-    approved = db.get_approved_channels()
+    """返回频道白名单（含 APPROVED 与 PAUSED 状态）"""
+    managed = db.get_managed_channels()
+    approved = [c for c in managed if c.get("status") == "APPROVED"]
+    paused = [c for c in managed if c.get("status") == "PAUSED"]
     pending = db.get_pending_channels()
     return {
+        "channels": managed,
         "approved": approved,
+        "paused": paused,
         "pending": pending,
         "total_approved": len(approved),
+        "total_paused": len(paused),
+        "total_managed": len(managed),
     }
 
 
@@ -1799,6 +1806,41 @@ def remove_channel(channel_id: str):
     """从白名单中删除一个频道"""
     ok = db.delete_channel(channel_id)
     return {"success": ok}
+
+
+@app.post("/api/channels/{channel_id}/pause")
+def pause_channel(channel_id: str):
+    """暂停白名单频道的自动轮询抓取（状态置为 PAUSED）"""
+    ok = db.set_channel_paused(channel_id, paused=True)
+    if not ok:
+        return {"success": False, "error": "频道不存在或不允许暂停"}
+    return {"success": True, "channel_id": channel_id, "status": "PAUSED"}
+
+
+@app.post("/api/channels/{channel_id}/resume")
+def resume_channel(channel_id: str):
+    """恢复白名单频道的自动轮询抓取（状态置为 APPROVED）"""
+    ok = db.set_channel_paused(channel_id, paused=False)
+    if not ok:
+        return {"success": False, "error": "频道不存在或不允许恢复"}
+    return {"success": True, "channel_id": channel_id, "status": "APPROVED"}
+
+
+@app.get("/api/channels/{channel_id}/funnel")
+def get_channel_funnel(channel_id: str, window: str = "7d"):
+    """获取频道的生产转化漏斗（支持 7d, 30d, all）"""
+    days_map = {"7d": 7, "30d": 30, "all": None}
+    days = days_map.get(window, 7)
+    metrics = db.get_channel_funnel_metrics(channel_id, days=days)
+    channel = db.get_channel_by_id(channel_id)
+    channel_name = channel.get("channel_name", "") if channel else ""
+    return {
+        "success": True,
+        "channel_id": channel_id,
+        "channel_name": channel_name,
+        "window": window if window in days_map else "7d",
+        "metrics": metrics,
+    }
 
 
 # ── 手动添加视频 API ──────────────────────────────────────────────────────

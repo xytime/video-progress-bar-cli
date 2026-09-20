@@ -662,6 +662,8 @@
     .badge-dot-COMPLETED { background: #6ee7b7; }
     .badge-SEGMENTED     { background: rgba(167,139,250,0.15); color: var(--accent2); }
     .badge-dot-SEGMENTED { background: var(--accent2); }
+    .badge-PAUSED        { background: rgba(245,158,11,0.15); color: #f59e0b; }
+    .badge-dot-PAUSED    { background: #f59e0b; }
 
     @keyframes pulse-blue   { 0%,100%{box-shadow:0 0 0 0 rgba(96,165,250,.5)} 50%{box-shadow:0 0 0 5px rgba(96,165,250,0)} }
     @keyframes pulse-yellow { 0%,100%{box-shadow:0 0 0 0 rgba(251,191,36,.5)} 50%{box-shadow:0 0 0 5px rgba(251,191,36,0)} }
@@ -673,11 +675,40 @@
       display: flex; align-items: center; justify-content: space-between;
       padding: 12px 22px;
       border-bottom: 1px solid rgba(255,255,255,0.04);
+      transition: background 0.15s, opacity 0.15s;
     }
     .channel-item:last-child { border-bottom: none; }
+    .channel-item.is-paused { opacity: 0.72; background: rgba(0,0,0,0.12); }
     .channel-name { font-size: 0.8125rem; font-weight: 500; }
     .channel-id { font-size: 0.75rem; color: var(--text3); font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
     .channel-actions { display: flex; align-items: center; gap: 8px; }
+
+    .btn-channel-action {
+      background: none; border-radius: 6px; font-size: 0.75rem; font-weight: 600;
+      cursor: pointer; padding: 3px 9px; transition: all 0.15s; font-family: inherit;
+    }
+    .btn-channel-pause {
+      border: 1px solid rgba(245,158,11,0.3); color: #f59e0b; background: rgba(245,158,11,0.08);
+    }
+    .btn-channel-pause:hover {
+      background: rgba(245,158,11,0.2); border-color: #f59e0b;
+    }
+    .btn-channel-resume {
+      border: 1px solid rgba(96,165,250,0.35); color: #60a5fa; background: rgba(96,165,250,0.1);
+    }
+    .btn-channel-resume:hover {
+      background: rgba(96,165,250,0.22); border-color: #60a5fa;
+    }
+    .btn-channel-funnel {
+      background: rgba(124,110,247,0.12); border: 1px solid rgba(124,110,247,0.28);
+      color: var(--accent2); font-size: 0.72rem; font-weight: 500; cursor: pointer;
+      padding: 3px 8px; border-radius: 6px; transition: all 0.15s; font-family: inherit;
+      display: inline-flex; align-items: center; gap: 4px;
+    }
+    .btn-channel-funnel:hover, .btn-channel-funnel.active {
+      background: rgba(124,110,247,0.24); border-color: var(--accent); color: #fff;
+    }
+
     .btn-delete {
       background: none; border: 1px solid rgba(248,113,113,0.25); color: var(--red);
       font-size: 0.75rem; font-weight: 600; cursor: pointer;
@@ -686,6 +717,152 @@
       font-family: inherit;
     }
     .btn-delete:hover { background: rgba(248,113,113,0.12); border-color: var(--red); }
+
+    /* ── Channel Funnel Popover ── */
+    .channel-funnel-popover {
+      position: absolute;
+      z-index: 9999;
+      width: 320px;
+      background: rgba(17, 19, 28, 0.96);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 12px;
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05);
+      padding: 14px 16px;
+      color: var(--text);
+      font-family: inherit;
+      display: none;
+      pointer-events: auto;
+      animation: popoverFadeIn 0.18s ease-out;
+    }
+    @keyframes popoverFadeIn {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .funnel-popover-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .funnel-popover-title {
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 240px;
+    }
+    .funnel-popover-close {
+      background: none;
+      border: none;
+      color: var(--text3);
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+    .funnel-popover-close:hover {
+      color: var(--text);
+      background: rgba(255,255,255,0.08);
+    }
+    .funnel-tabs {
+      display: flex;
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: 6px;
+      padding: 2px;
+      margin-bottom: 12px;
+      gap: 2px;
+    }
+    .funnel-tab {
+      flex: 1;
+      text-align: center;
+      font-size: 0.72rem;
+      padding: 4px 6px;
+      border-radius: 5px;
+      cursor: pointer;
+      color: var(--text3);
+      background: none;
+      border: none;
+      font-family: inherit;
+      transition: all 0.15s;
+    }
+    .funnel-tab:hover {
+      color: var(--text);
+    }
+    .funnel-tab.active {
+      background: rgba(124, 110, 247, 0.25);
+      color: var(--accent2);
+      font-weight: 600;
+    }
+    .funnel-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .funnel-step {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .funnel-step-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.75rem;
+    }
+    .funnel-step-name {
+      color: var(--text2);
+    }
+    .funnel-step-value {
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text);
+    }
+    .funnel-step-rate {
+      font-size: 0.7rem;
+      color: var(--text3);
+      margin-left: 6px;
+    }
+    .funnel-step-bar-bg {
+      height: 5px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .funnel-step-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+    .funnel-bar-1 { background: #60a5fa; }
+    .funnel-bar-2 { background: #a78bfa; }
+    .funnel-bar-3 { background: #38bdf8; }
+    .funnel-bar-4 { background: #34d399; }
+    .funnel-diagnosis {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 0.72rem;
+      color: var(--text3);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .funnel-diagnosis-row {
+      display: flex;
+      justify-content: space-between;
+    }
 
     /* ── Add Channel Form ── */
     .add-channel-form {
@@ -1915,7 +2092,7 @@
     <!-- Channel Watchlist -->
     <div class="panel">
       <div class="panel-header">
-        <div class="panel-title">📡 频道白名单 <span class="panel-badge" id="channel-count">0</span></div>
+        <div class="panel-title">📡 频道白名单 <span class="panel-badge" id="channel-count">0</span> <span id="channel-subcounts" style="font-size:0.75rem;font-weight:400;color:var(--text3);margin-left:8px;"></span></div>
       </div>
       <div class="panel-body">
         <div id="channel-list">
@@ -2011,6 +2188,7 @@
 
   <footer>Video Pipeline Control Center · Auto-refresh every 3s · <a href="/api/stats" target="_blank" style="color:var(--accent2);text-decoration:none;">/api/stats</a></footer>
   <div id="toast-container"></div>
+  <div id="channel-funnel-popover" class="channel-funnel-popover"></div>
 
   <!-- Delete Modal -->
   <div id="delete-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:9999; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
@@ -2161,7 +2339,8 @@
     BANNED: ['禁止发布', 'FAILED'],
     CANCELED: ['已取消', 'PENDING'],
     DRAFT: ['草稿', 'PENDING'],
-    APPROVED: ['已批准', 'PUBLISHED'],
+    APPROVED: ['监控中', 'PUBLISHED', '频道处于自动抓取监控中'],
+    PAUSED: ['已暂停', 'PAUSED', '频道已暂停自动轮询抓取'],
     UNKNOWN: ['待核验', 'UNCERTAIN', '未识别的状态，须先核验；不得盲目重发'],
   };
 
@@ -3956,30 +4135,281 @@
   }
   setInterval(updateDownloadProgress, 1500);
 
+  // ── 频道白名单与漏斗管理 ──
+  let _funnelState = {
+    channelId: null,
+    channelName: null,
+    window: '7d',
+    isPinned: false,
+    cache: {},
+    timer: null,
+    activeTrigger: null,
+  };
+
   async function fetchChannels() {
     try {
       const r = await fetch('/api/channels');
       const d = await r.json();
-      document.getElementById('channel-count').textContent = d.total_approved;
+      const channels = d.channels || d.approved || [];
+      const countEl = document.getElementById('channel-count');
+      if (countEl) countEl.textContent = d.total_managed != null ? d.total_managed : (d.total_approved || 0);
+
+      const subcountsEl = document.getElementById('channel-subcounts');
+      if (subcountsEl) {
+        subcountsEl.textContent = `(监控中 ${d.total_approved || 0} · 已暂停 ${d.total_paused || 0})`;
+      }
+
       const list = document.getElementById('channel-list');
-      if (!d.approved || d.approved.length === 0) {
-        list.innerHTML = '<div class="empty-state"><div class="empty-icon">📻</div>暂无已批准的频道，请在下方添加</div>';
+      if (!channels || channels.length === 0) {
+        list.innerHTML = '<div class="empty-state"><div class="empty-icon">📻</div>暂无受管频道，请在下方添加</div>';
         return;
       }
-      list.innerHTML = d.approved.map(c => `
-        <div class="channel-item">
-          <div>
-            <div class="channel-name">${c.channel_name}</div>
-            <div class="channel-id">${c.channel_id}</div>
+      list.innerHTML = channels.map(c => {
+        const isPaused = c.status === 'PAUSED';
+        const pauseBtn = isPaused
+          ? `<button class="btn-channel-action btn-channel-resume" onclick="toggleChannelPause('${c.channel_id}', false)">▶ 恢复</button>`
+          : `<button class="btn-channel-action btn-channel-pause" onclick="toggleChannelPause('${c.channel_id}', true)">⏸ 暂停</button>`;
+        const safeName = escapeHtml(c.channel_name);
+        const attrName = escapeAttr(c.channel_name);
+
+        return `
+          <div class="channel-item ${isPaused ? 'is-paused' : ''}" id="channel-item-${c.channel_id}">
+            <div>
+              <div class="channel-name">${safeName}</div>
+              <div class="channel-id">${escapeHtml(c.channel_id)}</div>
+            </div>
+            <div class="channel-actions">
+              <button class="btn-channel-funnel" 
+                      id="btn-funnel-${c.channel_id}"
+                      onclick="toggleFunnelPopover(event, '${c.channel_id}', '${attrName}')"
+                      onmouseenter="showFunnelPreview(event, '${c.channel_id}', '${attrName}')"
+                      onmouseleave="scheduleFunnelHide()">
+                📊 漏斗数据
+              </button>
+              ${statusBadge(c.status)}
+              ${pauseBtn}
+              <button class="btn-delete" onclick="deleteChannel('${c.channel_id}', '${attrName}')">删除</button>
+            </div>
           </div>
-          <div class="channel-actions">
-            ${statusBadge(c.status)}
-            <button class="btn-delete" onclick="deleteChannel('${c.channel_id}', '${c.channel_name.replace(/'/g,"\\'")}')">删除</button>
-          </div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     } catch(e) { console.warn('channels fetch error', e); }
   }
+
+  async function toggleChannelPause(channelId, pause) {
+    if (navigator.vibrate) navigator.vibrate(10);
+    const action = pause ? 'pause' : 'resume';
+    try {
+      const r = await fetch(`/api/channels/${channelId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const d = await r.json();
+      if (d.success) {
+        showToast(pause ? '⏸ 频道已暂停自动抓取轮询' : '🟢 频道已恢复自动抓取监控');
+        await fetchChannels();
+      } else {
+        showToast(d.error || '操作失败', 'error');
+      }
+    } catch(e) {
+      showToast('网络请求失败', 'error');
+    }
+  }
+
+  function showFunnelPreview(event, channelId, channelName) {
+    if (_funnelState.isPinned && _funnelState.channelId === channelId) return;
+    if (_funnelState.timer) { clearTimeout(_funnelState.timer); _funnelState.timer = null; }
+    _funnelState.channelId = channelId;
+    _funnelState.channelName = channelName;
+    _funnelState.activeTrigger = event.currentTarget;
+    _openFunnelPopover(event.currentTarget, false);
+  }
+
+  function toggleFunnelPopover(event, channelId, channelName) {
+    event.stopPropagation();
+    if (_funnelState.timer) { clearTimeout(_funnelState.timer); _funnelState.timer = null; }
+    const pop = document.getElementById('channel-funnel-popover');
+    if (pop && pop.style.display === 'block' && _funnelState.channelId === channelId && _funnelState.isPinned) {
+      closeFunnelPopover();
+      return;
+    }
+    _funnelState.channelId = channelId;
+    _funnelState.channelName = channelName;
+    _funnelState.isPinned = true;
+    _funnelState.activeTrigger = event.currentTarget;
+    _openFunnelPopover(event.currentTarget, true);
+  }
+
+  function scheduleFunnelHide() {
+    if (_funnelState.isPinned) return;
+    _funnelState.timer = setTimeout(() => {
+      closeFunnelPopover();
+    }, 240);
+  }
+
+  function closeFunnelPopover() {
+    const pop = document.getElementById('channel-funnel-popover');
+    if (pop) pop.style.display = 'none';
+    if (_funnelState.activeTrigger) {
+      _funnelState.activeTrigger.classList.remove('active');
+    }
+    _funnelState.isPinned = false;
+  }
+
+  async function _openFunnelPopover(triggerEl, pinned) {
+    const pop = document.getElementById('channel-funnel-popover');
+    if (!pop) return;
+
+    document.querySelectorAll('.btn-channel-funnel').forEach(b => b.classList.remove('active'));
+    if (triggerEl) triggerEl.classList.add('active');
+
+    const rect = triggerEl.getBoundingClientRect();
+    const popWidth = 320;
+    let left = rect.right - popWidth + window.scrollX;
+    if (left < 10) left = 10;
+    let top = rect.bottom + 8 + window.scrollY;
+
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+    pop.style.display = 'block';
+
+    pop.onmouseenter = () => {
+      if (_funnelState.timer) { clearTimeout(_funnelState.timer); _funnelState.timer = null; }
+    };
+    pop.onmouseleave = () => {
+      scheduleFunnelHide();
+    };
+
+    await renderFunnelContent(_funnelState.window);
+  }
+
+  async function switchFunnelWindow(win) {
+    _funnelState.window = win;
+    await renderFunnelContent(win);
+  }
+
+  async function renderFunnelContent(win) {
+    const pop = document.getElementById('channel-funnel-popover');
+    if (!pop || !_funnelState.channelId) return;
+
+    const cacheKey = `${_funnelState.channelId}_${win}`;
+    let data = _funnelState.cache[cacheKey];
+
+    pop.innerHTML = `
+      <div class="funnel-popover-header">
+        <div class="funnel-popover-title">📊 ${escapeHtml(_funnelState.channelName)}</div>
+        <button class="funnel-popover-close" onclick="closeFunnelPopover()">✕</button>
+      </div>
+      <div class="funnel-tabs">
+        <button class="funnel-tab ${win === '7d' ? 'active' : ''}" onclick="switchFunnelWindow('7d')">近 7 天</button>
+        <button class="funnel-tab ${win === '30d' ? 'active' : ''}" onclick="switchFunnelWindow('30d')">近 30 天</button>
+        <button class="funnel-tab ${win === 'all' ? 'active' : ''}" onclick="switchFunnelWindow('all')">全生命周期</button>
+      </div>
+      <div id="funnel-metrics-container">
+        <div style="text-align:center;padding:18px 0;color:var(--text3);font-size:0.75rem;">
+          <span class="inline-spinner"></span> 正在聚合漏斗数据…
+        </div>
+      </div>
+    `;
+
+    if (!data) {
+      try {
+        const res = await fetch(`/api/channels/${_funnelState.channelId}/funnel?window=${win}`);
+        const json = await res.json();
+        if (json.success) {
+          data = json.metrics;
+          _funnelState.cache[cacheKey] = data;
+        }
+      } catch (e) {
+        console.warn('Funnel fetch failed', e);
+      }
+    }
+
+    const container = document.getElementById('funnel-metrics-container');
+    if (!container) return;
+
+    if (!data || data.total_ingested === 0) {
+      container.innerHTML = `
+        <div style="text-align:center;padding:20px 0;color:var(--text3);font-size:0.75rem;">
+          📭 该时间窗口内暂无采集视频数据
+        </div>
+      `;
+      return;
+    }
+
+    const ingested = data.total_ingested || 0;
+    const qual = data.qualified || 0;
+    const proc = data.processed || 0;
+    const pub = data.published || 0;
+
+    const qualPct = ingested > 0 ? Math.min(100, Math.round((qual / ingested) * 100)) : 0;
+    const procPct = ingested > 0 ? Math.min(100, Math.round((proc / ingested) * 100)) : 0;
+    const pubPct = ingested > 0 ? Math.min(100, Math.round((pub / ingested) * 100)) : 0;
+
+    container.innerHTML = `
+      <div class="funnel-steps">
+        <div class="funnel-step">
+          <div class="funnel-step-header">
+            <span class="funnel-step-name">1. 发现采集 (Ingested)</span>
+            <span class="funnel-step-value">${ingested}<span class="funnel-step-rate">基准 100%</span></span>
+          </div>
+          <div class="funnel-step-bar-bg"><div class="funnel-step-bar-fill funnel-bar-1" style="width:100%"></div></div>
+        </div>
+
+        <div class="funnel-step">
+          <div class="funnel-step-header">
+            <span class="funnel-step-name">2. 评分入围 (≥ 75 分)</span>
+            <span class="funnel-step-value">${qual}<span class="funnel-step-rate">入围率 ${data.qualification_rate}%</span></span>
+          </div>
+          <div class="funnel-step-bar-bg"><div class="funnel-step-bar-fill funnel-bar-2" style="width:${qualPct}%"></div></div>
+        </div>
+
+        <div class="funnel-step">
+          <div class="funnel-step-header">
+            <span class="funnel-step-name">3. 制作加工 (Processed)</span>
+            <span class="funnel-step-value">${proc}<span class="funnel-step-rate">制作率 ${data.processing_rate}%</span></span>
+          </div>
+          <div class="funnel-step-bar-bg"><div class="funnel-step-bar-fill funnel-bar-3" style="width:${procPct}%"></div></div>
+        </div>
+
+        <div class="funnel-step">
+          <div class="funnel-step-header">
+            <span class="funnel-step-name">4. 正式发布 (Published)</span>
+            <span class="funnel-step-value">${pub}<span class="funnel-step-rate">全链转化 ${data.overall_conversion_rate}%</span></span>
+          </div>
+          <div class="funnel-step-bar-bg"><div class="funnel-step-bar-fill funnel-bar-4" style="width:${pubPct}%"></div></div>
+        </div>
+      </div>
+
+      <div class="funnel-diagnosis">
+        <div class="funnel-diagnosis-row">
+          <span>🛡 拦截/失败:</span>
+          <span style="color:${data.failed > 0 ? 'var(--red)' : 'var(--text2)'};font-weight:600;">
+            ${data.failed} 条 ${data.censor_blocked > 0 ? `(敏感词 ${data.censor_blocked})` : ''}
+          </span>
+        </div>
+        <div class="funnel-diagnosis-row">
+          <span>⏱ 最近采集:</span>
+          <span>${data.latest_ingested_at ? relativeTime(data.latest_ingested_at) : '—'}</span>
+        </div>
+        ${data.latest_published_at ? `
+        <div class="funnel-diagnosis-row">
+          <span>🚀 最近发布:</span>
+          <span>${relativeTime(data.latest_published_at)}</span>
+        </div>` : ''}
+      </div>
+    `;
+  }
+
+  // 点击页面空白处关闭浮层
+  document.addEventListener('click', (e) => {
+    const pop = document.getElementById('channel-funnel-popover');
+    if (pop && pop.style.display === 'block') {
+      if (!pop.contains(e.target) && !e.target.closest('.btn-channel-funnel')) {
+        closeFunnelPopover();
+      }
+    }
+  });
 
   async function deleteChannel(channelId, channelName) {
     navigator.vibrate(15);
