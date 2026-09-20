@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.54.0  | 2026-09-20 | Antigravity                         | 视频号首评互动与回查彻底解耦：在上传受理（SUBMITTED_BOUND）且取得平台原生 ID 时立即异步派发互动 worker。 |
 | 3.53.0  | 2026-09-19 | Codex                               | 视频号互动改为默认关闭的通用有界 worker 派发，保留可观测日志并优先恢复持久到期任务。 |
 | 3.52.0  | 2026-09-19 | Antigravity                         | Project Runway-CTA: 接入互动图层处理器与发布中央选片协议，实现切片编号继承、mtime失效与安全降级。 |
 | 3.51.0  | 2026-09-19 | Antigravity                         | 视频号发布成功后异步触发独立的评论区互动引导任务，与主流水线解耦。 |
@@ -930,6 +931,8 @@ class PipelineManager:
             )
         )
         self._send_wechat_submission_review_material(prefix, final_title)
+        if platform_post_id:
+            self._trigger_wechat_interaction(platform_post_id, yid=yid, slice_index=slice_index)
 
     def _has_wechat_submission_terminal_state(self, yid: str, *, slice_index: int = 0) -> bool:
         """判断任务是否已经跨过视频号提交边界，之后任何本地异常都不得触发重传。"""
@@ -1058,7 +1061,7 @@ class PipelineManager:
         return settled
 
     def _trigger_wechat_interaction(self, platform_post_id: str, yid: str = "", slice_index: int = 0) -> None:
-        """发布确认后派发通用 worker；平台 ID 只用于日志，不越过持久队列。"""
+        """视频号提交受理或发布确认后派发通用 worker；平台 ID 只用于日志，不越过持久队列。"""
         if not platform_post_id:
             return
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid

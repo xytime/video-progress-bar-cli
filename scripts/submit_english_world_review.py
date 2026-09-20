@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.15.0 | 2026-09-20 | Antigravity | 视频号首评互动解耦：投稿受理绑定原生 post_id 后异步派发互动 worker。 |
 | 1.14.0 | 2026-09-20 | Antigravity | 隔离中心发布账本注册异常，防止同步异常触发投稿状态二次回写。 |
 | 1.13.0 | 2026-09-20 | Antigravity | 投稿受理并取得原生 post_id 时向中心账本 wechat_publications 注册发布记录。 |
 | 1.12.0 | 2026-09-18 | Antigravity | 自动投稿窗口改用英语世界专属发布窗口判定 is_english_world_publish_window。 |
@@ -253,6 +254,24 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                         db.ensure_english_world_douyin_publication(review_id)
                     except Exception as douyin_sync_exc:
                         logger.warning("English World 抖音同步建账失败: %s", douyin_sync_exc)
+                if settings.enable_wechat_comment_interaction:
+                    try:
+                        worker_log = _PROJECT_ROOT / "output" / "wechat_interaction_worker.log"
+                        worker_log.parent.mkdir(parents=True, exist_ok=True)
+                        with worker_log.open("ab") as log_file:
+                            subprocess.Popen(
+                                [
+                                    str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
+                                    str(_PROJECT_ROOT / "scripts" / "wechat_commenter.py"),
+                                ],
+                                cwd=str(_PROJECT_ROOT),
+                                stdout=log_file,
+                                stderr=subprocess.STDOUT,
+                                start_new_session=True,
+                            )
+                        logger.info("已派发 English World 视频号互动 worker: post_id=%s", platform_post_id)
+                    except Exception as exc:
+                        logger.warning("English World 派发视频号互动 worker 失败: %s", exc)
         except subprocess.TimeoutExpired:
             state = "UNCERTAIN"
             message = "视频号上传超时，无法排除平台已受理；已停止自动重传，需在后台核验。"
