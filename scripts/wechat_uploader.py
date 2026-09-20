@@ -65,6 +65,7 @@
 | 5.5.3   | 2026-09-03 | Codex                               | 原创弹窗中“声明原创”按钮由禁用变可点并成功点击时，作为平台动作确认链；仍保留最终页截图与回执。 |
 | 5.6.0 | 2026-09-07 | Codex | 原生接口正文与页面状态分离，同 ID 合并保留状态证据；未知数值状态只落诊断且不推断公开。 |
 | 5.7.0 | 2026-09-19 | Codex | 评论互动开关启用时，以登录态派生共享锁覆盖完整浏览器会话。 |
+| 5.8.0 | 2026-09-20 | Codex | 发表前选择“不显示位置”并回读显示值；未确认时保留证据并阻断提交。 |
 """
 
 import os
@@ -132,6 +133,7 @@ MANAGEMENT_UNCERTAIN = "UNCERTAIN"
 # 但也不应因一次 SPA 卡片延迟而把已有提交长期误留在不可判定状态。
 MANAGEMENT_VERIFY_ATTEMPTS = 2
 MANAGEMENT_VERIFY_RETRY_DELAY_MS = 1_500
+NO_LOCATION_TEXT = "不显示位置"
 
 
 def _original_declaration_publish_allowed(
@@ -861,6 +863,93 @@ def _stamp_login_success(state_file: Path) -> None:
         logger.info(f"Login success marker updated: {marker}")
     except Exception as e:
         logger.warning(f"Failed to update login success marker: {e}")
+
+
+def _location_display_text(page) -> str:
+    """读取位置控件当前显示值，避免把隐藏下拉项误当成已选状态。"""
+    selectors = (
+        ".post-position-wrap .position-display .location-name",
+        ".post-position-wrap .position-display-wrap .location-name",
+        ".post-position-wrap .position-display-wrap",
+    )
+    for selector in selectors:
+        try:
+            candidates = page.locator(selector)
+            for index in range(candidates.count()):
+                candidate = candidates.nth(index)
+                if not candidate.is_visible(timeout=300):
+                    continue
+                text = re.sub(r"\s+", "", candidate.inner_text(timeout=1_000) or "")
+                if text:
+                    return text
+        except Exception:
+            continue
+    return ""
+
+
+def _select_no_location(page) -> bool:
+    """选择“不显示位置”，并以发布表单显示区的最终值作为确认依据。"""
+    if _location_display_text(page) == NO_LOCATION_TEXT:
+        logger.info("Location already set to '不显示位置'.")
+        return True
+
+    trigger = None
+    for selector in (
+        ".post-position-wrap .position-display",
+        ".post-position-wrap .position-display-wrap",
+    ):
+        try:
+            candidate = page.locator(selector).first
+            if candidate.count() > 0 and candidate.is_visible(timeout=500):
+                trigger = candidate
+                break
+        except Exception:
+            continue
+    if trigger is None:
+        logger.error("Could not find the WeChat location selector.")
+        return False
+
+    try:
+        trigger.click(timeout=2_000)
+        page.wait_for_selector(
+            ".post-position-wrap .location-filter-wrap .option-item",
+            state="visible",
+            timeout=5_000,
+        )
+    except Exception as exc:
+        logger.error("Could not open the WeChat location selector: %s", exc)
+        return False
+
+    try:
+        exact_text = page.get_by_text(NO_LOCATION_TEXT, exact=True)
+        options = page.locator(
+            ".post-position-wrap .location-filter-wrap .option-item"
+        ).filter(has=exact_text)
+        target = None
+        for index in range(options.count()):
+            candidate = options.nth(index)
+            if candidate.is_visible(timeout=300):
+                target = candidate
+                break
+        if target is None:
+            logger.error("Location option '不显示位置' was not found in the open selector.")
+            return False
+        target.click(timeout=2_000)
+    except Exception as exc:
+        logger.error("Failed to choose location option '不显示位置': %s", exc)
+        return False
+
+    for _ in range(12):
+        if _location_display_text(page) == NO_LOCATION_TEXT:
+            logger.info("Location selection confirmed: '不显示位置'.")
+            return True
+        page.wait_for_timeout(250)
+
+    logger.error(
+        "Location selection was clicked but not confirmed; current display=%r.",
+        _location_display_text(page),
+    )
+    return False
 
 
 def _select_collection(page, collection_name: str) -> bool:
@@ -2542,13 +2631,20 @@ def run_uploader(
         if category:
             logger.info(f"Category logic skipped. WeChat Web UI no longer supports category selectors. Relying on hashtags for {category!r}.")
             
-        # ── 8. 合集选择与新建 ───────────────────────────────────────────────────
+        # ── 8. 位置 ─────────────────────────────────────────────────────────────
+        if not _select_no_location(page):
+            logger.error("'不显示位置' was not confirmed; refusing to publish this video.")
+            _capture_wechat_evidence(page, evidence_root, "no_location_required_failed")
+            browser.close()
+            return 1
+
+        # ── 9. 合集选择与新建 ───────────────────────────────────────────────────
         if not _collection_binding_confirmed(page, collection):
             logger.error("Collection binding was not confirmed; refusing to publish this video.")
             browser.close()
             return 1
 
-        # ── 9. 发表前清理残留遮罩 ────────────────────────────────────────────────
+        # ── 10. 发表前清理残留遮罩 ───────────────────────────────────────────────
         # [Claude_Sonnet_4.6_Thinking_planning] v2.0.0 bugfix:
         # 合集创建流程可能留下未关闭的 .weui-desktop-dialog__wrp，会拦截「发表」按钮点击
         try:
