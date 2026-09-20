@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.74.0 | 2026-09-20 | Gemini | 新增 get_global_funnel_metrics DAL 方法，并支持 get_channel_funnel_metrics 在未指定频道时回落为全站漏斗聚合。 |
 | 3.73.0 | 2026-09-20 | Gemini | 新增 get_managed_channels、set_channel_paused 与 get_channel_funnel_metrics DAL 方法，支持白名单暂停与漏斗统计。 |
 | 3.72.0 | 2026-09-20 | Antigravity | ensure_english_world_wechat_publication 加入状态单调性保护，防止重入将 PUBLISHED 刷回 SUBMITTED_BOUND。 |
 | 3.71.0 | 2026-09-20 | Antigravity | publication_subjects 支持 ENGLISH_WORLD，打通发布账本与评论区互动发现，并增加候选 72 小时调度截断与防饥饿清理。 |
@@ -2833,13 +2834,20 @@ class PipelineDB:
             conn.commit()
             return True
 
-    def get_channel_funnel_metrics(self, channel_id: str, days: Optional[int] = None) -> Dict[str, Any]:
-        """获取指定频道的内容生产漏斗指标（可选 7 天、30 天或全生命周期）。"""
-        where_clauses = ["channel_id = ?"]
-        params: List[Any] = [channel_id]
+    def get_global_funnel_metrics(self, days: Optional[int] = None) -> Dict[str, Any]:
+        """获取全站全局视频生产漏斗指标（可选 7 天、30 天或全生命周期）。"""
+        return self.get_channel_funnel_metrics(channel_id=None, days=days)
+
+    def get_channel_funnel_metrics(self, channel_id: Optional[str] = None, days: Optional[int] = None) -> Dict[str, Any]:
+        """获取指定频道或全局的内容生产漏斗指标（可选 7 天、30 天或全生命周期）。"""
+        where_clauses: List[str] = []
+        params: List[Any] = []
+        if channel_id and channel_id not in ("all", "*", ""):
+            where_clauses.append("channel_id = ?")
+            params.append(channel_id)
         if days is not None and days > 0:
             where_clauses.append(f"created_at >= datetime('now', '-{int(days)} days')")
-        where_sql = " AND ".join(where_clauses)
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
         query = f"""
             SELECT 
@@ -2852,7 +2860,7 @@ class PipelineDB:
                 MAX(created_at) as latest_ingested_at,
                 MAX(CASE WHEN status IN ('PUBLISHED', 'SUBMITTED_BOUND') THEN updated_at ELSE NULL END) as latest_published_at
             FROM processed_videos
-            WHERE {where_sql}
+            {where_sql}
         """
         with self.get_connection() as conn:
             row = conn.execute(query, params).fetchone()

@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 # Modification History
+| 3.39.0 | 2026-09-20 | Gemini | 新增 GET /api/funnel 全站流转漏斗数据 API，支持 7d/30d/all 三维时间切片。 |
 | 3.38.0 | 2026-09-20 | Gemini | 挂载 /static 静态资源目录 (StaticFiles)；_check_dashboard_origin 中间件放行 /static 路径，杜绝静态资源跨源加载 403。 |
 | 3.37.0 | 2026-09-20 | Gemini | 新增白名单频道暂停/恢复 (/pause, /resume) 与多时间切片漏斗数据 (/funnel) API；list_channels 支持全量受管状态聚合。 |
 | 3.36.2 | 2026-09-20 | Gemini | 修复添加频道时 yt-dlp --flat-playlist 导致 channel_id 为 NA 的 Bug；优先提取播放列表级/多候选元数据 |
@@ -1832,6 +1833,19 @@ def resume_channel(channel_id: str):
     if not ok:
         return {"success": False, "error": "频道不存在或不允许恢复"}
     return {"success": True, "channel_id": channel_id, "status": "APPROVED"}
+
+
+@app.get("/api/funnel")
+def get_global_funnel(window: str = "7d"):
+    """获取全站视频生产流转全局漏斗指标（支持 7d, 30d, all）"""
+    days_map = {"7d": 7, "30d": 30, "all": None}
+    days = days_map.get(window, 7)
+    metrics = db.get_global_funnel_metrics(days=days)
+    return {
+        "success": True,
+        "window": window if window in days_map else "7d",
+        "metrics": metrics,
+    }
 
 
 @app.get("/api/channels/{channel_id}/funnel")

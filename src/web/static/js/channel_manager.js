@@ -79,26 +79,28 @@
 
         return `
           <div class="channel-item ${isPaused ? 'is-paused' : ''}" id="channel-item-${safeId}">
-            <div>
-              <div class="channel-name">${safeName}</div>
-              <div class="channel-id">${_escapeHtml(c.channel_id)}</div>
+            <div class="channel-item-header">
+              <div class="channel-name" title="${attrName}">${safeName}</div>
+              <div class="channel-header-badge">${_statusBadge(c.status)}</div>
             </div>
-            <div class="channel-actions">
-              <button class="btn-channel-funnel" 
-                      id="btn-funnel-${safeId}"
-                      data-channel-id="${safeId}"
-                      data-channel-name="${attrName}"
-                      onclick="toggleFunnelPopover(event, this.dataset.channelId, this.dataset.channelName)"
-                      onmouseenter="showFunnelPreview(event, this.dataset.channelId, this.dataset.channelName)"
-                      onmouseleave="scheduleFunnelHide()">
-                📊 漏斗数据
-              </button>
-              ${_statusBadge(c.status)}
-              ${pauseBtn}
-              <button class="btn-delete"
-                      data-channel-id="${safeId}"
-                      data-channel-name="${attrName}"
-                      onclick="deleteChannel(this.dataset.channelId, this.dataset.channelName)">删除</button>
+            <div class="channel-item-footer">
+              <div class="channel-id" title="${safeId}">${_escapeHtml(c.channel_id)}</div>
+              <div class="channel-actions">
+                <button class="btn-channel-funnel" 
+                        id="btn-funnel-${safeId}"
+                        data-channel-id="${safeId}"
+                        data-channel-name="${attrName}"
+                        onclick="toggleFunnelPopover(event, this.dataset.channelId, this.dataset.channelName)"
+                        onmouseenter="showFunnelPreview(event, this.dataset.channelId, this.dataset.channelName)"
+                        onmouseleave="scheduleFunnelHide()">
+                  📊 漏斗
+                </button>
+                ${pauseBtn}
+                <button class="btn-delete"
+                        data-channel-id="${safeId}"
+                        data-channel-name="${attrName}"
+                        onclick="deleteChannel(this.dataset.channelId, this.dataset.channelName)">删除</button>
+              </div>
             </div>
           </div>
         `;

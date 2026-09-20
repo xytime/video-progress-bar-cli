@@ -91,3 +91,26 @@ def test_channel_funnel_endpoint(tmp_path):
         res_all = client.get(f"/api/channels/{cid}/funnel?window=all")
         assert res_all.status_code == 200
         assert res_all.json()["window"] == "all"
+
+
+def test_global_funnel_endpoint(tmp_path):
+    test_db = PipelineDB(str(tmp_path / "pipeline.db"))
+    test_db.add_channel("UC_A", "Channel A", status="APPROVED")
+    test_db.add_channel("UC_B", "Channel B", status="APPROVED")
+    test_db.add_video("vid_a", "Video A", "UC_A", score=85)
+    test_db.update_video_status("vid_a", "PUBLISHED")
+    test_db.add_video("vid_b", "Video B", "UC_B", score=30)
+
+    with patch.object(web_app, "db", test_db):
+        client = TestClient(web_app.app)
+        res = client.get("/api/funnel?window=all")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert data["window"] == "all"
+        assert data["metrics"]["total_ingested"] == 2
+        assert data["metrics"]["qualified"] == 1
+        assert data["metrics"]["published"] == 1
+        assert data["metrics"]["qualification_rate"] == 50.0
+        assert data["metrics"]["overall_conversion_rate"] == 50.0
+

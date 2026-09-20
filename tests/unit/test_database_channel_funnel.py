@@ -114,3 +114,29 @@ def test_get_channel_funnel_metrics_time_windows(tmp_path):
     assert m_all["censor_blocked"] == 1
     assert m_all["qualification_rate"] == 75.0
     assert round(m_all["publishing_rate"], 1) == 66.7
+
+
+def test_get_global_funnel_metrics(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    # 录入来自不同频道的视频
+    db.add_channel("UC_1", "Channel 1", status="APPROVED")
+    db.add_channel("UC_2", "Channel 2", status="APPROVED")
+
+    db.add_video("vid_1", "Vid 1", "UC_1", score=80)
+    db.update_video_status("vid_1", "PUBLISHED")
+
+    db.add_video("vid_2", "Vid 2", "UC_2", score=90)
+    db.update_video_status("vid_2", "DOWNLOADING")
+
+    db.add_video("vid_3", "Vid 3", "UC_2", score=30)
+
+    # 全局漏斗
+    global_m = db.get_global_funnel_metrics()
+    assert global_m["total_ingested"] == 3
+    assert global_m["qualified"] == 2
+    assert global_m["processed"] == 2  # PUBLISHED + DOWNLOADING
+    assert global_m["published"] == 1
+    assert round(global_m["qualification_rate"], 1) == 66.7
+    assert global_m["processing_rate"] == 100.0
+    assert global_m["publishing_rate"] == 50.0
+
