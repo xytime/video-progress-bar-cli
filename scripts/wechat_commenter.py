@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.4.0 | 2026-09-20 | Antigravity | 支持目标 target 显式提供 copy_path 生成文案与定位提示，兼容 English World 作品。 |
 | 2.3.0 | 2026-09-20 | Antigravity | 放宽人工批量上限至 10 条，支持最新作品批量互动与自动收敛。 |
 | 2.2.0 | 2026-09-20 | Codex | 支持仅在未持久化提交意图时审计式替换失败草稿，并从已发布文案生成唯一卡片定位提示。 |
 | 2.1.0 | 2026-09-20 | Codex | 增加最多三条的人工批量入口，严格按上传记录时间选择无互动账本候选；遇到不确定或失败即停止后续提交。 |
@@ -52,14 +53,19 @@ class _LiveServices:
         self.last_draft = None
 
     @staticmethod
-    def _published_title_hint(youtube_id: str, slice_index: int) -> Optional[str]:
+    def _published_title_hint(
+        youtube_id: str, slice_index: int, copy_path: Optional[str] = None
+    ) -> Optional[str]:
         """从已发布文案取稳定前缀，供无原生 ID 属性的后台列表做唯一绑定。"""
-        prefix = f"{youtube_id}_s{slice_index}" if slice_index else youtube_id
-        copy_path = PROJECT_ROOT / "output" / f"{prefix}_copy.txt"
-        if not copy_path.is_file():
+        if copy_path and Path(copy_path).is_file():
+            target_path = Path(copy_path)
+        else:
+            prefix = f"{youtube_id}_s{slice_index}" if slice_index else youtube_id
+            target_path = PROJECT_ROOT / "output" / f"{prefix}_copy.txt"
+        if not target_path.is_file():
             return None
         try:
-            text = " ".join(copy_path.read_text(encoding="utf-8").split())
+            text = " ".join(target_path.read_text(encoding="utf-8").split())
         except OSError as exc:
             logger.warning("读取已发布文案定位提示失败: %s", exc)
             return None
@@ -68,8 +74,12 @@ class _LiveServices:
     def generate_comment(self, target: Mapping[str, Any], *, force_rule: bool) -> Any:
         yid = str(target.get("youtube_id") or "")
         slice_index = int(target.get("slice_index") or 0)
-        prefix = f"{yid}_s{slice_index}" if slice_index else yid
-        copy_path = PROJECT_ROOT / "output" / f"{prefix}_copy.txt"
+        custom_copy = target.get("copy_path")
+        if custom_copy and Path(custom_copy).is_file():
+            copy_path = Path(custom_copy)
+        else:
+            prefix = f"{yid}_s{slice_index}" if slice_index else yid
+            copy_path = PROJECT_ROOT / "output" / f"{prefix}_copy.txt"
         title = str(target.get("zh_title") or target.get("title") or "精选视频")
         description = copy_path.read_text(encoding="utf-8") if copy_path.is_file() else title
         self.last_draft = self.generator.generate_comment(
@@ -95,6 +105,7 @@ class _LiveServices:
         hint = self._published_title_hint(
             str(call_kwargs.pop("source_youtube_id", "") or ""),
             int(call_kwargs.pop("source_slice_index", 0) or 0),
+            copy_path=str(call_kwargs.pop("copy_path", "") or "") or None,
         )
         if hint:
             call_kwargs["video_title"] = hint

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-09-20 | Antigravity | 覆盖 English World 视频号发布账本打通与元数据发现，以及陈旧任务超时淘汰。 |
 | 1.3.0 | 2026-09-20 | Codex | 覆盖无提交意图的草稿修订审计，并拒绝修改已进入提交边界的评论。 |
 | 1.2.0 | 2026-09-20 | Codex | 覆盖人工批量候选按上传记录时间排序，并严格排除已有互动账本。 |
 | 1.1.0 | 2026-09-19 | Codex | 固定人工“最新视频”查询不因已有互动账本回退到旧作品。 |
@@ -385,3 +386,102 @@ def test_recent_uninteracted_candidates_follow_upload_record_time(tmp_path: Path
     candidates = db.get_recent_wechat_posts_without_interaction(limit=3)
 
     assert [item["publication_id"] for item in candidates] == [newest["id"], older["id"]]
+
+
+def test_english_world_publication_interaction_discovery_and_metadata(tmp_path: Path) -> None:
+    db_path = tmp_path / "ew_interaction.db"
+    db = PipelineDB(db_path=str(db_path))
+    copy_file = tmp_path / "copy.txt"
+    copy_file.write_text("英语世界测试文案：清洁技术投资", encoding="utf-8")
+    
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """INSERT INTO english_world_review_items (
+                   id, state, artifact_sha256, title, mp4_path, manifest_path,
+                   title_path, copy_path, cover_path, cover_provenance_path,
+                   source_youtube_id, source_title
+               ) VALUES (?, 'UNDER_REVIEW', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "review_ew_1", "a" * 64, "加拿大清洁技术跌超10亿美元",
+                str(tmp_path / "video.mp4"), str(tmp_path / "manifest.json"),
+                str(tmp_path / "title.txt"), str(copy_file),
+                str(tmp_path / "cover.jpg"), str(tmp_path / "prov.json"),
+                "eRugI-YnPI4", "Canada struggles to scale cleantech firms",
+            ),
+        )
+        conn.commit()
+
+    post_id = "export/post_ew_1"
+    pub = db.ensure_english_world_wechat_publication(
+        "review_ew_1",
+        platform_post_id=post_id,
+        state="SUBMITTED_BOUND",
+    )
+    assert pub["platform_post_id"] == post_id
+    assert pub["subject_id"] == "english_world:review_ew_1"
+
+    candidate = db.get_wechat_interaction_discovery_candidate()
+    assert candidate is not None
+    assert candidate["platform_post_id"] == post_id
+    assert candidate["youtube_id"] == "eRugI-YnPI4"
+    assert candidate["zh_title"] == "加拿大清洁技术跌超10亿美元"
+    assert candidate["copy_path"] == str(copy_file)
+
+    commentable = db.get_commentable_wechat_post_by_platform_id(post_id)
+    assert commentable is not None
+    assert commentable["youtube_id"] == "eRugI-YnPI4"
+    assert commentable["copy_path"] == str(copy_file)
+
+    # Queue interaction and claim it
+    queued = db.queue_wechat_interaction(
+        publication_id=int(candidate["publication_id"]),
+        platform_post_id=post_id,
+        interaction_type="POLL_STAND",
+        provider="rule",
+        comment_text="测试评论内容",
+    )
+    claimed = db.claim_due_wechat_interaction(platform_post_id=post_id)
+    assert claimed is not None
+    assert claimed["platform_post_id"] == post_id
+    assert claimed["youtube_id"] == "eRugI-YnPI4"
+    assert claimed["zh_title"] == "加拿大清洁技术跌超10亿美元"
+    assert claimed["copy_path"] == str(copy_file)
+
+
+def test_zombie_retry_tasks_expire_and_prevent_queue_starvation(tmp_path: Path) -> None:
+    db_path = tmp_path / "zombie.db"
+    db = PipelineDB(db_path=str(db_path))
+    target = _published_target(db, tmp_path, "zombie")
+    
+    # 模拟 10 天前的发布
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE wechat_publications SET created_at = datetime('now', '-10 days') WHERE id = ?",
+            (target["id"],),
+        )
+        conn.commit()
+
+    db.queue_wechat_interaction(
+        publication_id=int(target["id"]),
+        platform_post_id="export/post_zombie",
+        interaction_type="POLL_STAND",
+        provider="rule",
+        comment_text="陈旧任务",
+    )
+    # 将其置为 RETRY_WAIT，且到期
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE wechat_interactions SET status = 'RETRY_WAIT', next_attempt_at = datetime('now', '-1 hour') WHERE platform_post_id = ?",
+            ("export/post_zombie",),
+        )
+        conn.commit()
+
+    # 尝试领取
+    claimed = db.claim_due_wechat_interaction()
+    # 应该因为超过 3 天被置为 FAILED，无法领取
+    assert claimed is None
+    record = db.get_wechat_interaction_by_post_id("export/post_zombie")
+    assert record is not None
+    assert record["status"] == "FAILED"
+    assert "超期" in str(record["error_message"])
+

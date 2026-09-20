@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-20 | Antigravity | 传递 copy_path 到 post_comment 门面以支持 English World 作品定位与文案。 |
 | 1.0.0 | 2026-09-19 | Codex | 建立有界 tick、提交意图 callback 与 UNCERTAIN 只读回查协议。 |
 """
 
@@ -38,6 +39,7 @@ class InteractionWorkerServices(Protocol):
         evidence_dir: Path,
         before_submit: Optional[Callable[[], bool]],
         verify_only: bool,
+        copy_path: Optional[str] = None,
     ) -> tuple[str, Optional[str], Optional[str]]: ...
 
     def notify_result(
@@ -193,6 +195,7 @@ def run_interaction_tick(
         evidence_dir=root / prefix,
         before_submit=None if verify_only else persist_submit_intent,
         verify_only=verify_only,
+        copy_path=str(target.get("copy_path") or "") or None,
     )
     final_record = db.finish_wechat_interaction_attempt(
         interaction_id,

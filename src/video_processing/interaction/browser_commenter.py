@@ -8,6 +8,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.6.0 | 2026-09-20 | Antigravity | 遵循 AGENTS.md 规范优先以 post_list 原生 ID 精准索引绑定卡片，文本片段退为兜底，消除前缀重复卡片歧义。 |
+| 2.5.0 | 2026-09-20 | Antigravity | 视口升级至1920x1080防响应式折叠，增强展开/折叠双模态菜单导航并引入评论路由守门断言。 |
 | 2.4.0 | 2026-09-20 | Antigravity | 接入 post_list API 响应捕获与真实平台 exportId 精准索引卡片绑定，解决后台 DOM 缺少 data-id 属性的定位问题。 |
 | 2.3.0 | 2026-09-20 | Codex | 依据真实后台只读校准，以唯一发布文案片段辅助绑定无原生 ID 属性的卡片；移除接口顺序回退，并在提交前再次确认活动卡片。 |
 | 2.2.0 | 2026-09-20 | Antigravity | 真实发评闭环强化：支持 post_list API 索引卡片定位、真实微前端评论正文上屏回读兼容。 |
@@ -217,14 +219,14 @@ class BrowserCommenter:
         with sync_playwright() as runtime:
             launch_options: dict[str, Any] = {
                 "headless": self.headless,
-                "args": ["--window-size=1280,800", "--no-proxy-server"],
+                "args": ["--window-size=1920,1080", "--no-proxy-server"],
             }
             if self.browser_executable_path:
                 launch_options["executable_path"] = self.browser_executable_path
             browser = runtime.chromium.launch(**launch_options)
             try:
                 context = browser.new_context(
-                    viewport={"width": 1280, "height": 800},
+                    viewport={"width": 1920, "height": 1080},
                     storage_state=str(self.state_path),
                 )
                 page = context.new_page()
@@ -260,14 +262,25 @@ class BrowserCommenter:
                 if "channels.weixin.qq.com" in self.comment_url:
                     page.goto("https://channels.weixin.qq.com/platform", timeout=30000, wait_until="domcontentloaded")
                     page.wait_for_timeout(2500)
-                    menu_link = page.get_by_role("link", name="互动管理")
-                    if menu_link.count() > 0:
-                        menu_link.first.click()
-                        page.wait_for_timeout(1000)
+                    if "platform/interaction/comment" not in page.url:
+                        menu_link = page.get_by_role("link", name="互动管理")
+                        if menu_link.count() > 0:
+                            menu_link.first.click()
+                            page.wait_for_timeout(1000)
+                        else:
+                            sub_wrp = page.locator(".finder-ui-desktop-menu__sub__wrp:has-text('互动管理'), .finder-ui-desktop-menu__sub__wrp:nth-child(2)")
+                            if sub_wrp.count() > 0:
+                                sub_wrp.first.click()
+                                page.wait_for_timeout(1000)
                         comment_link = page.get_by_role("link", name="评论")
+                        if comment_link.count() == 0:
+                            comment_link = page.locator("a:has-text('评论'), .finder-ui-desktop-menu__link:has-text('评论')")
                         if comment_link.count() > 0:
                             comment_link.first.click()
                             page.wait_for_timeout(3500)
+                        else:
+                            page.goto(self.comment_url, timeout=30000, wait_until="domcontentloaded")
+                            page.wait_for_timeout(3000)
                 else:
                     page.goto(self.comment_url, wait_until="domcontentloaded")
                 return self._interact_with_page(
@@ -316,22 +329,28 @@ class BrowserCommenter:
             if "login" in page.url:
                 return self._finish_page(page, attempt_dir, "FAILED", "微信登录态已失效", metadata)
 
+            if "channels.weixin.qq.com" in self.comment_url and "platform/interaction/comment" not in page.url:
+                return self._finish_page(
+                    page, attempt_dir, "FAILED",
+                    f"未能成功导航至视频号评论管理页面 (当前URL: {page.url})", metadata,
+                )
+
             cards = page.locator(
                 f'[data-object-id="{platform_post_id}"]:visible, '
                 f'[data-post-id="{platform_post_id}"]:visible, '
                 f'[data-id="{platform_post_id}"]:visible'
             )
-            # 真实后台卡片不总暴露原生 ID：优先使用发布文案片段，若未命中则使用真实 post_list 接口捕获的原生 ID 索引精准定位
-            if cards.count() == 0 and video_title:
-                cards = page.locator(".comment-feed-wrap:visible").filter(
-                    has=page.locator(".feed-title")
-                ).filter(has_text=video_title.strip())
-
+            # 真实后台卡片优先使用真实 post_list 接口捕获的原生 ID 索引精准定位（AGENTS.md 铁律）；文本匹配仅作兜底
             if cards.count() == 0 and captured_post_ids and platform_post_id in captured_post_ids:
                 idx = captured_post_ids.index(platform_post_id)
                 feed_wraps = page.locator(".comment-feed-wrap:visible")
                 if feed_wraps.count() > idx:
                     cards = feed_wraps.nth(idx)
+
+            if cards.count() == 0 and video_title:
+                cards = page.locator(".comment-feed-wrap:visible").filter(
+                    has=page.locator(".feed-title")
+                ).filter(has_text=video_title.strip())
 
             visible_count = cards.count()
             if visible_count != 1:

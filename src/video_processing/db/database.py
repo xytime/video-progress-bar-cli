@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.71.0 | 2026-09-20 | Antigravity | publication_subjects 支持 ENGLISH_WORLD，打通发布账本与评论区互动发现，并增加候选 72 小时调度截断与防饥饿清理。 |
 | 3.70.0 | 2026-09-20 | Antigravity | 新增 bind_wechat_publication_platform_post_id DAL 方法，用于对齐平台真实 exportId。 |
 | 3.69.0 | 2026-09-20 | Codex | 记录未提交互动草稿的受控修订，并只允许无提交意图的预提交失败任务更新文案。 |
 | 3.68.0 | 2026-09-20 | Codex | 评论互动候选按视频号上传记录时间排序，并提供严格排除已有互动账本的批量候选查询。 |
@@ -267,8 +268,57 @@ class PipelineDB:
                 yield conn
         finally:
             conn.close()
-        
+
+    def _migrate_publication_subjects_if_needed(self) -> None:
+        if self._read_only or not self.db_path or self.db_path == ":memory:":
+            return
+        if not os.path.exists(self.db_path):
+            return
+        raw_conn = sqlite3.connect(self.db_path, timeout=30.0)
+        try:
+            raw_conn.execute("PRAGMA foreign_keys=OFF;")
+            cursor = raw_conn.cursor()
+            cursor.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'publication_subjects'"
+            )
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                return
+            sql = row[0]
+            if "ENGLISH_WORLD" in sql:
+                return
+            self._logger.info("[Migration] Upgrading publication_subjects to support ENGLISH_WORLD")
+            cursor.execute("ALTER TABLE publication_subjects RENAME TO publication_subjects_legacy")
+            cursor.execute('''
+                CREATE TABLE publication_subjects (
+                    id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL CHECK(kind IN ('VIDEO_ITEM', 'HIGHLIGHT_CLIP', 'ENGLISH_WORLD')),
+                    video_id INTEGER DEFAULT NULL UNIQUE,
+                    highlight_clip_id TEXT DEFAULT NULL UNIQUE,
+                    english_world_review_id TEXT DEFAULT NULL UNIQUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CHECK(
+                        (kind = 'VIDEO_ITEM' AND video_id IS NOT NULL AND highlight_clip_id IS NULL AND english_world_review_id IS NULL)
+                        OR (kind = 'HIGHLIGHT_CLIP' AND video_id IS NULL AND highlight_clip_id IS NOT NULL AND english_world_review_id IS NULL)
+                        OR (kind = 'ENGLISH_WORLD' AND video_id IS NULL AND highlight_clip_id IS NULL AND english_world_review_id IS NOT NULL)
+                    ),
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE,
+                    FOREIGN KEY(highlight_clip_id) REFERENCES highlight_clips(id) ON DELETE CASCADE,
+                    FOREIGN KEY(english_world_review_id) REFERENCES english_world_review_items(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                INSERT INTO publication_subjects (id, kind, video_id, highlight_clip_id, created_at)
+                SELECT id, kind, video_id, highlight_clip_id, created_at
+                FROM publication_subjects_legacy
+            ''')
+            cursor.execute("DROP TABLE publication_subjects_legacy")
+            raw_conn.commit()
+        finally:
+            raw_conn.close()
+
     def _init_db(self):
+        self._migrate_publication_subjects_if_needed()
         with self.get_connection() as conn:
             cursor = conn.cursor()
             # [Gemini_3.5_Flash_planning] 开启 WAL 模式，支持高并发读写，并激活 SQLite 外键支持
@@ -639,16 +689,19 @@ class PipelineDB:
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS publication_subjects (
                     id TEXT PRIMARY KEY,
-                    kind TEXT NOT NULL CHECK(kind IN ('VIDEO_ITEM', 'HIGHLIGHT_CLIP')),
+                    kind TEXT NOT NULL CHECK(kind IN ('VIDEO_ITEM', 'HIGHLIGHT_CLIP', 'ENGLISH_WORLD')),
                     video_id INTEGER DEFAULT NULL UNIQUE,
                     highlight_clip_id TEXT DEFAULT NULL UNIQUE,
+                    english_world_review_id TEXT DEFAULT NULL UNIQUE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     CHECK(
-                        (kind = 'VIDEO_ITEM' AND video_id IS NOT NULL AND highlight_clip_id IS NULL)
-                        OR (kind = 'HIGHLIGHT_CLIP' AND video_id IS NULL AND highlight_clip_id IS NOT NULL)
+                        (kind = 'VIDEO_ITEM' AND video_id IS NOT NULL AND highlight_clip_id IS NULL AND english_world_review_id IS NULL)
+                        OR (kind = 'HIGHLIGHT_CLIP' AND video_id IS NULL AND highlight_clip_id IS NOT NULL AND english_world_review_id IS NULL)
+                        OR (kind = 'ENGLISH_WORLD' AND video_id IS NULL AND highlight_clip_id IS NULL AND english_world_review_id IS NOT NULL)
                     ),
                     FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE,
-                    FOREIGN KEY(highlight_clip_id) REFERENCES highlight_clips(id) ON DELETE CASCADE
+                    FOREIGN KEY(highlight_clip_id) REFERENCES highlight_clips(id) ON DELETE CASCADE,
+                    FOREIGN KEY(english_world_review_id) REFERENCES english_world_review_items(id) ON DELETE CASCADE
                 )
             ''')
 
@@ -6771,11 +6824,78 @@ class PipelineDB:
                     "UPDATE english_world_review_items SET error_message = ? WHERE id = ?",
                     (clean_message, clean_review_id),
                 )
+            if normalized_state == "PUBLISHED":
+                conn.execute(
+                    """UPDATE wechat_publications
+                       SET state = 'PUBLISHED', confirmed_at = CURRENT_TIMESTAMP,
+                           last_reconciled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                       WHERE subject_id = ?""",
+                    (f"english_world:{clean_review_id}",),
+                )
             conn.commit()
             row = conn.execute(
                 "SELECT * FROM english_world_review_items WHERE id = ?", (clean_review_id,),
             ).fetchone()
             return dict(row) if row else {}
+
+    def ensure_english_world_wechat_publication(
+        self,
+        review_id: str,
+        *,
+        platform_post_id: str,
+        platform_url: Optional[str] = None,
+        evidence_path: Optional[str] = None,
+        state: str = "SUBMITTED_BOUND",
+    ) -> Dict[str, Any]:
+        """为已取得平台原生 ID 的 English World 审核项在中心账本建立或绑定发布记录。"""
+        clean_review_id = (review_id or "").strip()
+        clean_post_id = (platform_post_id or "").strip()
+        if not clean_review_id:
+            raise ValueError("review_id is required")
+        if not clean_post_id:
+            raise ValueError("platform_post_id is required")
+        with self.get_connection() as conn:
+            review = conn.execute(
+                "SELECT id, title, source_youtube_id FROM english_world_review_items WHERE id = ?",
+                (clean_review_id,),
+            ).fetchone()
+            if not review:
+                raise ValueError(f"English World review item not found: {clean_review_id}")
+            subject_id = f"english_world:{clean_review_id}"
+            conn.execute(
+                """INSERT OR IGNORE INTO publication_subjects (id, kind, english_world_review_id)
+                   VALUES (?, 'ENGLISH_WORLD', ?)""",
+                (subject_id, clean_review_id),
+            )
+            conn.execute(
+                """INSERT INTO wechat_publications (
+                       video_id, subject_id, state, evidence_path, confirmed_at,
+                       platform_post_id, platform_url, last_error_message,
+                       created_at, updated_at
+                   ) VALUES (
+                       NULL, ?, ?, ?, NULL,
+                       ?, ?, NULL,
+                       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                   )
+                   ON CONFLICT(subject_id) DO UPDATE SET
+                       platform_post_id = excluded.platform_post_id,
+                       state = excluded.state,
+                       evidence_path = COALESCE(excluded.evidence_path, wechat_publications.evidence_path),
+                       platform_url = COALESCE(excluded.platform_url, wechat_publications.platform_url),
+                       updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    subject_id, state, (evidence_path or "").strip() or None,
+                    clean_post_id, (platform_url or "").strip() or None,
+                ),
+            )
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM wechat_publications WHERE subject_id = ?", (subject_id,)
+            ).fetchone()
+            if not row:
+                raise RuntimeError("Failed to ensure English World WeChat publication")
+            return dict(row)
 
     def list_english_world_submission_attempts(
         self, review_id: str, *, limit: int = 20,
@@ -10022,6 +10142,20 @@ class PipelineDB:
             ''',
             (now_text, now_text, now_text),
         )
+        conn.execute(
+            '''
+            UPDATE wechat_interactions
+            SET status = 'FAILED', lease_token = NULL, lease_expires_at = NULL,
+                next_attempt_at = NULL, updated_at = ?,
+                error_message = COALESCE(error_message, '作品发布超期（>3天），终止自动重试')
+            WHERE status IN ('RETRY_WAIT', 'QUEUED')
+              AND publication_id IN (
+                  SELECT id FROM wechat_publications
+                  WHERE created_at < datetime(?, '-3 days')
+              )
+            ''',
+            (now_text, now_text),
+        )
 
     def recover_expired_wechat_interactions(
         self, *, now: Optional[datetime.datetime] = None
@@ -10103,11 +10237,18 @@ class PipelineDB:
             )
             claimed = conn.execute(
                 '''
-                SELECT i.*, w.video_id, p.youtube_id, p.slice_index, p.title,
-                       p.zh_title, p.category
+                SELECT i.*, w.video_id,
+                       COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                       COALESCE(p.slice_index, 0) AS slice_index,
+                       COALESCE(p.title, ew.source_title, ew.title) AS title,
+                       COALESCE(p.zh_title, ew.title) AS zh_title,
+                       COALESCE(p.category, 'English World') AS category,
+                       ew.copy_path AS copy_path
                 FROM wechat_interactions i
                 JOIN wechat_publications w ON w.id = i.publication_id
-                JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 WHERE i.id = ?
                 ''',
                 (int(row["id"]),),
@@ -10282,15 +10423,18 @@ class PipelineDB:
                     w.platform_post_id,
                     w.state as wechat_state,
                     w.created_at as publication_created_at,
-                    p.youtube_id,
-                    p.slice_index,
-                    p.title,
-                    p.zh_title,
-                    p.category,
+                    COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                    COALESCE(p.slice_index, 0) AS slice_index,
+                    COALESCE(p.title, ew.source_title, ew.title) AS title,
+                    COALESCE(p.zh_title, ew.title) AS zh_title,
+                    COALESCE(p.category, 'English World') AS category,
+                    ew.copy_path AS copy_path,
                     i.status as interaction_status,
                     i.attempt_count as interaction_attempt_count
                 FROM wechat_publications w
-                JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
                 WHERE w.platform_post_id = ?
                   AND w.state = 'PUBLISHED'
@@ -10314,15 +10458,18 @@ class PipelineDB:
                     w.platform_post_id,
                     w.state as wechat_state,
                     w.created_at as publication_created_at,
-                    p.youtube_id,
-                    p.slice_index,
-                    p.title,
-                    p.zh_title,
-                    p.category,
+                    COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                    COALESCE(p.slice_index, 0) AS slice_index,
+                    COALESCE(p.title, ew.source_title, ew.title) AS title,
+                    COALESCE(p.zh_title, ew.title) AS zh_title,
+                    COALESCE(p.category, 'English World') AS category,
+                    ew.copy_path AS copy_path,
                     i.status as interaction_status,
                     i.attempt_count as interaction_attempt_count
                 FROM wechat_publications w
-                JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
                 WHERE w.platform_post_id = ?
                   AND w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
@@ -10406,17 +10553,20 @@ class PipelineDB:
                     w.platform_post_id,
                     w.state AS wechat_state,
                     w.created_at AS publication_created_at,
-                    p.youtube_id,
-                    p.slice_index,
-                    p.title,
-                    p.zh_title,
-                    p.category,
+                    COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                    COALESCE(p.slice_index, 0) AS slice_index,
+                    COALESCE(p.title, ew.source_title, ew.title) AS title,
+                    COALESCE(p.zh_title, ew.title) AS zh_title,
+                    COALESCE(p.category, 'English World') AS category,
+                    ew.copy_path AS copy_path,
                     i.id AS interaction_id,
                     i.status AS interaction_status,
                     i.attempt_count AS interaction_attempt_count,
                     i.comment_text AS interaction_comment_text
                 FROM wechat_publications w
-                JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 LEFT JOIN wechat_interactions i ON i.platform_post_id = w.platform_post_id
                 WHERE w.state = 'PUBLISHED'
                   AND w.platform_post_id IS NOT NULL
@@ -10437,17 +10587,20 @@ class PipelineDB:
                     w.platform_post_id,
                     w.state AS wechat_state,
                     w.created_at AS publication_created_at,
-                    p.youtube_id,
-                    p.slice_index,
-                    p.title,
-                    p.zh_title,
-                    p.category,
+                    COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                    COALESCE(p.slice_index, 0) AS slice_index,
+                    COALESCE(p.title, ew.source_title, ew.title) AS title,
+                    COALESCE(p.zh_title, ew.title) AS zh_title,
+                    COALESCE(p.category, 'English World') AS category,
+                    ew.copy_path AS copy_path,
                     i.id AS interaction_id,
                     i.status AS interaction_status,
                     i.attempt_count AS interaction_attempt_count,
                     i.comment_text AS interaction_comment_text
                 FROM wechat_publications w
-                JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 LEFT JOIN wechat_interactions i ON i.platform_post_id = w.platform_post_id
                 WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND w.platform_post_id IS NOT NULL
@@ -10457,28 +10610,37 @@ class PipelineDB:
             ).fetchone()
             return dict(row) if row else None
 
-    def get_wechat_interaction_discovery_candidate(self) -> Optional[dict]:
-        """只读发现尚未建立互动账本的最近可评论作品。"""
+    def get_wechat_interaction_discovery_candidate(self, max_age_days: int = 3) -> Optional[dict]:
+        """只读发现尚未建立互动账本的最近可评论作品（默认限定 3 天内发布）。"""
         with self.get_connection() as conn:
             row = conn.execute(
                 '''
                 SELECT w.id AS publication_id, w.video_id, w.platform_post_id,
                        w.state AS wechat_state, w.created_at AS publication_created_at,
-                       p.youtube_id, p.slice_index, p.title, p.zh_title, p.category
+                       COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                       COALESCE(p.slice_index, 0) AS slice_index,
+                       COALESCE(p.title, ew.source_title, ew.title) AS title,
+                       COALESCE(p.zh_title, ew.title) AS zh_title,
+                       COALESCE(p.category, 'English World') AS category,
+                       ew.copy_path AS copy_path
                 FROM wechat_publications w
-                JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 LEFT JOIN wechat_interactions i ON i.platform_post_id = w.platform_post_id
                 WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND w.platform_post_id IS NOT NULL
                   AND i.id IS NULL
+                  AND w.created_at >= datetime('now', '-' || ? || ' days')
                 ORDER BY w.created_at DESC, w.id DESC
                 LIMIT 1
-                '''
+                ''',
+                (int(max_age_days),),
             ).fetchone()
             return dict(row) if row else None
 
-    def get_recent_wechat_posts_without_interaction(self, limit: int = 3) -> List[dict]:
-        """按视频号上传记录时间返回尚未建立互动账本的有限候选。
+    def get_recent_wechat_posts_without_interaction(self, limit: int = 3, max_age_days: int = 3) -> List[dict]:
+        """按视频号上传记录时间返回尚未建立互动账本的有限候选（默认限定 3 天内发布）。
 
         这不是重试或回查队列：一旦已存在互动账本，即使当前没有终态，也不会被
         本查询再次选中，避免人工批量任务与已有提交意图交叉。
@@ -10488,17 +10650,25 @@ class PipelineDB:
                 """
                 SELECT w.id AS publication_id, w.video_id, w.platform_post_id,
                        w.state AS wechat_state, w.created_at AS publication_created_at,
-                       p.youtube_id, p.slice_index, p.title, p.zh_title, p.category
+                       COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                       COALESCE(p.slice_index, 0) AS slice_index,
+                       COALESCE(p.title, ew.source_title, ew.title) AS title,
+                       COALESCE(p.zh_title, ew.title) AS zh_title,
+                       COALESCE(p.category, 'English World') AS category,
+                       ew.copy_path AS copy_path
                 FROM wechat_publications w
-                JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN processed_videos p ON p.id = w.video_id
+                LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 LEFT JOIN wechat_interactions i ON i.platform_post_id = w.platform_post_id
                 WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND w.platform_post_id IS NOT NULL
                   AND i.id IS NULL
+                  AND w.created_at >= datetime('now', '-' || ? || ' days')
                 ORDER BY w.created_at DESC, w.id DESC
                 LIMIT ?
                 """,
-                (max(1, int(limit)),),
+                (int(max_age_days), max(1, int(limit))),
             ).fetchall()
             return [dict(row) for row in rows]
 
@@ -10507,8 +10677,9 @@ class PipelineDB:
         limit: int = 5,
         include_pending_review: bool = True,
         max_attempts: int = 5,
+        max_age_days: int = 3,
     ) -> List[dict]:
-        """查询近期可评论但尚未发评或处于允许重试的视频号作品。
+        """查询近期可评论但尚未发评或处于允许重试的视频号作品（默认限定 3 天内发布）。
 
         发布账本仍保留严格的 ``PUBLISHED`` 语义；这里仅为互动候选视图，允许
         已绑定平台原生 ID 的 ``SUBMITTED_BOUND`` 作品进入人工认可的互动流程。
@@ -10520,10 +10691,10 @@ class PipelineDB:
                      OR i.status IN ('QUEUED', 'RETRY_WAIT')
                      OR (i.status = 'UNCERTAIN' AND COALESCE(i.attempt_count, 0) < ?))
                 """
-                params = [max_attempts, max(1, int(limit))]
+                params = [int(max_age_days), max_attempts, max(1, int(limit))]
             else:
                 condition = "(i.id IS NULL OR i.status IN ('QUEUED', 'RETRY_WAIT'))"
-                params = [max(1, int(limit))]
+                params = [int(max_age_days), max(1, int(limit))]
 
             rows = conn.execute(
                 f"""
@@ -10533,18 +10704,22 @@ class PipelineDB:
                     w.platform_post_id,
                     w.state as wechat_state,
                     w.created_at as publication_created_at,
-                    p.youtube_id,
-                    p.slice_index,
-                    p.title,
-                    p.zh_title,
-                    p.category,
+                    COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                    COALESCE(p.slice_index, 0) AS slice_index,
+                    COALESCE(p.title, ew.source_title, ew.title) AS title,
+                    COALESCE(p.zh_title, ew.title) AS zh_title,
+                    COALESCE(p.category, 'English World') AS category,
+                    ew.copy_path AS copy_path,
                     i.status as interaction_status,
                     COALESCE(i.attempt_count, 0) as interaction_attempt_count
                 FROM wechat_publications w
-                JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 LEFT JOIN wechat_interactions i ON w.platform_post_id = i.platform_post_id
                 WHERE w.platform_post_id IS NOT NULL
                   AND w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
+                  AND w.created_at >= datetime('now', '-' || ? || ' days')
                   AND {condition}
                 ORDER BY w.created_at DESC, w.id DESC
                 LIMIT ?
@@ -10563,17 +10738,20 @@ class PipelineDB:
                     w.video_id,
                     w.platform_post_id,
                     w.state as wechat_state,
-                    p.youtube_id,
-                    p.slice_index,
-                    p.title,
-                    p.zh_title,
-                    p.category,
+                    COALESCE(p.youtube_id, ew.source_youtube_id, '') AS youtube_id,
+                    COALESCE(p.slice_index, 0) AS slice_index,
+                    COALESCE(p.title, ew.source_title, ew.title) AS title,
+                    COALESCE(p.zh_title, ew.title) AS zh_title,
+                    COALESCE(p.category, 'English World') AS category,
+                    ew.copy_path AS copy_path,
                     i.status as interaction_status,
                     COALESCE(i.attempt_count, 1) as interaction_attempt_count,
                     i.updated_at as interaction_updated_at
                 FROM wechat_interactions i
                 JOIN wechat_publications w ON i.platform_post_id = w.platform_post_id
-                JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN processed_videos p ON w.video_id = p.id
+                LEFT JOIN publication_subjects ps ON ps.id = w.subject_id
+                LEFT JOIN english_world_review_items ew ON ew.id = ps.english_world_review_id
                 WHERE w.state IN ('PUBLISHED', 'SUBMITTED_BOUND')
                   AND i.status = 'UNCERTAIN'
                   AND COALESCE(i.attempt_count, 0) < ?

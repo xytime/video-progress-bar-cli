@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.13.0 | 2026-09-20 | Antigravity | 投稿受理并取得原生 post_id 时向中心账本 wechat_publications 注册发布记录。 |
 | 1.12.0 | 2026-09-18 | Antigravity | 自动投稿窗口改用英语世界专属发布窗口判定 is_english_world_publish_window。 |
 | 1.0.0 | 2026-08-23 | Codex | 新增英语世界学习卡的独立、一次性视频号投稿执行器。 |
 | 1.1.0 | 2026-08-26 | Codex | 投稿器在领取前尊重全局微信暂停开关，避免自动策略绕过运营暂停。 |
@@ -235,9 +236,16 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             if (
                 state == "UNDER_REVIEW"
                 and platform_post_id
-                and settings.enable_english_world_douyin_sync
             ):
-                db.ensure_english_world_douyin_publication(review_id)
+                db.ensure_english_world_wechat_publication(
+                    review_id,
+                    platform_post_id=platform_post_id,
+                    platform_url=platform_url,
+                    evidence_path=str(evidence_dir),
+                    state="SUBMITTED_BOUND",
+                )
+                if settings.enable_english_world_douyin_sync:
+                    db.ensure_english_world_douyin_publication(review_id)
         except subprocess.TimeoutExpired:
             state = "UNCERTAIN"
             message = "视频号上传超时，无法排除平台已受理；已停止自动重传，需在后台核验。"
