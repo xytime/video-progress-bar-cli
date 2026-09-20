@@ -3,13 +3,15 @@
 覆盖：
 1. 幽灵任务排除与自愈校准 (Ghost tasks calibration and exclusion from queue/waitlist)
 2. 待筛选低分素材 TTL 时效淘汰与归档 (Waitlist TTL eviction to EXPIRED)
-3. 待处理超期排队丢弃与忽略 (Queue stale discard to IGNORED, single video ignore)
-4. 待筛选素材提权入队 (Waitlist promotion to queue/manual, including reviving EXPIRED)
+3. 待处理超期排队丢弃与忽略 (Queue stale discard to IGNORED, single video ignore, slice-level ignore)
+4. 待筛选素材提权入队 (Waitlist promotion to queue/manual, including reviving EXPIRED and IGNORED)
 5. 治理相关控制面 API 测试 (cleanup-expired, discard-stale, calibrate, ignore, promote)
+6. 微信发布防重守卫拦截与 upload_date 淘汰 (WeChat submission guard and upload_date TTL)
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-20 | Antigravity | 补充微信发布防重拦截、include_expired 归档回溯、切片粒度忽略与 upload_date 淘汰测试 |
 | 1.0.0 | 2026-09-20 | Antigravity | 初始创建：覆盖待筛选与待处理队列治理、状态自愈与控制面接口 |
 """
 
@@ -276,3 +278,159 @@ def test_api_governance_endpoints(test_db, monkeypatch):
     promoted_v = test_db.get_video_by_youtube_id("api-promote-wl")
     assert promoted_v["source"] == "MANUAL"
     assert promoted_v["score"] == 100
+
+
+def test_wechat_guard_blocks_promote_and_ignore(test_db, monkeypatch):
+    """测试微信发布/归档保护状态对提权和忽略操作的防御拦截（Fail-Closed）。"""
+    monkeypatch.setattr(web_app, "db", test_db)
+    client = TestClient(web_app.app)
+
+    # 1. 插入一条已发布视频
+    test_db.add_video("guard-pub", "Published Video", "Bloomberg", score=80, source="AUTO")
+    test_db.update_video_status("guard-pub", "PUBLISHED")
+
+    # 2. 插入一条历史归档视频
+    test_db.add_video("guard-arch", "Archived Video", "Bloomberg", score=85, source="AUTO")
+    test_db.update_video_status("guard-arch", "HISTORICAL_ARCHIVED")
+
+    # 3. 插入一条带有 wechat_publications 账本但 status 异常的视频
+    test_db.add_video("guard-ledger", "Ledger Video", "Bloomberg", score=85, source="AUTO")
+    ledger_vid = test_db.get_video_by_youtube_id("guard-ledger")["id"]
+    with test_db.get_connection() as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO publication_subjects (id, kind, video_id)
+               VALUES (?, 'VIDEO_ITEM', ?)""",
+            (f"video:{ledger_vid}", ledger_vid)
+        )
+        conn.execute(
+            """INSERT INTO wechat_publications (
+                video_id, subject_id, state
+            ) VALUES (?, ?, 'SUBMITTED_BOUND')""",
+            (ledger_vid, f"video:{ledger_vid}")
+        )
+        conn.commit()
+
+    # 验证 API 拦截 promote
+    res_pub = client.post("/api/videos/guard-pub/promote")
+    assert res_pub.status_code == 200
+    assert res_pub.json()["success"] is False
+    assert "无法提权" in res_pub.json()["error"]
+
+    res_arch = client.post("/api/videos/guard-arch/promote")
+    assert res_arch.status_code == 200
+    assert res_arch.json()["success"] is False
+    assert "无法提权" in res_arch.json()["error"]
+
+    res_ledg = client.post("/api/videos/guard-ledger/promote")
+    assert res_ledg.status_code == 200
+    assert res_ledg.json()["success"] is False
+
+    # 验证 DAL 拦截 promote_waitlist_to_queue 与 promote_to_manual
+    assert test_db.promote_waitlist_to_queue("guard-pub") is False
+    assert test_db.promote_waitlist_to_queue("guard-arch") is False
+    assert test_db.promote_waitlist_to_queue("guard-ledger") is False
+
+    # 验证 API 与 DAL 拦截 ignore（不能将已发布任务覆盖为已忽略）
+    res_ign_pub = client.post("/api/videos/guard-pub/ignore")
+    assert res_ign_pub.status_code == 200
+    assert res_ign_pub.json()["success"] is False
+    assert "禁止忽略" in res_ign_pub.json()["error"]
+
+    assert test_db.ignore_video("guard-pub") is False
+    assert test_db.get_video_by_youtube_id("guard-pub")["status"] == "PUBLISHED"
+
+
+def test_waitlist_include_expired_query_and_api(test_db, monkeypatch):
+    """测试 waitlist 查询中 include_expired 参数与前端回溯支持。"""
+    monkeypatch.setattr(web_app, "db", test_db)
+    client = TestClient(web_app.app)
+
+    test_db.add_video("wl-act", "Active Waitlist", "Channel D", score=30, source="AUTO")
+    test_db.add_video("wl-exp", "Expired Waitlist", "Channel D", score=25, source="AUTO")
+    test_db.update_video_status("wl-exp", "EXPIRED", error_msg="超时自动归档")
+
+    # 默认 waitlist 只返回 active (PENDING)
+    vids, total = test_db.get_paginated_videos(tab="waitlist", include_expired=False)
+    assert total == 1
+    assert [v["youtube_id"] for v in vids] == ["wl-act"]
+
+    # 开启 include_expired=True，可查询到已过期的素材
+    vids_all, total_all = test_db.get_paginated_videos(tab="waitlist", include_expired=True)
+    assert total_all == 2
+    yids = {v["youtube_id"] for v in vids_all}
+    assert yids == {"wl-act", "wl-exp"}
+
+    # 通过 API GET /api/videos 验证
+    res_def = client.get("/api/videos?tab=waitlist&include_expired=false")
+    assert res_def.status_code == 200
+    assert res_def.json()["total_count"] == 1
+
+    res_exp = client.get("/api/videos?tab=waitlist&include_expired=true")
+    assert res_exp.status_code == 200
+    assert res_exp.json()["total_count"] == 2
+
+    # 提权复活已过期素材，验证清除 error_msg（API 调用后会被 claim_video_for_processing 抢占为 DOWNLOADING）
+    res_prom = client.post("/api/videos/wl-exp/promote")
+    assert res_prom.status_code == 200
+    assert res_prom.json()["success"] is True
+    revived = test_db.get_video_by_youtube_id("wl-exp")
+    assert revived["status"] in ("PENDING", "DOWNLOADING")
+    assert revived["score"] == 100
+    assert revived["error_msg"] is None
+
+    # 直接调用 DAL promote_waitlist_to_queue 验证状态重置为 PENDING
+    test_db.update_video_status("wl-exp", "EXPIRED", error_msg="超时归档测试")
+    assert test_db.promote_waitlist_to_queue("wl-exp") is True
+    revived_dal = test_db.get_video_by_youtube_id("wl-exp")
+    assert revived_dal["status"] == "PENDING"
+    assert revived_dal["score"] == 100
+    assert revived_dal["error_msg"] is None
+
+
+def test_slice_level_ignore(test_db, monkeypatch):
+    """测试切片粒度的 ignore_video 操作。"""
+    monkeypatch.setattr(web_app, "db", test_db)
+    client = TestClient(web_app.app)
+
+    # 创建父任务及两个切片
+    test_db.add_video("sliced-parent", "Parent Video", "Channel E", score=80, source="AUTO")
+    parent_row = test_db.get_video_by_youtube_id("sliced-parent")
+    test_db.update_video_status("sliced-parent", "SEGMENTED")
+
+    test_db.add_video("sliced-parent", "Parent Video - Slice 1", "Channel E", score=80, slice_index=1, parent_id=parent_row["id"])
+    test_db.add_video("sliced-parent", "Parent Video - Slice 2", "Channel E", score=80, slice_index=2, parent_id=parent_row["id"])
+
+    # 仅忽略切片 1
+    res = client.post("/api/videos/sliced-parent/ignore?slice_index=1")
+    assert res.status_code == 200
+    assert res.json()["success"] is True
+
+    s1 = test_db.get_video_by_youtube_id("sliced-parent", slice_index=1)
+    assert s1["status"] == "IGNORED"
+
+    s2 = test_db.get_video_by_youtube_id("sliced-parent", slice_index=2)
+    assert s2["status"] == "PENDING"
+
+    parent = test_db.get_video_by_youtube_id("sliced-parent", slice_index=0)
+    assert parent["status"] == "SEGMENTED"
+
+
+def test_cleanup_expired_by_upload_date(test_db):
+    """测试当 created_at 较新但原片发布日期(upload_date)超过 30 天时的时效淘汰（含紧凑与带横杠格式）。"""
+    # 模拟从 YouTube 抓取的旧视频：created_at 是今天，但 upload_date 是 2 个月前
+    test_db.add_video("old-yt-upload", "Old YouTube Upload", "Channel F", score=35, source="AUTO", upload_date="20260101")
+    # 模拟带横杠格式的旧视频
+    test_db.add_video("old-yt-hyphen", "Old YouTube Hyphen", "Channel F", score=40, source="AUTO", upload_date="2026-01-01")
+    # 模拟近期的带横杠视频，不应被淘汰
+    test_db.add_video("recent-yt-hyphen", "Recent YouTube Hyphen", "Channel F", score=50, source="AUTO", upload_date="2026-09-15")
+    assert test_db.get_tab_counts()["waitlist"] == 3
+
+    evicted = test_db.cleanup_expired_waitlist_videos(ttl_days=30)
+    assert evicted == 2
+
+    assert test_db.get_video_by_youtube_id("old-yt-upload")["status"] == "EXPIRED"
+    assert test_db.get_video_by_youtube_id("old-yt-hyphen")["status"] == "EXPIRED"
+    assert test_db.get_video_by_youtube_id("recent-yt-hyphen")["status"] == "PENDING"
+    assert test_db.get_tab_counts()["waitlist"] == 1
+
+

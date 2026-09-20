@@ -308,7 +308,11 @@
         <!-- 默认模式 (Normal View) -->
         <div id="batch-normal-view" style="display:flex; align-items:center; width:100%; gap:10px; flex-wrap:wrap;">
           <button class="btn-batch-del" style="background:var(--accent); border-color:var(--accent); color:#fff; min-height:44px;" onclick="enterEditMode()">🛠 批量管理 (Batch Edit)</button>
-          <button class="btn-retry btn-reset" onclick="cleanExpiredWaitlist()" style="min-height:44px; padding:6px 14px; background:rgba(59,130,246,0.15); border:1px solid rgba(59,130,246,0.4); color:#93c5fd; font-weight:500;" title="将 30 天前抓取的低分素材流转为 EXPIRED 归档状态，移出待筛选列表">📦 一键归档 30 天前过期素材</button>
+          <button class="btn-retry btn-reset" onclick="cleanExpiredWaitlist()" style="min-height:44px; padding:6px 14px; background:rgba(59,130,246,0.15); border:1px solid rgba(59,130,246,0.4); color:#93c5fd; font-weight:500;" title="将 30 天前抓取或发布的低分素材流转为 EXPIRED 归档状态，移出待筛选列表">📦 一键归档 30 天前过期素材</button>
+          <label class="cb-show-expired-label" style="display:inline-flex; align-items:center; gap:6px; cursor:pointer; font-size:0.875rem; color:var(--text2); user-select:none; margin-left:4px;">
+            <input type="checkbox" id="cb-show-expired" onchange="toggleIncludeExpired(this.checked)">
+            <span>显示已归档过期素材</span>
+          </label>
           <button class="btn-clear-all" onclick="clearAllWaitlist()" style="min-height:44px; margin-left:auto;">⚠️ 清空全部待筛选</button>
         </div>
 
@@ -989,6 +993,7 @@
   const filterState = {
     search: '', channel: '', sort: 'source_published_at_desc', size: Number(localStorage.getItem('video_pipeline_page_size')) || 20,
     scoreBand: 'all', errorType: 'all', status: 'all', engagementWindowDays: 3, includeProcessed: false,
+    includeExpired: false,
     createdWindow: 'all',
     funnelStage: null,
   };
@@ -1004,6 +1009,7 @@
       channel: filterState.channel, sort: filterState.sort, score_band: filterState.scoreBand,
       error_type: filterState.errorType, status: filterState.status,
       engagement_window_days: String(filterState.engagementWindowDays), include_processed: String(filterState.includeProcessed),
+      include_expired: String(filterState.includeExpired),
       created_window: filterState.createdWindow || 'all',
     };
     if (filterState.funnelStage) {
@@ -1031,12 +1037,19 @@
     document.getElementById('video-filter-window').value = String(filterState.engagementWindowDays);
     const showProcessed = document.getElementById('cb-show-processed');
     if (showProcessed) showProcessed.checked = filterState.includeProcessed;
+    const showExpired = document.getElementById('cb-show-expired');
+    if (showExpired) showExpired.checked = filterState.includeExpired;
     const score = document.getElementById('filter-score-context');
     const error = document.getElementById('filter-error-context');
     const engagement = document.getElementById('filter-engagement-context');
     score.hidden = false;
     error.hidden = currentTab !== 'error';
     engagement.hidden = currentTab !== 'high_likes';
+  }
+
+  function toggleIncludeExpired(checked) {
+    filterState.includeExpired = Boolean(checked);
+    loadVideos(1);
   }
 
   function updateChannelOptions(channels) {
@@ -1197,6 +1210,7 @@
       filterState.status = overrides.status !== undefined ? overrides.status : 'all';
       filterState.createdWindow = overrides.createdWindow !== undefined ? overrides.createdWindow : 'all';
       filterState.includeProcessed = false;
+      filterState.includeExpired = false;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       const activeBtn = document.getElementById('tab-' + tab);
       if (activeBtn) activeBtn.classList.add('active');
@@ -1444,6 +1458,8 @@
             ? `<button class="btn-stop" onclick="stopVideo('${v.youtube_id}')" title="强行停止任务" style="margin-right: 4px;">🛑 停止</button>
                <button class="btn-retry btn-reset" onclick="retryVideo('${v.youtube_id}')" title="强制重置(断点)">⚡ 强置</button>
                <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="从头开始">🗑 重置</button>` + deleteBtn
+            : (v.status === 'EXPIRED' || v.status === 'IGNORED')
+              ? `<button class="btn-retry btn-reset" onclick="promoteVideo('${v.youtube_id}')" title="精选提权：将此素材复活并加急入队处理(score=100)" style="background:linear-gradient(135deg, #10b981, #059669); margin-right:4px;">⭐ 提权</button>` + deleteBtn
             : (v.status === 'PUBLISHED' || v.status === 'COMPLETED')
               ? `<button class="btn-republish" onclick="republishVideo('${v.youtube_id}')" title="该视频在平台被删后，重新发布一次（复用本地成片，可能产生重复）">🔁 再次发布</button>` + deleteBtn
               : deleteBtn;
@@ -1878,14 +1894,16 @@
     }
   }
 
-  async function ignoreVideo(youtubeId) {
+  async function ignoreVideo(youtubeId, sliceIndex = null) {
     navigator.vibrate(15);
-    if (!confirm('🚫 确定要忽略该任务吗？\n\n标记为已忽略后，任务将移出当前排队队列。')) return;
+    const targetLabel = sliceIndex !== null ? `分集 #${sliceIndex}` : '任务';
+    if (!confirm(`🚫 确定要忽略该${targetLabel}吗？\n\n标记为已忽略后，任务将移出当前排队队列。`)) return;
     try {
-      const r = await fetch(`/api/videos/${youtubeId}/ignore`, { method: 'POST' });
+      const url = sliceIndex !== null ? `/api/videos/${youtubeId}/ignore?slice_index=${sliceIndex}` : `/api/videos/${youtubeId}/ignore`;
+      const r = await fetch(url, { method: 'POST' });
       const d = await r.json();
       if (d.success) {
-        showToast('✅ 任务已标记为已忽略');
+        showToast(`✅ ${targetLabel}已标记为已忽略`);
         loadVideos();
         fetchStats();
       } else {
@@ -2150,7 +2168,7 @@
                <button class="btn-retry" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="扫码后点此重试上传">🔄 重试</button>
                <button class="btn-hard-reset" onclick="hardResetVideo('${s.youtube_id}')" title="硬重置">🗑 重置</button>` + deleteBtn
             : s.status === 'PENDING'
-            ? `<button class="btn-retry btn-reset" onclick="processSliceNow('${s.youtube_id}', ${s.slice_index})" title="立即执行分集">⚡ 执行</button>` + deleteBtn
+            ? `<button class="btn-retry btn-reset" onclick="processSliceNow('${s.youtube_id}', ${s.slice_index})" title="立即执行分集">⚡ 执行</button><button class="btn-mark-undone" onclick="ignoreVideo('${s.youtube_id}', ${s.slice_index})" title="放弃/忽略该分集（标记为已忽略，不再排队）" style="margin-left:4px; margin-right:4px; padding:3px 8px; font-size:0.75rem;">🚫 忽略</button>` + deleteBtn
             : isRetryable
             ? sliceBypassBtn + `<button class="btn-retry" onclick="retrySlice('${s.youtube_id}', ${s.slice_index})" title="重试分集">🔄 重试</button>` + deleteBtn
             : isStuck

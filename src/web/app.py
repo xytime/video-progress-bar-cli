@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 # Modification History
+| 3.42.0 | 2026-09-20 | Antigravity | 新增 waitlist/queue 治理接口 (cleanup-expired, discard-stale, calibrate, ignore)；promote 与 ignore 增加平台生命周期防重保护；GET /api/videos 支持 include_expired 归档回溯 |
 | 3.41.0 | 2026-09-20 | Gemini | GET /api/videos 新增 funnel_stage 参数，支持大盘漏斗各阶段穿透查询与数据严格联动。 |
 | 3.40.0 | 2026-09-20 | Gemini | 全局漏斗与频道漏斗端点新增 24h 与 today_bj 窗口支持；视频分页查询透传 created_window 时间过滤。 |
 | 3.39.0 | 2026-09-20 | Gemini | 新增 GET /api/funnel 全站流转漏斗数据 API，支持 7d/30d/all 三维时间切片。 |
@@ -47,7 +48,6 @@
 | 2.7.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 新增后台队列自动轮询器 _queue_runner_loop 自动执行切片/高分任务 |
 | 2.8.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 使用 python -u 启动子进程以实现 pipeline.log 实时无缓冲日志输出 |
 | 2.9.0 | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 respec_video 端点：停止当前处理、覆盖规格并重新入队；add_video_manual 重复检测补充 video_id/title 返回 |
-| 3.20.0 | 2026-09-20 | Antigravity                         | 新增 waitlist/queue 治理接口 (cleanup-expired, discard-stale, calibrate, ignore)；扩展 promote 端点支持待筛选提权入队；保护状态集增加 HISTORICAL_ARCHIVED |
 | 3.0.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 新增 /api/trending-keywords 端点，整合 HN 热词注入功能到后台 Web UI 热词监控 Tab |
 | 3.1.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix+防卡] _run_pipeline_manager 使用 settings.get_active_proxies() 动态代理注入；_queue_runner_loop 新增 purge_stale_tasks() 自动清理卡死 DOWNLOADING 任务 |
 | 3.2.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 _wechat_keepalive_loop：定期局动 wechat_keepalive.py 子进程刷新 Session，防止闲置掉线 |
@@ -1371,6 +1371,7 @@ def get_videos(
     status: str = "all",
     engagement_window_days: int = 3,
     include_processed: bool = False,
+    include_expired: bool = False,
     created_window: str = "all",
     funnel_stage: Optional[str] = None,
 ):
@@ -1381,6 +1382,7 @@ def get_videos(
         tab, page, size, search=search.strip(), channel=channel.strip(), sort=sort,
         score_band=score_band, error_type=error_type, status=status,
         engagement_window_days=engagement_window_days, include_processed=include_processed,
+        include_expired=include_expired,
         created_window=created_window,
         funnel_stage=funnel_stage,
     )
@@ -2243,15 +2245,20 @@ def promote_video(youtube_id: str):
     - DISCOVERY 来源：原子转换 source 为 MANUAL、score=100 并加评分锁，脱离发现防火墙；
     - 待筛选/普通来源：原子转换 source 为 MANUAL、score=100 并加评分锁，重置为 PENDING 入队。
     提权成功后立即抢占触发完整处理管线（若抢占成功则后台异步处理，否则等待调度器消费）。
+    受平台发布账本守护，已在微信发布的视频拒绝提权。
     """
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
 
+    guard_reason = _wechat_submission_guard_reason(video)
+    if guard_reason:
+        return {"success": False, "error": f"无法提权：{guard_reason}"}
+
     if video.get("source") == "DISCOVERY":
         # 原子转换：DISCOVERY → MANUAL，score=100，并打手动评分锁
         if not db.promote_to_manual(youtube_id, score=100):
-            return {"success": False, "error": "转换失败：该视频可能已被处理或来源已变更"}
+            return {"success": False, "error": "转换失败：该视频可能已被处理、已在发布账本中或来源已变更"}
     else:
         # 待筛选/普通素材提权入队
         if not db.promote_waitlist_to_queue(youtube_id, score=100):
@@ -2275,16 +2282,20 @@ def promote_video(youtube_id: str):
 
 
 @app.post("/api/videos/{youtube_id}/ignore")
-def ignore_video(youtube_id: str):
+def ignore_video(youtube_id: str, slice_index: Optional[int] = None):
     """将指定视频标记为已忽略(IGNORED)，从待处理/待筛选队列中移除。"""
-    video = db.get_video_by_youtube_id(youtube_id)
+    video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index or 0)
     if not video:
         return {"success": False, "error": "视频不存在"}
+
+    guard_reason = _wechat_submission_guard_reason(video)
+    if guard_reason:
+        return {"success": False, "error": f"已在平台发布或归档，禁止忽略：{guard_reason}"}
 
     if video.get("status") in {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}:
         return {"success": False, "error": f"视频处于 {video.get('status')} 处理中，无法直接忽略"}
 
-    success = db.ignore_video(youtube_id, reason="控制台人工放弃/忽略")
+    success = db.ignore_video(youtube_id, slice_index=slice_index, reason="控制台人工放弃/忽略")
     if not success:
         return {"success": False, "error": "忽略操作未生效"}
 
