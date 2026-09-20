@@ -173,3 +173,83 @@ def test_guard_busy_returns_sentinel_without_calling_function(tmp_path: Path):
     finally:
         stop.set()
         process.join(5)
+
+
+class _FakeLocator:
+    def __init__(self, count: int = 0, items: list | None = None, text: str = ""):
+        self._count = count
+        self._items = items or []
+        self._text = text
+
+    def count(self) -> int:
+        if self._items:
+            return len(self._items)
+        return self._count
+
+    def nth(self, idx: int):
+        if idx < len(self._items):
+            return self._items[idx]
+        return _FakeLocator(count=0)
+
+    def filter(self, has=None, has_text: str | None = None):
+        if has_text is not None:
+            filtered = [item for item in self._items if has_text in item._text]
+            return _FakeLocator(items=filtered)
+        return self
+
+
+class _FakePage:
+    def __init__(self, locators: dict[str, _FakeLocator] | None = None, url: str = "https://channels.weixin.qq.com/platform/interaction/comment"):
+        self._locators = locators or {}
+        self.url = url
+
+    def locator(self, selector: str):
+        for k, loc in self._locators.items():
+            if k in selector or selector in k:
+                return loc
+        return _FakeLocator(count=0)
+
+
+def test_resolve_target_card_by_direct_id_attribute():
+    direct_card = _FakeLocator(count=1)
+    page = _FakePage({"data-object-id": direct_card})
+    resolved = BrowserCommenter.resolve_target_card(page, "export/native_id_1")
+    assert resolved.count() == 1
+
+
+def test_resolve_target_card_prefers_captured_post_ids_index_over_duplicate_title():
+    # 模拟后台卡片：2 个卡片拥有相同标题前缀，但原生 ID 分别为 post_1 和 post_2
+    card_0 = _FakeLocator(count=1, text="跟随 BNN Bloomberg 原声 标题前缀 第1集")
+    card_1 = _FakeLocator(count=1, text="跟随 BNN Bloomberg 原声 标题前缀 第2集")
+    feed_wraps = _FakeLocator(items=[card_0, card_1])
+
+    page = _FakePage({".comment-feed-wrap:visible": feed_wraps})
+    captured = ["export/post_1", "export/post_2"]
+
+    # 目标为第二个视频 post_2
+    resolved = BrowserCommenter.resolve_target_card(
+        page,
+        platform_post_id="export/post_2",
+        video_title="跟随 BNN Bloomberg 原声",
+        captured_post_ids=captured,
+    )
+    assert resolved.count() == 1
+    assert resolved == card_1  # 严格依据 post_list 索引定位到 card_1，而不是因标题前缀匹配多张卡片报错
+
+
+def test_resolve_target_card_falls_back_to_title_when_id_not_captured():
+    card_0 = _FakeLocator(count=1, text="其他不相关的标题")
+    card_1 = _FakeLocator(count=1, text="唯一特定标题的视频")
+    feed_wraps = _FakeLocator(items=[card_0, card_1])
+
+    page = _FakePage({".comment-feed-wrap:visible": feed_wraps})
+
+    resolved = BrowserCommenter.resolve_target_card(
+        page,
+        platform_post_id="export/unseen_id",
+        video_title="唯一特定标题的视频",
+        captured_post_ids=["export/other_id"],
+    )
+    assert resolved.count() == 1
+    assert resolved._items[0] == card_1
+

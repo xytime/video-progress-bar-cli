@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.14.0 | 2026-09-20 | Antigravity | 隔离中心发布账本注册异常，防止同步异常触发投稿状态二次回写。 |
 | 1.13.0 | 2026-09-20 | Antigravity | 投稿受理并取得原生 post_id 时向中心账本 wechat_publications 注册发布记录。 |
 | 1.12.0 | 2026-09-18 | Antigravity | 自动投稿窗口改用英语世界专属发布窗口判定 is_english_world_publish_window。 |
 | 1.0.0 | 2026-08-23 | Codex | 新增英语世界学习卡的独立、一次性视频号投稿执行器。 |
@@ -237,15 +238,21 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                 state == "UNDER_REVIEW"
                 and platform_post_id
             ):
-                db.ensure_english_world_wechat_publication(
-                    review_id,
-                    platform_post_id=platform_post_id,
-                    platform_url=platform_url,
-                    evidence_path=str(evidence_dir),
-                    state="SUBMITTED_BOUND",
-                )
+                try:
+                    db.ensure_english_world_wechat_publication(
+                        review_id,
+                        platform_post_id=platform_post_id,
+                        platform_url=platform_url,
+                        evidence_path=str(evidence_dir),
+                        state="SUBMITTED_BOUND",
+                    )
+                except Exception as sync_exc:
+                    logger.warning("English World 投稿中心账本同步失败 (保留审核态): %s", sync_exc)
                 if settings.enable_english_world_douyin_sync:
-                    db.ensure_english_world_douyin_publication(review_id)
+                    try:
+                        db.ensure_english_world_douyin_publication(review_id)
+                    except Exception as douyin_sync_exc:
+                        logger.warning("English World 抖音同步建账失败: %s", douyin_sync_exc)
         except subprocess.TimeoutExpired:
             state = "UNCERTAIN"
             message = "视频号上传超时，无法排除平台已受理；已停止自动重传，需在后台核验。"

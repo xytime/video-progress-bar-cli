@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.7.0 | 2026-09-20 | Antigravity | 提取 resolve_target_card 纯逻辑，支持离线单元测试卡片索引消歧义与降级分支。 |
 | 2.6.0 | 2026-09-20 | Antigravity | 遵循 AGENTS.md 规范优先以 post_list 原生 ID 精准索引绑定卡片，文本片段退为兜底，消除前缀重复卡片歧义。 |
 | 2.5.0 | 2026-09-20 | Antigravity | 视口升级至1920x1080防响应式折叠，增强展开/折叠双模态菜单导航并引入评论路由守门断言。 |
 | 2.4.0 | 2026-09-20 | Antigravity | 接入 post_list API 响应捕获与真实平台 exportId 精准索引卡片绑定，解决后台 DOM 缺少 data-id 属性的定位问题。 |
@@ -297,6 +298,33 @@ class BrowserCommenter:
             finally:
                 browser.close()
 
+    @staticmethod
+    def resolve_target_card(
+        page,
+        platform_post_id: str,
+        video_title: Optional[str] = None,
+        captured_post_ids: Optional[list[str]] = None,
+    ):
+        """解析页面上与目标作品对应的卡片定位器，严格遵循索引消歧义铁律。"""
+        cards = page.locator(
+            f'[data-object-id="{platform_post_id}"]:visible, '
+            f'[data-post-id="{platform_post_id}"]:visible, '
+            f'[data-id="{platform_post_id}"]:visible'
+        )
+        # 真实后台卡片优先使用真实 post_list 接口捕获的原生 ID 索引精准定位（AGENTS.md 铁律）；文本匹配仅作兜底
+        if cards.count() == 0 and captured_post_ids and platform_post_id in captured_post_ids:
+            idx = captured_post_ids.index(platform_post_id)
+            feed_wraps = page.locator(".comment-feed-wrap:visible")
+            if feed_wraps.count() > idx:
+                cards = feed_wraps.nth(idx)
+
+        if cards.count() == 0 and video_title:
+            cards = page.locator(".comment-feed-wrap:visible").filter(
+                has=page.locator(".feed-title")
+            ).filter(has_text=video_title.strip())
+
+        return cards
+
     def _interact_with_page(
         self,
         page,
@@ -335,22 +363,12 @@ class BrowserCommenter:
                     f"未能成功导航至视频号评论管理页面 (当前URL: {page.url})", metadata,
                 )
 
-            cards = page.locator(
-                f'[data-object-id="{platform_post_id}"]:visible, '
-                f'[data-post-id="{platform_post_id}"]:visible, '
-                f'[data-id="{platform_post_id}"]:visible'
+            cards = self.resolve_target_card(
+                page,
+                platform_post_id=platform_post_id,
+                video_title=video_title,
+                captured_post_ids=captured_post_ids,
             )
-            # 真实后台卡片优先使用真实 post_list 接口捕获的原生 ID 索引精准定位（AGENTS.md 铁律）；文本匹配仅作兜底
-            if cards.count() == 0 and captured_post_ids and platform_post_id in captured_post_ids:
-                idx = captured_post_ids.index(platform_post_id)
-                feed_wraps = page.locator(".comment-feed-wrap:visible")
-                if feed_wraps.count() > idx:
-                    cards = feed_wraps.nth(idx)
-
-            if cards.count() == 0 and video_title:
-                cards = page.locator(".comment-feed-wrap:visible").filter(
-                    has=page.locator(".feed-title")
-                ).filter(has_text=video_title.strip())
 
             visible_count = cards.count()
             if visible_count != 1:

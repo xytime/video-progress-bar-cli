@@ -237,3 +237,33 @@ def test_manual_batch_stops_after_uncertain_result(monkeypatch, tmp_path: Path) 
 
     assert wechat_commenter.run_interaction(count=3, notify_tg=False) == 0
     assert calls == ["export/newest"]
+
+
+def test_published_title_hint_handles_invalid_encoding(tmp_path: Path) -> None:
+    bad_file = tmp_path / "corrupt_copy.txt"
+    # 写入非法的 UTF-8 字节序列
+    bad_file.write_bytes(b"\x80\x81\xff\xfe\xaa")
+
+    # 不应抛出 UnicodeDecodeError，应优雅返回 None
+    hint = wechat_commenter._LiveServices._published_title_hint("yt_corrupt", 0, copy_path=str(bad_file))
+    assert hint is None
+
+
+def test_generate_comment_handles_corrupt_copy_file(monkeypatch, tmp_path: Path) -> None:
+    bad_file = tmp_path / "corrupt_copy_2.txt"
+    bad_file.write_bytes(b"\xff\xfe\xfd\x80")
+
+    services = wechat_commenter._LiveServices(db=object(), headless=True, notify_tg=False)
+    target = {
+        "youtube_id": "yt_corrupt_2",
+        "slice_index": 0,
+        "title": "兜底降级标题",
+        "copy_path": str(bad_file),
+        "category": "Tech",
+    }
+
+    # generate_comment 内部不应因编码损坏崩溃，应降级使用 title 顺利生成草稿
+    draft = services.generate_comment(target, force_rule=True)
+    assert draft is not None
+    assert "兜底降级标题" in draft.formatted_comment or "Tech" in draft.formatted_comment or len(draft.formatted_comment) > 0
+

@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.5.0 | 2026-09-20 | Antigravity | 增加文案文件读取 UnicodeDecodeError 与非 UTF-8 异常捕获，平稳降级使用标题。 |
 | 2.4.0 | 2026-09-20 | Antigravity | 支持目标 target 显式提供 copy_path 生成文案与定位提示，兼容 English World 作品。 |
 | 2.3.0 | 2026-09-20 | Antigravity | 放宽人工批量上限至 10 条，支持最新作品批量互动与自动收敛。 |
 | 2.2.0 | 2026-09-20 | Codex | 支持仅在未持久化提交意图时审计式替换失败草稿，并从已发布文案生成唯一卡片定位提示。 |
@@ -66,7 +67,7 @@ class _LiveServices:
             return None
         try:
             text = " ".join(target_path.read_text(encoding="utf-8").split())
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
             logger.warning("读取已发布文案定位提示失败: %s", exc)
             return None
         return text[:96] or None
@@ -81,7 +82,13 @@ class _LiveServices:
             prefix = f"{yid}_s{slice_index}" if slice_index else yid
             copy_path = PROJECT_ROOT / "output" / f"{prefix}_copy.txt"
         title = str(target.get("zh_title") or target.get("title") or "精选视频")
-        description = copy_path.read_text(encoding="utf-8") if copy_path.is_file() else title
+        description = title
+        if copy_path.is_file():
+            try:
+                description = copy_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                logger.warning("读取文案文件失败，降级使用标题: %s", exc)
+                description = title
         self.last_draft = self.generator.generate_comment(
             title=title,
             description=description,

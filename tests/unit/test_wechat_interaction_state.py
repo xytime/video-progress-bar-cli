@@ -485,3 +485,86 @@ def test_zombie_retry_tasks_expire_and_prevent_queue_starvation(tmp_path: Path) 
     assert record["status"] == "FAILED"
     assert "超期" in str(record["error_message"])
 
+
+@pytest.mark.parametrize("offset_hours,offset_minutes,should_claim", [
+    (-71, -50, True),   # 71小时50分前发布：未满 72 小时，应当正常领取
+    (-72, -10, False),  # 72小时10分前发布：已超过 72 小时，应当自动淘汰为 FAILED
+])
+def test_interaction_ttl_boundary_analysis(
+    tmp_path: Path, offset_hours: int, offset_minutes: int, should_claim: bool
+) -> None:
+    db_path = tmp_path / f"ttl_{abs(offset_hours)}_{abs(offset_minutes)}.db"
+    db = PipelineDB(db_path=str(db_path))
+    target = _published_target(db, tmp_path, f"b_{abs(offset_hours)}")
+    post_id = target["platform_post_id"]
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE wechat_publications SET created_at = datetime('now', ? || ' hours', ? || ' minutes') WHERE id = ?",
+            (str(offset_hours), str(offset_minutes), target["id"]),
+        )
+        conn.commit()
+
+    db.queue_wechat_interaction(
+        publication_id=int(target["id"]),
+        platform_post_id=post_id,
+        interaction_type="POLL_STAND",
+        provider="rule",
+        comment_text="边界测试",
+    )
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE wechat_interactions SET status = 'RETRY_WAIT', next_attempt_at = datetime('now', '-1 minute') WHERE platform_post_id = ?",
+            (post_id,),
+        )
+        conn.commit()
+
+    claimed = db.claim_due_wechat_interaction(platform_post_id=post_id)
+    if should_claim:
+        assert claimed is not None
+        assert claimed["platform_post_id"] == post_id
+        assert claimed["status"] == "CLAIMED"
+    else:
+        assert claimed is None
+        record = db.get_wechat_interaction_by_post_id(post_id)
+        assert record is not None
+        assert record["status"] == "FAILED"
+        assert "超期" in str(record["error_message"])
+
+
+def test_ensure_english_world_wechat_publication_preserves_published_monotonicity(tmp_path: Path) -> None:
+    db_path = tmp_path / "monotonic.db"
+    db = PipelineDB(db_path=str(db_path))
+    
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """INSERT INTO english_world_review_items (
+                   id, state, artifact_sha256, title, mp4_path, manifest_path,
+                   title_path, copy_path, cover_path, cover_provenance_path,
+                   source_youtube_id, source_title
+               ) VALUES (?, 'UNDER_REVIEW', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                "rev_monotonic", "a" * 64, "单调性测试视频",
+                str(tmp_path / "v.mp4"), str(tmp_path / "m.json"),
+                str(tmp_path / "t.txt"), str(tmp_path / "c.txt"),
+                str(tmp_path / "cov.jpg"), str(tmp_path / "p.json"),
+                "yid_mono", "Source Title",
+            ),
+        )
+        conn.commit()
+
+    post_id = "export/mono_post"
+    pub = db.ensure_english_world_wechat_publication("rev_monotonic", platform_post_id=post_id, state="SUBMITTED_BOUND")
+    assert pub["state"] == "SUBMITTED_BOUND"
+
+    # 模拟外部回查或人工将发布状态置为 PUBLISHED
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE wechat_publications SET state = 'PUBLISHED' WHERE id = ?", (pub["id"],))
+        conn.commit()
+
+    # 再次重入调用 ensure_english_world_wechat_publication，入参为 SUBMITTED_BOUND
+    reentered = db.ensure_english_world_wechat_publication("rev_monotonic", platform_post_id=post_id, state="SUBMITTED_BOUND")
+    # 状态必须保持 PUBLISHED，绝不可倒退为 SUBMITTED_BOUND
+    assert reentered["state"] == "PUBLISHED"
+
+

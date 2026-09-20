@@ -100,3 +100,94 @@ def test_submission_identity_requires_same_session_unique_native_id_delta(tmp_pa
         "matched_by": "title_guess", "platform_post_id": "export/wrong",
     }), encoding="utf-8")
     assert submitter._read_submission_identity(tmp_path) == (None, None)
+
+
+def test_submission_registers_wechat_publication_on_under_review(monkeypatch, tmp_path):
+    recorded_calls = []
+
+    class FakeDB:
+        def get_english_world_review_item(self, review_id):
+            return {
+                "id": review_id,
+                "approval_source": "TELEGRAM_REVIEW",
+                "state": "SUBMISSION_APPROVED",
+                "mp4_path": str(tmp_path / "study.mp4"),
+            }
+
+        def claim_english_world_submission(self, review_id, **_kwargs):
+            return {
+                "id": review_id,
+                "_attempt_id": "att_1",
+                "mp4_path": str(tmp_path / "study.mp4"),
+            }
+
+        def complete_english_world_submission(self, *args, **kwargs):
+            recorded_calls.append(("complete", kwargs))
+
+        def ensure_english_world_wechat_publication(self, review_id, **kwargs):
+            recorded_calls.append(("ensure_pub", review_id, kwargs))
+
+    monkeypatch.setattr(submitter, "PipelineDB", FakeDB)
+    monkeypatch.setattr(submitter, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(submitter, "_manual_authorization_active", lambda _p: True)
+    monkeypatch.setattr(submitter, "_require_publish_package", lambda _p: None)
+    monkeypatch.setattr(submitter, "_english_world_uploader_command", lambda _i, _e: ["true"])
+    monkeypatch.setattr(submitter, "_original_declaration_receipt_is_confirmed", lambda _d: True)
+    monkeypatch.setattr(
+        submitter, "_read_submission_identity", lambda _d: ("export/native_123", "https://channels.weixin.qq.com")
+    )
+    monkeypatch.setattr(submitter.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stderr": ""})())
+    monkeypatch.setattr(submitter.fcntl, "flock", lambda *_args: None)
+
+    exit_code = submitter.submit("rev_contract_1")
+    assert exit_code == 0
+
+    ensure_pub_calls = [c for c in recorded_calls if c[0] == "ensure_pub"]
+    assert len(ensure_pub_calls) == 1
+    assert ensure_pub_calls[0][1] == "rev_contract_1"
+    assert ensure_pub_calls[0][2]["platform_post_id"] == "export/native_123"
+    assert ensure_pub_calls[0][2]["state"] == "SUBMITTED_BOUND"
+
+
+def test_submission_wechat_publication_error_does_not_corrupt_submission_attempt(monkeypatch, tmp_path):
+    recorded_calls = []
+
+    class FakeDB:
+        def get_english_world_review_item(self, review_id):
+            return {
+                "id": review_id,
+                "approval_source": "TELEGRAM_REVIEW",
+                "state": "SUBMISSION_APPROVED",
+                "mp4_path": str(tmp_path / "study.mp4"),
+            }
+
+        def claim_english_world_submission(self, review_id, **_kwargs):
+            return {
+                "id": review_id,
+                "_attempt_id": "att_2",
+                "mp4_path": str(tmp_path / "study.mp4"),
+            }
+
+        def complete_english_world_submission(self, *args, **kwargs):
+            recorded_calls.append(("complete", kwargs["state"]))
+
+        def ensure_english_world_wechat_publication(self, _review_id, **_kwargs):
+            raise RuntimeError("Database locked during publication registration")
+
+    monkeypatch.setattr(submitter, "PipelineDB", FakeDB)
+    monkeypatch.setattr(submitter, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(submitter, "_manual_authorization_active", lambda _p: True)
+    monkeypatch.setattr(submitter, "_require_publish_package", lambda _p: None)
+    monkeypatch.setattr(submitter, "_english_world_uploader_command", lambda _i, _e: ["true"])
+    monkeypatch.setattr(submitter, "_original_declaration_receipt_is_confirmed", lambda _d: True)
+    monkeypatch.setattr(
+        submitter, "_read_submission_identity", lambda _d: ("export/native_456", "https://channels.weixin.qq.com")
+    )
+    monkeypatch.setattr(submitter.subprocess, "run", lambda *args, **kwargs: type("Result", (), {"returncode": 0, "stderr": ""})())
+    monkeypatch.setattr(submitter.fcntl, "flock", lambda *_args: None)
+
+    exit_code = submitter.submit("rev_contract_2")
+    assert exit_code == 0
+    # complete_english_world_submission 只允许调用一次且状态必须为 UNDER_REVIEW，绝不可再调用 FAILED
+    assert recorded_calls == [("complete", "UNDER_REVIEW")]
+

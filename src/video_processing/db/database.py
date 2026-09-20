@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.72.0 | 2026-09-20 | Antigravity | ensure_english_world_wechat_publication 加入状态单调性保护，防止重入将 PUBLISHED 刷回 SUBMITTED_BOUND。 |
 | 3.71.0 | 2026-09-20 | Antigravity | publication_subjects 支持 ENGLISH_WORLD，打通发布账本与评论区互动发现，并增加候选 72 小时调度截断与防饥饿清理。 |
 | 3.70.0 | 2026-09-20 | Antigravity | 新增 bind_wechat_publication_platform_post_id DAL 方法，用于对齐平台真实 exportId。 |
 | 3.69.0 | 2026-09-20 | Codex | 记录未提交互动草稿的受控修订，并只允许无提交意图的预提交失败任务更新文案。 |
@@ -6879,7 +6880,7 @@ class PipelineDB:
                    )
                    ON CONFLICT(subject_id) DO UPDATE SET
                        platform_post_id = excluded.platform_post_id,
-                       state = excluded.state,
+                       state = CASE WHEN wechat_publications.state = 'PUBLISHED' THEN 'PUBLISHED' ELSE excluded.state END,
                        evidence_path = COALESCE(excluded.evidence_path, wechat_publications.evidence_path),
                        platform_url = COALESCE(excluded.platform_url, wechat_publications.platform_url),
                        updated_at = CURRENT_TIMESTAMP
