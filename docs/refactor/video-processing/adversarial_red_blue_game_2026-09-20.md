@@ -4,8 +4,8 @@ project: Video-precessing (YouTube → 微信视频号/多平台流水线)
 date: 2026-09-20
 author: Gemini_3.8_Flash_planning
 companion: shadow_development_blueprint.md, VP-POLARIS-WORK-ORDER.md
-status: 评审与基准终审签署稿 (FINAL ARCHITECT REVIEW - REVISED V2.2)
-version: 2.2.0
+status: 评审与基准终审签署稿 (FINAL ARCHITECT REVIEW - REVISED V2.3)
+version: 2.3.0
 ---
 
 # VP-POLARIS「北辰」架构重构红蓝对抗博弈推演与设计加固报告
@@ -265,7 +265,7 @@ version: 2.2.0
 ### 🔵 蓝·防守（硬化防御）
 1. **实操命令 100% 同步更新与反向恢复闭环**：
    - 蓝图 6.1 节实操命令全量更新：第一步第一小步实装 crontab 备份、`sed -E ... # QUIESCE_DISABLED` 物理静音及活跃清空 grep 核验；
-   - 第五小步实装 `canonical_wechat_session_lock_path` 真实派生锁探测；
+   - 第五小步实装基于调度器与上传入口约定路径 `output/wechat_state.json` 的 `canonical_wechat_session_lock_path` 真实派生锁探测（彻底根除不存在配置字段的引用），并在 `POLARIS-101` 明确持锁反例测试执行完整探测入口；
    - 第五步实装反向恢复 crontab 调度命令（`sed -E 's/^# QUIESCE_DISABLED (.*)$/\1/'`）与核验，彻底消除文档与实操的矛盾。
 2. **外键兼容顺序：先 Attempt 后活跃租约 (FK-Compatible Atomic Order)**：
    - 在单个 `BEGIN IMMEDIATE` 写入事务内：

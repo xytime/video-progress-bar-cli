@@ -18,6 +18,7 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
 
 | 版本 | 日期 | 作者 | 说明 |
 | :--- | :---: | :---: | :--- |
+| 2.3.0 | 2026-09-20 | Antigravity | M6.2+ 第六轮架构终审 1 项 P2 闭环：修正真实锁探测命令中引用不存在的 settings.wechat_state_path 缺陷；对齐实际调度器（pipeline_manager.py:996, 4234）与上传入口默认约定路径 output/wechat_state.json，严格派生 output/.wechat_state.json.browser.lock；并在 POLARIS-101 明确持锁/释放单测执行剧本中的完整探测入口，杜绝静默配置遗漏 |
 | 2.2.0 | 2026-09-20 | Antigravity | M6.2+ 第五轮架构终审 3 项 P1 缺口深度闭环：① 回滚剧本彻底消除文档间矛盾，实操命令全量更新为宿主 crontab 物理静音（# QUIESCE_DISABLED）、真实锁探测（canonical_wechat_session_lock_path）与反向恢复步骤；② 纠正领取事务外键顺序为 BEGIN IMMEDIATE -> 4 表联合阻断 -> 先 Attempt 后活跃租约 -> COMMIT，杜绝外键与主键冲突；③ 领取条件补齐历史 Attempt 联合阻断，增设历史 Attempt 独占拒绝与外键回滚无残留单测 |
 | 2.1.0 | 2026-09-20 | Antigravity | M6.2+ 第四轮架构终审 3 项 P1 缺口终极闭环：① 纠正会话锁核验路径：调用 canonical_wechat_session_lock_path 解析真实锁文件 output/.wechat_state.json.browser.lock，并在 POLARIS-101 增加持锁反例测试；② 确立租约方案 A 完整契约：废弃方案 B，补齐 Attempt 表 CHECK 扩展迁移与 wechat_submission_active_claims 独立表创建、同事务 CAS 领取与按 active_attempt_id 条件释放；③ 升级启动源宿主级停用：引入 crontab 物理静音（# QUIESCE_DISABLED 注释与核验），彻底摆脱对可能被 revert 业务代码的依赖，静音窗口覆盖全回滚与沙箱测试 |
 | 2.0.0 | 2026-09-20 | Antigravity | M6.2+ 架构终审 4 项缺陷闭环与基线漂移归属：① 彻底封堵 UNCERTAIN 领取 SQL 穿透漏洞（Attempt 与 Publication 联合阻断，补齐禁止重领单测）；② 消除历史数据唯一索引冲突风险（提出独立原子租约表 A 方案与同表去重归档 B 方案，避免 IntegrityError 崩溃）；③ 升级全系统受控停写与零消费物理核验（引入 pipeline_freeze.lock 封闭启动源、PGID 整树清理、Chromium 孤儿清理与会话锁释放验证）；④ 根除 WAL 备份覆写隐患（微秒时间戳+UUID 熵、拒绝覆盖、完整性校验与恢复点登记）；⑤ 明确 Git HEAD e897eb2 基线与 9b0eb71 业务提交归属，严格分离【协议已落盘】/【实现待完成】/【测试已验证】 |
@@ -200,7 +201,7 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
      - **独立活跃租约生命周期与条件释放测试 (`test_active_claims_lease_lifecycle`)**：在沙箱内断言 `wechat_submission_active_claims` 与 `wechat_submission_attempts` 在单事务内的原子创建；断言并发冲突时第二个领取被拒绝；断言携带匹配的 `active_attempt_id` 时可正常释放或更新状态，携带不匹配 ID 时无法篡改或删除他人租约；
      - **历史 Attempt 存在时的独立阻断测试 (`test_claim_attempt_rejected_when_only_historical_attempt_exists`)**：断言当某视频仅存在历史 `wechat_submission_attempts`（状态为 `SUBMITTED_UNBOUND` / `PLATFORM_ID_BOUND` / `UNCERTAIN`），且租约表 `wechat_submission_active_claims` 与 Publication 账本尚无记录时，调用原子领取接口**必须坚决被拒绝**（抛出或返回已发布/未决错误），绝不重复领取与重复发帖；
      - **外键兼容与领取失败原子回滚无残留测试 (`test_claim_attempt_rollback_leaves_no_residual_on_failure`)**：断言在 `BEGIN IMMEDIATE` 事务中，若步骤 3（插入租约表）遭遇主键冲突或外部异常失败，整个事务干净回滚，步骤 2 先行写入的 Attempt 审计行**必须完全回滚，数据库无任何残留孤儿数据**；
-     - **微信真实会话锁规范化探测与持锁反例测试 (`test_wechat_session_lock_probe_detects_real_hold_and_release`)**：调用 `canonical_wechat_session_lock_path("output/wechat_state.json")` 解析出真实锁文件（`.wechat_state.json.browser.lock`）；断言当后台线程通过 `WeChatSessionLock` 持有该真实锁时，探测脚本**必须捕获 `BlockingIOError` 并判定为锁忙失败（非零退出码反例）**；持锁线程释放后，探测脚本必须成功断言为 FREE（返回码 0）。
+     - **微信真实会话锁规范化探测与持锁反例测试 (`test_wechat_session_lock_probe_detects_real_hold_and_release`)**：测试必须执行**回滚剧本中的完整探测入口逻辑**（对齐调度器 `pipeline_manager.py:996` 与上传入口 `wechat_uploader.py:1230` 默认传入的 `output/wechat_state.json` 调用 `canonical_wechat_session_lock_path` 派生出的真实锁文件 `.wechat_state.json.browser.lock`）；断言当后台线程通过 `WeChatSessionLock` 持有该真实锁时，完整探测入口**必须捕获 `BlockingIOError` 并判定为锁忙失败（非零退出码反例，拒绝误报 FREE）**；持锁线程释放后，完整探测入口必须成功断言为 FREE（返回码 0），杜绝仅测试路径派生函数而遗漏运行时配置错误。
 - **验收护栏 (Guardrails)**：
   - [ ] **严禁修改任何生产代码**。
   - [ ] 漏洞用例红灯证据归档，正常基线用例全绿通过。
@@ -423,24 +424,26 @@ title: VP-POLARIS「北辰」架构重构与影子开发多角色工程实施指
    - **第五小步（会话排他锁与物理资源释放核验）**：
      通过 Python 脚本调用 `canonical_wechat_session_lock_path` 对实际派生的锁文件 `output/.wechat_state.json.browser.lock` 进行非阻塞 flock 探测，确保真实文件锁已被物理操作系统释放：
      ```bash
-     PYTHONPATH=src .venv/bin/python -c "
-     import fcntl
-     from pathlib import Path
-     from video_processing.core.wechat_session_lock import canonical_wechat_session_lock_path
-     from config.settings import settings
+      PYTHONPATH=src .venv/bin/python -c "
+      import fcntl, sys
+      from pathlib import Path
+      from video_processing.core.wechat_session_lock import canonical_wechat_session_lock_path
 
-     lock_path = canonical_wechat_session_lock_path(settings.wechat_state_path)
-     print(f'正在探测真实会话锁: {lock_path}')
-     lock_path.parent.mkdir(parents=True, exist_ok=True)
-     try:
-         with open(lock_path, 'a') as f:
-             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-             fcntl.flock(f, fcntl.LOCK_UN)
-         print('✓ 微信真实会话锁已安全释放 (Lock is FREE)')
-     except BlockingIOError:
-         print('✗ 严重警告：微信真实会话锁仍被占用！')
-         exit(1)
-     "
+      # 真实上传入口 (pipeline_manager.py:996, 4234 与 wechat_uploader.py:1230) 默认约定路径
+      state_path = Path('output/wechat_state.json')
+      lock_path = canonical_wechat_session_lock_path(state_path)
+      print(f'正在探测真实会话锁: {lock_path}')
+      lock_path.parent.mkdir(parents=True, exist_ok=True)
+      try:
+          with open(lock_path, 'a') as f:
+              fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+              fcntl.flock(f, fcntl.LOCK_UN)
+          print('✓ 微信真实会话锁已安全释放 (Lock is FREE)')
+          sys.exit(0)
+      except (BlockingIOError, IOError):
+          print('✗ 严重警告：微信真实会话锁仍被占用！')
+          sys.exit(1)
+      "
      ```
    - **第六小步（在途中断任务安全收敛）**：
      对被强行终止且状态停留在 `IN_PROGRESS` 的在途 Attempt，运行收敛脚本将其置为 `UNCERTAIN`，保留现场日志与取证路径，严禁直接丢弃或自动重置为待发布；

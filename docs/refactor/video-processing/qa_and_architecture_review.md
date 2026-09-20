@@ -4,8 +4,8 @@ project: Video-precessing (YouTube → 微信视频号/多平台流水线)
 date: 2026-09-20
 author: Gemini_3.8_Flash_planning
 companion: shadow_development_blueprint.md, adversarial_red_blue_game_2026-09-20.md, VP-POLARIS-WORK-ORDER.md
-status: 架构师审议终审修订归档 (FOR ARCHITECT REVIEW - REVISED V2.2)
-version: 2.2.0
+status: 架构师审议终审修订归档 (FOR ARCHITECT REVIEW - REVISED V2.3)
+version: 2.3.0
 ---
 
 # VP-POLARIS「北辰」架构重构与治理深度问答档案 (Q&A Review Compendium)
@@ -26,7 +26,7 @@ version: 2.2.0
 9. [Q9: 再次红蓝博弈（5 场极限对抗）推导出了哪些必须落地的硬化加固措施？](#q9)
 10. [Q10: 为什么明明做了“有限止损”，`PipelineDB` 依然在过去 48 小时从 9.7k 暴涨至 10.6k？如何从物理机制上彻底终结反复？](#q10)
 11. [Q11: 架构复审第三轮意见指出的 4 项具体技术缺陷（UNCERTAIN 穿透、历史数据索引冲突、零消费核验盲区、备份覆写）是如何彻底闭环的？基线漂移事实如何澄清？](#q11)
-12. [Q12: 第五轮架构终审 3 项 P1 缺口（回滚剧本实操一致性、外键兼容领取顺序、历史 Attempt 联合阻断）是如何彻底闭环的？](#q12)
+12. [Q12: 第五/六轮架构终审缺口（回滚实操一致性、外键兼容顺序、历史 Attempt 阻断、真实锁探测配置脱节）是如何彻底闭环的？](#q12)
 
 ---
 
@@ -271,9 +271,15 @@ version: 2.2.0
      - 活跃核验：`crontab -l | grep -v '^[[:space:]]*#' | grep 'Video-precessing'` 断言必须输出为空；
      - 创建本地 `touch output/pipeline_freeze.lock` 作为进程内双重防御；
   2) **第一步第五小步实操命令全面更新**：
-     调用 `canonical_wechat_session_lock_path(settings.wechat_state_path)` 规范解析出真实锁文件 `output/.wechat_state.json.browser.lock` 并进行非阻塞 flock 探测，持锁时严格判定为非零失败；
+     对齐实际调度器（`pipeline_manager.py:996, 4234`）与上传入口（`wechat_uploader.py:1230`）约定路径 `output/wechat_state.json`，调用 `canonical_wechat_session_lock_path("output/wechat_state.json")` 规范解析出真实锁文件 `output/.wechat_state.json.browser.lock` 并进行非阻塞 flock 探测，持锁时严格判定为非零失败；彻底根除引用不存在配置字段 `settings.wechat_state_path` 的缺陷；
   3) **第五步恢复步骤全面补齐**：
      执行反向 sed 恢复 crontab（`crontab -l | sed -E 's/^# QUIESCE_DISABLED (.*)$/\1/' | crontab -`），核验恢复生效，随后安全移除 `pipeline_freeze.lock`，彻底消除文档间冲突。
+
+#### 4. [P2] 真实锁探测根除不存在的配置字段引用，对齐实际上传入口约定并执行完整入口测试
+- **缺陷本质**：蓝图第 432 行此前写为 `lock_path = canonical_wechat_session_lock_path(settings.wechat_state_path)`。但当前 `Settings` 未定义 `wechat_state_path`，执行时会直接抛出 `AttributeError` 导致探测脚本在进入 `flock` 之前崩溃。当前调度器实际传入的是输出目录下的 `wechat_state.json`（`pipeline_manager.py:996, 4234`），`wechat_uploader.py:1230` 的默认参数也是 `"output/wechat_state.json"`。
+- **闭环方案**：
+  1) **消除不存在的字段引用**：探测脚本直接使用生产约定的 `state_path = Path("output/wechat_state.json")`，调用 `canonical_wechat_session_lock_path(state_path)` 规范派生真实锁文件 `output/.wechat_state.json.browser.lock`；
+  2) **单测执行完整探测入口**：在 `POLARIS-101` 单测中，要求持锁/释放测试必须执行剧本中的完整探测入口逻辑（而不仅是底层路径派生函数），断言真实持锁时非零失败、释放后返回 0，确保脚本与配置 100% 具备可执行性。
 
 #### 2. [P1] 解决外键约束冲突，确立外键兼容的原子领取事务顺序
 - **缺陷本质**：`wechat_submission_active_claims.active_attempt_id` 外键严格引用 `wechat_submission_attempts.attempt_id`。SQLite 连接默认开启外键检查（`PRAGMA foreign_keys = ON;`）且未声明延迟检查。若按原伪代码先向租约表插入引用尚不存在的 `active_attempt_id`，即使在同一事务内也会立即抛出 `sqlite3.IntegrityError: FOREIGN KEY constraint failed` 崩溃！

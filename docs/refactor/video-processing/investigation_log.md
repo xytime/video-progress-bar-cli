@@ -2,7 +2,7 @@
 created_by: Gemini_3.8_Flash_planning
 created_at: 2026-09-12
 last_updated_at: 2026-09-20
-version: 2.2.0
+version: 2.3.0
 ---
 
 # Video-precessing 架构调查与治理日志 (Investigation & Governance Log)
@@ -10,6 +10,7 @@ version: 2.2.0
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.3.0 | 2026-09-20 | Antigravity | M6.2+ 第六轮架构终审 1 项 P2 闭环：修正真实锁探测命令中引用不存在的 settings.wechat_state_path 缺陷；对齐实际调度器（pipeline_manager.py:996, 4234）与上传入口默认约定路径 output/wechat_state.json，严格派生 output/.wechat_state.json.browser.lock；并在 POLARIS-101 明确持锁/释放单测执行剧本中的完整探测入口，杜绝静默配置遗漏 |
 | 2.2.0 | 2026-09-20 | Antigravity | M6.2+ 第五轮架构终审 3 项 P1 缺口深度闭环：① 消除文档间矛盾，全面更新 Section 6.1 实操回滚命令与恢复步骤（实装 crontab 宿主物理静音 # QUIESCE_DISABLED、真实锁探测 canonical_wechat_session_lock_path 与反向恢复调度）；② 确立外键兼容的原子领取事务顺序（BEGIN IMMEDIATE 内严格执行：4 表联合前置阻断检查 → 先插入 Attempt 满足 active_attempt_id 外键 → 随后插入活跃租约实现主键互斥 → COMMIT，任一步失败全量回滚零残留）；③ 恢复历史 Attempt 联合阻断（检查租约表、Publication 表与历史 Attempt 表，杜绝存量独立 Attempt 重复发帖入口，并增设单测验证） |
 | 2.1.0 | 2026-09-20 | Antigravity | M6.2+ 第四轮架构终审 3 项 P1 缺口深度闭环：① 规范会话锁路径探测（canonical_wechat_session_lock_path 探测 output/.wechat_state.json.browser.lock）并在 POLARIS-101 增设真实持锁反例测试；② 确立租约方案 A 完整契约（废除方案 B，补齐 Attempt 表 CHECK 扩展迁移与 active claims 独立表创建、同事务 CAS 领取与按 active_attempt_id 条件精确释放）；③ 升级启动源封闭为宿主级 crontab 物理静音（# QUIESCE_DISABLED 前缀与活跃项清空核验），静音覆盖全回滚与沙箱测试窗口 |
 | 2.0.0 | 2026-09-20 | Antigravity | M6.2+ 架构终审 4 项缺陷闭环与基线漂移归属：① 彻底封堵 UNCERTAIN 状态 CAS 领取穿透漏洞（多表联合阻断，单测物理验证拒绝重发）；② 消除历史数据唯一索引冲突风险（独立原子租约表 A 方案与去重归档 B 方案）；③ 升级全系统受控停写与零消费物理核验（pipeline_freeze.lock 封闭启动源、PGID 整树清理、Chromium 孤儿清理与会话锁释放验证）；④ 根除 WAL 备份覆写隐患（微秒时间戳+UUID 熵、拒绝覆盖、完整性校验与恢复点登记）；⑤ 明确 Git HEAD e897eb2 基线与 9b0eb71 业务提交归属，严格分离【协议已落盘】/【实现待完成】/【测试已验证】 |
@@ -667,7 +668,33 @@ version: 2.2.0
   ```json
   {"source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing", "snapshot": "/private/tmp/video-pytest-g1up18i_/sandbox/repo", "probe": {"exit_code": 0, "seconds": 0.073}, "pytest_arguments": ["-q", "tests/unit/test_characterization_baseline.py", "tests/unit/test_golden_replay_dataset.py"], "timeout_seconds": 600, "source_manifest_sha256": "a8dddeaf4772db26d063e78a8471fdd2dbabf50623aa8f6b04b1131f89c50c6e", "profile_sha256": "4653f92b35363dc06c92036df76428ea6017084d9903a862a77c1e2f7bfe2cec", "browser_runtime": null, "browser_runtime_sha256": null, "media_runtime": null, "media_runtime_sha256": null, "pytest": {"exit_code": 0, "seconds": 2.828}, "finished_at": "2026-09-20T11:43:26.431298+00:00"}
   ```
-- **Sign-off Readiness**: 第五轮架构终审指出的 3 项 P1 技术缺口已 100% 物理闭环，所有文档已落盘，沙箱测试 15 用例全绿（2.83s），等待系统架构师签署与口令 `继续北辰重构`。
+- **Sign-off Readiness**: 第五轮架构终审指出的 3 项 P1 技术缺口已 100% 物理闭环，所有文档已落盘，沙箱测试 15 用例全绿（2.83s）。
+
+---
+
+## 2026-09-20: M6.2+ 第六轮架构终审 1 项 P2 缺陷深度闭环 (Round 6 Architecture Review Final Closure)
+
+### Update 2026-09-20 · Phase M6.2+ (Round 6 Architecture Review Closure)
+- **Author**: Antigravity
+- **Trigger**: Codex / 系统架构师第六轮复审结论「上一轮的事务顺序和历史 Attempt 阻断已闭合；仍有 1 项 P2，暂不签署“全部闭环”的放行意见。修正这处探测入口后再复核即可，无需再扩展架构方案」。
+- **What changed & Physical Evidence**:
+  1. **[P2] 真实锁探测根除不存在的配置字段引用，对齐实际上传入口约定并执行完整入口测试**：
+     - *根因确证*：蓝图 Section 6.1 第五小步命令行 L432 此前使用了 `canonical_wechat_session_lock_path(settings.wechat_state_path)`。但源码 `src/config/settings.py` 内部并未定义 `wechat_state_path` 字段。运维在回滚执行到该步骤时，Python 解释器在进入 `fcntl.flock` 之前会立即抛出 `AttributeError: 'Settings' object has no attribute 'wechat_state_path'` 异常而退出，导致回滚所要求的锁释放核验无法执行；
+     - *物理真相源对齐*：调度器 `pipeline_manager.py:996`（reconcile）、`pipeline_manager.py:4234`（正式上传发布）以及底层脚本 `scripts/wechat_uploader.py:1230`、`scripts/wechat_keepalive.py:120` 统一使用的状态文件路径约定均为 `output/wechat_state.json`；
+     - *闭环方案*：
+       ① 彻底移除 `settings.wechat_state_path`，探测脚本直接以实际约定 `state_path = Path("output/wechat_state.json")` 调用 `canonical_wechat_session_lock_path` 派生出真实锁文件 `output/.wechat_state.json.browser.lock` 并进行非阻塞 `flock` 探测；
+       ② 在 `POLARIS-101` 单测验收规范与 `work_orders.md` 中，明确要求 `test_wechat_session_lock_probe_detects_real_hold_and_release` 单测必须直接执行剧本中的完整探测入口逻辑（而不仅是底层路径函数），断言后台真实持锁时非零失败、释放后返回 0，杜绝配置与入口脱节；
+  2. **工作区状态与基线澄清**：
+     - 当前工作区 `git status` 确认处于完全 clean 状态（无未提交的脏改动）；
+     - 生产业务代码（`src/`、`scripts/`）严格保持 100% 只读冻结（零修改）；
+     - 明确本次测试收据范围为既有基线与黄金回放（15 项通过），严谨遵循三层状态分离，绝不虚称新特性已通过。
+- **Production Code Status**: 生产业务代码严格保持零修改（Zero runtime code changes, 0 line diff in `src/` & `scripts/`）。
+- **Isolated Test Receipt**:
+  ```json
+  {"source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing", "snapshot": "/private/tmp/video-pytest-klrkt8u7/sandbox/repo", "probe": {"exit_code": 0, "seconds": 0.073}, "pytest_arguments": ["-q", "tests/unit/test_characterization_baseline.py", "tests/unit/test_golden_replay_dataset.py"], "timeout_seconds": 600, "source_manifest_sha256": "78aa4d9c495bf9b8ab16fdd450e7eb1b7ea3790452eb4acfa7137493f3becca3", "profile_sha256": "20dca9cae3e8fe9bbbece8e0d391c09ea4b65ef82bf87f1aac6d6b347a3e558a", "browser_runtime": null, "browser_runtime_sha256": null, "media_runtime": null, "media_runtime_sha256": null, "pytest": {"exit_code": 0, "seconds": 2.964}, "finished_at": "2026-09-20T12:00:04.173309+00:00"}
+  ```
+- **Sign-off Readiness**: 第六轮架构终审指出的 1 项 P2 技术缺口已 100% 物理闭环，所有文档已落盘，沙箱测试 15 用例全绿（2.96s），等待系统架构师复核签署放行。
+
 
 
 
