@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.55.0  | 2026-09-20 | Antigravity                         | 例行任务新增幽灵待处理自愈校准与待筛选 TTL 时效淘汰维护。 |
 | 3.54.0  | 2026-09-20 | Antigravity                         | 视频号首评互动与回查彻底解耦：在上传受理（SUBMITTED_BOUND）且取得平台原生 ID 时立即异步派发互动 worker。 |
 | 3.53.0  | 2026-09-19 | Codex                               | 视频号互动改为默认关闭的通用有界 worker 派发，保留可观测日志并优先恢复持久到期任务。 |
 | 3.52.0  | 2026-09-19 | Antigravity                         | Project Runway-CTA: 接入互动图层处理器与发布中央选片协议，实现切片编号继承、mtime失效与安全降级。 |
@@ -4438,6 +4439,12 @@ class PipelineManager:
         reconciled = self.reconcile_wechat_under_review()
         if reconciled:
             logger.info("WeChat creator-management reconciliation settled %s publication(s).", reconciled)
+        reconciled_ghosts = self.db.reconcile_pending_ghost_tasks()
+        if reconciled_ghosts:
+            logger.info("Reconciled %s ghost pending video(s).", reconciled_ghosts)
+        evicted_waitlist = self.db.cleanup_expired_waitlist_videos(ttl_days=settings.waitlist_ttl_days)
+        if evicted_waitlist:
+            logger.info("Evicted %s expired waitlist video(s) older than %s days.", evicted_waitlist, settings.waitlist_ttl_days)
         self.score_pending_videos()
         self.process_high_score_videos(limit=5)
         if not settings.wechat_publishing_paused:

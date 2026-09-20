@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.67.0 | 2026-09-20 | Antigravity | 新增 waitlist_ttl_days (待筛选低分素材TTL淘汰保留天数) 与 queue_stale_days (待处理超期排队时效天数) 配置 |
 | 3.66.0 | 2026-09-20 | Antigravity | 新增 pipeline_window_log_keep_days 与 pipeline_window_log_suppression_window_sec 配置，用于巡航日志降频与保留天数治理 |
 | 3.65.1 | 2026-09-19 | Codex | Runway-CTA v2 生产默认触发参数对齐审核公式：首段比例 0.12、尾段距片尾 16 秒。 |
 | 3.65.0 | 2026-09-19 | Antigravity | 扩展 OptionSense 交易日安全窗口为 16:15-17:50 与 19:00-08:30 ET。 |
@@ -160,6 +161,11 @@ class Settings(BaseSettings):
     # The minute-level runner only rescans candidates whose metrics changed or whose
     # cached score is old; this keeps a large low-score waitlist from hot-looping.
     score_refresh_interval_minutes: int = 180
+
+    # 待筛选(waitlist)低分素材(score < 75) TTL 保留天数；超过此天数的低分素材自动流转淘汰为 EXPIRED 归档
+    waitlist_ttl_days: int = Field(default=30, ge=1, le=365)
+    # 待处理(queue)超期排队时效天数；用于识别并批量放弃/忽略超过此天数未处理的高分排队任务
+    queue_stale_days: int = Field(default=7, ge=1, le=90)
 
     # [Claude_Opus_4.8 / Antigravity] 美股盘中及 OptionSense 物理交易时钟重负载保护：
     # 统一以 America/New_York (ET) 为唯一绝对基准，自适应夏令时 (EDT) 与冬令时 (EST) 切换。

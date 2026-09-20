@@ -47,6 +47,7 @@
 | 2.7.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 新增后台队列自动轮询器 _queue_runner_loop 自动执行切片/高分任务 |
 | 2.8.0 | 2026-05-28 | Gemini_3.5_Flash_planning           | 使用 python -u 启动子进程以实现 pipeline.log 实时无缓冲日志输出 |
 | 2.9.0 | 2026-06-01 | Claude_Sonnet_4.6_Thinking_planning | 新增 respec_video 端点：停止当前处理、覆盖规格并重新入队；add_video_manual 重复检测补充 video_id/title 返回 |
+| 3.20.0 | 2026-09-20 | Antigravity                         | 新增 waitlist/queue 治理接口 (cleanup-expired, discard-stale, calibrate, ignore)；扩展 promote 端点支持待筛选提权入队；保护状态集增加 HISTORICAL_ARCHIVED |
 | 3.0.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | 新增 /api/trending-keywords 端点，整合 HN 热词注入功能到后台 Web UI 热词监控 Tab |
 | 3.1.0 | 2026-06-07 | Claude_Sonnet_4.6_Thinking_planning | [BugFix+防卡] _run_pipeline_manager 使用 settings.get_active_proxies() 动态代理注入；_queue_runner_loop 新增 purge_stale_tasks() 自动清理卡死 DOWNLOADING 任务 |
 | 3.2.0 | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | 新增 _wechat_keepalive_loop：定期局动 wechat_keepalive.py 子进程刷新 Session，防止闲置掉线 |
@@ -850,7 +851,7 @@ ACTIVE_STATUSES = PROCESSING_STATUSES | {"UNDER_REVIEW"}
 # 通用重试/重置接口回写为 PENDING。只有专用、人工确认的发布流程可另行处理。
 _WECHAT_SUBMISSION_GUARD_STATUSES = frozenset({
     "PUBLISHING", "UNDER_REVIEW", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNCERTAIN",
-    "PUBLISHED", "REJECTED", "NOT_FOUND", "HISTORICAL_UNRESOLVED",
+    "PUBLISHED", "REJECTED", "NOT_FOUND", "HISTORICAL_UNRESOLVED", "HISTORICAL_ARCHIVED",
 })
 
 
@@ -2237,24 +2238,24 @@ def process_video_now(youtube_id: str):
 
 @app.post("/api/videos/{youtube_id}/promote")
 def promote_video(youtube_id: str):
-    """[Claude_Opus_4.8] 将高赞发现(DISCOVERY)视频一键「加入队列」并立即发布。
+    """将高赞发现(DISCOVERY)或待筛选(waitlist)低分视频一键「提权/加入队列」并立即处理。
 
-    把 source 提升为 MANUAL、score=100 后立即触发完整处理管线，
-    替代原先「删除 DISCOVERY 条目 → 手动重新粘贴链接」的三步绕路：
-    保留已抓取的元数据/zh_title，且不经过黑名单墓碑。
-    仅 DISCOVERY 源视频可被提升（其余来源已在正式队列中，应使用 ⚡执行/重试）。
+    - DISCOVERY 来源：原子转换 source 为 MANUAL、score=100 并加评分锁，脱离发现防火墙；
+    - 待筛选/普通来源：原子转换 source 为 MANUAL、score=100 并加评分锁，重置为 PENDING 入队。
+    提权成功后立即抢占触发完整处理管线（若抢占成功则后台异步处理，否则等待调度器消费）。
     """
     video = db.get_video_by_youtube_id(youtube_id)
     if not video:
         return {"success": False, "error": "视频不存在"}
 
-    if video.get("source") != "DISCOVERY":
-        return {"success": False,
-                "error": f"仅高赞发现视频可加入队列（当前来源：{video.get('source')}）"}
-
-    # 原子转换：DISCOVERY → MANUAL，score=100，并打手动评分锁
-    if not db.promote_to_manual(youtube_id, score=100):
-        return {"success": False, "error": "转换失败：该视频可能已被处理或来源已变更"}
+    if video.get("source") == "DISCOVERY":
+        # 原子转换：DISCOVERY → MANUAL，score=100，并打手动评分锁
+        if not db.promote_to_manual(youtube_id, score=100):
+            return {"success": False, "error": "转换失败：该视频可能已被处理或来源已变更"}
+    else:
+        # 待筛选/普通素材提权入队
+        if not db.promote_waitlist_to_queue(youtube_id, score=100):
+            return {"success": False, "error": "提权失败：该视频当前状态不符合提权条件或已被处理"}
 
     # 立即触发管线：抢占 PENDING → DOWNLOADING 后异步执行
     triggered = False
@@ -2268,9 +2269,26 @@ def promote_video(youtube_id: str):
         "success": True,
         "youtube_id": youtube_id,
         "triggered": triggered,
-        "message": "已加入队列并立即开始处理" if triggered
-                   else "已加入队列（score=100），等待调度器触发",
+        "message": "已提权入队并立即开始处理" if triggered
+                   else "已提权入队（score=100），等待调度器触发",
     }
+
+
+@app.post("/api/videos/{youtube_id}/ignore")
+def ignore_video(youtube_id: str):
+    """将指定视频标记为已忽略(IGNORED)，从待处理/待筛选队列中移除。"""
+    video = db.get_video_by_youtube_id(youtube_id)
+    if not video:
+        return {"success": False, "error": "视频不存在"}
+
+    if video.get("status") in {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}:
+        return {"success": False, "error": f"视频处于 {video.get('status')} 处理中，无法直接忽略"}
+
+    success = db.ignore_video(youtube_id, reason="控制台人工放弃/忽略")
+    if not success:
+        return {"success": False, "error": "忽略操作未生效"}
+
+    return {"success": True, "message": "视频已标记为已忽略"}
 
 
 @app.post("/api/platforms/wechat/reconcile")
@@ -2840,6 +2858,43 @@ def reset_video_hard(youtube_id: str):
 
 # [Gemini_2.5_Pro_planning] 注意：此路由必须在 /api/videos/{youtube_id} 之前注册，
 # 否则 FastAPI 会将 'waitlist' 当成 youtube_id 参数，导致 404。
+@app.post("/api/videos/waitlist/cleanup-expired")
+def cleanup_expired_waitlist(days: Optional[int] = None):
+    """一键清理/归档超过指定天数（默认 30 天）的待筛选低分素材，流转为 EXPIRED。"""
+    ttl_days = days if days is not None else settings.waitlist_ttl_days
+    count = db.cleanup_expired_waitlist_videos(ttl_days=ttl_days)
+    return {
+        "success": True,
+        "cleaned_count": count,
+        "ttl_days": ttl_days,
+        "message": f"已成功归档清理 {count} 条超过 {ttl_days} 天的过期待筛选素材",
+    }
+
+
+@app.post("/api/videos/queue/discard-stale")
+def discard_stale_queue(days: Optional[int] = None):
+    """批量放弃排队超过指定天数（默认 7 天）的高分过时视频，流转为 IGNORED。"""
+    stale_days = days if days is not None else settings.queue_stale_days
+    count = db.discard_stale_queue_videos(stale_days=stale_days)
+    return {
+        "success": True,
+        "discarded_count": count,
+        "stale_days": stale_days,
+        "message": f"已成功放弃/忽略 {count} 条超过 {stale_days} 天的超期排队任务",
+    }
+
+
+@app.post("/api/videos/queue/calibrate")
+def calibrate_queue():
+    """手动触发幽灵排队任务状态自愈校准。"""
+    count = db.reconcile_pending_ghost_tasks()
+    return {
+        "success": True,
+        "calibrated_count": count,
+        "message": f"已校准 {count} 条幽灵排队任务状态",
+    }
+
+
 @app.delete("/api/videos/waitlist/all")
 def clear_waitlist():
     """[Gemini_2.5_Pro_planning] 清空待筛选列表（全部 PENDING 且分数 < 75 的视频）。

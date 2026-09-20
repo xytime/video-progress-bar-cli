@@ -77,6 +77,7 @@
 | 3.29.0  | 2026-08-20 | Codex                               | 新增独立 Highlight Job 与候选切片账本；不复用或改写既有视频处理状态机与发布账本 |
 | 3.28.0  | 2026-08-20 | Codex                               | 视频号历史未解归档升级为永久墓碑；阻止既有提交证据被调度器重新写入活跃账本 |
 | 3.27.0  | 2026-08-20 | Codex                               | 视频号提交尝试记录不可变本地指纹；仅以同次提交捕获的原生 post_id 绑定和回查平台状态 |
+| 3.27.0  | 2026-09-20 | Antigravity                         | 对齐 queue/waitlist 谓词排除微信归档与已发布；新增幽灵任务自愈 reconcile_pending_ghost_tasks、待筛选 TTL 淘汰 cleanup_expired_waitlist_videos、超期排队放弃 discard_stale_queue_videos、任务忽略 ignore_video 与待筛选提权 promote_waitlist_to_queue |
 | 3.26.0  | 2026-08-20 | Codex                               | 视频号账本增加后台驳回/未找到终态、平台记录标识和回查时间，支持提交后状态自动终结 |
 | 1.0.0   | 2026-05-21 | Claude_Sonnet_4.6_Thinking_planning | 初始创建数据库与DAL封装                                                         |
 | 2.0.0   | 2026-05-26 | Claude_Sonnet_4.6_Thinking_planning | v7.0 架构升级：黑名单表、Pid追踪、手动评分锁                                      |
@@ -174,6 +175,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Collection, List, Dict, Any, Optional, Sequence
 
+from config.settings import settings
 from ..content_types import CONTENT_TYPE_GENERAL, normalize_content_type
 from ..scoring import CHANNEL_SCORE_CAPS, cap_channel_score
 
@@ -249,6 +251,7 @@ class PipelineDB:
             # 确保目录存在
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             self._init_db()
+            self.reconcile_pending_ghost_tasks()
         
     @contextmanager
     def get_connection(self):
@@ -4402,6 +4405,175 @@ class PipelineDB:
             conn.commit()
             return cursor.rowcount > 0
 
+    def promote_waitlist_to_queue(self, youtube_id: str, score: int = 100) -> bool:
+        """将待筛选(waitlist)中的低分素材提权为手动加急任务(MANUAL)，赋分>=75并入队。
+
+        原子地将主任务(slice_index=0) source 提升为 MANUAL、score 设为指定分数(默认100)，
+        并打上手动评分锁(is_manually_scored=1)，状态重置为 PENDING，移入排队队列。
+        """
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE processed_videos
+                   SET source = 'MANUAL',
+                       score = ?,
+                       is_manually_scored = 1,
+                       status = 'PENDING',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE youtube_id = ?
+                     AND slice_index = 0
+                     AND status IN ('PENDING', 'EXPIRED')
+                     AND IFNULL(source, '') != 'DISCOVERY'""",
+                (score, youtube_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def ignore_video(self, youtube_id: str, reason: str = "人工忽略") -> bool:
+        """将指定任务及其关联切片标记为已忽略(IGNORED)，使其从待处理/待筛选队列退出。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE processed_videos
+                   SET status = 'IGNORED',
+                       error_msg = ?,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE youtube_id = ?""",
+                (reason, youtube_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def discard_stale_queue_videos(self, stale_days: Optional[int] = None) -> int:
+        """批量放弃/忽略排队过久的高分过时视频 (Stale Discard)。
+
+        将滞留在 PENDING 状态超过 stale_days 天的高分任务(score >= 75)
+        流转为 IGNORED 状态，不再占用待处理排队队列。
+
+        Args:
+            stale_days: 排队超期天数，默认读取 settings.queue_stale_days (默认 7 天)
+
+        Returns:
+            流转为 IGNORED 的记录数
+        """
+        if stale_days is None:
+            stale_days = settings.queue_stale_days
+        days = max(1, int(stale_days))
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE processed_videos
+                   SET status = 'IGNORED',
+                       error_msg = COALESCE(error_msg, '超期排队批量放弃'),
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE status = 'PENDING'
+                     AND score >= 75
+                     AND parent_id IS NULL
+                     AND created_at < datetime('now', ?)""",
+                (f"-{days} days",)
+            )
+            count = cursor.rowcount
+            if count > 0:
+                conn.commit()
+                self._logger.info(f"[Queue] Discarded {count} stale queue videos older than {days} days.")
+            return count
+
+    def cleanup_expired_waitlist_videos(self, ttl_days: Optional[int] = None) -> int:
+        """待筛选(waitlist)低分素材(score < 75) TTL 时效淘汰与归档。
+
+        将发布/抓取时间超过 ttl_days 天、尚未进入排队的低分素材流转为 EXPIRED 归档状态，
+        移出待筛选列表，避免陈年低分素材堆积淹没待筛选首页。保留原始记录与数据血缘。
+
+        Args:
+            ttl_days: 淘汰时效天数，默认读取 settings.waitlist_ttl_days (默认 30 天)
+
+        Returns:
+            流转为 EXPIRED 的记录数
+        """
+        if ttl_days is None:
+            ttl_days = settings.waitlist_ttl_days
+        days = max(1, int(ttl_days))
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE processed_videos
+                   SET status = 'EXPIRED',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE status = 'PENDING'
+                     AND score < 75
+                     AND parent_id IS NULL
+                     AND IFNULL(source, '') != 'DISCOVERY'
+                     AND created_at < datetime('now', ?)""",
+                (f"-{days} days",)
+            )
+            count = cursor.rowcount
+            if count > 0:
+                conn.commit()
+                self._logger.info(f"[TTL] Evicted {count} expired waitlist videos older than {days} days.")
+            return count
+
+    def reconcile_pending_ghost_tasks(self) -> int:
+        """自愈校准幽灵待处理(PENDING)任务状态。
+
+        将已存在于微信历史归档表(wechat_publications_historical_archive)中的
+        PENDING 记录校准为 HISTORICAL_ARCHIVED；
+        将已存在于微信发布账本(wechat_publications)中的 PENDING 记录按其真实
+        平台终态(PUBLISHED / REJECTED / UNDER_REVIEW 等)对齐。
+        避免已被底层调度器硬过滤的历史残留继续误报为活跃待处理任务。
+
+        Returns:
+            校准的记录总数
+        """
+        calibrated = 0
+        with self.get_connection() as conn:
+            # 1. 历史归档表中的 PENDING 条目 -> 校准为 HISTORICAL_ARCHIVED
+            cursor = conn.execute(
+                """UPDATE processed_videos
+                   SET status = 'HISTORICAL_ARCHIVED',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE status = 'PENDING'
+                     AND EXISTS (
+                         SELECT 1 FROM wechat_publications_historical_archive archive
+                         WHERE archive.video_id = processed_videos.id
+                     )"""
+            )
+            calibrated += cursor.rowcount
+
+            # 2. 微信发布账本中的 PENDING 条目 -> 校准为对应的实际状态
+            cursor = conn.execute(
+                """SELECT pv.id, wp.state, wp.last_error_message
+                   FROM processed_videos pv
+                   JOIN wechat_publications wp ON wp.video_id = pv.id
+                   WHERE pv.status = 'PENDING'"""
+            )
+            pub_rows = cursor.fetchall()
+            for r in pub_rows:
+                v_id = r["id"]
+                state = r["state"]
+                err = r["last_error_message"]
+                if state == "PUBLISHED":
+                    conn.execute(
+                        "UPDATE processed_videos SET status = 'PUBLISHED', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (v_id,)
+                    )
+                elif state == "REJECTED":
+                    conn.execute(
+                        "UPDATE processed_videos SET status = 'FAILED', error_msg = COALESCE(?, error_msg, '微信平台审核驳回'), updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (err, v_id)
+                    )
+                elif state in ("UNDER_REVIEW", "SUBMITTED_BOUND", "SUBMITTED_UNBOUND", "UNCERTAIN"):
+                    conn.execute(
+                        "UPDATE processed_videos SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (state, v_id)
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE processed_videos SET status = 'HISTORICAL_ARCHIVED', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (v_id,)
+                    )
+                calibrated += 1
+
+            if calibrated > 0:
+                conn.commit()
+                self._logger.info(f"[SelfHealing] Reconciled {calibrated} ghost pending records.")
+        return calibrated
+
     def set_bypass_censorship(self, youtube_id: str, enabled: bool = True, slice_index: int = 0) -> None:
         """[Claude_Opus_4.8] 设置/清除「人工复核放行」标志。
 
@@ -4444,7 +4616,7 @@ class PipelineDB:
             threshold_clauses.append("(pv.channel_id = ? AND pv.score >= ?)")
             threshold_params.extend([channel_id, channel_min_score])
         threshold_sql = " OR ".join(threshold_clauses)
-        terminal_states = ["PUBLISHED", "IGNORED", "COMPLETED"]
+        terminal_states = ["PUBLISHED", "IGNORED", "COMPLETED", "HISTORICAL_ARCHIVED"]
         if allow_deferred_predecessors:
             terminal_states.append("WECHAT_DEFERRED")
         terminal_placeholders = ", ".join("?" for _ in terminal_states)
@@ -4856,10 +5028,10 @@ class PipelineDB:
     def _build_video_tab_condition(self, tab: str, engagement_window_days: int) -> tuple[str, List[Any]]:
         """返回列表 Tab 的基础谓词；调用方再安全叠加筛选且始终在分页前执行。"""
         if tab == 'completed':
-            return """((pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED') AND pv.parent_id IS NULL)
+            return """((pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED') AND pv.parent_id IS NULL)
                 OR (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND
                     (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id
-                     AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) = 0))""", []
+                     AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED')) = 0))""", []
         if tab == 'error':
             return """((pv.status IN ('FAILED', 'LOGIN_REQUIRED') AND pv.parent_id IS NULL)
                 OR (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND
@@ -4869,19 +5041,23 @@ class PipelineDB:
             return """((pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING') AND pv.parent_id IS NULL)
                 OR (pv.status = 'SEGMENTED' AND pv.parent_id IS NULL AND
                     (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
-                    (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0))""", []
+                    (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED')) > 0))""", []
         if tab == 'wechat_deferred':
             return """pv.status = 'WECHAT_DEFERRED' AND pv.parent_id IS NULL AND NOT EXISTS (
                 SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = pv.id)""", []
         if tab == 'review':
             return "pv.status IN ('UNDER_REVIEW', 'SUBMITTED_UNBOUND', 'SUBMITTED_BOUND', 'UNCERTAIN') AND pv.parent_id IS NULL", []
         if tab == 'queue':
-            return "pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL", []
+            return """pv.status = 'PENDING' AND pv.score >= 75 AND pv.parent_id IS NULL
+                AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
+                AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = pv.id)""", []
         if tab == 'high_likes':
             since = (datetime.datetime.now() - datetime.timedelta(days=engagement_window_days)).strftime("%Y%m%d")
             return "pv.upload_date >= ? AND pv.view_count > 500 AND pv.parent_id IS NULL", [since]
         if tab == 'waitlist':
-            return "pv.status = 'PENDING' AND pv.score < 75 AND pv.parent_id IS NULL AND IFNULL(pv.source,'') != 'DISCOVERY'", []
+            return """pv.status = 'PENDING' AND pv.score < 75 AND pv.parent_id IS NULL AND IFNULL(pv.source,'') != 'DISCOVERY'
+                AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
+                AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = pv.id)""", []
         raise ValueError(f"Unknown video tab: {tab}")
 
     @staticmethod
@@ -5030,7 +5206,7 @@ class PipelineDB:
                 f"""SELECT pv.*, COALESCE(rc.channel_name, pv.channel_id) AS channel_name,
                            EXISTS(SELECT 1 FROM video_browser_marks marks WHERE marks.video_id = pv.id AND marks.mark_type = 'ENGAGEMENT_REVIEWED') AS browser_processed,
                            (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id) AS slices_count,
-                           (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) AS completed_slices_count
+                           (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED')) AS completed_slices_count
                     FROM processed_videos pv
                     LEFT JOIN recommended_channels rc ON pv.channel_id = rc.channel_id
                     WHERE {where}
@@ -5314,7 +5490,9 @@ class PipelineDB:
             cursor = conn.execute(
                 "SELECT youtube_id FROM processed_videos "
                 "WHERE status = 'PENDING' AND score < 75 AND parent_id IS NULL "
-                "AND IFNULL(source,'') != 'DISCOVERY'"
+                "AND IFNULL(source,'') != 'DISCOVERY' "
+                "AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = processed_videos.id) "
+                "AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = processed_videos.id)"
             )
             return [row["youtube_id"] for row in cursor.fetchall()]
 
@@ -5346,14 +5524,20 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.execute("""
                 SELECT
-                    SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 AND IFNULL(pv.source,'') != 'DISCOVERY' THEN 1 ELSE 0 END) as waitlist,
-                    SUM(CASE WHEN pv.status = 'PENDING' AND pv.score >= 75 THEN 1 ELSE 0 END) as queue,
+                    SUM(CASE WHEN pv.status = 'PENDING' AND pv.score < 75 AND IFNULL(pv.source,'') != 'DISCOVERY'
+                        AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
+                        AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = pv.id)
+                        THEN 1 ELSE 0 END) as waitlist,
+                    SUM(CASE WHEN pv.status = 'PENDING' AND pv.score >= 75
+                        AND NOT EXISTS (SELECT 1 FROM wechat_publications wp WHERE wp.video_id = pv.id)
+                        AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive archive WHERE archive.video_id = pv.id)
+                        THEN 1 ELSE 0 END) as queue,
                     SUM(CASE WHEN (
                         pv.status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'AI_COVER_PENDING', 'PUBLISHING')
                         OR
                         (pv.status = 'SEGMENTED' AND 
                          (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status IN ('FAILED', 'LOGIN_REQUIRED')) = 0 AND
-                         (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) > 0)
+                         (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED')) > 0)
                     ) THEN 1 ELSE 0 END) as active,
                     SUM(CASE WHEN pv.status = 'WECHAT_DEFERRED' AND NOT EXISTS (
                         SELECT 1 FROM wechat_publications_historical_archive archive
@@ -5362,10 +5546,10 @@ class PipelineDB:
                     SUM(CASE WHEN pv.status = 'SUBMITTED_UNBOUND' THEN 1 ELSE 0 END) as local_accepted,
                     SUM(CASE WHEN pv.status IN ('UNDER_REVIEW', 'SUBMITTED_BOUND', 'UNCERTAIN') THEN 1 ELSE 0 END) as review,
                     SUM(CASE WHEN (
-                        pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED')
+                        pv.status IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED')
                         OR
                         (pv.status = 'SEGMENTED' AND 
-                         (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED')) = 0)
+                         (SELECT COUNT(*) FROM processed_videos sub WHERE sub.parent_id = pv.id AND sub.status NOT IN ('PUBLISHED', 'IGNORED', 'COMPLETED', 'HISTORICAL_ARCHIVED')) = 0)
                     ) THEN 1 ELSE 0 END) as completed,
                     SUM(CASE WHEN (
                         pv.status IN ('FAILED', 'LOGIN_REQUIRED')

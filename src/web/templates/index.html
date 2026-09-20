@@ -6,6 +6,7 @@
   Modification History:
   | Date       | Author                | Description                                   |
   |------------|-----------------------|-----------------------------------------------|
+  | 2026-09-20 | Antigravity | 待筛选/待处理时效与健康治理：新增 30 天前过期素材归档、排队超期放弃(>7天)、队列状态校准及行内提权/忽略操作。 |
   | 2026-05-27 | Gemini_3.5_Flash_planning | Optimize trim segment UX: add collapsible switch, preset chips, live validation, and visual timeline progress bar. |
   | 2026-05-27 | Gemini_3.5_Flash_planning | Avoid 404 cover request console errors; fix Stats redirects, Tab persistence, Batch Edit checkbox toggle, and layout alignment. |
   | 2026-05-27 | Gemini_2.0_Flash_fast | Refine table to card flow classes, improve touch targets size to 44px. |
@@ -305,8 +306,9 @@
       <!-- [Gemini_2.5_Pro_planning] 批量操作栏（仅待筛选 tab 显示） -->
       <div id="batch-action-bar">
         <!-- 默认模式 (Normal View) -->
-        <div id="batch-normal-view" style="display:flex; align-items:center; width:100%; gap:10px;">
+        <div id="batch-normal-view" style="display:flex; align-items:center; width:100%; gap:10px; flex-wrap:wrap;">
           <button class="btn-batch-del" style="background:var(--accent); border-color:var(--accent); color:#fff; min-height:44px;" onclick="enterEditMode()">🛠 批量管理 (Batch Edit)</button>
+          <button class="btn-retry btn-reset" onclick="cleanExpiredWaitlist()" style="min-height:44px; padding:6px 14px; background:rgba(59,130,246,0.15); border:1px solid rgba(59,130,246,0.4); color:#93c5fd; font-weight:500;" title="将 30 天前抓取的低分素材流转为 EXPIRED 归档状态，移出待筛选列表">📦 一键归档 30 天前过期素材</button>
           <button class="btn-clear-all" onclick="clearAllWaitlist()" style="min-height:44px; margin-left:auto;">⚠️ 清空全部待筛选</button>
         </div>
 
@@ -317,6 +319,16 @@
           <span class="batch-deselect" onclick="clearSelection()">取消选择</span>
           <button class="btn-batch-del" onclick="batchDelete()" style="min-height:44px;">🗑 删除所选</button>
           <button class="btn-clear-all" onclick="exitEditMode()" style="background:rgba(255,255,255,0.05); border-color:var(--border); color:var(--text2); min-height:44px; margin-left:auto;">退出编辑</button>
+        </div>
+      </div>
+
+      <!-- 待处理队列健康操作栏（仅待处理 tab 显示） -->
+      <div id="queue-action-bar" style="display:none; align-items:center; width:100%; gap:10px; flex-wrap:wrap; margin-bottom:12px; background:rgba(245,158,11,0.06); border:1px solid rgba(245,158,11,0.2); border-radius:8px; padding:8px 12px;">
+        <span style="color:var(--yellow); font-weight:600; font-size:0.875rem;">⚡ 待处理队列健康治理</span>
+        <span style="font-size:0.8rem; color:var(--text3);">排队任务状态监控与时效维护</span>
+        <div style="display:flex; gap:8px; margin-left:auto; flex-wrap:wrap;">
+          <button class="btn-retry btn-reset" onclick="calibrateQueueGhosts()" style="min-height:36px; padding:4px 12px; background:rgba(16,185,129,0.15); border:1px solid rgba(16,185,129,0.35); color:#6ee7b7; font-size:0.8rem;" title="自愈校准幽灵排队任务（对齐已归档/微信确认状态）">🩺 队列状态校准</button>
+          <button class="btn-stop" onclick="discardStaleQueue()" style="min-height:36px; padding:4px 12px; background:rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.35); color:#fca5a5; font-size:0.8rem;" title="将排队超过 7 天的高分过时任务标记为已忽略(IGNORED)">🧹 放弃超期排队(&gt;7天)</button>
         </div>
       </div>
 
@@ -641,8 +653,10 @@
     PUBLISHING: ['提交中', 'PUBLISHING'],
     PUBLISHED: ['已发布', 'PUBLISHED'],
     COMPLETED: ['处理完成', 'COMPLETED', '本地流程完成；各平台发布结果请查看平台状态'],
+    HISTORICAL_ARCHIVED: ['历史归档', 'COMPLETED', '已由操作员或系统历史归档，不再参与排队'],
+    EXPIRED: ['已过期', 'COMPLETED', '低分素材已超期自动淘汰归档'],
     SEGMENTED: ['已分集', 'COMPLETED'],
-    IGNORED: ['已忽略', 'PENDING'],
+    IGNORED: ['已忽略', 'COMPLETED'],
     WECHAT_DEFERRED: ['待微信恢复', 'SUBMITTED_BOUND'],
     UNDER_REVIEW: ['审核中', 'SUBMITTED_BOUND', '平台审核中，尚未确认公开发布'],
     SUBMITTED_BOUND: ['已提交，待确认发布', 'SUBMITTED_BOUND', '已记录平台作品 ID，但尚无公开发布证明；禁止重发'],
@@ -1203,6 +1217,8 @@
       if (filterBar) filterBar.style.display = 'none';
       const _hlBar0 = document.getElementById('high-likes-bar');
       if (_hlBar0) _hlBar0.classList.remove('visible');
+      const _qBar0 = document.getElementById('queue-action-bar');
+      if (_qBar0) _qBar0.style.display = 'none';
       loadHotwords();
       return;
     }
@@ -1216,18 +1232,26 @@
     syncFilterControls();
 
     const _hlBar = document.getElementById('high-likes-bar');
+    const _qBar = document.getElementById('queue-action-bar');
     if (tab === 'waitlist') {
       if (batchBar) batchBar.classList.add('visible');
       if (_hlBar) _hlBar.classList.remove('visible');
+      if (_qBar) _qBar.style.display = 'none';
     } else if (tab === 'high_likes') {
       // [Gemini_2.5_Pro_planning] 高赞 tab 显示专属工具栏
       if (batchBar) batchBar.classList.remove('visible');
       if (_hlBar) _hlBar.classList.add('visible');
+      if (_qBar) _qBar.style.display = 'none';
       const cbShow = document.getElementById('cb-show-processed');
       if (cbShow) cbShow.checked = filterState.includeProcessed;
+    } else if (tab === 'queue') {
+      if (batchBar) batchBar.classList.remove('visible');
+      if (_hlBar) _hlBar.classList.remove('visible');
+      if (_qBar) _qBar.style.display = 'flex';
     } else {
       if (batchBar) batchBar.classList.remove('visible');
       if (_hlBar) _hlBar.classList.remove('visible');
+      if (_qBar) _qBar.style.display = 'none';
     }
     loadVideos();
   }
@@ -1408,7 +1432,11 @@
              <button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="扫码后点此重试上传">🔄 重试</button>
              <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="硬重置">🗑 重置</button>` + deleteBtn
           : v.status === 'PENDING'
-          ? `<button class="btn-retry btn-reset" onclick="processVideoNow('${v.youtube_id}')" title="立即启动视频管线">⚡ 执行</button>` + deleteBtn
+          ? (currentTab === 'waitlist'
+              ? `<button class="btn-retry btn-reset" onclick="promoteVideo('${v.youtube_id}')" title="精选提权：将此素材转为加急任务(score=100)并立即入队处理" style="background:linear-gradient(135deg, #10b981, #059669); margin-right:4px;">⭐ 提权</button><button class="btn-retry btn-reset" onclick="processVideoNow('${v.youtube_id}')" title="立即启动视频管线">⚡ 执行</button>` + deleteBtn
+              : currentTab === 'queue'
+              ? `<button class="btn-retry btn-reset" onclick="processVideoNow('${v.youtube_id}')" title="立即启动视频管线">⚡ 执行</button><button class="btn-mark-undone" onclick="ignoreVideo('${v.youtube_id}')" title="放弃/忽略该任务（标记为已忽略，不再排队）" style="margin-left:4px; margin-right:4px; padding:3px 8px; font-size:0.75rem;">🚫 忽略</button>` + deleteBtn
+              : `<button class="btn-retry btn-reset" onclick="processVideoNow('${v.youtube_id}')" title="立即启动视频管线">⚡ 执行</button>` + deleteBtn)
           : isRetryable
           ? bypassBtn + `<button class="btn-retry" onclick="retryVideo('${v.youtube_id}')" title="断点续传">🔄 重试</button>
              <button class="btn-hard-reset" onclick="hardResetVideo('${v.youtube_id}')" title="删除产物重新下载">🗑 重置</button>` + deleteBtn
@@ -1796,6 +1824,78 @@
     } catch(e) { showToast('❌ 网络错误', 'error'); }
   }
 
+  async function cleanExpiredWaitlist() {
+    navigator.vibrate(15);
+    if (!confirm('📦 确定要清理归档 30 天前的低分素材吗？\n\n发布/抓取超过 30 天且分数 < 75 的低分素材将流转为已过期(EXPIRED)归档状态，移出待筛选列表，保留数据血缘。')) return;
+    try {
+      const r = await fetch('/api/videos/waitlist/cleanup-expired', { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        showToast(`✅ ${d.message}`);
+        clearSelection();
+        loadVideos(1);
+        fetchStats();
+      } else {
+        showToast('❌ ' + (d.message || d.error || '清理失败'), 'error');
+      }
+    } catch(e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+    }
+  }
+
+  async function discardStaleQueue() {
+    navigator.vibrate(15);
+    if (!confirm('🧹 确定要放弃排队超过 7 天的高分任务吗？\n\n滞留在待处理队列超过 7 天的任务将流转为已忽略(IGNORED)状态，移出待处理队列。')) return;
+    try {
+      const r = await fetch('/api/videos/queue/discard-stale', { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        showToast(`✅ ${d.message}`);
+        loadVideos(1);
+        fetchStats();
+      } else {
+        showToast('❌ ' + (d.message || d.error || '操作失败'), 'error');
+      }
+    } catch(e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+    }
+  }
+
+  async function calibrateQueueGhosts() {
+    navigator.vibrate(15);
+    try {
+      const r = await fetch('/api/videos/queue/calibrate', { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        showToast(`✅ ${d.message}`);
+        loadVideos(1);
+        fetchStats();
+      } else {
+        showToast('❌ ' + (d.message || d.error || '校准失败'), 'error');
+      }
+    } catch(e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+    }
+  }
+
+  async function ignoreVideo(youtubeId) {
+    navigator.vibrate(15);
+    if (!confirm('🚫 确定要忽略该任务吗？\n\n标记为已忽略后，任务将移出当前排队队列。')) return;
+    try {
+      const r = await fetch(`/api/videos/${youtubeId}/ignore`, { method: 'POST' });
+      const d = await r.json();
+      if (d.success) {
+        showToast('✅ 任务已标记为已忽略');
+        loadVideos();
+        fetchStats();
+      } else {
+        showToast('❌ ' + (d.error || '忽略操作失败'), 'error');
+      }
+    } catch(e) {
+      showToast('❌ 网络错误: ' + e.message, 'error');
+    }
+  }
+
   async function clearAllWaitlist() {
     navigator.vibrate(15);
     const bar = document.getElementById('batch-action-bar');
@@ -2165,7 +2265,7 @@
   // [Claude_Opus_4.8] 高赞发现视频一键加入队列：DISCOVERY → MANUAL(100) 并立即触发完整管线
   async function promoteVideo(youtubeId) {
     navigator.vibrate(15);
-    if (!confirm('📥 将该高赞视频转为手动加急任务并立即开始处理？\n（下载 → 文案 → 双语字幕 → 封面 → 发布到视频号）')) return;
+    if (!confirm('📥 将该视频转为手动加急任务(score=100)并立即开始处理？\n（下载 → 文案 → 双语字幕 → 封面 → 发布到视频号）')) return;
     const btn = event?.target;
     const oldText = btn ? btn.innerHTML : '';
     if (btn) {
@@ -2969,11 +3069,18 @@
   if (savedTabBtn) savedTabBtn.classList.add('active');
 
   const bar = document.getElementById('batch-action-bar');
+  const qBarInit = document.getElementById('queue-action-bar');
   if (savedTab === 'waitlist') {
     if (bar) bar.classList.add('visible');
+    if (qBarInit) qBarInit.style.display = 'none';
     exitEditMode(); // 待筛选模式下默认展示 Normal View
+  } else if (savedTab === 'queue') {
+    if (bar) bar.classList.remove('visible');
+    if (qBarInit) qBarInit.style.display = 'flex';
+    exitEditMode();
   } else {
     if (bar) bar.classList.remove('visible');
+    if (qBarInit) qBarInit.style.display = 'none';
     exitEditMode(); // 隐藏并清空编辑状态
   }
 
