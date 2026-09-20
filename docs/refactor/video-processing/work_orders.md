@@ -1,8 +1,8 @@
 ---
 created_by: Gemini_3.8_Flash_planning
 created_at: 2026-09-12
-last_updated_at: 2026-09-12
-version: 1.3.0
+last_updated_at: 2026-09-20
+version: 1.5.0
 ---
 
 # Video-precessing 重构工单池 (Refactor Work Orders v1.0 Candidate)
@@ -10,6 +10,8 @@ version: 1.3.0
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-09-20 | Antigravity | M6.2 架构审议校准：修补 WO-STATE-001 回滚方案为 Fail-Closed 只读降级与常驻进程重启，澄清子进程持锁与退避契约，扩展入口边界测试 |
+| 1.4.0 | 2026-09-20 | Gemini_3.8_Flash_planning | M6.2+ 红蓝博弈加固：将 Bot 退出码 6 事务闭环（防鬼魂状态）、微信会话锁遵循与 QUEUED 异步语义注入 WO-STATE-001 |
 | 1.3.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.2 阶段升级：重申 M6.2 黄金数据集建设期间全部 7 项重构工单保持严格 BLOCKED |
 | 1.2.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.1B 语义升级：路线图细化为 Gate M6.5A 独立解锁 WO-STATE-001，WO-SCRIPTS-001 归入 Gate M6.5B 条件评估 |
 | 1.1.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.1 阶段升级：M5 正式签署完结，建立 M6.1 特征化测试基线，全量锁定运行时工单 |
@@ -24,8 +26,8 @@ version: 1.3.0
 
 > [!CAUTION]
 > **All runtime work orders are currently BLOCKED.**  
-> 当前处于 **Phase M6.2 — Executable Golden Replay Dataset**。M6.1 特征化测试基线已正式签署完结 (SIGNED OFF / COMPLETE)。  
-> 目前已完成 M6.1 特征化测试基线与 M6.2 可执行黄金回放数据集（`GOLDEN-WF-01` ~ `GOLDEN-RISK-BOT`），但**所有运行时工单（`WO-STATE-001` ~ `WO-PUB-001`）依然保持严格 BLOCKED 状态**。  
+> 当前处于 **Phase M6.2+ — Executable Golden Replay Dataset & Adversarial Review**。M6.1 特征化测试基线已正式签署完结 (SIGNED OFF / COMPLETE)。  
+> 目前已完成 M6.1 特征化测试基线、M6.2 可执行黄金回放数据集（`GOLDEN-WF-01` ~ `GOLDEN-RISK-BOT`）以及 2026-09-20 红蓝对抗博弈加固，但**所有运行时工单（`WO-STATE-001` ~ `WO-PUB-001`）依然保持严格 BLOCKED 状态**。  
 > 必须在通过 Gate M6 完整验收评审后，方可在受控条件下逐项解锁。未来进入安全修复时，将首先且仅进入 **Phase M6.5A** 单独实施 `WO-STATE-001`，严禁多工单并发实施。
 
 ---
@@ -62,13 +64,21 @@ version: 1.3.0
   - `Current mitigation`: 目前仅限白名单管理员在受限群组内手动执行
   - `Related invariant`: [`INV-001`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/refactor_handoff.md#8-confirmed-invariants-八大系统不变式), [`INV-008`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/refactor_handoff.md#8-confirmed-invariants-八大系统不变式)
   - `Related risk`: `RISK-STATE-001`
-- **事实证据**: [`src/bot/pipeline_agent.py:L714,L749`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/bot/pipeline_agent.py#L714) 直接调用 `self.db.update_video_status(youtube_id, status)` 和 `self.db.update_video_status(youtube_id, "PENDING")`，未接入 [`src/web/app.py:L842`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/web/app.py#L842) 的 `_wechat_submission_guard_reason` 校验。
-- **治理问题**: 管理员若在 Telegram 群组内对正处于 `PUBLISHED` 或 `UNDER_REVIEW` 的视频执行状态修改或重试指令，会绕过 Web 控制台的防重投 Guard，将视频打回 `PENDING`，带来状态分叉隐患。
-- **实施范围**: 在 `src/bot/pipeline_agent.py` 内部引入与 Web 端对齐的前置状态校验，阻断对已发布/在途视频的非法回写。
-- **明确非目标**: 重构 Telegram Bot 的网络通信机制或异步长轮询架构。
-- **安全 Harness 要求**: 编写自动化测试，验证针对已发布视频执行 Bot 重置命令时被拒绝并返回清晰错误。
-- **验收标准**: 任何通过 Bot 指令重置已存在平台账本的视频均被拒绝并返回明确报错；无正常阻断任务仍可正常重置。
-- **回滚方案**: 提供配置开关 `enable_bot_status_guard`，可一键降级回原透传行为。
+- **事实证据**: 
+  - [`src/bot/pipeline_agent.py:L714,L749`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/bot/pipeline_agent.py#L714) 直接调用 `self.db.update_video_status(youtube_id, status)` 和 `self.db.update_video_status(youtube_id, "PENDING")`，未接入 [`src/web/app.py:L842`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/web/app.py#L842) 的 `_wechat_submission_guard_reason` 校验。
+  - [`src/bot/pipeline_agent.py:L683-L695`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/bot/pipeline_agent.py#L683) 未识别 `scripts/wechat_uploader.py` 退出码 `6`，误当作失败抛出。
+  - [`scripts/wechat_uploader.py:L1221`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/scripts/wechat_uploader.py#L1221) 内部由 `@guarded_wechat_browser_session` 装饰持锁（超时 0 秒，争用时立即返回 `busy_result=1`）；但素材缺失（视频/文案/封面）同样返回 `1`。Bot 当前使用裸子进程环境，且对退出码 1 语义缺乏明确 BUSY 凭证校验与退避处理。
+- **治理问题**: 管理员若在 Telegram 群组内对正处于 `PUBLISHED` 或 `UNDER_REVIEW` 的视频执行状态修改或重试指令，会绕过 Web 控制台的防重投 Guard，将视频打回 `PENDING`，带来二次重复发布与封号隐患；且 Bot 缺少对退出码 6 的正确处理，会造成假失败与无账本鬼魂状态。
+- **实施范围**: 
+  1. 将 Bot 严格收口为具名任务分发客户端：执行**响应前强制持久化**（先在 SQLite 原子写入分发记录，随后返回 `QUEUED` 异步受理语义包含 task_id 与时间戳），对活跃中任务执行幂等复用，严禁 LLM 擅自向用户宣称“已发布完成”。
+  2. 外部物理调用前执行 `wechat_submission_attempts` 增量表迁移、建立部分唯一活跃索引（`idx_wechat_active_attempt`）并执行条件 CAS 原子领取不可重试 Attempt 租约（状态 `IN_PROGRESS`）；BUSY 退出时标记 `RELEASED_BUSY` 释放重领；若外部平台受理后本地崩溃，重启强制 Fail-Closed 进入 `UNCERTAIN` 绝不自动重领，物理阻断并发与重复提交，闭环 At-Most-Once。
+  3. 由核心应用服务统一负责发布账本守卫校验，阻断对已发布/在途视频的非法回写与删除。
+  4. 捕获退出码 6 并原子调用事务方法写入 Publication 账本、Attempt 记录与 `SUBMITTED_UNBOUND` 状态，明确本地三表强一致性 vs 外部 At-Most-Once 边界。
+  5. 接入 `_build_subprocess_env`；会话锁由子进程内部自洽持有（严禁父进程外置重复加锁，防止超时 0 秒产生锁争用立即锁忙失败）；仅对明确 BUSY 凭证有限退避（最多 3 次），通用退出码 1 判定为永久失败，退出码 3 明确为发布结果未确认（`EXIT_RESULT_UNCERTAIN`），绝不可自动重传。
+- **明确非目标**: 重构 Telegram Bot 的长轮询网络通信机制。
+- **安全 Harness 要求**: 编写自动化回归测试，验证退出码 6 的原子账本写入、针对已发布视频执行 Bot 重置与删除命令被明确拒绝、并发重置互斥、退出码 3 告警、子进程超时回收及平台受理后本地崩溃窗口（未决 Attempt 租约恢复与禁止重领）。
+- **验收标准**: 任何通过 Bot 指令重置或删除已存在平台账本的视频均被拒绝并返回明确报错；未受阻任务仍可正常重置；退出码 6 正确转入审核中并记录三表原子账本。
+- **回滚方案**: 实行**受控安全回滚五步法**：① 全局停写、终止在途执行进程并严格核验零活跃消费（未完成核验前严禁 revert）；② 绑定具体目标 Commit 执行原子回滚；③ 沙箱运行 `POLARIS-101` 新增防线测试（严禁运行包含不安全基线的历史单测，防线测试若失败必须保持暂停、严禁恢复调度）；④ 推送并重启全套守护进程；⑤ 确认无误后解除暂停。若已发生状态分叉，严禁全库盲跑与裸写生产 SQL，按专用剧本执行：SQLite 在线备份 API（`conn.backup()`）并验证完整性（`PRAGMA integrity_check;`） → 排除 `PUBLISHED` 的受测 DAL 只读差异预览 → 针对指定 `video_id` 的受测 DAL 定点纠偏。
 
 ---
 

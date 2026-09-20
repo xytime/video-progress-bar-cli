@@ -1,8 +1,8 @@
 ---
 created_by: Gemini_3.8_Flash_planning
 created_at: 2026-09-12
-last_updated_at: 2026-09-12
-version: 1.5.0
+last_updated_at: 2026-09-20
+version: 1.9.0
 ---
 
 # Video-precessing 架构治理与重构接手总指南
@@ -10,6 +10,10 @@ version: 1.5.0
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.0 | 2026-09-20 | Antigravity | M6.2+ 第三轮架构复审协议与剧本深度闭环：确立全局停写与在途执行进程零消费物理核验门禁、SQLite WAL 模式一致性在线备份（conn.backup()）与完整性校验、Attempt 增量表迁移与部分唯一活跃索引 CAS 原子领取、回滚验证绑定 POLARIS-101 防线单测（失败保持暂停）、影子比对显式开启读事务快照（BEGIN DEFERRED 消除 with conn 假读事务）并验收并发隔离、定点纠偏全面收敛至受测 DAL 接口（根绝生产裸 SQL） |
+| 1.8.0 | 2026-09-20 | Antigravity | M6.2+ 第二轮架构复审 7 项技术缺口彻底闭环：确立受控安全回滚五步法、SQLite 账本纠偏局限审查与定点差异预览规程、QUEUED 响应前持久化与不可重试 Attempt 租约（闭环 At-Most-Once）、退出码 1 混淆治理与明确 BUSY 凭证有限退避、校准退出码 3 语义、影子比对同一显式只读快照与底层中断释放、测试收据证明范围与单测覆盖范围精确校准 |
+| 1.7.0 | 2026-09-20 | Antigravity | M6.2+ 架构审议整改与基线收敛：吸收架构师「REVISE BEFORE IMPLEMENTATION」7 项 P1/P2 整改意见，修正回滚剧本为 Fail-Closed 只读降级、明确 settings 构造与 SQLite 纠偏剧本、收口 Bot 为具名分发客户端、消除会话锁互锁误区、对齐双轨测试逻辑与单体递减棘轮门禁、新增 RISK-STATE-003 |
+| 1.6.0 | 2026-09-20 | Gemini_3.8_Flash_planning | M6.2+ 红蓝博弈与工程加固：校准近一周 25 次业务提交（评论互动系统、会话共享锁、环境构建器）带来的架构漂移；完成 5 场红蓝博弈压力测试；沉淀影子开发多角色工程蓝图与博弈报告 |
 | 1.5.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.2 阶段启动：M6.1 特征化测试基线签署完结 (SIGNED OFF / COMPLETE)，正式启动 M6.2 可执行黄金回放数据集 (Executable Golden Replay Dataset) 建设 |
 | 1.4.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.1D 独立防线与去重审计：分离 Fact 与 Defense，消除微信与快手防线重复计算，多维建模防线与控制族 |
 | 1.3.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.1C 防线合格性审计：确立 Publication Safety Defense 准入标准，剔除 Attempt Identity 虚增防线，降级 INV-003 为 PARTIAL |
@@ -27,7 +31,7 @@ version: 1.5.0
 
 ### 1. 为什么进行这次架构治理？
 随着流水线演进为集 YouTube 监控、Gemini 评分、切片、文案、Whisper 转录、双语字幕压制、敏感词审查及微信视频号/抖音/快手多平台发布于一体的自动化系统，核心代码出现单体集中化膨胀：
-- 数据访问层 [`src/video_processing/db/database.py`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/video_processing/db/database.py)（`PipelineDB`）达约 9.7k 行、245 个方法（基于 2026-09-12 静态快照观测）。
+- 数据访问层 [`src/video_processing/db/database.py`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/video_processing/db/database.py)（`PipelineDB`）达约 10.6k 行、245+ 个方法（基于 2026-09-20 静态快照观测）。
 - 状态机调度层 [`src/video_processing/pipeline_manager.py`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/video_processing/pipeline_manager.py)（`PipelineManager`）达约 4.4k 行，且主编排方法 `_process_single_video` 达约 1k 行。
 **治理目标不是追求理论架构漂亮或进行目录搬家**，而是：
 1. 降低单点修改的爆炸半径（Blast Radius）；
@@ -89,6 +93,10 @@ version: 1.5.0
 - 黄金场景可执行回放数据集规范：[`golden_replay_dataset.md`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/golden_replay_dataset.md)
 - 安全防护网与不变式双轨矩阵：[`safety_harness.md`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/safety_harness.md)
 - 结构化研发与安全工单依赖图：[`work_orders.md`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/work_orders.md)
+- 北辰重构工程总工单：[`VP-POLARIS-WORK-ORDER.md`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/VP-POLARIS-WORK-ORDER.md)
+- 影子开发多角色工程实施指南：[`shadow_development_blueprint.md`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/shadow_development_blueprint.md)
+- 红蓝对抗博弈推演与设计加固报告：[`adversarial_red_blue_game_2026-09-20.md`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/adversarial_red_blue_game_2026-09-20.md)
+- 架构重构与治理深度问答档案：[`qa_and_architecture_review.md`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/docs/refactor/video-processing/qa_and_architecture_review.md)
 
 ---
 

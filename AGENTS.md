@@ -160,6 +160,13 @@ Keep `enable_english_world_language_qa=false` until benchmark, human review and 
 
 `src/config/settings.py` defines v7.0 feature flags that **default to `False`** for production safety; enable per-flag in `.env`: `enable_blacklist_tombstone`, `enable_manual_score_lock`, `enable_censorship_engine`, `enable_channel_policy_filter`, `enable_sigterm_kill`, `enable_dynamic_keywords`, `enable_wechat_comment_interaction`.
 
+## Target Audience Persona & Content Contract
+
+The project's target audience for WeChat Channels is **mature, high-net-worth, predominantly male (70% male, 75.8% aged 40+, 34.4% Tier-1 cities, >25% overseas/overseas Chinese, 55% iPhone)**. Detailed definition is locked in `docs/audience_persona.md`.
+- **Approved topics**: Macro economy/geopolitics (debt, Fed, energy, dollar), high-level strategic tech/industry impacts (semiconductors, AI shifts, key leadership interviews), corporate history/crisis autopsies, and longevity/health science.
+- **Strictly forbidden**: Junior developer tutorials/syntax guides, generic pop-culture/anime, shallow motivational fluff, and politically sensitive controversies (guarded by `censor_engine`).
+- **All future agents and extensions (whitelist curation, event radar, copywriters)** must strictly adhere to `docs/audience_persona.md`.
+
 ## Repo hygiene note
 
 The project root is littered with one-off artifacts — `scratch_*.py`, `dump_*.py`, `render_*.sh`, `*.mp4`, `*.ass`, `*.log`, `draft-code/`, `scratch/`. These are debugging/demo leftovers, **not** the real codebase. The maintained code is in `src/`, `scripts/`, and `tests/`.

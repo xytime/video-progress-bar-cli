@@ -1,8 +1,8 @@
 ---
 created_by: Gemini_3.8_Flash_planning
 created_at: 2026-09-12
-last_updated_at: 2026-09-12
-version: 1.4.0
+last_updated_at: 2026-09-20
+version: 1.5.0
 ---
 
 # Video-precessing 重构交接合同 (Refactor Handoff Contract v1.0 Final)
@@ -10,6 +10,7 @@ version: 1.4.0
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-09-20 | Antigravity | M6.2 架构审议校准：在权威风险登记册中正式新增 RISK-STATE-003（中心 DAL 候选查询 get_high_score_pending_videos 遗漏 DISCOVERY 过滤），规范 POLARIS-101 测试先行与 POLARIS-103 修复分工，保留 RISK-STATE-002 退役历史记录不变 |
 | 1.4.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.1D 独立防线与去重审计：校准 INV-003 语义，分离 Publication Fact 与 Defense，引入 Protection Dimensions 与 Control Families 多维建模 |
 | 1.3.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.1C 防线合格性审计：严格对齐 Publication Safety Defense 标准，删除未形式定义的故障域指标，改用共享依赖分析 |
 | 1.2.0 | 2026-09-12 | Gemini_3.8_Flash_planning | M6.1B 语义审计升级：收敛 M6.5 为 M6.5A (WO-STATE-001 only) 与条件化 M6.5B (WO-SCRIPTS-001)，对齐工单依赖图 |
@@ -504,6 +505,20 @@ version: 1.4.0
 - **Related invariants**: `INV-003`, `INV-004`, `INV-005`, `INV-007`
 - **Related work orders**: `WO-PUB-001`
 - **Disposition**: `ACTIVE`（作为 Last Mile 最后一公里迁移单元，必须在前序所有 Gate 验证通过后实施）。
+
+#### RISK-STATE-003
+- **ID**: `RISK-STATE-003`
+- **Title**: 中心 DAL 候选查询未内聚 DISCOVERY 隔离规则引发非预期自动流转
+- **Status**: `ACTIVE`
+- **Severity**: `HIGH`
+- **Likelihood**: `MEDIUM`
+- **Evidence confidence**: `HIGH`
+- **Statement**: `PipelineDB.get_high_score_pending_videos` 作为消费高分待处理视频的中心核心查询，仅按分值和状态筛选，未在 SQL 谓词中显式排除 `source = 'DISCOVERY'`。系统当前依赖外围调用方在各自逻辑中自行补充过滤。一旦新增外围入口（如 Bot 指令、批量调度器、重试队列）直接调用 DAL 候选方法，高赞发现流视频就会被误纳入自动下载压制与发布流，破坏“高赞发现仅供浏览”的业务契约。
+- **Evidence**: [`src/video_processing/db/database.py:L4270-L4310`](file:///Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/video_processing/db/database.py#L4270) 与 `VP-POLARIS-WORK-ORDER.md` (POLARIS-101 / POLARIS-103)
+- **Current mitigation**: 仅外围部分自动化脚本自行带 `source != 'DISCOVERY'` 过滤，中心 DAL 未做内聚防御。
+- **Related invariants**: `INV-001`, `INV-002`
+- **Related work orders**: `POLARIS-103` (前置依赖 `POLARIS-101` 编写独立失败断言测试)
+- **Disposition**: `ACTIVE`（在 `POLARIS-101` 产生双轨红灯证据后，由工单 `POLARIS-103` 在 DAL 核心下沉完成 `UPPER(TRIM(COALESCE(pv.source, ''))) != 'DISCOVERY'` 修复）。
 
 ---
 

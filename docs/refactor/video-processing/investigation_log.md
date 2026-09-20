@@ -462,3 +462,121 @@ version: 1.5.0
 - **M6.2 状态**：**COMPLETE / VERIFIED**。
 - **可执行黄金回放数据集交付完结**：已物理实例化 6 个标准场景，具备双重隔离重放能力，完全满足 Gate M6 验收准则。
 - **重构工单状态**：所有工单（`WO-STATE-001` ~ `WO-PUB-001`）严格保持 **BLOCKED**。未获授权严禁进入 M6.3 或 M6.5。
+
+---
+
+## 2026-09-20: M6.2+ 红蓝对抗博弈迭代、近一周业务演变审计与设计加固
+
+### Update 2026-09-20 · Phase M6.2+
+- **Author**: Gemini_3.8_Flash_planning
+- **What changed**: 
+  1. 对 2026-09-12 至 2026-09-20 期间落盘的 25 次业务提交进行了全量拓扑与并发冲突审计；
+  2. 针对 `VP-POLARIS` 方案组织了 5 场红蓝对抗博弈压力测试（涵盖 Bot 假死/鬼魂状态、DISCOVERY 候选与夹具雪崩、评论互动引擎共享锁冲突、PipelineDB 内部委托死锁以及影子比对盘中资源侵占）；
+  3. 输出专项博弈报告 [`adversarial_red_blue_game_2026-09-20.md`](./adversarial_red_blue_game_2026-09-20.md) 并完成实施指南更新。
+- **New evidence**: 
+  1. **行号与规模漂移**：`PipelineDB` 从 9.7k 行增长至 10,649 行，245+ 方法；`get_high_score_pending_videos` 位于 `L4270-L4296`。
+  2. **新增并发共享锁**：`scripts/wechat_uploader.py:L104` 引入 `guarded_wechat_browser_session`（v5.7.0），与 `WeChat-Interaction-Engine` 常驻后台 Worker 共享 Playwright 浏览器用户目录。Bot 直调绕过了该锁。
+  3. **统一环境构建器**：`PipelineManager._build_subprocess_env()` 在 commit `e7c9866` 与 `0a8380c` 完成统一提取，但 Bot 尚未接入。
+  4. **测试有效性证明**：在隔离测试沙箱中验证 `test_characterization_baseline.py`（2.96s）与 `test_golden_replay_dataset.py`（2.23s）全绿。
+- **Decision**: 
+  1. **维持 Hybrid Plan B 核心路线**（先 Containment 封堵旁路 → 后 Contract/Harness 补齐测试 → 最后 Incremental Extraction 渐进解耦）；
+  2. **将博弈产出的 4 项硬化措施注入工单**：
+     - Bot 退出码 6 处理必须同事务写入 Publication 账本与 Attempt 记录，彻底杜绝“无账本鬼魂状态”；
+     - Bot 暴露接口改为返回 `QUEUED` 语义，调整 Prompt 消除 LLM 幻觉；
+     - DAL 候选过滤强化为 `UPPER(TRIM(COALESCE(pv.source, ''))) != 'DISCOVERY'`，并建立正反双轨独立测试套件；
+     - 影子比对器接入美股盘中交易时段（Market Guard）自动短路与采样限流。
+- **Next action**: 待用户输入口令 `继续北辰重构`，启动 `POLARIS-000` 现场复核并推进 `POLARIS-101`。
+
+---
+
+## 2026-09-20: M6.2+ 架构审议整改与实施前基线收敛 (Architect Review Revisions & Convergence)
+
+### Update 2026-09-20 · Phase M6.2+ (Post-Review Revision)
+- **Author**: Antigravity
+- **Trigger**: 架构师审议结论「REVISE BEFORE IMPLEMENTATION」，提出 7 项 P1/P2 严格整改意见。
+- **What changed**:
+  1. **回滚剧本整改 (Fail-Closed Read-Only Fallback)**：全面撤除“允许恢复原透传行为”的漏洞，修正为 Fail-Closed 只读降级（暂停高危写，保留只读核验）；纠正 `.env` 30秒热熔断误区（`settings` 在 import 时构造，明确需要常驻进程重启）；绑定 `git revert` 目标提交；补齐 SQLite 账本纠偏命令（`repair_wechat_submission_status_divergence`）。
+  2. **Bot 收口唯一定位**：统一将 Bot 收口为单一具名任务分发客户端（仅提交任务，返回 `QUEUED` 异步受理语义）；核心应用服务负责安全拦截、排重、拉起子进程及三表原子记账；声明本地三表强事务一致性与外部 At-Most-Once 边界。
+  3. **会话锁事实纠偏 (Deadlock Prevention)**：确认 `scripts/wechat_uploader.py:L1221`（`run_uploader`）内部已由 `@guarded_wechat_browser_session` 装饰持锁；删除父进程加锁错误建议（避免父子互锁）；明确子进程自洽持锁、调度层传递规范 `state_path` 并在遇到 `busy_result=1` 时执行优雅退避。
+  4. **测试双轨红绿逻辑规范 (Dual-Track Testing)**：明确漏洞复现用例先红后绿，现有正常基线用例全程保绿；扩展入口测试覆盖（视频删除 `delete_video_from_db`、并发重置、退出码 3、超时与平台受理后本地写账本崩溃窗口）；厘清沙箱隔离收据、确定性与语义等价性的概念边界。
+  5. **单体膨胀根因与三板斧重构**：修正过去 48 小时互动提交数据（+990/-74/净增 +916 行）；确立 Facade 连接生命周期与事务管理（子模块注入 `conn`）；部署单调递减动态棘轮门禁；增加跨域事务回滚实测。
+  6. **影子比较器前置条件**：补充 Gate M7 启动前强制同一只读快照、确定性排序、虚拟固定时钟以及有界资源（队列上限 100、并发 2 线程、200ms 超时、过载静默丢弃）。
+  7. **风险登记册编号修正**：在 `refactor_handoff.md` 中正式新增 `RISK-STATE-003`（DISCOVERY 候选泄漏），保持 `RISK-STATE-002` 的 RETIRED 状态不变。
+- **Status**: 治理文档与设计蓝图全量修订对齐完毕，等待架构师复审放行。
+
+---
+
+## 2026-09-20: M6.2+ 第二轮架构复审 7 项技术缺口彻底闭环 (Round 2 Review Rectification & Final Disk Persistence)
+
+### Update 2026-09-20 · Phase M6.2+ (Round 2 Architecture Review Closure)
+- **Author**: Antigravity
+- **Trigger**: 架构师第二轮审议结论「仍需修订，暂不签署 7 项意见 100% 闭环，不发出实施启动口令」，明确指出 4 项 P1、3 项 P2 与 1 项锁措辞校准的技术缺口。
+- **What changed & Physical Evidence**:
+  1. **[P1] 锁忙与退出码 1 混淆治理及退出码 3 语义对齐**：
+     - 确证 `scripts/wechat_uploader.py:L1221` 中 `@guarded_wechat_browser_session` 锁争用返回 `busy_result=1`，而素材缺失（L1262 视频、L1267 文案、L1282 封面）同样直接 `return 1`；
+     - 彻底禁止仅凭退出码 1 执行盲目重试；确立独立结构化 BUSY 凭证协议（如 stderr 输出 `[SESSION_LOCK_BUSY]`），仅对明确 BUSY 凭证执行有限指数退避（最多 3 次）；通用退出码 1 判定为永久失败；
+     - 统一更正退出码映射：退出码 `2` 为凭据失效（`EXIT_LOGIN_REQUIRED`），退出码 `3` 为**发布结果未确认**（`EXIT_RESULT_UNCERTAIN`，必须交由人工核销，绝不可自动重传）。
+  2. **[P1] 严禁裸 Revert，确立受控安全回滚五步法**：
+     - 明确指出若仅执行 `git revert <SHA>`，会撤销修补 DISCOVERY 漏洞的提交，导致系统重新暴露于不设防状态；
+     - 制定严格的受控安全回滚五步机制：① 前置暂停调度与写入（设置 `WECHAT_PUBLISHING_PAUSED=true` 立即止血）；② 绑定具体提交回滚（`git revert <TARGET_SHA> --no-edit`）；③ 沙箱验证回滚后防线（确保 DISCOVERY 过滤与关键安全门禁受控）；④ 推送并重启守护进程（`git push origin main && ./vpanel ui restart && ./vpanel bot restart`）；⑤ 确认平稳后恢复调度。
+  3. **[P1] QUEUED 响应前持久化与不可重试 Attempt 租约闭环 At-Most-Once**：
+     - 规范客户端与调度端契约：收到调度请求后，必须先在 SQLite 原子持久化写入分发记录，**随后**才返回 `QUEUED` 异步受理语义，对活跃任务幂等复用，杜绝内存丢单；
+     - 外部物理调用前落盘 `wechat_submission_attempts`（`IN_PROGRESS`）租约；若外部平台已受理但在本地写入 Publication 账本时发生进程崩溃（`SIGKILL`），系统重启扫描到未决 Attempt，**强制 Fail-Closed 进入 `UNCERTAIN` 并请求人工核验**，物理阻断自动重发。
+  4. **[P1] SQLite 账本纠偏命令真实实现与安全规范**：
+     - 源码真实事实揭露：`PipelineDB.repair_wechat_submission_status_divergence()`（`src/video_processing/db/database.py:3505`）**物理上只查询 `wechat_publications` 事实表，根本不读 `wechat_submission_attempts` 表**；
+     - 源码严重覆盖风险：其内联 SQL `WHERE id IN (...) AND status NOT IN ('SUBMITTED_*', 'UNDER_REVIEW', 'UNCERTAIN')` **未显式排除 `processed_videos.status = 'PUBLISHED'`**！若真实发布已 PUBLISHED 但 publication 表停留在 UNDER_REVIEW，全库运行会错误将 `PUBLISHED` 覆盖为 `UNDER_REVIEW`；
+     - 绝对禁止全库盲跑；制定规程：生产数据库备份 → 显式排除 `PUBLISHED` 的只读差异预览（Dry-Run） → 针对指定 `video_id` 定点纠偏 → 物理复核。
+  5. **[P2] 风险登记册精准校准**：
+     - 修正 `refactor_handoff.md` 中的 API 引用为 `PipelineDB.get_high_score_pending_videos()`（`src/video_processing/db/database.py:L4270-L4310`）；
+     - 彻底删除未定义的 `WO-STATE-002`，明确工单分工：`POLARIS-101` 负责前置失败测试，`POLARIS-103` 负责 DAL SQL 过滤修复，保持 `RISK-STATE-002` 的 RETIRED 归档状态。
+  6. **[P2] 影子比对同一只读事务快照与底层资源释放**：
+     - 确立影子双跑必须在同一个数据库连接的显式只读事务快照（`with conn:` 或 `BEGIN DEFERRED`）内执行，防止新旧实现读取不同快照造成假分叉；
+     - 200ms 硬超时必须在验收中验证底层中断：触发 `sqlite3_interrupt()` 或物理关闭影子专用连接，确保底层 C 引擎立即释放读锁与 CPU 资源。
+  7. **[P2] 证据真实度与措辞校准**：
+     - 澄清测试收据范围：`receipt.json` 证明了当前单次运行被 OS 沙箱阻断且环境密封；`Run A == Run B` 是 `test_golden_replay_dataset.py` 内部用例对特定输入的两遍确定性回放，非顶层脚本执行两次；
+     - 严谨界定单测覆盖：澄清 15 passed 仅覆盖 `test_characterization_baseline.py` 与 `test_golden_replay_dataset.py` 两个文件，严禁夸大为“全量单测通过”；
+     - 校准会话锁竞争措辞：锁超时默认 0 秒导致子进程立即锁忙退出，更正为“父子进程锁争用与立即锁忙失败”。
+- **Production Code Status**: 生产业务代码严格保持零修改（Zero runtime code changes, 0 line diff in `src/` & `scripts/`）。
+- **Isolated Test Receipt**: `.venv/bin/python scripts/run_isolated_tests.py -- -q tests/unit/test_characterization_baseline.py tests/unit/test_golden_replay_dataset.py` -> **15 passed, 2 warnings in 3.82s**。
+- **Sign-off Readiness**: 7 项复审技术缺口 100% 物理闭环，所有文档已更新落盘，等待架构师最终签署与放行口令。
+
+---
+
+## 2026-09-20: M6.2+ 第三轮架构复审协议与剧本深度闭环 (Round 3 Architecture Review Closure)
+
+### Update 2026-09-20 · Phase M6.2+ (Round 3 Architecture Review Closure)
+- **Author**: Antigravity
+- **Trigger**: 架构师第三轮审议结论「仍不放行实施。剩余问题集中在新增协议和运维剧本」，指出 4 项 P1 与 2 项 P2 实施缺口。
+- **What changed & Physical Evidence**:
+  1. **[P1] 全局停写、在途任务清空与执行进程零消费物理核验**：
+     - 确证 `vpanel:217` (`ui restart / stop`) 仅管理 FastAPI 控制中心（`:8765`），无法停止 cron 定时任务、后台 `pipeline_manager`、`Bot` 守护进程以及拉起的 `wechat_uploader.py` 浏览器进程；
+     - 补齐四步严密停写与核验规范：设置 `WECHAT_PUBLISHING_PAUSED=true` -> `./vpanel ui stop && ./vpanel bot stop` -> 检索 `pipeline_manager|wechat_uploader` 进程并发送 SIGTERM/SIGKILL -> `ps` 物理核验进程完全清空且状态确认停止；
+     - 门禁铁律：零消费物理核验未通过前，绝对禁止执行 `git revert`。
+  2. **[P1] SQLite WAL 模式一致性在线备份与完整性验证**：
+     - 确证项目启用 WAL 模式（`PRAGMA journal_mode=WAL;`），单纯 shell `cp output/pipeline.db` 会遗漏 `-wal` 中的已提交发布账本或造成快照损坏；
+     - 采用 SQLite 官方在线备份 API (`sqlite3.Connection.backup()`)，由底层 C 引擎获取一致性读锁、同步 WAL 检查点并原子输出快照文件；
+     - 备份后立即连接备份文件执行 `PRAGMA integrity_check;` 并断言返回值为 `ok`。
+  3. **[P1] Attempt 协议数据库增量迁移、部分唯一索引与原子领取规则**：
+     - 确证现有表 `wechat_submission_attempts` CHECK 约束为 `CHECK(state IN ('SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND'))`（`database.py:750`），直接插入 `IN_PROGRESS` 会抛出异常；
+     - `PipelineDB._migrate_database()` 增加自动迁移守卫，升级为扩展约束：`CHECK(state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND', 'PLATFORM_ID_BOUND', 'UNCERTAIN', 'RELEASED_BUSY'))`；
+     - 物理建立部分唯一活跃索引：`CREATE UNIQUE INDEX IF NOT EXISTS idx_wechat_active_attempt ON wechat_submission_attempts(subject_id) WHERE state IN ('IN_PROGRESS', 'SUBMITTED_UNBOUND');`，通过条件 CAS 插入执行原子领取；
+     - 子进程明确 BUSY 退出时标记 `RELEASED_BUSY` 释放唯一索引以便有限退避重领；平台受理后本地崩溃在重启后强制 Fail-Closed 进入终态 `UNCERTAIN` 绝不自动重领，闭环 At-Most-Once。
+  4. **[P1] 回滚验证门禁：执行 POLARIS-101 新增防线测试，失败保持暂停**：
+     - 确证旧 `test_characterization_baseline.py:287` 记录了底层缺乏防线时状态重置成功的已知不安全基线，且不含 DISCOVERY 排除测试，用于回滚验证会导致假全绿；
+     - 修正为必须在沙箱中运行 `POLARIS-101` 新增的独立防线测试套件（`tests/unit/test_polaris_containment.py`），验证 DISCOVERY 硬排除、Bot 状态重置拦截与 AUTO 正常流转；
+     - 门禁铁律：若防线测试失败，系统必须保持 `WECHAT_PUBLISHING_PAUSED=true` 暂停状态，严禁解除暂停，严禁恢复调度。
+  5. **[P2] 影子比对显式开启读事务快照与底层资源释放**：
+     - 纠正 Python `sqlite3` `with conn:` 误区：官方文档明确 `with conn:` 仅管理 commit/rollback，不自动对 SELECT 开启事务；
+     - 必须在专用连接上显式执行 `conn.execute("BEGIN DEFERRED")` 开启事务，锁定 WAL 读版本快照并在同一事务内先后执行新旧查询；
+     - 验收要求必须包含并发隔离测试（断言并发写入不可见）；
+     - 查询完毕或 200ms 超时（`sqlite3_interrupt`）后，显式执行 `conn.execute("ROLLBACK")` 并显式关闭专用连接。
+  6. **[P2] 定点纠偏全面收敛至受测 DAL 接口**：
+     - 彻底废除运维剧本中直接使用 `sqlite3.connect` 裸连生产库写 SQL 的违规行为（遵守宪法 Rule 2）；
+     - 在 `PipelineDB` 中设计封装受测接口：`preview_wechat_submission_divergence()`（只读预览，排除 `PUBLISHED`）与 `repair_wechat_submission_divergence_for_ids(video_ids)`（非空校验，单事务更新排除 `PUBLISHED`，返回逐条审计结果）；
+     - 运维剧本全面改为调用封装的受测 DAL 接口方法。
+- **Production Code Status**: 生产业务代码严格保持零修改（Zero runtime code changes, 0 line diff in `src/` & `scripts/`）。
+- **Isolated Test Receipt**: `.venv/bin/python scripts/run_isolated_tests.py -- -q tests/unit/test_characterization_baseline.py tests/unit/test_golden_replay_dataset.py` -> **15 passed, 2 warnings in 3.19s**。
+- **Sign-off Readiness**: 第三轮架构复审指出的 6 项协议与剧本缺口（4 项 P1、2 项 P2）已 100% 物理闭环，所有文档已更新落盘。
+
+
+
