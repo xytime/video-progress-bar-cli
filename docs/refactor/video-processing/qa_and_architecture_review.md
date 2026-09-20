@@ -4,8 +4,8 @@ project: Video-precessing (YouTube → 微信视频号/多平台流水线)
 date: 2026-09-20
 author: Gemini_3.8_Flash_planning
 companion: shadow_development_blueprint.md, adversarial_red_blue_game_2026-09-20.md, VP-POLARIS-WORK-ORDER.md
-status: 架构师审议终审修订归档 (FOR ARCHITECT REVIEW - REVISED V2.3)
-version: 2.3.0
+status: 架构师审议终审修订归档 (FOR ARCHITECT REVIEW - REVISED V2.4)
+version: 2.4.0
 ---
 
 # VP-POLARIS「北辰」架构重构与治理深度问答档案 (Q&A Review Compendium)
@@ -275,11 +275,14 @@ version: 2.3.0
   3) **第五步恢复步骤全面补齐**：
      执行反向 sed 恢复 crontab（`crontab -l | sed -E 's/^# QUIESCE_DISABLED (.*)$/\1/' | crontab -`），核验恢复生效，随后安全移除 `pipeline_freeze.lock`，彻底消除文档间冲突。
 
-#### 4. [P2] 真实锁探测根除不存在的配置字段引用，对齐实际上传入口约定并执行完整入口测试
-- **缺陷本质**：蓝图第 432 行此前写为 `lock_path = canonical_wechat_session_lock_path(settings.wechat_state_path)`。但当前 `Settings` 未定义 `wechat_state_path`，执行时会直接抛出 `AttributeError` 导致探测脚本在进入 `flock` 之前崩溃。当前调度器实际传入的是输出目录下的 `wechat_state.json`（`pipeline_manager.py:996, 4234`），`wechat_uploader.py:1230` 的默认参数也是 `"output/wechat_state.json"`。
+#### 4. [P2] 真实锁探测根除未定义配置引用与代码块缩进语法缺陷，对齐上传约定并动态提取单测验收
+- **缺陷本质**：
+  1) 蓝图第 432 行此前写为 `lock_path = canonical_wechat_session_lock_path(settings.wechat_state_path)`，因 `Settings` 未定义 `wechat_state_path` 导致运行时报 `AttributeError`；
+  2) 蓝图第 427 行代码内容缩进为 6 个空格，而 Markdown 代码围栏为 5 个空格（差值 diff=1），导致从 Markdown 去除围栏缩进提取脚本后，Python 顶层第二行残留 1 个前导空格，引发 `IndentationError: unexpected indent, line 2` 语法错误。
 - **闭环方案**：
-  1) **消除不存在的字段引用**：探测脚本直接使用生产约定的 `state_path = Path("output/wechat_state.json")`，调用 `canonical_wechat_session_lock_path(state_path)` 规范派生真实锁文件 `output/.wechat_state.json.browser.lock`；
-  2) **单测执行完整探测入口**：在 `POLARIS-101` 单测中，要求持锁/释放测试必须执行剧本中的完整探测入口逻辑（而不仅是底层路径派生函数），断言真实持锁时非零失败、释放后返回 0，确保脚本与配置 100% 具备可执行性。
+  1) **真实约定路径对齐**：使用生产约定的 `state_path = Path("output/wechat_state.json")` 派生锁文件，根除未定义配置字段；
+  2) **代码块缩进严格对齐**：代码块内容统一左移 1 个空格与代码围栏严格按 5 个空格对齐（diff=0），经 AST 语法分析 100% 通过；
+  3) **单测动态提取蓝图命令验收**：在 `POLARIS-101` 中，要求单测必须动态提取蓝图第 6.1 节代码块命令并执行，真实持锁断言非零失败，释放断言返回 0，确保文档命令 100% 可直接复制执行。
 
 #### 2. [P1] 解决外键约束冲突，确立外键兼容的原子领取事务顺序
 - **缺陷本质**：`wechat_submission_active_claims.active_attempt_id` 外键严格引用 `wechat_submission_attempts.attempt_id`。SQLite 连接默认开启外键检查（`PRAGMA foreign_keys = ON;`）且未声明延迟检查。若按原伪代码先向租约表插入引用尚不存在的 `active_attempt_id`，即使在同一事务内也会立即抛出 `sqlite3.IntegrityError: FOREIGN KEY constraint failed` 崩溃！

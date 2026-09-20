@@ -2,7 +2,7 @@
 created_by: Gemini_3.8_Flash_planning
 created_at: 2026-09-12
 last_updated_at: 2026-09-20
-version: 2.3.0
+version: 2.4.0
 ---
 
 # Video-precessing 架构调查与治理日志 (Investigation & Governance Log)
@@ -10,6 +10,7 @@ version: 2.3.0
 ## Version History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.4.0 | 2026-09-20 | Antigravity | M6.2+ 第七轮架构复核 1 项 P2 闭环：修正 Section 6.1 探测代码块内容多出 1 个空格的缩进缺陷，与围栏严格按 5 个空格对齐（diff=0），杜绝 Markdown 提取后 Python 报 IndentationError 语法错误；在 POLARIS-101 明确单测必须动态提取蓝图命令执行语法与逻辑验证 |
 | 2.3.0 | 2026-09-20 | Antigravity | M6.2+ 第六轮架构终审 1 项 P2 闭环：修正真实锁探测命令中引用不存在的 settings.wechat_state_path 缺陷；对齐实际调度器（pipeline_manager.py:996, 4234）与上传入口默认约定路径 output/wechat_state.json，严格派生 output/.wechat_state.json.browser.lock；并在 POLARIS-101 明确持锁/释放单测执行剧本中的完整探测入口，杜绝静默配置遗漏 |
 | 2.2.0 | 2026-09-20 | Antigravity | M6.2+ 第五轮架构终审 3 项 P1 缺口深度闭环：① 消除文档间矛盾，全面更新 Section 6.1 实操回滚命令与恢复步骤（实装 crontab 宿主物理静音 # QUIESCE_DISABLED、真实锁探测 canonical_wechat_session_lock_path 与反向恢复调度）；② 确立外键兼容的原子领取事务顺序（BEGIN IMMEDIATE 内严格执行：4 表联合前置阻断检查 → 先插入 Attempt 满足 active_attempt_id 外键 → 随后插入活跃租约实现主键互斥 → COMMIT，任一步失败全量回滚零残留）；③ 恢复历史 Attempt 联合阻断（检查租约表、Publication 表与历史 Attempt 表，杜绝存量独立 Attempt 重复发帖入口，并增设单测验证） |
 | 2.1.0 | 2026-09-20 | Antigravity | M6.2+ 第四轮架构终审 3 项 P1 缺口深度闭环：① 规范会话锁路径探测（canonical_wechat_session_lock_path 探测 output/.wechat_state.json.browser.lock）并在 POLARIS-101 增设真实持锁反例测试；② 确立租约方案 A 完整契约（废除方案 B，补齐 Attempt 表 CHECK 扩展迁移与 active claims 独立表创建、同事务 CAS 领取与按 active_attempt_id 条件精确释放）；③ 升级启动源封闭为宿主级 crontab 物理静音（# QUIESCE_DISABLED 前缀与活跃项清空核验），静音覆盖全回滚与沙箱测试窗口 |
@@ -693,7 +694,32 @@ version: 2.3.0
   ```json
   {"source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing", "snapshot": "/private/tmp/video-pytest-klrkt8u7/sandbox/repo", "probe": {"exit_code": 0, "seconds": 0.073}, "pytest_arguments": ["-q", "tests/unit/test_characterization_baseline.py", "tests/unit/test_golden_replay_dataset.py"], "timeout_seconds": 600, "source_manifest_sha256": "78aa4d9c495bf9b8ab16fdd450e7eb1b7ea3790452eb4acfa7137493f3becca3", "profile_sha256": "20dca9cae3e8fe9bbbece8e0d391c09ea4b65ef82bf87f1aac6d6b347a3e558a", "browser_runtime": null, "browser_runtime_sha256": null, "media_runtime": null, "media_runtime_sha256": null, "pytest": {"exit_code": 0, "seconds": 2.964}, "finished_at": "2026-09-20T12:00:04.173309+00:00"}
   ```
-- **Sign-off Readiness**: 第六轮架构终审指出的 1 项 P2 技术缺口已 100% 物理闭环，所有文档已落盘，沙箱测试 15 用例全绿（2.96s），等待系统架构师复核签署放行。
+- **Sign-off Readiness**: 第六轮架构终审指出的 1 项 P2 技术缺口已 100% 物理闭环，所有文档已落盘，沙箱测试 15 用例全绿（2.96s）。
+
+---
+
+## 2026-09-20: M6.2+ 第七轮架构复核 1 项 P2 缩进缺陷深度闭环 (Round 7 Architecture Review Final Closure)
+
+### Update 2026-09-20 · Phase M6.2+ (Round 7 Architecture Review Closure)
+- **Author**: Antigravity
+- **Trigger**: Codex / 系统架构师第七轮复核结论「配置字段问题已修正，但实际命令还有 1 处 P2，暂不签署“实操入口已闭环”。蓝图代码块多出一级缩进，直接复制执行会报错。只需修正代码块缩进，并让验收执行从蓝图提取的完整命令」。
+- **What changed & Physical Evidence**:
+  1. **[P2] 修正 Section 6.1 代码块缩进差值，AST 语法验证 100% 通过**：
+     - *根因确证*：蓝图第 6.1 节代码围栏为 5 个空格（`     ```bash`），但代码块内部每一行均为 6 个空格（多出 1 个空格缩进，差值 diff=1）。当 Markdown 解析器按围栏 5 空格对齐剥离缩进后，Python 顶层第一条语句（第二行 `import fcntl, sys`）残留 1 个前导空格，解释执行时抛出 `IndentationError: unexpected indent, line 2` 语法错误；
+     - *闭环方案*：将代码块内部全部行统一左移 1 个空格，使内容缩进严格与围栏 5 个空格对齐（diff=0）；经脚本动态提取并执行 `ast.parse` 校验，语法 100% 合法，彻底杜绝语法异常；
+  2. **[P2] 强化单测验收规程：动态提取蓝图命令执行**：
+     - 在 `POLARIS-101` 与 `work_orders.md:WO-STATE-001` 中，明确要求 `test_wechat_session_lock_probe_detects_real_hold_and_release` 单测必须**动态从 `shadow_development_blueprint.md:Section 6.1` 代码块提取完整命令执行**，在后台持锁时断言退出码 1，释放后断言退出码 0，确保文档中的实操命令绝对具备可复制执行性；
+  3. **工作区状态与基线澄清**：
+     - 当前工作区 `git status` 确认处于完全 clean 状态（无未提交的脏改动）；
+     - 生产业务代码（`src/`、`scripts/`）严格保持 100% 只读冻结（零修改）；
+     - 隔离沙箱测试 15 项基线与黄金回放全绿通过（耗时 2.95s，退出码 0）。
+- **Production Code Status**: 生产业务代码严格保持零修改（Zero runtime code changes, 0 line diff in `src/` & `scripts/`）。
+- **Isolated Test Receipt**:
+  ```json
+  {"source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing", "snapshot": "/private/tmp/video-pytest-iki61nkw/sandbox/repo", "probe": {"exit_code": 0, "seconds": 0.075}, "pytest_arguments": ["-q", "tests/unit/test_characterization_baseline.py", "tests/unit/test_golden_replay_dataset.py"], "timeout_seconds": 600, "source_manifest_sha256": "624c3cf7ee4845e10c405dc7d19032a91ad64131c1693afdd1a6dcf8f1f27982", "profile_sha256": "a9e3916279786eb403051223ff538476d860e393328303cc18f600f3dc543d43", "browser_runtime": null, "browser_runtime_sha256": null, "media_runtime": null, "media_runtime_sha256": null, "pytest": {"exit_code": 0, "seconds": 2.953}, "finished_at": "2026-09-20T12:41:10.982916+00:00"}
+  ```
+- **Sign-off Readiness**: 第七轮架构复核指出的 1 项 P2 代码缩进技术缺口已 100% 物理闭环，所有文档已落盘，沙箱测试 15 用例全绿（2.95s），等待系统架构师复核签署放行。
+
 
 
 
