@@ -316,10 +316,17 @@ job_add_channel() {
         exit 1
     fi
 
-    echo "🔍 正在通过 yt-dlp 验证频道 ID（验证过才入库，防止错误 ID）..."
-    INFO=$(.venv/bin/yt-dlp --print "%(channel_id)s|%(channel)s" \
-        --playlist-items 1 --no-warnings \
-        --cookies-from-browser safari \
+    local COOKIE_ARGS=()
+    if [ -f "output/youtube_cookies.txt" ]; then
+        COOKIE_ARGS=(--cookies output/youtube_cookies.txt)
+    else
+        COOKIE_ARGS=(--cookies-from-browser safari)
+    fi
+
+    INFO=$(.venv/bin/yt-dlp --flat-playlist --playlist-items 1 --no-warnings \
+        --print "playlist:%(channel_id,id)s|%(channel,title)s" \
+        --print "%(playlist_channel_id,channel_id,uploader_id)s|%(playlist_channel,channel,uploader,playlist_title)s" \
+        "${COOKIE_ARGS[@]}" \
         "$URL" 2>&1)
 
     if echo "$INFO" | grep -q "ERROR"; then
@@ -328,11 +335,15 @@ job_add_channel() {
         exit 1
     fi
 
-    CHANNEL_ID=$(echo "$INFO" | head -1 | cut -d'|' -f1)
-    CHANNEL_NAME=$(echo "$INFO" | head -1 | cut -d'|' -f2)
+    CHANNEL_LINE=$(echo "$INFO" | grep -E '^UC[a-zA-Z0-9_-]{22}\|' | head -1)
+    if [ -z "$CHANNEL_LINE" ]; then
+        CHANNEL_LINE=$(echo "$INFO" | grep '|' | head -1)
+    fi
+    CHANNEL_ID=$(echo "$CHANNEL_LINE" | cut -d'|' -f1)
+    CHANNEL_NAME=$(echo "$CHANNEL_LINE" | cut -d'|' -f2)
 
-    if [ -z "$CHANNEL_ID" ]; then
-        echo "❌ 未能解析到频道 ID，请检查 URL 格式"
+    if [[ ! "$CHANNEL_ID" =~ ^UC[a-zA-Z0-9_-]{22}$ ]]; then
+        echo "❌ 解析到的频道 ID 格式异常（${CHANNEL_ID:-空}），请确认这是一个有效的 YouTube 频道链接"
         exit 1
     fi
 

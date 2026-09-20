@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 # Modification History
+| 3.36.2 | 2026-09-20 | Gemini | 修复添加频道时 yt-dlp --flat-playlist 导致 channel_id 为 NA 的 Bug；优先提取播放列表级/多候选元数据 |
 | 3.35.1 | 2026-09-08 | Codex | 仪表盘允许局域网 IPv4 绑定；浏览器 Origin 必须与当前请求地址同源，保留轻量 CSRF 边界。 |
 | 3.36.0 | 2026-09-09 | Codex | 新增已确认公开发布账本只读接口，供 Telegram /last 查询；拒绝本地工作流状态回退。 |
 | 3.36.1 | 2026-09-09 | Codex | /last API 拒绝 SQLite 不可表示的位置参数，避免将异常暴露给 Telegram。 |
@@ -1705,14 +1706,18 @@ def add_channel(req: AddChannelRequest):
 
     # ── 2. 调用 yt-dlp 获取频道元数据 ─────────────────────────────────
     # 关键：使用 --flat-playlist 只获取列表元数据，不触发视频格式解析，
-    # 避免 "Requested format is not available" 导致的误报失败
+    # 避免 "Requested format is not available" 导致的误报失败。
+    # 注意：yt-dlp 在 --flat-playlist 模式下条目对象的 channel_id 为 None（格式化为 NA），
+    # 真实的频道 ID 与名称位于播放列表层级（playlist_channel_id / playlist_channel），
+    # 因此需通过多候选字段与 playlist: 前缀提取，确保频道首页、分栏与普通条目均能稳定解析。
     try:
         result = subprocess.run(
             [
                 _YT_DLP,
                 "--flat-playlist",          # 不解析视频格式，只取列表元数据
                 "--playlist-items", "1",    # 只取第一条，快速返回
-                "--print", "%(channel_id)s|%(channel)s",
+                "--print", "playlist:%(channel_id,id)s|%(channel,title)s",
+                "--print", "%(playlist_channel_id,channel_id,uploader_id)s|%(playlist_channel,channel,uploader,playlist_title)s",
                 "--no-warnings",
                 *settings.get_yt_cookie_args(),
                 url,
@@ -1725,8 +1730,11 @@ def add_channel(req: AddChannelRequest):
         return {"success": False, "error": f"找不到 yt-dlp 可执行文件：{_YT_DLP}"}
 
     # ── 3. 解析输出（stdout 有内容 = 频道存在，与 returncode 无关）───────
-    raw_line = result.stdout.strip().split("\n")[0] if result.stdout.strip() else ""
-    if not raw_line or "|" not in raw_line:
+    raw_lines = [
+        line.strip() for line in result.stdout.strip().splitlines()
+        if line.strip() and "|" in line
+    ]
+    if not raw_lines:
         # 真正的频道不存在：stdout 为空
         first_err = result.stderr.strip().split("\n")[0] if result.stderr.strip() else ""
         # 过滤掉格式错误（这类错误不代表频道不存在）
@@ -1734,7 +1742,12 @@ def add_channel(req: AddChannelRequest):
             first_err = "频道不存在或无法通过当前 Cookie 访问"
         return {"success": False, "error": first_err or "无法解析频道信息，请检查 URL"}
 
-    channel_id, channel_name = raw_line.split("|", 1)
+    # 优先选取符合 YouTube 频道规范（UC 开头，24 字符）的行
+    selected_line = next(
+        (l for l in raw_lines if l.split("|", 1)[0].strip().startswith("UC") and len(l.split("|", 1)[0].strip()) == 24),
+        raw_lines[0]
+    )
+    channel_id, channel_name = selected_line.split("|", 1)
     channel_id   = channel_id.strip()
     channel_name = channel_name.strip()
 
