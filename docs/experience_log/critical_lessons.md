@@ -2,7 +2,7 @@
 created_by: Gemini_3.1_Pro_High
 created_at: 2026-05-17
 updated_by: Codex
-updated_at: 2026-08-26T15:25:00+08:00
+updated_at: 2026-09-20T15:10:00+08:00
 purpose: 视频处理项目的关键教训防重犯清单
 ---
 
@@ -48,3 +48,19 @@ purpose: 视频处理项目的关键教训防重犯清单
 ## L6: GlossaryCard 释义区字号必须动态钳制，不可仅靠 SSAStyle (P2)
 **症状**: 当主字幕因多行折叠触发动态缩放（`_fit_font_size`）后，英文字号可能降至 28-45pt。但 `GlossaryCard` SSAStyle 的 `fontsize` 是全局固定值（42% × 84 ≈ 35pt），不感知动态缩放结果。未来若主字号调低至 28pt 时，释义区固定 35pt 反而会比主字幕更大，违反「Principle 1：释义字号不超过英文字幕字号」。
 **规约**: `build_glossary_text` 必须接收当前段落渲染后的实际英文字号 `en_size`，并在 ASS text 层插入 `{\fs{min(gloss_size, en_size)}}` 内联覆盖标签，以硬性保证释义字号 ≤ 当前段落英文字号，而非依赖静态样式。
+
+## L10: 微信后台微前端卡片定位与接口回包非对称陷阱 (P1)
+**症状**: 自动化发评时，定位作品卡片报错或发生错位；微信发评接口成功返回后，状态机却将记录置为 `UNCERTAIN` 并触发不必要的失败重试。
+**根因**:
+1. 真实视频号后台 DOM 无原生 `data-object-id` 属性，且前端卡片标题会被截断为前 20~40 字并带换行，导致纯 XPath 或文本选择器无法精确定位。
+2. 微信 `post/comment_add` 接口回包 `data` 仅返回 `commentId`，省略了关联的 `exportId`。
+**规约**:
+1. 必须挂载网络监听器拦截微前端 `post/post_list` 响应数组，按原生 ID 检索准确物理下标，通过 `.comment-feed-wrap:visible.nth(idx)` 绑定操作目标。
+2. 发评成功的因果验证必须从发起的请求体（Request Payload）与响应体（Response Payload）双向合并数据，严禁仅依赖回包字段。
+
+## L11: 互动状态机原子租约、短格式文案契约与 SQLite 字典序陷阱 (P1)
+**症状**: 网络超时重试导致评论区重复发帖刷屏；或待重试任务明明已过退避窗口却始终无法被拉取；文案带有机械的标签和表情引发用户负向反馈。
+**规约**:
+1. **文案契约**: 彻底去除【栏目标题】与 Emoji，采用“一句话问题 + 2~3 项选项 + ≤30字启发反问”，经 `censor_engine` 一票否决后方可提交。
+2. **原子租约**: 物理提交前必须通过 `before_submit` 回调落盘 `SUBMIT_INTENT` 并持有租约，未完成前由只读通道对账收敛，禁止无脑重试。
+3. **时间戳比对**: Python `isoformat()`（带 `T`）与 SQLite `CURRENT_TIMESTAMP`（带空格）在文本比对时因 ASCII 码差异会导致逻辑颠倒，跨语言时间比对必须由 Python 层标准化后传参。

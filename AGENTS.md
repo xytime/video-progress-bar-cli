@@ -13,6 +13,7 @@ The README describes a "video processing tool library," but that is only the bot
 5. **Transcribe** (Whisper) → **translate** (Gemini, Aliyun MT fallback) → render **bilingual subtitles** + optional **TTS** voiceover and progress bar
 6. **Censor** (banned-word / channel-policy checks)
 7. **Publish** to WeChat Channels via Playwright browser automation, with Telegram notifications
+8. **Interact** (optional / auto-dispatch): post natural author comments & poll interactions on published videos (`scripts/wechat_commenter.py`)
 
 The whole flow is a checkpoint-resumable finite state machine driven by `PipelineManager`. Most code comments and docstrings are in **Chinese** — match that when editing.
 
@@ -53,7 +54,7 @@ SQLite at `output/pipeline.db`, WAL mode, foreign keys on. The schema self-migra
 - **`src/video_processing/processors/`** — the actual FFmpeg/Whisper/pysubs2 work (caption, slicer, vertical, progress_bar, subtitle/chapter extractors). **Read `docs/experience_log/critical_lessons.md` before major changes here.**
 - **`src/cover/`** — cover image generation engine (layout/renderer/themes/semantic).
 - **`src/bot/`** — Telegram bot for remote pipeline control (async, **httpx not requests**, to avoid blocking the event loop).
-- **`scripts/`** — operational glue: `monitor_channels.py` (discovery), `copywriter.py`, `cover_generator.py`, `wechat_uploader.py` (Playwright, ~80KB), `wechat_keepalive.py` (session watchdog), `bot_daemon.py`.
+- **`scripts/`** — operational glue: `monitor_channels.py` (discovery), `copywriter.py`, `cover_generator.py`, `wechat_uploader.py` (Playwright, ~80KB), `wechat_commenter.py` (interaction engine), `wechat_keepalive.py` (session watchdog), `bot_daemon.py`.
 
 ## Commands
 
@@ -77,6 +78,11 @@ Run the pipeline directly (note the required `PYTHONPATH`):
 ```bash
 PYTHONPATH=src .venv/bin/python -m video_processing.pipeline_manager   # = run_daily_job(): score + process
 .venv/bin/python scripts/monitor_channels.py                          # discovery pass only
+
+# Comment interaction commands (requires ENABLE_WECHAT_COMMENT_INTERACTION=true)
+ENABLE_WECHAT_COMMENT_INTERACTION=true PYTHONPATH=src .venv/bin/python scripts/wechat_commenter.py --latest
+ENABLE_WECHAT_COMMENT_INTERACTION=true PYTHONPATH=src .venv/bin/python scripts/wechat_commenter.py --count 5
+PYTHONPATH=src .venv/bin/python scripts/wechat_commenter.py --post-id "export/..." --dry-run
 ```
 
 ### CLI video tools
@@ -137,6 +143,9 @@ These encode hard-won failures — violating them silently corrupts subtitles:
 - **Whisper input**: always re-sample extracted audio to **16 kHz mono** (`-ar 16000 -ac 1`).
 - **`pysubs2.Color`**: pass `(R, G, B)` integers, not hex/RGBA. ASS alpha is **inverted** (255 = fully transparent).
 - **Glossary font size**: clamp it to the *current rendered* English font size at runtime (`{\fs...}` inline), not the static style value.
+- **WeChat interaction copy contract**: Natural short-format only — strictly NO column tags like `【互动话题】` or emojis; 1 single natural question + 2~3 concise options + 1 heuristic open question (≤30 chars).
+- **WeChat micro-frontend cards**: NEVER match comment cards solely by video title text (DOM truncates title to 20~40 chars). Always intercept `post/post_list` API to map native `export_id` to index, then bind `.comment-feed-wrap:visible.nth(idx)`.
+- **WeChat session concurrency**: Video uploading and comment posting share the same Chromium profile. All comment automation must respect `WeChatSessionLock` to prevent session corruption.
 
 ## Feature flags
 
@@ -149,7 +158,7 @@ For this contract ordinary screens require 3–5 learning points and terminal sc
 overriding legacy eight-note rules. Do not rewrite old QA or retry historical publication.
 Keep `enable_english_world_language_qa=false` until benchmark, human review and three shadow runs pass.
 
-`src/config/settings.py` defines v7.0 feature flags that **default to `False`** for production safety; enable per-flag in `.env`: `enable_blacklist_tombstone`, `enable_manual_score_lock`, `enable_censorship_engine`, `enable_channel_policy_filter`, `enable_sigterm_kill`, `enable_dynamic_keywords`.
+`src/config/settings.py` defines v7.0 feature flags that **default to `False`** for production safety; enable per-flag in `.env`: `enable_blacklist_tombstone`, `enable_manual_score_lock`, `enable_censorship_engine`, `enable_channel_policy_filter`, `enable_sigterm_kill`, `enable_dynamic_keywords`, `enable_wechat_comment_interaction`.
 
 ## Repo hygiene note
 
