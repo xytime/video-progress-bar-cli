@@ -346,6 +346,15 @@ def test_persistent_deduplicating_filter(tmp_path: Path):
 
 
 def test_trim_log_to_recent_days(tmp_path: Path, monkeypatch):
+    # 固定测试时钟，避免历史样例随真实日期推移变成过期日志。
+    from datetime import datetime
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 9, 20, 12, tzinfo=tz)
+
+    monkeypatch.setattr(runner, "datetime", FixedDateTime)
     log_file = tmp_path / "test_window.log"
     state_file = tmp_path / "last_trim.json"
     monkeypatch.setattr(runner, "TRIM_STATE_PATH", state_file)
@@ -373,4 +382,3 @@ def test_trim_log_to_recent_days(tmp_path: Path, monkeypatch):
     assert "Old log line 2" not in trimmed
     assert "Recent log line 1" in trimmed
     assert "Recent log line 2" in trimmed
-

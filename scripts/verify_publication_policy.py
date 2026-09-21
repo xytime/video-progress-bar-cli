@@ -11,6 +11,7 @@
 | 1.0.2 | 2026-07-31 | Codex | 校验进程环境覆盖与后台预加工巡航，避免规则只在文件层面一致 |
 | 1.1.0 | 2026-08-02 | Codex | 校验关闭窗口限制后的每分钟自动发布巡航 |
 | 1.1.1 | 2026-08-31 | Codex | 允许本机 .env 的显式受控策略覆盖，同时校验运行进程未被未受管环境变量篡改。 |
+| 1.1.2 | 2026-09-22 | Codex | 要求受管巡航在 Python 启动前持有系统非阻塞锁，并拒绝无锁的重复入口。 |
 """
 
 from __future__ import annotations
@@ -95,7 +96,9 @@ def _check_policy_sources() -> list[str]:
 def _check_installed_schedule() -> list[str]:
     expected_command = (
         f'* * * * * cd "{PROJECT_ROOT}" && '
-        f'PYTHONPATH="{SRC_ROOT}" "{PROJECT_ROOT / ".venv/bin/python"}" '
+        f'PYTHONPATH="{SRC_ROOT}" /usr/bin/lockf -ks -t 0 '
+        f'"{PROJECT_ROOT / "output/publication_window_startup.lock"}" '
+        f'"{PROJECT_ROOT / ".venv/bin/python"}" '
         f'"{PROJECT_ROOT / "scripts/run_publication_window.py"}"'
     )
     result = subprocess.run(["crontab", "-l"], text=True, capture_output=True, check=False)
@@ -105,8 +108,13 @@ def _check_installed_schedule() -> list[str]:
     lines = result.stdout.splitlines()
     if CRON_BEGIN not in lines or CRON_END not in lines:
         return ["未找到受管的自动发布巡航 crontab 区块。"]
-    if not any(line.startswith(expected_command) for line in lines):
-        return ["受管 crontab 区块缺少预期的每分钟自动发布巡航命令。"]
+    managed_lines = lines[lines.index(CRON_BEGIN) + 1:lines.index(CRON_END)]
+    if sum(line.startswith(expected_command) for line in managed_lines) != 1:
+        return ["受管 crontab 区块必须恰有一条带启动前非阻塞锁的每分钟巡航命令。"]
+    active_entries = [line for line in lines if line.strip() and not line.lstrip().startswith("#")]
+    project_runner = str(PROJECT_ROOT / "scripts/run_publication_window.py")
+    if sum(project_runner in line for line in active_entries) != 1:
+        return ["发现本项目重复的巡航入口，拒绝绕过启动锁的并行调度。"]
     if any("run_background_preparation.py" in line for line in lines):
         return ["受管 crontab 区块仍包含已停用的窗口外预加工巡航命令。"]
     return []

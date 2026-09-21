@@ -7,6 +7,7 @@
 # | 1.0.0 | 2026-07-31 | Codex | 以 Settings 窗口判定替代硬编码的单点发布 cron，并保留其他项目条目 |
 # | 1.1.0 | 2026-07-31 | Codex | 加入源字幕先行后台预加工巡航，并收窄旧 cron 清理范围 |
 # | 1.2.0 | 2026-08-02 | Codex | 改为每分钟完整流水线巡航，关闭按时段等待与冗余预加工巡航 |
+# | 1.2.1 | 2026-09-22 | Codex | Python 启动前使用系统非阻塞锁，覆盖依赖加载、回查及完整巡航，避免 cron 进程积压 |
 
 set -euo pipefail
 
@@ -33,8 +34,8 @@ mv "$TMP_CRONTAB.filtered" "$TMP_CRONTAB"
 
 cat >> "$TMP_CRONTAB" <<EOF
 # BEGIN Video Pipeline public-window cruise (managed)
-# 每分钟巡航；成片与审查完成后立即提交。重叠轮次由入口锁跳过。
-* * * * * cd "$PROJECT_ROOT" && PYTHONPATH="$PROJECT_ROOT/src" "$PYTHON_BIN" "$PROJECT_ROOT/scripts/run_publication_window.py" >> "$PROJECT_ROOT/output/pipeline_window.log" 2>&1
+# 每分钟巡航；系统锁在 Python 启动前阻止重入；-k 保留锁文件，-t 0 不等待。
+* * * * * cd "$PROJECT_ROOT" && PYTHONPATH="$PROJECT_ROOT/src" /usr/bin/lockf -ks -t 0 "$PROJECT_ROOT/output/publication_window_startup.lock" "$PYTHON_BIN" "$PROJECT_ROOT/scripts/run_publication_window.py" >> "$PROJECT_ROOT/output/pipeline_window.log" 2>&1
 # END Video Pipeline public-window cruise (managed)
 EOF
 
