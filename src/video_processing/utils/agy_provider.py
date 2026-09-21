@@ -6,6 +6,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-09-22 | Codex | 允许调用方提供最小运行环境，独立 App 文案不继承业务 API 凭据。 |
 | 1.3.0 | 2026-09-18 | Antigravity | 支持根据模型后缀(-high/-low)自动推断 effort，避免参数冲突 |
 | language-v1 | 2026-09-09 | Codex | 可选返回供应商原始用量，不改变现有结构化调用返回合同。 |
 | 1.1.0 | 2026-08-24 | Codex | 禁用 print-mode 指令扩展，并将外部错误压缩为非敏感分类。 |
@@ -34,6 +35,7 @@ def run_agy_structured(
     timeout_sec: int,
     effort: Optional[str] = None,
     include_usage: bool = False,
+    environment: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """在无业务工作区、无危险权限下调用 agy 并提取结构化输出。"""
     if effort is None:
@@ -70,6 +72,7 @@ def run_agy_structured(
                 capture_output=True,
                 timeout=max(1, int(timeout_sec)) + 15,
                 check=False,
+                **({"env": environment} if environment is not None else {}),
             )
     except FileNotFoundError as exc:
         raise AgyProviderError("agy command not found") from exc

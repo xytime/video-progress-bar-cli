@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.79.0 | 2026-09-22 | Codex | AGY 文案冷却排队，原子排除所有投稿账本并按到期时间领取。 |
 | 3.78.0 | 2026-09-21 | Codex | 零进度超时凭据单次消费、两次退避恢复与只读交付健康统计。 |
 | 3.77.0 | 2026-09-20 | Antigravity | 队列时效与健康治理强化：完善微信发布防重提权守卫，ignore_video 支持切片粒度，包含 HISTORICAL_ARCHIVED 终态识别，waitlist 支持 include_expired 归档回溯，清理支持 upload_date 淘汰 |
 | 3.76.2 | 2026-09-20 | Gemini | 强化 source_published_sort_key 与 upload_date 排序的合法年份校验，防御非标准日期排在顶部。 |
@@ -731,6 +732,13 @@ class PipelineDB:
                     next_attempt_at TIMESTAMP NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(video_id, attempt_number),
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS copywriter_deferred (
+                    video_id INTEGER PRIMARY KEY,
+                    next_attempt_at TIMESTAMP NOT NULL,
                     FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                 )
             ''')
@@ -3190,6 +3198,34 @@ class PipelineDB:
             conn.commit()
             return cursor.rowcount > 0
 
+    def defer_copywriter_provider(self, youtube_id: str, *, slice_index: int,
+                                 until: int, reason: str) -> bool:
+        """只延后文案阶段且无任何历史投稿证据的任务，不消耗视频故障重试次数。"""
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute('''
+                SELECT pv.id FROM processed_videos pv
+                WHERE pv.youtube_id = ? AND pv.slice_index = ? AND pv.status = 'COPYWRITING'
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM douyin_publications d WHERE d.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM kuaishou_publications k WHERE k.video_id = pv.id)
+            ''', (youtube_id, slice_index)).fetchone()
+            if not row:
+                return False
+            conn.execute('''
+                INSERT INTO copywriter_deferred (video_id, next_attempt_at)
+                VALUES (?, datetime(?, 'unixepoch'))
+                ON CONFLICT(video_id) DO UPDATE SET next_attempt_at = excluded.next_attempt_at
+            ''', (row["id"], int(until)))
+            conn.execute('''
+                UPDATE processed_videos SET status = 'PENDING', error_msg = ?,
+                    updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            ''', (reason, row["id"]))
+            conn.commit()
+            return True
+
     def requeue_transient_pre_submission_failure(
         self,
         youtube_id: str,
@@ -3320,6 +3356,8 @@ class PipelineDB:
             cursor = conn.execute(
                 "UPDATE processed_videos SET status = 'DOWNLOADING', updated_at = CURRENT_TIMESTAMP "
                 "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING' "
+                "AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c "
+                "WHERE c.video_id = processed_videos.id AND c.next_attempt_at > CURRENT_TIMESTAMP) "
                 "AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r "
                 "WHERE r.video_id = processed_videos.id AND r.next_attempt_at > CURRENT_TIMESTAMP)",
                 (youtube_id, slice_index)
@@ -4712,6 +4750,8 @@ class PipelineDB:
         query = f"""
             SELECT * FROM processed_videos pv
             WHERE pv.status = 'PENDING' AND ({threshold_sql})
+              AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
+                              WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
               AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
               AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
                               WHERE r.video_id = pv.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
@@ -4765,6 +4805,8 @@ class PipelineDB:
             SELECT pv.* FROM processed_videos pv
             WHERE pv.status = 'PENDING'
               AND pv.source = 'AUTO'
+              AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
+                              WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
               AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
                               WHERE r.video_id = pv.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
               AND IFNULL(pv.publication_review_required, 0) = 0

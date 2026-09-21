@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.57.0 | 2026-09-22 | Codex | 文案 CLI 临时失败按冷却时间安全回队，保持提交后不重试。 |
 | 3.56.0 | 2026-09-21 | Codex | 仅凭本次上传零进度证据限次回队，补充发布断流去重告警。 |
 | 3.55.0  | 2026-09-20 | Antigravity                         | 例行任务新增幽灵待处理自愈校准与待筛选 TTL 时效淘汰维护。 |
 | 3.54.0  | 2026-09-20 | Antigravity                         | 视频号首评互动与回查彻底解耦：在上传受理（SUBMITTED_BOUND）且取得平台原生 ID 时立即异步派发互动 worker。 |
@@ -766,6 +767,37 @@ class PipelineManager:
             "文案已继续处理；金额校验仅告警，请发布后复核。\n"
             f"{detail}"
         )
+
+    def _defer_copy_provider_failure(self, yid: str, title: str,
+                                    error: subprocess.CalledProcessError, *, slice_index: int = 0) -> bool:
+        """只消费文案子进程的专用临时退出协议；提交证据和 DAL 条件优先。"""
+        if error.returncode != 75:
+            return False
+        detail = error.stderr or ""
+        if isinstance(detail, bytes):
+            detail = detail.decode("utf-8", errors="replace")
+        match = re.search(
+            r"^COPY_PROVIDER_DEFERRED until=(\d+) reason=(quota|unavailable|busy|cooldown) notify=([01])$",
+            detail, re.MULTILINE,
+        )
+        prefix = yid if slice_index == 0 else f"{yid}_part{slice_index}"
+        if not match or self._wechat_submission_evidence_paths(prefix):
+            return False
+        until = int(match[1])
+        if not time.time() < until <= time.time() + 86460:
+            return False
+        reason = match[0]
+        if not self.db.defer_copywriter_provider(yid, slice_index=slice_index, until=until, reason=reason):
+            return False
+        logger.warning("[%s] 文案服务冷却，保留排队；%s", prefix, reason)
+        if match[3] == "1":
+            self.send_telegram_msg(
+                "⚠️ <b>文案服务暂不可用，已延后排队</b>\n"
+                f"ID: <code>{html.escape(prefix)}</code>\n"
+                f"Title: {html.escape(title)}\nReason: {match[2]}\n"
+                "冷却期间不重复调用、不切换付费 API。"
+            )
+        return True
 
     def _requeue_transient_pre_submission_failure(
         self,
@@ -3799,8 +3831,13 @@ class PipelineManager:
                         "--title", title,
                         "--desc-file", str(self._OUT_DIR / f"{yid}.description"),
                     ]
-                    self._run_tracked(copy_cmd, yid, slice_index=slice_index, capture_output=True,
-                                      cwd=str(self._PRJ_ROOT))
+                    try:
+                        self._run_tracked(copy_cmd, yid, slice_index=slice_index, capture_output=True,
+                                          cwd=str(self._PRJ_ROOT))
+                    except subprocess.CalledProcessError as exc:
+                        if self._defer_copy_provider_failure(yid, title, exc, slice_index=slice_index):
+                            return
+                        raise
                     self._notify_copy_numeric_warnings(yid, title, prefix)
 
                 try:

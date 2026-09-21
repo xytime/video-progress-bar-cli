@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.68.0 | 2026-09-22 | Codex | 独立 AGY 文案配置及 App 子进程最小环境，不传入 API/机器人凭据。 |
 | 3.67.0 | 2026-09-20 | Antigravity | 新增 waitlist_ttl_days (待筛选低分素材TTL淘汰保留天数) 与 queue_stale_days (待处理超期排队时效天数) 配置 |
 | 3.66.0 | 2026-09-20 | Antigravity | 新增 pipeline_window_log_keep_days 与 pipeline_window_log_suppression_window_sec 配置，用于巡航日志降频与保留天数治理 |
 | 3.65.1 | 2026-09-19 | Codex | Runway-CTA v2 生产默认触发参数对齐审核公式：首段比例 0.12、尾段距片尾 16 秒。 |
@@ -96,12 +97,13 @@
 | 3.62.0 | 2026-09-18 | Antigravity | copywriter_title_provider_order 默认启用 agy,gemini；梯队首选高阶思考模型 |
 """
 import json
+import os
 import socket
 import urllib.request
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import Field, computed_field
@@ -214,6 +216,10 @@ class Settings(BaseSettings):
 
     # Google Gemini API Key
     gemini_api_key: Optional[str] = None
+
+    # 完整文案独立入口；agy 模式不调用 API 或翻译兜底，灰度验收后显式启用。
+    copywriter_content_provider: Literal["gemini", "agy"] = "gemini"
+    copywriter_agy_quota_cooldown_seconds: int = Field(default=21600, ge=60, le=86400)
 
     # 标题供应商顺序。默认启用高阶思考模型 agy，既有 Gemini 作为严格合同兜底。
     # 仅改变标题字段，正文仍由现有文案器生成；未知 provider 会被忽略。
@@ -754,6 +760,16 @@ class Settings(BaseSettings):
     def default_output_dir(self) -> Path:
         """默认输出目录"""
         return self.project_root / "output"
+
+    def agy_app_environment(self) -> dict[str, str]:
+        """仅继承 App 运行和网络所需环境，不传入业务 API 或机器人凭据。"""
+        allowed = {
+            "HOME", "PATH", "TMPDIR", "LANG", "LC_ALL", "LC_CTYPE",
+            "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+            "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+            "SSL_CERT_FILE", "SSL_CERT_DIR",
+        }
+        return {key: value for key, value in os.environ.items() if key in allowed}
 
     @computed_field  # type: ignore[misc]
     @property
