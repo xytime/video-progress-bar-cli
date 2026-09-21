@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.56.0 | 2026-09-21 | Codex | 仅凭本次上传零进度证据限次回队，补充发布断流去重告警。 |
 | 3.55.0  | 2026-09-20 | Antigravity                         | 例行任务新增幽灵待处理自愈校准与待筛选 TTL 时效淘汰维护。 |
 | 3.54.0  | 2026-09-20 | Antigravity                         | 视频号首评互动与回查彻底解耦：在上传受理（SUBMITTED_BOUND）且取得平台原生 ID 时立即异步派发互动 worker。 |
 | 3.53.0  | 2026-09-19 | Codex                               | 视频号互动改为默认关闭的通用有界 worker 派发，保留可观测日志并优先恢复持久到期任务。 |
@@ -179,6 +180,7 @@ from typing import Callable, Dict, Any, Mapping, Optional, Tuple
 from pathlib import Path
 
 from .db import PipelineDB
+from .core.wechat_upload_recovery import PRE_SUBMIT_UPLOAD_TIMEOUT
 from .utils.subprocess_env import build_subprocess_env, PROXY_KEYS as _PROXY_KEYS
 from .utils.file_utils import (
     find_downloaded_video,
@@ -832,6 +834,61 @@ class PipelineManager:
             snippet = html.escape(" ".join(terminal_line.split())[:200])
             msg += f"\nReason: {snippet}"
         self.send_telegram_msg(msg)
+
+    def _requeue_wechat_upload_timeout(
+        self, yid: str, *, slice_index: int, evidence_dir: Path, video_path: str,
+    ) -> bool:
+        """只恢复本次上传器出具未提交凭据的零进度超时，不消费历史失败记录。"""
+        prefix = yid if slice_index == 0 else f"{yid}_s{slice_index}"
+        expected_root = (self._OUT_DIR / "wechat_evidence" / prefix).resolve()
+        if evidence_dir.resolve().parent != expected_root:
+            return False
+        if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
+            return False
+        root = self._OUT_DIR / "wechat_evidence" / prefix
+        if self._wechat_submission_evidence_paths(prefix) or list(root.glob("*/submission_receipt.json")):
+            return False
+        retry = self.db.requeue_wechat_upload_timeout(
+            yid, slice_index=slice_index, evidence_dir=evidence_dir, video_path=video_path,
+        )
+        if not retry:
+            return False
+        logger.warning(
+            "[%s] PRE_SUBMIT_UPLOAD_TIMEOUT: retry %s/2 due %s UTC; evidence=%s",
+            prefix, retry["attempt_number"], retry["next_attempt_at"], retry["evidence_path"],
+        )
+        return True
+
+    def _check_wechat_delivery_health(self) -> None:
+        """窗口内四小时无受理或零进度失败耗尽候选时告警；同一事故四小时去重。"""
+        if settings.wechat_publishing_paused or not settings.is_public_publish_window():
+            return
+        try:
+            health = self.db.read_daily_ops_health(self.db.db_path)
+            queue = self.db.get_high_score_pending_videos(
+                min_score=75, limit=1, channel_min_scores=settings.auto_publish_channel_min_scores,
+            )
+            stalled = not queue and health["recent_upload_timeouts"] > 0
+            gap = health["hours_since_acceptance"]
+            if not stalled and (gap is None or gap < 4):
+                return
+            reason = "上传超时后可领取队列已空" if stalled else "已超过 4 小时没有新的平台受理记录"
+            text = (
+                f"⚠️ <b>视频号交付中断</b>\n{reason}\n"
+                f"最后受理(UTC)：{html.escape(health['last_accepted_at'] or '暂无记录')}\n"
+                f"在途 {health['active']}；今日受理 {health['accepted_today']}；"
+                f"今日确认公开 {health['confirmed_today']}。\n"
+                "平台受理与公开确认分别统计；请检查队列及失败凭据。"
+            )
+            logger.warning("WeChat delivery health: %s; last_accepted=%s", reason, health["last_accepted_at"])
+            send_telegram_text(
+                event_type="pipeline.wechat_delivery_gap", priority="P1", text=text,
+                dedupe_key=f"{health['last_accepted_at']}:{'upload' if stalled else 'gap'}",
+                cooldown_seconds=4 * 3600, timeout_seconds=10, db=self.db,
+                token=self.telegram_token, chat_id=self.telegram_chat_id,
+            )
+        except Exception as exc:
+            logger.error("WeChat delivery health check failed: %s", type(exc).__name__)
 
     def _wechat_submission_evidence_paths(self, prefix: str) -> list[Path]:
         """返回该任务既有的视频号提交后证据截图；存在即视为不可自动重发。"""
@@ -4275,6 +4332,12 @@ class PipelineManager:
                     )
                     return
                 except subprocess.CalledProcessError as upload_err:
+                    if upload_err.returncode == PRE_SUBMIT_UPLOAD_TIMEOUT:
+                        if self._requeue_wechat_upload_timeout(
+                            yid, slice_index=slice_index, evidence_dir=evidence_dir,
+                            video_path=str(published_video),
+                        ):
+                            return
                     if upload_err.returncode == 2:
                         logger.error(f"WeChat login required for {prefix}.")
                         self.db.update_video_status(yid, "LOGIN_REQUIRED", slice_index=slice_index)
@@ -4447,6 +4510,7 @@ class PipelineManager:
             logger.info("Evicted %s expired waitlist video(s) older than %s days.", evicted_waitlist, settings.waitlist_ttl_days)
         self.score_pending_videos()
         self.process_high_score_videos(limit=5)
+        self._check_wechat_delivery_health()
         if not settings.wechat_publishing_paused:
             recovered = self.recover_deferred_wechat_publications()
             if recovered:

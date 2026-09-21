@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.78.0 | 2026-09-21 | Codex | 零进度超时凭据单次消费、两次退避恢复与只读交付健康统计。 |
 | 3.77.0 | 2026-09-20 | Antigravity | 队列时效与健康治理强化：完善微信发布防重提权守卫，ignore_video 支持切片粒度，包含 HISTORICAL_ARCHIVED 终态识别，waitlist 支持 include_expired 归档回溯，清理支持 upload_date 淘汰 |
 | 3.76.2 | 2026-09-20 | Gemini | 强化 source_published_sort_key 与 upload_date 排序的合法年份校验，防御非标准日期排在顶部。 |
 | 3.76.1 | 2026-09-20 | Gemini | get_channel_funnel_metrics 统一约束 parent_id IS NULL，排除切片重复统计，与下钻列表保持绝对同构。 |
@@ -722,6 +723,17 @@ class PipelineDB:
                 "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'wechat_publications'"
             )
             wechat_schema = (cursor.fetchone() or [""])[0] or ""
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS wechat_upload_retries (
+                    evidence_path TEXT PRIMARY KEY,
+                    video_id INTEGER NOT NULL,
+                    attempt_number INTEGER NOT NULL CHECK(attempt_number BETWEEN 1 AND 2),
+                    next_attempt_at TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(video_id, attempt_number),
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                )
+            ''')
             cursor.execute("PRAGMA table_info(wechat_publications)")
             wechat_columns = {row[1] for row in cursor.fetchall()}
             needs_wechat_state_migration = bool(
@@ -3200,6 +3212,47 @@ class PipelineDB:
             conn.commit()
             return cursor.rowcount > 0
 
+    def requeue_wechat_upload_timeout(
+        self, youtube_id: str, *, slice_index: int, evidence_dir: Path, video_path: str,
+    ) -> Optional[Dict[str, Any]]:
+        """消费本次零进度凭据，最多两次原子恢复；所有投稿账本和历史墓碑优先。"""
+        from video_processing.core.wechat_upload_recovery import valid_timeout_receipt, RECEIPT_NAME
+
+        if not valid_timeout_receipt(evidence_dir, video_path):
+            return None
+        evidence_path = str((evidence_dir / RECEIPT_NAME).resolve())
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            video = conn.execute('''
+                SELECT pv.id FROM processed_videos pv
+                WHERE pv.youtube_id = ? AND pv.slice_index = ? AND pv.status = 'PUBLISHING'
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = pv.id)
+            ''', (youtube_id, slice_index)).fetchone()
+            if not video or conn.execute(
+                "SELECT 1 FROM wechat_upload_retries WHERE evidence_path = ?", (evidence_path,),
+            ).fetchone():
+                return None
+            count = conn.execute(
+                "SELECT count(*) FROM wechat_upload_retries WHERE video_id = ?", (video["id"],),
+            ).fetchone()[0]
+            if count >= 2:
+                return None
+            delay_minutes = (10, 30)[count]
+            conn.execute('''
+                INSERT INTO wechat_upload_retries (video_id, evidence_path, attempt_number, next_attempt_at)
+                VALUES (?, ?, ?, datetime('now', ?))
+            ''', (video["id"], evidence_path, count + 1, f"+{delay_minutes} minutes"))
+            conn.execute('''
+                UPDATE processed_videos SET status = 'PENDING', retry_count = COALESCE(retry_count, 0) + 1,
+                    process_pid = NULL, preparation_ready = 1, error_msg = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (f"PRE_SUBMIT_UPLOAD_TIMEOUT: 第 {count + 1}/2 次恢复，等待 {delay_minutes} 分钟；凭据 {evidence_path}", video["id"]))
+            return dict(conn.execute(
+                "SELECT * FROM wechat_upload_retries WHERE evidence_path = ?", (evidence_path,),
+            ).fetchone())
+
     def mark_ai_cover_resolved(self, youtube_id: str, slice_index: int = 0) -> bool:
         """AI 封面任务完成后，原子恢复待发布并标记此前已完成的成片为可提交。"""
         with self.get_connection() as conn:
@@ -3266,7 +3319,9 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "UPDATE processed_videos SET status = 'DOWNLOADING', updated_at = CURRENT_TIMESTAMP "
-                "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING'",
+                "WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING' "
+                "AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r "
+                "WHERE r.video_id = processed_videos.id AND r.next_attempt_at > CURRENT_TIMESTAMP)",
                 (youtube_id, slice_index)
             )
             conn.commit()
@@ -4657,6 +4712,9 @@ class PipelineDB:
         query = f"""
             SELECT * FROM processed_videos pv
             WHERE pv.status = 'PENDING' AND ({threshold_sql})
+              AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+              AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
+                              WHERE r.video_id = pv.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
               AND IFNULL(pv.publication_review_required, 0) = 0
               AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
               AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
@@ -4707,6 +4765,8 @@ class PipelineDB:
             SELECT pv.* FROM processed_videos pv
             WHERE pv.status = 'PENDING'
               AND pv.source = 'AUTO'
+              AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r
+                              WHERE r.video_id = pv.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
               AND IFNULL(pv.publication_review_required, 0) = 0
               AND IFNULL(pv.preparation_ready, 0) = 0
               AND ({threshold_sql})
@@ -4755,6 +4815,68 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.execute(query, (f"-{int(days)} days", limit))
             return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def read_daily_ops_health(db_path: str) -> Dict[str, Any]:
+        """只读实时 WAL 快照；受理按不可变尝试、公开按确认时间，绝不按任务更新时间。"""
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        bj = timezone(timedelta(hours=8))
+        start = now.astimezone(bj).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        since = start.strftime("%Y-%m-%d %H:%M:%S")
+        conn = sqlite3.connect(f"{Path(db_path).resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("BEGIN")
+            acceptance = conn.execute('''
+                SELECT count(DISTINCT CASE WHEN created_at >= ? THEN subject_id END) AS accepted_today,
+                       max(created_at) AS last_accepted_at,
+                       (julianday('now') - julianday(max(created_at))) * 24 AS hours_since_acceptance
+                FROM wechat_submission_attempts
+            ''', (since,)).fetchone()
+            confirmed = conn.execute('''
+                SELECT count(DISTINCT subject_id) FROM (
+                    SELECT subject_id, confirmed_at FROM wechat_publications WHERE state = 'PUBLISHED'
+                    UNION ALL
+                    SELECT 'video:' || video_id AS subject_id, confirmed_at
+                    FROM wechat_publications_historical_archive WHERE state = 'PUBLISHED'
+                ) WHERE confirmed_at >= ?
+            ''', (since,)).fetchone()[0]
+            counts = conn.execute('''
+                SELECT count(CASE WHEN status = 'FAILED' AND updated_at >= ? THEN 1 END) AS failed_today,
+                       count(CASE WHEN status IN ('DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING') THEN 1 END) AS active,
+                       count(CASE WHEN status = 'LOGIN_REQUIRED' THEN 1 END) AS login_required,
+                       count(CASE WHEN status IN ('PENDING','FAILED') AND updated_at >= datetime('now','-24 hours')
+                           AND updated_at > COALESCE((SELECT max(created_at) FROM wechat_submission_attempts), '1970-01-01')
+                           AND (error_msg LIKE '%PRE_SUBMIT_UPLOAD_TIMEOUT%' OR error_msg LIKE '%Upload verification timed out%')
+                           THEN 1 END) AS recent_upload_timeouts
+                FROM processed_videos
+            ''', (since,)).fetchone()
+            queue = conn.execute('''
+                SELECT count(*) FROM processed_videos pv
+                WHERE pv.status = 'PENDING' AND pv.score >= 75
+                  AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
+                  AND COALESCE(pv.publication_review_required, 0) = 0
+                  AND pv.channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
+                  AND pv.youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = pv.id)
+            ''').fetchone()[0]
+            leak = conn.execute('''
+                SELECT count(*) FROM processed_videos pv
+                JOIN recommended_channels rc ON rc.channel_id = pv.channel_id
+                WHERE rc.status = 'BLACKLISTED' AND (
+                    (pv.status = 'PENDING' AND pv.score >= 75) OR EXISTS (
+                        SELECT 1 FROM wechat_submission_attempts a
+                        WHERE a.video_id = pv.id AND a.created_at >= ?
+                    )
+                )
+            ''', (since,)).fetchone()[0]
+            return {**dict(acceptance), **dict(counts), "confirmed_today": confirmed,
+                    "queue": queue, "blacklist_leak": leak, "day_start_utc": since}
+        finally:
+            conn.close()
 
     def get_status_counts(self) -> Dict[str, int]:
         with self.get_connection() as conn:
@@ -11204,4 +11326,3 @@ class PipelineDB:
             if not row:
                 raise RuntimeError(f"未能更新 video_id={video_id} 的 wechat_publications")
             return dict(row)
-

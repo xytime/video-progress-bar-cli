@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.8.0 | 2026-09-21 | Codex | 按北京时间日界和投稿账本分别统计平台受理、公开确认，消除历史回填虚增。 |
 | 1.0.0   | 2026-06-26 | Claude_Opus_4.8 | 初版：每日发布/黑名单/会话/限流巡检工单 |
 | 1.1.0   | 2026-07-05 | Codex           | 接入翻译质量审计聚合摘要，纳入每日巡检 |
 | 1.2.0   | 2026-07-05 | Codex           | 翻译质量摘要显示非阻断告警数，便于追踪术语一致性漂移 |
@@ -25,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -40,14 +40,6 @@ _DB = PRJ / "output" / "pipeline.db"
 _DASH_LOG = PRJ / "output" / "dashboard.log"
 _MON_LOG = PRJ / "output" / "monitor.log"
 _OUT_DIR = PRJ / "output"
-
-
-def _ro_conn():
-    return sqlite3.connect(f"file:{_DB}?mode=ro", uri=True, timeout=10)
-
-
-def _one(con, sql, *args):
-    return con.execute(sql, args).fetchone()[0]
 
 
 def format_translation_quality(summary: dict) -> str:
@@ -180,23 +172,9 @@ def fetch_deepseek_balance() -> str:
 
 
 def collect() -> str:
-    # 北京今天 00:00 ≈ UTC 前一天 16:00；用 datetime('now','-16 hours')(SQLite UTC) 对齐"今天"
-    since = "datetime('now','-16 hours')"
-    con = _ro_conn()
-
-    pub = _one(con, f"SELECT count(*) FROM processed_videos WHERE status='PUBLISHED' AND updated_at>={since}")
-    fail = _one(con, f"SELECT count(*) FROM processed_videos WHERE status='FAILED' AND updated_at>={since}")
-    queue = _one(con, "SELECT count(*) FROM processed_videos WHERE status='PENDING' AND score>=75 AND IFNULL(source,'')!='DISCOVERY'")
-    active = _one(con, "SELECT count(*) FROM processed_videos WHERE status IN ('DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING')")
-    login_req = _one(con, "SELECT count(*) FROM processed_videos WHERE status='LOGIN_REQUIRED'")
-
-    # 黑名单泄漏：已拉黑频道的视频出现在 已发(今日) 或 可发队列(≥75 PENDING) = 异常
-    leak = _one(con, f"""SELECT count(*) FROM processed_videos p
-        JOIN recommended_channels r ON p.channel_id=r.channel_id
-        WHERE r.status='BLACKLISTED'
-          AND ( (p.status='PUBLISHED' AND p.updated_at>={since})
-                OR (p.status='PENDING' AND p.score>=75) )""")
-    con.close()
+    health = PipelineDB.read_daily_ops_health(str(_DB))
+    fail, queue, active = health["failed_today"], health["queue"], health["active"]
+    login_req, leak = health["login_required"], health["blacklist_leak"]
 
     # 微信会话：keepalive 最近判活 + LOGIN_REQUIRED
     sess = "未知"
@@ -238,7 +216,9 @@ def collect() -> str:
     return (
         f"📋 <b>每日运维工单 {today}</b>\n"
         f"━━ 发布健康 ━━\n"
-        f"今日发布 <b>{pub}</b> | 失败 {fail} | 可发队列(≥75) {queue} | 在途 {active}\n"
+        f"今日视频号受理 <b>{health['accepted_today']}</b> | 今日确认公开 {health['confirmed_today']}\n"
+        f"失败 {fail} | 高分待处理(含冷却) {queue} | 在途 {active}\n"
+        f"最后受理(UTC): {health['last_accepted_at'] or '暂无记录'}\n"
         f"━━ 黑名单完整性 ━━\n"
         f"已拉黑频道泄漏: {leak_line}\n"
         f"━━ 微信会话 ━━\n"

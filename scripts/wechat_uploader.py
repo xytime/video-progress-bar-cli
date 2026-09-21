@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.9.0 | 2026-09-21 | Codex | 上传等待独立返回码与零进度未提交凭据，供管线安全退避。 |
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | Initial creation using Playwright                        |
 | 1.1.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 处理短标题/封面/分类/原创勾选；修复登录误判 URL优先策略 |
 | 1.2.0   | 2026-05-24 | Claude_Sonnet_4.6_Thinking_planning | P0根因修复: (1)封面确认改为轮询等待disabled→enabled (2)原创声明增加JS兜底 |
@@ -103,6 +104,9 @@ from wechat_desktop_auth import WeChatDesktopAuthWatcher, desktop_auth_preflight
 from copywriter import graceful_truncate_title  # [Claude_Sonnet_4.6_Thinking_planning] v1.6.0
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.core.wechat_session_lock import guarded_wechat_browser_session
+from video_processing.core.wechat_upload_recovery import (
+    PRE_SUBMIT_UPLOAD_TIMEOUT, write_timeout_receipt,
+)
 
 try:
     import requests as _requests
@@ -323,6 +327,35 @@ def _capture_wechat_evidence(page, evidence_dir: Path, name: str) -> None:
         page.screenshot(path=str(evidence_dir / f"{name}.png"), full_page=True)
     except Exception as exc:
         logger.warning("Failed to capture WeChat evidence %s: %s", name, exc)
+
+
+def _wait_for_video_upload(page, evidence_root: Path, video_abs: str) -> int:
+    """上传等待阶段专用返回码；不执行文案、封面或发表操作。"""
+    logger.info("Waiting for video upload to complete...")
+    for i in range(60):
+        page.wait_for_timeout(5000)
+        content = page.content()
+        if "上传成功" in content or "已上传100%" in content or "上传完成" in content:
+            logger.info("Upload complete (text detected).")
+            return 0
+        publish_btn = page.locator("button:has-text('发表')").first
+        if publish_btn.count() > 0:
+            disabled = (
+                publish_btn.get_attribute("disabled") is not None
+                or "disabled" in (publish_btn.get_attribute("class") or "").lower()
+            )
+            if not disabled:
+                logger.info("Upload complete (Publish button enabled).")
+                return 0
+        logger.info("Still uploading... (%s/60)", i + 1)
+    logger.error("Upload verification timed out (5 min). Stopping before copy, cover, and publish.")
+    _capture_wechat_evidence(page, evidence_root, "upload_timeout")
+    try:
+        if write_timeout_receipt(evidence_root, video_abs, page.locator("body").inner_text()):
+            return PRE_SUBMIT_UPLOAD_TIMEOUT
+    except Exception as exc:
+        logger.warning("Upload timeout receipt unavailable: %s", type(exc).__name__)
+    return 1
 
 
 def _collect_management_cards(page) -> dict[str, dict[str, str]]:
@@ -1731,31 +1764,10 @@ def run_uploader(
             return 1
             
         # ── 3. 等待视频上传完成 ────────────
-        logger.info("Waiting for video upload to complete...")
-        upload_finished = False
-        for i in range(60):  # 60 × 5s = 300s max
-            page.wait_for_timeout(5000)
-            content = page.content()
-            if "上传成功" in content or "已上传100%" in content or "上传完成" in content:
-                logger.info("Upload complete (text detected).")
-                upload_finished = True
-                break
-            publish_btn = page.locator("button:has-text('发表')").first
-            if publish_btn.count() > 0:
-                is_disabled = (
-                    publish_btn.get_attribute("disabled") is not None or
-                    "disabled" in (publish_btn.get_attribute("class") or "").lower()
-                )
-                if not is_disabled:
-                    logger.info("Upload complete (Publish button enabled).")
-                    upload_finished = True
-                    break
-            logger.info(f"Still uploading... ({i+1}/60)")
-        if not upload_finished:
-            logger.error("Upload verification timed out (5 min). Stopping before copy, cover, and publish.")
-            _capture_wechat_evidence(page, evidence_root, "upload_timeout")
+        upload_result = _wait_for_video_upload(page, evidence_root, video_abs)
+        if upload_result:
             browser.close()
-            return 1
+            return upload_result
 
         # ── 4. 填写视频文案/描述 (等上传完成页面稳定后再填) ────────────
         logger.info("Writing copy to description field...")
