@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.17.0 | 2026-09-22 | Codex | 领取前校验失败持久化退出队列；不启动浏览器、不伪造提交尝试。 |
 | 1.16.0 | 2026-09-22 | Codex | 原创策略绑定不可变审核包；声明异常保留原生 ID 并停止重传。 |
 | 1.15.0 | 2026-09-20 | Antigravity | 视频号首评互动解耦：投稿受理绑定原生 post_id 后异步派发互动 worker。 |
 | 1.14.0 | 2026-09-20 | Antigravity | 隔离中心发布账本注册异常，防止同步异常触发投稿状态二次回写。 |
@@ -271,7 +272,19 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             except WeChatSessionLockBusy:
                 logger.info("English World deferred before claim: browser session is busy")
                 return EXIT_DEFERRED
-        _require_publish_package(pending)
+        try:
+            _require_publish_package(pending)
+        except Exception as exc:  # 领取前没有平台副作用，拒绝项不能永久占据队首。
+            db.fail_english_world_submission_preflight(
+                review_id, message=f"{type(exc).__name__}: {exc}",
+            )
+            logger.exception("English World preflight rejected before claim: %s", review_id)
+            _post_status(
+                "❌ <b>英语世界投稿前校验未通过</b>\n"
+                f"审核编号：<code>{review_id[:8]}</code>\n"
+                "本轮未领取、未启动浏览器。拒绝原因已入账，本条停止自动投稿。"
+            )
+            return 1
         evidence_dir = Path(str(pending["mp4_path"])).parent / "wechat_evidence" / str(time.time_ns())
         item = db.claim_english_world_submission(review_id, evidence_dir=str(evidence_dir))
         if item is None:

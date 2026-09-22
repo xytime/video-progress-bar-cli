@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.80.0 | 2026-09-22 | Codex | 投稿前拒绝独立入账；仅恢复证实未启动浏览器的过期占用项，保留尝试。 |
 | 3.79.0 | 2026-09-22 | Codex | AGY 文案冷却排队，原子排除所有投稿账本并按到期时间领取。 |
 | 3.78.0 | 2026-09-21 | Codex | 零进度超时凭据单次消费、两次退避恢复与只读交付健康统计。 |
 | 3.77.0 | 2026-09-20 | Antigravity | 队列时效与健康治理强化：完善微信发布防重提权守卫，ignore_video 支持切片粒度，包含 HISTORICAL_ARCHIVED 终态识别，waitlist 支持 include_expired 归档回溯，清理支持 upload_date 淘汰 |
@@ -6852,6 +6853,25 @@ class PipelineDB:
             updated = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
             return dict(updated) if updated else {}
 
+    def fail_english_world_submission_preflight(
+        self, review_id: str, *, message: str,
+    ) -> Dict[str, Any]:
+        """领取前校验拒绝独立入账，不伪造上传尝试、不覆盖在途或平台事实。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'FAILED', error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'SUBMISSION_APPROVED'
+                     AND submission_started_at IS NULL AND platform_post_id IS NULL
+                     AND platform_url IS NULL AND platform_state IS NULL""",
+                (f"投稿前校验拒绝；本轮未领取、未启动浏览器：{message}"[:1000], review_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Preflight failure cannot overwrite an in-flight or bound review")
+            return dict(conn.execute(
+                "SELECT * FROM english_world_review_items WHERE id = ?", (review_id,),
+            ).fetchone())
+
     def claim_english_world_submission(
         self, review_id: str, *, evidence_dir: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -7038,23 +7058,48 @@ class PipelineDB:
             return dict(row) if row else None
 
     def restore_expired_english_world_operator_recoveries(self) -> int:
-        """把未领取且已过期的具名补发授权退回 AUTO_POLICY 公共窗口队列。"""
+        """过期具名授权回归原策略；只允许零尝试或全部为未启动浏览器的占用。"""
+        from video_processing.core.wechat_session_lock import EXIT_WECHAT_SESSION_BUSY
         with self.get_connection() as conn:
-            cursor = conn.execute(
-                """UPDATE english_world_review_items
-                   SET approval_source = 'AUTO_POLICY', authorization_expires_at = NULL,
-                       error_message = '具名操作员补发授权未在两小时内领取；已安全退回公共窗口队列。',
-                       updated_at = CURRENT_TIMESTAMP
+            # 读取尝试证据与更新授权使用同一写事务，不能穿插新的领取。
+            conn.execute("BEGIN IMMEDIATE")
+            candidates = conn.execute(
+                """SELECT id FROM english_world_review_items
                    WHERE state = 'SUBMISSION_APPROVED'
                      AND approval_source = 'OPERATOR_RECOVERY'
                      AND authorization_expires_at <= CURRENT_TIMESTAMP
                      AND submission_started_at IS NULL
+                     AND platform_post_id IS NULL AND platform_url IS NULL AND platform_state IS NULL
                      AND NOT EXISTS (
                          SELECT 1 FROM english_world_submission_attempts attempt
                          WHERE attempt.review_id = english_world_review_items.id
+                           AND (attempt.state != 'FAILED'
+                                OR COALESCE(attempt.uploader_exit_code, -1) != ?
+                                OR attempt.platform_post_id IS NOT NULL OR attempt.platform_url IS NOT NULL
+                                OR attempt.finished_at IS NULL OR COALESCE(attempt.evidence_dir, '') = '')
                      )""",
-            )
-            return cursor.rowcount
+                (EXIT_WECHAT_SESSION_BUSY,),
+            ).fetchall()
+            restored = 0
+            for candidate in candidates:
+                attempts = conn.execute(
+                    "SELECT evidence_dir FROM english_world_submission_attempts WHERE review_id = ?",
+                    (candidate["id"],),
+                ).fetchall()
+                try:
+                    if any(not Path(row["evidence_dir"]).is_dir() or any(Path(row["evidence_dir"]).iterdir())
+                           for row in attempts):
+                        continue
+                except OSError:
+                    continue  # 证据无法回读不是“从未提交”的证明。
+                conn.execute(
+                    """UPDATE english_world_review_items
+                       SET approval_source = 'AUTO_POLICY', authorization_expires_at = NULL,
+                           error_message = '具名补发授权已过期；确认未启动投稿，保留尝试并退回公共窗口队列。',
+                           updated_at = CURRENT_TIMESTAMP WHERE id = ?""", (candidate["id"],),
+                )
+                restored += 1
+            return restored
 
     def reopen_uncertain_english_world_submission(self, review_id: str) -> Dict[str, Any]:
         """人工明确确认未发布后，重开同一审核项的一次投稿机会。

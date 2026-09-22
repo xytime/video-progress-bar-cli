@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-22 | Codex | 逐写入节点故障注入验证续跑、原证据保留及未知修改拒绝覆盖。 |
 | 1.0.0 | 2026-09-22 | Codex | 临时来源与合成复听记录验证，不调用模型或生产账本。 |
 """
 import importlib.util
@@ -132,3 +133,78 @@ def test_resolution_rejects_evidence_tampering(tmp_path, name):
     else:
         path.write_bytes(path.read_bytes() + b" ")
     with pytest.raises(ValueError): validate_language_qa(timeline)
+
+
+@pytest.mark.parametrize("after_write", [False, True])
+@pytest.mark.parametrize("name", ["qa/source_resolution/timeline.after.json",
+    "qa/source_resolution/display_plan.after.json", "qa/source_resolution/prepared_receipt.json",
+    "timeline.json", "display_plan.json", "qa/source_resolution.json"])
+def test_resolution_resumes_at_every_json_write(tmp_path, monkeypatch, name, after_write):
+    timeline, before, *_, task, cache = fixture(tmp_path)
+    original = {p: p.read_bytes() for p in [timeline, tmp_path / "display_plan.json",
+                tmp_path / "qa/language_qa.json", task / "language_attempts.json"]}
+    operation = resolver()
+    write = operation.__globals__["atomic_json"]
+    def interrupted(path, value):
+        if path == tmp_path / name and not after_write:
+            raise OSError("injected interruption")
+        write(path, value)
+        if path == tmp_path / name and after_write:
+            raise OSError("injected interruption")
+    monkeypatch.setitem(operation.__globals__, "atomic_json", interrupted)
+    with pytest.raises(OSError, match="injected"):
+        operation(timeline, word_index=2, task_dir=task, cache_dir=cache)
+    monkeypatch.setitem(operation.__globals__, "atomic_json", write)
+    assert operation(timeline, word_index=2, task_dir=task, cache_dir=cache)["state"] == "SOURCE_RESOLVED"
+    assert validate_language_qa(timeline)["state"] == "SOURCE_RESOLVED"
+    assert read_json(timeline) == corrected_payload(before, 2, "and")
+    assert (tmp_path / "qa/source_resolution/timeline.before.json").read_bytes() == original[timeline]
+    assert (tmp_path / "qa/source_resolution/display_plan.before.json").read_bytes() == original[tmp_path / "display_plan.json"]
+    assert (tmp_path / "qa/language_qa.json").read_bytes() == original[tmp_path / "qa/language_qa.json"]
+    assert (task / "language_attempts.json").read_bytes() == original[task / "language_attempts.json"]
+
+
+@pytest.mark.parametrize("after_copy", [False, True])
+@pytest.mark.parametrize("name", ["timeline.before.json", "display_plan.before.json"])
+def test_resolution_resumes_partial_archive(tmp_path, monkeypatch, name, after_copy):
+    timeline, *_, task, cache = fixture(tmp_path)
+    operation = resolver()
+    preserve = operation.__globals__["_preserve_file"]
+    def interrupted(source, target, expected, **kwargs):
+        if target.name == name and not after_copy:
+            raise OSError("injected archive interruption")
+        preserve(source, target, expected, **kwargs)
+        if target.name == name and after_copy:
+            raise OSError("injected archive interruption")
+    monkeypatch.setitem(operation.__globals__, "_preserve_file", interrupted)
+    with pytest.raises(OSError, match="injected"):
+        operation(timeline, word_index=2, task_dir=task, cache_dir=cache)
+    monkeypatch.setitem(operation.__globals__, "_preserve_file", preserve)
+    assert operation(timeline, word_index=2, task_dir=task, cache_dir=cache)["state"] == "SOURCE_RESOLVED"
+
+
+@pytest.mark.parametrize("changed", ["timeline.json", "display_plan.json", "task/language_attempts.json",
+    "qa/source_resolution/timeline.before.json", "qa/source_resolution/display_plan.after.json",
+    "qa/source_word_confirmation.wav", "source.mp4", "cache"])
+def test_resume_refuses_new_edits_without_overwriting_live_inputs(tmp_path, monkeypatch, changed):
+    timeline, *_, task, cache = fixture(tmp_path)
+    operation = resolver()
+    write = operation.__globals__["atomic_json"]
+    def interrupted(path, value):
+        if path == timeline:
+            raise OSError("injected commit interruption")
+        write(path, value)
+    monkeypatch.setitem(operation.__globals__, "atomic_json", interrupted)
+    with pytest.raises(OSError, match="injected"):
+        operation(timeline, word_index=2, task_dir=task, cache_dir=cache)
+    monkeypatch.setitem(operation.__globals__, "atomic_json", write)
+    path = next(cache.glob("*.json")) if changed == "cache" else tmp_path / changed
+    if path.suffix == ".json":
+        atomic_json(path, {**read_json(path), "unknown_edit": True})
+    else:
+        path.write_bytes(path.read_bytes() + b"unknown edit")
+    live = {p: p.read_bytes() for p in [timeline, tmp_path / "display_plan.json"]}
+    with pytest.raises(ValueError):
+        operation(timeline, word_index=2, task_dir=task, cache_dir=cache)
+    assert all(p.read_bytes() == value for p, value in live.items())
+    assert not (tmp_path / "qa/source_resolution.json").exists()

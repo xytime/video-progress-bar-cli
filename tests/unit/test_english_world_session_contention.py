@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-22 | Codex | 真实调度选择验证占用后过期回归；拒绝不明尝试与证据异常。 |
 | 1.0.0 | 2026-09-22 | Codex | 覆盖领取前占用、子进程竞争及具名旧故障恢复边界。 |
 """
 import json
@@ -79,6 +80,77 @@ def test_session_deferral_refuses_any_browser_evidence(tmp_path, artifact):
     with pytest.raises(ValueError, match="untouched"):
         db.defer_english_world_session_busy(item["id"], attempt_id=claimed["_attempt_id"], evidence_dir=str(evidence))
     assert db.get_english_world_review_item(item["id"])["state"] == "SUBMITTING"
+
+
+def busy_attempt(db, item, evidence):
+    evidence.mkdir()
+    claimed = db.claim_english_world_submission(item["id"], evidence_dir=str(evidence))
+    db.defer_english_world_session_busy(item["id"], attempt_id=claimed["_attempt_id"], evidence_dir=str(evidence))
+    return claimed["_attempt_id"]
+
+
+def expire_operator(db, item):
+    with db.get_connection() as conn:
+        conn.execute("UPDATE english_world_review_items SET authorization_expires_at = datetime('now','-1 minute') WHERE id = ?",
+                     (item["id"],))
+
+
+def test_dispatcher_restores_expired_busy_item_and_preserves_all_attempts(tmp_path, monkeypatch):
+    from scripts import run_publication_window as runner
+    db, item = package(tmp_path)
+    for index in range(2):
+        busy_attempt(db, item, tmp_path / f"evidence-{index}")
+    attempts = db.list_english_world_submission_attempts(item["id"])
+    assert len(attempts) == 2
+    assert db.get_english_world_review_item(item["id"])["authorization_expires_at"] == item["authorization_expires_at"]
+    assert db.restore_expired_english_world_operator_recoveries() == 0
+    expire_operator(db, item)
+    assert db.claim_english_world_submission(item["id"]) is None
+    commands = []
+    def launch(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=10, stderr="")
+    monkeypatch.setattr(runner, "PipelineDB", lambda: db)
+    monkeypatch.setattr(runner, "settings", SimpleNamespace(enable_english_world_auto_publish=True,
+                        wechat_publishing_paused=False, is_english_world_publish_window=lambda: True))
+    monkeypatch.setattr(runner.subprocess, "run", launch)
+    runner.dispatch_one_deferred_english_world_submission()
+    assert len(commands) == 1 and commands[0][-2:] == ["--review-id", item["id"]]
+    restored = db.get_english_world_review_item(item["id"])
+    assert restored["approval_source"] == "AUTO_POLICY" and restored["authorization_expires_at"] is None
+    assert db.list_english_world_submission_attempts(item["id"]) == attempts
+    assert db.restore_expired_english_world_operator_recoveries() == 0
+    assert db.claim_english_world_submission(item["id"], evidence_dir=str(tmp_path / "next"))
+
+
+@pytest.mark.parametrize("invalid", ["exit", "null_exit", "inflight", "attempt_id", "attempt_url",
+                                       "unfinished", "missing_dir", "browser_evidence", "review_id", "review_state"])
+def test_expired_busy_recovery_rejects_any_unproven_attempt(tmp_path, invalid):
+    db, item = package(tmp_path)
+    evidence = tmp_path / "evidence"
+    attempt_id = busy_attempt(db, item, evidence)
+    expire_operator(db, item)
+    mutations = {
+        "exit": "uploader_exit_code = 1", "null_exit": "uploader_exit_code = NULL",
+        "inflight": "state = 'SUBMITTING'", "attempt_id": "platform_post_id = 'export/native'",
+        "attempt_url": "platform_url = 'https://example.invalid/post'", "unfinished": "finished_at = NULL",
+    }
+    with db.get_connection() as conn:
+        if invalid in mutations:
+            conn.execute(f"UPDATE english_world_submission_attempts SET {mutations[invalid]} WHERE attempt_id = ?", (attempt_id,))
+        elif invalid == "review_id":
+            conn.execute("UPDATE english_world_review_items SET platform_post_id = 'export/native' WHERE id = ?", (item["id"],))
+        elif invalid == "review_state":
+            conn.execute("UPDATE english_world_review_items SET platform_state = 'UNKNOWN' WHERE id = ?", (item["id"],))
+    if invalid == "missing_dir":
+        evidence.rmdir()
+    if invalid == "browser_evidence":
+        (evidence / "upload.png").write_bytes(b"observed")
+    before = db.get_english_world_review_item(item["id"])
+    attempts = db.list_english_world_submission_attempts(item["id"])
+    assert db.restore_expired_english_world_operator_recoveries() == 0
+    assert db.get_english_world_review_item(item["id"]) == before
+    assert db.list_english_world_submission_attempts(item["id"]) == attempts
 
 
 @pytest.mark.parametrize("invalid", [None, "audit", "evidence", "identity", "expired"])
