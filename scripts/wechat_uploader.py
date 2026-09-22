@@ -3,7 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
-| 5.10.0 | 2026-09-22 | Codex | 不声明原创必须回读明确未选状态；缺失、混合或多控件状态禁止发表。 |
+| 5.10.0 | 2026-09-22 | Codex | 实证分列表单与 Shadow DOM 的不声明状态；未知阻断，原创提醒仅确认直接发表。 |
 | 5.9.0 | 2026-09-21 | Codex | 上传等待独立返回码与零进度未提交凭据，供管线安全退避。 |
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | Initial creation using Playwright                        |
 | 1.1.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 处理短标题/封面/分类/原创勾选；修复登录误判 URL优先策略 |
@@ -245,26 +245,57 @@ def _write_original_declaration_receipt(
 
 
 def _original_declaration_ui_state(page) -> str:
-    """精确命名的唯一可见控件才可证明未选；未知 UI 一律停止。"""
+    """精确名称或实证表单行绑定的唯一可见控件才可证明未选。"""
     try:
         name = re.compile(r"^\s*(?:声明原创|原创声明)\s*$")
-        controls = []
-        for role in ("checkbox", "switch"):
-            matches = page.get_by_role(role, name=name)
-            controls.extend(matches.nth(i) for i in range(matches.count()))
-        if len(controls) != 1 or not controls[0].is_visible():
+        controls = page.get_by_role("checkbox", name=name).or_(
+            page.get_by_role("switch", name=name),
+        )
+        # 真实视频号将字段名与 AntD checkbox 分列；名称并不是 accessible name。
+        # 只接受已观察到的精确行结构，不向上搜索包含其他设置/弹窗的宽泛祖先。
+        rows = page.locator(".form-item")
+        for index in range(rows.count()):
+            row = rows.nth(index)
+            label = row.locator(":scope > .label")
+            if label.count() != 1 or not name.fullmatch(label.inner_text()):
+                continue
+            controls = controls.or_(row.locator(
+                ":scope > .form-item-body > .declare-original-checkbox input[type=checkbox]",
+            ))
+        if controls.count() != 1 or not controls.first.is_visible():
             return "UNKNOWN"
-        control = controls[0]
+        control = controls.first
         # 非原生控件必须显式给出布尔状态；aria 缺失或 mixed 不能当成 false。
         if not control.evaluate("node => node.matches('input[type=checkbox]')"):
             if control.get_attribute("aria-checked") not in {"true", "false"}:
                 return "UNKNOWN"
         if control.evaluate("node => node.indeterminate === true"):
             return "UNKNOWN"
+        control.scroll_into_view_if_needed()
         return "DECLARED" if control.is_checked() else "NOT_DECLARED"
     except Exception as exc:
         logger.warning("Original declaration state unavailable: %s", type(exc).__name__)
         return "UNKNOWN"
+
+
+def _confirm_no_original_interceptor(page, evidence_root: Path) -> bool:
+    """仅在不声明策略下调用；确认实证原创提醒中的“直接发表”，不修改偏好。"""
+    footers = page.locator(".original-interceptor-footer:visible")
+    if footers.count() != 1:
+        return False
+    footer = footers.first
+    direct = footer.get_by_role("button", name="直接发表", exact=True)
+    original = footer.get_by_role("button", name="声明原创", exact=True)
+    if direct.count() != 1 or original.count() != 1 or not direct.is_enabled():
+        return False
+    if _original_declaration_ui_state(page) != "NOT_DECLARED":
+        return False
+    _write_original_declaration_receipt(
+        evidence_root, required=False, requested=False, applied=False, ui_state="NOT_DECLARED",
+    )
+    _capture_wechat_evidence(page, evidence_root, "no_original_interceptor_before_confirm")
+    direct.click()
+    return True
 
 
 def _calculate_english_world_package_hashes(item: dict) -> dict:
@@ -2745,6 +2776,9 @@ def run_uploader(
         # 6. 确认提交/保存结果
         # 跳转作品列表仅代表平台接收；严禁在这里声称公开视频已发布。
         page.wait_for_timeout(5000)
+        if not draft and not declare_original:
+            if _confirm_no_original_interceptor(page, evidence_root):
+                logger.info("Confirmed direct submission without original declaration; awaiting platform receipt.")
         redirected, page_content = False, ""
         try:
             # 成功发布后视频号网页通常跳转到 /post/list（最可靠信号）
