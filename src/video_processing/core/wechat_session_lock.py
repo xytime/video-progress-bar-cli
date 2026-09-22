@@ -21,6 +21,7 @@ from typing import Callable, ParamSpec, TypeVar
 
 P = ParamSpec("P")
 R = TypeVar("R")
+EXIT_WECHAT_SESSION_BUSY = 11  # 未进入被保护函数，更未启动浏览器或发表。
 
 
 class WeChatSessionLockBusy(RuntimeError):

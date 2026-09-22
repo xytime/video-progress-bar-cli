@@ -43,6 +43,9 @@ import requests
 
 from config.settings import settings
 from video_processing.core.cover_policy import validate_dedicated_cover_file
+from video_processing.core.wechat_session_lock import (
+    EXIT_WECHAT_SESSION_BUSY, WeChatSessionLock, WeChatSessionLockBusy,
+)
 from video_processing.db.database import PipelineDB
 from video_processing.english_world.package_integrity import verify_package_hashes
 
@@ -261,6 +264,13 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
 
         if pending["state"] != "SUBMISSION_APPROVED":
             return 0
+        if settings.enable_wechat_comment_interaction:
+            try:
+                with WeChatSessionLock(_PROJECT_ROOT / "output/wechat_state.json"):
+                    pass
+            except WeChatSessionLockBusy:
+                logger.info("English World deferred before claim: browser session is busy")
+                return EXIT_DEFERRED
         _require_publish_package(pending)
         evidence_dir = Path(str(pending["mp4_path"])).parent / "wechat_evidence" / str(time.time_ns())
         item = db.claim_english_world_submission(review_id, evidence_dir=str(evidence_dir))
@@ -283,6 +293,11 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                 command, cwd=str(_PROJECT_ROOT), text=True, capture_output=True,
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
+            # 预检与子进程拿锁之间仍可能有竞争；11 仅在浏览器启动前返回。
+            if result.returncode == EXIT_WECHAT_SESSION_BUSY:
+                db.defer_english_world_session_busy(review_id, attempt_id=attempt_id,
+                                                   evidence_dir=str(evidence_dir))
+                return EXIT_DEFERRED
             state, message = _record_submission_result(
                 db, review_id, attempt_id=attempt_id, code=result.returncode,
                 evidence_dir=evidence_dir, require_original_declaration=require_original,

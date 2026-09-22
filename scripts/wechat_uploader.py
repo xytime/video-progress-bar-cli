@@ -104,7 +104,9 @@ from config.settings import settings
 from wechat_desktop_auth import WeChatDesktopAuthWatcher, desktop_auth_preflight
 from copywriter import graceful_truncate_title  # [Claude_Sonnet_4.6_Thinking_planning] v1.6.0
 from video_processing.core.cover_policy import validate_dedicated_cover_file
-from video_processing.core.wechat_session_lock import guarded_wechat_browser_session
+from video_processing.core.wechat_session_lock import (
+    EXIT_WECHAT_SESSION_BUSY, guarded_wechat_browser_session,
+)
 from video_processing.core.wechat_upload_recovery import (
     PRE_SUBMIT_UPLOAD_TIMEOUT, write_timeout_receipt,
 )
@@ -1374,7 +1376,7 @@ def _capture_wechat_login_qr(page, qr_path: Path) -> bool:
     enabled=lambda: settings.enable_wechat_comment_interaction,
     state_parameter="state_path",
     timeout_seconds=0.0,
-    busy_result=1,
+    busy_result=EXIT_WECHAT_SESSION_BUSY,
 )
 def run_uploader(
     video_path: str = None,

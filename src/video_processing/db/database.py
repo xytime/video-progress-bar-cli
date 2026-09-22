@@ -6896,6 +6896,83 @@ class PipelineDB:
             )
             return {**dict(row), "_attempt_id": attempt_id}
 
+    def defer_english_world_session_busy(
+        self, review_id: str, *, attempt_id: str, evidence_dir: str,
+    ) -> Dict[str, Any]:
+        """仅消费上传器专用的浏览器启动前占用码；保留尝试并退回原批准队列。"""
+        from video_processing.core.wechat_session_lock import EXIT_WECHAT_SESSION_BUSY
+        evidence = Path(evidence_dir)
+        if not evidence.is_dir() or any(evidence.iterdir()):
+            raise ValueError("Session-busy deferral requires an untouched evidence directory")
+        message = "浏览器会话占用；上传器未启动浏览器、未尝试发表，保留原授权延后。"
+        with self.get_connection() as conn:
+            attempt = conn.execute(
+                """SELECT * FROM english_world_submission_attempts
+                   WHERE attempt_id = ? AND review_id = ? AND state = 'SUBMITTING'
+                     AND evidence_dir = ? AND platform_post_id IS NULL""",
+                (attempt_id, review_id, evidence_dir),
+            ).fetchone()
+            if not attempt:
+                raise ValueError("Session-busy attempt does not match")
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'SUBMISSION_APPROVED', submission_started_at = NULL,
+                       submission_finished_at = NULL, uploader_exit_code = NULL,
+                       error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'SUBMITTING' AND platform_post_id IS NULL
+                     AND platform_state IS NULL""", (message, review_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Session-busy review cannot be deferred")
+            conn.execute(
+                """UPDATE english_world_submission_attempts SET state = 'FAILED',
+                       uploader_exit_code = ?, error_message = ?, finished_at = CURRENT_TIMESTAMP
+                   WHERE attempt_id = ?""", (EXIT_WECHAT_SESSION_BUSY, message, attempt_id),
+            )
+            return dict(conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (review_id,)).fetchone())
+
+    def reopen_english_world_audited_prelaunch_failure(
+        self, review_id: str, *, attempt_id: str, audit_path: str,
+    ) -> Dict[str, Any]:
+        """具名人工/代理运维核验后的旧启动前故障恢复；非自动重试入口。
+
+        不由调度调用，不凭 exit=1 或空目录推断。须另有绑定具体尝试的运维
+        核验文件；旧尝试不改写。只允许一个历史失败且原授权仍有效的条目。
+        """
+        import hashlib
+        audit_file = Path(audit_path)
+        raw = audit_file.read_bytes()
+        audit = json.loads(raw)
+        if (audit.get("state") != "PRE_BROWSER_FAILURE_CONFIRMED"
+                or audit.get("review_id") != review_id or audit.get("attempt_id") != attempt_id
+                or not audit.get("operator") or not audit.get("reason")
+                or audit.get("submit_attempted") is not False or not audit.get("evidence")):
+            raise ValueError("Prelaunch recovery requires a named audit")
+        with self.get_connection() as conn:
+            attempts = conn.execute(
+                "SELECT * FROM english_world_submission_attempts WHERE review_id = ?", (review_id,),
+            ).fetchall()
+            if (len(attempts) != 1 or attempts[0]["attempt_id"] != attempt_id
+                    or attempts[0]["state"] != "FAILED" or attempts[0]["uploader_exit_code"] != 1
+                    or attempts[0]["platform_post_id"] or attempts[0]["platform_url"]):
+                raise ValueError("Only a single unbound legacy prelaunch failure can be audited")
+            evidence = Path(attempts[0]["evidence_dir"])
+            if not evidence.is_dir() or any(evidence.iterdir()):
+                raise ValueError("Prelaunch recovery found browser evidence; refuse replay")
+            message = f"具名核验确认未启动浏览器；旧失败保留。audit={audit_file.resolve()} sha256={hashlib.sha256(raw).hexdigest()}"
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET state = 'SUBMISSION_APPROVED', uploader_exit_code = NULL,
+                       submission_started_at = NULL, submission_finished_at = NULL,
+                       error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'FAILED' AND platform_post_id IS NULL
+                     AND platform_state IS NULL AND approval_source = 'OPERATOR_RECOVERY'
+                     AND authorization_expires_at > CURRENT_TIMESTAMP""", (message, review_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Prelaunch recovery requires active named authority")
+            return dict(conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (review_id,)).fetchone())
+
     def authorize_english_world_operator_recovery(
         self, review_id: str, *, reason: str,
     ) -> Dict[str, Any]:
