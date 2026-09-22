@@ -134,6 +134,8 @@ def _require_publish_package(item: dict) -> bool:
         raise ValueError("English World publish manifest is unreadable") from exc
     if manifest.get("content_type") != "ENGLISH_WORLD_SHORT":
         raise ValueError("English World publish item content type is invalid")
+    from video_processing.english_world.safety_gate import require_submission_text_safety
+    require_submission_text_safety(item, manifest)
     if not validate_dedicated_cover_file(
         Path(str(item["cover_path"])), Path(str(item["cover_provenance_path"])),
     ):

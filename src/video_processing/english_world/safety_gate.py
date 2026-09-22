@@ -310,6 +310,34 @@ def evaluate_delivery(
         }
 
 
+def require_submission_text_safety(item: Mapping[str, Any], manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """投稿前重查实际标题、文案及学习字幕；不继承旧 PASS 或频道人工旁路。"""
+    strings = [Path(str(item[field])).read_text(encoding="utf-8")
+               for field in ("title_path", "copy_path")]
+    if any(not text.strip() for text in strings):
+        raise EnglishWorldSafetyGateError("实际投稿标题或文案为空")
+    documents = [SafetyDocument(
+        name="actual_submission_title_and_copy",
+        zh_text="\n".join(text for text in strings if re.search(r"[\u4e00-\u9fff]", text)),
+        en_text="\n".join(strings),
+    )]
+    # 学习卡始终带字幕；不能因字幕开关关闭漏掉教学文本。
+    timeline_path = Path(str(manifest.get("timeline") or ""))
+    timeline = _read_json(timeline_path)
+    if timeline.get("language_contract") == "english-world-language-v1":
+        source = _read_json(timeline_path.parent / "qa/source_evidence.json")
+        plan = _read_json(timeline_path.parent / "display_plan.json")
+        documents.extend(delivery_documents(title=strings[0], timeline=timeline,
+                                            source_evidence=source, display_plan=plan))
+    else:
+        english = str(timeline.get("english_text") or "").strip()
+        chinese = str(timeline.get("translation_zh") or "").strip()
+        if not english or not chinese:
+            raise EnglishWorldSafetyGateError("实际学习字幕不完整")
+        documents.append(SafetyDocument(name="actual_study_subtitles", zh_text=chinese, en_text=english))
+    return require_pass(evaluate("pre_submit_text", documents))
+
+
 def attach_artifact_binding(receipt: Mapping[str, Any], *, mp4: Path, manifest: Path, timeline: Path) -> dict[str, Any]:
     """把 PASS/失败回执绑定到本次三份不可互换的交付产物。"""
     bound = dict(receipt)

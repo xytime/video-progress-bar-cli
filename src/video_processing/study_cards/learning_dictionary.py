@@ -9,7 +9,7 @@
 """
 import csv
 import re
-from .language_qa import file_digest
+from .language_protocol import file_digest
 
 
 def _chinese_key(value):

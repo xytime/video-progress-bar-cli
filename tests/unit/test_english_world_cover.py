@@ -17,7 +17,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 from scripts import generate_english_cover as english_cover_cli
 from src.cover.semantic import SemanticAnalyzer
 from src.cover.layout import LayoutComposer, _format_quote_en_html
@@ -27,6 +27,36 @@ from src.cover import antigravity
 from src.cover.antigravity import accept_and_normalize, build_agy_prompt, build_visual_brief
 from video_processing.core.cover_policy import assert_template_respects_cover_policy, validate_dedicated_cover_file
 from video_processing.core.cover_policy import compliant_cover_layout_policy
+
+
+def test_pillow_wrap_preserves_s_and_whole_english_words():
+    draw = ImageDraw.Draw(Image.new("RGB", (1080, 1260)))
+    quote = "Big tech names like Intel, Arm Holdings and AMD are rising in the markets."
+    lines = english_cover_cli._wrapped_lines(draw, quote, english_cover_cli._font(31), width=880, limit=3)
+    assert " ".join(lines) == quote
+    assert all(word in " ".join(lines).split() for word in ("names", "Holdings", "rising", "markets."))
+
+
+def test_pillow_wrap_does_not_ellipsize_complete_last_line():
+    draw = ImageDraw.Draw(Image.new("RGB", (300, 300)))
+    font = english_cover_cli._font(24)
+    width = int(draw.textlength("words ", font=font)) + 1
+    assert english_cover_cli._wrapped_lines(draw, "these words", font, width=width, limit=2) == ["these", "words"]
+
+
+def test_pillow_wrap_keeps_mixed_language_punctuation_spacing():
+    draw = ImageDraw.Draw(Image.new("RGB", (1080, 1260)))
+    quote = "英特尔、Arm Holdings 和 AMD 等大型科技股在市场上走强。"
+    lines = english_cover_cli._wrapped_lines(draw, quote, english_cover_cli._font(27), width=880, limit=2)
+    assert "".join(lines) == quote
+
+
+def test_pillow_ipa_font_has_nasal_glyph_and_fails_without_font(monkeypatch):
+    font = english_cover_cli._ipa_font(24)
+    assert bytes(font.getmask("ŋ")) != bytes(font.getmask("\uffff"))
+    monkeypatch.setattr(english_cover_cli, "_IPA_FONT_CANDIDATES", ())
+    with pytest.raises(ValueError, match="IPA"):
+        english_cover_cli._ipa_font(24)
 
 
 def test_quote_en_html_highlighting():

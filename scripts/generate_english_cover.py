@@ -46,6 +46,22 @@ _CJK_FONT_CANDIDATES = (
     Path("/System/Library/Fonts/STHeiti Light.ttc"),
 )
 
+_IPA_FONT_CANDIDATES = (
+    Path("/System/Library/Fonts/Supplemental/Arial.ttf"),
+    Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+)
+
+
+def _ipa_font(size: int) -> ImageFont.FreeTypeFont:
+    """音标使用包含 IPA 字形的拉丁字体，不能把缺字方框当成成功。"""
+    for candidate in _IPA_FONT_CANDIDATES:
+        if candidate.is_file():
+            try:
+                return ImageFont.truetype(str(candidate), size)
+            except OSError:
+                continue
+    raise ValueError("本地缺少可渲染 IPA 的字体，拒绝输出错误音标封面")
+
 
 def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """加载可显示中文的本地字体；备用路径不依赖浏览器或网络。"""
@@ -63,15 +79,17 @@ def _font(size: int, *, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFon
 def _wrapped_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, *, width: int, limit: int) -> list[str]:
     """按实际像素宽度折行；末行截断而不让封面文字越界。"""
     source = str(text or "")
-    tokens = re.findall(r"[A-Za-z0-9’'-]+\\s*|[^\\s]", source)
+    tokens = re.findall(r"[A-Za-z0-9’'-]+\s*|[^\s]\s*", source)
     lines: list[str] = []
     current = ""
+    truncated = False
     for token in tokens:
         candidate = f"{current}{token}"
         if current and draw.textbbox((0, 0), candidate, font=font)[2] > width:
             lines.append(current.rstrip())
             current = token.lstrip()
             if len(lines) >= limit:
+                truncated = True
                 break
         else:
             current = candidate
@@ -79,7 +97,7 @@ def _wrapped_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFo
         lines.append(current.rstrip())
     if not lines:
         return [""]
-    if len(lines) == limit and len("".join(lines)) < len(source):
+    if truncated:
         lines[-1] = lines[-1].rstrip(".。…") + "…"
     return lines
 
@@ -93,8 +111,10 @@ def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
 
     badge_font = _font(30, bold=True)
     meta_font = _font(20, bold=True)
-    draw.rounded_rectangle((48, 48, 288, 104), radius=4, fill="#A53C2B")
-    draw.text((66, 58), str(layout.get("badge") or "世界英语新闻精读"), font=badge_font, fill="#FFFFFF")
+    badge_text = str(layout.get("badge") or "世界英语新闻精读")
+    badge_right = 84 + draw.textlength(badge_text, font=badge_font)
+    draw.rounded_rectangle((48, 48, badge_right, 104), radius=4, fill="#A53C2B")
+    draw.text((66, 58), badge_text, font=badge_font, fill="#FFFFFF")
     draw.text((594, 65), "DAILY NEWS · STUDY", font=meta_font, fill="#6E625A")
     draw.line((48, 124, width - 48, 124), fill="#1E1A18", width=3)
     draw.text((48, 142), str(layout.get("date_str") or "今日英语打卡"), font=meta_font, fill="#8C7E72")
@@ -133,7 +153,7 @@ def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
         phonetic_word = str(card.get("phonetic_word") or card.get("word") or "")
         ipa = str(card.get("ipa") or "")
         ipa_label = f"{phonetic_word}: {ipa}" if ipa and phonetic_word.lower() != str(card.get("word") or "").lower() else ipa
-        draw.text((x0 + 24, cards_y + 94), ipa_label, font=_font(17), fill="#6E625A")
+        draw.text((x0 + 24, cards_y + 94), ipa_label, font=_ipa_font(17), fill="#6E625A")
         draw.text((x0 + 24, cards_y + 120), str(card.get("meaning") or ""), font=_font(21), fill="#4A3E34")
         draw.text((x0 + 24, cards_y + 150), str(card.get("level") or "英语学习"), font=_font(18, bold=True), fill="#785A18")
 
@@ -285,7 +305,7 @@ def main() -> int:
                     "template_variant": layout["template_variant"],
                     "payload_sha256": payload_sha256,
                     "source_timeline_sha256": source_timeline_sha256,
-                    "generator": "scripts/generate_english_cover.py@1.3.0",
+                    "generator": "scripts/generate_english_cover.py@1.3.3",
                     "render_backend": render_backend,
                 },
                 ensure_ascii=False,

@@ -10,7 +10,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 import tempfile
 
-from .language_qa import VERSION, digest
+from .language_protocol import VERSION, digest
 from .learning_dictionary import _dictionary_key
 from .models import StudyCardContent, VocabularyItem
 from .template_a import (RecordUnderlineTemplate, TEXT_TOP, READING_VIEWPORT_BOTTOM,

@@ -357,9 +357,10 @@ def test_latest_published_post_does_not_fall_back_when_latest_has_interaction(
 def test_recent_uninteracted_candidates_follow_upload_record_time(tmp_path: Path) -> None:
     db_path = tmp_path / "batch_candidates.db"
     db = PipelineDB(db_path=str(db_path))
-    older = _published_target(db, tmp_path, "batch_older")
     newest = _published_target(db, tmp_path, "batch_newest")
+    older = _published_target(db, tmp_path, "batch_older")
     already_queued = _published_target(db, tmp_path, "batch_queued")
+    expired = _published_target(db, tmp_path, "batch_expired")
     db.queue_wechat_interaction(
         publication_id=already_queued["id"],
         platform_post_id="export/post_batch_queued",
@@ -372,15 +373,19 @@ def test_recent_uninteracted_candidates_follow_upload_record_time(tmp_path: Path
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "UPDATE wechat_publications SET created_at = ? WHERE id = ?",
-            ("2026-09-19 01:00:00", older["id"]),
+            ((datetime.datetime.now(UTC) - datetime.timedelta(hours=3)).strftime("%Y-%m-%d %H:%M:%S"), older["id"]),
         )
         conn.execute(
             "UPDATE wechat_publications SET created_at = ? WHERE id = ?",
-            ("2026-09-19 03:00:00", newest["id"]),
+            ((datetime.datetime.now(UTC) - datetime.timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S"), newest["id"]),
         )
         conn.execute(
             "UPDATE wechat_publications SET created_at = ? WHERE id = ?",
-            ("2026-09-19 04:00:00", already_queued["id"]),
+            ((datetime.datetime.now(UTC) - datetime.timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S"), already_queued["id"]),
+        )
+        conn.execute(
+            "UPDATE wechat_publications SET created_at = ? WHERE id = ?",
+            ((datetime.datetime.now(UTC) - datetime.timedelta(days=4)).strftime("%Y-%m-%d %H:%M:%S"), expired["id"]),
         )
 
     candidates = db.get_recent_wechat_posts_without_interaction(limit=3)
@@ -566,5 +571,4 @@ def test_ensure_english_world_wechat_publication_preserves_published_monotonicit
     reentered = db.ensure_english_world_wechat_publication("rev_monotonic", platform_post_id=post_id, state="SUBMITTED_BOUND")
     # 状态必须保持 PUBLISHED，绝不可倒退为 SUBMITTED_BOUND
     assert reentered["state"] == "PUBLISHED"
-
 

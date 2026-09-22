@@ -229,6 +229,10 @@ class StudyCardRenderer:
                                  "micro_note_unique_count": len(content.vocabulary),
                                  "right_card_display_count": len(cards), "right_card_unique_count": len(set(cards)),
                                  "display_screens": frozen_plan["screens"], "timeline": str(language_timeline.resolve())})
+                resolution = language_timeline.parent / "qa/source_resolution.json"
+                if resolution.exists():
+                    manifest["source_resolution_sha256"] = file_digest(resolution)
+                    manifest["language_approval_method"] = "TWO_LOCAL_ASR_MINIMAL_RESTORE"
                 atomic_json(manifest_path, manifest)
             if keep_assets:
                 assets_dir = output_path.with_suffix("").with_name(output_path.stem + "_assets")
