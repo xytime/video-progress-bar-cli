@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.10 | 2026-09-22 | Codex | 被拒绝的正文及增量输入不改账本，原启动失败仍可具名恢复。 |
 | 1.0.9 | 2026-09-22 | Codex | 覆盖显式启动恢复、预检失败不改账本和三次硬上限。 |
 | 1.0.0 | 2026-09-09 | Codex | JSON3 完整词、逐目标审校覆盖及重启缓存测试。 |
 | 1.0.1 | 2026-09-09 | Codex | 覆盖转录差异逐项裁决、片段任务隔离和词元音标标签。 |
@@ -570,6 +571,57 @@ def test_startup_probe_failure_leaves_ledger_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "probe_agy_startup", probe)
     with pytest.raises(AgyProviderError):
         review(timeline, recover_startup_reason="confirmed startup failure", **kwargs)
+    assert path.read_bytes() == before
+
+
+def test_rejected_model_change_does_not_poison_startup_recovery(tmp_path, monkeypatch):
+    from video_processing.study_cards import language_review_service as module
+    timeline, p, kwargs, path = setup_startup_failure(tmp_path)
+    before = path.read_bytes()
+    calls = []
+
+    def caller(*args, **kw):
+        calls.append(kw["model"])
+        return good(p)
+
+    with pytest.raises(ValueError, match="已终止"):
+        review(timeline, caller=caller, **{**kwargs, "model": "different-model"})
+    assert path.read_bytes() == before
+    assert calls == []
+    monkeypatch.setattr(module, "probe_agy_startup", lambda **kw: {"model_available": True})
+    report = review(timeline, caller=caller, recover_startup_reason="confirmed startup failure", **kwargs)
+    ledger = read_json(path)
+    assert report["state"] == "PASS" and ledger["attempts"] == 2
+    assert len(ledger["keys"]) == 1 and ledger["retries"] == 1
+    assert calls == ["m"]
+
+
+@pytest.mark.parametrize("blocked", [{"attempts": 3}, {"inflight": True}, {"terminal": True}])
+def test_rejected_input_does_not_mutate_ledger(tmp_path, blocked):
+    timeline, _ = setup_review(tmp_path)
+    path = tmp_path / "task/language_attempts.json"
+    atomic_json(path, {"attempts": 1, "retries": 0, "keys": ["attempted-input"], **blocked})
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="已终止"):
+        review(timeline, cache_dir=tmp_path / "cache", task_dir=path.parent, model="new-model")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("blocked", [{"attempts": 3}, {"inflight": True}, {"terminal": True}])
+def test_rejected_publication_input_does_not_mutate_shared_ledger(tmp_path, monkeypatch, blocked):
+    from video_processing.study_cards import publication_qa as module
+    timeline, p = setup_review(tmp_path)
+    p["content"].update(headline_en="Reading", headline_zh="阅读")
+    atomic_json(tmp_path / "display_plan.json", p)
+    monkeypatch.setattr(module, "validate_language_qa", lambda _: {"input_key": "base-pass"})
+    path = tmp_path / "task/language_attempts.json"
+    atomic_json(path, {"attempts": 1, "retries": 0, "keys": ["attempted-input"], **blocked})
+    before = path.read_bytes()
+    publication = {"title": "阅读成绩", "copy": "阅读成绩令人警醒", "cover_payload": {
+        "title": "阅读成绩", "quote_en": "The results are sobering.", "quote_zh": "结果令人警醒。",
+        "difficulty_tag": "A2–B1", "audio_source": "ABC News", "date_str": "2026.09.09"}}
+    with pytest.raises(ValueError, match="用尽或停止"):
+        module.review_publication(timeline, publication, cache_dir=tmp_path / "cache", task_dir=path.parent, model="m")
     assert path.read_bytes() == before
 
 

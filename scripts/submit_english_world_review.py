@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.16.0 | 2026-09-22 | Codex | 原创策略绑定不可变审核包；声明异常保留原生 ID 并停止重传。 |
 | 1.15.0 | 2026-09-20 | Antigravity | 视频号首评互动解耦：投稿受理绑定原生 post_id 后异步派发互动 worker。 |
 | 1.14.0 | 2026-09-20 | Antigravity | 隔离中心发布账本注册异常，防止同步异常触发投稿状态二次回写。 |
 | 1.13.0 | 2026-09-20 | Antigravity | 投稿受理并取得原生 post_id 时向中心账本 wechat_publications 注册发布记录。 |
@@ -31,6 +32,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -51,8 +53,10 @@ _UPLOAD_TIMEOUT_SECONDS = 25 * 60
 EXIT_DEFERRED = 10
 
 
-def _english_world_uploader_command(item: dict, evidence_dir: Path) -> list[str]:
-    """构造英语世界专用投稿命令，永远要求视频号确认原创声明。"""
+def _english_world_uploader_command(
+    item: dict, evidence_dir: Path, *, require_original_declaration: bool = True,
+) -> list[str]:
+    """按已核验审核包的声明策略构造命令，不改变历史包默认策略。"""
     return [
         str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
         str(_PROJECT_ROOT / "scripts" / "wechat_uploader.py"),
@@ -64,24 +68,39 @@ def _english_world_uploader_command(item: dict, evidence_dir: Path) -> list[str]
         "--state", str(_PROJECT_ROOT / "output" / "wechat_state.json"),
         "--evidence-dir", str(evidence_dir),
         "--fail-fast-login",
-        "--require-original-declaration",
+        "--require-original-declaration" if require_original_declaration else "--no-original-declaration",
     ]
 
 
-def _original_declaration_receipt_is_confirmed(evidence_dir: Path) -> bool:
-    """只接受本次证据目录内完整的原创声明界面回执。"""
+def _original_declaration_required(item: dict) -> bool:
+    """声明策略只从已绑定哈希的 manifest 读取，不能通过临时参数降级。"""
+    raw = Path(item["manifest_path"]).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != item.get("manifest_sha256"):
+        raise ValueError("English World declaration policy manifest hash mismatch")
+    policy = json.loads(raw).get("wechat_original_declaration", "REQUIRE_ORIGINAL")
+    if policy not in ("REQUIRE_ORIGINAL", "DO_NOT_DECLARE"):
+        raise ValueError("English World original declaration policy is invalid")
+    return policy == "REQUIRE_ORIGINAL"
+
+
+def _original_declaration_receipt_is_confirmed(
+    evidence_dir: Path, *, require_original_declaration: bool = True,
+) -> bool:
+    """按本条审核包策略确认界面；未声明必须有明确未选中的回读。"""
     try:
         payload = json.loads(
             (evidence_dir / "original_declaration_receipt.json").read_text(encoding="utf-8"),
         )
     except (OSError, ValueError, json.JSONDecodeError):
         return False
-    return (
-        isinstance(payload, dict)
-        and payload.get("required") is True
-        and payload.get("requested") is True
-        and payload.get("applied_in_ui") is True
-    )
+    if not isinstance(payload, dict):
+        return False
+    if require_original_declaration:
+        return (payload.get("required") is True and payload.get("requested") is True
+                and payload.get("applied_in_ui") is True)
+    return (payload.get("required") is False and payload.get("requested") is False
+            and payload.get("applied_in_ui") is False
+            and payload.get("ui_state") == "NOT_DECLARED")
 
 
 def _post_status(text: str) -> None:
@@ -102,7 +121,7 @@ def _post_status(text: str) -> None:
         logger.warning("Telegram submission receipt failed: %s", type(exc).__name__)
 
 
-def _require_publish_package(item: dict) -> None:
+def _require_publish_package(item: dict) -> bool:
     """在启动浏览器前验证审核项绑定的完整发布包，防止改路径或默认封面投稿。"""
     required = ("mp4_path", "manifest_path", "title_path", "copy_path", "cover_path", "cover_provenance_path")
     for field in required:
@@ -123,6 +142,7 @@ def _require_publish_package(item: dict) -> None:
     from video_processing.study_cards.qa_integrity import validate_audio_qa
     report = Path(str(item.get("audio_qa_report_path") or Path(item["mp4_path"]).parent / "qa" / "final_audio_qa.json"))
     validate_audio_qa(report, mp4=Path(item["mp4_path"]), manifest=Path(item["manifest_path"]))
+    return _original_declaration_required(item)
 
 
 def _completion_for_exit_code(code: int) -> tuple[str, str]:
@@ -131,7 +151,7 @@ def _completion_for_exit_code(code: int) -> tuple[str, str]:
         return "UNDER_REVIEW", "视频号已受理提交，等待平台审核/作品管理页确认；尚无公开发布证明。"
     if code == 2:
         return "LOGIN_REQUIRED", "视频号登录失效，未完成可确认投稿；请完成扫码后人工处理本条。"
-    if code == 3:
+    if code in {3, 124}:
         return "UNCERTAIN", "投稿结果无法确认，可能已受理；已停止自动重传，需在视频号后台核验。"
     return "FAILED", f"投稿器返回 exit={code}，未自动重传。请先核验视频号后台再决定后续动作。"
 
@@ -143,11 +163,48 @@ def _read_submission_identity(evidence_dir: Path) -> tuple[str | None, str | Non
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
         return None, None
+    if not isinstance(receipt, dict):
+        return None, None
     if str(receipt.get("matched_by") or "") != "same_session_before_after_unique_post_list_object_id_delta":
         return None, None
     platform_post_id = str(receipt.get("platform_post_id") or "").strip() or None
     platform_url = str(receipt.get("platform_url") or "").strip() or None
     return platform_post_id, platform_url
+
+
+def _record_submission_result(
+    db: PipelineDB, review_id: str, *, attempt_id: str, code: int,
+    evidence_dir: Path, require_original_declaration: bool, detail: str = "",
+) -> tuple[str, str]:
+    """平台事实与声明合规分开记账；后处理异常不能抹掉同次原生 ID。"""
+    state, message = _completion_for_exit_code(code)
+    platform_post_id, platform_url = _read_submission_identity(evidence_dir)
+    declaration_confirmed = _original_declaration_receipt_is_confirmed(
+        evidence_dir, require_original_declaration=require_original_declaration,
+    )
+    if state == "UNDER_REVIEW" and not declaration_confirmed:
+        state = "UNCERTAIN"
+        message = "提交后声明状态证据缺失或与审核包不符；保留受理证据，停止重传及后续同步，需后台核验。"
+    elif platform_post_id and state != "UNDER_REVIEW":
+        state = "UNCERTAIN"
+        message = "已取得同次平台原生 ID，但投稿器未正常确认完成；保留 ID 并停止重传，需后台核验。"
+    if detail:
+        message += f"\n执行摘要：{detail[-500:]}"
+    db.complete_english_world_submission(
+        review_id, state=state, uploader_exit_code=code, evidence_dir=str(evidence_dir),
+        message=message, attempt_id=attempt_id, platform_post_id=platform_post_id,
+        platform_url=platform_url if platform_post_id else None,
+    )
+    if platform_post_id:
+        try:
+            db.ensure_english_world_wechat_publication(
+                review_id, platform_post_id=platform_post_id, platform_url=platform_url,
+                evidence_path=str(evidence_dir),
+                state="SUBMITTED_BOUND" if state == "UNDER_REVIEW" else "UNCERTAIN",
+            )
+        except Exception as sync_exc:
+            logger.warning("English World 投稿中心账本同步失败 (保留提交状态): %s", sync_exc)
+    return state, message
 
 
 def _manual_authorization_active(item: dict) -> bool:
@@ -212,43 +269,28 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
         title = str(item.get("title") or "英语世界短视频")
         attempt_id = str(item["_attempt_id"])
         evidence_dir.mkdir(parents=True, exist_ok=True)
+        require_original = True
         try:
-            _require_publish_package(item)
-            command = _english_world_uploader_command(item, evidence_dir)
+            require_original = _require_publish_package(item)
+            command = _english_world_uploader_command(
+                item, evidence_dir, require_original_declaration=require_original,
+            )
             if not settings.wechat_headless:
                 command.append("--no-headless")
             result = subprocess.run(
                 command, cwd=str(_PROJECT_ROOT), text=True, capture_output=True,
                 timeout=_UPLOAD_TIMEOUT_SECONDS,
             )
-            state, message = _completion_for_exit_code(result.returncode)
-            if state == "UNDER_REVIEW" and not _original_declaration_receipt_is_confirmed(evidence_dir):
-                state = "FAILED"
-                message = "原创声明未取得完整界面确认回执，已停止并禁止将本次投稿记为受理。"
-            platform_post_id, platform_url = _read_submission_identity(evidence_dir)
-            if state != "UNDER_REVIEW":
-                platform_post_id = platform_url = None
-            if result.stderr:
-                message = f"{message}\n执行摘要：{result.stderr[-500:].strip()}"
-            db.complete_english_world_submission(
-                review_id, state=state, uploader_exit_code=result.returncode,
-                evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
-                platform_post_id=platform_post_id, platform_url=platform_url,
+            state, message = _record_submission_result(
+                db, review_id, attempt_id=attempt_id, code=result.returncode,
+                evidence_dir=evidence_dir, require_original_declaration=require_original,
+                detail=(result.stderr or "").strip(),
             )
+            platform_post_id, _ = _read_submission_identity(evidence_dir)
             if (
                 state == "UNDER_REVIEW"
                 and platform_post_id
             ):
-                try:
-                    db.ensure_english_world_wechat_publication(
-                        review_id,
-                        platform_post_id=platform_post_id,
-                        platform_url=platform_url,
-                        evidence_path=str(evidence_dir),
-                        state="SUBMITTED_BOUND",
-                    )
-                except Exception as sync_exc:
-                    logger.warning("English World 投稿中心账本同步失败 (保留审核态): %s", sync_exc)
                 if settings.enable_english_world_douyin_sync:
                     try:
                         db.ensure_english_world_douyin_publication(review_id)
@@ -273,19 +315,16 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                     except Exception as exc:
                         logger.warning("English World 派发视频号互动 worker 失败: %s", exc)
         except subprocess.TimeoutExpired:
-            state = "UNCERTAIN"
-            message = "视频号上传超时，无法排除平台已受理；已停止自动重传，需在后台核验。"
-            db.complete_english_world_submission(
-                review_id, state=state, uploader_exit_code=124,
-                evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
+            state, message = _record_submission_result(
+                db, review_id, attempt_id=attempt_id, code=124,
+                evidence_dir=evidence_dir, require_original_declaration=require_original,
             )
         except Exception as exc:  # noqa: BLE001 - worker must persist its own failure receipt
             logger.exception("English World WeChat submission failed: %s", exc)
-            state = "FAILED"
-            message = f"投稿前校验或执行失败：{exc}。未自动重传。"
-            db.complete_english_world_submission(
-                review_id, state=state, uploader_exit_code=1,
-                evidence_dir=str(evidence_dir), message=message, attempt_id=attempt_id,
+            state, message = _record_submission_result(
+                db, review_id, attempt_id=attempt_id, code=1,
+                evidence_dir=evidence_dir, require_original_declaration=require_original,
+                detail=f"投稿前校验或执行失败：{exc}。未自动重传。",
             )
 
     labels = {

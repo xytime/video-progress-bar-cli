@@ -7161,8 +7161,8 @@ class PipelineDB:
             raise ValueError("Invalid English World submission completion state")
         clean_platform_post_id = (platform_post_id or "").strip() or None
         clean_platform_url = (platform_url or "").strip() or None
-        if clean_platform_post_id and target_state != "UNDER_REVIEW":
-            raise ValueError("English World platform identity requires an accepted submission")
+        if clean_platform_post_id and target_state not in {"UNDER_REVIEW", "UNCERTAIN"}:
+            raise ValueError("English World platform identity requires an accepted or uncertain submission")
         with self.get_connection() as conn:
             clean_review_id = (review_id or "").strip()
             clean_attempt_id = (attempt_id or "").strip()

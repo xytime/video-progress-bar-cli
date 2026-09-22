@@ -130,9 +130,9 @@ def test_submission_registers_wechat_publication_on_under_review(monkeypatch, tm
     monkeypatch.setattr(submitter, "PipelineDB", FakeDB)
     monkeypatch.setattr(submitter, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(submitter, "_manual_authorization_active", lambda _p: True)
-    monkeypatch.setattr(submitter, "_require_publish_package", lambda _p: None)
-    monkeypatch.setattr(submitter, "_english_world_uploader_command", lambda _i, _e: ["true"])
-    monkeypatch.setattr(submitter, "_original_declaration_receipt_is_confirmed", lambda _d: True)
+    monkeypatch.setattr(submitter, "_require_publish_package", lambda _p: True)
+    monkeypatch.setattr(submitter, "_english_world_uploader_command", lambda _i, _e, **_kw: ["true"])
+    monkeypatch.setattr(submitter, "_original_declaration_receipt_is_confirmed", lambda _d, **_kw: True)
     monkeypatch.setattr(
         submitter, "_read_submission_identity", lambda _d: ("export/native_123", "https://channels.weixin.qq.com")
     )
@@ -177,9 +177,9 @@ def test_submission_wechat_publication_error_does_not_corrupt_submission_attempt
     monkeypatch.setattr(submitter, "PipelineDB", FakeDB)
     monkeypatch.setattr(submitter, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(submitter, "_manual_authorization_active", lambda _p: True)
-    monkeypatch.setattr(submitter, "_require_publish_package", lambda _p: None)
-    monkeypatch.setattr(submitter, "_english_world_uploader_command", lambda _i, _e: ["true"])
-    monkeypatch.setattr(submitter, "_original_declaration_receipt_is_confirmed", lambda _d: True)
+    monkeypatch.setattr(submitter, "_require_publish_package", lambda _p: True)
+    monkeypatch.setattr(submitter, "_english_world_uploader_command", lambda _i, _e, **_kw: ["true"])
+    monkeypatch.setattr(submitter, "_original_declaration_receipt_is_confirmed", lambda _d, **_kw: True)
     monkeypatch.setattr(
         submitter, "_read_submission_identity", lambda _d: ("export/native_456", "https://channels.weixin.qq.com")
     )
@@ -190,4 +190,3 @@ def test_submission_wechat_publication_error_does_not_corrupt_submission_attempt
     assert exit_code == 0
     # complete_english_world_submission 只允许调用一次且状态必须为 UNDER_REVIEW，绝不可再调用 FAILED
     assert recorded_calls == [("complete", "UNDER_REVIEW")]
-

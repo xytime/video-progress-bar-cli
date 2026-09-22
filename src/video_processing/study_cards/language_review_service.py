@@ -137,13 +137,16 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180, 
             ledger["recovered_transient_failure"] = True
             atomic_json(ledger_path, ledger)
         failures = check_content_budget(ledger, cache_dir, key)
+        hit = cache.exists()
+        if key not in ledger["keys"] and len(ledger["keys"]) + len(ledger.get("publication_keys", [])) >= 3:
+            raise ValueError("同一任务最多三个审校输入，内容最多一次修订")
+        # 被拒绝的调用不能登记新输入，否则会污染启动恢复所绑定的失败键。
+        if not hit and (ledger["attempts"] >= 3 or ledger.get("terminal") or ledger.get("inflight")):
+            raise ValueError("独立审校尝试已用尽或已终止")
         if key not in ledger["keys"]:
-            if len(ledger["keys"]) + len(ledger.get("publication_keys", [])) >= 3:
-                raise ValueError("同一任务最多三个审校输入，内容最多一次修订")
             ledger["keys"].append(key)
             atomic_json(ledger_path, ledger)
         started = time.monotonic()
-        hit = cache.exists()
         if hit:
             result = read_json(cache)["result"]
             evaluate(result, plan, evidence=evidence, editorial=editorial)

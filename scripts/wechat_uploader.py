@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.10.0 | 2026-09-22 | Codex | 不声明原创必须回读明确未选状态；缺失、混合或多控件状态禁止发表。 |
 | 5.9.0 | 2026-09-21 | Codex | 上传等待独立返回码与零进度未提交凭据，供管线安全退避。 |
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | Initial creation using Playwright                        |
 | 1.1.0   | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | 处理短标题/封面/分类/原创勾选；修复登录误判 URL优先策略 |
@@ -145,8 +146,11 @@ def _original_declaration_publish_allowed(
     declare_original: bool,
     require_original_declaration: bool,
     declaration_applied: bool,
+    declaration_absent_confirmed: bool = False,
 ) -> bool:
-    """严格原创模式仅在声明开关及其确认流程均完成后允许发表。"""
+    """声明和不声明均须符合各自界面证据，不能把未检测到当成未勾选。"""
+    if not declare_original:
+        return not require_original_declaration and not declaration_applied and declaration_absent_confirmed
     if not require_original_declaration:
         return True
     return declare_original and declaration_applied
@@ -218,6 +222,7 @@ def _write_original_declaration_receipt(
     required: bool,
     requested: bool,
     applied: bool,
+    ui_state: str | None = None,
 ) -> None:
     """原子记录本次原创声明界面结果；它不是平台审核或公开发布证明。"""
     payload = {
@@ -225,6 +230,8 @@ def _write_original_declaration_receipt(
         "requested": requested,
         "applied_in_ui": applied,
     }
+    if ui_state is not None:
+        payload["ui_state"] = ui_state
     try:
         evidence_root.mkdir(parents=True, exist_ok=True)
         receipt_path = evidence_root / "original_declaration_receipt.json"
@@ -233,6 +240,29 @@ def _write_original_declaration_receipt(
         temporary_path.replace(receipt_path)
     except OSError as exc:
         logger.warning("Failed to persist original declaration receipt: %s", type(exc).__name__)
+
+
+def _original_declaration_ui_state(page) -> str:
+    """精确命名的唯一可见控件才可证明未选；未知 UI 一律停止。"""
+    try:
+        name = re.compile(r"^\s*(?:声明原创|原创声明)\s*$")
+        controls = []
+        for role in ("checkbox", "switch"):
+            matches = page.get_by_role(role, name=name)
+            controls.extend(matches.nth(i) for i in range(matches.count()))
+        if len(controls) != 1 or not controls[0].is_visible():
+            return "UNKNOWN"
+        control = controls[0]
+        # 非原生控件必须显式给出布尔状态；aria 缺失或 mixed 不能当成 false。
+        if not control.evaluate("node => node.matches('input[type=checkbox]')"):
+            if control.get_attribute("aria-checked") not in {"true", "false"}:
+                return "UNKNOWN"
+        if control.evaluate("node => node.indeterminate === true"):
+            return "UNKNOWN"
+        return "DECLARED" if control.is_checked() else "NOT_DECLARED"
+    except Exception as exc:
+        logger.warning("Original declaration state unavailable: %s", type(exc).__name__)
+        return "UNKNOWN"
 
 
 def _calculate_english_world_package_hashes(item: dict) -> dict:
@@ -2598,6 +2628,7 @@ def run_uploader(
         page.screenshot(path="output/debug_original_before.png")
 
         declaration_applied = False
+        declaration_ui_state = None
         if declare_original:
             toggle_ok = _click_original_toggle(page)
             if toggle_ok:
@@ -2620,7 +2651,9 @@ def run_uploader(
             else:
                 logger.warning("⚠️ Original declaration toggle not found")
         else:
-            logger.info("Skipping original declaration by explicit operator choice.")
+            declaration_ui_state = _original_declaration_ui_state(page)
+            declaration_applied = declaration_ui_state == "DECLARED"
+            logger.info("Explicit no-original declaration UI state: %s", declaration_ui_state)
 
         page.screenshot(path="output/debug_original_after.png")
         _write_original_declaration_receipt(
@@ -2628,11 +2661,13 @@ def run_uploader(
             required=require_original_declaration,
             requested=declare_original,
             applied=declaration_applied,
+            ui_state=declaration_ui_state,
         )
         if not _original_declaration_publish_allowed(
             declare_original=declare_original,
             require_original_declaration=require_original_declaration,
             declaration_applied=declaration_applied,
+            declaration_absent_confirmed=declaration_ui_state == "NOT_DECLARED",
         ):
             logger.error("Original declaration was not confirmed; refusing to publish this video.")
             _capture_wechat_evidence(page, evidence_root, "original_declaration_required_failed")
@@ -2668,6 +2703,19 @@ def run_uploader(
         except Exception:
             pass
             
+        # 位置/合集弹窗结束后再次确认，避免复用更早的未勾选状态。
+        if not declare_original:
+            declaration_ui_state = _original_declaration_ui_state(page)
+            _write_original_declaration_receipt(
+                evidence_root, required=False, requested=False,
+                applied=declaration_ui_state == "DECLARED", ui_state=declaration_ui_state,
+            )
+            _capture_wechat_evidence(page, evidence_root, "no_original_declaration_pre_submit")
+            if declaration_ui_state != "NOT_DECLARED":
+                logger.error("No-original declaration not confirmed immediately before submission.")
+                browser.close()
+                return 1
+
         # 5. 执行提交或存草稿
         if draft:
             logger.info("Saving as draft...")

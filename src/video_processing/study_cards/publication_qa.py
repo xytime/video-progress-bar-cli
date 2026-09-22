@@ -61,13 +61,16 @@ def review_publication(timeline, publication, *, cache_dir, task_dir, model, com
     with locked(task_dir / "language.lock"), locked(cache_dir / f"{key}.lock"):
         ledger = read_json(ledger_path)  # 无主审校账本不得创建新的额度起点
         check_content_budget(ledger, cache_dir, key)
-        keys = ledger.setdefault("publication_keys", [])
+        hit, started = cache.exists(), time.monotonic()
+        keys = ledger.get("publication_keys", [])
+        if key not in keys and len(keys) + len(ledger["keys"]) >= 3:
+            raise ValueError("全文及文案合计最多三个审校输入，内容最多一次修订")
+        if not hit and (ledger["attempts"] >= 3 or ledger.get("terminal") or ledger.get("inflight")):
+            raise ValueError("任务合计审校尝试已用尽或停止")
         if key not in keys:
-            if len(keys) + len(ledger["keys"]) >= 3:
-                raise ValueError("全文及文案合计最多三个审校输入，内容最多一次修订")
+            ledger["publication_keys"] = keys
             keys.append(key)
             atomic_json(ledger_path, ledger)
-        hit, started = cache.exists(), time.monotonic()
         if hit:
             saved = read_json(cache)
         else:
