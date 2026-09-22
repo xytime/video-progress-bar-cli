@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-09-22 | Codex | 覆盖本地启动分类、模型列表预检及敏感输出不外泄。 |
 | 1.0.0 | 2026-08-24 | Codex | 覆盖隔离调用、Schema 输出提取和缺失结构化结果的拒绝 |
 """
 
@@ -64,3 +65,33 @@ def test_agy_provider_does_not_expose_external_error_text(monkeypatch):
         run_agy_structured("translate", schema={"type": "object"}, model="test", command="agy", timeout_sec=1)
 
     assert str(exc_info.value) == "agy exit 1: rate limit"
+
+
+@pytest.mark.parametrize("message, expected", [
+    ("Failed to start: listen tcp 127.0.0.1:0: bind: operation not permitted", "local startup blocked"),
+    ("403 permission denied", "permission"),
+    ("operation not permitted", "provider error"),
+])
+def test_startup_failure_category_is_narrow(message, expected):
+    from video_processing.utils.agy_provider import _safe_failure_category
+    assert _safe_failure_category(message) == expected
+
+
+@pytest.mark.parametrize("code, output, success", [
+    (0, "m\tTest model\n", True), (0, "other\tOther model\n", False),
+    (1, "private account details", False),
+])
+def test_startup_probe_only_queries_model_list(monkeypatch, code, output, success):
+    import video_processing.utils.agy_provider as module
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=code, stdout=output, stderr="")
+    monkeypatch.setattr(module.subprocess, "run", run)
+    if success:
+        assert module.probe_agy_startup(command="agy", model="m")["model_available"]
+    else:
+        with pytest.raises(AgyProviderError) as exc:
+            module.probe_agy_startup(command="agy", model="m")
+        assert "private" not in str(exc.value)
+    assert calls == [["agy", "models"]]

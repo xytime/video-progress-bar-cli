@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.6 | 2026-09-22 | Codex | 提供显式启动故障恢复理由入口，不清除次数或绕过语言检查。 |
 | 1.0.0 | 2026-09-09 | Codex | source/prepare/review/validate 阶段独立执行，不接触投稿账本。 |
 | 1.0.1 | 2026-09-09 | Codex | 以来源+字幕+自然片段隔离布局和审校预算。 |
 | 1.0.2 | 2026-09-09 | Codex | 保存边界跨越字幕的 ASR 对齐文本，禁止静默丢词。 |
@@ -144,11 +145,15 @@ def main():
     parser.add_argument("--timeline", type=Path, required=True)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--publication-file", type=Path)
+    parser.add_argument("--recover-startup-failure", metavar="REASON",
+                        help="已确认本地启动故障并修复环境后，保留原预算进行一次受控恢复")
     parser.add_argument("--whisper-model", type=Path, default=Path.home() / ".cache/whisper/small.pt")
     parser.add_argument("--wordlist-dir", type=Path, default=Path.home() / "Downloads/hermes-wordlists")
     args = parser.parse_args()
     timeline = args.timeline.resolve()
     try:
+        if args.recover_startup_failure is not None and args.stage != "review":
+            raise ValueError("启动恢复仅支持 review 阶段")
         if args.stage == "source":
             source_evidence(timeline, args.whisper_model.expanduser())
         elif args.stage == "lexicon":
@@ -164,6 +169,8 @@ def main():
             evidence = read_json(timeline.parent / "qa/source_evidence.json")
             task_key = task_identity(evidence)
             kwargs = {}
+            if args.recover_startup_failure is not None:
+                kwargs["recover_startup_reason"] = args.recover_startup_failure
             if args.stage == "publication":
                 from video_processing.study_cards.publication_qa import review_publication
                 if not args.publication_file:

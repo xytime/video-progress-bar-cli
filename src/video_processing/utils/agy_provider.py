@@ -6,6 +6,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.1 | 2026-09-22 | Codex | 区分本地启动受限与服务鉴权失败，提供无模型调用的启动预检。 |
 | 1.4.0 | 2026-09-22 | Codex | 允许调用方提供最小运行环境，独立 App 文案不继承业务 API 凭据。 |
 | 1.3.0 | 2026-09-18 | Antigravity | 支持根据模型后缀(-high/-low)自动推断 effort，避免参数冲突 |
 | language-v1 | 2026-09-09 | Codex | 可选返回供应商原始用量，不改变现有结构化调用返回合同。 |
@@ -97,6 +98,9 @@ def run_agy_structured(
 def _safe_failure_category(value: str | None) -> str:
     """将外部错误压缩为稳定分类，避免任何 prompt 或运行环境回显泄漏。"""
     text = (value or "").lower()
+    if ("failed to start" in text and "operation not permitted" in text
+            and ("listen tcp" in text or "creating log file" in text)):
+        return "local startup blocked"
     if any(token in text for token in ("429", "quota", "rate limit", "resource_exhausted")):
         return "rate limit"
     if any(token in text for token in ("401", "403", "permission", "unauthorized")):
@@ -104,3 +108,21 @@ def _safe_failure_category(value: str | None) -> str:
     if any(token in text for token in ("timeout", "timed out")):
         return "timeout"
     return "provider error"
+
+
+def probe_agy_startup(*, command: str, model: str) -> dict:
+    """只查询模型列表验证本地启动；不调用模型，不保留原始账号输出。"""
+    try:
+        with tempfile.TemporaryDirectory(prefix="video-processing-agy-probe-") as workdir:
+            result = subprocess.run(
+                [command, "models"], cwd=workdir, input="", text=True,
+                capture_output=True, timeout=45, check=False,
+            )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AgyProviderError("agy startup probe unavailable") from exc
+    if result.returncode:
+        raise AgyProviderError("agy startup probe: " + _safe_failure_category(result.stderr or result.stdout))
+    available = {line.split()[0] for line in result.stdout.splitlines() if line.strip()}
+    if model not in available:
+        raise AgyProviderError("agy startup probe: requested model unavailable")
+    return {"command": "models", "exit_code": 0, "model": model, "model_available": True}

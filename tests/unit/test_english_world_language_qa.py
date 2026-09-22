@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.9 | 2026-09-22 | Codex | 覆盖显式启动恢复、预检失败不改账本和三次硬上限。 |
 | 1.0.0 | 2026-09-09 | Codex | JSON3 完整词、逐目标审校覆盖及重启缓存测试。 |
 | 1.0.1 | 2026-09-09 | Codex | 覆盖转录差异逐项裁决、片段任务隔离和词元音标标签。 |
 | 1.0.2 | 2026-09-09 | Codex | 覆盖边界跨越 JSON3 片段只能以 ASR 裁决。 |
@@ -521,6 +522,88 @@ def test_permission_failure_is_terminal(tmp_path):
     with pytest.raises(AgyProviderError): review(timeline, **kwargs)
     assert read_json(tmp_path / "task/language_attempts.json")["attempts"] == 1
     with pytest.raises(ValueError): review(timeline, **kwargs)
+
+
+def setup_startup_failure(tmp_path):
+    timeline, p = setup_review(tmp_path)
+    def fail(*args, **kwargs):
+        raise AgyProviderError("agy exit 1: provider error")
+    kwargs = dict(cache_dir=tmp_path / "cache", task_dir=tmp_path / "task", model="m")
+    with pytest.raises(AgyProviderError):
+        review(timeline, caller=fail, **kwargs)
+    return timeline, p, kwargs, tmp_path / "task/language_attempts.json"
+
+
+def test_explicit_startup_recovery_preserves_budget_and_requires_fresh_probe(tmp_path, monkeypatch):
+    from video_processing.study_cards import language_review_service as module
+    timeline, p, kwargs, path = setup_startup_failure(tmp_path)
+    ledger = read_json(path)
+    ledger["attempts"] = 2
+    atomic_json(path, ledger)
+    probes = []
+    def probe(**kw):
+        probes.append(kw)
+        return {"model_available": True, "exit_code": 0}
+    monkeypatch.setattr(module, "probe_agy_startup", probe)
+    calls = []
+    def caller(*a, **kw):
+        calls.append(1)
+        return good(p)
+    report = review(timeline, caller=caller, recover_startup_reason="Confirmed local bind denial; approved recovery",
+                    **kwargs)
+    assert report["state"] == "PASS" and report["attempts"] == 3
+    ledger = read_json(path)
+    assert ledger["startup_recovery"]["preserved_attempts"] == 2
+    assert ledger["startup_recovery"]["previous_error"] == "agy exit 1: provider error"
+    assert ledger["retries"] == 1 and len(calls) == len(probes) == 1
+    with pytest.raises(ValueError):
+        review(timeline, caller=caller, recover_startup_reason="again", **kwargs)
+    assert len(calls) == 1
+
+
+def test_startup_probe_failure_leaves_ledger_unchanged(tmp_path, monkeypatch):
+    from video_processing.study_cards import language_review_service as module
+    timeline, _, kwargs, path = setup_startup_failure(tmp_path)
+    before = path.read_bytes()
+    def probe(**kw):
+        raise AgyProviderError("agy startup probe unavailable")
+    monkeypatch.setattr(module, "probe_agy_startup", probe)
+    with pytest.raises(AgyProviderError):
+        review(timeline, recover_startup_reason="confirmed startup failure", **kwargs)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("change", [
+    {"attempts": 3}, {"retries": 1}, {"inflight": True}, {"content_terminal": True},
+    {"last_error": "agy exit 1: permission"}, {"last_error": "ValidationError"},
+    {"startup_recovery": {"version": 1}}, {"keys": ["missing-prior", "different-input"]},
+])
+def test_startup_recovery_does_not_bypass_other_blocks(tmp_path, change):
+    timeline, _, kwargs, path = setup_startup_failure(tmp_path)
+    ledger = read_json(path)
+    ledger.update(change)
+    atomic_json(path, ledger)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="恢复条件"):
+        review(timeline, recover_startup_reason="confirmed startup failure", **kwargs)
+    assert path.read_bytes() == before
+
+
+def test_startup_recovery_final_call_failure_remains_terminal(tmp_path, monkeypatch):
+    from video_processing.study_cards import language_review_service as module
+    timeline, _, kwargs, path = setup_startup_failure(tmp_path)
+    ledger = read_json(path)
+    ledger["attempts"] = 2
+    atomic_json(path, ledger)
+    monkeypatch.setattr(module, "probe_agy_startup", lambda **kw: {"model_available": True})
+    def fail(*a, **kw):
+        raise AgyProviderError("agy timed out")
+    with pytest.raises(AgyProviderError):
+        review(timeline, caller=fail, recover_startup_reason="confirmed startup failure", **kwargs)
+    ledger = read_json(path)
+    assert ledger["attempts"] == 3 and ledger["terminal"] and ledger["retries"] == 1
+    with pytest.raises(ValueError):
+        review(timeline, caller=fail, **kwargs)
 
 
 def test_path_only_binding_does_not_change_cache():
