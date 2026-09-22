@@ -6,6 +6,7 @@
   Modification History:
   | Date       | Author                | Description                                   |
   |------------|-----------------------|-----------------------------------------------|
+  | 2026-09-23 | Codex | 入库时间筛选双向联动并跨任务 Tab 保留，统一默认值与清空行为，隔离过期统计响应。 |
   | 2026-09-20 | Antigravity | 待筛选/待处理时效与健康治理：新增 30 天前过期素材归档、排队超期放弃(>7天)、队列状态校准及行内提权/忽略操作。 |
   | 2026-05-27 | Gemini_3.5_Flash_planning | Optimize trim segment UX: add collapsible switch, preset chips, live validation, and visual timeline progress bar. |
   | 2026-05-27 | Gemini_3.5_Flash_planning | Avoid 404 cover request console errors; fix Stats redirects, Tab persistence, Batch Edit checkbox toggle, and layout alignment. |
@@ -287,7 +288,7 @@
           <option value="all">全部入库时间</option>
           <option value="24h">入库：最近 24 小时</option>
           <option value="today_bj">入库：今日 (BJ)</option>
-          <option value="7d">入库：近 7 天</option>
+          <option value="7d" selected>入库：近 7 天</option>
           <option value="30d">入库：近 30 天</option>
         </select>
         <span class="filter-context" id="filter-score-context">
@@ -712,7 +713,7 @@
     setTimeout(() => el.classList.remove('updated'), 600);
   }
 
-  let currentGlobalFunnelWindow = '7d';
+  let _globalFunnelRequestId = 0;
   let currentFunnelStage = null;
   const _windowLabels = {
     '24h': '最近 24 小时',
@@ -722,27 +723,29 @@
     'all': '全生命周期',
   };
 
-  async function switchGlobalFunnelWindow(win) {
-    currentGlobalFunnelWindow = win;
-    ['24h', 'today_bj', '7d', '30d', 'all'].forEach(w => {
+  function setCreatedWindow(win) {
+    if (!Object.hasOwn(_windowLabels, win)) return false;
+    const changed = filterState.createdWindow !== win;
+    filterState.createdWindow = win;
+    Object.keys(_windowLabels).forEach(w => {
       const btn = document.getElementById(`gf-tab-${w}`);
       if (btn) btn.classList.toggle('active', w === win);
     });
-    // 若当前正在大盘下钻透视，同步更新时间切片并重载列表
-    if (currentFunnelStage) {
-      filterState.createdWindow = win;
-      updateFunnelBannerText();
-      const cwEl = document.getElementById('video-filter-created-window');
-      if (cwEl) cwEl.value = win;
-      loadVideos(1);
-    }
-    await fetchGlobalFunnel(win);
+    const cwEl = document.getElementById('video-filter-created-window');
+    if (cwEl) cwEl.value = win;
+    updateFunnelBannerText();
+    return changed;
+  }
+
+  async function switchGlobalFunnelWindow(win) {
+    setCreatedWindow(win);
+    await Promise.all([fetchGlobalFunnel(), loadVideos(1)]);
   }
 
   function updateFunnelBannerText(customLabel = null) {
     const banner = document.getElementById('funnel-active-banner');
     if (!banner) return;
-    const winText = _windowLabels[currentGlobalFunnelWindow] || currentGlobalFunnelWindow;
+    const winText = _windowLabels[filterState.createdWindow] || filterState.createdWindow;
     const winEl = document.getElementById('banner-window-text');
     if (winEl) winEl.textContent = winText;
     if (customLabel) {
@@ -772,7 +775,7 @@
 
     // 联动筛选状态
     const overrides = {
-      createdWindow: currentGlobalFunnelWindow,
+      createdWindow: filterState.createdWindow,
       funnelStage: stage,
     };
     if (stage === 'failed') {
@@ -795,10 +798,14 @@
     }
   }
 
-  async function fetchGlobalFunnel(win = currentGlobalFunnelWindow) {
+  async function fetchGlobalFunnel() {
+    const win = filterState.createdWindow;
+    const requestId = ++_globalFunnelRequestId;
     try {
       const r = await fetch(`/api/funnel?window=${encodeURIComponent(win)}`);
       const d = await r.json();
+      // 快速切换窗口或自动刷新时，只允许最新且匹配当前筛选的响应回写。
+      if (requestId !== _globalFunnelRequestId || win !== filterState.createdWindow) return;
       if (!d.success || !d.metrics) return;
       const m = d.metrics;
       animateNumber(document.getElementById('gf-ingested'), m.total_ingested || 0);
@@ -994,7 +1001,7 @@
     search: '', channel: '', sort: 'source_published_at_desc', size: Number(localStorage.getItem('video_pipeline_page_size')) || 20,
     scoreBand: 'all', errorType: 'all', status: 'all', engagementWindowDays: 3, includeProcessed: false,
     includeExpired: false,
-    createdWindow: 'all',
+    createdWindow: '7d',
     funnelStage: null,
   };
   let _selectedYids = new Set();
@@ -1069,7 +1076,7 @@
     filterState.sort = document.getElementById('video-filter-sort').value;
     filterState.size = Number(document.getElementById('video-filter-size').value);
     const cwEl = document.getElementById('video-filter-created-window');
-    if (cwEl) filterState.createdWindow = cwEl.value;
+    if (cwEl && setCreatedWindow(cwEl.value)) fetchGlobalFunnel();
     filterState.scoreBand = document.getElementById('video-filter-score').value;
     filterState.errorType = document.getElementById('video-filter-error').value;
     filterState.status = document.getElementById('video-filter-status').value;
@@ -1083,7 +1090,7 @@
     filterState.search = ''; filterState.channel = ''; filterState.sort = 'source_published_at_desc';
     filterState.scoreBand = 'all'; filterState.errorType = 'all'; filterState.status = 'all';
     filterState.engagementWindowDays = 3; filterState.includeProcessed = false;
-    filterState.createdWindow = 'all';
+    if (setCreatedWindow('all')) fetchGlobalFunnel();
     clearFunnelDrilldown(false);
     syncFilterControls();
     currentPage = 1;
@@ -1204,11 +1211,11 @@
       currentTab = tab;
       localStorage.setItem('video_pipeline_active_tab', tab);
       currentPage = 1;
-      // 全局搜索、频道、排序和每页条数跨 Tab 保留；仅清除不适用的场景筛选。
+      // 全局入库时间、搜索、频道、排序和每页条数跨 Tab 保留；仅清除场景筛选。
       filterState.scoreBand = 'all';
       filterState.errorType = overrides.errorType !== undefined ? overrides.errorType : 'all';
       filterState.status = overrides.status !== undefined ? overrides.status : 'all';
-      filterState.createdWindow = overrides.createdWindow !== undefined ? overrides.createdWindow : 'all';
+      if (overrides.createdWindow !== undefined && setCreatedWindow(overrides.createdWindow)) fetchGlobalFunnel();
       filterState.includeProcessed = false;
       filterState.includeExpired = false;
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
