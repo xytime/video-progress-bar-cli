@@ -144,7 +144,7 @@ These encode hard-won failures — violating them silently corrupts subtitles:
 - **`pysubs2.Color`**: pass `(R, G, B)` integers, not hex/RGBA. ASS alpha is **inverted** (255 = fully transparent).
 - **Glossary font size**: clamp it to the *current rendered* English font size at runtime (`{\fs...}` inline), not the static style value.
 - **WeChat interaction copy contract**: Natural short-format only — strictly NO column tags like `【互动话题】` or emojis; 1 single natural question + 2~3 concise options + 1 heuristic open question (≤30 chars).
-- **WeChat micro-frontend cards**: NEVER match comment cards solely by video title text (DOM truncates title to 20~40 chars). Always intercept `post/post_list` API to map native `export_id` to index, then bind `.comment-feed-wrap:visible.nth(idx)`.
+- **WeChat micro-frontend cards**: DO NOT assume `post/post_list` API array indices match DOM `.comment-feed-wrap:visible` indices (videos still in "processing/transcoding" state appear in `post_list` API but are hidden from the comment DOM!). Must use strong content prefix matching (12~15 chars from `video_title` / `desc`), disambiguate multiple matches with API index only when content matches, and strictly **Fail-Closed (return 0 cards)** if target video is not in DOM. NEVER fallback to index 0. Mismatched submit requests (`objectId != platform_post_id`) must record `mismatched_requests` and fail hard (`FAILED`).
 - **WeChat session concurrency**: Video uploading and comment posting share the same Chromium profile. All comment automation must respect `WeChatSessionLock` to prevent session corruption.
 
 ## Feature flags

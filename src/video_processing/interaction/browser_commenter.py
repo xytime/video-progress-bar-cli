@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.9.0 | 2026-09-23 | Antigravity | 修复视频号后台处理中作品未上架导致卡片索引错位发评的严重缺陷；引入内容前缀强校验、详情面板文本核验与发评请求作品ID不符硬熔断（Fail-Closed）。 |
 | 2.8.0 | 2026-09-20 | Antigravity | 新增首评自动置顶与替换确认逻辑，记录 is_pinned 证据。 |
 | 2.7.0 | 2026-09-20 | Antigravity | 提取 resolve_target_card 纯逻辑，支持离线单元测试卡片索引消歧义与降级分支。 |
 | 2.6.0 | 2026-09-20 | Antigravity | 遵循 AGENTS.md 规范优先以 post_list 原生 ID 精准索引绑定卡片，文本片段退为兜底，消除前缀重复卡片歧义。 |
@@ -82,6 +83,35 @@ def _payload_value(payload: object, *names: str) -> object:
     return None
 
 
+def _extract_title_probes(
+    video_title: Optional[str], target_desc: Optional[str] = None
+) -> list[str]:
+    """提取用于在评论管理页卡片和详情中强校验目标作品的文本探针。"""
+    probes: list[str] = []
+    candidates = [video_title, target_desc]
+    for raw in candidates:
+        if not raw:
+            continue
+        text = _normalized_text(raw).strip()
+        if not text:
+            continue
+        # 1. 直接前缀 (15 字符)
+        p1 = text[:15].strip()
+        if p1 and p1 not in probes:
+            probes.append(p1)
+        # 2. 剥离开头的话题标签 (#...#)、书名号、中括号等符号后的核心文案前缀 (12 字符)
+        core = re.sub(
+            r"^([#＃][^#＃]+[#＃]\s*|[【《「『“\"][^】》」』”\"]+[】》」』”\"]\s*|[^\w\u4e00-\u9fa5]+)",
+            "",
+            text,
+        ).strip()
+        if core and len(core) >= 4:
+            p2 = core[:12].strip()
+            if p2 and p2 not in probes:
+                probes.append(p2)
+    return probes
+
+
 class _SubmissionResponseWindow:
     """只关联监听窗口内发出的精确提交 Request 及其 Response。"""
 
@@ -92,6 +122,7 @@ class _SubmissionResponseWindow:
         self.expected_text = expected_text
         self.requests: list[Any] = []
         self.responses: list[dict[str, Any]] = []
+        self.mismatched_requests: list[dict[str, Any]] = []
 
     def capture_request(self, request) -> None:
         parsed = urlparse(request.url)
@@ -105,8 +136,13 @@ class _SubmissionResponseWindow:
             payload = request.post_data_json
         except Exception:
             return
-        payload_id = str(_payload_value(payload, "objectId", "object_id", "exportId", "export_id") or "")
-        if payload_id != self.platform_post_id:
+        payload_id = str(_payload_value(payload, "objectId", "object_id", "exportId", "export_id") or "").strip()
+        if payload_id and payload_id != self.platform_post_id:
+            self.mismatched_requests.append({
+                "url": request.url,
+                "payload_id": payload_id,
+                "expected_post_id": self.platform_post_id,
+            })
             return
         text = _normalized_text(_payload_value(payload, "content", "comment", "commentText"))
         if text == self.expected_text:
@@ -238,6 +274,7 @@ class BrowserCommenter:
                 )
                 page = context.new_page()
                 captured_post_ids: list[str] = []
+                captured_post_descs: dict[str, str] = {}
                 captured_comments: list[dict[str, Any]] = []
 
                 def _on_response_capture(res: Any) -> None:
@@ -246,9 +283,16 @@ class BrowserCommenter:
                             body = res.json()
                             if isinstance(body, dict) and "data" in body and isinstance(body["data"], dict) and "list" in body["data"]:
                                 for item in body["data"]["list"]:
-                                    eid = str(item.get("exportId") or item.get("objectId") or "").strip()
-                                    if eid and eid not in captured_post_ids:
-                                        captured_post_ids.append(eid)
+                                    eid = str(item.get("exportId") or "").strip()
+                                    oid = str(item.get("objectId") or "").strip()
+                                    desc = str(item.get("desc") or "").strip()
+                                    item_id = eid or oid
+                                    if item_id and item_id not in captured_post_ids:
+                                        captured_post_ids.append(item_id)
+                                    if eid and desc:
+                                        captured_post_descs[eid] = desc
+                                    if oid and desc:
+                                        captured_post_descs[oid] = desc
                         except Exception:
                             pass
                     if "comment/comment_list" in res.url and res.status in (200, 201):
@@ -299,6 +343,7 @@ class BrowserCommenter:
                     before_submit=before_submit,
                     verify_only=verify_only,
                     captured_post_ids=captured_post_ids,
+                    captured_post_descs=captured_post_descs,
                     captured_comments=captured_comments,
                 )
             finally:
@@ -310,26 +355,63 @@ class BrowserCommenter:
         platform_post_id: str,
         video_title: Optional[str] = None,
         captured_post_ids: Optional[list[str]] = None,
+        captured_post_descs: Optional[dict[str, str]] = None,
     ):
-        """解析页面上与目标作品对应的卡片定位器，严格遵循索引消歧义铁律。"""
+        """解析页面上与目标作品对应的卡片定位器，严格遵循内容强校验与索引消歧义铁律。"""
         cards = page.locator(
             f'[data-object-id="{platform_post_id}"]:visible, '
             f'[data-post-id="{platform_post_id}"]:visible, '
             f'[data-id="{platform_post_id}"]:visible'
         )
-        # 真实后台卡片优先使用真实 post_list 接口捕获的原生 ID 索引精准定位（AGENTS.md 铁律）；文本匹配仅作兜底
-        if cards.count() == 0 and captured_post_ids and platform_post_id in captured_post_ids:
+        if cards.count() == 1:
+            return cards
+
+        feed_wraps = page.locator(".comment-feed-wrap:visible")
+        if feed_wraps.count() == 0:
+            return feed_wraps
+
+        target_desc = (captured_post_descs or {}).get(platform_post_id)
+        probes = _extract_title_probes(video_title, target_desc)
+        if not probes:
+            # 没有任何文案提示且无原生 ID 属性时，严禁盲发盲猜，Fail-Closed 返回空定位器
+            return feed_wraps.filter(has_text="__NO_HINT_FAIL_CLOSED__")
+
+        # 通过文案探针在可见卡片列表中进行内容强校验过滤
+        matching = None
+        matched_probe = None
+        for probe in probes:
+            candidate_matches = feed_wraps.filter(has_text=probe)
+            if candidate_matches.count() > 0:
+                matching = candidate_matches
+                matched_probe = probe
+                break
+
+        # 若 DOM 中无任何卡片匹配目标文案（视频仍在转码处理中，后台列表未展示），坚决 Fail-Closed
+        if matching is None or matching.count() == 0:
+            return feed_wraps.filter(has_text="__NO_MATCHING_CARD_FAIL_CLOSED__")
+
+        # 若恰好唯一匹配，直接返回
+        if matching.count() == 1:
+            return matching
+
+        # 若存在多张卡片同时匹配前缀（如分集系列视频），尝试进一步消歧义：
+        # 1. 先尝试更长/更精确的完整文案片段消歧义
+        for full_text in [target_desc, video_title]:
+            if full_text and len(full_text.strip()) > 15:
+                longer_matches = matching.filter(has_text=full_text.strip()[:25])
+                if longer_matches.count() == 1:
+                    return longer_matches
+
+        # 2. 结合 post_list 接口物理索引消歧义（仅在对应下标卡片通过内容校验时采信）
+        if captured_post_ids and platform_post_id in captured_post_ids:
             idx = captured_post_ids.index(platform_post_id)
-            feed_wraps = page.locator(".comment-feed-wrap:visible")
             if feed_wraps.count() > idx:
-                cards = feed_wraps.nth(idx)
+                candidate = feed_wraps.nth(idx)
+                if matched_probe and candidate.filter(has_text=matched_probe).count() == 1:
+                    return candidate
 
-        if cards.count() == 0 and video_title:
-            cards = page.locator(".comment-feed-wrap:visible").filter(
-                has=page.locator(".feed-title")
-            ).filter(has_text=video_title.strip())
-
-        return cards
+        # 若仍无法唯一确定，返回多重匹配定位器供调用方触发 Fail-Closed
+        return matching
 
     def _interact_with_page(
         self,
@@ -342,6 +424,7 @@ class BrowserCommenter:
         before_submit: Callable[[], bool] | None,
         verify_only: bool,
         captured_post_ids: Optional[list[str]] = None,
+        captured_post_descs: Optional[dict[str, str]] = None,
         captured_comments: Optional[list[dict[str, Any]]] = None,
     ) -> BrowserResult:
         """在已打开的真实页面上执行适配器合同，供隔离 Chromium 验收复用。"""
@@ -374,6 +457,7 @@ class BrowserCommenter:
                 platform_post_id=platform_post_id,
                 video_title=video_title,
                 captured_post_ids=captured_post_ids,
+                captured_post_descs=captured_post_descs,
             )
 
             visible_count = cards.count()
@@ -385,31 +469,54 @@ class BrowserCommenter:
             cards.click()
             page.wait_for_timeout(self.poll_interval_ms)
 
+            probes = _extract_title_probes(
+                video_title,
+                (captured_post_descs or {}).get(platform_post_id),
+            )
+
             active_cards = page.locator('.comment-feed-wrap.active-feed:visible')
-            if video_title and not (captured_post_ids and platform_post_id in captured_post_ids):
-                active_cards = active_cards.filter(has_text=video_title.strip()[:15])
+            if active_cards.count() > 0 and probes:
+                matched_active = False
+                for probe in probes:
+                    if active_cards.filter(has_text=probe).count() > 0:
+                        matched_active = True
+                        break
+                if not matched_active:
+                    return self._finish_page(
+                        page, attempt_dir, "FAILED",
+                        f"激活卡片内容与目标作品不符 (期望包含: {probes[0]!r})，停止交互",
+                        metadata,
+                    )
 
             # ID 已由严格字符白名单限定；精确属性 locator 不会因 DOM 重排改绑其他作品。
             opened = page.locator(
                 f'[data-current-object-id="{platform_post_id}"]:visible'
             )
             if opened.count() != 1:
-                if (
-                    active_cards.count() == 1
-                    or (captured_post_ids and platform_post_id in captured_post_ids)
-                ):
+                if active_cards.count() == 1:
                     opened = page.locator('.body-wrap, .feeds, body').first
                 else:
                     return self._finish_page(
                         page, attempt_dir, "FAILED", "无法验证当前打开详情的原生作品 ID，停止提交", metadata,
                     )
 
+            # 校验右侧详情区域文本前缀（防微前端卡片点击后详情未刷新或漂移）
+            if probes and opened.count() > 0 and opened.get_attribute("data-current-object-id") != platform_post_id:
+                detail_matches = False
+                for probe in probes:
+                    if opened.filter(has_text=probe).count() > 0:
+                        detail_matches = True
+                        break
+                if not detail_matches:
+                    return self._finish_page(
+                        page, attempt_dir, "FAILED",
+                        f"详情面板展示内容与目标作品文案不符 (期望包含: {probes[0]!r})，停止交互",
+                        metadata,
+                    )
+
             comments = opened.locator('[data-comment-list][data-comments-complete="true"]')
             if comments.count() != 1:
-                if (
-                    active_cards.count() == 1
-                    or (captured_post_ids and platform_post_id in captured_post_ids)
-                ):
+                if active_cards.count() == 1:
                     comments = page.locator('.body-wrap, body').first
                 else:
                     return self._finish_page(
@@ -526,10 +633,7 @@ class BrowserCommenter:
                 and opened.get_attribute("data-current-object-id") == platform_post_id
             )
             if not has_valid_opened:
-                if not (
-                    active_cards.count() == 1
-                    or (captured_post_ids and platform_post_id in captured_post_ids)
-                ):
+                if active_cards.count() != 1:
                     return self._finish_page(
                         page, attempt_dir, "FAILED", "提交前作品详情已变化，未持久化提交意图", metadata,
                     )
@@ -554,8 +658,17 @@ class BrowserCommenter:
             submit_button.click()
 
             deadline = time.monotonic() + self.response_timeout_ms / 1000
-            while not response_window.responses and time.monotonic() < deadline:
+            while not response_window.responses and not response_window.mismatched_requests and time.monotonic() < deadline:
                 page.wait_for_timeout(self.poll_interval_ms)
+
+            if response_window.mismatched_requests:
+                metadata["mismatched_requests"] = response_window.mismatched_requests
+                return self._finish_page(
+                    page, attempt_dir, "FAILED",
+                    f"检测到发往非目标作品的提交请求 ({response_window.mismatched_requests[0]['payload_id']} != {platform_post_id})，硬阻断为 FAILED",
+                    metadata,
+                )
+
             correlated_responses = response_window.responses
             metadata["correlated_responses"] = correlated_responses
             if not correlated_responses:

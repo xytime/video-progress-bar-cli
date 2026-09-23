@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-09-23 | Antigravity | 增加处理中作品未上架 Fail-Closed 熔断、列表索引漂移正确选择与提交作品ID不匹配拦截单元测试。 |
 | 1.1.0 | 2026-09-20 | Antigravity | 增加评论置顶单元测试，验证已置顶跳过、无按钮跳过以及成功置顶与弹窗确认分支。 |
 | 1.0.0 | 2026-09-19 | Codex | 覆盖前置门禁、规范锁路径、进程争用与崩溃释放。 |
 """
@@ -300,6 +301,76 @@ def test_resolve_target_card_falls_back_to_title_when_id_not_captured():
     )
     assert resolved.count() == 1
     assert resolved._items[0] == card_1
+
+
+def test_resolve_target_card_fails_closed_when_processing_video_missing_from_dom():
+    # 场景复现：目标视频刚提交（在 post_list API 下标 0），但后台转码中未展示于 DOM。
+    # DOM 只有历史已发布视频。绝不能因下标 0 盲发到历史视频。
+    card_historical = _FakeLocator(count=1, text="历史已发布公民教育视频")
+    feed_wraps = _FakeLocator(items=[card_historical])
+
+    page = _FakePage({".comment-feed-wrap:visible": feed_wraps})
+    captured_ids = ["export/processing_mcafee", "export/historical_civics"]
+    captured_descs = {
+        "export/processing_mcafee": "新买的笔记本电脑为何自带杀毒软件迈克菲",
+        "export/historical_civics": "历史已发布公民教育视频",
+    }
+
+    resolved = BrowserCommenter.resolve_target_card(
+        page,
+        platform_post_id="export/processing_mcafee",
+        video_title="新买的笔记本电脑为何自带杀毒软件",
+        captured_post_ids=captured_ids,
+        captured_post_descs=captured_descs,
+    )
+    # 必须坚决 Fail-Closed，返回 0 个卡片，严禁盲选 card_historical！
+    assert resolved.count() == 0
+
+
+def test_resolve_target_card_with_index_shift_selects_correct_dom_card():
+    # 场景：前置视频正在转码（post_list 下标 0），目标视频已上架（post_list 下标 1，DOM 下标 0）
+    card_target = _FakeLocator(count=1, text="已上架的目标视频标题")
+    card_older = _FakeLocator(count=1, text="更早发布的历史视频标题")
+    feed_wraps = _FakeLocator(items=[card_target, card_older])
+
+    page = _FakePage({".comment-feed-wrap:visible": feed_wraps})
+    captured_ids = ["export/transcoding_earlier", "export/target_video", "export/older_video"]
+    captured_descs = {
+        "export/transcoding_earlier": "正在转码的前置视频",
+        "export/target_video": "已上架的目标视频标题",
+        "export/older_video": "更早发布的历史视频标题",
+    }
+
+    resolved = BrowserCommenter.resolve_target_card(
+        page,
+        platform_post_id="export/target_video",
+        video_title="已上架的目标视频标题",
+        captured_post_ids=captured_ids,
+        captured_post_descs=captured_descs,
+    )
+    assert resolved.count() == 1
+    # 尽管 post_list 下标为 1，但 DOM 下标 0 才是目标，必须依据文案强校验精准绑定 card_target！
+    assert resolved == card_target or resolved._items[0] == card_target
+
+
+def test_submission_response_window_captures_mismatched_request_and_blocks():
+    class Request:
+        method = "POST"
+        url = f"https://channels.weixin.qq.com{COMMENT_SUBMIT_PATH}"
+        post_data_json = {"objectId": "wrong-post-id", "content": "完整评论"}
+
+    window = _SubmissionResponseWindow(
+        "https://channels.weixin.qq.com/platform/interaction/comment",
+        "expected-post-id",
+        "完整评论",
+    )
+    wrong_req = Request()
+    window.capture_request(wrong_req)
+
+    assert len(window.requests) == 0
+    assert len(window.mismatched_requests) == 1
+    assert window.mismatched_requests[0]["payload_id"] == "wrong-post-id"
+    assert window.mismatched_requests[0]["expected_post_id"] == "expected-post-id"
 
 
 def test_ensure_comment_pinned_already_pinned_skips_action(tmp_path: Path):

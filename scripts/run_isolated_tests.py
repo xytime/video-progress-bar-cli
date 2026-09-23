@@ -114,7 +114,7 @@ def run_child(command, cwd, environment, log_path, timeout):
             # 但不承诺在此组清理覆盖范围内。
             try:
                 os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
+            except (ProcessLookupError, PermissionError):
                 pass
             process.wait()
     return {"exit_code": code, "seconds": round(time.monotonic() - started, 3)}

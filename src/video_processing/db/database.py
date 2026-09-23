@@ -5,6 +5,8 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| 3.83.0 | 2026-09-23 | Antigravity | 新增 reset_wechat_interaction DAL 方法，支持被误判或需重试的微信互动记录重置回 PENDING。 |
+| 3.82.0 | 2026-09-23 | Antigravity | 新增 wechat_review_notifications 账本表及入队/抢占/状态记录/超时恢复 DAL 方法，防进程退出丢单。 |
 | 3.81.0 | 2026-09-23 | Codex | 持久化待发布阶段与原子领取；未完成源缓存保护及就绪计数。 |
 | 3.80.0 | 2026-09-22 | Codex | 投稿前拒绝独立入账；仅恢复证实未启动浏览器的过期占用项，保留尝试。 |
 | 3.79.0 | 2026-09-22 | Codex | AGY 文案冷却排队，原子排除所有投稿账本并按到期时间领取。 |
@@ -1595,6 +1597,31 @@ class PipelineDB:
             cursor.execute(
                 "CREATE INDEX IF NOT EXISTS idx_telegram_notification_receipts_dedupe "
                 "ON telegram_notification_receipts(event_type, content_sha256, created_at DESC)"
+            )
+
+            # 视频号审核成片通知待办账本：持久化待投递/投递中的审核物料，防止短生命周期进程退出丢单
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS wechat_review_notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    prefix TEXT NOT NULL,
+                    title TEXT DEFAULT NULL,
+                    delivery_state TEXT NOT NULL
+                        CHECK(delivery_state IN ('PENDING', 'PROCESSING', 'ACCEPTED', 'FAILED', 'UNKNOWN'))
+                        DEFAULT 'PENDING',
+                    error_message TEXT DEFAULT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_attempt_at TIMESTAMP DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wechat_review_notifications_state "
+                "ON wechat_review_notifications(delivery_state, created_at DESC)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_wechat_review_notifications_prefix "
+                "ON wechat_review_notifications(prefix, delivery_state)"
             )
 
             # 发布后数据地基：日粒度指标只记录事实读数，不反推平台发布成功状态。
@@ -8580,6 +8607,108 @@ class PipelineDB:
             ).fetchone()
             return row is not None
 
+    # ── WeChat Review Notifications Persistent Ledger ─────────────────────────
+
+    def enqueue_wechat_review_notification(self, prefix: str, title: Optional[str]) -> int:
+        """入队视频号审核物料通知任务；若已有未完成任务则复用，防止重复派发。"""
+        with self.get_connection() as conn:
+            existing = conn.execute(
+                """SELECT id FROM wechat_review_notifications
+                   WHERE prefix = ? AND delivery_state IN ('PENDING', 'PROCESSING')
+                   ORDER BY id DESC LIMIT 1""",
+                (prefix,),
+            ).fetchone()
+            if existing:
+                return int(existing["id"])
+            cursor = conn.execute(
+                """INSERT INTO wechat_review_notifications (prefix, title, delivery_state)
+                   VALUES (?, ?, 'PENDING')""",
+                (prefix, title),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+
+    def claim_pending_wechat_review_notifications(self, limit: int = 5) -> List[Dict[str, Any]]:
+        """原子抢占待发送的审核物料通知，置为 PROCESSING 并增加尝试次数。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT id, prefix, title, attempts FROM wechat_review_notifications
+                   WHERE delivery_state = 'PENDING'
+                   ORDER BY id ASC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+            claimed = []
+            for row in rows:
+                updated = conn.execute(
+                    """UPDATE wechat_review_notifications
+                       SET delivery_state = 'PROCESSING',
+                           attempts = attempts + 1,
+                           last_attempt_at = CURRENT_TIMESTAMP,
+                           updated_at = CURRENT_TIMESTAMP
+                       WHERE id = ? AND delivery_state = 'PENDING'""",
+                    (row["id"],),
+                ).rowcount
+                if updated > 0:
+                    claimed.append(dict(row))
+            conn.commit()
+            return claimed
+
+    def record_wechat_review_notification_status(
+        self,
+        task_id: int,
+        delivery_state: str,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """更新审核物料通知状态（ACCEPTED / FAILED / UNKNOWN）。"""
+        allowed = {"PENDING", "PROCESSING", "ACCEPTED", "FAILED", "UNKNOWN"}
+        if delivery_state not in allowed:
+            raise ValueError(f"Invalid delivery_state: {delivery_state}")
+        with self.get_connection() as conn:
+            conn.execute(
+                """UPDATE wechat_review_notifications
+                   SET delivery_state = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ?""",
+                (delivery_state, (error_message or "")[:500] or None, task_id),
+            )
+            conn.commit()
+
+    def get_pending_wechat_review_notifications(self) -> List[Dict[str, Any]]:
+        """获取所有待发送或未决的审核物料通知。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """SELECT * FROM wechat_review_notifications
+                   WHERE delivery_state IN ('PENDING', 'PROCESSING', 'UNKNOWN')
+                   ORDER BY id ASC""",
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def recover_stale_wechat_review_notifications(self, stale_minutes: int = 10) -> int:
+        """将超期卡在 PROCESSING 的通知任务回滚为 PENDING（重试上限 3 次，超限转 UNKNOWN）。"""
+        with self.get_connection() as conn:
+            exhausted = conn.execute(
+                """UPDATE wechat_review_notifications
+                   SET delivery_state = 'UNKNOWN',
+                       error_message = '超过最大重试次数 (3 次)，保留不确定性人工核验',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE delivery_state = 'PROCESSING'
+                     AND attempts >= 3
+                     AND last_attempt_at <= datetime('now', ? || ' minutes')""",
+                (f"-{stale_minutes}",),
+            ).rowcount
+
+            recovered = conn.execute(
+                """UPDATE wechat_review_notifications
+                   SET delivery_state = 'PENDING',
+                       error_message = '处理超时自动回收为待投递',
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE delivery_state = 'PROCESSING'
+                     AND attempts < 3
+                     AND last_attempt_at <= datetime('now', ? || ' minutes')""",
+                (f"-{stale_minutes}",),
+            ).rowcount
+            conn.commit()
+            return recovered + exhausted
+
     # --- Dubbing studio DAL (manual-only, isolated from PipelineManager) ---
     _DUBBING_STATES = {
         "DRAFT", "ANALYZING", "SCRIPT_READY", "SYNTHESIZING", "ALIGNING", "RENDERING",
@@ -11107,6 +11236,33 @@ class PipelineDB:
                 "SELECT * FROM wechat_interactions WHERE id = ?", (int(interaction_id),)
             ).fetchone()
             return dict(updated)
+
+    def reset_wechat_interaction(self, interaction_id: int) -> dict:
+        """重置指定互动记录状态为 QUEUED，清除租约和错误计数，供纠错后重新调度。"""
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                UPDATE wechat_interactions
+                SET status = 'QUEUED',
+                    attempt_count = 0,
+                    next_attempt_at = NULL,
+                    lease_token = NULL,
+                    lease_expires_at = NULL,
+                    submit_intent_at = NULL,
+                    commented_at = NULL,
+                    error_message = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (int(interaction_id),),
+            )
+            row = conn.execute(
+                "SELECT * FROM wechat_interactions WHERE id = ?", (int(interaction_id),)
+            ).fetchone()
+            if not row:
+                raise ValueError(f"Unknown interaction_id: {interaction_id}")
+            return dict(row)
 
     def record_wechat_interaction(
         self,
