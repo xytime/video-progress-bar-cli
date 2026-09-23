@@ -5,8 +5,10 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
-| 3.83.0 | 2026-09-23 | Antigravity | 新增 reset_wechat_interaction DAL 方法，支持被误判或需重试的微信互动记录重置回 PENDING。 |
-| 3.82.0 | 2026-09-23 | Antigravity | 新增 wechat_review_notifications 账本表及入队/抢占/状态记录/超时恢复 DAL 方法，防进程退出丢单。 |
+|---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.84.0  | 2026-09-23 | Antigravity                         | [Code Review Fix] 新增 claim_specific_wechat_review_notification 原子抢占单条通知任务，防并发冲突 |
+| 3.83.0  | 2026-09-23 | Antigravity                         | 新增 reset_wechat_interaction DAL 方法，支持被误判或需重试的微信互动记录重置回 PENDING。 |
+| 3.82.0  | 2026-09-23 | Antigravity                         | 新增 wechat_review_notifications 账本表及入队/抢占/状态记录/超时恢复 DAL 方法，防进程退出丢单。 |
 | 3.81.0 | 2026-09-23 | Codex | 持久化待发布阶段与原子领取；未完成源缓存保护及就绪计数。 |
 | 3.80.0 | 2026-09-22 | Codex | 投稿前拒绝独立入账；仅恢复证实未启动浏览器的过期占用项，保留尝试。 |
 | 3.79.0 | 2026-09-22 | Codex | AGY 文案冷却排队，原子排除所有投稿账本并按到期时间领取。 |
@@ -8652,6 +8654,21 @@ class PipelineDB:
                     claimed.append(dict(row))
             conn.commit()
             return claimed
+
+    def claim_specific_wechat_review_notification(self, task_id: int) -> bool:
+        """原子抢占指定的单条审核物料通知，从 PENDING 置为 PROCESSING 并递增尝试次数。"""
+        with self.get_connection() as conn:
+            updated = conn.execute(
+                """UPDATE wechat_review_notifications
+                   SET delivery_state = 'PROCESSING',
+                       attempts = attempts + 1,
+                       last_attempt_at = CURRENT_TIMESTAMP,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND delivery_state = 'PENDING'""",
+                (task_id,),
+            ).rowcount
+            conn.commit()
+            return updated > 0
 
     def record_wechat_review_notification_status(
         self,

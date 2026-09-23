@@ -28,6 +28,8 @@ based on incoming Telegram messages and commands.
 | 1.14.2  | 2026-08-10 | Codex                               | Gemini 不可用时以同工具集切换 DeepSeek OpenAI 兼容 Function Calling 兜底 |
 | 1.14.3  | 2026-09-09 | Codex                               | Telegram 回传成片补充标题、任务 ID 与可点击的原 YouTube 视频链接        |
 | 1.15.0  | 2026-09-23 | Antigravity                         | [下载引擎翻转] download_video 优先原生 yt-dlp，经 download_strategy 抽象 Strategy/Fallback 模式，覆盖进程异常与产物验真 (<50KB/缺失) 双重兜底并自动清理损坏分片 |
+| 1.16.0  | 2026-09-23 | Antigravity                         | [契约对齐与超时加固] 1. _find_downloaded_video 统一启用 verify_media=True 校验完整音视频轨并自动隔离损坏产物；2. download_video 注入总超时预算 settings.youtube_download_timeout_seconds，保留完整 curl 低速保护参数，识别中断/取消 |
+| 1.17.0  | 2026-09-23 | Antigravity                         | [Code Review Fix] download_video 捕获 TimeoutError 统一上报下载超时，与 download_strategy 契约对齐 |
 """
 import html
 import os
@@ -446,17 +448,19 @@ class PipelineAgent:
             env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
 
             # [Antigravity] v1.15.0: 下载引擎翻转 (Strategy/Fallback 模式)
-            # 优先使用原生 yt-dlp 分块下载；若进程异常、超时或未产生有效视频 (>50KB)，自动清理分片并降级回退至 curl 外部下载器
+            # [Antigravity] v1.15.0: 下载引擎翻转 (Strategy/Fallback 模式)
+            # 优先使用原生 yt-dlp 分块下载；若进程异常、超时或未产生有效视频 (>50KB/缺轨)，自动清理分片并降级回退至 curl 外部下载器
             options = DownloadOptions(
                 ytdlp_path=self.venv_ytdlp,
                 url=url,
                 output_template=str(self.output_dir / f"{youtube_id}.%(ext)s"),
                 cookie_args=settings.get_yt_cookie_args(),
                 write_info_json=False,
-                curl_args="curl:--retry 10 --retry-delay 3 --retry-all-errors",
             )
 
-            def _agent_runner(cmd: list[str]) -> None:
+            timeout_sec = float(settings.youtube_download_timeout_seconds)
+
+            def _agent_runner(cmd: list[str], timeout: Optional[float] = None) -> None:
                 subprocess.run(
                     cmd,
                     check=True,
@@ -464,6 +468,7 @@ class PipelineAgent:
                     text=True,
                     cwd=str(self.project_root),
                     env=env_no_proxy,
+                    timeout=timeout or timeout_sec,
                 )
 
             try:
@@ -472,11 +477,16 @@ class PipelineAgent:
                     runner=_agent_runner,
                     verifier=lambda: self._find_downloaded_video(youtube_id),
                     cleaner=lambda: clean_partial_downloads(self.output_dir, youtube_id),
+                    total_timeout=timeout_sec,
                     on_fallback=lambda reason: logger.warning(
                         f"[Bot Download] Native yt-dlp did not produce valid video ({reason}), falling back to curl downloader..."
                     ),
                 )
                 return json.dumps({"ok": True, "message": "Download successful", "path": target_file})
+            except (subprocess.TimeoutExpired, TimeoutError) as e:
+                return json.dumps({"ok": False, "error": f"Download timed out after {timeout_sec}s: {e}"})
+            except InterruptedError as e:
+                return json.dumps({"ok": False, "error": f"Download cancelled: {e}"})
             except subprocess.CalledProcessError as e:
                 return json.dumps({"ok": False, "error": f"yt-dlp download failed: {e.stderr}"})
             except Exception as e:
@@ -811,10 +821,17 @@ class PipelineAgent:
 
         旧私有副本用「黑名单」且不校验 stem，会把 `{yid}.ass` 字幕 / `{yid}.f398.mp4`
         无音轨分片误当源视频喂给 ffmpeg（exit 234 崩溃 / 无声成片）。现统一走
-        ``utils.file_utils.find_downloaded_video``（白名单 + stem==yid + 体积 + 冷归档回退）。
+        ``utils.file_utils.find_downloaded_video``（白名单 + stem==yid + 体积 + 冷归档回退 + 音视频双轨验真）。
         # [Claude_Opus_4.8] BUG-3 修复：复用单一真相源
         """
-        return find_downloaded_video(self.output_dir, yid, self.output_dir / "original_video")
+        return find_downloaded_video(
+            self.output_dir,
+            yid,
+            self.output_dir / "original_video",
+            min_size=50_000,
+            verify_media=True,
+            quarantine_invalid=True,
+        )
 
     def _get_deepseek_client(self) -> Optional[OpenAI]:
         """惰性创建 DeepSeek 客户端；未配置时保留原本的友好降级。"""

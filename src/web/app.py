@@ -1,6 +1,8 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
-# Modification History
+| 3.46.0 | 2026-09-23 | Antigravity | [Code Review Fix] 1. _safe_kill_pid_or_pgid 增加自杀保护 (pid == os.getpid())；2. _process_group_alive 增加命令白名单特征过滤，防御 PID 复用；3. _queue_runner_loop 补偿排水审核通知；4. _trigger_video_async 等待超时扩展至 120s 对齐附件发送 |
+| 3.45.0 | 2026-09-23 | Antigravity | [看门狗与进程组加固] 1. _process_group_alive 区分并同时校验 PID 与 PGID，防止批量入口 worker 被误回收；2. _run_pipeline_manager 与 run_full_pipeline 启用 start_new_session=True；3. 预提交孤儿回收联动 read_lease_owner 内核文件锁双重防误杀；4. 进程终止操作支持 PGID 与 PID 阶梯强杀；5. 巡检循环回收超期审核通知 |
+| 3.44.0 | 2026-09-23 | Worker M2 (Topic Clues) | 重构 /api/trending-keywords 与 /refresh 接入 TopicCluesHub，消除 sys.path.insert(0, scripts) 与同步阻塞 |
 | 3.43.0 | 2026-09-23 | Codex | 守护独立发布进程；显示待发布归属、占用原因与就绪时间。 |
 | 3.42.0 | 2026-09-20 | Antigravity | 新增 waitlist/queue 治理接口 (cleanup-expired, discard-stale, calibrate, ignore)；promote 与 ignore 增加平台生命周期防重保护；GET /api/videos 支持 include_expired 归档回溯 |
 | 3.41.0 | 2026-09-20 | Gemini | GET /api/videos 新增 funnel_stage 参数，支持大盘漏斗各阶段穿透查询与数据严格联动。 |
@@ -519,7 +521,7 @@ def _run_pipeline_manager():
             f.write("\n=== Auto-triggered queue pipeline run ===\n")
             # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
             sp.run([python, "-u", "-m", "video_processing.pipeline_manager"],
-                   cwd=src_dir, stdout=f, stderr=f, env=env_clean)
+                   cwd=src_dir, stdout=f, stderr=f, env=env_clean, start_new_session=True)
     except Exception as e:
         import logging
         logging.getLogger(__name__).error(f"_run_pipeline_manager failed: {e}")
@@ -565,6 +567,13 @@ def _queue_runner_loop():
                     "[Scheduler] Recovered %s orphaned pre-submission task(s)",
                     recovered_pre_submission,
                 )
+
+            # 回收超期卡在 PROCESSING 的视频号审核通知任务并补偿排水投递
+            try:
+                from video_processing.pipeline_manager import PipelineManager
+                PipelineManager().drain_pending_review_notifications(limit=3)
+            except Exception as e:
+                logging.getLogger(__name__).debug(f"[Scheduler] Drain review notifications: {e}")
 
             # [Claude_Sonnet_4.6_Thinking_planning] v3.1.0: 每轮先清理卡在非终态的任务
             # 将卡在 DOWNLOADING/PROCESSING 超过 2 小时的死锁任务重置回 PENDING
@@ -615,42 +624,94 @@ def _queue_pipeline_launch_allowed() -> bool:
     return not has_local_pipeline and not _is_pipeline_manager_running()
 
 
-def _process_group_alive(pid: Optional[int]) -> bool:
-    """保守判断进程组是否仍活着。
+_PIPELINE_PROCESS_MARKERS = frozenset({
+    "python", "ffmpeg", "ffprobe", "yt-dlp", "curl", "playwright",
+    "node", "chromium", "chrome", "video_processing", "video-processing",
+    "video-precessing", "app.py", "pipeline_manager",
+})
 
-    优先使用 ps 实证，而不是单纯依赖 killpg(pid, 0)，避免 macOS 上僵尸/权限细节造成误判。
+
+def _process_group_alive(pid: Optional[int]) -> bool:
+    """保守判断进程或进程组是否仍活着。
+
+    区分任务执行者 PID 与子进程 PGID：
+    同时检查 PID 与 PGID 是否存在且非僵尸状态，结合进程命令行特征过滤，
+    避免在 PID != PGID（如批量入口继承父进程组）或 PID 被操作系统无关进程复用时误判。
     """
     if not pid:
         return False
+    target = int(pid)
     try:
         result = subprocess.run(
-            ["ps", "-axo", "pgid=,stat=,command="],
+            ["ps", "-axo", "pid=,pgid=,stat=,command="],
             cwd=str(Path(__file__).parent.parent.parent),
             capture_output=True,
             text=True,
             timeout=3,
         )
     except Exception:
-        return True
+        # 当 ps 命令受沙箱或容器权限限制不可达时，回退到基于内核系统调用的信号探测
+        return _is_pid_or_pgid_alive(target)
 
     for line in result.stdout.splitlines():
-        parts = line.strip().split(None, 2)
-        if len(parts) < 2:
+        parts = line.strip().split(None, 3)
+        if len(parts) < 3:
             continue
         try:
-            pgid = int(parts[0])
+            p_pid = int(parts[0])
+            p_pgid = int(parts[1])
         except ValueError:
             continue
-        stat = parts[1]
-        if pgid == int(pid) and "Z" not in stat:
-            return True
+        stat = parts[2]
+        if "Z" in stat:
+            continue
+        if p_pid == target or p_pgid == target:
+            if len(parts) >= 4:
+                cmd_lower = parts[3].lower()
+                if any(m in cmd_lower for m in _PIPELINE_PROCESS_MARKERS):
+                    return True
+            else:
+                return True
     return False
+
+
+def _safe_kill_pid_or_pgid(pid: Optional[int], sig: int) -> None:
+    """终止进程或进程组：优先以进程组终止，失败时回退至单进程。严格防御自杀。"""
+    if not pid or pid == os.getpid():
+        return
+    try:
+        os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError):
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def _is_pid_or_pgid_alive(pid: Optional[int]) -> bool:
+    """检查进程或进程组是否仍在运行且非僵尸进程。严格防御自判。"""
+    if not pid:
+        return False
+    if pid == os.getpid():
+        return True
+    try:
+        os.killpg(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
 
 
 def _recover_orphaned_publishing_tasks(stale_minutes: int = 30) -> int:
     """将已死发布进程转为未绑定提交，保留平台结果未知的 fail-closed 边界。"""
+    from video_processing.core.task_lease import read_lease_owner
+
     recovered = 0
     candidates = db.get_stale_publishing_videos(stale_minutes=stale_minutes)
+    prj_root = Path(__file__).resolve().parents[2]
     for video in candidates:
         pid = video.get("process_pid")
         if _process_group_alive(pid):
@@ -658,6 +719,11 @@ def _recover_orphaned_publishing_tasks(stale_minutes: int = 30) -> int:
 
         yid = video.get("youtube_id")
         slice_index = int(video.get("slice_index") or 0)
+        prefix = f"{yid}_s{slice_index}" if slice_index else yid
+        task_lock = prj_root / "output" / "task_locks" / f"{prefix}.lock"
+        if read_lease_owner(task_lock):
+            continue
+
         reason = (
             "发布进程已结束，但数据库仍停留在 PUBLISHING；平台可能已受理。"
             "已停止自动重传，等待视频号后台按平台记录核验。"
@@ -686,8 +752,11 @@ def _recover_orphaned_publishing_tasks(stale_minutes: int = 30) -> int:
 
 def _recover_orphaned_pre_submission_tasks(stale_minutes: int = 20) -> int:
     """回收无存活进程的预提交孤儿任务；视频号发布阶段绝不走此路径。"""
+    from video_processing.core.task_lease import read_lease_owner
+
     recovered = 0
     pipeline_running = _is_pipeline_manager_running()
+    prj_root = Path(__file__).resolve().parents[2]
     for video in db.get_stale_pre_submission_processing_videos(stale_minutes=stale_minutes):
         pid = video.get("process_pid")
         if _process_group_alive(pid):
@@ -697,6 +766,11 @@ def _recover_orphaned_pre_submission_tasks(stale_minutes: int = 20) -> int:
 
         yid = str(video.get("youtube_id") or "")
         slice_index = int(video.get("slice_index") or 0)
+        prefix = f"{yid}_s{slice_index}" if slice_index else yid
+        task_lock = prj_root / "output" / "task_locks" / f"{prefix}.lock"
+        if read_lease_owner(task_lock):
+            continue
+
         stage = str(video.get("status") or "预提交加工")
         next_status = db.recover_orphaned_pre_submission_task(
             yid,
@@ -2124,7 +2198,7 @@ def _trigger_video_async(video: dict) -> None:
             f"from video_processing.pipeline_manager import PipelineManager\n"
             f"pm = PipelineManager()\n"
             f"pm._process_single_video(json.loads(sys.stdin.read()))\n"
-            f"pm.wait_for_review_notifications(timeout=60.0)\n"
+            f"pm.wait_for_review_notifications(timeout=120.0)\n"
         )
         try:
             with open(log_path, "a") as f:
@@ -3149,22 +3223,16 @@ def delete_video(youtube_id: str, delete_files: bool = False, slice_index: Optio
         pids_to_kill = [t.get("process_pid") for t in active_targets if t.get("process_pid")]
         if pids_to_kill:
             for pid in pids_to_kill:
-                try:
-                    os.killpg(pid, signal.SIGTERM)   # 优雅终止信号
-                except (ProcessLookupError, PermissionError):
-                    pass
+                _safe_kill_pid_or_pgid(pid, signal.SIGTERM)
             
             time.sleep(2.0)                  # 等待 2 秒自退（time 已顶层导入）
             
             for pid in pids_to_kill:
-                try:
-                    os.killpg(pid, 0)            # 检查进程是否仍存活
-                    os.killpg(pid, signal.SIGKILL)
+                if _is_pid_or_pgid_alive(pid):
+                    _safe_kill_pid_or_pgid(pid, signal.SIGKILL)
                     import logging as _logging   # 局部别名，避免覆盖模块级 logger
                     _logging.getLogger(__name__).warning(
-                        f"[SIGKILL] Process group {pid} did not exit after SIGTERM, force killed.")
-                except (ProcessLookupError, PermissionError):
-                    pass  # 进程已自退或在 macOS 下已变为僵尸进程，视为正常退出
+                        f"[SIGKILL] Process or group {pid} did not exit after SIGTERM, force killed.")
 
     # ── 2. 删除产物文件 ─────────────────────────────────────────
     deleted_files = []
@@ -3256,20 +3324,14 @@ def respec_video(youtube_id: str, req: RespecVideoRequest):
             }
         pid = video.get("process_pid")
         if pid:
-            try:
-                os.killpg(pid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                pass
+            _safe_kill_pid_or_pgid(pid, signal.SIGTERM)
             time.sleep(2.0)
-            try:
-                os.killpg(pid, 0)              # 检查进程是否仍存活
-                os.killpg(pid, signal.SIGKILL)  # 残存 → 强杀
+            if _is_pid_or_pgid_alive(pid):
+                _safe_kill_pid_or_pgid(pid, signal.SIGKILL)
                 import logging as _log
                 _log.getLogger(__name__).warning(
                     f"[SIGKILL] respec forced kill pid={pid} for {youtube_id}"
                 )
-            except (ProcessLookupError, PermissionError):
-                pass  # 已自行退出，正常
         was_stopped = True
 
     # ── 3. 校验裁剪参数 ─────────────────────────────────────
@@ -3390,22 +3452,16 @@ def stop_video(youtube_id: str, slice_index: Optional[int] = None):
     pids_to_kill = [t.get("process_pid") for t in active_targets if t.get("process_pid")]
     if pids_to_kill:
         for pid in pids_to_kill:
-            try:
-                os.killpg(pid, signal.SIGTERM)   # 优雅终止信号
-            except (ProcessLookupError, PermissionError):
-                pass
+            _safe_kill_pid_or_pgid(pid, signal.SIGTERM)
         
         time.sleep(2.0)                  # 等待 2 秒自退 [Gemini_3.5_Flash_planning]
         
         for pid in pids_to_kill:
-            try:
-                os.killpg(pid, 0)            # 检查进程是否仍存活
-                os.killpg(pid, signal.SIGKILL)
+            if _is_pid_or_pgid_alive(pid):
+                _safe_kill_pid_or_pgid(pid, signal.SIGKILL)
                 import logging as _logging
                 _logging.getLogger(__name__).warning(
-                    f"[SIGKILL] Process group {pid} did not exit after SIGTERM, force killed.")
-            except (ProcessLookupError, PermissionError):
-                pass
+                    f"[SIGKILL] Process or group {pid} did not exit after SIGTERM, force killed.")
 
     # 仅预提交阶段可标记 FAILED；发布中被终止时平台状态未知，必须保持 fail-closed。
     for t in active_targets:
@@ -3553,7 +3609,7 @@ def run_full_pipeline():
             f.write(f"\n=== Web-triggered pipeline run ({now_str}) ===\n")
             # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
             sp.run([python, "-u", str(prj_root / "scripts" / "monitor_channels.py")],
-                   cwd=str(prj_root), stdout=f, stderr=f, env=env_clean)
+                   cwd=str(prj_root), stdout=f, stderr=f, env=env_clean, start_new_session=True)
             
             # [Gemini_3.5_Flash_planning] 校验引擎排他锁以防并发阻塞导致进程堆积泄露
             if _is_pipeline_manager_running():
@@ -3561,106 +3617,28 @@ def run_full_pipeline():
                 f.flush()
             else:
                 sp.run([python, "-u", "-m", "video_processing.pipeline_manager"],
-                       cwd=src_dir, stdout=f, stderr=f, env=env_clean)
+                       cwd=src_dir, stdout=f, stderr=f, env=env_clean, start_new_session=True)
 
     threading.Thread(target=_run, daemon=True, name="full-pipeline").start()
     return {"success": True, "message": "全量管线已在后台启动，请关注仪表盘进度"}
 
 
 
-# ── 热词监控 API ─────────────────────────────────────────────────────────
+# ── 科技选题线索中枢 (Topic Clues Hub) API ─────────────────────────────
 @app.get("/api/trending-keywords")
-def get_trending_keywords(force_refresh: bool = False):
-    """[Claude_Sonnet_4.6_Thinking_planning] 返回当前动态热词列表及元数据
-
-    响应结构:
-      enabled: bool          — settings.enable_dynamic_keywords
-      source: str            — 'cache' | 'live' | 'static'
-      keywords: list[dict]   — 每条含 keyword/type/hn_score/signal/title/yt_url
-      updated_at: float|None — 缓存 Unix 时间戳
-      hn_top_n: int          — 从 HN 抓取的条数
-    """
-    import json as _json
-    import time as _time
-
-    prj_root = Path(__file__).parent.parent.parent
-    scripts_dir = str(prj_root / "scripts")
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-
-    # 静态兜底词
-    STATIC_KWS = ["AI interview", "tech keynote 2026", "business podcast", "founder speech"]
-
-    if not settings.enable_dynamic_keywords:
-        return {
-            "enabled": False,
-            "source": "static",
-            "keywords": [{"keyword": kw, "type": "static", "hn_score": None,
-                          "signal": None, "title": None, "yt_url": None} for kw in STATIC_KWS],
-            "updated_at": None,
-            "hn_top_n": 0,
-        }
-
-    cache_path = prj_root / "output" / "trending_keywords.json"
-    cache_age  = None
-    cached_kws = []
-
-    # 读缓存
-    if cache_path.exists() and not force_refresh:
-        try:
-            data = _json.loads(cache_path.read_text(encoding="utf-8"))
-            age  = _time.time() - data.get("updated_at", 0)
-            if age < 3600:  # 1 小时内有效
-                cached_kws  = data.get("keywords", [])
-                cache_age   = data.get("updated_at")
-        except Exception:
-            pass
-
-    source = "cache" if cached_kws else "live"
-
-    # 需要实时拉取（无缓存 or 强制刷新）
-    if not cached_kws or force_refresh:
-        try:
-            from fetch_trending_keywords import fetch_hn_trending_keywords
-            top_n     = getattr(settings, "hn_top_n", 30)
-            cached_kws = fetch_hn_trending_keywords(top_n=top_n)
-            cache_age  = _time.time()
-            cache_path.write_text(_json.dumps({
-                "updated_at": cache_age,
-                "keywords":   cached_kws,
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
-            source = "live"
-        except Exception as e:
-            print(f"[HotwordsAPI] fetch failed: {e}")
-            source = "error"
-
-    # 静态词永远追加在后面
-    dynamic_set = set(cached_kws)
-    result_kws  = [
-        {"keyword": kw, "type": "dynamic", "hn_score": None,
-         "signal": None, "title": None,
-         "yt_url": f"https://www.youtube.com/results?search_query={kw.replace(' ', '+')}"
-         } for kw in cached_kws
-    ] + [
-        {"keyword": kw, "type": "static",  "hn_score": None,
-         "signal": None, "title": None,
-         "yt_url": f"https://www.youtube.com/results?search_query={kw.replace(' ', '+')}"
-         } for kw in STATIC_KWS if kw not in dynamic_set
-    ]
-
-    return {
-        "enabled":    True,
-        "source":     source,
-        "keywords":   result_kws,
-        "updated_at": cache_age,
-        "hn_top_n":   getattr(settings, "hn_top_n", 30),
-    }
+def get_trending_keywords():
+    """返回当前科技选题线索列表及元数据 (SWR 毫秒级极速响应，超期后台静默刷新)"""
+    from video_processing.topic_clues.hub import get_topic_clues_hub
+    hub = get_topic_clues_hub()
+    return hub.get_clues_swr()
 
 
 @app.post("/api/trending-keywords/refresh")
 def refresh_trending_keywords():
-    """[Claude_Sonnet_4.6_Thinking_planning] 强制刷新 HN 热词缓存（忽略 1h TTL）"""
-    return get_trending_keywords(force_refresh=True)
+    """强制同步刷新科技选题线索（经 Singleflight 互斥，多并发共享单次底层抓取）"""
+    from video_processing.topic_clues.hub import get_topic_clues_hub
+    hub = get_topic_clues_hub()
+    return hub.refresh_sync()
 
 
 # ── [Claude_Sonnet_4.6_Thinking_planning] v3.4.0: 高赞内容手动刷新 ──────────────

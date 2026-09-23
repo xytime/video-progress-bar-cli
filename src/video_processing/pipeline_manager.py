@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.59.0 | 2026-09-23 | Antigravity | 审核物料通知持久化 SQLite 账本并支持断点补偿排水；_run_tracked 超时有界升级 SIGKILL；下载注入共享总预算并委托单一真相源验真。 |
 | 3.58.0 | 2026-09-23 | Codex | 独立发布与加工资源解耦；恢复缓存保护，审核副本异步发送。 |
 | 3.57.0 | 2026-09-22 | Codex | 文案 CLI 临时失败按冷却时间安全回队，保持提交后不重试。 |
 | 3.56.0 | 2026-09-21 | Codex | 仅凭本次上传零进度证据限次回队，补充发布断流去重告警。 |
@@ -163,6 +164,8 @@
 | 3.48.16 | 2026-08-11 | Codex                               | 视频号未确认公开时取消同源尚未提交的抖音/快手队列，防止旧误判触发跨平台抢跑 |
 | 3.48.21 | 2026-09-04 | Codex                               | 通用抖音投稿透传独立横封面并按账本尝试隔离浏览器证据，避免封面退化和失败根因被覆盖。 |
 | 3.50.0  | 2026-09-23 | Antigravity                         | [四支柱工程优化] 1. 下载引擎翻转：原生 yt-dlp 作为高速首选，经 download_strategy 抽象 Strategy/Fallback 模式，覆盖进程异常与产物验真 (<50KB/缺失) 双重兜底并自动清理损坏分片；2. 单任务懒抢占：process_high_score_videos 每轮仅 claim 1 个就绪视频并立即处理，记录 attempted_targets 防回写 PENDING 紧凑死循环，盘中中途开盘自动回滚 claim 为 PENDING；3. 视频号审核物料异步化：_send_wechat_submission_review_material 解耦为后台线程派发，并在 daily_job / process 结束前提供 lifecycle wait |
+| 3.51.0  | 2026-09-23 | Antigravity                         | [防假死加固] 1. _find_downloaded_video 统一走 file_utils 校验音视频双轨；2. 下载链路注入 settings.youtube_download_timeout_seconds 共享超时预算；3. _run_tracked 超时阶梯强杀 (SIGTERM->3s->SIGKILL)；4. 视频号审核成片通知持久化入库 (wechat_review_notifications) 与恢复处理，防止短生命周期进程退出丢单 |
+| 3.52.0  | 2026-09-23 | Antigravity                         | [Code Review Fix] 1. _run_tracked 固化 pgid 防止 leader 退出后 SIGKILL 升级失效；2. 下载回退增加 is_cancelled_callback 守卫；3. 审核物料通知派发原子抢占 PROCESSING 防并发；4. daily_job 显式 drain_pending_review_notifications |
 """
 
 
@@ -729,6 +732,41 @@ class PipelineManager:
             )
         return sent
 
+    def _execute_persisted_review_notification(self, task_id: int, prefix: str, title: str | None) -> bool:
+        """执行已持久化的审核成片投递，并将事实结果写入账本与 Telegram 回执。"""
+        try:
+            sent = self._send_wechat_submission_review_material_sync(prefix, title)
+            state = "ACCEPTED" if sent else "FAILED"
+            self.db.record_wechat_review_notification_status(task_id, state)
+            try:
+                import hashlib
+                content_hash = hashlib.sha256(f"{prefix}:{title}".encode("utf-8")).hexdigest()
+                self.db.record_telegram_notification_receipt(
+                    event_type="wechat_review_video",
+                    priority="P1",
+                    content_sha256=content_hash,
+                    delivery_state=state,
+                )
+            except Exception:
+                pass
+            return sent
+        except Exception as exc:
+            logger.error("[%s] 审核成片投递异常: %s", prefix, exc, exc_info=True)
+            self.db.record_wechat_review_notification_status(task_id, "UNKNOWN", error_message=str(exc))
+            try:
+                import hashlib
+                content_hash = hashlib.sha256(f"{prefix}:{title}".encode("utf-8")).hexdigest()
+                self.db.record_telegram_notification_receipt(
+                    event_type="wechat_review_video",
+                    priority="P1",
+                    content_sha256=content_hash,
+                    delivery_state="UNKNOWN",
+                    error_kind=type(exc).__name__,
+                )
+            except Exception:
+                pass
+            return False
+
     def _send_wechat_submission_review_material(
         self,
         prefix: str,
@@ -736,18 +774,21 @@ class PipelineManager:
         *,
         sync: bool = False,
     ) -> bool | threading.Thread:
-        """为“已受理未公开”的视频号任务发送手机审核成片，不改变其审核中账本。
+        """为“已受理未公开”的视频号任务发送手机审核成片，先持久化待办任务再执行。
 
-        默认派发至后台独立线程异步执行，防止大视频压缩或 Telegram 网络超时长期霸占 pipeline.lock。
+        默认派发至后台独立线程异步执行，防止大视频压缩或 Telegram 网络超时长期霸占 pipeline.lock；
+        若进程中途退出，待办留存于 SQLite，后续执行者可断点恢复。
         """
+        task_id = self.db.enqueue_wechat_review_notification(prefix, title)
+
         if sync:
-            return self._send_wechat_submission_review_material_sync(prefix, title)
+            if self.db.claim_specific_wechat_review_notification(task_id):
+                return self._execute_persisted_review_notification(task_id, prefix, title)
+            return False
 
         def _worker():
-            try:
-                self._send_wechat_submission_review_material_sync(prefix, title)
-            except Exception as exc:
-                logger.error("[%s] 异步发送视频号审核成片异常: %s", prefix, exc, exc_info=True)
+            if self.db.claim_specific_wechat_review_notification(task_id):
+                self._execute_persisted_review_notification(task_id, prefix, title)
 
         thread = threading.Thread(
             target=_worker,
@@ -768,6 +809,18 @@ class PipelineManager:
         for thread in list(self._async_review_threads):
             if thread.is_alive():
                 thread.join(timeout=timeout)
+
+    def drain_pending_review_notifications(self, limit: int = 5) -> int:
+        """从 SQLite 账本恢复并顺序投递遗留的审核物料通知（有并发上限与超期回收）。"""
+        self.db.recover_stale_wechat_review_notifications(stale_minutes=10)
+        claimed = self.db.claim_pending_wechat_review_notifications(limit=limit)
+        processed = 0
+        for task in claimed:
+            self._execute_persisted_review_notification(
+                task["id"], task["prefix"], task.get("title"),
+            )
+            processed += 1
+        return processed
 
     def _notify_copy_numeric_warnings(self, yid: str, title: str, prefix: str) -> None:
         """将已接受文案中的金额告警推送 Telegram；告警不改变发布链路。"""
@@ -1871,22 +1924,19 @@ class PipelineManager:
         """查找下载后的视频主文件（热目录 output/ 优先，回退冷归档 original_video/）。
 
         实现已提取为 ``utils.file_utils.find_downloaded_video`` 单一真相源，
-        bot（pipeline_agent）与管线共用，避免两处实现分叉。
+        bot（pipeline_agent）与管线共用，统一校验音视频双轨与损坏自动隔离。
         # [Claude_Opus_4.8] v3.13.0 提取共享实现；保留薄封装以维持归档命中的日志。
         """
-        result = find_downloaded_video(self._OUT_DIR, yid, self._ORIG_VIDEO_DIR, min_size=-1)
-        if result:
-            from .utils.file_utils import media_streams
-            source = Path(result)
-            streams = media_streams(source) if source.stat().st_size > 50_000 else frozenset()
-            if not {"video", "audio"}.issubset(streams):
-                if not quarantine_invalid:
-                    return None
-                logger.warning("[CacheInvalid] %s 原片缓存缺少有效音视频轨道，隔离后重新获取。", source.name)
-                source.rename(source.with_name(f"{source.name}.invalid-{time.time_ns()}"))
-                return self._find_downloaded_video(yid)
-            if source.parent == self._ORIG_VIDEO_DIR:
-                logger.info(f"[OV] Found archived original video for {yid}: {source.name}")
+        result = find_downloaded_video(
+            self._OUT_DIR,
+            yid,
+            self._ORIG_VIDEO_DIR,
+            min_size=50_000,
+            verify_media=True,
+            quarantine_invalid=quarantine_invalid,
+        )
+        if result and Path(result).parent == self._ORIG_VIDEO_DIR:
+            logger.info(f"[OV] Found archived original video for {yid}: {Path(result).name}")
         return result
 
     # ── 原始视频归档（v3.6.0）────────────────────────────────────────────────
@@ -1987,18 +2037,18 @@ class PipelineManager:
                 preexec_fn=os.setsid,  # 建立独立进程组
                 **popen_kwargs
             )
+            pgid = proc.pid
             if settings.enable_sigterm_kill:
-                try:
-                    pgid = os.getpgid(proc.pid)
-                    self.db.update_process_pid(yid, pgid, slice_index=slice_index)
-                except ProcessLookupError:
-                    pass  # 进程已极速退出，无需记录
+                self.db.update_process_pid(yid, pgid, slice_index=slice_index)
 
             def terminate_process_group() -> None:
                 try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                    os.killpg(pgid, signal.SIGTERM)
                 except (ProcessLookupError, PermissionError):
-                    proc.kill()
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
 
             monitor_stop = threading.Event() if progress_path else None
             monitor_thread = None
@@ -2051,7 +2101,21 @@ class PipelineManager:
                 stdout, stderr = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired as e:
                 terminate_process_group()
-                stdout, stderr = proc.communicate()
+                try:
+                    stdout, stderr = proc.communicate(timeout=3.0)
+                except subprocess.TimeoutExpired:
+                    # 升格 SIGKILL 强杀残留失控进程组（使用固化的 pgid，防止 leader 退出后 getpgid 失败遗漏孙进程）
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    try:
+                        stdout, stderr = proc.communicate(timeout=3.0)
+                    except subprocess.TimeoutExpired:
+                        stdout, stderr = b"", b"Process group killed forcefully after timeout communicate failure"
                 raise subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr) from e
             finally:
                 if settings.enable_sigterm_kill:
@@ -3718,6 +3782,15 @@ class PipelineManager:
         except TaskLeaseBusy:
             logger.info("[%s] 该视频已有执行者，保留原任务归属。", prefix)
 
+    def _is_video_cancelled(self, yid: str, slice_index: int = 0) -> bool:
+        """检查当前任务是否已被外部取消（信号终止或数据库置为 FAILED/CANCELED）。"""
+        if settings.enable_sigterm_kill and _sigterm_received:
+            return True
+        video = self.db.get_video_by_youtube_id(yid, slice_index=slice_index)
+        if video and str(video.get("status") or "").upper() in ("FAILED", "CANCELED"):
+            return True
+        return False
+
     def _prepare_single_video(
         self,
         video: Dict[str, Any],
@@ -3881,12 +3954,14 @@ class PipelineManager:
                             force_keyframes_at_cuts=used_download_sections,
                         )
 
-                        def _run_download_cmd(cmd: list[str]) -> None:
+                        timeout_budget = float(settings.youtube_download_timeout_seconds)
+
+                        def _run_download_cmd(cmd: list[str], timeout: Optional[float] = None) -> None:
                             with settings.clash_switch_node():
                                 self._run_tracked(
                                     cmd, yid, slice_index=slice_index, capture_output=True,
                                     cwd=str(self._PRJ_ROOT), env=subprocess_env,
-                                    timeout=settings.youtube_download_timeout_seconds,
+                                    timeout=timeout or timeout_budget,
                                 )
 
                         target_file = execute_download_with_fallback(
@@ -3894,6 +3969,8 @@ class PipelineManager:
                             runner=_run_download_cmd,
                             verifier=lambda: self._find_downloaded_video(yid),
                             cleaner=lambda: clean_partial_downloads(self._OUT_DIR, yid),
+                            total_timeout=timeout_budget,
+                            is_cancelled_callback=lambda: self._is_video_cancelled(yid, slice_index=slice_index),
                             on_fallback=lambda reason: logger.warning(
                                 "[Download] 原生 yt-dlp 未产生有效成片或失败（%s），保留有效缓存并降级备选 curl 下载器重试 %s。",
                                 reason, yid,
@@ -4514,6 +4591,16 @@ class PipelineManager:
                 self._notify_failed(yid, title, err, slice_index=slice_index)
                 self._run_garbage_collection(yid, slice_index, "FAILED")
 
+            except InterruptedError as e:
+                logger.info(f"Task cancelled by interrupt/signal for {prefix}: {e}")
+                if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
+                    logger.warning("[%s] 取消信号发生在视频号提交后；保留账本状态，拒绝重试或写 FAILED。", prefix)
+                    return
+                current = self.db.get_video_by_youtube_id(yid, slice_index=slice_index)
+                if not current or current.get("status") != "FAILED":
+                    self.db.update_video_status(yid, "FAILED", error_msg=f"任务被取消: {e}", slice_index=slice_index)
+                self._run_garbage_collection(yid, slice_index, "FAILED")
+
             except Exception as e:
                 logger.error(f"Unexpected error for {prefix}: {e}")
                 if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
@@ -4645,6 +4732,7 @@ class PipelineManager:
             else:
                 self._run_douyin_history_migration()
         self._dispatch_wechat_interaction_worker(log_prefix="daily")
+        self.drain_pending_review_notifications(limit=5)
         self.wait_for_review_notifications(timeout=30.0)
         logger.info("--- Daily Pipeline Job Completed ---")
 

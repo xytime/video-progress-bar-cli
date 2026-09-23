@@ -7,11 +7,13 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
-| 1.0.0 | 2026-09-23 | Antigravity | 新增四支柱优化核心契约与边缘场景隔离单测 |
+| 1.3.0 | 2026-09-23 | Antigravity | [Code Review Fix] 懒抢占测试接入真实 SQLite 校验 PROCESSING；看门狗测试接入真实进程与 PID 过滤；增加取消信号/SystemExit 拦截、自杀防御与特定审核抢占单测 |
 | 1.2.0 | 2026-09-23 | Codex | 下载验真测试使用真实音视频；验证回退保留续传缓存。 |
 | 1.1.0 | 2026-09-23 | Antigravity | 补充产物验真 (<50KB) 回退、损坏文件清理、死循环防护与盘中开盘回滚单测 |
+| 1.0.0 | 2026-09-23 | Antigravity | 新增四支柱优化核心契约与边缘场景隔离单测 |
 """
 
+import os
 import subprocess
 import threading
 import time
@@ -198,24 +200,30 @@ def test_clean_partial_downloads_comprehensive(tmp_path):
     assert valid_other.exists()
 
 
-def test_pipeline_agent_download_inversion_fallback(tmp_path):
-    """PipelineAgent.download_video 优先原生下载，失败回退 curl。"""
+def test_pipeline_agent_download_inversion_fallback(tmp_path, valid_media):
+    """PipelineAgent.download_video 优先原生下载，产物不合格或失败时回退 curl。"""
     from bot.pipeline_agent import PipelineAgent
 
     with patch("bot.pipeline_agent.settings.gemini_api_key", "fake_key"):
         agent = PipelineAgent(bot=None, loop=None, chat_id=123)
     agent.output_dir = tmp_path
 
+    _real_run = subprocess.run
     recorded_cmds = []
     run_count = 0
 
     def fake_run(cmd, *args, **kwargs):
         nonlocal run_count
+        if any("ffprobe" in str(arg) for arg in cmd):
+            return _real_run(cmd, *args, **kwargs)
         run_count += 1
         recorded_cmds.append(list(cmd))
         if run_count == 1:
-            raise subprocess.CalledProcessError(1, cmd, stderr="Network reset")
-        (tmp_path / "agent_dl_123.mp4").write_bytes(b"0" * 60_000)
+            # 原生 runner 写入全零损坏文件（无有效音视频轨），验真失败触发回退
+            (tmp_path / "agent_dl_123.mp4").write_bytes(b"0" * 60_000)
+            return MagicMock(returncode=0)
+        # 回退 curl 产出真实媒体，双轨校验通过
+        (tmp_path / "agent_dl_123.mp4").write_bytes(valid_media)
         return MagicMock(returncode=0)
 
     with patch("bot.pipeline_agent.subprocess.run", side_effect=fake_run):
@@ -228,57 +236,123 @@ def test_pipeline_agent_download_inversion_fallback(tmp_path):
     assert "curl" in recorded_cmds[1]
 
 
+def test_download_cancellation_by_signals_and_system_exit(tmp_path):
+    """当子进程被外部信号或 SystemExit 取消，或回调标记取消时，严禁误触发降级回退重试。"""
+    from video_processing.utils.download_strategy import (
+        DownloadOptions,
+        execute_download_with_fallback,
+    )
+
+    options = DownloadOptions(
+        ytdlp_path="/fake/yt-dlp",
+        url="https://youtu.be/cancel_test",
+        output_template=str(tmp_path / "cancel.%(ext)s"),
+    )
+
+    # 1. 模拟外部 SIGTERM 取消 (returncode -15)
+    run_calls = []
+    clean_called = False
+
+    def runner_sigterm(cmd, timeout=None):
+        run_calls.append(cmd)
+        raise subprocess.CalledProcessError(-15, cmd, stderr="Terminated by signal")
+
+    def fake_cleaner():
+        nonlocal clean_called
+        clean_called = True
+
+    with pytest.raises(InterruptedError) as exc_info:
+        execute_download_with_fallback(
+            options=options,
+            runner=runner_sigterm,
+            verifier=lambda: None,
+            cleaner=fake_cleaner,
+            total_timeout=60.0,
+        )
+
+    assert "cancelled by signal" in str(exc_info.value).lower()
+    assert len(run_calls) == 1
+    assert clean_called is True
+
+    # 2. 模拟 SystemExit
+    run_calls.clear()
+
+    def runner_sysexit(cmd, timeout=None):
+        run_calls.append(cmd)
+        raise SystemExit(143)
+
+    with pytest.raises(InterruptedError):
+        execute_download_with_fallback(
+            options=options,
+            runner=runner_sysexit,
+            verifier=lambda: None,
+            cleaner=lambda: None,
+            total_timeout=60.0,
+        )
+    assert len(run_calls) == 1
+
+    # 3. 模拟 is_cancelled_callback 在降级前拦截
+    run_calls.clear()
+    is_cancelled = False
+
+    def runner_transient_failure(cmd, timeout=None):
+        nonlocal is_cancelled
+        run_calls.append(cmd)
+        is_cancelled = True
+        raise RuntimeError("Transient network EOF")
+
+    with pytest.raises(InterruptedError) as exc_info:
+        execute_download_with_fallback(
+            options=options,
+            runner=runner_transient_failure,
+            verifier=lambda: None,
+            cleaner=lambda: None,
+            total_timeout=60.0,
+            is_cancelled_callback=lambda: is_cancelled,
+        )
+    assert len(run_calls) == 1
+    assert "before fallback" in str(exc_info.value).lower()
+
+
 # ── Pillar 2: 单任务懒抢占（Lazy Claiming） ──────────────────────────────────────
 
 
 def test_lazy_claiming_in_process_high_score_videos(tmp_path, monkeypatch):
-    """process_high_score_videos 每轮仅 claim 1 个就绪任务并立即处理，后续任务保持 PENDING。"""
+    """process_high_score_videos 每轮仅 claim 1 个就绪任务并立即处理，状态置为 PROCESSING，后续任务保持 PENDING。"""
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     manager.send_telegram_msg = MagicMock()
 
-    v1 = {"youtube_id": "yid_1", "slice_index": 0, "score": 90, "status": "PENDING"}
-    v2 = {"youtube_id": "yid_2", "slice_index": 0, "score": 85, "status": "PENDING"}
-    v3 = {"youtube_id": "yid_3", "slice_index": 0, "score": 80, "status": "PENDING"}
+    manager.db.add_video("yid_1", "Title 1", "test_channel", score=90)
+    manager.db.add_video("yid_2", "Title 2", "test_channel", score=85)
+    manager.db.add_video("yid_3", "Title 3", "test_channel", score=80)
 
-    db_videos = {"yid_1": "PENDING", "yid_2": "PENDING", "yid_3": "PENDING"}
-    claim_history = []
-    process_history = []
-
-    def fake_get_pending(min_score=75, limit=15, **kwargs):
-        return [
-            {"youtube_id": yid, "slice_index": 0, "score": 80, "status": status}
-            for yid, status in db_videos.items()
-            if status == "PENDING"
-        ]
-
-    def fake_claim(yid, slice_index=0):
-        if db_videos.get(yid) == "PENDING":
-            db_videos[yid] = "DOWNLOADING"
-            claim_history.append((yid, dict(db_videos)))
-            return True
-        return False
+    observed_states = []
 
     def fake_process_single(video, submission_only=False):
         yid = video["youtube_id"]
-        process_history.append((yid, dict(db_videos)))
-        db_videos[yid] = "PUBLISHED"
+        v1 = manager.db.get_video_by_youtube_id("yid_1")["status"]
+        v2 = manager.db.get_video_by_youtube_id("yid_2")["status"]
+        v3 = manager.db.get_video_by_youtube_id("yid_3")["status"]
+        observed_states.append((yid, {"yid_1": v1, "yid_2": v2, "yid_3": v3}))
+        manager.db.update_video_status(yid, "PUBLISHED")
 
-    manager.db.get_high_score_pending_videos = fake_get_pending
-    manager.db.claim_video_for_processing = fake_claim
     manager._process_single_video = fake_process_single
     monkeypatch.setattr(manager, "_is_public_publish_window", lambda reason: True)
 
     manager.process_high_score_videos(limit=3)
 
-    assert len(process_history) == 3
-    v1_process_time_state = process_history[0][1]
-    assert v1_process_time_state["yid_1"] == "DOWNLOADING"
-    assert v1_process_time_state["yid_2"] == "PENDING"
-    assert v1_process_time_state["yid_3"] == "PENDING"
+    assert len(observed_states) == 3
+    # 当 yid_1 正在被处理时，其状态必须为真实 DAL 置的 PROCESSING，且 yid_2/yid_3 仍处于 PENDING
+    assert observed_states[0][0] == "yid_1"
+    assert observed_states[0][1]["yid_1"] == "PROCESSING"
+    assert observed_states[0][1]["yid_2"] == "PENDING"
+    assert observed_states[0][1]["yid_3"] == "PENDING"
 
-    v2_process_time_state = process_history[1][1]
-    assert v2_process_time_state["yid_2"] == "DOWNLOADING"
-    assert v2_process_time_state["yid_3"] == "PENDING"
+    # 当 yid_2 正在被处理时，yid_1 已 PUBLISHED，yid_2 为 PROCESSING，yid_3 仍为 PENDING
+    assert observed_states[1][0] == "yid_2"
+    assert observed_states[1][1]["yid_1"] == "PUBLISHED"
+    assert observed_states[1][1]["yid_2"] == "PROCESSING"
+    assert observed_states[1][1]["yid_3"] == "PENDING"
 
 
 def test_lazy_claiming_prevents_infinite_reprocessing_loop(tmp_path, monkeypatch):
@@ -286,27 +360,15 @@ def test_lazy_claiming_prevents_infinite_reprocessing_loop(tmp_path, monkeypatch
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     manager.send_telegram_msg = MagicMock()
 
-    db_videos = {"deferred_yid": "PENDING"}
+    manager.db.add_video("deferred_yid", "Deferred Title", "test_channel", score=80)
     attempt_count = 0
-
-    def fake_get_pending(min_score=75, limit=15, **kwargs):
-        return [
-            {"youtube_id": yid, "slice_index": 0, "score": 80, "status": status}
-            for yid, status in db_videos.items()
-            if status == "PENDING"
-        ]
-
-    def fake_claim(yid, slice_index=0):
-        return True
 
     def fake_process_single(video, submission_only=False):
         nonlocal attempt_count
         attempt_count += 1
-        # 任务在此次处理中被重置回 PENDING
-        db_videos[video["youtube_id"]] = "PENDING"
+        # 模拟加工中回写 PENDING（例如源字幕检测缺失或外部避让）
+        manager.db.update_video_status(video["youtube_id"], "PENDING")
 
-    manager.db.get_high_score_pending_videos = fake_get_pending
-    manager.db.claim_video_for_processing = fake_claim
     manager._process_single_video = fake_process_single
     monkeypatch.setattr(manager, "_is_public_publish_window", lambda reason: True)
 
@@ -376,46 +438,95 @@ def test_trigger_video_async_popen_and_pid_tracking():
     assert ("async_yid_test", None, 0) in pid_updates
 
 
-def test_recover_orphaned_pre_submission_tasks_guard():
-    """看门狗回收逻辑守卫：
+def test_recover_orphaned_pre_submission_tasks_guard(tmp_path, monkeypatch):
+    """看门狗回收逻辑守卫（使用真实 SQLite 与真实进程状态，不 mock 存活性判断）：
     1. 进程组活着时不回收
     2. PID 为空但管线锁被持有时不回收
     3. 进程组已死且未持锁时正常回收
     """
     import web.app as web_app
+    from video_processing.db.database import PipelineDB
 
-    mock_video_active = {"youtube_id": "active_yid", "slice_index": 0, "process_pid": 8888, "status": "DOWNLOADING"}
-    mock_video_no_pid = {"youtube_id": "no_pid_yid", "slice_index": 0, "process_pid": None, "status": "DOWNLOADING"}
-    mock_video_dead = {"youtube_id": "dead_yid", "slice_index": 0, "process_pid": 9999, "status": "DOWNLOADING"}
+    test_db = PipelineDB(str(tmp_path / "watchdog_test.db"))
+    monkeypatch.setattr(web_app, "db", test_db)
 
-    # 1. PID 8888 进程组活着 -> 不回收
-    with patch.object(web_app.db, "get_stale_pre_submission_processing_videos", return_value=[mock_video_active]), \
-         patch.object(web_app, "_process_group_alive", return_value=True), \
-         patch.object(web_app, "_is_pipeline_manager_running", return_value=False), \
-         patch.object(web_app.db, "recover_orphaned_pre_submission_task") as mock_recover:
-        assert web_app._recover_orphaned_pre_submission_tasks() == 0
-        mock_recover.assert_not_called()
+    # 启动一个立即退出的真实子进程以获取真实 dead_pid
+    dead_proc = subprocess.Popen(["true"])
+    dead_proc.wait()
+    dead_pid = dead_proc.pid
 
-    # 2. PID 为 None，但 pipeline.lock 正在被持有 -> 不回收
-    with patch.object(web_app.db, "get_stale_pre_submission_processing_videos", return_value=[mock_video_no_pid]), \
-         patch.object(web_app, "_process_group_alive", return_value=False), \
-         patch.object(web_app, "_is_pipeline_manager_running", return_value=True), \
-         patch.object(web_app.db, "recover_orphaned_pre_submission_task") as mock_recover:
-        assert web_app._recover_orphaned_pre_submission_tasks() == 0
-        mock_recover.assert_not_called()
+    # 1. PID active (os.getpid() 正在运行 pytest/python) -> 不回收
+    test_db.add_video("active_yid", "Active Video", "test_channel", score=80)
+    test_db.update_video_status("active_yid", "DOWNLOADING")
+    test_db.update_process_pid("active_yid", os.getpid())
+    with test_db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET updated_at = datetime('now', '-30 minutes') WHERE youtube_id = 'active_yid'")
 
-    # 3. PID 9999 进程组已死，管线未持锁 -> 正常回收
-    with patch.object(web_app.db, "get_stale_pre_submission_processing_videos", return_value=[mock_video_dead]), \
-         patch.object(web_app, "_process_group_alive", return_value=False), \
-         patch.object(web_app, "_is_pipeline_manager_running", return_value=False), \
-         patch.object(web_app.db, "recover_orphaned_pre_submission_task", return_value="PENDING") as mock_recover:
-        assert web_app._recover_orphaned_pre_submission_tasks() == 1
-        mock_recover.assert_called_once_with(
-            "dead_yid",
-            expected_process_pid=9999,
-            error_msg="DOWNLOADING 子进程已不存在；自动有界回收，尚未触发视频号提交。",
-            slice_index=0,
-        )
+    # 2. PID 为空，管线持锁 -> 不回收
+    test_db.add_video("no_pid_yid", "No PID Video", "test_channel", score=80)
+    test_db.update_video_status("no_pid_yid", "DOWNLOADING")
+    with test_db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET updated_at = datetime('now', '-30 minutes') WHERE youtube_id = 'no_pid_yid'")
+
+    # 3. dead_pid 进程已死，且未持锁 -> 正常回收
+    test_db.add_video("dead_yid", "Dead Video", "test_channel", score=80)
+    test_db.update_video_status("dead_yid", "DOWNLOADING")
+    test_db.update_process_pid("dead_yid", dead_pid)
+    with test_db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET updated_at = datetime('now', '-30 minutes') WHERE youtube_id = 'dead_yid'")
+
+    # 管线持锁：保护 PID 为空的排队任务
+    monkeypatch.setattr(web_app, "_is_pipeline_manager_running", lambda: True)
+
+    recovered = web_app._recover_orphaned_pre_submission_tasks(stale_minutes=20)
+    assert recovered == 1
+
+    # active_yid 存活，保持 DOWNLOADING
+    assert test_db.get_video_by_youtube_id("active_yid")["status"] == "DOWNLOADING"
+    # no_pid_yid 在管线持锁排队中，保持 DOWNLOADING
+    assert test_db.get_video_by_youtube_id("no_pid_yid")["status"] == "DOWNLOADING"
+    # dead_yid 进程已死亡，成功回收为 PENDING
+    assert test_db.get_video_by_youtube_id("dead_yid")["status"] == "PENDING"
+
+
+def test_process_group_alive_distinguishes_pid_and_pgid(monkeypatch):
+    """看门狗 _process_group_alive 应正确识别 Worker PID、PGID，并防御系统守护进程 PID 复用。"""
+    from web import app as web_app
+
+    fake_ps_output = (
+        "1001  1001 S python -m video_processing.pipeline_manager\n"
+        "2002  1001 S yt-dlp https://youtu.be/xxx\n"
+        "3003  3003 S /usr/sbin/systemstats --daemon\n"
+    )
+
+    def fake_run(cmd, *args, **kwargs):
+        return MagicMock(stdout=fake_ps_output, returncode=0)
+
+    monkeypatch.setattr("web.app.subprocess.run", fake_run)
+
+    # 1. 查询独立进程组 PGID 1001 -> 存活
+    assert web_app._process_group_alive(1001) is True
+
+    # 2. 查询派生 Worker PID 2002 -> 即使不是 PGID 主进程，也能基于 PID 与合法命令判定存活
+    assert web_app._process_group_alive(2002) is True
+
+    # 3. 查询 PID 3003 -> 命令为系统守护进程，触发白名单拦截判定为已死 (防御 PID 复用)
+    assert web_app._process_group_alive(3003) is False
+
+    # 4. 查询不存在的 PID/PGID 9999 -> 死亡
+    assert web_app._process_group_alive(9999) is False
+
+
+def test_safe_kill_pid_or_pgid_guards_self():
+    """_safe_kill_pid_or_pgid 严禁对自身 PID (Web Server) 执行终止。"""
+    import os
+    from web import app as web_app
+
+    # 当传入当前进程 PID 时，函数直接返回，绝不 kill 自己
+    web_app._safe_kill_pid_or_pgid(os.getpid(), 15)
+    web_app._safe_kill_pid_or_pgid(None, 15)
+    assert web_app._is_pid_or_pgid_alive(os.getpid()) is True
+    assert web_app._is_pid_or_pgid_alive(None) is False
 
 
 # ── Pillar 4: 视频号审核物料异步通知 ──────────────────────────────────────────────
@@ -453,19 +564,95 @@ def test_async_wechat_submission_review_notification(tmp_path):
     assert ("prefix_sync", "Sync Title") in sent_calls
 
 
-def test_daily_job_lifecycle_waits_for_review_notifications(tmp_path, monkeypatch):
-    """_run_daily_job_unlocked 结束前显式调用 wait_for_review_notifications。"""
+def test_wait_for_review_notifications_lifecycle(tmp_path):
+    """测试 wait_for_review_notifications 真实等待后台线程完成。"""
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
-    manager.wait_for_review_notifications = MagicMock()
-    manager.reconcile_wechat_under_review = MagicMock(return_value=0)
-    manager.score_pending_videos = MagicMock()
-    manager.process_high_score_videos = MagicMock()
-    manager._check_wechat_delivery_health = MagicMock()
-    manager._dispatch_wechat_interaction_worker = MagicMock()
-    monkeypatch.setattr(settings, "wechat_publishing_paused", True)
-    monkeypatch.setattr(settings, "enable_kuaishou_browser_publishing", False)
-    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", False)
+    completed = False
 
-    manager._run_daily_job_unlocked()
+    def background_worker():
+        time.sleep(0.05)
+        nonlocal completed
+        completed = True
 
-    manager.wait_for_review_notifications.assert_called_once_with(timeout=30.0)
+    t = threading.Thread(target=background_worker, daemon=True)
+    t.start()
+    manager._async_review_threads = [t]
+
+    manager.wait_for_review_notifications(timeout=1.0)
+    assert completed is True
+
+
+def test_wechat_review_notification_dal_and_drain(tmp_path):
+    """视频号审核物料通知持久化 DAL 及补偿排水机制。"""
+    from video_processing.db.database import PipelineDB
+
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+
+    # 1. 入队持久化
+    nid = db.enqueue_wechat_review_notification(
+        prefix=str(tmp_path / "yid_rev_1"),
+        title="Review Title",
+    )
+    assert nid > 0
+
+    # 2. 认领待办
+    claimed = db.claim_pending_wechat_review_notifications(limit=5)
+    assert len(claimed) == 1
+    assert claimed[0]["id"] == nid
+
+    # 3. 记录处理状态
+    db.record_wechat_review_notification_status(nid, "ACCEPTED")
+
+    # 再次查询已无待办
+    assert len(db.get_pending_wechat_review_notifications()) == 0
+
+    # 4. 验证 claim_specific_wechat_review_notification 单任务原子抢占
+    nid_spec = db.enqueue_wechat_review_notification(
+        prefix=str(tmp_path / "yid_rev_spec"),
+        title="Specific Review Title",
+    )
+    assert db.claim_specific_wechat_review_notification(nid_spec) is True
+    # 重复抢占失败（防并发冲突）
+    assert db.claim_specific_wechat_review_notification(nid_spec) is False
+    db.record_wechat_review_notification_status(nid_spec, "ACCEPTED")
+
+    # 5. 模拟卡死在 PROCESSING 的任务并超时回收
+    nid_stale = db.enqueue_wechat_review_notification(
+        prefix=str(tmp_path / "yid_rev_2"),
+        title="Stale Title",
+    )
+    db.claim_pending_wechat_review_notifications(limit=5)
+
+    # 手动回拨 last_attempt_at 到 20 分钟前
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE wechat_review_notifications SET last_attempt_at = datetime('now', '-20 minutes') WHERE id = ?",
+            (nid_stale,),
+        )
+
+    recovered = db.recover_stale_wechat_review_notifications(stale_minutes=10)
+    assert recovered == 1
+
+    # 回收后状态重置为 PENDING
+    pending = db.get_pending_wechat_review_notifications()
+    assert len(pending) == 1
+    assert pending[0]["id"] == nid_stale
+
+    # 6. 测试 PipelineManager.drain_pending_review_notifications 补偿发送
+    manager = PipelineManager(str(tmp_path / "pipeline.db"))
+    manager._OUT_DIR = tmp_path
+    drain_sent = []
+
+    def fake_sync_send(prefix, title):
+        drain_sent.append((prefix, title))
+        return True
+
+    manager._send_wechat_submission_review_material_sync = fake_sync_send
+    drained = manager.drain_pending_review_notifications(limit=5)
+    assert drained == 1
+    assert len(drain_sent) == 1
+    assert drain_sent[0][1] == "Stale Title"
+
+    # 排水后待办再次清空
+    assert len(db.get_pending_wechat_review_notifications()) == 0
+

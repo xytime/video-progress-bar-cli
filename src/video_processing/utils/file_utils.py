@@ -2,18 +2,20 @@
 
 # Modification History
 | Version | Date       | Author          | Description                                                        |
-|---------|------------|-----------------|-------------------------------------------------------------------|
-| 1.5.0 | 2026-09-23 | Codex | 校验音视频轨道；降级下载保留完整格式流及可续传片段。 |
+|---------|------------|-------------|-------------------------------------------------------------------|
+| 1.6.1   | 2026-09-23 | Antigravity | 修复 find_downloaded_video 中小于 min_size 的无效文件在 quarantine_invalid=True 时未被隔离的缺陷 |
+| 1.6.0   | 2026-09-23 | Antigravity | 下沉统一媒体验真 verify_downloaded_media；find_downloaded_video 统一支持音视频双轨验真与损坏隔离 |
+| 1.5.0   | 2026-09-23 | Codex           | 校验音视频轨道；降级下载保留完整格式流及可续传片段。 |
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | find_downloaded_video 单一真相源（bot 与管线共用）                  |
 | 1.1.0   | 2026-06-22 | Claude_Opus_4.8 | 新增 read_subtitle_text（.ass 纯文本，管线字幕审查与复核 UI 共用）   |
 | 1.2.0   | 2026-06-22 | Claude_Opus_4.8 | [Review Fix] read_subtitle_text 精确匹配切片，排除 {yid}_s1 误配子切片/_s11 |
-| 1.3.0   | 2026-07-31 | Codex | 新增 WebVTT 纯文本读取，供下载前源字幕安全预检复用 |
-| 1.4.0   | 2026-09-23 | Antigravity | 新增 clean_partial_downloads 单一真相源，自动清理分片/临时文件及损坏小视频 |
+| 1.3.0   | 2026-07-31 | Codex           | 新增 WebVTT 纯文本读取，供下载前源字幕安全预检复用 |
+| 1.4.0   | 2026-09-23 | Antigravity     | 新增 clean_partial_downloads 单一真相源，自动清理分片/临时文件及损坏小视频 |
 """
 import html
+import json
 import re
 import shutil
-import json
 import subprocess
 import time
 from functools import lru_cache
@@ -124,27 +126,54 @@ def preserve_download_fragments(output_dir: Path, youtube_id: str) -> None:
             path.rename(path.with_name(f"{path.name}.invalid-{time.time_ns()}"))
 
 
+def verify_downloaded_media(path: Path | str, min_size: int = 50_000) -> bool:
+    """统一的媒体验真契约（单一真相源）：
+    1. 必须是实际存在的文件；
+    2. 文件扩展名必须在 :data:`VIDEO_CONTAINER_SUFFIXES` 白名单内；
+    3. 文件大小必须 > min_size（默认 50,000 字节，过滤 HTML 错误页/占位碎片）；
+    4. 必须通过 ffprobe 验证同时包含有效非空的 video 和 audio 轨道（杜绝全零/损坏文件/无音轨分片）。
+    """
+    try:
+        p = Path(path)
+        if not p.is_file():
+            return False
+        if p.suffix.lower() not in VIDEO_CONTAINER_SUFFIXES:
+            return False
+        if p.stat().st_size <= min_size:
+            return False
+        streams = media_streams(p)
+        return {"video", "audio"}.issubset(streams)
+    except Exception:
+        return False
+
+
 def find_downloaded_video(
     output_dir: Path,
     yid: str,
     archive_dir: Optional[Path] = None,
     min_size: int = 50_000,
+    *,
+    verify_media: bool = False,
+    quarantine_invalid: bool = False,
 ) -> Optional[str]:
     """定位某 youtube_id 已下载的【源视频主文件】。
 
     选择规则（防止把 `.ass` 字幕 / `{yid}.f398.mp4` 无音轨 DASH 分片误当源视频）：
     - 扩展名必须在 :data:`VIDEO_CONTAINER_SUFFIXES` 白名单内；
     - 文件名主干 ``stem`` 必须严格等于 ``yid``（排除 ``{yid}.f398`` / ``{yid}_vertical`` 等衍生件）；
-    - 体积 > ``min_size``（默认 50KB，过滤占位/碎片）。
-
-    查找顺序：先热目录 ``output_dir``，未命中再查冷归档 ``archive_dir``。
-    结果按文件名排序后取首个，保证选择**确定性**（旧实现依赖 glob 任意顺序）。
+    - 体积 > ``min_size``（默认 50KB，过滤占位/碎片）；
+    - 若 verify_media=True，必须通过 verify_downloaded_media 严格校验音视频轨道完整性；
+      若校验未通过且 quarantine_invalid=True，则对已损坏文件实施安全隔离；
+    - 查找顺序：先热目录 ``output_dir``，未命中再查冷归档 ``archive_dir``。
+    - 结果按文件名排序后取首个，保证选择确定性。
 
     Args:
         output_dir: 热目录（yt-dlp 刚下载、尚未归档）。
         yid: YouTube 视频 ID。
         archive_dir: 冷归档目录（如 ``output/original_video/``），可选。
         min_size: 有效视频的最小字节数。
+        verify_media: 是否调用 verify_downloaded_media 进行完整音视频轨道验真。
+        quarantine_invalid: 若验真失败，是否重命名隔离损坏文件。
 
     Returns:
         命中文件的绝对路径字符串；未找到返回 ``None``。
@@ -163,9 +192,22 @@ def find_downloaded_video(
                 continue
             try:
                 if f.stat().st_size <= min_size:
+                    if quarantine_invalid:
+                        try:
+                            f.rename(f.with_name(f"{f.name}.invalid-{time.time_ns()}"))
+                        except OSError:
+                            pass
                     continue
             except OSError:
                 continue
+            if verify_media:
+                if not verify_downloaded_media(f, min_size=min_size):
+                    if quarantine_invalid:
+                        try:
+                            f.rename(f.with_name(f"{f.name}.invalid-{time.time_ns()}"))
+                        except OSError:
+                            pass
+                    continue
             out.append(f)
         return sorted(out)
 
