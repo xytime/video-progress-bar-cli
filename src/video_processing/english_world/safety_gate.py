@@ -20,6 +20,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import re
+import unicodedata
 from typing import Any, Mapping
 
 from video_processing.censor_engine import (
@@ -55,11 +56,12 @@ def _result_payload(result: CensorResult) -> dict[str, Any]:
     return asdict(result)
 
 
-def _source_policy_result(en_text: str) -> dict[str, Any]:
+def _source_policy_result(en_text: str, zh_text: str = "") -> dict[str, Any]:
     """复用候选研究的硬排除词，作为成片前不可绕过的第二道来源门。"""
-    normalized = en_text.casefold()
+    normalized = " ".join(unicodedata.normalize("NFKC", en_text + "\n" + zh_text).casefold().split())
     matched = next((term for term in sorted(HARD_BLOCKED_TERMS)
-                    if re.search(rf"\b{re.escape(term)}\b", normalized)), None)
+                    if re.search(re.escape(term) if any("\u4e00" <= c <= "\u9fff" for c in term)
+                                 else rf"\b{re.escape(term)}\b", normalized)), None)
     return {
         "hit": matched is not None,
         "level": "SOURCE_POLICY" if matched is not None else None,
@@ -67,7 +69,7 @@ def _source_policy_result(en_text: str) -> dict[str, Any]:
         "score": 0,
         "action": "SOURCE_REJECT" if matched is not None else None,
         "matched": matched,
-        "channel": "en" if matched is not None else None,
+        "channel": ("zh" if any("\u4e00" <= c <= "\u9fff" for c in matched) else "en") if matched else None,
     }
 
 
@@ -181,7 +183,7 @@ def evaluate(
         for document in documents:
             censorship = check_text(document.zh_text, document.en_text)
             channel_policy = check_channel_policy(document.zh_text, document.en_text)
-            source_policy = _source_policy_result(document.en_text)
+            source_policy = _source_policy_result(document.en_text, document.zh_text)
             audit_matches = scan_all_matches(document.zh_text, document.en_text)
             receipt["checks"].append({
                 "document": document.name,

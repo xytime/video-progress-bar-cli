@@ -184,7 +184,8 @@ class StudyCardRenderer:
             if frozen_plan:
                 from .display_plan import layout
                 from .language_qa import digest
-                _, _, verified_steps, verified_screens = layout(render_content, self.template, work_dir)
+                _, _, verified_steps, verified_screens = layout(
+                    render_content, self.template, work_dir, quality_policy=frozen_plan.get("quality_policy"))
                 if digest(verified_screens) != digest(frozen_plan["screens"]):
                     raise ValueError("渲染布局偏离已审校展示计划")
                 by_id = {v.item_id: v for v in render_content.vocabulary}

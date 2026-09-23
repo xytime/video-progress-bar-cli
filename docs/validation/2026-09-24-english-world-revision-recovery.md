@@ -67,3 +67,24 @@
 - 隔离发布回归测试 96 passed，证据 `/private/tmp/video-pytest-gc2_tl2z`。
 - 增加真实 Chromium 的普通 DOM、Shadow DOM、提交前漂移、不可见与重复控件验证；
   同时回归原创声明与发布账本，证据 `/private/tmp/video-pytest-of43f63x`。
+# 追加：用户批准的质量提示策略（2026-09-24）
+
+身份：Codex。用户明确要求除敏感内容审核外放宽限制。本轮新时间线采用
+`english-world-quality-advisory-v1`：保留语言审校的原始 FAIL、严重度和建议，
+以独立 `review_state` / `quality_warnings` 记录，不再因语言问题阻止制作、耗用修订。
+每屏词卡下限为零，超密自动删减；基础词有语境价值即可选用。
+旧时间线、已受理视频及其历史审校文件保持原样。
+
+安全回归发现原规则漏检 Ku Klux Klan，已补上英文全名、KKK、中文三K党，
+含大小写、连续空白和全角字符归一化；候选、成片及投稿前独立安全门继续硬拦截。
+这是补漏，不降低既有敏感内容限制。
+
+验证：`/private/tmp/video-pytest-5jghfjzt/pytest.log`，240 passed，包含真实多屏
+零词卡布局、增量文案、严格旧策略、原始警告防篡改、成片文件绑定及安全回归。
+本次未进行新的平台投稿。
+
+对今晨原始失败结果做只读离线回放：旧策略 FAIL，新质量判定 PASS，三条原始
+发音问题完整保留；原始报告 SHA256
+`fb1bd9afd0ce449e311c0aca3660dd7a60a56e58ea9c88df240fe13be48ee55c`
+前后不变。回放回执：`/private/tmp/english-world-quality-replay-20260924.json`。
+这是新策略判定验证，不是重新审校、重写历史结果或平台发布证明。

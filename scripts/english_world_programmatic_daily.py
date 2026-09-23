@@ -3,7 +3,7 @@
 
 本入口不启动 Codex，也不把工作流交给可委派的代理。候选检索、媒体/字幕
 取得、ASR 来源证据、渲染和所有交付门禁均由宿主程序执行；AGY 仅在无工具、
-JSON Schema 约束的一次调用中补全中文段译、标题和 3--5 个学习点，并在既有
+JSON Schema 约束的一次调用中补全中文段译、标题和适量学习点，并在既有
 语言/视觉审校步骤中独立复核。任一外部步骤异常都会留下失败请求，绝不投稿。
 
 # Modification History
@@ -50,6 +50,7 @@ from cover.english_world import build_english_world_cover_payload
 from video_processing.english_world.research import _rank_candidates, _youtube_search
 from video_processing.study_cards.caption_evidence import parse_json3
 from video_processing.study_cards.language_qa import VERSION, atomic_json, read_json
+from video_processing.study_cards.quality_policy import ADVISORY_POLICY
 from video_processing.utils.agy_provider import AgyProviderError, run_agy_structured
 
 
@@ -260,6 +261,7 @@ def _initial_timeline(candidate: Mapping[str, Any], *, source: Path, caption: Pa
         _require_caption_text_quality(parsed)
     return {
         "language_contract": VERSION,
+        "quality_policy": ADVISORY_POLICY,
         "content_type": "ENGLISH_WORLD_SHORT",
         "headline_zh": "来源预检中",
         "headline_en": "Source preflight",
@@ -468,18 +470,19 @@ def _paragraph_word_ranges(words: list[dict[str, Any]], *, maximum: int = 34) ->
 
 
 def _learning_point_bounds(paragraph_count: int) -> tuple[int, int]:
-    """语言契约按屏计数：普通屏 3--5，末屏可为 0--3。"""
+    """学习点可少选或不选，保留数量上限避免遮挡正文。"""
     ordinary = max(0, paragraph_count - 1)
-    return (3 if paragraph_count == 1 else ordinary * 3, 5 if paragraph_count == 1 else ordinary * 5 + 3)
+    return (0, 5 if paragraph_count == 1 else ordinary * 5 + 3)
 
 
 def _draft_schema(paragraph_count: int, word_count: int, *, allowed_indexes=None) -> dict[str, Any]:
     point_min, point_max = _learning_point_bounds(paragraph_count)
     index_schema = {"type": "integer", "minimum": 0, "maximum": word_count - 1}
     if allowed_indexes is not None:
-        if not allowed_indexes:
-            raise ProgrammaticDailyError("词典没有可用的学习点")
-        index_schema["enum"] = sorted(set(allowed_indexes))
+        if allowed_indexes:
+            index_schema["enum"] = sorted(set(allowed_indexes))
+        else:
+            point_max = 0
     return {
         "type": "object", "additionalProperties": False,
         "required": ["headline_zh", "headline_en", "translations", "learning_points"],
@@ -510,7 +513,7 @@ def _draft_prompt(words: list[dict[str, Any]], ranges: list[tuple[int, int]], *,
 提供 dictionary_word_options 时仅从其中选择学习点；音标由离线词典绑定，须核对语境词性，不能假设单个词典读音适合所有词性。
 中文标题：须紧凑且在 14 个字符以内，忠实概括并完整保留来源核心主体专有名词与核心数字/货币单位（例如“加拿大Cohere估值50亿美元”）；
 逐段忠实中文翻译；
-按 paragraph 分配不重叠、严格适合 A2-B1 学习难度的核心词汇：每个非末段 3--5 个，末段 0--3 个；优先挑选具有学习价值的新闻核心实词（如名词、动词、形容词等），严禁挑选极度基础简单的初级词（如 big, good, see, make, new 等 A1 级词）及其简单屈折词（如 bigger, older 等）；word_index 必须严格指向给定 words 中的一个词；词义须为单一简明中文语境义，保留否定、数字、比较和说话者归属。\nDATA:\n""" + json.dumps(payload, ensure_ascii=False)
+按 paragraph 分配不重叠、严格适合 A2-B1 学习难度的核心词汇：每个非末段 0--5 个，末段 0--3 个；通常选 1--3 个有帮助的词即可，词典无可靠选项时可不选，不为数量凑词；优先挑选具有学习价值的新闻核心实词（如名词、动词、形容词等），基础词若有语境价值也可选择；word_index 必须严格指向给定 words 中的一个词；词义须为单一简明中文语境义，保留否定、数字、比较和说话者归属。\nDATA:\n""" + json.dumps(payload, ensure_ascii=False)
 
 
 def _apply_draft(timeline: dict[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
@@ -619,7 +622,7 @@ def _revision_draft_prompt(
         "不要使用工具，不要改写英文，不要编造新闻事实。只返回 Schema 所要求的 JSON：\n"
         "中文标题：须紧凑且在 14 个字符以内，忠实概括并完整保留来源核心主体专有名词与核心数字/货币单位；\n"
         "逐段忠实中文翻译：针对反馈中指出的翻译不准、语义偏移或漏译进行纠正；\n"
-        "按 paragraph 分配不重叠、严格适合 A2-B1 学习难度的核心词汇：每个非末段 3--5 个，末段 0--3 个；"
+        "按 paragraph 分配不重叠、严格适合 A2-B1 学习难度的核心词汇：每个非末段 0--5 个，末段 0--3 个；通常选 1--3 个有帮助的词即可，词典无可靠选项时可不选，不为数量凑词；"
         "针对反馈中指出的词汇选取或释义问题进行替换或修正；word_index 必须严格指向给定 words 中的一个词；词义须为单一简明中文语境义。\n"
         "DATA:\n" + json.dumps(payload, ensure_ascii=False)
     )
@@ -709,7 +712,7 @@ def _apply_revision_draft(
 
 
 def _fit_learning_point_density(timeline: dict[str, Any]) -> dict[str, Any]:
-    """在冻结前试算排版，修剪超密视口内的学习点以符合普通屏 3-5、末屏 0-3 契约。"""
+    """冻结前修剪超密视口；新策略不为凑数量补词或阻断整片。"""
     import tempfile
     from video_processing.study_cards.display_plan import layout, reviewed_content
     from video_processing.study_cards.template_a import RecordUnderlineTemplate
@@ -718,7 +721,7 @@ def _fit_learning_point_density(timeline: dict[str, Any]) -> dict[str, Any]:
     template = RecordUnderlineTemplate()
     template.language_reviewed = True
 
-    for _ in range(10):
+    for _ in range(len(points) + 1):
         test_payload = dict(timeline, learning_points=points, vocabulary_candidates=points)
         try:
             content = reviewed_content(test_payload)
@@ -726,14 +729,16 @@ def _fit_learning_point_density(timeline: dict[str, Any]) -> dict[str, Any]:
             break
         with tempfile.TemporaryDirectory(prefix="density_fit_") as tmp_dir:
             try:
-                layout(content, template, Path(tmp_dir), enforce_density=True)
+                layout(content, template, Path(tmp_dir), enforce_density=True,
+                       quality_policy=timeline.get("quality_policy"))
                 timeline["learning_points"] = points
                 timeline["vocabulary_candidates"] = points
                 return timeline
             except ValueError as exc:
                 if "个学习点，要求" not in str(exc):
                     break
-                _, _, steps, screens = layout(content, template, Path(tmp_dir), enforce_density=False)
+                _, _, steps, screens = layout(content, template, Path(tmp_dir), enforce_density=False,
+                                             quality_policy=timeline.get("quality_policy"))
                 pruned = False
                 for s in screens:
                     idx = s["index"]

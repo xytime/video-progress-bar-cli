@@ -9,6 +9,7 @@
 | 1.0.3 | 2026-09-10 | Codex | 支持带权威证据的 P1 误报裁决，并保留原始独立审校结果。 |
 """
 from pathlib import Path
+from .quality_policy import advisory_quality, quality_receipt
 
 from .language_protocol import (
     CHECKS, VERSION, MODEL, digest, file_digest, read_json, atomic_json, review_schema,
@@ -49,6 +50,10 @@ def validate_language_qa(timeline, *, manifest=None, required=True):
         raise ValueError("语言审校文件绑定失效")
     evidence = read_json(root / "qa/source_evidence.json")
     editorial = read_json(root / "editorial_changes.json")
+    if payload.get("quality_policy") != plan.get("quality_policy"):
+        raise ValueError("质量策略与冻结时间线不一致")
+    if advisory_quality(plan) and any(report.get(k) != v for k, v in quality_receipt(effective_result, plan).items()):
+        raise ValueError("质量提示回执与原始审校不一致")
     if report.get("input_key") != cache_key(
             review_input(plan, evidence, editorial, projection=report.get("input_projection", "legacy")),
             report["model"], report.get("effort")):

@@ -104,9 +104,13 @@ def test_task_identity_separates_source_windows_without_path_entropy():
     assert task_identity(base) == task_identity(dict(base))
 
 
-def test_incremental_publication_shares_budget_and_binds_approved_body(tmp_path, monkeypatch):
+@pytest.mark.parametrize("advisory", [False, True])
+def test_incremental_publication_shares_budget_and_binds_approved_body(tmp_path, monkeypatch, advisory):
     from video_processing.study_cards import publication_qa as module
     timeline, p = setup_review(tmp_path)
+    if advisory:
+        from video_processing.study_cards.quality_policy import ADVISORY_POLICY
+        p["quality_policy"] = ADVISORY_POLICY
     p["content"].update(headline_en="Reading", headline_zh="阅读")
     atomic_json(tmp_path / "display_plan.json", p)
     monkeypatch.setattr(module, "validate_language_qa", lambda _: {"input_key": "base-pass"})
@@ -118,10 +122,15 @@ def test_incremental_publication_shares_budget_and_binds_approved_body(tmp_path,
     calls = []
     def caller(*a, **k):
         calls.append(1)
-        return good(projected)
+        result = good(projected)
+        if advisory:
+            result["findings"][0].update(status="FAIL", severity="P1")
+        return result
     kw = dict(cache_dir=tmp_path / "cache", task_dir=tmp_path / "task", model="m", caller=caller)
     report = module.review_publication(timeline, publication, **kw)
     assert report["state"] == "PASS" and report["attempts"] == 3
+    if advisory:
+        assert report["review_state"] == "FAIL" and report["quality_warnings"]
     assert module.review_publication(timeline, publication, **kw)["cache_hit"]
     assert len(calls) == 1
     assert module.approved_publication(timeline)[0]["title"] == publication["title"]
@@ -268,7 +277,8 @@ def test_one_retry_is_shared_across_revision_and_restart(tmp_path):
 
 
 @pytest.mark.parametrize("changed", ["timeline.json", "display_plan.json", "qa/source_evidence.json", "editorial_changes.json", "source.mp4", "caption.json3"])
-def test_gate_rejects_any_changed_bound_artifact(tmp_path, changed):
+@pytest.mark.parametrize("advisory", [False, True])
+def test_gate_rejects_any_changed_bound_artifact(tmp_path, changed, advisory):
     from video_processing.study_cards.language_qa import validate_language_qa
     timeline, p = setup_review(tmp_path)
     (tmp_path / "source.mp4").write_bytes(b"media fixture")
@@ -276,12 +286,26 @@ def test_gate_rejects_any_changed_bound_artifact(tmp_path, changed):
     atomic_json(timeline, {"language_contract": VERSION, "source_provenance": {
         "source_video": "source.mp4", "caption_artifact": "caption.json3",
         "source_start_seconds": 0, "source_end_seconds": 1}})
+    if advisory:
+        from video_processing.study_cards.quality_policy import ADVISORY_POLICY
+        p["quality_policy"] = ADVISORY_POLICY
+        atomic_json(timeline, {**read_json(timeline), "quality_policy": ADVISORY_POLICY})
     p["timeline_sha256"] = file_digest(timeline)
     atomic_json(tmp_path / "display_plan.json", p)
     atomic_json(tmp_path / "qa/source_evidence.json", {"source_sha256": file_digest(tmp_path / "source.mp4"),
         "caption_sha256": file_digest(tmp_path / "caption.json3"), "source_start": 0, "source_end": 1})
-    review(timeline, cache_dir=tmp_path / "cache", task_dir=tmp_path / "task", model="m", caller=lambda *a, **k: good(p))
+    result = good(p)
+    if advisory:
+        result["findings"][0].update(status="FAIL", severity="P1")
+    review(timeline, cache_dir=tmp_path / "cache", task_dir=tmp_path / "task", model="m", caller=lambda *a, **k: result)
     assert validate_language_qa(timeline)["state"] == "PASS"
+    if advisory:
+        report_path = tmp_path / "qa/language_qa.json"
+        report = read_json(report_path)
+        atomic_json(report_path, {**report, "quality_warnings": []})
+        with pytest.raises(ValueError, match="质量提示"):
+            validate_language_qa(timeline)
+        atomic_json(report_path, report)
     target = tmp_path / changed
     if changed.endswith(".mp4"):
         target.write_bytes(b"new media")
@@ -426,6 +450,58 @@ def test_fail_closed(status, severity):
     p = plan(); result = good(p)
     result["findings"][0].update(status=status, severity=severity)
     assert evaluate(result, p) == "FAIL"
+
+
+@pytest.mark.parametrize("status,severity", [("FAIL", "P0"), ("FAIL", "P1"), ("UNCERTAIN", "P2")])
+def test_new_quality_policy_preserves_findings_without_stopping_production(status, severity):
+    from video_processing.study_cards.quality_policy import ADVISORY_POLICY, quality_receipt
+    p = plan()
+    result = good(p)
+    result["findings"][0].update(status=status, severity=severity)
+    strict_key = cache_key(review_input(p, {}, {}))
+    p["quality_policy"] = ADVISORY_POLICY
+    assert evaluate(result, p) == "PASS"
+    assert quality_receipt(result, p)["review_state"] == "FAIL"
+    assert quality_receipt(result, p)["quality_warnings"] == [result["findings"][0]]
+    assert strict_key != cache_key(review_input(p, {}, {}))
+    result["findings"].pop()
+    with pytest.raises(ValueError, match="覆盖"):
+        evaluate(result, p)
+
+
+def test_advisory_review_cache_does_not_exhaust_revision_budget(tmp_path):
+    from video_processing.study_cards.quality_policy import ADVISORY_POLICY
+    from video_processing.study_cards.language_review_service import content_failure_keys
+    timeline, p = setup_review(tmp_path)
+    p["quality_policy"] = ADVISORY_POLICY
+    atomic_json(tmp_path / "display_plan.json", p)
+    calls = []
+    def caller(*args, **kwargs):
+        calls.append(1)
+        result = good(p)
+        result["findings"][0].update(status="FAIL", severity="P1")
+        return result
+    kwargs = dict(cache_dir=tmp_path / "cache", task_dir=tmp_path / "task", caller=caller, model="model")
+    first = review(timeline, **kwargs)
+    second = review(timeline, **kwargs)
+    assert first["state"] == second["state"] == "PASS"
+    assert first["review_state"] == "FAIL" and first["quality_warnings"]
+    assert len(calls) == 1 and second["cache_hit"]
+    ledger = read_json(tmp_path / "task/language_attempts.json")
+    assert ledger["attempts"] == 1 and not ledger.get("content_terminal")
+    assert content_failure_keys(ledger, tmp_path / "cache") == []
+
+
+@pytest.mark.parametrize("en,zh", [("Ku Klux Klan", ""), ("the KKK", ""), ("", "涉及三Ｋ党的内容")])
+def test_quality_policy_never_overrides_sensitive_content_gate(en, zh):
+    from video_processing.english_world.safety_gate import SafetyDocument, evaluate as safety_evaluate, require_pass
+    from video_processing.study_cards.quality_policy import ADVISORY_POLICY
+    p = {**plan(), "quality_policy": ADVISORY_POLICY}
+    assert evaluate(good(p), p) == "PASS"
+    receipt = safety_evaluate("test", [SafetyDocument(name="source", en_text=en, zh_text=zh)])
+    assert receipt["state"] == "BLOCKED"
+    with pytest.raises(ValueError):
+        require_pass(receipt)
 
 
 def test_missing_duplicate_and_blank_evidence_block():

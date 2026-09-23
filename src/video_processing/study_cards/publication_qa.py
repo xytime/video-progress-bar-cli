@@ -16,6 +16,7 @@ from .language_qa import (VERSION, atomic_json, cache_key, digest, evaluate, fil
                           read_json, review_input, review_schema, validate_language_qa)
 from .language_review_service import locked, check_content_budget, content_failure_keys
 from ..utils.agy_provider import AgyProviderError, run_agy_structured
+from .quality_policy import advisory_quality, quality_receipt
 
 PROMPT = """你是独立英语教学编辑。正文已通过独立审校，但新增投稿字段尚未通过。
 只审 publication_text：中文是否忠实、数字/专名/范围是否一致、是否与 approved_context 冲突。
@@ -48,6 +49,8 @@ def inputs_for(timeline, publication):
             k: plan["content"][k] for k in ("headline_en", "headline_zh", "paragraphs", "vocabulary")}}
     evidence = {"base_input_key": base["input_key"], "base_plan_sha256": digest(plan),
                 "base_timeline_sha256": file_digest(timeline)}
+    if advisory_quality(plan):
+        projected["quality_policy"] = plan["quality_policy"]
     return review_input(projected, evidence, {}), projected, evidence
 
 
@@ -84,6 +87,7 @@ def review_publication(timeline, publication, *, cache_dir, task_dir, model, com
                         model=model, command=command, timeout_sec=timeout, effort=effort, include_usage=True)
                     saved = {"result": response.get("structured_result", response), "usage": response.get("usage")}
                     evaluate(saved["result"], plan)
+                    saved.update(quality_receipt(saved["result"], plan))
                     atomic_json(cache, saved)
                     ledger["inflight"] = False
                     break
@@ -116,6 +120,7 @@ def review_publication(timeline, publication, *, cache_dir, task_dir, model, com
             "result": saved["result"], "attempts": ledger["attempts"], "cache_hit": hit,
             "usage": saved.get("usage"), "elapsed_seconds": round(time.monotonic() - started, 3)}
         path = timeline.parent / "qa/publication_language_qa.json"
+        report.update(quality_receipt(saved["result"], plan))
         previous = read_json(path) if path.exists() else {}
         if previous.get("input_key") != key or previous.get("state") != state:
             atomic_json(path, report)

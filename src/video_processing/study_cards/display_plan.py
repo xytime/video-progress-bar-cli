@@ -12,6 +12,7 @@ import tempfile
 
 from .language_protocol import VERSION, digest
 from .learning_dictionary import _dictionary_key
+from .quality_policy import advisory_quality
 from .models import StudyCardContent, VocabularyItem
 from .template_a import (RecordUnderlineTemplate, TEXT_TOP, READING_VIEWPORT_BOTTOM,
                           _vocabulary_occurrence_y_positions, _normalise_phrase,
@@ -44,7 +45,7 @@ def reviewed_content(payload):
             if f"0:{raw['phonetic_word']}" not in raw.get("dictionary_senses", {}).get("exchange", "").split("/"):
                 raise ValueError("词元音标缺少词典词形依据")
         meaning = raw["context_meaning_zh"]
-        if any(x in meaning for x in ("…", "...", ";", "；")):
+        if not advisory_quality(payload) and any(x in meaning for x in ("…", "...", ";", "；")):
             raise ValueError("学习点需单一完整语境义，不可堆词典义或省略")
         item = VocabularyItem(word=word, meaning_zh=meaning, phonetic=raw["phonetic"],
                               part_of_speech=raw["pos"], level=raw.get("level", ""),
@@ -61,7 +62,7 @@ def reviewed_content(payload):
     return replace(content, vocabulary=tuple(items), vocabulary_candidates=tuple(items))
 
 
-def layout(content, template, directory, *, enforce_density=True):
+def layout(content, template, directory, *, enforce_density=True, quality_policy=None):
     # 外层在调用时导入，避免 renderer -> display_plan -> renderer 模块循环。
     from .renderer import StudyCardRenderer
     assets = template.render_static(content, directory)
@@ -76,6 +77,8 @@ def layout(content, template, directory, *, enforce_density=True):
         visible = [v for v in content.vocabulary if any(TEXT_TOP <= y - offset <= READING_VIEWPORT_BOTTOM - 80
                     for y in _vocabulary_occurrence_y_positions(v, assets.word_boxes))]
         lower, upper = (0, 3) if i == len(steps) else (3, 5)
+        if advisory_quality({"quality_policy": quality_policy}):
+            lower = 0
         if enforce_density and not lower <= len(visible) <= upper:
             raise ValueError(f"第 {i+1} 屏有 {len(visible)} 个学习点，要求 {lower}–{upper}；请重新分屏一次")
         screens.append({"index": i, "offset": offset, "micro_notes": [v.item_id for v in visible],
@@ -101,8 +104,9 @@ def build_plan(payload, timeline_sha256, template=None):
     template = template or RecordUnderlineTemplate()
     template.language_reviewed = True
     with tempfile.TemporaryDirectory(prefix="english_display_plan_") as directory:
-        _, _, steps, screens = layout(content, template, Path(directory))
-    return {"version": VERSION, "layout_version": "template-a-language-v1.1",
+        _, _, steps, screens = layout(content, template, Path(directory), quality_policy=payload.get("quality_policy"))
+    policy = {"quality_policy": payload["quality_policy"]} if advisory_quality(payload) else {}
+    return {**policy, "version": VERSION, "layout_version": "template-a-language-v1.1",
             "presentation_text": ["世界英语新闻时事深度阅读", "A2–B1 家庭精读 / 原声 · 语境 · 跟读",
                                   "影子跟读", "紧跟原声 · 逐词训练", "核心词汇"],
             "timeline_sha256": timeline_sha256, "content": asdict(content),

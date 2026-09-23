@@ -8,6 +8,7 @@
 import hashlib
 import json
 from pathlib import Path
+from .quality_policy import advisory_quality, quality_findings
 
 CHECKS = ("TRANSCRIPT_ACCURACY", "TRANSLATION_ACCURACY", "VOCAB_POS",
           "VOCAB_CONTEXT_MEANING", "PROPER_NOUNS_NUMBERS", "SEMANTIC_CONSISTENCY",
@@ -115,9 +116,10 @@ def evaluate(result, plan, *, evidence=None, editorial=None):
     for x in result["findings"]:
         if not x["evidence"].strip():
             raise ValueError("语言审校缺少证据")
-        if x["status"] != "PASS" or x["severity"] in {"P0", "P1"}:
-            return "FAIL"
-    return "PASS"
+    # 只改变完整语言报告的生产判定；敏感内容仍须经过独立安全门。
+    if advisory_quality(plan):
+        return "PASS"
+    return "FAIL" if quality_findings(result) else "PASS"
 
 
 def apply_adjudications(result, adjudications):

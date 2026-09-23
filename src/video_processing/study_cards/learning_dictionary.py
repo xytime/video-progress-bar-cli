@@ -13,6 +13,7 @@
 import csv
 import re
 from .language_protocol import file_digest
+from .quality_policy import advisory_quality
 
 
 def normalize_phonetic(raw: str) -> tuple[str, list[str]]:
@@ -173,6 +174,7 @@ def attach_evidence(payload, directory):
                      dictionary_source="ecdict.csv", dictionary_senses={"definition": row.get("definition", ""),
                      "translation": row.get("translation", ""), "exchange": row.get("exchange", "")},
                      level=level.recommended_level, level_source=level.source)
-    validate_context_meaning_separation(points, payload.get("words", []))
+    if not advisory_quality(payload):
+        validate_context_meaning_separation(points, payload.get("words", []))
     payload["dictionary_sha256"] = file_digest(path)
     return payload

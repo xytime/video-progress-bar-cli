@@ -49,6 +49,7 @@ HARD_BLOCKED_TERMS = frozenset({
     "war", "military", "missile", "battle", "politic", "election", "president",
     "crime", "murder", "shooting", "terror", "adult", "sex", "drug", "weapon",
     "trump", "iran", "tariff", "sanction", "border",
+    "ku klux klan", "kkk", "三k党",
 })
 # 兼容既有研究服务私有名称；运行时安全门只使用公开常量。
 _HARD_BLOCKED_TERMS = HARD_BLOCKED_TERMS

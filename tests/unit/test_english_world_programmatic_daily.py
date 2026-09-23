@@ -113,10 +113,47 @@ def test_draft_schema_uses_per_screen_learning_point_bounds():
     schema = daily._draft_schema(paragraph_count=2, word_count=10)
 
     assert schema["properties"]["headline_zh"]["maxLength"] == 14
-    assert schema["properties"]["learning_points"]["minItems"] == 3
+    assert schema["properties"]["learning_points"]["minItems"] == 0
     assert schema["properties"]["learning_points"]["maxItems"] == 8
     assert schema["properties"]["translations"]["minItems"] == 2
-    assert daily._learning_point_bounds(3) == (6, 13)
+    assert daily._learning_point_bounds(3) == (0, 13)
+
+
+def test_no_dictionary_options_produces_reading_without_forced_word_cards():
+    import jsonschema
+    schema = daily._draft_schema(paragraph_count=1, word_count=10, allowed_indexes=[])
+    jsonschema.Draft202012Validator.check_schema(schema)
+    assert schema["properties"]["learning_points"]["maxItems"] == 0
+    draft = _draft()
+    draft["learning_points"] = []
+    result = daily._apply_draft(_timeline(), draft)
+    assert result["learning_points"] == []
+    assert result["english_text"] and result["translation_zh"]
+
+
+def test_advisory_layout_supports_multiple_screens_without_word_cards():
+    from video_processing.study_cards.display_plan import build_plan, verify_plan
+    from video_processing.study_cards.quality_policy import ADVISORY_POLICY
+    text = "Clean energy helps families learn together and understand the changing world. " * 2
+    paragraphs = [{"english_text": text.strip(), "translation_zh": "清洁能源帮助家庭共同学习并理解不断变化的世界。"}
+                  for _ in range(4)]
+    english = " ".join(p["english_text"] for p in paragraphs)
+    payload = {"language_contract": daily.VERSION, "quality_policy": ADVISORY_POLICY,
+               "headline_zh": "清洁能源", "headline_en": "Clean energy",
+               "paragraphs": paragraphs, "english_text": english,
+               "translation_zh": "".join(p["translation_zh"] for p in paragraphs),
+               "words": [{"text": word, "start": i * .4, "end": (i + 1) * .4}
+                         for i, word in enumerate(english.split())],
+               "learning_points": [], "vocabulary_candidates": [],
+               "source_provenance": {"publisher": "Test News"}}
+    daily._freeze_publication(payload)
+    plan = build_plan(payload, "test-timeline")
+    assert len(plan["screens"]) > 1
+    assert all(not screen["micro_notes"] for screen in plan["screens"])
+    assert verify_plan(payload, plan, "test-timeline").words
+    del payload["quality_policy"]
+    with pytest.raises(ValueError, match="个学习点，要求"):
+        build_plan(payload, "test-timeline")
 
 
 def test_frozen_words_normalizes_whisper_word_key_without_losing_timing():
