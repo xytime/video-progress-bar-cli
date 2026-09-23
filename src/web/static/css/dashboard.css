@@ -1158,27 +1158,28 @@
     .ingest-time-chip { color: var(--text2); }
     .freshness-line {
       display: inline-flex; align-items: center; flex-wrap: wrap;
+      flex: 1 1 100%; width: 100%; box-sizing: border-box;
       column-gap: 7px; row-gap: 2px; vertical-align: middle;
-      padding: 3px 9px 3px 7px; border: 1px solid currentColor;
-      border-left-width: 4px; border-radius: 6px;
-      font-size: 0.76rem; font-weight: 700; line-height: 1.55;
+      padding: 5px 10px 5px 8px; border: 1px solid currentColor;
+      border-left-width: 5px; border-radius: 6px;
+      font-size: 0.78rem; font-weight: 750; line-height: 1.55;
       font-variant-numeric: tabular-nums; letter-spacing: 0.005em;
     }
     .freshness-line-separator { opacity: 0.58; }
-    .freshness-line-age { font-weight: 850; white-space: nowrap; }
+    .video-meta-row .freshness-line-age { color: inherit; font-weight: 850; white-space: nowrap; }
     .freshness-line-fresh {
-      color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent);
-      box-shadow: 0 0 9px color-mix(in srgb, var(--green) 22%, transparent);
+      color: #052e2b; background: #5eead4; border-color: #14b8a6;
+      box-shadow: 0 0 0 2px rgba(45,212,191,0.2);
     }
     .freshness-line-recent {
-      color: var(--yellow); background: color-mix(in srgb, var(--yellow) 13%, transparent);
+      color: #422006; background: #fbbf24; border-color: #f59e0b;
     }
     .freshness-line-stale {
-      color: var(--orange); background: color-mix(in srgb, var(--orange) 14%, transparent);
+      color: #431407; background: #fb923c; border-color: #f97316;
     }
     .freshness-line-very-stale {
-      color: var(--red); background: color-mix(in srgb, var(--red) 16%, transparent);
-      box-shadow: 0 0 9px color-mix(in srgb, var(--red) 20%, transparent);
+      color: #fff1f2; background: #be123c; border-color: #fb7185;
+      box-shadow: 0 0 0 2px rgba(244,63,94,0.18);
     }
     /* ── 观看数/点赞率列固定宽度 — 防止占用所有剩余空间 ── */
     .activity-table td.vt-cell,
