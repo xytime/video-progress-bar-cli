@@ -1155,6 +1155,28 @@
     .source-published-age-fresh { color: var(--green) !important; font-weight: 600; }
     .source-published-age-today { color: var(--teal)  !important; }
     .source-published-age-week  { color: var(--yellow)!important; }
+    .ingest-time-chip { color: var(--text2); }
+    .source-freshness {
+      display: inline-flex; align-items: center; gap: 4px;
+      border: 1px solid transparent; border-radius: 999px;
+      padding: 2px 9px; font-size: 0.76rem; font-weight: 750;
+      font-family: 'JetBrains Mono', monospace; white-space: nowrap;
+      font-variant-numeric: tabular-nums; letter-spacing: 0.01em;
+    }
+    .source-freshness-fresh {
+      color: #052e2b; background: #5eead4; border-color: #2dd4bf;
+      box-shadow: 0 0 10px rgba(45,212,191,0.32);
+    }
+    .source-freshness-recent {
+      color: #422006; background: #fbbf24; border-color: #f59e0b;
+    }
+    .source-freshness-stale {
+      color: #431407; background: #fb923c; border-color: #f97316;
+    }
+    .source-freshness-very-stale {
+      color: #fff1f2; background: #be123c; border-color: #fb7185;
+      box-shadow: 0 0 9px rgba(244,63,94,0.24);
+    }
     /* ── 观看数/点赞率列固定宽度 — 防止占用所有剩余空间 ── */
     .activity-table td.vt-cell,
     .activity-table th.col-views-hd {
@@ -1970,4 +1992,3 @@
       border-color: rgba(239, 68, 68, 0.4);
       color: #f87171;
     }
-

@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-09-23 | Codex | 待筛选来源发布时间补充 ET 时分、BJ 入库时间与四档相对新鲜度展示。 |
   | Date       | Author                | Description                                   |
   |------------|-----------------------|-----------------------------------------------|
   | 2026-09-23 | Codex | 待发布独立入口、就绪和等待时间、可回读占用原因。 |
@@ -1577,6 +1578,36 @@
           if (days < 7) return 'week';
           return '';
         };
+        const parseSourcePublishedInstant = (d) => {
+          const raw = String(d || '').trim();
+          // 新字段按 UTC ISO 写入；拒绝只有日期的历史 upload_date，避免伪造发布时间。
+          if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw)) return null;
+          const instant = new Date(raw);
+          return Number.isNaN(instant.getTime()) ? null : instant;
+        };
+        const formatZonedDateTime = (instant, timeZone) => {
+          const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+          }).formatToParts(instant);
+          const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+          const todayParts = new Intl.DateTimeFormat('en-CA', {
+            timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+          }).formatToParts(new Date());
+          const today = Object.fromEntries(todayParts.map(({ type, value }) => [type, value]));
+          const dateLabel = values.year === today.year && values.month === today.month && values.day === today.day
+            ? '今天' : `${values.year}-${values.month}-${values.day}`;
+          return `${dateLabel} ${values.hour}:${values.minute}`;
+        };
+        const sourceFreshness = (instant) => {
+          if (!instant) return null;
+          const hours = Math.max(0, (Date.now() - instant.getTime()) / 3600000);
+          const age = hours < 1
+            ? `${Math.max(1, Math.floor(hours * 60))}m ago`
+            : hours < 48 ? `${hours.toFixed(1)}h ago` : `${(hours / 24).toFixed(1)}d ago`;
+          const tier = hours <= 6 ? 'fresh' : hours <= 24 ? 'recent' : hours <= 48 ? 'stale' : 'very-stale';
+          return { age, tier, hours };
+        };
         // like% = likes / views
         const likeRatio = (v.like_count != null && v.view_count > 0)
           ? (v.like_count / v.view_count * 100).toFixed(1) + '%'
@@ -1622,11 +1653,22 @@
         const sourceDate = v.source_published_at || v.upload_date;
         const sourcePublishAge = fmtSourcePublishedAge(sourceDate);
         const sourcePublished = normalizeSourcePublishedDate(sourceDate) || '未知';
+        const sourceInstant = parseSourcePublishedInstant(v.source_published_at);
+        const freshness = sourceFreshness(sourceInstant);
+        const showWaitlistFreshness = currentTab === 'waitlist';
+        const sourceDateTimeLabel = showWaitlistFreshness && sourceInstant
+          ? formatZonedDateTime(sourceInstant, 'America/New_York')
+          : (sourcePublishAge || escapeHtml(sourcePublished));
+        const ingestedDateTimeLabel = showWaitlistFreshness && v.created_at
+          ? formatZonedDateTime(new Date(`${String(v.created_at).replace(' ', 'T')}Z`), 'Asia/Shanghai')
+          : '入库时间未知';
 
         // [Claude_Sonnet_4.6_Thinking_planning] metaChips: 移除 views/likeRatio（已有独立列）
         const metaChips = [
           dur       ? `<span class="meta-chip">⏱ 时长: ${dur}</span>` : '',
-          `<span class="meta-chip source-published-age-${sourcePublishedAgeCls(sourceDate)}" title="YouTube 来源发布日期（美东时间 ET）：${escapeAttr(sourcePublished)}">来源发布 (ET)：${sourcePublishAge || escapeHtml(sourcePublished)}</span>`,
+          `<span class="meta-chip source-published-age-${sourcePublishedAgeCls(sourceDate)}" title="YouTube 来源发布时间（美东时间 ET）">来源发布 (ET)：${sourceDateTimeLabel}</span>`,
+          showWaitlistFreshness ? `<span class="meta-chip ingest-time-chip" title="本地记录入库时间（北京时间 BJ）">入库时间：${escapeHtml(ingestedDateTimeLabel)}</span>` : '',
+          showWaitlistFreshness && freshness ? `<span class="source-freshness source-freshness-${freshness.tier}" title="按来源发布时间计算；超过未来时间的记录按刚发布显示">● ${freshness.age} (BJ)</span>` : '',
         ].join('');
 
         // [Unknown_Model_planning] 显示 已完成集数/全部集数 状态标签，按全部完成与否区分颜色
