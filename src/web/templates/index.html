@@ -6,6 +6,7 @@
   Modification History:
   | Date       | Author                | Description                                   |
   |------------|-----------------------|-----------------------------------------------|
+  | 2026-09-23 | Codex | 待发布独立入口、就绪和等待时间、可回读占用原因。 |
   | 2026-09-23 | Codex | 入库时间筛选双向联动并跨任务 Tab 保留，统一默认值与清空行为，隔离过期统计响应。 |
   | 2026-09-20 | Antigravity | 待筛选/待处理时效与健康治理：新增 30 天前过期素材归档、排队超期放弃(>7天)、队列状态校准及行内提权/忽略操作。 |
   | 2026-05-27 | Gemini_3.5_Flash_planning | Optimize trim segment UX: add collapsible switch, preset chips, live validation, and visual timeline progress bar. |
@@ -253,6 +254,7 @@
       <div class="tabs-header">
         <button class="tab-btn active" id="tab-waitlist" onclick="switchTab('waitlist')">待筛选</button>
         <button class="tab-btn" id="tab-queue" onclick="switchTab('queue')">待处理</button>
+        <button class="tab-btn" id="tab-ready" onclick="switchTab('ready')">待发布</button>
         <button class="tab-btn" id="tab-active" onclick="switchTab('active')">处理中</button>
         <button class="tab-btn" id="tab-wechat_deferred" onclick="switchTab('wechat_deferred')">待微信恢复</button>
         <button class="tab-btn" id="tab-review" onclick="switchTab('review')">待平台确认</button>
@@ -633,7 +635,7 @@
     img.outerHTML = '<div class="cover-placeholder">🎬</div>';
   }
 
-  const STEP_ORDER = ["PENDING","DOWNLOADING","TRANSCRIBING","COPYWRITING","PUBLISHING","PUBLISHED"];
+  const STEP_ORDER = ["PENDING","PROCESSING","DOWNLOADING","COPYWRITING","TRANSCRIBING","READY_TO_PUBLISH","PUBLISHING","UNDER_REVIEW","PUBLISHED"];
 
   function formatTrimTime(secStr) {
     if (!secStr) return '0\'00';
@@ -649,6 +651,9 @@
     PENDING: ['待处理', 'PENDING'],
     NOT_QUEUED: ['未入队', 'PENDING', '尚未加入该平台发布队列'],
     QUEUED: ['排队中', 'PENDING', '已入队，尚未开始上传'],
+    READY_TO_PUBLISH: ['待发布', 'PENDING'],
+    PROCESSING: ['加工准备中', 'COPYWRITING'],
+    PUBLISH_PRECHECK: ['发布前校验', 'PENDING'],
     DOWNLOADING: ['下载中', 'DOWNLOADING'],
     TRANSCRIBING: ['转录中', 'TRANSCRIBING'],
     COPYWRITING: ['文案生成中', 'COPYWRITING'],
@@ -688,6 +693,18 @@
       : ['PUBLISHED', 'COMPLETED'].includes(badge) ? 'st-published'
       : badge === 'PENDING' ? 'st-none' : 'st-review';
     return {label, badge, tone, description: description || label, tooltip: `${description || label}（${raw}）`};
+  }
+
+  function readyPublicationDetails(v) {
+    if (v.display_status !== 'READY_TO_PUBLISH') return '';
+    const parseUtc = text => new Date(text.includes('T') ? text : text.replace(' ', 'T') + 'Z');
+    const ready = v.publication_ready_at ? parseUtc(v.publication_ready_at) : null;
+    const minutes = ready && !isNaN(ready) ? Math.max(0, Math.floor((Date.now() - ready.getTime()) / 60000)) : null;
+    const times = [ready ? `就绪：${ready.toLocaleString('zh-CN')}` : '就绪时间待确认',
+      minutes !== null ? `已等待 ${minutes} 分钟` : '',
+      v.publication_last_attempt_at ? `最近尝试：${parseUtc(v.publication_last_attempt_at).toLocaleString('zh-CN')}` : '',
+      v.publication_next_attempt_at ? `下次重试：${parseUtc(v.publication_next_attempt_at).toLocaleString('zh-CN')}` : ''].filter(Boolean);
+    return `<div class="publication-wait-detail" style="max-width:300px;white-space:normal;margin-top:6px;font-size:12px;line-height:1.6">${escapeHtml(v.publication_target || '视频号')} · ${escapeHtml(v.publication_wait_reason || '等待领取')}<br><span style="color:var(--text-muted)">${times.map(escapeHtml).join('<br>')}</span></div>`;
   }
 
   function statusBadge(state) {
@@ -1321,6 +1338,7 @@
       if (d.tab_counts) {
         document.getElementById('tab-waitlist').textContent = `待筛选(${d.tab_counts.waitlist})`;
         document.getElementById('tab-queue').textContent = `待处理(${d.tab_counts.queue})`;
+        document.getElementById('tab-ready').textContent = `待发布(${d.tab_counts.ready || 0})`;
         document.getElementById('tab-active').textContent = `处理中(${d.tab_counts.active})`;
         document.getElementById('tab-wechat_deferred').textContent = `待微信恢复(${d.tab_counts.wechat_deferred || 0})`;
         const localAccepted = d.tab_counts.local_accepted || 0;
@@ -1352,6 +1370,7 @@
         let emptyMsg = '暂无数据';
         if (currentTab === 'waitlist') emptyMsg = '暂无待筛选记录，等待自动获取...';
         else if (currentTab === 'queue') emptyMsg = '当前没有排队中的任务';
+        else if (currentTab === 'ready') emptyMsg = '当前没有等待发布的成片';
         else if (currentTab === 'active') emptyMsg = '当前没有正在处理的任务';
         else if (currentTab === 'review') emptyMsg = '当前没有等待平台公开确认的任务';
         else if (currentTab === 'high_likes') emptyMsg = filterState.includeProcessed ? '当前条件下没有近期高互动记录' : '当前条件下没有未浏览的近期高互动记录；可勾选“显示已处理”查看历史';
@@ -1713,7 +1732,7 @@
             </td>
             <td class="vt-cell ${viewsCls}">${viewsStr}</td>
             <td class="lr-cell ${lrCls}">${lrStr}</td>
-            <td class="status-cell">${statusBadge(v.status)}${v.status === 'DOWNLOADING' ? `
+            <td class="status-cell">${statusBadge(v.display_status || v.status)}${readyPublicationDetails(v)}${v.status === 'DOWNLOADING' ? `
               <div class="dl-progress" data-dlprog="${v.youtube_id}">
                 <div class="dl-bar"><div class="dl-bar-fill indeterminate"></div></div>
                 <div class="dl-meta">连接中…</div>
@@ -2219,7 +2238,7 @@
               </td>
               <td class="vt-cell" style="color:var(--text3);">—</td>
               <td class="lr-cell" style="color:var(--text3);">—</td>
-              <td class="status-cell" style="white-space:nowrap">${statusBadge(s.status)} <div style="margin-top:6px;">${retryBtn}</div></td>
+              <td class="status-cell" style="white-space:nowrap">${statusBadge(s.display_status || s.status)}${readyPublicationDetails(s)} <div style="margin-top:6px;">${retryBtn}</div></td>
               <td class="score-cell">${scoreControls}</td>
               <td class="time-cell"><span class="video-time">${relativeTime(s.updated_at)}</span></td>
             </tr>

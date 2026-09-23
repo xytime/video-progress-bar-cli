@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-23 | Codex | 所有上传入口强制会话互斥，公开占用归属并让待发布优先。 |
 | 1.0.0 | 2026-09-19 | Codex | 新增 state-path 派生的有界非阻塞跨进程会话锁与脚本装饰器。 |
 """
 
@@ -15,6 +16,11 @@ import fcntl
 import functools
 import inspect
 import time
+import json
+import os
+from datetime import datetime, timezone
+
+from .task_lease import read_lease_owner
 from pathlib import Path
 from typing import Callable, ParamSpec, TypeVar
 
@@ -43,15 +49,21 @@ class WeChatSessionLock:
         *,
         timeout_seconds: float = 0.0,
         poll_interval_seconds: float = 0.05,
+        purpose: str = "浏览器操作",
+        video: str = "",
     ) -> None:
         self.state_path = Path(state_path).expanduser().resolve(strict=False)
         self.lock_path = canonical_wechat_session_lock_path(self.state_path)
         self.timeout_seconds = max(0.0, float(timeout_seconds))
         self.poll_interval_seconds = max(0.001, float(poll_interval_seconds))
         self._handle = None
+        self.purpose = purpose
+        self.video = video
 
     def acquire(self) -> "WeChatSessionLock":
         """在截止时间内尝试获取锁，超时即抛出可识别的 busy 异常。"""
+        if self.purpose != "发布" and read_lease_owner(self.state_path.parent / "wechat_publish_priority.lock"):
+            raise WeChatSessionLockBusy("待发布任务优先；评论/保活本轮让出浏览器")
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = self.lock_path.open("a+", encoding="utf-8")
         deadline = time.monotonic() + self.timeout_seconds
@@ -59,6 +71,11 @@ class WeChatSessionLock:
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._handle = handle
+                handle.seek(0)
+                handle.truncate()
+                json.dump({"pid": os.getpid(), "stage": self.purpose, "video": self.video,
+                           "started_at": datetime.now(timezone.utc).isoformat()}, handle, ensure_ascii=False)
+                handle.flush()
                 return self
             except BlockingIOError:
                 if time.monotonic() >= deadline:
@@ -94,6 +111,7 @@ def guarded_wechat_browser_session(
     state_parameter: str = "state_path",
     timeout_seconds: float = 0.0,
     busy_result: R,
+    purpose: str = "浏览器操作",
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """仅在功能开关开启时，为脚本入口的整个浏览器会话加锁。"""
 
@@ -109,7 +127,8 @@ def guarded_wechat_browser_session(
             if state_path is None:
                 state_path = signature.parameters[state_parameter].default
             try:
-                with WeChatSessionLock(state_path, timeout_seconds=timeout_seconds):
+                with WeChatSessionLock(state_path, timeout_seconds=timeout_seconds, purpose=purpose,
+                                       video=Path(str(bound.arguments.get("video_path") or "")).stem):
                     return function(*args, **kwargs)
             except WeChatSessionLockBusy:
                 return busy_result

@@ -22,7 +22,7 @@ from config.settings import Settings, settings
 from video_processing.pipeline_manager import PipelineManager
 
 
-def test_public_publish_window_uses_configured_timezone():
+def test_ready_publication_ignores_legacy_time_window():
     previous_enabled = settings.enable_public_publish_windows
     previous_timezone = settings.public_publish_timezone
     previous_windows = settings.public_publish_windows
@@ -31,14 +31,14 @@ def test_public_publish_window_uses_configured_timezone():
     settings.public_publish_windows = "07:00-08:00,19:00-20:40"
     try:
         assert settings.is_public_publish_window(datetime(2026, 7, 28, 19, 30, tzinfo=ZoneInfo("Asia/Shanghai")))
-        assert not settings.is_public_publish_window(datetime(2026, 7, 28, 20, 41, tzinfo=ZoneInfo("Asia/Shanghai")))
+        assert settings.is_public_publish_window(datetime(2026, 7, 28, 20, 41, tzinfo=ZoneInfo("Asia/Shanghai")))
     finally:
         settings.enable_public_publish_windows = previous_enabled
         settings.public_publish_timezone = previous_timezone
         settings.public_publish_windows = previous_windows
 
 
-def test_public_publish_window_uses_holiday_schedule():
+def test_ready_publication_ignores_holiday_time_window():
     previous_enabled = settings.enable_public_publish_windows
     previous_timezone = settings.public_publish_timezone
     previous_windows = settings.public_publish_windows
@@ -56,8 +56,8 @@ def test_public_publish_window_uses_holiday_schedule():
         assert settings.is_china_rest_day(date(2026, 2, 16))
         assert settings.is_china_rest_day(date(2026, 8, 1))
 
-        assert not settings.is_public_publish_window(datetime(2026, 2, 14, 9, 45, tzinfo=ZoneInfo("Asia/Shanghai")))
-        assert not settings.is_public_publish_window(datetime(2026, 2, 16, 7, 29, tzinfo=ZoneInfo("Asia/Shanghai")))
+        assert settings.is_public_publish_window(datetime(2026, 2, 14, 9, 45, tzinfo=ZoneInfo("Asia/Shanghai")))
+        assert settings.is_public_publish_window(datetime(2026, 2, 16, 7, 29, tzinfo=ZoneInfo("Asia/Shanghai")))
         assert settings.is_public_publish_window(datetime(2026, 2, 16, 7, 30, tzinfo=ZoneInfo("Asia/Shanghai")))
         assert settings.is_public_publish_window(datetime(2026, 8, 1, 21, 0, tzinfo=ZoneInfo("Asia/Shanghai")))
     finally:

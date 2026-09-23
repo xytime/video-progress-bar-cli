@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.3 | 2026-09-23 | Codex | 同账号浏览器入口互斥，与加工锁独立，领取凭据前拒绝占用。 |
 | 1.7.2 | 2026-09-09 | Codex | 横封面改用全幅裁切，消除竖版封面缩放后形成的大面积内框；投稿页控件证据补充实际输入值。 |
 | 1.7.1 | 2026-09-05 | Codex | 按作品编辑操作、日期和紧邻状态读取回查结果，修复长简介超过 320 字被误判。 |
 | 1.7.0 | 2026-09-05 | Codex | 双封面保存后等待检测刷新；旧缺失提示仅触发一次重新检测；管理页等待搜索框加载后再检索。 |
@@ -2538,6 +2539,19 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    from video_processing.core.task_lease import TaskLease, TaskLeaseBusy
+
+    state_path = Path(args.state).expanduser().resolve()
+    try:
+        with TaskLease(state_path.with_name(f".{state_path.name}.browser.lock"),
+                       stage="抖音浏览器操作", video=str(getattr(args, "video", "") or "")):
+            return _main_with_session(args)
+    except TaskLeaseBusy:
+        logger.info("抖音同账号浏览器正被占用，未消费启动凭据、未打开浏览器。")
+        return EXIT_FAILED
+
+
+def _main_with_session(args) -> int:
     if (args.publish or args.preflight_only) and (not args.video or not args.copy or not args.title_file or not args.cover):
         logger.error("--publish/--preflight-only requires --video, --copy, --title-file and --cover")
         return EXIT_FAILED

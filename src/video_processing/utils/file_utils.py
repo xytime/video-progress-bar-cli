@@ -3,14 +3,20 @@
 # Modification History
 | Version | Date       | Author          | Description                                                        |
 |---------|------------|-----------------|-------------------------------------------------------------------|
+| 1.5.0 | 2026-09-23 | Codex | 校验音视频轨道；降级下载保留完整格式流及可续传片段。 |
 | 1.0.0   | 2026-06-15 | Claude_Opus_4.8 | find_downloaded_video 单一真相源（bot 与管线共用）                  |
 | 1.1.0   | 2026-06-22 | Claude_Opus_4.8 | 新增 read_subtitle_text（.ass 纯文本，管线字幕审查与复核 UI 共用）   |
 | 1.2.0   | 2026-06-22 | Claude_Opus_4.8 | [Review Fix] read_subtitle_text 精确匹配切片，排除 {yid}_s1 误配子切片/_s11 |
 | 1.3.0   | 2026-07-31 | Codex | 新增 WebVTT 纯文本读取，供下载前源字幕安全预检复用 |
+| 1.4.0   | 2026-09-23 | Antigravity | 新增 clean_partial_downloads 单一真相源，自动清理分片/临时文件及损坏小视频 |
 """
 import html
 import re
 import shutil
+import json
+import subprocess
+import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, List, Optional
 
@@ -86,6 +92,38 @@ def find_video_files(directory: Path, extensions: Optional[List[str]] = None) ->
 VIDEO_CONTAINER_SUFFIXES = {'.mp4', '.webm', '.mkv', '.mov', '.m4v', '.avi', '.flv', '.ts'}
 
 
+@lru_cache(maxsize=256)
+def _media_streams(path: str, size: int, modified_ns: int) -> frozenset[str]:
+    """按文件版本缓存容器校验；工具不可用时抛错，不误删素材。"""
+    from .video_metadata import _resolve_ffprobe_cmd
+
+    result = subprocess.run(
+        [_resolve_ffprobe_cmd(), "-v", "error", "-show_entries",
+         "stream=codec_type:format=duration", "-of", "json", path],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode:
+        return frozenset()
+    data = json.loads(result.stdout)
+    if float(data.get("format", {}).get("duration") or 0) <= 0:
+        return frozenset()
+    return frozenset(s.get("codec_type") for s in data.get("streams", []))
+
+
+def media_streams(path: Path) -> frozenset[str]:
+    stat = path.stat()
+    return _media_streams(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
+
+
+def preserve_download_fragments(output_dir: Path, youtube_id: str) -> None:
+    """降级下载器保留完整格式流与续传文件，只隔离已确认无效的成品。"""
+    for path in output_dir.glob(f"{youtube_id}.f*"):
+        if not path.is_file() or path.suffix not in VIDEO_CONTAINER_SUFFIXES | {".m4a", ".opus"}:
+            continue  # .part / .ytdl 继续由 yt-dlp 管理
+        if not media_streams(path):
+            path.rename(path.with_name(f"{path.name}.invalid-{time.time_ns()}"))
+
+
 def find_downloaded_video(
     output_dir: Path,
     yid: str,
@@ -138,6 +176,30 @@ def find_downloaded_video(
     if archived:
         return str(archived[0])
     return None
+
+
+def clean_partial_downloads(
+    output_dir: Path,
+    yid: str,
+    min_valid_size: int = 50_000,
+) -> List[Path]:
+    """保留可续传文件与完整格式流，仅隔离已确认损坏的主文件。
+
+    保留兼容入口；返回隔离前的原路径。不得删除未知分片或续传元数据。
+    """
+    d = Path(output_dir)
+    if not d.is_dir():
+        return []
+    preserve_download_fragments(d, yid)
+    quarantined = []
+    for path in d.glob(f"{yid}.*"):
+        if not path.is_file() or path.stem != yid or path.suffix.lower() not in VIDEO_CONTAINER_SUFFIXES:
+            continue
+        streams = media_streams(path) if path.stat().st_size > min_valid_size else frozenset()
+        if not {"audio", "video"}.issubset(streams):
+            path.rename(path.with_name(f"{path.name}.invalid-{time.time_ns()}"))
+            quarantined.append(path)
+    return quarantined
 
 
 def read_subtitle_text(

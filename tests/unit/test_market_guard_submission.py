@@ -25,7 +25,7 @@ def _manager(tmp_path):
     return manager
 
 
-def test_market_guard_submits_only_preparation_ready_video(tmp_path, monkeypatch):
+def test_heavy_scheduler_leaves_prepared_video_to_independent_dispatcher(tmp_path, monkeypatch):
     manager = _manager(tmp_path)
     ready = {"youtube_id": "ready", "slice_index": 0, "preparation_ready": 1}
     manager.db.get_high_score_pending_videos.side_effect = [[ready], []]
@@ -34,8 +34,8 @@ def test_market_guard_submits_only_preparation_ready_video(tmp_path, monkeypatch
 
     manager.process_high_score_videos(limit=1)
 
-    manager.db.claim_video_for_processing.assert_called_once_with("ready", slice_index=0)
-    manager._process_single_video.assert_called_once_with(ready, submission_only=True)
+    manager.db.claim_video_for_processing.assert_not_called()
+    manager._process_single_video.assert_not_called()
 
 
 def test_market_guard_does_not_claim_unprepared_video(tmp_path, monkeypatch):
@@ -69,7 +69,7 @@ def test_submission_only_invalid_checkpoint_never_starts_heavy_processing(tmp_pa
     manager.db.update_video_status.assert_called_once()
     args, kwargs = manager.db.update_video_status.call_args
     assert args == ("missing-assets", "PENDING")
-    assert "盘中仅提交检查点未通过" in kwargs["error_msg"]
+    assert "成片就绪检查点失效" in kwargs["error_msg"]
 
 
 @pytest.mark.parametrize("slice_index", [0, 1])
@@ -79,7 +79,7 @@ def test_checkpoint_reads_actual_input_ass_not_legacy_root(tmp_path, slice_index
     original = tmp_path / "original_video" / "video.mp4"
     original.parent.mkdir()
     original.touch()
-    manager._find_downloaded_video = lambda _: original
+    manager._find_downloaded_video = lambda _, **kwargs: original
     prefix = "video_s1" if slice_index else "video"
     (tmp_path / f"{prefix}_title.txt").write_text("财政部回购国债")
     (tmp_path / f"{prefix}_copy.txt").write_text("视频讨论财政部回购国债的操作背景。")

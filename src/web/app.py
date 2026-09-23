@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 # Modification History
+| 3.43.0 | 2026-09-23 | Codex | 守护独立发布进程；显示待发布归属、占用原因与就绪时间。 |
 | 3.42.0 | 2026-09-20 | Antigravity | 新增 waitlist/queue 治理接口 (cleanup-expired, discard-stale, calibrate, ignore)；promote 与 ignore 增加平台生命周期防重保护；GET /api/videos 支持 include_expired 归档回溯 |
 | 3.41.0 | 2026-09-20 | Gemini | GET /api/videos 新增 funnel_stage 参数，支持大盘漏斗各阶段穿透查询与数据严格联动。 |
 | 3.40.0 | 2026-09-20 | Gemini | 全局漏斗与频道漏斗端点新增 24h 与 today_bj 窗口支持；视频分页查询透传 created_window 时间过滤。 |
@@ -82,6 +83,7 @@
 | 3.18.8 | 2026-08-11 | Codex                               | 视频号平台已受理但未公开的任务展示为 UNDER_REVIEW，禁止将其作为可重试或已完成状态 |
 | 3.18.9 | 2026-08-14 | Codex                               | 将平台待确认状态从实际加工计数中分离，避免仪表盘把已提交待回查误报为处理中 |
 | 3.18.10 | 2026-08-26 | Codex                              | 所有微信登录入口统一使用带平台提交证据保护的任务恢复逻辑 |
+| 3.19.0  | 2026-09-23 | Antigravity                         | [进程生命周期与看门狗加固] 1. _trigger_video_async 改用 Popen 并在独立会话启动后立即记录 process_pid，结束自动置空，子进程退出前调用 wait_for_review_notifications 保护异步推送；2. _recover_orphaned_pre_submission_tasks 增加保护：若进程组存活，或 pid 为空但 pipeline.lock 正在被管线持有，则绝不误判孤儿 |
 """
 import hashlib
 import logging
@@ -160,7 +162,7 @@ db = PipelineDB()
 _wechat_login_thread: Optional[threading.Thread] = None
 _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
 
-_VIDEO_TABS = {"waitlist", "queue", "active", "wechat_deferred", "review", "completed", "error", "high_likes"}
+_VIDEO_TABS = {"waitlist", "queue", "ready", "active", "wechat_deferred", "review", "completed", "error", "high_likes"}
 _VIDEO_SORTS = {"default", "score_desc", "views_desc", "like_rate_desc", "source_published_at_desc", "upload_date_desc"}
 _SCORE_BANDS = {"all", "unscored", "below_50", "50_74", "80_plus"}
 _ERROR_TYPES = {"all", "channel_policy", "login", "youtube_403", "copy_quality", "censorship_p0", "other"}
@@ -168,7 +170,7 @@ _ENGAGEMENT_WINDOWS = {1, 3, 7, 30}
 _CREATED_WINDOWS = {"all", "24h", "today_bj", "7d", "30d"}
 _FUNNEL_STAGES = {"", "ingested", "qualified", "processed", "published", "failed", "blocked"}
 _VIDEO_STATUSES = {
-    "PENDING", "METADATA_PENDING", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "AI_COVER_PENDING",
+    "PENDING", "METADATA_PENDING", "PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "AI_COVER_PENDING",
     "PUBLISHING", "PUBLISHED", "COMPLETED", "IGNORED", "FAILED", "LOGIN_REQUIRED", "SEGMENTED",
     "WECHAT_DEFERRED", "UNDER_REVIEW", "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNCERTAIN",
 }
@@ -523,6 +525,27 @@ def _run_pipeline_manager():
         logging.getLogger(__name__).error(f"_run_pipeline_manager failed: {e}")
 
 
+def _ready_publication_supervisor():
+    """独立发布进程守护；不查询加工锁或市场避让，进程锁防重复启动。"""
+    import time
+    from video_processing.core.task_lease import read_lease_owner
+
+    root = Path(__file__).resolve().parents[2]
+    out = root / "output"
+    child = None
+    while True:
+        try:
+            if (child is None or child.poll() is not None) and not read_lease_owner(out / "ready_publications.lock"):
+                with (out / "ready_publications.log").open("a") as log:
+                    child = subprocess.Popen(
+                        [str(root / ".venv/bin/python"), str(root / "scripts/run_ready_publications.py")],
+                        cwd=str(root), stdout=log, stderr=log, start_new_session=True,
+                    )
+        except Exception:
+            logging.getLogger(__name__).exception("[ReadyPublication] 独立执行者启动失败")
+        time.sleep(15)
+
+
 def _queue_runner_loop():
     """[Gemini_3.5_Flash_planning] 每15秒巡检一次：如果有 >=75 分且状态为 PENDING 的任务，且当前没有管线任务在运行，则自动启动管线处理"""
     import time
@@ -568,6 +591,7 @@ def _queue_runner_loop():
             pending_videos = db.get_high_score_pending_videos(
                 min_score=75,
                 limit=1,
+                ready_only=False,
                 channel_min_scores=settings.auto_publish_channel_min_scores,
             )
             if pending_videos:
@@ -663,9 +687,12 @@ def _recover_orphaned_publishing_tasks(stale_minutes: int = 30) -> int:
 def _recover_orphaned_pre_submission_tasks(stale_minutes: int = 20) -> int:
     """回收无存活进程的预提交孤儿任务；视频号发布阶段绝不走此路径。"""
     recovered = 0
+    pipeline_running = _is_pipeline_manager_running()
     for video in db.get_stale_pre_submission_processing_videos(stale_minutes=stale_minutes):
         pid = video.get("process_pid")
         if _process_group_alive(pid):
+            continue
+        if pid is None and pipeline_running:
             continue
 
         yid = str(video.get("youtube_id") or "")
@@ -800,6 +827,7 @@ def startup_event():
     threading.Thread(target=_auto_pipeline_loop, daemon=True, name="auto-pipeline-scheduler").start()
     print("[Scheduler] Background pipeline scheduler started.")
 
+    threading.Thread(target=_ready_publication_supervisor, daemon=True, name="ready-publication-supervisor").start()
     threading.Thread(target=_queue_runner_loop, daemon=True, name="queue-runner-scheduler").start()
     print("[Scheduler] Queue runner scheduler started.")
 
@@ -841,7 +869,7 @@ def _is_youtube_url(url: str) -> bool:
 
 
 # 实际占用管线执行资源的状态；平台已受理待确认不属于加工中。
-PROCESSING_STATUSES = {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
+PROCESSING_STATUSES = {"PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}
 
 # 保留既有安全保护：UNDER_REVIEW 不可被删除/停止接口当作普通终态处理，
 # 以免为修正展示语义而误删已提交的平台作品证据。
@@ -873,7 +901,7 @@ def _wechat_submission_guard_reason(video: dict) -> Optional[str]:
 
 # FSM 状态的显示顺序
 STATUS_ORDER = [
-    "PENDING", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING",
+    "PENDING", "PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING",
     "SUBMITTED_UNBOUND", "SUBMITTED_BOUND", "UNDER_REVIEW", "UNCERTAIN",
     "PUBLISHED", "FAILED", "LOGIN_REQUIRED",
 ]
@@ -1358,6 +1386,46 @@ def _validate_video_list_query(
         raise HTTPException(status_code=422, detail="status filter only applies to recent engagement")
 
 
+def _attach_ready_publication_fields(videos: list[dict]) -> None:
+    """准备、执行、受理状态分层展示；占用者来自实际内核锁。"""
+    import json
+    from video_processing.core.task_lease import read_lease_owner
+    from video_processing.core.wechat_session_lock import canonical_wechat_session_lock_path
+    import time
+
+    out = Path(__file__).resolve().parents[2] / "output"
+    owner = read_lease_owner(canonical_wechat_session_lock_path(out / "wechat_state.json"))
+    details = db.get_publication_queue_details([v["id"] for v in videos if v.get("id")])
+    try:
+        runtime = json.loads((out / "ready_publications_status.json").read_text())
+        healthy = time.time() - float(runtime.get("heartbeat_at", 0)) < 30 and bool(read_lease_owner(out / "ready_publications.lock"))
+    except (OSError, ValueError, TypeError):
+        runtime, healthy = {}, False
+    for video in videos:
+        is_ready = video.get("status") == "PUBLISH_PRECHECK" or (video.get("status") == "PENDING" and video.get("preparation_ready"))
+        if not is_ready:
+            continue
+        detail = details.get(video.get("id"), {})
+        reason = video.get("publication_wait_reason") or "等待发布执行者领取"
+        if video.get("publication_review_required"):
+            reason = "成片已就绪，等待人工复核通过"
+        elif settings.wechat_publishing_paused:
+            reason = "视频号发布已被人工暂停"
+        elif detail.get("predecessor"):
+            reason = f"等待前序切片 {detail['predecessor']} 完成发布"
+        elif detail.get("next_attempt_at") and detail['next_attempt_at'] > datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'):
+            reason = "上传前失败退避，到期自动重试"
+        elif owner:
+            reason = f"同账号浏览器占用：{owner.get('video', '其他操作')}（{owner.get('stage', '浏览器操作')}，PID {owner.get('pid', '未知')}）"
+        elif not healthy:
+            reason = "发布执行者心跳缺失，等待恢复；成片已保留"
+        elif runtime.get("current_video") and runtime['current_video'] != video['youtube_id']:
+            reason = f"发布执行者正在处理 {runtime['current_video']}（{runtime.get('stage', '发布中')}）"
+        video.update(display_status="READY_TO_PUBLISH", publication_wait_reason=reason,
+                     publication_next_attempt_at=detail.get("next_attempt_at"), publication_owner=owner,
+                     publication_target="视频号")
+
+
 @app.get("/api/videos")
 def get_videos(
     tab: str = "waitlist",
@@ -1387,6 +1455,7 @@ def get_videos(
         funnel_stage=funnel_stage,
     )
     _attach_publish_display_fields(videos)
+    _attach_ready_publication_fields(videos)
     tab_counts = db.get_tab_counts()
     return {
         "videos": videos,
@@ -1427,6 +1496,7 @@ def get_slices(youtube_id: str):
     """[Gemini_3.5_Flash_High_planning] 获取指定 YouTube ID 的所有切片子任务"""
     slices = db.get_slices_by_parent_yid(youtube_id)
     _attach_publish_display_fields(slices)
+    _attach_ready_publication_fields(slices)
     return {"slices": slices}
 
 
@@ -2036,6 +2106,9 @@ def _trigger_video_async(video: dict) -> None:
     在独立子进程中处理单个视频，避免相对导入和 CWD 问题。
     输出写入 output/pipeline.log 与 vp job logs 共享。
     """
+    yid = str(video.get("youtube_id") or "")
+    slice_index = int(video.get("slice_index") or 0)
+
     def _run():
         prj_root = Path(__file__).parent.parent.parent
         python   = str(prj_root / ".venv" / "bin" / "python")
@@ -2051,16 +2124,31 @@ def _trigger_video_async(video: dict) -> None:
             f"from video_processing.pipeline_manager import PipelineManager\n"
             f"pm = PipelineManager()\n"
             f"pm._process_single_video(json.loads(sys.stdin.read()))\n"
+            f"pm.wait_for_review_notifications(timeout=60.0)\n"
         )
         try:
             with open(log_path, "a") as f:
                 import subprocess as sp
                 # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
-                sp.run([python, "-u", "-c", inline], input=video_json, text=True,
-                       cwd=str(prj_root), stdout=f, stderr=f)
+                # [Antigravity] v3.19.0: 使用 Popen 启动独立进程组并立即记录 PID，保护预提交加工免受看门狗误判
+                proc = sp.Popen(
+                    [python, "-u", "-c", inline],
+                    stdin=sp.PIPE,
+                    stdout=f,
+                    stderr=f,
+                    text=True,
+                    cwd=str(prj_root),
+                    start_new_session=True,
+                )
+                if yid:
+                    db.update_process_pid(yid, proc.pid, slice_index=slice_index)
+                proc.communicate(input=video_json)
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"_trigger_video_async failed: {e}")
+        finally:
+            if yid:
+                db.update_process_pid(yid, None, slice_index=slice_index)
 
     threading.Thread(target=_run, daemon=True,
                      name=f"pipeline-{video.get('youtube_id','?')[:8]}").start()
@@ -2292,7 +2380,7 @@ def ignore_video(youtube_id: str, slice_index: Optional[int] = None):
     if guard_reason:
         return {"success": False, "error": f"已在平台发布或归档，禁止忽略：{guard_reason}"}
 
-    if video.get("status") in {"DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}:
+    if video.get("status") in {"PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "TRANSCRIBING", "COPYWRITING", "PUBLISHING"}:
         return {"success": False, "error": f"视频处于 {video.get('status')} 处理中，无法直接忽略"}
 
     success = db.ignore_video(youtube_id, slice_index=slice_index, reason="控制台人工放弃/忽略")

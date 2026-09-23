@@ -193,6 +193,10 @@ def _render(
     if not db.mark_ai_cover_resolved(youtube_id, slice_index=slice_index):
         logger.warning("[%s] cover rendered but video status changed before requeue; leaving row unchanged", task.task_id)
         return False
+    try:
+        (target.parent / "ready_publications.wake").touch()
+    except OSError as exc:
+        logger.warning("发布唤醒标记写入失败，15 秒巡检继续兜底：%s", exc)
     logger.info("[%s] cover resolved via %s", task.task_id, "Codex visual" if visual_path else "fallback")
     return True
 

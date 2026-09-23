@@ -104,7 +104,7 @@ def test_lease_http_routes_require_internal_token_and_reject_browser_origin(
     ).status_code == 403
 
 
-def test_pipeline_lease_bypasses_closed_window_once(monkeypatch, tmp_path: Path):
+def test_pipeline_allows_anytime_after_legacy_lease_consumed(monkeypatch, tmp_path: Path):
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     assert manager.db.add_video("lease-gate1", "窗口外任务", "channel", score=85, source="AUTO")
     manager.db.issue_manual_publish_lease(
@@ -119,7 +119,7 @@ def test_pipeline_lease_bypasses_closed_window_once(monkeypatch, tmp_path: Path)
     assert manager._is_public_publish_window(
         "微信", "lease-gate1", consume_manual_lease=True,
     )
-    assert not manager._is_public_publish_window(
+    assert manager._is_public_publish_window(
         "微信", "lease-gate1", consume_manual_lease=True,
     )
 

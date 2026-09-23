@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-09-23 | Codex | 真实浏览器验证待发布计数、占用原因和平台事实分离。 |
 | 1.0.0 | 2026-09-08 | Codex | 覆盖刷新选择、具名删除确认、状态一致性和过期响应隔离 |
 | 1.1.0 | 2026-09-08 | Codex | 共用显式 Chromium 快照夹具；依赖缺失明确失败 |
 """
@@ -10,6 +11,31 @@
 import pytest
 
 from tests.browser_fixtures import chromium, dashboard, _payload, _video
+
+
+def test_ready_tab_explains_wait_and_keeps_platform_result_separate(dashboard, tmp_path):
+    page, state = dashboard
+    video = _video("ready-video")
+    video.update(display_status="READY_TO_PUBLISH", preparation_ready=1, score=90,
+                 publication_ready_at="2026-09-23 00:00:00",
+                 publication_last_attempt_at="2026-09-23 00:01:00",
+                 publication_next_attempt_at="2026-09-23 00:20:00",
+                 publication_wait_reason="同账号浏览器占用：other-video（发布，PID 123）",
+                 publication_target="视频号")
+    counts = dict.fromkeys(("waitlist", "queue", "active", "wechat_deferred", "local_accepted", "review", "completed", "error"), 0)
+    state["payload"] = dict(_payload([video], total=1), total_pages=1, tab_counts=dict(counts, ready=1))
+    page.locator("#tab-ready").click()
+    row = page.locator("#row-ready-video")
+    row.wait_for()
+    assert page.locator("#tab-ready").inner_text() == "待发布(1)"
+    assert row.locator(".status-cell > .badge").inner_text() == "待发布"
+    details = row.locator(".publication-wait-detail").inner_text()
+    for text in ("视频号", "other-video", "PID 123", "就绪：", "已等待", "最近尝试：", "下次重试："):
+        assert text in details
+    assert "已发布" not in row.locator(".plat-wechat").inner_text()
+    assert state["queries"][-1]["tab"] == ["ready"]
+    assert not state["writes"]
+    page.screenshot(path=str(tmp_path / "ready-publication.png"), full_page=True)
 
 
 def _select_first(page):

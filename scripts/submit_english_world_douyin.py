@@ -2,12 +2,13 @@
 """将一条视频号已受理的英语世界短视频同步提交到抖音。
 
 该入口只消费 ``english_world_douyin_publications`` 的零尝试 QUEUED 记录；完整投稿包
-位级校验、pipeline.lock 和不可变尝试账本全部在打开浏览器前建立。
+位级校验、抖音提交互斥和不可变尝试账本全部在打开浏览器前建立。
 已受理、未确认或失败记录均不会自动重传。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-09-23 | Codex | 专属投稿仅持抖音提交互斥，不等待全局加工锁。 |
 | 1.4.1 | 2026-09-04 | Codex | 提供双封面、原创声明与快速检测均通过的非最终预检证据摘要，供受控恢复绑定审计。 |
 | 1.4.0 | 2026-09-04 | Codex | 抖音投稿改用独立横竖英语视觉短视频海报封面，并把两图一同绑定至启动凭据。 |
 | 1.3.2 | 2026-09-02 | Codex | 未启动票据的包校验/启动失败及超时遗留仅收口为 CANCELED，需显式恢复才可重投。 |
@@ -213,7 +214,7 @@ def submit(review_id: str) -> int:
         ]
         if not settings.douyin_browser_headless:
             command.append("--no-headless")
-        pipeline_lock = PROJECT_ROOT / "output/pipeline.lock"
+        pipeline_lock = PROJECT_ROOT / "output/douyin_submission.lock"
         pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
         with pipeline_lock.open("a+") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)

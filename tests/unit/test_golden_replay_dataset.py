@@ -160,6 +160,7 @@ def _execute_golden_pub_wc(db: PipelineDB, tmp_dir: Path) -> Dict[str, Any]:
     pm = PipelineManager(db_path=str(db.db_path))
     pm._OUT_DIR = tmp_dir
     fs_guard_blocked = pm._block_duplicate_wechat_submission_if_needed(yid, yid, slice_index=0)
+    pm.wait_for_review_notifications(timeout=5.0)
 
     # Step 3: 验证 Web 控制面 Fail-Closed 拦截
     import web.app
@@ -344,7 +345,8 @@ def _run_scenario(scenario_id: str) -> Dict[str, Any]:
 
         # 执行动作
         executor = DISPATCHER[scenario_id]
-        with mock.patch.object(PipelineManager, "send_telegram_msg", return_value=True):
+        with mock.patch.object(PipelineManager, "send_telegram_msg", return_value=True), \
+             mock.patch.object(PipelineManager, "send_telegram_video", return_value=True):
             raw_obs = executor(db, tmp_path)
 
         # 归一化处理

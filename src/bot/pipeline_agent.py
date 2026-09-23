@@ -27,6 +27,7 @@ based on incoming Telegram messages and commands.
 | 1.14.1  | 2026-08-10 | Codex                               | Gemini TLS 瞬断加入有限重试；最终失败仅返回一条可操作提示                |
 | 1.14.2  | 2026-08-10 | Codex                               | Gemini 不可用时以同工具集切换 DeepSeek OpenAI 兼容 Function Calling 兜底 |
 | 1.14.3  | 2026-09-09 | Codex                               | Telegram 回传成片补充标题、任务 ID 与可点击的原 YouTube 视频链接        |
+| 1.15.0  | 2026-09-23 | Antigravity                         | [下载引擎翻转] download_video 优先原生 yt-dlp，经 download_strategy 抽象 Strategy/Fallback 模式，覆盖进程异常与产物验真 (<50KB/缺失) 双重兜底并自动清理损坏分片 |
 """
 import html
 import os
@@ -53,6 +54,11 @@ if _src not in sys.path:
 from config.settings import settings
 from video_processing.db import PipelineDB
 from video_processing.core.cover_policy import validate_dedicated_cover_file
+from video_processing.utils.file_utils import clean_partial_downloads
+from video_processing.utils.download_strategy import (
+    DownloadOptions,
+    execute_download_with_fallback,
+)
 
 
 def _cover_provenance_path(cover_file: Path) -> Path:
@@ -436,32 +442,40 @@ class PipelineAgent:
 
             # [Gemini_3.5_Flash_planning] v1.3.2: 修复 url 未定义 NameError 崩溃，增加 url = f"https://youtu.be/{youtube_id}"
             url = f"https://youtu.be/{youtube_id}"
-            dl_cmd = [
-                self.venv_ytdlp,
-                # [Claude_Opus_4.8] v1.7.0: 优先 H.264(avc)，规避 AV1(av01)。与 pipeline_manager
-                # v3.16.0 对齐——imageio-ffmpeg 内置 AOM AV1 解码器解码 YouTube AV1 流时会间歇性
-                # SIGSEGV，导致后续 ffmpeg 渲染崩溃。YouTube ≤720p 始终提供 avc1，无 avc 时回退原选择器。
-                "-f", (
-                    "bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/"
-                    "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/"
-                    "best[ext=mp4]/best"
-                ),
-                "-S", "vcodec:h264",
-                *settings.get_yt_cookie_args(),
-                "--write-description",
-                "--remote-components", "ejs:github",
-                "--downloader", "curl",
-                "--downloader-args", "curl:--retry 10 --retry-delay 3 --retry-all-errors",
-                url, "-o", str(self.output_dir / f"{youtube_id}.%(ext)s"),
-            ]
             _PROXY_KEYS = {'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'}
             env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
 
+            # [Antigravity] v1.15.0: 下载引擎翻转 (Strategy/Fallback 模式)
+            # 优先使用原生 yt-dlp 分块下载；若进程异常、超时或未产生有效视频 (>50KB)，自动清理分片并降级回退至 curl 外部下载器
+            options = DownloadOptions(
+                ytdlp_path=self.venv_ytdlp,
+                url=url,
+                output_template=str(self.output_dir / f"{youtube_id}.%(ext)s"),
+                cookie_args=settings.get_yt_cookie_args(),
+                write_info_json=False,
+                curl_args="curl:--retry 10 --retry-delay 3 --retry-all-errors",
+            )
+
+            def _agent_runner(cmd: list[str]) -> None:
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(self.project_root),
+                    env=env_no_proxy,
+                )
+
             try:
-                subprocess.run(dl_cmd, check=True, capture_output=True, text=True, cwd=str(self.project_root), env=env_no_proxy)
-                target_file = self._find_downloaded_video(youtube_id)
-                if not target_file:
-                    return json.dumps({"ok": False, "error": "No video file found after download completed"})
+                target_file = execute_download_with_fallback(
+                    options=options,
+                    runner=_agent_runner,
+                    verifier=lambda: self._find_downloaded_video(youtube_id),
+                    cleaner=lambda: clean_partial_downloads(self.output_dir, youtube_id),
+                    on_fallback=lambda reason: logger.warning(
+                        f"[Bot Download] Native yt-dlp did not produce valid video ({reason}), falling back to curl downloader..."
+                    ),
+                )
                 return json.dumps({"ok": True, "message": "Download successful", "path": target_file})
             except subprocess.CalledProcessError as e:
                 return json.dumps({"ok": False, "error": f"yt-dlp download failed: {e.stderr}"})

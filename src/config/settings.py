@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.69.0 | 2026-09-23 | Codex | 已就绪成片全天可提交，旧发布窗口配置不再阻断入口。 |
 | 3.68.0 | 2026-09-22 | Codex | 独立 AGY 文案配置及 App 子进程最小环境，不传入 API/机器人凭据。 |
 | 3.67.0 | 2026-09-20 | Antigravity | 新增 waitlist_ttl_days (待筛选低分素材TTL淘汰保留天数) 与 queue_stale_days (待处理超期排队时效天数) 配置 |
 | 3.66.0 | 2026-09-20 | Antigravity | 新增 pipeline_window_log_keep_days 与 pipeline_window_log_suppression_window_sec 配置，用于巡航日志降频与保留天数治理 |
@@ -647,17 +648,8 @@ class Settings(BaseSettings):
         return ranges
 
     def is_public_publish_window(self, now: Optional[datetime] = None) -> bool:
-        """当前时间是否允许触发公开视频提交；关闭开关时始终允许。"""
-        if not self.enable_public_publish_windows:
-            return True
-        local_now = self._local_public_publish_datetime(now)
-        minute = local_now.hour * 60 + local_now.minute
-        for start, end in self.selected_public_publish_window_ranges(local_now):
-            if start < end and start <= minute < end:
-                return True
-            if start > end and (minute >= start or minute < end):
-                return True
-        return False
+        """成片全天可发布；兼容历史窗口配置，但不再用它阻断提交。"""
+        return True
 
     def selected_english_world_publish_window_ranges(
         self, now: Optional[datetime] = None,
@@ -666,15 +658,8 @@ class Settings(BaseSettings):
         return self._parse_publish_window_ranges(self.english_world_publish_windows)
 
     def is_english_world_publish_window(self, now: Optional[datetime] = None) -> bool:
-        """判定当前时间是否处于英语世界专属发布窗口（默认 05:30 与 16:30）。"""
-        local_now = self._local_public_publish_datetime(now)
-        minute = local_now.hour * 60 + local_now.minute
-        for start, end in self.selected_english_world_publish_window_ranges(local_now):
-            if start < end and start <= minute < end:
-                return True
-            if start > end and (minute >= start or minute < end):
-                return True
-        return False
+        """英语世界成片同样全天可发布；生成计划与提交资格分离。"""
+        return True
 
     def _local_public_publish_datetime(self, now: Optional[datetime] = None) -> datetime:
         try:

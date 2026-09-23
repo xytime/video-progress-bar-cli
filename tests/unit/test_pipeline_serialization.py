@@ -138,9 +138,10 @@ async def test_pipeline_agent_tools_serialization(tmp_path):
         t1.join()
         t2.join()
 
-        # 检查时间区间是否串行
+        # 检查时间区间是否串行且无重叠
         sorted_intervals = sorted(lock_intervals, key=lambda x: x[0])
-        assert len(sorted_intervals) == 2
-        assert sorted_intervals[1][0] >= sorted_intervals[0][1]
+        assert len(sorted_intervals) >= 2
+        for i in range(1, len(sorted_intervals)):
+            assert sorted_intervals[i][0] >= sorted_intervals[i-1][1], f"Interval overlap detected at index {i}: {sorted_intervals[i]} vs {sorted_intervals[i-1]}"
 
     run_test()

@@ -111,7 +111,8 @@ def _maybe_warn_expiry(login_at_path: Path, warned_path: Path) -> None:
 
 
 @guarded_wechat_browser_session(
-    enabled=lambda: settings.enable_wechat_comment_interaction,
+    enabled=lambda: True,
+    purpose="保活",
     state_parameter="state_path",
     timeout_seconds=0.0,
     busy_result=1,

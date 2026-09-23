@@ -374,7 +374,7 @@ def test_waitlist_include_expired_query_and_api(test_db, monkeypatch):
     assert res_prom.status_code == 200
     assert res_prom.json()["success"] is True
     revived = test_db.get_video_by_youtube_id("wl-exp")
-    assert revived["status"] in ("PENDING", "DOWNLOADING")
+    assert revived["status"] in ("PENDING", "PROCESSING")
     assert revived["score"] == 100
     assert revived["error_msg"] is None
 

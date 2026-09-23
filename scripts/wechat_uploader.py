@@ -1404,7 +1404,8 @@ def _capture_wechat_login_qr(page, qr_path: Path) -> bool:
 
 
 @guarded_wechat_browser_session(
-    enabled=lambda: settings.enable_wechat_comment_interaction,
+    enabled=lambda: True,
+    purpose="发布",
     state_parameter="state_path",
     timeout_seconds=0.0,
     busy_result=EXIT_WECHAT_SESSION_BUSY,

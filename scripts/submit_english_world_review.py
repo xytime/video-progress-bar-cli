@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.18.0 | 2026-09-23 | Codex | 专属投稿改用微信发布互斥，不等待全局加工锁。 |
 | 1.17.0 | 2026-09-22 | Codex | 领取前校验失败持久化退出队列；不启动浏览器、不伪造提交尝试。 |
 | 1.16.0 | 2026-09-22 | Codex | 原创策略绑定不可变审核包；声明异常保留原生 ID 并停止重传。 |
 | 1.15.0 | 2026-09-20 | Antigravity | 视频号首评互动解耦：投稿受理绑定原生 post_id 后异步派发互动 worker。 |
@@ -254,20 +255,20 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             "English World review %s uses its two-hour bounded capability outside the publish window source=%s",
             review_id, pending.get("approval_source"),
         )
-    pipeline_lock = _PROJECT_ROOT / "output" / "pipeline.lock"
+    pipeline_lock = _PROJECT_ROOT / "output" / "wechat_publish_priority.lock"
     pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
     with pipeline_lock.open("a+") as lock_file:
         try:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            logger.info("English World submission deferred because pipeline.lock is busy: %s", review_id)
+            logger.info("English World submission deferred because WeChat publication is busy: %s", review_id)
             return EXIT_DEFERRED
 
         if pending["state"] != "SUBMISSION_APPROVED":
             return 0
         if settings.enable_wechat_comment_interaction:
             try:
-                with WeChatSessionLock(_PROJECT_ROOT / "output/wechat_state.json"):
+                with WeChatSessionLock(_PROJECT_ROOT / "output/wechat_state.json", purpose="发布"):
                     pass
             except WeChatSessionLockBusy:
                 logger.info("English World deferred before claim: browser session is busy")
