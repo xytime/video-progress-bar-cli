@@ -25,7 +25,7 @@ from video_processing.pipeline_manager import PipelineManager
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    PipelineManager().run_preparation_job()
+    PipelineManager(trigger_source="background_preparation").run_preparation_job()
     return 0
 
 

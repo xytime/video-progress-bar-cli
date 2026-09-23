@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| 3.47.0 | 2026-09-24 | Codex | 区分自动与人工管线触发来源，提供逐日视频号投稿归因漏斗。 |
 | 3.46.0 | 2026-09-23 | Antigravity | [Code Review Fix] 1. _safe_kill_pid_or_pgid 增加自杀保护 (pid == os.getpid())；2. _process_group_alive 增加命令白名单特征过滤，防御 PID 复用；3. _queue_runner_loop 补偿排水审核通知；4. _trigger_video_async 等待超时扩展至 120s 对齐附件发送 |
 | 3.45.0 | 2026-09-23 | Antigravity | [看门狗与进程组加固] 1. _process_group_alive 区分并同时校验 PID 与 PGID，防止批量入口 worker 被误回收；2. _run_pipeline_manager 与 run_full_pipeline 启用 start_new_session=True；3. 预提交孤儿回收联动 read_lease_owner 内核文件锁双重防误杀；4. 进程终止操作支持 PGID 与 PID 阶梯强杀；5. 巡检循环回收超期审核通知 |
 | 3.44.0 | 2026-09-23 | Worker M2 (Topic Clues) | 重构 /api/trending-keywords 与 /refresh 接入 TopicCluesHub，消除 sys.path.insert(0, scripts) 与同步阻塞 |
@@ -101,7 +102,7 @@ import subprocess
 import threading
 from collections.abc import Mapping
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -472,7 +473,7 @@ def _translate_title_task(youtube_id: str, english_title: str):
                 video = db.get_video_by_youtube_id(youtube_id)
                 if video:
                     print(f"[Scheduler] Auto-triggering pipeline for manual video: {youtube_id}")
-                    _trigger_video_async(video)
+                    _trigger_video_async(video, trigger_source="dashboard_scheduler")
         except Exception as trigger_err:
             import logging
             logging.getLogger(__name__).error(f"[Scheduler] Failed to auto-trigger video {youtube_id}: {trigger_err}")
@@ -494,7 +495,7 @@ def _auto_pipeline_loop():
                 print("[Scheduler] 美股盘中，跳过全量管线（重负载保护）。")
             else:
                 # 复用已有的全量管线触发逻辑
-                run_full_pipeline()
+                _start_full_pipeline("scheduler")
                 print("[Scheduler] Auto-triggered full pipeline run.")
         except Exception as e:
             print(f"[Scheduler] Auto pipeline error: {e}")
@@ -520,7 +521,8 @@ def _run_pipeline_manager():
         with open(log_path, "a") as f:
             f.write("\n=== Auto-triggered queue pipeline run ===\n")
             # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
-            sp.run([python, "-u", "-m", "video_processing.pipeline_manager"],
+            sp.run([python, "-u", "-m", "video_processing.pipeline_manager",
+                    "--trigger-source", "dashboard_scheduler"],
                    cwd=src_dir, stdout=f, stderr=f, env=env_clean, start_new_session=True)
     except Exception as e:
         import logging
@@ -2009,6 +2011,17 @@ def get_global_funnel(window: str = "7d"):
     }
 
 
+@app.get("/api/publication-funnel")
+def get_publication_funnel(day_bj: date):
+    """按北京日期返回自动入库、平台 ID 已绑定受理与人工参与量。"""
+    return {
+        "success": True,
+        "metrics": db.get_daily_publication_funnel(
+            str(day_bj), channel_min_scores=settings.auto_publish_channel_min_scores,
+        ),
+    }
+
+
 @app.get("/api/channels/{channel_id}/funnel")
 def get_channel_funnel(channel_id: str, window: str = "7d"):
     """获取频道的生产转化漏斗（支持 24h, today_bj, 7d, 30d, all）"""
@@ -2175,7 +2188,7 @@ class RevokeManualPublishLeaseRequest(BaseModel):
     revoked_by: str
 
 
-def _trigger_video_async(video: dict) -> None:
+def _trigger_video_async(video: dict, *, trigger_source: str = "dashboard_manual_item") -> None:
     """
     在独立子进程中处理单个视频，避免相对导入和 CWD 问题。
     输出写入 output/pipeline.log 与 vp job logs 共享。
@@ -2196,7 +2209,7 @@ def _trigger_video_async(video: dict) -> None:
         inline = (
             f"import sys, json; sys.path.insert(0, {repr(src_dir)})\n"
             f"from video_processing.pipeline_manager import PipelineManager\n"
-            f"pm = PipelineManager()\n"
+            f"pm = PipelineManager(trigger_source={trigger_source!r})\n"
             f"pm._process_single_video(json.loads(sys.stdin.read()))\n"
             f"pm.wait_for_review_notifications(timeout=120.0)\n"
         )
@@ -3590,9 +3603,8 @@ def _is_pipeline_manager_running() -> bool:
         return False
 
 
-@app.post("/api/pipeline/run")
-def run_full_pipeline():
-    """触发完整管线：monitor_channels + pipeline_manager。等价于 vp job run，全程后台执行。"""
+def _start_full_pipeline(trigger_source: str):
+    """启动完整管线，并记录实际触发来源。"""
     def _run():
         prj_root = Path(__file__).parent.parent.parent
         python   = str(prj_root / ".venv" / "bin" / "python")
@@ -3606,7 +3618,7 @@ def run_full_pipeline():
         import subprocess as sp
         with open(log_path, "a") as f:
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"\n=== Web-triggered pipeline run ({now_str}) ===\n")
+            f.write(f"\n=== {trigger_source}-triggered pipeline run ({now_str}) ===\n")
             # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
             sp.run([python, "-u", str(prj_root / "scripts" / "monitor_channels.py")],
                    cwd=str(prj_root), stdout=f, stderr=f, env=env_clean, start_new_session=True)
@@ -3616,11 +3628,18 @@ def run_full_pipeline():
                 f.write("[Scheduler] pipeline_manager is already running (pipeline.lock is held). Skipping duplicate run to prevent process leaks.\n")
                 f.flush()
             else:
-                sp.run([python, "-u", "-m", "video_processing.pipeline_manager"],
+                sp.run([python, "-u", "-m", "video_processing.pipeline_manager",
+                        "--trigger-source", "dashboard_manual_full" if trigger_source == "web" else "dashboard_scheduler"],
                        cwd=src_dir, stdout=f, stderr=f, env=env_clean, start_new_session=True)
 
     threading.Thread(target=_run, daemon=True, name="full-pipeline").start()
     return {"success": True, "message": "全量管线已在后台启动，请关注仪表盘进度"}
+
+
+@app.post("/api/pipeline/run")
+def run_full_pipeline():
+    """网页手动触发完整管线：monitor_channels + pipeline_manager。"""
+    return _start_full_pipeline("web")
 
 
 

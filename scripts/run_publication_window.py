@@ -186,7 +186,9 @@ def run_publication_window() -> int:
                 settings.english_world_douyin_sync_max_per_run,
                 settings.douyin_require_wechat_public_confirmation,
             )
-            PipelineManager(status_reporter=report_pipeline_stage).run_daily_job()
+            PipelineManager(
+                status_reporter=report_pipeline_stage, trigger_source="cron",
+            ).run_daily_job()
             _update_run_status(status, status_lock, state="COMPLETED")
         except Exception as exc:
             _update_run_status(status, status_lock, state="FAILED", error=str(exc))

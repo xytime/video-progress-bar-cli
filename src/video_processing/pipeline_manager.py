@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.60.0 | 2026-09-24 | Codex | 将任务加工来源写入审计事件，避免把自动发现误认为自动投稿。 |
 | 3.59.0 | 2026-09-23 | Antigravity | 审核物料通知持久化 SQLite 账本并支持断点补偿排水；_run_tracked 超时有界升级 SIGKILL；下载注入共享总预算并委托单一真相源验真。 |
 | 3.58.0 | 2026-09-23 | Codex | 独立发布与加工资源解耦；恢复缓存保护，审核副本异步发送。 |
 | 3.57.0 | 2026-09-22 | Codex | 文案 CLI 临时失败按冷却时间安全回队，保持提交后不重试。 |
@@ -485,9 +486,11 @@ class PipelineManager:
         db_path: str = "pipeline.db",
         *,
         status_reporter: Optional[Callable[[Dict[str, Any]], None]] = None,
+        trigger_source: str = "unknown",
     ):
         self.db = PipelineDB(db_path)
         self._status_reporter = status_reporter
+        self._trigger_source = trigger_source
         self._OUT_DIR.mkdir(exist_ok=True)
         self._ORIG_VIDEO_DIR.mkdir(exist_ok=True)  # [Claude_Sonnet_4.6_Thinking_planning] 归档目录随主目录一并创建
         self.telegram_token   = settings.telegram_bot_token
@@ -1097,6 +1100,7 @@ class PipelineManager:
             slice_index=slice_index,
             platform_post_id=platform_post_id,
             platform_url=platform_url,
+            trigger_source=self._trigger_source,
         )
         cancel_douyin = settings.douyin_require_wechat_public_confirmation
         downstream_reason = (
@@ -3770,6 +3774,12 @@ class PipelineManager:
             raise ValueError("invalid video identity")
         try:
             with TaskLease(self._OUT_DIR / "task_locks" / f"{prefix}.lock", video=prefix, stage="提交" if submission_only else "加工"):
+                try:
+                    self.db.record_processing_trigger(
+                        yid, self._trigger_source, slice_index=index,
+                    )
+                except Exception:
+                    logger.exception("[%s] 未能保存加工触发来源；本次归因保持未知。", prefix)
                 if submission_only or (video.get("preparation_ready") and not preparation_only):
                     with TaskLease(self._OUT_DIR / "wechat_publish_priority.lock", video=prefix, stage="发布前校验/上传"):
                         self._submit_ready_video(video)
@@ -4738,5 +4748,14 @@ class PipelineManager:
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run the video processing pipeline")
+    parser.add_argument(
+        "--trigger-source",
+        choices=("dashboard_scheduler", "dashboard_manual_full", "direct_cli"),
+        default="direct_cli",
+    )
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    PipelineManager().run_daily_job()
+    PipelineManager(trigger_source=args.trigger_source).run_daily_job()

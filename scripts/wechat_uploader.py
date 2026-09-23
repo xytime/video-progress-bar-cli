@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.11.0 | 2026-09-24 | Codex | 作品列表结构化 desc 提取短标题；提交绑定须唯一新增 ID 与短标题精确一致，拒绝仅凭 ID 差集绑定。 |
 | 5.10.0 | 2026-09-22 | Codex | 实证分列表单与 Shadow DOM 的不声明状态；未知阻断，原创提醒仅确认直接发表。 |
 | 5.9.0 | 2026-09-21 | Codex | 上传等待独立返回码与零进度未提交凭据，供管线安全退避。 |
 | 1.0.0   | 2026-05-21 | Gemini_3.5_Flash_planning           | Initial creation using Playwright                        |
@@ -481,10 +482,17 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
         post_id = str(record.get("objectId") or "").strip()
         if not post_id:
             continue
+        desc = record.get("desc")
+        short_title = str(desc.get("shortTitle") or "").strip() if isinstance(desc, dict) else ""
+        description = (
+            str(desc.get("description") or "") if isinstance(desc, dict)
+            else str(desc or "")
+        )
         cards[post_id] = {
             "platform_post_id": post_id,
             "platform_url": "",
-            "card_text": str(record.get("desc") or ""),
+            "card_text": description,
+            "short_title": short_title,
             "identity_source": "post_list_api",
             "platform_status": str(record["status"]) if record.get("status") is not None else "",
         }
@@ -509,10 +517,11 @@ def resolve_submission_platform_identity(
     }
     if normalized_title in card_title_lines:
         matched_by = "same_session_before_after_platform_id_delta_and_exact_title"
-    elif record.get("identity_source") == "post_list_api":
-        # 平台 post_list 只返回长描述，未返回 6–16 字投稿短标题。
-        # 此处分配的主体仍由提交前后同一会话的唯一新增 objectId 精确限定。
-        matched_by = "same_session_before_after_unique_post_list_object_id_delta"
+    elif (
+        record.get("identity_source") == "post_list_api"
+        and re.sub(r"\s+", "", str(record.get("short_title") or "")) == normalized_title
+    ):
+        matched_by = "same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title"
     else:
         return None
     return {

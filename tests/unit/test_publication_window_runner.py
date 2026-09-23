@@ -64,7 +64,7 @@ def test_runner_executes_pipeline_without_consulting_publication_window(monkeypa
     monkeypatch.setattr(runner, "PipelineManager", pipeline_manager)
 
     assert runner.run_publication_window() == 0
-    pipeline_manager.assert_called_once_with(status_reporter=ANY)
+    pipeline_manager.assert_called_once_with(status_reporter=ANY, trigger_source="cron")
     manager.run_daily_job.assert_called_once_with()
 
 
@@ -75,7 +75,7 @@ def test_runner_executes_pipeline_inside_publication_window(monkeypatch, tmp_pat
     monkeypatch.setattr(runner, "PipelineManager", pipeline_manager)
 
     assert runner.run_publication_window() == 0
-    pipeline_manager.assert_called_once_with(status_reporter=ANY)
+    pipeline_manager.assert_called_once_with(status_reporter=ANY, trigger_source="cron")
     manager.run_daily_job.assert_called_once_with()
 
 
@@ -113,7 +113,8 @@ def test_runner_records_pipeline_stage_context(monkeypatch, tmp_path: Path):
     _configure_runner_paths(monkeypatch, tmp_path)
     manager = MagicMock()
 
-    def pipeline_factory(*, status_reporter):
+    def pipeline_factory(*, status_reporter, trigger_source):
+        assert trigger_source == "cron"
         status_reporter({
             "current_video": "video-id",
             "current_slice_index": 0,

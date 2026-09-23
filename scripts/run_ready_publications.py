@@ -94,7 +94,10 @@ def main(argv=None) -> int:
 
     try:
         with TaskLease(out / "ready_publications.lock", stage="全天发布巡检"):
-            manager = PipelineManager(str(out / "pipeline.db"), status_reporter=report)
+            manager = PipelineManager(
+                str(out / "pipeline.db"), status_reporter=report,
+                trigger_source="ready_worker",
+            )
             worker = threading.Thread(target=heartbeat, daemon=True)
             worker.start()
             try:

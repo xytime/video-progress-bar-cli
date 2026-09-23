@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.85.0 | 2026-09-24 | Codex | 保存逐视频加工触发事件，按北京时间汇总自动与人工参与的投稿漏斗。 |
 | 3.84.0  | 2026-09-23 | Antigravity                         | [Code Review Fix] 新增 claim_specific_wechat_review_notification 原子抢占单条通知任务，防并发冲突 |
 | 3.83.0  | 2026-09-23 | Antigravity                         | 新增 reset_wechat_interaction DAL 方法，支持被误判或需重试的微信互动记录重置回 PENDING。 |
 | 3.82.0  | 2026-09-23 | Antigravity                         | 新增 wechat_review_notifications 账本表及入队/抢占/状态记录/超时恢复 DAL 方法，防进程退出丢单。 |
@@ -856,6 +857,19 @@ class PipelineDB:
                     FOREIGN KEY(subject_id) REFERENCES publication_subjects(id) ON DELETE RESTRICT
                 )
             ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS publication_trigger_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id INTEGER NOT NULL,
+                    trigger_source TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_publication_trigger_video_time "
+                "ON publication_trigger_events(video_id, created_at, id)"
+            )
             if migrate_wechat_attempts:
                 cursor.execute('''
                     INSERT OR IGNORE INTO publication_subjects (id, kind, video_id)
@@ -878,6 +892,10 @@ class PipelineDB:
                     FROM wechat_submission_attempts_legacy
                 '''.format(subject_id=attempt_subject_expr))
                 cursor.execute("DROP TABLE wechat_submission_attempts_legacy")
+            cursor.execute("PRAGMA table_info(wechat_submission_attempts)")
+            current_attempt_columns = {row[1] for row in cursor.fetchall()}
+            if "trigger_source" not in current_attempt_columns:
+                cursor.execute("ALTER TABLE wechat_submission_attempts ADD COLUMN trigger_source TEXT DEFAULT NULL")
             cursor.execute("PRAGMA table_info(wechat_publications_historical_archive)")
             wechat_archive_columns = {row[1] for row in cursor.fetchall()}
             migrate_wechat_archive = bool(
@@ -3792,6 +3810,7 @@ class PipelineDB:
         slice_index: int = 0,
         platform_post_id: Optional[str] = None,
         platform_url: Optional[str] = None,
+        trigger_source: Optional[str] = None,
     ) -> Dict[str, Any]:
         """同事务保存视频号受理事实、一次性尝试和任务停止状态。
 
@@ -3804,6 +3823,13 @@ class PipelineDB:
         clean_evidence_path = (evidence_path or "").strip() or None
         clean_platform_post_id = (platform_post_id or "").strip() or None
         clean_platform_url = (platform_url or "").strip() or None
+        allowed_triggers = {
+            "cron", "dashboard_scheduler", "dashboard_manual_full",
+            "dashboard_manual_item", "background_preparation", "ready_worker",
+            "direct_cli", "operator_recovery", "unknown",
+        }
+        if trigger_source is not None and trigger_source not in allowed_triggers:
+            raise ValueError(f"Unsupported publication trigger: {trigger_source}")
         state = "SUBMITTED_BOUND" if clean_platform_post_id else "SUBMITTED_UNBOUND"
         with self.get_connection() as conn:
             video = conn.execute(
@@ -3865,6 +3891,12 @@ class PipelineDB:
                            bound_at = CURRENT_TIMESTAMP
                        WHERE attempt_id = ?''',
                     (clean_platform_post_id, clean_platform_url, attempt["attempt_id"]),
+                )
+            if trigger_source is not None:
+                conn.execute(
+                    "UPDATE wechat_submission_attempts SET trigger_source = COALESCE(trigger_source, ?) "
+                    "WHERE attempt_id = ?",
+                    (trigger_source, attempt["attempt_id"]),
                 )
             cursor = conn.execute(
                 "UPDATE processed_videos SET status = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP "
@@ -4962,6 +4994,124 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.execute(query, (f"-{int(days)} days", limit))
             return [dict(row) for row in cursor.fetchall()]
+
+    def record_processing_trigger(
+        self, youtube_id: str, trigger_source: str, *, slice_index: int = 0,
+    ) -> None:
+        """记录已经领取或开始处理的一条任务；未知来源保持未知，绝不推断为自动。"""
+        allowed = {
+            "cron", "dashboard_scheduler", "dashboard_manual_full",
+            "dashboard_manual_item", "background_preparation", "ready_worker",
+            "direct_cli", "operator_recovery", "unknown",
+        }
+        if trigger_source not in allowed:
+            raise ValueError(f"Unsupported publication trigger: {trigger_source}")
+        with self.get_connection() as conn:
+            video = conn.execute(
+                "SELECT id FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if not video:
+                raise ValueError(f"Video not found: {youtube_id}#{slice_index}")
+            conn.execute(
+                "INSERT INTO publication_trigger_events(video_id, trigger_source) VALUES (?, ?)",
+                (video["id"], trigger_source),
+            )
+            conn.commit()
+
+    def get_daily_publication_funnel(
+        self, day_bj: str, *, channel_min_scores: Optional[Dict[str, int]] = None,
+    ) -> Dict[str, Any]:
+        """北京日期漏斗：入库按入库日，受理按尝试日；遗留来源单列未知。"""
+        from datetime import date
+
+        date.fromisoformat(day_bj)
+        thresholds = channel_min_scores or {}
+        with self.get_connection() as conn:
+            intake = conn.execute(
+                """SELECT id, channel_id, score, status, error_msg, is_manually_scored
+                   FROM processed_videos
+                   WHERE source = 'AUTO' AND parent_id IS NULL
+                     AND date(datetime(created_at, '+8 hours')) = ?""",
+                (day_bj,),
+            ).fetchall()
+            eligible = [
+                row for row in intake
+                if (row["score"] or 0) >= thresholds.get(row["channel_id"], 75)
+                and not row["is_manually_scored"]
+            ]
+            accepted = conn.execute(
+                """SELECT a.subject_id, a.video_id, a.created_at, a.trigger_source, pv.source,
+                          pv.is_manually_scored
+                   FROM wechat_submission_attempts a
+                   LEFT JOIN processed_videos pv ON pv.id = a.video_id
+                   WHERE a.state = 'PLATFORM_ID_BOUND'
+                     AND a.platform_post_id IS NOT NULL
+                     AND date(datetime(a.created_at, '+8 hours')) = ?
+                   ORDER BY a.created_at, a.attempt_id""",
+                (day_bj,),
+            ).fetchall()
+            provenance = {"proven_auto": 0, "manual_assisted": 0, "unknown": 0}
+            seen_subjects: set[str] = set()
+            for row in accepted:
+                if row["subject_id"] in seen_subjects:
+                    continue
+                seen_subjects.add(row["subject_id"])
+                if row["video_id"] is None:
+                    provenance["unknown"] += 1
+                    continue
+                events = conn.execute(
+                    """SELECT trigger_source FROM publication_trigger_events
+                       WHERE video_id = ? AND created_at <= ? ORDER BY id""",
+                    (row["video_id"], row["created_at"]),
+                ).fetchall()
+                sources = {event["trigger_source"] for event in events}
+                manual = (
+                    row["source"] == "MANUAL"
+                    or bool(row["is_manually_scored"])
+                    or row["trigger_source"] in {
+                        "dashboard_manual_full", "dashboard_manual_item",
+                        "operator_recovery", "direct_cli",
+                    }
+                    or bool(sources & {
+                        "dashboard_manual_full", "dashboard_manual_item",
+                        "operator_recovery", "direct_cli",
+                    })
+                )
+                if manual:
+                    provenance["manual_assisted"] += 1
+                elif row["trigger_source"] in {"cron", "dashboard_scheduler", "ready_worker"}:
+                    provenance["proven_auto"] += 1
+                else:
+                    provenance["unknown"] += 1
+            confirmed = conn.execute(
+                """SELECT count(*) FROM wechat_publications
+                   WHERE state = 'PUBLISHED'
+                     AND date(datetime(confirmed_at, '+8 hours')) = ?""",
+                (day_bj,),
+            ).fetchone()[0]
+            failure_reasons: Dict[str, int] = {}
+            for row in eligible:
+                if row["status"] != "FAILED":
+                    continue
+                error = str(row["error_msg"] or "")
+                reason = (
+                    "policy" if "Policy Reject" in error or "Censorship" in error
+                    else "translation" if "translation providers failed" in error
+                    else "other"
+                )
+                failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+            return {
+                "day_bj": day_bj,
+                "auto_intake": len(intake),
+                "eligible_intake_current_score": len(eligible),
+                "eligible_failed_current": sum(row["status"] == "FAILED" for row in eligible),
+                "failure_reasons_current": failure_reasons,
+                "bound_acceptances": len(seen_subjects),
+                **provenance,
+                "confirmed_public": confirmed,
+                "attribution_rule": "Only recorded automatic processing with no manual assistance is proven_auto; legacy is unknown.",
+            }
 
     @staticmethod
     def read_daily_ops_health(db_path: str) -> Dict[str, Any]:

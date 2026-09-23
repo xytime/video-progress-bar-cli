@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.12.0 | 2026-09-24 | Codex | 覆盖结构化 desc 的短标题提取与精确绑定，阻断仅凭唯一新增 ID 的误绑。 |
 | 1.11.0 | 2026-09-07 | Codex | 覆盖接口正文与页面状态隔离，以及失败通知保留末尾异常。 |
 | 1.8.0   | 2026-08-27 | Codex | 覆盖作品管理原生 post_list 的唯一新增 objectId 绑定，避免长描述与短标题不一致漏绑。 |
 | 1.9.0   | 2026-08-31 | Codex | 覆盖管理卡片标题/正文中的普通“不可见”等词不得伪造平台审核驳回。 |
@@ -210,11 +211,12 @@ class TestExactSubmissionIdentity:
 
         assert resolve_submission_platform_identity({}, after, "本次唯一完整标题") is None
 
-    def test_unique_post_list_object_id_delta_binds_without_short_title_in_long_description(self):
+    def test_unique_post_list_object_id_delta_requires_exact_short_title(self):
         after = {
             "new-post": {
                 "platform_post_id": "new-post",
                 "card_text": "这是一篇不会包含投稿短标题的完整长描述",
+                "short_title": "本次唯一完整标题",
                 "identity_source": "post_list_api",
             },
         }
@@ -222,7 +224,14 @@ class TestExactSubmissionIdentity:
         receipt = resolve_submission_platform_identity({}, after, "本次唯一完整标题")
 
         assert receipt and receipt["platform_post_id"] == "new-post"
-        assert receipt["matched_by"] == "same_session_before_after_unique_post_list_object_id_delta"
+        assert receipt["matched_by"] == "same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title"
+
+    def test_unique_post_list_delta_without_exact_short_title_stays_unbound(self):
+        after = {"other-post": {
+            "platform_post_id": "other-post", "card_text": "另一部作品的描述",
+            "identity_source": "post_list_api", "short_title": "另一部作品",
+        }}
+        assert resolve_submission_platform_identity({}, after, "本次唯一完整标题") is None
 
     def test_post_list_payload_exposes_only_native_object_ids(self):
         cards = _collect_management_cards_from_post_list_payload({
@@ -239,10 +248,19 @@ class TestExactSubmissionIdentity:
                 "platform_post_id": "native-post-1",
                 "platform_url": "",
                 "card_text": "完整描述",
+                "short_title": "",
                 "identity_source": "post_list_api",
                 "platform_status": "3",
             },
         }
+
+    def test_post_list_structured_desc_preserves_title_without_media_urls(self):
+        cards = _collect_management_cards_from_post_list_payload({"data": {"list": [{
+            "objectId": "native-post-2", "status": 1,
+            "desc": {"shortTitle": "原油跌破百元柴油创历史新高", "description": "完整长描述", "media": [{"url": "https://media.example.test/private"}]},
+        }]}})
+        assert cards["native-post-2"]["short_title"] == "原油跌破百元柴油创历史新高"
+        assert cards["native-post-2"]["card_text"] == "完整长描述"
 
     def test_post_submit_identity_waits_for_async_management_card(self, monkeypatch):
         before = {"old-post": {"platform_post_id": "old-post", "card_text": "历史作品"}}
