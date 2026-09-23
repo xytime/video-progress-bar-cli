@@ -282,7 +282,7 @@ def _initial_timeline(candidate: Mapping[str, Any], *, source: Path, caption: Pa
             "caption_artifact": f"source/{caption.name}",
             "caption_format": "local_whisper_bootstrap" if caption.name.startswith("local_whisper_") else "youtube_json3",
             "caption_transcription_note": (
-                "本地 Whisper 引导词轴会以第二次独立 16kHz 单声道转写对齐。"
+                "本地 16kHz 单声道 Whisper 原始转写按首个自然句窗口验证，保留完整上下文与原始证据。"
                 if caption.name.startswith("local_whisper_") else "JSON3 原字幕以本地 16kHz 单声道 Whisper 对齐。"
             ),
         },
@@ -884,8 +884,11 @@ def run(
                 timeline_path = workspace / "timeline.json"
                 atomic_json(timeline_path, _initial_timeline(candidate, source=source, caption=caption, start=start, end=end))
                 stage = "source_evidence_alignment"
-                _source_evidence(timeline_path)
-                evidence = read_json(workspace / "qa/source_evidence.json")
+                from scripts.english_world_language import bind_bootstrap_evidence
+                evidence = bind_bootstrap_evidence(timeline_path, parent={
+                    "raw": read_json(workspace / "qa/source_asr_raw.json"),
+                    "parent_caption": "source/local_whisper_placeholder.json3",
+                })
             words = _frozen_words(evidence)
             timeline = read_json(timeline_path)
             timeline["words"] = words

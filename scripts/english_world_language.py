@@ -33,6 +33,83 @@ from video_processing.study_cards.caption_evidence import (
 )
 
 
+def _is_placeholder(payload):
+    p = payload["source_provenance"]
+    return (p.get("caption_format") == "local_whisper_bootstrap"
+            and Path(p["caption_artifact"]).name == "local_whisper_placeholder.json3"
+            and p["source_start_seconds"] == 0)
+
+
+def _raw_evidence(payload, raw, parsed, *, bootstrap=False):
+    from video_processing.study_cards.asr_window import validate_window
+    raw_words = raw["raw_words"]
+    if bootstrap:
+        words, repairs, window = validate_window(raw_words, raw["source_end"])
+        text = " ".join(str(w.get("word") or w.get("text") or "").strip() for w in words)
+    else:
+        words, repairs = repair_asr_word_timestamps(raw_words, raw["source_end"] - raw["source_start"])
+        text, window = raw["asr_text"], None
+    evidence = {k: v for k, v in raw.items() if k not in ("raw_words", "asr_text")}
+    evidence.update(parsed=parsed, asr_text=text, asr_words_raw=raw_words,
+                    asr_words=words, asr_timing_repairs=repairs,
+                    caption_differences=transcript_differences(parsed["english_text"], text),
+                    caption_normalizations=transcript_normalizations(parsed["english_text"], text),
+                    timeline_differences=transcript_differences(payload["english_text"], text),
+                    timeline_normalizations=transcript_normalizations(payload["english_text"], text))
+    if window:
+        evidence["bootstrap_window"] = window
+        evidence["asr_context_text"] = raw["asr_text"]
+    if parsed["requires_alignment"]:
+        try:
+            evidence["aligned_words"] = align_json3(parsed, words)
+            evidence["alignment_status"] = "PASS"
+            evidence["aligned_caption_text"] = " ".join(w["text"] for w in evidence["aligned_words"])
+            evidence["caption_boundary_trim"] = transcript_differences(parsed["english_text"], evidence["aligned_caption_text"])
+        except ValueError as exc:
+            evidence.update(alignment_status="UNCERTAIN", alignment_error=str(exc))
+    return evidence
+
+
+def bind_bootstrap_evidence(timeline, *, parent=None):
+    """从保留的完整 ASR 重新计算固定窗口，绑定派生 JSON3；后续缓存也重新验证。"""
+    root = timeline.parent
+    payload = read_json(timeline)
+    p = payload["source_provenance"]
+    scope_path = root / "qa/bootstrap_scope.json"
+    scope = parent if parent is not None else read_json(scope_path)
+    raw = scope["raw"]
+    source = root / p["source_video"]
+    caption = root / p["caption_artifact"]
+    if (file_digest(source) != raw.get("source_sha256") or raw.get("source_start") != 0
+            or raw.get("caption_parser_version") != PARSER_VERSION
+            or raw.get("sample_rate") != 16000 or raw.get("channels") != 1
+            or file_digest(root / scope["parent_caption"]) != raw.get("caption_sha256")
+            or p.get("caption_format") != "local_whisper_bootstrap"):
+        raise ValueError("ASR 窗口来源绑定过期")
+    parsed = parse_json3(read_json(caption), p["source_start_seconds"], p["source_end_seconds"])
+    evidence = _raw_evidence(payload, raw, parsed, bootstrap=True)
+    window = evidence["bootstrap_window"]
+    if (p["source_start_seconds"] != 0 or p["source_end_seconds"] != window["source_end"]
+            or evidence["caption_differences"]):
+        raise ValueError("禁止改变已选自然句窗口或遗漏原词")
+    expected = {"events": [{"tStartMs": round(w["start"] * 1000),
+                            "dDurationMs": round((w["end"] - w["start"]) * 1000),
+                            "segs": [{"utf8": str(w.get("word") or w.get("text") or "").strip()}]}
+                           for w in evidence["asr_words"]]}
+    if read_json(caption) != expected:
+        raise ValueError("派生字幕未逐词保留已验证 ASR 锚点")
+    if evidence.get("alignment_status") not in (None, "PASS"):
+        raise ValueError("UNCERTAIN: 派生字幕无法与固定窗口对齐")
+    evidence.update(source_end=window["source_end"], caption_sha256=file_digest(caption),
+                    bootstrap_parent_binding={k: raw[k] for k in
+                        ("source_sha256", "caption_sha256", "source_start", "source_end", "model_sha256")})
+    if parent is not None:
+        atomic_json(scope_path, scope)
+    atomic_json(root / "qa/source_evidence.json", evidence)
+    atomic_json(root / "qa/source_asr_raw.json", raw)
+    return evidence
+
+
 def source_evidence(timeline, model_path):
     import imageio_ffmpeg
     import whisper
@@ -54,12 +131,13 @@ def source_evidence(timeline, model_path):
     raw_path = root / "qa/source_asr_raw.json"
     if cached_path.exists():
         old = read_json(cached_path)
-        if all(old.get(k) == v for k, v in binding.items()):
+        if (all(old.get(k) == v for k, v in binding.items())
+                and (not _is_placeholder(payload) or old.get("bootstrap_window"))):
             old["timeline_differences"] = transcript_differences(payload["english_text"], old["asr_text"])
             atomic_json(cached_path, old)
             if "asr_words_raw" in old:
                 atomic_json(raw_path, {
-                    "version": VERSION, **binding, "asr_text": old.get("asr_text", ""),
+                    "version": VERSION, **binding, "asr_text": old.get("asr_context_text", old.get("asr_text", "")),
                     "raw_words": old.get("asr_words_raw", []), "sample_rate": 16000, "channels": 1,
                 })
             return
@@ -76,24 +154,7 @@ def source_evidence(timeline, model_path):
         "version": VERSION, **binding, "asr_text": result.get("text", ""),
         "raw_words": raw_words, "sample_rate": 16000, "channels": 1,
     })
-    words, timing_repairs = repair_asr_word_timestamps(raw_words, end - start)
-    evidence = {"version": VERSION, **binding, "parsed": parsed, "asr_text": result["text"],
-                "asr_words_raw": raw_words, "asr_words": words, "asr_timing_repairs": timing_repairs,
-                "sample_rate": 16000, "channels": 1,
-                "caption_differences": transcript_differences(parsed["english_text"], result["text"]),
-                "caption_normalizations": transcript_normalizations(parsed["english_text"], result["text"]),
-                "timeline_differences": transcript_differences(payload["english_text"], result["text"]),
-                "timeline_normalizations": transcript_normalizations(payload["english_text"], result["text"])}
-    if parsed["requires_alignment"]:
-        try:
-            evidence["aligned_words"] = align_json3(parsed, words)
-            evidence["alignment_status"] = "PASS"
-            evidence["aligned_caption_text"] = " ".join(word["text"] for word in evidence["aligned_words"])
-            evidence["caption_boundary_trim"] = transcript_differences(
-                parsed["english_text"], evidence["aligned_caption_text"])
-        except ValueError as exc:
-            evidence["alignment_status"] = "UNCERTAIN"
-            evidence["alignment_error"] = str(exc)
+    evidence = _raw_evidence(payload, read_json(raw_path), parsed, bootstrap=_is_placeholder(payload))
     atomic_json(cached_path, evidence)
 
 
@@ -103,6 +164,13 @@ def source_evidence_with_recheck(timeline, small_model, medium_model, task_root)
     root = timeline.parent
     payload = read_json(timeline)
     p = payload["source_provenance"]
+    if (root / "qa/bootstrap_scope.json").exists():
+        raw = read_json(root / "qa/bootstrap_scope.json")["raw"]
+        if not any(model.is_file() and raw.get("model_sha256") == file_digest(model)
+                   for model in (small_model, medium_model)):
+            raise ValueError("ASR 窗口模型证据过期")
+        bind_bootstrap_evidence(timeline)
+        return
     source = Path(p.get("source_video", "source/source.mp4"))
     source = source if source.is_absolute() else root / source
     binding = {"source_sha256": file_digest(source), "caption_sha256": file_digest(root / p["caption_artifact"]),
@@ -124,9 +192,42 @@ def source_evidence_with_recheck(timeline, small_model, medium_model, task_root)
         return evidence
 
     with locked(task_dir / "source_recheck.lock"):
+        bootstrap_path = task_dir / "bootstrap_source.json"
+        if _is_placeholder(payload) and bootstrap_path.exists():
+            frozen = read_json(bootstrap_path)
+            raw = frozen["raw"]
+            if not any(bound(raw, model) for model in (small_model, medium_model)):
+                raise ValueError("已冻结自然句窗口来源过期；禁止重新转写换区间")
+            evidence = _raw_evidence(payload, raw,
+                parse_json3(read_json(root / p["caption_artifact"]), binding["source_start"], binding["source_end"]),
+                bootstrap=True)
+            if evidence["bootstrap_window"] != frozen["window"]:
+                raise ValueError("已冻结自然句窗口发生变化")
+            atomic_json(evidence_path, evidence)
+            atomic_json(raw_path, raw)
+            require_alignment()
+            return
+
+        def freeze_bootstrap(evidence, raw):
+            if _is_placeholder(payload):
+                atomic_json(bootstrap_path, {"raw": raw, "window": evidence["bootstrap_window"]})
+
         if receipt_path.exists():
             receipt = read_json(receipt_path)
             evidence, raw = receipt.get("medium_evidence", {}), receipt.get("medium_raw", {})
+            if _is_placeholder(payload) and receipt.get("status") in ("PASS", "FAIL") and bound(raw, medium_model):
+                # 历史全段 FAIL 保持原样；仅用同一 medium 原始证据复算固定窗口。
+                evidence = _raw_evidence(payload, raw,
+                    parse_json3(read_json(root / p["caption_artifact"]), binding["source_start"], binding["source_end"]),
+                    bootstrap=True)
+                atomic_json(evidence_path, evidence)
+                atomic_json(raw_path, raw)
+                require_alignment()
+                atomic_json(task_dir / "bootstrap_scope_recheck.json", {
+                    "original_receipt_sha256": file_digest(receipt_path), "raw_sha256": digest(raw),
+                    "window": evidence["bootstrap_window"], "status": "PASS", "additional_model_calls": 0})
+                freeze_bootstrap(evidence, raw)
+                return
             if (receipt.get("status") != "PASS" or not bound(evidence, medium_model)
                     or not bound(raw, medium_model)):
                 raise ValueError("来源 medium 复核已尝试或证据过期；禁止换目录重复复核")
@@ -139,7 +240,9 @@ def source_evidence_with_recheck(timeline, small_model, medium_model, task_root)
             return
         try:
             source_evidence(timeline, small_model)
-            require_alignment()
+            evidence = require_alignment()
+            if _is_placeholder(payload):
+                freeze_bootstrap(evidence, read_json(raw_path))
             return
         except ValueError as exc:
             if not str(exc).startswith("UNCERTAIN:"):
@@ -175,6 +278,7 @@ def source_evidence_with_recheck(timeline, small_model, medium_model, task_root)
             atomic_json(receipt_path, receipt)
             raise
         atomic_json(receipt_path, receipt)
+        freeze_bootstrap(evidence, raw)
 
 
 def prepare(timeline, wordlist_dir=None):
