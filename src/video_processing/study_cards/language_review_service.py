@@ -14,6 +14,7 @@
 from contextlib import contextmanager
 import fcntl
 import json
+import math
 from pathlib import Path
 import time
 import jsonschema
@@ -156,8 +157,30 @@ def _recover_startup(ledger, *, key, cache_dir, reason, command, model):
     ledger["terminal"] = False
 
 
+def _recover_rate_limit(ledger, *, key, cache_dir, reason, not_before):
+    """操作员确认额度冷却后，只动用原输入尚未使用的第三次调用。"""
+    if (not isinstance(reason, str) or not reason.strip()
+            or not isinstance(not_before, (int, float)) or not math.isfinite(not_before)
+            or not 0 < not_before <= time.time()):
+        raise ValueError("额度恢复必须记录原因，且已到确认的恢复时间")
+    if (ledger.get("terminal") is not True or ledger.get("inflight")
+            or ledger.get("content_terminal") or ledger.get("rate_limit_recovery")
+            or ledger.get("startup_recovery") or ledger.get("attempts") != 2
+            or ledger.get("retries") != 1 or ledger.get("keys") != [key]
+            or ledger.get("publication_keys") or (cache_dir / f"{key}.json").exists()
+            or ledger.get("last_error") not in {"agy exit 1: rate limit", "agy exit 3: rate limit"}):
+        raise ValueError("当前任务不符合额度故障受控恢复条件")
+    ledger["rate_limit_recovery"] = {
+        "version": 1, "operator_reason": reason, "input_key": key,
+        "not_before_unix": not_before, "recorded_at_unix": time.time(),
+        "previous_error": ledger["last_error"], "previous_terminal": True,
+        "preserved_attempts": ledger["attempts"], "preserved_retries": ledger["retries"],
+    }
+    ledger["terminal"] = False
+
+
 def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180, effort="high",
-           caller=run_agy_structured, recover_startup_reason=None):
+           caller=run_agy_structured, recover_startup_reason=None, recover_rate_limit=None):
     timeline, cache_dir, task_dir = Path(timeline), Path(cache_dir), Path(task_dir)
     root = timeline.parent
     plan, evidence, editorial = (read_json(root / p) for p in
@@ -171,6 +194,11 @@ def review(timeline, *, cache_dir, task_dir, model, command="agy", timeout=180, 
     ledger_path = task_dir / "language_attempts.json"
     with locked(task_dir / "language.lock"), locked(cache_dir / f"{key}.lock"):
         ledger = read_json(ledger_path) if ledger_path.exists() else {"attempts": 0, "retries": 0, "keys": []}
+        if recover_rate_limit is not None:
+            if recover_startup_reason is not None:
+                raise ValueError("不能同时申请两种故障恢复")
+            _recover_rate_limit(ledger, key=key, cache_dir=cache_dir, **recover_rate_limit)
+            atomic_json(ledger_path, ledger)
         if recover_startup_reason is not None:
             _recover_startup(ledger, key=key, cache_dir=cache_dir, reason=recover_startup_reason,
                              command=command, model=model)

@@ -747,3 +747,84 @@ def test_transcript_failure_cannot_trigger_text_only_revision(tmp_path):
     timeline, p, kwargs = _first_failure_for_revision(tmp_path, check="TRANSCRIPT_ACCURACY")
     with pytest.raises(ValueError, match="不能由受限编辑修订"):
         reserve_editorial_revision(timeline, not_before_ns=100, **kwargs)
+
+
+def setup_rate_limit_failure(tmp_path):
+    timeline, p = setup_review(tmp_path)
+    def fail(*args, **kwargs):
+        raise AgyProviderError("agy exit 3: rate limit")
+    kwargs = dict(cache_dir=tmp_path / "cache", task_dir=tmp_path / "task", model="m")
+    with pytest.raises(AgyProviderError):
+        review(timeline, caller=fail, **kwargs)
+    return timeline, p, kwargs, tmp_path / "task/language_attempts.json"
+
+
+def test_quota_recovery_uses_only_remaining_third_call_and_preserves_history(tmp_path):
+    timeline, p, kwargs, path = setup_rate_limit_failure(tmp_path)
+    before = read_json(path)
+    assert before["attempts"] == 2 and before["retries"] == 1 and before["terminal"]
+    calls = []
+    def caller(*a, **kw):
+        calls.append(1)
+        return good(p)
+    recovery = {"reason": "Provider reset confirmed by operator", "not_before": 1}
+    report = review(timeline, caller=caller, recover_rate_limit=recovery, **kwargs)
+    ledger = read_json(path)
+    assert report["state"] == "PASS" and report["attempts"] == 3
+    assert ledger["retries"] == 1 and ledger["keys"] == before["keys"]
+    assert ledger["rate_limit_recovery"]["previous_error"] == before["last_error"]
+    assert ledger["rate_limit_recovery"]["preserved_attempts"] == 2
+    with pytest.raises(ValueError, match="恢复条件"):
+        review(timeline, caller=caller, recover_rate_limit=recovery, **kwargs)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("change", [
+    {"attempts": 3}, {"inflight": True}, {"content_terminal": True},
+    {"last_error": "agy exit 1: permission"}, {"last_error": "agy timed out"},
+    {"last_error": "ValidationError"}, {"rate_limit_recovery": {"version": 1}},
+    {"startup_recovery": {"version": 1}}, {"keys": ["different-input"]},
+    {"publication_keys": ["missing-result"]},
+])
+def test_quota_recovery_cannot_bypass_other_failures_or_change_inputs(tmp_path, change):
+    timeline, _, kwargs, path = setup_rate_limit_failure(tmp_path)
+    ledger = read_json(path)
+    ledger.update(change)
+    atomic_json(path, ledger)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="恢复条件"):
+        review(timeline, recover_rate_limit={"reason": "reset confirmed", "not_before": 1}, **kwargs)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("not_before", [float("inf"), float("nan"), -1, 10**12])
+def test_quota_recovery_rejects_unknown_or_future_reset_without_mutation(tmp_path, not_before):
+    timeline, _, kwargs, path = setup_rate_limit_failure(tmp_path)
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="恢复时间"):
+        review(timeline, recover_rate_limit={"reason": "reset", "not_before": not_before}, **kwargs)
+    assert path.read_bytes() == before
+
+
+def test_quota_recovery_final_provider_failure_stays_terminal(tmp_path):
+    timeline, _, kwargs, path = setup_rate_limit_failure(tmp_path)
+    def fail(*args, **kw):
+        raise AgyProviderError("agy exit 3: rate limit")
+    with pytest.raises(AgyProviderError):
+        review(timeline, caller=fail, recover_rate_limit={"reason": "reset confirmed", "not_before": 1}, **kwargs)
+    ledger = read_json(path)
+    assert ledger["attempts"] == 3 and ledger["terminal"]
+    with pytest.raises(ValueError):
+        review(timeline, caller=fail, **kwargs)
+
+
+def test_quota_recovery_cannot_override_completed_content_failure(tmp_path):
+    timeline, p, kwargs, path = setup_rate_limit_failure(tmp_path)
+    ledger = read_json(path)
+    result = good(p)
+    result["findings"][0].update(status="FAIL", severity="P1")
+    atomic_json(kwargs["cache_dir"] / (ledger["keys"][0] + ".json"), {"result": result})
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="恢复条件"):
+        review(timeline, recover_rate_limit={"reason": "reset", "not_before": 1}, **kwargs)
+    assert path.read_bytes() == before

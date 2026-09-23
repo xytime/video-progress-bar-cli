@@ -344,6 +344,8 @@ def main():
     parser.add_argument("--publication-file", type=Path)
     parser.add_argument("--recover-startup-failure", metavar="REASON",
                         help="已确认本地启动故障并修复环境后，保留原预算进行一次受控恢复")
+    parser.add_argument("--recover-rate-limit", metavar="REASON", help="确认额度已恢复后，动用原输入剩余第三次审校")
+    parser.add_argument("--rate-limit-reset-at", type=float, help="操作员从供应商回执确认的额度恢复 Unix 时间")
     parser.add_argument("--whisper-model", type=Path, default=Path.home() / ".cache/whisper/small.pt")
     parser.add_argument("--allow-medium-recheck", action="store_true", help="small 对齐不确定时复核同源片段一次")
     parser.add_argument("--wordlist-dir", type=Path, default=Path.home() / "Downloads/hermes-wordlists")
@@ -355,6 +357,10 @@ def main():
     try:
         if args.recover_startup_failure is not None and args.stage != "review":
             raise ValueError("启动恢复仅支持 review 阶段")
+        if ((args.recover_rate_limit is not None or args.rate_limit_reset_at is not None)
+                and (args.stage != "review" or args.recover_rate_limit is None
+                     or args.rate_limit_reset_at is None)):
+            raise ValueError("额度恢复仅支持 review，必须同时提供恢复原因和时间")
         if args.stage == "bootstrap-bind":
             caption = Path(read_json(timeline)["source_provenance"]["caption_artifact"])
             bind_bootstrap_evidence(timeline, parent={
@@ -383,6 +389,9 @@ def main():
             kwargs = {}
             if args.recover_startup_failure is not None:
                 kwargs["recover_startup_reason"] = args.recover_startup_failure
+            if args.recover_rate_limit is not None:
+                kwargs["recover_rate_limit"] = {"reason": args.recover_rate_limit,
+                                                "not_before": args.rate_limit_reset_at}
             if args.stage == "publication":
                 from video_processing.study_cards.publication_qa import review_publication
                 if not args.publication_file:
