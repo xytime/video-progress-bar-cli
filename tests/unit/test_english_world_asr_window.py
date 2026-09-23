@@ -85,7 +85,13 @@ def test_historical_medium_failure_is_preserved_and_projection_reuses_no_model(t
     payload["source_provenance"].update(caption_artifact=str(derived), source_end_seconds=43.14)
     payload["english_text"] = "The report ends."
     atomic_json(timeline, payload)
-    language.bind_bootstrap_evidence(timeline, parent={"raw": raw, "parent_caption": str(caption)})
+    import subprocess
+    import sys
+    # 使用生产的文件入口方式，避免 pytest 把项目根加到路径后掩盖导入故障。
+    result = subprocess.run([sys.executable, str(language.ROOT / "scripts/english_world_language.py"),
+                             "bootstrap-bind", "--timeline", str(timeline)],
+                            cwd=tmp_path, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
     language.source_evidence_with_recheck(timeline, small, medium, tasks)
     projected = read_json(tmp_path / "qa/source_evidence.json")
     assert projected["asr_words_raw"] == raw_words()

@@ -338,7 +338,7 @@ def prepare(timeline, wordlist_dir=None):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=("source", "lexicon", "prepare", "review", "publication", "validate"))
+    parser.add_argument("stage", choices=("source", "bootstrap-bind", "lexicon", "prepare", "review", "publication", "validate"))
     parser.add_argument("--timeline", type=Path, required=True)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--publication-file", type=Path)
@@ -355,7 +355,13 @@ def main():
     try:
         if args.recover_startup_failure is not None and args.stage != "review":
             raise ValueError("启动恢复仅支持 review 阶段")
-        if args.stage == "source":
+        if args.stage == "bootstrap-bind":
+            caption = Path(read_json(timeline)["source_provenance"]["caption_artifact"])
+            bind_bootstrap_evidence(timeline, parent={
+                "raw": read_json(timeline.parent / "qa/source_asr_raw.json"),
+                "parent_caption": str(caption.with_name("local_whisper_placeholder.json3")),
+            })
+        elif args.stage == "source":
             if args.allow_medium_recheck:
                 source_evidence_with_recheck(timeline, args.whisper_model.expanduser(),
                                             Path.home() / ".cache/whisper/medium.pt",

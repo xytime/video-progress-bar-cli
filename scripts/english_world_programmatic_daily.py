@@ -884,11 +884,8 @@ def run(
                 timeline_path = workspace / "timeline.json"
                 atomic_json(timeline_path, _initial_timeline(candidate, source=source, caption=caption, start=start, end=end))
                 stage = "source_evidence_alignment"
-                from scripts.english_world_language import bind_bootstrap_evidence
-                evidence = bind_bootstrap_evidence(timeline_path, parent={
-                    "raw": read_json(workspace / "qa/source_asr_raw.json"),
-                    "parent_caption": "source/local_whisper_placeholder.json3",
-                })
+                _script("bootstrap-bind", timeline=timeline_path)
+                evidence = read_json(workspace / "qa/source_evidence.json")
             words = _frozen_words(evidence)
             timeline = read_json(timeline_path)
             timeline["words"] = words
