@@ -11,6 +11,8 @@
 7. `review` 用 AGY Gemini 3.8 Flash High 独立审校。首次实际内容 FAIL 后允许修订一次，再 source/prepare/review；第二次实际内容 FAIL 结束。输入变化、时间修复和此前的 PASS 不算内容失败。全文与增量文案共享最多三个输入、三次模型调用（包括供应商故障重试）；不通过回读旧 PASS 撤销新 FAIL。旧误终止仅在全部原始缓存可验证、恰好一次实际 FAIL 且总调用有余量时由程序迁移，保留原次数、缓存和迁移证据；不得手工清除账本或制造 PASS。P2 风格建议可 PASS，P0/P1 实质错误仍阻断。
 8. `render_study_card.py` 消费冻结计划；渲染后仍跑音频、结构、关键帧检查。日更允许的自然长片段（严格大于30秒且不超过300秒）可在渲染命令使用兼容参数 `--allow-long-test`；结构校验使用 `scripts/english_world_language.py validate --timeline ... --manifest ...`，音频校验使用 `scripts/validate_study_card_audio.py --mp4 ... --timeline ... --manifest ... --report ...`，二者不接受 `--allow-long`，自行执行真实时长和语音硬门禁。所有新生成封面、标题与投稿文案必须纳入审校或新增独立文案审校证据。
 
+左上原视频窗口一律按原始显示比例完整缩放（`contain`），居中留底色；横、竖、方形素材均不得为铺满窗口而裁切或拉伸。manifest 记录适配模式与窗口坐标。验收须看开头、中段、每次滚动结束和末句的实际成片，确认人物头部、原始画面边缘完整。内容安全 PASS 不代表构图合格；两者分别验收。
+
 供应商失败不转付费 API；未知额度记录 unknown。已经投稿或状态不确定的旧片不重传。
 
 ### 自然句窗口的质量判定范围（2026-09-23 用户批准）

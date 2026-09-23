@@ -20,7 +20,10 @@
 """
 
 from pathlib import Path
+import subprocess
 
+import imageio_ffmpeg
+from PIL import Image, ImageChops, ImageDraw
 import pytest
 
 from video_processing.study_cards import StudyCardContent, StudyCardRenderer, VocabularyItem
@@ -29,6 +32,7 @@ from video_processing.study_cards.template_a import (
     MIN_MICRO_NOTES_PER_SCREEN,
     READING_VIEWPORT_BOTTOM,
     TEXT_TOP,
+    VIDEO_BOX,
     WordBox,
     RIGHT_CARD_TOP,
     RecordUnderlineTemplate,
@@ -39,6 +43,48 @@ from video_processing.study_cards.template_a import (
     _vocabulary_anchor_y,
     required_micro_notes_for_screen,
 )
+
+
+@pytest.mark.parametrize("width,height,sar", [
+    (180, 320, "1/1"), (320, 180, "1/1"), (480, 160, "1/1"),
+    (240, 240, "1/1"), (720, 576, "16/15"),
+])
+def test_source_window_keeps_all_four_corners_and_display_ratio(tmp_path, width, height, sar):
+    """真实 FFmpeg 检查四角都在且不拉伸，防止竖片人物被裁头脚。"""
+    source = Image.new("RGB", (width, height), (24, 24, 24))
+    draw = ImageDraw.Draw(source)
+    colors = [(240, 32, 32), (32, 240, 32), (32, 32, 240), (240, 240, 32)]
+    for (right, bottom), color in zip(((0, 0), (1, 0), (0, 1), (1, 1)), colors):
+        x = width * 7 // 8 if right else 0
+        y = height * 7 // 8 if bottom else 0
+        draw.rectangle((x, y, x + width // 8, y + height // 8), fill=color)
+    fixture, output = tmp_path / "source.png", tmp_path / "window.png"
+    source.save(fixture)
+    target_w, target_h = VIDEO_BOX[2] - VIDEO_BOX[0], VIDEO_BOX[3] - VIDEO_BOX[1]
+    graph = StudyCardRenderer._source_video_filter(
+        video_w=target_w, video_h=target_h, source_duration=1,
+    ).replace("[1:v]", "[source]")
+    result = subprocess.run([
+        imageio_ffmpeg.get_ffmpeg_exe(), "-v", "error", "-y",
+        "-f", "lavfi", "-i", "color=s=2x2", "-loop", "1", "-framerate", "30", "-i", str(fixture),
+        "-filter_complex", f"[1:v]format=yuv420p,setsar={sar}[source];{graph}",
+        "-map", "[clip]", "-frames:v", "1", str(output),
+    ], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    rendered = Image.open(output).convert("RGB")
+    assert rendered.size == (target_w, target_h)
+    bounds = ImageChops.difference(rendered, Image.new("RGB", rendered.size, "#EDE7DF")).getbbox()
+    left, top, right, bottom = bounds
+    fitted_w, fitted_h = right - left, bottom - top
+    numerator, denominator = map(int, sar.split("/"))
+    ratio = width * numerator / (height * denominator)
+    assert abs(fitted_w - fitted_h * ratio) <= max(2, ratio * 2)
+    assert min(target_w - fitted_w, target_h - fitted_h) <= 2
+    assert abs(left - (target_w - fitted_w) / 2) <= 1
+    assert abs(top - (target_h - fitted_h) / 2) <= 1
+    for (x, y), color in zip(((1, 1), (15, 1), (1, 15), (15, 15)), colors):
+        actual = rendered.getpixel((left + fitted_w * x // 16, top + fitted_h * y // 16))
+        assert max(abs(a - b) for a, b in zip(actual, color)) < 12
 
 
 def _payload():

@@ -517,7 +517,12 @@ class StudyCardRenderer:
         video_h: int,
         source_duration: float,
     ) -> str:
-        scale = f"scale={video_w}:{video_h}:force_original_aspect_ratio=increase,crop={video_w}:{video_h},fps=30"
+        # 按显示比例完整容纳原片；竖版也不能为铺满横窗而裁去头脚。
+        # dar 包含非方形像素比例，缩放后统一为方形像素再居中留边。
+        scale = (
+            f"scale=w='min({video_w},{video_h}*dar)':h='min({video_h},{video_w}/dar)',"
+            f"setsar=1,format=rgba,pad={video_w}:{video_h}:(ow-iw)/2:(oh-ih)/2:color=0xEDE7DF,fps=30"
+        )
         return f"[1:v]{scale}[clip]"
 
     @staticmethod
@@ -561,6 +566,8 @@ class StudyCardRenderer:
             "template": self.template.name,
             "content_type": content.content_type,
             "source_video": str(source_video),
+            "source_video_fit": "contain",
+            "source_video_box": list(VIDEO_BOX),
             "source_start": source_start,
             "source_duration": source_duration,
             "duration": output_duration,
