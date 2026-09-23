@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-09-24 | Codex | 替换候选保留词元证据、排除重复坏词及未解析音标。 |
 | 1.1.0 | 2026-09-17 | Antigravity | 验证带标点表面词在展示计划中不误触发词元音标依据校验。 |
 | 1.0.0 | 2026-09-17 | Codex | 验证学习点表面词的末尾标点不改变词典证据绑定。 |
 """
@@ -77,3 +78,15 @@ def test_reviewed_content_accepts_surface_word_with_punctuation():
     assert item.phonetic == "'sә:fis"
     assert item.phonetic_word == "surface"
 
+
+def test_revision_options_exclude_rejected_words_ambiguous_ipa_and_keep_proven_lemmas(tmp_path):
+    (tmp_path / "ecdict.csv").write_text(
+        "word,phonetic,definition,translation,exchange\n"
+        "record,ri'kɒ:d,record,n.记录,\nvolatility,.vɒlə'tiliti,volatility,n.波动,\n"
+        "note,nəut,note,n.笔记,\nnotes,,notes,n.笔记,0:note\n"
+        "empty,...,empty,n.空,\n", encoding="utf-8")
+    words = [{"text": w} for w in ["record", "Record,", "volatility,", "notes", "unknown", "empty"]]
+    options = learning_dictionary.dictionary_word_options(words, tmp_path, excluded_words={"record"})
+    assert [p["word_index"] for p in options] == [3]
+    assert options[0]["phonetic_word"] == "note"
+    assert options[0]["phonetic"] == "nəut"

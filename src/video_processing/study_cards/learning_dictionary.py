@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.5 | 2026-09-24 | Codex | 共享批量词典查询与词元证据，为受限选词排除缺音标、歧义点号及审校拒绝词。 |
 | 1.0.4 | 2026-09-23 | Codex | 仅规范化已确认字符；保留歧义点号、拒绝空发音，记录规范化版本。 |
 | 1.0.0 | 2026-09-09 | Codex | 表面词优先，缺音标时显式标注经词典证明的词元。 |
 | 1.0.2 | 2026-09-17 | Codex | 词典查找规范化来源词两端标点，保留屏显原词与词轴不变，避免安全候选因逗号误判无词条。 |
@@ -91,13 +92,8 @@ def validate_context_meaning_separation(points, words):
                 )
 
 
-def attach_evidence(payload, directory):
-    from ..vocabulary.leveler import VocabularyLeveler
-    leveler = VocabularyLeveler(directory)
-    points = payload["learning_points"]
-    targets = {_dictionary_key(p["word"]) for p in points}
-    if "" in targets:
-        raise ValueError("学习点必须包含可查询的英文词，不能编造音标")
+def _load_rows(directory, targets):
+    """一次扫描候选词及必要词元，供证据绑定和修订选词共享。"""
     path = directory / "ecdict.csv"
     rows = {}
     with path.open(encoding="utf-8", newline="") as stream:
@@ -113,15 +109,54 @@ def attach_evidence(payload, directory):
                 key = _dictionary_key(row["word"])
                 if key in missing_lemmas:
                     rows[key] = row
+    return rows
+
+
+def _pronunciation(row, rows):
+    if row.get("phonetic"):
+        return row
+    lemma = next((part[2:] for part in row.get("exchange", "").split("/") if part.startswith("0:")), "")
+    return rows.get(lemma, {})
+
+
+def dictionary_word_options(words, directory, *, excluded_words=()):
+    """提供有本地发音证据的替换词；排除已被审校拒绝的词和未解析音标。
+
+    这里只证明词典可用，不证明语境读音正确；最终仍须独立复审。
+    """
+    excluded = {_dictionary_key(word) for word in excluded_words}
+    keys = {_dictionary_key(word["text"]) for word in words} - {""}
+    rows = _load_rows(directory, keys)
+    options = []
+    for index, word in enumerate(words):
+        key = _dictionary_key(word["text"])
+        row = rows.get(key)
+        if not row or key in excluded:
+            continue
+        pronunciation = _pronunciation(row, rows)
+        phonetic, rules = normalize_phonetic(pronunciation.get("phonetic", ""))
+        if not any(c.isalpha() for c in phonetic) or "unresolved_legacy_punctuation" in rules:
+            continue
+        options.append({"word_index": index, "word": word["text"], "phonetic": phonetic,
+                        "phonetic_word": pronunciation["word"], "dictionary_translation": row.get("translation", "")})
+    return options
+
+
+def attach_evidence(payload, directory):
+    from ..vocabulary.leveler import VocabularyLeveler
+    leveler = VocabularyLeveler(directory)
+    points = payload["learning_points"]
+    targets = {_dictionary_key(p["word"]) for p in points}
+    if "" in targets:
+        raise ValueError("学习点必须包含可查询的英文词，不能编造音标")
+    path = directory / "ecdict.csv"
+    rows = _load_rows(directory, targets)
     for point in points:
         key = _dictionary_key(point["word"])
         row = rows.get(key)
         if not row:
             raise ValueError(f"本机词典没有学习点 {key}，不能编造音标")
-        pronunciation = row
-        if not row.get("phonetic"):
-            lemma = next((part[2:] for part in row.get("exchange", "").split("/") if part.startswith("0:")), "")
-            pronunciation = rows.get(lemma, {})
+        pronunciation = _pronunciation(row, rows)
         if not pronunciation.get("phonetic"):
             raise ValueError(f"本机词典没有 {key} 或其词元的音标")
         raw_phonetic = pronunciation["phonetic"]

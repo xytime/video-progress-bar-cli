@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.2 | 2026-09-24 | Codex | 真实词典、封面和账本覆盖发音错误替换及失败终止，验证 Schema 限制。 |
 | 1.3.1 | 2026-09-23 | Codex | 入口测试使用真实词典、布局及账本验证首次 FAIL 到唯一复审 PASS 或终止。 |
 | 1.3.0 | 2026-09-17 | Codex | 覆盖本地 ASR 占位锚点不会在转写前被误作成片字幕拒绝。 |
 | 1.2.0 | 2026-09-17 | Codex | 覆盖无原字幕时本地 Whisper 的自然句窗口与透明引导工件。 |
@@ -154,7 +155,8 @@ def test_candidate_failure_receipt_records_stage_and_error(monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize("second_passes", [True, False])
-def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path, monkeypatch, second_passes):
+@pytest.mark.parametrize("pronunciation_failure", [True, False])
+def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path, monkeypatch, second_passes, pronunciation_failure):
     """只替换子进程边界和供应商；词典、布局、指纹、审校预算均跑真实实现。"""
     from video_processing.study_cards.learning_dictionary import attach_evidence
     from video_processing.study_cards.display_plan import build_plan
@@ -167,7 +169,7 @@ def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path,
     wordlist = tmp_path / "wordlist"
     wordlist.mkdir()
     (wordlist / "ecdict.csv").write_text("word,phonetic,definition,translation,exchange\n"
-        "clean,kli:n,clean,a. 清洁的,\nenergy,enədʒi,energy,n. 能源,\nfamilies,fæməliz,families,n. 家庭,\n")
+        "clean,kli:n,clean,a. 清洁的,\nenergy,enədʒi,energy,n. 能源,\nfamilies,fæməliz,families,n. 家庭,\nhelps,helps,helps,v. 帮助,\n")
     (wordlist / "exam-wordlists.csv").write_text("word,pos,exam,phonetic,translation\nclean,a.,KET,kli:n,清洁的\nenergy,n.,KET,enədʒi,能源\nfamilies,n.,KET,fæməliz,家庭\n")
     (wordlist / "cefr-enhanced.csv").write_text("word,pos,cefr,phonetic,translation\n")
     payload = daily._apply_draft(_timeline(), _draft())
@@ -197,7 +199,8 @@ def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path,
                                 "evidence": "来源核对", "suggestion": ""}
                                for c, t in sorted(expected_checks(p, evidence, editorial))]}
         if not reviews or not second_passes:
-            f = next(f for f in result["findings"] if f["check"] == "TRANSLATION_ACCURACY" and f["target"] == "paragraph:0")
+            check, target = ("VOCAB_PRONUNCIATION", "word:0:1") if pronunciation_failure and not reviews else ("TRANSLATION_ACCURACY", "paragraph:0")
+            f = next(f for f in result["findings"] if f["check"] == check and f["target"] == target)
             f.update(status="FAIL", severity="P1", suggestion="纠正段译")
         report = review(timeline, cache_dir=tmp_path / "output/english_world_language/cache", task_dir=task_dir,
                         model=daily.settings.english_world_language_model, effort=daily.settings.english_world_language_effort,
@@ -212,6 +215,9 @@ def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path,
         drafts.append(1)
         value = _draft()
         value["translations"][0]["translation_zh"] = "清洁能源带来帮助。各个家庭正在学习。"
+        if pronunciation_failure:
+            assert 0 not in kwargs["schema"]["properties"]["learning_points"]["items"]["properties"]["word_index"]["enum"]
+            value["learning_points"][0] = {"word_index": 2, "pos": "v.", "context_meaning_zh": "帮助"}
         return value
 
     monkeypatch.setattr(daily, "_script", script)
@@ -228,3 +234,18 @@ def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path,
     assert reviews[-1]["attempts"] == 2
     assert read_json(timeline.parent / "editorial_changes.json")["revision"] == 1
     assert read_json(task_dir / "editorial_revision.json")["preserved_attempts"] == 1
+
+
+def test_dictionary_bounded_schema_rejects_provider_reusing_bad_pronunciation():
+    import jsonschema
+    timeline = daily._apply_draft(_timeline(), _draft())
+    finding = {'check': 'VOCAB_PRONUNCIATION', 'target': 'word:0:1', 'status': 'FAIL', 'severity': 'P1'}
+    assert daily._rejected_pronunciation_words(timeline, [finding]) == {'Clean'}
+    schema = daily._draft_schema(1, 5, allowed_indexes=[1, 2, 3])
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(_draft(), schema)
+    value = _draft()
+    value['learning_points'][0]['word_index'] = 2
+    jsonschema.validate(value, schema)
+    prompt = daily._revision_draft_prompt(timeline['words'], [(0, 5)], timeline, [finding], word_options=[])
+    assert '返回格式不能修改音标' in prompt
