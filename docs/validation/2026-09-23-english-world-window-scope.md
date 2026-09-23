@@ -15,3 +15,20 @@
 来源与候选文本安全预检恢复后，AGY 初稿未返回；依既有 Codex 起草协议，在同一工作目录完成初稿、离线词典与展示准备。独立审校实际遇到 `429 / RESOURCE_EXHAUSTED / Individual quota reached`，服务提示恢复时间约为 14:31:10 +08:00（14:16:05 日志提示 15m5s）。这不是内容审校 FAIL。
 
 增加显式额度恢复入口，仅允许同一输入在确认冷却结束后动用原三次总预算中的第三次；不删除或重置账本，不允许覆盖任何已完成内容结论。140 项隔离测试通过，证据目录 `/private/tmp/video-pytest-gybz62ni`；覆盖所有次数/状态拒绝、未来或非法恢复时间、输入改变、已完成内容失败以及最终一次仍失败的终止行为。实际补发结果另以审核与平台回执为准。
+
+## 实际恢复及补发结果
+
+14:31:48 在冷却结束后，对相同输入使用第三次调用，AGY high-effort 独立审校完成，69 项检查全部 PASS；原两次额度失败和恢复记录完整保留。成片为 43.14 秒，语言结构、最终音频、独立九帧视觉安全及机械内容安全全部 PASS。成片 SHA256：`11a42a2c5e4f6c1da466eb820d26b745311a3fc2fb13e6732ada43a9c3a7fd07`。
+
+用户已明确授权补发。14:42 视频号受理具名审核项 `9e7af91859844dcfbde382a495212088`，原生 ID 为 `export/UzFfBgAAxP2leBZCE0XWk8zT4DCaYaGdsT-gXv1y-t_PrjZaAw`。投稿前固定第三方素材不声明原创，实际页面回执为 `NOT_DECLARED`；本次未派发额外评论、Telegram 通知或抖音同步。
+
+14:43 只读回查通过 `post_list_api` 找到相同原生 ID，但原生状态码 `1` 尚无已核验语义映射，因此记录 `UNDER_REVIEW / platform_state=UNCERTAIN`，不声称公开可见，不再次上传。
+
+运行证据相对于生产项目根目录：
+
+- 工作目录：`output/english_world_programmatic/20260923_140929_640479_0nRIV_FXMnA/`。
+- 汇总：工作目录下 `qa/operator_backfill_result.json`；各独立 QA 原始报告保留。
+- 受理与声明：工作目录下 `wechat_evidence/1790145665526908000/`。
+- 精确 ID 回读：工作目录下 `wechat_readback/20260923_1443/management_readback.json`。
+
+代码 `df6f963` 已由生产 main 采用并推送；采用时保护 28 个无关脏文件。单次受理证明本条恢复成功，不代替后续每日双更稳定性观察或公开端确认。
