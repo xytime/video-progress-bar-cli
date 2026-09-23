@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                         | Description                                            |
 |---------|------------|--------------------------------|--------------------------------------------------------|
+| 1.1.0 | 2026-09-23 | Codex | 验证 Pillow 完整双语段落布局和溢出拒绝。 |
 | 1.3.0   | 2026-09-18 | Antigravity                    | 覆盖新语言契约下 AGY 封面生成与 approved_cover_payload 透传，以及封面渲染载荷隔离校验。 |
 | 1.0.0   | 2026-08-24 | Gemini_3.7_Flash_High_planning | 初始创建：覆盖 ENGLISH_WORLD_SHORT 内容路由、教学字段装配、合规策略与全流程渲染 |
 | 1.1.0 | 2026-08-24 | Codex | 覆盖 agy OCR 人审待决门禁与首选封面审核包集成。 |
@@ -485,3 +486,20 @@ def test_cover_engine_e2e_planning():
     assert layout["template_variant"] == "cover_english_newspaper"
     assert layout["canvas_width"] == 1080
     assert layout["canvas_height"] == 1260
+
+
+def test_pillow_complete_paragraph_fit_and_overflow_refusal(tmp_path):
+    draw = ImageDraw.Draw(Image.new("RGB", (1080, 1260)))
+    en = ("The company cleared a key hurdle in its proposed takeover after reaching a settlement "
+          "with several U.S. states over antitrust concerns about the deal.")
+    zh = "这家公司拟议的收购跨过了一道关键障碍。此前，公司已与美国几个州就这笔交易的反垄断问题达成和解。"
+    en_font, zh_font, en_lines, zh_lines, en_step, zh_step = english_cover_cli._fit_quote(draw, en, zh)
+    assert " ".join(en_lines) == en
+    assert "".join(zh_lines) == zh
+    assert len(en_lines) * en_step + len(zh_lines) * zh_step + 6 <= 166
+    with pytest.raises(ValueError, match="禁止省略或截断"):
+        english_cover_cli._fit_quote(draw, en * 20, zh * 20)
+    # 实际 Pillow 绘制留存产物，完整词卡和引语均使用上述通过的布局。
+    output = tmp_path / "paired-paragraph.jpg"
+    english_cover_cli._render_with_pillow_fallback({"title": "公司收购跨过障碍", "quote_en": en, "quote_zh": zh}, output)
+    assert Image.open(output).size == (1080, 1260)

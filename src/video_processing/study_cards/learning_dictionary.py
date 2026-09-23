@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.4 | 2026-09-23 | Codex | 仅规范化已确认字符；保留歧义点号、拒绝空发音，记录规范化版本。 |
 | 1.0.0 | 2026-09-09 | Codex | 表面词优先，缺音标时显式标注经词典证明的词元。 |
 | 1.0.2 | 2026-09-17 | Codex | 词典查找规范化来源词两端标点，保留屏显原词与词轴不变，避免安全候选因逗号误判无词条。 |
 | 1.0.3 | 2026-09-23 | Antigravity | 词条证据保留 raw_phonetic、normalized_phonetic、normalization_rules，规范化西里尔字符 \u04d9 及前导损坏点号，严密缺音标阻断。 |
@@ -17,7 +18,7 @@ def normalize_phonetic(raw: str) -> tuple[str, list[str]]:
     """规范化离线词典音标，保留原始值与规则溯源。
 
     将非标准西里尔字符 \\u04d9 (ә) 替换为标准 IPA \\u0259 (ə)，
-    并审慎处理前导点、多余尾点等格式损坏符号。
+    保留有歧义的点号供独立审校，不能把清洗当成发音正确证明。
     """
     if not raw:
         return "", []
@@ -29,15 +30,9 @@ def normalize_phonetic(raw: str) -> tuple[str, list[str]]:
         normalized = normalized.replace("\u04d9", "\u0259").replace("\u04d8", "\u0259")
         rules.append("replace_cyrillic_schwa")
 
-    # 2. 审慎处理前导点等格式损坏符号（如 .ˈæpl 或 .əˈbav 等点号在音标头部的情况）
-    if normalized.startswith("."):
-        normalized = re.sub(r"^\.+", "", normalized).strip()
-        rules.append("strip_leading_dots")
-
-    # 3. 处理末尾多余点号
-    if normalized.endswith("."):
-        normalized = re.sub(r"\.+$", "", normalized).strip()
-        rules.append("strip_trailing_dots")
+    # 历史点号可能承载重音信息，未经词条级核验不能删除或统一改成次重音。
+    if normalized.startswith(".") or normalized.endswith("."):
+        rules.append("unresolved_legacy_punctuation")
 
     return normalized, rules
 
@@ -131,11 +126,14 @@ def attach_evidence(payload, directory):
             raise ValueError(f"本机词典没有 {key} 或其词元的音标")
         raw_phonetic = pronunciation["phonetic"]
         normalized_phonetic, rules = normalize_phonetic(raw_phonetic)
+        if not normalized_phonetic or not any(ch.isalpha() for ch in normalized_phonetic):
+            raise ValueError(f"本机词典 {key} 的音标缺少发音字符")
         level = leveler.analyze_word(key)
         point.update(phonetic=normalized_phonetic,
                      raw_phonetic=raw_phonetic,
                      normalized_phonetic=normalized_phonetic,
                      normalization_rules=rules,
+                     normalization_version="ecdict-phonetic-v2",
                      phonetic_word=pronunciation["word"],
                      dictionary_source="ecdict.csv", dictionary_senses={"definition": row.get("definition", ""),
                      "translation": row.get("translation", ""), "exchange": row.get("exchange", "")},

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.11 | 2026-09-23 | Codex | 验证修订预占、旧回执拒绝和同任务真实预算两轮审校。 |
 | 1.0.10 | 2026-09-22 | Codex | 被拒绝的正文及增量输入不改账本，原启动失败仍可具名恢复。 |
 | 1.0.9 | 2026-09-22 | Codex | 覆盖显式启动恢复、预检失败不改账本和三次硬上限。 |
 | 1.0.0 | 2026-09-09 | Codex | JSON3 完整词、逐目标审校覆盖及重启缓存测试。 |
@@ -669,3 +670,80 @@ def test_occurrence_specific_highlight():
     item = VocabularyItem("key", "关键的", word_index=3, item_id="word:3:1")
     assert not _highlighted_token_indices(["key"], (item,), start_index=0)
     assert _highlighted_token_indices(["key"], (item,), start_index=3)
+
+
+def _first_failure_for_revision(tmp_path, check="TRANSLATION_ACCURACY"):
+    timeline, p = setup_review(tmp_path)
+    result = good(p)
+    finding = next(f for f in result["findings"] if f["check"] == check)
+    finding.update(status="FAIL", severity="P1", suggestion="按当前上下文修正", evidence="原句与当前表述不同")
+    kwargs = {"cache_dir": tmp_path / "cache", "task_dir": tmp_path / "task", "model": "test", "effort": "high"}
+    report = review(timeline, caller=lambda *a, **k: result, **kwargs)
+    atomic_json(tmp_path / "qa/review_execution.json",
+                {"status": "COMPLETED", "started_ns": 100, "report_sha256": digest(report)})
+    return timeline, p, kwargs
+
+
+def test_revision_reservation_keeps_budget_and_survives_restart(tmp_path):
+    from video_processing.study_cards.language_review_service import reserve_editorial_revision
+    timeline, p, kwargs = _first_failure_for_revision(tmp_path)
+    ledger = kwargs["task_dir"] / "language_attempts.json"
+    original = ledger.read_bytes()
+    assert reserve_editorial_revision(timeline, not_before_ns=100, **kwargs)
+    assert ledger.read_bytes() == original
+    with pytest.raises(ValueError, match="已经预占"):
+        reserve_editorial_revision(timeline, not_before_ns=100, **kwargs)
+    assert ledger.read_bytes() == original
+
+    # 真正复审消费原审校服务的第二次额度；仍为同一任务，不建立新账本。
+    atomic_json(timeline, {"english_text": "test", "translation_zh": "修正翻译"})
+    p["timeline_sha256"] = file_digest(timeline)
+    p["content"]["paragraphs"][0]["translation_zh"] = "结果令人警醒。"
+    atomic_json(tmp_path / "display_plan.json", p)
+    editorial = {"version": VERSION, "revision": 1, "changes": [
+        {"kind": "translation", "before": "旧译", "after": "新译", "evidence": "来源 10–20s"}]}
+    atomic_json(tmp_path / "editorial_changes.json", editorial)
+    result = review(timeline, caller=lambda *a, **k: good(p, editorial=editorial), **kwargs)
+    assert result["state"] == "PASS"
+    assert result["attempts"] == 2
+    assert read_json(ledger)["attempts"] == 2
+
+
+@pytest.mark.parametrize("case", ["budget", "terminal", "content_terminal", "inflight", "stale_report",
+                                  "stale_execution", "execution_error", "cache_changed", "source_changed"])
+def test_revision_refuses_invalid_evidence_before_generation(tmp_path, case):
+    from video_processing.study_cards.language_review_service import reserve_editorial_revision
+    timeline, p, kwargs = _first_failure_for_revision(tmp_path)
+    ledger_path = kwargs["task_dir"] / "language_attempts.json"
+    ledger = read_json(ledger_path)
+    if case == "budget":
+        ledger["attempts"] = 3
+    elif case in {"terminal", "content_terminal", "inflight"}:
+        ledger[case] = True
+    elif case == "stale_report":
+        atomic_json(timeline, {"english_text": "changed"})
+    elif case in {"stale_execution", "execution_error"}:
+        receipt = read_json(tmp_path / "qa/review_execution.json")
+        receipt.update(started_ns=1 if case == "stale_execution" else 100,
+                       status="ERROR" if case == "execution_error" else "COMPLETED")
+        atomic_json(tmp_path / "qa/review_execution.json", receipt)
+    elif case == "cache_changed":
+        cache = kwargs["cache_dir"] / f"{ledger['keys'][0]}.json"
+        value = read_json(cache)
+        value["result"] = good(p)
+        atomic_json(cache, value)
+    else:
+        atomic_json(tmp_path / "qa/source_evidence.json", {"source_sha256": "other"})
+    atomic_json(ledger_path, ledger)
+    before = ledger_path.read_bytes()
+    with pytest.raises(ValueError):
+        reserve_editorial_revision(timeline, not_before_ns=100, **kwargs)
+    assert ledger_path.read_bytes() == before
+    assert not (kwargs["task_dir"] / "editorial_revision.json").exists()
+
+
+def test_transcript_failure_cannot_trigger_text_only_revision(tmp_path):
+    from video_processing.study_cards.language_review_service import reserve_editorial_revision
+    timeline, p, kwargs = _first_failure_for_revision(tmp_path, check="TRANSCRIPT_ACCURACY")
+    with pytest.raises(ValueError, match="不能由受限编辑修订"):
+        reserve_editorial_revision(timeline, not_before_ns=100, **kwargs)

@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.5 | 2026-09-23 | Codex | 语言契约封面取同一完整双语段落，修复间隔缩写误拦截。 |
 | 1.0.0 | 2026-08-24 | Codex | 新增确定性时间线提取、词汇排序与封面载荷校验。 |
 | 1.0.1 | 2026-09-09 | Codex | 封面音标携带并呈现词形或显式词元标签。 |
 | 1.0.3 | 2026-09-17 | Antigravity | 修复首句无词导致封面词汇统计误判 0 词及词汇项留空缺陷，优先引用全文实际学习点。 |
@@ -147,7 +148,7 @@ def _first_sentence(text: object, *, fallback: str = "") -> str:
 
 
 def _validate_quote_closure(quote_en: str, quote_zh: str) -> None:
-    """确保中英文封面引语表达同一语义范围，检查专名完整性与引句闭合。"""
+    """机械检查明显截断与引句闭合；语义对齐仍须独立审校。"""
     en = str(quote_en or "").strip()
     zh = str(quote_zh or "").strip()
     if not en or not zh:
@@ -159,7 +160,7 @@ def _validate_quote_closure(quote_en: str, quote_zh: str) -> None:
 
     if re.search(r"\b[A-Za-z]\s*\.$", en) and not re.search(r"\b(?:u\.s\.|u\.n\.|e\.u\.|d\.c\.|etc\.)$", en, re.IGNORECASE):
         raise ValueError(f"封面英文引语截断在单字母专名缩写处：{en}")
-    if re.search(r"\bseveral\s+U\b", en, re.IGNORECASE) and not re.search(r"\bseveral\s+U\.?\s*S\b", en, re.IGNORECASE):
+    if re.search(r"\bseveral\s+U\b", en, re.IGNORECASE) and not re.search(r"\bseveral\s+U\s*\.?\s*S\b", en, re.IGNORECASE):
         raise ValueError(f"封面英文引语包含残缺专有名词碎片：{en}")
 
     if len(en_words) < 4 and any(w.lower() in {"the", "a", "an", "in", "on", "at", "to", "for", "from", "of", "by", "with", "across", "several"} for w in en_words[:-1]) and any(en.lower().rstrip(".,!?;:\"'“”‘’()").endswith(abbr.rstrip(".")) for abbr in ("u.s", "u.n", "e.u", "co", "inc", "corp", "ltd")):
@@ -293,8 +294,16 @@ def build_english_world_cover_payload(timeline: Mapping[str, Any], *, date_str: 
         return validate_english_world_cover_payload(payload)
 
     title = str(timeline.get("headline_zh") or "英语时事精读").strip()
-    quote_en = _first_sentence(timeline.get("english_text"))
-    quote_zh = _first_sentence(timeline.get("translation_zh"))
+    if timeline.get("language_contract") == "english-world-language-v1":
+        paragraphs = timeline.get("paragraphs")
+        if not isinstance(paragraphs, list) or not paragraphs or not isinstance(paragraphs[0], Mapping):
+            raise ValueError("语言契约封面必须绑定同一完整双语段落")
+        # 一个英文句子可能对应两个中文句子，不能各自取首句后假定语义对齐。
+        quote_en = str(paragraphs[0].get("english_text") or "").strip()
+        quote_zh = str(paragraphs[0].get("translation_zh") or "").strip()
+    else:
+        quote_en = _first_sentence(timeline.get("english_text"))
+        quote_zh = _first_sentence(timeline.get("translation_zh"))
     if not quote_en or not quote_zh:
         raise ValueError("timeline 缺少可用于封面的中英文首句")
     _validate_quote_closure(quote_en, quote_zh)

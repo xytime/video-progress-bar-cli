@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                       | Description                                                  |
 |---------|------------|------------------------------|--------------------------------------------------------------|
+| 1.5.1 | 2026-09-23 | Codex | 英语封面截图前验证实际教学文本未溢出或被页脚覆盖。 |
 | 1.0.0   | 2026-05-26 | Gemini_3.5_Flash_planning    | 初始创建，支持 Jinja2 模板装配、Inline SVG 注入以及 Playwright 截图生成 |
 | 1.1.0   | 2026-06-02 | Gemini_2.5_Pro_planning      | 模板目录化：接受 template_dir 替代单文件，根据 layout_spec.template_variant 动态选择 .html.j2 文件 |
 | 1.2.0   | 2026-06-02 | Gemini_3.5_Flash_planning    | 修正截图视口为 6:7 比例 (1080x1260) |
@@ -102,6 +103,21 @@ class HTMLRenderer:
                 file_url = temp_html_path.resolve().as_uri()
                 page.goto(file_url, wait_until="networkidle")
                 
+                if variant == "cover_english_newspaper":
+                    page.evaluate("document.fonts.ready")
+                    fits = page.evaluate("""() => {
+                        const footer = document.querySelector('.footer-bar').getBoundingClientRect();
+                        return [...document.querySelectorAll('.main-title, .quote-container, .vocab-section')]
+                          .every(el => {
+                            const r = el.getBoundingClientRect();
+                            return r.left >= 0 && r.top >= 0 && r.right <= innerWidth
+                              && r.bottom <= footer.top && el.scrollWidth <= el.clientWidth + 1;
+                          });
+                    }""")
+                    if not fits:
+                        browser.close()
+                        raise ValueError("英语封面完整教学文本溢出，禁止裁切截图")
+
                 # 截图并保存为 JPEG
                 out_p = Path(output_path)
                 out_p.parent.mkdir(parents=True, exist_ok=True)

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.6 | 2026-09-23 | Codex | 唯一编辑修订前验证本次回执、原缓存和剩余预算，持久预占防重复生成。 |
 | 1.0.5 | 2026-09-22 | Codex | 显式启动故障恢复须新鲜预检、绑定原输入并保留次数和终止证据。 |
 | 1.0.0 | 2026-09-09 | Codex | 跨重启三次尝试、一次修订和同键合并。 |
 | 1.0.1 | 2026-09-09 | Codex | 将转录差异和编辑修改纳入逐目标审校覆盖。 |
@@ -85,6 +86,51 @@ def check_content_budget(ledger, cache_dir, key):
     if failures and key in ordered and ordered.index(key) < max(ordered.index(k) for k in failures):
         raise ValueError("内容失败后不能回退到旧 PASS，本任务已停止旧缓存回读")
     return failures
+
+
+
+def reserve_editorial_revision(timeline, *, cache_dir, task_dir, model, effort, not_before_ns):
+    """在调用修订生成器前核验本次内容失败并持久预占唯一修订；不改审校计数。"""
+    timeline, cache_dir, task_dir = Path(timeline), Path(cache_dir), Path(task_dir)
+    root = timeline.parent
+    with locked(task_dir / "language.lock"):
+        report = read_json(root / "qa/language_qa.json")
+        execution = read_json(root / "qa/review_execution.json")
+        plan, evidence, editorial = (read_json(root / p) for p in
+                                    ("display_plan.json", "qa/source_evidence.json", "editorial_changes.json"))
+        key = cache_key(review_input(plan, evidence, editorial), model, effort)
+        if (execution.get("status") != "COMPLETED" or execution.get("started_ns", 0) < not_before_ns
+                or execution.get("report_sha256") != digest(report)
+                or report.get("state") != "FAIL" or report.get("revision") != 0
+                or editorial.get("revision") != 0 or report.get("input_key") != key
+                or report.get("timeline_sha256") != file_digest(timeline)
+                or plan.get("timeline_sha256") != file_digest(timeline)
+                or report.get("plan_sha256") != digest(plan)):
+            raise ValueError("修订必须绑定本次已完成的首次内容失败；旧报告或运行故障不能触发修订")
+        ledger = read_json(task_dir / "language_attempts.json")
+        if (ledger.get("terminal") or ledger.get("content_terminal") or ledger.get("inflight")
+                or not 0 < ledger.get("attempts", 0) < 3
+                or ledger.get("attempts") != report.get("attempts")
+                or key not in ledger.get("keys", [])
+                or len(set(ledger.get("keys", []) + ledger.get("publication_keys", []))) >= 3
+                or content_failure_keys(ledger, cache_dir) != [key]
+                or read_json(cache_dir / f"{key}.json")["result"] != report["result"]):
+            raise ValueError("没有可用于唯一修订的审校预算或原始失败缓存")
+        if evaluate(report["result"], plan, evidence=evidence, editorial=editorial) != "FAIL":
+            raise ValueError("修订报告没有有效内容失败")
+        findings = [f for f in report["result"]["findings"]
+                    if f["status"] != "PASS" or f["severity"] in {"P0", "P1"}]
+        # 英文词轴和来源在草稿 Schema 中不可修改，不能让模型用翻译掩盖原声疑点。
+        if (not findings or any(not f["suggestion"].strip() for f in findings)
+                or any(f["check"] == "TRANSCRIPT_ACCURACY" for f in findings)):
+            raise ValueError("当前问题不能由受限编辑修订解决，保留失败等待来源证据")
+        reservation = task_dir / "editorial_revision.json"
+        if reservation.exists():
+            raise ValueError("本来源已经预占唯一修订，禁止跨重启或换目录再次生成")
+        atomic_json(reservation, {"version": VERSION, "input_key": key,
+                                 "timeline_sha256": file_digest(timeline), "status": "RESERVED",
+                                 "preserved_attempts": ledger["attempts"], "started_ns": time.time_ns()})
+        return findings
 
 
 def _recover_startup(ledger, *, key, cache_dir, reason, command, model):

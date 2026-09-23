@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.1 | 2026-09-23 | Codex | 入口测试使用真实词典、布局及账本验证首次 FAIL 到唯一复审 PASS 或终止。 |
 | 1.3.0 | 2026-09-17 | Codex | 覆盖本地 ASR 占位锚点不会在转写前被误作成片字幕拒绝。 |
 | 1.2.0 | 2026-09-17 | Codex | 覆盖无原字幕时本地 Whisper 的自然句窗口与透明引导工件。 |
 | 1.1.0 | 2026-09-17 | Codex | 覆盖候选失败凭据，确保影子失败可复核具体阶段。 |
@@ -150,3 +151,80 @@ def test_candidate_failure_receipt_records_stage_and_error(monkeypatch, tmp_path
     payload = json.loads(receipt.read_text())
     assert payload["stage"] == "download"
     assert payload["error"] == "missing subtitles"
+
+
+@pytest.mark.parametrize("second_passes", [True, False])
+def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path, monkeypatch, second_passes):
+    """只替换子进程边界和供应商；词典、布局、指纹、审校预算均跑真实实现。"""
+    from video_processing.study_cards.learning_dictionary import attach_evidence
+    from video_processing.study_cards.display_plan import build_plan
+    from video_processing.study_cards.language_protocol import (atomic_json, read_json, file_digest, digest,
+                                                               expected_checks, task_identity)
+    from video_processing.study_cards.language_review_service import review
+    from copy import deepcopy
+    import time
+    monkeypatch.setattr(daily, "ROOT", tmp_path)
+    wordlist = tmp_path / "wordlist"
+    wordlist.mkdir()
+    (wordlist / "ecdict.csv").write_text("word,phonetic,definition,translation,exchange\n"
+        "clean,kli:n,clean,a. 清洁的,\nenergy,enədʒi,energy,n. 能源,\nfamilies,fæməliz,families,n. 家庭,\n")
+    (wordlist / "exam-wordlists.csv").write_text("word,pos,exam,phonetic,translation\nclean,a.,KET,kli:n,清洁的\nenergy,n.,KET,enədʒi,能源\nfamilies,n.,KET,fæməliz,家庭\n")
+    (wordlist / "cefr-enhanced.csv").write_text("word,pos,cefr,phonetic,translation\n")
+    payload = daily._apply_draft(_timeline(), _draft())
+    payload.update(language_contract=daily.VERSION, source_provenance={
+        "publisher": "Test", "source_start_seconds": 10, "source_end_seconds": 12})
+    payload = attach_evidence(payload, wordlist)
+    daily._freeze_publication(payload)
+    original_cover = deepcopy(payload["publication_text"]["cover_payload"])
+    timeline = tmp_path / "package/timeline.json"
+    atomic_json(timeline, payload)
+    evidence = {"source_sha256": "source", "caption_sha256": "caption", "source_start": 10, "source_end": 12}
+    atomic_json(timeline.parent / "qa/source_evidence.json", evidence)
+    atomic_json(timeline.parent / "editorial_changes.json", {"version": daily.VERSION, "revision": 0, "changes": []})
+    task_dir = tmp_path / "output/english_world_language/tasks" / task_identity(evidence)
+    reviews, drafts = [], []
+
+    def script(stage, *, timeline, **kwargs):
+        value = read_json(timeline)
+        p = build_plan(value, file_digest(timeline))
+        atomic_json(timeline.parent / "display_plan.json", p)
+        if stage == "prepare":
+            return
+        assert stage == "review"
+        started = time.time_ns()
+        editorial = read_json(timeline.parent / "editorial_changes.json")
+        result = {"findings": [{"check": c, "target": t, "status": "PASS", "severity": "NONE",
+                                "evidence": "来源核对", "suggestion": ""}
+                               for c, t in sorted(expected_checks(p, evidence, editorial))]}
+        if not reviews or not second_passes:
+            f = next(f for f in result["findings"] if f["check"] == "TRANSLATION_ACCURACY" and f["target"] == "paragraph:0")
+            f.update(status="FAIL", severity="P1", suggestion="纠正段译")
+        report = review(timeline, cache_dir=tmp_path / "output/english_world_language/cache", task_dir=task_dir,
+                        model=daily.settings.english_world_language_model, effort=daily.settings.english_world_language_effort,
+                        caller=lambda *a, **k: result)
+        reviews.append(report)
+        atomic_json(timeline.parent / "qa/review_execution.json", {"status": "COMPLETED", "started_ns": started,
+                                                                   "report_sha256": digest(read_json(timeline.parent / "qa/language_qa.json"))})
+        if report["state"] != "PASS":
+            raise daily.ProgrammaticDailyError("language QA: FAIL")
+
+    def draft(*args, **kwargs):
+        drafts.append(1)
+        value = _draft()
+        value["translations"][0]["translation_zh"] = "清洁能源带来帮助。各个家庭正在学习。"
+        return value
+
+    monkeypatch.setattr(daily, "_script", script)
+    monkeypatch.setattr(daily, "run_agy_structured", draft)
+    if second_passes:
+        result = daily._review_and_revise(timeline, payload, wordlist_dir=wordlist)
+        assert result["publication_text"]["cover_payload"]["quote_zh"] != original_cover["quote_zh"]
+    else:
+        with pytest.raises(daily.ProgrammaticDailyError, match="FAIL"):
+            daily._review_and_revise(timeline, payload, wordlist_dir=wordlist)
+        assert read_json(task_dir / "language_attempts.json")["content_terminal"]
+    assert len(drafts) == 1
+    assert len(reviews) == 2
+    assert reviews[-1]["attempts"] == 2
+    assert read_json(timeline.parent / "editorial_changes.json")["revision"] == 1
+    assert read_json(task_dir / "editorial_revision.json")["preserved_attempts"] == 1

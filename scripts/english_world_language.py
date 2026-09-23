@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.8 | 2026-09-23 | Codex | 保存一次 medium 复核及原始证据，跨目录复用已通过模型，区分内容失败与运行失败回执。 |
 | 1.0.7 | 2026-09-23 | Antigravity | Whisper ASR 原始证据先落盘至 source_asr_raw.json 再校验修复。 |
 | 1.0.6 | 2026-09-22 | Codex | 提供显式启动故障恢复理由入口，不清除次数或绕过语言检查。 |
 | 1.0.0 | 2026-09-09 | Codex | source/prepare/review/validate 阶段独立执行，不接触投稿账本。 |
@@ -18,6 +19,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -55,7 +57,7 @@ def source_evidence(timeline, model_path):
         if all(old.get(k) == v for k, v in binding.items()):
             old["timeline_differences"] = transcript_differences(payload["english_text"], old["asr_text"])
             atomic_json(cached_path, old)
-            if not raw_path.exists() and "asr_words_raw" in old:
+            if "asr_words_raw" in old:
                 atomic_json(raw_path, {
                     "version": VERSION, **binding, "asr_text": old.get("asr_text", ""),
                     "raw_words": old.get("asr_words_raw", []), "sample_rate": 16000, "channels": 1,
@@ -93,6 +95,86 @@ def source_evidence(timeline, model_path):
             evidence["alignment_status"] = "UNCERTAIN"
             evidence["alignment_error"] = str(exc)
     atomic_json(cached_path, evidence)
+
+
+def source_evidence_with_recheck(timeline, small_model, medium_model, task_root):
+    """small 的时间/对齐不确定时，保留原始证据，对同源片段最多做一次本地 medium 复核。"""
+    from video_processing.study_cards.language_review_service import locked
+    root = timeline.parent
+    payload = read_json(timeline)
+    p = payload["source_provenance"]
+    source = Path(p.get("source_video", "source/source.mp4"))
+    source = source if source.is_absolute() else root / source
+    binding = {"source_sha256": file_digest(source), "caption_sha256": file_digest(root / p["caption_artifact"]),
+               "source_start": p["source_start_seconds"], "source_end": p["source_end_seconds"],
+               "caption_parser_version": PARSER_VERSION}
+    task_dir = Path(task_root) / task_identity(binding)
+    receipt_path = task_dir / "source_recheck.json"
+    evidence_path, raw_path = root / "qa/source_evidence.json", root / "qa/source_asr_raw.json"
+
+    def bound(value, model):
+        return (all(value.get(k) == v for k, v in binding.items())
+                and model.is_file() and value.get("model_sha256") == file_digest(model))
+
+    def require_alignment():
+        evidence = read_json(evidence_path)
+        if (evidence.get("alignment_status") not in (None, "PASS") or not evidence.get("asr_words")
+                or evidence.get("sample_rate") != 16000 or evidence.get("channels") != 1):
+            raise ValueError("UNCERTAIN: 来源字幕/ASR 对齐不确定")
+        return evidence
+
+    with locked(task_dir / "source_recheck.lock"):
+        if receipt_path.exists():
+            receipt = read_json(receipt_path)
+            evidence, raw = receipt.get("medium_evidence", {}), receipt.get("medium_raw", {})
+            if (receipt.get("status") != "PASS" or not bound(evidence, medium_model)
+                    or not bound(raw, medium_model)):
+                raise ValueError("来源 medium 复核已尝试或证据过期；禁止换目录重复复核")
+            # 后续 source/prepare/review 继续使用通过的模型，保留 small 失败记录。
+            evidence["timeline_differences"] = transcript_differences(payload["english_text"], evidence["asr_text"])
+            evidence["timeline_normalizations"] = transcript_normalizations(payload["english_text"], evidence["asr_text"])
+            atomic_json(evidence_path, evidence)
+            atomic_json(raw_path, raw)
+            require_alignment()
+            return
+        try:
+            source_evidence(timeline, small_model)
+            require_alignment()
+            return
+        except ValueError as exc:
+            if not str(exc).startswith("UNCERTAIN:"):
+                raise
+            small_error = str(exc)
+        # 没有绑定当前来源的原始 ASR 时，不把其他错误误判为可复核的对齐问题。
+        small_raw = read_json(raw_path)
+        if not bound(small_raw, small_model):
+            raise ValueError("small 失败缺少绑定当前来源的原始 ASR")
+        if not medium_model.is_file():
+            raise ValueError("UNCERTAIN: medium 模型未下载，保留 small 原始证据并停止")
+        if file_digest(medium_model) == file_digest(small_model):
+            raise ValueError("medium 复核必须使用不同的本地模型")
+        receipt = {"version": VERSION, "binding": binding, "status": "STARTED", "attempts": 1,
+                   "small_error": small_error, "small_raw": small_raw}
+        if evidence_path.exists():
+            failed_evidence = read_json(evidence_path)
+            if bound(failed_evidence, small_model):
+                receipt["small_evidence"] = failed_evidence
+        atomic_json(receipt_path, receipt)  # 崩溃也不能重新领取复核。
+        try:
+            source_evidence(timeline, medium_model)
+            evidence, raw = require_alignment(), read_json(raw_path)
+            if not bound(evidence, medium_model) or not bound(raw, medium_model):
+                raise ValueError("medium 复核来源绑定发生变化")
+            receipt.update(status="PASS", medium_evidence=evidence, medium_raw=raw)
+        except Exception as exc:
+            receipt.update(status="FAIL", medium_error=str(exc))
+            if raw_path.exists():
+                raw = read_json(raw_path)
+                if bound(raw, medium_model):
+                    receipt["medium_raw"] = raw
+            atomic_json(receipt_path, receipt)
+            raise
+        atomic_json(receipt_path, receipt)
 
 
 def prepare(timeline, wordlist_dir=None):
@@ -159,14 +241,23 @@ def main():
     parser.add_argument("--recover-startup-failure", metavar="REASON",
                         help="已确认本地启动故障并修复环境后，保留原预算进行一次受控恢复")
     parser.add_argument("--whisper-model", type=Path, default=Path.home() / ".cache/whisper/small.pt")
+    parser.add_argument("--allow-medium-recheck", action="store_true", help="small 对齐不确定时复核同源片段一次")
     parser.add_argument("--wordlist-dir", type=Path, default=Path.home() / "Downloads/hermes-wordlists")
     args = parser.parse_args()
     timeline = args.timeline.resolve()
+    review_execution = {"status": "STARTED", "started_ns": time.time_ns()}
+    if args.stage == "review":
+        atomic_json(timeline.parent / "qa/review_execution.json", review_execution)
     try:
         if args.recover_startup_failure is not None and args.stage != "review":
             raise ValueError("启动恢复仅支持 review 阶段")
         if args.stage == "source":
-            source_evidence(timeline, args.whisper_model.expanduser())
+            if args.allow_medium_recheck:
+                source_evidence_with_recheck(timeline, args.whisper_model.expanduser(),
+                                            Path.home() / ".cache/whisper/medium.pt",
+                                            ROOT / "output/english_world_language/tasks")
+            else:
+                source_evidence(timeline, args.whisper_model.expanduser())
         elif args.stage == "lexicon":
             from video_processing.study_cards.learning_dictionary import attach_evidence
             atomic_json(timeline, attach_evidence(read_json(timeline), args.wordlist_dir.expanduser()))
@@ -193,6 +284,9 @@ def main():
                             model=settings.english_world_language_model, command=settings.agy_command,
                             timeout=settings.english_world_language_timeout_seconds,
                             effort=settings.english_world_language_effort)
+            if args.stage == "review":
+                atomic_json(timeline.parent / "qa/review_execution.json",
+                            {**review_execution, "status": "COMPLETED", "report_sha256": digest(read_json(timeline.parent / "qa/language_qa.json"))})
             print(f"language QA: {report['state']}; cache_hit={report['cache_hit']}; attempts={report['attempts']}")
             return 0 if report["state"] == "PASS" else 2
         else:
@@ -200,6 +294,9 @@ def main():
             print(validate_display(timeline, args.manifest))
         return 0
     except Exception as exc:
+        if args.stage == "review":
+            atomic_json(timeline.parent / "qa/review_execution.json",
+                        {**review_execution, "status": "ERROR", "error_type": type(exc).__name__})
         # 保留失败收据；绝不覆盖已有语言 PASS 来掩盖内容改变，验证器仍核对绑定。
         atomic_json(timeline.parent / "qa/language_execution_error.json",
                     {"stage": args.stage, "state": "FAIL", "error_type": type(exc).__name__, "message": str(exc)})

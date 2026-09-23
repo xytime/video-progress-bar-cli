@@ -9,6 +9,7 @@ JSON Schema 约束的一次调用中补全中文段译、标题和 3--5 个学�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.1 | 2026-09-23 | Codex | 安全分段无解即停止；重新冻结双语封面，按真实账本预占唯一修订并验证目标变化与来源依据。 |
 | 1.5.0 | 2026-09-23 | Antigravity | 语法分段与多词短语边界保护防跨屏撕裂，接入 Revision 1 修订机制并基于最终排版生成变更审计。 |
 | 1.4.0 | 2026-09-19 | Antigravity | 修复锁题后质检或渲染失败时排除列表遗漏 candidate ID 的问题，防止跨槽位死锁。 |
 | 1.3.8 | 2026-09-17 | Antigravity | 扩充预检候选池上限至 10，保持与每日 10 条发布目标一致。 |
@@ -35,6 +36,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from typing import Any, Iterable, Mapping
 
 
@@ -456,19 +458,7 @@ def _paragraph_word_ranges(words: list[dict[str, Any]], *, maximum: int = 34) ->
                         best_k = k
 
         if best_k is None:
-            for k in range(begin + maximum, min(n - 1, begin + maximum + 12)):
-                cleaned = [str(w.get("text", "")).strip(".,!?;:\"'“”‘’").lower() for w in words]
-                inside_entity = any(
-                    start < k < start + len(entity)
-                    for entity in _KNOWN_MULTIWORD_ENTITIES
-                    for start in range(max(0, k - len(entity) + 1), min(len(words) - len(entity) + 1, k + 1))
-                    if tuple(cleaned[start:start + len(entity)]) == entity
-                )
-                if not inside_entity and cleaned[k - 1] not in _FORBIDDEN_SPLIT_PREV:
-                    best_k = k
-                    break
-            if best_k is None:
-                best_k = min(n - 1, begin + maximum)
+            raise ProgrammaticDailyError("无法找到安全分段边界；禁止按词数强行截断")
 
         ranges.append((begin, best_k))
         begin = best_k
@@ -608,71 +598,69 @@ def _generate_editorial_changes(
     new_timeline: Mapping[str, Any],
     actionable_findings: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """对比修订前后时间线，生成符合协议的 editorial_changes 记录。"""
-    old_headline = old_timeline.get("headline_zh", "")
-    old_paragraphs = [p.get("translation_zh", "") for p in old_timeline.get("paragraphs", [])]
-    old_points = {p.get("word_index"): p for p in old_timeline.get("learning_points", [])}
+    """记录最终实际变化，包括词性、英文标题和重新冻结的文案，并绑定绝对来源区间。"""
+    provenance = new_timeline.get("source_provenance", {})
+    start, end = provenance.get("source_start_seconds"), provenance.get("source_end_seconds")
+    if not isinstance(start, (int, float)) or not isinstance(end, (int, float)) or not 0 <= start < end:
+        raise ProgrammaticDailyError("修订缺少来源绝对时间段")
+    if old_timeline.get("words") != new_timeline.get("words"):
+        raise ProgrammaticDailyError("受限修订不得改写英文词轴")
+    changes = []
 
-    new_headline = new_timeline.get("headline_zh", "")
-    new_paragraphs = [p.get("translation_zh", "") for p in new_timeline.get("paragraphs", [])]
-    new_points = {p.get("word_index"): p for p in new_timeline.get("learning_points", [])}
+    def add(kind, target, before, after):
+        if before == after:
+            return
+        related = [f for f in actionable_findings
+                   if f.get("target") in (target, "document")
+                   or str(f.get("target", "")).startswith(target + ":")]
+        # 记录原审校依据及建议；建议不是独立的声学或词典证据。
+        evidence = f"来源绝对时间 {start:.3f}–{end:.3f}s；目标 {target}。" + json.dumps(
+            related or actionable_findings, ensure_ascii=False, sort_keys=True)
+        changes.append({"kind": kind, "target": target,
+                        "before": json.dumps(before, ensure_ascii=False, sort_keys=True),
+                        "after": json.dumps(after, ensure_ascii=False, sort_keys=True),
+                        "evidence": evidence})
 
-    changes: list[dict[str, Any]] = []
-
-    # 1. 标题变更记录
-    if old_headline != new_headline:
-        ev = next((f["suggestion"] for f in actionable_findings if "headline" in str(f.get("target", "")).lower()), "根据语言审校建议修订中文标题")
-        changes.append({
-            "kind": "headline",
-            "before": old_headline or "None",
-            "after": new_headline or "None",
-            "evidence": ev,
-        })
-
-    # 2. 翻译变更记录
-    for idx, (old_t, new_t) in enumerate(zip(old_paragraphs, new_paragraphs)):
-        if old_t != new_t:
-            ev = next((f["suggestion"] for f in actionable_findings if f"paragraph:{idx}" in str(f.get("target", "")).lower() or "translation" in str(f.get("target", "")).lower()), f"根据语言审校建议修订第 {idx+1} 段翻译")
-            changes.append({
-                "kind": "translation",
-                "before": old_t or "None",
-                "after": new_t or "None",
-                "evidence": ev,
-            })
-
-    # 3. 词汇变更记录
-    for w_idx, new_p in new_points.items():
-        if w_idx not in old_points:
-            ev = next((f["suggestion"] for f in actionable_findings if f"word:{w_idx}" in str(f.get("target", "")).lower()), f"根据语言审校建议新增学习点 {new_p.get('word')}")
-            changes.append({
-                "kind": "vocabulary",
-                "before": "None",
-                "after": f"{new_p.get('word')}: {new_p.get('context_meaning_zh')}",
-                "evidence": ev,
-            })
-        elif old_points[w_idx].get("context_meaning_zh") != new_p.get("context_meaning_zh"):
-            old_p = old_points[w_idx]
-            ev = next((f["suggestion"] for f in actionable_findings if f"word:{w_idx}" in str(f.get("target", "")).lower()), f"根据语言审校建议修订学习点 {new_p.get('word')} 语境义")
-            changes.append({
-                "kind": "vocabulary",
-                "before": f"{old_p.get('word')}: {old_p.get('context_meaning_zh')}",
-                "after": f"{new_p.get('word')}: {new_p.get('context_meaning_zh')}",
-                "evidence": ev,
-            })
-
-    for w_idx, old_p in old_points.items():
-        if w_idx not in new_points:
-            ev = next((f["suggestion"] for f in actionable_findings if f"word:{w_idx}" in str(f.get("target", "")).lower()), f"根据语言审校建议移除学习点 {old_p.get('word')}")
-            changes.append({
-                "kind": "vocabulary",
-                "before": f"{old_p.get('word')}: {old_p.get('context_meaning_zh')}",
-                "after": "Removed",
-                "evidence": ev,
-            })
-
+    for field in ("headline_zh", "headline_en"):
+        add("headline", field, old_timeline.get(field), new_timeline.get(field))
+    old_paragraphs, new_paragraphs = old_timeline.get("paragraphs", []), new_timeline.get("paragraphs", [])
+    if len(old_paragraphs) != len(new_paragraphs):
+        raise ProgrammaticDailyError("受限修订不得改变已冻结段落边界")
+    for index, (old, new) in enumerate(zip(old_paragraphs, new_paragraphs)):
+        if old.get("english_text") != new.get("english_text"):
+            raise ProgrammaticDailyError("受限修订不得改写英文段落")
+        add("translation", f"paragraph:{index}", old.get("translation_zh"), new.get("translation_zh"))
+    fields = ("word", "word_index", "pos", "context_meaning_zh", "phonetic", "phonetic_word", "level")
+    old_points = {p["word_index"]: {k: p.get(k) for k in fields} for p in old_timeline.get("learning_points", [])}
+    new_points = {p["word_index"]: {k: p.get(k) for k in fields} for p in new_timeline.get("learning_points", [])}
+    for index in sorted(old_points.keys() | new_points.keys()):
+        add("vocabulary", f"word:{index}", old_points.get(index), new_points.get(index))
+    add("publication", "publication", old_timeline.get("publication_text"), new_timeline.get("publication_text"))
     if not changes:
         raise ProgrammaticDailyError("修订初稿未产生实质编辑改动，无法形成有效 Revision 1")
-
+    for finding in actionable_findings:
+        if not finding.get("check"):
+            continue
+        target = str(finding.get("target", ""))
+        def target_value(payload):
+            parts = target.split(":")
+            if parts[0] == "paragraph" and len(parts) == 2 and parts[1].isdigit():
+                return payload["paragraphs"][int(parts[1])].get("translation_zh")
+            if parts[0] == "word" and len(parts) >= 2 and parts[1].isdigit():
+                point = next((p for p in payload.get("learning_points", []) if p["word_index"] == int(parts[1])), None)
+                field = {"VOCAB_POS": "pos", "VOCAB_CONTEXT_MEANING": "context_meaning_zh",
+                         "VOCAB_PRONUNCIATION": "phonetic"}.get(finding["check"])
+                return point.get(field) if point and field else point
+            if parts[0] == "publication" and len(parts) == 2:
+                return payload.get("publication_text", {}).get(parts[1])
+            if parts[0] == "cover_word" and len(parts) == 2 and parts[1].isdigit():
+                items = payload.get("publication_text", {}).get("cover_payload", {}).get("vocab_items", [])
+                return items[int(parts[1])] if int(parts[1]) < len(items) else None
+            if target == "document":
+                return {k: payload.get(k) for k in ("headline_zh", "headline_en", "paragraphs", "learning_points", "publication_text")}
+            return payload.get(target)
+        if target_value(old_timeline) == target_value(new_timeline):
+            raise ProgrammaticDailyError(f"修订未改变审校指出的目标 {target}，停止消耗复审预算")
     return changes
 
 
@@ -731,7 +719,10 @@ def _fit_learning_point_density(timeline: dict[str, Any]) -> dict[str, Any]:
 
 def _freeze_publication(timeline: dict[str, Any]) -> None:
     """从已冻结的文本和离线词典证据构建投稿文案，避免二次模型生成。"""
-    cover = build_english_world_cover_payload(timeline)
+    # 显式生成新版本；封面渲染器仍只消费已冻结载荷，绝不静默改写旧版本。
+    generation_input = {k: v for k, v in timeline.items() if k != "publication_text"}
+    previous_date = timeline.get("publication_text", {}).get("cover_payload", {}).get("date_str")
+    cover = build_english_world_cover_payload(generation_input, date_str=previous_date)
     title = f"英语世界｜{timeline['headline_zh']}"
     publisher = timeline["source_provenance"]["publisher"]
     timeline["publication_text"] = {
@@ -747,7 +738,7 @@ def _script(stage: str, *, timeline: Path, extra: list[str] | None = None, timeo
 
 
 def _source_evidence(timeline: Path) -> None:
-    _script("source", timeline=timeline, timeout=1200)
+    _script("source", timeline=timeline, extra=["--allow-medium-recheck"], timeout=1200)
     evidence = read_json(timeline.parent / "qa/source_evidence.json")
     if evidence.get("alignment_status") not in (None, "PASS"):
         raise ProgrammaticDailyError("来源字幕/ASR 对齐不确定")
@@ -799,6 +790,61 @@ def _make_delivery_request(*, request: Path, title: str, mp4: Path, manifest: Pa
     _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/record_english_world_delivery_request.py"),
           "--request", str(request), "--title", title, "--mp4", str(mp4), "--manifest", str(manifest),
           "--audio-qa-report", str(audio_qa), "--safety-report", str(safety)], cwd=ROOT, timeout=120)
+
+
+def _review_and_revise(timeline_path, timeline, *, wordlist_dir):
+    """运行首次独立审校，按原任务预算最多生成并复审一次编辑修订。"""
+    workspace = timeline_path.parent
+    words = timeline["words"]
+    ranges = _paragraph_word_ranges(words)
+    review_started_ns = time.time_ns()
+    try:
+        _script("review", timeline=timeline_path, timeout=600)
+    except Exception:
+        qa_report_path = workspace / "qa/language_qa.json"
+        if not qa_report_path.exists():
+            raise
+        report = read_json(qa_report_path)
+        if report.get("state") != "FAIL":
+            raise
+        from video_processing.study_cards.language_review_service import reserve_editorial_revision
+        from video_processing.study_cards.language_protocol import task_identity
+        task_key = task_identity(read_json(workspace / "qa/source_evidence.json"))
+        actionable = reserve_editorial_revision(
+            timeline_path, cache_dir=ROOT / "output/english_world_language/cache",
+            task_dir=ROOT / "output/english_world_language/tasks" / task_key,
+            model=settings.english_world_language_model, effort=settings.english_world_language_effort,
+            not_before_ns=review_started_ns,
+        )
+
+        rev_prompt = _revision_draft_prompt(words, ranges, current_timeline=timeline, findings=actionable)
+        try:
+            revised_draft = run_agy_structured(
+                rev_prompt, schema=_draft_schema(len(ranges), len(words)),
+                model=settings.english_world_language_model, command=settings.agy_command,
+                timeout_sec=settings.english_world_language_timeout_seconds,
+                effort=settings.english_world_language_effort,
+            )
+        except AgyProviderError as exc:
+            raise ProgrammaticDailyError("AGY Revision 1 结构化修订不可用") from exc
+
+        pre_revision_timeline = dict(timeline)
+        timeline = _apply_draft(dict(timeline), revised_draft)
+        from video_processing.study_cards.learning_dictionary import attach_evidence
+        timeline = attach_evidence(timeline, wordlist_dir)
+        timeline = _fit_learning_point_density(timeline)
+        _freeze_publication(timeline)
+        editorial_changes = _generate_editorial_changes(pre_revision_timeline, timeline, actionable)
+        atomic_json(timeline_path, timeline)
+        atomic_json(workspace / "editorial_changes.json", {
+            "version": VERSION,
+            "revision": 1,
+            "changes": editorial_changes,
+            "human_review": "PROGRAMMATIC_REVISION_1",
+        })
+        _script("prepare", timeline=timeline_path)
+        _script("review", timeline=timeline_path, timeout=600)
+    return timeline
 
 
 def run(
@@ -873,55 +919,7 @@ def run(
             stage = "language_prepare"
             _script("prepare", timeline=timeline_path)
             stage = "language_review"
-            try:
-                _script("review", timeline=timeline_path, timeout=600)
-            except Exception as review_exc:
-                qa_report_path = workspace / "qa/language_qa.json"
-                if not qa_report_path.exists():
-                    raise
-                report = read_json(qa_report_path)
-                if report.get("state") != "FAIL":
-                    raise
-                findings = report.get("result", {}).get("findings", [])
-                actionable = [
-                    f for f in findings
-                    if (f.get("status") != "PASS" or f.get("severity") in ("P0", "P1"))
-                    and str(f.get("suggestion") or "").strip()
-                ]
-                if not actionable or report.get("revision", 0) >= 1:
-                    raise ProgrammaticDailyError(f"语言初稿审校未通过且无可修订建议: {review_exc}") from review_exc
-
-                stage = "language_revision_draft"
-                rev_prompt = _revision_draft_prompt(words, ranges, current_timeline=timeline, findings=actionable)
-                try:
-                    revised_draft = run_agy_structured(
-                        rev_prompt, schema=_draft_schema(len(ranges), len(words)),
-                        model=settings.english_world_language_model, command=settings.agy_command,
-                        timeout_sec=settings.english_world_language_timeout_seconds,
-                        effort=settings.english_world_language_effort,
-                    )
-                except AgyProviderError as exc:
-                    raise ProgrammaticDailyError("AGY Revision 1 结构化修订不可用") from exc
-
-                pre_revision_timeline = dict(timeline)
-                timeline = _apply_draft(dict(timeline), revised_draft)
-                stage = "dictionary_evidence_revision_1"
-                from video_processing.study_cards.learning_dictionary import attach_evidence
-                timeline = attach_evidence(timeline, Path.home() / "Downloads/hermes-wordlists")
-                timeline = _fit_learning_point_density(timeline)
-                editorial_changes = _generate_editorial_changes(pre_revision_timeline, timeline, actionable)
-                _freeze_publication(timeline)
-                atomic_json(timeline_path, timeline)
-                atomic_json(workspace / "editorial_changes.json", {
-                    "version": VERSION,
-                    "revision": 1,
-                    "changes": editorial_changes,
-                    "human_review": "PROGRAMMATIC_REVISION_1",
-                })
-                stage = "language_prepare_revision_1"
-                _script("prepare", timeline=timeline_path)
-                stage = "language_review_revision_1"
-                _script("review", timeline=timeline_path, timeout=600)
+            timeline = _review_and_revise(timeline_path, timeline, wordlist_dir=Path.home() / "Downloads/hermes-wordlists")
             stage = "render"
             mp4 = workspace / "english_world.mp4"
             _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/render_study_card.py"), "--source", str(source),

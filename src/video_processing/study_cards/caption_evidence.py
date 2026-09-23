@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.6 | 2026-09-23 | Codex | 撤除猜测微时长；仅允许同锚点有正时长证据的修复，并更新解析缓存版本。 |
 | 1.0.0 | 2026-09-09 | Codex | 确定性解析、规范化记录和 ASR 差异证据。 |
 | 1.0.1 | 2026-09-09 | Codex | 保留片段边界跨越的原字幕，并仅以 ASR 确定边界内词序。 |
 | 1.0.2 | 2026-09-09 | Codex | 仅将 ASR 的 U S 和数字年龄拆词作受限排印等价，保留原文词形与全部差异。 |
@@ -15,7 +16,7 @@ import math
 import re
 
 TOKEN = re.compile(r"[+-]?[$£€]?[A-Za-z0-9]+(?:[’'][A-Za-z0-9]+)*(?:[.,]\d+)*(?:[-–][A-Za-z0-9]+)*%?")
-PARSER_VERSION = "json3-asr-v1.4"
+PARSER_VERSION = "json3-asr-v1.5"
 _ARTICLES = frozenset({"a", "an", "the"})
 _NUMBER_WORDS = {
     "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
@@ -128,14 +129,10 @@ def _comparison_key(value):
 
 
 def repair_asr_word_timestamps(words, duration):
-    """修复 Whisper 同一锚点及孤立零宽词；其他任何时间异常仍直接失败。
+    """仅在同一起点且末词有正时长的已知 ASR 区间内等分。
 
-    Whisper 偶尔会把短词和紧邻词同时落在一个时间点，例如 ``The U``，
-    或者在两个词之间产生孤立零宽词。
-    - 若同一开始时间的词组末词有正时长，在已知区间内等分；
-    - 若为孤立零宽词（或零宽组）且后接有效邻词，在可证明间距内保守分配微时长；
-    - 若为切片尾部或无法证明后续，则严格遵循协议不可猜测。
-    原始值和替换值均留在 repair 记录中，供语言审校和人工追溯；不得用此函数猜测词序或文本。
+    邻词前的空隙不能证明孤立零宽词的声学结束位置，必须保留原始证据并停止。
+    不猜测词序、文本或微时长；原始值和替换值均留在 repair 记录中。
     """
     if not isinstance(words, list) or not words or not math.isfinite(duration) or duration <= 0:
         raise ValueError("UNCERTAIN: ASR 逐词时间轴或来源时长非法")
@@ -175,28 +172,7 @@ def repair_asr_word_timestamps(words, duration):
                 word["end"] = round(start + (offset + 1) * width, 3)
             evidence = "同一 ASR 起点、末词有正时长；仅在该已知区间内等分。"
         else:
-            # 孤立零宽词或同一零宽起点但组末仍为零宽：仅当存在有效邻词且 next_start > start 时在可证明区间内分配微时长
-            if stop >= len(normalized):
-                raise ValueError("UNCERTAIN: 零宽 ASR 词没有可证明的后续边界")
-            try:
-                next_start = float(normalized[stop]["start"])
-                next_end = float(normalized[stop]["end"])
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError("UNCERTAIN: ASR 缺少可解析词时间") from exc
-            if not math.isfinite(next_start + next_end) or next_end < next_start or next_start <= start:
-                raise ValueError("UNCERTAIN: 零宽 ASR 词没有可证明的后续边界")
-            gap = next_start - start
-            count = stop - index
-            alloc = min(0.05 * count, gap / 2.0)
-            if alloc < 0.001 * count:
-                raise ValueError("UNCERTAIN: 零宽 ASR 词没有可证明的后续边界")
-            width = alloc / count
-            for offset, word in enumerate(normalized[index:stop]):
-                word["start"] = round(start + offset * width, 3)
-                word["end"] = round(start + (offset + 1) * width, 3)
-            if normalized[stop - 1]["end"] <= normalized[index]["start"] or normalized[stop - 1]["end"] > next_start:
-                raise ValueError("UNCERTAIN: 零宽 ASR 词没有可证明的后续边界")
-            evidence = f"零宽 ASR 词后存在有效邻词（间距 {gap:.3f}s）；在两词间距的可证明区间内保守分配微时长。"
+            raise ValueError("UNCERTAIN: 零宽 ASR 词没有可证明的后续边界")
         repairs.append({"kind": "zero_width_asr_anchor", "word_indexes": list(range(index, stop)),
                         "before": before,
                         "after": [{"word": str(word.get("word", "")), "start": word["start"], "end": word["end"]}

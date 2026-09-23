@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author                         | Description                                            |
 |---------|------------|--------------------------------|--------------------------------------------------------|
+| 1.3.4 | 2026-09-23 | Codex | Pillow 封面按可读字号完整排版双语引语，禁止静默省略。 |
 | 1.3.2   | 2026-09-18 | Antigravity                    | 隔离渲染载荷与审校语义载荷，防止 visual_asset_path 破坏封面载荷一致性质检。 |
 | 1.3.1   | 2026-09-09 | Codex                          | Pillow 回退展示与词形/词元明确对应的音标。 |
 | 1.3.0   | 2026-08-28 | Codex                          | Chromium 不可启动时改用本地 Pillow 渲染英语报刊封面，避免回退路径仍依赖浏览器。 |
@@ -102,6 +103,20 @@ def _wrapped_lines(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFo
     return lines
 
 
+def _fit_quote(draw, english, chinese):
+    """在既有引语框内缩字号，保留全部已审校文本；最低字号仍放不下则拒绝。"""
+    for en_size in range(31, 21, -1):
+        en_font, zh_font = _font(en_size), _font(max(20, en_size - 4))
+        en_lines = _wrapped_lines(draw, english, en_font, width=880, limit=10000)
+        zh_lines = _wrapped_lines(draw, chinese, zh_font, width=880, limit=10000)
+        en_step, zh_step = en_size + 8, max(20, en_size - 4) + 8
+        if (len(en_lines) * en_step + len(zh_lines) * zh_step + 6 <= 166
+                and all(draw.textlength(line, font=en_font) <= 880 for line in en_lines)
+                and all(draw.textlength(line, font=zh_font) <= 880 for line in zh_lines)):
+            return en_font, zh_font, en_lines, zh_lines, en_step, zh_step
+    raise ValueError("完整双语引语超出封面可读区域；禁止省略或截断已审校文本")
+
+
 def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
     """浏览器受 macOS 阻断时，渲染同规格的英语报刊封面。"""
     width, height = 1080, 1260
@@ -128,20 +143,20 @@ def _render_with_pillow_fallback(layout: dict, output: Path) -> None:
         draw.text((52, title_y), str(line), font=title_font, fill="#1E1A18", stroke_width=2, stroke_fill="#E7DED3")
         title_y += 98
 
-    quote_en_font = _font(31)
-    quote_zh_font = _font(27)
+    quote_en_font, quote_zh_font, en_lines, zh_lines, en_step, zh_step = _fit_quote(
+        draw, str(layout.get("quote_en") or ""), str(layout.get("quote_zh") or ""))
     quote_y = max(402, title_y + 12)
     draw.rounded_rectangle((48, quote_y, width - 48, quote_y + 248), radius=14, fill="#F3ECE0", outline="#E6DDD0", width=2)
     draw.rectangle((48, quote_y, 58, quote_y + 248), fill="#A53C2B")
     draw.text((82, quote_y + 22), "KEY SENTENCE · 精选原声金句", font=meta_font, fill="#A53C2B")
     line_y = quote_y + 62
-    for line in _wrapped_lines(draw, str(layout.get("quote_en") or ""), quote_en_font, width=880, limit=3):
+    for line in en_lines:
         draw.text((82, line_y), line, font=quote_en_font, fill="#2D241E")
-        line_y += 42
+        line_y += en_step
     line_y += 6
-    for line in _wrapped_lines(draw, str(layout.get("quote_zh") or ""), quote_zh_font, width=880, limit=2):
+    for line in zh_lines:
         draw.text((82, line_y), line, font=quote_zh_font, fill="#5A4E44")
-        line_y += 36
+        line_y += zh_step
 
     cards_y = quote_y + 276
     draw.text((48, cards_y), "本篇核心词汇", font=meta_font, fill="#8C7E72")
@@ -305,7 +320,7 @@ def main() -> int:
                     "template_variant": layout["template_variant"],
                     "payload_sha256": payload_sha256,
                     "source_timeline_sha256": source_timeline_sha256,
-                    "generator": "scripts/generate_english_cover.py@1.3.3",
+                    "generator": "scripts/generate_english_cover.py@1.3.4",
                     "render_backend": render_backend,
                 },
                 ensure_ascii=False,

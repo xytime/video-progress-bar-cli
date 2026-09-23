@@ -1,15 +1,16 @@
 """英语世界全阶段改造针对性测试与失败样本回归。
 
 涵盖：
-1. ASR 原始证据落盘与孤立零宽词受控修复；
+1. ASR 原始证据落盘与无依据零宽词阻断；
 2. 封面双语引句抽取与对齐加固（缩写点防截断与闭合校验）；
 3. 正文段落语法分段边界保护（介词、冠词、专名防撕裂）；
-4. 离线词典音标规范化管道（保留原始音标、替换西里尔字符、去除损坏符号）；
+4. 离线词典音标规范化管道（保留原始音标、替换已确认字符、保留歧义符号）；
 5. 主控接入 Revision 1 修订机制。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-09-23 | Codex | 纠正无声学依据的测试预期，验证原证据保留、跨目录复核及双语封面重冻结。 |
 | 1.0.0 | 2026-09-23 | Antigravity | 初始创建：覆盖 5 个阶段改造的回归与边界反向阻断测试。 |
 """
 
@@ -40,39 +41,15 @@ from scripts.english_world_programmatic_daily import (
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 阶段 1：ASR 原始证据落盘与孤立零宽词受控修复
+# 阶段 1：ASR 原始证据落盘与无依据零宽词阻断
 # ─────────────────────────────────────────────────────────────────────────────
 
-def test_repair_asr_word_timestamps_isolated_zero_width_success():
-    """验证孤立零宽词在有后随有效邻词时，按保守可证明微时长修复且词轴单调递增。"""
-    raw = [
-        {"word": "Before", "start": 0.0, "end": 0.5},
-        {"word": "The", "start": 1.0, "end": 1.0},  # 孤立零宽词
-        {"word": "United", "start": 1.2, "end": 1.5},
-        {"word": "States", "start": 1.5, "end": 2.0},
-    ]
-    repaired, records = repair_asr_word_timestamps(raw, 3.0)
-
-    # 验证修复后的时间
-    # gap = 1.2 - 1.0 = 0.2, alloc = min(0.05, 0.1) = 0.05
-    assert repaired[1]["word"] == "The"
-    assert repaired[1]["start"] == 1.0
-    assert repaired[1]["end"] == 1.05
-    assert repaired[2]["start"] == 1.2
-
-    # 验证审计证据记录
-    assert len(records) == 1
-    rec = records[0]
-    assert rec["kind"] == "zero_width_asr_anchor"
-    assert rec["word_indexes"] == [1]
-    assert rec["before"] == [{"word": "The", "start": 1.0, "end": 1.0}]
-    assert rec["after"] == [{"word": "The", "start": 1.0, "end": 1.05}]
-    assert "可证明区间" in rec["evidence"]
-
-    # 验证全程严格单调递增
-    for i in range(len(repaired) - 1):
-        assert repaired[i]["start"] < repaired[i]["end"]
-        assert repaired[i]["end"] <= repaired[i + 1]["start"] + 0.001
+def test_isolated_zero_width_gap_is_not_an_acoustic_end():
+    raw = [{"word": "The", "start": 1.0, "end": 1.0},
+           {"word": "United", "start": 1.2, "end": 1.5}]
+    with pytest.raises(ValueError, match="UNCERTAIN"):
+        repair_asr_word_timestamps(raw, 3.0)
+    assert raw[0]["end"] == 1.0
 
 
 def test_repair_asr_word_timestamps_slice_tail_zero_width_fails():
@@ -251,7 +228,7 @@ def test_is_safe_cut_position_rules():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_normalize_phonetic_cyrillic_schwa_and_leading_dots():
-    """验证非标准西里尔字母 \u04d9 替换及前导损坏点号清洗，保留规则审计。"""
+    """验证已确认字符替换及歧义点号保留，保留规则审计。"""
     # 真实样本：非标准西里尔字符
     raw_1 = "'s\u04d9:fis"
     norm_1, rules_1 = normalize_phonetic(raw_1)
@@ -261,15 +238,14 @@ def test_normalize_phonetic_cyrillic_schwa_and_leading_dots():
     # 真实样本：前导点格式损坏
     raw_2 = ".ˈæpl"
     norm_2, rules_2 = normalize_phonetic(raw_2)
-    assert norm_2 == "ˈæpl"
-    assert rules_2 == ["strip_leading_dots"]
+    assert norm_2 == ".ˈæpl"
+    assert rules_2 == ["unresolved_legacy_punctuation"]
 
     # 组合样本：前导点 + 西里尔 schwa + 尾部多余点
     raw_3 = "..əˈbav."
     norm_3, rules_3 = normalize_phonetic(raw_3)
-    assert norm_3 == "əˈbav"
-    assert "strip_leading_dots" in rules_3
-    assert "strip_trailing_dots" in rules_3
+    assert norm_3 == "..əˈbav."
+    assert "unresolved_legacy_punctuation" in rules_3
 
 
 def test_attach_evidence_retains_raw_and_normalized_phonetics(tmp_path, monkeypatch):
@@ -307,11 +283,11 @@ def test_attach_evidence_retains_raw_and_normalized_phonetics(tmp_path, monkeypa
     result = attach_evidence(payload, tmp_path)
     point = result["learning_points"][0]
 
-    assert point["phonetic"] == "'s\u0259:fis"
+    assert point["phonetic"] == ".'s\u0259:fis"
     assert point["raw_phonetic"] == ".'s\u04d9:fis"
-    assert point["normalized_phonetic"] == "'s\u0259:fis"
+    assert point["normalized_phonetic"] == ".'s\u0259:fis"
     assert "replace_cyrillic_schwa" in point["normalization_rules"]
-    assert "strip_leading_dots" in point["normalization_rules"]
+    assert "unresolved_legacy_punctuation" in point["normalization_rules"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -368,6 +344,7 @@ def test_apply_revision_draft_generates_valid_editorial_changes():
         {"target": "word:1", "suggestion": "语境义应为深入学习"},
     ]
 
+    timeline["source_provenance"] = {"source_start_seconds": 10, "source_end_seconds": 20}
     updated_timeline, changes = _apply_revision_draft(timeline, draft, actionable)
 
     assert updated_timeline["headline_zh"] == "新标题精读"
@@ -387,42 +364,13 @@ def test_apply_revision_draft_generates_valid_editorial_changes():
         assert c["evidence"]
 
 
-def test_repair_asr_word_timestamps_consecutive_zero_width_group_monotonic():
-    """验证同一时间点连续多个零宽词（零宽词组）以及不同时间点连续零宽词均能单调递增修复。"""
-    # 场景 A：同一时间点两个零宽词
-    raw_a = [
-        {"word": "The", "start": 0.0, "end": 0.0},
-        {"word": "White", "start": 0.0, "end": 0.0},
-        {"word": "House", "start": 0.5, "end": 0.8},
-    ]
-    repaired_a, records_a = repair_asr_word_timestamps(raw_a, 2.0)
-    assert len(repaired_a) == 3
-    assert repaired_a[0]["start"] == 0.0
-    assert repaired_a[0]["end"] == 0.05
-    assert repaired_a[1]["start"] == 0.05
-    assert repaired_a[1]["end"] == 0.10
-    assert repaired_a[2]["start"] == 0.5
-    assert repaired_a[2]["end"] == 0.8
-    # 严格单调递增
-    for i in range(len(repaired_a) - 1):
-        assert repaired_a[i]["start"] < repaired_a[i]["end"]
-        assert repaired_a[i]["end"] <= repaired_a[i + 1]["start"] + 0.001
-
-    # 场景 B：不同时间点交替出现的零宽词
-    raw_b = [
-        {"word": "A", "start": 0.0, "end": 0.0},
-        {"word": "B", "start": 0.1, "end": 0.1},
-        {"word": "C", "start": 0.5, "end": 0.8},
-    ]
-    repaired_b, records_b = repair_asr_word_timestamps(raw_b, 2.0)
-    assert len(repaired_b) == 3
-    assert repaired_b[0]["start"] == 0.0
-    assert repaired_b[0]["end"] == 0.05
-    assert repaired_b[1]["start"] == 0.1
-    assert repaired_b[1]["end"] == 0.15
-    for i in range(len(repaired_b) - 1):
-        assert repaired_b[i]["start"] < repaired_b[i]["end"]
-        assert repaired_b[i]["end"] <= repaired_b[i + 1]["start"] + 0.001
+@pytest.mark.parametrize("second_start", [0.0, 0.1])
+def test_zero_width_group_without_positive_shared_anchor_stays_uncertain(second_start):
+    raw = [{"word": "The", "start": 0.0, "end": 0.0},
+           {"word": "White", "start": second_start, "end": second_start},
+           {"word": "House", "start": 0.5, "end": 0.8}]
+    with pytest.raises(ValueError, match="UNCERTAIN"):
+        repair_asr_word_timestamps(raw, 2.0)
 
 
 def test_first_sentence_with_capitalized_proper_nouns_following_abbreviation():
@@ -523,6 +471,7 @@ def test_generate_editorial_changes_syncs_with_density_pruning():
         ],
     }
     actionable = [{"target": "headline", "suggestion": "优化标题"}]
+    new_timeline["source_provenance"] = {"source_start_seconds": 10, "source_end_seconds": 20}
     changes = _generate_editorial_changes(old_timeline, new_timeline, actionable)
 
     # 验证变更中只有 apple(未变不记)、banana(新增)，绝不出现已被剪裁的 cherry
@@ -596,3 +545,140 @@ def test_source_evidence_saves_raw_asr_before_repair_failure(tmp_path, monkeypat
     assert raw_data["raw_words"][1] == {"word": "world", "start": 1.0, "end": 1.0}
 
 
+
+
+def test_cover_pairs_complete_paragraph_and_refreezes_revision():
+    from scripts.english_world_programmatic_daily import _freeze_publication
+    from copy import deepcopy
+    en = "The company cleared a hurdle after it reached a settlement with several U . S . states."
+    zh = "公司跨过了一道障碍。它与美国几个州达成了和解。"
+    timeline = {"language_contract": "english-world-language-v1", "headline_zh": "公司达成和解",
+                "english_text": en, "translation_zh": zh,
+                "paragraphs": [{"english_text": en, "translation_zh": zh}],
+                "learning_points": [], "source_provenance": {"publisher": "Source"}}
+    _freeze_publication(timeline)
+    old = deepcopy(timeline["publication_text"])
+    assert old["cover_payload"]["quote_zh"] == zh
+    assert old["cover_payload"]["quote_en"] == en
+    timeline["headline_zh"] = "公司跨过障碍"
+    timeline["paragraphs"][0]["translation_zh"] = "这家公司跨过了一道障碍。它与美国几个州达成了和解。"
+    # 渲染入口仍消费原冻结载荷；编辑入口必须显式生成新载荷。
+    assert build_english_world_cover_payload(timeline) == old["cover_payload"]
+    _freeze_publication(timeline)
+    assert timeline["publication_text"]["cover_payload"]["title"] == "公司跨过障碍"
+    assert timeline["publication_text"]["cover_payload"]["quote_zh"] == timeline["paragraphs"][0]["translation_zh"]
+
+
+def test_paragraph_never_falls_back_to_an_unsafe_cut():
+    from scripts.english_world_programmatic_daily import ProgrammaticDailyError
+    with pytest.raises(ProgrammaticDailyError, match="安全分段"):
+        _paragraph_word_ranges([{"text": "the"}] * 90)
+
+
+def test_pos_only_revision_is_audited_with_source_and_exact_word_target():
+    from scripts.english_world_programmatic_daily import _generate_editorial_changes
+    from copy import deepcopy
+    old = {"source_provenance": {"source_start_seconds": 12, "source_end_seconds": 42},
+           "learning_points": [{"word_index": 1, "word": "key", "pos": "n.", "context_meaning_zh": "关键"}]}
+    new = deepcopy(old)
+    new["learning_points"][0]["pos"] = "adj."
+    changes = _generate_editorial_changes(old, new, [
+        {"target": "word:10", "suggestion": "wrong target"},
+        {"target": "word:1:key", "suggestion": "correct target"}])
+    assert len(changes) == 1
+    assert "adj." in changes[0]["after"]
+    assert "12.000–42.000s" in changes[0]["evidence"]
+    assert "wrong target" not in changes[0]["evidence"]
+    assert "correct target" in changes[0]["evidence"]
+
+
+@pytest.mark.parametrize("medium_passes", [True, False])
+def test_medium_recheck_is_once_per_source_and_preserves_raw(tmp_path, monkeypatch, medium_passes):
+    from scripts import english_world_language as language
+    from video_processing.study_cards.language_protocol import atomic_json, read_json, file_digest
+    source, caption = tmp_path / "source.mp4", tmp_path / "caption.json"
+    source.write_bytes(b"source")
+    caption.write_bytes(b"caption")
+    small, medium = tmp_path / "small.pt", tmp_path / "medium.pt"
+    small.write_bytes(b"small")
+    medium.write_bytes(b"medium")
+    payload = {"english_text": "The team agreed.", "source_provenance": {
+        "source_video": str(source), "caption_artifact": str(caption),
+        "source_start_seconds": 10, "source_end_seconds": 20}}
+    timeline = tmp_path / "first/timeline.json"
+    atomic_json(timeline, payload)
+    calls = []
+
+    def transcribe(path, model):
+        calls.append(model.name)
+        binding = {"source_sha256": file_digest(source), "caption_sha256": file_digest(caption),
+                   "model_sha256": file_digest(model), "source_start": 10, "source_end": 20,
+                   "caption_parser_version": language.PARSER_VERSION}
+        raw = {**binding, "raw_words": [{"word": "The", "start": 0, "end": 0}],
+               "asr_text": "The team agreed.", "sample_rate": 16000, "channels": 1}
+        atomic_json(path.parent / "qa/source_asr_raw.json", raw)
+        if model == small or not medium_passes:
+            raise ValueError("UNCERTAIN: zero width")
+        atomic_json(path.parent / "qa/source_evidence.json", {
+            **binding, "asr_text": "The team agreed.", "asr_words": [{"word": "The", "start": 0, "end": .2}],
+            "alignment_status": "PASS", "sample_rate": 16000, "channels": 1})
+
+    monkeypatch.setattr(language, "source_evidence", transcribe)
+    tasks = tmp_path / "tasks"
+    if medium_passes:
+        language.source_evidence_with_recheck(timeline, small, medium, tasks)
+    else:
+        with pytest.raises(ValueError, match="UNCERTAIN"):
+            language.source_evidence_with_recheck(timeline, small, medium, tasks)
+    assert calls == ["small.pt", "medium.pt"]
+    receipt = read_json(next(tasks.glob("*/source_recheck.json")))
+    assert receipt["small_raw"]["raw_words"][0]["end"] == 0
+    assert receipt["status"] == ("PASS" if medium_passes else "FAIL")
+    # 新目录也必须读取同一来源任务的结果，不能重新发起模型计算。
+    moved = tmp_path / "second/timeline.json"
+    atomic_json(moved, payload)
+    if medium_passes:
+        language.source_evidence_with_recheck(moved, small, medium, tasks)
+        assert read_json(moved.parent / "qa/source_asr_raw.json")["model_sha256"] == file_digest(medium)
+    else:
+        with pytest.raises(ValueError, match="禁止换目录"):
+            language.source_evidence_with_recheck(moved, small, medium, tasks)
+    assert calls == ["small.pt", "medium.pt"]
+
+
+def test_revision_cannot_spend_review_on_an_unchanged_failed_target():
+    from scripts.english_world_programmatic_daily import _generate_editorial_changes, ProgrammaticDailyError
+    from copy import deepcopy
+    old = {"headline_zh": "旧标题", "source_provenance": {"source_start_seconds": 10, "source_end_seconds": 20},
+           "paragraphs": [{"english_text": "The team agreed.", "translation_zh": "队伍同意。"}]}
+    new = deepcopy(old)
+    new["headline_zh"] = "新标题"
+    with pytest.raises(ProgrammaticDailyError, match="未改变审校指出的目标"):
+        _generate_editorial_changes(old, new, [{"check": "TRANSLATION_ACCURACY", "target": "paragraph:0",
+                                               "status": "FAIL", "severity": "P1", "suggestion": "修正翻译"}])
+
+
+def test_review_cli_records_fresh_completion_and_local_failure(tmp_path, monkeypatch):
+    import sys
+    from scripts import english_world_language as language
+    from video_processing.study_cards import language_review_service as service
+    from video_processing.study_cards.language_protocol import atomic_json, read_json, digest
+    timeline = tmp_path / "timeline.json"
+    atomic_json(timeline, {})
+    atomic_json(tmp_path / "qa/source_evidence.json", {"source_sha256": "source", "caption_sha256": "caption",
+                                                       "source_start": 0, "source_end": 20})
+    report = {"state": "FAIL", "cache_hit": False, "attempts": 1}
+    atomic_json(tmp_path / "qa/language_qa.json", report)
+    monkeypatch.setattr(sys, "argv", ["english_world_language.py", "review", "--timeline", str(timeline)])
+    monkeypatch.setattr(language, "prepare", lambda *a: None)
+    monkeypatch.setattr(service, "review", lambda *a, **k: dict(report, cache_hit=True))
+    assert language.main() == 2
+    receipt = read_json(tmp_path / "qa/review_execution.json")
+    assert receipt["status"] == "COMPLETED"
+    assert receipt["report_sha256"] == digest(report)  # 缓存读回可能保留更早的原始报告字节。
+    def broken_prepare(*a):
+        raise ValueError("词典证据过期")
+    monkeypatch.setattr(language, "prepare", broken_prepare)
+    assert language.main() == 2
+    assert read_json(tmp_path / "qa/review_execution.json")["status"] == "ERROR"
+    assert read_json(tmp_path / "qa/language_qa.json") == report
