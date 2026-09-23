@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.12.1 | 2026-09-24 | Codex | 清洗后标题实际回读可绑定，原始长标题、回读不符和不可见输入不能绑定。 |
 | 1.12.0 | 2026-09-24 | Codex | 覆盖结构化 desc 的短标题提取与精确绑定，阻断仅凭唯一新增 ID 的误绑。 |
 | 1.11.0 | 2026-09-07 | Codex | 覆盖接口正文与页面状态隔离，以及失败通知保留末尾异常。 |
 | 1.8.0   | 2026-08-27 | Codex | 覆盖作品管理原生 post_list 的唯一新增 objectId 绑定，避免长描述与短标题不一致漏绑。 |
@@ -44,6 +45,7 @@ from wechat_uploader import (
     capture_submission_identity_baseline,
     _collect_management_cards_from_post_list_payload,
     _load_management_cards,
+    _read_confirmed_submission_title,
     resolve_submission_platform_identity,
     resolve_submission_platform_identity_after_publish,
     run_uploader,
@@ -54,6 +56,38 @@ from video_processing.pipeline_manager import PipelineManager
 
 
 # ── 1. 发布确认判定（纯函数）──────────────────────────────────────────────
+@pytest.mark.parametrize("actual,visible,expected", [
+    ("英语世界NASDAQ创新高", True, "英语世界NASDAQ创新高"),
+    ("另一条视频标题", True, ""),
+    ("英语世界NASDAQ创新高", False, ""),
+    ("", True, ""),
+])
+def test_submission_identity_uses_confirmed_form_title(actual, visible, expected):
+    class Form:
+        first = property(lambda self: self)
+        def locator(self, _selector):
+            return self
+        def count(self):
+            return 1
+        def is_visible(self):
+            return visible
+        def input_value(self):
+            return actual
+
+    confirmed = _read_confirmed_submission_title(Form(), "英语世界NASDAQ创新高")
+    assert confirmed == expected
+    cards = _collect_management_cards_from_post_list_payload({
+        "data": {"list": [{"objectId": "new-native-id", "desc": {
+            "shortTitle": "英语世界NASDAQ创新高", "description": "本期英文听读正文",
+        }}]},
+    })
+    assert resolve_submission_platform_identity({}, cards, "英语世界｜NASDAQ创新高后回调") is None
+    receipt = resolve_submission_platform_identity({}, cards, confirmed)
+    assert bool(receipt) == bool(expected)
+    if receipt:
+        assert receipt["platform_post_id"] == "new-native-id"
+
+
 class TestClassifyPublishResult:
     def test_redirect_is_not_final_publish_success(self):
         assert classify_publish_result(True, "", draft=False) is False

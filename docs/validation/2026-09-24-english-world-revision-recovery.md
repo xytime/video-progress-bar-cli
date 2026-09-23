@@ -50,4 +50,20 @@
 - 独立 AGY high 视觉安全 PASS；最终机械安全与语言/manifest 结构门均 PASS。
 - 人工检查九帧接触表及 16.32、29.38 秒滚动结束帧：原片完整 contain，人物头部完整。
 - 为外部新闻素材固定 `wechat_original_declaration=DO_NOT_DECLARE`，更改 manifest 后重新绑定 QA。
-- 恢复出本地成片与代码修复不等于平台受理；本次手动补发等待用户对具体成片的确认。
+- 用户明确选择“立即补发”后，07:09 执行一次具名 OPERATOR_RECOVERY 投稿。
+  审核项 `0680a0f4c1614d4a94bd1660bf69102a` 为 UNDER_REVIEW；作品管理页已有
+  07:09 对应成片卡片。原生 ID 未绑定，不能确认公开，也不重传。
+  同目录 `qa/operator_submission_20260924.json` 及 `wechat_evidence/1790204901065594000/`
+  保存审批、未声明原创、封面确认和提交后列表截图。没有派发 Telegram、抖音或评论。
+
+## 补发发现的回查缺陷
+
+上传器会将超过 16 字的短标题截短，并删除“｜”等不支持的字符；此前绑定原生作品 ID
+仍拿清洗前标题比较。今天的已审校标题正好会触发变换，这构成确定的无法匹配路径。
+修复为提交前回读实际表单标题，只有它与清洗后的预期值一致才用于本次唯一新增 ID 绑定。
+保留 requested/normalized/confirmed 标题回执；无法回读、控件重复或标题漂移均不猜绑定。
+这不补绑历史条目、不改变平台状态映射，也不把作品卡片出现当作公开发布证明。
+
+- 隔离发布回归测试 96 passed，证据 `/private/tmp/video-pytest-gc2_tl2z`。
+- 增加真实 Chromium 的普通 DOM、Shadow DOM、提交前漂移、不可见与重复控件验证；
+  同时回归原创声明与发布账本，证据 `/private/tmp/video-pytest-of43f63x`。

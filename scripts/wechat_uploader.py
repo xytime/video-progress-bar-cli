@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.11.1 | 2026-09-24 | Codex | 原生 ID 绑定使用提交前回读确认的清洗后短标题，保存标题变换证据；未知回读不绑定。 |
 | 5.11.0 | 2026-09-24 | Codex | 作品列表结构化 desc 提取短标题；提交绑定须唯一新增 ID 与短标题精确一致，拒绝仅凭 ID 差集绑定。 |
 | 5.10.0 | 2026-09-22 | Codex | 实证分列表单与 Shadow DOM 的不声明状态；未知阻断，原创提醒仅确认直接发表。 |
 | 5.9.0 | 2026-09-21 | Codex | 上传等待独立返回码与零进度未提交凭据，供管线安全退避。 |
@@ -497,6 +498,26 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
             "platform_status": str(record["status"]) if record.get("status") is not None else "",
         }
     return cards
+
+
+def _read_confirmed_submission_title(page, expected_title: str | None) -> str:
+    """绑定只使用本次表单回读的实际标题；不猜测截断或清洗结果。"""
+    if not expected_title:
+        return ""
+    for selector in (
+        "input[placeholder*='概括视频主要内容']",
+        "input[placeholder*='6-16']",
+        "input[placeholder*='短标题']",
+        ".post-short-title-wrap input",
+    ):
+        try:
+            field = page.locator(selector)
+            if field.count() == 1 and field.first.is_visible():
+                actual = field.first.input_value().strip()
+                return actual if actual == expected_title else ""
+        except Exception:
+            continue
+    return ""
 
 
 def resolve_submission_platform_identity(
@@ -1896,6 +1917,7 @@ def run_uploader(
         # 禁止：逗号 , 句号 . 感叹号 ! 其他半角标点（逗号可用空格代替）
         # 输入清洗：去除零宽字符 \u200B
 
+        short_title_clean = None
         if short_title:
             import re as _re
             # [Claude_Sonnet_4.6_Thinking_fast] 规则来自 WeChat JS 源码 345.509f6449.js
@@ -2759,6 +2781,17 @@ def run_uploader(
                 browser.close()
                 return 1
 
+        submitted_short_title = _read_confirmed_submission_title(page, short_title_clean)
+        if not draft:
+            evidence_root.mkdir(parents=True, exist_ok=True)
+            (evidence_root / "submission_title_receipt.json").write_text(json.dumps({
+                "requested_title": short_title,
+                "normalized_title": short_title_clean,
+                "confirmed_title": submitted_short_title,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            if not submitted_short_title:
+                logger.warning("Submitted short title could not be confirmed; keeping native identity unbound.")
+
         # 5. 执行提交或存草稿
         if draft:
             logger.info("Saving as draft...")
@@ -2799,7 +2832,7 @@ def run_uploader(
               _capture_wechat_evidence(page, evidence_root, "post_list_after_submission")
               if identity_baseline_ready:
                   receipt = resolve_submission_platform_identity_after_publish(
-                      page, identity_baseline, short_title,
+                      page, identity_baseline, submitted_short_title,
                   )
                   if receipt:
                       _write_submission_receipt(evidence_root, receipt)
