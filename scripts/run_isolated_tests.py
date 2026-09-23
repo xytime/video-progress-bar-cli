@@ -23,7 +23,8 @@ import time
 
 
 SOURCE_DIRS = {"src", "scripts", "tests", "resources", "assets", "config", "docs"}
-SOURCE_FILES = {"pyproject.toml", "setup.py", "requirements.txt", ".env.example", "data/comment_strategies.json"}
+SOURCE_FILES = {"pyproject.toml", "setup.py", "requirements.txt", ".env.example", "data/comment_strategies.json",
+                "vpanel", "vhelp"}
 MARKER = ".test-sandbox.json"
 
 

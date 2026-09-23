@@ -13,6 +13,7 @@
 # | 1.4.1 | 2026-07-27 | Codex | 端口变量输出统一使用 ${DASH_PORT}，避免 set -u 下中文标点紧邻变量导致误解析 |
 # | 1.4.2 | 2026-07-27 | Codex | _port_pid 增加 netstat fallback，避免 lsof 受异常挂载影响误报 UI 未监听 |
 # | 1.5.0 | 2026-07-29 | Codex | 新增 dubbing 人工配音再制网关；不接入 job 自动流水线 |
+# | 1.6.0 | 2026-09-23 | Antigravity | 新增 craft / antishit 极客架构守卫与防屎山度量命令组 |
 # =======================================================================
 
 # [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
@@ -22,6 +23,17 @@ set -u  # 未定义变量立即报错
 # [Claude_Sonnet_4.6_Thinking_planning] P1修复：从脚本自身位置动态推导项目根目录，避免硬编码绝对路径
 # BASH_SOURCE[0] 在脚本被 source 或通过别名调用时也能正确工作
 PRJ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# craft 必须保留调用者 cwd，并在任何生产目录初始化之前直接返回。
+case "${1:-}" in
+    craft|antishit)
+        shift
+        if [ ! -x "$PRJ_ROOT/.venv/bin/python" ]; then
+            echo "错误: 未找到扫描器解释器 $PRJ_ROOT/.venv/bin/python" >&2
+            exit 2
+        fi
+        exec "$PRJ_ROOT/.venv/bin/python" -B "$PRJ_ROOT/scripts/anti_spaghetti.py" "$@"
+        ;;
+esac
 cd "$PRJ_ROOT"
 
 # 定义相关路径与常量
@@ -107,6 +119,10 @@ show_usage() {
     echo "  ./vpanel bot status           查看 Bot 运行状态"
     echo "  ./vpanel bot logs             实时查看 Bot 日志（最近 50 行）"
     echo "  ./vpanel bot restart          重启 Bot"
+    echo ""
+    echo "命令组: craft / antishit (极客架构守卫与防屎山代码度量)"
+    echo "  ./vpanel craft [PATH...]      扫描 Python 文件或目录的架构坏味道与复杂度"
+    echo "  ./vpanel craft --check [PATH] 检查依赖规则；违规=1，扫描不完整=2；路径相对调用目录"
     echo ""
     echo "通用:"
     echo "  ./vpanel help                 显示此帮助信息"

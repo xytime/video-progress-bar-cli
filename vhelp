@@ -14,6 +14,7 @@
 # | 1.6.0   | 2026-08-21 | Codex                         | 新增 wxvideo 本地字幕提取快捷指令              |
 # | 1.7.0   | 2026-08-30 | Codex                         | 新增 BGMScout 本地服务管理速查                 |
 # | 1.8.0   | 2026-09-15 | Codex                         | 新增 FutuWeb 前端常驻服务快捷指令              |
+# | 1.9.0   | 2026-09-23 | Antigravity                   | 新增 craft / antishit 极客架构守卫与防屎山代码度量速查 |
 # =======================================================================
 
 # 终端颜色代码
@@ -58,6 +59,11 @@ echo ""
 echo -e "  ${BOLD}微信登录/Cookie 失效处理:${RESET}"
 echo -e "    ${RED}./.venv/bin/python scripts/wechat_uploader.py --login-only --no-headless${RESET}"
 echo -e "    ${DIM}↳ 扫码登录专用命令（浏览器弹出，扫码更新 Cookie）${RESET}"
+echo ""
+echo -e "  ${BOLD}🍝 架构守卫与防屎山度量 (craft / antishit):${RESET}"
+echo -e "    ${CYAN}./vpanel craft [路径]${RESET}          - 极客架构体检：扫描 God Class、超长函数与复杂度"
+echo -e "    ${CYAN}./vpanel craft --check [路径]${RESET}  - 依赖违规=1，扫描不完整=2；相对路径以调用目录为准"
+echo -e "    ${DIM}↳ 全局别名: ${GREEN}craft${RESET} ${DIM}或 ${GREEN}antishit${RESET} ${DIM}| 架构技能: anti-spaghetti${RESET}"
 
 echo -e "\n${SEP}"
 
