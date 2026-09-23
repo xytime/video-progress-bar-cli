@@ -1664,11 +1664,21 @@
           : '入库时间未知';
 
         // [Claude_Sonnet_4.6_Thinking_planning] metaChips: 移除 views/likeRatio（已有独立列）
+        const freshnessLine = showWaitlistFreshness && freshness
+          ? `<span class="freshness-line freshness-line-${freshness.tier}" title="按来源发布时间计算；超过未来时间的记录按刚发布显示">
+              <span>来源发布 (ET)：${sourceDateTimeLabel}</span>
+              <span class="freshness-line-separator">·</span>
+              <span>入库时间：${escapeHtml(ingestedDateTimeLabel)}</span>
+              <span class="freshness-line-separator">·</span>
+              <strong class="freshness-line-age">● ${freshness.age} (BJ)</strong>
+            </span>`
+          : [
+              `<span class="meta-chip source-published-age-${sourcePublishedAgeCls(sourceDate)}" title="YouTube 来源发布时间（美东时间 ET）">来源发布 (ET)：${sourceDateTimeLabel}</span>`,
+              showWaitlistFreshness ? `<span class="meta-chip ingest-time-chip" title="本地记录入库时间（北京时间 BJ）">入库时间：${escapeHtml(ingestedDateTimeLabel)}</span>` : '',
+            ].join('');
         const metaChips = [
-          dur       ? `<span class="meta-chip">⏱ 时长: ${dur}</span>` : '',
-          `<span class="meta-chip source-published-age-${sourcePublishedAgeCls(sourceDate)}" title="YouTube 来源发布时间（美东时间 ET）">来源发布 (ET)：${sourceDateTimeLabel}</span>`,
-          showWaitlistFreshness ? `<span class="meta-chip ingest-time-chip" title="本地记录入库时间（北京时间 BJ）">入库时间：${escapeHtml(ingestedDateTimeLabel)}</span>` : '',
-          showWaitlistFreshness && freshness ? `<span class="source-freshness source-freshness-${freshness.tier}" title="按来源发布时间计算；超过未来时间的记录按刚发布显示">● ${freshness.age} (BJ)</span>` : '',
+          dur ? `<span class="meta-chip">⏱ 时长: ${dur}</span>` : '',
+          freshnessLine,
         ].join('');
 
         // [Unknown_Model_planning] 显示 已完成集数/全部集数 状态标签，按全部完成与否区分颜色

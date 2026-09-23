@@ -1156,26 +1156,29 @@
     .source-published-age-today { color: var(--teal)  !important; }
     .source-published-age-week  { color: var(--yellow)!important; }
     .ingest-time-chip { color: var(--text2); }
-    .source-freshness {
-      display: inline-flex; align-items: center; gap: 4px;
-      border: 1px solid transparent; border-radius: 999px;
-      padding: 2px 9px; font-size: 0.76rem; font-weight: 750;
-      font-family: 'JetBrains Mono', monospace; white-space: nowrap;
-      font-variant-numeric: tabular-nums; letter-spacing: 0.01em;
+    .freshness-line {
+      display: inline-flex; align-items: center; flex-wrap: wrap;
+      column-gap: 7px; row-gap: 2px; vertical-align: middle;
+      padding: 3px 9px 3px 7px; border: 1px solid currentColor;
+      border-left-width: 4px; border-radius: 6px;
+      font-size: 0.76rem; font-weight: 700; line-height: 1.55;
+      font-variant-numeric: tabular-nums; letter-spacing: 0.005em;
     }
-    .source-freshness-fresh {
-      color: #052e2b; background: #5eead4; border-color: #2dd4bf;
-      box-shadow: 0 0 10px rgba(45,212,191,0.32);
+    .freshness-line-separator { opacity: 0.58; }
+    .freshness-line-age { font-weight: 850; white-space: nowrap; }
+    .freshness-line-fresh {
+      color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent);
+      box-shadow: 0 0 9px color-mix(in srgb, var(--green) 22%, transparent);
     }
-    .source-freshness-recent {
-      color: #422006; background: #fbbf24; border-color: #f59e0b;
+    .freshness-line-recent {
+      color: var(--yellow); background: color-mix(in srgb, var(--yellow) 13%, transparent);
     }
-    .source-freshness-stale {
-      color: #431407; background: #fb923c; border-color: #f97316;
+    .freshness-line-stale {
+      color: var(--orange); background: color-mix(in srgb, var(--orange) 14%, transparent);
     }
-    .source-freshness-very-stale {
-      color: #fff1f2; background: #be123c; border-color: #fb7185;
-      box-shadow: 0 0 9px rgba(244,63,94,0.24);
+    .freshness-line-very-stale {
+      color: var(--red); background: color-mix(in srgb, var(--red) 16%, transparent);
+      box-shadow: 0 0 9px color-mix(in srgb, var(--red) 20%, transparent);
     }
     /* ── 观看数/点赞率列固定宽度 — 防止占用所有剩余空间 ── */
     .activity-table td.vt-cell,
