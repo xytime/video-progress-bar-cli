@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.7 | 2026-09-23 | Antigravity | Whisper ASR 原始证据先落盘至 source_asr_raw.json 再校验修复。 |
 | 1.0.6 | 2026-09-22 | Codex | 提供显式启动故障恢复理由入口，不清除次数或绕过语言检查。 |
 | 1.0.0 | 2026-09-09 | Codex | source/prepare/review/validate 阶段独立执行，不接触投稿账本。 |
 | 1.0.1 | 2026-09-09 | Codex | 以来源+字幕+自然片段隔离布局和审校预算。 |
@@ -48,11 +49,17 @@ def source_evidence(timeline, model_path):
                "model_sha256": file_digest(model_path), "caption_parser_version": PARSER_VERSION,
                "source_start": start, "source_end": end}
     cached_path = root / "qa/source_evidence.json"
+    raw_path = root / "qa/source_asr_raw.json"
     if cached_path.exists():
         old = read_json(cached_path)
         if all(old.get(k) == v for k, v in binding.items()):
             old["timeline_differences"] = transcript_differences(payload["english_text"], old["asr_text"])
             atomic_json(cached_path, old)
+            if not raw_path.exists() and "asr_words_raw" in old:
+                atomic_json(raw_path, {
+                    "version": VERSION, **binding, "asr_text": old.get("asr_text", ""),
+                    "raw_words": old.get("asr_words_raw", []), "sample_rate": 16000, "channels": 1,
+                })
             return
     with tempfile.TemporaryDirectory(prefix="english_source_asr_") as d:
         audio = Path(d) / "source.wav"
@@ -63,6 +70,10 @@ def source_evidence(timeline, model_path):
     if file_digest(source) != binding["source_sha256"] or file_digest(caption) != binding["caption_sha256"]:
         raise ValueError("转写期间来源改变")
     raw_words = [w for segment in result["segments"] for w in segment.get("words", [])]
+    atomic_json(raw_path, {
+        "version": VERSION, **binding, "asr_text": result.get("text", ""),
+        "raw_words": raw_words, "sample_rate": 16000, "channels": 1,
+    })
     words, timing_repairs = repair_asr_word_timestamps(raw_words, end - start)
     evidence = {"version": VERSION, **binding, "parsed": parsed, "asr_text": result["text"],
                 "asr_words_raw": raw_words, "asr_words": words, "asr_timing_repairs": timing_repairs,
