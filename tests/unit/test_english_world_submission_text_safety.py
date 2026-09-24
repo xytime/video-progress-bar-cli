@@ -128,3 +128,26 @@ def test_versioned_submission_cannot_omit_source_evidence(tmp_path):
     timeline.write_text(json.dumps(content), encoding="utf-8")
     with pytest.raises(EnglishWorldSafetyGateError, match="无法读取"):
         require_submission_text_safety(item, manifest)
+
+
+@pytest.mark.parametrize("changed", [None, "title_path", "copy_path", "cover"])
+def test_fulltext_policy_binds_actual_publication_text(tmp_path, changed):
+    from video_processing.english_world.safety_gate import FULLTEXT_SAFETY_POLICY
+    item, manifest, timeline = package(tmp_path)
+    content = json.loads(timeline.read_text())
+    content.update(safety_policy=FULLTEXT_SAFETY_POLICY,
+                   publication_text={"title": Path(item["title_path"]).read_text(),
+                                     "copy": Path(item["copy_path"]).read_text(),
+                                     "cover_payload": {"headline": "科学英语"}})
+    timeline.write_text(json.dumps(content))
+    cover = tmp_path / "cover_payload.json"
+    cover.write_text(json.dumps(content["publication_text"]["cover_payload"]))
+    if changed == "cover":
+        cover.write_text(json.dumps({"headline": "后改的封面"}))
+    elif changed:
+        Path(item[changed]).write_text("未经过全文安全审核的新内容")
+    if changed:
+        with pytest.raises(EnglishWorldSafetyGateError, match="全文安全审核"):
+            require_submission_text_safety(item, manifest)
+    else:
+        assert require_submission_text_safety(item, manifest)["state"] == "PASS"

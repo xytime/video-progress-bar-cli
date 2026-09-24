@@ -36,6 +36,7 @@ from video_processing.english_world.package_integrity import sha256_file
 
 VERSION = "english-world-safety-v1"
 VISUAL_REVIEW_VERSION = "english-world-visual-safety-v1"
+FULLTEXT_SAFETY_POLICY = "english-world-fulltext-safety-v1"
 AGY_HIGH_EFFORT_MODEL = "gemini-3.8-flash-high"
 
 
@@ -59,6 +60,11 @@ def _result_payload(result: CensorResult) -> dict[str, Any]:
 def _source_policy_result(en_text: str, zh_text: str = "") -> dict[str, Any]:
     """复用候选研究的硬排除词，作为成片前不可绕过的第二道来源门。"""
     normalized = " ".join(unicodedata.normalize("NFKC", en_text + "\n" + zh_text).casefold().split())
+    normalized = normalized.replace("黨", "党")
+    normalized = re.sub(r"[\u200b-\u200d\ufeff]", "", normalized)
+    normalized = re.sub(r"\bku[\W_]+klux[\W_]+klan\b", "ku klux klan", normalized)
+    normalized = re.sub(r"\bk[\W_]*k[\W_]*k\b", "kkk", normalized)
+    normalized = re.sub(r"三[\W_]*k[\W_]*党", "三k党", normalized)
     matched = next((term for term in sorted(HARD_BLOCKED_TERMS)
                     if re.search(re.escape(term) if any("\u4e00" <= c <= "\u9fff" for c in term)
                                  else rf"\b{re.escape(term)}\b", normalized)), None)
@@ -130,6 +136,14 @@ def _validate_visual_review(value: Mapping[str, Any] | None) -> dict[str, Any]:
     normalized["contact_sheet_sha256"] = normalized["contact_sheet_sha256"].lower()
     normalized["mp4_sha256"] = normalized["mp4_sha256"].lower()
     normalized["risk_categories"] = []
+    if "text_review" in value:
+        text_review = value["text_review"]
+        if (not isinstance(text_review, Mapping)
+                or text_review.get("version") != FULLTEXT_SAFETY_POLICY
+                or text_review.get("coverage") != "SUFFICIENT"
+                or not re.fullmatch(r"[0-9a-f]{64}", str(text_review.get("input_sha256", "")))):
+            raise EnglishWorldSafetyGateError("全文安全审核证据不完整")
+        normalized["text_review"] = dict(text_review)
     return normalized
 
 
@@ -243,7 +257,7 @@ def _content_strings(value: Any, *, field: str = "") -> list[str]:
     excluded_suffixes = ("_path", "_sha256")
     excluded_fields = {
         "source_video", "caption_artifact", "model", "version", "input_key",
-        "dictionary_senses", "dictionary_source", "source_evidence",
+        "dictionary_senses", "dictionary_source", "source_evidence", "quality_adjustments",
     }
     if field in excluded_fields or field.endswith(excluded_suffixes):
         return []
@@ -280,6 +294,33 @@ def delivery_documents(*, title: str, timeline: Mapping[str, Any], source_eviden
     ]
 
 
+def fulltext_safety_input(timeline_path: Path) -> dict[str, Any]:
+    """供模型与宿主共同使用的完整文本，指纹覆盖来源、字幕、词卡与投稿文案。"""
+    timeline_path = Path(timeline_path).resolve()
+    timeline = _read_json(timeline_path)
+    documents = delivery_documents(
+        title=str(timeline.get("publication_text", {}).get("title") or timeline.get("headline_zh") or ""),
+        timeline=timeline,
+        source_evidence=_read_json(timeline_path.parent / "qa/source_evidence.json"),
+        display_plan=_read_json(timeline_path.parent / "display_plan.json"),
+    )
+    _require_text(documents)
+    return {"version": FULLTEXT_SAFETY_POLICY, "input_sha256": _document_digest(documents),
+            "documents": [asdict(document) for document in documents]}
+
+
+def _validate_fulltext_binding(visual_review: Mapping[str, Any], timeline: Path) -> None:
+    policy = _read_json(timeline).get("safety_policy")
+    if policy not in (None, FULLTEXT_SAFETY_POLICY):
+        raise EnglishWorldSafetyGateError("未知全文安全策略")
+    review = visual_review.get("text_review")
+    if policy is None and review is None:
+        return  # 历史交付不追认新证据；新时间线显式冻结新策略。
+    if (not isinstance(review, Mapping) or review.get("coverage") != "SUFFICIENT"
+            or review.get("input_sha256") != fulltext_safety_input(timeline)["input_sha256"]):
+        raise EnglishWorldSafetyGateError("全文安全审核未绑定当前来源与最终文本")
+
+
 def evaluate_delivery(
     *,
     title: str,
@@ -294,6 +335,8 @@ def evaluate_delivery(
         source_evidence = _read_json(timeline_path.parent / "qa/source_evidence.json")
         plan_path = timeline_path.parent / "display_plan.json"
         display_plan = _read_json(plan_path) if plan_path.exists() else None
+        if timeline.get("safety_policy") is not None:
+            _validate_fulltext_binding(_validate_visual_review(visual_review), timeline_path)
         return evaluate(
             "delivery",
             delivery_documents(title=title, timeline=timeline, source_evidence=source_evidence, display_plan=display_plan),
@@ -326,6 +369,13 @@ def require_submission_text_safety(item: Mapping[str, Any], manifest: Mapping[st
     # 学习卡始终带字幕；不能因字幕开关关闭漏掉教学文本。
     timeline_path = Path(str(manifest.get("timeline") or ""))
     timeline = _read_json(timeline_path)
+    if timeline.get("safety_policy") == FULLTEXT_SAFETY_POLICY:
+        publication = timeline.get("publication_text", {})
+        if strings != [publication.get("title"), publication.get("copy")]:
+            raise EnglishWorldSafetyGateError("实际投稿文本变更，必须重新执行全文安全审核")
+        actual_cover = _read_json(Path(str(item.get("cover_path") or "")).parent / "cover_payload.json")
+        if actual_cover != publication.get("cover_payload"):
+            raise EnglishWorldSafetyGateError("实际封面文本变更，必须重新执行全文安全审核")
     if timeline.get("language_contract") == "english-world-language-v1":
         source = _read_json(timeline_path.parent / "qa/source_evidence.json")
         plan = _read_json(timeline_path.parent / "display_plan.json")
@@ -355,6 +405,7 @@ def attach_artifact_binding(receipt: Mapping[str, Any], *, mp4: Path, manifest: 
     if normalized_visual["mp4_sha256"] != bound["mp4_sha256"]:
         raise EnglishWorldSafetyGateError("视觉安全审核未绑定当前 MP4")
     _validate_contact_sheet_binding(normalized_visual, timeline=paths["timeline"])
+    _validate_fulltext_binding(normalized_visual, paths["timeline"])
     bound["visual_review"] = normalized_visual
     evidence = paths["timeline"].parent / "qa/source_evidence.json"
     if not evidence.is_file() or evidence.stat().st_size <= 0:
@@ -386,4 +437,5 @@ def validate_delivery_receipt(path: Path, *, mp4: Path, manifest: Path, timeline
     if visual_review["mp4_sha256"] != receipt.get("mp4_sha256"):
         raise EnglishWorldSafetyGateError("视觉安全审核与当前 MP4 内容不一致")
     _validate_contact_sheet_binding(visual_review, timeline=expected["timeline"])
+    _validate_fulltext_binding(visual_review, expected["timeline"])
     return receipt

@@ -286,3 +286,130 @@ def test_dictionary_bounded_schema_rejects_provider_reusing_bad_pronunciation():
     jsonschema.validate(value, schema)
     prompt = daily._revision_draft_prompt(timeline['words'], [(0, 5)], timeline, [finding], word_options=[])
     assert '返回格式不能修改音标' in prompt
+
+
+@pytest.mark.parametrize("defect", ["phonetic", "meaning", "missing_evidence", "overlap", "offscreen"])
+def test_optional_bad_card_is_dropped_with_full_text_preserved(defect):
+    from copy import deepcopy
+    from video_processing.study_cards.display_plan import build_plan
+    payload = daily._apply_draft(_timeline(), _draft())
+    payload.update(language_contract=daily.VERSION, quality_policy=daily.ADVISORY_POLICY,
+                   source_provenance={"publisher": "Test News"})
+    for point in payload["learning_points"]:
+        point.update(phonetic="enə", phonetic_word=point["word"], dictionary_source="ecdict.csv")
+    before = deepcopy(payload)
+    point = payload["learning_points"][1]
+    if defect == "phonetic":
+        point["phonetic"] = "a" * 80
+    elif defect == "meaning":
+        point["context_meaning_zh"] = "这是过长的解释" * 40
+    elif defect == "missing_evidence":
+        point.pop("dictionary_source")
+    elif defect == "overlap":
+        payload["learning_points"].insert(1, deepcopy(payload["learning_points"][0]))
+    else:
+        point["word_index"] = 999
+    daily._fit_learning_point_density(payload)
+    daily._freeze_publication(payload)
+    assert build_plan(payload, "test-timeline")["content"]["words"]
+    assert payload["quality_adjustments"][-1]["action"] == "drop_optional_card"
+    for key in ("words", "english_text", "translation_zh", "paragraphs"):
+        assert payload[key] == before[key]
+    assert len(payload["learning_points"]) == (3 if defect == "overlap" else 2)
+
+
+def test_bad_body_is_not_hidden_by_optional_card_removal():
+    payload = daily._apply_draft(_timeline(), _draft())
+    payload.update(quality_policy=daily.ADVISORY_POLICY, translation_zh="与段译不同")
+    with pytest.raises(ValueError, match="中文"):
+        daily._fit_learning_point_density(payload)
+
+
+@pytest.mark.parametrize("transient", [True, False])
+def test_stage_recovery_retries_only_transient_errors_in_same_workspace(tmp_path, monkeypatch, transient):
+    monkeypatch.setattr(daily.time, "sleep", lambda _: None)
+    calls = []
+    def action():
+        calls.append(1)
+        if len(calls) == 1:
+            raise daily.TransientStageError("transport") if transient else ValueError("code or input defect")
+        return "completed"
+    if transient:
+        assert daily._stage_call("render", tmp_path, action) == "completed"
+        assert len(calls) == 2
+    else:
+        with pytest.raises(ValueError):
+            daily._stage_call("render", tmp_path, action)
+        assert len(calls) == 1
+    journal = daily.read_json(tmp_path / "qa/stage_recovery.json")
+    assert journal["attempts"][0]["state"] == "FAILED"
+    assert journal["attempts"][-1]["state"] == ("COMPLETED" if transient else "FAILED")
+
+
+def test_stage_recovery_is_bounded_and_does_not_clear_ledger(tmp_path, monkeypatch):
+    monkeypatch.setattr(daily.time, "sleep", lambda _: None)
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text('{"calls":3}')
+    def action():
+        raise daily.TransientStageError("transport")
+    with pytest.raises(daily.TransientStageError):
+        daily._stage_call("review", tmp_path, action)
+    assert len(daily.read_json(tmp_path / "qa/stage_recovery.json")["attempts"]) == 2
+    assert ledger.read_text() == '{"calls":3}'
+
+
+@pytest.mark.parametrize("state,error", [("BLOCKED", daily.CandidateSafetyRejected),
+                                         ("FAIL_CLOSED", daily.ProgrammaticDailyError)])
+def test_safety_rejection_is_distinct_from_review_unavailability(tmp_path, state, error):
+    receipt = tmp_path / "qa/visual_safety.json"
+    def action():
+        daily.atomic_json(receipt, {"state": state})
+        raise daily.ProgrammaticDailyError("safety exit 2")
+    with pytest.raises(error):
+        daily._stage_call("visual_safety", tmp_path, action, safety_report=receipt)
+    assert len(daily.read_json(tmp_path / "qa/stage_recovery.json")["attempts"]) == 1
+
+
+@pytest.mark.parametrize("locked", [False, True])
+def test_candidate_switch_is_bounded_without_banning_infrastructure_failures(locked):
+    route = daily._candidate_failure_route
+    assert route(daily.CandidateSafetyRejected("blocked"), locked_source=locked, production_candidates=1) == (True, True)
+    assert route(daily.CandidateSafetyRejected("blocked"), locked_source=locked,
+                 production_candidates=daily.MAX_PRODUCTION_CANDIDATES) == (True, False)
+    assert route(daily.TransientStageError("transport"), locked_source=locked, production_candidates=1) == (False, False)
+    assert route(RuntimeError("program defect"), locked_source=locked, production_candidates=1) == (False, False)
+    assert route(ValueError("bad input"), locked_source=locked, production_candidates=1) == ((False, False) if locked else (True, True))
+
+
+def test_stale_safety_rejection_cannot_trigger_candidate_switch(tmp_path):
+    import os
+    receipt = tmp_path / "qa/visual_safety.json"
+    daily.atomic_json(receipt, {"state": "BLOCKED"})
+    os.utime(receipt, (1, 1))
+    def action():
+        raise daily.ProgrammaticDailyError("provider failed before writing new receipt")
+    with pytest.raises(daily.ProgrammaticDailyError) as caught:
+        daily._stage_call("visual_safety", tmp_path, action, safety_report=receipt)
+    assert not isinstance(caught.value, daily.CandidateSafetyRejected)
+
+
+def test_timed_out_stage_kills_and_reaps_process_group_before_return(tmp_path, monkeypatch):
+    import subprocess
+    from unittest.mock import MagicMock
+    events = []
+    process = MagicMock(pid=91234)
+    process.__enter__.return_value = process
+    def communicate(**kwargs):
+        events.append("communicate")
+        if kwargs:
+            raise subprocess.TimeoutExpired("render", kwargs["timeout"])
+        return "", ""
+    process.communicate.side_effect = communicate
+    def popen(command, **kwargs):
+        assert kwargs["start_new_session"] is True
+        return process
+    monkeypatch.setattr(daily.subprocess, "Popen", popen)
+    monkeypatch.setattr(daily.os, "killpg", lambda pid, sig: events.append((pid, sig)))
+    with pytest.raises(subprocess.TimeoutExpired):
+        daily._run(["render"], cwd=tmp_path, timeout=1)
+    assert events == ["communicate", (91234, daily.signal.SIGKILL), "communicate"]

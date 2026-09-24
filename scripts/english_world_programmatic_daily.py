@@ -32,9 +32,11 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -50,11 +52,13 @@ from cover.english_world import build_english_world_cover_payload
 from video_processing.english_world.research import _rank_candidates, _youtube_search
 from video_processing.study_cards.caption_evidence import parse_json3
 from video_processing.study_cards.language_qa import VERSION, atomic_json, read_json
-from video_processing.study_cards.quality_policy import ADVISORY_POLICY
+from video_processing.study_cards.quality_policy import ADVISORY_POLICY, advisory_quality
+from video_processing.english_world.safety_gate import FULLTEXT_SAFETY_POLICY
 from video_processing.utils.agy_provider import AgyProviderError, run_agy_structured
 
 
 MAX_PREFLIGHT_CANDIDATES = 10
+MAX_PRODUCTION_CANDIDATES = 3
 MIN_SECONDS = 30.0
 MAX_SECONDS = 300.0
 
@@ -63,11 +67,84 @@ class ProgrammaticDailyError(RuntimeError):
     """无法生成可安全交付的本日英语世界成片。"""
 
 
+class TransientStageError(ProgrammaticDailyError):
+    """明确的短暂传输故障，可在同一工作目录有限恢复。"""
+
+
+class CandidateSafetyRejected(ProgrammaticDailyError):
+    """安全审核明确拒绝当前候选；可继续预检其它来源，但绝不放行本片。"""
+
+
+def _transient_error(exc: Exception) -> bool:
+    if isinstance(exc, (TransientStageError, subprocess.TimeoutExpired)):
+        return True
+    return isinstance(exc, AgyProviderError) and any(
+        marker in str(exc).lower() for marker in ("timed out", ": timeout", "connection reset", "no capacity"))
+
+
+def _candidate_failure_route(exc: Exception, *, locked_source: bool, production_candidates: int) -> tuple[bool, bool]:
+    """返回是否排除来源、是否继续候选；基础设施失败永不作为来源缺陷。"""
+    if isinstance(exc, CandidateSafetyRejected):
+        return True, production_candidates < MAX_PRODUCTION_CANDIDATES
+    known = isinstance(exc, (OSError, ValueError, ProgrammaticDailyError))
+    if locked_source or not known or _transient_error(exc):
+        return False, False
+    return True, True
+
+
+def _stage_call(stage: str, workspace: Path, action, *, safety_report: Path | None = None):
+    """同目录同输入最多执行两次；只重试明确瞬断，保存阶段进度而不重做前序步骤。"""
+    journal_path = workspace / "qa/stage_recovery.json"
+    journal = read_json(journal_path) if journal_path.exists() else {"version": VERSION, "attempts": []}
+    for attempt in (1, 2):
+        started_ns = time.time_ns()
+        entry = {"stage": stage, "attempt": attempt, "state": "RUNNING", "started_ns": started_ns}
+        journal["attempts"].append(entry)
+        atomic_json(journal_path, journal)
+        try:
+            value = action()
+        except Exception as exc:
+            transient = _transient_error(exc)
+            blocked = False
+            if safety_report is not None and safety_report.is_file() and safety_report.stat().st_mtime_ns >= started_ns:
+                receipt = read_json(safety_report)
+                blocked = receipt.get("state") == "BLOCKED"
+                transient = receipt.get("state") == "FAIL_CLOSED" and receipt.get("retryable") is True
+            entry.update(state="BLOCKED" if blocked else "FAILED", error_class=type(exc).__name__,
+                         retryable=transient, finished_ns=time.time_ns())
+            atomic_json(journal_path, journal)
+            if blocked:
+                raise CandidateSafetyRejected(f"{stage} 明确拒绝当前候选") from exc
+            if not transient or attempt == 2:
+                raise
+            time.sleep(2)
+        else:
+            entry.update(state="COMPLETED", finished_ns=time.time_ns())
+            atomic_json(journal_path, journal)
+            return value
+
+
 def _run(command: list[str], *, cwd: Path, timeout: int = 900) -> None:
     """运行一个固定 argv 的子进程，不让来源文本进入 shell。"""
-    result = subprocess.run(command, cwd=str(cwd), text=True, capture_output=True, timeout=timeout, check=False)
-    if result.returncode != 0:
-        raise ProgrammaticDailyError(f"子步骤失败：{Path(command[0]).name} exit={result.returncode}")
+    with subprocess.Popen(command, cwd=str(cwd), text=True, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, start_new_session=True) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # 重试前结束整个渲染/ASR 进程组，防止遗留 FFmpeg 与新尝试并发写同一产物。
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+            raise
+    if process.returncode != 0:
+        # 只保留分类，不把可能含正文/环境的子进程输出写入日志。
+        output = (stderr + "\n" + stdout).lower()
+        if any(marker in output for marker in ("connection reset", "tls handshake eof", "stream disconnected",
+                                               "temporary failure in name resolution", "no capacity available")):
+            raise TransientStageError("子步骤短暂传输故障")
+        raise ProgrammaticDailyError(f"子步骤失败：{Path(command[0]).name} exit={process.returncode}")
 
 
 def _youtube_args() -> list[str]:
@@ -262,6 +339,7 @@ def _initial_timeline(candidate: Mapping[str, Any], *, source: Path, caption: Pa
     return {
         "language_contract": VERSION,
         "quality_policy": ADVISORY_POLICY,
+        "safety_policy": FULLTEXT_SAFETY_POLICY,
         "content_type": "ENGLISH_WORLD_SHORT",
         "headline_zh": "来源预检中",
         "headline_en": "Source preflight",
@@ -721,6 +799,29 @@ def _fit_learning_point_density(timeline: dict[str, Any]) -> dict[str, Any]:
     template = RecordUnderlineTemplate()
     template.language_reviewed = True
 
+    if advisory_quality(timeline):
+        # 先证明无词卡的正文可正确显示；正文/词轴错误不能被词卡降级掩盖。
+        def validate_cards(selected, directory):
+            content = reviewed_content(dict(timeline, learning_points=selected, vocabulary_candidates=selected))
+            layout(content, template, directory, quality_policy=timeline["quality_policy"])
+
+        with tempfile.TemporaryDirectory(prefix="optional_cards_") as tmp_dir:
+            directory = Path(tmp_dir)
+            validate_cards([], directory)
+            retained = []
+            for point in points:
+                try:
+                    validate_cards([*retained, point], directory)
+                except ValueError as exc:
+                    timeline.setdefault("quality_adjustments", []).append({
+                        "action": "drop_optional_card", "stage": "layout",
+                        "word_index": point.get("word_index"), "reason": str(exc)})
+                else:
+                    retained.append(point)
+        timeline["learning_points"] = retained
+        timeline["vocabulary_candidates"] = retained
+        return timeline
+
     for _ in range(len(points) + 1):
         test_payload = dict(timeline, learning_points=points, vocabulary_candidates=points)
         try:
@@ -770,8 +871,9 @@ def _freeze_publication(timeline: dict[str, Any]) -> None:
 
 
 def _script(stage: str, *, timeline: Path, extra: list[str] | None = None, timeout: int = 1200) -> None:
-    _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/english_world_language.py"), stage,
-          "--timeline", str(timeline), *(extra or [])], cwd=ROOT, timeout=timeout)
+    _stage_call(stage, timeline.parent, lambda: _run(
+        [str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/english_world_language.py"), stage,
+         "--timeline", str(timeline), *(extra or [])], cwd=ROOT, timeout=timeout))
 
 
 def _source_evidence(timeline: Path) -> None:
@@ -820,6 +922,10 @@ def _candidate_safety_preflight(candidate: Mapping[str, Any], *, timeline: Mappi
         )],
     )
     atomic_json(receipt_path, receipt)
+    if receipt["state"] == "BLOCKED":
+        raise CandidateSafetyRejected("候选敏感内容审核拒绝")
+    if receipt["state"] != "PASS":
+        raise RuntimeError("候选安全审核不可用，不能判为来源缺陷")
     require_pass(receipt)
 
 
@@ -910,7 +1016,10 @@ def run(
     rejected: list[str] = []
     failures: list[str] = []
     locked_source = False
+    production_candidates = 0
+    internal_failure = False
     for candidate in candidates[:MAX_PREFLIGHT_CANDIDATES]:
+        locked_source = False
         video_id = str(candidate.get("youtube_id") or "")
         workspace = output_root / f"{datetime.now():%Y%m%d_%H%M%S_%f}_{video_id}"
         stage = "download"
@@ -943,18 +1052,19 @@ def run(
             _source_evidence(timeline_path)
             stage = "candidate_safety"
             _candidate_safety_preflight(candidate, timeline=timeline, receipt_path=workspace / "qa/candidate_safety.json")
-            # 媒体、字幕、ASR 和机械安全预检均已通过；自此不可换题掩盖后续失败。
+            # 已预检的来源保持冻结；仅明确的候选安全拒绝允许有限换题。
             locked_source = True
+            production_candidates += 1
             stage = "agy_draft"
             ranges = _paragraph_word_ranges(words)
             from video_processing.study_cards.learning_dictionary import dictionary_word_options
             options = dictionary_word_options(words, Path.home() / "Downloads/hermes-wordlists")
             draft_schema = _draft_schema(len(ranges), len(words), allowed_indexes=[p["word_index"] for p in options])
             try:
-                draft = run_agy_structured(_draft_prompt(words, ranges, word_options=options), schema=draft_schema,
+                draft = _stage_call("agy_draft", workspace, lambda: run_agy_structured(_draft_prompt(words, ranges, word_options=options), schema=draft_schema,
                                            model=settings.english_world_language_model, command=settings.agy_command,
                                            timeout_sec=settings.english_world_language_timeout_seconds,
-                                           effort=settings.english_world_language_effort)
+                                           effort=settings.english_world_language_effort))
             except AgyProviderError as exc:
                 raise ProgrammaticDailyError("AGY 结构化初稿不可用") from exc
             atomic_json(workspace / "qa/initial_draft.json", draft)
@@ -975,26 +1085,28 @@ def run(
             timeline = _review_and_revise(timeline_path, timeline, wordlist_dir=Path.home() / "Downloads/hermes-wordlists")
             stage = "render"
             mp4 = workspace / "english_world.mp4"
-            _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/render_study_card.py"), "--source", str(source),
+            _stage_call(stage, workspace, lambda: _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/render_study_card.py"), "--source", str(source),
                   "--timeline", str(timeline_path), "--output", str(mp4), "--source-start", str(start),
-                  "--duration", str(end - start), "--allow-long-test"], cwd=ROOT, timeout=1800)
+                  "--duration", str(end - start), "--allow-long-test"], cwd=ROOT, timeout=1800))
             manifest = mp4.with_suffix(".manifest.json")
             audio_qa = workspace / "qa/final_audio_qa.json"
             stage = "audio_qa"
-            _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/validate_study_card_audio.py"), "--mp4", str(mp4),
-                  "--timeline", str(timeline_path), "--manifest", str(manifest), "--report", str(audio_qa)], cwd=ROOT, timeout=1200)
+            _stage_call(stage, workspace, lambda: _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/validate_study_card_audio.py"), "--mp4", str(mp4),
+                  "--timeline", str(timeline_path), "--manifest", str(manifest), "--report", str(audio_qa)], cwd=ROOT, timeout=1200))
             _script("validate", timeline=timeline_path, extra=["--manifest", str(manifest)])
             visual = workspace / "qa/visual_safety.json"
             stage = "visual_safety"
-            _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/english_world_visual_safety_review.py"),
+            _stage_call(stage, workspace, lambda: _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/english_world_visual_safety_review.py"),
                   "--mp4", str(mp4), "--output", str(visual), "--contact-sheet-output", str(workspace / "qa/contact_sheet.png"),
-                  "--model", settings.english_world_language_model], cwd=ROOT, timeout=600)
+                  "--timeline", str(timeline_path),
+                  "--model", settings.english_world_language_model], cwd=ROOT, timeout=600), safety_report=visual)
             safety = workspace / "qa/safety_gate.json"
             title = timeline["publication_text"]["title"]
             stage = "mechanical_safety"
-            _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/english_world_safety_gate.py"),
+            _stage_call(stage, workspace, lambda: _run([str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/english_world_safety_gate.py"),
                   "--output", str(safety), "--title", title, "--timeline", str(timeline_path), "--mp4", str(mp4),
-                  "--manifest", str(manifest), "--visual-review-report", str(visual)], cwd=ROOT, timeout=120)
+                  "--manifest", str(manifest), "--visual-review-report", str(visual)], cwd=ROOT, timeout=120), safety_report=safety)
+            stage = "delivery_request"
             _make_delivery_request(request=request, title=title, mp4=mp4, manifest=manifest, audio_qa=audio_qa, safety=safety)
             return workspace
         except Exception as exc:
@@ -1011,18 +1123,20 @@ def run(
             failures.append(f"{video_id}:{stage}:{detail}")
             # 编程错误与未知外部异常绝不可伪装成候选质量问题，避免错误地把
             # 合格来源写入排除账本；它们同样必须有可审计的失败请求。
-            known_source_failure = isinstance(exc, (OSError, ValueError, ProgrammaticDailyError, subprocess.TimeoutExpired))
-            if video_id and known_source_failure and not locked_source:
+            reject_source, continue_candidates = _candidate_failure_route(
+                exc, locked_source=locked_source, production_candidates=production_candidates)
+            internal_failure = internal_failure or not reject_source
+            if video_id and reject_source:
                 rejected.append(video_id)
-            # 锁定后仍中断，但制作/修订故障不是来源质量失败，不能污染七天来源排除。
-            if locked_source or not known_source_failure:
+            # 已锁定来源的安全拒绝可以换题；供应商故障/程序错误不污染来源排除。
+            if not continue_candidates:
                 break
             continue
     request.parent.mkdir(parents=True, exist_ok=True)
     reason = "；".join(failures)[:800] or "没有取得可预检的授权候选"
     command = [str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/record_english_world_delivery_request.py"),
                "--request", str(request), "--title", "今日英语世界短视频", "--failure", reason,
-               "--failure-kind", "internal_error" if locked_source else "source_quality"]
+               "--failure-kind", "internal_error" if internal_failure else "source_quality"]
     for video_id in rejected[:MAX_PREFLIGHT_CANDIDATES]:
         command.append(f"--rejected-youtube-id={video_id}")
     _run(command, cwd=ROOT, timeout=120)

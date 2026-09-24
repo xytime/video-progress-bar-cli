@@ -90,3 +90,18 @@ def test_revision_options_exclude_rejected_words_ambiguous_ipa_and_keep_proven_l
     assert [p["word_index"] for p in options] == [3]
     assert options[0]["phonetic_word"] == "note"
     assert options[0]["phonetic"] == "nəut"
+
+
+def test_optional_missing_dictionary_cards_are_dropped_idempotently(tmp_path):
+    from copy import deepcopy
+    from video_processing.study_cards.quality_policy import ADVISORY_POLICY
+    (tmp_path / "ecdict.csv").write_text("word,phonetic,definition,translation,exchange\nclean,kli:n,clean,a.清洁的,\nempty,,,空的,\n")
+    (tmp_path / "exam-wordlists.csv").write_text("word,pos,exam,phonetic,translation\nclean,a.,KET,kli:n,清洁的\n")
+    (tmp_path / "cefr-enhanced.csv").write_text("word,pos,cefr,phonetic,translation\n")
+    points = [{"word": word, "word_index": i, "context_meaning_zh": "示例"}
+              for i, word in enumerate(("clean", "missing", "empty"))]
+    payload = {"quality_policy": ADVISORY_POLICY, "learning_points": points, "words": []}
+    result = learning_dictionary.attach_evidence(payload, tmp_path)
+    assert [p["word"] for p in result["learning_points"]] == ["clean"]
+    assert len(result["quality_adjustments"]) == 2
+    assert learning_dictionary.attach_evidence(deepcopy(result), tmp_path) == result

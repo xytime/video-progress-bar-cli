@@ -84,3 +84,46 @@ def test_visual_review_rejects_when_mp4_changes_during_review(monkeypatch, tmp_p
             mp4=mp4, contact_sheet=tmp_path / "contact.png", agy_bin="agy", model="model", timeout_seconds=60,
         )
 
+
+
+@pytest.mark.parametrize("coverage,expected", [("SUFFICIENT", "PASS"), ("INSUFFICIENT", "FAIL_CLOSED"), (None, "FAIL_CLOSED")])
+def test_fulltext_is_supplied_and_coverage_is_mandatory(monkeypatch, tmp_path, coverage, expected):
+    import json
+    timeline = tmp_path / "timeline.json"
+    timeline.write_text(json.dumps({"english_text": "All source words.", "translation_zh": "完整中文。",
+                                   "publication_text": {"title": "今日新闻", "copy": "读新闻。"}}))
+    (tmp_path / "qa").mkdir()
+    (tmp_path / "qa/source_evidence.json").write_text(json.dumps({"asr_text": "All source words."}))
+    (tmp_path / "display_plan.json").write_text("{}")
+    mp4 = tmp_path / "video.mp4"
+    mp4.write_bytes(b"video")
+    monkeypatch.setattr(review, "_extract_contact_sheet", _fake_contact_sheet)
+    def caller(**kwargs):
+        supplied = json.loads((kwargs["work_dir"] / "safety_text.json").read_text())
+        assert "All source words." in supplied["documents"][0]["en_text"]
+        assert "完整中文。" in supplied["documents"][1]["zh_text"]
+        return {"state": "PASS", "coverage": "SUFFICIENT", "risk_categories": [], "text_coverage": coverage}
+    monkeypatch.setattr(review, "_run_agy", caller)
+    receipt = review.review_video(mp4=mp4, contact_sheet=tmp_path / "qa/contact.png", agy_bin="agy",
+                                  model="gemini-3.8-flash-high", timeout_seconds=60, timeline=timeline)
+    assert receipt["state"] == expected
+    assert receipt["text_review"]["input_sha256"] == review.fulltext_safety_input(timeline)["input_sha256"]
+
+
+def test_fulltext_mutation_during_review_is_rejected(monkeypatch, tmp_path):
+    import json
+    timeline = tmp_path / "timeline.json"
+    timeline.write_text(json.dumps({"english_text": "Clean energy.", "translation_zh": "清洁能源。"}))
+    (tmp_path / "qa").mkdir()
+    (tmp_path / "qa/source_evidence.json").write_text(json.dumps({"asr_text": "Clean energy."}))
+    (tmp_path / "display_plan.json").write_text("{}")
+    mp4 = tmp_path / "video.mp4"
+    mp4.write_bytes(b"video")
+    monkeypatch.setattr(review, "_extract_contact_sheet", _fake_contact_sheet)
+    def caller(**kwargs):
+        timeline.write_text(json.dumps({"english_text": "Changed text."}))
+        return {"state": "PASS", "coverage": "SUFFICIENT", "risk_categories": [], "text_coverage": "SUFFICIENT"}
+    monkeypatch.setattr(review, "_run_agy", caller)
+    with pytest.raises(review.VisualSafetyReviewError, match="最终文本发生变化"):
+        review.review_video(mp4=mp4, contact_sheet=tmp_path / "qa/contact.png", agy_bin="agy",
+                            model="gemini-3.8-flash-high", timeout_seconds=60, timeline=timeline)

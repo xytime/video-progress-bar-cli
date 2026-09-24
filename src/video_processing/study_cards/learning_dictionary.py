@@ -148,22 +148,28 @@ def attach_evidence(payload, directory):
     leveler = VocabularyLeveler(directory)
     points = payload["learning_points"]
     targets = {_dictionary_key(p["word"]) for p in points}
-    if "" in targets:
+    optional = advisory_quality(payload)
+    if "" in targets and not optional:
         raise ValueError("学习点必须包含可查询的英文词，不能编造音标")
     path = directory / "ecdict.csv"
     rows = _load_rows(directory, targets)
+    retained = []
     for point in points:
         key = _dictionary_key(point["word"])
         row = rows.get(key)
-        if not row:
-            raise ValueError(f"本机词典没有学习点 {key}，不能编造音标")
-        pronunciation = _pronunciation(row, rows)
-        if not pronunciation.get("phonetic"):
-            raise ValueError(f"本机词典没有 {key} 或其词元的音标")
-        raw_phonetic = pronunciation["phonetic"]
+        pronunciation = _pronunciation(row, rows) if row else {}
+        raw_phonetic = pronunciation.get("phonetic", "")
         normalized_phonetic, rules = normalize_phonetic(raw_phonetic)
-        if not normalized_phonetic or not any(ch.isalpha() for ch in normalized_phonetic):
-            raise ValueError(f"本机词典 {key} 的音标缺少发音字符")
+        reason = (f"本机词典没有学习点 {key}，不能编造音标" if not row else
+                  f"本机词典没有 {key} 或其词元的音标" if not raw_phonetic else
+                  f"本机词典 {key} 的音标缺少发音字符" if not any(ch.isalpha() for ch in normalized_phonetic) else "")
+        if reason:
+            if not optional:
+                raise ValueError(reason)
+            payload.setdefault("quality_adjustments", []).append({
+                "action": "drop_optional_card", "stage": "dictionary_evidence",
+                "word_index": point.get("word_index"), "reason": reason})
+            continue
         level = leveler.analyze_word(key)
         point.update(phonetic=normalized_phonetic,
                      raw_phonetic=raw_phonetic,
@@ -174,6 +180,10 @@ def attach_evidence(payload, directory):
                      dictionary_source="ecdict.csv", dictionary_senses={"definition": row.get("definition", ""),
                      "translation": row.get("translation", ""), "exchange": row.get("exchange", "")},
                      level=level.recommended_level, level_source=level.source)
+        retained.append(point)
+    if optional:
+        payload["learning_points"] = retained
+        payload["vocabulary_candidates"] = retained
     if not advisory_quality(payload):
         validate_context_meaning_separation(points, payload.get("words", []))
     payload["dictionary_sha256"] = file_digest(path)

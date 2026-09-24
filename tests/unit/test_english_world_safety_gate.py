@@ -204,3 +204,33 @@ def test_delivery_without_source_evidence_produces_fail_closed_receipt(tmp_path)
     receipt = safety_gate.evaluate_delivery(title="标题", timeline_path=timeline)
 
     assert receipt["state"] == "FAIL_CLOSED"
+
+
+@pytest.mark.parametrize("text", ["Ku-Klux-Klan", "KU—KLUX—KLAN", "K.K.K.", "Ｋ．Ｋ．Ｋ．", "三K黨", "三 K 黨", "Ku\u200b Klux Klan"])
+def test_sensitive_aliases_remain_hard_blocked(text):
+    result = safety_gate.evaluate("candidate_preflight", [safety_gate.SafetyDocument(name="source", en_text=text)])
+    assert result["state"] == "BLOCKED"
+
+
+def test_alias_normalization_does_not_match_unrelated_substrings():
+    assert not safety_gate._source_policy_result("A clean energy workshop and a bookkeeper.")["hit"]
+
+
+def test_new_fulltext_policy_requires_current_semantic_review(tmp_path):
+    timeline = tmp_path / "timeline.json"
+    payload = {"safety_policy": safety_gate.FULLTEXT_SAFETY_POLICY,
+               "english_text": "Clean energy helps.", "translation_zh": "清洁能源有帮助。",
+               "publication_text": {"title": "清洁能源", "copy": "一起读新闻。"}}
+    timeline.write_text(json.dumps(payload))
+    (tmp_path / "qa").mkdir()
+    (tmp_path / "qa/source_evidence.json").write_text(json.dumps({"asr_text": "Clean energy helps."}))
+    (tmp_path / "display_plan.json").write_text("{}")
+    visual = _visual_receipt()
+    assert safety_gate.evaluate_delivery(title="清洁能源", timeline_path=timeline, visual_review=visual)["state"] == "FAIL_CLOSED"
+    text_input = safety_gate.fulltext_safety_input(timeline)
+    visual["text_review"] = {"version": safety_gate.FULLTEXT_SAFETY_POLICY, "coverage": "SUFFICIENT",
+                             "input_sha256": text_input["input_sha256"]}
+    assert safety_gate.evaluate_delivery(title="清洁能源", timeline_path=timeline, visual_review=visual)["state"] == "PASS"
+    payload["translation_zh"] = "改过的中文。"
+    timeline.write_text(json.dumps(payload))
+    assert safety_gate.evaluate_delivery(title="清洁能源", timeline_path=timeline, visual_review=visual)["state"] == "FAIL_CLOSED"
