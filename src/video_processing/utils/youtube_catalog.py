@@ -7,6 +7,7 @@
 | Version | Date       | Author | Description |
 |---------|------------|--------|-------------|
 | 1.1.0 | 2026-08-23 | Codex | 保留 UTC 精确源发布时间，供视频号原创声明按 24 小时判定 |
+| 1.2.0 | 2026-09-25 | Codex | 批量读取视频统计，供低成本重评候选复查 |
 | 1.0.0 | 2026-07-28 | Codex | 新增 Data API 主源与 RSS 降级，解除频道发现对 yt-dlp 反爬状态的依赖 |
 """
 
@@ -55,6 +56,29 @@ class ChannelCatalog:
     videos: list[ChannelVideo]
     metadata_complete: bool
     fallback_reason: str | None = None
+
+
+def fetch_video_statistics(
+    video_ids: list[str], *, api_key: str, timeout_sec: int = 20,
+) -> dict[str, tuple[int, int | None]]:
+    """批量读取现时播放/点赞；缺失或无效的播放量不视为成功刷新。"""
+    if not api_key:
+        raise ValueError("YouTube Data API key is required")
+    result: dict[str, tuple[int, int | None]] = {}
+    for start in range(0, len(video_ids), 50):
+        batch = video_ids[start:start + 50]
+        payload = _request_json(
+            "videos", {"part": "statistics", "id": ",".join(batch), "key": api_key},
+            timeout_sec,
+        )
+        for item in payload.get("items") or []:
+            video_id = item.get("id")
+            statistics = item.get("statistics") or {}
+            views = _int_or_none(statistics.get("viewCount"))
+            if video_id in batch and views is not None and views >= 0:
+                likes = _int_or_none(statistics.get("likeCount"))
+                result[video_id] = (views, likes if likes is not None and likes >= 0 else None)
+    return result
 
 
 def fetch_channel_catalog(

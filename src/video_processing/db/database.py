@@ -7,6 +7,7 @@
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.88.0 | 2026-09-25 | Codex | 英语世界具名只读回查限用一次，并原子节流公开确认缺失提醒。 |
+| 3.87.0 | 2026-09-25 | Codex | 重评候选按上次抓取时间轮转；统计、评分与抓取时间原子保存。 |
 | 3.86.0 | 2026-09-25 | Codex | 自动加工与预加工候选排除 TED/TEDx 启用边界前主视频及其切片，不释放历史条目。 |
 | 3.85.0 | 2026-09-24 | Codex | 保存逐视频加工触发事件，按北京时间汇总自动与人工参与的投稿漏斗。 |
 | 3.84.0  | 2026-09-23 | Antigravity                         | [Code Review Fix] 新增 claim_specific_wechat_review_notification 原子抢占单条通知任务，防并发冲突 |
@@ -188,7 +189,7 @@ from typing import Collection, List, Dict, Any, Optional, Sequence
 
 from config.settings import settings
 from ..content_types import CONTENT_TYPE_GENERAL, normalize_content_type
-from ..scoring import CHANNEL_SCORE_CAPS, TED_AUTO_PUBLISH_CHANNEL_IDS, cap_channel_score
+from ..scoring import CHANNEL_SCORE_CAPS, TED_AUTO_PUBLISH_CHANNEL_IDS, cap_channel_score, compute_auto_score
 
 
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
@@ -594,6 +595,9 @@ class PipelineDB:
             if columns and "score_computed_at" not in columns:
                 self._logger.info("[Migration] Adding score_computed_at to processed_videos table...")
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN score_computed_at TIMESTAMP DEFAULT NULL;")
+                conn.commit()
+            if columns and "rescore_checked_at" not in columns:
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN rescore_checked_at TIMESTAMP DEFAULT NULL;")
                 conn.commit()
 
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
@@ -4986,8 +4990,11 @@ class PipelineDB:
             )
             return [dict(row) for row in cursor.fetchall()]
 
-    def get_rescore_candidates(self, days: int = 8, limit: int = 250) -> List[Dict[str, Any]]:
-        """[Claude_Opus_4.8] 重算候选：近 N 天、AUTO、未手动锁分、<75 分的 PENDING 视频。
+    def get_rescore_candidates(
+        self, days: int = 8, limit: int = 50,
+        channel_min_scores: Optional[Dict[str, int]] = None,
+    ) -> List[Dict[str, Any]]:
+        """重评候选：新片优先复查一次，之后按上次抓取时间公平轮转。
 
         与 get_high_score_pending_videos 共用同一套黑名单过滤（BLACKLISTED 频道 + blacklisted_videos
         墓碑），把黑名单语义收敛为 DAL 单一真相源——杜绝 rescore 脚本手抄过滤 SQL 随 DAL 漂移、
@@ -4995,19 +5002,108 @@ class PipelineDB:
         时间比较用 SQLite datetime('now')（UTC）对齐 created_at（CURRENT_TIMESTAMP 亦为 UTC），
         避免宿主本地时区（UTC+8）与库内 UTC 不一致造成的窗口边界漂移。
         """
-        query = """
-            SELECT youtube_id, slice_index, channel_id, view_count, like_count, score
+        thresholds = channel_min_scores or {}
+        score_line = (
+            "CASE channel_id " + " ".join("WHEN ? THEN ?" for _ in thresholds) + " ELSE 75 END"
+            if thresholds else "75"
+        )
+        capped_out = [
+            channel_id for channel_id, cap in CHANNEL_SCORE_CAPS.items()
+            if cap < thresholds.get(channel_id, 75)
+        ]
+        cap_filter = (
+            "AND channel_id NOT IN (" + ",".join("?" for _ in capped_out) + ")"
+            if capped_out else ""
+        )
+        query = f"""
+            SELECT youtube_id, slice_index, channel_id, view_count, like_count, score,
+                   rescore_checked_at
             FROM processed_videos
             WHERE status = 'PENDING' AND source = 'AUTO' AND IFNULL(is_manually_scored, 0) = 0
-              AND score < 75
+              AND score < ({score_line})
               AND created_at >= datetime('now', ?)
+              AND created_at <= datetime('now', '-1 hour')
+              AND (
+                    rescore_checked_at IS NULL
+                 OR rescore_checked_at <= datetime('now',
+                       CASE WHEN created_at >= datetime('now', '-1 day')
+                            THEN '-3 hours' ELSE '-24 hours' END)
+              )
               AND channel_id NOT IN (SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED')
               AND youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)
-            ORDER BY view_count DESC LIMIT ?
+              {cap_filter}
+            ORDER BY CASE WHEN created_at >= datetime('now', '-1 day') THEN 0 ELSE 1 END,
+                     COALESCE(rescore_checked_at, created_at) ASC, id ASC
+            LIMIT ?
         """
+        threshold_params = [value for item in thresholds.items() for value in item]
         with self.get_connection() as conn:
-            cursor = conn.execute(query, (f"-{int(days)} days", limit))
+            cursor = conn.execute(query, (
+                *threshold_params, f"-{max(1, int(days))} days", *capped_out, max(1, int(limit)),
+            ))
             return [dict(row) for row in cursor.fetchall()]
+
+    def record_rescore_attempt(
+        self, youtube_id: str, slice_index: int,
+        view_count: Optional[int], like_count: Optional[int],
+    ) -> Optional[tuple[int, int]]:
+        """记录一次抓取；成功时原子保存新统计与只升不降的自动分。"""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """SELECT score, channel_id FROM processed_videos
+                   WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING'
+                     AND source = 'AUTO' AND IFNULL(is_manually_scored, 0) = 0
+                     AND score < 75
+                     AND channel_id NOT IN (
+                         SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
+                     )
+                     AND youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)""",
+                (youtube_id, slice_index),
+            ).fetchone()
+            if row is None:
+                return None
+            old_score = int(row["score"] or 0)
+            if view_count is None or view_count < 0:
+                cursor = conn.execute(
+                    """UPDATE processed_videos SET rescore_checked_at = CURRENT_TIMESTAMP
+                       WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING'
+                         AND source = 'AUTO' AND IFNULL(is_manually_scored, 0) = 0
+                         AND score < 75
+                         AND channel_id NOT IN (
+                             SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
+                         )
+                         AND youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)""",
+                    (youtube_id, slice_index),
+                )
+                conn.commit()
+                return (old_score, old_score) if cursor.rowcount else None
+
+            proposed_score = cap_channel_score(
+                row["channel_id"], compute_auto_score(view_count, like_count),
+            )
+            score_cap = CHANNEL_SCORE_CAPS.get(row["channel_id"], 100)
+            signature = self._score_input_signature(row["channel_id"], view_count, like_count)
+            cursor = conn.execute(
+                """UPDATE processed_videos
+                   SET view_count = ?, like_count = ?, score = MIN(MAX(score, ?), ?),
+                       score_input_signature = ?,
+                       score_computed_at = CURRENT_TIMESTAMP,
+                       rescore_checked_at = CURRENT_TIMESTAMP
+                   WHERE youtube_id = ? AND slice_index = ? AND status = 'PENDING'
+                     AND source = 'AUTO' AND IFNULL(is_manually_scored, 0) = 0
+                     AND score < 75
+                     AND channel_id NOT IN (
+                         SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
+                     )
+                     AND youtube_id NOT IN (SELECT youtube_id FROM blacklisted_videos)""",
+                (view_count, like_count, proposed_score, score_cap, signature, youtube_id, slice_index),
+            )
+            new_score = conn.execute(
+                "SELECT score FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index),
+            ).fetchone()["score"] if cursor.rowcount else old_score
+            conn.commit()
+            return (old_score, new_score) if cursor.rowcount else None
 
     def record_processing_trigger(
         self, youtube_id: str, trigger_source: str, *, slice_index: int = 0,
