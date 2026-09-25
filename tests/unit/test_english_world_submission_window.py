@@ -97,6 +97,12 @@ def test_submission_identity_requires_same_session_unique_native_id_delta(tmp_pa
     )
 
     receipt.write_text(json.dumps({
+        "matched_by": "same_session_before_after_unique_post_list_object_id_delta_and_exact_description",
+        "platform_post_id": "export/native-id",
+    }), encoding="utf-8")
+    assert submitter._read_submission_identity(tmp_path) == ("export/native-id", None)
+
+    receipt.write_text(json.dumps({
         "matched_by": "title_guess", "platform_post_id": "export/wrong",
     }), encoding="utf-8")
     assert submitter._read_submission_identity(tmp_path) == (None, None)

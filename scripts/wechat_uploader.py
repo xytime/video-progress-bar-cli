@@ -71,6 +71,7 @@
 | 5.6.0 | 2026-09-07 | Codex | 原生接口正文与页面状态分离，同 ID 合并保留状态证据；未知数值状态只落诊断且不推断公开。 |
 | 5.7.0 | 2026-09-19 | Codex | 评论互动开关启用时，以登录态派生共享锁覆盖完整浏览器会话。 |
 | 5.8.0 | 2026-09-20 | Codex | 发表前选择“不显示位置”并回读显示值；未确认时保留证据并阻断提交。 |
+| 5.9.0 | 2026-09-25 | Codex | 列表无短标题时以本次完整文案精确绑定唯一新增原生 ID；会话刷新不再伪装成重新登录。 |
 """
 
 import os
@@ -523,8 +524,9 @@ def _read_confirmed_submission_title(page, expected_title: str | None) -> str:
 
 def resolve_submission_platform_identity(
     before: dict[str, dict[str, str]], after: dict[str, dict[str, str]], expected_title: str,
+    *, expected_description: str | None = None,
 ) -> dict[str, str] | None:
-    """仅当同次提交产生唯一新增平台 ID 且完整标题一致时返回精确绑定结果。"""
+    """同次提交唯一新增 ID，且列表标题或本次完整文案吻合时才绑定。"""
     if not expected_title:
         return None
     introduced_ids = set(after) - set(before)
@@ -544,6 +546,14 @@ def resolve_submission_platform_identity(
         and re.sub(r"\s+", "", str(record.get("short_title") or "")) == normalized_title
     ):
         matched_by = "same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title"
+    elif (
+        record.get("identity_source") == "post_list_api"
+        and expected_description
+        and str(record.get("card_text") or "").strip()
+        and re.sub(r"\s+", "", str(record["card_text"]))
+        == re.sub(r"\s+", "", expected_description)
+    ):
+        matched_by = "same_session_before_after_unique_post_list_object_id_delta_and_exact_description"
     else:
         return None
     return {
@@ -557,6 +567,7 @@ def resolve_submission_platform_identity_after_publish(
     page,
     before: dict[str, dict[str, str]],
     expected_title: str,
+    expected_description: str | None = None,
     *,
     attempts: int = 5,
     retry_delay_ms: int = 1500,
@@ -568,7 +579,9 @@ def resolve_submission_platform_identity_after_publish(
         return None
 
     for attempt in range(max(1, attempts)):
-        receipt = resolve_submission_platform_identity(before, after, expected_title)
+        receipt = resolve_submission_platform_identity(
+            before, after, expected_title, expected_description=expected_description,
+        )
         if receipt:
             return receipt
         if attempt + 1 >= max(1, attempts):
@@ -992,6 +1005,11 @@ def _stamp_login_success(state_file: Path) -> None:
         auto_flag = state_file.parent / "wechat_auto_relogin_started.flag"
         try:
             auto_flag.unlink()
+        except FileNotFoundError:
+            pass
+        warned_flag = state_file.parent / "wechat_login_warned.flag"
+        try:
+            warned_flag.unlink()
         except FileNotFoundError:
             pass
         logger.info(f"Login success marker updated: {marker}")
@@ -1775,7 +1793,6 @@ def run_uploader(
             )
             try:
                 context.storage_state(path=str(state_file))
-                _stamp_login_success(state_file)
             except Exception as exc:
                 logger.warning("精确平台 ID 回查后保存会话失败: %s", exc)
             browser.close()
@@ -1913,7 +1930,6 @@ def run_uploader(
         # [BugFix] 每次上传成功后及时保存最新的 storage_state，保存刷新的 Cookie / Token
         try:
             context.storage_state(path=str(state_file))
-            _stamp_login_success(state_file)
             logger.info(f"Session state updated and saved to: {state_file}")
         except Exception as e:
             logger.warning(f"Failed to update session state after upload: {e}")
@@ -2842,6 +2858,7 @@ def run_uploader(
               if identity_baseline_ready:
                   receipt = resolve_submission_platform_identity_after_publish(
                       page, identity_baseline, submitted_short_title,
+                      expected_description=copy_text,
                   )
                   if receipt:
                       _write_submission_receipt(evidence_root, receipt)
@@ -2854,7 +2871,7 @@ def run_uploader(
                           evidence_root,
                           {
                               "matched_by": "unbound",
-                              "reason": "No unique before/after platform-ID delta with exact title",
+                              "reason": "No unique before/after platform-ID delta with exact title or description",
                           },
                       )
         except Exception:

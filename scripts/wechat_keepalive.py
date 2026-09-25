@@ -10,6 +10,7 @@
 | 1.1.0   | 2026-06-27 | Claude_Opus_4.8 | [无痛重登·预警] 会话龄追踪(标记文件，刷新不重置、过期清零) + 临期预警：龄超 settings.wechat_session_warn_hours(默认22h) 即推 Telegram「该重扫」，在 ~24h 服务端硬上限断档前提醒；Telegram 凭据迁移至 settings（消除 os.environ 违规） |
 | 1.2.0   | 2026-06-27 | Claude_Opus_4.8 | 临期预警/过期告警话术改为引导「发 /wechat_login 取二维码到 Telegram 手机扫码」，与 pipeline_agent 无头 QR 推送闭环（替代原终端 --no-headless 命令） |
 | 1.3.0   | 2026-09-19 | Codex | 评论互动开关启用时，以登录态派生共享锁覆盖完整保活会话。 |
+| 1.4.0   | 2026-09-25 | Codex | 登录过期时保留会话龄标记，让控制台恢复流程仍能识别过期会话。 |
 
 Exit Codes:
     0 - Session 活跃，Cookie 已刷新
@@ -46,7 +47,7 @@ WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 
 # [Claude_Opus_4.8] 会话龄追踪：标记文件记录上次「扫码登录」的近似时刻(epoch)。
 # 看门狗的 Cookie 刷新【不】重置它（刷新无法延长 ~24h 服务端硬上限，见 RCA 候选②）；
-# 仅在会话过期(login required)时清除，使下一次 active 视为重扫后重新计时。
+# 仅实际重新登录成功时重置；过期时保留标记供自动重登调度器判断。
 _LOGIN_AT_FILE = "output/wechat_login_at.txt"
 _WARNED_FILE = "output/wechat_login_warned.flag"
 
@@ -76,17 +77,6 @@ def _stamp_login_if_absent(login_at_path: Path) -> None:
             login_at_path.write_text(str(int(time.time())))
         except Exception as e:
             logger.warning(f"[Keepalive] Failed to stamp login time: {e}")
-
-
-def _reset_login_markers(*paths: Path) -> None:
-    """会话过期 → 清除登录时刻与已预警标记，便于重扫后重新计时。"""
-    for p in paths:
-        try:
-            p.unlink()
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            logger.warning(f"[Keepalive] Failed to clear marker {p}: {e}")
 
 
 def _maybe_warn_expiry(login_at_path: Path, warned_path: Path) -> None:
@@ -235,8 +225,7 @@ def run_keepalive(
                     is_logged_in = True  # 不确定时乐观假设已登录
 
         if not is_logged_in:
-            # [Claude_Opus_4.8] Session 已过期：清除会话龄标记（重扫后重新计时）+ 推 Telegram 报警
-            _reset_login_markers(Path(_LOGIN_AT_FILE), Path(_WARNED_FILE))
+            # 过期标记须保留：Web 看门狗下一轮据此触发自动重登；实际登录成功才重计时。
             _send_telegram(
                 "⚠️ <b>WeChat Session 已过期</b>\n"
                 "看门狗检测到登录态失效，请尽快重新扫码登录。\n"

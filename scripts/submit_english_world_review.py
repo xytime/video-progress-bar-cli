@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.19.0 | 2026-09-25 | Codex | 接受投稿器基于同次唯一新增 ID 与精确短标题或完整文案的绑定回执。 |
 | 1.18.0 | 2026-09-23 | Codex | 专属投稿改用微信发布互斥，不等待全局加工锁。 |
 | 1.17.0 | 2026-09-22 | Codex | 领取前校验失败持久化退出队列；不启动浏览器、不伪造提交尝试。 |
 | 1.16.0 | 2026-09-22 | Codex | 原创策略绑定不可变审核包；声明异常保留原生 ID 并停止重传。 |
@@ -172,7 +173,11 @@ def _read_submission_identity(evidence_dir: Path) -> tuple[str | None, str | Non
         return None, None
     if not isinstance(receipt, dict):
         return None, None
-    if str(receipt.get("matched_by") or "") != "same_session_before_after_unique_post_list_object_id_delta":
+    if str(receipt.get("matched_by") or "") not in {
+        "same_session_before_after_unique_post_list_object_id_delta",
+        "same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title",
+        "same_session_before_after_unique_post_list_object_id_delta_and_exact_description",
+    }:
         return None, None
     platform_post_id = str(receipt.get("platform_post_id") or "").strip() or None
     platform_url = str(receipt.get("platform_url") or "").strip() or None

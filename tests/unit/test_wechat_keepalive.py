@@ -4,6 +4,7 @@
 | Version | Date       | Author                              | Description                              |
 |---------|------------|-------------------------------------|------------------------------------------|
 | 1.1.0   | 2026-09-08 | Codex | 注入实际被业务读取的 settings 单例，报警单测不依赖宿主 Telegram 配置 |
+| 1.2.0   | 2026-09-25 | Codex | 过期保活仍保留重登调度所需的时间标记。 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | Initial creation: 5 unit tests covering  |
 |         |            |                                     | logged-in, session-expired, missing-file,|
 |         |            |                                     | ambiguous-URL, and DOM-fallback scenarios|
@@ -99,6 +100,27 @@ def test_keepalive_session_expired(tmp_path):
     # Session 未刷新（已过期，不保存）
     context_mock.storage_state.assert_not_called()
     browser_mock.close.assert_called_once()
+
+
+def test_expired_session_preserves_relogin_marker(tmp_path, monkeypatch):
+    from scripts import wechat_keepalive as keepalive
+
+    state_file = tmp_path / "wechat_state.json"
+    state_file.write_text("{}")
+    login_at = tmp_path / "wechat_login_at.txt"
+    login_at.write_text("123")
+    warned = tmp_path / "wechat_login_warned.flag"
+    warned.write_text("1")
+    monkeypatch.setattr(keepalive, "_LOGIN_AT_FILE", str(login_at))
+    monkeypatch.setattr(keepalive, "_WARNED_FILE", str(warned))
+    monkeypatch.setattr(keepalive, "_send_telegram", lambda _message: None)
+    page = _make_page_mock("https://channels.weixin.qq.com/login.html")
+    playwright_ctx, _, _ = _make_sync_playwright_context(page)
+    monkeypatch.setattr(keepalive, "sync_playwright", lambda: playwright_ctx)
+
+    assert keepalive.run_keepalive(state_path=str(state_file), dwell=0) == 2
+    assert login_at.read_text() == "123"
+    assert warned.read_text() == "1"
 
 
 # ── Test 3: Session 文件不存在 → 直接返回 1，不启动浏览器 ─────────────────────

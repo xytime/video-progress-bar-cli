@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.13.0 | 2026-09-25 | Codex | 覆盖 post_list 仅返回长描述时的精确文案绑定与错配拒绝。 |
 | 1.12.1 | 2026-09-24 | Codex | 清洗后标题实际回读可绑定，原始长标题、回读不符和不可见输入不能绑定。 |
 | 1.12.0 | 2026-09-24 | Codex | 覆盖结构化 desc 的短标题提取与精确绑定，阻断仅凭唯一新增 ID 的误绑。 |
 | 1.11.0 | 2026-09-07 | Codex | 覆盖接口正文与页面状态隔离，以及失败通知保留末尾异常。 |
@@ -266,6 +267,27 @@ class TestExactSubmissionIdentity:
             "identity_source": "post_list_api", "short_title": "另一部作品",
         }}
         assert resolve_submission_platform_identity({}, after, "本次唯一完整标题") is None
+
+    def test_post_list_string_description_binds_only_exact_submitted_copy(self):
+        after = _collect_management_cards_from_post_list_payload({"data": {"list": [{
+            "objectId": "native-new", "desc": "本次投稿的完整正文\n#科技", "status": 3,
+        }]}})
+        receipt = resolve_submission_platform_identity(
+            {}, after, "本次唯一完整标题",
+            expected_description="本次投稿的完整正文\n#科技",
+        )
+        assert receipt == {
+            "platform_post_id": "native-new", "platform_url": "",
+            "matched_by": "same_session_before_after_unique_post_list_object_id_delta_and_exact_description",
+        }
+
+    def test_post_list_unique_delta_with_other_copy_stays_unbound(self):
+        after = _collect_management_cards_from_post_list_payload({"data": {"list": [{
+            "objectId": "native-other", "desc": "另一条投稿的完整正文", "status": 3,
+        }]}})
+        assert resolve_submission_platform_identity(
+            {}, after, "本次唯一完整标题", expected_description="本次投稿的完整正文",
+        ) is None
 
     def test_post_list_payload_exposes_only_native_object_ids(self):
         cards = _collect_management_cards_from_post_list_payload({

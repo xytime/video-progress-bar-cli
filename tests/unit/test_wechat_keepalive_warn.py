@@ -3,7 +3,7 @@
 覆盖 wechat_keepalive 的会话龄追踪 + 临期预警：
 - 年轻会话不预警；
 - 龄超阈值预警一次，本登录周期不重复；
-- 过期重置 + 重扫后重新计时（age 归零）。
+- 过期标记保留；真实重登后重新计时（age 归零）。
 
 Telegram 发送被 stub，不发真消息（mock 1 个 + monkeypatch 1 个，满足 mock-gate≤3）。
 
@@ -52,14 +52,19 @@ def test_aged_session_warns_once(tmp_path, captured):
     assert len(captured) == 1
 
 
-def test_reset_on_expiry_then_rescan_retimes(tmp_path, captured):
-    login_at = tmp_path / "login_at.txt"
-    warned = tmp_path / "warned.flag"
+def test_only_confirmed_login_resets_expiry_age(tmp_path, captured):
+    login_at = tmp_path / "wechat_login_at.txt"
+    warned = tmp_path / "wechat_login_warned.flag"
     login_at.write_text(str(int(time.time()) - int(23 * 3600)))
     warned.write_text("1")
-    keepalive._reset_login_markers(login_at, warned)
-    assert not login_at.exists() and not warned.exists()
-    # 重扫后重新计时 → 年轻会话 → 不预警
+    keepalive._stamp_login_if_absent(login_at)
+    assert login_at.exists() and warned.exists()
+    assert (time.time() - int(login_at.read_text())) / 3600 >= 22
+
+    from scripts.wechat_uploader import _stamp_login_success
+    _stamp_login_success(tmp_path / "wechat_state.json")
+    assert not warned.exists()
+    # 真实重登后重新计时 → 年轻会话 → 不预警
     keepalive._stamp_login_if_absent(login_at)
     keepalive._maybe_warn_expiry(login_at, warned)
     assert captured == []

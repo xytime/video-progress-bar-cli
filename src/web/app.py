@@ -1,6 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
 | 3.47.0 | 2026-09-24 | Codex | 区分自动与人工管线触发来源，提供逐日视频号投稿归因漏斗。 |
+| 3.48.0 | 2026-09-25 | Codex | 登录标记缺失时恢复自动重登，并在保活确认为过期后立即启动既有登录流程。 |
 | 3.46.0 | 2026-09-23 | Antigravity | [Code Review Fix] 1. _safe_kill_pid_or_pgid 增加自杀保护 (pid == os.getpid())；2. _process_group_alive 增加命令白名单特征过滤，防御 PID 复用；3. _queue_runner_loop 补偿排水审核通知；4. _trigger_video_async 等待超时扩展至 120s 对齐附件发送 |
 | 3.45.0 | 2026-09-23 | Antigravity | [看门狗与进程组加固] 1. _process_group_alive 区分并同时校验 PID 与 PGID，防止批量入口 worker 被误回收；2. _run_pipeline_manager 与 run_full_pipeline 启用 start_new_session=True；3. 预提交孤儿回收联动 read_lease_owner 内核文件锁双重防误杀；4. 进程终止操作支持 PGID 与 PID 阶梯强杀；5. 巡检循环回收超期审核通知 |
 | 3.44.0 | 2026-09-23 | Worker M2 (Topic Clues) | 重构 /api/trending-keywords 与 /refresh 接入 TopicCluesHub，消除 sys.path.insert(0, scripts) 与同步阻塞 |
@@ -439,14 +440,16 @@ def _wechat_session_needs_auto_relogin() -> bool:
         return False
     prj_root = Path(__file__).parent.parent.parent
     login_at = prj_root / "output" / "wechat_login_at.txt"
+    state_file = prj_root / "output" / "wechat_state.json"
     auto_flag = prj_root / "output" / _WECHAT_AUTO_RELOGIN_FLAG
     try:
         if auto_flag.exists() and time.time() - auto_flag.stat().st_mtime < 15 * 60:
             return False
         stamp = int(login_at.read_text(encoding="utf-8").strip())
         return (time.time() - stamp) / 3600.0 >= settings.wechat_session_warn_hours
-    except Exception:
-        return False
+    except (OSError, ValueError):
+        # 旧看门狗会删标记；只有保存过会话时才尝试恢复，避免首次安装时误启动。
+        return state_file.is_file()
 
 def _translate_title_task(youtube_id: str, english_title: str):
     """后台任务：调用翻译接口（阿里云 MT 优先）翻译标题并更新数据库。
@@ -876,6 +879,13 @@ def _wechat_keepalive_loop():
                 log.info("[Keepalive] WeChat session refreshed successfully.")
             elif result.returncode == 2:
                 log.warning("[Keepalive] WeChat session expired (LOGIN_REQUIRED). Telegram alert sent.")
+                if settings.wechat_auto_relogin_enabled:
+                    started = _start_wechat_login_flow(
+                        headless=True,
+                        preserve_marker=True,
+                        reason="expired keepalive session",
+                    )
+                    log.warning("[Keepalive] Expired-session relogin triggered: %s", started)
             else:
                 log.warning(f"[Keepalive] Keepalive subprocess returned code: {result.returncode}.")
         except _sp.TimeoutExpired:
