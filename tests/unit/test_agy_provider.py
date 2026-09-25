@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.2 | 2026-09-25 | Codex | 识别结构化参数的 API 400，确保只输出安全分类而不泄漏原始错误文本。 |
 | 1.0.1 | 2026-09-22 | Codex | 覆盖本地启动分类、模型列表预检及敏感输出不外泄。 |
 | 1.0.0 | 2026-08-24 | Codex | 覆盖隔离调用、Schema 输出提取和缺失结构化结果的拒绝 |
 """
@@ -65,6 +66,25 @@ def test_agy_provider_does_not_expose_external_error_text(monkeypatch):
         run_agy_structured("translate", schema={"type": "object"}, model="test", command="agy", timeout_sec=1)
 
     assert str(exc_info.value) == "agy exit 1: rate limit"
+
+
+def test_agy_provider_classifies_invalid_structured_schema_without_external_text(monkeypatch):
+    import video_processing.utils.agy_provider as module
+
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=3, stdout="",
+            stderr="INVALID_ARGUMENT (code 400): function_declarations[0].parameters.properties[learning_points] "
+                   "private subtitle: cannot be empty",
+        ),
+    )
+
+    with pytest.raises(AgyProviderError) as exc_info:
+        run_agy_structured("translate", schema={"type": "object"}, model="test", command="agy", timeout_sec=1)
+
+    assert str(exc_info.value) == "agy exit 3: invalid schema"
 
 
 @pytest.mark.parametrize("message, expected", [

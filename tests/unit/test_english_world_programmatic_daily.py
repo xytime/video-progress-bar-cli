@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.3 | 2026-09-25 | Codex | 验证 AGY Schema 无整数枚举，词典候选由宿主拒绝越界与坏发音词。 |
 | 1.3.2 | 2026-09-24 | Codex | 真实词典、封面和账本覆盖发音错误替换及失败终止，验证 Schema 限制。 |
 | 1.3.1 | 2026-09-23 | Codex | 入口测试使用真实词典、布局及账本验证首次 FAIL 到唯一复审 PASS 或终止。 |
 | 1.3.0 | 2026-09-17 | Codex | 覆盖本地 ASR 占位锚点不会在转写前被误作成片字幕拒绝。 |
@@ -253,7 +254,7 @@ def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path,
         value = _draft()
         value["translations"][0]["translation_zh"] = "清洁能源带来帮助。各个家庭正在学习。"
         if pronunciation_failure:
-            assert 0 not in kwargs["schema"]["properties"]["learning_points"]["items"]["properties"]["word_index"]["enum"]
+            assert "enum" not in kwargs["schema"]["properties"]["learning_points"]["items"]["properties"]["word_index"]
             value["learning_points"][0] = {"word_index": 2, "pos": "v.", "context_meaning_zh": "帮助"}
         return value
 
@@ -273,17 +274,22 @@ def test_coordinator_revises_once_using_real_ledger_and_refrozen_cover(tmp_path,
     assert read_json(task_dir / "editorial_revision.json")["preserved_attempts"] == 1
 
 
-def test_dictionary_bounded_schema_rejects_provider_reusing_bad_pronunciation():
+def test_dictionary_bounded_host_rejects_provider_reusing_bad_pronunciation():
     import jsonschema
     timeline = daily._apply_draft(_timeline(), _draft())
     finding = {'check': 'VOCAB_PRONUNCIATION', 'target': 'word:0:1', 'status': 'FAIL', 'severity': 'P1'}
     assert daily._rejected_pronunciation_words(timeline, [finding]) == {'Clean'}
     schema = daily._draft_schema(1, 5, allowed_indexes=[1, 2, 3])
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(_draft(), schema)
+    index_schema = schema['properties']['learning_points']['items']['properties']['word_index']
+    assert index_schema == {'type': 'integer', 'minimum': 0, 'maximum': 4}
+    jsonschema.validate(_draft(), schema)
+    with pytest.raises(daily.ProgrammaticDailyError, match='词典候选'):
+        daily._apply_draft(_timeline(), _draft(), allowed_indexes=[1, 2, 3])
     value = _draft()
     value['learning_points'][0]['word_index'] = 2
     jsonschema.validate(value, schema)
+    assert [point['word_index'] for point in daily._apply_draft(
+        _timeline(), value, allowed_indexes=[1, 2, 3])['learning_points']] == [2, 1, 3]
     prompt = daily._revision_draft_prompt(timeline['words'], [(0, 5)], timeline, [finding], word_options=[])
     assert '返回格式不能修改音标' in prompt
 

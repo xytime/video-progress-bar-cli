@@ -6,6 +6,7 @@ Schema 验证后的 ``structured_output``。本模块不保存 prompt、字幕�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.2 | 2026-09-25 | Codex | 将结构化 Schema 400 错误归入安全分类，保留退出码且不回显原始内容。 |
 | 1.4.1 | 2026-09-22 | Codex | 区分本地启动受限与服务鉴权失败，提供无模型调用的启动预检。 |
 | 1.4.0 | 2026-09-22 | Codex | 允许调用方提供最小运行环境，独立 App 文案不继承业务 API 凭据。 |
 | 1.3.0 | 2026-09-18 | Antigravity | 支持根据模型后缀(-high/-low)自动推断 effort，避免参数冲突 |
@@ -101,6 +102,8 @@ def _safe_failure_category(value: str | None) -> str:
     if ("failed to start" in text and "operation not permitted" in text
             and ("listen tcp" in text or "creating log file" in text)):
         return "local startup blocked"
+    if "invalid_argument" in text and ("schema" in text or "function_declarations" in text):
+        return "invalid schema"
     if any(token in text for token in ("429", "quota", "rate limit", "resource_exhausted")):
         return "rate limit"
     if any(token in text for token in ("401", "403", "permission", "unauthorized")):

@@ -9,6 +9,7 @@ JSON Schema 约束的一次调用中补全中文段译、标题和适量学习�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.3 | 2026-09-25 | Codex | 移除 AGY 不支持的整数枚举，在宿主校验词典索引并保留安全的供应商错误分类。 |
 | 1.5.2 | 2026-09-24 | Codex | 初稿与修订按词典可用索引选词；发音失败换词卡，保留生成结果，制作异常不污染来源排除。 |
 | 1.5.1 | 2026-09-23 | Codex | 安全分段无解即停止；重新冻结双语封面，按真实账本预占唯一修订并验证目标变化与来源依据。 |
 | 1.5.0 | 2026-09-23 | Antigravity | 语法分段与多词短语边界保护防跨屏撕裂，接入 Revision 1 修订机制并基于最终排版生成变更审计。 |
@@ -556,11 +557,8 @@ def _learning_point_bounds(paragraph_count: int) -> tuple[int, int]:
 def _draft_schema(paragraph_count: int, word_count: int, *, allowed_indexes=None) -> dict[str, Any]:
     point_min, point_max = _learning_point_bounds(paragraph_count)
     index_schema = {"type": "integer", "minimum": 0, "maximum": word_count - 1}
-    if allowed_indexes is not None:
-        if allowed_indexes:
-            index_schema["enum"] = sorted(set(allowed_indexes))
-        else:
-            point_max = 0
+    if allowed_indexes is not None and not allowed_indexes:
+        point_max = 0
     return {
         "type": "object", "additionalProperties": False,
         "required": ["headline_zh", "headline_en", "translations", "learning_points"],
@@ -594,8 +592,8 @@ def _draft_prompt(words: list[dict[str, Any]], ranges: list[tuple[int, int]], *,
 按 paragraph 分配不重叠、严格适合 A2-B1 学习难度的核心词汇：每个非末段 0--5 个，末段 0--3 个；通常选 1--3 个有帮助的词即可，词典无可靠选项时可不选，不为数量凑词；优先挑选具有学习价值的新闻核心实词（如名词、动词、形容词等），基础词若有语境价值也可选择；word_index 必须严格指向给定 words 中的一个词；词义须为单一简明中文语境义，保留否定、数字、比较和说话者归属。\nDATA:\n""" + json.dumps(payload, ensure_ascii=False)
 
 
-def _apply_draft(timeline: dict[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
-    """把 AGY 的受限结构化结果附着到已冻结 words；越界、重复或缺段全部拒绝。"""
+def _apply_draft(timeline: dict[str, Any], result: Mapping[str, Any], *, allowed_indexes=None) -> dict[str, Any]:
+    """把 AGY 结果附着到冻结词轴；在本机校验词典索引、重复、越界和缺段。"""
     words = timeline["words"]
     ranges = _paragraph_word_ranges(words)
     translations = result.get("translations")
@@ -607,6 +605,7 @@ def _apply_draft(timeline: dict[str, Any], result: Mapping[str, Any]) -> dict[st
     if set(by_index) != set(range(len(ranges))) or any(not value for value in by_index.values()):
         raise ProgrammaticDailyError("AGY 初稿没有逐段完整翻译")
     used: set[int] = set()
+    allowed = set(allowed_indexes) if allowed_indexes is not None else None
     learning_points: list[dict[str, Any]] = []
     for raw in points:
         if not isinstance(raw, Mapping) or type(raw.get("word_index")) is not int:
@@ -614,6 +613,8 @@ def _apply_draft(timeline: dict[str, Any], result: Mapping[str, Any]) -> dict[st
         index = raw["word_index"]
         if not 0 <= index < len(words) or index in used:
             raise ProgrammaticDailyError("AGY 初稿学习点重复或越界")
+        if allowed is not None and index not in allowed:
+            raise ProgrammaticDailyError("AGY 初稿学习点不在词典候选中")
         used.add(index)
         meaning, pos = str(raw.get("context_meaning_zh") or "").strip(), str(raw.get("pos") or "").strip()
         if not meaning or not pos:
@@ -974,15 +975,16 @@ def _review_and_revise(timeline_path, timeline, *, wordlist_dir):
                 effort=settings.english_world_language_effort,
             )
         except AgyProviderError as exc:
-            raise ProgrammaticDailyError("AGY Revision 1 结构化修订不可用") from exc
+            raise ProgrammaticDailyError(f"AGY Revision 1 结构化修订不可用：{exc}") from exc
 
-        # 保留原始修订输出；宿主再次验证枚举，不能只相信供应商遵守 Schema。
+        # 保留原始修订输出；词典索引由宿主校验，不能只相信供应商遵守提示词。
         atomic_json(workspace / "qa/revision_draft.json", revised_draft)
         import jsonschema
         jsonschema.validate(revised_draft, schema)
 
         pre_revision_timeline = dict(timeline)
-        timeline = _apply_draft(dict(timeline), revised_draft)
+        timeline = _apply_draft(dict(timeline), revised_draft,
+                                allowed_indexes=[p["word_index"] for p in options])
         from video_processing.study_cards.learning_dictionary import attach_evidence
         timeline = attach_evidence(timeline, wordlist_dir)
         timeline = _fit_learning_point_density(timeline)
@@ -1066,11 +1068,12 @@ def run(
                                            timeout_sec=settings.english_world_language_timeout_seconds,
                                            effort=settings.english_world_language_effort))
             except AgyProviderError as exc:
-                raise ProgrammaticDailyError("AGY 结构化初稿不可用") from exc
+                raise ProgrammaticDailyError(f"AGY 结构化初稿不可用：{exc}") from exc
             atomic_json(workspace / "qa/initial_draft.json", draft)
             import jsonschema
             jsonschema.validate(draft, draft_schema)
-            timeline = _apply_draft(timeline, draft)
+            timeline = _apply_draft(timeline, draft,
+                                    allowed_indexes=[p["word_index"] for p in options])
             stage = "dictionary_evidence"
             from video_processing.study_cards.learning_dictionary import attach_evidence
             timeline = attach_evidence(timeline, Path.home() / "Downloads/hermes-wordlists")
