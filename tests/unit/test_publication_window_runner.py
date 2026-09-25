@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.1 | 2026-09-25 | Codex | 验证公开回读双凭据与 24 小时零确认提醒。 |
 | 1.8.5 | 2026-09-20 | Antigravity | 覆盖持久化日志降频过滤器与保留 N 日日志修剪功能。 |
 | 1.8.4 | 2026-09-18 | Antigravity | 覆盖英语世界专属发布窗口 is_english_world_publish_window 派发判定。 |
 | 1.8.3 | 2026-09-07 | Codex | 区分投稿器正常延后退出码与真实失败，防止锁忙刷 ERROR。 |
@@ -24,6 +25,7 @@
 import fcntl
 import json
 import subprocess
+from datetime import datetime, time, timezone
 from pathlib import Path
 from unittest.mock import ANY, MagicMock
 
@@ -322,6 +324,104 @@ def test_reconciliation_timeout_reaches_fuse_and_escapes_notification(monkeypatc
     assert notifications[0]["event_type"] == "english_world.reconciliation_recording_required"
     assert "A&amp;B &lt;成长&gt;" in notifications[0]["text"]
     assert "A&B <成长>" not in notifications[0]["text"]
+
+
+def test_published_readback_requires_same_native_id_and_explicit_state(tmp_path):
+    screenshot = tmp_path / "management_published.png"
+    screenshot.write_bytes(b"png")
+    readback = tmp_path / "management_readback.json"
+    readback.write_text(json.dumps({
+        "platform_post_id": "export/other", "state": "PUBLISHED", "reason": "DOM_STATUS_TEXT",
+    }), encoding="utf-8")
+    assert runner._has_explicit_published_readback(tmp_path, "export/native") is False
+    readback.write_text(json.dumps({
+        "platform_post_id": "export/native", "state": "PUBLISHED", "reason": "API_STATUS_UNMAPPED",
+    }), encoding="utf-8")
+    assert runner._has_explicit_published_readback(tmp_path, "export/native") is False
+    readback.write_text(json.dumps({
+        "platform_post_id": "export/native", "state": "PUBLISHED", "reason": "DOM_STATUS_TEXT",
+    }), encoding="utf-8")
+    assert runner._has_explicit_published_readback(tmp_path, "export/native") is True
+    screenshot.unlink()
+    assert runner._has_explicit_published_readback(tmp_path, "export/native") is False
+
+
+@pytest.mark.parametrize("readback_id, expected_state", [
+    ("export/native-id", "PUBLISHED"),
+    ("export/other-id", "UNCERTAIN"),
+])
+def test_reconciliation_exit_zero_still_requires_matching_readback(
+    monkeypatch, tmp_path, readback_id, expected_state,
+):
+    recorded = []
+
+    class FakeDB:
+        def claim_next_english_world_reconciliation(self, **_kwargs):
+            return {
+                "id": "e" * 32, "title": "目标作品", "platform_post_id": "export/native-id",
+                "evidence_dir": str(tmp_path / "submission"),
+            }
+
+        def record_english_world_reconciliation(self, _review_id, **kwargs):
+            recorded.append(kwargs)
+            return {"reconciliation_failures": 1}
+
+    def fake_run(command, **_kwargs):
+        evidence_dir = Path(command[command.index("--evidence-dir") + 1])
+        evidence_dir.mkdir(parents=True)
+        (evidence_dir / "management_published.png").write_bytes(b"png")
+        (evidence_dir / "management_readback.json").write_text(json.dumps({
+            "platform_post_id": readback_id,
+            "state": "PUBLISHED",
+            "reason": "DOM_STATUS_TEXT",
+        }), encoding="utf-8")
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(runner, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(runner, "PipelineDB", FakeDB)
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner, "send_text", lambda **_kwargs: None)
+    monkeypatch.setattr(runner.settings, "wechat_headless", True)
+    assert runner.reconcile_one_english_world_submission() is True
+    assert recorded[0]["platform_state"] == expected_state
+
+
+def test_publication_gap_alert_requires_24_hours_and_uses_one_claim(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.claims = 0
+            self.last_confirmed_at = "2026-09-24 11:00:00"
+
+        def get_english_world_publication_health(self):
+            return {
+                "last_confirmed_at": self.last_confirmed_at,
+                "accepted_unconfirmed_count": 4,
+            }
+
+        def claim_english_world_publication_gap_alert(self):
+            self.claims += 1
+            return self.claims == 1
+
+    db = FakeDB()
+    notifications = []
+    monkeypatch.setattr(runner, "PipelineDB", lambda: db)
+    monkeypatch.setattr(runner, "production_slots", lambda: (time(10), time(14)))
+    monkeypatch.setattr(runner, "_latest_english_world_failure_stage", lambda: "agy_draft")
+    monkeypatch.setattr(runner, "send_text", lambda **kwargs: (
+        notifications.append(kwargs) or type("Delivery", (), {"state": "ACCEPTED"})()
+    ))
+    now = datetime(2026, 9, 25, 12, tzinfo=timezone.utc)
+    db.last_confirmed_at = "2026-09-25 11:00:00"
+    assert runner.alert_english_world_publication_gap(now=now) is False
+    assert db.claims == 0
+    db.last_confirmed_at = "2026-09-24 11:00:00"
+    assert runner.alert_english_world_publication_gap(now=now) is True
+    assert runner.alert_english_world_publication_gap(now=now) is False
+    assert len(notifications) == 1
+    assert notifications[0]["priority"] == "P1"
+    assert "公开确认缺失" in notifications[0]["text"]
+    assert "agy_draft" in notifications[0]["text"]
+    assert "4 条" in notifications[0]["text"]
 
 
 def test_persistent_deduplicating_filter(tmp_path: Path):

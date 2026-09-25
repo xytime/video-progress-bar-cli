@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.1 | 2026-09-25 | Codex | 具名一次只读复核及 24 小时公开确认缺失提醒，公开归档校验原生 ID 回读凭据。 |
 | 1.9.0 | 2026-09-20 | Antigravity | 增加巡航日志高频熔断信息跨分钟持久化降频，并在启动时修剪保留最近 N 日日志 |
 | 1.8.6 | 2026-09-18 | Antigravity | 英语世界延后项巡航派发改用专属发布窗口判定 is_english_world_publish_window。 |
 | 1.8.5 | 2026-09-07 | Codex | 投稿器退出码 10 按正常延后记录，避免锁忙被误报为失败。 |
@@ -28,6 +29,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 
 from __future__ import annotations
 
+import argparse
 import fcntl
 import html
 import json
@@ -54,6 +56,7 @@ from video_processing.core.douyin_ui_guard_policy import (
 from config.settings import settings
 from video_processing.db.database import PipelineDB
 from video_processing.telegram_delivery import send_text
+from video_processing.english_world.daily_schedule import production_slots
 
 
 LOCK_PATH = PROJECT_ROOT / "output" / "publication_window_runner.lock"
@@ -446,7 +449,7 @@ def _record_english_world_reconciliation_result(
     elif (
         platform_state in {"UNCERTAIN", "NOT_FOUND"}
         and int(updated.get("reconciliation_failures") or 0)
-        >= max(1, int(settings.english_world_reconcile_failure_limit))
+        == max(1, int(settings.english_world_reconcile_failure_limit))
     ):
         send_text(
             event_type="english_world.reconciliation_recording_required",
@@ -463,7 +466,22 @@ def _record_english_world_reconciliation_result(
     return updated
 
 
-def reconcile_one_english_world_submission() -> None:
+def _has_explicit_published_readback(evidence_dir: Path, platform_post_id: str) -> bool:
+    """页面截图与同一原生 ID 的结构化显式状态同时存在才可归档。"""
+    try:
+        readback = json.loads((evidence_dir / "management_readback.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(
+        isinstance(readback, dict)
+        and readback.get("platform_post_id") == platform_post_id
+        and readback.get("state") == "PUBLISHED"
+        and readback.get("reason") == "DOM_STATUS_TEXT"
+        and (evidence_dir / "management_published.png").is_file()
+    )
+
+
+def reconcile_one_english_world_submission(*, review_id: str | None = None) -> bool:
     """按同次提交绑定的原生 ID 回查一条英语世界作品；不上传、不按标题匹配。"""
     pipeline_lock = PROJECT_ROOT / "output" / "pipeline.lock"
     pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
@@ -472,16 +490,19 @@ def reconcile_one_english_world_submission() -> None:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             logging.info("[EnglishWorld] pipeline.lock 正忙，本轮跳过只读作品回查。")
-            return
+            return False
         try:
             db = PipelineDB()
-            item = db.claim_next_english_world_reconciliation(
-                min_interval_minutes=settings.english_world_reconcile_interval_minutes,
-                max_age_hours=settings.english_world_reconcile_max_age_hours,
-                failure_limit=settings.english_world_reconcile_failure_limit,
+            item = (
+                db.claim_named_english_world_reconciliation(review_id)
+                if review_id else db.claim_next_english_world_reconciliation(
+                    min_interval_minutes=settings.english_world_reconcile_interval_minutes,
+                    max_age_hours=settings.english_world_reconcile_max_age_hours,
+                    failure_limit=settings.english_world_reconcile_failure_limit,
+                )
             )
             if not item:
-                return
+                return False
             review_id = str(item["id"])
             platform_post_id = str(item["platform_post_id"])
             evidence_root = Path(str(item.get("evidence_dir") or PROJECT_ROOT / "output"))
@@ -495,6 +516,8 @@ def reconcile_one_english_world_submission() -> None:
                 "--verify-only",
                 "--platform-post-id", platform_post_id,
             ]
+            if item.get("title"):
+                command.extend(["--expected-title", str(item["title"])])
             if not settings.wechat_headless:
                 command.append("--no-headless")
             try:
@@ -515,7 +538,7 @@ def reconcile_one_english_world_submission() -> None:
                     evidence_dir=evidence_dir,
                     message="视频号原生 ID 只读回查超时；保留已受理状态并等待下一次节流回查。",
                 )
-                return
+                return True
 
             outcomes = {
                 0: ("PUBLISHED", "management_published.png", "作品管理页按原生 ID 明确显示已发布。"),
@@ -531,6 +554,11 @@ def reconcile_one_english_world_submission() -> None:
             if not evidence_path.is_file():
                 platform_state = "UNCERTAIN"
                 message = "视频号原生 ID 回查缺少对应页面证据；不改变已受理事实。"
+            elif platform_state == "PUBLISHED" and not _has_explicit_published_readback(
+                evidence_dir, platform_post_id,
+            ):
+                platform_state = "UNCERTAIN"
+                message = "视频号回查缺少同原生 ID 的明确公开状态凭据；保留已受理事实。"
             _record_english_world_reconciliation_result(
                 db,
                 item,
@@ -543,8 +571,66 @@ def reconcile_one_english_world_submission() -> None:
                 "[EnglishWorld] 原生 ID 回查完成 review=%s platform_state=%s",
                 review_id[:8], platform_state,
             )
+            return True
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _latest_english_world_failure_stage() -> str:
+    """仅取最近的结构化失败阶段，不发送异常正文或候选内容。"""
+    paths = (PROJECT_ROOT / "output/english_world_programmatic").glob("*/qa/candidate_failure.json")
+    try:
+        latest = max(paths, key=lambda path: path.stat().st_mtime)
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+        stage = str(payload.get("stage") or "").strip()
+        if stage and len(stage) <= 80 and all(c.isalnum() or c in "_-" for c in stage):
+            return stage
+    except (ValueError, OSError, TypeError):
+        pass
+    return "无可用记录"
+
+
+def alert_english_world_publication_gap(*, now: datetime | None = None) -> bool:
+    """有生产窗口且 24 小时无新增公开确认时至多尝试一次 P1 提醒。"""
+    observed = now or datetime.now(timezone.utc)
+    if observed.tzinfo is None:
+        raise ValueError("publication gap clock must include timezone")
+    local_now = observed.astimezone()
+    cutoff = observed.astimezone(timezone.utc) - timedelta(hours=24)
+    due = any(
+        cutoff.astimezone(local_now.tzinfo) < datetime.combine(
+            (local_now - timedelta(days=days_back)).date(), slot, tzinfo=local_now.tzinfo,
+        ) <= local_now
+        for days_back in (0, 1)
+        for slot in production_slots()
+    )
+    if not due:
+        return False
+    db = PipelineDB()
+    health = db.get_english_world_publication_health()
+    last_raw = health.get("last_confirmed_at")
+    last_confirmed = datetime.fromisoformat(str(last_raw)).replace(tzinfo=timezone.utc) if last_raw else None
+    if last_confirmed and last_confirmed > cutoff:
+        return False
+    if not db.claim_english_world_publication_gap_alert():
+        return False
+    last_label = last_confirmed.astimezone().strftime("%Y-%m-%d %H:%M %Z") if last_confirmed else "无记录"
+    text = (
+        "⚠️ 英语世界视频号公开确认缺失（连续 24 小时）\n"
+        f"最后确认：{html.escape(last_label)}\n"
+        f"最近失败阶段：{html.escape(_latest_english_world_failure_stage())}\n"
+        f"已受理但未确认：{int(health.get('accepted_unconfirmed_count') or 0)} 条\n"
+        "此提醒仅表示账本缺少公开回读；请人工核对作品管理状态。"
+    )
+    delivery = send_text(
+        event_type="english_world.public_confirmation_gap",
+        priority="P1",
+        text=text,
+        dedupe_key="english_world_publication_gap",
+        db=db,
+    )
+    logging.warning("[EnglishWorld] 公开确认缺失提醒投递状态：%s", delivery.state)
+    return True
 
 
 class _PersistentDeduplicatingFilter(logging.Filter):
@@ -674,7 +760,18 @@ def _trim_log_to_recent_days(
         return False
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--recheck-english-world-review-id",
+        metavar="REVIEW_ID",
+        help="指定审核编号执行一次按原生 ID 的只读复核；不触发常规巡航",
+    )
+    args = parser.parse_args(argv)
+    if args.recheck_english_world_review_id:
+        return 0 if reconcile_one_english_world_submission(
+            review_id=args.recheck_english_world_review_id,
+        ) else 2
     try:
         _trim_log_to_recent_days(
             LOG_PATH,
@@ -698,6 +795,10 @@ def main() -> int:
         reconcile_one_english_world_submission()
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         logging.error("[EnglishWorld] accepted submission reconciliation failed: %s", exc)
+    try:
+        alert_english_world_publication_gap()
+    except (OSError, ValueError) as exc:
+        logging.error("[EnglishWorld] public confirmation gap check failed: %s", exc)
     try:
         reconcile_one_english_world_douyin_submission()
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:

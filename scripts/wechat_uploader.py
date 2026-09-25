@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.11.2 | 2026-09-25 | Codex | 原生 ID 回查可先按标题缩小旧作品列表，终态仍只按原生 ID 与显式页面状态判定。 |
 | 5.11.1 | 2026-09-24 | Codex | 原生 ID 绑定使用提交前回读确认的清洗后短标题，保存标题变换证据；未知回读不绑定。 |
 | 5.11.0 | 2026-09-24 | Codex | 作品列表结构化 desc 提取短标题；提交绑定须唯一新增 ID 与短标题精确一致，拒绝仅凭 ID 差集绑定。 |
 | 5.10.0 | 2026-09-22 | Codex | 实证分列表单与 Shadow DOM 的不声明状态；未知阻断，原创提醒仅确认直接发表。 |
@@ -594,7 +595,7 @@ def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> No
         logger.warning("Failed to persist WeChat submission identity receipt: %s", exc)
 
 
-def _load_management_cards(page) -> tuple[dict[str, dict[str, str]], bool]:
+def _load_management_cards(page, *, search_title: str | None = None) -> tuple[dict[str, dict[str, str]], bool]:
     """打开作品管理页并读取已加载卡片；失败返回 false，调用方必须拒绝绑定。"""
     post_list_responses = []
 
@@ -634,6 +635,8 @@ def _load_management_cards(page) -> tuple[dict[str, dict[str, str]], bool]:
     if "/post/list" not in page.url:
         _remove_post_list_listener()
         return {}, False
+    if search_title:
+        _search_management_title(page, search_title)
     cards = _collect_management_cards(page)
     if post_list_responses:
         try:
@@ -807,11 +810,16 @@ def verify_management_publication(page, evidence_root: Path, expected_title: str
     return MANAGEMENT_UNCERTAIN, "", ""
 
 
-def verify_management_publication_by_id(page, evidence_root: Path, platform_post_id: str) -> tuple[str, str]:
+def verify_management_publication_by_id(
+    page, evidence_root: Path, platform_post_id: str, *, expected_title: str | None = None,
+) -> tuple[str, str]:
     """只按已绑定的原生记录 ID 回查平台状态；有界重读后仍不可判定时绝不补发。"""
     normalized_post_id = (platform_post_id or "").strip()
     for attempt in range(MANAGEMENT_VERIFY_ATTEMPTS):
-        cards, loaded = _load_management_cards(page)
+        cards, loaded = (
+            _load_management_cards(page, search_title=expected_title)
+            if expected_title else _load_management_cards(page)
+        )
         record = cards.get(normalized_post_id) if loaded else None
         if record:
             api_identity = record.get("identity_source") == "post_list_api"
@@ -1460,6 +1468,7 @@ def run_uploader(
     require_original_declaration: bool = False,
     verify_only: bool = False,
     platform_post_id: str = None,
+    expected_title: str | None = None,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -1762,7 +1771,7 @@ def run_uploader(
 
         if verify_only:
             state, platform_url = verify_management_publication_by_id(
-                page, evidence_root, platform_post_id,
+                page, evidence_root, platform_post_id, expected_title=expected_title,
             )
             try:
                 context.storage_state(path=str(state_file))
@@ -2885,6 +2894,7 @@ def main():
     parser.add_argument("--verify-only", action="store_true",
                         help="仅按已绑定的视频号原生 post_id 回查状态，绝不上传或发布")
     parser.add_argument("--platform-post-id", help="视频号后台的已绑定原生作品 ID；回查时必填")
+    parser.add_argument("--expected-title", help="只读回查时缩小旧作品列表；最终仍须原生 ID 精确匹配")
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--draft",       action="store_true")
     parser.add_argument(
@@ -2924,6 +2934,7 @@ def main():
             require_original_declaration = args.require_original_declaration,
             verify_only = args.verify_only,
             platform_post_id = args.platform_post_id,
+            expected_title = args.expected_title,
         )
     except Exception as exc:
         if not _is_playwright_target_closed(exc):

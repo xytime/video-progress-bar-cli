@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.88.0 | 2026-09-25 | Codex | 英语世界具名只读回查限用一次，并原子节流公开确认缺失提醒。 |
 | 3.86.0 | 2026-09-25 | Codex | 自动加工与预加工候选排除 TED/TEDx 启用边界前主视频及其切片，不释放历史条目。 |
 | 3.85.0 | 2026-09-24 | Codex | 保存逐视频加工触发事件，按北京时间汇总自动与人工参与的投稿漏斗。 |
 | 3.84.0  | 2026-09-23 | Antigravity                         | [Code Review Fix] 新增 claim_specific_wechat_review_notification 原子抢占单条通知任务，防并发冲突 |
@@ -1436,6 +1437,7 @@ class PipelineDB:
                     reconciliation_evidence_dir TEXT DEFAULT NULL,
                     last_reconciled_at TIMESTAMP DEFAULT NULL,
                     reconciliation_failures INTEGER NOT NULL DEFAULT 0,
+                    manual_recheck_used_at TIMESTAMP DEFAULT NULL,
                     reconciliation_error TEXT DEFAULT NULL,
                     error_message TEXT DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1495,6 +1497,7 @@ class PipelineDB:
                 ("reconciliation_evidence_dir", "TEXT DEFAULT NULL"),
                 ("last_reconciled_at", "TIMESTAMP DEFAULT NULL"),
                 ("reconciliation_failures", "INTEGER NOT NULL DEFAULT 0"),
+                ("manual_recheck_used_at", "TIMESTAMP DEFAULT NULL"),
                 ("reconciliation_error", "TEXT DEFAULT NULL"),
             ):
                 if column_name not in english_world_review_columns:
@@ -1619,6 +1622,12 @@ class PipelineDB:
                 "CREATE INDEX IF NOT EXISTS idx_telegram_notification_receipts_dedupe "
                 "ON telegram_notification_receipts(event_type, content_sha256, created_at DESC)"
             )
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS english_world_publication_gap_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    claimed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
 
             # 视频号审核成片通知待办账本：持久化待投递/投递中的审核物料，防止短生命周期进程退出丢单
             cursor.execute('''
@@ -7716,6 +7725,63 @@ class PipelineDB:
                 "SELECT * FROM english_world_review_items WHERE id = ?", (candidate["id"],),
             ).fetchone()
             return dict(row) if row else None
+
+    def claim_named_english_world_reconciliation(self, review_id: str) -> Optional[Dict[str, Any]]:
+        """人工具名只读复核只可领取一次；不受自动失败阈值和时间窗限制。"""
+        clean_id = (review_id or "").strip()
+        if not clean_id:
+            return None
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE english_world_review_items
+                   SET manual_recheck_used_at = CURRENT_TIMESTAMP,
+                       last_reconciled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state = 'UNDER_REVIEW'
+                     AND platform_post_id IS NOT NULL AND platform_post_id != ''
+                     AND COALESCE(platform_state, '') NOT IN ('PUBLISHED', 'REJECTED')
+                     AND manual_recheck_used_at IS NULL""",
+                (clean_id,),
+            )
+            if cursor.rowcount != 1:
+                return None
+            conn.commit()
+            row = conn.execute(
+                "SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_english_world_publication_health(self) -> Dict[str, Any]:
+        """公开确认时间与已受理未确认数；不把投稿受理当作公开。"""
+        with self.get_connection() as conn:
+            latest = conn.execute(
+                """SELECT MAX(confirmed_at) AS confirmed_at
+                   FROM wechat_publications
+                   WHERE subject_id LIKE 'english_world:%' AND state = 'PUBLISHED'
+                     AND platform_post_id IS NOT NULL AND confirmed_at IS NOT NULL"""
+            ).fetchone()
+            pending = conn.execute(
+                """SELECT COUNT(*) AS count FROM english_world_review_items
+                   WHERE state = 'UNDER_REVIEW' AND submission_finished_at IS NOT NULL
+                     AND COALESCE(platform_state, '') != 'PUBLISHED'"""
+            ).fetchone()
+            return {
+                "last_confirmed_at": latest["confirmed_at"] if latest else None,
+                "accepted_unconfirmed_count": int(pending["count"] if pending else 0),
+            }
+
+    def claim_english_world_publication_gap_alert(self) -> bool:
+        """跨进程原子限制公开确认缺失提醒每 24 小时至多一次尝试。"""
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            recent = conn.execute(
+                """SELECT 1 FROM english_world_publication_gap_alerts
+                   WHERE claimed_at > datetime('now', '-24 hours') LIMIT 1"""
+            ).fetchone()
+            if recent:
+                return False
+            conn.execute("INSERT INTO english_world_publication_gap_alerts DEFAULT VALUES")
+            conn.commit()
+            return True
 
     def record_english_world_reconciliation(
         self,

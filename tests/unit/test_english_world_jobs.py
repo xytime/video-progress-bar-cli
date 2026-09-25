@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.8 | 2026-09-25 | Codex | 覆盖具名只读回查一次限制、无 ID 拒领及公开缺失提醒原子冷却。 |
 | 1.10.7 | 2026-09-04 | Codex | 覆盖五次均未提交后，只有绑定双封面原创预检摘要时才能领取最终一次恢复。 |
 | 1.10.6 | 2026-09-04 | Codex | 覆盖新上传器规范化的双封面确认失败文本仍可触发唯一落库修复验证。 |
 | 1.10.5 | 2026-09-04 | Codex | 覆盖四次双封面发布前停止且无提交时，只能验证一次卡槽缩略图落库修复。 |
@@ -654,6 +655,53 @@ def test_english_world_platform_identity_enables_throttled_exact_reconciliation(
     assert db.claim_next_english_world_reconciliation(
         min_interval_minutes=5, max_age_hours=72,
     ) is None
+
+
+def test_named_read_only_recheck_bypasses_automatic_limit_once(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    paths = {}
+    for field in ("mp4", "manifest", "title", "copy", "cover", "cover_provenance"):
+        path = tmp_path / f"{field}.bin"
+        path.write_text(field, encoding="utf-8")
+        paths[f"{field}_path"] = str(path)
+    item = db.create_english_world_review_item(
+        title="人工只读复核", **paths, **calculate_package_hashes(paths),
+    )
+    db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
+    claimed = db.claim_english_world_submission(item["id"], evidence_dir="/evidence/submission")
+    assert claimed
+    db.complete_english_world_submission(
+        item["id"], state="UNDER_REVIEW", uploader_exit_code=6,
+        evidence_dir="/evidence/submission", attempt_id=claimed["_attempt_id"],
+    )
+    assert db.claim_named_english_world_reconciliation(item["id"]) is None
+    db.bind_english_world_submission_platform_identity(
+        item["id"], attempt_id=claimed["_attempt_id"],
+        platform_post_id="export/native-item-id",
+    )
+    for _ in range(2):
+        db.record_english_world_reconciliation(
+            item["id"], platform_state="UNCERTAIN", evidence_dir="/evidence/reconciliation",
+            message="状态未确认",
+        )
+    assert db.claim_next_english_world_reconciliation(failure_limit=2) is None
+    manual = db.claim_named_english_world_reconciliation(item["id"])
+    assert manual and manual["platform_post_id"] == "export/native-item-id"
+    assert manual["manual_recheck_used_at"]
+    assert db.claim_named_english_world_reconciliation(item["id"]) is None
+    assert len(db.list_english_world_submission_attempts(item["id"])) == 1
+
+
+def test_publication_gap_alert_claim_is_one_per_24_hours(tmp_path):
+    db = PipelineDB(str(tmp_path / "pipeline.db"))
+    assert db.claim_english_world_publication_gap_alert() is True
+    assert db.claim_english_world_publication_gap_alert() is False
+    with db.get_connection() as conn:
+        conn.execute(
+            "UPDATE english_world_publication_gap_alerts SET claimed_at = datetime('now', '-25 hours')"
+        )
+        conn.commit()
+    assert db.claim_english_world_publication_gap_alert() is True
 
 
 def test_confirmed_deleted_english_world_item_can_reopen_once_with_new_identity(tmp_path):
