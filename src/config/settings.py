@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.70.0 | 2026-09-25 | Codex | TED/TEDx 自动评分托底增加入库 ID 边界，默认关闭以保护历史待处理视频。 |
 | 3.69.0 | 2026-09-23 | Codex | 已就绪成片全天可提交，旧发布窗口配置不再阻断入口。 |
 | 3.68.0 | 2026-09-22 | Codex | 独立 AGY 文案配置及 App 子进程最小环境，不传入 API/机器人凭据。 |
 | 3.67.0 | 2026-09-20 | Antigravity | 新增 waitlist_ttl_days (待筛选低分素材TTL淘汰保留天数) 与 queue_stale_days (待处理超期排队时效天数) 配置 |
@@ -364,6 +365,10 @@ class Settings(BaseSettings):
     # 与 censorship_bypass_channels 配合时也只影响评分与 CP，P0/P1/P2 仍强制审查。
     # 经 channel_score_floor_map 读取。
     channel_score_floors: str = ""
+
+    # TED/TEDx 新视频托底的存量边界：仅 id 大于此值的 AUTO 视频适用；0 表示关闭。
+    # 启用时写入当时 processed_videos 的最大 id，避免历史 PENDING 被批量释放。
+    ted_auto_publish_after_id: int = 0
 
     # 演讲/TED/高校频道使用较低的自动发布线；普通频道仍使用 75。
     speech_publish_score_line: int = 40

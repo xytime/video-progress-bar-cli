@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.86.0 | 2026-09-25 | Codex | 自动加工与预加工候选排除 TED/TEDx 启用边界前主视频及其切片，不释放历史条目。 |
 | 3.85.0 | 2026-09-24 | Codex | 保存逐视频加工触发事件，按北京时间汇总自动与人工参与的投稿漏斗。 |
 | 3.84.0  | 2026-09-23 | Antigravity                         | [Code Review Fix] 新增 claim_specific_wechat_review_notification 原子抢占单条通知任务，防并发冲突 |
 | 3.83.0  | 2026-09-23 | Antigravity                         | 新增 reset_wechat_interaction DAL 方法，支持被误判或需重试的微信互动记录重置回 PENDING。 |
@@ -186,7 +187,7 @@ from typing import Collection, List, Dict, Any, Optional, Sequence
 
 from config.settings import settings
 from ..content_types import CONTENT_TYPE_GENERAL, normalize_content_type
-from ..scoring import CHANNEL_SCORE_CAPS, cap_channel_score
+from ..scoring import CHANNEL_SCORE_CAPS, TED_AUTO_PUBLISH_CHANNEL_IDS, cap_channel_score
 
 
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
@@ -4887,6 +4888,7 @@ class PipelineDB:
         query = f"""
             SELECT * FROM processed_videos pv
             WHERE pv.status = 'PENDING' AND ({threshold_sql}) {readiness}
+              AND NOT (pv.channel_id IN (?, ?) AND COALESCE(pv.parent_id, pv.id) <= ?)
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
                               WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
               AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
@@ -4919,7 +4921,8 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.execute(
                 query,
-                (*threshold_params, f"-{max(1, int(source_subtitle_retry_hours))} hours", *terminal_states, limit),
+                (*threshold_params, *TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_auto_publish_after_id,
+                 f"-{max(1, int(source_subtitle_retry_hours))} hours", *terminal_states, limit),
             )
             return [dict(row) for row in cursor.fetchall()]
 
@@ -4949,6 +4952,7 @@ class PipelineDB:
               AND IFNULL(pv.publication_review_required, 0) = 0
               AND IFNULL(pv.preparation_ready, 0) = 0
               AND ({threshold_sql})
+              AND NOT (pv.channel_id IN (?, ?) AND COALESCE(pv.parent_id, pv.id) <= ?)
               AND pv.channel_id NOT IN (
                   SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
               )
@@ -4968,7 +4972,8 @@ class PipelineDB:
         with self.get_connection() as conn:
             cursor = conn.execute(
                 query,
-                (*threshold_params, f"-{max(1, int(retry_hours))} hours", limit),
+                (*threshold_params, *TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_auto_publish_after_id,
+                 f"-{max(1, int(retry_hours))} hours", limit),
             )
             return [dict(row) for row in cursor.fetchall()]
 

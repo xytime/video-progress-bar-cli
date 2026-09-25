@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.61.0 | 2026-09-25 | Codex | 仅对启用边界后新入库的 TED/TEDx AUTO 视频应用演讲发布线托底，不释放历史低分候选。 |
 | 3.60.0 | 2026-09-24 | Codex | 将任务加工来源写入审计事件，避免把自动发现误认为自动投稿。 |
 | 3.59.0 | 2026-09-23 | Antigravity | 审核物料通知持久化 SQLite 账本并支持断点补偿排水；_run_tracked 超时有界升级 SIGKILL；下载注入共享总预算并委托单一真相源验真。 |
 | 3.58.0 | 2026-09-23 | Codex | 独立发布与加工资源解耦；恢复缓存保护，审核副本异步发送。 |
@@ -215,7 +216,7 @@ from .utils.engagement_post import engagement_receipt_section
 from .utils.subtitle_content_contract import bilingual_ass_contract_error
 from .telegram_delivery import send_text as send_telegram_text, send_video as send_telegram_review_video
 from .utils.title_contract import TitleContractError, validate_display_title
-from .scoring import compute_auto_score
+from .scoring import TED_AUTO_PUBLISH_CHANNEL_IDS, compute_auto_score
 from .censorship_service import CensorshipService
 from .ai_cover_queue import AICoverQueue
 from .core.cover_policy import validate_dedicated_cover_file
@@ -1628,6 +1629,13 @@ class PipelineManager:
             # [Claude_Opus_4.8] 受信任频道地板分：列入 settings.channel_score_floor_map 的频道
             # 评分托底（如 @wstruthbombs 默认 80→必过发布线 ≥75，整批自动发布，不受低播放拖累）。
             _floor = settings.channel_score_floor_map.get(video.get('channel_id'), 0)
+            if (
+                settings.ted_auto_publish_after_id > 0
+                and (video.get('parent_id') or video['id']) > settings.ted_auto_publish_after_id
+                and video.get('source') == 'AUTO'
+                and video.get('channel_id') in TED_AUTO_PUBLISH_CHANNEL_IDS
+            ):
+                _floor = max(_floor, settings.speech_publish_score_line)
             if _floor > score:
                 logger.info(f"  [{yid}] trusted-channel score floor {_floor} applied (computed was {score})")
                 score = _floor
@@ -1635,7 +1643,7 @@ class PipelineManager:
             if views > 0:
                 logger.info(f"  [{yid}] views={views} like_rate={likes / views * 100:.1f}% → score={score}")
             else:
-                logger.info(f"  [{yid}] no view data → score=0")
+                logger.info(f"  [{yid}] no view data → score={score}")
             # force=False：自动算分，is_manually_scored=1 的记录会被 DB 层自动跳过
             self.db.update_video_score(yid, score, force=False)
 

@@ -13,6 +13,7 @@
 |---------|------------|-----------------|--------------------------------------------------------------|
 | 1.0.0   | 2026-06-22 | Claude_Opus_4.8 | 从 pipeline_manager.score_pending_videos 抽出 compute_auto_score（v3.9.0 曲线逐字保留） |
 | 1.1.0   | 2026-08-08 | Codex           | 增加频道评分上限：The Economist 的任何写入评分不得超过 60 |
+| 1.2.0   | 2026-09-25 | Codex           | 固定 TED/TEDx 精确频道 ID，供新视频托底与历史候选隔离共用。 |
 """
 import math
 
@@ -21,6 +22,10 @@ HEAT_VIEW_THRESHOLD = 1500
 HEAT_LIKE_RATE_THRESHOLD = 3.0
 # 发布线：score >= 75 才进入 process_high_score_videos
 PUBLISH_SCORE_LINE = 75
+TED_AUTO_PUBLISH_CHANNEL_IDS = (
+    "UCAuUUnT6oDeKwE6v1NGQxug",  # TED
+    "UCsT0YIqwnpJCM-mx7-gSA4Q",  # TEDx Talks
+)
 
 # 频道评分上限是发布策略的一部分，必须在统一写入入口执行，避免自动评分、
 # 人工调分、重算或审查复核从不同路径绕过。
