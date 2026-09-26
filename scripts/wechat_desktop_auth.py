@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.0 | 2026-09-26 | Codex | 只读识别桌面登录页，明确报告 DESKTOP_LOGIN_REQUIRED，阻止无效桌面授权监听。 |
 | 1.7.0 | 2026-09-26 | Codex | 短暂辅助功能超时在截止前重试；停止后禁止视觉点击，保留明确诊断状态。 |
 | 1.0.0 | 2026-08-25 | Codex | 新增受限 WeChat 桌面登录授权监听、无点击预检与超时退出。 |
 | 1.1.0 | 2026-08-25 | Codex | 仅在“视频号创作平台 申请使用”窗口中允许点击“允许”，覆盖实际快捷登录授权弹窗且不放宽通用确认。 |
@@ -33,10 +34,46 @@ logger = logging.getLogger("wechat_desktop_auth")
 
 
 _PREFLIGHT_SCRIPT = r'''
+on loginButtonNames(pane, remainingDepth)
+    set matches to {}
+    tell application "System Events"
+        try
+            repeat with candidate in buttons of pane
+                set labels to {}
+                try
+                    set end of labels to name of candidate
+                end try
+                try
+                    set end of labels to description of candidate
+                end try
+                repeat with expected in {"仅传输文件", "二维码", "进入微信"}
+                    if labels contains (expected as text) then set end of matches to (expected as text)
+                end repeat
+            end repeat
+        end try
+        if remainingDepth > 0 then
+            try
+                repeat with childPane in UI elements of pane
+                    set matches to matches & (my loginButtonNames(childPane, remainingDepth - 1))
+                end repeat
+            end try
+        end if
+    end tell
+    return matches
+end loginButtonNames
+
 tell application "System Events"
     if not (exists process "WeChat") then return "NO_WECHAT_PROCESS"
     tell process "WeChat"
-        set windowNames to name of every window
+        if (count of windows) is 0 then return "NO_WECHAT_WINDOW"
+        repeat with w in windows
+            -- 仅小型登录窗口、有限层级、固定按钮名；不读取聊天正文和二维码内容。
+            set windowSize to size of w
+            if (item 1 of windowSize) <= 700 and (item 2 of windowSize) <= 900 then
+                set loginNames to my loginButtonNames(w, 3)
+                if (loginNames contains "仅传输文件") and ((loginNames contains "二维码") or (loginNames contains "进入微信")) then return "DESKTOP_LOGIN_REQUIRED"
+            end if
+        end repeat
     end tell
 end tell
 return "READY"
@@ -128,7 +165,7 @@ class DesktopAuthPreflight:
 
 
 def desktop_auth_preflight() -> DesktopAuthPreflight:
-    """只读检查 WeChat 进程和 macOS 辅助功能权限，不执行任何点击。"""
+    """检查进程、辅助功能和明确的桌面登录页；READY 不证明网页登录成功。"""
     try:
         result = subprocess.run(
             ["osascript", "-e", _PREFLIGHT_SCRIPT],
@@ -303,6 +340,12 @@ class WeChatDesktopAuthWatcher:
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
+            return
+        self.clicked = False
+        preflight = desktop_auth_preflight()
+        self.last_result = preflight.code
+        if not preflight.ready:
+            logger.warning("WeChat desktop authorization unavailable: %s", preflight.code)
             return
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._poll, name="wechat-desktop-auth", daemon=True)

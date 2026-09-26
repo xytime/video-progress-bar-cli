@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.0 | 2026-09-26 | Codex | 桌面登录页不能视为就绪；未登录时不启动点击线程。 |
 | 1.6.0 | 2026-09-26 | Codex | 覆盖临时超时重试、停止后零点击及自动化失败不降级视觉。 |
 | 1.0.0 | 2026-08-25 | Codex | 覆盖无点击预检、受限成功信号和失败不抛异常的边界。 |
 | 1.1.0 | 2026-08-25 | Codex | 固化视频号申请窗口的允许按钮白名单，防止扩展为通用允许。 |
@@ -135,4 +136,22 @@ def test_automation_error_does_not_fall_back_to_unproven_visual_click():
         watcher._poll()
     visual.assert_not_called()
     assert watcher.last_result == 'AUTOMATION_FAILED'
+    assert not watcher.clicked
+
+
+def test_preflight_reports_desktop_login_required_instead_of_ready():
+    completed = MagicMock(returncode=0, stdout='DESKTOP_LOGIN_REQUIRED\n', stderr='')
+    with patch('scripts.wechat_desktop_auth.subprocess.run', return_value=completed):
+        result = desktop_auth_preflight()
+    assert result.ready is False
+    assert result.code == 'DESKTOP_LOGIN_REQUIRED'
+
+
+def test_watcher_never_starts_clicking_when_desktop_login_is_required():
+    from scripts.wechat_desktop_auth import DesktopAuthPreflight
+    watcher = WeChatDesktopAuthWatcher(timeout_seconds=1, enable_visual_fallback=True)
+    with patch('scripts.wechat_desktop_auth.desktop_auth_preflight', return_value=DesktopAuthPreflight(False, 'DESKTOP_LOGIN_REQUIRED')), patch('scripts.wechat_desktop_auth.threading.Thread') as thread:
+        watcher.start()
+    thread.assert_not_called()
+    assert watcher.last_result == 'DESKTOP_LOGIN_REQUIRED'
     assert not watcher.clicked
