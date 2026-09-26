@@ -1460,7 +1460,7 @@
       }
       .activity-table tr {
         display: grid;
-        grid-template-columns: 56px minmax(0, 1fr); /* Cover + Info */
+        grid-template-columns: 62px minmax(0, 1fr); /* Cover + Info */
         align-items: start;
         padding: 14px;
         margin: 10px 0;
@@ -1471,7 +1471,7 @@
         gap: 12px;
       }
       .activity-table.in-edit-mode tr {
-        grid-template-columns: auto 56px minmax(0, 1fr); /* Checkbox + Cover + Info */
+        grid-template-columns: auto 62px minmax(0, 1fr); /* Checkbox + Cover + Info */
       }
 
       /* 已发布成功视频卡片强视觉区分：翠绿发光渐变底、明亮翠绿边框、左侧加粗条、轻发光 */
@@ -1520,20 +1520,20 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        width: 56px;
+        width: 62px;
       }
       .cover-thumb-wrapper {
-        width: 56px;
+        width: 62px;
       }
       .cover-thumb {
-        width: 56px;
-        height: 96px;
+        width: 62px;
+        height: 104px;
         border-radius: 6px;
         object-fit: cover;
       }
       .cover-placeholder {
-        width: 56px;
-        height: 96px;
+        width: 62px;
+        height: 104px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -1551,77 +1551,80 @@
       }
       .cover-status-badge .badge {
         font-size: 0.6875rem !important;
-        padding: 2px 4px !important;
-        white-space: nowrap;
-        width: 100%;
+        padding: 2px 6px !important;
+        white-space: nowrap !important;
+        overflow-wrap: normal !important;
+        word-break: keep-all !important;
+        width: auto !important;
+        max-width: 100%;
         box-sizing: border-box;
         justify-content: center;
         text-align: center;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        line-height: 1.2;
       }
 
       /* 内容单元格 */
       .activity-table td.info-cell {
         padding: 0 !important;
-        padding-right: 56px !important; /* 避免与右上角时间重叠 */
+        padding-right: 0 !important;
         min-width: 0; /* 防止内容溢出 */
       }
-      .video-zh-title, .video-title-link {
+      .video-zh-title {
         max-width: 100%;
-        white-space: normal; /* 手机上标题允许折行 */
+        padding-right: 48px; /* 仅顶部标题区域为绝对定位时间戳留出空间 */
+        white-space: normal;
+        word-break: break-all;
+      }
+      .video-title-link {
+        max-width: 100%;
+        white-space: normal;
         word-break: break-all;
       }
 
-      /* 移动端专属核心指标栏（打分、浏览量、互动率、评分提取时间） */
+      /* 移动端专属核心指标栏（打分、评分提取、浏览量、互动率）采用 2x2 紧凑自适应网格 */
       .mobile-card-metrics.mobile-only {
         display: grid !important;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 6px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px 12px;
         margin-top: 10px;
-        padding: 8px 6px;
+        padding: 9px 12px;
         background: rgba(0, 0, 0, 0.32);
         border: 1px solid rgba(255, 255, 255, 0.08);
-        border-radius: 8px;
-        align-items: center;
+        border-radius: 10px;
+        align-items: stretch;
         box-sizing: border-box;
       }
       .mcm-stat {
         display: flex;
         flex-direction: column;
-        align-items: center;
-        text-align: center;
+        align-items: flex-start;
         min-width: 0;
-        position: relative;
-      }
-      .mcm-stat:not(:last-child)::after {
-        content: '';
-        position: absolute;
-        right: -3px;
-        top: 15%;
-        height: 70%;
-        width: 1px;
-        background: rgba(255, 255, 255, 0.08);
       }
       .mcm-label {
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
         color: var(--text3);
         margin-bottom: 2px;
         white-space: nowrap;
       }
+      .mcm-val-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
       .mcm-val {
-        font-size: 0.8125rem;
+        font-size: 0.875rem;
         font-weight: 700;
         color: var(--text);
         white-space: nowrap;
         line-height: 1.2;
       }
       .mcm-val strong {
-        font-size: 0.875rem;
+        font-size: 0.9375rem;
         font-variant-numeric: tabular-nums;
       }
       .mcm-val small {
-        font-size: 0.65rem;
+        font-size: 0.6875rem;
         font-weight: normal;
         color: var(--text3);
         margin-left: 1px;
@@ -1634,22 +1637,21 @@
       }
       .mcm-tag {
         display: inline-block;
-        font-size: 0.58rem;
-        padding: 1px 3px;
-        border-radius: 3px;
-        margin-top: 2px;
+        font-size: 0.625rem;
+        padding: 1px 5px;
+        border-radius: 4px;
         white-space: nowrap;
-        line-height: 1.1;
+        line-height: 1.2;
       }
       .mcm-tag-warn {
         background: rgba(245, 158, 11, 0.15);
         color: var(--orange);
-        border: 1px solid rgba(245, 158, 11, 0.25);
+        border: 1px solid rgba(245, 158, 11, 0.3);
       }
       .mcm-tag-pass {
         background: rgba(16, 185, 129, 0.15);
         color: var(--green);
-        border: 1px solid rgba(16, 185, 129, 0.25);
+        border: 1px solid rgba(16, 185, 129, 0.3);
       }
 
       .activity-table td.status-cell {
@@ -1679,10 +1681,11 @@
       .activity-table td.score-cell {
         grid-column: 1 / -1;
         grid-row: 3;
-        padding: 0 !important;
-        margin-top: 4px;
+        padding: 8px 0 0 0 !important;
+        margin-top: 6px;
         background: transparent !important;
         border: none !important;
+        border-top: 1px dashed rgba(255, 255, 255, 0.08) !important;
       }
       .activity-table td.score-cell.static-score-cell,
       .activity-table td.score-cell .desktop-score-header,
@@ -1693,17 +1696,30 @@
       }
       .score-btn-group {
         display: flex;
-        gap: 6px;
+        gap: 8px;
         margin-top: 0 !important;
         width: 100%;
       }
       .btn-score {
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: var(--text2);
         padding: 6px 12px !important;
-        font-size: 0.75rem !important;
+        font-size: 0.8125rem !important;
+        font-weight: 600;
         min-width: 44px;
-        min-height: 44px;
-        border-radius: 6px !important;
+        min-height: 40px;
+        border-radius: 8px !important;
         flex: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.15s ease;
+      }
+      .btn-score:hover {
+        background: rgba(124, 110, 247, 0.18);
+        border-color: var(--accent);
+        color: var(--text);
       }
 
       .activity-table td.time-cell {
@@ -1980,11 +1996,12 @@
       .display-preferences label { flex: 1 1 140px; flex-wrap: wrap; }
       .display-preferences select { width: 100%; min-height: 44px; }
       .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .activity-table tr { grid-template-columns: 56px minmax(0, 1fr); }
-      .activity-table.in-edit-mode tr { grid-template-columns: auto 56px minmax(0, 1fr); }
-      .activity-table td.info-cell { padding-right: 56px !important; }
+      .activity-table tr { grid-template-columns: 62px minmax(0, 1fr); }
+      .activity-table.in-edit-mode tr { grid-template-columns: auto 62px minmax(0, 1fr); }
+      .activity-table td.info-cell { padding-right: 0 !important; }
       .activity-table td.time-cell { position: absolute !important; top: 12px !important; right: 12px !important; grid-column: auto !important; }
-      .meta-chip, .badge, .platform-badge { white-space: normal; overflow-wrap: anywhere; }
+      .meta-chip, .badge:not(.cover-status-badge .badge), .platform-badge { white-space: normal; overflow-wrap: anywhere; }
+      .cover-status-badge .badge { white-space: nowrap !important; overflow-wrap: normal !important; word-break: keep-all !important; }
       .backfill-controls { display: flex; }
       .backfill-input { max-width: 120px; }
       .pagination { align-items: flex-start; }

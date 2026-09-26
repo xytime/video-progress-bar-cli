@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| 3.51.0 | 2026-09-26 | Antigravity | 修复移动端静态资源强缓存导致新卡片样式未生效问题；HTML 注入静态文件 mtime 版本号，直出无缓存响应头。 |
 | 3.50.0 | 2026-09-26 | Antigravity | 全局漏斗与频道漏斗端点默认时间窗口统一改为 today_bj (北京时间今日)。 |
 | 3.49.0 | 2026-09-26 | Antigravity | 新增 /apple-touch-icon.png 与 /favicon.ico 根路由直出支持，保障 iOS 桌面与 PWA 📺 视觉呈现。 |
 | 3.47.0 | 2026-09-24 | Codex | 区分自动与人工管线触发来源，提供逐日视频号投稿归因漏斗。 |
@@ -150,7 +151,13 @@ async def reject_untrusted_browser_origins(request, call_next):
         or request.url.path.startswith("/static/")
         or request.url.path in {"/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"}
     ):
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path.endswith(".css") or request.url.path.endswith(".js"):
+            if "v=" in str(request.query_params):
+                response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            else:
+                response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
     origin = request.headers.get("origin")
     if origin:
         port = settings.dashboard_port
@@ -1222,9 +1229,26 @@ def _build_backfill_preview_payload(
 # ── 页面路由 ─────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
-    """返回仪表盘 HTML 页面"""
+    """返回仪表盘 HTML 页面，自动注入静态资源 mtime 版本号并禁用页面强缓存，击穿移动端/PWA 缓存。"""
     template_path = Path(__file__).parent / "templates" / "index.html"
-    return HTMLResponse(content=template_path.read_text(encoding="utf-8"))
+    content = template_path.read_text(encoding="utf-8")
+
+    css_path = _static_dir / "css" / "dashboard.css"
+    js_path = _static_dir / "js" / "channel_manager.js"
+    css_v = int(css_path.stat().st_mtime) if css_path.exists() else int(time.time())
+    js_v = int(js_path.stat().st_mtime) if js_path.exists() else int(time.time())
+
+    content = re.sub(r'/static/css/dashboard\.css(?:\?v=[^"\'\s>]+)?', f'/static/css/dashboard.css?v={css_v}', content)
+    content = re.sub(r'/static/js/channel_manager\.js(?:\?v=[^"\'\s>]+)?', f'/static/js/channel_manager.js?v={js_v}', content)
+
+    return HTMLResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.api_route("/apple-touch-icon.png", methods=["GET", "HEAD"])

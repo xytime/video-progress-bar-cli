@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-09-26 | Antigravity | 修复移动端静态 CSS 强缓存，添加版本号；移动端卡片 4 大核心指标升级为 2x2 紧凑自适应排版，解决超长换行重叠；修复状态徽章坚排拆字 Bug。 |
   | 2026-09-26 | Antigravity | 任务数据中心全 Tab 来源发布/入库时间统一；移动端卡片重构（状态置于封面下方、四大指标紧凑汇聚、已发布高辨识度区分）；iOS 桌面 icon 设为 📺。 |
   | 2026-09-23 | Codex | 待筛选来源发布时间补充 ET 时分、BJ 入库时间与四档相对新鲜度展示。 |
   | Date       | Author                | Description                                   |
@@ -90,7 +91,7 @@
       });
     })();
   </script>
-  <link rel="stylesheet" href="/static/css/dashboard.css" />
+  <link rel="stylesheet" href="/static/css/dashboard.css?v=20260926_2" />
 </head>
 <body>
 <div class="app">
@@ -639,7 +640,7 @@
   </div>
 </div>
 
-<script src="/static/js/channel_manager.js"></script>
+<script src="/static/js/channel_manager.js?v=20260926_2"></script>
 <script>
   function handleCoverError(img) {
     img.outerHTML = '<div class="cover-placeholder">🎬</div>';
@@ -1832,7 +1833,7 @@
         const lrStr = likeRawPct != null ? likeRawPct.toFixed(2) + '%' : '未知';
         const viewsStr = views != null ? views : '未知';
 
-        // 移动端专属核心数据卡（打分、浏览量、互动率、评分提取时间）紧凑成组排布
+        // 移动端专属核心数据卡（打分、评分提取、浏览量、互动率）采用 2x2 紧凑自适应网格
         const scoreValStr = score != null ? `${score}<small>分</small>` : '—';
         const scoreStateTag = (isPending && score < 75)
           ? `<span class="mcm-tag mcm-tag-warn">低于75分暂停</span>`
@@ -1844,10 +1845,18 @@
           <div class="mobile-card-metrics mobile-only">
             <div class="mcm-stat mcm-score">
               <span class="mcm-label">打分</span>
-              <span class="mcm-val ${score >= 75 ? 'val-high' : 'val-low'}">
-                <strong id="mcm-score-${v.youtube_id}">${scoreValStr}</strong>
+              <div class="mcm-val-group">
+                <span class="mcm-val ${score >= 75 ? 'val-high' : 'val-low'}">
+                  <strong id="mcm-score-${v.youtube_id}">${scoreValStr}</strong>
+                </span>
+                ${scoreStateTag}
+              </div>
+            </div>
+            <div class="mcm-stat mcm-score-time">
+              <span class="mcm-label">评分提取</span>
+              <span class="mcm-val" title="${escapeAttr(scoreTimeInfo?.tooltip || '未记录评分时间')}">
+                <strong>${scoreTimeInfo ? scoreTimeInfo.age : '—'}</strong>
               </span>
-              ${scoreStateTag}
             </div>
             <div class="mcm-stat mcm-views">
               <span class="mcm-label">浏览量</span>
@@ -1856,12 +1865,6 @@
             <div class="mcm-stat mcm-lr">
               <span class="mcm-label">互动率</span>
               <span class="mcm-val ${lrCls}"><strong>${lrStr}</strong></span>
-            </div>
-            <div class="mcm-stat mcm-score-time">
-              <span class="mcm-label">评分提取</span>
-              <span class="mcm-val" title="${escapeAttr(scoreTimeInfo?.tooltip || '未记录评分时间')}">
-                <strong>${scoreTimeInfo ? scoreTimeInfo.age : '—'}</strong>
-              </span>
             </div>
           </div>
         `;
