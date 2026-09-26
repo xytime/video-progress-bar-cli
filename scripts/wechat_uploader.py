@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.11.3 | 2026-09-26 | Codex | 授权检查覆盖整个登录期限，兼容分行文案并限制可信来源；诊断不输出授权 URL。 |
 | 5.11.2 | 2026-09-25 | Codex | 原生 ID 回查可先按标题缩小旧作品列表，终态仍只按原生 ID 与显式页面状态判定。 |
 | 5.11.1 | 2026-09-24 | Codex | 原生 ID 绑定使用提交前回读确认的清洗后短标题，保存标题变换证据；未知回读不绑定。 |
 | 5.11.0 | 2026-09-24 | Codex | 作品列表结构化 desc 提取短标题；提交绑定须唯一新增 ID 与短标题精确一致，拒绝仅凭 ID 差集绑定。 |
@@ -83,6 +84,7 @@ import logging
 import re
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
 try:
     from playwright._impl._errors import TargetClosedError
@@ -1364,63 +1366,75 @@ def _wait_and_save_login(page, context, state_file: Path, qr_path: Path | None =
             pass
 
 
+def _trusted_wechat_login_frame(frame) -> bool:
+    """只处理视频号与微信官方登录页，不把其他 frame 的同名按钮当授权。"""
+    url = urlsplit(frame.url)
+    return url.scheme == "https" and url.hostname in {
+        "channels.weixin.qq.com", "open.weixin.qq.com",
+    }
+
+
 def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
-    """在主页面与跨域登录 iframe 中点击指定可见按钮。"""
+    """在可信登录 iframe 中点击指定可见按钮；日志不保留授权参数。"""
     for fr in page.frames:
         try:
-            loc = fr.locator("button:visible").filter(has_text=text).first
-            if loc.count() > 0:
+            if not _trusted_wechat_login_frame(fr):
+                continue
+            loc = fr.get_by_role("button", name=text, exact=True)
+            if loc.count() == 1 and loc.is_visible():
                 loc.click(timeout=timeout)
-                logger.info(f"Clicked visible login button {text!r} in frame={fr.url[:80]!r}")
+                logger.info("Clicked visible login button %r.", text)
                 return True
         except Exception as e:
-            logger.debug(f"Login button {text!r} not usable in frame={fr.url[:80]!r}: {e}")
+            logger.debug("Login button %r not usable: %s", text, type(e).__name__)
     return False
 
 
 def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None = None,
                             timeout_ms: int = 30_000) -> bool:
-    """新版 open.weixin.qq.com 登录 iframe：完成快捷登录及资料授权。"""
+    """同一期限内持续等待桌面确认、网页资料授权和发布页跳转。"""
+    deadline = time.monotonic() + max(0, timeout_ms) / 1000
+    approved_frames = set()
     try:
         if not _click_visible_frame_button(page, "微信快捷登录"):
             return False
-        # 原生 WeChat 授权弹窗由上述网页点击触发；必须随后才启动监听，避免
-        # 把有限超时耗在 iframe 尚未创建授权请求的阶段。
         if desktop_auth:
             desktop_auth.start()
 
-        # 点击“微信快捷登录”后，微信会在同一网页 iframe 显示「视频号创作平台
-        # 申请使用你的昵称、头像」的二次确认。它不是手机扫码/手机确认；若不点
-        # 「允许」，旧逻辑会等到超时后错误降级到二维码，导致单手机远程值守卡住。
-        # 限定先确认授权文案存在，再点完全匹配的「允许」，避免误点发布页上无关按钮。
-        for _ in range(20):
+        while time.monotonic() < deadline:
+            url = urlsplit(page.url)
+            if (url.scheme == "https" and url.hostname == "channels.weixin.qq.com"
+                    and url.path == "/platform/post/create"):
+                logger.info("WeChat quick authorization login succeeded.")
+                return True
             for fr in page.frames:
                 try:
-                    request_text = fr.get_by_text("视频号创作平台申请使用", exact=False)
-                    if request_text.count() == 0 or not request_text.first.is_visible():
+                    if fr in approved_frames or not _trusted_wechat_login_frame(fr):
+                        continue
+                    request_text = fr.get_by_text(
+                        re.compile(r"视频号创作平台\s*申请使用"), exact=False,
+                    )
+                    if not request_text.count() or not request_text.first.is_visible():
                         continue
                     allow = fr.get_by_role("button", name="允许", exact=True)
-                    if allow.count() > 0 and allow.first.is_visible():
-                        allow.first.click(timeout=3000)
+                    if allow.count() == 1 and allow.is_visible():
+                        remaining = max(1, int((deadline - time.monotonic()) * 1000))
+                        allow.click(timeout=min(3000, remaining))
+                        approved_frames.add(fr)
                         logger.info("Approved WeChat Channels nickname/avatar authorization.")
-                        break
                 except Exception as e:
-                    logger.debug(f"WeChat profile authorization not ready in frame={fr.url[:80]!r}: {e}")
-            else:
-                page.wait_for_timeout(500)
-                continue
-            break
-
-        try:
-            page.wait_for_url("**/post/create", timeout=timeout_ms)
-            logger.info("WeChat quick authorization login succeeded.")
-            return True
-        except Exception as e:
-            logger.warning(f"WeChat quick authorization did not finish within {timeout_ms / 1000:.0f}s: {e}")
-            return False
+                    logger.debug("WeChat profile authorization not ready: %s", type(e).__name__)
+            remaining = int((deadline - time.monotonic()) * 1000)
+            if remaining > 0:
+                # 让 Playwright 持续处理网络/导航事件；桌面确认可能晚于旧版的 10 秒检查窗。
+                page.wait_for_timeout(min(250, remaining))
+        logger.warning("WeChat quick authorization did not finish within %.0fs.", timeout_ms / 1000)
+        return False
     finally:
         if desktop_auth:
             desktop_auth.stop()
+            logger.info("WeChat desktop authorization result: %s",
+                        getattr(desktop_auth, "last_result", "UNKNOWN"))
 
 
 def _capture_wechat_login_qr(page, qr_path: Path) -> bool:

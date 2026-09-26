@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.0 | 2026-09-26 | Codex | 短暂辅助功能超时在截止前重试；停止后禁止视觉点击，保留明确诊断状态。 |
 | 1.0.0 | 2026-08-25 | Codex | 新增受限 WeChat 桌面登录授权监听、无点击预检与超时退出。 |
 | 1.1.0 | 2026-08-25 | Codex | 仅在“视频号创作平台 申请使用”窗口中允许点击“允许”，覆盖实际快捷登录授权弹窗且不放宽通用确认。 |
 | 1.2.0 | 2026-08-25 | Codex | 以辅助功能文本而非窗口标题识别视频号申请弹窗，适配 WeChat 自绘窗口。 |
@@ -298,6 +299,7 @@ class WeChatDesktopAuthWatcher:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self.clicked = False
+        self.last_result = "NOT_STARTED"
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -319,18 +321,33 @@ class WeChatDesktopAuthWatcher:
                     ["osascript", "-e", _CLICK_AUTH_SCRIPT],
                     capture_output=True,
                     text=True,
-                    timeout=3,
+                    timeout=max(0.01, min(3, deadline - time.monotonic())),
                     check=False,
                 )
                 if result.returncode == 0 and (result.stdout or "").strip() == "CLICKED_LOGIN":
                     self.clicked = True
+                    self.last_result = "CLICKED_LOGIN"
                     logger.info("WeChat desktop scoped login authorization clicked.")
                     return
-            except (OSError, subprocess.TimeoutExpired):
+                if result.returncode != 0:
+                    self.last_result = "AUTOMATION_FAILED"
+                    logger.warning("WeChat desktop authorization automation failed.")
+                    return
+                self.last_result = "NO_SCOPED_AUTH_WINDOW"
+            except subprocess.TimeoutExpired:
+                self.last_result = "AUTOMATION_TIMEOUT"
+                # 短暂 AX 卡顿不代表整个授权流程失败，也不据此放宽到视觉点击。
+                self._stop_event.wait(self.poll_interval_seconds)
+                continue
+            except OSError:
+                self.last_result = "OSASCRIPT_UNAVAILABLE"
                 logger.warning("WeChat desktop authorization watcher could not invoke osascript.")
+                return
+            if self._stop_event.is_set() or time.monotonic() >= deadline:
                 return
             if self.enable_visual_fallback and _try_visual_allow_click():
                 self.clicked = True
+                self.last_result = "CLICKED_VISUAL"
                 logger.info("WeChat desktop visual authorization fallback clicked.")
                 return
             self._stop_event.wait(self.poll_interval_seconds)

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.6.0 | 2026-09-26 | Codex | 覆盖临时超时重试、停止后零点击及自动化失败不降级视觉。 |
 | 1.0.0 | 2026-08-25 | Codex | 覆盖无点击预检、受限成功信号和失败不抛异常的边界。 |
 | 1.1.0 | 2026-08-25 | Codex | 固化视频号申请窗口的允许按钮白名单，防止扩展为通用允许。 |
 | 1.2.0 | 2026-08-25 | Codex | 断言提示文本由辅助功能树精确匹配，不依赖 WeChat 自绘窗口标题。 |
@@ -104,3 +105,34 @@ def test_activate_wechat_returns_false_when_osascript_fails():
 
     with patch("scripts.wechat_desktop_auth.subprocess.run", return_value=completed):
         assert _activate_wechat() is False
+
+
+def test_transient_automation_timeout_retries_until_scoped_success():
+    import subprocess
+    watcher = WeChatDesktopAuthWatcher(timeout_seconds=1, poll_interval_seconds=0.1)
+    success = MagicMock(returncode=0, stdout='CLICKED_LOGIN', stderr='')
+    with patch('scripts.wechat_desktop_auth.subprocess.run', side_effect=[subprocess.TimeoutExpired('osascript', 3), success]) as run:
+        watcher._poll()
+    assert watcher.clicked
+    assert watcher.last_result == 'CLICKED_LOGIN'
+    assert run.call_count == 2
+
+
+def test_stopped_watcher_never_starts_visual_click():
+    watcher = WeChatDesktopAuthWatcher(timeout_seconds=1, enable_visual_fallback=True)
+    def stop_during_check(*args, **kwargs):
+        watcher._stop_event.set()
+        return MagicMock(returncode=0, stdout='NO_SCOPED_AUTH_WINDOW', stderr='')
+    with patch('scripts.wechat_desktop_auth.subprocess.run', side_effect=stop_during_check), patch('scripts.wechat_desktop_auth._try_visual_allow_click') as visual:
+        watcher._poll()
+    visual.assert_not_called()
+    assert not watcher.clicked
+
+
+def test_automation_error_does_not_fall_back_to_unproven_visual_click():
+    watcher = WeChatDesktopAuthWatcher(timeout_seconds=1, enable_visual_fallback=True)
+    with patch('scripts.wechat_desktop_auth.subprocess.run', return_value=MagicMock(returncode=1, stdout='', stderr='denied')), patch('scripts.wechat_desktop_auth._try_visual_allow_click') as visual:
+        watcher._poll()
+    visual.assert_not_called()
+    assert watcher.last_result == 'AUTOMATION_FAILED'
+    assert not watcher.clicked
