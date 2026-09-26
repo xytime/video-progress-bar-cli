@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.0.0 | 2026-09-26 | Codex | 绑定评论页完整文案与场景 ID；发送前阻断错帖请求，限定作品与完整作者评论回读。 |
 | 2.9.0 | 2026-09-23 | Antigravity | 修复视频号后台处理中作品未上架导致卡片索引错位发评的严重缺陷；引入内容前缀强校验、详情面板文本核验与发评请求作品ID不符硬熔断（Fail-Closed）。 |
 | 2.8.0 | 2026-09-20 | Antigravity | 新增首评自动置顶与替换确认逻辑，记录 is_pinned 证据。 |
 | 2.7.0 | 2026-09-20 | Antigravity | 提取 resolve_target_card 纯逻辑，支持离线单元测试卡片索引消歧义与降级分支。 |
@@ -83,6 +84,42 @@ def _payload_value(payload: object, *names: str) -> object:
     return None
 
 
+def _interaction_post_id(post_id: str, published_description: Optional[str], descriptions: dict[str, str]) -> tuple[str, str]:
+    """不同后台场景可能返回不同 exportId；只允许完整已发布文案唯一绑定。"""
+    if post_id in descriptions:
+        return post_id, "exact_native_id"
+    expected = _normalized_text(published_description)
+    matches = [pid for pid, desc in descriptions.items() if expected and _normalized_text(desc) == expected]
+    if len(matches) == 1 and len(expected) >= 30:
+        return matches[0], "unique_exact_published_description"
+    raise ValueError("评论页未找到原生 ID 或唯一完整已发布文案，拒绝绑定场景 ID")
+
+
+def _read_live_author_comments(page, captured_comments, platform_post_id):
+    """真实 DOM 作者徽标与完整正文，绑定同作品接口返回的唯一评论 ID。"""
+    texts = page.locator('.comment-author-bandage:visible').evaluate_all("""els => els.flatMap(el => {
+        let node = el.parentElement;
+        while (node && node !== document.body) {
+            const contents = node.querySelectorAll('.comment-content');
+            if (contents.length) {
+                return contents.length === 1 && node.querySelectorAll('.comment-author-bandage').length === 1
+                    ? [contents[0].innerText] : [];
+            }
+            node = node.parentElement;
+        }
+        return [];
+    })""")
+    result = []
+    for text in texts:
+        normalized = _normalized_text(text)
+        ids = {c['comment_id'] for c in (captured_comments or [])
+               if c.get('platform_post_id') == platform_post_id and c.get('comment_id')
+               and c.get('content') == normalized}
+        if len(ids) == 1:
+            result.append({'comment_id': next(iter(ids)), 'text': normalized})
+    return result
+
+
 def _extract_title_probes(
     video_title: Optional[str], target_desc: Optional[str] = None
 ) -> list[str]:
@@ -123,6 +160,26 @@ class _SubmissionResponseWindow:
         self.requests: list[Any] = []
         self.responses: list[dict[str, Any]] = []
         self.mismatched_requests: list[dict[str, Any]] = []
+        self.blocked_requests: list[dict[str, Any]] = []
+
+    def guard_request(self, route) -> None:
+        """网络发送前核对作品 ID 与全文；监听响应不能撤回已经发出的错帖。"""
+        request = route.request
+        parsed = urlparse(request.url)
+        if parsed.path not in COMMENT_SUBMIT_PATHS:
+            route.fallback()
+            return
+        try:
+            payload = request.post_data_json
+            pid = str(_payload_value(payload, "objectId", "object_id", "exportId", "export_id") or "").strip()
+            text = _normalized_text(_payload_value(payload, "content", "comment", "commentText"))
+        except Exception:
+            pid, text = "", ""
+        if request.method != "POST" or (parsed.scheme, parsed.netloc) != self.origin or pid != self.platform_post_id or text != self.expected_text:
+            self.blocked_requests.append({"payload_id": pid, "expected_post_id": self.platform_post_id})
+            route.abort()
+            return
+        route.fallback()
 
     def capture_request(self, request) -> None:
         parsed = urlparse(request.url)
@@ -137,7 +194,7 @@ class _SubmissionResponseWindow:
         except Exception:
             return
         payload_id = str(_payload_value(payload, "objectId", "object_id", "exportId", "export_id") or "").strip()
-        if payload_id and payload_id != self.platform_post_id:
+        if payload_id != self.platform_post_id:
             self.mismatched_requests.append({
                 "url": request.url,
                 "payload_id": payload_id,
@@ -201,6 +258,7 @@ class BrowserCommenter:
         evidence_dir: Optional[Path | str] = None,
         before_submit: Callable[[], bool] | None = None,
         verify_only: bool = False,
+        published_description: Optional[str] = None,
     ) -> BrowserResult:
         """提交或只读核验作者评论，保持 ``(status, evidence, error)`` 返回合同。"""
         post_id = str(platform_post_id or "").strip()
@@ -226,6 +284,7 @@ class BrowserCommenter:
                     attempt_dir=attempt_dir,
                     before_submit=before_submit,
                     verify_only=verify_only,
+                    published_description=published_description,
                 )
         except WeChatSessionLockBusy as exc:
             return self._finish(
@@ -257,6 +316,7 @@ class BrowserCommenter:
         attempt_dir: Path,
         before_submit: Callable[[], bool] | None,
         verify_only: bool,
+        published_description: Optional[str] = None,
     ) -> BrowserResult:
         """创建浏览器；不关闭 Web 安全、不禁用 Chromium sandbox。"""
         with sync_playwright() as runtime:
@@ -285,7 +345,8 @@ class BrowserCommenter:
                                 for item in body["data"]["list"]:
                                     eid = str(item.get("exportId") or "").strip()
                                     oid = str(item.get("objectId") or "").strip()
-                                    desc = str(item.get("desc") or "").strip()
+                                    raw_desc = item.get("desc") or ""
+                                    desc = _normalized_text(raw_desc.get("description") if isinstance(raw_desc, dict) else raw_desc)
                                     item_id = eid or oid
                                     if item_id and item_id not in captured_post_ids:
                                         captured_post_ids.append(item_id)
@@ -298,13 +359,14 @@ class BrowserCommenter:
                     if "comment/comment_list" in res.url and res.status in (200, 201):
                         try:
                             body = res.json()
+                            request_post_id = str(_payload_value(res.request.post_data_json, "exportId", "objectId", "export_id", "object_id") or "")
                             if isinstance(body, dict) and "data" in body and isinstance(body["data"], dict) and "comment" in body["data"]:
+                                captured_comments.append({"platform_post_id": request_post_id, "list_loaded": True})
                                 for c in body["data"]["comment"]:
                                     captured_comments.append({
+                                        "platform_post_id": request_post_id,
                                         "comment_id": str(c.get("commentId") or ""),
-                                        "nickname": str(c.get("commentNickname") or ""),
                                         "content": _normalized_text(str(c.get("commentContent") or "")),
-                                        "username": str(c.get("username") or ""),
                                     })
                         except Exception:
                             pass
@@ -345,6 +407,7 @@ class BrowserCommenter:
                     captured_post_ids=captured_post_ids,
                     captured_post_descs=captured_post_descs,
                     captured_comments=captured_comments,
+                    published_description=published_description,
                 )
             finally:
                 browser.close()
@@ -426,6 +489,7 @@ class BrowserCommenter:
         captured_post_ids: Optional[list[str]] = None,
         captured_post_descs: Optional[dict[str, str]] = None,
         captured_comments: Optional[list[dict[str, Any]]] = None,
+        published_description: Optional[str] = None,
     ) -> BrowserResult:
         """在已打开的真实页面上执行适配器合同，供隔离 Chromium 验收复用。"""
         clicked = False
@@ -435,7 +499,7 @@ class BrowserCommenter:
             "video_title_hint": video_title,
             "verify_only": verify_only,
             "comment_text_normalized": expected_text,
-            "adapter_contract": "wechat-comment-v2-pending-live-schema-validation",
+            "adapter_contract": "wechat-comment-v3-scoped-author-readback",
         }
         if not _PLATFORM_POST_ID_RE.fullmatch(platform_post_id):
             return self._finish_page(
@@ -452,6 +516,18 @@ class BrowserCommenter:
                     f"未能成功导航至视频号评论管理页面 (当前URL: {page.url})", metadata,
                 )
 
+            canonical_post_id = platform_post_id
+            if captured_post_descs:
+                try:
+                    platform_post_id, binding = _interaction_post_id(platform_post_id, published_description, captured_post_descs)
+                except ValueError as exc:
+                    return self._finish_page(page, attempt_dir, "FAILED", str(exc), metadata)
+                metadata["id_binding"] = binding
+            if not _PLATFORM_POST_ID_RE.fullmatch(platform_post_id):
+                return self._finish_page(page, attempt_dir, "FAILED", "评论页作品 ID 字符无效", metadata)
+            metadata["interaction_post_id"] = platform_post_id
+            metadata["platform_post_id"] = canonical_post_id
+
             cards = self.resolve_target_card(
                 page,
                 platform_post_id=platform_post_id,
@@ -466,6 +542,8 @@ class BrowserCommenter:
                     page, attempt_dir, "FAILED",
                     f"原生 ID 目标卡片必须唯一，实际可见数量={visible_count}", metadata,
                 )
+            if captured_comments is not None:
+                captured_comments.clear()
             cards.click()
             page.wait_for_timeout(self.poll_interval_ms)
 
@@ -494,6 +572,14 @@ class BrowserCommenter:
             )
             if opened.count() != 1:
                 if active_cards.count() == 1:
+                    target_desc = (captured_post_descs or {}).get(platform_post_id)
+                    if not target_desc or active_cards.filter(has_text=target_desc).count() != 1:
+                        return self._finish_page(page, attempt_dir, "FAILED", "活动卡片缺少完整目标文案，停止提交", metadata)
+                    loaded_deadline = time.monotonic() + 5.0
+                    while not any(c.get('list_loaded') and c.get('platform_post_id') == platform_post_id for c in (captured_comments or [])):
+                        if time.monotonic() >= loaded_deadline:
+                            return self._finish_page(page, attempt_dir, "FAILED", "未回读到目标作品的评论列表，停止提交", metadata)
+                        page.wait_for_timeout(self.poll_interval_ms)
                     opened = page.locator('.body-wrap, .feeds, body').first
                 else:
                     return self._finish_page(
@@ -545,30 +631,19 @@ class BrowserCommenter:
                     )
                 existing = self._read_author_comments(author_nodes)
             else:
-                # 真实微信微前端后台：等待异步接口拉取与 DOM 渲染
                 existing = []
                 check_deadline = time.monotonic() + (4.0 if verify_only else 2.0)
                 while time.monotonic() < check_deadline:
-                    if captured_comments:
-                        for c in captured_comments:
-                            existing.append({"comment_id": c["comment_id"], "text": c["content"]})
-                    if not existing:
-                        author_nodes = page.locator(
-                            '.comment-row:has(.bandage:has-text("作者")), .comment-row:has(.author-role:has-text("作者"))'
-                        )
-                        for idx in range(author_nodes.count()):
-                            node = author_nodes.nth(idx)
-                            cid = str(node.get_attribute("data-comment-id") or f"live-author-{idx}").strip()
-                            existing.append({"comment_id": cid, "text": _normalized_text(node.inner_text())})
+                    existing = _read_live_author_comments(page, captured_comments, platform_post_id)
                     if existing:
                         break
                     page.wait_for_timeout(self.poll_interval_ms)
 
             metadata["existing_author_comments"] = existing
-            if any(item["text"] == expected_text or expected_text[:30] in item["text"] for item in existing):
+            if any(item["text"] == expected_text for item in existing):
                 if not verify_only:
                     try:
-                        metadata["is_pinned"] = self._ensure_comment_pinned(page, comments)
+                        metadata["is_pinned"] = self._ensure_comment_pinned(page, comments, expected_text)
                     except Exception as exc:
                         logger.warning("已有首评补齐置顶异常: %s", exc)
                         metadata["is_pinned"] = False
@@ -633,7 +708,8 @@ class BrowserCommenter:
                 and opened.get_attribute("data-current-object-id") == platform_post_id
             )
             if not has_valid_opened:
-                if active_cards.count() != 1:
+                target_desc = (captured_post_descs or {}).get(platform_post_id)
+                if active_cards.count() != 1 or not target_desc or active_cards.filter(has_text=target_desc).count() != 1:
                     return self._finish_page(
                         page, attempt_dir, "FAILED", "提交前作品详情已变化，未持久化提交意图", metadata,
                     )
@@ -654,13 +730,18 @@ class BrowserCommenter:
             # 请求和响应监听都只在 callback 成功后安装；响应必须属于窗口内捕获的同一 Request。
             page.on("request", response_window.capture_request)
             page.on("response", response_window.capture_response)
+            page.route("**/*", response_window.guard_request)
             clicked = True
             submit_button.click()
 
             deadline = time.monotonic() + self.response_timeout_ms / 1000
-            while not response_window.responses and not response_window.mismatched_requests and time.monotonic() < deadline:
+            while not response_window.responses and not response_window.mismatched_requests and not response_window.blocked_requests and time.monotonic() < deadline:
                 page.wait_for_timeout(self.poll_interval_ms)
 
+            if response_window.blocked_requests:
+                metadata["blocked_requests"] = response_window.blocked_requests
+                metadata["mismatched_requests"] = response_window.mismatched_requests
+                return self._finish_page(page, attempt_dir, "FAILED", "评论请求 ID、来源或全文不符，已在网络发送前阻断", metadata)
             if response_window.mismatched_requests:
                 metadata["mismatched_requests"] = response_window.mismatched_requests
                 return self._finish_page(
@@ -711,13 +792,10 @@ class BrowserCommenter:
                 ]
                 if len(matching) == 1 and matching[0]["text"] == expected_text:
                     break
-                # 微前端真实后台兼容：仅在 DOM 完全缺少自定义 data-comment-id 时，允许回读带有作者徽标且包含正文的真实节点
                 if not has_explicit_sandbox_ids and not matching:
-                    live_author_row = page.locator(
-                        f'.comment-row:has(.bandage:has-text("作者")):has-text("{expected_text[:20]}"):visible'
-                    )
-                    if live_author_row.count() > 0 or page.locator(f'.comment-content:has-text("{expected_text[:20]}"):visible').count() > 0:
-                        matching = [{"comment_id": comment_id, "text": expected_text}]
+                    matching = [row for row in _read_live_author_comments(page, captured_comments, platform_post_id)
+                                if row['comment_id'] == comment_id]
+                    if len(matching) == 1 and matching[0]['text'] == expected_text:
                         break
                 page.wait_for_timeout(self.poll_interval_ms)
             metadata["accepted_comment_id"] = comment_id
@@ -729,7 +807,7 @@ class BrowserCommenter:
                 )
             if not verify_only:
                 try:
-                    metadata["is_pinned"] = self._ensure_comment_pinned(page, comments)
+                    metadata["is_pinned"] = self._ensure_comment_pinned(page, comments, expected_text)
                 except Exception as exc:
                     logger.warning("新发首评置顶异常（不影响发评成功）: %s", exc)
                     metadata["is_pinned"] = False
@@ -741,94 +819,43 @@ class BrowserCommenter:
                 f"浏览器适配器异常: {type(exc).__name__}: {exc}", metadata,
             )
 
-    def _ensure_comment_pinned(self, page, comments_locator) -> bool:
-        """检查并确保作者评论处于置顶状态，若未置顶则自动展开更多菜单执行置顶及替换确认。"""
+    def _ensure_comment_pinned(self, page, comments_locator, expected_text: str) -> bool:
+        """仅操作完整同文的作者评论；不使用全页第一个更多按钮。"""
         try:
-            # 1. 检查是否已经置顶
-            pinned_tags = page.locator(
-                '.comment-tags:has-text("置顶"), .tag:has-text("置顶"), [data-pinned="true"]'
-            )
-            if pinned_tags.count() > 0 and any(pinned_tags.nth(i).is_visible() for i in range(pinned_tags.count())):
-                logger.info("目标作者评论已处于置顶状态，无需重复置顶。")
-                return True
-
-            # 2. 唤起操作栏并定位更多操作按钮 (...)
-            more_btn = page.locator(
-                '.comment-actions .action-icon.weui-icon-outlined-more, '
-                '.action-icon.weui-icon-outlined-more, '
-                '.action-item:has(.weui-icon-outlined-more), '
-                '[data-action="more"], [data-action="pin"]'
-            )
-            if more_btn.count() == 0:
-                author_row = page.locator(
-                    '.comment-row:has(.bandage:has-text("作者")), '
-                    '.comment-row:has(.author-role:has-text("作者")), '
-                    '.comment-main-content'
-                )
-                if author_row.count() > 0:
-                    try:
-                        author_row.first.hover()
-                        page.wait_for_timeout(200)
-                    except Exception:
-                        pass
-                    more_btn = page.locator(
-                        '.comment-actions .action-icon.weui-icon-outlined-more, '
-                        '.action-icon.weui-icon-outlined-more, '
-                        '.action-item:has(.weui-icon-outlined-more), '
-                        '[data-action="more"], [data-action="pin"]'
-                    )
-
-            if more_btn.count() == 0 or not more_btn.first.is_visible():
-                logger.info("页面未渲染评论更多操作按钮或暂不支持置顶控件，跳过置顶。")
+            target = comments_locator.locator('[data-author-role="author"]').filter(has_text=expected_text)
+            if target.count() != 1:
+                target = page.locator('.comment-item-main:has(.comment-author-bandage)').filter(has_text=expected_text)
+            if target.count() != 1:
                 return False
-
-            # 若直接是置顶按钮（测试简化夹具）
-            if "pin" in str(more_btn.first.get_attribute("data-action") or "").lower():
-                more_btn.first.click()
+            tags = target.locator('.comment-tags:has-text("置顶"), .tag:has-text("置顶"), [data-pinned="true"]')
+            if target.get_attribute("data-pinned") == "true" or (tags.count() and tags.first.is_visible()):
+                return True
+            target.hover()
+            more = target.locator('.action-icon.weui-icon-outlined-more, .action-item:has(.weui-icon-outlined-more), [data-action="more"], [data-action="pin"]')
+            if more.count() != 1 or not more.is_visible():
+                return False
+            more.click()
+            page.wait_for_timeout(200)
+            if more.get_attribute('data-action') != 'pin':
+                pin = page.locator('.weui-desktop-popover:visible .menu-item, [role="menu"]:visible [role="menuitem"], [data-menu-item="pin"]:visible').filter(has_text=re.compile(r"^\s*置顶\s*$"))
+                if pin.count() != 1:
+                    return False
+                pin.click()
                 page.wait_for_timeout(300)
-                return True
-
-            # 点击展开更多下拉菜单
-            more_btn.first.click()
-            page.wait_for_timeout(300)
-
-            # 3. 菜单中查找「置顶」
-            popover_item = page.locator(
-                '.weui-desktop-popover:visible .menu-item, '
-                '[role="menu"]:visible [role="menuitem"], '
-                '[data-menu-item="pin"]'
-            ).filter(has_text=re.compile(r"^\s*置顶\s*$"))
-            if popover_item.count() == 0 or not popover_item.first.is_visible():
-                logger.info("更多菜单中未出现置顶选项，跳过。")
-                return False
-
-            popover_item.first.click()
-            page.wait_for_timeout(500)
-
-            # 4. 检测并确认替换已有置顶弹窗
-            dialog = page.locator(
-                '.common-dialog:visible, .weui-desktop-dialog:visible'
-            ).filter(has_text=re.compile(r"置顶"))
-            if dialog.count() > 0 and dialog.first.is_visible():
-                confirm_btn = dialog.first.locator(
-                    '.weui-desktop-btn_primary, button:has-text("替换置顶"), button:has-text("确定")'
-                )
-                if confirm_btn.count() > 0 and confirm_btn.first.is_visible():
-                    confirm_btn.first.click()
-                    page.wait_for_timeout(500)
-
-            # 5. 等待置顶状态生效
-            check_deadline = time.monotonic() + min(3.0, self.dom_timeout_ms / 1000)
-            while time.monotonic() < check_deadline:
-                if page.locator('.comment-tags:has-text("置顶"), .tag:has-text("置顶"), [data-pinned="true"]').count() > 0:
-                    logger.info("首评作者评论已成功置顶。")
+                dialog = page.locator('.common-dialog:visible, .weui-desktop-dialog:visible').filter(has_text='置顶')
+                if dialog.count():
+                    confirm = dialog.get_by_role('button', name='替换置顶', exact=True)
+                    if confirm.count() != 1:
+                        return False
+                    confirm.click()
+            deadline = time.monotonic() + min(3.0, self.dom_timeout_ms / 1000)
+            while time.monotonic() < deadline:
+                if target.get_attribute("data-pinned") == "true" or (tags.count() and tags.first.is_visible()):
                     return True
                 page.wait_for_timeout(self.poll_interval_ms)
-
-            logger.warning("置顶请求已发出，但超时未回读到置顶标识。")
             return False
         except Exception as exc:
-            logger.warning("执行评论置顶流程异常: %s", exc)
+            logger.warning("目标作者评论置顶未确认: %s", exc)
             return False
 
     @staticmethod

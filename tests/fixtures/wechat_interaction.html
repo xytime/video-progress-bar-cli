@@ -48,7 +48,7 @@
         }
         const response = await fetch('/cgi-bin/mmfinderassistant-bin/comment/create', {
           method: 'POST', headers: {'content-type': 'application/json'},
-          body: JSON.stringify({objectId: id, content})
+          body: JSON.stringify({objectId: mode === 'wrong-request-id' ? 'post-other' : id, content})
         });
         const payload = await response.json();
         if (payload.errCode !== 0) return;

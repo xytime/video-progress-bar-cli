@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-09-26 | Codex | 覆盖发送前错帖阻断、场景 ID 与完整作者回读。 |
 | 1.0.0 | 2026-09-19 | Codex | 覆盖原生 ID、响应因果、完整作者回读、延迟成功和 verify-only。 |
 """
 
@@ -125,7 +126,7 @@ def test_wrong_or_ambiguous_native_id_never_opens_writer(interaction_page, tmp_p
     ("mode", "expected"),
     [
         ("unrelated-only", "UNCERTAIN"),
-        ("cross-origin-only", "UNCERTAIN"),
+        ("cross-origin-only", "FAILED"),
         ("no-api", "UNCERTAIN"),
         ("rejected", "FAILED"),
         ("unknown-response", "UNCERTAIN"),
@@ -247,3 +248,56 @@ def test_blank_author_comment_id_fails_closed_before_writer(
     assert page.evaluate("window.fixtureState.writeOpened") == 0
     assert page.evaluate("window.fixtureState.submitClicked") == 0
     assert writes == []
+
+
+def test_wrong_request_is_blocked_before_network(interaction_page, tmp_path):
+    page, writes = interaction_page
+    result, receipt, _ = _run(page, tmp_path, mode="wrong-request-id")
+    assert result[0] == "FAILED"
+    assert writes == []
+    assert receipt['blocked_requests'][0]['payload_id'] == 'post-other'
+
+
+def test_existing_partial_author_text_is_not_success(interaction_page, tmp_path):
+    page, writes = interaction_page
+    page.evaluate("""text => document.querySelector('[data-object-id="post-target"]').addEventListener('click', () => {
+      const node=document.createElement('div'); node.dataset.commentId='existing'; node.dataset.authorRole='author';
+      node.textContent=text; document.querySelector('[data-comment-list]').append(node);
+    })""", COMMENT[:5])
+    result, _, _ = _run(page, tmp_path, verify_only=True)
+    assert result[0] == 'SKIPPED_EXISTS'
+    assert writes == []
+
+
+def test_live_author_readback_requires_scoped_id_and_complete_text(interaction_page):
+    from video_processing.interaction.browser_commenter import _read_live_author_comments
+    page, _ = interaction_page
+    page.locator('#detail-host').evaluate("""(el, text) => { el.innerHTML='<div class="comment-main-content"><div class="comment-row"><div class="comment-author-bandage">作者</div></div><div class="comment-row"><span class="comment-content"></span></div></div>';el.querySelector('.comment-content').textContent=text; }""", COMMENT)
+    normalized = ' '.join(COMMENT.split())
+    records = [{'platform_post_id':'other','comment_id':'wrong','content':normalized},
+               {'platform_post_id':'target','comment_id':'right','content':normalized}]
+    assert _read_live_author_comments(page, records, 'target') == [{'comment_id':'right','text':normalized}]
+    assert _read_live_author_comments(page, records, 'missing') == []
+    records[1]['content'] = normalized[:5]
+    assert _read_live_author_comments(page, records, 'target') == []
+
+
+def test_scene_id_requires_unique_full_published_description():
+    from video_processing.interaction.browser_commenter import _interaction_post_id
+    text = '完整发布文案用于唯一作品绑定和验证，不能用截断前缀替代完整的内容身份。'
+    assert _interaction_post_id('canonical', text, {'scene':text}) == ('scene','unique_exact_published_description')
+    for descriptions in ({'scene':text+'不同尾部'}, {'a':text,'b':text}):
+        with pytest.raises(ValueError):
+            _interaction_post_id('canonical',text,descriptions)
+
+
+def test_pin_uses_only_target_author_container(interaction_page, tmp_path):
+    page, _ = interaction_page
+    page.locator('#detail-host').evaluate("""(el, text) => {
+      el.innerHTML='<div data-author-role="viewer" data-pinned="true">观众</div><div data-author-role="author"><span></span><button data-action="pin">置顶</button></div>';
+      const author=el.querySelector('[data-author-role="author"]');author.querySelector('span').textContent=text;
+      author.querySelector('button').onclick=()=>author.dataset.pinned='true';
+    }""", COMMENT)
+    commenter = BrowserCommenter(state_path=tmp_path/'state.json',dom_timeout_ms=300)
+    assert commenter._ensure_comment_pinned(page,page.locator('#detail-host'),' '.join(COMMENT.split())) is True
+    assert page.locator('[data-author-role="author"]').get_attribute('data-pinned') == 'true'

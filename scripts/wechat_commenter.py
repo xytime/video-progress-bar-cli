@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.5.0 | 2026-09-26 | Codex | 传递完整已发布文案以唯一绑定评论页场景 ID，保留短定位提示。 |
 | 2.5.0 | 2026-09-20 | Antigravity | 增加文案文件读取 UnicodeDecodeError 与非 UTF-8 异常捕获，平稳降级使用标题。 |
 | 2.4.0 | 2026-09-20 | Antigravity | 支持目标 target 显式提供 copy_path 生成文案与定位提示，兼容 English World 作品。 |
 | 2.3.0 | 2026-09-20 | Antigravity | 放宽人工批量上限至 10 条，支持最新作品批量互动与自动收敛。 |
@@ -57,7 +58,7 @@ class _LiveServices:
     def _published_title_hint(
         youtube_id: str, slice_index: int, copy_path: Optional[str] = None
     ) -> Optional[str]:
-        """从已发布文案取稳定前缀，供无原生 ID 属性的后台列表做唯一绑定。"""
+        """读取完整已发布文案，用于评论页场景 ID 的唯一绑定。"""
         if copy_path and Path(copy_path).is_file():
             target_path = Path(copy_path)
         else:
@@ -70,7 +71,7 @@ class _LiveServices:
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             logger.warning("读取已发布文案定位提示失败: %s", exc)
             return None
-        return text[:96] or None
+        return text or None
 
     def generate_comment(self, target: Mapping[str, Any], *, force_rule: bool) -> Any:
         yid = str(target.get("youtube_id") or "")
@@ -115,7 +116,8 @@ class _LiveServices:
             copy_path=str(call_kwargs.pop("copy_path", "") or "") or None,
         )
         if hint:
-            call_kwargs["video_title"] = hint
+            call_kwargs["video_title"] = hint[:96]
+            call_kwargs["published_description"] = hint
         return BrowserCommenter(headless=self.headless).post_comment(**call_kwargs)
 
     def notify_result(
