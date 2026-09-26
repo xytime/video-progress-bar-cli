@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.62.0 | 2026-09-26 | Antigravity | 安全访问 _trigger_source 属性以兼容单元测试实例化与非完整管线实例。 |
 | 3.61.0 | 2026-09-25 | Codex | 仅对启用边界后新入库的 TED/TEDx AUTO 视频应用演讲发布线托底，不释放历史低分候选。 |
 | 3.60.0 | 2026-09-24 | Codex | 将任务加工来源写入审计事件，避免把自动发现误认为自动投稿。 |
 | 3.59.0 | 2026-09-23 | Antigravity | 审核物料通知持久化 SQLite 账本并支持断点补偿排水；_run_tracked 超时有界升级 SIGKILL；下载注入共享总预算并委托单一真相源验真。 |
@@ -1101,7 +1102,7 @@ class PipelineManager:
             slice_index=slice_index,
             platform_post_id=platform_post_id,
             platform_url=platform_url,
-            trigger_source=self._trigger_source,
+            trigger_source=getattr(self, "_trigger_source", None),
         )
         cancel_douyin = settings.douyin_require_wechat_public_confirmation
         downstream_reason = (
@@ -3784,7 +3785,7 @@ class PipelineManager:
             with TaskLease(self._OUT_DIR / "task_locks" / f"{prefix}.lock", video=prefix, stage="提交" if submission_only else "加工"):
                 try:
                     self.db.record_processing_trigger(
-                        yid, self._trigger_source, slice_index=index,
+                        yid, getattr(self, "_trigger_source", None), slice_index=index,
                     )
                 except Exception:
                     logger.exception("[%s] 未能保存加工触发来源；本次归因保持未知。", prefix)

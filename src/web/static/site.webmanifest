@@ -1,0 +1,22 @@
+{
+  "name": "Video Pipeline Control Center",
+  "short_name": "VideoPipeline",
+  "description": "全自动视频加工 · 翻译 · 微信视频号发布控制中心",
+  "icons": [
+    {
+      "src": "/static/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "theme_color": "#0b0f19",
+  "background_color": "#0b0f19",
+  "display": "standalone"
+}

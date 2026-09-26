@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-09-26 | Antigravity | 验证 /api/funnel 与 /api/channels/{cid}/funnel 默认窗口为 today_bj。 |
 | 1.1.0 | 2026-09-20 | Gemini | 补充 /api/videos?funnel_stage=... 穿透参数校验与下钻接口测试。 |
 | 1.0.0 | 2026-09-20 | Gemini | 初始创建：覆盖受管白名单列表聚合、频道暂停与恢复端点、多时间窗口漏斗统计 API。 |
 """
@@ -93,6 +94,11 @@ def test_channel_funnel_endpoint(tmp_path):
         assert res_all.status_code == 200
         assert res_all.json()["window"] == "all"
 
+        # 默认窗口查询（应当为 today_bj）
+        res_default = client.get(f"/api/channels/{cid}/funnel")
+        assert res_default.status_code == 200
+        assert res_default.json()["window"] == "today_bj"
+
 
 def test_global_funnel_endpoint(tmp_path):
     test_db = PipelineDB(str(tmp_path / "pipeline.db"))
@@ -124,6 +130,11 @@ def test_global_funnel_endpoint(tmp_path):
         res_today = client.get("/api/funnel?window=today_bj")
         assert res_today.status_code == 200
         assert res_today.json()["window"] == "today_bj"
+
+        # 测试默认窗口（应当为 today_bj）
+        res_default = client.get("/api/funnel")
+        assert res_default.status_code == 200
+        assert res_default.json()["window"] == "today_bj"
 
 
 def test_get_videos_created_window_api(tmp_path):

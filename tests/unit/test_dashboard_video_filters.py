@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-09-26 | Antigravity | 断言模板来源发布采用 sourceDateTimeLabel 并将默认入库时间筛选窗口对齐为 today_bj。 |
 | 1.4.0 | 2026-09-20 | Gemini | 增加非法/非标 upload_date 容错排序测试，验证脏数据不抢占来源发布最新位。 |
 | 1.3.0 | 2026-09-20 | Gemini | 断言来源发布显式标注 ET 时区 (来源发布 (ET)：)。 |
 | 1.2.0 | 2026-09-07 | Codex | 覆盖仅含旧 upload_date 的历史记录按来源日期参与默认排序，并保留同日内的来源时间顺序。 |
@@ -128,8 +129,10 @@ def test_dashboard_template_labels_source_dates_without_claiming_platform_upload
 
     assert "sort: 'source_published_at_desc'" in template
     assert '<option value="80_plus">80 以上</option>' in template
-    assert "来源发布 (ET)：${sourcePublishAge" in template
+    assert "来源发布 (ET)：${sourceDateTimeLabel}" in template
     assert "上传：${uploadAge" not in template
+    assert '<option value="today_bj" selected>入库：今日 (BJ)</option>' in template
+    assert "createdWindow: 'today_bj'" in template
 
 
 def test_dal_source_published_sort_immune_to_corrupted_dates(tmp_path):

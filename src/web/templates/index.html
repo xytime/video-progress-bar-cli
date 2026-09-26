@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-09-26 | Antigravity | 任务数据中心全 Tab 来源发布/入库时间统一；移动端卡片重构（状态置于封面下方、四大指标紧凑汇聚、已发布高辨识度区分）；iOS 桌面 icon 设为 📺。 |
   | 2026-09-23 | Codex | 待筛选来源发布时间补充 ET 时分、BJ 入库时间与四档相对新鲜度展示。 |
   | Date       | Author                | Description                                   |
   |------------|-----------------------|-----------------------------------------------|
@@ -36,10 +37,18 @@
   | 2026-09-15 | Codex | 添加主题与持久化字号设置；提高文字对比度并适配笔记本及窄屏布局。 |
   | 2026-09-20 | Gemini | 全量解耦内联样式至 /static/css/dashboard.css，解耦频道与漏斗管理至 /static/js/channel_manager.js；refresh() 与 Enter 键防御性守卫 fetchChannels 与 addChannel 调用。 |
   | 2026-09-20 | Gemini | 首页 UI/UE/UX 重构：上线全局生产转化漏斗大盘（7d/30d/all）；处理中状态（active>0）红光呼吸动效与网页标题动态提示；移除静态流程介绍；平台补录改折叠；显示设置收纳进 Header。 |
+  | 2026-09-26 | Antigravity | 任务数据中心 Tab 三段式时效全覆盖；移动端卡片布局重构并紧凑聚合 4 大核心指标；iOS/PWA 桌面图标更换为 📺；Global Funnel 默认窗口与全站筛选联动对齐为 today_bj (今日 BJ)。 |
   | 2026-09-20 | Gemini | 增强 normalizeSourcePublishedDate 容错提取能力，防御历史非标格式导致发布时间显示为未知。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>📺 Video Pipeline Control Center</title>
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
+  <link rel="manifest" href="/static/site.webmanifest" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="VideoPipeline" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
@@ -140,8 +149,8 @@
       </div>
       <div class="funnel-tabs" id="global-funnel-tabs" style="display:flex; gap:6px;">
         <button class="btn-channel-action btn-channel-funnel" id="gf-tab-24h" onclick="switchGlobalFunnelWindow('24h')">最近 24 小时</button>
-        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-today_bj" onclick="switchGlobalFunnelWindow('today_bj')">今日 (BJ)</button>
-        <button class="btn-channel-action btn-channel-funnel active" id="gf-tab-7d" onclick="switchGlobalFunnelWindow('7d')">近 7 天</button>
+        <button class="btn-channel-action btn-channel-funnel active" id="gf-tab-today_bj" onclick="switchGlobalFunnelWindow('today_bj')">今日 (BJ)</button>
+        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-7d" onclick="switchGlobalFunnelWindow('7d')">近 7 天</button>
         <button class="btn-channel-action btn-channel-funnel" id="gf-tab-30d" onclick="switchGlobalFunnelWindow('30d')">近 30 天</button>
         <button class="btn-channel-action btn-channel-funnel" id="gf-tab-all" onclick="switchGlobalFunnelWindow('all')">全生命周期</button>
       </div>
@@ -269,7 +278,7 @@
       <div id="funnel-active-banner" class="funnel-active-banner" style="display:none;">
         <div style="display:flex; align-items:center; gap:8px;">
           <span class="funnel-banner-icon">🎯</span>
-          <span>已联动大盘透视：<strong id="banner-window-text" style="color:var(--accent2);">近 7 天</strong> · <strong id="banner-stage-text" style="color:#fff;">终审发布</strong></span>
+          <span>已联动大盘透视：<strong id="banner-window-text" style="color:var(--accent2);">今日 (BJ)</strong> · <strong id="banner-stage-text" style="color:#fff;">终审发布</strong></span>
           <span id="banner-count-badge" class="panel-badge" style="background:rgba(52,211,153,0.15); color:var(--green); font-size:0.75rem; padding:2px 8px;">共 0 条</span>
         </div>
         <button class="btn-clear-funnel" onclick="clearFunnelDrilldown()" title="退出大盘联动筛选，恢复常规视图">✕ 退出大盘透视</button>
@@ -290,8 +299,8 @@
         <select id="video-filter-created-window" onchange="applyVideoFilters()" title="按入库时间窗口筛选">
           <option value="all">全部入库时间</option>
           <option value="24h">入库：最近 24 小时</option>
-          <option value="today_bj">入库：今日 (BJ)</option>
-          <option value="7d" selected>入库：近 7 天</option>
+          <option value="today_bj" selected>入库：今日 (BJ)</option>
+          <option value="7d">入库：近 7 天</option>
           <option value="30d">入库：近 30 天</option>
         </select>
         <span class="filter-context" id="filter-score-context">
@@ -1019,7 +1028,7 @@
     search: '', channel: '', sort: 'source_published_at_desc', size: Number(localStorage.getItem('video_pipeline_page_size')) || 20,
     scoreBand: 'all', errorType: 'all', status: 'all', engagementWindowDays: 3, includeProcessed: false,
     includeExpired: false,
-    createdWindow: '7d',
+    createdWindow: 'today_bj',
     funnelStage: null,
   };
   let _selectedYids = new Set();
@@ -1055,7 +1064,7 @@
     document.getElementById('video-filter-sort').value = filterState.sort;
     document.getElementById('video-filter-size').value = String(filterState.size);
     const cwEl = document.getElementById('video-filter-created-window');
-    if (cwEl) cwEl.value = filterState.createdWindow || 'all';
+    if (cwEl) cwEl.value = filterState.createdWindow || 'today_bj';
     document.getElementById('video-filter-score').value = filterState.scoreBand;
     document.getElementById('video-filter-error').value = filterState.errorType;
     document.getElementById('video-filter-status').value = filterState.status;
@@ -1108,7 +1117,7 @@
     filterState.search = ''; filterState.channel = ''; filterState.sort = 'source_published_at_desc';
     filterState.scoreBand = 'all'; filterState.errorType = 'all'; filterState.status = 'all';
     filterState.engagementWindowDays = 3; filterState.includeProcessed = false;
-    if (setCreatedWindow('all')) fetchGlobalFunnel();
+    if (setCreatedWindow('today_bj')) fetchGlobalFunnel();
     clearFunnelDrilldown(false);
     syncFilterControls();
     currentPage = 1;
@@ -1401,6 +1410,43 @@
         if (_badge) _badge.textContent = filterState.includeProcessed ? '（含已浏览）' : '（已浏览默认隐藏）';
       }
 
+      // 统一时区格式化函数（美东 ET / 北京 BJ）
+      const formatZonedDateTime = (instant, timeZone) => {
+        if (!instant || isNaN(instant.getTime())) return '未知';
+        const parts = new Intl.DateTimeFormat('en-CA', {
+          timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+          hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+        }).formatToParts(instant);
+        const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+        const todayParts = new Intl.DateTimeFormat('en-CA', {
+          timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+        }).formatToParts(new Date());
+        const today = Object.fromEntries(todayParts.map(({ type, value }) => [type, value]));
+        const dateLabel = values.year === today.year && values.month === today.month && values.day === today.day
+          ? '今天' : `${values.year}-${values.month}-${values.day}`;
+        return `${dateLabel} ${values.hour}:${values.minute}`;
+      };
+
+      // 纯动态评分提取时差计算函数（客户端实时计算，杜绝写死“1小时前”）
+      const formatScoreComputedAge = (rawTs) => {
+        if (!rawTs) return null;
+        const raw = String(rawTs || '').trim();
+        if (!raw) return null;
+        const iso = raw.replace(' ', 'T') + (raw.includes('Z') || raw.includes('+') ? '' : 'Z');
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return null;
+        const diffSec = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+        const hours = diffSec / 3600;
+        let ageStr;
+        if (diffSec < 60) ageStr = '刚刚';
+        else if (diffSec < 3600) ageStr = `${Math.floor(diffSec / 60)}m ago`;
+        else if (hours < 48) ageStr = `${hours.toFixed(1)}h ago`;
+        else ageStr = `${(hours / 24).toFixed(1)}d ago`;
+
+        const bjTime = formatZonedDateTime(d, 'Asia/Shanghai');
+        return { age: ageStr, bjTime, tooltip: `评分提取时间 (BJ): ${bjTime} · ● ${ageStr}` };
+      };
+
       _currentVideosMap = {};
       tbody.innerHTML = videos.map(v => {
         _currentVideosMap[v.youtube_id] = v;
@@ -1410,31 +1456,39 @@
         const isRetryable = RETRYABLE.has(v.status);
         const isStuck     = STUCK.has(v.status);
 
+        // 评分提取时间（动态算出的时差对象）
+        const scoreComputedTs = v.score_computed_at || v.rescore_checked_at || (v.score != null ? v.created_at : null);
+        const scoreTimeInfo = formatScoreComputedAge(scoreComputedTs);
+
         // 分数/操作栏
         // [Gemini_2.5_Pro_planning] DISCOVERY 源视频：只读，不展示评分按钮（防止误触发管线）
         const isDiscovery = v.source === 'DISCOVERY';
         // [Gemini_2.5_Pro_planning] high_likes tab: 已处理行标记
         const isDone = Boolean(v.browser_processed);
+        const hasScoreBtns = (!isTerminal || isRetryable) && !isDiscovery && currentTab !== 'high_likes';
         let scoreControls = '';
         if (isDiscovery) {
           // 高赞发现视频：展示点赞率而非评分，提示只读
           const likeRatePct = (v.like_count != null && v.view_count > 0)
             ? (v.like_count / v.view_count * 100).toFixed(2) + '%'
             : '未知';
-          scoreControls = `<div style="text-align:center; line-height:1.4;">
+          scoreControls = `<div class="score-display-wrap score-discovery" style="text-align:center; line-height:1.4;">
             <span style="font-size:0.75rem; color:var(--text3);">点赞率</span><br>
             <span style="font-size:0.875rem; font-weight:600; color:var(--green);">${likeRatePct}</span>
             <div style="font-size:0.75rem; color:var(--text3); margin-top:2px;">👁 仅浏览</div>
           </div>`;
         } else if (currentTab === 'high_likes') {
           // 近期高互动是浏览面：显示既有评分，但绝不在此改变生产优先级。
-          scoreControls = `<span class="video-score">${score || '未评分'}</span>${score ? ' 分' : ''}`;
-        } else if (!isTerminal || isRetryable) {
+          scoreControls = `<div class="score-display-wrap"><span class="video-score">${score || '未评分'}</span>${score ? ' 分' : ''}${scoreTimeInfo ? `<div class="desktop-score-age" title="${escapeAttr(scoreTimeInfo.tooltip)}">🕒 ${scoreTimeInfo.age}</div>` : ''}</div>`;
+        } else if (hasScoreBtns) {
           const thresholdWarn = isPending && score < 75 ? `<div style="font-size:0.75rem;color:var(--orange);margin-top:2px;">⚠️ 低于75分暂停</div>` : '';
           scoreControls = `
-            <div>
-              <span class="video-score" id="score-${v.youtube_id}">${score}</span> 分
-              ${thresholdWarn}
+            <div class="score-interactive-wrap">
+              <div class="desktop-score-header">
+                <span class="video-score" id="score-${v.youtube_id}">${score}</span> 分
+                ${scoreTimeInfo ? `<div class="desktop-score-age" title="${escapeAttr(scoreTimeInfo.tooltip)}">🕒 ${scoreTimeInfo.age}</div>` : ''}
+                ${thresholdWarn}
+              </div>
               <div class="score-btn-group">
                 <button class="btn-score" onclick="setScore('${v.youtube_id}', 0)">0</button>
                 <button class="btn-score" onclick="setScore('${v.youtube_id}', 60)">60</button>
@@ -1443,7 +1497,7 @@
               </div>
             </div>`;
         } else {
-          scoreControls = `<span class="video-score">${score}</span> 分`;
+          scoreControls = `<div class="score-display-wrap"><span class="video-score">${score}</span> 分${scoreTimeInfo ? `<div class="desktop-score-age" title="${escapeAttr(scoreTimeInfo.tooltip)}">🕒 ${scoreTimeInfo.age}</div>` : ''}</div>`;
         }
 
         const deleteBtn = `<button class="btn-hard-reset" onclick="deleteVideo('${v.youtube_id}')" title="彻底清除任务记录" style="color:var(--text3); border-color:var(--border); background:rgba(255,255,255,0.05); margin-left: 4px;">❌ 删除</button>`;
@@ -1655,16 +1709,16 @@
         const sourcePublished = normalizeSourcePublishedDate(sourceDate) || '未知';
         const sourceInstant = parseSourcePublishedInstant(v.source_published_at);
         const freshness = sourceFreshness(sourceInstant);
-        const showWaitlistFreshness = currentTab === 'waitlist';
-        const sourceDateTimeLabel = showWaitlistFreshness && sourceInstant
+        const sourceDateTimeLabel = sourceInstant
           ? formatZonedDateTime(sourceInstant, 'America/New_York')
           : (sourcePublishAge || escapeHtml(sourcePublished));
-        const ingestedDateTimeLabel = showWaitlistFreshness && v.created_at
+        const ingestedDateTimeLabel = v.created_at
           ? formatZonedDateTime(new Date(`${String(v.created_at).replace(' ', 'T')}Z`), 'Asia/Shanghai')
           : '入库时间未知';
 
         // [Claude_Sonnet_4.6_Thinking_planning] metaChips: 移除 views/likeRatio（已有独立列）
-        const freshnessLine = showWaitlistFreshness && freshness
+        // 来源发布与入库时间三段式新鲜度展示统一推广到所有 Tab
+        const freshnessLine = freshness
           ? `<span class="freshness-line freshness-line-${freshness.tier}" title="按来源发布时间计算；超过未来时间的记录按刚发布显示">
               <span>来源发布 (ET)：${sourceDateTimeLabel}</span>
               <span class="freshness-line-separator">·</span>
@@ -1672,10 +1726,11 @@
               <span class="freshness-line-separator">·</span>
               <strong class="freshness-line-age">● ${freshness.age} (BJ)</strong>
             </span>`
-          : [
-              `<span class="meta-chip source-published-age-${sourcePublishedAgeCls(sourceDate)}" title="YouTube 来源发布时间（美东时间 ET）">来源发布 (ET)：${sourceDateTimeLabel}</span>`,
-              showWaitlistFreshness ? `<span class="meta-chip ingest-time-chip" title="本地记录入库时间（北京时间 BJ）">入库时间：${escapeHtml(ingestedDateTimeLabel)}</span>` : '',
-            ].join('');
+          : `<span class="freshness-line freshness-line-stale" title="YouTube 来源发布时间与入库时间">
+              <span>来源发布 (ET)：${sourceDateTimeLabel}</span>
+              <span class="freshness-line-separator">·</span>
+              <span>入库时间：${escapeHtml(ingestedDateTimeLabel)}</span>
+            </span>`;
         const metaChips = [
           dur ? `<span class="meta-chip">⏱ 时长: ${dur}</span>` : '',
           freshnessLine,
@@ -1737,24 +1792,31 @@
         const channelRow = `<div class="video-meta-row">📺 <strong>${v.channel_name}</strong> ${sourceBadge}${sliceBadge}${metaChips ? ' · ' + metaChips : ''}${badgesPart ? ' · ' + badgesPart : ''}</div>`;
         const platformBadgesHtml = renderPlatformBadges(v);
 
-        // [Gemini_2.5_Pro_planning] 封面缩略图单元格
+        // [Gemini_2.5_Pro_planning] 封面缩略图单元格与已发布状态
         const coverUrl = `/api/covers/${v.youtube_id}`;
         const hasLocalCover = ['PUBLISHING', 'PUBLISHED', 'COMPLETED'].includes(v.status);
+        const isPublished = ['PUBLISHED', 'COMPLETED', 'SUBMITTED_BOUND'].includes(v.status) || v.display_status === 'PUBLISHED';
+
+        // 状态徽章在移动端直接挂在封面缩略图正下方，垂直居中排布
         const coverCell = `
           <td class="cover-thumb-cell">
-            ${hasLocalCover ? `
-            <img
-              class="cover-thumb"
-              src="${coverUrl}"
-              alt="封面"
-              loading="lazy"
-              onerror="handleCoverError(this)"
-              onclick="openCoverLightbox('${coverUrl}', '${escapeAttr(v.title || '')}');"
-            />` : `
-            <div class="cover-placeholder">🎬</div>
-            `}
+            <div class="cover-thumb-wrapper">
+              ${hasLocalCover ? `
+              <img
+                class="cover-thumb"
+                src="${coverUrl}"
+                alt="封面"
+                loading="lazy"
+                onerror="handleCoverError(this)"
+                onclick="openCoverLightbox('${coverUrl}', '${escapeAttr(v.title || '')}');"
+              />` : `
+              <div class="cover-placeholder">🎬</div>
+              `}
+              <div class="cover-status-badge mobile-only">
+                ${statusBadge(v.display_status || v.status)}
+              </div>
+            </div>
           </td>`;
-
 
         // [Gemini_2.5_Pro_planning] checkbox 单元格（仅 waitlist tab 显示）
         const isWaitlist = currentTab === 'waitlist';
@@ -1770,26 +1832,65 @@
         const lrStr = likeRawPct != null ? likeRawPct.toFixed(2) + '%' : '未知';
         const viewsStr = views != null ? views : '未知';
 
+        // 移动端专属核心数据卡（打分、浏览量、互动率、评分提取时间）紧凑成组排布
+        const scoreValStr = score != null ? `${score}<small>分</small>` : '—';
+        const scoreStateTag = (isPending && score < 75)
+          ? `<span class="mcm-tag mcm-tag-warn">低于75分暂停</span>`
+          : (score >= 75)
+          ? `<span class="mcm-tag mcm-tag-pass">${isPublished ? '已发布' : '达标入队'}</span>`
+          : '';
+
+        const mobileCardMetricsHtml = `
+          <div class="mobile-card-metrics mobile-only">
+            <div class="mcm-stat mcm-score">
+              <span class="mcm-label">打分</span>
+              <span class="mcm-val ${score >= 75 ? 'val-high' : 'val-low'}">
+                <strong id="mcm-score-${v.youtube_id}">${scoreValStr}</strong>
+              </span>
+              ${scoreStateTag}
+            </div>
+            <div class="mcm-stat mcm-views">
+              <span class="mcm-label">浏览量</span>
+              <span class="mcm-val ${viewsCls}"><strong>${viewsStr}</strong></span>
+            </div>
+            <div class="mcm-stat mcm-lr">
+              <span class="mcm-label">互动率</span>
+              <span class="mcm-val ${lrCls}"><strong>${lrStr}</strong></span>
+            </div>
+            <div class="mcm-stat mcm-score-time">
+              <span class="mcm-label">评分提取</span>
+              <span class="mcm-val" title="${escapeAttr(scoreTimeInfo?.tooltip || '未记录评分时间')}">
+                <strong>${scoreTimeInfo ? scoreTimeInfo.age : '—'}</strong>
+              </span>
+            </div>
+          </div>
+        `;
+
         return `
-          <tr id="row-${v.youtube_id}" class="${isDone ? 'discovery-done' : ''}" onclick="${isWaitlist ? `toggleRowCb('${v.youtube_id}')` : ''}"
+          <tr id="row-${v.youtube_id}" class="${isDone ? 'discovery-done' : ''} ${isPublished ? 'row-published' : ''}" onclick="${isWaitlist ? `toggleRowCb('${v.youtube_id}')` : ''}"
               style="${isWaitlist ? 'cursor:default' : ''}">
             ${cbCell}
             ${coverCell}
             <td class="info-cell">
+              ${isPublished ? '<div class="published-ribbon-tag mobile-only">✅ 已发布成功</div>' : ''}
               ${titleBlock}
               ${channelRow}
               ${platformBadgesHtml}
               ${trimTimelineHtml}
+              ${mobileCardMetricsHtml}
               ${errorToggle}
             </td>
             <td class="vt-cell ${viewsCls}">${viewsStr}</td>
             <td class="lr-cell ${lrCls}">${lrStr}</td>
-            <td class="status-cell">${statusBadge(v.display_status || v.status)}${readyPublicationDetails(v)}${v.status === 'DOWNLOADING' ? `
+            <td class="status-cell">
+              <span class="desktop-only-status">${statusBadge(v.display_status || v.status)}</span>
+              ${readyPublicationDetails(v)}
+              ${v.status === 'DOWNLOADING' ? `
               <div class="dl-progress" data-dlprog="${v.youtube_id}">
                 <div class="dl-bar"><div class="dl-bar-fill indeterminate"></div></div>
                 <div class="dl-meta">连接中…</div>
-              </div>` : ''} <div>${retryBtn}</div></td>
-            <td class="score-cell">${scoreControls}</td>
+              </div>` : ''} <div class="row-actions-wrap">${retryBtn}</div></td>
+            <td class="score-cell ${hasScoreBtns ? 'has-score-btns' : 'static-score-cell'}">${scoreControls}</td>
             <td class="time-cell"><span class="video-time" title="更新时间（北京时间 BJ）：${escapeAttr(v.updated_at || '未知')}">${relativeTime(v.updated_at)}</span></td>
           </tr>
           ${errorRow}`;
@@ -2023,6 +2124,11 @@
     if (scoreEl) {
       scoreEl.textContent = score;
       scoreEl.style.color = 'var(--accent)';
+    }
+    const mcmScoreEl = document.getElementById(`mcm-score-${youtubeId}`);
+    if (mcmScoreEl) {
+      mcmScoreEl.innerHTML = `${score}<small>分</small>`;
+      mcmScoreEl.style.color = 'var(--accent)';
     }
 
     try {

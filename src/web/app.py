@@ -1,5 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| 3.50.0 | 2026-09-26 | Antigravity | 全局漏斗与频道漏斗端点默认时间窗口统一改为 today_bj (北京时间今日)。 |
+| 3.49.0 | 2026-09-26 | Antigravity | 新增 /apple-touch-icon.png 与 /favicon.ico 根路由直出支持，保障 iOS 桌面与 PWA 📺 视觉呈现。 |
 | 3.47.0 | 2026-09-24 | Codex | 区分自动与人工管线触发来源，提供逐日视频号投稿归因漏斗。 |
 | 3.48.0 | 2026-09-25 | Codex | 登录标记缺失时恢复自动重登，并在保活确认为过期后立即启动既有登录流程。 |
 | 3.46.0 | 2026-09-23 | Antigravity | [Code Review Fix] 1. _safe_kill_pid_or_pgid 增加自杀保护 (pid == os.getpid())；2. _process_group_alive 增加命令白名单特征过滤，防御 PID 复用；3. _queue_runner_loop 补偿排水审核通知；4. _trigger_video_async 等待超时扩展至 120s 对齐附件发送 |
@@ -143,7 +145,11 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 @app.middleware("http")
 async def reject_untrusted_browser_origins(request, call_next):
     """只允许当前 Dashboard 地址的同源浏览器请求，阻止第三方网页跨站写入。"""
-    if request.url.path == "/static" or request.url.path.startswith("/static/"):
+    if (
+        request.url.path == "/static"
+        or request.url.path.startswith("/static/")
+        or request.url.path in {"/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"}
+    ):
         return await call_next(request)
     origin = request.headers.get("origin")
     if origin:
@@ -1221,6 +1227,19 @@ def dashboard():
     return HTMLResponse(content=template_path.read_text(encoding="utf-8"))
 
 
+@app.api_route("/apple-touch-icon.png", methods=["GET", "HEAD"])
+@app.api_route("/apple-touch-icon-precomposed.png", methods=["GET", "HEAD"])
+def apple_touch_icon():
+    """为 iOS Safari 添加到主屏幕直出高清 📺 原生 PNG 图标"""
+    return FileResponse(_static_dir / "apple-touch-icon.png", media_type="image/png")
+
+
+@app.api_route("/favicon.ico", methods=["GET", "HEAD"])
+def favicon_ico():
+    """直出 📺 favicon.ico"""
+    return FileResponse(_static_dir / "favicon.ico", media_type="image/x-icon")
+
+
 @app.get("/api/ai-audit/summary")
 def get_ai_audit_summary(hours: int = 168):
     """AI 字幕调用概览：近期开销、失败与降级统计。"""
@@ -2009,10 +2028,10 @@ def resume_channel(channel_id: str):
 
 
 @app.get("/api/funnel")
-def get_global_funnel(window: str = "7d"):
+def get_global_funnel(window: str = "today_bj"):
     """获取全站视频生产流转全局漏斗指标（支持 24h, today_bj, 7d, 30d, all）"""
     valid_windows = {"24h", "today_bj", "7d", "30d", "all"}
-    win = window if window in valid_windows else "7d"
+    win = window if window in valid_windows else "today_bj"
     metrics = db.get_global_funnel_metrics(window=win)
     return {
         "success": True,
@@ -2033,10 +2052,10 @@ def get_publication_funnel(day_bj: date):
 
 
 @app.get("/api/channels/{channel_id}/funnel")
-def get_channel_funnel(channel_id: str, window: str = "7d"):
+def get_channel_funnel(channel_id: str, window: str = "today_bj"):
     """获取频道的生产转化漏斗（支持 24h, today_bj, 7d, 30d, all）"""
     valid_windows = {"24h", "today_bj", "7d", "30d", "all"}
-    win = window if window in valid_windows else "7d"
+    win = window if window in valid_windows else "today_bj"
     metrics = db.get_channel_funnel_metrics(channel_id, window=win)
     channel = db.get_channel_by_id(channel_id)
     channel_name = channel.get("channel_name", "") if channel else ""

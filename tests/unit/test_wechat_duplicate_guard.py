@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.8.0 | 2026-09-26 | Antigravity | 审核物料通知异步化后，单元测试通过 wait_for_review_notifications 等待后台线程完成。 |
 | 1.6.0 | 2026-08-22 | Codex | 已受理视频号任务须附送 Telegram 手机审核成片，且不改变未公开状态。 |
 | 1.7.0 | 2026-08-24 | Codex | 提交证据闸门须先于仅投递检查点，缺失本地产物不得将已受理任务回写待处理。 |
 | 1.5.0 | 2026-08-21 | Codex | 历史提交墓碑不得占用视频号延后恢复的每日领取额度。 |
@@ -89,6 +90,7 @@ def test_accepted_submission_sends_rendered_video_for_mobile_review(tmp_path: Pa
         "wechat-review", "wechat-review", evidence_path=None,
         reason="platform accepted", submission_confirmed=True,
     )
+    manager.wait_for_review_notifications(timeout=5.0)
 
     assert manager.db.get_video_by_youtube_id("wechat-review")["status"] == "SUBMITTED_UNBOUND"
     assert messages and "submission accepted" in messages[0]

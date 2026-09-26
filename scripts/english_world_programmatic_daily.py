@@ -54,7 +54,7 @@ from video_processing.english_world.research import _rank_candidates, _youtube_s
 from video_processing.study_cards.caption_evidence import parse_json3
 from video_processing.study_cards.language_qa import VERSION, atomic_json, read_json
 from video_processing.study_cards.quality_policy import ADVISORY_POLICY, advisory_quality
-from video_processing.english_world.safety_gate import FULLTEXT_SAFETY_POLICY
+from video_processing.english_world.safety_gate import FULLTEXT_SAFETY_POLICY, EnglishWorldSafetyGateError
 from video_processing.utils.agy_provider import AgyProviderError, run_agy_structured
 
 
@@ -72,7 +72,7 @@ class TransientStageError(ProgrammaticDailyError):
     """明确的短暂传输故障，可在同一工作目录有限恢复。"""
 
 
-class CandidateSafetyRejected(ProgrammaticDailyError):
+class CandidateSafetyRejected(ProgrammaticDailyError, EnglishWorldSafetyGateError):
     """安全审核明确拒绝当前候选；可继续预检其它来源，但绝不放行本片。"""
 
 

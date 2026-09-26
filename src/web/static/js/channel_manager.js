@@ -43,7 +43,7 @@
   let _funnelState = {
     channelId: null,
     channelName: null,
-    window: '7d',
+    window: 'today_bj',
     isPinned: false,
     cache: {},
     timer: null,
