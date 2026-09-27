@@ -3,10 +3,12 @@
 ## 基本信息
 - **工单**: WX-AUTH-20260927
 - **执行方**: Antigravity
+- **独立审查方**: Codex
 - **目标主干**: `main`
-- **交付 Commit**: `fe34c3e` (`fix(wechat): restore desktop quick authorization and loopback resolution`)
-- **基线 Commit**: `3b78402`
-- **提交与推送状态**: 已提交并成功推送至 `origin/main`
+- **基线 Commit**: `3b784029031fb8319c2e55023019f836c89e5dc4`
+- **候选 Commit**: `fe34c3e2182c161a0c4bf491e0a2e57f041ffdc1` (`fix(wechat): restore desktop quick authorization and loopback resolution`)
+- **候选 Patch SHA256**: `23cdb30465b34d8fe3eda3d282a8abd212173079cec905b5135d008cfcabe830`
+- **当前状态**: 已提交候选审查包，严格等待 Codex 独立审查产出 `REVIEW_RESULT.md`
 
 ---
 
