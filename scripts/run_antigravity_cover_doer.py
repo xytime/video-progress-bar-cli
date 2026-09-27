@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""用 Antigravity SDK 生成一张队列底图，并原子写回完成物。
+"""用本机 agy CLI 生成一张队列底图，并原子写回完成物。
 
 # Modification History
 | Version | Date | Author | Description |
@@ -7,12 +7,12 @@
 | 1.0.0 | 2026-08-20 | Codex | 新增 Anti-gravity 图像工具第一兜底适配器 |
 | 1.1.0 | 2026-08-20 | Codex | 增加 claim、OCR 无文字验收、超时窗口和原子回执 |
 | 1.2.0 | 2026-08-24 | Codex | 保留图像工具失败诊断，避免将配额等根因误报为无产物 |
+| 1.3.0 | 2026-09-27 | Codex | 备用生图改走已验证的 agy CLI，隔离 API 凭据并保留文件验收 |
 """
 
 from __future__ import annotations
 
 import argparse
-import asyncio
 import hashlib
 import json
 import shutil
@@ -30,6 +30,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from video_processing.ai_cover_queue import AICoverQueue, AICoverTask
+from video_processing.utils.subprocess_env import build_subprocess_env
 
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -168,10 +169,8 @@ def _diagnostic_text(chunks: list[object]) -> str:
     return " ".join(messages).strip()[:500]
 
 
-async def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> str:
-    from google.antigravity import Agent, CapabilitiesConfig, LocalAgentConfig
-    from google.antigravity.types import BuiltinTools
-
+def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> str:
+    """CLI 使用本机登录通道，不能重新落回 SDK 的 API Key 配额。"""
     brief = task.payload.get("visual_brief", {})
     direction = str(brief.get("visual_direction", "abstract technology"))
     keywords = ", ".join(str(item) for item in brief.get("visual_keywords", []))
@@ -181,26 +180,38 @@ async def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path)
         "Use abstract or original visual content only. Leave deliberate dark negative space in the "
         "upper-left title-safe area. Absolutely no text, letters, numbers, logos, watermark, UI, "
         "screenshot, video frame, thumbnail, or readable symbol. Do not create a title card. "
-        "Call the generate_image tool exactly once; if the tool reports an error, stop and report it."
+        "Call the generate_image tool exactly once; if the tool reports an error, stop and report it. "
+        "Save the actual generated bitmap as candidate.png in the current directory. "
+        "Do not synthesize placeholder images or inspect files outside this directory. "
+        "Return JSON with status, asset_path and visual_description."
     )
-    config = LocalAgentConfig(
-        system_instructions=(
-            "You are an automated cover-background worker. You must call generate_image for the "
-            "requested bitmap. Never use video frames or screenshots. Never claim success without "
-            "a generated image artifact."
-        ),
-        workspaces=[str(work_dir)],
-        save_dir=str(work_dir),
-        model=args.model,
-        capabilities=CapabilitiesConfig(
-            enabled_tools=[BuiltinTools.GENERATE_IMAGE, BuiltinTools.FINISH],
-            image_model=args.image_model,
-        ),
+    remaining = (task.fallback_after - _now()).total_seconds()
+    # 为尺寸、OCR 和原子回执留出时间；仍严格拒绝超过队列截止时间的图片。
+    timeout_seconds = min(args.timeout_seconds - 15, int(remaining) - 10)
+    if timeout_seconds <= 0:
+        raise RuntimeError("insufficient time for agy generation and visual validation")
+    env = build_subprocess_env(include_gemini=False, include_telegram=False)
+    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ADMIN_IDS"):
+        env.pop(key, None)
+    command = [
+        args.agy_bin, "--model", args.model, "--effort", "high",
+        "--mode", "accept-edits", "--sandbox", "--dangerously-skip-permissions",
+        "--add-dir", str(work_dir), "--output-format", "json",
+        "--print-timeout", f"{timeout_seconds}s", "--print", prompt,
+    ]
+    result = subprocess.run(
+        command, cwd=str(work_dir), capture_output=True, text=True,
+        timeout=timeout_seconds + 5, check=False, env=env,
     )
-    async with Agent(config) as agent:
-        response = await agent.chat(prompt)
-        chunks = [chunk async for chunk in response.chunks]
-    return _diagnostic_text(chunks)
+    try:
+        response = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        response = {}
+    diagnostic = str(response.get("response", "")) if isinstance(response, dict) else ""
+    status = str(response.get("status", "")).lower() if isinstance(response, dict) else ""
+    if result.returncode != 0 or status in {"error", "failed", "timeout", "cancelled"}:
+        raise RuntimeError(f"agy CLI failed: {(result.stderr or diagnostic or result.stdout)[-500:]}")
+    return diagnostic[-500:]
 
 
 def run(args: argparse.Namespace) -> int:
@@ -229,7 +240,7 @@ def run(args: argparse.Namespace) -> int:
     work_dir.mkdir(parents=True, exist_ok=False)
     started_at = time.time()
     try:
-        diagnostic = asyncio.run(_generate(args, task, work_dir))
+        diagnostic = _generate(args, task, work_dir)
         candidates = _candidate_images(work_dir, started_at)
         if not candidates:
             suffix = f": {diagnostic}" if diagnostic else ""
@@ -258,12 +269,14 @@ def run(args: argparse.Namespace) -> int:
                 "ocr_text": "",
                 "dimensions": {"width": width, "height": height},
                 "source_artifact": str(candidates[0]),
+                "transport": "agy_cli",
+                "model": args.model,
             },
         )
         claim_path.unlink(missing_ok=True)
         _write_json(
             attempt_path,
-            {"task_id": task.task_id, "provider": "antigravity", "status": "succeeded", "completed_at": _iso(completed_at)},
+            {"task_id": task.task_id, "provider": "antigravity", "transport": "agy_cli", "status": "succeeded", "completed_at": _iso(completed_at)},
         )
         return 0
     except Exception as exc:
@@ -280,7 +293,8 @@ def main() -> int:
     parser.add_argument("--queue-dir", required=True)
     parser.add_argument("--finish-dir", required=True)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--image-model", required=True)
+    parser.add_argument("--agy-bin", default="agy")
+    parser.add_argument("--timeout-seconds", type=int, default=90)
     args = parser.parse_args()
     return run(args)
 

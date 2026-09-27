@@ -162,18 +162,21 @@ def test_run_antigravity_injects_env_and_records_failure(tmp_path: Path, monkeyp
     now = datetime(2026, 7, 31, tzinfo=timezone.utc)
     task = _new_task(queue, tmp_path, now)
 
-    (tmp_path / "bin").mkdir()
-    py_path = tmp_path / "bin" / "python"
+    (tmp_path / ".venv" / "bin").mkdir(parents=True)
+    py_path = tmp_path / ".venv" / "bin" / "python"
     py_path.write_text("#!/bin/sh\nexit 1\n")
     py_path.chmod(0o755)
 
-    monkeypatch.setattr(reconciler.settings, "antigravity_runtime_dir", str(tmp_path))
+    monkeypatch.setattr(reconciler, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(reconciler.settings, "gemini_api_key", "test_gemini_key_123")
+    monkeypatch.setenv("GEMINI_API_KEY", "inherited_test_key")
+    monkeypatch.setenv("GOOGLE_API_KEY", "inherited_google_key")
 
     captured_kwargs = {}
 
     def fake_run(command, **kwargs):
         captured_kwargs.update(kwargs)
+        captured_kwargs["command"] = command
 
         class DummyResult:
             returncode = 1
@@ -186,7 +189,10 @@ def test_run_antigravity_injects_env_and_records_failure(tmp_path: Path, monkeyp
 
     reconciler._run_antigravity(task)
 
-    assert captured_kwargs["env"]["GEMINI_API_KEY"] == "test_gemini_key_123"
+    assert "GEMINI_API_KEY" not in captured_kwargs["env"]
+    assert "GOOGLE_API_KEY" not in captured_kwargs["env"]
+    assert "--agy-bin" in captured_kwargs["command"]
+    assert "--image-model" not in captured_kwargs["command"]
     assert "/opt/homebrew/bin" in captured_kwargs["env"]["PATH"]
     attempt_file = task.finish_dir / "antigravity_attempt.json"
     assert attempt_file.is_file()
@@ -205,5 +211,4 @@ def test_generated_images_symlink_resolves_to_real_path(tmp_path: Path):
     resolved = symlink_path.expanduser().resolve()
     assert resolved == real_target
     assert not resolved.is_symlink()
-
 

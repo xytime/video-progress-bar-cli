@@ -479,7 +479,7 @@ class Settings(BaseSettings):
     # Codex 底图在截止时间未完成时，先调用本机 Anti-gravity 图像工具；失败后才进入固定背景降级。
     enable_antigravity_cover_fallback: bool = True
     antigravity_runtime_dir: str = "~/.local/share/videopipeline-antigravity313"
-    antigravity_model: str = "gemini-3.5-flash"
+    antigravity_model: str = "gemini-3.7-flash-high"
     antigravity_image_model: str = "gemini-3.1-flash-image-preview"
     antigravity_timeout_seconds: int = 90
 

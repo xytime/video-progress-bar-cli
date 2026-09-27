@@ -189,7 +189,9 @@ flowchart LR
 ### 9.1 Anti-gravity 兜底接入（人工视觉验收）
 
 已验证本机 Antigravity 图形界面可以调用 `generate_image`，产物位于：
-`~/.gemini/antigravity/brain/<conversation_id>/`，通常是 JPG。当前 `agy --print` 只验证了 CLI 会话可启动，未验证它能在非交互模式稳定返回图像文件，因此不把它直接挂进三分钟定时器，避免“命令成功但队列没有底图”。
+`~/.gemini/antigravity/brain/<conversation_id>/`，通常是 JPG。
+
+2026-09-27 更新：`agy --print` 已实测生成并落盘 896×1200 无字图片。自动备用执行器现使用本机 CLI 登录通道，不再使用要求 Gemini API Key 的 SDK；后者曾因 API 生图免费层配额不足连续失败。CLI 仍须通过实际文件、尺寸、OCR、哈希及截止时间验收，详见 [CLI 示例和验证](agy_cli_demos.md)。32/34 分钟窗口及固定模板降级策略保持现状。
 
 当 Codex 底图不可用且任务尚未到 `generation_deadline_at` 时，人工在 Antigravity 中生成无文字底图并视觉确认后，用适配器接入：
 
@@ -202,7 +204,7 @@ flowchart LR
 
 适配器只接受人工明确确认的无文字、无 logo、无水印、非视频帧产物；将 JPG/PNG 转成队列要求的 `visual.png`，校验至少 `720x960`、生成时间不晚于 deadline，并原子写入 `result.json`。`reconcile_ai_cover_queue.py` 会继续走同一封面排版、provenance、数据库状态和发布门禁，`resolution.json.source` 记录为 `antigravity_ai_visual`。未通过人工验收、尺寸校验或 deadline 的文件不会写入完成物，随后仍由确定性 fallback 接管。
 
-这条路径是“外部图像生成器的人工确认兜底”，不是自动上传或绕过审核；若后续要全自动化，应先取得 Antigravity 官方稳定的图像生成 API/CLI 文件输出契约，再增加独立 provider adapter 和端到端影子任务验证。
+人工导入路径仍用于外部图片的明确视觉验收，不触发自动上传或绕过审核。自动备用执行器的证据由 `antigravity_attempt.json` 和 `result.json` 独立记录；配额或验收失败不能写成生图成功。
 
 上线前还必须补充运行监控：任务创建数、接受数、拒绝原因、超时降级数、协调器最近成功运行时间和最老 `AI_COVER_PENDING` 等待时长。告警应报告事实，不得把“进程存在”误报为“封面已完成”。
 

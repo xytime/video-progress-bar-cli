@@ -11,6 +11,7 @@
 | 1.4.0 | 2026-08-20 | Codex | 在 Codex deadline 与固定背景 deadline 之间自动调用 Anti-gravity 第一兜底 |
 | 1.5.0 | 2026-09-18 | Antigravity | 传递 GEMINI_API_KEY 与 PATH 环境变量，并在非零退出时兜底写回失败记录 |
 | 1.6.0 | 2026-09-18 | Antigravity | 接入统一子进程环境工厂 build_subprocess_env，统一管理子进程凭据与 PATH |
+| 1.7.0 | 2026-09-27 | Codex | 备用生图使用项目 venv 与 agy CLI，不再调用 API Key SDK |
 """
 
 from __future__ import annotations
@@ -81,7 +82,7 @@ def _write_antigravity_attempt(task: AICoverTask, status: str, error: str) -> No
 
 
 def _run_antigravity(task: AICoverTask) -> None:
-    runtime_python = Path(settings.antigravity_runtime_dir).expanduser() / "bin" / "python"
+    runtime_python = PROJECT_ROOT / ".venv" / "bin" / "python"
     if not runtime_python.is_file():
         _write_antigravity_attempt(task, "failed", f"runtime not found: {runtime_python}")
         return
@@ -96,10 +97,14 @@ def _run_antigravity(task: AICoverTask) -> None:
         str(PROJECT_ROOT / settings.ai_cover_finish_dir),
         "--model",
         settings.antigravity_model,
-        "--image-model",
-        settings.antigravity_image_model,
+        "--agy-bin",
+        settings.agy_command,
+        "--timeout-seconds",
+        str(settings.antigravity_timeout_seconds),
     ]
-    env = build_subprocess_env()
+    env = build_subprocess_env(include_gemini=False, include_telegram=False)
+    for key in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ADMIN_IDS"):
+        env.pop(key, None)
     try:
         result = subprocess.run(
             command,
