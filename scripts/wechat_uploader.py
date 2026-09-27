@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.11.4 | 2026-09-27 | Antigravity | Chromium 启动参数强制追加 localhost.weixin.qq.com 本地环回映射，防止透明代理与 TUN Fake IP 阻断桌面快捷登录通信。 |
 | 5.11.3 | 2026-09-26 | Codex | 授权检查覆盖整个登录期限，兼容分行文案并限制可信来源；诊断不输出授权 URL。 |
 | 5.11.2 | 2026-09-25 | Codex | 原生 ID 回查可先按标题缩小旧作品列表，终态仍只按原生 ID 与显式页面状态判定。 |
 | 5.11.1 | 2026-09-24 | Codex | 原生 ID 绑定使用提交前回读确认的清洗后短标题，保存标题变换证据；未知回读不绑定。 |
@@ -1582,6 +1583,7 @@ def run_uploader(
                 "--window-size=1280,800",
                 # [BugFix] 禁用代理，防止 Playwright 走海外节点导致微信异地登录强制掉线
                 "--no-proxy-server",
+                "--host-resolver-rules=MAP localhost.weixin.qq.com 127.0.0.1",
             ]
         )
 

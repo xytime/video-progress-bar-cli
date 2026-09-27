@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.0 | 2026-09-27 | Antigravity | 覆盖上下文置信度与按钮置信度差异化门禁。 |
+| 1.8.0 | 2026-09-26 | Codex | 覆盖离线授权文字、错误按钮、窗口变化、停止和多屏缩放边界。 |
 | 1.7.0 | 2026-09-26 | Codex | 桌面登录页不能视为就绪；未登录时不启动点击线程。 |
 | 1.6.0 | 2026-09-26 | Codex | 覆盖临时超时重试、停止后零点击及自动化失败不降级视觉。 |
 | 1.0.0 | 2026-08-25 | Codex | 覆盖无点击预检、受限成功信号和失败不抛异常的边界。 |
@@ -155,3 +157,100 @@ def test_watcher_never_starts_clicking_when_desktop_login_is_required():
     thread.assert_not_called()
     assert watcher.last_result == 'DESKTOP_LOGIN_REQUIRED'
     assert not watcher.clicked
+
+
+def _visual_fixture():
+    image = np.zeros((600, 600, 3), dtype=np.uint8)
+    image[340:401, 180:421] = (96, 193, 7)
+    observations = [
+        {'text': '视频号创作平台', 'confidence': 1, 'box': [0.25, 0.8, 0.5, 0.06]},
+        {'text': '申请使用', 'confidence': 1, 'box': [0.4, 0.7, 0.2, 0.06]},
+        {'text': '允许', 'confidence': 1, 'box': [0.45, 0.36, 0.1, 0.06]},
+    ]
+    return image, observations
+
+
+def test_visual_click_requires_real_authorization_words_and_allow_inside_button():
+    from scripts.wechat_desktop_auth import _verified_visual_allow_center
+    image, observations = _visual_fixture()
+    assert _verified_visual_allow_center(image, observations) == (300, 370)
+    assert _verified_visual_allow_center(image, []) is None
+    assert _verified_visual_allow_center(image, observations[1:]) is None
+    assert _verified_visual_allow_center(image, observations[:1] + observations[2:]) is None
+    observations[-1]['text'] = '发送'
+    assert _verified_visual_allow_center(image, observations) is None
+
+
+def test_visual_click_rejects_low_confidence_ambiguous_and_misplaced_allow():
+    from scripts.wechat_desktop_auth import _verified_visual_allow_center
+    image, observations = _visual_fixture()
+    observations[-1]['confidence'] = 0.5
+    assert _verified_visual_allow_center(image, observations) is None
+    observations[-1]['confidence'] = 1
+    assert _verified_visual_allow_center(image, observations + [observations[-1]]) is None
+    observations[-1]['box'] = [0.1, 0.1, 0.1, 0.06]
+    assert _verified_visual_allow_center(image, observations) is None
+
+
+def test_visual_click_rejects_blank_unreadable_or_malformed_capture():
+    from scripts.wechat_desktop_auth import _verified_visual_allow_center
+    image, observations = _visual_fixture()
+    assert _verified_visual_allow_center(None, observations) is None
+    assert _verified_visual_allow_center(image, None) is None
+    assert _verified_visual_allow_center(image, [{'unexpected': 'data'}]) is None
+    assert _verified_visual_allow_center(np.zeros_like(image), observations) is None
+
+
+def test_cancelled_visual_check_never_activates_or_captures_desktop():
+    from scripts.wechat_desktop_auth import _try_visual_allow_click
+    with patch('scripts.wechat_desktop_auth.subprocess.run') as run:
+        assert not _try_visual_allow_click(cancelled=lambda: True)
+    run.assert_not_called()
+
+
+def test_visual_check_revalidates_window_and_stop_before_click():
+    import json
+    import cv2
+    from scripts.wechat_desktop_auth import _try_visual_allow_click
+    image, observations = _visual_fixture()
+    window = {'id': 123, 'pid': 456, 'bounds': {'X': -600, 'Y': 100, 'Width': 300, 'Height': 300}}
+    for mode in ('moved', 'cancelled', 'valid'):
+        calls = []
+        stopped = [False]
+        window_reads = [0]
+        def native_run(args, **kwargs):
+            calls.append(args)
+            output = ''
+            if args[0] == 'screencapture':
+                assert args[:4] == ['screencapture', '-x', '-o', '-l']
+                cv2.imwrite(args[-1], image)
+            elif 'windows' == args[-1]:
+                window_reads[0] += 1
+                if window_reads[0] == 2:
+                    if mode == 'cancelled': stopped[0] = True
+                    if mode == 'moved': return MagicMock(returncode=0, stdout='[]')
+                output = json.dumps([window])
+            elif 'ocr' in args:
+                output = json.dumps(observations)
+            elif 'click' in args:
+                output = 'true'
+            elif args[:2] == ['osascript', '-e']:
+                if 'frontApps' in args[-1]: output = 'WeChat'
+            return MagicMock(returncode=0, stdout=output)
+        with patch('scripts.wechat_desktop_auth.subprocess.run', side_effect=native_run):
+            assert _try_visual_allow_click(cancelled=lambda: stopped[0]) is (mode == 'valid')
+        clicks = [c for c in calls if c[0] == 'osascript' and 'click' in c]
+        if mode == 'valid':
+            assert len(clicks) == 1
+            assert (json.loads(clicks[0][-1])['x'], json.loads(clicks[0][-1])['y']) == (-450, 285)  # 负坐标屏幕 + retina 缩放
+        else:
+            assert clicks == []
+
+
+def test_unsupported_ax_click_can_use_strict_visual_fallback():
+    watcher = WeChatDesktopAuthWatcher(timeout_seconds=1, enable_visual_fallback=True)
+    result = MagicMock(returncode=1, stdout='', stderr='System Events error (-25208)')
+    with patch('scripts.wechat_desktop_auth.subprocess.run', return_value=result), patch('scripts.wechat_desktop_auth._try_visual_allow_click', return_value=True) as visual:
+        watcher._poll()
+    visual.assert_called_once()
+    assert watcher.clicked and watcher.last_result == 'CLICKED_VISUAL'
