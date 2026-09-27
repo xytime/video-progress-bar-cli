@@ -1,0 +1,13 @@
+Captured 2026-09-27 Asia/Shanghai
+HEAD 3b784029031fb8319c2e55023019f836c89e5dc4
+## main...origin/main
+ M scripts/fetch_trending_keywords.py
+ M scripts/wechat_desktop_auth.py
+ M src/web/app.py
+ M src/web/static/css/dashboard.css
+ M src/web/templates/index.html
+ M tests/unit/test_wechat_desktop_auth.py
+?? docs/handoffs/
+?? scripts/wechat_auth_vision.js
+?? src/video_processing/topic_clues/
+?? tests/unit/test_topic_clues_hub.py

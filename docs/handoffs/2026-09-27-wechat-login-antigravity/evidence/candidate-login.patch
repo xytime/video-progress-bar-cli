@@ -1,0 +1,411 @@
+diff --git a/scripts/wechat_desktop_auth.py b/scripts/wechat_desktop_auth.py
+index cb07e39..41e9dab 100644
+--- a/scripts/wechat_desktop_auth.py
++++ b/scripts/wechat_desktop_auth.py
+@@ -8,6 +8,7 @@
+ # Modification History
+ | Version | Date | Author | Description |
+ | --- | --- | --- | --- |
++| 1.9.0 | 2026-09-26 | Codex | 视觉后备改为限定小窗口与离线文字验证；校验坐标、窗口身份及停止期限后才点击。 |
+ | 1.8.0 | 2026-09-26 | Codex | 只读识别桌面登录页，明确报告 DESKTOP_LOGIN_REQUIRED，阻止无效桌面授权监听。 |
+ | 1.7.0 | 2026-09-26 | Codex | 短暂辅助功能超时在截止前重试；停止后禁止视觉点击，保留明确诊断状态。 |
+ | 1.0.0 | 2026-08-25 | Codex | 新增受限 WeChat 桌面登录授权监听、无点击预检与超时退出。 |
+@@ -21,6 +22,7 @@
+ 
+ from __future__ import annotations
+ 
++import json
+ import logging
+ import re
+ import subprocess
+@@ -147,10 +149,6 @@ tell application "System Events"
+ end tell
+ '''
+ 
+-_DESKTOP_BOUNDS_SCRIPT = r'''
+-tell application "Finder" to get bounds of window of desktop
+-'''
+-
+ _ACTIVATE_WECHAT_SCRIPT = r'''
+ tell application "System Events"
+     tell process "WeChat" to set frontmost to true
+@@ -206,26 +204,6 @@ def _frontmost_process_name() -> str:
+     return (result.stdout or "").strip() if result.returncode == 0 else ""
+ 
+ 
+-def _logical_desktop_size() -> tuple[int, int] | None:
+-    """读取逻辑屏幕尺寸，用于把 retina 截图坐标换算为辅助功能坐标。"""
+-    try:
+-        result = subprocess.run(
+-            ["osascript", "-e", _DESKTOP_BOUNDS_SCRIPT],
+-            capture_output=True,
+-            text=True,
+-            timeout=3,
+-            check=False,
+-        )
+-    except (OSError, subprocess.TimeoutExpired):
+-        return None
+-    values = [int(value) for value in re.findall(r"-?\d+", result.stdout or "")]
+-    if result.returncode != 0 or len(values) != 4:
+-        return None
+-    left, top, right, bottom = values
+-    width, height = right - left, bottom - top
+-    return (width, height) if width > 0 and height > 0 else None
+-
+-
+ def _activate_wechat() -> bool:
+     """只将 WeChat 置前；后续仍须通过视觉候选门禁才会点击。"""
+     try:
+@@ -273,56 +251,104 @@ def _find_visual_allow_button(image) -> tuple[int, int] | None:
+     return (x + button_width // 2, y + button_height // 2)
+ 
+ 
+-def _try_visual_allow_click() -> bool:
+-    """置前 WeChat 后仅在唯一视觉候选存在时，执行一次全局“允许”点击。"""
+-    if not _activate_wechat():
++def _vision_command(*args: str, timeout: float = 3):
++    """系统离线识别适配器；不输出图片文字、账号或授权参数到日志。"""
++    try:
++        result = subprocess.run(
++            ["osascript", "-l", "JavaScript", str(Path(__file__).with_name("wechat_auth_vision.js")), *args],
++            capture_output=True, text=True, timeout=max(0.01, timeout), check=False,
++        )
++        return json.loads(result.stdout) if result.returncode == 0 else None
++    except (OSError, subprocess.TimeoutExpired, ValueError):
++        return None
++
++
++def _verified_visual_allow_center(image, observations) -> tuple[int, int] | None:
++    """同一窗口必须同时具备申请方、申请提示和绿色按钮内的精确“允许”。"""
++    if not isinstance(observations, list):
++        return None
++    center = _find_visual_allow_button(image)
++    if center is None:
++        return None
++    height, width = image.shape[:2]
++    lines = []
++    for item in observations:
++        try:
++            text = re.sub(r"\s+", "", item["text"])
++            x, y, w, h = item["box"]
++            if item["confidence"] < 0.85 or not (0 <= x < x+w <= 1 and 0 <= y < y+h <= 1):
++                continue
++            lines.append((text, (x*width, (1-y-h)*height, (x+w)*width, (1-y)*height)))
++        except (KeyError, TypeError, ValueError):
++            continue
++    combined = "".join(text for text, _ in lines)
++    if "视频号创作平台" not in combined or "申请使用" not in combined:
++        return None
++    allows = [box for text, box in lines if text == "允许"]
++    if len(allows) != 1:
++        return None
++    left, top, right, bottom = allows[0]
++    if not (left <= center[0] <= right and top <= center[1] <= bottom):
++        return None
++    return center
++
++
++def _try_visual_allow_click(*, cancelled=lambda: False, deadline: float | None = None) -> bool:
++    """只截取候选授权小窗口；离线 OCR 与颜色均通过后才允许受限点击。"""
++    deadline = deadline if deadline is not None else time.monotonic() + 10
++    def stopped():
++        return cancelled() or time.monotonic() >= deadline
++    def remaining():
++        return max(0.01, min(3, deadline - time.monotonic()))
++    if stopped() or not _activate_wechat() or stopped():
+         return False
+-    time.sleep(0.2)
+-    if _frontmost_process_name() != "WeChat":
++    windows = _vision_command("windows", timeout=remaining())
++    if not isinstance(windows, list) or not 1 <= len(windows) <= 3:
+         return False
+     try:
+         import cv2
+     except ImportError:
+         return False
++    candidates = []
+     with tempfile.TemporaryDirectory(prefix="wechat-desktop-auth-") as temp_dir:
+-        screenshot_path = Path(temp_dir) / "screen.png"
+-        try:
+-            capture = subprocess.run(
+-                ["screencapture", "-x", "-t", "png", str(screenshot_path)],
+-                capture_output=True,
+-                text=True,
+-                timeout=3,
+-                check=False,
+-            )
+-        except (OSError, subprocess.TimeoutExpired):
+-            return False
+-        if capture.returncode != 0:
+-            return False
+-        image = cv2.imread(str(screenshot_path))
+-        screenshot_size = image.shape[1::-1] if image is not None else None
+-        center = _find_visual_allow_button(image)
+-    desktop_size = _logical_desktop_size()
+-    if not center or not desktop_size or not screenshot_size:
++        for window in windows:
++            if stopped():
++                return False
++            try:
++                window_id = int(window["id"])
++                bounds = window["bounds"]
++                if window_id <= 0 or not (200 <= bounds["Width"] <= 700 and 120 <= bounds["Height"] <= 900):
++                    return False
++                screenshot = Path(temp_dir) / f"{window_id}.png"
++                capture = subprocess.run(
++                    ["screencapture", "-x", "-o", "-l", str(window_id), str(screenshot)],
++                    capture_output=True, text=True, timeout=remaining(), check=False,
++                )
++                if capture.returncode != 0 or stopped():
++                    return False
++                image = cv2.imread(str(screenshot))
++                observations = _vision_command("ocr", str(screenshot), timeout=remaining())
++                center = _verified_visual_allow_center(image, observations)
++                if center:
++                    height, width = image.shape[:2]
++                    point = (round(bounds["X"] + center[0]*bounds["Width"]/width),
++                             round(bounds["Y"] + center[1]*bounds["Height"]/height))
++                    candidates.append((window, point))
++            except (KeyError, TypeError, ValueError, OSError, subprocess.TimeoutExpired):
++                return False
++    if len(candidates) != 1 or stopped():
+         return False
+-    screenshot_x, screenshot_y = center
+-    screenshot_width, screenshot_height = screenshot_size
+-    logical_width, logical_height = desktop_size
+-    # 截图可能是 retina 像素；按比例换算而不是假设固定 2x 缩放。
+-    click_x = round(screenshot_x * logical_width / screenshot_width)
+-    click_y = round(screenshot_y * logical_height / screenshot_height)
+-    if _frontmost_process_name() != "WeChat":
++    window, (click_x, click_y) = candidates[0]
++    # OCR 期间窗口可能消失或移动；同一编号、进程与几何必须仍在可见白名单内。
++    current = _vision_command("windows", timeout=remaining())
++    if not isinstance(current, list) or window not in current or stopped():
+         return False
+-    try:
+-        result = subprocess.run(
+-            ["osascript", "-e", f'tell application "System Events" to click at {{{click_x}, {click_y}}}'],
+-            capture_output=True,
+-            text=True,
+-            timeout=3,
+-            check=False,
+-        )
+-    except (OSError, subprocess.TimeoutExpired):
++    if _frontmost_process_name() != "WeChat" or stopped():
+         return False
+-    return result.returncode == 0
++    target = {"window": window, "x": click_x, "y": click_y,
++              "expiresAt": (time.time() + max(0, deadline - time.monotonic())) * 1000}
++    return _vision_command("click", json.dumps(target), timeout=remaining()) is True
++
+ 
+ 
+ class WeChatDesktopAuthWatcher:
+@@ -373,10 +399,15 @@ class WeChatDesktopAuthWatcher:
+                     logger.info("WeChat desktop scoped login authorization clicked.")
+                     return
+                 if result.returncode != 0:
+-                    self.last_result = "AUTOMATION_FAILED"
+-                    logger.warning("WeChat desktop authorization automation failed.")
+-                    return
+-                self.last_result = "NO_SCOPED_AUTH_WINDOW"
++                    # Qt 自绘控件的 AXPress 不支持，可交给严格文字验证的原生点击；权限错误不能降级。
++                    if "-25208" in (result.stderr or ""):
++                        self.last_result = "AX_CLICK_UNSUPPORTED"
++                    else:
++                        self.last_result = "AUTOMATION_FAILED"
++                        logger.warning("WeChat desktop authorization automation failed.")
++                        return
++                else:
++                    self.last_result = "NO_SCOPED_AUTH_WINDOW"
+             except subprocess.TimeoutExpired:
+                 self.last_result = "AUTOMATION_TIMEOUT"
+                 # 短暂 AX 卡顿不代表整个授权流程失败，也不据此放宽到视觉点击。
+@@ -388,7 +419,9 @@ class WeChatDesktopAuthWatcher:
+                 return
+             if self._stop_event.is_set() or time.monotonic() >= deadline:
+                 return
+-            if self.enable_visual_fallback and _try_visual_allow_click():
++            if self.enable_visual_fallback and _try_visual_allow_click(
++                cancelled=self._stop_event.is_set, deadline=deadline,
++            ):
+                 self.clicked = True
+                 self.last_result = "CLICKED_VISUAL"
+                 logger.info("WeChat desktop visual authorization fallback clicked.")
+diff --git a/tests/unit/test_wechat_desktop_auth.py b/tests/unit/test_wechat_desktop_auth.py
+index 3568c19..b5ab29d 100644
+--- a/tests/unit/test_wechat_desktop_auth.py
++++ b/tests/unit/test_wechat_desktop_auth.py
+@@ -3,6 +3,7 @@
+ # Modification History
+ | Version | Date | Author | Description |
+ | --- | --- | --- | --- |
++| 1.8.0 | 2026-09-26 | Codex | 覆盖离线授权文字、错误按钮、窗口变化、停止和多屏缩放边界。 |
+ | 1.7.0 | 2026-09-26 | Codex | 桌面登录页不能视为就绪；未登录时不启动点击线程。 |
+ | 1.6.0 | 2026-09-26 | Codex | 覆盖临时超时重试、停止后零点击及自动化失败不降级视觉。 |
+ | 1.0.0 | 2026-08-25 | Codex | 覆盖无点击预检、受限成功信号和失败不抛异常的边界。 |
+@@ -155,3 +156,100 @@ def test_watcher_never_starts_clicking_when_desktop_login_is_required():
+     thread.assert_not_called()
+     assert watcher.last_result == 'DESKTOP_LOGIN_REQUIRED'
+     assert not watcher.clicked
++
++
++def _visual_fixture():
++    image = np.zeros((600, 600, 3), dtype=np.uint8)
++    image[340:401, 180:421] = (96, 193, 7)
++    observations = [
++        {'text': '视频号创作平台', 'confidence': 1, 'box': [0.25, 0.8, 0.5, 0.06]},
++        {'text': '申请使用', 'confidence': 1, 'box': [0.4, 0.7, 0.2, 0.06]},
++        {'text': '允许', 'confidence': 1, 'box': [0.45, 0.36, 0.1, 0.06]},
++    ]
++    return image, observations
++
++
++def test_visual_click_requires_real_authorization_words_and_allow_inside_button():
++    from scripts.wechat_desktop_auth import _verified_visual_allow_center
++    image, observations = _visual_fixture()
++    assert _verified_visual_allow_center(image, observations) == (300, 370)
++    assert _verified_visual_allow_center(image, []) is None
++    assert _verified_visual_allow_center(image, observations[1:]) is None
++    assert _verified_visual_allow_center(image, observations[:1] + observations[2:]) is None
++    observations[-1]['text'] = '发送'
++    assert _verified_visual_allow_center(image, observations) is None
++
++
++def test_visual_click_rejects_low_confidence_ambiguous_and_misplaced_allow():
++    from scripts.wechat_desktop_auth import _verified_visual_allow_center
++    image, observations = _visual_fixture()
++    observations[-1]['confidence'] = 0.5
++    assert _verified_visual_allow_center(image, observations) is None
++    observations[-1]['confidence'] = 1
++    assert _verified_visual_allow_center(image, observations + [observations[-1]]) is None
++    observations[-1]['box'] = [0.1, 0.1, 0.1, 0.06]
++    assert _verified_visual_allow_center(image, observations) is None
++
++
++def test_visual_click_rejects_blank_unreadable_or_malformed_capture():
++    from scripts.wechat_desktop_auth import _verified_visual_allow_center
++    image, observations = _visual_fixture()
++    assert _verified_visual_allow_center(None, observations) is None
++    assert _verified_visual_allow_center(image, None) is None
++    assert _verified_visual_allow_center(image, [{'unexpected': 'data'}]) is None
++    assert _verified_visual_allow_center(np.zeros_like(image), observations) is None
++
++
++def test_cancelled_visual_check_never_activates_or_captures_desktop():
++    from scripts.wechat_desktop_auth import _try_visual_allow_click
++    with patch('scripts.wechat_desktop_auth.subprocess.run') as run:
++        assert not _try_visual_allow_click(cancelled=lambda: True)
++    run.assert_not_called()
++
++
++def test_visual_check_revalidates_window_and_stop_before_click():
++    import json
++    import cv2
++    from scripts.wechat_desktop_auth import _try_visual_allow_click
++    image, observations = _visual_fixture()
++    window = {'id': 123, 'pid': 456, 'bounds': {'X': -600, 'Y': 100, 'Width': 300, 'Height': 300}}
++    for mode in ('moved', 'cancelled', 'valid'):
++        calls = []
++        stopped = [False]
++        window_reads = [0]
++        def native_run(args, **kwargs):
++            calls.append(args)
++            output = ''
++            if args[0] == 'screencapture':
++                assert args[:4] == ['screencapture', '-x', '-o', '-l']
++                cv2.imwrite(args[-1], image)
++            elif 'windows' == args[-1]:
++                window_reads[0] += 1
++                if window_reads[0] == 2:
++                    if mode == 'cancelled': stopped[0] = True
++                    if mode == 'moved': return MagicMock(returncode=0, stdout='[]')
++                output = json.dumps([window])
++            elif 'ocr' in args:
++                output = json.dumps(observations)
++            elif 'click' in args:
++                output = 'true'
++            elif args[:2] == ['osascript', '-e']:
++                if 'frontApps' in args[-1]: output = 'WeChat'
++            return MagicMock(returncode=0, stdout=output)
++        with patch('scripts.wechat_desktop_auth.subprocess.run', side_effect=native_run):
++            assert _try_visual_allow_click(cancelled=lambda: stopped[0]) is (mode == 'valid')
++        clicks = [c for c in calls if c[0] == 'osascript' and 'click' in c]
++        if mode == 'valid':
++            assert len(clicks) == 1
++            assert (json.loads(clicks[0][-1])['x'], json.loads(clicks[0][-1])['y']) == (-450, 285)  # 负坐标屏幕 + retina 缩放
++        else:
++            assert clicks == []
++
++
++def test_unsupported_ax_click_can_use_strict_visual_fallback():
++    watcher = WeChatDesktopAuthWatcher(timeout_seconds=1, enable_visual_fallback=True)
++    result = MagicMock(returncode=1, stdout='', stderr='System Events error (-25208)')
++    with patch('scripts.wechat_desktop_auth.subprocess.run', return_value=result), patch('scripts.wechat_desktop_auth._try_visual_allow_click', return_value=True) as visual:
++        watcher._poll()
++    visual.assert_called_once()
++    assert watcher.clicked and watcher.last_result == 'CLICKED_VISUAL'
+diff --git a/scripts/wechat_auth_vision.js b/scripts/wechat_auth_vision.js
+new file mode 100644
+index 0000000..be4a5eb
+--- /dev/null
++++ b/scripts/wechat_auth_vision.js
+@@ -0,0 +1,58 @@
++/* macOS 视频号授权离线识别适配器，无网络、无模型调用。
++ * 依赖：wechat_uploader -> wechat_desktop_auth -> 本文件 -> macOS 原生接口。
++ * Modification History
++ * | Version | Date | Author | Description |
++ * | --- | --- | --- | --- |
++ * | 1.0.0 | 2026-09-26 | Codex | 仅可见微信小型候选窗口与 Vision 离线 OCR。 |
++ */
++ObjC.import('Foundation');
++ObjC.import('AppKit');
++ObjC.import('CoreGraphics');
++ObjC.import('Vision');
++function authWindows() {
++        var all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1, 0)));
++        return all.filter(function(w) {
++            var b = w.kCGWindowBounds, title = w.kCGWindowName || '';
++            if (!w.kCGWindowIsOnscreen || w.kCGWindowLayer !== 0 || !b ||
++                b.Width < 200 || b.Width > 700 || b.Height < 120 || b.Height > 900) return false;
++            if (['WeChat', '微信'].indexOf(w.kCGWindowOwnerName) < 0) return false;
++            var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(w.kCGWindowOwnerPID);
++            if (!app || ObjC.unwrap(app.bundleIdentifier) !== 'com.tencent.xinWeChat') return false;
++            // 主聊天窗口和设置页不进入截图候选；不依赖单纯绿色按钮。
++            return title === '' || ['视频号创作平台', '微信登录', '授权登录'].indexOf(title) >= 0;
++        }).map(function(w) {
++            return {id: w.kCGWindowNumber, pid: w.kCGWindowOwnerPID, bounds: w.kCGWindowBounds};
++        });
++}
++function run(args) {
++    if (args[0] === 'windows') return JSON.stringify(authWindows());
++    if (args[0] === 'click' && args.length === 2) {
++        var target = JSON.parse(args[1]), b = target.window.bounds;
++        var front = $.NSWorkspace.sharedWorkspace.frontmostApplication;
++        if (!front || ObjC.unwrap(front.bundleIdentifier) !== 'com.tencent.xinWeChat') return 'false';
++        var present = authWindows().some(function(w) { return JSON.stringify(w) === JSON.stringify(target.window); });
++        if (!present || !Number.isFinite(target.x) || !Number.isFinite(target.y) ||
++            target.x < b.X || target.x >= b.X + b.Width || target.y < b.Y || target.y >= b.Y + b.Height ||
++            !Number.isFinite(target.expiresAt) || Date.now() >= target.expiresAt) return 'false';
++        var point = $.CGPointMake(target.x, target.y);
++        // Qt 自绘按钮可能拒绝 AXPress；仅已验证的授权窗口使用原生鼠标事件。
++        $.CGEventPost(0, $.CGEventCreateMouseEvent(null, 1, point, 0));
++        $.CGEventPost(0, $.CGEventCreateMouseEvent(null, 2, point, 0));
++        return 'true';
++    }
++    if (args[0] !== 'ocr' || args.length !== 2) throw Error('INVALID_ARGUMENTS');
++    var req = $.VNRecognizeTextRequest.alloc.init;
++    req.recognitionLevel = 0;
++    req.recognitionLanguages = $(['zh-Hans', 'en-US']);
++    req.usesLanguageCorrection = false;
++    var handler = $.VNImageRequestHandler.alloc.initWithURLOptions($.NSURL.fileURLWithPath(args[1]), $({}));
++    var error = Ref();
++    if (!handler.performRequestsError($([req]), error)) throw Error('OCR_FAILED');
++    var out = [];
++    for (var i = 0; i < req.results.count; i++) {
++        var ob = req.results.objectAtIndex(i), top = ob.topCandidates(1).objectAtIndex(0), b = ob.boundingBox;
++        out.push({text: ObjC.unwrap(top.string), confidence: top.confidence,
++                  box: [b.origin.x, b.origin.y, b.size.width, b.size.height]});
++    }
++    return JSON.stringify(out);
++}
