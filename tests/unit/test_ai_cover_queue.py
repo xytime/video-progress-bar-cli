@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-07-31 | Codex | 覆盖巡查前可领取任务判定，避免空队列执行外部生成器 |
 | 1.2.0 | 2026-08-03 | Codex | 覆盖已有底图优先复用和高消耗确认规则进入任务协议 |
 | 1.3.0 | 2026-08-20 | Codex | 覆盖 Anti-gravity 完成物来源验收 |
+| 1.5.0 | 2026-09-27 | Codex | 验证 AGY 首选立即执行、身份隔离、有限重试及无字硬闸 |
 | 1.4.0 | 2026-09-18 | Antigravity | 覆盖 Anti-gravity 兜底环境注入与非零退出记录 |
 """
 
@@ -22,7 +23,7 @@ from PIL import Image
 from src.video_processing.ai_cover_queue import AICoverQueue
 
 
-def _new_task(queue: AICoverQueue, tmp_path: Path, now: datetime):
+def _new_task(queue: AICoverQueue, tmp_path: Path, now: datetime, primary_provider="codex"):
     return queue.create_task(
         prefix="abcdefghijk",
         youtube_id="abcdefghijk",
@@ -36,6 +37,7 @@ def _new_task(queue: AICoverQueue, tmp_path: Path, now: datetime):
         generation_deadline_minutes=32,
         fallback_after_minutes=34,
         now=now,
+        primary_provider=primary_provider,
     )
 
 
@@ -212,3 +214,52 @@ def test_generated_images_symlink_resolves_to_real_path(tmp_path: Path):
     assert resolved == real_target
     assert not resolved.is_symlink()
 
+
+
+def test_agy_primary_starts_immediately_and_never_uses_template(tmp_path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    now = datetime(2026, 9, 27, tzinfo=timezone.utc)
+    legacy = _new_task(queue, tmp_path, now)
+    task = _new_task(queue, tmp_path, now, "agy")
+    assert legacy.task_id != task.task_id
+    assert queue.antigravity_due(task, now)
+    assert not queue.antigravity_due(legacy, now)
+    legacy.path.unlink()
+    assert not queue.has_eligible_task(now)
+    assert not queue.should_fallback(task, now + timedelta(hours=1))
+    assert not queue.antigravity_due(task, now + timedelta(minutes=32))
+    assert task.payload["rules"]["generate_text"] is False
+
+
+def test_agy_retry_is_bounded_and_respects_claim(tmp_path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    now = datetime(2026, 9, 27, tzinfo=timezone.utc)
+    task = _new_task(queue, tmp_path, now, "agy")
+    attempt = task.finish_dir / "antigravity_attempt.json"
+    attempt.write_text(json.dumps({"status": "failed", "attempt_number": 1}))
+    assert queue.antigravity_due(task, now)
+    claim = task.finish_dir / "claim.json"
+    claim.write_text(json.dumps({"task_id": task.task_id, "claim_expires_at": "2026-09-27T00:02:00Z"}))
+    assert not queue.antigravity_due(task, now)
+    claim.unlink()
+    attempt.write_text(json.dumps({"status": "failed", "attempt_number": 3}))
+    assert not queue.antigravity_due(task, now)
+
+
+def test_agy_primary_rejects_wrong_provider_text_and_late_result(tmp_path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    now = datetime(2026, 9, 27, tzinfo=timezone.utc)
+    task = _new_task(queue, tmp_path, now, "agy")
+    visual = task.finish_dir / "visual.png"
+    Image.new("RGB", (896, 1200), "#101522").save(visual)
+    result = dict(task_id=task.task_id, generated_by="antigravity_imagegen",
+                  completed_at="2026-09-27T00:01:00Z", visual_filename="visual.png",
+                  sha256=hashlib.sha256(visual.read_bytes()).hexdigest(), uses_video_frame=False,
+                  machine_visual_review="ocr_empty", ocr_text="")
+    path = task.finish_dir / "result.json"
+    path.write_text(json.dumps(result))
+    assert queue.accepted_visual(task) == visual
+    for changed in ({"generated_by": "codex_imagegen"}, {"ocr_text": "NEWS"},
+                    {"completed_at": "2026-09-27T00:32:00Z"}, {"sha256": "wrong"}):
+        path.write_text(json.dumps(dict(result, **changed)))
+        assert queue.accepted_visual(task) is None

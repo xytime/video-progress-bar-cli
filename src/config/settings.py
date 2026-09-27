@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.71.0 | 2026-09-27 | Codex | 常规封面首选 AGY CLI；无字验收失败挂起，保留旧队列兼容配置。 |
 | 3.70.0 | 2026-09-25 | Codex | TED/TEDx 自动评分托底增加入库 ID 边界，默认关闭以保护历史待处理视频。 |
 | 3.69.0 | 2026-09-23 | Codex | 已就绪成片全天可提交，旧发布窗口配置不再阻断入口。 |
 | 3.68.0 | 2026-09-22 | Codex | 独立 AGY 文案配置及 App 子进程最小环境，不传入 API/机器人凭据。 |
@@ -473,10 +474,11 @@ class Settings(BaseSettings):
     # 默认关闭；启用后会额外持久化 _cover_brief.json，缺失时不复用旧封面 checkpoint。
     enable_content_aware_cover: bool = False
 
-    # Codex 专属底图队列。任务单由项目写入目录，Codex 技能生成底图后写回完成目录；
-    # 本地协调器在超时前执行当前确定性封面渲染，绝不等待外部执行器无限期返回。
+    # 专属无字底图队列，保留旧开关名兼容部署。新任务首选 AGY CLI；
+    # 生成失败保留 AI_COVER_PENDING，不再静默使用固定底图。
     enable_codex_cover_queue: bool = False
-    # Codex 底图在截止时间未完成时，先调用本机 Anti-gravity 图像工具；失败后才进入固定背景降级。
+    ai_cover_primary_provider: Literal["agy", "codex"] = "agy"
+    # 仅旧 Codex 任务在截止时间后启用 AGY 备用；新 AGY 首选任务不受此开关影响。
     enable_antigravity_cover_fallback: bool = True
     antigravity_runtime_dir: str = "~/.local/share/videopipeline-antigravity313"
     antigravity_model: str = "gemini-3.7-flash-high"

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.63.0 | 2026-09-27 | Codex | 常规封面队列固化 AGY 首选与无文字底图要求。 |
 | 3.62.0 | 2026-09-26 | Antigravity | 安全访问 _trigger_source 属性以兼容单元测试实例化与非完整管线实例。 |
 | 3.61.0 | 2026-09-25 | Codex | 仅对启用边界后新入库的 TED/TEDx AUTO 视频应用演讲发布线托底，不释放历史低分候选。 |
 | 3.60.0 | 2026-09-24 | Codex | 将任务加工来源写入审计事件，避免把自动发现误认为自动投稿。 |
@@ -4534,11 +4535,12 @@ class PipelineManager:
                             content_aware=content_aware_cover_enabled,
                             generation_deadline_minutes=settings.ai_cover_generation_deadline_minutes,
                             fallback_after_minutes=settings.ai_cover_fallback_after_minutes,
+                            primary_provider=settings.ai_cover_primary_provider,
                         )
                         self.db.update_video_status(
                             yid,
                             "AI_COVER_PENDING",
-                            error_msg=f"等待 Codex 专属底图任务 {task.task_id}",
+                            error_msg=f"等待 {task.primary_provider.upper()} 无文字专属底图任务 {task.task_id}",
                             slice_index=slice_index,
                         )
                         logger.info("[%s] queued dedicated visual task %s", prefix, task.task_id)

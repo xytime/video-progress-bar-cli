@@ -12,6 +12,7 @@
 | 1.5.0 | 2026-09-18 | Antigravity | 传递 GEMINI_API_KEY 与 PATH 环境变量，并在非零退出时兜底写回失败记录 |
 | 1.6.0 | 2026-09-18 | Antigravity | 接入统一子进程环境工厂 build_subprocess_env，统一管理子进程凭据与 PATH |
 | 1.7.0 | 2026-09-27 | Codex | 备用生图使用项目 venv 与 agy CLI，不再调用 API Key SDK |
+| 1.8.0 | 2026-09-27 | Codex | AGY 首选即时生成，三次失败或超时挂起，禁止新任务固定底图降级 |
 """
 
 from __future__ import annotations
@@ -117,7 +118,7 @@ def _run_antigravity(task: AICoverTask) -> None:
         )
     except subprocess.TimeoutExpired:
         _write_antigravity_attempt(task, "failed", "Anti-gravity timeout")
-        logger.warning("[%s] Anti-gravity timed out; fixed-background fallback remains armed", task.task_id)
+        logger.warning("[%s] Anti-gravity timed out; keep task pending", task.task_id)
         return
     if result.returncode != 0:
         logger.warning(
@@ -141,6 +142,9 @@ def _render(
     visual_source: str | None = None,
 ) -> bool:
     db = db or PipelineDB()
+    if task.primary_provider == "agy" and visual_path is None:
+        logger.error("[%s] AGY primary forbids deterministic fallback", task.task_id)
+        return False
     youtube_id = str(task.payload["youtube_id"])
     slice_index = int(task.payload["slice_index"])
     video = db.get_video_by_youtube_id(youtube_id, slice_index=slice_index)
@@ -202,7 +206,7 @@ def _render(
         (target.parent / "ready_publications.wake").touch()
     except OSError as exc:
         logger.warning("发布唤醒标记写入失败，15 秒巡检继续兜底：%s", exc)
-    logger.info("[%s] cover resolved via %s", task.task_id, "Codex visual" if visual_path else "fallback")
+    logger.info("[%s] cover resolved via %s", task.task_id, visual_source or "fallback")
     return True
 
 
@@ -218,6 +222,8 @@ def reconcile() -> int:
             return 0
 
         try:
+            logger.info("[AI Cover] loaded primary=%s; new AGY tasks use no-text validation and fail closed",
+                        settings.ai_cover_primary_provider)
             queue = AICoverQueue(
                 PROJECT_ROOT / settings.ai_cover_queue_dir,
                 PROJECT_ROOT / settings.ai_cover_finish_dir,
@@ -230,14 +236,15 @@ def reconcile() -> int:
                 target = Path(str(task.payload["final_cover_path"]))
                 if _is_dedicated_cover(target):
                     continue
+                video = db.get_video_by_youtube_id(str(task.payload["youtube_id"]), slice_index=int(task.payload["slice_index"]))
+                if not video or video["status"] != _COVER_QUEUE_ACTIVE_STATUS:
+                    continue
                 visual = queue.accepted_visual(task)
                 generated_by = queue.accepted_source(task)
                 if (
                     visual is None
-                    and settings.enable_antigravity_cover_fallback
-                    and datetime.now(timezone.utc) >= task.generation_deadline
-                    and datetime.now(timezone.utc) < task.fallback_after
-                    and not (task.finish_dir / "antigravity_attempt.json").is_file()
+                    and (task.primary_provider == "agy" or settings.enable_antigravity_cover_fallback)
+                    and queue.antigravity_due(task)
                 ):
                     _run_antigravity(task)
                     visual = queue.accepted_visual(task)
@@ -247,6 +254,13 @@ def reconcile() -> int:
                     resolved += 1
                 elif visual is None and queue.should_fallback(task) and _render(task, None, db):
                     resolved += 1
+                elif visual is None and task.primary_provider == "agy" and not queue.antigravity_due(task):
+                    if not queue._has_fresh_claim(task, datetime.now(timezone.utc)):
+                        reason = f"AGY 无文字底图未通过验收，任务挂起：{task.task_id}（详见 antigravity_attempt.json）"
+                        if video.get("error_msg") != reason:
+                            db.update_ai_cover_wait_reason(str(task.payload["youtube_id"]), reason,
+                                                          slice_index=int(task.payload["slice_index"]))
+                        logger.warning("[%s] %s", task.task_id, reason)
             return resolved
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

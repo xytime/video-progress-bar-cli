@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.89.0 | 2026-09-27 | Codex | 封面挂起原因仅原子写入仍处于 AI_COVER_PENDING 的条目。 |
 | 3.88.0 | 2026-09-25 | Codex | 英语世界具名只读回查限用一次，并原子节流公开确认缺失提醒。 |
 | 3.87.0 | 2026-09-25 | Codex | 重评候选按上次抓取时间轮转；统计、评分与抓取时间原子保存。 |
 | 3.86.0 | 2026-09-25 | Codex | 自动加工与预加工候选排除 TED/TEDx 启用边界前主视频及其切片，不释放历史条目。 |
@@ -3357,6 +3358,17 @@ class PipelineDB:
             return dict(conn.execute(
                 "SELECT * FROM wechat_upload_retries WHERE evidence_path = ?", (evidence_path,),
             ).fetchone())
+
+    def update_ai_cover_wait_reason(self, youtube_id: str, reason: str, slice_index: int = 0) -> bool:
+        """只更新仍待封面的条目，不能把并发完成的发布状态改回待处理。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos SET error_msg = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ? AND status = 'AI_COVER_PENDING'",
+                (reason, youtube_id, slice_index),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
 
     def mark_ai_cover_resolved(self, youtube_id: str, slice_index: int = 0) -> bool:
         """AI 封面任务完成后，原子恢复待发布并标记此前已完成的成片为可提交。"""

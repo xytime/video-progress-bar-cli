@@ -8,6 +8,7 @@
 | 1.1.0 | 2026-08-20 | Codex | 增加 claim、OCR 无文字验收、超时窗口和原子回执 |
 | 1.2.0 | 2026-08-24 | Codex | 保留图像工具失败诊断，避免将配额等根因误报为无产物 |
 | 1.3.0 | 2026-09-27 | Codex | 备用生图改走已验证的 agy CLI，隔离 API 凭据并保留文件验收 |
+| 1.4.0 | 2026-09-27 | Codex | 支持立即执行的首选任务与有限重试，失败释放 claim，保留无字硬闸 |
 """
 
 from __future__ import annotations
@@ -180,12 +181,15 @@ def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> st
         "Use abstract or original visual content only. Leave deliberate dark negative space in the "
         "upper-left title-safe area. Absolutely no text, letters, numbers, logos, watermark, UI, "
         "screenshot, video frame, thumbnail, or readable symbol. Do not create a title card. "
+        "Avoid displays, signs, labels, charts, patterns resembling glyphs, and small decorative marks. "
+        "Prefer clean coherent forms and generous uncluttered space. "
         "Call the generate_image tool exactly once; if the tool reports an error, stop and report it. "
         "Save the actual generated bitmap as candidate.png in the current directory. "
         "Do not synthesize placeholder images or inspect files outside this directory. "
         "Return JSON with status, asset_path and visual_description."
     )
-    remaining = (task.fallback_after - _now()).total_seconds()
+    deadline = getattr(task, "antigravity_deadline", task.fallback_after)
+    remaining = (deadline - _now()).total_seconds()
     # 为尺寸、OCR 和原子回执留出时间；仍严格拒绝超过队列截止时间的图片。
     timeout_seconds = min(args.timeout_seconds - 15, int(remaining) - 10)
     if timeout_seconds <= 0:
@@ -222,18 +226,24 @@ def run(args: argparse.Namespace) -> int:
     if (task.finish_dir / "result.json").is_file() or (task.finish_dir / "resolution.json").is_file():
         return 0
     now = _now()
-    if now < task.generation_deadline:
+    if task.primary_provider == "codex" and now < task.generation_deadline:
         raise RuntimeError("Anti-gravity fallback is not due before generation deadline")
-    if now >= task.fallback_after:
+    if now >= task.antigravity_deadline:
         raise RuntimeError("Anti-gravity fallback window has closed")
 
     attempt_path = task.finish_dir / "antigravity_attempt.json"
-    if attempt_path.is_file():
+    if not queue.antigravity_due(task, now):
         return 0
     claim_path = _claim(task, now)
+    attempt_number = 1
+    if attempt_path.is_file():
+        previous = json.loads(attempt_path.read_text(encoding="utf-8"))
+        attempt_number = int(previous.get("attempt_number", 1)) + 1
+        _write_json(task.finish_dir / f"antigravity_attempt_{attempt_number - 1}.json", previous)
     _write_json(
         attempt_path,
-        {"task_id": task.task_id, "provider": "antigravity", "status": "running", "started_at": _iso(now)},
+        {"task_id": task.task_id, "provider": "antigravity", "attempt_number": attempt_number,
+         "status": "running", "started_at": _iso(now)},
     )
     # Antigravity 的 workspace 校验会拒绝隐藏目录；生成过程目录本身不参与队列验收。
     work_dir = task.finish_dir / f"antigravity-run-{time.time_ns()}"
@@ -252,7 +262,7 @@ def run(args: argparse.Namespace) -> int:
         if ocr_text:
             raise RuntimeError(f"OCR detected text: {ocr_text[:160]}")
         completed_at = _now()
-        if completed_at >= task.fallback_after:
+        if completed_at >= task.antigravity_deadline:
             raise RuntimeError("generated image arrived after Anti-gravity fallback window")
         visual = task.finish_dir / "visual.png"
         visual_tmp.replace(visual)
@@ -276,14 +286,17 @@ def run(args: argparse.Namespace) -> int:
         claim_path.unlink(missing_ok=True)
         _write_json(
             attempt_path,
-            {"task_id": task.task_id, "provider": "antigravity", "transport": "agy_cli", "status": "succeeded", "completed_at": _iso(completed_at)},
+            {"task_id": task.task_id, "provider": "antigravity", "attempt_number": attempt_number,
+             "transport": "agy_cli", "status": "succeeded", "completed_at": _iso(completed_at)},
         )
         return 0
     except Exception as exc:
         _write_json(
             attempt_path,
-            {"task_id": task.task_id, "provider": "antigravity", "status": "failed", "failed_at": _iso(_now()), "error": str(exc)[:500]},
+            {"task_id": task.task_id, "provider": "antigravity", "attempt_number": attempt_number,
+             "status": "failed", "failed_at": _iso(_now()), "error": str(exc)[:500]},
         )
+        claim_path.unlink(missing_ok=True)
         return 1
 
 

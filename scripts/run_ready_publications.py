@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-09-23 | Codex | 全天巡检已就绪成片，独立进程隔离与可回读心跳。 |
+| 1.1.0 | 2026-09-27 | Codex | 心跳记录加载的封面首选方案与队列开关，验证部署采用。 |
 """
 from __future__ import annotations
 
@@ -72,6 +73,8 @@ def main(argv=None) -> int:
         git_revision = "unknown"
     state = {"pid": os.getpid(), "stage": "IDLE", "current_video": None,
              "git_revision": git_revision,
+             "ai_cover_primary_provider": settings.ai_cover_primary_provider,
+             "ai_cover_queue_enabled": settings.enable_codex_cover_queue,
              "started_at": time.time(), "stage_started_at": time.time()}
     stopped = threading.Event()
     state_lock = threading.Lock()

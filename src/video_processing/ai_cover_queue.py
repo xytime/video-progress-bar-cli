@@ -8,6 +8,7 @@
 | 1.2.0 | 2026-08-03 | Codex | 任务协议写明已有底图优先复用与高消耗生成需确认的执行边界 |
 | 1.3.0 | 2026-08-20 | Codex | 接受经过人工视觉验收的 Anti-gravity 底图，并保留来源标识 |
 | 1.4.0 | 2026-08-20 | Codex | 接受 Anti-gravity 机器 OCR 无文字验收结果，保留人工验收优先级 |
+| 1.5.0 | 2026-09-27 | Codex | 固化 AGY 首选任务、有限重试及禁止固定底图降级 |
 """
 
 from __future__ import annotations
@@ -60,6 +61,14 @@ class AICoverTask:
     def fallback_after(self) -> datetime:
         return _parse_time(str(self.payload["fallback_after_at"]))
 
+    @property
+    def primary_provider(self) -> str:
+        return str(self.payload.get("primary_provider", "codex"))
+
+    @property
+    def antigravity_deadline(self) -> datetime:
+        return self.generation_deadline if self.primary_provider == "agy" else self.fallback_after
+
 
 class AICoverQueue:
     """文件系统任务队列；任务 Markdown 不可变，完成物仅可在 deadline 前被消费。"""
@@ -82,13 +91,19 @@ class AICoverQueue:
         content_aware: bool,
         generation_deadline_minutes: int,
         fallback_after_minutes: int,
+        primary_provider: str = "codex",
         now: Optional[datetime] = None,
     ) -> AICoverTask:
         if fallback_after_minutes <= generation_deadline_minutes:
             raise ValueError("fallback_after_minutes must be greater than generation_deadline_minutes")
+        if primary_provider not in {"codex", "agy"}:
+            raise ValueError("unsupported cover primary provider")
         created_at = now or _utc_now()
+        identity_payload = {"prefix": prefix, "cover_payload": cover_payload, "visual_brief": visual_brief}
+        if primary_provider == "agy":
+            identity_payload["primary_provider"] = primary_provider
         identity = json.dumps(
-            {"prefix": prefix, "cover_payload": cover_payload, "visual_brief": visual_brief},
+            identity_payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -101,11 +116,13 @@ class AICoverQueue:
 
         task_payload = {
             "schema_version": 1,
+            "primary_provider": primary_provider,
+            "maximum_generation_attempts": 3 if primary_provider == "agy" else 1,
             "task_id": task_id,
             "created_at": _iso(created_at),
             "generation_deadline_at": _iso(created_at + timedelta(minutes=generation_deadline_minutes)),
             "fallback_after_at": _iso(created_at + timedelta(minutes=fallback_after_minutes)),
-            "antigravity_deadline_at": _iso(created_at + timedelta(minutes=fallback_after_minutes)),
+            "antigravity_deadline_at": _iso(created_at + timedelta(minutes=generation_deadline_minutes if primary_provider == "agy" else fallback_after_minutes)),
             "prefix": prefix,
             "youtube_id": youtube_id,
             "slice_index": int(slice_index),
@@ -185,8 +202,10 @@ class AICoverQueue:
             return None
         if result.get("uses_video_frame") is not False:
             return None
+        if task.primary_provider == "agy" and generated_by != "antigravity_imagegen":
+            return None
         if generated_by == "antigravity_imagegen":
-            if completed_at >= task.fallback_after:
+            if completed_at >= task.antigravity_deadline:
                 return None
             human_reviewed = result.get("human_visual_review") == "reviewed_no_text"
             machine_reviewed = (
@@ -207,6 +226,8 @@ class AICoverQueue:
         """是否存在尚未完成、未超时且未被有效 claim 占用的任务。"""
         current_time = now or _utc_now()
         for task in self.list_tasks():
+            if task.primary_provider != "codex":
+                continue
             if (task.finish_dir / "result.json").is_file() or (task.finish_dir / "resolution.json").is_file():
                 continue
             if current_time >= task.generation_deadline:
@@ -217,7 +238,27 @@ class AICoverQueue:
         return False
 
     def should_fallback(self, task: AICoverTask, now: Optional[datetime] = None) -> bool:
-        return (now or _utc_now()) >= task.fallback_after
+        return task.primary_provider == "codex" and (now or _utc_now()) >= task.fallback_after
+
+    def antigravity_due(self, task: AICoverTask, now: Optional[datetime] = None) -> bool:
+        """首选立即执行，旧任务仍只在备用窗口执行；失败最多三次。"""
+        current = now or _utc_now()
+        if current >= task.antigravity_deadline or self._has_fresh_claim(task, current):
+            return False
+        if task.primary_provider == "codex" and current < task.generation_deadline:
+            return False
+        if (task.finish_dir / "result.json").exists() or (task.finish_dir / "resolution.json").exists():
+            return False
+        attempt_path = task.finish_dir / "antigravity_attempt.json"
+        if not attempt_path.exists():
+            return True
+        try:
+            attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+            count = int(attempt.get("attempt_number", 1))
+        except (OSError, ValueError, TypeError):
+            return False
+        return (task.primary_provider == "agy" and attempt.get("status") in {"failed", "running"}
+                and count < int(task.payload.get("maximum_generation_attempts", 3)))
 
     @staticmethod
     def _has_fresh_claim(task: AICoverTask, now: datetime) -> bool:
@@ -249,9 +290,10 @@ class AICoverQueue:
             f"<!-- {_TASK_MARKER}\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n{_TASK_MARKER} -->\n\n"
             f"# AI 封面底图任务：{payload['task_id']}\n\n"
             f"- 创建时间（UTC）：{payload['created_at']}\n"
-            f"- Codex 生成截止（UTC）：{payload['generation_deadline_at']}\n"
-            f"- 本地降级起点（UTC）：{payload['fallback_after_at']}\n"
-            f"- 最终封面由项目统一排版，Codex 只生成无文字底图。\n\n"
+            f"- 首选生成器：{payload.get('primary_provider', 'codex')}\n"
+            f"- 生成截止（UTC）：{payload['generation_deadline_at']}\n"
+            f"- 超时策略：{'挂起，不使用固定底图' if payload.get('primary_provider') == 'agy' else '保留旧任务降级策略'}\n"
+            f"- 最终封面由项目统一排版，生成器只生成无文字底图。\n\n"
             "## 视觉需求\n\n"
             f"- 视觉方向：{brief.get('visual_direction', '')}\n"
             f"- 关键词：{'、'.join(brief.get('visual_keywords', []))}\n"

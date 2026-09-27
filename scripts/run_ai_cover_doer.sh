@@ -124,7 +124,7 @@ if [[ ! -x "$CODEX_BIN" ]]; then
     exit 1
 fi
 
-PROMPT='执行 /ai-cover-doer 技能。仅处理 /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/ai-cover-queue 下当前可领取的任务。严格遵守技能的 claim、deadline、原子 result.json 和视觉验收规则；无任务时直接结束。绝不发布视频、编辑平台、写最终 JPEG、修改数据库或改写任务 Markdown。'
+PROMPT='执行 /ai-cover-doer 技能。仅处理 /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/ai-cover-queue 下当前可领取且 primary_provider=codex（旧任务无此字段也视为 codex）的任务。primary_provider=agy 的任务由项目 CLI 协调器专门执行，必须跳过。严格遵守技能的 claim、deadline、原子 result.json 和视觉验收规则；无任务时直接结束。绝不发布视频、编辑平台、写最终 JPEG、修改数据库或改写任务 Markdown。'
 
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '%s ai-cover-doer started\n' "$started_at"
