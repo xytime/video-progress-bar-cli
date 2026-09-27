@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.2.0 | 2026-09-09 | Codex | 覆盖队列和已发布列表的安全 YouTube 原视频链接。 |
+| 1.3.0 | 2026-09-27 | Antigravity | 覆盖 /last_login 帮助文案与 fmt_wechat_login_status 状态渲染。 |
 | 1.1.0 | 2026-08-20 | Codex | 覆盖 Highlight Job 的显式候选入口帮助文案 |
 | 1.0.0 | 2026-05-22 | Claude_Sonnet_4.6_Thinking_planning | TDD Red phase: 先写测试定义合约 |
 """
@@ -86,5 +87,44 @@ class TestFormatter:
         """帮助信息应包含所有核心命令"""
         from bot.formatter import fmt_help
         msg = fmt_help()
-        for cmd in ["/queue", "/published", "/delete", "/retry", "/highlight"]:
+        for cmd in ["/queue", "/published", "/delete", "/retry", "/highlight", "/last_login"]:
             assert cmd in msg
+
+    def test_format_wechat_login_status_valid(self):
+        """有效登录态渲染测试"""
+        from bot.formatter import fmt_wechat_login_status
+
+        info = {
+            "login_time_bj": "2026-09-27 13:21:31 BJ",
+            "relative_age": "2小时前",
+            "status_label": "✅ 有效",
+            "remaining_hours": 20.8,
+            "state_file_status": "✅ 已保存 (2.9 KB)",
+            "desktop_preflight": "✅ 就绪（免扫码桌面快捷授权）",
+            "suggestions": ["当前登录态正常，无需操作。"],
+        }
+        msg = fmt_wechat_login_status(info)
+        assert "微信视频号登录态状态" in msg
+        assert "2026-09-27 13:21:31 BJ" in msg
+        assert "✅ 有效（2小时前）" in msg
+        assert "约 20.8 小时" in msg
+        assert "已保存 (2.9 KB)" in msg
+        assert "免扫码桌面快捷授权" in msg
+
+    def test_format_wechat_login_status_expired(self):
+        """过期登录态渲染测试"""
+        from bot.formatter import fmt_wechat_login_status
+
+        info = {
+            "login_time_bj": "2026-09-25 10:00:00 BJ",
+            "relative_age": "2天前",
+            "status_label": "❌ 已过期",
+            "remaining_hours": 0.0,
+            "state_file_status": "✅ 已保存",
+            "desktop_preflight": "⚠️ 不可用 (NO_PROCESS)",
+            "suggestions": ["请发送 /wechat_login 重新登录。"],
+        }
+        msg = fmt_wechat_login_status(info)
+        assert "❌ 已过期" in msg
+        assert "请发送 /wechat_login 重新登录。" in msg
+

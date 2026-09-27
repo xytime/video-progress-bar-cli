@@ -21,6 +21,7 @@
 | 1.9.0 | 2026-09-09 | Codex | 新增 /last 的移动端发布账本卡片、时区展示和 HTML 安全链接格式化。 |
 | 1.9.1 | 2026-09-09 | Codex | 限制 /last 异常历史 ID 的显示长度，确保单卡可由 Telegram 投递。 |
 | 1.9.2 | 2026-09-09 | Codex | /last 的平台确认和原片发布时间均直接标注 BJ 时区。 |
+| 1.10.0 | 2026-09-27 | Antigravity | 新增 fmt_wechat_login_status 格式化输出微信登录态更新时间、有效性与建议操作。 |
 """
 from __future__ import annotations
 from datetime import datetime, timezone
@@ -294,6 +295,7 @@ def fmt_help() -> str:
         "♻️ `/retry <ID> [slice_index]` — 重试失败的视频或分集任务\n"
         "♻️ `/retry <小时数>` — 批量重试最近 N 小时失败/需登录任务，如 `/retry 24`\n"
         "🔐 `/wechat_login` — 推送视频号扫码登录二维码\n"
+        "🕒 `/last_login` — 查询微信视频号登录态更新时间与有效期（支持 `/last-login`）\n"
         "🚀 `/process <ID>` — 立即处理指定视频（忽略分数阈值，单条发布）\n"
         "🏃 `/run` — 立即触发一次全量管线\n"
         "📊 `/stats` — 查看系统统计数据\n"
@@ -469,3 +471,32 @@ def _relative_age(updated_at: str | None) -> str:
         return f"{hours}h前"
     days = hours // 24
     return f"{days}d前"
+
+
+def fmt_wechat_login_status(info: dict) -> str:
+    """渲染微信登录态更新时间与状态报告 (HTML 格式)。"""
+    login_time_str = info.get("login_time_bj", "未知")
+    relative_age = info.get("relative_age", "未知")
+    status_label = info.get("status_label", "未知")
+    state_file_status = info.get("state_file_status", "未生成")
+    desktop_preflight = info.get("desktop_preflight", "未知")
+    remaining_hours = info.get("remaining_hours")
+
+    lines = [
+        "🔐 <b>微信视频号登录态状态</b>\n",
+        f"• <b>更新时间</b>：<code>{html.escape(login_time_str)}</code>",
+        f"• <b>状态评定</b>：{status_label}（{relative_age}）",
+    ]
+    if remaining_hours is not None:
+        lines.append(f"• <b>有效剩余</b>：约 {remaining_hours:.1f} 小时")
+    lines.extend([
+        f"• <b>会话凭证</b>：{state_file_status}",
+        f"• <b>桌面快捷</b>：{desktop_preflight}",
+    ])
+
+    suggestions = info.get("suggestions", [])
+    if suggestions:
+        lines.append("\n💡 <b>建议操作</b>：")
+        for s in suggestions:
+            lines.append(f"• {s}")
+    return "\n".join(lines)

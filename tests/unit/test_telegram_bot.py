@@ -14,6 +14,7 @@
 | 1.8.0 | 2026-08-29 | Codex | 覆盖 lease jobs 菜单、候选选择、二次确认和两小时单任务授权。 |
 | 1.9.0 | 2026-08-29 | Codex | 覆盖未消费 lease 撤销按钮、管理员撤销回调和分层启动回执。 |
 | 1.10.0 | 2026-09-09 | Codex | Highlight 源视频列表保留安全可点击的 YouTube 原视频链接。 |
+| 1.11.0 | 2026-09-27 | Antigravity | 覆盖 /last_login 命令菜单可见性与状态查询回复格式。 |
 """
 import logging
 import re
@@ -251,6 +252,36 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
 
     def test_bot_command_menu_includes_lease_jobs(self):
         self.assertIn("lease_jobs", [command.command for command in _BOT_COMMANDS])
+
+    def test_bot_command_menu_includes_last_login(self):
+        self.assertIn("last_login", [command.command for command in _BOT_COMMANDS])
+
+    async def test_cmd_last_login_renders_status(self):
+        from bot.telegram_bot import cmd_last_login
+
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.reply_text = AsyncMock()
+
+        mock_info = {
+            "login_time_bj": "2026-09-27 13:21:31 BJ",
+            "relative_age": "2小时前",
+            "status_label": "✅ 有效",
+            "remaining_hours": 20.8,
+            "state_file_status": "✅ 已保存 (2.9 KB)",
+            "desktop_preflight": "✅ 就绪（免扫码桌面快捷授权）",
+            "suggestions": ["当前登录态正常，无需操作。"],
+        }
+        with patch("bot.telegram_bot._check_admin", return_value=True), \
+             patch("bot.telegram_bot._get_wechat_login_info", return_value=mock_info):
+            await cmd_last_login(update, MagicMock())
+
+        update.message.reply_text.assert_awaited_once()
+        _, kwargs = update.message.reply_text.call_args
+        self.assertEqual(kwargs["parse_mode"], "HTML")
+        self.assertIn("微信视频号登录态状态", update.message.reply_text.call_args[0][0])
+        self.assertIn("2026-09-27 13:21:31 BJ", update.message.reply_text.call_args[0][0])
+        self.assertIn("免扫码桌面快捷授权", update.message.reply_text.call_args[0][0])
 
     @patch("bot.telegram_bot._api")
     async def test_lease_jobs_shows_safe_candidate_list(self, mock_api_client):

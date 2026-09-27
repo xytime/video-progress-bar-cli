@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.12.0 | 2026-09-27 | Antigravity | 登录态保存（快捷/扫码/交互）后自动投递 Telegram 回报通知，记录授权方式与更新时间。 |
 | 5.11.4 | 2026-09-27 | Antigravity | Chromium 启动参数强制追加 localhost.weixin.qq.com 本地环回映射，防止透明代理与 TUN Fake IP 阻断桌面快捷登录通信。 |
 | 5.11.3 | 2026-09-26 | Codex | 授权检查覆盖整个登录期限，兼容分行文案并限制可信来源；诊断不输出授权 URL。 |
 | 5.11.2 | 2026-09-25 | Codex | 原生 ID 回查可先按标题缩小旧作品列表，终态仍只按原生 ID 与显式页面状态判定。 |
@@ -1353,8 +1354,48 @@ def classify_publish_result(redirected: bool, page_content: str, draft: bool = F
     return any(k in content for k in positives)
 
 
-def _wait_and_save_login(page, context, state_file: Path, qr_path: Path | None = None) -> None:
-    """等待登录回到发布页，保存 Playwright state 和登录成功时间戳。"""
+def _notify_wechat_login_success(method: str, state_file: Path) -> None:
+    """登录/续约成功后通过 Telegram 发送通知回执，绝不包含 token 或 cookie 敏感信息。"""
+    try:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from video_processing.telegram_delivery import send_text
+
+        method_labels = {
+            "desktop_quick": "桌面快捷授权（免扫码）",
+            "scan_qr": "手机扫码登录",
+            "interactive": "浏览器交互登录",
+            "auto": "自动续约",
+        }
+        method_desc = method_labels.get(method, method)
+        bj_time = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
+
+        text = (
+            "<b>✅ 微信视频号登录态已更新</b>\n\n"
+            f"<b>授权方式</b>: {method_desc}\n"
+            f"<b>更新时间</b>: {bj_time} BJ\n"
+            f"<b>会话文件</b>: <code>{state_file.name}</code>\n"
+            "<b>状态说明</b>: 登录态已成功保存，受阻任务与发布通道已恢复。"
+        )
+        send_text(
+            event_type="WECHAT_LOGIN_RENEWED",
+            priority="NORMAL",
+            text=text,
+            cooldown_seconds=30,
+        )
+        logger.info("Telegram notification sent for WeChat login renewal (%s).", method)
+    except Exception as exc:
+        logger.warning("Failed to send WeChat login renewal notification: %s", type(exc).__name__)
+
+
+def _wait_and_save_login(
+    page,
+    context,
+    state_file: Path,
+    qr_path: Path | None = None,
+    method: str = "auto",
+) -> None:
+    """等待登录回到发布页，保存 Playwright state、写入时间戳并发送 Telegram 回报。"""
     page.wait_for_url("**/post/create", timeout=600000)
     logger.info("Login detected. Saving session...")
     context.storage_state(path=str(state_file))
@@ -1365,6 +1406,7 @@ def _wait_and_save_login(page, context, state_file: Path, qr_path: Path | None =
             qr_path.unlink()
         except Exception:
             pass
+    _notify_wechat_login_success(method=method, state_file=state_file)
 
 
 def _trusted_wechat_login_frame(frame) -> bool:
@@ -1711,7 +1753,7 @@ def run_uploader(
                     desktop_auth=desktop_auth,
                     timeout_ms=settings.wechat_desktop_quick_login_timeout_seconds * 1000,
                 ):
-                    _wait_and_save_login(page, context, state_file, qr_path)
+                    _wait_and_save_login(page, context, state_file, qr_path, method="desktop_quick")
                     login_completed = True
 
             if not login_completed and fail_fast_login and not login_only:
@@ -1720,7 +1762,7 @@ def run_uploader(
                 return 2  # LOGIN_REQUIRED，交由管线回写状态并告警
 
             if not login_completed and not desktop_quick_attempted and _try_wechat_quick_login(page):
-                _wait_and_save_login(page, context, state_file, qr_path)
+                _wait_and_save_login(page, context, state_file, qr_path, method="desktop_quick")
                 login_completed = True
             elif not login_completed:
                 _capture_wechat_login_qr(page, qr_path)
@@ -1761,17 +1803,7 @@ def run_uploader(
                 # [Gemini_2.0_Flash_fast] 无论是否配置 TG，在 headless 模式下均挂起等待扫码（120秒内由 Web UI 扫码完成登录）
                 logger.info("Waiting for WeChat login authorization (Web UI / Telegram / App)...")
                 try:
-                    _wait_and_save_login(page, context, state_file, qr_path)
-                        
-                    if tg_token and tg_chat_id and _requests:
-                        try:
-                            _requests.post(
-                                f"https://api.telegram.org/bot{tg_token}/sendMessage",
-                                json={"chat_id": tg_chat_id, "text": "✅ 微信视频号登录成功，继续上传任务..."},
-                                timeout=10,
-                            )
-                        except Exception:
-                            pass
+                    _wait_and_save_login(page, context, state_file, qr_path, method="scan_qr")
                 except Exception as e:
                     logger.error(f"Headless WeChat login wait timed out or failed: {e}")
                     if qr_path.exists():
@@ -1786,7 +1818,7 @@ def run_uploader(
                 logger.info("请在弹出的浏览器窗口中完成微信快捷授权或扫码登录。")
                 logger.info("=" * 50)
                 try:
-                    _wait_and_save_login(page, context, state_file, qr_path)
+                    _wait_and_save_login(page, context, state_file, qr_path, method="interactive")
                 except Exception as e:
                     logger.error(f"Login wait timed out or failed: {e}")
                     if qr_path.exists():

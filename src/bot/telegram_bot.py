@@ -44,6 +44,7 @@
 | 1.25.1  | 2026-09-09 | Codex                               | /getvideo 与 Highlight 来源信息补充安全的可点击 YouTube 原视频链接。 |
 | 1.26.0  | 2026-09-09 | Codex                               | 新增 /last 平台确认发布历史命令，支持范围参数、卡片分包和安全 YouTube 链接。 |
 | 1.26.1  | 2026-09-09 | Codex                               | /last 在解析前限制位置范围，拒绝超长数字和 SQLite 不可表示的偏移。 |
+| 1.27.0  | 2026-09-27 | Antigravity                         | 新增 /last_login 与 /last-login 命令，支持手机端快速查询视频号登录态更新时间与有效剩余。 |
 """
 from __future__ import annotations
 
@@ -110,9 +111,9 @@ _COMMAND_KEYBOARD = ReplyKeyboardMarkup(
     [
         ["/status", "/queue"],
         ["/run", "/wechat_login"],
-        ["/lease_jobs", "/last"],
-        ["/published", "/highlight"],
-        ["/english_world"],
+        ["/last_login", "/last"],
+        ["/lease_jobs", "/published"],
+        ["/highlight", "/english_world"],
         ["/help"],
     ],
     resize_keyboard=True,
@@ -124,6 +125,7 @@ _BOT_COMMANDS = [
     BotCommand("queue", "查看当前队列"),
     BotCommand("run", "触发一次管线"),
     BotCommand("wechat_login", "推送微信扫码登录"),
+    BotCommand("last_login", "查询微信登录态更新时间与状态"),
     BotCommand("lease_jobs", "单任务发布授权（2小时）"),
     BotCommand("published", "最近本地发布记录"),
     BotCommand("last", "最近平台确认发布"),
@@ -946,6 +948,107 @@ async def cmd_wechat_login(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
         await notice.edit_text(fmt.fmt_error(result.get("error", "启动微信登录失败")), parse_mode="Markdown")
 
 
+def _get_wechat_login_info() -> dict:
+    """获取当前微信登录时间戳、会话文件与桌面环境状态（只读，无外部网络依赖）。"""
+    from datetime import datetime
+    import time
+    from zoneinfo import ZoneInfo
+
+    prj_root = Path(__file__).parent.parent.parent
+    login_at_path = prj_root / "output" / "wechat_login_at.txt"
+    state_path = prj_root / "output" / "wechat_state.json"
+    qr_path = prj_root / "output" / "login_qr.png"
+
+    info: dict = {}
+    bj_tz = ZoneInfo("Asia/Shanghai")
+    now_ts = time.time()
+
+    login_ts = None
+    if login_at_path.exists():
+        try:
+            login_ts = int(login_at_path.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            login_ts = None
+
+    if login_ts is not None:
+        dt = datetime.fromtimestamp(login_ts, tz=bj_tz)
+        info["login_time_bj"] = dt.strftime("%Y-%m-%d %H:%M:%S") + " BJ"
+        age_seconds = max(0.0, now_ts - login_ts)
+        age_hours = age_seconds / 3600.0
+
+        if age_seconds < 60:
+            info["relative_age"] = f"{int(age_seconds)}秒前"
+        elif age_seconds < 3600:
+            info["relative_age"] = f"{int(age_seconds // 60)}分钟前"
+        elif age_hours < 48:
+            info["relative_age"] = f"{int(age_hours)}小时前"
+        else:
+            info["relative_age"] = f"{int(age_hours // 24)}天前"
+
+        max_valid_hours = 23.0
+        remaining_hours = max_valid_hours - age_hours
+        if remaining_hours > 3.0:
+            info["status_label"] = "✅ 有效"
+            info["remaining_hours"] = remaining_hours
+            suggestions = ["当前登录态正常，无需操作。"]
+        elif remaining_hours > 0:
+            info["status_label"] = "⚠️ 即将到期"
+            info["remaining_hours"] = remaining_hours
+            suggestions = ["登录态将在 3 小时内到期，建议发送 /wechat_login 提前续期。"]
+        else:
+            info["status_label"] = "❌ 已过期"
+            info["remaining_hours"] = 0.0
+            suggestions = ["登录态已超过 23 小时有效期，请发送 /wechat_login 重新登录。"]
+    else:
+        info["login_time_bj"] = "未找到登录记录"
+        info["relative_age"] = "无记录"
+        info["status_label"] = "❌ 未登录"
+        info["remaining_hours"] = None
+        suggestions = ["尚未检测到有效登录记录，请发送 /wechat_login 启动登录。"]
+
+    if state_path.exists():
+        try:
+            size_kb = state_path.stat().st_size / 1024.0
+            info["state_file_status"] = f"✅ 已保存 ({size_kb:.1f} KB)"
+        except OSError:
+            info["state_file_status"] = "✅ 已保存"
+    else:
+        info["state_file_status"] = "❌ 未生成"
+        if "未登录" not in info["status_label"]:
+            info["status_label"] = "⚠️ 状态文件缺失"
+            suggestions.append("会话文件缺失，建议发送 /wechat_login 重新保存。")
+
+    try:
+        from scripts.wechat_desktop_auth import desktop_auth_preflight
+        preflight = desktop_auth_preflight()
+        if preflight.ready:
+            info["desktop_preflight"] = "✅ 就绪（免扫码桌面快捷授权）"
+        else:
+            info["desktop_preflight"] = f"⚠️ 不可用 ({preflight.code}，需手机扫码)"
+    except Exception as exc:
+        info["desktop_preflight"] = f"❓ 预检异常 ({type(exc).__name__})"
+
+    if qr_path.exists():
+        suggestions.insert(0, "当前有待扫描的登录二维码，可在手机微信中确认。")
+
+    info["suggestions"] = suggestions
+    return info
+
+
+async def cmd_last_login(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/last_login 或 /last-login — 查询微信视频号登录态更新时间与状态。"""
+    if not _check_admin(update):
+        return
+    try:
+        info = await asyncio.to_thread(_get_wechat_login_info)
+        text = fmt.fmt_wechat_login_status(info)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("cmd_last_login failed")
+        await update.message.reply_text(fmt.fmt_error(f"查询登录态失败：{e}"), parse_mode="Markdown")  # type: ignore
+        return
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=_COMMAND_KEYBOARD)  # type: ignore
+
+
 async def cmd_published(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _check_admin(update):
         return
@@ -1630,6 +1733,8 @@ def main() -> None:
     app.add_handler(CommandHandler("queue", cmd_queue))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("wechat_login", cmd_wechat_login))
+    app.add_handler(CommandHandler("last_login", cmd_last_login))
+    app.add_handler(MessageHandler(filters.Regex(r"^/last[-_]login(?:\s|$)"), cmd_last_login))
     app.add_handler(CommandHandler("lease_jobs", cmd_lease_jobs))
     app.add_handler(CommandHandler("published", cmd_published))
     app.add_handler(CommandHandler("last", cmd_last))
