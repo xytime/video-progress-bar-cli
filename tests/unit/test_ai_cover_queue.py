@@ -187,7 +187,7 @@ def test_run_antigravity_injects_env_and_records_failure(tmp_path: Path, monkeyp
 
         return DummyResult()
 
-    monkeypatch.setattr(reconciler.subprocess, "run", fake_run)
+    monkeypatch.setattr(reconciler, "run_process", fake_run)
 
     reconciler._run_antigravity(task)
 
@@ -216,7 +216,7 @@ def test_generated_images_symlink_resolves_to_real_path(tmp_path: Path):
 
 
 
-def test_agy_primary_starts_immediately_and_never_uses_template(tmp_path):
+def test_agy_primary_starts_immediately_and_falls_back_at_deadline(tmp_path):
     queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
     now = datetime(2026, 9, 27, tzinfo=timezone.utc)
     legacy = _new_task(queue, tmp_path, now)
@@ -226,9 +226,9 @@ def test_agy_primary_starts_immediately_and_never_uses_template(tmp_path):
     assert not queue.antigravity_due(legacy, now)
     legacy.path.unlink()
     assert not queue.has_eligible_task(now)
-    assert not queue.should_fallback(task, now + timedelta(hours=1))
+    assert queue.should_fallback(task, now + timedelta(hours=1))
     assert not queue.antigravity_due(task, now + timedelta(minutes=32))
-    assert task.payload["rules"]["generate_text"] is False
+    assert task.payload["rules"]["ocr_zero_required"] is False
 
 
 def test_agy_retry_is_bounded_and_respects_claim(tmp_path):
@@ -255,11 +255,12 @@ def test_agy_primary_rejects_wrong_provider_text_and_late_result(tmp_path):
     result = dict(task_id=task.task_id, generated_by="antigravity_imagegen",
                   completed_at="2026-09-27T00:01:00Z", visual_filename="visual.png",
                   sha256=hashlib.sha256(visual.read_bytes()).hexdigest(), uses_video_frame=False,
-                  machine_visual_review="ocr_empty", ocr_text="")
+                  machine_visual_review="agy-cover-quality-v1", ocr_text="NEWS")
+    result["quality_review"] = dict(version="agy-cover-quality-v1", provider="agy_cli", task_id=task.task_id, sha256=result["sha256"], review=dict(decision="PASS", image_inspected=True, subject_relevant=True, composition_complete=True, adequate_detail=True, no_severe_artifacts=True, observed_content="gold and bonds", reason="usable"))
     path = task.finish_dir / "result.json"
     path.write_text(json.dumps(result))
     assert queue.accepted_visual(task) == visual
-    for changed in ({"generated_by": "codex_imagegen"}, {"ocr_text": "NEWS"},
+    for changed in ({"generated_by": "codex_imagegen"}, {"quality_review": {}},
                     {"completed_at": "2026-09-27T00:32:00Z"}, {"sha256": "wrong"}):
         path.write_text(json.dumps(dict(result, **changed)))
         assert queue.accepted_visual(task) is None

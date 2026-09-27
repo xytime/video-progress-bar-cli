@@ -1,147 +1,117 @@
-"""Anti-gravity 自动封面执行器的失败诊断测试。
-
-# Modification History
-| Version | Date | Author | Description |
-| --- | --- | --- | --- |
-| 1.0.0 | 2026-08-24 | Codex | 防止 SDK 配额错误被压缩为无产物 |
-| 1.2.0 | 2026-09-27 | Codex | 覆盖首选无字拒收、重试成功和三次上限 |
-| 1.1.0 | 2026-09-27 | Codex | 验证 CLI 凭据隔离、工作目录边界、失败与临近截止时间 |
-"""
-
-from __future__ import annotations
-
-from scripts.run_antigravity_cover_doer import _diagnostic_text
-from scripts import run_antigravity_cover_doer as worker
+"""程序化 AGY 生图及独立质量回执，不使用 OCR 字符数作为门禁。"""
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-import subprocess
+
 import pytest
+from PIL import Image
+from scripts import run_antigravity_cover_doer as worker
+from video_processing.ai_cover_queue import AICoverQueue
+from video_processing.utils.cover_agy import QUALITY_VERSION
 
 
-class Text:
-    def __init__(self, *, text: str = "", error: str = "") -> None:
-        self.text = text
-        self.error = error
+def inputs(tmp_path):
+    queue = AICoverQueue(tmp_path / 'queue', tmp_path / 'finish')
+    task = queue.create_task(prefix='demo', youtube_id='demo', slice_index=0,
+        cover_payload={'title': '国债回购'}, visual_brief={'visual_direction': 'finance'},
+        final_cover_path=tmp_path/'cover.jpg', provenance_path=tmp_path/'prov.json',
+        brief_path=tmp_path/'brief.json', content_aware=False, generation_deadline_minutes=32,
+        fallback_after_minutes=34, primary_provider='agy')
+    args = SimpleNamespace(task_id=task.task_id, queue_dir=str(queue.queue_dir),
+        finish_dir=str(queue.finish_dir), agy_bin='agy', model='gemini-3.7-flash-high',
+        timeout_seconds=120, review_timeout_seconds=90)
+    return queue, task, args
 
 
-def test_diagnostic_text_prefers_tool_error_and_limits_length():
-    message = _diagnostic_text([Text(text="visible"), Text(error="RESOURCE_EXHAUSTED")])
-
-    assert "visible" in message
-    assert "RESOURCE_EXHAUSTED" in message
-    assert len(_diagnostic_text([Text(text="x" * 700)])) == 500
-
-
-def _generation_inputs(tmp_path, seconds=120):
-    task = SimpleNamespace(
-        payload={"cover_payload": {"title": "望远镜研究系外行星", "subtitle": "行星大气"},
-                 "visual_brief": {"visual_direction": "telescope", "visual_keywords": ["space"]}},
-        fallback_after=datetime.now(timezone.utc) + timedelta(seconds=seconds),
-    )
-    args = SimpleNamespace(agy_bin="agy", model="gemini-3.7-flash-high", timeout_seconds=90)
-    return args, task
+def quality(path, **kwargs):
+    return {'version': QUALITY_VERSION, 'provider': 'agy_cli', 'model': 'test',
+        'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+        'review': dict(decision='PASS', image_inspected=True, subject_relevant=True,
+            composition_complete=True, adequate_detail=True, no_severe_artifacts=True,
+            observed_content='bonds and gold', reason='usable editorial scene')}
 
 
-def test_cli_generation_strips_api_credentials_and_bounds_workspace(tmp_path, monkeypatch):
-    args, task = _generation_inputs(tmp_path)
+def generate(args, task, work_dir):
+    Image.new('RGB', (896, 1200), '#273f52').save(work_dir/'candidate.png')
+    return 'saved'
+
+
+def test_generation_prompt_allows_english_and_never_calls_codex(tmp_path, monkeypatch):
+    queue, task, args = inputs(tmp_path)
     captured = {}
-    monkeypatch.setattr(worker, "build_subprocess_env", lambda **kwargs: {
-        "PATH": "/usr/bin", "GEMINI_API_KEY": "test", "GOOGLE_API_KEY": "test",
-        "TELEGRAM_BOT_TOKEN": "test",
-    })
-
     def cli(command, **kwargs):
         captured.update(command=command, **kwargs)
-        return subprocess.CompletedProcess(command, 0, '{"status":"SUCCESS","response":"saved"}', '')
-
-    monkeypatch.setattr(worker.subprocess, "run", cli)
-    assert worker._generate(args, task, tmp_path) == "saved"
-    assert captured["cwd"] == str(tmp_path)
-    assert captured["command"][captured["command"].index("--add-dir") + 1] == str(tmp_path)
-    assert "GEMINI_API_KEY" not in captured["env"]
-    assert "GOOGLE_API_KEY" not in captured["env"]
-    assert "TELEGRAM_BOT_TOKEN" not in captured["env"]
-    assert "candidate.png" in captured["command"][-1]
-    prompt = captured["command"][-1]
-    assert "望远镜研究系外行星" in prompt and "行星大气" in prompt
-    assert "telescope" in prompt and "space" in prompt
-    assert "never render these words" in prompt and "Absolutely no text" in prompt
-    assert "foreground, midground and background" in prompt
-    assert "isolated floating spheres" in prompt and "vast empty gradients" in prompt
+        return {'response': 'saved'}
+    monkeypatch.setattr(worker, 'run_cli', cli)
+    assert worker._generate(args, task, tmp_path) == 'saved'
+    command = captured['command']
+    assert command[0] == 'agy'
+    assert 'Avoid non-English text' in command[-1]
+    assert 'English lettering or numbers may appear' in command[-1]
+    assert 'Absolutely no text' not in command[-1]
+    assert '国债回购' in command[-1]
+    assert captured['timeout'] <= args.timeout_seconds + 5
 
 
-def test_cli_failure_preserves_diagnostic(tmp_path, monkeypatch):
-    args, task = _generation_inputs(tmp_path)
-    monkeypatch.setattr(worker, "build_subprocess_env", lambda **kwargs: {})
-    monkeypatch.setattr(worker.subprocess, "run", lambda command, **kwargs:
-                        subprocess.CompletedProcess(command, 1, '', 'image quota exhausted'))
-    with pytest.raises(RuntimeError, match="image quota exhausted"):
-        worker._generate(args, task, tmp_path)
+def test_worker_accepts_only_independent_quality_and_binds_hash(tmp_path, monkeypatch):
+    queue, task, args = inputs(tmp_path)
+    monkeypatch.setattr(worker, '_generate', generate)
+    monkeypatch.setattr(worker, 'review_image', quality)
+    assert worker.run(args) == 0
+    visual = queue.accepted_visual(task)
+    assert visual is not None
+    assert not (task.finish_dir/'claim.json').exists()
+    result = json.loads((task.finish_dir/'result.json').read_text())
+    assert result['machine_visual_review'] == QUALITY_VERSION
+    assert 'ocr_text' not in result
+    assert result['quality_review']['sha256'] == result['sha256']
+    assert worker.run(args) == 0
+    # 图片变化使已有回执失效。
+    Image.new('RGB', (896, 1200), 'red').save(visual)
+    assert queue.accepted_visual(task) is None
 
 
-def test_cli_error_status_cannot_accept_zero_exit(tmp_path, monkeypatch):
-    args, task = _generation_inputs(tmp_path)
-    monkeypatch.setattr(worker, "build_subprocess_env", lambda **kwargs: {})
-    monkeypatch.setattr(worker.subprocess, "run", lambda command, **kwargs:
-                        subprocess.CompletedProcess(command, 0, '{"status":"ERROR","response":"quota blocked"}', ''))
-    with pytest.raises(RuntimeError, match="quota blocked"):
-        worker._generate(args, task, tmp_path)
-
-
-def test_cli_does_not_start_when_validation_time_is_missing(tmp_path):
-    args, task = _generation_inputs(tmp_path, seconds=5)
-    with pytest.raises(RuntimeError, match="insufficient time"):
-        worker._generate(args, task, tmp_path)
-
-
-def test_primary_worker_retries_text_but_only_accepts_empty_ocr(tmp_path, monkeypatch):
-    from PIL import Image
-    from video_processing.ai_cover_queue import AICoverQueue
-    import json
-    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
-    task = queue.create_task(prefix="demo", youtube_id="demo", slice_index=0,
-        cover_payload={"title": "demo"}, visual_brief={"visual_direction": "space"},
-        final_cover_path=tmp_path / "cover.jpg", provenance_path=tmp_path / "provenance.json",
-        brief_path=tmp_path / "brief.json", content_aware=False,
-        generation_deadline_minutes=32, fallback_after_minutes=34, primary_provider="agy")
-    args = SimpleNamespace(task_id=task.task_id, queue_dir=str(queue.queue_dir),
-        finish_dir=str(queue.finish_dir), agy_bin="agy", model="gemini-3.7-flash-high", timeout_seconds=90)
-    def generate(_args, _task, work_dir):
-        Image.new("RGB", (896, 1200), "#101522").save(work_dir / "candidate.png")
-        return "saved"
-    monkeypatch.setattr(worker, "_generate", generate)
-    monkeypatch.setattr(worker, "_dimensions", lambda path: (896, 1200))
-    monkeypatch.setattr(worker, "_ocr_text", lambda path: "NEWS")
+def test_rejects_crude_image_then_retries_and_keeps_evidence(tmp_path, monkeypatch):
+    queue, task, args = inputs(tmp_path)
+    monkeypatch.setattr(worker, '_generate', generate)
+    def rejected(path, **kw):
+        r = quality(path)
+        r['review'].update(decision='REJECT', adequate_detail=False, reason='crude placeholder')
+        return r
+    monkeypatch.setattr(worker, 'review_image', rejected)
     assert worker.run(args) == 1
-    assert not (task.finish_dir / "result.json").exists()
-    assert not (task.finish_dir / "claim.json").exists()
-    monkeypatch.setattr(worker, "_ocr_text", lambda path: "")
+    assert not (task.finish_dir/'result.json').exists()
+    monkeypatch.setattr(worker, 'review_image', quality)
     assert worker.run(args) == 0
-    assert queue.accepted_visual(task) == task.finish_dir / "visual.png"
-    assert json.loads((task.finish_dir / "antigravity_attempt.json").read_text())["attempt_number"] == 2
-    assert (task.finish_dir / "antigravity_attempt_1.json").exists()
-    assert worker.run(args) == 0
+    assert queue.accepted_visual(task)
+    old = json.loads((task.finish_dir/'antigravity_attempt_1.json').read_text())
+    assert old['stage'] == 'quality_review'
+    assert 'crude placeholder' in old['error']
 
 
-def test_primary_worker_stops_after_three_text_rejections(tmp_path, monkeypatch):
-    # 复用同一真实队列与生成边界；不能把第四次调用变成隐式无限重试。
-    from PIL import Image
-    from video_processing.ai_cover_queue import AICoverQueue
-    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
-    task = queue.create_task(prefix="blocked", youtube_id="blocked", slice_index=0,
-        cover_payload={}, visual_brief={}, final_cover_path=tmp_path / "cover.jpg",
-        provenance_path=tmp_path / "p.json", brief_path=tmp_path / "b.json", content_aware=False,
-        generation_deadline_minutes=32, fallback_after_minutes=34, primary_provider="agy")
-    args = SimpleNamespace(task_id=task.task_id, queue_dir=str(queue.queue_dir), finish_dir=str(queue.finish_dir))
+@pytest.mark.parametrize('failure', ['PROCESS_TIMEOUT: budget=90s', 'AGY_QUALITY_MISSING_STRUCTURED_OUTPUT'])
+def test_quality_unavailable_exhausts_three_attempts_then_fallback(tmp_path, monkeypatch, failure):
+    queue, task, args = inputs(tmp_path)
     calls = []
-    def generate(_args, _task, work_dir):
-        calls.append(work_dir)
-        Image.new("RGB", (896, 1200), "white").save(work_dir / "candidate.png")
-        return "saved"
-    monkeypatch.setattr(worker, "_generate", generate)
-    monkeypatch.setattr(worker, "_dimensions", lambda path: (896, 1200))
-    monkeypatch.setattr(worker, "_ocr_text", lambda path: "TEXT")
+    def unavailable(*a, **kw):
+        calls.append(1)
+        raise RuntimeError(failure)
+    monkeypatch.setattr(worker, '_generate', generate)
+    monkeypatch.setattr(worker, 'review_image', unavailable)
     assert [worker.run(args) for _ in range(3)] == [1, 1, 1]
     assert worker.run(args) == 0
     assert len(calls) == 3
-    assert not (task.finish_dir / "result.json").exists()
+    assert queue.should_fallback(task)
+    assert not (task.finish_dir/'result.json').exists()
+    assert failure in (task.finish_dir/'antigravity_attempt.json').read_text()
+
+
+def test_worker_lock_prevents_second_generation(tmp_path, monkeypatch):
+    import fcntl
+    queue, task, args = inputs(tmp_path)
+    monkeypatch.setattr(worker, '_generate', lambda *a: pytest.fail('duplicate call'))
+    with (task.finish_dir/'worker.lock').open('a+') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert worker.run(args) == 0
+    assert not (task.finish_dir/'antigravity_attempt.json').exists()

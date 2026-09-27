@@ -59,3 +59,17 @@ def test_installer_does_not_replace_crontab_after_read_error(tmp_path: Path):
     assert result.returncode == 1
     assert "permission denied" in result.stderr
     assert not marker.exists()
+
+
+def test_scheduler_executes_program_without_codex(tmp_path):
+    import shutil
+    scripts=tmp_path/'scripts';scripts.mkdir()
+    runner=scripts/'run_ai_cover_doer.sh'
+    shutil.copy2(PROJECT_ROOT/'scripts/run_ai_cover_doer.sh',runner)
+    binary=tmp_path/'.venv/bin';binary.mkdir(parents=True)
+    marker=tmp_path/'calls'
+    python=binary/'python'
+    python.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > '+str(marker)+'\n')
+    python.chmod(0o755)
+    subprocess.run([str(runner)],check=True,env={'PATH':'/usr/bin:/bin'})
+    assert marker.read_text().strip().endswith('/scripts/reconcile_ai_cover_queue.py')

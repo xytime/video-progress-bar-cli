@@ -4540,7 +4540,7 @@ class PipelineManager:
                         self.db.update_video_status(
                             yid,
                             "AI_COVER_PENDING",
-                            error_msg=f"等待 {task.primary_provider.upper()} 无文字专属底图任务 {task.task_id}",
+                            error_msg=f"等待 {task.primary_provider.upper()} 专属底图生成与质量核验：{task.task_id}",
                             slice_index=slice_index,
                         )
                         logger.info("[%s] queued dedicated visual task %s", prefix, task.task_id)

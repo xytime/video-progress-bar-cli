@@ -3370,13 +3370,26 @@ class PipelineDB:
             conn.commit()
             return cursor.rowcount > 0
 
+    def can_resolve_ai_cover(self, youtube_id: str, slice_index: int = 0) -> bool:
+        """封面恢复仅处理未有投稿历史的待封面条目。"""
+        with self.get_connection() as conn:
+            return conn.execute("""SELECT 1 FROM processed_videos pv
+                WHERE youtube_id = ? AND slice_index = ? AND status = 'AI_COVER_PENDING'
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = pv.id)
+                """, (youtube_id, slice_index)).fetchone() is not None
+
     def mark_ai_cover_resolved(self, youtube_id: str, slice_index: int = 0) -> bool:
         """AI 封面任务完成后，原子恢复待发布并标记此前已完成的成片为可提交。"""
         with self.get_connection() as conn:
             cursor = conn.execute(
                 "UPDATE processed_videos "
                 "SET status = 'PENDING', preparation_ready = 1, publication_ready_at = CURRENT_TIMESTAMP, publication_wait_reason = '等待发布执行者领取', error_msg = NULL, updated_at = CURRENT_TIMESTAMP "
-                "WHERE youtube_id = ? AND slice_index = ? AND status = 'AI_COVER_PENDING'",
+                "WHERE youtube_id = ? AND slice_index = ? AND status = 'AI_COVER_PENDING' "
+                "AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id) "
+                "AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id) "
+                "AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = processed_videos.id)",
                 (youtube_id, slice_index),
             )
             conn.commit()

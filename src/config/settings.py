@@ -474,8 +474,8 @@ class Settings(BaseSettings):
     # 默认关闭；启用后会额外持久化 _cover_brief.json，缺失时不复用旧封面 checkpoint。
     enable_content_aware_cover: bool = False
 
-    # 专属无字底图队列，保留旧开关名兼容部署。新任务首选 AGY CLI；
-    # 生成失败保留 AI_COVER_PENDING，不再静默使用固定底图。
+    # 专属底图队列，保留旧开关名兼容部署。新任务首选 AGY CLI；
+    # AI 失败恢复本地兜底；生图与质量复核只使用 AGY，OCR 字符数不作为门禁。
     enable_codex_cover_queue: bool = False
     ai_cover_primary_provider: Literal["agy", "codex"] = "agy"
     # 仅旧 Codex 任务在截止时间后启用 AGY 备用；新 AGY 首选任务不受此开关影响。
@@ -483,7 +483,8 @@ class Settings(BaseSettings):
     antigravity_runtime_dir: str = "~/.local/share/videopipeline-antigravity313"
     antigravity_model: str = "gemini-3.7-flash-high"
     antigravity_image_model: str = "gemini-3.1-flash-image-preview"
-    antigravity_timeout_seconds: int = 90
+    antigravity_timeout_seconds: int = 120
+    ai_cover_quality_timeout_seconds: int = 90
 
     # 英语世界审核包的首选无字主视觉。失败时回退确定性报刊封面。
     enable_english_world_antigravity_primary: bool = True

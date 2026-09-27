@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 安装受管的 Codex 专属封面底图巡查调度。
+# 安装受管的程序化 AGY 封面巡查调度。
 #
 # Modification History
 # | Version | Date | Author | Description |
@@ -27,15 +27,6 @@ TMP_CRONTAB="$(mktemp)"
 TMP_CRONTAB_ERR="$(mktemp)"
 trap 'rm -f "$TMP_CRONTAB" "$TMP_CRONTAB_ERR"' EXIT
 
-[[ -x "$HOME/.local/bin/codex" ]] || {
-    echo "Codex CLI is unavailable at $HOME/.local/bin/codex" >&2
-    exit 1
-}
-[[ -f "$HOME/.codex/skills/ai-cover-doer/SKILL.md" ]] || {
-    echo "ai-cover-doer skill is unavailable" >&2
-    exit 1
-}
-
 chmod +x "$RUNNER"
 
 if ! "$CRONTAB_BIN" -l > "$TMP_CRONTAB" 2> "$TMP_CRONTAB_ERR"; then
@@ -61,7 +52,7 @@ cat > "$LAUNCHER" <<EOF
 set -euo pipefail
 
 PROJECT_ROOT="$PROJECT_ROOT"
-LOG_FILE="\$PROJECT_ROOT/output/ai_cover_codex_runs.log"
+LOG_FILE="\$PROJECT_ROOT/output/ai_cover_queue_scheduler.log"
 
 mkdir -p "\$(dirname "\$LOG_FILE")"
 exec "\$PROJECT_ROOT/scripts/run_ai_cover_doer.sh" >> "\$LOG_FILE" 2>&1

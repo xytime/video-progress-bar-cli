@@ -1,4 +1,4 @@
-"""Codex AI 封面底图任务协议与完成物校验。
+"""AI 封面底图任务协议与完成物校验。
 
 # Modification History
 | Version | Date | Author | Description |
@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 from PIL import Image
+from video_processing.utils.cover_agy import QUALITY_VERSION, valid_quality
 
 
 _TASK_MARKER = "AI_COVER_TASK_JSON"
@@ -102,6 +103,7 @@ class AICoverQueue:
         identity_payload = {"prefix": prefix, "cover_payload": cover_payload, "visual_brief": visual_brief}
         if primary_provider == "agy":
             identity_payload["primary_provider"] = primary_provider
+            identity_payload["quality_contract"] = QUALITY_VERSION
         identity = json.dumps(
             identity_payload,
             ensure_ascii=False,
@@ -115,7 +117,8 @@ class AICoverQueue:
             return AICoverTask(task_id=task_id, path=task_path, payload=self.read_task(task_path).payload)
 
         task_payload = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "quality_contract": QUALITY_VERSION if primary_provider == "agy" else "legacy",
             "primary_provider": primary_provider,
             "maximum_generation_attempts": 3 if primary_provider == "agy" else 1,
             "task_id": task_id,
@@ -135,7 +138,8 @@ class AICoverQueue:
             "cover_payload": dict(cover_payload),
             "visual_brief": dict(visual_brief),
             "rules": {
-                "generate_text": False,
+                "avoid_non_english_text": True,
+                "ocr_zero_required": False,
                 "uses_video_frame": False,
                 "dedicated_image_only": True,
                 "no_broad_dark_overlay": True,
@@ -212,7 +216,20 @@ class AICoverQueue:
                 result.get("machine_visual_review") == "ocr_empty"
                 and not str(result.get("ocr_text", "")).strip()
             )
-            if not human_reviewed and not machine_reviewed:
+            quality = result.get("quality_review", {})
+            quality_reviewed = (
+                isinstance(quality, dict)
+                and result.get("machine_visual_review") == QUALITY_VERSION
+                and quality.get("version") == QUALITY_VERSION
+                and quality.get("provider") == "agy_cli"
+                and quality.get("task_id") == task.task_id
+                and quality.get("sha256") == result.get("sha256")
+                and valid_quality(quality.get("review"))
+            )
+            if task.payload.get("quality_contract") == QUALITY_VERSION:
+                if not quality_reviewed:
+                    return None
+            elif not human_reviewed and not machine_reviewed and not quality_reviewed:
                 return None
         elif completed_at > task.generation_deadline:
             return None
@@ -238,7 +255,19 @@ class AICoverQueue:
         return False
 
     def should_fallback(self, task: AICoverTask, now: Optional[datetime] = None) -> bool:
-        return task.primary_provider == "codex" and (now or _utc_now()) >= task.fallback_after
+        current = now or _utc_now()
+        if self._has_fresh_claim(task, current):
+            return False
+        if task.primary_provider == "codex":
+            return current >= task.fallback_after
+        if current >= task.antigravity_deadline:
+            return True
+        try:
+            attempt = json.loads((task.finish_dir / "antigravity_attempt.json").read_text())
+            return (attempt.get("status") in {"failed", "running"} and int(attempt.get("attempt_number", 0))
+                    >= int(task.payload.get("maximum_generation_attempts", 3)))
+        except (OSError, ValueError, TypeError):
+            return False
 
     def antigravity_due(self, task: AICoverTask, now: Optional[datetime] = None) -> bool:
         """首选立即执行，旧任务仍只在备用窗口执行；失败最多三次。"""
@@ -292,14 +321,14 @@ class AICoverQueue:
             f"- 创建时间（UTC）：{payload['created_at']}\n"
             f"- 首选生成器：{payload.get('primary_provider', 'codex')}\n"
             f"- 生成截止（UTC）：{payload['generation_deadline_at']}\n"
-            f"- 超时策略：{'挂起，不使用固定底图' if payload.get('primary_provider') == 'agy' else '保留旧任务降级策略'}\n"
-            f"- 最终封面由项目统一排版，生成器只生成无文字底图。\n\n"
+            "- 超时策略：自动使用本地专属封面兜底；记录真实来源。\n"
+            f"- 最终标题由项目统一排版；底图提示避免非英文文字，英文不作为拒收条件。\n\n"
             "## 视觉需求\n\n"
             f"- 视觉方向：{brief.get('visual_direction', '')}\n"
             f"- 关键词：{'、'.join(brief.get('visual_keywords', []))}\n"
             "- 构图：主体避开左上标题安全区；保留完整人物、物体和地平线。\n"
             "- 排版边界：最终标题会由项目用大字号、描边/阴影叠加；底图不得预留大遮罩或文字卡片。\n"
             "- 资源边界：如果已有可用 `visual.png` 或只需要文字重排，不得重新生成底图；高消耗重生成必须先获人工确认。\n"
-            "- 禁止：任何文字、Logo、水印、视频帧、视频截图、YouTube 缩略图。\n"
+            "- 禁止：Logo、水印、视频帧、视频截图、YouTube 缩略图；质量由独立 AGY 会话核验。\n"
             "- 输出：`finish_dir/visual.png`，以及同目录的 `result.json`。\n"
         )
