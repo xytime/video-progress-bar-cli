@@ -163,3 +163,14 @@ def test_interrupted_final_attempt_falls_back_after_claim_expires(tmp_path,monke
 def test_cli_success_exit_is_not_the_resolved_count(monkeypatch):
     monkeypatch.setattr(reconciler,'reconcile',lambda:3)
     assert reconciler.main()==0
+
+
+def test_async_cover_wait_has_no_required_pid_and_survives_orphan_reaper(tmp_path,monkeypatch):
+    queue,task,db=setup_task(tmp_path,monkeypatch,33)
+    with db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET updated_at=datetime('now','-2 hours') WHERE youtube_id='cover-guard'")
+    assert db.get_stale_pre_submission_processing_videos(stale_minutes=20)==[]
+    assert db.recover_orphaned_pre_submission_task('cover-guard',expected_process_pid=None,error_msg='worker gone') is None
+    monkeypatch.setattr(reconciler,'run_process',renderer)
+    assert reconciler.reconcile()==1
+    assert db.get_video_by_youtube_id('cover-guard')['status']=='PENDING'

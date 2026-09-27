@@ -4489,8 +4489,8 @@ class PipelineDB:
     def get_stale_pre_submission_processing_videos(
         self, stale_minutes: int = 20,
     ) -> List[Dict[str, Any]]:
-        """返回超时的预提交任务候选；发布阶段绝不由此路径回收。"""
-        states = ("PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "AI_COVER_PENDING")
+        """返回超时预提交进程；异步封面等待由队列 deadline 管理，不能按 PID 回收。"""
+        states = ("PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING")
         placeholders = ", ".join("?" for _ in states)
         with self.get_connection() as conn:
             rows = conn.execute(
@@ -4514,9 +4514,9 @@ class PipelineDB:
         """有界恢复已死的下载/文案/转录任务，返回 PENDING、FAILED 或 None。
 
         ``expected_process_pid`` 使进程存活检查与状态写入形成 compare-and-set：
-        若新的子进程已接管任务，此次孤儿回收不会覆盖它。发布阶段没有资格进入此方法。
+        若新的子进程已接管任务，此次孤儿回收不会覆盖它。发布及异步封面等待均不进入此方法。
         """
-        recoverable_states = ("PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "AI_COVER_PENDING")
+        recoverable_states = ("PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING")
         with self.get_connection() as conn:
             row = conn.execute(
                 """SELECT status, retry_count, process_pid FROM processed_videos
