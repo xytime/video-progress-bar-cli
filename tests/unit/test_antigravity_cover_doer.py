@@ -34,7 +34,8 @@ def test_diagnostic_text_prefers_tool_error_and_limits_length():
 
 def _generation_inputs(tmp_path, seconds=120):
     task = SimpleNamespace(
-        payload={"visual_brief": {"visual_direction": "telescope", "visual_keywords": ["space"]}},
+        payload={"cover_payload": {"title": "望远镜研究系外行星", "subtitle": "行星大气"},
+                 "visual_brief": {"visual_direction": "telescope", "visual_keywords": ["space"]}},
         fallback_after=datetime.now(timezone.utc) + timedelta(seconds=seconds),
     )
     args = SimpleNamespace(agy_bin="agy", model="gemini-3.7-flash-high", timeout_seconds=90)
@@ -61,6 +62,12 @@ def test_cli_generation_strips_api_credentials_and_bounds_workspace(tmp_path, mo
     assert "GOOGLE_API_KEY" not in captured["env"]
     assert "TELEGRAM_BOT_TOKEN" not in captured["env"]
     assert "candidate.png" in captured["command"][-1]
+    prompt = captured["command"][-1]
+    assert "望远镜研究系外行星" in prompt and "行星大气" in prompt
+    assert "telescope" in prompt and "space" in prompt
+    assert "never render these words" in prompt and "Absolutely no text" in prompt
+    assert "foreground, midground and background" in prompt
+    assert "isolated floating spheres" in prompt and "vast empty gradients" in prompt
 
 
 def test_cli_failure_preserves_diagnostic(tmp_path, monkeypatch):

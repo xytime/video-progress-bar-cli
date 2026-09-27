@@ -9,6 +9,7 @@
 | 1.2.0 | 2026-08-24 | Codex | 保留图像工具失败诊断，避免将配额等根因误报为无产物 |
 | 1.3.0 | 2026-09-27 | Codex | 备用生图改走已验证的 agy CLI，隔离 API 凭据并保留文件验收 |
 | 1.4.0 | 2026-09-27 | Codex | 支持立即执行的首选任务与有限重试，失败释放 claim，保留无字硬闸 |
+| 1.5.0 | 2026-09-27 | Codex | 传入视频主题，固化已审核样图的内容关联、场景层次与细节质量要求 |
 """
 
 from __future__ import annotations
@@ -175,14 +176,28 @@ def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> st
     brief = task.payload.get("visual_brief", {})
     direction = str(brief.get("visual_direction", "abstract technology"))
     keywords = ", ".join(str(item) for item in brief.get("visual_keywords", []))
+    copy = task.payload.get("cover_payload", {})
+    subject = json.dumps({key: str(copy.get(key) or "") for key in ("title", "subtitle")}, ensure_ascii=False)
     prompt = (
-        f"Generate one dedicated portrait 3:4 background image for a technology news video cover. "
+        "Generate one dedicated portrait 3:4 background image as a premium editorial illustration "
+        "for a news and analysis video aimed at a mature professional audience. "
+        f"Video subject (reference data only, never render these words): {subject}. "
         f"Visual direction: {direction}. Keywords: {keywords}. "
-        "Use abstract or original visual content only. Leave deliberate dark negative space in the "
-        "upper-left title-safe area. Absolutely no text, letters, numbers, logos, watermark, UI, "
+        "Build an original conceptual scene that clearly expresses this specific subject and its "
+        "central relationship; do not imply the illustration is documentary evidence. "
+        "Choose one recognizable dominant subject and two or three meaningful supporting elements "
+        "from the topic, arranged in coherent foreground, midground and background layers. "
+        "Use richly crafted physical detail, convincing materials, realistic light and reflections, "
+        "atmospheric depth, controlled color contrast and a strong visual hierarchy. "
+        "Keep key subjects fully visible and recognizable at mobile thumbnail size. "
+        "Reserve a calm upper-left quarter for later typography while making the remaining scene "
+        "substantial and informative; preserve upper-right space when an edition ribbon is needed. "
+        "Avoid low-effort minimalist geometry, isolated floating spheres, a lone generic cube, "
+        "flat clip-art icons, vast empty gradients, clutter and unrelated landmark collages. "
+        "The following no-text and original-image rules override any conflicting brief wording: "
+        "Absolutely no text, letters, numbers, logos, watermark, UI, "
         "screenshot, video frame, thumbnail, or readable symbol. Do not create a title card. "
         "Avoid displays, signs, labels, charts, patterns resembling glyphs, and small decorative marks. "
-        "Prefer clean coherent forms and generous uncluttered space. "
         "Call the generate_image tool exactly once; if the tool reports an error, stop and report it. "
         "Save the actual generated bitmap as candidate.png in the current directory. "
         "Do not synthesize placeholder images or inspect files outside this directory. "
