@@ -45,6 +45,7 @@
 | 1.26.0  | 2026-09-09 | Codex                               | 新增 /last 平台确认发布历史命令，支持范围参数、卡片分包和安全 YouTube 链接。 |
 | 1.26.1  | 2026-09-09 | Codex                               | /last 在解析前限制位置范围，拒绝超长数字和 SQLite 不可表示的偏移。 |
 | 1.27.0  | 2026-09-27 | Antigravity                         | 新增 /last_login 与 /last-login 命令，支持手机端快速查询视频号登录态更新时间与有效剩余。 |
+| 1.27.1  | 2026-09-27 | Antigravity                         | 修复独立守护进程未将项目根目录加入 sys.path 导致预检报 ModuleNotFoundError 的问题。 |
 """
 from __future__ import annotations
 
@@ -72,7 +73,10 @@ from telegram.ext import (
     filters,
 )
 
-# 确保 src/ 在 sys.path
+# 确保项目根目录与 src/ 在 sys.path
+_root = str(Path(__file__).parent.parent.parent)
+if _root not in sys.path:
+    sys.path.insert(0, _root)
 _src = str(Path(__file__).parent.parent)
 if _src not in sys.path:
     sys.path.insert(0, _src)
@@ -1019,6 +1023,8 @@ def _get_wechat_login_info() -> dict:
             suggestions.append("会话文件缺失，建议发送 /wechat_login 重新保存。")
 
     try:
+        if str(prj_root) not in sys.path:
+            sys.path.insert(0, str(prj_root))
         from scripts.wechat_desktop_auth import desktop_auth_preflight
         preflight = desktop_auth_preflight()
         if preflight.ready:
@@ -1026,6 +1032,7 @@ def _get_wechat_login_info() -> dict:
         else:
             info["desktop_preflight"] = f"⚠️ 不可用 ({preflight.code}，需手机扫码)"
     except Exception as exc:
+        logger.warning("WeChat desktop auth preflight check failed: %s", exc)
         info["desktop_preflight"] = f"❓ 预检异常 ({type(exc).__name__})"
 
     if qr_path.exists():

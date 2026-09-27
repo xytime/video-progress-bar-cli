@@ -283,6 +283,21 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
         self.assertIn("2026-09-27 13:21:31 BJ", update.message.reply_text.call_args[0][0])
         self.assertIn("免扫码桌面快捷授权", update.message.reply_text.call_args[0][0])
 
+    def test_get_wechat_login_info_resolves_scripts_when_sys_path_isolated(self):
+        from bot.telegram_bot import _get_wechat_login_info
+
+        root_dir = str(Path(__file__).parent.parent.parent.resolve())
+        saved_path = list(sys.path)
+        saved_modules = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "scripts" or k.startswith("scripts.")}
+        try:
+            sys.path = [p for p in saved_path if p != root_dir and p != ""]
+            info = _get_wechat_login_info()
+            self.assertNotIn("ModuleNotFoundError", info.get("desktop_preflight", ""))
+        finally:
+            sys.path = saved_path
+            sys.modules.update(saved_modules)
+
+
     @patch("bot.telegram_bot._api")
     async def test_lease_jobs_shows_safe_candidate_list(self, mock_api_client):
         from bot.telegram_bot import cmd_lease_jobs
