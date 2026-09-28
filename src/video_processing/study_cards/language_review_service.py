@@ -93,6 +93,39 @@ def check_content_budget(ledger, cache_dir, key):
     return failures
 
 
+def new_draft_admission(*, task_dir, cache_dir):
+    """新制作锁题前只读预算；不替代原输入缓存回读或具名恢复。"""
+    task_dir = Path(task_dir)
+    path = task_dir / "language_attempts.json"
+    if not path.exists():
+        return {"state": "READY", "reason": "NEW_TASK", "attempts": 0}
+    with locked(task_dir / "language.lock"):
+        ledger = read_json(path)
+        attempts = ledger.get("attempts")
+        keys, publication_keys = ledger.get("keys"), ledger.get("publication_keys", [])
+        if (type(attempts) is not int or attempts < 0
+                or not isinstance(keys, list) or not isinstance(publication_keys, list)
+                or any(not isinstance(key, str) or len(key) != 64
+                       or any(c not in "0123456789abcdef" for c in key)
+                       for key in keys + publication_keys)
+                or any(type(ledger.get(flag, False)) is not bool
+                       for flag in ("terminal", "content_terminal", "inflight"))):
+            raise ValueError("审校预算账本格式无效")
+        reason = None
+        if ledger.get("inflight"):
+            reason = "REVIEW_INFLIGHT"
+        elif ledger.get("terminal") or ledger.get("content_terminal"):
+            reason = "REVIEW_TERMINAL"
+        elif attempts >= 3:
+            reason = "ATTEMPT_BUDGET_EXHAUSTED"
+        elif len(keys) + len(publication_keys) >= 3:
+            reason = "INPUT_BUDGET_EXHAUSTED"
+        elif len(content_failure_keys(ledger, cache_dir)) >= 2:
+            reason = "CONTENT_BUDGET_EXHAUSTED"
+        return {"state": "BLOCKED" if reason else "READY", "reason": reason or "BUDGET_AVAILABLE",
+                "attempts": attempts, "ledger_sha256": file_digest(path)}
+
+
 
 def reserve_editorial_revision(timeline, *, cache_dir, task_dir, model, effort, not_before_ns):
     """在调用修订生成器前核验本次内容失败并持久预占唯一修订；不改审校计数。"""

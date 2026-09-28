@@ -76,6 +76,27 @@ class CandidateSafetyRejected(ProgrammaticDailyError, EnglishWorldSafetyGateErro
     """安全审核明确拒绝当前候选；可继续预检其它来源，但绝不放行本片。"""
 
 
+class CandidateReviewUnavailable(ProgrammaticDailyError):
+    """预检发现既有任务不可新制；保留预算，不加入来源质量黑名单。"""
+
+
+def _require_new_draft_budget(workspace: Path, evidence: Mapping[str, Any]) -> None:
+    from video_processing.study_cards.language_protocol import task_identity
+    from video_processing.study_cards.language_review_service import new_draft_admission
+    try:
+        task_key = task_identity(evidence)
+        receipt = new_draft_admission(
+            task_dir=ROOT / "output/english_world_language/tasks" / task_key,
+            cache_dir=ROOT / "output/english_world_language/cache",
+        )
+    except Exception as exc:
+        # 损坏或不可读不能被当作可跳过的历史终态，更不能惩罚来源。
+        raise RuntimeError("新制作审校预算无法核验") from exc
+    atomic_json(workspace / "qa/language_admission.json", {**receipt, "task_identity": task_key})
+    if receipt["state"] != "READY":
+        raise CandidateReviewUnavailable(f"既有任务不可新制：{receipt['reason']}；task={task_key}")
+
+
 def _transient_error(exc: Exception) -> bool:
     if isinstance(exc, (TransientStageError, subprocess.TimeoutExpired)):
         return True
@@ -85,6 +106,8 @@ def _transient_error(exc: Exception) -> bool:
 
 def _candidate_failure_route(exc: Exception, *, locked_source: bool, production_candidates: int) -> tuple[bool, bool]:
     """返回是否排除来源、是否继续候选；基础设施失败永不作为来源缺陷。"""
+    if isinstance(exc, CandidateReviewUnavailable):
+        return False, not locked_source
     if isinstance(exc, CandidateSafetyRejected):
         return True, production_candidates < MAX_PRODUCTION_CANDIDATES
     known = isinstance(exc, (OSError, ValueError, ProgrammaticDailyError))
@@ -1044,6 +1067,8 @@ def run(
                 stage = "source_evidence_alignment"
                 _script("bootstrap-bind", timeline=timeline_path)
                 evidence = read_json(workspace / "qa/source_evidence.json")
+            stage = "language_admission"
+            _require_new_draft_budget(workspace, evidence)
             words = _frozen_words(evidence)
             timeline = read_json(timeline_path)
             timeline["words"] = words

@@ -15,9 +15,107 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from scripts import english_world_programmatic_daily as daily
 
 import pytest
+
+
+@pytest.mark.parametrize("ledger,reason", [
+    ({"attempts": 3, "keys": []}, "ATTEMPT_BUDGET_EXHAUSTED"),
+    ({"attempts": 1, "keys": [], "terminal": True}, "REVIEW_TERMINAL"),
+    ({"attempts": 1, "keys": [], "content_terminal": True}, "REVIEW_TERMINAL"),
+    ({"attempts": 1, "keys": [], "inflight": True}, "REVIEW_INFLIGHT"),
+    ({"attempts": 1, "keys": ["a" * 64], "publication_keys": ["b" * 64, "c" * 64]}, "INPUT_BUDGET_EXHAUSTED"),
+    ({"attempts": 1, "keys": ["a" * 64]}, "BUDGET_AVAILABLE"),
+])
+def test_new_draft_admission_preserves_existing_budget(tmp_path, ledger, reason):
+    from video_processing.study_cards.language_review_service import new_draft_admission
+    path = tmp_path / "task/language_attempts.json"
+    daily.atomic_json(path, ledger)
+    before = path.read_bytes()
+    report = new_draft_admission(task_dir=path.parent, cache_dir=tmp_path / "cache")
+    assert report["reason"] == reason
+    assert report["state"] == ("READY" if reason == "BUDGET_AVAILABLE" else "BLOCKED")
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("ledger", [
+    {"attempts": "3", "keys": []}, {"attempts": False, "keys": []},
+    {"attempts": 1, "keys": "bad"}, {"attempts": 1, "keys": ["../invalid"]},
+    {"attempts": 1, "keys": [], "inflight": "false"},
+])
+def test_invalid_review_ledger_stops_without_source_rejection(tmp_path, monkeypatch, ledger):
+    from video_processing.study_cards.language_protocol import task_identity
+    monkeypatch.setattr(daily, "ROOT", tmp_path)
+    evidence = {"source_sha256": "source", "caption_sha256": "caption", "source_start": 0, "source_end": 40}
+    path = tmp_path / "output/english_world_language/tasks" / task_identity(evidence) / "language_attempts.json"
+    daily.atomic_json(path, ledger)
+    with pytest.raises(RuntimeError, match="预算无法核验") as error:
+        daily._require_new_draft_budget(tmp_path / "work", evidence)
+    assert daily._candidate_failure_route(error.value, locked_source=False, production_candidates=0) == (False, False)
+
+
+def test_new_task_and_different_segment_have_independent_admission(tmp_path, monkeypatch):
+    from video_processing.study_cards.language_protocol import task_identity
+    monkeypatch.setattr(daily, "ROOT", tmp_path)
+    evidence = {"source_sha256": "source", "caption_sha256": "caption", "source_start": 0, "source_end": 40}
+    path = tmp_path / "output/english_world_language/tasks" / task_identity(evidence) / "language_attempts.json"
+    daily.atomic_json(path, {"attempts": 3, "keys": []})
+    with pytest.raises(daily.CandidateReviewUnavailable):
+        daily._require_new_draft_budget(tmp_path / "blocked", evidence)
+    daily._require_new_draft_budget(tmp_path / "fresh", {**evidence, "source_start": 40, "source_end": 80})
+    assert daily.read_json(tmp_path / "fresh/qa/language_admission.json")["reason"] == "NEW_TASK"
+
+
+def test_exhausted_candidates_are_bounded_before_draft_without_blacklisting(tmp_path, monkeypatch):
+    """真实入口读取账本；仅替换检索、下载、子进程三个外部边界。"""
+    from video_processing.study_cards.language_protocol import task_identity
+    monkeypatch.setattr(daily, "ROOT", tmp_path)
+    candidates = [{"youtube_id": f"source-{i}", "source_channel": "Test", "source_channel_id": "test",
+                   "source_url": "https://example.test/video", "source_title": "Clean energy"} for i in range(11)]
+    evidence = {"source_sha256": "source", "caption_sha256": "caption", "source_start": 0, "source_end": 40,
+                "sample_rate": 16000, "channels": 1, "asr_words": [{"word": "Clean", "start": 0, "end": 1}]}
+    ledger_path = tmp_path / "output/english_world_language/tasks" / task_identity(evidence) / "language_attempts.json"
+    daily.atomic_json(ledger_path, {"attempts": 3, "keys": ["a" * 64, "b" * 64, "c" * 64]})
+    before = ledger_path.read_bytes()
+    visited, recorded = [], []
+
+    def download(candidate, workspace):
+        visited.append(candidate["youtube_id"])
+        source = workspace / "source/source.mp4"
+        source.parent.mkdir(parents=True)
+        source.write_bytes(b"fixture")
+        caption = source.with_suffix(".json3")
+        words = [{"text": word, "start": i * 4, "end": (i + 1) * 4} for i, word in enumerate(
+            "Clean energy helps many families learn about our shared future.".split())]
+        daily.atomic_json(caption, daily._bootstrap_caption_payload(duration=40, words=words))
+        return source, caption, 0, 40
+
+    def subprocess_boundary(command, **kwargs):
+        if "--timeline" in command:
+            assert command[2] == "source", "预算耗尽后不能进入模型、渲染或交付"
+            timeline = Path(command[command.index("--timeline") + 1])
+            daily.atomic_json(timeline.parent / "qa/source_evidence.json", evidence)
+        else:
+            assert command[1].endswith("record_english_world_delivery_request.py")
+            recorded.append(command)
+
+    monkeypatch.setattr(daily, "_discover_candidates", lambda **kwargs: candidates)
+    monkeypatch.setattr(daily, "_download_candidate", download)
+    monkeypatch.setattr(daily, "_run", subprocess_boundary)
+    with pytest.raises(daily.ProgrammaticDailyError, match="language_admission"):
+        daily.run(request=tmp_path / "request.json", output_root=tmp_path / "out", shadow_only=True)
+    assert visited == [c["youtube_id"] for c in candidates[:10]]
+    assert len(recorded) == 1
+    assert not any(arg.startswith("--rejected-youtube-id") for arg in recorded[0])
+    assert recorded[0][recorded[0].index("--failure-kind") + 1] == "internal_error"
+    assert ledger_path.read_bytes() == before
+    receipts = list((tmp_path / "out").glob("*/qa/candidate_failure.json"))
+    assert len(receipts) == 10
+    assert all(daily.read_json(p)["locked_source"] is False for p in receipts)
+    assert daily._candidate_failure_route(daily.CandidateReviewUnavailable("blocked"),
+        locked_source=True, production_candidates=1) == (False, False)
 
 
 def _timeline():
