@@ -2207,7 +2207,9 @@ def fill_publish_fields(
         return False
     title = title[:50]
     title_input.fill(title)
-    editor.fill(description)
+    # 以空行结束已审核文案，避免光标停在末尾话题内触发异步推荐替换。
+    # 回读仅忽略排版空白，任何新增可见字符仍然拒绝提交。
+    editor.fill(description + "\n")
     # 平台候选可能把原话题扩写为另一个话题；不得点击候选或让它替换本地审计包。
     # 仅关闭浮层、失焦，再做逐字回读和封面动作。
     try:

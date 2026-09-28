@@ -694,7 +694,7 @@ def test_douyin_publish_fields_are_filled_without_submit(tmp_path: Path):
     ), patch("scripts.douyin_uploader.apply_cover", return_value=True):
         assert fill_publish_fields(page, "一个测试标题", "一段测试描述", tmp_path, cover_path=str(cover))
     title.fill.assert_called_once_with("一个测试标题")
-    editor.fill.assert_called_once_with("一段测试描述")
+    editor.fill.assert_called_once_with("一段测试描述\n")
     editor.press.assert_called_once_with("Escape")
     editor.evaluate.assert_called_once_with("element => element.blur()")
     page.keyboard.press.assert_called_once_with("Escape")
@@ -764,6 +764,7 @@ def test_douyin_fill_fields_never_clicks_hashtag_suggestion(tmp_path: Path):
         assert fill_publish_fields(page, "标题", "正文 #英文阅读", tmp_path, cover_path=str(cover))
 
     page.get_by_text.assert_not_called()
+    editor.fill.assert_called_once_with("正文 #英文阅读\n")
 
 
 def test_final_metadata_rejects_platform_terminal_hashtag_expansion():
@@ -1567,7 +1568,7 @@ def test_douyin_publish_fields_refuse_unconfirmed_title_or_description(tmp_path:
     page.locator.side_effect = lambda selector: title if selector == DOUYIN_TITLE_SELECTOR else editor
 
     assert not fill_publish_fields(page, "标题", "描述", tmp_path, cover_path=str(cover))
-    editor.fill.assert_called_once_with("描述")
+    editor.fill.assert_called_once_with("描述\n")
 
 
 def test_douyin_publish_fields_accept_editor_zero_width_formatting(tmp_path: Path):
