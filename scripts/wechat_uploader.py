@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.16.0 | 2026-09-28 | Antigravity | 严格过滤 login frame 非默认端口与 userinfo；管理页分支与发布检测中遇到 DOM_ERROR 立即失败拒绝 fail-open。 |
 | 5.15.0 | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract；修复 context.browser 为空 fail-open、初始检查未知路由放行、登录通知过度承诺与发布等待期源重核验。 |
 | 5.14.0 | 2026-09-28 | Antigravity | 消除乐观登录判定：初始检查、快捷授权与 _wait_and_save_login 必须官方 HTTPS 源 + 正向视频发布控件；经独立全新浏览器上下文复用验证通过后原子提交会话；移除 legacy marker 回退伪造；login-only 不触发续投。 |
 | 5.13.0 | 2026-09-28 | Antigravity | 登录成功后原子保存会话并写入结构化授权状态（wechat_auth_state.json），更新 authorized_at 与 last_verified_at。 |
@@ -1489,11 +1490,9 @@ def _wait_and_save_login(
 
 
 def _trusted_wechat_login_frame(frame) -> bool:
-    """只处理视频号与微信官方登录页，不把其他 frame 的同名按钮当授权。"""
-    url = urlsplit(frame.url)
-    return url.scheme == "https" and url.hostname in {
-        "channels.weixin.qq.com", "open.weixin.qq.com",
-    }
+    """只处理视频号与微信官方登录页，严格拒绝非默认端口与 userInfo。"""
+    from video_processing.core.wechat_page_contract import is_official_wechat_frame_origin
+    return is_official_wechat_frame_origin(getattr(frame, "url", None))
 
 
 def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
@@ -1540,6 +1539,7 @@ def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None 
                     except Exception:
                         pass
                 return False
+            approved_this_cycle = False
             for fr in page.frames:
                 try:
                     if fr in approved_frames or not _trusted_wechat_login_frame(fr):
@@ -1554,13 +1554,32 @@ def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None 
                         remaining = max(1, int((deadline - time.monotonic()) * 1000))
                         allow.click(timeout=min(3000, remaining))
                         approved_frames.add(fr)
+                        approved_this_cycle = True
                         logger.info("Approved WeChat Channels nickname/avatar authorization.")
+                        # 允许点击后，立即执行正向发布页判据，以剩余期限为上限
+                        rem_sec = max(0.5, deadline - time.monotonic())
+                        ready, _ = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=min(3.0, rem_sec))
+                        if ready:
+                            logger.info("WeChat quick authorization login succeeded after profile approval.")
+                            return True
+                        break
                 except Exception as e:
                     logger.debug("WeChat profile authorization not ready: %s", type(e).__name__)
+            if approved_this_cycle:
+                # 获准后跳过本轮末尾的长 sleep，直接进入下一轮外层循环进行正向检测
+                continue
             remaining = int((deadline - time.monotonic()) * 1000)
             if remaining > 0:
                 # 让 Playwright 持续处理网络/导航事件；桌面确认可能晚于旧版的 10 秒检查窗。
                 page.wait_for_timeout(min(1000, remaining))
+
+        # 有界末次检查：若已点击允许，做有界末次发布页核验，防止时钟边界漏检
+        if approved_frames:
+            ready, _ = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=1.0)
+            if ready:
+                logger.info("WeChat quick authorization login confirmed on boundary check.")
+                return True
+
         logger.warning("WeChat quick authorization did not finish within %.0fs.", timeout_ms / 1000)
         if state_file is not None:
             from video_processing.core.wechat_auth_state import record_wechat_auth_attempt
@@ -1815,6 +1834,9 @@ def run_uploader(
                 raise RuntimeError("DOM error during publish controls inspection; refusing to fail open.")
             else:  # PAGE_UNREADY or unexpected route
                 explicit_login, dom_err = check_explicit_login_prompt(page)
+                if dom_err:
+                    logger.error("DOM error occurred while checking explicit login prompt after SPA check: DOM_ERROR")
+                    raise RuntimeError("DOM error during login prompt check after SPA unready; refusing to fail open.")
                 if explicit_login:
                     is_login_page = True
                     logger.warning("Explicit login prompt detected after SPA check.")
@@ -1826,6 +1848,9 @@ def run_uploader(
                 logger.error("Untrusted origin for management page: INVALID_ORIGIN")
                 raise RuntimeError("Untrusted origin for management page")
             explicit_login, dom_err = check_explicit_login_prompt(page)
+            if dom_err:
+                logger.error("DOM error occurred while checking explicit login prompt on management page: DOM_ERROR")
+                raise RuntimeError("DOM error during management page login prompt check; refusing to fail open.")
             if explicit_login:
                 is_login_page = True
                 logger.warning("Explicit login detected on management page redirect.")

@@ -43,17 +43,38 @@ def test_notify_wechat_login_success_scan_qr():
 
 def test_wait_and_save_login_triggers_notification_and_cleanup(tmp_path):
     page = MagicMock()
+    page.url = "https://channels.weixin.qq.com/platform/post/create"
+
+    reuse_page = MagicMock()
+    reuse_page.url = "https://channels.weixin.qq.com/platform/post/create"
+    reuse_context = MagicMock()
+    reuse_context.new_page.return_value = reuse_page
+
+    browser = MagicMock()
+    browser.new_context.return_value = reuse_context
+
     context = MagicMock()
+    context.browser = browser
+
+    def fake_storage_state(path=None):
+        if path:
+            Path(path).write_text('{"cookies": [{"name": "auth", "value": "1"}]}')
+        return {"cookies": []}
+
+    context.storage_state.side_effect = fake_storage_state
+
     state_file = tmp_path / "wechat_state.json"
     qr_file = tmp_path / "login_qr.png"
     qr_file.write_text("dummy qr")
 
     with patch("scripts.wechat_uploader._stamp_login_success") as mock_stamp, \
-         patch("scripts.wechat_uploader._notify_wechat_login_success") as mock_notify:
+         patch("scripts.wechat_uploader._notify_wechat_login_success") as mock_notify, \
+         patch("video_processing.core.wechat_page_contract.wait_for_publish_ready_with_spa_guard", return_value=(True, None)):
         _wait_and_save_login(page, context, state_file, qr_path=qr_file, method="desktop_quick")
 
         page.wait_for_url.assert_called_once_with("**/post/create", timeout=600000)
-        context.storage_state.assert_called_once_with(path=str(state_file))
-        mock_stamp.assert_called_once_with(state_file)
+        assert state_file.is_file()
+        mock_stamp.assert_called_once_with(state_file, method="desktop_quick")
         assert not qr_file.exists()  # QR cleaned up
         mock_notify.assert_called_once_with(method="desktop_quick", state_file=state_file)
+

@@ -646,7 +646,7 @@ def evaluate_wechat_session_status(
     if not auto_relogin_enabled:
         summary["schedule_estimate"] = "自动重登未开启 (wechat_auto_relogin_enabled=false)，需手动执行 /wechat_login"
     elif auto_relogin_started:
-        summary["schedule_estimate"] = "正在尝试自动重登中..."
+        summary["schedule_estimate"] = "自动重登近期已触发，结果以最近授权记录为准"
     elif summary["threshold_reached"]:
         if lock_owner:
             summary["schedule_estimate"] = f"已达 {threshold_h:.1f}h 调度阈值（会话锁被 PID {lock_owner.get('pid')} 占用，等待空闲）"

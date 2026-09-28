@@ -219,3 +219,94 @@ def test_try_wechat_quick_login_custom_state_file_passed_to_attempt(chromium, tm
             assert not prod_marker.exists()
     finally:
         page.close()
+
+
+def test_try_wechat_quick_login_zero_clicks_on_untrusted_frame_origin(chromium, tmp_path):
+    """当 iframe 来源携带非默认端口或 userInfo 时，严格拒绝信任，按钮点击计数为 0。"""
+    from scripts.wechat_uploader import _click_visible_frame_button, _try_wechat_quick_login
+
+    page = chromium.new_page()
+    try:
+        # iframe 内包含按钮，并通过 window.clickCount 统计真实点击
+        frame_html = """<!DOCTYPE html><html><body>
+        <script>window.clickCount = 0;</script>
+        <p>视频号创作平台 申请使用</p>
+        <button onclick="window.clickCount++">允许</button>
+        <button onclick="window.clickCount++">微信快捷登录</button>
+        </body></html>"""
+
+        def route(r):
+            url = r.request.url
+            if ":8443" in url:
+                r.fulfill(content_type="text/html; charset=utf-8", body=frame_html)
+            else:
+                # 页面包含指向非默认端口 8443 的 iframe
+                r.fulfill(
+                    content_type="text/html; charset=utf-8",
+                    body="""<!DOCTYPE html><html><body>
+                    <iframe src="https://open.weixin.qq.com:8443/connect/login"></iframe>
+                    </body></html>""",
+                )
+
+        page.route("**/*", route)
+        page.goto("https://channels.weixin.qq.com/platform/login")
+        page.frame_locator("iframe").get_by_role("button", name="允许", exact=True).wait_for()
+
+        # 1. 尝试通过 _click_visible_frame_button 点击
+        clicked = _click_visible_frame_button(page, "微信快捷登录")
+        assert clicked is False
+
+        # 2. 尝试通过 _try_wechat_quick_login 处理
+        res = _try_wechat_quick_login(page, timeout_ms=500)
+        assert res is False
+
+        # 3. 验证零点击：iframe 内的按钮点击计数严格为 0
+        click_count = page.frames[1].evaluate("() => window.clickCount")
+        assert click_count == 0
+    finally:
+        page.close()
+
+
+def test_uploader_management_page_fails_hard_on_dom_error(chromium, tmp_path):
+    import json
+    import pytest
+    from unittest.mock import MagicMock, patch
+    from scripts.wechat_uploader import run_uploader
+
+    state_file = tmp_path / "wechat_state.json"
+    state_file.write_text(json.dumps({"cookies": [], "origins": []}))
+
+    def handle_route(route):
+        route.fulfill(
+            content_type="text/html; charset=utf-8",
+            body="<html><body><h1>Management List Page</h1></body></html>",
+        )
+
+    class MockPW:
+        def __init__(self, browser):
+            self.chromium = MagicMock()
+            def _launch(*args, **kwargs):
+                orig_ctx = browser.new_context
+                def _new_ctx(*c_args, **c_kwargs):
+                    ctx = orig_ctx(*c_args, **c_kwargs)
+                    ctx.route("**/*", handle_route)
+                    return ctx
+                mock_b = MagicMock()
+                mock_b.new_context = _new_ctx
+                mock_b.close = lambda: None
+                return mock_b
+            self.chromium.launch = _launch
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    with patch("scripts.wechat_uploader.sync_playwright", return_value=MockPW(chromium)), \
+         patch("video_processing.core.wechat_page_contract.check_explicit_login_prompt", return_value=(False, True)):
+        with pytest.raises(RuntimeError, match="DOM error during management page login prompt check"):
+            run_uploader(
+                state_path=str(state_file),
+                verify_only=True,
+                platform_post_id="export/mock_12345",
+                login_only=True,
+            )
+
+

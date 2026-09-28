@@ -979,7 +979,18 @@ def _get_wechat_login_info() -> dict:
 
     lock_owner = read_lease_owner(canonical_wechat_session_lock_path(state_path))
     relogin_flag_path = prj_root / "output" / "wechat_auto_relogin_started.flag"
-    auto_relogin_started = relogin_flag_path.is_file()
+    auto_relogin_started = False
+    if relogin_flag_path.is_file():
+        try:
+            if time.time() - relogin_flag_path.stat().st_mtime < 15 * 60:
+                auto_relogin_started = True
+            else:
+                try:
+                    relogin_flag_path.unlink()
+                except OSError:
+                    pass
+        except OSError:
+            pass
 
     evaluation = evaluate_wechat_session_status(
         auth_state=auth_state,

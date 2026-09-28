@@ -406,3 +406,48 @@ def test_auth_attempt_tracking_and_failure_display(tmp_path: Path):
     eval_succ = evaluate_wechat_session_status(data_succ, state_file_exists=True, now_ts=t_succ + 60)
     assert "授权尝试成功" in eval_succ["last_auth_attempt_display"]
 
+
+def test_auto_relogin_started_copy_does_not_claim_active_process():
+    """验证 auto_relogin_started 为 True 时，提示近期已触发，不把 flag 误作活跃进程。"""
+    res = evaluate_wechat_session_status(
+        auth_state={},
+        state_file_exists=True,
+        enable_auto_relogin=True,
+        auto_relogin_started=True,
+    )
+    assert res["schedule_estimate"] == "自动重登近期已触发，结果以最近授权记录为准"
+
+
+def test_official_wechat_frame_origin_contract():
+    """验证官方授权 frame 严格拒绝携带 userinfo 或非默认端口。"""
+    from video_processing.core.wechat_page_contract import is_official_wechat_frame_origin
+    from scripts.wechat_uploader import _trusted_wechat_login_frame
+    from unittest.mock import MagicMock
+
+    # 1. 允许合法的官方源
+    assert is_official_wechat_frame_origin("https://open.weixin.qq.com/connect/login") is True
+    assert is_official_wechat_frame_origin("https://channels.weixin.qq.com/platform/login") is True
+
+    # 2. 拒绝带有 userinfo 或非默认端口
+    assert is_official_wechat_frame_origin("https://admin:secret@open.weixin.qq.com/connect/login") is False
+    assert is_official_wechat_frame_origin("https://open.weixin.qq.com:8443/connect/login") is False
+    assert is_official_wechat_frame_origin("http://open.weixin.qq.com/connect/login") is False
+    assert is_official_wechat_frame_origin("https://evil.com/connect/login") is False
+
+    # 3. _trusted_wechat_login_frame 判据与零点击
+    frame_bad_port = MagicMock()
+    frame_bad_port.url = "https://open.weixin.qq.com:8443/connect/login"
+    assert _trusted_wechat_login_frame(frame_bad_port) is False
+
+    frame_userinfo = MagicMock()
+    frame_userinfo.url = "https://user:pwd@open.weixin.qq.com/connect/login"
+    assert _trusted_wechat_login_frame(frame_userinfo) is False
+
+    from scripts.wechat_uploader import _click_visible_frame_button
+    fake_page = MagicMock()
+    fake_page.frames = [frame_bad_port, frame_userinfo]
+    # 零点击：不点击任何按钮，直接返回 False
+    clicked = _click_visible_frame_button(fake_page, "允许")
+    assert clicked is False
+
+

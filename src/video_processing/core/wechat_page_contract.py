@@ -9,6 +9,7 @@ core/wechat_page_contract.py -> 标准库（0 外部业务依赖）。
 # Modification History
 | Version | Date       | Author      | Description                                                  |
 |---------|------------|-------------|--------------------------------------------------------------|
+| 1.2.0   | 2026-09-28 | Antigravity | 新增 is_official_wechat_frame_origin，严格过滤 iframe 的非默认端口与 userinfo |
 | 1.1.0   | 2026-09-28 | Antigravity | 修复 DOM 异常跳过正向判定、严格拒绝非默认端口与 userinfo、统一 create/list 来源判据 |
 | 1.0.0   | 2026-09-28 | Antigravity | 初始创建：统一官方源、强正向发布控件、明确登录提示与SPA有界等待判据 |
 """
@@ -47,6 +48,28 @@ def is_official_wechat_origin(url: str) -> bool:
             return False
         # 严格官方域名
         if u.hostname != OFFICIAL_HOST:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+OFFICIAL_FRAME_HOSTS = frozenset({OFFICIAL_HOST, "open.weixin.qq.com"})
+
+
+def is_official_wechat_frame_origin(url: str) -> bool:
+    """严格核验登录/授权 iframe 来源：必须为官方 HTTPS、默认 443 端口、无 userInfo，且 host 为官方视频号或微信开放平台。"""
+    if not url:
+        return False
+    try:
+        u = urlsplit(url)
+        if u.scheme != OFFICIAL_SCHEME:
+            return False
+        if u.username or u.password:
+            return False
+        if u.port is not None and u.port != 443:
+            return False
+        if u.hostname not in OFFICIAL_FRAME_HOSTS:
             return False
         return True
     except Exception:
