@@ -809,7 +809,8 @@ class PipelineAgent:
         if settings.active_telegram_chat_id:
             env["TELEGRAM_CHAT_ID"] = settings.active_telegram_chat_id
         try:
-            subprocess.Popen(login_cmd, cwd=str(self.project_root), env=env)
+            # 后台 Bot 的终端可能已撤销，登录子进程不能继承失效的 stdin。
+            subprocess.Popen(login_cmd, cwd=str(self.project_root), env=env, stdin=subprocess.DEVNULL)
             return json.dumps({"ok": True, "message": "微信登录已启动（无头）。登录二维码将稍后发到这里，请用手机微信扫码；扫码成功后会自动保存登录态并继续。"})
         except Exception as e:
             return json.dumps({"ok": False, "error": f"Failed to launch WeChat login process: {e}"})

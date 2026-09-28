@@ -99,6 +99,7 @@ def start() -> None:
         proc = subprocess.Popen(
             [PYTHON, BOT_SCRIPT],
             cwd=str(PRJ_ROOT),
+            stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=log,
             env=env,
