@@ -91,40 +91,55 @@ class TestFormatter:
             assert cmd in msg
 
     def test_format_wechat_login_status_valid(self):
-        """有效登录态渲染测试"""
+        """有效授权状态渲染测试"""
         from bot.formatter import fmt_wechat_login_status
 
         info = {
             "login_time_bj": "2026-09-27 13:21:31 BJ",
             "relative_age": "2小时前",
-            "status_label": "✅ 有效",
-            "remaining_hours": 20.8,
+            "auth_method_label": "桌面快捷",
+            "status_label": "✅ 授权期内",
+            "last_verified_bj": "2026-09-27 15:00:00 BJ",
+            "relative_verified_age": "30分钟前",
+            "schedule_estimate": "距 22.0h 调度阈值约 20.0 小时（调度估算，不代表平台剩余寿命）",
+            "lock_status": "空闲",
             "state_file_status": "✅ 已保存 (2.9 KB)",
-            "desktop_preflight": "✅ 就绪（免扫码桌面快捷授权）",
-            "suggestions": ["当前登录态正常，无需操作。"],
+            "desktop_preflight": "✅ 预检就绪（仅桌面客户端环境就绪，不代表平台已授权）",
+            "suggestions": ["当前在授权维护期内，系统将按计划定期保活。"],
         }
         msg = fmt_wechat_login_status(info)
         assert "微信视频号登录态状态" in msg
         assert "2026-09-27 13:21:31 BJ" in msg
-        assert "✅ 有效（2小时前）" in msg
-        assert "约 20.8 小时" in msg
+        assert "2小时前 · 桌面快捷" in msg
+        assert "✅ 授权期内" in msg
+        assert "2026-09-27 15:00:00 BJ" in msg
+        assert "30分钟前" in msg
+        assert "调度估算，不代表平台剩余寿命" in msg
+        assert "会话锁" in msg and "空闲" in msg
         assert "已保存 (2.9 KB)" in msg
-        assert "免扫码桌面快捷授权" in msg
+        assert "仅桌面客户端环境就绪，不代表平台已授权" in msg
 
     def test_format_wechat_login_status_expired(self):
-        """过期登录态渲染测试"""
+        """失效登录态渲染测试"""
         from bot.formatter import fmt_wechat_login_status
 
         info = {
             "login_time_bj": "2026-09-25 10:00:00 BJ",
             "relative_age": "2天前",
-            "status_label": "❌ 已过期",
-            "remaining_hours": 0.0,
+            "auth_method_label": "历史记录",
+            "status_label": "❌ 会话已失效（需重新登录）",
+            "last_verified_bj": "2026-09-25 10:00:00 BJ",
+            "relative_verified_age": "2天前",
+            "last_failure_display": "09-28 08:23:58 · LOGIN_REQUIRED (Redirected to login)",
+            "schedule_estimate": "已达 22.0h 调度阈值（等待空闲周期自动重登）",
+            "lock_status": "空闲",
             "state_file_status": "✅ 已保存",
-            "desktop_preflight": "⚠️ 不可用 (NO_PROCESS)",
-            "suggestions": ["请发送 /wechat_login 重新登录。"],
+            "desktop_preflight": "⚠️ 不可用 (NO_PROCESS，需手机扫码)",
+            "suggestions": ["平台已要求重新扫码登录，请发送 /wechat_login 获取二维码扫码。"],
         }
         msg = fmt_wechat_login_status(info)
-        assert "❌ 已过期" in msg
-        assert "请发送 /wechat_login 重新登录。" in msg
+        assert "❌ 会话已失效（需重新登录）" in msg
+        assert "最近检查" in msg
+        assert "09-28 08:23:58 · LOGIN_REQUIRED" in msg
+        assert "请发送 /wechat_login 获取二维码扫码。" in msg
 

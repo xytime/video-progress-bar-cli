@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.13.0 | 2026-09-28 | Antigravity | 登录成功后原子保存会话并写入结构化授权状态（wechat_auth_state.json），更新 authorized_at 与 last_verified_at。 |
 | 5.12.0 | 2026-09-27 | Antigravity | 登录态保存（快捷/扫码/交互）后自动投递 Telegram 回报通知，记录授权方式与更新时间。 |
 | 5.11.4 | 2026-09-27 | Antigravity | Chromium 启动参数强制追加 localhost.weixin.qq.com 本地环回映射，防止透明代理与 TUN Fake IP 阻断桌面快捷登录通信。 |
 | 5.11.3 | 2026-09-26 | Codex | 授权检查覆盖整个登录期限，兼容分行文案并限制可信来源；诊断不输出授权 URL。 |
@@ -1000,25 +1001,19 @@ def _has_wechat_cover_success_marker(page) -> bool:
     return any(marker in page_text for marker in markers)
 
 
-def _stamp_login_success(state_file: Path) -> None:
+def _stamp_login_success(state_file: Path, method: str = "auto") -> None:
     """真实跳回发布页并保存 state 后，记录本轮登录成功时间。"""
     try:
-        marker = state_file.parent / "wechat_login_at.txt"
-        marker.write_text(str(int(time.time())), encoding="utf-8")
-        # 自动预热重登成功后允许下一登录周期再次触发。
-        auto_flag = state_file.parent / "wechat_auto_relogin_started.flag"
-        try:
-            auto_flag.unlink()
-        except FileNotFoundError:
-            pass
-        warned_flag = state_file.parent / "wechat_login_warned.flag"
-        try:
-            warned_flag.unlink()
-        except FileNotFoundError:
-            pass
-        logger.info(f"Login success marker updated: {marker}")
+        from video_processing.core.wechat_auth_state import record_wechat_authorization
+        record_wechat_authorization(state_file, method=method)
+        logger.info(f"Login success recorded in structured auth state for {state_file} (method={method})")
     except Exception as e:
         logger.warning(f"Failed to update login success marker: {e}")
+        try:
+            marker = state_file.parent / "wechat_login_at.txt"
+            marker.write_text(str(int(time.time())), encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _location_display_text(page) -> str:
@@ -1395,11 +1390,16 @@ def _wait_and_save_login(
     qr_path: Path | None = None,
     method: str = "auto",
 ) -> None:
-    """等待登录回到发布页，保存 Playwright state、写入时间戳并发送 Telegram 回报。"""
+    """等待登录回到发布页，原子保存 Playwright state、写入时间戳并发送 Telegram 回报。"""
     page.wait_for_url("**/post/create", timeout=600000)
     logger.info("Login detected. Saving session...")
-    context.storage_state(path=str(state_file))
-    _stamp_login_success(state_file)
+    tmp_state = state_file.with_name(f".{state_file.name}.tmp.{os.getpid()}")
+    try:
+        context.storage_state(path=str(tmp_state))
+        os.replace(tmp_state, state_file)
+    except Exception:
+        context.storage_state(path=str(state_file))
+    _stamp_login_success(state_file, method=method)
     logger.info(f"Session saved to: {state_file}")
     if qr_path and qr_path.exists():
         try:

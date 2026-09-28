@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| 3.52.0 | 2026-09-28 | Antigravity | 会话重登检测优先读取结构化授权状态，保活循环识别锁冲突 (code 11) 不再报错。 |
 | 3.51.0 | 2026-09-26 | Antigravity | 修复移动端静态资源强缓存导致新卡片样式未生效问题；HTML 注入静态文件 mtime 版本号，直出无缓存响应头。 |
 | 3.50.0 | 2026-09-26 | Antigravity | 全局漏斗与频道漏斗端点默认时间窗口统一改为 today_bj (北京时间今日)。 |
 | 3.49.0 | 2026-09-26 | Antigravity | 新增 /apple-touch-icon.png 与 /favicon.ico 根路由直出支持，保障 iOS 桌面与 PWA 📺 视觉呈现。 |
@@ -458,7 +459,11 @@ def _wechat_session_needs_auto_relogin() -> bool:
     try:
         if auto_flag.exists() and time.time() - auto_flag.stat().st_mtime < 15 * 60:
             return False
-        stamp = int(login_at.read_text(encoding="utf-8").strip())
+        from video_processing.core.wechat_auth_state import read_wechat_auth_state
+        auth_state = read_wechat_auth_state(state_file)
+        stamp = auth_state.get("authorized_at")
+        if stamp is None:
+            stamp = int(login_at.read_text(encoding="utf-8").strip())
         return (time.time() - stamp) / 3600.0 >= settings.wechat_session_warn_hours
     except (OSError, ValueError):
         # 旧看门狗会删标记；只有保存过会话时才尝试恢复，避免首次安装时误启动。
@@ -899,6 +904,8 @@ def _wechat_keepalive_loop():
                         reason="expired keepalive session",
                     )
                     log.warning("[Keepalive] Expired-session relogin triggered: %s", started)
+            elif result.returncode == 11:
+                log.info("[Keepalive] WeChat session lock busy (upload or other operation running), skipping this round.")
             else:
                 log.warning(f"[Keepalive] Keepalive subprocess returned code: {result.returncode}.")
         except _sp.TimeoutExpired:

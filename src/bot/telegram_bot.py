@@ -42,7 +42,8 @@
 | 1.24.0  | 2026-08-29 | Codex                               | 英语世界二次确认后显示真实生产阶段；成片完成只进入人工审核，不继承自动投稿。 |
 | 1.25.0  | 2026-08-30 | Codex                               | 英语世界回执区分本地提交状态与视频号原生 ID 回查状态。 |
 | 1.25.1  | 2026-09-09 | Codex                               | /getvideo 与 Highlight 来源信息补充安全的可点击 YouTube 原视频链接。 |
-| 1.26.0  | 2026-09-09 | Codex                               | 新增 /last 平台确认发布历史命令，支持范围参数、卡片分包和安全 YouTube 链接。 |
+| 1.28.0  | 2026-09-28 | Antigravity                         | /last_login 改接结构化授权状态与会话锁，区分授权/验证/失败时间，以 22h settings 为准。 |
+| 1.27.0  | 2026-09-27 | Antigravity                         | 新增 /last_login 命令与 Telegram 快捷菜单按钮，查询微信登录态更新时间。 |
 | 1.26.1  | 2026-09-09 | Codex                               | /last 在解析前限制位置范围，拒绝超长数字和 SQLite 不可表示的偏移。 |
 | 1.27.0  | 2026-09-27 | Antigravity                         | 新增 /last_login 与 /last-login 命令，支持手机端快速查询视频号登录态更新时间与有效剩余。 |
 | 1.27.1  | 2026-09-27 | Antigravity                         | 修复独立守护进程未将项目根目录加入 sys.path 导致预检报 ModuleNotFoundError 的问题。 |
@@ -954,63 +955,41 @@ async def cmd_wechat_login(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
 
 def _get_wechat_login_info() -> dict:
     """获取当前微信登录时间戳、会话文件与桌面环境状态（只读，无外部网络依赖）。"""
-    from datetime import datetime
+    import sys
     import time
-    from zoneinfo import ZoneInfo
+    from pathlib import Path
 
-    prj_root = Path(__file__).parent.parent.parent
-    login_at_path = prj_root / "output" / "wechat_login_at.txt"
+    prj_root = Path(__file__).resolve().parent.parent.parent
+    if str(prj_root) not in sys.path:
+        sys.path.insert(0, str(prj_root))
+
+    from config.settings import settings
+    from video_processing.core.wechat_auth_state import (
+        read_wechat_auth_state,
+        evaluate_wechat_session_status,
+    )
+    from video_processing.core.wechat_session_lock import canonical_wechat_session_lock_path
+    from video_processing.core.task_lease import read_lease_owner
+
     state_path = prj_root / "output" / "wechat_state.json"
     qr_path = prj_root / "output" / "login_qr.png"
 
-    info: dict = {}
-    bj_tz = ZoneInfo("Asia/Shanghai")
-    now_ts = time.time()
+    auth_state = read_wechat_auth_state(state_path)
+    state_file_exists = state_path.is_file()
 
-    login_ts = None
-    if login_at_path.exists():
-        try:
-            login_ts = int(login_at_path.read_text(encoding="utf-8").strip())
-        except (ValueError, OSError):
-            login_ts = None
+    lock_owner = read_lease_owner(canonical_wechat_session_lock_path(state_path))
 
-    if login_ts is not None:
-        dt = datetime.fromtimestamp(login_ts, tz=bj_tz)
-        info["login_time_bj"] = dt.strftime("%Y-%m-%d %H:%M:%S") + " BJ"
-        age_seconds = max(0.0, now_ts - login_ts)
-        age_hours = age_seconds / 3600.0
+    evaluation = evaluate_wechat_session_status(
+        auth_state=auth_state,
+        state_file_exists=state_file_exists,
+        lock_owner=lock_owner,
+        now_ts=time.time(),
+        warn_hours=float(settings.wechat_session_warn_hours),
+    )
 
-        if age_seconds < 60:
-            info["relative_age"] = f"{int(age_seconds)}秒前"
-        elif age_seconds < 3600:
-            info["relative_age"] = f"{int(age_seconds // 60)}分钟前"
-        elif age_hours < 48:
-            info["relative_age"] = f"{int(age_hours)}小时前"
-        else:
-            info["relative_age"] = f"{int(age_hours // 24)}天前"
+    info = dict(evaluation)
 
-        max_valid_hours = 23.0
-        remaining_hours = max_valid_hours - age_hours
-        if remaining_hours > 3.0:
-            info["status_label"] = "✅ 有效"
-            info["remaining_hours"] = remaining_hours
-            suggestions = ["当前登录态正常，无需操作。"]
-        elif remaining_hours > 0:
-            info["status_label"] = "⚠️ 即将到期"
-            info["remaining_hours"] = remaining_hours
-            suggestions = ["登录态将在 3 小时内到期，建议发送 /wechat_login 提前续期。"]
-        else:
-            info["status_label"] = "❌ 已过期"
-            info["remaining_hours"] = 0.0
-            suggestions = ["登录态已超过 23 小时有效期，请发送 /wechat_login 重新登录。"]
-    else:
-        info["login_time_bj"] = "未找到登录记录"
-        info["relative_age"] = "无记录"
-        info["status_label"] = "❌ 未登录"
-        info["remaining_hours"] = None
-        suggestions = ["尚未检测到有效登录记录，请发送 /wechat_login 启动登录。"]
-
-    if state_path.exists():
+    if state_file_exists:
         try:
             size_kb = state_path.stat().st_size / 1024.0
             info["state_file_status"] = f"✅ 已保存 ({size_kb:.1f} KB)"
@@ -1018,9 +997,6 @@ def _get_wechat_login_info() -> dict:
             info["state_file_status"] = "✅ 已保存"
     else:
         info["state_file_status"] = "❌ 未生成"
-        if "未登录" not in info["status_label"]:
-            info["status_label"] = "⚠️ 状态文件缺失"
-            suggestions.append("会话文件缺失，建议发送 /wechat_login 重新保存。")
 
     try:
         if str(prj_root) not in sys.path:
@@ -1028,7 +1004,7 @@ def _get_wechat_login_info() -> dict:
         from scripts.wechat_desktop_auth import desktop_auth_preflight
         preflight = desktop_auth_preflight()
         if preflight.ready:
-            info["desktop_preflight"] = "✅ 就绪（免扫码桌面快捷授权）"
+            info["desktop_preflight"] = "✅ 预检就绪（仅桌面客户端环境就绪，不代表平台已授权）"
         else:
             info["desktop_preflight"] = f"⚠️ 不可用 ({preflight.code}，需手机扫码)"
     except Exception as exc:
@@ -1036,9 +1012,8 @@ def _get_wechat_login_info() -> dict:
         info["desktop_preflight"] = f"❓ 预检异常 ({type(exc).__name__})"
 
     if qr_path.exists():
-        suggestions.insert(0, "当前有待扫描的登录二维码，可在手机微信中确认。")
+        info["suggestions"].insert(0, "当前有待扫描的登录二维码，可在手机微信中确认。")
 
-    info["suggestions"] = suggestions
     return info
 
 
