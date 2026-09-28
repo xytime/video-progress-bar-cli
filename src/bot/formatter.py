@@ -502,9 +502,17 @@ def fmt_wechat_login_status(info: dict) -> str:
         f"• <b>最近验证</b>：<code>{html.escape(last_verified_str)}</code>（{html.escape(verified_desc)}）",
     ]
 
+    last_auth_attempt = info.get("last_auth_attempt_display")
+    if last_auth_attempt:
+        lines.append(f"• <b>最近授权</b>：<code>{html.escape(last_auth_attempt)}</code>")
+
     last_failure = info.get("last_failure_display")
     if last_failure:
         lines.append(f"• <b>最近检查</b>：<code>{html.escape(last_failure)}</code>")
+
+    next_keepalive = info.get("next_keepalive_estimate")
+    if next_keepalive:
+        lines.append(f"• <b>保活计划</b>：{html.escape(next_keepalive)}")
 
     lines.extend([
         f"• <b>重登调度</b>：{html.escape(schedule_estimate)}",

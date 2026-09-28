@@ -42,11 +42,11 @@
 | 1.24.0  | 2026-08-29 | Codex                               | 英语世界二次确认后显示真实生产阶段；成片完成只进入人工审核，不继承自动投稿。 |
 | 1.25.0  | 2026-08-30 | Codex                               | 英语世界回执区分本地提交状态与视频号原生 ID 回查状态。 |
 | 1.25.1  | 2026-09-09 | Codex                               | /getvideo 与 Highlight 来源信息补充安全的可点击 YouTube 原视频链接。 |
-| 1.28.0  | 2026-09-28 | Antigravity                         | /last_login 改接结构化授权状态与会话锁，区分授权/验证/失败时间，以 22h settings 为准。 |
-| 1.27.0  | 2026-09-27 | Antigravity                         | 新增 /last_login 命令与 Telegram 快捷菜单按钮，查询微信登录态更新时间。 |
+| 1.26.0  | 2026-09-09 | Codex                               | 新增 /last 平台确认发布历史命令，支持范围参数、卡片分包和安全 YouTube 链接。 |
 | 1.26.1  | 2026-09-09 | Codex                               | /last 在解析前限制位置范围，拒绝超长数字和 SQLite 不可表示的偏移。 |
 | 1.27.0  | 2026-09-27 | Antigravity                         | 新增 /last_login 与 /last-login 命令，支持手机端快速查询视频号登录态更新时间与有效剩余。 |
 | 1.27.1  | 2026-09-27 | Antigravity                         | 修复独立守护进程未将项目根目录加入 sys.path 导致预检报 ModuleNotFoundError 的问题。 |
+| 1.28.0  | 2026-09-28 | Antigravity                         | /last_login 改接结构化授权状态与会话锁，区分授权/验证/失败时间，以 22h settings 为准。 |
 """
 from __future__ import annotations
 
@@ -978,6 +978,8 @@ def _get_wechat_login_info() -> dict:
     state_file_exists = state_path.is_file()
 
     lock_owner = read_lease_owner(canonical_wechat_session_lock_path(state_path))
+    relogin_flag_path = prj_root / "output" / "wechat_auto_relogin_started.flag"
+    auto_relogin_started = relogin_flag_path.is_file()
 
     evaluation = evaluate_wechat_session_status(
         auth_state=auth_state,
@@ -985,6 +987,11 @@ def _get_wechat_login_info() -> dict:
         lock_owner=lock_owner,
         now_ts=time.time(),
         warn_hours=float(settings.wechat_session_warn_hours),
+        enable_auto_relogin=bool(settings.wechat_auto_relogin_enabled),
+        enable_keepalive=bool(settings.wechat_keepalive_enabled),
+        keepalive_min_interval=int(settings.wechat_keepalive_min_interval),
+        keepalive_max_interval=int(settings.wechat_keepalive_max_interval),
+        auto_relogin_started=auto_relogin_started,
     )
 
     info = dict(evaluation)

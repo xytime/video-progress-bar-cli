@@ -168,7 +168,7 @@ def test_browser_keepalive_wrong_origin(chromium, tmp_path):
 
     assert code == 1
     auth_state = read_wechat_auth_state(state_file)
-    assert auth_state["last_keepalive_status"] in ("INVALID_ORIGIN", "NETWORK_TIMEOUT")
+    assert auth_state["last_keepalive_status"] == "INVALID_ORIGIN"
 
 
 def test_browser_keepalive_login_required(chromium, tmp_path):
@@ -264,3 +264,202 @@ def test_browser_verify_session_reuse_independent_context(chromium, tmp_path):
     assert receipt["positive_controls_verified"] is True
     assert receipt["login_required"] is False
     assert any("session_token=token_abc_123" in c for c in received_cookies)
+
+
+def test_browser_keepalive_generic_file_input_rejected_as_unready(chromium, tmp_path):
+    """反例 1：仅包含空泛的普通 file input（非 video）与通用按钮 → 拒绝判定成功，报 PAGE_UNREADY。"""
+    state_file = tmp_path / "wechat_state.json"
+    initial_content = json.dumps({
+        "cookies": [{"name": "s_cookie", "value": "xyz", "domain": "channels.weixin.qq.com", "path": "/"}],
+        "origins": [],
+    })
+    state_file.write_text(initial_content)
+    record_wechat_authorization(state_file, method="desktop_quick", timestamp=1720000000.0)
+
+    generic_html = """<!DOCTYPE html>
+    <html>
+      <head><title>视频号助手</title></head>
+      <body>
+        <form>
+          <input type="file" name="avatar" accept="image/*" />
+          <button type="submit">发表</button>
+        </form>
+      </body>
+    </html>"""
+
+    def handle_route(route):
+        url = route.request.url
+        if "platform/post/create" in url:
+            route.fulfill(content_type="text/html; charset=utf-8", body=generic_html)
+        else:
+            route.fulfill(status=404, body="Not Found")
+
+    mock_pw = _setup_browser_route(chromium, handle_route)
+
+    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw):
+        code = run_keepalive(state_path=str(state_file), dwell=0)
+
+    assert code == 1
+    assert state_file.read_text() == initial_content
+    auth_state = read_wechat_auth_state(state_file)
+    assert auth_state["last_keepalive_status"] == "PAGE_UNREADY"
+
+
+def test_browser_keepalive_late_redirect_during_dwell_detected(chromium, tmp_path):
+    """反例 2：停留期间发生迟到重定向至登录页 → 最终保存前二次校验阻断，判定 LOGIN_REQUIRED 并退出 2。"""
+    state_file = tmp_path / "wechat_state.json"
+    initial_content = json.dumps({
+        "cookies": [{"name": "expire_token", "value": "old_val", "domain": "channels.weixin.qq.com", "path": "/"}],
+        "origins": [],
+    })
+    state_file.write_text(initial_content)
+    record_wechat_authorization(state_file, method="desktop_quick", timestamp=1720000000.0)
+
+    html_with_late_redirect = """<!DOCTYPE html>
+    <html>
+      <head><title>视频号助手</title></head>
+      <body>
+        <input type="file" accept="video/mp4" />
+        <button class="upload-btn">上传视频</button>
+        <script>
+          setTimeout(() => {
+            window.location.replace("https://channels.weixin.qq.com/platform/login");
+          }, 100);
+        </script>
+      </body>
+    </html>"""
+
+    login_html = """<!DOCTYPE html><html><body><div class="login-box">使用微信扫码登录</div></body></html>"""
+
+    def handle_route(route):
+        url = route.request.url
+        if "platform/post/create" in url:
+            route.fulfill(content_type="text/html; charset=utf-8", body=html_with_late_redirect)
+        elif "platform/login" in url:
+            route.fulfill(content_type="text/html; charset=utf-8", body=login_html)
+        else:
+            route.fulfill(status=404, body="Not Found")
+
+    mock_pw = _setup_browser_route(chromium, handle_route)
+
+    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw), \
+         patch("scripts.wechat_keepalive._send_telegram") as mock_tg:
+        code = run_keepalive(state_path=str(state_file), dwell=1)
+
+    assert code == 2
+    mock_tg.assert_called_once()
+    assert state_file.read_text() == initial_content
+    auth_state = read_wechat_auth_state(state_file)
+    assert auth_state["last_keepalive_status"] == "LOGIN_REQUIRED"
+
+
+def test_browser_spa_guard_dom_error_during_probe_rejects_positive_success(chromium):
+    """反例 3：当轮 DOM 探针异常（如 evaluate/DOM 抛错），即使页面存在正向控件也绝不放行，fail-closed 返回 DOM_ERROR。"""
+    from video_processing.core.wechat_page_contract import wait_for_publish_ready_with_spa_guard
+
+    page = chromium.new_page()
+    try:
+        page.set_content("""
+        <html>
+          <body>
+            <input type="file" accept="video/mp4" />
+            <button class="upload-btn">上传视频</button>
+          </body>
+        </html>
+        """)
+
+        # 即使页面有视频控件，如果 check_explicit_login_prompt 探针发生 DOM 异常
+        with patch("video_processing.core.wechat_page_contract.is_official_wechat_origin", return_value=True), \
+             patch("video_processing.core.wechat_page_contract.is_official_create_url", return_value=True), \
+             patch("video_processing.core.wechat_page_contract.check_explicit_login_prompt", return_value=(False, "DOM_ERROR")):
+            ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=0.6, poll_interval=0.1)
+            assert ready is False
+            assert err_cat == "DOM_ERROR"
+
+        # 如果 check_strong_video_publish_controls 探针发生 DOM 异常
+        with patch("video_processing.core.wechat_page_contract.is_official_wechat_origin", return_value=True), \
+             patch("video_processing.core.wechat_page_contract.is_official_create_url", return_value=True), \
+             patch("video_processing.core.wechat_page_contract.check_explicit_login_prompt", return_value=(False, None)), \
+             patch("video_processing.core.wechat_page_contract.check_strong_video_publish_controls", return_value=(False, "DOM_ERROR")):
+            ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=0.6, poll_interval=0.1)
+            assert ready is False
+            assert err_cat == "DOM_ERROR"
+    finally:
+        page.close()
+
+
+def test_browser_strict_origin_rejects_userinfo_and_non_default_port(chromium, tmp_path):
+    """反例 4：严格 origin 拒绝携带 userinfo 或非默认 443 端口的 URL，并在 keepalive 中记录 INVALID_ORIGIN。"""
+    from video_processing.core.wechat_page_contract import is_official_wechat_origin, is_official_create_url
+
+    # 1. 严格契约函数判据
+    assert not is_official_wechat_origin("https://admin:secret@channels.weixin.qq.com/platform/post/create")
+    assert not is_official_wechat_origin("https://channels.weixin.qq.com:8443/platform/post/create")
+    assert not is_official_wechat_origin("http://channels.weixin.qq.com/platform/post/create")
+    assert not is_official_create_url("https://admin:secret@channels.weixin.qq.com/platform/post/create")
+    assert not is_official_create_url("https://channels.weixin.qq.com:8443/platform/post/create")
+
+    # 2. 真实浏览器路由跳转至伪造非默认端口 URL，keepalive 拒绝并记录 INVALID_ORIGIN
+    state_file = tmp_path / "wechat_state.json"
+    initial_content = json.dumps({
+        "cookies": [{"name": "s_cookie", "value": "xyz", "domain": "channels.weixin.qq.com", "path": "/"}],
+        "origins": [],
+    })
+    state_file.write_text(initial_content)
+    record_wechat_authorization(state_file, method="desktop_quick", timestamp=1720000000.0)
+
+    def handle_route(route):
+        url = route.request.url
+        if ":8443" in url:
+            route.fulfill(
+                content_type="text/html; charset=utf-8",
+                body="<html><body><h1>Non-default port page</h1></body></html>",
+            )
+        else:
+            # 客户端安全重定向，原页返回本地 HTML 做 JS location.replace 跳转，避免 302 触发底层沙箱网络拒绝
+            route.fulfill(
+                content_type="text/html; charset=utf-8",
+                body='<script>window.location.replace("https://channels.weixin.qq.com:8443/platform/post/create");</script>',
+            )
+
+    mock_pw = _setup_browser_route(chromium, handle_route)
+
+    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw):
+        code = run_keepalive(state_path=str(state_file), dwell=0)
+
+    assert code == 1
+    assert state_file.read_text() == initial_content
+    auth_state = read_wechat_auth_state(state_file)
+    assert auth_state["last_keepalive_status"] == "INVALID_ORIGIN"
+
+
+def test_browser_verify_session_reuse_generic_file_input_rejected(chromium, tmp_path):
+    """反例 5：verify_session_reuse 遇到普通图片上传或通用提交按钮时，严格拒绝正向通过。"""
+    state_file = tmp_path / "wechat_state.json"
+    state_file.write_text(json.dumps({
+        "cookies": [{"name": "session_token", "value": "token_abc_123", "domain": "channels.weixin.qq.com", "path": "/"}],
+        "origins": [],
+    }))
+    record_wechat_authorization(state_file, method="scan_qr", timestamp=1720000000.0)
+
+    def handle_route(route):
+        req = route.request
+        if "platform/post/create" in req.url:
+            route.fulfill(
+                content_type="text/html; charset=utf-8",
+                body="""<!DOCTYPE html><html><body>
+                <input type="file" name="avatar" accept="image/*" />
+                <button type="submit">发表</button>
+                </body></html>""",
+            )
+        else:
+            route.fulfill(status=404, body="Not Found")
+
+    mock_pw = _setup_browser_route(chromium, handle_route)
+
+    with patch("scripts.verify_wechat_session_reuse.sync_playwright", return_value=mock_pw):
+        receipt = verify_session_reuse(state_file)
+
+    assert receipt["success"] is False
+    assert receipt["positive_controls_verified"] is False
+    assert receipt["error_type"] == "PAGE_UNREADY"

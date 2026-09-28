@@ -1,5 +1,7 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| 3.54.0 | 2026-09-28 | Antigravity | /api/wechat/status 基于结构化验证事实判断登录有效性；自动重登与登录恢复绑定本次成功授权时间戳 |
+| 3.53.0 | 2026-09-28 | Antigravity | 持久化记录实际随机选定的计划保活时刻，消除计划保活时间估算的平均伪造。 |
 | 3.52.0 | 2026-09-28 | Antigravity | 会话重登检测优先读取结构化授权状态，保活循环识别锁冲突 (code 11) 不再报错。 |
 | 3.51.0 | 2026-09-26 | Antigravity | 修复移动端静态资源强缓存导致新卡片样式未生效问题；HTML 注入静态文件 mtime 版本号，直出无缓存响应头。 |
 | 3.50.0 | 2026-09-26 | Antigravity | 全局漏斗与频道漏斗端点默认时间窗口统一改为 today_bj (北京时间今日)。 |
@@ -432,12 +434,29 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
         except Exception:
             pass
 
+    start_ts = time.time()
+    from video_processing.core.wechat_auth_state import read_wechat_auth_state
+    pre_auth = read_wechat_auth_state(state) if state.exists() else {}
+    pre_auth_at = float(pre_auth.get("authorized_at") or 0.0)
+
     def _run():
         try:
             result = subprocess.run(args, cwd=str(prj_root), env=_wechat_login_env())
-            if result.returncode == 0 and _wechat_login_marker_active(login_at_path):
+            post_auth = read_wechat_auth_state(state) if state.exists() else {}
+            post_auth_at = float(post_auth.get("authorized_at") or 0.0)
+            auth_succeeded_this_run = (
+                result.returncode == 0
+                and post_auth_at > pre_auth_at
+                and post_auth_at >= (start_ts - 2.0)
+            )
+            if auth_succeeded_this_run:
                 _restore_login_required_after_wechat_login()
                 _resume_eligible_english_world_after_wechat_login()
+            else:
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"WeChat login subprocess finished (code={result.returncode}) but fresh authorization was not confirmed (pre={pre_auth_at}, post={post_auth_at}, start={start_ts})."
+                )
         except Exception as exc:
             import logging
             logging.getLogger(__name__).error(f"WeChat login subprocess failed ({reason}): {exc}")
@@ -836,6 +855,12 @@ def _wechat_keepalive_loop():
         min_s = settings.wechat_keepalive_min_interval * 60
         max_s = settings.wechat_keepalive_max_interval * 60
         interval = random.randint(min_s, max_s)
+        next_ts = time.time() + interval
+        try:
+            from video_processing.core.wechat_auth_state import record_wechat_keepalive_schedule
+            record_wechat_keepalive_schedule(state_file, scheduled_at=next_ts)
+        except Exception as _exc:
+            log.warning("[Keepalive] Failed to record keepalive schedule: %s", _exc)
         log.info(f"[Keepalive] Next keepalive scheduled in {interval // 60}m{interval % 60}s.")
         time.sleep(interval)
 
@@ -3603,11 +3628,23 @@ def get_wechat_status():
     is_running = _is_wechat_login_running()
     login_marker_active = _wechat_login_marker_active(login_at_path)
     login_flow_active = is_running or qr_path.exists()
+
+    from video_processing.core.wechat_auth_state import (
+        read_wechat_auth_state,
+        evaluate_wechat_session_status,
+    )
+    auth_state = read_wechat_auth_state(state_path) if state_path.exists() else {}
+    eval_status = (
+        evaluate_wechat_session_status(auth_state, state_file_exists=state_path.exists())
+        if state_path.exists()
+        else {"status_label": "❌ 凭证文件缺失"}
+    )
     
     return {
         "logged_in": state_path.exists() and login_marker_active,
         "state_exists": state_path.exists(),
         "login_marker_active": login_marker_active,
+        "status_label": eval_status.get("status_label"),
         "qr_exists": qr_path.exists(),
         "is_running": is_running,
         "login_flow_active": login_flow_active,
@@ -3635,12 +3672,23 @@ def _is_wechat_login_running() -> bool:
 
 
 def _wechat_login_marker_active(login_at_path: Path, max_age_hours: int = 23) -> bool:
-    """仅把真实扫码成功后写入且未超龄的标记视为登录有效。"""
-    try:
-        login_at = int(login_at_path.read_text().strip())
-    except Exception:
+    """结合结构化状态与验证事实判断微信会话是否真实处于有效登录态。
+
+    不再单凭文本文件时间戳或固定 23h 断言有效，而是优先核验结构化授权状态与最近验证事实。
+    """
+    prj_root = Path(__file__).parent.parent.parent
+    state_file = prj_root / "output" / "wechat_state.json"
+    if not state_file.is_file():
         return False
-    return (time.time() - login_at) < max_age_hours * 3600
+
+    from video_processing.core.wechat_auth_state import (
+        read_wechat_auth_state,
+        evaluate_wechat_session_status,
+    )
+    auth_state = read_wechat_auth_state(state_file)
+    eval_res = evaluate_wechat_session_status(auth_state, state_file_exists=True)
+    valid_labels = ("✅ 授权且已验证", "🟡 会话已验证（授权时间未知）", "🟡 已达重登阈值", "⚠️ 临近重登阈值")
+    return eval_res.get("status_label") in valid_labels
 
 
 def _is_pipeline_manager_running() -> bool:
