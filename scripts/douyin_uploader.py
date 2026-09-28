@@ -2374,10 +2374,27 @@ def submission_preflight_allows_publish(page, artifact_dir: Path, *, title_text:
 
     if not final_metadata_matches(page, title_text, description_text):
         capture_controls(page, artifact_dir, "douyin_final_metadata_mismatch")
-        return False
+        # 封面编辑期间平台可能异步替换末尾话题。只重填同一审核正文一次，
+        # 等待推荐出现再关闭，绝不改标题或接受推荐词。
+        editor = get_description_editor(page)
+        if not editor:
+            return False
+        editor.fill(description_text.strip() + "\n")
+        page.wait_for_timeout(2_000)
+        editor.press("Escape")
+        editor.evaluate("element => element.blur()")
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(500)
+        if not final_metadata_matches(page, title_text, description_text):
+            capture_controls(page, artifact_dir, "douyin_metadata_restore_failed")
+            return False
 
     if not quick_detection_allows_submission(page):
         capture_controls(page, artifact_dir, "douyin_quick_detection_blocked")
+        return False
+
+    if not final_metadata_matches(page, title_text, description_text):
+        capture_controls(page, artifact_dir, "douyin_metadata_changed_after_detection")
         return False
 
     capture_controls(page, artifact_dir, "douyin_preflight_ready")

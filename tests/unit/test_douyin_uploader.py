@@ -1612,3 +1612,24 @@ def test_launch_arguments_allow_leading_hyphen_without_browser(monkeypatch):
     args = parse_args()
     assert args.douyin_launch_ticket_id == "-ticket"
     assert args.douyin_launch_token == "-token"
+
+
+@pytest.mark.parametrize("matches,allowed", [([False, True, True], True), ([False, False], False), ([True, False], False)])
+def test_preflight_restores_only_reviewed_copy_once_and_rechecks_after_detection(tmp_path, matches, allowed):
+    page = MagicMock()
+    page.url = "https://creator.douyin.com/creator-micro/content/post/video"
+    page.title.return_value = "抖音"
+    page.evaluate.return_value = True
+    control = MagicMock()
+    control.count.return_value = 1
+    control.evaluate_all.return_value = []
+    page.locator.return_value = control
+    with patch("scripts.douyin_uploader.final_metadata_matches", side_effect=matches), patch(
+        "scripts.douyin_uploader.quick_detection_allows_submission", return_value=True
+    ):
+        assert submission_preflight_allows_publish(page, tmp_path, title_text="标题", description_text="正文 #科技前沿") is allowed
+    if not matches[0]:
+        control.fill.assert_called_once_with("正文 #科技前沿\n")
+    else:
+        control.fill.assert_not_called()
+    page.get_by_text.assert_not_called()
