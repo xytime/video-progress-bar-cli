@@ -2873,8 +2873,8 @@ class PipelineManager:
             "--fail-fast-login",
             "--prepare-description",
             "--publish",
-            "--douyin-launch-ticket", ticket_id,
-            "--douyin-launch-token", launch_token,
+            f"--douyin-launch-ticket={ticket_id}",
+            f"--douyin-launch-token={launch_token}",
             "--cover", str(cover_file),
         ]
         if horizontal_cover_file:

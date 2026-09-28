@@ -209,8 +209,8 @@ def submit(review_id: str) -> int:
             "--fail-fast-login",
             "--prepare-description",
             "--publish",
-            "--douyin-launch-ticket", ticket_id,
-            "--douyin-launch-token", launch_token,
+            f"--douyin-launch-ticket={ticket_id}",
+            f"--douyin-launch-token={launch_token}",
         ]
         if not settings.douyin_browser_headless:
             command.append("--no-headless")

@@ -2146,22 +2146,6 @@ def _normalized_metadata_text(text: str) -> str:
     )
 
 
-def _is_terminal_hashtag_platform_expansion(expected: str, actual: str) -> bool:
-    """只接受末尾同源话题被平台加 1--6 个中文限定字的规范化。
-
-    平台会把 ``#英文阅读`` 显示为 ``#英文阅读书单`` 一类推荐话题。正文及此前
-    所有话题必须完全相同，且标题永远不走本例外，避免把平台改写误当作原文一致。
-    """
-    expected_prefix, expected_marker, expected_tag = expected.rpartition("#")
-    actual_prefix, actual_marker, actual_tag = actual.rpartition("#")
-    if not expected_marker or not actual_marker or expected_prefix != actual_prefix:
-        return False
-    if not expected_tag or not actual_tag.startswith(expected_tag):
-        return False
-    extension = actual_tag[len(expected_tag):]
-    return 1 <= len(extension) <= 6 and all("\u4e00" <= char <= "\u9fff" for char in extension)
-
-
 def _filled_text_matches(control, expected: str, *, is_title: bool) -> bool:
     """回读已填写的作品元信息；任何无法读取或不一致均按失败处理。"""
     expected_normalized = _normalized_metadata_text(expected)
@@ -2173,15 +2157,6 @@ def _filled_text_matches(control, expected: str, *, is_title: bool) -> bool:
         logger.error("抖音%s填写后无法回读：%s", "标题" if is_title else "作品描述", exc)
         return False
     actual_normalized = _normalized_metadata_text(actual)
-    if (
-        not is_title
-        and _is_terminal_hashtag_platform_expansion(expected_normalized, actual_normalized)
-    ):
-        logger.warning(
-            "抖音仅将末尾话题规范化扩写，正文与此前话题保持一致：expected=%r actual=%r",
-            expected[-80:], str(actual)[-80:],
-        )
-        return True
     if actual_normalized != expected_normalized:
         logger.error(
             "抖音%s填写后回读不一致，拒绝发布：expected=%r actual=%r",

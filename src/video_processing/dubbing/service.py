@@ -629,8 +629,8 @@ class DubbingService:
         }
         if douyin_launch:
             commands["douyin"].extend([
-                "--douyin-launch-ticket", str(douyin_launch["_douyin_launch_ticket_id"]),
-                "--douyin-launch-token", str(douyin_launch["_douyin_launch_token"]),
+                "--douyin-launch-ticket=" + str(douyin_launch["_douyin_launch_ticket_id"]),
+                "--douyin-launch-token=" + str(douyin_launch["_douyin_launch_token"]),
             ])
         result = subprocess.run(
             [str(self.project_root / ".venv" / "bin" / "python"), *commands[platform]],

@@ -766,7 +766,7 @@ def test_douyin_fill_fields_never_clicks_hashtag_suggestion(tmp_path: Path):
     page.get_by_text.assert_not_called()
 
 
-def test_final_metadata_accepts_platform_terminal_hashtag_expansion_only():
+def test_final_metadata_rejects_platform_terminal_hashtag_expansion():
     title = MagicMock()
     title.count.return_value = 1
     title.input_value.return_value = "标题"
@@ -776,7 +776,7 @@ def test_final_metadata_accepts_platform_terminal_hashtag_expansion_only():
     page = MagicMock()
     page.locator.side_effect = lambda selector: title if selector == DOUYIN_TITLE_SELECTOR else editor
 
-    assert final_metadata_matches(page, "标题", "正文 #英文阅读")
+    assert not final_metadata_matches(page, "标题", "正文 #英文阅读")
 
 
 def test_final_metadata_rejects_platform_replaced_hashtag_with_new_base_topic():
@@ -1603,3 +1603,11 @@ def test_douyin_publish_fields_refuse_missing_required_metadata(tmp_path: Path):
 
     assert not fill_publish_fields(page, "", "描述", tmp_path)
     title.fill.assert_not_called()
+
+
+def test_launch_arguments_allow_leading_hyphen_without_browser(monkeypatch):
+    from scripts.douyin_uploader import parse_args
+    monkeypatch.setattr("sys.argv", ["douyin_uploader.py", "--douyin-launch-ticket=-ticket", "--douyin-launch-token=-token"])
+    args = parse_args()
+    assert args.douyin_launch_ticket_id == "-ticket"
+    assert args.douyin_launch_token == "-token"

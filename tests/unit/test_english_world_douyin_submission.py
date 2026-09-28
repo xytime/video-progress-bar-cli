@@ -166,8 +166,8 @@ def test_management_verify_fuse_allows_claim_and_publish_worker(monkeypatch, tmp
     command = worker.call_args.args[0]
     assert "--publish" in command
     assert command[command.index("--horizontal-cover") + 1] == str(tmp_path / "cover.jpg")
-    assert command[command.index("--douyin-launch-ticket") + 1] == "ew-ticket-1"
-    assert command[command.index("--douyin-launch-token") + 1] == "ew-token-1"
+    assert "--douyin-launch-ticket=ew-ticket-1" in command
+    assert "--douyin-launch-token=ew-token-1" in command
     assert db.completed[0][0] == review_id
     assert db.completed[0][1]["state"] == "UNDER_REVIEW"
 

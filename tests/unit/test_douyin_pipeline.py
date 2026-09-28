@@ -170,8 +170,8 @@ def test_claimed_douyin_publication_runs_publish_and_marks_under_review(tmp_path
     assert command[command.index("--evidence-dir") + 1] == str(
         tmp_path / "douyin_evidence" / "video-id" / "17"
     )
-    assert command[command.index("--douyin-launch-ticket") + 1] == "ticket-17"
-    assert command[command.index("--douyin-launch-token") + 1] == "token-17"
+    assert "--douyin-launch-ticket=ticket-17" in command
+    assert "--douyin-launch-token=token-17" in command
     manager.db.bind_douyin_browser_launch_ticket_payload.assert_called_once()
     manager.db.update_douyin_publication_state.assert_called_once()
     args, kwargs = manager.db.update_douyin_publication_state.call_args

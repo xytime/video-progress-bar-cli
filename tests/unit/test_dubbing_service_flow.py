@@ -213,8 +213,8 @@ def test_publish_one_maps_platform_under_review_exit_code(tmp_path, monkeypatch)
         error_message="已提交，等待平台作品管理页确认可见。",
     )
     command = run.call_args.args[0]
-    assert command[command.index("--douyin-launch-ticket") + 1] == "dubbing-ticket-91"
-    assert command[command.index("--douyin-launch-token") + 1] == "dubbing-token-91"
+    assert "--douyin-launch-ticket=dubbing-ticket-91" in command
+    assert "--douyin-launch-token=dubbing-token-91" in command
 
 
 def test_publish_one_maps_platform_banned_exit_code(tmp_path, monkeypatch):
