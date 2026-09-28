@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author      | Description                                                  |
 |---------|------------|-------------|--------------------------------------------------------------|
+| 1.2.0   | 2026-09-28 | Antigravity | 接入统一 wechat_browser_context 工厂：统一 Viewport、真实 Chrome UA 与 init_script 反检测指纹。 |
 | 1.1.0   | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract，严格 HTTPS 官方域名与正向控件判据；回执脱敏仅输出白名单分类，消除 URL 查询与原始异常泄漏 |
 | 1.0.0   | 2026-09-28 | Antigravity | 初始创建：独立全新上下文复用验证脚本，输出结构化诊断凭据     |
 """
@@ -38,6 +39,7 @@ from video_processing.core.wechat_page_contract import (
     check_strong_video_publish_controls,
     wait_for_publish_ready_with_spa_guard,
 )
+from video_processing.core.wechat_browser_context import create_wechat_context
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,23 +87,8 @@ def verify_session_reuse(state_path: str | Path, *, timeout_ms: int = 25000) -> 
         )
 
         try:
-            # 独立全新上下文
-            context = browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                storage_state=str(state_file),
-            )
-
-            context.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', { get: () => false });
-                window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){}, app: {} };
-                delete window.__playwright;
-                delete window.__pw_manual;
-            """)
+            # 独立全新上下文（统一通过 wechat_browser_context 工厂配置 Viewport、UA 与 init_script）
+            context = create_wechat_context(browser, storage_state=state_file)
 
             page = context.new_page()
 

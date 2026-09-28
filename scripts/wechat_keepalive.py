@@ -13,6 +13,7 @@
 | 1.4.0   | 2026-09-25 | Codex | 登录过期时保留会话龄标记，让控制台恢复流程仍能识别过期会话。 |
 | 1.5.0   | 2026-09-28 | Antigravity | 整改 WX-AUTH-20260927：去除首次保活伪造授权时间；增加官方来源与正向发布控件校验（消除乐观成功）；导航有界重试并分离网络超时/SPA未就绪/LOGIN_REQUIRED；存储原子写入且失败报失败；锁冲突返回 EXIT_WECHAT_SESSION_BUSY (11)。 |
 | 1.6.0   | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract，消除判据漂移；DOM探针异常不掩盖登录态；有界等待SPA正向控件；白名单脱敏失败分类 |
+| 1.7.0   | 2026-09-28 | Antigravity | 接入统一 wechat_browser_context 工厂：统一 Viewport、真实 Chrome UA 与 init_script 反检测指纹。 |
 
 Exit Codes:
     0 - Session 活跃，Cookie 已刷新且正向控件校验通过
@@ -49,6 +50,7 @@ from video_processing.core.wechat_page_contract import (
     check_strong_video_publish_controls,
     wait_for_publish_ready_with_spa_guard,
 )
+from video_processing.core.wechat_browser_context import create_wechat_context
 
 try:
     import requests as _requests
@@ -183,37 +185,7 @@ def run_keepalive(
             ]
         )
 
-        context_opts = {
-            "viewport": {"width": 1280, "height": 800},
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "storage_state": str(state_file),
-        }
-
-        context = browser.new_context(**context_opts)
-
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            window.chrome = {
-                runtime: {},
-                loadTimes: function(){},
-                csi: function(){},
-                app: {}
-            };
-            Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
-            const _oq = window.navigator.permissions.query;
-            window.navigator.permissions.query = (p) =>
-                p.name === 'notifications'
-                    ? Promise.resolve({ state: Notification.permission })
-                    : _oq(p);
-            delete window.__playwright;
-            delete window.__pw_manual;
-            delete window._phantom;
-        """)
+        context = create_wechat_context(browser, storage_state=state_file)
 
         page = context.new_page()
 

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.0 | 2026-09-28 | Antigravity | 接入统一 wechat_browser_context 工厂：统一初始 context 与内部 reuse_ctx 的真实 Chrome UA、Viewport 与 init_script 反检测指纹，确保独立复用门禁指纹与初始环境 100% 一致；relogin 保证初始不加载旧会话。 |
 | 5.16.0 | 2026-09-28 | Antigravity | 严格过滤 login frame 非默认端口与 userinfo；管理页分支与发布检测中遇到 DOM_ERROR 立即失败拒绝 fail-open。 |
 | 5.15.0 | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract；修复 context.browser 为空 fail-open、初始检查未知路由放行、登录通知过度承诺与发布等待期源重核验。 |
 | 5.14.0 | 2026-09-28 | Antigravity | 消除乐观登录判定：初始检查、快捷授权与 _wait_and_save_login 必须官方 HTTPS 源 + 正向视频发布控件；经独立全新浏览器上下文复用验证通过后原子提交会话；移除 legacy marker 回退伪造；login-only 不触发续投。 |
@@ -122,6 +123,7 @@ from video_processing.core.wechat_session_lock import (
 from video_processing.core.wechat_upload_recovery import (
     PRE_SUBMIT_UPLOAD_TIMEOUT, write_timeout_receipt,
 )
+from video_processing.core.wechat_browser_context import create_wechat_context
 
 try:
     import requests as _requests
@@ -1423,13 +1425,10 @@ def _wait_and_save_login(
             record_wechat_auth_attempt(state_file, method=method, success=False, reason="STORAGE_FAILED")
             raise
 
-        # 启动全新独立浏览器上下文验证会话复用（独立复用门禁）
+        # 启动全新独立浏览器上下文验证会话复用（独立复用门禁：严格与初始上下文环境指纹一致）
         logger.info("Verifying session reuse in an independent fresh browser context...")
         try:
-            reuse_ctx = browser.new_context(
-                viewport={"width": 1280, "height": 800},
-                storage_state=str(tmp_verify_state),
-            )
+            reuse_ctx = create_wechat_context(browser, storage_state=tmp_verify_state)
         except Exception:
             record_wechat_auth_attempt(state_file, method=method, success=False, reason="REUSE_VERIFICATION_FAILED")
             raise
@@ -1744,46 +1743,19 @@ def run_uploader(
             ]
         )
 
-        # 加载 Cookie 状态
-        context_opts = {
-            "viewport": {"width": 1280, "height": 800},
-            # 使用真实 Chrome UA（与保存 Session 时一致）
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-        }
+        # 加载 Cookie 状态（统一通过 wechat_browser_context 工厂配置 Viewport、UA 与 init_script）
         if relogin:
             # [Claude_Opus_4.8] 强制重登：不加载旧会话→必到登录页出二维码。旧 state 文件**不删**，
             # 仅在扫码成功后由 context.storage_state() 覆盖；未扫码则旧会话保持有效（管线不掉线）。
             logger.info("Force-relogin: ignoring existing session, will show fresh QR.")
+            initial_state = None
         elif state_file.exists():
             logger.info(f"Loading session state from: {state_file}")
-            context_opts["storage_state"] = str(state_file)
+            initial_state = state_file
+        else:
+            initial_state = None
 
-        context = browser.new_context(**context_opts)
-
-        # [Claude_Sonnet_4.6_Thinking_planning] 反检测 v2.0: 完整浏览器指纹伪造
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            window.chrome = {
-                runtime: {},
-                loadTimes: function(){},
-                csi: function(){},
-                app: {}
-            };
-            Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
-            const _oq = window.navigator.permissions.query;
-            window.navigator.permissions.query = (p) =>
-                p.name === 'notifications'
-                    ? Promise.resolve({ state: Notification.permission })
-                    : _oq(p);
-            delete window.__playwright;
-            delete window.__pw_manual;
-            delete window._phantom;
-        """)
+        context = create_wechat_context(browser, storage_state=initial_state)
 
         page = context.new_page()
 
