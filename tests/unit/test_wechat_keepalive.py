@@ -3,7 +3,8 @@
 # Modification History
 | Version | Date       | Author                              | Description                              |
 |---------|------------|-------------------------------------|------------------------------------------|
-| 1.3.0   | 2026-09-28 | Antigravity | 整改 WX-AUTH-20260927：增加正向发布控件校验、网络超时重试与故障分类、存储失败阻断、锁忙 (11) 及不伪造授权时刻 |
+| 1.3.1   | 2026-09-28 | Antigravity                         | 修复 _make_page_mock：建模 get_by_role/get_by_text count=0 与 frames=[]，防止 TypeError 误判 DOM_ERROR |
+| 1.3.0   | 2026-09-28 | Antigravity                         | 整改 WX-AUTH-20260927：增加正向发布控件校验、网络超时重试与故障分类、存储失败阻断、锁忙 (11) 及不伪造授权时刻 |
 | 1.2.0   | 2026-09-25 | Codex | 过期保活仍保留重登调度所需的时间标记。 |
 | 1.1.0   | 2026-09-08 | Codex | 注入实际被业务读取的 settings 单例，报警单测不依赖宿主 Telegram 配置 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | Initial creation: unit tests covering logged-in, session-expired, missing-file |
@@ -29,11 +30,26 @@ def _make_page_mock(url: str, dom_login: bool = False, has_file_input: bool = Tr
     page.wait_for_timeout.return_value = None
     page.wait_for_load_state.return_value = None
     page.evaluate.return_value = has_file_input
+    page.frames = []
+    page.main_frame = None
 
     # 登录 DOM 检测与控件 locator
     login_loc = MagicMock()
     login_loc.is_visible.return_value = dom_login
+    login_loc.count.return_value = 1 if dom_login else 0
+    login_loc.first = login_loc
+    login_loc.nth.return_value = login_loc
     page.locator.return_value = login_loc
+
+    # role / text locator mock 建模：无控件时 count=0, visible=False, evaluate=False
+    control_loc = MagicMock()
+    control_loc.count.return_value = 0
+    control_loc.is_visible.return_value = False
+    control_loc.first = control_loc
+    control_loc.nth.return_value = control_loc
+    control_loc.evaluate.return_value = False
+    page.get_by_role.return_value = control_loc
+    page.get_by_text.return_value = control_loc
     return page
 
 
