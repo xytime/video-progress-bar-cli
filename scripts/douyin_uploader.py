@@ -278,10 +278,7 @@ def _operator_recovery_matches_active_stages(
     if not active_stages or not active_stages.issubset(known_stages):
         return False
     if action == _UI_GUARD_ACTION_MANAGEMENT_VERIFY:
-        return (
-            stage == DOUYIN_UI_STAGE_MANAGEMENT_VERIFY
-            and active_stages == {DOUYIN_UI_STAGE_MANAGEMENT_VERIFY}
-        )
+        return stage == DOUYIN_UI_STAGE_MANAGEMENT_VERIFY
     return (
         stage == DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT
         and DOUYIN_UI_STAGE_PUBLISH_PRE_SUBMIT in active_stages
@@ -570,7 +567,14 @@ def verify_management_publication(
         logger.error("抖音作品管理页登录态失效")
         return None
     capture_controls(page, artifact_dir, "douyin_management_evidence")
-    return get_management_publication_state(page_text, copy_text, title_text)
+    state = get_management_publication_state(page_text, copy_text, title_text)
+    # 控件快照只截取前 2000 字；目标在后续卡片时必须保留实际判定输入。
+    (artifact_dir / "douyin_management_readback.json").write_text(
+        json.dumps({"title": title_text.strip(), "copy_sha256": hashlib.sha256(copy_text.encode()).hexdigest(),
+                    "state": state, "page_text": page_text}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return state
 
 
 def capture_controls(page, artifact_dir: Path, artifact_name: str) -> None:
@@ -980,6 +984,7 @@ def upload_for_calibration(
             cover_path=cover_path,
             horizontal_cover_path=horizontal_cover_path,
         ):
+            capture_controls(page, artifact_dir, "douyin_fields_failed")
             return False
     logger.info("已上传文件并保存抖音上传后表单控件；未保存草稿、未发布")
     return True
@@ -2582,11 +2587,22 @@ def _main_with_session(args) -> int:
         return guard_exit
 
     artifact_dir = args.evidence_dir or args.state.parent / "douyin_calibration"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    diagnostic_log = logging.FileHandler(artifact_dir / "douyin_uploader.log", encoding="utf-8")
+    diagnostic_log.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logger.addHandler(diagnostic_log)
     try:
         playwright_context = sync_playwright()
         playwright = playwright_context.__enter__()
     except KeyboardInterrupt:
+        logger.removeHandler(diagnostic_log)
+        diagnostic_log.close()
         return EXIT_UNCONFIRMED
+    except Exception:
+        logger.exception("抖音浏览器运行时初始化失败，未开始页面操作")
+        logger.removeHandler(diagnostic_log)
+        diagnostic_log.close()
+        raise
     try:
         browser = playwright.chromium.launch(headless=not args.no_headless)
         context_kwargs = {}
@@ -2720,6 +2736,8 @@ def _main_with_session(args) -> int:
         logger.warning("抖音上传器被中断，本次状态未确认")
         return EXIT_UNCONFIRMED
     finally:
+        logger.removeHandler(diagnostic_log)
+        diagnostic_log.close()
         try:
             playwright_context.__exit__(None, None, None)
         except Exception:

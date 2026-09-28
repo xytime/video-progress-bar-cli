@@ -2949,6 +2949,9 @@ class PipelineManager:
                 state = "RETRYABLE_FAILED"
                 reason = f"抖音上传器失败（exit {exc.returncode}）：{stderr[:500]}"
             if ui_failure_stage:
+                # 保留具体控件/回读错误，不能只留下阶段概述而丢失恢复依据。
+                if stderr.strip():
+                    reason = f"{reason} 上传器诊断：{stderr.strip()[-1500:]}"
                 reason = self._record_douyin_ui_failure(
                     ui_failure_stage, reason,
                     evidence_dir=self._douyin_attempt_evidence_dir(publication_id, yid, slice_index),

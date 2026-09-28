@@ -220,6 +220,7 @@ def test_uncalibrated_douyin_publish_cancels_automatic_retry(tmp_path: Path, mon
     assert args == (18, "CANCELED")
     assert "尚未完成页面校准" in kwargs["error_message"]
     assert "停止自动重试" in kwargs["error_message"]
+    assert "not calibrated" in kwargs["error_message"]
     manager.db.record_platform_ui_failure.assert_called_once()
 
 

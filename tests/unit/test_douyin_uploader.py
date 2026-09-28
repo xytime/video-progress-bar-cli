@@ -52,6 +52,7 @@
 """
 
 import json
+import pytest
 import hashlib
 from pathlib import Path
 from types import SimpleNamespace
@@ -377,6 +378,33 @@ def test_raw_uploader_recovery_allows_audited_publish_page_snapshot(tmp_path: Pa
 
     assert _guard_before_browser(args, db=db, calibration_root=evidence_dir.parent) is None
     assert (evidence_dir / "operator_recovery_calibration.json").is_file()
+
+
+@pytest.mark.parametrize("stages", [("publish_pre_submit",), ("publish_pre_submit", "management_verify")])
+def test_recovery_verification_with_two_fuses_is_read_only_and_audited(tmp_path: Path, stages):
+    """投稿熔断不得阻止人工恢复核验，但未知阶段和最终提交仍拒绝。"""
+    evidence_dir = tmp_path / "douyin_calibration" / "management"
+    db = MagicMock()
+    db.get_platform_ui_failure_streaks.return_value = [
+        {"stage": stage, "active": 1, "consecutive_failures": 2}
+        for stage in stages
+    ]
+    args = _raw_uploader_args(tmp_path=tmp_path)
+    args.verify_only = True
+    args.operator_recovery_stage = "management_verify"
+    args.operator_recovery_reason = "只读核验双熔断事故"
+    args.evidence_dir = evidence_dir
+    assert _guard_before_browser(args, db=db, calibration_root=evidence_dir.parent) is None
+    audit = json.loads((evidence_dir / "operator_recovery_calibration.json").read_text())
+    assert audit["final_publish"] is False
+    assert audit["active_stages"] == sorted(stages)
+    db.begin_douyin_browser_launch.assert_not_called()
+    db.get_platform_ui_failure_streaks.return_value.append(
+        {"stage": "unknown", "active": 1, "consecutive_failures": 2}
+    )
+    assert _guard_before_browser(args, db=db, calibration_root=evidence_dir.parent) == EXIT_NOT_CALIBRATED
+    args.publish = True
+    assert _guard_before_browser(args, db=db, calibration_root=evidence_dir.parent) == EXIT_FAILED
 
 
 def test_management_state_requires_exact_copy_identity_and_local_card_status():
