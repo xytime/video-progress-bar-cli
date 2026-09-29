@@ -5,6 +5,8 @@
  * | --- | --- | --- | --- |
  * | 1.0.0 | 2026-09-26 | Codex | 仅可见微信小型候选窗口与 Vision 离线 OCR。 |
  * | 1.1.0 | 2026-09-27 | Antigravity | 放宽模态面板层级窗口过滤(0<=layer<=30)，适配微信自绘授权弹窗。 |
+ * | 1.2.0 | 2026-09-29 | Antigravity | 原生鼠标事件补全移动光标、按压保持(60ms)、clickState=1，sleep 后重验期限与目标，finally 释放。 |
+ * | 1.3.0 | 2026-09-29 | Antigravity | 增加底层 visible 存活探针；click 补全精确 JSON 重验、前台重验、down/up 创建校验及 NSThread 睡眠。 |
  */
 ObjC.import('Foundation');
 ObjC.import('AppKit');
@@ -27,6 +29,16 @@ function authWindows() {
 }
 function run(args) {
     if (args[0] === 'windows') return JSON.stringify(authWindows());
+    if (args[0] === 'visible' && args.length === 2) {
+        var query = JSON.parse(args[1]);
+        var all = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1, 0)));
+        var exists = all.some(function(w) {
+            return w.kCGWindowNumber === query.id &&
+                   w.kCGWindowOwnerPID === query.pid &&
+                   Boolean(w.kCGWindowIsOnscreen);
+        });
+        return exists ? 'true' : 'false';
+    }
     if (args[0] === 'click' && args.length === 2) {
         var target = JSON.parse(args[1]), b = target.window.bounds;
         var front = $.NSWorkspace.sharedWorkspace.frontmostApplication;
@@ -35,10 +47,35 @@ function run(args) {
         if (!present || !Number.isFinite(target.x) || !Number.isFinite(target.y) ||
             target.x < b.X || target.x >= b.X + b.Width || target.y < b.Y || target.y >= b.Y + b.Height ||
             !Number.isFinite(target.expiresAt) || Date.now() >= target.expiresAt) return 'false';
+
+        var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(target.window.pid);
+        if (app) app.activateWithOptions($.NSApplicationActivateIgnoringOtherApps);
+
         var point = $.CGPointMake(target.x, target.y);
-        // Qt 自绘按钮可能拒绝 AXPress；仅已验证的授权窗口使用原生鼠标事件。
-        $.CGEventPost(0, $.CGEventCreateMouseEvent(null, 1, point, 0));
-        $.CGEventPost(0, $.CGEventCreateMouseEvent(null, 2, point, 0));
+        // 先移动光标至目标按钮，稳定指针与 hover 状态
+        var moveEvent = $.CGEventCreateMouseEvent(null, 5, point, 0); // 5: kCGEventMouseMoved
+        if (moveEvent) $.CGEventPost(0, moveEvent);
+        $.NSThread.sleepForTimeInterval(0.02); // 20ms 移动稳定
+
+        // sleep 后派发前必须重验期限、前台应用及完整可信目标 (PID+ID+完整 bounds)
+        var currentFront = $.NSWorkspace.sharedWorkspace.frontmostApplication;
+        if (!currentFront || ObjC.unwrap(currentFront.bundleIdentifier) !== 'com.tencent.xinWeChat') return 'false';
+        if (Date.now() >= target.expiresAt) return 'false';
+        var stillPresent = authWindows().some(function(w) { return JSON.stringify(w) === JSON.stringify(target.window); });
+        if (!stillPresent) return 'false';
+
+        // Qt 自绘按钮可能拒绝 AXPress；仅已验证的授权窗口使用原生鼠标事件。显式设置 clickState=1 并在 finally 中释放。
+        var downEvent = $.CGEventCreateMouseEvent(null, 1, point, 0); // 1: kCGEventLeftMouseDown
+        var upEvent = $.CGEventCreateMouseEvent(null, 2, point, 0);   // 2: kCGEventLeftMouseUp
+        if (!downEvent || !upEvent) return 'false';
+        $.CGEventSetIntegerValueField(downEvent, 1, 1); // 1: kCGMouseEventClickState
+        $.CGEventSetIntegerValueField(upEvent, 1, 1);
+        try {
+            $.CGEventPost(0, downEvent);
+            $.NSThread.sleepForTimeInterval(0.06); // 60ms 按压保持时长
+        } finally {
+            $.CGEventPost(0, upEvent);
+        }
         return 'true';
     }
     if (args[0] !== 'ocr' || args.length !== 2) throw Error('INVALID_ARGUMENTS');
