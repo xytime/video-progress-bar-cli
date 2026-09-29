@@ -1335,6 +1335,7 @@ def get_cover(youtube_id: str):
 @app.get("/api/stats")
 def get_stats():
     """返回各状态视频数量，用于顶部统计卡片"""
+    from video_processing.core.ffmpeg_slot import config_status
     counts = db.get_status_counts()
     total = sum(counts.values())
     active = sum(v for k, v in counts.items() if k in PROCESSING_STATUSES)
@@ -1349,7 +1350,7 @@ def get_stats():
         "detailed": detailed,
         "server_time": datetime.now().strftime("%H:%M:%S"),
         "resource_control": {
-            "ffmpeg_limit": 1,
+            **config_status(),
             "ffmpeg_guard_enabled": subprocess.Popen.__module__ == "video_processing.core.ffmpeg_slot",
             "pid": os.getpid(),
         },

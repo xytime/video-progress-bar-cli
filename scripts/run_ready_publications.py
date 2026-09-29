@@ -71,10 +71,11 @@ def main(argv=None) -> int:
         git_revision = revision.stdout.strip() if revision.returncode == 0 else "unknown"
     except (OSError, subprocess.TimeoutExpired):
         git_revision = "unknown"
+    from video_processing.core.ffmpeg_slot import config_status
     state = {"pid": os.getpid(), "stage": "IDLE", "current_video": None,
              "git_revision": git_revision,
              "ffmpeg_guard_enabled": subprocess.Popen.__module__ == "video_processing.core.ffmpeg_slot",
-             "ffmpeg_limit": 1,
+             **config_status(),
              "ai_cover_primary_provider": settings.ai_cover_primary_provider,
              "ai_cover_queue_enabled": settings.enable_codex_cover_queue,
              "started_at": time.time(), "stage_started_at": time.time()}
@@ -91,7 +92,7 @@ def main(argv=None) -> int:
     def heartbeat():
         while not stopped.is_set():
             with state_lock:
-                snapshot = dict(state, heartbeat_at=time.time())
+                snapshot = dict(state, heartbeat_at=time.time(), **config_status())
             temp = status_path.with_suffix(".tmp")
             temp.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
             temp.replace(status_path)

@@ -1,6 +1,6 @@
-"""本机视频虚拟环境的 FFmpeg 单名额。只用标准库，允许在 Python 启动时装载。
+"""本机视频虚拟环境的 FFmpeg 共享名额。只用标准库，允许在 Python 启动时装载。
 
-所有 Popen 入口（含 imageio / Whisper / yt-dlp）共用同一 flock；非 FFmpeg
+所有 Popen 入口（含 imageio / Whisper / yt-dlp）共用同一组 flock；非 FFmpeg
 保持标准库行为。等待发生在创建子进程之前，所以 run(timeout=...) 只计算执行。
 锁 FD 传给 FFmpeg：即使 Python 父进程崩溃，仍不会提前放行下一项。
 """
@@ -24,6 +24,33 @@ _WAITERS = 0
 _WAIT_STARTED = 0.0
 _WAIT_TOTAL = 0.0
 _LOG = logging.getLogger(__name__)
+
+
+DEFAULT_FFMPEG_SLOTS = 1
+
+
+def configured_limit(directory: Path | None = None) -> int:
+    """共享文件是唯一配置源；缺省为 1，损坏时拒绝启动，绝不放开限制。"""
+    path = (directory or _DIRECTORY) / "resource-limits.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return DEFAULT_FFMPEG_SLOTS
+    except (ValueError, OSError) as exc:
+        raise ValueError(f"无法读取 FFmpeg 名额配置：{path}") from exc
+    value = data.get("ffmpeg_slots", DEFAULT_FFMPEG_SLOTS) if isinstance(data, dict) else None
+    if type(value) is not int or not 1 <= value <= 64:
+        raise ValueError(f"ffmpeg_slots 必须是 1 到 64 的整数：{path}")
+    return value
+
+
+def config_status() -> dict:
+    status = {"ffmpeg_config": str(_DIRECTORY / "resource-limits.json")}
+    try:
+        status.update(ffmpeg_limit=configured_limit(), ffmpeg_config_error=None)
+    except ValueError as exc:
+        status.update(ffmpeg_limit=None, ffmpeg_config_error=str(exc))
+    return status
 
 
 def register_executable(path: str | None) -> None:
@@ -70,7 +97,7 @@ def _atomic(path: Path, data: dict) -> None:
 
 
 class Slot:
-    """FIFO 等候票 + 单执行锁。票与锁均靠内核生命周期，不依赖 PID 文件过期。"""
+    """FIFO 等候票 + 可配置执行锁池。票与锁均靠内核生命周期，不依赖 PID 文件过期。"""
     def __init__(self, directory: Path | None = None):
         self.directory = directory or _DIRECTORY
         self.fd: int | None = None
@@ -79,6 +106,7 @@ class Slot:
         self.token = uuid.uuid4().hex
         self.waited = 0.0
         self.wait_record = None
+        self.limit = DEFAULT_FFMPEG_SLOTS
 
     def _first(self) -> bool:
         for path in sorted(self.directory.glob("*.wait")):
@@ -95,9 +123,42 @@ class Slot:
                 continue
         return False
 
+    def _try_acquire(self) -> bool:
+        # 准入锁只覆盖计数与占位；执行锁 FD 仍由 FFmpeg 继承。
+        with (self.directory / "admission.lock").open("a+") as admission:
+            fcntl.flock(admission, fcntl.LOCK_EX)
+            if not self._first():
+                return False
+            self.limit = configured_limit(self.directory)
+            paths = {self.directory / "execution.lock"}  # 兼容原单名额 inode。
+            paths.update(self.directory / f"execution-{i}.lock" for i in range(1, self.limit))
+            # 调低时仍计入旧的高编号名额，等待其自然结束。
+            paths.update(self.directory.glob("execution-[0-9]*.lock"))
+            free = []
+            busy = 0
+            try:
+                for path in sorted(paths, key=lambda p: (p.name != "execution.lock", p.name)):
+                    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        busy += 1
+                        os.close(fd)
+                    except BaseException:
+                        os.close(fd)
+                        raise
+                    else:
+                        free.append(fd)
+                if busy < self.limit and free:
+                    self.fd = free.pop(0)
+                    return True
+                return False
+            finally:
+                for fd in free:
+                    os.close(fd)
+
     def acquire(self) -> int:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.fd = os.open(self.directory / "execution.lock", os.O_CREAT | os.O_RDWR, 0o600)
         temporary = self.directory / (self.token + ".ticket")
         started = time.monotonic()
         _waiting(1)
@@ -110,19 +171,15 @@ class Slot:
             temporary.rename(self.ticket)
             logged = False
             while True:
-                if self._first():
-                    try:
-                        fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except BlockingIOError:
-                        pass
+                if self._try_acquire():
+                    break
                 if not logged:
                     self.wait_record = {"pid": os.getpid(), "started_at": time.time(),
                                         "ancestors": _ancestors()}
                     os.lseek(self.ticket_fd, 0, os.SEEK_SET)
                     os.ftruncate(self.ticket_fd, 0)
                     os.write(self.ticket_fd, json.dumps(self.wait_record).encode())
-                    _LOG.warning("[FFmpegSlot] 等待全局单名额 pid=%s", os.getpid())
+                    _LOG.warning("[FFmpegSlot] 等待全局 FFmpeg 名额 pid=%s", os.getpid())
                     logged = True
                 time.sleep(0.25)
             self.waited = time.monotonic() - started
@@ -182,7 +239,7 @@ class GuardedPopen(_BASE_POPEN):
         try:
             _atomic(slot.directory / "last-start.json", {
                 "pid": self.pid, "parent_pid": os.getpid(), "started_at": time.time(),
-                "wait_seconds": slot.waited, "limit": 1,
+                "wait_seconds": slot.waited, "limit": slot.limit,
             })
         except OSError:
             _LOG.warning("[FFmpegSlot] 无法写入启动审计，内核互斥仍有效")

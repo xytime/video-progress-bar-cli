@@ -10,6 +10,20 @@
 
 这项措施作用于项目 Python 执行环境。用户在终端直接启动的 FFmpeg、其他应用、自带未受管解释器、`shell=True` 或通过 `os.exec*` 绕过 Popen 的新入口不在覆盖范围。当前维护目录没有视频 shell 管道和并行 reader/writer FFmpeg 依赖。以后引入这类入口必须先接入守卫，不可使用系统原始 FFmpeg 绕过排队。
 
+## 名额配置
+
+唯一运行配置为 `~/Library/Application Support/VideoProcessing/ffmpeg-slot/resource-limits.json`，常规视频、英语世界、不同 checkout 和解释器共同读取：
+
+```json
+{
+  "ffmpeg_slots": 1
+}
+```
+
+默认和当前值均为 **1**。安装器首次创建文件；重装不会覆盖已有配置。允许 1–64 的整数，配置缺失或字段缺省回到 1；非法值、损坏 JSON 或不可读文件拒绝新的 FFmpeg 启动，并在状态中显示配置错误。此文件不含密钥，也不读取 `.env`，避免 Python 启动钩子加载完整应用配置。
+
+部署此版本并重载旧解释器后，修改该文件对下一次准入生效，已排队任务也会重新读取。建议用临时文件 + 原子替换保存，避免半写入 JSON。调大可放行更多进程；调小时，已运行任务自然结束，现有占用降到新上限以下才放行下一项。不会杀进程。`/api/stats` 和发布巡检心跳回读配置路径、当前上限与错误；启动审计记录当次实际准入上限。
+
 ## 锁与取消
 
 - 位置：`~/Library/Application Support/VideoProcessing/ffmpeg-slot/`。FIFO 等候票与执行锁使用内核 flock；不靠 PID 存在性或陈旧超时释放。
@@ -33,7 +47,7 @@
 .venv/bin/python scripts/install_ffmpeg_slot.py --install
 ```
 
-安装器只写本项目 venv 的 `video_ffmpeg_slot.pth`；禁止改全局 Python。重建 venv 后须重新安装。存活的旧解释器不会热加载：应待业务空闲后重载相应服务，不能把提交代码等同于运行采用。
+安装器初始化上述共享配置，并写本项目 venv 的 `video_ffmpeg_slot.pth`；禁止改全局 Python。重建 venv 后须重新安装。存活的旧解释器不会热加载：应待业务空闲后重载相应服务，不能把提交代码等同于运行采用。
 
 回读证据：新解释器的 Popen 类来自 `video_processing.core.ffmpeg_slot`；`/api/stats` 的 `resource_control.ffmpeg_guard_enabled`；`output/ready_publications_status.json` 的 guard 标记、PID 和 Git revision。第三方 yt-dlp 的 Popen 继承同一守卫。以两个低负载本地合成作业验证排队，不制作或发布业务视频。
 

@@ -166,3 +166,69 @@ def test_queue_budget_merges_descendant_intervals_and_ignores_old_pid(runtime, m
             "ancestors": [42], "started_at": budget.started_at + begin,
             "ended_at": budget.started_at + end}))
     assert budget.elapsed() == pytest.approx(4)
+
+
+def set_limit(directory, value):
+    directory.mkdir(parents=True, exist_ok=True)
+    temporary = directory / "config.tmp"
+    temporary.write_text(json.dumps({"ffmpeg_slots": value}))
+    temporary.replace(directory / "resource-limits.json")
+
+
+def test_config_default_and_live_reload(runtime):
+    assert gate.configured_limit() == 1
+    set_limit(runtime[0], 2)
+    assert gate.configured_limit() == 2
+    set_limit(runtime[0], 1)
+    assert gate.config_status()["ffmpeg_limit"] == 1
+
+
+@pytest.mark.parametrize("value", [0, -1, 65, True, 1.5, "2", None])
+def test_invalid_config_prevents_spawn(runtime, value):
+    set_limit(runtime[0], value)
+    with pytest.raises(ValueError, match="ffmpeg_slots"):
+        subprocess.run([str(runtime[1]), str(runtime[2]), "0.01"])
+    assert not runtime[2].exists()
+    assert gate.config_status()["ffmpeg_limit"] is None
+    assert not list(runtime[0].glob("*.wait"))
+
+
+def test_corrupt_config_prevents_spawn(runtime):
+    set_limit(runtime[0], 1)
+    (runtime[0] / "resource-limits.json").write_text("{")
+    with pytest.raises(ValueError, match="无法读取"):
+        subprocess.run([str(runtime[1]), str(runtime[2]), "0.01"])
+    assert not runtime[2].exists()
+
+
+def test_two_slots_are_shared_across_three_processes(runtime):
+    set_limit(runtime[0], 2)
+    first = child(runtime, "0.9")
+    until(lambda: len(lines(runtime[2])) == 1)
+    second = child(runtime, "0.9")
+    until(lambda: len(lines(runtime[2])) >= 2)
+    assert [line.split()[0] for line in lines(runtime[2])][:2] == ["start", "start"]
+    third = child(runtime, "0.1")
+    for p in (first, second, third):
+        _, errors = p.communicate(timeout=8)
+        assert p.returncode == 0, errors
+    active = peak = 0
+    for line in lines(runtime[2]):
+        active += 1 if line.startswith("start") else -1
+        peak = max(peak, active)
+    assert peak == 2 and active == 0
+
+
+def test_lowering_limit_drains_existing_slots(runtime):
+    set_limit(runtime[0], 2)
+    first = child(runtime, "0.7")
+    until(lambda: len(lines(runtime[2])) == 1)
+    second = child(runtime, "1.2")
+    until(lambda: len(lines(runtime[2])) >= 2)
+    set_limit(runtime[0], 1)
+    third = child(runtime, "0.01")
+    for p in (first, second, third):
+        _, errors = p.communicate(timeout=8)
+        assert p.returncode == 0, errors
+    assert [line.split()[0] for line in lines(runtime[2])] == ["start", "start", "end", "end", "start", "end"]
+    assert json.loads((runtime[0] / "last-start.json").read_text())["limit"] == 1
