@@ -61,8 +61,10 @@ def test_only_confirmed_login_resets_expiry_age(tmp_path, captured):
     assert login_at.exists() and warned.exists()
     assert (time.time() - int(login_at.read_text())) / 3600 >= 22
 
+    from unittest.mock import patch
     from scripts.wechat_uploader import _stamp_login_success
-    _stamp_login_success(tmp_path / "wechat_state.json")
+    with patch("video_processing.core.wechat_auth_state.is_wechat_state_target", return_value=True):
+        _stamp_login_success(tmp_path / "wechat_state.json")
     assert not warned.exists()
     # 真实重登后重新计时 → 年轻会话 → 不预警
     keepalive._stamp_login_if_absent(login_at)

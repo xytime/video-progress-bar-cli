@@ -3,6 +3,11 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.0 | 2026-09-28 | Antigravity | 接入统一 wechat_browser_context 工厂：统一初始 context 与内部 reuse_ctx 的真实 Chrome UA、Viewport 与 init_script 反检测指纹，确保独立复用门禁指纹与初始环境 100% 一致；relogin 保证初始不加载旧会话。 |
+| 5.16.0 | 2026-09-28 | Antigravity | 严格过滤 login frame 非默认端口与 userinfo；管理页分支与发布检测中遇到 DOM_ERROR 立即失败拒绝 fail-open。 |
+| 5.15.0 | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract；修复 context.browser 为空 fail-open、初始检查未知路由放行、登录通知过度承诺与发布等待期源重核验。 |
+| 5.14.0 | 2026-09-28 | Antigravity | 消除乐观登录判定：初始检查、快捷授权与 _wait_and_save_login 必须官方 HTTPS 源 + 正向视频发布控件；经独立全新浏览器上下文复用验证通过后原子提交会话；移除 legacy marker 回退伪造；login-only 不触发续投。 |
+| 5.13.0 | 2026-09-28 | Antigravity | 登录成功后原子保存会话并写入结构化授权状态（wechat_auth_state.json），更新 authorized_at 与 last_verified_at。 |
 | 5.12.0 | 2026-09-27 | Antigravity | 登录态保存（快捷/扫码/交互）后自动投递 Telegram 回报通知，记录授权方式与更新时间。 |
 | 5.11.4 | 2026-09-27 | Antigravity | Chromium 启动参数强制追加 localhost.weixin.qq.com 本地环回映射，防止透明代理与 TUN Fake IP 阻断桌面快捷登录通信。 |
 | 5.11.3 | 2026-09-26 | Codex | 授权检查覆盖整个登录期限，兼容分行文案并限制可信来源；诊断不输出授权 URL。 |
@@ -118,6 +123,7 @@ from video_processing.core.wechat_session_lock import (
 from video_processing.core.wechat_upload_recovery import (
     PRE_SUBMIT_UPLOAD_TIMEOUT, write_timeout_receipt,
 )
+from video_processing.core.wechat_browser_context import create_wechat_context
 
 try:
     import requests as _requests
@@ -350,8 +356,8 @@ def _resume_eligible_english_world_after_login(db: object) -> str | None:
         return None
 
 
-def _restore_login_required_tasks_after_login() -> int:
-    """任何成功登录入口都恢复可安全续跑的微信任务与一条受限英语世界续投。"""
+def _restore_login_required_tasks_after_login(resume_submission: bool = True) -> int:
+    """登录成功后可恢复任务；仅在非 login_only 上传流中续投英语世界，login-only 不自动触发历史投稿。"""
     try:
         from video_processing.db.database import PipelineDB
 
@@ -362,7 +368,8 @@ def _restore_login_required_tasks_after_login() -> int:
                 "[WeChatLogin] Restored %s LOGIN_REQUIRED task(s) to PENDING after login success.",
                 restored,
             )
-        _resume_eligible_english_world_after_login(db)
+        if resume_submission:
+            _resume_eligible_english_world_after_login(db)
         return restored
     except Exception:
         # 登录本身已经成功；恢复失败必须可观测，但不能伪造登录失败或覆盖 state。
@@ -1000,25 +1007,11 @@ def _has_wechat_cover_success_marker(page) -> bool:
     return any(marker in page_text for marker in markers)
 
 
-def _stamp_login_success(state_file: Path) -> None:
-    """真实跳回发布页并保存 state 后，记录本轮登录成功时间。"""
-    try:
-        marker = state_file.parent / "wechat_login_at.txt"
-        marker.write_text(str(int(time.time())), encoding="utf-8")
-        # 自动预热重登成功后允许下一登录周期再次触发。
-        auto_flag = state_file.parent / "wechat_auto_relogin_started.flag"
-        try:
-            auto_flag.unlink()
-        except FileNotFoundError:
-            pass
-        warned_flag = state_file.parent / "wechat_login_warned.flag"
-        try:
-            warned_flag.unlink()
-        except FileNotFoundError:
-            pass
-        logger.info(f"Login success marker updated: {marker}")
-    except Exception as e:
-        logger.warning(f"Failed to update login success marker: {e}")
+def _stamp_login_success(state_file: Path, method: str = "auto") -> None:
+    """真实跳回发布页并通过独立新上下文复用验证后，记录本轮授权成功证据。"""
+    from video_processing.core.wechat_auth_state import record_wechat_authorization
+    record_wechat_authorization(state_file, method=method)
+    logger.info(f"Login authorization successfully recorded for {state_file} (method={method})")
 
 
 def _location_display_text(page) -> str:
@@ -1375,7 +1368,7 @@ def _notify_wechat_login_success(method: str, state_file: Path) -> None:
             f"<b>授权方式</b>: {method_desc}\n"
             f"<b>更新时间</b>: {bj_time} BJ\n"
             f"<b>会话文件</b>: <code>{state_file.name}</code>\n"
-            "<b>状态说明</b>: 登录态已成功保存，受阻任务与发布通道已恢复。"
+            "<b>状态说明</b>: 凭证已在独立全新上下文完成复用验证并持久化。"
         )
         send_text(
             event_type="WECHAT_LOGIN_RENEWED",
@@ -1388,6 +1381,13 @@ def _notify_wechat_login_success(method: str, state_file: Path) -> None:
         logger.warning("Failed to send WeChat login renewal notification: %s", type(exc).__name__)
 
 
+def _has_positive_publish_controls(page) -> bool:
+    """检查页面是否存在视频号官方发布的强特征控件。"""
+    from video_processing.core.wechat_page_contract import check_strong_video_publish_controls
+    ok, _ = check_strong_video_publish_controls(page)
+    return ok
+
+
 def _wait_and_save_login(
     page,
     context,
@@ -1395,12 +1395,91 @@ def _wait_and_save_login(
     qr_path: Path | None = None,
     method: str = "auto",
 ) -> None:
-    """等待登录回到发布页，保存 Playwright state、写入时间戳并发送 Telegram 回报。"""
-    page.wait_for_url("**/post/create", timeout=600000)
-    logger.info("Login detected. Saving session...")
-    context.storage_state(path=str(state_file))
-    _stamp_login_success(state_file)
-    logger.info(f"Session saved to: {state_file}")
+    """等待登录回到官方发布页、验证正向发布控件、并在全新独立上下文验证复用后原子保存与记录。"""
+    browser = getattr(context, "browser", None)
+    if browser is None:
+        raise RuntimeError("Cannot verify session reuse: browser instance unavailable")
+
+    from video_processing.core.wechat_auth_state import record_wechat_auth_attempt
+    from video_processing.core.wechat_page_contract import wait_for_publish_ready_with_spa_guard
+
+    try:
+        page.wait_for_url("**/post/create", timeout=600000)
+    except Exception as exc:
+        record_wechat_auth_attempt(state_file, method=method, success=False, reason="NAVIGATION_TIMEOUT")
+        raise RuntimeError(f"Wait for login redirect failed: {type(exc).__name__}") from exc
+
+    ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=15.0)
+    if not ready:
+        record_wechat_auth_attempt(state_file, method=method, success=False, reason=err_cat or "PAGE_UNREADY")
+        raise RuntimeError(f"Positive publish controls not found on /post/create after login redirect ({err_cat})")
+
+    logger.info("Login detected and positive publish controls verified. Saving to temporary verification state...")
+    tmp_verify_state = state_file.with_name(f".{state_file.name}.verify.{os.getpid()}.{time.time_ns()}")
+    try:
+        try:
+            context.storage_state(path=str(tmp_verify_state))
+            if not tmp_verify_state.exists() or tmp_verify_state.stat().st_size == 0:
+                raise OSError(f"Saved temporary state file is empty or missing: {tmp_verify_state}")
+        except Exception:
+            record_wechat_auth_attempt(state_file, method=method, success=False, reason="STORAGE_FAILED")
+            raise
+
+        # 启动全新独立浏览器上下文验证会话复用（独立复用门禁：严格与初始上下文环境指纹一致）
+        logger.info("Verifying session reuse in an independent fresh browser context...")
+        try:
+            reuse_ctx = create_wechat_context(browser, storage_state=tmp_verify_state)
+        except Exception:
+            record_wechat_auth_attempt(state_file, method=method, success=False, reason="REUSE_VERIFICATION_FAILED")
+            raise
+
+        reuse_ok = False
+        reuse_err_cat = "REUSE_VERIFICATION_FAILED"
+        try:
+            reuse_page = reuse_ctx.new_page()
+            try:
+                reuse_page.goto(WECHAT_CREATE_URL, wait_until="domcontentloaded", timeout=25000)
+                try:
+                    reuse_page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    pass
+            except Exception as nav_exc:
+                logger.warning("Navigation failed during reuse verification: %s", type(nav_exc).__name__)
+                reuse_err_cat = "NETWORK_TIMEOUT"
+                record_wechat_auth_attempt(state_file, method=method, success=False, reason="NETWORK_TIMEOUT")
+                raise
+
+            reuse_ready, reuse_err = wait_for_publish_ready_with_spa_guard(reuse_page, timeout_seconds=10.0)
+            if reuse_ready:
+                reuse_ok = True
+                logger.info("Session reuse in independent fresh context confirmed successfully.")
+            else:
+                reuse_err_cat = reuse_err or "REUSE_VERIFICATION_FAILED"
+                logger.error("Session reuse verification failed: %s", reuse_err)
+        finally:
+            reuse_ctx.close()
+
+        if not reuse_ok:
+            record_wechat_auth_attempt(state_file, method=method, success=False, reason=reuse_err_cat)
+            raise RuntimeError(f"Independent fresh context session reuse verification failed ({reuse_err_cat}); refusing to commit session.")
+
+        # 独立复用验证通过后，原子提交至目标会话文件
+        try:
+            os.replace(tmp_verify_state, state_file)
+            logger.info(f"Session atomically saved to: {state_file}")
+        except Exception:
+            record_wechat_auth_attempt(state_file, method=method, success=False, reason="STORAGE_FAILED")
+            raise
+
+    except Exception:
+        if tmp_verify_state.exists():
+            try:
+                tmp_verify_state.unlink()
+            except OSError:
+                pass
+        raise
+
+    _stamp_login_success(state_file, method=method)
     if qr_path and qr_path.exists():
         try:
             qr_path.unlink()
@@ -1410,11 +1489,9 @@ def _wait_and_save_login(
 
 
 def _trusted_wechat_login_frame(frame) -> bool:
-    """只处理视频号与微信官方登录页，不把其他 frame 的同名按钮当授权。"""
-    url = urlsplit(frame.url)
-    return url.scheme == "https" and url.hostname in {
-        "channels.weixin.qq.com", "open.weixin.qq.com",
-    }
+    """只处理视频号与微信官方登录页，严格拒绝非默认端口与 userInfo。"""
+    from video_processing.core.wechat_page_contract import is_official_wechat_frame_origin
+    return is_official_wechat_frame_origin(getattr(frame, "url", None))
 
 
 def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
@@ -1434,7 +1511,8 @@ def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
 
 
 def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None = None,
-                            timeout_ms: int = 30_000) -> bool:
+                            timeout_ms: int = 30_000,
+                            state_file: Path | None = None) -> bool:
     """同一期限内持续等待桌面确认、网页资料授权和发布页跳转。"""
     deadline = time.monotonic() + max(0, timeout_ms) / 1000
     approved_frames = set()
@@ -1444,12 +1522,23 @@ def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None 
         if desktop_auth:
             desktop_auth.start()
 
+        from video_processing.core.wechat_page_contract import wait_for_publish_ready_with_spa_guard
+
         while time.monotonic() < deadline:
-            url = urlsplit(page.url)
-            if (url.scheme == "https" and url.hostname == "channels.weixin.qq.com"
-                    and url.path == "/platform/post/create"):
-                logger.info("WeChat quick authorization login succeeded.")
+            ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=1.0)
+            if ready:
+                logger.info("WeChat quick authorization login succeeded with positive publish controls.")
                 return True
+            if err_cat in ("INVALID_ORIGIN", "DOM_ERROR"):
+                logger.error("WeChat quick authorization blocked by page guard: %s", err_cat)
+                if state_file is not None:
+                    from video_processing.core.wechat_auth_state import record_wechat_auth_attempt
+                    try:
+                        record_wechat_auth_attempt(state_file, method="desktop_quick", success=False, reason=err_cat)
+                    except Exception:
+                        pass
+                return False
+            approved_this_cycle = False
             for fr in page.frames:
                 try:
                     if fr in approved_frames or not _trusted_wechat_login_frame(fr):
@@ -1464,14 +1553,39 @@ def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None 
                         remaining = max(1, int((deadline - time.monotonic()) * 1000))
                         allow.click(timeout=min(3000, remaining))
                         approved_frames.add(fr)
+                        approved_this_cycle = True
                         logger.info("Approved WeChat Channels nickname/avatar authorization.")
+                        # 允许点击后，立即执行正向发布页判据，以剩余期限为上限
+                        rem_sec = max(0.5, deadline - time.monotonic())
+                        ready, _ = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=min(3.0, rem_sec))
+                        if ready:
+                            logger.info("WeChat quick authorization login succeeded after profile approval.")
+                            return True
+                        break
                 except Exception as e:
                     logger.debug("WeChat profile authorization not ready: %s", type(e).__name__)
+            if approved_this_cycle:
+                # 获准后跳过本轮末尾的长 sleep，直接进入下一轮外层循环进行正向检测
+                continue
             remaining = int((deadline - time.monotonic()) * 1000)
             if remaining > 0:
                 # 让 Playwright 持续处理网络/导航事件；桌面确认可能晚于旧版的 10 秒检查窗。
-                page.wait_for_timeout(min(250, remaining))
+                page.wait_for_timeout(min(1000, remaining))
+
+        # 有界末次检查：若已点击允许，做有界末次发布页核验，防止时钟边界漏检
+        if approved_frames:
+            ready, _ = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=1.0)
+            if ready:
+                logger.info("WeChat quick authorization login confirmed on boundary check.")
+                return True
+
         logger.warning("WeChat quick authorization did not finish within %.0fs.", timeout_ms / 1000)
+        if state_file is not None:
+            from video_processing.core.wechat_auth_state import record_wechat_auth_attempt
+            try:
+                record_wechat_auth_attempt(state_file, method="desktop_quick", success=False, reason="PAGE_UNREADY")
+            except Exception:
+                pass
         return False
     finally:
         if desktop_auth:
@@ -1629,46 +1743,19 @@ def run_uploader(
             ]
         )
 
-        # 加载 Cookie 状态
-        context_opts = {
-            "viewport": {"width": 1280, "height": 800},
-            # 使用真实 Chrome UA（与保存 Session 时一致）
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-        }
+        # 加载 Cookie 状态（统一通过 wechat_browser_context 工厂配置 Viewport、UA 与 init_script）
         if relogin:
             # [Claude_Opus_4.8] 强制重登：不加载旧会话→必到登录页出二维码。旧 state 文件**不删**，
             # 仅在扫码成功后由 context.storage_state() 覆盖；未扫码则旧会话保持有效（管线不掉线）。
             logger.info("Force-relogin: ignoring existing session, will show fresh QR.")
+            initial_state = None
         elif state_file.exists():
             logger.info(f"Loading session state from: {state_file}")
-            context_opts["storage_state"] = str(state_file)
+            initial_state = state_file
+        else:
+            initial_state = None
 
-        context = browser.new_context(**context_opts)
-
-        # [Claude_Sonnet_4.6_Thinking_planning] 反检测 v2.0: 完整浏览器指纹伪造
-        context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => false });
-            window.chrome = {
-                runtime: {},
-                loadTimes: function(){},
-                csi: function(){},
-                app: {}
-            };
-            Object.defineProperty(navigator, 'plugins', { get: () => [1,2,3,4,5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN','zh','en'] });
-            const _oq = window.navigator.permissions.query;
-            window.navigator.permissions.query = (p) =>
-                p.name === 'notifications'
-                    ? Promise.resolve({ state: Notification.permission })
-                    : _oq(p);
-            delete window.__playwright;
-            delete window.__pw_manual;
-            delete window._phantom;
-        """)
+        context = create_wechat_context(browser, storage_state=initial_state)
 
         page = context.new_page()
 
@@ -1691,48 +1778,60 @@ def run_uploader(
         except Exception:
             pass
 
-        # ── 登录状态检测（URL 优先，防止 Vue SPA 未渲染完触发误判）────────────
-        current_url = page.url
-        logger.info(f"Current URL after load: {current_url}")
+        # ── 登录状态与目标页面就绪检测（严格官方源、正向强控件与登录分类）────────────
+        from video_processing.core.wechat_page_contract import (
+            is_official_wechat_origin,
+            is_official_create_url,
+            is_official_list_url,
+            check_explicit_login_prompt,
+            wait_for_publish_ready_with_spa_guard,
+        )
 
-        # 1st: 目标业务页已打开 → 明确已登录，跳过所有 DOM 检测
-        if expected_route in current_url:
-            is_login_page = False
-            logger.info("Successfully authenticated via saved session (URL confirmed).")
-        # 2nd: URL 明确含 login → 未登录
-        elif "login" in current_url:
-            is_login_page = True
-            logger.warning(f"Redirected to login page: {current_url}")
-        # 3rd: URL 模糊（如首页 /）→ 再等 3s 后检查 DOM
-        else:
-            page.wait_for_timeout(3000)
-            current_url = page.url
-            if expected_route in current_url:
+        logger.info("Verifying session against expected route %s", expected_route)
+
+        is_login_page = False
+        if expected_route == "/post/create":
+            ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=8.0)
+            if ready:
                 is_login_page = False
-                logger.info("Successfully authenticated (URL confirmed after extra wait).")
-            elif "login" in current_url:
+                logger.info("Successfully authenticated via saved session (URL & positive controls confirmed).")
+            elif err_cat == "LOGIN_REQUIRED":
                 is_login_page = True
-            else:
-                # DOM 检测作为最后手段
-                try:
-                    dom_login = (
-                        page.locator("text=使用微信扫码登录").is_visible(timeout=2000) or
-                        page.locator(".login-box").is_visible(timeout=2000) or
-                        page.locator(".login-qr").is_visible(timeout=2000)
-                    )
-                except Exception:
-                    dom_login = False
-                is_login_page = dom_login
-                if is_login_page:
-                    # 截图留证，方便排查是否是误判
-                    dbg = state_file.parent / "debug_login_detect.png"
-                    try:
-                        page.screenshot(path=str(dbg))
-                        logger.warning(f"Login page detected via DOM. Debug screenshot: {dbg}")
-                    except Exception:
-                        pass
+                logger.warning("Explicit login page or QR prompt detected on /post/create redirect.")
+            elif err_cat == "INVALID_ORIGIN":
+                logger.error("Untrusted origin detected during login check: INVALID_ORIGIN")
+                raise RuntimeError("Untrusted origin during login check: invalid scheme or host")
+            elif err_cat == "DOM_ERROR":
+                logger.error("DOM error occurred while inspecting publish controls: DOM_ERROR")
+                raise RuntimeError("DOM error during publish controls inspection; refusing to fail open.")
+            else:  # PAGE_UNREADY or unexpected route
+                explicit_login, dom_err = check_explicit_login_prompt(page)
+                if dom_err:
+                    logger.error("DOM error occurred while checking explicit login prompt after SPA check: DOM_ERROR")
+                    raise RuntimeError("DOM error during login prompt check after SPA unready; refusing to fail open.")
+                if explicit_login:
+                    is_login_page = True
+                    logger.warning("Explicit login prompt detected after SPA check.")
                 else:
-                    logger.info("Successfully authenticated (DOM check passed).")
+                    logger.error("Publish page unready: positive controls missing and no login prompt found.")
+                    raise RuntimeError("Publish page unready: positive controls missing; refusing to trigger relogin or proceed.")
+        else:
+            if not is_official_wechat_origin(page.url):
+                logger.error("Untrusted origin for management page: INVALID_ORIGIN")
+                raise RuntimeError("Untrusted origin for management page")
+            explicit_login, dom_err = check_explicit_login_prompt(page)
+            if dom_err:
+                logger.error("DOM error occurred while checking explicit login prompt on management page: DOM_ERROR")
+                raise RuntimeError("DOM error during management page login prompt check; refusing to fail open.")
+            if explicit_login:
+                is_login_page = True
+                logger.warning("Explicit login detected on management page redirect.")
+            elif is_official_list_url(page.url):
+                is_login_page = False
+                logger.info("Successfully authenticated via saved session (management list page confirmed).")
+            else:
+                logger.error("Unexpected route for management page: PAGE_UNREADY")
+                raise RuntimeError("Unexpected route for management page; refusing to fail open.")
 
         if is_login_page:
             qr_path = state_file.parent / "login_qr.png"
@@ -1752,6 +1851,7 @@ def run_uploader(
                     page,
                     desktop_auth=desktop_auth,
                     timeout_ms=settings.wechat_desktop_quick_login_timeout_seconds * 1000,
+                    state_file=state_file,
                 ):
                     _wait_and_save_login(page, context, state_file, qr_path, method="desktop_quick")
                     login_completed = True
@@ -1761,7 +1861,7 @@ def run_uploader(
                 browser.close()
                 return 2  # LOGIN_REQUIRED，交由管线回写状态并告警
 
-            if not login_completed and not desktop_quick_attempted and _try_wechat_quick_login(page):
+            if not login_completed and not desktop_quick_attempted and _try_wechat_quick_login(page, state_file=state_file):
                 _wait_and_save_login(page, context, state_file, qr_path, method="desktop_quick")
                 login_completed = True
             elif not login_completed:
@@ -1830,8 +1930,8 @@ def run_uploader(
                     return 1
 
         if login_only:
-            _restore_login_required_tasks_after_login()
-            logger.info("Login-only mode completed successfully.")
+            _restore_login_required_tasks_after_login(resume_submission=False)
+            logger.info("Login-only mode completed successfully without triggering submissions.")
             browser.close()
             return 0
 

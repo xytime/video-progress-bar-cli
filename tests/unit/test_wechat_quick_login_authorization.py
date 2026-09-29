@@ -18,7 +18,7 @@ class Locator:
     @property
     def first(self): return self
     def count(self): return int(self.visible)
-    def is_visible(self): return self.visible
+    def is_visible(self, **kwargs): return self.visible
     def click(self, **kwargs): self.on_click()
 
 
@@ -43,6 +43,16 @@ class LoginPage:
         self.allowed = True
         self.url = 'https://channels.weixin.qq.com/platform/post/create'
     def wait_for_timeout(self, milliseconds): self.now += milliseconds / 1000
+    def locator(self, selector, **kwargs):
+        if any(s in selector for s in ('.login-box', '.login-container', '.qrcode-panel')):
+            return Locator('login' in self.url)
+        if '上传视频' in selector or 'upload' in selector:
+            return Locator('post/create' in self.url)
+        return Locator(False)
+    def evaluate(self, script, **kwargs):
+        if 'input' in script or 'video' in script:
+            return 'post/create' in self.url
+        return False
 
 
 @pytest.fixture

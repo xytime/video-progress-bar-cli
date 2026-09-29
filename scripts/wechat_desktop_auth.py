@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.11.0 | 2026-09-29 | Antigravity | 视觉后备采用底层可见探针确认窗口关闭(VISUAL_WINDOW_DISMISSED)，仅真实派发占点击预算，失败标为VISUAL_CLICK_UNCONFIRMED并退避防抢焦点。 |
 | 1.10.0 | 2026-09-27 | Antigravity | 区分上下文文本置信度(>=0.3)与按钮精确置信度(>=0.8)，适配 Apple Vision 对中文短语的标称置信度。 |
 | 1.9.0 | 2026-09-26 | Codex | 视觉后备改为限定小窗口与离线文字验证；校验坐标、窗口身份及停止期限后才点击。 |
 | 1.8.0 | 2026-09-26 | Codex | 只读识别桌面登录页，明确报告 DESKTOP_LOGIN_REQUIRED，阻止无效桌面授权监听。 |
@@ -163,6 +164,15 @@ class DesktopAuthPreflight:
     code: str
 
 
+@dataclass(frozen=True)
+class VisualClickResult:
+    confirmed: bool
+    attempted: bool
+
+    def __bool__(self) -> bool:
+        return self.confirmed
+
+
 def desktop_auth_preflight() -> DesktopAuthPreflight:
     """检查进程、辅助功能和明确的桌面登录页；READY 不证明网页登录成功。"""
     try:
@@ -299,7 +309,7 @@ def _verified_visual_allow_center(image, observations) -> tuple[int, int] | None
     return center
 
 
-def _try_visual_allow_click(*, cancelled=lambda: False, deadline: float | None = None) -> bool:
+def _try_visual_allow_click(*, cancelled=lambda: False, deadline: float | None = None) -> VisualClickResult:
     """只截取候选授权小窗口；离线 OCR 与颜色均通过后才允许受限点击。"""
     deadline = deadline if deadline is not None else time.monotonic() + 10
     def stopped():
@@ -307,31 +317,31 @@ def _try_visual_allow_click(*, cancelled=lambda: False, deadline: float | None =
     def remaining():
         return max(0.01, min(3, deadline - time.monotonic()))
     if stopped() or not _activate_wechat() or stopped():
-        return False
+        return VisualClickResult(False, False)
     windows = _vision_command("windows", timeout=remaining())
     if not isinstance(windows, list) or not 1 <= len(windows) <= 3:
-        return False
+        return VisualClickResult(False, False)
     try:
         import cv2
     except ImportError:
-        return False
+        return VisualClickResult(False, False)
     candidates = []
     with tempfile.TemporaryDirectory(prefix="wechat-desktop-auth-") as temp_dir:
         for window in windows:
             if stopped():
-                return False
+                return VisualClickResult(False, False)
             try:
                 window_id = int(window["id"])
                 bounds = window["bounds"]
                 if window_id <= 0 or not (200 <= bounds["Width"] <= 700 and 120 <= bounds["Height"] <= 900):
-                    return False
+                    return VisualClickResult(False, False)
                 screenshot = Path(temp_dir) / f"{window_id}.png"
                 capture = subprocess.run(
                     ["screencapture", "-x", "-o", "-l", str(window_id), str(screenshot)],
                     capture_output=True, text=True, timeout=remaining(), check=False,
                 )
                 if capture.returncode != 0 or stopped():
-                    return False
+                    return VisualClickResult(False, False)
                 image = cv2.imread(str(screenshot))
                 observations = _vision_command("ocr", str(screenshot), timeout=remaining())
                 center = _verified_visual_allow_center(image, observations)
@@ -341,19 +351,37 @@ def _try_visual_allow_click(*, cancelled=lambda: False, deadline: float | None =
                              round(bounds["Y"] + center[1]*bounds["Height"]/height))
                     candidates.append((window, point))
             except (KeyError, TypeError, ValueError, OSError, subprocess.TimeoutExpired):
-                return False
+                return VisualClickResult(False, False)
     if len(candidates) != 1 or stopped():
-        return False
+        return VisualClickResult(False, False)
     window, (click_x, click_y) = candidates[0]
     # OCR 期间窗口可能消失或移动；同一编号、进程与几何必须仍在可见白名单内。
     current = _vision_command("windows", timeout=remaining())
     if not isinstance(current, list) or window not in current or stopped():
-        return False
+        return VisualClickResult(False, False)
     if _frontmost_process_name() != "WeChat" or stopped():
-        return False
+        return VisualClickResult(False, False)
     target = {"window": window, "x": click_x, "y": click_y,
               "expiresAt": (time.time() + max(0, deadline - time.monotonic())) * 1000}
-    return _vision_command("click", json.dumps(target), timeout=remaining()) is True
+    dispatched = _vision_command("click", json.dumps(target), timeout=remaining()) is True
+    if not dispatched or stopped():
+        return VisualClickResult(False, True)
+
+    # 派发成功后，必须等待并确认目标窗口响应关闭。
+    # 审查要求：
+    # 1. 窗口消失只作为响应/关闭确认，状态为 VISUAL_WINDOW_DISMISSED；
+    # 2. post_windows 使用白名单窗口列表会被过滤，故增加底层 visible 探针仅检查原 PID+window ID；
+    # 3. 只有明确返回 False 才确认关闭；异常/读取失败/超时维持未知，不能算关闭。
+    query_json = json.dumps({"id": window["id"], "pid": window["pid"]})
+    confirmation_deadline = min(time.monotonic() + 1.5, deadline)
+    while time.monotonic() < confirmation_deadline and not stopped():
+        time.sleep(0.15)
+        visible = _vision_command("visible", query_json, timeout=remaining())
+        if visible is False:
+            logger.info("WeChat desktop visual click response confirmed: window dismissed.")
+            return VisualClickResult(True, True)
+    logger.warning("WeChat desktop visual click unconfirmed: target window still visible or read failed.")
+    return VisualClickResult(False, True)
 
 
 
@@ -361,10 +389,13 @@ class WeChatDesktopAuthWatcher:
     """在受限时间窗内轮询 WeChat 登录/授权窗口；失败不抛异常。"""
 
     def __init__(self, timeout_seconds: int, poll_interval_seconds: float = 0.5,
-                 enable_visual_fallback: bool = False) -> None:
+                 enable_visual_fallback: bool = False,
+                 max_visual_attempts: int = 2) -> None:
         self.timeout_seconds = max(1, int(timeout_seconds))
         self.poll_interval_seconds = max(0.1, float(poll_interval_seconds))
         self.enable_visual_fallback = enable_visual_fallback
+        self.max_visual_attempts = max(1, int(max_visual_attempts))
+        self.visual_attempts = 0
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self.clicked = False
@@ -374,6 +405,7 @@ class WeChatDesktopAuthWatcher:
         if self._thread and self._thread.is_alive():
             return
         self.clicked = False
+        self.visual_attempts = 0
         preflight = desktop_auth_preflight()
         self.last_result = preflight.code
         if not preflight.ready:
@@ -425,11 +457,22 @@ class WeChatDesktopAuthWatcher:
                 return
             if self._stop_event.is_set() or time.monotonic() >= deadline:
                 return
-            if self.enable_visual_fallback and _try_visual_allow_click(
-                cancelled=self._stop_event.is_set, deadline=deadline,
-            ):
-                self.clicked = True
-                self.last_result = "CLICKED_VISUAL"
-                logger.info("WeChat desktop visual authorization fallback clicked.")
-                return
+            if self.enable_visual_fallback and self.visual_attempts < self.max_visual_attempts:
+                click_result = _try_visual_allow_click(
+                    cancelled=self._stop_event.is_set, deadline=deadline,
+                )
+                if click_result.attempted:
+                    self.visual_attempts += 1
+                if click_result.confirmed:
+                    self.clicked = True
+                    self.last_result = "VISUAL_WINDOW_DISMISSED"
+                    logger.info("WeChat desktop visual authorization response confirmed.")
+                    return
+                elif click_result.attempted:
+                    self.last_result = "VISUAL_CLICK_UNCONFIRMED"
+                    # 点击未确认关闭，退避避免频繁激活微信抢占焦点
+                    self._stop_event.wait(min(1.0, max(self.poll_interval_seconds, 1.0)))
+                    continue
+            elif self.enable_visual_fallback and self.visual_attempts >= self.max_visual_attempts:
+                self.last_result = "VISUAL_CLICK_UNCONFIRMED"
             self._stop_event.wait(self.poll_interval_seconds)

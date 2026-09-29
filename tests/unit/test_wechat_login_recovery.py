@@ -130,12 +130,16 @@ def test_uploader_login_only_restores_tasks_after_existing_session_check(tmp_pat
 
     monkeypatch.setattr(wechat_uploader, "sync_playwright", lambda: playwright)
     monkeypatch.setattr(wechat_uploader, "_restore_login_required_tasks_after_login", restored)
+    monkeypatch.setattr(
+        "video_processing.core.wechat_page_contract.wait_for_publish_ready_with_spa_guard",
+        lambda *args, **kwargs: (True, None),
+    )
 
     assert wechat_uploader.run_uploader(
         state_path=str(tmp_path / "wechat_state.json"),
         login_only=True,
     ) == 0
-    restored.assert_called_once_with()
+    restored.assert_called_once_with(resume_submission=False)
     browser.close.assert_called_once()
 
 
@@ -171,3 +175,7 @@ def test_uploader_login_recovery_resumes_only_dal_claimed_english_world_item(mon
 
     assert wechat_uploader._resume_eligible_english_world_after_login(FakeDB()) == "a" * 32
     assert launched == [["a" * 32]]
+
+
+
+

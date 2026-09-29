@@ -21,6 +21,7 @@
 | 1.9.0 | 2026-09-09 | Codex | 新增 /last 的移动端发布账本卡片、时区展示和 HTML 安全链接格式化。 |
 | 1.9.1 | 2026-09-09 | Codex | 限制 /last 异常历史 ID 的显示长度，确保单卡可由 Telegram 投递。 |
 | 1.9.2 | 2026-09-09 | Codex | /last 的平台确认和原片发布时间均直接标注 BJ 时区。 |
+| 1.11.0 | 2026-09-28 | Antigravity | 升级 fmt_wechat_login_status：区分授权时间、最近验证、异常诊断、重登调度估算与会话锁，不承诺平台寿命。 |
 | 1.10.0 | 2026-09-27 | Antigravity | 新增 fmt_wechat_login_status 格式化输出微信登录态更新时间、有效性与建议操作。 |
 """
 from __future__ import annotations
@@ -474,24 +475,50 @@ def _relative_age(updated_at: str | None) -> str:
 
 
 def fmt_wechat_login_status(info: dict) -> str:
-    """渲染微信登录态更新时间与状态报告 (HTML 格式)。"""
-    login_time_str = info.get("login_time_bj", "未知")
-    relative_age = info.get("relative_age", "未知")
+    """渲染微信登录态结构化状态报告 (HTML 格式)。
+
+    区分上次授权、最近验证/保活、最近异常、调度阈值估算、会话锁与凭证，
+    明确说明调度估算不承诺平台寿命，预检仅代表桌面客户端环境。
+    """
+    login_time_str = info.get("login_time_bj", "无授权记录")
+    relative_age = info.get("relative_age", "无记录")
+    auth_method_label = info.get("auth_method_label", "")
+    auth_desc = f"{relative_age}" + (f" · {auth_method_label}" if auth_method_label else "")
+
     status_label = info.get("status_label", "未知")
+    last_verified_str = info.get("last_verified_bj", "未验证")
+    relative_verified_age = info.get("relative_verified_age")
+    verified_desc = f"{relative_verified_age}" if relative_verified_age else "无成功保活记录"
+
     state_file_status = info.get("state_file_status", "未生成")
     desktop_preflight = info.get("desktop_preflight", "未知")
-    remaining_hours = info.get("remaining_hours")
+    lock_status = info.get("lock_status", "空闲")
+    schedule_estimate = info.get("schedule_estimate", "调度运行中")
 
     lines = [
         "🔐 <b>微信视频号登录态状态</b>\n",
-        f"• <b>更新时间</b>：<code>{html.escape(login_time_str)}</code>",
-        f"• <b>状态评定</b>：{status_label}（{relative_age}）",
+        f"• <b>授权时间</b>：<code>{html.escape(login_time_str)}</code>（{html.escape(auth_desc)}）",
+        f"• <b>状态评定</b>：{status_label}",
+        f"• <b>最近验证</b>：<code>{html.escape(last_verified_str)}</code>（{html.escape(verified_desc)}）",
     ]
-    if remaining_hours is not None:
-        lines.append(f"• <b>有效剩余</b>：约 {remaining_hours:.1f} 小时")
+
+    last_auth_attempt = info.get("last_auth_attempt_display")
+    if last_auth_attempt:
+        lines.append(f"• <b>最近授权</b>：<code>{html.escape(last_auth_attempt)}</code>")
+
+    last_failure = info.get("last_failure_display")
+    if last_failure:
+        lines.append(f"• <b>最近检查</b>：<code>{html.escape(last_failure)}</code>")
+
+    next_keepalive = info.get("next_keepalive_estimate")
+    if next_keepalive:
+        lines.append(f"• <b>保活计划</b>：{html.escape(next_keepalive)}")
+
     lines.extend([
+        f"• <b>重登调度</b>：{html.escape(schedule_estimate)}",
+        f"• <b>会话锁</b>：{html.escape(lock_status)}",
         f"• <b>会话凭证</b>：{state_file_status}",
-        f"• <b>桌面快捷</b>：{desktop_preflight}",
+        f"• <b>桌面环境</b>：{desktop_preflight}",
     ])
 
     suggestions = info.get("suggestions", [])

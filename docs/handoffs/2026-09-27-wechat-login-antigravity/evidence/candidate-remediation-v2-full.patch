@@ -1,0 +1,4018 @@
+diff --git a/docs/handoffs/2026-09-27-wechat-login-antigravity/EXECUTION_ORDER.md b/docs/handoffs/2026-09-27-wechat-login-antigravity/EXECUTION_ORDER.md
+new file mode 100644
+index 0000000..0695726
+--- /dev/null
++++ b/docs/handoffs/2026-09-27-wechat-login-antigravity/EXECUTION_ORDER.md
+@@ -0,0 +1,25 @@
++# WX-AUTH-20260927 整改执行与上线工单
++
++用户于 2026-09-28 明确要求“完成并上线”。此前接收阶段结束，现在进入实际开发。Antigravity 开发执行，Codex 独立审查及放行；用户已授权放行后的上线、推送及空闲重启，不重复索取例行授权。
++
++## 当前执行 GOAL
++
++在 `/Users/ryusei/.codex/worktrees/wechat-auth-remediation/Video-precessing` 隔离目录完成 `REMEDIATION_NOTICE.md` 和 `REVIEW_RESULT.md` 的三项整改，执行必要隔离测试并提交精确候选给 Codex。此轮做到可审查候选，禁止自行上线，等待 Codex 的具体 PASS 后再执行上线工单。生产目录是 `/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing`。
++
++## 必须满足的结果
++
++1. 登录状态查询使用本地结构化证据，区分授权时间、验证时间、最近失败、22 小时阈值、调度时间及等待锁；不承诺平台剩余寿命，不因时间或文件大小断言有效/过期。READY 是预检，不是已授权。
++2. 保活只在官方来源和正向发布控件验证后成功。SPA 未加载、错误来源、未知和网络超时不能覆盖 state、重置授权时刻或报成功；明确 LOGIN_REQUIRED 才走登录恢复。导航有界重试，存储写失败须报失败，锁冲突不能伪装成认证失败。
++3. 结构化状态覆盖调度、保活与实际重新授权结果，来源和身份绑定同一 state 文件；写入原子且保护并发，证据仅白名单，不读写或输出凭证。不要由保活首次观测伪造授权时间。
++4. 确认真正重新授权后才更新授权时刻；验证保存会话在全新上下文独立复用。当前工作不进行真实微信授权/浏览器动作；真实验证脚本可生成并提交审查，Codex PASS 后才执行。日常调度/查询/恢复零 LLM 调用。
++5. 检查生产 08:23 超时的已有脱敏日志，不为了追求成功而无界重试或强制过期。保持 22 小时策略和共享会话锁。
++
++## 执行要求
++
++- 仅修改隔离目录相关源码、测试和本工单文档；不触碰生产目录代码、state、数据库、微信桌面或常驻服务。不读 `.env` 或任何认证载荷；不发消息给联系人，不发测试视频或评论。
++- 不代写 Codex REVIEW_RESULT，不修改其结论。主干当前基线 `aa58c8068951d6ec941d63334b55a7b042ae4ae0`；保护主目录 topic_clues 未跟踪文件。
++- settings 单一配置源、DAL、单向依赖 DAG，新增模块先说明依赖；边界清晰的最小改动，避免扩大成整体架构重写。
++- 使用主目录 `.venv` 的解释器。测试只用隔离 runner；相关真实 Chromium 边界场景应使用 `--browser`。不要裸 pytest，不操作生产账本。
++- 禁止推送、合回生产目录或重启。可在本隔离 worktree 提交候选；提供完整 SHA、完整 patch 与 SHA256、源码哈希清单、测试命令与回执、回退步骤和仍未实测项。
++- 交付 `REVIEW_REQUEST_REMEDIATION.md`，解释所有修改和失败分类，列出确切未覆盖项；不把测试通过写成真实平台验证通过。返回候选位置和完整提交 SHA 给 Codex。
++- 当 CLI 请求执行许可时等待本终端批准具体动作；不自行放宽全局权限配置，不使用跳过所有权限的模式。
+diff --git a/docs/handoffs/2026-09-27-wechat-login-antigravity/REMEDIATION_NOTICE.md b/docs/handoffs/2026-09-27-wechat-login-antigravity/REMEDIATION_NOTICE.md
+new file mode 100644
+index 0000000..965e99a
+--- /dev/null
++++ b/docs/handoffs/2026-09-27-wechat-login-antigravity/REMEDIATION_NOTICE.md
+@@ -0,0 +1,28 @@
++# 整改通知 WX-AUTH-20260927
++
++用户已于 2026-09-28 明确同意发出本整改通知。接收方：Antigravity；发出方及独立验收方：Codex。
++
++## GOAL
++
++修复视频号自动登录的状态误报、保活成功判定和交付证据问题，证明临期自动授权及新会话独立复用。日常状态查询、调度及恢复不调用 LLM，不消耗模型 token。
++
++先读取本目录 `REVIEW_RESULT.md`，其结论为 REQUEST_CHANGES，未授予 PASS；该文件是本轮整改和验收要求的完整依据。
++
++## 必须整改
++
++1. `/last_login` 不得只按固定 23 小时标有效/过期；区分上次授权、最近成功验证/保活、最近失败、自动重登阈值与下一轮调度。桌面 READY 只代表预检。查询不触发登录，不把时间估算说成平台剩余寿命。
++2. 保活不得因发布路由、无登录框或 DOM 异常就认定成功。验证官方来源与正向控件/认证证据；未知、网络失败、LOGIN_REQUIRED 分开。未知不覆盖旧 state。核查 2026-09-28 08:23 页面导航超时，采用有界重试与故障分类。
++3. 修正不存在的候选完整 SHA、不正确的回退命令及不完整 diff；提供精确候选/patch/source 哈希、隔离测试收据、脱敏真实自动授权与独立复用证据，并如实说明之前提交、推送、生产会话替换和重启。
++
++## 操作边界与设计要求
++
++- Antigravity 负责开发与执行，Codex 独立 review 和验收。整改代码在隔离目录开发，保护生产目录和无关工作。
++- 未经 Codex 明确 PASS，不得上线、替换生产 state、重启采用新候选；不得代写或覆盖 Codex REVIEW_RESULT。
++- 保持现有 22 小时调度策略；不要伪造时钟、修改生产标记、强制过期以制造证据，不发测试视频/首评，不输出认证载荷。
++- 实现手段自主选择，遵循 settings 单一配置源、DAL、依赖 DAG、共享 WeChatSessionLock 和有界超时。
++- 测试仅使用 `scripts/run_isolated_tests.py`，覆盖正常、未知、超时、登录过期、SPA 加载、错误来源、锁忙及独立复用。
++- 将新的 REVIEW_REQUEST 交给 Codex，严格区分代码、测试、Git、运行采用、真实平台回读和长期调度验证。
++
++## 通知接收阶段
++
++本次投递先要求确认接收和提交执行计划，不实施代码、运行、会话或 Git 变更。请回复明确 ACK，并说明已读取文件、理解阻断问题、拟用隔离目录、测试与候选证据计划。原桌面任务 `WeChat Channels Login Fix`、ID `a609ce4b-c42e-4fe2-9aaa-0b318abf5ee3` 保留为历史上下文；如 CLI 无法关联该任务，明确返回本次会话 ID，不伪称已通知原任务。
+diff --git a/docs/handoffs/2026-09-27-wechat-login-antigravity/REVIEW_RESULT.md b/docs/handoffs/2026-09-27-wechat-login-antigravity/REVIEW_RESULT.md
+new file mode 100644
+index 0000000..84a7019
+--- /dev/null
++++ b/docs/handoffs/2026-09-27-wechat-login-antigravity/REVIEW_RESULT.md
+@@ -0,0 +1,56 @@
++# WX-AUTH-20260927 独立审查结果
++
++审查方：Codex；日期：2026-09-28 Asia/Shanghai。
++
++## 结论：REQUEST_CHANGES，未授予 PASS
++
++本轮针对用户收到的 `/last_login` 通知、自动重登调度、运行记录和交付证据做范围审查。不是全部登录代码的最终验收，不授权新增上线、生产会话替换或重启采用候选。Antigravity 继续负责隔离开发与执行，Codex 负责独立 review 和验收。
++
++现场 HEAD：`aa58c8068951d6ec941d63334b55a7b042ae4ae0`。
++登录修复实际提交：`fe34c3e9fc5f20974b24ad54c6e5116ba7d9eca0`。
++状态通知提交：`680422260afed96c9f0c76cf0137ec240401e644`。
++无关未跟踪 topic_clues 源码和测试保持原状。
++
++## 运行证据与对用户问题的判断
++
++- 上次授权时间标记：2026-09-27 13:21:31 BJ。
++- 当前配置：保活与自动重登开启；会话龄阈值 22 小时；保活间隔 50–65 分钟；桌面快捷及视觉后备开启。
++- 控制台 PID 95170，2026-09-27 23:28:01 启动，监听 9100。保活由控制台线程调度，未发现单独保活 cron。
++- `/private/tmp/videopipeline-ui.log` 记录 2026-09-28 02:19、03:13、04:11、05:14、06:18、07:22 成功访问发布路由并保存 state；07:22:09 文件更新时间与日志一致。这是保活脚本的运行证据，不是独立强认证验收。
++- 08:23:58 导航随后发生 `Page.goto: Timeout 30000ms exceeded`，保活退出码 1。该轮不能算成功，也不能据此断定会话已过期。
++- 19 小时未重新授权本身不异常：22 小时阈值约在 09-28 11:21:31 达到，然后等待下一轮调度，上传互斥可能延迟。保活保存不会重置授权标记。尚未观察本周期临期自动重登结果。
++
++## 阻断问题
++
++### P1：状态通知将时间估算当作认证事实
++
++位置：`src/bot/telegram_bot.py:992` 至状态建议分支、`:1031`。
++
++`_get_wechat_login_info()` 明确是无网络的本地读取，却只凭时间标记和固定 `23.0` 小时输出“有效/已过期/无需操作”；即使平台提前撤销会话、最新保活失败，仍可能报有效。文件存在及大小只证明保存；desktop READY 只证明预检。实际重登阈值是 settings 的 22 小时，通知固定倒计时与调度含义不一致。
++
++整改目标：状态中区分上次授权、最近成功验证/保活、最近失败、自动重登阈值与下一次调度；缺失或陈旧验证证据显示未验证，网络超时显示检查失败而非已过期；以 settings 为配置真相源，说明距离重登阈值是调度估算，不承诺平台真实剩余寿命。预检文案明确不代表授权成功。查询走本地结构化状态，不因每次查询启动登录或调用 LLM。
++
++### P1：保活存在明确的乐观成功路径
++
++位置：`scripts/wechat_keepalive.py:201`、`:223`、`:225`。
++
++仅凭 `/post/create` 路由，或无登录框，甚至 DOM 判断异常就认定登录成功并保存 state。空白页、未完成加载或选择器故障不能作为认证成功；该路径也会污染新的结构化状态证据。
++
++整改目标：在共享锁内，使用官方来源和正向发布控件/认证响应证据；无法判断、网络超时与真实 LOGIN_REQUIRED 分开。检查未知时不覆盖旧 state、不标成功、不重置授权时间。增加隔离浏览器场景验证 SPA 尚未加载、错误页、登录框、控件就绪、超时与锁忙；不要仅用 mock 复述实现。
++
++### 交付证据缺口：审查对象与运行采用未绑定
++
++- REVIEW_REQUEST 的候选完整 SHA `fe34c3e2182c161a0c4bf491e0a2e57f041ffdc1` 在本地不存在，实际 SHA 如上；修正对象并重算精确 patch 哈希，完整 diff 不应以省略号代替。
++- 请求书称“等待 review”，同时记录已替换生产 state；不存在先前 Codex PASS。请如实列出已提交、推送、会话替换、重启时间及是否有后续用户授权，不能将测试成功当放行。
++- `auth_receipt_20260927.json` 只记录 SUCCESS/方式/时间和旧大小，未绑定候选或完整两步证据；不足以独立验收自动恢复。
++- 回退示例对普通提交使用 `git revert ... -m 1` 不正确；请提供适用于实际提交且保护后续改动的回退计划，本轮不要执行回退。
++
++## 下一步工单与验收
++
++1. Antigravity ACK 本结论，在隔离目录完成状态证据与判断修复；不要改变 22 小时策略来掩盖通知问题，也不要为验证而发视频/首评。
++2. 通过 `scripts/run_isolated_tests.py` 给出相关测试收据；提交新的 REVIEW_REQUEST，绑定实际候选/patch/source 哈希、测试与 sanitized 真实登录及独立复用证据。
++3. 核查 08:23 导航超时原因，采用有界重试及故障分类；不要把所有网络故障转成反复扫码或无界重登。
++4. 给出本周期临期调度是否触发、授权是否免手机、state 是否保存、独立上下文是否复用的实际运行证据。必须区分“等待调度”“触发”“成功”“需要手机”“失败”。不要伪造时钟、修改生产标记或强制过期。
++5. Codex 对确切候选独立 review 后才可授予 PASS；上线后运行验收另列。没有本周期证据时不得宣布长期自动续登已完成。
++
++本轮未修改修复源码、未触发授权、未替换 state、未发稿/发评、未重启服务，也未运行测试。所有日志摘录仅保留状态、时间与错误类别，未复制认证数据。
+diff --git a/scripts/verify_wechat_session_reuse.py b/scripts/verify_wechat_session_reuse.py
+new file mode 100644
+index 0000000..ae8edbb
+--- /dev/null
++++ b/scripts/verify_wechat_session_reuse.py
+@@ -0,0 +1,166 @@
++"""WeChat Channels Session Independent Reuse Verifier
++
++在全新浏览器上下文中独立复用保存的 session 凭证，验证是否能够正常访问
++发布页并被正向强特征控件识别。仅用于只读验证，不触发任何上传、发布、评论或消息发送。
++日常查询与验证 0 LLM 调用，0 Token 消耗。
++
++# Modification History
++| Version | Date       | Author      | Description                                                  |
++|---------|------------|-------------|--------------------------------------------------------------|
++| 1.1.0   | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract，严格 HTTPS 官方域名与正向控件判据；回执脱敏仅输出白名单分类，消除 URL 查询与原始异常泄漏 |
++| 1.0.0   | 2026-09-28 | Antigravity | 初始创建：独立全新上下文复用验证脚本，输出结构化诊断凭据     |
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import logging
++import os
++import sys
++import time
++from datetime import datetime, timezone
++from pathlib import Path
++from urllib.parse import urlsplit
++
++from playwright.sync_api import sync_playwright
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
++from video_processing.core.wechat_auth_state import (
++    canonical_wechat_auth_state_path,
++    read_wechat_auth_state,
++    VALID_FAILURE_CATEGORIES,
++)
++from video_processing.core.wechat_page_contract import (
++    is_official_wechat_origin,
++    is_official_create_url,
++    check_explicit_login_prompt,
++    check_strong_video_publish_controls,
++    wait_for_publish_ready_with_spa_guard,
++)
++
++logging.basicConfig(
++    level=logging.INFO,
++    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
++)
++logger = logging.getLogger("verify_wechat_session_reuse")
++
++WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
++
++
++def verify_session_reuse(state_path: str | Path, *, timeout_ms: int = 25000) -> dict:
++    """在隔离全新上下文验证 session 复用能力，返回脱敏只读结构化凭据。"""
++    state_file = Path(state_path).expanduser().resolve(strict=False)
++
++    receipt = {
++        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
++        "state_file": state_file.name,
++        "state_file_exists": state_file.is_file(),
++        "state_file_size_bytes": state_file.stat().st_size if state_file.is_file() else 0,
++        "origin_verified": False,
++        "positive_controls_verified": False,
++        "login_required": False,
++        "success": False,
++        "error_type": None,
++        "summary": None,
++    }
++
++    if not state_file.is_file():
++        receipt["error_type"] = "STORAGE_FAILED"
++        receipt["summary"] = "会话文件不存在"
++        return receipt
++
++    with sync_playwright() as p:
++        browser = p.chromium.launch(
++            headless=True,
++            args=[
++                "--disable-web-security",
++                "--no-sandbox",
++                "--disable-blink-features=AutomationControlled",
++                "--disable-infobars",
++                "--window-size=1280,800",
++                "--no-proxy-server",
++                "--host-resolver-rules=MAP localhost.weixin.qq.com 127.0.0.1",
++            ],
++        )
++
++        try:
++            # 独立全新上下文
++            context = browser.new_context(
++                viewport={"width": 1280, "height": 800},
++                user_agent=(
++                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
++                    "AppleWebKit/537.36 (KHTML, like Gecko) "
++                    "Chrome/124.0.0.0 Safari/537.36"
++                ),
++                storage_state=str(state_file),
++            )
++
++            context.add_init_script("""
++                Object.defineProperty(navigator, 'webdriver', { get: () => false });
++                window.chrome = { runtime: {}, loadTimes: function(){}, csi: function(){}, app: {} };
++                delete window.__playwright;
++                delete window.__pw_manual;
++            """)
++
++            page = context.new_page()
++
++            try:
++                page.goto(WECHAT_CREATE_URL, wait_until="domcontentloaded", timeout=timeout_ms)
++                try:
++                    page.wait_for_load_state("networkidle", timeout=10000)
++                except Exception:
++                    pass
++            except Exception as nav_exc:
++                logger.warning("Navigation failed during reuse verification: %s", type(nav_exc).__name__)
++                receipt["error_type"] = "NAVIGATION_TIMEOUT"
++                receipt["summary"] = VALID_FAILURE_CATEGORIES["NAVIGATION_TIMEOUT"]
++                return receipt
++
++            # 使用统一页面判据与 SPA 保护门禁进行有界检测
++            ready, err_type = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=8.0)
++            if ready:
++                receipt["origin_verified"] = True
++                receipt["positive_controls_verified"] = True
++                receipt["success"] = True
++            else:
++                err_cat = err_type or "PAGE_UNREADY"
++                receipt["origin_verified"] = is_official_wechat_origin(page.url)
++                receipt["positive_controls_verified"] = False
++                receipt["login_required"] = (err_cat == "LOGIN_REQUIRED")
++                receipt["success"] = False
++                receipt["error_type"] = err_cat
++                receipt["summary"] = VALID_FAILURE_CATEGORIES.get(err_cat, "复用验证未通过")
++
++        finally:
++            browser.close()
++
++    return receipt
++
++
++def main():
++    parser = argparse.ArgumentParser(description="Verify WeChat session reuse in fresh browser context")
++    parser.add_argument("--state", default="output/wechat_state.json", help="Path to state file")
++    parser.add_argument("--receipt", help="Path to write JSON receipt output")
++    parser.add_argument("--timeout", type=int, default=25000, help="Navigation timeout ms")
++    args = parser.parse_args()
++
++    result = verify_session_reuse(args.state, timeout_ms=args.timeout)
++    formatted = json.dumps(result, ensure_ascii=False, indent=2)
++    print(formatted)
++
++    if args.receipt:
++        out_p = Path(args.receipt)
++        out_p.parent.mkdir(parents=True, exist_ok=True)
++        out_p.write_text(formatted, encoding="utf-8")
++
++    if result.get("success"):
++        sys.exit(0)
++    elif result.get("login_required"):
++        sys.exit(2)
++    else:
++        sys.exit(1)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/scripts/wechat_keepalive.py b/scripts/wechat_keepalive.py
+index abcd55c..39ce189 100644
+--- a/scripts/wechat_keepalive.py
++++ b/scripts/wechat_keepalive.py
+@@ -11,25 +11,44 @@
+ | 1.2.0   | 2026-06-27 | Claude_Opus_4.8 | 临期预警/过期告警话术改为引导「发 /wechat_login 取二维码到 Telegram 手机扫码」，与 pipeline_agent 无头 QR 推送闭环（替代原终端 --no-headless 命令） |
+ | 1.3.0   | 2026-09-19 | Codex | 评论互动开关启用时，以登录态派生共享锁覆盖完整保活会话。 |
+ | 1.4.0   | 2026-09-25 | Codex | 登录过期时保留会话龄标记，让控制台恢复流程仍能识别过期会话。 |
++| 1.5.0   | 2026-09-28 | Antigravity | 整改 WX-AUTH-20260927：去除首次保活伪造授权时间；增加官方来源与正向发布控件校验（消除乐观成功）；导航有界重试并分离网络超时/SPA未就绪/LOGIN_REQUIRED；存储原子写入且失败报失败；锁冲突返回 EXIT_WECHAT_SESSION_BUSY (11)。 |
++| 1.6.0   | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract，消除判据漂移；DOM探针异常不掩盖登录态；有界等待SPA正向控件；白名单脱敏失败分类 |
+ 
+ Exit Codes:
+-    0 - Session 活跃，Cookie 已刷新
+-    1 - 未知错误
++    0 - Session 活跃，Cookie 已刷新且正向控件校验通过
++    1 - 运行时错误（网络超时、SPA 未就绪、非微信来源、存储保存失败等）
+     2 - Session 已过期（LOGIN_REQUIRED），需重新扫码
++    11 - 锁占用（EXIT_WECHAT_SESSION_BUSY）
+ """
+ 
++import os
+ import sys
+ import time
+ import argparse
+ import logging
+ from pathlib import Path
++from urllib.parse import urlsplit
+ 
+ from playwright.sync_api import sync_playwright
+ 
+ # [Claude_Opus_4.8] 接入 settings 单一真相源（临期预警阈值 + Telegram 凭据，消除 os.environ 违规）
+ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+ from config.settings import settings
+-from video_processing.core.wechat_session_lock import guarded_wechat_browser_session
++from video_processing.core.wechat_session_lock import (
++    EXIT_WECHAT_SESSION_BUSY,
++    guarded_wechat_browser_session,
++)
++from video_processing.core.wechat_auth_state import (
++    read_wechat_auth_state,
++    record_wechat_keepalive_result,
++)
++from video_processing.core.wechat_page_contract import (
++    is_official_wechat_origin,
++    is_official_create_url,
++    check_explicit_login_prompt,
++    check_strong_video_publish_controls,
++    wait_for_publish_ready_with_spa_guard,
++)
+ 
+ try:
+     import requests as _requests
+@@ -42,15 +61,17 @@ logging.basicConfig(
+ )
+ logger = logging.getLogger("wechat_keepalive")
+ 
+-# [Claude_Sonnet_4.6_Thinking_planning] 与 wechat_uploader.py 保持一致
+ WECHAT_CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
+-
+-# [Claude_Opus_4.8] 会话龄追踪：标记文件记录上次「扫码登录」的近似时刻(epoch)。
+-# 看门狗的 Cookie 刷新【不】重置它（刷新无法延长 ~24h 服务端硬上限，见 RCA 候选②）；
+-# 仅实际重新登录成功时重置；过期时保留标记供自动重登调度器判断。
+-_LOGIN_AT_FILE = "output/wechat_login_at.txt"
+ _WARNED_FILE = "output/wechat_login_warned.flag"
+ 
++# 兼容保留内部函数
++_check_strong_video_publish_controls = check_strong_video_publish_controls
++
++
++def _is_login_page_dom(page) -> bool:
++    is_login, _ = check_explicit_login_prompt(page)
++    return is_login
++
+ 
+ def _send_telegram(html: str) -> None:
+     """推送 Telegram（凭据走 settings 单一真相源）。未配置/失败仅记录，不抛。"""
+@@ -66,12 +87,11 @@ def _send_telegram(html: str) -> None:
+             timeout=10,
+         )
+     except Exception as exc:
+-        # requests 异常可能包含带 Bot Token 的请求 URL，日志中只保留错误类别。
+         logger.error("[Keepalive] Telegram send failed: %s", type(exc).__name__)
+ 
+ 
+ def _stamp_login_if_absent(login_at_path: Path) -> None:
+-    """首次观测到 active（或重扫后）→ 记录登录时刻；已存在则不动，让会话龄正确累计。"""
++    """[已废弃] 旧版首次观测记录逻辑。保活流程中严禁调用，避免伪造授权时刻；保留仅供旧单元测试向后兼容。"""
+     if not login_at_path.exists():
+         try:
+             login_at_path.write_text(str(int(time.time())))
+@@ -79,11 +99,18 @@ def _stamp_login_if_absent(login_at_path: Path) -> None:
+             logger.warning(f"[Keepalive] Failed to stamp login time: {e}")
+ 
+ 
+-def _maybe_warn_expiry(login_at_path: Path, warned_path: Path) -> None:
++def _maybe_warn_expiry(login_target: Path, warned_path: Path) -> None:
+     """会话龄超过阈值且本登录周期未预警过 → 推 Telegram 临期提醒（每登录周期仅一次）。"""
+-    try:
+-        login_at = int(login_at_path.read_text().strip())
+-    except Exception:
++    login_at = None
++    if str(login_target).endswith(".json"):
++        auth_state = read_wechat_auth_state(login_target)
++        login_at = auth_state.get("authorized_at")
++    else:
++        try:
++            login_at = int(login_target.read_text().strip())
++        except Exception:
++            login_at = None
++    if login_at is None:
+         return
+     age_h = (time.time() - login_at) / 3600.0
+     warn_h = float(settings.wechat_session_warn_hours)
+@@ -94,7 +121,7 @@ def _maybe_warn_expiry(login_at_path: Path, warned_path: Path) -> None:
+             f"👉 给 Bot 发 <code>/wechat_login</code>，登录二维码会推到这里，手机微信扫码即可。"
+         )
+         try:
+-            warned_path.write_text(str(int(time.time())))
++            warned_path.write_text(str(int(time.time())), encoding="utf-8")
+         except Exception:
+             pass
+         logger.info(f"[Keepalive] Sent pre-expiry warning (age={age_h:.1f}h >= {warn_h}h).")
+@@ -105,7 +132,7 @@ def _maybe_warn_expiry(login_at_path: Path, warned_path: Path) -> None:
+     purpose="保活",
+     state_parameter="state_path",
+     timeout_seconds=0.0,
+-    busy_result=1,
++    busy_result=EXIT_WECHAT_SESSION_BUSY,
+ )
+ def run_keepalive(
+     state_path: str = "output/wechat_state.json",
+@@ -113,23 +140,32 @@ def run_keepalive(
+ ) -> int:
+     """执行一次 WeChat Session 保活操作。
+ 
+-    # [Claude_Sonnet_4.6_Thinking_planning] 1.0.0
+-    加载现有 Session，访问发布创建页，停留 dwell 秒后保存刷新后的 Cookie。
++    加载现有 Session，访问发布创建页并验证正向发布控件，停留 dwell 秒后原子保存刷新后的 Cookie。
+     若检测到已被重定向到登录页，则发送 Telegram 报警并退出码 2。
++    若检测到网络超时、页面未就绪或存储失败，记录明确证据并退出码 1，绝不覆盖旧 state。
+ 
+     Args:
+         state_path: wechat_state.json 路径。
+         dwell: 停留时长（秒），给微信服务端足够时间记录活跃请求。
+ 
+     Returns:
+-        0 - Session 刷新成功
+-        1 - 运行时错误
+-        2 - SESSION 已过期，需重新登录
++        0 - Session 活跃且正向控件验证通过，Cookie 已原子保存
++        1 - 运行时错误（网络超时、SPA 未就绪、非微信来源、存储保存失败等）
++        2 - Session 已过期（LOGIN_REQUIRED），需重新扫码
++        11 - 锁占用（EXIT_WECHAT_SESSION_BUSY）
+     """
+     state_file = Path(state_path)
+ 
+     if not state_file.exists():
+         logger.error(f"Session file not found: {state_file}. Cannot keepalive without existing session.")
++        record_wechat_keepalive_result(
++            state_file,
++            status="UNKNOWN",
++            failure={
++                "stage": "preflight",
++                "error_type": "UNKNOWN",
++            },
++        )
+         return 1
+ 
+     with sync_playwright() as p:
+@@ -139,18 +175,16 @@ def run_keepalive(
+             args=[
+                 "--disable-web-security",
+                 "--no-sandbox",
+-                # [Claude_Sonnet_4.6_Thinking_planning] 反检测：与 wechat_uploader 保持一致
+                 "--disable-blink-features=AutomationControlled",
+                 "--disable-infobars",
+                 "--window-size=1280,800",
+-                # [BugFix] 禁止走代理，防止微信安全风控检测到异地 IP 踢掉 Session
+                 "--no-proxy-server",
++                "--host-resolver-rules=MAP localhost.weixin.qq.com 127.0.0.1",
+             ]
+         )
+ 
+         context_opts = {
+             "viewport": {"width": 1280, "height": 800},
+-            # [Claude_Sonnet_4.6_Thinking_planning] 与保存 Session 时使用同一 UA，防止 UA 变化触发微信重验
+             "user_agent": (
+                 "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                 "AppleWebKit/537.36 (KHTML, like Gecko) "
+@@ -161,7 +195,6 @@ def run_keepalive(
+ 
+         context = browser.new_context(**context_opts)
+ 
+-        # [Claude_Sonnet_4.6_Thinking_planning] 反检测指纹伪造（与 wechat_uploader 完全一致）
+         context.add_init_script("""
+             Object.defineProperty(navigator, 'webdriver', { get: () => false });
+             window.chrome = {
+@@ -184,74 +217,183 @@ def run_keepalive(
+ 
+         page = context.new_page()
+ 
+-        logger.info(f"[Keepalive] Navigating to: {WECHAT_CREATE_URL}")
+-        page.goto(WECHAT_CREATE_URL, wait_until="domcontentloaded")
+-
+-        # 等待页面加载稳定
+-        try:
+-            page.wait_for_load_state("networkidle", timeout=15000)
+-        except Exception:
+-            pass
+-        page.wait_for_timeout(3000)
+-
+-        current_url = page.url
+-        logger.info(f"[Keepalive] Current URL: {current_url}")
+-
+-        # ── 登录状态检测（URL 优先策略，与 wechat_uploader 保持一致）────────────
+-        if "/post/create" in current_url:
+-            is_logged_in = True
+-            logger.info("[Keepalive] Session active (URL confirmed /post/create).")
+-        elif "login" in current_url:
+-            is_logged_in = False
+-            logger.warning(f"[Keepalive] Redirected to login page: {current_url}")
+-        else:
+-            # 模糊 URL，等待额外 2 秒再判断
+-            page.wait_for_timeout(2000)
+-            current_url = page.url
+-            if "/post/create" in current_url:
+-                is_logged_in = True
+-                logger.info("[Keepalive] Session active (URL confirmed after extra wait).")
+-            elif "login" in current_url:
+-                is_logged_in = False
+-            else:
+-                # DOM 兜底检测
++        # 导航与有界重试（最多重试 1 次，有界超时 25000ms）
++        max_nav_attempts = 2
++        nav_success = False
++        nav_error = None
++        for attempt in range(1, max_nav_attempts + 1):
++            try:
++                logger.info(f"[Keepalive] Navigating to: {WECHAT_CREATE_URL} (attempt {attempt}/{max_nav_attempts})")
++                page.goto(WECHAT_CREATE_URL, wait_until="domcontentloaded", timeout=25000)
+                 try:
+-                    dom_login = (
+-                        page.locator("text=使用微信扫码登录").is_visible(timeout=2000) or
+-                        page.locator(".login-box").is_visible(timeout=2000)
+-                    )
+-                    is_logged_in = not dom_login
++                    page.wait_for_load_state("networkidle", timeout=10000)
+                 except Exception:
+-                    is_logged_in = True  # 不确定时乐观假设已登录
+-
+-        if not is_logged_in:
+-            # 过期标记须保留：Web 看门狗下一轮据此触发自动重登；实际登录成功才重计时。
+-            _send_telegram(
+-                "⚠️ <b>WeChat Session 已过期</b>\n"
+-                "看门狗检测到登录态失效，请尽快重新扫码登录。\n"
+-                "👉 给 Bot 发 <code>/wechat_login</code>，登录二维码会推到这里，手机微信扫码即可。"
++                    pass
++                nav_success = True
++                break
++            except Exception as exc:
++                nav_error = exc
++                logger.warning(f"[Keepalive] Navigation attempt {attempt} failed: {type(exc).__name__}")
++                if attempt < max_nav_attempts:
++                    page.wait_for_timeout(2000)
++
++        if not nav_success:
++            logger.error(f"[Keepalive] Navigation failed after {max_nav_attempts} attempts: {type(nav_error).__name__}")
++            record_wechat_keepalive_result(
++                state_file,
++                status="NETWORK_TIMEOUT",
++                failure={
++                    "stage": "navigation",
++                    "error_type": "NETWORK_TIMEOUT",
++                },
+             )
+-            logger.info("[Keepalive] Sent LOGIN_REQUIRED alert to Telegram.")
+             browser.close()
+-            return 2  # LOGIN_REQUIRED
+-
+-        # [Claude_Opus_4.8] 会话龄追踪 + 临期预警：首次/重扫后记录登录时刻，临近 ~24h 硬上限主动提醒，
+-        # 在发布断档前让你有时间重扫（见 docs/wechat_login_expiry_rca.html 候选②坐实）。
+-        login_at_file = Path(_LOGIN_AT_FILE)
+-        _stamp_login_if_absent(login_at_file)
+-        _maybe_warn_expiry(login_at_file, Path(_WARNED_FILE))
+-
+-        # ── Session 活跃：停留 dwell 秒，让微信服务端记录活跃请求 ─────────────
+-        logger.info(f"[Keepalive] Session active. Dwelling for {dwell}s to refresh cookies...")
+-        page.wait_for_timeout(dwell * 1000)
+-
+-        # ── 保存刷新后的 Cookie / Token ────────────────────────────────────────
++            return 1
++
++        # 1. 使用统一 SPA 保护门禁进行有界正向控件判定（结合协议、域名、路径与登录提示）
++        ready, err_type = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=8.0)
++        if not ready:
++            err_cat = err_type or "PAGE_UNREADY"
++            logger.warning(f"[Keepalive] SPA publish page not ready: {err_cat}")
++            if err_cat == "INVALID_ORIGIN":
++                record_wechat_keepalive_result(
++                    state_file,
++                    status="INVALID_ORIGIN",
++                    failure={
++                        "stage": "navigation",
++                        "error_type": "INVALID_ORIGIN",
++                    },
++                )
++                browser.close()
++                return 1
++            elif err_cat == "LOGIN_REQUIRED":
++                record_wechat_keepalive_result(
++                    state_file,
++                    status="LOGIN_REQUIRED",
++                    failure={
++                        "stage": "auth",
++                        "error_type": "LOGIN_REQUIRED",
++                    },
++                )
++                _send_telegram(
++                    "⚠️ <b>WeChat Session 已过期</b>\n"
++                    "看门狗检测到登录态失效，请尽快重新扫码登录。\n"
++                    "👉 给 Bot 发 <code>/wechat_login</code>，登录二维码会推到这里，手机微信扫码即可。"
++                )
++                browser.close()
++                return 2
++            elif err_cat == "DOM_ERROR":
++                record_wechat_keepalive_result(
++                    state_file,
++                    status="DOM_ERROR",
++                    failure={
++                        "stage": "positive_validation",
++                        "error_type": "DOM_ERROR",
++                    },
++                )
++                browser.close()
++                return 1
++            else:
++                record_wechat_keepalive_result(
++                    state_file,
++                    status="PAGE_UNREADY",
++                    failure={
++                        "stage": "positive_validation",
++                        "error_type": "PAGE_UNREADY",
++                    },
++                )
++                browser.close()
++                return 1
++
++        # 临期预警检查（仅检查，不伪造授权时刻）
++        _maybe_warn_expiry(state_file, Path(_WARNED_FILE))
++
++        # 2. Session 活跃：停留 dwell 秒
++        logger.info(f"[Keepalive] Session verified active with strong positive controls. Dwelling for {dwell}s...")
++        if dwell > 0:
++            page.wait_for_timeout(dwell * 1000)
++
++        # 3. 跳转后及最终保存前二次验证官方 HTTPS 源与正向发布页，防止页面失效或发生迟到跳转
++        post_ready, post_err = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=4.0)
++        if not post_ready:
++            post_err_cat = post_err or "PAGE_UNREADY"
++            logger.warning(f"[Keepalive] Post-dwell validation failed: {post_err_cat}")
++            if post_err_cat == "INVALID_ORIGIN":
++                record_wechat_keepalive_result(
++                    state_file,
++                    status="INVALID_ORIGIN",
++                    failure={
++                        "stage": "dwell",
++                        "error_type": "INVALID_ORIGIN",
++                    },
++                )
++                browser.close()
++                return 1
++            elif post_err_cat == "LOGIN_REQUIRED":
++                record_wechat_keepalive_result(
++                    state_file,
++                    status="LOGIN_REQUIRED",
++                    failure={
++                        "stage": "dwell",
++                        "error_type": "LOGIN_REQUIRED",
++                    },
++                )
++                _send_telegram(
++                    "⚠️ <b>WeChat Session 已过期</b>\n"
++                    "看门狗检测到登录态失效（迟到跳转），请尽快重新扫码登录。"
++                )
++                browser.close()
++                return 2
++            elif post_err_cat == "DOM_ERROR":
++                record_wechat_keepalive_result(
++                    state_file,
++                    status="DOM_ERROR",
++                    failure={
++                        "stage": "dwell",
++                        "error_type": "DOM_ERROR",
++                    },
++                )
++                browser.close()
++                return 1
++            else:
++                record_wechat_keepalive_result(
++                    state_file,
++                    status="PAGE_UNREADY",
++                    failure={
++                        "stage": "dwell",
++                        "error_type": "PAGE_UNREADY",
++                    },
++                )
++                browser.close()
++                return 1
++
++        # 4. 保存刷新后的 Cookie / Token（原子写入，写失败报失败）
++        tmp_state = state_file.with_name(f".{state_file.name}.tmp.{os.getpid()}.{time.time_ns()}")
+         try:
+-            context.storage_state(path=str(state_file))
++            context.storage_state(path=str(tmp_state))
++            if not tmp_state.exists() or tmp_state.stat().st_size == 0:
++                raise OSError(f"Saved state file is empty or missing: {tmp_state}")
++            os.replace(tmp_state, state_file)
+             logger.info(f"[Keepalive] Session state refreshed and saved to: {state_file}")
+         except Exception as e:
+-            logger.warning(f"[Keepalive] Failed to save session state: {e}")
++            if tmp_state.exists():
++                try:
++                    tmp_state.unlink()
++                except Exception:
++                    pass
++            logger.error(f"[Keepalive] Failed to save session state: {type(e).__name__}")
++            record_wechat_keepalive_result(
++                state_file,
++                status="STORAGE_FAILED",
++                failure={
++                    "stage": "storage_save",
++                    "error_type": "STORAGE_FAILED",
++                },
++            )
++            browser.close()
++            return 1
+ 
++        record_wechat_keepalive_result(state_file, status="SUCCESS")
+         browser.close()
+         logger.info("[Keepalive] Keepalive completed successfully.")
+         return 0
+diff --git a/scripts/wechat_uploader.py b/scripts/wechat_uploader.py
+index 7cc6f17..da4a387 100644
+--- a/scripts/wechat_uploader.py
++++ b/scripts/wechat_uploader.py
+@@ -3,6 +3,9 @@
+ # Modification History
+ | Version | Date       | Author                              | Description                                              |
+ |---------|------------|-------------------------------------|----------------------------------------------------------|
++| 5.15.0 | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract；修复 context.browser 为空 fail-open、初始检查未知路由放行、登录通知过度承诺与发布等待期源重核验。 |
++| 5.14.0 | 2026-09-28 | Antigravity | 消除乐观登录判定：初始检查、快捷授权与 _wait_and_save_login 必须官方 HTTPS 源 + 正向视频发布控件；经独立全新浏览器上下文复用验证通过后原子提交会话；移除 legacy marker 回退伪造；login-only 不触发续投。 |
++| 5.13.0 | 2026-09-28 | Antigravity | 登录成功后原子保存会话并写入结构化授权状态（wechat_auth_state.json），更新 authorized_at 与 last_verified_at。 |
+ | 5.12.0 | 2026-09-27 | Antigravity | 登录态保存（快捷/扫码/交互）后自动投递 Telegram 回报通知，记录授权方式与更新时间。 |
+ | 5.11.4 | 2026-09-27 | Antigravity | Chromium 启动参数强制追加 localhost.weixin.qq.com 本地环回映射，防止透明代理与 TUN Fake IP 阻断桌面快捷登录通信。 |
+ | 5.11.3 | 2026-09-26 | Codex | 授权检查覆盖整个登录期限，兼容分行文案并限制可信来源；诊断不输出授权 URL。 |
+@@ -350,8 +353,8 @@ def _resume_eligible_english_world_after_login(db: object) -> str | None:
+         return None
+ 
+ 
+-def _restore_login_required_tasks_after_login() -> int:
+-    """任何成功登录入口都恢复可安全续跑的微信任务与一条受限英语世界续投。"""
++def _restore_login_required_tasks_after_login(resume_submission: bool = True) -> int:
++    """登录成功后可恢复任务；仅在非 login_only 上传流中续投英语世界，login-only 不自动触发历史投稿。"""
+     try:
+         from video_processing.db.database import PipelineDB
+ 
+@@ -362,7 +365,8 @@ def _restore_login_required_tasks_after_login() -> int:
+                 "[WeChatLogin] Restored %s LOGIN_REQUIRED task(s) to PENDING after login success.",
+                 restored,
+             )
+-        _resume_eligible_english_world_after_login(db)
++        if resume_submission:
++            _resume_eligible_english_world_after_login(db)
+         return restored
+     except Exception:
+         # 登录本身已经成功；恢复失败必须可观测，但不能伪造登录失败或覆盖 state。
+@@ -1000,25 +1004,11 @@ def _has_wechat_cover_success_marker(page) -> bool:
+     return any(marker in page_text for marker in markers)
+ 
+ 
+-def _stamp_login_success(state_file: Path) -> None:
+-    """真实跳回发布页并保存 state 后，记录本轮登录成功时间。"""
+-    try:
+-        marker = state_file.parent / "wechat_login_at.txt"
+-        marker.write_text(str(int(time.time())), encoding="utf-8")
+-        # 自动预热重登成功后允许下一登录周期再次触发。
+-        auto_flag = state_file.parent / "wechat_auto_relogin_started.flag"
+-        try:
+-            auto_flag.unlink()
+-        except FileNotFoundError:
+-            pass
+-        warned_flag = state_file.parent / "wechat_login_warned.flag"
+-        try:
+-            warned_flag.unlink()
+-        except FileNotFoundError:
+-            pass
+-        logger.info(f"Login success marker updated: {marker}")
+-    except Exception as e:
+-        logger.warning(f"Failed to update login success marker: {e}")
++def _stamp_login_success(state_file: Path, method: str = "auto") -> None:
++    """真实跳回发布页并通过独立新上下文复用验证后，记录本轮授权成功证据。"""
++    from video_processing.core.wechat_auth_state import record_wechat_authorization
++    record_wechat_authorization(state_file, method=method)
++    logger.info(f"Login authorization successfully recorded for {state_file} (method={method})")
+ 
+ 
+ def _location_display_text(page) -> str:
+@@ -1375,7 +1365,7 @@ def _notify_wechat_login_success(method: str, state_file: Path) -> None:
+             f"<b>授权方式</b>: {method_desc}\n"
+             f"<b>更新时间</b>: {bj_time} BJ\n"
+             f"<b>会话文件</b>: <code>{state_file.name}</code>\n"
+-            "<b>状态说明</b>: 登录态已成功保存，受阻任务与发布通道已恢复。"
++            "<b>状态说明</b>: 凭证已在独立全新上下文完成复用验证并持久化。"
+         )
+         send_text(
+             event_type="WECHAT_LOGIN_RENEWED",
+@@ -1388,6 +1378,13 @@ def _notify_wechat_login_success(method: str, state_file: Path) -> None:
+         logger.warning("Failed to send WeChat login renewal notification: %s", type(exc).__name__)
+ 
+ 
++def _has_positive_publish_controls(page) -> bool:
++    """检查页面是否存在视频号官方发布的强特征控件。"""
++    from video_processing.core.wechat_page_contract import check_strong_video_publish_controls
++    ok, _ = check_strong_video_publish_controls(page)
++    return ok
++
++
+ def _wait_and_save_login(
+     page,
+     context,
+@@ -1395,12 +1392,94 @@ def _wait_and_save_login(
+     qr_path: Path | None = None,
+     method: str = "auto",
+ ) -> None:
+-    """等待登录回到发布页，保存 Playwright state、写入时间戳并发送 Telegram 回报。"""
+-    page.wait_for_url("**/post/create", timeout=600000)
+-    logger.info("Login detected. Saving session...")
+-    context.storage_state(path=str(state_file))
+-    _stamp_login_success(state_file)
+-    logger.info(f"Session saved to: {state_file}")
++    """等待登录回到官方发布页、验证正向发布控件、并在全新独立上下文验证复用后原子保存与记录。"""
++    browser = getattr(context, "browser", None)
++    if browser is None:
++        raise RuntimeError("Cannot verify session reuse: browser instance unavailable")
++
++    from video_processing.core.wechat_auth_state import record_wechat_auth_attempt
++    from video_processing.core.wechat_page_contract import wait_for_publish_ready_with_spa_guard
++
++    try:
++        page.wait_for_url("**/post/create", timeout=600000)
++    except Exception as exc:
++        record_wechat_auth_attempt(state_file, method=method, success=False, reason="NAVIGATION_TIMEOUT")
++        raise RuntimeError(f"Wait for login redirect failed: {type(exc).__name__}") from exc
++
++    ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=15.0)
++    if not ready:
++        record_wechat_auth_attempt(state_file, method=method, success=False, reason=err_cat or "PAGE_UNREADY")
++        raise RuntimeError(f"Positive publish controls not found on /post/create after login redirect ({err_cat})")
++
++    logger.info("Login detected and positive publish controls verified. Saving to temporary verification state...")
++    tmp_verify_state = state_file.with_name(f".{state_file.name}.verify.{os.getpid()}.{time.time_ns()}")
++    try:
++        try:
++            context.storage_state(path=str(tmp_verify_state))
++            if not tmp_verify_state.exists() or tmp_verify_state.stat().st_size == 0:
++                raise OSError(f"Saved temporary state file is empty or missing: {tmp_verify_state}")
++        except Exception:
++            record_wechat_auth_attempt(state_file, method=method, success=False, reason="STORAGE_FAILED")
++            raise
++
++        # 启动全新独立浏览器上下文验证会话复用（独立复用门禁）
++        logger.info("Verifying session reuse in an independent fresh browser context...")
++        try:
++            reuse_ctx = browser.new_context(
++                viewport={"width": 1280, "height": 800},
++                storage_state=str(tmp_verify_state),
++            )
++        except Exception:
++            record_wechat_auth_attempt(state_file, method=method, success=False, reason="REUSE_VERIFICATION_FAILED")
++            raise
++
++        reuse_ok = False
++        reuse_err_cat = "REUSE_VERIFICATION_FAILED"
++        try:
++            reuse_page = reuse_ctx.new_page()
++            try:
++                reuse_page.goto(WECHAT_CREATE_URL, wait_until="domcontentloaded", timeout=25000)
++                try:
++                    reuse_page.wait_for_load_state("networkidle", timeout=5000)
++                except Exception:
++                    pass
++            except Exception as nav_exc:
++                logger.warning("Navigation failed during reuse verification: %s", type(nav_exc).__name__)
++                reuse_err_cat = "NETWORK_TIMEOUT"
++                record_wechat_auth_attempt(state_file, method=method, success=False, reason="NETWORK_TIMEOUT")
++                raise
++
++            reuse_ready, reuse_err = wait_for_publish_ready_with_spa_guard(reuse_page, timeout_seconds=10.0)
++            if reuse_ready:
++                reuse_ok = True
++                logger.info("Session reuse in independent fresh context confirmed successfully.")
++            else:
++                reuse_err_cat = reuse_err or "REUSE_VERIFICATION_FAILED"
++                logger.error("Session reuse verification failed: %s", reuse_err)
++        finally:
++            reuse_ctx.close()
++
++        if not reuse_ok:
++            record_wechat_auth_attempt(state_file, method=method, success=False, reason=reuse_err_cat)
++            raise RuntimeError(f"Independent fresh context session reuse verification failed ({reuse_err_cat}); refusing to commit session.")
++
++        # 独立复用验证通过后，原子提交至目标会话文件
++        try:
++            os.replace(tmp_verify_state, state_file)
++            logger.info(f"Session atomically saved to: {state_file}")
++        except Exception:
++            record_wechat_auth_attempt(state_file, method=method, success=False, reason="STORAGE_FAILED")
++            raise
++
++    except Exception:
++        if tmp_verify_state.exists():
++            try:
++                tmp_verify_state.unlink()
++            except OSError:
++                pass
++        raise
++
++    _stamp_login_success(state_file, method=method)
+     if qr_path and qr_path.exists():
+         try:
+             qr_path.unlink()
+@@ -1434,7 +1513,8 @@ def _click_visible_frame_button(page, text: str, timeout: int = 3000) -> bool:
+ 
+ 
+ def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None = None,
+-                            timeout_ms: int = 30_000) -> bool:
++                            timeout_ms: int = 30_000,
++                            state_file: Path | None = None) -> bool:
+     """同一期限内持续等待桌面确认、网页资料授权和发布页跳转。"""
+     deadline = time.monotonic() + max(0, timeout_ms) / 1000
+     approved_frames = set()
+@@ -1444,12 +1524,22 @@ def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None
+         if desktop_auth:
+             desktop_auth.start()
+ 
++        from video_processing.core.wechat_page_contract import wait_for_publish_ready_with_spa_guard
++
+         while time.monotonic() < deadline:
+-            url = urlsplit(page.url)
+-            if (url.scheme == "https" and url.hostname == "channels.weixin.qq.com"
+-                    and url.path == "/platform/post/create"):
+-                logger.info("WeChat quick authorization login succeeded.")
++            ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=1.0)
++            if ready:
++                logger.info("WeChat quick authorization login succeeded with positive publish controls.")
+                 return True
++            if err_cat in ("INVALID_ORIGIN", "DOM_ERROR"):
++                logger.error("WeChat quick authorization blocked by page guard: %s", err_cat)
++                if state_file is not None:
++                    from video_processing.core.wechat_auth_state import record_wechat_auth_attempt
++                    try:
++                        record_wechat_auth_attempt(state_file, method="desktop_quick", success=False, reason=err_cat)
++                    except Exception:
++                        pass
++                return False
+             for fr in page.frames:
+                 try:
+                     if fr in approved_frames or not _trusted_wechat_login_frame(fr):
+@@ -1470,8 +1560,14 @@ def _try_wechat_quick_login(page, desktop_auth: WeChatDesktopAuthWatcher | None
+             remaining = int((deadline - time.monotonic()) * 1000)
+             if remaining > 0:
+                 # 让 Playwright 持续处理网络/导航事件；桌面确认可能晚于旧版的 10 秒检查窗。
+-                page.wait_for_timeout(min(250, remaining))
++                page.wait_for_timeout(min(1000, remaining))
+         logger.warning("WeChat quick authorization did not finish within %.0fs.", timeout_ms / 1000)
++        if state_file is not None:
++            from video_processing.core.wechat_auth_state import record_wechat_auth_attempt
++            try:
++                record_wechat_auth_attempt(state_file, method="desktop_quick", success=False, reason="PAGE_UNREADY")
++            except Exception:
++                pass
+         return False
+     finally:
+         if desktop_auth:
+@@ -1691,48 +1787,54 @@ def run_uploader(
+         except Exception:
+             pass
+ 
+-        # ── 登录状态检测（URL 优先，防止 Vue SPA 未渲染完触发误判）────────────
+-        current_url = page.url
+-        logger.info(f"Current URL after load: {current_url}")
+-
+-        # 1st: 目标业务页已打开 → 明确已登录，跳过所有 DOM 检测
+-        if expected_route in current_url:
+-            is_login_page = False
+-            logger.info("Successfully authenticated via saved session (URL confirmed).")
+-        # 2nd: URL 明确含 login → 未登录
+-        elif "login" in current_url:
+-            is_login_page = True
+-            logger.warning(f"Redirected to login page: {current_url}")
+-        # 3rd: URL 模糊（如首页 /）→ 再等 3s 后检查 DOM
+-        else:
+-            page.wait_for_timeout(3000)
+-            current_url = page.url
+-            if expected_route in current_url:
++        # ── 登录状态与目标页面就绪检测（严格官方源、正向强控件与登录分类）────────────
++        from video_processing.core.wechat_page_contract import (
++            is_official_wechat_origin,
++            is_official_create_url,
++            is_official_list_url,
++            check_explicit_login_prompt,
++            wait_for_publish_ready_with_spa_guard,
++        )
++
++        logger.info("Verifying session against expected route %s", expected_route)
++
++        is_login_page = False
++        if expected_route == "/post/create":
++            ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=8.0)
++            if ready:
+                 is_login_page = False
+-                logger.info("Successfully authenticated (URL confirmed after extra wait).")
+-            elif "login" in current_url:
++                logger.info("Successfully authenticated via saved session (URL & positive controls confirmed).")
++            elif err_cat == "LOGIN_REQUIRED":
+                 is_login_page = True
+-            else:
+-                # DOM 检测作为最后手段
+-                try:
+-                    dom_login = (
+-                        page.locator("text=使用微信扫码登录").is_visible(timeout=2000) or
+-                        page.locator(".login-box").is_visible(timeout=2000) or
+-                        page.locator(".login-qr").is_visible(timeout=2000)
+-                    )
+-                except Exception:
+-                    dom_login = False
+-                is_login_page = dom_login
+-                if is_login_page:
+-                    # 截图留证，方便排查是否是误判
+-                    dbg = state_file.parent / "debug_login_detect.png"
+-                    try:
+-                        page.screenshot(path=str(dbg))
+-                        logger.warning(f"Login page detected via DOM. Debug screenshot: {dbg}")
+-                    except Exception:
+-                        pass
++                logger.warning("Explicit login page or QR prompt detected on /post/create redirect.")
++            elif err_cat == "INVALID_ORIGIN":
++                logger.error("Untrusted origin detected during login check: INVALID_ORIGIN")
++                raise RuntimeError("Untrusted origin during login check: invalid scheme or host")
++            elif err_cat == "DOM_ERROR":
++                logger.error("DOM error occurred while inspecting publish controls: DOM_ERROR")
++                raise RuntimeError("DOM error during publish controls inspection; refusing to fail open.")
++            else:  # PAGE_UNREADY or unexpected route
++                explicit_login, dom_err = check_explicit_login_prompt(page)
++                if explicit_login:
++                    is_login_page = True
++                    logger.warning("Explicit login prompt detected after SPA check.")
+                 else:
+-                    logger.info("Successfully authenticated (DOM check passed).")
++                    logger.error("Publish page unready: positive controls missing and no login prompt found.")
++                    raise RuntimeError("Publish page unready: positive controls missing; refusing to trigger relogin or proceed.")
++        else:
++            if not is_official_wechat_origin(page.url):
++                logger.error("Untrusted origin for management page: INVALID_ORIGIN")
++                raise RuntimeError("Untrusted origin for management page")
++            explicit_login, dom_err = check_explicit_login_prompt(page)
++            if explicit_login:
++                is_login_page = True
++                logger.warning("Explicit login detected on management page redirect.")
++            elif is_official_list_url(page.url):
++                is_login_page = False
++                logger.info("Successfully authenticated via saved session (management list page confirmed).")
++            else:
++                logger.error("Unexpected route for management page: PAGE_UNREADY")
++                raise RuntimeError("Unexpected route for management page; refusing to fail open.")
+ 
+         if is_login_page:
+             qr_path = state_file.parent / "login_qr.png"
+@@ -1752,6 +1854,7 @@ def run_uploader(
+                     page,
+                     desktop_auth=desktop_auth,
+                     timeout_ms=settings.wechat_desktop_quick_login_timeout_seconds * 1000,
++                    state_file=state_file,
+                 ):
+                     _wait_and_save_login(page, context, state_file, qr_path, method="desktop_quick")
+                     login_completed = True
+@@ -1761,7 +1864,7 @@ def run_uploader(
+                 browser.close()
+                 return 2  # LOGIN_REQUIRED，交由管线回写状态并告警
+ 
+-            if not login_completed and not desktop_quick_attempted and _try_wechat_quick_login(page):
++            if not login_completed and not desktop_quick_attempted and _try_wechat_quick_login(page, state_file=state_file):
+                 _wait_and_save_login(page, context, state_file, qr_path, method="desktop_quick")
+                 login_completed = True
+             elif not login_completed:
+@@ -1830,8 +1933,8 @@ def run_uploader(
+                     return 1
+ 
+         if login_only:
+-            _restore_login_required_tasks_after_login()
+-            logger.info("Login-only mode completed successfully.")
++            _restore_login_required_tasks_after_login(resume_submission=False)
++            logger.info("Login-only mode completed successfully without triggering submissions.")
+             browser.close()
+             return 0
+ 
+diff --git a/src/bot/formatter.py b/src/bot/formatter.py
+index e7d4245..6c99af0 100644
+--- a/src/bot/formatter.py
++++ b/src/bot/formatter.py
+@@ -21,6 +21,7 @@
+ | 1.9.0 | 2026-09-09 | Codex | 新增 /last 的移动端发布账本卡片、时区展示和 HTML 安全链接格式化。 |
+ | 1.9.1 | 2026-09-09 | Codex | 限制 /last 异常历史 ID 的显示长度，确保单卡可由 Telegram 投递。 |
+ | 1.9.2 | 2026-09-09 | Codex | /last 的平台确认和原片发布时间均直接标注 BJ 时区。 |
++| 1.11.0 | 2026-09-28 | Antigravity | 升级 fmt_wechat_login_status：区分授权时间、最近验证、异常诊断、重登调度估算与会话锁，不承诺平台寿命。 |
+ | 1.10.0 | 2026-09-27 | Antigravity | 新增 fmt_wechat_login_status 格式化输出微信登录态更新时间、有效性与建议操作。 |
+ """
+ from __future__ import annotations
+@@ -474,24 +475,50 @@ def _relative_age(updated_at: str | None) -> str:
+ 
+ 
+ def fmt_wechat_login_status(info: dict) -> str:
+-    """渲染微信登录态更新时间与状态报告 (HTML 格式)。"""
+-    login_time_str = info.get("login_time_bj", "未知")
+-    relative_age = info.get("relative_age", "未知")
++    """渲染微信登录态结构化状态报告 (HTML 格式)。
++
++    区分上次授权、最近验证/保活、最近异常、调度阈值估算、会话锁与凭证，
++    明确说明调度估算不承诺平台寿命，预检仅代表桌面客户端环境。
++    """
++    login_time_str = info.get("login_time_bj", "无授权记录")
++    relative_age = info.get("relative_age", "无记录")
++    auth_method_label = info.get("auth_method_label", "")
++    auth_desc = f"{relative_age}" + (f" · {auth_method_label}" if auth_method_label else "")
++
+     status_label = info.get("status_label", "未知")
++    last_verified_str = info.get("last_verified_bj", "未验证")
++    relative_verified_age = info.get("relative_verified_age")
++    verified_desc = f"{relative_verified_age}" if relative_verified_age else "无成功保活记录"
++
+     state_file_status = info.get("state_file_status", "未生成")
+     desktop_preflight = info.get("desktop_preflight", "未知")
+-    remaining_hours = info.get("remaining_hours")
++    lock_status = info.get("lock_status", "空闲")
++    schedule_estimate = info.get("schedule_estimate", "调度运行中")
+ 
+     lines = [
+         "🔐 <b>微信视频号登录态状态</b>\n",
+-        f"• <b>更新时间</b>：<code>{html.escape(login_time_str)}</code>",
+-        f"• <b>状态评定</b>：{status_label}（{relative_age}）",
++        f"• <b>授权时间</b>：<code>{html.escape(login_time_str)}</code>（{html.escape(auth_desc)}）",
++        f"• <b>状态评定</b>：{status_label}",
++        f"• <b>最近验证</b>：<code>{html.escape(last_verified_str)}</code>（{html.escape(verified_desc)}）",
+     ]
+-    if remaining_hours is not None:
+-        lines.append(f"• <b>有效剩余</b>：约 {remaining_hours:.1f} 小时")
++
++    last_auth_attempt = info.get("last_auth_attempt_display")
++    if last_auth_attempt:
++        lines.append(f"• <b>最近授权</b>：<code>{html.escape(last_auth_attempt)}</code>")
++
++    last_failure = info.get("last_failure_display")
++    if last_failure:
++        lines.append(f"• <b>最近检查</b>：<code>{html.escape(last_failure)}</code>")
++
++    next_keepalive = info.get("next_keepalive_estimate")
++    if next_keepalive:
++        lines.append(f"• <b>保活计划</b>：{html.escape(next_keepalive)}")
++
+     lines.extend([
++        f"• <b>重登调度</b>：{html.escape(schedule_estimate)}",
++        f"• <b>会话锁</b>：{html.escape(lock_status)}",
+         f"• <b>会话凭证</b>：{state_file_status}",
+-        f"• <b>桌面快捷</b>：{desktop_preflight}",
++        f"• <b>桌面环境</b>：{desktop_preflight}",
+     ])
+ 
+     suggestions = info.get("suggestions", [])
+diff --git a/src/bot/telegram_bot.py b/src/bot/telegram_bot.py
+index 9e79b90..4a8f4ca 100644
+--- a/src/bot/telegram_bot.py
++++ b/src/bot/telegram_bot.py
+@@ -46,6 +46,7 @@
+ | 1.26.1  | 2026-09-09 | Codex                               | /last 在解析前限制位置范围，拒绝超长数字和 SQLite 不可表示的偏移。 |
+ | 1.27.0  | 2026-09-27 | Antigravity                         | 新增 /last_login 与 /last-login 命令，支持手机端快速查询视频号登录态更新时间与有效剩余。 |
+ | 1.27.1  | 2026-09-27 | Antigravity                         | 修复独立守护进程未将项目根目录加入 sys.path 导致预检报 ModuleNotFoundError 的问题。 |
++| 1.28.0  | 2026-09-28 | Antigravity                         | /last_login 改接结构化授权状态与会话锁，区分授权/验证/失败时间，以 22h settings 为准。 |
+ """
+ from __future__ import annotations
+ 
+@@ -954,63 +955,48 @@ async def cmd_wechat_login(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
+ 
+ def _get_wechat_login_info() -> dict:
+     """获取当前微信登录时间戳、会话文件与桌面环境状态（只读，无外部网络依赖）。"""
+-    from datetime import datetime
++    import sys
+     import time
+-    from zoneinfo import ZoneInfo
++    from pathlib import Path
++
++    prj_root = Path(__file__).resolve().parent.parent.parent
++    if str(prj_root) not in sys.path:
++        sys.path.insert(0, str(prj_root))
++
++    from config.settings import settings
++    from video_processing.core.wechat_auth_state import (
++        read_wechat_auth_state,
++        evaluate_wechat_session_status,
++    )
++    from video_processing.core.wechat_session_lock import canonical_wechat_session_lock_path
++    from video_processing.core.task_lease import read_lease_owner
+ 
+-    prj_root = Path(__file__).parent.parent.parent
+-    login_at_path = prj_root / "output" / "wechat_login_at.txt"
+     state_path = prj_root / "output" / "wechat_state.json"
+     qr_path = prj_root / "output" / "login_qr.png"
+ 
+-    info: dict = {}
+-    bj_tz = ZoneInfo("Asia/Shanghai")
+-    now_ts = time.time()
++    auth_state = read_wechat_auth_state(state_path)
++    state_file_exists = state_path.is_file()
++
++    lock_owner = read_lease_owner(canonical_wechat_session_lock_path(state_path))
++    relogin_flag_path = prj_root / "output" / "wechat_auto_relogin_started.flag"
++    auto_relogin_started = relogin_flag_path.is_file()
++
++    evaluation = evaluate_wechat_session_status(
++        auth_state=auth_state,
++        state_file_exists=state_file_exists,
++        lock_owner=lock_owner,
++        now_ts=time.time(),
++        warn_hours=float(settings.wechat_session_warn_hours),
++        enable_auto_relogin=bool(settings.wechat_auto_relogin_enabled),
++        enable_keepalive=bool(settings.wechat_keepalive_enabled),
++        keepalive_min_interval=int(settings.wechat_keepalive_min_interval),
++        keepalive_max_interval=int(settings.wechat_keepalive_max_interval),
++        auto_relogin_started=auto_relogin_started,
++    )
+ 
+-    login_ts = None
+-    if login_at_path.exists():
+-        try:
+-            login_ts = int(login_at_path.read_text(encoding="utf-8").strip())
+-        except (ValueError, OSError):
+-            login_ts = None
+-
+-    if login_ts is not None:
+-        dt = datetime.fromtimestamp(login_ts, tz=bj_tz)
+-        info["login_time_bj"] = dt.strftime("%Y-%m-%d %H:%M:%S") + " BJ"
+-        age_seconds = max(0.0, now_ts - login_ts)
+-        age_hours = age_seconds / 3600.0
+-
+-        if age_seconds < 60:
+-            info["relative_age"] = f"{int(age_seconds)}秒前"
+-        elif age_seconds < 3600:
+-            info["relative_age"] = f"{int(age_seconds // 60)}分钟前"
+-        elif age_hours < 48:
+-            info["relative_age"] = f"{int(age_hours)}小时前"
+-        else:
+-            info["relative_age"] = f"{int(age_hours // 24)}天前"
+-
+-        max_valid_hours = 23.0
+-        remaining_hours = max_valid_hours - age_hours
+-        if remaining_hours > 3.0:
+-            info["status_label"] = "✅ 有效"
+-            info["remaining_hours"] = remaining_hours
+-            suggestions = ["当前登录态正常，无需操作。"]
+-        elif remaining_hours > 0:
+-            info["status_label"] = "⚠️ 即将到期"
+-            info["remaining_hours"] = remaining_hours
+-            suggestions = ["登录态将在 3 小时内到期，建议发送 /wechat_login 提前续期。"]
+-        else:
+-            info["status_label"] = "❌ 已过期"
+-            info["remaining_hours"] = 0.0
+-            suggestions = ["登录态已超过 23 小时有效期，请发送 /wechat_login 重新登录。"]
+-    else:
+-        info["login_time_bj"] = "未找到登录记录"
+-        info["relative_age"] = "无记录"
+-        info["status_label"] = "❌ 未登录"
+-        info["remaining_hours"] = None
+-        suggestions = ["尚未检测到有效登录记录，请发送 /wechat_login 启动登录。"]
++    info = dict(evaluation)
+ 
+-    if state_path.exists():
++    if state_file_exists:
+         try:
+             size_kb = state_path.stat().st_size / 1024.0
+             info["state_file_status"] = f"✅ 已保存 ({size_kb:.1f} KB)"
+@@ -1018,9 +1004,6 @@ def _get_wechat_login_info() -> dict:
+             info["state_file_status"] = "✅ 已保存"
+     else:
+         info["state_file_status"] = "❌ 未生成"
+-        if "未登录" not in info["status_label"]:
+-            info["status_label"] = "⚠️ 状态文件缺失"
+-            suggestions.append("会话文件缺失，建议发送 /wechat_login 重新保存。")
+ 
+     try:
+         if str(prj_root) not in sys.path:
+@@ -1028,7 +1011,7 @@ def _get_wechat_login_info() -> dict:
+         from scripts.wechat_desktop_auth import desktop_auth_preflight
+         preflight = desktop_auth_preflight()
+         if preflight.ready:
+-            info["desktop_preflight"] = "✅ 就绪（免扫码桌面快捷授权）"
++            info["desktop_preflight"] = "✅ 预检就绪（仅桌面客户端环境就绪，不代表平台已授权）"
+         else:
+             info["desktop_preflight"] = f"⚠️ 不可用 ({preflight.code}，需手机扫码)"
+     except Exception as exc:
+@@ -1036,9 +1019,8 @@ def _get_wechat_login_info() -> dict:
+         info["desktop_preflight"] = f"❓ 预检异常 ({type(exc).__name__})"
+ 
+     if qr_path.exists():
+-        suggestions.insert(0, "当前有待扫描的登录二维码，可在手机微信中确认。")
++        info["suggestions"].insert(0, "当前有待扫描的登录二维码，可在手机微信中确认。")
+ 
+-    info["suggestions"] = suggestions
+     return info
+ 
+ 
+diff --git a/src/video_processing/core/wechat_auth_state.py b/src/video_processing/core/wechat_auth_state.py
+new file mode 100644
+index 0000000..18d5764
+--- /dev/null
++++ b/src/video_processing/core/wechat_auth_state.py
+@@ -0,0 +1,735 @@
++"""视频号授权与会话结构化状态管理。
++
++管理本地结构化证据，包括授权时间、最近验证/保活时间、最近失败详情、
++调度阈值与锁状态。所有状态更新均通过原子写入与白名单字段持久化，
++不读写或输出任何敏感凭证（如 Cookie 载荷或 Token）。
++
++依赖方向：
++core/wechat_auth_state.py -> config/settings.py
++（仅依赖标准库及配置真相源，不反向依赖上层 scripts/cli/bot）。
++
++# Modification History
++| Version | Date       | Author      | Description                                                  |
++|---------|------------|-------------|--------------------------------------------------------------|
++| 1.3.0   | 2026-09-28 | Antigravity | 新增 last_auth_attempt_* 尝试证据追踪，失败可查分类原因；完善读取校验与展示 |
++| 1.2.0   | 2026-09-28 | Antigravity | 区分历史保活失败与新验证时序、收口固定分类失败摘要、去除未来时间clamp、完整扩展名元数据派生与排期持久化 |
++| 1.1.0   | 2026-09-28 | Antigravity | 修复元数据路径唯一派生、read-modify-write并发锁、脱敏白名单过滤、严谨状态评定与调度覆盖 |
++| 1.0.0   | 2026-09-28 | Antigravity | 初始创建：本地结构化授权/保活状态管理，支持原子更新、白名单过滤及状态报告 |
++"""
++
++from __future__ import annotations
++
++import contextlib
++import fcntl
++import json
++import logging
++import math
++import os
++import time
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any
++from zoneinfo import ZoneInfo
++
++from config.settings import settings
++
++logger = logging.getLogger(__name__)
++
++BJ_TZ = ZoneInfo("Asia/Shanghai")
++AUTH_STATE_VERSION = "1.3.0"
++
++DEFAULT_WECHAT_STATE_FILE = Path(__file__).resolve().parents[3] / "output" / "wechat_state.json"
++
++VALID_AUTH_METHODS = {"desktop_quick", "scan_qr", "interactive", "auto", "legacy"}
++VALID_KEEPALIVE_STATUSES = {
++    "SUCCESS",
++    "LOGIN_REQUIRED",
++    "NETWORK_TIMEOUT",
++    "INVALID_ORIGIN",
++    "PAGE_UNREADY",
++    "DOM_ERROR",
++    "STORAGE_FAILED",
++    "REUSE_VERIFICATION_FAILED",
++    "UNKNOWN",
++}
++VALID_STAGES = {
++    "navigation",
++    "positive_validation",
++    "dwell",
++    "storage_save",
++    "reuse_verification",
++    "preflight",
++    "keepalive",
++    "auth",
++}
++
++# 严格白名单固定失败分类与脱敏摘要，绝不记录原始异常、完整 URL 或查询参数
++VALID_FAILURE_CATEGORIES = {
++    "NAVIGATION_TIMEOUT": "页面导航超时",
++    "NETWORK_TIMEOUT": "网络请求超时未响应",
++    "INVALID_ORIGIN": "非官方微信域名或未知重定向",
++    "PAGE_UNREADY": "正向视频发布控件未就绪",
++    "DOM_ERROR": "DOM探针或操作异常",
++    "LOGIN_REQUIRED": "检测到登录页或登录二维码",
++    "REUSE_VERIFICATION_FAILED": "独立新上下文复用验证失败",
++    "STORAGE_FAILED": "会话凭证持久化写入失败",
++    "BUSY_LOCK": "会话锁被其他进程占用",
++    "UNKNOWN": "未分类运行时异常",
++}
++
++
++def _validate_timestamp(ts: Any) -> float | None:
++    if ts is None:
++        return None
++    try:
++        val = float(ts)
++        if not math.isfinite(val):
++            return None
++        # 限制在合法时间戳范围 (2020-01-01 至 2050-01-01)
++        if 1_577_836_800.0 <= val <= 2_524_608_000.0:
++            return val
++    except (TypeError, ValueError):
++        pass
++    return None
++
++
++def _categorize_failure_summary(error_type: str) -> str:
++    """按固定白名单分类输出脱敏摘要，严禁返回任意自由文本或 URL。"""
++    raw = str(error_type or "").strip()
++    if raw in VALID_FAILURE_CATEGORIES.values():
++        return raw
++    clean_type = raw.upper()
++    return VALID_FAILURE_CATEGORIES.get(clean_type, VALID_FAILURE_CATEGORIES["UNKNOWN"])
++
++
++def canonical_wechat_auth_state_path(state_path: str | Path) -> Path:
++    """从会话文件路径唯一派生绑定的结构化授权状态元数据文件路径。
++
++    使用完整文件名（含扩展名）进行派生，例如：
++    output/wechat_state.json -> output/wechat_state.json.auth_state.json
++    output/wechat.json       -> output/wechat.json.auth_state.json
++    output/wechat.tmp        -> output/wechat.tmp.auth_state.json
++    杜绝不同名/不同扩展名会话文件的元数据命名冲突。
++    """
++    state_file = Path(state_path).expanduser().resolve(strict=False)
++    meta_name = f"{state_file.name}.auth_state.json"
++    return state_file.with_name(meta_name)
++
++
++@contextlib.contextmanager
++def _auth_state_lock(auth_path: Path):
++    """跨进程与跨线程的元数据读改写独占锁。"""
++    lock_file = auth_path.with_name(f"{auth_path.name}.lock")
++    lock_file.parent.mkdir(parents=True, exist_ok=True)
++    fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR, 0o600)
++    try:
++        fcntl.flock(fd, fcntl.LOCK_EX)
++        yield
++    finally:
++        try:
++            fcntl.flock(fd, fcntl.LOCK_UN)
++        except OSError:
++            pass
++        os.close(fd)
++
++
++def is_wechat_state_target(state_path: str | Path) -> bool:
++    """判定是否为系统标准生产微信会话文件。
++
++    必须严格核验规范化后的绝对路径与 settings.project_root / "output" / "wechat_state.json" 完全一致。
++    杜绝仅按文件名匹配导致的自定义目录同名测试状态被误判为生产会话，
++    进而污染生产遗留 marker 或清除运行中 flags。
++    """
++    try:
++        prod_target = (settings.project_root / "output" / "wechat_state.json").resolve(strict=False)
++        target = Path(state_path).expanduser().resolve(strict=False)
++        return target == prod_target
++    except Exception:
++        return False
++
++
++def read_wechat_auth_state(state_path: str | Path) -> dict[str, Any]:
++    """读取绑定的微信授权结构化状态。
++
++    若结构化文件不存在，尝试从遗留的 wechat_login_at.txt 读取授权时间作为回退，
++    但不伪造最近验证时间。严格核验绑定的 canonical state 身份。
++    """
++    state_file = Path(state_path).expanduser().resolve(strict=False)
++    canonical_state_path_str = str(state_file)
++    auth_path = canonical_wechat_auth_state_path(state_file)
++
++    # 候选读取路径：优先完整文件名派生；向后兼容旧版 stem 派生及历史文件
++    candidate_paths = [auth_path]
++    stem_meta = state_file.with_name(f"{state_file.stem}.auth_state.json")
++    if stem_meta not in candidate_paths:
++        candidate_paths.append(stem_meta)
++    if is_wechat_state_target(state_file):
++        legacy_meta = state_file.with_name("wechat_auth_state.json")
++        if legacy_meta not in candidate_paths:
++            candidate_paths.append(legacy_meta)
++
++    for p in candidate_paths:
++        if p.is_file():
++            try:
++                content = p.read_text(encoding="utf-8")
++                data = json.loads(content)
++                if isinstance(data, dict):
++                    recorded_canon = data.get("canonical_state_path")
++                    # 严格校验：读入没有 canonical 身份或身份不匹配时，不能默认为通过
++                    if not recorded_canon or str(recorded_canon).strip() != canonical_state_path_str:
++                        logger.warning(
++                            "Auth state file %s recorded identity %r does not match requested %s, ignoring.",
++                            p, recorded_canon, canonical_state_path_str,
++                        )
++                        continue
++
++                    method = str(data.get("auth_method") or "")
++                    last_status = str(data.get("last_keepalive_status") or "")
++                    last_fail = data.get("last_failure")
++                    clean_fail = None
++                    if isinstance(last_fail, dict):
++                        f_ts = _validate_timestamp(last_fail.get("timestamp"))
++                        f_stage = str(last_fail.get("stage") or "unknown")[:32]
++                        f_type = str(last_fail.get("error_type") or "UNKNOWN")[:32]
++                        valid_err = f_type if f_type in VALID_KEEPALIVE_STATUSES else "UNKNOWN"
++                        clean_fail = {
++                            "timestamp": f_ts,
++                            "stage": f_stage if f_stage in VALID_STAGES else "unknown",
++                            "error_type": valid_err,
++                            "summary": _categorize_failure_summary(valid_err),
++                        }
++
++                    att_method = str(data.get("last_auth_attempt_method") or "")
++                    att_status = str(data.get("last_auth_attempt_status") or "")
++
++                    return {
++                        "version": str(data.get("version", AUTH_STATE_VERSION)),
++                        "canonical_state_path": canonical_state_path_str,
++                        "state_file": state_file.name,
++                        "authorized_at": _validate_timestamp(data.get("authorized_at")),
++                        "auth_method": method if method in VALID_AUTH_METHODS else None,
++                        "last_verified_at": _validate_timestamp(data.get("last_verified_at")),
++                        "last_keepalive_at": _validate_timestamp(data.get("last_keepalive_at")),
++                        "last_keepalive_status": last_status if last_status in VALID_KEEPALIVE_STATUSES else None,
++                        "next_keepalive_scheduled_at": _validate_timestamp(data.get("next_keepalive_scheduled_at")),
++                        "last_auth_attempt_at": _validate_timestamp(data.get("last_auth_attempt_at")),
++                        "last_auth_attempt_method": att_method if att_method in VALID_AUTH_METHODS else None,
++                        "last_auth_attempt_status": att_status if att_status in {"SUCCESS", "FAILED"} else None,
++                        "last_auth_attempt_reason": (
++                            (
++                                str(data.get("last_auth_attempt_reason")).upper()
++                                if str(data.get("last_auth_attempt_reason")).upper() in VALID_FAILURE_CATEGORIES
++                                else {v: k for k, v in VALID_FAILURE_CATEGORIES.items()}.get(str(data.get("last_auth_attempt_reason")), "UNKNOWN")
++                            )
++                            if data.get("last_auth_attempt_reason") and att_status == "FAILED"
++                            else None
++                        ),
++                        "last_failure": clean_fail,
++                        "updated_at": str(data.get("updated_at") or ""),
++                    }
++            except (OSError, ValueError, TypeError) as exc:
++                logger.warning("Failed to read structured auth state from %s: %s", p, exc)
++
++    # 兼容回退：仅当 state_file 为系统标准生产会话时，才从同目录读取 wechat_login_at.txt
++    legacy_auth_ts = None
++    if is_wechat_state_target(state_file):
++        legacy_file = state_file.parent / "wechat_login_at.txt"
++        if legacy_file.is_file():
++            try:
++                raw = legacy_file.read_text(encoding="utf-8").strip()
++                if raw:
++                    legacy_auth_ts = _validate_timestamp(float(raw))
++            except (OSError, ValueError):
++                legacy_auth_ts = None
++
++    return {
++        "version": AUTH_STATE_VERSION,
++        "canonical_state_path": canonical_state_path_str,
++        "state_file": state_file.name,
++        "authorized_at": legacy_auth_ts,
++        "auth_method": "legacy" if legacy_auth_ts is not None else None,
++        "last_verified_at": None,
++        "last_keepalive_at": None,
++        "last_keepalive_status": None,
++        "next_keepalive_scheduled_at": None,
++        "last_auth_attempt_at": legacy_auth_ts,
++        "last_auth_attempt_method": "legacy" if legacy_auth_ts is not None else None,
++        "last_auth_attempt_status": "SUCCESS" if legacy_auth_ts is not None else None,
++        "last_auth_attempt_reason": None,
++        "last_failure": None,
++        "updated_at": (
++            datetime.fromtimestamp(legacy_auth_ts, tz=timezone.utc).isoformat()
++            if legacy_auth_ts is not None
++            else None
++        ),
++    }
++
++
++def _write_auth_state_atomic(auth_path: Path, data: dict[str, Any]) -> None:
++    """原子写入结构化状态文件（写入临时文件后执行 POSIX replace）。"""
++    auth_path.parent.mkdir(parents=True, exist_ok=True)
++    tmp_path = auth_path.with_name(f".{auth_path.name}.tmp.{os.getpid()}.{time.time_ns()}")
++    try:
++        content = json.dumps(data, ensure_ascii=False, indent=2)
++        tmp_path.write_text(content, encoding="utf-8")
++        os.replace(tmp_path, auth_path)
++    except Exception:
++        if tmp_path.exists():
++            try:
++                tmp_path.unlink()
++            except OSError:
++                pass
++        raise
++
++
++def record_wechat_authorization(
++    state_path: str | Path,
++    *,
++    method: str = "auto",
++    timestamp: float | None = None,
++) -> dict[str, Any]:
++    """记录一次真实的重新授权/登录成功事件。
++
++    仅在真实扫码或桌面快捷授权成功且通过全新独立上下文复用验证后调用。
++    更新 authorized_at、last_verified_at 与 last_auth_attempt_*，清除失败记录。
++    绝不伪造或篡改 last_keepalive_at 与 last_keepalive_status。
++    使用文件锁保护并发读改写。
++    """
++    state_file = Path(state_path).expanduser().resolve(strict=False)
++    auth_path = canonical_wechat_auth_state_path(state_file)
++    now_ts = float(timestamp if timestamp is not None else time.time())
++    if not math.isfinite(now_ts):
++        raise ValueError(f"Invalid timestamp: {timestamp}")
++
++    valid_method = method if method in VALID_AUTH_METHODS else "auto"
++
++    with _auth_state_lock(auth_path):
++        existing = read_wechat_auth_state(state_file)
++        record = {
++            "version": AUTH_STATE_VERSION,
++            "canonical_state_path": str(state_file),
++            "state_file": state_file.name,
++            "authorized_at": now_ts,
++            "auth_method": valid_method,
++            "last_verified_at": now_ts,
++            "last_keepalive_at": existing.get("last_keepalive_at"),
++            "last_keepalive_status": existing.get("last_keepalive_status"),
++            "next_keepalive_scheduled_at": existing.get("next_keepalive_scheduled_at"),
++            "last_auth_attempt_at": now_ts,
++            "last_auth_attempt_method": valid_method,
++            "last_auth_attempt_status": "SUCCESS",
++            "last_auth_attempt_reason": None,
++            "last_failure": None,
++            "updated_at": datetime.now(timezone.utc).isoformat(),
++        }
++        _write_auth_state_atomic(auth_path, record)
++
++    # 仅当目标文件为系统生产配置的 state_file 时，才同步更新遗留 marker 与 flags
++    if is_wechat_state_target(state_file):
++        legacy_file = state_file.parent / "wechat_login_at.txt"
++        try:
++            legacy_file.write_text(str(int(now_ts)), encoding="utf-8")
++        except OSError as exc:
++            logger.warning("Failed to update legacy login marker %s: %s", legacy_file, exc)
++
++        for flag_name in ("wechat_auto_relogin_started.flag", "wechat_login_warned.flag"):
++            flag_path = state_file.parent / flag_name
++            try:
++                flag_path.unlink(missing_ok=True)
++            except OSError:
++                pass
++
++    return record
++
++
++def record_wechat_auth_attempt(
++    state_path: str | Path,
++    *,
++    method: str = "auto",
++    success: bool,
++    reason: str | None = None,
++    timestamp: float | None = None,
++) -> dict[str, Any]:
++    """记录一次微信授权尝试的执行证据（涵盖成功与失败）。
++
++    失败后可查最近自动授权尝试证据，白名单固定分类，绝不泄露敏感载荷或 URL 查询。
++    使用文件锁保护并发读改写。
++    """
++    state_file = Path(state_path).expanduser().resolve(strict=False)
++    auth_path = canonical_wechat_auth_state_path(state_file)
++    now_ts = float(timestamp if timestamp is not None else time.time())
++    if not math.isfinite(now_ts):
++        raise ValueError(f"Invalid timestamp: {timestamp}")
++
++    valid_method = method if method in VALID_AUTH_METHODS else "auto"
++    status = "SUCCESS" if success else "FAILED"
++    clean_reason = None
++    if not success:
++        raw_key = str(reason or "UNKNOWN").upper().strip()
++        inv_cat = {v: k for k, v in VALID_FAILURE_CATEGORIES.items()}
++        if raw_key in VALID_FAILURE_CATEGORIES:
++            clean_reason = raw_key
++        elif reason in inv_cat:
++            clean_reason = inv_cat[reason]
++        else:
++            clean_reason = "UNKNOWN"
++
++    with _auth_state_lock(auth_path):
++        existing = read_wechat_auth_state(state_file)
++        record = {
++            **existing,
++            "version": AUTH_STATE_VERSION,
++            "canonical_state_path": str(state_file),
++            "state_file": state_file.name,
++            "last_auth_attempt_at": now_ts,
++            "last_auth_attempt_method": valid_method,
++            "last_auth_attempt_status": status,
++            "last_auth_attempt_reason": clean_reason,
++            "updated_at": datetime.now(timezone.utc).isoformat(),
++        }
++        _write_auth_state_atomic(auth_path, record)
++    return record
++
++
++def record_wechat_keepalive_schedule(
++    state_path: str | Path,
++    scheduled_at: float,
++) -> dict[str, Any]:
++    """持久化记录下一次实际随机选定的计划保活时刻。使用文件锁保护并发读改写。"""
++    state_file = Path(state_path).expanduser().resolve(strict=False)
++    auth_path = canonical_wechat_auth_state_path(state_file)
++    valid_ts = _validate_timestamp(scheduled_at)
++    if valid_ts is None:
++        raise ValueError(f"Invalid scheduled_at timestamp: {scheduled_at}")
++
++    with _auth_state_lock(auth_path):
++        existing = read_wechat_auth_state(state_file)
++        record = {
++            **existing,
++            "next_keepalive_scheduled_at": valid_ts,
++            "updated_at": datetime.now(timezone.utc).isoformat(),
++        }
++        _write_auth_state_atomic(auth_path, record)
++    return record
++
++
++def record_wechat_keepalive_result(
++    state_path: str | Path,
++    *,
++    status: str,
++    failure: dict[str, Any] | None = None,
++    timestamp: float | None = None,
++) -> dict[str, Any]:
++    """记录保活执行结果。
++
++    保活成功只更新 last_verified_at 与 last_keepalive_status，绝不伪造或覆盖 authorized_at。
++    若失败，记录固定白名单失败证据（阶段、分类、脱敏摘要）。
++    使用文件锁保护并发读改写。
++    """
++    state_file = Path(state_path).expanduser().resolve(strict=False)
++    auth_path = canonical_wechat_auth_state_path(state_file)
++    now_ts = float(timestamp if timestamp is not None else time.time())
++    if not math.isfinite(now_ts):
++        raise ValueError(f"Invalid timestamp: {timestamp}")
++
++    valid_status = status if status in VALID_KEEPALIVE_STATUSES else "UNKNOWN"
++
++    clean_failure = None
++    if failure and valid_status != "SUCCESS":
++        raw_stage = str(failure.get("stage", "keepalive"))
++        stage = raw_stage if raw_stage in VALID_STAGES else "unknown"
++        raw_type = str(failure.get("error_type", valid_status))
++        error_type = raw_type if raw_type in VALID_KEEPALIVE_STATUSES else valid_status
++        clean_failure = {
++            "timestamp": now_ts,
++            "stage": stage,
++            "error_type": error_type,
++            "summary": _categorize_failure_summary(error_type),
++        }
++
++    with _auth_state_lock(auth_path):
++        existing = read_wechat_auth_state(state_file)
++        record = {
++            "version": AUTH_STATE_VERSION,
++            "canonical_state_path": str(state_file),
++            "state_file": state_file.name,
++            "authorized_at": existing.get("authorized_at"),
++            "auth_method": existing.get("auth_method"),
++            "last_verified_at": now_ts if valid_status == "SUCCESS" else existing.get("last_verified_at"),
++            "last_keepalive_at": now_ts,
++            "last_keepalive_status": valid_status,
++            "next_keepalive_scheduled_at": existing.get("next_keepalive_scheduled_at"),
++            "last_auth_attempt_at": existing.get("last_auth_attempt_at"),
++            "last_auth_attempt_method": existing.get("last_auth_attempt_method"),
++            "last_auth_attempt_status": existing.get("last_auth_attempt_status"),
++            "last_auth_attempt_reason": existing.get("last_auth_attempt_reason"),
++            "last_failure": clean_failure if clean_failure else (None if valid_status == "SUCCESS" else existing.get("last_failure")),
++            "updated_at": datetime.now(timezone.utc).isoformat(),
++        }
++        _write_auth_state_atomic(auth_path, record)
++
++    return record
++
++
++def _format_relative_age(seconds: float) -> str:
++    if seconds < 60:
++        return f"{int(seconds)}秒前"
++    if seconds < 3600:
++        return f"{int(seconds // 60)}分钟前"
++    hours = seconds / 3600.0
++    if hours < 48:
++        return f"{int(hours)}小时前"
++    return f"{int(hours // 24)}天前"
++
++
++def evaluate_wechat_session_status(
++    auth_state: dict[str, Any],
++    state_file_exists: bool,
++    lock_owner: dict[str, Any] | None = None,
++    now_ts: float | None = None,
++    warn_hours: float | None = None,
++    enable_auto_relogin: bool | None = None,
++    enable_keepalive: bool | None = None,
++    keepalive_min_interval: int | None = None,
++    keepalive_max_interval: int | None = None,
++    keepalive_interval_minutes: int | None = None,
++    auto_relogin_started: bool = False,
++    **kwargs: Any,
++) -> dict[str, Any]:
++    """根据结构化状态与配置评定当前状态与建议。
++
++    纯领域逻辑，不调用外部网络，不发起浏览器动作，不调用模型。
++    """
++    now = float(now_ts if now_ts is not None else time.time())
++    threshold_h = float(warn_hours if warn_hours is not None else settings.wechat_session_warn_hours)
++    auto_relogin_enabled = (
++        enable_auto_relogin if enable_auto_relogin is not None
++        else getattr(settings, "wechat_auto_relogin_enabled", False)
++    )
++    keepalive_enabled = (
++        enable_keepalive if enable_keepalive is not None
++        else getattr(settings, "wechat_keepalive_enabled", False)
++    )
++    ka_min_interval = int(
++        keepalive_min_interval if keepalive_min_interval is not None
++        else (keepalive_interval_minutes if keepalive_interval_minutes is not None
++              else getattr(settings, "wechat_keepalive_min_interval", 50))
++    )
++    ka_max_interval = int(
++        keepalive_max_interval if keepalive_max_interval is not None
++        else getattr(settings, "wechat_keepalive_max_interval", 65)
++    )
++
++    authorized_at = auth_state.get("authorized_at")
++    last_verified_at = auth_state.get("last_verified_at")
++    last_status = auth_state.get("last_keepalive_status")
++    last_failure = auth_state.get("last_failure")
++    auth_method = auth_state.get("auth_method")
++    last_keepalive_at = auth_state.get("last_keepalive_at")
++    next_ka_ts = auth_state.get("next_keepalive_scheduled_at")
++    last_att_at = auth_state.get("last_auth_attempt_at")
++    last_att_status = auth_state.get("last_auth_attempt_status")
++    last_att_reason = auth_state.get("last_auth_attempt_reason")
++
++    # 未来时间戳严格检测：绝不 clamp age=0 后报绿色
++    is_future_auth = bool(authorized_at is not None and authorized_at > (now + 60.0))
++    is_future_verified = bool(last_verified_at is not None and last_verified_at > (now + 60.0))
++
++    # 状态链时序区分：区分历史保活失败与更新的授权/复用成功
++    # 若在最近一次保活之后，发生过更新的成功授权或独立复用验证 (last_verified_at > last_keepalive_at)，
++    # 则历史保活失败状态（如 LOGIN_REQUIRED / NETWORK_TIMEOUT）已被新验证覆盖，不再作为当前失效判据。
++    is_keepalive_superseded = False
++    if last_verified_at is not None:
++        if last_keepalive_at is None:
++            is_keepalive_superseded = True
++        elif last_verified_at > last_keepalive_at:
++            is_keepalive_superseded = True
++
++    active_keepalive_status = None if is_keepalive_superseded else last_status
++
++    summary: dict[str, Any] = {
++        "authorized_at": authorized_at,
++        "auth_method": auth_method,
++        "auth_method_label": {
++            "desktop_quick": "桌面快捷",
++            "scan_qr": "扫码登录",
++            "legacy": "历史记录",
++            "auto": "自动重登",
++        }.get(str(auth_method), str(auth_method or "")),
++        "last_verified_at": last_verified_at,
++        "last_keepalive_at": last_keepalive_at,
++        "last_keepalive_status": last_status,
++        "active_keepalive_status": active_keepalive_status,
++        "is_keepalive_superseded": is_keepalive_superseded,
++        "last_auth_attempt_at": last_att_at,
++        "last_auth_attempt_status": last_att_status,
++        "last_auth_attempt_reason": last_att_reason,
++        "warn_hours": threshold_h,
++        "enable_auto_relogin": auto_relogin_enabled,
++        "enable_keepalive": keepalive_enabled,
++        "auto_relogin_started": auto_relogin_started,
++    }
++
++    # 1. 授权时间格式化
++    if is_future_auth:
++        summary["login_time_bj"] = "时间戳异常（超前系统时钟）"
++        summary["relative_age"] = "时间戳异常（未来时间）"
++        summary["auth_age_hours"] = None
++        summary["hours_to_threshold"] = None
++        summary["threshold_reached"] = False
++    elif authorized_at is not None:
++        dt_auth = datetime.fromtimestamp(authorized_at, tz=BJ_TZ)
++        summary["login_time_bj"] = dt_auth.strftime("%Y-%m-%d %H:%M:%S") + " BJ"
++        age_seconds = now - authorized_at
++        summary["relative_age"] = _format_relative_age(max(0.0, age_seconds))
++        auth_age_hours = age_seconds / 3600.0
++        summary["auth_age_hours"] = auth_age_hours
++        hours_to_threshold = max(0.0, threshold_h - auth_age_hours)
++        summary["hours_to_threshold"] = hours_to_threshold
++        summary["threshold_reached"] = bool(auth_age_hours >= threshold_h)
++    else:
++        summary["login_time_bj"] = "无授权记录"
++        summary["relative_age"] = "无记录"
++        summary["auth_age_hours"] = None
++        summary["hours_to_threshold"] = None
++        summary["threshold_reached"] = False
++
++    # 2. 最近验证时间格式化
++    verified_age_seconds: float | None = None
++    if is_future_verified:
++        summary["last_verified_bj"] = "时间戳异常（超前系统时钟）"
++        summary["relative_verified_age"] = "时间戳异常（未来时间）"
++    elif last_verified_at is not None:
++        dt_ver = datetime.fromtimestamp(last_verified_at, tz=BJ_TZ)
++        summary["last_verified_bj"] = dt_ver.strftime("%Y-%m-%d %H:%M:%S") + " BJ"
++        verified_age_seconds = now - last_verified_at
++        summary["relative_verified_age"] = _format_relative_age(max(0.0, verified_age_seconds))
++    else:
++        summary["last_verified_bj"] = "未验证"
++        summary["relative_verified_age"] = "无成功保活记录"
++
++    # 3. 最近失败格式化
++    if last_failure:
++        fail_ts = last_failure.get("timestamp")
++        fail_bj = (
++            datetime.fromtimestamp(fail_ts, tz=BJ_TZ).strftime("%m-%d %H:%M:%S")
++            if fail_ts
++            else "未知时间"
++        )
++        summary["last_failure_display"] = (
++            f"{fail_bj} · {last_failure.get('error_type', 'FAIL')} "
++            f"({last_failure.get('summary', '')})"
++        )
++    else:
++        summary["last_failure_display"] = None
++
++    # 3.1 最近授权尝试展示
++    if last_att_status == "FAILED" and last_att_at is not None:
++        att_bj = datetime.fromtimestamp(last_att_at, tz=BJ_TZ).strftime("%m-%d %H:%M:%S")
++        reason_desc = _categorize_failure_summary(last_att_reason) if last_att_reason else "未分类"
++        summary["last_auth_attempt_display"] = f"{att_bj} · 授权尝试失败 ({reason_desc})"
++    elif last_att_status == "SUCCESS" and last_att_at is not None:
++        att_bj = datetime.fromtimestamp(last_att_at, tz=BJ_TZ).strftime("%m-%d %H:%M:%S")
++        summary["last_auth_attempt_display"] = f"{att_bj} · 授权尝试成功"
++    else:
++        summary["last_auth_attempt_display"] = None
++
++    # 4. 锁状态
++    if lock_owner:
++        pid = lock_owner.get("pid", "?")
++        stage = lock_owner.get("stage", "操作中")
++        summary["lock_status"] = f"占用中 (PID {pid} · {stage})"
++    else:
++        summary["lock_status"] = "空闲"
++
++    # 5. 调度估算与开关状态（涵盖实际开关、下次计划检查/授权时刻及锁延迟）
++    if not auto_relogin_enabled:
++        summary["schedule_estimate"] = "自动重登未开启 (wechat_auto_relogin_enabled=false)，需手动执行 /wechat_login"
++    elif auto_relogin_started:
++        summary["schedule_estimate"] = "正在尝试自动重登中..."
++    elif summary["threshold_reached"]:
++        if lock_owner:
++            summary["schedule_estimate"] = f"已达 {threshold_h:.1f}h 调度阈值（会话锁被 PID {lock_owner.get('pid')} 占用，等待空闲）"
++        else:
++            summary["schedule_estimate"] = f"已达 {threshold_h:.1f}h 调度阈值（等待看门狗调度自动重登）"
++    elif authorized_at is not None and not is_future_auth:
++        rem = summary["hours_to_threshold"]
++        target_ts = authorized_at + threshold_h * 3600
++        target_dt = datetime.fromtimestamp(target_ts, tz=BJ_TZ)
++        target_str = target_dt.strftime("%m-%d %H:%M") + " BJ"
++        summary["schedule_estimate"] = f"计划重登：约 {target_str}（距 {threshold_h:.1f}h 阈值约 {rem:.1f} 小时，调度估算）"
++    else:
++        summary["schedule_estimate"] = "未启动重登调度（无有效授权时间记录）"
++
++    # 6. 下次保活计划（必须持久化实际随机选定时间，而非伪造平均分钟）
++    if not keepalive_enabled:
++        summary["next_keepalive_estimate"] = "自动保活未开启 (wechat_keepalive_enabled=false)"
++    elif next_ka_ts is not None:
++        if next_ka_ts > now:
++            next_ka_dt = datetime.fromtimestamp(next_ka_ts, tz=BJ_TZ)
++            summary["next_keepalive_estimate"] = f"约 {next_ka_dt.strftime('%H:%M')} BJ（实际计划时刻）"
++        else:
++            summary["next_keepalive_estimate"] = "计划时刻已到（等待看门狗空闲周期执行）"
++    elif last_keepalive_at is not None:
++        summary["next_keepalive_estimate"] = f"未排期（配置周期 {ka_min_interval}~{ka_max_interval} 分钟）"
++    else:
++        summary["next_keepalive_estimate"] = f"待首次调度（配置周期 {ka_min_interval}~{ka_max_interval} 分钟）"
++
++    # 7. 严谨状态评定与建议
++    suggestions: list[str] = []
++    if not state_file_exists:
++        status_label = "❌ 凭证文件缺失"
++        suggestions.append("会话文件缺失，建议发送 /wechat_login 重新登录保存。")
++    elif is_future_auth or is_future_verified:
++        status_label = "❌ 时间戳异常（未来时间戳）"
++        suggestions.append("检测到时间戳超前当前系统时钟，可能系统时钟异常或数据损坏，禁止报正常。")
++    elif active_keepalive_status == "INVALID_ORIGIN":
++        status_label = "❌ 来源异常（非官方域名）"
++        suggestions.append("最近一次检查检测到非官方微信域名重定向，可能存在网络劫持或代理配置错误。")
++    elif active_keepalive_status == "LOGIN_REQUIRED":
++        status_label = "❌ 会话已失效（需重新登录）"
++        suggestions.append("平台已要求重新扫码登录，请发送 /wechat_login 获取二维码扫码。")
++    elif active_keepalive_status == "REUSE_VERIFICATION_FAILED":
++        status_label = "❌ 会话复用验证失败"
++        suggestions.append("独立全新上下文无法复用会话凭证，请执行 /wechat_login 重新授权。")
++    elif active_keepalive_status == "NETWORK_TIMEOUT":
++        status_label = "⚠️ 检查失败（网络超时）"
++        suggestions.append("最近一次检查网络超时，平台真实状态未知，等待下一轮重试或手动验证。")
++    elif active_keepalive_status in ("PAGE_UNREADY", "DOM_ERROR"):
++        status_label = f"⚠️ 检查未就绪（{active_keepalive_status}）"
++        suggestions.append("最近一次检查未检测到正向发布控件，等待下一轮重试。")
++    elif active_keepalive_status == "STORAGE_FAILED":
++        status_label = "⚠️ 存储刷新失败"
++        suggestions.append("会话刷新写入失败，等待下一轮重试。")
++    elif active_keepalive_status == "UNKNOWN":
++        status_label = "⚠️ 状态未知（检查未分类）"
++        suggestions.append("最近一次检查状态未归类，未取得正向证据，平台真实状态未知。")
++    elif last_verified_at is None:
++        if authorized_at is not None:
++            status_label = "⚠️ 未经验证（待保活验证）"
++            suggestions.append("已有历史授权记录，但尚未通过正向保活验证，等待看门狗运行。")
++        else:
++            status_label = "❌ 未授权"
++            suggestions.append("尚未检测到有效登录记录，请发送 /wechat_login 启动登录。")
++    elif verified_age_seconds is not None and verified_age_seconds > 4 * 3600:
++        status_label = "⚠️ 验证已陈旧（超期未验证）"
++        suggestions.append("距离上次成功验证已超过 4 小时，保活可能未按时执行，建议检查看门狗。")
++    elif authorized_at is None:
++        status_label = "🟡 会话已验证（授权时间未知）"
++        suggestions.append("会话凭证有效且近期已验证，但缺失初始授权时间戳，建议在空闲时重新登录补齐。")
++    elif summary["threshold_reached"]:
++        status_label = "🟡 已达重登阈值"
++        if auto_relogin_enabled:
++            suggestions.append(f"授权已满 {threshold_h:.1f} 小时重登阈值，系统将在看门狗空闲周期自动启动重登，或发送 /wechat_login 手动重登。")
++        else:
++            suggestions.append(f"授权已满 {threshold_h:.1f} 小时重登阈值，自动重登未开启，请发送 /wechat_login 手动重登。")
++    elif summary["hours_to_threshold"] is not None and summary["hours_to_threshold"] <= 3.0:
++        status_label = "⚠️ 临近重登阈值"
++        suggestions.append(f"距离 {threshold_h:.1f} 小时重登阈值不足 3 小时，建议关注或发送 /wechat_login 提前续期。")
++    else:
++        status_label = "✅ 授权且已验证"
++        suggestions.append("当前在授权维护期内且已通过正向验证，系统将按计划定期保活。")
++
++    summary["status_label"] = status_label
++    summary["suggestions"] = suggestions
++    return summary
+diff --git a/src/video_processing/core/wechat_page_contract.py b/src/video_processing/core/wechat_page_contract.py
+new file mode 100644
+index 0000000..534e31d
+--- /dev/null
++++ b/src/video_processing/core/wechat_page_contract.py
+@@ -0,0 +1,201 @@
++"""视频号官方页面判据单一真相源。
++
++由 uploader、keepalive 与 session reuse verifier 共享，
++消除各模块在 URL 校验、正向视频发布强控件和登录判定上的判据漂移。
++
++依赖方向：
++core/wechat_page_contract.py -> 标准库（0 外部业务依赖）。
++
++# Modification History
++| Version | Date       | Author      | Description                                                  |
++|---------|------------|-------------|--------------------------------------------------------------|
++| 1.1.0   | 2026-09-28 | Antigravity | 修复 DOM 异常跳过正向判定、严格拒绝非默认端口与 userinfo、统一 create/list 来源判据 |
++| 1.0.0   | 2026-09-28 | Antigravity | 初始创建：统一官方源、强正向发布控件、明确登录提示与SPA有界等待判据 |
++"""
++
++from __future__ import annotations
++
++import logging
++import time
++from typing import Any
++from urllib.parse import urlsplit
++
++logger = logging.getLogger(__name__)
++
++OFFICIAL_SCHEME = "https"
++OFFICIAL_HOST = "channels.weixin.qq.com"
++OFFICIAL_CREATE_PATH = "/platform/post/create"
++OFFICIAL_LIST_PATH = "/platform/post/list"
++
++
++def is_official_wechat_origin(url: str) -> bool:
++    """严格核验是否为官方 HTTPS 微信视频号创作者域名。
++
++    严格拒绝非 https 协议、非官方域名、URL userinfo（user:pass@）及非默认端口（如 :8443）。
++    """
++    if not url:
++        return False
++    try:
++        u = urlsplit(url)
++        if u.scheme != OFFICIAL_SCHEME:
++            return False
++        # 严格拒绝 userinfo，防止凭据或伪装注入
++        if u.username or u.password:
++            return False
++        # 严格拒绝非默认 HTTPS 端口
++        if u.port is not None and u.port != 443:
++            return False
++        # 严格官方域名
++        if u.hostname != OFFICIAL_HOST:
++            return False
++        return True
++    except Exception:
++        return False
++
++
++def is_official_create_url(url: str) -> bool:
++    """严格核验是否为官方视频发布创建页（统一域名与路径判据）。"""
++    if not is_official_wechat_origin(url):
++        return False
++    try:
++        u = urlsplit(url)
++        return u.path == OFFICIAL_CREATE_PATH
++    except Exception:
++        return False
++
++
++def is_official_list_url(url: str) -> bool:
++    """严格核验是否为官方作品列表页（统一域名与路径判据）。"""
++    if not is_official_wechat_origin(url):
++        return False
++    try:
++        u = urlsplit(url)
++        return u.path == OFFICIAL_LIST_PATH
++    except Exception:
++        return False
++
++
++def check_explicit_login_prompt(page: Any) -> tuple[bool, str | None]:
++    """检查页面是否明确处于登录状态（登录页 URL 或 DOM 登录二维码/扫码框）。
++
++    Returns:
++        (is_login, error_category)
++        若检测到登录，返回 (True, None)；
++        若检测正常且无登录框，返回 (False, None)；
++        若 DOM 探针执行异常，返回 (False, "DOM_ERROR")，调用方绝不能把异常当作无登录框。
++    """
++    try:
++        cur_url = getattr(page, "url", "")
++        u = urlsplit(cur_url)
++        if "login" in u.path.lower():
++            return True, None
++
++        # DOM 探针
++        is_login = bool(
++            page.locator("text=使用微信扫码登录").is_visible(timeout=500)
++            or page.locator(".login-box").is_visible(timeout=500)
++            or page.locator(".login-qr").is_visible(timeout=500)
++            or page.locator("iframe[src*='login']").is_visible(timeout=500)
++        )
++        return is_login, None
++    except Exception as exc:
++        logger.warning("DOM probe for login failed: %s", type(exc).__name__)
++        return False, "DOM_ERROR"
++
++
++def check_strong_video_publish_controls(page: Any) -> tuple[bool, str | None]:
++    """检查页面是否存在视频号正向视频发布强特征控件。
++
++    必须满足以下任一条件：
++    1. input[type='file'] 且 accept 包含 'video' 或 'mp4'；
++    2. 带视频专属文案的上传按钮或上传区域。
++    严格拒绝：
++    - 普通空泛的 input[type='file']（如头像/图片上传）
++    - 通用“发表”或“提交”按钮
++
++    Returns:
++        (is_ready, error_category)
++    """
++    try:
++        has_video_input = page.evaluate("""() => {
++            const inputs = document.querySelectorAll('input[type="file"]');
++            for (const input of inputs) {
++                const accept = (input.getAttribute('accept') || '').toLowerCase();
++                if (accept.includes('video') || accept.includes('mp4')) {
++                    return true;
++                }
++            }
++            return false;
++        }""")
++        if has_video_input:
++            return True, None
++
++        if (
++            page.locator("button:has-text('上传视频')").is_visible(timeout=300)
++            or page.locator(".upload-btn:has-text('上传视频')").is_visible(timeout=300)
++            or page.locator(".upload-area:has-text('视频')").is_visible(timeout=300)
++        ):
++            return True, None
++
++        return False, "PAGE_UNREADY"
++    except Exception as exc:
++        logger.warning("DOM probe for publish controls failed: %s", type(exc).__name__)
++        return False, "DOM_ERROR"
++
++
++def wait_for_publish_ready_with_spa_guard(
++    page: Any,
++    timeout_seconds: float = 6.0,
++    poll_interval: float = 0.3,
++) -> tuple[bool, str | None]:
++    """有界等待 Vue SPA 渲染正向视频发布控件，并持续监控登录跳转、域名漂移与 DOM 异常。
++
++    Fail-closed 铁律：
++    本轮若发生任何 DOM 异常 (dom_err 或 ctrl_err == 'DOM_ERROR')，绝对不能跳过并报成功！
++    必须记录 DOM_ERROR 并进入下一轮重试；若直到超时仍未脱离异常/未就绪状态，返回失败。
++
++    Returns:
++        (ready, error_category)
++        成功：(True, None)
++        失败：(False, "INVALID_ORIGIN" | "LOGIN_REQUIRED" | "PAGE_UNREADY" | "DOM_ERROR")
++    """
++    deadline = time.monotonic() + max(0.5, timeout_seconds)
++    last_err = "PAGE_UNREADY"
++    while time.monotonic() < deadline:
++        # 1. 严格域名、协议、端口与 userinfo 校验
++        if not is_official_wechat_origin(page.url):
++            return False, "INVALID_ORIGIN"
++
++        # 2. 检查是否出现明确登录提示
++        is_login, dom_err = check_explicit_login_prompt(page)
++        if dom_err:
++            last_err = "DOM_ERROR"
++            # 严格 fail-closed：本轮 DOM 探针异常，禁止继续尝试判定正向成功，休眠后重试
++            page.wait_for_timeout(int(poll_interval * 1000))
++            continue
++
++        if is_login:
++            return False, "LOGIN_REQUIRED"
++
++        # 3. 检查路径是否为官方创建页
++        if not is_official_create_url(page.url):
++            return False, "PAGE_UNREADY"
++
++        # 4. 检查正向控件
++        controls_ok, ctrl_err = check_strong_video_publish_controls(page)
++        if ctrl_err == "DOM_ERROR":
++            last_err = "DOM_ERROR"
++            # 严格 fail-closed：控件检测发生 DOM 异常，禁止报成功，休眠后重试
++            page.wait_for_timeout(int(poll_interval * 1000))
++            continue
++
++        if controls_ok:
++            # 找到控件后，二次核验 URL 未在渲染瞬间发生重定向
++            if is_official_create_url(page.url):
++                return True, None
++            return False, "INVALID_ORIGIN" if not is_official_wechat_origin(page.url) else "PAGE_UNREADY"
++
++        last_err = "PAGE_UNREADY"
++        page.wait_for_timeout(int(poll_interval * 1000))
++
++    return False, last_err
+diff --git a/src/web/app.py b/src/web/app.py
+index 87d6e3a..fe43170 100644
+--- a/src/web/app.py
++++ b/src/web/app.py
+@@ -1,5 +1,8 @@
+ """Web 控制中心后端 — FastAPI 仪表盘服务
+ 
++| 3.54.0 | 2026-09-28 | Antigravity | /api/wechat/status 基于结构化验证事实判断登录有效性；自动重登与登录恢复绑定本次成功授权时间戳 |
++| 3.53.0 | 2026-09-28 | Antigravity | 持久化记录实际随机选定的计划保活时刻，消除计划保活时间估算的平均伪造。 |
++| 3.52.0 | 2026-09-28 | Antigravity | 会话重登检测优先读取结构化授权状态，保活循环识别锁冲突 (code 11) 不再报错。 |
+ | 3.51.0 | 2026-09-26 | Antigravity | 修复移动端静态资源强缓存导致新卡片样式未生效问题；HTML 注入静态文件 mtime 版本号，直出无缓存响应头。 |
+ | 3.50.0 | 2026-09-26 | Antigravity | 全局漏斗与频道漏斗端点默认时间窗口统一改为 today_bj (北京时间今日)。 |
+ | 3.49.0 | 2026-09-26 | Antigravity | 新增 /apple-touch-icon.png 与 /favicon.ico 根路由直出支持，保障 iOS 桌面与 PWA 📺 视觉呈现。 |
+@@ -431,12 +434,29 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
+         except Exception:
+             pass
+ 
++    start_ts = time.time()
++    from video_processing.core.wechat_auth_state import read_wechat_auth_state
++    pre_auth = read_wechat_auth_state(state) if state.exists() else {}
++    pre_auth_at = float(pre_auth.get("authorized_at") or 0.0)
++
+     def _run():
+         try:
+             result = subprocess.run(args, cwd=str(prj_root), env=_wechat_login_env())
+-            if result.returncode == 0 and _wechat_login_marker_active(login_at_path):
++            post_auth = read_wechat_auth_state(state) if state.exists() else {}
++            post_auth_at = float(post_auth.get("authorized_at") or 0.0)
++            auth_succeeded_this_run = (
++                result.returncode == 0
++                and post_auth_at > pre_auth_at
++                and post_auth_at >= (start_ts - 2.0)
++            )
++            if auth_succeeded_this_run:
+                 _restore_login_required_after_wechat_login()
+                 _resume_eligible_english_world_after_wechat_login()
++            else:
++                import logging
++                logging.getLogger(__name__).warning(
++                    f"WeChat login subprocess finished (code={result.returncode}) but fresh authorization was not confirmed (pre={pre_auth_at}, post={post_auth_at}, start={start_ts})."
++                )
+         except Exception as exc:
+             import logging
+             logging.getLogger(__name__).error(f"WeChat login subprocess failed ({reason}): {exc}")
+@@ -458,7 +478,11 @@ def _wechat_session_needs_auto_relogin() -> bool:
+     try:
+         if auto_flag.exists() and time.time() - auto_flag.stat().st_mtime < 15 * 60:
+             return False
+-        stamp = int(login_at.read_text(encoding="utf-8").strip())
++        from video_processing.core.wechat_auth_state import read_wechat_auth_state
++        auth_state = read_wechat_auth_state(state_file)
++        stamp = auth_state.get("authorized_at")
++        if stamp is None:
++            stamp = int(login_at.read_text(encoding="utf-8").strip())
+         return (time.time() - stamp) / 3600.0 >= settings.wechat_session_warn_hours
+     except (OSError, ValueError):
+         # 旧看门狗会删标记；只有保存过会话时才尝试恢复，避免首次安装时误启动。
+@@ -831,6 +855,12 @@ def _wechat_keepalive_loop():
+         min_s = settings.wechat_keepalive_min_interval * 60
+         max_s = settings.wechat_keepalive_max_interval * 60
+         interval = random.randint(min_s, max_s)
++        next_ts = time.time() + interval
++        try:
++            from video_processing.core.wechat_auth_state import record_wechat_keepalive_schedule
++            record_wechat_keepalive_schedule(state_file, scheduled_at=next_ts)
++        except Exception as _exc:
++            log.warning("[Keepalive] Failed to record keepalive schedule: %s", _exc)
+         log.info(f"[Keepalive] Next keepalive scheduled in {interval // 60}m{interval % 60}s.")
+         time.sleep(interval)
+ 
+@@ -899,6 +929,8 @@ def _wechat_keepalive_loop():
+                         reason="expired keepalive session",
+                     )
+                     log.warning("[Keepalive] Expired-session relogin triggered: %s", started)
++            elif result.returncode == 11:
++                log.info("[Keepalive] WeChat session lock busy (upload or other operation running), skipping this round.")
+             else:
+                 log.warning(f"[Keepalive] Keepalive subprocess returned code: {result.returncode}.")
+         except _sp.TimeoutExpired:
+@@ -3596,11 +3628,23 @@ def get_wechat_status():
+     is_running = _is_wechat_login_running()
+     login_marker_active = _wechat_login_marker_active(login_at_path)
+     login_flow_active = is_running or qr_path.exists()
++
++    from video_processing.core.wechat_auth_state import (
++        read_wechat_auth_state,
++        evaluate_wechat_session_status,
++    )
++    auth_state = read_wechat_auth_state(state_path) if state_path.exists() else {}
++    eval_status = (
++        evaluate_wechat_session_status(auth_state, state_file_exists=state_path.exists())
++        if state_path.exists()
++        else {"status_label": "❌ 凭证文件缺失"}
++    )
+     
+     return {
+         "logged_in": state_path.exists() and login_marker_active,
+         "state_exists": state_path.exists(),
+         "login_marker_active": login_marker_active,
++        "status_label": eval_status.get("status_label"),
+         "qr_exists": qr_path.exists(),
+         "is_running": is_running,
+         "login_flow_active": login_flow_active,
+@@ -3628,12 +3672,23 @@ def _is_wechat_login_running() -> bool:
+ 
+ 
+ def _wechat_login_marker_active(login_at_path: Path, max_age_hours: int = 23) -> bool:
+-    """仅把真实扫码成功后写入且未超龄的标记视为登录有效。"""
+-    try:
+-        login_at = int(login_at_path.read_text().strip())
+-    except Exception:
++    """结合结构化状态与验证事实判断微信会话是否真实处于有效登录态。
++
++    不再单凭文本文件时间戳或固定 23h 断言有效，而是优先核验结构化授权状态与最近验证事实。
++    """
++    prj_root = Path(__file__).parent.parent.parent
++    state_file = prj_root / "output" / "wechat_state.json"
++    if not state_file.is_file():
+         return False
+-    return (time.time() - login_at) < max_age_hours * 3600
++
++    from video_processing.core.wechat_auth_state import (
++        read_wechat_auth_state,
++        evaluate_wechat_session_status,
++    )
++    auth_state = read_wechat_auth_state(state_file)
++    eval_res = evaluate_wechat_session_status(auth_state, state_file_exists=True)
++    valid_labels = ("✅ 授权且已验证", "🟡 会话已验证（授权时间未知）", "🟡 已达重登阈值", "⚠️ 临近重登阈值")
++    return eval_res.get("status_label") in valid_labels
+ 
+ 
+ def _is_pipeline_manager_running() -> bool:
+diff --git a/tests/browser/test_wechat_keepalive_browser.py b/tests/browser/test_wechat_keepalive_browser.py
+new file mode 100644
+index 0000000..06d21b6
+--- /dev/null
++++ b/tests/browser/test_wechat_keepalive_browser.py
+@@ -0,0 +1,465 @@
++"""真实隔离 Chromium 中的视频号保活与独立复用验收测试。
++
++覆盖：
++1. 控件就绪（真实正向发布控件加载完成）→ 验证通过，Cookie 原子保存，状态为 SUCCESS
++2. SPA 尚未加载 / 空白页（无正向发布控件）→ 拒绝乐观成功，不覆盖 state，退出 1
++3. 错误来源（非官方域名重定向）→ 阻断退出 1
++4. 登录框（明确重定向至登录页并含登录容器）→ 判定 LOGIN_REQUIRED，退出 2
++5. 锁冲突（会话排他锁被发布占用）→ 退出 EXIT_WECHAT_SESSION_BUSY (11)
++6. 独立全新上下文复用验证（verify_wechat_session_reuse）→ 校验 Cookie 携带与发布页正向识别
++
++# Modification History
++| Version | Date       | Author      | Description                                                  |
++|---------|------------|-------------|--------------------------------------------------------------|
++| 1.0.0   | 2026-09-28 | Antigravity | 初始创建：真实 Chromium 下保活正向校验、SPA未就绪、错误来源、锁忙及独立复用 |
++"""
++
++import json
++from pathlib import Path
++from unittest.mock import MagicMock, patch
++
++import pytest
++
++from scripts.verify_wechat_session_reuse import verify_session_reuse
++from scripts.wechat_keepalive import run_keepalive
++from tests.browser_fixtures import chromium
++from video_processing.core.wechat_auth_state import (
++    read_wechat_auth_state,
++    record_wechat_authorization,
++)
++from video_processing.core.wechat_session_lock import (
++    EXIT_WECHAT_SESSION_BUSY,
++    WeChatSessionLock,
++)
++
++
++def _setup_browser_route(chromium, route_fn):
++    """为 chromium 创建上下文并挂载路由拦截，返回代理 launch 对象。"""
++    class _MockPlaywright:
++        def __init__(self, browser):
++            self.chromium = MagicMock()
++            self._browser = browser
++
++            def _custom_launch(*args, **kwargs):
++                orig_new_context = self._browser.new_context
++
++                def _wrapped_new_context(*c_args, **c_kwargs):
++                    ctx = orig_new_context(*c_args, **c_kwargs)
++                    ctx.route("**/*", route_fn)
++                    return ctx
++
++                mock_b = MagicMock()
++                mock_b.new_context = _wrapped_new_context
++                mock_b.close = lambda: None
++                return mock_b
++
++            self.chromium.launch = _custom_launch
++
++        def __enter__(self):
++            return self
++
++        def __exit__(self, exc_type, exc_val, exc_tb):
++            return False
++
++    return _MockPlaywright(chromium)
++
++
++def test_browser_keepalive_positive_controls_success(chromium, tmp_path):
++    """场景 1：真实 Chromium 访问官方发布页，正向控件就绪 → 成功刷新并原子保存。"""
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text(json.dumps({
++        "cookies": [{"name": "test_s", "value": "123", "domain": "channels.weixin.qq.com", "path": "/"}],
++        "origins": [],
++    }))
++    record_wechat_authorization(state_file, method="desktop_quick", timestamp=1720000000.0)
++
++    html_content = """<!DOCTYPE html>
++    <html>
++      <head><title>视频号助手</title></head>
++      <body>
++        <div class="weui-desktop-layout__main">
++          <input type="file" name="media" />
++          <button class="upload-btn">上传视频</button>
++          <button>发表</button>
++        </div>
++      </body>
++    </html>"""
++
++    def handle_route(route):
++        url = route.request.url
++        if "platform/post/create" in url:
++            route.fulfill(content_type="text/html; charset=utf-8", body=html_content)
++        else:
++            route.fulfill(status=404, body="Not Found")
++
++    mock_pw = _setup_browser_route(chromium, handle_route)
++
++    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw):
++        code = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert code == 0
++    # 状态文件存在且非空
++    assert state_file.stat().st_size > 0
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "SUCCESS"
++    assert auth_state["authorized_at"] == 1720000000.0  # 授权时间未被破坏
++    assert auth_state["last_verified_at"] is not None
++
++
++def test_browser_keepalive_spa_unready_blank_page(chromium, tmp_path):
++    """场景 2：页面停留在发布页但 SPA 尚未加载（白屏/无发布控件）→ 拒绝乐观成功，不覆盖 state。"""
++    state_file = tmp_path / "wechat_state.json"
++    initial_content = json.dumps({
++        "cookies": [{"name": "initial_cookie", "value": "xyz", "domain": "channels.weixin.qq.com", "path": "/"}],
++        "origins": [],
++    })
++    state_file.write_text(initial_content)
++    record_wechat_authorization(state_file, method="desktop_quick", timestamp=1720000000.0)
++
++    # 空白骨架屏，无 input[type=file] 也无任何上传按钮
++    blank_html = """<!DOCTYPE html>
++    <html>
++      <head><title>视频号助手</title></head>
++      <body>
++        <div id="app"><div class="skeleton-loading">加载中...</div></div>
++      </body>
++    </html>"""
++
++    def handle_route(route):
++        url = route.request.url
++        if "platform/post/create" in url:
++            route.fulfill(content_type="text/html; charset=utf-8", body=blank_html)
++        else:
++            route.fulfill(status=404, body="Not Found")
++
++    mock_pw = _setup_browser_route(chromium, handle_route)
++
++    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw):
++        code = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert code == 1
++    # 验证原 state 文件未被破坏或覆盖
++    assert state_file.read_text() == initial_content
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "PAGE_UNREADY"
++    assert auth_state["authorized_at"] == 1720000000.0
++
++
++def test_browser_keepalive_wrong_origin(chromium, tmp_path):
++    """场景 3：重定向到非预期外部域名 → 拒绝判定成功，退出 1。"""
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text('{"cookies": []}')
++
++    def handle_route(route):
++        url = route.request.url
++        if "wrong-origin.invalid" in url:
++            route.fulfill(content_type="text/html; charset=utf-8", body="<h1>Wrong Origin</h1>")
++        else:
++            # 客户端安全重定向，避免沙箱触发未解析 DNS
++            route.fulfill(
++                content_type="text/html; charset=utf-8",
++                body='<script>window.location.replace("https://wrong-origin.invalid/error");</script>',
++            )
++
++    mock_pw = _setup_browser_route(chromium, handle_route)
++
++    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw):
++        code = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert code == 1
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "INVALID_ORIGIN"
++
++
++def test_browser_keepalive_login_required(chromium, tmp_path):
++    """场景 4：重定向至登录页且出现登录扫码容器 → 明确判定 LOGIN_REQUIRED，退出 2。"""
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text('{"cookies": []}')
++
++    login_html = """<!DOCTYPE html>
++    <html>
++      <head><title>微信视频号 - 登录</title></head>
++      <body>
++        <div class="login-box">
++          <p>使用微信扫码登录</p>
++        </div>
++      </body>
++    </html>"""
++
++    def handle_route(route):
++        url = route.request.url
++        if "platform/login" in url:
++            route.fulfill(content_type="text/html; charset=utf-8", body=login_html)
++        else:
++            # 客户端安全重定向至微信官方登录页
++            route.fulfill(
++                content_type="text/html; charset=utf-8",
++                body='<script>window.location.replace("https://channels.weixin.qq.com/platform/login");</script>',
++            )
++
++    mock_pw = _setup_browser_route(chromium, handle_route)
++
++    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw), \
++         patch("scripts.wechat_keepalive._send_telegram") as mock_tg:
++        code = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert code == 2
++    mock_tg.assert_called_once()
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "LOGIN_REQUIRED"
++
++
++def test_browser_keepalive_lock_busy(tmp_path):
++    """场景 5：会话共享锁被占用 → 立即退出 EXIT_WECHAT_SESSION_BUSY (11)，不拉起浏览器。"""
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text('{"cookies": []}')
++
++    with WeChatSessionLock(state_file, purpose="发布"):
++        code = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert code == EXIT_WECHAT_SESSION_BUSY
++
++
++def test_browser_verify_session_reuse_independent_context(chromium, tmp_path):
++    """场景 6：在独立全新上下文验证 state_file 的 Cookie 携带与发布页正向识别。"""
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text(json.dumps({
++        "cookies": [{
++            "name": "session_token",
++            "value": "token_abc_123",
++            "domain": "channels.weixin.qq.com",
++            "path": "/",
++            "httpOnly": True,
++            "secure": True,
++            "expires": -1,
++        }],
++        "origins": [],
++    }))
++    record_wechat_authorization(state_file, method="scan_qr", timestamp=1720000000.0)
++
++    received_cookies = []
++
++    def handle_route(route):
++        req = route.request
++        if "platform/post/create" in req.url:
++            cookie_hdr = req.headers.get("cookie", "")
++            received_cookies.append(cookie_hdr)
++            route.fulfill(
++                content_type="text/html; charset=utf-8",
++                body="""<!DOCTYPE html><html><body>
++                <input type="file" name="media" />
++                <button class="upload-btn">上传视频</button>
++                </body></html>""",
++            )
++        else:
++            route.fulfill(status=404, body="Not Found")
++
++    mock_pw = _setup_browser_route(chromium, handle_route)
++
++    with patch("scripts.verify_wechat_session_reuse.sync_playwright", return_value=mock_pw):
++        receipt = verify_session_reuse(state_file)
++
++    assert receipt["success"] is True
++    assert receipt["origin_verified"] is True
++    assert receipt["positive_controls_verified"] is True
++    assert receipt["login_required"] is False
++    assert any("session_token=token_abc_123" in c for c in received_cookies)
++
++
++def test_browser_keepalive_generic_file_input_rejected_as_unready(chromium, tmp_path):
++    """反例 1：仅包含空泛的普通 file input（非 video）与通用按钮 → 拒绝判定成功，报 PAGE_UNREADY。"""
++    state_file = tmp_path / "wechat_state.json"
++    initial_content = json.dumps({
++        "cookies": [{"name": "s_cookie", "value": "xyz", "domain": "channels.weixin.qq.com", "path": "/"}],
++        "origins": [],
++    })
++    state_file.write_text(initial_content)
++    record_wechat_authorization(state_file, method="desktop_quick", timestamp=1720000000.0)
++
++    generic_html = """<!DOCTYPE html>
++    <html>
++      <head><title>视频号助手</title></head>
++      <body>
++        <form>
++          <input type="file" name="avatar" accept="image/*" />
++          <button type="submit">发表</button>
++        </form>
++      </body>
++    </html>"""
++
++    def handle_route(route):
++        url = route.request.url
++        if "platform/post/create" in url:
++            route.fulfill(content_type="text/html; charset=utf-8", body=generic_html)
++        else:
++            route.fulfill(status=404, body="Not Found")
++
++    mock_pw = _setup_browser_route(chromium, handle_route)
++
++    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw):
++        code = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert code == 1
++    assert state_file.read_text() == initial_content
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "PAGE_UNREADY"
++
++
++def test_browser_keepalive_late_redirect_during_dwell_detected(chromium, tmp_path):
++    """反例 2：停留期间发生迟到重定向至登录页 → 最终保存前二次校验阻断，判定 LOGIN_REQUIRED 并退出 2。"""
++    state_file = tmp_path / "wechat_state.json"
++    initial_content = json.dumps({
++        "cookies": [{"name": "expire_token", "value": "old_val", "domain": "channels.weixin.qq.com", "path": "/"}],
++        "origins": [],
++    })
++    state_file.write_text(initial_content)
++    record_wechat_authorization(state_file, method="desktop_quick", timestamp=1720000000.0)
++
++    html_with_late_redirect = """<!DOCTYPE html>
++    <html>
++      <head><title>视频号助手</title></head>
++      <body>
++        <input type="file" accept="video/mp4" />
++        <button class="upload-btn">上传视频</button>
++        <script>
++          setTimeout(() => {
++            window.location.replace("https://channels.weixin.qq.com/platform/login");
++          }, 100);
++        </script>
++      </body>
++    </html>"""
++
++    login_html = """<!DOCTYPE html><html><body><div class="login-box">使用微信扫码登录</div></body></html>"""
++
++    def handle_route(route):
++        url = route.request.url
++        if "platform/post/create" in url:
++            route.fulfill(content_type="text/html; charset=utf-8", body=html_with_late_redirect)
++        elif "platform/login" in url:
++            route.fulfill(content_type="text/html; charset=utf-8", body=login_html)
++        else:
++            route.fulfill(status=404, body="Not Found")
++
++    mock_pw = _setup_browser_route(chromium, handle_route)
++
++    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw), \
++         patch("scripts.wechat_keepalive._send_telegram") as mock_tg:
++        code = run_keepalive(state_path=str(state_file), dwell=1)
++
++    assert code == 2
++    mock_tg.assert_called_once()
++    assert state_file.read_text() == initial_content
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "LOGIN_REQUIRED"
++
++
++def test_browser_spa_guard_dom_error_during_probe_rejects_positive_success(chromium):
++    """反例 3：当轮 DOM 探针异常（如 evaluate/DOM 抛错），即使页面存在正向控件也绝不放行，fail-closed 返回 DOM_ERROR。"""
++    from video_processing.core.wechat_page_contract import wait_for_publish_ready_with_spa_guard
++
++    page = chromium.new_page()
++    try:
++        page.set_content("""
++        <html>
++          <body>
++            <input type="file" accept="video/mp4" />
++            <button class="upload-btn">上传视频</button>
++          </body>
++        </html>
++        """)
++
++        # 即使页面有视频控件，如果 check_explicit_login_prompt 探针发生 DOM 异常
++        with patch("video_processing.core.wechat_page_contract.is_official_wechat_origin", return_value=True), \
++             patch("video_processing.core.wechat_page_contract.is_official_create_url", return_value=True), \
++             patch("video_processing.core.wechat_page_contract.check_explicit_login_prompt", return_value=(False, "DOM_ERROR")):
++            ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=0.6, poll_interval=0.1)
++            assert ready is False
++            assert err_cat == "DOM_ERROR"
++
++        # 如果 check_strong_video_publish_controls 探针发生 DOM 异常
++        with patch("video_processing.core.wechat_page_contract.is_official_wechat_origin", return_value=True), \
++             patch("video_processing.core.wechat_page_contract.is_official_create_url", return_value=True), \
++             patch("video_processing.core.wechat_page_contract.check_explicit_login_prompt", return_value=(False, None)), \
++             patch("video_processing.core.wechat_page_contract.check_strong_video_publish_controls", return_value=(False, "DOM_ERROR")):
++            ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=0.6, poll_interval=0.1)
++            assert ready is False
++            assert err_cat == "DOM_ERROR"
++    finally:
++        page.close()
++
++
++def test_browser_strict_origin_rejects_userinfo_and_non_default_port(chromium, tmp_path):
++    """反例 4：严格 origin 拒绝携带 userinfo 或非默认 443 端口的 URL，并在 keepalive 中记录 INVALID_ORIGIN。"""
++    from video_processing.core.wechat_page_contract import is_official_wechat_origin, is_official_create_url
++
++    # 1. 严格契约函数判据
++    assert not is_official_wechat_origin("https://admin:secret@channels.weixin.qq.com/platform/post/create")
++    assert not is_official_wechat_origin("https://channels.weixin.qq.com:8443/platform/post/create")
++    assert not is_official_wechat_origin("http://channels.weixin.qq.com/platform/post/create")
++    assert not is_official_create_url("https://admin:secret@channels.weixin.qq.com/platform/post/create")
++    assert not is_official_create_url("https://channels.weixin.qq.com:8443/platform/post/create")
++
++    # 2. 真实浏览器路由跳转至伪造非默认端口 URL，keepalive 拒绝并记录 INVALID_ORIGIN
++    state_file = tmp_path / "wechat_state.json"
++    initial_content = json.dumps({
++        "cookies": [{"name": "s_cookie", "value": "xyz", "domain": "channels.weixin.qq.com", "path": "/"}],
++        "origins": [],
++    })
++    state_file.write_text(initial_content)
++    record_wechat_authorization(state_file, method="desktop_quick", timestamp=1720000000.0)
++
++    def handle_route(route):
++        url = route.request.url
++        if ":8443" in url:
++            route.fulfill(
++                content_type="text/html; charset=utf-8",
++                body="<html><body><h1>Non-default port page</h1></body></html>",
++            )
++        else:
++            # 客户端安全重定向，原页返回本地 HTML 做 JS location.replace 跳转，避免 302 触发底层沙箱网络拒绝
++            route.fulfill(
++                content_type="text/html; charset=utf-8",
++                body='<script>window.location.replace("https://channels.weixin.qq.com:8443/platform/post/create");</script>',
++            )
++
++    mock_pw = _setup_browser_route(chromium, handle_route)
++
++    with patch("scripts.wechat_keepalive.sync_playwright", return_value=mock_pw):
++        code = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert code == 1
++    assert state_file.read_text() == initial_content
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "INVALID_ORIGIN"
++
++
++def test_browser_verify_session_reuse_generic_file_input_rejected(chromium, tmp_path):
++    """反例 5：verify_session_reuse 遇到普通图片上传或通用提交按钮时，严格拒绝正向通过。"""
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text(json.dumps({
++        "cookies": [{"name": "session_token", "value": "token_abc_123", "domain": "channels.weixin.qq.com", "path": "/"}],
++        "origins": [],
++    }))
++    record_wechat_authorization(state_file, method="scan_qr", timestamp=1720000000.0)
++
++    def handle_route(route):
++        req = route.request
++        if "platform/post/create" in req.url:
++            route.fulfill(
++                content_type="text/html; charset=utf-8",
++                body="""<!DOCTYPE html><html><body>
++                <input type="file" name="avatar" accept="image/*" />
++                <button type="submit">发表</button>
++                </body></html>""",
++            )
++        else:
++            route.fulfill(status=404, body="Not Found")
++
++    mock_pw = _setup_browser_route(chromium, handle_route)
++
++    with patch("scripts.verify_wechat_session_reuse.sync_playwright", return_value=mock_pw):
++        receipt = verify_session_reuse(state_file)
++
++    assert receipt["success"] is False
++    assert receipt["positive_controls_verified"] is False
++    assert receipt["error_type"] == "PAGE_UNREADY"
+diff --git a/tests/browser/test_wechat_quick_login.py b/tests/browser/test_wechat_quick_login.py
+index c2c599e..7cf2ca6 100644
+--- a/tests/browser/test_wechat_quick_login.py
++++ b/tests/browser/test_wechat_quick_login.py
+@@ -22,7 +22,10 @@ def _page(chromium, *, host='open.weixin.qq.com', delay=11000):
+         elif '/connect/login' in r.request.url:
+             r.fulfill(content_type='text/html; charset=utf-8', body=frame_html)
+         elif '/post/create' in r.request.url:
+-            r.fulfill(content_type='text/html; charset=utf-8', body='<h1>发布页</h1>')
++            r.fulfill(
++                content_type='text/html; charset=utf-8',
++                body='<h1>发布页</h1><div class="upload-area"><input type="file" accept="video/mp4,video/*" /><button class="upload-btn">上传视频</button></div>',
++            )
+         else:
+             r.fulfill(content_type='text/html; charset=utf-8', body=f'''<iframe src="https://{host}/connect/login"></iframe>
+             <script>addEventListener('message', e => {{if(e.data==='approved') location.href='/platform/post/create'}})</script>''')
+@@ -51,3 +54,168 @@ def test_untrusted_iframe_cannot_trigger_authorization(chromium):
+         assert page.url.endswith('/platform/login')
+     finally:
+         page.close()
++
++
++def test_wait_and_save_login_browser_none_rejected(tmp_path):
++    """当 context.browser is None 时，_wait_and_save_login 必须 fail-closed 抛错拒绝，绝不跳过独立复用。"""
++    from unittest.mock import MagicMock
++    import pytest
++    from scripts.wechat_uploader import _wait_and_save_login
++
++    mock_page = MagicMock()
++    mock_context = MagicMock()
++    mock_context.browser = None
++    state_file = tmp_path / "wechat_state.json"
++
++    with pytest.raises(RuntimeError, match="browser instance unavailable"):
++        _wait_and_save_login(mock_page, mock_context, state_file)
++
++
++def test_wait_and_save_login_reuse_verification_failure_cleans_up(chromium, tmp_path):
++    """独立全新上下文复用验证失败时，必须清理临时文件、拒绝提交会话，并记录 FAILED 状态（真实本地 route，不 mock 页面判据）。"""
++    import json
++    import pytest
++    from unittest.mock import patch
++    from scripts.wechat_uploader import _wait_and_save_login
++    from video_processing.core.wechat_auth_state import read_wechat_auth_state
++
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text(json.dumps({"cookies": [{"name": "old", "value": "val"}]}))
++
++    context = chromium.new_context(viewport={"width": 1280, "height": 800})
++    def main_route(r):
++        if "/post/create" in r.request.url:
++            r.fulfill(
++                content_type="text/html; charset=utf-8",
++                body='<html><body><h1>发布页</h1><input type="file" accept="video/mp4" /><button class="upload-btn">上传视频</button></body></html>',
++            )
++        else:
++            r.fulfill(status=404, body="Not Found")
++
++    context.route("**/*", main_route)
++    page = context.new_page()
++    page.goto("https://channels.weixin.qq.com/platform/post/create")
++
++    # 包装 chromium.new_context：为全新上下文挂载本地 route，真实返回未就绪 HTML（绝不触碰外网，不 mock 页面判据）
++    orig_new_context = chromium.new_context
++    def reuse_new_context(*args, **kwargs):
++        ctx = orig_new_context(*args, **kwargs)
++        def reuse_route(r):
++            if "/post/create" in r.request.url:
++                r.fulfill(
++                    content_type="text/html; charset=utf-8",
++                    body='<!DOCTYPE html><html><body><h1>未就绪页面</h1><p>无正向发布控件</p></body></html>',
++                )
++            else:
++                r.fulfill(status=404, body="Not Found")
++        ctx.route("**/*", reuse_route)
++        return ctx
++
++    with patch.object(chromium, "new_context", side_effect=reuse_new_context):
++        with pytest.raises(RuntimeError, match="Independent fresh context session reuse verification failed"):
++            _wait_and_save_login(page, context, state_file, method="desktop_quick")
++
++    # 1. 临时验证文件已被清理
++    tmp_files = list(tmp_path.glob(".*verify*"))
++    assert tmp_files == []
++
++    # 2. 原 state_file 未被覆盖
++    assert json.loads(state_file.read_text()) == {"cookies": [{"name": "old", "value": "val"}]}
++
++    # 3. 记录了本次授权尝试失败（由真实 SPA guard 输出的 PAGE_UNREADY 转换而来）
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state.get("last_auth_attempt_status") == "FAILED"
++    assert auth_state.get("last_auth_attempt_reason") == "PAGE_UNREADY"
++    assert auth_state.get("last_auth_attempt_method") == "desktop_quick"
++
++
++def test_wait_and_save_login_storage_failure_records_attempt_and_re_raises(chromium, tmp_path):
++    """当 storage_state 写入异常或保存为空时，记录 STORAGE_FAILED 并清理临时文件。"""
++    import json
++    import pytest
++    from unittest.mock import MagicMock, patch
++    from scripts.wechat_uploader import _wait_and_save_login
++    from video_processing.core.wechat_auth_state import read_wechat_auth_state
++
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text(json.dumps({"cookies": [{"name": "keep_old", "value": "val"}]}))
++
++    page = chromium.new_page()
++    context = page.context
++
++    # 模拟 storage_state 写入失败
++    mock_context = MagicMock()
++    mock_context.browser = chromium
++    mock_context.storage_state.side_effect = OSError("Disk full simulation")
++
++    mock_page = MagicMock()
++    mock_page.wait_for_url.return_value = None
++
++    with patch("video_processing.core.wechat_page_contract.wait_for_publish_ready_with_spa_guard", return_value=(True, None)):
++        with pytest.raises(OSError, match="Disk full simulation"):
++            _wait_and_save_login(mock_page, mock_context, state_file, method="desktop_quick")
++
++    # 临时文件已被清理
++    tmp_files = list(tmp_path.glob(".*verify*"))
++    assert tmp_files == []
++
++    # 原 state_file 未被覆盖
++    assert json.loads(state_file.read_text()) == {"cookies": [{"name": "keep_old", "value": "val"}]}
++
++    # 记录了 STORAGE_FAILED
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state.get("last_auth_attempt_status") == "FAILED"
++    assert auth_state.get("last_auth_attempt_reason") == "STORAGE_FAILED"
++
++
++def test_try_wechat_quick_login_custom_state_file_passed_to_attempt(chromium, tmp_path):
++    """_try_wechat_quick_login 超时时，将失败尝试记录在调用方传入的 state_file，绝不触碰生产 state。"""
++    import json
++    from scripts.wechat_uploader import _try_wechat_quick_login
++    from video_processing.core.wechat_auth_state import read_wechat_auth_state
++    from config.settings import settings
++
++    custom_state = tmp_path / "custom_wechat_state.json"
++    custom_state.write_text(json.dumps({"cookies": []}))
++
++    # 准备生产目录的 marker 和 flag 路径作为对照
++    prod_output = settings.project_root / "output"
++    prod_marker = prod_output / "wechat_login_at.txt"
++    prod_marker_content_before = prod_marker.read_text() if prod_marker.is_file() else None
++
++    page = chromium.new_page()
++    try:
++        # 页面包含微信快捷登录按钮，点击后进入轮询循环，但直到超时未完成授权
++        frame_html = """<!DOCTYPE html><html><body><button>微信快捷登录</button></body></html>"""
++        def route(r):
++            if "/connect/login" in r.request.url:
++                r.fulfill(content_type="text/html; charset=utf-8", body=frame_html)
++            else:
++                r.fulfill(
++                    content_type="text/html; charset=utf-8",
++                    body="""<!DOCTYPE html><html><body>
++                    <iframe src="https://open.weixin.qq.com/connect/login"></iframe>
++                    </body></html>""",
++                )
++
++        page.route("**/*", route)
++        page.goto("https://channels.weixin.qq.com/platform/login")
++        page.frame_locator("iframe").get_by_role("button", name="微信快捷登录", exact=True).wait_for()
++
++        # 执行 _try_wechat_quick_login，设置短超时 500ms
++        res = _try_wechat_quick_login(page, timeout_ms=500, state_file=custom_state)
++        assert res is False
++
++        # 验证 1：custom_state 记录了本次超时失败尝试
++        auth_state = read_wechat_auth_state(custom_state)
++        assert auth_state.get("last_auth_attempt_status") == "FAILED"
++        assert auth_state.get("last_auth_attempt_reason") == "PAGE_UNREADY"
++        assert auth_state.get("last_auth_attempt_method") == "desktop_quick"
++
++        # 验证 2：生产目标隔离，未生成/修改生产 marker
++        if prod_marker_content_before is not None:
++            assert prod_marker.read_text() == prod_marker_content_before
++        else:
++            assert not prod_marker.exists()
++    finally:
++        page.close()
+diff --git a/tests/unit/test_bot_formatter.py b/tests/unit/test_bot_formatter.py
+index f296ebf..ea5fa91 100644
+--- a/tests/unit/test_bot_formatter.py
++++ b/tests/unit/test_bot_formatter.py
+@@ -91,40 +91,60 @@ class TestFormatter:
+             assert cmd in msg
+ 
+     def test_format_wechat_login_status_valid(self):
+-        """有效登录态渲染测试"""
++        """有效授权状态渲染测试"""
+         from bot.formatter import fmt_wechat_login_status
+ 
+         info = {
+             "login_time_bj": "2026-09-27 13:21:31 BJ",
+             "relative_age": "2小时前",
+-            "status_label": "✅ 有效",
+-            "remaining_hours": 20.8,
++            "auth_method_label": "桌面快捷",
++            "status_label": "✅ 授权且已验证",
++            "last_verified_bj": "2026-09-27 15:00:00 BJ",
++            "relative_verified_age": "30分钟前",
++            "next_keepalive_estimate": "约 11:30 BJ（周期约 60 分钟）",
++            "schedule_estimate": "距 22.0h 调度阈值约 20.0 小时（调度估算，不代表平台剩余寿命）",
++            "lock_status": "空闲",
+             "state_file_status": "✅ 已保存 (2.9 KB)",
+-            "desktop_preflight": "✅ 就绪（免扫码桌面快捷授权）",
+-            "suggestions": ["当前登录态正常，无需操作。"],
++            "desktop_preflight": "✅ 预检就绪（仅桌面客户端环境就绪，不代表平台已授权）",
++            "suggestions": ["当前在授权维护期内且已通过正向验证，系统将按计划定期保活。"],
+         }
+         msg = fmt_wechat_login_status(info)
+         assert "微信视频号登录态状态" in msg
+         assert "2026-09-27 13:21:31 BJ" in msg
+-        assert "✅ 有效（2小时前）" in msg
+-        assert "约 20.8 小时" in msg
++        assert "2小时前 · 桌面快捷" in msg
++        assert "✅ 授权且已验证" in msg
++        assert "2026-09-27 15:00:00 BJ" in msg
++        assert "30分钟前" in msg
++        assert "保活计划" in msg and "约 11:30 BJ" in msg
++        assert "调度估算，不代表平台剩余寿命" in msg
++        assert "会话锁" in msg and "空闲" in msg
+         assert "已保存 (2.9 KB)" in msg
+-        assert "免扫码桌面快捷授权" in msg
++        assert "仅桌面客户端环境就绪，不代表平台已授权" in msg
+ 
+     def test_format_wechat_login_status_expired(self):
+-        """过期登录态渲染测试"""
++        """失效登录态渲染测试"""
+         from bot.formatter import fmt_wechat_login_status
+ 
+         info = {
+             "login_time_bj": "2026-09-25 10:00:00 BJ",
+             "relative_age": "2天前",
+-            "status_label": "❌ 已过期",
+-            "remaining_hours": 0.0,
++            "auth_method_label": "历史记录",
++            "status_label": "❌ 会话已失效（需重新登录）",
++            "last_verified_bj": "2026-09-25 10:00:00 BJ",
++            "relative_verified_age": "2天前",
++            "last_failure_display": "09-28 08:23:58 · LOGIN_REQUIRED (Redirected to login)",
++            "last_auth_attempt_display": "09-28 08:24:00 · 授权尝试失败 (独立新上下文复用验证失败)",
++            "schedule_estimate": "已达 22.0h 调度阈值（等待空闲周期自动重登）",
++            "lock_status": "空闲",
+             "state_file_status": "✅ 已保存",
+-            "desktop_preflight": "⚠️ 不可用 (NO_PROCESS)",
+-            "suggestions": ["请发送 /wechat_login 重新登录。"],
++            "desktop_preflight": "⚠️ 不可用 (NO_PROCESS，需手机扫码)",
++            "suggestions": ["平台已要求重新扫码登录，请发送 /wechat_login 获取二维码扫码。"],
+         }
+         msg = fmt_wechat_login_status(info)
+-        assert "❌ 已过期" in msg
+-        assert "请发送 /wechat_login 重新登录。" in msg
++        assert "❌ 会话已失效（需重新登录）" in msg
++        assert "最近检查" in msg
++        assert "09-28 08:23:58 · LOGIN_REQUIRED" in msg
++        assert "最近授权" in msg
++        assert "授权尝试失败" in msg
++        assert "请发送 /wechat_login 获取二维码扫码。" in msg
+ 
+diff --git a/tests/unit/test_wechat_auth_state.py b/tests/unit/test_wechat_auth_state.py
+new file mode 100644
+index 0000000..5667846
+--- /dev/null
++++ b/tests/unit/test_wechat_auth_state.py
+@@ -0,0 +1,408 @@
++"""Unit tests for WeChat structured auth state management (wechat_auth_state.py).
++
++# Modification History
++| Version | Date       | Author      | Description                              |
++|---------|------------|-------------|------------------------------------------|
++| 1.2.0   | 2026-09-28 | Antigravity | 测试完整文件名派生、身份核验拒绝、未来时间异常、保活失败时序覆盖与排期持久化 |
++| 1.1.0   | 2026-09-28 | Antigravity | 升级至 1.1.0 契约：测试唯一派生、无伪造保活、脱敏白名单、非绿异常判定及无标记已验证会话 |
++| 1.0.0   | 2026-09-28 | Antigravity | 初始创建：覆盖结构化授权状态原子读写、白名单字段、调度评估与边界场景 |
++"""
++
++import json
++import time
++from pathlib import Path
++
++import pytest
++
++from video_processing.core.wechat_auth_state import (
++    AUTH_STATE_VERSION,
++    canonical_wechat_auth_state_path,
++    evaluate_wechat_session_status,
++    read_wechat_auth_state,
++    record_wechat_authorization,
++    record_wechat_auth_attempt,
++    record_wechat_keepalive_result,
++    record_wechat_keepalive_schedule,
++)
++
++
++def test_canonical_path_derivation_unique(tmp_path: Path):
++    """验证元数据路径严格按完整文件名派生，wechat.json 与 wechat_state.json 绝不冲突。"""
++    state_file = tmp_path / "wechat_state.json"
++    derived = canonical_wechat_auth_state_path(state_file)
++    assert derived.name == "wechat_state.json.auth_state.json"
++    assert derived.parent == tmp_path
++
++    other_state = tmp_path / "wechat.json"
++    other_derived = canonical_wechat_auth_state_path(other_state)
++    assert other_derived.name == "wechat.json.auth_state.json"
++    assert derived != other_derived
++
++    custom_state = tmp_path / "custom.tmp"
++    assert canonical_wechat_auth_state_path(custom_state).name == "custom.tmp.auth_state.json"
++
++
++def test_custom_state_does_not_pollute_production_markers(tmp_path: Path):
++    """验证自定义/测试 state 路径绝不污染或清空生产 legacy marker 和 flags。"""
++    custom_state = tmp_path / "test_state.json"
++    started_flag = tmp_path / "wechat_auto_relogin_started.flag"
++    warned_flag = tmp_path / "wechat_login_warned.flag"
++    legacy_file = tmp_path / "wechat_login_at.txt"
++
++    started_flag.write_text("1")
++    warned_flag.write_text("1")
++
++    record_wechat_authorization(custom_state, method="desktop_quick", timestamp=1720000000.0)
++
++    # 自定义路径不会写入同级 wechat_login_at.txt，也不会误删同级 flags
++    assert not legacy_file.exists()
++    assert started_flag.exists()
++    assert warned_flag.exists()
++
++
++def test_custom_directory_same_filename_wechat_state_not_treated_as_production(tmp_path: Path):
++    """同名不同目录的 wechat_state.json 绝不能被误判为生产会话目标，不得污染同目录 marker 或 flags。"""
++    from video_processing.core.wechat_auth_state import is_wechat_state_target
++    from config.settings import settings
++
++    # 1. 验证 is_wechat_state_target 路径判据：同名但位于自定义目录拒绝
++    custom_state = tmp_path / "wechat_state.json"
++    assert is_wechat_state_target(custom_state) is False
++
++    prod_state = settings.project_root / "output" / "wechat_state.json"
++    assert is_wechat_state_target(prod_state) is True
++    assert is_wechat_state_target("output/wechat_state.json") is True
++
++    # 2. 授权写入隔离验证：同名自定义 state 绝不生成 legacy marker 或删除 flags
++    started_flag = tmp_path / "wechat_auto_relogin_started.flag"
++    warned_flag = tmp_path / "wechat_login_warned.flag"
++    legacy_file = tmp_path / "wechat_login_at.txt"
++
++    started_flag.write_text("1")
++    warned_flag.write_text("1")
++
++    record_wechat_authorization(custom_state, method="desktop_quick", timestamp=1720000000.0)
++
++    assert not legacy_file.exists()
++    assert started_flag.exists()
++    assert warned_flag.exists()
++
++
++def test_read_rejects_missing_or_mismatched_canonical_identity(tmp_path: Path):
++    """验证读取时严格校验 canonical_state_path 身份，缺失或不匹配的元数据拒绝通过。"""
++    state_file = tmp_path / "custom_state.json"
++    auth_meta = canonical_wechat_auth_state_path(state_file)
++
++    # 1. 缺失 canonical_state_path 身份
++    auth_meta.write_text(json.dumps({
++        "version": AUTH_STATE_VERSION,
++        "authorized_at": 1720000000.0,
++        "auth_method": "auto",
++        "last_verified_at": 1720000000.0,
++    }), encoding="utf-8")
++
++    state_data = read_wechat_auth_state(state_file)
++    assert state_data["authorized_at"] is None
++    assert state_data["last_verified_at"] is None
++
++    # 2. 身份与请求路径不匹配（冒充）
++    auth_meta.write_text(json.dumps({
++        "version": AUTH_STATE_VERSION,
++        "canonical_state_path": "/other/path/wechat_state.json",
++        "authorized_at": 1720000000.0,
++        "auth_method": "auto",
++        "last_verified_at": 1720000000.0,
++    }), encoding="utf-8")
++
++    state_data2 = read_wechat_auth_state(state_file)
++    assert state_data2["authorized_at"] is None
++    assert state_data2["last_verified_at"] is None
++
++
++def test_record_wechat_authorization_does_not_forge_keepalive(tmp_path: Path):
++    """验证记录授权成功事件只更新授权与最近验证时间，绝不伪造保活记录。"""
++    state_file = tmp_path / "wechat_state.json"
++    t0 = 1720000000.0
++    rec = record_wechat_authorization(state_file, method="desktop_quick", timestamp=t0)
++
++    assert rec["version"] == AUTH_STATE_VERSION
++    assert rec["authorized_at"] == t0
++    assert rec["auth_method"] == "desktop_quick"
++    assert rec["last_verified_at"] == t0
++    assert rec["last_keepalive_at"] is None  # 严禁伪造保活时间
++    assert rec["last_keepalive_status"] is None  # 严禁伪造保活状态
++    assert rec["last_failure"] is None
++
++
++def test_keepalive_sanitizes_failure_and_preserves_authorized_at(tmp_path: Path):
++    """验证保活失败时使用固定白名单分类与脱敏摘要，绝不暴露 URL 参数或自由文本。"""
++    state_file = tmp_path / "wechat_state.json"
++    t_auth = 1720000000.0
++    record_wechat_authorization(state_file, method="scan_qr", timestamp=t_auth)
++
++    t_keepalive = t_auth + 3600.0
++    ka_rec = record_wechat_keepalive_result(state_file, status="SUCCESS", timestamp=t_keepalive)
++    assert ka_rec["authorized_at"] == t_auth
++    assert ka_rec["last_verified_at"] == t_keepalive
++    assert ka_rec["last_keepalive_at"] == t_keepalive
++    assert ka_rec["last_keepalive_status"] == "SUCCESS"
++
++    # 失败记录：含敏感 query 的 URL 与非白名单字段
++    t_fail = t_keepalive + 1800.0
++    fail_rec = record_wechat_keepalive_result(
++        state_file,
++        status="NETWORK_TIMEOUT",
++        failure={
++            "stage": "navigation",
++            "error_type": "NETWORK_TIMEOUT",
++            "detail": "https://channels.weixin.qq.com/platform/post/create?token=secret123&uid=999\nTraceback...",
++            "secret_token": "leak_me",
++        },
++        timestamp=t_fail,
++    )
++
++    assert fail_rec["authorized_at"] == t_auth
++    assert fail_rec["last_verified_at"] == t_keepalive  # 保持上次成功时间
++    assert fail_rec["last_keepalive_status"] == "NETWORK_TIMEOUT"
++    assert fail_rec["last_failure"]["error_type"] == "NETWORK_TIMEOUT"
++    # 固定分类脱敏摘要
++    assert fail_rec["last_failure"]["summary"] == "网络请求超时未响应"
++    assert "token" not in fail_rec["last_failure"]["summary"]
++    assert "secret_token" not in fail_rec["last_failure"]
++
++
++def test_fresh_authorization_supersedes_historical_keepalive_failure(tmp_path: Path):
++    """回归验证：真实授权成功后，更新的验证时间应覆盖旧的保活失败，不再误报失败。"""
++    state_file = tmp_path / "wechat_state.json"
++    t1 = 1720000000.0
++
++    # 1. 历史保活检测到 LOGIN_REQUIRED
++    record_wechat_keepalive_result(
++        state_file,
++        status="LOGIN_REQUIRED",
++        failure={"stage": "auth", "error_type": "LOGIN_REQUIRED"},
++        timestamp=t1,
++    )
++
++    eval_before = evaluate_wechat_session_status(
++        auth_state=read_wechat_auth_state(state_file),
++        state_file_exists=True,
++        now_ts=t1 + 60,
++    )
++    assert eval_before["status_label"] == "❌ 会话已失效（需重新登录）"
++
++    # 2. 用户通过重新授权成功，更新 authorized_at 与 last_verified_at
++    t2 = t1 + 300.0
++    record_wechat_authorization(state_file, method="scan_qr", timestamp=t2)
++
++    # 3. 评定：授权成功后，旧保活被判定为 superseded，会话转为健康绿色
++    eval_after = evaluate_wechat_session_status(
++        auth_state=read_wechat_auth_state(state_file),
++        state_file_exists=True,
++        now_ts=t2 + 60,
++        warn_hours=22.0,
++    )
++    assert eval_after["is_keepalive_superseded"] is True
++    assert eval_after["status_label"] == "✅ 授权且已验证"
++    assert eval_after["last_keepalive_status"] == "LOGIN_REQUIRED"  # 历史保留不擦除
++
++    # 4. 后续新的保活如果在 t3 再次失败，则应重新生效
++    t3 = t2 + 3600.0
++    record_wechat_keepalive_result(
++        state_file,
++        status="LOGIN_REQUIRED",
++        failure={"stage": "auth", "error_type": "LOGIN_REQUIRED"},
++        timestamp=t3,
++    )
++    eval_t3 = evaluate_wechat_session_status(
++        auth_state=read_wechat_auth_state(state_file),
++        state_file_exists=True,
++        now_ts=t3 + 60,
++    )
++    assert eval_t3["is_keepalive_superseded"] is False
++    assert eval_t3["status_label"] == "❌ 会话已失效（需重新登录）"
++
++
++def test_future_timestamp_rejected_as_anomaly():
++    """验证未来时间戳绝不能 clamp age=0 后报绿色，必须显式报错。"""
++    now = 1720000000.0
++    future_auth = evaluate_wechat_session_status(
++        auth_state={
++            "authorized_at": now + 3600.0,  # 未来 1 小时
++            "last_verified_at": now - 100,
++            "last_keepalive_status": "SUCCESS",
++        },
++        state_file_exists=True,
++        now_ts=now,
++    )
++    assert future_auth["status_label"] == "❌ 时间戳异常（未来时间戳）"
++    assert "时间戳异常" in future_auth["relative_age"]
++
++
++def test_keepalive_schedule_persistence(tmp_path: Path):
++    """验证下一次检查实际随机选定时间的持久化与评定展示。"""
++    state_file = tmp_path / "wechat_state.json"
++    now = 1720000000.0
++    record_wechat_authorization(state_file, method="auto", timestamp=now - 3600)
++
++    target_schedule = now + 1800.0  # 30 分钟后
++    record_wechat_keepalive_schedule(state_file, scheduled_at=target_schedule)
++
++    read_state = read_wechat_auth_state(state_file)
++    assert read_state["next_keepalive_scheduled_at"] == target_schedule
++
++    evaluated = evaluate_wechat_session_status(
++        auth_state=read_state,
++        state_file_exists=True,
++        now_ts=now,
++        enable_keepalive=True,
++    )
++    assert "实际计划时刻" in evaluated["next_keepalive_estimate"]
++
++
++def test_evaluate_wechat_session_status_rigorous_scenarios():
++    now = 1720000000.0
++
++    # 场景 1: 未经验证的会话（即使有授权 marker，也绝不能报绿）
++    unverified = evaluate_wechat_session_status(
++        auth_state={"authorized_at": now - 3600, "last_verified_at": None},
++        state_file_exists=True,
++        now_ts=now,
++    )
++    assert unverified["status_label"] == "⚠️ 未经验证（待保活验证）"
++
++    # 场景 2: 验证已陈旧（超过 4 小时未成功保活，绝不能报绿）
++    stale_ver = evaluate_wechat_session_status(
++        auth_state={
++            "authorized_at": now - 3600 * 10,
++            "last_verified_at": now - 3600 * 5,  # 5 小时前验证
++            "last_keepalive_at": now - 3600 * 5,
++            "last_keepalive_status": "SUCCESS",
++        },
++        state_file_exists=True,
++        now_ts=now,
++    )
++    assert stale_ver["status_label"] == "⚠️ 验证已陈旧（超期未验证）"
++
++    # 场景 3: 非官方域名重定向（INVALID_ORIGIN 绝不能报绿）
++    wrong_origin = evaluate_wechat_session_status(
++        auth_state={
++            "authorized_at": now - 3600,
++            "last_verified_at": now - 1800,
++            "last_keepalive_at": now - 100,
++            "last_keepalive_status": "INVALID_ORIGIN",
++        },
++        state_file_exists=True,
++        now_ts=now,
++    )
++    assert wrong_origin["status_label"] == "❌ 来源异常（非官方域名）"
++
++    # 场景 4: 无授权 marker 但已验证会话（不能武断报未授权）
++    verified_no_marker = evaluate_wechat_session_status(
++        auth_state={
++            "authorized_at": None,
++            "last_verified_at": now - 600,
++            "last_keepalive_at": now - 600,
++            "last_keepalive_status": "SUCCESS",
++        },
++        state_file_exists=True,
++        now_ts=now,
++    )
++    assert verified_no_marker["status_label"] == "🟡 会话已验证（授权时间未知）"
++
++    # 场景 5: UNKNOWN 状态必须保留并降级
++    unknown_eval = evaluate_wechat_session_status(
++        auth_state={
++            "authorized_at": now - 3600,
++            "last_verified_at": now - 1800,
++            "last_keepalive_at": now - 300,
++            "last_keepalive_status": "UNKNOWN",
++        },
++        state_file_exists=True,
++        now_ts=now,
++    )
++    assert unknown_eval["status_label"] == "⚠️ 状态未知（检查未分类）"
++
++    # 场景 6: 网络超时判定（不能声称不影响会话）
++    timeout_eval = evaluate_wechat_session_status(
++        auth_state={
++            "authorized_at": now - 3600 * 10,
++            "last_verified_at": now - 3600 * 2,
++            "last_keepalive_at": now - 300,
++            "last_keepalive_status": "NETWORK_TIMEOUT",
++            "last_failure": {"timestamp": now - 300, "error_type": "NETWORK_TIMEOUT", "summary": "网络请求超时未响应"},
++        },
++        state_file_exists=True,
++        now_ts=now,
++    )
++    assert timeout_eval["status_label"] == "⚠️ 检查失败（网络超时）"
++    assert "不影响现有会话" not in "".join(timeout_eval["suggestions"])
++    assert "平台真实状态未知" in timeout_eval["suggestions"][0]
++
++    # 场景 7: 正常授权且近期已验证（绿色）
++    normal_active = evaluate_wechat_session_status(
++        auth_state={
++            "authorized_at": now - 3600 * 5,
++            "last_verified_at": now - 1800,
++            "last_keepalive_at": now - 1800,
++            "last_keepalive_status": "SUCCESS",
++        },
++        state_file_exists=True,
++        now_ts=now,
++        warn_hours=22.0,
++        enable_auto_relogin=True,
++    )
++    assert normal_active["status_label"] == "✅ 授权且已验证"
++    assert "计划重登" in normal_active["schedule_estimate"]
++
++    # 场景 8: 调度开关禁用时的提示
++    disabled_auto = evaluate_wechat_session_status(
++        auth_state={
++            "authorized_at": now - 3600 * 23,
++            "last_verified_at": now - 600,
++            "last_keepalive_at": now - 600,
++            "last_keepalive_status": "SUCCESS",
++        },
++        state_file_exists=True,
++        now_ts=now,
++        enable_auto_relogin=False,
++    )
++    assert "自动重登未开启" in disabled_auto["schedule_estimate"]
++
++
++def test_auth_attempt_tracking_and_failure_display(tmp_path: Path):
++    """验证记录授权尝试（涵盖成功与失败），失败可查分类原因并结构化展示。"""
++    state_file = tmp_path / "wechat_state.json"
++    now = 1720000000.0
++
++    # 1. 尝试失败
++    record_wechat_auth_attempt(
++        state_file,
++        method="desktop_quick",
++        success=False,
++        reason="PAGE_UNREADY",
++        timestamp=now,
++    )
++
++    data = read_wechat_auth_state(state_file)
++    assert data["last_auth_attempt_at"] == now
++    assert data["last_auth_attempt_method"] == "desktop_quick"
++    assert data["last_auth_attempt_status"] == "FAILED"
++    assert data["last_auth_attempt_reason"] == "PAGE_UNREADY"
++
++    evaluated = evaluate_wechat_session_status(data, state_file_exists=True, now_ts=now + 60)
++    assert evaluated["last_auth_attempt_display"] is not None
++    assert "授权尝试失败" in evaluated["last_auth_attempt_display"]
++    assert "正向视频发布控件未就绪" in evaluated["last_auth_attempt_display"]
++
++    # 2. 尝试成功（通过 record_wechat_authorization 同步更新）
++    t_succ = now + 300.0
++    record_wechat_authorization(state_file, method="scan_qr", timestamp=t_succ)
++    data_succ = read_wechat_auth_state(state_file)
++    assert data_succ["last_auth_attempt_at"] == t_succ
++    assert data_succ["last_auth_attempt_status"] == "SUCCESS"
++    assert data_succ["last_auth_attempt_reason"] is None
++
++    eval_succ = evaluate_wechat_session_status(data_succ, state_file_exists=True, now_ts=t_succ + 60)
++    assert "授权尝试成功" in eval_succ["last_auth_attempt_display"]
++
+diff --git a/tests/unit/test_wechat_auto_relogin.py b/tests/unit/test_wechat_auto_relogin.py
+index 8f0a110..3128ed2 100644
+--- a/tests/unit/test_wechat_auto_relogin.py
++++ b/tests/unit/test_wechat_auto_relogin.py
+@@ -36,3 +36,116 @@ def test_expired_login_marker_requests_relogin(tmp_path, monkeypatch):
+     monkeypatch.setattr(web_app.settings, "wechat_session_warn_hours", 22.0)
+     (output / "wechat_login_at.txt").write_text(str(int(time.time()) - 23 * 3600))
+     assert web_app._wechat_session_needs_auto_relogin() is True
++
++
++def test_get_wechat_status_failed_keepalive_not_green_despite_active_marker(tmp_path, monkeypatch):
++    """即使历史 marker 存在且在 23h 内，若最近保活失败（如 LOGIN_REQUIRED 或 INVALID_ORIGIN），状态绝不报绿。"""
++    output = _prepare_project(tmp_path, monkeypatch)
++    state_file = output / "wechat_state.json"
++    marker_file = output / "wechat_login_at.txt"
++
++    from video_processing.core.wechat_auth_state import (
++        record_wechat_authorization,
++        record_wechat_keepalive_result,
++    )
++
++    now = time.time()
++    marker_file.write_text(str(int(now)))  # 活跃 marker
++    record_wechat_authorization(state_file, method="scan_qr", timestamp=now - 1000)
++
++    # 1. 模拟保活失败 LOGIN_REQUIRED
++    record_wechat_keepalive_result(state_file, status="LOGIN_REQUIRED", timestamp=now - 10)
++    status = web_app.get_wechat_status()
++    assert status["logged_in"] is False
++    assert status["login_marker_active"] is False
++    assert "❌ 会话已失效" in status["status_label"]
++
++    # 2. 模拟保活失败 INVALID_ORIGIN
++    record_wechat_keepalive_result(state_file, status="INVALID_ORIGIN", timestamp=now - 5)
++    status = web_app.get_wechat_status()
++    assert status["logged_in"] is False
++    assert status["login_marker_active"] is False
++    assert "❌ 来源异常" in status["status_label"]
++
++
++def test_start_wechat_login_flow_failed_code_does_not_resume(tmp_path, monkeypatch):
++    """登录子进程退出码非 0 时，即使旧 marker 存在，绝不能误报授权成功，绝不恢复任务。"""
++    from unittest.mock import MagicMock, patch
++    output = _prepare_project(tmp_path, monkeypatch)
++    state_file = output / "wechat_state.json"
++    marker_file = output / "wechat_login_at.txt"
++
++    from video_processing.core.wechat_auth_state import record_wechat_authorization
++
++    old_auth_time = time.time() - 7200
++    marker_file.write_text(str(int(old_auth_time)))
++    record_wechat_authorization(state_file, method="scan_qr", timestamp=old_auth_time)
++
++    mock_restore = MagicMock()
++    monkeypatch.setattr(web_app, "_restore_login_required_after_wechat_login", mock_restore)
++    monkeypatch.setattr(web_app, "_resume_eligible_english_world_after_wechat_login", MagicMock())
++    monkeypatch.setattr(web_app, "_is_wechat_login_running", lambda: False)
++
++    with patch("subprocess.run", return_value=MagicMock(returncode=1)):
++        res = web_app._start_wechat_login_flow(headless=True, preserve_marker=False)
++        assert res["success"] is True
++        if web_app._wechat_login_thread:
++            web_app._wechat_login_thread.join(timeout=2.0)
++    assert not mock_restore.called
++
++
++def test_start_wechat_login_flow_unmodified_auth_does_not_resume(tmp_path, monkeypatch):
++    """子进程 returncode=0 但未写入新的 authorized_at 时，绝不触发任务恢复。"""
++    from unittest.mock import MagicMock, patch
++    output = _prepare_project(tmp_path, monkeypatch)
++    state_file = output / "wechat_state.json"
++    marker_file = output / "wechat_login_at.txt"
++
++    from video_processing.core.wechat_auth_state import record_wechat_authorization
++
++    old_auth_time = time.time() - 7200
++    marker_file.write_text(str(int(old_auth_time)))
++    record_wechat_authorization(state_file, method="scan_qr", timestamp=old_auth_time)
++
++    mock_restore = MagicMock()
++    monkeypatch.setattr(web_app, "_restore_login_required_after_wechat_login", mock_restore)
++    monkeypatch.setattr(web_app, "_resume_eligible_english_world_after_wechat_login", MagicMock())
++    monkeypatch.setattr(web_app, "_is_wechat_login_running", lambda: False)
++
++    with patch("subprocess.run", return_value=MagicMock(returncode=0)):
++        res = web_app._start_wechat_login_flow(headless=True, preserve_marker=False)
++        assert res["success"] is True
++        if web_app._wechat_login_thread:
++            web_app._wechat_login_thread.join(timeout=2.0)
++    assert not mock_restore.called
++
++
++def test_start_wechat_login_flow_fresh_auth_resumes_tasks(tmp_path, monkeypatch):
++    """子进程 returncode=0 且真实写入了新的 authorized_at 时，成功触发任务恢复。"""
++    from unittest.mock import MagicMock, patch
++    output = _prepare_project(tmp_path, monkeypatch)
++    state_file = output / "wechat_state.json"
++    marker_file = output / "wechat_login_at.txt"
++
++    from video_processing.core.wechat_auth_state import record_wechat_authorization
++
++    old_auth_time = time.time() - 7200
++    marker_file.write_text(str(int(old_auth_time)))
++    record_wechat_authorization(state_file, method="scan_qr", timestamp=old_auth_time)
++
++    mock_restore = MagicMock()
++    monkeypatch.setattr(web_app, "_restore_login_required_after_wechat_login", mock_restore)
++    monkeypatch.setattr(web_app, "_resume_eligible_english_world_after_wechat_login", MagicMock())
++    monkeypatch.setattr(web_app, "_is_wechat_login_running", lambda: False)
++
++    def fake_success_run(*args, **kwargs):
++        record_wechat_authorization(state_file, method="desktop_quick", timestamp=time.time())
++        return MagicMock(returncode=0)
++
++    with patch("subprocess.run", side_effect=fake_success_run):
++        res = web_app._start_wechat_login_flow(headless=True, preserve_marker=False)
++        assert res["success"] is True
++        if web_app._wechat_login_thread:
++            web_app._wechat_login_thread.join(timeout=2.0)
++    assert mock_restore.called
++
+diff --git a/tests/unit/test_wechat_keepalive.py b/tests/unit/test_wechat_keepalive.py
+index f48b5cb..04bedb6 100644
+--- a/tests/unit/test_wechat_keepalive.py
++++ b/tests/unit/test_wechat_keepalive.py
+@@ -3,29 +3,34 @@
+ # Modification History
+ | Version | Date       | Author                              | Description                              |
+ |---------|------------|-------------------------------------|------------------------------------------|
+-| 1.1.0   | 2026-09-08 | Codex | 注入实际被业务读取的 settings 单例，报警单测不依赖宿主 Telegram 配置 |
++| 1.3.0   | 2026-09-28 | Antigravity | 整改 WX-AUTH-20260927：增加正向发布控件校验、网络超时重试与故障分类、存储失败阻断、锁忙 (11) 及不伪造授权时刻 |
+ | 1.2.0   | 2026-09-25 | Codex | 过期保活仍保留重登调度所需的时间标记。 |
+-| 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | Initial creation: 5 unit tests covering  |
+-|         |            |                                     | logged-in, session-expired, missing-file,|
+-|         |            |                                     | ambiguous-URL, and DOM-fallback scenarios|
++| 1.1.0   | 2026-09-08 | Codex | 注入实际被业务读取的 settings 单例，报警单测不依赖宿主 Telegram 配置 |
++| 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_Thinking_planning | Initial creation: unit tests covering logged-in, session-expired, missing-file |
+ """
+ 
+-import pytest
+ from pathlib import Path
+-from unittest.mock import patch, MagicMock, call
++from unittest.mock import MagicMock, patch
+ 
++import pytest
++
++from video_processing.core.wechat_auth_state import read_wechat_auth_state
++from video_processing.core.wechat_session_lock import (
++    EXIT_WECHAT_SESSION_BUSY,
++    WeChatSessionLock,
++)
+ 
+-# ── 辅助工厂 ─────────────────────────────────────────────────────────────────
+ 
+-def _make_page_mock(url: str, dom_login: bool = False):
+-    """创建 Playwright page mock，模拟指定 URL 和 DOM 状态。"""
++def _make_page_mock(url: str, dom_login: bool = False, has_file_input: bool = True):
++    """创建 Playwright page mock，模拟指定 URL、登录状态和正向控件。"""
+     page = MagicMock()
+     page.url = url
+     page.goto.return_value = None
+     page.wait_for_timeout.return_value = None
+     page.wait_for_load_state.return_value = None
++    page.evaluate.return_value = has_file_input
+ 
+-    # 登录 DOM 检测相关 locator
++    # 登录 DOM 检测与控件 locator
+     login_loc = MagicMock()
+     login_loc.is_visible.return_value = dom_login
+     page.locator.return_value = login_loc
+@@ -33,11 +38,12 @@ def _make_page_mock(url: str, dom_login: bool = False):
+ 
+ 
+ def _make_sync_playwright_context(page_mock, context_mock=None):
+-    """搭建完整的 sync_playwright 上下文 mock 链。"""
++    """搭建完整的 sync_playwright 上下文 mock 链，支持原子写入。"""
+     if context_mock is None:
+         context_mock = MagicMock()
+     context_mock.new_page.return_value = page_mock
+-    context_mock.storage_state.return_value = None
++    # 模拟真实 Playwright 写入 storage_state 文件
++    context_mock.storage_state.side_effect = lambda path: Path(path).write_text('{"cookies": []}', encoding="utf-8")
+     context_mock.add_init_script.return_value = None
+ 
+     browser_mock = MagicMock()
+@@ -53,31 +59,36 @@ def _make_sync_playwright_context(page_mock, context_mock=None):
+     return playwright_ctx, browser_mock, context_mock
+ 
+ 
+-# ── Test 1: Session 活跃（URL 明确包含 /post/create）→ 刷新并退出 0 ─────────
++# ── Test 1: Session 活跃（URL 包含 /post/create 且正向控件存在）→ 刷新并退出 0 ──
+ 
+ def test_keepalive_session_active(tmp_path):
+-    """已登录场景：URL 含 /post/create，停留 dwell 秒后保存 Session，返回 0。"""
+     state_file = tmp_path / "wechat_state.json"
+-    state_file.write_text("{}")  # 假装已有 session 文件
++    state_file.write_text('{"cookies": []}')
+ 
+-    page_mock = _make_page_mock(url="https://channels.weixin.qq.com/platform/post/create")
++    page_mock = _make_page_mock(
++        url="https://channels.weixin.qq.com/platform/post/create",
++        has_file_input=True,
++    )
+     playwright_ctx, browser_mock, context_mock = _make_sync_playwright_context(page_mock)
+ 
+     with patch("scripts.wechat_keepalive.sync_playwright", return_value=playwright_ctx):
+         from scripts.wechat_keepalive import run_keepalive
+-        result = run_keepalive(state_path=str(state_file), dwell=1)
++        result = run_keepalive(state_path=str(state_file), dwell=0)
+ 
+     assert result == 0
+-    context_mock.storage_state.assert_called_once_with(path=str(state_file))
++    assert context_mock.storage_state.called
+     browser_mock.close.assert_called_once()
+ 
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "SUCCESS"
++    assert auth_state["last_verified_at"] is not None
++
+ 
+ # ── Test 2: Session 过期（URL 含 login）→ 发 Telegram 报警，退出 2 ───────────
+ 
+ def test_keepalive_session_expired(tmp_path):
+-    """未登录场景：URL 含 login，返回 2（LOGIN_REQUIRED）。"""
+     state_file = tmp_path / "wechat_state.json"
+-    state_file.write_text("{}")
++    state_file.write_text('{"cookies": []}')
+ 
+     page_mock = _make_page_mock(url="https://channels.weixin.qq.com/login.html")
+     playwright_ctx, browser_mock, context_mock = _make_sync_playwright_context(page_mock)
+@@ -90,17 +101,17 @@ def test_keepalive_session_expired(tmp_path):
+          patch.multiple("scripts.wechat_keepalive.settings",
+                         telegram_bot_token="fake_token", telegram_chat_id="12345"):
+         from scripts.wechat_keepalive import run_keepalive
+-        result = run_keepalive(state_path=str(state_file), dwell=1)
++        result = run_keepalive(state_path=str(state_file), dwell=0)
+ 
+     assert result == 2
+-    # 应该发送了 Telegram 报警
+     mock_requests.post.assert_called_once()
+-    call_args = mock_requests.post.call_args
+-    assert "sendMessage" in call_args[0][0]
+-    # Session 未刷新（已过期，不保存）
++    assert "sendMessage" in mock_requests.post.call_args[0][0]
+     context_mock.storage_state.assert_not_called()
+     browser_mock.close.assert_called_once()
+ 
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "LOGIN_REQUIRED"
++
+ 
+ def test_expired_session_preserves_relogin_marker(tmp_path, monkeypatch):
+     from scripts import wechat_keepalive as keepalive
+@@ -111,7 +122,6 @@ def test_expired_session_preserves_relogin_marker(tmp_path, monkeypatch):
+     login_at.write_text("123")
+     warned = tmp_path / "wechat_login_warned.flag"
+     warned.write_text("1")
+-    monkeypatch.setattr(keepalive, "_LOGIN_AT_FILE", str(login_at))
+     monkeypatch.setattr(keepalive, "_WARNED_FILE", str(warned))
+     monkeypatch.setattr(keepalive, "_send_telegram", lambda _message: None)
+     page = _make_page_mock("https://channels.weixin.qq.com/login.html")
+@@ -126,84 +136,123 @@ def test_expired_session_preserves_relogin_marker(tmp_path, monkeypatch):
+ # ── Test 3: Session 文件不存在 → 直接返回 1，不启动浏览器 ─────────────────────
+ 
+ def test_keepalive_no_state_file(tmp_path):
+-    """Session 文件缺失场景：跳过浏览器启动，直接返回 1。"""
+     state_file = tmp_path / "nonexistent_state.json"
+-    # 故意不创建 state_file
+-
+     playwright_ctx, _, _ = _make_sync_playwright_context(MagicMock())
+ 
+     with patch("scripts.wechat_keepalive.sync_playwright", return_value=playwright_ctx) as mock_pw:
+         from scripts.wechat_keepalive import run_keepalive
+-        result = run_keepalive(state_path=str(state_file), dwell=1)
++        result = run_keepalive(state_path=str(state_file), dwell=0)
+ 
+     assert result == 1
+-    # 浏览器不应该被启动
+     mock_pw.__enter__.assert_not_called()
+ 
+ 
+-# ── Test 4: URL 模糊（非 /post/create 也非 login）→ 额外等待后检测 ──────────
++# ── Test 4: 页面未完成渲染 / 空白骨架屏（无正向控件）→ 拒绝乐观判定，返回 1 ──
+ 
+-def test_keepalive_ambiguous_url_then_login(tmp_path):
+-    """URL 模糊场景（如首页 /）：额外等待后重新检测 URL，检测到 login 后返回 2。"""
++def test_keepalive_blank_page_unready_fails_closed(tmp_path):
+     state_file = tmp_path / "wechat_state.json"
+-    state_file.write_text("{}")
++    state_file.write_text('{"cookies": []}')
+ 
+-    page_mock = MagicMock()
+-    # 第一次访问返回模糊 URL（首页），第二次访问（wait_for_timeout 后）返回 login URL
+-    page_mock.url = "https://channels.weixin.qq.com/"
+-    page_mock.goto.return_value = None
+-    page_mock.wait_for_load_state.return_value = None
+-
+-    call_count = {"n": 0}
+-    original_url = "https://channels.weixin.qq.com/"
+-
+-    def dynamic_url():
+-        call_count["n"] += 1
+-        if call_count["n"] >= 2:
+-            return "https://channels.weixin.qq.com/login.html"
+-        return original_url
+-
+-    type(page_mock).url = property(lambda self: dynamic_url())
+-    page_mock.wait_for_timeout.return_value = None
+-    login_loc = MagicMock()
+-    login_loc.is_visible.return_value = False
+-    page_mock.locator.return_value = login_loc
++    # URL 在 post/create，但无正向发布控件（SPA 未加载完成或空白）
++    page_mock = _make_page_mock(
++        url="https://channels.weixin.qq.com/platform/post/create",
++        has_file_input=False,
++    )
++    # 所有备选 locator 均不可见
++    page_mock.locator.return_value.is_visible.return_value = False
+ 
+     playwright_ctx, browser_mock, context_mock = _make_sync_playwright_context(page_mock)
+ 
+     with patch("scripts.wechat_keepalive.sync_playwright", return_value=playwright_ctx):
+         from scripts.wechat_keepalive import run_keepalive
+-        result = run_keepalive(state_path=str(state_file), dwell=1)
++        result = run_keepalive(state_path=str(state_file), dwell=0)
+ 
+-    assert result == 2
++    assert result == 1
++    # 未就绪时不覆盖旧 state
+     context_mock.storage_state.assert_not_called()
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "PAGE_UNREADY"
+ 
+ 
+-# ── Test 5: URL 模糊 + DOM 回退检测为已登录 → 刷新成功，退出 0 ──────────────
++# ── Test 5: 导航网络超时有界重试 → 记录 NETWORK_TIMEOUT，退出 1 ────────────
+ 
+-def test_keepalive_ambiguous_url_dom_fallback_logged_in(tmp_path):
+-    """URL 模糊场景：URL 始终不含 /post/create 或 login，DOM 检测显示已登录，返回 0。"""
++def test_keepalive_network_timeout_bounded_retry(tmp_path):
+     state_file = tmp_path / "wechat_state.json"
+-    state_file.write_text("{}")
++    state_file.write_text('{"cookies": []}')
+ 
+     page_mock = MagicMock()
+-    # URL 始终是首页，不含特征字符串
+-    type(page_mock).url = property(lambda self: "https://channels.weixin.qq.com/")
+-    page_mock.goto.return_value = None
+-    page_mock.wait_for_load_state.return_value = None
+-    page_mock.wait_for_timeout.return_value = None
++    page_mock.goto.side_effect = TimeoutError("Page.goto: Timeout 25000ms exceeded")
++    playwright_ctx, browser_mock, context_mock = _make_sync_playwright_context(page_mock)
+ 
+-    # DOM 检测：没有登录框（已登录状态）
+-    login_loc = MagicMock()
+-    login_loc.is_visible.return_value = False
+-    page_mock.locator.return_value = login_loc
++    with patch("scripts.wechat_keepalive.sync_playwright", return_value=playwright_ctx):
++        from scripts.wechat_keepalive import run_keepalive
++        result = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert result == 1
++    # 验证尝试了 2 次导航
++    assert page_mock.goto.call_count == 2
++    context_mock.storage_state.assert_not_called()
++
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "NETWORK_TIMEOUT"
++    assert auth_state["last_failure"]["error_type"] == "NETWORK_TIMEOUT"
+ 
++
++# ── Test 6: 存储保存失败 → 报错返回 1，不报成功 ─────────────────────────────
++
++def test_keepalive_storage_failure_fails_closed(tmp_path):
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text('{"cookies": []}')
++
++    page_mock = _make_page_mock(
++        url="https://channels.weixin.qq.com/platform/post/create",
++        has_file_input=True,
++    )
+     playwright_ctx, browser_mock, context_mock = _make_sync_playwright_context(page_mock)
++    context_mock.storage_state.side_effect = OSError("Disk write error")
++
++    with patch("scripts.wechat_keepalive.sync_playwright", return_value=playwright_ctx):
++        from scripts.wechat_keepalive import run_keepalive
++        result = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert result == 1
++    auth_state = read_wechat_auth_state(state_file)
++    assert auth_state["last_keepalive_status"] == "STORAGE_FAILED"
++
++
++# ── Test 7: 锁忙冲突 → 返回 EXIT_WECHAT_SESSION_BUSY (11) ───────────────────
++
++def test_keepalive_lock_busy_returns_exit_code_11(tmp_path):
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text('{"cookies": []}')
++
++    from scripts.wechat_keepalive import run_keepalive
++
++    # 先行持有排他会话锁
++    with WeChatSessionLock(state_file, purpose="发布"):
++        result = run_keepalive(state_path=str(state_file), dwell=0)
++
++    assert result == EXIT_WECHAT_SESSION_BUSY
++
++
++# ── Test 8: 保活绝不伪造授权时间 ─────────────────────────────────────────────
++
++def test_keepalive_does_not_forge_authorized_at(tmp_path):
++    state_file = tmp_path / "wechat_state.json"
++    state_file.write_text('{"cookies": []}')
++
++    page_mock = _make_page_mock(
++        url="https://channels.weixin.qq.com/platform/post/create",
++        has_file_input=True,
++    )
++    playwright_ctx, _, _ = _make_sync_playwright_context(page_mock)
+ 
+     with patch("scripts.wechat_keepalive.sync_playwright", return_value=playwright_ctx):
+         from scripts.wechat_keepalive import run_keepalive
+-        result = run_keepalive(state_path=str(state_file), dwell=1)
++        result = run_keepalive(state_path=str(state_file), dwell=0)
+ 
+     assert result == 0
+-    context_mock.storage_state.assert_called_once_with(path=str(state_file))
+-    browser_mock.close.assert_called_once()
++    auth_state = read_wechat_auth_state(state_file)
++    # authorized_at 保持为 None，绝不伪造为当前时间
++    assert auth_state["authorized_at"] is None
++    assert auth_state["last_verified_at"] is not None
+diff --git a/tests/unit/test_wechat_keepalive_warn.py b/tests/unit/test_wechat_keepalive_warn.py
+index a1071b4..1c3da85 100644
+--- a/tests/unit/test_wechat_keepalive_warn.py
++++ b/tests/unit/test_wechat_keepalive_warn.py
+@@ -61,8 +61,10 @@ def test_only_confirmed_login_resets_expiry_age(tmp_path, captured):
+     assert login_at.exists() and warned.exists()
+     assert (time.time() - int(login_at.read_text())) / 3600 >= 22
+ 
++    from unittest.mock import patch
+     from scripts.wechat_uploader import _stamp_login_success
+-    _stamp_login_success(tmp_path / "wechat_state.json")
++    with patch("video_processing.core.wechat_auth_state.is_wechat_state_target", return_value=True):
++        _stamp_login_success(tmp_path / "wechat_state.json")
+     assert not warned.exists()
+     # 真实重登后重新计时 → 年轻会话 → 不预警
+     keepalive._stamp_login_if_absent(login_at)
+diff --git a/tests/unit/test_wechat_login_recovery.py b/tests/unit/test_wechat_login_recovery.py
+index 136e8d2..29e22cf 100644
+--- a/tests/unit/test_wechat_login_recovery.py
++++ b/tests/unit/test_wechat_login_recovery.py
+@@ -130,12 +130,16 @@ def test_uploader_login_only_restores_tasks_after_existing_session_check(tmp_pat
+ 
+     monkeypatch.setattr(wechat_uploader, "sync_playwright", lambda: playwright)
+     monkeypatch.setattr(wechat_uploader, "_restore_login_required_tasks_after_login", restored)
++    monkeypatch.setattr(
++        "video_processing.core.wechat_page_contract.wait_for_publish_ready_with_spa_guard",
++        lambda *args, **kwargs: (True, None),
++    )
+ 
+     assert wechat_uploader.run_uploader(
+         state_path=str(tmp_path / "wechat_state.json"),
+         login_only=True,
+     ) == 0
+-    restored.assert_called_once_with()
++    restored.assert_called_once_with(resume_submission=False)
+     browser.close.assert_called_once()
+ 
+ 

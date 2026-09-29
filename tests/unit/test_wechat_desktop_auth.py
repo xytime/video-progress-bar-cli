@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.0 | 2026-09-29 | Antigravity | 覆盖点击后窗口响应关闭确认(同ID仍存在/读取失败不计为关闭)及重试频次限制。 |
 | 1.9.0 | 2026-09-27 | Antigravity | 覆盖上下文置信度与按钮置信度差异化门禁。 |
 | 1.8.0 | 2026-09-26 | Codex | 覆盖离线授权文字、错误按钮、窗口变化、停止和多屏缩放边界。 |
 | 1.7.0 | 2026-09-26 | Codex | 桌面登录页不能视为就绪；未登录时不启动点击线程。 |
@@ -234,11 +235,15 @@ def test_visual_check_revalidates_window_and_stop_before_click():
                 output = json.dumps(observations)
             elif 'click' in args:
                 output = 'true'
+            elif 'visible' in args:
+                output = 'false' if mode == 'valid' else 'true'
             elif args[:2] == ['osascript', '-e']:
                 if 'frontApps' in args[-1]: output = 'WeChat'
             return MagicMock(returncode=0, stdout=output)
         with patch('scripts.wechat_desktop_auth.subprocess.run', side_effect=native_run):
-            assert _try_visual_allow_click(cancelled=lambda: stopped[0]) is (mode == 'valid')
+            result = _try_visual_allow_click(cancelled=lambda: stopped[0])
+            assert result.confirmed is (mode == 'valid')
+            assert result.attempted is (mode == 'valid')
         clicks = [c for c in calls if c[0] == 'osascript' and 'click' in c]
         if mode == 'valid':
             assert len(clicks) == 1
@@ -247,10 +252,78 @@ def test_visual_check_revalidates_window_and_stop_before_click():
             assert clicks == []
 
 
+def test_visual_click_unconfirmed_when_visible_returns_true_or_fails():
+    import json
+    import cv2
+    from scripts.wechat_desktop_auth import _try_visual_allow_click
+    image, observations = _visual_fixture()
+    window = {'id': 123, 'pid': 456, 'bounds': {'X': 100, 'Y': 100, 'Width': 300, 'Height': 300}}
+
+    for mode in ('still_visible', 'probe_failed'):
+        def native_run(args, **kwargs):
+            if args[0] == 'screencapture':
+                cv2.imwrite(args[-1], image)
+            elif 'windows' == args[-1]:
+                return MagicMock(returncode=0, stdout=json.dumps([window]))
+            elif 'ocr' in args:
+                return MagicMock(returncode=0, stdout=json.dumps(observations))
+            elif 'click' in args:
+                return MagicMock(returncode=0, stdout='true')
+            elif 'visible' in args:
+                if mode == 'probe_failed':
+                    return MagicMock(returncode=1, stdout='', stderr='probe error')
+                return MagicMock(returncode=0, stdout='true')  # 窗口仍可见
+            elif args[:2] == ['osascript', '-e'] and 'frontApps' in args[-1]:
+                return MagicMock(returncode=0, stdout='WeChat')
+            return MagicMock(returncode=0, stdout='')
+
+        with patch('scripts.wechat_desktop_auth.subprocess.run', side_effect=native_run):
+            result = _try_visual_allow_click()
+            assert result.confirmed is False
+            assert result.attempted is True
+
+
+def test_watcher_does_not_count_attempt_when_not_ready_and_throttles_on_dispatch():
+    from scripts.wechat_desktop_auth import VisualClickResult
+    watcher = WeChatDesktopAuthWatcher(timeout_seconds=5, poll_interval_seconds=0.01,
+                                       enable_visual_fallback=True, max_visual_attempts=2)
+    ax_result = MagicMock(returncode=1, stdout='', stderr='System Events error (-25208)')
+    calls = []
+    waits = [0]
+
+    def mock_visual_click(*args, **kwargs):
+        # 前 3 次未就绪（不占点击次数），随后 2 次派发失败（占次数）
+        if len(calls) < 3:
+            res = VisualClickResult(confirmed=False, attempted=False)
+        else:
+            res = VisualClickResult(confirmed=False, attempted=True)
+        calls.append(res)
+        return res
+
+    def mock_wait(*args, **kwargs):
+        waits[0] += 1
+        if waits[0] >= 10:
+            watcher._stop_event.set()
+
+    with patch('scripts.wechat_desktop_auth.subprocess.run', return_value=ax_result), \
+         patch('scripts.wechat_desktop_auth._try_visual_allow_click', side_effect=mock_visual_click), \
+         patch.object(watcher._stop_event, 'wait', side_effect=mock_wait):
+        watcher._poll()
+
+    # 3 次未就绪 + 2 次派发，总调用 5 次，visual_attempts 精确为 2
+    assert watcher.visual_attempts == 2
+    assert len(calls) == 5
+    assert watcher.last_result == 'VISUAL_CLICK_UNCONFIRMED'
+    assert watcher.clicked is False
+
+
 def test_unsupported_ax_click_can_use_strict_visual_fallback():
+    from scripts.wechat_desktop_auth import VisualClickResult
     watcher = WeChatDesktopAuthWatcher(timeout_seconds=1, enable_visual_fallback=True)
     result = MagicMock(returncode=1, stdout='', stderr='System Events error (-25208)')
-    with patch('scripts.wechat_desktop_auth.subprocess.run', return_value=result), patch('scripts.wechat_desktop_auth._try_visual_allow_click', return_value=True) as visual:
+    mock_res = VisualClickResult(confirmed=True, attempted=True)
+    with patch('scripts.wechat_desktop_auth.subprocess.run', return_value=result), \
+         patch('scripts.wechat_desktop_auth._try_visual_allow_click', return_value=mock_res) as visual:
         watcher._poll()
     visual.assert_called_once()
-    assert watcher.clicked and watcher.last_result == 'CLICKED_VISUAL'
+    assert watcher.clicked and watcher.last_result == 'VISUAL_WINDOW_DISMISSED'
