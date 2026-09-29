@@ -29,6 +29,8 @@ from pathlib import Path
 from typing import Optional
 
 from config.settings import settings
+from video_processing.core.ffmpeg_slot import register_executable
+register_executable(settings.ffmpeg_path)
 from video_processing.utils.video_metadata import get_video_duration_ffprobe
 
 logger = logging.getLogger("video_delivery")

@@ -344,6 +344,8 @@ class ProgressBarProcessor(VideoProcessorBase):
             default_title_font_size = 48
         
         self.ffmpeg_path = ffmpeg_path or default_ffmpeg or "ffmpeg"
+        from video_processing.core.ffmpeg_slot import register_executable
+        register_executable(self.ffmpeg_path)
         self.ffprobe_path = ffprobe_path or "ffprobe"
         self.threads = threads
         self.preset = preset

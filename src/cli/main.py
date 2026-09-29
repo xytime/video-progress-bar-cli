@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 import click
 from config.settings import settings
+from video_processing.core.ffmpeg_slot import register_executable
+register_executable(settings.ffmpeg_path)
 
 # 配置日志
 logging.basicConfig(

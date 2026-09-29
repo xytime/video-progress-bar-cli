@@ -153,7 +153,8 @@ def _run(command: list[str], *, cwd: Path, timeout: int = 900) -> None:
     with subprocess.Popen(command, cwd=str(cwd), text=True, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, start_new_session=True) as process:
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            from video_processing.core.ffmpeg_slot import communicate_with_progress_budget
+            stdout, stderr = communicate_with_progress_budget(process, timeout)
         except subprocess.TimeoutExpired:
             # 重试前结束整个渲染/ASR 进程组，防止遗留 FFmpeg 与新尝试并发写同一产物。
             try:

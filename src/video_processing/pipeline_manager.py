@@ -232,6 +232,8 @@ from .core.douyin_launch_context import douyin_submission_payload_sha256
 from .core.original_declaration_policy import decide_original_declaration
 from cover.creative_brief import build_cover_creative_brief
 from config.settings import settings
+from video_processing.core.ffmpeg_slot import register_executable
+register_executable(settings.ffmpeg_path)
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +393,12 @@ class _CaptionProgressWatchdog:
             )
 
         stage_limit = self._stage_timeout_seconds.get(self._stage, self._default_stage_timeout_seconds)
+        # 同一阶段排队时上报的有效起点会前移；心跳检查仍照常执行。
+        if "resource_wait_seconds" in payload:
+            try:
+                self._stage_started_at = max(self._stage_started_at, min(float(payload["stage_started_at"]), current))
+            except (ValueError, TypeError, KeyError):
+                pass
         stage_age = max(0.0, current - self._stage_started_at)
         if stage_age > stage_limit:
             return _CaptionProgressBreach("STAGE_TIMEOUT", self._stage, stage_age, stage_limit)
@@ -2044,7 +2052,10 @@ class PipelineManager:
 
         # 字幕阶段看门狗需要可靠地终止整棵子进程树，因此即使常规 PID 追踪
         # 关闭，只要调用方提供 progress_path 也创建独立进程组。
-        use_isolated_process_group = settings.enable_sigterm_kill or progress_path is not None
+        use_isolated_process_group = (
+            settings.enable_sigterm_kill or progress_path is not None
+            or (bool(cmd) and Path(str(cmd[0])).name == "yt-dlp")
+        )
         if use_isolated_process_group:
             proc = subprocess.Popen(
                 cmd,
@@ -2112,7 +2123,8 @@ class PipelineManager:
                 )
                 monitor_thread.start()
             try:
-                stdout, stderr = proc.communicate(timeout=timeout)
+                from video_processing.core.ffmpeg_slot import communicate_with_progress_budget
+                stdout, stderr = communicate_with_progress_budget(proc, timeout, progress_path)
             except subprocess.TimeoutExpired as e:
                 terminate_process_group()
                 try:

@@ -73,6 +73,8 @@ def main(argv=None) -> int:
         git_revision = "unknown"
     state = {"pid": os.getpid(), "stage": "IDLE", "current_video": None,
              "git_revision": git_revision,
+             "ffmpeg_guard_enabled": subprocess.Popen.__module__ == "video_processing.core.ffmpeg_slot",
+             "ffmpeg_limit": 1,
              "ai_cover_primary_provider": settings.ai_cover_primary_provider,
              "ai_cover_queue_enabled": settings.enable_codex_cover_queue,
              "started_at": time.time(), "stage_started_at": time.time()}

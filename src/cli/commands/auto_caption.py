@@ -24,6 +24,8 @@ from video_processing.processors.caption_processor import AutoCaptionProcessor
 from video_processing.processors.vertical_processor import VerticalCaptionProcessor
 from video_processing.core.base import VideoProcessingError
 
+from video_processing.core.ffmpeg_slot import wait_state
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,6 +36,8 @@ class _CaptionProgressReporter:
         self._progress_file = progress_file
         self._stage = "STARTING"
         self._stage_started_at = time.time()
+        self._stage_wait_baseline = wait_state()["seconds"]
+        self._process_wait_baseline = self._stage_wait_baseline
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -42,6 +46,7 @@ class _CaptionProgressReporter:
         with self._lock:
             if stage != self._stage:
                 self._stage_started_at = time.time()
+                self._stage_wait_baseline = wait_state()["seconds"]
             self._stage = stage
         self._write_current()
 
@@ -64,6 +69,8 @@ class _CaptionProgressReporter:
             with self._lock:
                 stage = self._stage
                 stage_started_at = self._stage_started_at
+                waiting = wait_state()
+                stage_started_at += max(0, waiting["seconds"] - self._stage_wait_baseline)
             self._progress_file.parent.mkdir(parents=True, exist_ok=True)
             temporary = self._progress_file.with_name(f".{self._progress_file.name}.tmp")
             temporary.write_text(
@@ -71,6 +78,8 @@ class _CaptionProgressReporter:
                     "stage": stage,
                     "stage_started_at": stage_started_at,
                     "updated_at": time.time(),
+                    "resource_waiting": waiting["waiting"],
+                    "resource_wait_seconds": max(0, waiting["seconds"] - self._process_wait_baseline),
                 }, ensure_ascii=False),
                 encoding="utf-8",
             )

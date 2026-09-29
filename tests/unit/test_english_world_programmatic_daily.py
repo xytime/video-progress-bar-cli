@@ -506,6 +506,8 @@ def test_timed_out_stage_kills_and_reaps_process_group_before_return(tmp_path, m
     def communicate(**kwargs):
         events.append("communicate")
         if kwargs:
+            import time
+            time.sleep(kwargs["timeout"])
             raise subprocess.TimeoutExpired("render", kwargs["timeout"])
         return "", ""
     process.communicate.side_effect = communicate

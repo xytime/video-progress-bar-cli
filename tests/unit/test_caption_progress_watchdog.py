@@ -87,3 +87,17 @@ def test_watchdog_stops_when_stage_heartbeat_goes_stale(tmp_path):
     assert breach.kind == "HEARTBEAT_STALE"
     assert breach.stage == "VIDEO_RENDERING"
     assert breach.limit_seconds == 30
+
+
+def test_waiting_excluded_but_stale_heartbeat_still_fails(tmp_path):
+    path = tmp_path / "progress.json"
+    watchdog = _CaptionProgressWatchdog(started_at=100, startup_timeout_seconds=20,
+        heartbeat_timeout_seconds=30, stage_timeout_seconds={"AUDIO_EXTRACTING": 60},
+        default_stage_timeout_seconds=60)
+    path.write_text(json.dumps({"stage": "AUDIO_EXTRACTING", "updated_at": 110,
+                               "stage_started_at": 100, "resource_wait_seconds": 0}))
+    assert watchdog.check(path, now=110) is None
+    path.write_text(json.dumps({"stage": "AUDIO_EXTRACTING", "updated_at": 230,
+                               "stage_started_at": 220, "resource_wait_seconds": 120}))
+    assert watchdog.check(path, now=230) is None
+    assert watchdog.check(path, now=261).kind == "HEARTBEAT_STALE"

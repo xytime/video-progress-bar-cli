@@ -58,6 +58,13 @@ from pathlib import Path
 import pytest
 
 from config.settings import settings
+
+
+@pytest.fixture(autouse=True)
+def deterministic_market_window(monkeypatch):
+    """调度故障用例与其假子进程不依赖当前真实美股时钟；不改生产配置。"""
+    monkeypatch.setattr(settings, "enable_market_hours_guard", False)
+    monkeypatch.setenv("ENABLE_MARKET_HOURS_GUARD", "false")
 from scripts import run_english_world_daily as runner
 from video_processing.utils.youtube_access import YoutubeAccessResult
 

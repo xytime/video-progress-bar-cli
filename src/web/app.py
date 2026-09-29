@@ -966,10 +966,8 @@ def startup_event():
     threading.Thread(target=_wechat_keepalive_loop, daemon=True, name="wechat-keepalive-watchdog").start()
     print("[Scheduler] WeChat session keepalive watchdog started.")
 
-# 优先用 PATH 里的 yt-dlp，其次用 venv 里的
-_YT_DLP = shutil.which("yt-dlp") or str(
-    Path(__file__).parent.parent.parent / ".venv" / "bin" / "yt-dlp"
-)
+# 下载器与生产加工共用项目虚拟环境。
+_YT_DLP = settings.ytdlp_path  # 下载器必须加载项目 FFmpeg 单名额启动钩子。
 
 # [Claude_Sonnet_4.6_Thinking_planning] SEC-1 修复：严格 YouTube 域名白名单。
 # 旧方案 `any(d in url ...)` 可被路径、子域名、data URI 等 5 种向量绕过。
@@ -1350,6 +1348,11 @@ def get_stats():
         "breakdown": {s: counts.get(s, 0) for s in STATUS_ORDER},
         "detailed": detailed,
         "server_time": datetime.now().strftime("%H:%M:%S"),
+        "resource_control": {
+            "ffmpeg_limit": 1,
+            "ffmpeg_guard_enabled": subprocess.Popen.__module__ == "video_processing.core.ffmpeg_slot",
+            "pid": os.getpid(),
+        },
     }
 
 

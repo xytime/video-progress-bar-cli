@@ -1006,7 +1006,8 @@ def _run_coordinator(
             start_new_session=True,
         )
         try:
-            return process.wait(timeout=paths.coordinator_timeout_seconds)
+            from video_processing.core.ffmpeg_slot import wait_with_queue_budget
+            return wait_with_queue_budget(process, paths.coordinator_timeout_seconds)
         except subprocess.TimeoutExpired:
             _log(
                 stream,
