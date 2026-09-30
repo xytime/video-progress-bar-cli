@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 from pathlib import Path
@@ -65,6 +66,31 @@ def run_process(command: list[str], *, cwd: Path, timeout: float, env: dict,
     return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
+def cli_failure_detail(stdout: str, stderr: str) -> str:
+    """只分类实际错误，禁止把 usage 等元数据误判为额度不足或回显私密内容。"""
+    try:
+        envelope = json.loads(stdout)
+    except (ValueError, TypeError):
+        envelope = None
+    error = envelope.get("error") if isinstance(envelope, dict) else None
+    if isinstance(error, dict):
+        error = " ".join(str(error.get(key, "")) for key in ("code", "status", "message"))
+    detail = str(error or stderr).lower()
+    categories = (
+        ("model_configuration", ("invalid model selection", "--effort is not supported", "unknown model")),
+        ("location_unsupported", ("user location is not supported", "unsupported location", "unsupported country")),
+        ("authentication", ("not logged into", "unauthenticated", "invalid credentials")),
+        ("quota", ("resource_exhausted", "quota exceeded", "quota exhausted", "rate limit", "too many requests")),
+        ("network", ("connection refused", "connection reset", "no such host", "proxyconnect")),
+        ("timeout", ("deadline_exceeded", "timed out", "timeout")),
+    )
+    category = next((name for name, markers in categories if any(marker in detail for marker in markers)), "provider_error")
+    status = re.search(r"(?:code|status|http)[ :=(]+([45]\d{2})\b", detail)
+    if category == "provider_error" and status and status[1] == "429":
+        category = "quota"
+    return f"category={category}" + (f"; status={status[1]}" if status else "")
+
+
 def run_cli(command: list[str], *, cwd: Path, timeout: float) -> dict:
     """不记录包含提示词的 TimeoutExpired，也不继承业务 API 凭据。"""
     env = build_subprocess_env(include_gemini=False, include_telegram=False)
@@ -74,14 +100,13 @@ def run_cli(command: list[str], *, cwd: Path, timeout: float) -> dict:
     stdout, stderr = process.stdout, process.stderr
     if process.returncode:
         # 仅持久化稳定分类，禁止回显整条命令、提示词或环境。
-        detail = "quota" if any(x in (stderr + stdout).lower() for x in ("quota", "429", "resource_exhausted")) else "provider_error"
-        raise RuntimeError(f"AGY_CALL_FAILED: exit={process.returncode}; category={detail}")
+        raise RuntimeError(f"AGY_CALL_FAILED: exit={process.returncode}; {cli_failure_detail(stdout, stderr)}")
     try:
         envelope = json.loads(stdout)
     except (ValueError, TypeError):
         raise RuntimeError("AGY_INVALID_JSON") from None
     if not isinstance(envelope, dict) or str(envelope.get("status", "")).lower() in {"error", "failed", "timeout", "cancelled"}:
-        raise RuntimeError("AGY_FAILED_ENVELOPE")
+        raise RuntimeError(f"AGY_FAILED_ENVELOPE: {cli_failure_detail(stdout, stderr)}")
     return envelope
 
 
@@ -101,7 +126,8 @@ def review_image(path: Path, *, subject: dict, agy_bin: str, model: str, timeout
         "The publisher adds the Chinese headline separately. Return UNCERTAIN if you cannot actually view the image. "
         "Describe what you actually see in observed_content, explain the decision, and return the required structured JSON."
     )
-    command = [agy_bin, "--model", model, "--effort", "high", "--mode", "plan", "--sandbox",
+    # 模型 ID 本身选择推理档位；Claude 等模型不接受 Gemini 的 --effort 参数。
+    command = [agy_bin, "--model", model, "--mode", "plan", "--sandbox",
                "--disable-slash-commands", "--dangerously-skip-permissions", "--add-dir", str(path.parent),
                "--json-schema", json.dumps(QUALITY_SCHEMA), "--output-format", "json",
                "--print-timeout", f"{timeout}s", "--print", prompt]

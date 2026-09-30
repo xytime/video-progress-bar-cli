@@ -172,7 +172,7 @@ def _generate(args: argparse.Namespace, task: AICoverTask, work_dir: Path) -> st
     if timeout_seconds <= 0:
         raise RuntimeError("insufficient time for agy generation and visual validation")
     command = [
-        args.agy_bin, "--model", args.model, "--effort", "high",
+        args.agy_bin, "--model", args.model,
         "--mode", "accept-edits", "--sandbox", "--disable-slash-commands", "--dangerously-skip-permissions",
         "--add-dir", str(work_dir), "--output-format", "json",
         "--print-timeout", f"{timeout_seconds}s", "--print", prompt,
@@ -275,6 +275,10 @@ def _run_task(args: argparse.Namespace, task: AICoverTask, queue: AICoverQueue) 
              "status": "failed", "stage": stage, "failed_at": _iso(_now()), "error": str(exc)[:1200]},
         )
         claim_path.unlink(missing_ok=True)
+        # 外层协调器依赖 stderr；只输出稳定 CLI 分类，其他诊断仍从任务回执读取。
+        error = str(exc)
+        summary = error if error.startswith(("AGY_CALL_FAILED:", "AGY_FAILED_ENVELOPE:", "PROCESS_TIMEOUT:")) else type(exc).__name__
+        print(f"AI_COVER_FAILED: stage={stage}; attempt={attempt_number}; {summary}", file=sys.stderr)
         return 1
 
 
