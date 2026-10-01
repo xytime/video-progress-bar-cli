@@ -1,3 +1,5 @@
+> **2026-10-01 增量规则**：仅新建且带 `codex-luna-cli-v1` 标记的 AGY 首选任务，在 AGY 三次耗尽且剩余时间足够时，协调器调用一次本机 `codex exec`（`gpt-5.6-luna`、`model_reasoning_effort=none`）生图，并在独立 CLI 会话中看图复核。通过后写 `generated_by=codex_luna_imagegen` 和 `resolution.source=codex_luna_ai_visual`；失败或来不及则沿用本地兜底。只用 Codex 登录态和内置生图工具，不使用 OpenAI API Key。旧任务身份和历史回执不改动。下文早期规则保留为历史。
+
 ---
 
 > **当前规则（2026-09-27 晚间修复）**：程序调用 AGY CLI 生图，再用独立 AGY CLI 会话实际看图并输出质量回执。取消 OCR 零字符闸；生成时提示避免非英文文字，英文/数字不构成拒收理由。最多三次尝试或截止后自动使用本地封面兜底。定时执行入口不再调用 Codex。以下旧时间点的无字硬闸、失败挂起、Codex 巡查等描述仅为历史记录，不能作为当前操作规范。实现边界和验收见 [可靠性修复规格](ai-cover-reliability-repair-spec.md)。

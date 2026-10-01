@@ -9,6 +9,7 @@
 | 1.3.0 | 2026-08-20 | Codex | 接受经过人工视觉验收的 Anti-gravity 底图，并保留来源标识 |
 | 1.4.0 | 2026-08-20 | Codex | 接受 Anti-gravity 机器 OCR 无文字验收结果，保留人工验收优先级 |
 | 1.5.0 | 2026-09-27 | Codex | 固化 AGY 首选任务、有限重试及禁止固定底图降级 |
+| 1.6.0 | 2026-10-01 | Codex | AGY 耗尽后验收带独立复核的 Luna CLI 底图，保留模型来源 |
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ from video_processing.utils.cover_agy import QUALITY_VERSION, valid_quality
 
 
 _TASK_MARKER = "AI_COVER_TASK_JSON"
+LUNA_QUALITY_VERSION = "codex-luna-cover-quality-v1"
+LUNA_FALLBACK_CONTRACT = "codex-luna-cli-v1"
 
 
 def _utc_now() -> datetime:
@@ -93,6 +96,7 @@ class AICoverQueue:
         generation_deadline_minutes: int,
         fallback_after_minutes: int,
         primary_provider: str = "codex",
+        enable_luna_fallback: bool = False,
         now: Optional[datetime] = None,
     ) -> AICoverTask:
         if fallback_after_minutes <= generation_deadline_minutes:
@@ -104,6 +108,8 @@ class AICoverQueue:
         if primary_provider == "agy":
             identity_payload["primary_provider"] = primary_provider
             identity_payload["quality_contract"] = QUALITY_VERSION
+            if enable_luna_fallback:
+                identity_payload["luna_fallback_contract"] = LUNA_FALLBACK_CONTRACT
         identity = json.dumps(
             identity_payload,
             ensure_ascii=False,
@@ -119,6 +125,7 @@ class AICoverQueue:
         task_payload = {
             "schema_version": 2,
             "quality_contract": QUALITY_VERSION if primary_provider == "agy" else "legacy",
+            "luna_fallback_contract": LUNA_FALLBACK_CONTRACT if primary_provider == "agy" and enable_luna_fallback else None,
             "primary_provider": primary_provider,
             "maximum_generation_attempts": 3 if primary_provider == "agy" else 1,
             "task_id": task_id,
@@ -202,11 +209,12 @@ class AICoverQueue:
         if result.get("task_id") != task.task_id or generated_by not in {
             "codex_imagegen",
             "antigravity_imagegen",
+            "codex_luna_imagegen",
         }:
             return None
         if result.get("uses_video_frame") is not False:
             return None
-        if task.primary_provider == "agy" and generated_by != "antigravity_imagegen":
+        if task.primary_provider == "agy" and generated_by not in {"antigravity_imagegen", "codex_luna_imagegen"}:
             return None
         if generated_by == "antigravity_imagegen":
             if completed_at >= task.antigravity_deadline:
@@ -230,6 +238,24 @@ class AICoverQueue:
                 if not quality_reviewed:
                     return None
             elif not human_reviewed and not machine_reviewed and not quality_reviewed:
+                return None
+        elif generated_by == "codex_luna_imagegen":
+            quality = result.get("quality_review")
+            if (task.primary_provider != "agy"
+                    or task.payload.get("quality_contract") != QUALITY_VERSION
+                    or task.payload.get("luna_fallback_contract") != LUNA_FALLBACK_CONTRACT
+                    or not self.antigravity_exhausted(task)
+                    or completed_at >= task.generation_deadline
+                    or result.get("transport") != "codex_cli"
+                    or result.get("model") != "gpt-5.6-luna"
+                    or result.get("reasoning_effort") != "none"
+                    or not isinstance(quality, dict)
+                    or result.get("machine_visual_review") != LUNA_QUALITY_VERSION
+                    or quality.get("version") != LUNA_QUALITY_VERSION
+                    or quality.get("provider") != "codex_cli_independent"
+                    or quality.get("task_id") != task.task_id
+                    or quality.get("sha256") != result.get("sha256")
+                    or not valid_quality(quality.get("review"))):
                 return None
         elif completed_at > task.generation_deadline:
             return None
@@ -262,10 +288,14 @@ class AICoverQueue:
             return current >= task.fallback_after
         if current >= task.antigravity_deadline:
             return True
+        return self.antigravity_exhausted(task)
+
+    @staticmethod
+    def antigravity_exhausted(task: AICoverTask) -> bool:
         try:
             attempt = json.loads((task.finish_dir / "antigravity_attempt.json").read_text())
-            return (attempt.get("status") in {"failed", "running"} and int(attempt.get("attempt_number", 0))
-                    >= int(task.payload.get("maximum_generation_attempts", 3)))
+            return (attempt.get("status") in {"failed", "running"}
+                    and int(attempt.get("attempt_number", 0)) >= int(task.payload.get("maximum_generation_attempts", 3)))
         except (OSError, ValueError, TypeError):
             return False
 

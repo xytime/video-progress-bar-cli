@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 3.71.0 | 2026-09-27 | Codex | 常规封面首选 AGY CLI；无字验收失败挂起，保留旧队列兼容配置。 |
+| 3.72.0 | 2026-10-01 | Codex | AGY 失败后可选 Codex Luna CLI 生图及独立复核，保留本地兜底。 |
 | 3.70.0 | 2026-09-25 | Codex | TED/TEDx 自动评分托底增加入库 ID 边界，默认关闭以保护历史待处理视频。 |
 | 3.69.0 | 2026-09-23 | Codex | 已就绪成片全天可提交，旧发布窗口配置不再阻断入口。 |
 | 3.68.0 | 2026-09-22 | Codex | 独立 AGY 文案配置及 App 子进程最小环境，不传入 API/机器人凭据。 |
@@ -475,7 +476,7 @@ class Settings(BaseSettings):
     enable_content_aware_cover: bool = False
 
     # 专属底图队列，保留旧开关名兼容部署。新任务首选 AGY CLI；
-    # AI 失败恢复本地兜底；生图与质量复核只使用 AGY，OCR 字符数不作为门禁。
+    # AI 失败恢复本地兜底；可选 Luna CLI 只处理新任务的 AGY 耗尽路径，OCR 字符数不作为门禁。
     enable_codex_cover_queue: bool = False
     ai_cover_primary_provider: Literal["agy", "codex"] = "agy"
     # 仅旧 Codex 任务在截止时间后启用 AGY 备用；新 AGY 首选任务不受此开关影响。
@@ -485,6 +486,12 @@ class Settings(BaseSettings):
     antigravity_image_model: str = "gemini-3.1-flash-image-preview"
     antigravity_timeout_seconds: int = 120
     ai_cover_quality_timeout_seconds: int = 90
+    # 只在 AGY 三次失败且仍有时间预算时启用；使用 Codex 登录态与内置生图工具，不调用 OpenAI API Key。
+    enable_codex_luna_cover_fallback: bool = False
+    codex_luna_cover_command: str = "codex"
+    codex_luna_cover_model: str = "gpt-5.6-luna"
+    codex_luna_cover_timeout_seconds: int = 180
+    codex_luna_cover_review_timeout_seconds: int = 60
 
     # 英语世界审核包的首选无字主视觉。失败时回退确定性报刊封面。
     enable_english_world_antigravity_primary: bool = True

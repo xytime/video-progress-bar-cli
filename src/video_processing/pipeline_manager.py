@@ -4551,6 +4551,7 @@ class PipelineManager:
                             generation_deadline_minutes=settings.ai_cover_generation_deadline_minutes,
                             fallback_after_minutes=settings.ai_cover_fallback_after_minutes,
                             primary_provider=settings.ai_cover_primary_provider,
+                            enable_luna_fallback=settings.enable_codex_luna_cover_fallback,
                         )
                         self.db.update_video_status(
                             yid,

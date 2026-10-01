@@ -9,6 +9,7 @@
 | 1.3.0 | 2026-08-20 | Codex | 覆盖 Anti-gravity 完成物来源验收 |
 | 1.5.0 | 2026-09-27 | Codex | 验证 AGY 首选立即执行、身份隔离、有限重试及无字硬闸 |
 | 1.4.0 | 2026-09-18 | Antigravity | 覆盖 Anti-gravity 兜底环境注入与非零退出记录 |
+| 1.6.0 | 2026-10-01 | Codex | 验证 Luna 新任务隔离、AGY 耗尽与独立质量回执 |
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from PIL import Image
 from src.video_processing.ai_cover_queue import AICoverQueue
 
 
-def _new_task(queue: AICoverQueue, tmp_path: Path, now: datetime, primary_provider="codex"):
+def _new_task(queue: AICoverQueue, tmp_path: Path, now: datetime, primary_provider="codex", enable_luna_fallback=False):
     return queue.create_task(
         prefix="abcdefghijk",
         youtube_id="abcdefghijk",
@@ -38,7 +39,38 @@ def _new_task(queue: AICoverQueue, tmp_path: Path, now: datetime, primary_provid
         fallback_after_minutes=34,
         now=now,
         primary_provider=primary_provider,
+        enable_luna_fallback=enable_luna_fallback,
     )
+
+
+def test_luna_contract_is_new_task_only_and_requires_verified_receipt(tmp_path: Path):
+    queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
+    now = datetime.now(timezone.utc) - timedelta(minutes=1)
+    old = _new_task(queue, tmp_path, now, "agy")
+    task = _new_task(queue, tmp_path, now, "agy", True)
+    assert old.task_id != task.task_id
+    assert old.payload.get("luna_fallback_contract") is None
+    visual = task.finish_dir / "visual.png"
+    Image.new("RGB", (768, 1024), "white").save(visual)
+    digest = hashlib.sha256(visual.read_bytes()).hexdigest()
+    result = {"task_id": task.task_id, "generated_by": "codex_luna_imagegen",
+              "completed_at": datetime.now(timezone.utc).isoformat(), "visual_filename": "visual.png",
+              "sha256": digest, "uses_video_frame": False, "transport": "codex_cli",
+              "model": "gpt-5.6-luna", "reasoning_effort": "none",
+              "machine_visual_review": "codex-luna-cover-quality-v1",
+              "quality_review": {"version": "codex-luna-cover-quality-v1", "provider": "codex_cli_independent",
+                                 "task_id": task.task_id, "sha256": digest,
+                                 "review": {"image_inspected": True, "subject_relevant": True,
+                                            "composition_complete": True, "adequate_detail": True,
+                                            "no_severe_artifacts": True, "decision": "PASS",
+                                            "observed_content": "A cleanroom and chips", "reason": "Relevant scene"}}}
+    (task.finish_dir / "result.json").write_text(json.dumps(result))
+    assert queue.accepted_visual(task) is None
+    (task.finish_dir / "antigravity_attempt.json").write_text(json.dumps({"status": "failed", "attempt_number": 3}))
+    assert queue.accepted_source(task) == "codex_luna_imagegen"
+    result["quality_review"]["sha256"] = "wrong"
+    (task.finish_dir / "result.json").write_text(json.dumps(result))
+    assert queue.accepted_visual(task) is None
 
 
 def test_task_is_markdown_and_is_idempotent(tmp_path: Path):

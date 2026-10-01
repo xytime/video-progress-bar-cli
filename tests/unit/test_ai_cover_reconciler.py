@@ -1,4 +1,10 @@
-"""恢复本地兜底，真实 DAL 验证中断/并发/已提交状态保护。"""
+"""恢复本地兜底，真实 DAL 验证中断/并发/已提交状态保护。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-10-01 | Codex | 验证 Luna 新任务路由与独立来源回执 |
+"""
 import fcntl
 import hashlib
 import json
@@ -7,19 +13,20 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 from scripts import reconcile_ai_cover_queue as reconciler
 from video_processing.ai_cover_queue import AICoverQueue
 from video_processing.db.database import PipelineDB
 from video_processing.core.cover_policy import compliant_cover_layout_policy
 
 
-def setup_task(tmp_path, monkeypatch, age=0):
+def setup_task(tmp_path, monkeypatch, age=0, luna=False):
     queue=AICoverQueue(tmp_path/'queue',tmp_path/'finish')
     task=queue.create_task(prefix='cover-guard',youtube_id='cover-guard',slice_index=0,
         cover_payload={'title':'测试标题'},visual_brief={},final_cover_path=tmp_path/'output'/'cover-guard_cover.jpg',
         provenance_path=tmp_path/'output'/'cover-guard_cover_provenance.json',brief_path=tmp_path/'output'/'brief.json',
         content_aware=False,generation_deadline_minutes=32,fallback_after_minutes=34,primary_provider='agy',
-        now=datetime.now(timezone.utc)-timedelta(minutes=age))
+        enable_luna_fallback=luna,now=datetime.now(timezone.utc)-timedelta(minutes=age))
     db=PipelineDB(str(tmp_path/'pipeline.db'));db.add_video('cover-guard','Title','channel',score=88)
     db.update_video_status('cover-guard','AI_COVER_PENDING')
     monkeypatch.setattr(reconciler,'PROJECT_ROOT',tmp_path)
@@ -29,6 +36,41 @@ def setup_task(tmp_path, monkeypatch, age=0):
         enable_antigravity_cover_fallback=False))
     monkeypatch.setattr(reconciler,'PipelineDB',lambda:db)
     return queue,task,db
+
+
+def test_luna_eligible_task_records_distinct_source(tmp_path, monkeypatch):
+    queue, task, db = setup_task(tmp_path, monkeypatch, luna=True)
+    (task.finish_dir / 'antigravity_attempt.json').write_text(json.dumps({'status':'failed','attempt_number':3}))
+    reconciler.settings.enable_codex_luna_cover_fallback = True
+    reconciler.settings.codex_luna_cover_timeout_seconds = 180
+    reconciler.settings.codex_luna_cover_review_timeout_seconds = 60
+    calls = []
+
+    def fake_luna(item):
+        calls.append(item.task_id)
+        visual = item.finish_dir / 'visual.png'
+        Image.new('RGB',(768,1024),'blue').save(visual)
+        digest = hashlib.sha256(visual.read_bytes()).hexdigest()
+        review = {'image_inspected': True, 'subject_relevant': True,
+                  'composition_complete': True, 'adequate_detail': True,
+                  'no_severe_artifacts': True, 'decision': 'PASS',
+                  'observed_content': '芯片制造', 'reason': '题材贴合'}
+        receipt = {'task_id':item.task_id,'generated_by':'codex_luna_imagegen',
+                   'completed_at':datetime.now(timezone.utc).isoformat(),
+                   'visual_filename':'visual.png','sha256':digest,'uses_video_frame':False,
+                   'transport':'codex_cli','model':'gpt-5.6-luna','reasoning_effort':'none',
+                   'machine_visual_review':'codex-luna-cover-quality-v1',
+                   'quality_review':{'version':'codex-luna-cover-quality-v1',
+                                     'provider':'codex_cli_independent','task_id':item.task_id,
+                                     'sha256':digest,'review':review}}
+        (item.finish_dir/'result.json').write_text(json.dumps(receipt))
+
+    monkeypatch.setattr(reconciler,'_run_luna',fake_luna)
+    monkeypatch.setattr(reconciler,'run_process',renderer)
+    assert reconciler.reconcile()==1
+    assert calls == [task.task_id]
+    assert json.loads((task.finish_dir/'resolution.json').read_text())['source']=='codex_luna_ai_visual'
+    assert db.get_video_by_youtube_id('cover-guard')['status']=='PENDING'
 
 
 def renderer(command, **kwargs):

@@ -13,6 +13,7 @@
 | 1.6.0 | 2026-09-18 | Antigravity | 接入统一子进程环境工厂 build_subprocess_env，统一管理子进程凭据与 PATH |
 | 1.7.0 | 2026-09-27 | Codex | 备用生图使用项目 venv 与 agy CLI，不再调用 API Key SDK |
 | 1.8.0 | 2026-09-27 | Codex | AGY 首选即时生成，三次失败或超时挂起，禁止新任务固定底图降级 |
+| 1.9.0 | 2026-10-01 | Codex | 新任务 AGY 耗尽后尝试一次 Luna CLI，独立复核后标记来源 |
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from config.settings import settings
-from video_processing.ai_cover_queue import AICoverQueue, AICoverTask
+from video_processing.ai_cover_queue import AICoverQueue, AICoverTask, LUNA_FALLBACK_CONTRACT
 from video_processing.core.cover_policy import validate_dedicated_cover_file
 from video_processing.db import PipelineDB
 from video_processing.utils.subprocess_env import build_subprocess_env
@@ -145,6 +146,40 @@ def _run_antigravity(task: AICoverTask) -> None:
                 "failed",
                 (result.stderr or result.stdout)[-500:] or "unknown rejection",
             )
+
+
+def _run_luna(task: AICoverTask) -> None:
+    attempt_path = task.finish_dir / "luna_attempt.json"
+    runtime_python = PROJECT_ROOT / ".venv" / "bin" / "python"
+    if not runtime_python.is_file():
+        attempt_path.write_text(json.dumps({"task_id": task.task_id, "status": "failed", "error": "RUNTIME_MISSING"}))
+        return
+    command = [str(runtime_python), str(PROJECT_ROOT / "scripts" / "run_codex_luna_cover_doer.py"),
+               "--task-id", task.task_id, "--queue-dir", str(PROJECT_ROOT / settings.ai_cover_queue_dir),
+               "--finish-dir", str(PROJECT_ROOT / settings.ai_cover_finish_dir),
+               "--codex-bin", settings.codex_luna_cover_command,
+               "--model", settings.codex_luna_cover_model,
+               "--timeout-seconds", str(settings.codex_luna_cover_timeout_seconds),
+               "--review-timeout-seconds", str(settings.codex_luna_cover_review_timeout_seconds)]
+    env = build_subprocess_env(include_gemini=False, include_telegram=False)
+    for key in ("OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "TELEGRAM_ADMIN_IDS"):
+        env.pop(key, None)
+    try:
+        result = run_process(command, cwd=PROJECT_ROOT,
+                             timeout=settings.codex_luna_cover_timeout_seconds
+                             + settings.codex_luna_cover_review_timeout_seconds + 45,
+                             env=env, cleanup_grace=15)
+    except (RuntimeError, OSError) as exc:
+        if not attempt_path.exists():
+            attempt_path.write_text(json.dumps({"task_id": task.task_id, "status": "failed",
+                                                "error": "WORKER_UNAVAILABLE"}))
+        logger.warning("[%s] Luna worker unavailable: %s", task.task_id, type(exc).__name__)
+        return
+    if result.returncode != 0:
+        if not attempt_path.exists():
+            attempt_path.write_text(json.dumps({"task_id": task.task_id, "status": "failed",
+                                                "error": "WORKER_EXIT_NONZERO"}))
+        logger.warning("[%s] Luna cover rejected; see luna_attempt.json", task.task_id)
 
 
 def _render_locked(
@@ -266,8 +301,8 @@ def reconcile() -> int:
             return 0
 
         try:
-            logger.info("[AI Cover] loaded primary=%s; quality=agy-cover-quality-v1; local fallback enabled; Codex disabled",
-                        settings.ai_cover_primary_provider)
+            logger.info("[AI Cover] loaded primary=%s; Luna CLI fallback=%s; local fallback enabled",
+                        settings.ai_cover_primary_provider, getattr(settings, "enable_codex_luna_cover_fallback", False))
             queue = AICoverQueue(
                 PROJECT_ROOT / settings.ai_cover_queue_dir,
                 PROJECT_ROOT / settings.ai_cover_finish_dir,
@@ -296,7 +331,20 @@ def reconcile() -> int:
                     _run_antigravity(task)
                     visual = queue.accepted_visual(task)
                     generated_by = queue.accepted_source(task)
-                visual_source = "antigravity_ai_visual" if generated_by == "antigravity_imagegen" else "codex_ai_visual"
+                if (visual is None and getattr(settings, "enable_codex_luna_cover_fallback", False)
+                        and task.payload.get("luna_fallback_contract") == LUNA_FALLBACK_CONTRACT
+                        and queue.antigravity_exhausted(task)
+                        and not (task.finish_dir / "luna_attempt.json").exists()
+                        and not queue._has_fresh_claim(task, datetime.now(timezone.utc))
+                        and (task.generation_deadline - datetime.now(timezone.utc)).total_seconds()
+                        >= settings.codex_luna_cover_timeout_seconds + settings.codex_luna_cover_review_timeout_seconds + 30):
+                    _run_luna(task)
+                    visual = queue.accepted_visual(task)
+                    generated_by = queue.accepted_source(task)
+                visual_source = {
+                    "antigravity_imagegen": "antigravity_ai_visual",
+                    "codex_luna_imagegen": "codex_luna_ai_visual",
+                }.get(generated_by, "codex_ai_visual")
                 render_failed = False
                 if visual:
                     try:
