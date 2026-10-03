@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.14.0 | 2026-10-03 | Codex | 新版结构化短标题只接受唯一项；原生 exportId 回查精确关联并拒绝歧义。 |
 | 1.13.0 | 2026-09-25 | Codex | 覆盖 post_list 仅返回长描述时的精确文案绑定与错配拒绝。 |
 | 1.12.1 | 2026-09-24 | Codex | 清洗后标题实际回读可绑定，原始长标题、回读不符和不可见输入不能绑定。 |
 | 1.12.0 | 2026-09-24 | Codex | 覆盖结构化 desc 的短标题提取与精确绑定，阻断仅凭唯一新增 ID 的误绑。 |
@@ -512,3 +513,32 @@ class TestPurgeStaleDoesNotRequeuePublishing:
 
         v = db.get_video_by_youtube_id("dlvid123456")
         assert v["status"] == "PENDING"
+
+@pytest.mark.parametrize('raw_title,expected', [
+    ([{'shortTitle': '唯一短标题'}], '唯一短标题'),
+    ([{'shortTitle': '一个'}, {'shortTitle': '另一个'}], ''),
+    ([], ''), ({'shortTitle': '不支持的对象'}, ''),
+])
+def test_structured_single_short_title_is_read_without_stringifying(raw_title, expected):
+    cards = _collect_management_cards_from_post_list_payload({'data': {'list': [
+        {'objectId': 'native-id', 'desc': {'shortTitle': raw_title, 'description': '正文'}}
+    ]}})
+    assert cards['native-id']['short_title'] == expected
+
+
+@pytest.mark.parametrize('collision', [False, True])
+def test_readback_accepts_only_unique_platform_export_alias(monkeypatch, tmp_path, collision):
+    import json
+    cards = {'management-id': {'platform_post_id': 'management-id',
+        'platform_export_id': 'receipt-id', 'identity_source': 'post_list_api',
+        'status_text': '审核中', 'platform_status': '0'}}
+    if collision:
+        cards['another-id'] = {'platform_post_id': 'another-id', 'platform_export_id': 'receipt-id'}
+    monkeypatch.setattr('wechat_uploader._load_management_cards', lambda _: (cards, True))
+    monkeypatch.setattr('wechat_uploader._capture_wechat_evidence', lambda *_: None)
+    state, _ = verify_management_publication_by_id(object(), tmp_path, 'receipt-id')
+    assert state == (MANAGEMENT_UNCERTAIN if collision else MANAGEMENT_UNDER_REVIEW)
+    if not collision:
+        proof = json.loads((tmp_path / 'management_readback.json').read_text())
+        assert proof['matched_by'] == 'EXACT_EXPORT_ID'
+        assert proof['management_object_id'] == 'management-id'

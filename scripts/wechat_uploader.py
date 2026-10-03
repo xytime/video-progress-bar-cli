@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.11 | 2026-10-03 | Codex | 原生组件 ID 绑定独立状态标签；唯一 exportId 直接关联才允许回查，兼容新版单项结构化短标题并保留脱敏身份证据。 |
 | 5.17.10 | 2026-10-03 | Codex | 禁用浏览器 2D Canvas 硬件加速，使封面裁剪和严格像素回读使用一致渲染路径。 |
 | 5.17.9 | 2026-10-03 | Codex | 对保存后重新打开的 Croppie Canvas 复现等比缩放，完整 RGBA 与指定封面精确相等才放行。 |
 | 5.17.8 | 2026-10-03 | Codex | 编辑器回读覆盖本地 CSS 背景资源，并留存脱敏媒体结构；不请求远端，不匹配仍禁止发表。 |
@@ -479,11 +480,33 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
     except Exception as exc:
         logger.warning("Unable to read platform record identifiers from management page: %s", exc)
         return {}
+    try:
+        component_records = page.locator(".post-feed-item").evaluate_all('''nodes => {
+            const records = [];
+            for (const node of nodes) {
+                const rect = node.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                const post = node.__vue__?.$props?.post;
+                if (!post || typeof post.objectId !== 'string' || !post.objectId.trim()) continue;
+                const status = node.querySelector('.bandage-list');
+                records.push({post_id: post.objectId, url: '', text: node.innerText || '',
+                    status_text: status?.innerText || '',
+                    export_id: typeof post.exportId === 'string' ? post.exportId : ''});
+            }
+            const counts = new Map();
+            for (const record of records) counts.set(record.post_id, (counts.get(record.post_id) || 0) + 1);
+            return records.filter(record => counts.get(record.post_id) === 1);
+        }''')
+        records.extend(component_records)
+    except Exception as exc:
+        logger.info("Native management component unavailable: %s", type(exc).__name__)
     return {
         str(record["post_id"]): {
             "platform_post_id": str(record["post_id"]),
             "platform_url": str(record.get("url") or ""),
             "card_text": str(record.get("text") or ""),
+            **({"status_text": str(record["status_text"]), "platform_export_id": str(record.get("export_id") or "")}
+               if "status_text" in record else {}),
         }
         for record in records
         if record.get("post_id")
@@ -507,13 +530,17 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
         if not post_id:
             continue
         desc = record.get("desc")
-        short_title = str(desc.get("shortTitle") or "").strip() if isinstance(desc, dict) else ""
+        raw_title = desc.get("shortTitle") if isinstance(desc, dict) else None
+        if isinstance(raw_title, list):
+            raw_title = raw_title[0].get("shortTitle") if len(raw_title) == 1 and isinstance(raw_title[0], dict) else None
+        short_title = raw_title.strip() if isinstance(raw_title, str) else ""
         description = (
             str(desc.get("description") or "") if isinstance(desc, dict)
             else str(desc or "")
         )
         cards[post_id] = {
             "platform_post_id": post_id,
+            **({"platform_export_id": record["exportId"]} if isinstance(record.get("exportId"), str) and record["exportId"] else {}),
             "platform_url": "",
             "card_text": description,
             "short_title": short_title,
@@ -679,12 +706,13 @@ def _load_management_cards(page, *, search_title: str | None = None) -> tuple[di
                 # 接口 desc 是用户正文，只用于提交绑定；同 ID 的页面状态必须单独保留。
                 dom_record = cards.get(post_id)
                 if dom_record:
-                    api_record["status_text"] = dom_record.get("card_text", "")
+                    api_record["status_text"] = dom_record.get("status_text", dom_record.get("card_text", ""))
                     api_record["platform_url"] = dom_record.get("platform_url", "")
                 cards[post_id] = api_record
         except Exception as exc:
             logger.warning("Unable to read native post_list response for exact submission binding: %s", exc)
     _remove_post_list_listener()
+    logger.info("Management readback: native_responses=%s cards=%s", len(post_list_responses), len(cards))
     return cards, True
 
 
@@ -854,10 +882,22 @@ def verify_management_publication_by_id(
             _load_management_cards(page, search_title=expected_title)
             if expected_title else _load_management_cards(page)
         )
-        record = cards.get(normalized_post_id) if loaded else None
+        matches = [card for card in cards.values() if normalized_post_id in {
+            card.get("platform_post_id"), card.get("platform_export_id")
+        }] if loaded else []
+        record = matches[0] if len(matches) == 1 else None
+        try:
+            evidence_root.mkdir(parents=True, exist_ok=True)
+            snapshot = [{key: card.get(key, "") for key in (
+                "platform_post_id", "platform_export_id", "short_title", "platform_status", "status_text"
+            )} for card in cards.values()]
+            (evidence_root / f"management_identity_snapshot_{attempt}.json").write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            logger.info("Management identity evidence unavailable: %s", type(exc).__name__)
         if record:
             api_identity = record.get("identity_source") == "post_list_api"
-            status_text = record.get("status_text", "") if api_identity else record.get("card_text", "")
+            status_text = record.get("status_text", "") if api_identity else record.get("status_text", record.get("card_text", ""))
             state = classify_management_publication(status_text)
             # 原生 status 数值尚无经核验的语义映射，不能按 desc、播放量或截图猜公开状态。
             reason = "API_STATUS_UNMAPPED" if api_identity and not status_text else "DOM_STATUS_TEXT"
@@ -865,6 +905,9 @@ def verify_management_publication_by_id(
                 evidence_root.mkdir(parents=True, exist_ok=True)
                 (evidence_root / "management_readback.json").write_text(json.dumps({
                     "platform_post_id": normalized_post_id,
+                    "management_object_id": record.get("platform_post_id", ""),
+                    "management_export_id": record.get("platform_export_id", ""),
+                    "matched_by": "EXACT_OBJECT_ID" if record.get("platform_post_id") == normalized_post_id else "EXACT_EXPORT_ID",
                     "identity_source": record.get("identity_source", "dom"),
                     "platform_status": record.get("platform_status", ""),
                     "state": state,
@@ -971,7 +1014,7 @@ def _find_wechat_cover_preview_card(label, evidence_dir: Path | None = None):
 def _wechat_cover_editor_matches_file(dialog, cover_path: Path, evidence_dir: Path | None = None) -> bool:
     """只核对已解码的大图本地资源，地址和图像字节不写日志或证据。"""
     expected = hashlib.sha256(cover_path.read_bytes()).hexdigest()
-    result = dialog.locator("*").evaluate_all("""async elements => {
+    result = dialog.locator("*").evaluate_all(r"""async elements => {
         const bytes = [], trace = [];
         for (const el of elements) {
             const rect = el.getBoundingClientRect();
