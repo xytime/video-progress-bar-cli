@@ -24,3 +24,9 @@
 正式运行采用：`r63spwe1LCI` 的49段字幕在 Gemini / DeepSeek / Google 全部失败后选中 `codex:gpt-5.6-luna`，宿主质量分100、中文覆盖率1，完整互动成片已生成；`gHbGugI5kag` 也通过 Codex 字幕，但随后被原有频道策略拒绝，保持停止。`ybBuD_dImN4` 的156段字幕分四批完整通过，开始渲染。`0qRcIglHBxE` 的文案在 AGY 冷却后选中 Codex，实际子进程命中验收缓存，并完成成片与专属封面。
 
 近24小时快照共14个文字技术失败任务：13个具名恢复，另1个已被既有执行者接手，没有清零重试次数或恢复策略拒绝项。逐条恢复回执保存在 `output/codex_text_validation/recovery_batch_receipt.json`。截至2026-10-03 14:59，两个验收成片因视频号封面回读未通过而停在提交前，均无投稿回执或平台账本；此结果不计作发布成功，成片及质量缓存继续保留。
+
+封面发布验收增量：平台保存后的裁剪编辑器使用 `canvas.cr-image`，原有图片地址/字节回读无法覆盖此显示方式。`wechat_cover_canvas.py` 复现 Croppie 的小数等比缩放，要求完整 RGBA 与本地封面相等，并保留文件哈希及差异计数。可视 Chromium 的硬件 Canvas 重采样产生小幅差异；上传器固定禁用 2D Canvas 硬件加速后，真实可视浏览器核验差异为0。仍要求保存成功、重新打开编辑器回读及正常关闭，没有人工覆盖门禁。27项相关隔离浏览器与封面门禁回归通过（`/private/tmp/video-pytest-x38bc0qc`）；真实只读探针主动阻断发表，证据见 `output/codex_text_validation/cover_readonly_probe/`。修复分别提交于 `11f274d`、`1f4b65e`。三条已就绪验收成片在检查无投稿回执/平台账本后恢复正常提交，保留所有加工检查点和重试次数。
+
+截至2026-10-03 15:48，恢复批次中4条已走正常流水线获得视频号受理：`ybBuD_dImN4`、`0qRcIglHBxE`、`ahnIpn_IAEU` 为 `SUBMITTED_BOUND`，回执使用同会话唯一新增原生 ID 与完整文案精确匹配；`r63spwe1LCI` 为 `SUBMITTED_UNBOUND`，平台受理后未能唯一绑定 ID，保持停止重传，禁止仅按标题补绑。每条证据位于 `output/wechat_evidence/<youtube_id>/<本次提交编号>/submission_receipt.json`，这不等于公开可见确认。其余9条继续加工/排队，1条频道策略拒绝保持停止。正式 Codex 字幕审计已有4条通过（含被后续策略拒绝的1条），质量分100、中文覆盖率1；`0qRcIglHBxE` 单独验证了正式文案兜底入口。
+
+15:54 独立只读回查：对3个提交时绑定 ID 各执行一次有界回查，均返回状态不确定（退出码7），没有改写为公开发布。新列表中对应内容返回的 `export/...` 标识与本次提交回执不一致；现有原生 ID 门禁保持停止，禁止按标题重新绑定或重传。证据见 `output/codex_text_validation/native_readback_results.json` 及逐条管理页快照。公开状态回读仍是独立的平台适配问题，不把4条平台受理结果计作已确认公开发布。
