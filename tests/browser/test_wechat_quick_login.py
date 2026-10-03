@@ -3,10 +3,54 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-03 | Codex | 回归扫码页保留创建地址且授权晚于十五秒时，仍须等待正向控件和独立复用成功才保存。 |
 | 1.0.0 | 2026-09-26 | Codex | 实际跨域 iframe 第 11 秒授权、完整导航及错误来源零点击。 |
 """
 from tests.browser_fixtures import chromium
 from scripts.wechat_uploader import _try_wechat_quick_login
+
+
+def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromium, tmp_path):
+    import json
+    from unittest.mock import patch
+    from scripts.wechat_uploader import _wait_and_save_login
+    from video_processing.core.wechat_auth_state import read_wechat_auth_state
+
+    state_file = tmp_path / "wechat_state.json"
+    old_state = {"cookies": [], "origins": []}
+    state_file.write_text(json.dumps(old_state))
+    ready_html = '<input type="file" accept="video/mp4"><button>上传视频</button>'
+    login_html = '''<div class="login-box">使用微信扫码登录</div><script>
+    setTimeout(() => {
+      document.cookie = 'scanned=1; path=/; Secure; SameSite=Lax';
+      document.body.innerHTML = READY;
+    }, 16000);
+    </script>'''.replace('READY', json.dumps(ready_html))
+
+    def route(r):
+        scanned = "scanned=1" in r.request.headers.get("cookie", "")
+        r.fulfill(content_type="text/html; charset=utf-8", body=ready_html if scanned else login_html)
+
+    original_new_context = chromium.new_context
+    def routed_context(*args, **kwargs):
+        ctx = original_new_context(*args, **kwargs)
+        ctx.route("**/*", route)
+        return ctx
+
+    context = routed_context()
+    page = context.new_page()
+    try:
+        page.goto("https://channels.weixin.qq.com/platform/post/create")
+        assert page.locator(".login-box").is_visible()
+        assert json.loads(state_file.read_text()) == old_state
+        with patch.object(chromium, "new_context", side_effect=routed_context), \
+             patch("scripts.wechat_uploader._notify_wechat_login_success"):
+            _wait_and_save_login(page, context, state_file, method="scan_qr")
+        assert any(cookie["name"] == "scanned" for cookie in json.loads(state_file.read_text())["cookies"])
+        assert read_wechat_auth_state(state_file)["authorized_at"] > 0
+        page.screenshot(path=str(tmp_path / "delayed-scan-saved-after-reuse.png"))
+    finally:
+        context.close()
 
 
 def _page(chromium, *, host='open.weixin.qq.com', delay=11000):
@@ -308,5 +352,4 @@ def test_uploader_management_page_fails_hard_on_dom_error(chromium, tmp_path):
                 platform_post_id="export/mock_12345",
                 login_only=True,
             )
-
 

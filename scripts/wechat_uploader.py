@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.1 | 2026-10-03 | Codex | 扫码等待按完整十分钟期限轮询正向发布控件，避免登录页沿用 /post/create 地址而十五秒提前退出；来源与独立复用门禁保持不变。 |
 | 5.17.0 | 2026-09-28 | Antigravity | 接入统一 wechat_browser_context 工厂：统一初始 context 与内部 reuse_ctx 的真实 Chrome UA、Viewport 与 init_script 反检测指纹，确保独立复用门禁指纹与初始环境 100% 一致；relogin 保证初始不加载旧会话。 |
 | 5.16.0 | 2026-09-28 | Antigravity | 严格过滤 login frame 非默认端口与 userinfo；管理页分支与发布检测中遇到 DOM_ERROR 立即失败拒绝 fail-open。 |
 | 5.15.0 | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract；修复 context.browser 为空 fail-open、初始检查未知路由放行、登录通知过度承诺与发布等待期源重核验。 |
@@ -1403,13 +1404,24 @@ def _wait_and_save_login(
     from video_processing.core.wechat_auth_state import record_wechat_auth_attempt
     from video_processing.core.wechat_page_contract import wait_for_publish_ready_with_spa_guard
 
+    login_deadline = time.monotonic() + 600.0
     try:
         page.wait_for_url("**/post/create", timeout=600000)
     except Exception as exc:
         record_wechat_auth_attempt(state_file, method=method, success=False, reason="NAVIGATION_TIMEOUT")
         raise RuntimeError(f"Wait for login redirect failed: {type(exc).__name__}") from exc
 
-    ready, err_cat = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=15.0)
+    # 登录 iframe 可以留在 /post/create：URL 命中不代表用户已完成扫码。
+    # 使用原十分钟总期限继续等待正向控件；未知来源仍立即拒绝。
+    ready, err_cat = False, "PAGE_UNREADY"
+    while time.monotonic() < login_deadline:
+        remaining = login_deadline - time.monotonic()
+        ready, err_cat = wait_for_publish_ready_with_spa_guard(
+            page, timeout_seconds=min(15.0, remaining)
+        )
+        if ready or err_cat == "INVALID_ORIGIN":
+            break
+        page.wait_for_timeout(250)
     if not ready:
         record_wechat_auth_attempt(state_file, method=method, success=False, reason=err_cat or "PAGE_UNREADY")
         raise RuntimeError(f"Positive publish controls not found on /post/create after login redirect ({err_cat})")
