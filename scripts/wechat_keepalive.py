@@ -13,6 +13,7 @@
 | 1.4.0   | 2026-09-25 | Codex | 登录过期时保留会话龄标记，让控制台恢复流程仍能识别过期会话。 |
 | 1.5.0   | 2026-09-28 | Antigravity | 整改 WX-AUTH-20260927：去除首次保活伪造授权时间；增加官方来源与正向发布控件校验（消除乐观成功）；导航有界重试并分离网络超时/SPA未就绪/LOGIN_REQUIRED；存储原子写入且失败报失败；锁冲突返回 EXIT_WECHAT_SESSION_BUSY (11)。 |
 | 1.6.0   | 2026-09-28 | Antigravity | 接入统一 wechat_page_contract，消除判据漂移；DOM探针异常不掩盖登录态；有界等待SPA正向控件；白名单脱敏失败分类 |
+| 1.8.0   | 2026-10-03 | Codex | 首次发布控件等待由八秒调整到四十五秒，与已验证的独立登录复用窗口一致；来源和登录提示仍立即拒绝。 |
 | 1.7.0   | 2026-09-28 | Antigravity | 接入统一 wechat_browser_context 工厂：统一 Viewport、真实 Chrome UA 与 init_script 反检测指纹。 |
 
 Exit Codes:
@@ -223,7 +224,7 @@ def run_keepalive(
             return 1
 
         # 1. 使用统一 SPA 保护门禁进行有界正向控件判定（结合协议、域名、路径与登录提示）
-        ready, err_type = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=8.0)
+        ready, err_type = wait_for_publish_ready_with_spa_guard(page, timeout_seconds=45.0)
         if not ready:
             err_cat = err_type or "PAGE_UNREADY"
             logger.warning(f"[Keepalive] SPA publish page not ready: {err_cat}")

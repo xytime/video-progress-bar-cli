@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-03 | Codex | 重新打开保存后的封面编辑器，以已解码本地大图与指定文件精确哈希核验；不同文件拒绝。 |
 | 1.1.0 | 2026-10-03 | Codex | 覆盖真实混排 form-item 的编辑入口收窄、无媒体和多个入口拒绝。 |
 | 1.0.0 | 2026-10-03 | Codex | 标签与图片为兄弟节点时确认图片变化；视频变化与缺失封面均拒绝。 |
 """
@@ -10,6 +11,7 @@ from tests.browser_fixtures import chromium
 from scripts.wechat_uploader import (
     _find_wechat_cover_preview_card, _wechat_cover_preview_signatures,
     _wechat_cover_preview_visual_signature, _is_wechat_cover_applied,
+    _wechat_cover_editor_matches_file, _verify_wechat_cover_editor_readback,
 )
 
 
@@ -76,5 +78,33 @@ def test_cover_resource_change_survives_failed_image_decode(chromium):
         assert "declared-img:https://example.invalid/before.jpg" in before
         page.locator("img").evaluate("node => node.src = 'https://example.invalid/after.jpg'")
         assert _is_wechat_cover_applied(page, card, before, None)
+    finally:
+        page.close()
+
+
+def test_cover_editor_readback_requires_exact_decoded_file(chromium, tmp_path):
+    import base64
+    import io
+    from PIL import Image
+    image = Image.new("RGB", (200, 200), "red")
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    cover = tmp_path / "cover.png"
+    cover.write_bytes(stream.getvalue())
+    src = "data:image/png;base64," + base64.b64encode(stream.getvalue()).decode()
+    page = chromium.new_page()
+    try:
+        page.set_content(f'''<div id="card"><button onclick="document.querySelector('.edit-cover-dialog-container').style.display='block'">编辑</button></div>
+          <div class="edit-cover-dialog-container" style="display:none">
+          <img src="{src}"><button onclick="this.parentElement.style.display='none'">取消</button></div>''')
+        dialog = page.locator(".edit-cover-dialog-container")
+        assert _verify_wechat_cover_editor_readback(page, page.locator("#card"), cover, tmp_path)
+        assert not dialog.is_visible()
+        evidence = (tmp_path / "cover_editor_readback.json").read_text()
+        assert '"decoded_local_image_matches_file": true' in evidence
+        assert src not in evidence
+        cover.write_bytes(b"different-file")
+        assert not _verify_wechat_cover_editor_readback(page, page.locator("#card"), cover, tmp_path)
+        assert not dialog.is_visible()
     finally:
         page.close()

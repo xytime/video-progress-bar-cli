@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.7 | 2026-10-03 | Codex | 缩略图资源未更新时重新打开编辑器，按已解码本地图像字节哈希回读指定封面；未知或不匹配仍阻止发表。 |
 | 5.17.6 | 2026-10-03 | Codex | 实测封面标签父节点包含整个发布表单；从唯一可见编辑入口定位最小图片卡片，留存无凭据节点诊断；图片未解码时同时比较声明的资源地址。 |
 | 5.17.5 | 2026-10-03 | Codex | 封面指纹限定在包含真实预览图片的最小字段范围，避免只比较标签父节点；拒绝扩展到视频播放器或整页。 |
 | 5.17.4 | 2026-10-03 | Codex | 独立复用页面初始化观察窗口从十秒调整到四十五秒；仍只凭官方发布强控件保存会话，登录提示与未知来源不放行。 |
@@ -962,6 +963,66 @@ def _find_wechat_cover_preview_card(label, evidence_dir: Path | None = None):
             (evidence_dir / "cover_preview_scope.json").write_text(
                 json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+
+
+def _wechat_cover_editor_matches_file(dialog, cover_path: Path) -> bool:
+    """只核对已解码的大图本地资源，地址和图像字节不写日志或证据。"""
+    expected = hashlib.sha256(cover_path.read_bytes()).hexdigest()
+    images = dialog.locator("img").evaluate_all("""async images => {
+        const bytes = [];
+        for (const img of images) {
+            const rect = img.getBoundingClientRect();
+            if (rect.width < 150 || rect.height < 150 || !img.naturalWidth) continue;
+            const src = img.currentSrc || img.src;
+            // 仅本地上传预览的 data/blob；拒绝请求远端或读取任意文件。
+            if (!src.startsWith('data:image/') && !src.startsWith('blob:')) continue;
+            try { bytes.push(Array.from(new Uint8Array(await (await fetch(src)).arrayBuffer()))); }
+            catch (_) { /* 未知资源不放行 */ }
+        }
+        return bytes;
+    }""")
+    return any(hashlib.sha256(bytes(data)).hexdigest() == expected for data in images)
+
+
+def _verify_wechat_cover_editor_readback(page, cover_card, cover_path: Path, evidence_dir: Path) -> bool:
+    """保存后重新打开编辑器，并核对指定文件仍是已解码的大图，再取消关闭。"""
+    proof = {"expected_file_sha256": hashlib.sha256(cover_path.read_bytes()).hexdigest(),
+             "decoded_local_image_matches_file": False, "editor_closed_after_readback": False,
+             "stage": "hover"}
+    try:
+        cover_card.hover(force=True)
+        edits = cover_card.get_by_text("编辑", exact=True)
+        visible = [edits.nth(i) for i in range(edits.count()) if edits.nth(i).is_visible()]
+        if len(visible) != 1:
+            proof["stage"] = "edit_entry_missing_or_ambiguous"
+            return False
+        proof["stage"] = "open_editor"
+        visible[0].click(force=True)
+        dialog = None
+        for _ in range(10):
+            page.wait_for_timeout(1_000)
+            dialog = _find_wechat_cover_dialog(page)
+            if dialog:
+                break
+        if not dialog:
+            proof["stage"] = "editor_not_opened"
+            return False
+        proof["stage"] = "compare_file"
+        proof["decoded_local_image_matches_file"] = _wechat_cover_editor_matches_file(dialog, cover_path)
+        _capture_wechat_evidence(page, evidence_dir, "cover_editor_readback")
+        cancel = dialog.get_by_role("button", name="取消", exact=True)
+        proof["stage"] = "close_editor"
+        if cancel.count() == 1 and cancel.is_visible():
+            cancel.click(force=True)
+            proof["editor_closed_after_readback"] = _wait_for_wechat_cover_dialog_to_close(page)
+        proof["stage"] = "complete"
+        return proof["decoded_local_image_matches_file"] and proof["editor_closed_after_readback"]
+    except Exception as exc:
+        proof["error_type"] = type(exc).__name__
+        return False
+    finally:
+        (evidence_dir / "cover_editor_readback.json").write_text(
+            json.dumps(proof, indent=2), encoding="utf-8")
 
 
 def _wechat_cover_preview_signatures(container) -> frozenset[str]:
@@ -2504,6 +2565,10 @@ def run_uploader(
                                 success_marker_observed=cover_success_marker,
                                 evidence_dir=evidence_root,
                             )
+                            if not cover_set and cover_success_marker and not _find_wechat_cover_dialog(page):
+                                cover_set = _verify_wechat_cover_editor_readback(
+                                    page, cover_card, Path(cover_abs), evidence_root,
+                                )
                         break  # 成功处理一张卡片即退出循环
                     except Exception as e_card:
                         logger.warning(f"Cover strategy A failed for card \'{card_sel}\': {e_card}")
