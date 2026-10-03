@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.91.0 | 2026-10-03 | Codex | TED/TEDx 两个自动候选入口及提交前统一检查源点赞率，切片继承父视频指标。 |
 | 3.90.1 | 2026-10-03 | Codex | 发布资源锁冲突时按领取归属原子释放未开始的就绪任务，保留缓存和重试计数并排除投稿账本。 |
 | 3.90.0 | 2026-10-03 | Codex | 具名恢复近24小时文字供应商失败，原子排除投稿账本、运行占用和策略拒绝。 |
 | 3.89.0 | 2026-09-27 | Codex | 封面挂起原因仅原子写入仍处于 AI_COVER_PENDING 的条目。 |
@@ -4952,6 +4953,42 @@ class PipelineDB:
             row = cursor.fetchone()
             return bool(row and row["bypass_censorship"])
 
+    @staticmethod
+    def _ted_like_rate_filter() -> tuple[str, tuple[Any, ...]]:
+        """pv 为任务、origin 为原视频；缺失/零播放指标不放行 TED。"""
+        return (
+            """(COALESCE(origin.channel_id, pv.channel_id, '') NOT IN (?, ?)
+                OR (origin.view_count > 0 AND origin.like_count >= 0
+                    AND origin.like_count * 100.0 > origin.view_count * ?))""",
+            (*TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_min_like_rate_pct),
+        )
+
+    def is_ted_like_rate_eligible(self, youtube_id: str, slice_index: int = 0) -> bool:
+        """提交前读取最新原视频指标；不使用调用者的排队快照。"""
+        rate_sql, rate_params = self._ted_like_rate_filter()
+        with self.get_connection() as conn:
+            row = conn.execute(
+                f"""SELECT 1 FROM processed_videos pv
+                    LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
+                    WHERE pv.youtube_id = ? AND pv.slice_index = ? AND {rate_sql}""",
+                (youtube_id, slice_index, *rate_params),
+            ).fetchone()
+            return row is not None
+
+    def defer_ted_like_rate_video(self, youtube_id: str, reason: str, slice_index: int = 0) -> None:
+        """未进入投稿边界的任务回队，保留评分、缓存和就绪状态。"""
+        with self.get_connection() as conn:
+            conn.execute("""UPDATE processed_videos SET status = 'PENDING',
+                publication_wait_reason = ?, error_msg = ?, process_pid = NULL,
+                updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ? AND slice_index = ?
+                  AND status IN ('PENDING', 'PROCESSING', 'DOWNLOADING', 'COPYWRITING',
+                                 'TRANSCRIBING', 'RENDERING', 'PUBLISH_PRECHECK', 'WECHAT_DEFERRED')
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = processed_videos.id)
+                """, (reason, reason, youtube_id, slice_index))
+            conn.commit()
+
     def get_high_score_pending_videos(self, min_score: int = 75, limit: int = 5,
                                       channel_min_scores: Optional[Dict[str, int]] = None,
                                       allow_deferred_predecessors: bool = False,
@@ -4970,15 +5007,18 @@ class PipelineDB:
             threshold_clauses.append("(pv.channel_id = ? AND pv.score >= ?)")
             threshold_params.extend([channel_id, channel_min_score])
         threshold_sql = " OR ".join(threshold_clauses)
+        rate_sql, rate_params = self._ted_like_rate_filter()
         terminal_states = ["PUBLISHED", "IGNORED", "COMPLETED", "HISTORICAL_ARCHIVED"]
         if allow_deferred_predecessors:
             terminal_states.append("WECHAT_DEFERRED")
         terminal_placeholders = ", ".join("?" for _ in terminal_states)
         readiness = "" if ready_only is None else ("AND IFNULL(pv.preparation_ready, 0) = " + str(int(ready_only)))
         query = f"""
-            SELECT * FROM processed_videos pv
+            SELECT pv.* FROM processed_videos pv
+            LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
             WHERE pv.status = 'PENDING' AND ({threshold_sql}) {readiness}
               AND NOT (pv.channel_id IN (?, ?) AND COALESCE(pv.parent_id, pv.id) <= ?)
+              AND {rate_sql}
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
                               WHERE c.video_id = pv.id AND c.next_attempt_at > CURRENT_TIMESTAMP)
               AND COALESCE(pv.source, 'AUTO') != 'DISCOVERY'
@@ -5012,6 +5052,7 @@ class PipelineDB:
             cursor = conn.execute(
                 query,
                 (*threshold_params, *TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_auto_publish_after_id,
+                 *rate_params,
                  f"-{max(1, int(source_subtitle_retry_hours))} hours", *terminal_states, limit),
             )
             return [dict(row) for row in cursor.fetchall()]
@@ -5031,8 +5072,10 @@ class PipelineDB:
             threshold_clauses.append("(pv.channel_id = ? AND pv.score >= ?)")
             threshold_params.extend([channel_id, channel_min_score])
         threshold_sql = " OR ".join(threshold_clauses)
+        rate_sql, rate_params = self._ted_like_rate_filter()
         query = f"""
             SELECT pv.* FROM processed_videos pv
+            LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
             WHERE pv.status = 'PENDING'
               AND pv.source = 'AUTO'
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
@@ -5043,6 +5086,7 @@ class PipelineDB:
               AND IFNULL(pv.preparation_ready, 0) = 0
               AND ({threshold_sql})
               AND NOT (pv.channel_id IN (?, ?) AND COALESCE(pv.parent_id, pv.id) <= ?)
+              AND {rate_sql}
               AND pv.channel_id NOT IN (
                   SELECT channel_id FROM recommended_channels WHERE status = 'BLACKLISTED'
               )
@@ -5063,6 +5107,7 @@ class PipelineDB:
             cursor = conn.execute(
                 query,
                 (*threshold_params, *TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_auto_publish_after_id,
+                 *rate_params,
                  f"-{max(1, int(retry_hours))} hours", limit),
             )
             return [dict(row) for row in cursor.fetchall()]

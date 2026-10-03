@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.74.0 | 2026-10-03 | Codex | TED/TEDx 自动候选新增严格大于 0.6% 的源视频点赞率门槛，保持评分线。 |
 | 3.73.0 | 2026-10-03 | Codex | 经济型 Codex CLI 文字兜底，默认关闭并固定在字幕供应商末尾。 |
 | 3.71.0 | 2026-09-27 | Codex | 常规封面首选 AGY CLI；无字验收失败挂起，保留旧队列兼容配置。 |
 | 3.72.0 | 2026-10-01 | Codex | AGY 失败后可选 Codex Luna CLI 生图及独立复核，保留本地兜底。 |
@@ -380,6 +381,9 @@ class Settings(BaseSettings):
     # TED/TEDx 新视频托底的存量边界：仅 id 大于此值的 AUTO 视频适用；0 表示关闭。
     # 启用时写入当时 processed_videos 的最大 id，避免历史 PENDING 被批量释放。
     ted_auto_publish_after_id: int = 0
+
+    # 百分数单位：0.6 表示 0.6%；严格大于，不按显示值四舍五入。
+    ted_min_like_rate_pct: float = Field(default=0.6, ge=0, le=100, allow_inf_nan=False)
 
     # 演讲/TED/高校频道使用较低的自动发布线；普通频道仍使用 75。
     speech_publish_score_line: int = 40

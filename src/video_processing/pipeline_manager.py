@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.64.0 | 2026-10-03 | Codex | TED/TEDx 加工与提交前重查点赞率，低互动任务保留缓存回队，不改评分。 |
 | 3.63.1 | 2026-10-03 | Codex | 区分单视频与共享发布锁冲突，未开始投稿的就绪领取安全回队，保留既有提交终态。 |
 | 3.63.0 | 2026-09-27 | Codex | 常规封面队列固化 AGY 首选与无文字底图要求。 |
 | 3.62.0 | 2026-09-26 | Antigravity | 安全访问 _trigger_source 属性以兼容单元测试实例化与非完整管线实例。 |
@@ -3618,12 +3619,23 @@ class PipelineManager:
             if claimed:
                 self.db.update_process_pid(yid, None, slice_index=slice_index)
 
+    def _block_ted_like_rate_if_needed(self, yid: str, slice_index: int = 0) -> bool:
+        """排队后指标可能变化；提交前重新检查，避免高分/旧快照绕过。"""
+        if self.db.is_ted_like_rate_eligible(yid, slice_index=slice_index):
+            return False
+        reason = f"TED/TEDx 源 YouTube 点赞率须严格 >{settings.ted_min_like_rate_pct:g}%；当前不达标或指标缺失，等待更新"
+        self.db.defer_ted_like_rate_video(yid, reason, slice_index=slice_index)
+        logger.info("[%s] %s", yid, reason)
+        return True
+
     def _publish_prepared_assets(self, video, copy_file, title_file, category_file, cover_file):
         """复用原有上传、内容证据与受理回执协议。"""
         yid = video["youtube_id"]
         slice_index = int(video.get("slice_index") or 0)
         prefix = f"{yid}_s{slice_index}" if slice_index else yid
         title = video.get("title", yid)
+        if self._block_ted_like_rate_if_needed(yid, slice_index=slice_index):
+            return
         # ── 4. PUBLISHING ─────────────────────────────────────────────────
         # Sequence Locking 二次校验（防止在 queue 排队期间状态改变）
         if slice_index > 0:
@@ -3894,6 +3906,9 @@ class PipelineManager:
                 return
             if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
                 logger.info("[%s] 已跨越视频号提交边界，保留既有产物，不参与标题升级。", prefix)
+                return
+
+            if self._block_ted_like_rate_if_needed(yid, slice_index=slice_index):
                 return
 
             if submission_only:

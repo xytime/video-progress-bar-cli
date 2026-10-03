@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-03 | Codex | 托底测试使用满足新增点赞率条件的指标，评分及历史隔离断言保持。 |
 | 1.0.0 | 2026-09-25 | Codex | 验证新视频托底及历史主视频、切片从两个自动候选入口隔离。 |
 """
 
@@ -17,13 +18,13 @@ TEDX = "UCsT0YIqwnpJCM-mx7-gSA4Q"
 def test_ted_floor_only_admits_future_auto_videos(tmp_path, monkeypatch):
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     db = manager.db
-    assert db.add_video("old-ted", "Old TED", TED, score=0, source="AUTO", view_count=1)
+    assert db.add_video("old-ted", "Old TED", TED, score=0, source="AUTO", view_count=1, like_count=1)
     boundary = db.get_video_by_youtube_id("old-ted")["id"]
     monkeypatch.setattr(settings, "ted_auto_publish_after_id", boundary)
     monkeypatch.setattr(settings, "speech_publish_score_line", 40)
 
-    assert db.add_video("new-ted", "New TED", TED, score=0, source="AUTO", view_count=1)
-    assert db.add_video("new-tedx", "New TEDx", TEDX, score=0, source="AUTO", view_count=1)
+    assert db.add_video("new-ted", "New TED", TED, score=0, source="AUTO", view_count=1, like_count=1)
+    assert db.add_video("new-tedx", "New TEDx", TEDX, score=0, source="AUTO", view_count=1, like_count=1)
     assert db.add_video("other", "Other channel", "other-channel", score=0, source="AUTO", view_count=1)
     assert db.add_video("discovery", "TED discovery", TED, score=0, source="DISCOVERY", view_count=1)
     assert db.add_video("manual-lock", "Manually scored TED", TED, score=0, source="AUTO", view_count=1)
@@ -60,7 +61,7 @@ def test_ted_floor_only_admits_future_auto_videos(tmp_path, monkeypatch):
 def test_ted_floor_is_disabled_without_boundary(tmp_path, monkeypatch):
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     monkeypatch.setattr(settings, "ted_auto_publish_after_id", 0)
-    assert manager.db.add_video("ted-disabled", "TED", TED, score=0, source="AUTO", view_count=1)
+    assert manager.db.add_video("ted-disabled", "TED", TED, score=0, source="AUTO", view_count=1, like_count=1)
 
     manager.score_pending_videos()
 
