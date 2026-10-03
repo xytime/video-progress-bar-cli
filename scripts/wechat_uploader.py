@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.8 | 2026-10-03 | Codex | 编辑器回读覆盖本地 CSS 背景资源，并留存脱敏媒体结构；不请求远端，不匹配仍禁止发表。 |
 | 5.17.7 | 2026-10-03 | Codex | 缩略图资源未更新时重新打开编辑器，按已解码本地图像字节哈希回读指定封面；未知或不匹配仍阻止发表。 |
 | 5.17.6 | 2026-10-03 | Codex | 实测封面标签父节点包含整个发布表单；从唯一可见编辑入口定位最小图片卡片，留存无凭据节点诊断；图片未解码时同时比较声明的资源地址。 |
 | 5.17.5 | 2026-10-03 | Codex | 封面指纹限定在包含真实预览图片的最小字段范围，避免只比较标签父节点；拒绝扩展到视频播放器或整页。 |
@@ -965,23 +966,34 @@ def _find_wechat_cover_preview_card(label, evidence_dir: Path | None = None):
             )
 
 
-def _wechat_cover_editor_matches_file(dialog, cover_path: Path) -> bool:
+def _wechat_cover_editor_matches_file(dialog, cover_path: Path, evidence_dir: Path | None = None) -> bool:
     """只核对已解码的大图本地资源，地址和图像字节不写日志或证据。"""
     expected = hashlib.sha256(cover_path.read_bytes()).hexdigest()
-    images = dialog.locator("img").evaluate_all("""async images => {
-        const bytes = [];
-        for (const img of images) {
-            const rect = img.getBoundingClientRect();
-            if (rect.width < 150 || rect.height < 150 || !img.naturalWidth) continue;
-            const src = img.currentSrc || img.src;
+    result = dialog.locator("*").evaluate_all("""async elements => {
+        const bytes = [], trace = [];
+        for (const el of elements) {
+            const rect = el.getBoundingClientRect();
+            const background = getComputedStyle(el).backgroundImage;
+            const match = background.match(/^url\(["']?(.*?)["']?\)$/);
+            const src = el instanceof HTMLImageElement ? (el.currentSrc || el.src) : (match ? match[1] : '');
+            if (!src || rect.width < 150 || rect.height < 150) continue;
+            const kind = src.startsWith('data:') ? 'data' : src.startsWith('blob:') ? 'blob' : 'remote';
+            trace.push({tag: el.tagName, classes: String(el.className), source_kind: kind,
+                width: rect.width, height: rect.height,
+                decoded_width: el instanceof HTMLImageElement ? el.naturalWidth : null});
             // 仅本地上传预览的 data/blob；拒绝请求远端或读取任意文件。
             if (!src.startsWith('data:image/') && !src.startsWith('blob:')) continue;
-            try { bytes.push(Array.from(new Uint8Array(await (await fetch(src)).arrayBuffer()))); }
-            catch (_) { /* 未知资源不放行 */ }
+            try {
+                const image = new Image(); image.src = src;
+                await image.decode();
+                if (image.naturalWidth) bytes.push(Array.from(new Uint8Array(await (await fetch(src)).arrayBuffer())));
+            } catch (_) { /* 未知资源不放行 */ }
         }
-        return bytes;
+        return {bytes, trace};
     }""")
-    return any(hashlib.sha256(bytes(data)).hexdigest() == expected for data in images)
+    if evidence_dir is not None:
+        (evidence_dir / "cover_editor_media.json").write_text(json.dumps(result["trace"], indent=2), encoding="utf-8")
+    return any(hashlib.sha256(bytes(data)).hexdigest() == expected for data in result["bytes"])
 
 
 def _verify_wechat_cover_editor_readback(page, cover_card, cover_path: Path, evidence_dir: Path) -> bool:
@@ -1008,7 +1020,7 @@ def _verify_wechat_cover_editor_readback(page, cover_card, cover_path: Path, evi
             proof["stage"] = "editor_not_opened"
             return False
         proof["stage"] = "compare_file"
-        proof["decoded_local_image_matches_file"] = _wechat_cover_editor_matches_file(dialog, cover_path)
+        proof["decoded_local_image_matches_file"] = _wechat_cover_editor_matches_file(dialog, cover_path, evidence_dir)
         _capture_wechat_evidence(page, evidence_dir, "cover_editor_readback")
         cancel = dialog.get_by_role("button", name="取消", exact=True)
         proof["stage"] = "close_editor"

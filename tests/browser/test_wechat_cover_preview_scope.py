@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-03 | Codex | CSS 背景渲染的本地封面也须与指定文件字节精确匹配。 |
 | 1.2.0 | 2026-10-03 | Codex | 重新打开保存后的封面编辑器，以已解码本地大图与指定文件精确哈希核验；不同文件拒绝。 |
 | 1.1.0 | 2026-10-03 | Codex | 覆盖真实混排 form-item 的编辑入口收窄、无媒体和多个入口拒绝。 |
 | 1.0.0 | 2026-10-03 | Codex | 标签与图片为兄弟节点时确认图片变化；视频变化与缺失封面均拒绝。 |
@@ -103,6 +104,10 @@ def test_cover_editor_readback_requires_exact_decoded_file(chromium, tmp_path):
         evidence = (tmp_path / "cover_editor_readback.json").read_text()
         assert '"decoded_local_image_matches_file": true' in evidence
         assert src not in evidence
+        page.locator("#card button").click()
+        dialog.locator("img").evaluate("(node, src) => { const panel = document.createElement('div'); panel.style.cssText = 'width:200px;height:200px'; panel.style.backgroundImage = `url(\"${src}\")`; node.replaceWith(panel); }", src)
+        assert _wechat_cover_editor_matches_file(dialog, cover, tmp_path)
+        dialog.get_by_role("button", name="取消").click()
         cover.write_bytes(b"different-file")
         assert not _verify_wechat_cover_editor_readback(page, page.locator("#card"), cover, tmp_path)
         assert not dialog.is_visible()
