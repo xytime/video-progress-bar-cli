@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.4 | 2026-10-03 | Codex | 独立复用页面初始化观察窗口从十秒调整到四十五秒；仍只凭官方发布强控件保存会话，登录提示与未知来源不放行。 |
 | 5.17.3 | 2026-10-03 | Codex | 扫码等待阶段每三十秒保留当前官方页面证据，二维码裁剪前留存整页，定位即时失效与选择错误。 |
 | 5.17.2 | 2026-10-03 | Codex | 登录与独立复用检查留存固定路由分类、页面加载状态和截图，失败诊断不输出 URL、凭据或页面正文。 |
 | 5.17.1 | 2026-10-03 | Codex | 扫码等待按完整十分钟期限轮询正向发布控件，避免登录页沿用 /post/create 地址而十五秒提前退出；来源与独立复用门禁保持不变。 |
@@ -1497,7 +1498,8 @@ def _wait_and_save_login(
                 raise
 
             _record_login_page_evidence(reuse_page, login_evidence_dir, "reuse_loaded")
-            reuse_ready, reuse_err = wait_for_publish_ready_with_spa_guard(reuse_page, timeout_seconds=10.0)
+            # 真实页面可能已进入账户后台但仍显示“页面初始化中”；给 SPA 有界渲染窗口。
+            reuse_ready, reuse_err = wait_for_publish_ready_with_spa_guard(reuse_page, timeout_seconds=45.0)
             _record_login_page_evidence(
                 reuse_page, login_evidence_dir, "reuse_ready" if reuse_ready else "reuse_failed"
             )

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-03 | Codex | 真实浏览器回归独立复用页初始化二十五秒后才展示上传控件的会话保存。 |
 | 1.2.0 | 2026-10-03 | Codex | 覆盖官方登录路由延迟跳转，确认跳转前已记录扫码等待证据且复用验证仍必须通过。 |
 | 1.1.0 | 2026-10-03 | Codex | 回归扫码页保留创建地址且授权晚于十五秒时，仍须等待正向控件和独立复用成功才保存。 |
 | 1.0.0 | 2026-09-26 | Codex | 实际跨域 iframe 第 11 秒授权、完整导航及错误来源零点击。 |
@@ -56,6 +57,38 @@ def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromiu
         expected_route = "CREATE" if login_route.endswith("/create") else "OTHER_OFFICIAL"
         assert json.loads(waiting_evidence[0].read_text())["route"] == expected_route
         page.screenshot(path=str(tmp_path / "delayed-scan-saved-after-reuse.png"))
+    finally:
+        context.close()
+
+
+def test_reuse_initializing_page_can_finish_after_ten_seconds(chromium, tmp_path):
+    import json
+    from unittest.mock import patch
+    from scripts.wechat_uploader import _wait_and_save_login
+    from video_processing.core.wechat_auth_state import read_wechat_auth_state
+
+    ready_html = '<input type="file" accept="video/mp4"><button>上传视频</button>'
+    loading_html = ('<p>页面初始化中</p><script>setTimeout(() => document.body.innerHTML = '
+                    + json.dumps(ready_html) + ', 25000);</script>')
+    original_new_context = chromium.new_context
+    context = original_new_context()
+    context.route("**/*", lambda r: r.fulfill(content_type="text/html", body=ready_html))
+    page = context.new_page()
+    page.goto("https://channels.weixin.qq.com/platform/post/create")
+
+    def reuse_context(*args, **kwargs):
+        ctx = original_new_context(*args, **kwargs)
+        ctx.route("**/*", lambda r: r.fulfill(content_type="text/html", body=loading_html))
+        return ctx
+
+    state_file = tmp_path / "wechat_state.json"
+    try:
+        with patch.object(chromium, "new_context", side_effect=reuse_context), \
+             patch("scripts.wechat_uploader._notify_wechat_login_success"):
+            _wait_and_save_login(page, context, state_file, method="scan_qr")
+        assert state_file.is_file()
+        assert read_wechat_auth_state(state_file)["authorized_at"] > 0
+        assert list(tmp_path.glob("wechat_login_evidence/*/reuse_ready.png"))
     finally:
         context.close()
 
