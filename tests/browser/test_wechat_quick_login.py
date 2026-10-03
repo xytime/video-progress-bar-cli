@@ -3,14 +3,17 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-03 | Codex | 覆盖官方登录路由延迟跳转，确认跳转前已记录扫码等待证据且复用验证仍必须通过。 |
 | 1.1.0 | 2026-10-03 | Codex | 回归扫码页保留创建地址且授权晚于十五秒时，仍须等待正向控件和独立复用成功才保存。 |
 | 1.0.0 | 2026-09-26 | Codex | 实际跨域 iframe 第 11 秒授权、完整导航及错误来源零点击。 |
 """
 from tests.browser_fixtures import chromium
 from scripts.wechat_uploader import _try_wechat_quick_login
+import pytest
 
 
-def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromium, tmp_path):
+@pytest.mark.parametrize("login_route", ["/platform/post/create", "/platform/login"])
+def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromium, tmp_path, login_route):
     import json
     from unittest.mock import patch
     from scripts.wechat_uploader import _wait_and_save_login
@@ -23,9 +26,9 @@ def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromiu
     login_html = '''<div class="login-box">使用微信扫码登录</div><script>
     setTimeout(() => {
       document.cookie = 'scanned=1; path=/; Secure; SameSite=Lax';
-      document.body.innerHTML = READY;
+      location.href = '/platform/post/create';
     }, 16000);
-    </script>'''.replace('READY', json.dumps(ready_html))
+    </script>'''
 
     def route(r):
         scanned = "scanned=1" in r.request.headers.get("cookie", "")
@@ -40,7 +43,7 @@ def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromiu
     context = routed_context()
     page = context.new_page()
     try:
-        page.goto("https://channels.weixin.qq.com/platform/post/create")
+        page.goto("https://channels.weixin.qq.com" + login_route)
         assert page.locator(".login-box").is_visible()
         assert json.loads(state_file.read_text()) == old_state
         with patch.object(chromium, "new_context", side_effect=routed_context), \
@@ -48,6 +51,10 @@ def test_scan_on_create_route_waits_beyond_fifteen_seconds_before_saving(chromiu
             _wait_and_save_login(page, context, state_file, method="scan_qr")
         assert any(cookie["name"] == "scanned" for cookie in json.loads(state_file.read_text())["cookies"])
         assert read_wechat_auth_state(state_file)["authorized_at"] > 0
+        waiting_evidence = list(tmp_path.glob("wechat_login_evidence/*/scan_wait.json"))
+        assert waiting_evidence
+        expected_route = "CREATE" if login_route.endswith("/create") else "OTHER_OFFICIAL"
+        assert json.loads(waiting_evidence[0].read_text())["route"] == expected_route
         page.screenshot(path=str(tmp_path / "delayed-scan-saved-after-reuse.png"))
     finally:
         context.close()
@@ -352,4 +359,3 @@ def test_uploader_management_page_fails_hard_on_dom_error(chromium, tmp_path):
                 platform_post_id="export/mock_12345",
                 login_only=True,
             )
-

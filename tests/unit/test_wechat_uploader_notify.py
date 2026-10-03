@@ -98,7 +98,7 @@ def test_wait_and_save_login_triggers_notification_and_cleanup(tmp_path):
          patch("video_processing.core.wechat_page_contract.wait_for_publish_ready_with_spa_guard", return_value=(True, None)):
         _wait_and_save_login(page, context, state_file, qr_path=qr_file, method="desktop_quick")
 
-        page.wait_for_url.assert_called_once_with("**/post/create", timeout=600000)
+        page.wait_for_url.assert_not_called()
         assert state_file.is_file()
         mock_stamp.assert_called_once_with(state_file, method="desktop_quick")
         assert not qr_file.exists()  # QR cleaned up

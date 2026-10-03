@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.3 | 2026-10-03 | Codex | 扫码等待阶段每三十秒保留当前官方页面证据，二维码裁剪前留存整页，定位即时失效与选择错误。 |
 | 5.17.2 | 2026-10-03 | Codex | 登录与独立复用检查留存固定路由分类、页面加载状态和截图，失败诊断不输出 URL、凭据或页面正文。 |
 | 5.17.1 | 2026-10-03 | Codex | 扫码等待按完整十分钟期限轮询正向发布控件，避免登录页沿用 /post/create 地址而十五秒提前退出；来源与独立复用门禁保持不变。 |
 | 5.17.0 | 2026-09-28 | Antigravity | 接入统一 wechat_browser_context 工厂：统一初始 context 与内部 reuse_ctx 的真实 Chrome UA、Viewport 与 init_script 反检测指纹，确保独立复用门禁指纹与初始环境 100% 一致；relogin 保证初始不加载旧会话。 |
@@ -1439,13 +1440,9 @@ def _wait_and_save_login(
     from video_processing.core.wechat_page_contract import wait_for_publish_ready_with_spa_guard
 
     login_deadline = time.monotonic() + 600.0
-    try:
-        page.wait_for_url("**/post/create", timeout=600000)
-    except Exception as exc:
-        record_wechat_auth_attempt(state_file, method=method, success=False, reason="NAVIGATION_TIMEOUT")
-        raise RuntimeError(f"Wait for login redirect failed: {type(exc).__name__}") from exc
-
-    # 登录 iframe 可以留在 /post/create：URL 命中不代表用户已完成扫码。
+    login_evidence_dir = state_file.parent / "wechat_login_evidence" / str(time.time_ns())
+    next_wait_evidence = time.monotonic()
+    # 官方登录页可以跳离或保留 /post/create，不能阻塞在 URL 等待中丢失扫码阶段证据。
     # 使用原十分钟总期限继续等待正向控件；未知来源仍立即拒绝。
     ready, err_cat = False, "PAGE_UNREADY"
     while time.monotonic() < login_deadline:
@@ -1455,13 +1452,15 @@ def _wait_and_save_login(
         )
         if ready or err_cat == "INVALID_ORIGIN":
             break
+        if time.monotonic() >= next_wait_evidence:
+            _record_login_page_evidence(page, login_evidence_dir, "scan_wait")
+            next_wait_evidence = time.monotonic() + 30.0
         page.wait_for_timeout(250)
     if not ready:
         record_wechat_auth_attempt(state_file, method=method, success=False, reason=err_cat or "PAGE_UNREADY")
         raise RuntimeError(f"Positive publish controls not found on /post/create after login redirect ({err_cat})")
 
     logger.info("Login detected and positive publish controls verified. Saving to temporary verification state...")
-    login_evidence_dir = state_file.parent / "wechat_login_evidence" / str(time.time_ns())
     _record_login_page_evidence(page, login_evidence_dir, "initial_ready")
     tmp_verify_state = state_file.with_name(f".{state_file.name}.verify.{os.getpid()}.{time.time_ns()}")
     try:
@@ -1658,6 +1657,10 @@ def _capture_wechat_login_qr(page, qr_path: Path) -> bool:
     # 新版 open.weixin.qq.com iframe 默认展示快捷登录；点“使用其他头像...”后二维码才可见。
     if _click_visible_frame_button(page, "使用其他头像、昵称或账号", timeout=3000):
         page.wait_for_timeout(1000)
+
+    _record_login_page_evidence(
+        page, qr_path.parent / "wechat_login_evidence" / str(time.time_ns()), "qr_page"
+    )
 
     qr_selectors = ["img.qrcode", ".login-qr img", ".qr-code img", "img[src*='qr']", ".qrcode"]
     for fr in page.frames:
