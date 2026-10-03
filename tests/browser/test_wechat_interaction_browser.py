@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-03 | Codex | 覆盖首页初始化竞态、延迟评论卡片、加载超时和登录回跳的只读导航边界。 |
 | 1.1.0 | 2026-09-26 | Codex | 覆盖发送前错帖阻断、场景 ID 与完整作者回读。 |
 | 1.0.0 | 2026-09-19 | Codex | 覆盖原生 ID、响应因果、完整作者回读、延迟成功和 verify-only。 |
 """
@@ -301,3 +302,130 @@ def test_pin_uses_only_target_author_container(interaction_page, tmp_path):
     commenter = BrowserCommenter(state_path=tmp_path/'state.json',dom_timeout_ms=300)
     assert commenter._ensure_comment_pinned(page,page.locator('#detail-host'),' '.join(COMMENT.split())) is True
     assert page.locator('[data-author-role="author"]').get_attribute('data-pinned') == 'true'
+
+
+def _navigation_page(
+    chromium, *, home_ready=True, comment_ready=True, login_redirect=False, auto_comment=False, post_schema_ready=True,
+):
+    """模拟菜单先出现、首页稍后初始化并覆写路由的真实 SPA 顺序。"""
+    page = chromium.new_page()
+    writes = []
+    options = json.dumps({"home": home_ready, "comment": comment_ready, "login": login_redirect, "auto": auto_comment})
+    html = """<html><head><meta charset="utf-8"></head><body>
+      <a href="#" id="interaction">互动管理</a>
+      <a href="#" style="display:none">互动管理</a>
+      <a href="#" id="comment" hidden>评论</a>
+      <div id="surface">首页加载中</div>
+      <script>
+      const options = OPTIONS;
+      window.earlyClicks = 0;
+      window.ready = false;
+      if (options.home) setTimeout(() => {
+        window.ready = true;
+        document.querySelector('#surface').textContent = '最近视频';
+        history.replaceState({}, '', '/platform');
+      }, 150);
+      document.querySelector('#interaction').onclick = event => {
+        event.preventDefault();
+        if (!window.ready) { window.earlyClicks++; return; }
+        document.querySelector('#comment').hidden = false;
+        if (options.auto) startComment();
+      };
+      function startComment() {
+        history.pushState({}, '', options.login ? '/platform/login.html' : '/platform/interaction/comment');
+        document.querySelector('#surface').textContent = '评论加载中';
+        if (options.comment && !options.login) setTimeout(() => {
+          fetch('/micro/interaction/cgi-bin/mmfinderassistant-bin/post/post_list').then(() => {
+            document.querySelector('#surface').innerHTML = '<div class="comment-feed-wrap">唯一目标</div>';
+          });
+        }, 200);
+      }
+      document.querySelector('#comment').onclick = event => {
+        event.preventDefault();
+        startComment();
+      };
+      </script></body></html>""".replace("OPTIONS", options)
+
+    def handler(route):
+        if route.request.method != "GET":
+            writes.append(route.request.method)
+        if route.request.url.endswith('/post/post_list'):
+            route.fulfill(status=201, json={"data": {"list": [{"exportId": "comment-scene", "desc": "目标完整发布文案"}]}} if post_schema_ready else {"unknown": True})
+            return
+        route.fulfill(content_type="text/html", body=html if route.request.is_navigation_request() else "")
+
+    page.route("**/*", handler)
+    return page, writes
+
+
+@pytest.mark.parametrize('auto_comment', [False, True])
+def test_navigation_waits_for_initialized_home_and_rendered_comment_cards(chromium, tmp_path, auto_comment):
+    from video_processing.interaction.browser_commenter import _capture_comment_posts
+    page, writes = _navigation_page(chromium, auto_comment=auto_comment)
+    resets = []
+    ids, descriptions = ['stale'], {'stale': '首页文案'}
+    seen = []
+
+    def capture(response):
+        seen.append((response.url, response.status))
+        _capture_comment_posts(response, ids, descriptions)
+
+    page.on('response', capture)
+
+    def reset():
+        resets.append(page.url)
+        ids.clear()
+        descriptions.clear()
+
+    commenter = BrowserCommenter(state_path=tmp_path / 'unused.json', page_ready_timeout_ms=1500, poll_interval_ms=20)
+    try:
+        error = commenter._open_comment_page(page, reset, post_list_ready=lambda: bool(ids and descriptions))
+        assert error is None
+        assert page.evaluate('window.earlyClicks') == 0
+        assert resets == ['https://channels.weixin.qq.com/platform']
+        assert page.locator('.comment-feed-wrap:visible').count() == 1
+        assert ids == ['comment-scene'], seen
+        assert descriptions == {'comment-scene': '目标完整发布文案'}
+        assert writes == []
+    finally:
+        page.close()
+
+
+def test_visible_cards_without_valid_scene_snapshot_still_fail_closed(chromium, tmp_path):
+    from video_processing.interaction.browser_commenter import _capture_comment_posts
+    page, writes = _navigation_page(chromium, post_schema_ready=False)
+    ids, descriptions = [], {}
+    page.on('response', lambda response: _capture_comment_posts(response, ids, descriptions))
+    commenter = BrowserCommenter(state_path=tmp_path / 'unused.json', page_ready_timeout_ms=500, poll_interval_ms=20)
+    try:
+        error = commenter._open_comment_page(page, lambda: None, post_list_ready=lambda: bool(ids and descriptions))
+        assert '评论管理页未就绪 (PAGE_UNREADY)' in error
+        assert page.locator('.comment-feed-wrap:visible').count() == 1
+        assert ids == []
+        assert writes == []
+    finally:
+        page.close()
+
+
+@pytest.mark.parametrize(("home_ready", "comment_ready", "login_redirect", "reason", "reset_count"), [
+    (False, True, False, '首页初始化未就绪 (PAGE_UNREADY)', 0),
+    (True, False, False, '评论管理页未就绪 (PAGE_UNREADY)', 1),
+    (True, True, True, '评论管理页未就绪 (LOGIN_REQUIRED)', 1),
+])
+def test_navigation_unready_or_login_never_reaches_target_resolution(
+    chromium, tmp_path, home_ready, comment_ready, login_redirect, reason, reset_count,
+):
+    page, writes = _navigation_page(
+        chromium, home_ready=home_ready, comment_ready=comment_ready, login_redirect=login_redirect,
+    )
+    resets = []
+    commenter = BrowserCommenter(state_path=tmp_path / 'unused.json', page_ready_timeout_ms=500, poll_interval_ms=20)
+    try:
+        error = commenter._open_comment_page(page, lambda: resets.append(True), post_list_ready=lambda: True)
+        assert reason in error
+        assert len(resets) == reset_count
+        assert page.locator('.comment-feed-wrap:visible').count() == 0
+        assert page.evaluate('window.earlyClicks') == 0
+        assert writes == []
+    finally:
+        page.close()

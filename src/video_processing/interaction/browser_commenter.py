@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.1.0 | 2026-10-03 | Codex | 有界等待首页与评论卡片就绪，只采集评论场景作品 ID，避免初始化竞态和跨场景污染。 |
 | 3.0.0 | 2026-09-26 | Codex | 绑定评论页完整文案与场景 ID；发送前阻断错帖请求，限定作品与完整作者评论回读。 |
 | 2.9.0 | 2026-09-23 | Antigravity | 修复视频号后台处理中作品未上架导致卡片索引错位发评的严重缺陷；引入内容前缀强校验、详情面板文本核验与发评请求作品ID不符硬熔断（Fail-Closed）。 |
 | 2.8.0 | 2026-09-20 | Antigravity | 新增首评自动置顶与替换确认逻辑，记录 is_pinned 证据。 |
@@ -38,11 +39,16 @@ from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
+from video_processing.core.wechat_page_contract import (
+    check_explicit_login_prompt,
+    is_official_wechat_origin,
+)
 from video_processing.core.wechat_session_lock import WeChatSessionLock, WeChatSessionLockBusy
 
 logger = logging.getLogger(__name__)
 
 WECHAT_COMMENT_URL = "https://channels.weixin.qq.com/platform/interaction/comment"
+COMMENT_POST_LIST_PATH = "/micro/interaction/cgi-bin/mmfinderassistant-bin/post/post_list"
 # 真实平台已完成只读校准：包含微前端子路径与传统路径
 COMMENT_SUBMIT_PATH = "/cgi-bin/mmfinderassistant-bin/comment/create"
 COMMENT_SUBMIT_PATHS = {
@@ -93,6 +99,35 @@ def _interaction_post_id(post_id: str, published_description: Optional[str], des
     if len(matches) == 1 and len(expected) >= 30:
         return matches[0], "unique_exact_published_description"
     raise ValueError("评论页未找到原生 ID 或唯一完整已发布文案，拒绝绑定场景 ID")
+
+
+def _capture_comment_posts(response, post_ids: list[str], descriptions: dict[str, str]) -> None:
+    """只读取已校准的评论场景列表，隔离首页/内容管理的其他场景 ID。"""
+    if not is_official_wechat_origin(response.url) or urlparse(response.url).path != COMMENT_POST_LIST_PATH:
+        return
+    if response.status not in (200, 201):
+        return
+    try:
+        body = response.json()
+        items = body["data"]["list"]
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            eid = str(item.get("exportId") or "").strip()
+            oid = str(item.get("objectId") or "").strip()
+            raw_desc = item.get("desc") or ""
+            desc = _normalized_text(raw_desc.get("description") if isinstance(raw_desc, dict) else raw_desc)
+            item_id = eid or oid
+            if item_id and item_id not in post_ids:
+                post_ids.append(item_id)
+            for native_id in (eid, oid):
+                if native_id and desc:
+                    descriptions[native_id] = desc
+    except Exception as exc:
+        logger.warning("评论场景作品列表解析失败: %s", type(exc).__name__)
+        return
 
 
 def _read_live_author_comments(page, captured_comments, platform_post_id):
@@ -234,6 +269,7 @@ class BrowserCommenter:
         browser_executable_path: Path | str | None = None,
         response_timeout_ms: int = 5_000,
         dom_timeout_ms: int = 6_000,
+        page_ready_timeout_ms: int = 45_000,
         poll_interval_ms: int = 100,
         lock_timeout_seconds: float = 0.25,
     ) -> None:
@@ -247,6 +283,7 @@ class BrowserCommenter:
         )
         self.response_timeout_ms = max(0, int(response_timeout_ms))
         self.dom_timeout_ms = max(0, int(dom_timeout_ms))
+        self.page_ready_timeout_ms = max(0, int(page_ready_timeout_ms))
         self.poll_interval_ms = max(10, int(poll_interval_ms))
         self.lock_timeout_seconds = max(0.0, float(lock_timeout_seconds))
 
@@ -338,24 +375,7 @@ class BrowserCommenter:
                 captured_comments: list[dict[str, Any]] = []
 
                 def _on_response_capture(res: Any) -> None:
-                    if "post/post_list" in res.url and res.status in (200, 201):
-                        try:
-                            body = res.json()
-                            if isinstance(body, dict) and "data" in body and isinstance(body["data"], dict) and "list" in body["data"]:
-                                for item in body["data"]["list"]:
-                                    eid = str(item.get("exportId") or "").strip()
-                                    oid = str(item.get("objectId") or "").strip()
-                                    raw_desc = item.get("desc") or ""
-                                    desc = _normalized_text(raw_desc.get("description") if isinstance(raw_desc, dict) else raw_desc)
-                                    item_id = eid or oid
-                                    if item_id and item_id not in captured_post_ids:
-                                        captured_post_ids.append(item_id)
-                                    if eid and desc:
-                                        captured_post_descs[eid] = desc
-                                    if oid and desc:
-                                        captured_post_descs[oid] = desc
-                        except Exception:
-                            pass
+                    _capture_comment_posts(res, captured_post_ids, captured_post_descs)
                     if "comment/comment_list" in res.url and res.status in (200, 201):
                         try:
                             body = res.json()
@@ -372,30 +392,22 @@ class BrowserCommenter:
                             pass
 
                 page.on("response", _on_response_capture)
-                if "channels.weixin.qq.com" in self.comment_url:
-                    page.goto("https://channels.weixin.qq.com/platform", timeout=30000, wait_until="domcontentloaded")
-                    page.wait_for_timeout(2500)
-                    if "platform/interaction/comment" not in page.url:
-                        menu_link = page.get_by_role("link", name="互动管理")
-                        if menu_link.count() > 0:
-                            menu_link.first.click()
-                            page.wait_for_timeout(1000)
-                        else:
-                            sub_wrp = page.locator(".finder-ui-desktop-menu__sub__wrp:has-text('互动管理'), .finder-ui-desktop-menu__sub__wrp:nth-child(2)")
-                            if sub_wrp.count() > 0:
-                                sub_wrp.first.click()
-                                page.wait_for_timeout(1000)
-                        comment_link = page.get_by_role("link", name="评论")
-                        if comment_link.count() == 0:
-                            comment_link = page.locator("a:has-text('评论'), .finder-ui-desktop-menu__link:has-text('评论')")
-                        if comment_link.count() > 0:
-                            comment_link.first.click()
-                            page.wait_for_timeout(3500)
-                        else:
-                            page.goto(self.comment_url, timeout=30000, wait_until="domcontentloaded")
-                            page.wait_for_timeout(3000)
-                else:
-                    page.goto(self.comment_url, wait_until="domcontentloaded")
+                def _clear_scene_snapshot() -> None:
+                    captured_post_ids.clear()
+                    captured_post_descs.clear()
+                    captured_comments.clear()
+
+                navigation_error = self._open_comment_page(
+                    page, _clear_scene_snapshot,
+                    post_list_ready=lambda: bool(captured_post_ids and captured_post_descs),
+                )
+                if navigation_error:
+                    return self._finish_page(page, attempt_dir, "FAILED", navigation_error, {
+                        "platform_post_id": platform_post_id,
+                        "verify_only": verify_only,
+                        "page_readiness": navigation_error,
+                        "clicked": False,
+                    })
                 return self._interact_with_page(
                     page,
                     comment_text=comment_text,
@@ -411,6 +423,64 @@ class BrowserCommenter:
                 )
             finally:
                 browser.close()
+
+    def _wait_for_page_controls(self, page, ready: Callable[[], bool]) -> Optional[str]:
+        """有界等待正向控件，URL、登录提示或 DOM 异常均不能算作就绪。"""
+        deadline = time.monotonic() + self.page_ready_timeout_ms / 1000
+        last_error = "PAGE_UNREADY"
+        while True:
+            if not is_official_wechat_origin(page.url):
+                return "INVALID_ORIGIN"
+            is_login, dom_error = check_explicit_login_prompt(page)
+            if is_login:
+                return "LOGIN_REQUIRED"
+            try:
+                if dom_error:
+                    last_error = "DOM_ERROR"
+                elif ready():
+                    return None if is_official_wechat_origin(page.url) else "INVALID_ORIGIN"
+                else:
+                    last_error = "PAGE_UNREADY"
+            except Exception:
+                last_error = "DOM_ERROR"
+            if time.monotonic() >= deadline:
+                return last_error
+            page.wait_for_timeout(self.poll_interval_ms)
+
+    def _open_comment_page(
+        self, page, before_navigation: Callable[[], None], *, post_list_ready: Callable[[], bool],
+    ) -> Optional[str]:
+        """首页初始化完成后点击明确菜单，再等待评论卡片实际渲染。"""
+        if not is_official_wechat_origin(self.comment_url):
+            # 显式本地 fixture 入口，生产默认仅访问官方 HTTPS 源。
+            page.goto(self.comment_url, wait_until="domcontentloaded")
+            return None
+        try:
+            page.goto("https://channels.weixin.qq.com/platform", timeout=30000, wait_until="domcontentloaded")
+            menu = page.get_by_role("link", name="互动管理", exact=True).filter(visible=True)
+            error = self._wait_for_page_controls(
+                page, lambda: page.get_by_text("最近视频", exact=True).filter(visible=True).count() == 1 and menu.count() == 1,
+            )
+            if error:
+                return f"首页初始化未就绪 ({error})，未导航或打开评论写入界面"
+            # 点击父菜单可能自动进入首个评论子页，必须在这次点击前清理快照。
+            before_navigation()
+            menu.click()
+            comment_link = page.get_by_role("link", name="评论", exact=True).filter(visible=True)
+            error = self._wait_for_page_controls(page, lambda: comment_link.count() == 1)
+            if error:
+                return f"评论导航菜单未就绪 ({error})"
+            if urlparse(page.url).path != "/platform/interaction/comment":
+                comment_link.click()
+            error = self._wait_for_page_controls(
+                page, lambda: urlparse(page.url).path == "/platform/interaction/comment"
+                and page.locator(".comment-feed-wrap:visible").count() > 0 and post_list_ready(),
+            )
+            if error:
+                return f"评论管理页未就绪 ({error})，未解析目标卡片或打开评论写入界面"
+            return None
+        except Exception as exc:
+            return f"评论页面导航异常 ({type(exc).__name__})，未打开评论写入界面"
 
     @staticmethod
     def resolve_target_card(
@@ -500,6 +570,9 @@ class BrowserCommenter:
             "verify_only": verify_only,
             "comment_text_normalized": expected_text,
             "adapter_contract": "wechat-comment-v3-scoped-author-readback",
+            "visible_feed_count": page.locator(".comment-feed-wrap:visible").count(),
+            "captured_post_count": len(captured_post_ids or []),
+            "captured_description_count": len(captured_post_descs or {}),
         }
         if not _PLATFORM_POST_ID_RE.fullmatch(platform_post_id):
             return self._finish_page(
@@ -537,6 +610,7 @@ class BrowserCommenter:
             )
 
             visible_count = cards.count()
+            metadata["target_card_count"] = visible_count
             if visible_count != 1:
                 return self._finish_page(
                     page, attempt_dir, "FAILED",

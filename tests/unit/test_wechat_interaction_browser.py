@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-03 | Codex | 覆盖首页与评论场景列表隔离、来源校验及唯一全文场景绑定。 |
 | 1.3.0 | 2026-09-26 | Codex | 全页置顶测试迁移至真实浏览器，缺少唯一作者时停止。 |
 | 1.2.0 | 2026-09-23 | Antigravity | 增加处理中作品未上架 Fail-Closed 熔断、列表索引漂移正确选择与提交作品ID不匹配拦截单元测试。 |
 | 1.1.0 | 2026-09-20 | Antigravity | 增加评论置顶单元测试，验证已置顶跳过、无按钮跳过以及成功置顶与弹窗确认分支。 |
@@ -26,6 +27,8 @@ from video_processing.interaction.browser_commenter import (
     BrowserCommenter,
     COMMENT_SUBMIT_PATH,
     _SubmissionResponseWindow,
+    _capture_comment_posts,
+    _interaction_post_id,
 )
 
 
@@ -378,3 +381,48 @@ def test_submission_response_window_captures_mismatched_request_and_blocks():
 def test_ensure_comment_pinned_without_unique_author_returns_false(tmp_path):
     commenter = BrowserCommenter(state_path=tmp_path / 'unused.json')
     assert commenter._ensure_comment_pinned(_FakePage(), _FakeLocator(), '目标完整正文') is False
+
+
+@pytest.mark.parametrize('http_status', [200, 201])
+def test_comment_snapshot_ignores_home_ids_even_after_comment_list(http_status):
+    description = "纽约州州长在记者会上宣布重新调查案件，这是完整已发布文案，用于场景身份唯一绑定。"
+
+    class Response:
+        status = http_status
+
+        def __init__(self, path, native_id):
+            self.url = "https://channels.weixin.qq.com" + path
+            self.native_id = native_id
+
+        def json(self):
+            return {"data": {"list": [{"exportId": self.native_id, "desc": description}]}}
+
+    post_ids, descriptions = [], {}
+    home = Response("/micro/home/cgi-bin/mmfinderassistant-bin/post/post_list", "canonical")
+    scene = Response("/micro/interaction/cgi-bin/mmfinderassistant-bin/post/post_list", "comment-scene")
+    for response in (home, scene, home):
+        _capture_comment_posts(response, post_ids, descriptions)
+
+    assert post_ids == ["comment-scene"]
+    assert descriptions == {"comment-scene": description}
+    assert _interaction_post_id("canonical", description, descriptions) == (
+        "comment-scene", "unique_exact_published_description",
+    )
+
+
+@pytest.mark.parametrize("origin", [
+    "http://channels.weixin.qq.com", "https://channels.weixin.qq.com.evil.invalid",
+    "https://channels.weixin.qq.com:8443", "https://user@channels.weixin.qq.com",
+])
+def test_comment_snapshot_rejects_untrusted_origin(origin):
+    class Response:
+        status = 200
+        url = origin + "/micro/interaction/cgi-bin/mmfinderassistant-bin/post/post_list"
+
+        def json(self):
+            raise AssertionError("拒绝来源后不得读取响应正文")
+
+    ids, descriptions = [], {}
+    _capture_comment_posts(Response(), ids, descriptions)
+    assert ids == []
+    assert descriptions == {}
