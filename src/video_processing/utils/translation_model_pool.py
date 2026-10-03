@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.7.0 | 2026-10-03 | Codex | 纳入经济型 Codex 字幕与词汇兜底 profile。 |
 | 1.0.0   | 2026-07-13 | Codex  | 新增字幕 provider 动态排序、冷却记忆、错误分类与质量评分 |
 | 1.1.0   | 2026-07-13 | Codex  | 状态文件改为锁保护的原子替换，避免截断 JSON 丢失冷却记忆 |
 | 1.2.0   | 2026-07-13 | Codex  | 纳入 Gemini 模型级 profile，使免费模型分别冷却与排序 |
@@ -40,6 +41,7 @@ PROFILES = {
     "gemini": ModelProfile("gemini", frozenset({"translate", "vocab"}), 100),
     "deepseek": ModelProfile("deepseek", frozenset({"translate", "vocab"}), 90),
     "google": ModelProfile("google", frozenset({"translate"}), 20),
+    "codex": ModelProfile("codex", frozenset({"translate", "vocab"}), 10),
     # Gemini 供应商内部也必须按模型而不是整体冷却，否则一个模型撞配额会拖垮全部免费池。
     "gemini-2.5-flash": ModelProfile("gemini-2.5-flash", frozenset({"translate", "vocab"}), 100),
     "gemini-3.5-flash": ModelProfile("gemini-3.5-flash", frozenset({"translate", "vocab"}), 90),

@@ -37,6 +37,7 @@ pysubs2>=1.6.0
 # 自动化与大模型 (Phase 5)
 playwright>=1.40.0
 google-genai>=2.0.0          # [Claude_Sonnet_4.6_Thinking_planning] 新 SDK，替换已废弃的 google-generativeai
+jsonschema>=4.18.0           # Codex CLI 结构化文字的宿主 schema 验证
 # google-generativeai>=0.3.0  # deprecated, replaced by google-genai
 
 # Telegram Bot 远程控制 (Phase 6)

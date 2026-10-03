@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.37.0 | 2026-10-03 | Codex | 最后追加 Luna CLI 候选，保留严格质量和完整批次合同。 |
 | 1.36.0 | 2026-09-09 | Codex | 翻译硬合同先于软质量开关；占位符和段数错误留审计后回退 |
 | 1.1.0 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复未导入 os 引发异常，修复硬编码 ffmpeg 导致无 libass 问题 |
 | 1.1.1 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复深层翻译API风控导致将500报错信息输出为中文字幕的重大缺陷 |
@@ -685,6 +686,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 "gemini": "dynamic Gemini pool",
                 "deepseek": getattr(settings, "deepseek_model", "") or "DeepSeek default",
                 "google": "Google Translate",
+                "codex": getattr(settings, "codex_text_model", ""),
             }.get(key)
             capabilities = ",".join(sorted(profile.capabilities)) if profile else "translate"
             PipelineDB().record_ai_provider_attempt(
@@ -767,8 +769,28 @@ class AutoCaptionProcessor(VideoProcessorBase):
             return self._build_deepseek_candidate(texts, translation_context)
         if provider == "google":
             return self._build_google_candidate(texts)
+        if provider == "codex":
+            return self._build_codex_candidate(texts, translation_context)
         logger.warning("[Translate] Unknown provider ignored: %s", provider)
         return None
+
+    def _build_codex_candidate(self, texts: List[str], translation_context: str) -> Optional[SubtitleTranslationCandidate]:
+        """全部既有供应商失败后才调用；任何批次失败都不修改字幕。"""
+        from video_processing.utils.codex_subtitle_provider import build_codex_subtitle_candidate
+        try:
+            return build_codex_subtitle_candidate(
+                texts, translation_context,
+                state_dir=settings.default_output_dir / "codex_text_cache",
+                command=settings.codex_text_command, model=settings.codex_text_model,
+                effort=settings.codex_text_effort,
+                request_timeout=settings.codex_text_request_timeout_seconds,
+                total_timeout=settings.codex_subtitle_total_timeout_seconds,
+                batch_size=settings.codex_subtitle_batch_size,
+            )
+        except Exception as exc:
+            self._last_provider_error = f"codex_text:{getattr(exc, 'code', type(exc).__name__)}"
+            logger.warning("[Translate] Codex candidate failed: %s", self._last_provider_error)
+            return None
 
     def _build_agy_candidate(
         self,
@@ -1014,7 +1036,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
         # TODO 临时处理：量化误杀（金额单位漂移/事件方向偏差）和频道策略误判高发阶段，先保证发布可继续。
         # 长期要求：恢复阻断语义后关闭开关，改由更细粒度规则修复。
-        if getattr(settings, "enable_translation_quality_fail_open", False) and decision.blocking_issues:
+        if provider != "codex" and getattr(settings, "enable_translation_quality_fail_open", False) and decision.blocking_issues:
             logger.warning(
                 "[TranslationGuard] TEMP_FAIL_OPEN: blocking quality issues ignored (provider=%s)."
                 " Issues: %s",

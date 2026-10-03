@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.90.0 | 2026-10-03 | Codex | 具名恢复近24小时文字供应商失败，原子排除投稿账本、运行占用和策略拒绝。 |
 | 3.89.0 | 2026-09-27 | Codex | 封面挂起原因仅原子写入仍处于 AI_COVER_PENDING 的条目。 |
 | 3.88.0 | 2026-09-25 | Codex | 英语世界具名只读回查限用一次，并原子节流公开确认缺失提醒。 |
 | 3.87.0 | 2026-09-25 | Codex | 重评候选按上次抓取时间轮转；统计、评分与抓取时间原子保存。 |
@@ -3293,6 +3294,42 @@ class PipelineDB:
                 UPDATE processed_videos SET status = 'PENDING', error_msg = ?,
                     updated_at = CURRENT_TIMESTAMP WHERE id = ?
             ''', (reason, row["id"]))
+            conn.commit()
+            return True
+
+    def requeue_recent_text_provider_failure(
+        self, youtube_id: str, *, slice_index: int = 0, expected_error: str, max_retry_count: int = 3,
+    ) -> bool:
+        """新兜底上线后的具名恢复；保留检查点，仅限近24小时且尚未投稿的文字失败。"""
+        markers = ("All subtitle translation providers failed or were blocked.",
+                   "TitleContractError:", "COPY_PROVIDER_DEFERRED")
+        if not expected_error or not any(marker in expected_error for marker in markers):
+            return False
+        if any(marker in expected_error for marker in ("Channel Policy Reject", "CENSOR", "LOGIN_REQUIRED")):
+            return False
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute('''
+                SELECT pv.id FROM processed_videos pv
+                WHERE pv.youtube_id = ? AND pv.slice_index = ?
+                  AND (pv.status = 'FAILED' OR (pv.status = 'PENDING' AND pv.error_msg LIKE '%COPY_PROVIDER_DEFERRED%'))
+                  AND pv.error_msg = ? AND pv.process_pid IS NULL
+                  AND pv.updated_at >= datetime('now', '-24 hours')
+                  AND COALESCE(pv.retry_count, 0) < ?
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM douyin_publications d WHERE d.video_id = pv.id)
+                  AND NOT EXISTS (SELECT 1 FROM kuaishou_publications k WHERE k.video_id = pv.id)
+            ''', (youtube_id, slice_index, expected_error, min(4, max(1, int(max_retry_count))))).fetchone()
+            if not row:
+                return False
+            conn.execute("DELETE FROM copywriter_deferred WHERE video_id = ?", (row["id"],))
+            conn.execute('''
+                UPDATE processed_videos SET status = 'PENDING', error_msg = 'CODEX_TEXT_RECOVERY',
+                    retry_count = COALESCE(retry_count, 0) + 1, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            ''', (row["id"],))
             conn.commit()
             return True
 

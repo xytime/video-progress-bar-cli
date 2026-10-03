@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.73.0 | 2026-10-03 | Codex | 经济型 Codex CLI 文字兜底，默认关闭并固定在字幕供应商末尾。 |
 | 3.71.0 | 2026-09-27 | Codex | 常规封面首选 AGY CLI；无字验收失败挂起，保留旧队列兼容配置。 |
 | 3.72.0 | 2026-10-01 | Codex | AGY 失败后可选 Codex Luna CLI 生图及独立复核，保留本地兜底。 |
 | 3.70.0 | 2026-09-25 | Codex | TED/TEDx 自动评分托底增加入库 ID 边界，默认关闭以保护历史待处理视频。 |
@@ -232,6 +233,14 @@ class Settings(BaseSettings):
     copywriter_agy_model: str = "gemini-3.7-flash-high"
     copywriter_agy_timeout_seconds: int = 45
     copywriter_gemini_max_attempts: int = 2
+    # 完整文案和字幕的最后一层经济型 CLI 兜底；真实样本验收后显式启用。
+    enable_codex_text_fallback: bool = False
+    codex_text_command: str = str(Path.home() / ".local" / "bin" / "codex")
+    codex_text_model: Literal["gpt-6-luna", "gpt-5.6-luna"] = "gpt-5.6-luna"
+    codex_text_effort: Literal["low", "medium", "high"] = "medium"
+    codex_text_request_timeout_seconds: int = Field(default=120, ge=10, le=300)
+    codex_subtitle_total_timeout_seconds: int = Field(default=900, ge=30, le=1800)
+    codex_subtitle_batch_size: int = Field(default=50, ge=5, le=100)
     # 双标题消费默认关闭：启用后仅封面读取 display_title，平台/视频顶部仍读 title.txt。
     enable_dual_title_display: bool = False
 
@@ -725,7 +734,10 @@ class Settings(BaseSettings):
             provider = item.strip().lower()
             if provider in allowed and provider not in providers:
                 providers.append(provider)
-        return providers or ["gemini", "deepseek", "google"]
+        providers = providers or ["gemini", "deepseek", "google"]
+        if self.enable_codex_text_fallback:
+            providers.append("codex")
+        return providers
 
     @property
     def dubbing_script_refinement_provider_order_list(self) -> list[str]:
