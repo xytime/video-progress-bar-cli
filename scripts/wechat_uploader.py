@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.9 | 2026-10-03 | Codex | 对保存后重新打开的 Croppie Canvas 复现等比缩放，完整 RGBA 与指定封面精确相等才放行。 |
 | 5.17.8 | 2026-10-03 | Codex | 编辑器回读覆盖本地 CSS 背景资源，并留存脱敏媒体结构；不请求远端，不匹配仍禁止发表。 |
 | 5.17.7 | 2026-10-03 | Codex | 缩略图资源未更新时重新打开编辑器，按已解码本地图像字节哈希回读指定封面；未知或不匹配仍阻止发表。 |
 | 5.17.6 | 2026-10-03 | Codex | 实测封面标签父节点包含整个发布表单；从唯一可见编辑入口定位最小图片卡片，留存无凭据节点诊断；图片未解码时同时比较声明的资源地址。 |
@@ -993,7 +994,10 @@ def _wechat_cover_editor_matches_file(dialog, cover_path: Path, evidence_dir: Pa
     }""")
     if evidence_dir is not None:
         (evidence_dir / "cover_editor_media.json").write_text(json.dumps(result["trace"], indent=2), encoding="utf-8")
-    return any(hashlib.sha256(bytes(data)).hexdigest() == expected for data in result["bytes"])
+    if any(hashlib.sha256(bytes(data)).hexdigest() == expected for data in result["bytes"]):
+        return True
+    from video_processing.utils.wechat_cover_canvas import matches_editor_canvas
+    return matches_editor_canvas(dialog, cover_path, evidence_dir)
 
 
 def _verify_wechat_cover_editor_readback(page, cover_card, cover_path: Path, evidence_dir: Path) -> bool:
