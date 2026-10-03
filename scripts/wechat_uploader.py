@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.6 | 2026-10-03 | Codex | 实测封面标签父节点包含整个发布表单；从唯一可见编辑入口定位最小图片卡片，留存无凭据节点诊断；图片未解码时同时比较声明的资源地址。 |
 | 5.17.5 | 2026-10-03 | Codex | 封面指纹限定在包含真实预览图片的最小字段范围，避免只比较标签父节点；拒绝扩展到视频播放器或整页。 |
 | 5.17.4 | 2026-10-03 | Codex | 独立复用页面初始化观察窗口从十秒调整到四十五秒；仍只凭官方发布强控件保存会话，登录提示与未知来源不放行。 |
 | 5.17.3 | 2026-10-03 | Codex | 扫码等待阶段每三十秒保留当前官方页面证据，二维码裁剪前留存整页，定位即时失效与选择错误。 |
@@ -913,18 +914,54 @@ def _wait_for_wechat_cover_dialog_to_close(page, attempts: int = 20) -> bool:
     return not _find_wechat_cover_dialog(page)
 
 
-def _find_wechat_cover_preview_card(label):
-    """标签和预览可能是兄弟节点；只向上寻找最小图片范围，不包含视频或整页。"""
+def _find_wechat_cover_preview_card(label, evidence_dir: Path | None = None):
+    """优先标签字段；表单混排时从唯一编辑入口收窄到独立图片卡片。"""
+    trace = []
+
+    def inspect(card, origin):
+        structure = card.evaluate("""node => ({
+            tag: node.tagName, classes: String(node.className),
+            child_count: node.children.length,
+            shadow_root: Boolean(node.shadowRoot)
+        })""")
+        structure["origin"] = origin
+        structure["image_count"] = card.locator("img").count()
+        structure["video_count"] = card.locator("video, input[type='file'][accept*='video']").count()
+        structure["media_source_count"] = len(_wechat_cover_preview_signatures(card))
+        trace.append(structure)
+        return structure
+
     card = label
-    for _ in range(5):
-        card = card.locator("xpath=..").first
-        if card.evaluate("node => ['BODY', 'HTML'].includes(node.tagName)"):
-            return None
-        if card.locator("video, input[type='file'][accept*='video']").count():
-            return None
-        if _wechat_cover_preview_signatures(card):
-            return card
-    return None
+    try:
+        for _ in range(5):
+            card = card.locator("xpath=..").first
+            structure = inspect(card, "label")
+            if structure["tag"] in ("BODY", "HTML"):
+                return None
+            if structure["video_count"]:
+                # 实际页面的 form-item 同时包含播放器与所有字段，不能作为指纹范围。
+                edits = card.get_by_text("编辑", exact=True)
+                visible_edits = [edits.nth(i) for i in range(edits.count()) if edits.nth(i).is_visible()]
+                if len(visible_edits) != 1:
+                    return None
+                preview = visible_edits[0]
+                for _ in range(5):
+                    preview = preview.locator("xpath=..").first
+                    candidate = inspect(preview, "edit")
+                    if candidate["tag"] in ("BODY", "HTML") or candidate["video_count"]:
+                        return None
+                    if candidate["image_count"] or candidate["media_source_count"]:
+                        return preview
+                return None
+            if structure["image_count"] or structure["media_source_count"]:
+                return card
+        return None
+    finally:
+        if evidence_dir is not None:
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            (evidence_dir / "cover_preview_scope.json").write_text(
+                json.dumps(trace, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
 
 
 def _wechat_cover_preview_signatures(container) -> frozenset[str]:
@@ -934,8 +971,10 @@ def _wechat_cover_preview_signatures(container) -> frozenset[str]:
         media_sources = container.locator("*").evaluate_all(
             """elements => elements.flatMap(element => {
                 const sources = [];
-                if (element instanceof HTMLImageElement && element.currentSrc) {
-                    sources.push(`img:${element.currentSrc}`);
+                if (element instanceof HTMLImageElement) {
+                    if (element.currentSrc) sources.push(`img:${element.currentSrc}`);
+                    // 损坏或尚未解码的缩略图 currentSrc 可为空，src 仍表示平台指定的封面资源。
+                    if (element.getAttribute('src')) sources.push(`declared-img:${element.src}`);
                 }
                 const background = getComputedStyle(element).backgroundImage;
                 if (background && background !== 'none') {
@@ -965,6 +1004,7 @@ def _is_wechat_cover_applied(
     before_signatures: frozenset[str],
     before_visual_signature: str | None,
     success_marker_observed: bool = False,
+    evidence_dir: Path | None = None,
 ) -> bool:
     """确认封面弹层关闭、预览实际变化且本轮操作出现平台确认。"""
     if _find_wechat_cover_dialog(page):
@@ -979,6 +1019,17 @@ def _is_wechat_cover_applied(
         and before_visual_signature != after_visual_signature
     )
     preview_changed = source_changed or visual_changed
+    if evidence_dir is not None:
+        (evidence_dir / "cover_preview_change.json").write_text(json.dumps({
+            "before_source_count": len(before_signatures),
+            "after_source_count": len(after_signatures),
+            "source_changed": source_changed, "visual_changed": visual_changed,
+            "images": cover_card.locator("img").evaluate_all("""images => images.map(img => ({
+                has_declared_src: Boolean(img.getAttribute('src')),
+                has_current_src: Boolean(img.currentSrc), complete: img.complete,
+                decoded_width: img.naturalWidth, decoded_height: img.naturalHeight
+            }))""")
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         page_text = page.locator("body").inner_text(timeout=3_000)
     except Exception:
@@ -2283,7 +2334,7 @@ def run_uploader(
                         card_labels = page.locator(card_sel)
                         if card_labels.count() == 0:
                             continue
-                        cover_card = _find_wechat_cover_preview_card(card_labels.first)
+                        cover_card = _find_wechat_cover_preview_card(card_labels.first, evidence_root)
                         if cover_card is None:
                             logger.warning("No isolated cover preview media scope found.")
                             continue
@@ -2451,6 +2502,7 @@ def run_uploader(
                                 before_signatures,
                                 before_visual_signature,
                                 success_marker_observed=cover_success_marker,
+                                evidence_dir=evidence_root,
                             )
                         break  # 成功处理一张卡片即退出循环
                     except Exception as e_card:
