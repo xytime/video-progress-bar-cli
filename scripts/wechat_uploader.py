@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.5 | 2026-10-03 | Codex | 封面指纹限定在包含真实预览图片的最小字段范围，避免只比较标签父节点；拒绝扩展到视频播放器或整页。 |
 | 5.17.4 | 2026-10-03 | Codex | 独立复用页面初始化观察窗口从十秒调整到四十五秒；仍只凭官方发布强控件保存会话，登录提示与未知来源不放行。 |
 | 5.17.3 | 2026-10-03 | Codex | 扫码等待阶段每三十秒保留当前官方页面证据，二维码裁剪前留存整页，定位即时失效与选择错误。 |
 | 5.17.2 | 2026-10-03 | Codex | 登录与独立复用检查留存固定路由分类、页面加载状态和截图，失败诊断不输出 URL、凭据或页面正文。 |
@@ -910,6 +911,20 @@ def _wait_for_wechat_cover_dialog_to_close(page, attempts: int = 20) -> bool:
             return True
         page.wait_for_timeout(1_000)
     return not _find_wechat_cover_dialog(page)
+
+
+def _find_wechat_cover_preview_card(label):
+    """标签和预览可能是兄弟节点；只向上寻找最小图片范围，不包含视频或整页。"""
+    card = label
+    for _ in range(5):
+        card = card.locator("xpath=..").first
+        if card.evaluate("node => ['BODY', 'HTML'].includes(node.tagName)"):
+            return None
+        if card.locator("video, input[type='file'][accept*='video']").count():
+            return None
+        if _wechat_cover_preview_signatures(card):
+            return card
+    return None
 
 
 def _wechat_cover_preview_signatures(container) -> frozenset[str]:
@@ -2265,10 +2280,13 @@ def run_uploader(
                 cover_card_sels = ["text=封面预览"]
                 for card_sel in cover_card_sels:
                     try:
-                        card_container = page.locator(card_sel).locator("xpath=..")
-                        if card_container.count() == 0:
+                        card_labels = page.locator(card_sel)
+                        if card_labels.count() == 0:
                             continue
-                        cover_card = card_container.first
+                        cover_card = _find_wechat_cover_preview_card(card_labels.first)
+                        if cover_card is None:
+                            logger.warning("No isolated cover preview media scope found.")
+                            continue
                         before_signatures = _wechat_cover_preview_signatures(cover_card)
                         before_visual_signature = _wechat_cover_preview_visual_signature(cover_card)
                         cover_card.hover()
