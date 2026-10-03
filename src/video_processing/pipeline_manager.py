@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.63.1 | 2026-10-03 | Codex | 区分单视频与共享发布锁冲突，未开始投稿的就绪领取安全回队，保留既有提交终态。 |
 | 3.63.0 | 2026-09-27 | Codex | 常规封面队列固化 AGY 首选与无文字底图要求。 |
 | 3.62.0 | 2026-09-26 | Antigravity | 安全访问 _trigger_source 属性以兼容单元测试实例化与非完整管线实例。 |
 | 3.61.0 | 2026-09-25 | Codex | 仅对启用边界后新入库的 TED/TEDx AUTO 视频应用演讲发布线托底，不释放历史低分候选。 |
@@ -3806,8 +3807,19 @@ class PipelineManager:
                 except Exception:
                     logger.exception("[%s] 未能保存加工触发来源；本次归因保持未知。", prefix)
                 if submission_only or (video.get("preparation_ready") and not preparation_only):
-                    with TaskLease(self._OUT_DIR / "wechat_publish_priority.lock", video=prefix, stage="发布前校验/上传"):
-                        self._submit_ready_video(video)
+                    try:
+                        with TaskLease(self._OUT_DIR / "wechat_publish_priority.lock", video=prefix, stage="发布前校验/上传"):
+                            self._submit_ready_video(video)
+                    except TaskLeaseBusy:
+                        evidence_root = self._OUT_DIR / "wechat_evidence" / prefix
+                        if self._wechat_submission_evidence_paths(prefix) or list(evidence_root.glob("*/submission_receipt.json")):
+                            logger.warning("[%s] 发布资源占用且已有投稿证据，保留状态，禁止回队重发。", prefix)
+                        else:
+                            self.db.release_unstarted_ready_publication_claim(
+                                yid, owner_pid=os.getpid(), slice_index=index,
+                                reason="同账号发布执行者占用，等待释放后自动重试",
+                            )
+                            logger.info("[%s] 发布资源占用；未开始的就绪任务保留缓存等待。", prefix)
                 else:
                     self.db.update_process_pid(yid, os.getpid(), slice_index=index)
                     try:

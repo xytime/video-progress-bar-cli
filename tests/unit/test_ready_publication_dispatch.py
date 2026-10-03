@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-03 | Codex | 真实锁冲突释放未开始领取，拒绝改写其他归属、投稿证据和同视频活跃任务。 |
 | 1.0.0 | 2026-09-23 | Codex | 验证加工锁不阻塞发布、原子领取与失败缓存保护。 |
 """
 from concurrent.futures import ThreadPoolExecutor
@@ -143,6 +144,44 @@ def test_actual_task_lock_owner_and_publication_priority(tmp_path):
     assert read_lease_owner(priority) == {}
     with WeChatSessionLock(state, purpose="保活"):
         pass
+
+
+def test_priority_lock_busy_requeues_claim_without_retry_or_cache_loss(tmp_path):
+    manager = manager_at(tmp_path)
+    manager.db.add_video("ready", "Ready", "channel", score=90)
+    manager.db.mark_video_ready_for_publication("ready")
+    assert manager.db.claim_video_for_processing("ready")
+    before = manager.db.get_video_by_youtube_id("ready")
+    with TaskLease(tmp_path / "wechat_publish_priority.lock", video="other"):
+        manager._process_single_video(before)
+    row = manager.db.get_video_by_youtube_id("ready")
+    assert row["status"] == "PENDING" and row["process_pid"] is None
+    assert row["preparation_ready"] == 1
+    assert row["retry_count"] == before["retry_count"]
+    assert row["publication_ready_at"] == before["publication_ready_at"]
+    assert row["publication_wait_reason"].startswith("同账号")
+
+
+@pytest.mark.parametrize("guard", ["other_owner", "same_video_lock", "receipt", "publication"])
+def test_priority_conflict_keeps_existing_owner_or_submission(tmp_path, guard):
+    manager = manager_at(tmp_path)
+    manager.db.add_video("ready", "Ready", "channel", score=90)
+    manager.db.mark_video_ready_for_publication("ready")
+    assert manager.db.claim_video_for_processing("ready")
+    if guard == "other_owner":
+        manager.db.update_process_pid("ready", 987654)
+    if guard == "receipt":
+        proof = tmp_path / "wechat_evidence/ready/attempt/submission_receipt.json"
+        proof.parent.mkdir(parents=True)
+        proof.write_text('{}')
+    if guard == "publication":
+        manager.db.record_wechat_publication_confirmation("ready", evidence_path=None, state="UNCERTAIN")
+    before = manager.db.get_video_by_youtube_id("ready")
+    lock_path = tmp_path / ("task_locks/ready.lock" if guard == "same_video_lock" else "wechat_publish_priority.lock")
+    with TaskLease(lock_path, video="other"):
+        manager._process_single_video(before)
+    after = manager.db.get_video_by_youtube_id("ready")
+    assert (after["status"], after["process_pid"]) == (before["status"], before["process_pid"])
 
 
 def test_cache_gc_protects_failed_pending_and_unknown_sources(tmp_path):

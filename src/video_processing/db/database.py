@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.90.1 | 2026-10-03 | Codex | 发布资源锁冲突时按领取归属原子释放未开始的就绪任务，保留缓存和重试计数并排除投稿账本。 |
 | 3.90.0 | 2026-10-03 | Codex | 具名恢复近24小时文字供应商失败，原子排除投稿账本、运行占用和策略拒绝。 |
 | 3.89.0 | 2026-09-27 | Codex | 封面挂起原因仅原子写入仍处于 AI_COVER_PENDING 的条目。 |
 | 3.88.0 | 2026-09-25 | Codex | 英语世界具名只读回查限用一次，并原子节流公开确认缺失提醒。 |
@@ -3462,6 +3463,20 @@ class PipelineDB:
                   AND NOT EXISTS (SELECT 1 FROM recommended_channels c WHERE c.channel_id = processed_videos.channel_id AND c.status = 'BLACKLISTED')
                   AND NOT EXISTS (SELECT 1 FROM wechat_upload_retries r WHERE r.video_id = processed_videos.id AND r.next_attempt_at > CURRENT_TIMESTAMP)
                 """, (owner_pid, youtube_id, slice_index))
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def release_unstarted_ready_publication_claim(self, youtube_id: str, *, owner_pid: int, reason: str, slice_index: int = 0) -> bool:
+        """持单视频锁时释放共享发布锁争用的任务；未开始投稿且归属一致才可回队。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute("""UPDATE processed_videos SET status = 'PENDING',
+                process_pid = NULL, publication_wait_reason = ?, error_msg = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE youtube_id = ? AND slice_index = ? AND preparation_ready = 1
+                  AND status IN ('PENDING', 'PROCESSING') AND (process_pid IS NULL OR process_pid = ?)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = processed_videos.id)
+                """, (reason, reason, youtube_id, slice_index, owner_pid))
             conn.commit()
             return cursor.rowcount == 1
 
