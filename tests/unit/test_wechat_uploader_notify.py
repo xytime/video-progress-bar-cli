@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-03 | Codex | 验证登录诊断仅记录固定字段，外部页面不读取正文或截图。 |
 | 1.0.0 | 2026-09-27 | Antigravity | 新增自动登录/续约成功后的 Telegram 回报通知与方法标识测试。 |
 """
 import sys
@@ -18,6 +19,31 @@ if _scripts not in sys.path:
     sys.path.insert(0, _scripts)
 
 from scripts.wechat_uploader import _notify_wechat_login_success, _wait_and_save_login
+
+
+def test_login_evidence_omits_query_and_does_not_inspect_untrusted_page(tmp_path):
+    import json
+    from scripts.wechat_uploader import _record_login_page_evidence
+
+    page = MagicMock()
+    page.url = "https://channels.weixin.qq.com/platform?token=should-not-be-recorded"
+    page.evaluate.return_value = {
+        "ready_state": "complete", "local_storage_count": 2,
+        "session_storage_count": 1, "frame_count": 0,
+    }
+    _record_login_page_evidence(page, tmp_path, "reuse_failed")
+    text = (tmp_path / "reuse_failed.json").read_text()
+    assert "should-not-be-recorded" not in text
+    assert "https://" not in text
+    assert json.loads(text)["route"] == "HOME"
+    page.screenshot.assert_called_once()
+
+    page.reset_mock()
+    page.url = "https://wrong-origin.invalid/platform/post/create"
+    _record_login_page_evidence(page, tmp_path, "untrusted")
+    assert json.loads((tmp_path / "untrusted.json").read_text())["route"] == "UNTRUSTED"
+    page.evaluate.assert_not_called()
+    page.screenshot.assert_not_called()
 
 
 def test_notify_wechat_login_success_desktop_quick():
@@ -77,4 +103,3 @@ def test_wait_and_save_login_triggers_notification_and_cleanup(tmp_path):
         mock_stamp.assert_called_once_with(state_file, method="desktop_quick")
         assert not qr_file.exists()  # QR cleaned up
         mock_notify.assert_called_once_with(method="desktop_quick", state_file=state_file)
-

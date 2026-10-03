@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.2 | 2026-10-03 | Codex | 登录与独立复用检查留存固定路由分类、页面加载状态和截图，失败诊断不输出 URL、凭据或页面正文。 |
 | 5.17.1 | 2026-10-03 | Codex | 扫码等待按完整十分钟期限轮询正向发布控件，避免登录页沿用 /post/create 地址而十五秒提前退出；来源与独立复用门禁保持不变。 |
 | 5.17.0 | 2026-09-28 | Antigravity | 接入统一 wechat_browser_context 工厂：统一初始 context 与内部 reuse_ctx 的真实 Chrome UA、Viewport 与 init_script 反检测指纹，确保独立复用门禁指纹与初始环境 100% 一致；relogin 保证初始不加载旧会话。 |
 | 5.16.0 | 2026-09-28 | Antigravity | 严格过滤 login frame 非默认端口与 userinfo；管理页分支与发布检测中遇到 DOM_ERROR 立即失败拒绝 fail-open。 |
@@ -1389,6 +1390,39 @@ def _has_positive_publish_controls(page) -> bool:
     return ok
 
 
+def _record_login_page_evidence(page, evidence_dir: Path, stage: str) -> None:
+    """只留存固定分类与官方页面截图，不读取会话凭据或原始 URL。"""
+    from video_processing.core.wechat_page_contract import is_official_wechat_origin
+
+    try:
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        official = is_official_wechat_origin(page.url)
+        route = "UNTRUSTED"
+        if official:
+            route = {
+                "/platform/post/create": "CREATE", "/platform/post/list": "LIST",
+                "/platform": "HOME", "/platform/": "HOME",
+            }.get(urlsplit(page.url).path, "OTHER_OFFICIAL")
+        evidence = {"stage": stage, "observed_at": time.time(), "route": route}
+        if official:
+            # 固定字段；不读取 Cookie、storage 值、页面正文或查询参数。
+            evidence["page"] = page.evaluate("""() => ({
+                ready_state: document.readyState,
+                local_storage_count: localStorage.length,
+                session_storage_count: sessionStorage.length,
+                frame_count: document.querySelectorAll('iframe').length
+            })""")
+        (evidence_dir / f"{stage}.json").write_text(
+            json.dumps(evidence, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        if official:
+            page.screenshot(path=str(evidence_dir / f"{stage}.png"), timeout=5000)
+        logger.info("Login page evidence recorded: %s (%s)", stage, route)
+    except Exception as exc:
+        # 诊断留存失败不能改变认证门禁的结果。
+        logger.warning("Login page evidence unavailable: %s", type(exc).__name__)
+
+
 def _wait_and_save_login(
     page,
     context,
@@ -1427,6 +1461,8 @@ def _wait_and_save_login(
         raise RuntimeError(f"Positive publish controls not found on /post/create after login redirect ({err_cat})")
 
     logger.info("Login detected and positive publish controls verified. Saving to temporary verification state...")
+    login_evidence_dir = state_file.parent / "wechat_login_evidence" / str(time.time_ns())
+    _record_login_page_evidence(page, login_evidence_dir, "initial_ready")
     tmp_verify_state = state_file.with_name(f".{state_file.name}.verify.{os.getpid()}.{time.time_ns()}")
     try:
         try:
@@ -1461,7 +1497,11 @@ def _wait_and_save_login(
                 record_wechat_auth_attempt(state_file, method=method, success=False, reason="NETWORK_TIMEOUT")
                 raise
 
+            _record_login_page_evidence(reuse_page, login_evidence_dir, "reuse_loaded")
             reuse_ready, reuse_err = wait_for_publish_ready_with_spa_guard(reuse_page, timeout_seconds=10.0)
+            _record_login_page_evidence(
+                reuse_page, login_evidence_dir, "reuse_ready" if reuse_ready else "reuse_failed"
+            )
             if reuse_ready:
                 reuse_ok = True
                 logger.info("Session reuse in independent fresh context confirmed successfully.")
