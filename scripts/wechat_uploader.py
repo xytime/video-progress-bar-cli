@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.17.10 | 2026-10-03 | Codex | 禁用浏览器 2D Canvas 硬件加速，使封面裁剪和严格像素回读使用一致渲染路径。 |
 | 5.17.9 | 2026-10-03 | Codex | 对保存后重新打开的 Croppie Canvas 复现等比缩放，完整 RGBA 与指定封面精确相等才放行。 |
 | 5.17.8 | 2026-10-03 | Codex | 编辑器回读覆盖本地 CSS 背景资源，并留存脱敏媒体结构；不请求远端，不匹配仍禁止发表。 |
 | 5.17.7 | 2026-10-03 | Codex | 缩略图资源未更新时重新打开编辑器，按已解码本地图像字节哈希回读指定封面；未知或不匹配仍阻止发表。 |
@@ -1937,6 +1938,8 @@ def run_uploader(
                 "--disable-blink-features=AutomationControlled",
                 "--disable-infobars",
                 "--window-size=1280,800",
+                # CPU Canvas 统一可视与无界面模式的缩放结果，避免 GPU 重采样差异误拒封面。
+                "--disable-accelerated-2d-canvas",
                 # [BugFix] 禁用代理，防止 Playwright 走海外节点导致微信异地登录强制掉线
                 "--no-proxy-server",
                 "--host-resolver-rules=MAP localhost.weixin.qq.com 127.0.0.1",
