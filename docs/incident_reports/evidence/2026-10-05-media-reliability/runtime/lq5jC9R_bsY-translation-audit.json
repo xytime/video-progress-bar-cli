@@ -1,0 +1,53 @@
+{
+  "run": {
+    "id": 1622,
+    "youtube_id": "lq5jC9R_bsY",
+    "slice_index": 0,
+    "operation": "subtitle_translation",
+    "status": "SUCCEEDED",
+    "started_at": "2026-10-04 22:14:59",
+    "finished_at": "2026-10-04 22:20:21",
+    "final_provider": "codex",
+    "fallback_used": 1,
+    "quality_score": 100.0,
+    "chinese_coverage": 1.0,
+    "vocabulary_segments": 0,
+    "quality_status": "passed",
+    "error_class": null,
+    "error_message": null
+  },
+  "attempts": [
+    {
+      "provider": "gemini",
+      "model": "dynamic Gemini pool",
+      "status": "FAILED",
+      "duration_ms": 23110,
+      "error_class": "invalid_response",
+      "selected": 0
+    },
+    {
+      "provider": "deepseek",
+      "model": "deepseek-v4-flash",
+      "status": "FAILED",
+      "duration_ms": 443,
+      "error_class": "billing",
+      "selected": 0
+    },
+    {
+      "provider": "google",
+      "model": "Google Translate",
+      "status": "FAILED",
+      "duration_ms": 10085,
+      "error_class": "rate_limit",
+      "selected": 0
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-5.6-luna",
+      "status": "SUCCEEDED",
+      "duration_ms": 288311,
+      "error_class": null,
+      "selected": 1
+    }
+  ]
+}

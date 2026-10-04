@@ -1,0 +1,10 @@
+{
+  "platform_post_id": "export/UzFfBgAAxNOkWHgEFnunk8zT4DCaaPzxp6AKky2QEoH2hWgixg",
+  "management_object_id": "export/UzFfBgAAxNOkWHgEFnunk8zT4DCaaPzxp6AKky2QEoH2hWgixg",
+  "management_export_id": "export/UzFfBgAAxNOkWHgEFnunk8zT4DCaaPzxp6AKky2QEoH2hWgixg",
+  "matched_by": "EXACT_OBJECT_ID",
+  "identity_source": "post_list_api",
+  "platform_status": "1",
+  "state": "UNCERTAIN",
+  "reason": "API_STATUS_UNMAPPED"
+}

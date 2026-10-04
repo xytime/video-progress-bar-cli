@@ -1,0 +1,15 @@
+{
+  "youtube_id": "aZJZV-FODqk",
+  "readonly": true,
+  "purpose": "compare metadata-only cookie probe with exact production format extraction; no media download, queue mutation or cooldown clearing",
+  "at": 1791153253.9247282,
+  "elapsed_seconds": 2.22,
+  "returncode": 1,
+  "production_force_ipv4": true,
+  "format_selector": "bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+  "remote_components": [
+    "ejs:github"
+  ],
+  "status": "FORMAT_EXTRACTION_REJECTED",
+  "detail": "WARNING: [youtube] No title found in player responses; falling back to title from initial data. Other metadata may also be missing\nERROR: [youtube] aZJZV-FODqk: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  <url>  for how to manually pass cookies. Also see  <url>  for tips on effectively exporting YouTube cookies"
+}

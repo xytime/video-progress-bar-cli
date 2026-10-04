@@ -1,0 +1,69 @@
+{
+  "youtube_id": "8g7Nhc7k2Hs",
+  "source_sha256_after": "cf8931e7725c257b04cd938987002774f796b5f45282ac1a0a5dce8efafb97fb",
+  "source_unchanged": true,
+  "captioned_video": {
+    "path": "output/8g7Nhc7k2Hs_vertical.mp4",
+    "sha256": "3650bceee8c8eb25a24677de7b4304f4146c3d5e8ff9efe39f24a96d93a262c1",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_type": "video"
+        },
+        {
+          "codec_type": "audio"
+        }
+      ],
+      "format": {
+        "duration": "887.210998",
+        "size": "98557523"
+      }
+    }
+  },
+  "subtitle": {
+    "path": "output/original_video/8g7Nhc7k2Hs.ass",
+    "sha256": "364cffed14311441804db98bfd22cd7a4c922795f255d7d6eca7baffe9b062ad",
+    "events_by_style": {
+      "Default": 137,
+      "GlossaryCard": 120
+    },
+    "last_end_seconds": 886.48
+  },
+  "translation_quality": {
+    "input": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/original_video/8g7Nhc7k2Hs.mp4",
+    "src_lang": "en",
+    "target_lang": "zh-CN",
+    "events": [
+      {
+        "provider": "Gemini",
+        "status": "passed",
+        "action": "accept",
+        "warning_issues": [],
+        "blocking_issues": [],
+        "final_provider": false,
+        "quality_context": {
+          "domain": "finance/technology",
+          "facts": [
+            "Preserve USD amount magnitudes exactly where mentioned: $900B, $1, $1B, $100, $85, $15."
+          ],
+          "entities": [
+            "RAP",
+            "IRA",
+            "MetLife",
+            "VOIA"
+          ],
+          "term_notes": [
+            "For finance subtitles, distinguish fundraising inflow from investor exit/outflow."
+          ],
+          "style_notes": [
+            "Translate meaning, not isolated words; keep subtitles concise and natural in zh-CN.",
+            "Preserve event direction, money flow, entities, and numeric magnitude."
+          ]
+        },
+        "selected": true
+      }
+    ]
+  }
+}

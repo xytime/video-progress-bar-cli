@@ -1,0 +1,5 @@
+{
+  "category": "auth",
+  "detail": "WARNING: [youtube] The provided YouTube account cookies are no longer valid. They have likely been rotated in the browser as a security measure. For tips on how to effectively export YouTube cookies, refer to  <url> .\nWARNING: [youtube] The provided YouTube account cookies are no longer valid. They have likely been rotated in the browser as a security measure. For tips on how to effectively export YouTube cookies, refer to  <url> .\nWARNING: [youtube] No title found in player responses; falling back to title from initial data. Other metadata may also be missing\nERROR: [youtube] aZJZV-FODqk: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  <url>  for how to manually pass cookies. Also see  <url>  for tips on effectively exporting YouTube cookies",
+  "retry_after": 1791173558.272125
+}

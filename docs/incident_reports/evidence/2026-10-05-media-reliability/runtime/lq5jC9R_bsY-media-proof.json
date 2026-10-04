@@ -1,0 +1,131 @@
+{
+  "youtube_id": "lq5jC9R_bsY",
+  "artifacts": [
+    {
+      "path": "output/original_video/lq5jC9R_bsY.mp4",
+      "bytes": 238363408,
+      "sha256": "95eccb623c547d559ad67ec3d15ea1d34bf6c795995e3321e59efa679eaa9252",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_type": "video"
+          },
+          {
+            "codec_type": "audio"
+          }
+        ],
+        "format": {
+          "duration": "938.016508",
+          "size": "238363408"
+        }
+      }
+    },
+    {
+      "path": "output/lq5jC9R_bsY_vertical.mp4",
+      "bytes": 165237557,
+      "sha256": "8c500a477eb04e88bc49726067d97585e195d27979af1b1ed9c05be548ee8cdd",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_type": "video"
+          },
+          {
+            "codec_type": "audio"
+          }
+        ],
+        "format": {
+          "duration": "938.016009",
+          "size": "165237557"
+        }
+      }
+    },
+    {
+      "path": "output/lq5jC9R_bsY_vertical_interactive.mp4",
+      "bytes": 201102274,
+      "sha256": "f11f4165064edcc156eb794125b9f5c2059387d5daa5234e971ed302bf0720e4",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_type": "video"
+          },
+          {
+            "codec_type": "audio"
+          }
+        ],
+        "format": {
+          "duration": "938.016009",
+          "size": "201102274"
+        }
+      }
+    },
+    {
+      "path": "output/original_video/lq5jC9R_bsY.ass",
+      "bytes": 59481,
+      "sha256": "36fee499be9d7f0f6de7042690b2e6f4927168931ef96cff46a22d6f9f816156"
+    }
+  ],
+  "subtitle": {
+    "path": "output/original_video/lq5jC9R_bsY.ass",
+    "events_by_style": {
+      "Default": 180
+    },
+    "last_end_seconds": 937.84
+  },
+  "translation_quality": {
+    "input": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/original_video/lq5jC9R_bsY.mp4",
+    "src_lang": "en",
+    "target_lang": "zh-CN",
+    "events": [
+      {
+        "provider": "Google",
+        "status": "blocked",
+        "action": "fallback",
+        "warning_issues": [],
+        "blocking_issues": [
+          {
+            "severity": "P1",
+            "code": "TRANSLATION_EMPTY_SEGMENT",
+            "message": "translation_empty_segment: index=0",
+            "source_signal": "segments=180",
+            "translation_signal": "structural_contract_failed",
+            "suggested_fix": ""
+          }
+        ],
+        "final_provider": false,
+        "selected": false
+      },
+      {
+        "provider": "codex",
+        "status": "passed",
+        "action": "accept",
+        "warning_issues": [],
+        "blocking_issues": [],
+        "final_provider": true,
+        "quality_context": {
+          "domain": "finance/technology",
+          "facts": [
+            "Preserve USD amount magnitudes exactly where mentioned: $20B."
+          ],
+          "entities": [
+            "EESI",
+            "UAE"
+          ],
+          "term_notes": [
+            "For finance subtitles, distinguish fundraising inflow from investor exit/outflow."
+          ],
+          "style_notes": [
+            "Translate meaning, not isolated words; keep subtitles concise and natural in zh-CN.",
+            "Preserve event direction, money flow, entities, and numeric magnitude."
+          ]
+        },
+        "selected": true
+      }
+    ]
+  }
+}

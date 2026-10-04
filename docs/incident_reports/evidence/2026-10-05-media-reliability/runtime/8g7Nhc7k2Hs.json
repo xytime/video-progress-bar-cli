@@ -1,0 +1,24 @@
+{
+  "before": {
+    "youtube_id": "8g7Nhc7k2Hs",
+    "status": "FAILED",
+    "retry_count": 2,
+    "score": 80,
+    "source": "AUTO",
+    "preparation_ready": 0,
+    "error_summary": "字幕阶段看门狗终止：字幕阶段 TRANSLATING 持续 724s 未完成（上限 720s）。子进程已终止；请检查该阶段的 Whisper、翻译或 FFmpeg 日志后再点「重试」。"
+  },
+  "started_at": 1791151166.5659761,
+  "git_revision": "55ec2f6",
+  "quality_fail_open": false,
+  "after": {
+    "youtube_id": "8g7Nhc7k2Hs",
+    "status": "AI_COVER_PENDING",
+    "retry_count": 3,
+    "score": 80,
+    "preparation_ready": 0,
+    "source_subtitle_status": "PASSED",
+    "error_summary": "等待 AGY 专属底图生成与质量核验：8g7Nhc7k2Hs-9f85ec51fb2f"
+  },
+  "finished_at": 1791151955.448684
+}

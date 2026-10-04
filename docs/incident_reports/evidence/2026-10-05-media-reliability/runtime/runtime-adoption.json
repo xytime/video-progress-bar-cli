@@ -1,0 +1,29 @@
+{
+  "at": 1791153611.861701,
+  "publication_worker_heartbeat": {
+    "pid": 97503,
+    "stage": "IDLE",
+    "current_video": null,
+    "git_revision": "55ec2f6bafdac85fbac322818db9d185098a6143",
+    "ffmpeg_guard_enabled": true,
+    "ffmpeg_config": "/Users/ryusei/Library/Application Support/VideoProcessing/ffmpeg-slot/resource-limits.json",
+    "ffmpeg_limit": 1,
+    "ffmpeg_config_error": null,
+    "ai_cover_primary_provider": "agy",
+    "ai_cover_queue_enabled": true,
+    "ted_min_like_rate_pct": 0.6,
+    "speech_publish_score_line": 40,
+    "subtitle_translation_total_timeout_seconds": 600,
+    "google_translate_interval_seconds": 0.4,
+    "youtube_auth_cooldown_seconds": 21600,
+    "started_at": 1791150369.0370471,
+    "stage_started_at": 1791153605.502377,
+    "current_slice_index": 0,
+    "preparation_only": false,
+    "heartbeat_at": 1791153608.864083
+  },
+  "final_source_commits": [
+    "55ec2f6bafdac85fbac322818db9d185098a6143",
+    "83d5b64fd833675bf562709ca8f14932518875a3"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "run": {
+    "id": 1621,
+    "youtube_id": "8g7Nhc7k2Hs",
+    "slice_index": 0,
+    "operation": "subtitle_translation",
+    "status": "SUCCEEDED",
+    "started_at": "2026-10-04 22:00:52",
+    "finished_at": "2026-10-04 22:04:00",
+    "final_provider": "Gemini",
+    "fallback_used": 0,
+    "quality_score": 100.0,
+    "chinese_coverage": 1.0,
+    "vocabulary_segments": 120,
+    "quality_status": "passed",
+    "error_class": null,
+    "error_message": null
+  },
+  "attempts": [
+    {
+      "provider": "gemini",
+      "model": "dynamic Gemini pool",
+      "status": "SUCCEEDED",
+      "duration_ms": 187576,
+      "error_class": null,
+      "selected": 1
+    }
+  ]
+}

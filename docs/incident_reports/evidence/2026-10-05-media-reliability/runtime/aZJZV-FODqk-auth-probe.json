@@ -1,0 +1,12 @@
+{
+  "youtube_id": "aZJZV-FODqk",
+  "result": {
+    "ok": true,
+    "code": "READY",
+    "detail": ""
+  },
+  "at": 1791152121.345196,
+  "cookie_mtime": 1791152071.527305,
+  "purpose": "read-only validation after safe browser refresh; no queue/cooldown mutation",
+  "recording_note": "initial dataclass serialization failed; this independent probe records current state without repeating refresh"
+}

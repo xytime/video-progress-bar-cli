@@ -1,0 +1,35 @@
+{
+  "task_id": "OflqlNOW3Ek-0f64ec07cf06",
+  "generated_by": "antigravity_imagegen",
+  "completed_at": "2026-10-04T22:00:15.588348Z",
+  "visual_filename": "visual.png",
+  "sha256": "245bebefd76615b720f34419dafd1c8597d98bb5a5c69549064407eaa34cb773",
+  "uses_video_frame": false,
+  "machine_visual_review": "agy-cover-quality-v1",
+  "quality_review": {
+    "version": "agy-cover-quality-v1",
+    "provider": "agy_cli",
+    "model": "gemini-3.7-flash-high",
+    "sha256": "245bebefd76615b720f34419dafd1c8597d98bb5a5c69549064407eaa34cb773",
+    "review": {
+      "adequate_detail": true,
+      "composition_complete": true,
+      "decision": "PASS",
+      "image_inspected": true,
+      "no_severe_artifacts": true,
+      "observed_content": "A modern high-rise executive boardroom at dusk with floor-to-ceiling panoramic glass windows looking out onto a rainy urban skyline with illuminated skyscrapers. On the sleek dark conference table in the foreground, a glowing golden holographic financial chart is projected, displaying rising bar graphs and an ascending line trend with data nodes, cleanly reflected on the polished tabletop surface.",
+      "reason": "The image presents a high-quality, atmospheric financial and corporate boardroom setting directly relevant to corporate debt, capital markets, and business finance topics. The composition is well-balanced with coherent perspective, crisp physical details (reflections, rain on glass, lighting), ample negative space for editorial titles, and no visual artifacts or distortions.",
+      "subject_relevant": true
+    },
+    "task_id": "OflqlNOW3Ek-0f64ec07cf06",
+    "attempt_number": 1,
+    "reviewed_at": "2026-10-04T22:00:15.562896Z"
+  },
+  "dimensions": {
+    "width": 896,
+    "height": 1200
+  },
+  "source_artifact": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/ai-cover-finish/OflqlNOW3Ek-0f64ec07cf06/antigravity-run-1791151084325152000/candidate.png",
+  "transport": "agy_cli",
+  "model": "gemini-3.7-flash-high"
+}

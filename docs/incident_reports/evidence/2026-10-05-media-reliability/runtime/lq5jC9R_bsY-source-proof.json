@@ -1,0 +1,23 @@
+{
+  "youtube_id": "lq5jC9R_bsY",
+  "source": {
+    "path": "output/original_video/lq5jC9R_bsY.mp4",
+    "sha256": "95eccb623c547d559ad67ec3d15ea1d34bf6c795995e3321e59efa679eaa9252",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_type": "video"
+        },
+        {
+          "codec_type": "audio"
+        }
+      ],
+      "format": {
+        "duration": "938.016508",
+        "size": "238363408"
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "before": {
+    "youtube_id": "lq5jC9R_bsY",
+    "status": "FAILED",
+    "retry_count": 0,
+    "score": 85,
+    "source": "AUTO",
+    "preparation_ready": 0,
+    "error_summary": "Command '['/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/bin/yt-dlp', '--force-ipv4', '-f', 'bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '-S', 'vcodec:h264', '--cookies', 'output/youtube_cookies.txt', '--write-description', '--write-info-json', '--remote-components', 'ejs:github', '--downloader', 'curl', '--downloader-args', 'curl:--continue-at - --retry 10 --retry-delay 3 --retry-all-errors --speed-limit 10000 --speed-time 30 --connect-timeout 15', '<url> '-o', '/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/lq5jC9R_bsY.%(ext)s']' timed out after 893.4831101894379 seconds"
+  },
+  "started_at": 1791151958.713674,
+  "git_revision": "55ec2f6",
+  "quality_fail_open": false,
+  "after": {
+    "youtube_id": "lq5jC9R_bsY",
+    "status": "AI_COVER_PENDING",
+    "retry_count": 1,
+    "score": 85,
+    "preparation_ready": 0,
+    "source_subtitle_status": "PASSED",
+    "error_summary": "等待 AGY 专属底图生成与质量核验：lq5jC9R_bsY-316bc55df1fb"
+  },
+  "finished_at": 1791153137.977401
+}

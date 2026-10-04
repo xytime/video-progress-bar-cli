@@ -1,0 +1,93 @@
+{
+  "youtube_id": "OflqlNOW3Ek",
+  "artifacts": [
+    {
+      "path": "output/original_video/OflqlNOW3Ek.ass",
+      "bytes": 78096,
+      "sha256": "572f4ee070e7909e98e2e23a2debe624a30e52c2a8cd4bcc1b75d842ba5ddcbf"
+    },
+    {
+      "path": "output/original_video/OflqlNOW3Ek.mp4",
+      "bytes": 113352768,
+      "sha256": "c09a9d1d5adfaccec6f621eee95d96b56201145c076670889cd33f13d67f4c28",
+      "probe": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "codec_type": "video"
+          },
+          {
+            "codec_type": "audio"
+          }
+        ],
+        "format": {
+          "duration": "856.746667",
+          "size": "113352768"
+        }
+      }
+    },
+    {
+      "path": "output/original_video/OflqlNOW3Ek.translation_quality.json",
+      "bytes": 993,
+      "sha256": "9678b6f2e40bfd0c369e90bd6eae2af733d6c8d4338ae63e7f0499221df74ed9",
+      "quality": {
+        "input": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/original_video/OflqlNOW3Ek.mp4",
+        "src_lang": "en",
+        "target_lang": "zh-CN",
+        "events": [
+          {
+            "provider": "Gemini",
+            "status": "passed",
+            "action": "accept",
+            "warning_issues": [],
+            "blocking_issues": [],
+            "final_provider": false,
+            "quality_context": {
+              "domain": "finance/technology",
+              "facts": [
+                "Preserve USD amount magnitudes exactly where mentioned: $1.8T, $100M, $500M, $12.5M, $42.5M, $30M."
+              ],
+              "entities": [
+                "U.S"
+              ],
+              "term_notes": [
+                "For finance subtitles, distinguish fundraising inflow from investor exit/outflow."
+              ],
+              "style_notes": [
+                "Translate meaning, not isolated words; keep subtitles concise and natural in zh-CN.",
+                "Preserve event direction, money flow, entities, and numeric magnitude."
+              ]
+            },
+            "selected": true
+          }
+        ]
+      }
+    }
+  ],
+  "captioned_video": {
+    "path": "output/OflqlNOW3Ek_vertical.mp4",
+    "probe": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_type": "video"
+        },
+        {
+          "codec_type": "audio"
+        }
+      ],
+      "format": {
+        "duration": "856.746009",
+        "size": "97063288"
+      }
+    },
+    "sha256": "3ae0024eba253f9b9400bf5348db42cef41625d209a0e904289ab0ce839f19ea"
+  },
+  "subtitle_events_by_style": {
+    "Default": 137,
+    "GlossaryCard": 112
+  },
+  "subtitle_last_end_seconds": 856.16
+}

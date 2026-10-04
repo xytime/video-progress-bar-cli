@@ -1,0 +1,21 @@
+{
+  "youtube_id": "aZJZV-FODqk",
+  "auth_probe": {
+    "ok": true,
+    "code": "READY",
+    "detail": ""
+  },
+  "verified_at": 1791153144.974029,
+  "before_retry_count": 1,
+  "quality_fail_open": false,
+  "git_revision": "83d5b64fd833675bf562709ca8f14932518875a3",
+  "prior_cooldown_evidence": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/recovery-20261005/aZJZV-FODqk-cooldown-before-verified-auth.json",
+  "after": {
+    "youtube_id": "aZJZV-FODqk",
+    "status": "FAILED",
+    "retry_count": 2,
+    "preparation_ready": 0,
+    "error_summary": "SOURCE_DOWNLOAD_AUTH: WARNING: [youtube] No title found in player responses; falling back to title from initial data. Other metadata may also be missing\nERROR: [youtube] aZJZV-FODqk: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication. See  <url>  for how to manually pass cookies. Also see  <url>  for tips on effectively exporting YouTube cookies; retry_after=1791174748"
+  },
+  "finished_at": 1791153147.7832499
+}

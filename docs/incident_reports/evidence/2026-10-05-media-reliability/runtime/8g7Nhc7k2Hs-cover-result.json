@@ -1,0 +1,35 @@
+{
+  "task_id": "8g7Nhc7k2Hs-9f85ec51fb2f",
+  "generated_by": "antigravity_imagegen",
+  "completed_at": "2026-10-04T22:23:18.576549Z",
+  "visual_filename": "visual.png",
+  "sha256": "d3c0070940e6afe6d560e6b878b99ac29a48543ea39d703f2c1070c6771c4552",
+  "uses_video_frame": false,
+  "machine_visual_review": "agy-cover-quality-v1",
+  "quality_review": {
+    "version": "agy-cover-quality-v1",
+    "provider": "agy_cli",
+    "model": "gemini-3.7-flash-high",
+    "sha256": "d3c0070940e6afe6d560e6b878b99ac29a48543ea39d703f2c1070c6771c4552",
+    "review": {
+      "adequate_detail": true,
+      "composition_complete": true,
+      "decision": "PASS",
+      "image_inspected": true,
+      "no_severe_artifacts": true,
+      "observed_content": "画面前景为一个由深色大理石、拉丝金属框架和波纹磨砂玻璃构成的精细金融保险柜/锁闭结构，带金属锁扣与锁具细节，顶部有微光点缀；背景为笼罩在晨雾与幽蓝暮色中的现代金融核心区摩天大楼天际线。",
+      "reason": "主体具象且与财经、资本锁定及基金流动性隐喻高度契合；构图完整、纵深层次分明，留有合理的上方留白空间适合排版；材质纹理（大理石、金属、玻璃）细节丰富，无严重畸变或低质生成伪影，符合专业财经视频封面背景质量要求。",
+      "subject_relevant": true
+    },
+    "task_id": "8g7Nhc7k2Hs-9f85ec51fb2f",
+    "attempt_number": 3,
+    "reviewed_at": "2026-10-04T22:23:18.550075Z"
+  },
+  "dimensions": {
+    "width": 896,
+    "height": 1200
+  },
+  "source_artifact": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/ai-cover-finish/8g7Nhc7k2Hs-9f85ec51fb2f/antigravity-run-1791152497989469000/candidate.png",
+  "transport": "agy_cli",
+  "model": "gemini-3.7-flash-high"
+}

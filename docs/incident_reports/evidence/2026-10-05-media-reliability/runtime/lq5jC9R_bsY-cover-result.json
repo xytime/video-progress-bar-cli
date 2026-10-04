@@ -1,0 +1,35 @@
+{
+  "task_id": "lq5jC9R_bsY-316bc55df1fb",
+  "generated_by": "antigravity_imagegen",
+  "completed_at": "2026-10-04T22:34:43.594002Z",
+  "visual_filename": "visual.png",
+  "sha256": "b5d7c33dfc2b60642fac7adae48f2f9466abb3bd531e303dc89cc20fbad2fceb",
+  "uses_video_frame": false,
+  "machine_visual_review": "agy-cover-quality-v1",
+  "quality_review": {
+    "version": "agy-cover-quality-v1",
+    "provider": "agy_cli",
+    "model": "gemini-3.7-flash-high",
+    "sha256": "b5d7c33dfc2b60642fac7adae48f2f9466abb3bd531e303dc89cc20fbad2fceb",
+    "review": {
+      "adequate_detail": true,
+      "composition_complete": true,
+      "decision": "PASS",
+      "image_inspected": true,
+      "no_severe_artifacts": true,
+      "observed_content": "An editorial-style aerial landscape illustration showing a large concrete curved dam (reminiscent of Hoover Dam / Glen Canyon Dam) set in a dramatic red-rock desert canyon. The reservoir walls clearly display prominent white 'bathtub rings' indicating depleted water levels. In the foreground, cracked, parched dry earth is highlighted with topographic contour lines, emphasizing drought and water scarcity. The turquoise river flows through the canyon, framed by stratified mesa cliffs under a clear, open sky with ample negative space at the top.",
+      "reason": "The illustration is highly relevant to the Colorado River water crisis topic, clearly visualizing key elements such as the dam infrastructure, reservoir water level depletion (bathtub rings), and drought-stricken arid land. The composition is complete, physically detailed, stylistically coherent, and free of visual artifacts, making it an excellent editorial cover background.",
+      "subject_relevant": true
+    },
+    "task_id": "lq5jC9R_bsY-316bc55df1fb",
+    "attempt_number": 1,
+    "reviewed_at": "2026-10-04T22:34:43.586791Z"
+  },
+  "dimensions": {
+    "width": 896,
+    "height": 1200
+  },
+  "source_artifact": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/ai-cover-finish/lq5jC9R_bsY-316bc55df1fb/antigravity-run-1791153164585056000/candidate.png",
+  "transport": "agy_cli",
+  "model": "gemini-3.7-flash-high"
+}

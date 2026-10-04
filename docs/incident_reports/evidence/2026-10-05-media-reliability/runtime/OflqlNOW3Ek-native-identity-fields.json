@@ -1,0 +1,75 @@
+[
+  {
+    "keys": [
+      "argsInfo",
+      "avgPlayTimeSec",
+      "canSetOriginalsoundTitle",
+      "commentClose",
+      "commentCount",
+      "commentList",
+      "createTime",
+      "desc",
+      "disableInfo",
+      "exportId",
+      "fastFlipRate",
+      "favCount",
+      "flag",
+      "followCount",
+      "forwardAggregationCount",
+      "forwardAllChatCount",
+      "forwardCount",
+      "forwardSnsCount",
+      "fullPlayRate",
+      "likeCount",
+      "objectId",
+      "objectNonce",
+      "objectType",
+      "originalInfo",
+      "permissionFlag",
+      "readCount",
+      "ringsetCount",
+      "showOriginal",
+      "snscoverCount",
+      "status",
+      "statusrefCount",
+      "stickyOpStatus",
+      "visibleType",
+      "yesterdayReadCount"
+    ],
+    "identity_fields": {
+      "objectId": "export/UzFfBgAAxO6lXFxzdUSnk8zT4DCa7nCu0_dh5d6V44eM67L7pA",
+      "exportId": "export/UzFfBgAAxO6lXFxzdUSnk8zT4DCa7nCu0_dh5d6V44eM67L7pA",
+      "createTime": 1791151414,
+      "status": 1
+    },
+    "nested_keys": {
+      "desc": [
+        "audio",
+        "description",
+        "event",
+        "extReading",
+        "feedLocation",
+        "finderNewlifeDesc",
+        "location",
+        "media",
+        "mediaType",
+        "member",
+        "mentionedMusics",
+        "modFeedInfo",
+        "shortTitle",
+        "topic"
+      ],
+      "disableInfo": [
+        "isDisabled"
+      ],
+      "originalInfo": [
+        "auditOriginalFlag",
+        "isDeclared",
+        "isOriginalUpgrad"
+      ],
+      "argsInfo": [
+        "poiCheckSum"
+      ]
+    }
+  }
+]

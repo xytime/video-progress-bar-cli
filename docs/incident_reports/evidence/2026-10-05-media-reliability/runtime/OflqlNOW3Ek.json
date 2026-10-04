@@ -1,0 +1,24 @@
+{
+  "before": {
+    "youtube_id": "OflqlNOW3Ek",
+    "status": "FAILED",
+    "retry_count": 0,
+    "score": 80,
+    "source": "AUTO",
+    "preparation_ready": 0,
+    "error_summary": "     0  0:07:15  0:07:04  0:00:11 30835\r 97 13.2M   97 12.9M    0     0  31832      0  0:07:15  0:07:05  0:00:10 29574\r 97 13.2M   97 12.9M    0     0  31832      0  0:07:15  0:07:06  0:00:09 29326\r 98 13.2M   98 12.9M    0     0  31837      0  0:07:15  0:07:07  0:00:08 32787\r 98 13.2M   98 13.0M    0     0  31815      0  0:07:15  0:07:08  0:00:07 31130\r 98 13.2M   98 13.0M    0     0  31818      0  0:07:15  0:07:09  0:00:06 31124\r 98 13.2M   98 13.0M    0     0  31839      0  0:07:15  0:07:10  0:00:05 32398\r 99 13.2M   99 13.1M    0     0  31844      0  0:07:15  0:07:11  0:00:04 32926\r 99 13.2M   99 13.1M    0     0  31843      0  0:07:15  0:07:12  0:00:03 32353\r 99 13.2M   99 13.1M    0     0  31847      0  0:07:15  0:07:13  0:00:02 34829\r 99 13.2M   99 13.2M    0     0  31852      0  0:07:15  0:07:14  0:00:01 35008\r100 13.2M  100 13.2M    0     0  31851      0  0:07:15  0:07:15 --:--:-- 32978\nERROR: Postprocessing: Error opening input files: Invalid data found when processing input\n"
+  },
+  "started_at": 1791150355.6431282,
+  "git_revision": "55ec2f6",
+  "quality_fail_open": false,
+  "after": {
+    "youtube_id": "OflqlNOW3Ek",
+    "status": "AI_COVER_PENDING",
+    "retry_count": 1,
+    "score": 80,
+    "preparation_ready": 0,
+    "source_subtitle_status": "PASSED",
+    "error_summary": "等待 AGY 专属底图生成与质量核验：OflqlNOW3Ek-0f64ec07cf06"
+  },
+  "finished_at": 1791151076.545978
+}
