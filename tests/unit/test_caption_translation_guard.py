@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-05 | Codex | 共享期限耗尽后禁止切换供应商或应用未审查译文。 |
 | 1.1.0 | 2026-09-09 | Codex | 硬合同在 fail-open 下仍回退或失败，审计记录占位符段号 |
 """
 
@@ -29,6 +30,24 @@ def _processor(path: Path = Path("dummy.mp4")) -> AutoCaptionProcessor:
         src_lang="en",
         target_lang="zh-CN",
     )
+
+
+@patch("video_processing.processors.caption_processor.AutoCaptionProcessor._validate_input")
+def test_shared_budget_stops_provider_switching(_validate, tmp_path, monkeypatch):
+    import video_processing.processors.caption_processor as module
+    now, calls = [100.0], []
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    processor = _processor(tmp_path / "video.mp4")
+    def failed_candidate(provider, texts, context):
+        calls.append(provider)
+        now[0] += 601
+        return None
+    monkeypatch.setattr(processor, "_build_translation_candidate", failed_candidate)
+    segments = [{"text": "This is a complete source segment."}]
+    with pytest.raises(VideoProcessingError, match="All subtitle translation providers failed"):
+        processor._translate_segments(segments)
+    assert calls == ["gemini"]
+    assert "zh_text" not in segments[0]
 
 
 @pytest.fixture(autouse=True)

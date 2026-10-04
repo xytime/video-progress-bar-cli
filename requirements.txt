@@ -5,7 +5,7 @@ moviepy>=1.0.3
 imageio-ffmpeg>=0.4.9
 
 # 视频抓取
-yt-dlp>=2023.11.16
+yt-dlp[default]>=2026.08.19
 
 # CLI框架
 click>=8.1.0

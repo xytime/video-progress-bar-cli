@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author      | Description                                                        |
 |---------|------------|-------------|-------------------------------------------------------------------|
+| 1.2.0   | 2026-10-05 | Codex       | 认证/限流有界冷却，失败后验真清理，保留有效分片；压缩脱敏错误证据 |
 | 1.1.1   | 2026-09-23 | Antigravity | [Code Review Fix] 增加 SystemExit 识别为取消异常，防止退出信号误触发 curl 降级 |
 | 1.1.0   | 2026-09-23 | Antigravity | 提取公共参数构建器；纠正 Native 流式下载注释；精准识别 SIGTERM/SIGINT 取消信号与外部取消回调，杜绝取消后误降级 curl；引入贯穿降级链路的总截止时间与动态超时预算 |
 | 1.0.0   | 2026-09-23 | Antigravity | 初始实现：Strategy/Fallback 模式、Native 首选与 Curl 备选、产物后置验真与分片自动清理 |
@@ -13,7 +14,12 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
+import re
+import shutil
+from functools import lru_cache
+from importlib import metadata
 import signal
 import subprocess
 import time
@@ -26,6 +32,31 @@ from .file_utils import clean_partial_downloads
 
 logger = logging.getLogger(__name__)
 
+
+@lru_cache(maxsize=4)
+def download_runtime_status(search_path: str) -> dict:
+    """下载前核对本机依赖；只执行版本命令，不联网或改变代理。"""
+    from packaging.requirements import Requirement
+    result = {"yt_dlp": metadata.version("yt-dlp")}
+    try:
+        result["ejs"] = metadata.version("yt-dlp-ejs")
+    except metadata.PackageNotFoundError as exc:
+        raise RuntimeError("下载运行时缺少兼容 yt-dlp-ejs；安装 requirements.txt 的 yt-dlp[default]。") from exc
+    for raw in metadata.requires("yt-dlp") or []:
+        requirement = Requirement(raw)
+        if requirement.name == "yt-dlp-ejs" and result["ejs"] not in requirement.specifier:
+            raise RuntimeError("yt-dlp-ejs 与当前 yt-dlp 不兼容，停止下载。")
+    for name, flag in (("deno", "--version"), ("ffmpeg", "-version"), ("ffprobe", "-version")):
+        executable = shutil.which(name, path=search_path)
+        if not executable:
+            raise RuntimeError(f"下载运行时缺少 {name}，停止下载。")
+        version = subprocess.run([executable, flag], capture_output=True, text=True, timeout=5, check=True).stdout.splitlines()[0]
+        result[name] = version
+    match = re.search(r"deno (\d+)\.(\d+)", result["deno"])
+    if not match or tuple(map(int, match.groups())) < (2, 3):
+        raise RuntimeError("YouTube challenge runtime requires Deno >=2.3，停止下载。")
+    return result
+
 _CANCELLATION_RETURNCODES = frozenset({
     -signal.SIGTERM,
     -signal.SIGINT,
@@ -34,6 +65,34 @@ _CANCELLATION_RETURNCODES = frozenset({
     130,  # 128 + 2
     137,  # 128 + 9
 })
+
+
+class DownloadBlockedError(RuntimeError):
+    """同一身份的认证/限流阻断；换下载器不能恢复。"""
+
+    def __init__(self, category: str, detail: str, retry_after: float):
+        self.category = category
+        self.retry_after = retry_after
+        super().__init__(f"SOURCE_DOWNLOAD_{category.upper()}: {detail}; retry_after={retry_after:.0f}")
+
+
+def _failure_detail(exc: BaseException) -> str:
+    raw = getattr(exc, "stderr", None) or str(exc)
+    if isinstance(raw, bytes):
+        raw = raw.decode(errors="replace")
+    # 保留核心错误，拒绝把签名媒体 URL 和整段进度写入账本。
+    lines = [line for line in str(raw).splitlines() if "error" in line.lower() or "warning" in line.lower()]
+    detail = "\n".join(lines[-6:]) or str(raw)[-1000:]
+    return re.sub(r"https?://[^\s]+", "<url>", detail)[-1500:]
+
+
+def _blocking_category(detail: str) -> Optional[str]:
+    text = detail.lower()
+    if any(marker in text for marker in ("sign in to confirm", "not a bot", "login required", "use --cookies for the authentication")):
+        return "auth"
+    if any(marker in text for marker in ("429", "too many requests", "rate limit")):
+        return "rate_limit"
+    return None
 
 
 def _is_cancellation_exception(exc: BaseException) -> bool:
@@ -49,10 +108,10 @@ def _invoke_runner(runner: Callable[..., Any], cmd: list[str], timeout: Optional
     """自适应调用 runner：若 runner 支持 timeout 参数则传入，否则按单参数调用。"""
     try:
         sig = inspect.signature(runner)
-        if "timeout" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
-            return runner(cmd, timeout=timeout)
     except (ValueError, TypeError):
-        pass
+        return runner(cmd)
+    if "timeout" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return runner(cmd, timeout=timeout)
     return runner(cmd)
 
 
@@ -76,6 +135,9 @@ class DownloadOptions:
     write_info_json: bool = True
     download_sections: Optional[str] = None
     force_keyframes_at_cuts: bool = False
+    cooldown_path: Optional[Path] = None
+    auth_cooldown_seconds: int = 21600
+    rate_limit_cooldown_seconds: int = 900
     curl_args: str = (
         "curl:--continue-at - --retry 10 --retry-delay 3 --retry-all-errors "
         "--speed-limit 10000 --speed-time 30 --connect-timeout 15"
@@ -191,6 +253,13 @@ def execute_download_with_fallback(
         FileNotFoundError: 降级尝试后仍未产生有效视频文件。
         Exception: 备选策略执行中的严重未捕获异常。
     """
+    if options.cooldown_path and options.cooldown_path.exists():
+        try:
+            state = json.loads(options.cooldown_path.read_text())
+            if float(state["retry_after"]) > time.time():
+                raise DownloadBlockedError(state["category"], state["detail"], float(state["retry_after"]))
+        except (ValueError, KeyError, TypeError):
+            logger.warning("[Download] 忽略损坏的源下载冷却记录。")
     if is_cancelled_callback and is_cancelled_callback():
         raise InterruptedError(f"Download cancelled for {options.url} before start.")
 
@@ -207,6 +276,20 @@ def execute_download_with_fallback(
     primary_failed = False
     fallback_reason = ""
 
+    def block_if_needed(exc: BaseException) -> str:
+        detail = _failure_detail(exc)
+        category = _blocking_category(detail)
+        if category:
+            seconds = options.auth_cooldown_seconds if category == "auth" else options.rate_limit_cooldown_seconds
+            retry_after = time.time() + seconds
+            if options.cooldown_path:
+                from .file_utils import write_json_atomically
+                write_json_atomically(options.cooldown_path, {"category": category, "detail": detail, "retry_after": retry_after})
+            if cleaner:
+                cleaner()
+            raise DownloadBlockedError(category, detail, retry_after) from exc
+        return detail
+
     primary_timeout = max(1.0, deadline - time.time()) if deadline else None
     try:
         _invoke_runner(runner, primary_cmd, timeout=primary_timeout)
@@ -219,18 +302,24 @@ def execute_download_with_fallback(
         fallback_reason = "原生下载退出码为 0，但未生成通过完整音视频轨道验真的有效视频文件"
     except BaseException as exc:
         if _is_cancellation_exception(exc):
+            if cleaner:
+                cleaner()
             logger.info("[Download] 原生下载检测到取消信号/中断 (%s)，终止下载并不再启动备选降级。", exc)
             raise InterruptedError(f"Download cancelled by signal/interrupt: {exc}") from exc
         primary_failed = True
-        fallback_reason = f"原生下载抛出异常: {type(exc).__name__} ({exc})"
+        fallback_reason = f"原生下载抛出异常: {type(exc).__name__}: {block_if_needed(exc)}"
 
     if is_cancelled_callback and is_cancelled_callback():
+        if cleaner:
+            cleaner()
         raise InterruptedError(f"Download cancelled for {options.url} before fallback.")
 
     if primary_failed:
         if deadline:
             remaining_budget = deadline - time.time()
             if remaining_budget <= 0:
+                if cleaner:
+                    cleaner()
                 raise TimeoutError(
                     f"Download budget of {total_timeout}s exhausted during primary strategy; skipping fallback."
                 )
@@ -246,14 +335,23 @@ def execute_download_with_fallback(
             cleaner()
 
         fallback_cmd = fallback.build_command(options)
-        fallback_timeout = max(1.0, remaining_budget) if remaining_budget is not None else None
+        fallback_timeout = deadline - time.time() if deadline else None
+        if fallback_timeout is not None and fallback_timeout <= 0:
+            raise TimeoutError("Download budget exhausted before fallback execution")
         try:
             _invoke_runner(runner, fallback_cmd, timeout=fallback_timeout)
         except BaseException as exc:
             if _is_cancellation_exception(exc):
                 logger.info("[Download] 备选下载检测到取消信号/中断 (%s)，终止下载。", exc)
                 raise InterruptedError(f"Fallback download cancelled by signal/interrupt: {exc}") from exc
+            detail = block_if_needed(exc)
+            if isinstance(exc, subprocess.CalledProcessError):
+                raise subprocess.CalledProcessError(exc.returncode, exc.cmd, stderr=detail) from exc
             raise
+        finally:
+            # 验真而非删除：有效单轨与 .part/.ytdl 均保留供续传。
+            if cleaner:
+                cleaner()
 
         if is_cancelled_callback and is_cancelled_callback():
             raise InterruptedError(f"Download cancelled for {options.url} after fallback execution.")

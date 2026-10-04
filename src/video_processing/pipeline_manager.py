@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.65.0 | 2026-10-05 | Codex | 下载身份验证与限流持久冷却，保留已验证阶段。 |
 | 3.64.0 | 2026-10-03 | Codex | TED/TEDx 加工与提交前重查点赞率，低互动任务保留缓存回队，不改评分。 |
 | 3.63.1 | 2026-10-03 | Codex | 区分单视频与共享发布锁冲突，未开始投稿的就绪领取安全回队，保留既有提交终态。 |
 | 3.63.0 | 2026-09-27 | Codex | 常规封面队列固化 AGY 首选与无文字底图要求。 |
@@ -204,6 +205,7 @@ from .utils.file_utils import (
 from .utils.download_strategy import (
     DownloadOptions,
     execute_download_with_fallback,
+    download_runtime_status,
 )
 from .utils.platform_events import (
     PlatformEvent,
@@ -1836,6 +1838,7 @@ class PipelineManager:
                         text=True,
                         capture_output=True,
                         cwd=str(self._PRJ_ROOT),
+                        timeout=settings.youtube_source_preflight_timeout_seconds,
                     )
                     break
                 except subprocess.CalledProcessError as exc:
@@ -1844,6 +1847,11 @@ class PipelineManager:
                         continue
                     return self._mark_source_subtitle_unavailable(
                         yid, slice_index, stderr or "yt-dlp 未返回可用源字幕",
+                    )
+                except (subprocess.TimeoutExpired, TimeoutError):
+                    return self._mark_source_subtitle_unavailable(
+                        yid, slice_index,
+                        f"源字幕预检超出 {settings.youtube_source_preflight_timeout_seconds} 秒预算；保留缓存并冷却。",
                     )
 
             subtitle_files = self._source_subtitle_files(yid)
@@ -4002,6 +4010,7 @@ class PipelineManager:
                             )
 
                         subprocess_env = _build_subprocess_env()
+                        logger.info("[DownloadHealth] %s", download_runtime_status(subprocess_env.get("PATH", "")))
                         if settings.clash_download_node:
                             logger.info(
                                 f"[Clash] 切换到日本节点: {settings.clash_download_node}"
@@ -4014,6 +4023,9 @@ class PipelineManager:
                             cookie_args=settings.get_yt_cookie_args(),
                             download_sections=sec_arg,
                             force_keyframes_at_cuts=used_download_sections,
+                            cooldown_path=self._OUT_DIR / f"{yid}.download_cooldown.json",
+                            auth_cooldown_seconds=settings.youtube_auth_cooldown_seconds,
+                            rate_limit_cooldown_seconds=settings.youtube_rate_limit_cooldown_seconds,
                         )
 
                         timeout_budget = float(settings.youtube_download_timeout_seconds)

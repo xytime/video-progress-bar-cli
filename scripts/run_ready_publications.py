@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-05 | Codex | 心跳暴露字幕共享期限、节流与源下载冷却配置，供运行采用验收。 |
 | 1.2.0 | 2026-10-03 | Codex | 心跳暴露已加载的 TED 点赞率门槛及演讲评分线，支持运行采用回读。 |
 | 1.0.0 | 2026-09-23 | Codex | 全天巡检已就绪成片，独立进程隔离与可回读心跳。 |
 | 1.1.0 | 2026-09-27 | Codex | 心跳记录加载的封面首选方案与队列开关，验证部署采用。 |
@@ -81,6 +82,9 @@ def main(argv=None) -> int:
              "ai_cover_queue_enabled": settings.enable_codex_cover_queue,
              "ted_min_like_rate_pct": settings.ted_min_like_rate_pct,
              "speech_publish_score_line": settings.speech_publish_score_line,
+             "subtitle_translation_total_timeout_seconds": settings.subtitle_translation_total_timeout_seconds,
+             "google_translate_interval_seconds": settings.google_translate_interval_seconds,
+             "youtube_auth_cooldown_seconds": settings.youtube_auth_cooldown_seconds,
              "started_at": time.time(), "stage_started_at": time.time()}
     stopped = threading.Event()
     state_lock = threading.Lock()

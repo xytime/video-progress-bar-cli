@@ -8,6 +8,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 2.2.0 | 2026-10-05 | Codex | DeepSeek 批次服从字幕全供应商共享期限。 |
 | 1.0.0   | 2026-07-05 | Codex  | 初始创建：DeepSeek OpenAI-compatible 字幕批量翻译 provider |
 | 1.1.0   | 2026-07-06 | Codex  | 强化全局上下文硬约束提示，降低金融 close/金额单位误译 |
 | 1.2.0   | 2026-07-06 | Codex  | 复用 translation_prompt_constraints，避免 provider 约束漂移 |
@@ -96,6 +97,7 @@ def translate_batch_with_vocab_deepseek(
     context_text: str = "",
     settings_obj: Any = None,
     error_out: Optional[List[str]] = None,
+    deadline: Optional[float] = None,
 ) -> Optional[List[Dict[str, Any]]]:
     """一次调用返回中文翻译和与中文子串严格对齐的 vocabulary。"""
     if not texts:
@@ -117,7 +119,8 @@ def translate_batch_with_vocab_deepseek(
     base_url = (getattr(settings_obj, "deepseek_base_url", "") or "https://api.deepseek.com").rstrip("/")
     model = getattr(settings_obj, "deepseek_model", "") or "deepseek-v4-flash"
     total_timeout = max(30, int(getattr(settings_obj, "deepseek_subtitle_total_timeout_seconds", 300) or 300))
-    deadline = time.monotonic() + total_timeout
+    local_deadline = time.monotonic() + total_timeout
+    deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
     all_items: List[Dict[str, Any]] = []
     for batch_start in range(0, len(texts), _VOCAB_BATCH_SIZE):
         remaining = deadline - time.monotonic()

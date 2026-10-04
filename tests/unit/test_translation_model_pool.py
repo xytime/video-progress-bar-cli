@@ -6,6 +6,16 @@ from pathlib import Path
 from video_processing.utils.translation_model_pool import DynamicTranslationModelPool, classify_error
 
 
+def test_billing_region_and_budget_have_distinct_cooldowns(tmp_path):
+    assert classify_error("HTTP Error 402: Payment Required") == "billing"
+    assert classify_error("400 FAILED_PRECONDITION User location is not supported") == "region_restricted"
+    assert classify_error("budget below minimum request deadline") == "budget_exhausted"
+    pool = DynamicTranslationModelPool(tmp_path / "pool.json")
+    pool.record_failure("deepseek", "HTTP Error 402")
+    assert "deepseek" not in pool.order(["deepseek"])
+    assert pool.snapshot()["deepseek"]["last_error_class"] == "billing"
+
+
 def test_model_pool_prefers_vocab_capable_provider(tmp_path: Path):
     pool = DynamicTranslationModelPool(tmp_path / "pool.json")
     assert pool.order(["google", "deepseek", "gemini"], required={"translate", "vocab"}) == ["gemini", "deepseek", "google"]

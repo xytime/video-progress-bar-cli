@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.38.0 | 2026-10-05 | Codex | 全供应商共享字幕预算，Google 逐段检查点与完整候选日志。 |
 | 1.37.0 | 2026-10-03 | Codex | 最后追加 Luna CLI 候选，保留严格质量和完整批次合同。 |
 | 1.36.0 | 2026-09-09 | Codex | 翻译硬合同先于软质量开关；占位符和段数错误留审计后回退 |
 | 1.1.0 | 2026-05-21 | Gemini_3.1_Pro_High_planning | 修复未导入 os 引发异常，修复硬编码 ffmpeg 导致无 libass 问题 |
@@ -185,6 +186,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         self._translation_quality_audit: List[Dict[str, Any]] = []
         self._translation_audit_run_id: Optional[int] = None
         self._progress_reporter = progress_reporter
+        self._translation_deadline: Optional[float] = None
 
     def _report_progress(self, stage: str) -> None:
         """上报阶段心跳；观测失败绝不影响字幕加工。"""
@@ -499,6 +501,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
         if not segments:
             return segments
 
+        self._translation_deadline = time.monotonic() + getattr(settings, "subtitle_translation_total_timeout_seconds", 600)
         logger.info(f"Translating {len(segments)} segments from {self.src_lang} to {self.target_lang}...")
         texts = [seg.get("text", "").strip() for seg in segments]
         self._translation_quality_audit = []
@@ -534,6 +537,9 @@ class AutoCaptionProcessor(VideoProcessorBase):
         provider_order = [provider for provider in configured_providers if provider in eligible_providers]
         arbiter = TranslationCandidateArbiter()
         for idx, provider in enumerate(provider_order):
+            if time.monotonic() >= self._translation_deadline:
+                logger.warning("[Translate] 整片翻译预算已耗尽，停止供应商切换。")
+                break
             final_provider = idx == len(provider_order) - 1
             self._last_provider_error = ""
             attempt_started = time.monotonic()
@@ -564,6 +570,10 @@ class AutoCaptionProcessor(VideoProcessorBase):
                     self._write_translation_quality_report()
                 continue
 
+            if time.monotonic() >= self._translation_deadline:
+                logger.warning("[Translate] %s 超出整片预算，未选用候选。", provider)
+                break
+            logger.info("[Translate] %s returned complete candidate (%s segments); checking quality.", provider, len(texts))
             decision = self._evaluate_translation_quality(
                 texts,
                 candidate.translations[:len(segments)],
@@ -784,7 +794,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 command=settings.codex_text_command, model=settings.codex_text_model,
                 effort=settings.codex_text_effort,
                 request_timeout=settings.codex_text_request_timeout_seconds,
-                total_timeout=settings.codex_subtitle_total_timeout_seconds,
+                total_timeout=min(settings.codex_subtitle_total_timeout_seconds, self._remaining_translation_budget()),
                 batch_size=settings.codex_subtitle_batch_size,
             )
         except Exception as exc:
@@ -837,7 +847,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 schema=schema,
                 model=settings.agy_subtitle_model,
                 command=settings.agy_command,
-                timeout_sec=settings.agy_timeout_sec,
+                timeout_sec=min(settings.agy_timeout_sec, self._remaining_translation_budget()),
             )
         except AgyProviderError as exc:
             self._last_provider_error = str(exc)
@@ -883,12 +893,14 @@ class AutoCaptionProcessor(VideoProcessorBase):
     ) -> Optional[SubtitleTranslationCandidate]:
         """Gemini 主译：翻译 + vocab 天然对齐。"""
         used_models: List[str] = []
+        errors: List[str] = []
         try:
             gemini_results = extract_vocab_batch(
                 texts,
                 chinese_translations=None,
                 context_text=translation_context,
                 model_out=used_models,
+                deadline=self._translation_deadline, error_out=errors,
             )
         except Exception as e:
             logger.warning(f"Gemini translation/vocab extraction failed: {e}")
@@ -904,7 +916,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 supports_vocab=True,
                 model=",".join(used_models) or None,
             )
-        self._last_provider_error = self._last_provider_error or "Gemini returned no aligned candidate"
+        self._last_provider_error = self._last_provider_error or "; ".join(errors) or "Gemini returned no aligned candidate"
         return None
 
     def _build_deepseek_candidate(
@@ -928,6 +940,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
             texts,
             context_text=translation_context,
             error_out=errors,
+            deadline=self._translation_deadline,
         )
         if results:
             logger.info("DeepSeek produced a subtitle translation+vocab candidate.")
@@ -942,11 +955,18 @@ class AutoCaptionProcessor(VideoProcessorBase):
 
     def _build_google_candidate(self, texts: List[str]) -> SubtitleTranslationCandidate:
         """Google Translate 终级 fallback：仅翻译，无 vocab。"""
-        logger.info("Google Translate produced a subtitle translation candidate (no vocab alignment).")
-        gt_translated = _google_batch_fallback(texts, src_lang="auto", target_lang=self.target_lang)
+        errors: List[str] = []
+        gt_translated = _google_batch_fallback(
+            texts, src_lang="auto", target_lang=self.target_lang,
+            deadline=self._translation_deadline,
+            cache_dir=(self.output_path or self.input_path).parent / "google_translation_cache", error_out=errors,
+        )
         if not gt_translated or any(not text or not text.strip() for text in gt_translated[:len(texts)]):
-            self._last_provider_error = "Google returned empty translation"
+            self._last_provider_error = "; ".join(errors) or "Google returned empty translation"
         return SubtitleTranslationCandidate(provider="Google", translations=gt_translated)
+
+    def _remaining_translation_budget(self) -> float:
+        return max(0.0, self._translation_deadline - time.monotonic()) if self._translation_deadline is not None else 600.0
 
     def _align_vocab_after_plain_translation(
         self,
@@ -962,6 +982,7 @@ class AutoCaptionProcessor(VideoProcessorBase):
                 texts,
                 chinese_translations=zh_texts,
                 context_text=translation_context,
+                deadline=self._translation_deadline,
             )
             if vocab_results:
                 logger.info("Gemini vocab alignment succeeded (post-%s).", provider)

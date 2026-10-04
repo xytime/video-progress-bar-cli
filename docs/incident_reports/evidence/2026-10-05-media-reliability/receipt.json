@@ -1,0 +1,43 @@
+{
+  "source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+  "snapshot": "/private/tmp/video-pytest-ua4fnh2c/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.079
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_download_reliability.py",
+    "tests/unit/test_four_pillars_optimization.py",
+    "tests/unit/test_find_downloaded_video.py",
+    "tests/unit/test_translation_helper.py",
+    "tests/unit/test_vocab_helper_timeout.py",
+    "tests/unit/test_translation_model_pool.py",
+    "tests/unit/test_deepseek_translation.py",
+    "tests/unit/test_deepseek_translation_budget.py",
+    "tests/unit/test_caption_translation_guard.py",
+    "tests/unit/test_translation_provider_settings.py",
+    "tests/unit/test_subprocess_env.py",
+    "tests/unit/test_database_media_recovery.py",
+    "tests/unit/test_download_settings.py",
+    "tests/unit/test_source_subtitle_preparation.py",
+    "tests/unit/test_source_subtitle_screening.py",
+    "tests/unit/test_translation_alignment.py",
+    "tests/unit/test_caption_progress_watchdog.py",
+    "tests/unit/test_auto_caption_progress.py",
+    "tests/unit/test_translation_quality_guard.py",
+    "tests/unit/test_subtitle_translation_provider.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "0d76c68cad870cb9ca165ff4abee8bda6effe299c9ed34f5d7ff21efffa24c7a",
+  "profile_sha256": "5a2cec09aaf79690fbd3c0acc5c10c5f50aff451fe10b64c5cd91d6505bb7908",
+  "browser_runtime": null,
+  "browser_runtime_sha256": null,
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 7.348
+  },
+  "finished_at": "2026-10-04T21:44:04.466976+00:00"
+}

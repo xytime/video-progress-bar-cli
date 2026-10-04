@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author                     | Description |
 | ------- | ---------- | -------------------------- | ----------- |
+| 1.4.0   | 2026-10-05 | Codex | 逐段节流和有界退避，保留已完成缓存，供应商共用截止时间。 |
 | 1.0.0   | 2026-06-08 | Claude_Sonnet_4.6_planning | 初始创建：高内聚翻译模块 |
 | 1.3.0   | 2026-07-17 | Codex                      | 移除阿里云 MT 调用；仅保留 Google 终级翻译接口 |
 | 1.3.1   | 2026-07-26 | Codex                      | 保留字符预算切块纯函数，维持字幕对齐回归保护 |
@@ -16,15 +17,20 @@
 """
 
 import logging
+import hashlib
+import json
 import threading
 import time
 from contextlib import contextmanager
 from typing import List
+from pathlib import Path
 
 import requests
 
 from config.settings import settings
 from .generated_content_validation import is_upstream_error_response
+from .file_utils import write_json_atomically
+from .translation_model_pool import classify_error
 
 try:
     from deep_translator import GoogleTranslator
@@ -61,9 +67,10 @@ class _VerifiedGoogleRequests:
         if remaining_seconds <= 0:
             raise requests.Timeout("Google Translate batch budget exhausted")
         _, configured_read_timeout = _google_translate_timeout()
-        read_timeout = min(configured_read_timeout, max(1, int(remaining_seconds)))
+        connect_timeout = min(20, remaining_seconds / 2)
+        read_timeout = min(configured_read_timeout, remaining_seconds - connect_timeout)
         kwargs["verify"] = True
-        kwargs.setdefault("timeout", (min(20, read_timeout), read_timeout))
+        kwargs["timeout"] = (connect_timeout, read_timeout)
         return requests.get(*args, **kwargs)
 
     def __getattr__(self, name: str):
@@ -112,11 +119,14 @@ def translate_batch(
     texts: List[str],
     src_lang: str = "auto",
     target_lang: str = "zh-CN",
+    *, deadline: float | None = None, cache_dir: Path | None = None,
+    error_out: List[str] | None = None,
 ) -> List[str]:
     """批量翻译文本列表，使用 Google Translate 作为终级兜底。"""
     if not texts:
         return []
-    return _google_translate_batch(texts, src_lang=src_lang, target_lang=target_lang)
+    return _google_translate_batch(texts, src_lang=src_lang, target_lang=target_lang,
+                                   deadline=deadline, cache_dir=cache_dir, error_out=error_out)
 
 
 def translate_text(
@@ -136,6 +146,8 @@ def _google_translate_batch(
     texts: List[str],
     src_lang: str = "auto",
     target_lang: str = "zh-CN",
+    *, deadline: float | None = None, cache_dir: Path | None = None,
+    error_out: List[str] | None = None,
 ) -> List[str]:
     """使用 deep_translator.GoogleTranslator 批量翻译并过滤错误页面。"""
     if not texts:
@@ -143,21 +155,66 @@ def _google_translate_batch(
     if GoogleTranslator is None:
         logger.warning("[TransHelper] deep_translator 未安装，Google 终级兜底不可用。")
         return [""] * len(texts)
-    deadline = time.monotonic() + _google_translate_total_timeout()
-    try:
-        with _bounded_google_translator_transport(deadline):
-            translator = GoogleTranslator(source=src_lang, target=target_lang)
-            translated = translator.translate_batch(texts)
-    except Exception as exc:
-        logger.warning("[TransHelper] Google Translate failed: %s", exc)
-        return [""] * len(texts)
-
+    local_deadline = time.monotonic() + _google_translate_total_timeout()
+    deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
     invalid_markers = ("<html", "cloudflare", "captcha", "attention required")
-    results = []
-    for value in translated or []:
-        text = str(value or "").strip()
+    def valid_translation(value) -> str:
+        text = value.strip() if isinstance(value, str) else ""
         if any(marker in text.lower() for marker in invalid_markers) or is_upstream_error_response(text):
-            logger.warning("[TransHelper] Google returned an upstream error response; discarding candidate entry.")
-            text = ""
-        results.append(text)
-    return (results + [""] * len(texts))[:len(texts)]
+            return ""
+        return text
+
+    results = [""] * len(texts)
+    cache_path = None
+    if cache_dir is not None:
+        identity = json.dumps(["google-v2", src_lang, target_lang, texts], ensure_ascii=False)
+        signature = hashlib.sha256(identity.encode()).hexdigest()
+        cache_path = cache_dir / f"{signature}.json"
+        try:
+            cached = json.loads(cache_path.read_text())
+            if isinstance(cached, list) and len(cached) == len(texts):
+                results = [valid_translation(value) for value in cached]
+        except (OSError, ValueError):
+            pass
+
+    interval = settings.google_translate_interval_seconds
+    next_request_at = time.monotonic()
+    with _bounded_google_translator_transport(deadline):
+        translator = GoogleTranslator(source=src_lang, target=target_lang)
+        for index, source in enumerate(texts):
+            if results[index]:
+                continue
+            for attempt in range(settings.google_translate_max_retries + 1):
+                wait = max(0.0, next_request_at - time.monotonic())
+                if time.monotonic() + wait >= deadline:
+                    if error_out is not None:
+                        error_out.append(f"Google batch budget exhausted at segment {index + 1}/{len(texts)}")
+                    return results
+                if wait:
+                    time.sleep(wait)
+                try:
+                    value = valid_translation(translator.translate(source))
+                    if not value:
+                        raise ValueError("Google invalid or empty upstream response")
+                    results[index] = value
+                    if cache_path is not None:
+                        write_json_atomically(cache_path, results)
+                    break
+                except Exception as exc:
+                    category = classify_error(str(exc))
+                    # deep-translator TooManyRequests 的消息不总含 HTTP 429。
+                    if type(exc).__name__ == "TooManyRequests":
+                        category = "rate_limit"
+                    logger.warning("[TransHelper] Google segment %s/%s attempt %s failed: %s",
+                                   index + 1, len(texts), attempt + 1, category)
+                    if category not in {"rate_limit", "network"} or attempt >= settings.google_translate_max_retries:
+                        if error_out is not None:
+                            error_out.append(f"Google segment {index + 1}/{len(texts)}: {category}: {str(exc)[:240]}")
+                        # 认证/限流/传输失败停止整个批次，不继续冲击同一服务。
+                        if category in {"auth_or_permission", "rate_limit", "network"}:
+                            return results
+                        break
+                    next_request_at = time.monotonic() + min(8.0, 2.0 ** (attempt + 1))
+                finally:
+                    next_request_at = max(next_request_at, time.monotonic() + interval)
+    return results

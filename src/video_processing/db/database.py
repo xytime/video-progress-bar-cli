@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.92.0 | 2026-10-05 | Codex | 具名媒体恢复的原子领取，保留重试数并拒绝投稿、历史和策略记录。 |
 | 3.91.0 | 2026-10-03 | Codex | TED/TEDx 两个自动候选入口及提交前统一检查源点赞率，切片继承父视频指标。 |
 | 3.90.1 | 2026-10-03 | Codex | 发布资源锁冲突时按领取归属原子释放未开始的就绪任务，保留缓存和重试计数并排除投稿账本。 |
 | 3.90.0 | 2026-10-03 | Codex | 具名恢复近24小时文字供应商失败，原子排除投稿账本、运行占用和策略拒绝。 |
@@ -3334,6 +3335,32 @@ class PipelineDB:
             ''', (row["id"],))
             conn.commit()
             return True
+
+    def claim_failed_media_recovery(self, youtube_id: str, *, expected_error: str,
+                                    expected_retry_count: int, owner_pid: int) -> bool:
+        """具名修复验收使用 compare-and-set；保留重试历史，拒绝任何投稿或策略证据。"""
+        markers = ("Invalid data found when processing input", "timed out", "TRANSLATING", "All subtitle translation providers failed")
+        if (not expected_error or not any(marker in expected_error for marker in markers)
+                or any(marker in expected_error for marker in ("Channel Policy Reject", "CENSOR", "LOGIN_REQUIRED"))
+                or not 0 <= expected_retry_count <= 4 or owner_pid <= 0):
+            return False
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute('''
+                UPDATE processed_videos SET status='PROCESSING', process_pid=?,
+                    retry_count=retry_count+1, error_msg='CODEX_MEDIA_RECOVERY', updated_at=CURRENT_TIMESTAMP
+                WHERE youtube_id=? AND slice_index=0 AND status='FAILED' AND score>=75
+                  AND source<>'DISCOVERY' AND error_msg=? AND retry_count=? AND process_pid IS NULL
+                  AND updated_at >= datetime('now', '-48 hours')
+                  AND NOT EXISTS (SELECT 1 FROM blacklisted_videos b WHERE b.youtube_id=processed_videos.youtube_id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications w WHERE w.video_id=processed_videos.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id=processed_videos.id)
+                  AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id=processed_videos.id)
+                  AND NOT EXISTS (SELECT 1 FROM douyin_publications d WHERE d.video_id=processed_videos.id)
+                  AND NOT EXISTS (SELECT 1 FROM kuaishou_publications k WHERE k.video_id=processed_videos.id)
+            ''', (owner_pid, youtube_id, expected_error, expected_retry_count))
+            conn.commit()
+            return cursor.rowcount == 1
 
     def requeue_transient_pre_submission_failure(
         self,

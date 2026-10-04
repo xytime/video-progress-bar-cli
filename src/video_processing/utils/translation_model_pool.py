@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.8.0 | 2026-10-05 | Codex | 单独冷却账单与地区错误，拒绝短期限无效请求。 |
 | 1.7.0 | 2026-10-03 | Codex | 纳入经济型 Codex 字幕与词汇兜底 profile。 |
 | 1.0.0   | 2026-07-13 | Codex  | 新增字幕 provider 动态排序、冷却记忆、错误分类与质量评分 |
 | 1.1.0   | 2026-07-13 | Codex  | 状态文件改为锁保护的原子替换，避免截断 JSON 丢失冷却记忆 |
@@ -53,11 +54,17 @@ PROFILES = {
 def classify_error(message: str | None) -> str:
     """将供应商错误归一为可用于冷却策略的类别。"""
     text = (message or "").lower()
-    if any(token in text for token in ("429", "quota", "rate limit", "resource_exhausted")):
+    if any(token in text for token in ("402", "insufficient balance", "billing", "payment required")):
+        return "billing"
+    if any(token in text for token in ("user location", "not supported in your country", "region", "failed_precondition")):
+        return "region_restricted"
+    if "deadline" in text or "budget" in text:
+        return "budget_exhausted"
+    if any(token in text for token in ("429", "quota", "rate limit", "rate_limit", "resource_exhausted")):
         return "rate_limit"
     if any(token in text for token in ("401", "403", "10009", "permission", "unauthorized")):
         return "auth_or_permission"
-    if any(token in text for token in ("timeout", "timed out", "connection", "name or service")):
+    if any(token in text for token in ("timeout", "timed out", "connection", "name or service", "500", "502", "503", "server error")):
         return "network"
     if any(token in text for token in ("json", "parse", "aligned", "empty")):
         return "invalid_response"
@@ -70,6 +77,9 @@ class DynamicTranslationModelPool:
     _COOLDOWN_SECONDS = {
         "rate_limit": 900,
         "auth_or_permission": 3600,
+        "billing": 86400,
+        "region_restricted": 21600,
+        "budget_exhausted": 180,
         "network": 180,
         "invalid_response": 300,
         "quality_blocked": 600,

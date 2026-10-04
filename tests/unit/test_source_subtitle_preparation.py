@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-05 | Codex | 源字幕预检超时后进入冷却，禁止无界阻塞和媒体下载。 |
 | 1.0.0 | 2026-07-31 | Codex | 覆盖 VTT 解析、下载前阻断、AUTO 预加工选择和真实微信补发日限额 |
 | 1.1.0 | 2026-08-26 | Codex | 覆盖 YouTube bot 校验后的受限 Cookie 刷新与单次预检重试。 |
 | 1.2.0 | 2026-09-12 | Codex | 覆盖源字幕暂不可用候选的高分加工冷却，防止同轮热循环。 |
@@ -67,6 +68,20 @@ def test_missing_source_subtitle_runs_skip_download_only_and_blocks_video_downlo
     assert stored["status"] == "PENDING"
     assert stored["source_subtitle_status"] == "UNAVAILABLE"
     assert not list(tmp_path.glob("source-preflight-missing*.mp4"))
+
+
+def test_source_preflight_timeout_is_bounded_and_defers_source(tmp_path):
+    manager = _manager(tmp_path)
+    video = _add_candidate(manager.db, "source-timeout")
+    def timeout(command, *_args, **kwargs):
+        assert kwargs["timeout"] == settings.youtube_source_preflight_timeout_seconds
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+    manager._run_tracked = timeout
+    assert not manager._ensure_source_subtitle_preflight(video)
+    row = manager.db.get_video_by_youtube_id("source-timeout")
+    assert row["status"] == "PENDING"
+    assert row["source_subtitle_status"] == "UNAVAILABLE"
+    assert "预算" in row["error_msg"]
 
 
 def test_source_subtitle_security_hit_blocks_before_video_download(tmp_path: Path, monkeypatch):

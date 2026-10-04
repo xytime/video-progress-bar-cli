@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author          | Description                                                        |
 |---------|------------|-------------|-------------------------------------------------------------------|
+| 1.7.0   | 2026-10-05 | Codex | 提供冷却与逐段翻译检查点的原子 JSON 写入。 |
 | 1.6.1   | 2026-09-23 | Antigravity | 修复 find_downloaded_video 中小于 min_size 的无效文件在 quarantine_invalid=True 时未被隔离的缺陷 |
 | 1.6.0   | 2026-09-23 | Antigravity | 下沉统一媒体验真 verify_downloaded_media；find_downloaded_video 统一支持音视频双轨验真与损坏隔离 |
 | 1.5.0   | 2026-09-23 | Codex           | 校验音视频轨道；降级下载保留完整格式流及可续传片段。 |
@@ -16,11 +17,27 @@ import html
 import json
 import re
 import shutil
+import os
+import tempfile
 import subprocess
 import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable, List, Optional
+
+
+def write_json_atomically(path: Path, payload: object) -> None:
+    """同目录临时文件替换，失败不损坏此前检查点。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(payload, stream, ensure_ascii=False)
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def ensure_directory(path: Path) -> Path:

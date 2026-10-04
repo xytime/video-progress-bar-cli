@@ -58,6 +58,7 @@ def test_download_engine_inversion_native_success(tmp_path, monkeypatch, valid_m
 
     manager._run_tracked = fake_run_tracked
 
+    manager.db.add_video("test1234567", "Test Title", "test-channel", score=80)
     video = {
         "youtube_id": "test1234567",
         "title": "Test Title",
@@ -109,6 +110,7 @@ def test_download_engine_inversion_fallback_to_curl_on_error(tmp_path, monkeypat
 
     manager._run_tracked = fake_run_tracked
 
+    manager.db.add_video("fail1234567", "Fail Title", "test-channel", score=80)
     video = {
         "youtube_id": "fail1234567",
         "title": "Fail Title",
@@ -157,6 +159,7 @@ def test_download_engine_inversion_fallback_on_corrupt_or_missing_file(tmp_path,
 
     manager._run_tracked = fake_run_tracked
 
+    manager.db.add_video("corrupt12345", "Corrupt Small File Title", "test-channel", score=80)
     video = {
         "youtube_id": "corrupt12345",
         "title": "Corrupt Small File Title",

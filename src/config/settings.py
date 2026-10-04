@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 3.75.0 | 2026-10-05 | Codex | 字幕共享期限、Google 节流与源下载冷却配置；禁止不可还原的代理切换。 |
 | 3.74.0 | 2026-10-03 | Codex | TED/TEDx 自动候选新增严格大于 0.6% 的源视频点赞率门槛，保持评分线。 |
 | 3.73.0 | 2026-10-03 | Codex | 经济型 Codex CLI 文字兜底，默认关闭并固定在字幕供应商末尾。 |
 | 3.71.0 | 2026-09-27 | Codex | 常规封面首选 AGY CLI；无字验收失败挂起，保留旧队列兼容配置。 |
@@ -261,6 +262,10 @@ class Settings(BaseSettings):
     # Google 仅作终级兜底；请求保持系统 CA 验证，超时后返回空候选并交给现有质量门处理。
     google_translate_request_timeout_seconds: int = Field(default=90, ge=5, le=300)
     google_translate_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
+    # 全供应商、节流和质量检查共享期限；低于外层 TRANSLATING 看门狗 720 秒。
+    subtitle_translation_total_timeout_seconds: int = Field(default=600, ge=30, le=660)
+    google_translate_interval_seconds: float = Field(default=0.4, ge=0.2, le=10)
+    google_translate_max_retries: int = Field(default=2, ge=0, le=3)
 
     # agy CLI：只在独立临时目录的 plan/sandbox 模式下调用，生产输出必须满足 JSON Schema。
     agy_command: str = "agy"
@@ -314,6 +319,9 @@ class Settings(BaseSettings):
     enable_youtube_cookie_auto_refresh: bool = False
     # 单次 yt-dlp 下载的总时限。curl 自身有连接和低速超时，但代理半关闭连接仍可能无限等待。
     youtube_download_timeout_seconds: int = 900
+    youtube_source_preflight_timeout_seconds: int = Field(default=120, ge=30, le=300)
+    youtube_auth_cooldown_seconds: int = Field(default=21600, ge=300, le=86400)
+    youtube_rate_limit_cooldown_seconds: int = Field(default=900, ge=60, le=86400)
 
     # YouTube Data API 只用于频道目录和评分元数据；下载仍由 yt-dlp 负责。
     # 留空时监控器自动退到公开 RSS，条目保持 METADATA_PENDING，绝不凭空自动发布。
@@ -1080,6 +1088,10 @@ class Settings(BaseSettings):
                 return False
 
         original = _get_current()
+        if not original:
+            _log.warning("[Clash] 配置的代理组不可读取，沿用当前路由；禁止无法还原的节点切换。")
+            yield
+            return
 
         # [Claude_Sonnet_4.6_Thinking_planning] 若 clash_download_node 是一个 URLTest 组名
         # （如 🇯🇵 日本下载专用），Selector 无法直接选择子组，需要先读取该组的 .now（当前最快节点）
