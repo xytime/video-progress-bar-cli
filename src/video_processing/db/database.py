@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.93.0 | 2026-10-05 | Codex | 具名认证恢复要求本视频最近 60 秒内真实验证，保留媒体恢复的全部 CAS 与投稿保护。 |
 | 3.92.0 | 2026-10-05 | Codex | 具名媒体恢复的原子领取，保留重试数并拒绝投稿、历史和策略记录。 |
 | 3.91.0 | 2026-10-03 | Codex | TED/TEDx 两个自动候选入口及提交前统一检查源点赞率，切片继承父视频指标。 |
 | 3.90.1 | 2026-10-03 | Codex | 发布资源锁冲突时按领取归属原子释放未开始的就绪任务，保留缓存和重试计数并排除投稿账本。 |
@@ -3337,10 +3338,17 @@ class PipelineDB:
             return True
 
     def claim_failed_media_recovery(self, youtube_id: str, *, expected_error: str,
-                                    expected_retry_count: int, owner_pid: int) -> bool:
-        """具名修复验收使用 compare-and-set；保留重试历史，拒绝任何投稿或策略证据。"""
+                                    expected_retry_count: int, owner_pid: int,
+                                    verified_source_auth_at: Optional[float] = None) -> bool:
+        """具名 CAS 保留历史；调用方须对本视频真实验证新凭据，认证证据只接受最近 60 秒。"""
         markers = ("Invalid data found when processing input", "timed out", "TRANSLATING", "All subtitle translation providers failed")
-        if (not expected_error or not any(marker in expected_error for marker in markers)
+        is_auth_failure = bool(expected_error and expected_error.startswith("SOURCE_DOWNLOAD_AUTH:"))
+        verified_auth = (
+            is_auth_failure and isinstance(verified_source_auth_at, (int, float))
+            and 0 <= time.time() - verified_source_auth_at <= 60
+        )
+        media_failure = not is_auth_failure and any(marker in (expected_error or "") for marker in markers)
+        if (not expected_error or not (verified_auth or media_failure)
                 or any(marker in expected_error for marker in ("Channel Policy Reject", "CENSOR", "LOGIN_REQUIRED"))
                 or not 0 <= expected_retry_count <= 4 or owner_pid <= 0):
             return False

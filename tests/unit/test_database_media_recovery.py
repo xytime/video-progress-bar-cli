@@ -3,9 +3,11 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-05 | Codex | 认证恢复必须具有新鲜验证，且不能绕过投稿、策略与 CAS 保护。 |
 | 1.0.0 | 2026-10-05 | Codex | compare-and-set、进程归属、策略与投稿账本保护。 |
 """
 import pytest
+import time
 from video_processing.db.database import PipelineDB
 
 ERROR = "Caption progress timed out: stage=TRANSLATING (724s)"
@@ -43,3 +45,31 @@ def test_protected_rows_are_not_claimed(tmp_path, change):
         elif change == "discovery": conn.execute("UPDATE processed_videos SET source='DISCOVERY'")
         elif change == "old": conn.execute("UPDATE processed_videos SET updated_at=datetime('now','-49 hours')")
     assert not db.claim_failed_media_recovery("test", expected_error=ERROR, expected_retry_count=0, owner_pid=123)
+
+
+@pytest.mark.parametrize("age", [None, 61, -10, float("nan")])
+def test_auth_failure_requires_fresh_verified_source(tmp_path, age):
+    db = make_db(tmp_path)
+    error = "SOURCE_DOWNLOAD_AUTH: not a bot; previous request timed out"
+    db.update_video_status("test", "FAILED", error_msg=error)
+    verified_at = None if age is None else time.time() - age
+    assert not db.claim_failed_media_recovery("test", expected_error=error,
+        expected_retry_count=0, owner_pid=123, verified_source_auth_at=verified_at)
+
+
+@pytest.mark.parametrize("protection", [None, "submitted", "policy", "changed"])
+def test_verified_auth_still_preserves_recovery_guards(tmp_path, protection):
+    db = make_db(tmp_path)
+    error = "SOURCE_DOWNLOAD_AUTH: Sign in to confirm you are not a bot"
+    if protection == "policy":
+        error += "; CENSOR blocked"
+    db.update_video_status("test", "FAILED", error_msg=error)
+    if protection == "submitted":
+        db.record_wechat_submission_attempt("test", evidence_path="submission-proof")
+    if protection == "changed":
+        db.update_video_status("test", "FAILED", error_msg="other failure")
+    claimed = db.claim_failed_media_recovery("test", expected_error=error,
+        expected_retry_count=0, owner_pid=123, verified_source_auth_at=time.time())
+    assert claimed is (protection is None)
+    row = db.get_video_by_youtube_id("test")
+    assert row["retry_count"] == (1 if protection is None else 0)
