@@ -1,0 +1,17 @@
+Error processing line 1 of /Users/ryusei/.codex/worktrees/aa90/Video-precessing/.venv/lib/python3.12/site-packages/video_ffmpeg_slot.pth:
+
+  Traceback (most recent call last):
+    File "<frozen site>", line 206, in addpackage
+    File "<string>", line 1, in <module>
+  ModuleNotFoundError: No module named 'video_processing'
+
+Remainder of file ignored
+Error processing line 1 of /Users/ryusei/.codex/worktrees/aa90/Video-precessing/.venv/lib/python3.12/site-packages/video_ffmpeg_slot.pth:
+
+  Traceback (most recent call last):
+    File "<frozen site>", line 206, in addpackage
+    File "<string>", line 1, in <module>
+  ModuleNotFoundError: No module named 'video_processing'
+
+Remainder of file ignored
+{"outside_read_denied": true, "outside_write_denied": true, "network_denied": true, "outside_signal_denied": true, "data_volume_alias_read_denied": true, "child_write_denied": true}

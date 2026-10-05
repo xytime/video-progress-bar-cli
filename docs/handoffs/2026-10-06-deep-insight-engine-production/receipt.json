@@ -1,0 +1,32 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/aa90/Video-precessing",
+  "snapshot": "/private/tmp/video-pytest-4ze65xqr/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.121
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_insight_processor.py",
+    "tests/unit/test_copywriter.py",
+    "tests/unit/test_interaction_overlay.py",
+    "tests/unit/test_ready_publication_dispatch.py",
+    "tests/unit/test_market_guard_submission.py",
+    "tests/unit/test_censorship_p0_manual_review.py",
+    "tests/unit/test_subtitle_censorship.py",
+    "tests/unit/test_censorship_slice_index.py",
+    "tests/unit/test_tts_engine.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "87bfb466508557db197dcd21fe4888d5b1695b9c04f77877de8783021729d80c",
+  "profile_sha256": "9af5c51600b2526b5dd886d78bbeb2ec6c1c17f59d4660b11d5ea0946305d704",
+  "browser_runtime": null,
+  "browser_runtime_sha256": null,
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 20.419
+  },
+  "finished_at": "2026-10-05T19:20:25.227965+00:00"
+}

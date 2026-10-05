@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                                  | Description                                      |
 |---------|------------|-----------------------------------------|--------------------------------------------------|
+| insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
 | 2.2.0 | 2026-10-03 | Codex | 文案候选耗尽后调用经济型 Luna，保留原失败审计和宿主质量合同。 |
 | 2.1.0 | 2026-09-22 | Codex | 完整文案支持独立 AGY CLI，保留宿主质量合同、校验后缓存及冷却延后。 |
 | 2.0.3 | 2026-09-11 | Codex | 收紧评论区互动帖为标题独立展示、正文四段结构，禁止机器人套话。 |
@@ -1282,6 +1283,9 @@ def main():
     parser.add_argument("--title",       required=True, type=str)
     parser.add_argument("--desc-file",   default=None,  help="Path to description text file")
     parser.add_argument("--output-dir",  default="output", type=str)
+    parser.add_argument("--insight-source", type=Path, help="已烧录字幕的基础竖版成片")
+    parser.add_argument("--insight-subtitle", type=Path, help="基础成片对应的有时间戳 ASS")
+    parser.add_argument("--insight-only", action="store_true", help="只生成洞察脚本，不改写普通文案")
     args = parser.parse_args(argv)
 
     description = ""
@@ -1294,6 +1298,13 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     yid = args.youtube_id
+    if args.insight_only:
+        from video_processing.utils.insight_planner import generate_insight_script
+        if not args.insight_source or not args.insight_subtitle:
+            parser.error("--insight-only 需要 --insight-source 和 --insight-subtitle")
+        return 0 if generate_insight_script(
+            args.title, args.insight_source, args.insight_subtitle, out / f"{yid}_insight.json",
+        ) else 1
     content = generate_wechat_content(
         args.title,
         description,
@@ -1330,7 +1341,7 @@ def main():
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except CopyProviderDeferred as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(75)

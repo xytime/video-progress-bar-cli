@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
 | 3.75.0 | 2026-10-05 | Codex | 字幕共享期限、Google 节流与源下载冷却配置；禁止不可还原的代理切换。 |
 | 3.74.0 | 2026-10-03 | Codex | TED/TEDx 自动候选新增严格大于 0.6% 的源视频点赞率门槛，保持评分线。 |
 | 3.73.0 | 2026-10-03 | Codex | 经济型 Codex CLI 文字兜底，默认关闭并固定在字幕供应商末尾。 |
@@ -418,6 +419,10 @@ class Settings(BaseSettings):
     # 日期戳文字前缀（与日期拼接，如「发布日期：2026-06-25」）。
     # 使用全角冒号「：」而非半角「:」，避免与 ffmpeg filtergraph 选项分隔符冲突。
     source_date_stamp_label: str = "发布日期："
+
+    # 深度信息增量引擎：默认关闭；仅增强独立成片，不改写基础字幕。
+    enable_deep_insight_enrichment: bool = False
+    insight_default_voice: str = "zh-CN-YunyangNeural"
 
     # Project Runway-CTA: 跑道级流光互动转化系统 (中央三联胶囊 + 左下角45°跑道流光航标)
     # 默认关闭，确保生产零风险。启用后在 {prefix}_vertical.mp4 基础上叠加互动图层与双频 Pop 音效，

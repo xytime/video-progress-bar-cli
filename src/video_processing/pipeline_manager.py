@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
 | 3.65.0 | 2026-10-05 | Codex | 下载身份验证与限流持久冷却，保留已验证阶段。 |
 | 3.64.0 | 2026-10-03 | Codex | TED/TEDx 加工与提交前重查点赞率，低互动任务保留缓存回队，不改评分。 |
 | 3.63.1 | 2026-10-03 | Codex | 区分单视频与共享发布锁冲突，未开始投稿的就绪领取安全回队，保留既有提交终态。 |
@@ -2259,6 +2260,11 @@ class PipelineManager:
         开启互动层且成片有效时使用 interactive，否则平滑降级为 vertical。
         """
         vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
+        if settings.enable_deep_insight_enrichment:
+            from .processors.insight_processor import valid_enrichment
+            enriched = self._OUT_DIR / f"{prefix}_insight.mp4"
+            if valid_enrichment(vertical, self._OUT_DIR / f"{prefix}_insight.json", enriched):
+                return enriched
         if settings.enable_interaction_overlay:
             interactive = self._OUT_DIR / f"{prefix}_vertical_interactive.mp4"
             if interactive.is_file() and interactive.stat().st_size > 1_000_000:
@@ -2272,6 +2278,81 @@ class PipelineManager:
                     except Exception:
                         pass
         return vertical
+
+    def _insight_review_text(self, prefix: str) -> str:
+        """仅审查实际选用增强成片的脚本；发布执行者再次读取相同正文。"""
+        if not settings.enable_deep_insight_enrichment:
+            return ""
+        if self._get_published_video_path(prefix) != self._OUT_DIR / f"{prefix}_insight.mp4":
+            return ""
+        from .core.insight_script import InsightScript
+        return InsightScript.model_validate_json(
+            (self._OUT_DIR / f"{prefix}_insight.json").read_text(encoding="utf-8"),
+        ).review_text()
+
+    def _process_insight_enrichment(self, prefix: str, yid: str, title: str,
+                                    subtitle: Path, slice_index: int = 0) -> bool:
+        """字幕基础成片就绪后执行增强；子进程沿用 PID 跟踪和整组终止。"""
+        if not settings.enable_deep_insight_enrichment:
+            return False
+        from .processors.insight_processor import valid_enrichment
+        source = self._OUT_DIR / f"{prefix}_vertical.mp4"
+        script = self._OUT_DIR / f"{prefix}_insight.json"
+        plan_receipt = self._OUT_DIR / f"{prefix}_insight_plan.json"
+        output = self._OUT_DIR / f"{prefix}_insight.mp4"
+        if valid_enrichment(source, script, output):
+            return True
+        try:
+            from .core.insight_script import InsightScript
+            script_valid = False
+            if script.is_file():
+                try:
+                    InsightScript.model_validate_json(script.read_text(encoding="utf-8"))
+                    script_valid = True
+                    if plan_receipt.is_file():
+                        plan = json.loads(plan_receipt.read_text(encoding="utf-8"))
+                        script_valid = plan == {
+                            "source_sha256": self._sha256_file(source),
+                            "subtitle_sha256": self._sha256_file(subtitle),
+                            "script_sha256": self._sha256_file(script),
+                        }
+                except (ValueError, OSError):
+                    pass
+            env = _build_subprocess_env()
+            env["PYTHONPATH"] = str(self._SRC_DIR)
+            if not script_valid:
+                self._run_tracked([
+                    self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts/copywriter.py"),
+                    f"--youtube-id={prefix}", "--title", title, "--output-dir", str(self._OUT_DIR),
+                    "--insight-only", "--insight-source", str(source), "--insight-subtitle", str(subtitle),
+                ], yid, slice_index=slice_index, capture_output=True,
+                   cwd=str(self._PRJ_ROOT), env=env, timeout=180)
+                plan_temporary = plan_receipt.with_suffix(".pending.json")
+                plan_temporary.write_text(json.dumps({
+                    "source_sha256": self._sha256_file(source),
+                    "subtitle_sha256": self._sha256_file(subtitle),
+                    "script_sha256": self._sha256_file(script),
+                }), encoding="utf-8")
+                plan_temporary.replace(plan_receipt)
+            self._run_tracked([
+                self._VENV_PYTHON, "-m", "video_processing.processors.insight_processor",
+                str(source), str(script), str(output),
+            ], yid, slice_index=slice_index, capture_output=True,
+               cwd=str(self._PRJ_ROOT), env=env, timeout=1800)
+            if not valid_enrichment(source, script, output):
+                raise ValueError("增强成片回执或媒体校验未通过")
+            logger.info("[InsightReady] %s 增强成片已验证", prefix)
+            return True
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            # 超时/错误均保留基础成片，禁止消费旧增强回执。
+            try:
+                output.with_suffix(".receipt.json").unlink(missing_ok=True)
+            except OSError:
+                logger.warning("[InsightFallback] 无法清理旧回执：%s", prefix)
+            logger.warning("[InsightFallback] %s 回退普通成片：%s", prefix, type(exc).__name__)
+            return False
 
     def _process_interaction_overlay(self, prefix: str, yid: str, slice_index: int = 0) -> Optional[Path]:
         """
@@ -3480,6 +3561,9 @@ class PipelineManager:
         """
         # [Claude_Opus_4.8 架构B] 审查执行已抽至 CensorshipService（内聚单元，可独立测试）。
         # 这里按调用方既有契约（仅需 self.db + self.send_telegram_msg）即时构造，零状态。
+        if settings.enable_deep_insight_enrichment:
+            prefix = f"{yid}_s{slice_index}" if slice_index else yid
+            description += "\n" + self._insight_review_text(prefix)
         return CensorshipService(self.db, self.send_telegram_msg).check(
             yid, title, description, zh_title=zh_title,
             slice_index=slice_index, subtitle_text=subtitle_text,
@@ -4441,6 +4525,10 @@ class PipelineManager:
                             f"Renderer exceeded {_AUTO_CAPTION_TIMEOUT_SEC // 60} minutes and was terminated."
                         )
                         return
+
+                self._process_insight_enrichment(
+                    prefix, yid, render_title, _ass_file, slice_index=slice_index,
+                )
 
                 # ── 2c. CENSORSHIP COPYWRITING CHECK ──────────────────────────────
                 self._report_runtime_stage(

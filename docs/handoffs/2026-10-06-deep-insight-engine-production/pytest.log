@@ -1,0 +1,23 @@
+........................................................................ [ 51%]
+...................................................................      [100%]
+=============================== warnings summary ===============================
+tests/unit/test_censorship_p0_manual_review.py::test_p0_bypass_requires_double_confirmation_and_records_audit
+  /private/tmp/video-pytest-4ze65xqr/sandbox/repo/tests/unit/../../src/web/app.py:944: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+tests/unit/test_censorship_p0_manual_review.py::test_p0_bypass_requires_double_confirmation_and_records_audit
+  /Users/ryusei/.codex/worktrees/aa90/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+139 passed, 2 warnings in 18.82s
