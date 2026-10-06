@@ -197,6 +197,36 @@ def test_deferred_wechat_daily_limit_is_persistent_across_claims(tmp_path: Path)
 
 import pytest
 
+@pytest.mark.parametrize('cached_subtitle', [False, True])
+def test_route_rejection_releases_claim_preserves_cache_and_cools_down(tmp_path, monkeypatch, cached_subtitle):
+    from video_processing.utils.youtube_route import YoutubeRouteError
+    manager = _manager(tmp_path)
+    video = _add_candidate(manager.db, 'route-blocked')
+    assert manager.db.claim_video_for_processing('route-blocked')
+    cache = manager._ORIG_VIDEO_DIR / 'route-blocked.mp4.part'
+    cache.write_bytes(b'partial media must survive')
+    if cached_subtitle:
+        (tmp_path / 'route-blocked_source_subtitle.en.vtt').write_text(
+            'WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nA safe source transcript about science and technology.\n')
+    monkeypatch.setattr(settings, 'enable_censorship_engine', True)
+    monkeypatch.setattr(manager, '_check_censorship', lambda *a, **kw: False)
+    monkeypatch.setattr(manager, '_run_tracked', lambda *a, **kw: pytest.fail('must not launch'))
+    checks = []
+    def reject(**kw):
+        checks.append(manager.db.get_video_by_youtube_id('route-blocked')['source_subtitle_status'])
+        raise YoutubeRouteError('test self-hosted route unavailable')
+    monkeypatch.setattr('video_processing.utils.youtube_route.verify_youtube_route', reject)
+    manager._process_single_video(video, preparation_only=True)
+    stored = manager.db.get_video_by_youtube_id('route-blocked')
+    assert checks
+    assert (checks[0] == 'PASSED') is cached_subtitle
+    assert stored['status'] == 'PENDING'
+    assert stored['source_subtitle_status'] == 'UNAVAILABLE'
+    assert stored['process_pid'] is None
+    assert '自建出口' in stored['error_msg']
+    assert cache.read_bytes() == b'partial media must survive'
+    assert not manager.db.get_high_score_pending_videos(min_score=75, limit=10)
+
 @pytest.fixture(autouse=True)
 def verified_youtube_route(monkeypatch):
     # These tests isolate downstream behavior; test_youtube_route covers rejection.

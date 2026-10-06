@@ -3912,6 +3912,7 @@ class PipelineManager:
     def _process_single_video(self, video: Dict[str, Any], *, preparation_only=False, submission_only=False):
         """同视频互斥；就绪提交与重型加工使用不同资源锁。"""
         from .core.task_lease import TaskLease, TaskLeaseBusy
+        from .utils.youtube_route import YoutubeRouteError
 
         yid = video["youtube_id"]
         index = int(video.get("slice_index") or 0)
@@ -3944,6 +3945,14 @@ class PipelineManager:
                     self.db.update_process_pid(yid, os.getpid(), slice_index=index)
                     try:
                         self._prepare_single_video(video, preparation_only=preparation_only)
+                    except YoutubeRouteError as exc:
+                        # 这是本机通路阻断，不是视频质量失败；释放认领并沿用来源冷却。
+                        reason = f"YouTube 自建出口检查未通过；保留缓存并冷却：{exc}"
+                        self.db.set_source_subtitle_preflight(
+                            yid, "UNAVAILABLE", error_msg=reason, slice_index=index,
+                        )
+                        self.db.update_video_status(yid, "PENDING", error_msg=reason, slice_index=index)
+                        logger.warning("[%s] %s", prefix, reason)
                     finally:
                         self.db.update_process_pid(yid, None, slice_index=index)
         except TaskLeaseBusy:
@@ -3965,6 +3974,8 @@ class PipelineManager:
         preparation_only: bool = False,
         submission_only: bool = False,
     ):
+        from .utils.youtube_route import YoutubeRouteError
+
         # [Claude_Opus_4.8] graceful_truncate_title 已下沉至 utils.text_utils 并在模块顶部 import，
         # 消除此前 sys.path 注入 scripts/ 反向 import copywriter 的 DAG 违规。
         yid   = video['youtube_id']
@@ -4745,6 +4756,9 @@ class PipelineManager:
                 logger.info("[ReadyPublication] %s 成片就绪，交给独立发布执行者。", prefix)
                 return
 
+            except YoutubeRouteError:
+                # 统一交由任务边界释放认领；不得进入普通失败或下载器降级。
+                raise
             except InterruptedError as e:
                 logger.warning(f"[SIGTERM] Clean abort for {prefix}: {e}")
                 if self._has_wechat_submission_terminal_state(yid, slice_index=slice_index):
