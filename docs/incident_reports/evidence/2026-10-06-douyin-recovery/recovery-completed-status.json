@@ -1,0 +1,230 @@
+{
+  "observed_at": "2026-10-06T08:27:23.614574+00:00",
+  "date": "2026-10-06",
+  "timezone": "Asia/Shanghai",
+  "shared_quota_used": 20,
+  "shared_daily_limit": 20,
+  "per_run_limit": 1,
+  "generic_new_today": [
+    {
+      "id": 513,
+      "youtube_id": "iXgPvPp_vTw",
+      "state": "PUBLISHED",
+      "attempt_count": 2,
+      "claimed_at": "2026-10-06 05:43:47",
+      "published_at": "2026-10-06 05:57:34",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 516,
+      "youtube_id": "CTFJyj4R4N8",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:07:19",
+      "published_at": "2026-10-06 06:12:23",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 515,
+      "youtube_id": "842rGBmrsf4",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:02:12",
+      "published_at": "2026-10-06 06:18:43",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 517,
+      "youtube_id": "-h-CSfqSgqg",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:12:25",
+      "published_at": "2026-10-06 06:19:01",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 518,
+      "youtube_id": "2L5jOA6JnHc",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:19:03",
+      "published_at": "2026-10-06 06:33:30",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 519,
+      "youtube_id": "6xbG8OLQYys",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:23:05",
+      "published_at": "2026-10-06 06:36:17",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 520,
+      "youtube_id": "f30j685R7s4",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:25:32",
+      "published_at": "2026-10-06 06:39:16",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 524,
+      "youtube_id": "JFVQKolFo5k",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:36:30",
+      "published_at": "2026-10-06 06:39:29",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 521,
+      "youtube_id": "9oz15WUa7zM",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:28:29",
+      "published_at": "2026-10-06 06:41:49",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 522,
+      "youtube_id": "scN2-afWapQ",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:30:54",
+      "published_at": "2026-10-06 06:44:22",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 523,
+      "youtube_id": "vm2pRzlRK9g",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:33:45",
+      "published_at": "2026-10-06 06:47:39",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    },
+    {
+      "id": 525,
+      "youtube_id": "hC7mo9_cWhI",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:39:30",
+      "published_at": "2026-10-06 06:52:26",
+      "last_error_message": "抖音作品管理已确认本次作品为已发布。"
+    }
+  ],
+  "english_world_today": [
+    {
+      "review_id": "82d716656a914e3584520e312f473a92",
+      "title": "美债收益率飙升至多年高位",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:21:18",
+      "submitted_at": "2026-10-06 06:22:49",
+      "published_at": "2026-10-06 06:33:16",
+      "reconciliation_failures": 0
+    },
+    {
+      "review_id": "7230bc3ffbe84e6ea2b419add7a34698",
+      "title": "新探险搜寻埃尔哈特失踪之谜",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:16:37",
+      "submitted_at": "2026-10-06 06:18:26",
+      "published_at": "2026-10-06 06:21:16",
+      "reconciliation_failures": 0
+    },
+    {
+      "review_id": "eec437070b924619ad61e0aeb7406fab",
+      "title": "Nike一季度业绩不及预期",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:10:21",
+      "submitted_at": "2026-10-06 06:12:05",
+      "published_at": "2026-10-06 08:25:51",
+      "reconciliation_failures": 0
+    },
+    {
+      "review_id": "debfa1114f814f5681c6a8c2cb9ec0e1",
+      "title": "加拿大基建热选Acon集团",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 06:05:24",
+      "submitted_at": "2026-10-06 06:07:04",
+      "published_at": "2026-10-06 08:25:59",
+      "reconciliation_failures": 0
+    },
+    {
+      "review_id": "9d9844463ce6441ca5555fa863aa805c",
+      "title": "时代周刊发布百大新星榜",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 05:58:06",
+      "submitted_at": "2026-10-06 06:02:11",
+      "published_at": "2026-10-06 06:05:21",
+      "reconciliation_failures": 0
+    },
+    {
+      "review_id": "ea7920fd32534853bd36c8362b0160ac",
+      "title": "Heidi投资2500万美元",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 05:55:03",
+      "submitted_at": "2026-10-06 05:57:01",
+      "published_at": "2026-10-06 08:26:07",
+      "reconciliation_failures": 0
+    },
+    {
+      "review_id": "fc2593700dc2409f93d259c7e0db8fe0",
+      "title": "AI交易加剧债券抛售",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 05:53:03",
+      "submitted_at": "2026-10-06 05:54:47",
+      "published_at": "2026-10-06 06:59:17",
+      "reconciliation_failures": 0
+    },
+    {
+      "review_id": "d8efa0eeb5394f08833923292fc34ff3",
+      "title": "Chukumba谈假日零售",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "claimed_at": "2026-10-06 05:50:04",
+      "submitted_at": "2026-10-06 05:52:04",
+      "published_at": "2026-10-06 08:26:15",
+      "reconciliation_failures": 0
+    }
+  ],
+  "generic_states": {
+    "PUBLISHED": 230,
+    "UNCERTAIN": 147,
+    "CANCELED": 141,
+    "RETRYABLE_FAILED": 1,
+    "QUEUED": 73,
+    "BANNED": 6
+  },
+  "english_world_states": {
+    "PUBLISHED": 34,
+    "CANCELED": 14,
+    "LOGIN_REQUIRED": 1
+  },
+  "fuses": [
+    {
+      "stage": "publish_pre_submit",
+      "active": 0,
+      "consecutive_failures": 0,
+      "cleared_at": "2026-10-06 06:40:48"
+    },
+    {
+      "stage": "management_verify",
+      "active": 0,
+      "consecutive_failures": 0,
+      "cleared_at": "2026-10-06 06:52:26"
+    }
+  ],
+  "history_daily_limit": 0,
+  "public_guest_verified": false,
+  "note": "恢复后已用完20个共享投稿名额，20条均获管理页确认。此前4条英语世界回查歧义已修复并串行只读回账，无重复上传；剩余队列按原有每日额度和发布窗口继续。"
+}

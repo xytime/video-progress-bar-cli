@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.64 | 2026-10-06 | Codex | 等待精确目标标题出现，拒绝旧列表与共用简介提前结束管理回查。 |
 | 1.5.63 | 2026-10-06 | Codex | 覆盖异步封面生成、延迟保存和平台受限状态。 |
 | 1.5.62 | 2026-09-09 | Codex | 覆盖横封面全幅裁切，防止竖版内容缩小后产生可被平台识别的大面积内框。 |
 | 1.5.46 | 2026-09-04 | Codex | 覆盖发布前闸门与发布后不确定退出码的状态边界。 |
@@ -478,6 +479,19 @@ def test_management_title_search_is_exact_and_read_only():
     search.fill.assert_called_once_with("北极运动：一场跨越世代的平衡挑战", timeout=3_000)
     search.press.assert_called_once_with("Enter", timeout=3_000)
     page.wait_for_timeout.assert_called_once_with(1_000)
+
+
+def test_management_wait_does_not_accept_old_list_before_expected_title():
+    page = MagicMock()
+    body = MagicMock()
+    body.inner_text.side_effect = [
+        "搜索作品 已发布 审核中 其他作品 跟随 BNN Bloomberg 原声",
+        "搜索作品 已发布 英语世界｜加拿大基建热选Acon集团",
+    ]
+    page.locator.return_value = body
+    text = wait_for_management_content(page, timeout_ms=2_000, expected_markers=["英语世界｜加拿大基建热选Acon集团"])
+    assert "加拿大基建热选Acon集团" in text
+    assert page.wait_for_timeout.call_count == 1
 
 
 def test_login_detection_includes_passport_and_creator_login_text():

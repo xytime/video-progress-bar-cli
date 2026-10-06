@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.6 | 2026-10-06 | Codex | 完整标题作为管理身份与等待目标，避免共用简介及旧列表抢先结束回查。 |
 | 1.7.5 | 2026-10-06 | Codex | 浏览器启动异常落入独立诊断日志，保留尚未建页面或上传的完整错误。 |
 | 1.7.4 | 2026-10-06 | Codex | 识别平台限制状态；等待初始双封面生成与异步保存，保持发布前闸门。 |
 | 1.7.3 | 2026-09-23 | Codex | 同账号浏览器入口互斥，与加工锁独立，领取凭据前拒绝占用。 |
@@ -472,7 +473,7 @@ def wait_for_management_content(
             and "已发布" in page_text
             and ("审核中" in page_text or "不通过" in page_text)
         )
-        if "加载中" not in page_text and (target_visible or list_ready):
+        if "加载中" not in page_text and (target_visible if markers else list_ready):
             return page_text
         page.wait_for_timeout(500)
     return page_text
@@ -515,7 +516,8 @@ def verify_management_publication(
         return None
     normalized_title = _normalize_page_text(title_text)
     expected_markers = [normalized_title] if len(normalized_title) >= 6 else []
-    expected_markers.extend(get_management_copy_markers(copy_text))
+    if not expected_markers:
+        expected_markers.extend(get_management_copy_markers(copy_text))
     _search_management_title(page, title_text)
     page_text = wait_for_management_content(page, expected_markers=expected_markers)
     if is_login_required(page.url, page_text, [frame.url for frame in page.frames]):

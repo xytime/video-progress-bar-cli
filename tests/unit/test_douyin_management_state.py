@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-06 | Codex | 拒绝跨卡片与歧义匹配；平台限制不释放已提交额度。 |
+| 1.1.0 | 2026-10-06 | Codex | 共用简介不覆盖独有标题；目标缺失、重复及未知状态仍拒绝落账。 |
 """
 from pathlib import Path
 
@@ -37,6 +38,39 @@ def test_unknown_state_does_not_borrow_next_card_status():
 def test_two_matching_cards_remain_ambiguous_even_with_same_state():
     card = TITLE + COPY + " 编辑作品 设置权限 2026年09月29日 07:55 已发布"
     assert get_management_publication_state(card + card, COPY, TITLE) is None
+
+
+SHARED_COPY = "跟随 BNN Bloomberg 原声，进行 A2–B1 家庭英语精读。原报道观点与事实归原来源。"
+EW_TITLE = "英语世界｜Heidi投资2500万美元"
+
+
+def shared_copy_card(title, label="已发布"):
+    return title + SHARED_COPY + " 编辑作品 设置权限 作品置顶 删除作品 2026年10月06日 13:57 " + label
+
+
+@pytest.mark.parametrize("label,state", [("已发布", "PUBLISHED"), ("审核中", "UNDER_REVIEW"), ("不适宜公开", "REJECTED"), ("流量减少", "RESTRICTED")])
+def test_unique_title_resolves_one_of_multiple_shared_copy_cards(label, state):
+    page = shared_copy_card(EW_TITLE, label) + shared_copy_card("英语世界｜美债收益率飙升至多年高位")
+    assert get_management_publication_state(page, SHARED_COPY, EW_TITLE) == state
+
+
+def test_missing_title_does_not_use_shared_copy_of_another_video():
+    assert get_management_publication_state(shared_copy_card("英语世界｜其他主题"), SHARED_COPY, EW_TITLE) is None
+
+
+def test_duplicate_title_with_unknown_state_does_not_borrow_known_state():
+    page = shared_copy_card(EW_TITLE, "未知状态") + shared_copy_card(EW_TITLE)
+    assert get_management_publication_state(page, SHARED_COPY, EW_TITLE) is None
+
+
+def test_unknown_target_state_does_not_fall_back_to_shared_copy():
+    page = shared_copy_card(EW_TITLE, "未知状态") + shared_copy_card("英语世界｜其他主题")
+    assert get_management_publication_state(page, SHARED_COPY, EW_TITLE) is None
+
+
+def test_shared_copy_without_title_remains_ambiguous():
+    page = shared_copy_card(EW_TITLE) + shared_copy_card("英语世界｜其他主题")
+    assert get_management_publication_state(page, SHARED_COPY) is None
 
 
 def test_restricted_generic_submission_keeps_daily_quota_and_cannot_requeue(tmp_path):

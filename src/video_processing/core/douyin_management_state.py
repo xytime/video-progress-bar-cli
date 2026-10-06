@@ -6,6 +6,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-06 | Codex | 同作品卡片识别公开、审核及限制状态，负面审核不累计 UI 熔断。 |
+| 1.1.0 | 2026-10-06 | Codex | 已有完整标题时只核验标题卡片，避免共用简介造成歧义或借用其他作品状态。 |
 """
 
 from __future__ import annotations
@@ -48,9 +49,10 @@ def get_management_publication_state(page_text: str, copy_text: str, title_text:
     """仅接受身份锚点后第一个编辑菜单紧邻的日期和状态，不借用下一作品。"""
     page = normalize_page_text(page_text)
     title = normalize_page_text(title_text)
-    markers = [title] if len(title) >= 6 else []
-    markers.extend(marker for marker in get_management_copy_markers(copy_text) if marker not in markers)
-    cards: dict[int, str] = {}
+    # 英语世界可能逐条使用相同的来源简介；已提供标题时不能让该模板
+    # 扩大匹配集合，也不能在目标标题缺失时用另一条的简介替代身份。
+    markers = [title] if len(title) >= 6 else get_management_copy_markers(copy_text)
+    cards: dict[int, str | None] = {}
     for marker in markers:
         start = 0
         while (index := page.find(marker, start)) >= 0:
@@ -58,7 +60,6 @@ def get_management_publication_state(page_text: str, copy_text: str, title_text:
             edit_index = tail.find("编辑作品")
             if edit_index >= 0:
                 match = _CARD_STATE.match(tail[edit_index:])
-                if match:
-                    cards[index + len(marker) + edit_index] = _LABEL_STATES[match.group(1)]
+                cards[index + len(marker) + edit_index] = _LABEL_STATES[match.group(1)] if match else None
             start = index + len(marker)
     return next(iter(cards.values())) if len(cards) == 1 else None

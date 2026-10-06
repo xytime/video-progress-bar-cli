@@ -1,0 +1,123 @@
+{
+  "started_at": "2026-10-06T08:25:43.486382+00:00",
+  "actions": "verify_only; no upload; no publish; no notifications",
+  "results": [
+    {
+      "review_id": "eec437070b924619ad61e0aeb7406fab",
+      "title": "Nike一季度业绩不及预期",
+      "exit_code": 0,
+      "observed": "PUBLISHED",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "reconciliation_failures": 0,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/eec437070b924619ad61e0aeb7406fab/1791275143489263000",
+      "public_guest_verified": false,
+      "files": [
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/eec437070b924619ad61e0aeb7406fab/1791275143489263000/douyin_management_readback.json",
+          "sha256": "3d9a39a2b65dee18b9437af106527c15b110382dc8e54c70f6d29705975dcf45"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/eec437070b924619ad61e0aeb7406fab/1791275143489263000/douyin_management_evidence_controls.json",
+          "sha256": "1d7b2739e6c3decfd047082f2bb468e735fc78045f05d7899d55165c975118f0"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/eec437070b924619ad61e0aeb7406fab/1791275143489263000/douyin_management_evidence.png",
+          "sha256": "5aa14ce8575d9ffef18fe94d3f04306bf50723d0dbb6c1c39783365888eb16f7"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/eec437070b924619ad61e0aeb7406fab/1791275143489263000/douyin_uploader.log",
+          "sha256": "ee1e239a1c7b4c0bc48ebffac1217cc0f9f855c5ca77a8414383ed7740bec4be"
+        }
+      ]
+    },
+    {
+      "review_id": "debfa1114f814f5681c6a8c2cb9ec0e1",
+      "title": "加拿大基建热选Acon集团",
+      "exit_code": 0,
+      "observed": "PUBLISHED",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "reconciliation_failures": 0,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/debfa1114f814f5681c6a8c2cb9ec0e1/1791275151759642000",
+      "public_guest_verified": false,
+      "files": [
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/debfa1114f814f5681c6a8c2cb9ec0e1/1791275151759642000/douyin_management_readback.json",
+          "sha256": "7d4d866884957587d8ece93c6944c7c9f8d15d4acbccf15e45118b97d10300f9"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/debfa1114f814f5681c6a8c2cb9ec0e1/1791275151759642000/douyin_management_evidence_controls.json",
+          "sha256": "ac1910ce8a9827362df34050d49ee44c49151ab6dec373d50f0e61e2ed2bb1ff"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/debfa1114f814f5681c6a8c2cb9ec0e1/1791275151759642000/douyin_management_evidence.png",
+          "sha256": "eeea34fbb245d5d9a8cad9f401964f2a35aebcf726a2f926c8327ca3c96e5bd2"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/debfa1114f814f5681c6a8c2cb9ec0e1/1791275151759642000/douyin_uploader.log",
+          "sha256": "5a51694e9cc4dd3f351658ab1dc65e900f13aa1b3d94f9affc77e42e0448e114"
+        }
+      ]
+    },
+    {
+      "review_id": "ea7920fd32534853bd36c8362b0160ac",
+      "title": "Heidi投资2500万美元",
+      "exit_code": 0,
+      "observed": "PUBLISHED",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "reconciliation_failures": 0,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/ea7920fd32534853bd36c8362b0160ac/1791275159378806000",
+      "public_guest_verified": false,
+      "files": [
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/ea7920fd32534853bd36c8362b0160ac/1791275159378806000/douyin_management_readback.json",
+          "sha256": "25c40330b8dafeb6a420b75ae5fe3594d9307e02b7843dd3841efcce4f494b79"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/ea7920fd32534853bd36c8362b0160ac/1791275159378806000/douyin_management_evidence_controls.json",
+          "sha256": "ad40dbf6c61991615591b8b559d4700ad1e44b79a0b45e492c577606ad2185f6"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/ea7920fd32534853bd36c8362b0160ac/1791275159378806000/douyin_management_evidence.png",
+          "sha256": "cb74ec273082390795225d86bcf2fc0fa622d485b84994fff3aa5dba4c61dcdb"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/ea7920fd32534853bd36c8362b0160ac/1791275159378806000/douyin_uploader.log",
+          "sha256": "f2335a1a57ecda8a7fe4bc8e97150bf2cd0a8bd36b0e8db3c08168e4902d0485"
+        }
+      ]
+    },
+    {
+      "review_id": "d8efa0eeb5394f08833923292fc34ff3",
+      "title": "Chukumba谈假日零售",
+      "exit_code": 0,
+      "observed": "PUBLISHED",
+      "state": "PUBLISHED",
+      "attempt_count": 1,
+      "reconciliation_failures": 0,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/d8efa0eeb5394f08833923292fc34ff3/1791275167094242000",
+      "public_guest_verified": false,
+      "files": [
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/d8efa0eeb5394f08833923292fc34ff3/1791275167094242000/douyin_management_readback.json",
+          "sha256": "82f4482ebd25fd95b64011a66a681a5aeaad308172f2d69dc9a0145ccf52a8aa"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/d8efa0eeb5394f08833923292fc34ff3/1791275167094242000/douyin_management_evidence_controls.json",
+          "sha256": "1a736c1446efaf8b59daa8fb8619206b9c41da59900d4b187c730cbe5917ee78"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/d8efa0eeb5394f08833923292fc34ff3/1791275167094242000/douyin_management_evidence.png",
+          "sha256": "74a678bceda5c16e68228126163d0cb1d514204a40ded5e3c692424ca4214f87"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/english-world-final/d8efa0eeb5394f08833923292fc34ff3/1791275167094242000/douyin_uploader.log",
+          "sha256": "3d0fa0970ac19f3a19379a932a0029a5ab7ba66ddf745e8d14d8e809b3c1cd0c"
+        }
+      ]
+    }
+  ],
+  "finished_at": "2026-10-06T08:26:15.775316+00:00"
+}
