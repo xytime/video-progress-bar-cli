@@ -61,6 +61,11 @@ except ImportError:
     cli.add_command(vocab_level)
 
 
+from cli.commands.follow_along import follow_along, follow_along_init
+cli.add_command(follow_along)
+cli.add_command(follow_along_init)
+
+
 def main():
     """主函数"""
     cli()

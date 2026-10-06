@@ -1,15 +1,16 @@
-# 双语跟唱／跟读流水线：待确认规格
+# 双语跟唱／跟读流水线：规格与首版实现
 
-日期：2026-10-07。作者：Codex；精确模型标识未知。状态：**规格草案，尚未批准实现**。
+日期：2026-10-07。作者：Codex；精确模型标识未知。状态：**规格已由用户确认；首版本地工程路径已实现，真实素材验收待完成**。
 
 目标：输入本地音频、与音频对应的表演视频、英文及中文文本，生成可复核、可重复渲染的 9:16 双语跟唱／跟读视频。推荐首版为独立制作入口，完成至本地成片和 QA 回执。
 
 交付文件：
 
 - [architecture.md](architecture.md)：系统与依赖图、目录、六个模块、技术取舍、扩展路径与验收。
-- [core-design.md](core-design.md)：音频／对齐、断句／运动、编排的接口与算法设计；均非已实现代码。
+- [core-design.md](core-design.md)：音频／对齐、断句／运动、编排的接口与算法设计；具体实现与差距见 implementation.md。
 - [timeline.schema.json](timeline.schema.json)：完整 JSON Schema Draft 2020-12，定义 `follow-along.timeline/1.0`。
 - [timeline.example.json](timeline.example.json)：人为构造的数据契约示例，不能作为媒体、对齐或排版成功证据。
+- [implementation.md](implementation.md)：可运行入口、对齐协议、缓存和明确的未实现项。
 - [verification.md](verification.md)：本机事实、Schema/示例与 14 项契约检查的实际结果及限制。
 
 推荐决策：
@@ -28,10 +29,8 @@
 - 不把首版入口接入 cron、自动选题、上传、评论或通知。发布是另一项有平台授权和证据账本的工作。
 - 不改旧成片、旧 QA、历史投稿或现有生产配置。新增依赖在隔离模型环境中验证，业务执行仍通过项目 venv 与资源守卫。
 
-已核实的事实：当前 checkout 为 `main`；有无关未跟踪工作。已有 `study_cards` 逐词模型、文字布局和 FFmpeg 合成器，但其新闻内容约束不适合直接充当歌唱 AST。本机为 arm64、16 GiB、10 个物理核；项目 venv 为 Python 3.12.4，torch 2.9.1、Pillow 11.3.0、jsonschema 4.26.0；未安装 whisperx、demucs、torchaudio。未加载模型或执行媒体加工。
+已核实的事实：当前 checkout 为 `main`；有无关未跟踪工作。已有 `study_cards` 逐词模型、文字布局和 FFmpeg 合成器，但其新闻内容约束不适合直接充当歌唱 AST。本机为 arm64、16 GiB、10 个物理核；项目 venv 为 Python 3.12.4，torch 2.9.1、Pillow 11.3.0、jsonschema 4.26.0；未安装 whisperx、demucs、torchaudio。未加载模型；已在隔离测试中加工合成工程夹具。
 
 通过标准：至少一个真实讲话样本和一个真实歌唱样本完成音画对应、双语无缺词、动态安全区、编码后音频与恢复／缓存验证；长音、重复副歌、缺失时间和字体缺字等失败样例必须给出可定位回执。具体门槛见 [architecture.md](architecture.md) 的验收表。
 
-本轮只交付规格和数据契约。Schema 结构验证与示例验证不代表业务语义验证、词级对齐成功或真实成片成功。
-
-确认点：是否按以上首版范围，在本仓库独立命名空间实现本地制作路径，先完成真实样本与资源基准，再评估运营接入？这是用户要求的“先确认规格再开发”约定；[critical-collaboration](</Users/ryusei/.codex/skills/critical-collaboration/SKILL.md>) 明确要求：`Await confirmation before changing product code, dependencies, schema, or runtime for the proposed implementation.` 本目录 JSON Schema 是待批准的规格文件，未迁移数据库或启用运行契约。
+首版本地代码与工程测试不等于真实歌声/口语样本验收。自动分离、歌声对齐精度与长片资源指标仍待验证；详见 implementation.md 与 verification.md。
