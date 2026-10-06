@@ -1,0 +1,32 @@
+{
+  "at": "2026-10-06T05:57:34.633351+00:00",
+  "publication_id": 513,
+  "settled": 1,
+  "state": "PUBLISHED",
+  "reason": "抖音作品管理已确认本次作品为已发布。",
+  "evidence": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_reconciliation/513/1791266246713078000/douyin_management_readback.json",
+  "evidence_sha256": "b80ec8551964076d2b5d11e120e8e0dc4619201bea307ef352591fe9b305a1e2",
+  "public_guest_verified": false,
+  "fuses": [
+    {
+      "stage": "publish_pre_submit",
+      "active": 0,
+      "consecutive_failures": 0,
+      "cleared_at": "2026-10-06 05:57:01"
+    },
+    {
+      "stage": "management_verify",
+      "active": 0,
+      "consecutive_failures": 0,
+      "cleared_at": "2026-10-06 05:57:34"
+    }
+  ],
+  "generic_states": {
+    "PUBLISHED": 219,
+    "UNCERTAIN": 147,
+    "CANCELED": 140,
+    "RETRYABLE_FAILED": 1,
+    "QUEUED": 44,
+    "BANNED": 6
+  }
+}

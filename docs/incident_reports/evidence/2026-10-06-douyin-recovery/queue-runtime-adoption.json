@@ -1,0 +1,150 @@
+{
+  "observed_at": "2026-10-06T05:58:40.093843+00:00",
+  "fresh_manager_publish_halted": false,
+  "fresh_manager_management_halted": false,
+  "policy": {
+    "enabled": true,
+    "daily_limit": 20,
+    "per_run": 1,
+    "history_daily_limit": 0
+  },
+  "fuses": [
+    {
+      "stage": "publish_pre_submit",
+      "active": 0,
+      "consecutive_failures": 0,
+      "cleared_at": "2026-10-06 05:57:01"
+    },
+    {
+      "stage": "management_verify",
+      "active": 0,
+      "consecutive_failures": 0,
+      "cleared_at": "2026-10-06 05:57:34"
+    }
+  ],
+  "generic_states": {
+    "PUBLISHED": 219,
+    "UNCERTAIN": 147,
+    "CANCELED": 140,
+    "RETRYABLE_FAILED": 1,
+    "QUEUED": 44,
+    "BANNED": 6
+  },
+  "english_world_states": {
+    "QUEUED": 4,
+    "SUBMITTING": 1,
+    "UNDER_REVIEW": 3,
+    "CANCELED": 14,
+    "PUBLISHED": 26,
+    "LOGIN_REQUIRED": 1
+  },
+  "automatic_queue_acceptances_after_recovery": [
+    {
+      "review_id": "ea7920fd32534853bd36c8362b0160ac",
+      "title": "Heidi投资2500万美元",
+      "state": "UNDER_REVIEW",
+      "attempt_count": 1,
+      "submitted_at": "2026-10-06 05:57:01",
+      "updated_at": "2026-10-06 05:58:05",
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_043411_397089_4Q50uteEs70/douyin_evidence/1791266103406262000",
+      "attempts": [
+        {
+          "state": "UNDER_REVIEW",
+          "uploader_exit_code": 6,
+          "started_at": "2026-10-06 05:55:03",
+          "finished_at": "2026-10-06 05:57:01",
+          "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_043411_397089_4Q50uteEs70/douyin_evidence/1791266103406262000"
+        }
+      ],
+      "evidence_files": [
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_043411_397089_4Q50uteEs70/douyin_evidence/1791266103406262000/douyin_post_submit.png",
+          "sha256": "4378f292ae7e26e810f5aac12c63a3591eb93950f8d698da603ff64fadda645d"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_043411_397089_4Q50uteEs70/douyin_evidence/1791266103406262000/douyin_post_submit_controls.json",
+          "sha256": "f8f975a52442c632b5ad741f4d71b05db414952f0b8af3f8d49d57edf4b540f7"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_043411_397089_4Q50uteEs70/douyin_evidence/1791266103406262000/douyin_preflight_ready_controls.json",
+          "sha256": "da71676d25393a51ad247346acbfd5096cf0f4593933074e21b430ba7d856a5b"
+        }
+      ]
+    },
+    {
+      "review_id": "fc2593700dc2409f93d259c7e0db8fe0",
+      "title": "AI交易加剧债券抛售",
+      "state": "UNDER_REVIEW",
+      "attempt_count": 1,
+      "submitted_at": "2026-10-06 05:54:47",
+      "updated_at": "2026-10-06 05:55:02",
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_020452_594062_3I_6jzJ49So/douyin_evidence/1791265983269173000",
+      "attempts": [
+        {
+          "state": "UNDER_REVIEW",
+          "uploader_exit_code": 6,
+          "started_at": "2026-10-06 05:53:03",
+          "finished_at": "2026-10-06 05:54:47",
+          "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_020452_594062_3I_6jzJ49So/douyin_evidence/1791265983269173000"
+        }
+      ],
+      "evidence_files": [
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_020452_594062_3I_6jzJ49So/douyin_evidence/1791265983269173000/douyin_post_submit.png",
+          "sha256": "22d4e89cafc6ae2dc6c0e048251b5d8315048a0804f6672c93027dae186a07d8"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_020452_594062_3I_6jzJ49So/douyin_evidence/1791265983269173000/douyin_post_submit_controls.json",
+          "sha256": "28c6a75fa19b0df365f13bdd080c0e1e3d7ca94de0a746f6b75f7b4b02862c74"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261004_020452_594062_3I_6jzJ49So/douyin_evidence/1791265983269173000/douyin_preflight_ready_controls.json",
+          "sha256": "2c0e74de6250ea736a0c70dd5722da34d85e24b612f3020d50f8ff9e98a074dc"
+        }
+      ]
+    },
+    {
+      "review_id": "d8efa0eeb5394f08833923292fc34ff3",
+      "title": "Chukumba谈假日零售",
+      "state": "UNDER_REVIEW",
+      "attempt_count": 1,
+      "submitted_at": "2026-10-06 05:52:04",
+      "updated_at": "2026-10-06 05:53:02",
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261002_050901_237644_qNGahe3D_w0/douyin_evidence/1791265804798068000",
+      "attempts": [
+        {
+          "state": "UNDER_REVIEW",
+          "uploader_exit_code": 6,
+          "started_at": "2026-10-06 05:50:04",
+          "finished_at": "2026-10-06 05:52:04",
+          "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261002_050901_237644_qNGahe3D_w0/douyin_evidence/1791265804798068000"
+        }
+      ],
+      "evidence_files": [
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261002_050901_237644_qNGahe3D_w0/douyin_evidence/1791265804798068000/douyin_post_submit.png",
+          "sha256": "992aa85afc7041e79fe7daedfd0f926c1a138b9bfc3903df630bf446de5707d4"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261002_050901_237644_qNGahe3D_w0/douyin_evidence/1791265804798068000/douyin_post_submit_controls.json",
+          "sha256": "3d54df256249ebba5324471f43abcad6b3734e93317ec352a9f01ca86128666f"
+        },
+        {
+          "path": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/english_world_programmatic/20261002_050901_237644_qNGahe3D_w0/douyin_evidence/1791265804798068000/douyin_preflight_ready_controls.json",
+          "sha256": "a744b6d8f7bdc0ffe6684f325cfbdeb310d8d23313fa45a5262e1a192ddd8ffd"
+        }
+      ]
+    }
+  ],
+  "cron_status": {
+    "ended_at": "2026-10-06T05:57:02.450448+00:00",
+    "git_revision": "b7e85489e6ab3591af817df5b98e5dead7c2cef3",
+    "last_heartbeat_at": "2026-10-06T05:57:02.450448+00:00",
+    "pid": 75385,
+    "run_id": "1791266222-75385",
+    "started_at": "2026-10-06T05:57:02.291083+00:00",
+    "state": "COMPLETED"
+  },
+  "runtime_note": "旧巡航 22740 于 13:49:30 完成；新自动巡航从 13:52:05 采用 b7e8548。完整加工任务锁由 13:49:35 启动的 73019 持有，未停止在途任务。自动英语世界投稿已受理三条；普通剩余队列等待该加工轮完成，未单独抢锁。新巡航 COMPLETED 记录包含任务锁忙时跳过，不把它当普通队列已投稿证明。",
+  "public_guest_verified": false
+}
