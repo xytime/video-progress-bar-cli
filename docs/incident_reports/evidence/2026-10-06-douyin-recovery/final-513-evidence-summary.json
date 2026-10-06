@@ -1,0 +1,30 @@
+{
+  "publication_id": 513,
+  "state": "UNDER_REVIEW",
+  "platform_accepted_at": "2026-10-06T13:46:10+08:00",
+  "actual_uploads_after_approval": 1,
+  "final_publish_clicks": 1,
+  "launch_claims": 2,
+  "first_claim_failed_before_page_creation": true,
+  "title_and_copy_exact_final_match": true,
+  "both_cover_slots_saved": true,
+  "declaration": "内容为个人观点或见解",
+  "settings": {
+    "visibility": "公开",
+    "download": "允许",
+    "schedule": "立即发布",
+    "cross_platform": "不同时发布"
+  },
+  "full_video_quick_detection": "UNAVAILABLE_VIDEO_LONGER_THAN_5_MINUTES",
+  "public_guest_verified": false,
+  "evidence": {
+    "output/douyin_evidence/iXgPvPp_vTw/513/douyin_cover_applied.json": "ed5b3ffd96bb46840e8268e7dfe88784fa2a4bb07e4453c41526ac1c1efa74b9",
+    "output/douyin_evidence/iXgPvPp_vTw/513/douyin_cover_applied.png": "fafe6179e1b4bd730b1647658ff15d6455d32f209e1d2c9a1695ef376d87b996",
+    "output/douyin_evidence/iXgPvPp_vTw/513/douyin_preflight_ready.png": "1625f922912e7386087e370b35cdb4d7991e37fe15b2e00f4ddc686a4bcebf25",
+    "output/douyin_evidence/iXgPvPp_vTw/513/douyin_preflight_ready_controls.json": "4c69a45737436ab23e74dc39fbf7d68b06face693a33cff9d734541f14fe757f",
+    "output/douyin_evidence/iXgPvPp_vTw/513/douyin_post_submit.png": "f309fdd7094db69bd519b8d6bf35d503041650ebd93c0c13a3e3e01ae2102aa9",
+    "output/douyin_evidence/iXgPvPp_vTw/513/douyin_post_submit_controls.json": "a565685ea035a6fbffd42b7a24576316c9b17e87db3bba0744159d0fbbf2a375",
+    "output/douyin_evidence/iXgPvPp_vTw/513/douyin_uploader.log": "90f1452791e8c3d5acbc2f53979d653e42c9e39a877279e5b268a0437a861482",
+    "output/douyin_reconciliation/513/1791265605158730000/douyin_management_readback.json": "a0b59f11b6e188c22dcac054908e1a70938eb18c330ef7a0b51eb7ca7a850e45"
+  }
+}

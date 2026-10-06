@@ -1,0 +1,42 @@
+{
+  "publication_id": 513,
+  "youtube_id": "iXgPvPp_vTw",
+  "title": "房贷托管账户缺口导致月供上涨",
+  "source_revision": "6885359",
+  "started_at": "2026-10-06T05:40:51.156125+00:00",
+  "authorization": "确认发布并恢复队列；同一成片重上传一次、核验后单次点击发布",
+  "daily_limit": 20,
+  "per_run_limit": 1,
+  "attempt_count": 1,
+  "state": "RETRYABLE_FAILED",
+  "notifications": [
+    {
+      "at": "2026-10-06T05:40:58.839188+00:00",
+      "delivery": "local_acceptance_only"
+    }
+  ],
+  "guard_clear": {
+    "cleared": true,
+    "stage": "publish_pre_submit",
+    "evidence": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/preflight-513/douyin_ready_to_submit_controls.json",
+    "at": "2026-10-06T05:40:51.171638+00:00"
+  },
+  "accepted": false,
+  "finished_at": "2026-10-06T05:40:58.842172+00:00",
+  "error_message": null,
+  "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_evidence/iXgPvPp_vTw/513",
+  "guard_stages": [
+    {
+      "stage": "publish_pre_submit",
+      "active": 0,
+      "consecutive_failures": 0,
+      "cleared_at": "2026-10-06 05:40:51"
+    },
+    {
+      "stage": "management_verify",
+      "active": 0,
+      "consecutive_failures": 0,
+      "cleared_at": "2026-10-06 05:31:42"
+    }
+  ]
+}

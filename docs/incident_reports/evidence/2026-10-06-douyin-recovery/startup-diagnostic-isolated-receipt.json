@@ -1,0 +1,24 @@
+{
+  "source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+  "snapshot": "/private/tmp/video-pytest-i3_a0s9q/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.069
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_douyin_uploader.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "b5d51d2ed46781d3dd57f4fe2ac990eaf8902690172139ae782c4d0792378bf6",
+  "profile_sha256": "a3ce58948ba9e6fd4b1a6a0b3dfa9ca0424e843c1489dfe5de2581a252880440",
+  "browser_runtime": null,
+  "browser_runtime_sha256": null,
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 0.75
+  },
+  "finished_at": "2026-10-06T05:46:18.721167+00:00"
+}

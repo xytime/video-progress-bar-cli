@@ -1,0 +1,35 @@
+{
+  "observed_at": "2026-10-06T05:48:41.625829+00:00",
+  "fresh_manager_publish_halted": false,
+  "fresh_manager_management_halted": false,
+  "policy": {
+    "enabled": true,
+    "daily_limit": 20,
+    "per_run": 1,
+    "history_daily_limit": 0,
+    "lookback_hours": 72
+  },
+  "generic_states": {
+    "PUBLISHED": 218,
+    "UNCERTAIN": 147,
+    "CANCELED": 140,
+    "RETRYABLE_FAILED": 1,
+    "QUEUED": 44,
+    "BANNED": 6,
+    "UNDER_REVIEW": 1
+  },
+  "long_running_pipeline": {
+    "current_slice_index": 0,
+    "current_video": "Zi4NTv3GXk4",
+    "git_revision": "be9cc43d8e6f320ebf2184da564dac22e7f29095",
+    "last_heartbeat_at": "2026-10-06T05:48:14.285661+00:00",
+    "pid": 22740,
+    "preparation_only": false,
+    "run_id": "1791259985-22740",
+    "stage": "CONTENT_CENSORSHIP",
+    "stage_started_at": "2026-10-06T05:43:38.419441+00:00",
+    "started_at": "2026-10-06T04:13:05.412745+00:00",
+    "state": "RUNNING"
+  },
+  "note": "验收投稿与只读回查已用修复后的新实例；在途加工未中断，下一次原有每分钟巡航启动后完整采用新代码。"
+}

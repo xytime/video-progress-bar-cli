@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.5 | 2026-10-06 | Codex | 浏览器启动异常落入独立诊断日志，保留尚未建页面或上传的完整错误。 |
 | 1.7.4 | 2026-10-06 | Codex | 识别平台限制状态；等待初始双封面生成与异步保存，保持发布前闸门。 |
 | 1.7.3 | 2026-09-23 | Codex | 同账号浏览器入口互斥，与加工锁独立，领取凭据前拒绝占用。 |
 | 1.7.2 | 2026-09-09 | Codex | 横封面改用全幅裁切，消除竖版封面缩放后形成的大面积内框；投稿页控件证据补充实际输入值。 |
@@ -2568,7 +2569,11 @@ def _main_with_session(args) -> int:
         diagnostic_log.close()
         raise
     try:
-        browser = playwright.chromium.launch(headless=not args.no_headless)
+        try:
+            browser = playwright.chromium.launch(headless=not args.no_headless)
+        except Exception:
+            logger.exception("抖音浏览器启动失败，尚未创建页面或开始上传")
+            raise
         context_kwargs = {}
         if args.state.is_file():
             context_kwargs["storage_state"] = str(args.state)
