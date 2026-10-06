@@ -1,0 +1,416 @@
+{
+  "verified_at": "2026-10-06T13:31:22+08:00",
+  "counts": {
+    "REJECTED": 4,
+    "PUBLISHED": 39,
+    "RESTRICTED": 2
+  },
+  "records": [
+    {
+      "id": 487,
+      "youtube_id": "S5zAQ1Yh0I4",
+      "observed_state": "REJECTED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-487",
+      "error": null,
+      "readback_sha256": "9867a1d863190cd9193d3f0704568e785c6f6938c46211ad2f6544f29bcd082e"
+    },
+    {
+      "id": 488,
+      "youtube_id": "zW2GaUwDQyA",
+      "observed_state": "REJECTED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-488",
+      "error": null,
+      "readback_sha256": "872fed6fe5802e92feac48d6ab5609998950b69391f7c77fceba499eca5a7472"
+    },
+    {
+      "id": 509,
+      "youtube_id": "qH9HscSOfME",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-509",
+      "error": null,
+      "readback_sha256": "98e96982dd46c3542b3460ef9a601fe079a33f74c46bde6ce7b11d3c40011aa3"
+    },
+    {
+      "id": 510,
+      "youtube_id": "9Ff4S1FJdRM",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-510",
+      "error": null,
+      "readback_sha256": "23d65a309409093790caabcb6bfa5e6257266b1eb54e463bf3424f1d14efaefb"
+    },
+    {
+      "id": 444,
+      "youtube_id": "IOeZWeYDR4c",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-444",
+      "error": null,
+      "readback_sha256": "ce396b4aab0cf3b491d0883e324c257b0b0d58d2770507aed2af8ec3c76c9241"
+    },
+    {
+      "id": 445,
+      "youtube_id": "FLTvHKg_UgI",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-445",
+      "error": null,
+      "readback_sha256": "c9510d61c821ded1463846b13aeb94a5eb06df3cd87e5219ce59bb94a036b59a"
+    },
+    {
+      "id": 446,
+      "youtube_id": "R9nVkPEQtI8",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-446",
+      "error": null,
+      "readback_sha256": "cbe8f1588ae082456b6abb72243dcff967b4888c0eb952f786ba47e886c43859"
+    },
+    {
+      "id": 447,
+      "youtube_id": "3KE9NeA67wE",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-447",
+      "error": null,
+      "readback_sha256": "5b26b7c76adc96153d57cfc0b123b52084d8211489174f5c2f970e7ed38921af"
+    },
+    {
+      "id": 448,
+      "youtube_id": "0vkid7GEPUI",
+      "observed_state": "RESTRICTED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-448",
+      "error": null,
+      "readback_sha256": "68184c2e350aee27b7482ba03c3ce7c6d46ffe692e44559e688f7dea9e83387a"
+    },
+    {
+      "id": 449,
+      "youtube_id": "4GpcY-mAIRc",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-449",
+      "error": null,
+      "readback_sha256": "5336d99ec711586ee836aef7fbf5fd1196a4dca992f6665dff57beb25f53ea93"
+    },
+    {
+      "id": 450,
+      "youtube_id": "GRQlIAWVO_E",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-450",
+      "error": null,
+      "readback_sha256": "82f95c454100f19b56d0eb32cb46b82bd839983f412048501285c125a7a810c6"
+    },
+    {
+      "id": 451,
+      "youtube_id": "uWYKdkwNVYE",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-451",
+      "error": null,
+      "readback_sha256": "5bbd11c944217787244601c0765381312bf7924b0397f98a88575fed7042a556"
+    },
+    {
+      "id": 452,
+      "youtube_id": "F33vZJFDxqY",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-452",
+      "error": null,
+      "readback_sha256": "309ea08a4ad2241d3dc1bd55b639c796341b12633c111598d83fca92d9625505"
+    },
+    {
+      "id": 454,
+      "youtube_id": "annPNRpnIYw",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-454",
+      "error": null,
+      "readback_sha256": "68d06ca4df89197d500bc968dcd8014f0331ce996cad47ef1fd6302b25a11b5b"
+    },
+    {
+      "id": 455,
+      "youtube_id": "sMCnsKf0Gw4",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-455",
+      "error": null,
+      "readback_sha256": "6ba024d11eb02412652d4754ff716f0ece2462f7e9d7466f8284021df2f8ecae"
+    },
+    {
+      "id": 456,
+      "youtube_id": "SpXCOlrCgfM",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-456",
+      "error": null,
+      "readback_sha256": "b487ae3abd85f323f2c50a7d3e3bd200f3c19d5fe177e3eecac1d41e9bbdbf07"
+    },
+    {
+      "id": 457,
+      "youtube_id": "ZXuYc_5ojxA",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-457",
+      "error": null,
+      "readback_sha256": "93f724d473f8090642f6a97aa0e3382aea5e7495bdac9fea0783db12802c3dc2"
+    },
+    {
+      "id": 458,
+      "youtube_id": "HMXLRCfd3DI",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-458",
+      "error": null,
+      "readback_sha256": "c406c23449965f929bcc0e9dfd2e052aecb995925c8f49ee3cd0d42b14e2c342"
+    },
+    {
+      "id": 459,
+      "youtube_id": "0slOyzdXdYE",
+      "observed_state": "REJECTED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-459",
+      "error": null,
+      "readback_sha256": "a4e6ea442338c4393fdba634eb7d8f1bdf7c6d16cefa4dc2e1ca773806060be9"
+    },
+    {
+      "id": 460,
+      "youtube_id": "JpEk4XDy5wY",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-460",
+      "error": null,
+      "readback_sha256": "79583f530df1b81f99a3fb79cd88814ad9fbf845eb7b27137a27aa9f36b400dc"
+    },
+    {
+      "id": 462,
+      "youtube_id": "dEe4A3O9OmI",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-462",
+      "error": null,
+      "readback_sha256": "4141dc36974d3d0de0a80ed7c008021a4b1d308fbaddb06c2bb518ff105f00a8"
+    },
+    {
+      "id": 463,
+      "youtube_id": "UEEKAkIPjM8",
+      "observed_state": "REJECTED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-463",
+      "error": null,
+      "readback_sha256": "fad6a3f5b2dcdd1175a3c6f3426f4638a9c83bec3c21c84e4a908ae64e912df2"
+    },
+    {
+      "id": 464,
+      "youtube_id": "2HVVJT_jTQY",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-464",
+      "error": null,
+      "readback_sha256": "8e3c5434811514fd980fa8cab3429081ef43e53aff8f8ad2e9b92fdfd6db84ad"
+    },
+    {
+      "id": 465,
+      "youtube_id": "NNry0FlgDSQ",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-465",
+      "error": null,
+      "readback_sha256": "e139b3a768e23d0188902295380093ef97e04d9a86a6a0809ba94003ae6ac5bb"
+    },
+    {
+      "id": 467,
+      "youtube_id": "hqcwA9i3WfA",
+      "observed_state": "RESTRICTED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-467",
+      "error": null,
+      "readback_sha256": "afbb1f98ea4aa3ad5ebeaf8ef183a0f6ea4c3094ab096f8c0f266cd8e627f5e9"
+    },
+    {
+      "id": 474,
+      "youtube_id": "9SdD5PBtvLA",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-474",
+      "error": null,
+      "readback_sha256": "288e6b9a28aa3231d0513006c547e36909f693d12a44c7f90deb66d5ccf599a0"
+    },
+    {
+      "id": 476,
+      "youtube_id": "IdzwLrRQN5o",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-476",
+      "error": null,
+      "readback_sha256": "bc9a0256782066d3f7b7b5d54f5f01482d85ff9599b5cd08a9b3251b3a70bb0a"
+    },
+    {
+      "id": 477,
+      "youtube_id": "th_tXR2QQ6U",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-477",
+      "error": null,
+      "readback_sha256": "dba2644e19bf424596a28594ed6aa7d6e6a0dc29a94a9af8081d69287726bcd0"
+    },
+    {
+      "id": 489,
+      "youtube_id": "edH4S6JYB7c",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-489",
+      "error": null,
+      "readback_sha256": "cfa565772d48fb59243662faa7cf960d16f1925f1d24c659a4e47dfd30864299"
+    },
+    {
+      "id": 490,
+      "youtube_id": "Eh3xXKar2uM",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-490",
+      "error": null,
+      "readback_sha256": "963305b62a9aff393ec2c1edb85a9280c97cb97636796061da1757d5d0e0dcdd"
+    },
+    {
+      "id": 491,
+      "youtube_id": "GhU9yBxMR1U",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-491",
+      "error": null,
+      "readback_sha256": "dcd0bccd1e4686a9ffdfc690183980aad8cbd6072b35b74b455a55ab8a04ca72"
+    },
+    {
+      "id": 492,
+      "youtube_id": "XnaYKQWd6wQ",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-492",
+      "error": null,
+      "readback_sha256": "3b0aa90265313860e6e864c84d560467b12544dd20b3da470773afcc88f2d2be"
+    },
+    {
+      "id": 494,
+      "youtube_id": "zYfEcGMl-PE",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-494",
+      "error": null,
+      "readback_sha256": "67fe7efe78bdf77f168bc0d2ef72192f0ae0b7d6eee5072a20b4be2b843e3d3d"
+    },
+    {
+      "id": 495,
+      "youtube_id": "gPjBDpeCl5U",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-495",
+      "error": null,
+      "readback_sha256": "42dd5146fada575bc263dcdd9353c3d704111411aae39783405608d0f9cfc0b4"
+    },
+    {
+      "id": 496,
+      "youtube_id": "vuzbmen19IM",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-496",
+      "error": null,
+      "readback_sha256": "4b00ea6a298d8942ea89afe8f7f28a7f887195352216925ce83a2441f2fa12a6"
+    },
+    {
+      "id": 497,
+      "youtube_id": "1eCX3na89-U",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-497",
+      "error": null,
+      "readback_sha256": "e9edddfa356d0ff004fb13bc2bdec5e29680e31d755fedfb8a2bf53eb6677717"
+    },
+    {
+      "id": 498,
+      "youtube_id": "TriIBagqSIc",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-498",
+      "error": null,
+      "readback_sha256": "32670ab55865e4d762a23e82363d63f128d7eabd09d7c25e29c8b060183ddc8a"
+    },
+    {
+      "id": 500,
+      "youtube_id": "txf8CrI5z-k",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-500",
+      "error": null,
+      "readback_sha256": "234760fcf1c60f80dd6d1aeaa0c6c4566e7ef393a72267025a9559948af5ae1d"
+    },
+    {
+      "id": 502,
+      "youtube_id": "fI2VOfTxWjI",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-502",
+      "error": null,
+      "readback_sha256": "b30f367a100c33db1308845be559d3146e8539b9be74f74fb0373e8ed001a274"
+    },
+    {
+      "id": 503,
+      "youtube_id": "X-l-AHXad0g",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-503",
+      "error": null,
+      "readback_sha256": "af54b64da8cc522606f5910991fc4de2ef6345002c64f55ef991c91d3e907629"
+    },
+    {
+      "id": 504,
+      "youtube_id": "Uk31lVtda2g",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-504",
+      "error": null,
+      "readback_sha256": "3d1cfb4716ad76bd4812d68ee3b0aba1fbf33985b1d72909a5d06fd82dead01b"
+    },
+    {
+      "id": 505,
+      "youtube_id": "w1lthcfzRcg",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-505",
+      "error": null,
+      "readback_sha256": "5951cdd40c17a6b8ac1d452944b2920cca2647deca0ceeb04c758b349645ebf0"
+    },
+    {
+      "id": 506,
+      "youtube_id": "KJ3UoQTsdFg",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-506",
+      "error": null,
+      "readback_sha256": "3404bbe1809ec04eec5bd1f6f4b960e24bbf5d28b1abf2cb305ffde1229bde60"
+    },
+    {
+      "id": 507,
+      "youtube_id": "LSmFbEMC3kg",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-507",
+      "error": null,
+      "readback_sha256": "a3409d0c68510653f5f80ef0377aa6bec7929b3385232f1ffb485b3414340156"
+    },
+    {
+      "id": 508,
+      "youtube_id": "q1H-Mxo4CXs",
+      "observed_state": "PUBLISHED",
+      "ledger_applied": true,
+      "evidence_dir": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/douyin_calibration/20261006-recovery/management-508",
+      "error": null,
+      "readback_sha256": "8da2e0fb9e7ce7fc3b78e6b44228ae7f6b9416894e0c62300d9d53015c290bf8"
+    }
+  ],
+  "public_guest_visibility_verified": false
+}

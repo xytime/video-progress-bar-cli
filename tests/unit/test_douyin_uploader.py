@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.63 | 2026-10-06 | Codex | 覆盖异步封面生成、延迟保存和平台受限状态。 |
 | 1.5.62 | 2026-09-09 | Codex | 覆盖横封面全幅裁切，防止竖版内容缩小后产生可被平台识别的大面积内框。 |
 | 1.5.46 | 2026-09-04 | Codex | 覆盖发布前闸门与发布后不确定退出码的状态边界。 |
 | 1.5.47 | 2026-09-04 | Codex | 覆盖内容管理页精确标题检索的只读回查路径。 |
@@ -445,7 +446,7 @@ def test_management_state_reads_long_description_but_not_next_card():
     card = title + copy + "编辑作品 设置权限 作品置顶 删除作品 2026年09月05日 10:58 "
     assert get_management_publication_state(card + "已发布", copy, title) == "PUBLISHED"
     next_card = "另一作品 编辑作品 设置权限 2026年09月05日 已发布"
-    assert get_management_publication_state(card + "流量减少 播放 3 " + next_card, copy, title) is None
+    assert get_management_publication_state(card + "流量减少 播放 3 " + next_card, copy, title) == "RESTRICTED"
 
 
 def test_management_wait_ignores_empty_shell_until_list_or_target_loads():
@@ -1633,3 +1634,28 @@ def test_preflight_restores_only_reviewed_copy_once_and_rechecks_after_detection
     else:
         control.fill.assert_not_called()
     page.get_by_text.assert_not_called()
+
+
+def test_initial_cover_slots_wait_for_both_asynchronous_thumbnails():
+    from scripts.douyin_uploader import _wait_for_initial_cover_slots
+    page = MagicMock()
+    page.evaluate.side_effect = [{}, {"vertical": "v"}, {"vertical": "v", "horizontal": "h"}]
+    assert _wait_for_initial_cover_slots(page, require_horizontal=True, timeout_seconds=3) == {
+        "vertical": "v", "horizontal": "h",
+    }
+    assert page.wait_for_timeout.call_count == 2
+
+
+def test_initial_cover_slots_timeout_keeps_publish_blocked():
+    from scripts.douyin_uploader import _wait_for_initial_cover_slots
+    page = MagicMock()
+    page.evaluate.return_value = {"vertical": "v"}
+    assert _wait_for_initial_cover_slots(page, require_horizontal=True, timeout_seconds=2) == {}
+
+
+def test_cover_editor_can_finish_save_after_old_ten_second_cutoff():
+    from scripts.douyin_uploader import _wait_for_cover_editor_closed
+    page, modal = MagicMock(), MagicMock()
+    modal.is_visible.side_effect = [True] * 12 + [False]
+    assert _wait_for_cover_editor_closed(page, modal)
+    assert page.wait_for_timeout.call_count == 12

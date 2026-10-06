@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.66.0 | 2026-10-06 | Codex | 平台明确受限不累计管理页 UI 熔断，不通知发布成功。 |
 | insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
 | 3.65.0 | 2026-10-05 | Codex | 下载身份验证与限流持久冷却，保留已验证阶段。 |
 | 3.64.0 | 2026-10-03 | Codex | TED/TEDx 加工与提交前重查点赞率，低互动任务保留缓存回队，不改评分。 |
@@ -237,6 +238,7 @@ from .core.douyin_launch_context import douyin_submission_payload_sha256
 from .core.original_declaration_policy import decide_original_declaration
 from cover.creative_brief import build_cover_creative_brief
 from config.settings import settings
+from video_processing.core.douyin_management_state import MANAGEMENT_EXIT_STATES, MANAGEMENT_STATE_MESSAGES
 from video_processing.core.ffmpeg_slot import register_executable
 register_executable(settings.ffmpeg_path)
 
@@ -3309,6 +3311,17 @@ class PipelineManager:
                         _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
                         f"runtime:publication:{publication_id}:under_review",
                     )
+                    continue
+                elif exc.returncode in {8, 9}:
+                    observed = MANAGEMENT_EXIT_STATES[exc.returncode]
+                    self.db.update_douyin_publication_state(
+                        publication_id, "BANNED", error_message=MANAGEMENT_STATE_MESSAGES[observed],
+                    )
+                    self._clear_douyin_ui_failure_on_success(
+                        _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+                        f"runtime:publication:{publication_id}:{observed.lower()}",
+                    )
+                    logger.warning("[%s] %s", yid, MANAGEMENT_STATE_MESSAGES[observed])
                     continue
                 elif exc.returncode == 2:
                     reason = "抖音登录态失效，保留审核中状态；停止本轮后续自动回查。"

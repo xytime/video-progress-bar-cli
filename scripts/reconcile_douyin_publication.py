@@ -1,11 +1,12 @@
 """按抖音账本 ID 执行一次只读作品管理回查，并可显式回账。
 
 默认只调用 ``douyin_uploader.py --verify-only``，绝不上传、填写或发布；只有同时提供
-``--apply-ledger`` 时，才把创作者中心明确返回的 PUBLISHED / UNDER_REVIEW 写回原记录。
+``--apply-ledger`` 时，才把明确的发布、审核或平台限制状态写回原记录。
 
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-06 | Codex | 明确平台限制按作品 BANNED 回账，禁止误归为 UI 故障或重传。 |
 | 1.1.0 | 2026-09-02 | Codex | 手工只读回查在启动浏览器前遵守持久阶段熔断，防止绕过录屏校准边界。 |
 | 1.0.0 | 2026-08-30 | Codex | 新增单记录、单浏览器动作、默认只读的抖音人工回查入口 |
 """
@@ -26,8 +27,12 @@ from video_processing.core.douyin_ui_guard_policy import (  # noqa: E402
     active_douyin_ui_failure_stages,
     douyin_management_verify_is_blocked,
 )
+from video_processing.core.douyin_management_state import (  # noqa: E402
+    MANAGEMENT_EXIT_STATES, MANAGEMENT_NEGATIVE_STATES, MANAGEMENT_STATE_MESSAGES,
+)
 from video_processing.db.database import PipelineDB  # noqa: E402
 from video_processing.pipeline_manager import _build_subprocess_env  # noqa: E402
+
 
 EXIT_OK = 0
 EXIT_UNDER_REVIEW = 6
@@ -105,18 +110,12 @@ def reconcile_publication(
         check=False,
     )
     exit_code = int(result.returncode)
-    observed_state = {EXIT_OK: "PUBLISHED", EXIT_UNDER_REVIEW: "UNDER_REVIEW"}.get(
-        exit_code, "UNCONFIRMED"
-    )
+    observed_state = MANAGEMENT_EXIT_STATES.get(exit_code, "UNCONFIRMED")
     applied = False
-    if apply_ledger and observed_state in {"PUBLISHED", "UNDER_REVIEW"}:
-        message = (
-            "抖音作品管理页按完整标题精确回查，已确认本次作品为已发布。"
-            if observed_state == "PUBLISHED"
-            else "抖音作品管理页按完整标题精确回查，本次作品仍在审核中。"
-        )
+    if apply_ledger and observed_state in MANAGEMENT_STATE_MESSAGES:
+        ledger_state = "BANNED" if observed_state in MANAGEMENT_NEGATIVE_STATES else observed_state
         applied = db.update_douyin_publication_state(
-            int(publication_id), observed_state, error_message=message
+            int(publication_id), ledger_state, error_message=MANAGEMENT_STATE_MESSAGES[observed_state],
         )
 
     return {
@@ -149,7 +148,7 @@ def main() -> int:
         print(json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False))
         return 1
     print(json.dumps({"success": True, **outcome}, ensure_ascii=False, indent=2))
-    if outcome["observed_state"] in {"PUBLISHED", "UNDER_REVIEW"}:
+    if outcome["observed_state"] in MANAGEMENT_STATE_MESSAGES:
         return 0
     return int(outcome["exit_code"])
 

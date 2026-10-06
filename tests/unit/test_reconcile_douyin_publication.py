@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-06 | Codex | 覆盖平台限制回账且禁止重传。 |
 | 1.0.0 | 2026-08-30 | Codex | 覆盖只读命令边界、显式回账和非明确结果不改账 |
 | 1.1.0 | 2026-09-02 | Codex | 覆盖持久 UI 熔断在手工只读回查打开浏览器前生效。 |
 """
@@ -110,3 +111,18 @@ def test_reconcile_respects_active_ui_guard_before_browser(tmp_path: Path, monke
 
     runner.assert_not_called()
     assert db.get_douyin_publication_by_id(publication["id"])["state"] == "UNCERTAIN"
+
+
+@pytest.mark.parametrize("exit_code,observed", [(8, "REJECTED"), (9, "RESTRICTED")])
+def test_negative_management_result_is_terminal_without_reupload(tmp_path, exit_code, observed):
+    db, publication = _fixture(tmp_path)
+    runner = MagicMock(return_value=subprocess.CompletedProcess([], exit_code, stdout="", stderr=""))
+    result = reconcile_publication(
+        db, publication["id"], apply_ledger=True, output_dir=tmp_path,
+        runner=runner, env_builder=lambda: {},
+    )
+    assert result["observed_state"] == observed
+    assert result["ledger_applied"]
+    assert db.get_douyin_publication_by_id(publication["id"])["state"] == "BANNED"
+    assert "--video" not in runner.call_args.args[0]
+    assert db.claim_next_douyin_publication("NEW") is None

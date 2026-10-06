@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.2 | 2026-10-06 | Codex | 英语世界回查区分平台拒绝与 UI 未确认，停止受限作品后续尝试。 |
 | 1.9.1 | 2026-09-25 | Codex | 具名一次只读复核及 24 小时公开确认缺失提醒，公开归档校验原生 ID 回读凭据。 |
 | 1.9.0 | 2026-09-20 | Antigravity | 增加巡航日志高频熔断信息跨分钟持久化降频，并在启动时修剪保留最近 N 日日志 |
 | 1.8.6 | 2026-09-18 | Antigravity | 英语世界延后项巡航派发改用专属发布窗口判定 is_english_world_publish_window。 |
@@ -54,6 +55,7 @@ from video_processing.core.douyin_ui_guard_policy import (
     douyin_management_verify_is_blocked,
 )
 from config.settings import settings
+from video_processing.core.douyin_management_state import MANAGEMENT_EXIT_STATES, MANAGEMENT_STATE_MESSAGES
 from video_processing.db.database import PipelineDB
 from video_processing.telegram_delivery import send_text
 from video_processing.english_world.daily_schedule import production_slots
@@ -360,14 +362,10 @@ def reconcile_one_english_world_douyin_submission() -> None:
                     check=False,
                     timeout=180,
                 )
-                observed = {0: "PUBLISHED", 6: "UNDER_REVIEW"}.get(
-                    result.returncode, "UNCERTAIN",
+                observed = MANAGEMENT_EXIT_STATES.get(result.returncode, "UNCERTAIN")
+                message = MANAGEMENT_STATE_MESSAGES.get(
+                    observed, f"抖音作品管理页回查未确认，exit={result.returncode}。",
                 )
-                message = {
-                    "PUBLISHED": "抖音作品管理页按完整标题/文案确认已发布。",
-                    "UNDER_REVIEW": "抖音作品管理页按完整标题/文案确认仍在审核。",
-                    "UNCERTAIN": f"抖音作品管理页回查未确认，exit={result.returncode}。",
-                }[observed]
             except subprocess.TimeoutExpired:
                 observed = "UNCERTAIN"
                 message = "抖音作品管理页只读回查超时；保留已受理状态。"

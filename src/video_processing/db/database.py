@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.94.0 | 2026-10-06 | Codex | 平台限制保留投稿身份与日额，英语世界记录具名限制状态。 |
 | 3.93.0 | 2026-10-05 | Codex | 具名认证恢复要求本视频最近 60 秒内真实验证，保留媒体恢复的全部 CAS 与投稿保护。 |
 | 3.92.0 | 2026-10-05 | Codex | 具名媒体恢复的原子领取，保留重试数并拒绝投稿、历史和策略记录。 |
 | 3.91.0 | 2026-10-03 | Codex | TED/TEDx 两个自动候选入口及提交前统一检查源点赞率，切片继承父视频指标。 |
@@ -8596,13 +8597,14 @@ class PipelineDB:
                 generic_used = conn.execute(
                     """SELECT COUNT(*) AS count FROM douyin_publications
                        WHERE source_kind = 'NEW'
-                         AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                         AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN', 'BANNED')
                          AND claimed_at IS NOT NULL
                          AND date(claimed_at, 'localtime') = date('now', 'localtime')"""
                 ).fetchone()["count"]
                 english_world_used = conn.execute(
                     """SELECT COUNT(*) AS count FROM english_world_douyin_publications
-                       WHERE state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                       WHERE (state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                           OR platform_state IN ('REJECTED', 'RESTRICTED'))
                          AND claimed_at IS NOT NULL
                          AND date(claimed_at, 'localtime') = date('now', 'localtime')"""
                 ).fetchone()["count"]
@@ -8873,9 +8875,11 @@ class PipelineDB:
     ) -> Dict[str, Any]:
         """写入按完整标题/文案得到的抖音管理页状态；只有 PUBLISHED 才落公开终态。"""
         observed = (platform_state or "").strip().upper()
-        if observed not in {"PUBLISHED", "UNDER_REVIEW", "UNCERTAIN"}:
+        if observed not in {"PUBLISHED", "UNDER_REVIEW", "UNCERTAIN", "REJECTED", "RESTRICTED"}:
             raise ValueError("Invalid English World Douyin reconciliation state")
-        next_state = "PUBLISHED" if observed == "PUBLISHED" else "UNDER_REVIEW"
+        next_state = "PUBLISHED" if observed == "PUBLISHED" else (
+            "CANCELED" if observed in {"REJECTED", "RESTRICTED"} else "UNDER_REVIEW"
+        )
         with self.get_connection() as conn:
             cursor = conn.execute(
                 """UPDATE english_world_douyin_publications
@@ -10645,12 +10649,13 @@ class PipelineDB:
                     SELECT (
                         SELECT COUNT(*) FROM douyin_publications
                         WHERE source_kind = ?
-                          AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                          AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN', 'BANNED')
                           AND claimed_at IS NOT NULL
                           AND date(claimed_at, 'localtime') = date('now', 'localtime')
                     ) + CASE WHEN ? = 'NEW' THEN (
                         SELECT COUNT(*) FROM english_world_douyin_publications
-                        WHERE state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                        WHERE (state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                           OR platform_state IN ('REJECTED', 'RESTRICTED'))
                           AND claimed_at IS NOT NULL
                           AND date(claimed_at, 'localtime') = date('now', 'localtime')
                     ) ELSE 0 END AS count
@@ -10734,12 +10739,13 @@ class PipelineDB:
                     SELECT (
                         SELECT COUNT(*) FROM douyin_publications
                         WHERE source_kind = ?
-                          AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                          AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN', 'BANNED')
                           AND claimed_at IS NOT NULL
                           AND date(claimed_at, 'localtime') = date('now', 'localtime')
                     ) + CASE WHEN ? = 'NEW' THEN (
                         SELECT COUNT(*) FROM english_world_douyin_publications
-                        WHERE state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                        WHERE (state IN ('SUBMITTING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                           OR platform_state IN ('REJECTED', 'RESTRICTED'))
                           AND claimed_at IS NOT NULL
                           AND date(claimed_at, 'localtime') = date('now', 'localtime')
                     ) ELSE 0 END AS count
@@ -10994,7 +11000,7 @@ class PipelineDB:
                 '''
                 SELECT COUNT(*) AS count FROM douyin_publications
                 WHERE source_kind = 'HISTORY'
-                  AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN')
+                  AND state IN ('UPLOADING', 'UNDER_REVIEW', 'PUBLISHED', 'UNCERTAIN', 'BANNED')
                   AND claimed_at IS NOT NULL
                   AND date(claimed_at, 'localtime') = date('now', 'localtime')
                 '''

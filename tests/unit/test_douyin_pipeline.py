@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.0.15 | 2026-10-06 | Codex | 覆盖负面审核不触发 UI 熔断与成功通知。 |
 | 2.0.14 | 2026-09-05 | Codex | 回查冷却项不消耗批次预算，零值安全回退，每次证据按作品隔离。 |
 | 2.0.13 | 2026-09-05 | Codex | 本次投稿失败不得引用旧校准目录证据。 |
 | 1.0.0 | 2026-07-23 | Codex | 覆盖抖音发布器 fail-closed、审核回查和每日入口衔接 |
@@ -1391,3 +1392,18 @@ def test_douyin_new_sync_material_gap_alert_is_persistently_deduplicated(tmp_pat
     assert "2 条" in calls[0][1]["json"]["text"]
     assert manager.db.get_douyin_publication("missing-one") is None
     assert manager.db.get_douyin_publication("missing-two") is None
+
+
+@pytest.mark.parametrize("exit_code", [8, 9])
+def test_management_negative_result_does_not_fuse_or_send_success(tmp_path, monkeypatch, exit_code):
+    manager = _manager_with_assets(tmp_path)
+    monkeypatch.setattr(settings, "enable_douyin_browser_publishing", True)
+    manager.db.get_douyin_publications_by_states.return_value = [
+        {"id": 19, "youtube_id": "video-id", "slice_index": 0},
+    ]
+    manager._run_tracked = MagicMock(side_effect=subprocess.CalledProcessError(exit_code, ["douyin"]))
+    assert manager.reconcile_douyin_under_review() == 0
+    assert manager.db.update_douyin_publication_state.call_args.args == (19, "BANNED")
+    manager.db.record_platform_ui_failure.assert_not_called()
+    manager.send_telegram_msg.assert_not_called()
+    manager.db.clear_platform_ui_failure_streak.assert_called_once()

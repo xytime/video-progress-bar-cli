@@ -1,7 +1,7 @@
 """抖音创作者中心浏览器上传器。
 
 上传与发布继续采用页面校准和 fail-closed 门禁；`--verify-only` 则只读访问作品管理页，
-必须在同一作品卡片中精确匹配本地标题或文案指纹及“已发布”或“审核中”状态，绝不凭
+必须在同一作品卡片中精确匹配本地标题或文案指纹及平台明确状态，绝不凭
 本地账本或页面其他作品的状态确认结果。
 
 本脚本是低层浏览器原语，但对会上传、预检、发布或访问作品管理页的动作，会在启动浏览器
@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.4 | 2026-10-06 | Codex | 识别平台限制状态；等待初始双封面生成与异步保存，保持发布前闸门。 |
 | 1.7.3 | 2026-09-23 | Codex | 同账号浏览器入口互斥，与加工锁独立，领取凭据前拒绝占用。 |
 | 1.7.2 | 2026-09-09 | Codex | 横封面改用全幅裁切，消除竖版封面缩放后形成的大面积内框；投稿页控件证据补充实际输入值。 |
 | 1.7.1 | 2026-09-05 | Codex | 按作品编辑操作、日期和紧邻状态读取回查结果，修复长简介超过 320 字被误判。 |
@@ -123,6 +124,12 @@ from video_processing.core.douyin_launch_context import (  # noqa: E402
     sha256_file as launch_sha256_file,
 )
 from video_processing.db.database import PipelineDB  # noqa: E402
+from video_processing.core.douyin_management_state import (  # noqa: E402
+    MANAGEMENT_STATE_MESSAGES,
+    get_management_copy_markers,
+    get_management_publication_state,
+    normalize_page_text as _normalize_page_text,
+)
 
 
 logger = logging.getLogger("douyin_uploader")
@@ -149,6 +156,8 @@ EXIT_NOT_CALIBRATED = 4
 EXIT_UPLOADED_FOR_CALIBRATION = 5
 EXIT_UNDER_REVIEW = 6
 EXIT_SUBMISSION_UNCONFIRMED = 7
+EXIT_MANAGEMENT_REJECTED = 8
+EXIT_MANAGEMENT_RESTRICTED = 9
 MANAGEMENT_PUBLISHED = "PUBLISHED"
 MANAGEMENT_UNDER_REVIEW = "UNDER_REVIEW"
 DOUYIN_BLOCKING_QUICK_CHECK_MARKERS = (
@@ -441,61 +450,6 @@ def get_page_text(page) -> str:
         return page.locator("body").inner_text(timeout=3_000)
     except Exception:
         return ""
-
-
-def _normalize_page_text(text: str) -> str:
-    """压缩页面空白及零宽格式字符，便于稳定匹配作品管理卡片正文。"""
-    return "".join((text or "").replace("\u200b", "").split())
-
-
-def get_management_copy_markers(copy_text: str) -> list[str]:
-    """生成管理页可见的正文指纹；短片段只作兜底，避免跨作品误匹配。"""
-    normalized = _normalize_page_text(copy_text)
-    markers: list[str] = []
-    for size in (96, 64, 40, 24):
-        if len(normalized) < size:
-            continue
-        marker = normalized[:size]
-        if marker not in markers:
-            markers.append(marker)
-    return markers
-
-
-def get_management_publication_state(
-    page_text: str,
-    copy_text: str,
-    title_text: str = "",
-) -> Optional[str]:
-    """只在精确身份锚点后的同一作品卡片片段内读取可见发布状态。"""
-    normalized_page = _normalize_page_text(page_text)
-    normalized_title = _normalize_page_text(title_text)
-    markers = [normalized_title] if len(normalized_title) >= 6 else []
-    markers.extend(marker for marker in get_management_copy_markers(copy_text) if marker not in markers)
-    matched_states: set[str] = set()
-    for marker in markers:
-        start = 0
-        while True:
-            marker_index = normalized_page.find(marker, start)
-            if marker_index < 0:
-                break
-            # 简介可能超过 320 字；状态属于其后编辑菜单+日期，不属于简介文字或下一作品。
-            tail = normalized_page[marker_index + len(marker):]
-            edit_index = tail.find("编辑作品")
-            if edit_index >= 0:
-                state_match = re.match(
-                    r"编辑作品设置权限(?:作品置顶)?(?:删除作品)?"
-                    r"\d{4}年\d{2}月\d{2}日(?:\d{2}:\d{2})?(已发布|审核中)",
-                    tail[edit_index:],
-                )
-                if state_match:
-                    matched_states.add(
-                        MANAGEMENT_PUBLISHED if state_match.group(1) == "已发布"
-                        else MANAGEMENT_UNDER_REVIEW
-                    )
-            start = marker_index + len(marker)
-    if len(matched_states) == 1:
-        return next(iter(matched_states))
-    return None
 
 
 def wait_for_management_content(
@@ -1776,7 +1730,7 @@ def _click_cover_confirm(page, modal, timeout_seconds: int = 90) -> bool:
     return False
 
 
-def _wait_for_cover_editor_closed(page, modal, *, timeout_seconds: int = 10) -> bool:
+def _wait_for_cover_editor_closed(page, modal, *, timeout_seconds: int = 30) -> bool:
     """等待当前封面编辑器保存落地；不能用 Escape 取消平台的异步保存。"""
     editor_still_open = True
     try:
@@ -1945,6 +1899,20 @@ def _visible_cover_slot_image_sources(page) -> dict[str, str]:
     }
 
 
+def _wait_for_initial_cover_slots(page, *, require_horizontal: bool, timeout_seconds: int = 90) -> dict[str, str]:
+    """等待平台默认卡槽生成，保留保存前后对比证据，不把生成中误判为缺失。"""
+    required = {"vertical", "horizontal"} if require_horizontal else {"vertical"}
+    for elapsed in range(max(1, timeout_seconds)):
+        slots = _visible_cover_slot_image_sources(page)
+        if all(slots.get(slot) for slot in required):
+            return slots
+        if elapsed and elapsed % 15 == 0:
+            logger.info("抖音初始封面卡槽仍在生成，已等待 %s 秒", elapsed)
+        page.wait_for_timeout(1_000)
+    logger.error("抖音初始封面卡槽未在 %s 秒内生成完整缩略图", timeout_seconds)
+    return {}
+
+
 def _wait_for_cover_slot_source_change(
     page,
     *,
@@ -1987,7 +1955,9 @@ def apply_cover(
         logger.info("开始应用抖音封面: %s", cover_path)
         cover_path_abs = str(Path(cover_path).resolve())
         horizontal_cover_path_abs = str(Path(horizontal_cover_path).resolve()) if horizontal_cover_path else None
-        initial_slot_sources = _visible_cover_slot_image_sources(page)
+        initial_slot_sources = _wait_for_initial_cover_slots(
+            page, require_horizontal=bool(horizontal_cover_path_abs),
+        )
         if not initial_slot_sources.get("vertical") or (
             horizontal_cover_path_abs and not initial_slot_sources.get("horizontal")
         ):
@@ -2666,6 +2636,9 @@ def _main_with_session(args) -> int:
             if state == MANAGEMENT_UNDER_REVIEW:
                 logger.info("抖音作品管理页显示本次作品仍在审核中")
                 return EXIT_UNDER_REVIEW
+            if state in {"REJECTED", "RESTRICTED"}:
+                logger.warning(MANAGEMENT_STATE_MESSAGES[state])
+                return EXIT_MANAGEMENT_REJECTED if state == "REJECTED" else EXIT_MANAGEMENT_RESTRICTED
             logger.warning("作品管理页未能确认本次作品状态，保守返回未确认")
             return EXIT_SUBMISSION_UNCONFIRMED
 
