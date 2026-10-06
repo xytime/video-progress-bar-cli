@@ -1817,8 +1817,9 @@ class PipelineManager:
 
         if len(subtitle_text.strip()) < _SOURCE_SUBTITLE_MIN_CHARS:
             output_template = self._OUT_DIR / f"{yid}_source_subtitle.%(ext)s"
+            from .utils.youtube_route import youtube_cli_args, youtube_environment, verify_youtube_route
             subtitle_cmd = [
-                self._VENV_YTDLP,
+                self._VENV_YTDLP, *youtube_cli_args(),
                 "--skip-download",
                 "--no-playlist",
                 "--write-subs",
@@ -1831,10 +1832,12 @@ class PipelineManager:
             ]
             for attempt in range(2):
                 try:
+                    verify_youtube_route()
                     logger.info("[SourceSubtitle] 拉取 %s 的源 VTT（不下载视频）。", yid)
                     self._run_tracked(
                         subtitle_cmd,
                         yid,
+                        env=youtube_environment(_build_subprocess_env()),
                         slice_index=slice_index,
                         text=True,
                         capture_output=True,
@@ -4093,18 +4096,18 @@ class PipelineManager:
                                 f"[PARTIAL DL] Using --download-sections {sec_arg} for {yid}"
                             )
 
-                        subprocess_env = _build_subprocess_env()
+                        from .utils.youtube_route import youtube_environment
+                        subprocess_env = youtube_environment(_build_subprocess_env())
                         logger.info("[DownloadHealth] %s", download_runtime_status(subprocess_env.get("PATH", "")))
-                        if settings.clash_download_node:
-                            logger.info(
-                                f"[Clash] 切换到日本节点: {settings.clash_download_node}"
-                            )
 
                         options = DownloadOptions(
                             ytdlp_path=self._VENV_YTDLP,
                             url=url,
                             output_template=str(self._OUT_DIR / f"{yid}.%(ext)s"),
                             cookie_args=settings.get_yt_cookie_args(),
+                            proxy_url=settings.youtube_download_proxy,
+                            route_audit_path=self._OUT_DIR / f"{yid}.download_routes.jsonl",
+                            task_id=f"{yid}:{slice_index}",
                             download_sections=sec_arg,
                             force_keyframes_at_cuts=used_download_sections,
                             cooldown_path=self._OUT_DIR / f"{yid}.download_cooldown.json",
@@ -4115,12 +4118,11 @@ class PipelineManager:
                         timeout_budget = float(settings.youtube_download_timeout_seconds)
 
                         def _run_download_cmd(cmd: list[str], timeout: Optional[float] = None) -> None:
-                            with settings.clash_switch_node():
-                                self._run_tracked(
-                                    cmd, yid, slice_index=slice_index, capture_output=True,
-                                    cwd=str(self._PRJ_ROOT), env=subprocess_env,
-                                    timeout=timeout or timeout_budget,
-                                )
+                            return self._run_tracked(
+                                cmd, yid, slice_index=slice_index, capture_output=True,
+                                cwd=str(self._PRJ_ROOT), env=subprocess_env,
+                                timeout=timeout or timeout_budget,
+                            )
 
                         target_file = execute_download_with_fallback(
                             options=options,

@@ -16,6 +16,9 @@ import subprocess
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
+from config.settings import settings
+from .youtube_route import youtube_cli_args, youtube_environment, verify_youtube_route
+
 
 _AUTH_MARKERS = (
     "sign in to confirm you're not a bot",
@@ -60,11 +63,13 @@ def probe_youtube_media_access(
     timeout_seconds: int = 45,
 ) -> YoutubeAccessResult:
     """解析一个真实媒体 URL 并仅读取其前 64 KiB，不产生本地视频文件。"""
+    route_args = youtube_cli_args()
+    environment = youtube_environment(environment)
     format_selector = "bv*[height<=360][ext=mp4]/bv*[height<=360]/b[height<=360]/b"
     try:
         resolve = subprocess.run(
             [
-                ytdlp_path,
+                ytdlp_path, *route_args,
                 "--get-url",
                 "--no-playlist",
                 "--no-warnings",
@@ -91,10 +96,12 @@ def probe_youtube_media_access(
     if not media_urls:
         return YoutubeAccessResult(False, "MEDIA_URL_MISSING", "yt-dlp did not return a direct media URL")
 
+    verify_youtube_route()
     try:
         transfer = subprocess.run(
             [
-                curl_path,
+                curl_path, "--proxy", settings.youtube_download_proxy, "--noproxy", "",
+                "--max-filesize", "65536",
                 "--fail",
                 "--location",
                 "--silent",

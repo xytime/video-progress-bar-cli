@@ -71,3 +71,12 @@ def test_media_probe_classifies_cdn_403_as_access_not_candidate_quality(monkeypa
 
     assert result.ok is False
     assert result.code == "MEDIA_ACCESS_REJECTED"
+
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def verified_youtube_route(monkeypatch):
+    # Transport/auth tests stub the policy boundary; fail-closed behavior is covered separately.
+    monkeypatch.setattr("video_processing.utils.youtube_route.verify_youtube_route", lambda **kw: {"policy_verified": True})
+    monkeypatch.setattr(youtube_access, "verify_youtube_route", lambda **kw: {"policy_verified": True})

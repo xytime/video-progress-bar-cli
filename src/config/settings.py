@@ -295,11 +295,9 @@ class Settings(BaseSettings):
     # Gemini 主字幕候选的整片总预算；单请求超时会按剩余预算自动收紧。
     gemini_subtitle_total_timeout_seconds: int = Field(default=300, ge=30, le=1800)
 
-    # [Claude_Sonnet_4.6_Thinking_planning] v2.9.0: Clash Mi 下载节点切换配置
-    # 架构背景：Clash Mi 使用 macOS Network Extension，系统扩展不允许动态开放任意端口，
-    # 因此无法通过 listeners 实现真正的进程级隔离。唯一可行的优化方案是:
-    # 下载前通过 API 将代理组切换到日本节点，完成后自动还原。
-    # 影响范围：仅在实际下载期间（约 5-15 分钟）全局流量临时走日本，签出后自动还原。
+    # 旧切组接口仅保留兼容；YouTube 获取使用显式代理与只读出口验收。
+    youtube_download_proxy: str = "http://127.0.0.1:7890"
+    youtube_download_required_node: str = "hy2-ai.optionbank.us"
     clash_api_url: str = "http://127.0.0.1:9090"   # Clash 外部控制器地址
     clash_api_secret: Optional[str] = None          # CLASH_API_SECRET=...
     clash_proxy_group: str = "🌍 国外网站"           # 要切换的代理组

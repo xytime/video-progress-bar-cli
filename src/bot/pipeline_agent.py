@@ -444,8 +444,9 @@ class PipelineAgent:
 
             # [Gemini_3.5_Flash_planning] v1.3.2: 修复 url 未定义 NameError 崩溃，增加 url = f"https://youtu.be/{youtube_id}"
             url = f"https://youtu.be/{youtube_id}"
-            _PROXY_KEYS = {'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy'}
-            env_no_proxy = {k: v for k, v in os.environ.items() if k not in _PROXY_KEYS}
+            from video_processing.utils.youtube_route import youtube_environment
+            from video_processing.utils.subprocess_env import build_subprocess_env
+            env_no_proxy = youtube_environment(build_subprocess_env())
 
             # [Antigravity] v1.15.0: 下载引擎翻转 (Strategy/Fallback 模式)
             # [Antigravity] v1.15.0: 下载引擎翻转 (Strategy/Fallback 模式)
@@ -455,13 +456,16 @@ class PipelineAgent:
                 url=url,
                 output_template=str(self.output_dir / f"{youtube_id}.%(ext)s"),
                 cookie_args=settings.get_yt_cookie_args(),
+                proxy_url=settings.youtube_download_proxy,
+                route_audit_path=self.output_dir / f"{youtube_id}.download_routes.jsonl",
+                task_id=youtube_id,
                 write_info_json=False,
             )
 
             timeout_sec = float(settings.youtube_download_timeout_seconds)
 
-            def _agent_runner(cmd: list[str], timeout: Optional[float] = None) -> None:
-                subprocess.run(
+            def _agent_runner(cmd: list[str], timeout: Optional[float] = None):
+                return subprocess.run(
                     cmd,
                     check=True,
                     capture_output=True,

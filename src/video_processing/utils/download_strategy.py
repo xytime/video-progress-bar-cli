@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
 from .file_utils import clean_partial_downloads
+from .youtube_route import YoutubeRouteError, guarded_youtube_call
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,9 @@ class DownloadOptions:
     url: str
     output_template: str
     cookie_args: Sequence[str] = ()
+    proxy_url: Optional[str] = None
+    route_audit_path: Optional[Path] = None
+    task_id: str = ""
     format_selector: str = (
         "bestvideo[height<=720][ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/"
         "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/"
@@ -147,6 +151,10 @@ class DownloadOptions:
 def _build_common_ytdlp_args(options: DownloadOptions) -> list[str]:
     """提取两套策略共用的 yt-dlp 基础命令行参数。"""
     cmd = [options.ytdlp_path]
+    if options.proxy_url:
+        cmd.extend(["--ignore-config", "--proxy", options.proxy_url, "--no-playlist",
+                    "--newline", "--progress", "--progress-template",
+                    "download:ROUTE_MEDIA_BYTES:%(info.id)s:%(info.format_id)s:%(progress.downloaded_bytes)s"])
     if options.force_ipv4:
         cmd.append("--force-ipv4")
     if options.format_selector:
@@ -290,9 +298,28 @@ def execute_download_with_fallback(
             raise DownloadBlockedError(category, detail, retry_after) from exc
         return detail
 
+    def run_attempt(cmd, timeout, strategy):
+        if not options.proxy_url:
+            return _invoke_runner(runner, cmd, timeout=timeout)
+        template = Path(options.output_template)
+        prefix = template.name.split("%", 1)[0]
+        def transfer():
+            remaining = min(timeout, deadline - time.time()) if deadline and timeout else timeout
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError("Download budget exhausted during route preflight")
+            return _invoke_runner(runner, cmd, timeout=remaining)
+        return guarded_youtube_call(
+            transfer,
+            task_id=options.task_id or template.stem, source_url=options.url,
+            downloader="FFmpeg sections" if options.download_sections else strategy.name,
+            evidence_path=options.route_audit_path, expected_proxy=options.proxy_url,
+            artifact_paths=lambda: [p for p in template.parent.glob(prefix + "*")
+                                    if p.suffix in {".mp4", ".m4a", ".webm", ".mkv", ".part"}],
+        )
+
     primary_timeout = max(1.0, deadline - time.time()) if deadline else None
     try:
-        _invoke_runner(runner, primary_cmd, timeout=primary_timeout)
+        run_attempt(primary_cmd, primary_timeout, primary)
         if is_cancelled_callback and is_cancelled_callback():
             raise InterruptedError(f"Download cancelled for {options.url} after primary execution.")
         target_file = verifier()
@@ -301,6 +328,8 @@ def execute_download_with_fallback(
         primary_failed = True
         fallback_reason = "原生下载退出码为 0，但未生成通过完整音视频轨道验真的有效视频文件"
     except BaseException as exc:
+        if isinstance(exc, YoutubeRouteError):
+            raise
         if _is_cancellation_exception(exc):
             if cleaner:
                 cleaner()
@@ -339,8 +368,10 @@ def execute_download_with_fallback(
         if fallback_timeout is not None and fallback_timeout <= 0:
             raise TimeoutError("Download budget exhausted before fallback execution")
         try:
-            _invoke_runner(runner, fallback_cmd, timeout=fallback_timeout)
+            run_attempt(fallback_cmd, fallback_timeout, fallback)
         except BaseException as exc:
+            if isinstance(exc, YoutubeRouteError):
+                raise
             if _is_cancellation_exception(exc):
                 logger.info("[Download] 备选下载检测到取消信号/中断 (%s)，终止下载。", exc)
                 raise InterruptedError(f"Fallback download cancelled by signal/interrupt: {exc}") from exc

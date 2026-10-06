@@ -13,9 +13,11 @@ from html import unescape
 import json
 import re
 import subprocess
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from config.settings import settings
+from .youtube_route import youtube_cli_args, verify_youtube_route, youtube_environment, youtube_opener
+from .subprocess_env import build_subprocess_env
 from ..censor_engine import CensorResult, check_text
 
 
@@ -62,7 +64,9 @@ def screen_youtube_source_subtitles(url: str, *, timeout_sec: int = 30) -> Sourc
 
     try:
         request = Request(vtt_url, headers={"User-Agent": "Video-precessing/1.0 topic-screen"})
-        with urlopen(request, timeout=timeout_sec) as response:
+        verify_youtube_route()
+        opener = youtube_opener()
+        with opener.open(request, timeout=timeout_sec) as response:
             subtitle_text = _parse_webvtt(response.read().decode("utf-8", errors="replace"))
     except OSError as exc:
         return SourceSubtitleScreening(youtube_id, title, 0, None, f"英文 VTT 读取失败：{type(exc).__name__}")
@@ -79,7 +83,7 @@ def screen_youtube_source_subtitles(url: str, *, timeout_sec: int = 30) -> Sourc
 
 def _read_video_metadata(url: str, timeout_sec: int) -> dict:
     command = [
-        settings.ytdlp_path,
+        settings.ytdlp_path, *youtube_cli_args(),
         "--dump-single-json",
         "--skip-download",
         "--no-playlist",
@@ -87,7 +91,8 @@ def _read_video_metadata(url: str, timeout_sec: int) -> dict:
         *settings.get_yt_cookie_args(),
         url,
     ]
-    completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout_sec)
+    completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout_sec,
+                               env=youtube_environment(build_subprocess_env()))
     return json.loads(completed.stdout)
 
 

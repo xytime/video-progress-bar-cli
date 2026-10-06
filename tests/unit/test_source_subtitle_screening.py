@@ -53,7 +53,9 @@ def test_source_screening_suspends_geopolitical_subtitle(monkeypatch):
             "automatic_captions": {"en": [{"ext": "vtt", "url": "https://example.test/source.vtt"}]},
         },
     )
-    monkeypatch.setattr(screening_module, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+    from types import SimpleNamespace
+    monkeypatch.setattr(screening_module, "youtube_opener",
+                        lambda: SimpleNamespace(open=lambda *_args, **_kwargs: FakeResponse()))
 
     result = screening_module.screen_youtube_source_subtitles("https://youtu.be/subtitle-test")
 
@@ -61,3 +63,11 @@ def test_source_screening_suspends_geopolitical_subtitle(monkeypatch):
     assert result.result is not None
     assert result.result.level == "P1"
     assert result.result.matched == "china_taiwan_geopolitical_security"
+
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def verified_youtube_route(monkeypatch):
+    # Transport/auth tests stub the policy boundary; fail-closed behavior is covered separately.
+    monkeypatch.setattr("video_processing.utils.source_subtitle_screening.verify_youtube_route", lambda **kw: {"policy_verified": True})

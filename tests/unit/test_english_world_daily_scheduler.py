@@ -376,7 +376,7 @@ def test_source_access_auth_failure_refreshes_cookie_once_then_reprobes(monkeypa
     assert refresh_calls and refresh_calls[0][1]["environment"] == environment
 
 
-def test_source_access_media_failure_uses_configured_clash_fallback_once(monkeypatch, tmp_path: Path):
+def test_source_access_media_failure_never_switches_global_clash_group(monkeypatch, tmp_path: Path):
     paths = runner.RuntimePaths(
         project_root=tmp_path,
         codex_home=tmp_path,
@@ -421,9 +421,9 @@ def test_source_access_media_failure_uses_configured_clash_fallback_once(monkeyp
 
     result, _settings, _environment, use_clash = runner._preflight_youtube_source_access(paths, StringIO())
 
-    assert result.ok is True
-    assert use_clash is True
-    assert switches == ["entered", "restored"]
+    assert result.ok is False
+    assert use_clash is False
+    assert switches == []
 
 
 def test_manual_production_prompt_binds_selected_candidate_and_forbids_platform_authority(tmp_path: Path):

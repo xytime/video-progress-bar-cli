@@ -20,6 +20,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
+from .youtube_route import youtube_cli_args, youtube_environment
+from .subprocess_env import build_subprocess_env
+
 
 _REQUIRED_AUTH_COOKIES = frozenset({"SID", "SAPISID", "__Secure-3PSID"})
 
@@ -53,7 +56,7 @@ def validate_youtube_cookie_file(
         os.chmod(temp_file, 0o600)
         result = subprocess.run(
             [
-                ytdlp_path,
+                ytdlp_path, *youtube_cli_args(),
                 "--cookies", str(temp_file),
                 "--skip-download",
                 "--no-playlist",
@@ -65,7 +68,7 @@ def validate_youtube_cookie_file(
             text=True,
             timeout=timeout_seconds,
             check=False,
-            env=dict(environment) if environment is not None else None,
+            env=youtube_environment(environment if environment is not None else build_subprocess_env()),
         )
     except subprocess.TimeoutExpired:
         return YoutubeAuthResult(False, "PROBE_TIMEOUT")
@@ -105,7 +108,7 @@ def refresh_youtube_cookie_file(
         temp_file.unlink()
         result = subprocess.run(
             [
-                ytdlp_path,
+                ytdlp_path, *youtube_cli_args(),
                 "--cookies-from-browser", browser,
                 "--cookies", str(temp_file),
                 "--skip-download",
@@ -118,7 +121,7 @@ def refresh_youtube_cookie_file(
             text=True,
             timeout=timeout_seconds,
             check=False,
-            env=dict(environment) if environment is not None else None,
+            env=youtube_environment(environment if environment is not None else build_subprocess_env()),
         )
         if result.returncode != 0 or not result.stdout.strip():
             detail = " ".join((result.stderr or result.stdout or "browser export failed").split())[:300]

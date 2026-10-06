@@ -224,10 +224,10 @@ def test_pipeline_agent_download_inversion_fallback(tmp_path, valid_media):
         if run_count == 1:
             # 原生 runner 写入全零损坏文件（无有效音视频轨），验真失败触发回退
             (tmp_path / "agent_dl_123.mp4").write_bytes(b"0" * 60_000)
-            return MagicMock(returncode=0)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         # 回退 curl 产出真实媒体，双轨校验通过
         (tmp_path / "agent_dl_123.mp4").write_bytes(valid_media)
-        return MagicMock(returncode=0)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     with patch("bot.pipeline_agent.subprocess.run", side_effect=fake_run):
         res = agent.download_video("agent_dl_123")
@@ -659,3 +659,11 @@ def test_wechat_review_notification_dal_and_drain(tmp_path):
     # 排水后待办再次清空
     assert len(db.get_pending_wechat_review_notifications()) == 0
 
+
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def verified_youtube_route(monkeypatch):
+    # These tests isolate downstream behavior; test_youtube_route covers rejection.
+    monkeypatch.setattr("video_processing.utils.youtube_route.verify_youtube_route", lambda **kw: {"policy_verified": True})

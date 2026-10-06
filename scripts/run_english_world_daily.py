@@ -137,7 +137,7 @@ PROMPT = """执行今日“英语世界短视频”无人值守制作任务。�
 
 立即开始来源研究、字幕预检或候选预览下载中的一项实际生产动作。不要轮询、等待或反复检查调度状态；若二十分钟内无法取得通过完整来源预检的合格候选，按下方失败命令汇总已检查候选及各自准确失败原因并退出。
 
-所有 YouTube 元数据、字幕和下载命令都必须使用项目已验证的 Cookie：在每个 `yt-dlp` 调用后附加 `--cookies output/youtube_cookies.txt`。禁止裸调用 yt-dlp 后把“Sign in to confirm you’re not a bot”误报为无候选；若该 Cookie 文件缺失或明确失效，只能运行一次 `PYTHONPATH=src .venv/bin/python scripts/refresh_yt_cookies.py` 后重试该同一预检。
+所有 YouTube 元数据、字幕和下载命令必须通过 `.venv/bin/python scripts/youtube_fetch.py` 执行（把原 yt-dlp 参数传给该入口），并附加 `--cookies output/youtube_cookies.txt`。该入口核对 Clash 自建路由并固定本机 HTTP 代理；出口验收失败必须停止，不得裸调用 yt-dlp、切换全局策略组或绕过代理重试。禁止裸调用 yt-dlp 后把“Sign in to confirm you’re not a bot”误报为无候选；若该 Cookie 文件缺失或明确失效，只能运行一次 `PYTHONPATH=src .venv/bin/python scripts/refresh_yt_cookies.py` 后重试该同一预检。
 
 来源仅限以下频道，并按频道 ID 严格核验（从高到低为候选优先级，不改变任一来源预检或安全条件）：
 - BNN Bloomberg：UC5aNPmKYwbudeNngDMTY3lw（首选：优先从其当天或近期未使用候选开始预检）
@@ -414,15 +414,6 @@ def _preflight_youtube_source_access(
             _log(stream, f"YouTube source access after Cookie recovery: code={result.code}")
             if result.ok:
                 return result, settings, environment, False
-
-    if result.code in {"TRANSPORT_UNAVAILABLE", "MEDIA_ACCESS_REJECTED"} and settings.clash_download_node:
-        _log(stream, "YouTube source access failed; trying configured Clash download node once")
-        with settings.clash_switch_node():
-            fallback_environment = _build_coordinator_environment(paths, settings)
-            fallback = probe(fallback_environment)
-        _log(stream, f"YouTube source access after Clash fallback: code={fallback.code}")
-        if fallback.ok:
-            return fallback, settings, fallback_environment, True
 
     return result, settings, environment, False
 
@@ -1260,34 +1251,18 @@ def run(
                     )
                     if shadow_only:
                         prompt = SHADOW_ONLY_PROMPT + prompt
-                    if use_clash_download_node:
-                        _log(stream, "running coordinator through verified Clash download-node fallback")
-                        with source_access_settings.clash_switch_node():
-                            exit_code = _run_coordinator(
-                                paths,
-                                response_path,
-                                delivery_request_path,
-                                stream,
-                                prompt=prompt,
-                                environment=_build_coordinator_environment(paths, source_access_settings),
-                                require_safety_gate=shadow_only,
-                                shadow_only=shadow_only,
-                                excluded_youtube_ids=coordinator_exclusions,
-                                forced_youtube_id=forced_youtube_id,
-                            )
-                    else:
-                        exit_code = _run_coordinator(
-                            paths,
-                            response_path,
-                            delivery_request_path,
-                            stream,
-                            prompt=prompt,
-                            environment=source_access_environment,
-                            require_safety_gate=shadow_only,
-                            shadow_only=shadow_only,
-                            excluded_youtube_ids=coordinator_exclusions,
-                            forced_youtube_id=forced_youtube_id,
-                        )
+                    exit_code = _run_coordinator(
+                        paths,
+                        response_path,
+                        delivery_request_path,
+                        stream,
+                        prompt=prompt,
+                        environment=source_access_environment,
+                        require_safety_gate=shadow_only,
+                        shadow_only=shadow_only,
+                        excluded_youtube_ids=coordinator_exclusions,
+                        forced_youtube_id=forced_youtube_id,
+                    )
                 except subprocess.TimeoutExpired:
                     exit_code = 124
                     if shadow_only:

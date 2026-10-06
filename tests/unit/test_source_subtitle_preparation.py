@@ -193,3 +193,11 @@ def test_deferred_wechat_daily_limit_is_persistent_across_claims(tmp_path: Path)
     assert first is not None
     assert second is None
     assert db.get_video_by_youtube_id("deferred-second")["status"] == "WECHAT_DEFERRED"
+
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def verified_youtube_route(monkeypatch):
+    # These tests isolate downstream behavior; test_youtube_route covers rejection.
+    monkeypatch.setattr("video_processing.utils.youtube_route.verify_youtube_route", lambda **kw: {"policy_verified": True})

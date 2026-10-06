@@ -164,6 +164,9 @@ def _youtube_ydl_options() -> dict[str, Any]:
         # 搜索结果中的单条视频受限不应中断其它候选的元数据预筛。
         "ignoreerrors": True,
     }
+    from video_processing.utils.youtube_route import verify_youtube_route
+    verify_youtube_route()
+    options["proxy"] = settings.youtube_download_proxy
     cookie_args = settings.get_yt_cookie_args()
     if cookie_args[:1] == ["--cookies"] and len(cookie_args) == 2:
         options["cookiefile"] = cookie_args[1]

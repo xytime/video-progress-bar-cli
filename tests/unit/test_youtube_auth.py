@@ -91,7 +91,9 @@ def test_cookie_validation_forwards_controlled_network_environment(tmp_path: Pat
     )
 
     assert result.ok is True
-    assert captured["env"] == {"HTTPS_PROXY": "http://127.0.0.1:7890"}
+    assert captured["env"]["HTTPS_PROXY"] == "http://127.0.0.1:7890"
+    assert captured["env"]["http_proxy"] == "http://127.0.0.1:7890"
+    assert captured["env"]["NO_PROXY"] == ""
 
 
 def test_refresh_returns_busy_without_replacing_cookie(tmp_path: Path):
@@ -110,3 +112,11 @@ def test_refresh_returns_busy_without_replacing_cookie(tmp_path: Path):
 
     assert result.code == "REFRESH_BUSY"
     assert target.read_text(encoding="utf-8") == "old-cookie"
+
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def verified_youtube_route(monkeypatch):
+    # Transport/auth tests stub the policy boundary; fail-closed behavior is covered separately.
+    monkeypatch.setattr("video_processing.utils.youtube_route.verify_youtube_route", lambda **kw: {"policy_verified": True})

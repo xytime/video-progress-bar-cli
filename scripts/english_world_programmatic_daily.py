@@ -148,10 +148,15 @@ def _stage_call(stage: str, workspace: Path, action, *, safety_report: Path | No
             return value
 
 
-def _run(command: list[str], *, cwd: Path, timeout: int = 900) -> None:
+def _run(command: list[str], *, cwd: Path, timeout: int = 900):
     """运行一个固定 argv 的子进程，不让来源文本进入 shell。"""
+    kwargs = {}
+    if "--proxy" in command and Path(command[0]).name == "yt-dlp":
+        from video_processing.utils.youtube_route import youtube_environment
+        from video_processing.utils.subprocess_env import build_subprocess_env
+        kwargs["env"] = youtube_environment(build_subprocess_env())
     with subprocess.Popen(command, cwd=str(cwd), text=True, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, start_new_session=True) as process:
+                          stderr=subprocess.PIPE, start_new_session=True, **kwargs) as process:
         try:
             from video_processing.core.ffmpeg_slot import communicate_with_progress_budget
             stdout, stderr = communicate_with_progress_budget(process, timeout)
@@ -170,11 +175,13 @@ def _run(command: list[str], *, cwd: Path, timeout: int = 900) -> None:
                                                "temporary failure in name resolution", "no capacity available")):
             raise TransientStageError("子步骤短暂传输故障")
         raise ProgrammaticDailyError(f"子步骤失败：{Path(command[0]).name} exit={process.returncode}")
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def _youtube_args() -> list[str]:
     """只从 settings 取得既有 Cookie 参数，缺失时由 yt-dlp 失败关闭。"""
-    return list(settings.get_yt_cookie_args())
+    from video_processing.utils.youtube_route import youtube_cli_args
+    return youtube_cli_args() + list(settings.get_yt_cookie_args())
 
 
 def _discover_candidates(*, excluded: set[str], only_youtube_id: str | None = None) -> list[dict[str, Any]]:
@@ -305,10 +312,18 @@ def _download_candidate(candidate: Mapping[str, Any], workspace: Path) -> tuple[
     template = str(source_dir / "source.%(ext)s")
     command = [
         str(ROOT / ".venv/bin/yt-dlp"), *_youtube_args(),
+        "--newline", "--progress", "--progress-template",
+        "download:ROUTE_MEDIA_BYTES:%(info.id)s:%(info.format_id)s:%(progress.downloaded_bytes)s",
         "--no-playlist", "--write-subs", "--sub-langs", "en.*,en", "--sub-format", "json3",
         "--merge-output-format", "mp4", "-f", "bv*+ba/b", "-o", template, url,
     ]
-    _run(command, cwd=ROOT, timeout=900)
+    from video_processing.utils.youtube_route import guarded_youtube_call
+    guarded_youtube_call(
+        lambda: _run(command, cwd=ROOT, timeout=900),
+        task_id=str(candidate.get("youtube_id") or workspace.name), source_url=url,
+        downloader="Native yt-dlp", evidence_path=workspace / "qa/download_routes.jsonl",
+        artifact_paths=lambda: list(source_dir.glob("*.mp4")),
+    )
     videos = sorted(source_dir.glob("source.*"))
     source = next((path for path in videos if path.suffix.lower() == ".mp4"), None)
     caption = next((path for path in videos if path.suffix.lower() == ".json3"), None)

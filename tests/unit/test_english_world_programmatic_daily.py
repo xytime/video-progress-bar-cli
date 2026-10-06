@@ -519,3 +519,11 @@ def test_timed_out_stage_kills_and_reaps_process_group_before_return(tmp_path, m
     with pytest.raises(subprocess.TimeoutExpired):
         daily._run(["render"], cwd=tmp_path, timeout=1)
     assert events == ["communicate", (91234, daily.signal.SIGKILL), "communicate"]
+
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def verified_youtube_route(monkeypatch):
+    # These tests isolate downstream behavior; test_youtube_route covers rejection.
+    monkeypatch.setattr("video_processing.utils.youtube_route.verify_youtube_route", lambda **kw: {"policy_verified": True})

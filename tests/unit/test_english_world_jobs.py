@@ -1078,3 +1078,11 @@ def test_english_world_douyin_proven_pre_submit_stops_can_recover_after_cover_re
             preflight_evidence_sha256="a" * 64,
             reason="不得重复恢复。",
         )
+
+
+import pytest
+
+@pytest.fixture(autouse=True)
+def verified_youtube_route(monkeypatch):
+    # Transport/auth tests stub the policy boundary; fail-closed behavior is covered separately.
+    monkeypatch.setattr("video_processing.utils.youtube_route.verify_youtube_route", lambda **kw: {"policy_verified": True})
