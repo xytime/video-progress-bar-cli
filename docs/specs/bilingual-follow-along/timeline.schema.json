@@ -1,0 +1,456 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:follow-along:timeline:1.0",
+  "title": "Bilingual Follow-Along Timeline AST v1",
+  "$comment": "Design contract only. Authored by Codex 2026-10-07; exact model unknown. Cross-reference, temporal, media and geometry validation are separate host gates.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "timeline_id", "phase", "metadata", "clock", "canvas", "assets", "styles", "layers", "tracks", "cues", "motions", "policy", "provenance"],
+  "properties": {
+    "schema_version": {"const": "follow-along.timeline/1.0"},
+    "timeline_id": {"$ref": "#/$defs/id"},
+    "phase": {"enum": ["draft", "aligned", "resolved"]},
+    "metadata": {"$ref": "#/$defs/metadata"},
+    "clock": {"$ref": "#/$defs/clock"},
+    "canvas": {"$ref": "#/$defs/canvas"},
+    "assets": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/asset"}},
+    "styles": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/style"}},
+    "layers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/layer"}},
+    "tracks": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/track"}},
+    "cues": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cue"}},
+    "motions": {"type": "array", "items": {"$ref": "#/$defs/motion"}},
+    "policy": {"$ref": "#/$defs/policy"},
+    "provenance": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/provenance"}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"phase": {"const": "resolved"}}, "required": ["phase"]},
+      "then": {
+        "properties": {
+          "cues": {
+            "items": {
+              "properties": {
+                "interval": {"$ref": "#/$defs/interval"},
+                "layout": {"$ref": "#/$defs/cueLayout"},
+                "words": {
+                  "items": {
+                    "properties": {
+                      "interval": {"$ref": "#/$defs/interval"},
+                      "timing_status": {"enum": ["observed", "manual"]},
+                      "evidence_ref": {"$ref": "#/$defs/artifactEvidence"},
+                      "glyph_boxes": {"minItems": 1}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "text": {"type": "string", "minLength": 1},
+    "localPath": {
+      "type": "string", "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?![A-Za-z][A-Za-z0-9+.-]*:)(?!.*\\\\).+$",
+      "description": "Relative POSIX path beneath the job artifact root; the host must resolve symlinks and verify containment. No remote retrieval at render time."
+    },
+    "rational": {
+      "type": "object", "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {"numerator": {"type": "integer", "minimum": 1}, "denominator": {"type": "integer", "minimum": 1}}
+    },
+    "interval": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start_tick", "end_tick"],
+      "properties": {"start_tick": {"type": "integer", "minimum": 0}, "end_tick": {"type": "integer", "minimum": 1}},
+      "description": "Half-open interval [start,end) in global ticks. Host checks end > start and timeline/media coverage."
+    },
+    "span": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {"start": {"type": "integer", "minimum": 0}, "end": {"type": "integer", "minimum": 1}},
+      "description": "Half-open Unicode code point offsets. Host checks end > start and referenced text coverage."
+    },
+    "rect": {
+      "type": "object", "additionalProperties": false,
+      "required": ["x", "y", "width", "height"],
+      "properties": {
+        "x": {"type": "number"}, "y": {"type": "number"},
+        "width": {"type": "number", "exclusiveMinimum": 0},
+        "height": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
+    "color": {"type": "string", "pattern": "^#[a-fA-F0-9]{8}$", "description": "RGBA #RRGGBBAA; alpha 00 transparent, FF opaque, unlike ASS inverted alpha."},
+    "artifactEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["uri", "sha256"],
+      "properties": {"uri": {"$ref": "#/$defs/localPath"}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "metadata": {
+      "type": "object", "additionalProperties": false,
+      "required": ["title", "tag", "exercise_objective", "mode", "source_language", "translation_language", "duration_tick", "content_type"],
+      "properties": {
+        "title": {"$ref": "#/$defs/text"}, "tag": {"$ref": "#/$defs/text"},
+        "exercise_objective": {"$ref": "#/$defs/text"},
+        "mode": {"enum": ["singing", "speaking"]},
+        "source_language": {"const": "en"}, "translation_language": {"const": "zh-CN"},
+        "duration_tick": {"type": "integer", "minimum": 1},
+        "content_type": {"const": "BILINGUAL_FOLLOW_ALONG"},
+        "description": {"type": "string"},
+        "expected_lyric_end_tick": {"type": "integer", "minimum": 0},
+        "outro_interval": {"$ref": "#/$defs/interval"},
+        "synthetic_contract_example": {"type": "boolean", "default": false}
+      }
+    },
+    "clock": {
+      "type": "object", "additionalProperties": false,
+      "required": ["ticks_per_second", "fps", "master_sample_rate", "rounding"],
+      "properties": {
+        "ticks_per_second": {"type": "integer", "minimum": 1},
+        "fps": {"$ref": "#/$defs/rational"},
+        "master_sample_rate": {"type": "integer", "minimum": 8000},
+        "rounding": {"const": "nearest_half_up"}
+      }
+    },
+    "canvas": {
+      "type": "object", "additionalProperties": false,
+      "required": ["width", "height", "color_space", "background", "content_safe_rect", "safe_zone_profile", "occlusions"],
+      "properties": {
+        "width": {"type": "integer", "minimum": 1}, "height": {"type": "integer", "minimum": 1},
+        "color_space": {"const": "bt709"}, "background": {"$ref": "#/$defs/color"},
+        "content_safe_rect": {"$ref": "#/$defs/rect"},
+        "safe_zone_profile": {"$ref": "#/$defs/text"},
+        "occlusions": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["id", "rect", "reason"],
+            "properties": {"id": {"$ref": "#/$defs/id"}, "rect": {"$ref": "#/$defs/rect"}, "reason": {"$ref": "#/$defs/text"}}
+          }
+        }
+      }
+    },
+    "asset": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "uri", "sha256", "byte_length"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "kind": {"enum": ["audio", "video", "font", "text", "image"]},
+        "uri": {"$ref": "#/$defs/localPath"}, "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_length": {"type": "integer", "minimum": 1},
+        "duration_tick": {"type": "integer", "minimum": 1},
+        "sample_rate": {"type": "integer", "minimum": 8000},
+        "sample_count": {"type": "integer", "minimum": 1},
+        "channels": {"type": "integer", "minimum": 1},
+        "width": {"type": "integer", "minimum": 1}, "height": {"type": "integer", "minimum": 1},
+        "native_time_base": {"$ref": "#/$defs/rational"},
+        "pts_origin_tick": {"type": "integer"},
+        "stream_index": {"type": "integer", "minimum": 0},
+        "font_face_index": {"type": "integer", "minimum": 0},
+        "usage_conditions_ref": {"$ref": "#/$defs/localPath"},
+        "source_asset_id": {"$ref": "#/$defs/id"},
+        "source_time_map": {
+          "type": "object", "additionalProperties": false,
+          "required": ["parent_interval", "asset_interval", "playback_rate", "compensated_delay_tick"],
+          "properties": {
+            "parent_interval": {"$ref": "#/$defs/interval"},
+            "asset_interval": {"$ref": "#/$defs/interval"},
+            "playback_rate": {"$ref": "#/$defs/rational"},
+            "compensated_delay_tick": {"type": "integer"}
+          },
+          "description": "Map the source_asset_id parent range to this derived asset range after any latency compensation; delay is recorded evidence, not applied a second time."
+        },
+        "probe_evidence_ref": {"$ref": "#/$defs/artifactEvidence"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"enum": ["audio", "video"]}}}, "then": {"required": ["duration_tick", "native_time_base", "pts_origin_tick", "stream_index"]}},
+        {"if": {"properties": {"kind": {"const": "audio"}}}, "then": {"required": ["sample_rate", "sample_count", "channels"]}},
+        {"if": {"properties": {"kind": {"const": "video"}}}, "then": {"required": ["width", "height"]}},
+        {"if": {"required": ["source_asset_id"]}, "then": {"required": ["source_time_map"]}}
+      ]
+    },
+    "style": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "font_asset_id", "font_size_px", "line_height_px", "letter_spacing_px", "base_color", "active_color", "weight", "stroke_width_px", "stroke_color", "shadow"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "font_asset_id": {"$ref": "#/$defs/id"},
+        "font_size_px": {"type": "number", "exclusiveMinimum": 0},
+        "line_height_px": {"type": "number", "exclusiveMinimum": 0},
+        "letter_spacing_px": {"type": "number"},
+        "base_color": {"$ref": "#/$defs/color"}, "active_color": {"$ref": "#/$defs/color"},
+        "weight": {"type": "integer", "minimum": 100, "maximum": 900, "multipleOf": 100},
+        "stroke_width_px": {"type": "number", "minimum": 0}, "stroke_color": {"$ref": "#/$defs/color"},
+        "shadow": {
+          "type": "object", "additionalProperties": false,
+          "required": ["dx", "dy", "blur_px", "color"],
+          "properties": {"dx": {"type": "number"}, "dy": {"type": "number"}, "blur_px": {"type": "number", "minimum": 0}, "color": {"$ref": "#/$defs/color"}}
+        }
+      }
+    },
+    "crop": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fit", "focus_x", "focus_y", "corner_radius_px", "padding_px"],
+      "properties": {
+        "fit": {"enum": ["cover", "contain"]},
+        "focus_x": {"type": "number", "minimum": 0, "maximum": 1},
+        "focus_y": {"type": "number", "minimum": 0, "maximum": 1},
+        "corner_radius_px": {"type": "number", "minimum": 0},
+        "padding_px": {"type": "number", "minimum": 0}
+      }
+    },
+    "layer": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "z_index", "rect", "visible_interval", "opacity", "collision_group"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "kind": {"enum": ["video", "text", "lyrics", "background"]},
+        "z_index": {"type": "integer"}, "rect": {"$ref": "#/$defs/rect"},
+        "visible_interval": {"$ref": "#/$defs/interval"},
+        "opacity": {"type": "number", "minimum": 0, "maximum": 1},
+        "collision_group": {"$ref": "#/$defs/id"},
+        "track_id": {"$ref": "#/$defs/id"}, "crop": {"$ref": "#/$defs/crop"},
+        "text": {"$ref": "#/$defs/text"}, "style_id": {"$ref": "#/$defs/id"},
+        "text_align": {"enum": ["left", "center", "right"]},
+        "cue_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "clip_to_rect": {"type": "boolean"},
+        "document_height_px": {"type": "number", "exclusiveMinimum": 0},
+        "initial_scroll_y_px": {"type": "number"},
+        "active_anchor_y_px": {"type": "number"},
+        "color": {"$ref": "#/$defs/color"}
+      },
+      "allOf": [
+        {"if": {"properties": {"kind": {"const": "video"}}}, "then": {"required": ["track_id", "crop"]}},
+        {"if": {"properties": {"kind": {"const": "text"}}}, "then": {"required": ["text", "style_id", "text_align"]}},
+        {"if": {"properties": {"kind": {"const": "lyrics"}}}, "then": {"required": ["cue_ids", "clip_to_rect", "document_height_px", "initial_scroll_y_px", "active_anchor_y_px"]}},
+        {"if": {"properties": {"kind": {"const": "background"}}}, "then": {"required": ["color"]}}
+      ],
+      "description": "All layer rects use screen-space px. A lyrics layer's rect is its clipping viewport. Variant-inappropriate fields are rejected by host validation."
+    },
+    "clip": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "asset_id", "source_interval", "timeline_interval", "playback_rate"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "asset_id": {"$ref": "#/$defs/id"},
+        "source_interval": {"$ref": "#/$defs/interval"}, "timeline_interval": {"$ref": "#/$defs/interval"},
+        "playback_rate": {"$ref": "#/$defs/rational"},
+        "gain_db": {"type": "number"},
+        "fade_in_tick": {"type": "integer", "minimum": 0}, "fade_out_tick": {"type": "integer", "minimum": 0}
+      },
+      "description": "Source interval is in normalised asset time expressed in global ticks. Timeline interval is in output time. V1 runtime requires playback_rate=1."
+    },
+    "track": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "role", "clips"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "kind": {"enum": ["audio", "video"]},
+        "role": {"enum": ["performer", "source_master", "alignment_vocals", "instrumental", "render_master"]},
+        "clips": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/clip"}}
+      },
+      "description": "Source/analysis tracks are not implicitly audible. The renderer uses performer video and render_master audio only."
+    },
+    "translation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["text", "style_id", "source_asset_id", "source_span", "meaning_group_id", "sync_mode"],
+      "properties": {
+        "text": {"$ref": "#/$defs/text"}, "style_id": {"$ref": "#/$defs/id"},
+        "source_asset_id": {"$ref": "#/$defs/id"}, "source_span": {"$ref": "#/$defs/span"},
+        "meaning_group_id": {"$ref": "#/$defs/id"}, "sync_mode": {"const": "cue"}
+      }
+    },
+    "glyphBox": {
+      "type": "object", "additionalProperties": false,
+      "required": ["row_index", "display_span", "advance_rect", "ink_rect"],
+      "properties": {
+        "row_index": {"type": "integer", "minimum": 0}, "display_span": {"$ref": "#/$defs/span"},
+        "advance_rect": {"$ref": "#/$defs/rect"}, "ink_rect": {"$ref": "#/$defs/rect"}
+      },
+      "description": "Rects are lyrics document-space px. Span refers to the cue's English text. Multiple boxes may represent one timed word."
+    },
+    "word": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "text", "alignment_text", "origin_token_ids", "display_span", "interval", "timing_status", "alignment_score", "evidence_ref", "glyph_boxes", "highlight"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "text": {"$ref": "#/$defs/text"},
+        "alignment_text": {"$ref": "#/$defs/text"},
+        "origin_token_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}},
+        "display_span": {"$ref": "#/$defs/span"},
+        "interval": {"oneOf": [{"$ref": "#/$defs/interval"}, {"type": "null"}]},
+        "timing_status": {"enum": ["observed", "manual", "estimated", "unaligned"]},
+        "alignment_score": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "evidence_ref": {"oneOf": [{"$ref": "#/$defs/artifactEvidence"}, {"type": "null"}]},
+        "glyph_boxes": {"type": "array", "items": {"$ref": "#/$defs/glyphBox"}},
+        "highlight": {
+          "type": "object", "additionalProperties": false,
+          "required": ["mode", "style_id"],
+          "properties": {"mode": {"enum": ["sweep", "whole_word"]}, "style_id": {"$ref": "#/$defs/id"}}
+        }
+      },
+      "allOf": [
+        {"if": {"properties": {"timing_status": {"const": "unaligned"}}}, "then": {"properties": {"interval": {"type": "null"}}}},
+        {"if": {"properties": {"timing_status": {"enum": ["observed", "manual", "estimated"]}}}, "then": {"properties": {"interval": {"$ref": "#/$defs/interval"}}}}
+      ]
+    },
+    "row": {
+      "type": "object", "additionalProperties": false,
+      "required": ["language", "display_span", "rect", "baseline_y_px", "style_id"],
+      "properties": {
+        "language": {"enum": ["en", "zh-CN"]}, "display_span": {"$ref": "#/$defs/span"},
+        "rect": {"$ref": "#/$defs/rect"}, "baseline_y_px": {"type": "number"}, "style_id": {"$ref": "#/$defs/id"}
+      }
+    },
+    "cueLayout": {
+      "type": "object", "additionalProperties": false,
+      "required": ["coordinate_space", "block_rect", "rows", "atlas_ref", "metrics_fingerprint"],
+      "properties": {
+        "coordinate_space": {"const": "lyrics_document_px"}, "block_rect": {"$ref": "#/$defs/rect"},
+        "rows": {"type": "array", "minItems": 2, "items": {"$ref": "#/$defs/row"}},
+        "atlas_ref": {"$ref": "#/$defs/artifactEvidence"}, "metrics_fingerprint": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "cue": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "origin_line_id", "occurrence_index", "source_asset_id", "source_span", "english_text", "english_style_id", "translation", "voice_id", "interval", "words", "layout"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "origin_line_id": {"$ref": "#/$defs/id"},
+        "occurrence_index": {"type": "integer", "minimum": 0},
+        "source_asset_id": {"$ref": "#/$defs/id"}, "source_span": {"$ref": "#/$defs/span"},
+        "english_text": {"$ref": "#/$defs/text"}, "english_style_id": {"$ref": "#/$defs/id"},
+        "translation": {"$ref": "#/$defs/translation"}, "voice_id": {"$ref": "#/$defs/id"},
+        "interval": {"oneOf": [{"$ref": "#/$defs/interval"}, {"type": "null"}]},
+        "words": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/word"}},
+        "layout": {"oneOf": [{"$ref": "#/$defs/cueLayout"}, {"type": "null"}]},
+        "boundary_reason": {"enum": ["source_line", "punctuation", "clause", "silence", "width", "manual"]}
+      }
+    },
+    "easing": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["type"],
+          "properties": {"type": {"enum": ["linear", "hold", "smoothstep"]}}
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["type", "k"],
+          "properties": {"type": {"const": "exponential_out"}, "k": {"type": "number", "exclusiveMinimum": 0}}
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["type", "control_points"],
+          "properties": {
+            "type": {"const": "cubic_bezier"},
+            "control_points": {
+              "type": "array", "minItems": 4, "maxItems": 4,
+              "prefixItems": [
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"type": "number", "minimum": 0, "maximum": 1},
+                {"type": "number", "minimum": 0, "maximum": 1}
+              ], "items": false
+            }
+          }
+        }
+      ]
+    },
+    "motion": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "target", "property", "keyframes"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"},
+        "target": {
+          "type": "object", "additionalProperties": false, "required": ["kind", "id"],
+          "properties": {"kind": {"enum": ["layer", "cue", "word"]}, "id": {"$ref": "#/$defs/id"}}
+        },
+        "property": {"enum": ["scroll_y_px", "opacity", "highlight_progress"]},
+        "keyframes": {
+          "type": "array", "minItems": 2,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["at_tick", "value", "easing_to_next"],
+            "properties": {
+              "at_tick": {"type": "integer", "minimum": 0}, "value": {"type": "number"},
+              "easing_to_next": {"$ref": "#/$defs/easing"}
+            }
+          }
+        }
+      },
+      "description": "Global-time keyframes. Before/after the range, clamp to endpoint values; final easing is ignored. Host validates ordering, target/property compatibility and value range."
+    },
+    "policy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["revision", "chunking", "scroll", "audio", "alignment"],
+      "properties": {
+        "revision": {"$ref": "#/$defs/text"},
+        "chunking": {
+          "type": "object", "additionalProperties": false,
+          "required": ["min_silence_tick", "max_en_rows", "max_zh_rows", "min_en_font_px", "min_zh_font_px", "max_active_block_height_px"],
+          "properties": {
+            "min_silence_tick": {"type": "integer", "minimum": 0},
+            "max_en_rows": {"type": "integer", "minimum": 1}, "max_zh_rows": {"type": "integer", "minimum": 1},
+            "min_en_font_px": {"type": "number", "exclusiveMinimum": 0},
+            "min_zh_font_px": {"type": "number", "exclusiveMinimum": 0},
+            "max_active_block_height_px": {"type": "number", "exclusiveMinimum": 0}
+          }
+        },
+        "scroll": {
+          "type": "object", "additionalProperties": false,
+          "required": ["transition_tick", "deadband_px", "past_opacity_floor", "future_opacity_floor", "falloff_k", "rest_behavior"],
+          "properties": {
+            "transition_tick": {"type": "integer", "minimum": 1}, "deadband_px": {"type": "number", "minimum": 0},
+            "past_opacity_floor": {"type": "number", "minimum": 0, "maximum": 1},
+            "future_opacity_floor": {"type": "number", "minimum": 0, "maximum": 1},
+            "falloff_k": {"type": "number", "exclusiveMinimum": 0},
+            "rest_behavior": {"const": "hold_previous_subdued"}
+          }
+        },
+        "audio": {
+          "type": "object", "additionalProperties": false,
+          "required": ["mix_mode", "vocal_gain_db", "instrumental_gain_db", "ducking", "target_lufs", "lufs_tolerance", "master_true_peak_dbtp", "encoded_max_true_peak_dbtp", "fade_in_tick", "fade_out_tick"],
+          "properties": {
+            "mix_mode": {"enum": ["original", "stem_mix"]},
+            "vocal_gain_db": {"type": "number"}, "instrumental_gain_db": {"type": "number"},
+            "ducking": {
+              "type": "object", "additionalProperties": false,
+              "required": ["enabled", "max_reduction_db", "attack_ms", "release_ms"],
+              "properties": {
+                "enabled": {"type": "boolean"}, "max_reduction_db": {"type": "number", "minimum": 0},
+                "attack_ms": {"type": "number", "exclusiveMinimum": 0}, "release_ms": {"type": "number", "exclusiveMinimum": 0}
+              }
+            },
+            "target_lufs": {"type": "number", "minimum": -70, "maximum": -5},
+            "lufs_tolerance": {"type": "number", "minimum": 0},
+            "master_true_peak_dbtp": {"type": "number", "minimum": -9, "maximum": 0},
+            "encoded_max_true_peak_dbtp": {"type": "number", "maximum": 0},
+            "fade_in_tick": {"type": "integer", "minimum": 0}, "fade_out_tick": {"type": "integer", "minimum": 0}
+          }
+        },
+        "alignment": {
+          "type": "object", "additionalProperties": false,
+          "required": ["adapter", "model_id", "model_revision", "weights_sha256", "requested_device", "accept_estimated_word_timings"],
+          "properties": {
+            "adapter": {"$ref": "#/$defs/text"}, "model_id": {"$ref": "#/$defs/text"}, "model_revision": {"$ref": "#/$defs/text"},
+            "weights_sha256": {"$ref": "#/$defs/sha256"}, "requested_device": {"enum": ["cpu", "mps", "cuda"]},
+            "accept_estimated_word_timings": {"const": false}
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["component", "version", "actual_device", "input_hashes", "evidence_ref"],
+      "properties": {
+        "component": {"$ref": "#/$defs/text"}, "version": {"$ref": "#/$defs/text"},
+        "actual_device": {"enum": ["cpu", "mps", "cuda", "not_applicable", "not_executed"]},
+        "input_hashes": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["id", "sha256"],
+            "properties": {"id": {"$ref": "#/$defs/id"}, "sha256": {"$ref": "#/$defs/sha256"}}
+          }
+        },
+        "evidence_ref": {"$ref": "#/$defs/artifactEvidence"},
+        "model_id": {"$ref": "#/$defs/text"}, "model_revision": {"$ref": "#/$defs/text"},
+        "weights_sha256": {"$ref": "#/$defs/sha256"}, "git_revision": {"type": "string", "pattern": "^[a-f0-9]{7,40}$"}
+      }
+    }
+  }
+}

@@ -1,0 +1,273 @@
+{
+  "schema_version": "follow-along.timeline/1.0",
+  "timeline_id": "synthetic-contract-example",
+  "phase": "resolved",
+  "metadata": {
+    "title": "Hope — 数据契约示例",
+    "tag": "跟唱",
+    "exercise_objective": "保持长元音，听清弱读",
+    "mode": "singing",
+    "source_language": "en",
+    "translation_language": "zh-CN",
+    "duration_tick": 480000,
+    "content_type": "BILINGUAL_FOLLOW_ALONG",
+    "description": "Synthetic specification fixture: invented text, timings, coordinates and hashes. Referenced files do not exist. No alignment or render took place.",
+    "expected_lyric_end_tick": 384000,
+    "outro_interval": {"start_tick": 384000, "end_tick": 480000},
+    "synthetic_contract_example": true
+  },
+  "clock": {
+    "ticks_per_second": 48000,
+    "fps": {"numerator": 30, "denominator": 1},
+    "master_sample_rate": 48000,
+    "rounding": "nearest_half_up"
+  },
+  "canvas": {
+    "width": 1080, "height": 1920, "color_space": "bt709", "background": "#102028FF",
+    "content_safe_rect": {"x": 60, "y": 80, "width": 864, "height": 1600},
+    "safe_zone_profile": "proposed-portrait-mobile-v1",
+    "occlusions": [
+      {"id": "right-ui", "rect": {"x": 960, "y": 440, "width": 120, "height": 1160}, "reason": "Proposed interaction controls"},
+      {"id": "bottom-ui", "rect": {"x": 0, "y": 1700, "width": 1080, "height": 220}, "reason": "Proposed caption and scrubber controls"}
+    ]
+  },
+  "assets": [
+    {
+      "id": "performer-video", "kind": "video", "uri": "assets/performer.mp4",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "byte_length": 1000000, "duration_tick": 960000,
+      "width": 1920, "height": 1080, "native_time_base": {"numerator": 1, "denominator": 90000},
+      "pts_origin_tick": 0, "stream_index": 0
+    },
+    {
+      "id": "source-audio", "kind": "audio", "uri": "assets/original.wav",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "byte_length": 7680000, "duration_tick": 960000,
+      "sample_rate": 48000, "sample_count": 960000, "channels": 2,
+      "native_time_base": {"numerator": 1, "denominator": 48000}, "pts_origin_tick": 0, "stream_index": 0
+    },
+    {
+      "id": "vocals-16k", "kind": "audio", "uri": "analysis/vocals-16k.wav",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "byte_length": 640000, "duration_tick": 480000,
+      "sample_rate": 16000, "sample_count": 160000, "channels": 1,
+      "native_time_base": {"numerator": 1, "denominator": 16000}, "pts_origin_tick": 0, "stream_index": 0,
+      "source_asset_id": "source-audio",
+      "source_time_map": {"parent_interval": {"start_tick": 240000, "end_tick": 720000}, "asset_interval": {"start_tick": 0, "end_tick": 480000}, "playback_rate": {"numerator": 1, "denominator": 1}, "compensated_delay_tick": 0}
+    },
+    {
+      "id": "final-master", "kind": "audio", "uri": "mix/master.wav",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "byte_length": 3840000, "duration_tick": 480000,
+      "sample_rate": 48000, "sample_count": 480000, "channels": 2,
+      "native_time_base": {"numerator": 1, "denominator": 48000}, "pts_origin_tick": 0, "stream_index": 0,
+      "source_asset_id": "source-audio",
+      "source_time_map": {"parent_interval": {"start_tick": 240000, "end_tick": 720000}, "asset_interval": {"start_tick": 0, "end_tick": 480000}, "playback_rate": {"numerator": 1, "denominator": 1}, "compensated_delay_tick": 0}
+    },
+    {
+      "id": "en-font", "kind": "font", "uri": "assets/fonts/english.ttf",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444", "byte_length": 500000
+    },
+    {
+      "id": "zh-font", "kind": "font", "uri": "assets/fonts/chinese.otf",
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555", "byte_length": 2000000
+    },
+    {
+      "id": "raw-en", "kind": "text", "uri": "text/english.txt",
+      "sha256": "6666666666666666666666666666666666666666666666666666666666666666", "byte_length": 33
+    },
+    {
+      "id": "raw-zh", "kind": "text", "uri": "text/chinese.txt",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777", "byte_length": 34
+    }
+  ],
+  "styles": [
+    {
+      "id": "en-main", "font_asset_id": "en-font", "font_size_px": 56, "line_height_px": 68,
+      "letter_spacing_px": 0, "base_color": "#D8E4E8FF", "active_color": "#F5D264FF", "weight": 600,
+      "stroke_width_px": 0, "stroke_color": "#00000000",
+      "shadow": {"dx": 0, "dy": 0, "blur_px": 0, "color": "#00000000"}
+    },
+    {
+      "id": "zh-main", "font_asset_id": "zh-font", "font_size_px": 38, "line_height_px": 48,
+      "letter_spacing_px": 0, "base_color": "#AEBEC5FF", "active_color": "#F0E0A8FF", "weight": 400,
+      "stroke_width_px": 0, "stroke_color": "#00000000",
+      "shadow": {"dx": 0, "dy": 0, "blur_px": 0, "color": "#00000000"}
+    }
+  ],
+  "layers": [
+    {
+      "id": "performer", "kind": "video", "z_index": 1,
+      "rect": {"x": 60, "y": 90, "width": 864, "height": 520},
+      "visible_interval": {"start_tick": 0, "end_tick": 480000}, "opacity": 1, "collision_group": "performer",
+      "track_id": "performer-track", "crop": {"fit": "cover", "focus_x": 0.5, "focus_y": 0.45, "corner_radius_px": 24, "padding_px": 10}
+    },
+    {
+      "id": "header-title", "kind": "text", "z_index": 2,
+      "rect": {"x": 60, "y": 640, "width": 864, "height": 70},
+      "visible_interval": {"start_tick": 0, "end_tick": 480000}, "opacity": 1, "collision_group": "header",
+      "text": "Hope — 数据契约示例", "style_id": "zh-main", "text_align": "left"
+    },
+    {
+      "id": "header-tag", "kind": "text", "z_index": 2,
+      "rect": {"x": 60, "y": 720, "width": 864, "height": 48},
+      "visible_interval": {"start_tick": 0, "end_tick": 480000}, "opacity": 1, "collision_group": "header",
+      "text": "跟唱", "style_id": "zh-main", "text_align": "left"
+    },
+    {
+      "id": "header-objective", "kind": "text", "z_index": 2,
+      "rect": {"x": 60, "y": 780, "width": 864, "height": 48},
+      "visible_interval": {"start_tick": 0, "end_tick": 480000}, "opacity": 1, "collision_group": "header",
+      "text": "保持长元音，听清弱读", "style_id": "zh-main", "text_align": "left"
+    },
+    {
+      "id": "lyrics", "kind": "lyrics", "z_index": 3,
+      "rect": {"x": 60, "y": 850, "width": 864, "height": 810},
+      "visible_interval": {"start_tick": 0, "end_tick": 480000}, "opacity": 1, "collision_group": "lyrics",
+      "cue_ids": ["cue-1", "cue-2"], "clip_to_rect": true, "document_height_px": 1500,
+      "initial_scroll_y_px": 0, "active_anchor_y_px": 1255
+    }
+  ],
+  "tracks": [
+    {"id": "performer-track", "kind": "video", "role": "performer", "clips": [
+      {"id": "video-clip", "asset_id": "performer-video", "source_interval": {"start_tick": 240000, "end_tick": 720000}, "timeline_interval": {"start_tick": 0, "end_tick": 480000}, "playback_rate": {"numerator": 1, "denominator": 1}}
+    ]},
+    {"id": "source-track", "kind": "audio", "role": "source_master", "clips": [
+      {"id": "source-clip", "asset_id": "source-audio", "source_interval": {"start_tick": 240000, "end_tick": 720000}, "timeline_interval": {"start_tick": 0, "end_tick": 480000}, "playback_rate": {"numerator": 1, "denominator": 1}}
+    ]},
+    {"id": "analysis-track", "kind": "audio", "role": "alignment_vocals", "clips": [
+      {"id": "analysis-clip", "asset_id": "vocals-16k", "source_interval": {"start_tick": 0, "end_tick": 480000}, "timeline_interval": {"start_tick": 0, "end_tick": 480000}, "playback_rate": {"numerator": 1, "denominator": 1}}
+    ]},
+    {"id": "master-track", "kind": "audio", "role": "render_master", "clips": [
+      {"id": "master-clip", "asset_id": "final-master", "source_interval": {"start_tick": 0, "end_tick": 480000}, "timeline_interval": {"start_tick": 0, "end_tick": 480000}, "playback_rate": {"numerator": 1, "denominator": 1}, "gain_db": 0, "fade_in_tick": 0, "fade_out_tick": 0}
+    ]}
+  ],
+  "cues": [
+    {
+      "id": "cue-1", "origin_line_id": "line-1", "occurrence_index": 0,
+      "source_asset_id": "raw-en", "source_span": {"start": 0, "end": 16},
+      "english_text": "Hold on to hope.", "english_style_id": "en-main",
+      "translation": {"text": "心怀希望。", "style_id": "zh-main", "source_asset_id": "raw-zh", "source_span": {"start": 0, "end": 5}, "meaning_group_id": "meaning-1", "sync_mode": "cue"},
+      "voice_id": "lead", "interval": {"start_tick": 48000, "end_tick": 192000}, "boundary_reason": "source_line",
+      "words": [
+        {
+          "id": "w-1", "text": "Hold", "alignment_text": "hold", "origin_token_ids": ["raw-en:0"], "display_span": {"start": 0, "end": 4},
+          "interval": {"start_tick": 48000, "end_tick": 72000}, "timing_status": "manual", "alignment_score": null,
+          "evidence_ref": {"uri": "synthetic/manual-example.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+          "glyph_boxes": [{"row_index": 0, "display_span": {"start": 0, "end": 4}, "advance_rect": {"x": 0, "y": 340, "width": 140, "height": 64}, "ink_rect": {"x": 2, "y": 347, "width": 136, "height": 52}}],
+          "highlight": {"mode": "sweep", "style_id": "en-main"}
+        },
+        {
+          "id": "w-2", "text": "on", "alignment_text": "on", "origin_token_ids": ["raw-en:1"], "display_span": {"start": 5, "end": 7},
+          "interval": {"start_tick": 72000, "end_tick": 84000}, "timing_status": "manual", "alignment_score": null,
+          "evidence_ref": {"uri": "synthetic/manual-example.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+          "glyph_boxes": [{"row_index": 0, "display_span": {"start": 5, "end": 7}, "advance_rect": {"x": 154, "y": 340, "width": 70, "height": 64}, "ink_rect": {"x": 155, "y": 350, "width": 68, "height": 48}}],
+          "highlight": {"mode": "sweep", "style_id": "en-main"}
+        },
+        {
+          "id": "w-3", "text": "to", "alignment_text": "to", "origin_token_ids": ["raw-en:2"], "display_span": {"start": 8, "end": 10},
+          "interval": {"start_tick": 84000, "end_tick": 96000}, "timing_status": "manual", "alignment_score": null,
+          "evidence_ref": {"uri": "synthetic/manual-example.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+          "glyph_boxes": [{"row_index": 0, "display_span": {"start": 8, "end": 10}, "advance_rect": {"x": 238, "y": 340, "width": 62, "height": 64}, "ink_rect": {"x": 239, "y": 348, "width": 60, "height": 50}}],
+          "highlight": {"mode": "sweep", "style_id": "en-main"}
+        },
+        {
+          "id": "w-4", "text": "hope", "alignment_text": "hope", "origin_token_ids": ["raw-en:3"], "display_span": {"start": 11, "end": 15},
+          "interval": {"start_tick": 96000, "end_tick": 192000}, "timing_status": "manual", "alignment_score": null,
+          "evidence_ref": {"uri": "synthetic/manual-example.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+          "glyph_boxes": [{"row_index": 0, "display_span": {"start": 11, "end": 15}, "advance_rect": {"x": 314, "y": 340, "width": 142, "height": 64}, "ink_rect": {"x": 315, "y": 347, "width": 140, "height": 53}}],
+          "highlight": {"mode": "sweep", "style_id": "en-main"}
+        }
+      ],
+      "layout": {
+        "coordinate_space": "lyrics_document_px", "block_rect": {"x": 0, "y": 332, "width": 864, "height": 146},
+        "rows": [
+          {"language": "en", "display_span": {"start": 0, "end": 16}, "rect": {"x": 0, "y": 340, "width": 480, "height": 64}, "baseline_y_px": 390, "style_id": "en-main"},
+          {"language": "zh-CN", "display_span": {"start": 0, "end": 5}, "rect": {"x": 0, "y": 410, "width": 190, "height": 48}, "baseline_y_px": 446, "style_id": "zh-main"}
+        ],
+        "atlas_ref": {"uri": "synthetic/cue-1-atlas.png", "sha256": "9999999999999999999999999999999999999999999999999999999999999999"},
+        "metrics_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "id": "cue-2", "origin_line_id": "line-2", "occurrence_index": 0,
+      "source_asset_id": "raw-en", "source_span": {"start": 17, "end": 33},
+      "english_text": "Sing it with me.", "english_style_id": "en-main",
+      "translation": {"text": "和我一起唱。", "style_id": "zh-main", "source_asset_id": "raw-zh", "source_span": {"start": 6, "end": 12}, "meaning_group_id": "meaning-2", "sync_mode": "cue"},
+      "voice_id": "lead", "interval": {"start_tick": 240000, "end_tick": 384000}, "boundary_reason": "source_line",
+      "words": [
+        {
+          "id": "w-5", "text": "Sing", "alignment_text": "sing", "origin_token_ids": ["raw-en:4"], "display_span": {"start": 0, "end": 4},
+          "interval": {"start_tick": 240000, "end_tick": 264000}, "timing_status": "manual", "alignment_score": null,
+          "evidence_ref": {"uri": "synthetic/manual-example.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+          "glyph_boxes": [{"row_index": 0, "display_span": {"start": 0, "end": 4}, "advance_rect": {"x": 0, "y": 650, "width": 128, "height": 64}, "ink_rect": {"x": 2, "y": 657, "width": 124, "height": 53}}],
+          "highlight": {"mode": "sweep", "style_id": "en-main"}
+        },
+        {
+          "id": "w-6", "text": "it", "alignment_text": "it", "origin_token_ids": ["raw-en:5"], "display_span": {"start": 5, "end": 7},
+          "interval": {"start_tick": 264000, "end_tick": 276000}, "timing_status": "manual", "alignment_score": null,
+          "evidence_ref": {"uri": "synthetic/manual-example.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+          "glyph_boxes": [{"row_index": 0, "display_span": {"start": 5, "end": 7}, "advance_rect": {"x": 142, "y": 650, "width": 46, "height": 64}, "ink_rect": {"x": 143, "y": 657, "width": 44, "height": 52}}],
+          "highlight": {"mode": "sweep", "style_id": "en-main"}
+        },
+        {
+          "id": "w-7", "text": "with", "alignment_text": "with", "origin_token_ids": ["raw-en:6"], "display_span": {"start": 8, "end": 12},
+          "interval": {"start_tick": 276000, "end_tick": 300000}, "timing_status": "manual", "alignment_score": null,
+          "evidence_ref": {"uri": "synthetic/manual-example.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+          "glyph_boxes": [{"row_index": 0, "display_span": {"start": 8, "end": 12}, "advance_rect": {"x": 202, "y": 650, "width": 128, "height": 64}, "ink_rect": {"x": 203, "y": 657, "width": 126, "height": 52}}],
+          "highlight": {"mode": "sweep", "style_id": "en-main"}
+        },
+        {
+          "id": "w-8", "text": "me", "alignment_text": "me", "origin_token_ids": ["raw-en:7"], "display_span": {"start": 13, "end": 15},
+          "interval": {"start_tick": 300000, "end_tick": 384000}, "timing_status": "manual", "alignment_score": null,
+          "evidence_ref": {"uri": "synthetic/manual-example.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888"},
+          "glyph_boxes": [{"row_index": 0, "display_span": {"start": 13, "end": 15}, "advance_rect": {"x": 344, "y": 650, "width": 86, "height": 64}, "ink_rect": {"x": 345, "y": 660, "width": 84, "height": 48}}],
+          "highlight": {"mode": "sweep", "style_id": "en-main"}
+        }
+      ],
+      "layout": {
+        "coordinate_space": "lyrics_document_px", "block_rect": {"x": 0, "y": 642, "width": 864, "height": 146},
+        "rows": [
+          {"language": "en", "display_span": {"start": 0, "end": 16}, "rect": {"x": 0, "y": 650, "width": 450, "height": 64}, "baseline_y_px": 700, "style_id": "en-main"},
+          {"language": "zh-CN", "display_span": {"start": 0, "end": 6}, "rect": {"x": 0, "y": 720, "width": 228, "height": 48}, "baseline_y_px": 756, "style_id": "zh-main"}
+        ],
+        "atlas_ref": {"uri": "synthetic/cue-2-atlas.png", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+        "metrics_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ],
+  "motions": [
+    {
+      "id": "scroll-main", "target": {"kind": "layer", "id": "lyrics"}, "property": "scroll_y_px",
+      "keyframes": [
+        {"at_tick": 0, "value": 0, "easing_to_next": {"type": "hold"}},
+        {"at_tick": 232320, "value": 0, "easing_to_next": {"type": "cubic_bezier", "control_points": [0.22, 0, 0.36, 1]}},
+        {"at_tick": 246720, "value": 310, "easing_to_next": {"type": "hold"}},
+        {"at_tick": 480000, "value": 310, "easing_to_next": {"type": "linear"}}
+      ]
+    }
+  ],
+  "policy": {
+    "revision": "proposed-profile-v1",
+    "chunking": {"min_silence_tick": 12000, "max_en_rows": 2, "max_zh_rows": 2, "min_en_font_px": 44, "min_zh_font_px": 34, "max_active_block_height_px": 260},
+    "scroll": {"transition_tick": 14400, "deadband_px": 24, "past_opacity_floor": 0.25, "future_opacity_floor": 0.45, "falloff_k": 3, "rest_behavior": "hold_previous_subdued"},
+    "audio": {
+      "mix_mode": "original", "vocal_gain_db": 0, "instrumental_gain_db": 0,
+      "ducking": {"enabled": false, "max_reduction_db": 3, "attack_ms": 20, "release_ms": 250},
+      "target_lufs": -16, "lufs_tolerance": 1, "master_true_peak_dbtp": -1.5, "encoded_max_true_peak_dbtp": -1,
+      "fade_in_tick": 0, "fade_out_tick": 0
+    },
+    "alignment": {
+      "adapter": "synthetic-not-run", "model_id": "synthetic-not-run", "model_revision": "none",
+      "weights_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "requested_device": "cpu", "accept_estimated_word_timings": false
+    }
+  },
+  "provenance": [
+    {
+      "component": "synthetic-contract-example", "version": "1.0", "actual_device": "not_executed",
+      "input_hashes": [{"id": "raw-en", "sha256": "6666666666666666666666666666666666666666666666666666666666666666"}],
+      "evidence_ref": {"uri": "synthetic/NO_REAL_EVIDENCE.json", "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+    }
+  ]
+}
