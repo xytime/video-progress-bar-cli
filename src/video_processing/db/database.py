@@ -42,6 +42,7 @@
 | 3.64.0 | 2026-09-19 | Antigravity | 还原 idx_douyin_browser_launch_tickets_prelaunch_recovery 索引；增加严格限定 PUBLISHED 的 post_id/video_id 互动前置查询 DAL 方法与重试追踪。 |
 | 3.63.0 | 2026-09-19 | Antigravity | 新增 wechat_interactions 账本表及 DAL 方法，支持视频号评论区引导与状态追踪。 |
 | 3.62.0 | 2026-09-18 | Antigravity | 新增未确认英语世界通知步骤的安全重置方法，支持网络异常后受控重发。 |
+| 3.65.0 | 2026-10-08 | Antigravity | 新增 processed_videos.enrichment_status 字段自迁移及 DAL 读写方法 (RFC-2026-DEEP-CREATION-001) |
 | 3.61.0 | 2026-09-18 | Antigravity | 新增英语世界待发池库存统计与今日发布数量统计方法。 |
 | 3.60.0 | 2026-09-09 | Codex | 新增 /last 已确认公开发布跨平台账本查询，并限制 SQLite 安全偏移。 |
 | 3.59.9 | 2026-09-07 | Codex | 服务端分页前完成控制面筛选、排序与近期高互动浏览标记，平台状态保持不变。 |
@@ -412,6 +413,7 @@ class PipelineDB:
                             preparation_ready INTEGER DEFAULT 0,
                             source_subtitle_status TEXT DEFAULT 'PENDING',
                             source_subtitle_checked_at TIMESTAMP DEFAULT NULL,
+                            enrichment_status TEXT NOT NULL DEFAULT 'NONE',
                             UNIQUE(youtube_id, slice_index),
                             FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                         )
@@ -493,6 +495,7 @@ class PipelineDB:
                         preparation_ready INTEGER DEFAULT 0,
                         source_subtitle_status TEXT DEFAULT 'PENDING',
                         source_subtitle_checked_at TIMESTAMP DEFAULT NULL,
+                        enrichment_status TEXT NOT NULL DEFAULT 'NONE',
                         UNIQUE(youtube_id, slice_index),
                         FOREIGN KEY(parent_id) REFERENCES processed_videos(id) ON DELETE CASCADE
                     )
@@ -605,6 +608,14 @@ class PipelineDB:
                 conn.commit()
             if columns and "rescore_checked_at" not in columns:
                 cursor.execute("ALTER TABLE processed_videos ADD COLUMN rescore_checked_at TIMESTAMP DEFAULT NULL;")
+                conn.commit()
+
+            # [RFC-2026-DEEP-CREATION-001] 二创增强发布状态 (NONE, ENRICHED, DEGRADED, FAILED)
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if columns and "enrichment_status" not in columns:
+                self._logger.info("[Migration] Adding enrichment_status column to processed_videos table...")
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN enrichment_status TEXT NOT NULL DEFAULT 'NONE';")
                 conn.commit()
 
             # [Claude_Sonnet_4.6_Thinking_planning] v7.0 黑名单墓碑表
@@ -3262,6 +3273,27 @@ class PipelineDB:
                 (status, error_msg, youtube_id, slice_index)
             )
             conn.commit()
+
+    def update_enrichment_status(self, youtube_id: str, status: str, slice_index: int = 0) -> bool:
+        """[RFC-2026-DEEP-CREATION-001] 更新指定视频的二创增强发布状态 (NONE, ENRICHED, DEGRADED, FAILED)。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE processed_videos SET enrichment_status = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE youtube_id = ? AND slice_index = ?",
+                (status, youtube_id, slice_index)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_enrichment_status(self, youtube_id: str, slice_index: int = 0) -> str:
+        """[RFC-2026-DEEP-CREATION-001] 获取指定视频的二创增强状态。"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT enrichment_status FROM processed_videos WHERE youtube_id = ? AND slice_index = ?",
+                (youtube_id, slice_index)
+            )
+            row = cursor.fetchone()
+            return row[0] if row and row[0] else "NONE"
 
     def update_video_zh_title(self, youtube_id: str, zh_title: str, slice_index: int = 0) -> bool:
         """更新单条任务的源标题译文，不改变其处理或发布状态。"""
