@@ -103,6 +103,7 @@
 | 3.16.1 | 2026-08-24 | Codex | agy 作为字幕与普通话精修首选，DeepSeek 保留为次选，并固定 CLI 模型/超时配置 |
 | 3.61.8 | 2026-09-06 | Codex | 增加安装器与监控共用的英语世界生产时刻配置。 |
 | 3.62.0 | 2026-09-18 | Antigravity | copywriter_title_provider_order 默认启用 agy,gemini；梯队首选高阶思考模型 |
+| 7.1.0 | 2026-10-08 | Antigravity | 新增豆包语音 2.0 (Doubao Voice) 配置与沉稳克制转场过渡音效配置 |
 """
 import json
 import os
@@ -418,9 +419,19 @@ class Settings(BaseSettings):
     # 使用全角冒号「：」而非半角「:」，避免与 ffmpeg filtergraph 选项分隔符冲突。
     source_date_stamp_label: str = "发布日期："
 
-    # 深度信息增量引擎：默认关闭；仅增强独立成片，不改写基础字幕。
+    # 深度信息增量引擎与高品质母带配置 (RFC-2026-DEEP-CREATION-001)
     enable_deep_insight_enrichment: bool = False
     insight_default_voice: str = "zh-CN-YunyangNeural"
+    tts_provider: str = "doubao"  # "doubao" | "edge" | "indextts"
+    doubao_tts_api_key: Optional[str] = None
+    doubao_tts_endpoint: str = "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
+    doubao_tts_resource_id: str = "seed-tts-2.0"
+    doubao_tts_speaker: str = "zh_male_m191_uranus_bigtts"  # 云舟 2.0 沉稳男声
+
+    # 转场过渡音效配置：彻底告别突兀炸裂的 60Hz 电影重音，提供沉稳、克制、低调方案
+    # 可选: "subtle_tape_swish" (默认，微风/胶片柔风滑音), "gentle_warm_thud" (温润微触点), "none" (纯黑场静音过渡), "cinema_hit_60hz" (旧版重音)
+    transition_sfx: str = "subtle_tape_swish"
+    transition_sfx_volume: float = 0.22
 
     # Project Runway-CTA: 跑道级流光互动转化系统 (中央三联胶囊 + 左下角45°跑道流光航标)
     # 默认关闭，确保生产零风险。启用后在 {prefix}_vertical.mp4 基础上叠加互动图层与双频 Pop 音效，

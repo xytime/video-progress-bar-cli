@@ -4,12 +4,14 @@
 支持的 Provider：
 - EDGE: Microsoft Edge TTS（应急可用，不作为高品质中文配音默认值）
 - INDEXTTS: IndexTTS 2.0 本地推理（高品质中文配音默认值）
+- DOUBAO: 火山引擎豆包语音合成 2.0 (Seed-TTS 2.0，沉稳高端大模型配音)
 
 # Modification History
-| Version | Date       | Author | Description |
-| ------- | ---------- | ------ | ----------- |
+| Version | Date       | Author      | Description |
+| ------- | ---------- | ----------- | ----------- |
 | 1.0.0   | 2026-05-20 | Gemini_3.1_Pro_High_planning | 初始创建，支持 EDGE / INDEXTTS |
-| 3.0.0   | 2026-07-17 | Codex | 移除 CosyVoice/DashScope；TTS 保持本地 IndexTTS 优先，避免云端质量降级 |
+| 3.0.0   | 2026-07-17 | Codex       | 移除 CosyVoice/DashScope；TTS 保持本地 IndexTTS 优先，避免云端质量降级 |
+| 3.1.0   | 2026-10-08 | Antigravity | 新增 DOUBAO 语音合成引擎，原生 44.1kHz 输出 |
 """
 
 import asyncio
@@ -29,6 +31,7 @@ _DEFAULT_INDEX_TTS_PROMPT = "test_audio.wav"
 class TTSProvider(Enum):
     EDGE = "edge"
     INDEXTTS = "indextts"
+    DOUBAO = "doubao"
 
 
 class TTSEngine:
@@ -66,6 +69,8 @@ class TTSEngine:
                 custom_prompt = self.index_tts_path / custom_prompt
             prompt_value = str(custom_prompt) if custom_prompt.is_file() else None
             self._run_indextts_jobs([self._indextts_job(text, output_file, prompt_value)])
+        elif self.provider == TTSProvider.DOUBAO:
+            self._generate_doubao(text, output_file, voice)
         else:
             raise ValueError(f"未知的 TTS Provider: {self.provider}")
         return []
@@ -86,6 +91,14 @@ class TTSEngine:
                 output = output_dir / item["filename"]
                 if not output.exists():
                     self._generate_edge(item["text"], output, voice)
+                timestamps_map[item["filename"]] = []
+            return timestamps_map
+        elif self.provider == TTSProvider.DOUBAO:
+            voice = voice_prompt or ""
+            for item in items:
+                output = output_dir / item["filename"]
+                if not output.exists():
+                    self._generate_doubao(item["text"], output, voice)
                 timestamps_map[item["filename"]] = []
             return timestamps_map
 
@@ -123,6 +136,13 @@ class TTSEngine:
             raise RuntimeError(f"IndexTTS 未生成全部音频: {', '.join(missing[:3])}")
 
     @staticmethod
+    def _generate_doubao(text: str, output_file: Path, voice: str) -> None:
+        from video_processing.utils.doubao_tts import DoubaoTTSClient
+        client = DoubaoTTSClient()
+        speaker = voice if (voice.startswith("zh_") or voice.startswith("en_")) else None
+        client.synthesize(text, output_file, speaker=speaker, sample_rate=44100)
+
+    @staticmethod
     def _generate_edge(text: str, output_file: Path, voice: str) -> None:
         import edge_tts
 
@@ -130,3 +150,4 @@ class TTSEngine:
             await edge_tts.Communicate(text, voice).save(str(output_file))
 
         asyncio.run(run())
+

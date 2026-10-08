@@ -57,5 +57,13 @@ def disable_public_publish_windows_by_default():
 @pytest.fixture(autouse=True)
 def isolate_ffmpeg_slot(tmp_path, monkeypatch):
     """真实媒体单测也必须使用隔离锁，不能接触或等待生产队列。"""
-    from video_processing.core import ffmpeg_slot
-    monkeypatch.setattr(ffmpeg_slot, "_DIRECTORY", tmp_path / "ffmpeg-slot")
+    import sys
+    slot_dir = tmp_path / "ffmpeg-slot"
+    for name in ["video_processing.core.ffmpeg_slot", "src.video_processing.core.ffmpeg_slot"]:
+        if name in sys.modules:
+            monkeypatch.setattr(sys.modules[name], "_DIRECTORY", slot_dir)
+    try:
+        from video_processing.core import ffmpeg_slot
+        monkeypatch.setattr(ffmpeg_slot, "_DIRECTORY", slot_dir)
+    except Exception:
+        pass

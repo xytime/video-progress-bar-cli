@@ -14,6 +14,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001 Milestone 3：独立母带调度 CLI、真实视频影子运行与质检报告输出 |
 | 1.1.0 | 2026-10-08 | Antigravity | 扩展字幕候选路径、健全异常下 DAL FAILED 状态回写与 JSON 结构化错误报告输出 |
+| 1.2.0 | 2026-10-08 | Antigravity | 接入火山引擎豆包语音 2.0 (Doubao Voice) 沉稳男声与克制低调转场音效配置 |
 """
 import argparse
 import json

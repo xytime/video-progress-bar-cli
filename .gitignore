@@ -105,6 +105,8 @@ wechat_state.json
 !tests/fixtures/media/caption_speech.wav
 !tests/fixtures/vtt/*.vtt
 !assets/audio/sfx/cinema_hit_60hz_subbass.wav
+!assets/audio/sfx/subtle_tape_swish.wav
+!assets/audio/sfx/gentle_warm_thud.wav
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/

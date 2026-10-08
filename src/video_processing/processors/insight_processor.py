@@ -7,6 +7,7 @@
 | 1.0.0 | 2026-10-06 | Codex | 四维增量、音画校验、输入绑定回执及失败回退 |
 | 2.0.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：InsightScriptV2 契约、100% 完整原片零裁切、全幅安全横栏(Y=265~555)、0.6s Dip to Black + 60Hz Hit 母带转场与三级收据系统 |
 | 2.1.0 | 2026-10-08 | Antigravity | 绑定官方品牌图腾微标、受控真实二维码、Slogan与思辨投票选项渲染，增强三级收据深层校验 |
+| 2.2.0 | 2026-10-08 | Antigravity | 接入火山引擎豆包语音 2.0 (Doubao Voice) 沉稳男声，并将转场音效升级为克制高级的 subtle_tape_swish，彻底消除炫耀感 |
 """
 import argparse
 import hashlib
@@ -102,7 +103,12 @@ def valid_enrichment(source: Path, script_path: Path, output: Path) -> bool:
 
 class InsightProcessor:
     def __init__(self, tts=None, runner=None):
-        self.tts = tts or TTSEngine(TTSProvider.EDGE)
+        if tts is not None:
+            self.tts = tts
+        else:
+            has_doubao = bool(getattr(settings, "doubao_tts_api_key", None) or getattr(settings, "volc_speech_api_key", None))
+            use_doubao = getattr(settings, "tts_provider", "doubao").lower() == "doubao" and has_doubao
+            self.tts = TTSEngine(TTSProvider.DOUBAO if use_doubao else TTSProvider.EDGE)
         self.runner = runner or subprocess.run
 
     @staticmethod
@@ -437,12 +443,19 @@ class InsightProcessor:
                 lengths = []
 
                 # 生成片头与片尾 TTS 配音及音视频片段 (44.1kHz)
+                tts_prov = getattr(self.tts, "provider", None)
+                is_doubao = tts_prov == TTSProvider.DOUBAO or tts_prov == "doubao"
+                active_voice = (
+                    getattr(settings, "doubao_tts_speaker", "zh_male_m191_uranus_bigtts")
+                    if is_doubao
+                    else settings.insight_default_voice
+                )
                 for index, (text, card, is_in) in enumerate([
                     (hook_narration, intro_card, True),
                     (outro_narration, outro_card, False),
                 ]):
                     audio = work / f"voice{index}.mp3"
-                    self.tts.generate_audio(text, audio, voice=settings.insight_default_voice)
+                    self.tts.generate_audio(text, audio, voice=active_voice)
                     seg_len = self.bookend(card, audio, segments[index * 2], is_intro=is_in)
                     lengths.append(seg_len)
 
@@ -498,22 +511,31 @@ class InsightProcessor:
                 self.run([*inputs, "-filter_complex", ";".join(filters), "-map", last_v, "-map", "[a]",
                           "-t", str(core_duration), *self.codecs(), str(segments[1])])
 
-                # 缝合三大段落并混流 60Hz 空间重音音效
+                # 缝合三大段落并混流沉稳克制转场过渡音效
                 assembled = work / "assembled.mp4"
                 t_intro = lengths[0]
                 t_main = core_duration
                 t_outro = lengths[1]
                 expected = t_intro + t_main + t_outro
 
-                sfx_path = Path(__file__).resolve().parents[3] / "assets/audio/sfx/cinema_hit_60hz_subbass.wav"
-                if sfx_path.is_file():
-                    d1 = int(round(max(0.0, t_intro - 0.3) * 1000))
-                    d2 = int(round(max(0.0, t_intro + t_main - 0.3) * 1000))
+                sfx_name = str(getattr(settings, "transition_sfx", "subtle_tape_swish")).lower()
+                sfx_vol = float(getattr(settings, "transition_sfx_volume", 0.22))
+                root_sfx = Path(__file__).resolve().parents[3] / "assets/audio/sfx"
+                sfx_file_map = {
+                    "subtle_tape_swish": root_sfx / "subtle_tape_swish.wav",
+                    "gentle_warm_thud": root_sfx / "gentle_warm_thud.wav",
+                    "cinema_hit_60hz": root_sfx / "cinema_hit_60hz_subbass.wav",
+                }
+                sfx_path = sfx_file_map.get(sfx_name)
+
+                if sfx_name != "none" and sfx_path and sfx_path.is_file():
+                    d1 = int(round(max(0.0, t_intro - 0.25) * 1000))
+                    d2 = int(round(max(0.0, t_intro + t_main - 0.25) * 1000))
                     concat_filter = (
                         "[0:v]setsar=1[v0];[1:v]setsar=1[v1];[2:v]setsar=1[v2];"
                         "[v0][0:a][v1][1:a][v2][2:a]concat=n=3:v=1:a=1[cv][ca];"
-                        f"[3:a]adelay={d1}|{d1},aresample=44100,volume=0.9[h1];"
-                        f"[4:a]adelay={d2}|{d2},aresample=44100,volume=0.9[h2];"
+                        f"[3:a]adelay={d1}|{d1},aresample=44100,volume={sfx_vol}[h1];"
+                        f"[4:a]adelay={d2}|{d2},aresample=44100,volume={sfx_vol}[h2];"
                         "[ca][h1][h2]amix=inputs=3:duration=first:dropout_transition=0:normalize=0[aout]"
                     )
                     self.run([
@@ -550,7 +572,9 @@ class InsightProcessor:
                     "source_sha256": source_hash,
                     "script_sha256": script_hash,
                     "output_sha256": output_hash,
-                    "voice": settings.insight_default_voice,
+                    "voice": active_voice,
+                    "tts_provider": getattr(getattr(self.tts, "provider", None), "value", str(getattr(self.tts, "provider", "custom"))),
+                    "transition_sfx": sfx_name,
                     "duration": expected,
                     "schema_version": "2.0.0" if is_v2 else "1.0.0",
                     "level1_manifest": {
@@ -567,7 +591,7 @@ class InsightProcessor:
                         "duration": expected,
                         "sample_rate": 44100,
                         "validate_media_passed": True,
-                    },
+                    }
                 }
 
                 receipt = work / "receipt.json"
