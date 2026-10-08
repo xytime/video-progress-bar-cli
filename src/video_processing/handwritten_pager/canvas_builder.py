@@ -14,6 +14,8 @@ Constructs:
 | 1.0.0 | 2026-10-08 | Antigravity | Initial implementation of canvas builder and typography layout |
 | 1.1.0 | 2026-10-08 | Antigravity | Fix missing glyph box (tofu) in study notes card header by using universal geometric bullet ◆ |
 | 1.2.0 | 2026-10-08 | Antigravity | Upgrade to hand-drawn bullet journal layout: calligraphy, brand seal, vibrant accolades, tightened tracking, +76px non-overlapping translation, and contextual doodles |
+| 1.3.0 | 2026-10-08 | Antigravity | Refine Cosmic Eye brand seal with 24K gold hairline bezel, cyan accent, and paper drop shadow based on remix brand standards |
+| 1.3.1 | 2026-10-08 | Antigravity | Crop outer polar tick margins in brand seal to eliminate edge artifacts and enhance Cosmic Eye prominence |
 """
 
 import math
@@ -21,7 +23,7 @@ import random
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .contracts import HandwrittenPagerConfig, LyricLine, LyricWord
 
@@ -82,7 +84,12 @@ class CanvasBuilder:
         root = Path(__file__).resolve().parent.parent.parent.parent
         logo_path = root / "assets/brand/01_logos/concept_a.png"
         if logo_path.exists():
-            self.logo_raw = Image.open(logo_path).convert("RGBA")
+            raw_im = Image.open(logo_path).convert("RGBA")
+            # Cleanly crop the 6.25% outer polar tick margins (eliminates edge diamond dots at border)
+            # so the Cosmic Eye totem fills 75-80% of the badge with crisp iconic prominence
+            w, h = raw_im.size
+            crop_box = (int(w * 0.0625), int(h * 0.0625), int(w * 0.9375), int(h * 0.9375))
+            self.logo_raw = raw_im.crop(crop_box)
         else:
             self.logo_raw = Image.new("RGBA", (100, 100), (40, 60, 90, 255))
 
@@ -169,37 +176,66 @@ class CanvasBuilder:
             jitter_line((x1, y1), (x0, y1))
             jitter_line((x0, y1), (x0, y0))
 
+    def draw_cosmic_eye_brand_seal(
+        self,
+        canvas: Image.Image,
+        center_xy: Tuple[float, float],
+        badge_size: int = 52,
+        corner_ratio: float = 0.20,
+    ) -> None:
+        """Draws the refined Cosmic Eye brand seal with metallic 24K gold hairline bezel and paper shadow.
+
+        Inherits the iconic squircle geometry and colors from the deep insight / remix sessions,
+        elevating brand recognition without crude or overly complex decorations.
+        """
+        cx, cy = center_xy
+        x0 = int(cx - badge_size // 2)
+        y0 = int(cy - badge_size // 2)
+
+        # 1. Soft paper contact shadow
+        pad = 6
+        sh_w, sh_h = badge_size + pad * 2, badge_size + pad * 2
+        sh_img = Image.new("RGBA", (sh_w, sh_h), (0, 0, 0, 0))
+        cr = int(badge_size * corner_ratio)
+        ImageDraw.Draw(sh_img).rounded_rectangle(
+            [pad, pad + 2, pad + badge_size, pad + badge_size + 2],
+            radius=cr + 1,
+            fill=(0, 0, 0, 38),
+        )
+        sh_blurred = sh_img.filter(ImageFilter.GaussianBlur(3))
+        canvas.paste(sh_blurred, (x0 - pad, y0 - pad), sh_blurred)
+
+        # 2. 4x supersampled crisp badge rendering
+        scale = 4
+        bs = badge_size * scale
+        logo_big = self.logo_raw.resize((bs, bs), Image.Resampling.LANCZOS)
+
+        mask = Image.new("L", (bs, bs), 0)
+        m_draw = ImageDraw.Draw(mask)
+        m_cr = int(bs * corner_ratio)
+        m_draw.rounded_rectangle([0, 0, bs, bs], radius=m_cr, fill=255)
+
+        badge = Image.new("RGBA", (bs, bs), (0, 0, 0, 0))
+        badge.paste(logo_big, (0, 0), mask)
+
+        # 3. Precision metallic gold outer bezel & subtle cyan inner accent
+        b_draw = ImageDraw.Draw(badge)
+        b_draw.rounded_rectangle([2, 2, bs - 3, bs - 3], radius=m_cr - 2, outline=(243, 186, 47, 240), width=6)
+        b_draw.rounded_rectangle([8, 8, bs - 9, bs - 9], radius=m_cr - 6, outline=(0, 240, 255, 120), width=2)
+
+        badge_final = badge.resize((badge_size, badge_size), Image.Resampling.LANCZOS)
+        canvas.paste(badge_final, (x0, y0), badge_final)
+
     def draw_handdrawn_circle_seal(
         self,
         canvas: Image.Image,
         center_xy: Tuple[float, float],
-        radius: float,
+        radius: float = 26.0,
         logo_size: int = 42,
     ) -> None:
-        """Draws a hand-sketched circular seal with the Cosmic Eye logo in center."""
-        cx, cy = center_xy
-        draw = ImageDraw.Draw(canvas)
-        for r_offset, rough in [(0, 1.2), (3, 1.0)]:
-            r = radius + r_offset
-            pts = []
-            num_pts = 36
-            for i in range(num_pts + 1):
-                angle = 2 * math.pi * (i / num_pts)
-                jr = (random.random() - 0.5) * rough
-                px = cx + (r + jr) * math.cos(angle)
-                py = cy + (r + jr) * math.sin(angle)
-                pts.append((px, py))
-            for i in range(len(pts) - 1):
-                draw.line([pts[i], pts[i+1]], fill=(225, 145, 35, 230), width=2)
-
-        l_resized = self.logo_raw.resize((logo_size, logo_size), Image.Resampling.LANCZOS)
-        mask = Image.new("L", (logo_size, logo_size), 0)
-        m_draw = ImageDraw.Draw(mask)
-        m_draw.ellipse([0, 0, logo_size, logo_size], fill=255)
-
-        out_logo = Image.new("RGBA", (logo_size, logo_size), (0, 0, 0, 0))
-        out_logo.paste(l_resized, (0, 0), mask)
-        canvas.paste(out_logo, (int(cx - logo_size // 2), int(cy - logo_size // 2)), out_logo)
+        """Draws the Cosmic Eye brand seal (backwards compatible alias to draw_cosmic_eye_brand_seal)."""
+        badge_size = max(int(radius * 2), logo_size, 52)
+        self.draw_cosmic_eye_brand_seal(canvas, center_xy, badge_size=badge_size)
 
     def build_canvas(
         self,
@@ -233,8 +269,8 @@ class CanvasBuilder:
             draw.line([(110, ry), (1020, ry)], fill=(220, 230, 242, 160), width=1)
 
         # 4. Top Branding: Hand-drawn Bullet Journal Masthead (y=50..120)
-        self.draw_handdrawn_circle_seal(canvas, (175, 82), radius=26, logo_size=42)
-        draw.text((215, 66), "六维时空号", font=self.font_zh_tian_32, fill=(30, 42, 60))
+        self.draw_cosmic_eye_brand_seal(canvas, (175, 82), badge_size=52)
+        draw.text((214, 66), "六维时空号", font=self.font_zh_tian_32, fill=(30, 42, 60))
         draw.text((375, 68), "｜", font=self.font_sym_hiragino_26, fill=(190, 175, 150))
         self.draw_mixed_text(
             draw, (405, 72), "“不同的视角，看见更大的世界。”", self.font_zh_tian_23, self.font_sym_hiragino_21, fill=(195, 125, 30)

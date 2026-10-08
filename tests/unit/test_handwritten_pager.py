@@ -5,6 +5,8 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-08 | Antigravity | Comprehensive test suite for physics, typography, covers, and copy |
 | 1.1.0 | 2026-10-08 | Antigravity | Add tests for new default config, tofu-free glyphs, and PCHIP physics trajectory |
+| 1.2.0 | 2026-10-08 | Antigravity | Add tests for refined Cosmic Eye brand seal and persistent running header across all pages |
+| 1.3.0 | 2026-10-08 | Antigravity | Add assertions for Page 1 act capsule, full margin line span, and collision-free vertical clearance |
 """
 
 import math
@@ -221,4 +223,86 @@ def test_cli_handwritten_pager(tmp_path, sample_lyrics, monkeypatch):
     res_help = runner.invoke(handwritten_pager, ["--help"])
     assert res_help.exit_code == 0
     assert "Generate high-resolution handwritten notebook" in res_help.output
+
+
+def test_cosmic_eye_brand_seal():
+    """Verifies that refined Cosmic Eye brand seal and backward-compatible alias render cleanly."""
+    builder = CanvasBuilder()
+    canvas = Image.new("RGBA", (400, 400), (254, 251, 246, 255))
+
+    # Test draw_cosmic_eye_brand_seal
+    builder.draw_cosmic_eye_brand_seal(canvas, (100, 100), badge_size=52)
+
+    # Test draw_handdrawn_circle_seal compatibility alias
+    builder.draw_handdrawn_circle_seal(canvas, (250, 100), radius=26, logo_size=42)
+
+    # Ensure seal areas are rendered with non-background pixels
+    seal_pixel = canvas.getpixel((100, 100))
+    # Brand logo center is dark obsidian/navy or quantum cyan
+    assert seal_pixel[3] == 255
+    assert seal_pixel != (254, 251, 246, 255)
+
+
+def test_split_chapter_title():
+    """Verifies splitting of chapter titles into act tag and theme."""
+    from video_processing.handwritten_pager.daylight_pages import split_chapter_title
+
+    act, theme = split_chapter_title("【第二幕 · 暗影初临】 Pre-Chorus & Chorus 宿命爱恨")
+    assert act == "【第二幕 · 暗影初临】"
+    assert theme == "Pre-Chorus & Chorus 宿命爱恨"
+
+    # Fallback without brackets
+    act_raw, theme_raw = split_chapter_title("No Brackets Chapter")
+    assert act_raw == "No Brackets Chapter"
+    assert theme_raw == ""
+
+
+def test_daylight_multipage_header_persistence():
+    """Verifies that all 6 pages retain complete song identity and proper vertical layout."""
+    from video_processing.handwritten_pager.daylight_pages import (
+        get_daylight_pages_data,
+        render_daylight_page_canvas,
+    )
+
+    builder = CanvasBuilder()
+    pages_data = get_daylight_pages_data()
+    assert len(pages_data) == 6
+
+    for p_data in pages_data:
+        p_idx = p_data["page_idx"]
+        canvas, lines = render_daylight_page_canvas(p_data, builder)
+
+        # 1. Canvas dimensions
+        assert canvas.size == (1080, 1920)
+        assert canvas.mode == "RGBA"
+
+        # 2. Measured lyric lines
+        assert len(lines) == len(p_data["lyrics"])
+        assert len(lines) in (6, 7)
+
+        # 3. First line vertical layout verification
+        first_y = lines[0].y_en
+        if p_data.get("is_cover_page"):
+            # Page 1: Starts below full accolade washi tape box
+            assert first_y >= 400.0, f"Page {p_idx} first line {first_y} too high for cover"
+        else:
+            # Pages 2..6: Persistent running header preserves Daylight + 《白昼暗影》 + David Kushner
+            # and leaves ample breathing room for lyrics
+            assert 250.0 <= first_y <= 280.0, f"Page {p_idx} first line {first_y} out of bounds"
+
+        # 4. Vertical spacing between lyrics and study notes
+        last_line = lines[-1]
+        last_y_zh = last_line.y_zh
+        assert last_y_zh < 1380.0, f"Page {p_idx} last line {last_y_zh} collides with study card at 1395"
+
+        # 5. Song & Act chapter identity verification on every page
+        from video_processing.handwritten_pager.daylight_pages import split_chapter_title
+        act, theme = split_chapter_title(p_data["chapter_title"])
+        assert act.startswith("【第") and act.endswith("】"), f"Page {p_idx} missing standard act capsule: {act}"
+        assert len(theme) > 0, f"Page {p_idx} missing theme subtitle: {theme}"
+
+        # 6. Verify left red margin line extends to upper notebook (y=60)
+        margin_pixel = canvas.getpixel((130, 60))
+        assert margin_pixel[0] > 180 and margin_pixel[1] < 120, f"Margin line missing at y=60: {margin_pixel}"
+
 

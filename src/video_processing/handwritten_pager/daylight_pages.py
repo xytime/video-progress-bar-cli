@@ -4,6 +4,8 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-08 | Antigravity | Full 6-page bilingual journal layout, word timestamps, and study cards for Daylight |
+| 1.1.0 | 2026-10-08 | Antigravity | Upgrade to refined Cosmic Eye brand seal and persistent song identity running header across all pages |
+| 1.2.0 | 2026-10-08 | Antigravity | Harmonize Page 1 header with act capsule, resolve subtitle/accolade box collision, and extend margin line |
 """
 
 from __future__ import annotations
@@ -661,6 +663,14 @@ def get_daylight_pages_data() -> List[Dict[str, Any]]:
     ]
 
 
+def split_chapter_title(title: str) -> Tuple[str, str]:
+    """Splits chapter title into act tag and theme text."""
+    if "】" in title:
+        parts = title.split("】", 1)
+        return parts[0] + "】", parts[1].strip()
+    return title, ""
+
+
 def render_daylight_page_canvas(
     page_data: Dict[str, Any],
     builder: CanvasBuilder,
@@ -678,18 +688,21 @@ def render_daylight_page_canvas(
     draw = ImageDraw.Draw(canvas)
 
     # 2. Left margin line & binder holes
-    draw.line([(130, 80), (130, 1840)], fill=(215, 95, 95, 160), width=2)
+    draw.line([(130, 40), (130, 1880)], fill=(215, 95, 95, 160), width=2)
     for hy in [250, 600, 960, 1320, 1680]:
         draw.ellipse([45, hy - 14, 75, hy + 14], fill=(225, 220, 212, 255), outline=(190, 185, 178, 255), width=2)
 
+    is_cover = page_data.get("is_cover_page", False)
+    chap_act, chap_theme = split_chapter_title(page_data.get("chapter_title", ""))
+
     # 3. Horizontal ruled lines
-    first_ry = 410 if page_data.get("is_cover_page") else 220
+    first_ry = 410 if is_cover else 260
     for ry in range(first_ry, 1420, 64):
         draw.line([(110, ry), (1020, ry)], fill=(220, 230, 242, 160), width=1)
 
-    # 4. Top Masthead (Consistent across all pages)
-    builder.draw_handdrawn_circle_seal(canvas, (175, 82), radius=26, logo_size=42)
-    draw.text((215, 66), "六维时空号", font=builder.font_zh_tian_32, fill=(30, 42, 60))
+    # 4. Top Masthead (Consistent brand identity across all pages)
+    builder.draw_cosmic_eye_brand_seal(canvas, (175, 82), badge_size=52)
+    draw.text((214, 66), "六维时空号", font=builder.font_zh_tian_32, fill=(30, 42, 60))
     draw.text((375, 68), "｜", font=builder.font_sym_hiragino_26, fill=(190, 175, 150))
     builder.draw_mixed_text(
         draw, (405, 72), "“不同的视角，看见更大的世界。”", builder.font_zh_tian_23, builder.font_sym_hiragino_21, fill=(195, 125, 30)
@@ -699,28 +712,31 @@ def render_daylight_page_canvas(
     for dx in range(150, 1000, 16):
         draw.line([(dx, 120), (dx + 8, 120)], fill=(215, 205, 185, 180), width=1)
 
-    is_cover = page_data.get("is_cover_page", False)
-
     if is_cover:
         # Title: Daylight (Dark Gothic Midnight + Ember Crimson)
         t1 = "Daylight"
-        draw.text((150, 134), t1, font=builder.font_en_bradley_56, fill=(145, 35, 35))
+        draw.text((150, 132), t1, font=builder.font_en_bradley_56, fill=(145, 35, 35))
         w_t1 = draw.textlength(t1, font=builder.font_en_bradley_56)
 
         zh_title_text = "《白昼暗影》"
         zh_w = builder.get_mixed_text_width(draw, zh_title_text, builder.font_zh_tian_36, builder.font_sym_hiragino_32)
-        zh_x = 150 + w_t1 + 30
-        draw.rounded_rectangle([zh_x - 8, 144, zh_x + zh_w + 8, 188], radius=8, fill=(255, 218, 90, 170))
-        builder.draw_mixed_text(draw, (zh_x, 140), zh_title_text, builder.font_zh_tian_36, builder.font_sym_hiragino_32, fill=(30, 38, 48))
+        zh_x = 150 + w_t1 + 22
+        draw.rounded_rectangle([zh_x - 6, 142, zh_x + zh_w + 6, 184], radius=6, fill=(255, 218, 90, 160))
+        builder.draw_mixed_text(draw, (zh_x, 138), zh_title_text, builder.font_zh_tian_36, builder.font_sym_hiragino_32, fill=(30, 38, 48))
 
-        underline_end = int(150 + w_t1 + 10)
-        draw.line([(150, 204), (underline_end, 204)], fill=(145, 35, 35, 220), width=3)
+        # Chapter Act capsule on Page 1 (Unified song + chapter visual identity across all 6 pages)
+        ch_badge_x = int(zh_x + zh_w + 20)
+        ch_bw = builder.get_mixed_text_width(draw, chap_act, builder.font_zh_tian_23, builder.font_sym_hiragino_21)
+        builder.draw_handdrawn_rect(draw, (ch_badge_x, 140, ch_badge_x + ch_bw + 28, 184), fill=(255, 245, 230, 240), outline=(220, 150, 70, 220), width=2, roughness=1.0)
+        builder.draw_mixed_text(draw, (ch_badge_x + 14, 146), chap_act, builder.font_zh_tian_23, builder.font_sym_hiragino_21, fill=(140, 45, 30))
 
-        artist_desc = "原唱：David Kushner (2023)  ·  全球现象级暗黑福音诗意神作  ·  全曲双语伴读"
-        builder.draw_mixed_text(draw, (150, 218), artist_desc, builder.font_zh_tian_22, builder.font_sym_hiragino_21, fill=(90, 100, 115))
+        draw.line([(150, 198), (int(150 + w_t1 + 10), 198)], fill=(145, 35, 35, 220), width=2)
 
-        # Accolades Badges
-        builder.draw_handdrawn_rect(draw, (145, 248, 1005, 376), fill=(255, 250, 240, 245), outline=(225, 175, 95, 240), width=2, roughness=1.4)
+        artist_desc = f"原唱：David Kushner (2023)  ·  {chap_theme}  ·  全曲双语伴读"
+        builder.draw_mixed_text(draw, (150, 210), artist_desc, builder.font_zh_tian_22, builder.font_sym_hiragino_21, fill=(90, 100, 115))
+
+        # Accolades Badges (y=252..376, providing ample vertical breathing room with no subtitle collision)
+        builder.draw_handdrawn_rect(draw, (145, 252, 1005, 376), fill=(255, 250, 240, 245), outline=(225, 175, 95, 240), width=2, roughness=1.2)
         badges = [
             ("★ 全球流媒体超 18 亿播放", (245, 130, 15), (255, 255, 255), (210, 85, 0)),
             ("◆ 现象级低音叙事殿堂神作", (20, 120, 210), (255, 255, 255), (10, 90, 170)),
@@ -728,13 +744,10 @@ def render_daylight_page_canvas(
         ]
         box_x0 = 145
         box_w = 860
-        by = 264
+        by = 266
         b_widths = []
         for b_text, _, _, _ in badges:
-            w = 0
-            for ch in b_text:
-                f = builder.font_zh_tian_22 if is_cjk(ch) else builder.font_sym_arial_21
-                w += draw.textlength(ch, font=f)
+            w = sum(draw.textlength(ch, font=builder.font_zh_tian_22 if is_cjk(ch) else builder.font_sym_arial_21) for ch in b_text)
             b_widths.append(w + 36)
         gap = (box_w - sum(b_widths)) / 4
         cur_bx = box_x0 + gap
@@ -751,27 +764,43 @@ def render_daylight_page_canvas(
         w_qh = builder.get_mixed_text_width(draw, quote_highlight, builder.font_zh_tian_22, builder.font_sym_arial_21)
         hl_x0 = 175 + w_qp
         hl_x1 = hl_x0 + w_qh
-        draw.rounded_rectangle([hl_x0 - 4, 327, hl_x1 + 4, 353], radius=6, fill=(255, 215, 130, 160))
-        builder.draw_mixed_text(draw, (175, 326), quote_prefix, builder.font_zh_tian_22, builder.font_sym_arial_21, fill=(100, 90, 80))
-        builder.draw_mixed_text(draw, (hl_x0, 326), quote_highlight, builder.font_zh_tian_22, builder.font_sym_arial_21, fill=(175, 45, 20))
-        builder.draw_mixed_text(draw, (hl_x1, 326), quote_suffix, builder.font_zh_tian_22, builder.font_sym_arial_21, fill=(100, 90, 80))
+        draw.rounded_rectangle([hl_x0 - 4, 329, hl_x1 + 4, 355], radius=6, fill=(255, 215, 130, 160))
+        builder.draw_mixed_text(draw, (175, 328), quote_prefix, builder.font_zh_tian_22, builder.font_sym_arial_21, fill=(100, 90, 80))
+        builder.draw_mixed_text(draw, (hl_x0, 328), quote_highlight, builder.font_zh_tian_22, builder.font_sym_arial_21, fill=(175, 45, 20))
+        builder.draw_mixed_text(draw, (hl_x1, 328), quote_suffix, builder.font_zh_tian_22, builder.font_sym_arial_21, fill=(100, 90, 80))
 
         # Stanza positions for Page 1
         stanza_y = [405, 565, 725, 885, 1045, 1205]
     else:
-        # Chapter header for Pages 2..6
-        chap_title = page_data["chapter_title"]
-        ch_w = builder.get_mixed_text_width(draw, chap_title, builder.font_zh_tian_28, builder.font_sym_hiragino_26)
-        builder.draw_handdrawn_rect(draw, (145, 136, 145 + ch_w + 40, 184), fill=(255, 245, 230, 240), outline=(220, 150, 70, 230), width=2, roughness=1.2)
-        builder.draw_mixed_text(draw, (165, 142), chap_title, builder.font_zh_tian_28, builder.font_sym_hiragino_26, fill=(135, 40, 30))
+        # Running Song Header for Continuation Pages (Pages 2..6)
+        # Guarantees full song identity (Daylight + 《白昼暗影》 + David Kushner + Chapter) is always visible
+        t1 = "Daylight"
+        draw.text((150, 132), t1, font=builder.font_en_bradley_56, fill=(145, 35, 35))
+        w_t1 = draw.textlength(t1, font=builder.font_en_bradley_56)
 
-        sub_tag = "全曲官方双语精读伴唱  ·  六维时空精修译文"
-        builder.draw_mixed_text(draw, (150, 196), sub_tag, builder.font_zh_tian_22, builder.font_sym_hiragino_21, fill=(120, 130, 145))
+        zh_title_text = "《白昼暗影》"
+        zh_w = builder.get_mixed_text_width(draw, zh_title_text, builder.font_zh_tian_36, builder.font_sym_hiragino_32)
+        zh_x = 150 + w_t1 + 22
+        draw.rounded_rectangle([zh_x - 6, 142, zh_x + zh_w + 6, 184], radius=6, fill=(255, 218, 90, 160))
+        builder.draw_mixed_text(draw, (zh_x, 138), zh_title_text, builder.font_zh_tian_36, builder.font_sym_hiragino_32, fill=(30, 38, 48))
 
-        # Stanza positions for Pages 2..6
+        # Chapter Act capsule
+        ch_badge_x = int(zh_x + zh_w + 20)
+        ch_bw = builder.get_mixed_text_width(draw, chap_act, builder.font_zh_tian_23, builder.font_sym_hiragino_21)
+        builder.draw_handdrawn_rect(draw, (ch_badge_x, 140, ch_badge_x + ch_bw + 28, 184), fill=(255, 245, 230, 240), outline=(220, 150, 70, 220), width=2, roughness=1.0)
+        builder.draw_mixed_text(draw, (ch_badge_x + 14, 146), chap_act, builder.font_zh_tian_23, builder.font_sym_hiragino_21, fill=(140, 45, 30))
+
+        draw.line([(150, 198), (int(150 + w_t1 + 10), 198)], fill=(145, 35, 35, 220), width=2)
+
+        sub_tag = f"原唱：David Kushner (2023)  ·  {chap_theme}  ·  双语伴唱"
+        builder.draw_mixed_text(draw, (150, 210), sub_tag, builder.font_zh_tian_22, builder.font_sym_hiragino_21, fill=(90, 100, 115))
+        for dx in range(150, 1000, 16):
+            draw.line([(dx, 240), (dx + 8, 240)], fill=(225, 215, 195, 160), width=1)
+
+        # Stanza positions for Pages 2..6: ample breathing room for lyrics & doodles
         n_lines = len(page_data["lyrics"])
-        pitch = 152 if n_lines >= 7 else 162
-        start_y = 230
+        pitch = 154 if n_lines >= 7 else 170
+        start_y = 260 if n_lines >= 7 else 265
         stanza_y = [start_y + i * pitch for i in range(n_lines)]
 
     # Draw Lyrics & Measure Word Coordinates
@@ -863,7 +892,7 @@ def render_daylight_page_canvas(
     # 5. Study Notes Card at bottom (y = 1395..1750)
     card_y0, card_y1 = 1395, 1750
     builder.draw_handdrawn_rect(draw, (145, card_y0, 1005, card_y1), fill=(255, 252, 245, 240), outline=(215, 200, 175, 230), width=2, roughness=1.5)
-    header_txt = f"◆ 重点表达手账解析 ({page_data['chapter_title'][:8]}...)"
+    header_txt = f"◆ 重点表达手账解析 ({chap_act})"
     hw = builder.get_mixed_text_width(draw, header_txt, builder.font_zh_tian_28, builder.font_sym_hiragino_26)
     draw.rounded_rectangle([170, card_y0 + 16, 170 + hw + 24, card_y0 + 58], radius=6, fill=(255, 220, 110, 180))
     builder.draw_mixed_text(draw, (182, card_y0 + 22), header_txt, builder.font_zh_tian_28, builder.font_sym_hiragino_26, fill=(40, 48, 60))
