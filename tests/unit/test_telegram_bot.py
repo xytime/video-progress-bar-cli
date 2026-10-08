@@ -15,6 +15,7 @@
 | 1.9.0 | 2026-08-29 | Codex | 覆盖未消费 lease 撤销按钮、管理员撤销回调和分层启动回执。 |
 | 1.10.0 | 2026-09-09 | Codex | Highlight 源视频列表保留安全可点击的 YouTube 原视频链接。 |
 | 1.11.0 | 2026-09-27 | Antigravity | 覆盖 /last_login 命令菜单可见性与状态查询回复格式。 |
+| 1.12.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：覆盖 /masterpiece 远程母带渲染指令与菜单可见性测试。 |
 """
 import logging
 import re
@@ -33,6 +34,7 @@ from bot.telegram_bot import (
     _YOUTUBE_RE,
     _highlight_source_text,
     cmd_status,
+    cmd_masterpiece,
     handle_youtube_url,
     parse_trim_params,
 )
@@ -458,6 +460,88 @@ class TestTelegramBotRouting(unittest.IsolatedAsyncioTestCase):
         query.edit_message_text.assert_awaited_once()
         text = query.edit_message_text.call_args.args[0]
         self.assertIn("尚未渲染、上传或发布", text)
+
+    def test_bot_command_menu_includes_masterpiece(self):
+        self.assertIn("masterpiece", [command.command for command in _BOT_COMMANDS])
+
+    async def test_cmd_masterpiece_non_admin_ignored(self):
+        update = MagicMock()
+        update.effective_user.id = 99999
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = ["SfNypZIb0H4"]
+
+        with patch("bot.telegram_bot._check_admin", return_value=False):
+            await cmd_masterpiece(update, context)
+
+        update.message.reply_text.assert_not_called()
+
+    async def test_cmd_masterpiece_missing_args(self):
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = []
+
+        with patch("bot.telegram_bot._check_admin", return_value=True):
+            await cmd_masterpiece(update, context)
+
+        update.message.reply_text.assert_awaited_once()
+        text = update.message.reply_text.call_args.args[0]
+        self.assertIn("用法：/masterpiece", text)
+
+    async def test_cmd_masterpiece_success(self):
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = ["SfNypZIb0H4"]
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 0
+        mock_proc.communicate = AsyncMock(return_value=(
+            b'{"youtube_id": "SfNypZIb0H4", "status": "SUCCESS", "masterpiece_file": "output/masterpiece_SfNypZIb0H4.mp4", "render_seconds": 12.5, "media_parameters": {"duration_seconds": 207.9, "width": 1080, "height": 1920, "fps": "30/1", "audio_sample_rate": 44100}, "receipt_sha256": {"output_sha256": "abcdef1234567890abcdef1234567890"}}',
+            b"",
+        ))
+
+        with patch("bot.telegram_bot._check_admin", return_value=True), patch(
+            "asyncio.create_subprocess_exec", return_value=mock_proc
+        ) as mock_exec:
+            await cmd_masterpiece(update, context)
+
+        mock_exec.assert_called_once()
+        self.assertEqual(update.message.reply_text.await_count, 2)
+        initial_reply = update.message.reply_text.await_args_list[0].args[0]
+        self.assertIn("重大新闻二创母带任务已启动", initial_reply)
+        final_reply = update.message.reply_text.await_args_list[1].args[0]
+        self.assertIn("重大新闻高品质母带就绪", final_reply)
+        self.assertIn("207.9s", final_reply)
+        self.assertIn("44100Hz", final_reply)
+        self.assertIn("abcdef1234567890", final_reply)
+
+    async def test_cmd_masterpiece_failure(self):
+        update = MagicMock()
+        update.effective_user.id = 12345
+        update.message.reply_text = AsyncMock()
+        context = MagicMock()
+        context.args = ["SfNypZIb0H4"]
+
+        mock_proc = AsyncMock()
+        mock_proc.returncode = 1
+        mock_proc.communicate = AsyncMock(return_value=(
+            b"",
+            b"Error: VTT evidence token match ratio 50% < 80%",
+        ))
+
+        with patch("bot.telegram_bot._check_admin", return_value=True), patch(
+            "asyncio.create_subprocess_exec", return_value=mock_proc
+        ):
+            await cmd_masterpiece(update, context)
+
+        self.assertEqual(update.message.reply_text.await_count, 2)
+        final_reply = update.message.reply_text.await_args_list[1].args[0]
+        self.assertIn("母带生成失败", final_reply)
+        self.assertIn("VTT evidence", final_reply)
 
 
 if __name__ == "__main__":

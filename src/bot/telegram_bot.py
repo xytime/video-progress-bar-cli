@@ -47,6 +47,7 @@
 | 1.27.0  | 2026-09-27 | Antigravity                         | 新增 /last_login 与 /last-login 命令，支持手机端快速查询视频号登录态更新时间与有效剩余。 |
 | 1.27.1  | 2026-09-27 | Antigravity                         | 修复独立守护进程未将项目根目录加入 sys.path 导致预检报 ModuleNotFoundError 的问题。 |
 | 1.28.0  | 2026-09-28 | Antigravity                         | /last_login 改接结构化授权状态与会话锁，区分授权/验证/失败时间，以 22h settings 为准。 |
+| 1.29.0  | 2026-10-08 | Antigravity                         | 落实 RFC-2026-DEEP-CREATION-001：新增 /masterpiece 远程指令，支持重大新闻高品质二创母带一键调度。 |
 """
 from __future__ import annotations
 
@@ -129,6 +130,7 @@ _BOT_COMMANDS = [
     BotCommand("status", "3秒质检：异常/卡点/遗留"),
     BotCommand("queue", "查看当前队列"),
     BotCommand("run", "触发一次管线"),
+    BotCommand("masterpiece", "深度二创：3-5分钟重大新闻高品质母带"),
     BotCommand("wechat_login", "推送微信扫码登录"),
     BotCommand("last_login", "查询微信登录态更新时间与状态"),
     BotCommand("lease_jobs", "单任务发布授权（2小时）"),
@@ -1295,6 +1297,104 @@ async def cmd_process(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+async def cmd_masterpiece(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """/masterpiece <youtube_id|url> [force] — 触发重大新闻高品质二创母带渲染 (RFC-2026-DEEP-CREATION-001)"""
+    if not _check_admin(update):
+        return
+    args = ctx.args  # type: ignore
+    if not args:
+        await update.message.reply_text(  # type: ignore
+            fmt.fmt_error("用法：/masterpiece <youtube_id或URL> [force]\n例：/masterpiece SfNypZIb0H4"),
+            parse_mode="Markdown",
+        )
+        return
+
+    raw_input = args[0].strip()
+    match = re.search(r"([A-Za-z0-9_-]{11})", raw_input)
+    if not match:
+        await update.message.reply_text(fmt.fmt_error("请输入有效的 YouTube 视频 ID 或链接！"), parse_mode="Markdown")  # type: ignore
+        return
+    youtube_id = match.group(1)
+    force = len(args) > 1 and "force" in args[1].lower()
+
+    prj_root = str(Path(__file__).parent.parent.parent)
+    python_bin = sys.executable or str(Path(prj_root) / ".venv" / "bin" / "python")
+    script_path = str(Path(prj_root) / "scripts" / "run_masterpiece.py")
+
+    cmd = [python_bin, script_path, youtube_id, "--json"]
+    if force:
+        cmd.append("--force")
+
+    mode_label = "强制重新渲染" if force else "智能增量缓存/零裁切重用"
+    await update.message.reply_text(  # type: ignore
+        f"🎬 *重大新闻二创母带任务已启动*\n"
+        f"🆔 ID: `{youtube_id}`\n"
+        f"⚙️ 模式: `{mode_label}`\n"
+        f"_核验 VTT 引证门禁、安全横栏与母带装配中，耗时较长请稍候..._",
+        parse_mode="Markdown",
+    )
+
+    env = {**os.environ, "PYTHONPATH": "src"}
+    try:
+        p = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=prj_root,
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(p.communicate(), timeout=360)
+        out_str = stdout.decode(errors="ignore").strip()
+        err_str = stderr.decode(errors="ignore").strip()
+
+        if p.returncode == 0:
+            report: dict[str, Any] = {}
+            for line in out_str.splitlines():
+                line = line.strip()
+                if line.startswith("{") and line.endswith("}"):
+                    try:
+                        report = json.loads(line)
+                        break
+                    except Exception:
+                        pass
+            if not report:
+                try:
+                    report = json.loads(out_str)
+                except Exception:
+                    pass
+
+            params = report.get("media_parameters", {})
+            dur = params.get("duration_seconds", "未知")
+            res = f"{params.get('width', 1080)}x{params.get('height', 1920)}"
+            fps = params.get("fps", "30/1")
+            sr = params.get("audio_sample_rate", 44100)
+            render_s = report.get("render_seconds", 0)
+            receipt_sha = report.get("receipt_sha256", {}).get("output_sha256", "已生成")
+            masterpiece_path = report.get("masterpiece_file", f"output/masterpiece_{youtube_id}.mp4")
+
+            msg = (
+                f"🎉 *重大新闻高品质母带就绪！*\n"
+                f"🆔 ID：`{youtube_id}`\n"
+                f"⏱ 物理时长：`{dur}s`\n"
+                f"📐 画布规格：`{res} @ {fps}`\n"
+                f"🔊 音频规格：`{sr}Hz 双声道`\n"
+                f"⚡ 耗时：`{render_s}s`\n"
+                f"🧾 三级收据：`{receipt_sha[:16]}...`\n"
+                f"📁 文件：`{masterpiece_path}`"
+            )
+            await update.message.reply_text(msg, parse_mode="Markdown")  # type: ignore
+        else:
+            tail_err = err_str[-600:] if err_str else (out_str[-600:] if out_str else "未知错误")
+            await update.message.reply_text(  # type: ignore
+                f"❌ *母带生成失败 (exit {p.returncode})*\n🆔 ID: `{youtube_id}`\n\n```\n{tail_err}\n```",
+                parse_mode="Markdown",
+            )
+    except asyncio.TimeoutError:
+        await update.message.reply_text(f"❌ *母带任务超时 (360s)*\n🆔 ID: `{youtube_id}`", parse_mode="Markdown")  # type: ignore
+    except Exception as exc:  # noqa: BLE001
+        await update.message.reply_text(f"❌ *二创调度异常*: {exc}", parse_mode="Markdown")  # type: ignore
+
+
 async def cmd_run(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if not _check_admin(update):
         return
@@ -1748,6 +1848,7 @@ def main() -> None:
     app.add_handler(CommandHandler("whole", cmd_whole))
     app.add_handler(CommandHandler("slice", cmd_slice))
     app.add_handler(CommandHandler("highlight", cmd_highlight))
+    app.add_handler(CommandHandler("masterpiece", cmd_masterpiece))
     app.add_handler(CommandHandler("english_world", cmd_english_world))
     app.add_handler(CommandHandler("tts", cmd_tts))  # [Claude_Sonnet_4.6_Thinking_planning] 按需 TTS 配音命令
     app.add_handler(CallbackQueryHandler(handle_highlight_callback, pattern=r"^hl:"))

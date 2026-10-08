@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.67.1 | 2026-10-08 | Antigravity | 优化二创策划字幕源选择，优先透传原文字幕以供事实引证门禁核验 |
+| 3.67.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：二创自动降级状态回写 (ENRICHED/DEGRADED)、错误日志记录及 InsightScriptV2 审查兼容 |
 | 3.66.0 | 2026-10-06 | Codex | 平台明确受限不累计管理页 UI 熔断，不通知发布成功。 |
 | insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
 | 3.65.0 | 2026-10-05 | Codex | 下载身份验证与限流持久冷却，保留已验证阶段。 |
@@ -2290,10 +2292,12 @@ class PipelineManager:
             return ""
         if self._get_published_video_path(prefix) != self._OUT_DIR / f"{prefix}_insight.mp4":
             return ""
-        from .core.insight_script import InsightScript
-        return InsightScript.model_validate_json(
-            (self._OUT_DIR / f"{prefix}_insight.json").read_text(encoding="utf-8"),
-        ).review_text()
+        from .core.insight_script import InsightScript, InsightScriptV2
+        raw_script = (self._OUT_DIR / f"{prefix}_insight.json").read_text(encoding="utf-8")
+        try:
+            return InsightScriptV2.model_validate_json(raw_script).review_text()
+        except Exception:
+            return InsightScript.model_validate_json(raw_script).review_text()
 
     def _process_insight_enrichment(self, prefix: str, yid: str, title: str,
                                     subtitle: Path, slice_index: int = 0) -> bool:
@@ -2306,13 +2310,19 @@ class PipelineManager:
         plan_receipt = self._OUT_DIR / f"{prefix}_insight_plan.json"
         output = self._OUT_DIR / f"{prefix}_insight.mp4"
         if valid_enrichment(source, script, output):
+            if hasattr(self, "db") and self.db:
+                self.db.update_enrichment_status(yid, "ENRICHED", slice_index=slice_index)
             return True
         try:
-            from .core.insight_script import InsightScript
+            from .core.insight_script import InsightScript, InsightScriptV2
             script_valid = False
             if script.is_file():
                 try:
-                    InsightScript.model_validate_json(script.read_text(encoding="utf-8"))
+                    raw = script.read_text(encoding="utf-8")
+                    try:
+                        InsightScriptV2.model_validate_json(raw)
+                    except Exception:
+                        InsightScript.model_validate_json(raw)
                     script_valid = True
                     if plan_receipt.is_file():
                         plan = json.loads(plan_receipt.read_text(encoding="utf-8"))
@@ -2326,16 +2336,18 @@ class PipelineManager:
             env = _build_subprocess_env()
             env["PYTHONPATH"] = str(self._SRC_DIR)
             if not script_valid:
+                source_subs = self._source_subtitle_files(yid) if hasattr(self, "_source_subtitle_files") else []
+                sub_to_use = source_subs[0] if (source_subs and source_subs[0].is_file()) else subtitle
                 self._run_tracked([
                     self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts/copywriter.py"),
                     f"--youtube-id={prefix}", "--title", title, "--output-dir", str(self._OUT_DIR),
-                    "--insight-only", "--insight-source", str(source), "--insight-subtitle", str(subtitle),
+                    "--insight-only", "--insight-source", str(source), "--insight-subtitle", str(sub_to_use),
                 ], yid, slice_index=slice_index, capture_output=True,
                    cwd=str(self._PRJ_ROOT), env=env, timeout=180)
                 plan_temporary = plan_receipt.with_suffix(".pending.json")
                 plan_temporary.write_text(json.dumps({
                     "source_sha256": self._sha256_file(source),
-                    "subtitle_sha256": self._sha256_file(subtitle),
+                    "subtitle_sha256": self._sha256_file(sub_to_use),
                     "script_sha256": self._sha256_file(script),
                 }), encoding="utf-8")
                 plan_temporary.replace(plan_receipt)
@@ -2347,6 +2359,8 @@ class PipelineManager:
             if not valid_enrichment(source, script, output):
                 raise ValueError("增强成片回执或媒体校验未通过")
             logger.info("[InsightReady] %s 增强成片已验证", prefix)
+            if hasattr(self, "db") and self.db:
+                self.db.update_enrichment_status(yid, "ENRICHED", slice_index=slice_index)
             return True
         except InterruptedError:
             raise
@@ -2357,6 +2371,24 @@ class PipelineManager:
             except OSError:
                 logger.warning("[InsightFallback] 无法清理旧回执：%s", prefix)
             logger.warning("[InsightFallback] %s 回退普通成片：%s", prefix, type(exc).__name__)
+            if hasattr(self, "db") and self.db:
+                self.db.update_enrichment_status(yid, "DEGRADED", slice_index=slice_index)
+            try:
+                log_dir = self._OUT_DIR / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                with open(log_dir / "enrichment_error.log", "a", encoding="utf-8") as f:
+                    f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [{prefix}] {type(exc).__name__}: {exc}\n")
+            except Exception:
+                pass
+            if hasattr(self, "send_telegram_msg"):
+                try:
+                    self.send_telegram_msg(
+                        f"⚠️ <b>[InsightFallback]</b> 深度二创处理失败，已自动降级为常规双语成片发布\n"
+                        f"ID: <code>{html.escape(prefix)}</code>\n"
+                        f"原因: {type(exc).__name__}: {html.escape(str(exc)[:200])}"
+                    )
+                except Exception:
+                    pass
             return False
 
     def _process_interaction_overlay(self, prefix: str, yid: str, slice_index: int = 0) -> Optional[Path]:
