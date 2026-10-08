@@ -45,4 +45,4 @@
 
 指标目前支持绑定真实原生 ID 的后台快照导入，未实现自动抓取。分别记录每版公开后 24/72/168 小时的播放、点赞、评论、转发、收藏；缺失值保持 null，同一时点累计值更新而不相加。只有原生平台时间和接近目标年龄的数据才标为可比较；固定先 A 后 B 仍存在时效和受众重叠偏差。当前没有配对互动数据，不能宣称哪版效果更好。
 
-运行代码版本以生产 `main`、`origin/main` 和 `output/ready_publications_status.json` 的 `code_revision` 回读为准；上线命令及人工单条提示词分别见 `docs/guides/wallstreet-ab-operations.md`、`docs/guides/masterpiece-publish-prompt.md`。
+生产 `main` 与 `origin/main` 已采用并推送运行代码提交 `c77dbeda7e2ff23eab07babf9ee04f305f86e192`；新发布执行者 PID 33886 的 `output/ready_publications_status.json.git_revision` 精确回读该提交，阶段 IDLE，心跳约 2 秒。运行设置确认 `remote_planning_authorized=false`。后续文档修订不代表执行代码再次变化；运行代码版本以 `git_revision` 为准。上线命令及人工单条提示词分别见 `docs/guides/wallstreet-ab-operations.md`、`docs/guides/masterpiece-publish-prompt.md`。
