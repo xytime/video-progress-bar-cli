@@ -9,6 +9,7 @@
 | Version | Date       | Author      | Description |
 | ------- | ---------- | ----------- | ----------- |
 | 1.0.0   | 2026-10-08 | Antigravity | 初始创建，支持火山引擎双向流式 TTS 2.0 与 44.1kHz 母带音频输出 |
+| 1.0.1   | 2026-10-08 | Antigravity | 支持 speech_rate 语速调节，默认 12（约 1.12x 加快）提升传达干脆度 |
 """
 
 import asyncio
@@ -52,12 +53,14 @@ class DoubaoTTSClient:
         resource_id: Optional[str] = None,
         default_speaker: Optional[str] = None,
         sample_rate: int = 44100,
+        speech_rate: Optional[int] = None,
     ):
         self.api_key = api_key or getattr(settings, "doubao_tts_api_key", None) or getattr(settings, "volc_speech_api_key", None)
         self.endpoint = endpoint or getattr(settings, "doubao_tts_endpoint", "wss://openspeech.bytedance.com/api/v3/tts/bidirection")
         self.resource_id = resource_id or getattr(settings, "doubao_tts_resource_id", "seed-tts-2.0")
         self.default_speaker = default_speaker or getattr(settings, "doubao_tts_speaker", "zh_male_m191_uranus_bigtts")
         self.sample_rate = sample_rate
+        self.speech_rate = speech_rate if speech_rate is not None else getattr(settings, "doubao_tts_speech_rate", 12)
 
     async def async_synthesize(
         self,
@@ -65,6 +68,7 @@ class DoubaoTTSClient:
         output_path: Path,
         speaker: Optional[str] = None,
         sample_rate: Optional[int] = None,
+        speech_rate: Optional[int] = None,
         audio_format: str = "mp3",
     ) -> Path:
         """异步合成单条文本为音频文件。"""
@@ -106,12 +110,14 @@ class DoubaoTTSClient:
                     await wait_for_event(websocket, MsgType.FullServerResponse, EventType.ConnectionStarted)
 
                     session_id = str(uuid.uuid4())
+                    rate = speech_rate if speech_rate is not None else self.speech_rate
                     base_request = {
                         "req_params": {
                             "speaker": spk,
                             "audio_params": {
                                 "format": audio_format,
                                 "sample_rate": sr,
+                                "speech_rate": rate,
                             },
                         }
                     }
@@ -170,6 +176,7 @@ class DoubaoTTSClient:
         output_path: Path,
         speaker: Optional[str] = None,
         sample_rate: Optional[int] = None,
+        speech_rate: Optional[int] = None,
         audio_format: str = "mp3",
     ) -> Path:
         """同步接口便捷包装。"""
@@ -183,6 +190,7 @@ class DoubaoTTSClient:
             output_path=output_path,
             speaker=speaker,
             sample_rate=sample_rate,
+            speech_rate=speech_rate,
             audio_format=audio_format,
         )
 

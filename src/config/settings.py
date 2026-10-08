@@ -427,6 +427,7 @@ class Settings(BaseSettings):
     doubao_tts_endpoint: str = "wss://openspeech.bytedance.com/api/v3/tts/bidirection"
     doubao_tts_resource_id: str = "seed-tts-2.0"
     doubao_tts_speaker: str = "zh_male_m191_uranus_bigtts"  # 云舟 2.0 沉稳男声
+    doubao_tts_speech_rate: int = 12  # 语速调节 [-50, 100]，12 为稍微加快一点点 (约 1.12x)
 
     # 转场过渡音效配置：彻底告别突兀炸裂的 60Hz 电影重音，提供沉稳、克制、低调方案
     # 可选: "subtle_tape_swish" (默认，微风/胶片柔风滑音), "gentle_warm_thud" (温润微触点), "none" (纯黑场静音过渡), "cinema_hit_60hz" (旧版重音)
