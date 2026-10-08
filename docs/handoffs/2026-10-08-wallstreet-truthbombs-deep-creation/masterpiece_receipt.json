@@ -1,0 +1,37 @@
+{
+  "source_sha256": "1490ceba4912069f39553b3440d5a8e163eb51a3095b29004c4d75c75372f1c1",
+  "script_sha256": "5a9d6320947844f195ffd4d7d35067d3d44912d4edb3719acb9b55f461f610ec",
+  "output_sha256": "2f2c75ff3cb236a1da26872923f913dfc9dcf2f95d75895280cd2d0568222228",
+  "voice": "zh_male_m191_uranus_bigtts",
+  "tts_provider": "doubao",
+  "transition_sfx": "subtle_tape_swish",
+  "duration": 687.7,
+  "schema_version": "2.0.0",
+  "level1_manifest": {
+    "source_sha256": "1490ceba4912069f39553b3440d5a8e163eb51a3095b29004c4d75c75372f1c1",
+    "script_sha256": "5a9d6320947844f195ffd4d7d35067d3d44912d4edb3719acb9b55f461f610ec"
+  },
+  "level2_segments": [
+    {
+      "segment": "intro",
+      "duration": 13.1,
+      "sha256": "c93645264bbfc098d8fcdec535f3735e4e8700df1eca4ddf596436c24295b35e"
+    },
+    {
+      "segment": "main",
+      "duration": 666.8666666666667,
+      "sha256": "d869942a9e96f1d5e220b3b42e7022772d7bacfd83a27a821cc6919b20e2937e"
+    },
+    {
+      "segment": "outro",
+      "duration": 7.733333333333333,
+      "sha256": "f1cf57dedf24775cdd18015160d7ee7df4f61e574c8c9b3cd799f998f3ad5bfa"
+    }
+  ],
+  "level3_receipt": {
+    "output_sha256": "2f2c75ff3cb236a1da26872923f913dfc9dcf2f95d75895280cd2d0568222228",
+    "duration": 687.7,
+    "sample_rate": 44100,
+    "validate_media_passed": true
+  }
+}

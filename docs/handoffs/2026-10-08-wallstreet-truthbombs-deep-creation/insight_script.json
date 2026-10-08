@@ -1,0 +1,100 @@
+{
+  "schema_version": "2.0.0",
+  "video_id": "U7TXk5wXa_w",
+  "headline": "私人信贷赎回门槛与流动性错配",
+  "preserve_full_body": true,
+  "hook": {
+    "title": "华尔街私人信贷赎回困局",
+    "narration": "今年上半年，大型私人信贷基金面临高达71亿美元的投资者赎回申请。当高净值投资者要求拿回本金时，才发现自己的资金陷入了精心设计的流动性锁定期。",
+    "estimated_sec": 16.0
+  },
+  "cards": [
+    {
+      "card_id": "card_1",
+      "badge": "制度透视",
+      "title": "71亿赎回潮触发流动性锁",
+      "start_sec": 120.0,
+      "end_sec": 145.0,
+      "points": [
+        {
+          "point_type": "FACT",
+          "keyword": "赎回激增",
+          "explanation": "投资者向大型私人借贷基金发起超71亿美元赎回",
+          "vtt_reference": {
+            "start_sec": 1.0,
+            "end_sec": 5.0,
+            "source_quote": "7.1 billion in redemption requests from investors came to the largest"
+          }
+        },
+        {
+          "point_type": "INSIGHT",
+          "keyword": "限额闸门",
+          "explanation": "非上市商业开发公司季度流动性上限仅为净资产5%",
+          "vtt_reference": {
+            "start_sec": 122.0,
+            "end_sec": 126.0,
+            "source_quote": "quarterly liquidity of up to 5% of net"
+          }
+        },
+        {
+          "point_type": "BACKGROUND",
+          "keyword": "期限错配",
+          "explanation": "短期赎回诉求与多年期底层非流动资产严重错配",
+          "vtt_reference": {
+            "start_sec": 163.0,
+            "end_sec": 166.0,
+            "source_quote": "redemption expectations funded by multi-year"
+          }
+        }
+      ]
+    },
+    {
+      "card_id": "card_2",
+      "badge": "利益博弈",
+      "title": "SOFR高息下的PIK会计掩护",
+      "start_sec": 265.0,
+      "end_sec": 295.0,
+      "points": [
+        {
+          "point_type": "FACT",
+          "keyword": "基准利差",
+          "explanation": "以隔夜SOFR基准利率加上600至700基点高额计价",
+          "vtt_reference": {
+            "start_sec": 178.0,
+            "end_sec": 186.0,
+            "source_quote": "base overnight SOFR rate plus a risk spread of 600 to perhaps 700 basis points"
+          }
+        },
+        {
+          "point_type": "INSIGHT",
+          "keyword": "实物记账",
+          "explanation": "将借款人未支付现金利息转为PIK借据计入收益",
+          "vtt_reference": {
+            "start_sec": 266.0,
+            "end_sec": 270.0,
+            "source_quote": "on Wall Street as payment in kind or PIK"
+          }
+        },
+        {
+          "point_type": "BACKGROUND",
+          "keyword": "法定义务",
+          "explanation": "触发限额时基金管理人并无法定义务返还全部本金",
+          "vtt_reference": {
+            "start_sec": 372.0,
+            "end_sec": 382.0,
+            "source_quote": "management is not obligated to return your money redeem more than 5%"
+          }
+        }
+      ]
+    }
+  ],
+  "outro": {
+    "philosophical_quote": "高收益的背后永远是对流动性的残酷剥夺",
+    "reflection_question": "私人信贷究竟是避风港还是下一个次贷风暴？",
+    "poll_options": [
+      "底层资产稳健",
+      "期限错配爆雷",
+      "静观其变"
+    ]
+  }
+}
