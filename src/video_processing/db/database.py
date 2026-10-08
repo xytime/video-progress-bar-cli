@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.95.0 | 2026-10-09 | Codex | 独立华尔街版本账本、原子就绪纳入及二创浏览器启动凭据。 |
 | 3.94.0 | 2026-10-06 | Codex | 平台限制保留投稿身份与日额，英语世界记录具名限制状态。 |
 | 3.93.0 | 2026-10-05 | Codex | 具名认证恢复要求本视频最近 60 秒内真实验证，保留媒体恢复的全部 CAS 与投稿保护。 |
 | 3.92.0 | 2026-10-05 | Codex | 具名媒体恢复的原子领取，保留重试数并拒绝投稿、历史和策略记录。 |
@@ -194,6 +195,7 @@ import secrets
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Collection, List, Dict, Any, Optional, Sequence
+from .wallstreet_experiment import WallstreetExperimentDAL
 
 from config.settings import settings
 from ..content_types import CONTENT_TYPE_GENERAL, normalize_content_type
@@ -203,7 +205,7 @@ from ..scoring import CHANNEL_SCORE_CAPS, TED_AUTO_PUBLISH_CHANNEL_IDS, cap_chan
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 
-class PipelineDB:
+class PipelineDB(WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。
@@ -1899,6 +1901,8 @@ class PipelineDB:
                 )
             ''')
             # 低层上传器不能信任 CLI 的来源文本。每次自动投稿都由上层账本签发一个
+            self._init_wallstreet_experiment(conn)
+            self._migrate_editorial_launch_tickets(conn)
             # 一次性启动凭据；上传器在打开浏览器前原子消费它，避免 HISTORY 伪装成 NEW
             # 或同一领取在并发/重放时重复上传。旧进程无凭据时宁可停止，绝不从未
             # 绑定的 UPLOADING 账本推断可发布的投稿包。
@@ -1906,7 +1910,7 @@ class PipelineDB:
                 CREATE TABLE IF NOT EXISTS douyin_browser_launch_tickets (
                     ticket_id TEXT PRIMARY KEY,
                     source_type TEXT NOT NULL
-                        CHECK(source_type IN ('GENERIC', 'ENGLISH_WORLD', 'DUBBING')),
+                        CHECK(source_type IN ('GENERIC', 'ENGLISH_WORLD', 'DUBBING', 'EDITORIAL')),
                     source_ref TEXT NOT NULL,
                     video_path TEXT NOT NULL,
                     asset_sha256 TEXT NOT NULL,
@@ -3505,15 +3509,18 @@ class PipelineDB:
     def mark_video_ready_for_publication(self, youtube_id: str, slice_index: int = 0) -> None:
         """原子持久化成片就绪时间与可见的待发布原因。"""
         with self.get_connection() as conn:
-            conn.execute("""UPDATE processed_videos SET status = 'PENDING', preparation_ready = 1,
-                publication_ready_at = COALESCE(publication_ready_at, CURRENT_TIMESTAMP),
+            self._mark_ready_in_connection(conn, youtube_id, slice_index)
+
+    @staticmethod
+    def _mark_ready_in_connection(conn, youtube_id, slice_index):
+        conn.execute("""UPDATE processed_videos SET status = 'PENDING', preparation_ready = 1,
+                publication_ready_at = COALESCE(publication_ready_at, ?),
                 publication_wait_reason = '等待发布执行者领取', error_msg = NULL, process_pid = NULL,
                 updated_at = CURRENT_TIMESTAMP WHERE youtube_id = ? AND slice_index = ?
                   AND status NOT IN ('PUBLISHED', 'COMPLETED', 'IGNORED', 'HISTORICAL_ARCHIVED', 'UNDER_REVIEW', 'PUBLISHING')
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id)
                   AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id)""",
-                (youtube_id, slice_index))
-            conn.commit()
+                (datetime.datetime.now(datetime.timezone.utc).isoformat(), youtube_id, slice_index))
 
     def claim_video_for_publication(self, youtube_id: str, owner_pid: int, slice_index: int = 0) -> bool:
         """发布前原子领取；拒绝审核闸、提交账本、墓碑、退避及已有领取。"""
@@ -10029,7 +10036,7 @@ class PipelineDB:
         normalized_asset = str(asset_sha256 or "").strip().lower()
         normalized_payload = str(payload_sha256 or "").strip().lower()
         if (
-            source_type not in {"GENERIC", "ENGLISH_WORLD", "DUBBING"}
+            source_type not in {"GENERIC", "ENGLISH_WORLD", "DUBBING", "EDITORIAL"}
             or not source_ref
             or not canonical_path
             or not self._is_sha256_digest(normalized_asset)
@@ -10084,6 +10091,19 @@ class PipelineDB:
         """在同一事务复核 ticket 对应的真实状态、尝试号、路径与成片哈希。"""
         source_type = str(ticket.get("source_type") or "")
         source_ref = str(ticket.get("source_ref") or "")
+        if source_type == "EDITORIAL":
+            parsed_ref = self._parse_douyin_launch_source_ref(source_ref)
+            if not parsed_ref:
+                return False
+            identifier, attempt = parsed_ref
+            row = conn.execute("""SELECT pub.*,p.state AS render_state FROM wallstreet_version_publications pub
+                JOIN wallstreet_pairs p ON p.id=pub.pair_id WHERE pub.id=?""", (identifier,)).fetchone()
+            return bool(row and row["variant"] == "B" and row["platform"] == "douyin"
+                and row["state"] == "SUBMITTING" and row["render_state"] == "READY"
+                and row["attempt_count"] == attempt
+                and self._canonical_douyin_launch_path(row["video_path"]) == canonical_path
+                and row["asset_sha256"] == asset_sha256
+                and row["package_sha256"] == ticket.get("payload_sha256"))
         if source_type == "GENERIC":
             parsed_ref = self._parse_douyin_launch_source_ref(source_ref)
             if not parsed_ref:

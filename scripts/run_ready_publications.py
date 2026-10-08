@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-09 | Codex | 非阻塞唤起独立二创执行者，不阻塞 A 发布。 |
 | 1.3.0 | 2026-10-05 | Codex | 心跳暴露字幕共享期限、节流与源下载冷却配置，供运行采用验收。 |
 | 1.2.0 | 2026-10-03 | Codex | 心跳暴露已加载的 TED 点赞率门槛及演讲评分线，支持运行采用回读。 |
 | 1.0.0 | 2026-09-23 | Codex | 全天巡检已就绪成片，独立进程隔离与可回读心跳。 |
@@ -23,6 +24,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from video_processing.utils.wallstreet_worker import ensure_wallstreet_worker
 from config.settings import settings
 from video_processing.core.task_lease import TaskLease, TaskLeaseBusy
 from video_processing.pipeline_manager import PipelineManager
@@ -117,6 +119,7 @@ def main(argv=None) -> int:
                 while True:
                     try:
                         report({"stage": "POLLING", "current_video": None})
+                        ensure_wallstreet_worker()
                         attempted = dispatch_once(manager)
                         attempted += dispatch_english_world_once(manager)
                         report({"stage": "IDLE", "current_video": None})

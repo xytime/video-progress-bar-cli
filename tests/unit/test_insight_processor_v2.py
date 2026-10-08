@@ -5,6 +5,7 @@
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-08 | Antigravity | 覆盖 V2 原片零裁切、Y=265~555 安全横栏、VTT 事实引证门禁、三级收据与自动降级 |
 | 1.1.0 | 2026-10-08 | Antigravity | 消除 VTT 门禁测试静默跳过漏洞，增加片头图腾/片尾二维码渲染、严格 V2 网关及 CLI 错误报告单测 |
+| 1.2.0 | 2026-10-09 | Codex | 使用明确时码夹具验收真实编码及缓存，不把静音替身当真实 ASR |
 """
 import copy
 import json
@@ -79,6 +80,19 @@ class TestInsightProcessorV2:
         test_script["cards"][0]["end_sec"] = 6.5  # 5.5s
         test_script["cards"][1]["start_sec"] = 7.0
         test_script["cards"][1]["end_sec"] = 13.0  # 6.0s
+
+        # 静音只用于编码和收据测试；真实语音对齐由单独实片验收。
+        from video_processing.processors import insight_mobile
+        from video_processing.processors.mobile_editorial_layout import clean
+        def fixture_alignment(processor, path, output):
+            text = (test_script['hook']['narration'] if path.name=='voice-0.wav'
+                    else InsightScriptV2.model_validate(test_script).outro.tts_narration if path.name=='voice-1.wav'
+                    else 'The complete source frame is preserved.')
+            chars = clean(text)
+            length = .5 if path.suffix=='.wav' else 14
+            return [{'word':c,'start':i*length/len(chars),'end':(i+1)*length/len(chars)}
+                    for i,c in enumerate(chars)]
+        monkeypatch.setattr(insight_mobile,'align_audio',fixture_alignment)
 
         script_file = tmp_path / "cornell_script.json"
         script_file.write_text(json.dumps(test_script), encoding="utf-8")
@@ -227,6 +241,7 @@ class TestGracefulDegradation:
 
         # 模拟 run_tracked 抛出异常
         pm._run_tracked = Mock(side_effect=RuntimeError("FFmpeg mother-tape assembly failed"))
+        pm.db.wallstreet_uses_normal_a.return_value = False
 
         source = tmp_path / "Vid01_vertical.mp4"
         source.write_bytes(b"base video")

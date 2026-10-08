@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.2.0 | 2026-10-09 | Codex | 显式 B 策划不依赖旧增强替换开关，保留事实提示。 |
 | 1.0.0 | 2026-10-06 | Codex | 复用文案供应商与结构化校验，单次失败回退 |
 | 2.0.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：调度 V2 规范、Pydantic 网关校验与 verify_vtt_evidence 事实引证机器门禁 |
 | 2.1.0 | 2026-10-08 | Antigravity | 接入 INSIGHT_SCRIPT_V2_SYSTEM_PROMPT 生产规范，彻底移除网关旧版回退漏洞，强化边界防护 |
@@ -34,9 +35,9 @@ def verify_vtt_evidence(script: InsightScriptV2, vtt_path: Path, tolerance_sec: 
         return False
 
 
-def generate_insight_script(title: str, source: Path, subtitle: Path, output: Path) -> bool:
+def generate_insight_script(title: str, source: Path, subtitle: Path, output: Path, *, explicit_editorial: bool = False) -> bool:
     """来源时间相对基础竖版；不把标题/简介猜成准确的高光定位。"""
-    if not settings.enable_deep_insight_enrichment:
+    if not settings.enable_deep_insight_enrichment and not explicit_editorial:
         return False
     try:
         subs = pysubs2.load(str(subtitle))

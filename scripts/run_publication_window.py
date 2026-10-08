@@ -7,6 +7,7 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.10.0 | 2026-10-09 | Codex | 复用已有每分钟巡航恢复二创队列。 |
 | 1.9.2 | 2026-10-06 | Codex | 英语世界回查区分平台拒绝与 UI 未确认，停止受限作品后续尝试。 |
 | 1.9.1 | 2026-09-25 | Codex | 具名一次只读复核及 24 小时公开确认缺失提醒，公开归档校验原生 ID 回读凭据。 |
 | 1.9.0 | 2026-09-20 | Antigravity | 增加巡航日志高频熔断信息跨分钟持久化降频，并在启动时修剪保留最近 N 日日志 |
@@ -54,6 +55,7 @@ from video_processing.core.douyin_ui_guard_policy import (
     active_douyin_ui_failure_stages,
     douyin_management_verify_is_blocked,
 )
+from video_processing.utils.wallstreet_worker import ensure_wallstreet_worker
 from config.settings import settings
 from video_processing.core.douyin_management_state import MANAGEMENT_EXIT_STATES, MANAGEMENT_STATE_MESSAGES
 from video_processing.db.database import PipelineDB
@@ -809,6 +811,7 @@ def main(argv: list[str] | None = None) -> int:
         dispatch_one_english_world_douyin_submission()
     except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
         logging.error("[EnglishWorld][Douyin] sync dispatch failed: %s", exc)
+    ensure_wallstreet_worker()
     return run_publication_window()
 
 

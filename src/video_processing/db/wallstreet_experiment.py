@@ -1,0 +1,312 @@
+"""华尔街 A/B 持久账本。依赖：db → 标准库；由 PipelineDB 提供连接。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-10-09 | Codex | 独立二创身份、租约、不可重传提交边界及作品级指标 |
+"""
+from __future__ import annotations
+
+import datetime as dt
+import json
+import math
+import time
+import uuid
+
+CHANNEL_ID = "UCTK_cv-y88CScoudcXnS1Ew"
+EXPERIMENT = "wallstreet-editorial-mobile-2"
+TEMPLATE = "insight-editorial-mobile-2"
+PLATFORMS = {"wechat", "douyin"}
+
+
+class WallstreetExperimentDAL:
+    """SQL 全部留在 DAL；A 的既有账本不修改，B 使用独立发布实体。"""
+
+    @staticmethod
+    def _migrate_editorial_launch_tickets(conn):
+        """仅扩充 ticket 来源约束；无反向外键，旧 token/尝试及列原样保留。"""
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='douyin_browser_launch_tickets'").fetchone()
+        if not row or "EDITORIAL" in row[0]:
+            return
+        sql = row[0].replace("douyin_browser_launch_tickets", "editorial_ticket_migration", 1)
+        sql = sql.replace("'DUBBING'", "'DUBBING', 'EDITORIAL'")
+        conn.execute(sql)
+        columns = [r[1] for r in conn.execute("PRAGMA table_info(douyin_browser_launch_tickets)")]
+        names = ",".join('"'+name+'"' for name in columns)
+        conn.execute(f"INSERT INTO editorial_ticket_migration ({names}) SELECT {names} FROM douyin_browser_launch_tickets")
+        conn.execute("DROP TABLE douyin_browser_launch_tickets")
+        conn.execute("ALTER TABLE editorial_ticket_migration RENAME TO douyin_browser_launch_tickets")
+
+    @staticmethod
+    def _init_wallstreet_experiment(conn):
+        statements = [
+            """CREATE TABLE IF NOT EXISTS wallstreet_experiment (
+                name TEXT PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('ACTIVE','PAUSED')),
+                activated_at REAL NOT NULL, delay_hours REAL NOT NULL, review_pairs INTEGER NOT NULL,
+                template TEXT NOT NULL)""",
+            """CREATE TABLE IF NOT EXISTS wallstreet_pairs (
+                id INTEGER PRIMARY KEY, experiment TEXT NOT NULL, video_id INTEGER NOT NULL UNIQUE,
+                mode TEXT NOT NULL CHECK(mode IN ('PAIRED','B_ONLY')), created_at REAL NOT NULL,
+                template TEXT NOT NULL, inputs_json TEXT NOT NULL, package_json TEXT,
+                state TEXT NOT NULL DEFAULT 'QUEUED'
+                  CHECK(state IN ('QUEUED','RENDERING','RETRY','READY','CANCELED')),
+                lease_token TEXT, lease_until REAL, attempts INTEGER NOT NULL DEFAULT 0,
+                next_run_at REAL NOT NULL DEFAULT 0, last_error TEXT,
+                FOREIGN KEY(video_id) REFERENCES processed_videos(id) ON DELETE RESTRICT)""",
+            """CREATE TABLE IF NOT EXISTS wallstreet_version_publications (
+                id INTEGER PRIMARY KEY, pair_id INTEGER NOT NULL,
+                variant TEXT NOT NULL CHECK(variant IN ('A','B')),
+                platform TEXT NOT NULL CHECK(platform IN ('wechat','douyin')), account TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'WAITING'
+                  CHECK(state IN ('WAITING','SUBMITTING','UNCERTAIN','UNDER_REVIEW','PUBLISHED','REJECTED','CANCELED')),
+                platform_post_id TEXT, public_at REAL, public_time_basis TEXT,
+                evidence_path TEXT, package_sha256 TEXT, video_path TEXT, asset_sha256 TEXT,
+                attempt_token TEXT, attempt_count INTEGER NOT NULL DEFAULT 0,
+                next_readback_at REAL NOT NULL DEFAULT 0, last_error TEXT,
+                UNIQUE(pair_id,variant,platform,account), UNIQUE(platform,account,platform_post_id),
+                FOREIGN KEY(pair_id) REFERENCES wallstreet_pairs(id) ON DELETE RESTRICT)""",
+            """CREATE TABLE IF NOT EXISTS wallstreet_metric_snapshots (
+                publication_id INTEGER NOT NULL, platform_post_id TEXT NOT NULL,
+                horizon_hours INTEGER NOT NULL CHECK(horizon_hours IN (24,72,168)),
+                captured_at REAL NOT NULL, evidence_path TEXT NOT NULL, values_json TEXT NOT NULL,
+                PRIMARY KEY(publication_id,horizon_hours),
+                FOREIGN KEY(publication_id) REFERENCES wallstreet_version_publications(id) ON DELETE RESTRICT)""",
+        ]
+        for statement in statements:
+            conn.execute(statement)
+
+    def set_wallstreet_experiment(self, *, active: bool, delay_hours: float = 6, review_pairs: int = 20):
+        if not math.isfinite(delay_hours) or delay_hours < 0 or review_pairs < 1:
+            raise ValueError("无效的配对参数")
+        with self.get_connection() as conn:
+            conn.execute("""INSERT INTO wallstreet_experiment VALUES (?,?,?,?,?,?)
+                ON CONFLICT(name) DO UPDATE SET state=excluded.state""",
+                (EXPERIMENT, "ACTIVE" if active else "PAUSED", time.time(), delay_hours, review_pairs, TEMPLATE))
+        return self.get_wallstreet_experiment()
+
+    def get_wallstreet_experiment(self):
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM wallstreet_experiment WHERE name=?", (EXPERIMENT,)).fetchone()
+            return dict(row) if row else None
+
+    def wallstreet_uses_normal_a(self, youtube_id, slice_index=0):
+        with self.get_connection() as conn:
+            return bool(conn.execute("""SELECT 1 FROM processed_videos v
+                LEFT JOIN wallstreet_pairs p ON p.video_id=v.id
+                WHERE v.youtube_id=? AND v.slice_index=? AND v.channel_id=?
+                  AND (p.id IS NOT NULL OR EXISTS(SELECT 1 FROM wallstreet_experiment e
+                    WHERE e.name=? AND e.state='ACTIVE' AND
+                      (v.publication_ready_at IS NULL OR
+                       (julianday(v.publication_ready_at)-2440587.5)*86400 >= e.activated_at)))""",
+                (youtube_id, slice_index, CHANNEL_ID, EXPERIMENT)).fetchone())
+
+    def enroll_wallstreet_video(self, youtube_id, *, slice_index=0, inputs=None, b_only=False,
+                               accounts=None, mark_ready=False):
+        """A 就绪后原子纳入；明确 B 单条请求可纳入历史但复用唯一的同一 B。"""
+        accounts = accounts or {"wechat": "default", "douyin": "default"}
+        if not accounts or not set(accounts) <= PLATFORMS or not all(accounts.values()):
+            raise ValueError("无效的平台/账号")
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if mark_ready:
+                self._mark_ready_in_connection(conn, youtube_id, slice_index)
+            row = conn.execute("SELECT * FROM processed_videos WHERE youtube_id=? AND slice_index=?",
+                               (youtube_id, slice_index)).fetchone()
+            if not row or row["channel_id"] != CHANNEL_ID:
+                return None
+            existing = conn.execute("SELECT * FROM wallstreet_pairs WHERE video_id=?", (row["id"],)).fetchone()
+            if existing:
+                return dict(existing)
+            config = conn.execute("SELECT * FROM wallstreet_experiment WHERE name=? AND state='ACTIVE'",
+                                  (EXPERIMENT,)).fetchone()
+            if not b_only:
+                if not config or not row["preparation_ready"] or row["source"] == "DISCOVERY":
+                    return None
+                ready = row["publication_ready_at"]
+                if not ready or dt.datetime.fromisoformat(ready).replace(tzinfo=dt.timezone.utc).timestamp() < config["activated_at"]:
+                    return None
+                submitted = conn.execute("""SELECT 1 FROM wechat_submission_attempts WHERE video_id=?
+                    UNION ALL SELECT 1 FROM wechat_publications WHERE video_id=?
+                    UNION ALL SELECT 1 FROM douyin_publications WHERE video_id=? LIMIT 1""",
+                    (row["id"], row["id"], row["id"])).fetchone()
+                if submitted or row["publication_review_required"]:
+                    return None
+            cursor = conn.execute("""INSERT INTO wallstreet_pairs
+                (experiment,video_id,mode,created_at,template,inputs_json) VALUES (?,?,?,?,?,?)""",
+                (EXPERIMENT, row["id"], "B_ONLY" if b_only else "PAIRED", time.time(), TEMPLATE,
+                 json.dumps(inputs or {}, ensure_ascii=False, sort_keys=True)))
+            pair_id = cursor.lastrowid
+            for platform, account in accounts.items():
+                for variant in (("B",) if b_only else ("A", "B")):
+                    conn.execute("""INSERT INTO wallstreet_version_publications
+                        (pair_id,variant,platform,account) VALUES (?,?,?,?)""", (pair_id, variant, platform, account))
+            return dict(conn.execute("SELECT * FROM wallstreet_pairs WHERE id=?", (pair_id,)).fetchone())
+
+    def get_wallstreet_pairs(self):
+        with self.get_connection() as conn:
+            return [dict(r) for r in conn.execute("""SELECT p.*,v.youtube_id,v.slice_index,v.title,v.zh_title
+                FROM wallstreet_pairs p JOIN processed_videos v ON v.id=p.video_id ORDER BY p.id""")]
+
+    def get_wallstreet_publications(self, pair_id=None):
+        with self.get_connection() as conn:
+            return [dict(r) for r in conn.execute("""SELECT pub.*,p.mode,p.package_json,p.video_id,
+                v.youtube_id,v.slice_index FROM wallstreet_version_publications pub
+                JOIN wallstreet_pairs p ON p.id=pub.pair_id JOIN processed_videos v ON v.id=p.video_id
+                WHERE (? IS NULL OR p.id=?) ORDER BY pub.id""", (pair_id, pair_id))]
+
+    def wallstreet_pinned_sources(self):
+        with self.get_connection() as conn:
+            return {r[0] for r in conn.execute("""SELECT DISTINCT v.youtube_id FROM wallstreet_pairs p
+                JOIN processed_videos v ON v.id=p.video_id WHERE p.state!='CANCELED'
+                  AND (p.state!='READY' OR EXISTS(SELECT 1 FROM wallstreet_version_publications pub
+                    WHERE pub.pair_id=p.id AND pub.variant='B'
+                      AND pub.state NOT IN ('PUBLISHED','REJECTED','CANCELED')))""")}
+
+    def claim_wallstreet_render(self, *, now=None, lease_seconds=7200):
+        now = time.time() if now is None else now
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("""SELECT * FROM wallstreet_pairs WHERE
+                ((state IN ('QUEUED','RETRY') AND next_run_at<=?) OR
+                 (state='RENDERING' AND lease_until<?)) ORDER BY id LIMIT 1""", (now, now)).fetchone()
+            if not row:
+                return None
+            token = uuid.uuid4().hex
+            conn.execute("""UPDATE wallstreet_pairs SET state='RENDERING',lease_token=?,lease_until=?,
+                attempts=attempts+1 WHERE id=?""", (token, now+lease_seconds, row["id"]))
+            return dict(conn.execute("SELECT * FROM wallstreet_pairs WHERE id=?", (row["id"],)).fetchone())
+
+    def renew_wallstreet_render(self, pair_id, lease_token, lease_seconds, *, now=None):
+        now = time.time() if now is None else now
+        with self.get_connection() as conn:
+            return conn.execute("""UPDATE wallstreet_pairs SET lease_until=? WHERE id=?
+                AND state='RENDERING' AND lease_token=? AND lease_until>=?""",
+                (now+lease_seconds,pair_id,lease_token,now)).rowcount == 1
+
+    def finish_wallstreet_render(self, pair_id, lease_token, *, package=None, error=None, now=None):
+        now = time.time() if now is None else now
+        with self.get_connection() as conn:
+            cursor = conn.execute("""UPDATE wallstreet_pairs SET state=?,package_json=?,last_error=?,
+                next_run_at=?,lease_token=NULL,lease_until=NULL WHERE id=? AND state='RENDERING'
+                  AND lease_token=? AND lease_until>=?""",
+                ("READY" if package else "RETRY", json.dumps(package, ensure_ascii=False) if package else None,
+                 error, now+900, pair_id, lease_token, now))
+            return cursor.rowcount == 1
+
+    def observe_wallstreet_publication(self, publication_id, *, state, platform_post_id=None,
+                                      evidence_path, public_at=None, time_basis="first_observed_public",
+                                      attempt_token=None, error=None):
+        """管理页证据显式绑定作品 ID；晚到/错误尝试不能改写另一提交。"""
+        if state not in {"UNCERTAIN","UNDER_REVIEW","PUBLISHED","REJECTED","CANCELED"}:
+            raise ValueError("不允许以观察重置提交边界")
+        if not evidence_path or (state == "PUBLISHED" and not platform_post_id):
+            raise ValueError("公开记录必须有平台作品 ID 与回读证据")
+        if time_basis not in {"platform", "first_observed_public"}:
+            raise ValueError("无效的公开时间依据")
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute("SELECT * FROM wallstreet_version_publications WHERE id=?", (publication_id,)).fetchone()
+            if not current:
+                raise ValueError("发布实体不存在")
+            if current["platform_post_id"] and platform_post_id and current["platform_post_id"] != platform_post_id:
+                raise ValueError("作品 ID 不匹配，禁止覆盖")
+            if attempt_token and current["attempt_token"] != attempt_token:
+                raise ValueError("提交尝试不匹配")
+            if current["state"] == "PUBLISHED" and state != "PUBLISHED":
+                return False
+            timestamp = public_at if public_at is not None else time.time()
+            conn.execute("""UPDATE wallstreet_version_publications SET state=?,platform_post_id=COALESCE(?,platform_post_id),
+                evidence_path=?,public_at=CASE WHEN ?='PUBLISHED' THEN COALESCE(public_at,?) ELSE public_at END,
+                public_time_basis=CASE WHEN ?='PUBLISHED' THEN COALESCE(public_time_basis,?) ELSE public_time_basis END,
+                next_readback_at=?,last_error=? WHERE id=?""",
+                (state, platform_post_id, evidence_path, state, timestamp, state, time_basis,
+                 time.time()+1800, error, publication_id))
+            return True
+
+    def claim_wallstreet_submission(self, publication_id, *, package_sha256, video_path, asset_sha256,
+                                    evidence_path, now=None):
+        """先提交意图再启动上传；进程中断后不自动把 SUBMITTING 回队。"""
+        now = time.time() if now is None else now
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("""SELECT pub.*,p.mode,p.state AS render_state FROM wallstreet_version_publications pub
+                JOIN wallstreet_pairs p ON p.id=pub.pair_id WHERE pub.id=?""", (publication_id,)).fetchone()
+            if not row or row["variant"] != "B" or row["state"] != "WAITING" or row["render_state"] != "READY":
+                return None
+            if row["mode"] == "PAIRED":
+                a = conn.execute("""SELECT * FROM wallstreet_version_publications WHERE pair_id=?
+                    AND variant='A' AND platform=? AND account=?""", (row["pair_id"],row["platform"],row["account"])).fetchone()
+                config = conn.execute("SELECT * FROM wallstreet_experiment WHERE name=?", (EXPERIMENT,)).fetchone()
+                if not a or a["state"] != "PUBLISHED" or not a["public_at"] or not config or now < a["public_at"] + config["delay_hours"]*3600:
+                    return None
+            for digest in (package_sha256, asset_sha256):
+                if not self._is_sha256_digest(digest):
+                    raise ValueError("缺少成片/投稿包指纹")
+            token = uuid.uuid4().hex
+            conn.execute("""UPDATE wallstreet_version_publications SET state='SUBMITTING',attempt_token=?,
+                attempt_count=attempt_count+1,package_sha256=?,video_path=?,asset_sha256=?,evidence_path=? WHERE id=?""",
+                (token,package_sha256,video_path,asset_sha256,evidence_path,publication_id))
+            result = dict(conn.execute("SELECT * FROM wallstreet_version_publications WHERE id=?", (publication_id,)).fetchone())
+            if row["platform"] == "douyin":
+                result.update(self._insert_douyin_browser_launch_ticket(conn, source_type="EDITORIAL",
+                    source_ref=f'{publication_id}:{result["attempt_count"]}', video_path=video_path,
+                    asset_sha256=asset_sha256, payload_sha256=package_sha256))
+            return result
+
+    def recover_unstarted_wallstreet_douyin(self, *, min_age_seconds=1800):
+        """只恢复未打开浏览器的抖音尝试；先撤销票据，使迟到子进程失效。"""
+        if min_age_seconds < 60:
+            raise ValueError('恢复等待期至少 60 秒')
+        with self.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            rows = conn.execute("""SELECT pub.id,t.ticket_id FROM wallstreet_version_publications pub
+                JOIN douyin_browser_launch_tickets t
+                  ON t.source_type='EDITORIAL' AND t.source_ref=CAST(pub.id AS TEXT)||':'||CAST(pub.attempt_count AS TEXT)
+                WHERE pub.platform='douyin' AND pub.variant='B' AND pub.state IN ('SUBMITTING','UNCERTAIN')
+                  AND t.launch_started_at IS NULL AND t.prelaunch_canceled_at IS NULL
+                  AND datetime(t.issued_at)<=datetime('now', ?)""", (f'-{min_age_seconds} seconds',)).fetchall()
+            recovered = 0
+            for row in rows:
+                if self._cancel_unstarted_douyin_browser_ticket(conn,row['ticket_id'],'二创尝试超时，确认浏览器未启动'):
+                    conn.execute("""UPDATE wallstreet_version_publications SET state='WAITING',attempt_token=NULL,
+                        next_readback_at=0,last_error='浏览器未启动，票据已撤销，可安全重新领取' WHERE id=?""",(row['id'],))
+                    recovered += 1
+            return recovered
+
+    def record_wallstreet_metrics(self, publication_id, *, platform_post_id, horizon_hours,
+                                 captured_at, values, evidence_path):
+        if horizon_hours not in {24,72,168} or not evidence_path or not math.isfinite(captured_at):
+            raise ValueError("快照缺少时点或证据")
+        for key, value in values.items():
+            if key not in {"views","likes","comments","shares","favorites","completion_rate","average_watch_seconds","follows"}:
+                raise ValueError("未知指标")
+            if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value < 0):
+                raise ValueError("指标应为非负真实读数或缺失")
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM wallstreet_version_publications WHERE id=?", (publication_id,)).fetchone()
+            if not row or row["platform_post_id"] != platform_post_id or row["state"] != "PUBLISHED":
+                raise ValueError("快照必须绑定同一已公开作品")
+            if captured_at < row["public_at"]:
+                raise ValueError("采集时间早于公开确认")
+            conn.execute("""INSERT INTO wallstreet_metric_snapshots VALUES (?,?,?,?,?,?)
+                ON CONFLICT(publication_id,horizon_hours) DO UPDATE SET captured_at=excluded.captured_at,
+                evidence_path=excluded.evidence_path,values_json=excluded.values_json
+                WHERE excluded.captured_at>=wallstreet_metric_snapshots.captured_at""",
+                (publication_id,platform_post_id,horizon_hours,captured_at,evidence_path,json.dumps(values,sort_keys=True)))
+
+    def get_wallstreet_metrics_report(self):
+        with self.get_connection() as conn:
+            rows = [dict(r) for r in conn.execute("""SELECT p.id AS pair_id,v.youtube_id,pub.variant,
+                pub.platform,pub.account,pub.platform_post_id,pub.state,pub.public_at,pub.public_time_basis,
+                m.horizon_hours,m.captured_at,m.evidence_path,m.values_json
+                FROM wallstreet_pairs p JOIN processed_videos v ON v.id=p.video_id
+                JOIN wallstreet_version_publications pub ON pub.pair_id=p.id
+                LEFT JOIN wallstreet_metric_snapshots m ON m.publication_id=pub.id
+                ORDER BY p.id,pub.platform,m.horizon_hours,pub.variant""")]
+        for row in rows:
+            values = json.loads(row.pop("values_json") or "{}")
+            required = [values.get(k) for k in ("views","likes","comments","shares")]
+            row["values"] = values
+            row["interaction_rate"] = sum(required[1:])/required[0] if all(x is not None for x in required) and required[0] > 0 else None
+            row["observed_age_hours"] = (row["captured_at"]-row["public_at"])/3600 if row["captured_at"] and row["public_at"] else None
+        return rows

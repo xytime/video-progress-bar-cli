@@ -140,6 +140,8 @@ def test_real_ffmpeg_composition_and_cache_binding(tmp_path, payload, monkeypatc
 def manager(tmp_path):
     from video_processing.pipeline_manager import PipelineManager
     result = PipelineManager.__new__(PipelineManager)
+    from video_processing.db.database import PipelineDB
+    result.db = PipelineDB(str(tmp_path / "pipeline.db"))
     result._OUT_DIR = tmp_path
     result._PRJ_ROOT = tmp_path
     result._SRC_DIR = tmp_path / "src"
@@ -182,6 +184,7 @@ def test_censorship_receives_enrichment_even_without_subtitle_flag(tmp_path, pay
     monkeypatch.setattr(module, "valid_enrichment", lambda *args: True)
     pm = manager(tmp_path)
     pm.db = Mock()
+    pm.db.wallstreet_uses_normal_a.return_value = False
     pm.send_telegram_msg = Mock()
     service = Mock()
     service.check.return_value = True

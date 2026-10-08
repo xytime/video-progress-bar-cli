@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.68.0 | 2026-10-09 | Codex | 正常 A 与二创 B 分离、就绪原子入队及共享原片保护。 |
 | 3.67.1 | 2026-10-08 | Antigravity | 优化二创策划字幕源选择，优先透传原文字幕以供事实引证门禁核验 |
 | 3.67.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：二创自动降级状态回写 (ENRICHED/DEGRADED)、错误日志记录及 InsightScriptV2 审查兼容 |
 | 3.66.0 | 2026-10-06 | Codex | 平台明确受限不累计管理页 UI 熔断，不通知发布成功。 |
@@ -2025,6 +2026,7 @@ class PipelineManager:
         import time as _time
 
         evictable = self.db.get_source_cache_evictable_ids(ttl_days)
+        evictable -= self.db.wallstreet_pinned_sources()
         ttl_seconds = ttl_days * 86400
         now = _time.time()
         evicted = 0
@@ -2188,6 +2190,9 @@ class PipelineManager:
         - 当所有子任务均进入终态，清理父任务的超大原始 MP4 视频与 info.json 等临时文件。
         """
         import shutil
+        if yid in self.db.wallstreet_pinned_sources():
+            logger.info("[AB] 二创任务仍需素材，暂缓 %s 的媒体和字幕清理。", yid)
+            return
         
         # 1. 如果任务发布成功，清理其关联的临时文件
         if status == "PUBLISHED":
@@ -2267,7 +2272,10 @@ class PipelineManager:
         开启互动层且成片有效时使用 interactive，否则平滑降级为 vertical。
         """
         vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
-        if settings.enable_deep_insight_enrichment:
+        suffix = prefix[11:]
+        slice_index = int(suffix[2:]) if suffix.startswith("_s") and suffix[2:].isdigit() else 0
+        paired_a = bool(getattr(self, "db", None) and self.db.wallstreet_uses_normal_a(prefix[:11], slice_index))
+        if settings.enable_deep_insight_enrichment and not paired_a:
             from .processors.insight_processor import valid_enrichment
             enriched = self._OUT_DIR / f"{prefix}_insight.mp4"
             if valid_enrichment(vertical, self._OUT_DIR / f"{prefix}_insight.json", enriched):
@@ -2286,6 +2294,16 @@ class PipelineManager:
                         pass
         return vertical
 
+    def _mark_ready_and_enqueue_wallstreet(self, yid: str, slice_index: int):
+        """正常版先就绪；二创只持久入队，不能在此等待策划或渲染。"""
+        prefix = f"{yid}_s{slice_index}" if slice_index else yid
+        accounts = {"wechat": "default"}
+        if settings.enable_douyin_browser_publishing:
+            accounts["douyin"] = "default"
+        self.db.enroll_wallstreet_video(yid, slice_index=slice_index, accounts=accounts, mark_ready=True,
+            inputs={"prefix": prefix, "output_dir": str(self._OUT_DIR),
+                    "a_video": str(self._OUT_DIR / f"{prefix}_vertical.mp4")})
+
     def _insight_review_text(self, prefix: str) -> str:
         """仅审查实际选用增强成片的脚本；发布执行者再次读取相同正文。"""
         if not settings.enable_deep_insight_enrichment:
@@ -2302,7 +2320,7 @@ class PipelineManager:
     def _process_insight_enrichment(self, prefix: str, yid: str, title: str,
                                     subtitle: Path, slice_index: int = 0) -> bool:
         """字幕基础成片就绪后执行增强；子进程沿用 PID 跟踪和整组终止。"""
-        if not settings.enable_deep_insight_enrichment:
+        if not settings.enable_deep_insight_enrichment or self.db.wallstreet_uses_normal_a(yid, slice_index):
             return False
         from .processors.insight_processor import valid_enrichment
         source = self._OUT_DIR / f"{prefix}_vertical.mp4"
@@ -4773,7 +4791,7 @@ class PipelineManager:
                 if preparation_only:
                     if not self._is_dedicated_cover(cover_file):
                         raise RuntimeError("预加工未生成可验证的专门封面，禁止标记为待发布就绪。")
-                    self.db.mark_video_ready_for_publication(yid, slice_index=slice_index)
+                    self._mark_ready_and_enqueue_wallstreet(yid, slice_index)
                     (self._OUT_DIR / "ready_publications.wake").touch()
                     logger.info("[Preparation] %s 成片就绪，交给独立发布执行者。", prefix)
                     return
@@ -4781,12 +4799,12 @@ class PipelineManager:
                 if video.get("publication_review_required"):
                     if not self._is_dedicated_cover(cover_file):
                         raise RuntimeError("人工复核闸前缺少可验证的专门封面，禁止标记为待审核。")
-                    self.db.mark_video_ready_for_publication(yid, slice_index=slice_index)
+                    self._mark_ready_and_enqueue_wallstreet(yid, slice_index)
                     logger.info("[ReviewGate] %s 已完成制作与审查，人工复核通过前禁止平台提交。", prefix)
                     return
 
                 # 成片完成后释放加工资源；独立执行者负责全天发布。
-                self.db.mark_video_ready_for_publication(yid, slice_index=slice_index)
+                self._mark_ready_and_enqueue_wallstreet(yid, slice_index)
                 (self._OUT_DIR / "ready_publications.wake").touch()
                 logger.info("[ReadyPublication] %s 成片就绪，交给独立发布执行者。", prefix)
                 return

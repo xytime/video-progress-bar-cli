@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.3.0 | 2026-10-09 | Codex | 固化 mobile-2 通用母带、真实词时码及排版代码缓存指纹。 |
 | 1.0.0 | 2026-10-06 | Codex | 四维增量、音画校验、输入绑定回执及失败回退 |
 | 2.0.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：InsightScriptV2 契约、100% 完整原片零裁切、全幅安全横栏(Y=265~555)、0.6s Dip to Black + 60Hz Hit 母带转场与三级收据系统 |
 | 2.1.0 | 2026-10-08 | Antigravity | 绑定官方品牌图腾微标、受控真实二维码、Slogan与思辨投票选项渲染，增强三级收据深层校验 |
@@ -24,13 +25,14 @@ import imageio_ffmpeg
 
 from config.settings import settings
 from video_processing.processors import insight_editorial as editorial
+from video_processing.processors import insight_mobile as mobile
 from video_processing.core.insight_script import InsightScript, InsightScriptV2
 from video_processing.core.tts_engine import TTSEngine, TTSProvider
 from video_processing.utils.video_metadata import _resolve_ffprobe_cmd
 
 logger = logging.getLogger(__name__)
 WIDTH, HEIGHT = 1080, 1920
-RENDER_RECIPE = "insight-editorial-1"
+RENDER_RECIPE = "insight-editorial-mobile-2"
 ASSET_ROOT = Path(__file__).resolve().parents[3] / "assets"
 
 
@@ -62,7 +64,9 @@ def render_spec(provider=None) -> dict:
     provider = provider.value if isinstance(provider, TTSProvider) else provider
     doubao = provider == "doubao"
     sfx_name = settings.transition_sfx.lower()
-    assets = {"font": font_path(), "sans": editorial.SANS, "sfx": transition_path(sfx_name),
+    assets = {"font": font_path(), "sans": editorial.SANS, "english": mobile.m.ENGLISH,
+              "sfx": transition_path(sfx_name),
+              "layout_code": Path(mobile.m.__file__), "render_code": Path(mobile.__file__),
               "logo": ASSET_ROOT / "brand/01_logos/concept_a.png",
               "qr": ASSET_ROOT / "brand/05_qrcodes/liuwei-shikonghao-wechat-channels-code-source.jpeg"}
     return {"recipe": RENDER_RECIPE, "tts_provider": provider,
@@ -260,7 +264,7 @@ class InsightProcessor:
         image.save(path)
 
     def run(self, args):
-        self.runner([settings.ffmpeg_path or imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-v", "error", "-y", *args],
+        self.runner([mobile.resolve_ffmpeg_cmd(), "-nostdin", "-v", "error", "-y", *args],
                     check=True, capture_output=True, timeout=900)
 
     @staticmethod
@@ -333,7 +337,7 @@ class InsightProcessor:
                 active_voice = spec["voice"]
                 point_timeline = []
                 if is_v2:
-                    segments, lengths, core_duration, point_timeline = editorial.render_segments(
+                    segments, lengths, core_duration, point_timeline = mobile.render_segments(
                         self, script, original, subtitles, work, source_dur, active_voice, duration)
                 else:
                     intro_card, outro_card = work / "intro.png", work / "outro.png"
@@ -462,6 +466,13 @@ class InsightProcessor:
                     raise ValueError("渲染期间原片或双语字幕变化")
 
                 # 三级 SHA-256 收据系统 (Level 1 / Level 2 / Level 3)
+                if is_v2:
+                    import shutil
+                    previews = output.with_suffix('.preview')
+                    previews.mkdir(exist_ok=True)
+                    for name in ('intro.png','outro.png','body-overlay.png'):
+                        if (work/name).is_file():
+                            shutil.copyfile(work/name,previews/name)
                 output_hash = sha256(assembled)
                 receipt_data = {
                     "source_sha256": source_hash,
@@ -498,7 +509,7 @@ class InsightProcessor:
                 receipt.replace(output.with_suffix(".receipt.json"))
             return True
         except Exception as exc:
-            logger.warning("[InsightFallback] 增强失败，保留基础成片：%s", exc)
+            logger.warning("[InsightFallback] 增强失败，保留基础成片：%s", exc, exc_info=True)
             return False
 
 

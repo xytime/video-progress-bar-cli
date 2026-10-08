@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.65 | 2026-10-09 | Codex | 完整简介绑定 API 原生作品 ID，拒绝标题相同的错误回读。 |
 | 1.7.7 | 2026-10-08 | Antigravity | 修复封面完成按钮整页降级检索；支持发文助手“作品未见异常（含建议）”明确检测完成状态，避免非阻断性优化建议导致虚假超时。 |
 | 1.7.6 | 2026-10-06 | Codex | 完整标题作为管理身份与等待目标，避免共用简介及旧列表抢先结束回查。 |
 | 1.7.5 | 2026-10-06 | Codex | 浏览器启动异常落入独立诊断日志，保留尚未建页面或上传的完整错误。 |
@@ -503,13 +504,39 @@ def _search_management_title(page, title_text: str) -> bool:
         return False
 
 
+def native_ids_for_description(value, copy_text):
+    """只接受完整描述一致的作品 ID；不以列表索引或标题相似度推断。"""
+    found = set()
+    if isinstance(value,dict):
+        native = str(value.get('aweme_id') or '')
+        description = value.get('desc')
+        if native.isdigit() and len(native)>=15 and isinstance(description,str) and _normalize_page_text(description)==_normalize_page_text(copy_text):
+            found.add(native)
+        for child in value.values():
+            if isinstance(child,(dict,list)):
+                found.update(native_ids_for_description(child,copy_text))
+    elif isinstance(value,list):
+        for child in value:
+            found.update(native_ids_for_description(child,copy_text))
+    return found
+
+
 def verify_management_publication(
     page,
     artifact_dir: Path,
     copy_text: str,
     title_text: str = "",
+    platform_post_id: str = "",
 ) -> Optional[str]:
     """只读进入作品管理页，记录当前页面证据并返回本次作品的明确可见状态。"""
+    native_ids = set()
+    def observe_response(response):
+        try:
+            if response.status==200 and 'json' in response.headers.get('content-type',''):
+                native_ids.update(native_ids_for_description(response.json(),copy_text))
+        except Exception:
+            pass
+    page.on('response',observe_response)
     try:
         page.goto(DOUYIN_MANAGEMENT_URL, wait_until="domcontentloaded", timeout=60_000)
     except Exception as exc:
@@ -526,10 +553,16 @@ def verify_management_publication(
         return None
     capture_controls(page, artifact_dir, "douyin_management_evidence")
     state = get_management_publication_state(page_text, copy_text, title_text)
+    page.remove_listener('response',observe_response)
+    native = next(iter(native_ids)) if len(native_ids)==1 else None
+    if platform_post_id and native != platform_post_id:
+        state = None
+        native = None
     # 控件快照只截取前 2000 字；目标在后续卡片时必须保留实际判定输入。
     (artifact_dir / "douyin_management_readback.json").write_text(
         json.dumps({"title": title_text.strip(), "copy_sha256": hashlib.sha256(copy_text.encode()).hexdigest(),
-                    "state": state, "page_text": page_text}, ensure_ascii=False, indent=2),
+                    "state": state, "page_text": page_text, "platform_post_id":native,
+                    "identity_source":"API_EXACT_DESCRIPTION" if native else None}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     return state
@@ -2477,6 +2510,7 @@ def save_storage_state(context, state_path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Douyin creator-center uploader")
+    parser.add_argument("--platform-post-id", default="", help="只读回查必须匹配的原生作品 ID")
     parser.add_argument("--video", type=Path, help="竖屏成片路径")
     parser.add_argument("--cover", type=Path, help="封面图片路径")
     parser.add_argument("--horizontal-cover", type=Path, help="横版封面图片路径；省略时由竖版封面生成")
@@ -2642,6 +2676,7 @@ def _main_with_session(args) -> int:
                 artifact_dir,
                 args.copy.read_text(encoding="utf-8"),
                 title_text,
+                getattr(args,"platform_post_id",""),
             )
             browser.close()
             if state == MANAGEMENT_PUBLISHED:

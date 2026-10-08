@@ -1673,3 +1673,12 @@ def test_cover_editor_can_finish_save_after_old_ten_second_cutoff():
     modal.is_visible.side_effect = [True] * 12 + [False]
     assert _wait_for_cover_editor_closed(page, modal)
     assert page.wait_for_timeout.call_count == 12
+
+
+def test_native_id_requires_full_description_and_never_title_similarity():
+    from scripts.douyin_uploader import native_ids_for_description
+    payload={'aweme_list':[{'aweme_id':'1234567890123456789','desc':'深度观察：84个月车贷风险'},
+                          {'aweme_id':'2234567890123456789','desc':'84个月车贷风险'},
+                          {'aweme_id':'3234567890123456789','desc':'深度观察：84个月车贷风险旧稿'}]}
+    assert native_ids_for_description(payload,'深度观察：84个月车贷风险')=={'1234567890123456789'}
+    assert native_ids_for_description(payload,'深度观察：84个月车贷')==set()

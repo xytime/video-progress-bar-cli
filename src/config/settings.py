@@ -429,6 +429,9 @@ class Settings(BaseSettings):
 
     # 深度信息增量引擎与高品质母带配置 (RFC-2026-DEEP-CREATION-001)
     enable_deep_insight_enrichment: bool = False
+    # 试验启停与首次纳入时间由 DAL 持久保存；程序默认不创建活动试验。
+    wallstreet_ab_render_lease_seconds: int = 14400
+    wallstreet_ab_poll_seconds: int = 60
     insight_default_voice: str = "zh-CN-YunyangNeural"
     tts_provider: str = "doubao"  # "doubao" | "edge" | "indextts"
     doubao_tts_api_key: Optional[str] = None
