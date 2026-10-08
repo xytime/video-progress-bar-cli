@@ -552,9 +552,10 @@ def verify_management_publication(
         logger.error("抖音作品管理页登录态失效")
         return None
     capture_controls(page, artifact_dir, "douyin_management_evidence")
-    state = get_management_publication_state(page_text, copy_text, title_text)
     page.remove_listener('response',observe_response)
     native = next(iter(native_ids)) if len(native_ids)==1 else None
+    # A/B 的封面短标题可相同；API 已绑定完整描述后，状态也须跟随这份描述。
+    state = get_management_publication_state(page_text, copy_text, '' if native else title_text)
     if platform_post_id and native != platform_post_id:
         state = None
         native = None

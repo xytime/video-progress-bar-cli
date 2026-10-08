@@ -5,6 +5,7 @@ FFmpeg 读取原片填入，无全片 rawvideo 临时文件，也无需两个 FF
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-09 | Codex | 整段字幕共用真实 ASR 锚点，避免事件边界漏词 |
 | 1.0.0 | 2026-10-09 | Codex | 固化已批准视觉、完整原片与六要点，按真实字宽分页 |
 """
 from __future__ import annotations
@@ -122,7 +123,7 @@ def caption_pages(ass_path,words,duration):
         if event.style == 'GlossaryCard':
             plain = re.sub(r'^词汇\s*','',event.plaintext)
             glossary[(event.start,event.end)] = re.findall(r"([A-Za-z][A-Za-z .'-]*?)\s*·\s*([\u3400-\u9fffA-Za-z]+)",plain)
-    pages = []
+    entries = []
     for event in subs:
         if event.is_comment or event.style == 'GlossaryCard':
             continue
@@ -132,6 +133,17 @@ def caption_pages(ass_path,words,duration):
             raise ValueError('字幕缺少双语或不属于该完整原片')
         en,zh = ' '.join(lines[:split]),''.join(lines[split:])
         vocab = glossary.get((event.start,event.end),[])
+        entries.append((event,en,zh,vocab))
+    # ASS 切句与 ASR 词边界不同；全片顺序匹配后按字符偏移分配，
+    # 保留真实语音锚点与全局覆盖门槛，不能靠放宽事件时间窗猜测词序。
+    all_pos = [{'char':c,'x':0,'y':0,'width':1,'line':0}
+               for _,en,_,_ in entries for c in en if c.isalnum()]
+    aligned_all = m.align_positions(all_pos,words)
+    pages,offset = [],0
+    for event,en,zh,vocab in entries:
+        size = sum(c.isalnum() for c in en)
+        full = aligned_all[offset:offset+size]
+        offset += size
         # 释义与短语作为同一 token，不拆成独立生词列表。
         terms = dict(vocab)
         pattern = '('+'|'.join(re.escape(t) for t in sorted(terms,key=len,reverse=True))+')' if terms else None
@@ -178,10 +190,6 @@ def caption_pages(ass_path,words,duration):
                         x+=m.width(char,35,'en')
                     if token in terms:
                         x+=m.width('（'+terms[token]+'）',26)
-            # 从完整事件的音频窗口进行匹配，避免同一词出现在相邻页时误用时间。
-            event_words = [w for w in words if event.start/1000-.35 <= w['start'] < event.end/1000+.2]
-            full_pos = [{'char':c,'x':0,'y':0,'width':1,'line':0} for c in en if c.isalnum()]
-            full = m.align_positions(full_pos,event_words)
             preceding = sum(c.isalnum() for row in rows[:len(rows)*i//count] for token in row for c in token)
             timing = full[preceding:preceding+len(pos)]
             if len(timing) != len(pos):

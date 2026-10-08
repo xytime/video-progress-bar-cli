@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from config.settings import settings
 from video_processing.db.database import PipelineDB
-from video_processing.db.wallstreet_experiment import TEMPLATE
+from video_processing.db.wallstreet_experiment import TEMPLATE, CHANNEL_ID
 from video_processing.core.task_lease import TaskLease, TaskLeaseBusy, read_lease_owner
 from video_processing.core.insight_script import InsightScriptV2
 from video_processing.core.cover_policy import validate_dedicated_cover_file
@@ -56,12 +56,13 @@ def content_gate(package):
     findings = []
     if settings.enable_censorship_engine:
         findings.append(check_text(text,original))
-    if settings.enable_channel_policy_filter:
+    cp_bypass = CHANNEL_ID in settings.censorship_bypass_channel_set
+    if settings.enable_channel_policy_filter and not cp_bypass:
         findings.append(check_channel_policy(text,original))
     # 二创新增内容独立审查；不修改 A 的状态、评分或提交账本。
     blocked = any(result.hit for result in findings)
     write_json(Path(package['video']).parent/'content-review.json',
-               {'blocked':blocked,'rules':current_rules_fingerprint(),
+               {'blocked':blocked,'rules':current_rules_fingerprint(),'channel_policy_bypass':cp_bypass,
                 'findings':[str(result) for result in findings], 'script_sha256':sha256(Path(package['script']))})
     if blocked:
         raise ValueError('二创新增内容触发现行内容闸门，保留正常 A')
@@ -299,7 +300,10 @@ def report(db):
     completed = sum(all(p['state']=='PUBLISHED' for p in publications if p['pair_id']==pair_id) for pair_id in enrolled)
     return {'experiment':config,'completed_pairs':completed,
             'review_due':bool(config and completed>=config['review_pairs']),
-            'pairs':pairs,'metric_capture':'native_id_bound_import'}
+            'pairs':pairs,'metric_capture':'native_id_bound_import',
+            'publications':[{key:pub[key] for key in ('id','pair_id','youtube_id','variant','platform','account',
+                'state','platform_post_id','public_at','public_time_basis','evidence_path','last_error')}
+                for pub in publications]}
 
 
 def main():

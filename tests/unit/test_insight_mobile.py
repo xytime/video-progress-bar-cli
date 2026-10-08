@@ -37,3 +37,22 @@ def test_overflowing_hand_mark_rejected():
     image = mobile.base()
     with pytest.raises(ValueError,match='遮挡区'):
         layout.pen_stroke(image,layout.hand_circle(930,1450,'长期风险',43))
+
+
+def test_caption_alignment_preserves_real_words_across_ass_boundaries(tmp_path):
+    source = tmp_path/'boundary.ass'
+    subs = pysubs2.SSAFile()
+    subs.events = [
+        pysubs2.SSAEvent(start=1000,end=3000,text=r'You understand risk.\N你理解风险。'),
+        pysubs2.SSAEvent(start=3000,end=5000,text=r'You understand debt.\N你理解债务。'),
+    ]
+    subs.save(str(source))
+    words = [dict(word='You',start=.4,end=.6),
+             dict(word='understand',start=1,end=2),dict(word='risk',start=2,end=2.8),
+             dict(word='You',start=2.5,end=2.7),
+             dict(word='understand',start=3,end=4),dict(word='debt',start=4,end=4.8)]
+    pages = mobile.caption_pages(source,words,5)
+    assert len(pages)==2
+    assert pages[0]['positions'][0]['start']==.4
+    assert pages[1]['positions'][0]['start']==2.5
+    assert ''.join(p['char'] for page in pages for p in page['positions'])=='YouunderstandriskYouunderstanddebt'
