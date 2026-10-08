@@ -203,3 +203,22 @@ def test_copywriter():
     assert "Alec Benjamin" in pkg.wechat_copy
     assert "慢慢放手" in pkg.douyin_copy
     assert len(pkg.hashtags) >= 4
+
+
+def test_cli_handwritten_pager(tmp_path, sample_lyrics, monkeypatch):
+    import json
+    from click.testing import CliRunner
+    from cli.commands.handwritten_pager import handwritten_pager
+
+    lyrics_file = tmp_path / "lyrics.json"
+    lyrics_file.write_text(json.dumps(sample_lyrics), encoding="utf-8")
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x80>\x00\x00\x00}\x00\x00\x02\x00\x10\x00data\x00\x00\x00\x00")
+    output_video = tmp_path / "out.mp4"
+
+    runner = CliRunner()
+    # Test --help
+    res_help = runner.invoke(handwritten_pager, ["--help"])
+    assert res_help.exit_code == 0
+    assert "Generate high-resolution handwritten notebook" in res_help.output
+

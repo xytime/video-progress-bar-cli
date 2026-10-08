@@ -44,27 +44,47 @@ The pipeline is organized under `src/video_processing/handwritten_pager/`:
 
 ---
 
-## 2. Standard Production Workflow
+## 2. Standard Production Workflows
 
-All commands MUST run with the virtual environment Python (`.venv/bin/python`) and `PYTHONPATH=src`.
+### 2.1 Fast CLI & Pipeline Operations (Preferred Entry Points)
 
-### 2.1 Prepare Audio & Timestamped Lyrics
-Ensure `audio.wav` and `lyrics.json` exist in the working directory:
-```json
-[
-  {
-    "en": "Could you find a way to let me down slowly?",
-    "zh": "你能试着，温柔地放开我吗？",
-    "words": [
-      {"word": "Could", "start": 0.05, "end": 0.28},
-      {"word": "you", "start": 0.28, "end": 0.45},
-      ...
-    ]
-  }
-]
+#### A. One-Command End-to-End Pipeline (from YouTube URL or Audio)
+```bash
+# 1. Full pipeline from YouTube URL (download -> 60fps render -> covers -> copywriting -> dual publish)
+PYTHONPATH=src .venv/bin/python scripts/pipeline_handwritten_pager.py \
+  --url "https://www.youtube.com/shorts/U1RKC6Fyyg0" \
+  --title "Let Me Down Slowly" \
+  --artist "Alec Benjamin" \
+  --chinese-title "慢慢放手" \
+  --publish-wechat \
+  --publish-douyin
+
+# 2. Local generation dry-run (generate video + covers + copy without publishing)
+PYTHONPATH=src .venv/bin/python scripts/pipeline_handwritten_pager.py \
+  --audio output/handwritten_pager/U1RKC6Fyyg0/audio.wav \
+  --lyrics-json output/handwritten_pager/U1RKC6Fyyg0/lyrics.json \
+  --work-dir output/handwritten_pager/U1RKC6Fyyg0 \
+  --dry-run
 ```
 
-### 2.2 Render Complete 60fps Video & Covers
+#### B. Quick CLI Generation via `vpanel` or `video-process`
+```bash
+# Via project control panel vpanel:
+./vpanel pager \
+  --audio output/handwritten_pager/<ID>/audio.wav \
+  --lyrics-json output/handwritten_pager/<ID>/lyrics.json \
+  --output output/handwritten_pager/<ID>/final_video.mp4 \
+  --covers-dir output/handwritten_pager/<ID>/covers \
+  --copy-output output/handwritten_pager/<ID>/copywriting.json
+
+# Or directly via CLI wrapper:
+./scripts/video-process handwritten-pager \
+  --audio output/handwritten_pager/<ID>/audio.wav \
+  --lyrics-json output/handwritten_pager/<ID>/lyrics.json \
+  --output output/handwritten_pager/<ID>/final_video.mp4
+```
+
+### 2.2 Programmatic Python API
 ```python
 from pathlib import Path
 import json

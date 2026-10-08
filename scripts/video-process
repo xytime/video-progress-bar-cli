@@ -1,10 +1,19 @@
 #!/usr/bin/env python
 """视频处理工具便捷脚本"""
+import os
 import sys
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+VENV_DIR = PROJECT_ROOT / ".venv"
+VENV_PYTHON = VENV_DIR / "bin" / "python"
+
+if VENV_PYTHON.exists() and Path(sys.prefix).resolve() != VENV_DIR.resolve():
+    os.execv(str(VENV_PYTHON), [str(VENV_PYTHON)] + sys.argv)
+
+
 # 添加 src 目录到路径
-src_path = Path(__file__).parent.parent / "src"
+src_path = PROJECT_ROOT / "src"
 sys.path.insert(0, str(src_path))
 
 # 运行 CLI
@@ -12,4 +21,5 @@ from cli.main import main
 
 if __name__ == "__main__":
     main()
+
 
