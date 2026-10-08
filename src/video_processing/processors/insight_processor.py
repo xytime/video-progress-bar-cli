@@ -28,6 +28,47 @@ from video_processing.utils.video_metadata import _resolve_ffprobe_cmd, resolve_
 
 logger = logging.getLogger(__name__)
 WIDTH, HEIGHT = 1080, 1920
+RENDER_RECIPE = "insight-v2-cache-1"
+ASSET_ROOT = Path(__file__).resolve().parents[3] / "assets"
+
+
+def effective_tts_provider() -> TTSProvider:
+    """生成与缓存使用同一供应商选择；只判断凭据是否配置，不记录凭据。"""
+    available = bool(settings.doubao_tts_api_key or settings.volc_speech_api_key)
+    return TTSProvider.DOUBAO if settings.tts_provider.lower() == "doubao" and available else TTSProvider.EDGE
+
+
+def font_path() -> Path:
+    for candidate in [ASSET_ROOT / "fonts/SourceHanSerifCN-Medium.otf",
+                      Path("/System/Library/Fonts/Hiragino Sans GB.ttc"),
+                      Path("/System/Library/Fonts/PingFang.ttc")]:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("没有可用中文字体，拒绝生成缺字卡片")
+
+
+def transition_path(name: str):
+    filename = {"subtle_tape_swish": "subtle_tape_swish.wav",
+                "gentle_warm_thud": "gentle_warm_thud.wav",
+                "cinema_hit_60hz": "cinema_hit_60hz_subbass.wav"}.get(name)
+    return ASSET_ROOT / "audio/sfx" / filename if filename else None
+
+
+def render_spec(provider=None) -> dict:
+    """所有影响母带的配置与资产指纹；历史回执缺少此字段时重建一次。"""
+    provider = provider if isinstance(provider, (str, TTSProvider)) else effective_tts_provider()
+    provider = provider.value if isinstance(provider, TTSProvider) else provider
+    doubao = provider == "doubao"
+    sfx_name = settings.transition_sfx.lower()
+    assets = {"font": font_path(), "sfx": transition_path(sfx_name),
+              "logo": ASSET_ROOT / "brand/01_logos/concept_a.png",
+              "qr": ASSET_ROOT / "brand/05_qrcodes/liuwei-shikonghao-wechat-channels-code-source.jpeg"}
+    return {"recipe": RENDER_RECIPE, "tts_provider": provider,
+            "voice": settings.doubao_tts_speaker if doubao else settings.insight_default_voice,
+            "tts_resource": settings.doubao_tts_resource_id if doubao else None,
+            "speech_rate": settings.doubao_tts_speech_rate if doubao else None,
+            "transition_sfx": sfx_name, "transition_sfx_volume": settings.transition_sfx_volume,
+            "assets": {key: sha256(path) if path and path.is_file() else None for key, path in assets.items()}}
 
 
 def sha256(path: Path) -> str:
@@ -76,12 +117,11 @@ def valid_enrichment(source: Path, script_path: Path, output: Path) -> bool:
         if not receipt_path.is_file() or not output.is_file() or not source.is_file() or not script_path.is_file():
             return False
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        script_raw = script_path.read_text(encoding="utf-8")
-        try:
-            InsightScriptV2.model_validate_json(script_raw)
-        except Exception:
-            InsightScript.model_validate_json(script_raw)
-        if receipt["voice"] != settings.insight_default_voice:
+        InsightScriptV2.model_validate_json(script_path.read_text(encoding="utf-8"))
+        expected_spec = render_spec()
+        if (receipt.get("render_spec") != expected_spec
+                or receipt.get("voice") != expected_spec["voice"]
+                or receipt.get("tts_provider") != expected_spec["tts_provider"]):
             return False
         for key, path in [("source_sha256", source), ("script_sha256", script_path),
                           ("output_sha256", output)]:
@@ -107,20 +147,12 @@ class InsightProcessor:
         if tts is not None:
             self.tts = tts
         else:
-            has_doubao = bool(getattr(settings, "doubao_tts_api_key", None) or getattr(settings, "volc_speech_api_key", None))
-            use_doubao = getattr(settings, "tts_provider", "doubao").lower() == "doubao" and has_doubao
-            self.tts = TTSEngine(TTSProvider.DOUBAO if use_doubao else TTSProvider.EDGE)
+            self.tts = TTSEngine(effective_tts_provider())
         self.runner = runner or subprocess.run
 
     @staticmethod
     def font(size: int):
-        root = Path(__file__).resolve().parents[3]
-        for candidate in [root / "assets/fonts/SourceHanSerifCN-Medium.otf",
-                          Path("/System/Library/Fonts/Hiragino Sans GB.ttc"),
-                          Path("/System/Library/Fonts/PingFang.ttc")]:
-            if candidate.is_file():
-                return ImageFont.truetype(str(candidate), size)
-        raise FileNotFoundError("没有可用中文字体，拒绝生成缺字卡片")
+        return ImageFont.truetype(str(font_path()), size)
 
     def render_intro_card(self, path: Path, title: str, narration: str):
         """渲染片头独占导读大卡 (1080x1920)。
@@ -385,7 +417,7 @@ class InsightProcessor:
                   "-af", af_filter, "-t", str(seconds), *self.codecs(), str(output)])
         return seconds
 
-    def process(self, source: Path, script_path: Path, output: Path) -> bool:
+    def process(self, source: Path, script_path: Path, output: Path, *, allow_legacy: bool = False) -> bool:
         try:
             source, script_path, output = Path(source), Path(script_path), Path(output)
             if source.resolve() == output.resolve():
@@ -397,6 +429,8 @@ class InsightProcessor:
                 script = InsightScriptV2.model_validate_json(raw_script_text)
                 is_v2 = True
             except Exception:
+                if not allow_legacy:
+                    raise ValueError("新母带只接受 V2 引证脚本；V1 仅供显式历史复现")
                 script = InsightScript.model_validate_json(raw_script_text)
 
             source_dur = duration(source)
@@ -413,6 +447,7 @@ class InsightProcessor:
 
             output.parent.mkdir(parents=True, exist_ok=True)
             source_hash, script_hash = sha256(source), sha256(script_path)
+            spec = render_spec(getattr(self.tts, "provider", None))
             with tempfile.TemporaryDirectory(prefix="insight-", dir=output.parent) as directory:
                 work = Path(directory)
                 intro_card, outro_card = work / "intro.png", work / "outro.png"
@@ -444,13 +479,7 @@ class InsightProcessor:
                 lengths = []
 
                 # 生成片头与片尾 TTS 配音及音视频片段 (44.1kHz)
-                tts_prov = getattr(self.tts, "provider", None)
-                is_doubao = tts_prov == TTSProvider.DOUBAO or tts_prov == "doubao"
-                active_voice = (
-                    getattr(settings, "doubao_tts_speaker", "zh_male_m191_uranus_bigtts")
-                    if is_doubao
-                    else settings.insight_default_voice
-                )
+                active_voice = spec["voice"]
                 for index, (text, card, is_in) in enumerate([
                     (hook_narration, intro_card, True),
                     (outro_narration, outro_card, False),
@@ -519,15 +548,9 @@ class InsightProcessor:
                 t_outro = lengths[1]
                 expected = t_intro + t_main + t_outro
 
-                sfx_name = str(getattr(settings, "transition_sfx", "subtle_tape_swish")).lower()
-                sfx_vol = float(getattr(settings, "transition_sfx_volume", 0.22))
-                root_sfx = Path(__file__).resolve().parents[3] / "assets/audio/sfx"
-                sfx_file_map = {
-                    "subtle_tape_swish": root_sfx / "subtle_tape_swish.wav",
-                    "gentle_warm_thud": root_sfx / "gentle_warm_thud.wav",
-                    "cinema_hit_60hz": root_sfx / "cinema_hit_60hz_subbass.wav",
-                }
-                sfx_path = sfx_file_map.get(sfx_name)
+                sfx_name = spec["transition_sfx"]
+                sfx_vol = spec["transition_sfx_volume"]
+                sfx_path = transition_path(sfx_name)
 
                 if sfx_name != "none" and sfx_path and sfx_path.is_file():
                     d1 = int(round(max(0.0, t_intro - 0.25) * 1000))
@@ -566,23 +589,18 @@ class InsightProcessor:
                 validate_media(assembled, expected)
                 if source_hash != sha256(source) or script_hash != sha256(script_path):
                     raise ValueError("渲染期间输入发生变化")
+                if spec != render_spec(getattr(self.tts, "provider", None)):
+                    raise ValueError("渲染期间声音配置或素材发生变化")
 
                 # 三级 SHA-256 收据系统 (Level 1 / Level 2 / Level 3)
                 output_hash = sha256(assembled)
-                prov = getattr(self.tts, "provider", None)
-                if hasattr(prov, "value") and isinstance(prov.value, str):
-                    provider_str = prov.value
-                elif isinstance(prov, str):
-                    provider_str = prov
-                else:
-                    provider_str = "custom"
-
                 receipt_data = {
                     "source_sha256": source_hash,
                     "script_sha256": script_hash,
                     "output_sha256": output_hash,
                     "voice": str(active_voice),
-                    "tts_provider": provider_str,
+                    "tts_provider": spec["tts_provider"],
+                    "render_spec": spec,
                     "transition_sfx": sfx_name,
                     "duration": expected,
                     "schema_version": "2.0.0" if is_v2 else "1.0.0",
@@ -627,4 +645,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

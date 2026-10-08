@@ -18,57 +18,20 @@ from config.settings import settings
 from video_processing.core.insight_script import InsightScriptV2
 from video_processing.utils.agy_copy_service import generate_cached_agy_copy
 from video_processing.utils.insight_v2_prompt import INSIGHT_SCRIPT_V2_SYSTEM_PROMPT
+from video_processing.utils.insight_evidence import quote_checks, review_evidence
 from video_processing.utils.video_metadata import get_video_duration_ffprobe
 
 logger = logging.getLogger(__name__)
 
 
 def verify_vtt_evidence(script: InsightScriptV2, vtt_path: Path, tolerance_sec: float = 5.0) -> bool:
-    """自动核对卡片中的 vtt_reference 是否在原始字幕对应时间窗口内真实出现 (词频匹配度 ≥ 80%)。"""
+    """兼容接口：仅检查引文连续词序，不把匹配结果称为事实正确。"""
     try:
-        if isinstance(script, dict):
-            script = InsightScriptV2.model_validate(script)
-        elif not hasattr(script, "cards"):
-            logger.error("[GateRejected] 脚本对象未包含 cards 结构，拒绝核验")
-            return False
-
-        vtt_file = Path(vtt_path)
-        if not vtt_file.is_file():
-            logger.error("[GateRejected] 字幕文件不存在: %s", vtt_file)
-            return False
-
-        subs = pysubs2.load(str(vtt_file))
-        if not subs:
-            logger.error("[GateRejected] 字幕内容为空: %s", vtt_file)
-            return False
-    except Exception as exc:
-        logger.error("[GateRejected] 无法解析字幕文件进行事实引证核验: %s (%s)", vtt_path, exc)
+        script = InsightScriptV2.model_validate(script) if isinstance(script, dict) else script
+        checks = quote_checks(script, Path(vtt_path), tolerance_sec)
+        return bool(checks) and all(check["quote_matched"] for check in checks)
+    except Exception:
         return False
-
-    tolerance_sec = max(0.0, float(tolerance_sec))
-    for card in script.cards:
-        for point in card.points:
-            ref = point.vtt_reference
-            w_start = (ref.start_sec - tolerance_sec) * 1000.0
-            w_end = (ref.end_sec + tolerance_sec) * 1000.0
-            overlap_text = " ".join(
-                line.plaintext for line in subs if line.end >= w_start and line.start <= w_end
-            )
-            ref_words = re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fa5]", ref.source_quote.lower())
-            if not ref_words:
-                logger.error("[GateRejected] 论据引证原文引用为空: %s", ref)
-                return False
-
-            overlap_words = set(re.findall(r"[a-zA-Z0-9]+|[\u4e00-\u9fa5]", overlap_text.lower()))
-            matched_count = sum(1 for w in ref_words if w in overlap_words)
-            ratio = matched_count / len(ref_words)
-            if ratio < 0.80:
-                logger.error(
-                    "[GateRejected] 论据引证未能匹配原文字幕 (匹配度 %.2f < 0.80): '%s' 在 [%.1fs, %.1fs] 内",
-                    ratio, ref.source_quote, ref.start_sec, ref.end_sec,
-                )
-                return False
-    return True
 
 
 def generate_insight_script(title: str, source: Path, subtitle: Path, output: Path) -> bool:
@@ -99,24 +62,12 @@ def generate_insight_script(title: str, source: Path, subtitle: Path, output: Pa
         )
 
         def validate(raw):
-            try:
-                if isinstance(raw, str):
-                    parsed = InsightScriptV2.model_validate_json(raw)
-                else:
-                    parsed = InsightScriptV2.model_validate(raw)
-                for card in parsed.cards:
-                    if card.end_sec > source_duration:
-                        raise ValueError(f"卡片结束时间 {card.end_sec}s 超出源视频时长 {source_duration}s")
-                return parsed.model_dump()
-            except Exception as v2_err:
-                try:
-                    from video_processing.core.insight_script import InsightScript
-                    legacy = InsightScript.model_validate(raw)
-                    if legacy.highlight_window.end_sec > source_duration:
-                        raise ValueError("高光超出媒体时长")
-                    return legacy.model_dump()
-                except Exception:
-                    raise v2_err
+            parsed = (InsightScriptV2.model_validate_json(raw) if isinstance(raw, str)
+                      else InsightScriptV2.model_validate(raw))
+            for card in parsed.cards:
+                if card.end_sec > source_duration:
+                    raise ValueError(f"卡片结束时间 {card.end_sec}s 超出源视频时长 {source_duration}s")
+            return parsed.model_dump()
 
         if settings.copywriter_content_provider == "agy":
             result = generate_cached_agy_copy(
@@ -139,16 +90,9 @@ def generate_insight_script(title: str, source: Path, subtitle: Path, output: Pa
                 )
             data = json.loads(response.text)
 
-        validated_dict = validate(data)
-        try:
-            script = InsightScriptV2.model_validate(validated_dict)
-            # 网关出口：强制核验事实原文引证门禁 (Fail-Closed)
-            if not verify_vtt_evidence(script, subtitle):
-                logger.error("[GateRejected] 事实引证核验失败 (Fail-Closed)，拒绝输出幻觉脚本")
-                return False
-        except Exception:
-            from video_processing.core.insight_script import InsightScript
-            script = InsightScript.model_validate(validated_dict)
+        script = InsightScriptV2.model_validate(validate(data))
+        # 普通事实疑点仅归档提示，不影响渲染与发布；结构契约仍须有效。
+        review_evidence(script, subtitle, output.with_suffix(".evidence.json"))
 
         temporary = output.with_suffix(".pending.json")
         temporary.write_text(script.model_dump_json(indent=2), encoding="utf-8")

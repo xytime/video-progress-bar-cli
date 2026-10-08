@@ -125,9 +125,15 @@ class TestInsightProcessorV2:
         assert "overlay=0:0:enable='between(t,22.0,44.0)'" in cmd_str
         assert "overlay=0:0:enable='between(t,70.0,95.0)'" in cmd_str
 
-    def test_three_level_sha256_receipt_system(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("provider", ["edge", "doubao"])
+    def test_three_level_sha256_receipt_system(self, tmp_path, monkeypatch, provider):
         """验证三级 SHA-256 收据系统结构与 valid_enrichment 双向校验。"""
-        processor = InsightProcessor(tts=LocalSpeech44100())
+        from video_processing.core.tts_engine import TTSProvider
+        tts = LocalSpeech44100()
+        tts.provider = TTSProvider(provider)
+        monkeypatch.setattr(settings, "tts_provider", provider)
+        monkeypatch.setattr(settings, "doubao_tts_api_key", "offline-test-placeholder")
+        processor = InsightProcessor(tts=tts)
         monkeypatch.setattr(settings, "insight_default_voice", "zh-CN-YunyangNeural")
 
         # 生成 14 秒真实测试视频 (44.1kHz 立体声, 1080x1920 @ 30fps)
@@ -182,6 +188,23 @@ class TestInsightProcessorV2:
 
         # valid_enrichment 双向校验通过
         assert valid_enrichment(source, script_file, output) is True
+        assert receipt["tts_provider"] == provider
+        expected_voice = settings.doubao_tts_speaker if provider == "doubao" else settings.insight_default_voice
+        assert receipt["voice"] == expected_voice
+        # 重复校验复用同一母带；改变任何实际渲染参数必须使缓存失效。
+        for name, changed in [("transition_sfx_volume", 0.73),
+                              ("doubao_tts_speech_rate", 29) if provider == "doubao"
+                              else ("insight_default_voice", "another-voice")]:
+            with monkeypatch.context() as patch:
+                patch.setattr(settings, name, changed)
+                assert not valid_enrichment(source, script_file, output)
+            assert valid_enrichment(source, script_file, output)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "RENDER_RECIPE", "new-layout")
+            assert not valid_enrichment(source, script_file, output)
+        receipt.pop("render_spec")
+        receipt_file.write_text(json.dumps(receipt))
+        assert not valid_enrichment(source, script_file, output)
 
 
 class TestEvidenceVerificationGate:
@@ -223,8 +246,8 @@ class TestEvidenceVerificationGate:
         # 必须拦截返回 False
         assert verify_vtt_evidence(bad_script, vtt) is False
 
-    def test_generate_insight_script_rejects_hallucination(self, tmp_path, monkeypatch):
-        """generate_insight_script 若在网关引证校验失败，必须拒绝写入并返回 False。"""
+    def test_generate_insight_script_records_quote_warning_without_blocking(self, tmp_path, monkeypatch):
+        """普通事实疑点须留档，但不停止脚本生成。"""
         monkeypatch.setattr(settings, "enable_deep_insight_enrichment", True)
         monkeypatch.setattr(settings, "copywriter_content_provider", "agy")
 
@@ -239,12 +262,18 @@ class TestEvidenceVerificationGate:
             return validate(FEW_SHOT_EXAMPLE_CORNELL)
 
         monkeypatch.setattr(insight_planner, "generate_cached_agy_copy", provider)
+        from video_processing.utils import insight_evidence
+        monkeypatch.setattr(insight_evidence, "generate_cached_agy_copy", Mock(side_effect=TimeoutError))
 
         output = tmp_path / "test_insight.json"
         success = generate_insight_script("测试标题", tmp_path / "dummy.mp4", subtitle, output)
 
-        assert success is False
-        assert not output.exists()
+        assert success is True
+        assert output.exists()
+        report = json.loads(output.with_suffix(".evidence.json").read_text())
+        assert report["status"] == "NEEDS_REVIEW"
+        assert report["publication_blocked"] is False
+        assert report["semantic_review"]["status"] == "UNAVAILABLE"
 
 
 

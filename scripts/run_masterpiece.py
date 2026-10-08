@@ -4,7 +4,7 @@
 
 提供 CLI 与自动化调度入口，支持针对特定 YouTube ID 或链接执行全流程二创编排与母带渲染：
 1. 规范脚本加载与 Pydantic 强类型网关出口核查；
-2. VTT 事实引证机器门禁双向核验（Fail-Closed）；
+2. 引文顺序核对与独立语义复核，普通疑点仅提示并归档；
 3. 100% 完整原片零裁切 + Y=265~555 安全横栏 + 0.6s Dip to Black + 60Hz Hit 空间重音母带装配；
 4. 全流程 44.1kHz 音频采样率、音画同轴偏差与媒体规格质检；
 5. 三级 SHA-256 收据归档与 DAL 状态机回写。
@@ -43,7 +43,8 @@ from video_processing.processors.insight_processor import (
     probe,
     sha256,
 )
-from video_processing.utils.insight_planner import verify_vtt_evidence, generate_insight_script
+from video_processing.utils.insight_planner import generate_insight_script
+from video_processing.utils.insight_evidence import review_evidence
 from video_processing.utils.insight_v2_prompt import (
     FEW_SHOT_EXAMPLE_CORNELL,
     FEW_SHOT_EXAMPLE_NOBEL,
@@ -158,28 +159,21 @@ def run_masterpiece_pipeline(
         script = InsightScriptV2.model_validate_json(raw_script_text)
         logger.info("✔ Pydantic V2 契约校验通过: headline='%s', cards=%d", script.headline, len(script.cards))
 
-        # 2. VTT 事实引证机器可验证门禁
-        logger.info("正在执行 VTT 事实引证机器可验证门禁 (Fail-Closed)...")
-        if not verify_vtt_evidence(script, sub_path, tolerance_sec=5.0):
-            logger.error("❌ 事实引证门禁拦截：台词引用未能匹配原文字幕时间轴！")
-            raise RuntimeError("VTT Evidence Verification Failed: Fail-Closed Gate Blocked")
-        logger.info("✔ 事实引证门禁核验 100% 通过 (词频吻合度均 ≥ 80%)")
+        # 2. 核查结果不等于事实保证，也不作为普通内容疑点的停发条件。
+        evidence = review_evidence(script, sub_path, sc_path.with_suffix(".evidence.json"))
 
         output_masterpiece = out_dir / f"masterpiece_{youtube_id}.mp4"
 
         # 3. 检查缓存
+        if dry_run:
+            return {
+                "youtube_id": youtube_id, "status": "VALIDATED_DRY_RUN",
+                "source_video": str(src_video), "script": script.model_dump(),
+                "evidence_review": evidence,
+            }
         if not force and valid_enrichment(src_video, sc_path, output_masterpiece):
             logger.info("✔ 命中已验证的完整二创母带缓存: %s", output_masterpiece)
             render_seconds = 0.0
-        elif dry_run:
-            logger.info("✔ [Dry-Run] 校验全部通过，跳过实际音画渲染")
-            return {
-                "youtube_id": youtube_id,
-                "status": "VALIDATED_DRY_RUN",
-                "source_video": str(src_video),
-                "script": script.model_dump(),
-                "evidence_passed": True,
-            }
         else:
             logger.info("正在启动母带音画缝合与 44.1kHz 空间重音混流...")
             processor = InsightProcessor()
@@ -213,6 +207,7 @@ def run_masterpiece_pipeline(
         report = {
             "youtube_id": youtube_id,
             "status": "SUCCESS",
+            "evidence_review": evidence,
             "masterpiece_file": str(output_masterpiece),
             "file_size_bytes": output_masterpiece.stat().st_size,
             "render_seconds": render_seconds,

@@ -90,7 +90,7 @@ def test_failure_preserves_base_and_never_creates_output(tmp_path, payload, monk
         tts.generate_audio.side_effect = RuntimeError("tts")
     elif failure == "ffmpeg":
         monkeypatch.setattr(processor, "run", Mock(side_effect=RuntimeError("ffmpeg")))
-    assert processor.process(source, script, output) is False
+    assert processor.process(source, script, output, allow_legacy=True) is False
     assert source.read_bytes() == b"original"
     assert not output.exists()
     assert "InsightFallback" in caplog.text
@@ -103,7 +103,7 @@ def test_window_outside_source_fails_before_tts(tmp_path, payload, monkeypatch):
     script.write_text(json.dumps(payload))
     monkeypatch.setattr(module, "duration", lambda _: 0.2)
     tts = Mock()
-    assert not InsightProcessor(tts=tts).process(source, script, tmp_path / "output.mp4")
+    assert not InsightProcessor(tts=tts).process(source, script, tmp_path / "output.mp4", allow_legacy=True)
     tts.generate_audio.assert_not_called()
 
 
@@ -129,15 +129,11 @@ def test_real_ffmpeg_composition_and_cache_binding(tmp_path, payload, monkeypatc
     script = tmp_path / "script.json"
     script.write_text(json.dumps(payload))
     output = script.with_suffix(".mp4")
-    assert InsightProcessor(tts=LocalSpeech()).process(source, script, output)
+    assert InsightProcessor(tts=LocalSpeech()).process(source, script, output, allow_legacy=True)
     assert module.sha256(source) == before
     assert InsightScript.model_validate_json(script.read_text()).hook_title == payload["hook_title"]
     assert output.with_suffix(".receipt.json").is_file()
-    assert valid_enrichment(source, script, output)
-    monkeypatch.setattr(settings, "insight_default_voice", "different")
-    assert not valid_enrichment(source, script, output)
-    monkeypatch.setattr(settings, "insight_default_voice", "zh-CN-YunyangNeural")
-    script.write_text(json.dumps({**payload, "hook_title": "已改变"}))
+    # 显式历史复现可以读取，但自动生产不得采用 V1 缓存。
     assert not valid_enrichment(source, script, output)
 
 
@@ -195,7 +191,7 @@ def test_censorship_receives_enrichment_even_without_subtitle_flag(tmp_path, pay
     assert "你会先核验什么？" in service.check.call_args.args[2]
 
 
-def test_planner_uses_existing_provider_contract(tmp_path, payload, monkeypatch):
+def test_planner_rejects_legacy_provider_result(tmp_path, payload, monkeypatch):
     from video_processing.utils import insight_planner
     monkeypatch.setattr(settings, "enable_deep_insight_enrichment", True)
     monkeypatch.setattr(settings, "copywriter_content_provider", "agy")
@@ -208,8 +204,8 @@ def test_planner_uses_existing_provider_contract(tmp_path, payload, monkeypatch)
         return validate(payload)
     monkeypatch.setattr(insight_planner, "generate_cached_agy_copy", provider)
     output = tmp_path / "id_insight.json"
-    assert insight_planner.generate_insight_script("title", tmp_path / "base.mp4", subtitle, output)
-    assert InsightScript.model_validate_json(output.read_text()).hook_title == payload["hook_title"]
+    assert not insight_planner.generate_insight_script("title", tmp_path / "base.mp4", subtitle, output)
+    assert not output.exists()
 
 
 def test_planner_failure_and_disabled_never_write(tmp_path, monkeypatch):
@@ -235,7 +231,12 @@ def test_pipeline_replans_when_automatic_plan_source_changes(tmp_path, payload, 
     (tmp_path / "id_insight_plan.json").write_text(json.dumps({
         "source_sha256": "old", "subtitle_sha256": "old", "script_sha256": "old",
     }))
-    pm._run_tracked = lambda cmd, *args, **kwargs: calls.append(cmd)
+    def tracked(cmd, *args, **kwargs):
+        calls.append(cmd)
+        if "--insight-only" in cmd:
+            from video_processing.utils.insight_v2_prompt import FEW_SHOT_EXAMPLE_CORNELL
+            script.write_text(json.dumps(FEW_SHOT_EXAMPLE_CORNELL))
+    pm._run_tracked = tracked
     assert pm._process_insight_enrichment("id", "id", "title", subtitle)
     assert "--insight-only" in calls[0]
     assert "video_processing.processors.insight_processor" in calls[1]

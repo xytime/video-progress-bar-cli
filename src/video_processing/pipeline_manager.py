@@ -2314,15 +2314,12 @@ class PipelineManager:
                 self.db.update_enrichment_status(yid, "ENRICHED", slice_index=slice_index)
             return True
         try:
-            from .core.insight_script import InsightScript, InsightScriptV2
+            from .core.insight_script import InsightScriptV2
             script_valid = False
             if script.is_file():
                 try:
                     raw = script.read_text(encoding="utf-8")
-                    try:
-                        InsightScriptV2.model_validate_json(raw)
-                    except Exception:
-                        InsightScript.model_validate_json(raw)
+                    InsightScriptV2.model_validate_json(raw)
                     script_valid = True
                     if plan_receipt.is_file():
                         plan = json.loads(plan_receipt.read_text(encoding="utf-8"))
@@ -2351,6 +2348,12 @@ class PipelineManager:
                     "script_sha256": self._sha256_file(script),
                 }), encoding="utf-8")
                 plan_temporary.replace(plan_receipt)
+            # 手工脚本同样记录普通事实疑点；复核不改变发布状态。
+            from .utils.insight_evidence import review_evidence
+            parsed_script = InsightScriptV2.model_validate_json(script.read_text(encoding="utf-8"))
+            review_subs = self._source_subtitle_files(yid)
+            review_subtitle = review_subs[0] if review_subs else subtitle
+            review_evidence(parsed_script, review_subtitle, script.with_suffix(".evidence.json"))
             self._run_tracked([
                 self._VENV_PYTHON, "-m", "video_processing.processors.insight_processor",
                 str(source), str(script), str(output),
