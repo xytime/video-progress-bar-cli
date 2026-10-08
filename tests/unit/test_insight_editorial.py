@@ -99,6 +99,7 @@ def test_serif_title_and_chinese_numeric_units_are_not_orphaned():
     lines = e.wrap(title,84,884,serif=True)
     assert ''.join(lines)==title
     assert len(lines[-1])>=4
+    assert any('风险' in line for line in lines)
     text = "原视频从72个月、84个月车贷讲起，我们沿着月供和车辆残值观察。"
     lines = e.wrap(text,39,884)
     assert ''.join(lines)==text

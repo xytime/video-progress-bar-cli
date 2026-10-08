@@ -80,10 +80,14 @@ def wrap(text, size, width, serif=False, *, balanced=True):
     if (balanced and "\n" not in text and len(lines) > 1
             and measure.textlength(lines[-1], font=font(size, serif)) < width * .3
             and re.search(r"[\u3400-\u9fff]", text)):
+        # 两行标题优先在语义标点处分句，避免均衡折行将“风险”拆开。
+        divisions = [(text[:i+1],text[i+1:]) for i,c in enumerate(text[:-1]) if c in '，、：；']
+        candidates = [parts for parts in divisions if len(lines)==2 and all(
+            width*.3 <= measure.textlength(part,font=font(size,serif)) <= width for part in parts)]
         target = min(width, measure.textlength(text, font=font(size, serif)) / len(lines) + size)
-        candidate = wrap(text, size, target, serif, balanced=False)
+        candidate = min(candidates,key=lambda p:abs(len(p[0])-len(p[1]))) if candidates else wrap(text, size, target, serif, balanced=False)
         if len(candidate) == len(lines):
-            lines = candidate
+            lines = list(candidate)
     return lines
 
 
