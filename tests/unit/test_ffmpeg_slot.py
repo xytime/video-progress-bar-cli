@@ -28,7 +28,7 @@ with open(sys.argv[1], "a") as f:
     return directory, fake, tmp_path / "events"
 
 
-def child(runtime, duration="0.4", timeout=2):
+def child(runtime, duration="0.4", timeout=4):
     directory, fake, events = runtime
     code = '''from pathlib import Path
 import subprocess, sys

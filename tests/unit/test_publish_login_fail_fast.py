@@ -110,6 +110,7 @@ def test_fail_fast_attempts_enabled_desktop_quick_login_before_returning_login_r
         page,
         desktop_auth=watcher_cls.return_value,
         timeout_ms=15_000,
+        state_file=tmp_path / "wechat_state.json",
     )
     page.wait_for_url.assert_not_called()
 

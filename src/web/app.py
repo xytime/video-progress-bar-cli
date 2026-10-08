@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| 3.55.0 | 2026-10-08 | Antigravity | /api/trending-keywords 与 /refresh 增加异常防崩与静态兜底降级包装 |
 | 3.54.0 | 2026-09-28 | Antigravity | /api/wechat/status 基于结构化验证事实判断登录有效性；自动重登与登录恢复绑定本次成功授权时间戳 |
 | 3.53.0 | 2026-09-28 | Antigravity | 持久化记录实际随机选定的计划保活时刻，消除计划保活时间估算的平均伪造。 |
 | 3.52.0 | 2026-09-28 | Antigravity | 会话重登检测优先读取结构化授权状态，保活循环识别锁冲突 (code 11) 不再报错。 |
@@ -3759,17 +3760,63 @@ def run_full_pipeline():
 @app.get("/api/trending-keywords")
 def get_trending_keywords():
     """返回当前科技选题线索列表及元数据 (SWR 毫秒级极速响应，超期后台静默刷新)"""
-    from video_processing.topic_clues.hub import get_topic_clues_hub
-    hub = get_topic_clues_hub()
-    return hub.get_clues_swr()
+    try:
+        from video_processing.topic_clues.hub import get_topic_clues_hub
+        hub = get_topic_clues_hub()
+        return hub.get_clues_swr()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[TopicClues] 获取热词线索异常降级: {e}")
+        from urllib.parse import quote_plus
+        from video_processing.topic_clues.hub import DEFAULT_STATIC_KEYWORDS
+        result_kws = [
+            {
+                "keyword": kw,
+                "type": "static",
+                "hn_score": None,
+                "signal": None,
+                "title": None,
+                "yt_url": f"https://www.youtube.com/results?search_query={quote_plus(kw)}",
+            }
+            for kw in DEFAULT_STATIC_KEYWORDS
+        ]
+        return {
+            "enabled": False,
+            "source": "error",
+            "keywords": result_kws,
+            "updated_at": None,
+            "error": str(e),
+        }
 
 
 @app.post("/api/trending-keywords/refresh")
 def refresh_trending_keywords():
     """强制同步刷新科技选题线索（经 Singleflight 互斥，多并发共享单次底层抓取）"""
-    from video_processing.topic_clues.hub import get_topic_clues_hub
-    hub = get_topic_clues_hub()
-    return hub.refresh_sync()
+    try:
+        from video_processing.topic_clues.hub import get_topic_clues_hub
+        hub = get_topic_clues_hub()
+        return hub.refresh_sync()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"[TopicClues] 刷新热词线索异常降级: {e}")
+        from urllib.parse import quote_plus
+        from video_processing.topic_clues.hub import DEFAULT_STATIC_KEYWORDS
+        result_kws = [
+            {
+                "keyword": kw,
+                "type": "static",
+                "hn_score": None,
+                "signal": None,
+                "title": None,
+                "yt_url": f"https://www.youtube.com/results?search_query={quote_plus(kw)}",
+            }
+            for kw in DEFAULT_STATIC_KEYWORDS
+        ]
+        return {
+            "enabled": False,
+            "source": "error",
+            "keywords": result_kws,
+            "updated_at": None,
+            "error": str(e),
+        }
 
 
 # ── [Claude_Sonnet_4.6_Thinking_planning] v3.4.0: 高赞内容手动刷新 ──────────────

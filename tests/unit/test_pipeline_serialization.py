@@ -119,8 +119,9 @@ async def test_pipeline_agent_tools_serialization(tmp_path):
         return res
 
     # 测试 download_video 工具的锁排队
+    @patch('video_processing.utils.youtube_route.verify_youtube_route', return_value={'mode': 'rule', 'proxy': 'http://127.0.0.1:7890', 'policy_verified': True})
     @patch('bot.pipeline_agent.subprocess.run', side_effect=fake_subprocess_run)
-    def run_test(mock_run):
+    def run_test(mock_run, mock_verify):
         # 强制清除 mock 缓存
         if (tmp_path / "vid1.mp4").exists():
             (tmp_path / "vid1.mp4").unlink()
