@@ -33,6 +33,20 @@ def test_inactive_and_non_target_do_not_enroll(db):
     assert db.enroll_wallstreet_video('other______',b_only=True) is None
 
 
+def test_manual_render_retry_cannot_reset_active_or_completed_work(db):
+    pair = db.enroll_wallstreet_video('abcdefghijk',b_only=True)
+    assert not db.retry_wallstreet_render(pair['id'])
+    job = db.claim_wallstreet_render(now=100)
+    assert not db.retry_wallstreet_render(pair['id'])
+    assert db.finish_wallstreet_render(pair['id'],job['lease_token'],error='temporary',now=101)
+    assert db.claim_wallstreet_render(now=102) is None
+    assert db.retry_wallstreet_render(pair['id'])
+    retry = db.claim_wallstreet_render(now=102)
+    assert retry['attempts']==2
+    assert db.finish_wallstreet_render(pair['id'],retry['lease_token'],package={'video':'B.mp4'},now=103)
+    assert not db.retry_wallstreet_render(pair['id'])
+
+
 def test_manual_b_and_experiment_reuse_one_identity(db):
     pair = ready(db)
     assert db.enroll_wallstreet_video('abcdefghijk',b_only=True)['id'] == pair['id']

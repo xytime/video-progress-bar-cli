@@ -313,12 +313,15 @@ def main():
     parser.add_argument('--activate',action='store_true')
     parser.add_argument('--pause',action='store_true')
     parser.add_argument('--enqueue-b-only')
+    parser.add_argument('--retry-render',type=int)
     parser.add_argument('--import-metrics',type=Path)
     parser.add_argument('--report',action='store_true')
     parser.add_argument('--bind-publication',type=int)
     parser.add_argument('--platform-post-id')
     args = parser.parse_args()
     db = PipelineDB(str(settings.default_output_dir/'pipeline.db'))
+    if args.retry_render is not None:
+        print(json.dumps({'retry_scheduled':db.retry_wallstreet_render(args.retry_render)}));return 0
     if args.activate or args.pause:
         print(json.dumps(db.set_wallstreet_experiment(active=args.activate),ensure_ascii=False));return 0
     if args.enqueue_b_only:

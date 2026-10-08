@@ -11,9 +11,11 @@
 PYTHONPATH=src .venv/bin/python scripts/run_wallstreet_ab.py --report
 PYTHONPATH=src .venv/bin/python scripts/run_wallstreet_ab.py --pause
 PYTHONPATH=src .venv/bin/python scripts/run_wallstreet_ab.py --activate
+PYTHONPATH=src .venv/bin/python scripts/run_wallstreet_ab.py --retry-render 加工任务ID
 ```
 
 暂停只停止新作品入组，不撤销已受理任务，也不重发已公开版本。首次启用时刻不会因恢复而改写。
+修复加工失败原因后，可立即重试处于 RETRY 的加工任务；该命令不重置平台投稿。
 正常 A 与独立 B 分别使用原生作品 ID；A 确认公开后同平台 B 至少等待 6 小时。
 结果不明只读回查；只有票据证明抖音浏览器未启动时才能撤销票据并重新领取。
 其他结果不明的任务不能重传；有明确原生 ID 后，以下命令只读核验后才能恢复绑定：

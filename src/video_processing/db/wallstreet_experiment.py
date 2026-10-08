@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-09 | Codex | 修复后可立即重试加工，禁止重置正在执行或已完成任务 |
 | 1.0.0 | 2026-10-09 | Codex | 独立二创身份、租约、不可重传提交边界及作品级指标 |
 """
 from __future__ import annotations
@@ -175,6 +176,12 @@ class WallstreetExperimentDAL:
             conn.execute("""UPDATE wallstreet_pairs SET state='RENDERING',lease_token=?,lease_until=?,
                 attempts=attempts+1 WHERE id=?""", (token, now+lease_seconds, row["id"]))
             return dict(conn.execute("SELECT * FROM wallstreet_pairs WHERE id=?", (row["id"],)).fetchone())
+
+    def retry_wallstreet_render(self, pair_id):
+        """仅调度失败加工；不触碰提交状态、尝试计数或有效执行租约。"""
+        with self.get_connection() as conn:
+            return conn.execute("""UPDATE wallstreet_pairs SET next_run_at=0
+                WHERE id=? AND state='RETRY' AND lease_token IS NULL""", (pair_id,)).rowcount == 1
 
     def renew_wallstreet_render(self, pair_id, lease_token, lease_seconds, *, now=None):
         now = time.time() if now is None else now
