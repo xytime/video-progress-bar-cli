@@ -8,6 +8,7 @@
 | 2.0.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：InsightScriptV2 契约、100% 完整原片零裁切、全幅安全横栏(Y=265~555)、0.6s Dip to Black + 60Hz Hit 母带转场与三级收据系统 |
 | 2.1.0 | 2026-10-08 | Antigravity | 绑定官方品牌图腾微标、受控真实二维码、Slogan与思辨投票选项渲染，增强三级收据深层校验 |
 | 2.2.0 | 2026-10-08 | Antigravity | 接入火山引擎豆包语音 2.0 (Doubao Voice) 沉稳男声，并将转场音效升级为克制高级的 subtle_tape_swish，彻底消除炫耀感 |
+| 2.2.1 | 2026-10-08 | Antigravity | 修复 receipt_data 中 tts_provider 字段在 Mock/自定义对象下的序列化异常 |
 """
 import argparse
 import hashlib
@@ -568,12 +569,20 @@ class InsightProcessor:
 
                 # 三级 SHA-256 收据系统 (Level 1 / Level 2 / Level 3)
                 output_hash = sha256(assembled)
+                prov = getattr(self.tts, "provider", None)
+                if hasattr(prov, "value") and isinstance(prov.value, str):
+                    provider_str = prov.value
+                elif isinstance(prov, str):
+                    provider_str = prov
+                else:
+                    provider_str = "custom"
+
                 receipt_data = {
                     "source_sha256": source_hash,
                     "script_sha256": script_hash,
                     "output_sha256": output_hash,
-                    "voice": active_voice,
-                    "tts_provider": getattr(getattr(self.tts, "provider", None), "value", str(getattr(self.tts, "provider", "custom"))),
+                    "voice": str(active_voice),
+                    "tts_provider": provider_str,
                     "transition_sfx": sfx_name,
                     "duration": expected,
                     "schema_version": "2.0.0" if is_v2 else "1.0.0",
