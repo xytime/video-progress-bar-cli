@@ -563,7 +563,7 @@ def verify_management_publication(
     page.remove_listener('response',observe_response)
     native = next(iter(native_ids)) if len(native_ids)==1 else None
     # A/B 的封面短标题可相同；API 已绑定完整描述后，状态也须跟随这份描述。
-    state = get_management_publication_state(page_text, copy_text, '' if native else title_text)
+    state = native_management_publication_state(page_text, copy_text) if native else get_management_publication_state(page_text, copy_text, title_text)
     if platform_post_id and native != platform_post_id:
         state = None
         native = None
@@ -575,6 +575,15 @@ def verify_management_publication(
         encoding="utf-8",
     )
     return state
+
+
+def native_management_publication_state(page_text, copy_text):
+    """API 已精确绑定完整正文后，兼容页面同源换行序列化；冲突状态仍保持未知。"""
+    states = {get_management_publication_state(page_text, value, '') for value in (
+        copy_text, copy_text.replace('\n', '\n*'),
+    )}
+    states.discard(None)
+    return next(iter(states)) if len(states) == 1 else None
 
 
 def capture_controls(page, artifact_dir: Path, artifact_name: str) -> None:

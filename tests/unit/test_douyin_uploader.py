@@ -1698,3 +1698,13 @@ def test_native_id_accepts_observed_title_and_line_serialization_only():
     assert native_ids_for_description(payload, copy, title) == {'1234567890123456789'}
     assert native_ids_for_description(payload, copy, '另一标题') == set()
     assert native_ids_for_description(payload, copy) == set()
+
+
+def test_native_state_follows_serialized_body_instead_of_shared_title():
+    from scripts.douyin_uploader import native_management_publication_state
+    copy = '深度观察：月供变轻，风险去哪了\n每月少还一点真的更划算吗\n欢迎在评论区说说你的判断'
+    page = '共享标题 ' + copy.replace('\n', '\n*') + '\n编辑作品\n设置权限\n作品置顶\n删除作品\n2026年10月09日 01:42\n已发布'
+    page += '\n共享标题 普通版本\n编辑作品\n2026年10月09日 00:42\n审核中'
+    assert native_management_publication_state(page, copy) == 'PUBLISHED'
+    assert native_management_publication_state(page.replace('已发布', '不适宜公开'), copy) == 'REJECTED'
+    assert native_management_publication_state(page.replace('深度观察：月供变轻', '旧稿观察：月供變輕'), copy) is None
