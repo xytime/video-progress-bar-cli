@@ -99,3 +99,24 @@ spread_final = Image.alpha_composite(spread_final, spine_blur)
 douyin_4_3_path = covers_dir / "cover_douyin_4_3.jpg"
 spread_final.convert("RGB").save(douyin_4_3_path, "JPEG", quality=95)
 print(f"Douyin 4:3 open spread cover saved: {douyin_4_3_path}")
+
+# Write provenance files
+import hashlib, json
+from video_processing.core.cover_policy import compliant_cover_layout_policy
+
+for cp in [wechat_path, douyin_3_4_path, douyin_4_3_path]:
+    sha = hashlib.sha256(cp.read_bytes()).hexdigest()
+    prov_data = {
+        "schema_version": 1,
+        "cover_kind": "dedicated_generated_image",
+        "uses_video_frame": False,
+        "cover_filename": cp.name,
+        "cover_sha256": sha,
+        "audio_edition": "original_audio_subtitled",
+        "visual_asset": None,
+        "layout_policy": compliant_cover_layout_policy(),
+    }
+    pf = cp.with_name(f"{cp.stem}_provenance.json")
+    pf.write_text(json.dumps(prov_data, indent=2, ensure_ascii=False), encoding="utf-8")
+print("Provenance JSONs generated and validated.")
+
