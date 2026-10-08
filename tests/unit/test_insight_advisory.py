@@ -89,7 +89,7 @@ def test_masterpiece_continues_render_with_semantic_warning(case, tmp_path, monk
     monkeypatch.setattr(evidence, "generate_cached_agy_copy", Mock(side_effect=TimeoutError))
     called = []
     class Processor:
-        def process(self, src, plan, output):
+        def process(self, src, plan, output, **kwargs):
             called.append(output)
             return False  # 到达渲染即证明普通复核不可用没有拦截；媒体失败仍真实报告。
     monkeypatch.setattr(runner, "InsightProcessor", Processor)

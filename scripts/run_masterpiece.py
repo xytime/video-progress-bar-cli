@@ -136,6 +136,8 @@ def run_masterpiece_pipeline(
     script_path: Optional[Path] = None,
     force: bool = False,
     dry_run: bool = False,
+    original_video: Optional[Path] = None,
+    bilingual_subtitle: Optional[Path] = None,
 ) -> Dict[str, Any]:
     """执行高品质二创母带渲染与质检，返回结构化报告。"""
     out_dir = Path(output_dir or settings.default_output_dir)
@@ -171,14 +173,14 @@ def run_masterpiece_pipeline(
                 "source_video": str(src_video), "script": script.model_dump(),
                 "evidence_review": evidence,
             }
-        if not force and valid_enrichment(src_video, sc_path, output_masterpiece):
+        if not force and valid_enrichment(src_video, sc_path, output_masterpiece, original_video=original_video, bilingual_subtitle=bilingual_subtitle):
             logger.info("✔ 命中已验证的完整二创母带缓存: %s", output_masterpiece)
             render_seconds = 0.0
         else:
             logger.info("正在启动母带音画缝合与 44.1kHz 空间重音混流...")
             processor = InsightProcessor()
             t0 = time.time()
-            ok = processor.process(src_video, sc_path, output_masterpiece)
+            ok = processor.process(src_video, sc_path, output_masterpiece, original_video=original_video, bilingual_subtitle=bilingual_subtitle)
             render_seconds = round(time.time() - t0, 2)
             if not ok or not output_masterpiece.is_file():
                 raise RuntimeError(f"母带渲染失败，产物未生成或未通过基础校验")
@@ -248,6 +250,8 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=None, help="成片产物输出目录 (默认: output/)")
     parser.add_argument("--source-video", type=Path, default=None, help="指定基础竖版视频文件路径")
     parser.add_argument("--subtitle", type=Path, default=None, help="指定源字幕文件路径 (.vtt, .srt, .ass)")
+    parser.add_argument("--original-video", type=Path, help="对应未烧录字幕的原片；默认按基础竖版文件名查找")
+    parser.add_argument("--bilingual-subtitle", type=Path, help="对应双语 ASS；默认查找同名字幕")
     parser.add_argument("--script", type=Path, default=None, help="指定已生成的二创脚本文件 (.json)")
     parser.add_argument("--force", action="store_true", help="强制重新渲染，忽略既有缓存")
     parser.add_argument("--dry-run", action="store_true", help="只校验 Schema、引证门禁与收据，不触发 FFmpeg 渲染")
@@ -264,6 +268,8 @@ def main():
             script_path=args.script,
             force=args.force,
             dry_run=args.dry_run,
+            original_video=args.original_video,
+            bilingual_subtitle=args.bilingual_subtitle,
         )
         if args.json:
             print(json.dumps(report, ensure_ascii=False, indent=2))

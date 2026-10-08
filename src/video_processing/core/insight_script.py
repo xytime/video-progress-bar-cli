@@ -122,9 +122,16 @@ class OutroSegment(InsightModel):
     poll_options: Annotated[list[Annotated[str, Field(min_length=2, max_length=16)]], Field(min_length=2, max_length=3)]
 
     @property
+    def comment_invitation(self) -> str:
+        """画面、口播与审查共用同一句自然评论邀请。"""
+        return "欢迎在评论区说说你的判断。"
+
+    @property
     def tts_narration(self) -> str:
         """规范化片尾 TTS 配音合成文本。"""
-        return f"{self.philosophical_quote}。{self.reflection_question}。"
+        quote = self.philosophical_quote.rstrip("。？！?!.")
+        question = self.reflection_question.rstrip("。？！?!.")
+        return f"{quote}。{question}？{self.comment_invitation}"
 
 
 class InsightScriptV2(InsightModel):
@@ -156,6 +163,7 @@ class InsightScriptV2(InsightModel):
             self.outro.philosophical_quote,
             self.outro.reflection_question,
             *self.outro.poll_options,
+            self.outro.comment_invitation,
         ])
         return "\n".join(texts)
 

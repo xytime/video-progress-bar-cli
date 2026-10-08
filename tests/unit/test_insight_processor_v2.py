@@ -36,94 +36,16 @@ class LocalSpeech44100:
 
 
 class TestInsightProcessorV2:
-    def test_safe_horizontal_bar_dimensions_and_isolation(self, tmp_path):
-        """卡片渲染为 Y=265~555 全幅安全横栏，14px 指示条，覆盖水印并留出 1365px 避让区。"""
-        processor = InsightProcessor(tts=Mock())
-        card_a = tmp_path / "card_a.png"
-        card_b = tmp_path / "card_b.png"
-
-        processor.render_card(
-            card_a, "为什么纽约州长能越级夺权？",
-            ["1. 宪政纠偏：州长签署紧急行政令指派总检察长作为特检接管案件",
-             "2. 外部独立：州政府敦促校方启动由外部独立律师主导的全面审查",
-             "3. 行政施压：州长直接对话大学校长达成整改共识突破地方层层阻力"],
-            overlay=True, badge="制度透视", card_index=1,
-        )
-        processor.render_card(
-            card_b, "常春藤兄弟会背后的权力盲区",
-            ["1. 掩盖报告：校警向检方提交的初查报告中关键受害陈述竟被完全隐匿",
-             "2. 案发指控：受害人详尽指控在兄弟会酒局遭到五名醉酒男性的严重侵害",
-             "3. 司法失职：地方检察官未对涉案人员全面质询便仓促撤案引发公信力危机"],
-            overlay=True, badge="利益博弈", card_index=2,
-        )
-
-        for path, expected_indicator_color in [
-            (card_a, (245, 197, 66)),  # Card 1 金黄色
-            (card_b, (56, 189, 248)),  # Card 2 青蓝色
-        ]:
-            with Image.open(path) as img:
-                assert img.size == (1080, 1920)
-                # 顶部 0~264 完全透明 (避让上方空间)
-                assert img.getpixel((540, 100))[3] == 0
-                assert img.getpixel((0, 0))[3] == 0
-
-                # 横栏 Y=265~555 为 100% 不透明深度蓝灰底板 (彻底覆盖源视频日期水印)
-                pixel_center = img.getpixel((540, 400))
-                assert pixel_center[3] == 255
-                assert pixel_center[0] == 12 and pixel_center[1] == 18 and pixel_center[2] == 32
-
-                # 左侧 14px 内为发光指示条
-                indicator_pixel = img.getpixel((6, 300))
-                assert indicator_pixel[3] == 255
-                assert indicator_pixel[0] == expected_indicator_color[0]
-                assert indicator_pixel[1] == expected_indicator_color[1]
-                assert indicator_pixel[2] == expected_indicator_color[2]
-
-                # 底部 Y=556~1919 (高达 1365px) 完全透明，避让人脸与双语字幕
-                # 验证 1920 - 555 == 1365
-                assert 1920 - 555 == 1365
-                assert img.getpixel((540, 600))[3] == 0
-                assert img.getpixel((540, 1200))[3] == 0
-                assert img.getpixel((540, 1800))[3] == 0
-
-    def test_full_body_zero_trim_contract(self, tmp_path, monkeypatch):
-        """当输入为 InsightScriptV2 时，彻底废除 trim/atrim，100% 保留正文。"""
-        captured_commands = []
-
-        def mock_runner(cmd, **kw):
-            captured_commands.append(cmd)
-            # 模拟生成目标产物文件，使后续校验与重命名正常流转
-            out_file = Path(cmd[-1])
-            out_file.parent.mkdir(parents=True, exist_ok=True)
-            out_file.write_bytes(b"mock video data")
-
-        processor = InsightProcessor(tts=Mock(), runner=mock_runner)
-
-        # 伪造 180 秒视频
-        source = tmp_path / "source.mp4"
-        source.write_bytes(b"dummy")
-        script_file = tmp_path / "script.json"
-        script_file.write_text(json.dumps(FEW_SHOT_EXAMPLE_CORNELL), encoding="utf-8")
-        output = tmp_path / "output.mp4"
-
+    def test_missing_original_falls_back_before_tts(self, tmp_path, monkeypatch):
+        source = tmp_path / "base_vertical.mp4"
+        source.write_bytes(b"base")
+        script = tmp_path / "script.json"
+        script.write_text(json.dumps(FEW_SHOT_EXAMPLE_CORNELL))
+        tts = Mock()
         monkeypatch.setattr(module, "duration", lambda _: 180.0)
-        monkeypatch.setattr(module, "validate_media", lambda *args: None)
-
-        success = processor.process(source, script_file, output)
-        assert success is True
-
-        # 检查正文处理 FFmpeg 命令，确保没有出现 trim/atrim
-        main_cmd = captured_commands[2]  # cmd 0: intro, cmd 1: outro, cmd 2: main segment
-        cmd_str = " ".join(main_cmd)
-        assert "trim=" not in cmd_str
-        assert "atrim=" not in cmd_str
-        # 必须包含 1080:1920 缩放与首尾 0.6s Dip to Black 溶镜
-        assert "scale=1080:1920" in cmd_str
-        assert "fade=t=in:st=0:d=0.6" in cmd_str
-        assert "fade=t=out:st=179.4:d=0.6" in cmd_str
-        # 必须包含两张卡片的 overlay
-        assert "overlay=0:0:enable='between(t,22.0,44.0)'" in cmd_str
-        assert "overlay=0:0:enable='between(t,70.0,95.0)'" in cmd_str
+        assert not InsightProcessor(tts=tts).process(source, script, tmp_path / "output.mp4")
+        tts.generate_audio.assert_not_called()
+        assert source.read_bytes() == b"base"
 
     @pytest.mark.parametrize("provider", ["edge", "doubao"])
     def test_three_level_sha256_receipt_system(self, tmp_path, monkeypatch, provider):
@@ -137,16 +59,19 @@ class TestInsightProcessorV2:
         monkeypatch.setattr(settings, "insight_default_voice", "zh-CN-YunyangNeural")
 
         # 生成 14 秒真实测试视频 (44.1kHz 立体声, 1080x1920 @ 30fps)
-        source = tmp_path / "base.mp4"
+        original = tmp_path / "base.mp4"
+        source = tmp_path / "base_vertical.mp4"
         subprocess.run([
             "ffmpeg", "-nostdin", "-v", "error", "-y",
-            "-f", "lavfi", "-i", "color=c=black:s=1080x1920:r=30",
+            "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30",
             "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
             "-t", "14",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-ar", "44100", "-ac", "2",
-            str(source)
+            str(original)
         ], check=True)
+        source.write_bytes(original.read_bytes())
+        (tmp_path / "base.ass").write_text("[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:14.00,Default,,0,0,0,,The complete source frame is preserved.\\N完整保留原始视频画面。\n")
 
         # 调整测试脚本卡片时间，单卡时长须满足 5.0~45.0s 契约约束
         test_script = copy.deepcopy(FEW_SHOT_EXAMPLE_CORNELL)
@@ -189,6 +114,14 @@ class TestInsightProcessorV2:
         # valid_enrichment 双向校验通过
         assert valid_enrichment(source, script_file, output) is True
         assert receipt["tts_provider"] == provider
+        assert len(receipt["point_timeline"]) == 6
+        assert segments[1]["duration"] == 14
+        for input_file in (original, tmp_path / "base.ass"):
+            data = input_file.read_bytes()
+            input_file.write_bytes(data + b"changed")
+            assert not valid_enrichment(source, script_file, output)
+            input_file.write_bytes(data)
+            assert valid_enrichment(source, script_file, output)
         expected_voice = settings.doubao_tts_speaker if provider == "doubao" else settings.insight_default_voice
         assert receipt["voice"] == expected_voice
         # 重复校验复用同一母带；改变任何实际渲染参数必须使缓存失效。
@@ -275,38 +208,6 @@ class TestEvidenceVerificationGate:
         assert report["publication_blocked"] is False
         assert report["semantic_review"]["status"] == "UNAVAILABLE"
 
-
-
-class TestBrandAssetRendering:
-    def test_render_intro_card_brand_assets(self, tmp_path):
-        """片头导读大卡必须完整渲染图腾微标、品牌名称、主 Slogan 与标题口播。"""
-        processor = InsightProcessor(tts=Mock())
-        intro_png = tmp_path / "intro_brand.png"
-        processor.render_intro_card(
-            intro_png,
-            "名校兄弟会黑幕被掩盖",
-            "常春藤名校兄弟会深陷性侵丑闻，地方校警与检方却在调查中涉嫌刻意包庇。",
-        )
-        assert intro_png.is_file()
-        with Image.open(intro_png) as img:
-            assert img.size == (1080, 1920)
-            # 背景不透明
-            assert img.getpixel((540, 960))[3] == 255
-
-    def test_render_outro_card_brand_assets_and_poll(self, tmp_path):
-        """片尾终章大卡必须包含哲学金句、思辨议题、A/B/C投票选项与官方受控二维码。"""
-        processor = InsightProcessor(tts=Mock())
-        outro_png = tmp_path / "outro_brand.png"
-        processor.render_outro_card(
-            outro_png,
-            "当机构的自保本能压过个体正义，法治的阳光该照向何方？",
-            "常春藤名校与地方司法的利益闭环，是否需联邦立法强制监管？",
-            ["必须立法穿透", "坚持高校自治", "视案件性质而定"],
-        )
-        assert outro_png.is_file()
-        with Image.open(outro_png) as img:
-            assert img.size == (1080, 1920)
-            assert img.getpixel((540, 960))[3] == 255
 
 
 class TestGracefulDegradation:

@@ -1,4 +1,4 @@
-"""洞察卡片、解说和高光缝合。依赖：processors → core/utils → config。
+"""洞察卡片、解说和完整原片缝合。依赖：processors → core/utils → config。
 
 始终保留基础竖版，临时目录内完成渲染，验证后原子替换增强成片。
 # Modification History
@@ -20,15 +20,17 @@ import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
+import imageio_ffmpeg
 
 from config.settings import settings
+from video_processing.processors import insight_editorial as editorial
 from video_processing.core.insight_script import InsightScript, InsightScriptV2
 from video_processing.core.tts_engine import TTSEngine, TTSProvider
-from video_processing.utils.video_metadata import _resolve_ffprobe_cmd, resolve_ffmpeg_cmd
+from video_processing.utils.video_metadata import _resolve_ffprobe_cmd
 
 logger = logging.getLogger(__name__)
 WIDTH, HEIGHT = 1080, 1920
-RENDER_RECIPE = "insight-v2-cache-1"
+RENDER_RECIPE = "insight-editorial-1"
 ASSET_ROOT = Path(__file__).resolve().parents[3] / "assets"
 
 
@@ -60,7 +62,7 @@ def render_spec(provider=None) -> dict:
     provider = provider.value if isinstance(provider, TTSProvider) else provider
     doubao = provider == "doubao"
     sfx_name = settings.transition_sfx.lower()
-    assets = {"font": font_path(), "sfx": transition_path(sfx_name),
+    assets = {"font": font_path(), "sans": editorial.SANS, "sfx": transition_path(sfx_name),
               "logo": ASSET_ROOT / "brand/01_logos/concept_a.png",
               "qr": ASSET_ROOT / "brand/05_qrcodes/liuwei-shikonghao-wechat-channels-code-source.jpeg"}
     return {"recipe": RENDER_RECIPE, "tts_provider": provider,
@@ -110,7 +112,7 @@ def validate_media(path: Path, expected: float) -> None:
         raise ValueError("音画起点偏差超过一帧")
 
 
-def valid_enrichment(source: Path, script_path: Path, output: Path) -> bool:
+def valid_enrichment(source: Path, script_path: Path, output: Path, *, original_video=None, bilingual_subtitle=None) -> bool:
     """检查脚本、声音、源成片和输出哈希，拒绝陈旧或损坏增强缓存。"""
     try:
         receipt_path = output.with_suffix(".receipt.json")
@@ -118,6 +120,9 @@ def valid_enrichment(source: Path, script_path: Path, output: Path) -> bool:
             return False
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         InsightScriptV2.model_validate_json(script_path.read_text(encoding="utf-8"))
+        original, subtitles = editorial.resolve_inputs(source, original_video, bilingual_subtitle)
+        if receipt.get("editorial_inputs") != {"original_sha256": sha256(original), "subtitles_sha256": sha256(subtitles)}:
+            return False
         expected_spec = render_spec()
         if (receipt.get("render_spec") != expected_spec
                 or receipt.get("voice") != expected_spec["voice"]
@@ -154,144 +159,11 @@ class InsightProcessor:
     def font(size: int):
         return ImageFont.truetype(str(font_path()), size)
 
-    def render_intro_card(self, path: Path, title: str, narration: str):
-        """渲染片头独占导读大卡 (1080x1920)。
-        绑定官方「几何共振之眸」图腾微标、品牌名称「六维时空号」与主 Slogan「不同的视角，看见更大的世界。」。
-        """
-        image = Image.new("RGBA", (WIDTH, HEIGHT), (12, 18, 32, 255))
-        glow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-        ImageDraw.Draw(glow).ellipse((90, 200, 990, 1100), fill=(24, 45, 75, 120))
-        image = Image.alpha_composite(image, glow.filter(ImageFilter.GaussianBlur(120)))
-        draw = ImageDraw.Draw(image)
-
-        root = Path(__file__).resolve().parents[3]
-        logo_path = root / "assets/brand/01_logos/concept_a.png"
-        if logo_path.is_file():
-            logo = Image.open(logo_path).convert("RGBA").resize((110, 110), Image.Resampling.LANCZOS)
-            image.paste(logo, (100, 190), mask=logo)
-
-        draw.text((230, 205), "六维时空号", font=self.font(40), fill=(245, 197, 66))
-        draw.text((230, 260), "不同的视角，看见更大的世界。", font=self.font(24), fill=(160, 185, 220))
-        draw.line([100, 330, 980, 330], fill=(56, 189, 248, 100), width=2)
-
-        # 核心内容卡片容器
-        top, bottom = 370, 1480
-        draw.rounded_rectangle([100, top, 980, bottom], radius=24, fill=(18, 26, 44, 255),
-                               outline=(245, 197, 66, 200), width=2)
-        draw.text((150, top + 45), "◆ 深度观察 · 独家导读", font=self.font(26), fill=(245, 197, 66))
-
-        # 标题换行与渲染
-        f_title = self.font(46)
-        if draw.textlength(title, font=f_title) > 740:
-            f_title = self.font(38)
-        draw.text((150, top + 100), title, font=f_title, fill=(255, 255, 255))
-        draw.line([150, top + 175, 930, top + 175], fill=(56, 189, 248, 80), width=1)
-
-        # 导读口播正文折行渲染
-        f_body = self.font(34)
-        cur_y = top + 215
-        line = ""
-        for char in narration:
-            if draw.textlength(line + char, font=f_body) > 720:
-                if cur_y + f_body.size > bottom - 60:
-                    raise ValueError("导读正文超出可读布局，拒绝截断")
-                draw.text((150, cur_y), line, font=f_body, fill=(230, 240, 255))
-                cur_y += 58
-                line = char
-            else:
-                line += char
-        if line:
-            if cur_y + f_body.size > bottom - 60:
-                raise ValueError("导读正文超出可读布局，拒绝截断")
-            draw.text((150, cur_y), line, font=f_body, fill=(230, 240, 255))
-
-        draw.text((150, bottom - 60), "六维时空号 · 深度智囊出品", font=self.font(22), fill=(140, 160, 190))
-        image.save(path)
-
-    def render_outro_card(self, path: Path, quote: str, question: str, poll_options: list[str] = None):
-        """渲染片尾独占终章大卡 (1080x1920)。
-        1:1 嵌入官方受控真实二维码 (内嵌地球仪头像) 并展示思辨哲学金句与互动议题选项。
-        """
-        image = Image.new("RGBA", (WIDTH, HEIGHT), (12, 18, 32, 255))
-        glow = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-        ImageDraw.Draw(glow).ellipse((90, 300, 990, 1400), fill=(24, 45, 75, 120))
-        image = Image.alpha_composite(image, glow.filter(ImageFilter.GaussianBlur(120)))
-        draw = ImageDraw.Draw(image)
-
-        # 1. 深度思辨内容卡片 (Y=180~1260)
-        top, bottom = 180, 1260
-        draw.rounded_rectangle([100, top, 980, bottom], radius=24, fill=(18, 26, 44, 255),
-                               outline=(56, 189, 248, 180), width=2)
-        draw.text((150, top + 40), "◆ 深度思辨 · 终章观察", font=self.font(26), fill=(245, 197, 66))
-
-        # 哲学金句
-        f_quote = self.font(38)
-        cur_y = top + 95
-        line = ""
-        for char in quote:
-            if draw.textlength(line + char, font=f_quote) > 720:
-                draw.text((150, cur_y), line, font=f_quote, fill=(245, 197, 66))
-                cur_y += 56
-                line = char
-            else:
-                line += char
-        if line:
-            draw.text((150, cur_y), line, font=f_quote, fill=(245, 197, 66))
-            cur_y += 75
-
-        draw.line([150, cur_y, 930, cur_y], fill=(56, 189, 248, 80), width=1)
-        cur_y += 35
-
-        # 思辨问题
-        f_q = self.font(32)
-        line = ""
-        for char in question:
-            if draw.textlength(line + char, font=f_q) > 720:
-                draw.text((150, cur_y), line, font=f_q, fill=(230, 240, 255))
-                cur_y += 48
-                line = char
-            else:
-                line += char
-        if line:
-            draw.text((150, cur_y), line, font=f_q, fill=(230, 240, 255))
-            cur_y += 65
-
-        # 互动投票选项 (A / B / C)
-        if poll_options:
-            prefixes = ["[A]", "[B]", "[C]"]
-            for i, opt in enumerate(poll_options[:3]):
-                opt_y = cur_y + i * 80
-                if opt_y + 64 <= bottom - 20:
-                    draw.rounded_rectangle([150, opt_y, 930, opt_y + 64], radius=12,
-                                           fill=(28, 40, 68, 240), outline=(56, 189, 248, 120), width=1)
-                    label = f"{prefixes[i]}  {opt}"
-                    draw.text((180, opt_y + 14), label, font=self.font(28), fill=(240, 245, 255))
-
-        # 2. 底部受控官方二维码卡片 (Y=1310~1710)
-        qr_top, qr_bottom = 1310, 1710
-        draw.rounded_rectangle([100, qr_top, 980, qr_bottom], radius=24, fill=(16, 24, 38, 240),
-                               outline=(245, 197, 66, 180), width=2)
-
-        root = Path(__file__).resolve().parents[3]
-        qr_path = root / "assets/brand/05_qrcodes/liuwei-shikonghao-wechat-channels-code-source.jpeg"
-        if qr_path.is_file():
-            qr_img = Image.open(qr_path).convert("RGB").resize((190, 190), Image.Resampling.LANCZOS)
-            qr_frame = Image.new("RGB", (206, 206), (255, 255, 255))
-            qr_frame.paste(qr_img, (8, 8))
-            image.paste(qr_frame, (140, qr_top + 95))
-
-        draw.text((380, qr_top + 65), "扫码关注 · 六维时空号", font=self.font(34), fill=(245, 197, 66))
-        draw.text((380, qr_top + 120), "微信视频号官方认证", font=self.font(24), fill=(56, 189, 248))
-        draw.text((380, qr_top + 165), "不同的视角，看见更大的世界。", font=self.font(24), fill=(210, 225, 245))
-        draw.text((380, qr_top + 215), "长按或扫码识别 · 获取更多独家深度洞察", font=self.font(20), fill=(140, 160, 190))
-
-        image.save(path)
-
     def render_card(self, path: Path, title: str, paragraphs: list[str], *, overlay: bool = False,
                     badge: str = "", card_index: int = 1):
-        """渲染认知透视卡。
-        当 overlay=True 时生成 1080x1920 全幅透明底板，在 Y=265~555 处绘制不透明深蓝灰安全横栏
-        及左侧 14px 发光指示条，彻底覆盖源视频日期水印，下方留出 1365px 避让人脸与双语字幕。
+        """仅显式 V1 历史复现使用；V2 使用独立编辑版式。
+        当 overlay=True 时生成 1080x1920 全幅透明底板，在 Y=265~555 处绘制旧版不透明横栏
+        及左侧 14px 发光指示条，历史布局可能遮挡原片，不用于新生产母带。
         """
         image = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0) if overlay else (15, 18, 24, 255))
         if not overlay:
@@ -388,7 +260,7 @@ class InsightProcessor:
         image.save(path)
 
     def run(self, args):
-        self.runner([resolve_ffmpeg_cmd(), "-nostdin", "-v", "error", "-y", *args],
+        self.runner([settings.ffmpeg_path or imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-v", "error", "-y", *args],
                     check=True, capture_output=True, timeout=900)
 
     @staticmethod
@@ -417,7 +289,8 @@ class InsightProcessor:
                   "-af", af_filter, "-t", str(seconds), *self.codecs(), str(output)])
         return seconds
 
-    def process(self, source: Path, script_path: Path, output: Path, *, allow_legacy: bool = False) -> bool:
+    def process(self, source: Path, script_path: Path, output: Path, *, allow_legacy: bool = False,
+                original_video: Path = None, bilingual_subtitle: Path = None) -> bool:
         try:
             source, script_path, output = Path(source), Path(script_path), Path(output)
             if source.resolve() == output.resolve():
@@ -436,7 +309,14 @@ class InsightProcessor:
             source_dur = duration(source)
             preserve_full_body = is_v2 or getattr(script, "preserve_full_body", False)
 
+            editorial_inputs = None
             if is_v2:
+                original, subtitles = editorial.resolve_inputs(source, original_video, bilingual_subtitle)
+                if output.resolve() in {original.resolve(), subtitles.resolve(), script_path.resolve()}:
+                    raise ValueError("增强产物不可覆盖原片、字幕或脚本")
+                if abs(duration(original) - source_dur) > 0.12:
+                    raise ValueError("原片与基础成片时长不匹配，拒绝误配父片或切片")
+                editorial_inputs = {"original_sha256": sha256(original), "subtitles_sha256": sha256(subtitles)}
                 for c in script.cards:
                     if c.end_sec > source_dur:
                         raise ValueError(f"卡片时间窗 {c.end_sec}s 超出源成片 {source_dur}s")
@@ -450,16 +330,14 @@ class InsightProcessor:
             spec = render_spec(getattr(self.tts, "provider", None))
             with tempfile.TemporaryDirectory(prefix="insight-", dir=output.parent) as directory:
                 work = Path(directory)
-                intro_card, outro_card = work / "intro.png", work / "outro.png"
-
+                active_voice = spec["voice"]
+                point_timeline = []
                 if is_v2:
-                    hook_title = script.hook.title
-                    hook_narration = script.hook.narration
-                    outro_quote = script.outro.philosophical_quote
-                    outro_narration = script.outro.tts_narration
-                    outro_poll = script.outro.reflection_question
-                    cards_list = script.cards
+                    segments, lengths, core_duration, point_timeline = editorial.render_segments(
+                        self, script, original, subtitles, work, source_dur, active_voice, duration)
                 else:
+                    intro_card, outro_card = work / "intro.png", work / "outro.png"
+
                     hook_title = script.hook_title
                     hook_narration = script.hook_narration
                     close = script.closing_takeaway
@@ -467,79 +345,67 @@ class InsightProcessor:
                     outro_narration = close.narration
                     outro_poll = close.poll_topic
                     cards_list = script.context_cards
-
-                if is_v2:
-                    self.render_intro_card(intro_card, hook_title, hook_narration)
-                    self.render_outro_card(outro_card, outro_quote, outro_poll, script.outro.poll_options)
-                else:
                     self.render_card(intro_card, hook_title, [hook_narration], overlay=False)
                     self.render_card(outro_card, outro_quote, [outro_poll], overlay=False)
 
-                segments = [work / f"seg{i}.mp4" for i in range(3)]
-                lengths = []
+                    segments = [work / f"seg{i}.mp4" for i in range(3)]
+                    lengths = []
 
-                # 生成片头与片尾 TTS 配音及音视频片段 (44.1kHz)
-                active_voice = spec["voice"]
-                for index, (text, card, is_in) in enumerate([
-                    (hook_narration, intro_card, True),
-                    (outro_narration, outro_card, False),
-                ]):
-                    audio = work / f"voice{index}.mp3"
-                    self.tts.generate_audio(text, audio, voice=active_voice)
-                    seg_len = self.bookend(card, audio, segments[index * 2], is_intro=is_in)
-                    lengths.append(seg_len)
+                    # 生成片头与片尾 TTS 配音及音视频片段 (44.1kHz)
+                    active_voice = spec["voice"]
+                    for index, (text, card, is_in) in enumerate([
+                        (hook_narration, intro_card, True),
+                        (outro_narration, outro_card, False),
+                    ]):
+                        audio = work / f"voice{index}.mp3"
+                        self.tts.generate_audio(text, audio, voice=active_voice)
+                        seg_len = self.bookend(card, audio, segments[index * 2], is_intro=is_in)
+                        lengths.append(seg_len)
 
-                # 处理 Segment 1：原片正文 + 认知透视卡定时叠加 + 首尾 0.6s Dip to Black 溶镜
-                inputs = ["-i", str(source)]
-                if preserve_full_body:
-                    # 100% 完整原片零裁切
-                    core_duration = math.ceil(source_dur * 30) / 30
-                    fade_out_st = max(0.0, core_duration - 0.6)
-                    filters = [
-                        f"[0:v]scale=1080:1920,setsar=1,fps=30,format=yuv420p,"
-                        f"fade=t=in:st=0:d=0.6,fade=t=out:st={fade_out_st}:d=0.6[v0]",
-                        f"[0:a]aresample=44100,aformat=channel_layouts=stereo:sample_rates=44100,"
-                        f"afade=t=in:st=0:d=0.2,afade=t=out:st={fade_out_st}:d=0.6,apad[a]",
-                    ]
-                else:
-                    # Legacy 裁切兼容
-                    window = script.highlight_window
-                    core_duration = math.ceil((window.end_sec - window.start_sec) * 30) / 30
-                    filters = [
-                        f"[0:v]trim=start={window.start_sec}:end={window.end_sec},setpts=PTS-STARTPTS,"
-                        "scale=1080:1920,setsar=1,fps=30[v0]",
-                        f"[0:a]atrim=start={window.start_sec}:end={window.end_sec},asetpts=PTS-STARTPTS,"
-                        "aresample=44100,aformat=channel_layouts=stereo:sample_rates=44100,apad[a]",
-                    ]
-
-                for index, card in enumerate(cards_list, 1):
-                    png = work / f"card{index}.png"
-                    if is_v2:
-                        badge = card.badge
-                        card_title = card.title
-                        points = [f"{p.keyword}：{p.explanation}" for p in card.points]
-                        start_sec = card.start_sec
-                        end_sec = card.end_sec
+                    # 处理 Segment 1：原片正文 + 认知透视卡定时叠加 + 首尾 0.6s Dip to Black 溶镜
+                    inputs = ["-i", str(source)]
+                    if preserve_full_body:
+                        # 100% 完整原片零裁切
+                        core_duration = math.ceil(source_dur * 30) / 30
+                        fade_out_st = max(0.0, core_duration - 0.6)
+                        filters = [
+                            f"[0:v]scale=1080:1920,setsar=1,fps=30,format=yuv420p,"
+                            f"fade=t=in:st=0:d=0.6,fade=t=out:st={fade_out_st}:d=0.6[v0]",
+                            f"[0:a]aresample=44100,aformat=channel_layouts=stereo:sample_rates=44100,"
+                            f"afade=t=in:st=0:d=0.2,afade=t=out:st={fade_out_st}:d=0.6,apad[a]",
+                        ]
                     else:
+                        # Legacy 裁切兼容
+                        window = script.highlight_window
+                        core_duration = math.ceil((window.end_sec - window.start_sec) * 30) / 30
+                        filters = [
+                            f"[0:v]trim=start={window.start_sec}:end={window.end_sec},setpts=PTS-STARTPTS,"
+                            "scale=1080:1920,setsar=1,fps=30[v0]",
+                            f"[0:a]atrim=start={window.start_sec}:end={window.end_sec},asetpts=PTS-STARTPTS,"
+                            "aresample=44100,aformat=channel_layouts=stereo:sample_rates=44100,apad[a]",
+                        ]
+
+                    for index, card in enumerate(cards_list, 1):
+                        png = work / f"card{index}.png"
                         badge = card.badge
                         card_title = card.badge
                         points = card.points
                         start_sec = card.trigger_sec
                         end_sec = card.trigger_sec + card.duration_sec
 
-                    self.render_card(png, card_title, points, overlay=True, badge=badge, card_index=index)
-                    inputs += ["-loop", "1", "-framerate", "30", "-i", str(png)]
-                    card_dur = end_sec - start_sec
-                    fade = min(0.5, card_dur / 2)
-                    filters += [
-                        f"[{index}:v]format=rgba,fade=t=in:st={start_sec}:d={fade}:alpha=1,"
-                        f"fade=t=out:st={end_sec-fade}:d={fade}:alpha=1[c{index}]",
-                        f"[v{index-1}][c{index}]overlay=0:0:enable='between(t,{start_sec},{end_sec})'[v{index}]",
-                    ]
+                        self.render_card(png, card_title, points, overlay=True, badge=badge, card_index=index)
+                        inputs += ["-loop", "1", "-framerate", "30", "-i", str(png)]
+                        card_dur = end_sec - start_sec
+                        fade = min(0.5, card_dur / 2)
+                        filters += [
+                            f"[{index}:v]format=rgba,fade=t=in:st={start_sec}:d={fade}:alpha=1,"
+                            f"fade=t=out:st={end_sec-fade}:d={fade}:alpha=1[c{index}]",
+                            f"[v{index-1}][c{index}]overlay=0:0:enable='between(t,{start_sec},{end_sec})'[v{index}]",
+                        ]
 
-                last_v = f"[v{len(cards_list)}]"
-                self.run([*inputs, "-filter_complex", ";".join(filters), "-map", last_v, "-map", "[a]",
-                          "-t", str(core_duration), *self.codecs(), str(segments[1])])
+                    last_v = f"[v{len(cards_list)}]"
+                    self.run([*inputs, "-filter_complex", ";".join(filters), "-map", last_v, "-map", "[a]",
+                              "-t", str(core_duration), *self.codecs(), str(segments[1])])
 
                 # 缝合三大段落并混流沉稳克制转场过渡音效
                 assembled = work / "assembled.mp4"
@@ -592,6 +458,9 @@ class InsightProcessor:
                 if spec != render_spec(getattr(self.tts, "provider", None)):
                     raise ValueError("渲染期间声音配置或素材发生变化")
 
+                if editorial_inputs and editorial_inputs != {"original_sha256": sha256(original), "subtitles_sha256": sha256(subtitles)}:
+                    raise ValueError("渲染期间原片或双语字幕变化")
+
                 # 三级 SHA-256 收据系统 (Level 1 / Level 2 / Level 3)
                 output_hash = sha256(assembled)
                 receipt_data = {
@@ -601,6 +470,8 @@ class InsightProcessor:
                     "voice": str(active_voice),
                     "tts_provider": spec["tts_provider"],
                     "render_spec": spec,
+                    "editorial_inputs": editorial_inputs,
+                    "point_timeline": point_timeline,
                     "transition_sfx": sfx_name,
                     "duration": expected,
                     "schema_version": "2.0.0" if is_v2 else "1.0.0",
@@ -636,11 +507,14 @@ def main():
     parser.add_argument("source", type=Path)
     parser.add_argument("script", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--original-video", type=Path)
+    parser.add_argument("--bilingual-subtitle", type=Path)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     if not settings.enable_deep_insight_enrichment:
         return 1
-    return 0 if InsightProcessor().process(args.source, args.script, args.output) else 1
+    return 0 if InsightProcessor().process(args.source, args.script, args.output,
+                                            original_video=args.original_video, bilingual_subtitle=args.bilingual_subtitle) else 1
 
 
 if __name__ == "__main__":
