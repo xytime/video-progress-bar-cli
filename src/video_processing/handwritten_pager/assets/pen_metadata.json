@@ -1,0 +1,10 @@
+{
+  "name": "pen_ballpoint_photorealistic",
+  "orientation": "natural_right_hand_pointing_upleft",
+  "width": 938,
+  "height": 925,
+  "tip_x": 33,
+  "tip_y": 30,
+  "base_angle_deg": -2.5,
+  "material": "chrome_and_lacquer"
+}
