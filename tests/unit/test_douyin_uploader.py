@@ -1682,3 +1682,19 @@ def test_native_id_requires_full_description_and_never_title_similarity():
                           {'aweme_id':'3234567890123456789','desc':'深度观察：84个月车贷风险旧稿'}]}
     assert native_ids_for_description(payload,'深度观察：84个月车贷风险')=={'1234567890123456789'}
     assert native_ids_for_description(payload,'深度观察：84个月车贷')==set()
+
+
+def test_native_id_accepts_observed_title_and_line_serialization_only():
+    from scripts.douyin_uploader import native_ids_for_description
+    copy = '深度观察：月供变轻\n原视频从84个月讲起\n欢迎评论'
+    title = '汽车贷款观察'
+    exact = title + ' ' + copy.replace('\n', '\n*')
+    payload = {'items': [
+        {'aweme_id': '1234567890123456789', 'desc': exact},
+        {'aweme_id': '2234567890123456789', 'desc': exact.replace('84', '72')},
+        {'aweme_id': '3234567890123456789', 'desc': exact + '旧稿'},
+        {'item_id': 1234567890123456000, 'desc': exact},
+    ]}
+    assert native_ids_for_description(payload, copy, title) == {'1234567890123456789'}
+    assert native_ids_for_description(payload, copy, '另一标题') == set()
+    assert native_ids_for_description(payload, copy) == set()

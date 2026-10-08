@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.66 | 2026-10-09 | Codex | 按实测管理 API 的标题前置与换行星号序列化绑定完整正文，保持 ID 字符串精度。 |
 | 1.5.65 | 2026-10-09 | Codex | 完整简介绑定 API 原生作品 ID，拒绝标题相同的错误回读。 |
 | 1.7.7 | 2026-10-08 | Antigravity | 修复封面完成按钮整页降级检索；支持发文助手“作品未见异常（含建议）”明确检测完成状态，避免非阻断性优化建议导致虚假超时。 |
 | 1.7.6 | 2026-10-06 | Codex | 完整标题作为管理身份与等待目标，避免共用简介及旧列表抢先结束回查。 |
@@ -504,20 +505,27 @@ def _search_management_title(page, title_text: str) -> bool:
         return False
 
 
-def native_ids_for_description(value, copy_text):
+def native_ids_for_description(value, copy_text, title_text=""):
     """只接受完整描述一致的作品 ID；不以列表索引或标题相似度推断。"""
+    # 管理 API 会把已核验标题前置，并给正文换行加 '*'；只生成这些确定形式，
+    # 不删除平台描述中的任意标点，也不接受相似正文或 JS 已失真的数值 item_id。
+    copies = {copy_text.strip(), copy_text.strip().replace('\n', '\n*')}
+    title = " ".join(title_text.split()).strip()[:50]
+    expected = {_normalize_page_text(copy) for copy in copies}
+    if title:
+        expected.update(_normalize_page_text(title + ' ' + copy) for copy in copies)
     found = set()
     if isinstance(value,dict):
         native = str(value.get('aweme_id') or '')
         description = value.get('desc')
-        if native.isdigit() and len(native)>=15 and isinstance(description,str) and _normalize_page_text(description)==_normalize_page_text(copy_text):
+        if native.isdigit() and len(native)>=15 and isinstance(description,str) and _normalize_page_text(description) in expected:
             found.add(native)
         for child in value.values():
             if isinstance(child,(dict,list)):
-                found.update(native_ids_for_description(child,copy_text))
+                found.update(native_ids_for_description(child,copy_text,title_text))
     elif isinstance(value,list):
         for child in value:
-            found.update(native_ids_for_description(child,copy_text))
+            found.update(native_ids_for_description(child,copy_text,title_text))
     return found
 
 
@@ -533,7 +541,7 @@ def verify_management_publication(
     def observe_response(response):
         try:
             if response.status==200 and 'json' in response.headers.get('content-type',''):
-                native_ids.update(native_ids_for_description(response.json(),copy_text))
+                native_ids.update(native_ids_for_description(response.json(),copy_text,title_text))
         except Exception:
             pass
     page.on('response',observe_response)

@@ -140,8 +140,7 @@ def command(publication,package,evidence,*,verify=False,ticket=None):
         args+=['--verify-only']
         if publication.get('platform_post_id'):
             args+=['--platform-post-id',publication['platform_post_id']]
-        if platform=='wechat':
-            args+=['--expected-title',Path(package['title']).read_text().strip()]
+        # B 的封面短标题可能不进入视频号列表索引；已有原生 ID 时直接精确回查。
     else:
         args+=['--video',package['video'],'--cover',package['cover']]
         if platform=='wechat':

@@ -79,6 +79,7 @@
 | 4.8.0   | 2026-08-27 | Codex                               | 新标签页作品管理基线不可用时回退同页采集并安全返回投稿页，避免无基线提交永久未绑定。 |
 | 4.9.0   | 2026-08-27 | Codex                               | 作品管理 SPA 的 networkidle 超时改为非致命，改按业务路由及卡片证据判定页面可用。 |
 | 5.0.0   | 2026-08-27 | Codex                               | 读取作品管理原生 post_list 响应，以同会话唯一新增 objectId 绑定，修复短标题不在列表响应中的漏绑定。 |
+| 5.0.1   | 2026-10-09 | Codex                               | 已绑定组件同时确认已发表 DOM 分支、处理成功和公开权限枚举，拒绝凭 API 数值状态或播放量推断。 |
 | 5.1.0   | 2026-08-30 | Codex                               | 已绑定原生 ID 的只读回查在 SPA 卡片短暂未稳定时做一次有界重试；不可判定仍禁止重传。 |
 | 5.2.0   | 2026-08-31 | Codex                               | 回查拒绝词只接受明确平台状态短语，避免标题或正文中的“不可见/违规”等内容词被误判为审核驳回。 |
 | 5.3.0   | 2026-08-31 | Codex                               | 管理页状态只从独立状态行或具名状态标签读取；标题/正文中的发布、审核等普通词一律保持未判定。 |
@@ -491,6 +492,16 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
                 const status = node.querySelector('.bandage-list');
                 records.push({post_id: post.objectId, url: '', text: node.innerText || '',
                     status_text: status?.innerText || '',
+                    component_state: {
+                        has_posted: node.__vue__.isPostHasPosted === true,
+                        process_success: node.__vue__.isPostProcessSuccess === true,
+                        processing: node.__vue__.isPostProcessing === true,
+                        scheduled: node.__vue__.isTimePublish === true,
+                        posted_info_visible: !!node.querySelector('.posted-info') &&
+                            node.querySelector('.posted-info').getBoundingClientRect().height > 0,
+                        public_visibility: node.__vue__.VisibleType?.public !== undefined &&
+                            post.visibleType === node.__vue__.VisibleType.public,
+                    },
                     export_id: typeof post.exportId === 'string' ? post.exportId : ''});
             }
             const counts = new Map();
@@ -507,6 +518,7 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
             "card_text": str(record.get("text") or ""),
             **({"status_text": str(record["status_text"]), "platform_export_id": str(record.get("export_id") or "")}
                if "status_text" in record else {}),
+            **({"component_state": record["component_state"]} if "component_state" in record else {}),
         }
         for record in records
         if record.get("post_id")
@@ -708,6 +720,8 @@ def _load_management_cards(page, *, search_title: str | None = None) -> tuple[di
                 if dom_record:
                     api_record["status_text"] = dom_record.get("status_text", dom_record.get("card_text", ""))
                     api_record["platform_url"] = dom_record.get("platform_url", "")
+                    if "component_state" in dom_record:
+                        api_record["component_state"] = dom_record["component_state"]
                 cards[post_id] = api_record
         except Exception as exc:
             logger.warning("Unable to read native post_list response for exact submission binding: %s", exc)
@@ -789,6 +803,17 @@ def classify_management_publication(card_text: str) -> str:
         return MANAGEMENT_PUBLISHED
     if _has_labeled_management_status(candidates, ("审核中", "原创审核中", "审核通过", "处理中", "待审核", "转码中")):
         return MANAGEMENT_UNDER_REVIEW
+    return MANAGEMENT_UNCERTAIN
+
+
+def classify_management_component(value) -> str:
+    """使用同一原生 ID 的已发表 DOM 分支和组件公开枚举，不猜 API 数值状态。"""
+    if not isinstance(value, dict):
+        return MANAGEMENT_UNCERTAIN
+    if all(value.get(key) is True for key in (
+        "has_posted", "process_success", "posted_info_visible", "public_visibility",
+    )) and all(value.get(key) is False for key in ("processing", "scheduled")):
+        return MANAGEMENT_PUBLISHED
     return MANAGEMENT_UNCERTAIN
 
 
@@ -889,7 +914,7 @@ def verify_management_publication_by_id(
         try:
             evidence_root.mkdir(parents=True, exist_ok=True)
             snapshot = [{key: card.get(key, "") for key in (
-                "platform_post_id", "platform_export_id", "short_title", "platform_status", "status_text"
+                "platform_post_id", "platform_export_id", "short_title", "platform_status", "status_text", "component_state"
             )} for card in cards.values()]
             (evidence_root / f"management_identity_snapshot_{attempt}.json").write_text(
                 json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -901,6 +926,10 @@ def verify_management_publication_by_id(
             state = classify_management_publication(status_text)
             # 原生 status 数值尚无经核验的语义映射，不能按 desc、播放量或截图猜公开状态。
             reason = "API_STATUS_UNMAPPED" if api_identity and not status_text else "DOM_STATUS_TEXT"
+            if state == MANAGEMENT_UNCERTAIN:
+                state = classify_management_component(record.get("component_state"))
+                if state == MANAGEMENT_PUBLISHED:
+                    reason = "DOM_POSTED_PUBLIC_COMPONENT"
             try:
                 evidence_root.mkdir(parents=True, exist_ok=True)
                 (evidence_root / "management_readback.json").write_text(json.dumps({
@@ -912,6 +941,7 @@ def verify_management_publication_by_id(
                     "platform_status": record.get("platform_status", ""),
                     "state": state,
                     "reason": reason,
+                    "component_state": record.get("component_state"),
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as exc:
                 logger.warning("Unable to persist management readback diagnostics: %s", type(exc).__name__)

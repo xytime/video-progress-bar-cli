@@ -43,6 +43,7 @@ from wechat_uploader import (
     MANAGEMENT_UNCERTAIN,
     MANAGEMENT_UNDER_REVIEW,
     classify_management_publication,
+    classify_management_component,
     classify_publish_result,
     capture_submission_identity_baseline,
     _collect_management_cards_from_post_list_payload,
@@ -542,3 +543,28 @@ def test_readback_accepts_only_unique_platform_export_alias(monkeypatch, tmp_pat
         proof = json.loads((tmp_path / 'management_readback.json').read_text())
         assert proof['matched_by'] == 'EXACT_EXPORT_ID'
         assert proof['management_object_id'] == 'management-id'
+
+
+@pytest.mark.parametrize('invalid', [None, 'has_posted', 'process_success', 'posted_info_visible', 'public_visibility', 'processing', 'scheduled'])
+def test_published_component_requires_all_native_public_state_evidence(invalid):
+    evidence = dict(has_posted=True, process_success=True, posted_info_visible=True,
+                    public_visibility=True, processing=False, scheduled=False)
+    if invalid:
+        evidence[invalid] = not evidence[invalid]
+    assert classify_management_component(evidence) == (MANAGEMENT_UNCERTAIN if invalid else MANAGEMENT_PUBLISHED)
+    assert classify_management_component({}) == MANAGEMENT_UNCERTAIN
+
+
+def test_exact_native_component_readback_records_observed_public_state(monkeypatch, tmp_path):
+    import json
+    evidence = dict(has_posted=True, process_success=True, posted_info_visible=True,
+                    public_visibility=True, processing=False, scheduled=False)
+    cards = {'native': dict(platform_post_id='native', identity_source='post_list_api',
+                           platform_status='1', status_text='', component_state=evidence)}
+    monkeypatch.setattr('wechat_uploader._load_management_cards', lambda _: (cards, True))
+    monkeypatch.setattr('wechat_uploader._capture_wechat_evidence', lambda *_: None)
+    state, _ = verify_management_publication_by_id(object(), tmp_path, 'native')
+    assert state == MANAGEMENT_PUBLISHED
+    proof = json.loads((tmp_path/'management_readback.json').read_text())
+    assert proof['reason'] == 'DOM_POSTED_PUBLIC_COMPONENT'
+    assert proof['component_state'] == evidence
