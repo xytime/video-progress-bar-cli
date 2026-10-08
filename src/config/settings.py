@@ -432,6 +432,8 @@ class Settings(BaseSettings):
     # 试验启停与首次纳入时间由 DAL 持久保存；程序默认不创建活动试验。
     wallstreet_ab_render_lease_seconds: int = 14400
     wallstreet_ab_poll_seconds: int = 60
+    # 外部字幕策划在用户明确同意服务及内容发送后启用；已有本地审核脚本可继续。
+    wallstreet_ab_remote_planning_authorized: bool = False
     insight_default_voice: str = "zh-CN-YunyangNeural"
     tts_provider: str = "doubao"  # "doubao" | "edge" | "indextts"
     doubao_tts_api_key: Optional[str] = None

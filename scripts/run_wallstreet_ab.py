@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-09 | Codex | 程序化固化 mobile-2 与可恢复配对试验，复用既有平台闸门 |
+| 1.0.1 | 2026-10-09 | Codex | 外部字幕策划等待明确授权，本地脚本与普通 A 持续运行 |
 """
 from __future__ import annotations
 import argparse
@@ -93,8 +94,11 @@ def build_package(db,pair):
     folder = out/'wallstreet_ab'/str(pair['id'])/TEMPLATE
     folder.mkdir(parents=True,exist_ok=True)
     script_path = folder/f'{prefix}_insight.json'
-    if not script_path.is_file() and not generate_insight_script(video['title'],source,subtitle,script_path,explicit_editorial=True):
-        raise ValueError('二创策划失败；不替换为普通成片')
+    if not script_path.is_file():
+        if not settings.wallstreet_ab_remote_planning_authorized:
+            raise ValueError('REMOTE_PLANNING_APPROVAL_PENDING：外部字幕策划待授权；A 正常发布')
+        if not generate_insight_script(video['title'],source,subtitle,script_path,explicit_editorial=True):
+            raise ValueError('二创策划失败；不替换为普通成片')
     script = InsightScriptV2.model_validate_json(script_path.read_text())
     if script.video_id != video['youtube_id']:
         raise ValueError('二创脚本指向另一源视频')
@@ -298,6 +302,7 @@ def report(db):
     enrolled = {p['pair_id'] for p in publications if p['mode']=='PAIRED'}
     completed = sum(all(p['state']=='PUBLISHED' for p in publications if p['pair_id']==pair_id) for pair_id in enrolled)
     return {'experiment':config,'completed_pairs':completed,
+            'remote_planning_authorized':settings.wallstreet_ab_remote_planning_authorized,
             'review_due':bool(config and completed>=config['review_pairs']),
             'pairs':pairs,'metric_capture':'native_id_bound_import',
             'publications':[{key:pub[key] for key in ('id','pair_id','youtube_id','variant','platform','account',
@@ -363,6 +368,7 @@ def main():
                 while not stopped.is_set():
                     write_json(settings.default_output_dir/'wallstreet_worker_status.json',
                         {'pid':os.getpid(),'git_revision':revision,'loaded_template':TEMPLATE,'render_spec':adopted,
+                         'remote_planning_authorized':settings.wallstreet_ab_remote_planning_authorized,
                          'rules_fingerprint':current_rules_fingerprint(),'heartbeat_at':time.time(),
                          'experiment':db.get_wallstreet_experiment(),'pairs':db.get_wallstreet_pairs()})
                     stopped.wait(5)
