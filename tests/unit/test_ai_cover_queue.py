@@ -21,7 +21,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from src.video_processing.ai_cover_queue import AICoverQueue
+from video_processing.ai_cover_queue import AICoverQueue
 
 
 def _new_task(queue: AICoverQueue, tmp_path: Path, now: datetime, primary_provider="codex", enable_luna_fallback=False):
@@ -190,7 +190,7 @@ def test_eligible_task_excludes_completed_expired_and_fresh_claims(tmp_path: Pat
 
 def test_run_antigravity_injects_env_and_records_failure(tmp_path: Path, monkeypatch):
     import scripts.reconcile_ai_cover_queue as reconciler
-    from src.config.settings import settings
+    from config.settings import settings
 
     queue = AICoverQueue(tmp_path / "queue", tmp_path / "finish")
     now = datetime(2026, 7, 31, tzinfo=timezone.utc)

@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-08 | Antigravity | 修复沙盒环境下 Path.home() mach-lookup 拦截，安全回退至 HOME 环境变量或 /tmp |
 | 1.1.0 | 2026-09-18 | Antigravity | 候选 PATH 补齐 /usr/bin 与 /bin 基础系统路径，支持系统命令与守护进程保底 |
 | 1.0.0 | 2026-09-18 | Antigravity | 建立子进程环境工厂单一真相源，支持代理探测、PATH 补齐、GEMINI 密钥注入与 PYTHONPATH 保障 |
 """
@@ -63,11 +64,16 @@ def build_subprocess_env(
     if include_gemini and settings.gemini_api_key:
         env["GEMINI_API_KEY"] = settings.gemini_api_key
 
+    try:
+        user_local_bin = str(Path.home() / ".local" / "bin")
+    except Exception:
+        user_local_bin = str(Path(os.environ.get("HOME", "/tmp")) / ".local" / "bin")
+
     candidate_paths = [
         str(settings.project_root / ".venv" / "bin"),
         "/opt/homebrew/bin",
         "/usr/local/bin",
-        str(Path.home() / ".local" / "bin"),
+        user_local_bin,
         "/usr/bin",
         "/bin",
     ]

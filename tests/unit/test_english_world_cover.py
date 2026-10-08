@@ -20,12 +20,12 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image, ImageDraw
 from scripts import generate_english_cover as english_cover_cli
-from src.cover.semantic import SemanticAnalyzer
-from src.cover.layout import LayoutComposer, _format_quote_en_html
-from src.cover.engine import CoverEngine
-from src.cover.english_world import build_english_world_cover_payload, validate_english_world_cover_payload
-from src.cover import antigravity
-from src.cover.antigravity import accept_and_normalize, build_agy_prompt, build_visual_brief
+from cover.semantic import SemanticAnalyzer
+from cover.layout import LayoutComposer, _format_quote_en_html
+from cover.engine import CoverEngine
+from cover.english_world import build_english_world_cover_payload, validate_english_world_cover_payload
+from cover import antigravity
+from cover.antigravity import accept_and_normalize, build_agy_prompt, build_visual_brief
 from video_processing.core.cover_policy import assert_template_respects_cover_policy, validate_dedicated_cover_file
 from video_processing.core.cover_policy import compliant_cover_layout_policy
 

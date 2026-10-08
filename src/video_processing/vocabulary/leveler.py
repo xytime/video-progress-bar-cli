@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date       | Author | Description |
 | ------- | ---------- | ------ | ----------- |
+| 1.3.0 | 2026-10-08 | Antigravity | 修复沙盒环境下 Path.home() mach-lookup 拦截，安全回退至 HOME 环境变量或 /tmp |
 | 1.0.0 | 2026-08-03 | Codex | 初始创建：合并 hermes-wordlists 的 CEFR 与国内考试标签，支持词形还原与 JSON 输出。 |
 | 1.1.0 | 2026-08-03 | Codex | 修复词表缺失静默降级，增加离线语境释义选择与文章生词表提取接口。 |
 | 1.2.0 | 2026-08-03 | Codex | 增加 ECDICT lazy/eager/off 加载模式，按目标词批量扫描降低启动内存。 |
@@ -15,13 +16,21 @@ import csv
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+import os
 import re
 from typing import Iterable, Literal, Sequence
 
 from .models import FriendlyTag, WordLevelResult
 
 
-DEFAULT_WORDLIST_DIR = Path.home() / "Downloads" / "hermes-wordlists"
+def _default_wordlist_dir() -> Path:
+    try:
+        return Path.home() / "Downloads" / "hermes-wordlists"
+    except Exception:
+        return Path(os.environ.get("HOME", "/tmp")) / "Downloads" / "hermes-wordlists"
+
+
+DEFAULT_WORDLIST_DIR = _default_wordlist_dir()
 MAIN_WORDLIST_FILES = ("exam-wordlists.csv", "cefr-enhanced.csv")
 ECDICT_WORDLIST_FILE = "ecdict.csv"
 ECDICT_MODES = ("lazy", "eager", "off")

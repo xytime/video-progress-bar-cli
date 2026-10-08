@@ -15,7 +15,7 @@ import pytest
 from PIL import Image
 
 from scripts.import_antigravity_cover import import_visual
-from src.video_processing.ai_cover_queue import AICoverQueue
+from video_processing.ai_cover_queue import AICoverQueue
 
 
 def _task(tmp_path):

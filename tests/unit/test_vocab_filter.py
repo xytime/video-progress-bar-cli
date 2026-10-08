@@ -7,7 +7,7 @@
 | 1.0.0   | 2026-06-28 | Claude_Opus_4.8 | 初始创建：覆盖 _filter_vocab 剔除周知专有名词/常识词（Wall Street 等），保留真生词 |
 | 1.1.0   | 2026-07-13 | Codex | PET/B1 标准改为保留专有名词，删除历史黑名单断言 |
 """
-from src.video_processing.utils.vocab_helper import _filter_vocab
+from video_processing.utils.vocab_helper import _filter_vocab
 
 
 class TestFilterVocab:

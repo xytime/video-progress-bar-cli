@@ -18,12 +18,12 @@ import json
 from unittest.mock import patch, MagicMock
 
 # --- Imports for the components we test ---
-from src.video_processing.db.database import PipelineDB
-from src.video_processing.processors.caption_processor import AutoCaptionProcessor
+from video_processing.db.database import PipelineDB
+from video_processing.processors.caption_processor import AutoCaptionProcessor
 from scripts.cover_generator import split_text_by_width, get_font, generate_cover
-from src.bot.api_client import PipelineAPIClient
-from src.bot.auth import parse_admin_ids, SecurityConfigError
-from src.video_processing.pipeline_manager import PipelineManager
+from bot.api_client import PipelineAPIClient
+from bot.auth import parse_admin_ids, SecurityConfigError
+from video_processing.pipeline_manager import PipelineManager
 
 
 # ==============================================================================
@@ -123,8 +123,8 @@ def test_translation_html_filtering(tmp_path):
         {"text": "Captcha"}
     ]
     
-    with patch('src.video_processing.utils.vocab_helper.extract_vocab_batch', return_value=None), \
-         patch('src.video_processing.processors.caption_processor._google_batch_fallback',
+    with patch('video_processing.utils.vocab_helper.extract_vocab_batch', return_value=None), \
+         patch('video_processing.processors.caption_processor._google_batch_fallback',
                side_effect=lambda texts, **kw: [mock_instance.translate_batch(texts)[i] if i < len(mock_instance.translate_batch(texts)) else '' for i in range(len(texts))]):
         # 我们必须通过 translation_helper._google_translate_batch 来测试 HTML 过滤。
         # 直接测试 _google_translate_batch 本身的行为（单元测试其过滤逻辑）。
@@ -134,6 +134,7 @@ def test_translation_html_filtering(tmp_path):
         with patch('video_processing.utils.translation_helper.GoogleTranslator') as mock_gt:
             mock_gt_inst = mock_gt.return_value
             mock_gt_inst.translate_batch.return_value = raw_texts
+            mock_gt_inst.translate.side_effect = lambda text: text
             result = _google_translate_batch(raw_texts)
 
     assert result[0] == "正常翻译" or result[0] == "Hello"  # may pass through if not HTML

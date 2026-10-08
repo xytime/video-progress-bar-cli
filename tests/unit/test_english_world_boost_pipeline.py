@@ -22,13 +22,13 @@ from types import SimpleNamespace
 import pytest
 
 from video_processing.study_cards.caption_evidence import repair_asr_word_timestamps
-from src.cover.english_world import (
+from cover.english_world import (
     _first_sentence,
     _validate_quote_closure,
     build_english_world_cover_payload,
     validate_english_world_cover_payload,
 )
-from src.video_processing.study_cards.learning_dictionary import (
+from video_processing.study_cards.learning_dictionary import (
     normalize_phonetic,
     attach_evidence,
 )
@@ -513,7 +513,10 @@ def test_source_evidence_saves_raw_asr_before_repair_failure(tmp_path, monkeypat
     # Mock ffmpeg run
     class FakeCompletedProcess:
         returncode = 0
+        stdout = ""
+        stderr = ""
     monkeypatch.setattr("subprocess.run", lambda *args, **kwargs: FakeCompletedProcess())
+    monkeypatch.setattr("imageio_ffmpeg.get_ffmpeg_exe", lambda: "ffmpeg")
 
     # Mock whisper transcribe to return a zero-width word at the tail (which will fail repair)
     class FakeWhisperModel:

@@ -3,6 +3,11 @@
 所有 Popen 入口（含 imageio / Whisper / yt-dlp）共用同一组 flock；非 FFmpeg
 保持标准库行为。等待发生在创建子进程之前，所以 run(timeout=...) 只计算执行。
 锁 FD 传给 FFmpeg：即使 Python 父进程崩溃，仍不会提前放行下一项。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-08 | Antigravity | 修复沙盒环境下 Path.home() 拦截降级及 _ancestors 中 process mock 导致的 AttributeError。 |
 """
 from __future__ import annotations
 
@@ -16,8 +21,17 @@ import threading
 import time
 import uuid
 
-_BASE_POPEN = subprocess.Popen
-_DIRECTORY = Path.home() / "Library" / "Application Support" / "VideoProcessing" / "ffmpeg-slot"
+_BASE_POPEN = getattr(subprocess.Popen, "_base_popen", subprocess.Popen)
+
+
+def _default_slot_directory() -> Path:
+    try:
+        return Path.home() / "Library" / "Application Support" / "VideoProcessing" / "ffmpeg-slot"
+    except Exception:
+        return Path("/tmp") / "VideoProcessing" / "ffmpeg-slot"
+
+
+_DIRECTORY = _default_slot_directory()
 _CUSTOM_EXECUTABLES: set[str] = set()
 _STATE_LOCK = threading.Lock()
 _WAITERS = 0
@@ -217,6 +231,9 @@ class Slot:
 
 class GuardedPopen(_BASE_POPEN):
     """精确拦截 FFmpeg 创建；不改参数、媒体内容、线程数或其他子进程。"""
+    _base_popen = _BASE_POPEN
+    _is_guarded = True
+
     def __init__(self, args, *positional, **kwargs):
         self._ffmpeg_slot = None
         if not is_ffmpeg(args, kwargs.get("executable"), kwargs.get("shell", False)):
@@ -269,7 +286,7 @@ class GuardedPopen(_BASE_POPEN):
 
 def install() -> None:
     """仅项目虚拟环境/项目入口启用；幂等，避免重复套娃。"""
-    if subprocess.Popen is not GuardedPopen:
+    if not getattr(subprocess.Popen, "_is_guarded", False):
         subprocess.Popen = GuardedPopen
 
 
@@ -285,7 +302,7 @@ def _ancestors() -> list[int]:
             if parent <= 1 or parent in ancestors:
                 break
             ancestors.append(parent)
-    except (OSError, ValueError, subprocess.SubprocessError):
+    except (OSError, ValueError, AttributeError, subprocess.SubprocessError):
         pass
     return ancestors
 

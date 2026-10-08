@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| insight-v1.1 | 2026-10-08 | Antigravity | 修复沙盒环境无 HOME 变量时 Path.home() mach-lookup 拦截异常。 |
 | insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
 | 3.75.0 | 2026-10-05 | Codex | 字幕共享期限、Google 节流与源下载冷却配置；禁止不可还原的代理切换。 |
 | 3.74.0 | 2026-10-03 | Codex | TED/TEDx 自动候选新增严格大于 0.6% 的源视频点赞率门槛，保持评分线。 |
@@ -121,6 +122,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # [Claude_Sonnet_4.6_Thinking_planning] 项目根目录的绝对路径，在模块加载时确定
 # 用于 env_file 绝对路径，避免 cwd 不同时 .env 加载失败的根因
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+
+def _default_codex_text_command() -> str:
+    try:
+        return str(Path.home() / ".local" / "bin" / "codex")
+    except Exception:
+        return str(Path(os.environ.get("HOME", "/tmp")) / ".local" / "bin" / "codex")
 
 
 class Settings(BaseSettings):
@@ -239,7 +247,7 @@ class Settings(BaseSettings):
     copywriter_gemini_max_attempts: int = 2
     # 完整文案和字幕的最后一层经济型 CLI 兜底；真实样本验收后显式启用。
     enable_codex_text_fallback: bool = False
-    codex_text_command: str = str(Path.home() / ".local" / "bin" / "codex")
+    codex_text_command: str = _default_codex_text_command()
     codex_text_model: Literal["gpt-6-luna", "gpt-5.6-luna"] = "gpt-5.6-luna"
     codex_text_effort: Literal["low", "medium", "high"] = "medium"
     codex_text_request_timeout_seconds: int = Field(default=120, ge=10, le=300)

@@ -15,10 +15,10 @@ import json
 import re
 import pytest
 from pathlib import Path
-from src.cover.semantic import SemanticAnalyzer, ContentSignal
-from src.cover.themes import ThemeRegistry
-from src.cover.layout import LayoutComposer
-from src.cover.engine import CoverEngine
+from cover.semantic import SemanticAnalyzer, ContentSignal
+from cover.themes import ThemeRegistry
+from cover.layout import LayoutComposer
+from cover.engine import CoverEngine
 
 @pytest.fixture
 def temp_config_paths(tmp_path):
@@ -267,7 +267,7 @@ def test_cover_engine_e2e_mocked(temp_config_paths, tmp_path, monkeypatch):
         # 模拟生成输出图片文件
         Path(output_path).touch()
         
-    from src.cover.renderer import HTMLRenderer
+    from cover.renderer import HTMLRenderer
     monkeypatch.setattr(HTMLRenderer, "render", mock_render)
     
     engine = CoverEngine(

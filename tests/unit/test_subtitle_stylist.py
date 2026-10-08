@@ -10,7 +10,7 @@
 import textwrap
 
 import pytest
-from src.video_processing.utils.subtitle_stylist import (
+from video_processing.utils.subtitle_stylist import (
     SubtitleStylist,
     SubtitleLayout,
     strip_trailing_punctuation,

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.39.0 | 2026-10-08 | Antigravity | 修复 _remaining_translation_budget 在 __new__ 单体实例中缺少 _translation_deadline 属性时的 AttributeError 缺陷。 |
 | 1.38.0 | 2026-10-05 | Codex | 全供应商共享字幕预算，Google 逐段检查点与完整候选日志。 |
 | 1.37.0 | 2026-10-03 | Codex | 最后追加 Luna CLI 候选，保留严格质量和完整批次合同。 |
 | 1.36.0 | 2026-09-09 | Codex | 翻译硬合同先于软质量开关；占位符和段数错误留审计后回退 |
@@ -966,7 +967,8 @@ class AutoCaptionProcessor(VideoProcessorBase):
         return SubtitleTranslationCandidate(provider="Google", translations=gt_translated)
 
     def _remaining_translation_budget(self) -> float:
-        return max(0.0, self._translation_deadline - time.monotonic()) if self._translation_deadline is not None else 600.0
+        deadline = getattr(self, "_translation_deadline", None)
+        return max(0.0, deadline - time.monotonic()) if deadline is not None else 600.0
 
     def _align_vocab_after_plain_translation(
         self,
