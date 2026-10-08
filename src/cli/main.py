@@ -62,8 +62,10 @@ except ImportError:
 
 
 from cli.commands.follow_along import follow_along, follow_along_init
+from cli.commands.handwritten_pager import handwritten_pager
 cli.add_command(follow_along)
 cli.add_command(follow_along_init)
+cli.add_command(handwritten_pager)
 
 
 def main():

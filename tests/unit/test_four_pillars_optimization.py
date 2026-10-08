@@ -341,6 +341,7 @@ def test_lazy_claiming_in_process_high_score_videos(tmp_path, monkeypatch):
 
     manager._process_single_video = fake_process_single
     monkeypatch.setattr(manager, "_is_public_publish_window", lambda reason: True)
+    monkeypatch.setattr(type(settings), "is_us_market_guard_window", lambda _self: False)
 
     manager.process_high_score_videos(limit=3)
 
@@ -374,6 +375,7 @@ def test_lazy_claiming_prevents_infinite_reprocessing_loop(tmp_path, monkeypatch
 
     manager._process_single_video = fake_process_single
     monkeypatch.setattr(manager, "_is_public_publish_window", lambda reason: True)
+    monkeypatch.setattr(type(settings), "is_us_market_guard_window", lambda _self: False)
 
     manager.process_high_score_videos(limit=5)
 

@@ -14,6 +14,7 @@
 # | 1.4.2 | 2026-07-27 | Codex | _port_pid 增加 netstat fallback，避免 lsof 受异常挂载影响误报 UI 未监听 |
 # | 1.5.0 | 2026-07-29 | Codex | 新增 dubbing 人工配音再制网关；不接入 job 自动流水线 |
 # | 1.6.0 | 2026-09-23 | Antigravity | 新增 craft / antishit 极客架构守卫与防屎山度量命令组 |
+# | 1.7.0 | 2026-10-08 | Antigravity | 新增 pager / handwritten 手写手账伴读视频制作命令组 |
 # =======================================================================
 
 # [Claude_Sonnet_4.6_Thinking_planning] 严格错误处理，但用于流程控制的命令须显式处理退出码
@@ -32,6 +33,14 @@ case "${1:-}" in
             exit 2
         fi
         exec "$PRJ_ROOT/.venv/bin/python" -B "$PRJ_ROOT/scripts/anti_spaghetti.py" "$@"
+        ;;
+    pager|handwritten)
+        shift
+        if [ ! -x "$PRJ_ROOT/.venv/bin/python" ]; then
+            echo "错误: 未找到解释器 $PRJ_ROOT/.venv/bin/python" >&2
+            exit 2
+        fi
+        PYTHONPATH="$PRJ_ROOT/src" exec "$PRJ_ROOT/.venv/bin/python" -m cli.main handwritten-pager "$@"
         ;;
 esac
 cd "$PRJ_ROOT"
@@ -112,6 +121,9 @@ show_usage() {
     echo "  ./vpanel dubbing approve YOUTUBE_ID"
     echo "  ./vpanel dubbing publish YOUTUBE_ID --platform all --confirm"
     echo "  ./vpanel dubbing run YOUTUBE_ID --platform all --confirm"
+    echo ""
+    echo "命令组: pager / handwritten (沉浸式手写手账伴读视频生成与双平台海报)"
+    echo "  ./vpanel pager --audio <path> --lyrics-json <path> --output <path> [选项]"
     echo ""
     echo "命令组: bot (Telegram Bot 管理)"
     echo "  ./vpanel bot start            后台启动 Telegram Bot"

@@ -12,6 +12,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.7.7 | 2026-10-08 | Antigravity | 修复封面完成按钮整页降级检索；支持发文助手“作品未见异常（含建议）”明确检测完成状态，避免非阻断性优化建议导致虚假超时。 |
 | 1.7.6 | 2026-10-06 | Codex | 完整标题作为管理身份与等待目标，避免共用简介及旧列表抢先结束回查。 |
 | 1.7.5 | 2026-10-06 | Codex | 浏览器启动异常落入独立诊断日志，保留尚未建页面或上传的完整错误。 |
 | 1.7.4 | 2026-10-06 | Codex | 识别平台限制状态；等待初始双封面生成与异步保存，保持发布前闸门。 |
@@ -1718,6 +1719,8 @@ def _click_cover_confirm(page, modal, timeout_seconds: int = 90) -> bool:
     ]
     for elapsed in range(timeout_seconds):
         confirm_btn = _find_visible_element(modal, confirm_selectors)
+        if not confirm_btn and modal is not page:
+            confirm_btn = _find_visible_element(page, confirm_selectors)
         try:
             if confirm_btn and confirm_btn.is_enabled():
                 confirm_btn.click(timeout=2000)
@@ -1853,7 +1856,11 @@ def wait_for_cover_validation(page, timeout_seconds: int = 120) -> bool:
                 return False
             # 保存双封面时平台会短暂保留前一轮“横/竖双封面缺失”提示；
             # 同一页面已经给出具名成功态时，成功态才是当前检测结果。
-            if any(marker in text for marker in success_markers):
+            if any(marker in text for marker in success_markers) or (
+                "作品未见异常" in text
+                and "封面优化建议" in text
+                and not any(marker in text for marker in missing_markers)
+            ):
                 logger.info("抖音封面检测已明确通过")
                 return True
             # 卡槽已完成持久化后，检测区域仍可能保留上传前的缺失结果。
