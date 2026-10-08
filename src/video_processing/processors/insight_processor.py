@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 2.3.1 | 2026-10-09 | Codex | 缓存绑定排版辅助与编码编排代码，避免修订后复用旧母带。 |
 | 2.3.0 | 2026-10-09 | Codex | 固化 mobile-2 通用母带、真实词时码及排版代码缓存指纹。 |
 | 1.0.0 | 2026-10-06 | Codex | 四维增量、音画校验、输入绑定回执及失败回退 |
 | 2.0.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：InsightScriptV2 契约、100% 完整原片零裁切、全幅安全横栏(Y=265~555)、0.6s Dip to Black + 60Hz Hit 母带转场与三级收据系统 |
@@ -67,6 +68,7 @@ def render_spec(provider=None) -> dict:
     assets = {"font": font_path(), "sans": editorial.SANS, "english": mobile.m.ENGLISH,
               "sfx": transition_path(sfx_name),
               "layout_code": Path(mobile.m.__file__), "render_code": Path(mobile.__file__),
+              "editorial_code": Path(editorial.__file__), "compositor_code": Path(__file__),
               "logo": ASSET_ROOT / "brand/01_logos/concept_a.png",
               "qr": ASSET_ROOT / "brand/05_qrcodes/liuwei-shikonghao-wechat-channels-code-source.jpeg"}
     return {"recipe": RENDER_RECIPE, "tts_provider": provider,

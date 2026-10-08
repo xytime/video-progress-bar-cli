@@ -1,6 +1,11 @@
 """财经纪录片版式：原片、字幕、洞察各占独立区域；不裁切或改写字幕。
 
 绘制与时序在本模块，FFmpeg/TTS 的执行由调用方提供，避免依赖编排器。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.1 | 2026-10-09 | Codex | 标题均衡末行，数字与中文计量单位不拆分 |
 """
 from functools import lru_cache
 import math
@@ -50,7 +55,7 @@ def font(size, serif=False):
 def wrap(text, size, width, serif=False, *, balanced=True):
     """按真实字宽折行，英文单词不拆分；不截断文本。"""
     measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    tokens = re.findall(r"[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*[%％]?|[^A-Za-z0-9]", text)
+    tokens = re.findall(r"[0-9]+(?:\.[0-9]+)?(?:个月|小时|分钟|秒|年|天|美元|元|%|％)|[A-Za-z0-9]+(?:['’.-][A-Za-z0-9]+)*[%％]?|[^A-Za-z0-9]", text)
     joined = []
     for token in tokens:
         if joined and token in "，。！？；：、,.!?;%％）】》」』":
@@ -72,7 +77,7 @@ def wrap(text, size, width, serif=False, *, balanced=True):
     if line.strip():
         lines.append(line.rstrip())
     # 中文末行不孤留百分号或一两个字；采用均衡行宽，保持词组与数字原样。
-    if (balanced and not serif and "\n" not in text and len(lines) > 1
+    if (balanced and "\n" not in text and len(lines) > 1
             and measure.textlength(lines[-1], font=font(size, serif)) < width * .3
             and re.search(r"[\u3400-\u9fff]", text)):
         target = min(width, measure.textlength(text, font=font(size, serif)) / len(lines) + size)

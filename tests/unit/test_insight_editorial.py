@@ -92,3 +92,15 @@ def test_number_percent_and_short_last_line_remain_readable():
 def test_chinese_punctuation_does_not_start_line():
     lines = e.wrap("违约会迫使资产进行公开减记，这将降低报告的资产净值。", 46, 912)
     assert not any(line.startswith(("，", "。")) for line in lines)
+
+
+def test_serif_title_and_chinese_numeric_units_are_not_orphaned():
+    title = "月供变轻，风险变小了吗"
+    lines = e.wrap(title,84,884,serif=True)
+    assert ''.join(lines)==title
+    assert len(lines[-1])>=4
+    text = "原视频从72个月、84个月车贷讲起，我们沿着月供和车辆残值观察。"
+    lines = e.wrap(text,39,884)
+    assert ''.join(lines)==text
+    assert any('72个月' in line for line in lines)
+    assert any('84个月' in line for line in lines)
