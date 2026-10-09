@@ -107,3 +107,12 @@ PYTHONPATH=src .venv/bin/python scripts/verify_ted_openings.py \
 媒体与流水线隔离回归：**159 passed in 56.77s，退出0，无跳过**；严格读写/网络/信号边界探针退出0。入口为上文8个测试文件加 `tests/unit/test_speech_opening_runtime.py` 和 `tests/unit/test_ffmpeg_slot.py`，仍使用 `scripts/run_isolated_tests.py --media`。证据根 `/private/tmp/video-pytest-o018o5bw/`；源清单SHA256 `b694648937c35240a0d5b0828625913553cb818163321122c2995505a70cb758`。
 
 本轮没有修改VAD、模板、裁剪配方或二创渲染。30条真实样本、6条裁剪及整片成本沿用上文归档证据，不将此次159项回归算作新增真实样本。绑定副本继续占用存储；解除这类历史依赖另列研究任务。TTL随新归档触发，不宣称持续后台全目录扫描。
+
+
+2026-10-09 **16:46:52（Asia/Shanghai）已再次部署采用**：生产主干从 `bd7ff6d` 快进到实现提交 `013db8455d4fc9955d35c86c53082ebf8b6a880c`，`git push origin main`退出0。部署期间持有 `output/pipeline.lock` 排他锁，合入/重启前活动任务0；生产无关 `.gitignore` 的SHA256前后不变，其他未提交工作保留。
+
+`./vpanel ui restart`退出0，控制器PID从52511切换为**65646**，:9100 `/api/stats` HTTP200。随后运行回读：控制器cwd为 `/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing`；生产解释器核验 `ENABLE_TED_OPENING_TRIM=true`，配方v2、模型摘要正确、六条模板清单摘要与上午一致；管理器及缓存清理模块路径均属于生产主干，裁剪调用明确强制进程组保护。现有全局SIGTERM开关为true，本轮未改变配置；隔离测试另外证明其为false时新保护仍有效。
+
+自动入口保持现有行为：控制器启动自动调度及队列轮询，后台预加工入口导入同一主干管理器；后续新整片会自动执行开场检查，无需人工确认。重启后正常队列回读已有1条PUBLISHING任务；本轮未手动创建、重发或提交视频任务。不把该既有队列活动当作新TED整链路证据。自然新TED任务的完整加工、平台受理和公开播放仍需分别核验；本轮已证实代码部署、配置开启及运行入口采用。
+
+此部署归档只更新文档，不再重启服务。
