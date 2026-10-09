@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render formal video for ABBA - Gimme! Gimme! Gimme! (Scheme B v2 - Safe Zones & Default Lyrics Visible).
+"""Render formal video for ABBA - Gimme! Gimme! Gimme! (Scheme B v4 - No Pen, Enlarged Tilted Polaroid, Enlarged English Fonts & Safe Zones).
 
 Key Features:
 1. Strict Mobile Safe Zones (Top >= 210px, Bottom safe margin >= 400px):
@@ -8,13 +8,19 @@ Key Features:
 2. Default Lyrics Visibility:
    - All 10 lyric lines (side column + main section) are pre-printed and 100% visible from frame 0.
    - Never wait until sung to appear. Zero blank wasteland.
-3. Realistic Pen Dynamics & Active Singing Highlight:
-   - Pen physically points at and traces the active singing word with dual shadows (contact AO + progressive cast shadow).
-   - Active line is accented with a delicate warm amber highlighter ribbon and vibrant focus carmine ink.
-4. Synchronized Official 1979 Polaroid PiP MV.
-5. Smooth 0.7s page flip to Ending Vocabulary Study Card Page (P2/2 - 全曲语言点精萃).
-6. Generates full platform cover package (WeChat 9:16, Douyin 3:4, Douyin 4:3) with self-consistent provenance hashes.
-7. Generates platform copywriting packages.
+3. Clean Typography & Warm Golden Highlighter Ribbon (No Pen Sprite):
+   - Completely removes physical pen overlay, pen drawing, and pen shadows for a clean, undistracted reading experience.
+   - Active singing line tracks with a vibrant warm golden highlight ribbon; completed lines retain a subtle warm amber tint.
+4. Enlarged & Dynamic Polaroid PiP MV:
+   - Polaroid frame tilted to -7.0° for a vibrant, authentic scrapbook aesthetic.
+   - Video area enlarged by 23% to 410x230 for superior mobile visual presence.
+   - Placed in intimate proximity with side lyrics with zero collision.
+5. Enlarged English Typography & Space Budget Optimization:
+   - Side English enlarged to 27pt; main English enlarged to 35pt (chorus 38pt).
+   - Inter-couplet vertical spacing tightened (gap reduced from 18px to 8px) to fit all 10 lines comfortably within safe zone.
+6. Smooth 0.7s page flip to Ending Vocabulary Study Card Page (P2/2 - 全曲语言点精萃).
+7. Generates full platform cover package (WeChat 9:16, Douyin 3:4, Douyin 4:3) with self-consistent provenance hashes.
+8. Generates platform copywriting packages and timeline verification demos.
 
 # Modification History
 | Version | Date | Author | Description |
@@ -22,6 +28,8 @@ Key Features:
 | 1.0.0 | 2026-10-09 | Antigravity | ABBA《Gimme! Gimme! Gimme!》方案B(v2)母带渲染器：拍立得画中画同步MV、零重叠粗墨手写、终曲研读卡翻页。 |
 | 2.0.0 | 2026-10-09 | Antigravity | 严格手机安全区适配（顶部≥210px防电量/信号/导航遮挡，底部≥400px防视频号头像/简介遮挡）；默认全曲歌词立显（零盲区预印墨水）；物理双阴影钢笔轨迹平滑追踪与荧光笔高亮伴读；全套封面产物及自洽凭证哈希生成。 |
 | 3.0.0 | 2026-10-09 | Antigravity | 修复换行阶段关键帧去重丢失导致的钢笔轨迹脱节与滞空漂移Bug；消除第1行未唱先红的预印墨水瑕疵；重构高亮伴读层为渐进持久暖金荧光带；优化P2终章研读卡行距并下移钢笔休止位避让品牌标识。 |
+| 4.0.0 | 2026-10-09 | Antigravity | 彻底移除钢笔元素；拍立得画中画倾角与尺寸初调；英文字号增大与行间距收紧。 |
+| 4.1.0 | 2026-10-09 | Antigravity | 视觉与排版深度调优：拍立得倾角进一步增大至 -8.5°，视频画框扩大至 432x244（手账胶带及阴影联动匹配）；修复侧边栏高亮块向上溢出覆盖顶部 Y=332 分割线瑕疵（起排点沉至 dy=338）；精简副标题消除画框顶部遮挡；英文字体全面升级（侧边 28pt，主歌 38pt，高潮 42pt 胭脂红焦点）；上一句中文与下一句英文间距收紧（gap=3px），全部 10 行歌词与底部署名在 Y=1512 完结，底留 408px（严守 ≥400px 安全区）。 |
 """
 
 import cv2
@@ -62,7 +70,6 @@ OUTPUT_VIDEO_PATH = WORK_DIR / "gimme_full_handwritten_pager.mp4"
 # Assets
 ASSETS_DIR = PROJECT_ROOT / "src/video_processing/handwritten_pager/assets"
 PAPER_PATH = ASSETS_DIR / "paper_texture_ivory.jpg"
-PEN_PATH = ASSETS_DIR / "pen_ballpoint_photorealistic.png"
 LOGO_PATH = PROJECT_ROOT / "assets/brand/01_logos/concept_a.png"
 MV_FRAME_PATH = WORK_DIR / "frames/frame_agnetha_40s.jpg"
 
@@ -87,13 +94,15 @@ font_title_en = load_font(FONT_EN_NOTEWORTHY, 32, index=1)
 font_title_zh = load_font(FONT_ZH_CALLIGRAPHY, 25)
 font_subtitle = load_font(FONT_SANS, 18)
 
-# Side Column Lyrics Fonts
-font_side_en = load_font(FONT_EN_NOTEWORTHY, 24, index=1)
-font_side_zh = load_font(FONT_ZH_CALLIGRAPHY, 19)
+# Side Column Lyrics Fonts (Enlarged)
+font_side_en = load_font(FONT_EN_NOTEWORTHY, 28, index=1)
+font_side_zh = load_font(FONT_ZH_CALLIGRAPHY, 20)
 
-# Main Lower Lyrics Fonts
-font_lyrics_en_large = load_font(FONT_EN_NOTEWORTHY, 31, index=1)
-font_lyrics_zh_large = load_font(FONT_ZH_CALLIGRAPHY, 23)
+# Main Lower Lyrics Fonts (Enlarged)
+font_lyrics_en_large = load_font(FONT_EN_NOTEWORTHY, 38, index=1)
+font_lyrics_zh_large = load_font(FONT_ZH_CALLIGRAPHY, 24)
+font_hl_en = load_font(FONT_EN_NOTEWORTHY, 42, index=1)
+font_hl_zh = load_font(FONT_ZH_CALLIGRAPHY, 26)
 
 def is_chinese_char(char: str) -> bool:
     cp = ord(char)
@@ -137,35 +146,36 @@ def draw_notebook_holes(draw: ImageDraw.ImageDraw, y_start=60, y_end=1880, step=
     draw.line([(130, y_start - 20), (130, y_end + 20)], fill=(220, 100, 100, 130), width=2)
 
 def prepare_polaroid_template():
-    p_w, p_h = 390, 280
+    v_w, v_h = 432, 244
+    p_w, p_h = v_w + 24, 12 + v_h + 52
     polaroid = Image.new("RGBA", (p_w, p_h), (255, 253, 248, 255))
     pd = ImageDraw.Draw(polaroid)
     pd.rectangle([0, 0, p_w - 1, p_h - 1], outline=(210, 200, 190, 220), width=1)
-    pd.text((14, 235), "Agnetha @ Polar Studio 1979", fill=(70, 75, 85, 220), font=load_font(FONT_EN_NOTEWORTHY, 19, index=1))
-    pd.text((280, 240), "● Official MV", fill=(160, 50, 50, 220), font=load_font(FONT_SANS, 14))
+    pd.text((14, 12 + v_h + 14), "Agnetha @ Polar Studio 1979", fill=(70, 75, 85, 220), font=load_font(FONT_EN_NOTEWORTHY, 21, index=1))
+    pd.text((p_w - 118, 12 + v_h + 18), "● Official MV", fill=(160, 50, 50, 220), font=load_font(FONT_SANS, 14))
     
-    dummy_rot = polaroid.rotate(-2.0, expand=True, resample=Image.Resampling.BILINEAR)
+    dummy_rot = polaroid.rotate(-8.5, expand=True, resample=Image.Resampling.BILINEAR)
     pshadow = Image.new("RGBA", dummy_rot.size, (0, 0, 0, 0))
     for x in range(0, dummy_rot.width, 2):
         for y in range(0, dummy_rot.height, 2):
             if dummy_rot.getpixel((x, y))[3] > 40:
                 pshadow.putpixel((x, y), (35, 30, 25, 110))
-    pshadow = pshadow.filter(ImageFilter.GaussianBlur(radius=10))
+    pshadow = pshadow.filter(ImageFilter.GaussianBlur(radius=11))
     
-    tape = Image.new("RGBA", (110, 28), (235, 205, 130, 190))
-    ImageDraw.Draw(tape).line([(0, 0), (110, 0)], fill=(255, 255, 255, 80), width=1)
-    tape_rot = tape.rotate(-2.0, expand=True)
+    tape = Image.new("RGBA", (130, 32), (235, 205, 130, 190))
+    ImageDraw.Draw(tape).line([(0, 0), (130, 0)], fill=(255, 255, 255, 80), width=1)
+    tape_rot = tape.rotate(-8.5, expand=True)
     return polaroid, pshadow, tape_rot
 
 def composite_polaroid_frame(canvas: Image.Image, polaroid_template: Image.Image, pshadow: Image.Image, tape_rot: Image.Image, mv_rgb_frame: np.ndarray):
-    px_pos, py_pos = 550, 336
+    px_pos, py_pos = 536, 308
     p = polaroid_template.copy()
-    im_frame = Image.fromarray(mv_rgb_frame).resize((366, 210), Image.Resampling.BILINEAR)
+    im_frame = Image.fromarray(mv_rgb_frame).resize((432, 244), Image.Resampling.BILINEAR)
     p.paste(im_frame, (12, 12))
-    p_rot = p.rotate(-2.0, expand=True, resample=Image.Resampling.BILINEAR)
+    p_rot = p.rotate(-8.5, expand=True, resample=Image.Resampling.BILINEAR)
     canvas.paste(pshadow, (px_pos + 8, py_pos + 10), pshadow)
     canvas.paste(p_rot, (px_pos, py_pos), p_rot)
-    canvas.paste(tape_rot, (px_pos + 120, py_pos - 8), tape_rot)
+    canvas.paste(tape_rot, (px_pos + 170, py_pos + 4), tape_rot)
 
 
 # =========================================================================
@@ -236,73 +246,78 @@ def get_lyrics_schedule():
 
 
 def get_lyrics_geometry():
-    """Computes exact (x, y) bounding boxes for all lyrics so both static drawing and pen tracking are identical."""
+    """Computes exact (x, y) bounding boxes for all lyrics with enlarged fonts and tightened inter-couplet gaps."""
     side_lyrics, main_lyrics = get_lyrics_schedule()
     im_dummy = ImageDraw.Draw(Image.new("RGBA", (100, 100)))
     
     side_geom = []
-    dy = 320
+    dy = 338
+    gap_en_zh_side = 3
+    gap_couplet_side = 4
     for item in side_lyrics:
         if item["type"] == "single":
             en = item["en"]
             w_en = im_dummy.textlength(en, font=font_side_en)
-            b_en = im_dummy.textbbox((150, dy), en, font=font_side_en)
-            zh_y = b_en[3] + 6
-            b_zh = im_dummy.textbbox((150, zh_y), item["zh"], font=font_side_zh)
+            b_en = im_dummy.textbbox((148, dy), en, font=font_side_en)
+            zh_y = b_en[3] + gap_en_zh_side
+            b_zh = im_dummy.textbbox((148, zh_y), item["zh"], font=font_side_zh)
             side_geom.append({
                 "type": "single",
                 "en": en,
                 "zh": item["zh"],
                 "start": item["start"],
                 "end": item["end"],
-                "en_pos": (150, dy),
+                "en_pos": (148, dy),
                 "en_w": w_en,
-                "zh_pos": (150, zh_y),
-                "tip_y": b_en[3] + 3,
+                "zh_pos": (148, zh_y),
+                "tip_y": b_en[3] + 2,
                 "bottom": b_zh[3]
             })
-            dy = b_zh[3] + 12
+            dy = b_zh[3] + gap_couplet_side
         else:
             l1, l2 = item["lines"]
             w1 = im_dummy.textlength(l1, font=font_side_en)
-            b1 = im_dummy.textbbox((150, dy), l1, font=font_side_en)
-            l2_y = b1[3] + 4
+            b1 = im_dummy.textbbox((148, dy), l1, font=font_side_en)
+            l2_y = b1[3] + 2
             w2 = im_dummy.textlength(l2, font=font_side_en)
-            b2 = im_dummy.textbbox((150, l2_y), l2, font=font_side_en)
-            zh_y = b2[3] + 6
-            b_zh = im_dummy.textbbox((150, zh_y), item["zh"], font=font_side_zh)
+            b2 = im_dummy.textbbox((148, l2_y), l2, font=font_side_en)
+            zh_y = b2[3] + gap_en_zh_side
+            b_zh = im_dummy.textbbox((148, zh_y), item["zh"], font=font_side_zh)
             side_geom.append({
                 "type": "double",
                 "lines": [l1, l2],
                 "zh": item["zh"],
                 "start": item["start"],
                 "end": item["end"],
-                "l1_pos": (150, dy),
+                "l1_pos": (148, dy),
                 "l1_w": w1,
-                "l1_tip_y": b1[3] + 3,
-                "l2_pos": (150, l2_y),
+                "l1_tip_y": b1[3] + 2,
+                "l2_pos": (148, l2_y),
                 "l2_w": w2,
-                "l2_tip_y": b2[3] + 3,
-                "zh_pos": (150, zh_y),
+                "l2_tip_y": b2[3] + 2,
+                "zh_pos": (148, zh_y),
                 "bottom": b_zh[3]
             })
-            dy = b_zh[3] + 12
+            dy = b_zh[3] + gap_couplet_side
             
     main_geom = []
-    cy = 675
+    cy = 690
+    gap_en_wrap = 2
+    gap_en_zh_main = 3
+    gap_couplet_main = 3
     for item in main_lyrics:
         is_hl = item["highlight"]
-        f_en = load_font(FONT_EN_NOTEWORTHY, 34, index=1) if is_hl else font_lyrics_en_large
-        f_zh = load_font(FONT_ZH_CALLIGRAPHY, 25) if is_hl else font_lyrics_zh_large
+        f_en = font_hl_en if is_hl else font_lyrics_en_large
+        f_zh = font_hl_zh if is_hl else font_lyrics_zh_large
         if item["type"] == "wrap":
             l1 = item["line1"]
             l2 = item["line2"]
             w1 = im_dummy.textlength(l1, font=f_en)
             b1 = im_dummy.textbbox((155, cy), l1, font=f_en)
-            l2_y = b1[3] + 5
+            l2_y = b1[3] + gap_en_wrap
             w2 = im_dummy.textlength(l2, font=f_en)
             b2 = im_dummy.textbbox((155, l2_y), l2, font=f_en)
-            zh_y = b2[3] + 8
+            zh_y = b2[3] + gap_en_zh_main
             b_zh = im_dummy.textbbox((155, zh_y), item["zh"], font=f_zh)
             main_geom.append({
                 "type": "wrap",
@@ -316,19 +331,19 @@ def get_lyrics_geometry():
                 "font_zh": f_zh,
                 "l1_pos": (155, cy),
                 "l1_w": w1,
-                "l1_tip_y": b1[3] + 4,
+                "l1_tip_y": b1[3] + 2,
                 "l2_pos": (155, l2_y),
                 "l2_w": w2,
-                "l2_tip_y": b2[3] + 4,
+                "l2_tip_y": b2[3] + 2,
                 "zh_pos": (155, zh_y),
                 "bottom": b_zh[3]
             })
-            cy = b_zh[3] + 18
+            cy = b_zh[3] + gap_couplet_main
         else:
             en = item["en"]
             w_en = im_dummy.textlength(en, font=f_en)
             b_en = im_dummy.textbbox((155, cy), en, font=f_en)
-            zh_y = b_en[3] + 8
+            zh_y = b_en[3] + gap_en_zh_main
             b_zh = im_dummy.textbbox((155, zh_y), item["zh"], font=f_zh)
             main_geom.append({
                 "type": "single",
@@ -342,10 +357,10 @@ def get_lyrics_geometry():
                 "en_pos": (155, cy),
                 "en_w": w_en,
                 "zh_pos": (155, zh_y),
-                "tip_y": b_en[3] + 4,
+                "tip_y": b_en[3] + 2,
                 "bottom": b_zh[3]
             })
-            cy = b_zh[3] + 18
+            cy = b_zh[3] + gap_couplet_main
             
     return side_geom, main_geom
 
@@ -358,16 +373,16 @@ def build_page1_static_base():
     
     # --- Top Brand Header (Y = 210 ~ 330) ---
     logo = get_clean_logo(42)
-    canvas.paste(logo, (150, 210), logo)
-    draw.text((205, 214), "六维时空号", fill=(35, 40, 50, 240), font=font_brand)
-    draw.line([(335, 220), (335, 244)], fill=(180, 170, 160, 180), width=2)
-    draw.text((355, 219), "“不同的视角，看见更大的世界。”", fill=(130, 95, 45, 220), font=font_slogan)
+    canvas.paste(logo, (148, 210), logo)
+    draw.text((203, 214), "六维时空号", fill=(35, 40, 50, 240), font=font_brand)
+    draw.line([(333, 220), (333, 244)], fill=(180, 170, 160, 180), width=2)
+    draw.text((353, 219), "“不同的视角，看见更大的世界。”", fill=(130, 95, 45, 220), font=font_slogan)
     draw_mixed_text(draw, (730, 219), "★ 音乐手账 · 经典典藏 (P1/2)", load_font(FONT_ZH_CALLIGRAPHY, 19), font_slogan, (110, 115, 125, 210))
     
     # Song Title Row
-    draw.text((150, 262), "Gimme! Gimme! Gimme!", fill=(140, 30, 30, 255), font=font_title_en)
+    draw.text((148, 262), "Gimme! Gimme! Gimme!", fill=(140, 30, 30, 255), font=font_title_en)
     title_w = draw.textlength("Gimme! Gimme! Gimme!", font=font_title_en)
-    zh_box_x = int(150 + title_w + 16)
+    zh_box_x = int(148 + title_w + 16)
     draw.rounded_rectangle([zh_box_x, 265, zh_box_x + 145, 298], radius=6, fill=(245, 228, 175, 240), outline=(215, 165, 55, 200), width=1)
     draw_mixed_text(draw, (zh_box_x + 8, 267), "《午夜求爱》", font_title_zh, load_font(FONT_SANS, 20), (70, 45, 15, 255))
     
@@ -375,9 +390,9 @@ def build_page1_static_base():
     draw.rounded_rectangle([act_box_x, 265, act_box_x + 185, 298], radius=6, fill=(250, 240, 230, 220), outline=(190, 120, 70, 180), width=1)
     draw_mixed_text(draw, (act_box_x + 8, 269), "【第一幕 · 孤影独白】", font_title_zh, load_font(FONT_SANS, 18), (140, 60, 30, 240))
     
-    draw_mixed_text(draw, (150, 308), "原唱：ABBA (1979)  ·  Agnetha Faltskog 主唱  ·  全曲双语伴读", load_font(FONT_ZH_CALLIGRAPHY, 18), font_subtitle, (100, 105, 115, 230))
-    draw.line([(150, 332), (960, 332)], fill=(220, 210, 195, 180), width=1)
-    draw.line([(150, 665), (960, 665)], fill=(220, 210, 195, 180), width=1)
+    draw_mixed_text(draw, (148, 308), "原唱：ABBA (1979)  ·  Agnetha 主唱", load_font(FONT_ZH_CALLIGRAPHY, 18), font_subtitle, (100, 105, 115, 230))
+    draw.line([(148, 332), (960, 332)], fill=(220, 210, 195, 180), width=1)
+    draw.line([(148, 684), (960, 684)], fill=(220, 210, 195, 180), width=1)
     
     # --- PRE-RENDER ALL LYRICS (DEFAULT VISIBILITY) ---
     side_geom, main_geom = get_lyrics_geometry()
@@ -407,9 +422,11 @@ def build_page1_static_base():
             draw.text(g["en_pos"], g["en"], fill=col_en, font=f_en)
             draw_mixed_text(draw, g["zh_pos"], g["zh"], f_zh, load_font(FONT_SANS, 22), col_zh)
             
-    # Footer (Strictly at Y = 1495, finishes at 1515, well before 1550!)
-    draw_mixed_text(draw, (155, 1495), "• 本幕完 · 翻页进入下一乐段 »", load_font(FONT_ZH_CALLIGRAPHY, 19), load_font(FONT_ARIAL_UNICODE, 19), (130, 125, 120, 220))
-    draw.text((790, 1495), "ABBA · 1979 POLAR", fill=(170, 160, 150, 200), font=load_font(FONT_SANS, 18))
+    # Footer (Finishes at Y = 1512, strictly preserving mobile bottom safe margin >= 400px / Y <= 1520!)
+    last_main_bottom = max(g["bottom"] for g in main_geom)
+    footer_y = last_main_bottom + 8
+    draw_mixed_text(draw, (155, footer_y), "• 本幕完 · 翻页进入下一乐段 »", load_font(FONT_ZH_CALLIGRAPHY, 19), load_font(FONT_ARIAL_UNICODE, 19), (130, 125, 120, 220))
+    draw.text((790, footer_y), "ABBA · 1979 POLAR", fill=(170, 160, 150, 200), font=load_font(FONT_SANS, 18))
     
     return canvas
 
@@ -492,123 +509,11 @@ def build_page2_vocab_canvas():
 
 
 # =========================================================================
-# PEN TRAJECTORY INTERPOLATOR
-# =========================================================================
-def build_pen_trajectory(total_duration=91.0, fps=60):
-    """Builds realistic pen motion path keyframes across all musical sections.
-    
-    Guarantees:
-    1. Keyframe timestamps are strictly monotonic (no dropped frames upon deduplication).
-    2. At the exact start of every lyric line, pen touches down at line start with z=0.0.
-    3. Pen coordinates synchronize precisely with active word progress.
-    4. On Page 2, pen rests at (920, 1540, z=10.0), well below all text and clear of footer.
-    """
-    side_geom, main_geom = get_lyrics_geometry()
-    
-    # Unified list of lyric line items in chronological sequence
-    all_items = []
-    for g in side_geom:
-        all_items.append({"geom": g, "start_x": 150.0})
-    for g in main_geom:
-        all_items.append({"geom": g, "start_x": 155.0})
-
-    keyframes = [
-        (0.0, 450.0, 400.0, 22.0),
-        (10.0, 470.0, 390.0, 20.0),
-        (20.0, 440.0, 410.0, 20.0),
-        (30.0, 280.0, 350.0, 16.0),
-        (34.5, 160.0, 335.0, 8.0),
-    ]
-
-    for idx, item in enumerate(all_items):
-        g = item["geom"]
-        sx = item["start_x"]
-        st, et = g["start"], g["end"]
-        has_next = idx + 1 < len(all_items)
-        next_st = all_items[idx + 1]["geom"]["start"] if has_next else 84.5
-        next_sx = all_items[idx + 1]["start_x"] if has_next else 920.0
-        next_ty = (all_items[idx + 1]["geom"]["tip_y"] if all_items[idx + 1]["geom"]["type"] == "single"
-                   else all_items[idx + 1]["geom"]["l1_tip_y"]) if has_next else 1540.0
-
-        gap = (next_st - et) if has_next else 0.0
-
-        if g["type"] == "single":
-            ty = g["tip_y"]
-            w = g["en_w"]
-            keyframes.append((st, sx, ty, 0.0))
-            if has_next:
-                if gap <= 0.15:
-                    keyframes.append((et - 0.08, sx + w, ty, 0.0))
-                    keyframes.append((et - 0.03, sx + w + 8.0, ty - 6.0, 4.0))
-                elif gap <= 0.50:
-                    keyframes.append((et, sx + w, ty, 0.0))
-                    mid_gap = (et + next_st) / 2.0
-                    keyframes.append((mid_gap, (sx + w + next_sx) / 2.0, (ty + next_ty) / 2.0, 6.0))
-                else:
-                    keyframes.append((et, sx + w, ty, 0.0))
-                    keyframes.append((et + 0.15, sx + w + 15.0, ty - 8.0, 8.0))
-                    keyframes.append((next_st - 0.15, next_sx - 10.0, next_ty - 10.0, 6.0))
-            else:
-                keyframes.append((et, sx + w, ty, 0.0))
-        else:
-            ty1 = g["l1_tip_y"]
-            w1 = g["l1_w"]
-            ty2 = g["l2_tip_y"]
-            w2 = g["l2_w"]
-            mid_t = (st + et) / 2.0
-            keyframes.append((st, sx, ty1, 0.0))
-            keyframes.append((mid_t - 0.08, sx + w1, ty1, 0.0))
-            keyframes.append((mid_t - 0.03, sx + w1 + 10.0, ty1 - 6.0, 4.0))
-            keyframes.append((mid_t + 0.04, sx, ty2, 0.0))
-            if has_next:
-                if gap <= 0.15:
-                    keyframes.append((et - 0.08, sx + w2, ty2, 0.0))
-                    keyframes.append((et - 0.03, sx + w2 + 8.0, ty2 - 6.0, 4.0))
-                elif gap <= 0.50:
-                    keyframes.append((et, sx + w2, ty2, 0.0))
-                    mid_gap = (et + next_st) / 2.0
-                    keyframes.append((mid_gap, (sx + w2 + next_sx) / 2.0, (ty2 + next_ty) / 2.0, 6.0))
-                else:
-                    keyframes.append((et, sx + w2, ty2, 0.0))
-                    keyframes.append((et + 0.15, sx + w2 + 15.0, ty2 - 8.0, 8.0))
-                    keyframes.append((next_st - 0.15, next_sx - 10.0, next_ty - 10.0, 6.0))
-            else:
-                keyframes.append((et, sx + w2, ty2, 0.0))
-
-    # Page flip transition at 86.8s ~ 87.5s: Pen lifts high
-    keyframes.append((84.7, 445.0, 1430.0, 10.0))
-    keyframes.append((85.8, 750.0, 1200.0, 18.0))
-    keyframes.append((86.8, 600.0, 950.0, 35.0))
-    # Page 2 vocabulary study card: Pen rests at safe bottom margin (clearing footer text completely)
-    keyframes.append((87.5, 920.0, 1540.0, 10.0))
-    keyframes.append((91.0, 920.0, 1540.0, 10.0))
-
-    # Sort and deduplicate
-    k_t, k_x, k_y, k_z = [], [], [], []
-    for pt in sorted(keyframes, key=lambda p: p[0]):
-        if not k_t or pt[0] > k_t[-1] + 1e-4:
-            k_t.append(pt[0])
-            k_x.append(pt[1])
-            k_y.append(pt[2])
-            k_z.append(pt[3])
-
-    total_frames = int(round(total_duration * fps))
-    t_eval = np.linspace(0.0, total_duration, total_frames)
-
-    from video_processing.handwritten_pager.pen_physics import _pchip_interpolate
-    x_eval = _pchip_interpolate(np.array(k_t), np.array(k_x), t_eval)
-    y_eval = _pchip_interpolate(np.array(k_t), np.array(k_y), t_eval)
-    z_eval = np.maximum(0.0, _pchip_interpolate(np.array(k_t), np.array(k_z), t_eval))
-
-    return t_eval, x_eval, y_eval, z_eval
-
-
-# =========================================================================
-# MAIN RENDER PIPELINE
+# MAIN RENDER PIPELINE (CLEAN TYPOGRAPHY, NO PEN SPRITE)
 # =========================================================================
 def render_full_video():
     """Renders the full 60fps video and encodes with FFmpeg."""
-    logger.info("Initializing multi-layer handwritten video rendering pipeline...")
+    logger.info("Initializing handwritten video rendering pipeline (clean typography, no pen sprite)...")
     fps = 60
     total_duration = 91.0
     total_frames = int(round(total_duration * fps))
@@ -620,22 +525,14 @@ def render_full_video():
     # 2. Prepare Polaroid templates
     polaroid_template, pshadow, tape_rot = prepare_polaroid_template()
     
-    # 3. Geometry and Trajectory
+    # 3. Geometry
     side_geom, main_geom = get_lyrics_geometry()
-    t_eval, x_eval, y_eval, z_eval = build_pen_trajectory(total_duration=total_duration, fps=fps)
     
-    # 4. Pen Physics Engine
-    from video_processing.handwritten_pager.contracts import HandwrittenPagerConfig, PenState
-    from video_processing.handwritten_pager.pen_physics import PenPhysicsEngine
-    
-    config = HandwrittenPagerConfig(fps=fps)
-    pen_engine = PenPhysicsEngine(config)
-    
-    # 5. Open MV video
+    # 4. Open MV video
     cap = cv2.VideoCapture(str(MV_PATH))
     mv_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
     
-    # 6. Spawning FFmpeg
+    # 5. Spawning FFmpeg
     ffmpeg_cmd = [
         "ffmpeg",
         "-hide_banner",
@@ -664,10 +561,7 @@ def render_full_video():
     last_reported = 0
     
     for f_idx in range(total_frames):
-        t = float(t_eval[f_idx])
-        pen_x = float(x_eval[f_idx])
-        pen_y = float(y_eval[f_idx])
-        pen_z = float(z_eval[f_idx])
+        t = f_idx / fps
         
         # Read video frame for Polaroid
         if t < 86.8:
@@ -675,9 +569,9 @@ def render_full_video():
             cap.set(cv2.CAP_PROP_POS_FRAMES, mv_frame_idx)
             ret, frame = cap.read()
             if ret:
-                mv_rgb = cv2.cvtColor(cv2.resize(frame, (366, 210)), cv2.COLOR_BGR2RGB)
+                mv_rgb = cv2.cvtColor(cv2.resize(frame, (432, 244)), cv2.COLOR_BGR2RGB)
             else:
-                mv_rgb = np.zeros((210, 366, 3), dtype=np.uint8)
+                mv_rgb = np.zeros((244, 432, 3), dtype=np.uint8)
                 
         # Base frame setup
         if t < 86.8:
@@ -694,33 +588,33 @@ def render_full_video():
                 if t >= et:
                     # Completed line: gentle warm amber highlighter
                     if g["type"] == "single":
-                        hl_draw.rounded_rectangle([148, g["en_pos"][1] + 2, 150 + g["en_w"] + 6, g["tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
+                        hl_draw.rounded_rectangle([146, g["en_pos"][1] + 1, 148 + g["en_w"] + 6, g["tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
                         hl_draw.text(g["en_pos"], g["en"], fill=(38, 44, 55, 255), font=font_side_en)
                     else:
-                        hl_draw.rounded_rectangle([148, g["l1_pos"][1] + 2, 150 + g["l1_w"] + 6, g["l1_tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
+                        hl_draw.rounded_rectangle([146, g["l1_pos"][1] + 1, 148 + g["l1_w"] + 6, g["l1_tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
                         hl_draw.text(g["l1_pos"], g["lines"][0], fill=(38, 44, 55, 255), font=font_side_en)
-                        hl_draw.rounded_rectangle([148, g["l2_pos"][1] + 2, 150 + g["l2_w"] + 6, g["l2_tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
+                        hl_draw.rounded_rectangle([146, g["l2_pos"][1] + 1, 148 + g["l2_w"] + 6, g["l2_tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
                         hl_draw.text(g["l2_pos"], g["lines"][1], fill=(38, 44, 55, 255), font=font_side_en)
                 elif st <= t < et:
-                    # Active line: vibrant golden highlighter ribbon tracking pen tip
+                    # Active line: vibrant golden highlighter ribbon tracking singing progress
                     if g["type"] == "single":
                         progress = (t - st) / max(0.01, et - st)
                         cur_w = progress * g["en_w"]
-                        hl_draw.rounded_rectangle([148, g["en_pos"][1] + 2, 150 + cur_w + 6, g["tip_y"] + 2], radius=4, fill=(255, 220, 80, 125))
+                        hl_draw.rounded_rectangle([146, g["en_pos"][1] + 1, 148 + cur_w + 6, g["tip_y"] + 2], radius=4, fill=(255, 220, 80, 130))
                         hl_draw.text(g["en_pos"], g["en"], fill=(38, 44, 55, 255), font=font_side_en)
                     else:
                         mid_t = (st + et) / 2.0
                         if t < mid_t:
-                            p1 = (t - st) / max(0.01, mid_t - st)
-                            cur_w = p1 * g["l1_w"]
-                            hl_draw.rounded_rectangle([148, g["l1_pos"][1] + 2, 150 + cur_w + 6, g["l1_tip_y"] + 2], radius=4, fill=(255, 220, 80, 125))
+                            p1_prog = (t - st) / max(0.01, mid_t - st)
+                            cur_w = p1_prog * g["l1_w"]
+                            hl_draw.rounded_rectangle([146, g["l1_pos"][1] + 1, 148 + cur_w + 6, g["l1_tip_y"] + 2], radius=4, fill=(255, 220, 80, 130))
                             hl_draw.text(g["l1_pos"], g["lines"][0], fill=(38, 44, 55, 255), font=font_side_en)
                         else:
-                            p2 = (t - mid_t) / max(0.01, et - mid_t)
-                            cur_w = p2 * g["l2_w"]
-                            hl_draw.rounded_rectangle([148, g["l1_pos"][1] + 2, 150 + g["l1_w"] + 6, g["l1_tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
+                            p2_prog = (t - mid_t) / max(0.01, et - mid_t)
+                            cur_w = p2_prog * g["l2_w"]
+                            hl_draw.rounded_rectangle([146, g["l1_pos"][1] + 1, 148 + g["l1_w"] + 6, g["l1_tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
                             hl_draw.text(g["l1_pos"], g["lines"][0], fill=(38, 44, 55, 255), font=font_side_en)
-                            hl_draw.rounded_rectangle([148, g["l2_pos"][1] + 2, 150 + cur_w + 6, g["l2_tip_y"] + 2], radius=4, fill=(255, 220, 80, 125))
+                            hl_draw.rounded_rectangle([146, g["l2_pos"][1] + 1, 148 + cur_w + 6, g["l2_tip_y"] + 2], radius=4, fill=(255, 220, 80, 130))
                             hl_draw.text(g["l2_pos"], g["lines"][1], fill=(38, 44, 55, 255), font=font_side_en)
 
             # 2. Main lyrics highlights
@@ -731,33 +625,33 @@ def render_full_video():
                 if t >= et:
                     # Completed line
                     if g["type"] == "wrap":
-                        hl_draw.rounded_rectangle([153, g["l1_pos"][1] + 2, 155 + g["l1_w"] + 8, g["l1_tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
+                        hl_draw.rounded_rectangle([153, g["l1_pos"][1] + 1, 155 + g["l1_w"] + 8, g["l1_tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
                         hl_draw.text(g["l1_pos"], g["line1"], fill=text_col, font=f_en)
-                        hl_draw.rounded_rectangle([153, g["l2_pos"][1] + 2, 155 + g["l2_w"] + 8, g["l2_tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
+                        hl_draw.rounded_rectangle([153, g["l2_pos"][1] + 1, 155 + g["l2_w"] + 8, g["l2_tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
                         hl_draw.text(g["l2_pos"], g["line2"], fill=text_col, font=f_en)
                     else:
-                        hl_draw.rounded_rectangle([153, g["en_pos"][1] + 2, 155 + g["en_w"] + 8, g["tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
+                        hl_draw.rounded_rectangle([153, g["en_pos"][1] + 1, 155 + g["en_w"] + 8, g["tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
                         hl_draw.text(g["en_pos"], g["en"], fill=text_col, font=f_en)
                 elif st <= t < et:
                     # Active line
                     if g["type"] == "wrap":
                         mid_t = (st + et) / 2.0
                         if t < mid_t:
-                            p1 = (t - st) / max(0.01, mid_t - st)
-                            cur_w = p1 * g["l1_w"]
-                            hl_draw.rounded_rectangle([153, g["l1_pos"][1] + 2, 155 + cur_w + 8, g["l1_tip_y"] + 2], radius=6, fill=(255, 220, 80, 125))
+                            p1_prog = (t - st) / max(0.01, mid_t - st)
+                            cur_w = p1_prog * g["l1_w"]
+                            hl_draw.rounded_rectangle([153, g["l1_pos"][1] + 1, 155 + cur_w + 8, g["l1_tip_y"] + 2], radius=6, fill=(255, 220, 80, 130))
                             hl_draw.text(g["l1_pos"], g["line1"], fill=text_col, font=f_en)
                         else:
-                            p2 = (t - mid_t) / max(0.01, et - mid_t)
-                            cur_w = p2 * g["l2_w"]
-                            hl_draw.rounded_rectangle([153, g["l1_pos"][1] + 2, 155 + g["l1_w"] + 8, g["l1_tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
+                            p2_prog = (t - mid_t) / max(0.01, et - mid_t)
+                            cur_w = p2_prog * g["l2_w"]
+                            hl_draw.rounded_rectangle([153, g["l1_pos"][1] + 1, 155 + g["l1_w"] + 8, g["l1_tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
                             hl_draw.text(g["l1_pos"], g["line1"], fill=text_col, font=f_en)
-                            hl_draw.rounded_rectangle([153, g["l2_pos"][1] + 2, 155 + cur_w + 8, g["l2_tip_y"] + 2], radius=6, fill=(255, 220, 80, 125))
+                            hl_draw.rounded_rectangle([153, g["l2_pos"][1] + 1, 155 + cur_w + 8, g["l2_tip_y"] + 2], radius=6, fill=(255, 220, 80, 130))
                             hl_draw.text(g["l2_pos"], g["line2"], fill=text_col, font=f_en)
                     else:
                         progress = (t - st) / max(0.01, et - st)
                         cur_w = progress * g["en_w"]
-                        hl_draw.rounded_rectangle([153, g["en_pos"][1] + 2, 155 + cur_w + 8, g["tip_y"] + 2], radius=6, fill=(255, 220, 80, 125))
+                        hl_draw.rounded_rectangle([153, g["en_pos"][1] + 1, 155 + cur_w + 8, g["tip_y"] + 2], radius=6, fill=(255, 220, 80, 130))
                         hl_draw.text(g["en_pos"], g["en"], fill=text_col, font=f_en)
                     
             frame_canvas = Image.alpha_composite(frame_canvas, hl_layer)
@@ -771,23 +665,7 @@ def render_full_video():
             # Page 2 study card
             frame_canvas = page2_canvas.copy()
             
-        # Pen Physics State & Micro-jitter
-        jitter_x = 0.35 * math.sin(2 * math.pi * 9.1 * t + 1.2)
-        jitter_y = 0.30 * math.cos(2 * math.pi * 8.4 * t + 0.8)
-        dyn_angle = pen_engine.base_angle + 0.35 * math.sin(2 * math.pi * 1.5 * t)
-        
-        state = PenState(
-            frame_idx=f_idx,
-            t=t,
-            x=pen_x + jitter_x,
-            y=pen_y + jitter_y,
-            z=pen_z,
-            angle_deg=dyn_angle,
-            is_active=(pen_z < 2.0),
-            active_word=None,
-        )
-        final_frame = pen_engine.render_pen_frame(frame_canvas, state)
-        proc.stdin.write(final_frame.tobytes())
+        proc.stdin.write(frame_canvas.tobytes())
         
         # Logging progress
         if f_idx - last_reported >= 300 or f_idx == total_frames - 1:
@@ -804,15 +682,139 @@ def render_full_video():
 
 
 # =========================================================================
+# VERIFICATION DEMOS GENERATION
+# =========================================================================
+def generate_verification_demos():
+    """Generates key timeline verification frames and stitches them into a verification grid."""
+    logger.info("Generating timeline verification demo frames and comparison grid...")
+    page1_static = build_page1_static_base()
+    page2_canvas = build_page2_vocab_canvas()
+    polaroid_template, pshadow, tape_rot = prepare_polaroid_template()
+    side_geom, main_geom = get_lyrics_geometry()
+    
+    cap = cv2.VideoCapture(str(MV_PATH))
+    mv_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    
+    def render_snapshot(t: float) -> Image.Image:
+        if t < 86.8:
+            mv_frame_idx = int(round(t * mv_fps))
+            cap.set(cv2.CAP_PROP_POS_FRAMES, mv_frame_idx)
+            ret, frame = cap.read()
+            if ret:
+                mv_rgb = cv2.cvtColor(cv2.resize(frame, (432, 244)), cv2.COLOR_BGR2RGB)
+            else:
+                mv_rgb = np.zeros((244, 432, 3), dtype=np.uint8)
+            frame_canvas = page1_static.copy()
+            composite_polaroid_frame(frame_canvas, polaroid_template, pshadow, tape_rot, mv_rgb)
+            
+            hl_layer = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+            hl_draw = ImageDraw.Draw(hl_layer)
+            
+            for g in side_geom:
+                st, et = g["start"], g["end"]
+                if t >= et:
+                    if g["type"] == "single":
+                        hl_draw.rounded_rectangle([146, g["en_pos"][1] + 1, 148 + g["en_w"] + 6, g["tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
+                        hl_draw.text(g["en_pos"], g["en"], fill=(38, 44, 55, 255), font=font_side_en)
+                    else:
+                        hl_draw.rounded_rectangle([146, g["l1_pos"][1] + 1, 148 + g["l1_w"] + 6, g["l1_tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
+                        hl_draw.text(g["l1_pos"], g["lines"][0], fill=(38, 44, 55, 255), font=font_side_en)
+                        hl_draw.rounded_rectangle([146, g["l2_pos"][1] + 1, 148 + g["l2_w"] + 6, g["l2_tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
+                        hl_draw.text(g["l2_pos"], g["lines"][1], fill=(38, 44, 55, 255), font=font_side_en)
+                elif st <= t < et:
+                    if g["type"] == "single":
+                        progress = (t - st) / max(0.01, et - st)
+                        cur_w = progress * g["en_w"]
+                        hl_draw.rounded_rectangle([146, g["en_pos"][1] + 1, 148 + cur_w + 6, g["tip_y"] + 2], radius=4, fill=(255, 220, 80, 130))
+                        hl_draw.text(g["en_pos"], g["en"], fill=(38, 44, 55, 255), font=font_side_en)
+                    else:
+                        mid_t = (st + et) / 2.0
+                        if t < mid_t:
+                            p1_prog = (t - st) / max(0.01, mid_t - st)
+                            cur_w = p1_prog * g["l1_w"]
+                            hl_draw.rounded_rectangle([146, g["l1_pos"][1] + 1, 148 + cur_w + 6, g["l1_tip_y"] + 2], radius=4, fill=(255, 220, 80, 130))
+                            hl_draw.text(g["l1_pos"], g["lines"][0], fill=(38, 44, 55, 255), font=font_side_en)
+                        else:
+                            p2_prog = (t - mid_t) / max(0.01, et - mid_t)
+                            cur_w = p2_prog * g["l2_w"]
+                            hl_draw.rounded_rectangle([146, g["l1_pos"][1] + 1, 148 + g["l1_w"] + 6, g["l1_tip_y"] + 2], radius=4, fill=(255, 232, 130, 75))
+                            hl_draw.text(g["l1_pos"], g["lines"][0], fill=(38, 44, 55, 255), font=font_side_en)
+                            hl_draw.rounded_rectangle([146, g["l2_pos"][1] + 1, 148 + cur_w + 6, g["l2_tip_y"] + 2], radius=4, fill=(255, 220, 80, 130))
+                            hl_draw.text(g["l2_pos"], g["lines"][1], fill=(38, 44, 55, 255), font=font_side_en)
+                            
+            for g in main_geom:
+                st, et = g["start"], g["end"]
+                f_en = g["font_en"]
+                text_col = (165, 28, 28, 255) if g["highlight"] else (38, 44, 55, 255)
+                if t >= et:
+                    if g["type"] == "wrap":
+                        hl_draw.rounded_rectangle([153, g["l1_pos"][1] + 1, 155 + g["l1_w"] + 8, g["l1_tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
+                        hl_draw.text(g["l1_pos"], g["line1"], fill=text_col, font=f_en)
+                        hl_draw.rounded_rectangle([153, g["l2_pos"][1] + 1, 155 + g["l2_w"] + 8, g["l2_tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
+                        hl_draw.text(g["l2_pos"], g["line2"], fill=text_col, font=f_en)
+                    else:
+                        hl_draw.rounded_rectangle([153, g["en_pos"][1] + 1, 155 + g["en_w"] + 8, g["tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
+                        hl_draw.text(g["en_pos"], g["en"], fill=text_col, font=f_en)
+                elif st <= t < et:
+                    if g["type"] == "wrap":
+                        mid_t = (st + et) / 2.0
+                        if t < mid_t:
+                            p1_prog = (t - st) / max(0.01, mid_t - st)
+                            cur_w = p1_prog * g["l1_w"]
+                            hl_draw.rounded_rectangle([153, g["l1_pos"][1] + 1, 155 + cur_w + 8, g["l1_tip_y"] + 2], radius=6, fill=(255, 220, 80, 130))
+                            hl_draw.text(g["l1_pos"], g["line1"], fill=text_col, font=f_en)
+                        else:
+                            p2_prog = (t - mid_t) / max(0.01, et - mid_t)
+                            cur_w = p2_prog * g["l2_w"]
+                            hl_draw.rounded_rectangle([153, g["l1_pos"][1] + 1, 155 + g["l1_w"] + 8, g["l1_tip_y"] + 2], radius=6, fill=(255, 232, 130, 75))
+                            hl_draw.text(g["l1_pos"], g["line1"], fill=text_col, font=f_en)
+                            hl_draw.rounded_rectangle([153, g["l2_pos"][1] + 1, 155 + cur_w + 8, g["l2_tip_y"] + 2], radius=6, fill=(255, 220, 80, 130))
+                            hl_draw.text(g["l2_pos"], g["line2"], fill=text_col, font=f_en)
+                    else:
+                        progress = (t - st) / max(0.01, et - st)
+                        cur_w = progress * g["en_w"]
+                        hl_draw.rounded_rectangle([153, g["en_pos"][1] + 1, 155 + cur_w + 8, g["tip_y"] + 2], radius=6, fill=(255, 220, 80, 130))
+                        hl_draw.text(g["en_pos"], g["en"], fill=text_col, font=f_en)
+            return Image.alpha_composite(frame_canvas, hl_layer)
+        else:
+            return page2_canvas.copy()
+
+    snapshots = [
+        (10.0, "timeline_t10_intro_hover.jpg"),
+        (36.5, "timeline_t36_side_active.jpg"),
+        (48.0, "timeline_t48_main_active.jpg"),
+        (68.0, "timeline_t68_chorus_active.jpg"),
+        (88.0, "timeline_t88_page2_vocab.jpg"),
+    ]
+    resized_snaps = []
+    for t_val, fname in snapshots:
+        im = render_snapshot(t_val)
+        out_f = DEMOS_DIR / fname
+        im.convert("RGB").save(out_f, "JPEG", quality=95)
+        resized_snaps.append(im.resize((360, 640), Image.Resampling.LANCZOS))
+        logger.info(f"Saved snapshot: {out_f}")
+        
+    cap.release()
+    
+    # 5-column stitched verification grid
+    grid = Image.new("RGB", (1800, 640), (255, 255, 255))
+    for idx, snap in enumerate(resized_snaps):
+        grid.paste(snap, (idx * 360, 0))
+    grid_out = DEMOS_DIR / "timeline_verification_grid.jpg"
+    grid.save(grid_out, "JPEG", quality=95)
+    logger.info(f"Timeline verification grid updated: {grid_out}")
+
+
+# =========================================================================
 # COVERS GENERATION (WeChat 9:16, Douyin 3:4, Douyin 4:3)
 # =========================================================================
 def generate_platform_covers():
-    logger.info("Generating platform-compliant covers with updated safe zones...")
+    logger.info("Generating platform-compliant covers with updated safe zones and enlarged typography...")
     p1 = build_page1_static_base()
     polaroid_template, pshadow, tape_rot = prepare_polaroid_template()
-    dummy_mv = np.full((210, 366, 3), (25, 40, 60), dtype=np.uint8)
+    dummy_mv = np.full((244, 432, 3), (25, 40, 60), dtype=np.uint8)
     if MV_FRAME_PATH.exists():
-        im = Image.open(MV_FRAME_PATH).resize((366, 210))
+        im = Image.open(MV_FRAME_PATH).resize((432, 244))
         dummy_mv = np.array(im)
     composite_polaroid_frame(p1, polaroid_template, pshadow, tape_rot, dummy_mv)
     p2 = build_page2_vocab_canvas()
@@ -996,4 +998,5 @@ def generate_copywriting():
 if __name__ == "__main__":
     generate_platform_covers()
     generate_copywriting()
+    generate_verification_demos()
     render_full_video()
