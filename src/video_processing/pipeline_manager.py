@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.69.2 | 2026-10-09 | Codex | 裁剪超时独立清理进程组；裁剪副本接入硬重置与受保护 TTL。 |
 | 3.69.1 | 2026-10-09 | Codex | 裁剪时间轴拒绝复用缺少来源指纹的旧二创脚本。 |
 | 3.69.0 | 2026-10-09 | Codex | TED/TEDx 新整片自动去开场等待，保留原片和二创片头，字幕/二创绑定同一加工副本。 |
 | 3.68.0 | 2026-10-09 | Codex | 正常 A 与二创 B 分离、就绪原子入队及共享原片保护。 |
@@ -1960,6 +1961,15 @@ class PipelineManager:
         match = re.fullmatch(r"(.+)_s(\d+)", yid)
         source_yid = match.group(1) if match else yid
         slice_index = int(match.group(2)) if match else 0
+        vertical = self._OUT_DIR / f"{source_yid}_vertical.mp4"
+        if slice_index == 0 and not (vertical.exists() or vertical.is_symlink()):
+            from .utils.speech_opening_cache import remove_opening_cache
+            try:
+                deleted.extend(remove_opening_cache(self._OUT_DIR, source_yid))
+                # 硬重置已删除基础成片，不保留已失效的源绑定。
+                (self._OUT_DIR / f"{source_yid}_vertical.source.json").unlink(missing_ok=True)
+            except (OSError, ValueError) as exc:
+                logger.warning("[HARD RESET] Cannot clear opening cache %s: %s", source_yid, type(exc).__name__)
         self.db.clear_video_preparation_state(source_yid, slice_index=slice_index)
         return deleted
 
@@ -2048,10 +2058,18 @@ class PipelineManager:
                     logger.warning(f"[OV-GC] Failed to evict {f.name}: {e}")
         if evicted:
             logger.info(f"[OV-GC] TTL eviction complete: {evicted} file(s) removed from original_video/.")
+        from .utils.speech_opening_cache import evict_opening_caches
+        try:
+            removed = evict_opening_caches(self._OUT_DIR, evictable, before=now - ttl_seconds)
+            if removed:
+                logger.info("[OpeningGC] Removed %s unreferenced expired artifact(s).", len(removed))
+        except (OSError, ValueError) as exc:
+            logger.warning("[OpeningGC] 保留裁剪缓存：%s", type(exc).__name__)
 
     # ── 子进程辅助（v7.0: Popen + 进程组隔离）────────────────────────────────
 
-    def _run_tracked(self, cmd: list, yid: str, slice_index: int = 0, **kwargs) -> subprocess.CompletedProcess:
+    def _run_tracked(self, cmd: list, yid: str, slice_index: int = 0, *,
+                     isolate_process_group: bool = False, **kwargs) -> subprocess.CompletedProcess:
         """以独立进程组运行命令，并将 PGID 写入数据库，供 API 层 SIGTERM 精准击杀。
 
         [Claude_Sonnet_4.6_Thinking_planning] v7.0 关键设计：
@@ -2072,10 +2090,9 @@ class PipelineManager:
         if "env" not in popen_kwargs:
             popen_kwargs["env"] = _build_subprocess_env()
 
-        # 字幕阶段看门狗需要可靠地终止整棵子进程树，因此即使常规 PID 追踪
-        # 关闭，只要调用方提供 progress_path 也创建独立进程组。
+        # 长步骤显式要求或字幕看门狗存在时，即使关闭常规 PID 追踪也清理整棵树。
         use_isolated_process_group = (
-            settings.enable_sigterm_kill or progress_path is not None
+            isolate_process_group or settings.enable_sigterm_kill or progress_path is not None
             or (bool(cmd) and Path(str(cmd[0])).name == "yt-dlp")
         )
         if use_isolated_process_group:
@@ -4053,7 +4070,7 @@ class PipelineManager:
                 self._VENV_PYTHON, "-m", "video_processing.processors.speech_opening",
                 str(source), str(prepared_dir),
             ], yid, slice_index=0, capture_output=True, cwd=str(self._PRJ_ROOT),
-               env=env, timeout=1320)
+               env=env, timeout=1320, isolate_process_group=True)
             payload = json.loads(result.stdout)
             selected = Path(payload["selected"])
             if selected.resolve() not in {source.resolve(), prepared.resolve()} or not selected.is_file():

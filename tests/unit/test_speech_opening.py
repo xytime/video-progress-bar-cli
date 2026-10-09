@@ -198,6 +198,7 @@ def test_pipeline_adopts_prepared_source_without_confirmation(tmp_path, monkeypa
                                       "UCAuUUnT6oDeKwE6v1NGQxug"}, source) == prepared
     assert calls[0][0][1:3] == ["-m", "video_processing.processors.speech_opening"]
     assert calls[0][2]["timeout"] == 1320
+    assert calls[0][2]["isolate_process_group"] is True
 
 
 def test_pipeline_flag_off_preserves_source(tmp_path, monkeypatch):
