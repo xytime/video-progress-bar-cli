@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.69.0 | 2026-10-09 | Codex | TED/TEDx 新整片自动去开场等待，保留原片和二创片头，字幕/二创绑定同一加工副本。 |
 | 3.68.0 | 2026-10-09 | Codex | 正常 A 与二创 B 分离、就绪原子入队及共享原片保护。 |
 | 3.67.1 | 2026-10-08 | Antigravity | 优化二创策划字幕源选择，优先透传原文字幕以供事实引证门禁核验 |
 | 3.67.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：二创自动降级状态回写 (ENRICHED/DEGRADED)、错误日志记录及 InsightScriptV2 审查兼容 |
@@ -2352,7 +2353,9 @@ class PipelineManager:
             env["PYTHONPATH"] = str(self._SRC_DIR)
             if not script_valid:
                 source_subs = self._source_subtitle_files(yid) if hasattr(self, "_source_subtitle_files") else []
-                sub_to_use = source_subs[0] if (source_subs and source_subs[0].is_file()) else subtitle
+                # 已裁剪素材必须使用零起点 ASS；源 VTT 保留给源安全预检。
+                opening_bound = source.with_suffix(".source.json").is_file()
+                sub_to_use = source_subs[0] if (source_subs and source_subs[0].is_file() and not opening_bound) else subtitle
                 self._run_tracked([
                     self._VENV_PYTHON, str(self._PRJ_ROOT / "scripts/copywriter.py"),
                     f"--youtube-id={prefix}", "--title", title, "--output-dir", str(self._OUT_DIR),
@@ -2370,7 +2373,7 @@ class PipelineManager:
             from .utils.insight_evidence import review_evidence
             parsed_script = InsightScriptV2.model_validate_json(script.read_text(encoding="utf-8"))
             review_subs = self._source_subtitle_files(yid)
-            review_subtitle = review_subs[0] if review_subs else subtitle
+            review_subtitle = review_subs[0] if review_subs and not source.with_suffix(".source.json").is_file() else subtitle
             review_evidence(parsed_script, review_subtitle, script.with_suffix(".evidence.json"))
             self._run_tracked([
                 self._VENV_PYTHON, "-m", "video_processing.processors.insight_processor",
@@ -3665,6 +3668,13 @@ class PipelineManager:
             return "缺少文案标签检查点"
 
         target_file = self._OUT_DIR / f"{prefix}.mp4" if slice_index > 0 else Path(source_video)
+        from .utils.render_source_binding import bound_render_inputs
+        try:
+            bound = bound_render_inputs(self._OUT_DIR / f"{prefix}_vertical.mp4")
+            if bound is not None:
+                target_file = bound[0]
+        except (ValueError, OSError, KeyError, TypeError) as exc:
+            return f"加工素材绑定无效：{type(exc).__name__}"
         subtitle_error = bilingual_ass_contract_error(target_file.with_suffix(".ass"))
         if subtitle_error:
             return subtitle_error
@@ -4019,6 +4029,42 @@ class PipelineManager:
         if video and str(video.get("status") or "").upper() in ("FAILED", "CANCELED"):
             return True
         return False
+
+    def _prepare_speech_opening(self, video: Dict[str, Any], source: Path) -> Path:
+        """只加工 TED/TEDx 新整片；疑难及异常直接继续原片，无确认队列。"""
+        if (not settings.enable_ted_opening_trim
+                or video.get("channel_id") not in TED_AUTO_PUBLISH_CHANNEL_IDS
+                or video.get("slice_index", 0)
+                or any(video.get(key) not in (None, "") for key in ("trim_start", "trim_end"))):
+            return source
+        yid = video["youtube_id"]
+        prepared_dir = self._OUT_DIR / "speech_opening" / yid
+        prepared = prepared_dir / f"{yid}.mp4"
+        decision_path = prepared.with_suffix(".opening.json")
+        if (self._OUT_DIR / f"{yid}_vertical.mp4").is_file() and not decision_path.is_file():
+            logger.info("[SpeechOpening] %s 已有成片，保留历史加工。", yid)
+            return source
+        try:
+            env = _build_subprocess_env()
+            env["PYTHONPATH"] = str(self._SRC_DIR)
+            result = self._run_tracked([
+                self._VENV_PYTHON, "-m", "video_processing.processors.speech_opening",
+                str(source), str(prepared_dir),
+            ], yid, slice_index=0, capture_output=True, cwd=str(self._PRJ_ROOT),
+               env=env, timeout=1320)
+            payload = json.loads(result.stdout)
+            selected = Path(payload["selected"])
+            if selected.resolve() not in {source.resolve(), prepared.resolve()} or not selected.is_file():
+                raise ValueError("裁剪子进程未返回本片有效素材")
+            receipt = payload["receipt"]
+            logger.info("[SpeechOpening] %s offset=%ss reason=%s", yid,
+                        receipt["offset_seconds"], receipt["reason"])
+            return selected
+        except InterruptedError:
+            raise
+        except Exception as exc:
+            logger.warning("[SpeechOpening] %s 保留原片：%s", yid, type(exc).__name__)
+            return source
 
     def _prepare_single_video(
         self,
@@ -4432,8 +4478,13 @@ class PipelineManager:
                     total_cnt = len(all_slices) if all_slices else 1
                     render_title = f"{render_title} {slice_index}/{total_cnt}"
                 logger.info(f"[Render] Using title for video header: {render_title!r}")
-
-
+                if not submission_only:
+                    target_file = self._prepare_speech_opening(video, Path(target_file))
+                else:
+                    from .utils.render_source_binding import bound_render_inputs
+                    bound = bound_render_inputs(self._OUT_DIR / f"{prefix}_vertical.mp4")
+                    if bound is not None:
+                        target_file = bound[0]
                 vertical = self._OUT_DIR / f"{prefix}_vertical.mp4"
                 # [Claude_Sonnet_4.6_Thinking_planning] v3.5.0 Transcribe Checkpoint 缓存校验增强：
                 # 仅检测 _vertical.mp4 存在不够，当字幕渲染代码升级后旧格式视频会被错误地复用。
@@ -4479,6 +4530,11 @@ class PipelineManager:
                         if _subtitle_error:
                             logger.warning("[CacheInvalid] %s", _subtitle_error)
                             _cache_valid = False
+
+                from .utils.render_source_binding import render_source_matches, bind_render_source, binding_path
+                if _cache_valid and not render_source_matches(vertical, Path(target_file)):
+                    logger.info("[CacheInvalid] %s 加工素材与基础竖版绑定不匹配。", prefix)
+                    _cache_valid = False
 
                 if _cache_valid:
                     logger.info(f"[SKIP] Transcribe checkpoint (subtitle contract verified): {vertical.name}")
@@ -4604,6 +4660,18 @@ class PipelineManager:
                             f"Renderer exceeded {_AUTO_CAPTION_TIMEOUT_SEC // 60} minutes and was terminated."
                         )
                         return
+
+                canonical_ass = self._OUT_DIR / f"{prefix}.ass"
+                if _ass_file.resolve() != canonical_ass.resolve():
+                    # 包括关闭裁剪后恢复原片，避免审查沿用上一版本的零起点字幕。
+                    import shutil
+                    temporary_ass = canonical_ass.with_suffix(".pending.ass")
+                    shutil.copy2(_ass_file, temporary_ass)
+                    temporary_ass.replace(canonical_ass)
+                if Path(target_file).parent.parent == self._OUT_DIR / "speech_opening":
+                    bind_render_source(vertical, Path(target_file), _ass_file)
+                else:
+                    binding_path(vertical).unlink(missing_ok=True)
 
                 self._process_insight_enrichment(
                     prefix, yid, render_title, _ass_file, slice_index=slice_index,

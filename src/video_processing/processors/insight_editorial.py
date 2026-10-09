@@ -5,6 +5,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.2 | 2026-10-09 | Codex | 二创按摘要绑定选取去等待原片及字幕，二创片头完整保留。 |
 | 1.0.1 | 2026-10-09 | Codex | 标题均衡末行，数字与中文计量单位不拆分 |
 """
 from functools import lru_cache
@@ -30,6 +31,12 @@ LOGO = ASSETS / "brand/01_logos/concept_a.png"
 def resolve_inputs(source, original=None, subtitles=None):
     """只匹配当前片段的精确文件名，禁止将父视频误配给切片。"""
     source = Path(source)
+    if original is None or subtitles is None:
+        from video_processing.utils.render_source_binding import bound_render_inputs
+        bound = bound_render_inputs(source)
+        if bound is not None:
+            original = original if original is not None else bound[0]
+            subtitles = subtitles if subtitles is not None else bound[1]
     stem = source.stem.removesuffix("_vertical")
     roots = [source.parent, source.parent / "original_video"]
     if original is None:

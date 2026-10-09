@@ -401,6 +401,9 @@ class Settings(BaseSettings):
     # 百分数单位：0.6 表示 0.6%；严格大于，不按显示值四舍五入。
     ted_min_like_rate_pct: float = Field(default=0.6, ge=0, le=100, allow_inf_nan=False)
 
+    # 已授权的 TED/TEDx 新整片优化；疑似语音、旧成片、手工范围和章节均保留。
+    enable_ted_opening_trim: bool = True
+
     # 演讲/TED/高校频道使用较低的自动发布线；普通频道仍使用 75。
     speech_publish_score_line: int = 40
     speech_channel_ids: str = (
