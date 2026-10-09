@@ -1,0 +1,943 @@
+{
+  "recipe": "speech-opening-v2",
+  "sampling": "目的性选择30条真实40秒摘录；六条登记品牌前缀；非独立准确率评估",
+  "real_sample_count": 30,
+  "trim_count": 6,
+  "retain_count": 24,
+  "samples": [
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/1qmF_znXxrE.mp4",
+      "source_sha256": "ae747527a838429e657167ec38ced23ba8a8f7081283be290094ea1913c49bd6",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/1qmF_znXxrE.mp4",
+      "source_bytes": 3134941,
+      "selected_bytes": 3134941,
+      "elapsed_seconds": 0.974,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "ae747527a838429e657167ec38ced23ba8a8f7081283be290094ea1913c49bd6",
+        "source_duration": 40.081708,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "1qmF_znXxrE",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/Uk31lVtda2g.mp4",
+      "source_sha256": "5f58cdbf70d91b86391950ea26597de3b88c1328facd3c95e87139207ffade21",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/final-openings/Uk31lVtda2g/Uk31lVtda2g.mp4",
+      "source_bytes": 6803203,
+      "selected_bytes": 6338404,
+      "elapsed_seconds": 4.922,
+      "decode_seconds": 0.342,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 8.5,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "5f58cdbf70d91b86391950ea26597de3b88c1328facd3c95e87139207ffade21",
+        "source_duration": 40.023317,
+        "reason": "VERIFIED_AV_PREFIX",
+        "reference_id": "Uk31lVtda2g",
+        "output_sha256": "70261b63808474336e1cfde91456b3d540a434aabd807c848fded0e7ab42206c"
+      },
+      "source_unchanged": true,
+      "id": "Uk31lVtda2g",
+      "scenario": "品牌片头后讲话",
+      "expected_offset": 8.5
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/6xbG8OLQYys.mp4",
+      "source_sha256": "c8921aa8be844caab7d867a990aa1d1169a670338e40fb46234d7af56a534d22",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/final-openings/6xbG8OLQYys/6xbG8OLQYys.mp4",
+      "source_bytes": 6004124,
+      "selected_bytes": 4857006,
+      "elapsed_seconds": 6.426,
+      "decode_seconds": 0.299,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 7,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "c8921aa8be844caab7d867a990aa1d1169a670338e40fb46234d7af56a534d22",
+        "source_duration": 40.023317,
+        "reason": "VERIFIED_AV_PREFIX",
+        "reference_id": "6xbG8OLQYys",
+        "output_sha256": "d7e7f6fa7f6ea59a1f968a9b9d5995058c937c543c3376e3cd093fae6fc0d317"
+      },
+      "source_unchanged": true,
+      "id": "6xbG8OLQYys",
+      "scenario": "品牌片头后讲话",
+      "expected_offset": 7
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/1aY-puP8oOw.mp4",
+      "source_sha256": "7e6d4bd9c6688e71559427c0ed5f175942164792ec414a7fbcf70bfb7ea3d5bf",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/1aY-puP8oOw.mp4",
+      "source_bytes": 5180101,
+      "selected_bytes": 5180101,
+      "elapsed_seconds": 0.169,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "7e6d4bd9c6688e71559427c0ed5f175942164792ec414a7fbcf70bfb7ea3d5bf",
+        "source_duration": 40.081708,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "1aY-puP8oOw",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/txf8CrI5z-k.mp4",
+      "source_sha256": "7c4251a8933f464fb7fd9ec9756193e147a6310d683d7132d0b91f36a08e16d4",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/txf8CrI5z-k.mp4",
+      "source_bytes": 3397700,
+      "selected_bytes": 3397700,
+      "elapsed_seconds": 0.167,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "7c4251a8933f464fb7fd9ec9756193e147a6310d683d7132d0b91f36a08e16d4",
+        "source_duration": 40.033417,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "txf8CrI5z-k",
+      "scenario": "先唱歌再解释，表演属于内容",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/y64RDBeR19c.mp4",
+      "source_sha256": "8a197e54ced5c6ebe32c6c7c858306431a815a72c6d2fce70413bff99339b9da",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/y64RDBeR19c.mp4",
+      "source_bytes": 7326498,
+      "selected_bytes": 7326498,
+      "elapsed_seconds": 0.17,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "8a197e54ced5c6ebe32c6c7c858306431a815a72c6d2fce70413bff99339b9da",
+        "source_duration": 40.081708,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "y64RDBeR19c",
+      "scenario": "手风琴演示，无讲话的音乐内容",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/n4WktuDT49I.mp4",
+      "source_sha256": "bdb98637d2b5d46f2e02611a29a21303eb315ab9f4f9cdb0707cb0d1611f3441",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/n4WktuDT49I.mp4",
+      "source_bytes": 5138126,
+      "selected_bytes": 5138126,
+      "elapsed_seconds": 0.168,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "bdb98637d2b5d46f2e02611a29a21303eb315ab9f4f9cdb0707cb0d1611f3441",
+        "source_duration": 40.04,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "n4WktuDT49I",
+      "scenario": "音乐示范与讲话混合",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/535jVKx0_DI.mp4",
+      "source_sha256": "dfced7f6f146e8db7d2625d772c0701282b082dcd8d9195ca373f0f9f3fa8036",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/final-openings/535jVKx0_DI/535jVKx0_DI.mp4",
+      "source_bytes": 3111196,
+      "selected_bytes": 1788035,
+      "elapsed_seconds": 1.693,
+      "decode_seconds": 0.118,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 10.5,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "dfced7f6f146e8db7d2625d772c0701282b082dcd8d9195ca373f0f9f3fa8036",
+        "source_duration": 40.04,
+        "reason": "VERIFIED_AV_PREFIX",
+        "reference_id": "535jVKx0_DI",
+        "output_sha256": "07054576cea84c5d8ec83b39fea41ce6b2f9a8a6470e1dfa075a46d9a89745ba"
+      },
+      "source_unchanged": true,
+      "id": "535jVKx0_DI",
+      "scenario": "品牌片头后讲话",
+      "expected_offset": 10.5
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/2SS8xDcsXCM.mp4",
+      "source_sha256": "86732d10b6da1dfed0dc5c66d0f19a7d5d6edb24c654933f8496820fe5000cfc",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/2SS8xDcsXCM.mp4",
+      "source_bytes": 4690784,
+      "selected_bytes": 4690784,
+      "elapsed_seconds": 0.175,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "86732d10b6da1dfed0dc5c66d0f19a7d5d6edb24c654933f8496820fe5000cfc",
+        "source_duration": 40.041667,
+        "reason": "UNCERTAIN_EARLY_VOICE",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "2SS8xDcsXCM",
+      "scenario": "掌声及早期含混信号，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/AlY6ztT12Ps.mp4",
+      "source_sha256": "b130ea385135a45d2460fea5967f8562b81995dd8df64ee822af2cd1c27a3374",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/AlY6ztT12Ps.mp4",
+      "source_bytes": 4288593,
+      "selected_bytes": 4288593,
+      "elapsed_seconds": 0.191,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "b130ea385135a45d2460fea5967f8562b81995dd8df64ee822af2cd1c27a3374",
+        "source_duration": 40.04,
+        "reason": "UNVERIFIED_AV_PREFIX",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "AlY6ztT12Ps",
+      "scenario": "赞助卡、讲者及屏幕文字",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/P1hob_amyIg.mp4",
+      "source_sha256": "722e5ca923f7bce46f63e2fa97fa3926dc00c75f9a83f52f39054097f82456d7",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/P1hob_amyIg.mp4",
+      "source_bytes": 5553429,
+      "selected_bytes": 5553429,
+      "elapsed_seconds": 0.18,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "722e5ca923f7bce46f63e2fa97fa3926dc00c75f9a83f52f39054097f82456d7",
+        "source_duration": 40.04,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "P1hob_amyIg",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/rU-Awn4m2VY.mp4",
+      "source_sha256": "4cb4422828e2a6af2d7b3ad9bbe6ef9032a2ebd0ddd4895ba326b2bac22db5a2",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/rU-Awn4m2VY.mp4",
+      "source_bytes": 3056877,
+      "selected_bytes": 3056877,
+      "elapsed_seconds": 0.169,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "4cb4422828e2a6af2d7b3ad9bbe6ef9032a2ebd0ddd4895ba326b2bac22db5a2",
+        "source_duration": 40.04,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "rU-Awn4m2VY",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/DTwHfQR-_Ac.mp4",
+      "source_sha256": "07a2ada8f157f4c24e2364195892c62c753406d3479588b497bac80d4797ee51",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/final-openings/DTwHfQR-_Ac/DTwHfQR-_Ac.mp4",
+      "source_bytes": 4354820,
+      "selected_bytes": 5176265,
+      "elapsed_seconds": 2.988,
+      "decode_seconds": 0.198,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 8.5,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "07a2ada8f157f4c24e2364195892c62c753406d3479588b497bac80d4797ee51",
+        "source_duration": 40.04,
+        "reason": "VERIFIED_AV_PREFIX",
+        "reference_id": "DTwHfQR-_Ac",
+        "output_sha256": "0620e758092919eb03c4a1baf258250687a37400999e81585f78fdea0792927c"
+      },
+      "source_unchanged": true,
+      "id": "DTwHfQR-_Ac",
+      "scenario": "品牌片头后讲话",
+      "expected_offset": 8.5
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/BDA2oTj_6KI.mp4",
+      "source_sha256": "26d0ef0f3ed6f1740e68ac940fde05df6e63b1947c1b5cfc10e410df886e1cf2",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/BDA2oTj_6KI.mp4",
+      "source_bytes": 6134474,
+      "selected_bytes": 6134474,
+      "elapsed_seconds": 0.164,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "26d0ef0f3ed6f1740e68ac940fde05df6e63b1947c1b5cfc10e410df886e1cf2",
+        "source_duration": 40.081708,
+        "reason": "UNVERIFIED_AV_PREFIX",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "BDA2oTj_6KI",
+      "scenario": "先掌声后讲话，未登记舞台画面",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/CfuEK3U6Bog.mp4",
+      "source_sha256": "2ecbeb9f63a3d12ca273eac04c7624dc3524a4a76774d259a1bdf24d6a7b561f",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/final-openings/CfuEK3U6Bog/CfuEK3U6Bog.mp4",
+      "source_bytes": 5534684,
+      "selected_bytes": 5055733,
+      "elapsed_seconds": 5.595,
+      "decode_seconds": 0.314,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 8,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "2ecbeb9f63a3d12ca273eac04c7624dc3524a4a76774d259a1bdf24d6a7b561f",
+        "source_duration": 40.023317,
+        "reason": "VERIFIED_AV_PREFIX",
+        "reference_id": "CfuEK3U6Bog",
+        "output_sha256": "e8998c8cbfeb1c26bf123f9f7437b16f8ed5fdb1f88457a8eba51961e4f7449d"
+      },
+      "source_unchanged": true,
+      "id": "CfuEK3U6Bog",
+      "scenario": "品牌片头后讲话",
+      "expected_offset": 8
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/1eCX3na89-U.mp4",
+      "source_sha256": "a81ad6479f58cbad8a77c272d671c917061dfb2e2d0c3d3fd85f077834239e41",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/1eCX3na89-U.mp4",
+      "source_bytes": 5268244,
+      "selected_bytes": 5268244,
+      "elapsed_seconds": 0.165,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "a81ad6479f58cbad8a77c272d671c917061dfb2e2d0c3d3fd85f077834239e41",
+        "source_duration": 40.04,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "1eCX3na89-U",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/27SwlEfTbUI.mp4",
+      "source_sha256": "ed653207fa6ca4c65a4fbc23581962667cf14216ca84f0cfa432c090010d32ec",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/27SwlEfTbUI.mp4",
+      "source_bytes": 5336443,
+      "selected_bytes": 5336443,
+      "elapsed_seconds": 0.164,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "ed653207fa6ca4c65a4fbc23581962667cf14216ca84f0cfa432c090010d32ec",
+        "source_duration": 40.04,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "27SwlEfTbUI",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/2L5jOA6JnHc.mp4",
+      "source_sha256": "56e6f8e6412153b1766cc1c5b95e7a5bc4c7dd5bbd79b054d174e2fca55881f3",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/final-openings/2L5jOA6JnHc/2L5jOA6JnHc.mp4",
+      "source_bytes": 7229603,
+      "selected_bytes": 5672897,
+      "elapsed_seconds": 4.389,
+      "decode_seconds": 0.339,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 8.5,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "56e6f8e6412153b1766cc1c5b95e7a5bc4c7dd5bbd79b054d174e2fca55881f3",
+        "source_duration": 40.023317,
+        "reason": "VERIFIED_AV_PREFIX",
+        "reference_id": "Uk31lVtda2g",
+        "output_sha256": "a49b2e681be12d1bf7f529785ef103b9379ca849063f2f4336575f94de252419"
+      },
+      "source_unchanged": true,
+      "id": "2L5jOA6JnHc",
+      "scenario": "品牌片头后讲话",
+      "expected_offset": 8.5
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/PKN3b8hmzWg.mp4",
+      "source_sha256": "cb69323fa8c30928a12ca22c0cd2f465b9ab0cf69820c9dfec30f28c07e5c1e2",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/PKN3b8hmzWg.mp4",
+      "source_bytes": 3307562,
+      "selected_bytes": 3307562,
+      "elapsed_seconds": 0.234,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "cb69323fa8c30928a12ca22c0cd2f465b9ab0cf69820c9dfec30f28c07e5c1e2",
+        "source_duration": 40.081708,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "PKN3b8hmzWg",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/Lk7d0xG3AZk.mp4",
+      "source_sha256": "afdb3c1d6d2722f6776e48635a365f93ad46232768176c79921fa4147c3a41fa",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/Lk7d0xG3AZk.mp4",
+      "source_bytes": 2607793,
+      "selected_bytes": 2607793,
+      "elapsed_seconds": 0.181,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "afdb3c1d6d2722f6776e48635a365f93ad46232768176c79921fa4147c3a41fa",
+        "source_duration": 40.04,
+        "reason": "UNVERIFIED_AV_PREFIX",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "Lk7d0xG3AZk",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/0lQtYesj_yI.mp4",
+      "source_sha256": "80e99eb51a5efd1df3dfa454108b67b137943889d11c4d8b890cb20e5dd3f58b",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/0lQtYesj_yI.mp4",
+      "source_bytes": 4717528,
+      "selected_bytes": 4717528,
+      "elapsed_seconds": 0.166,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "80e99eb51a5efd1df3dfa454108b67b137943889d11c4d8b890cb20e5dd3f58b",
+        "source_duration": 40.04,
+        "reason": "UNVERIFIED_AV_PREFIX",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "0lQtYesj_yI",
+      "scenario": "主题文字只在开场卡出现",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/-_GCY_ZQyUs.mp4",
+      "source_sha256": "24d87e03e8eb6a31482e61c94fdf0ea35e1c44ae3cd9576650b83795e53f9ecc",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/-_GCY_ZQyUs.mp4",
+      "source_bytes": 4370128,
+      "selected_bytes": 4370128,
+      "elapsed_seconds": 0.165,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "24d87e03e8eb6a31482e61c94fdf0ea35e1c44ae3cd9576650b83795e53f9ecc",
+        "source_duration": 40.04,
+        "reason": "UNVERIFIED_AV_PREFIX",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "-_GCY_ZQyUs",
+      "scenario": "讲者照片及主题只在开场卡出现",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/81iS7JsTGmk.mp4",
+      "source_sha256": "b857583ed61b66aff06d3540600386374ffc0c6f248c96f0daca9f0b590fed89",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/81iS7JsTGmk.mp4",
+      "source_bytes": 3640453,
+      "selected_bytes": 3640453,
+      "elapsed_seconds": 0.162,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "b857583ed61b66aff06d3540600386374ffc0c6f248c96f0daca9f0b590fed89",
+        "source_duration": 40.04,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "81iS7JsTGmk",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/Hd8npxrnpuo.mp4",
+      "source_sha256": "41b5cdda414ec54e910e8cf2bf6aea4120af662cfdecda78e244af31fa2e3452",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/Hd8npxrnpuo.mp4",
+      "source_bytes": 7924511,
+      "selected_bytes": 7924511,
+      "elapsed_seconds": 0.167,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "41b5cdda414ec54e910e8cf2bf6aea4120af662cfdecda78e244af31fa2e3452",
+        "source_duration": 40.04,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "Hd8npxrnpuo",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/jCbITOCoxpo.mp4",
+      "source_sha256": "bf81669772922c520bfeee03640ac307b83e93d7c3d8b30e4ca921361759b5c1",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/jCbITOCoxpo.mp4",
+      "source_bytes": 3924041,
+      "selected_bytes": 3924041,
+      "elapsed_seconds": 0.168,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "bf81669772922c520bfeee03640ac307b83e93d7c3d8b30e4ca921361759b5c1",
+        "source_duration": 40.04,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "jCbITOCoxpo",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/gduYQKmz05M.mp4",
+      "source_sha256": "2b61fa7702992dc688c5af85634baa499bfaed3e79d1b9fbd2365b00f8de6fce",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/gduYQKmz05M.mp4",
+      "source_bytes": 1856376,
+      "selected_bytes": 1856376,
+      "elapsed_seconds": 0.166,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "2b61fa7702992dc688c5af85634baa499bfaed3e79d1b9fbd2365b00f8de6fce",
+        "source_duration": 40.081708,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "gduYQKmz05M",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/9Ff4S1FJdRM.mp4",
+      "source_sha256": "a87ef90a63e3ef8304b267dac677a0381036928106e8475d1289e24b57c7f777",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/9Ff4S1FJdRM.mp4",
+      "source_bytes": 3966792,
+      "selected_bytes": 3966792,
+      "elapsed_seconds": 0.165,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "a87ef90a63e3ef8304b267dac677a0381036928106e8475d1289e24b57c7f777",
+        "source_duration": 40.081708,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "9Ff4S1FJdRM",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/5SNEMFH7NlE.mp4",
+      "source_sha256": "ec0fc1aec03080e86f8270ed0ceb00b77da53553d9d170ef57e91a0c13e20119",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/5SNEMFH7NlE.mp4",
+      "source_bytes": 5491086,
+      "selected_bytes": 5491086,
+      "elapsed_seconds": 0.181,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "ec0fc1aec03080e86f8270ed0ceb00b77da53553d9d170ef57e91a0c13e20119",
+        "source_duration": 40.033333,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "5SNEMFH7NlE",
+      "scenario": "立即短问候，保留随后内容",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/pT0HuZM4Tf0.mp4",
+      "source_sha256": "df5f892b941a5a33cc6c36fa82717dde527bb7d0daf36eabebdd07b1d1bf37c2",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/pT0HuZM4Tf0.mp4",
+      "source_bytes": 2778341,
+      "selected_bytes": 2778341,
+      "elapsed_seconds": 0.184,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "df5f892b941a5a33cc6c36fa82717dde527bb7d0daf36eabebdd07b1d1bf37c2",
+        "source_duration": 40.016667,
+        "reason": "UNCERTAIN_EARLY_VOICE",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "pT0HuZM4Tf0",
+      "scenario": "早期含混信号，保留",
+      "expected_offset": 0
+    },
+    {
+      "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/oyRxhiAC9u8.mp4",
+      "source_sha256": "ddd510699867a054ff440d8cc1956c6c2843d18a71a34fc13ac088ba55af9ac5",
+      "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/oyRxhiAC9u8.mp4",
+      "source_bytes": 2304205,
+      "selected_bytes": 2304205,
+      "elapsed_seconds": 0.168,
+      "decode_seconds": 0,
+      "receipt": {
+        "recipe": "speech-opening-v2",
+        "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+        "offset_seconds": 0.0,
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_sha256": "ddd510699867a054ff440d8cc1956c6c2843d18a71a34fc13ac088ba55af9ac5",
+        "source_duration": 40.081708,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "source_unchanged": true,
+      "id": "oyRxhiAC9u8",
+      "scenario": "访谈从讲话开始，保留",
+      "expected_offset": 0
+    }
+  ],
+  "whole_source_prefix_checks": [
+    {
+      "id": "Uk31lVtda2g",
+      "whole_source_sha256": "3c22ccf29833c7f6fa367387593612ad0033dfb33591415f05c0b64246b4aa57",
+      "source_bytes": 144031937,
+      "matches_excerpt_prefix": true,
+      "seconds": 1.349
+    },
+    {
+      "id": "6xbG8OLQYys",
+      "whole_source_sha256": "525d03add8fc797434273cea75305c2bffef8e45d61b5ff95c90f05cc123b783",
+      "source_bytes": 117682654,
+      "matches_excerpt_prefix": true,
+      "seconds": 1.051
+    },
+    {
+      "id": "535jVKx0_DI",
+      "whole_source_sha256": "a82a64bc57d5c23be59919326ce6430d511df42c4919cb1c86279f4ef6d647ad",
+      "source_bytes": 44700213,
+      "matches_excerpt_prefix": true,
+      "seconds": 0.706
+    },
+    {
+      "id": "DTwHfQR-_Ac",
+      "whole_source_sha256": "f364f6a5a3d4d30167ae08d2dab5bfbaef880bb991fdb0dd142be3dea0ab9c7c",
+      "source_bytes": 83828888,
+      "matches_excerpt_prefix": true,
+      "seconds": 0.766
+    },
+    {
+      "id": "CfuEK3U6Bog",
+      "whole_source_sha256": "ac5b2573da8f98f23aebcef00957caa7f24e1aa31dbc83f5a2a4f8e98713949a",
+      "source_bytes": 181647279,
+      "matches_excerpt_prefix": true,
+      "seconds": 1.227
+    },
+    {
+      "id": "2L5jOA6JnHc",
+      "whole_source_sha256": "2d794f24083e8d05f6d84a2fee896cd127124f0261068805d8b5449ee5040162",
+      "source_bytes": 260771750,
+      "matches_excerpt_prefix": true,
+      "seconds": 1.332
+    }
+  ],
+  "full_cost": {
+    "source": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/ted-openings/535jVKx0_DI.full.mp4",
+    "source_sha256": "a82a64bc57d5c23be59919326ce6430d511df42c4919cb1c86279f4ef6d647ad",
+    "selected": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/final-openings/full-cost/535jVKx0_DI.full.mp4",
+    "source_bytes": 44700213,
+    "selected_bytes": 67412193,
+    "elapsed_seconds": 28.748,
+    "decode_seconds": 2.944,
+    "receipt": {
+      "recipe": "speech-opening-v2",
+      "model_sha256": "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a",
+      "offset_seconds": 10.5,
+      "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+      "source_sha256": "a82a64bc57d5c23be59919326ce6430d511df42c4919cb1c86279f4ef6d647ad",
+      "source_duration": 674.075283,
+      "reason": "VERIFIED_AV_PREFIX",
+      "reference_id": "535jVKx0_DI",
+      "output_sha256": "3454dab40969ae8cb088c272631fe0222adde7e151c7c9dc36d416d81c670a93"
+    },
+    "source_unchanged": true
+  },
+  "audio_integrity": [
+    {
+      "id": "Uk31lVtda2g",
+      "source_first_words": [
+        "good",
+        "evening",
+        "everyone",
+        "let",
+        "me"
+      ],
+      "prepared_first_words": [
+        "good",
+        "evening",
+        "everyone",
+        "let",
+        "me"
+      ],
+      "first_words_agree": true,
+      "waveform_correlation": 0.999989,
+      "audio_lag_ms": 0.0
+    },
+    {
+      "id": "6xbG8OLQYys",
+      "source_first_words": [
+        "i",
+        "have",
+        "either",
+        "called",
+        "it"
+      ],
+      "prepared_first_words": [
+        "i",
+        "have",
+        "either",
+        "called",
+        "it"
+      ],
+      "first_words_agree": true,
+      "waveform_correlation": 0.999665,
+      "audio_lag_ms": 0.0
+    },
+    {
+      "id": "535jVKx0_DI",
+      "source_first_words": [
+        "my",
+        "grandfather",
+        "maurice",
+        "was",
+        "when"
+      ],
+      "prepared_first_words": [
+        "my",
+        "grandfather",
+        "maurice",
+        "was",
+        "when"
+      ],
+      "first_words_agree": true,
+      "waveform_correlation": 0.99994,
+      "audio_lag_ms": 0.0
+    },
+    {
+      "id": "DTwHfQR-_Ac",
+      "source_first_words": [
+        "this",
+        "might",
+        "divide",
+        "the",
+        "room"
+      ],
+      "prepared_first_words": [
+        "this",
+        "might",
+        "divide",
+        "the",
+        "room"
+      ],
+      "first_words_agree": true,
+      "waveform_correlation": 0.999899,
+      "audio_lag_ms": 0.0
+    },
+    {
+      "id": "CfuEK3U6Bog",
+      "source_first_words": [
+        "a",
+        "couple",
+        "of",
+        "years",
+        "ago"
+      ],
+      "prepared_first_words": [
+        "a",
+        "couple",
+        "of",
+        "years",
+        "ago"
+      ],
+      "first_words_agree": true,
+      "waveform_correlation": 0.99996,
+      "audio_lag_ms": 0.0
+    },
+    {
+      "id": "2L5jOA6JnHc",
+      "source_first_words": [
+        "when",
+        "you",
+        "think",
+        "of",
+        "ancient"
+      ],
+      "prepared_first_words": [
+        "when",
+        "you",
+        "think",
+        "of",
+        "ancient"
+      ],
+      "first_words_agree": true,
+      "waveform_correlation": 0.999997,
+      "audio_lag_ms": 0.0
+    }
+  ],
+  "media_evidence_root": "/private/tmp/video-pytest-6g797my5/sandbox/tmp/final-openings",
+  "final_test_evidence_root": "/private/tmp/video-pytest-tsppf2hd",
+  "final_test_receipt": {
+    "source": "/Users/ryusei/.codex/worktrees/f600/Video-precessing",
+    "snapshot": "/private/tmp/video-pytest-tsppf2hd/sandbox/repo",
+    "probe": {
+      "exit_code": 0,
+      "seconds": 0.069
+    },
+    "pytest_arguments": [
+      "-q",
+      "tests/unit/test_speech_opening.py",
+      "tests/unit/test_insight_editorial.py",
+      "tests/unit/test_insight_processor.py",
+      "tests/unit/test_insight_processor_v2.py",
+      "tests/unit/test_insight_advisory.py",
+      "tests/unit/test_pipeline_title_consistency.py",
+      "tests/unit/test_video_slicer.py",
+      "tests/unit/test_ready_publication_dispatch.py"
+    ],
+    "timeout_seconds": 600,
+    "source_manifest_sha256": "8b8291ad85acfeaae9cc6d58fc333e9db3a7309e1df92eafc1f2e156411af44c",
+    "profile_sha256": "233f7999413159f6fc41dc3863547c547c65efcba49be62bbfba72b6f732db6b",
+    "browser_runtime": null,
+    "browser_runtime_sha256": null,
+    "media_runtime": {
+      "models": {
+        "tiny": {
+          "source": "/Volumes/EXT2T/AppDataOffload/ryusei/ML/whisper/tiny.pt",
+          "snapshot": "/private/tmp/video-pytest-tsppf2hd/sandbox/cache/whisper/tiny.pt",
+          "sha256": "65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9",
+          "bytes": 75572083
+        },
+        "base": {
+          "source": "/Volumes/EXT2T/AppDataOffload/ryusei/ML/whisper/base.pt",
+          "snapshot": "/private/tmp/video-pytest-tsppf2hd/sandbox/cache/whisper/base.pt",
+          "sha256": "ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e",
+          "bytes": 145262807
+        }
+      },
+      "metadata_sha256": "79ecbed714783b6230931a3dba6d5da6d386e2d44f9fc27256e4fc72751e1f62",
+      "model_cache": "/private/tmp/video-pytest-tsppf2hd/sandbox/cache/whisper",
+      "cpu_threads": 2
+    },
+    "media_runtime_sha256": "d8b229b261134ec5cf5ddef8f463451aadb66e13a414a43542b04616234dfbce",
+    "pytest": {
+      "exit_code": 0,
+      "seconds": 35.944
+    },
+    "finished_at": "2026-10-09T00:52:40.168066+00:00"
+  }
+}

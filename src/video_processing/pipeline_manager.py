@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.69.1 | 2026-10-09 | Codex | 裁剪时间轴拒绝复用缺少来源指纹的旧二创脚本。 |
 | 3.69.0 | 2026-10-09 | Codex | TED/TEDx 新整片自动去开场等待，保留原片和二创片头，字幕/二创绑定同一加工副本。 |
 | 3.68.0 | 2026-10-09 | Codex | 正常 A 与二创 B 分离、就绪原子入队及共享原片保护。 |
 | 3.67.1 | 2026-10-08 | Antigravity | 优化二创策划字幕源选择，优先透传原文字幕以供事实引证门禁核验 |
@@ -2339,7 +2340,8 @@ class PipelineManager:
                 try:
                     raw = script.read_text(encoding="utf-8")
                     InsightScriptV2.model_validate_json(raw)
-                    script_valid = True
+                    # 自动裁剪改变时间轴，缺少计划指纹的旧脚本不能复用。
+                    script_valid = not source.with_suffix(".source.json").is_file()
                     if plan_receipt.is_file():
                         plan = json.loads(plan_receipt.read_text(encoding="utf-8"))
                         script_valid = plan == {

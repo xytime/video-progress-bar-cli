@@ -5,9 +5,11 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-09 | Codex | 固定离线 VAD、保守起点、原片保留及指纹检查点。 |
+| 1.1.0 | 2026-10-09 | Codex | 只删除完全匹配已验证音画的品牌前缀；校验零起点及有限时长。 |
 """
 from dataclasses import asdict, dataclass
 import argparse
+import errno
 import hashlib
 import json
 import math
@@ -17,8 +19,9 @@ import tempfile
 
 from video_processing.utils.video_metadata import _resolve_ffprobe_cmd, resolve_ffmpeg_cmd
 
-RECIPE = "speech-opening-v1"
+RECIPE = "speech-opening-v2"
 MODEL = Path(__file__).resolve().parents[3] / "assets/models/silero-vad/silero_vad.jit"
+PREFIXES = Path(__file__).resolve().parents[3] / "assets/models/silero-vad/verified-prefixes.json"
 MODEL_SHA256 = "85c48e1f0ecb604e5d2a268f3ccfb912d4f7e935acdc86af5a3fc5b0aea7b29a"
 SAMPLE_RATE, FRAME_SAMPLES = 16000, 512
 FRAME_SECONDS = FRAME_SAMPLES / SAMPLE_RATE
@@ -43,6 +46,7 @@ def atomic_json(path: Path, data: dict) -> None:
 class OpeningDecision:
     offset_seconds: float = 0.0
     reason: str = "NO_RELIABLE_SPEECH"
+    reference_id: str = ""
 
 
 def decide_opening(probabilities: list[float], *, pad_seconds: float = .5,
@@ -110,14 +114,58 @@ def media_info(path: Path) -> dict:
     return {"duration": seconds, "streams": streams}
 
 
+def prefix_shape(info: dict) -> dict:
+    return {kind: {key: info["streams"][kind].get(key) for key in fields}
+            for kind, fields in [("video", ["width", "height", "pix_fmt", "r_frame_rate"]),
+                                 ("audio", ["sample_rate", "channels"])]}
+
+
+def decoded_prefix_sha256(source: Path, seconds: float, shape: dict) -> str:
+    """完整帧和所有声道解码摘要，不采样图像、不使用模糊相似度。"""
+    result = subprocess.run([
+        resolve_ffmpeg_cmd(), "-v", "error", "-i", str(source), "-t", str(seconds),
+        "-map", "0:v:0", "-map", "0:a:0", "-c:v", "rawvideo", "-threads", "2",
+        "-c:a", "pcm_f32le", "-f", "streamhash", "-hash", "sha256", "pipe:1",
+    ], check=True, capture_output=True, text=True, timeout=60)
+    return hashlib.sha256((json.dumps(shape, sort_keys=True) + result.stdout.strip()).encode()).hexdigest()
+
+
+def protect_visual_prefix(source: Path, info: dict, decision: OpeningDecision) -> OpeningDecision:
+    """音频无讲话不等于视觉可删；未知或内容变化的前缀一律保留。"""
+    starts = [float(info["streams"][kind].get("start_time", "nan")) for kind in ("video", "audio")]
+    if any(not math.isfinite(start) or abs(start) > .001 for start in starts):
+        return OpeningDecision(reason="UNSUPPORTED_SOURCE_TIMEBASE")
+    manifest = json.loads(PREFIXES.read_text(encoding="utf-8"))
+    if manifest["version"] != 1:
+        raise ValueError("UNKNOWN_PREFIX_MANIFEST")
+    shape, digests = prefix_shape(info), {}
+    for prefix in sorted(manifest["prefixes"], key=lambda p: p["seconds"], reverse=True):
+        seconds = prefix["seconds"]
+        if not math.isfinite(seconds) or not 2 <= seconds <= 30:
+            raise ValueError("INVALID_PREFIX_DURATION")
+        if prefix["shape"] != shape or seconds >= info["duration"] - 2:
+            continue
+        if seconds not in digests:
+            digests[seconds] = decoded_prefix_sha256(source, seconds, shape)
+        if digests[seconds] == prefix["decoded_av_sha256"]:
+            return OpeningDecision(min(seconds, decision.offset_seconds), "VERIFIED_AV_PREFIX",
+                                   prefix.get("reference_id", ""))
+    return OpeningDecision(reason="UNVERIFIED_AV_PREFIX")
+
+
 def validate_prepared(path: Path, expected: float) -> None:
     info = media_info(path)
-    if abs(info["duration"] - expected) > .15:
+    if not math.isfinite(expected) or expected <= 0 or abs(info["duration"] - expected) > .15:
         raise ValueError("PREPARED_DURATION_MISMATCH")
     video, audio = (info["streams"][kind] for kind in ("video", "audio"))
-    if abs(float(video.get("start_time", 0)) - float(audio.get("start_time", 0))) > .05:
+    starts = [float(stream.get("start_time", "nan")) for stream in (video, audio)]
+    durations = [float(stream["duration"]) for stream in (video, audio)]
+    if any(not math.isfinite(t) or abs(t) > .05 for t in starts):
         raise ValueError("PREPARED_AV_START_MISMATCH")
-    if abs(float(video["duration"]) - float(audio["duration"])) > .08:
+    # 结束时间=起点+时长。裁剪落在帧间时，视频起点可能比音频晚一帧。
+    ends = [start + duration for start, duration in zip(starts, durations)]
+    if (any(not math.isfinite(t) or t <= 0 for t in durations)
+            or any(abs(t - expected) > .15 for t in ends) or abs(ends[0] - ends[1]) > .08):
         raise ValueError("PREPARED_AV_END_MISMATCH")
 
 
@@ -132,6 +180,9 @@ def prepare_opening(source: Path, output_dir: Path) -> tuple[Path, dict]:
         atomic_json(receipt_path, receipt)
         return source, receipt
     try:
+        if sha256(MODEL) != MODEL_SHA256:
+            raise ValueError("VAD_MODEL_HASH_MISMATCH")
+        receipt["prefix_manifest_sha256"] = sha256(PREFIXES)
         receipt["source_sha256"] = sha256(source)
         source_info = media_info(source)
         receipt["source_duration"] = source_info["duration"]
@@ -146,6 +197,8 @@ def prepare_opening(source: Path, output_dir: Path) -> tuple[Path, dict]:
                         validate_prepared(output, source_info["duration"] - offset)
                         return output, previous
         decision = decide_opening(speech_probabilities(source))
+        if decision.offset_seconds:
+            decision = protect_visual_prefix(source, source_info, decision)
         receipt.update(asdict(decision))
         if decision.offset_seconds:
             expected = source_info["duration"] - decision.offset_seconds
@@ -169,6 +222,9 @@ def prepare_opening(source: Path, output_dir: Path) -> tuple[Path, dict]:
                 return output, receipt
     except Exception as exc:
         receipt.update(offset_seconds=0.0, reason=f"UNAVAILABLE_{type(exc).__name__}")
+        receipt["failure_code"] = (str(exc)[:100] if type(exc) is ValueError else
+                                   errno.errorcode.get(exc.errno, type(exc).__name__)
+                                   if isinstance(exc, OSError) else type(exc).__name__)
     atomic_json(receipt_path, receipt)
     return source, receipt
 

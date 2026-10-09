@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "prefixes": [
+    {
+      "reference_id": "Uk31lVtda2g",
+      "seconds": 8.5,
+      "decoded_av_sha256": "7e2f7ea45e0a7a5cd437f3f3583768c0ede488a5f30ed607f29dc0285a14becd",
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "60000/1001"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    },
+    {
+      "reference_id": "6xbG8OLQYys",
+      "seconds": 7,
+      "decoded_av_sha256": "970a7be125329576dbde489491264a2502f6a585be5d5e87a0b1e4301e8cea1a",
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "60000/1001"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    },
+    {
+      "reference_id": "535jVKx0_DI",
+      "seconds": 10.5,
+      "decoded_av_sha256": "128e2082835c0d31492f3192d5c73b679ade32c0e057c4590b90f8db220035fb",
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    },
+    {
+      "reference_id": "DTwHfQR-_Ac",
+      "seconds": 8.5,
+      "decoded_av_sha256": "9dae6a9fd088423337235106c25af6cb6b2f63a1734754b7a861929c54b8ebce",
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    },
+    {
+      "reference_id": "CfuEK3U6Bog",
+      "seconds": 8,
+      "decoded_av_sha256": "9abc821a4e851091fda6bc0c992bb0d26df8ec63284ea5e371b7f13c576ba708",
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "60000/1001"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    },
+    {
+      "reference_id": "2L5jOA6JnHc",
+      "seconds": 8,
+      "decoded_av_sha256": "9296599b10a4d943e8e549802c99f0f38e9eb5d77102e8d913fdea262ed078cf",
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "60000/1001"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    }
+  ]
+}

@@ -6,6 +6,7 @@
 | 1.0.0 | 2026-10-08 | Antigravity | 覆盖 V2 原片零裁切、Y=265~555 安全横栏、VTT 事实引证门禁、三级收据与自动降级 |
 | 1.1.0 | 2026-10-08 | Antigravity | 消除 VTT 门禁测试静默跳过漏洞，增加片头图腾/片尾二维码渲染、严格 V2 网关及 CLI 错误报告单测 |
 | 1.2.0 | 2026-10-09 | Codex | 使用明确时码夹具验收真实编码及缓存，不把静音替身当真实 ASR |
+| 1.3.0 | 2026-10-09 | Codex | 裁剪副本、零起点字幕及完整二创首尾合成回归。 |
 """
 import copy
 import json
@@ -48,8 +49,8 @@ class TestInsightProcessorV2:
         tts.generate_audio.assert_not_called()
         assert source.read_bytes() == b"base"
 
-    @pytest.mark.parametrize("provider", ["edge", "doubao"])
-    def test_three_level_sha256_receipt_system(self, tmp_path, monkeypatch, provider):
+    @pytest.mark.parametrize("provider,opening_bound", [("edge", False), ("doubao", False), ("edge", True)])
+    def test_three_level_sha256_receipt_system(self, tmp_path, monkeypatch, provider, opening_bound):
         """验证三级 SHA-256 收据系统结构与 valid_enrichment 双向校验。"""
         from video_processing.core.tts_engine import TTSProvider
         tts = LocalSpeech44100()
@@ -73,13 +74,27 @@ class TestInsightProcessorV2:
         ], check=True)
         source.write_bytes(original.read_bytes())
         (tmp_path / "base.ass").write_text("[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:14.00,Default,,0,0,0,,The complete source frame is preserved.\\N完整保留原始视频画面。\n")
+        if opening_bound:
+            # 使用真实编码副本及零起点字幕，验证二创仍保留完整首尾段。
+            from video_processing.processors import speech_opening
+            from video_processing.utils.render_source_binding import bind_render_source
+            prepared = tmp_path / "speech_opening/base/base.mp4"
+            prepared.parent.mkdir(parents=True)
+            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(original), "-ss", "2",
+                            "-c:v", "libx264", "-threads", "2", "-c:a", "aac", str(prepared)],
+                           check=True, capture_output=True, timeout=60)
+            prepared.with_suffix(".ass").write_text((tmp_path / "base.ass").read_text().replace("0:00:14.00", "0:00:12.00"))
+            source.write_bytes(prepared.read_bytes())
+            speech_opening.validate_prepared(prepared, 12)
+            bind_render_source(source, prepared, prepared.with_suffix(".ass"))
+        body_seconds = 12 if opening_bound else 14
 
         # 调整测试脚本卡片时间，单卡时长须满足 5.0~45.0s 契约约束
         test_script = copy.deepcopy(FEW_SHOT_EXAMPLE_CORNELL)
         test_script["cards"][0]["start_sec"] = 1.0
         test_script["cards"][0]["end_sec"] = 6.5  # 5.5s
         test_script["cards"][1]["start_sec"] = 7.0
-        test_script["cards"][1]["end_sec"] = 13.0  # 6.0s
+        test_script["cards"][1]["end_sec"] = 12.0 if opening_bound else 13.0
 
         # 静音只用于编码和收据测试；真实语音对齐由单独实片验收。
         from video_processing.processors import insight_mobile
@@ -89,13 +104,19 @@ class TestInsightProcessorV2:
                     else InsightScriptV2.model_validate(test_script).outro.tts_narration if path.name=='voice-1.wav'
                     else 'The complete source frame is preserved.')
             chars = clean(text)
-            length = .5 if path.suffix=='.wav' else 14
+            length = .5 if path.suffix=='.wav' else body_seconds
             return [{'word':c,'start':i*length/len(chars),'end':(i+1)*length/len(chars)}
                     for i,c in enumerate(chars)]
         monkeypatch.setattr(insight_mobile,'align_audio',fixture_alignment)
 
         script_file = tmp_path / "cornell_script.json"
         script_file.write_text(json.dumps(test_script), encoding="utf-8")
+        if opening_bound:
+            plan_file = script_file.with_name(script_file.stem + "_plan.json")
+            plan_text = json.dumps({"source_sha256": module.sha256(source),
+                                   "subtitle_sha256": module.sha256(prepared.with_suffix(".ass")),
+                                   "script_sha256": module.sha256(script_file)})
+            plan_file.write_text(plan_text)
         output = tmp_path / "masterpiece_output.mp4"
 
         ok = processor.process(source, script_file, output)
@@ -127,10 +148,21 @@ class TestInsightProcessorV2:
 
         # valid_enrichment 双向校验通过
         assert valid_enrichment(source, script_file, output) is True
+        if opening_bound:
+            plan_file.unlink()
+            assert not valid_enrichment(source, script_file, output)
+            plan_file.write_text(plan_text.replace(module.sha256(source), "stale"))
+            assert not valid_enrichment(source, script_file, output)
+            plan_file.write_text(plan_text)
+            assert valid_enrichment(source, script_file, output)
         assert receipt["tts_provider"] == provider
         assert len(receipt["point_timeline"]) == 6
-        assert segments[1]["duration"] == 14
-        for input_file in (original, tmp_path / "base.ass"):
+        assert segments[0]["duration"] > 0 and segments[2]["duration"] > 0
+        assert abs(segments[1]["duration"] - body_seconds) < .05
+        assert InsightScriptV2.model_validate_json(script_file.read_text()).hook.narration == test_script["hook"]["narration"]
+        assert abs(module.duration(output) - sum(segment["duration"] for segment in segments)) < .15
+        inputs = (prepared, prepared.with_suffix(".ass")) if opening_bound else (original, tmp_path / "base.ass")
+        for input_file in inputs:
             data = input_file.read_bytes()
             input_file.write_bytes(data + b"changed")
             assert not valid_enrichment(source, script_file, output)

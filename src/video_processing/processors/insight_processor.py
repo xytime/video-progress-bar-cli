@@ -127,6 +127,11 @@ def valid_enrichment(source: Path, script_path: Path, output: Path, *, original_
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
         InsightScriptV2.model_validate_json(script_path.read_text(encoding="utf-8"))
         original, subtitles = editorial.resolve_inputs(source, original_video, bilingual_subtitle)
+        if source.with_suffix(".source.json").is_file():
+            plan = json.loads(script_path.with_name(script_path.stem + "_plan.json").read_text())
+            if plan != {"source_sha256": sha256(source), "subtitle_sha256": sha256(subtitles),
+                        "script_sha256": sha256(script_path)}:
+                return False
         if receipt.get("editorial_inputs") != {"original_sha256": sha256(original), "subtitles_sha256": sha256(subtitles)}:
             return False
         expected_spec = render_spec()

@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-09 | Codex | 保护短问候、历史/手工/切片，验证真实 VAD、检查点及二创输入绑定。 |
+| 1.1.0 | 2026-10-09 | Codex | 验证完整音画前缀、损坏缓存、有限时间轴及真实整片结束时码回归。 |
 """
 import json
 import subprocess
@@ -41,7 +42,7 @@ def test_uncertainty_and_short_greeting_preserve_original(probabilities, reason)
 
 
 @pytest.fixture
-def speech_source(tmp_path):
+def speech_source(tmp_path, monkeypatch):
     """真实合成语音前加4秒纯音；不以此替代真实 TED 样本准确率。"""
     source = tmp_path / "abcdefghijk.mp4"
     fixture = ROOT / "tests/fixtures/media/caption_speech.wav"
@@ -54,6 +55,14 @@ def speech_source(tmp_path):
         "-map", "0:v", "-map", "[a]", "-t", "8", "-c:v", "libx264",
         "-threads", "2", "-c:a", "aac", str(source),
     ], check=True, capture_output=True, timeout=30)
+    # 测试夹具明确登记纯音测试图前缀；生产模板只来自真实品牌片头。
+    shape = opening.prefix_shape(opening.media_info(source))
+    manifest = tmp_path / "prefixes.json"
+    manifest.write_text(json.dumps({"version": 1, "prefixes": [{
+        "seconds": 3.5, "shape": shape,
+        "decoded_av_sha256": opening.decoded_prefix_sha256(source, 3.5, shape),
+    }]}))
+    monkeypatch.setattr(opening, "PREFIXES", manifest)
     return source
 
 
@@ -200,3 +209,63 @@ def test_pipeline_flag_off_preserves_source(tmp_path, monkeypatch):
     source = tmp_path / "abcdefghijk.mp4"
     assert pm._prepare_speech_opening({"youtube_id": "abcdefghijk", "channel_id":
                                       "UCAuUUnT6oDeKwE6v1NGQxug"}, source) == source
+
+
+@pytest.mark.parametrize("kind,field,value", [
+    ("video", "start_time", "nan"), ("audio", "duration", "nan"),
+    ("video", "duration", "inf"), ("audio", "start_time", "1.0"),
+])
+def test_prepared_rejects_invalid_timebase(monkeypatch, kind, field, value):
+    info = {"duration": 8, "streams": {k: {"duration": "8", "start_time": "0"}
+                                      for k in ("video", "audio")}}
+    info["streams"][kind][field] = value
+    monkeypatch.setattr(opening, "media_info", lambda _: info)
+    with pytest.raises(ValueError, match="PREPARED_"):
+        opening.validate_prepared(Path("candidate.mp4"), 8)
+
+
+def test_prepared_compares_absolute_stream_ends(monkeypatch):
+    # 真实535jVKx0_DI整片复现值；旧算法比较时长误报95ms，实际末端差55ms。
+    info = {"duration": 663.575011, "streams": {
+        "video": {"start_time": ".04", "duration": "663.48"},
+        "audio": {"start_time": "0", "duration": "663.575011"}}}
+    monkeypatch.setattr(opening, "media_info", lambda _: info)
+    opening.validate_prepared(Path("candidate.mp4"), 663.575283)
+
+
+def test_unverified_visual_and_voice_changes_preserve_original(speech_source, tmp_path):
+    # 同一讲话起点，但画面新增无声内容；也检验音轨改动不能借用品牌模板。
+    for kind, flags in [("visual", ["-vf", "drawbox=x=0:y=0:w=iw:h=30:color=white:t=fill"]),
+                        ("voice", ["-af", "volume=0.5"])]:
+        changed = tmp_path / f"{kind}.mp4"
+        subprocess.run([opening.resolve_ffmpeg_cmd(), "-v", "error", "-y", "-i", str(speech_source),
+                        *flags, "-c:v", "libx264", "-threads", "2", "-c:a", "aac", str(changed)],
+                       check=True, capture_output=True, timeout=30)
+        chosen, receipt = opening.prepare_opening(changed, tmp_path / kind)
+        assert chosen == changed and receipt["reason"] == "UNVERIFIED_AV_PREFIX"
+
+
+def test_manifest_change_invalidates_positive_checkpoint(speech_source, tmp_path):
+    output_dir = tmp_path / "prepared"
+    chosen, _ = opening.prepare_opening(speech_source, output_dir)
+    assert chosen != speech_source
+    opening.PREFIXES.write_text(json.dumps({"version": 1, "prefixes": []}))
+    chosen, receipt = opening.prepare_opening(speech_source, output_dir)
+    assert chosen == speech_source and receipt["reason"] == "UNVERIFIED_AV_PREFIX"
+
+
+def test_corrupt_model_cannot_reuse_positive_checkpoint(speech_source, tmp_path, monkeypatch):
+    output_dir = tmp_path / "prepared"
+    assert opening.prepare_opening(speech_source, output_dir)[0] != speech_source
+    model = tmp_path / "corrupt.jit"
+    model.write_bytes(b"invalid model")
+    monkeypatch.setattr(opening, "MODEL", model)
+    chosen, receipt = opening.prepare_opening(speech_source, output_dir)
+    assert chosen == speech_source and receipt["failure_code"] == "VAD_MODEL_HASH_MISMATCH"
+
+
+def test_nonzero_source_timebase_preserves_original(speech_source):
+    info = opening.media_info(speech_source)
+    info["streams"]["audio"]["start_time"] = ".1"
+    decision = opening.protect_visual_prefix(speech_source, info, opening.OpeningDecision(3.5))
+    assert decision.offset_seconds == 0 and decision.reason == "UNSUPPORTED_SOURCE_TIMEBASE"

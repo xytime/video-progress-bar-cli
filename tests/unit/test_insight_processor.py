@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-06 | Codex | 验证生产开关、回退、输入绑定与真实 FFmpeg 输出 |
+| 1.1.0 | 2026-10-09 | Codex | 回归裁剪后二创脚本无计划凭证时重新策划。 |
 """
 import json
 import subprocess
@@ -220,7 +221,8 @@ def test_planner_failure_and_disabled_never_write(tmp_path, monkeypatch):
         assert not output.exists()
 
 
-def test_pipeline_replans_when_automatic_plan_source_changes(tmp_path, payload, monkeypatch):
+@pytest.mark.parametrize("missing_bound_receipt", [False, True])
+def test_pipeline_replans_when_automatic_plan_source_changes(tmp_path, payload, monkeypatch, missing_bound_receipt):
     monkeypatch.setattr(settings, "enable_deep_insight_enrichment", True)
     calls = []
     monkeypatch.setattr(module, "valid_enrichment", lambda *args: len(calls) == 2)
@@ -230,10 +232,14 @@ def test_pipeline_replans_when_automatic_plan_source_changes(tmp_path, payload, 
     script = tmp_path / "id_insight.json"
     source.write_bytes(b"new source")
     subtitle.write_bytes(b"subtitle")
-    script.write_text(json.dumps(payload))
-    (tmp_path / "id_insight_plan.json").write_text(json.dumps({
-        "source_sha256": "old", "subtitle_sha256": "old", "script_sha256": "old",
-    }))
+    from video_processing.utils.insight_v2_prompt import FEW_SHOT_EXAMPLE_CORNELL
+    script.write_text(json.dumps(FEW_SHOT_EXAMPLE_CORNELL))
+    if missing_bound_receipt:
+        source.with_suffix(".source.json").write_text("{}")
+    else:
+        (tmp_path / "id_insight_plan.json").write_text(json.dumps({
+            "source_sha256": "old", "subtitle_sha256": "old", "script_sha256": "old",
+        }))
     def tracked(cmd, *args, **kwargs):
         calls.append(cmd)
         if "--insight-only" in cmd:
