@@ -32,6 +32,7 @@
 | 3.75.0 | 2026-09-20 | Gemini | 漏斗指标与视频分页查询新增 24h 与 today_bj (北京时间今日) 时间窗口过滤支持。 |
 | 3.74.0 | 2026-09-20 | Gemini | 新增 get_global_funnel_metrics DAL 方法，并支持 get_channel_funnel_metrics 在未指定频道时回落为全站漏斗聚合。 |
 | 3.73.0 | 2026-09-20 | Gemini | 新增 get_managed_channels、set_channel_paused 与 get_channel_funnel_metrics DAL 方法，支持白名单暂停与漏斗统计。 |
+| 3.73.0 | 2026-10-09 | Antigravity | 新增 reset_douyin_publication_for_reupload DAL 方法，封装通用视频重新上传前的重置与哈希同步，严格遵循 DAL 封装铁律。 |
 | 3.72.0 | 2026-09-20 | Antigravity | ensure_english_world_wechat_publication 加入状态单调性保护，防止重入将 PUBLISHED 刷回 SUBMITTED_BOUND。 |
 | 3.71.0 | 2026-09-20 | Antigravity | publication_subjects 支持 ENGLISH_WORLD，打通发布账本与评论区互动发现，并增加候选 72 小时调度截断与防饥饿清理。 |
 | 3.70.0 | 2026-09-20 | Antigravity | 新增 bind_wechat_publication_platform_post_id DAL 方法，用于对齐平台真实 exportId。 |
@@ -10842,6 +10843,26 @@ class PipelineDB(WallstreetExperimentDAL):
             )
             conn.commit()
             return {**row_data, **ticket}
+
+    def reset_douyin_publication_for_reupload(
+        self,
+        publication_id: int,
+        *,
+        asset_sha256: str,
+        video_path: str,
+    ) -> bool:
+        """重置指定抖音任务为 QUEUED 状态并同步最新成片路径与哈希，供重新上传。"""
+        if len(asset_sha256) != 64:
+            raise ValueError("asset_sha256 must be a SHA-256 hex digest")
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                """UPDATE douyin_publications
+                   SET asset_sha256 = ?, video_path = ?, state = 'QUEUED', updated_at = CURRENT_TIMESTAMP
+                   WHERE id = ? AND state != 'PUBLISHED'""",
+                (asset_sha256, str(video_path), int(publication_id)),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
 
     def reserve_douyin_reconciliation_slot(
         self, publication_id: int, minimum_interval_seconds: int, *,

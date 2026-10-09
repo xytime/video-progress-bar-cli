@@ -8,6 +8,8 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-07 | Antigravity | 新增独立/通用视频抖音提交流水线执行器，支持不可变 ticket 绑定与审计追踪。 |
+| 1.1.0 | 2026-10-09 | Antigravity | 支持检测并同步视频资产哈希变更，重置并签发最新成片启动凭据。 |
+| 1.2.0 | 2026-10-09 | Antigravity | 遵循 DAL 封装宪法，使用 PipelineDB.reset_douyin_publication_for_reupload 替代原生 SQL。 |
 """
 
 from __future__ import annotations
@@ -94,18 +96,27 @@ def main() -> int:
 
     pub_id = pub["id"]
 
+    # 检查成片哈希是否有更新（如重新渲染后重新提交），有则同步更新
+    if pub.get("asset_sha256") != video_sha256 and pub.get("state") != "PUBLISHED":
+        logger.info(
+            "Video hash updated (%s -> %s), resetting pub id=%s to QUEUED with new hash",
+            (pub.get("asset_sha256") or "")[:8],
+            video_sha256[:8],
+            pub_id,
+        )
+        db.reset_douyin_publication_for_reupload(
+            pub_id, asset_sha256=video_sha256, video_path=str(video_path)
+        )
+
     # 领取任务并获取启动凭据
     claimed = db.claim_douyin_publication(pub_id)
     if not claimed:
         # 可能是正在上传或重试
         logger.warning("Could not claim douyin publication id=%s; state=%s", pub_id, pub.get("state"))
         # 尝试重置为 QUEUED 后再领取
-        with db.get_connection() as conn:
-            conn.execute(
-                "UPDATE douyin_publications SET state = 'QUEUED' WHERE id = ? AND state != 'PUBLISHED'",
-                (pub_id,),
-            )
-            conn.commit()
+        db.reset_douyin_publication_for_reupload(
+            pub_id, asset_sha256=video_sha256, video_path=str(video_path)
+        )
         claimed = db.claim_douyin_publication(pub_id)
         if not claimed:
             logger.error("Failed to claim douyin publication id=%s after reset", pub_id)
