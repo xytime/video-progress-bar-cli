@@ -939,5 +939,24 @@
       "seconds": 35.944
     },
     "finished_at": "2026-10-09T00:52:40.168066+00:00"
+  },
+  "delivery": {
+    "code_commit": "dfd9f7c540dcb40cd36dfe4212a6d8f4c7931e8b",
+    "previous_main": "2c9287c003ac882e340553006ed25bf1ade969e9",
+    "merge": "fast-forward under exclusive pipeline lock, active=0",
+    "code_push": "origin/main confirmed",
+    "runtime_readback_at": "2026-10-09T08:54:30+08:00",
+    "old_pid": 35423,
+    "new_pid": 52511,
+    "restart_exit": 0,
+    "api_active": 0,
+    "recipe": "speech-opening-v2",
+    "enabled": true,
+    "model_verified": true,
+    "prefix_count": 6,
+    "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+    "runtime_root": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+    "new_complete_pipeline_job_executed": false,
+    "published_by_this_goal": false
   }
 }

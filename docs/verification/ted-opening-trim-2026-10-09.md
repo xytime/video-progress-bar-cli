@@ -90,4 +90,8 @@ PYTHONPATH=src .venv/bin/python scripts/verify_ted_openings.py \
 
 ## 交付边界
 
-主干交付与运行采用回读将在本轮结束前补充。没有触发新视频完整加工；代码采用、加工完成、平台受理及公开播放分别判断。[具体研究任务](../specs/ted-opening-trim.md)已有当前处置、缺失证据及未来验收标准，无人工确认环节。
+实现提交 `dfd9f7c540dcb40cd36dfe4212a6d8f4c7931e8b`，在活动任务为0并持有`output/pipeline.lock`排他锁时，从主干`2c9287c`快进合入；保留并行任务的两个版式脚本提交。`git push origin main`成功。此报告的后续归档提交仅修改文档与证据，不改变已验证代码。
+
+2026-10-09 08:54:30（Asia/Shanghai）运行回读：`./vpanel ui restart`退出0，控制器由PID35423切换为52511，:9100健康，`/api/stats`活动任务0。只读主干解释器核验得到`ENABLE_TED_OPENING_TRIM=true`、`speech-opening-v2`、离线模型摘要匹配、六条前缀模板，模块实际路径位于生产主干目录。模板清单SHA256为`b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4`。
+
+已确认新进程及代码入口采用；没有触发新视频完整加工，也没有发布或重发。代码采用、加工完成、平台受理及公开播放分别判断。[具体研究任务](../specs/ted-opening-trim.md)已有当前处置、缺失证据及未来验收标准，无人工确认环节。
