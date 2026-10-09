@@ -1,0 +1,416 @@
+{
+  "cases": [
+    {
+      "id": "NRkHdspgnI8",
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "first_vad_seconds": {
+        "0.2": 0.512,
+        "0.8": 23.84
+      },
+      "decision": {
+        "offset_seconds": 0.0,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "forced_prefix_match": {
+        "offset_seconds": 0.0,
+        "reason": "UNVERIFIED_AV_PREFIX",
+        "reference_id": ""
+      },
+      "segments": [
+        {
+          "start": 21.819999999999997,
+          "end": 22.7,
+          "text": " Music",
+          "no_speech_prob": 0.3194209039211273
+        },
+        {
+          "start": 22.7,
+          "end": 28.28,
+          "text": " Often I get asked as a chef, what is my favourite thing to cook?",
+          "no_speech_prob": 0.3194209039211273
+        },
+        {
+          "start": 28.28,
+          "end": 29.98,
+          "text": " Unmai",
+          "no_speech_prob": 0.5203489065170288
+        }
+      ],
+      "words": [
+        {
+          "word": " Music",
+          "start": 21.819999999999997,
+          "end": 22.7,
+          "probability": 0.0014771268470212817
+        },
+        {
+          "word": " Often",
+          "start": 22.7,
+          "end": 22.7,
+          "probability": 0.13581810891628265
+        },
+        {
+          "word": " I",
+          "start": 22.7,
+          "end": 23.76,
+          "probability": 0.5611506700515747
+        },
+        {
+          "word": " get",
+          "start": 23.76,
+          "end": 23.9,
+          "probability": 0.9915679097175598
+        },
+        {
+          "word": " asked",
+          "start": 23.9,
+          "end": 24.24,
+          "probability": 0.9941616654396057
+        },
+        {
+          "word": " as",
+          "start": 24.24,
+          "end": 24.7,
+          "probability": 0.9606574773788452
+        },
+        {
+          "word": " a",
+          "start": 24.7,
+          "end": 24.8,
+          "probability": 0.9877460598945618
+        },
+        {
+          "word": " chef,",
+          "start": 24.8,
+          "end": 25.06,
+          "probability": 0.9706652164459229
+        },
+        {
+          "word": " what",
+          "start": 25.72,
+          "end": 26.14,
+          "probability": 0.38613036274909973
+        },
+        {
+          "word": " is",
+          "start": 26.14,
+          "end": 26.62,
+          "probability": 0.9833436608314514
+        },
+        {
+          "word": " my",
+          "start": 26.62,
+          "end": 26.78,
+          "probability": 0.9943172335624695
+        },
+        {
+          "word": " favourite",
+          "start": 26.78,
+          "end": 27.3,
+          "probability": 0.7789199352264404
+        },
+        {
+          "word": " thing",
+          "start": 27.3,
+          "end": 27.9,
+          "probability": 0.9825944304466248
+        },
+        {
+          "word": " to",
+          "start": 27.9,
+          "end": 28.06,
+          "probability": 0.9959121942520142
+        },
+        {
+          "word": " cook?",
+          "start": 28.06,
+          "end": 28.28,
+          "probability": 0.996673583984375
+        },
+        {
+          "word": " Unmai",
+          "start": 28.28,
+          "end": 29.98,
+          "probability": 0.3938185591250658
+        }
+      ]
+    },
+    {
+      "id": "yRZadwCn0jY",
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "first_vad_seconds": {
+        "0.2": 1.728,
+        "0.8": 7.52
+      },
+      "decision": {
+        "offset_seconds": 0.0,
+        "reason": "SPEECH_AT_START_OR_SMALL_GAIN",
+        "reference_id": ""
+      },
+      "forced_prefix_match": {
+        "offset_seconds": 0.0,
+        "reason": "UNVERIFIED_AV_PREFIX",
+        "reference_id": ""
+      },
+      "segments": [
+        {
+          "start": 6.68,
+          "end": 16.0,
+          "text": " Hi, I'm Jo. I'm from Vietnam and I just turned 30. Today, I'd like to show you two very different",
+          "no_speech_prob": 0.38460293412208557
+        },
+        {
+          "start": 16.0,
+          "end": 26.82,
+          "text": " features, a pack pack, opening up a world of learning and dreaming, and a wedding ring,",
+          "no_speech_prob": 0.6641902923583984
+        },
+        {
+          "start": 26.82,
+          "end": 29.56,
+          "text": " causing all shyhood, education.",
+          "no_speech_prob": 0.29329806566238403
+        }
+      ],
+      "words": [
+        {
+          "word": " Hi,",
+          "start": 6.68,
+          "end": 7.46,
+          "probability": 0.33581942319869995
+        },
+        {
+          "word": " I'm",
+          "start": 7.84,
+          "end": 8.58,
+          "probability": 0.9631135761737823
+        },
+        {
+          "word": " Jo.",
+          "start": 8.58,
+          "end": 8.76,
+          "probability": 0.3855452537536621
+        },
+        {
+          "word": " I'm",
+          "start": 9.12,
+          "end": 9.54,
+          "probability": 0.9771747887134552
+        },
+        {
+          "word": " from",
+          "start": 9.54,
+          "end": 9.74,
+          "probability": 0.9970389604568481
+        },
+        {
+          "word": " Vietnam",
+          "start": 9.74,
+          "end": 10.16,
+          "probability": 0.9805759787559509
+        },
+        {
+          "word": " and",
+          "start": 10.16,
+          "end": 10.84,
+          "probability": 0.5100468993186951
+        },
+        {
+          "word": " I",
+          "start": 10.84,
+          "end": 10.94,
+          "probability": 0.99365234375
+        },
+        {
+          "word": " just",
+          "start": 10.94,
+          "end": 11.12,
+          "probability": 0.9820965528488159
+        },
+        {
+          "word": " turned",
+          "start": 11.12,
+          "end": 11.38,
+          "probability": 0.8280786275863647
+        },
+        {
+          "word": " 30.",
+          "start": 11.38,
+          "end": 11.88,
+          "probability": 0.9743964076042175
+        },
+        {
+          "word": " Today,",
+          "start": 12.6,
+          "end": 13.02,
+          "probability": 0.9944236874580383
+        },
+        {
+          "word": " I'd",
+          "start": 13.6,
+          "end": 13.74,
+          "probability": 0.8336990177631378
+        },
+        {
+          "word": " like",
+          "start": 13.74,
+          "end": 13.94,
+          "probability": 0.9986953139305115
+        },
+        {
+          "word": " to",
+          "start": 13.94,
+          "end": 14.1,
+          "probability": 0.9959853291511536
+        },
+        {
+          "word": " show",
+          "start": 14.1,
+          "end": 14.42,
+          "probability": 0.9951887130737305
+        },
+        {
+          "word": " you",
+          "start": 14.42,
+          "end": 14.66,
+          "probability": 0.9940124154090881
+        },
+        {
+          "word": " two",
+          "start": 14.66,
+          "end": 15.2,
+          "probability": 0.9698833227157593
+        }
+      ]
+    }
+  ],
+  "prefix_comparison": [
+    {
+      "id": "yRZadwCn0jY",
+      "seconds": 5.5,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "2b574e363f55c4225bfdfab02c1e82737a5a5b0dbdb31c97513c35c009c71059"
+    },
+    {
+      "id": "iEZCPZdALks",
+      "seconds": 5.5,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "f119144ec8c559e52335b0e534da6c7295c8a612509dfd560d8718929e4b0ab2"
+    },
+    {
+      "id": "HlYRK3iN8Xk",
+      "seconds": 5.5,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "95db6616da2412dfa832d32481b33972176a01fdcacb38698c52f74008c4d6d2"
+    },
+    {
+      "id": "NRkHdspgnI8",
+      "seconds": 20,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "6f7c0f07bcad4bfcd5e3030e8495198de98418f34be057380df4644cc874263b"
+    },
+    {
+      "id": "P1hob_amyIg",
+      "seconds": 20,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "07591d83a2cc38c3f7c44fc420c1a0d55b442419543a87ae0ded6e492928cef9"
+    },
+    {
+      "id": "9DeJhWILnq0",
+      "seconds": 20,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "c6f8a7ba9fd1a4ec1e22b817d0b6f7d83ec79010e12725681b6cdf7642350ea1"
+    }
+  ],
+  "evidence_root": "/private/tmp/video-pytest-o018o5bw/sandbox/tmp/production-opening-diagnosis",
+  "limitations": "ASR为线索，不是首音素真值；完整音画摘要不同不能独立证明差异仅由转码造成；未复用或变更生产成片"
+}
