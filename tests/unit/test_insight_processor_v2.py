@@ -7,6 +7,7 @@
 | 1.1.0 | 2026-10-08 | Antigravity | 消除 VTT 门禁测试静默跳过漏洞，增加片头图腾/片尾二维码渲染、严格 V2 网关及 CLI 错误报告单测 |
 | 1.2.0 | 2026-10-09 | Codex | 使用明确时码夹具验收真实编码及缓存，不把静音替身当真实 ASR |
 | 1.3.0 | 2026-10-09 | Codex | 裁剪副本、零起点字幕及完整二创首尾合成回归。 |
+| 1.3.1 | 2026-10-09 | Codex | 验证 B 策划预算独立，普通 A 继续使用原预算。 |
 """
 import copy
 import json
@@ -38,6 +39,26 @@ class LocalSpeech44100:
 
 
 class TestInsightProcessorV2:
+    @pytest.mark.parametrize('explicit_editorial', [False, True])
+    def test_editorial_timeout_does_not_change_normal_budget(self, tmp_path, monkeypatch, explicit_editorial):
+        from video_processing.utils import insight_planner
+        monkeypatch.setattr(settings, 'enable_deep_insight_enrichment', not explicit_editorial)
+        monkeypatch.setattr(settings, 'copywriter_content_provider', 'agy')
+        monkeypatch.setattr(settings, 'copywriter_agy_timeout_seconds', 45)
+        monkeypatch.setattr(settings, 'wallstreet_ab_planning_timeout_seconds', 180)
+        monkeypatch.setattr(insight_planner, 'get_video_duration_ffprobe', lambda _: 180)
+        monkeypatch.setattr(insight_planner, 'review_evidence', lambda *args: None)
+        requested = []
+        def provider(prompt, **kwargs):
+            requested.append(kwargs['timeout_sec'])
+            return kwargs['validate'](FEW_SHOT_EXAMPLE_CORNELL)
+        monkeypatch.setattr(insight_planner, 'generate_cached_agy_copy', provider)
+        subtitle = tmp_path/'subtitle.srt'
+        subtitle.write_text('1\n00:00:01,000 --> 00:00:08,000\nThe original source quote.\n')
+        assert generate_insight_script('标题',tmp_path/'source.mp4',subtitle,tmp_path/'script.json',
+                                       explicit_editorial=explicit_editorial)
+        assert requested == [180 if explicit_editorial else 45]
+
     def test_missing_original_falls_back_before_tts(self, tmp_path, monkeypatch):
         source = tmp_path / "base_vertical.mp4"
         source.write_bytes(b"base")

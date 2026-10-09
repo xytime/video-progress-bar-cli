@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 2.2.0 | 2026-10-09 | Codex | 显式 B 策划不依赖旧增强替换开关，保留事实提示。 |
+| 2.2.1 | 2026-10-09 | Codex | 完整字幕 B 使用独立有界策划预算，不改变 A 的等待。 |
 | 1.0.0 | 2026-10-06 | Codex | 复用文案供应商与结构化校验，单次失败回退 |
 | 2.0.0 | 2026-10-08 | Antigravity | 落实 RFC-2026-DEEP-CREATION-001：调度 V2 规范、Pydantic 网关校验与 verify_vtt_evidence 事实引证机器门禁 |
 | 2.1.0 | 2026-10-08 | Antigravity | 接入 INSIGHT_SCRIPT_V2_SYSTEM_PROMPT 生产规范，彻底移除网关旧版回退漏洞，强化边界防护 |
@@ -74,7 +75,8 @@ def generate_insight_script(title: str, source: Path, subtitle: Path, output: Pa
             result = generate_cached_agy_copy(
                 prompt, schema=InsightScriptV2.model_json_schema(),
                 model=settings.copywriter_agy_model, command=settings.copywriter_agy_bin,
-                timeout_sec=settings.copywriter_agy_timeout_seconds,
+                timeout_sec=(settings.wallstreet_ab_planning_timeout_seconds if explicit_editorial
+                             else settings.copywriter_agy_timeout_seconds),
                 quota_cooldown_sec=settings.copywriter_agy_quota_cooldown_seconds,
                 cache_dir=settings.default_output_dir / "insight_plan_cache", validate=validate,
             )
@@ -102,4 +104,3 @@ def generate_insight_script(title: str, source: Path, subtitle: Path, output: Pa
     except Exception as exc:
         logger.warning("[InsightFallback] 策划失败，使用普通成片：%s", type(exc).__name__)
         return False
-

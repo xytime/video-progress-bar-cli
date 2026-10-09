@@ -4,9 +4,11 @@
 
 程序复用现有每分钟 cron 和常驻发布执行者，启动独立短进程读取持久队列。
 关闭 Codex 不影响运行；主机、已有调度、平台登录与策划/配音服务须可用。
-当前外部字幕策划授权待用户回复；`WALLSTREET_AB_REMOTE_PLANNING_AUTHORIZED=false`。
-新 B 正常入队，但缺少本地脚本时保留待授权加工状态，A 继续正常发布；不得换供应商绕过。
-用户明确同意将公开视频标题、字幕和二创脚本交给现有 AGY 服务后，才启用该配置。
+2026-10-09 用户在明确的外部字幕策划授权询问后回复“继续”，已启用现有 AGY 服务处理
+华尔街事实炸弹公开视频的标题、字幕和二创脚本；生产 `WALLSTREET_AB_REMOTE_PLANNING_AUTHORIZED=true`。
+既有定时调度启动的二创执行者已读取该配置；本机无须打开 Codex。
+未配置环境默认仍为 false，缺本地脚本的 B 等待授权，A 继续发布。供应商失败保留队列并遵守冷却，
+不得换供应商或用普通版冒充 B。授权记录在 `output/wallstreet_ab/authorization-2026-10-09/authorization.json`。
 已存在的本地审核 V2 脚本可继续制作、发布。本次最新 B 已通过此路径完成。
 运行采用看 `output/ready_publications_status.json` 和 `output/wallstreet_worker_status.json` 的代码版本，
 二创执行者按需退出后心跳停止，并由下一次巡检再次启动，不能把旧心跳当作存活证明。

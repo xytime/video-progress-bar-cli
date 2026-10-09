@@ -46,3 +46,18 @@
 指标目前支持绑定真实原生 ID 的后台快照导入，未实现自动抓取。分别记录每版公开后 24/72/168 小时的播放、点赞、评论、转发、收藏；缺失值保持 null，同一时点累计值更新而不相加。只有原生平台时间和接近目标年龄的数据才标为可比较；固定先 A 后 B 仍存在时效和受众重叠偏差。当前没有配对互动数据，不能宣称哪版效果更好。
 
 生产 `main` 与 `origin/main` 已采用并推送运行代码提交 `c77dbeda7e2ff23eab07babf9ee04f305f86e192`；新发布执行者 PID 33886 的 `output/ready_publications_status.json.git_revision` 精确回读该提交，阶段 IDLE，心跳约 2 秒。运行设置确认 `remote_planning_authorized=false`。后续文档修订不代表执行代码再次变化；运行代码版本以 `git_revision` 为准。上线命令及人工单条提示词分别见 `docs/guides/wallstreet-ab-operations.md`、`docs/guides/masterpiece-publish-prompt.md`。
+
+
+## 2026-10-09 授权恢复、真实策划与上线修复
+
+用户在明确说明现有 AGY 将接收目标频道公开视频标题、字幕和二创脚本的询问后回复“继续”；已记录具名范围并将生产非敏感开关启用为 true。自动审批已接受本次调用，前述待授权状态是历史记录。授权证据为 `output/wallstreet_ab/authorization-2026-10-09/authorization.json`；既有调度已启动读取 true 的二创短进程，无须 Codex 会话。
+
+同一完整字幕首次使用普通 45 秒预算超时；遵守缓存冷却后，现有 AGY 的真实诊断调用在 80.984 秒返回 V2 结构化策划，独立复核在 39.416 秒返回结构化疑点。维护代码增加二创专用 `WALLSTREET_AB_PLANNING_TIMEOUT_SECONDS=180`（45–300 秒有界），普通 A 仍用原 45 秒预算。没有切换供应商或清除冷却。诊断为 `output/wallstreet_ab/authorization-2026-10-09/provider_diagnostic.json`。
+
+原双语 ASS 的翻译在相邻英文事件中交错，导致跨事件英语引文误判。现按引文语言提取字幕，排除注释和独立 GlossaryCard，同时保留词序、数字及否定；复核缓存版本改为 `insight-advisory-1.1`。真实候选六条引文均匹配，但独立语义复核仍指出五个范围、数值或动机疑点，状态 NEEDS_REVIEW，publication_blocked=false。该诊断候选保存在授权目录，不替换或重发此前本地审核并发布的成片；引文对应不等于事实正确。
+
+在当前生产 main 源码上通过项目隔离测试入口：64 passed in 27.58s，日志 `/private/tmp/video-pytest-6j5v6y88/pytest.log`，覆盖 B 独立预算、普通 A 预算、双语引用、否定与数值变更及现行 V2 加工回归。保留同期其他任务已提交的 TED 与手写视频修改，以及无关未提交文件。
+
+最新只读视频号回查为 PUBLISHED，精确作品 ID 与前述一致：`output/wallstreet_ab/1/completion-audit/1791527799/wechat/management_readback.json`。抖音常规回查 exit 4 是管理页熔断，不是登录失效；其失败历史属于其他普通作品的回读。按维护的非最终恢复校准入口，只读同一已绑定原生作品，回查 exit 0、PUBLISHED、API_EXACT_DESCRIPTION，原生 ID `7694353709907725587`：`output/douyin_calibration/wallstreet-completion-1791531118/douyin_management_readback.json`。凭同次真实管理控件证据由维护脚本解除 management_verify；保留失败历史，不上传、不点击发布、不重置作品账本。
+
+截至此次收尾，只有一条 B_ONLY，完整 PAIRED 为 0；目标频道最新已准备素材仍为 h7rY4nSB2tM，其他近期合格 A 在试验启用前已有投稿。不能把这些历史 A 自动补发、把 B_ONLY 改成配对，或缩短已确认 6 小时间隔。代码和最新单条交付已具备证据；首组正常 A/B 的真实平台配对回读及后续 24/72/168 小时真实读数仍需合格新视频入组，实验验收尚未完全完成。

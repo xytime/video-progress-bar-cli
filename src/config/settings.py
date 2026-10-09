@@ -7,6 +7,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | insight-v1.1 | 2026-10-08 | Antigravity | 修复沙盒环境无 HOME 变量时 Path.home() mach-lookup 拦截异常。 |
+| insight-v1.2 | 2026-10-09 | Codex | 完整 B 策划独立超时，不增加普通 A 预算。 |
 | insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
 | 3.75.0 | 2026-10-05 | Codex | 字幕共享期限、Google 节流与源下载冷却配置；禁止不可还原的代理切换。 |
 | 3.74.0 | 2026-10-03 | Codex | TED/TEDx 自动候选新增严格大于 0.6% 的源视频点赞率门槛，保持评分线。 |
@@ -435,6 +436,8 @@ class Settings(BaseSettings):
     # 试验启停与首次纳入时间由 DAL 持久保存；程序默认不创建活动试验。
     wallstreet_ab_render_lease_seconds: int = 14400
     wallstreet_ab_poll_seconds: int = 60
+    # 长片完整字幕策划独立预算，不增加普通 A 文案的等待。
+    wallstreet_ab_planning_timeout_seconds: int = Field(default=180, ge=45, le=300)
     # 外部字幕策划在用户明确同意服务及内容发送后启用；已有本地审核脚本可继续。
     wallstreet_ab_remote_planning_authorized: bool = False
     insight_default_voice: str = "zh-CN-YunyangNeural"

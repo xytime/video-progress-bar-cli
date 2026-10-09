@@ -1,6 +1,11 @@
 """二创引证与中文结论的有界复核；疑点、服务不可用均不阻断发布。
 
 引文匹配只证明来源对应；独立模型复核也不是事实正确的保证。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-09 | Codex | 双语分行引证按引用语言匹配，排除独立生词注释；保留否定数值和词序 |
 """
 import hashlib
 import html
@@ -18,7 +23,7 @@ from video_processing.core.insight_script import InsightScriptV2
 from video_processing.utils.agy_copy_service import generate_cached_agy_copy
 
 logger = logging.getLogger(__name__)
-REVIEW_VERSION = "insight-advisory-1"
+REVIEW_VERSION = "insight-advisory-1.1"
 
 
 class Finding(BaseModel):
@@ -47,11 +52,17 @@ def _tokens(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:'[a-z]+)?|[\u4e00-\u9fff]", text)
 
 
-def _caption_tokens(lines) -> list[str]:
+def _caption_tokens(lines, *, english: bool) -> list[str]:
     """YouTube 滚动字幕包含前一行回显，只合并相邻时间的尾首重叠。"""
     result, previous_end = [], -1000
     for line in lines:
-        words = _tokens(line.plaintext)
+        if line.is_comment or line.style == 'GlossaryCard':
+            continue
+        source_lines = [part for part in line.plaintext.splitlines()
+                        if bool(re.search(r'[\u3400-\u9fff]', part)) != english]
+        words = _tokens(' '.join(source_lines))
+        if not words:
+            continue
         overlap = 0
         if line.start <= previous_end + 50:
             for size in range(min(len(result), len(words)), 0, -1):
@@ -74,7 +85,7 @@ def quote_checks(script: InsightScriptV2, subtitle: Path, tolerance_sec: float =
             ref = point.vtt_reference
             lines = [line for line in subs if line.end >= ref.start_sec * 1000 - tolerance
                      and line.start <= ref.end_sec * 1000 + tolerance]
-            actual = _caption_tokens(lines)
+            actual = _caption_tokens(lines, english=not bool(re.search(r'[\u3400-\u9fff]', ref.source_quote)))
             context = " ".join(actual)
             quoted = _tokens(ref.source_quote)
             matched = bool(quoted) and any(actual[i:i + len(quoted)] == quoted

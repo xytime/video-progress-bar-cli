@@ -1,10 +1,17 @@
-"""普通事实疑点不可停发；确定性引证与语义复核结果分别归档。"""
+"""普通事实疑点不可停发；确定性引证与语义复核结果分别归档。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-09 | Codex | 验证双语跨事件引文不会被译文或生词注释干扰 |
+"""
 import copy
 import json
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+import pysubs2
 
 from video_processing.core.insight_script import InsightScriptV2
 from video_processing.processors import insight_processor
@@ -36,6 +43,40 @@ def test_quote_mutations_are_not_certified(case, mutation):
         ref.source_quote = "The prosecutor cannot appoint a governor without legislative approval"
     else:
         ref.source_quote += " 100"
+    assert not verify_vtt_evidence(script, subtitle)
+
+
+def test_bilingual_split_quote_excludes_translation_and_glossary(case, tmp_path):
+    script, _ = case
+    subtitle = tmp_path / 'bilingual.ass'
+    subs = pysubs2.SSAFile()
+    subs.events = [
+        pysubs2.SSAEvent(start=1000,end=3000,text='The governor cannot\\N州长不能，数量99'),
+        pysubs2.SSAEvent(start=3000,end=5000,text='appoint a prosecutor without\\N任命检察官'),
+        pysubs2.SSAEvent(start=5000,end=8000,text='legislative approval\\N立法批准'),
+        pysubs2.SSAEvent(start=1000,end=8000,style='GlossaryCard',
+            text='The governor can appoint a prosecutor without legislative approval'),
+    ]
+    subs.save(str(subtitle))
+    assert verify_vtt_evidence(script, subtitle)
+    script.cards[0].points[0].vtt_reference.source_quote = script.cards[0].points[0].vtt_reference.source_quote.replace('cannot','can')
+    assert not verify_vtt_evidence(script, subtitle)
+
+
+def test_bilingual_translation_number_cannot_certify_english_quote(case, tmp_path):
+    script, _ = case
+    subtitle = tmp_path / 'numbers.ass'
+    subs = pysubs2.SSAFile()
+    subs.events = [
+        pysubs2.SSAEvent(start=1000,end=4000,text='Loans run 72\\N贷款36个月'),
+        pysubs2.SSAEvent(start=4000,end=8000,text='to 84 months\\N到99个月'),
+    ]
+    subs.save(str(subtitle))
+    for card in script.cards:
+        for point in card.points:
+            point.vtt_reference.source_quote = 'Loans run 72 to 84 months'
+    assert verify_vtt_evidence(script, subtitle)
+    script.cards[0].points[0].vtt_reference.source_quote = 'Loans run 72 to 99 months'
     assert not verify_vtt_evidence(script, subtitle)
 
 
