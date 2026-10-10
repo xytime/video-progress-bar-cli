@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| ted-cleanup-v1 | 2026-10-10 | Codex | 增加原片首尾包装清理开关，生产核验后显式启用。 |
 | insight-v1.1 | 2026-10-08 | Antigravity | 修复沙盒环境无 HOME 变量时 Path.home() mach-lookup 拦截异常。 |
 | insight-v1.2 | 2026-10-09 | Codex | 完整 B 策划独立超时，不增加普通 A 预算。 |
 | insight-v1 | 2026-10-06 | Codex | 默认关闭洞察策划、独立增强成片与发布前新增正文审查。 |
@@ -404,6 +405,7 @@ class Settings(BaseSettings):
 
     # 已授权的 TED/TEDx 新整片优化；疑似语音、旧成片、手工范围和章节均保留。
     enable_ted_opening_trim: bool = True
+    enable_ted_source_cleanup: bool = False
 
     # 演讲/TED/高校频道使用较低的自动发布线；普通频道仍使用 75。
     speech_publish_score_line: int = 40

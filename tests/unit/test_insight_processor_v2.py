@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.4.0 | 2026-10-10 | Codex | 完整二创编码回归实际调用首尾清理，保持导读、原片正文及结尾段。 |
 | 1.0.0 | 2026-10-08 | Antigravity | 覆盖 V2 原片零裁切、Y=265~555 安全横栏、VTT 事实引证门禁、三级收据与自动降级 |
 | 1.1.0 | 2026-10-08 | Antigravity | 消除 VTT 门禁测试静默跳过漏洞，增加片头图腾/片尾二维码渲染、严格 V2 网关及 CLI 错误报告单测 |
 | 1.2.0 | 2026-10-09 | Codex | 使用明确时码夹具验收真实编码及缓存，不把静音替身当真实 ASR |
@@ -88,7 +89,7 @@ class TestInsightProcessorV2:
             "ffmpeg", "-nostdin", "-v", "error", "-y",
             "-f", "lavfi", "-i", "testsrc2=s=640x360:r=30",
             "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100",
-            "-t", "14",
+            "-t", "16" if opening_bound else "14",
             "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-ar", "44100", "-ac", "2",
             str(original)
@@ -97,16 +98,27 @@ class TestInsightProcessorV2:
         (tmp_path / "base.ass").write_text("[Script Info]\nScriptType: v4.00+\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:14.00,Default,,0,0,0,,The complete source frame is preserved.\\N完整保留原始视频画面。\n")
         if opening_bound:
             # 使用真实编码副本及零起点字幕，验证二创仍保留完整首尾段。
-            from video_processing.processors import speech_opening
+            from video_processing.processors import ted_source_cleanup as cleanup
             from video_processing.utils.render_source_binding import bind_render_source
             prepared = tmp_path / "speech_opening/base/base.mp4"
             prepared.parent.mkdir(parents=True)
-            subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(original), "-ss", "2",
-                            "-c:v", "libx264", "-threads", "2", "-c:a", "aac", str(prepared)],
-                           check=True, capture_output=True, timeout=60)
+            # 仅合成编码夹具：明确登记两端测试图/纯音，再调用生产清理入口。
+            shape = cleanup.media.prefix_shape(cleanup.media.media_info(original))
+            packaging = tmp_path / "test-packaging.json"
+            packaging.write_text(json.dumps({"version": 1, "prefixes": [{"seconds": 2, "shape": shape,
+                "decoded_av_sha256": cleanup.media.decoded_prefix_sha256(original, 2, shape)}],
+                "suffixes": [{"seconds": 2, "shape": shape,
+                "decoded_av_sha256": cleanup.suffix_digest(original, 14, shape)}]}))
+            legacy = tmp_path / "test-prefixes.json"
+            legacy.write_text('{"version":1,"prefixes":[]}')
+            monkeypatch.setattr(cleanup, "PACKAGING", packaging)
+            monkeypatch.setattr(cleanup.media, "PREFIXES", legacy)
+            selected, decision = cleanup.prepare_source(original, prepared.parent)
+            assert selected == prepared
+            assert decision["offset_seconds"] == 2 and decision["end_seconds"] == 14
             prepared.with_suffix(".ass").write_text((tmp_path / "base.ass").read_text().replace("0:00:14.00", "0:00:12.00"))
             source.write_bytes(prepared.read_bytes())
-            speech_opening.validate_prepared(prepared, 12)
+            cleanup.media.validate_prepared(prepared, 12)
             bind_render_source(source, prepared, prepared.with_suffix(".ass"))
         body_seconds = 12 if opening_bound else 14
 

@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| ted-cleanup-v1 | 2026-10-10 | Codex | 统计 API 回读当前进程的原片清理开关及配方，用于运行采用核验。 |
 | 3.55.0 | 2026-10-08 | Antigravity | /api/trending-keywords 与 /refresh 增加异常防崩与静态兜底降级包装 |
 | 3.54.0 | 2026-09-28 | Antigravity | /api/wechat/status 基于结构化验证事实判断登录有效性；自动重登与登录恢复绑定本次成功授权时间戳 |
 | 3.53.0 | 2026-09-28 | Antigravity | 持久化记录实际随机选定的计划保活时刻，消除计划保活时间估算的平均伪造。 |
@@ -1337,6 +1338,7 @@ def get_cover(youtube_id: str):
 def get_stats():
     """返回各状态视频数量，用于顶部统计卡片"""
     from video_processing.core.ffmpeg_slot import config_status
+    from video_processing.processors.ted_source_cleanup import RECIPE as cleanup_recipe
     counts = db.get_status_counts()
     total = sum(counts.values())
     active = sum(v for k, v in counts.items() if k in PROCESSING_STATUSES)
@@ -1350,6 +1352,11 @@ def get_stats():
         "breakdown": {s: counts.get(s, 0) for s in STATUS_ORDER},
         "detailed": detailed,
         "server_time": datetime.now().strftime("%H:%M:%S"),
+        "source_preparation": {
+            "ted_source_cleanup_enabled": settings.enable_ted_source_cleanup,
+            "ted_opening_trim_enabled": settings.enable_ted_opening_trim,
+            "recipe": cleanup_recipe,
+        },
         "resource_control": {
             **config_status(),
             "ffmpeg_guard_enabled": subprocess.Popen.__module__ == "video_processing.core.ffmpeg_slot",

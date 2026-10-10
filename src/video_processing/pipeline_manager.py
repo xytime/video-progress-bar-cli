@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.70.0 | 2026-10-10 | Codex | 首尾清理只接入新 TED 整片；固定历史成片绑定及异常回退。 |
 | 3.69.2 | 2026-10-09 | Codex | 裁剪超时独立清理进程组；裁剪副本接入硬重置与受保护 TTL。 |
 | 3.69.1 | 2026-10-09 | Codex | 裁剪时间轴拒绝复用缺少来源指纹的旧二创脚本。 |
 | 3.69.0 | 2026-10-09 | Codex | TED/TEDx 新整片自动去开场等待，保留原片和二创片头，字幕/二创绑定同一加工副本。 |
@@ -4051,33 +4052,46 @@ class PipelineManager:
 
     def _prepare_speech_opening(self, video: Dict[str, Any], source: Path) -> Path:
         """只加工 TED/TEDx 新整片；疑难及异常直接继续原片，无确认队列。"""
-        if (not settings.enable_ted_opening_trim
-                or video.get("channel_id") not in TED_AUTO_PUBLISH_CHANNEL_IDS
+        if (video.get("channel_id") not in TED_AUTO_PUBLISH_CHANNEL_IDS
                 or video.get("slice_index", 0)
                 or any(video.get(key) not in (None, "") for key in ("trim_start", "trim_end"))):
             return source
-        yid = video["youtube_id"]
-        prepared_dir = self._OUT_DIR / "speech_opening" / yid
-        prepared = prepared_dir / f"{yid}.mp4"
-        decision_path = prepared.with_suffix(".opening.json")
-        if (self._OUT_DIR / f"{yid}_vertical.mp4").is_file() and not decision_path.is_file():
-            logger.info("[SpeechOpening] %s 已有成片，保留历史加工。", yid)
+        out = getattr(self, "_OUT_DIR", None)
+        if out is None:
             return source
+        yid = video["youtube_id"]
+        vertical = out / f"{yid}_vertical.mp4"
+        if vertical.is_file():
+            from .utils.render_source_binding import bound_render_inputs
+            # 配方升级、开关变化和重试都不能改写已成片的加工时间轴。
+            try:
+                bound = bound_render_inputs(vertical)
+            except (ValueError, OSError, KeyError, TypeError):
+                logger.warning("[SpeechOpening] %s 历史绑定损坏，保留原片供既有质量检查处理。", yid)
+                return source
+            logger.info("[SpeechOpening] %s 已有成片，保留历史加工。", yid)
+            return bound[0] if bound else source
+        if not (settings.enable_ted_opening_trim or settings.enable_ted_source_cleanup):
+            return source
+        prepared_dir = out / "speech_opening" / yid
+        prepared = prepared_dir / f"{yid}.mp4"
         try:
             env = _build_subprocess_env()
             env["PYTHONPATH"] = str(self._SRC_DIR)
             result = self._run_tracked([
-                self._VENV_PYTHON, "-m", "video_processing.processors.speech_opening",
+                self._VENV_PYTHON, "-m", "video_processing.processors." + (
+                    "ted_source_cleanup" if settings.enable_ted_source_cleanup else "speech_opening"),
                 str(source), str(prepared_dir),
             ], yid, slice_index=0, capture_output=True, cwd=str(self._PRJ_ROOT),
-               env=env, timeout=1320, isolate_process_group=True)
+               env=env, timeout=1680 if settings.enable_ted_source_cleanup else 1320,
+               isolate_process_group=True)
             payload = json.loads(result.stdout)
             selected = Path(payload["selected"])
             if selected.resolve() not in {source.resolve(), prepared.resolve()} or not selected.is_file():
                 raise ValueError("裁剪子进程未返回本片有效素材")
             receipt = payload["receipt"]
-            logger.info("[SpeechOpening] %s offset=%ss reason=%s", yid,
-                        receipt["offset_seconds"], receipt["reason"])
+            logger.info("[SpeechOpening] %s offset=%ss end=%s reason=%s", yid,
+                        receipt["offset_seconds"], receipt.get("end_seconds"), receipt["reason"])
             return selected
         except InterruptedError:
             raise

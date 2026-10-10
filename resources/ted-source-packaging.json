@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "prefixes": [
+    {
+      "reference_id": "TEDxNorthernQuarter-brand-sponsor-opening",
+      "seconds": 21.04,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "35ecc3b1fad691fe84586baab2f43fff41e4bcbddd684ef14735b2ea98e9757c"
+    }
+  ],
+  "suffixes": [
+    {
+      "reference_id": "TEDxNorthernQuarter-sponsor-account-ending",
+      "seconds": 7.72,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "25/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "ecd83e7b7cfbbb86d2195ecbbade5a714e93bb17a0253f09b424c414430abe8f"
+    }
+  ]
+}

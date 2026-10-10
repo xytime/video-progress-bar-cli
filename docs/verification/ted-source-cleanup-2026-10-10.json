@@ -1,0 +1,1266 @@
+{
+  "kind": "real_local_sources_not_accuracy_estimate",
+  "cases": [
+    {
+      "id": "1qmF_znXxrE",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "c3eaca96b9cc545b74d0f2744e25d58b21bdc9b1aa04d8d85e9848642ec0d99c",
+      "source_duration": 233.499864,
+      "expected_interval": [
+        0,
+        233.499864
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 233.499864,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.122,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "Uk31lVtda2g",
+      "scenario": "品牌片头后讲话",
+      "source_sha256": "3c22ccf29833c7f6fa367387593612ad0033dfb33591415f05c0b64246b4aa57",
+      "source_duration": 854.447891,
+      "expected_interval": [
+        8.5,
+        854.447891
+      ],
+      "decision": {
+        "offset_seconds": 8.5,
+        "end_seconds": 854.447891,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "Uk31lVtda2g"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 2.189,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未知端可能仍有包装；不追切",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "6xbG8OLQYys",
+      "scenario": "品牌片头后讲话",
+      "source_sha256": "525d03add8fc797434273cea75305c2bffef8e45d61b5ff95c90f05cc123b783",
+      "source_duration": 823.008073,
+      "expected_interval": [
+        7,
+        823.008073
+      ],
+      "decision": {
+        "offset_seconds": 7,
+        "end_seconds": 823.008073,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "6xbG8OLQYys"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 6.106,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未知端可能仍有包装；不追切",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "1aY-puP8oOw",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "82303a21c46597a2677153c72c9465d268121391b80ab153640a03e130b466ab",
+      "source_duration": 559.020408,
+      "expected_interval": [
+        0,
+        559.020408
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 559.020408,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.116,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "txf8CrI5z-k",
+      "scenario": "先唱歌再解释，表演属于内容",
+      "source_sha256": "71b91c410a781553646a8b4db62f254960beadb110a7dd8a4eb0192512e527fc",
+      "source_duration": 470.204082,
+      "expected_interval": [
+        0,
+        470.204082
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 470.204082,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.162,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "y64RDBeR19c",
+      "scenario": "手风琴演示，无讲话的音乐内容",
+      "source_sha256": "1471c079058b14af26914210570fb4373f976e7722686d2ae1c0011fd1fb2e2c",
+      "source_duration": 485.877551,
+      "expected_interval": [
+        0,
+        485.877551
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 485.877551,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.149,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "n4WktuDT49I",
+      "scenario": "音乐示范与讲话混合",
+      "source_sha256": "9c506dc99a2dc22ecf9ca1d8be5bcf7d09d0c6573619859357a62c8f41fef7f5",
+      "source_duration": 817.063764,
+      "expected_interval": [
+        0,
+        817.063764
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 817.063764,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 13.706,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "535jVKx0_DI",
+      "scenario": "品牌片头后讲话",
+      "source_sha256": "a82a64bc57d5c23be59919326ce6430d511df42c4919cb1c86279f4ef6d647ad",
+      "source_duration": 674.075283,
+      "expected_interval": [
+        10.5,
+        674.075283
+      ],
+      "decision": {
+        "offset_seconds": 10.5,
+        "end_seconds": 674.075283,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "535jVKx0_DI"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 3.712,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未知端可能仍有包装；不追切",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "2SS8xDcsXCM",
+      "scenario": "掌声及早期含混信号，保留",
+      "source_sha256": "2f049545f0467b019055b6d4d3b537c09aebc1b8c9ee256afe6220c294d312d3",
+      "source_duration": 433.934512,
+      "expected_interval": [
+        0,
+        433.934512
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 433.934512,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.053,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "AlY6ztT12Ps",
+      "scenario": "赞助卡、讲者及屏幕文字",
+      "source_sha256": "416f267ff8bdfaed24709320e5d2690431485d21ce1c02999c997656890e27dc",
+      "source_duration": 825.817687,
+      "expected_interval": [
+        0,
+        825.817687
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 825.817687,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.066,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "P1hob_amyIg",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "11e8eb412aa54d4ce0e8027e89a65ec91e7e555fe99f35f16c3b1dd4f35791cd",
+      "source_duration": 890.369161,
+      "expected_interval": [
+        0,
+        890.369161
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 890.369161,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 3.534,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "rU-Awn4m2VY",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "515f11e9a320cf2de2418f19e8af9cfa5055facf072009cd0ffdbcb0981eaaad",
+      "source_duration": 1078.822313,
+      "expected_interval": [
+        0,
+        1078.822313
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 1078.822313,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.132,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "DTwHfQR-_Ac",
+      "scenario": "品牌片头后讲话",
+      "source_sha256": "f364f6a5a3d4d30167ae08d2dab5bfbaef880bb991fdb0dd142be3dea0ab9c7c",
+      "source_duration": 788.2478,
+      "expected_interval": [
+        8.5,
+        788.2478
+      ],
+      "decision": {
+        "offset_seconds": 8.5,
+        "end_seconds": 788.2478,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "DTwHfQR-_Ac"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 3.966,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未知端可能仍有包装；不追切",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "BDA2oTj_6KI",
+      "scenario": "先掌声后讲话，未登记舞台画面",
+      "source_sha256": "738cda3d9d9ee9f2b664e10a8cc0ddc2cb55acb0019f9ef27118b62ee2eebff8",
+      "source_duration": 1165.827483,
+      "expected_interval": [
+        0,
+        1165.827483
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 1165.827483,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.136,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "CfuEK3U6Bog",
+      "scenario": "品牌片头后讲话",
+      "source_sha256": "ac5b2573da8f98f23aebcef00957caa7f24e1aa31dbc83f5a2a4f8e98713949a",
+      "source_duration": 1099.279093,
+      "expected_interval": [
+        8,
+        1099.279093
+      ],
+      "decision": {
+        "offset_seconds": 8,
+        "end_seconds": 1099.279093,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "CfuEK3U6Bog"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 3.007,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未知端可能仍有包装；不追切",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "1eCX3na89-U",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "647a33a94b22bcb1918ea2d9251b66f1b0b81b62e7a4d092cdffa999ecf26234",
+      "source_duration": 583.4478,
+      "expected_interval": [
+        0,
+        583.4478
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 583.4478,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.062,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "27SwlEfTbUI",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "5f9d6de70d132ab142a6a68cb6b754e93bd781518be120ea812c94bf1d226140",
+      "source_duration": 592.480363,
+      "expected_interval": [
+        0,
+        592.480363
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 592.480363,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.07,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "2L5jOA6JnHc",
+      "scenario": "品牌片头后讲话",
+      "source_sha256": "2d794f24083e8d05f6d84a2fee896cd127124f0261068805d8b5449ee5040162",
+      "source_duration": 1364.334875,
+      "expected_interval": [
+        8.5,
+        1364.334875
+      ],
+      "decision": {
+        "offset_seconds": 8.5,
+        "end_seconds": 1364.334875,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "Uk31lVtda2g"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 1.925,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未知端可能仍有包装；不追切",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "PKN3b8hmzWg",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "9df86629752dc0ec2dd3b8d5dea8997dd80abe72b3365dcd9027a4cfb9629957",
+      "source_duration": 790.732336,
+      "expected_interval": [
+        0,
+        790.732336
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 790.732336,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.056,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "Lk7d0xG3AZk",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "dbf543d1d1aa1a3e2b73575a725d932a8a4ab59ae443f9dca65d77a6dcab863c",
+      "source_duration": 993.976599,
+      "expected_interval": [
+        0,
+        993.976599
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 993.976599,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.086,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "0lQtYesj_yI",
+      "scenario": "主题文字只在开场卡出现",
+      "source_sha256": "91b18327efa1acd8ede5f1cd66f1c77c684e3217c18946c7e20d1004a988c9e0",
+      "source_duration": 598.215692,
+      "expected_interval": [
+        0,
+        598.215692
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 598.215692,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.094,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "-_GCY_ZQyUs",
+      "scenario": "讲者照片及主题只在开场卡出现",
+      "source_sha256": "3446319979b379ed229051043dce0a1c253d3c9b78b88f4db4871cf0b9d32041",
+      "source_duration": 663.324444,
+      "expected_interval": [
+        0,
+        663.324444
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 663.324444,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.092,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "81iS7JsTGmk",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "1039b266b097f1e4240b5ed45865ea90d147765ffcc8e02dc6ba43ae2736e8d6",
+      "source_duration": 605.413878,
+      "expected_interval": [
+        0,
+        605.413878
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 605.413878,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 3.325,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "Hd8npxrnpuo",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "509931e0ae21309d5e3b53b1fdd490923090304c2498e88570c3da9cac2dd59b",
+      "source_duration": 422.626395,
+      "expected_interval": [
+        0,
+        422.626395
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 422.626395,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.069,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "jCbITOCoxpo",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "b0e50ca00c3662fd08b73851937a6752099d9b04b26b5b7d2037217c68e973ad",
+      "source_duration": 498.764626,
+      "expected_interval": [
+        0,
+        498.764626
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 498.764626,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.049,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "gduYQKmz05M",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "b81bec3a52d39c4e39d0367096de249e5b6bda8276b159ad9b514ae81ee393f0",
+      "source_duration": 123.924898,
+      "expected_interval": [
+        0,
+        123.924898
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 123.924898,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.028,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "9Ff4S1FJdRM",
+      "scenario": "开头疑似讲话或收益不足，保留",
+      "source_sha256": "56c7038e2edfd6780abb6fd6b283a234793f98e83cfdf05397cf9db5a7ae183b",
+      "source_duration": 817.365624,
+      "expected_interval": [
+        0,
+        817.365624
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 817.365624,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.057,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "5SNEMFH7NlE",
+      "scenario": "立即短问候，保留随后内容",
+      "source_sha256": "a24d31ec34db5bdc43aaab3d22d692c5b362bf07b00e731d9cfd9303589b439a",
+      "source_duration": 973.589478,
+      "expected_interval": [
+        0,
+        973.589478
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 973.589478,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.12,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "pT0HuZM4Tf0",
+      "scenario": "早期含混信号，保留",
+      "source_sha256": "03c654fc63b5957f8d297d73d7606a0d9d8e6fc39050a0739455fb4d74b48cc2",
+      "source_duration": 376.952744,
+      "expected_interval": [
+        0,
+        376.952744
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 376.952744,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.049,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "oyRxhiAC9u8",
+      "scenario": "访谈从讲话开始，保留",
+      "source_sha256": "8535257f3bb8607adf3d2d3dbe86fa10635e52df25f97f0a20e1bca21e91ca3e",
+      "source_duration": 1247.468844,
+      "expected_interval": [
+        0,
+        1247.468844
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 1247.468844,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 0.08,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    },
+    {
+      "id": "NRkHdspgnI8",
+      "scenario": "片头音乐、赞助商包装、声音起点、末尾致谢和外平台卡",
+      "source_sha256": "822c1edb2550a88e64ecec78414a429e8ebf6a4f77233f13559db3f5639436be",
+      "source_duration": 922.969977,
+      "expected_interval": [
+        21.04,
+        915.2
+      ],
+      "decision": {
+        "offset_seconds": 21.04,
+        "end_seconds": 915.2,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "TEDxNorthernQuarter-brand-sponsor-opening"
+          },
+          {
+            "edge": "suffix",
+            "reference_id": "TEDxNorthernQuarter-sponsor-account-ending"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 2.014,
+      "boundary_evidence": "Daniel 原分辨率边界、首末离线转录、实际编码音画对照",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未知端可能仍有包装；不追切",
+      "output_evidence": "Daniel_auto_cleaned_source.mp4 与首尾预览、完整解码/音画检查"
+    },
+    {
+      "id": "yRZadwCn0jY",
+      "scenario": "短问候、未知片头",
+      "source_sha256": "a6f800afc2328011ef118121d953021dcea9d49ee6e840d08f02be650e560465",
+      "source_duration": 388.8878,
+      "expected_interval": [
+        0,
+        388.8878
+      ],
+      "decision": {
+        "offset_seconds": 0.0,
+        "end_seconds": 388.8878,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING"
+      },
+      "matches_expected": true,
+      "seconds": 3.625,
+      "boundary_evidence": "2026-10-09 已归档来源字幕/原片联系图边界；本轮重新读取完整原片检测",
+      "over_trim_against_verified_boundary": false,
+      "missed_packaging": "未标注通用包装边界，不能计为无漏剪",
+      "output_evidence": "本轮只复核检测；已知前缀的既有完整编码另见2026-10-09报告"
+    }
+  ],
+  "daniel": {
+    "receipt": {
+      "recipe": "ted-source-cleanup-v1",
+      "offset_seconds": 21.04,
+      "end_seconds": 915.2,
+      "source_sha256": "822c1edb2550a88e64ecec78414a429e8ebf6a4f77233f13559db3f5639436be",
+      "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+      "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+      "source_duration": 922.969977,
+      "source_bytes": 70891014,
+      "references": [
+        {
+          "edge": "prefix",
+          "reference_id": "TEDxNorthernQuarter-brand-sponsor-opening"
+        },
+        {
+          "edge": "suffix",
+          "reference_id": "TEDxNorthernQuarter-sponsor-account-ending"
+        }
+      ],
+      "reason": "VERIFIED_AV_PACKAGING",
+      "analysis_seconds": 2.478,
+      "output_sha256": "ae3509c0b3516cce7626efdf82159f57a3d5a8a7ed2d3849269d96ae5d04c4cf",
+      "output_bytes": 104483196,
+      "encode_and_decode_seconds": 63.827,
+      "removed_seconds": 28.809977
+    },
+    "cache_reused": true,
+    "speech": {
+      "opening": {
+        "original": {
+          "text": " Often I get asked as a chef, what is my favourite thing to cook? And my answer is always...",
+          "words": [
+            {
+              "word": " Often",
+              "start": 22.020000000000003,
+              "end": 22.880000000000003
+            },
+            {
+              "word": " I",
+              "start": 22.880000000000003,
+              "end": 23.740000000000002
+            },
+            {
+              "word": " get",
+              "start": 23.740000000000002,
+              "end": 23.88
+            },
+            {
+              "word": " asked",
+              "start": 23.88,
+              "end": 24.240000000000002
+            },
+            {
+              "word": " as",
+              "start": 24.240000000000002,
+              "end": 24.68
+            },
+            {
+              "word": " a",
+              "start": 24.68,
+              "end": 24.78
+            },
+            {
+              "word": " chef,",
+              "start": 24.78,
+              "end": 25.04
+            },
+            {
+              "word": " what",
+              "start": 25.740000000000002,
+              "end": 26.16
+            },
+            {
+              "word": " is",
+              "start": 26.16,
+              "end": 26.619999999999997
+            },
+            {
+              "word": " my",
+              "start": 26.619999999999997,
+              "end": 26.759999999999998
+            },
+            {
+              "word": " favourite",
+              "start": 26.759999999999998,
+              "end": 27.3
+            },
+            {
+              "word": " thing",
+              "start": 27.3,
+              "end": 27.9
+            },
+            {
+              "word": " to",
+              "start": 27.9,
+              "end": 28.08
+            },
+            {
+              "word": " cook?",
+              "start": 28.08,
+              "end": 28.3
+            },
+            {
+              "word": " And",
+              "start": 28.3,
+              "end": 29.759999999999998
+            },
+            {
+              "word": " my",
+              "start": 29.759999999999998,
+              "end": 29.92
+            },
+            {
+              "word": " answer",
+              "start": 29.92,
+              "end": 30.380000000000003
+            },
+            {
+              "word": " is",
+              "start": 30.380000000000003,
+              "end": 31.18
+            },
+            {
+              "word": " always...",
+              "start": 31.18,
+              "end": 31.88
+            }
+          ]
+        },
+        "prepared": {
+          "text": " Often I get asked as a chef, what is my favourite thing to cook? And my answer is always the same. My favourite thing to cook.",
+          "words": [
+            {
+              "word": " Often",
+              "start": 1.1799999999999997,
+              "end": 1.94
+            },
+            {
+              "word": " I",
+              "start": 1.94,
+              "end": 2.7
+            },
+            {
+              "word": " get",
+              "start": 2.7,
+              "end": 2.86
+            },
+            {
+              "word": " asked",
+              "start": 2.86,
+              "end": 3.2
+            },
+            {
+              "word": " as",
+              "start": 3.2,
+              "end": 3.64
+            },
+            {
+              "word": " a",
+              "start": 3.64,
+              "end": 3.76
+            },
+            {
+              "word": " chef,",
+              "start": 3.76,
+              "end": 4.0
+            },
+            {
+              "word": " what",
+              "start": 4.66,
+              "end": 5.12
+            },
+            {
+              "word": " is",
+              "start": 5.12,
+              "end": 5.58
+            },
+            {
+              "word": " my",
+              "start": 5.58,
+              "end": 5.74
+            },
+            {
+              "word": " favourite",
+              "start": 5.74,
+              "end": 6.26
+            },
+            {
+              "word": " thing",
+              "start": 6.26,
+              "end": 6.86
+            },
+            {
+              "word": " to",
+              "start": 6.86,
+              "end": 7.04
+            },
+            {
+              "word": " cook?",
+              "start": 7.04,
+              "end": 7.2
+            },
+            {
+              "word": " And",
+              "start": 8.22,
+              "end": 8.74
+            },
+            {
+              "word": " my",
+              "start": 8.74,
+              "end": 8.88
+            },
+            {
+              "word": " answer",
+              "start": 8.88,
+              "end": 9.32
+            },
+            {
+              "word": " is",
+              "start": 9.32,
+              "end": 10.1
+            },
+            {
+              "word": " always",
+              "start": 10.1,
+              "end": 10.52
+            },
+            {
+              "word": " the",
+              "start": 10.52,
+              "end": 11.1
+            },
+            {
+              "word": " same.",
+              "start": 11.1,
+              "end": 11.44
+            },
+            {
+              "word": " My",
+              "start": 12.46,
+              "end": 12.76
+            },
+            {
+              "word": " favourite",
+              "start": 12.76,
+              "end": 13.1
+            },
+            {
+              "word": " thing",
+              "start": 13.1,
+              "end": 13.3
+            },
+            {
+              "word": " to",
+              "start": 13.3,
+              "end": 13.46
+            },
+            {
+              "word": " cook.",
+              "start": 13.46,
+              "end": 13.72
+            }
+          ]
+        }
+      },
+      "ending": {
+        "original": {
+          "text": " That gesture changed the entire world and it still can today. Thank you.",
+          "words": [
+            {
+              "word": " That",
+              "start": 906.0,
+              "end": 906.48
+            },
+            {
+              "word": " gesture",
+              "start": 906.48,
+              "end": 906.88
+            },
+            {
+              "word": " changed",
+              "start": 906.88,
+              "end": 907.6
+            },
+            {
+              "word": " the",
+              "start": 907.6,
+              "end": 907.78
+            },
+            {
+              "word": " entire",
+              "start": 907.78,
+              "end": 908.18
+            },
+            {
+              "word": " world",
+              "start": 908.18,
+              "end": 908.62
+            },
+            {
+              "word": " and",
+              "start": 908.62,
+              "end": 909.22
+            },
+            {
+              "word": " it",
+              "start": 909.22,
+              "end": 909.36
+            },
+            {
+              "word": " still",
+              "start": 909.36,
+              "end": 909.62
+            },
+            {
+              "word": " can",
+              "start": 909.62,
+              "end": 909.9
+            },
+            {
+              "word": " today.",
+              "start": 909.9,
+              "end": 910.52
+            },
+            {
+              "word": " Thank",
+              "start": 911.18,
+              "end": 911.6
+            },
+            {
+              "word": " you.",
+              "start": 911.6,
+              "end": 911.86
+            }
+          ]
+        },
+        "prepared": {
+          "text": " That gesture changed the entire world and it still can today. Thank you.",
+          "words": [
+            {
+              "word": " That",
+              "start": 885.0,
+              "end": 885.42
+            },
+            {
+              "word": " gesture",
+              "start": 885.42,
+              "end": 885.84
+            },
+            {
+              "word": " changed",
+              "start": 885.84,
+              "end": 886.56
+            },
+            {
+              "word": " the",
+              "start": 886.56,
+              "end": 886.74
+            },
+            {
+              "word": " entire",
+              "start": 886.74,
+              "end": 887.14
+            },
+            {
+              "word": " world",
+              "start": 887.14,
+              "end": 887.58
+            },
+            {
+              "word": " and",
+              "start": 887.58,
+              "end": 888.18
+            },
+            {
+              "word": " it",
+              "start": 888.18,
+              "end": 888.32
+            },
+            {
+              "word": " still",
+              "start": 888.32,
+              "end": 888.6
+            },
+            {
+              "word": " can",
+              "start": 888.6,
+              "end": 888.88
+            },
+            {
+              "word": " today.",
+              "start": 888.88,
+              "end": 889.48
+            },
+            {
+              "word": " Thank",
+              "start": 890.22,
+              "end": 890.56
+            },
+            {
+              "word": " you.",
+              "start": 890.56,
+              "end": 890.8
+            }
+          ]
+        }
+      }
+    },
+    "audio_alignment": [
+      {
+        "output_start": 0,
+        "source_start": 21.04,
+        "seconds": 10,
+        "correlation": 0.9999810714939854
+      },
+      {
+        "output_start": 60,
+        "source_start": 81.03999999999999,
+        "seconds": 7,
+        "correlation": 0.999979614593736
+      },
+      {
+        "output_start": 889,
+        "source_start": 910.04,
+        "seconds": 4,
+        "correlation": 0.9999785371147071
+      }
+    ],
+    "visual_alignment": [
+      {
+        "output_seconds": 0,
+        "psnr_db": 84.04097846483631
+      },
+      {
+        "output_seconds": 1,
+        "psnr_db": 44.69675613935557
+      },
+      {
+        "output_seconds": 7,
+        "psnr_db": 45.39178677492081
+      },
+      {
+        "output_seconds": 60,
+        "psnr_db": 46.59461863215934
+      },
+      {
+        "output_seconds": 600,
+        "psnr_db": 47.952201190921684
+      },
+      {
+        "output_seconds": 890.44,
+        "psnr_db": 45.940542534539226
+      },
+      {
+        "output_seconds": 894.08,
+        "psnr_db": 60.858460769884076
+      }
+    ],
+    "existing_subtitle_mapping": {
+      "events": 279,
+      "texts_unchanged": true,
+      "last_end_seconds": 891.44,
+      "kind": "real_existing_subtitle_timeline_not_new_transcription"
+    }
+  },
+  "original_bytes_unchanged": {
+    "1qmF_znXxrE": true,
+    "Uk31lVtda2g": true,
+    "6xbG8OLQYys": true,
+    "1aY-puP8oOw": true,
+    "txf8CrI5z-k": true,
+    "y64RDBeR19c": true,
+    "n4WktuDT49I": true,
+    "535jVKx0_DI": true,
+    "2SS8xDcsXCM": true,
+    "AlY6ztT12Ps": true,
+    "P1hob_amyIg": true,
+    "rU-Awn4m2VY": true,
+    "DTwHfQR-_Ac": true,
+    "BDA2oTj_6KI": true,
+    "CfuEK3U6Bog": true,
+    "1eCX3na89-U": true,
+    "27SwlEfTbUI": true,
+    "2L5jOA6JnHc": true,
+    "PKN3b8hmzWg": true,
+    "Lk7d0xG3AZk": true,
+    "0lQtYesj_yI": true,
+    "-_GCY_ZQyUs": true,
+    "81iS7JsTGmk": true,
+    "Hd8npxrnpuo": true,
+    "jCbITOCoxpo": true,
+    "gduYQKmz05M": true,
+    "9Ff4S1FJdRM": true,
+    "5SNEMFH7NlE": true,
+    "pT0HuZM4Tf0": true,
+    "oyRxhiAC9u8": true,
+    "NRkHdspgnI8": true,
+    "yRZadwCn0jY": true
+  },
+  "verification": {
+    "media_regression": {
+      "passed": 148,
+      "seconds": 58.2,
+      "receipt_sha256": "52ed6502592093e9978e26cb68899433d155c57ef2092bf7a53a75361d202c41"
+    },
+    "final_path_guard_regression": {
+      "passed": 31,
+      "receipt_sha256": "41adc873b9845b415ffdb2feed657da1b589dc6b0665667d66364be6485b2159",
+      "seconds": 52.87
+    }
+  },
+  "limitations": [
+    "7条命中中6条是沿用模板参考，Daniel 是新增首尾参考，不能报告泛化准确率",
+    "未执行新的完整15分钟字幕翻译/TTS/发布；真实ASS检查是已有字幕平移对照",
+    "真实弱人声/无声演示/多活动结束卡留出集不足；未知内容保留"
+  ],
+  "implementation_sha256": "82c2c9e7e7ff937ad76080484e8f881acfa3f3dd685b08821ea53321ffdf61cd"
+}
