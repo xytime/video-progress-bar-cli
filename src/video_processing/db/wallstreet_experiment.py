@@ -3,7 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
-| 1.1.1 | 2026-10-10 | Codex | 人工确认的普通 A 身份恢复保留独立审计记录，不重新提交。 |
+| 1.1.1 | 2026-10-10 | Codex | 人工身份恢复审计，以及首次观察时间经平台证据校准；不重新提交。 |
 | 1.1.0 | 2026-10-10 | Codex | 封面就绪原子入队、具名漏单恢复及普通 A 强回读衔接。 |
 | 1.0.1 | 2026-10-09 | Codex | 修复后可立即重试加工，禁止重置正在执行或已完成任务 |
 | 1.0.0 | 2026-10-09 | Codex | 独立二创身份、租约、不可重传提交边界及作品级指标 |
@@ -284,6 +284,9 @@ class WallstreetExperimentDAL:
             raise ValueError("公开记录必须有平台作品 ID 与回读证据")
         if time_basis not in {"platform", "first_observed_public"}:
             raise ValueError("无效的公开时间依据")
+        if public_at is not None and (not isinstance(public_at,(int,float)) or isinstance(public_at,bool)
+                or not math.isfinite(public_at) or not 0 < public_at <= time.time()):
+            raise ValueError('无效的公开时间')
         with self.get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             current = conn.execute("SELECT * FROM wallstreet_version_publications WHERE id=?", (publication_id,)).fetchone()
@@ -296,11 +299,14 @@ class WallstreetExperimentDAL:
             if current["state"] == "PUBLISHED" and state != "PUBLISHED":
                 return False
             timestamp = public_at if public_at is not None else time.time()
+            if time_basis == 'platform' and public_at is None:
+                raise ValueError('平台时间必须有明确时间戳')
+            calibrate = state == 'PUBLISHED' and time_basis == 'platform' and current['public_time_basis'] == 'first_observed_public'
             conn.execute("""UPDATE wallstreet_version_publications SET state=?,platform_post_id=COALESCE(?,platform_post_id),
-                evidence_path=?,public_at=CASE WHEN ?='PUBLISHED' THEN COALESCE(public_at,?) ELSE public_at END,
-                public_time_basis=CASE WHEN ?='PUBLISHED' THEN COALESCE(public_time_basis,?) ELSE public_time_basis END,
+                evidence_path=?,public_at=CASE WHEN ? THEN ? WHEN ?='PUBLISHED' THEN COALESCE(public_at,?) ELSE public_at END,
+                public_time_basis=CASE WHEN ? THEN ? WHEN ?='PUBLISHED' THEN COALESCE(public_time_basis,?) ELSE public_time_basis END,
                 next_readback_at=?,last_error=? WHERE id=?""",
-                (state, platform_post_id, evidence_path, state, timestamp, state, time_basis,
+                (state, platform_post_id, evidence_path, calibrate,timestamp,state,timestamp,calibrate,time_basis,state,time_basis,
                  time.time()+1800, error, publication_id))
             return True
 

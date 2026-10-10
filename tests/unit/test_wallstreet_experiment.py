@@ -283,3 +283,23 @@ def test_only_proven_unstarted_ticket_can_recover(db):
     with db.get_connection() as conn:
         conn.execute("UPDATE douyin_browser_launch_tickets SET issued_at='2020-01-01'")
     assert db.recover_unstarted_wallstreet_douyin()==0
+
+
+def test_verified_platform_time_can_calibrate_first_observation_only(db):
+    ready(db)
+    pub=db.get_wallstreet_publications()[0]
+    db.observe_wallstreet_publication(pub['id'],state='PUBLISHED',platform_post_id='native-B',
+        evidence_path='/tmp/observed',public_at=200)
+    db.observe_wallstreet_publication(pub['id'],state='PUBLISHED',platform_post_id='native-B',
+        evidence_path='/tmp/strong-platform-time',public_at=100,time_basis='platform')
+    row=db.get_wallstreet_publications()[0]
+    assert row['public_at']==100 and row['public_time_basis']=='platform'
+    db.observe_wallstreet_publication(pub['id'],state='PUBLISHED',platform_post_id='native-B',
+        evidence_path='/tmp/observed-again',public_at=300)
+    assert db.get_wallstreet_publications()[0]['public_at']==100
+    with pytest.raises(ValueError,match='时间'):
+        db.observe_wallstreet_publication(pub['id'],state='PUBLISHED',platform_post_id='native-B',
+            evidence_path='/tmp/wrong',time_basis='platform')
+    with pytest.raises(ValueError,match='时间'):
+        db.observe_wallstreet_publication(pub['id'],state='PUBLISHED',platform_post_id='native-B',
+            evidence_path='/tmp/wrong',public_at=float('inf'),time_basis='platform')
