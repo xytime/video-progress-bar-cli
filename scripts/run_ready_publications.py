@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.5.0 | 2026-10-10 | Codex | 心跳回读当前 TED 原片清理开关和配方，验证独立执行者运行采用。 |
 | 1.4.0 | 2026-10-09 | Codex | 非阻塞唤起独立二创执行者，不阻塞 A 发布。 |
 | 1.3.0 | 2026-10-05 | Codex | 心跳暴露字幕共享期限、节流与源下载冷却配置，供运行采用验收。 |
 | 1.2.0 | 2026-10-03 | Codex | 心跳暴露已加载的 TED 点赞率门槛及演讲评分线，支持运行采用回读。 |
@@ -76,12 +77,16 @@ def main(argv=None) -> int:
     except (OSError, subprocess.TimeoutExpired):
         git_revision = "unknown"
     from video_processing.core.ffmpeg_slot import config_status
+    from video_processing.processors.ted_source_cleanup import RECIPE as cleanup_recipe
     state = {"pid": os.getpid(), "stage": "IDLE", "current_video": None,
              "git_revision": git_revision,
              "ffmpeg_guard_enabled": subprocess.Popen.__module__ == "video_processing.core.ffmpeg_slot",
              **config_status(),
              "ai_cover_primary_provider": settings.ai_cover_primary_provider,
              "ai_cover_queue_enabled": settings.enable_codex_cover_queue,
+             "ted_source_cleanup_enabled": settings.enable_ted_source_cleanup,
+             "ted_opening_trim_enabled": settings.enable_ted_opening_trim,
+             "ted_source_cleanup_recipe": cleanup_recipe,
              "ted_min_like_rate_pct": settings.ted_min_like_rate_pct,
              "speech_publish_score_line": settings.speech_publish_score_line,
              "subtitle_translation_total_timeout_seconds": settings.subtitle_translation_total_timeout_seconds,

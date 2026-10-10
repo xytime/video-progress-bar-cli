@@ -1255,7 +1255,14 @@
       "passed": 31,
       "receipt_sha256": "41adc873b9845b415ffdb2feed657da1b589dc6b0665667d66364be6485b2159",
       "seconds": 52.87
-    }
+    },
+    "ready_worker_observation_regression": {
+      "tests": 20,
+      "passed": true,
+      "seconds": 2.509,
+      "receipt_sha256": "41dd77443884452bd45cf38b1130704d80902c6ef09a835bdb7420ff68a6715e"
+    },
+    "production_originals_sha256_rechecked": 32
   },
   "limitations": [
     "7条命中中6条是沿用模板参考，Daniel 是新增首尾参考，不能报告泛化准确率",
