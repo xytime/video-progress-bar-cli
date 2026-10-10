@@ -1,0 +1,24 @@
+{
+  "source": "/Users/ryusei/.codex/worktrees/527f/Video-precessing",
+  "snapshot": "/private/tmp/video-pytest-5dev2nbl/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.084
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_wechat_product_selection.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "3fe2eb9387de4b952c771ee798f395f2587a8d04ff7aa9643292068d5e31c9d2",
+  "profile_sha256": "940a662b6b56da03725a1b7a665fb99835cdcd3d78e16453dde7637e9f5b7e74",
+  "browser_runtime": null,
+  "browser_runtime_sha256": null,
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 0.496
+  },
+  "finished_at": "2026-10-10T07:18:51.364625+00:00"
+}
