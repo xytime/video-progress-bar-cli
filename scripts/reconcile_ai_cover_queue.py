@@ -4,6 +4,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.9.1 | 2026-10-10 | Codex | 封面正常完成与回执恢复均原子入二创队列，传递启用平台和源文件路径。 |
 | 1.0.0 | 2026-07-31 | Codex | 新增两分钟巡查协调器，保证 AI 底图超时后确定性降级 |
 | 1.1.0 | 2026-08-03 | Codex | AI 封面完成物也必须通过无大面积遮罩版式来源清单校验 |
 | 1.2.0 | 2026-08-03 | Codex | 加锁并只允许 AI_COVER_PENDING 任务回到 PENDING，防止旧封面任务重发已发布视频 |
@@ -255,7 +256,7 @@ def _render_locked(
         visual_source or ("codex_ai_visual" if visual_path else "deterministic_fallback"),
         visual_path,
     )
-    if not db.mark_ai_cover_resolved(youtube_id, slice_index=slice_index):
+    if not _mark_cover_ready(task, db):
         logger.warning("[%s] cover rendered but video status changed before requeue; leaving row unchanged", task.task_id)
         return False
     try:
@@ -286,7 +287,19 @@ def _recover_resolution(task, db):
             return False
     except (OSError, ValueError, TypeError):
         return False
-    return db.mark_ai_cover_resolved(str(task.payload["youtube_id"]), slice_index=int(task.payload["slice_index"]))
+    return _mark_cover_ready(task, db)
+
+
+def _mark_cover_ready(task, db):
+    accounts = {"wechat": "default"}
+    if settings.enable_douyin_browser_publishing:
+        accounts["douyin"] = "default"
+    output = Path(task.payload["final_cover_path"]).parent
+    prefix = str(task.payload["prefix"])
+    return db.mark_ai_cover_resolved(str(task.payload["youtube_id"]),
+        slice_index=int(task.payload["slice_index"]), wallstreet_accounts=accounts,
+        wallstreet_inputs={"prefix": prefix, "output_dir": str(output),
+                          "a_video": str(output/f"{prefix}_vertical.mp4")})
 
 
 def reconcile() -> int:

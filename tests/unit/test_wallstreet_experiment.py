@@ -26,6 +26,44 @@ def ready(db):
     return pair
 
 
+def test_named_recovery_keeps_submitted_a_and_reuses_b_identity(db):
+    db.set_wallstreet_experiment(active=True)
+    db.mark_video_ready_for_publication('abcdefghijk')
+    db.record_wechat_submission_attempt('abcdefghijk',evidence_path='/tmp/receipt')
+    db.record_wechat_publication_confirmation('abcdefghijk',state='SUBMITTED_BOUND',
+        evidence_path='/tmp/receipt',platform_post_id='native-A')
+    db.update_video_status('abcdefghijk','SUBMITTED_BOUND')
+    before=db.get_wechat_publication('abcdefghijk')
+    assert db.enroll_wallstreet_video('abcdefghijk') is None
+    pair=db.recover_wallstreet_pair('abcdefghijk')
+    assert pair['mode']=='PAIRED'
+    assert db.recover_wallstreet_pair('abcdefghijk')['id']==pair['id']
+    assert db.get_wechat_publication('abcdefghijk')==before
+    assert db.get_video_by_youtube_id('abcdefghijk')['status']=='SUBMITTED_BOUND'
+    assert len(db.get_wallstreet_publications())==4
+    assert all(p['attempt_count']==0 for p in db.get_wallstreet_publications())
+    a=next(p for p in db.get_wallstreet_publications() if p['variant']=='A' and p['platform']=='wechat')
+    assert not db.sync_wallstreet_normal_a(a['id'])
+    db.observe_wallstreet_publication(a['id'],state='PUBLISHED',platform_post_id='other-ID',evidence_path='/tmp/readback')
+    assert not db.sync_wallstreet_normal_a(a['id'])
+    assert db.get_wechat_publication('abcdefghijk')==before
+
+
+def test_named_recovery_rejects_historical_unbound_and_review_held(db):
+    db.set_wallstreet_experiment(active=True)
+    db.mark_video_ready_for_publication('abcdefghijk')
+    assert db.recover_wallstreet_pair('abcdefghijk') is None
+    db.record_wechat_publication_confirmation('abcdefghijk',state='SUBMITTED_BOUND',
+        evidence_path='/tmp/receipt',platform_post_id='native-A')
+    db.set_publication_review_required('abcdefghijk',True)
+    assert db.recover_wallstreet_pair('abcdefghijk') is None
+    db.set_publication_review_required('abcdefghijk',False)
+    with db.get_connection() as conn:
+        conn.execute("UPDATE processed_videos SET publication_ready_at='2026-01-01 00:00:00'")
+    assert db.recover_wallstreet_pair('abcdefghijk') is None
+    assert db.get_wallstreet_pairs()==[]
+
+
 def test_inactive_and_non_target_do_not_enroll(db):
     assert db.enroll_wallstreet_video('abcdefghijk') is None
     db.set_wallstreet_experiment(active=True)

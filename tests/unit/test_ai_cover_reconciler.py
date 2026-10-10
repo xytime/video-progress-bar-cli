@@ -20,22 +20,64 @@ from video_processing.db.database import PipelineDB
 from video_processing.core.cover_policy import compliant_cover_layout_policy
 
 
-def setup_task(tmp_path, monkeypatch, age=0, luna=False):
+def setup_task(tmp_path, monkeypatch, age=0, luna=False, channel='channel'):
     queue=AICoverQueue(tmp_path/'queue',tmp_path/'finish')
     task=queue.create_task(prefix='cover-guard',youtube_id='cover-guard',slice_index=0,
         cover_payload={'title':'测试标题'},visual_brief={},final_cover_path=tmp_path/'output'/'cover-guard_cover.jpg',
         provenance_path=tmp_path/'output'/'cover-guard_cover_provenance.json',brief_path=tmp_path/'output'/'brief.json',
         content_aware=False,generation_deadline_minutes=32,fallback_after_minutes=34,primary_provider='agy',
         enable_luna_fallback=luna,now=datetime.now(timezone.utc)-timedelta(minutes=age))
-    db=PipelineDB(str(tmp_path/'pipeline.db'));db.add_video('cover-guard','Title','channel',score=88)
+    db=PipelineDB(str(tmp_path/'pipeline.db'));db.add_video('cover-guard','Title',channel,score=88)
     db.update_video_status('cover-guard','AI_COVER_PENDING')
     monkeypatch.setattr(reconciler,'PROJECT_ROOT',tmp_path)
     monkeypatch.setattr(reconciler,'LOCK_PATH',tmp_path/'queue.lock')
     monkeypatch.setattr(reconciler,'settings',SimpleNamespace(enable_codex_cover_queue=True,
+        enable_douyin_browser_publishing=False,
         ai_cover_primary_provider='agy',ai_cover_queue_dir='queue',ai_cover_finish_dir='finish',
         enable_antigravity_cover_fallback=False))
     monkeypatch.setattr(reconciler,'PipelineDB',lambda:db)
     return queue,task,db
+
+
+@pytest.mark.parametrize('recovered,douyin',[(False,False),(False,True),(True,True)])
+def test_target_cover_completion_and_crash_recovery_atomically_enroll(tmp_path,monkeypatch,recovered,douyin):
+    from video_processing.db.wallstreet_experiment import CHANNEL_ID
+    queue,task,db=setup_task(tmp_path,monkeypatch,33,channel=CHANNEL_ID)
+    db.set_wallstreet_experiment(active=True)
+    reconciler.settings.enable_douyin_browser_publishing=douyin
+    monkeypatch.setattr(reconciler,'run_process',renderer)
+    if recovered:
+        # 已写封面与回执，但就绪事务尚未发生。
+        Path(task.payload['final_cover_path']).parent.mkdir(parents=True,exist_ok=True)
+        renderer(['--output',task.payload['final_cover_path'],
+                  '--provenance-output',task.payload['provenance_path']])
+        reconciler._write_resolution(task,'deterministic_fallback',None)
+    assert reconciler.reconcile()==1
+    pairs=db.get_wallstreet_pairs()
+    assert len(pairs)==1 and pairs[0]['mode']=='PAIRED'
+    inputs=json.loads(pairs[0]['inputs_json'])
+    assert inputs['a_video']==str(tmp_path/'output/cover-guard_vertical.mp4')
+    pubs=db.get_wallstreet_publications()
+    assert {(p['variant'],p['platform']) for p in pubs}=={
+        (variant,platform) for variant in ('A','B')
+        for platform in (('wechat','douyin') if douyin else ('wechat',))}
+    assert all(p['attempt_count']==0 for p in pubs)
+    assert reconciler.reconcile()==0
+    assert len(db.get_wallstreet_pairs())==1
+
+
+def test_enrollment_failure_rolls_back_cover_readiness(tmp_path,monkeypatch):
+    from video_processing.db.wallstreet_experiment import CHANNEL_ID
+    _,_,db=setup_task(tmp_path,monkeypatch,33,channel=CHANNEL_ID)
+    db.set_wallstreet_experiment(active=True)
+    def failed(*args,**kwargs):
+        raise RuntimeError('enrollment failure')
+    monkeypatch.setattr(db,'_enroll_wallstreet_in_connection',failed)
+    with pytest.raises(RuntimeError,match='enrollment failure'):
+        db.mark_ai_cover_resolved('cover-guard')
+    assert db.get_video_by_youtube_id('cover-guard')['status']=='AI_COVER_PENDING'
+    assert db.get_video_by_youtube_id('cover-guard')['preparation_ready']==0
+    assert db.get_wallstreet_pairs()==[]
 
 
 def test_luna_eligible_task_records_distinct_source(tmp_path, monkeypatch):

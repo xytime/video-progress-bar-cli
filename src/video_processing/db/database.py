@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.95.1 | 2026-10-10 | Codex | AI 封面完成与二创入队共用事务，避免发布执行者抢跑漏单。 |
 | 3.95.0 | 2026-10-09 | Codex | 独立华尔街版本账本、原子就绪纳入及二创浏览器启动凭据。 |
 | 3.94.0 | 2026-10-06 | Codex | 平台限制保留投稿身份与日额，英语世界记录具名限制状态。 |
 | 3.93.0 | 2026-10-05 | Codex | 具名认证恢复要求本视频最近 60 秒内真实验证，保留媒体恢复的全部 CAS 与投稿保护。 |
@@ -3492,18 +3493,23 @@ class PipelineDB(WallstreetExperimentDAL):
                   AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = pv.id)
                 """, (youtube_id, slice_index)).fetchone() is not None
 
-    def mark_ai_cover_resolved(self, youtube_id: str, slice_index: int = 0) -> bool:
+    def mark_ai_cover_resolved(self, youtube_id: str, slice_index: int = 0, *,
+                               wallstreet_accounts=None, wallstreet_inputs=None) -> bool:
         """AI 封面任务完成后，原子恢复待发布并标记此前已完成的成片为可提交。"""
         with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.execute(
                 "UPDATE processed_videos "
-                "SET status = 'PENDING', preparation_ready = 1, publication_ready_at = CURRENT_TIMESTAMP, publication_wait_reason = '等待发布执行者领取', error_msg = NULL, updated_at = CURRENT_TIMESTAMP "
+                "SET status = 'PENDING', preparation_ready = 1, publication_ready_at = COALESCE(publication_ready_at, ?), publication_wait_reason = '等待发布执行者领取', error_msg = NULL, updated_at = CURRENT_TIMESTAMP "
                 "WHERE youtube_id = ? AND slice_index = ? AND status = 'AI_COVER_PENDING' "
                 "AND NOT EXISTS (SELECT 1 FROM wechat_publications p WHERE p.video_id = processed_videos.id) "
                 "AND NOT EXISTS (SELECT 1 FROM wechat_submission_attempts a WHERE a.video_id = processed_videos.id) "
                 "AND NOT EXISTS (SELECT 1 FROM wechat_publications_historical_archive h WHERE h.video_id = processed_videos.id)",
-                (youtube_id, slice_index),
+                (datetime.datetime.now(datetime.timezone.utc).isoformat(), youtube_id, slice_index),
             )
+            if cursor.rowcount:
+                self._enroll_wallstreet_in_connection(conn, youtube_id, slice_index=slice_index,
+                    accounts=wallstreet_accounts, inputs=wallstreet_inputs)
             conn.commit()
             return cursor.rowcount > 0
             

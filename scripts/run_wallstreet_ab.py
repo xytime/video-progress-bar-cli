@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-10 | Codex | 具名补队、普通 A 强回读衔接和抖音原生 ID 字段修复。 |
 | 1.0.0 | 2026-10-09 | Codex | 程序化固化 mobile-2 与可恢复配对试验，复用既有平台闸门 |
 | 1.0.1 | 2026-10-09 | Codex | 外部字幕策划等待明确授权，本地脚本与普通 A 持续运行 |
 """
@@ -170,6 +171,9 @@ def apply_readback(db,publication,evidence,code):
     value = json.loads(path.read_text()) if path.is_file() else {}
     accepted = json.loads(receipt.read_text()) if platform=='wechat' and receipt.is_file() else {}
     native = value.get('platform_post_id') or accepted.get('platform_post_id') or publication.get('platform_post_id')
+    if (publication.get('platform_post_id') and native
+            and native != publication['platform_post_id']):
+        raise ValueError('回读作品 ID 不匹配，禁止覆盖')
     strong = value.get('matched_by') in {'EXACT_OBJECT_ID','EXACT_EXPORT_ID'} if platform=='wechat' else value.get('identity_source')=='API_EXACT_DESCRIPTION'
     state = value.get('state')
     if state=='PUBLISHED' and strong and native:
@@ -183,6 +187,8 @@ def apply_readback(db,publication,evidence,code):
     db.observe_wallstreet_publication(publication['id'],state=outcome,platform_post_id=native,
         evidence_path=str(path if path.is_file() else receipt if receipt.is_file() else evidence/'uploader.log'),
         attempt_token=publication.get('attempt_token'),error=None if outcome=='PUBLISHED' else f'回读状态 {state}; uploader={code}')
+    if outcome == 'PUBLISHED' and publication['variant'] == 'A':
+        db.sync_wallstreet_normal_a(publication['id'])
     return outcome
 
 
@@ -190,7 +196,11 @@ def reconcile(db):
     db.recover_unstarted_wallstreet_douyin()
     now = time.time()
     for publication in db.get_wallstreet_publications():
-        if publication['state']=='PUBLISHED' or publication['next_readback_at']>now:
+        if publication['state']=='PUBLISHED':
+            if publication['variant']=='A':
+                db.sync_wallstreet_normal_a(publication['id'])
+            continue
+        if publication['next_readback_at']>now:
             continue
         if publication['variant']=='A':
             legacy = (db.get_wechat_publication(publication['youtube_id'],slice_index=publication['slice_index']) if publication['platform']=='wechat'
@@ -201,7 +211,11 @@ def reconcile(db):
             out = settings.default_output_dir
             prefix = publication['youtube_id']+(f"_s{publication['slice_index']}" if publication['slice_index'] else '')
             package = {'copy':str(out/f'{prefix}_copy.txt'),'title':str(out/f'{prefix}_title.txt')}
-            publication['platform_post_id'] = legacy.get('platform_post_id')
+            publication['platform_post_id'] = legacy.get(
+                'platform_post_id' if publication['platform']=='wechat' else 'external_post_id')
+            if publication['platform']=='douyin' and not publication['platform_post_id']:
+                # 尚未领取普通 A 的上传任务，不能用二创回查制造 A 的身份。
+                continue
             if publication['platform']=='wechat' and not publication['platform_post_id']:
                 continue
         elif publication['state'] in {'SUBMITTING','UNCERTAIN','UNDER_REVIEW'}:
@@ -317,6 +331,7 @@ def main():
     parser.add_argument('--activate',action='store_true')
     parser.add_argument('--pause',action='store_true')
     parser.add_argument('--enqueue-b-only')
+    parser.add_argument('--recover-pair', help='具名补入实验启用后、普通 A 已绑定提交的漏单；不重发 A')
     parser.add_argument('--retry-render',type=int)
     parser.add_argument('--import-metrics',type=Path)
     parser.add_argument('--report',action='store_true')
@@ -331,6 +346,14 @@ def main():
     if args.enqueue_b_only:
         db.set_publication_review_required(args.enqueue_b_only,True)
         print(json.dumps(db.enroll_wallstreet_video(args.enqueue_b_only,b_only=True),ensure_ascii=False));return 0
+    if args.recover_pair:
+        accounts = {'wechat':'default'}
+        if settings.enable_douyin_browser_publishing:
+            accounts['douyin'] = 'default'
+        out = settings.default_output_dir
+        print(json.dumps(db.recover_wallstreet_pair(args.recover_pair, accounts=accounts,
+            inputs={'prefix':args.recover_pair,'output_dir':str(out),
+                    'a_video':str(out/f'{args.recover_pair}_vertical.mp4')}),ensure_ascii=False));return 0
     if args.import_metrics:
         value = json.loads(args.import_metrics.read_text())
         for row in value if isinstance(value,list) else [value]:

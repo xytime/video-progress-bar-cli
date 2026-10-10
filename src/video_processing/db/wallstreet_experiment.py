@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-10 | Codex | 封面就绪原子入队、具名漏单恢复及普通 A 强回读衔接。 |
 | 1.0.1 | 2026-10-09 | Codex | 修复后可立即重试加工，禁止重置正在执行或已完成任务 |
 | 1.0.0 | 2026-10-09 | Codex | 独立二创身份、租约、不可重传提交边界及作品级指标 |
 """
@@ -104,44 +105,87 @@ class WallstreetExperimentDAL:
     def enroll_wallstreet_video(self, youtube_id, *, slice_index=0, inputs=None, b_only=False,
                                accounts=None, mark_ready=False):
         """A 就绪后原子纳入；明确 B 单条请求可纳入历史但复用唯一的同一 B。"""
-        accounts = accounts or {"wechat": "default", "douyin": "default"}
-        if not accounts or not set(accounts) <= PLATFORMS or not all(accounts.values()):
-            raise ValueError("无效的平台/账号")
         with self.get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if mark_ready:
                 self._mark_ready_in_connection(conn, youtube_id, slice_index)
-            row = conn.execute("SELECT * FROM processed_videos WHERE youtube_id=? AND slice_index=?",
+            return self._enroll_wallstreet_in_connection(conn, youtube_id, slice_index=slice_index,
+                inputs=inputs, b_only=b_only, accounts=accounts)
+
+    def recover_wallstreet_pair(self, youtube_id, *, slice_index=0, inputs=None, accounts=None):
+        """具名补入启用后漏掉的配对，保留 A 投稿账本与既有 B 身份；绝不重新发布 A。"""
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            return self._enroll_wallstreet_in_connection(conn, youtube_id, slice_index=slice_index,
+                inputs=inputs, accounts=accounts, recover_submitted=True)
+
+    def _enroll_wallstreet_in_connection(self, conn, youtube_id, *, slice_index=0, inputs=None,
+                                        b_only=False, accounts=None, recover_submitted=False):
+        accounts = accounts or {"wechat": "default", "douyin": "default"}
+        if not accounts or not set(accounts) <= PLATFORMS or not all(accounts.values()):
+            raise ValueError("无效的平台/账号")
+        row = conn.execute("SELECT * FROM processed_videos WHERE youtube_id=? AND slice_index=?",
                                (youtube_id, slice_index)).fetchone()
-            if not row or row["channel_id"] != CHANNEL_ID:
+        if not row or row["channel_id"] != CHANNEL_ID:
+            return None
+        existing = conn.execute("SELECT * FROM wallstreet_pairs WHERE video_id=?", (row["id"],)).fetchone()
+        if existing:
+            return dict(existing)
+        config = conn.execute("SELECT * FROM wallstreet_experiment WHERE name=? AND state='ACTIVE'",
+                              (EXPERIMENT,)).fetchone()
+        if not b_only:
+            if not config or not row["preparation_ready"] or row["source"] == "DISCOVERY":
                 return None
-            existing = conn.execute("SELECT * FROM wallstreet_pairs WHERE video_id=?", (row["id"],)).fetchone()
-            if existing:
-                return dict(existing)
-            config = conn.execute("SELECT * FROM wallstreet_experiment WHERE name=? AND state='ACTIVE'",
-                                  (EXPERIMENT,)).fetchone()
-            if not b_only:
-                if not config or not row["preparation_ready"] or row["source"] == "DISCOVERY":
+            ready = row["publication_ready_at"]
+            if not ready or dt.datetime.fromisoformat(ready).replace(tzinfo=dt.timezone.utc).timestamp() < config["activated_at"]:
+                return None
+            submitted = conn.execute("""SELECT 1 FROM wechat_submission_attempts WHERE video_id=?
+                UNION ALL SELECT 1 FROM wechat_publications WHERE video_id=?
+                UNION ALL SELECT 1 FROM douyin_publications WHERE video_id=? LIMIT 1""",
+                (row["id"], row["id"], row["id"])).fetchone()
+            if row["publication_review_required"]:
+                return None
+            if recover_submitted:
+                bound = conn.execute("""SELECT 1 FROM wechat_publications WHERE video_id=?
+                    AND platform_post_id IS NOT NULL AND platform_post_id!=''
+                    AND evidence_path IS NOT NULL AND evidence_path!=''
+                    AND state IN ('SUBMITTED_BOUND','UNDER_REVIEW','PUBLISHED')""", (row["id"],)).fetchone()
+                if not bound:
                     return None
-                ready = row["publication_ready_at"]
-                if not ready or dt.datetime.fromisoformat(ready).replace(tzinfo=dt.timezone.utc).timestamp() < config["activated_at"]:
-                    return None
-                submitted = conn.execute("""SELECT 1 FROM wechat_submission_attempts WHERE video_id=?
-                    UNION ALL SELECT 1 FROM wechat_publications WHERE video_id=?
-                    UNION ALL SELECT 1 FROM douyin_publications WHERE video_id=? LIMIT 1""",
-                    (row["id"], row["id"], row["id"])).fetchone()
-                if submitted or row["publication_review_required"]:
-                    return None
-            cursor = conn.execute("""INSERT INTO wallstreet_pairs
-                (experiment,video_id,mode,created_at,template,inputs_json) VALUES (?,?,?,?,?,?)""",
-                (EXPERIMENT, row["id"], "B_ONLY" if b_only else "PAIRED", time.time(), TEMPLATE,
-                 json.dumps(inputs or {}, ensure_ascii=False, sort_keys=True)))
-            pair_id = cursor.lastrowid
-            for platform, account in accounts.items():
-                for variant in (("B",) if b_only else ("A", "B")):
-                    conn.execute("""INSERT INTO wallstreet_version_publications
-                        (pair_id,variant,platform,account) VALUES (?,?,?,?)""", (pair_id, variant, platform, account))
-            return dict(conn.execute("SELECT * FROM wallstreet_pairs WHERE id=?", (pair_id,)).fetchone())
+            elif submitted:
+                return None
+        cursor = conn.execute("""INSERT INTO wallstreet_pairs
+            (experiment,video_id,mode,created_at,template,inputs_json) VALUES (?,?,?,?,?,?)""",
+            (EXPERIMENT, row["id"], "B_ONLY" if b_only else "PAIRED", time.time(), TEMPLATE,
+             json.dumps(inputs or {}, ensure_ascii=False, sort_keys=True)))
+        pair_id = cursor.lastrowid
+        for platform, account in accounts.items():
+            for variant in (("B",) if b_only else ("A", "B")):
+                conn.execute("""INSERT INTO wallstreet_version_publications
+                    (pair_id,variant,platform,account) VALUES (?,?,?,?)""", (pair_id, variant, platform, account))
+        return dict(conn.execute("SELECT * FROM wallstreet_pairs WHERE id=?", (pair_id,)).fetchone())
+
+    def sync_wallstreet_normal_a(self, publication_id):
+        """仅将强回读确认的同一 A ID 同步到普通账本，解开普通抖音的前置条件。"""
+        with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("""SELECT * FROM wallstreet_version_publications pub
+                JOIN wallstreet_pairs p ON p.id=pub.pair_id WHERE pub.id=?
+                AND pub.variant='A' AND pub.platform='wechat' AND pub.state='PUBLISHED'""",
+                (publication_id,)).fetchone()
+            if not row or not row['platform_post_id'] or not row['evidence_path']:
+                return False
+            changed = conn.execute("""UPDATE wechat_publications SET state='PUBLISHED',
+                evidence_path=?,confirmed_at=COALESCE(confirmed_at,CURRENT_TIMESTAMP),
+                last_reconciled_at=CURRENT_TIMESTAMP,last_error_message=NULL,updated_at=CURRENT_TIMESTAMP
+                WHERE video_id=? AND platform_post_id=?
+                AND state IN ('SUBMITTED_BOUND','UNDER_REVIEW','PUBLISHED')""",
+                (row['evidence_path'],row['video_id'],row['platform_post_id'])).rowcount
+            if changed:
+                conn.execute("""UPDATE processed_videos SET status='PUBLISHED',error_msg=NULL,
+                    updated_at=CURRENT_TIMESTAMP WHERE id=?
+                    AND status IN ('SUBMITTED_BOUND','UNDER_REVIEW','PUBLISHED')""", (row['video_id'],))
+            return bool(changed)
 
     def get_wallstreet_pairs(self):
         with self.get_connection() as conn:
