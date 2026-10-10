@@ -233,8 +233,8 @@ class Settings(BaseSettings):
     # 共享代码/DB 变更仍须隔离回归，实际平台验收及启用需要另行授权。
     enable_wechat_comment_interaction: bool = False
 
-    # 视频号发布时自动挂载图书商品开关与超时预算。默认关闭确保生产零风险。
-    enable_wechat_product_link: bool = False
+    # 常规视频号发布默认挂载图书商品；未确认绑定时由上传器阻止提交。
+    enable_wechat_product_link: bool = True
     wechat_product_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
 
 

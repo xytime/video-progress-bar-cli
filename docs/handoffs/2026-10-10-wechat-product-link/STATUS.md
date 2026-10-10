@@ -29,11 +29,15 @@
    - 平台只读结构体：`verify_6/management_readback.json`（`state: PUBLISHED`, `reason: DOM_POSTED_PUBLIC_COMPONENT`）
    - 数据库记录：`output/pipeline.db` 中 `processed_videos.status = 'PUBLISHED'`, `wechat_publications.state = 'PUBLISHED'` (ID: 1443)
 
-## 生产启用操作说明
+## 常规发布默认开启（2026-10-10，Codex）
 
-功能代码已完全就绪并合入生产主干。若需在全流水线例行发布（09:00 / 21:00）中全局自动开启图书挂载，只需在 `.env` 中设置：
+用户明确要求常规默认开启后，已将 Settings 字段默认值、公开配置模板与本机生产 `.env` 的商品开关统一设为 true：
 ```sh
 ENABLE_WECHAT_PRODUCT_LINK=true
 WECHAT_PRODUCT_TIMEOUT_SECONDS=30.0
 ```
-未开启时保持既有发布行为不变。
+新进程配置回读已确认 `enable_wechat_product_link=True`、预算 30 秒。商品未确认绑定时，现有上传器门禁返回失败并停止提交。
+
+2026-10-10 19:25 的 `g6J422o77BM` 投稿来自启动于 14:32 的旧版独立发布执行者，其选品回执为 `required=false`、`attempts=0`。本次不重传已受理作品、不重启或主动唤起发布执行者。上传器为每条投稿单独创建的子进程，启动时读取生产 `.env`，因此新投稿无需依赖旧协调器是否传入 `--require-product` 即可进入选品；下一条真实回执和播放页购买入口仍待验证。
+
+本次开启配置不代表之前审查的实际商品 ID 回读、共享截止时间、Playwright 超时回退三个缺陷已修复，也不代表全链路验收完成。
