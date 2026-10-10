@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date       | Author          | Description                          |
 |---------|------------|-----------------|--------------------------------------|
+| 1.15.0 | 2026-10-10 | Codex | 覆盖原提交 nonce 精确关联、缺失与错回执拒绝、歧义及原 ID 冲突。 |
 | 1.14.0 | 2026-10-03 | Codex | 新版结构化短标题只接受唯一项；原生 exportId 回查精确关联并拒绝歧义。 |
 | 1.13.0 | 2026-09-25 | Codex | 覆盖 post_list 仅返回长描述时的精确文案绑定与错配拒绝。 |
 | 1.12.1 | 2026-09-24 | Codex | 清洗后标题实际回读可绑定，原始长标题、回读不符和不可见输入不能绑定。 |
@@ -56,6 +57,52 @@ from wechat_uploader import (
 )
 from video_processing.db.database import PipelineDB
 from video_processing.pipeline_manager import PipelineManager
+
+
+@pytest.mark.parametrize('receipt_id,nonce,matched_by,card_nonces,expected', [
+    ('original-id','15695130342700161295','same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title',['15695130342700161295'],MANAGEMENT_PUBLISHED),
+    ('other-id','15695130342700161295','same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title',['15695130342700161295'],MANAGEMENT_UNCERTAIN),
+    ('original-id','','same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title',['15695130342700161295'],MANAGEMENT_UNCERTAIN),
+    ('original-id','15695130342700161295','title_match',['15695130342700161295'],MANAGEMENT_UNCERTAIN),
+    ('original-id','15695130342700161295','same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title',['15695130342700161295']*2,MANAGEMENT_UNCERTAIN),
+])
+def test_rotated_native_id_requires_unique_original_submission_nonce(monkeypatch,tmp_path,receipt_id,nonce,matched_by,card_nonces,expected):
+    import json
+    receipt=tmp_path/'submission_receipt.json'
+    receipt.write_text(json.dumps(dict(platform_post_id=receipt_id,platform_object_nonce=nonce,matched_by=matched_by)))
+    cards={f'rotated-{i}':dict(platform_post_id=f'rotated-{i}',platform_object_nonce=n,
+                            card_text='作品状态：已发布') for i,n in enumerate(card_nonces)}
+    monkeypatch.setattr('wechat_uploader._load_management_cards',lambda _: (cards,True))
+    monkeypatch.setattr('wechat_uploader._capture_wechat_evidence',lambda *_:None)
+    class Page:
+        def wait_for_timeout(self,*_):pass
+    state,_=verify_management_publication_by_id(Page(),tmp_path/'result','original-id',identity_receipt=receipt)
+    assert state==expected
+    if state==MANAGEMENT_PUBLISHED:
+        proof=json.loads((tmp_path/'result/management_readback.json').read_text())
+        assert proof['platform_post_id']=='original-id'
+        assert proof['management_object_id']=='rotated-0'
+        assert proof['matched_by']=='EXACT_SUBMISSION_NONCE'
+
+
+def test_exact_id_with_conflicting_submission_nonce_is_not_confirmed(monkeypatch,tmp_path):
+    import json
+    receipt=tmp_path/'submission_receipt.json'
+    receipt.write_text(json.dumps(dict(platform_post_id='original-id',platform_object_nonce='123',
+        matched_by='same_session_before_after_platform_id_delta_and_exact_title')))
+    cards={'original-id':dict(platform_post_id='original-id',platform_object_nonce='456',card_text='作品状态：已发布')}
+    monkeypatch.setattr('wechat_uploader._load_management_cards',lambda _: (cards,True))
+    monkeypatch.setattr('wechat_uploader._capture_wechat_evidence',lambda *_:None)
+    class Page:
+        def wait_for_timeout(self,*_):pass
+    assert verify_management_publication_by_id(Page(),tmp_path/'result','original-id',identity_receipt=receipt)[0]==MANAGEMENT_UNCERTAIN
+
+
+def test_submission_receipt_keeps_nonce_from_unique_native_record():
+    cards=_collect_management_cards_from_post_list_payload({'data':{'list':[
+        {'objectId':'native-id','objectNonce':'15695130342700161295','desc':{'shortTitle':'本次唯一完整标题'}}]}})
+    receipt=resolve_submission_platform_identity({},cards,'本次唯一完整标题')
+    assert receipt['platform_object_nonce']=='15695130342700161295'
 
 
 # ── 1. 发布确认判定（纯函数）──────────────────────────────────────────────

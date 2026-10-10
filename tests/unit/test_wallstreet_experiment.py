@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-10 | Codex | 具名补队与人工身份恢复的原子边界和不重传验证。 |
 | 1.0.0 | 2026-10-09 | Codex | 覆盖并发领取、A/B 顺序、未知提交及指标缺失 |
 """
 from concurrent.futures import ThreadPoolExecutor
@@ -62,6 +63,36 @@ def test_named_recovery_rejects_historical_unbound_and_review_held(db):
         conn.execute("UPDATE processed_videos SET publication_ready_at='2026-01-01 00:00:00'")
     assert db.recover_wallstreet_pair('abcdefghijk') is None
     assert db.get_wallstreet_pairs()==[]
+
+
+def test_operator_recovery_is_atomic_and_never_confirms_or_reuploads(db):
+    db.set_wallstreet_experiment(active=True)
+    db.mark_video_ready_for_publication('abcdefghijk')
+    db.record_wechat_publication_confirmation('abcdefghijk',state='SUBMITTED_BOUND',
+        evidence_path='/tmp/original-receipt',platform_post_id='old-A')
+    db.recover_wallstreet_pair('abcdefghijk',accounts={'wechat':'default'})
+    a=next(p for p in db.get_wallstreet_publications() if p['variant']=='A')
+    b=next(p for p in db.get_wallstreet_publications() if p['variant']=='B')
+    db.observe_wallstreet_publication(a['id'],state='UNCERTAIN',platform_post_id='old-A',evidence_path='/tmp/check')
+    args=dict(previous_id='old-A',recovered_id='new-A',evidence_path='/tmp/operator-proof',
+              operator_confirmation='用户核对完整原生预览确认同一普通版')
+    with pytest.raises(ValueError):
+        db.recover_wallstreet_normal_a_identity(b['id'],**args)
+    with pytest.raises(ValueError):
+        db.recover_wallstreet_normal_a_identity(a['id'],**{**args,'previous_id':'wrong'})
+    assert db.get_wechat_publication('abcdefghijk')['platform_post_id']=='old-A'
+    assert db.recover_wallstreet_normal_a_identity(a['id'],**args)
+    normal=db.get_wechat_publication('abcdefghijk')
+    assert normal['state']=='SUBMITTED_BOUND' and normal['platform_post_id']=='new-A'
+    assert normal['evidence_path']=='/tmp/original-receipt'
+    pubs=db.get_wallstreet_publications()
+    assert all(p['attempt_count']==0 for p in pubs)
+    assert next(p for p in pubs if p['variant']=='A')['state']=='UNCERTAIN'
+    with db.get_connection() as conn:
+        audit=dict(conn.execute('SELECT * FROM wallstreet_identity_recoveries').fetchone())
+        assert (audit['previous_id'],audit['recovered_id'])==('old-A','new-A')
+    with pytest.raises(ValueError):
+        db.recover_wallstreet_normal_a_identity(a['id'],**args)
 
 
 def test_inactive_and_non_target_do_not_enroll(db):

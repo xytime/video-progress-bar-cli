@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.18.0 | 2026-10-10 | Codex | 同会话回执保留 nonce；跨会话精确关联及公开日期与原生时间一致性校验。 |
 | 5.17.11 | 2026-10-03 | Codex | 原生组件 ID 绑定独立状态标签；唯一 exportId 直接关联才允许回查，兼容新版单项结构化短标题并保留脱敏身份证据。 |
 | 5.17.10 | 2026-10-03 | Codex | 禁用浏览器 2D Canvas 硬件加速，使封面裁剪和严格像素回读使用一致渲染路径。 |
 | 5.17.9 | 2026-10-03 | Codex | 对保存后重新打开的 Croppie Canvas 复现等比缩放，完整 RGBA 与指定封面精确相等才放行。 |
@@ -502,6 +503,11 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
                         public_visibility: node.__vue__.VisibleType?.public !== undefined &&
                             post.visibleType === node.__vue__.VisibleType.public,
                     },
+                    object_nonce: String(post.objectNonce || ''),
+                    posted_time_text: node.querySelector('.posted-info')?.innerText || '',
+                    native_create_time: post.createTime,
+                    native_time_parts: (() => {const d = new Date(Number(post.createTime)*1000);
+                        return [d.getFullYear(),d.getMonth()+1,d.getDate(),d.getHours(),d.getMinutes()];})(),
                     export_id: typeof post.exportId === 'string' ? post.exportId : ''});
             }
             const counts = new Map();
@@ -516,9 +522,13 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
             "platform_post_id": str(record["post_id"]),
             "platform_url": str(record.get("url") or ""),
             "card_text": str(record.get("text") or ""),
+            **({"platform_object_nonce": str(record["object_nonce"])} if str(record.get("object_nonce") or "").isdigit() else {}),
             **({"status_text": str(record["status_text"]), "platform_export_id": str(record.get("export_id") or "")}
                if "status_text" in record else {}),
             **({"component_state": record["component_state"]} if "component_state" in record else {}),
+            **({"posted_time_text": record["posted_time_text"], "native_create_time": record.get("native_create_time"),
+                "native_time_parts": record.get("native_time_parts")}
+               if "posted_time_text" in record else {}),
         }
         for record in records
         if record.get("post_id")
@@ -553,6 +563,7 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
         cards[post_id] = {
             "platform_post_id": post_id,
             **({"platform_export_id": record["exportId"]} if isinstance(record.get("exportId"), str) and record["exportId"] else {}),
+            **({"platform_object_nonce": str(record["objectNonce"])} if str(record.get("objectNonce") or "").isdigit() else {}),
             "platform_url": "",
             "card_text": description,
             "short_title": short_title,
@@ -620,6 +631,7 @@ def resolve_submission_platform_identity(
         "platform_post_id": record["platform_post_id"],
         "platform_url": record.get("platform_url", ""),
         "matched_by": matched_by,
+        **({"platform_object_nonce": record["platform_object_nonce"]} if str(record.get("platform_object_nonce") or "").isdigit() else {}),
     }
 
 
@@ -817,6 +829,20 @@ def classify_management_component(value) -> str:
     return MANAGEMENT_UNCERTAIN
 
 
+def _management_public_time(record, state):
+    """只有已公开 DOM 日期与同一卡片原生时间逐分钟一致，才采用平台时间。"""
+    if state != MANAGEMENT_PUBLISHED or classify_management_component(record.get('component_state')) != MANAGEMENT_PUBLISHED:
+        return {}
+    stamp = record.get('native_create_time')
+    match = re.search(r'(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日\s*(\d{1,2}):(\d{2})',
+                      str(record.get('posted_time_text') or ''))
+    if (not isinstance(stamp, (int,float)) or isinstance(stamp,bool) or stamp <= 0
+            or not match or list(map(int,match.groups())) != record.get('native_time_parts')):
+        return {}
+    return {'platform_public_at': stamp, 'public_time_evidence': 'DOM_POSTED_INFO_AND_NATIVE_CREATE_TIME',
+            'posted_time_text': record['posted_time_text']}
+
+
 def _search_management_title(page, expected_title: str) -> bool:
     """优先使用作品管理页搜索框；找不到搜索控件时不报告“未找到”。"""
     for selector in (
@@ -897,11 +923,33 @@ def verify_management_publication(page, evidence_root: Path, expected_title: str
     return MANAGEMENT_UNCERTAIN, "", ""
 
 
+def _submission_identity_nonce(receipt_path: Path | None, platform_post_id: str) -> str:
+    """nonce 必须来自原提交 ID 的同会话回执，禁止从待匹配作品反向补造。"""
+    if not receipt_path:
+        return ""
+    try:
+        receipt = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(receipt, dict) or receipt.get("platform_post_id") != platform_post_id:
+        return ""
+    if receipt.get("matched_by") not in {
+        "same_session_before_after_platform_id_delta_and_exact_title",
+        "same_session_before_after_unique_post_list_object_id_delta_and_exact_short_title",
+        "same_session_before_after_unique_post_list_object_id_delta_and_exact_description",
+    }:
+        return ""
+    nonce = str(receipt.get("platform_object_nonce") or "")
+    return nonce if nonce.isdigit() and len(nonce) <= 32 else ""
+
+
 def verify_management_publication_by_id(
     page, evidence_root: Path, platform_post_id: str, *, expected_title: str | None = None,
+    identity_receipt: Path | None = None,
 ) -> tuple[str, str]:
     """只按已绑定的原生记录 ID 回查平台状态；有界重读后仍不可判定时绝不补发。"""
     normalized_post_id = (platform_post_id or "").strip()
+    nonce = _submission_identity_nonce(identity_receipt, normalized_post_id)
     for attempt in range(MANAGEMENT_VERIFY_ATTEMPTS):
         cards, loaded = (
             _load_management_cards(page, search_title=expected_title)
@@ -910,11 +958,19 @@ def verify_management_publication_by_id(
         matches = [card for card in cards.values() if normalized_post_id in {
             card.get("platform_post_id"), card.get("platform_export_id")
         }] if loaded else []
+        matched_by = ""
+        if len(matches) == 1:
+            matched_by = "EXACT_OBJECT_ID" if matches[0].get("platform_post_id") == normalized_post_id else "EXACT_EXPORT_ID"
+            if nonce and matches[0].get("platform_object_nonce") != nonce:
+                matches = []
+        elif not matches and loaded and nonce:
+            matches = [card for card in cards.values() if card.get("platform_object_nonce") == nonce]
+            matched_by = "EXACT_SUBMISSION_NONCE"
         record = matches[0] if len(matches) == 1 else None
         try:
             evidence_root.mkdir(parents=True, exist_ok=True)
             snapshot = [{key: card.get(key, "") for key in (
-                "platform_post_id", "platform_export_id", "short_title", "platform_status", "status_text", "component_state"
+                "platform_post_id", "platform_export_id", "platform_object_nonce", "short_title", "platform_status", "status_text", "component_state"
             )} for card in cards.values()]
             (evidence_root / f"management_identity_snapshot_{attempt}.json").write_text(
                 json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -936,12 +992,15 @@ def verify_management_publication_by_id(
                     "platform_post_id": normalized_post_id,
                     "management_object_id": record.get("platform_post_id", ""),
                     "management_export_id": record.get("platform_export_id", ""),
-                    "matched_by": "EXACT_OBJECT_ID" if record.get("platform_post_id") == normalized_post_id else "EXACT_EXPORT_ID",
+                    "matched_by": matched_by,
+                    "platform_object_nonce": record.get("platform_object_nonce", ""),
+                    "identity_receipt": str(identity_receipt) if nonce else "",
                     "identity_source": record.get("identity_source", "dom"),
                     "platform_status": record.get("platform_status", ""),
                     "state": state,
                     "reason": reason,
                     "component_state": record.get("component_state"),
+                    **_management_public_time(record, state),
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as exc:
                 logger.warning("Unable to persist management readback diagnostics: %s", type(exc).__name__)
@@ -1932,6 +1991,7 @@ def run_uploader(
     verify_only: bool = False,
     platform_post_id: str = None,
     expected_title: str | None = None,
+    identity_receipt: str | None = None,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -2214,6 +2274,7 @@ def run_uploader(
         if verify_only:
             state, platform_url = verify_management_publication_by_id(
                 page, evidence_root, platform_post_id, expected_title=expected_title,
+                **({"identity_receipt": Path(identity_receipt)} if identity_receipt else {}),
             )
             try:
                 context.storage_state(path=str(state_file))
@@ -3343,6 +3404,7 @@ def main():
     parser.add_argument("--verify-only", action="store_true",
                         help="仅按已绑定的视频号原生 post_id 回查状态，绝不上传或发布")
     parser.add_argument("--platform-post-id", help="视频号后台的已绑定原生作品 ID；回查时必填")
+    parser.add_argument("--identity-receipt", help="原同会话 submission_receipt.json；仅从其中读取已绑定 nonce")
     parser.add_argument("--expected-title", help="只读回查时缩小旧作品列表；最终仍须原生 ID 精确匹配")
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--draft",       action="store_true")
@@ -3383,6 +3445,7 @@ def main():
             require_original_declaration = args.require_original_declaration,
             verify_only = args.verify_only,
             platform_post_id = args.platform_post_id,
+            identity_receipt = args.identity_receipt,
             expected_title = args.expected_title,
         )
     except Exception as exc:
