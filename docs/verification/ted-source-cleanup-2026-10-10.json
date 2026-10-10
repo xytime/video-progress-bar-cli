@@ -1262,7 +1262,202 @@
       "seconds": 2.509,
       "receipt_sha256": "41dd77443884452bd45cf38b1130704d80902c6ef09a835bdb7420ff68a6715e"
     },
-    "production_originals_sha256_rechecked": 32
+    "production_originals_sha256_rechecked": 32,
+    "integrated_main_regression": {
+      "code_commit": "dc0b74f7f7b6c0b067833f1a48ffb031b725b16c",
+      "preserved_parallel_commit": "b32f1a9ab6651f575e69991f9ecc3d60d9c9ce3a",
+      "tests": 51,
+      "passed": true,
+      "seconds": 40.547,
+      "receipt_sha256": "b22d1fc595f3b0b44ad5b327232b59ce365b0f45b1377d5f555c05c7880233e3",
+      "source_manifest_sha256": "c3035a954cbdc8f7972517c429b3f3df355a55e0589d59275c3314318e1d4368"
+    },
+    "latest_integrated_main_regression": {
+      "code_commit": "661794b9e44f260fc52130e88ae43069db90c93e",
+      "preserved_parallel_commits": [
+        "b32f1a9ab6651f575e69991f9ecc3d60d9c9ce3a",
+        "ee11a6876bcf5ae2aad66ecf5517915f35b7af83"
+      ],
+      "tests": 57,
+      "passed": true,
+      "seconds": 35.484,
+      "receipt_sha256": "2d47d60c5eade8da77800a075c8828c21fdefc5618a00951df6de29e8b2283a3",
+      "source_manifest_sha256": "eaab152e0ba347372313447f03d2e5fc3fac95fff0a12254447b028a9b33a946"
+    },
+    "latest_entry_and_dispatch_regression": {
+      "code_commit": "cee8a3df22840768c7f4e403425dbcb74c967037",
+      "preserved_parallel_commits": [
+        "b32f1a9ab6651f575e69991f9ecc3d60d9c9ce3a",
+        "ee11a6876bcf5ae2aad66ecf5517915f35b7af83",
+        "0f46978f6abaf945a2e4fac5e9014a715f67e432",
+        "c7895644c5aacbc29545c8d6e7f86308d97ed551",
+        "8baf95dbd62d4ac8e3bcedacdd8ff7e25efcd751"
+      ],
+      "tests": 123,
+      "passed": true,
+      "seconds": 12.305,
+      "receipt_sha256": "74536598dff6c1596d0b0d5d7be20e6a8cc5ca0096586a31e8a159fe3acab924",
+      "source_manifest_sha256": "000c203939b9af8a1170f8a3f9556ec6e2cff02effe0ead46b5e578140ed9d4e"
+    },
+    "previous_entry_and_dispatch_regression": {
+      "code_commit": "92ecd0acf147bb0f3850088333ecf6ca243a7fb1",
+      "preserved_parallel_commit": "0f46978f6abaf945a2e4fac5e9014a715f67e432",
+      "tests": 126,
+      "passed": true,
+      "seconds": 12.452,
+      "receipt_sha256": "3600adefd1f2affb00e04c8fe6bf7551c534d84749e7de9c51bb6c6255a00bb6",
+      "source_manifest_sha256": "7d3351b6052b5bda00ef464a0be6c681e8f81ed1ed2710f3f06e7b9836e49d8c"
+    },
+    "deployment_entry_regression": {
+      "code_commit": "fc2971077dacb86e1e12e00b2f192205f33ae0c9",
+      "preserved_parallel_commit": "0b745ac207d44e305ec5e10d8b91922f45e5b49e",
+      "tests": 104,
+      "passed": true,
+      "seconds": 11.976,
+      "receipt_sha256": "d84be03d9d6838f5873b04cb94923ea8cf8b809bb54b390746a5d89e94888a24",
+      "source_manifest_sha256": "570c34bbcef555b5a0e0956459807d09f549c7c1afbbd23a9b5a945675753f0c"
+    },
+    "production_adoption": {
+      "deployed": true,
+      "maintenance_reservation_seconds": 0.075,
+      "idle_active": 0,
+      "idle_manager_pids": [],
+      "prior_head": "0b745ac207d44e305ec5e10d8b91922f45e5b49e",
+      "prior_dashboard_pid": 65646,
+      "prior_ready_worker_pid": 10853,
+      "no_inflight_processing_rendering_or_submission": true,
+      "untouched_deferred_ready_row": null,
+      "main_commit": "fc2971077dacb86e1e12e00b2f192205f33ae0c9",
+      "verified_at": "2026-10-10T06:32:09.444759+00:00",
+      "source_preparation": {
+        "ted_source_cleanup_enabled": true,
+        "ted_opening_trim_enabled": true,
+        "recipe": "ted-source-cleanup-v1"
+      },
+      "dashboard_pid": 20065,
+      "post_restart_active": 0,
+      "unrelated_changes_preserved": true,
+      "ready_worker": {
+        "pid": 20130,
+        "git_revision": "fc2971077dacb86e1e12e00b2f192205f33ae0c9",
+        "ted_source_cleanup_enabled": true,
+        "ted_opening_trim_enabled": true,
+        "ted_source_cleanup_recipe": "ted-source-cleanup-v1",
+        "heartbeat_at": 1791613928.624386
+      },
+      "code_sha256": "82c2c9e7e7ff937ad76080484e8f881acfa3f3dd685b08821ea53321ffdf61cd",
+      "production_entry_evidence": "/private/tmp/ted-cleanup-production-entry-2026-10-10/evidence.json",
+      "production_entry_verified": true
+    },
+    "production_entry": {
+      "verified_at": "2026-10-10T06:33:01.982901+00:00",
+      "actual_loaded_flag": true,
+      "recipe": "ted-source-cleanup-v1",
+      "production_module_sha256": "82c2c9e7e7ff937ad76080484e8f881acfa3f3dd685b08821ea53321ffdf61cd",
+      "cases": [
+        {
+          "id": "NRkHdspgnI8",
+          "actual_entry": "PipelineManager._prepare_speech_opening / tracked production subprocess",
+          "selected_original": false,
+          "protected_production_artifacts_sha256": {
+            "output/original_video/NRkHdspgnI8.mp4": "822c1edb2550a88e64ecec78414a429e8ebf6a4f77233f13559db3f5639436be",
+            "output/NRkHdspgnI8_vertical.mp4": "72988722ec9c4466bd0e8e950123bb56367e3bc6153f4f7ec311034e1aad675f",
+            "output/NRkHdspgnI8.ass": "486cd89569e4f4398ad62a4649205ed732367805abdb4a157cb68e10c4107d9b"
+          },
+          "source_and_historical_outputs_unchanged": true,
+          "receipt": {
+            "recipe": "ted-source-cleanup-v1",
+            "offset_seconds": 21.04,
+            "end_seconds": 915.2,
+            "source_sha256": "822c1edb2550a88e64ecec78414a429e8ebf6a4f77233f13559db3f5639436be",
+            "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+            "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+            "source_duration": 922.969977,
+            "source_bytes": 70891014,
+            "references": [
+              {
+                "edge": "prefix",
+                "reference_id": "TEDxNorthernQuarter-brand-sponsor-opening"
+              },
+              {
+                "edge": "suffix",
+                "reference_id": "TEDxNorthernQuarter-sponsor-account-ending"
+              }
+            ],
+            "reason": "VERIFIED_AV_PACKAGING",
+            "analysis_seconds": 1.948,
+            "output_sha256": "ae3509c0b3516cce7626efdf82159f57a3d5a8a7ed2d3849269d96ae5d04c4cf",
+            "output_bytes": 104483196,
+            "encode_and_decode_seconds": 46.073,
+            "removed_seconds": 28.809977
+          },
+          "elapsed_seconds": 48.354
+        },
+        {
+          "id": "yRZadwCn0jY",
+          "actual_entry": "PipelineManager._prepare_speech_opening / tracked production subprocess",
+          "selected_original": true,
+          "protected_production_artifacts_sha256": {
+            "output/original_video/yRZadwCn0jY.mp4": "a6f800afc2328011ef118121d953021dcea9d49ee6e840d08f02be650e560465",
+            "output/yRZadwCn0jY_vertical.mp4": "c990a624b489d4c4c81d29b2693a50269ec0962be0a3f7cb3cd80920567bc90d",
+            "output/yRZadwCn0jY.ass": "e983ab5cdfde3bcdeb68f11b6b78aa24597e571e028bf258150c6ed79674c6f4"
+          },
+          "source_and_historical_outputs_unchanged": true,
+          "receipt": {
+            "recipe": "ted-source-cleanup-v1",
+            "offset_seconds": 0.0,
+            "end_seconds": 388.8878,
+            "source_sha256": "a6f800afc2328011ef118121d953021dcea9d49ee6e840d08f02be650e560465",
+            "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+            "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+            "source_duration": 388.8878,
+            "source_bytes": 39364660,
+            "references": [],
+            "reason": "UNVERIFIED_AV_PACKAGING",
+            "analysis_seconds": 3.164
+          },
+          "elapsed_seconds": 3.504
+        }
+      ],
+      "synthetic_failure_fixture": {
+        "kind": "truncated_media",
+        "returned_original": true,
+        "receipt": {
+          "recipe": "ted-source-cleanup-v1",
+          "offset_seconds": 0.0,
+          "end_seconds": null,
+          "source_sha256": "1670e94e6bb9e590efadfee590d5485abf86e004f888a14cae275f4f5b1afbf9",
+          "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+          "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+          "reason": "UNAVAILABLE_CalledProcessError",
+          "failure_code": "CalledProcessError"
+        }
+      },
+      "production_database_written": false,
+      "full_pipeline_or_publication_triggered": false
+    },
+    "production_adoption_sha256": "e8494abec42091384c8c87a8f22f83b317a8c4ce1b2c31292d2458ad57db2b3f",
+    "production_entry_sha256": "2629b7a7080c3b78887f0cde45ed35871c445424fe79abe1494ba9dcd6c07b85",
+    "production_evidence_preserved_at": "output/verification/ted-source-cleanup-2026-10-10/",
+    "final_runtime_readback": {
+      "checked_at": "2026-10-10T06:35:27.685061+00:00",
+      "active": 0,
+      "dashboard_pid": 20065,
+      "source_preparation": {
+        "ted_source_cleanup_enabled": true,
+        "ted_opening_trim_enabled": true,
+        "recipe": "ted-source-cleanup-v1"
+      },
+      "ready_worker": {
+        "pid": 20130,
+        "stage": "IDLE",
+        "git_revision": "fc2971077dacb86e1e12e00b2f192205f33ae0c9",
+        "ted_source_cleanup_enabled": true,
+        "ted_source_cleanup_recipe": "ted-source-cleanup-v1",
+        "heartbeat_at": 1791614126.4326851
+      },
+      "pipeline_lock_held": false
+    }
   },
   "limitations": [
     "7条命中中6条是沿用模板参考，Daniel 是新增首尾参考，不能报告泛化准确率",
