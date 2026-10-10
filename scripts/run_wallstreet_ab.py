@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-10-10 | Codex | 跨会话回读传入原提交回执 nonce，禁止历史无 nonce 作品弱绑定。 |
 | 1.1.0 | 2026-10-10 | Codex | 具名补队、普通 A 强回读衔接和抖音原生 ID 字段修复。 |
 | 1.0.0 | 2026-10-09 | Codex | 程序化固化 mobile-2 与可恢复配对试验，复用既有平台闸门 |
 | 1.0.1 | 2026-10-09 | Codex | 外部字幕策划等待明确授权，本地脚本与普通 A 持续运行 |
@@ -12,6 +13,7 @@ import argparse
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import shutil
@@ -145,6 +147,8 @@ def command(publication,package,evidence,*,verify=False,ticket=None):
         args+=['--verify-only']
         if publication.get('platform_post_id'):
             args+=['--platform-post-id',publication['platform_post_id']]
+        if platform=='wechat' and publication.get('identity_receipt'):
+            args+=['--identity-receipt',publication['identity_receipt']]
         # B 的封面短标题可能不进入视频号列表索引；已有原生 ID 时直接精确回查。
     else:
         args+=['--video',package['video'],'--cover',package['cover']]
@@ -174,7 +178,7 @@ def apply_readback(db,publication,evidence,code):
     if (publication.get('platform_post_id') and native
             and native != publication['platform_post_id']):
         raise ValueError('回读作品 ID 不匹配，禁止覆盖')
-    strong = value.get('matched_by') in {'EXACT_OBJECT_ID','EXACT_EXPORT_ID'} if platform=='wechat' else value.get('identity_source')=='API_EXACT_DESCRIPTION'
+    strong = value.get('matched_by') in {'EXACT_OBJECT_ID','EXACT_EXPORT_ID','EXACT_SUBMISSION_NONCE'} if platform=='wechat' else value.get('identity_source')=='API_EXACT_DESCRIPTION'
     state = value.get('state')
     if state=='PUBLISHED' and strong and native:
         outcome = 'PUBLISHED'
@@ -184,7 +188,14 @@ def apply_readback(db,publication,evidence,code):
         outcome = 'UNDER_REVIEW'
     else:
         outcome = 'UNCERTAIN'
+    platform_time = value.get('platform_public_at')
+    calibrated = (platform == 'wechat' and outcome == 'PUBLISHED'
+        and value.get('public_time_evidence') == 'DOM_POSTED_INFO_AND_NATIVE_CREATE_TIME'
+        and isinstance(platform_time,(int,float)) and not isinstance(platform_time,bool)
+        and math.isfinite(platform_time) and 0 < platform_time <= time.time())
     db.observe_wallstreet_publication(publication['id'],state=outcome,platform_post_id=native,
+        public_at=platform_time if calibrated else None,
+        time_basis='platform' if calibrated else 'first_observed_public',
         evidence_path=str(path if path.is_file() else receipt if receipt.is_file() else evidence/'uploader.log'),
         attempt_token=publication.get('attempt_token'),error=None if outcome=='PUBLISHED' else f'回读状态 {state}; uploader={code}')
     if outcome == 'PUBLISHED' and publication['variant'] == 'A':
@@ -218,6 +229,10 @@ def reconcile(db):
                 continue
             if publication['platform']=='wechat' and not publication['platform_post_id']:
                 continue
+            if publication['platform']=='wechat' and legacy.get('evidence_path'):
+                receipt = Path(legacy['evidence_path']).parent/'submission_receipt.json'
+                if receipt.is_file():
+                    publication['identity_receipt'] = str(receipt)
         elif publication['state'] in {'SUBMITTING','UNCERTAIN','UNDER_REVIEW'}:
             if not publication['package_json']:
                 continue
@@ -227,6 +242,10 @@ def reconcile(db):
                 continue
         else:
             continue
+        if publication['variant']=='B' and publication['platform']=='wechat':
+            receipt = Path(package['video']).parent/'submissions'/f"wechat-{publication['id']}"/'submission_receipt.json'
+            if receipt.is_file():
+                publication['identity_receipt'] = str(receipt)
         evidence = settings.default_output_dir/'wallstreet_ab'/str(publication['pair_id'])/'readback'/f"{publication['id']}-{int(now)}"
         try:
             with TaskLease(settings.default_output_dir/f"{publication['platform']}_publish_priority.lock",stage='A/B只读回查'):

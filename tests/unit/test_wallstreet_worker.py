@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-10 | Codex | 普通 A 强回读、原生时间与错误身份拒绝的验收。 |
 | 1.0.0 | 2026-10-09 | Codex | 验证内容命中时不领取上传意图或签发浏览器票据 |
 | 1.0.1 | 2026-10-09 | Codex | 验证待授权字幕策划不调用服务且不改变 A 的发布状态 |
 """
@@ -35,7 +36,8 @@ def test_strong_a_readback_updates_ordinary_ledger_without_upload(tmp_path,monke
         assert args[args.index('--platform-post-id')+1]=='native-A'
         evidence.mkdir(parents=True)
         (evidence/'management_readback.json').write_text(json.dumps({
-            'platform_post_id':'native-A','state':'PUBLISHED','matched_by':'EXACT_OBJECT_ID'}))
+            'platform_post_id':'native-A','state':'PUBLISHED','matched_by':'EXACT_OBJECT_ID',
+            'platform_public_at':100,'public_time_evidence':'DOM_POSTED_INFO_AND_NATIVE_CREATE_TIME'}))
         return 0
     monkeypatch.setattr(module,'run_command',read_only)
     module.reconcile(db)
@@ -43,6 +45,8 @@ def test_strong_a_readback_updates_ordinary_ledger_without_upload(tmp_path,monke
     assert db.get_wechat_publication('abcdefghijk')['state']=='PUBLISHED'
     assert db.get_video_by_youtube_id('abcdefghijk')['status']=='PUBLISHED'
     assert all(p['attempt_count']==0 for p in db.get_wallstreet_publications())
+    a=next(p for p in db.get_wallstreet_publications() if p['variant']=='A')
+    assert a['public_at']==100 and a['public_time_basis']=='platform'
     module.reconcile(db)
     assert len(calls)==1
 

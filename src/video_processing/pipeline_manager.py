@@ -1222,6 +1222,10 @@ class PipelineManager:
                 "--verify-only",
                 "--platform-post-id", platform_post_id,
             ]
+            if publication.get("evidence_path"):
+                receipt = Path(publication["evidence_path"]).parent / "submission_receipt.json"
+                if receipt.is_file():
+                    verify_cmd.extend(["--identity-receipt", str(receipt)])
             if not settings.wechat_headless:
                 verify_cmd.append("--no-headless")
             try:

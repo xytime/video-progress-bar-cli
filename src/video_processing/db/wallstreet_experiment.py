@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-10-10 | Codex | 人工确认的普通 A 身份恢复保留独立审计记录，不重新提交。 |
 | 1.1.0 | 2026-10-10 | Codex | 封面就绪原子入队、具名漏单恢复及普通 A 强回读衔接。 |
 | 1.0.1 | 2026-10-09 | Codex | 修复后可立即重试加工，禁止重置正在执行或已完成任务 |
 | 1.0.0 | 2026-10-09 | Codex | 独立二创身份、租约、不可重传提交边界及作品级指标 |
@@ -42,6 +43,11 @@ class WallstreetExperimentDAL:
     @staticmethod
     def _init_wallstreet_experiment(conn):
         statements = [
+            """CREATE TABLE IF NOT EXISTS wallstreet_identity_recoveries (
+                publication_id INTEGER NOT NULL, previous_id TEXT NOT NULL, recovered_id TEXT NOT NULL,
+                evidence_path TEXT NOT NULL, operator_confirmation TEXT NOT NULL, verified_at REAL NOT NULL,
+                PRIMARY KEY(publication_id,previous_id,recovered_id),
+                FOREIGN KEY(publication_id) REFERENCES wallstreet_version_publications(id) ON DELETE RESTRICT)""",
             """CREATE TABLE IF NOT EXISTS wallstreet_experiment (
                 name TEXT PRIMARY KEY, state TEXT NOT NULL CHECK(state IN ('ACTIVE','PAUSED')),
                 activated_at REAL NOT NULL, delay_hours REAL NOT NULL, review_pairs INTEGER NOT NULL,
@@ -164,6 +170,30 @@ class WallstreetExperimentDAL:
                 conn.execute("""INSERT INTO wallstreet_version_publications
                     (pair_id,variant,platform,account) VALUES (?,?,?,?)""", (pair_id, variant, platform, account))
         return dict(conn.execute("SELECT * FROM wallstreet_pairs WHERE id=?", (pair_id,)).fetchone())
+
+    def recover_wallstreet_normal_a_identity(self, publication_id, *, previous_id, recovered_id,
+                                           evidence_path, operator_confirmation):
+        """仅供已人工核对完整原生预览的具名恢复；CAS 两本账，仍须独立公开回读。"""
+        if not all(isinstance(x, str) and x.strip() for x in
+                   (previous_id, recovered_id, evidence_path, operator_confirmation)) or previous_id == recovered_id:
+            raise ValueError('恢复必须具备不同的新旧身份及人工确认证据')
+        with self.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute("""SELECT pub.*,p.video_id FROM wallstreet_version_publications pub
+                JOIN wallstreet_pairs p ON p.id=pub.pair_id WHERE pub.id=?
+                AND pub.variant='A' AND pub.platform='wechat' AND p.mode='PAIRED'""", (publication_id,)).fetchone()
+            if not row or row['state'] not in ('UNCERTAIN','UNDER_REVIEW') or row['platform_post_id'] != previous_id:
+                raise ValueError('普通 A 原身份或恢复状态不匹配')
+            changed = conn.execute("""UPDATE wechat_publications SET platform_post_id=?,updated_at=CURRENT_TIMESTAMP
+                WHERE video_id=? AND platform_post_id=? AND state IN ('SUBMITTED_BOUND','UNDER_REVIEW')""",
+                (recovered_id,row['video_id'],previous_id)).rowcount
+            if changed != 1:
+                raise ValueError('普通提交账本原身份不匹配')
+            conn.execute("""INSERT INTO wallstreet_identity_recoveries VALUES (?,?,?,?,?,?)""",
+                (publication_id,previous_id,recovered_id,evidence_path,operator_confirmation,time.time()))
+            conn.execute("""UPDATE wallstreet_version_publications SET platform_post_id=?,
+                next_readback_at=0,evidence_path=? WHERE id=?""", (recovered_id,evidence_path,publication_id))
+            return True
 
     def sync_wallstreet_normal_a(self, publication_id):
         """仅将强回读确认的同一 A ID 同步到普通账本，解开普通抖音的前置条件。"""
