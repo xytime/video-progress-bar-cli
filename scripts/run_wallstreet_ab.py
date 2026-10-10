@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.3 | 2026-10-10 | Codex | 抖音普通 A 已受理但尚无 ID 时只读精确正文取 ID，绝不回查未提交队列。 |
 | 1.1.2 | 2026-10-10 | Codex | 明确的上传前登录退出保存尝试证据并冷却重试；未知接受结果不恢复。 |
 | 1.1.1 | 2026-10-10 | Codex | 跨会话回读传入原提交回执 nonce，禁止历史无 nonce 作品弱绑定。 |
 | 1.1.0 | 2026-10-10 | Codex | 具名补队、普通 A 强回读衔接和抖音原生 ID 字段修复。 |
@@ -233,10 +234,11 @@ def reconcile(db):
             prefix = publication['youtube_id']+(f"_s{publication['slice_index']}" if publication['slice_index'] else '')
             package = {'copy':str(out/f'{prefix}_copy.txt'),'title':str(out/f'{prefix}_title.txt')}
             publication['platform_post_id'] = legacy.get(
-                'platform_post_id' if publication['platform']=='wechat' else 'external_post_id')
+                'platform_post_id' if publication['platform']=='wechat' else 'external_post_id') or publication.get('platform_post_id')
             if publication['platform']=='douyin' and not publication['platform_post_id']:
-                # 尚未领取普通 A 的上传任务，不能用二创回查制造 A 的身份。
-                continue
+                # 抖音受理不返回原生 ID；仅已提交 A 可按既有完整正文契约只读取 ID。
+                if legacy['state'] not in {'UNDER_REVIEW','PUBLISHED'} or legacy['attempt_count'] < 1:
+                    continue
             if publication['platform']=='wechat' and not publication['platform_post_id']:
                 continue
             if publication['platform']=='wechat' and legacy.get('evidence_path'):

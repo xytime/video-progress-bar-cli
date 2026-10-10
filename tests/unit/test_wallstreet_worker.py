@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.2 | 2026-10-10 | Codex | 已提交无 ID 的抖音 A 强回读闭环，未提交队列禁止绑定。 |
 | 1.1.1 | 2026-10-10 | Codex | 登录退出可恢复且冷却；未知退出与已有回执不恢复。 |
 | 1.1.0 | 2026-10-10 | Codex | 普通 A 强回读、原生时间与错误身份拒绝的验收。 |
 | 1.0.0 | 2026-10-09 | Codex | 验证内容命中时不领取上传意图或签发浏览器票据 |
@@ -116,6 +117,36 @@ def test_douyin_a_readback_uses_existing_external_post_id(tmp_path,monkeypatch):
     module.reconcile(db)
     assert len(calls)==1
     assert next(p for p in db.get_wallstreet_publications() if p['variant']=='A')['platform_post_id']=='douyin-A'
+
+
+@pytest.mark.parametrize('submitted',[True,False])
+def test_douyin_a_without_id_only_reads_after_submission(tmp_path,monkeypatch,submitted):
+    spec=importlib.util.spec_from_file_location('wallstreet_douyin_initial_id',Path('scripts/run_wallstreet_ab.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    db=PipelineDB(str(tmp_path/'db.sqlite'))
+    db.set_wallstreet_experiment(active=True)
+    db.add_video('abcdefghijk','A',CHANNEL_ID,score=80)
+    db.enroll_wallstreet_video('abcdefghijk',mark_ready=True,accounts={'douyin':'default'})
+    ordinary=db.create_douyin_publication('abcdefghijk','a'*64,str(tmp_path/'A.mp4'),source_kind='NEW')
+    if submitted:
+        assert db.claim_douyin_publication(ordinary['id'],daily_limit=100)
+        db.update_douyin_publication_state(ordinary['id'],'UNDER_REVIEW')
+    monkeypatch.setattr(type(settings),'default_output_dir',property(lambda _:tmp_path))
+    calls=[]
+    def verify(args,evidence):
+        calls.append(args)
+        assert '--verify-only' in args and '--video' not in args and '--platform-post-id' not in args
+        evidence.mkdir(parents=True)
+        (evidence/'douyin_management_readback.json').write_text(json.dumps({
+            'state':'PUBLISHED','identity_source':'API_EXACT_DESCRIPTION','platform_post_id':'douyin-A'}))
+        return 0
+    monkeypatch.setattr(module,'run_command',verify)
+    module.reconcile(db)
+    assert len(calls)==int(submitted)
+    normal=db.get_douyin_publication('abcdefghijk',0)
+    assert normal['attempt_count']==int(submitted)
+    assert normal['state']==('PUBLISHED' if submitted else 'QUEUED')
+    assert normal['external_post_id']==('douyin-A' if submitted else None)
 
 
 def test_content_hit_cannot_enter_browser_submission(tmp_path,monkeypatch):

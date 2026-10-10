@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.3 | 2026-10-10 | Codex | 抖音 A 强回读同步普通账本，未提交及冲突原生 ID 禁止绑定。 |
 | 1.1.2 | 2026-10-10 | Codex | 仅恢复微信上传前明确登录退出的同一尝试，保留次数和证据并延迟重试。 |
 | 1.1.1 | 2026-10-10 | Codex | 人工身份恢复审计，以及首次观察时间经平台证据校准；不重新提交。 |
 | 1.1.0 | 2026-10-10 | Codex | 封面就绪原子入队、具名漏单恢复及普通 A 强回读衔接。 |
@@ -202,10 +203,16 @@ class WallstreetExperimentDAL:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("""SELECT * FROM wallstreet_version_publications pub
                 JOIN wallstreet_pairs p ON p.id=pub.pair_id WHERE pub.id=?
-                AND pub.variant='A' AND pub.platform='wechat' AND pub.state='PUBLISHED'""",
+                AND pub.variant='A' AND pub.state='PUBLISHED'""",
                 (publication_id,)).fetchone()
             if not row or not row['platform_post_id'] or not row['evidence_path']:
                 return False
+            if row['platform']=='douyin':
+                return conn.execute("""UPDATE douyin_publications SET state='PUBLISHED',external_post_id=?,
+                    published_at=COALESCE(published_at,CURRENT_TIMESTAMP),last_error_message=NULL,updated_at=CURRENT_TIMESTAMP
+                    WHERE video_id=? AND attempt_count>0 AND state IN ('UNDER_REVIEW','PUBLISHED')
+                    AND (external_post_id IS NULL OR external_post_id=?)""",
+                    (row['platform_post_id'],row['video_id'],row['platform_post_id'])).rowcount == 1
             changed = conn.execute("""UPDATE wechat_publications SET state='PUBLISHED',
                 evidence_path=?,confirmed_at=COALESCE(confirmed_at,CURRENT_TIMESTAMP),
                 last_reconciled_at=CURRENT_TIMESTAMP,last_error_message=NULL,updated_at=CURRENT_TIMESTAMP
