@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-10 | Antigravity | 自动确认‘选择商品出现时机’弹窗，确保遮罩完全关闭且发表按钮无阻碍。 |
 | 1.0.0 | 2026-10-10 | Antigravity | 初始实现：适配当前视频号微前端结构，支持完整商品查找、单选确认、表单回读与解绑。 |
 """
 
@@ -191,14 +192,28 @@ class PlaywrightProductPicker:
         if not add_clicked:
             raise RuntimeError("弹窗内未找到'添加'按钮")
 
-        # 轮询等待弹窗关闭且表单绑定卡片呈现
+        # 轮询等待弹窗关闭且表单绑定卡片呈现；若出现“选择商品出现时机”弹窗，自动点击“确认”
         bound_name = None
         poll_count = max(1, int(min(10000, timeout_ms) / 500))
         for _ in range(poll_count):
             self.page.wait_for_timeout(500)
             status = ctx.evaluate("""() => {
+                // 1. 若出现“选择商品出现时机”弹窗，点击其“确认”按钮
+                const timingDialog = Array.from(document.querySelectorAll('.weui-desktop-dialog, .ant-modal, [class*="dialog"]')).find(
+                    d => d.offsetParent !== null && d.innerText.includes('选择商品出现时机')
+                );
+                if (timingDialog) {
+                    const confirmBtn = Array.from(timingDialog.querySelectorAll('button, .weui-desktop-btn')).find(
+                        b => b.innerText && b.innerText.includes('确认')
+                    );
+                    if (confirmBtn) {
+                        confirmBtn.click();
+                    }
+                }
+
+                // 2. 检查所有商品相关弹窗是否已完全关闭
                 const dialog = Array.from(document.querySelectorAll('.weui-desktop-dialog, .ant-modal, [class*="dialog"]')).find(
-                    d => d.offsetParent !== null && d.innerText.includes('从橱窗添加商品')
+                    d => d.offsetParent !== null && (d.innerText.includes('从橱窗添加商品') || d.innerText.includes('选择商品出现时机'))
                 );
                 const nameEl = document.querySelector('.post-component-choose-wrap .choose-content .name');
                 return {
@@ -241,7 +256,7 @@ class PlaywrightProductPicker:
         # 3. 验证无残留弹窗且无商品名称
         is_cleared = ctx.evaluate("""() => {
             const dialog = Array.from(document.querySelectorAll('.weui-desktop-dialog, .ant-modal, [class*="dialog"]')).find(
-                d => d.offsetParent !== null && d.innerText.includes('从橱窗添加商品')
+                d => d.offsetParent !== null && (d.innerText.includes('从橱窗添加商品') || d.innerText.includes('选择商品出现时机'))
             );
             const boundName = document.querySelector('.post-component-choose-wrap .choose-content .name');
             return !dialog && !boundName;
@@ -254,7 +269,7 @@ class PlaywrightProductPicker:
 
         ready = bool(ctx.evaluate("""() => {
             const dialog = Array.from(document.querySelectorAll('.weui-desktop-dialog, .ant-modal, [class*="dialog"]')).find(
-                d => d.offsetParent !== null && d.innerText.includes('从橱窗添加商品')
+                d => d.offsetParent !== null && (d.innerText.includes('从橱窗添加商品') || d.innerText.includes('选择商品出现时机'))
             );
             if (dialog) return false;
 
