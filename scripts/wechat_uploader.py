@@ -503,7 +503,7 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
                         public_visibility: node.__vue__.VisibleType?.public !== undefined &&
                             post.visibleType === node.__vue__.VisibleType.public,
                     },
-                    object_nonce: String(post.objectNonce || ''),
+                    object_nonce: typeof post.objectNonce === 'string' ? post.objectNonce : '',
                     posted_time_text: node.querySelector('.posted-info')?.innerText || '',
                     native_create_time: post.createTime,
                     native_time_parts: (() => {const d = new Date(Number(post.createTime)*1000);

@@ -24,6 +24,8 @@ def test_native_component_binds_own_status_without_description_spoof(chromium):
         assert cards['native-id']['status_text'] == '审核中'
         assert cards['native-id']['platform_export_id'] == 'export-id'
         assert cards['native-id']['platform_object_nonce'] == '12345678901234567890'
+        page.locator('.post-feed-item').first.evaluate('node => node.__vue__.$props.post.objectNonce=12345678901234567890')
+        assert 'platform_object_nonce' not in _collect_management_cards(page)['native-id']
     finally:
         page.close()
 
