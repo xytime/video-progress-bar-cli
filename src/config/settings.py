@@ -17,6 +17,7 @@
 | 3.72.0 | 2026-10-01 | Codex | AGY 失败后可选 Codex Luna CLI 生图及独立复核，保留本地兜底。 |
 | 3.70.0 | 2026-09-25 | Codex | TED/TEDx 自动评分托底增加入库 ID 边界，默认关闭以保护历史待处理视频。 |
 | 3.69.0 | 2026-09-23 | Codex | 已就绪成片全天可提交，旧发布窗口配置不再阻断入口。 |
+| 3.69.0 | 2026-10-10 | Antigravity | 新增 enable_wechat_product_link 与 wechat_product_timeout_seconds 配置，支持视频号发布时自动挂载图书商品。 |
 | 3.68.0 | 2026-09-22 | Codex | 独立 AGY 文案配置及 App 子进程最小环境，不传入 API/机器人凭据。 |
 | 3.67.0 | 2026-09-20 | Antigravity | 新增 waitlist_ttl_days (待筛选低分素材TTL淘汰保留天数) 与 queue_stale_days (待处理超期排队时效天数) 配置 |
 | 3.66.0 | 2026-09-20 | Antigravity | 新增 pipeline_window_log_keep_days 与 pipeline_window_log_suppression_window_sec 配置，用于巡航日志降频与保留天数治理 |
@@ -231,6 +232,10 @@ class Settings(BaseSettings):
     # 视频号评论区首评引导开关。默认关闭；关闭时不得派发评论任务。
     # 共享代码/DB 变更仍须隔离回归，实际平台验收及启用需要另行授权。
     enable_wechat_comment_interaction: bool = False
+
+    # 视频号发布时自动挂载图书商品开关与超时预算。默认关闭确保生产零风险。
+    enable_wechat_product_link: bool = False
+    wechat_product_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
 
 
     # Google Gemini API Key

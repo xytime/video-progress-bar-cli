@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-10 | Antigravity | 从真实账号清单核实并固化三本书的商品 ID 与完整名称，提供统一 get_verified_product_catalog。 |
 | 1.0.0 | 2026-10-10 | Codex | 财经/新闻/默认选品，按商品 ID 与完整名称核对，指定商品缺失时回退默认。 |
 """
 
@@ -90,3 +91,28 @@ class ProductCatalog:
 
     def configuration_fallback(self, decision: ProductDecision) -> bool:
         return decision.role not in self.products
+
+
+# 真实账号已核实图书商品清单（经 2026-10-10 实机页面实测与 DOM 校验）
+VERIFIED_FINANCE_PRODUCT = ProductIdentity(
+    product_id="10000028955239",
+    title="股市趋势技术分析10版爱德华兹原书第10版金融投资策略股票入门基础知识指标价值投资书籍书新华文轩旗舰店正",
+)
+VERIFIED_NEWS_PRODUCT = ProductIdentity(
+    product_id="10000129752415",
+    title="维特根斯坦说逻辑与语言 (英)维特根斯坦著",
+)
+VERIFIED_DEFAULT_PRODUCT = ProductIdentity(
+    product_id="10001054866768",
+    title="思考快与慢 丹尼尔卡尼曼 噪声作者行为经济学诺贝尔经济学奖 快思考慢思考 社会科学经济学心理学",
+)
+
+
+def get_verified_product_catalog() -> ProductCatalog:
+    """返回基于账号实测真实上架商品的不可变目录。"""
+    return ProductCatalog({
+        ProductRole.FINANCE: VERIFIED_FINANCE_PRODUCT,
+        ProductRole.NEWS: VERIFIED_NEWS_PRODUCT,
+        ProductRole.DEFAULT: VERIFIED_DEFAULT_PRODUCT,
+    })
+

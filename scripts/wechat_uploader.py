@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.19.0 | 2026-10-10 | Antigravity | 接入有界图书商品挂载（财经/新闻/默认），仅当 binding_confirmed=True 时允许发表。 |
 | 5.18.0 | 2026-10-10 | Codex | 同会话回执保留 nonce；跨会话精确关联及公开日期与原生时间一致性校验。 |
 | 5.17.11 | 2026-10-03 | Codex | 原生组件 ID 绑定独立状态标签；唯一 exportId 直接关联才允许回查，兼容新版单项结构化短标题并保留脱敏身份证据。 |
 | 5.17.10 | 2026-10-03 | Codex | 禁用浏览器 2D Canvas 硬件加速，使封面裁剪和严格像素回读使用一致渲染路径。 |
@@ -137,6 +138,15 @@ from video_processing.core.wechat_upload_recovery import (
     PRE_SUBMIT_UPLOAD_TIMEOUT, write_timeout_receipt,
 )
 from video_processing.core.wechat_browser_context import create_wechat_context
+from video_processing.core.wechat_product_policy import (
+    choose_product_role,
+    get_verified_product_catalog,
+)
+from video_processing.utils.wechat_product_picker import PlaywrightProductPicker
+from video_processing.utils.wechat_product_selection import (
+    ProductSelectionResult,
+    select_required_product,
+)
 
 try:
     import requests as _requests
@@ -269,6 +279,40 @@ def _write_original_declaration_receipt(
         temporary_path.replace(receipt_path)
     except OSError as exc:
         logger.warning("Failed to persist original declaration receipt: %s", type(exc).__name__)
+
+
+def _write_product_selection_receipt(
+    evidence_root: Path,
+    *,
+    required: bool,
+    result: ProductSelectionResult | None = None,
+    error: str | None = None,
+) -> None:
+    """原子记录本次商品挂载界面结果；仅代表表单绑定事实，不代表平台受理或购买入口。"""
+    payload = {
+        "required": required,
+        "binding_confirmed": bool(result.binding_confirmed) if result else False,
+        "state": result.state if result else "BLOCKED",
+        "reason": result.reason if result else (error or "UNKNOWN"),
+        "rule_version": result.decision.rule_version if result else None,
+        "role": result.decision.role.value if result else None,
+        "decision_reason": result.decision.reason if result else None,
+        "requested_product_id": result.requested.product_id if result else None,
+        "requested_title": result.requested.title if result else None,
+        "actual_product_id": result.actual.product_id if (result and result.actual) else None,
+        "actual_title": result.actual.title if (result and result.actual) else None,
+        "fallback_reason": result.fallback_reason if result else None,
+        "attempts": result.attempts if result else 0,
+        "elapsed_seconds": result.elapsed_seconds if result else 0.0,
+    }
+    try:
+        evidence_root.mkdir(parents=True, exist_ok=True)
+        receipt_path = evidence_root / "product_selection_receipt.json"
+        temporary_path = receipt_path.with_suffix(".json.tmp")
+        temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary_path.replace(receipt_path)
+    except OSError as exc:
+        logger.warning("Failed to persist product selection receipt: %s", type(exc).__name__)
 
 
 def _original_declaration_ui_state(page) -> str:
@@ -1995,6 +2039,9 @@ def run_uploader(
     platform_post_id: str = None,
     expected_title: str | None = None,
     identity_receipt: str | None = None,
+    require_product: bool = False,
+    source_channel_id: str | None = None,
+    stop_before_submit: bool = False,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -3277,6 +3324,47 @@ def run_uploader(
             browser.close()
             return 1
 
+        # ── 9.5. 商品挂载 (图书链接) ───────────────────────────────────────────────────
+        if settings.enable_wechat_product_link or require_product:
+            logger.info("Executing bounded WeChat product link selection...")
+            decision = choose_product_role(
+                category=category,
+                source_channel_id=source_channel_id,
+            )
+            catalog = get_verified_product_catalog()
+            picker = PlaywrightProductPicker(page, catalog)
+            timeout_sec = max(5.0, min(60.0, float(settings.wechat_product_timeout_seconds)))
+            product_result = select_required_product(
+                decision=decision,
+                catalog=catalog,
+                picker=picker,
+                timeout_seconds=timeout_sec,
+            )
+            _write_product_selection_receipt(
+                evidence_root,
+                required=True,
+                result=product_result,
+            )
+            if not product_result.binding_confirmed:
+                logger.error(
+                    f"Product link selection failed or binding unconfirmed: "
+                    f"state={product_result.state}, reason={product_result.reason}. "
+                    f"Refusing to publish without confirmed product link."
+                )
+                _capture_wechat_evidence(page, evidence_root, "product_binding_required_failed")
+                browser.close()
+                return 1
+            logger.info(
+                f"Product link binding confirmed: {product_result.actual.title} "
+                f"({product_result.actual.product_id}), role={product_result.decision.role.value}"
+            )
+            _capture_wechat_evidence(page, evidence_root, "product_binding_confirmed")
+        else:
+            _write_product_selection_receipt(
+                evidence_root,
+                required=False,
+            )
+
         # ── 10. 发表前清理残留遮罩 ───────────────────────────────────────────────
         # [Claude_Sonnet_4.6_Thinking_planning] v2.0.0 bugfix:
         # 合集创建流程可能留下未关闭的 .weui-desktop-dialog__wrp，会拦截「发表」按钮点击
@@ -3312,6 +3400,12 @@ def run_uploader(
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             if not submitted_short_title:
                 logger.warning("Submitted short title could not be confirmed; keeping native identity unbound.")
+
+        if stop_before_submit:
+            logger.info("STOP_BEFORE_SUBMIT active: Form and product binding verified; stopping immediately before publish/draft as requested.")
+            _capture_wechat_evidence(page, evidence_root, "pre_submit_stopped")
+            browser.close()
+            return 0
 
         # 5. 执行提交或存草稿
         if draft:
@@ -3419,6 +3513,17 @@ def main():
         "--require-original-declaration", action="store_true",
         help="原创声明必须由界面确认；否则停止在发表前",
     )
+    parser.add_argument(
+        "--require-product", action="store_true",
+        help="商品挂载必须由界面确认；否则停止在发表前",
+    )
+    parser.add_argument(
+        "--source-channel-id", help="来源 YouTube 频道 ID，用于精确识别华尔街等垂直选品",
+    )
+    parser.add_argument(
+        "--stop-before-submit", action="store_true",
+        help="完成所有表单填充与商品挂载核验后停止在提交前，不点击发表或存草稿",
+    )
     parser.set_defaults(headless=True)
     args = parser.parse_args()
 
@@ -3450,6 +3555,9 @@ def main():
             platform_post_id = args.platform_post_id,
             identity_receipt = args.identity_receipt,
             expected_title = args.expected_title,
+            require_product = args.require_product,
+            source_channel_id = args.source_channel_id,
+            stop_before_submit = args.stop_before_submit,
         )
     except Exception as exc:
         if not _is_playwright_target_closed(exc):

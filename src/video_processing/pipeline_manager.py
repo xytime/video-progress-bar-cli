@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.71.0 | 2026-10-10 | Antigravity | 视频号发布支持自动挂载图书商品（enable_wechat_product_link），透传频道来源并强制要求商品绑定。 |
 | 3.70.0 | 2026-10-10 | Codex | 首尾清理只接入新 TED 整片；固定历史成片绑定及异常回退。 |
 | 3.69.2 | 2026-10-09 | Codex | 裁剪超时独立清理进程组；裁剪副本接入硬重置与受保护 TTL。 |
 | 3.69.1 | 2026-10-09 | Codex | 裁剪时间轴拒绝复用缺少来源指纹的旧二创脚本。 |
@@ -3930,6 +3931,14 @@ class PipelineManager:
             upload_cmd += ["--collection", collection_name]
         if not declare_original:
             upload_cmd.append("--no-original-declaration")
+        if settings.enable_wechat_product_link:
+            upload_cmd.append("--require-product")
+            source_chan_id = (
+                video.get("channel_id")
+                or video.get("source_channel_id")
+            )
+            if source_chan_id:
+                upload_cmd.extend(["--source-channel-id", str(source_chan_id).strip()])
 
         try:
             res = self._run_tracked(upload_cmd, yid, slice_index=slice_index, text=True,
