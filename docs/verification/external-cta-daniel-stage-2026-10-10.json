@@ -1,0 +1,636 @@
+{
+  "type": "single_real_sample_revision_not_general_detection",
+  "input_sha256": {
+    "NRkHdspgnI8.mp4": "822c1edb2550a88e64ecec78414a429e8ebf6a4f77233f13559db3f5639436be",
+    "NRkHdspgnI8_vertical.mp4": "72988722ec9c4466bd0e8e950123bb56367e3bc6153f4f7ec311034e1aad675f",
+    "NRkHdspgnI8.ass": "486cd89569e4f4398ad62a4649205ed732367805abdb4a157cb68e10c4107d9b"
+  },
+  "retained_original_interval": [
+    21.6,
+    914.28
+  ],
+  "removed_original_intervals": [
+    [
+      0,
+      21.6
+    ],
+    [
+      914.28,
+      922.969977
+    ]
+  ],
+  "removed_seconds": 30.289977,
+  "output": {
+    "file": "Daniel_vertical_stage_only_v2.mp4",
+    "sha256": "0d359ed52560397d492546fc33f8b35d991aaf5db8b2b8b71ad52ee4d689ea4a",
+    "bytes": 92240402,
+    "seconds_with_decode_check": 61.136,
+    "duration": 892.68,
+    "streams": {
+      "video": {
+        "start_time": "0.000000",
+        "duration": "892.680000",
+        "width": 1080,
+        "height": 1920,
+        "sample_rate": null,
+        "channels": null
+      },
+      "audio": {
+        "start_time": "0.000000",
+        "duration": "892.680000",
+        "width": null,
+        "height": null,
+        "sample_rate": "44100",
+        "channels": 2
+      }
+    }
+  },
+  "subtitles": {
+    "file": "Daniel_vertical_stage_only_v2.ass",
+    "sha256": "5e4300f51ba5a03563023e38ca48b1e2c65c0e6d632ca1ccce8979f50c9f16f2",
+    "events": 279,
+    "time_shift_seconds": -21.6,
+    "leading_events_clamped_to_zero": 1,
+    "content_styles_unchanged": true,
+    "last_event_end_seconds": 890.88
+  },
+  "preserved_audio_checks": [
+    {
+      "output_seconds": 0,
+      "original_seconds": 21.6,
+      "duration_seconds": 10,
+      "correlation": 0.9999715104698758
+    },
+    {
+      "output_seconds": 60,
+      "original_seconds": 81.6,
+      "duration_seconds": 7,
+      "correlation": 0.9999811054250076
+    },
+    {
+      "output_seconds": 887,
+      "original_seconds": 908.6,
+      "duration_seconds": 4,
+      "correlation": 0.9999367467068344
+    }
+  ],
+  "preserved_video_checks": [
+    {
+      "output_seconds": 0,
+      "original_seconds": 21.6,
+      "psnr_db": 48.56846462204732
+    },
+    {
+      "output_seconds": 1,
+      "original_seconds": 22.6,
+      "psnr_db": 48.62641128841134
+    },
+    {
+      "output_seconds": 7,
+      "original_seconds": 28.6,
+      "psnr_db": 48.0720968702918
+    },
+    {
+      "output_seconds": 60,
+      "original_seconds": 81.6,
+      "psnr_db": 50.869659761895896
+    },
+    {
+      "output_seconds": 600,
+      "original_seconds": 621.6,
+      "psnr_db": 50.54340019236452
+    },
+    {
+      "output_seconds": 889.88,
+      "original_seconds": 911.48,
+      "psnr_db": 48.922673874939846
+    },
+    {
+      "output_seconds": 892.64,
+      "original_seconds": 914.24,
+      "psnr_db": 48.06783760654291
+    }
+  ],
+  "input_bytes_unchanged": {
+    "NRkHdspgnI8.mp4": true,
+    "NRkHdspgnI8_vertical.mp4": true,
+    "NRkHdspgnI8.ass": true
+  },
+  "status": "VERIFIED_LOCAL_SAMPLE",
+  "elapsed_seconds": 62.531,
+  "opening_asr": {
+    "method": "offline Whisper base; auxiliary text comparison, not precise phoneme timing",
+    "input_audio": "16kHz mono",
+    "segments": {
+      "original_context": {
+        "offset_seconds": 18,
+        "text": " Often, I get asked as a chef, what is my favourite thing to cook? And my answer is always the same. My favourite thing to cook is your favourite thing to eat. Have you ever wondered?",
+        "words": [
+          {
+            "word": " Often,",
+            "start": 21.98,
+            "end": 22.72,
+            "probability": 0.6372498273849487
+          },
+          {
+            "word": " I",
+            "start": 23.36,
+            "end": 23.76,
+            "probability": 0.9952801465988159
+          },
+          {
+            "word": " get",
+            "start": 23.76,
+            "end": 23.88,
+            "probability": 0.9967941641807556
+          },
+          {
+            "word": " asked",
+            "start": 23.88,
+            "end": 24.22,
+            "probability": 0.9956461787223816
+          },
+          {
+            "word": " as",
+            "start": 24.22,
+            "end": 24.68,
+            "probability": 0.9477163553237915
+          },
+          {
+            "word": " a",
+            "start": 24.68,
+            "end": 24.8,
+            "probability": 0.9891585111618042
+          },
+          {
+            "word": " chef,",
+            "start": 24.8,
+            "end": 25.02,
+            "probability": 0.9832327961921692
+          },
+          {
+            "word": " what",
+            "start": 25.74,
+            "end": 26.16,
+            "probability": 0.431388795375824
+          },
+          {
+            "word": " is",
+            "start": 26.16,
+            "end": 26.62,
+            "probability": 0.9883898496627808
+          },
+          {
+            "word": " my",
+            "start": 26.62,
+            "end": 26.78,
+            "probability": 0.995759904384613
+          },
+          {
+            "word": " favourite",
+            "start": 26.78,
+            "end": 27.28,
+            "probability": 0.5619469285011292
+          },
+          {
+            "word": " thing",
+            "start": 27.28,
+            "end": 27.9,
+            "probability": 0.9857820272445679
+          },
+          {
+            "word": " to",
+            "start": 27.9,
+            "end": 28.08,
+            "probability": 0.9973596930503845
+          },
+          {
+            "word": " cook?",
+            "start": 28.08,
+            "end": 28.26,
+            "probability": 0.9968396425247192
+          },
+          {
+            "word": " And",
+            "start": 29.14,
+            "end": 29.78,
+            "probability": 0.938520073890686
+          },
+          {
+            "word": " my",
+            "start": 29.78,
+            "end": 29.94,
+            "probability": 0.9891523122787476
+          },
+          {
+            "word": " answer",
+            "start": 29.94,
+            "end": 30.36,
+            "probability": 0.9987241625785828
+          },
+          {
+            "word": " is",
+            "start": 30.36,
+            "end": 31.16,
+            "probability": 0.9838225245475769
+          },
+          {
+            "word": " always",
+            "start": 31.16,
+            "end": 31.56,
+            "probability": 0.9892025589942932
+          },
+          {
+            "word": " the",
+            "start": 31.56,
+            "end": 32.14,
+            "probability": 0.9956983327865601
+          },
+          {
+            "word": " same.",
+            "start": 32.14,
+            "end": 32.48,
+            "probability": 0.9995293617248535
+          },
+          {
+            "word": " My",
+            "start": 33.6,
+            "end": 33.82,
+            "probability": 0.9813343286514282
+          },
+          {
+            "word": " favourite",
+            "start": 33.82,
+            "end": 34.14,
+            "probability": 0.953603208065033
+          },
+          {
+            "word": " thing",
+            "start": 34.14,
+            "end": 34.34,
+            "probability": 0.9876440167427063
+          },
+          {
+            "word": " to",
+            "start": 34.34,
+            "end": 34.5,
+            "probability": 0.9901722073554993
+          },
+          {
+            "word": " cook",
+            "start": 34.5,
+            "end": 34.8,
+            "probability": 0.9965550899505615
+          },
+          {
+            "word": " is",
+            "start": 34.8,
+            "end": 35.66,
+            "probability": 0.8698939085006714
+          },
+          {
+            "word": " your",
+            "start": 35.66,
+            "end": 36.06,
+            "probability": 0.9742884635925293
+          },
+          {
+            "word": " favourite",
+            "start": 36.06,
+            "end": 36.9,
+            "probability": 0.9838812351226807
+          },
+          {
+            "word": " thing",
+            "start": 36.9,
+            "end": 37.32,
+            "probability": 0.9713252782821655
+          },
+          {
+            "word": " to",
+            "start": 37.32,
+            "end": 37.52,
+            "probability": 0.9973906874656677
+          },
+          {
+            "word": " eat.",
+            "start": 37.52,
+            "end": 37.68,
+            "probability": 0.9942573308944702
+          },
+          {
+            "word": " Have",
+            "start": 39.0,
+            "end": 39.2,
+            "probability": 0.953287661075592
+          },
+          {
+            "word": " you",
+            "start": 39.2,
+            "end": 39.32,
+            "probability": 0.9978627562522888
+          },
+          {
+            "word": " ever",
+            "start": 39.32,
+            "end": 39.5,
+            "probability": 0.9981905817985535
+          },
+          {
+            "word": " wondered?",
+            "start": 39.5,
+            "end": 39.82,
+            "probability": 0.9212551116943359
+          }
+        ]
+      },
+      "new_opening": {
+        "offset_seconds": 0,
+        "text": " Often I get asked as a chef, what is my favourite thing to cook? And my answer is always the same. My favourite thing to cook is your favourite thing to eat. Have you ever...",
+        "words": [
+          {
+            "word": " Often",
+            "start": 0.0,
+            "end": 1.12,
+            "probability": 0.7006590366363525
+          },
+          {
+            "word": " I",
+            "start": 1.12,
+            "end": 2.14,
+            "probability": 0.597959041595459
+          },
+          {
+            "word": " get",
+            "start": 2.14,
+            "end": 2.3,
+            "probability": 0.9950681924819946
+          },
+          {
+            "word": " asked",
+            "start": 2.3,
+            "end": 2.64,
+            "probability": 0.9944012761116028
+          },
+          {
+            "word": " as",
+            "start": 2.64,
+            "end": 3.08,
+            "probability": 0.953971803188324
+          },
+          {
+            "word": " a",
+            "start": 3.08,
+            "end": 3.2,
+            "probability": 0.9866614937782288
+          },
+          {
+            "word": " chef,",
+            "start": 3.2,
+            "end": 3.46,
+            "probability": 0.9884105920791626
+          },
+          {
+            "word": " what",
+            "start": 4.18,
+            "end": 4.56,
+            "probability": 0.3494203984737396
+          },
+          {
+            "word": " is",
+            "start": 4.56,
+            "end": 5.02,
+            "probability": 0.9839619398117065
+          },
+          {
+            "word": " my",
+            "start": 5.02,
+            "end": 5.18,
+            "probability": 0.9950096607208252
+          },
+          {
+            "word": " favourite",
+            "start": 5.18,
+            "end": 5.66,
+            "probability": 0.6200467348098755
+          },
+          {
+            "word": " thing",
+            "start": 5.66,
+            "end": 6.28,
+            "probability": 0.9763327240943909
+          },
+          {
+            "word": " to",
+            "start": 6.28,
+            "end": 6.48,
+            "probability": 0.9964085221290588
+          },
+          {
+            "word": " cook?",
+            "start": 6.48,
+            "end": 6.64,
+            "probability": 0.9968722462654114
+          },
+          {
+            "word": " And",
+            "start": 7.66,
+            "end": 8.18,
+            "probability": 0.9118096828460693
+          },
+          {
+            "word": " my",
+            "start": 8.18,
+            "end": 8.32,
+            "probability": 0.990541398525238
+          },
+          {
+            "word": " answer",
+            "start": 8.32,
+            "end": 8.76,
+            "probability": 0.998528242111206
+          },
+          {
+            "word": " is",
+            "start": 8.76,
+            "end": 9.54,
+            "probability": 0.987641453742981
+          },
+          {
+            "word": " always",
+            "start": 9.54,
+            "end": 9.96,
+            "probability": 0.9891682863235474
+          },
+          {
+            "word": " the",
+            "start": 9.96,
+            "end": 10.54,
+            "probability": 0.9946568012237549
+          },
+          {
+            "word": " same.",
+            "start": 10.54,
+            "end": 10.88,
+            "probability": 0.9991924166679382
+          },
+          {
+            "word": " My",
+            "start": 11.9,
+            "end": 12.22,
+            "probability": 0.9826046824455261
+          },
+          {
+            "word": " favourite",
+            "start": 12.22,
+            "end": 12.54,
+            "probability": 0.9224192500114441
+          },
+          {
+            "word": " thing",
+            "start": 12.54,
+            "end": 12.74,
+            "probability": 0.9846833348274231
+          },
+          {
+            "word": " to",
+            "start": 12.74,
+            "end": 12.9,
+            "probability": 0.9882981181144714
+          },
+          {
+            "word": " cook",
+            "start": 12.9,
+            "end": 13.26,
+            "probability": 0.9966287016868591
+          },
+          {
+            "word": " is",
+            "start": 13.26,
+            "end": 14.06,
+            "probability": 0.9079177379608154
+          },
+          {
+            "word": " your",
+            "start": 14.06,
+            "end": 14.46,
+            "probability": 0.9730110168457031
+          },
+          {
+            "word": " favourite",
+            "start": 14.46,
+            "end": 15.3,
+            "probability": 0.9764302372932434
+          },
+          {
+            "word": " thing",
+            "start": 15.3,
+            "end": 15.72,
+            "probability": 0.9712041616439819
+          },
+          {
+            "word": " to",
+            "start": 15.72,
+            "end": 15.92,
+            "probability": 0.997357189655304
+          },
+          {
+            "word": " eat.",
+            "start": 15.92,
+            "end": 16.1,
+            "probability": 0.9928283095359802
+          },
+          {
+            "word": " Have",
+            "start": 17.3,
+            "end": 17.62,
+            "probability": 0.8620656132698059
+          },
+          {
+            "word": " you",
+            "start": 17.62,
+            "end": 17.72,
+            "probability": 0.9964882135391235
+          },
+          {
+            "word": " ever...",
+            "start": 17.72,
+            "end": 17.98,
+            "probability": 0.5891389548778534
+          }
+        ]
+      }
+    },
+    "elapsed_seconds": 3.637
+  },
+  "opening_first_sentence_words_equal": true,
+  "previews": [
+    {
+      "file": "Daniel_v2_opening_preview.mp4",
+      "sha256": "72c4a591063c7867bdc3d1cf6f51653d7cdbc3e76f07e295e811845a6f79bf8d",
+      "bytes": 1916500,
+      "seconds_with_decode_check": 1.615,
+      "duration": 15.0,
+      "streams": {
+        "video": {
+          "start_time": "0.000000",
+          "duration": "15.000000",
+          "width": 1080,
+          "height": 1920,
+          "sample_rate": null,
+          "channels": null
+        },
+        "audio": {
+          "start_time": "0.000000",
+          "duration": "15.000000",
+          "width": null,
+          "height": null,
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    },
+    {
+      "file": "Daniel_v2_ending_preview.mp4",
+      "sha256": "80372fd190ac4a54209a83ffee12677042aa3df2c1774417cf96e65c4f5cbfa6",
+      "bytes": 997092,
+      "seconds_with_decode_check": 0.824,
+      "duration": 8.0,
+      "streams": {
+        "video": {
+          "start_time": "0.000000",
+          "duration": "8.000000",
+          "width": 1080,
+          "height": 1920,
+          "sample_rate": null,
+          "channels": null
+        },
+        "audio": {
+          "start_time": "0.000000",
+          "duration": "8.000000",
+          "width": null,
+          "height": null,
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    }
+  ],
+  "synthetic_failure": {
+    "status": "KEEP_ORIGINAL",
+    "reason": "UNVERIFIED_SAMPLE_INPUT",
+    "error_type": "ValueError",
+    "production_modified": false,
+    "selected_input": "NRkHdspgnI8.mp4",
+    "elapsed_seconds": 0.197,
+    "fixture_type": "synthetic_corrupt_vertical_not_real_sample",
+    "no_new_video": true
+  },
+  "production_input_bytes_unchanged": {
+    "output/original_video/NRkHdspgnI8.mp4": true,
+    "output/NRkHdspgnI8_vertical.mp4": true,
+    "output/NRkHdspgnI8.ass": true
+  },
+  "previous_rejected_copy_bytes_unchanged": true,
+  "artifact_directory": "output/verification/external-cta-daniel-2026-10-10"
+}
