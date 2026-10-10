@@ -1,8 +1,31 @@
-"""mobile-2 实际像素、词汇原子与时码索引验收。"""
+"""mobile-2 实际像素、词汇原子与时码索引验收。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.1 | 2026-10-10 | Codex | 覆盖真实退休金口播繁体识别、错误语音拒绝及字时码索引。 |
+"""
 import pysubs2
 import pytest
 from video_processing.processors import insight_mobile as mobile
 from video_processing.processors import mobile_editorial_layout as layout
+
+
+def test_retirement_traditional_asr_keeps_display_and_time_indices():
+    display = '华尔街估值高歌猛进的背后，一场美国经济史上罕见的流动性挤兑正在工薪家庭隐秘上演。6%的退休计划参与者不惜承受高达37%的惩罚性税费强制提款。这标志着传统消费信贷防线已彻底枯竭。'
+    recognized = '華爾街估值高歌猛進的背後一場美國經濟史上罕見的流動性擠兌正在公新家庭隱密上演6的退休計劃參與者不惜承受高達37的懲罰性稅費強制提款这標誌著傳統消費信貸房線已徹底枯竭'
+    positions = [dict(char=c,x=i,y=1,width=1,line=0) for i,c in enumerate(display) if c.isalnum()]
+    aligned = layout.align_positions(positions,[dict(word=recognized,start=0,end=30)])
+    assert ''.join(p['char'] for p in aligned) == ''.join(c for c in display if c.isalnum())
+    assert len(aligned) == len(positions)
+    assert all(0 <= p['start'] <= p['end'] <= 30 for p in aligned)
+    assert all(a['end'] <= b['start'] for a,b in zip(aligned,aligned[1:]))
+
+
+def test_simplification_does_not_accept_unrelated_speech():
+    positions = [dict(char=c,x=i,y=1,width=1,line=0) for i,c in enumerate('美国退休计划税费强制提款')]
+    with pytest.raises(ValueError,match='无法可靠对齐'):
+        layout.align_positions(positions,[dict(word='今天我們介紹新能源汽車工廠',start=0,end=10)])
 
 
 def test_alignment_preserves_indices_after_one_missing_character():
