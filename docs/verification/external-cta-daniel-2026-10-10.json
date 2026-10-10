@@ -1,0 +1,311 @@
+{
+  "type": "single_real_sample_experiment_not_general_detection",
+  "input_sha256": {
+    "NRkHdspgnI8.mp4": "822c1edb2550a88e64ecec78414a429e8ebf6a4f77233f13559db3f5639436be",
+    "NRkHdspgnI8_vertical.mp4": "72988722ec9c4466bd0e8e950123bb56367e3bc6153f4f7ec311034e1aad675f",
+    "NRkHdspgnI8.ass": "486cd89569e4f4398ad62a4649205ed732367805abdb4a157cb68e10c4107d9b"
+  },
+  "verified_interval": [
+    0,
+    918.44
+  ],
+  "removed_interval": [
+    918.44,
+    922.969977
+  ],
+  "removed_seconds": 4.529977,
+  "ocr": "Tg\n\nThank you for watching\n\nro) () oO @tedxnorthernquarter ® TEDxNorthernQuarter\n\nTED* NorthernQuarter\n",
+  "last_subtitle_end_seconds": 912.48,
+  "outputs": [
+    {
+      "file": "Daniel_external_platform_excerpt.mp4",
+      "sha256": "be29663c7667214efb2facc342e851a28bfc11c2cfb264f005fb0d2165cd4392",
+      "bytes": 603228,
+      "seconds_with_decode_check": 0.366,
+      "duration": 4.53,
+      "streams": {
+        "video": {
+          "start_time": "0.000000",
+          "duration": "4.480000",
+          "width": 1280,
+          "height": 720,
+          "sample_rate": null,
+          "channels": null
+        },
+        "audio": {
+          "start_time": "0.000000",
+          "duration": "4.530000",
+          "width": null,
+          "height": null,
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    },
+    {
+      "file": "Daniel_source_without_external_cta.mp4",
+      "sha256": "a4458c4165e1807482e52dd5776ae073325df510b70dcee5a58e0ba769b6af8c",
+      "bytes": 108725226,
+      "seconds_with_decode_check": 44.629,
+      "duration": 918.44,
+      "streams": {
+        "video": {
+          "start_time": "0.000000",
+          "duration": "918.440000",
+          "width": 1280,
+          "height": 720,
+          "sample_rate": null,
+          "channels": null
+        },
+        "audio": {
+          "start_time": "0.000000",
+          "duration": "918.440000",
+          "width": null,
+          "height": null,
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    },
+    {
+      "file": "Daniel_vertical_without_external_cta.mp4",
+      "sha256": "81dd1402792b6d80265c5069e01576644531bff8f710e1aac9e9c9de1bb4e408",
+      "bytes": 90571098,
+      "seconds_with_decode_check": 70.509,
+      "duration": 918.44,
+      "streams": {
+        "video": {
+          "start_time": "0.000000",
+          "duration": "918.440000",
+          "width": 1080,
+          "height": 1920,
+          "sample_rate": null,
+          "channels": null
+        },
+        "audio": {
+          "start_time": "0.000000",
+          "duration": "918.440000",
+          "width": null,
+          "height": null,
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      }
+    }
+  ],
+  "preserved_audio_checks": [
+    {
+      "start_seconds": 0,
+      "duration_seconds": 20,
+      "correlation": 0.9999954099657288
+    },
+    {
+      "start_seconds": 22,
+      "duration_seconds": 10,
+      "correlation": 0.9999921228694649
+    },
+    {
+      "start_seconds": 906,
+      "duration_seconds": 7,
+      "correlation": 0.9999945975219157
+    }
+  ],
+  "preserved_video_checks": [
+    {
+      "seconds": 0,
+      "psnr_db": 49.127694377379136
+    },
+    {
+      "seconds": 5,
+      "psnr_db": 45.96114316793801
+    },
+    {
+      "seconds": 15,
+      "psnr_db": 51.922140738373386
+    },
+    {
+      "seconds": 23,
+      "psnr_db": 49.24447669370012
+    },
+    {
+      "seconds": 120,
+      "psnr_db": 51.38512357717886
+    },
+    {
+      "seconds": 600,
+      "psnr_db": 52.32767057615891
+    },
+    {
+      "seconds": 911,
+      "psnr_db": 49.89650349028863
+    },
+    {
+      "seconds": 917,
+      "psnr_db": 46.92067092706204
+    },
+    {
+      "seconds": 918.4000000000001,
+      "psnr_db": 48.08014006707498
+    }
+  ],
+  "subtitles_bytes_unchanged": true,
+  "input_bytes_unchanged": {
+    "NRkHdspgnI8.mp4": true,
+    "NRkHdspgnI8_vertical.mp4": true,
+    "NRkHdspgnI8.ass": true
+  },
+  "status": "VERIFIED_LOCAL_SAMPLE",
+  "elapsed_seconds": 117.798,
+  "video_id": "NRkHdspgnI8",
+  "source_title": "The power of sharing food | Daniel Bui | TEDxNorthern Quarter",
+  "validated_at_local": "2026-10-10 Asia/Shanghai",
+  "production_files_before_after": {
+    "original": {
+      "path": "output/original_video/NRkHdspgnI8.mp4",
+      "size": 70891014,
+      "sha256": "822c1edb2550a88e64ecec78414a429e8ebf6a4f77233f13559db3f5639436be",
+      "after_sha256": "822c1edb2550a88e64ecec78414a429e8ebf6a4f77233f13559db3f5639436be",
+      "unchanged": true
+    },
+    "vertical": {
+      "path": "output/NRkHdspgnI8_vertical.mp4",
+      "size": 68970483,
+      "sha256": "72988722ec9c4466bd0e8e950123bb56367e3bc6153f4f7ec311034e1aad675f",
+      "after_sha256": "72988722ec9c4466bd0e8e950123bb56367e3bc6153f4f7ec311034e1aad675f",
+      "unchanged": true
+    },
+    "subtitles": {
+      "path": "output/NRkHdspgnI8.ass",
+      "size": 73488,
+      "sha256": "486cd89569e4f4398ad62a4649205ed732367805abdb4a157cb68e10c4107d9b",
+      "after_sha256": "486cd89569e4f4398ad62a4649205ed732367805abdb4a157cb68e10c4107d9b",
+      "unchanged": true
+    }
+  },
+  "full_video_visual_candidate_scan": {
+    "source": "NRkHdspgnI8.mp4",
+    "sample_interval_seconds": 1,
+    "image_shape": [
+      640,
+      360
+    ],
+    "scan_seconds": 93.23,
+    "frames_scanned": 923,
+    "candidates": [
+      {
+        "seconds": 920,
+        "text": "Ve\n\nThank you for watching\n\n0 © oO @tedxnorthernquarter ® TEDxNorthernQuarter\n\nTED* NorthernQuarter\n"
+      },
+      {
+        "seconds": 921,
+        "text": "Ve\n\nThank you for watching\n\n0 © oO @tedxnorthernquarter ® TEDxNorthernQuarter\n\nTED* NorthernQuarter\n"
+      },
+      {
+        "seconds": 922,
+        "text": "Ve\n\nThank you for watching\n\n0 © oO @tedxnorthernquarter ® TEDxNorthernQuarter\n\nTED* NorthernQuarter\n"
+      }
+    ],
+    "limitations": "OCR frame sampling is candidate evidence, not proof that short, small, obscured or non-English CTAs are absent."
+  },
+  "tail_audio_asr": {
+    "method": "offline Whisper base; ASR estimate, not phoneme annotation",
+    "input_audio": "16kHz mono",
+    "elapsed_seconds": 1.947,
+    "words": [
+      {
+        "word": " That",
+        "start": 905.0,
+        "end": 906.44,
+        "probability": 0.6828587055206299
+      },
+      {
+        "word": " gesture",
+        "start": 906.44,
+        "end": 906.88,
+        "probability": 0.9953711628913879
+      },
+      {
+        "word": " changed",
+        "start": 906.88,
+        "end": 907.62,
+        "probability": 0.9660449624061584
+      },
+      {
+        "word": " the",
+        "start": 907.62,
+        "end": 907.78,
+        "probability": 0.9957464337348938
+      },
+      {
+        "word": " entire",
+        "start": 907.78,
+        "end": 908.2,
+        "probability": 0.9832400679588318
+      },
+      {
+        "word": " world",
+        "start": 908.2,
+        "end": 908.62,
+        "probability": 0.9969984292984009
+      },
+      {
+        "word": " and",
+        "start": 908.62,
+        "end": 909.22,
+        "probability": 0.6540066003799438
+      },
+      {
+        "word": " it",
+        "start": 909.22,
+        "end": 909.34,
+        "probability": 0.8867880702018738
+      },
+      {
+        "word": " still",
+        "start": 909.34,
+        "end": 909.64,
+        "probability": 0.9515584111213684
+      },
+      {
+        "word": " can",
+        "start": 909.64,
+        "end": 909.88,
+        "probability": 0.9963611960411072
+      },
+      {
+        "word": " today.",
+        "start": 909.88,
+        "end": 910.52,
+        "probability": 0.904453694820404
+      },
+      {
+        "word": " Thank",
+        "start": 911.28,
+        "end": 911.6,
+        "probability": 0.9935364127159119
+      },
+      {
+        "word": " you.",
+        "start": 911.6,
+        "end": 911.9,
+        "probability": 0.9817793965339661
+      }
+    ]
+  },
+  "fault_fixture": {
+    "status": "KEEP_ORIGINAL",
+    "reason": "UNVERIFIED_SAMPLE_INPUT",
+    "error_type": "ValueError",
+    "production_modified": false,
+    "selected_input": "NRkHdspgnI8.mp4",
+    "elapsed_seconds": 0.03
+  },
+  "scope": {
+    "production_code_changed": false,
+    "production_files_changed": false,
+    "published_or_reposted": false,
+    "general_detection_accepted": false,
+    "sample_has_insight_composite": false
+  },
+  "local_artifact_directory": "output/verification/external-cta-daniel-2026-10-10"
+}
