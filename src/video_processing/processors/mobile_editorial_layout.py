@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-10 | Codex | 完整简繁字归一化保留字符索引及真实 ASR 覆盖门槛。 |
 | 1.0.0 | 2026-10-09 | Codex | 从已确认样片提炼可复用绘制原语 |
 """
 from pathlib import Path
@@ -11,6 +12,7 @@ import difflib
 import math
 import re
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont, ImageOps
+from opencc import OpenCC
 ASSETS = Path(__file__).resolve().parents[3] / "assets"
 W, H, FPS = 1080, 1920, 30
 VIDEO_Y, VIDEO_H = 440, 608
@@ -71,10 +73,20 @@ def chinese_layout(image, value, xy, size, kind='sans', fill=INK, max_width=None
         raise ValueError(f'文字进入平台遮挡区：{value}')
     return positions
 
-TRANSLITERATE = str.maketrans('這類項證據歡評論區說斷驗訊', '这类项证据欢评论区说断验讯')
+@lru_cache(maxsize=1)
+def _simplifier():
+    return OpenCC('t2s')
+
+@lru_cache(maxsize=8192)
+def _alignment_character(char):
+    # 逐字归一化，禁止词语替换改变显示字符与 ASR 时码的索引关系。
+    converted = _simplifier().convert(char).lower()
+    if len(converted) != 1:
+        raise ValueError('简繁字归一化改变字符长度，无法可靠对齐')
+    return converted
 
 def clean(value):
-    return ''.join(c.lower() for c in value.translate(TRANSLITERATE) if c.isalnum())
+    return ''.join(_alignment_character(c) for c in value if c.isalnum())
 
 def char_times(words, offset=0):
     result = []

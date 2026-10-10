@@ -33,6 +33,7 @@ openai-whisper>=20231117
 pypdf>=5.0.0
 deep-translator>=1.11.0
 pysubs2>=1.6.0
+opencc-python-reimplemented==0.1.7  # ASR 简繁字归一化，不改变显示文案
 
 # 自动化与大模型 (Phase 5)
 playwright>=1.40.0
