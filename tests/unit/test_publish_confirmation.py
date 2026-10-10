@@ -615,3 +615,25 @@ def test_exact_native_component_readback_records_observed_public_state(monkeypat
     proof = json.loads((tmp_path/'management_readback.json').read_text())
     assert proof['reason'] == 'DOM_POSTED_PUBLIC_COMPONENT'
     assert proof['component_state'] == evidence
+
+
+def test_api_merge_preserves_same_native_dom_public_time(monkeypatch):
+    dom={'platform_post_id':'native','status_text':'','posted_time_text':'2026年10月10日 05:04',
+         'native_create_time':1791579858,'native_time_parts':[2026,10,10,5,4]}
+    class Response:
+        url='https://channels.weixin.qq.com/cgi-bin/post/post_list'
+        def json(self):
+            return {'data':{'list':[{'objectId':'native','desc':'正文','createTime':1}]}}
+    class Page:
+        url='https://channels.weixin.qq.com/platform/post/list'
+        def on(self,_,listener):self.listener=listener
+        def remove_listener(self,*_):pass
+        def goto(self,*_,**kwargs):self.listener(Response())
+        def wait_for_load_state(self,*_,**kwargs):pass
+        def wait_for_timeout(self,*_):pass
+    monkeypatch.setattr('wechat_uploader._collect_management_cards',lambda _:{'native':dom})
+    actual,loaded=_load_management_cards(Page())
+    assert loaded
+    for key in ('posted_time_text','native_create_time','native_time_parts'):
+        assert actual['native'][key]==dom[key]
+    assert actual['native']['identity_source']=='post_list_api'

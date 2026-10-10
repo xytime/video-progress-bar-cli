@@ -734,6 +734,9 @@ def _load_management_cards(page, *, search_title: str | None = None) -> tuple[di
                     api_record["platform_url"] = dom_record.get("platform_url", "")
                     if "component_state" in dom_record:
                         api_record["component_state"] = dom_record["component_state"]
+                    for key in ('posted_time_text','native_create_time','native_time_parts'):
+                        if key in dom_record:
+                            api_record[key] = dom_record[key]
                 cards[post_id] = api_record
         except Exception as exc:
             logger.warning("Unable to read native post_list response for exact submission binding: %s", exc)
