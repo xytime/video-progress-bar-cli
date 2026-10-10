@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.1 | 2026-10-10 | Codex | 登录退出可恢复且冷却；未知退出与已有回执不恢复。 |
 | 1.1.0 | 2026-10-10 | Codex | 普通 A 强回读、原生时间与错误身份拒绝的验收。 |
 | 1.0.0 | 2026-10-09 | Codex | 验证内容命中时不领取上传意图或签发浏览器票据 |
 | 1.0.1 | 2026-10-09 | Codex | 验证待授权字幕策划不调用服务且不改变 A 的发布状态 |
@@ -16,6 +17,32 @@ from config.settings import settings
 from video_processing.db.database import PipelineDB
 from video_processing.db.wallstreet_experiment import CHANNEL_ID
 from video_processing.utils.insight_v2_prompt import FEW_SHOT_EXAMPLE_CORNELL
+
+
+@pytest.mark.parametrize('code,receipt,state',[(2,False,'WAITING'),(1,False,'UNCERTAIN'),(2,True,'UNDER_REVIEW')])
+def test_preupload_login_exit_has_bounded_recovery(tmp_path,code,receipt,state):
+    spec=importlib.util.spec_from_file_location('wallstreet_login_exit',Path('scripts/run_wallstreet_ab.py'))
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    db=PipelineDB(str(tmp_path/'db.sqlite'))
+    db.add_video('abcdefghijk','B',CHANNEL_ID,score=80)
+    pair=db.enroll_wallstreet_video('abcdefghijk',b_only=True,accounts={'wechat':'default'})
+    job=db.claim_wallstreet_render()
+    db.finish_wallstreet_render(pair['id'],job['lease_token'],package={'video':'B.mp4'})
+    pub=db.get_wallstreet_publications()[0]
+    claim=db.claim_wallstreet_submission(pub['id'],package_sha256='a'*64,video_path='B.mp4',
+        asset_sha256='b'*64,evidence_path=str(tmp_path))
+    if receipt:
+        (tmp_path/'submission_receipt.json').write_text(json.dumps({'platform_post_id':'accepted-B'}))
+    assert module.apply_readback(db,claim,tmp_path,code)==state
+    observed=db.get_wallstreet_publications()[0]
+    assert observed['attempt_count']==1 and observed['state']==state
+    if state=='WAITING':
+        assert observed['attempt_token'] is None
+        assert json.loads(Path(observed['evidence_path']).read_text())['attempt_token']==claim['attempt_token']
+        assert db.claim_wallstreet_submission(pub['id'],package_sha256='a'*64,video_path='B.mp4',
+            asset_sha256='b'*64,evidence_path=str(tmp_path)) is None
+        assert not db.recover_wallstreet_wechat_login_exit(pub['id'],attempt_token=claim['attempt_token'],
+            uploader_exit_code=2,evidence_path=str(tmp_path/'late'))
 
 
 def test_strong_a_readback_updates_ordinary_ledger_without_upload(tmp_path,monkeypatch):

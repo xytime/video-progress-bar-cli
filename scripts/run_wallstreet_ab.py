@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.2 | 2026-10-10 | Codex | 明确的上传前登录退出保存尝试证据并冷却重试；未知接受结果不恢复。 |
 | 1.1.1 | 2026-10-10 | Codex | 跨会话回读传入原提交回执 nonce，禁止历史无 nonce 作品弱绑定。 |
 | 1.1.0 | 2026-10-10 | Codex | 具名补队、普通 A 强回读衔接和抖音原生 ID 字段修复。 |
 | 1.0.0 | 2026-10-09 | Codex | 程序化固化 mobile-2 与可恢复配对试验，复用既有平台闸门 |
@@ -175,6 +176,15 @@ def apply_readback(db,publication,evidence,code):
     value = json.loads(path.read_text()) if path.is_file() else {}
     accepted = json.loads(receipt.read_text()) if platform=='wechat' and receipt.is_file() else {}
     native = value.get('platform_post_id') or accepted.get('platform_post_id') or publication.get('platform_post_id')
+    if (code == 2 and platform == 'wechat' and publication['variant'] == 'B'
+            and not native and not path.exists() and not receipt.exists()):
+        proof = evidence/f"preupload-login-{publication['attempt_token']}.json"
+        write_json(proof,{'publication_id':publication['id'],'attempt_token':publication['attempt_token'],
+            'uploader_exit_code':code,'stage':'LOGIN_BEFORE_FILE_UPLOAD','captured_at':time.time(),
+            'uploader_log':str(evidence/'uploader.log')})
+        if db.recover_wallstreet_wechat_login_exit(publication['id'],
+                attempt_token=publication['attempt_token'],uploader_exit_code=code,evidence_path=str(proof)):
+            return 'WAITING'
     if (publication.get('platform_post_id') and native
             and native != publication['platform_post_id']):
         raise ValueError('回读作品 ID 不匹配，禁止覆盖')

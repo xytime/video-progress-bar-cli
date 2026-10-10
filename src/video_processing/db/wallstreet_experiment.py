@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.2 | 2026-10-10 | Codex | 仅恢复微信上传前明确登录退出的同一尝试，保留次数和证据并延迟重试。 |
 | 1.1.1 | 2026-10-10 | Codex | 人工身份恢复审计，以及首次观察时间经平台证据校准；不重新提交。 |
 | 1.1.0 | 2026-10-10 | Codex | 封面就绪原子入队、具名漏单恢复及普通 A 强回读衔接。 |
 | 1.0.1 | 2026-10-09 | Codex | 修复后可立即重试加工，禁止重置正在执行或已完成任务 |
@@ -318,7 +319,7 @@ class WallstreetExperimentDAL:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("""SELECT pub.*,p.mode,p.state AS render_state FROM wallstreet_version_publications pub
                 JOIN wallstreet_pairs p ON p.id=pub.pair_id WHERE pub.id=?""", (publication_id,)).fetchone()
-            if not row or row["variant"] != "B" or row["state"] != "WAITING" or row["render_state"] != "READY":
+            if not row or row["variant"] != "B" or row["state"] != "WAITING" or row["render_state"] != "READY" or now < row['next_readback_at']:
                 return None
             if row["mode"] == "PAIRED":
                 a = conn.execute("""SELECT * FROM wallstreet_version_publications WHERE pair_id=?
@@ -339,6 +340,19 @@ class WallstreetExperimentDAL:
                     source_ref=f'{publication_id}:{result["attempt_count"]}', video_path=video_path,
                     asset_sha256=asset_sha256, payload_sha256=package_sha256))
             return result
+
+    def recover_wallstreet_wechat_login_exit(self, publication_id, *, attempt_token,
+                                            uploader_exit_code, evidence_path, retry_after_seconds=1800):
+        """退出码 2 专用于文件上传前登录失败；其他未知结果绝不恢复。"""
+        if uploader_exit_code != 2 or not attempt_token or not evidence_path or retry_after_seconds < 0:
+            raise ValueError('缺少上传前登录退出的明确证据')
+        with self.get_connection() as conn:
+            return conn.execute("""UPDATE wallstreet_version_publications
+                SET state='WAITING',attempt_token=NULL,evidence_path=?,next_readback_at=?,
+                    last_error='上传前登录失败；未上传，可重新领取'
+                WHERE id=? AND variant='B' AND platform='wechat'
+                  AND state IN ('SUBMITTING','UNCERTAIN') AND platform_post_id IS NULL AND attempt_token=?""",
+                (evidence_path,time.time()+retry_after_seconds,publication_id,attempt_token)).rowcount == 1
 
     def recover_unstarted_wallstreet_douyin(self, *, min_age_seconds=1800):
         """只恢复未打开浏览器的抖音尝试；先撤销票据，使迟到子进程失效。"""
