@@ -57,13 +57,15 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _UPLOAD_TIMEOUT_SECONDS = 25 * 60
 EXIT_DEFERRED = 10
+EXIT_PRODUCT_WAIT = 14
 
 
 def _english_world_uploader_command(
     item: dict, evidence_dir: Path, *, require_original_declaration: bool = True,
+    product_decision: dict | None = None,
 ) -> list[str]:
     """按已核验审核包的声明策略构造命令，不改变历史包默认策略。"""
-    return [
+    command = [
         str(_PROJECT_ROOT / ".venv" / "bin" / "python"),
         str(_PROJECT_ROOT / "scripts" / "wechat_uploader.py"),
         "--video", str(item["mp4_path"]),
@@ -76,6 +78,41 @@ def _english_world_uploader_command(
         "--fail-fast-login",
         "--require-original-declaration" if require_original_declaration else "--no-original-declaration",
     ]
+    if product_decision is not None:
+        from video_processing.utils.wechat_product_task import write_product_task_arguments
+        # 宿主输入不属于浏览器副作用证据；会话锁竞争返回 11 时实际
+        # evidence_dir 必须为空，才能安全恢复批准态而不重传未知提交。
+        inputs_dir = evidence_dir.parent / '_product_task_inputs' / evidence_dir.name
+        command.extend(write_product_task_arguments(product_decision, inputs_dir))
+    return command
+
+
+def _product_task_decision(db: PipelineDB, item: dict) -> dict:
+    """读取不可变新包的制作登记，发布时仅冻结决策，不补登记旧包。"""
+    raw = Path(item['manifest_path']).read_bytes()
+    manifest_sha256 = hashlib.sha256(raw).hexdigest()
+    if manifest_sha256 != item.get('manifest_sha256'):
+        raise ValueError('English World product context manifest hash mismatch')
+    manifest = json.loads(raw)
+    if not isinstance(manifest, dict):
+        raise ValueError('English World product context manifest must be an object')
+    from video_processing.english_world.product_production import verify_product_production_context
+    from video_processing.utils.wechat_product_task import freeze_task_product_decision, product_profile_scope
+    state_path = _PROJECT_ROOT / 'output' / 'wechat_state.json'
+    if ('product_context' not in manifest and item.get('id')
+            and db.is_legacy_product_review(item['id'], manifest_sha256)):
+        # 白名单在首次迁移冻结审核 ID 与文件摘要；不修改旧包、不补占首条。
+        task_id = 'legacy-review:' + item['id']
+        provenance = manifest.get('source_provenance') or {}
+        context = {'task_id': task_id, 'production_task_id': task_id,
+                   'product_intent': 'AUTO', 'content_type': 'ENGLISH_WORLD_SHORT',
+                   'legacy_pre_cutover': True, 'youtube_id': provenance.get('youtube_id'),
+                   'legacy_review_id': item['id'], 'legacy_manifest_sha256': manifest_sha256,
+                   'product_profile_scope': product_profile_scope(state_path)}
+    else:
+        context = verify_product_production_context(db, manifest, state_path=state_path)
+    context['review_id'] = item.get('id')
+    return freeze_task_product_decision(db, context['task_id'], context, settings.wechat_product_policy_path)
 
 
 def _original_declaration_required(item: dict) -> bool:
@@ -187,6 +224,7 @@ def _read_submission_identity(evidence_dir: Path) -> tuple[str | None, str | Non
 def _record_submission_result(
     db: PipelineDB, review_id: str, *, attempt_id: str, code: int,
     evidence_dir: Path, require_original_declaration: bool, detail: str = "",
+    product_decision: dict | None = None,
 ) -> tuple[str, str]:
     """平台事实与声明合规分开记账；后处理异常不能抹掉同次原生 ID。"""
     state, message = _completion_for_exit_code(code)
@@ -197,6 +235,11 @@ def _record_submission_result(
     if state == "UNDER_REVIEW" and not declaration_confirmed:
         state = "UNCERTAIN"
         message = "提交后声明状态证据缺失或与审核包不符；保留受理证据，停止重传及后续同步，需后台核验。"
+    elif state == "UNDER_REVIEW" and product_decision is not None and not _product_receipt_is_confirmed(
+        evidence_dir, product_decision,
+    ):
+        state = "UNCERTAIN"
+        message = "提交后商品绑定/无绑定证据缺失或与冻结任务不符；保留原生 ID，停止重传及后续同步，需后台核验。"
     elif platform_post_id and state != "UNDER_REVIEW":
         state = "UNCERTAIN"
         message = "已取得同次平台原生 ID，但投稿器未正常确认完成；保留 ID 并停止重传，需后台核验。"
@@ -217,6 +260,46 @@ def _record_submission_result(
         except Exception as sync_exc:
             logger.warning("English World 投稿中心账本同步失败 (保留提交状态): %s", sync_exc)
     return state, message
+
+
+def _product_receipt_is_confirmed(evidence_dir: Path, decision: dict) -> bool:
+    """只接受本次任务/版本的精确绑定，跳过任务也必须确认没有残留商品。"""
+    try:
+        receipt = json.loads((evidence_dir / 'product_selection_receipt.json').read_text(encoding='utf-8'))
+        if not isinstance(receipt, dict):
+            return False
+        required = decision['require_product']
+        if (type(required) is not bool or receipt.get('required') is not required
+                or receipt.get('task_id') != decision['task_id']
+                or receipt.get('config_digest') != decision.get('config_digest')):
+            return False
+        if required:
+            identities = {(item['product_id'], item['title']) for item in decision['product_decision']['candidates']}
+            return (receipt.get('binding_confirmed') is True and receipt.get('unbound_confirmed') is False
+                    and (receipt.get('actual_product_id'), receipt.get('actual_title')) in identities)
+        return (receipt.get('binding_confirmed') is False and receipt.get('unbound_confirmed') is True
+                and not receipt.get('actual_product_id') and not receipt.get('actual_title'))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
+def _defer_product_wait(db: PipelineDB, review_id: str, attempt_id: str,
+                        evidence_dir: Path, decision: dict) -> bool:
+    """商品等待只有同任务、明确未发表且无受理回执时才恢复批准态。"""
+    try:
+        receipt = json.loads((evidence_dir / 'product_selection_receipt.json').read_text(encoding='utf-8'))
+        wait = json.loads((evidence_dir / 'product_wait.json').read_text(encoding='utf-8'))
+        if (not isinstance(receipt, dict) or not isinstance(wait, dict)
+                or decision.get('require_product') is not True
+                or receipt.get('task_id') != decision['task_id']
+                or receipt.get('config_digest') != decision.get('config_digest')):
+            return False
+        return db.defer_english_world_product_wait(
+            review_id, attempt_id=attempt_id, evidence_dir=str(evidence_dir),
+            receipt=receipt, wait_evidence=wait,
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def _manual_authorization_active(item: dict) -> bool:
@@ -280,6 +363,19 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                 return EXIT_DEFERRED
         try:
             _require_publish_package(pending)
+            product_decision = _product_task_decision(db, pending)
+            if product_decision is not None and product_decision.get('require_product') is True:
+                from video_processing.utils.wechat_product_execution import (
+                    product_artifacts_digest, product_observation_generation, product_task_preflight,
+                )
+                digest = product_artifacts_digest(Path(pending['mp4_path']), Path(pending['copy_path']),
+                                                   Path(pending['cover_path']))
+                if not product_task_preflight(
+                    product_decision, _PROJECT_ROOT / 'output', digest,
+                    observation_generation=product_observation_generation(settings.wechat_product_policy_path),
+                ):
+                    logger.info('English World product wait deferred before claim: %s', review_id)
+                    return EXIT_DEFERRED
         except Exception as exc:  # 领取前没有平台副作用，拒绝项不能永久占据队首。
             db.fail_english_world_submission_preflight(
                 review_id, message=f"{type(exc).__name__}: {exc}",
@@ -305,6 +401,7 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             require_original = _require_publish_package(item)
             command = _english_world_uploader_command(
                 item, evidence_dir, require_original_declaration=require_original,
+                product_decision=product_decision,
             )
             if not settings.wechat_headless:
                 command.append("--no-headless")
@@ -317,10 +414,15 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                 db.defer_english_world_session_busy(review_id, attempt_id=attempt_id,
                                                    evidence_dir=str(evidence_dir))
                 return EXIT_DEFERRED
+            if (result.returncode == EXIT_PRODUCT_WAIT and product_decision is not None
+                    and _defer_product_wait(db, review_id, attempt_id, evidence_dir, product_decision)):
+                logger.info('English World product wait preserved original task and authorization: %s', review_id)
+                return EXIT_DEFERRED
             state, message = _record_submission_result(
                 db, review_id, attempt_id=attempt_id, code=result.returncode,
                 evidence_dir=evidence_dir, require_original_declaration=require_original,
                 detail=(result.stderr or "").strip(),
+                product_decision=product_decision,
             )
             platform_post_id, _ = _read_submission_identity(evidence_dir)
             if (
@@ -354,6 +456,7 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
             state, message = _record_submission_result(
                 db, review_id, attempt_id=attempt_id, code=124,
                 evidence_dir=evidence_dir, require_original_declaration=require_original,
+                product_decision=product_decision,
             )
         except Exception as exc:  # noqa: BLE001 - worker must persist its own failure receipt
             logger.exception("English World WeChat submission failed: %s", exc)
@@ -361,6 +464,7 @@ def submit(review_id: str, *, operator_recovery_reason: str | None = None) -> in
                 db, review_id, attempt_id=attempt_id, code=1,
                 evidence_dir=evidence_dir, require_original_declaration=require_original,
                 detail=f"投稿前校验或执行失败：{exc}。未自动重传。",
+                product_decision=product_decision,
             )
 
     labels = {

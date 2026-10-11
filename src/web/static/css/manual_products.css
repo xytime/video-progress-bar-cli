@@ -1,0 +1,31 @@
+/* 手动入口沿用商品工作台的原生弹层、字号和主题。 */
+#manual-video-fields { border:0; padding:0; margin:0; min-width:0; }
+.manual-product-field,.manual-content-type { display:grid; grid-template-columns:minmax(130px,180px) minmax(0,1fr); gap:8px 16px; align-items:center; margin-top:14px; }
+.manual-product-field label,.manual-content-type label { color:var(--text2); font-size:.8125rem; }
+.manual-content-type select { width:100%; min-width:0; padding:8px 10px; }
+.manual-product-field .product-picker-trigger { display:flex; justify-content:space-between; align-items:center; gap:10px; min-width:0; width:100%; text-align:left; padding:9px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg2); color:var(--text1); cursor:pointer; }
+.manual-product-field .product-picker-trigger span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.manual-product-help,.manual-product-status { grid-column:1/-1; margin:0; color:var(--text3); font-size:.75rem; line-height:1.6; overflow-wrap:anywhere; }
+#manual-product-detail { color:var(--text2); }
+.manual-product-status { display:flex; align-items:flex-start; gap:12px; }
+.manual-product-status p { flex:1; min-width:0; margin:0; }
+#manual-products-retry { flex:none; padding:5px 9px; border:1px solid var(--border); border-radius:6px; background:var(--bg2); color:var(--accent2); cursor:pointer; }
+.product-intent-detail { margin-top:7px; font-size:.7rem; line-height:1.5; color:var(--text2); overflow-wrap:anywhere; }
+.manual-product-field button:disabled,#manual-products-retry:disabled { opacity:.5; cursor:not-allowed; }
+.product-picker-dialog,.product-picker-dialog * { box-sizing:border-box; }
+.product-picker-dialog { position:fixed; margin:0; border:1px solid var(--border); border-radius:10px; background:var(--bg2); color:var(--text1); padding:0; max-width:none; max-height:calc(100dvh - 24px); overflow:auto; font:.8rem/1.5 -apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif; box-shadow:0 16px 50px rgba(0,0,0,.4); }
+.product-picker-dialog::backdrop { background:transparent; }
+.product-picker-dialog button { min-height:40px; padding:8px 13px; border:1px solid var(--border); border-radius:6px; background:var(--bg2); color:var(--text1); font:inherit; cursor:pointer; }
+.product-picker-dialog button:hover { border-color:var(--blue); background:var(--glass-b); }
+.product-picker-dialog button:disabled { opacity:.5; cursor:not-allowed; }
+.product-picker-dialog input { width:100%; min-width:0; min-height:40px; padding:8px 10px; border:1px solid var(--border); border-radius:6px; background:var(--bg); color:var(--text1); font:inherit; }
+.product-picker-dialog .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.product-picker-dialog .picker-search { display:flex; gap:5px; align-items:center; padding:12px; }
+.product-picker-dialog .picker-clear,.product-picker-dialog .picker-close { padding:4px 8px; min-height:32px; }
+.product-picker-dialog select { display:block; width:calc(100% - 24px); margin:0 12px; border:0; padding:0; background:var(--bg2); color:var(--text1); font:inherit; height:230px; overflow:auto; border-radius:4px; }
+.product-picker-dialog option { padding:10px; border-bottom:1px solid var(--border); }
+.product-picker-dialog option:disabled { color:var(--text3); }
+.product-picker-dialog .picker-detail { font-size:.7rem; padding:12px; margin:0; overflow-wrap:anywhere; min-height:55px; color:var(--text2); }
+.product-picker-dialog .picker-footer { padding:10px 12px; display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid var(--border); font-size:.7rem; }
+.manual-product-field :focus-visible,.product-picker-dialog :focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+@media(max-width:600px) { .manual-product-field,.manual-content-type { grid-template-columns:minmax(0,1fr); }.manual-product-status { flex-wrap:wrap; }.manual-product-status p { flex-basis:100%; }.product-picker-dialog .picker-detail { max-height:110px; overflow:auto; } }

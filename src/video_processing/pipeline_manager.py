@@ -3931,14 +3931,22 @@ class PipelineManager:
             upload_cmd += ["--collection", collection_name]
         if not declare_original:
             upload_cmd.append("--no-original-declaration")
-        if settings.enable_wechat_product_link:
-            upload_cmd.append("--require-product")
-            source_chan_id = (
-                video.get("channel_id")
-                or video.get("source_channel_id")
-            )
-            if source_chan_id:
-                upload_cmd.extend(["--source-channel-id", str(source_chan_id).strip()])
+        from .utils.wechat_product_context import video_product_context
+        from .utils.wechat_product_task import freeze_task_product_decision, write_product_task_arguments
+        product_context = dict(video_product_context(self._OUT_DIR, video),
+                               youtube_id=yid, product_intent=video.get("product_intent") or "AUTO",
+                               product_id=video.get("product_id"), product_title=video.get("product_title"),
+                               view_count=video.get("view_count"), like_count=video.get("like_count"),
+                               status=video.get("status"))
+        product_task = freeze_task_product_decision(
+            self.db, f"pipeline:{yid}:{slice_index}", product_context, settings.wechat_product_policy_path)
+        from .utils.wechat_product_execution import product_artifacts_digest, product_task_preflight, product_observation_generation
+        if not product_task_preflight(product_task, self._OUT_DIR,
+                                  product_artifacts_digest(published_video, copy_file, cover_file),
+                                  observation_generation=product_observation_generation(settings.wechat_product_policy_path)):
+            self.db.defer_ready_publication(yid, '商品等待：原商品不可用、身份阻断或检查退避；保留原决定和成片', slice_index=slice_index)
+            return
+        upload_cmd.extend(write_product_task_arguments(product_task, evidence_dir.parent / '_product_task_inputs' / evidence_dir.name))
 
         try:
             res = self._run_tracked(upload_cmd, yid, slice_index=slice_index, text=True,
@@ -3959,6 +3967,9 @@ class PipelineManager:
             )
             return
         except subprocess.CalledProcessError as upload_err:
+            if upload_err.returncode == 14:
+                self.db.defer_ready_publication(yid, '商品等待：未点击发表，保留原商品和成片，按有界退避重新核验', slice_index=slice_index)
+                return
             if upload_err.returncode == 11:
                 self.db.defer_ready_publication(yid, "同账号浏览器会话占用，等待释放后自动重试", slice_index=slice_index)
                 return
@@ -4382,6 +4393,9 @@ class PipelineManager:
                                     "score": video.get("score", 0),
                                     "source": video.get("source", "AUTO"),
                                     "content_type": video.get("content_type"),
+                                    "product_intent": video.get("product_intent") or "AUTO",
+                                    "product_id": video.get("product_id"), "product_title": video.get("product_title"),
+                                    "view_count": video.get("view_count"), "like_count": video.get("like_count"),
                                     "duration_sec": int(ch["end_time"] - ch["start_time"]),
                                     "trim_start": f"{ch['start_time']:.3f}",
                                     "trim_end": f"{ch['end_time']:.3f}",
@@ -4411,6 +4425,12 @@ class PipelineManager:
                         pass
                 if self._check_censorship(yid, title, description, zh_title=zh_title_for_check, slice_index=slice_index):
                     return
+
+                # 来源预检、分片和内容检查后才算正式制作；父分片占位不消耗首条。
+                if video.get("content_type") == "ENGLISH_WORLD_SHORT" and (video.get("product_intent") or "AUTO") == "AUTO":
+                    from .utils.wechat_product_task import product_profile_scope
+                    self.db.register_product_production(f"pipeline:{yid}:{slice_index}",
+                        account_id=product_profile_scope(self._OUT_DIR / 'wechat_state.json'))
 
                 # ── 2a. COPYWRITING ────────────────────────────────────────────────
                 # [Claude_Sonnet_4.6_Thinking_planning] v2.8.0 前移至 TRANSCRIBING 之前：

@@ -185,6 +185,8 @@ from web.product_settings import create_product_settings_router
 app.include_router(create_product_settings_router(
     active=settings.wechat_product_policy_path, status=settings.wechat_product_status_path,
     output=Path(__file__).resolve().parents[2] / "output", videos=db.get_product_preview_videos,
+    publisher_connected=True, production_lookup=db.get_product_production, decision_lookup=db.get_product_task_decision,
+    legacy_lookup=db.is_legacy_product_review,
 ))
 _wechat_login_thread: Optional[threading.Thread] = None
 _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
@@ -1632,6 +1634,8 @@ def get_videos(
         created_window=created_window,
         funnel_stage=funnel_stage,
     )
+    for video in videos:
+        video['product_decision'] = db.get_product_task_decision(f"pipeline:{video['youtube_id']}:{video.get('slice_index') or 0}")
     _attach_publish_display_fields(videos)
     _attach_ready_publication_fields(videos)
     tab_counts = db.get_tab_counts()
@@ -2149,6 +2153,8 @@ class AddVideoRequest(BaseModel):
     disable_slicing: Optional[bool] = True  # [Gemini_3.5_Flash_planning] 默认不分片 (整片模式)
     tts_provider: Optional[str] = None      # [Claude_Sonnet_4.6_Thinking_planning] TTS 配音引擎，nullable
     content_type: str = CONTENT_TYPE_GENERAL
+    product_intent: str = 'NONE'
+    product_alias: Optional[str] = None
 
 
 @app.post("/api/videos/add")
@@ -2186,6 +2192,19 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
     # [Claude_Sonnet_4.6_Thinking_planning] SEC-1: 使用 _is_youtube_url() 严格 netloc 匹配
     if not _is_youtube_url(url):
         return {"success": False, "error": "请输入有效的 YouTube 视频 URL（必须来自 youtube.com 或 youtu.be）"}
+
+    # 手动商品意图在任何抓取前核验，不相信客户端商品标题/账号标记。
+    product = None
+    if req.product_intent not in {'NONE', 'PRODUCT'}:
+        return {"success": False, "error": "手动任务必须明确不绑定或指定商品"}
+    if req.product_intent == 'NONE' and req.product_alias:
+        return {"success": False, "error": "不绑定商品不能同时指定商品"}
+    if req.product_intent == 'PRODUCT':
+        try:
+            from video_processing.utils.wechat_product_task import validate_manual_product
+            product = validate_manual_product(settings.wechat_product_policy_path, req.product_alias)
+        except (ValueError, OSError) as exc:
+            return {"success": False, "error": str(exc)}
 
     # ── 3. yt-dlp 获取视频元数据 ─────────────────────────────────────
     try:
@@ -2248,7 +2267,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
 
     # 手工添加给100分加急
     disable_slicing_val = 1 if req.disable_slicing else 0
-    db.add_video(
+    inserted = db.add_video(
         video_id, title, channel_id, score=100, source="MANUAL",
         duration_sec=duration_sec, view_count=view_count,
         like_count=like_count, upload_date=upload_date,
@@ -2256,7 +2275,12 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         disable_slicing=disable_slicing_val,
         tts_provider=req.tts_provider or None,  # [Claude_Sonnet_4.6_Thinking_planning] 传递 TTS 配音引擎设置
         content_type=content_type,
+        product_intent=req.product_intent, product_id=product['product_id'] if product else None,
+        product_title=product['title'] if product else None,
     )
+    if not inserted:
+        existing = db.get_video_by_youtube_id(video_id)
+        return {"success": False, "already_exists": bool(existing), "error": "任务未新增；已有任务不会覆盖商品意图"}
     bg_tasks.add_task(_translate_title_task, video_id, title)
     
     return {
@@ -2269,6 +2293,8 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
         "disable_slicing": req.disable_slicing,
         "tts_provider": req.tts_provider,  # [Claude_Sonnet_4.6_Thinking_planning]
         "content_type": content_type,
+        "product_intent": req.product_intent, "product_id": product['product_id'] if product else None,
+        "product_title": product['title'] if product else None,
     }
 
 

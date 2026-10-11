@@ -14,6 +14,7 @@ from scripts import submit_english_world_review as submitter
 from scripts import wechat_uploader
 from video_processing.db.database import PipelineDB
 from video_processing.english_world.package_integrity import calculate_package_hashes
+from video_processing.english_world.product_production import start_product_production
 
 
 def _package(tmp_path, policy="DO_NOT_DECLARE"):
@@ -22,7 +23,11 @@ def _package(tmp_path, policy="DO_NOT_DECLARE"):
         path = tmp_path / f"{field}.bin"
         path.write_text(field, encoding="utf-8")
         item[f"{field}_path"] = str(path)
-    manifest = {"content_type": "ENGLISH_WORLD_SHORT"}
+    # 此声明用例是明确人工不挂商品包，不占自动制作名额；真实商品契约仍验证。
+    manifest = start_product_production(None, {
+        'content_type': 'ENGLISH_WORLD_SHORT',
+        'source_provenance': {'youtube_id': 'Abcdef12345', 'source_start_seconds': 0, 'source_end_seconds': 40},
+    }, product_intent='NONE')
     if policy is not None:
         manifest["wechat_original_declaration"] = policy
     Path(item["manifest_path"]).write_text(json.dumps(manifest), encoding="utf-8")
@@ -132,6 +137,11 @@ def test_submitter_passes_approved_policy_to_uploader(tmp_path, monkeypatch):
         assert "--require-original-declaration" not in command
         evidence_dir = Path(command[command.index("--evidence-dir") + 1])
         _accepted_receipt(evidence_dir)
+        decision = json.loads(Path(command[command.index('--product-task-decision') + 1]).read_text())
+        (evidence_dir / 'product_selection_receipt.json').write_text(json.dumps({
+            'required': False, 'binding_confirmed': False, 'unbound_confirmed': True,
+            'task_id': decision['task_id'], 'config_digest': decision.get('config_digest'),
+        }), encoding='utf-8')
         wechat_uploader._write_original_declaration_receipt(
             evidence_dir, required=False, requested=False, applied=False, ui_state="NOT_DECLARED",
         )

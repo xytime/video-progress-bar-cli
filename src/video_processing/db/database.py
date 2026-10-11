@@ -544,6 +544,23 @@ class PipelineDB(WallstreetExperimentDAL):
                 "ON processed_videos(content_type)"
             )
 
+            # 商品意图显式迁移：历史任务 AUTO；新手动入口自行传 NONE/PRODUCT。
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            product_columns = {row[1] for row in cursor.fetchall()}
+            for name, definition in (("product_intent", "TEXT NOT NULL DEFAULT 'AUTO'"),
+                                     ("product_id", "TEXT"), ("product_title", "TEXT")):
+                if name not in product_columns:
+                    cursor.execute(f"ALTER TABLE processed_videos ADD COLUMN {name} {definition}")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS product_production_tasks (
+                task_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, platform TEXT NOT NULL,
+                content_type TEXT NOT NULL, business_day TEXT NOT NULL, is_first INTEGER NOT NULL,
+                registered_at TEXT NOT NULL)""")
+            cursor.execute("""CREATE UNIQUE INDEX IF NOT EXISTS product_daily_first ON product_production_tasks
+                (account_id, platform, content_type, business_day) WHERE is_first=1""")
+            cursor.execute("""CREATE TABLE IF NOT EXISTS product_task_decisions (
+                task_id TEXT PRIMARY KEY, payload TEXT NOT NULL, frozen_at TEXT NOT NULL)""")
+            conn.commit()
+
             # [Claude_Opus_4.8] v3.6.0: 检查并补足 bypass_censorship 字段（人工复核放行标志）
             cursor.execute("PRAGMA table_info(processed_videos)")
             columns = [col[1] for col in cursor.fetchall()]
@@ -2065,6 +2082,17 @@ class PipelineDB(WallstreetExperimentDAL):
                 ON wechat_interaction_draft_revisions(interaction_id, id)
             ''')
             
+            cursor.execute('CREATE TABLE IF NOT EXISTS product_contract_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            cursor.execute('CREATE TABLE IF NOT EXISTS product_legacy_reviews (review_id TEXT PRIMARY KEY, manifest_sha256 TEXT NOT NULL)')
+            conn.commit()
+            # 后台与发布常驻者可同时启动：哨兵检查和白名单必须属于同一写事务。
+            cursor.execute('BEGIN IMMEDIATE')
+            if cursor.execute("SELECT 1 FROM product_contract_meta WHERE key='legacy-review-cutover-v2'").fetchone() is None:
+                cursor.execute('''INSERT OR IGNORE INTO product_legacy_reviews
+                    SELECT id, manifest_sha256 FROM english_world_review_items
+                    WHERE length(manifest_sha256)=64''')
+                cursor.execute("INSERT INTO product_contract_meta VALUES ('legacy-review-cutover-v2', ?)",
+                               (datetime.datetime.now(datetime.timezone.utc).isoformat(),))
             conn.commit()
 
     # --- AI processing audit DAL ---
@@ -2603,14 +2631,16 @@ class PipelineDB(WallstreetExperimentDAL):
             rows = conn.execute("""
                 SELECT 'video:' || id AS preview_key, youtube_id, slice_index,
                        COALESCE(zh_title, title) AS title, channel_id, category, content_type,
-                       status AS state, updated_at
+                       status AS state, updated_at, product_intent, product_id, product_title, view_count, like_count,
+                       NULL AS manifest_path, NULL AS manifest_sha256, NULL AS review_id
                 FROM processed_videos
                 WHERE status IN ('PENDING','PUBLISH_PRECHECK','COPYWRITING','AI_COVER_PENDING',
                                  'WECHAT_DEFERRED','LOGIN_REQUIRED','FAILED','PUBLISHING')
                 UNION ALL
                 SELECT 'english:' || id AS preview_key, source_youtube_id AS youtube_id,
                        0 AS slice_index, title, NULL AS channel_id, NULL AS category,
-                       'ENGLISH_WORLD_SHORT' AS content_type, state, updated_at
+                       'ENGLISH_WORLD_SHORT' AS content_type, state, updated_at, 'AUTO' AS product_intent, NULL AS product_id, NULL AS product_title, NULL AS view_count, NULL AS like_count,
+                       manifest_path, manifest_sha256, id AS review_id
                 FROM english_world_review_items
                 WHERE state IN ('READY_FOR_REVIEW','SUBMISSION_APPROVED','HELD','LOGIN_REQUIRED','FAILED')
                 ORDER BY updated_at DESC LIMIT ?
@@ -3064,6 +3094,88 @@ class PipelineDB(WallstreetExperimentDAL):
             }
 
 
+    def register_product_production(self, task_id: str, *, account_id: str = 'local-profile:primary',
+                                    content_type: str = 'ENGLISH_WORLD_SHORT', now=None) -> Dict[str, Any]:
+        """正式制作开始原子登记首条；相同任务跨日重入保持原业务日。"""
+        from zoneinfo import ZoneInfo
+        if not task_id or not account_id or content_type != 'ENGLISH_WORLD_SHORT':
+            raise ValueError('正式制作商品登记身份无效')
+        stamp = now or datetime.datetime.now(datetime.timezone.utc)
+        if stamp.tzinfo is None:
+            raise ValueError('制作登记时间必须带时区')
+        day = stamp.astimezone(ZoneInfo('Asia/Shanghai')).date().isoformat()
+        with self.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            old = conn.execute('SELECT * FROM product_production_tasks WHERE task_id=?', (task_id,)).fetchone()
+            if old:
+                if old['account_id'] != account_id or old['content_type'] != content_type:
+                    raise ValueError('正式制作登记范围冲突')
+                return self.get_product_production(task_id)
+            first = conn.execute("SELECT task_id FROM product_production_tasks WHERE account_id=? AND platform='wechat' AND content_type=? AND business_day=? AND is_first=1", (account_id, content_type, day)).fetchone()
+            conn.execute('INSERT INTO product_production_tasks VALUES (?, ?, ?, ?, ?, ?, ?)',
+                         (task_id, account_id, 'wechat', content_type, day, int(first is None), stamp.isoformat()))
+            conn.commit()
+        return self.get_product_production(task_id)
+
+    def get_product_production(self, task_id: str) -> Optional[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            row = conn.execute('''SELECT p.*, first.task_id AS first_task_id
+                FROM product_production_tasks p LEFT JOIN product_production_tasks first
+                ON first.account_id=p.account_id AND first.platform=p.platform
+                  AND first.content_type=p.content_type AND first.business_day=p.business_day AND first.is_first=1
+                WHERE p.task_id=?''', (task_id,)).fetchone()
+        return dict(row, is_first=bool(row['is_first'])) if row else None
+
+    def get_product_task_decision(self, task_id: str) -> Optional[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            row = conn.execute('SELECT payload FROM product_task_decisions WHERE task_id=?', (task_id,)).fetchone()
+        return json.loads(row['payload']) if row else None
+
+    def is_legacy_product_review(self, review_id: str, manifest_sha256: str) -> bool:
+        with self.get_connection() as conn:
+            return conn.execute('SELECT 1 FROM product_legacy_reviews WHERE review_id=? AND manifest_sha256=?',
+                                (review_id, manifest_sha256)).fetchone() is not None
+
+    def defer_english_world_product_wait(self, review_id: str, *, attempt_id: str, evidence_dir: str,
+                                        receipt: dict, wait_evidence: dict) -> bool:
+        """只消费上传器明确未点击发表的商品等待证据；保留尝试历史及原授权。"""
+        if (receipt.get('required') is not True or receipt.get('binding_confirmed') is not False
+                or receipt.get('state') != 'BLOCKED' or wait_evidence.get('not_submitted') is not True
+                or wait_evidence.get('submission_state') != 'NOT_SUBMITTED'
+                or wait_evidence.get('task_key') != receipt.get('task_id')
+                or wait_evidence.get('config_digest') != receipt.get('config_digest')
+                or (Path(evidence_dir) / 'submission_receipt.json').exists()):
+            return False
+        message = '商品等待：' + str(wait_evidence.get('reason')) + '；未点击发表，保留成片、原商品和原授权，按有界退避重新核验。'
+        with self.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            attempt = conn.execute('''SELECT 1 FROM english_world_submission_attempts
+                WHERE attempt_id=? AND review_id=? AND evidence_dir=? AND state='SUBMITTING'
+                  AND platform_post_id IS NULL''', (attempt_id, review_id, evidence_dir)).fetchone()
+            if not attempt:
+                return False
+            row = conn.execute('''UPDATE english_world_review_items SET state='SUBMISSION_APPROVED',
+                submission_started_at=NULL, submission_finished_at=NULL, uploader_exit_code=NULL,
+                error_message=?, updated_at=CURRENT_TIMESTAMP
+                WHERE id=? AND state='SUBMITTING' AND platform_post_id IS NULL AND platform_state IS NULL''',
+                (message, review_id))
+            if row.rowcount != 1:
+                return False
+            conn.execute("UPDATE english_world_submission_attempts SET state='FAILED', uploader_exit_code=14, error_message=?, finished_at=CURRENT_TIMESTAMP WHERE attempt_id=?", (message, attempt_id))
+            conn.commit()
+            return True
+
+    def freeze_product_task_decision(self, task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """并发冻结只有首个成功快照；重试必须消费原决定。"""
+        encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        with self.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            conn.execute('INSERT OR IGNORE INTO product_task_decisions VALUES (?, ?, ?)',
+                         (task_id, encoded, payload['frozen_at']))
+            row = conn.execute('SELECT payload FROM product_task_decisions WHERE task_id=?', (task_id,)).fetchone()
+            conn.commit()
+        return json.loads(row['payload'])
+
     # --- Video DAL ---
     def add_video(
         self,
@@ -3088,8 +3200,11 @@ class PipelineDB(WallstreetExperimentDAL):
         content_type: str = CONTENT_TYPE_GENERAL,   # 内容生产类型，独立于视频号分类
         censor_tag: Optional[str] = None,           # [Gemini_3.5_Flash_planning] 新增：敏感词标签
         censor_score: Optional[int] = None,         # [Gemini_3.5_Flash_planning] 新增：敏感词得分
+        product_intent: str = 'AUTO', product_id: Optional[str] = None, product_title: Optional[str] = None,
     ) -> bool:
         normalized_content_type = normalize_content_type(content_type)
+        from ..core.wechat_product_attachment import validate_intent
+        validate_intent(product_intent, product_id, product_title)
         # 前置黑名单检查，防止已删除视频被二次拉取
         if self.is_blacklisted(youtube_id):
             if source == 'MANUAL':
@@ -3104,11 +3219,11 @@ class PipelineDB(WallstreetExperimentDAL):
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
                         duration_sec, view_count, like_count, upload_date, source_published_at, trim_start, trim_end, disable_slicing,
-                        tts_provider, category, content_type, censor_tag, censor_score)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        tts_provider, category, content_type, censor_tag, censor_score, product_intent, product_id, product_title)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (youtube_id, slice_index, parent_id, title, channel_id, score, zh_title, source,
                      duration_sec, view_count, like_count, upload_date, source_published_at, trim_start, trim_end, disable_slicing,
-                     tts_provider, category, normalized_content_type, censor_tag, censor_score)  # [Gemini_3.5_Flash_planning]
+                     tts_provider, category, normalized_content_type, censor_tag, censor_score, product_intent, product_id, product_title)  # [Gemini_3.5_Flash_planning]
                 )
                 conn.commit()
                 return True
@@ -3204,12 +3319,15 @@ class PipelineDB(WallstreetExperimentDAL):
                 if yid in blacklisted and source != "MANUAL":
                     continue
                     
+                from video_processing.core.wechat_product_attachment import validate_intent
+                validate_intent(v.get("product_intent", "AUTO"), v.get("product_id"), v.get("product_title"))
                 insert_data.append((
                     yid, v.get("slice_index", 0), v.get("parent_id"), v.get("title"), v.get("channel_id"),
                     v.get("score", 0), v.get("zh_title"), source, v.get("duration_sec"), v.get("view_count"),
                     v.get("like_count"), v.get("upload_date"), v.get("source_published_at"), v.get("trim_start"), v.get("trim_end"),
                     v.get("disable_slicing", 1),
                     normalize_content_type(v.get("content_type")),
+                    v.get("product_intent", "AUTO"), v.get("product_id"), v.get("product_title"),
                 ))
             
             if not insert_data:
@@ -3220,8 +3338,8 @@ class PipelineDB(WallstreetExperimentDAL):
                     """INSERT INTO processed_videos
                        (youtube_id, slice_index, parent_id, title, channel_id, score, status, zh_title, source,
                         duration_sec, view_count, like_count, upload_date, source_published_at, trim_start, trim_end, disable_slicing,
-                        content_type)
-                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        content_type, product_intent, product_id, product_title)
+                       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     insert_data
                 )
                 conn.commit()
@@ -5096,7 +5214,8 @@ class PipelineDB(WallstreetExperimentDAL):
                                       channel_min_scores: Optional[Dict[str, int]] = None,
                                       allow_deferred_predecessors: bool = False,
                                       source_subtitle_retry_hours: int = 6,
-                                      ready_only: Optional[bool] = None) -> List[Dict[str, Any]]:
+                                      ready_only: Optional[bool] = None,
+                                      excluded_product_tasks: Collection[str] = ()) -> List[Dict[str, Any]]:
         """获取高分待处理视频列表。包括主视频(slice_index=0)和切片子视频均在此获取排队。
         [Gemini_3.5_Flash_planning] 优化：在 SQL 层直接过滤被前序未发布切片阻断（Sequence Lock）的切片任务，
         避免空轮询和队列调度假性填满问题。
@@ -5120,6 +5239,7 @@ class PipelineDB(WallstreetExperimentDAL):
             SELECT pv.* FROM processed_videos pv
             LEFT JOIN processed_videos origin ON origin.id = COALESCE(pv.parent_id, pv.id)
             WHERE pv.status = 'PENDING' AND ({threshold_sql}) {readiness}
+              AND 'pipeline:' || pv.youtube_id || ':' || pv.slice_index NOT IN (SELECT value FROM json_each(?))
               AND NOT (pv.channel_id IN (?, ?) AND COALESCE(pv.parent_id, pv.id) <= ?)
               AND {rate_sql}
               AND NOT EXISTS (SELECT 1 FROM copywriter_deferred c
@@ -5154,7 +5274,7 @@ class PipelineDB(WallstreetExperimentDAL):
         with self.get_connection() as conn:
             cursor = conn.execute(
                 query,
-                (*threshold_params, *TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_auto_publish_after_id,
+                (*threshold_params, json.dumps(list(excluded_product_tasks)), *TED_AUTO_PUBLISH_CHANNEL_IDS, settings.ted_auto_publish_after_id,
                  *rate_params,
                  f"-{max(1, int(source_subtitle_retry_hours))} hours", *terminal_states, limit),
             )
@@ -7644,13 +7764,17 @@ class PipelineDB(WallstreetExperimentDAL):
             row = conn.execute("SELECT * FROM english_world_review_items WHERE id = ?", (clean_id,)).fetchone()
             return dict(row) if row else None
 
-    def get_next_auto_approved_english_world_submission(self) -> Optional[Dict[str, Any]]:
+    def get_next_auto_approved_english_world_submission(self, *, excluded_product_tasks: Collection[str] = ()) -> Optional[Dict[str, Any]]:
         """读取下一条等待公共窗口的自动授权项；只读且不领取投稿。"""
         with self.get_connection() as conn:
             row = conn.execute(
                 """SELECT * FROM english_world_review_items
                    WHERE state = 'SUBMISSION_APPROVED' AND approval_source = 'AUTO_POLICY'
-                   ORDER BY approved_at ASC, id ASC LIMIT 1"""
+                     AND NOT EXISTS (SELECT 1 FROM product_task_decisions pd
+                       WHERE pd.task_id IN (SELECT value FROM json_each(?))
+                         AND (json_extract(pd.payload, '$.context.review_id')=english_world_review_items.id
+                              OR json_extract(pd.payload, '$.context.legacy_review_id')=english_world_review_items.id))
+                   ORDER BY approved_at ASC, id ASC LIMIT 1""", (json.dumps(list(excluded_product_tasks)),)
             ).fetchone()
             return dict(row) if row else None
 

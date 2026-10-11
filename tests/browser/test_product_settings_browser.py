@@ -1,9 +1,10 @@
 """真实 Chromium + 实际 FastAPI 路由；所有 HTTP 在隔离夹具内转送 TestClient。"""
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 import pytest
-from playwright.sync_api import expect
+from playwright.sync_api import expect, TimeoutError as PlaywrightTimeoutError
 from tests.browser_fixtures import chromium
 from tests.unit.test_wechat_product_groups import api_setup, data
 from video_processing.utils.wechat_product_config import load_policy
@@ -13,7 +14,7 @@ def ui(chromium, api_setup):
     client,active,status,records=api_setup
     page=chromium.new_page(viewport={'width':1280,'height':900})
     errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
-    flags={'offline':False,'conflict':False,'empty':False,'slow_save':False,'writes':0}
+    flags={'offline':False,'conflict':False,'empty':False,'slow_save':False,'writes':0,'records':records}
     def route(route):
         req=route.request;path=urlparse(req.url).path
         if flags['offline'] and path.startswith('/api/'):
@@ -38,6 +39,88 @@ def ui(chromium, api_setup):
     page.close();assert errors==[]
 
 
+@pytest.fixture
+def frozen_ui(chromium, tmp_path, data):
+    """真实 DAL 冻结快照与路由，浏览器只操作隔离配置，不触发发布。"""
+    from fastapi import FastAPI
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.testclient import TestClient
+    from video_processing.db.database import PipelineDB
+    from video_processing.utils.wechat_product_task import freeze_task_product_decision
+    from web.product_settings import create_product_settings_router
+
+    active = tmp_path / 'policy.json'
+    active.write_text(json.dumps(data))
+    status = tmp_path / 'runtime.json'
+    output = tmp_path / 'output'
+    output.mkdir()
+    db = PipelineDB(str(tmp_path / 'preview.sqlite'))
+    now = datetime(2026, 10, 11, 2, tzinfo=timezone.utc)
+    snapshots = {}
+    preview_keys = {}
+    for name, intent, content_type in (
+        ('first', 'AUTO', 'ENGLISH_WORLD_SHORT'),
+        ('later', 'AUTO', 'ENGLISH_WORLD_SHORT'),
+        ('none', 'NONE', 'GENERAL'),
+    ):
+        youtube_id = 'frozen-' + name
+        task_id = f'pipeline:{youtube_id}:0'
+        db.add_video(youtube_id, name + ' 冻结测试', 'test-channel',
+                     view_count=1000, like_count=0, content_type=content_type,
+                     product_intent=intent)
+        if content_type == 'ENGLISH_WORLD_SHORT':
+            db.register_product_production(task_id, account_id='local-profile:isolated-test', now=now)
+        snapshots[name] = freeze_task_product_decision(db, task_id, dict(
+            youtube_id=youtube_id, content_type=content_type, product_intent=intent,
+            view_count=1000, like_count=0), active, now=now)
+        preview_keys[name] = next(row['preview_key'] for row in db.get_product_preview_videos()
+                                  if row['youtube_id'] == youtube_id)
+    app = FastAPI()
+    app.include_router(create_product_settings_router(
+        active=active, status=status, output=output,
+        videos=db.get_product_preview_videos,
+        production_lookup=db.get_product_production,
+        decision_lookup=db.get_product_task_decision))
+    app.mount('/static', StaticFiles(directory=Path(__file__).resolve().parents[2] / 'src/web/static'))
+    page = chromium.new_page(viewport={'width': 1280, 'height': 900})
+    errors = []
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    with TestClient(app) as client:
+        def route(route):
+            request = route.request
+            response = client.request(request.method, urlparse(request.url).path,
+                                      content=request.post_data,
+                                      headers={'Content-Type': 'application/json'})
+            route.fulfill(status=response.status_code, body=response.content,
+                          content_type=response.headers.get('content-type', 'text/plain'))
+        page.route('**/*', route)
+        page.goto('http://settings-test.invalid/product-settings')
+        expect(page.locator('#editor')).to_be_enabled()
+        yield page, active, status, db, snapshots, preview_keys
+    page.close()
+    assert errors == []
+
+
+def choose(page, selector, value):
+    # 通过真实搜索弹层操作；原 select 仅作为保存值契约。
+    button=page.locator(selector+'-picker')
+    button.click()
+    page.locator('#picker-list').select_option(value)
+    page.locator('.picker-apply').click()
+
+
+def edit_library(page, alias):
+    page.locator('#tab-library').click()
+    page.locator(f'[data-library-alias="{alias}"]').click()
+
+
+def reload_ui(page):
+    page.locator('#tab-records').click()
+    page.locator('#reload').click()
+    if not page.locator('#discard-dialog').is_visible():
+        page.locator('#tab-rules').click()
+
+
 def save_with_preview(page):
     page.locator('#save').click()
     page.wait_for_function("document.querySelector('#impact-dialog').open || !document.querySelector('#editor').disabled")
@@ -49,8 +132,8 @@ def test_real_save_preview_persist_and_version(ui):
     page,active,status,flags=ui
     expect(page).to_have_title('商品挂载设置 · 视频控制台')
     expect(page.locator('#publisher-state')).to_contain_text('尚未接入')
-    page.locator('#english_world-0').select_option('finance')
-    page.locator('#english_world-1').select_option('news')
+    choose(page, '#english_world-0', 'finance')
+    choose(page, '#english_world-1', 'news')
     page.locator('#video').select_option('english:1')
     page.locator('#preview').click()
     expect(page.locator('#preview-result')).to_contain_text('英语世界短视频')
@@ -66,23 +149,161 @@ def test_real_save_preview_persist_and_version(ui):
     assert not status.exists()
 
 
+@pytest.mark.parametrize('views,likes,rate,state,reason', [
+    (10000, 1000, '10.0%', '有效', 'ATTACH_THRESHOLD'),
+    (10000, 0, '0%', '有效', 'SKIP_BELOW_THRESHOLD'),
+    (10000, None, '未知', '缺失', 'SKIP_METRICS_UNKNOWN'),
+    (0, 0, '未知', '无效', 'SKIP_METRICS_INVALID'),
+])
+def test_preview_reports_source_metrics_without_treating_zero_as_unknown(ui, views, likes, rate, state, reason):
+    page, active, status, flags = ui
+    original = active.read_bytes()
+    flags['records'][0].update(view_count=views, like_count=likes, product_intent='AUTO')
+    page.locator('#video').select_option('video:1')
+    page.locator('#preview').click()
+    simulation = page.locator('#preview-simulation')
+    expect(simulation).to_contain_text(f'源播放数：{views}')
+    expect(simulation).to_contain_text(f'源点赞数：{likes if likes is not None else "未知"}')
+    expect(simulation).to_contain_text(f'源点赞率：{rate}')
+    expect(simulation).to_contain_text(f'指标状态：{state}')
+    expect(simulation).to_contain_text(reason)
+    expect(simulation).to_contain_text('商品意图：自动规则')
+    if reason != 'ATTACH_THRESHOLD':
+        expect(simulation).to_contain_text('不执行商品选择器')
+    assert active.read_bytes() == original
+    assert not status.exists()
+
+
+@pytest.mark.parametrize('name', ['first', 'later', 'none'])
+def test_saved_config_simulation_stays_separate_from_actual_frozen_decision(frozen_ui, name):
+    page, active, status, db, snapshots, keys = frozen_ui
+    old = snapshots[name]
+    choose(page, '#english_world-0', 'finance')
+    save_with_preview(page)
+    expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    new = load_policy(active)
+    assert new.version != old['config_version']
+    assert new.digest != old['config_digest']
+    page.locator('#video').select_option(keys[name])
+    page.locator('#preview').click()
+    frozen = page.locator('#preview-frozen')
+    simulation = page.locator('#preview-simulation')
+    expect(frozen).to_contain_text('已冻结实际决定（重试沿用）')
+    expect(frozen).to_contain_text('保存或预览新配置不会改变它')
+    expect(frozen).to_contain_text(old['config_version'])
+    expect(frozen).to_contain_text(old['config_digest'])
+    expect(frozen).to_contain_text('源播放数：1000 · 源点赞数：0 · 源点赞率：0%')
+    expect(simulation).to_contain_text('新配置模拟（不改变已冻结任务）')
+    expect(simulation).to_contain_text(new.version)
+    expect(simulation).to_contain_text(new.digest)
+    expect(simulation).not_to_contain_text(old['config_digest'])
+    if name == 'none':
+        expect(frozen).to_contain_text('商品意图：手动不绑定 · 挂载决定：无需挂载')
+        expect(frozen).to_contain_text('冻结决定无需商品，不执行商品选择器')
+        expect(frozen.locator('li')).to_have_count(0)
+        expect(simulation).to_contain_text('SKIP_MANUAL_NONE')
+    else:
+        expect(frozen).to_contain_text('业务日（北京时间）：2026-10-11')
+        expect(frozen).to_contain_text(f'正式制作任务：pipeline:frozen-{name}:0')
+        expect(frozen).to_contain_text('当日首条任务：pipeline:frozen-first:0')
+        expect(frozen).to_contain_text('不代表平台账号已核实')
+        if name == 'first':
+            expect(frozen).to_contain_text('ATTACH_ENGLISH_FIRST')
+            expect(frozen.locator('li')).to_have_count(1)
+            expect(frozen.locator('li')).to_contain_text('ID 10001054866768')
+            expect(simulation.locator('li').first).to_contain_text('ID 10000028955239')
+        else:
+            expect(frozen).to_contain_text('本任务是后续任务')
+            expect(frozen).to_contain_text('SKIP_ENGLISH_LATER')
+            expect(frozen.locator('li')).to_have_count(0)
+            expect(simulation).to_contain_text('不执行商品选择器')
+    assert db.get_product_task_decision(old['task_id']) == old
+    assert not status.exists()
+    page.set_viewport_size({'width': 390, 'height': 900})
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    evidence = Path(__file__).resolve().parents[2] / 'output/test-evidence'
+    evidence.mkdir(parents=True, exist_ok=True)
+    page.screenshot(path=str(evidence / f'product-preview-frozen-{name}.png'), full_page=True)
+
+
+def test_manual_preview_uses_explicit_product_above_automatic_metrics_rule(ui):
+    page, active, status, flags = ui
+    original = active.read_bytes()
+    flags['records'][0].update(view_count=10000, like_count=0, product_intent='AUTO')
+    page.locator('#video').select_option('video:1')
+    choose(page, '#manual', 'news')
+    page.locator('#preview').click()
+    simulation = page.locator('#preview-simulation')
+    expect(simulation).to_contain_text('商品意图：手动指定商品 · 挂载决定：要求挂载')
+    expect(simulation).to_contain_text('ATTACH_MANUAL')
+    expect(simulation).to_contain_text('人工意图优先')
+    expect(simulation.locator('li')).to_have_count(1)
+    expect(simulation.locator('li')).to_have_text('维特根斯坦说逻辑与语言 (英)维特根斯坦著 · ID 10000129752415')
+    assert active.read_bytes() == original
+    assert flags['records'][0]['product_intent'] == 'AUTO'
+    assert not status.exists()
+
+
+def test_manual_preview_override_does_not_change_frozen_none_intent(frozen_ui):
+    page, active, status, db, snapshots, keys = frozen_ui
+    original = active.read_bytes()
+    page.locator('#video').select_option(keys['none'])
+    choose(page, '#manual', 'finance')
+    page.locator('#preview').click()
+    expect(page.locator('#preview-frozen')).to_contain_text('商品意图：手动不绑定 · 挂载决定：无需挂载')
+    expect(page.locator('#preview-frozen li')).to_have_count(0)
+    expect(page.locator('#preview-simulation')).to_contain_text('商品意图：手动指定商品 · 挂载决定：要求挂载')
+    expect(page.locator('#preview-simulation li')).to_have_count(1)
+    expect(page.locator('#preview-simulation li')).to_contain_text('ID 10000028955239')
+    assert db.get_product_task_decision(snapshots['none']['task_id']) == snapshots['none']
+    assert active.read_bytes() == original
+    assert not status.exists()
+
+
+def test_impact_distinguishes_candidate_change_from_unchanged_frozen_tasks(frozen_ui):
+    page, active, _, db, snapshots, _ = frozen_ui
+    original = active.read_bytes()
+    choose(page, '#english_world-0', 'finance')
+    page.locator('#save').click()
+    expect(page.locator('#impact-dialog')).to_be_visible()
+    expect(page.locator('#impact-result')).to_contain_text('配置候选链变化 2 条；预计实际选品变化 0 条')
+    expect(page.locator('#impact-result')).to_contain_text('实际决定已冻结，继续沿用原快照')
+    page.locator('#impact-cancel').click()
+    assert active.read_bytes() == original
+    for old in snapshots.values():
+        assert db.get_product_task_decision(old['task_id']) == old
+
+
+@pytest.mark.parametrize('likes,actual_count', [(1000, 1), (0, 0)])
+def test_impact_counts_actual_change_only_when_source_metrics_require_attachment(ui, likes, actual_count):
+    page, active, _, flags = ui
+    original = active.read_bytes()
+    flags['records'][0].update(view_count=10000, like_count=likes, product_intent='AUTO')
+    choose(page, '#wallstreet-0', 'news')
+    page.locator('#save').click()
+    expect(page.locator('#impact-dialog')).to_be_visible()
+    expect(page.locator('#impact-result')).to_contain_text(f'配置候选链变化 1 条；预计实际选品变化 {actual_count} 条')
+    page.locator('#impact-cancel').click()
+    assert active.read_bytes() == original
+
+
 def test_conflict_failure_preserves_draft_and_reload_cancel(ui):
     page,active,status,flags=ui
-    old=active.read_bytes();page.locator('#ted-0').select_option('finance');flags['conflict']=True
+    old=active.read_bytes();choose(page, '#ted-0', 'finance');flags['conflict']=True
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('其他窗口更新')
     expect(page.locator('#ted-0')).to_have_value('finance');assert active.read_bytes()==old
-    page.locator('#reload').click();expect(page.locator('#discard-dialog')).to_be_visible()
+    reload_ui(page);expect(page.locator('#discard-dialog')).to_be_visible()
     expect(page.locator('#keep-editing')).to_be_focused()
     page.keyboard.press('Escape');expect(page.locator('#discard-dialog')).not_to_be_visible()
-    page.locator('#reload').click();page.locator('#discard').click()
+    reload_ui(page);page.locator('#discard').click()
     expect(page.locator('#ted-0')).to_have_value('default')
-    flags['offline']=True;page.locator('#reload').click();expect(page.locator('#feedback')).to_contain_text('读取失败')
-    flags['offline']=False;page.locator('#reload').click();expect(page.locator('#feedback')).to_contain_text('配置已载入')
+    flags['offline']=True;reload_ui(page);expect(page.locator('#feedback')).to_contain_text('读取失败')
+    flags['offline']=False;reload_ui(page);expect(page.locator('#feedback')).to_contain_text('配置已载入')
 
 
 def test_invalid_chain_does_not_save(ui):
     page,active,_,_=ui
-    old=active.read_bytes();page.locator('#english_world-0').select_option('finance');page.locator('#english_world-1').select_option('news')
+    old=active.read_bytes();choose(page, '#english_world-0', 'finance');choose(page, '#english_world-1', 'news')
     page.locator('summary').filter(has_text='识别条件').click();page.locator('#attempts').select_option('2')
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('默认回退不可达')
     assert active.read_bytes()==old
@@ -95,7 +316,7 @@ def test_keyboard_responsive_and_screenshot(ui,width):
     page,_,_,_=ui
     page.set_viewport_size({'width':width,'height':900})
     page.emulate_media(reduced_motion='reduce')
-    control=page.locator('#wallstreet-0');control.focus();page.keyboard.press('Space');page.keyboard.press('ArrowDown');page.keyboard.press('Enter')
+    control=page.locator('#wallstreet-0-picker');expect(control).to_be_enabled();control.focus();page.keyboard.press('Space');expect(page.locator('.product-picker-dialog')).to_be_visible();page.keyboard.press('Escape');expect(page.locator('.product-picker-dialog')).not_to_be_visible()
     expect(control).to_be_focused()
     assert ui[3]['writes']==0
     page.locator('#video').select_option('english:1');page.locator('#preview').click()
@@ -108,7 +329,7 @@ def test_keyboard_responsive_and_screenshot(ui,width):
 
 def test_empty_list_and_draft_preview(ui):
     page,_,_,flags=ui
-    flags['empty']=True;page.locator('#reload').click();expect(page.locator('#videos-state')).to_contain_text('暂无待发布')
+    flags['empty']=True;reload_ui(page);expect(page.locator('#videos-state')).to_contain_text('暂无待发布')
     page.locator('#sample-context summary').click();page.locator('#topic').select_option('AI');page.locator('#preview').click()
     expect(page.locator('#preview-result')).to_contain_text('AI 相关资讯')
     page.locator('#topic').select_option('');page.locator('#category').select_option('科技');page.locator('#preview').click()
@@ -117,11 +338,12 @@ def test_empty_list_and_draft_preview(ui):
 
 def test_pending_save_blocks_duplicate_clicks(ui):
     page,active,_,flags=ui
-    before=active.read_bytes();page.locator('#ted-0').select_option('finance')
+    before=active.read_bytes();choose(page, '#ted-0', 'finance')
     flags['hold']=('PUT','/api/product-settings')
     save_with_preview(page);expect(page.locator('#save')).to_be_disabled()
     expect(page.locator('#feedback')).to_contain_text('正在保存')
-    page.locator('#save').evaluate('(button)=>button.click()')
+    with pytest.raises(PlaywrightTimeoutError):
+        page.locator('#save').click(timeout=200)
     assert flags['writes']==1 and active.read_bytes()==before
     flags['release']();expect(page.locator('#feedback')).to_contain_text('配置已保存；发布器尚未接入')
 
@@ -143,7 +365,7 @@ def test_all_product_dropdowns_use_catalog_and_new_selection_persists(ui):
     path=install_catalog(active,rows)
     catalog=json.loads(path.read_text());catalog['items'][-1]['stock']=0;path.write_text(json.dumps(catalog))
     original=active.read_bytes()
-    page.locator('#reload').click()
+    reload_ui(page)
     expect(page.locator('#catalog-state')).to_contain_text('5 件商品')
     expect(page.locator('#catalog-state')).to_contain_text('全量完整性尚未确认')
     assert active.read_bytes()==original
@@ -153,7 +375,7 @@ def test_all_product_dropdowns_use_catalog_and_new_selection_persists(ui):
         expect(page.locator(control+' option[value="product_70001"]')).to_have_count(1)
         expect(page.locator(control+' option[value="product_70002"]')).to_have_count(1)
         expect(page.locator(control+' option[value="product_70002"]')).to_contain_text('采集时缺货')
-    page.locator('#english_world-0').select_option('product_70001')
+    choose(page, '#english_world-0', 'product_70001')
     expect(page.locator('#english_world-0-detail')).to_contain_text('ID 70001')
     expect(page.locator('#english_world-0-detail')).to_contain_text('采集时库存未知')
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
@@ -163,7 +385,7 @@ def test_all_product_dropdowns_use_catalog_and_new_selection_persists(ui):
     assert flags['writes']==1
     assert json.loads(active.read_text())['profiles']['ted']==saved['profiles']['ted']
     path.write_text('{')
-    page.locator('#reload').click();expect(page.locator('#catalog-state')).to_contain_text('商品清单读取失败')
+    reload_ui(page);expect(page.locator('#catalog-state')).to_contain_text('商品清单读取失败')
     expect(page.locator('#english_world-0')).to_have_value('product_70001')
 
 
@@ -172,7 +394,7 @@ def test_catalog_file_preview_import_and_error_keeps_current(ui):
     page,active,_,flags=ui
     original=active.read_bytes()
     doc=document(list(json.loads(original)['products'].values())+[dict(product_id='8880001',title='新导入目录图书')])
-    page.locator('summary').filter(has_text='更新商品清单').click()
+    page.locator('#tab-library').click();page.locator('#catalog-open').click()
     page.locator('#catalog-file').set_input_files({'name':'catalog.json','mimeType':'application/json','buffer':json.dumps(doc).encode()})
     page.locator('#catalog-check').click()
     expect(page.locator('#catalog-import-feedback')).to_contain_text('文件完整性校验通过，尚未导入')
@@ -184,8 +406,8 @@ def test_catalog_file_preview_import_and_error_keeps_current(ui):
     for control in ('#default-product','#english_world-0','#ted-1','#manual','#rule-0'):
         expect(page.locator(control+' option[value="product_8880001"]')).to_have_count(1)
     assert active.read_bytes()==original
-    page.reload();expect(page.locator('#catalog-state')).to_contain_text('2 页')
-    page.locator('summary').filter(has_text='更新商品清单').click()
+    page.locator('[data-close="catalog-dialog"]').click();page.reload();expect(page.locator('#catalog-state')).to_contain_text('2 页')
+    page.locator('#tab-library').click();page.locator('#catalog-open').click()
     old=active.with_name('wechat_product_catalog.json').read_bytes();doc['pages'].pop()
     page.locator('#catalog-file').set_input_files({'name':'broken.json','mimeType':'application/json','buffer':json.dumps(doc).encode()})
     page.locator('#catalog-check').click()
@@ -200,18 +422,19 @@ def test_catalog_import_protects_unsaved_config_and_blocks_duplicate_submit(ui):
     from tests.unit.test_wechat_catalog_import import document
     page,active,_,flags=ui
     doc=document(list(json.loads(active.read_text())['products'].values()))
-    page.locator('summary').filter(has_text='更新商品清单').click()
+    choose(page, '#ted-0', 'finance')
+    page.locator('#tab-library').click();page.locator('#catalog-open').click()
     page.locator('#catalog-file').set_input_files({'name':'catalog.json','mimeType':'application/json','buffer':json.dumps(doc).encode()})
-    page.locator('#ted-0').select_option('finance')
     page.locator('#catalog-check').click()
     expect(page.locator('#catalog-import-feedback')).to_contain_text('有未保存修改')
     expect(page.locator('#ted-0')).to_have_value('finance')
-    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
-    page.locator('#catalog-check').click();expect(page.locator('#catalog-apply')).to_be_enabled()
+    page.locator('[data-close="catalog-dialog"]').click();save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    page.locator('#tab-library').click();page.locator('#catalog-open').click();page.locator('#catalog-check').click();expect(page.locator('#catalog-apply')).to_be_enabled()
     flags['hold']=('POST','/api/product-settings/catalog/import')
     page.locator('#catalog-apply').click();expect(page.locator('#catalog-apply')).to_be_disabled()
     expect(page.locator('#save')).to_be_disabled()
-    page.locator('#catalog-apply').evaluate('(el)=>el.click()')
+    with pytest.raises(PlaywrightTimeoutError):
+        page.locator('#catalog-apply').click(timeout=200)
     assert not active.with_name('wechat_product_catalog.json').exists()
     flags['release']();expect(page.locator('#catalog-import-feedback')).to_contain_text('已导入 3 件商品')
     expect(page.locator('#ted-0')).to_have_value('finance')
@@ -219,14 +442,17 @@ def test_catalog_import_protects_unsaved_config_and_blocks_duplicate_submit(ui):
 
 def test_impact_cancel_and_history_restore_as_draft(ui):
     page,active,status,flags=ui
-    old=load_policy(active);page.locator('#english_world-0').select_option('finance')
+    old=load_policy(active);choose(page, '#english_world-0', 'finance')
     page.locator('#save').click();expect(page.locator('#impact-dialog')).to_be_visible()
     expect(page.locator('#impact-result')).to_contain_text('变化 1 条')
+    expect(page.locator('#impact-result')).to_contain_text('预计实际选品变化 0 条')
+    expect(page.locator('#impact-result')).to_contain_text('实际影响未知 1 条')
+    expect(page.locator('#impact-result')).to_contain_text('正式制作顺序尚未确定')
     assert active.read_bytes() and load_policy(active).digest==old.digest
     page.locator('#impact-cancel').click();assert flags['writes']==0
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
     expect(page.locator('#revision option')).to_have_count(2)
-    page.locator('#revision').select_option(old.digest);page.locator('#restore-revision').click()
+    page.locator('#history-open').click();page.locator('#revision').select_option(old.digest);page.locator('#restore-revision').click()
     expect(page.locator('#feedback')).to_contain_text('恢复草稿')
     expect(page.locator('#english_world-0')).to_have_value('default')
     assert load_policy(active).digest!=old.digest
@@ -237,7 +463,7 @@ def test_impact_cancel_and_history_restore_as_draft(ui):
 
 def test_library_pending_then_verified_and_selected(ui):
     page,active,_,flags=ui
-    page.locator('#library-new').click()
+    page.locator('#tab-library').click();page.locator('#library-new').click()
     page.locator('#lib-title').fill('新书完整名称')
     page.locator('#lib-shop').fill('快捷英语教辅图书')
     page.locator('#lib-merchant_appid').fill('wx490e65efa3751b8c')
@@ -247,29 +473,99 @@ def test_library_pending_then_verified_and_selected(ui):
     expect(page.locator(f'#default-product option[value="{alias}"]')).to_have_count(0)
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
     assert json.loads(active.read_text())['library'][alias]['identity_status']=='UNVERIFIED'
-    page.locator('#library-choice').select_option(alias)
+    edit_library(page, alias)
     page.locator('#lib-product_id').fill('88888888')
     page.locator('#lib-account_id').fill('verified-publisher')
     page.locator('#lib-verified_source').fill('人工核对后台资料')
     page.locator('#lib-verified_at').fill('2026-01-01T00:00:00+08:00')
     page.locator('#lib-identity_status').select_option('VERIFIED')
     page.locator('#library-apply').click()
-    page.locator('#english_world-0').select_option(alias)
+    page.locator('#tab-rules').click();choose(page, '#english_world-0', alias)
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
     assert load_policy(active).decide(content_type='ENGLISH_WORLD_SHORT').candidates[0].product_id=='88888888'
     page.reload();expect(page.locator('#english_world-0')).to_have_value(alias)
-    page.locator('#library-search').fill('快捷英语')
+    page.locator('#tab-library').click();page.locator('#library-search').fill('快捷英语')
     expect(page.locator('#library-choice option')).to_have_count(2)
 
 
 def test_refresh_wait_parameters_and_disabled_reference(ui):
     page,active,_,_=ui
-    page.locator('#catalog-refresh').click();expect(page.locator('#refresh-state')).to_contain_text('尚未核验')
+    page.locator('#tab-library').click()
+    expect(page.locator('#catalog-refresh')).not_to_be_visible()
+    expect(page.locator('.catalog-summary .badge')).to_have_text('平台实时同步尚未接入')
     expect(page.locator('#wait-state')).to_contain_text('调度接入')
-    page.locator('#library-choice').select_option('default');page.locator('#library-toggle').click()
+    edit_library(page, 'default');page.locator('#library-toggle').click()
     page.locator('#save').click();expect(page.locator('#feedback')).to_contain_text('停用')
-    page.locator('#library-toggle').click()
-    page.locator('summary').filter(has_text='等待与恢复检查').click()
+    edit_library(page, 'default');page.locator('#library-toggle').click()
+    page.locator('#tab-rules').click();page.locator('summary').filter(has_text='等待与恢复检查').click()
     page.locator('#wait-base_seconds').fill('600')
     save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
     assert json.loads(active.read_text())['wait_policy']['base_seconds']==600
+
+
+def test_search_picker_keyboard_cancel_and_main_viewport(ui):
+    page,_,_,flags=ui
+    # 日常五类配置在首屏，不再被商品库与历史挡住。
+    assert page.locator('#other-0-picker').bounding_box()['y'] < 900
+    old=page.locator('#wallstreet-0').input_value()
+    button=page.locator('#wallstreet-0-picker');button.click()
+    search=page.locator('#picker-search');search.fill('没有这件商品')
+    expect(page.locator('.picker-count')).to_have_text('没有匹配的商品')
+    expect(page.locator('.picker-apply')).to_be_disabled()
+    page.locator('.picker-clear').click();expect(search).to_be_focused()
+    expect(page.locator('#picker-list option')).to_have_count(4)
+    page.keyboard.press('Escape');expect(page.locator('.product-picker-dialog')).not_to_be_visible()
+    expect(button).to_be_focused();expect(page.locator('#wallstreet-0')).to_have_value(old)
+    expect(page.locator('#save')).to_be_disabled()
+    button.click();search.fill('维特根斯坦');expect(page.locator('#picker-list option')).to_have_count(1)
+    page.keyboard.press('ArrowDown');page.keyboard.press('Enter')
+    expect(page.locator('#wallstreet-0')).to_have_value('news')
+    expect(button).to_be_focused();assert flags['writes']==0
+
+
+def test_library_navigation_search_and_editor_discard_do_not_lose_rules(ui):
+    page,active,_,flags=ui
+    choose(page,'#ted-0','finance')
+    page.locator('#tab-library').click();page.locator('#library-search').fill('不存在的商品')
+    expect(page.locator('#library-results')).to_contain_text('没有匹配的商品')
+    expect(page.locator('#dirty-state')).to_have_text('1 处修改待保存')
+    page.locator('#library-clear').click();expect(page.locator('#library-search')).to_be_focused()
+    page.locator('#library-new').click();page.locator('#lib-title').fill('尚未应用的资料')
+    page.locator('[data-close="library-editor"]').first.click()
+    expect(page.locator('#discard-dialog')).to_be_visible()
+    page.locator('#discard').click();expect(page.locator('#library-editor')).not_to_be_visible()
+    page.locator('#tab-rules').click();expect(page.locator('#ted-0')).to_have_value('finance')
+    expect(page.locator('#dirty-state')).to_have_text('1 处修改待保存')
+    assert flags['writes']==0
+
+
+def test_library_pagination_filters_and_url_restore(ui):
+    from tests.unit.test_wechat_product_catalog import install_catalog
+    page,active,_,flags=ui
+    products=list(json.loads(active.read_text())['products'].values())
+    rows=products+[dict(product_id=str(72000+i),title=f'目录商品 {i:02d}') for i in range(30)]
+    install_catalog(active,rows);reload_ui(page)
+    page.locator('#tab-library').click()
+    expect(page.locator('.library-table tbody tr')).to_have_count(25)
+    page.locator('#library-next').click();expect(page.locator('.library-table tbody tr')).to_have_count(8)
+    page.locator('#library-search').fill('目录商品 29')
+    expect(page.locator('.library-table tbody tr')).to_have_count(1)
+    page.reload();expect(page.locator('#view-library')).to_be_visible()
+    expect(page.locator('#library-search')).to_have_value('目录商品 29')
+    expect(page.locator('.library-table tbody tr')).to_have_count(1)
+    expect(page.locator('#save')).to_be_disabled();assert flags['writes']==0
+
+
+@pytest.mark.parametrize('theme',['dark','light','contrast'])
+def test_theme_preferences_and_mobile_picker_geometry(ui,theme):
+    page,_,_,_=ui
+    page.evaluate('(theme)=>localStorage.setItem("vp-display-preferences",JSON.stringify({theme,size:"large"}))',theme)
+    page.reload();expect(page.locator('#editor')).to_be_enabled()
+    page.set_viewport_size({'width':390,'height':844})
+    page.locator('#english_world-0-picker').click()
+    dialog=page.locator('.product-picker-dialog');expect(dialog).to_be_visible()
+    box=dialog.bounding_box();assert box['x']>=0 and box['x']+box['width']<=390
+    assert box['y']>=0 and box['y']+box['height']<=844
+    page.keyboard.press('Escape');expect(dialog).not_to_be_visible()
+    page.locator('#tab-library').click();assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    assert page.locator('html').get_attribute('data-theme')==theme

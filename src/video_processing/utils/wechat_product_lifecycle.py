@@ -5,7 +5,8 @@ import re
 from pathlib import Path
 from video_processing.core.wechat_product_policy import parse_product_policy
 from video_processing.utils.wechat_product_config import load_policy, PolicyConflict
-from video_processing.utils.wechat_product_context import video_product_context
+from video_processing.utils.wechat_product_context import video_product_context, video_attachment_context
+from video_processing.core.wechat_product_attachment import attachment_decision
 
 
 def history_path(active: Path) -> Path:
@@ -36,12 +37,13 @@ def list_revisions(active: Path) -> list[dict]:
     return list(rows.values())
 
 
-def impact(active: Path, candidate: dict, expected_digest: str, videos: list[dict], output: Path) -> dict:
+def impact(active: Path, candidate: dict, expected_digest: str, videos: list[dict], output: Path,
+           *, production_lookup=None, decision_lookup=None) -> dict:
     old = load_policy(active)
     if old.digest != expected_digest:
         raise PolicyConflict('配置已被其他窗口更新，请重新载入后比较。')
     new = parse_product_policy(candidate)
-    changed, unknown, unchanged = [], [], 0
+    changed, unknown, unchanged, actual, excluded = [], [], 0, [], []
     def signature(decision):
         return dict(group=decision.video_group, reason=decision.reason,
                     candidates=[vars(p) for p in decision.candidates],
@@ -52,7 +54,24 @@ def impact(active: Path, candidate: dict, expected_digest: str, videos: list[dic
             context = video_product_context(output, video)
             before, after = signature(old.decide(**context)), signature(new.decide(**context))
             if before != after:
-                changed.append(dict(identity, before=before, after=after))
+                source = video_attachment_context(output, video)
+                task_id = source.get('task_id') or source.get('production_task_id') or f"pipeline:{source.get('youtube_id')}:{source.get('slice_index') or 0}"
+                frozen = decision_lookup(task_id) if decision_lookup else None
+                outcome = attachment_decision(source, production_lookup(task_id) if production_lookup else None, preview=True)
+                if frozen:
+                    effect = 'UNCHANGED_FROZEN'
+                elif outcome['product_intent'] == 'PRODUCT':
+                    effect = 'UNCHANGED_MANUAL'
+                elif outcome['require_product'] is False:
+                    effect = 'UNCHANGED_SKIP'
+                elif outcome['require_product'] is None:
+                    effect = 'UNKNOWN_PRODUCTION_ORDER'
+                else:
+                    effect = 'APPLIES_TO_NEW_SELECTION'
+                row = dict(identity, before=before, after=after, actual_effect=effect,
+                           attachment=outcome, frozen_task=frozen)
+                changed.append(row)
+                (actual if effect == 'APPLIES_TO_NEW_SELECTION' else excluded).append(row)
             else:
                 unchanged += 1
         except (ValueError, OSError, TypeError, KeyError):
@@ -61,5 +80,7 @@ def impact(active: Path, candidate: dict, expected_digest: str, videos: list[dic
     configuration_changes = [label for key, label in [('library','商品资料'),('wait_policy','等待检查参数')]
                              if before_config.get(key) != candidate.get(key)]
     return dict(configuration_changes=configuration_changes, base_digest=old.digest, candidate_digest=new.digest, changed=changed,
+                candidate_changes=changed, actual_changes=actual, excluded_actual=excluded,
+                comparison_scope='changed 是配置候选链比较；actual_changes 才是预计新选品生效。冻结、跳过、人工指定保持原决定。',
                 unknown=unknown, unchanged=unchanged, examined=min(100, len(videos)), limit=100,
                 preview_only=True, scope='最近最多100条；已开始选品的任务继续使用旧快照')

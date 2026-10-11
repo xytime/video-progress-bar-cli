@@ -55,6 +55,7 @@ class ProductSelectionResult:
     fallback_reason: str | None
     attempts: int
     elapsed_seconds: float
+    attempt_records: tuple[dict, ...] = ()
 
     @property
     def binding_confirmed(self) -> bool:
@@ -79,7 +80,7 @@ class _Deadline:
 
 
 def select_required_product(
-    *, decision: ProductDecision, catalog: ProductCatalog,
+    *, decision: ProductDecision, catalog: ProductCatalog | None = None,
     picker: ProductPicker | None, timeout_seconds: float = 30,
     clock: Callable[[], float] = monotonic,
 ) -> ProductSelectionResult:
@@ -89,15 +90,28 @@ def select_required_product(
     超时由真实适配器执行；此处向每步传递剩余预算并拒绝超时后的成功结果。
     """
     budget = _Deadline(timeout_seconds, clock)
-    candidates = catalog.attempts(decision)
+    if decision.candidates:
+        candidates = decision.candidates
+        if len(candidates) > decision.max_attempts:
+            raise ValueError("候选链超过尝试上限")
+        if len(candidates) == 1:
+            candidates = candidates * decision.max_attempts
+        fallback_reason = None
+    elif catalog is not None:
+        candidates = catalog.attempts(decision)
+        fallback_reason = "TARGET_NOT_CONFIGURED" if catalog.configuration_fallback(decision) else None
+    else:
+        raise ValueError("缺少已验证的选品配置")
     requested = candidates[0]
-    fallback_reason = "TARGET_NOT_CONFIGURED" if catalog.configuration_fallback(decision) else None
+    records = []
     attempted = 0
 
     def result(state: str, reason: str, actual: ProductIdentity | None = None):
+        if records and records[-1]["outcome"] == "STARTED":
+            records[-1]["outcome"] = reason
         return ProductSelectionResult(
             decision, requested, actual, state, reason, fallback_reason,
-            attempted, max(0.0, clock() - budget.started),
+            attempted, max(0.0, clock() - budget.started), tuple(dict(r) for r in records),
         )
 
     if picker is None:
@@ -119,25 +133,42 @@ def select_required_product(
 
         for index, target in enumerate(candidates):
             attempted += 1
+            # 在同一总 deadline 内给后续候选保留时间；清理也计入当前候选份额。
+            share_ms = budget.remaining_ms() // (len(candidates) - index)
+            attempt_end = clock() + share_ms / 1000
+            cleanup_ms = min(2500, share_ms // 4) if index < len(candidates) - 1 else 0
+            action_end = attempt_end - cleanup_ms / 1000
+
+            def remaining_until(end):
+                remaining = min(budget.remaining_ms(), int((end - clock()) * 1000))
+                if remaining <= 0:
+                    raise TimeoutError("PRODUCT_CANDIDATE_BUDGET_EXHAUSTED")
+                return remaining
+
+            record = {"product_id": target.product_id, "title": target.title, "outcome": "STARTED",
+                      "kind": "TECHNICAL_RETRY" if index and target == candidates[index - 1] else "CANDIDATE",
+                      "allocated_ms": share_ms}
+            records.append(record)
             try:
-                status = picker.find(target, timeout_ms=budget.remaining_ms())
-                budget.remaining_ms()
+                status = picker.find(target, timeout_ms=remaining_until(action_end))
+                remaining_until(action_end)
                 if status is ProductLookup.IDENTITY_CONFLICT:
                     return result("BLOCKED", "PRODUCT_IDENTITY_CONFLICT")
                 if status is ProductLookup.AVAILABLE:
-                    picker.select(target, timeout_ms=budget.remaining_ms())
-                    budget.remaining_ms()
-                    actual = picker.read_binding(timeout_ms=budget.remaining_ms())
-                    budget.remaining_ms()
+                    picker.select(target, timeout_ms=remaining_until(action_end))
+                    remaining_until(action_end)
+                    actual = picker.read_binding(timeout_ms=remaining_until(action_end))
+                    remaining_until(action_end)
                     if actual is not None and actual != target:
                         return result("BLOCKED", "BINDING_IDENTITY_CONFLICT", actual)
                     if actual == target:
-                        if not picker.ready_to_submit(timeout_ms=budget.remaining_ms()):
+                        if not picker.ready_to_submit(timeout_ms=remaining_until(action_end)):
                             return result("BLOCKED", "FORM_NOT_READY", actual)
-                        confirmed = picker.read_binding(timeout_ms=budget.remaining_ms())
-                        budget.remaining_ms()
+                        confirmed = picker.read_binding(timeout_ms=remaining_until(action_end))
+                        remaining_until(action_end)
                         if confirmed != target:
                             return result("BLOCKED", "BINDING_CHANGED_BEFORE_SUBMIT", confirmed)
+                        record["outcome"] = "BOUND"
                         return result("BOUND", "BINDING_VERIFIED", actual)
                     failure = "BINDING_NOT_APPLIED"
                 elif status is ProductLookup.UNAVAILABLE:
@@ -149,19 +180,24 @@ def select_required_product(
                 budget.remaining_ms()
                 failure = "TARGET_OPERATION_TIMEOUT"
 
-            if index == 1:
+            record["outcome"] = failure
+            if index == len(candidates) - 1:
                 return result("BLOCKED", "DEFAULT_PRODUCT_NOT_BOUND")
-            if not picker.cancel_and_clear(timeout_ms=budget.remaining_ms()):
+            if not picker.cancel_and_clear(timeout_ms=remaining_until(attempt_end)):
                 return result("BLOCKED", "CANNOT_CONFIRM_CLEARED")
-            budget.remaining_ms()
+            remaining_until(attempt_end)
             # 再次回读，不把单个取消按钮的点击当成已清空证据。
-            if picker.read_binding(timeout_ms=budget.remaining_ms()) is not None:
+            if picker.read_binding(timeout_ms=remaining_until(attempt_end)) is not None:
                 return result("BLOCKED", "RESIDUAL_LINK_AFTER_CANCEL")
-            budget.remaining_ms()
-            if target != candidates[1]:
-                fallback_reason = failure
+            remaining_until(attempt_end)
+            if target != candidates[index + 1]:
+                fallback_reason = fallback_reason or failure
     except TimeoutError:
-        return result("BLOCKED", "PRODUCT_SELECTION_BUDGET_EXHAUSTED")
+        try:
+            budget.remaining_ms()
+        except TimeoutError:
+            return result("BLOCKED", "PRODUCT_SELECTION_BUDGET_EXHAUSTED")
+        return result("BLOCKED", "PRODUCT_OPERATION_TIMEOUT")
     except Exception as exc:
         # 不归档异常正文，避免平台请求/凭据进入回执；未知状态一律停止。
         return result("BLOCKED", "ADAPTER_ERROR:" + type(exc).__name__)

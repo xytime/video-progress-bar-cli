@@ -225,7 +225,9 @@ def dispatch_one_deferred_english_world_submission() -> None:
         return
     db = PipelineDB()
     db.restore_expired_english_world_operator_recoveries()
-    item = db.get_next_auto_approved_english_world_submission()
+    from video_processing.utils.wechat_product_execution import blocked_product_task_keys
+    item = db.get_next_auto_approved_english_world_submission(excluded_product_tasks=
+        blocked_product_task_keys(PROJECT_ROOT / 'output', settings.wechat_product_policy_path))
     if not item:
         return
     review_id = str(item["id"])

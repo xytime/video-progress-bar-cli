@@ -40,7 +40,7 @@ def test_deferred_submission_exit_is_not_reported_as_failure(monkeypatch, caplog
 
     db = SimpleNamespace(
         restore_expired_english_world_operator_recoveries=lambda: 0,
-        get_next_auto_approved_english_world_submission=lambda: {"id": "b" * 32},
+        get_next_auto_approved_english_world_submission=lambda **_kwargs: {"id": "b" * 32},
     )
     monkeypatch.setattr(runner, "PipelineDB", lambda: db)
     monkeypatch.setattr(runner.settings, "enable_english_world_auto_publish", True)
@@ -140,7 +140,7 @@ def test_window_dispatches_one_deferred_english_world_auto_item(monkeypatch):
         def restore_expired_english_world_operator_recoveries(self):
             return 0
 
-        def get_next_auto_approved_english_world_submission(self):
+        def get_next_auto_approved_english_world_submission(self, **_kwargs):
             return {"id": "b" * 32}
 
     completed = MagicMock(returncode=0, stderr="")

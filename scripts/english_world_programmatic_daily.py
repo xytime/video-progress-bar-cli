@@ -396,6 +396,8 @@ def _initial_timeline(candidate: Mapping[str, Any], *, source: Path, caption: Pa
             "source_url": str(candidate["source_url"]),
             "source_title": str(candidate["source_title"]),
             "upload_date": candidate.get("upload_date"),
+            "view_count": candidate.get("view_count"),
+            "like_count": candidate.get("like_count"),
             "source_start_seconds": start,
             "source_end_seconds": end,
             "source_duration_seconds": round(end - start, 3),
@@ -1044,13 +1046,15 @@ def _review_and_revise(timeline_path, timeline, *, wordlist_dir):
 def run(
     *, request: Path, output_root: Path, shadow_only: bool, excluded: set[str] | None = None,
     only_youtube_id: str | None = None,
+    product_intent: str = 'AUTO', product_id: str | None = None, product_title: str | None = None,
 ) -> Path:
     """执行一次制作；shadow_only 仍生成完整本地包，但调用方不得消费请求。"""
     excluded = set(excluded or ())
     protected: set[str] = set()
     try:
         from video_processing.db.database import PipelineDB
-        protected = set(PipelineDB(str(ROOT / "output/pipeline.db")).list_english_world_submission_protected_source_ids())
+        production_db = PipelineDB(str(ROOT / "output/pipeline.db"))
+        protected = set(production_db.list_english_world_submission_protected_source_ids())
     except Exception as exc:
         raise ProgrammaticDailyError("投稿保护账本不可读取") from exc
     candidates = _discover_candidates(excluded=excluded | protected, only_youtube_id=only_youtube_id)
@@ -1098,6 +1102,15 @@ def run(
             # 已预检的来源保持冻结；仅明确的候选安全拒绝允许有限换题。
             locked_source = True
             production_candidates += 1
+            # 预检/预算/安全均已通过。登记发生在首次翻译和词汇富化之前；
+            # 失败保留本任务首条归属，重试和换工作目录不能重复占名额。
+            if not shadow_only:
+                stage = "product_production"
+                from video_processing.english_world.product_production import start_product_production
+                timeline = start_product_production(production_db, timeline, product_intent=product_intent,
+                                                    product_id=product_id, product_title=product_title,
+                                                    state_path=ROOT / 'output' / 'wechat_state.json')
+                atomic_json(timeline_path, timeline)
             stage = "agy_draft"
             ranges = _paragraph_word_ranges(words)
             from video_processing.study_cards.learning_dictionary import dictionary_word_options
@@ -1194,11 +1207,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shadow-only", action="store_true")
     parser.add_argument("--exclude-youtube-id", action="append", default=[])
     parser.add_argument("--only-youtube-id")
+    parser.add_argument("--product-intent", choices=('AUTO', 'NONE', 'PRODUCT'), default='AUTO')
+    parser.add_argument("--product-id")
+    parser.add_argument("--product-title")
     args = parser.parse_args(argv)
     try:
         workspace = run(request=args.request.resolve(), output_root=args.output_root.resolve(), shadow_only=args.shadow_only,
                         excluded={str(value).strip() for value in args.exclude_youtube_id if str(value).strip()},
-                        only_youtube_id=str(args.only_youtube_id).strip() or None if args.only_youtube_id else None)
+                        only_youtube_id=str(args.only_youtube_id).strip() or None if args.only_youtube_id else None,
+                        product_intent=args.product_intent, product_id=args.product_id, product_title=args.product_title)
         print(f"English World programmatic run completed: {workspace}")
         return 0
     except Exception as exc:  # request, when possible, is already durable and fail-closed

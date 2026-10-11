@@ -53,6 +53,14 @@ def main() -> int:
     args = parse_args()
     try:
         payload = json.loads(args.timeline.read_text(encoding="utf-8"))
+        # 独立预览渲染保持可用；携带正式上下文的包只能消费已登记记录。
+        product_db = None
+        if 'product_context' in payload:
+            from video_processing.db.database import PipelineDB
+            from video_processing.english_world.product_production import verify_product_production_context
+            product_db = PipelineDB()
+            verify_product_production_context(product_db, payload,
+                                              state_path=PROJECT_ROOT / 'output' / 'wechat_state.json')
         validate_source_caption_boundary(payload, timeline_path=args.timeline)
         content = StudyCardContent.from_mapping(payload)
         from config.settings import settings
@@ -68,6 +76,10 @@ def main() -> int:
             allow_long_test=args.allow_long_test,
             language_timeline=args.timeline.resolve() if needs_language else None,
         )
+        if product_db is not None:
+            from video_processing.english_world.product_production import attach_product_context_to_manifest
+            attach_product_context_to_manifest(product_db, payload, args.output.with_suffix('.manifest.json'),
+                                               state_path=PROJECT_ROOT / 'output' / 'wechat_state.json')
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         print(f"render_study_card: {exc}", file=sys.stderr)
         return 2

@@ -16,6 +16,7 @@ from scripts import submit_english_world_review as submitter, wechat_uploader
 from video_processing.core.wechat_session_lock import EXIT_WECHAT_SESSION_BUSY, WeChatSessionLock
 from video_processing.db.database import PipelineDB
 from video_processing.english_world.package_integrity import calculate_package_hashes
+from video_processing.english_world.product_production import start_product_production
 
 
 def package(tmp_path):
@@ -24,6 +25,11 @@ def package(tmp_path):
         path = tmp_path / field
         path.write_text(field)
         paths[field + "_path"] = str(path)
+    manifest = start_product_production(None, {
+        'content_type': 'ENGLISH_WORLD_SHORT',
+        'source_provenance': {'youtube_id': 'Abcdef12345', 'source_start_seconds': 0, 'source_end_seconds': 40},
+    }, product_intent='NONE', state_path=tmp_path / 'output' / 'wechat_state.json')
+    Path(paths['manifest_path']).write_text(json.dumps(manifest), encoding='utf-8')
     db = PipelineDB(str(tmp_path / "output/pipeline.db"))
     item = db.create_english_world_review_item(title="会话锁测试", **paths, **calculate_package_hashes(paths))
     db.approve_english_world_submission(item["id"], authorization="AUTO_POLICY")
@@ -111,8 +117,10 @@ def test_dispatcher_restores_expired_busy_item_and_preserves_all_attempts(tmp_pa
         commands.append(command)
         return SimpleNamespace(returncode=10, stderr="")
     monkeypatch.setattr(runner, "PipelineDB", lambda: db)
+    monkeypatch.setattr(runner, 'PROJECT_ROOT', tmp_path)
     monkeypatch.setattr(runner, "settings", SimpleNamespace(enable_english_world_auto_publish=True,
-                        wechat_publishing_paused=False, is_english_world_publish_window=lambda: True))
+                        wechat_publishing_paused=False, is_english_world_publish_window=lambda: True,
+                        wechat_product_policy_path=tmp_path / 'products.json'))
     monkeypatch.setattr(runner.subprocess, "run", launch)
     runner.dispatch_one_deferred_english_world_submission()
     assert len(commands) == 1 and commands[0][-2:] == ["--review-id", item["id"]]

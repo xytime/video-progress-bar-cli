@@ -137,6 +137,8 @@ def test_submission_registers_wechat_publication_on_under_review(monkeypatch, tm
     monkeypatch.setattr(submitter, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(submitter, "_manual_authorization_active", lambda _p: True)
     monkeypatch.setattr(submitter, "_require_publish_package", lambda _p: True)
+    # 本用例隔离中心账本回写；商品实际 DAL/清单联调由 product_production 测试覆盖。
+    monkeypatch.setattr(submitter, "_product_task_decision", lambda _db, _p: None)
     monkeypatch.setattr(submitter, "_english_world_uploader_command", lambda _i, _e, **_kw: ["true"])
     monkeypatch.setattr(submitter, "_original_declaration_receipt_is_confirmed", lambda _d, **_kw: True)
     monkeypatch.setattr(
@@ -184,6 +186,7 @@ def test_submission_wechat_publication_error_does_not_corrupt_submission_attempt
     monkeypatch.setattr(submitter, "_PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(submitter, "_manual_authorization_active", lambda _p: True)
     monkeypatch.setattr(submitter, "_require_publish_package", lambda _p: True)
+    monkeypatch.setattr(submitter, "_product_task_decision", lambda _db, _p: None)
     monkeypatch.setattr(submitter, "_english_world_uploader_command", lambda _i, _e, **_kw: ["true"])
     monkeypatch.setattr(submitter, "_original_declaration_receipt_is_confirmed", lambda _d, **_kw: True)
     monkeypatch.setattr(

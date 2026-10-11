@@ -82,11 +82,16 @@ def decision_payload(decision) -> dict:
 
 
 def record_adoption(policy: ProductPolicy, decision, evidence_dir: Path, status_path: Path,
-                    *, phase: str, result=None) -> None:
+                    *, phase: str, result=None, task_decision: dict | None = None) -> None:
     """只由实际选品入口调用；preview/status 不伪造运行采用。"""
     atomic_json(evidence_dir / 'product_policy_snapshot.json', json.loads(policy.serialized))
     payload = dict(decision_payload(decision), phase=phase, evidence_dir=str(evidence_dir.resolve()),
                    recorded_at=datetime.now(timezone.utc).isoformat())
+    if task_decision is not None:
+        payload.update(task_id=task_decision['task_id'], attachment_reason=task_decision['reason'],
+                       attachment_version=task_decision['attachment_version'], product_intent=task_decision['product_intent'],
+                       production=task_decision['production'], metrics=task_decision['metrics'],
+                       publisher_capability=task_decision['publisher_capability'])
     if result is not None:
         payload.update(binding_confirmed=result.binding_confirmed, reason=result.reason)
     atomic_json(evidence_dir / 'product_policy_adoption.json', payload)

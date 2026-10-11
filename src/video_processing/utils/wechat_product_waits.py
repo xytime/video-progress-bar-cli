@@ -38,7 +38,7 @@ class ProductWaitStore:
         return sorted(self._read()['tasks'].values(), key=lambda r:r['updated_at'], reverse=True)
 
     def defer(self, task_key: str, *, reason: str, config_digest: str, artifacts_digest: str,
-              submission_state: str, wait_policy=None):
+              submission_state: str, wait_policy=None, observation_generation: str | None = None):
         if not task_key or len(task_key) > 200 or not config_digest or not artifacts_digest:
             raise ValueError('等待记录需要稳定任务标识、策略摘要和产物摘要')
         policy = validate_wait_policy(wait_policy or DEFAULT_WAIT_POLICY)
@@ -59,7 +59,7 @@ class ProductWaitStore:
                        submission_state=submission_state, wait_policy=policy,
                        next_check_at=now + min(policy['max_seconds'], policy['base_seconds'] * 2**min(checks,30)),
                        updated_at=now, lease_token=None, lease_until=0,
-                       observed_generation=old.get('observed_generation'))
+                       observed_generation=observation_generation or old.get('observed_generation'))
             data['tasks'][task_key] = row
         return row
 

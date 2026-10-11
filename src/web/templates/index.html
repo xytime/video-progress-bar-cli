@@ -92,6 +92,7 @@
     })();
   </script>
   <link rel="stylesheet" href="/static/css/dashboard.css?v=20260926_2" />
+  <link rel="stylesheet" href="/static/css/manual_products.css?v=20261011_1" />
 </head>
 <body>
 <div class="app">
@@ -467,7 +468,7 @@
     </div>
     <div class="panel-body" style="padding:20px 22px;">
       <!-- 输入行 -->
-      <div class="add-video-wrapper">
+      <fieldset id="manual-video-fields" class="add-video-wrapper" aria-label="手动添加视频">
         <div class="add-video-url-row">
           <input id="video-url-input" class="add-channel-input add-video-url-input"
             type="text"
@@ -515,20 +516,33 @@
           </div>
         </div>
 
-        <label style="display:flex; align-items:center; gap:10px; margin-top:6px; font-size:0.8125rem; color:var(--text2);">
-          <span>内容类型</span>
-          <select id="video-content-type" class="add-channel-input" style="width:190px; padding:8px 10px;">
+        <div class="manual-content-type">
+          <label for="video-content-type">内容类型</label>
+          <select id="video-content-type" class="add-channel-input">
             <option value="GENERAL">通用视频</option>
             <option value="ENGLISH_WORLD_SHORT">英语世界短视频</option>
           </select>
-          <span style="font-size:0.75rem; color:var(--text3);">独立于平台分类，用于生产归档与检索</span>
-        </label>
+          <p class="manual-product-help">独立于平台分类，用于生产归档与检索</p>
+        </div>
+
+        <div class="manual-product-field">
+          <label for="video-product">绑定商品</label>
+          <select id="video-product" disabled aria-describedby="manual-product-detail manual-products-state">
+            <option value="">不绑定商品（默认）</option>
+          </select>
+          <p class="manual-product-help">手动选择将覆盖自动挂载规则。选定商品即要求挂载；默认不绑定，不占自动英语世界每日首条名额。</p>
+          <p id="manual-product-detail" class="manual-product-help">当前任务不绑定商品；不会由自动规则或默认商品补挂。</p>
+          <div class="manual-product-status">
+            <p id="manual-products-state" role="status" aria-live="polite">正在加载商品清单；可按默认不绑定加入队列。</p>
+            <button id="manual-products-retry" type="button" hidden>重试读取商品</button>
+          </div>
+        </div>
 
         <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
           <button id="btn-add-video" class="btn-add btn-submit-video" style="width: auto; min-width: 150px;"
             onclick="addVideo()">验证并加入队列</button>
         </div>
-      </div>
+      </fieldset>
       <div id="add-video-feedback" class="add-channel-feedback" style="margin-top:10px; font-size:0.75rem;"></div>
     </div>
   </div>
@@ -642,6 +656,8 @@
 </div>
 
 <script src="/static/js/channel_manager.js?v=20260926_2"></script>
+<script src="/static/js/product_picker.js?v=20261011_1"></script>
+<script src="/static/js/manual_products.js?v=20261011_1"></script>
 <script>
   function handleCoverError(img) {
     img.outerHTML = '<div class="cover-placeholder">🎬</div>';
@@ -1879,6 +1895,7 @@
               ${isPublished ? '<div class="published-ribbon-tag mobile-only">✅ 已发布成功</div>' : ''}
               ${titleBlock}
               ${channelRow}
+              <div class="product-intent-detail">${escapeHtml(window.ManualProducts.taskText(v))}</div>
               ${platformBadgesHtml}
               ${trimTimelineHtml}
               ${mobileCardMetricsHtml}
@@ -2997,6 +3014,7 @@
           detectedText.innerHTML = `📋 检测到剪贴板有 YouTube 链接：<code style="background:rgba(255,255,255,0.1); padding:2px 6px; border-radius:4px; font-family:monospace; font-size:0.75rem;">${escapeHtml(text.substring(0, 45))}...</code>`;
           prompt.style.display = 'flex';
           prompt.onclick = () => {
+            if (document.getElementById('manual-video-fields').disabled) return;
             navigator.vibrate(15);
             const input = document.getElementById('video-url-input');
             if (input) {
@@ -3045,6 +3063,7 @@
   }
 
   function toggleTrimPanelCheckbox() {
+    if (document.getElementById('manual-video-fields').disabled) return;
     const cb = document.getElementById('enable-trim-checkbox');
     if (cb) {
       cb.checked = !cb.checked;
@@ -3053,6 +3072,7 @@
   }
 
   function setTrimPreset(start, end) {
+    if (document.getElementById('manual-video-fields').disabled) return;
     if (navigator.vibrate) navigator.vibrate(10);
     const startInput = document.getElementById('video-trim-start');
     const endInput = document.getElementById('video-trim-end');
@@ -3149,11 +3169,19 @@
     const contentTypeInput = document.getElementById('video-content-type');
     const btn   = document.getElementById('btn-add-video');
     const fb    = document.getElementById('add-video-feedback');
+    if (btn.disabled) return;
     const url   = input.value.trim();
     const enableTrim = document.getElementById('enable-trim-checkbox')?.checked;
     const trim_start = (enableTrim && trimStartInput) ? trimStartInput.value.trim() : '';
     const trim_end   = (enableTrim && trimEndInput) ? trimEndInput.value.trim() : '';
     const content_type = contentTypeInput ? contentTypeInput.value : 'GENERAL';
+    let product;
+    try { product = window.ManualProducts.intent(); }
+    catch (error) {
+      fb.textContent = error.message;
+      fb.className = 'add-channel-feedback err';
+      return;
+    }
 
     if (!url) {
       fb.textContent = '请输入 YouTube 视频 URL';
@@ -3162,6 +3190,7 @@
     }
 
     btn.disabled = true;
+    window.ManualProducts.setSubmitting(true);
     btn.innerHTML = '<span class="inline-spinner"></span> 验证中...';
     fb.textContent = '🔍 正在通过 yt-dlp 验证视频（约 5~15 秒）…';
     fb.className = 'add-channel-feedback loading';
@@ -3170,18 +3199,19 @@
       const r = await fetch('/api/videos/add', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, trim_start, trim_end, content_type }),
+        body: JSON.stringify({ url, trim_start, trim_end, content_type, ...product }),
       });
       const d = await r.json();
 
-      if (d.success) {
+      if (r.ok && d.success) {
         let trimText = (d.trim_start || d.trim_end) ? ` (✂️ ${formatTrimTime(d.trim_start || '0')}-${formatTrimTime(d.trim_end || 'End')})` : '';
-        fb.textContent = `✅ 已加入队列：${d.title}${trimText}（来自 ${d.channel_name}）`;
+        fb.textContent = `✅ 已加入队列：${d.title}${trimText}（来自 ${d.channel_name}） · ${product.product_intent === 'NONE' ? '不绑定商品' : '已保存指定商品，发布时核验挂载'}`;
         fb.className = 'add-channel-feedback ok';
         input.value = '';
         if (trimStartInput) trimStartInput.value = '';
         if (trimEndInput) trimEndInput.value = '';
         if (contentTypeInput) contentTypeInput.value = 'GENERAL';
+        window.ManualProducts.reset();
         const checkbox = document.getElementById('enable-trim-checkbox');
         if (checkbox) {
           checkbox.checked = false;
@@ -3193,7 +3223,8 @@
         fb.textContent = `ℹ️ ${d.error}`;
         fb.className = 'add-channel-feedback loading';
       } else {
-        fb.textContent = `❌ ${d.error}`;
+        const error = d.error || d.detail;
+        fb.textContent = `❌ ${typeof error === 'string' ? error : '任务未入队，请检查商品选择或视频输入'}`;
         fb.className = 'add-channel-feedback err';
       }
     } catch (e) {
@@ -3201,6 +3232,7 @@
       fb.className = 'add-channel-feedback err';
     } finally {
       btn.disabled = false;
+      window.ManualProducts.setSubmitting(false);
       btn.innerHTML = '验证并加入队列';
     }
   }

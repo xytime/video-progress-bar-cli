@@ -1,0 +1,28 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": [
+    "src/web"
+  ],
+  "locale": "zh-CN",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": [
+    "Select/Listbox",
+    "Form",
+    "Scrollbar",
+    "Toast",
+    "CRUD"
+  ],
+  "ownership": {
+    "Select/Listbox": "native"
+  },
+  "requiredCommands": [
+    "browser"
+  ],
+  "commands": {
+    "browser": ".venv/bin/python scripts/run_isolated_tests.py --browser -- -q tests/browser/test_product_settings_browser.py"
+  },
+  "evidence": {
+    "crudFullFlow": "tests/browser/test_product_settings_browser.py",
+    "failurePaths": "tests/browser/test_product_settings_browser.py"
+  }
+}

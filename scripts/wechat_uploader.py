@@ -716,6 +716,19 @@ def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> No
     """原子写入提交绑定回执，供管线只按平台原生 ID 维护账本。"""
     try:
         evidence_dir.mkdir(parents=True, exist_ok=True)
+        product_task_path = evidence_dir / "product_task_decision.json"
+        if product_task_path.exists():
+            product_task = json.loads(product_task_path.read_text(encoding="utf-8"))
+            receipt = dict(receipt, product_task_id=product_task['task_id'],
+                           product_config_version=product_task.get('config_version'),
+                           product_config_digest=product_task.get('config_digest'),
+                           product_attachment_reason=product_task['reason'])
+        selection_path = evidence_dir / 'product_selection_receipt.json'
+        if selection_path.exists():
+            selection = json.loads(selection_path.read_text(encoding='utf-8'))
+            receipt = dict(receipt, product_binding_confirmed=selection.get('binding_confirmed'),
+                           product_unbound_confirmed=selection.get('unbound_confirmed'),
+                           product_id=selection.get('actual_product_id'), product_title=selection.get('actual_title'))
         receipt_path = evidence_dir / "submission_receipt.json"
         temporary_path = receipt_path.with_suffix(".json.tmp")
         temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, sort_keys=True), encoding="utf-8")
@@ -2042,12 +2055,15 @@ def run_uploader(
     require_product: bool = False,
     source_channel_id: str | None = None,
     stop_before_submit: bool = False,
+    product_task_decision: str | None = None,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
     state_file = Path(state_path)
     state_file.parent.mkdir(parents=True, exist_ok=True)
     evidence_root = Path(evidence_dir) if evidence_dir else Path("output") / "wechat_evidence"
+    task_product = None
+    product_artifacts = None
 
     if require_original_declaration and not declare_original and not verify_only:
         logger.error("Original declaration is required for this submission but was explicitly disabled.")
@@ -2109,6 +2125,21 @@ def run_uploader(
         # [Claude_Opus_4.8] 不再强制 headless=False。--login-only 现遵循传入的 headless：
         # headless 时走下方「截图 QR → 发 Telegram / Web UI 浮层」远程扫码分支（与上传流登录同路径，
         # 已验证可达），实现「登录态丢失后经 Telegram 主动获取二维码」；本机当面登录用 --no-headless 显式弹窗。
+
+    if product_task_decision and not login_only and not verify_only:
+        from video_processing.utils.wechat_product_task import read_product_task_decision
+        from video_processing.utils.wechat_product_execution import product_artifacts_digest, product_task_preflight, product_observation_generation
+        try:
+            task_product = read_product_task_decision(Path(product_task_decision))
+            product_artifacts = product_artifacts_digest(Path(video_path), Path(copy_path), Path(cover_path))
+            task_product['_observation_generation'] = product_observation_generation(settings.wechat_product_policy_path)
+            if not product_task_preflight(task_product, state_file.parent, product_artifacts,
+                                      observation_generation=task_product['_observation_generation']):
+                logger.info("Product task remains in bounded wait; no browser or upload started.")
+                return 14
+        except (OSError, ValueError, KeyError, TypeError):
+            logger.error("Invalid product task contract before browser launch.")
+            return 1
 
     with sync_playwright() as p:
         logger.info("Launching browser...")
@@ -3324,46 +3355,40 @@ def run_uploader(
             browser.close()
             return 1
 
-        # ── 9.5. 商品挂载 (图书链接) ───────────────────────────────────────────────────
-        if settings.enable_wechat_product_link or require_product:
-            logger.info("Executing bounded WeChat product link selection...")
-            decision = choose_product_role(
-                category=category,
-                source_channel_id=source_channel_id,
-            )
-            catalog = get_verified_product_catalog()
-            picker = PlaywrightProductPicker(page, catalog)
-            timeout_sec = max(5.0, min(60.0, float(settings.wechat_product_timeout_seconds)))
-            product_result = select_required_product(
-                decision=decision,
-                catalog=catalog,
-                picker=picker,
-                timeout_seconds=timeout_sec,
-            )
-            _write_product_selection_receipt(
-                evidence_root,
-                required=True,
-                result=product_result,
-            )
-            if not product_result.binding_confirmed:
-                logger.error(
-                    f"Product link selection failed or binding unconfirmed: "
-                    f"state={product_result.state}, reason={product_result.reason}. "
-                    f"Refusing to publish without confirmed product link."
-                )
-                _capture_wechat_evidence(page, evidence_root, "product_binding_required_failed")
+        # 商品任务契约优先于旧全局开关与 --require-product。显式 NONE 绝不被补挂。
+        from video_processing.utils.wechat_product_task import read_product_task_decision
+        from video_processing.utils.wechat_product_execution import execute_product_task
+        try:
+            if product_task_decision:
+                # 沿用浏览器启动前已校验契约及实际观察代次，不能重置等待输入。
+                if not execute_product_task(task_product, PlaywrightProductPicker(page), evidence_root,
+                                            settings.wechat_product_status_path,
+                                            wait_output=state_file.parent, artifacts_digest=product_artifacts):
+                    _capture_wechat_evidence(page, evidence_root, "product_contract_failed")
+                    browser.close()
+                    return 14 if task_product['require_product'] else 1
+            elif settings.enable_wechat_product_link or require_product:
+                # 其他非本需求入口暂保留要求商品，但也必须用有效版本化配置及平台真实身份。
+                from video_processing.utils.wechat_product_config import load_policy, record_adoption
+                policy = load_policy(settings.wechat_product_policy_path)
+                decision = policy.decide(category=category, source_channel_id=source_channel_id)
+                record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path, phase="STARTED")
+                product_result = select_required_product(decision=decision, picker=PlaywrightProductPicker(page),
+                                                         timeout_seconds=decision.timeout_seconds)
+                _write_product_selection_receipt(evidence_root, required=True, result=product_result)
+                record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path,
+                                phase=product_result.state, result=product_result)
+                if not product_result.binding_confirmed:
+                    browser.close()
+                    return 1
+            else:
+                logger.error("Missing explicit product task decision; refusing ambiguous submission.")
                 browser.close()
                 return 1
-            logger.info(
-                f"Product link binding confirmed: {product_result.actual.title} "
-                f"({product_result.actual.product_id}), role={product_result.decision.role.value}"
-            )
-            _capture_wechat_evidence(page, evidence_root, "product_binding_confirmed")
-        else:
-            _write_product_selection_receipt(
-                evidence_root,
-                required=False,
-            )
+        except (ValueError, OSError) as exc:
+            _write_product_selection_receipt(evidence_root, required=True, error="PRODUCT_CONTRACT_INVALID:" + type(exc).__name__)
+            browser.close()
+            return 1
 
         # ── 10. 发表前清理残留遮罩 ───────────────────────────────────────────────
         # [Claude_Sonnet_4.6_Thinking_planning] v2.0.0 bugfix:
@@ -3389,6 +3414,17 @@ def run_uploader(
                 logger.error("No-original declaration not confirmed immediately before submission.")
                 browser.close()
                 return 1
+
+        if task_product is not None:
+            from video_processing.utils.wechat_product_execution import verify_product_before_submit
+            if not verify_product_before_submit(task_product, PlaywrightProductPicker(page)):
+                logger.error("Product binding changed after form cleanup; stopping before submission.")
+                if task_product['require_product']:
+                    from video_processing.utils.wechat_product_execution import record_pre_submit_product_block
+                    record_pre_submit_product_block(task_product, evidence_root, settings.wechat_product_status_path,
+                                                    state_file.parent, product_artifacts, 'BINDING_CHANGED_BEFORE_SUBMIT')
+                browser.close()
+                return 14 if task_product['require_product'] else 1
 
         submitted_short_title = _read_confirmed_submission_title(page, short_title_clean)
         if not draft:
@@ -3513,6 +3549,7 @@ def main():
         "--require-original-declaration", action="store_true",
         help="原创声明必须由界面确认；否则停止在发表前",
     )
+    parser.add_argument("--product-task-decision", help="冻结的商品任务契约；显式NONE覆盖旧开关")
     parser.add_argument(
         "--require-product", action="store_true",
         help="商品挂载必须由界面确认；否则停止在发表前",
@@ -3555,6 +3592,7 @@ def main():
             platform_post_id = args.platform_post_id,
             identity_receipt = args.identity_receipt,
             expected_title = args.expected_title,
+            product_task_decision = args.product_task_decision,
             require_product = args.require_product,
             source_channel_id = args.source_channel_id,
             stop_before_submit = args.stop_before_submit,

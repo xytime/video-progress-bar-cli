@@ -29,6 +29,20 @@ from video_processing.utils.wallstreet_worker import ensure_wallstreet_worker
 from config.settings import settings
 from video_processing.core.task_lease import TaskLease, TaskLeaseBusy
 from video_processing.pipeline_manager import PipelineManager
+from video_processing.utils.wechat_product_execution import blocked_product_task_keys
+from video_processing.utils.wechat_product_task import PUBLISHER_CAPABILITY, product_profile_scope
+from video_processing.core.wechat_product_attachment import ATTACHMENT_VERSION
+
+
+def product_configuration_status():
+    from video_processing.utils.wechat_product_config import load_policy
+    try:
+        policy = load_policy(settings.wechat_product_policy_path)
+        return {'product_config_digest': policy.digest, 'product_config_version': policy.version,
+                'product_config_readable': True}
+    except (OSError, ValueError):
+        return {'product_config_digest': None, 'product_config_version': None,
+                'product_config_readable': False}
 
 
 def dispatch_once(manager: PipelineManager) -> int:
@@ -38,6 +52,7 @@ def dispatch_once(manager: PipelineManager) -> int:
     videos = manager.db.get_high_score_pending_videos(
         min_score=75, limit=1, ready_only=True,
         channel_min_scores=settings.auto_publish_channel_min_scores,
+        excluded_product_tasks=blocked_product_task_keys(ROOT / 'output', settings.wechat_product_policy_path),
     )
     if not videos:
         return 0
@@ -50,7 +65,8 @@ def dispatch_english_world_once(manager: PipelineManager) -> int:
     if not settings.enable_english_world_auto_publish or settings.wechat_publishing_paused:
         return 0
     manager.db.restore_expired_english_world_operator_recoveries()
-    item = manager.db.get_next_auto_approved_english_world_submission()
+    item = manager.db.get_next_auto_approved_english_world_submission(
+        excluded_product_tasks=blocked_product_task_keys(ROOT / 'output', settings.wechat_product_policy_path))
     if not item:
         return 0
     review_id = str(item["id"])
@@ -80,6 +96,9 @@ def main(argv=None) -> int:
     from video_processing.processors.ted_source_cleanup import RECIPE as cleanup_recipe
     state = {"pid": os.getpid(), "stage": "IDLE", "current_video": None,
              "git_revision": git_revision,
+             "product_publisher_capability": PUBLISHER_CAPABILITY,
+             "product_attachment_version": ATTACHMENT_VERSION,
+             "product_internal_profile_scope": product_profile_scope(out / 'wechat_state.json'),
              "ffmpeg_guard_enabled": subprocess.Popen.__module__ == "video_processing.core.ffmpeg_slot",
              **config_status(),
              "ai_cover_primary_provider": settings.ai_cover_primary_provider,
@@ -106,7 +125,7 @@ def main(argv=None) -> int:
     def heartbeat():
         while not stopped.is_set():
             with state_lock:
-                snapshot = dict(state, heartbeat_at=time.time(), **config_status())
+                snapshot = dict(state, heartbeat_at=time.time(), **config_status(), **product_configuration_status())
             temp = status_path.with_suffix(".tmp")
             temp.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
             temp.replace(status_path)
@@ -139,7 +158,8 @@ def main(argv=None) -> int:
                     version = wake.stat().st_mtime_ns if wake.exists() else 0
                     delay = 15
                     if attempted:
-                        row = manager.db.get_high_score_pending_videos(limit=1, ready_only=True)
+                        row = manager.db.get_high_score_pending_videos(limit=1, ready_only=True,
+                            excluded_product_tasks=blocked_product_task_keys(out, settings.wechat_product_policy_path))
                         if row and not str(row[0].get("publication_wait_reason") or "").startswith("同账号"):
                             delay = 1
                     for _ in range(delay):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import re
+import hashlib
 
 
 def video_product_context(output: Path, video: dict) -> dict:
@@ -42,3 +43,19 @@ def product_context_arguments(context: dict) -> list[str]:
         if context.get(key):
             result.extend(['--product-category' if key == 'category' else '--' + key.replace('_', '-'), context[key]])
     return result
+
+
+def video_attachment_context(output: Path, video: dict) -> dict:
+    """商品资格用源指标与意图；独立英语世界只读审核绑定的 manifest。"""
+    context = dict(video, **video_product_context(output, video))
+    if video.get('manifest_path'):
+        raw = Path(video['manifest_path']).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != video.get('manifest_sha256'):
+            raise ValueError('审核包商品上下文摘要不一致')
+        manifest = json.loads(raw)
+        context['_manifest_product_context_present'] = 'product_context' in manifest
+        if 'product_context' in manifest:
+            if not isinstance(manifest['product_context'], dict):
+                raise ValueError('清单的正式制作商品上下文格式错误')
+            context.update(manifest['product_context'])
+    return context

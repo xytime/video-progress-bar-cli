@@ -1,24 +1,58 @@
 <!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>商品挂载设置 · 视频控制台</title>
-<link rel="stylesheet" href="/static/css/dashboard.css">
-<link rel="stylesheet" href="/static/css/product_settings.css">
-<script defer src="/static/js/product_settings.js"></script></head>
-<body><main class="product-settings">
-<nav aria-label="当前位置"><a id="back" href="/">← 返回视频控制台</a></nav>
-<header><div><h1>商品挂载设置</h1><p>按视频类型选书，指定商品不可用时依次尝试备选与全局默认。</p></div></header>
-<section class="status-panel" aria-labelledby="status-heading"><h2 id="status-heading">保存与实际采用</h2>
-<p id="publisher-state" role="status">发布器接入状态：正在读取…</p>
-<p id="saved-version">正在读取配置…</p><p id="adopted-version">最近一次选品：正在读取…</p>
-<button id="reload" disabled type="button">重新载入</button></section>
+<script>
+(() => {const root=document.documentElement; const system=matchMedia('(prefers-color-scheme: dark)'); let prefs={};try {prefs=JSON.parse(localStorage.getItem('vp-display-preferences') || '{}') || {};} catch (_) {} const theme=['system','dark','light','contrast'].includes(prefs.theme)?prefs.theme:'system'; const apply=()=>{root.dataset.theme=theme==='system'?(system.matches?'dark':'light'):theme;root.dataset.textSize=['standard','large','xlarge'].includes(prefs.size)?prefs.size:'large';};apply();system.addEventListener('change',apply);})();
+</script>
+<link rel="stylesheet" href="/static/css/dashboard.css"><link rel="stylesheet" href="/static/css/product_settings.css?v=20261011-redesign">
+<script defer src="/static/js/product_picker.js?v=20261011-redesign"></script><script defer src="/static/js/product_settings.js?v=20261011-redesign"></script>
+</head><body><main class="product-settings">
+<nav class="breadcrumbs" aria-label="当前位置"><a id="back" href="/">视频控制台</a><span aria-hidden="true"> / </span><span aria-current="page">商品挂载</span></nav>
+<header class="page-header"><div><h1>商品挂载</h1><p class="hint">按视频类型配置商品，保存前查看影响。</p></div><div class="header-actions"><span id="dirty-state" role="status">正在载入…</span><button id="history-open" type="button" disabled>版本历史</button><button id="save" disabled class="primary" type="button">保存更改</button></div></header>
+<div class="status-banner"><p id="publisher-state" role="status">正在读取发布器状态…</p><button id="runtime-link" type="button" disabled>查看状态 →</button></div>
 <p id="feedback" role="status" aria-live="polite"></p>
-<section aria-labelledby="catalog-heading"><h2 id="catalog-heading">后台商品清单</h2>
-<p id="catalog-state" role="status">正在读取商品清单…</p>
-<p id="catalog-time" class="hint"></p>
-<p class="hint">所有商品选择框共用此清单。库存为采集时的观测，当前是否可售需发布时核验；缺货商品仍可配置。重新载入只读取最近留存清单，不会连接平台实时同步。</p>
-<button id="catalog-refresh" type="button">尝试刷新平台清单</button><p id="refresh-state" role="status"></p>
-<details><summary>更新商品清单</summary>
+<nav class="view-tabs" aria-label="商品管理视图"><button id="tab-rules" type="button" data-view="rules" aria-current="page" disabled>按类型配置</button><button id="tab-library" type="button" data-view="library" disabled>商品库 <span id="library-count"></span></button><button id="tab-records" type="button" data-view="records" disabled>执行记录</button></nav>
+<form id="settings-form" novalidate><fieldset id="editor" disabled><legend class="sr-only">商品选择规则</legend>
+<div id="view-rules" class="view-panel"><div class="rules-layout"><div class="rules-main"><section class="mapping-panel"><div class="section-head"><h2>类型与商品</h2><span class="hint">首选 → 备选 → 全局默认</span></div><div class="mapping-columns" aria-hidden="true"><span>视频类型</span><span>首选商品</span><span>备选商品</span></div><div id="profiles"></div></section>
+<section class="default-panel"><div><h2>全局默认商品</h2><p class="hint">候选均不可用时等待，不空挂发布。</p></div><div><label for="default-product" class="sr-only">全局默认商品</label><select id="default-product" aria-describedby="default-detail" data-product-picker></select><p id="default-detail" class="sr-only"></p></div></section>
+<details class="advanced"><summary>识别条件与其他类型细分</summary>
+<p class="hint">英语世界使用任务内容类型；下列来源频道按完整 ID 匹配，多个 ID 用逗号分隔。AI 也接受显式主题 AI，“科技”分类不会自动归入 AI。</p>
+<div id="channel-fields"></div>
+<p class="hint">“其他”中的财经、新闻仍优先使用原有细分规则；没有命中时使用上方“其他”一行。</p>
+<div id="legacy-rules"></div>
+<label for="timeout">选品总时限（秒，含全部重试）</label><input id="timeout" type="number" min="1" max="60" step="1" aria-describedby="feedback">
+<label for="attempts">最多尝试次数</label><select id="attempts" aria-describedby="feedback"><option value="1">1 次</option><option value="2">2 次</option><option value="3">3 次</option></select>
+<p class="hint">首选、备选、全局默认去重后必须都能在次数上限内尝试。</p></details>
+<details class="advanced"><summary>等待与恢复检查</summary><p class="hint">以下是检查退避参数，不代表平台额度恢复时间。调度尚未接入时，仅保存参数，不启动任务。</p>
+<label for="wait-base_seconds">初次检查间隔（秒）</label><input id="wait-base_seconds" type="number" min="60" max="86400">
+<label for="wait-max_seconds">检查间隔上限（秒）</label><input id="wait-max_seconds" type="number" min="60" max="86400">
+<label for="wait-max_checks">最多连续检查次数</label><input id="wait-max_checks" type="number" min="1" max="30">
+<label for="wait-lease_seconds">单次检查占用上限（秒）</label><input id="wait-lease_seconds" type="number" min="30" max="600"></details>
+</div><aside class="details-panel"><section><p id="current-context" class="eyebrow">全局默认商品</p><h2 id="current-title">正在载入商品…</h2><dl class="product-facts"><div><dt>商品 ID</dt><dd id="current-id">—</dd></div><div><dt>店铺</dt><dd id="current-shop">—</dd></div><div><dt>身份资料</dt><dd id="current-identity">—</dd></div><div><dt>库存观测</dt><dd id="current-stock">—</dd></div></dl><p id="current-catalog" class="hint"></p></section><section class="preview-panel" aria-labelledby="preview-heading"><h2 id="preview-heading">预览选品结果</h2><p class="hint">查看当前配置的候选顺序。</p>
+<p class="hint">英语世界每天正式制作首条挂商品；其他自动 YouTube 视频点赞率达到10%才挂。已有冻结任务继续沿用原决定。</p>
+<label for="video">最近待发布视频（最多 100 条）</label><select id="video"><option value="">使用样例上下文</option></select><p id="videos-state" class="hint"></p>
+<details id="sample-context"><summary>样例上下文</summary>
+<label for="content-type">内容类型</label><select id="content-type"><option value="GENERAL">普通视频</option><option value="ENGLISH_WORLD_SHORT">英语世界短视频</option></select>
+<label for="channel">来源频道 ID</label><input id="channel" type="text">
+<label for="category">视频分类</label><select id="category"><option value="">未分类</option><option>财经</option><option>新闻</option><option>资讯</option><option>时事</option><option>科技</option><option>教育</option></select>
+<label for="topic">显式主题</label><select id="topic"><option value="">未标注</option><option value="AI">AI</option></select></details>
+<label for="manual">单条视频指定商品（仅用于本次预览）</label><select id="manual" data-product-picker></select>
+<p class="hint">未指定时沿用视频的商品意图；指定仅模拟人工挂载，不修改队列或原冻结决定。</p>
+<button id="preview" type="button" disabled>预览选品</button>
+<div id="preview-result" aria-live="polite"><p>选择视频或填写样例，查看类型、匹配原因和候选顺序。</p></div></section>
+</aside></div></div>
+<div id="view-library" class="view-panel" hidden><section class="library-panel"><div class="section-head"><div><h2>商品库</h2><p class="hint">资料与类型配置统一保存。待核实资料暂不能用于自动选品。</p></div><div class="actions"><button id="catalog-open" type="button" disabled>导入商品清单</button><button id="library-new" type="button" disabled>新增商品资料</button></div></div>
+<div class="library-toolbar"><div class="search-field"><label for="library-search" class="sr-only">搜索商品名称、ID、店铺或备注</label><input id="library-search" type="search" placeholder="搜索商品名称、ID、店铺或备注"><button id="library-clear" type="button" aria-label="清空商品搜索" hidden disabled>×</button></div><label for="library-filter" class="sr-only">商品状态筛选</label><select id="library-filter"><option value="all">全部状态</option><option value="enabled">启用</option><option value="disabled">停用</option><option value="unverified">待核实</option></select></div>
+<label for="library-choice" class="sr-only">选择已有商品</label><select id="library-choice" hidden></select>
+<div id="library-results" aria-live="polite"></div><div class="library-pagination"><p id="library-range" class="hint"></p><div><button id="library-prev" type="button" disabled>上一页</button><button id="library-next" type="button" disabled>下一页</button></div></div></section>
+<section class="catalog-summary"><h2>商品清单来源</h2><p id="catalog-state" role="status">正在读取商品清单…</p><p id="catalog-time" class="hint"></p><p class="hint">库存为采集时的观测；可售状态在发布时核验。</p><span class="badge">平台实时同步尚未接入</span><button id="catalog-refresh" type="button" hidden disabled>检查同步状态</button><p id="refresh-state" role="status"></p></section>
+<dialog id="library-editor" aria-labelledby="library-editor-title"><div class="dialog-head"><h2 id="library-editor-title">商品资料</h2><button type="button" data-close="library-editor" aria-label="关闭商品资料" disabled>×</button></div><div class="dialog-body"><div class="library-fields"><label for="lib-product_id">商品 ID</label><input id="lib-product_id" type="text"><label for="lib-title">完整商品名称</label><input id="lib-title" type="text"><label for="lib-account_id">所属发布账号标识（不是商家 AppID）</label><input id="lib-account_id" type="text"><label for="lib-shop">所属店铺</label><input id="lib-shop" type="text"><label for="lib-merchant_appid">商家 AppID</label><input id="lib-merchant_appid" type="text"><label for="lib-specification">版本 / 规格</label><input id="lib-specification" type="text"><label for="lib-short_name">显示简称</label><input id="lib-short_name" type="text"><label for="lib-notes">运营备注</label><input id="lib-notes" type="text"><label for="lib-verified_source">核实来源</label><input id="lib-verified_source" type="text"><label for="lib-verified_at">核实时间（含时区）</label><input id="lib-verified_at" type="text"><label for="lib-identity_status">身份核实状态</label><select id="lib-identity_status"><option value="UNVERIFIED">待核实（不能自动选品）</option><option value="VERIFIED">已人工核实身份与账号</option></select>
+<label for="lib-enabled">运营启用</label><select id="lib-enabled"><option value="true">启用</option><option value="false">停用</option></select>
+</div><p id="library-references" class="hint"></p></div><div class="dialog-foot"><button type="button" data-close="library-editor" disabled>返回商品库</button><button id="library-toggle" type="button" disabled>切换启用 / 停用</button><button id="library-apply" type="button" disabled>加入待保存更改</button><p id="library-feedback" role="status"></p></div></dialog></div>
+<div id="view-records" class="view-panel" hidden><section><div class="section-head"><h2>配置与实际采用</h2><button id="reload" disabled type="button">重新载入</button></div><p id="saved-version"></p><p id="adopted-version"></p><p class="hint">已保存配置、实际选品与作品挂载分别记录。</p></section><section><h2>等待记录</h2><p id="wait-state" role="status"></p><div id="wait-records"></div><p class="hint">恢复检查后仍需通过原有发布门禁；结果不明的任务先核验原作品。</p></section></div>
+</fieldset></form>
+<dialog id="history-dialog" class="side-dialog" aria-labelledby="history-heading"><div class="dialog-head"><h2 id="history-heading">版本历史</h2><button type="button" data-close="history-dialog" aria-label="关闭版本历史" disabled>×</button></div><div class="dialog-body"><p class="hint">恢复先载入草稿，保存后生成新版本。</p><label for="revision">已保留的版本</label><select id="revision"></select><p id="history-state" role="status"></p></div><div class="dialog-foot"><button type="button" data-close="history-dialog" disabled>返回编辑</button><button id="restore-revision" type="button" disabled>载入为恢复草稿</button></div></dialog>
+<dialog id="catalog-dialog" aria-labelledby="catalog-dialog-heading"><div class="dialog-head"><h2 id="catalog-dialog-heading">导入商品清单</h2><button type="button" data-close="catalog-dialog" aria-label="关闭导入商品清单" disabled>×</button></div><div class="dialog-body"><details><summary>更新商品清单</summary>
 <p>导入同一账号、同一次采集的完整商品清单。先校验并查看变更，确认后更新下拉框；现有类型匹配与默认商品保持不变。</p>
 <p class="hint">目前支持约定格式的 JSON 文件，尚未接入平台直接导出或实时同步。请使用可靠采集资料，勿用示例数据代替真实商品。文件中的分页、总数与账号声明不能替代平台核验。</p>
 <p><a href="/static/examples/wechat-product-catalog-v2.json" download>下载导入格式示例</a></p>
@@ -27,48 +61,7 @@
 <div class="actions"><button id="catalog-check" type="button" disabled>校验并预览</button><button id="catalog-apply" type="button" disabled>确认导入清单</button></div>
 <p id="catalog-import-feedback" role="status" aria-live="polite">选择文件后开始校验，不会立即更新清单。</p>
 <div id="catalog-import-preview"></div>
-</details></section>
-<section><h2>版本历史</h2><p class="hint">恢复历史版本先载入为草稿；预览影响并保存后生成新版本，不改写历史和在途任务。</p>
-<label for="revision">已保留快照</label><select id="revision"></select><button id="restore-revision" type="button">载入为恢复草稿</button><p id="history-state" role="status"></p></section>
-<form id="settings-form" novalidate>
-<fieldset id="editor" disabled><legend class="sr-only">商品选择规则</legend>
-<section><h2>商品库维护</h2><p class="hint">资料与类型规则同次保存。待核实资料不会进入商品下拉框；停用被引用商品时，需要先调整引用规则。</p>
-<label for="library-search">搜索名称、ID、店铺或备注</label><input id="library-search" type="search">
-<label for="library-choice">选择已有商品</label><select id="library-choice"></select>
-<div class="actions"><button id="library-new" type="button">新增资料</button><button id="library-toggle" type="button">切换启用 / 停用</button></div><p id="library-references"></p>
-<details id="library-editor"><summary>编辑商品资料</summary><label for="lib-product_id">商品 ID</label><input id="lib-product_id" type="text"><label for="lib-title">完整商品名称</label><input id="lib-title" type="text"><label for="lib-account_id">所属发布账号标识（不是商家 AppID）</label><input id="lib-account_id" type="text"><label for="lib-shop">所属店铺</label><input id="lib-shop" type="text"><label for="lib-merchant_appid">商家 AppID</label><input id="lib-merchant_appid" type="text"><label for="lib-specification">版本 / 规格</label><input id="lib-specification" type="text"><label for="lib-short_name">显示简称</label><input id="lib-short_name" type="text"><label for="lib-notes">运营备注</label><input id="lib-notes" type="text"><label for="lib-verified_source">核实来源</label><input id="lib-verified_source" type="text"><label for="lib-verified_at">核实时间（含时区）</label><input id="lib-verified_at" type="text"><label for="lib-identity_status">身份核实状态</label><select id="lib-identity_status"><option value="UNVERIFIED">待核实（不能自动选品）</option><option value="VERIFIED">已人工核实身份与账号</option></select>
-<label for="lib-enabled">运营启用</label><select id="lib-enabled"><option value="true">启用</option><option value="false">停用</option></select>
-<button id="library-apply" type="button">应用到当前草稿</button><p id="library-feedback" role="status"></p></details></section>
-<section><h2>视频类型</h2><p class="hint">识别顺序：英语世界 → 华尔街 → TED → AI → 其他。单条视频指定商品优先。</p>
-<div id="profiles"></div></section>
-<section><h2>全局默认商品</h2><label for="default-product">最后尝试的商品</label><select id="default-product" aria-describedby="default-detail"></select><p id="default-detail" class="product-detail"></p>
-<p class="hint">所有候选都不可用或无法核实实际挂载身份时，停止发表并记录原因，不空挂发布。</p></section>
-<details><summary>识别条件与其他类型细分</summary>
-<p class="hint">英语世界使用任务内容类型；下列来源频道按完整 ID 匹配，多个 ID 用逗号分隔。AI 也接受显式主题 AI，“科技”分类不会自动归入 AI。</p>
-<div id="channel-fields"></div>
-<p class="hint">“其他”中的财经、新闻仍优先使用原有细分规则；没有命中时使用上方“其他”一行。</p>
-<div id="legacy-rules"></div>
-<label for="timeout">选品总时限（秒，含全部重试）</label><input id="timeout" type="number" min="1" max="60" step="1" aria-describedby="feedback">
-<label for="attempts">最多尝试次数</label><select id="attempts" aria-describedby="feedback"><option value="1">1 次</option><option value="2">2 次</option><option value="3">3 次</option></select>
-<p class="hint">首选、备选、全局默认去重后必须都能在次数上限内尝试。</p></details>
-<details><summary>等待与恢复检查</summary><p class="hint">以下是检查退避参数，不代表平台额度恢复时间。调度尚未接入时，仅保存参数，不启动任务。</p>
-<label for="wait-base_seconds">初次检查间隔（秒）</label><input id="wait-base_seconds" type="number" min="60" max="86400">
-<label for="wait-max_seconds">检查间隔上限（秒）</label><input id="wait-max_seconds" type="number" min="60" max="86400">
-<label for="wait-max_checks">最多连续检查次数</label><input id="wait-max_checks" type="number" min="1" max="30">
-<label for="wait-lease_seconds">单次检查租期（秒）</label><input id="wait-lease_seconds" type="number" min="30" max="600"></details>
-<div class="actions"><button id="save" disabled class="primary" type="button">预览影响并保存</button><span id="dirty-state">尚未修改</span></div>
-</fieldset></form>
-<section aria-labelledby="preview-heading"><h2 id="preview-heading">预览选品结果</h2><p class="hint">使用当前表单预览，不保存、不发布，也不计为实际采用。</p>
-<label for="video">最近待发布视频（最多 100 条）</label><select id="video"><option value="">使用下面的样例上下文</option></select><p id="videos-state" class="hint"></p>
-<details id="sample-context"><summary>样例上下文</summary>
-<label for="content-type">内容类型</label><select id="content-type"><option value="GENERAL">普通视频</option><option value="ENGLISH_WORLD_SHORT">英语世界短视频</option></select>
-<label for="channel">来源频道 ID</label><input id="channel" type="text">
-<label for="category">视频分类</label><select id="category"><option value="">未分类</option><option>财经</option><option>新闻</option><option>资讯</option><option>时事</option><option>科技</option><option>教育</option></select>
-<label for="topic">显式主题</label><select id="topic"><option value="">未标注</option><option value="AI">AI</option></select></details>
-<label for="manual">单条视频指定商品（仅用于本次预览）</label><select id="manual"></select>
-<button id="preview" type="button" disabled>预览选品</button>
-<div id="preview-result" aria-live="polite"><p>选择视频或填写样例，查看类型、匹配原因和候选顺序。</p></div></section>
-<section><h2>等待记录</h2><p id="wait-state" role="status"></p><div id="wait-records"></div><p class="hint">恢复检查后仍需通过原有授权、去重与审核门禁；配置保存不会直接发表。已受理、审核中或结果不明的任务先核验原作品。</p></section>
-<dialog id="impact-dialog" aria-labelledby="impact-heading"><h2 id="impact-heading">保存前影响预览</h2><div id="impact-result"></div><div class="actions"><button id="impact-cancel" type="button">返回编辑</button><button id="impact-confirm" type="button" class="primary">确认保存配置</button></div></dialog>
-<dialog id="discard-dialog" aria-labelledby="discard-heading"><h2 id="discard-heading">有尚未保存的修改</h2><p>继续会丢弃当前表单中的修改。</p><div class="actions"><button id="keep-editing" disabled type="button" autofocus>继续编辑</button><button id="discard" disabled type="button">丢弃修改并继续</button></div></dialog>
+</details></div></dialog>
+<dialog id="impact-dialog" aria-labelledby="impact-heading"><h2 id="impact-heading">保存前影响预览</h2><div id="impact-result" class="dialog-body"></div><div class="dialog-foot"><button id="impact-cancel" type="button" disabled>返回编辑</button><button id="impact-confirm" type="button" class="primary" disabled>确认保存配置</button></div></dialog>
+<dialog id="discard-dialog" aria-labelledby="discard-heading"><h2 id="discard-heading">有尚未保存的修改</h2><p>继续会丢弃当前表单中的修改。</p><div class="dialog-foot"><button id="keep-editing" disabled type="button" autofocus>继续编辑</button><button id="discard" disabled type="button">丢弃修改并继续</button></div></dialog>
 </main></body></html>

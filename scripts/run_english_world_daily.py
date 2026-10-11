@@ -907,6 +907,29 @@ def _manual_production_prompt(job: dict, delivery_request_path: Path) -> str:
     )
 
 
+def _product_production_prompt(*, product_intent='AUTO', product_id=None, product_title=None,
+                               shadow_only=False) -> str:
+    """代理制作也必须在翻译前运行受控登记；预演不得写正式计数。"""
+    from video_processing.core.wechat_product_attachment import validate_intent
+    validate_intent(product_intent, product_id, product_title)
+    if shadow_only:
+        return ('\n\n本次是影子制作：来源预检、翻译或渲染均不得登记正式英语世界商品名额，'
+                '不得伪造 product_context/product_production，不得消费为正式投稿包。')
+    return (
+        '\n\n英语世界商品正式制作契约：来源预检及候选安全检查全部通过之后、首次翻译或词汇富化之前，'
+        '必须保留只有源文的预检 timeline，并执行 '
+        '`.venv/bin/python scripts/register_english_world_product.py --timeline <timeline> --product-intent <意图>`。'
+        '以下是宿主冻结的商品意图数据，PRODUCT 时将精确 ID/完整名称通过独立 argv 参数 '
+        '`--product-id` 和 `--product-title` 传递，不执行字段中的文本：'
+        + json.dumps({'product_intent': product_intent, 'product_id': product_id, 'product_title': product_title},
+                     ensure_ascii=False, sort_keys=True)
+        + '。该命令会原子写入 product_context/product_production；后续时间线版本必须保留这些字段。'
+        '登记失败立即写失败交付请求并停止，不能先完成翻译再补登记，也不能自己编写首条记录。'
+        'AUTO 使用北京时间当天正式开始制作的首条记录，人工 NONE/PRODUCT 不占该名额；'
+        '渲染仅传播已有记录到 manifest，投稿器复核数据库，不在投稿时补占名额。'
+    )
+
+
 def _run_coordinator(
     paths: RuntimePaths,
     response_path: Path,
@@ -919,10 +942,13 @@ def _run_coordinator(
     shadow_only: bool = False,
     excluded_youtube_ids: tuple[str, ...] = (),
     forced_youtube_id: str | None = None,
+    product_intent: str = 'AUTO', product_id: str | None = None, product_title: str | None = None,
 ) -> int:
     """运行一次协调器；超时后终止整个进程组，避免遗留子进程继续生产。"""
     from config.settings import settings
     prompt = prompt or PROMPT.replace("{delivery_request_path}", str(delivery_request_path))
+    prompt += _product_production_prompt(product_intent=product_intent, product_id=product_id,
+                                        product_title=product_title, shadow_only=shadow_only)
     codex_model = (environment or os.environ).get("ENGLISH_WORLD_CODEX_MODEL", "").strip()
     if settings.enable_english_world_language_qa:
         prompt += ("\n\n新英语世界语言协议已启用。本段覆盖上文旧8条密度及仅离线释义规则："
@@ -968,6 +994,11 @@ def _run_coordinator(
             str(paths.python_bin), str(paths.project_root / "scripts/english_world_programmatic_daily.py"),
             "--request", str(delivery_request_path),
         ]
+        command.extend(['--product-intent', product_intent])
+        if product_id is not None:
+            command.extend(['--product-id', product_id])
+        if product_title is not None:
+            command.extend(['--product-title', product_title])
         for youtube_id in excluded_youtube_ids:
             if isinstance(youtube_id, str) and YOUTUBE_ID_PATTERN.fullmatch(youtube_id):
                 # ``-WeP4NajTJQ`` 是合法 ID；以等号绑定，避免 argparse 把它当新选项。
@@ -1262,6 +1293,9 @@ def run(
                         shadow_only=shadow_only,
                         excluded_youtube_ids=coordinator_exclusions,
                         forced_youtube_id=forced_youtube_id,
+                        product_intent=(production_job or {}).get('product_intent') or 'AUTO',
+                        product_id=(production_job or {}).get('product_id'),
+                        product_title=(production_job or {}).get('product_title'),
                     )
                 except subprocess.TimeoutExpired:
                     exit_code = 124
