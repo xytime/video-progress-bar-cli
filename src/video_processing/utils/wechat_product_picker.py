@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-12 | Codex | 修复隐藏 iframe/Shadow DOM 定位；无 ID 卡片仅接受平台实际选中行及未变化表单证据。 |
 | 1.1.0 | 2026-10-10 | Antigravity | 自动确认‘选择商品出现时机’弹窗，确保遮罩完全关闭且发表按钮无阻碍。 |
 | 1.0.0 | 2026-10-10 | Antigravity | 初始实现：适配当前视频号微前端结构，支持完整商品查找、单选确认、表单回读与解绑。 |
 """
@@ -29,12 +30,12 @@ _DOM = r"""
 const visible = e => !!e && !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
 const text = e => (e?.innerText || '').trim();
 const enabled = e => visible(e) && !e.disabled && e.getAttribute('aria-disabled') !== 'true';
-const dialogs = () => Array.from(document.querySelectorAll('.weui-desktop-dialog, .ant-modal, [role="dialog"]'))
+const dialogs = () => Array.from(scope.querySelectorAll('.weui-desktop-dialog, .ant-modal, [role="dialog"]'))
     .filter(d => visible(d) && /从橱窗添加商品|选择商品出现时机/.test(text(d)));
 const productDialogs = () => dialogs().filter(d => text(d).includes('从橱窗添加商品'));
 const button = (d, re) => Array.from(d.querySelectorAll('button, .weui-desktop-btn')).find(b => enabled(b) && re.test(text(b)));
 const binding = () => {
-    const cards = Array.from(document.querySelectorAll('.post-component-choose-wrap .choose-content')).filter(visible);
+    const cards = Array.from(scope.querySelectorAll('.post-component-choose-wrap .choose-content')).filter(visible);
     const names = cards.flatMap(c => Array.from(c.querySelectorAll('.name')).filter(e => visible(e) && text(e)));
     if (names.length) {
         if (names.length !== 1 || cards.length !== 1) return {unknown: true};
@@ -44,19 +45,35 @@ const binding = () => {
             if (id?.trim()) ids.add(id.trim());
             if (e.matches('a[href]')) {
                 let u;
-                try { u = new URL(e.getAttribute('href'), document.baseURI); } catch { return {unknown: true}; }
+                try { u = new URL(e.getAttribute('href'), root.baseURI); } catch { return {unknown: true}; }
                 for (const key of ['product_id', 'productId']) {
                     const value = u.searchParams.get(key);
                     if (value?.trim()) ids.add(value.trim());
                 }
             }
         }
-        return ids.size === 1 ? {product_id: [...ids][0], title: text(names[0])} : {unknown: true};
+        return ids.size === 1 ? {product_id: [...ids][0], title: text(names[0])} : {unknown: true, missing_id: ids.size === 0, title: text(names[0])};
     }
     if (cards.some(c => text(c).includes('选择需要添加的商品')) ||
-        Array.from(document.querySelectorAll('.link-display-wrap')).some(e => visible(e) && text(e) === '选择链接'))
+        Array.from(scope.querySelectorAll('.link-display-wrap')).some(e => visible(e) && text(e) === '选择链接'))
         return {unbound: true};
     return {unknown: true};
+};
+const selectedIdentity = () => {
+    const ds = productDialogs();
+    if (ds.length !== 1) return null;
+    const rows = Array.from(ds[0].querySelectorAll('tr')).filter(r => visible(r) && r.querySelector('input[type="radio"]:checked'));
+    if (rows.length !== 1) return null;
+    const row = rows[0], ids = new Set();
+    for (const e of [row, ...row.querySelectorAll('[data-product-id], .id-wrap')]) {
+        const id = e.getAttribute('data-product-id') || (e.matches('.id-wrap') ? text(e) : '');
+        if (id?.trim()) ids.add(id.trim());
+    }
+    // 简单表格兼容；radio.value 和 data-row-key 是橱窗行 ID，不能当作商品 ID。
+    if (!ids.size && /^[A-Za-z0-9_-]+$/.test(text(row.cells[0]))) ids.add(text(row.cells[0]));
+    const titleNode = row.querySelector('.title') || row.cells[1];
+    const title = titleNode?.getAttribute('title')?.trim() || text(titleNode);
+    return ids.size === 1 && title ? {product_id: [...ids][0], title} : null;
 };
 const lookup = prod => {
     const ds = productDialogs();
@@ -87,13 +104,23 @@ class PlaywrightProductPicker:
     def __init__(self, page: Any, catalog=None, *, clock=monotonic) -> None:
         self.page = page
         self.clock = clock
+        self._binding_attestation = None
+        self.binding_identity_source = "FINAL_FORM_READBACK"
         # catalog 仅保留调用兼容，不用于身份回读。
 
     def _get_content_frame(self) -> Any:
+        # 无界微前端会保留隐藏的同名 iframe；当前可见控件优先。
+        controls = self.page.locator('.post-component-choose-wrap:visible, .link-display-wrap:visible')
+        if controls.count():
+            return self.page
+        frames = []
         for frame in getattr(self.page, "frames", []):
             if "content/post/create" in getattr(frame, "url", "") or getattr(frame, "name", "") == "content":
-                return frame
-        return self.page
+                if frame.frame_element().is_visible():
+                    frames.append(frame)
+        if len(frames) > 1:
+            raise BindingIdentityUnavailable("PRODUCT_VISIBLE_FRAME_CONFLICT")
+        return frames[0] if frames else self.page
 
     def _end(self, timeout_ms: int, cap_ms: int = 10000) -> float:
         if timeout_ms <= 0:
@@ -108,8 +135,17 @@ class PlaywrightProductPicker:
 
     def _eval(self, code: str, end: float, arg=None):
         try:
-            value = self._get_content_frame().locator("body").evaluate(
-                "(root, arg) => {" + _DOM + code + "}", arg,
+            ctx = self._get_content_frame()
+            controls = ctx.locator('.post-component-choose-wrap:visible, .link-display-wrap:visible')
+            if controls.count():
+                if controls.evaluate_all('es => new Set(es.map(e => e.getRootNode())).size') != 1:
+                    raise BindingIdentityUnavailable("PRODUCT_VISIBLE_ROOT_CONFLICT")
+                anchor = controls.first
+            else:
+                anchor = ctx.locator("body").first
+            # Locator 穿透公开 Shadow DOM，查询随后限定在该可见控件所属根。
+            value = anchor.evaluate(
+                "(root, arg) => {const scope = root.getRootNode();" + _DOM + code + "}", arg,
                 timeout=self._remaining(end),
             )
         except PlaywrightTimeoutError as exc:
@@ -129,7 +165,7 @@ class PlaywrightProductPicker:
             return
         ctx = self._get_content_frame()
         try:
-            if not self._eval("return Array.from(document.querySelectorAll('.choosen-link-wrap')).some(e => visible(e) && text(e).includes('商品'));", end):
+            if not self._eval("return Array.from(scope.querySelectorAll('.choosen-link-wrap')).some(e => visible(e) && text(e).includes('商品'));", end):
                 ctx.get_by_text("选择链接", exact=True).click(timeout=self._remaining(end))
                 ctx.get_by_text("商品", exact=True).click(timeout=self._remaining(end))
             ctx.get_by_text("选择需要添加的商品", exact=True).click(timeout=self._remaining(end))
@@ -138,11 +174,25 @@ class PlaywrightProductPicker:
         self._poll("return productDialogs().length > 0;", end)
 
     def read_binding(self, *, timeout_ms: int) -> ProductIdentity | None:
-        info = self._eval("return binding();", self._end(timeout_ms))
+        end = self._end(timeout_ms)
+        info = self._eval("return binding();", end)
+        self.binding_identity_source = "FINAL_FORM_READBACK"
         if info.get("unbound"):
             return None
         if info.get("product_id") and info.get("title"):
             return ProductIdentity(info["product_id"], info["title"])
+        if info.get("missing_id") and self._binding_attestation is not None:
+            actual = self._binding_attestation.evaluate("""e => {
+                const cards = Array.from(e.scope.querySelectorAll('.post-component-choose-wrap .choose-content'))
+                    .filter(n => !!n.getClientRects().length);
+                const name = e.card.querySelector('.name');
+                return e.valid && e.card.isConnected && cards.length === 1 && cards[0] === e.card
+                    && name?.innerText.trim() === e.product.title ? e.product : null;
+            }""")
+            self._remaining(end)
+            if actual and actual['title'] == info['title']:
+                self.binding_identity_source = "DOM_SELECTION_AND_UNCHANGED_FORM"
+                return ProductIdentity(actual['product_id'], actual['title'])
         raise BindingIdentityUnavailable("BINDING_ACTUAL_ID_OR_TITLE_UNAVAILABLE")
 
     def find(self, product: ProductIdentity, *, timeout_ms: int) -> ProductLookup:
@@ -173,20 +223,52 @@ class PlaywrightProductPicker:
         if status != "AVAILABLE":
             raise BindingIdentityUnavailable("PRODUCT_CHANGED_BEFORE_SELECTION")
         self._poll("const ds = productDialogs(); if (ds.length !== 1) return false; const r = lookup(arg); return r.status === 'AVAILABLE' && r.radio.checked;", end, vars(product))
+        observed = self._eval("return selectedIdentity();", end)
+        if not observed or ProductIdentity(**observed) != product:
+            raise BindingIdentityUnavailable("SELECTED_ACTUAL_ID_OR_TITLE_CONFLICT")
+        self._clear_attestation()
         self._poll(r"const d = productDialogs()[0]; const b = d && button(d, /^添加(?:\s*[（(]1[）)])?$/); if (!b) return false; b.click(); return true;", end)
         self._poll("""
             for (const d of dialogs().filter(d => text(d).includes('选择商品出现时机'))) {
                 const b = button(d, /^确认$/); if (b) b.click();
             }
-            const card = document.querySelector('.post-component-choose-wrap .choose-content .name');
+            const card = scope.querySelector('.post-component-choose-wrap .choose-content .name');
             return !dialogs().length && visible(card) && !!text(card);
         """, end)
 
+        # 保存平台实际选中行的身份及随后生成的卡片节点，任何改选/解绑/节点变化使证据失效。
+        self._binding_attestation = self._get_content_frame().locator(
+            '.post-component-choose-wrap .choose-content:visible'
+        ).evaluate_handle("""(card, product) => {
+            const scope = card.getRootNode(), region = card.closest('.post-component-choose-wrap');
+            const evidence = {card, product, scope, valid: true};
+            const observer = new MutationObserver(changes => {
+                if (changes.some(c => c.type !== 'attributes' || ['data-product-id','title','href'].includes(c.attributeName)))
+                    evidence.valid = false;
+            });
+            observer.observe(region, {childList: true, subtree: true, characterData: true, attributes: true});
+            const click = event => {
+                if (event.composedPath().some(n => n?.matches?.('.post-component-choose-wrap, .choosen-link-wrap, .link-display-wrap')))
+                    evidence.valid = false;
+            };
+            scope.addEventListener('click', click, true);
+            evidence.dispose = () => {observer.disconnect(); scope.removeEventListener('click', click, true);};
+            return evidence;
+        }""", observed, timeout=self._remaining(end))
+        self._remaining(end)
+
+    def _clear_attestation(self):
+        if self._binding_attestation is not None:
+            self._binding_attestation.evaluate('e => e.dispose()')
+            self._binding_attestation.dispose()
+            self._binding_attestation = None
+
     def cancel_and_clear(self, *, timeout_ms: int) -> bool:
+        self._clear_attestation()
         end = self._end(timeout_ms, 3000)
         self._eval("for (const d of dialogs()) { const b = button(d, /^取消$/); if (b) b.click(); }", end)
-        self._eval("const name = document.querySelector('.post-component-choose-wrap .choose-content .name'); const b = document.querySelector('.post-component-choose-wrap .close-icon'); if (visible(name) && text(name) && visible(b)) b.click();", end)
+        self._eval("const name = scope.querySelector('.post-component-choose-wrap .choose-content .name'); const b = scope.querySelector('.post-component-choose-wrap .close-icon'); if (visible(name) && text(name) && visible(b)) b.click();", end)
         return bool(self._poll("return !dialogs().length && binding().unbound === true;", end))
 
     def ready_to_submit(self, *, timeout_ms: int) -> bool:
-        return bool(self._eval("return !dialogs().length && !!button(document, /^发表$/);", self._end(timeout_ms)))
+        return bool(self._eval("return !dialogs().length && !!button(scope, /^发表$/);", self._end(timeout_ms)))

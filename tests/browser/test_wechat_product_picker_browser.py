@@ -1,4 +1,10 @@
-"""只在合成 DOM 中验证真实 Chromium 行为，不访问视频号或复用登录态。"""
+"""只在合成 DOM 中验证真实 Chromium 行为，不访问视频号或复用登录态。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-12 | Codex | 覆盖隐藏同名 iframe 与公开 Shadow DOM 的完整选品及多根冲突。 |
+"""
 import time
 import pytest
 from tests.browser_fixtures import chromium
@@ -187,3 +193,83 @@ def test_same_work_native_detail_readback_is_read_only(page,tmp_path,case):
     result=_read_management_product_detail(page,tmp_path,dict(platform_post_id='native-current',platform_object_nonce='12345'))
     assert result['state']==('BOUND' if case=='bound' else 'UNBOUND' if case=='unbound' else 'UNVERIFIED')
     assert page.evaluate('window.saved') is False
+
+
+def test_hidden_legacy_frame_and_shadow_form_complete_binding(page):
+    page.set_content('<iframe name="content" hidden></iframe><wujie-app></wujie-app>')
+    page.frame(name='content').set_content(card('999','旧页面图书'))
+    page.evaluate("""html => {
+        const scope = document.querySelector('wujie-app').attachShadow({mode:'open'});
+        scope.innerHTML = '<body>' + html.replaceAll('document.querySelector', 'window.fixtureRoot.querySelector') + '</body>';
+        window.fixtureRoot = scope;
+        window.eval(scope.querySelector('script').textContent.replaceAll('document.querySelector', 'window.fixtureRoot.querySelector').replace('let selected;', 'window.selected = null;'));
+        scope.querySelector('#products').hidden = true;
+    }""", form(row()))
+    picker = PlaywrightProductPicker(page)
+    assert picker.find(TARGET,timeout_ms=1200) == ProductLookup.AVAILABLE
+    picker.select(TARGET,timeout_ms=1200)
+    assert picker.read_binding(timeout_ms=500) == TARGET
+    assert picker.ready_to_submit(timeout_ms=500)
+    assert picker.cancel_and_clear(timeout_ms=500)
+    assert picker.read_binding(timeout_ms=500) is None
+
+
+def test_multiple_visible_shadow_product_roots_block(page):
+    page.set_content('<wujie-app></wujie-app><wujie-app></wujie-app>')
+    page.evaluate('html => document.querySelectorAll("wujie-app").forEach(h => h.attachShadow({mode:"open"}).innerHTML = html)',card())
+    with pytest.raises(BindingIdentityUnavailable, match='PRODUCT_VISIBLE_ROOT_CONFLICT'):
+        PlaywrightProductPicker(page).read_binding(timeout_ms=500)
+
+
+def idless_form():
+    return form(row()).replace('data-product-id="${id}"','')
+
+
+def test_binding_id_from_actual_selected_row_with_unchanged_idless_card(page):
+    page.set_content(idless_form())
+    picker=PlaywrightProductPicker(page)
+    picker.select(TARGET,timeout_ms=800)
+    assert page.locator('.choose-content').get_attribute('data-product-id') is None
+    assert picker.read_binding(timeout_ms=500) == TARGET
+    assert picker.binding_identity_source == 'DOM_SELECTION_AND_UNCHANGED_FORM'
+    assert picker.ready_to_submit(timeout_ms=500)
+    assert picker.read_binding(timeout_ms=500) == TARGET
+
+
+@pytest.mark.parametrize('mutation', ['replace','same_text_write','reopen'])
+def test_idless_card_attestation_invalidated_by_product_changes(page,mutation):
+    page.set_content(idless_form())
+    picker=PlaywrightProductPicker(page)
+    picker.select(TARGET,timeout_ms=800)
+    if mutation=='replace':
+        page.locator('.choose-content').evaluate('e => e.outerHTML=e.outerHTML')
+    elif mutation=='same_text_write':
+        page.locator('.name').evaluate('e => e.textContent=e.textContent')
+    else:
+        page.locator('.choose-content').click()
+    with pytest.raises(BindingIdentityUnavailable):
+        picker.read_binding(timeout_ms=500)
+
+
+def test_same_title_different_selected_id_not_inferred_from_configuration(page):
+    page.set_content(form(row('999')).replace('data-product-id="${id}"',''))
+    picker=PlaywrightProductPicker(page)
+    with pytest.raises(BindingIdentityUnavailable):
+        picker.select(TARGET,timeout_ms=500)
+    picker.select(ProductIdentity('999',TARGET.title),timeout_ms=800)
+    assert picker.read_binding(timeout_ms=500) == ProductIdentity('999',TARGET.title)
+
+
+def test_final_idless_binding_proof_requires_same_selection_session(page,tmp_path):
+    import json
+    from video_processing.utils.wechat_product_execution import finalize_product_before_submit
+    page.set_content(idless_form())
+    picker=PlaywrightProductPicker(page)
+    picker.select(TARGET,timeout_ms=800)
+    (tmp_path/'product_selection_receipt.json').write_text(json.dumps(dict(state='BOUND',
+        binding_confirmed=True,unbound_confirmed=False,actual_product_id=TARGET.product_id,actual_title=TARGET.title)))
+    assert finalize_product_before_submit(None,picker,tmp_path,require_bound=True)
+    evidence=json.loads((tmp_path/'product_pre_submit_readback.json').read_text())
+    assert evidence['identity_source']=='DOM_SELECTION_AND_UNCHANGED_FORM'
+    assert evidence['binding_required'] is True
+    assert not finalize_product_before_submit(None,PlaywrightProductPicker(page),tmp_path,require_bound=True)

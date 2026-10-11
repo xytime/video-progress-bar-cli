@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-12 | Codex | 保留逐次选品结果；允许正式挂商品验收显式要求最终绑定，日常降级规则不变。 |
 | 1.1.0 | 2026-10-11 | Codex | 取消商品绑定硬门槛及商品可用性退避；保留提交去重、产物一致性与在途租约。 |
 """
 from __future__ import annotations
@@ -99,7 +100,7 @@ def _record_product_wait(payload, result, evidence_dir, output, artifacts_digest
     atomic_json(evidence_dir / 'product_wait.json', dict(row, not_submitted=True))
 
 
-def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: Path) -> bool:
+def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: Path, *, require_bound: bool = False) -> bool:
     """最终表单必须与本次选品回执一致，独立保存发表前实读证据。
 
     不补挂、不推测 ID；商品消失/出现/被替换时均停止发表。
@@ -118,6 +119,8 @@ def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: P
         if not picker.ready_to_submit(timeout_ms=3000) or picker.read_binding(timeout_ms=3000) != actual:
             return False
         if actual is None:
+            if require_bound:
+                return False
             if (receipt.get('state') not in {'UNBOUND', 'SKIPPED'} or receipt.get('unbound_confirmed') is not True
                     or receipt.get('binding_confirmed') is not False
                     or receipt.get('actual_product_id') or receipt.get('actual_title')):
@@ -130,7 +133,8 @@ def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: P
             if payload is not None:
                 if payload['require_product'] is not True or actual not in selection_from_task(payload)[1].candidates:
                     return False
-        atomic_json(readback, dict(receipt, final_verified=True, identity_source='FINAL_FORM_READBACK'))
+        atomic_json(readback, dict(receipt, final_verified=True, identity_source=getattr(picker, 'binding_identity_source', 'FINAL_FORM_READBACK'),
+                                  binding_required=bool(require_bound or receipt.get('binding_required'))))
         return True
     except Exception:
         return False
@@ -170,6 +174,7 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
                        actual_title=result.actual.title if result.actual else None,
                        requested_product_id=result.requested.product_id, requested_title=result.requested.title,
                        attempts=result.attempts, fallback_reason=result.fallback_reason,
+                       attempt_records=list(result.attempt_records), elapsed_seconds=result.elapsed_seconds,
                        config_version=policy.version, config_digest=policy.digest,
                        task_id=payload['task_id'], attachment_reason=payload['reason'])
         atomic_json(evidence_dir / 'product_selection_receipt.json', receipt)

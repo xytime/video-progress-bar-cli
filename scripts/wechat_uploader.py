@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.21.0 | 2026-10-12 | Codex | 正式挂商品验收可显式要求最终实读绑定；保留逐次选品原因，日常可选挂接不变。 |
 | 5.20.0 | 2026-10-11 | Codex | 商品挂接失败且清空就绪时允许无商品继续，兼容旧参数和冻结任务。 |
 | 5.19.0 | 2026-10-10 | Antigravity | 接入有界图书商品挂载（财经/新闻/默认），仅当 binding_confirmed=True 时允许发表。 |
 | 5.18.0 | 2026-10-10 | Codex | 同会话回执保留 nonce；跨会话精确关联及公开日期与原生时间一致性校验。 |
@@ -306,6 +307,7 @@ def _write_product_selection_receipt(
         "actual_title": result.actual.title if (result and result.actual) else None,
         "fallback_reason": result.fallback_reason if result else None,
         "attempts": result.attempts if result else 0,
+        "attempt_records": list(result.attempt_records) if result else [],
         "elapsed_seconds": result.elapsed_seconds if result else 0.0,
     }
     try:
@@ -627,7 +629,7 @@ def _compare_management_product_receipt(record: dict, identity_receipt: Path | N
             return result
         if (not expected.get('platform_post_id')
                 or expected.get('platform_post_id') not in {record.get('platform_post_id'), record.get('platform_export_id')}
-                or expected.get('product_identity_source') != 'FINAL_FORM_READBACK'):
+                or expected.get('product_identity_source') not in {'FINAL_FORM_READBACK', 'DOM_SELECTION_AND_UNCHANGED_FORM'}):
             return result
         result['expected'] = {key: expected.get(key) for key in (
             'product_id', 'product_title', 'product_binding_confirmed', 'product_unbound_confirmed')}
@@ -2208,6 +2210,7 @@ def run_uploader(
     require_product: bool = False,
     source_channel_id: str | None = None,
     stop_before_submit: bool = False,
+    require_bound_product: bool = False,
     product_task_decision: str | None = None,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
@@ -3511,10 +3514,12 @@ def run_uploader(
         # 商品任务契约优先于旧全局开关与 --require-product。显式 NONE 绝不被补挂。
         from video_processing.utils.wechat_product_task import read_product_task_decision
         from video_processing.utils.wechat_product_execution import execute_product_task
+        # 同一实例保留本次平台选中行证据；不得在最终核验时丢失或重建。
+        product_picker = PlaywrightProductPicker(page)
         try:
             if product_task_decision:
                 # 沿用浏览器启动前已校验契约及实际观察代次，不能重置等待输入。
-                if not execute_product_task(task_product, PlaywrightProductPicker(page), evidence_root,
+                if not execute_product_task(task_product, product_picker, evidence_root,
                                             settings.wechat_product_status_path,
                                             wait_output=state_file.parent, artifacts_digest=product_artifacts):
                     _capture_wechat_evidence(page, evidence_root, "product_contract_failed")
@@ -3526,7 +3531,7 @@ def run_uploader(
                 policy = load_policy(settings.wechat_product_policy_path)
                 decision = policy.decide(category=category, source_channel_id=source_channel_id)
                 record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path, phase="STARTED")
-                product_result = select_optional_product(decision=decision, picker=PlaywrightProductPicker(page),
+                product_result = select_optional_product(decision=decision, picker=product_picker,
                                                          timeout_seconds=decision.timeout_seconds)
                 _write_product_selection_receipt(evidence_root, required=True, result=product_result)
                 record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path,
@@ -3570,12 +3575,15 @@ def run_uploader(
 
         if task_product is not None or (evidence_root / 'product_selection_receipt.json').exists():
             from video_processing.utils.wechat_product_execution import finalize_product_before_submit
-            if not finalize_product_before_submit(task_product, PlaywrightProductPicker(page), evidence_root):
-                logger.error("Product binding changed after form cleanup; stopping before submission.")
+            if not finalize_product_before_submit(task_product, product_picker, evidence_root,
+                                                   require_bound=require_bound_product):
+                logger.error("Final product state does not satisfy submission verification; stopping before submission.")
                 if task_product is not None and task_product['require_product']:
                     from video_processing.utils.wechat_product_execution import record_pre_submit_product_block
                     record_pre_submit_product_block(task_product, evidence_root, settings.wechat_product_status_path,
-                                                    state_file.parent, product_artifacts, 'BINDING_CHANGED_BEFORE_SUBMIT')
+                                                    state_file.parent, product_artifacts,
+                                                    'BOUND_PRODUCT_VERIFICATION_FAILED' if require_bound_product
+                                                    else 'BINDING_CHANGED_BEFORE_SUBMIT')
                 browser.close()
                 return 14 if task_product is not None and task_product['require_product'] else 1
 
@@ -3708,6 +3716,10 @@ def main():
         help="尝试挂接商品；失败且表单清空就绪时允许无商品继续",
     )
     parser.add_argument(
+        "--require-bound-product", action="store_true",
+        help="仅正式挂商品验收使用：最终未实读到精确绑定就停止在发表前；日常发布默认关闭",
+    )
+    parser.add_argument(
         "--source-channel-id", help="来源 YouTube 频道 ID，用于精确识别华尔街等垂直选品",
     )
     parser.add_argument(
@@ -3749,6 +3761,7 @@ def main():
             require_product = args.require_product,
             source_channel_id = args.source_channel_id,
             stop_before_submit = args.stop_before_submit,
+            require_bound_product = args.require_bound_product,
         )
     except Exception as exc:
         if not _is_playwright_target_closed(exc):

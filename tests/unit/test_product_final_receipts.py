@@ -1,4 +1,10 @@
-"""最终表单回执与异常队列公平性的隔离回归。"""
+"""最终表单回执与异常队列公平性的隔离回归。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-12 | Codex | 覆盖实际选中行与未变化表单证据的同作品商品精确核对。 |
+"""
 import json
 from pathlib import Path
 import pytest
@@ -178,13 +184,14 @@ def test_native_product_readback_requires_explicit_platform_fields(product,state
     if state=='BOUND':assert (result['actual_product_id'],result['actual_title'])==('700007','完整指定商品')
 
 
+@pytest.mark.parametrize('identity_source', ['FINAL_FORM_READBACK','DOM_SELECTION_AND_UNCHANGED_FORM'])
 @pytest.mark.parametrize('bound', [True,False])
 @pytest.mark.parametrize('mutation', ['match','wrong_id','wrong_title','wrong_state','wrong_post','missing_source','missing_receipt','unknown_actual'])
-def test_platform_product_comparison_uses_exact_work_and_final_receipt(tmp_path,bound,mutation):
+def test_platform_product_comparison_uses_exact_work_and_final_receipt(tmp_path,bound,mutation,identity_source):
     from scripts.wechat_uploader import _management_product_observation,_compare_management_product_receipt
     actual=_management_product_observation(dict(desc=dict(product=dict(productId='700007',title='完整指定商品') if bound else {})))
     record=dict(platform_post_id='native-current',product_observation=actual)
-    expected=dict(platform_post_id='native-current',product_identity_source='FINAL_FORM_READBACK',product_binding_confirmed=bound,
+    expected=dict(platform_post_id='native-current',product_identity_source=identity_source,product_binding_confirmed=bound,
         product_unbound_confirmed=not bound,product_id='700007' if bound else None,product_title='完整指定商品' if bound else None)
     if mutation=='wrong_id':expected['product_id']='other'
     if mutation=='wrong_title':expected['product_title']='不同版本'
