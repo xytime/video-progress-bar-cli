@@ -1,0 +1,29 @@
+{
+  "source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+  "snapshot": "/private/tmp/video-pytest-qv26242j/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.077
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_wechat_product_groups.py",
+    "tests/browser/test_product_settings_browser.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "331f978acf5b515b868e3a4ccfba63dd3bcd19763118da2773cb30d3f02ecc50",
+  "profile_sha256": "e403d640ef5bf7193193795f0d83f055a185d424f644d055851048f7e2716235",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-qv26242j/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "ad2edd532b9174ce2634c0f41581fcb8fc1c687013d823daea70551f6619c4c7",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 7.264
+  },
+  "finished_at": "2026-10-11T07:26:39.994409+00:00"
+}

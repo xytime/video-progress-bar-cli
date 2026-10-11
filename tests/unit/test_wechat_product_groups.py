@@ -10,7 +10,8 @@ from video_processing.utils.wechat_product_config import load_policy, save_polic
 from video_processing.utils.wechat_product_context import video_product_context, product_context_arguments
 from web.product_settings import create_product_settings_router
 
-SEED = Path(__file__).resolve().parents[2]/'config/wechat_products.json'
+# 测试固定夹具；后台保存的运营配置不能改变测试用例的前置条件。
+SEED = Path(__file__).resolve().parents[1]/'fixtures/wechat_products_v2.json'
 WALL = 'UCTK_cv-y88CScoudcXnS1Ew'
 TED = 'UCAuUUnT6oDeKwE6v1NGQxug'
 
@@ -70,7 +71,7 @@ def api_setup(tmp_path, data):
              {'preview_key':'english:1','content_type':'ENGLISH_WORLD_SHORT','title':'英语世界测试','state':'READY_FOR_REVIEW'}]
     app=FastAPI();app.include_router(create_product_settings_router(active=active,status=status,output=output,videos=lambda:records))
     from fastapi.staticfiles import StaticFiles
-    app.mount('/static',StaticFiles(directory=SEED.parent.parent/'src/web/static'))
+    app.mount('/static',StaticFiles(directory=Path(__file__).resolve().parents[2]/'src/web/static'))
     with TestClient(app) as client: yield client,active,status,records
 
 
