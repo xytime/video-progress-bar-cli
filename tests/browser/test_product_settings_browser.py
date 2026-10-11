@@ -126,3 +126,35 @@ def test_old_preview_cannot_overwrite_new_context(ui):
     page.locator('#video').select_option('english:1')
     flags['release']();expect(page.locator('#preview')).to_be_enabled()
     expect(page.locator('#preview-result')).to_have_text('上下文已修改，请重新预览。')
+
+
+def test_all_product_dropdowns_use_catalog_and_new_selection_persists(ui):
+    from tests.unit.test_wechat_product_catalog import install_catalog
+    page, active, _, flags = ui
+    saved=json.loads(active.read_text())
+    rows=list(saved['products'].values())+[dict(product_id='70001',title='新增真实目录商品'),dict(product_id='70002',title='新增真实目录商品')]
+    path=install_catalog(active,rows)
+    catalog=json.loads(path.read_text());catalog['items'][-1]['stock']=0;path.write_text(json.dumps(catalog))
+    original=active.read_bytes()
+    page.locator('#reload').click()
+    expect(page.locator('#catalog-state')).to_contain_text('5 件商品')
+    expect(page.locator('#catalog-state')).to_contain_text('全量完整性尚未确认')
+    assert active.read_bytes()==original
+    controls=['#default-product','#manual','#rule-0','#rule-1']
+    controls += [f'#{group}-{index}' for group in saved['profiles'] for index in (0,1)]
+    for control in controls:
+        expect(page.locator(control+' option[value="product_70001"]')).to_have_count(1)
+        expect(page.locator(control+' option[value="product_70002"]')).to_have_count(1)
+        expect(page.locator(control+' option[value="product_70002"]')).to_contain_text('采集时缺货')
+    page.locator('#english_world-0').select_option('product_70001')
+    expect(page.locator('#english_world-0-detail')).to_contain_text('ID 70001')
+    expect(page.locator('#english_world-0-detail')).to_contain_text('采集时库存未知')
+    page.locator('#save').click();expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    page.reload();expect(page.locator('#english_world-0')).to_have_value('product_70001')
+    page.locator('#video').select_option('english:1');page.locator('#preview').click()
+    expect(page.locator('#preview-result li').first).to_contain_text('ID 70001')
+    assert flags['writes']==1
+    assert json.loads(active.read_text())['profiles']['ted']==saved['profiles']['ted']
+    path.write_text('{')
+    page.locator('#reload').click();expect(page.locator('#catalog-state')).to_contain_text('商品清单读取失败')
+    expect(page.locator('#english_world-0')).to_have_value('product_70001')

@@ -2,15 +2,29 @@
 (() => {
   const $ = id => document.getElementById(id);
   let publisherConnected = false;
+  let catalogItems = new Map();
   let config, digest, groups, dirty = false, pending = false, previewSequence = 0, discardAction;
   const note = (message, error = false) => { $('feedback').textContent = message; $('feedback').dataset.error = String(error); };
   const element = (tag, text) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; return el; };
-  const detail = alias => alias ? `${config.products[alias].title} · ID ${config.products[alias].product_id}` : '继承全局默认商品';
+  const stockLabel = item => item ? (item.stock === null ? '采集时库存未知' : item.stock === 0 ? '采集时缺货' : `采集时库存 ${item.stock}`) : '未在最近清单中核实';
+  const detail = alias => {
+    if (!alias) return '继承全局默认商品';
+    const p = config.products[alias], item = catalogItems.get(p.product_id);
+    return `${p.title} · ID ${p.product_id}${item ? ` · ${item.shop} · ${item.price}` : ''} · ${stockLabel(item)}`;
+  };
   function choices(select, value, emptyLabel) {
     select.replaceChildren();
     if (emptyLabel) select.add(new Option(emptyLabel, ''));
-    Object.entries(config.products).filter(([, p]) => p.enabled).forEach(([alias, p]) => {
-      select.add(new Option(`${p.title.slice(0, 26)}${p.title.length > 26 ? '…' : ''} · ${p.product_id}`, alias));
+    const seen = new Set();
+    // 保留当前规则别名；同一平台 ID 只展示一次，同名不同 ID 仍分列。
+    const entries = Object.entries(config.products).sort(([a], [b]) => Number(b === value) - Number(a === value));
+    entries.forEach(([alias, p]) => {
+      if (seen.has(p.product_id)) return;
+      seen.add(p.product_id);
+      const item = catalogItems.get(p.product_id);
+      const option = new Option(`${p.title.slice(0, 26)}${p.title.length > 26 ? '…' : ''} · ${p.product_id}${item?.stock === 0 ? ' · 采集时缺货' : ''}${p.enabled ? '' : ' · 已停用'}`, alias);
+      option.disabled = !p.enabled; option.title = detail(alias);
+      select.add(option);
     });
     select.value = value || '';
   }
@@ -42,6 +56,13 @@
   function render(data) {
     previewSequence++; $('preview-result').textContent = '配置已载入，请预览选品结果。';
     config = data.config; digest = data.status.saved_digest; groups = data.groups;
+    const catalog = data.catalog;
+    catalogItems = new Map((catalog?.items || []).map(p => [p.product_id, p]));
+    if (catalog) config.products = catalog.products;
+    const count = new Set(Object.values(config.products).map(p => p.product_id)).size;
+    $('catalog-state').textContent = catalog?.error || `已载入后台快照中的 ${catalogItems.size} 件商品，下拉框共 ${count} 件；${catalog?.completeness === 'complete' ? '该次采集标记为完整' : '全量完整性尚未确认'}。`;
+    $('catalog-state').dataset.error = String(Boolean(catalog?.error));
+    $('catalog-time').textContent = catalog?.captured_at ? `采集时间：${new Date(catalog.captured_at).toLocaleString('zh-CN')} · 来源：后台商品列表快照。当前实时清单尚未核验。` : '当前实时清单尚未核验。';
     if (config.schema_version !== 2) throw new Error('当前配置是旧格式，请先用配置工具升级为五类策略后重新载入。');
     $('profiles').replaceChildren(); $('channel-fields').replaceChildren(); $('legacy-rules').replaceChildren();
     Object.entries(groups).forEach(([key, name]) => {
