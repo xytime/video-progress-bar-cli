@@ -1,0 +1,32 @@
+{
+  "source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+  "snapshot": "/private/tmp/video-pytest-vftpgm1q/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.069
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_wechat_product_groups.py",
+    "tests/browser/test_product_settings_browser.py",
+    "tests/unit/test_wechat_product_selection.py",
+    "tests/unit/test_wechat_product_picker.py",
+    "tests/unit/test_dashboard_control_plane_security.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "c1e1d9e8b10f5460119cca340212aa64097790a2986550c1ebe2c34ff04e8720",
+  "profile_sha256": "6ae9545a0231fbc1471184cc550f1b02d6bedb5bd569bbb11c4f19196c0c16da",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-vftpgm1q/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "5468caa492444bdc27d0737c79a7a66dcf825f29b642e16e220f8bd47edb1128",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 8.856
+  },
+  "finished_at": "2026-10-11T07:11:24.639368+00:00"
+}

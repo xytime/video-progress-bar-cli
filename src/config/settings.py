@@ -236,6 +236,9 @@ class Settings(BaseSettings):
     # 常规视频号发布默认挂载图书商品；未确认绑定时由上传器阻止提交。
     enable_wechat_product_link: bool = True
     wechat_product_timeout_seconds: float = Field(default=30.0, ge=1.0, le=60.0)
+    # 控制台配置目前只用于保存与预览，发布器接入后才用于真实选品。
+    wechat_product_policy_path: Path = _PROJECT_ROOT / "config" / "wechat_products.json"
+    wechat_product_status_path: Path = _PROJECT_ROOT / "output" / "wechat_product_runtime.json"
 
 
     # Google Gemini API Key

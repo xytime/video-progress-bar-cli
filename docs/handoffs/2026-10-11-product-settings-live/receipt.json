@@ -1,0 +1,30 @@
+{
+  "verified_at": "2026-10-11",
+  "live_url": "http://localhost:9100/product-settings",
+  "http_routes": {
+    "/": 200,
+    "/product-settings": 200,
+    "/api/product-settings": 200,
+    "/api/product-settings/videos": 200
+  },
+  "browser": {
+    "five_profiles_visible": true,
+    "english_preview": true,
+    "save_unchanged_preferences_then_reload": true,
+    "desktop_and_mobile": true,
+    "page_errors": []
+  },
+  "isolated_tests": {
+    "passed": 97,
+    "failed": 0,
+    "run": "/private/tmp/video-pytest-vftpgm1q"
+  },
+  "runtime_status": {
+    "saved_version": "books-20261011T071259Z-dcdfb0a2",
+    "saved_digest": "745a9366c22e54a226dcb6ea472e6d43c5d70f34c3d1ae61395a166b7d00e32d",
+    "last_selection": null,
+    "adopted_by_last_selection": false,
+    "publisher_connected": false
+  },
+  "platform_verification": "NOT_PERFORMED"
+}

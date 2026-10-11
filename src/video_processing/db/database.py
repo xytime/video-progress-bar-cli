@@ -2596,6 +2596,27 @@ class PipelineDB(WallstreetExperimentDAL):
             ).fetchone()
             return dict(row) if row else dict(identity)
 
+    def get_product_preview_videos(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """商品预览候选，只读两类待发布账本，不领取任务。"""
+        limit = max(1, min(int(limit), 100))
+        with self.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT 'video:' || id AS preview_key, youtube_id, slice_index,
+                       COALESCE(zh_title, title) AS title, channel_id, category, content_type,
+                       status AS state, updated_at
+                FROM processed_videos
+                WHERE status IN ('PENDING','PUBLISH_PRECHECK','COPYWRITING','AI_COVER_PENDING',
+                                 'WECHAT_DEFERRED','LOGIN_REQUIRED','FAILED','PUBLISHING')
+                UNION ALL
+                SELECT 'english:' || id AS preview_key, source_youtube_id AS youtube_id,
+                       0 AS slice_index, title, NULL AS channel_id, NULL AS category,
+                       'ENGLISH_WORLD_SHORT' AS content_type, state, updated_at
+                FROM english_world_review_items
+                WHERE state IN ('READY_FOR_REVIEW','SUBMISSION_APPROVED','HELD','LOGIN_REQUIRED','FAILED')
+                ORDER BY updated_at DESC LIMIT ?
+            """, (limit,)).fetchall()
+            return [dict(row) for row in rows]
+
     def get_video_content_identity(self, youtube_id: str, *, slice_index: int = 0) -> Optional[Dict[str, Any]]:
         """返回视频当前绑定的内容身份。"""
         with self.get_connection() as conn:

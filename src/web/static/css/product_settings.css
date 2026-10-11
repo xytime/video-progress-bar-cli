@@ -1,0 +1,34 @@
+.product-settings { max-width: 1040px; margin: auto; padding: 28px; font: 16px/1.65 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; }
+.product-settings h1 { font-size: 28px; margin-bottom: 8px; }
+.product-settings h2 { font-size: 19px; margin-bottom: 12px; }
+.product-settings h3 { font-size: 17px; }
+.product-settings nav { margin-bottom: 20px; }
+.product-settings header { margin-bottom: 20px; }
+.product-settings section, .product-settings details { padding: 22px; margin: 0 0 20px; background: var(--glass); border: 1px solid var(--border); border-radius: var(--radius); }
+.product-settings details { margin-top: 16px; }
+.product-settings label { display: block; margin: 12px 0 6px; }
+.product-settings select, .product-settings input { width: 100%; min-width: 0; min-height: 44px; padding: 10px; border: 1px solid var(--text2); border-radius: var(--radius-sm); background: var(--bg2); color: var(--text); font: inherit; }
+.product-settings a { color: var(--accent2); }
+.product-settings button { min-height: 44px; padding: 9px 18px; border: 1px solid var(--text2); border-radius: var(--radius-sm); background: var(--bg2); color: var(--text); font: inherit; }
+.product-settings button, .product-settings a, .product-settings summary, .product-settings select { cursor: pointer; }
+.product-settings button:hover, .product-settings a:hover { color: var(--teal); border-color: var(--teal); }
+.product-settings button:active { transform: translateY(1px); }
+.product-settings :focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+.product-settings button:disabled, .product-settings fieldset:disabled { opacity: .55; cursor: not-allowed; }
+.product-settings .primary { background: var(--accent2); color: var(--bg); font-weight: 700; min-width: 136px; }
+.product-settings fieldset { border: 0; min-width: 0; }
+.product-settings .profile-row { border-top: 1px solid var(--border); padding: 20px 0; }
+.product-settings .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+.product-settings .profile-grid > div { min-width: 0; }
+.product-settings .hint, .product-settings .product-detail { color: var(--text2); font-size: 14px; }
+.product-settings .product-detail { overflow-wrap: anywhere; margin-top: 8px; min-height: 24px; }
+.product-settings .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 20px 0; }
+.product-settings #feedback { min-height: 54px; padding: 8px 0; overflow-wrap: anywhere; }
+.product-settings [data-error="true"] { color: var(--red); }
+.product-settings #preview-result { margin-top: 16px; padding: 18px; border-left: 3px solid var(--teal); background: var(--bg2); overflow-wrap: anywhere; }
+.product-settings #preview-result ol { margin-left: 22px; }
+.product-settings #saved-version, .product-settings #adopted-version { overflow-wrap: anywhere; }
+.product-settings dialog { margin: auto; max-width: min(520px, 94vw); padding: 24px; background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); }
+.product-settings dialog::backdrop { background: rgba(0,0,0,.65); }
+.product-settings .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 600px) { .product-settings { padding: 16px; } .product-settings section, .product-settings details, .product-settings header { padding: 16px; } .product-settings .profile-grid { grid-template-columns: 1fr; gap: 0; } }
