@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const $ = id => document.getElementById(id);
-  let publisherConnected = false;
+  let publisherConnected = false, currentView, libraryAlias = null, libraryDraftDirty = false;
   let catalogItems = new Map();
   let catalogDigest = null, importDraft = null;
   const importNote = (text, error = false) => { $('catalog-import-feedback').textContent = text; $('catalog-import-feedback').dataset.error = String(error); };
@@ -65,6 +65,7 @@
     wrap.append(lab, select, info); parent.append(wrap);
   }
   function render(data) {
+    currentView = data; libraryDraftDirty = false;
     previewSequence++; $('preview-result').textContent = '配置已载入，请预览选品结果。';
     config = data.config; digest = data.status.saved_digest; groups = data.groups;
     const catalog = data.catalog;
@@ -101,12 +102,15 @@
     });
     choices($('default-product'), config.default_candidates[0]); $('default-detail').textContent = detail(config.default_candidates[0]);
     choices($('manual'), '', '按类型自动选择');
+    const waitPolicy = config.wait_policy || {base_seconds:300,max_seconds:21600,max_checks:8,lease_seconds:120};
+    Object.entries(waitPolicy).forEach(([k,v]) => { $('wait-'+k).value = v; });
     $('timeout').value = config.timeout_seconds; $('attempts').value = config.max_attempts;
-    status(data.status); dirty = false; $('dirty-state').textContent = '尚未修改'; $('editor').disabled = false; $('preview').disabled = false;
+    status(data.status); drawLibrary(); dirty = false; $('dirty-state').textContent = '尚未修改'; $('editor').disabled = false; $('preview').disabled = false;
   }
   function draft() {
     if (!config) throw new Error('请先成功载入配置。');
     const result = structuredClone(config);
+    result.wait_policy = Object.fromEntries(['base_seconds','max_seconds','max_checks','lease_seconds'].map(k => [k,Number($('wait-'+k).value)]));
     result.timeout_seconds = Number($('timeout').value); result.max_attempts = Number($('attempts').value);
     $('timeout').removeAttribute('aria-invalid'); $('attempts').removeAttribute('aria-invalid');
     if (!Number.isFinite(result.timeout_seconds) || result.timeout_seconds <= 0 || result.timeout_seconds > 60) {
@@ -114,6 +118,73 @@
       throw new Error('总时限必须大于 0 且不超过 60 秒。');
     }
     return result;
+  }
+  const libraryFields = ['product_id','title','account_id','shop','merchant_appid','specification','short_name','notes','verified_source','verified_at','identity_status'];
+  function refNames(alias) {
+    const refs = config.default_candidates.includes(alias) ? ['全局默认'] : [];
+    Object.entries(config.profiles).forEach(([key,p]) => { if (p.candidates.includes(alias)) refs.push(groups[key]); });
+    config.rules.forEach(r => { if (r.candidates.includes(alias)) refs.push(r.id); });
+    return refs;
+  }
+  function libraryRows() { return {...config.products,...(config.library || {})}; }
+  function drawLibrary() {
+    const search = $('library-search').value.toLowerCase(), selected = $('library-choice').value;
+    $('library-choice').replaceChildren(new Option('选择商品或新增资料', ''));
+    Object.entries(libraryRows()).forEach(([alias,p]) => {
+      if (![p.title,p.product_id,p.shop,p.notes,p.short_name].filter(Boolean).join(' ').toLowerCase().includes(search)) return;
+      $('library-choice').add(new Option(`${p.short_name || p.title || '未命名资料'} · ${p.product_id || 'ID待核实'} · ${p.identity_status === 'UNVERIFIED' ? '待核实' : p.enabled ? '启用' : '停用'}`,alias));
+    });
+    $('library-choice').value = selected;
+  }
+  function editLibrary(alias) {
+    libraryAlias = alias; libraryDraftDirty = false;
+    const p = libraryRows()[alias] || {};
+    libraryFields.forEach(k => { $('lib-'+k).value = p[k] || (k === 'identity_status' ? 'UNVERIFIED' : ''); });
+    $('lib-enabled').value = String(p.enabled !== false);
+    $('library-references').textContent = alias ? `当前引用：${refNames(alias).join('、') || '无'}；内部引用 ${alias}` : '新增资料采用稳定内部引用，不自动改变默认商品。';
+    $('library-feedback').textContent = '';
+  }
+  function rerenderDraft(next) {
+    render({...currentView,config:next,catalog:{...currentView.catalog,products:next.products}}); setDirty();
+  }
+  $('library-search').oninput = drawLibrary;
+  $('library-choice').onchange = () => {
+    if (libraryDraftDirty) { $('library-choice').value = libraryAlias || ''; note('商品资料尚未应用，请先应用到草稿。', true); return; }
+    editLibrary($('library-choice').value);
+  };
+  libraryFields.concat(['enabled']).forEach(k => $('lib-'+k).addEventListener('input', () => { libraryDraftDirty = true; }));
+  $('library-new').onclick = () => { if (libraryDraftDirty) { note('商品资料尚未应用，请先应用到草稿。', true); return; } editLibrary(null); $('library-editor').open = true; $('lib-title').focus(); };
+  $('library-toggle').onclick = () => {
+    const alias = $('library-choice').value; if (!alias) return;
+    const next = draft(), p = next.products[alias];
+    if (!p) { $('library-feedback').textContent = '待核实资料不能启用为候选，请先核实身份。'; return; }
+    p.enabled = !p.enabled; if (next.library?.[alias]) next.library[alias].enabled = p.enabled;
+    rerenderDraft(next); editLibrary(alias);
+    note(`商品已在草稿中${p.enabled ? '启用' : '停用'}。${refNames(alias).length ? '引用：'+refNames(alias).join('、')+'；保存前请修复停用引用。' : ''}`);
+  };
+  $('library-apply').onclick = () => {
+    const next = draft(), alias = libraryAlias || 'book_' + Array.from(crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2,'0')).join('');
+    const row = Object.fromEntries(libraryFields.map(k => [k,$('lib-'+k).value.trim()])); row.enabled = $('lib-enabled').value === 'true';
+    if (row.identity_status === 'VERIFIED' && ['product_id','title','account_id','verified_at','verified_source'].some(k => !row[k])) {
+      $('library-feedback').textContent = '已核实资料必须填写商品 ID、完整名称、发布账号、核实时间与来源。'; return;
+    }
+    next.library ||= {}; next.library[alias] = row;
+    if (row.identity_status === 'VERIFIED') next.products[alias] = Object.fromEntries(['product_id','title','enabled','verified_at','verified_source'].map(k => [k,row[k]]));
+    else delete next.products[alias];
+    // 正在被引用的资料不能改成缺失身份；先调整引用后可保留为待核实。
+    if (!next.products[alias] && refNames(alias).length) { $('library-feedback').textContent = '商品仍被引用：'+refNames(alias).join('、')+'。请先调整规则。'; return; }
+    libraryDraftDirty = false; rerenderDraft(next); libraryAlias = alias; drawLibrary(); $('library-choice').value = alias;
+    $('library-feedback').textContent = '已应用到草稿；通过保存前校验后才持久化。';
+  };
+  async function loadWaits() {
+    try {
+      const data = await api('/api/product-settings/waits');
+      $('wait-state').textContent = data.reason; $('wait-records').replaceChildren();
+      if (!data.records.length) $('wait-records').append(element('p','暂无已记录的商品等待任务；不代表平台全部可售。'));
+      const states = {WAITING:'等待检查',CHECKING:'检查中',CHECK_LIMIT:'检查次数已达上限',BLOCKED:'需核实',VERIFY_SUBMISSION:'先核验原作品',READY_FOR_EXISTING_GATES:'等待原有发布门禁'};
+      const reasons = {PRODUCT_UNAVAILABLE:'全部候选不可用',QUOTA_EXHAUSTED:'平台额度不足',LOGIN_REQUIRED:'需要登录',AVAILABILITY_UNVERIFIED:'可用性待核验'};
+      data.records.forEach(r => $('wait-records').append(element('p', `${r.task_key} · ${states[r.state] || r.state} · ${reasons[r.reason] || r.reason} · 下次检查：${new Date(r.next_check_at*1000).toLocaleString('zh-CN')} · 已检查 ${r.checks} 次`)));
+    } catch(error) { $('wait-state').textContent = `等待状态未知：${error.message}`; }
   }
   async function loadVideos() {
     try {
@@ -126,7 +197,7 @@
   async function load() {
     if (pending) return; previewSequence++; pending = true; $('reload').disabled = true;
     invalidateImport();
-    try { render(await api('/api/product-settings')); note('配置已载入，正在读取视频列表…'); $('editor').disabled = true; $('preview').disabled = true; await loadVideos(); note('配置已载入。'); }
+    try { render(await api('/api/product-settings')); note('配置已载入，正在读取视频列表…'); $('editor').disabled = true; $('preview').disabled = true; await loadVideos(); await history(); await loadWaits(); note('配置已载入。'); }
     catch (error) { note(`读取失败：${error.message}`, true); }
     finally { pending = false; importControls(); $('reload').disabled = false; if (config && config.schema_version === 2) { $('editor').disabled = false; $('preview').disabled = false; } }
   }
@@ -143,16 +214,70 @@
   $('settings-form').addEventListener('change', setDirty);
   $('default-product').onchange = () => { config.default_candidates = [$('default-product').value]; $('default-detail').textContent = detail($('default-product').value); };
   $('settings-form').onsubmit = event => event.preventDefault();
+  let saveDraft = null;
+  async function history() {
+    try {
+      const data = await api('/api/product-settings/history');
+      $('revision').replaceChildren();
+      data.revisions.forEach(r => { const option = new Option(`${r.version}${r.current ? '（当前）' : ''}`, r.digest); option.disabled = !!r.error; $('revision').add(option); });
+      $('history-state').textContent = `保留 ${data.revisions.length} 个快照；历史从本功能启用后的保存开始累计。`;
+    } catch(error) { $('history-state').textContent = `历史读取失败：${error.message}`; }
+  }
+  function showImpact(report) {
+    const list = element('ul');
+    const chain = d => d.candidates.map(p => `${p.title}（${p.product_id}）`).join(' → ');
+    report.changed.forEach(v => list.append(element('li', `${v.title}：${chain(v.before)} → ${chain(v.after)}；规则 ${v.before.reason} → ${v.after.reason}；预算 ${v.before.timeout_seconds}秒/${v.before.max_attempts}次 → ${v.after.timeout_seconds}秒/${v.after.max_attempts}次`)));
+    report.unknown.forEach(v => list.append(element('li', `${v.title}：${v.reason}`)));
+    $('impact-result').replaceChildren(element('p', `最近 ${report.examined} 条：变化 ${report.changed.length} 条，未变化 ${report.unchanged} 条，影响未知 ${report.unknown.length} 条。`), list,
+      element('p', `其他配置变化：${report.configuration_changes.join('、') || '无'}`), element('p', report.scope), element('p', '预览不验证平台库存，不启动发表。发布器尚未接入时，仅保存配置。'));
+  }
+  function busy(value) {
+    pending = value; $('editor').disabled = value; $('reload').disabled = value; $('preview').disabled = value;
+    $('restore-revision').disabled = value; $('catalog-refresh').disabled = value; importControls();
+  }
   $('save').onclick = async event => {
     event.preventDefault(); if (pending) return;
-    let candidate; try { candidate = draft(); } catch (error) { note(error.message, true); return; }
-    previewSequence++; pending = true; $('editor').disabled = true; $('reload').disabled = true; $('preview').disabled = true; $('save').setAttribute('aria-busy', 'true'); note('正在保存配置…');
-    invalidateImport();
-    try { const data = await api('/api/product-settings', {method: 'PUT', body: JSON.stringify({config: candidate, expected_digest: digest})}); render(data); note(publisherConnected ? '配置已保存；下一次开始选品时采用。在途任务继续使用原快照。' : '配置已保存；发布器尚未接入，当前实际选品不会改变。'); }
-    catch (error) { note(`保存未确认：${error.message} 当前编辑内容已保留。`, true);
-      if (error.message.includes('不可达')) { $('editor').disabled = false; $('attempts').setAttribute('aria-invalid','true'); $('attempts').closest('details').open = true; $('attempts').focus(); }
-    }
-    finally { pending = false; importControls(); $('editor').disabled = false; $('reload').disabled = false; $('preview').disabled = false; $('save').removeAttribute('aria-busy'); }
+    if (libraryDraftDirty) { note('商品资料尚未应用，请先点击“应用到当前草稿”。', true); return; }
+    let candidate; try { candidate = draft(); } catch(error) { note(error.message, true); return; }
+    previewSequence++; busy(true); invalidateImport(); note('正在计算保存影响…');
+    try {
+      const report = await api('/api/product-settings/impact', {method:'POST',body:JSON.stringify({config:candidate,expected_digest:digest})});
+      saveDraft = {config:candidate,expected_digest:digest}; showImpact(report); $('impact-dialog').showModal(); $('impact-cancel').focus(); note('请核对影响后确认保存。');
+    } catch(error) { note(`保存未确认：${error.message} 当前编辑内容已保留。`, true); }
+    finally { busy(false); }
+  };
+  $('impact-cancel').onclick = () => { saveDraft = null; $('impact-dialog').close(); };
+  $('impact-dialog').addEventListener('cancel', () => { saveDraft = null; });
+  $('impact-confirm').onclick = async () => {
+    if (pending || !saveDraft) return;
+    busy(true); $('impact-confirm').disabled = true; $('impact-cancel').disabled = true; note('正在保存配置…');
+    try {
+      const data = await api('/api/product-settings', {method:'PUT',body:JSON.stringify(saveDraft)});
+      render(data); saveDraft = null; note(publisherConnected ? '配置已保存；下一次开始选品时采用。在途任务继续使用原快照。' : '配置已保存；发布器尚未接入，当前实际选品不会改变。');
+      await history();
+    } catch(error) { note(`保存未确认：${error.message} 当前编辑内容已保留。`, true); }
+    finally { $('impact-dialog').close(); busy(false); $('impact-confirm').disabled = false; $('impact-cancel').disabled = false; }
+  };
+  $('restore-revision').onclick = () => {
+    if (pending) return;
+    guard(async () => {
+      busy(true);
+      try {
+        const data = await api('/api/product-settings/history/restore-draft', {method:'POST',body:JSON.stringify({digest:$('revision').value,expected_digest:digest})});
+        const current = await api('/api/product-settings');
+        if (current.status.saved_digest !== digest) throw new Error('当前版本已更新，请重新载入');
+        // 历史草稿保留自己的启停状态，不能被当前目录合并覆盖。
+        render({...current,config:data.config,catalog:{...current.catalog,products:data.config.products}}); setDirty();
+        note('历史版本已载入为恢复草稿；检查类型配置后点击“预览影响并保存”。');
+      } catch(error) { note(`恢复失败：${error.message}`, true); }
+      finally { busy(false); }
+    });
+  };
+  $('catalog-refresh').onclick = async () => {
+    if (pending) return; busy(true);
+    try { const data = await api('/api/product-settings/catalog/refresh', {method:'POST'}); $('refresh-state').textContent = data.reason; }
+    catch(error) { $('refresh-state').textContent = error.message; }
+    finally { busy(false); }
   };
   $('catalog-file').onchange = () => { invalidateImport(); importNote('请先校验文件；当前清单尚未改变。'); };
   async function catalogAction(apply) {

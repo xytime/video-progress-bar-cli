@@ -17,6 +17,7 @@
 <p id="catalog-state" role="status">正在读取商品清单…</p>
 <p id="catalog-time" class="hint"></p>
 <p class="hint">所有商品选择框共用此清单。库存为采集时的观测，当前是否可售需发布时核验；缺货商品仍可配置。重新载入只读取最近留存清单，不会连接平台实时同步。</p>
+<button id="catalog-refresh" type="button">尝试刷新平台清单</button><p id="refresh-state" role="status"></p>
 <details><summary>更新商品清单</summary>
 <p>导入同一账号、同一次采集的完整商品清单。先校验并查看变更，确认后更新下拉框；现有类型匹配与默认商品保持不变。</p>
 <p class="hint">目前支持约定格式的 JSON 文件，尚未接入平台直接导出或实时同步。请使用可靠采集资料，勿用示例数据代替真实商品。文件中的分页、总数与账号声明不能替代平台核验。</p>
@@ -27,8 +28,17 @@
 <p id="catalog-import-feedback" role="status" aria-live="polite">选择文件后开始校验，不会立即更新清单。</p>
 <div id="catalog-import-preview"></div>
 </details></section>
+<section><h2>版本历史</h2><p class="hint">恢复历史版本先载入为草稿；预览影响并保存后生成新版本，不改写历史和在途任务。</p>
+<label for="revision">已保留快照</label><select id="revision"></select><button id="restore-revision" type="button">载入为恢复草稿</button><p id="history-state" role="status"></p></section>
 <form id="settings-form" novalidate>
 <fieldset id="editor" disabled><legend class="sr-only">商品选择规则</legend>
+<section><h2>商品库维护</h2><p class="hint">资料与类型规则同次保存。待核实资料不会进入商品下拉框；停用被引用商品时，需要先调整引用规则。</p>
+<label for="library-search">搜索名称、ID、店铺或备注</label><input id="library-search" type="search">
+<label for="library-choice">选择已有商品</label><select id="library-choice"></select>
+<div class="actions"><button id="library-new" type="button">新增资料</button><button id="library-toggle" type="button">切换启用 / 停用</button></div><p id="library-references"></p>
+<details id="library-editor"><summary>编辑商品资料</summary><label for="lib-product_id">商品 ID</label><input id="lib-product_id" type="text"><label for="lib-title">完整商品名称</label><input id="lib-title" type="text"><label for="lib-account_id">所属发布账号标识（不是商家 AppID）</label><input id="lib-account_id" type="text"><label for="lib-shop">所属店铺</label><input id="lib-shop" type="text"><label for="lib-merchant_appid">商家 AppID</label><input id="lib-merchant_appid" type="text"><label for="lib-specification">版本 / 规格</label><input id="lib-specification" type="text"><label for="lib-short_name">显示简称</label><input id="lib-short_name" type="text"><label for="lib-notes">运营备注</label><input id="lib-notes" type="text"><label for="lib-verified_source">核实来源</label><input id="lib-verified_source" type="text"><label for="lib-verified_at">核实时间（含时区）</label><input id="lib-verified_at" type="text"><label for="lib-identity_status">身份核实状态</label><select id="lib-identity_status"><option value="UNVERIFIED">待核实（不能自动选品）</option><option value="VERIFIED">已人工核实身份与账号</option></select>
+<label for="lib-enabled">运营启用</label><select id="lib-enabled"><option value="true">启用</option><option value="false">停用</option></select>
+<button id="library-apply" type="button">应用到当前草稿</button><p id="library-feedback" role="status"></p></details></section>
 <section><h2>视频类型</h2><p class="hint">识别顺序：英语世界 → 华尔街 → TED → AI → 其他。单条视频指定商品优先。</p>
 <div id="profiles"></div></section>
 <section><h2>全局默认商品</h2><label for="default-product">最后尝试的商品</label><select id="default-product" aria-describedby="default-detail"></select><p id="default-detail" class="product-detail"></p>
@@ -41,7 +51,12 @@
 <label for="timeout">选品总时限（秒，含全部重试）</label><input id="timeout" type="number" min="1" max="60" step="1" aria-describedby="feedback">
 <label for="attempts">最多尝试次数</label><select id="attempts" aria-describedby="feedback"><option value="1">1 次</option><option value="2">2 次</option><option value="3">3 次</option></select>
 <p class="hint">首选、备选、全局默认去重后必须都能在次数上限内尝试。</p></details>
-<div class="actions"><button id="save" disabled class="primary" type="button">保存配置</button><span id="dirty-state">尚未修改</span></div>
+<details><summary>等待与恢复检查</summary><p class="hint">以下是检查退避参数，不代表平台额度恢复时间。调度尚未接入时，仅保存参数，不启动任务。</p>
+<label for="wait-base_seconds">初次检查间隔（秒）</label><input id="wait-base_seconds" type="number" min="60" max="86400">
+<label for="wait-max_seconds">检查间隔上限（秒）</label><input id="wait-max_seconds" type="number" min="60" max="86400">
+<label for="wait-max_checks">最多连续检查次数</label><input id="wait-max_checks" type="number" min="1" max="30">
+<label for="wait-lease_seconds">单次检查租期（秒）</label><input id="wait-lease_seconds" type="number" min="30" max="600"></details>
+<div class="actions"><button id="save" disabled class="primary" type="button">预览影响并保存</button><span id="dirty-state">尚未修改</span></div>
 </fieldset></form>
 <section aria-labelledby="preview-heading"><h2 id="preview-heading">预览选品结果</h2><p class="hint">使用当前表单预览，不保存、不发布，也不计为实际采用。</p>
 <label for="video">最近待发布视频（最多 100 条）</label><select id="video"><option value="">使用下面的样例上下文</option></select><p id="videos-state" class="hint"></p>
@@ -53,5 +68,7 @@
 <label for="manual">单条视频指定商品（仅用于本次预览）</label><select id="manual"></select>
 <button id="preview" type="button" disabled>预览选品</button>
 <div id="preview-result" aria-live="polite"><p>选择视频或填写样例，查看类型、匹配原因和候选顺序。</p></div></section>
+<section><h2>等待记录</h2><p id="wait-state" role="status"></p><div id="wait-records"></div><p class="hint">恢复检查后仍需通过原有授权、去重与审核门禁；配置保存不会直接发表。已受理、审核中或结果不明的任务先核验原作品。</p></section>
+<dialog id="impact-dialog" aria-labelledby="impact-heading"><h2 id="impact-heading">保存前影响预览</h2><div id="impact-result"></div><div class="actions"><button id="impact-cancel" type="button">返回编辑</button><button id="impact-confirm" type="button" class="primary">确认保存配置</button></div></dialog>
 <dialog id="discard-dialog" aria-labelledby="discard-heading"><h2 id="discard-heading">有尚未保存的修改</h2><p>继续会丢弃当前表单中的修改。</p><div class="actions"><button id="keep-editing" disabled type="button" autofocus>继续编辑</button><button id="discard" disabled type="button">丢弃修改并继续</button></div></dialog>
 </main></body></html>

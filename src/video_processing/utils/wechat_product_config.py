@@ -60,6 +60,15 @@ def save_policy(data: dict, active: Path, *, expected_digest: str | None = None)
         fcntl.flock(lock, fcntl.LOCK_EX)
         if expected_digest is not None and load_policy(active).digest != expected_digest:
             raise PolicyConflict('配置已被其他窗口更新。请先重新载入，再修改保存。')
+        # 先保存被替换的有效版本；归档失败不改变生效配置。
+        if active.exists():
+            previous = load_policy(active)
+            archive = active.with_name(active.stem + '_history') / (previous.digest + '.json')
+            if archive.exists():
+                if load_policy(archive).digest != previous.digest:
+                    raise ValueError('历史快照损坏，未覆盖当前配置')
+            else:
+                atomic_json(archive, json.loads(previous.serialized))
         atomic_json(active, json.loads(policy.serialized))
     return policy
 
