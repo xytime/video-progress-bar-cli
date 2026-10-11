@@ -3,12 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 from config.settings import settings
+from video_processing.utils.wechat_product_context import video_product_context
 from video_processing.utils.wechat_product_config import (
     load_policy, activate_policy, policy_status, decision_payload,
 )
@@ -25,6 +25,9 @@ def main(argv=None):
     preview = sub.add_parser('preview')
     preview.add_argument('--video-id')
     preview.add_argument('--category')
+    preview.add_argument('--content-type')
+    preview.add_argument('--product-topic')
+    preview.add_argument('--slice-index', type=int, default=0)
     preview.add_argument('--source-channel-id')
     preview.add_argument('--product-alias')
     args = parser.parse_args(argv)
@@ -37,22 +40,12 @@ def main(argv=None):
         elif args.action == 'status':
             output = policy_status(args.config, settings.wechat_product_status_path)
         else:
-            category, channel = args.category, args.source_channel_id
-            if args.video_id:
-                if not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', args.video_id):
-                    raise ValueError('非法 video-id')
-                base = ROOT / 'output' / args.video_id
-                category_path = base.with_name(base.name + '_category.txt')
-                info_path = base.with_name(base.name + '.info.json')
-                if category is None and category_path.exists():
-                    category = category_path.read_text().strip()
-                if channel is None and info_path.exists():
-                    info = json.loads(info_path.read_text())
-                    if not isinstance(info, dict):
-                        raise ValueError('视频元数据必须为对象')
-                    channel = info.get('channel_id')
-            decision = load_policy(args.config).decide(category=category, source_channel_id=channel,
-                                                       product_alias=args.product_alias)
+            context = (video_product_context(ROOT / 'output', {'youtube_id': args.video_id,
+                       'slice_index': args.slice_index, 'content_type': args.content_type}) if args.video_id else {})
+            for key in ('category', 'source_channel_id', 'content_type', 'product_topic'):
+                if getattr(args, key) is not None:
+                    context[key] = getattr(args, key)
+            decision = load_policy(args.config).decide(**context, product_alias=args.product_alias)
             output = dict(decision_payload(decision), preview_only=True, platform_availability='NOT_VERIFIED')
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0

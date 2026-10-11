@@ -14,7 +14,11 @@ SEED = Path(__file__).resolve().parents[2] / 'config/wechat_products.json'
 
 @pytest.fixture
 def data():
-    return json.loads(SEED.read_text())
+    data = json.loads(SEED.read_text())
+    legacy_channel = data['profiles']['wallstreet']
+    data['rules'].insert(0, {'id':'wallstreet', 'kind':'channel', 'values':legacy_channel['channel_ids'], 'candidates':legacy_channel['candidates'], 'role':'finance'})
+    data.pop('profiles'); data['schema_version'] = 1; data['max_attempts'] = 2
+    return data
 
 
 def test_priority_and_deterministic_fallback(data):

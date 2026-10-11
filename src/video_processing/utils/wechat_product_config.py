@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import fcntl
 from datetime import datetime, timezone
 
 from video_processing.core.wechat_product_policy import ProductPolicy, parse_product_policy
@@ -45,13 +46,28 @@ def atomic_json(path: Path, data: dict) -> None:
 def activate_policy(candidate: Path, active: Path) -> ProductPolicy:
     """先完整校验再替换；任何校验异常都保持已激活文件原样。"""
     policy = load_policy(candidate)
-    atomic_json(active, json.loads(policy.serialized))
+    return save_policy(json.loads(policy.serialized), active)
+
+
+class PolicyConflict(ValueError):
+    """另一位编辑者已保存，不能覆盖新版本。"""
+
+
+def save_policy(data: dict, active: Path, *, expected_digest: str | None = None) -> ProductPolicy:
+    policy = parse_product_policy(data)
+    active.parent.mkdir(parents=True, exist_ok=True)
+    with active.with_suffix(active.suffix + '.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if expected_digest is not None and load_policy(active).digest != expected_digest:
+            raise PolicyConflict('配置已被其他窗口更新。请先重新载入，再修改保存。')
+        atomic_json(active, json.loads(policy.serialized))
     return policy
 
 
 def decision_payload(decision) -> dict:
     return {'config_version': decision.rule_version, 'config_digest': decision.config_digest,
             'matched_rule': decision.reason, 'context': dict(decision.context),
+            'video_group': decision.video_group, 'group_reason': decision.group_reason,
             'candidates': [{'product_id': p.product_id, 'title': p.title} for p in decision.candidates],
             'timeout_seconds': decision.timeout_seconds, 'max_attempts': decision.max_attempts}
 
@@ -68,9 +84,11 @@ def record_adoption(policy: ProductPolicy, decision, evidence_dir: Path, status_
     atomic_json(status_path, payload)
 
 
-def policy_status(active: Path, status_path: Path) -> dict:
-    policy = load_policy(active)
+def policy_status(active: Path, status_path: Path, *, policy: ProductPolicy | None = None) -> dict:
+    policy = policy or load_policy(active)
     last = json.loads(status_path.read_text()) if status_path.exists() else None
+    if last is not None and not isinstance(last, dict):
+        raise ValueError('最近采用记录必须为对象')
     return {'saved_version': policy.version, 'saved_digest': policy.digest,
             'last_selection': last,
             'adopted_by_last_selection': bool(last and last.get('config_digest') == policy.digest)}

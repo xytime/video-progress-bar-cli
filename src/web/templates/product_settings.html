@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>商品挂载设置 · 视频控制台</title>
+<link rel="stylesheet" href="/static/css/dashboard.css">
+<link rel="stylesheet" href="/static/css/product_settings.css">
+<script defer src="/static/js/product_settings.js"></script></head>
+<body><main class="product-settings">
+<nav aria-label="当前位置"><a id="back" href="/">← 返回视频控制台</a></nav>
+<header><div><h1>商品挂载设置</h1><p>按视频类型选书，指定商品不可用时依次尝试备选与全局默认。</p></div></header>
+<section class="status-panel" aria-labelledby="status-heading"><h2 id="status-heading">保存与实际采用</h2>
+<p id="saved-version">正在读取配置…</p><p id="adopted-version">最近一次选品：正在读取…</p>
+<button id="reload" disabled type="button">重新载入</button></section>
+<p id="feedback" role="status" aria-live="polite"></p>
+<form id="settings-form" novalidate>
+<fieldset id="editor" disabled><legend class="sr-only">商品选择规则</legend>
+<section><h2>视频类型</h2><p class="hint">识别顺序：英语世界 → 华尔街 → TED → AI → 其他。单条视频指定商品优先。</p>
+<div id="profiles"></div></section>
+<section><h2>全局默认商品</h2><label for="default-product">最后尝试的商品</label><select id="default-product" aria-describedby="default-detail"></select><p id="default-detail" class="product-detail"></p>
+<p class="hint">所有候选都不可用或无法核实实际挂载身份时，停止发表并记录原因，不空挂发布。</p></section>
+<details><summary>识别条件与其他类型细分</summary>
+<p class="hint">英语世界使用任务内容类型；下列来源频道按完整 ID 匹配，多个 ID 用逗号分隔。AI 也接受显式主题 AI，“科技”分类不会自动归入 AI。</p>
+<div id="channel-fields"></div>
+<p class="hint">“其他”中的财经、新闻仍优先使用原有细分规则；没有命中时使用上方“其他”一行。</p>
+<div id="legacy-rules"></div>
+<label for="timeout">选品总时限（秒，含全部重试）</label><input id="timeout" type="number" min="1" max="60" step="1" aria-describedby="feedback">
+<label for="attempts">最多尝试次数</label><select id="attempts" aria-describedby="feedback"><option value="1">1 次</option><option value="2">2 次</option><option value="3">3 次</option></select>
+<p class="hint">首选、备选、全局默认去重后必须都能在次数上限内尝试。</p></details>
+<div class="actions"><button id="save" disabled class="primary" type="button">保存配置</button><span id="dirty-state">尚未修改</span></div>
+</fieldset></form>
+<section aria-labelledby="preview-heading"><h2 id="preview-heading">预览选品结果</h2><p class="hint">使用当前表单预览，不保存、不发布，也不计为实际采用。</p>
+<label for="video">最近待发布视频（最多 100 条）</label><select id="video"><option value="">使用下面的样例上下文</option></select><p id="videos-state" class="hint"></p>
+<details id="sample-context"><summary>样例上下文</summary>
+<label for="content-type">内容类型</label><select id="content-type"><option value="GENERAL">普通视频</option><option value="ENGLISH_WORLD_SHORT">英语世界短视频</option></select>
+<label for="channel">来源频道 ID</label><input id="channel" type="text">
+<label for="category">视频分类</label><select id="category"><option value="">未分类</option><option>财经</option><option>新闻</option><option>资讯</option><option>时事</option><option>科技</option><option>教育</option></select>
+<label for="topic">显式主题</label><select id="topic"><option value="">未标注</option><option value="AI">AI</option></select></details>
+<label for="manual">单条视频指定商品（仅用于本次预览）</label><select id="manual"></select>
+<button id="preview" type="button" disabled>预览选品</button>
+<div id="preview-result" aria-live="polite"><p>选择视频或填写样例，查看类型、匹配原因和候选顺序。</p></div></section>
+<dialog id="discard-dialog" aria-labelledby="discard-heading"><h2 id="discard-heading">有尚未保存的修改</h2><p>继续会丢弃当前表单中的修改。</p><div class="actions"><button id="keep-editing" disabled type="button" autofocus>继续编辑</button><button id="discard" disabled type="button">丢弃修改并继续</button></div></dialog>
+</main></body></html>

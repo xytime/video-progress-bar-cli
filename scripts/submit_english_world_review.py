@@ -74,6 +74,8 @@ def _english_world_uploader_command(
         "--state", str(_PROJECT_ROOT / "output" / "wechat_state.json"),
         "--evidence-dir", str(evidence_dir),
         "--fail-fast-login",
+        "--content-type", "ENGLISH_WORLD_SHORT",
+        "--require-product",
         "--require-original-declaration" if require_original_declaration else "--no-original-declaration",
     ]
 

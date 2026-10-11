@@ -1,0 +1,23 @@
+{
+  "findings": [
+    {
+      "category": "violation",
+      "file": "src/web/templates/index.html",
+      "line": 562,
+      "message": "Enabled literal button has no detectable action or submit behavior.",
+      "remediation": "Connect the button to a real action, make it a submit button, or disable/remove it.",
+      "ruleId": "affordance.actionless-button",
+      "severity": "error"
+    }
+  ],
+  "mode": "strict",
+  "projectRoot": "/private/tmp/vp-product-config-20261011",
+  "schemaVersion": 1,
+  "summary": {
+    "errors": 1,
+    "total": 1,
+    "unresolved": 0,
+    "violations": 1,
+    "warnings": 0
+  }
+}

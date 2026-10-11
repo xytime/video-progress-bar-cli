@@ -28,7 +28,7 @@ def test_ready_tab_explains_wait_and_keeps_platform_result_separate(dashboard, t
     row = page.locator("#row-ready-video")
     row.wait_for()
     assert page.locator("#tab-ready").inner_text() == "待发布(1)"
-    assert row.locator(".status-cell > .badge").inner_text() == "待发布"
+    assert row.locator(".status-cell .desktop-only-status > .badge").inner_text() == "待发布"
     details = row.locator(".publication-wait-detail").inner_text()
     for text in ("视频号", "other-video", "PID 123", "就绪：", "已等待", "最近尝试：", "下次重试："):
         assert text in details
@@ -160,7 +160,7 @@ def test_chinese_statuses_match_table_platform_and_details(dashboard):
     page.locator("#row-status-0").wait_for()
     for i, (code, label) in enumerate(labels.items()):
         row = page.locator(f"#row-status-{i}")
-        assert row.locator(".status-cell > .badge").inner_text() == label
+        assert row.locator(".status-cell .desktop-only-status > .badge").inner_text() == label
         badge = row.locator(".plat-wechat")
         assert f"微信·{label}" in badge.inner_text()
         assert code in badge.get_attribute("title")

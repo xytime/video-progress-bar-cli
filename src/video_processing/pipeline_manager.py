@@ -3933,12 +3933,8 @@ class PipelineManager:
             upload_cmd.append("--no-original-declaration")
         if settings.enable_wechat_product_link:
             upload_cmd.append("--require-product")
-            source_chan_id = (
-                video.get("channel_id")
-                or video.get("source_channel_id")
-            )
-            if source_chan_id:
-                upload_cmd.extend(["--source-channel-id", str(source_chan_id).strip()])
+        from video_processing.utils.wechat_product_context import video_product_context, product_context_arguments
+        upload_cmd.extend(product_context_arguments(video_product_context(self._OUT_DIR, video)))
 
         try:
             res = self._run_tracked(upload_cmd, yid, slice_index=slice_index, text=True,

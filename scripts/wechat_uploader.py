@@ -2049,6 +2049,9 @@ def run_uploader(
     identity_receipt: str | None = None,
     require_product: bool = False,
     product_alias: str | None = None,
+    content_type: str | None = None,
+    product_topic: str | None = None,
+    product_category: str | None = None,
     source_channel_id: str | None = None,
     stop_before_submit: bool = False,
 ) -> int:
@@ -3377,7 +3380,11 @@ def run_uploader(
             return 1
         try:
             policy = load_policy(settings.wechat_product_policy_path)
-            decision = policy.decide(category=category, source_channel_id=source_channel_id, product_alias=product_alias)
+            decision = policy.decide(
+                category=product_category if product_category is not None else category,
+                source_channel_id=source_channel_id, product_alias=product_alias,
+                content_type=content_type, product_topic=product_topic,
+            )
             record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path, phase="STARTED")
         except (ValueError, OSError) as exc:
             _write_product_selection_receipt(evidence_root, required=True, error="PRODUCT_CONFIG_INVALID:" + type(exc).__name__)
@@ -3518,6 +3525,9 @@ def main():
         "--require-original-declaration", action="store_true",
         help="原创声明必须由界面确认；否则停止在发表前",
     )
+    parser.add_argument("--content-type", help="生产内容类型，例如 ENGLISH_WORLD_SHORT")
+    parser.add_argument("--product-category", help="任务分类的选品快照")
+    parser.add_argument("--product-topic", help="显式选品主题；AI 表示 AI 相关资讯")
     parser.add_argument("--product-alias", help="本条视频优先商品别名；仍遵守配置的默认回退")
     parser.add_argument(
         "--require-product", action="store_true",
@@ -3563,6 +3573,9 @@ def main():
             expected_title = args.expected_title,
             require_product = args.require_product,
             product_alias = args.product_alias,
+            content_type = args.content_type,
+            product_topic = args.product_topic,
+            product_category = args.product_category,
             source_channel_id = args.source_channel_id,
             stop_before_submit = args.stop_before_submit,
         )

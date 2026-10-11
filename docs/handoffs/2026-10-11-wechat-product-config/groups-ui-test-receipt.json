@@ -1,0 +1,42 @@
+{
+  "source": "/private/tmp/vp-product-config-20261011",
+  "snapshot": "/private/tmp/video-pytest-qxgyabwk/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.132
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/browser/test_product_settings_browser.py",
+    "tests/browser/test_wechat_product_picker_browser.py",
+    "tests/unit/test_wechat_product_groups.py",
+    "tests/unit/test_wechat_product_config.py",
+    "tests/unit/test_wechat_product_selection.py",
+    "tests/unit/test_wechat_product_picker.py",
+    "tests/unit/test_wechat_publications.py",
+    "tests/unit/test_wechat_duplicate_guard.py",
+    "tests/unit/test_wechat_upload_recovery.py",
+    "tests/unit/test_wechat_publish_controls_contract.py",
+    "tests/unit/test_english_world_original_declaration.py",
+    "tests/unit/test_english_world_submission_text_safety.py",
+    "tests/unit/test_english_world_recovery_guards.py",
+    "tests/unit/test_ready_publication_dispatch.py",
+    "tests/unit/test_dashboard_interactions.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "4292db56f37800fc632a66669e1a5939903b47c5ec31c8d139fd9ea8780f6899",
+  "profile_sha256": "619cb9a5b65021f09bf07349e5000e8edf234e5a2edfcaddd8aaa975cdc3f348",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-qxgyabwk/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "f461d629837166a8f14cd8b67735ba03c7b8b62b3b8a715071383ab07649b764",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 33.546
+  },
+  "finished_at": "2026-10-11T06:57:32.421932+00:00"
+}

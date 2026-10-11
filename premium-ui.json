@@ -1,0 +1,12 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["src/web"],
+  "locale": "zh-CN",
+  "canonicalMap": "DESIGN.md",
+  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "Toast", "CRUD"],
+  "ownership": {"Select/Listbox": "native"},
+  "evidence": {
+    "crudFullFlow": "tests/browser/test_product_settings_browser.py",
+    "failurePaths": "tests/unit/test_wechat_product_groups.py"
+  }
+}

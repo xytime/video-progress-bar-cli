@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "version": "books-2026-10-11-v1",
+  "schema_version": 2,
+  "version": "books-2026-10-11-groups-v2",
   "products": {
     "finance": {
       "product_id": "10000028955239",
@@ -25,17 +25,6 @@
     }
   },
   "rules": [
-    {
-      "id": "wallstreet",
-      "kind": "channel",
-      "values": [
-        "UCTK_cv-y88CScoudcXnS1Ew"
-      ],
-      "candidates": [
-        "finance"
-      ],
-      "role": "finance"
-    },
     {
       "id": "finance",
       "kind": "category",
@@ -65,5 +54,40 @@
     "default"
   ],
   "timeout_seconds": 30,
-  "max_attempts": 2
+  "max_attempts": 3,
+  "profiles": {
+    "english_world": {
+      "candidates": [
+        "default"
+      ],
+      "channel_ids": []
+    },
+    "wallstreet": {
+      "candidates": [
+        "finance"
+      ],
+      "channel_ids": [
+        "UCTK_cv-y88CScoudcXnS1Ew"
+      ]
+    },
+    "ted": {
+      "candidates": [
+        "default"
+      ],
+      "channel_ids": [
+        "UCAuUUnT6oDeKwE6v1NGQxug",
+        "UCsT0YIqwnpJCM-mx7-gSA4Q"
+      ]
+    },
+    "ai_news": {
+      "candidates": [
+        "news"
+      ],
+      "channel_ids": []
+    },
+    "other": {
+      "candidates": [],
+      "channel_ids": []
+    }
+  }
 }

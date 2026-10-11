@@ -54,6 +54,8 @@ class ProductDecision:
     max_attempts: int = 2
     timeout_seconds: float = 30
     context: tuple[tuple[str, str | None], ...] = ()
+    video_group: str = "other"
+    group_reason: str = "未命中特定类型"
 
 
 
@@ -101,6 +103,16 @@ class ProductRule:
     role: ProductRole = ProductRole.DEFAULT
 
 
+VIDEO_GROUPS = ("english_world", "wallstreet", "ted", "ai_news", "other")
+GROUP_LABELS = dict(zip(VIDEO_GROUPS, ("英语世界短视频", "华尔街事实炸弹", "TED 类", "AI 相关资讯", "其他")))
+
+
+@dataclass(frozen=True)
+class ProductProfile:
+    candidates: tuple[str, ...]
+    channel_ids: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class ProductPolicy:
     """不可变策略快照；规则来自配置，不在领域层内置商品或频道特例。"""
@@ -113,6 +125,7 @@ class ProductPolicy:
     timeout_seconds: float
     max_attempts: int
     serialized: str
+    profiles: Mapping[str, ProductProfile]
 
     def chain(self, aliases: tuple[str, ...]) -> tuple[ProductIdentity, ...]:
         result = []
@@ -127,12 +140,31 @@ class ProductPolicy:
         return tuple(result)
 
     def decide(self, *, category: str | None = None, source_channel_id: str | None = None,
-               product_alias: str | None = None) -> ProductDecision:
+               product_alias: str | None = None, content_type: str | None = None,
+               product_topic: str | None = None) -> ProductDecision:
         context = (("category", category), ("source_channel_id", source_channel_id),
-                   ("product_alias", product_alias))
+                   ("product_alias", product_alias), ("content_type", content_type),
+                   ("product_topic", product_topic))
+        if any(v is not None and not isinstance(v, str) for _, v in context):
+            raise ValueError("视频上下文字段必须为字符串")
+        group, group_reason = "other", "未命中特定类型"
+        if self.profiles:
+            if content_type == "ENGLISH_WORLD_SHORT":
+                group, group_reason = "english_world", "内容类型 ENGLISH_WORLD_SHORT"
+            else:
+                for name in ("wallstreet", "ted", "ai_news"):
+                    if source_channel_id and source_channel_id.strip() in self.profiles[name].channel_ids:
+                        group, group_reason = name, "来源频道精确匹配"
+                        break
+                else:
+                    if product_topic == "AI":
+                        group, group_reason = "ai_news", "显式主题 AI"
         role, rule_id, aliases = ProductRole.DEFAULT, "DEFAULT", ()
         if product_alias is not None:
             rule_id, aliases = "MANUAL", (product_alias,)
+        elif group != "other":
+            aliases, rule_id = self.profiles[group].candidates, group
+            role = {"wallstreet": ProductRole.FINANCE, "ai_news": ProductRole.NEWS}.get(group, ProductRole.DEFAULT)
         else:
             for kind, value in (("channel", source_channel_id), ("category", category)):
                 normalized = value.strip() if isinstance(value, str) else ""
@@ -140,8 +172,11 @@ class ProductPolicy:
                 if match:
                     role, rule_id, aliases = match.role, match.rule_id, match.candidates
                     break
+            else:
+                if self.profiles:
+                    aliases = self.profiles["other"].candidates
         return ProductDecision(role, rule_id, self.version, self.digest, self.chain(aliases),
-                               self.max_attempts, self.timeout_seconds, context)
+                               self.max_attempts, self.timeout_seconds, context, group, group_reason)
 
 
 def parse_product_policy(data: dict) -> ProductPolicy:
@@ -169,8 +204,10 @@ def parse_product_policy(data: dict) -> ProductPolicy:
         return values
 
     fields = {"schema_version", "version", "products", "rules", "default_candidates", "timeout_seconds", "max_attempts"}
+    if isinstance(data, dict) and data.get('schema_version') == 2:
+        fields.add('profiles')
     obj(data, fields, fields)
-    if type(data['schema_version']) is not int or data['schema_version'] != 1:
+    if type(data['schema_version']) is not int or data['schema_version'] not in (1, 2):
         raise ValueError("不支持的 schema_version")
     version = string(data['version'])
     seconds, attempts = data['timeout_seconds'], data['max_attempts']
@@ -210,13 +247,31 @@ def parse_product_policy(data: dict) -> ProductPolicy:
         ids.add(rule_id)
         rules.append(ProductRule(rule_id, kind, values, strings(item['candidates']),
                                  ProductRole(item.get('role', 'default'))))
+    profiles = {}
+    if data['schema_version'] == 2:
+        obj(data['profiles'], VIDEO_GROUPS, VIDEO_GROUPS)
+        for name, item in data['profiles'].items():
+            obj(item, {'candidates', 'channel_ids'}, {'candidates', 'channel_ids'})
+            channels = item['channel_ids']
+            if not isinstance(channels, list):
+                raise ValueError('频道 ID 必须为列表')
+            channels = strings(channels) if channels else ()
+            if name in {'english_world', 'other'} and channels:
+                raise ValueError('英语世界与其他不支持频道条件')
+            # 空候选代表直接继承全局默认；备选与默认合并后仍必须可达。
+            candidates = item['candidates']
+            if not isinstance(candidates, list):
+                raise ValueError('候选必须为列表')
+            profiles[name] = ProductProfile(strings(candidates) if candidates else (), channels)
     serialized = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
     policy = ProductPolicy(version, hashlib.sha256(serialized.encode()).hexdigest(),
                            MappingProxyType(products), tuple(rules), strings(data['default_candidates']),
-                           float(seconds), attempts, serialized)
+                           float(seconds), attempts, serialized, MappingProxyType(profiles))
     policy.chain(())
     for rule in rules:
         policy.chain(rule.candidates)
+    for profile in profiles.values():
+        policy.chain(profile.candidates)
     # 目录中的每个启用商品都可人工指定，默认回退必须同样可达。
     for alias, entry in products.items():
         if entry.enabled:
