@@ -299,14 +299,14 @@ def test_operation_timeout_with_remaining_budget_can_use_default():
 
 def test_attempts_and_cleanup_share_one_budget():
     picker = FakePicker((DEFAULT,))
-    picker.delays["find:" + FINANCE.product_id] = 20
+    picker.delays["find:" + FINANCE.product_id] = 10
     picker.delays["clear"] = 2
-    picker.delays["find:" + DEFAULT.product_id] = 9
+    picker.delays["find:" + DEFAULT.product_id] = 19
     result = run(picker)
     assert result.reason == "PRODUCT_SELECTION_BUDGET_EXHAUSTED"
     assert not result.binding_confirmed
     default_timeout = [timeout for action, timeout in picker.calls if action == "find:" + DEFAULT.product_id]
-    assert default_timeout == [8000]
+    assert default_timeout == [18000]
     assert not any(action == "select:" + DEFAULT.product_id for action, _ in picker.calls)
 
 
@@ -356,3 +356,38 @@ def test_cleanup_timeout_is_not_misreported_as_total_budget_exhausted():
     result = run(picker)
     assert result.reason == "PRODUCT_OPERATION_TIMEOUT"
     assert result.attempts == 1 and result.elapsed_seconds == 3
+
+
+def test_slow_primary_and_backup_leave_time_for_default():
+    class SlowTargets(FakePicker):
+        def find(self, product, *, timeout_ms):
+            if product != DEFAULT:
+                self.calls.append(("find:" + product.product_id, timeout_ms))
+                self.clock.now += timeout_ms / 1000
+                raise TimeoutError("synthetic operation timeout")
+            return super().find(product, timeout_ms=timeout_ms)
+    picker = SlowTargets([DEFAULT])
+    decision = replace(choose_product_role(category="财经"), candidates=(FINANCE, NEWS, DEFAULT), max_attempts=3)
+    result = select_required_product(decision=decision, picker=picker, clock=picker.clock)
+    assert result.binding_confirmed and result.actual == DEFAULT
+    assert result.attempts == 3 and result.elapsed_seconds < 30
+    assert [r["outcome"] for r in result.attempt_records] == ["TARGET_OPERATION_TIMEOUT", "TARGET_OPERATION_TIMEOUT", "BOUND"]
+    assert all(r["kind"] == "CANDIDATE" for r in result.attempt_records)
+    assert next(ms for action, ms in picker.calls if action == "find:" + DEFAULT.product_id) > 10000
+
+
+def test_single_candidate_retry_is_distinct_from_fallback():
+    picker = FakePicker([])
+    decision = replace(choose_product_role(), candidates=(DEFAULT,), max_attempts=3)
+    result = select_required_product(decision=decision, picker=picker, clock=picker.clock)
+    assert [r["kind"] for r in result.attempt_records] == ["CANDIDATE", "TECHNICAL_RETRY", "TECHNICAL_RETRY"]
+    assert not result.binding_confirmed
+
+
+def test_adapter_overrun_of_candidate_budget_stops_without_unsafe_fallback():
+    picker = FakePicker((DEFAULT,))
+    picker.delays["find:" + FINANCE.product_id] = 20
+    result = run(picker)
+    assert result.reason == "PRODUCT_OPERATION_TIMEOUT"
+    assert not result.binding_confirmed
+    assert not any(action in {"clear", "find:" + DEFAULT.product_id} for action, _ in picker.calls)

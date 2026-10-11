@@ -1,0 +1,31 @@
+{
+  "source": "/private/tmp/vp-product-config-20261011",
+  "snapshot": "/private/tmp/video-pytest-_odpyu9k/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.078
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_wechat_product_selection.py",
+    "tests/unit/test_wechat_product_config.py",
+    "tests/unit/test_wechat_product_picker.py",
+    "tests/browser/test_wechat_product_picker_browser.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "aa05def55924da8a80f4cdf14bb2d55c43b7d461b9dd70eccd08f0e58ba16b68",
+  "profile_sha256": "4fbea70ba3c7e04c6691a0bdb074e35143fb3e33be33655d72c86d0bacd00fda",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-_odpyu9k/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "4a8c9672260815557d00334285f93e6ffd83b60b96934f8aab6da0896fccaf33",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 5.397
+  },
+  "finished_at": "2026-10-11T07:27:00.195400+00:00"
+}
