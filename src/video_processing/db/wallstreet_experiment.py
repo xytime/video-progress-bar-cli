@@ -361,6 +361,42 @@ class WallstreetExperimentDAL:
                   AND state IN ('SUBMITTING','UNCERTAIN') AND platform_post_id IS NULL AND attempt_token=?""",
                 (evidence_path,time.time()+retry_after_seconds,publication_id,attempt_token)).rowcount == 1
 
+    def defer_wallstreet_wechat_product_wait(self, publication_id, *, attempt_token, uploader_exit_code,
+                                           evidence_dir, receipt, wait_evidence, package_sha256,
+                                           asset_sha256, artifacts_digest):
+        """仅同次 B 的严格商品未发表证据恢复等待；A、已受理和不明结果不改写。"""
+        from pathlib import Path
+        expected_task = f'wallstreet:wechat:B:{publication_id}'
+        if (uploader_exit_code != 14 or not attempt_token
+                or not isinstance(receipt,dict) or not isinstance(wait_evidence,dict)
+                or receipt.get('required') is not True or receipt.get('binding_confirmed') is not False
+                or receipt.get('unbound_confirmed') is not False
+                or receipt.get('state') != 'BLOCKED' or receipt.get('task_id') != expected_task
+                or wait_evidence.get('task_key') != expected_task or wait_evidence.get('not_submitted') is not True
+                or wait_evidence.get('submission_state') != 'NOT_SUBMITTED'
+                or wait_evidence.get('artifacts_digest') != artifacts_digest
+                or any(not self._is_sha256_digest(d) for d in (package_sha256,asset_sha256,artifacts_digest))
+                or (Path(evidence_dir)/'submission_receipt.json').exists()
+                or (Path(evidence_dir)/'management_readback.json').exists()):
+            return False
+        with self.get_connection() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            frozen = conn.execute('SELECT payload FROM product_task_decisions WHERE task_id=?',(expected_task,)).fetchone()
+            if not frozen:
+                return False
+            decision = json.loads(frozen['payload'])
+            if (decision.get('require_product') is not True or not decision.get('config_digest')
+                    or receipt.get('config_digest') != decision['config_digest']
+                    or wait_evidence.get('config_digest') != decision['config_digest']):
+                return False
+            return conn.execute("""UPDATE wallstreet_version_publications SET state='WAITING',
+                attempt_token=NULL,evidence_path=?,next_readback_at=0,last_error=?
+                WHERE id=? AND platform='wechat' AND variant='B' AND state='SUBMITTING'
+                  AND platform_post_id IS NULL AND attempt_token=? AND evidence_path=?
+                  AND package_sha256=? AND asset_sha256=?""",
+                (str(Path(evidence_dir)/'product_wait.json'),'商品等待：'+str(wait_evidence.get('reason'))+'；明确未发表，保留原商品和产物。',
+                 publication_id,attempt_token,evidence_dir,package_sha256,asset_sha256)).rowcount == 1
+
     def recover_unstarted_wallstreet_douyin(self, *, min_age_seconds=1800):
         """只恢复未打开浏览器的抖音尝试；先撤销票据，使迟到子进程失效。"""
         if min_age_seconds < 60:

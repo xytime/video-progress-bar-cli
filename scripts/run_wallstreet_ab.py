@@ -36,6 +36,9 @@ from video_processing.processors.insight_processor import InsightProcessor, vali
 from video_processing.processors.insight_editorial import resolve_inputs
 from video_processing.utils.insight_planner import generate_insight_script
 from video_processing.utils.subprocess_env import build_subprocess_env
+from video_processing.utils.wechat_product_context import video_product_context
+from video_processing.utils.wechat_product_task import freeze_task_product_decision, write_product_task_arguments
+from video_processing.utils.wechat_product_execution import product_artifacts_digest, product_observation_generation, product_task_preflight
 
 
 def write_json(path,value):
@@ -141,7 +144,7 @@ def build_package(db,pair):
     return package
 
 
-def command(publication,package,evidence,*,verify=False,ticket=None):
+def command(publication,package,evidence,*,verify=False,ticket=None,product_decision=None):
     platform = publication['platform']
     args = [str(ROOT/'.venv/bin/python'),str(ROOT/f'scripts/{"wechat" if platform=="wechat" else "douyin"}_uploader.py'),
             '--copy',package['copy'],'--title-file',package['title'],'--evidence-dir',str(evidence),'--fail-fast-login']
@@ -155,8 +158,11 @@ def command(publication,package,evidence,*,verify=False,ticket=None):
     else:
         args+=['--video',package['video'],'--cover',package['cover']]
         if platform=='wechat':
+            if product_decision is None:
+                raise ValueError('微信 B 必须传入冻结的商品任务决定')
             args+=['--cover-provenance',package['cover_provenance'],'--category-file',package['category'],
                    '--no-original-declaration']
+            args+=write_product_task_arguments(product_decision, evidence.parent/'_product_task_inputs'/evidence.name)
         else:
             args+=['--horizontal-cover',package['horizontal_cover'],'--publish',
                    '--douyin-launch-ticket',ticket['_douyin_launch_ticket_id'],'--douyin-launch-token',ticket['_douyin_launch_token']]
@@ -170,13 +176,42 @@ def run_command(args,evidence):
                               stdout=log,stderr=log,timeout=1800,check=False).returncode
 
 
-def apply_readback(db,publication,evidence,code):
+def product_submission_matches(receipt, decision):
+    if (receipt.get('product_task_id') != decision['task_id']
+            or receipt.get('product_config_digest') != decision.get('config_digest')
+            or receipt.get('product_config_version') != decision.get('config_version')
+            or receipt.get('product_attachment_reason') != decision['reason']):
+        return False
+    if decision['require_product'] is False:
+        return (receipt.get('product_binding_confirmed') is False and receipt.get('product_unbound_confirmed') is True
+                and not receipt.get('product_id') and not receipt.get('product_title'))
+    allowed = {(p['product_id'],p['title']) for p in decision['product_decision']['candidates']}
+    return (receipt.get('product_binding_confirmed') is True and receipt.get('product_unbound_confirmed') is False
+            and (receipt.get('product_id'),receipt.get('product_title')) in allowed)
+
+
+def apply_readback(db,publication,evidence,code,*,product_decision=None):
     platform = publication['platform']
     path = evidence/('management_readback.json' if platform=='wechat' else 'douyin_management_readback.json')
     receipt = evidence/'submission_receipt.json'
     value = json.loads(path.read_text()) if path.is_file() else {}
     accepted = json.loads(receipt.read_text()) if platform=='wechat' and receipt.is_file() else {}
     native = value.get('platform_post_id') or accepted.get('platform_post_id') or publication.get('platform_post_id')
+    if (code == 14 and platform == 'wechat' and publication['variant'] == 'B'
+            and product_decision and not native and not path.exists() and not receipt.exists()):
+        try:
+            product_receipt = json.loads((evidence/'product_selection_receipt.json').read_text())
+            wait = json.loads((evidence/'product_wait.json').read_text())
+            package = json.loads(publication['package_json'])
+            validate_package(package)
+            if db.defer_wallstreet_wechat_product_wait(publication['id'],
+                    attempt_token=publication['attempt_token'], uploader_exit_code=code,
+                    evidence_dir=str(evidence), receipt=product_receipt, wait_evidence=wait,
+                    package_sha256=payload_hash(package), asset_sha256=sha256(Path(package['video'])),
+                    artifacts_digest=product_artifacts_digest(Path(package['video']),Path(package['copy']),Path(package['cover']))):
+                return 'WAITING'
+        except (OSError,ValueError,KeyError,TypeError):
+            pass
     if (code == 2 and platform == 'wechat' and publication['variant'] == 'B'
             and not native and not path.exists() and not receipt.exists()):
         proof = evidence/f"preupload-login-{publication['attempt_token']}.json"
@@ -198,6 +233,9 @@ def apply_readback(db,publication,evidence,code):
     elif accepted.get('platform_post_id') or (state=='UNDER_REVIEW' and native) or code==6:
         outcome = 'UNDER_REVIEW'
     else:
+        outcome = 'UNCERTAIN'
+    if product_decision and outcome in {'PUBLISHED','UNDER_REVIEW'} and not product_submission_matches(accepted,product_decision):
+        # 已受理仍保留原生 ID；商品证据不一致不能恢复等待或再次上传。
         outcome = 'UNCERTAIN'
     platform_time = value.get('platform_public_at')
     calibrated = (platform == 'wechat' and outcome == 'PUBLISHED'
@@ -255,7 +293,9 @@ def reconcile(db):
         else:
             continue
         if publication['variant']=='B' and publication['platform']=='wechat':
-            receipt = Path(package['video']).parent/'submissions'/f"wechat-{publication['id']}"/'submission_receipt.json'
+            recorded = Path(publication['evidence_path']) if publication.get('evidence_path') else None
+            receipt = ((recorded if recorded.is_dir() else recorded.parent)/'submission_receipt.json' if recorded
+                       else Path(package['video']).parent/'submissions'/f"wechat-{publication['id']}"/'submission_receipt.json')
             if receipt.is_file():
                 publication['identity_receipt'] = str(receipt)
         evidence = settings.default_output_dir/'wallstreet_ab'/str(publication['pair_id'])/'readback'/f"{publication['id']}-{int(now)}"
@@ -279,19 +319,36 @@ def submit_ready(db):
         if pub['platform']=='douyin' and not settings.enable_douyin_browser_publishing:
             continue
         package = json.loads(pub['package_json'])
-        evidence = Path(package['video']).parent/'submissions'/f"{pub['platform']}-{pub['id']}"
+        evidence = Path(package['video']).parent/'submissions'/f"{pub['platform']}-{pub['id']}"/f'attempt-{time.time_ns()}'
         try:
             lock = 'wechat_publish_priority.lock' if pub['platform']=='wechat' else 'douyin_submission.lock'
             with TaskLease(settings.default_output_dir/lock,stage='二创提交'):
                 validate_package(package)
+                product_decision = None
+                if pub['platform']=='wechat':
+                    source = db.get_video_by_youtube_id(pub['youtube_id'],slice_index=pub['slice_index'])
+                    if not source:
+                        raise ValueError('微信 B 缺少原视频商品上下文')
+                    context = dict(source, **video_product_context(settings.default_output_dir,source))
+                    # A 和 B 是两个发布实体：原视频受理状态不代表 B 已经提交。
+                    context.update(status=pub['state'],wallstreet_publication_id=pub['id'],variant='B')
+                    product_decision = freeze_task_product_decision(db,f"wallstreet:wechat:B:{pub['id']}",
+                        context,settings.wechat_product_policy_path)
+                    if not product_task_preflight(product_decision,settings.default_output_dir,
+                            product_artifacts_digest(Path(package['video']),Path(package['copy']),Path(package['cover'])),
+                            observation_generation=product_observation_generation(settings.wechat_product_policy_path)):
+                        continue
                 claim = db.claim_wallstreet_submission(pub['id'],package_sha256=payload_hash(package),
                     video_path=package['video'],asset_sha256=sha256(Path(package['video'])),evidence_path=str(evidence))
                 if not claim:
                     continue
                 try:
-                    code = run_command(command(pub,package,evidence,ticket=claim),evidence)
                     pub.update(claim)
-                    apply_readback(db,pub,evidence,code)
+                    if pub['platform']=='wechat':
+                        write_json(evidence/'attempt_claim.json', {key:claim[key] for key in
+                            ('id','attempt_token','attempt_count','package_sha256','asset_sha256','video_path','evidence_path')})
+                    code = run_command(command(pub,package,evidence,ticket=claim,product_decision=product_decision),evidence)
+                    apply_readback(db,pub,evidence,code,product_decision=product_decision)
                 except Exception as exc:
                     db.observe_wallstreet_publication(pub['id'],state='UNCERTAIN',attempt_token=claim['attempt_token'],
                         evidence_path=str(evidence/'uploader.log'),error=type(exc).__name__)
