@@ -600,7 +600,52 @@ def _management_product_observation(record: dict) -> dict:
         if value is None:
             return None
         return type(value).__name__
-    return {'state': 'UNVERIFIED', 'native_record_shape': shape(record)}
+    observed = {'state': 'UNVERIFIED', 'native_record_shape': shape(record)}
+    desc = record.get('desc')
+    product = desc.get('product') if isinstance(desc, dict) else None
+    # 已实读的 post_list 原生 desc.product，空对象明确表示没有商品。
+    # 缺字段/未知类型没有这种语义，不能按空值推断。
+    if isinstance(product, dict):
+        if product == {}:
+            observed.update(state='UNBOUND', actual_product_id=None, actual_title=None)
+        elif (isinstance(product.get('productId'), str) and product['productId'].strip()
+              and isinstance(product.get('title'), str) and product['title'].strip()):
+            observed.update(state='BOUND', actual_product_id=product['productId'], actual_title=product['title'])
+        observed['identity_source'] = 'POST_LIST_DESC_PRODUCT'
+    return observed
+
+
+def _compare_management_product_receipt(record: dict, identity_receipt: Path | None) -> dict:
+    """只比较同一原生作品的最终表单证据，缺证据或未知商品状态保持未核实。"""
+    observed = record.get('product_observation') or {}
+    result = {'state': 'UNVERIFIED', 'actual': observed}
+    if identity_receipt is None:
+        return result
+    try:
+        expected = json.loads(identity_receipt.read_text())
+        if not isinstance(expected, dict) or not isinstance(observed, dict):
+            return result
+        if (not expected.get('platform_post_id')
+                or expected.get('platform_post_id') not in {record.get('platform_post_id'), record.get('platform_export_id')}
+                or expected.get('product_identity_source') != 'FINAL_FORM_READBACK'):
+            return result
+        result['expected'] = {key: expected.get(key) for key in (
+            'product_id', 'product_title', 'product_binding_confirmed', 'product_unbound_confirmed')}
+        if observed.get('state') == 'BOUND':
+            matches = (expected.get('product_binding_confirmed') is True
+                       and expected.get('product_unbound_confirmed') is False
+                       and (expected.get('product_id'), expected.get('product_title')) ==
+                       (observed.get('actual_product_id'), observed.get('actual_title')))
+        elif observed.get('state') == 'UNBOUND':
+            matches = (expected.get('product_unbound_confirmed') is True
+                       and expected.get('product_binding_confirmed') is False
+                       and expected.get('product_id') is None and expected.get('product_title') is None)
+        else:
+            return result
+        result['state'] = 'MATCH' if matches else 'MISMATCH'
+        return result
+    except (OSError, ValueError, TypeError):
+        return result
 
 
 def _collect_management_cards_from_post_list_payload(payload: object) -> dict[str, dict[str, str]]:
@@ -1093,6 +1138,7 @@ def verify_management_publication_by_id(
                     "reason": reason,
                     "component_state": record.get("component_state"),
                     "product_observation": record.get("product_observation", {'state': 'UNVERIFIED'}),
+                    "product_verification": _compare_management_product_receipt(record, identity_receipt),
                     **_management_public_time(record, state),
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as exc:

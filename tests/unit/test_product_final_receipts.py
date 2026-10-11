@@ -168,3 +168,32 @@ def test_management_observation_preserves_identity_without_guessing_unbound():
     assert observation['native_record_shape']['desc']['goodsList'][0]==dict(productId='700007',productName='完整指定商品')
     assert 'do-not-save' not in json.dumps(observation)
     assert _management_product_observation(dict(desc={}))['state']=='UNVERIFIED'
+
+
+@pytest.mark.parametrize('product,state', [({},'UNBOUND'),({'productId':'700007','title':'完整指定商品'},'BOUND'),({'productId':'','title':''},'UNVERIFIED'),(None,'UNVERIFIED'),([], 'UNVERIFIED')])
+def test_native_product_readback_requires_explicit_platform_fields(product,state):
+    from scripts.wechat_uploader import _management_product_observation
+    result=_management_product_observation({'desc':{'product':product}})
+    assert result['state']==state
+    if state=='BOUND':assert (result['actual_product_id'],result['actual_title'])==('700007','完整指定商品')
+
+
+@pytest.mark.parametrize('bound', [True,False])
+@pytest.mark.parametrize('mutation', ['match','wrong_id','wrong_title','wrong_state','wrong_post','missing_source','missing_receipt','unknown_actual'])
+def test_platform_product_comparison_uses_exact_work_and_final_receipt(tmp_path,bound,mutation):
+    from scripts.wechat_uploader import _management_product_observation,_compare_management_product_receipt
+    actual=_management_product_observation(dict(desc=dict(product=dict(productId='700007',title='完整指定商品') if bound else {})))
+    record=dict(platform_post_id='native-current',product_observation=actual)
+    expected=dict(platform_post_id='native-current',product_identity_source='FINAL_FORM_READBACK',product_binding_confirmed=bound,
+        product_unbound_confirmed=not bound,product_id='700007' if bound else None,product_title='完整指定商品' if bound else None)
+    if mutation=='wrong_id':expected['product_id']='other'
+    if mutation=='wrong_title':expected['product_title']='不同版本'
+    if mutation=='wrong_state':expected['product_binding_confirmed']=not bound
+    if mutation=='wrong_post':expected['platform_post_id']='native-other'
+    if mutation=='missing_source':expected.pop('product_identity_source')
+    if mutation=='unknown_actual':record['product_observation']={'state':'UNVERIFIED'}
+    path=tmp_path/'receipt.json'
+    if mutation!='missing_receipt':path.write_text(json.dumps(expected))
+    result=_compare_management_product_receipt(record,path)
+    wanted='MATCH' if mutation=='match' else ('UNVERIFIED' if mutation in {'wrong_post','missing_source','missing_receipt','unknown_actual'} else 'MISMATCH')
+    assert result['state']==wanted
