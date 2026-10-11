@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from video_processing.core.wechat_product_policy import GROUP_LABELS, parse_product_policy
 from video_processing.utils.wechat_product_config import load_policy, policy_status, save_policy, PolicyConflict, decision_payload
 from video_processing.utils.wechat_product_context import video_product_context
-from video_processing.utils.wechat_product_catalog import catalog_view
+from video_processing.utils.wechat_product_catalog import catalog_view, prepare_import, import_catalog
 
 
 class SaveRequest(BaseModel):
@@ -26,6 +26,13 @@ class PreviewRequest(BaseModel):
     video_key: str | None = Field(default=None, max_length=120)
     context: dict = Field(default_factory=dict)
     product_alias: str | None = Field(default=None, max_length=100)
+
+
+class CatalogImportRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    content: str = Field(min_length=1, max_length=5_000_000)
+    expected_catalog_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+    expected_policy_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
 
 
 def create_product_settings_router(*, active: Path, status: Path, output: Path,
@@ -75,6 +82,32 @@ def create_product_settings_router(*, active: Path, status: Path, output: Path,
     @router.get('/api/product-settings/videos')
     def list_videos():
         return {'videos': videos(), 'limit': 100}
+
+    def catalog_operation(body: CatalogImportRequest, request: Request, *, apply: bool):
+        checked_origin(request)
+        try:
+            args = dict(expected_catalog_digest=body.expected_catalog_digest,
+                        expected_policy_digest=body.expected_policy_digest)
+            path = active.with_name('wechat_product_catalog.json')
+            if apply:
+                report = import_catalog(body.content, path, active, **args)
+                return dict(response_view(load_policy(active)), import_report=report)
+            _, report = prepare_import(body.content, path, active, **args)
+            return report
+        except PolicyConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except (ValueError, UnicodeError, RecursionError) as exc:
+            raise HTTPException(422, f'清单校验未通过：{exc}') from exc
+        except OSError as exc:
+            raise HTTPException(503, '清单操作未确认，请重新载入核对；不要重复替换文件。') from exc
+
+    @router.post('/api/product-settings/catalog/preview')
+    def preview_catalog(body: CatalogImportRequest, request: Request):
+        return catalog_operation(body, request, apply=False)
+
+    @router.post('/api/product-settings/catalog/import')
+    def apply_catalog(body: CatalogImportRequest, request: Request):
+        return catalog_operation(body, request, apply=True)
 
     @router.put('/api/product-settings')
     def save(body: SaveRequest, request: Request):

@@ -16,7 +16,17 @@
 <section aria-labelledby="catalog-heading"><h2 id="catalog-heading">后台商品清单</h2>
 <p id="catalog-state" role="status">正在读取商品清单…</p>
 <p id="catalog-time" class="hint"></p>
-<p class="hint">所有商品选择框共用此清单。库存为采集时的观测，当前是否可售需发布时核验；缺货商品仍可配置。重新载入只读取最近留存清单，不会连接平台实时同步。</p></section>
+<p class="hint">所有商品选择框共用此清单。库存为采集时的观测，当前是否可售需发布时核验；缺货商品仍可配置。重新载入只读取最近留存清单，不会连接平台实时同步。</p>
+<details><summary>更新商品清单</summary>
+<p>导入同一账号、同一次采集的完整商品清单。先校验并查看变更，确认后更新下拉框；现有类型匹配与默认商品保持不变。</p>
+<p class="hint">目前支持约定格式的 JSON 文件，尚未接入平台直接导出或实时同步。请使用可靠采集资料，勿用示例数据代替真实商品。文件中的分页、总数与账号声明不能替代平台核验。</p>
+<p><a href="/static/examples/wechat-product-catalog-v2.json" download>下载导入格式示例</a></p>
+<p class="hint">将示例占位内容替换为采集资料：account_id 是后台稳定账号标识；captured_at 为含时区的采集时间；total_pages、total_items 来自后台总数；pages 覆盖 1 到总页数。商品 ID 用字符串，title 保留完整名称，stock 为整数或 null（未知）。缺页、重复或名称冲突会拒绝导入。</p>
+<label for="catalog-file">商品清单文件（JSON，最多 5 MB）</label><input id="catalog-file" type="file" accept=".json,application/json" aria-describedby="catalog-import-feedback">
+<div class="actions"><button id="catalog-check" type="button" disabled>校验并预览</button><button id="catalog-apply" type="button" disabled>确认导入清单</button></div>
+<p id="catalog-import-feedback" role="status" aria-live="polite">选择文件后开始校验，不会立即更新清单。</p>
+<div id="catalog-import-preview"></div>
+</details></section>
 <form id="settings-form" novalidate>
 <fieldset id="editor" disabled><legend class="sr-only">商品选择规则</legend>
 <section><h2>视频类型</h2><p class="hint">识别顺序：英语世界 → 华尔街 → TED → AI → 其他。单条视频指定商品优先。</p>

@@ -158,3 +158,53 @@ def test_all_product_dropdowns_use_catalog_and_new_selection_persists(ui):
     path.write_text('{')
     page.locator('#reload').click();expect(page.locator('#catalog-state')).to_contain_text('商品清单读取失败')
     expect(page.locator('#english_world-0')).to_have_value('product_70001')
+
+
+def test_catalog_file_preview_import_and_error_keeps_current(ui):
+    from tests.unit.test_wechat_catalog_import import document
+    page,active,_,flags=ui
+    original=active.read_bytes()
+    doc=document(list(json.loads(original)['products'].values())+[dict(product_id='8880001',title='新导入目录图书')])
+    page.locator('summary').filter(has_text='更新商品清单').click()
+    page.locator('#catalog-file').set_input_files({'name':'catalog.json','mimeType':'application/json','buffer':json.dumps(doc).encode()})
+    page.locator('#catalog-check').click()
+    expect(page.locator('#catalog-import-feedback')).to_contain_text('文件完整性校验通过，尚未导入')
+    expect(page.locator('#catalog-import-preview')).to_contain_text('首次登记清单账号')
+    assert not active.with_name('wechat_product_catalog.json').exists()
+    page.locator('#catalog-apply').click()
+    expect(page.locator('#catalog-import-feedback')).to_contain_text('已导入 4 件商品')
+    expect(page.locator('#catalog-state')).to_contain_text('导入完整性校验通过（2 页），非平台实时核验')
+    for control in ('#default-product','#english_world-0','#ted-1','#manual','#rule-0'):
+        expect(page.locator(control+' option[value="product_8880001"]')).to_have_count(1)
+    assert active.read_bytes()==original
+    page.reload();expect(page.locator('#catalog-state')).to_contain_text('2 页')
+    page.locator('summary').filter(has_text='更新商品清单').click()
+    old=active.with_name('wechat_product_catalog.json').read_bytes();doc['pages'].pop()
+    page.locator('#catalog-file').set_input_files({'name':'broken.json','mimeType':'application/json','buffer':json.dumps(doc).encode()})
+    page.locator('#catalog-check').click()
+    expect(page.locator('#catalog-import-feedback')).to_contain_text('分页不完整')
+    expect(page.locator('#catalog-apply')).to_be_disabled()
+    assert active.with_name('wechat_product_catalog.json').read_bytes()==old
+    page.set_viewport_size({'width':390,'height':844})
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+
+
+def test_catalog_import_protects_unsaved_config_and_blocks_duplicate_submit(ui):
+    from tests.unit.test_wechat_catalog_import import document
+    page,active,_,flags=ui
+    doc=document(list(json.loads(active.read_text())['products'].values()))
+    page.locator('summary').filter(has_text='更新商品清单').click()
+    page.locator('#catalog-file').set_input_files({'name':'catalog.json','mimeType':'application/json','buffer':json.dumps(doc).encode()})
+    page.locator('#ted-0').select_option('finance')
+    page.locator('#catalog-check').click()
+    expect(page.locator('#catalog-import-feedback')).to_contain_text('有未保存修改')
+    expect(page.locator('#ted-0')).to_have_value('finance')
+    page.locator('#save').click();expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    page.locator('#catalog-check').click();expect(page.locator('#catalog-apply')).to_be_enabled()
+    flags['hold']=('POST','/api/product-settings/catalog/import')
+    page.locator('#catalog-apply').click();expect(page.locator('#catalog-apply')).to_be_disabled()
+    expect(page.locator('#save')).to_be_disabled()
+    page.locator('#catalog-apply').evaluate('(el)=>el.click()')
+    assert not active.with_name('wechat_product_catalog.json').exists()
+    flags['release']();expect(page.locator('#catalog-import-feedback')).to_contain_text('已导入 3 件商品')
+    expect(page.locator('#ted-0')).to_have_value('finance')

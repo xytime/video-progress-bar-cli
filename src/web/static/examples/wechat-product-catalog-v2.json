@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "account_id": "填写后台稳定账号标识，不要填写密码或令牌",
+  "captured_at": "填写真实采集时间，例如 2026-10-11T16:00:00+08:00",
+  "source": "填写资料来源和导出批次",
+  "total_pages": 1,
+  "total_items": 1,
+  "pages": [
+    {
+      "page": 1,
+      "items": [
+        {
+          "product_id": "填写后台显示的真实商品ID",
+          "title": "填写商品完整名称",
+          "shop": "填写店铺名称",
+          "price": "填写显示价格",
+          "stock": null
+        }
+      ]
+    }
+  ]
+}
