@@ -10,9 +10,21 @@ import pytest
 
 from video_processing.core.wechat_product_policy import (
     ProductCatalog, ProductIdentity, ProductLookup, ProductRole,
-    WALLSTREET_CHANNEL_ID, choose_product_role,
 )
 from video_processing.utils.wechat_product_selection import select_required_product
+
+
+from dataclasses import replace
+from pathlib import Path
+from video_processing.utils.wechat_product_config import load_policy
+
+WALLSTREET_CHANNEL_ID = "UCTK_cv-y88CScoudcXnS1Ew"
+
+
+def choose_product_role(**kwargs):
+    # 从正式配置验证规则；此文件的界面替身仍使用虚构目录。
+    policy = load_policy(Path(__file__).resolve().parents[2] / "config/wechat_products.json")
+    return replace(policy.decide(**kwargs), candidates=())
 
 
 # 明确为虚构 ID 和版本，不是用户账号的商品清单。
@@ -126,8 +138,9 @@ def test_catalog_rejects_incomplete_identity(identifier, title):
 def test_catalog_requires_default_and_unique_ids():
     with pytest.raises(ValueError):
         ProductCatalog({ProductRole.FINANCE: FINANCE})
+    ProductCatalog({ProductRole.FINANCE: DEFAULT, ProductRole.DEFAULT: DEFAULT})
     with pytest.raises(ValueError):
-        ProductCatalog({ProductRole.FINANCE: DEFAULT, ProductRole.DEFAULT: DEFAULT})
+        ProductCatalog({ProductRole.FINANCE: ProductIdentity(DEFAULT.product_id, "冲突版本"), ProductRole.DEFAULT: DEFAULT})
     with pytest.raises(ValueError):
         ProductCatalog({"default": DEFAULT})
 
@@ -332,3 +345,14 @@ def test_unknown_readback_is_not_assumed_empty_and_exception_is_redacted():
 def test_invalid_budget_is_rejected(seconds):
     with pytest.raises(ValueError):
         run(FakePicker((FINANCE,)), seconds=seconds)
+
+
+def test_cleanup_timeout_is_not_misreported_as_total_budget_exhausted():
+    picker = FakePicker([DEFAULT])
+    def timeout_clear(**kwargs):
+        picker.clock.now += 3
+        raise TimeoutError("synthetic cleanup timeout")
+    picker.cancel_and_clear = timeout_clear
+    result = run(picker)
+    assert result.reason == "PRODUCT_OPERATION_TIMEOUT"
+    assert result.attempts == 1 and result.elapsed_seconds == 3

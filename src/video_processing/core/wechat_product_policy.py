@@ -15,7 +15,6 @@ from types import MappingProxyType
 from typing import Mapping
 
 
-WALLSTREET_CHANNEL_ID = "UCTK_cv-y88CScoudcXnS1Ew"
 RULE_VERSION = "wechat-book-product-v1"
 
 
@@ -50,20 +49,12 @@ class ProductDecision:
     role: ProductRole
     reason: str
     rule_version: str = RULE_VERSION
+    config_digest: str = ""
+    candidates: tuple[ProductIdentity, ...] = ()
+    max_attempts: int = 2
+    timeout_seconds: float = 30
+    context: tuple[tuple[str, str | None], ...] = ()
 
-
-def choose_product_role(
-    *, category: str | None = None, source_channel_id: str | None = None,
-) -> ProductDecision:
-    """只用可信频道 ID 与单条明确分类；缺失、冲突及其他类别使用默认商品。"""
-    if source_channel_id == WALLSTREET_CHANNEL_ID:
-        return ProductDecision(ProductRole.FINANCE, "WALLSTREET_CHANNEL")
-    normalized = category.strip() if isinstance(category, str) else ""
-    if normalized == "财经":
-        return ProductDecision(ProductRole.FINANCE, "FINANCE_CATEGORY")
-    if normalized in {"资讯", "时事"}:
-        return ProductDecision(ProductRole.NEWS, "NEWS_CATEGORY")
-    return ProductDecision(ProductRole.DEFAULT, "OTHER_OR_UNKNOWN_CATEGORY")
 
 
 @dataclass(frozen=True)
@@ -79,9 +70,9 @@ class ProductCatalog:
         if any(not isinstance(role, ProductRole) or not isinstance(item, ProductIdentity)
                for role, item in entries.items()):
             raise ValueError("商品目录只能包含明确角色与商品身份")
-        ids = [item.product_id for item in entries.values()]
-        if len(set(ids)) != len(ids):
-            raise ValueError("不同图书角色不能复用同一商品 ID")
+        if any(a.product_id == b.product_id and a != b
+               for a in entries.values() for b in entries.values()):
+            raise ValueError("同一商品 ID 不能具有矛盾身份")
         object.__setattr__(self, "products", MappingProxyType(entries))
 
     def attempts(self, decision: ProductDecision) -> tuple[ProductIdentity, ProductIdentity]:
@@ -93,26 +84,141 @@ class ProductCatalog:
         return decision.role not in self.products
 
 
-# 真实账号已核实图书商品清单（经 2026-10-10 实机页面实测与 DOM 校验）
-VERIFIED_FINANCE_PRODUCT = ProductIdentity(
-    product_id="10000028955239",
-    title="股市趋势技术分析10版爱德华兹原书第10版金融投资策略股票入门基础知识指标价值投资书籍书新华文轩旗舰店正",
-)
-VERIFIED_NEWS_PRODUCT = ProductIdentity(
-    product_id="10000129752415",
-    title="维特根斯坦说逻辑与语言 (英)维特根斯坦著",
-)
-VERIFIED_DEFAULT_PRODUCT = ProductIdentity(
-    product_id="10001054866768",
-    title="思考快与慢 丹尼尔卡尼曼 噪声作者行为经济学诺贝尔经济学奖 快思考慢思考 社会科学经济学心理学",
-)
+@dataclass(frozen=True)
+class ProductEntry:
+    identity: ProductIdentity
+    enabled: bool
+    verified_at: str
+    verified_source: str
 
 
-def get_verified_product_catalog() -> ProductCatalog:
-    """返回基于账号实测真实上架商品的不可变目录。"""
-    return ProductCatalog({
-        ProductRole.FINANCE: VERIFIED_FINANCE_PRODUCT,
-        ProductRole.NEWS: VERIFIED_NEWS_PRODUCT,
-        ProductRole.DEFAULT: VERIFIED_DEFAULT_PRODUCT,
-    })
+@dataclass(frozen=True)
+class ProductRule:
+    rule_id: str
+    kind: str
+    values: tuple[str, ...]
+    candidates: tuple[str, ...]
+    role: ProductRole = ProductRole.DEFAULT
 
+
+@dataclass(frozen=True)
+class ProductPolicy:
+    """不可变策略快照；规则来自配置，不在领域层内置商品或频道特例。"""
+
+    version: str
+    digest: str
+    products: Mapping[str, ProductEntry]
+    rules: tuple[ProductRule, ...]
+    defaults: tuple[str, ...]
+    timeout_seconds: float
+    max_attempts: int
+    serialized: str
+
+    def chain(self, aliases: tuple[str, ...]) -> tuple[ProductIdentity, ...]:
+        result = []
+        for alias in (*aliases, *self.defaults):
+            entry = self.products.get(alias)
+            if entry is None or not entry.enabled:
+                raise ValueError(f"商品不存在或已停用: {alias}")
+            if entry.identity not in result:
+                result.append(entry.identity)
+        if len(result) > self.max_attempts:
+            raise ValueError("候选链超过尝试上限，默认回退不可达")
+        return tuple(result)
+
+    def decide(self, *, category: str | None = None, source_channel_id: str | None = None,
+               product_alias: str | None = None) -> ProductDecision:
+        context = (("category", category), ("source_channel_id", source_channel_id),
+                   ("product_alias", product_alias))
+        role, rule_id, aliases = ProductRole.DEFAULT, "DEFAULT", ()
+        if product_alias is not None:
+            rule_id, aliases = "MANUAL", (product_alias,)
+        else:
+            for kind, value in (("channel", source_channel_id), ("category", category)):
+                normalized = value.strip() if isinstance(value, str) else ""
+                match = next((r for r in self.rules if r.kind == kind and normalized in r.values), None)
+                if match:
+                    role, rule_id, aliases = match.role, match.rule_id, match.candidates
+                    break
+        return ProductDecision(role, rule_id, self.version, self.digest, self.chain(aliases),
+                               self.max_attempts, self.timeout_seconds, context)
+
+
+def parse_product_policy(data: dict) -> ProductPolicy:
+    """校验全部引用/冲突/预算后生成内容摘要；非法更新不能成为有效策略。"""
+    import hashlib
+    import json
+    import math
+    from datetime import datetime
+
+    def obj(value, allowed, required):
+        if not isinstance(value, dict) or set(value) - set(allowed) or not set(required) <= set(value):
+            raise ValueError("配置字段缺失、类型错误或含未知字段")
+
+    def string(value):
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            raise ValueError("配置字符串必须非空且无首尾空白")
+        return value
+
+    def strings(value):
+        if not isinstance(value, list) or not value:
+            raise ValueError("候选/条件列表不能为空")
+        values = tuple(string(v) for v in value)
+        if len(values) != len(set(values)):
+            raise ValueError("列表包含重复项")
+        return values
+
+    fields = {"schema_version", "version", "products", "rules", "default_candidates", "timeout_seconds", "max_attempts"}
+    obj(data, fields, fields)
+    if type(data['schema_version']) is not int or data['schema_version'] != 1:
+        raise ValueError("不支持的 schema_version")
+    version = string(data['version'])
+    seconds, attempts = data['timeout_seconds'], data['max_attempts']
+    if type(seconds) not in (int, float) or not 0 < seconds <= 60 or not math.isfinite(seconds):
+        raise ValueError("总预算必须在 0–60 秒之间")
+    if type(attempts) is not int or not 1 <= attempts <= 3:
+        raise ValueError("尝试次数必须为 1–3")
+    if not isinstance(data['products'], dict) or not data['products']:
+        raise ValueError("商品目录不能为空")
+    products, identities = {}, {}
+    for alias, item in data['products'].items():
+        string(alias)
+        fields = {"product_id", "title", "enabled", "verified_at", "verified_source"}
+        obj(item, fields, fields)
+        identity = ProductIdentity(item['product_id'], item['title'])
+        if type(item['enabled']) is not bool:
+            raise ValueError("enabled 必须是布尔值")
+        datetime.fromisoformat(string(item['verified_at']))
+        source = string(item['verified_source'])
+        if identity.product_id in identities and identities[identity.product_id] != identity:
+            raise ValueError("同一 ID 存在矛盾身份")
+        identities[identity.product_id] = identity
+        products[alias] = ProductEntry(identity, item['enabled'], item['verified_at'], source)
+    if not isinstance(data['rules'], list):
+        raise ValueError("rules 必须为列表")
+    rules, ids, conditions = [], set(), set()
+    for item in data['rules']:
+        obj(item, {'id','kind','values','candidates','role'}, {'id','kind','values','candidates'})
+        rule_id, kind = string(item['id']), string(item['kind'])
+        if rule_id in ids or rule_id in {'DEFAULT','MANUAL'} or kind not in {'channel','category'}:
+            raise ValueError("规则 ID 重复、保留或规则类型非法")
+        values = strings(item['values'])
+        for value in values:
+            if (kind, value) in conditions:
+                raise ValueError("同优先级规则条件冲突")
+            conditions.add((kind, value))
+        ids.add(rule_id)
+        rules.append(ProductRule(rule_id, kind, values, strings(item['candidates']),
+                                 ProductRole(item.get('role', 'default'))))
+    serialized = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    policy = ProductPolicy(version, hashlib.sha256(serialized.encode()).hexdigest(),
+                           MappingProxyType(products), tuple(rules), strings(data['default_candidates']),
+                           float(seconds), attempts, serialized)
+    policy.chain(())
+    for rule in rules:
+        policy.chain(rule.candidates)
+    # 目录中的每个启用商品都可人工指定，默认回退必须同样可达。
+    for alias, entry in products.items():
+        if entry.enabled:
+            policy.chain((alias,))
+    return policy

@@ -138,9 +138,8 @@ from video_processing.core.wechat_upload_recovery import (
     PRE_SUBMIT_UPLOAD_TIMEOUT, write_timeout_receipt,
 )
 from video_processing.core.wechat_browser_context import create_wechat_context
-from video_processing.core.wechat_product_policy import (
-    choose_product_role,
-    get_verified_product_catalog,
+from video_processing.utils.wechat_product_config import (
+    load_policy, decision_payload, record_adoption,
 )
 from video_processing.utils.wechat_product_picker import PlaywrightProductPicker
 from video_processing.utils.wechat_product_selection import (
@@ -304,6 +303,9 @@ def _write_product_selection_receipt(
         "fallback_reason": result.fallback_reason if result else None,
         "attempts": result.attempts if result else 0,
         "elapsed_seconds": result.elapsed_seconds if result else 0.0,
+        "attempt_records": list(result.attempt_records) if result else [],
+        "policy": decision_payload(result.decision) if result else None,
+        "binding_identity_source": "FORM_DOM_ACTUAL_ID_AND_TITLE" if result and result.actual else None,
     }
     try:
         evidence_root.mkdir(parents=True, exist_ok=True)
@@ -712,8 +714,14 @@ def resolve_submission_platform_identity_after_publish(
     return None
 
 
-def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> None:
+def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str],
+                              *, product_result: ProductSelectionResult | None = None) -> None:
     """原子写入提交绑定回执，供管线只按平台原生 ID 维护账本。"""
+    if product_result is not None and product_result.binding_confirmed:
+        receipt = dict(receipt, product_config_digest=product_result.decision.config_digest,
+                       product_config_version=product_result.decision.rule_version,
+                       form_product_id=product_result.actual.product_id,
+                       form_product_title=product_result.actual.title)
     try:
         evidence_dir.mkdir(parents=True, exist_ok=True)
         receipt_path = evidence_dir / "submission_receipt.json"
@@ -2040,6 +2048,7 @@ def run_uploader(
     expected_title: str | None = None,
     identity_receipt: str | None = None,
     require_product: bool = False,
+    product_alias: str | None = None,
     source_channel_id: str | None = None,
     stop_before_submit: bool = False,
 ) -> int:
@@ -3324,47 +3333,6 @@ def run_uploader(
             browser.close()
             return 1
 
-        # ── 9.5. 商品挂载 (图书链接) ───────────────────────────────────────────────────
-        if settings.enable_wechat_product_link or require_product:
-            logger.info("Executing bounded WeChat product link selection...")
-            decision = choose_product_role(
-                category=category,
-                source_channel_id=source_channel_id,
-            )
-            catalog = get_verified_product_catalog()
-            picker = PlaywrightProductPicker(page, catalog)
-            timeout_sec = max(5.0, min(60.0, float(settings.wechat_product_timeout_seconds)))
-            product_result = select_required_product(
-                decision=decision,
-                catalog=catalog,
-                picker=picker,
-                timeout_seconds=timeout_sec,
-            )
-            _write_product_selection_receipt(
-                evidence_root,
-                required=True,
-                result=product_result,
-            )
-            if not product_result.binding_confirmed:
-                logger.error(
-                    f"Product link selection failed or binding unconfirmed: "
-                    f"state={product_result.state}, reason={product_result.reason}. "
-                    f"Refusing to publish without confirmed product link."
-                )
-                _capture_wechat_evidence(page, evidence_root, "product_binding_required_failed")
-                browser.close()
-                return 1
-            logger.info(
-                f"Product link binding confirmed: {product_result.actual.title} "
-                f"({product_result.actual.product_id}), role={product_result.decision.role.value}"
-            )
-            _capture_wechat_evidence(page, evidence_root, "product_binding_confirmed")
-        else:
-            _write_product_selection_receipt(
-                evidence_root,
-                required=False,
-            )
-
         # ── 10. 发表前清理残留遮罩 ───────────────────────────────────────────────
         # [Claude_Sonnet_4.6_Thinking_planning] v2.0.0 bugfix:
         # 合集创建流程可能留下未关闭的 .weui-desktop-dialog__wrp，会拦截「发表」按钮点击
@@ -3400,6 +3368,42 @@ def run_uploader(
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             if not submitted_short_title:
                 logger.warning("Submitted short title could not be confirmed; keeping native identity unbound.")
+
+        # 每次选品只加载一次配置；后续候选和回执使用同一不可变快照。
+        if not (settings.enable_wechat_product_link or require_product):
+            _write_product_selection_receipt(evidence_root, required=True, error="PRODUCT_LINK_DISABLED")
+            logger.error("Product selection is disabled; refusing an empty product submission.")
+            browser.close()
+            return 1
+        try:
+            policy = load_policy(settings.wechat_product_policy_path)
+            decision = policy.decide(category=category, source_channel_id=source_channel_id, product_alias=product_alias)
+            record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path, phase="STARTED")
+        except (ValueError, OSError) as exc:
+            _write_product_selection_receipt(evidence_root, required=True, error="PRODUCT_CONFIG_INVALID:" + type(exc).__name__)
+            logger.error("Product policy could not be loaded or recorded; refusing submission.")
+            browser.close()
+            return 1
+        picker = PlaywrightProductPicker(page)
+        product_result = select_required_product(
+            decision=decision, picker=picker, timeout_seconds=decision.timeout_seconds,
+        )
+        _write_product_selection_receipt(evidence_root, required=True, result=product_result)
+        try:
+            record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path,
+                            phase=product_result.state, result=product_result)
+        except OSError:
+            logger.error("Could not persist product policy adoption evidence; refusing submission.")
+            browser.close()
+            return 1
+        if not product_result.binding_confirmed:
+            logger.error("Product binding failed: %s; refusing submission.", product_result.reason)
+            _capture_wechat_evidence(page, evidence_root, "product_binding_required_failed")
+            browser.close()
+            return 1
+        logger.info("Product binding confirmed: %s (%s), policy=%s", product_result.actual.title,
+                    product_result.actual.product_id, decision.rule_version)
+        _capture_wechat_evidence(page, evidence_root, "product_binding_confirmed")
 
         if stop_before_submit:
             logger.info("STOP_BEFORE_SUBMIT active: Form and product binding verified; stopping immediately before publish/draft as requested.")
@@ -3451,7 +3455,7 @@ def run_uploader(
                       expected_description=copy_text,
                   )
                   if receipt:
-                      _write_submission_receipt(evidence_root, receipt)
+                      _write_submission_receipt(evidence_root, receipt, product_result=product_result)
                       logger.info(
                           "Captured exact WeChat platform post identity for this submission: %s",
                           receipt["platform_post_id"],
@@ -3463,6 +3467,7 @@ def run_uploader(
                               "matched_by": "unbound",
                               "reason": "No unique before/after platform-ID delta with exact title or description",
                           },
+                          product_result=product_result,
                       )
         except Exception:
             page_content = page.content()  # 未跳转 → 取页面文本走降级判据
@@ -3513,6 +3518,7 @@ def main():
         "--require-original-declaration", action="store_true",
         help="原创声明必须由界面确认；否则停止在发表前",
     )
+    parser.add_argument("--product-alias", help="本条视频优先商品别名；仍遵守配置的默认回退")
     parser.add_argument(
         "--require-product", action="store_true",
         help="商品挂载必须由界面确认；否则停止在发表前",
@@ -3556,6 +3562,7 @@ def main():
             identity_receipt = args.identity_receipt,
             expected_title = args.expected_title,
             require_product = args.require_product,
+            product_alias = args.product_alias,
             source_channel_id = args.source_channel_id,
             stop_before_submit = args.stop_before_submit,
         )

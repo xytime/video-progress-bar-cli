@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "version": "books-2026-10-11-v1",
+  "products": {
+    "finance": {
+      "product_id": "10000028955239",
+      "title": "股市趋势技术分析10版爱德华兹原书第10版金融投资策略股票入门基础知识指标价值投资书籍书新华文轩旗舰店正",
+      "enabled": true,
+      "verified_at": "2026-10-10",
+      "verified_source": "docs/handoffs/2026-10-10-wechat-product-link/STATUS.md"
+    },
+    "news": {
+      "product_id": "10000129752415",
+      "title": "维特根斯坦说逻辑与语言 (英)维特根斯坦著",
+      "enabled": true,
+      "verified_at": "2026-10-10",
+      "verified_source": "docs/handoffs/2026-10-10-wechat-product-link/STATUS.md"
+    },
+    "default": {
+      "product_id": "10001054866768",
+      "title": "思考快与慢 丹尼尔卡尼曼 噪声作者行为经济学诺贝尔经济学奖 快思考慢思考 社会科学经济学心理学",
+      "enabled": true,
+      "verified_at": "2026-10-10",
+      "verified_source": "docs/handoffs/2026-10-10-wechat-product-link/STATUS.md"
+    }
+  },
+  "rules": [
+    {
+      "id": "wallstreet",
+      "kind": "channel",
+      "values": [
+        "UCTK_cv-y88CScoudcXnS1Ew"
+      ],
+      "candidates": [
+        "finance"
+      ],
+      "role": "finance"
+    },
+    {
+      "id": "finance",
+      "kind": "category",
+      "values": [
+        "财经"
+      ],
+      "candidates": [
+        "finance"
+      ],
+      "role": "finance"
+    },
+    {
+      "id": "news",
+      "kind": "category",
+      "values": [
+        "新闻",
+        "资讯",
+        "时事"
+      ],
+      "candidates": [
+        "news"
+      ],
+      "role": "news"
+    }
+  ],
+  "default_candidates": [
+    "default"
+  ],
+  "timeout_seconds": 30,
+  "max_attempts": 2
+}
