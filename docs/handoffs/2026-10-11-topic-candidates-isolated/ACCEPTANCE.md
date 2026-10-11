@@ -4,7 +4,7 @@
 
 **结论：确认范围已实现，隔离验收通过；生产搜索未开放。** 工作仅在独立工作区与沙盒测试根进行，没有改生产配置、重启后台或进行真实 API 搜索。收藏只保存选题意向，候选不会进入制作/发布流水线。
 
-确认依据：[唯一规格 v0.2](../../specs/topic-keyword-tracking-architecture.md)。分支 `codex/topic-candidate-workbench`，开发基线 `eb7b7fa34237c549bcc348c562de024d205c16dd`。本报告属于隔离交付；生产运行采用、真实配额与真实响应仍待后续开放阶段核实。
+确认依据：[唯一规格 v0.2](../../specs/topic-keyword-tracking-architecture.md)。分支 `codex/topic-candidate-workbench`，开发基线 `eb7b7fa34237c549bcc348c562de024d205c16dd`，实现提交 `46b4081`（后续提交仅补交付记录）。本报告属于隔离交付；生产运行采用、真实配额与真实响应仍待后续开放阶段核实。
 
 ## 已交付行为
 
@@ -31,7 +31,7 @@
 
 最终批次使用 Chromium 148.0.7778.96 / revision 1223，实际浏览器与 FastAPI、临时真实 SQLite 联动。YouTube 响应由内存适配器或 httpx.MockTransport 提供，未发真实网络请求；SQL、唯一键、回滚、锁与预算均使用真实临时 SQLite。跨进程测试使用沙盒内子进程。
 
-两条最终 warnings 来自原后台的 FastAPI `on_event` 弃用提示。隔离探针日志还保留既有 `.pth` 启动诊断；探针实际结果及 pytest 均成功。静态 UI 严格检查整项目仍返回 exit 1：原 `index.html` 的两条 actionless-button 报告在基线中已存在，本次只因增加导航而行号 +1，未宣称整项目零问题。未扩大本次范围重做旧页面。
+两条最终 warnings 来自原后台的 FastAPI `on_event` 弃用提示。隔离探针日志还保留既有 `.pth` 启动诊断；探针实际结果及 pytest 均成功。原始日志逐字归档，保留 pytest 自带的尾部空白，由证据目录局部 Git 属性排除空白检查。静态 UI 严格检查整项目仍返回 exit 1：原 `index.html` 的两条 actionless-button 报告在基线中已存在，本次只因增加导航而行号 +1，未宣称整项目零问题。未扩大本次范围重做旧页面。
 
 ## A01–A21 对照
 
