@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| topic-candidates-v1 | 2026-10-11 | Codex | 挂载本机候选独立路由，生产搜索默认关闭；不接入主流水线。 |
 | ted-cleanup-v1 | 2026-10-10 | Codex | 统计 API 回读当前进程的原片清理开关及配方，用于运行采用核验。 |
 | 3.55.0 | 2026-10-08 | Antigravity | /api/trending-keywords 与 /refresh 增加异常防崩与静态兜底降级包装 |
 | 3.54.0 | 2026-09-28 | Antigravity | /api/wechat/status 基于结构化验证事实判断登录有效性；自动重登与登录恢复绑定本次成功授权时间戳 |
@@ -188,6 +189,17 @@ app.include_router(create_product_settings_router(
     publisher_connected=True, production_lookup=db.get_product_production, decision_lookup=db.get_product_task_decision,
     legacy_lookup=db.is_legacy_product_review,
 ))
+
+from web.topic_candidates import create_topic_candidates_router
+
+
+def _create_topic_tracker():
+    from video_processing.topic_tracker.service import TopicTracker
+    from video_processing.utils.topic_search import ExistingTopicRules, YouTubeTopicSearch
+    return TopicTracker(db, settings, YouTubeTopicSearch(settings), ExistingTopicRules())
+
+
+app.include_router(create_topic_candidates_router(_create_topic_tracker, port=settings.dashboard_port))
 _wechat_login_thread: Optional[threading.Thread] = None
 _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
 

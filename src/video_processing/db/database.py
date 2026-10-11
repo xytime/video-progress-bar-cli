@@ -198,6 +198,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Collection, List, Dict, Any, Optional, Sequence
 from .wallstreet_experiment import WallstreetExperimentDAL
+from .topic_candidates import TopicCandidateDAL
 
 from config.settings import settings
 from ..content_types import CONTENT_TYPE_GENERAL, normalize_content_type
@@ -207,7 +208,7 @@ from ..scoring import CHANNEL_SCORE_CAPS, TED_AUTO_PUBLISH_CHANNEL_IDS, cap_chan
 MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 
-class PipelineDB(WallstreetExperimentDAL):
+class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
     """视频管线数据访问层。
 
     所有 SQL 操作必须通过此类的方法执行。

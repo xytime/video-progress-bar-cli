@@ -1,0 +1,32 @@
+{
+  "base_commit": "eb7b7fa34237c549bcc348c562de024d205c16dd",
+  "source_manifest_sha256": "1eba29a7a59775b69e27d38fea960343289efc5dacafcfaefd0b360cd806afac",
+  "files": {
+    ".env.example": "faa2b7a99e84aaee9121c516e83aaa3775c6442b18b6a966b908950f507972a6",
+    "src/config/settings.py": "387a80a4ce3c94b26b1a9bd7d00b421a3ccceb08c5563aea9df1f8743dca6b1a",
+    "src/video_processing/core/topic_candidates.py": "b97a1e8d0ffe818ced0f641f391d3183db2b9ec7b67b9d83f924513b500c7e0d",
+    "src/video_processing/db/database.py": "31d541c704bc7902cff9b428060aa5e66ab54f5fae7c38ea1eb09416bb4baaab",
+    "src/video_processing/db/topic_candidates.py": "137d3095d05cc9b451c90d4fc0b98afa2103559f4f1ce29be1d2f5bb91097ffa",
+    "src/video_processing/topic_tracker/__init__.py": "e7e411d91a3623705c95984bca58e4f76d51616618a5efb53b775d24986121f7",
+    "src/video_processing/topic_tracker/service.py": "378756ae114b8664ddd7408a11e79f03abe3b1e2014b1b32a651176442864b63",
+    "src/video_processing/utils/topic_search.py": "09590dad26ec75c62487cf5998f9a32d9117903f4f26d757bded2248629c4999",
+    "src/web/app.py": "6ca6de5ef217419372d7b405b9a891e042d2d6ef8be6e64a81f87c194eab9f31",
+    "src/web/static/css/topic_candidates.css": "5820fb6b81c707d50c3b11b33dde5cde3ebf054cb78660224b2b1d247dbc5940",
+    "src/web/static/js/topic_candidates.js": "1384b6c3d84398e4099ef1a0717e8e867e7c371dcc7f5d547cdf3e11ef689e4d",
+    "src/web/static/js/topic_display_preferences.js": "150b3100aa33e30486f39030c83f11fcb8c5fe65686f91b26c15c8d467626049",
+    "src/web/templates/index.html": "964a595b8b3d580265460af91b70f3b0e782c97e6d2e71be5c43d60bb51c3105",
+    "src/web/templates/topic_candidates.html": "bd3df081d6460beb0f55dbd0164139d2c789cc4607627f39db0240831cfbe538",
+    "src/web/topic_candidates.py": "d9fd2d7825048d34bd34c478d1ea7e57d7d16503741aa57f0f995c827b2d76d3",
+    "tests/browser/test_topic_candidates_browser.py": "5af515f058b19253bfbe5238e37d4705eeb1d2f3c11e12932f2b46b4a2215689",
+    "tests/topic_candidate_fixtures.py": "31a52c94eeab431f13ba41de9457f13ccb513b71acc3d4c13bc1cb652aaca387",
+    "tests/unit/test_topic_candidates.py": "46d97084ec861bbc6f33ad034407e176109d03c27c0e9a9f32be407237cd922d",
+    "tests/unit/test_topic_candidates_api.py": "7276cfc42705405b2a10bcbf4e683c37f64c356aa6aaab2dbd797cc8182b67d6",
+    "tests/unit/test_topic_candidates_edges.py": "34e801eae7070984b17863973c350a68470790574b1c6c095cb67c95caca2508",
+    "tests/unit/test_topic_search_adapter.py": "0a8c5954e921e49c11d1d9e460fac905a1de2ff4b85ef92aad8d143a99a952be"
+  },
+  "design_documents_linted_in_workspace": {
+    "DESIGN.md": "6b2675e260b1f8b4cfc2ac50c38820d0dc81f40dc2c372917cbd57e90b0d4666",
+    "UX-CONTRACT.md": "53de05320419310d35b87c5a278e2f0650c8a2b71993c9796a0baea30e654c2e",
+    "premium-ui.json": "1d168a887e1940ebcad5879bc684314d79a3d99bbc5f1550f5158af7e1da8966"
+  }
+}

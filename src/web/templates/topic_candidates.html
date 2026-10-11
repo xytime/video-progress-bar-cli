@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- Modification History: 1.0.0 | 2026-10-11 | Codex | v0.2 本机候选工作台，无制作或发布操作。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="topic-csrf" content="__TOPIC_CSRF__"><title>关键词追踪 · 视频控制台</title>
+<script src="/static/js/topic_display_preferences.js?v=1"></script>
+<link rel="stylesheet" href="/static/css/dashboard.css"><link rel="stylesheet" href="/static/css/product_settings.css?v=20261011-redesign">
+<link rel="stylesheet" href="/static/css/topic_candidates.css?v=1"><script defer src="/static/js/topic_candidates.js?v=1"></script>
+</head><body><main class="product-settings topic-workbench">
+<nav class="breadcrumbs" aria-label="当前位置"><a href="/">视频控制台</a><span aria-hidden="true"> / </span><span aria-current="page">关键词追踪</span></nav>
+<header class="page-header"><div><h1>关键词追踪</h1><p class="hint">搜索近期视频，收藏选题意向。</p></div><div class="header-actions"><button disabled id="reload" type="button">重新载入</button><button id="new-topic" class="primary" type="button" disabled>新建专题</button></div></header>
+<div class="status-banner"><div><p id="mode-state" role="status">正在读取运行状态…</p><p id="budget" class="hint"></p></div><button id="mode-button" type="button" disabled>开启手动搜索</button></div>
+<p id="feedback" role="status" aria-live="polite"></p>
+<section aria-labelledby="topics-heading"><div class="section-head"><h2 id="topics-heading">专题</h2><span class="hint">最多 10 个有效专题；保存后不会自动搜索。</span></div><div id="topics" aria-busy="true"><p>正在载入专题…</p></div></section>
+<section aria-labelledby="pool-heading"><div class="section-head"><h2 id="pool-heading">候选池</h2><span class="hint">收藏仅保存选题意向。</span></div>
+<form id="filters" class="candidate-filters" novalidate>
+<div><label for="topic-filter">专题</label><select id="topic-filter"><option value="">全部专题</option></select></div>
+<div><label for="state-filter">整理状态</label><select id="state-filter"><option value="">全部</option><option value="NEW">未整理</option><option value="SAVED">收藏</option><option value="REJECTED">排除</option></select></div>
+<div><label for="eligibility-filter">规则状态</label><select id="eligibility-filter"><option value="">全部</option><option value="CHECKABLE">可人工核实</option><option value="INCOMPLETE">资料不足</option><option value="RESTRICTED">规则受限</option><option value="UNAVAILABLE">不可用</option></select></div>
+<div class="candidate-search"><label for="candidate-query">标题或频道</label><input id="candidate-query" type="search" maxlength="120" placeholder="搜索已有候选"><button disabled id="clear-query" type="button" aria-label="清空候选搜索">清空</button></div>
+</form>
+<div id="candidates" aria-busy="true"><p>正在载入候选…</p></div><div class="candidate-pagination"><p id="candidate-range" class="hint"></p><div><button id="previous" type="button" disabled>上一页</button><button id="next" type="button" disabled>下一页</button></div></div></section>
+<section aria-labelledby="jobs-heading"><h2 id="jobs-heading">最近搜索</h2><div id="jobs"></div><details><summary id="audit-open">操作记录</summary><div id="audit-records"></div></details></section>
+<dialog id="topic-editor" aria-labelledby="editor-title"><form id="topic-form" novalidate><div class="dialog-head"><h2 id="editor-title">新建专题</h2><button disabled id="editor-close" type="button" aria-label="关闭专题编辑">×</button></div><div class="dialog-body">
+<label for="topic-name">专题名称</label><input id="topic-name" type="text" maxlength="40" aria-describedby="name-error"><p id="name-error" class="field-error"></p>
+<label for="topic-query">查询词</label><input id="topic-query" type="text" maxlength="120" placeholder="例如 plague outbreak" aria-describedby="query-error"><p id="query-error" class="field-error"></p>
+<p class="hint">保留原查询，不自动扩词。可使用 YouTube 的 OR（|）与排除词（-）。</p>
+<label for="topic-category">类别</label><select id="topic-category"><option>宏观经济</option><option>科技产业</option><option>商业历史</option><option>健康科学</option><option>地缘战略</option></select>
+<label for="topic-lookback">发布时间范围</label><select id="topic-lookback"><option value="3">最近 3 天</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option></select>
+<label for="topic-days">有效天数</label><input id="topic-days" type="number" min="1" max="30" step="1" value="7" aria-describedby="days-error"><p id="days-error" class="field-error"></p>
+<p id="form-feedback" role="status"></p></div><div class="dialog-foot"><button disabled id="editor-cancel" type="button">返回专题列表</button><button id="topic-save" class="primary" type="submit">保存专题</button></div></form></dialog>
+<dialog id="action-dialog" aria-labelledby="action-title"><form id="action-form" novalidate><div class="dialog-head"><h2 id="action-title"></h2></div><div class="dialog-body"><p id="action-description"></p><div id="reason-field"><label for="reject-reason">排除原因</label><select id="reject-reason"><option>不相关</option><option>来源不可信</option><option>不适合受众</option><option>已重复</option><option>其他</option></select></div><div id="renew-field"><label for="renew-days">新有效期（天）</label><input id="renew-days" type="number" min="1" max="30" value="7"></div><p id="action-feedback" role="status"></p></div><div class="dialog-foot"><button disabled id="action-cancel" type="button">返回</button><button id="action-confirm" type="submit">确认</button></div></form></dialog>
+<dialog id="discard-dialog" aria-labelledby="discard-title"><h2 id="discard-title">有尚未保存的修改</h2><p>返回列表会丢弃当前表单修改。</p><div class="dialog-foot"><button disabled id="keep-editing" type="button" autofocus>继续编辑</button><button disabled id="discard-edit" type="button">丢弃修改并返回</button></div></dialog>
+</main></body></html>

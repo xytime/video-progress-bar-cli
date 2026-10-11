@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| topic-candidates-v1 | 2026-10-11 | Codex | 声明默认关闭的专题搜索及经核实项目预算；不自动开放生产。 |
 | ted-cleanup-v1 | 2026-10-10 | Codex | 增加原片首尾包装清理开关，生产核验后显式启用。 |
 | insight-v1.1 | 2026-10-08 | Antigravity | 修复沙盒环境无 HOME 变量时 Path.home() mach-lookup 拦截异常。 |
 | insight-v1.2 | 2026-10-09 | Codex | 完整 B 策划独立超时，不增加普通 A 预算。 |
@@ -345,6 +346,13 @@ class Settings(BaseSettings):
     # 留空时监控器自动退到公开 RSS，条目保持 METADATA_PENDING，绝不凭空自动发布。
     youtube_data_api_key: str = ""
     youtube_data_api_timeout_sec: int = 20
+
+    # 专题候选：本轮仅开发和隔离验收，生产搜索保持关闭。
+    topic_search_enabled: bool = False
+    topic_quota_verified: bool = False
+    topic_quota_project: str = ""
+    topic_search_daily_limit: int = Field(default=20, ge=1, le=20)
+    topic_general_daily_limit: int = Field(default=40, ge=1, le=40)
 
     # -------------------------------------------------------------------------
     # v7.0 Feature Flags — 新功能灰度开关 [Claude_Sonnet_4.6_Thinking_planning]
