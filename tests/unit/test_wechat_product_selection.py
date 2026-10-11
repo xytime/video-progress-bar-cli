@@ -138,7 +138,8 @@ def test_catalog_rejects_incomplete_identity(identifier, title):
 def test_catalog_requires_default_and_unique_ids():
     with pytest.raises(ValueError):
         ProductCatalog({ProductRole.FINANCE: FINANCE})
-    ProductCatalog({ProductRole.FINANCE: DEFAULT, ProductRole.DEFAULT: DEFAULT})
+    with pytest.raises(ValueError):
+        ProductCatalog({ProductRole.FINANCE: DEFAULT, ProductRole.DEFAULT: DEFAULT})
     with pytest.raises(ValueError):
         ProductCatalog({ProductRole.FINANCE: ProductIdentity(DEFAULT.product_id, "冲突版本"), ProductRole.DEFAULT: DEFAULT})
     with pytest.raises(ValueError):

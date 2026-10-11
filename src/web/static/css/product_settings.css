@@ -22,6 +22,8 @@
 .product-settings .profile-grid > div { min-width: 0; }
 .product-settings .hint, .product-settings .product-detail { color: var(--text2); font-size: 14px; }
 .product-settings .product-detail { overflow-wrap: anywhere; margin-top: 8px; min-height: 24px; }
+.product-settings #catalog-import-preview, .product-settings #catalog-time, .product-settings #catalog-import-feedback { overflow-wrap: anywhere; }
+.product-settings #catalog-import-preview ul { padding-left: 20px; }
 .product-settings .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 20px 0; }
 .product-settings #feedback { min-height: 54px; padding: 8px 0; overflow-wrap: anywhere; }
 .product-settings [data-error="true"] { color: var(--red); }

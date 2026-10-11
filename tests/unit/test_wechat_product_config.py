@@ -10,7 +10,7 @@ from video_processing.utils.wechat_product_selection import select_required_prod
 from tests.unit.test_wechat_product_selection import FakePicker
 from scripts import wechat_product_config as cli
 
-SEED = Path(__file__).resolve().parents[2] / 'config/wechat_products.json'
+SEED = Path(__file__).resolve().parents[2] / 'tests/fixtures/wechat_products_v2.json'
 
 @pytest.fixture
 def data():
@@ -153,3 +153,27 @@ def test_submission_receipt_links_native_id_to_frozen_policy(tmp_path):
     assert receipt['form_product_id']==result.actual.product_id
     assert receipt['platform_post_id']==native['platform_post_id']
     assert 'product_config_digest' not in native
+
+
+@pytest.mark.parametrize("context", [
+    {"content_type": "ENGLISH_WORLD_SHORT"},
+    {"source_channel_id": "UCTK_cv-y88CScoudcXnS1Ew"},
+    {"content_type": "TED"},
+    {"product_topic": "AI"},
+    {},
+])
+def test_all_profiles_accept_catalog_product_outside_legacy_three(context):
+    data = json.loads(SEED.read_text())
+    item = deepcopy(data["products"]["default"])
+    item.update(product_id="fictional-catalog-fourth", title="目录新增商品完整名称")
+    data["products"]["fourth"] = item
+    for profile in data["profiles"].values():
+        profile["candidates"] = ["fourth"]
+    data["default_candidates"] = ["fourth"]
+    policy = parse_product_policy(data)
+    decision = policy.decide(**context)
+    picker = FakePicker([policy.products["fourth"].identity])
+    result = select_required_product(decision=decision, picker=picker, clock=picker.clock)
+    assert result.binding_confirmed
+    assert result.actual == policy.products["fourth"].identity
+    assert result.decision.config_digest == policy.digest
