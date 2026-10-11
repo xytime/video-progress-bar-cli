@@ -6,12 +6,13 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-11 | Codex | 商品挂接改为可选；失败后在总预算内核实清空与就绪，允许无商品继续。 |
 | 1.0.0 | 2026-10-10 | Codex | 两次尝试共享总预算；身份冲突或绑定不明阻止发表；默认回退保留原因。 |
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from time import monotonic
 from typing import Callable, Protocol
@@ -61,6 +62,11 @@ class ProductSelectionResult:
     def binding_confirmed(self) -> bool:
         """只表示同次表单绑定；不能用来宣称平台受理或播放页可购买。"""
         return self.state == "BOUND" and self.actual is not None
+
+    @property
+    def submission_allowed(self) -> bool:
+        """商品阶段已完成；其他发布门禁仍须照常执行。"""
+        return self.binding_confirmed or (self.state == "UNBOUND" and self.actual is None)
 
 
 class _Deadline:
@@ -203,3 +209,52 @@ def select_required_product(
         return result("BLOCKED", "ADAPTER_ERROR:" + type(exc).__name__)
 
     return result("BLOCKED", "DEFAULT_PRODUCT_NOT_BOUND")
+
+
+def select_optional_product(
+    *, decision: ProductDecision, catalog: ProductCatalog | None = None,
+    picker: ProductPicker | None, timeout_seconds: float = 30,
+    clock: Callable[[], float] = monotonic,
+    selection_block_reason: str | None = None,
+) -> ProductSelectionResult:
+    """挂接失败后清空并核验表单；总预算预留 20% 用于恢复。
+
+    未核实候选不尝试选择；回执保留失败原因，无法确认清空仍为表单异常。
+    """
+    budget = _Deadline(timeout_seconds, clock)
+    if selection_block_reason:
+        requested = decision.candidates[0] if decision.candidates else catalog.attempts(decision)[0]
+        selected = ProductSelectionResult(
+            decision, requested, None, "BLOCKED", selection_block_reason, None, 0, 0,
+        )
+    else:
+        selected = select_required_product(
+            decision=decision, catalog=catalog, picker=picker,
+            timeout_seconds=timeout_seconds * 0.8, clock=clock,
+        )
+    if selected.binding_confirmed or picker is None:
+        return selected
+
+    def result(state: str, reason: str, actual: ProductIdentity | None = None):
+        return replace(selected, state=state, reason=reason, actual=actual,
+                       fallback_reason=selected.reason,
+                       elapsed_seconds=max(0.0, clock() - budget.started))
+
+    try:
+        if not picker.cancel_and_clear(timeout_ms=budget.remaining_ms()):
+            return result("BLOCKED", "CANNOT_CONFIRM_CLEARED")
+        actual = picker.read_binding(timeout_ms=budget.remaining_ms())
+        budget.remaining_ms()
+        if actual is not None:
+            return result("BLOCKED", "RESIDUAL_LINK_AFTER_CANCEL", actual)
+        if not picker.ready_to_submit(timeout_ms=budget.remaining_ms()):
+            return result("BLOCKED", "FORM_NOT_READY")
+        actual = picker.read_binding(timeout_ms=budget.remaining_ms())
+        budget.remaining_ms()
+        if actual is not None:
+            return result("BLOCKED", "BINDING_CHANGED_BEFORE_SUBMIT", actual)
+        return result("UNBOUND", "OPTIONAL_PRODUCT_NOT_BOUND")
+    except TimeoutError:
+        return result("BLOCKED", "PRODUCT_CLEANUP_BUDGET_EXHAUSTED")
+    except Exception as exc:
+        return result("BLOCKED", "PRODUCT_CLEANUP_ERROR:" + type(exc).__name__)

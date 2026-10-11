@@ -7,6 +7,7 @@ PipelineManager、不会扫描任何待处理项，也不会为失败/未确认�
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.20.0 | 2026-10-11 | Codex | 商品可选，接受同任务同版本的无商品清空回执，不把缺商品判为提交不明。 |
 | 1.19.0 | 2026-09-25 | Codex | 接受投稿器基于同次唯一新增 ID 与精确短标题或完整文案的绑定回执。 |
 | 1.18.0 | 2026-09-23 | Codex | 专属投稿改用微信发布互斥，不等待全局加工锁。 |
 | 1.17.0 | 2026-09-22 | Codex | 领取前校验失败持久化退出队列；不启动浏览器、不伪造提交尝试。 |
@@ -263,7 +264,7 @@ def _record_submission_result(
 
 
 def _product_receipt_is_confirmed(evidence_dir: Path, decision: dict) -> bool:
-    """只接受本次任务/版本的精确绑定，跳过任务也必须确认没有残留商品。"""
+    """接受本次任务/版本的精确绑定或明确核实无商品，禁止残留与伪造绑定。"""
     try:
         receipt = json.loads((evidence_dir / 'product_selection_receipt.json').read_text(encoding='utf-8'))
         if not isinstance(receipt, dict):
@@ -274,6 +275,9 @@ def _product_receipt_is_confirmed(evidence_dir: Path, decision: dict) -> bool:
                 or receipt.get('config_digest') != decision.get('config_digest')):
             return False
         if required:
+            if receipt.get('binding_required') is False and receipt.get('state') == 'UNBOUND':
+                return (receipt.get('binding_confirmed') is False and receipt.get('unbound_confirmed') is True
+                        and not receipt.get('actual_product_id') and not receipt.get('actual_title'))
             identities = {(item['product_id'], item['title']) for item in decision['product_decision']['candidates']}
             return (receipt.get('binding_confirmed') is True and receipt.get('unbound_confirmed') is False
                     and (receipt.get('actual_product_id'), receipt.get('actual_title')) in identities)

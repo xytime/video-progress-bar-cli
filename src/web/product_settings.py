@@ -83,7 +83,7 @@ def create_product_settings_router(*, active: Path, status: Path, output: Path,
             and last.get('publisher_capability') == PUBLISHER_CAPABILITY
             and last.get('config_digest') == policy.digest
             and ((last.get('phase') == 'BOUND' and last.get('binding_confirmed') is True)
-                 or (last.get('phase') == 'SKIPPED' and last.get('unbound_confirmed') is True)))
+                 or (last.get('phase') in {'SKIPPED', 'UNBOUND'} and last.get('unbound_confirmed') is True)))
         result['adopted_by_last_selection'] = result['runtime_adoption_verified']
         result['actual_binding_verified'] = bool(result['runtime_adoption_verified'] and last.get('binding_confirmed') is True)
         if not publisher_connected:

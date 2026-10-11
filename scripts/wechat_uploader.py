@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.20.0 | 2026-10-11 | Codex | 商品挂接失败且清空就绪时允许无商品继续，兼容旧参数和冻结任务。 |
 | 5.19.0 | 2026-10-10 | Antigravity | 接入有界图书商品挂载（财经/新闻/默认），仅当 binding_confirmed=True 时允许发表。 |
 | 5.18.0 | 2026-10-10 | Codex | 同会话回执保留 nonce；跨会话精确关联及公开日期与原生时间一致性校验。 |
 | 5.17.11 | 2026-10-03 | Codex | 原生组件 ID 绑定独立状态标签；唯一 exportId 直接关联才允许回查，兼容新版单项结构化短标题并保留脱敏身份证据。 |
@@ -145,7 +146,7 @@ from video_processing.core.wechat_product_policy import (
 from video_processing.utils.wechat_product_picker import PlaywrightProductPicker
 from video_processing.utils.wechat_product_selection import (
     ProductSelectionResult,
-    select_required_product,
+    select_optional_product,
 )
 
 try:
@@ -292,6 +293,8 @@ def _write_product_selection_receipt(
     payload = {
         "required": required,
         "binding_confirmed": bool(result.binding_confirmed) if result else False,
+        "binding_required": False,
+        "unbound_confirmed": bool(result and result.state == "UNBOUND"),
         "state": result.state if result else "BLOCKED",
         "reason": result.reason if result else (error or "UNKNOWN"),
         "rule_version": result.decision.rule_version if result else None,
@@ -727,6 +730,7 @@ def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> No
         if selection_path.exists():
             selection = json.loads(selection_path.read_text(encoding='utf-8'))
             receipt = dict(receipt, product_binding_confirmed=selection.get('binding_confirmed'),
+                           product_binding_required=selection.get('binding_required'),
                            product_unbound_confirmed=selection.get('unbound_confirmed'),
                            product_id=selection.get('actual_product_id'), product_title=selection.get('actual_title'))
         receipt_path = evidence_dir / "submission_receipt.json"
@@ -3368,17 +3372,17 @@ def run_uploader(
                     browser.close()
                     return 14 if task_product['require_product'] else 1
             elif settings.enable_wechat_product_link or require_product:
-                # 其他非本需求入口暂保留要求商品，但也必须用有效版本化配置及平台真实身份。
+                # 兼容旧入口：仍尝试挂接，失败后核实清空即可无商品继续。
                 from video_processing.utils.wechat_product_config import load_policy, record_adoption
                 policy = load_policy(settings.wechat_product_policy_path)
                 decision = policy.decide(category=category, source_channel_id=source_channel_id)
                 record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path, phase="STARTED")
-                product_result = select_required_product(decision=decision, picker=PlaywrightProductPicker(page),
+                product_result = select_optional_product(decision=decision, picker=PlaywrightProductPicker(page),
                                                          timeout_seconds=decision.timeout_seconds)
                 _write_product_selection_receipt(evidence_root, required=True, result=product_result)
                 record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path,
                                 phase=product_result.state, result=product_result)
-                if not product_result.binding_confirmed:
+                if not product_result.submission_allowed:
                     browser.close()
                     return 1
             else:
@@ -3552,7 +3556,7 @@ def main():
     parser.add_argument("--product-task-decision", help="冻结的商品任务契约；显式NONE覆盖旧开关")
     parser.add_argument(
         "--require-product", action="store_true",
-        help="商品挂载必须由界面确认；否则停止在发表前",
+        help="尝试挂接商品；失败且表单清空就绪时允许无商品继续",
     )
     parser.add_argument(
         "--source-channel-id", help="来源 YouTube 频道 ID，用于精确识别华尔街等垂直选品",

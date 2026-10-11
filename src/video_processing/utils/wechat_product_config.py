@@ -93,7 +93,8 @@ def record_adoption(policy: ProductPolicy, decision, evidence_dir: Path, status_
                        production=task_decision['production'], metrics=task_decision['metrics'],
                        publisher_capability=task_decision['publisher_capability'])
     if result is not None:
-        payload.update(binding_confirmed=result.binding_confirmed, reason=result.reason)
+        payload.update(binding_confirmed=result.binding_confirmed, reason=result.reason,
+                       unbound_confirmed=result.state == 'UNBOUND', binding_required=False)
     atomic_json(evidence_dir / 'product_policy_adoption.json', payload)
     atomic_json(status_path, payload)
 

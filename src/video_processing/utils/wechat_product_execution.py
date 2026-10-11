@@ -1,4 +1,10 @@
-"""发布器消费冻结商品任务：NONE 清空并核验；要求商品只在精确绑定后通过。"""
+"""发布器消费冻结商品任务：尝试挂接，失败且表单清空就绪时允许无商品继续。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-11 | Codex | 取消商品绑定硬门槛及商品可用性退避；保留提交去重、产物一致性与在途租约。 |
+"""
 from __future__ import annotations
 from pathlib import Path
 from time import monotonic
@@ -6,7 +12,7 @@ import time
 import hashlib
 from video_processing.utils.wechat_product_config import atomic_json, record_adoption
 from video_processing.utils.wechat_product_task import selection_from_task
-from video_processing.utils.wechat_product_selection import select_required_product, _Deadline
+from video_processing.utils.wechat_product_selection import select_optional_product, _Deadline
 from video_processing.utils.wechat_product_waits import ProductWaitStore
 
 
@@ -33,52 +39,30 @@ def product_wait_ready(payload: dict, output: Path, artifacts_digest: str, *, cl
     """只读退避检查；已有受理状态由外层原有领取/去重门禁处理。"""
     row = next((r for r in ProductWaitStore(output / 'wechat_product_waits.json').records()
                 if r['task_key'] == payload['task_id']), None)
-    if payload.get('selection_block_reason'):
-        return False
     if row is None:
         return True
-    if row['artifacts_digest'] != artifacts_digest or row['state'] in {'BLOCKED', 'VERIFY_SUBMISSION'}:
+    if row['artifacts_digest'] != artifacts_digest or row['state'] == 'VERIFY_SUBMISSION':
         return False
     if row['submission_state'] != 'NOT_SUBMITTED' or row['lease_until'] > clock():
         return False
-    if row['state'] == 'READY_FOR_EXISTING_GATES':
-        return True
-    if observation_generation and observation_generation != row.get('observed_generation'):
-        return True
-    if row['state'] == 'CHECK_LIMIT':
-        return False
-    return row['submission_state'] == 'NOT_SUBMITTED' and row['lease_until'] <= clock() and row['next_check_at'] <= clock()
+    # 用户取消挂不上商品就不发布；商品等待不再阻挡尚未提交的任务。
+    return True
 
 
 def product_task_preflight(payload: dict, output: Path, artifacts_digest: str, *,
                            observation_generation: str | None = None) -> bool:
-    """确定尚未开浏览器时记录身份阻断；不修改业务快照或替换人工商品。"""
-    reason = payload.get('selection_block_reason')
-    if reason:
-        store = ProductWaitStore(output / 'wechat_product_waits.json')
-        old = next((r for r in store.records() if r['task_key'] == payload['task_id']), None)
-        if old is None:
-            policy, _ = selection_from_task(payload)
-            import json
-            store.defer(payload['task_id'], reason=reason, config_digest=payload['config_digest'],
-                        artifacts_digest=artifacts_digest, submission_state='NOT_SUBMITTED',
-                        wait_policy=json.loads(policy.serialized).get('wait_policy'),
-                        observation_generation=observation_generation)
-        return False
+    """保留在途/已提交/产物保护；商品身份不可用在表单阶段无商品降级。"""
     return product_wait_ready(payload, output, artifacts_digest, observation_generation=observation_generation)
 
 
 def blocked_product_task_keys(output: Path, active: Path, *, clock=time.time) -> list[str]:
     """遍历整个等待账本后交给 DAL 在 LIMIT 前排除，避免队首等待饿死后续。"""
-    generation = product_observation_generation(active)
     blocked = []
     for row in ProductWaitStore(output / 'wechat_product_waits.json').records():
         if row['state'] == 'READY_FOR_EXISTING_GATES':
             continue
-        changed = generation != row.get('observed_generation')
-        if (row['submission_state'] != 'NOT_SUBMITTED' or row['state'] in {'BLOCKED', 'VERIFY_SUBMISSION'}
-                or row['lease_until'] > clock()
-                or (not changed and (row['state'] == 'CHECK_LIMIT' or row['next_check_at'] > clock()))):
+        if (row['submission_state'] != 'NOT_SUBMITTED' or row['state'] == 'VERIFY_SUBMISSION'
+                or row['lease_until'] > clock()):
             blocked.append(row['task_key'])
     return blocked
 
@@ -111,6 +95,10 @@ def verify_product_before_submit(payload: dict, picker) -> bool:
             return False
         if payload['require_product'] is False:
             return binding is None and picker.read_binding(timeout_ms=3000) is None
+        if payload['require_product'] is not True:
+            return False
+        if binding is None:
+            return picker.read_binding(timeout_ms=3000) is None
         _, decision = selection_from_task(payload)
         return binding in decision.candidates and picker.read_binding(timeout_ms=3000) == binding
     except Exception:
@@ -140,30 +128,13 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
     atomic_json(evidence_dir / 'product_task_decision.json', payload)
     if payload['require_product'] is True:
         policy, decision = selection_from_task(payload)
-        if payload.get('selection_block_reason'):
-            if wait_output is not None and artifacts_digest:
-                product_task_preflight(payload, wait_output, artifacts_digest, observation_generation=generation)
-            atomic_json(evidence_dir / 'product_selection_receipt.json', dict(required=True,
-                binding_confirmed=False, unbound_confirmed=False, state='BLOCKED', reason=payload['selection_block_reason'],
-                task_id=payload['task_id'], config_digest=payload['config_digest']))
-            return False
-        check = None
-        if wait_output is not None and artifacts_digest:
-            store = ProductWaitStore(wait_output / 'wechat_product_waits.json')
-            old = next((r for r in store.records() if r['task_key'] == payload['task_id']), None)
-            if old and old['state'] != 'READY_FOR_EXISTING_GATES':
-                check = store.claim_check(payload['task_id'], current_config_digest=payload['config_digest'],
-                                          current_artifacts_digest=artifacts_digest, observation_generation=generation)
-                if check is None:
-                    atomic_json(evidence_dir / 'product_selection_receipt.json', dict(required=True,
-                        binding_confirmed=False, unbound_confirmed=False, state='BLOCKED', reason='PRODUCT_WAIT_BACKOFF',
-                        task_id=payload['task_id'], config_digest=payload['config_digest']))
-                    atomic_json(evidence_dir / 'product_wait.json', dict(old, not_submitted=True))
-                    return False
         record_adoption(policy, decision, evidence_dir, status_path, phase='STARTED', task_decision=payload)
-        result = select_required_product(decision=decision, picker=picker,
-                                         timeout_seconds=decision.timeout_seconds, clock=clock)
-        receipt = dict(required=True, binding_confirmed=result.binding_confirmed, unbound_confirmed=False, state=result.state,
+        result = select_optional_product(decision=decision, picker=picker,
+                                         timeout_seconds=decision.timeout_seconds, clock=clock,
+                                         selection_block_reason=payload.get('selection_block_reason'))
+        # required 沿用冻结任务的挂接意图；binding_required 明确本次无强制绑定门槛。
+        receipt = dict(required=True, binding_required=False, binding_confirmed=result.binding_confirmed,
+                       unbound_confirmed=result.state == 'UNBOUND', state=result.state,
                        reason=result.reason, actual_product_id=result.actual.product_id if result.actual else None,
                        actual_title=result.actual.title if result.actual else None,
                        requested_product_id=result.requested.product_id, requested_title=result.requested.title,
@@ -173,12 +144,9 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
         atomic_json(evidence_dir / 'product_selection_receipt.json', receipt)
         record_adoption(policy, decision, evidence_dir, status_path, phase=result.state, result=result, task_decision=payload)
         if wait_output is not None and artifacts_digest:
-            if check:
-                reason = _wait_reason(result)
-                store.finish_check(payload['task_id'], check['lease_token'], available=result.binding_confirmed, reason=reason)
-            if not result.binding_confirmed:
+            if not result.submission_allowed:
                 _record_product_wait(payload, result, evidence_dir, wait_output, artifacts_digest, generation)
-        return result.binding_confirmed
+        return result.submission_allowed
     if payload['require_product'] is not False:
         raise ValueError('未知商品决定不能默认跳过')
     budget = _Deadline(10, clock)

@@ -1,4 +1,10 @@
-"""华尔街独立 B 在真实 DAL 中消费同一商品冻结、等待与停止重传契约。"""
+"""华尔街独立 B 在真实 DAL 中消费商品意图、可选挂接与停止重传契约。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-11 | Codex | 验证缺商品或停用后清空放行，并保留同次原生 ID 与禁止重传。 |
+"""
 import importlib.util
 import json
 from pathlib import Path
@@ -96,37 +102,31 @@ class UnavailablePicker:
     def ready_to_submit(self,**kwargs):return True
 
 
-def test_real_product_wait_skips_claim_and_does_not_block_next_b(setup,tmp_path,monkeypatch):
+def test_product_unavailable_submits_b_without_product_and_never_reuploads(setup,tmp_path,monkeypatch):
     module,db,active=setup
     first,package=ready(module,db,tmp_path,intent='PRODUCT')
     second,_=ready(module,db,tmp_path,yid='other______',intent='NONE',likes=9000)
     calls=[]
     def uploader(args,evidence):
+        from scripts.wechat_uploader import _write_submission_receipt
         decision=read_product_task_decision(Path(args[args.index('--product-task-decision')+1]));calls.append(decision)
-        if decision['require_product']:
-            decision['_observation_generation']=product_observation_generation(active)
-            assert not execute_product_task(decision,UnavailablePicker(),evidence,tmp_path/'product-status.json',
-                wait_output=tmp_path,artifacts_digest=product_artifacts_digest(Path(package['video']),Path(package['copy']),Path(package['cover'])))
-            return 14
-        module.write_json(evidence/'submission_receipt.json',accepted_receipt(decision));return 6
+        assert execute_product_task(decision,UnavailablePicker(),evidence,tmp_path/'product-status.json',
+            wait_output=tmp_path,artifacts_digest=product_artifacts_digest(Path(package['video']),Path(package['copy']),Path(package['cover'])))
+        _write_submission_receipt(evidence,accepted_receipt(decision))
+        actual=json.loads((evidence/'submission_receipt.json').read_text())
+        assert actual['product_unbound_confirmed'] and not actual['product_id']
+        return 6
     monkeypatch.setattr(module,'run_command',uploader)
     module.submit_ready(db)
     rows={p['id']:p for p in db.get_wallstreet_publications()}
-    assert rows[first['id']]['state']=='WAITING' and rows[first['id']]['attempt_count']==1
-    assert rows[first['id']]['attempt_token'] is None
+    assert rows[first['id']]['state']=='UNDER_REVIEW' and rows[first['id']]['attempt_count']==1
+    assert rows[first['id']]['attempt_token']  # 受理身份仍关联同次已领取的提交尝试。
     assert rows[second['id']]['state']=='UNDER_REVIEW' and len(calls)==2
     original=rows[first['id']]
     module.submit_ready(db)
     assert len(calls)==2 and db.get_wallstreet_publications()[0]==original
-    wait_path=tmp_path/'wechat_product_waits.json'
-    waits=json.loads(wait_path.read_text());row=waits['tasks'][f"wallstreet:wechat:B:{first['id']}"]
-    # 到期可以重新核验原冻结商品；不改配置/原意图来绕过等待。
-    row['next_check_at']=0;wait_path.write_text(json.dumps(waits))
-    module.submit_ready(db)
-    assert len(calls)==3 and calls[-1]['product_decision']==calls[0]['product_decision']
-    current=next(p for p in db.get_wallstreet_publications() if p['id']==first['id'])
-    assert current['state']=='WAITING' and current['attempt_count']==2
-    assert len(list((Path(package['video']).parent/'submissions'/f"wechat-{first['id']}").glob('attempt-*/attempt_claim.json')))==2
+    assert not (tmp_path/'wechat_product_waits.json').exists()
+    assert len(list((Path(package['video']).parent/'submissions'/f"wechat-{first['id']}").glob('attempt-*/attempt_claim.json')))==1
 
 
 @pytest.mark.parametrize('fault',[
@@ -196,7 +196,7 @@ def test_fourteen_without_not_submitted_proof_stops_retransmission(setup,tmp_pat
     assert len(calls)==1
 
 
-def test_disabled_manual_product_blocks_before_claim_and_next_none_runs(setup,tmp_path,monkeypatch):
+def test_disabled_manual_product_is_cleared_and_b_continues(setup,tmp_path,monkeypatch):
     module,db,active=setup
     first,_=ready(module,db,tmp_path,intent='PRODUCT')
     second,_=ready(module,db,tmp_path,yid='other______',intent='NONE')
@@ -212,17 +212,19 @@ def test_disabled_manual_product_blocks_before_claim_and_next_none_runs(setup,tm
     active.write_text(json.dumps(config))
     calls=[]
     def uploader(args,evidence):
+        from scripts.wechat_uploader import _write_submission_receipt
         decision=read_product_task_decision(Path(args[args.index('--product-task-decision')+1]));calls.append(decision)
-        module.write_json(evidence/'submission_receipt.json',accepted_receipt(decision));return 6
+        assert execute_product_task(decision,UnavailablePicker(),evidence,tmp_path/'product-status.json')
+        _write_submission_receipt(evidence,accepted_receipt(decision))
+        return 6
     monkeypatch.setattr(module,'run_command',uploader)
     module.submit_ready(db)
     rows={p['id']:p for p in db.get_wallstreet_publications()}
-    assert rows[first['id']]['state']=='WAITING' and rows[first['id']]['attempt_count']==0
-    assert rows[second['id']]['state']=='UNDER_REVIEW' and len(calls)==1
+    assert rows[first['id']]['state']=='UNDER_REVIEW' and rows[first['id']]['attempt_count']==1
+    assert rows[second['id']]['state']=='UNDER_REVIEW' and len(calls)==2
     frozen=db.get_product_task_decision(f"wallstreet:wechat:B:{first['id']}")
     assert frozen['selection_block_reason']=='MANUAL_PRODUCT_DISABLED'
-    ledger=json.loads((tmp_path/'wechat_product_waits.json').read_text())
-    assert ledger['tasks'][frozen['task_id']]['state']=='BLOCKED'
+    assert not (tmp_path/'wechat_product_waits.json').exists()
 
 
 def test_verify_and_douyin_commands_keep_existing_contract(setup,tmp_path):

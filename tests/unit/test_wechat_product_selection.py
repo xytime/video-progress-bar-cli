@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-11 | Codex | 验证可选挂接失败后清空放行，残留、未知表单及超时仍阻断。 |
 | 1.0.0 | 2026-10-10 | Codex | 覆盖默认回退、身份冲突、取消失败及共享时间预算；不访问平台。 |
 """
 
@@ -11,7 +12,7 @@ import pytest
 from video_processing.core.wechat_product_policy import (
     ProductCatalog, ProductIdentity, ProductLookup, ProductRole,
 )
-from video_processing.utils.wechat_product_selection import select_required_product
+from video_processing.utils.wechat_product_selection import select_required_product, select_optional_product
 
 
 from dataclasses import replace
@@ -346,6 +347,58 @@ def test_unknown_readback_is_not_assumed_empty_and_exception_is_redacted():
 def test_invalid_budget_is_rejected(seconds):
     with pytest.raises(ValueError):
         run(FakePicker((FINANCE,)), seconds=seconds)
+
+
+def optional(picker):
+    return select_optional_product(decision=choose_product_role(category="财经"),
+                                   catalog=catalog(), picker=picker, clock=picker.clock)
+
+
+@pytest.mark.parametrize("failure", ["unavailable", "no_effect", "timeout", "wrong_identity"])
+def test_optional_product_failure_can_continue_after_confirmed_clear(failure):
+    picker = FakePicker(()) if failure == "unavailable" else FakePicker((FINANCE, DEFAULT))
+    if failure == "no_effect":
+        picker.no_effect = {FINANCE.product_id, DEFAULT.product_id}
+    if failure == "timeout":
+        picker.find_timeouts = {FINANCE.product_id, DEFAULT.product_id}
+    if failure == "wrong_identity":
+        picker.wrong_binding = NEWS
+    result = optional(picker)
+    assert result.state == "UNBOUND" and result.submission_allowed
+    assert result.actual is None and not result.binding_confirmed
+    assert result.fallback_reason and picker.binding is None
+    assert picker.calls[-3:][0][0] == "read"
+    assert [action for action, _ in picker.calls[-2:]] == ["ready", "read"]
+
+
+def test_optional_success_preserves_exact_product():
+    result = optional(FakePicker((FINANCE,)))
+    assert result.binding_confirmed and result.submission_allowed and result.actual == FINANCE
+
+
+@pytest.mark.parametrize("fault", ["clear_failed", "residual", "not_ready", "unknown"])
+def test_optional_product_still_requires_clean_ready_form(fault):
+    class Unknown(FakePicker):
+        def read_binding(self, **kwargs):
+            raise RuntimeError("private fixture diagnostic")
+    picker = Unknown() if fault == "unknown" else FakePicker()
+    if fault == "clear_failed":
+        picker.clear_success = False
+    if fault == "residual":
+        picker.residual_after_clear = NEWS
+    if fault == "not_ready":
+        picker.ready = False
+    result = optional(picker)
+    assert result.state == "BLOCKED" and not result.submission_allowed
+    assert "private" not in result.reason
+
+
+def test_optional_cleanup_respects_total_deadline():
+    picker = FakePicker()
+    picker.delays["clear"] = 31
+    result = optional(picker)
+    assert result.reason == "PRODUCT_CLEANUP_BUDGET_EXHAUSTED"
+    assert not result.submission_allowed
 
 
 def test_cleanup_timeout_is_not_misreported_as_total_budget_exhausted():

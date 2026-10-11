@@ -1,3 +1,10 @@
+"""商品意图冻结与发布入口的隔离回归。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.1.0 | 2026-10-11 | Codex | 缺商品可继续，覆盖旧等待释放、身份清理、两入口回执及已提交保护。 |
+"""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 import json
@@ -90,6 +97,32 @@ def product_fixture(tmp_path):
     return active
 
 
+def test_unbound_receipt_satisfies_english_submission_and_final_form_gate(tmp_path):
+    from scripts.submit_english_world_review import _product_receipt_is_confirmed
+    from video_processing.core.wechat_product_policy import ProductLookup, ProductIdentity
+    from video_processing.utils.wechat_product_execution import verify_product_before_submit
+    active=product_fixture(tmp_path)
+    db=PipelineDB(str(tmp_path/'db.sqlite'))
+    selected=validate_manual_product(active,'product_700007')
+    task=freeze_task_product_decision(db,'english:optional',dict(product_intent='PRODUCT',
+        product_id=selected['product_id'],product_title=selected['title']),active)
+    class Unavailable(EmptyPicker):
+        def find(self,*args,**kwargs):return ProductLookup.UNAVAILABLE
+    picker=Unavailable()
+    evidence=tmp_path/'evidence'
+    assert execute_product_task(task,picker,evidence,tmp_path/'status')
+    assert verify_product_before_submit(task,picker)
+    assert _product_receipt_is_confirmed(evidence,task)
+    picker.binding=ProductIdentity('wrong','残留商品')
+    assert not verify_product_before_submit(task,picker)
+    path=evidence/'product_selection_receipt.json'
+    receipt=json.loads(path.read_text())
+    receipt['unbound_confirmed']=False;path.write_text(json.dumps(receipt))
+    assert not _product_receipt_is_confirmed(evidence,task)
+    receipt['unbound_confirmed']=True;receipt['task_id']='different';path.write_text(json.dumps(receipt))
+    assert not _product_receipt_is_confirmed(evidence,task)
+
+
 def test_full_catalog_exact_manual_no_fallback_and_frozen_versions(tmp_path):
     from video_processing.core.wechat_product_policy import ProductLookup, ProductIdentity
     active=product_fixture(tmp_path)
@@ -118,10 +151,14 @@ def test_full_catalog_exact_manual_no_fallback_and_frozen_versions(tmp_path):
         def find(self,product,**kwargs):
             assert product.product_id=='700007'
             return ProductLookup.UNAVAILABLE
-    assert not execute_product_task(task,Missing(),tmp_path/'missing-evidence',tmp_path/'status.json')
+    assert execute_product_task(task,Missing(),tmp_path/'missing-evidence',tmp_path/'status.json')
+    missing_receipt=json.loads((tmp_path/'missing-evidence/product_selection_receipt.json').read_text())
+    assert missing_receipt['unbound_confirmed'] and missing_receipt['actual_product_id'] is None
     class Wrong(ExactPicker):
         def select(self,product,**kwargs):self.binding=ProductIdentity('700008',selected['title'])
-    assert not execute_product_task(task,Wrong(),tmp_path/'wrong-evidence',tmp_path/'status.json')
+    wrong=Wrong()
+    assert execute_product_task(task,wrong,tmp_path/'wrong-evidence',tmp_path/'status.json')
+    assert wrong.binding is None  # 错 ID 必须清空，不能伪报挂载成功。
 
 
 def test_manual_api_saves_atomically_duplicate_preserves_and_invalid_no_fetch(tmp_path,monkeypatch):
@@ -192,7 +229,7 @@ def test_profile_scope_uses_actual_session_path_without_reading_state(tmp_path):
     assert not (tmp_path/'one.json').exists()
 
 
-def test_product_wait_consumed_backoff_then_original_product_recovery(tmp_path):
+def test_product_wait_no_longer_blocks_unsubmitted_task_but_preserves_artifacts(tmp_path):
     from video_processing.core.wechat_product_policy import ProductLookup
     from video_processing.utils.wechat_product_execution import product_wait_ready, product_observation_generation, blocked_product_task_keys
     from video_processing.utils.wechat_product_waits import ProductWaitStore
@@ -202,13 +239,11 @@ def test_product_wait_consumed_backoff_then_original_product_recovery(tmp_path):
     task['_observation_generation']=product_observation_generation(active)
     class Missing(EmptyPicker):
         def find(self,product,**kwargs):return ProductLookup.UNAVAILABLE
-    assert not execute_product_task(task,Missing(),tmp_path/'failed',tmp_path/'status',wait_output=tmp_path,artifacts_digest='media')
-    row=ProductWaitStore(tmp_path/'wechat_product_waits.json').records()[0]
-    assert row['state']=='WAITING' and row['reason']=='PRODUCT_UNAVAILABLE'
-    assert not product_wait_ready(task,tmp_path,'media',observation_generation=task['_observation_generation'])
-    assert task['task_id'] in blocked_product_task_keys(tmp_path,active)
+    assert execute_product_task(task,Missing(),tmp_path/'failed',tmp_path/'status',wait_output=tmp_path,artifacts_digest='media')
     store=ProductWaitStore(tmp_path/'wechat_product_waits.json')
-    with store._locked() as data:data['tasks'][task['task_id']]['next_check_at']=0
+    assert not store.records()  # 无商品放行不再制造等待。
+    store.defer(task['task_id'],reason='PRODUCT_UNAVAILABLE',config_digest=task['config_digest'],
+                artifacts_digest='media',submission_state='NOT_SUBMITTED')
     assert product_wait_ready(task,tmp_path,'media',observation_generation=task['_observation_generation'])
     class Available(EmptyPicker):
         def find(self,product,**kwargs):return ProductLookup.AVAILABLE
@@ -216,9 +251,11 @@ def test_product_wait_consumed_backoff_then_original_product_recovery(tmp_path):
     picker=Available()
     assert execute_product_task(task,picker,tmp_path/'recovery',tmp_path/'status',wait_output=tmp_path,artifacts_digest='media')
     assert picker.binding.product_id==chosen['product_id']
-    assert store.records()[0]['state']=='READY_FOR_EXISTING_GATES'
     assert task['task_id'] not in blocked_product_task_keys(tmp_path,active)
     assert not product_wait_ready(task,tmp_path,'changed-media',observation_generation=task['_observation_generation'])
+    with store._locked() as data:data['tasks'][task['task_id']]['submission_state']='UNCERTAIN'
+    assert not product_wait_ready(task,tmp_path,'media')
+    assert task['task_id'] in blocked_product_task_keys(tmp_path,active)
 
 
 def test_sql_wait_filter_before_limit_no_queue_starvation(tmp_path,monkeypatch):
@@ -242,11 +279,14 @@ def test_sql_wait_filter_before_limit_no_queue_starvation(tmp_path,monkeypatch):
         def _process_single_video(self,row,**kwargs):self.called.append(row['youtube_id'])
     manager=Manager();monkeypatch.setattr(worker,'ROOT',tmp_path)
     monkeypatch.setattr(worker.settings,'wechat_product_policy_path',active)
-    assert worker.dispatch_once(manager)==1 and manager.called==['available']
+    assert worker.dispatch_once(manager)==1 and manager.called==['blocked000']
     store=ProductWaitStore(out/'wechat_product_waits.json')
     with store._locked() as rows:rows['tasks']['pipeline:blocked000:0']['next_check_at']=0
     assert worker.dispatch_once(manager)==1 and manager.called[-1]=='blocked000'
     with store._locked() as rows:rows['tasks']['pipeline:blocked000:0']['state']='BLOCKED'
+    assert worker.dispatch_once(manager)==1 and manager.called[-1]=='blocked000'
+    with store._locked() as rows:
+        for row in rows['tasks'].values():row['submission_state']='UNCERTAIN'
     assert worker.dispatch_once(manager)==1 and manager.called[-1]=='available'
 
 
@@ -270,11 +310,11 @@ def test_queued_manual_stock_wait_and_disabled_block_preserve_original(tmp_path,
     assert task['product_decision']['candidates']==[dict(product_id=selected['product_id'],title=selected['title'])]
     if disabled:
         assert task['selection_block_reason']=='MANUAL_PRODUCT_DISABLED'
-        assert not product_task_preflight(task,tmp_path,'media')
-        wait=ProductWaitStore(tmp_path/'wechat_product_waits.json').records()[0]
-        assert wait['state']=='BLOCKED' and wait['submission_state']=='NOT_SUBMITTED'
-        assert task['task_id'] in blocked_product_task_keys(tmp_path,active)
-        assert not execute_product_task(task,EmptyPicker(),tmp_path/'evidence',tmp_path/'status',wait_output=tmp_path,artifacts_digest='media')
+        assert product_task_preflight(task,tmp_path,'media')
+        assert task['task_id'] not in blocked_product_task_keys(tmp_path,active)
+        assert execute_product_task(task,EmptyPicker(),tmp_path/'evidence',tmp_path/'status',wait_output=tmp_path,artifacts_digest='media')
+        receipt=json.loads((tmp_path/'evidence/product_selection_receipt.json').read_text())
+        assert receipt['unbound_confirmed'] and receipt['fallback_reason']=='MANUAL_PRODUCT_DISABLED'
     else:
         assert 'selection_block_reason' not in task
         assert product_task_preflight(task,tmp_path,'media')  # 平台当前库存核验决定，不拿历史0代替实时结果。
@@ -307,10 +347,13 @@ def test_english_ready_wait_filter_entire_queue_before_limit(tmp_path,monkeypatc
     monkeypatch.setattr(worker,'settings',SimpleNamespace(enable_english_world_auto_publish=True,wechat_publishing_paused=False,wechat_product_policy_path=active))
     monkeypatch.setattr(worker.subprocess,'run',lambda args,**kw:(called.append(args) or SimpleNamespace(returncode=10)))
     manager=SimpleNamespace(db=db,_report_runtime_stage=lambda *a,**kw:None)
-    assert worker.dispatch_english_world_once(manager)==1 and called[-1][-1]==identities[-1][0]
+    assert worker.dispatch_english_world_once(manager)==1 and called[-1][-1]==identities[0][0]
     with store._locked() as rows:rows['tasks'][identities[0][1]]['next_check_at']=0
     assert worker.dispatch_english_world_once(manager)==1 and called[-1][-1]==identities[0][0]
     with store._locked() as rows:rows['tasks'][identities[0][1]]['state']='BLOCKED'
+    assert worker.dispatch_english_world_once(manager)==1 and called[-1][-1]==identities[0][0]
+    with store._locked() as rows:
+        for row in rows['tasks'].values():row['submission_state']='UNCERTAIN'
     assert worker.dispatch_english_world_once(manager)==1 and called[-1][-1]==identities[-1][0]
 
 
@@ -333,7 +376,8 @@ def test_runtime_diagnostics_readonly_and_adoption_requires_current_terminal_pro
         (dict(phase='BOUND',binding_confirmed=True,config_digest=policy.digest),False,False),
         (dict(phase='BOUND',binding_confirmed=True,publisher_capability=PUBLISHER_CAPABILITY,config_digest='old'),False,False),
         (dict(phase='BOUND',binding_confirmed=True,publisher_capability=PUBLISHER_CAPABILITY,config_digest=policy.digest),True,True),
-        (dict(phase='SKIPPED',unbound_confirmed=True,publisher_capability=PUBLISHER_CAPABILITY,config_digest=policy.digest),True,False)]:
+        (dict(phase='SKIPPED',unbound_confirmed=True,publisher_capability=PUBLISHER_CAPABILITY,config_digest=policy.digest),True,False),
+        (dict(phase='UNBOUND',unbound_confirmed=True,binding_confirmed=False,publisher_capability=PUBLISHER_CAPABILITY,config_digest=policy.digest),True,False)]:
         status.write_text(json.dumps(receipt))
         value=client.get('/api/product-settings').json()['status']
         assert value['runtime_adoption_verified'] is verified and value['actual_binding_verified'] is bound

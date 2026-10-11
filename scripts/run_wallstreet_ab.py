@@ -185,6 +185,9 @@ def product_submission_matches(receipt, decision):
     if decision['require_product'] is False:
         return (receipt.get('product_binding_confirmed') is False and receipt.get('product_unbound_confirmed') is True
                 and not receipt.get('product_id') and not receipt.get('product_title'))
+    if receipt.get('product_binding_required') is False and receipt.get('product_unbound_confirmed') is True:
+        return (receipt.get('product_binding_confirmed') is False
+                and not receipt.get('product_id') and not receipt.get('product_title'))
     allowed = {(p['product_id'],p['title']) for p in decision['product_decision']['candidates']}
     return (receipt.get('product_binding_confirmed') is True and receipt.get('product_unbound_confirmed') is False
             and (receipt.get('product_id'),receipt.get('product_title')) in allowed)
