@@ -16,6 +16,21 @@ from video_processing.utils.wechat_product_selection import select_optional_prod
 from video_processing.utils.wechat_product_waits import ProductWaitStore
 
 
+def _wait_row_ready(row: dict, now: float, generation: str | None) -> bool:
+    # 旧商品库存/额度等待可以进入表单并安全无商品降级；清理异常不能这样释放。
+    if row['submission_state'] != 'NOT_SUBMITTED' or row['state'] == 'VERIFY_SUBMISSION' or row['lease_until'] > now:
+        return False
+    if row['reason'] in {'PRODUCT_UNAVAILABLE', 'QUOTA_EXHAUSTED', 'LOGIN_REQUIRED'}:
+        return True
+    if row['state'] == 'BLOCKED':
+        return False
+    if row['state'] == 'READY_FOR_EXISTING_GATES':
+        return True
+    if generation is not None and generation != row.get('observed_generation'):
+        return True
+    return row['state'] in {'WAITING', 'CHECKING'} and row['next_check_at'] <= now
+
+
 def product_artifacts_digest(video: Path, copy: Path, cover: Path) -> str:
     digest = hashlib.sha256()
     for role, path in (('video', video), ('copy', copy), ('cover', cover)):
@@ -45,8 +60,7 @@ def product_wait_ready(payload: dict, output: Path, artifacts_digest: str, *, cl
         return False
     if row['submission_state'] != 'NOT_SUBMITTED' or row['lease_until'] > clock():
         return False
-    # 用户取消挂不上商品就不发布；商品等待不再阻挡尚未提交的任务。
-    return True
+    return _wait_row_ready(row, clock(), observation_generation)
 
 
 def product_task_preflight(payload: dict, output: Path, artifacts_digest: str, *,
@@ -57,12 +71,10 @@ def product_task_preflight(payload: dict, output: Path, artifacts_digest: str, *
 
 def blocked_product_task_keys(output: Path, active: Path, *, clock=time.time) -> list[str]:
     """遍历整个等待账本后交给 DAL 在 LIMIT 前排除，避免队首等待饿死后续。"""
+    generation = product_observation_generation(active)
     blocked = []
     for row in ProductWaitStore(output / 'wechat_product_waits.json').records():
-        if row['state'] == 'READY_FOR_EXISTING_GATES':
-            continue
-        if (row['submission_state'] != 'NOT_SUBMITTED' or row['state'] == 'VERIFY_SUBMISSION'
-                or row['lease_until'] > clock()):
+        if not _wait_row_ready(row, clock(), generation):
             blocked.append(row['task_key'])
     return blocked
 
@@ -83,24 +95,43 @@ def _record_product_wait(payload, result, evidence_dir, output, artifacts_digest
     row = ProductWaitStore(output / 'wechat_product_waits.json').defer(
         payload['task_id'], reason=reason, config_digest=payload['config_digest'],
         artifacts_digest=artifacts_digest, submission_state='NOT_SUBMITTED', wait_policy=configured.get('wait_policy'),
-        observation_generation=generation)
+        observation_generation=generation, count_failed_attempt=True)
     atomic_json(evidence_dir / 'product_wait.json', dict(row, not_submitted=True))
 
 
-def verify_product_before_submit(payload: dict, picker) -> bool:
-    """遮罩/声明操作结束后最后一次回读，不进行选择或补挂。"""
+def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: Path) -> bool:
+    """最终表单必须与本次选品回执一致，独立保存发表前实读证据。
+
+    不补挂、不推测 ID；商品消失/出现/被替换时均停止发表。
+    """
+    import json
+    readback = evidence_dir / 'product_pre_submit_readback.json'
+    readback.unlink(missing_ok=True)
     try:
-        binding = picker.read_binding(timeout_ms=3000)
-        if not picker.ready_to_submit(timeout_ms=3000):
+        receipt = json.loads((evidence_dir / 'product_selection_receipt.json').read_text())
+        if payload is not None:
+            if any(receipt.get(key) != payload.get(key) for key in ('task_id', 'config_version', 'config_digest')):
+                return False
+            if receipt.get('required') is not payload['require_product']:
+                return False
+        actual = picker.read_binding(timeout_ms=3000)
+        if not picker.ready_to_submit(timeout_ms=3000) or picker.read_binding(timeout_ms=3000) != actual:
             return False
-        if payload['require_product'] is False:
-            return binding is None and picker.read_binding(timeout_ms=3000) is None
-        if payload['require_product'] is not True:
-            return False
-        if binding is None:
-            return picker.read_binding(timeout_ms=3000) is None
-        _, decision = selection_from_task(payload)
-        return binding in decision.candidates and picker.read_binding(timeout_ms=3000) == binding
+        if actual is None:
+            if (receipt.get('state') not in {'UNBOUND', 'SKIPPED'} or receipt.get('unbound_confirmed') is not True
+                    or receipt.get('binding_confirmed') is not False
+                    or receipt.get('actual_product_id') or receipt.get('actual_title')):
+                return False
+        else:
+            if (receipt.get('state') != 'BOUND' or receipt.get('binding_confirmed') is not True
+                    or receipt.get('unbound_confirmed') is True
+                    or (actual.product_id, actual.title) != (receipt.get('actual_product_id'), receipt.get('actual_title'))):
+                return False
+            if payload is not None:
+                if payload['require_product'] is not True or actual not in selection_from_task(payload)[1].candidates:
+                    return False
+        atomic_json(readback, dict(receipt, final_verified=True, identity_source='FINAL_FORM_READBACK'))
+        return True
     except Exception:
         return False
 

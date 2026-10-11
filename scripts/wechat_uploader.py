@@ -582,6 +582,27 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
     }
 
 
+def _management_product_observation(record: dict) -> dict:
+    """保留原生记录的商品字段结构及公开商品身份，未知结构不推断未挂接。
+
+    不保存响应全文、描述、用户资料或会话信息；仅用于同作品核验诊断。
+    """
+    public_identity = {'productId', 'product_id', 'goodsId', 'goods_id',
+                       'productTitle', 'productName', 'goodsName', 'goods_name'}
+    def shape(value, depth=0):
+        if depth > 6:
+            return 'DEPTH_LIMIT'
+        if isinstance(value, dict):
+            return {key: child if key in public_identity and isinstance(child, (str, int))
+                    else shape(child, depth + 1) for key, child in value.items()}
+        if isinstance(value, list):
+            return [shape(child, depth + 1) for child in value[:5]]
+        if value is None:
+            return None
+        return type(value).__name__
+    return {'state': 'UNVERIFIED', 'native_record_shape': shape(record)}
+
+
 def _collect_management_cards_from_post_list_payload(payload: object) -> dict[str, dict[str, str]]:
     """从作品管理原生列表响应提取 objectId，绝不从标题反向寻找历史作品。"""
     if not isinstance(payload, dict):
@@ -616,6 +637,7 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
             "short_title": short_title,
             "identity_source": "post_list_api",
             "platform_status": str(record["status"]) if record.get("status") is not None else "",
+            "product_observation": _management_product_observation(record),
         }
     return cards
 
@@ -726,13 +748,19 @@ def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> No
                            product_config_version=product_task.get('config_version'),
                            product_config_digest=product_task.get('config_digest'),
                            product_attachment_reason=product_task['reason'])
-        selection_path = evidence_dir / 'product_selection_receipt.json'
+        selection_path = evidence_dir / 'product_pre_submit_readback.json'
         if selection_path.exists():
             selection = json.loads(selection_path.read_text(encoding='utf-8'))
-            receipt = dict(receipt, product_binding_confirmed=selection.get('binding_confirmed'),
-                           product_binding_required=selection.get('binding_required'),
-                           product_unbound_confirmed=selection.get('unbound_confirmed'),
-                           product_id=selection.get('actual_product_id'), product_title=selection.get('actual_title'))
+            valid = selection.get('final_verified') is True
+            if product_task_path.exists():
+                valid = valid and all(selection.get(key) == product_task.get(key)
+                                      for key in ('task_id', 'config_version', 'config_digest'))
+            if valid:
+                receipt = dict(receipt, product_binding_confirmed=selection.get('binding_confirmed'),
+                               product_binding_required=selection.get('binding_required'),
+                               product_unbound_confirmed=selection.get('unbound_confirmed'),
+                               product_id=selection.get('actual_product_id'), product_title=selection.get('actual_title'),
+                               product_identity_source=selection['identity_source'])
         receipt_path = evidence_dir / "submission_receipt.json"
         temporary_path = receipt_path.with_suffix(".json.tmp")
         temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, sort_keys=True), encoding="utf-8")
@@ -1064,6 +1092,7 @@ def verify_management_publication_by_id(
                     "state": state,
                     "reason": reason,
                     "component_state": record.get("component_state"),
+                    "product_observation": record.get("product_observation", {'state': 'UNVERIFIED'}),
                     **_management_public_time(record, state),
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as exc:
@@ -3419,16 +3448,16 @@ def run_uploader(
                 browser.close()
                 return 1
 
-        if task_product is not None:
-            from video_processing.utils.wechat_product_execution import verify_product_before_submit
-            if not verify_product_before_submit(task_product, PlaywrightProductPicker(page)):
+        if task_product is not None or (evidence_root / 'product_selection_receipt.json').exists():
+            from video_processing.utils.wechat_product_execution import finalize_product_before_submit
+            if not finalize_product_before_submit(task_product, PlaywrightProductPicker(page), evidence_root):
                 logger.error("Product binding changed after form cleanup; stopping before submission.")
-                if task_product['require_product']:
+                if task_product is not None and task_product['require_product']:
                     from video_processing.utils.wechat_product_execution import record_pre_submit_product_block
                     record_pre_submit_product_block(task_product, evidence_root, settings.wechat_product_status_path,
                                                     state_file.parent, product_artifacts, 'BINDING_CHANGED_BEFORE_SUBMIT')
                 browser.close()
-                return 14 if task_product['require_product'] else 1
+                return 14 if task_product is not None and task_product['require_product'] else 1
 
         submitted_short_title = _read_confirmed_submission_title(page, short_title_clean)
         if not draft:

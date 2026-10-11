@@ -282,7 +282,7 @@ def test_product_wait_keeps_approval_and_backoff_prevents_another_upload(tmp_pat
         decision = read_product_task_decision(Path(command[command.index('--product-task-decision') + 1]))
         assert decision['context']['review_id'] == item['id']
         row = ProductWaitStore(tmp_path / 'output/wechat_product_waits.json').defer(
-            decision['task_id'], reason='PRODUCT_UNAVAILABLE', config_digest=decision['config_digest'],
+            decision['task_id'], reason='AVAILABILITY_UNVERIFIED', config_digest=decision['config_digest'],
             artifacts_digest=product_artifacts_digest(Path(paths['mp4_path']), Path(paths['copy_path']),
                                                      Path(paths['cover_path'])), submission_state='NOT_SUBMITTED',
             observation_generation=product_observation_generation(submitter.settings.wechat_product_policy_path),

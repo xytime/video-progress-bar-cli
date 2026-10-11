@@ -153,3 +153,19 @@ def test_native_exact_id_search_cross_page_empty_and_conflict(page,result,status
     if status==ProductLookup.AVAILABLE:
         picker.select(TARGET,timeout_ms=1000)
         assert picker.read_binding(timeout_ms=500)==TARGET
+
+
+@pytest.mark.parametrize('initial,final,allowed', [(True,True,True),(False,False,True),(True,False,False),(False,True,False)])
+def test_final_dom_binding_matches_receipt_before_submission(page,tmp_path,initial,final,allowed):
+    from video_processing.utils.wechat_product_config import atomic_json
+    from video_processing.utils.wechat_product_execution import finalize_product_before_submit
+    page.set_content(card() if initial else form(''))
+    if not initial:page.locator('#products').evaluate('(node)=>node.hidden=true')
+    evidence=tmp_path/'e';evidence.mkdir()
+    atomic_json(evidence/'product_selection_receipt.json',dict(required=True,state='BOUND' if initial else 'UNBOUND',
+        binding_confirmed=initial,unbound_confirmed=not initial,
+        actual_product_id=TARGET.product_id if initial else None,actual_title=TARGET.title if initial else None))
+    page.set_content(card() if final else form(''))
+    if not final:page.locator('#products').evaluate('(node)=>node.hidden=true')
+    assert finalize_product_before_submit(None,PlaywrightProductPicker(page),evidence) is allowed
+    assert (evidence/'product_pre_submit_readback.json').exists() is allowed

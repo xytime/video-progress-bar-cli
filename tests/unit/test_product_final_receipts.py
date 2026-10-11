@@ -1,0 +1,170 @@
+"""最终表单回执与异常队列公平性的隔离回归。"""
+import json
+from pathlib import Path
+import pytest
+from config.settings import settings
+from video_processing.db.database import PipelineDB
+from video_processing.core.wechat_product_policy import ProductIdentity, ProductLookup
+from video_processing.utils.wechat_product_task import freeze_task_product_decision
+from video_processing.utils.wechat_product_execution import execute_product_task, finalize_product_before_submit, blocked_product_task_keys
+from video_processing.utils.wechat_product_waits import ProductWaitStore
+
+
+def policy_fixture(tmp_path):
+    active=tmp_path/'wechat_products.json'
+    active.write_text((Path(__file__).parents[1]/'fixtures/wechat_products_v2.json').read_text())
+    catalog=dict(schema_version=2,captured_at='2026-10-11T00:00:00+08:00',source='isolated fixture',
+        account_id='publisher-fixture',total_pages=1,total_items=1,
+        pages=[dict(page=1,items=[dict(product_id='700007',title='完整指定商品',shop='测试',price='20',stock=12)])])
+    active.with_name('wechat_product_catalog.json').write_text(json.dumps(catalog))
+    return active
+
+
+class Picker:
+    def __init__(self, available=True, clear=True):
+        self.binding=None;self.available=available;self.clear=clear
+    def read_binding(self, **kwargs): return self.binding
+    def ready_to_submit(self, **kwargs): return True
+    def find(self, *args, **kwargs): return ProductLookup.AVAILABLE if self.available else ProductLookup.UNAVAILABLE
+    def select(self, product, **kwargs): self.binding=product
+    def cancel_and_clear(self, **kwargs):
+        if self.clear: self.binding=None
+        return self.clear
+
+
+@pytest.mark.parametrize('initially_bound', [True,False])
+def test_final_binding_transition_cannot_leave_stale_accepted_product_receipt(tmp_path, initially_bound):
+    from scripts.wechat_uploader import _write_submission_receipt
+    from scripts.run_wallstreet_ab import product_submission_matches
+    from scripts.submit_english_world_review import _product_receipt_is_confirmed
+    active=policy_fixture(tmp_path)
+    db=PipelineDB(str(tmp_path/'db.sqlite'))
+    task=freeze_task_product_decision(db,'review:transition',dict(product_intent='PRODUCT',
+        product_id='700007',product_title='完整指定商品'),active)
+    picker=Picker(available=initially_bound)
+    evidence=tmp_path/'evidence'
+    assert execute_product_task(task,picker,evidence,tmp_path/'status.json')
+    picker.binding=None if initially_bound else ProductIdentity('700007','完整指定商品')
+    assert not finalize_product_before_submit(task,picker,evidence)
+    assert not (evidence/'product_pre_submit_readback.json').exists()
+    assert not (evidence/'submission_receipt.json').exists()
+
+
+def test_uncleared_high_priority_task_does_not_starve_ready_following_video(tmp_path,monkeypatch):
+    from scripts import run_ready_publications as worker
+    active=policy_fixture(tmp_path);out=tmp_path/'output';out.mkdir()
+    db=PipelineDB(str(out/'db.sqlite'))
+    task=freeze_task_product_decision(db,'pipeline:bad-form-01:0',dict(product_intent='PRODUCT',
+        product_id='700007',product_title='完整指定商品'),active)
+    for yid,score,intent in [('bad-form-01',100,'PRODUCT'),('ready-none2',80,'NONE')]:
+        identity=dict(product_id='700007',product_title='完整指定商品') if intent=='PRODUCT' else {}
+        db.add_video(yid,yid,'channel',score=score,product_intent=intent,**identity)
+        db.mark_video_ready_for_publication(yid)
+    calls=[]
+    class Manager:
+        def __init__(self): self.db=db
+        def _process_single_video(self,row,**kwargs):
+            calls.append(row['youtube_id'])
+            if row['youtube_id']=='bad-form-01':
+                allowed=execute_product_task(task,Picker(available=False,clear=False),
+                    tmp_path/f'attempt-{len(calls)}',tmp_path/'status.json',
+                    wait_output=out,artifacts_digest='unchanged-media')
+                assert not allowed
+                db.defer_ready_publication(row['youtube_id'],'商品清理失败，未点击发表')
+    monkeypatch.setattr(worker,'ROOT',tmp_path)
+    monkeypatch.setattr(settings,'wechat_product_policy_path',active)
+    monkeypatch.setattr(settings,'wechat_publishing_paused',False)
+    manager=Manager()
+    assert worker.dispatch_once(manager)==1
+    wait=ProductWaitStore(out/'wechat_product_waits.json').records()[0]
+    assert wait['state']=='BLOCKED' and wait['reason']=='CANNOT_CONFIRM_CLEARED'
+    assert worker.dispatch_once(manager)==1
+    assert calls==['bad-form-01','ready-none2'], dict(calls=calls,blocked=blocked_product_task_keys(out,active),wait=wait)
+
+
+@pytest.mark.parametrize('intent,available', [('PRODUCT', True), ('PRODUCT', False), ('NONE', False)])
+def test_stable_final_form_is_only_source_of_submission_product_receipt(tmp_path, intent, available):
+    from scripts.wechat_uploader import _write_submission_receipt
+    from scripts.run_wallstreet_ab import product_submission_matches
+    from scripts.submit_english_world_review import _product_receipt_is_confirmed
+    active=policy_fixture(tmp_path);db=PipelineDB(str(tmp_path/'db.sqlite'))
+    context=dict(product_intent=intent, product_id='700007', product_title='完整指定商品') if intent=='PRODUCT' else dict(product_intent='NONE')
+    task=freeze_task_product_decision(db,'task:stable',context,active)
+    picker=Picker(available=available);evidence=tmp_path/'evidence'
+    assert execute_product_task(task,picker,evidence,tmp_path/'status')
+    assert finalize_product_before_submit(task,picker,evidence)
+    # 后续选品文件被改写，也不能覆盖提交前实际回读。
+    (evidence/'product_selection_receipt.json').write_text('{}')
+    _write_submission_receipt(evidence,dict(platform_post_id='native-id'))
+    receipt=json.loads((evidence/'submission_receipt.json').read_text())
+    assert receipt['product_identity_source']=='FINAL_FORM_READBACK'
+    actual=(picker.binding.product_id,picker.binding.title) if picker.binding else (None,None)
+    assert (receipt['product_id'],receipt['product_title'])==actual
+    assert receipt['product_unbound_confirmed'] is (picker.binding is None)
+    assert product_submission_matches(receipt,task)
+    # English validator reads the selection receipt; restore the original final snapshot.
+    (evidence/'product_selection_receipt.json').write_text((evidence/'product_pre_submit_readback.json').read_text())
+    assert _product_receipt_is_confirmed(evidence,task)
+
+
+@pytest.mark.parametrize('mutation', ['missing','task_id','config_digest','config_version','required','wrong_id','wrong_title','unstable','not_ready','unknown'])
+def test_invalid_final_evidence_stops_submission(tmp_path,mutation):
+    active=policy_fixture(tmp_path);db=PipelineDB(str(tmp_path/'db.sqlite'))
+    task=freeze_task_product_decision(db,'task:invalid',dict(product_intent='PRODUCT',product_id='700007',product_title='完整指定商品'),active)
+    picker=Picker();evidence=tmp_path/'evidence'
+    assert execute_product_task(task,picker,evidence,tmp_path/'status')
+    path=evidence/'product_selection_receipt.json'
+    receipt=json.loads(path.read_text())
+    if mutation=='missing':path.unlink()
+    elif mutation in {'task_id','config_digest','config_version','required'}:
+        receipt[mutation]='stale';path.write_text(json.dumps(receipt))
+    elif mutation=='wrong_id':picker.binding=ProductIdentity('wrong','完整指定商品')
+    elif mutation=='wrong_title':picker.binding=ProductIdentity('700007','错误版本')
+    elif mutation=='not_ready':picker.ready_to_submit=lambda **kw:False
+    elif mutation=='unstable':
+        reads=iter([picker.binding,None]);picker.read_binding=lambda **kw:next(reads)
+    elif mutation=='unknown':
+        def unknown(**kw):raise ValueError('identity unavailable')
+        picker.read_binding=unknown
+    # 删除旧证据，避免复用上次成功。
+    (evidence/'product_pre_submit_readback.json').write_text('{"final_verified":true}')
+    assert not finalize_product_before_submit(task,picker,evidence)
+    assert not (evidence/'product_pre_submit_readback.json').exists()
+
+
+def test_unverified_selection_never_claims_product_in_native_receipt(tmp_path):
+    from scripts.wechat_uploader import _write_submission_receipt
+    evidence=tmp_path/'e';evidence.mkdir()
+    (evidence/'product_selection_receipt.json').write_text(json.dumps(dict(binding_confirmed=True,actual_product_id='wrong')))
+    _write_submission_receipt(evidence,dict(platform_post_id='accepted-native-id'))
+    receipt=json.loads((evidence/'submission_receipt.json').read_text())
+    assert receipt['platform_post_id']=='accepted-native-id'
+    assert 'product_id' not in receipt and 'product_binding_confirmed' not in receipt
+
+
+def test_form_failure_retries_have_backoff_and_hard_limit(tmp_path):
+    from video_processing.utils.wechat_product_execution import product_wait_ready, product_observation_generation
+    from types import SimpleNamespace
+    from video_processing.utils.wechat_product_execution import _record_product_wait
+    active=policy_fixture(tmp_path);db=PipelineDB(str(tmp_path/'db.sqlite'))
+    task=freeze_task_product_decision(db,'task:bounded',dict(product_intent='PRODUCT',product_id='700007',product_title='完整指定商品'),active)
+    generation=product_observation_generation(active)
+    store=ProductWaitStore(tmp_path/'wechat_product_waits.json')
+    for n in range(1,9):
+        _record_product_wait(task,SimpleNamespace(reason='FORM_NOT_READY',attempt_records=()),tmp_path/'e',tmp_path,'media',generation)
+        row=store.records()[0]
+        assert row['checks']==n
+        assert not product_wait_ready(task,tmp_path,'media',observation_generation=generation)
+        with store._locked() as data:data['tasks'][task['task_id']]['next_check_at']=0
+        assert product_wait_ready(task,tmp_path,'media',observation_generation=generation) is (n<8)
+        assert (task['task_id'] in blocked_product_task_keys(tmp_path,active)) is (n==8)
+    assert store.records()[0]['state']=='CHECK_LIMIT'
+
+
+def test_management_observation_preserves_identity_without_guessing_unbound():
+    from scripts.wechat_uploader import _management_product_observation
+    record=dict(objectId='native-id',sessionToken='do-not-save',desc=dict(goodsList=[dict(productId='700007',productName='完整指定商品')]))
+    observation=_management_product_observation(record)
+    assert observation['native_record_shape']['desc']['goodsList'][0]==dict(productId='700007',productName='完整指定商品')
+    assert 'do-not-save' not in json.dumps(observation)
+    assert _management_product_observation(dict(desc={}))['state']=='UNVERIFIED'

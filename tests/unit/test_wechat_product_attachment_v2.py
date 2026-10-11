@@ -100,7 +100,7 @@ def product_fixture(tmp_path):
 def test_unbound_receipt_satisfies_english_submission_and_final_form_gate(tmp_path):
     from scripts.submit_english_world_review import _product_receipt_is_confirmed
     from video_processing.core.wechat_product_policy import ProductLookup, ProductIdentity
-    from video_processing.utils.wechat_product_execution import verify_product_before_submit
+    from video_processing.utils.wechat_product_execution import finalize_product_before_submit
     active=product_fixture(tmp_path)
     db=PipelineDB(str(tmp_path/'db.sqlite'))
     selected=validate_manual_product(active,'product_700007')
@@ -111,10 +111,10 @@ def test_unbound_receipt_satisfies_english_submission_and_final_form_gate(tmp_pa
     picker=Unavailable()
     evidence=tmp_path/'evidence'
     assert execute_product_task(task,picker,evidence,tmp_path/'status')
-    assert verify_product_before_submit(task,picker)
+    assert finalize_product_before_submit(task,picker,evidence)
     assert _product_receipt_is_confirmed(evidence,task)
     picker.binding=ProductIdentity('wrong','残留商品')
-    assert not verify_product_before_submit(task,picker)
+    assert not finalize_product_before_submit(task,picker,evidence)
     path=evidence/'product_selection_receipt.json'
     receipt=json.loads(path.read_text())
     receipt['unbound_confirmed']=False;path.write_text(json.dumps(receipt))
@@ -267,7 +267,7 @@ def test_sql_wait_filter_before_limit_no_queue_starvation(tmp_path,monkeypatch):
     # More than any fixed small scan limit: filtering must occur before LIMIT.
     for n in range(35):
         yid=f'blocked{n:03d}'
-        db.add_video(yid,yid,'channel',score=100,product_intent='AUTO')
+        db.add_video(yid,yid,'channel',score=150-n,product_intent='AUTO')
         db.mark_video_ready_for_publication(yid)
         ProductWaitStore(out/'wechat_product_waits.json').defer(f'pipeline:{yid}:0',reason='PRODUCT_UNAVAILABLE',
             config_digest='policy',artifacts_digest='media',submission_state='NOT_SUBMITTED',
@@ -284,7 +284,8 @@ def test_sql_wait_filter_before_limit_no_queue_starvation(tmp_path,monkeypatch):
     with store._locked() as rows:rows['tasks']['pipeline:blocked000:0']['next_check_at']=0
     assert worker.dispatch_once(manager)==1 and manager.called[-1]=='blocked000'
     with store._locked() as rows:rows['tasks']['pipeline:blocked000:0']['state']='BLOCKED'
-    assert worker.dispatch_once(manager)==1 and manager.called[-1]=='blocked000'
+    with store._locked() as rows:rows['tasks']['pipeline:blocked000:0']['reason']='CANNOT_CONFIRM_CLEARED'
+    assert worker.dispatch_once(manager)==1 and manager.called[-1]=='blocked001'
     with store._locked() as rows:
         for row in rows['tasks'].values():row['submission_state']='UNCERTAIN'
     assert worker.dispatch_once(manager)==1 and manager.called[-1]=='available'
