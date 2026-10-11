@@ -1,0 +1,93 @@
+{
+  "observed_at": "2026-10-11T16:22:55.376453+00:00",
+  "method": "Read-only source, GET channels, allowlisted status fields, launchctl parsed state, metadata only; no application imports/secrets/YouTube calls",
+  "channels": {
+    "total_approved": 21,
+    "total_paused": 0,
+    "total_managed": 21,
+    "approved_tiers": {
+      "core": 1,
+      "speech": 8,
+      "other": 12
+    },
+    "theoretical_monitor_general_units_per_pt_day": 408,
+    "bound_assumptions": "One scheduler; persisted due state; 24/8/4 polls per full day; <=3 list requests per due channel; excludes bootstrap/manual overlap. Not a centrally enforced quota cap."
+  },
+  "publication_runner": {
+    "run_id": "1791734945-11642",
+    "pid": 11642,
+    "git_revision": "f0ac39a7cfc093cfdccf2c4d3a1ca03b90ec886f",
+    "state": "RUNNING",
+    "started_at": "2026-10-11T16:09:05.102086+00:00",
+    "last_heartbeat_at": "2026-10-11T16:22:06.154614+00:00",
+    "stage": "WAITING_PIPELINE_LOCK",
+    "stage_started_at": "2026-10-11T16:09:06.214328+00:00",
+    "source_mtime": "2026-10-11T16:22:06.159705+00:00"
+  },
+  "launchd_live": [
+    {
+      "label": "com.videopipeline.ui",
+      "query_exit_code": 0,
+      "registered_in_gui_domain": true,
+      "state": "running",
+      "pid": "99036",
+      "last exit code": "(never exited)"
+    },
+    {
+      "label": "com.videopipeline.bot",
+      "query_exit_code": 0,
+      "registered_in_gui_domain": true,
+      "state": "spawn scheduled",
+      "last exit code": "78: EX_CONFIG"
+    },
+    {
+      "label": "com.videopipeline.english-world-daily",
+      "query_exit_code": 0,
+      "registered_in_gui_domain": true,
+      "state": "not running",
+      "last exit code": "0"
+    },
+    {
+      "label": "com.videopipeline.english-world-forced-recovery",
+      "query_exit_code": 0,
+      "registered_in_gui_domain": true,
+      "state": "not running",
+      "last exit code": "78: EX_CONFIG"
+    },
+    {
+      "label": "com.videopipeline.english-world-monitor",
+      "query_exit_code": 0,
+      "registered_in_gui_domain": true,
+      "state": "not running",
+      "last exit code": "1"
+    },
+    {
+      "label": "com.videopipeline.periodic-qa-report",
+      "query_exit_code": 0,
+      "registered_in_gui_domain": true,
+      "state": "not running",
+      "last exit code": "0"
+    }
+  ],
+  "dependencies": {
+    "fastapi": [
+      "0.136.1"
+    ],
+    "httpx": [
+      "0.28.1"
+    ],
+    "pydantic": [
+      "2.13.4"
+    ],
+    "pydantic-settings": [
+      "2.14.1"
+    ],
+    "uvicorn": [
+      "0.47.0"
+    ],
+    "jinja2": [
+      "3.1.6"
+    ]
+  },
+  "python": "3.12.4"
+}
