@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-12 | Codex | 覆盖同一选中行的双 ID、前后变动及实际挂载身份写入原生提交回执。 |
 | 1.1.0 | 2026-10-12 | Codex | 覆盖隐藏同名 iframe 与公开 Shadow DOM 的完整选品及多根冲突。 |
 """
 import time
@@ -273,3 +274,47 @@ def test_final_idless_binding_proof_requires_same_selection_session(page,tmp_pat
     assert evidence['identity_source']=='DOM_SELECTION_AND_UNCHANGED_FORM'
     assert evidence['binding_required'] is True
     assert not finalize_product_before_submit(None,PlaywrightProductPicker(page),tmp_path,require_bound=True)
+
+
+@pytest.mark.parametrize('idless', [True, False])
+def test_platform_attachment_id_kept_separate_from_shop_id(page,tmp_path,idless):
+    import json
+    from video_processing.utils.wechat_product_execution import finalize_product_before_submit
+    from scripts.wechat_uploader import _write_submission_receipt, _compare_management_product_receipt
+    html = form(row()).replace('<tr>', '<tr data-row-key="888">').replace('name="book"', 'name="book" value="888"')
+    if idless:html = html.replace('data-product-id="${id}"', '')
+    page.set_content(html)
+    picker=PlaywrightProductPicker(page)
+    picker.select(TARGET,timeout_ms=800)
+    assert picker.read_binding(timeout_ms=500) == TARGET
+    assert picker.binding_platform_product_id == '888'
+    (tmp_path/'product_selection_receipt.json').write_text(json.dumps(dict(state='BOUND',
+        binding_confirmed=True,unbound_confirmed=False,actual_product_id='123',actual_title=TARGET.title,
+        actual_platform_product_id='888')))
+    assert finalize_product_before_submit(None,picker,tmp_path,require_bound=True)
+    _write_submission_receipt(tmp_path,dict(platform_post_id='native-work',platform_object_nonce='777'))
+    receipt=json.loads((tmp_path/'submission_receipt.json').read_text())
+    assert receipt['product_id']=='123' and receipt['product_platform_id']=='888'
+    assert receipt['product_platform_id_source']=='SELECTED_PUBLIC_ROW'
+    result=_compare_management_product_receipt(dict(platform_post_id='native-work',platform_object_nonce='777',
+        product_observation=dict(state='BOUND',actual_product_id='888',actual_title=TARGET.title)),tmp_path/'submission_receipt.json')
+    assert result['state']=='MATCH'
+    assert picker.cancel_and_clear(timeout_ms=500)
+    assert picker.read_binding(timeout_ms=500) is None and picker.binding_platform_product_id is None
+
+
+def test_conflicting_selected_row_attachment_ids_block(page):
+    page.set_content(form(row()).replace('<tr>','<tr data-row-key="888">').replace('name="book"','name="book" value="999"'))
+    with pytest.raises(BindingIdentityUnavailable,match='SELECTED_ACTUAL_ID_OR_TITLE_CONFLICT'):
+        PlaywrightProductPicker(page).select(TARGET,timeout_ms=800)
+
+
+def test_final_binding_rejects_changed_attachment_id(page,tmp_path):
+    import json
+    from video_processing.utils.wechat_product_execution import finalize_product_before_submit
+    page.set_content(form(row()).replace('<tr>','<tr data-row-key="888">').replace('name="book"','name="book" value="888"'))
+    picker=PlaywrightProductPicker(page);picker.select(TARGET,timeout_ms=800)
+    (tmp_path/'product_selection_receipt.json').write_text(json.dumps(dict(state='BOUND',
+        binding_confirmed=True,unbound_confirmed=False,actual_product_id='123',actual_title=TARGET.title,
+        actual_platform_product_id='999')))
+    assert not finalize_product_before_submit(None,picker,tmp_path,require_bound=True)

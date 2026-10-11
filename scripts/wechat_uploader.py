@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.22.0 | 2026-10-12 | Codex | 区分商家 outProductId 与视频号 productId；精确选中行或绑定原回执的原生对应关系才允许核验一致。 |
 | 5.21.0 | 2026-10-12 | Codex | 正式挂商品验收可显式要求最终实读绑定；保留逐次选品原因，日常可选挂接不变。 |
 | 5.20.0 | 2026-10-11 | Codex | 商品挂接失败且清空就绪时允许无商品继续，兼容旧参数和冻结任务。 |
 | 5.19.0 | 2026-10-10 | Antigravity | 接入有界图书商品挂载（财经/新闻/默认），仅当 binding_confirmed=True 时允许发表。 |
@@ -629,14 +630,45 @@ def _compare_management_product_receipt(record: dict, identity_receipt: Path | N
             return result
         if (not expected.get('platform_post_id')
                 or expected.get('platform_post_id') not in {record.get('platform_post_id'), record.get('platform_export_id')}
+                or (expected.get('platform_object_nonce') and expected['platform_object_nonce'] != record.get('platform_object_nonce'))
                 or expected.get('product_identity_source') not in {'FINAL_FORM_READBACK', 'DOM_SELECTION_AND_UNCHANGED_FORM'}):
             return result
         result['expected'] = {key: expected.get(key) for key in (
-            'product_id', 'product_title', 'product_binding_confirmed', 'product_unbound_confirmed')}
+            'product_id', 'product_platform_id', 'product_title', 'product_binding_confirmed', 'product_unbound_confirmed')}
         if observed.get('state') == 'BOUND':
+            platform_product_id = expected.get('product_platform_id')
+            if platform_product_id is not None:
+                if (not isinstance(platform_product_id, str) or not platform_product_id.isdigit()
+                        or expected.get('product_platform_id_source') != 'SELECTED_PUBLIC_ROW'):
+                    return result
+                result['mapping_source'] = 'SELECTED_PUBLIC_ROW'
+            else:
+                # 旧回执保持原样；补充凭据必须绑定原文件哈希、作品 ID/nonce，以及同条原生商品记录。
+                supplement = identity_receipt.with_name('product_identity_mapping.json')
+                if supplement.exists():
+                    mapping = json.loads(supplement.read_text())
+                    native = mapping.get('native_product') if isinstance(mapping, dict) else None
+                    if (not isinstance(native, dict) or mapping.get('schema_version') != 1
+                            or mapping.get('source') != 'PLATFORM_CATALOG_READBACK'
+                            or mapping.get('catalog_response_path') not in {
+                                '/shop-faas/mmecfinderassistantnode/live/cgi/get_all_window_products',
+                                '/shop-faas/mmecfinderassistantnode/live/cgi/search_products'}
+                            or mapping.get('submission_receipt_sha256') != hashlib.sha256(identity_receipt.read_bytes()).hexdigest()
+                            or mapping.get('platform_post_id') != expected['platform_post_id']
+                            or not expected.get('platform_object_nonce')
+                            or mapping.get('platform_object_nonce') != expected['platform_object_nonce']
+                            or record.get('platform_object_nonce') != expected['platform_object_nonce']
+                            or native.get('outProductId') != expected.get('product_id')
+                            or native.get('title') != expected.get('product_title')
+                            or not isinstance(native.get('productId'), str) or not native['productId'].isdigit()):
+                        return result
+                    platform_product_id = native['productId']
+                    result['mapping_source'] = mapping['source']
+                    result['mapping_evidence'] = str(supplement)
+            result['expected']['product_platform_id'] = platform_product_id
             matches = (expected.get('product_binding_confirmed') is True
                        and expected.get('product_unbound_confirmed') is False
-                       and (expected.get('product_id'), expected.get('product_title')) ==
+                       and (platform_product_id or expected.get('product_id'), expected.get('product_title')) ==
                        (observed.get('actual_product_id'), observed.get('actual_title')))
         elif observed.get('state') == 'UNBOUND':
             matches = (expected.get('product_unbound_confirmed') is True
@@ -874,6 +906,9 @@ def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> No
                                product_unbound_confirmed=selection.get('unbound_confirmed'),
                                product_id=selection.get('actual_product_id'), product_title=selection.get('actual_title'),
                                product_identity_source=selection['identity_source'])
+                if selection.get('actual_platform_product_id') is not None:
+                    receipt.update(product_platform_id=selection['actual_platform_product_id'],
+                                   product_platform_id_source='SELECTED_PUBLIC_ROW')
         receipt_path = evidence_dir / "submission_receipt.json"
         temporary_path = receipt_path.with_suffix(".json.tmp")
         temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, sort_keys=True), encoding="utf-8")

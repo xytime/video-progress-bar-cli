@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-12 | Codex | 双 ID 挂载核验；旧回执补充凭据必须精确绑定哈希、作品 nonce 与原生商品记录。 |
 | 1.1.0 | 2026-10-12 | Codex | 覆盖实际选中行与未变化表单证据的同作品商品精确核对。 |
 """
 import json
@@ -264,3 +265,51 @@ def test_readback_preserves_management_evidence_before_detail_navigation_and_com
     proof=json.loads((tmp_path/'proof/management_readback.json').read_text())
     assert proof['product_verification']['state']=='MATCH'
     assert proof['product_observation']['identity_source']=='POST_INFO_EXACT_WORK'
+
+
+@pytest.mark.parametrize('mutation', ['match','wrong_id','wrong_title','missing_source','wrong_nonce','non_string_id'])
+def test_selected_platform_id_requires_exact_identity_and_source(tmp_path,mutation):
+    from scripts.wechat_uploader import _compare_management_product_receipt
+    receipt=tmp_path/'submission_receipt.json'
+    expected=dict(platform_post_id='native-work',platform_object_nonce='777',product_identity_source='DOM_SELECTION_AND_UNCHANGED_FORM',
+        product_id='123',product_platform_id='888',product_platform_id_source='SELECTED_PUBLIC_ROW',product_title='完整图书版本',
+        product_binding_confirmed=True,product_unbound_confirmed=False)
+    record=dict(platform_post_id='native-work',platform_object_nonce='777',product_observation=dict(state='BOUND',actual_product_id='888',actual_title='完整图书版本'))
+    if mutation=='wrong_id':expected['product_platform_id']='999'
+    elif mutation=='wrong_title':record['product_observation']['actual_title']='另一版本'
+    elif mutation=='missing_source':expected.pop('product_platform_id_source')
+    elif mutation=='wrong_nonce':record['platform_object_nonce']='666'
+    elif mutation=='non_string_id':expected['product_platform_id']=888
+    receipt.write_text(json.dumps(expected))
+    wanted='MATCH' if mutation=='match' else 'MISMATCH' if mutation in {'wrong_id','wrong_title'} else 'UNVERIFIED'
+    assert _compare_management_product_receipt(record,receipt)['state']==wanted
+
+
+@pytest.mark.parametrize('mutation', ['match','missing_mapping','wrong_shop_id','wrong_platform_id','wrong_title','wrong_post','wrong_nonce',
+    'changed_receipt','wrong_hash','missing_hash','wrong_source','wrong_path','malformed_mapping'])
+def test_legacy_mapping_never_uses_title_only_or_another_receipt(tmp_path,mutation):
+    import hashlib
+    from scripts.wechat_uploader import _compare_management_product_receipt
+    receipt=tmp_path/'submission_receipt.json'
+    expected=dict(platform_post_id='native-work',platform_object_nonce='777',product_identity_source='DOM_SELECTION_AND_UNCHANGED_FORM',
+        product_id='123',product_title='完整图书版本',product_binding_confirmed=True,product_unbound_confirmed=False)
+    receipt.write_text(json.dumps(expected));original_bytes=receipt.read_bytes()
+    record=dict(platform_post_id='native-work',platform_object_nonce='777',product_observation=dict(state='BOUND',actual_product_id='888',actual_title='完整图书版本'))
+    mapping=dict(schema_version=1,source='PLATFORM_CATALOG_READBACK',platform_post_id='native-work',platform_object_nonce='777',
+        catalog_response_path='/shop-faas/mmecfinderassistantnode/live/cgi/search_products',
+        submission_receipt_sha256=hashlib.sha256(original_bytes).hexdigest(),native_product=dict(productId='888',outProductId='123',title='完整图书版本'))
+    if mutation=='wrong_shop_id':mapping['native_product']['outProductId']='999'
+    elif mutation=='wrong_platform_id':mapping['native_product']['productId']='999'
+    elif mutation=='wrong_title':mapping['native_product']['title']='另一版本'
+    elif mutation=='wrong_post':mapping['platform_post_id']='other-work'
+    elif mutation=='wrong_nonce':mapping['platform_object_nonce']='666'
+    elif mutation=='changed_receipt':receipt.write_text(json.dumps(dict(expected,product_id='999')))
+    elif mutation=='wrong_hash':mapping['submission_receipt_sha256']='wrong'
+    elif mutation=='missing_hash':mapping.pop('submission_receipt_sha256')
+    elif mutation=='wrong_source':mapping['source']='LOCAL_CATALOG'
+    elif mutation=='wrong_path':mapping['catalog_response_path']='/other_endpoint'
+    if mutation!='missing_mapping':(tmp_path/'product_identity_mapping.json').write_text('[]' if mutation=='malformed_mapping' else json.dumps(mapping))
+    result=_compare_management_product_receipt(record,receipt)
+    wanted='MATCH' if mutation=='match' else 'MISMATCH' if mutation in {'missing_mapping','wrong_platform_id'} else 'UNVERIFIED'
+    assert result['state']==wanted
+    if mutation!='changed_receipt':assert receipt.read_bytes()==original_bytes

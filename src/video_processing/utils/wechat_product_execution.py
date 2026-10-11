@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-12 | Codex | 最终实读回执保留平台选中行的挂载 ID，拒绝前后身份变化。 |
 | 1.2.0 | 2026-10-12 | Codex | 保留逐次选品结果；允许正式挂商品验收显式要求最终绑定，日常降级规则不变。 |
 | 1.1.0 | 2026-10-11 | Codex | 取消商品绑定硬门槛及商品可用性退避；保留提交去重、产物一致性与在途租约。 |
 """
@@ -133,7 +134,11 @@ def finalize_product_before_submit(payload: dict | None, picker, evidence_dir: P
             if payload is not None:
                 if payload['require_product'] is not True or actual not in selection_from_task(payload)[1].candidates:
                     return False
+            if (receipt.get('actual_platform_product_id') is not None
+                    and receipt['actual_platform_product_id'] != getattr(picker, 'binding_platform_product_id', None)):
+                return False
         atomic_json(readback, dict(receipt, final_verified=True, identity_source=getattr(picker, 'binding_identity_source', 'FINAL_FORM_READBACK'),
+                                  actual_platform_product_id=getattr(picker, 'binding_platform_product_id', None) if actual else None,
                                   binding_required=bool(require_bound or receipt.get('binding_required'))))
         return True
     except Exception:
@@ -171,6 +176,7 @@ def execute_product_task(payload: dict, picker, evidence_dir: Path, status_path:
         receipt = dict(required=True, binding_required=False, binding_confirmed=result.binding_confirmed,
                        unbound_confirmed=result.state == 'UNBOUND', state=result.state,
                        reason=result.reason, actual_product_id=result.actual.product_id if result.actual else None,
+                       actual_platform_product_id=getattr(picker, 'binding_platform_product_id', None) if result.actual else None,
                        actual_title=result.actual.title if result.actual else None,
                        requested_product_id=result.requested.product_id, requested_title=result.requested.title,
                        attempts=result.attempts, fallback_reason=result.fallback_reason,

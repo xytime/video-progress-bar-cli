@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.3.0 | 2026-10-12 | Codex | 同一实际选中行分别保留商家商品 ID 与视频号挂载 ID，禁止用名称或列表序号映射。 |
 | 1.2.0 | 2026-10-12 | Codex | 修复隐藏 iframe/Shadow DOM 定位；无 ID 卡片仅接受平台实际选中行及未变化表单证据。 |
 | 1.1.0 | 2026-10-10 | Antigravity | 自动确认‘选择商品出现时机’弹窗，确保遮罩完全关闭且发表按钮无阻碍。 |
 | 1.0.0 | 2026-10-10 | Antigravity | 初始实现：适配当前视频号微前端结构，支持完整商品查找、单选确认、表单回读与解绑。 |
@@ -73,7 +74,11 @@ const selectedIdentity = () => {
     if (!ids.size && /^[A-Za-z0-9_-]+$/.test(text(row.cells[0]))) ids.add(text(row.cells[0]));
     const titleNode = row.querySelector('.title') || row.cells[1];
     const title = titleNode?.getAttribute('title')?.trim() || text(titleNode);
-    return ids.size === 1 && title ? {product_id: [...ids][0], title} : null;
+    const rowId = row.getAttribute('data-row-key'), radioId = row.querySelector('input[type="radio"]:checked')?.value;
+    // 两个公开字段必须在同一实际选中行吻合；不把挂载 ID 替换为商家 ID。
+    const platformId = rowId && /^\d+$/.test(rowId) && rowId === radioId ? rowId : null;
+    if (rowId && radioId && rowId !== radioId) return null;
+    return ids.size === 1 && title ? {product_id: [...ids][0], title, platform_product_id: platformId} : null;
 };
 const lookup = prod => {
     const ds = productDialogs();
@@ -106,6 +111,7 @@ class PlaywrightProductPicker:
         self.clock = clock
         self._binding_attestation = None
         self.binding_identity_source = "FINAL_FORM_READBACK"
+        self.binding_platform_product_id = None
         # catalog 仅保留调用兼容，不用于身份回读。
 
     def _get_content_frame(self) -> Any:
@@ -177,11 +183,10 @@ class PlaywrightProductPicker:
         end = self._end(timeout_ms)
         info = self._eval("return binding();", end)
         self.binding_identity_source = "FINAL_FORM_READBACK"
+        self.binding_platform_product_id = None
         if info.get("unbound"):
             return None
-        if info.get("product_id") and info.get("title"):
-            return ProductIdentity(info["product_id"], info["title"])
-        if info.get("missing_id") and self._binding_attestation is not None:
+        if self._binding_attestation is not None:
             actual = self._binding_attestation.evaluate("""e => {
                 const cards = Array.from(e.scope.querySelectorAll('.post-component-choose-wrap .choose-content'))
                     .filter(n => !!n.getClientRects().length);
@@ -190,9 +195,13 @@ class PlaywrightProductPicker:
                     && name?.innerText.trim() === e.product.title ? e.product : null;
             }""")
             self._remaining(end)
-            if actual and actual['title'] == info['title']:
-                self.binding_identity_source = "DOM_SELECTION_AND_UNCHANGED_FORM"
-                return ProductIdentity(actual['product_id'], actual['title'])
+            if actual and actual['title'] == info.get('title'):
+                if info.get('product_id') == actual['product_id'] or info.get('missing_id'):
+                    self.binding_platform_product_id = actual.get('platform_product_id')
+                    self.binding_identity_source = "DOM_SELECTION_AND_UNCHANGED_FORM"
+                    return ProductIdentity(actual['product_id'], actual['title'])
+        if info.get("product_id") and info.get("title"):
+            return ProductIdentity(info["product_id"], info["title"])
         raise BindingIdentityUnavailable("BINDING_ACTUAL_ID_OR_TITLE_UNAVAILABLE")
 
     def find(self, product: ProductIdentity, *, timeout_ms: int) -> ProductLookup:
@@ -224,7 +233,7 @@ class PlaywrightProductPicker:
             raise BindingIdentityUnavailable("PRODUCT_CHANGED_BEFORE_SELECTION")
         self._poll("const ds = productDialogs(); if (ds.length !== 1) return false; const r = lookup(arg); return r.status === 'AVAILABLE' && r.radio.checked;", end, vars(product))
         observed = self._eval("return selectedIdentity();", end)
-        if not observed or ProductIdentity(**observed) != product:
+        if not observed or ProductIdentity(observed['product_id'], observed['title']) != product:
             raise BindingIdentityUnavailable("SELECTED_ACTUAL_ID_OR_TITLE_CONFLICT")
         self._clear_attestation()
         self._poll(r"const d = productDialogs()[0]; const b = d && button(d, /^添加(?:\s*[（(]1[）)])?$/); if (!b) return false; b.click(); return true;", end)
