@@ -648,6 +648,72 @@ def _compare_management_product_receipt(record: dict, identity_receipt: Path | N
         return result
 
 
+def _management_detail_product_observation(payload: object, post_id: str, nonce: str) -> dict:
+    """成功的同作品完整详情可证明商品字段未设置；残缺列表不能证明。"""
+    unknown = {'state': 'UNVERIFIED'}
+    if not isinstance(payload, dict) or type(payload.get('errCode')) is not int or payload['errCode'] != 0:
+        return unknown
+    data = payload.get('data')
+    post = data.get('object') if isinstance(data, dict) else None
+    if (not isinstance(post, dict) or post.get('objectId') != post_id
+            or not nonce or post.get('objectNonce') != nonce):
+        return unknown
+    observed = _management_product_observation(post)
+    desc = post.get('desc')
+    if not isinstance(desc, dict):
+        return unknown
+    # get_post_info 的完整原生 desc 在未挂商品时省略 product/component。
+    # 只接受同时提供媒体、正文、标题及修改信息的详情，拒绝错误/截断/另一作品。
+    if (observed['state'] == 'UNVERIFIED' and 'product' not in desc and 'component' not in desc
+            and isinstance(desc.get('media'), list) and len(desc['media']) == 1
+            and isinstance(desc['media'][0], dict)
+            and isinstance(desc['media'][0].get('videoPlayLen'), int) and desc['media'][0]['videoPlayLen'] > 0
+            and isinstance(desc.get('description'), str)
+            and isinstance(desc.get('shortTitle'), list) and len(desc['shortTitle']) == 1
+            and isinstance(desc['shortTitle'][0], dict)
+            and isinstance(desc['shortTitle'][0].get('shortTitle'), str)
+            and desc.get('extReading') == {} and isinstance(desc.get('modFeedInfo'), dict)):
+        observed.update(state='UNBOUND', actual_product_id=None, actual_title=None,
+                        absence_evidence='COMPLETE_POST_INFO_WITHOUT_PRODUCT_OR_COMPONENT')
+    observed.update(identity_source='POST_INFO_EXACT_WORK', platform_post_id=post_id,
+                    platform_object_nonce=nonce)
+    return observed
+
+
+def _read_management_product_detail(page, evidence_root: Path, record: dict) -> dict:
+    """从唯一原生作品的编辑入口只读详情；不修改字段、不点击完成。"""
+    unknown = {'state': 'UNVERIFIED'}
+    post_id = record.get('platform_post_id')
+    nonce = record.get('platform_object_nonce')
+    if not isinstance(post_id, str) or not isinstance(nonce, str) or not nonce:
+        return unknown
+    try:
+        matched = page.locator('.post-feed-item').evaluate_all('''(nodes, identity) => {
+            const matches = nodes.filter(n => n.__vue__?.$props?.post?.objectId === identity.id &&
+                n.__vue__?.$props?.post?.objectNonce === identity.nonce);
+            if (matches.length !== 1) return false;
+            matches[0].setAttribute('data-product-readback-target', 'true');
+            return true;
+        }''', {'id': post_id, 'nonce': nonce})
+        if matched is not True:
+            return unknown
+        target = page.locator('[data-product-readback-target=true]')
+        if target.count() != 1:
+            return unknown
+        target.hover(timeout=3000)
+        control = page.locator('[data-product-readback-target=true] .edit-cover-item .opr-item')
+        if control.count() != 1 or not control.is_visible():
+            return unknown
+        with page.expect_response(lambda response: response.url.split('?', 1)[0].endswith('/post/get_post_info'), timeout=15000) as response:
+            control.click(timeout=3000)
+        observed = _management_detail_product_observation(response.value.json(), post_id, nonce)
+        _capture_wechat_evidence(page, evidence_root, 'product_detail_readback')
+        return observed
+    except Exception as exc:
+        logger.info('Same-work product detail unavailable: %s', type(exc).__name__)
+        return unknown
+
+
 def _collect_management_cards_from_post_list_payload(payload: object) -> dict[str, dict[str, str]]:
     """从作品管理原生列表响应提取 objectId，绝不从标题反向寻找历史作品。"""
     if not isinstance(payload, dict):
@@ -1088,10 +1154,13 @@ def verify_management_publication_by_id(
     normalized_post_id = (platform_post_id or "").strip()
     nonce = _submission_identity_nonce(identity_receipt, normalized_post_id)
     for attempt in range(MANAGEMENT_VERIFY_ATTEMPTS):
-        cards, loaded = (
-            _load_management_cards(page, search_title=expected_title)
-            if expected_title else _load_management_cards(page)
-        )
+        # 标题搜索会过滤正文且可能清空同 ID 的 DOM；先按原生身份查当前页。
+        cards, loaded = _load_management_cards(page)
+        if expected_title and loaded and not any(
+            normalized_post_id in {card.get('platform_post_id'), card.get('platform_export_id')}
+            or (nonce and card.get('platform_object_nonce') == nonce) for card in cards.values()
+        ):
+            cards, loaded = _load_management_cards(page, search_title=expected_title)
         matches = [card for card in cards.values() if normalized_post_id in {
             card.get("platform_post_id"), card.get("platform_export_id")
         }] if loaded else []
@@ -1123,6 +1192,12 @@ def verify_management_publication_by_id(
                 state = classify_management_component(record.get("component_state"))
                 if state == MANAGEMENT_PUBLISHED:
                     reason = "DOM_POSTED_PUBLIC_COMPONENT"
+            # 在只读详情导航之前保存作品管理页，保留公开状态的原始页面证据。
+            _capture_wechat_evidence(page, evidence_root, f"management_{state.lower()}")
+            if identity_receipt and (record.get('product_observation') or {}).get('state') == 'UNVERIFIED':
+                detail = _read_management_product_detail(page, evidence_root, record)
+                if detail.get('state') in {'BOUND', 'UNBOUND'}:
+                    record['product_observation'] = detail
             try:
                 evidence_root.mkdir(parents=True, exist_ok=True)
                 (evidence_root / "management_readback.json").write_text(json.dumps({
@@ -1143,7 +1218,6 @@ def verify_management_publication_by_id(
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as exc:
                 logger.warning("Unable to persist management readback diagnostics: %s", type(exc).__name__)
-            _capture_wechat_evidence(page, evidence_root, f"management_{state.lower()}")
             return state, record.get("platform_url", "")
         if attempt + 1 < MANAGEMENT_VERIFY_ATTEMPTS:
             logger.info(

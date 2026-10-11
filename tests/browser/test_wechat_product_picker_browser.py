@@ -169,3 +169,21 @@ def test_final_dom_binding_matches_receipt_before_submission(page,tmp_path,initi
     if not final:page.locator('#products').evaluate('(node)=>node.hidden=true')
     assert finalize_product_before_submit(None,PlaywrightProductPicker(page),evidence) is allowed
     assert (evidence/'product_pre_submit_readback.json').exists() is allowed
+
+
+@pytest.mark.parametrize('case', ['unbound','bound','wrong_work','error','duplicate'])
+def test_same_work_native_detail_readback_is_read_only(page,tmp_path,case):
+    import json
+    from scripts.wechat_uploader import _read_management_product_detail
+    payload=dict(errCode=0,data=dict(object=dict(objectId='native-current',objectNonce='12345',desc=dict(
+        media=[dict(videoPlayLen=32)],description='原生描述',shortTitle=[dict(shortTitle='原生标题')],extReading={},modFeedInfo={}))))
+    if case=='bound':payload['data']['object']['desc']['product']=dict(productId='123',title=TARGET.title)
+    if case=='wrong_work':payload['data']['object']['objectId']='other-work'
+    if case=='error':payload['errCode']=1
+    page.route('**/post/get_post_info',lambda route:route.fulfill(json=payload,headers={'Access-Control-Allow-Origin':'*'}))
+    row='''<div class="post-feed-item"><div class="edit-cover-item"><button class="opr-item" onclick="fetch('https://fixture.test/post/get_post_info')">修改描述和封面</button></div></div>'''
+    page.set_content(row*(2 if case=='duplicate' else 1)+'''<button id="save" onclick="window.saved=true">完成</button>
+        <script>window.saved=false;for(const n of document.querySelectorAll('.post-feed-item'))n.__vue__={$props:{post:{objectId:'native-current',objectNonce:'12345'}}};</script>''')
+    result=_read_management_product_detail(page,tmp_path,dict(platform_post_id='native-current',platform_object_nonce='12345'))
+    assert result['state']==('BOUND' if case=='bound' else 'UNBOUND' if case=='unbound' else 'UNVERIFIED')
+    assert page.evaluate('window.saved') is False

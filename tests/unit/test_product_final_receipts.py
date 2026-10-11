@@ -197,3 +197,63 @@ def test_platform_product_comparison_uses_exact_work_and_final_receipt(tmp_path,
     result=_compare_management_product_receipt(record,path)
     wanted='MATCH' if mutation=='match' else ('UNVERIFIED' if mutation in {'wrong_post','missing_source','missing_receipt','unknown_actual'} else 'MISMATCH')
     assert result['state']==wanted
+
+
+def complete_detail_fixture():
+    return dict(errCode=0,data=dict(object=dict(objectId='native-current',objectNonce='12345',desc=dict(
+        media=[dict(videoPlayLen=32)],description='完整视频描述',shortTitle=[dict(shortTitle='完整标题')],
+        extReading={},modFeedInfo=dict(history=[])))))
+
+
+@pytest.mark.parametrize('mutation', ['none','error','missing_error','bool_error','missing_data','wrong_post','wrong_nonce','missing_nonce',
+    'missing_desc','missing_media','empty_media','missing_description','missing_title','missing_modify_info','other_component',
+    'other_link','malformed_product','explicit_empty','bound'])
+def test_only_successful_exact_complete_detail_proves_omitted_product(mutation):
+    from scripts.wechat_uploader import _management_detail_product_observation
+    payload=complete_detail_fixture();post=payload['data']['object'];desc=post['desc']
+    if mutation=='error':payload['errCode']=1
+    elif mutation=='missing_error':payload.pop('errCode')
+    elif mutation=='bool_error':payload['errCode']=False
+    elif mutation=='missing_data':payload.pop('data')
+    elif mutation=='wrong_post':post['objectId']='other'
+    elif mutation=='wrong_nonce':post['objectNonce']='67890'
+    elif mutation=='missing_nonce':post.pop('objectNonce')
+    elif mutation=='missing_desc':post.pop('desc')
+    elif mutation.startswith('missing_'):
+        desc.pop({'missing_media':'media','missing_description':'description','missing_title':'shortTitle','missing_modify_info':'modFeedInfo'}[mutation])
+    elif mutation=='empty_media':desc['media']=[]
+    elif mutation=='other_component':desc['component']={'type':1}
+    elif mutation=='other_link':desc['extReading']={'url':'https://example.test'}
+    elif mutation=='malformed_product':desc['product']=None
+    elif mutation=='explicit_empty':desc['product']={}
+    elif mutation=='bound':desc['product']=dict(productId='700007',title='完整指定商品')
+    result=_management_detail_product_observation(payload,'native-current','12345')
+    assert result['state']==('BOUND' if mutation=='bound' else 'UNBOUND' if mutation in {'none','explicit_empty'} else 'UNVERIFIED')
+    assert _management_detail_product_observation(payload,'native-current','')['state']=='UNVERIFIED'
+
+
+def test_readback_preserves_management_evidence_before_detail_navigation_and_compares_receipt(tmp_path,monkeypatch):
+    from scripts import wechat_uploader as uploader
+    receipt=tmp_path/'receipt.json'
+    receipt.write_text(json.dumps(dict(platform_post_id='native-current',platform_object_nonce='12345',
+        product_identity_source='FINAL_FORM_READBACK',product_binding_confirmed=False,product_unbound_confirmed=True,
+        product_id=None,product_title=None)))
+    record=dict(platform_post_id='native-current',platform_object_nonce='12345',identity_source='post_list_api',
+        status_text='已发布',product_observation=dict(state='UNVERIFIED'))
+    events=[]
+    def load(page,**kwargs):
+        assert not kwargs, '不得在原生身份已在当前页时执行标题过滤'
+        return {'native-current':record},True
+    def detail(*args):
+        events.append('detail-navigation')
+        return uploader._management_detail_product_observation(complete_detail_fixture(),'native-current','12345')
+    monkeypatch.setattr(uploader,'_load_management_cards',load)
+    monkeypatch.setattr(uploader,'_capture_wechat_evidence',lambda page,root,name:events.append(name))
+    monkeypatch.setattr(uploader,'_read_management_product_detail',detail)
+    state,_=uploader.verify_management_publication_by_id(object(),tmp_path/'proof','native-current',
+        expected_title='完整标题',identity_receipt=receipt)
+    assert state=='PUBLISHED'
+    assert events==['management_published','detail-navigation']
+    proof=json.loads((tmp_path/'proof/management_readback.json').read_text())
+    assert proof['product_verification']['state']=='MATCH'
+    assert proof['product_observation']['identity_source']=='POST_INFO_EXACT_WORK'
