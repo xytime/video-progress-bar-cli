@@ -246,7 +246,13 @@ def parse_product_policy(data: dict) -> ProductPolicy:
     fields = {"schema_version", "version", "products", "rules", "default_candidates", "timeout_seconds", "max_attempts"}
     if isinstance(data, dict) and data.get('schema_version') == 2:
         fields.add('profiles')
-    obj(data, fields, fields)
+    obj(data, fields | {'library', 'wait_policy'}, fields)
+    if 'wait_policy' in data:
+        from video_processing.core.wechat_product_wait_policy import validate_wait_policy
+        validate_wait_policy(data['wait_policy'])
+    if 'library' in data:
+        from video_processing.core.wechat_product_library import validate_library
+        validate_library(data['library'], data['products'])
     if type(data['schema_version']) is not int or data['schema_version'] not in (1, 2):
         raise ValueError("不支持的 schema_version")
     version = string(data['version'])

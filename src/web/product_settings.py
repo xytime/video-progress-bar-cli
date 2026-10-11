@@ -9,8 +9,11 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 from video_processing.core.wechat_product_policy import GROUP_LABELS, parse_product_policy
+from video_processing.core.wechat_product_library import references
 from video_processing.utils.wechat_product_config import load_policy, policy_status, save_policy, PolicyConflict, decision_payload
 from video_processing.utils.wechat_product_context import video_product_context
+from video_processing.utils.wechat_product_waits import ProductWaitStore
+from video_processing.utils.wechat_product_lifecycle import impact, list_revisions, read_revision
 from video_processing.utils.wechat_product_catalog import catalog_view, prepare_import, import_catalog
 
 
@@ -18,6 +21,12 @@ class SaveRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     config: dict
     expected_digest: str = Field(min_length=64, max_length=64)
+
+
+class RevisionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+    expected_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
 
 
 class PreviewRequest(BaseModel):
@@ -109,11 +118,63 @@ def create_product_settings_router(*, active: Path, status: Path, output: Path,
     def apply_catalog(body: CatalogImportRequest, request: Request):
         return catalog_operation(body, request, apply=True)
 
+    @router.get('/api/product-settings/waits')
+    def waits():
+        try:
+            return {'scheduler_connected': False, 'records': ProductWaitStore(output / 'wechat_product_waits.json').records(),
+                    'reason': '等待账本已准备；调度接入须与 P0 真实发布器一起验收。'}
+        except (ValueError, OSError) as exc:
+            raise HTTPException(503, '等待记录不可读，实际状态未知') from exc
+
+    @router.get('/api/product-settings/history')
+    def history():
+        try:
+            return {'revisions': list_revisions(active)}
+        except (ValueError, OSError) as exc:
+            raise HTTPException(503, '历史快照读取失败') from exc
+
+    @router.post('/api/product-settings/impact')
+    def compare(body: SaveRequest, request: Request):
+        checked_origin(request)
+        try:
+            return impact(active, body.config, body.expected_digest, videos(), output)
+        except PolicyConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @router.post('/api/product-settings/history/restore-draft')
+    def restore_draft(body: RevisionRequest, request: Request):
+        checked_origin(request)
+        try:
+            candidate = json.loads(read_revision(active, body.digest).serialized)
+            report = impact(active, candidate, body.expected_digest, videos(), output)
+            return {'config': candidate, 'impact': report, 'draft_only': True}
+        except PolicyConflict as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, '历史快照不可恢复：' + str(exc)) from exc
+
+    @router.post('/api/product-settings/catalog/refresh')
+    def refresh(request: Request):
+        checked_origin(request)
+        return {'connected': False, 'refreshed': False, 'reason': '真实同步适配器尚未核验；保留原清单，请导入可靠资料。'}
+
     @router.put('/api/product-settings')
     def save(body: SaveRequest, request: Request):
         checked_origin(request)
         try:
             data = dict(body.config)
+            from video_processing.core.wechat_product_library import validate_library
+            if 'library' in data:
+                validate_library(data['library'], data['products'])
+                catalog = catalog_view(active.with_name('wechat_product_catalog.json'), data['products'])
+                account = catalog.get('account_id')
+                if account and any(row['identity_status'] == 'VERIFIED' and row['account_id'] != account for row in data['library'].values()):
+                    raise ValueError('商品所属发布账号与清单账号不一致')
+            for alias, product in data['products'].items():
+                if not product.get('enabled') and references(data, alias):
+                    raise ValueError('停用商品仍被引用，请在同次保存修复：' + '、'.join(references(data, alias)))
             data['version'] = datetime.now(timezone.utc).strftime('books-%Y%m%dT%H%M%SZ-') + uuid4().hex[:8]
             saved = save_policy(data, active, expected_digest=body.expected_digest)
             return response_view(saved)

@@ -137,6 +137,11 @@ def prepare_import(content: str, path: Path, active: Path, *, expected_catalog_d
     if policy.digest != expected_policy_digest or catalog_digest(path) != expected_catalog_digest:
         raise PolicyConflict('商品清单或规则已被其他窗口更新，请重新载入后再校验。')
     data, catalog = decode_catalog(content.encode('utf-8'), import_only=True)
+    configured = json.loads(policy.serialized)
+    accounts = {row['account_id'] for row in configured.get('library', {}).values()
+                if row['identity_status'] == 'VERIFIED'}
+    if any(account != catalog['account_id'] for account in accounts):
+        raise ValueError('清单账号与已核实商品资料的发布账号不一致')
     stamp = _timestamp(catalog['captured_at'])
     if stamp > datetime.now(timezone.utc) + timedelta(minutes=5):
         raise ValueError('采集时间在未来，请核实来源时间')
@@ -171,5 +176,12 @@ def import_catalog(content: str, path: Path, active: Path, **expected) -> dict:
         with path.with_suffix(path.suffix+'.lock').open('a') as catalog_lock:
             fcntl.flock(catalog_lock, fcntl.LOCK_EX)
             data, report = prepare_import(content, path, active, **expected)
+            # 留存被替换的观测；库存历史不能被新快照抹去。
+            if path.exists():
+                previous = path.read_bytes()
+                archive = path.with_name(path.stem + '_history') / (hashlib.sha256(previous).hexdigest() + '.json')
+                if not archive.exists():
+                    atomic_json(archive, {'original_digest': hashlib.sha256(previous).hexdigest(),
+                                         'catalog': json.loads(previous, object_pairs_hook=_unique_object)})
             atomic_json(path, data)
             return report

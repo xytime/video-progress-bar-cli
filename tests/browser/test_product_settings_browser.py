@@ -38,6 +38,13 @@ def ui(chromium, api_setup):
     page.close();assert errors==[]
 
 
+def save_with_preview(page):
+    page.locator('#save').click()
+    page.wait_for_function("document.querySelector('#impact-dialog').open || !document.querySelector('#editor').disabled")
+    if page.locator('#impact-dialog').is_visible():
+        page.locator('#impact-confirm').click()
+
+
 def test_real_save_preview_persist_and_version(ui):
     page,active,status,flags=ui
     expect(page).to_have_title('商品挂载设置 · 视频控制台')
@@ -51,7 +58,7 @@ def test_real_save_preview_persist_and_version(ui):
     expect(page.locator('#preview-result li')).to_have_count(3)
     assert not status.exists()
     before=load_policy(active).digest
-    page.locator('#save').click()
+    save_with_preview(page)
     expect(page.locator('#feedback')).to_contain_text('配置已保存；发布器尚未接入')
     assert flags['writes']==1 and load_policy(active).digest!=before
     expect(page.locator('#adopted-version')).to_contain_text('尚无实际选品记录')
@@ -62,7 +69,7 @@ def test_real_save_preview_persist_and_version(ui):
 def test_conflict_failure_preserves_draft_and_reload_cancel(ui):
     page,active,status,flags=ui
     old=active.read_bytes();page.locator('#ted-0').select_option('finance');flags['conflict']=True
-    page.locator('#save').click();expect(page.locator('#feedback')).to_contain_text('其他窗口更新')
+    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('其他窗口更新')
     expect(page.locator('#ted-0')).to_have_value('finance');assert active.read_bytes()==old
     page.locator('#reload').click();expect(page.locator('#discard-dialog')).to_be_visible()
     expect(page.locator('#keep-editing')).to_be_focused()
@@ -77,9 +84,9 @@ def test_invalid_chain_does_not_save(ui):
     page,active,_,_=ui
     old=active.read_bytes();page.locator('#english_world-0').select_option('finance');page.locator('#english_world-1').select_option('news')
     page.locator('summary').filter(has_text='识别条件').click();page.locator('#attempts').select_option('2')
-    page.locator('#save').click();expect(page.locator('#feedback')).to_contain_text('默认回退不可达')
+    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('默认回退不可达')
     assert active.read_bytes()==old
-    page.locator('#timeout').fill('0');page.locator('#save').click()
+    page.locator('#timeout').fill('0');save_with_preview(page)
     expect(page.locator('#timeout')).to_have_attribute('aria-invalid','true');expect(page.locator('#timeout')).to_be_focused()
 
 
@@ -112,7 +119,7 @@ def test_pending_save_blocks_duplicate_clicks(ui):
     page,active,_,flags=ui
     before=active.read_bytes();page.locator('#ted-0').select_option('finance')
     flags['hold']=('PUT','/api/product-settings')
-    page.locator('#save').click();expect(page.locator('#save')).to_be_disabled()
+    save_with_preview(page);expect(page.locator('#save')).to_be_disabled()
     expect(page.locator('#feedback')).to_contain_text('正在保存')
     page.locator('#save').evaluate('(button)=>button.click()')
     assert flags['writes']==1 and active.read_bytes()==before
@@ -149,7 +156,7 @@ def test_all_product_dropdowns_use_catalog_and_new_selection_persists(ui):
     page.locator('#english_world-0').select_option('product_70001')
     expect(page.locator('#english_world-0-detail')).to_contain_text('ID 70001')
     expect(page.locator('#english_world-0-detail')).to_contain_text('采集时库存未知')
-    page.locator('#save').click();expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
     page.reload();expect(page.locator('#english_world-0')).to_have_value('product_70001')
     page.locator('#video').select_option('english:1');page.locator('#preview').click()
     expect(page.locator('#preview-result li').first).to_contain_text('ID 70001')
@@ -199,7 +206,7 @@ def test_catalog_import_protects_unsaved_config_and_blocks_duplicate_submit(ui):
     page.locator('#catalog-check').click()
     expect(page.locator('#catalog-import-feedback')).to_contain_text('有未保存修改')
     expect(page.locator('#ted-0')).to_have_value('finance')
-    page.locator('#save').click();expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
     page.locator('#catalog-check').click();expect(page.locator('#catalog-apply')).to_be_enabled()
     flags['hold']=('POST','/api/product-settings/catalog/import')
     page.locator('#catalog-apply').click();expect(page.locator('#catalog-apply')).to_be_disabled()
@@ -208,3 +215,61 @@ def test_catalog_import_protects_unsaved_config_and_blocks_duplicate_submit(ui):
     assert not active.with_name('wechat_product_catalog.json').exists()
     flags['release']();expect(page.locator('#catalog-import-feedback')).to_contain_text('已导入 3 件商品')
     expect(page.locator('#ted-0')).to_have_value('finance')
+
+
+def test_impact_cancel_and_history_restore_as_draft(ui):
+    page,active,status,flags=ui
+    old=load_policy(active);page.locator('#english_world-0').select_option('finance')
+    page.locator('#save').click();expect(page.locator('#impact-dialog')).to_be_visible()
+    expect(page.locator('#impact-result')).to_contain_text('变化 1 条')
+    assert active.read_bytes() and load_policy(active).digest==old.digest
+    page.locator('#impact-cancel').click();assert flags['writes']==0
+    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    expect(page.locator('#revision option')).to_have_count(2)
+    page.locator('#revision').select_option(old.digest);page.locator('#restore-revision').click()
+    expect(page.locator('#feedback')).to_contain_text('恢复草稿')
+    expect(page.locator('#english_world-0')).to_have_value('default')
+    assert load_policy(active).digest!=old.digest
+    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    assert load_policy(active).version!=old.version
+    assert load_policy(active).decide(content_type='ENGLISH_WORLD_SHORT').candidates==old.decide(content_type='ENGLISH_WORLD_SHORT').candidates
+
+
+def test_library_pending_then_verified_and_selected(ui):
+    page,active,_,flags=ui
+    page.locator('#library-new').click()
+    page.locator('#lib-title').fill('新书完整名称')
+    page.locator('#lib-shop').fill('快捷英语教辅图书')
+    page.locator('#lib-merchant_appid').fill('wx490e65efa3751b8c')
+    page.locator('#library-apply').click()
+    expect(page.locator('#library-feedback')).to_contain_text('已应用到草稿')
+    alias=page.locator('#library-choice').input_value()
+    expect(page.locator(f'#default-product option[value="{alias}"]')).to_have_count(0)
+    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    assert json.loads(active.read_text())['library'][alias]['identity_status']=='UNVERIFIED'
+    page.locator('#library-choice').select_option(alias)
+    page.locator('#lib-product_id').fill('88888888')
+    page.locator('#lib-account_id').fill('verified-publisher')
+    page.locator('#lib-verified_source').fill('人工核对后台资料')
+    page.locator('#lib-verified_at').fill('2026-01-01T00:00:00+08:00')
+    page.locator('#lib-identity_status').select_option('VERIFIED')
+    page.locator('#library-apply').click()
+    page.locator('#english_world-0').select_option(alias)
+    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    assert load_policy(active).decide(content_type='ENGLISH_WORLD_SHORT').candidates[0].product_id=='88888888'
+    page.reload();expect(page.locator('#english_world-0')).to_have_value(alias)
+    page.locator('#library-search').fill('快捷英语')
+    expect(page.locator('#library-choice option')).to_have_count(2)
+
+
+def test_refresh_wait_parameters_and_disabled_reference(ui):
+    page,active,_,_=ui
+    page.locator('#catalog-refresh').click();expect(page.locator('#refresh-state')).to_contain_text('尚未核验')
+    expect(page.locator('#wait-state')).to_contain_text('调度接入')
+    page.locator('#library-choice').select_option('default');page.locator('#library-toggle').click()
+    page.locator('#save').click();expect(page.locator('#feedback')).to_contain_text('停用')
+    page.locator('#library-toggle').click()
+    page.locator('summary').filter(has_text='等待与恢复检查').click()
+    page.locator('#wait-base_seconds').fill('600')
+    save_with_preview(page);expect(page.locator('#feedback')).to_contain_text('配置已保存')
+    assert json.loads(active.read_text())['wait_policy']['base_seconds']==600
