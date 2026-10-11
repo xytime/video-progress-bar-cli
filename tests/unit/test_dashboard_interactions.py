@@ -13,6 +13,58 @@ import pytest
 from tests.browser_fixtures import chromium, dashboard, _payload, _video
 
 
+def test_processing_row_has_stop_and_delete_controls(dashboard):
+    page, state = dashboard
+    state['payload'] = _payload([_video('preparing', status='PROCESSING')], total=1)
+    page.evaluate('async () => { await loadVideos(); }')
+    row = page.locator('#row-preparing')
+    assert row.locator('.btn-stop').is_visible()
+    assert row.get_by_role('button', name='❌ 删除', exact=True).is_visible()
+    page.on('dialog', lambda dialog: dialog.accept())
+    row.locator('.btn-stop').click()
+    page.wait_for_function("document.querySelector('#row-preparing .btn-stop') !== null")
+    assert state['writes'] == [{'method': 'POST', 'path': '/api/videos/preparing/stop', 'data': None}]
+
+
+def test_processing_slice_has_stop_control_with_slice_identity(dashboard):
+    page, state = dashboard
+    parent = dict(_video('parent', status='SEGMENTED'), slices_count=1)
+    state['payload'] = _payload([parent], total=1)
+    child = dict(_video('parent', status='PROCESSING'), slice_index=2)
+    page.route('**/api/videos/parent/slices', lambda route: route.fulfill(json={'slices': [child]}))
+    page.evaluate('async () => { await loadVideos(); }')
+    page.locator('#btn-toggle-parent').click()
+    stop = page.locator('.child-row-parent .btn-stop')
+    stop.wait_for()
+    assert stop.get_attribute('onclick') == "stopVideo('parent', 2)"
+
+
+@pytest.mark.parametrize('action', ['delete', 'stop'])
+def test_missing_task_refreshes_stale_row(dashboard, action):
+    page, state = dashboard
+    state['payload'] = _payload([_video('gone', status='PROCESSING')], total=1)
+    page.evaluate('async () => { await loadVideos(); }')
+    endpoint = '**/api/videos/gone' + ('/stop' if action == 'stop' else '?delete_files=false')
+
+    def missing(route):
+        state['payload'] = _payload([], total=0)
+        route.fulfill(json={'success': False, 'error': '视频不存在'})
+
+    page.route(endpoint, missing)
+    row = page.locator('#row-gone')
+    if action == 'delete':
+        row.get_by_role('button', name='❌ 删除', exact=True).click()
+        code = page.locator('#delete-safety-code').inner_text()
+        page.locator('#delete-confirm-code-input').fill(code)
+        page.locator('#btn-confirm-delete').click()
+        page.locator('#delete-modal').wait_for(state='hidden')
+    else:
+        page.on('dialog', lambda dialog: dialog.accept())
+        row.locator('.btn-stop').click()
+    row.wait_for(state='detached')
+    assert page.locator('.toast-item').last.inner_text() == '该任务记录已不存在，已刷新列表'
+
+
 def test_ready_tab_explains_wait_and_keeps_platform_result_separate(dashboard, tmp_path):
     page, state = dashboard
     video = _video("ready-video")
