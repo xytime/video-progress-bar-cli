@@ -17,6 +17,40 @@
         }
       },
       "decoded_av_sha256": "35ecc3b1fad691fe84586baab2f43fff41e4bcbddd684ef14735b2ea98e9757c"
+    },
+    {
+      "reference_id": "TED-particle-brand-50fps",
+      "seconds": 3.5,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "50/1"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "89bf281fb7cc36bba91550589014b32e0b59d7577d0430ebb8fc3ceb046f488d"
+    },
+    {
+      "reference_id": "TEDxSIUC-2026-brand-sponsor-opening",
+      "seconds": 10.0,
+      "shape": {
+        "video": {
+          "width": 1280,
+          "height": 720,
+          "pix_fmt": "yuv420p",
+          "r_frame_rate": "30000/1001"
+        },
+        "audio": {
+          "sample_rate": "44100",
+          "channels": 2
+        }
+      },
+      "decoded_av_sha256": "0e27f5de4a5012697aabd8d41c01976c95248a1eac3a51fad21d3d38660e75b1"
     }
   ],
   "suffixes": [
