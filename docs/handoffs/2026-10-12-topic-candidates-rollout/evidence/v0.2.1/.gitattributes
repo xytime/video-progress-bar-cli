@@ -1,0 +1,2 @@
+# 保留 pytest 原始日志中的提示和空白，不改写证据内容。
+**/*.log -whitespace

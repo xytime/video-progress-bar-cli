@@ -16,6 +16,8 @@
 | 2.0.0 | 2026-09-19 | Codex | 改为默认关闭、单次有界、持久状态机驱动的安全 worker。 |
 | 1.1.0 | 2026-09-19 | Antigravity | 阻断性修复：严禁构造伪目标，增加已发布精准校验、pipeline.lock避让互斥、发评成功后才触发自生长学习 |
 | 1.0.0 | 2026-09-19 | Antigravity | 初始创建：实现低耦合高内聚的独立发评 CLI |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -41,6 +43,8 @@ WORKER_LOCK = PROJECT_ROOT / "output" / ".wechat_interaction_worker.lock"
 DEFAULT_WORKER_TIMEOUT_SECONDS = 240
 MAX_MANUAL_INTERACTION_BATCH_SIZE = 10
 
+
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
 
 class _LiveServices:
     """将生成、浏览器和通知收口到 runner 的一个注入点。"""
@@ -173,6 +177,7 @@ def _worker_deadline(seconds: int):
         signal.signal(signal.SIGALRM, previous_handler)
 
 
+@entry
 def run_interaction(
     *,
     platform_post_id: str | None = None,
@@ -286,6 +291,7 @@ def run_interaction(
         return 1
 
 
+@entry
 def main() -> None:
     parser = argparse.ArgumentParser(description="微信视频号互动有界 worker")
     parser.add_argument("--post-id", type=str, help="指定已确认 PUBLISHED 的微信原生 ID")

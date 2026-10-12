@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-12 | Codex | 连接及 PRAGMA 纳入完整故障边界，保证资源释放 |
 | 1.0.0 | 2026-10-11 | Codex | 候选/决定/作业/配额持久化；原子预算与 CAS；不写主表 |
 """
 from __future__ import annotations
@@ -24,22 +25,27 @@ class TopicCandidateDAL:
     def _topic_connection(self, *, write=False):
         if getattr(self, "_read_only", False) and write:
             raise TopicError("READ_ONLY", "数据库为只读", 503)
-        conn = sqlite3.connect(self.db_path, timeout=2)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        # 清理 API 字段时清零释放的页内容；不对共享主库执行 VACUUM。
-        conn.execute("PRAGMA secure_delete=ON")
+        conn = None
         try:
+            conn = self._connect_topic()
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
+            # 清理 API 字段时清零释放的页内容；不对共享主库执行 VACUUM。
+            conn.execute("PRAGMA secure_delete=ON")
             if write:
                 conn.execute("BEGIN IMMEDIATE")
             with conn:
                 yield conn
         except sqlite3.OperationalError as exc:
-            busy = exc.sqlite_errorcode in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+            busy = getattr(exc, "sqlite_errorcode", None) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
             raise TopicError("DATABASE_BUSY" if busy else "DATABASE_ERROR",
                              "候选数据库忙，请稍后重试" if busy else "候选数据库操作未完成", 503) from exc
         finally:
-            conn.close()
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.OperationalError as exc:
+                    raise TopicError("DATABASE_ERROR", "候选数据库资源释放未确认", 503) from exc
 
     def topic_initialize(self):
         with self._topic_connection(write=True) as c:
@@ -317,3 +323,6 @@ class TopicCandidateDAL:
     def topic_audit_records(self):
         with self._topic_connection() as c:
             return [dict(r) for r in c.execute("SELECT * FROM topic_audit ORDER BY id DESC LIMIT 100")]
+    def _connect_topic(self):
+        """候选连接的单一故障注入边界；生产使用真实 SQLite。"""
+        return sqlite3.connect(self.db_path, timeout=2)

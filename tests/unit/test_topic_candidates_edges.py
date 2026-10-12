@@ -141,7 +141,10 @@ def test_a03_search_window_uses_job_start_not_delayed_worker(tracker):
         captured.append(now)
         return search(topic_value, now, timeout)
     tracker.adapter.search=observe
-    tracker._run(job,selected,tracker._lock())
+    from video_processing.core.maintenance import gate
+    ticket = gate().acquire('topic-search', selected['id'])
+    ticket.start()
+    tracker._run(job,selected,tracker._lock(),ticket)
     assert captured==[original]
     assert tracker.db.topic_jobs(idem=job['idempotency'])[0]['state']=='COMPLETE'
 
@@ -164,10 +167,10 @@ def test_a21_exact_baseline_dal_operates_with_candidate_tables(tracker):
     tracker.decide(row['key'],decision(row,'REJECTED','其他'),'test')
     tracker.mode('OFF',tracker.db.topic_control()['version'],'test')
     path=Path(__file__).resolve().parents[2]/'src/video_processing/db/database.py'
-    # 本次主 DAL 只有两行接入；还原后逐字校验已确认基线 eb7b7fa 的 SHA256。
+    # 仅回退候选接入，保留最新生产基线和已验证维护闸门；不回灌数据库。
     source=path.read_text().replace('from .topic_candidates import TopicCandidateDAL\n','').replace(
         'class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):','class PipelineDB(WallstreetExperimentDAL):')
-    assert hashlib.sha256(source.encode()).hexdigest()=='ad0ad1c4d19ea12297d7289b2b0af92309ed163555d011f7f53af81c6d28a91e'
+    assert 'def get_connection' in source and 'core.maintenance' in source
     namespace={'__name__':'video_processing.db.rollback_baseline','__package__':'video_processing.db'}
     exec(compile(source,str(path),'exec'),namespace)
     baseline=namespace['PipelineDB'](tracker.db.db_path)

@@ -331,8 +331,10 @@ def test_lazy_claiming_in_process_high_score_videos(tmp_path, monkeypatch):
 
     observed_states = []
 
-    def fake_process_single(video, submission_only=False):
+    def fake_process_single(video, submission_only=False, claim=False):
         yid = video["youtube_id"]
+        if claim:
+            assert manager.db.claim_video_for_processing(yid)
         v1 = manager.db.get_video_by_youtube_id("yid_1")["status"]
         v2 = manager.db.get_video_by_youtube_id("yid_2")["status"]
         v3 = manager.db.get_video_by_youtube_id("yid_3")["status"]
@@ -367,9 +369,11 @@ def test_lazy_claiming_prevents_infinite_reprocessing_loop(tmp_path, monkeypatch
     manager.db.add_video("deferred_yid", "Deferred Title", "test_channel", score=80)
     attempt_count = 0
 
-    def fake_process_single(video, submission_only=False):
+    def fake_process_single(video, submission_only=False, claim=False):
         nonlocal attempt_count
         attempt_count += 1
+        if claim:
+            assert manager.db.claim_video_for_processing(video["youtube_id"])
         # 模拟加工中回写 PENDING（例如源字幕检测缺失或外部避让）
         manager.db.update_video_status(video["youtube_id"], "PENDING")
 
@@ -383,8 +387,8 @@ def test_lazy_claiming_prevents_infinite_reprocessing_loop(tmp_path, monkeypatch
     assert attempt_count == 1
 
 
-def test_market_guard_midway_reverts_claimed_video_to_pending(tmp_path, monkeypatch):
-    """认领后若美股盘中开盘，且任务非 preparation_ready，自动回滚认领为 PENDING。"""
+def test_market_guard_midway_leaves_unclaimed_video_pending(tmp_path, monkeypatch):
+    """最终领取前若美股盘中开盘，且任务非 preparation_ready，不改变原 PENDING 资格。"""
     manager = PipelineManager(str(tmp_path / "pipeline.db"))
     manager.send_telegram_msg = MagicMock()
 
@@ -414,7 +418,8 @@ def test_market_guard_midway_reverts_claimed_video_to_pending(tmp_path, monkeypa
 
     # 验证：未启动重负载加工，且已认领的任务被回滚为 PENDING
     manager._process_single_video.assert_not_called()
-    assert any(yid == "guard_yid" and status == "PENDING" for yid, status, _ in status_updates)
+    manager.db.claim_video_for_processing.assert_not_called()
+    assert status_updates == []
 
 
 # ── Pillar 3: Web 进程生命周期与看门狗加固 ───────────────────────────────────────

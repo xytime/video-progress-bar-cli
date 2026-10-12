@@ -17,6 +17,8 @@
 | 1.2.0 | 2026-09-01 | Codex | 与视频号统一为不设抖音日额度；仍只领取唯一 QUEUED 尝试。 |
 | 1.1.0 | 2026-08-30 | Codex | 投稿前页面失败接入持久 UI 熔断；一次证据化修复后只允许一轮显式恢复。 |
 | 1.0.0 | 2026-08-30 | Codex | 新增英语世界到抖音的隔离、账本安全单次同步执行器。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -52,6 +54,10 @@ logger = logging.getLogger(__name__)
 UPLOAD_TIMEOUT_SECONDS = 25 * 60
 EXIT_NOT_CLAIMABLE = 10
 
+
+from video_processing.core.maintenance_child import run_admitted
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+from video_processing.core.maintenance_child import single_script, child_continuation
 
 def verified_douyin_preflight_evidence_sha256(evidence_dir: str | Path) -> str:
     """校验非最终预检已覆盖双封面、原创声明和平台快速检测，并返回不可变摘要。"""
@@ -116,6 +122,7 @@ def _cancel_unstarted_english_world_ticket(
     return bool(canceled)
 
 
+@guarded("english-douyin-submit", lambda review_id: "review:" + str(review_id))
 def submit(review_id: str) -> int:
     """建立唯一账本、领取一次投稿并执行抖音同步。"""
     if not settings.enable_douyin_browser_publishing:
@@ -218,7 +225,7 @@ def submit(review_id: str) -> int:
         pipeline_lock.parent.mkdir(parents=True, exist_ok=True)
         with pipeline_lock.open("a+") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            result = subprocess.run(
+            result = run_admitted(
                 command,
                 cwd=PROJECT_ROOT,
                 env=_build_subprocess_env(),
@@ -323,6 +330,7 @@ def submit(review_id: str) -> int:
         return 1
 
 
+@single_script
 def main() -> int:
     parser = argparse.ArgumentParser(description="同步一条已受理英语世界短视频到抖音")
     parser.add_argument("--review-id", required=True)

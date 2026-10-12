@@ -47,6 +47,8 @@
 | 1.28.1 | 2026-09-07 | Codex | 标题合同重试携带被拒字段和具体约束错误，避免原样重复请求。 |
 | 1.29.0  | 2026-09-18 | Antigravity                             | 弹性收敛与专业退避：短标题轻度超长（17-20字）支持 graceful_truncate 自愈；增加至3次修正机会，全抖动指数退避与温度扰动，防0延迟连撞；防范未翻译英文文案 |
 | 1.29.1  | 2026-09-19 | Antigravity                             | 确立 Fail-Closed 哲学并补齐降级翻译异常审计链路；清理 copywriter_gemini_max_attempts 的 getattr 冗余 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 import re
@@ -232,6 +234,9 @@ _ZH_CATEGORY_KEYWORDS: dict[str, list[str]] = {
     "科技": ["科技", "芯片", "智能", "机器人", "前沿", "太空", "物理", "算法", "程序", "开发", "英伟达", "特斯拉", "马斯克"],
 }
 
+
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+from video_processing.core.maintenance_child import single_script, child_continuation
 
 def classify_category(title: str, description: str) -> str:
     """[Gemini_2.5_Pro_planning] v1.7.0 基于双语关键字的视频分类器。
@@ -1261,6 +1266,7 @@ def generate_wechat_copy(title: str, description: str,
 
 # ── CLI 入口 ─────────────────────────────────────────────────────────────────
 
+@single_script
 def main():
     # [Claude_Sonnet_4.6_Thinking_planning] v1.4 argparse '-'前缀 YouTube ID 终极修复
     # 根因: parse_known_args 只注册了 --youtube-id，导致其他参数全部丢失 → AttributeError

@@ -52,6 +52,7 @@
 | 1.35.0 | 2026-09-08 | Codex | 委托纯函数补齐明确关闭翻译时的原文字幕，翻译失败不静默回退。 |
 """
 import logging
+import re
 from pathlib import Path
 from typing import Callable, Optional, List, Dict, Any, Union
 

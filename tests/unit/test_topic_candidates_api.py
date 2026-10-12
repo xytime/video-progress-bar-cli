@@ -94,7 +94,7 @@ def test_a12_production_search_closed_even_mode_api(topic_client):
     assert not tracker.adapter.calls
 
 
-def test_a21_busy_topic_initialization_preserves_existing_routes(tracker):
+def test_a21_busy_topic_initialization_preserves_existing_routes(tracker, monkeypatch):
     app=FastAPI()
     @app.get('/existing-health')
     def existing_health():return {'ok':True}
@@ -109,5 +109,8 @@ def test_a21_busy_topic_initialization_preserves_existing_routes(tracker):
             assert response.status_code==503
             assert response.json()['detail']['code']=='DATABASE_BUSY'
         assert not tracker.adapter.calls
+    runtime = app.state.topic_runtime
+    observed = runtime.monotonic()
+    monkeypatch.setattr(runtime, 'monotonic', lambda: observed + 61)
     with TestClient(app,base_url=ORIGIN,client=('127.0.0.1',50000)) as client:
         assert client.get('/topic-candidates').status_code==200

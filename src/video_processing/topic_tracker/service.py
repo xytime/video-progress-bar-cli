@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-12 | Codex | 锁故障脱敏，维护状态阻止模式开放与搜索 |
 | 1.0.0 | 2026-10-11 | Codex | 实现 v0.2 的 OFF/仅发现与有界停止；无主管线或发布调用 |
 """
 from __future__ import annotations
@@ -31,18 +32,28 @@ class TopicTracker:
         finally:
             if lock:
                 lock.close()
-        if not self.config.topic_search_enabled and self.db.topic_control()["mode"] != "OFF":
+        self.enforce_closed()
+
+    def enforce_closed(self):
+        from ..core.maintenance import gate
+        closed = not self.config.topic_search_enabled or gate().status()["state"] != "RUNNING"
+        if closed and self.db.topic_control()["mode"] != "OFF":
             control = self.db.topic_control()
             self.db.topic_set_mode("OFF", control["version"], "host", self.clock())
 
     def _lock(self):
-        stream = self.lock_path.open("a")
+        stream = None
         try:
+            stream = self.lock_path.open("a")
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return stream
         except BlockingIOError:
             stream.close()
             return None
+        except OSError as exc:
+            if stream:
+                stream.close()
+            raise TopicError("LOCK_UNAVAILABLE", "候选执行锁不可用", 503) from exc
 
     def maintenance(self):
         lock = self._lock()
@@ -51,8 +62,14 @@ class TopicTracker:
         finally:
             if lock:
                 lock.close()
+        self.enforce_closed()
 
     def _ready(self):
+        from ..core.maintenance import gate, MaintenanceDenied
+        try:
+            gate().require_running()
+        except MaintenanceDenied as exc:
+            raise TopicError(exc.code, str(exc), 503) from exc
         if not self.config.topic_search_enabled:
             raise TopicError("SEARCH_CLOSED", "生产搜索尚未开放", 403)
         if not self.config.topic_quota_verified or not self.config.topic_quota_project:
@@ -72,10 +89,27 @@ class TopicTracker:
         return self.db.topic_set_mode(mode, version, actor, self.clock())
 
     def start(self, topic_id, version, idem, actor):
+        from ..core.maintenance import gate, MaintenanceDenied
+        ticket = None
+        try:
+            ticket = gate().acquire("topic-search", topic_id)
+            ticket.start()
+            return self._start_admitted(topic_id, version, idem, actor, ticket)
+        except MaintenanceDenied as exc:
+            if ticket:
+                ticket.close()
+            raise TopicError(exc.code, str(exc), 503) from exc
+        except BaseException:
+            if ticket:
+                ticket.close()
+            raise
+
+    def _start_admitted(self, topic_id, version, idem, actor, ticket):
         existing = self.db.topic_jobs(idem=idem)
         if existing:
             if existing[0]["topic_id"] != topic_id:
                 raise TopicError("INVALID_IDEMPOTENCY", "请求标识不匹配", 422)
+            ticket.close()
             return existing[0]
         self._ready()
         if not self.adapter.configured():
@@ -87,13 +121,14 @@ class TopicTracker:
             if existing:
                 if existing[0]["topic_id"] != topic_id:
                     raise TopicError("INVALID_IDEMPOTENCY", "请求标识不匹配", 422)
+                ticket.close()
                 return existing[0]
             raise TopicError("BUSY", "其他搜索正在进行，请稍后重试")
         try:
             self.db.topic_maintenance(self.clock(), recover=True)
             job = self.db.topic_create_job(topic_id, version, idem, actor, self.clock())
             topic = self.db.topic_get(topic_id, self.clock())
-            worker = threading.Thread(target=self._run, args=(job, topic, lock), daemon=True, name="topic-search")
+            worker = threading.Thread(target=self._run, args=(job, topic, lock, ticket), daemon=True, name="topic-search")
             with self._mutex:
                 self._threads.add(worker)
             worker.start()
@@ -140,7 +175,7 @@ class TopicTracker:
         return dict(metadata=meta, eligibility=state, reason=reason, rule_version=version,
                     content_version=content_version(meta, version, state, reason), **presence)
 
-    def _run(self, job, topic, lock):
+    def _run(self, job, topic, lock, ticket):
         deadline = time.monotonic() + 60
         phase = "search"
         try:
@@ -176,9 +211,14 @@ class TopicTracker:
         except Exception:
             self._finish(job["id"], "FAILED", "INTERNAL_ERROR")
         finally:
-            lock.close()
-            with self._mutex:
-                self._threads.discard(threading.current_thread())
+            try:
+                lock.close()
+            finally:
+                try:
+                    ticket.close()
+                finally:
+                    with self._mutex:
+                        self._threads.discard(threading.current_thread())
 
     def _finish(self, job_id, state, code):
         # 每次写锁等待最多 2 秒；两次有界尝试后释放内核占用，读前恢复孤儿记录。
@@ -231,7 +271,15 @@ class TopicTracker:
 
     def view(self):
         self.maintenance()
-        return dict(control=self.db.topic_control(), topics=self.db.topic_list(self.clock()),
+        control = self.db.topic_control()
+        try:
+            self._ready()
+            search_open = control["mode"] == "DISCOVERY_ONLY" and self.adapter.configured()
+        except TopicError:
+            search_open = False
+        from ..core.maintenance import gate
+        maintenance = gate().status()
+        return dict(control=control, maintenance=dict(state=maintenance["state"], phase=maintenance["phase"]), topics=self.db.topic_list(self.clock()),
                     jobs=self.db.topic_jobs(), budget=self.db.topic_budget(self.config.topic_quota_project, self.clock()),
-                    search_open=self.config.topic_search_enabled and self.config.topic_quota_verified,
+                    search_open=search_open,
                     limits=dict(search=self.config.topic_search_daily_limit, general=self.config.topic_general_daily_limit))

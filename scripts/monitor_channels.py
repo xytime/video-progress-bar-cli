@@ -23,6 +23,8 @@
 | 3.0.0   | 2026-07-28 | Codex                          | [断供根治] 官方 Data API 主源、RSS 无密钥降级；发现脱离 yt-dlp，RSS 条目待元数据补全后才可评分 |
 | 3.2.0   | 2026-08-23 | Codex                          | 保留 UTC 精确源发布时间，供发布前原创声明按 24 小时判定 |
 | 3.1.0   | 2026-08-05 | Codex                          | [标题译文防污] 拒绝 Error 500 错误页写入 zh_title，保留原始英文标题待下轮翻译 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 import sys
 import argparse
@@ -66,6 +68,8 @@ _YTDLP = settings.ytdlp_path
 _IGNORE_NO_FORMATS = "--ignore-no-formats-error"
 
 
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+
 def _translate_title_or_source(video_id: str, title: str) -> str:
     """翻译失败或收到错误页时保留源标题，绝不污染监控列表。"""
     try:
@@ -87,6 +91,7 @@ STATIC_KEYWORDS = [
     "world cup 2026",
 ]
 
+@guarded("discovery-keywords")
 def get_discovery_keywords() -> list[str]:
     """获取发现新频道所需的关键词（合并静态和动态热词）"""
     # [Gemini_3.5_Flash_High_planning] 检查 Feature Flag 是否开启
@@ -109,6 +114,7 @@ def get_discovery_keywords() -> list[str]:
         return STATIC_KEYWORDS
 
 
+@guarded("channel-monitor", lambda db, channel_id, **kw: channel_id)
 def fetch_latest_videos(db: PipelineDB, channel_id: str, lookback_days: int = 3):
     """拉取频道近期候选；Data API 主源，RSS 只保住待补全候选。"""
     print(f"Polling channel: {channel_id}")
@@ -256,37 +262,41 @@ def _write_monitor_report(results: list[dict], approved_count: int) -> None:
 
 
 
+@entry
 def discover_new_channels(db: PipelineDB):
     """通过关键词搜索发现潜在的优质频道，加入推荐列表"""
     # [Gemini_3.5_Flash_planning] 独立频道探索逻辑，保持高内聚低耦合
     print("Running active discovery for new channels...")
     keywords = get_discovery_keywords()
     for keyword in keywords:
-        print(f"Searching channels for: {keyword}")
-        cmd = [
-            _YTDLP,
-            # [Claude_Opus_4.8 v2.0.0] 频道发现仅需 channel_id：用 --flat-playlist 跳过逐视频提取，
-            # 避免加 --ignore-no-formats-error 后逐个完整解析导致 ytsearch5 超时（实测 60s 超时 → 3.5s）。
-            "--flat-playlist",
-            "ytsearch5:" + keyword,  # 抓取前5个搜索结果
-            "--print", "%(channel_id)s|%(channel)s",
-            "--no-warnings",
-            *settings.get_yt_cookie_args()
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            if result.returncode == 0 and result.stdout.strip():
-                for line in result.stdout.strip().split('\n'):
-                    parts = line.split('|', 1)
-                    if len(parts) == 2:
-                        channel_id, channel_name = parts
-                        success = db.add_channel(channel_id, channel_name, status="PENDING", reason=f"Discovered via search: '{keyword}'")
-                        if success:
-                            print(f"  -> Discovered new channel: {channel_name} ({channel_id})")
-        except Exception as e:
-            print(f"Error during channel discovery for '{keyword}': {e}")
+        with gate().admit("discover_new_channels", "channel-search:" + keyword) as ticket:
+            ticket.start()
+            print(f"Searching channels for: {keyword}")
+            cmd = [
+                _YTDLP,
+                # [Claude_Opus_4.8 v2.0.0] 频道发现仅需 channel_id：用 --flat-playlist 跳过逐视频提取，
+                # 避免加 --ignore-no-formats-error 后逐个完整解析导致 ytsearch5 超时（实测 60s 超时 → 3.5s）。
+                "--flat-playlist",
+                "ytsearch5:" + keyword,  # 抓取前5个搜索结果
+                "--print", "%(channel_id)s|%(channel)s",
+                "--no-warnings",
+                *settings.get_yt_cookie_args()
+            ]
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                if result.returncode == 0 and result.stdout.strip():
+                    for line in result.stdout.strip().split('\n'):
+                        parts = line.split('|', 1)
+                        if len(parts) == 2:
+                            channel_id, channel_name = parts
+                            success = db.add_channel(channel_id, channel_name, status="PENDING", reason=f"Discovered via search: '{keyword}'")
+                            if success:
+                                print(f"  -> Discovered new channel: {channel_name} ({channel_id})")
+            except Exception as e:
+                print(f"Error during channel discovery for '{keyword}': {e}")
 
 
+@entry
 def discover_high_like_videos(db: PipelineDB):
     """通过关键词搜索发现最近3天内的高赞视频，进行敏感词检测和分类提取，存入数据库以供浏览和手动触发"""
     # [Gemini_3.5_Flash_planning] 独立高赞视频发现逻辑，避免与频道发现逻辑混合
@@ -305,69 +315,72 @@ def discover_high_like_videos(db: PipelineDB):
     
     keywords = get_discovery_keywords()
     for keyword in keywords:
-        print(f"Searching high-like videos for: {keyword}")
-        cmd = [
-            _YTDLP,
-            _IGNORE_NO_FORMATS,
-            "ytsearch10:" + keyword,  # [Claude_Opus_4.6_Thinking_planning] 回调为10：ytsearch30+dateafter导致yt-dlp需翻百页凑数，大量超时
-            "--dateafter", "now-3days",  # [Gemini_3.5_Flash_planning] 仅抓取最近3天的视频，规避历史热门视频干扰
-            "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s|||%(channel_id)s|||%(categories.0)s",
-            "--no-warnings",
-            *settings.get_yt_cookie_args()
-        ]
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)  # [Claude_Opus_4.6_Thinking_planning] 120→180s，dateafter过滤需更多时间
-            if result.returncode == 0 and result.stdout.strip():
-                for line in result.stdout.strip().split('\n'):
-                    parts = line.split('|||', 7)
-                    if len(parts) == 8:
-                        video_id = parts[0].strip()
-                        title = parts[1].strip()
-                        duration_sec = _int_or_none(parts[2])
-                        view_count = _int_or_none(parts[3])
-                        like_count = _int_or_none(parts[4])
-                        upload_date = parts[5].strip()
-                        channel_id = parts[6].strip()
-                        category = parts[7].strip()
-                        if category in ("NA", ""):
-                            category = None
+        with gate().admit("discover_high_like_videos", "high-like-search:" + keyword) as ticket:
+            ticket.start()
+            print(f"Searching high-like videos for: {keyword}")
+            cmd = [
+                _YTDLP,
+                _IGNORE_NO_FORMATS,
+                "ytsearch10:" + keyword,  # [Claude_Opus_4.6_Thinking_planning] 回调为10：ytsearch30+dateafter导致yt-dlp需翻百页凑数，大量超时
+                "--dateafter", "now-3days",  # [Gemini_3.5_Flash_planning] 仅抓取最近3天的视频，规避历史热门视频干扰
+                "--print", "%(id)s|||%(title)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s|||%(channel_id)s|||%(categories.0)s",
+                "--no-warnings",
+                *settings.get_yt_cookie_args()
+            ]
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)  # [Claude_Opus_4.6_Thinking_planning] 120→180s，dateafter过滤需更多时间
+                if result.returncode == 0 and result.stdout.strip():
+                    for line in result.stdout.strip().split('\n'):
+                        parts = line.split('|||', 7)
+                        if len(parts) == 8:
+                            video_id = parts[0].strip()
+                            title = parts[1].strip()
+                            duration_sec = _int_or_none(parts[2])
+                            view_count = _int_or_none(parts[3])
+                            like_count = _int_or_none(parts[4])
+                            upload_date = parts[5].strip()
+                            channel_id = parts[6].strip()
+                            category = parts[7].strip()
+                            if category in ("NA", ""):
+                                category = None
 
-                        # 筛选最近 3 天内发布且观看量>500的视频
-                        if upload_date and upload_date >= yesterday_str:
-                            if view_count and view_count > 500:
-                                zh_title = _translate_title_or_source(video_id, title)
+                            # 筛选最近 3 天内发布且观看量>500的视频
+                            if upload_date and upload_date >= yesterday_str:
+                                if view_count and view_count > 500:
+                                    zh_title = _translate_title_or_source(video_id, title)
 
-                                # [Gemini_3.5_Flash_planning] 进行敏感词检测
-                                censor_tag = None
-                                censor_score = None
-                                try:
-                                    block_res = check_text(zh_text=zh_title, en_text=title)
-                                    if block_res.hit:
-                                        censor_tag = block_res.tag
-                                        censor_score = block_res.score
-                                    else:
-                                        policy_res = check_channel_policy(zh_text=zh_title, en_text=title)
-                                        if policy_res.hit:
-                                            censor_tag = policy_res.tag
-                                            censor_score = policy_res.score
-                                except Exception as e:
-                                    print(f"  -> Censor engine failed for {video_id}: {e}")
+                                    # [Gemini_3.5_Flash_planning] 进行敏感词检测
+                                    censor_tag = None
+                                    censor_score = None
+                                    try:
+                                        block_res = check_text(zh_text=zh_title, en_text=title)
+                                        if block_res.hit:
+                                            censor_tag = block_res.tag
+                                            censor_score = block_res.score
+                                        else:
+                                            policy_res = check_channel_policy(zh_text=zh_title, en_text=title)
+                                            if policy_res.hit:
+                                                censor_tag = policy_res.tag
+                                                censor_score = policy_res.score
+                                    except Exception as e:
+                                        print(f"  -> Censor engine failed for {video_id}: {e}")
 
-                                # 以 DISCOVERY 源入库，score=0，防自动处理，仅在 Web 端高赞 Tab 供浏览
-                                added = db.add_video(
-                                    video_id, title, channel_id, score=0, zh_title=zh_title, source="DISCOVERY",
-                                    duration_sec=duration_sec, view_count=view_count,
-                                    like_count=like_count, upload_date=upload_date,
-                                    category=category, censor_tag=censor_tag, censor_score=censor_score
-                                )
-                                if added:
-                                    print(f"  -> Discovered high-like video: {title} (likes={like_count}, views={view_count}, category={category}, censor={censor_tag})")
-        except subprocess.TimeoutExpired:
-            print(f"  -> Timeout searching '{keyword}'")
-        except Exception as e:
-            print(f"Error during video discovery for '{keyword}': {e}")
+                                    # 以 DISCOVERY 源入库，score=0，防自动处理，仅在 Web 端高赞 Tab 供浏览
+                                    added = db.add_video(
+                                        video_id, title, channel_id, score=0, zh_title=zh_title, source="DISCOVERY",
+                                        duration_sec=duration_sec, view_count=view_count,
+                                        like_count=like_count, upload_date=upload_date,
+                                        category=category, censor_tag=censor_tag, censor_score=censor_score
+                                    )
+                                    if added:
+                                        print(f"  -> Discovered high-like video: {title} (likes={like_count}, views={view_count}, category={category}, censor={censor_tag})")
+            except subprocess.TimeoutExpired:
+                print(f"  -> Timeout searching '{keyword}'")
+            except Exception as e:
+                print(f"Error during video discovery for '{keyword}': {e}")
 
 
+@entry
 def main():
     parser = argparse.ArgumentParser(description="按频道分层轮询 YouTube 元数据")
     parser.add_argument(

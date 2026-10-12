@@ -1,6 +1,7 @@
 """自动化管线调度器 - 协调监测、评分、加工与通知流转
 
 # Modification History
+| maintenance-v1 | 2026-10-12 | Codex | 单项领取前维护准入、资源等待重检及同项子进程排空；保留资格和 FSM。 |
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.71.0 | 2026-10-10 | Antigravity | 视频号发布支持自动挂载图书商品（enable_wechat_product_link），透传频道来源并强制要求商品绑定。 |
@@ -246,6 +247,7 @@ from .core.douyin_launch_context import douyin_submission_payload_sha256
 from .core.original_declaration_policy import decide_original_declaration
 from cover.creative_brief import build_cover_creative_brief
 from config.settings import settings
+from .core.maintenance import claimed as claim_unit, spawn_admitted, gate, guarded, entry, start_current, MaintenanceDenied
 from video_processing.core.douyin_management_state import MANAGEMENT_EXIT_STATES, MANAGEMENT_STATE_MESSAGES
 from video_processing.core.ffmpeg_slot import register_executable
 register_executable(settings.ffmpeg_path)
@@ -761,6 +763,7 @@ class PipelineManager:
             )
         return sent
 
+    @guarded("review-notification", lambda self, task_id, *a, **kw: "notification:" + str(task_id))
     def _execute_persisted_review_notification(self, task_id: int, prefix: str, title: str | None) -> bool:
         """执行已持久化的审核成片投递，并将事实结果写入账本与 Telegram 回执。"""
         try:
@@ -811,20 +814,21 @@ class PipelineManager:
         task_id = self.db.enqueue_wechat_review_notification(prefix, title)
 
         if sync:
-            if self.db.claim_specific_wechat_review_notification(task_id):
-                return self._execute_persisted_review_notification(task_id, prefix, title)
+            with gate().admit("review-notification", "notification:" + str(task_id)) as ticket:
+                ticket.start()
+                if self.db.claim_specific_wechat_review_notification(task_id):
+                    return self._execute_persisted_review_notification(task_id, prefix, title)
             return False
 
         def _worker():
             if self.db.claim_specific_wechat_review_notification(task_id):
                 self._execute_persisted_review_notification(task_id, prefix, title)
 
-        thread = threading.Thread(
-            target=_worker,
-            daemon=True,
-            name=f"review-video-{prefix[:16]}",
-        )
-        thread.start()
+        try:
+            thread = spawn_admitted(_worker, role="review-notification", object_key="notification:" + str(task_id),
+                                    name=f"review-video-{prefix[:16]}")
+        except MaintenanceDenied:
+            return False
         if not hasattr(self, "_async_review_threads"):
             self._async_review_threads = []
         self._async_review_threads = [t for t in self._async_review_threads if t.is_alive()]
@@ -839,16 +843,22 @@ class PipelineManager:
             if thread.is_alive():
                 thread.join(timeout=timeout)
 
+    @entry
     def drain_pending_review_notifications(self, limit: int = 5) -> int:
         """从 SQLite 账本恢复并顺序投递遗留的审核物料通知（有并发上限与超期回收）。"""
         self.db.recover_stale_wechat_review_notifications(stale_minutes=10)
-        claimed = self.db.claim_pending_wechat_review_notifications(limit=limit)
         processed = 0
-        for task in claimed:
-            self._execute_persisted_review_notification(
-                task["id"], task["prefix"], task.get("title"),
-            )
-            processed += 1
+        for _ in range(limit):
+            try:
+                with claim_unit("review-notification", lambda: self.db.claim_pending_wechat_review_notifications(limit=1),
+                             lambda rows: "notification:" + str(rows[0]["id"])) as rows:
+                    if not rows:
+                        break
+                    task = rows[0]
+                    self._execute_persisted_review_notification(task["id"], task["prefix"], task.get("title"))
+                    processed += 1
+            except MaintenanceDenied:
+                break
         return processed
 
     def _notify_copy_numeric_warnings(self, yid: str, title: str, prefix: str) -> None:
@@ -1292,6 +1302,7 @@ class PipelineManager:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
         self._dispatch_wechat_interaction_worker(log_prefix=prefix or "wechat")
 
+    @guarded("interaction-dispatch")
     def _dispatch_wechat_interaction_worker(self, *, log_prefix: str = "wechat") -> None:
         """异步启动一个单次有界 worker；不在主管线内生成文案或访问平台。"""
         if not settings.enable_wechat_comment_interaction:
@@ -1744,10 +1755,10 @@ class PipelineManager:
                     continue
 
                 # 防竞态：单视频懒抢占 (Lazy Claiming: 1 video per iteration)
-                if self.db.claim_video_for_processing(yid, slice_index=slice_index):
-                    claimed_target = video
-                    attempted_targets.add(task_key)
-                    break
+                # 准入及 DB claim 在实际取得单视频锁后一起执行，等待项保持原资格。
+                claimed_target = video
+                attempted_targets.add(task_key)
+                break
 
             if not claimed_target:
                 logger.info("No claimable high-score videos in this batch. Exiting loop.")
@@ -1764,12 +1775,6 @@ class PipelineManager:
             if settings.is_us_market_guard_window() and not claimed_target.get("preparation_ready"):
                 claimed_yid = claimed_target['youtube_id']
                 claimed_slice = claimed_target.get('slice_index', 0)
-                self.db.update_video_status(
-                    claimed_yid,
-                    "PENDING",
-                    error_msg="美股盘中窗口开启，任务安全回退至 PENDING 等待盘后处理",
-                    slice_index=claimed_slice,
-                )
                 logger.info(
                     "[MarketGuard] 进入美股盘中窗口，已认领任务 %s#%s 安全回退至 PENDING 并停止重负载处理。",
                     claimed_yid,
@@ -1777,8 +1782,12 @@ class PipelineManager:
                 )
                 break
 
-            self._process_single_video(claimed_target)
-            total_processed += 1
+            try:
+                result = self._process_single_video(claimed_target, claim=True)
+            except MaintenanceDenied:
+                break
+            if result is not False:
+                total_processed += 1
 
         self.wait_for_review_notifications(timeout=15.0)
         logger.info(f"Pipeline run loop completed. Total processed: {total_processed}")
@@ -1803,9 +1812,11 @@ class PipelineManager:
             video = targets[0]
             yid = video["youtube_id"]
             slice_index = video.get("slice_index", 0)
-            if not self.db.claim_video_for_processing(yid, slice_index=slice_index):
-                continue
-            self._process_single_video(video, preparation_only=True)
+            try:
+                if self._process_single_video(video, preparation_only=True, claim=True) is False:
+                    break
+            except MaintenanceDenied:
+                break
             prepared += 1
 
         logger.info("[Preparation] 本轮完成 %s 个 AUTO 候选的预加工尝试。", prepared)
@@ -2074,7 +2085,13 @@ class PipelineManager:
 
     # ── 子进程辅助（v7.0: Popen + 进程组隔离）────────────────────────────────
 
-    def _run_tracked(self, cmd: list, yid: str, slice_index: int = 0, *,
+    @guarded("video", lambda self, cmd, yid, slice_index=0, **kw: f"{yid}:{slice_index}")
+    def _run_tracked(self, cmd: list, yid: str, slice_index: int = 0, **kwargs):
+        from .core.maintenance_child import child_continuation
+        with child_continuation(cmd, kwargs) as child_kwargs:
+            return self._run_tracked_impl(cmd, yid, slice_index, **child_kwargs)
+
+    def _run_tracked_impl(self, cmd: list, yid: str, slice_index: int = 0, *,
                      isolate_process_group: bool = False, **kwargs) -> subprocess.CompletedProcess:
         """以独立进程组运行命令，并将 PGID 写入数据库，供 API 层 SIGTERM 精准击杀。
 
@@ -2688,6 +2705,7 @@ class PipelineManager:
             logger.warning("[%s] 未知平台审查拦截，无法更新平台账本：%s", yid, platform)
         return True
 
+    @guarded("video", lambda self, publication: str(publication["youtube_id"]) + ":" + str(publication.get("slice_index", 0)))
     def _publish_claimed_kuaishou_publication(self, publication: Dict[str, Any]) -> bool:
         """执行已领取的快手任务；只有上传器完成作品管理回查才将账本置 PUBLISHED。"""
         publication_id = publication["id"]
@@ -2786,6 +2804,7 @@ class PipelineManager:
         )
         return True
 
+    @guarded("video", lambda self, yid, slice_index: f"{yid}:{slice_index}")
     def _queue_and_publish_new_kuaishou_video(self, yid: str, slice_index: int) -> bool:
         """视频号发布完成后立即投递同一成片到快手；默认由特性开关关闭。"""
         if not settings.enable_kuaishou_browser_publishing:
@@ -2816,6 +2835,7 @@ class PipelineManager:
             return False
         return self._publish_claimed_kuaishou_publication(claimed)
 
+    @entry
     def _run_kuaishou_history_migration(self) -> None:
         """按每日限额迁移视频号历史作品；任一失败后固定在该视频，绝不切换下一条。"""
         if not settings.enable_kuaishou_browser_publishing:
@@ -2839,18 +2859,19 @@ class PipelineManager:
             )
 
         while True:
-            claimed = self.db.claim_next_kuaishou_history_publication(daily_limit=daily_limit)
-            if not claimed:
-                return
-            if not self._publish_claimed_kuaishou_publication(claimed):
-                latest = self.db.get_kuaishou_publication(
-                    claimed["youtube_id"], slice_index=claimed.get("slice_index", 0)
-                )
-                if latest and latest.get("id") == claimed["id"] and latest.get("state") == "CANCELED":
-                    logger.warning("[%s] 快手历史迁移任务已取消，继续处理下一条", claimed["youtube_id"])
-                    continue
-                logger.warning("[%s] 快手历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
-                return
+            with claim_unit("kuaishou-history", lambda: self.db.claim_next_kuaishou_history_publication(daily_limit=daily_limit),
+                            lambda row: str(row["youtube_id"]) + ":" + str(row.get("slice_index", 0))) as claimed:
+                if not claimed:
+                    return
+                if not self._publish_claimed_kuaishou_publication(claimed):
+                    latest = self.db.get_kuaishou_publication(
+                        claimed["youtube_id"], slice_index=claimed.get("slice_index", 0)
+                    )
+                    if latest and latest.get("id") == claimed["id"] and latest.get("state") == "CANCELED":
+                        logger.warning("[%s] 快手历史迁移任务已取消，继续处理下一条", claimed["youtube_id"])
+                        continue
+                    logger.warning("[%s] 快手历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
+                    return
 
     def run_kuaishou_history_migration(self) -> None:
         """供早间定时任务调用：仅迁移快手历史作品，不执行视频加工或新片发布。"""
@@ -2858,6 +2879,7 @@ class PipelineManager:
         self._run_kuaishou_history_migration()
         logger.info("--- Kuaishou History Migration Completed ---")
 
+    @entry
     def reconcile_kuaishou_under_review(self) -> int:
         """只读回查快手审核中的作品；确认发布才落账，绝不再次上传或提交。"""
         if not settings.enable_kuaishou_browser_publishing:
@@ -2865,79 +2887,83 @@ class PipelineManager:
         reviewed = 0
         publications = self.db.get_kuaishou_publications_by_states(["UNDER_REVIEW"])
         for publication in publications:
-            publication_id = publication["id"]
-            yid = publication["youtube_id"]
-            slice_index = publication.get("slice_index", 0)
-            prefix = f"{yid}_s{slice_index}" if slice_index else yid
-            _, copy_file = self._kuaishou_asset_paths(yid, slice_index)
-            if not copy_file.is_file():
-                logger.error("[%s] 快手审核回查缺少文案文件：%s", yid, copy_file)
-                continue
-            verify_cmd = [
-                self._VENV_PYTHON,
-                str(self._PRJ_ROOT / "scripts" / "kuaishou_uploader.py"),
-                "--copy", str(copy_file),
-                "--state", str(self._OUT_DIR / "kuaishou_state.json"),
-                "--fail-fast-login",
-                "--verify-only",
-            ]
-            if not settings.kuaishou_browser_headless:
-                verify_cmd.append("--no-headless")
-            try:
-                result = self._run_tracked(
-                    verify_cmd,
-                    yid,
-                    slice_index=slice_index,
-                    text=True,
-                    capture_output=True,
-                    cwd=str(self._PRJ_ROOT),
-                    timeout=180,
-                )
-            except subprocess.TimeoutExpired:
-                logger.warning("[%s] 快手审核回查超时，保留审核中状态", yid)
-                continue
-            except subprocess.CalledProcessError as exc:
-                if exc.returncode == 6:
-                    logger.info("[%s] 快手作品仍在审核中", yid)
-                elif exc.returncode == 2:
-                    logger.warning("[%s] 快手登录态失效，保留审核中状态等待下次核对", yid)
-                elif exc.returncode == 7:
-                    reason = "快手账号已被封禁，无法访问创作者中心；停止快手审核回查。"
-                    logger.error("[%s] %s", yid, reason)
-                    self.db.update_kuaishou_publication_state(
-                        publication_id,
-                        "BANNED",
-                        error_message=reason,
+            with gate().admit("reconcile_kuaishou_under_review", str(publication["youtube_id"]) + ":" + str(publication.get("slice_index", 0))) as ticket:
+                ticket.start()
+                publication_id = publication["id"]
+                yid = publication["youtube_id"]
+                slice_index = publication.get("slice_index", 0)
+                prefix = f"{yid}_s{slice_index}" if slice_index else yid
+                _, copy_file = self._kuaishou_asset_paths(yid, slice_index)
+                if not copy_file.is_file():
+                    logger.error("[%s] 快手审核回查缺少文案文件：%s", yid, copy_file)
+                    continue
+                verify_cmd = [
+                    self._VENV_PYTHON,
+                    str(self._PRJ_ROOT / "scripts" / "kuaishou_uploader.py"),
+                    "--copy", str(copy_file),
+                    "--state", str(self._OUT_DIR / "kuaishou_state.json"),
+                    "--fail-fast-login",
+                    "--verify-only",
+                ]
+                if not settings.kuaishou_browser_headless:
+                    verify_cmd.append("--no-headless")
+                try:
+                    result = self._run_tracked(
+                        verify_cmd,
+                        yid,
+                        slice_index=slice_index,
+                        text=True,
+                        capture_output=True,
+                        cwd=str(self._PRJ_ROOT),
+                        timeout=180,
                     )
-                else:
-                    logger.warning("[%s] 快手审核回查未确认状态（exit %s），保留审核中", yid, exc.returncode)
-                continue
-            if result.stdout:
-                logger.debug("Kuaishou review verifier stdout:\n%s", result.stdout)
-            if result.stderr:
-                logger.debug("Kuaishou review verifier stderr:\n%s", result.stderr)
-            self.db.update_kuaishou_publication_state(
-                publication_id,
-                "PUBLISHED",
-                error_message="快手作品管理已确认本次作品为已发布。",
-            )
-            self.send_telegram_msg(
-                f"✅ <b>Video Published</b>\nPlatform: Kuaishou\n"
-                f"YouTube ID: {html.escape(prefix)}"
-            )
-            reviewed += 1
+                except subprocess.TimeoutExpired:
+                    logger.warning("[%s] 快手审核回查超时，保留审核中状态", yid)
+                    continue
+                except subprocess.CalledProcessError as exc:
+                    if exc.returncode == 6:
+                        logger.info("[%s] 快手作品仍在审核中", yid)
+                    elif exc.returncode == 2:
+                        logger.warning("[%s] 快手登录态失效，保留审核中状态等待下次核对", yid)
+                    elif exc.returncode == 7:
+                        reason = "快手账号已被封禁，无法访问创作者中心；停止快手审核回查。"
+                        logger.error("[%s] %s", yid, reason)
+                        self.db.update_kuaishou_publication_state(
+                            publication_id,
+                            "BANNED",
+                            error_message=reason,
+                        )
+                    else:
+                        logger.warning("[%s] 快手审核回查未确认状态（exit %s），保留审核中", yid, exc.returncode)
+                    continue
+                if result.stdout:
+                    logger.debug("Kuaishou review verifier stdout:\n%s", result.stdout)
+                if result.stderr:
+                    logger.debug("Kuaishou review verifier stderr:\n%s", result.stderr)
+                self.db.update_kuaishou_publication_state(
+                    publication_id,
+                    "PUBLISHED",
+                    error_message="快手作品管理已确认本次作品为已发布。",
+                )
+                self.send_telegram_msg(
+                    f"✅ <b>Video Published</b>\nPlatform: Kuaishou\n"
+                    f"YouTube ID: {html.escape(prefix)}"
+                )
+                reviewed += 1
         return reviewed
 
+    @entry
     def _retry_one_kuaishou_new_video(self) -> bool:
         """每日优先重试一条未确认的新片；失败时由调用者停止历史迁移，避免换片。"""
         if not settings.enable_kuaishou_browser_publishing:
             return True
         if not self._is_public_publish_window("快手新片重试"):
             return True
-        claimed = self.db.claim_next_kuaishou_publication("NEW")
-        if not claimed:
-            return True
-        return self._publish_claimed_kuaishou_publication(claimed)
+        with claim_unit("kuaishou-submit", lambda: self.db.claim_next_kuaishou_publication("NEW"),
+                        lambda row: str(row["youtube_id"]) + ":" + str(row.get("slice_index", 0))) as claimed:
+            if not claimed:
+                return True
+            return self._publish_claimed_kuaishou_publication(claimed)
 
     # ── 抖音创作者中心发布 ─────────────────────────────────────────────────────
 
@@ -2949,6 +2975,7 @@ class PipelineManager:
         prefix = f"{yid}_s{slice_index}" if slice_index > 0 else yid
         return self._OUT_DIR / f"{prefix}_title.txt"
 
+    @guarded("video", lambda self, publication: str(publication["youtube_id"]) + ":" + str(publication.get("slice_index", 0)))
     def _publish_claimed_douyin_publication(self, publication: Dict[str, Any]) -> bool:
         """执行已领取的抖音任务；校准完成前上传器会 fail-closed，不会误点发布。"""
         self._ensure_douyin_run_guard_loaded()
@@ -3205,6 +3232,7 @@ class PipelineManager:
         logger.info("[%s] 抖音 NEW 已入队，交由统一同步入口按额度和窗口领取。", prefix)
         return True
 
+    @entry
     def _run_douyin_history_migration(self) -> None:
         """迁移历史作品到抖音；任一失败后固定在同一视频等待人工状态核验。"""
         if not settings.enable_douyin_browser_publishing:
@@ -3259,13 +3287,14 @@ class PipelineManager:
             )
 
         while True:
-            claimed = self.db.claim_next_douyin_history_publication(daily_limit=daily_limit)
-            if not claimed:
-                return
-            self._notify_douyin_history_progress(claimed, daily_limit)
-            if not self._publish_claimed_douyin_publication(claimed):
-                logger.warning("[%s] 抖音历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
-                return
+            with claim_unit("douyin-history", lambda: self.db.claim_next_douyin_history_publication(daily_limit=daily_limit),
+                            lambda row: str(row["youtube_id"]) + ":" + str(row.get("slice_index", 0))) as claimed:
+                if not claimed:
+                    return
+                self._notify_douyin_history_progress(claimed, daily_limit)
+                if not self._publish_claimed_douyin_publication(claimed):
+                    logger.warning("[%s] 抖音历史迁移未确认成功，停止本轮，保留同一视频供下次重试", claimed["youtube_id"])
+                    return
 
     def _notify_douyin_history_progress(self, publication: Dict[str, Any], daily_limit: Optional[int]) -> None:
         """每条抖音历史补发开始前汇报当前篇和队列进度。"""
@@ -3312,6 +3341,7 @@ class PipelineManager:
         self._run_douyin_history_migration()
         logger.info("--- Douyin History Migration Completed ---")
 
+    @entry
     def reconcile_douyin_under_review(self) -> int:
         """只读回查抖音审核中的作品；确认发布才落账。"""
         if not settings.enable_douyin_browser_publishing:
@@ -3340,139 +3370,142 @@ class PipelineManager:
             )
         attempted = 0
         for publication in reviewable_publications:
-            if attempted >= max_per_run:
-                break
-            publication_id = publication["id"]
-            if not self.db.reserve_douyin_reconciliation_slot(
-                publication_id, max(60, int(settings.douyin_review_interval_seconds or 600)),
-            ):
-                continue
-            attempted += 1
-            yid = publication["youtube_id"]
-            slice_index = publication.get("slice_index", 0)
-            prefix = f"{yid}_s{slice_index}" if slice_index else yid
-            _, copy_file = self._douyin_asset_paths(yid, slice_index)
-            if not copy_file.is_file():
-                reason = f"抖音审核回查缺少文案文件：{copy_file}"
-                logger.error("[%s] %s", yid, reason)
-                self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
-                break
-            evidence_dir = self._OUT_DIR / "douyin_reconciliation" / str(publication_id) / str(time.time_ns())
-            verify_cmd = [
-                self._VENV_PYTHON,
-                str(self._PRJ_ROOT / "scripts" / "douyin_uploader.py"),
-                "--copy", str(copy_file),
-                "--title-file", str(self._douyin_title_path(yid, slice_index)),
-                "--state", str(self._OUT_DIR / "douyin_state.json"),
-                "--fail-fast-login",
-                "--verify-only",
-                "--evidence-dir", str(evidence_dir),
-            ]
-            # 自动只读回查始终后台运行；投稿页可视化配置不应反复抢占用户桌面。
-            try:
-                self._throttle_douyin_browser_action(f"{yid} 审核回查")
-                result = self._run_tracked(
-                    verify_cmd,
-                    yid,
-                    slice_index=slice_index,
-                    text=True,
-                    capture_output=True,
-                    cwd=str(self._PRJ_ROOT),
-                    timeout=180,
+            with gate().admit("reconcile_douyin_under_review", str(publication["youtube_id"]) + ":" + str(publication.get("slice_index", 0))) as ticket:
+                ticket.start()
+                if attempted >= max_per_run:
+                    break
+                publication_id = publication["id"]
+                if not self.db.reserve_douyin_reconciliation_slot(
+                    publication_id, max(60, int(settings.douyin_review_interval_seconds or 600)),
+                ):
+                    continue
+                attempted += 1
+                yid = publication["youtube_id"]
+                slice_index = publication.get("slice_index", 0)
+                prefix = f"{yid}_s{slice_index}" if slice_index else yid
+                _, copy_file = self._douyin_asset_paths(yid, slice_index)
+                if not copy_file.is_file():
+                    reason = f"抖音审核回查缺少文案文件：{copy_file}"
+                    logger.error("[%s] %s", yid, reason)
+                    self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
+                    break
+                evidence_dir = self._OUT_DIR / "douyin_reconciliation" / str(publication_id) / str(time.time_ns())
+                verify_cmd = [
+                    self._VENV_PYTHON,
+                    str(self._PRJ_ROOT / "scripts" / "douyin_uploader.py"),
+                    "--copy", str(copy_file),
+                    "--title-file", str(self._douyin_title_path(yid, slice_index)),
+                    "--state", str(self._OUT_DIR / "douyin_state.json"),
+                    "--fail-fast-login",
+                    "--verify-only",
+                    "--evidence-dir", str(evidence_dir),
+                ]
+                # 自动只读回查始终后台运行；投稿页可视化配置不应反复抢占用户桌面。
+                try:
+                    self._throttle_douyin_browser_action(f"{yid} 审核回查")
+                    result = self._run_tracked(
+                        verify_cmd,
+                        yid,
+                        slice_index=slice_index,
+                        text=True,
+                        capture_output=True,
+                        cwd=str(self._PRJ_ROOT),
+                        timeout=180,
+                    )
+                except subprocess.TimeoutExpired:
+                    reason = "抖音审核回查超时，保留审核中状态；停止本轮后续回查，避免连续访问。"
+                    logger.warning("[%s] %s", yid, reason)
+                    self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
+                    break
+                except subprocess.CalledProcessError as exc:
+                    if exc.returncode == 6:
+                        logger.info("[%s] 抖音作品仍在审核中", yid)
+                        self._clear_douyin_ui_failure_on_success(
+                            _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+                            f"runtime:publication:{publication_id}:under_review",
+                        )
+                        continue
+                    elif exc.returncode in {8, 9}:
+                        observed = MANAGEMENT_EXIT_STATES[exc.returncode]
+                        self.db.update_douyin_publication_state(
+                            publication_id, "BANNED", error_message=MANAGEMENT_STATE_MESSAGES[observed],
+                        )
+                        self._clear_douyin_ui_failure_on_success(
+                            _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+                            f"runtime:publication:{publication_id}:{observed.lower()}",
+                        )
+                        logger.warning("[%s] %s", yid, MANAGEMENT_STATE_MESSAGES[observed])
+                        continue
+                    elif exc.returncode == 2:
+                        reason = "抖音登录态失效，保留审核中状态；停止本轮后续自动回查。"
+                    elif exc.returncode == 4:
+                        reason = (
+                            "抖音作品已提交但当前机器尚未完成作品管理回查校准；"
+                            "转为 UNCERTAIN 等待人工核验，避免每轮重复打开创作者中心。"
+                        )
+                        reason = self._record_douyin_ui_failure(
+                            _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+                            reason,
+                            evidence_dir=evidence_dir,
+                        )
+                        self.db.update_douyin_publication_state(
+                            publication_id,
+                            "UNCERTAIN",
+                            error_message=reason,
+                        )
+                        logger.warning("[%s] %s", yid, reason)
+                        self._halt_douyin_management_verification(
+                            yid,
+                            reason,
+                            publication=publication,
+                            state="UNCERTAIN",
+                        )
+                        break
+                    elif exc.returncode == 7:
+                        reason = (
+                            "抖音作品管理页未能精确确认本次作品状态；"
+                            "转为 UNCERTAIN 等待人工核验，避免误报或重复提交。"
+                        )
+                        reason = self._record_douyin_ui_failure(
+                            _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+                            reason,
+                            evidence_dir=evidence_dir,
+                        )
+                        self.db.update_douyin_publication_state(
+                            publication_id,
+                            "UNCERTAIN",
+                            error_message=reason,
+                        )
+                        logger.warning("[%s] %s", yid, reason)
+                        self._halt_douyin_management_verification(
+                            yid,
+                            reason,
+                            publication=publication,
+                            state="UNCERTAIN",
+                        )
+                        break
+                    else:
+                        reason = f"抖音审核回查未确认状态（exit {exc.returncode}），保留审核中；停止本轮后续自动回查。"
+                    logger.warning("[%s] %s", yid, reason)
+                    self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
+                    break
+                if result.stdout:
+                    logger.debug("Douyin review verifier stdout:\n%s", result.stdout)
+                if result.stderr:
+                    logger.debug("Douyin review verifier stderr:\n%s", result.stderr)
+                self._clear_douyin_ui_failure_on_success(
+                    _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
+                    f"runtime:publication:{publication_id}:published",
                 )
-            except subprocess.TimeoutExpired:
-                reason = "抖音审核回查超时，保留审核中状态；停止本轮后续回查，避免连续访问。"
-                logger.warning("[%s] %s", yid, reason)
-                self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
-                break
-            except subprocess.CalledProcessError as exc:
-                if exc.returncode == 6:
-                    logger.info("[%s] 抖音作品仍在审核中", yid)
-                    self._clear_douyin_ui_failure_on_success(
-                        _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
-                        f"runtime:publication:{publication_id}:under_review",
-                    )
-                    continue
-                elif exc.returncode in {8, 9}:
-                    observed = MANAGEMENT_EXIT_STATES[exc.returncode]
-                    self.db.update_douyin_publication_state(
-                        publication_id, "BANNED", error_message=MANAGEMENT_STATE_MESSAGES[observed],
-                    )
-                    self._clear_douyin_ui_failure_on_success(
-                        _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
-                        f"runtime:publication:{publication_id}:{observed.lower()}",
-                    )
-                    logger.warning("[%s] %s", yid, MANAGEMENT_STATE_MESSAGES[observed])
-                    continue
-                elif exc.returncode == 2:
-                    reason = "抖音登录态失效，保留审核中状态；停止本轮后续自动回查。"
-                elif exc.returncode == 4:
-                    reason = (
-                        "抖音作品已提交但当前机器尚未完成作品管理回查校准；"
-                        "转为 UNCERTAIN 等待人工核验，避免每轮重复打开创作者中心。"
-                    )
-                    reason = self._record_douyin_ui_failure(
-                        _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
-                        reason,
-                        evidence_dir=evidence_dir,
-                    )
-                    self.db.update_douyin_publication_state(
-                        publication_id,
-                        "UNCERTAIN",
-                        error_message=reason,
-                    )
-                    logger.warning("[%s] %s", yid, reason)
-                    self._halt_douyin_management_verification(
-                        yid,
-                        reason,
-                        publication=publication,
-                        state="UNCERTAIN",
-                    )
-                    break
-                elif exc.returncode == 7:
-                    reason = (
-                        "抖音作品管理页未能精确确认本次作品状态；"
-                        "转为 UNCERTAIN 等待人工核验，避免误报或重复提交。"
-                    )
-                    reason = self._record_douyin_ui_failure(
-                        _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
-                        reason,
-                        evidence_dir=evidence_dir,
-                    )
-                    self.db.update_douyin_publication_state(
-                        publication_id,
-                        "UNCERTAIN",
-                        error_message=reason,
-                    )
-                    logger.warning("[%s] %s", yid, reason)
-                    self._halt_douyin_management_verification(
-                        yid,
-                        reason,
-                        publication=publication,
-                        state="UNCERTAIN",
-                    )
-                    break
-                else:
-                    reason = f"抖音审核回查未确认状态（exit {exc.returncode}），保留审核中；停止本轮后续自动回查。"
-                logger.warning("[%s] %s", yid, reason)
-                self._halt_douyin_platform(yid, reason, publication=publication, state="UNDER_REVIEW")
-                break
-            if result.stdout:
-                logger.debug("Douyin review verifier stdout:\n%s", result.stdout)
-            if result.stderr:
-                logger.debug("Douyin review verifier stderr:\n%s", result.stderr)
-            self._clear_douyin_ui_failure_on_success(
-                _DOUYIN_UI_STAGE_MANAGEMENT_VERIFY,
-                f"runtime:publication:{publication_id}:published",
-            )
-            self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
-            self.send_telegram_msg(
-                f"✅ <b>Video Published</b>\nPlatform: Douyin\n"
-                f"YouTube ID: {html.escape(prefix)}"
-            )
-            reviewed += 1
+                self.db.update_douyin_publication_state(publication_id, "PUBLISHED")
+                self.send_telegram_msg(
+                    f"✅ <b>Video Published</b>\nPlatform: Douyin\n"
+                    f"YouTube ID: {html.escape(prefix)}"
+                )
+                reviewed += 1
         return reviewed
 
+    @entry
     def _retry_one_douyin_new_video(self) -> bool:
         """每日优先重试一条抖音未确认的新片；失败则保留同一视频下次再试。"""
         if not settings.enable_douyin_browser_publishing:
@@ -3490,13 +3523,13 @@ class PipelineManager:
             return False
         if not self._is_public_publish_window("抖音新片重试"):
             return True
-        claimed = self.db.claim_next_douyin_publication(
-            "NEW", daily_limit=daily_limit,
-        )
-        if not claimed:
-            return True
-        self._record_douyin_new_action_claim()
-        return self._publish_claimed_douyin_publication(claimed)
+        with claim_unit("douyin-submit", lambda: self.db.claim_next_douyin_publication(
+"NEW", daily_limit=daily_limit,
+), lambda row: str(row["youtube_id"]) + ":" + str(row.get("slice_index", 0))) as claimed:
+            if not claimed:
+                return True
+            self._record_douyin_new_action_claim()
+            return self._publish_claimed_douyin_publication(claimed)
 
     def _queue_missing_douyin_new_publications(self) -> int:
         """按显式视频号确认策略补齐从未登记抖音账本的新片。"""
@@ -3583,6 +3616,7 @@ class PipelineManager:
             self.send_telegram_msg(f"🚚 <b>Douyin NEW Sync</b>\n已补齐漏同步队列：{queued} 条")
         return queued
 
+    @entry
     def _run_douyin_new_sync(self) -> bool:
         """按上限同步抖音 NEW 队列；任一失败停止，保留同一视频下轮重试。"""
         if not settings.enable_douyin_browser_publishing:
@@ -3602,23 +3636,23 @@ class PipelineManager:
             return True
         self._queue_missing_douyin_new_publications()
         while self._remaining_douyin_new_actions(max_per_run) > 0:
-            claimed = self.db.claim_next_douyin_publication(
-                "NEW", daily_limit=daily_limit,
-            )
-            if not claimed:
-                return True
-            yid = claimed.get("youtube_id", "")
-            self._record_douyin_new_action_claim()
-            claimed_count = max_per_run - self._remaining_douyin_new_actions(max_per_run)
-            logger.info(
-                "[DouyinNewSync] 当前发送 %s；本轮第 %s 条%s",
-                yid,
-                claimed_count,
-                f"（上限 {max_per_run}）",
-            )
-            if not self._publish_claimed_douyin_publication(claimed):
-                logger.warning("[%s] 抖音新片同步未确认成功，停止本轮，保留同一视频供下次重试。", yid)
-                return False
+            with claim_unit("douyin-submit", lambda: self.db.claim_next_douyin_publication(
+"NEW", daily_limit=daily_limit,
+), lambda row: str(row["youtube_id"]) + ":" + str(row.get("slice_index", 0))) as claimed:
+                if not claimed:
+                    return True
+                yid = claimed.get("youtube_id", "")
+                self._record_douyin_new_action_claim()
+                claimed_count = max_per_run - self._remaining_douyin_new_actions(max_per_run)
+                logger.info(
+                    "[DouyinNewSync] 当前发送 %s；本轮第 %s 条%s",
+                    yid,
+                    claimed_count,
+                    f"（上限 {max_per_run}）",
+                )
+                if not self._publish_claimed_douyin_publication(claimed):
+                    logger.warning("[%s] 抖音新片同步未确认成功，停止本轮，保留同一视频供下次重试。", yid)
+                    return False
         return True
 
     def _check_censorship(
@@ -3772,6 +3806,7 @@ class PipelineManager:
         )
         return decision.declare_original
 
+    @guarded("video", lambda self, video: str(video["youtube_id"]) + ":" + str(video.get("slice_index", 0)))
     def _submit_ready_video(self, video: Dict[str, Any]) -> None:
         """只读检查点后提交；不领取加工锁，不调用下载或渲染。调用者持单视频锁。"""
         yid = video["youtube_id"]
@@ -4016,7 +4051,8 @@ class PipelineManager:
         )
         return
 
-    def _process_single_video(self, video: Dict[str, Any], *, preparation_only=False, submission_only=False):
+    @guarded("video", lambda self, video, **kw: f"{video['youtube_id']}:{video.get('slice_index', 0)}", waiting=True)
+    def _process_single_video(self, video: Dict[str, Any], *, preparation_only=False, submission_only=False, claim=False):
         """同视频互斥；就绪提交与重型加工使用不同资源锁。"""
         from .core.task_lease import TaskLease, TaskLeaseBusy
         from .utils.youtube_route import YoutubeRouteError
@@ -4028,6 +4064,9 @@ class PipelineManager:
             raise ValueError("invalid video identity")
         try:
             with TaskLease(self._OUT_DIR / "task_locks" / f"{prefix}.lock", video=prefix, stage="提交" if submission_only else "加工"):
+                start_current()
+                if claim and not self.db.claim_video_for_processing(yid, slice_index=index):
+                    return False
                 try:
                     self.db.record_processing_trigger(
                         yid, getattr(self, "_trigger_source", None), slice_index=index,
@@ -4062,8 +4101,10 @@ class PipelineManager:
                         logger.warning("[%s] %s", prefix, reason)
                     finally:
                         self.db.update_process_pid(yid, None, slice_index=index)
+                return True
         except TaskLeaseBusy:
             logger.info("[%s] 该视频已有执行者，保留原任务归属。", prefix)
+            return False
 
     def _is_video_cancelled(self, yid: str, slice_index: int = 0) -> bool:
         """检查当前任务是否已被外部取消（信号终止或数据库置为 FAILED/CANCELED）。"""
@@ -5008,6 +5049,7 @@ class PipelineManager:
 
     # ── 每日作业 ──────────────────────────────────────────────────────────────
 
+    @entry
     def recover_deferred_wechat_publications(self) -> int:
         """从 WECHAT_DEFERRED 状态按限额恢复微信发布"""
         if settings.wechat_publishing_paused:
@@ -5017,11 +5059,11 @@ class PipelineManager:
         limit = max(0, settings.wechat_deferred_recovery_daily_limit)
         recovered = 0
         for _ in range(limit):
-            claimed = self.db.claim_next_deferred_wechat_publication(daily_limit=limit)
-            if not claimed:
-                break
-            self._process_single_video(claimed)
-            recovered += 1
+            with claim_unit("wechat-deferred", lambda: self.db.claim_next_deferred_wechat_publication(daily_limit=limit), lambda row: str(row["youtube_id"]) + ":" + str(row.get("slice_index", 0))) as claimed:
+                if not claimed:
+                    break
+                self._process_single_video(claimed)
+                recovered += 1
         return recovered
 
     def _defer_wechat_and_publish_kuaishou(self, yid: str, slice_index: int = 0) -> None:
@@ -5040,6 +5082,7 @@ class PipelineManager:
 
     def _run_with_job_lock(self, job_name: str, action) -> bool:
         """所有入口共用的非阻塞任务锁，防止 cron、面板和手动命令并发运行。"""
+        gate().require_running()
         lock_path = self._OUT_DIR / "pipeline_job.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+") as lock_file:
@@ -5049,6 +5092,7 @@ class PipelineManager:
                 logger.info("[JobLock] %s 已有任务在运行，本轮跳过。", job_name)
                 return False
             try:
+                gate().require_running()
                 action()
             finally:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)

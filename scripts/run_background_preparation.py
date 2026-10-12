@@ -7,6 +7,8 @@ crontab 可高频调用本脚本；PipelineManager 会在发布窗口和美股�
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-07-31 | Codex | 新增源字幕预检与后台预加工的受管 cron 入口 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -23,6 +25,9 @@ if str(SRC_ROOT) not in sys.path:
 from video_processing.pipeline_manager import PipelineManager
 
 
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+
+@entry
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     PipelineManager(trigger_source="background_preparation").run_preparation_job()

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.0.1 | 2026-10-12 | Codex | 单飞恢复、清理与退出隔离，提供本机脱敏健康状态 |
 | 1.0.0 | 2026-10-11 | Codex | v0.2 管理/候选/审计入口；默认拒绝生产搜索，无加工入口 |
 """
 from __future__ import annotations
@@ -67,26 +68,22 @@ class ModeBody(StrictBody):
 
 
 def create_topic_candidates_router(service_factory, *, port):
-    holder = {}
-    mutex = threading.Lock()
-
-    def service():
-        with mutex:
-            if "service" not in holder:
-                holder["service"] = service_factory()
-        return holder["service"]
+    from video_processing.topic_tracker.runtime import TopicRuntime
+    runtime = TopicRuntime(service_factory)
+    service = runtime.service
 
     async def clean_loop():
         while True:
             await asyncio.sleep(60)
             try:
-                await run_in_threadpool(service().maintenance)
+                await run_in_threadpool(runtime.clean)
             except TopicError:
                 # 数据库忙不代表清理成功；下一轮重试，页面读前也强制清理。
                 continue
 
     @asynccontextmanager
     async def lifespan(app):
+        app.state.topic_runtime = runtime
         try:
             await run_in_threadpool(service)
         except TopicError:
@@ -101,13 +98,7 @@ def create_topic_candidates_router(service_factory, *, port):
                 await task
             except asyncio.CancelledError:
                 pass
-            tracker = holder.get("service")
-            if tracker:
-                try:
-                    control = tracker.db.topic_control()
-                    tracker.db.topic_set_mode("OFF", control["version"], "host", tracker.clock())
-                finally:
-                    await run_in_threadpool(tracker.wait)
+            await run_in_threadpool(runtime.stop)
 
     router = APIRouter(lifespan=lifespan)
 
@@ -134,23 +125,32 @@ def create_topic_candidates_router(service_factory, *, port):
 
     def authorized(request: Request, _=Depends(boundary)):
         token = request.cookies.get(COOKIE, "")
-        tracker = call(service)
-        if len(token) != 64 or not call(tracker.db.topic_session, token_key(token), tracker.clock()):
+        if len(token) != 64:
             raise HTTPException(403, "本机会话已过期，请重新打开候选工作台")
         if request.method not in ("GET", "HEAD") and not hmac.compare_digest(request.headers.get("x-topic-csrf", ""), csrf(token)):
             raise HTTPException(403, "页面验证已过期，请重新载入")
+        tracker = call(service)
+        if not call(tracker.db.topic_session, token_key(token), tracker.clock()):
+            raise HTTPException(403, "本机会话已过期，请重新打开候选工作台")
         return token_key(token)[:16]
 
     def call(method, *args, **kwargs):
         try:
             return method(*args, **kwargs)
         except TopicError as exc:
+            if exc.code in {"DATABASE_BUSY", "DATABASE_ERROR", "LOCK_UNAVAILABLE", "READ_ONLY"}:
+                with runtime.mutex:
+                    runtime.failure(exc)
             raise HTTPException(exc.status, dict(code=exc.code, message=exc.message)) from exc
+
+    @router.get("/api/topic-candidates/health", dependencies=[Depends(boundary)])
+    def health():
+        return dict(runtime.health)
 
     @router.get("/topic-candidates", response_class=HTMLResponse, dependencies=[Depends(boundary)])
     def page(request: Request):
         tracker = call(service)
-        call(tracker.maintenance)
+        call(runtime.clean)
         token = request.cookies.get(COOKIE, "")
         if len(token) != 64 or not call(tracker.db.topic_session, token_key(token), tracker.clock()):
             token = secrets.token_hex(32)

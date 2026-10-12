@@ -176,7 +176,7 @@ def test_preparation_worker_claims_only_auto_candidates(tmp_path: Path, monkeypa
     manager._process_single_video.assert_called_once()
     candidate = manager._process_single_video.call_args.args[0]
     assert candidate["youtube_id"] == "auto-candidate"
-    assert manager._process_single_video.call_args.kwargs == {"preparation_only": True}
+    assert manager._process_single_video.call_args.kwargs == {"preparation_only": True, "claim": True}
     assert manager.db.get_video_by_youtube_id("manual-candidate")["status"] == "PENDING"
     assert manager.db.get_video_by_youtube_id("discovery-candidate")["status"] == "PENDING"
 

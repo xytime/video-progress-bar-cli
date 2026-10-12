@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-12 | Codex | 浏览器资源等待登记与拿锁后的维护重检，保留已运行同项续接。 |
 | 1.1.0 | 2026-09-23 | Codex | 所有上传入口强制会话互斥，公开占用归属并让待发布优先。 |
 | 1.0.0 | 2026-09-19 | Codex | 新增 state-path 派生的有界非阻塞跨进程会话锁与脚本装饰器。 |
 """
@@ -21,6 +22,7 @@ import os
 from datetime import datetime, timezone
 
 from .task_lease import read_lease_owner
+from .maintenance import gate, current
 from pathlib import Path
 from typing import Callable, ParamSpec, TypeVar
 
@@ -126,10 +128,14 @@ def guarded_wechat_browser_session(
             state_path = bound.arguments.get(state_parameter)
             if state_path is None:
                 state_path = signature.parameters[state_parameter].default
+            parent = current()
+            key = parent.key if parent and parent.row.get("parent") else "wechat-session:" + str(state_path) + ":" + purpose
             try:
-                with WeChatSessionLock(state_path, timeout_seconds=timeout_seconds, purpose=purpose,
-                                       video=Path(str(bound.arguments.get("video_path") or "")).stem):
-                    return function(*args, **kwargs)
+                with gate().admit("wechat-resource", key) as ticket:
+                    with WeChatSessionLock(state_path, timeout_seconds=timeout_seconds, purpose=purpose,
+                                           video=Path(str(bound.arguments.get("video_path") or "")).stem):
+                        ticket.start()
+                        return function(*args, **kwargs)
             except WeChatSessionLockBusy:
                 return busy_result
 

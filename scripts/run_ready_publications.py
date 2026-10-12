@@ -9,6 +9,8 @@
 | 1.2.0 | 2026-10-03 | Codex | 心跳暴露已加载的 TED 点赞率门槛及演讲评分线，支持运行采用回读。 |
 | 1.0.0 | 2026-09-23 | Codex | 全天巡检已就绪成片，独立进程隔离与可回读心跳。 |
 | 1.1.0 | 2026-09-27 | Codex | 心跳记录加载的封面首选方案与队列开关，验证部署采用。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 from __future__ import annotations
 
@@ -34,6 +36,10 @@ from video_processing.utils.wechat_product_task import PUBLISHER_CAPABILITY, pro
 from video_processing.core.wechat_product_attachment import ATTACHMENT_VERSION
 
 
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+from video_processing.core.maintenance_child import child_continuation
+from video_processing.core.maintenance_runtime import registered
+
 def product_configuration_status():
     from video_processing.utils.wechat_product_config import load_policy
     try:
@@ -47,7 +53,7 @@ def product_configuration_status():
 
 def dispatch_once(manager: PipelineManager) -> int:
     """只取就绪候选，不让高分未加工任务挤占发布名额。"""
-    if settings.wechat_publishing_paused:
+    if not running() or settings.wechat_publishing_paused:
         return 0
     videos = manager.db.get_high_score_pending_videos(
         min_score=75, limit=1, ready_only=True,
@@ -62,7 +68,7 @@ def dispatch_once(manager: PipelineManager) -> int:
 
 def dispatch_english_world_once(manager: PipelineManager) -> int:
     """既有自动授权的英语世界成片同样独立续投，保留专用投稿器的全部闸门。"""
-    if not settings.enable_english_world_auto_publish or settings.wechat_publishing_paused:
+    if not running() or not settings.enable_english_world_auto_publish or settings.wechat_publishing_paused:
         return 0
     manager.db.restore_expired_english_world_operator_recoveries()
     item = manager.db.get_next_auto_approved_english_world_submission(
@@ -70,15 +76,18 @@ def dispatch_english_world_once(manager: PipelineManager) -> int:
     if not item:
         return 0
     review_id = str(item["id"])
-    manager._report_runtime_stage(review_id, "ENGLISH_WORLD_SUBMISSION")
-    result = subprocess.run(
-        [str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/submit_english_world_review.py"),
-         "--review-id", review_id], cwd=ROOT, timeout=1800, check=False,
-    )
+    with gate().admit("english-submit", "review:" + review_id) as ticket:
+        ticket.start()
+        manager._report_runtime_stage(review_id, "ENGLISH_WORLD_SUBMISSION")
+        cmd = [str(ROOT / ".venv/bin/python"), str(ROOT / "scripts/submit_english_world_review.py"), "--review-id", review_id]
+        with child_continuation(cmd, dict(cwd=ROOT, timeout=1800, check=False)) as kwargs:
+            result = subprocess.run(cmd, **kwargs)
     logging.info("英语世界提交执行者退出 review=%s code=%s", review_id, result.returncode)
     return 1
 
 
+@entry
+@registered("ready-worker")
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--once", action="store_true")
@@ -142,6 +151,11 @@ def main(argv=None) -> int:
             try:
                 while True:
                     try:
+                        if not running():
+                            if args.once:
+                                return 0
+                            time.sleep(15)
+                            continue
                         report({"stage": "POLLING", "current_video": None})
                         ensure_wallstreet_worker()
                         attempted = dispatch_once(manager)

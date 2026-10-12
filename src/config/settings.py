@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| maintenance-v1 | 2026-10-12 | Codex | 声明维护状态及仅继承 FD 可验证的单项子进程归属。 |
 | topic-candidates-v1 | 2026-10-11 | Codex | 声明默认关闭的专题搜索及经核实项目预算；不自动开放生产。 |
 | ted-cleanup-v1 | 2026-10-10 | Codex | 增加原片首尾包装清理开关，生产核验后显式启用。 |
 | insight-v1.1 | 2026-10-08 | Antigravity | 修复沙盒环境无 HOME 变量时 Path.home() mach-lookup 拦截异常。 |
@@ -346,6 +347,15 @@ class Settings(BaseSettings):
     # 留空时监控器自动退到公开 RSS，条目保持 METADATA_PENDING，绝不凭空自动发布。
     youtube_data_api_key: str = ""
     youtube_data_api_timeout_sec: int = 20
+
+    # 维护状态独立于业务库；首次缺失拒绝领取，须由本机命令显式初始化。
+    maintenance_state_path: Path = _PROJECT_ROOT / "output" / "maintenance-state.json"
+    maintenance_child_receipt: str = ""
+    maintenance_child_fd: int = -1
+
+    def maintenance_child_environment(self) -> dict[str, str]:
+        """仅用于继承标准环境；业务代码不自行读取环境变量。"""
+        return dict(os.environ)
 
     # 专题候选：本轮仅开发和隔离验收，生产搜索保持关闭。
     topic_search_enabled: bool = False

@@ -1,0 +1,48 @@
+{
+  "at": "2026-10-12T05:00:50.837617+00:00",
+  "production_head": "0419de50cfd806353256db607878bdd34a096878",
+  "expected_head": "0419de50cfd806353256db607878bdd34a096878",
+  "head_matches": true,
+  "files": {
+    "src/video_processing/db/database.py": {
+      "sha256": "1a7a339f5031d2e9b93fab07059295d9a5ecc54627d05d1e4b625cdcfc07d727",
+      "matches": true
+    },
+    "src/video_processing/processors/caption_processor.py": {
+      "sha256": "fb5bf13e8c1ca0b7ab831bdc686f6375716e959f90efa9c829ec89e2bb8e5447",
+      "matches": true
+    },
+    "src/video_processing/utils/subtitle_translation_provider.py": {
+      "sha256": "990812de343dcf99df992d67fb2433c3fc9a658e83e3160fe7c9b0f0369effb8",
+      "matches": true
+    },
+    "src/video_processing/utils/vocab_helper.py": {
+      "sha256": "64566fab74d76d4bec8eca5c718e2e0a5826968dd996b21252a0e7191333edc2",
+      "matches": true
+    },
+    "scripts/submit_generic_douyin.py": {
+      "sha256": "ba81b2336ea16c12d92451e678b39527fe215ce08f9644311e9600d031e615c3",
+      "matches": true
+    },
+    "config/wechat_products.json": {
+      "sha256": "c5fdaa24c3f6bfd7a1bba28e282c9fe861496891c5995b8b00cd7d1d33009da6",
+      "matches": true
+    },
+    "src/video_processing/topic_clues/__init__.py": {
+      "sha256": "034b2034c5655a3969a830f45008bb530f2fcfbd20a22c6c8c1cb5bf2cfe3983",
+      "matches": true
+    },
+    "src/video_processing/topic_clues/hub.py": {
+      "sha256": "f5df32af6d0b8eb9df07687ace19eb7e7c092fd82fa66174030fb767976197b8",
+      "matches": true
+    },
+    "tests/unit/test_topic_clues_hub.py": {
+      "sha256": "64a015cbdc5eb673691612648539372574a7d1271d11d307741cf7a4b0c37355",
+      "matches": true
+    },
+    "tests/unit/test_vocabulary_export.py": {
+      "sha256": "aa439ebaba7d22bbcd122566563a788761ad577f55eeae63db06cc9e85d5a73d",
+      "matches": true
+    }
+  }
+}

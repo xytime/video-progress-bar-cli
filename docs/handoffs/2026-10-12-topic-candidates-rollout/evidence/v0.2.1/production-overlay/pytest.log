@@ -1,0 +1,39 @@
+........................................................................ [ 13%]
+........................................................................ [ 26%]
+........................................................................ [ 39%]
+........................................................................ [ 52%]
+........................................................................ [ 65%]
+........................................................................ [ 78%]
+........................................................................ [ 92%]
+...........................................                              [100%]
+=============================== warnings summary ===============================
+src/web/app.py:1007
+  /private/tmp/video-pytest-rjg73j8i/sandbox/repo/src/web/app.py:1007: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+../../../../../Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598
+../../../../../Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598
+  /Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/.venv/lib/python3.12/site-packages/fastapi/applications.py:4598: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)  # ty: ignore[deprecated]
+
+src/web/app.py:1049
+  /private/tmp/video-pytest-rjg73j8i/sandbox/repo/src/web/app.py:1049: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("shutdown")
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+547 passed, 4 warnings in 38.95s

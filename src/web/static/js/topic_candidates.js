@@ -1,4 +1,5 @@
 /* Modification History: 1.0.0 | 2026-10-11 | Codex | 本机候选交互、CAS、错误恢复、筛选与分页；无自动搜索。 */
+/* Modification History: 1.0.1 | 2026-10-12 | Codex | 显示持久化维护状态，保留本地专题管理。 */
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -55,6 +56,9 @@
   function renderState() {
     $('new-topic').disabled=false;
     $('mode-state').textContent=model.control.mode==='OFF' ? (model.search_open ? '已关闭；仅手动搜索' : '生产搜索尚未开放；可管理专题和整理已有候选') : '仅发现；点击专题按钮才会搜索';
+    if (model.maintenance?.state !== 'RUNNING') {
+      $('mode-state').textContent=(model.maintenance?.state === 'MAINTENANCE' ? '维护中；' : '维护状态无法确认；') + $('mode-state').textContent;
+    }
     $('budget').textContent=`太平洋日期 ${model.budget.day} · 搜索 ${model.budget.search} / ${model.limits.search} 次 · 详情 ${model.budget.general} / ${model.limits.general} units`;
     $('mode-button').textContent=model.control.mode==='OFF' ? '开启手动搜索' : '关闭搜索';
     $('mode-button').disabled=model.control.mode==='OFF' && !model.search_open;

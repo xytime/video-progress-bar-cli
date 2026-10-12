@@ -8,6 +8,8 @@
 | --- | --- | --- | --- |
 | 1.1.0 | 2026-09-20 | Antigravity | 传递 copy_path 到 post_comment 门面以支持 English World 作品定位与文案。 |
 | 1.0.0 | 2026-09-19 | Codex | 建立有界 tick、提交意图 callback 与 UNCERTAIN 只读回查协议。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -22,6 +24,8 @@ from video_processing.db.database import PipelineDB
 
 logger = logging.getLogger(__name__)
 
+
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
 
 class InteractionWorkerServices(Protocol):
     """生成、浏览器和通知的窄门面，测试只需注入一个替身。"""
@@ -77,6 +81,7 @@ def _select_target(
     return db.get_wechat_interaction_discovery_candidate()
 
 
+@guarded("interaction", lambda *a, **kw: str(kw.get("platform_post_id") or kw.get("video_id") or "next"))
 def run_interaction_tick(
     db: PipelineDB,
     services: InteractionWorkerServices,

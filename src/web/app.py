@@ -1,5 +1,6 @@
 """Web 控制中心后端 — FastAPI 仪表盘服务
 
+| maintenance-v1 | 2026-10-12 | Codex | 共用持久化准入、调度角色互斥、单项线程归属和资源等待；维护启动保留本地候选管理。 |
 | topic-candidates-v1 | 2026-10-11 | Codex | 挂载本机候选独立路由，生产搜索默认关闭；不接入主流水线。 |
 | ted-cleanup-v1 | 2026-10-10 | Codex | 统计 API 回读当前进程的原片清理开关及配方，用于运行采用核验。 |
 | 3.55.0 | 2026-10-08 | Antigravity | /api/trending-keywords 与 /refresh 增加异常防崩与静态兜底降级包装 |
@@ -121,7 +122,7 @@ _src = str(Path(__file__).parent.parent)
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-from fastapi import FastAPI, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import FastAPI, BackgroundTasks, Depends, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -140,6 +141,10 @@ from video_processing.highlight import HighlightJobService
 from video_processing.english_world import EnglishWorldResearchService
 from video_processing.english_world.package_integrity import calculate_package_hashes
 from web.listening_transcriber import router as listening_transcriber_router
+from video_processing.core.maintenance_child import run_admitted
+from video_processing.core.maintenance import gate, guarded, entry, running, spawn_admitted, MaintenanceDenied
+from video_processing.core.maintenance_child import child_continuation
+from video_processing.core.maintenance_runtime import registered, role_lease, inspection
 
 app = FastAPI(title="Video Pipeline Control Center", version="1.1.0")
 app.include_router(listening_transcriber_router)
@@ -200,6 +205,39 @@ def _create_topic_tracker():
 
 
 app.include_router(create_topic_candidates_router(_create_topic_tracker, port=settings.dashboard_port))
+
+
+@app.middleware("http")
+async def maintenance_admission(request, call_next):
+    """旧业务写请求共用准入；候选本地操作仍走自己的来源/会话检查。"""
+    if request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path.startswith("/api/topic-candidates/"):
+        return await call_next(request)
+    try:
+        matched = re.fullmatch(r"/api/videos/([^/]+)(?:/slices/(\d+))?/[^/]+", request.url.path)
+        key = f"{matched[1]}:{matched[2] or 0}" if matched else request.url.path
+        if request.url.path == "/api/publication-leases":
+            try:
+                body = await request.json()
+                key = f"{body['youtube_id']}:{body.get('slice_index', 0)}"
+            except (ValueError, KeyError, TypeError):
+                pass
+        with gate().admit("web-write", key) as ticket:
+            ticket.start()
+            return await call_next(request)
+    except MaintenanceDenied as exc:
+        return JSONResponse(status_code=503, content={"detail": {"code": exc.code, "message": str(exc)}})
+
+
+@app.get("/api/maintenance/status")
+def maintenance_status(request: Request):
+    import ipaddress
+    try:
+        local = request.client and ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        local = False
+    if not local:
+        raise HTTPException(403, "维护状态仅允许本机读取")
+    return inspection(gate())
 _wechat_login_thread: Optional[threading.Thread] = None
 _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
 
@@ -239,11 +277,7 @@ def _start_highlight_analysis(job_id: str) -> None:
         service = HighlightJobService(db, Path(__file__).parent.parent.parent)
         service.analyze(job_id)
 
-    threading.Thread(
-        target=_run,
-        daemon=True,
-        name=f"highlight-plan-{job_id[:8]}",
-    ).start()
+    spawn_admitted(_run, role="highlight-analysis", object_key="highlight:" + job_id, name=f"highlight-analysis-{job_id[:8]}", continuation=True)
 
 
 def _start_english_world_research(job_id: str) -> None:
@@ -251,11 +285,7 @@ def _start_english_world_research(job_id: str) -> None:
     def _run() -> None:
         EnglishWorldResearchService(db).research(job_id)
 
-    threading.Thread(
-        target=_run,
-        daemon=True,
-        name=f"english-world-research-{job_id[:8]}",
-    ).start()
+    spawn_admitted(_run, role="english-research", object_key="english-job:" + job_id, name=f"english-research-{job_id[:8]}", continuation=True)
 
 
 def _start_english_world_production(job_id: str) -> None:
@@ -266,7 +296,7 @@ def _start_english_world_production(job_id: str) -> None:
 
     def _run() -> None:
         try:
-            result = subprocess.run(
+            result = run_admitted(
                 [
                     str(python_bin), str(runner), "--job-id", job_id,
                     "--wait-for-lock-seconds", "7200",
@@ -288,11 +318,7 @@ def _start_english_world_production(job_id: str) -> None:
                 "[EnglishWorld] failed to launch production coordinator for %s: %s", job_id[:8], exc,
             )
 
-    threading.Thread(
-        target=_run,
-        daemon=True,
-        name=f"english-world-produce-{job_id[:8]}",
-    ).start()
+    spawn_admitted(_run, role="english-production", object_key="english-job:" + job_id, name=f"english-production-{job_id[:8]}", waiting=True)
 
 
 def _start_english_world_submission(review_id: str) -> None:
@@ -303,7 +329,7 @@ def _start_english_world_submission(review_id: str) -> None:
 
     def _run() -> None:
         try:
-            result = subprocess.run(
+            result = run_admitted(
                 [str(python_bin), str(runner), "--review-id", review_id],
                 cwd=str(project_root), timeout=30 * 60, text=True, capture_output=True,
             )
@@ -322,11 +348,7 @@ def _start_english_world_submission(review_id: str) -> None:
                 "[EnglishWorld] failed to launch submission worker for %s: %s", review_id[:8], exc,
             )
 
-    threading.Thread(
-        target=_run,
-        daemon=True,
-        name=f"english-world-submit-{review_id[:8]}",
-    ).start()
+    spawn_admitted(_run, role="english-submit", object_key="review:" + review_id, name=f"english-submit-{review_id[:8]}", waiting=True)
 
 
 def _wechat_login_env() -> dict:
@@ -346,6 +368,7 @@ def _wechat_login_env() -> dict:
     return env
 
 
+@guarded("login-recovery")
 def _restore_login_required_after_wechat_login() -> int:
     """微信重登成功后恢复因登录态失效暂停的任务，让既有调度器按分数线重发。"""
     import logging
@@ -379,6 +402,7 @@ def _restore_login_required_after_wechat_login() -> int:
     return count
 
 
+@guarded("english-login-recovery")
 def _resume_eligible_english_world_after_wechat_login() -> Optional[dict]:
     """登录成功后续投一条可证明未触达平台的英语世界自动任务。
 
@@ -414,6 +438,7 @@ def _resume_eligible_english_world_after_wechat_login() -> Optional[dict]:
     return item
 
 
+@guarded("wechat-login")
 def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = False, reason: str = "manual") -> dict:
     """启动单实例微信登录；自动预热时保留旧登录标记和 state，避免提前把现行会话判死。"""
     prj_root = Path(__file__).parent.parent.parent
@@ -462,7 +487,7 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
 
     def _run():
         try:
-            result = subprocess.run(args, cwd=str(prj_root), env=_wechat_login_env())
+            result = run_admitted(args, cwd=str(prj_root), env=_wechat_login_env())
             post_auth = read_wechat_auth_state(state) if state.exists() else {}
             post_auth_at = float(post_auth.get("authorized_at") or 0.0)
             auth_succeeded_this_run = (
@@ -483,8 +508,7 @@ def _start_wechat_login_flow(*, headless: bool = True, preserve_marker: bool = F
             logging.getLogger(__name__).error(f"WeChat login subprocess failed ({reason}): {exc}")
 
     global _wechat_login_thread
-    _wechat_login_thread = threading.Thread(target=_run, daemon=True, name="wechat-login")
-    _wechat_login_thread.start()
+    _wechat_login_thread = spawn_admitted(_run, role="wechat-login", object_key="wechat-login", name="wechat-login", continuation=True)
     return {"success": True, "message": "微信登录流程已启动"}
 
 
@@ -509,6 +533,7 @@ def _wechat_session_needs_auto_relogin() -> bool:
         # 旧看门狗会删标记；只有保存过会话时才尝试恢复，避免首次安装时误启动。
         return state_file.is_file()
 
+@guarded("title-translation", lambda youtube_id, *a: str(youtube_id) + ":0")
 def _translate_title_task(youtube_id: str, english_title: str):
     """后台任务：调用翻译接口（阿里云 MT 优先）翻译标题并更新数据库。
 
@@ -545,14 +570,18 @@ def _in_us_market_window() -> bool:
     return settings.is_us_market_guard_window()
 
 
-def _auto_pipeline_loop():
+@registered("auto-pipeline")
+def _auto_pipeline_loop(stop=None):
     """后台循环任务：启动后延迟10秒执行首次管线，之后每4小时执行一次"""
+    stop = stop if stop is not None else _scheduler_stop
     import time
-    time.sleep(10)
-    while True:
+    stop.wait(10)
+    while not stop.is_set():
         try:
             # [Claude_Opus_4.8] 美股盘中保护：盘中跳过重型全量管线，避免抢占实盘行情管线 CPU
-            if _in_us_market_window():
+            if not running():
+                pass
+            elif _in_us_market_window():
                 print("[Scheduler] 美股盘中，跳过全量管线（重负载保护）。")
             else:
                 # 复用已有的全量管线触发逻辑
@@ -560,9 +589,10 @@ def _auto_pipeline_loop():
                 print("[Scheduler] Auto-triggered full pipeline run.")
         except Exception as e:
             print(f"[Scheduler] Auto pipeline error: {e}")
-        time.sleep(14400)  # 4 小时 = 14400 秒
+        stop.wait(14400)  # 4 小时 = 14400 秒
 
 
+@guarded("queue-dispatch")
 def _run_pipeline_manager():
     """[Gemini_3.5_Flash_planning] 后台运行 pipeline_manager 进程处理高分视频"""
     prj_root = Path(__file__).parent.parent.parent
@@ -582,7 +612,7 @@ def _run_pipeline_manager():
         with open(log_path, "a") as f:
             f.write("\n=== Auto-triggered queue pipeline run ===\n")
             # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
-            sp.run([python, "-u", "-m", "video_processing.pipeline_manager",
+            run_admitted([python, "-u", "-m", "video_processing.pipeline_manager",
                     "--trigger-source", "dashboard_scheduler"],
                    cwd=src_dir, stdout=f, stderr=f, env=env_clean, start_new_session=True)
     except Exception as e:
@@ -590,34 +620,43 @@ def _run_pipeline_manager():
         logging.getLogger(__name__).error(f"_run_pipeline_manager failed: {e}")
 
 
-def _ready_publication_supervisor():
+@registered("ready-supervisor")
+def _ready_publication_supervisor(stop=None):
     """独立发布进程守护；不查询加工锁或市场避让，进程锁防重复启动。"""
+    stop = stop if stop is not None else _scheduler_stop
     import time
     from video_processing.core.task_lease import read_lease_owner
 
     root = Path(__file__).resolve().parents[2]
     out = root / "output"
     child = None
-    while True:
+    while not stop.is_set():
         try:
-            if (child is None or child.poll() is not None) and not read_lease_owner(out / "ready_publications.lock"):
-                with (out / "ready_publications.log").open("a") as log:
-                    child = subprocess.Popen(
+            if running() and (child is None or child.poll() is not None) and not read_lease_owner(out / "ready_publications.lock"):
+                with gate().admit("worker-launch", "ready-worker-launch") as ticket:
+                    ticket.start()
+                    with (out / "ready_publications.log").open("a") as log:
+                        child = subprocess.Popen(
                         [str(root / ".venv/bin/python"), str(root / "scripts/run_ready_publications.py")],
                         cwd=str(root), stdout=log, stderr=log, start_new_session=True,
                     )
         except Exception:
             logging.getLogger(__name__).exception("[ReadyPublication] 独立执行者启动失败")
-        time.sleep(15)
+        stop.wait(15)
 
 
-def _queue_runner_loop():
+@registered("queue-runner")
+def _queue_runner_loop(stop=None):
     """[Gemini_3.5_Flash_planning] 每15秒巡检一次：如果有 >=75 分且状态为 PENDING 的任务，且当前没有管线任务在运行，则自动启动管线处理"""
+    stop = stop if stop is not None else _scheduler_stop
     import time
     # [Gemini_3.5_Flash_planning] 自动执行队列轮询逻辑，解决切片子任务需要手动点击的痛点
-    time.sleep(5)
-    while True:
+    stop.wait(5)
+    while not stop.is_set():
         try:
+            if not running():
+                stop.wait(15)
+                continue
             recovered = _recover_orphaned_publishing_tasks(stale_minutes=30)
             if recovered > 0:
                 logging.getLogger(__name__).warning(
@@ -650,13 +689,13 @@ def _queue_runner_loop():
             # [Claude_Opus_4.8] 美股盘中保护：盘中不启动重型队列管线（下载/Whisper/渲染），
             # 避免抢占与实盘交易行情管线共用的整机 CPU。盘后（北京 04:15 起）自动恢复。
             if _in_us_market_window():
-                time.sleep(15)
+                stop.wait(15)
                 continue
 
             # 队列执行者只负责窗口内提交；非窗口由受管 cron 的后台预加工入口
             # 拉取字幕并完成重活，避免仪表盘每 15 秒反复启动完整管线进程。
             if not settings.is_public_publish_window():
-                time.sleep(15)
+                stop.wait(15)
                 continue
 
             # 1. 普通频道 >=75；演讲/TED/高校频道 >= speech_publish_score_line
@@ -671,10 +710,10 @@ def _queue_runner_loop():
                 # 仪表盘线程枚举中，遗漏锁检查会额外拉起一个等待锁的重复管线。
                 if _queue_pipeline_launch_allowed():
                     print(f"[Scheduler] Found pending high-score video {pending_videos[0]['youtube_id']}, auto-triggering queue pipeline...")
-                    threading.Thread(target=_run_pipeline_manager, daemon=True, name="queue-pipeline").start()
+                    spawn_admitted(_run_pipeline_manager, role="queue-dispatch", object_key="queue-dispatch", name="queue-pipeline")
         except Exception as e:
             logging.getLogger(__name__).error(f"[Scheduler] Queue runner loop error: {e}")
-        time.sleep(15)
+        stop.wait(15)
 
 
 def _queue_pipeline_launch_allowed() -> bool:
@@ -705,7 +744,7 @@ def _process_group_alive(pid: Optional[int]) -> bool:
         return False
     target = int(pid)
     try:
-        result = subprocess.run(
+        result = run_admitted(
             ["ps", "-axo", "pid=,pgid=,stat=,command="],
             cwd=str(Path(__file__).parent.parent.parent),
             capture_output=True,
@@ -850,7 +889,8 @@ def _recover_orphaned_pre_submission_tasks(stale_minutes: int = 20) -> int:
     return recovered
 
 
-def _wechat_keepalive_loop():
+@registered("keepalive-watchdog")
+def _wechat_keepalive_loop(stop=None):
     """[Claude_Sonnet_4.6_Thinking_planning] v3.2.0: WeChat Session 看门狗循环。
 
     每隔随机的 min~max 分钟（可通过 settings 配置），启动一个独立子进程
@@ -859,6 +899,7 @@ def _wechat_keepalive_loop():
     互斥保护：若检测到微信上传任务正在运行，则跳过本轮，避免两个
     Playwright 进程共享 Session 文件产生竞态。
     """
+    stop = stop if stop is not None else _scheduler_stop
     import random
     import logging
     log = logging.getLogger(__name__)
@@ -871,7 +912,7 @@ def _wechat_keepalive_loop():
     import subprocess as _sp
     import threading as _threading
 
-    while True:
+    while not stop.is_set():
         # 随机等待 min~max 分钟
         min_s = settings.wechat_keepalive_min_interval * 60
         max_s = settings.wechat_keepalive_max_interval * 60
@@ -879,14 +920,15 @@ def _wechat_keepalive_loop():
         next_ts = time.time() + interval
         try:
             from video_processing.core.wechat_auth_state import record_wechat_keepalive_schedule
-            record_wechat_keepalive_schedule(state_file, scheduled_at=next_ts)
+            if running():
+                record_wechat_keepalive_schedule(state_file, scheduled_at=next_ts)
         except Exception as _exc:
             log.warning("[Keepalive] Failed to record keepalive schedule: %s", _exc)
         log.info(f"[Keepalive] Next keepalive scheduled in {interval // 60}m{interval % 60}s.")
-        time.sleep(interval)
+        stop.wait(interval)
 
         # 开关检查（sleep 后判断，支持运行时热更新配置）
-        if not settings.wechat_keepalive_enabled:
+        if not running() or not settings.wechat_keepalive_enabled:
             log.debug("[Keepalive] Keepalive disabled by settings, skipping.")
             continue
 
@@ -930,7 +972,7 @@ def _wechat_keepalive_loop():
             env["TELEGRAM_ADMIN_IDS"] = settings.telegram_admin_ids
 
         try:
-            result = _sp.run(
+            result = run_admitted(
                 [
                     python, keepalive_script,
                     "--state", state_file,
@@ -970,22 +1012,53 @@ def startup_event():
     _process_single_video经由 daemon 线程执行，无法在内部注册信号。
     将 SIGTERM handler 注册移至此处（FastAPI startup 在主线程运行）。
     """
+    global _maintenance_ui_lease, _scheduler_stop, _scheduler_threads
+    if _maintenance_ui_lease is not None:
+        return
+    lease = role_lease("ui")
+    lease.__enter__()
+    _maintenance_ui_lease = lease
+    _scheduler_stop = threading.Event()
     # [Claude_Sonnet_4.6_Thinking_planning] BUG-1: 在主线程注册 SIGTERM handler
     if settings.enable_sigterm_kill:
         from video_processing import pipeline_manager as _pm
         signal.signal(signal.SIGTERM, _pm._sigterm_handler)
 
-    import threading
-    threading.Thread(target=_auto_pipeline_loop, daemon=True, name="auto-pipeline-scheduler").start()
+    _scheduler_threads = [threading.Thread(target=target, args=(_scheduler_stop,), daemon=True, name=name)
+                          for target, name in (
+                              (_auto_pipeline_loop, "auto-pipeline-scheduler"),
+                              (_ready_publication_supervisor, "ready-publication-supervisor"),
+                              (_queue_runner_loop, "queue-runner-scheduler"),
+                              (_wechat_keepalive_loop, "wechat-keepalive-watchdog"),
+                          )]
+    for thread in _scheduler_threads:
+        thread.start()
     print("[Scheduler] Background pipeline scheduler started.")
 
-    threading.Thread(target=_ready_publication_supervisor, daemon=True, name="ready-publication-supervisor").start()
-    threading.Thread(target=_queue_runner_loop, daemon=True, name="queue-runner-scheduler").start()
     print("[Scheduler] Queue runner scheduler started.")
 
     # [Claude_Sonnet_4.6_Thinking_planning] v3.2.0: WeChat Session 看门狗
-    threading.Thread(target=_wechat_keepalive_loop, daemon=True, name="wechat-keepalive-watchdog").start()
     print("[Scheduler] WeChat session keepalive watchdog started.")
+
+
+_maintenance_ui_lease = None
+_scheduler_stop = threading.Event()
+_scheduler_threads = []
+
+
+@app.on_event("shutdown")
+def release_maintenance_ui_role():
+    global _maintenance_ui_lease
+    _scheduler_stop.set()
+    deadline = time.monotonic() + 2
+    for thread in _scheduler_threads:
+        thread.join(max(0, deadline - time.monotonic()))
+    if any(thread.is_alive() for thread in _scheduler_threads):
+        # 不把未排空的同进程热重载冒充已退出，角色锁仍保留至进程结束。
+        raise RuntimeError("维护调度器尚未退出")
+    if _maintenance_ui_lease is not None:
+        _maintenance_ui_lease.__exit__(None, None, None)
+        _maintenance_ui_lease = None
 
 # 下载器与生产加工共用项目虚拟环境。
 _YT_DLP = settings.ytdlp_path  # 下载器必须加载项目 FFmpeg 单名额启动钩子。
@@ -2008,7 +2081,7 @@ def add_channel(req: AddChannelRequest):
     # 真实的频道 ID 与名称位于播放列表层级（playlist_channel_id / playlist_channel），
     # 因此需通过多候选字段与 playlist: 前缀提取，确保频道首页、分栏与普通条目均能稳定解析。
     try:
-        result = subprocess.run(
+        result = run_admitted(
             [
                 _YT_DLP,
                 "--flat-playlist",          # 不解析视频格式，只取列表元数据
@@ -2220,7 +2293,7 @@ def add_video_manual(req: AddVideoRequest, bg_tasks: BackgroundTasks):
 
     # ── 3. yt-dlp 获取视频元数据 ─────────────────────────────────────
     try:
-        result = subprocess.run(
+        result = run_admitted(
             [
                 _YT_DLP,
                 "--print", "%(id)s|||%(title)s|||%(channel_id)s|||%(channel)s|||%(duration)s|||%(view_count)s|||%(like_count)s|||%(upload_date)s",
@@ -2346,30 +2419,19 @@ def _trigger_video_async(video: dict, *, trigger_source: str = "dashboard_manual
         # 内联脚本：改用 JSON 通过 stdin 传递数据，避免 repr() 带来的代码注入风险
         import json
         video_json = json.dumps(dict(video))
-        inline = (
-            f"import sys, json; sys.path.insert(0, {repr(src_dir)})\n"
-            f"from video_processing.pipeline_manager import PipelineManager\n"
-            f"pm = PipelineManager(trigger_source={trigger_source!r})\n"
-            f"pm._process_single_video(json.loads(sys.stdin.read()))\n"
-            f"pm.wait_for_review_notifications(timeout=120.0)\n"
-        )
+        cmd = [python, "-u", str(prj_root / "scripts/run_video_task.py"),
+               "--trigger-source", trigger_source, "--object-key", f"{yid}:{slice_index}"]
         try:
             with open(log_path, "a") as f:
                 import subprocess as sp
                 # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
                 # [Antigravity] v3.19.0: 使用 Popen 启动独立进程组并立即记录 PID，保护预提交加工免受看门狗误判
-                proc = sp.Popen(
-                    [python, "-u", "-c", inline],
-                    stdin=sp.PIPE,
-                    stdout=f,
-                    stderr=f,
-                    text=True,
-                    cwd=str(prj_root),
-                    start_new_session=True,
-                )
-                if yid:
-                    db.update_process_pid(yid, proc.pid, slice_index=slice_index)
-                proc.communicate(input=video_json)
+                with child_continuation(cmd, dict(stdin=sp.PIPE, stdout=f, stderr=f, text=True,
+                        cwd=str(prj_root), start_new_session=True)) as kwargs:
+                    proc = sp.Popen(cmd, **kwargs)
+                    if yid:
+                        db.update_process_pid(yid, proc.pid, slice_index=slice_index)
+                    proc.communicate(input=video_json)
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"_trigger_video_async failed: {e}")
@@ -2377,8 +2439,8 @@ def _trigger_video_async(video: dict, *, trigger_source: str = "dashboard_manual
             if yid:
                 db.update_process_pid(yid, None, slice_index=slice_index)
 
-    threading.Thread(target=_run, daemon=True,
-                     name=f"pipeline-{video.get('youtube_id','?')[:8]}").start()
+    spawn_admitted(_run, role="video", object_key=f"{yid}:{slice_index}",
+                   name=f"pipeline-{yid[:8]}", waiting=True)
 
 
 @app.get(
@@ -3711,7 +3773,7 @@ def _is_wechat_login_running() -> bool:
     if _wechat_login_thread and _wechat_login_thread.is_alive():
         return True
     try:
-        result = subprocess.run(
+        result = run_admitted(
             ["ps", "-axo", "pid=,command="],
             cwd=str(Path(__file__).parent.parent.parent),
             capture_output=True,
@@ -3766,6 +3828,7 @@ def _is_pipeline_manager_running() -> bool:
         return False
 
 
+@entry
 def _start_full_pipeline(trigger_source: str):
     """启动完整管线，并记录实际触发来源。"""
     def _run():
@@ -3783,7 +3846,8 @@ def _start_full_pipeline(trigger_source: str):
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             f.write(f"\n=== {trigger_source}-triggered pipeline run ({now_str}) ===\n")
             # [Gemini_3.5_Flash_planning] 使用 -u 启用无缓冲输出
-            sp.run([python, "-u", str(prj_root / "scripts" / "monitor_channels.py")],
+            gate().require_running()
+            run_admitted([python, "-u", str(prj_root / "scripts" / "monitor_channels.py")],
                    cwd=str(prj_root), stdout=f, stderr=f, env=env_clean, start_new_session=True)
             
             # [Gemini_3.5_Flash_planning] 校验引擎排他锁以防并发阻塞导致进程堆积泄露
@@ -3791,11 +3855,12 @@ def _start_full_pipeline(trigger_source: str):
                 f.write("[Scheduler] pipeline_manager is already running (pipeline.lock is held). Skipping duplicate run to prevent process leaks.\n")
                 f.flush()
             else:
-                sp.run([python, "-u", "-m", "video_processing.pipeline_manager",
+                gate().require_running()
+                run_admitted([python, "-u", "-m", "video_processing.pipeline_manager",
                         "--trigger-source", "dashboard_manual_full" if trigger_source == "web" else "dashboard_scheduler"],
                        cwd=src_dir, stdout=f, stderr=f, env=env_clean, start_new_session=True)
 
-    threading.Thread(target=_run, daemon=True, name="full-pipeline").start()
+    spawn_admitted(_run, role="batch-dispatch", object_key="batch-dispatch", name="full-pipeline")
     return {"success": True, "message": "全量管线已在后台启动，请关注仪表盘进度"}
 
 
@@ -3813,11 +3878,12 @@ def get_trending_keywords():
     try:
         from video_processing.topic_clues.hub import get_topic_clues_hub
         hub = get_topic_clues_hub()
-        return hub.get_clues_swr()
+        from video_processing.utils.maintenance_clues import read_clues
+        return read_clues(hub)
     except Exception as e:
         logging.getLogger(__name__).warning(f"[TopicClues] 获取热词线索异常降级: {e}")
         from urllib.parse import quote_plus
-        from video_processing.topic_clues.hub import DEFAULT_STATIC_KEYWORDS
+        DEFAULT_STATIC_KEYWORDS = ["AI interview", "tech keynote 2026", "business podcast", "founder speech"]
         result_kws = [
             {
                 "keyword": kw,
@@ -3898,7 +3964,7 @@ def refresh_high_likes():
         finally:
             _high_likes_refresh_running = False
 
-    threading.Thread(target=_run, daemon=True, name="high-likes-refresh").start()
+    spawn_admitted(_run, role="high-like-dispatch", object_key="high-like-dispatch", name="high-likes-refresh")
     return {"started": True, "message": "已在后台开始刷新，1~3 分钟后刷新页面查看结果"}
 
 

@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-12 | Codex | M13 真实浏览器维护 CRUD、两次生命周期重启、版本与本机安全拒绝 |
 | 1.0.0 | 2026-10-11 | Codex | 候选完整任务、键盘/窄屏/错误/冲突/关闭验收及截图 |
 """
 from pathlib import Path
@@ -164,3 +165,66 @@ def test_a04_failed_search_keeps_old_candidate_and_no_false_zero(ui):
     expect(page.locator('#jobs')).to_contain_text('失败')
     expect(page.locator('#jobs')).to_contain_text('官方请求失败或超时')
     assert '本轮无结果' not in page.locator('#jobs').inner_text()
+
+
+def test_m13_maintenance_crud_two_restarts_and_boundary(chromium, tracker, isolated_running_maintenance):
+    from fastapi import FastAPI
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.testclient import TestClient
+    from video_processing.db.database import PipelineDB
+    from video_processing.topic_tracker.service import TopicTracker
+    from web.topic_candidates import create_topic_candidates_router
+    tracker.config.topic_search_enabled = False
+    tracker.config.topic_quota_verified = False
+    tracker.config.topic_quota_project = ''
+    maintained = isolated_running_maintenance.enter('浏览器维护验收')
+    page = chromium.new_page(viewport=dict(width=1280, height=900))
+    active = {}
+    errors = []; page.on('pageerror', lambda error: errors.append(str(error)))
+    def handle(route):
+        request = route.request; url = urlsplit(request.url)
+        response = active['client'].request(request.method, url.path, content=request.post_data,
+                    headers={k:v for k,v in request.all_headers().items() if k in ('origin','x-topic-csrf','host','cookie','content-type','sec-fetch-site')})
+        route.fulfill(status=response.status_code, body=response.content, headers=dict(response.headers))
+    page.route('**/*', handle)
+    try:
+        for restart in range(3):
+            peer = TopicTracker(PipelineDB(tracker.db.db_path), tracker.config, tracker.adapter, tracker.rules, clock=tracker.clock)
+            app = FastAPI()
+            app.include_router(create_topic_candidates_router(lambda:peer, port=9100))
+            app.mount('/static', StaticFiles(directory=Path(__file__).resolve().parents[2]/'src/web/static'))
+            with TestClient(app, base_url=ORIGIN, client=('127.0.0.1',1)) as client:
+                active['client'] = client
+                page.goto(ORIGIN + '/topic-candidates')
+                expect(page.locator('#mode-state')).to_contain_text('维护中')
+                expect(page.locator('#mode-state')).to_contain_text('尚未开放')
+                if restart == 0:
+                    create(page)
+                    page.get_by_role('button', name='编辑', exact=True).click()
+                    page.locator('#topic-name').fill('健康科学运营追踪')
+                    page.locator('#topic-query').fill('longevity health science')
+                    page.locator('#topic-save').click()
+                    expect(page.locator('#topic-editor')).not_to_be_visible()
+                    page.reload()
+                expect(page.locator('.topic-row')).to_contain_text('健康科学运营追踪')
+                expect(page.get_by_role('button', name='搜索候选', exact=True)).to_be_disabled()
+                expect(page.locator('#mode-button')).to_be_disabled()
+                row = peer.db.topic_list(peer.clock())[0]
+                csrf = page.locator('meta[name="topic-csrf"]').get_attribute('content')
+                cookie = {value['name']:value['value'] for value in page.context.cookies()}
+                headers = {'Origin':ORIGIN,'X-Topic-CSRF':csrf}
+                stale = client.put('/api/topic-candidates/topics/'+row['id'],cookies=cookie,headers=headers,
+                      json=dict(name=row['name'],query=row['query'],category=row['category'],version=row['version']-1))
+                assert stale.status_code == 409
+                assert client.post('/api/topic-candidates/topics',cookies=cookie,headers={**headers,'X-Topic-CSRF':'invalid'},
+                                   json=dict(name='forged',query='forged',category='科技产业')).status_code == 403
+                remote = TestClient(app, base_url=ORIGIN, client=('192.168.1.8',1))
+                assert remote.get('/topic-candidates').status_code == 403
+                assert peer.view()['search_open'] is False and peer.db.topic_control()['mode'] == 'OFF'
+                assert peer.db.topic_jobs() == [] and peer.db.topic_budget('',peer.clock())['search'] == 0
+                assert not tracker.adapter.calls
+                assert isolated_running_maintenance.status()['version'] == maintained['version']
+                evidence(page, 'maintenance-restart-'+str(restart))
+    finally:
+        page.close()
+    assert not errors

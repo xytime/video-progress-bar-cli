@@ -10,6 +10,7 @@
 `--publish` 永远不能用恢复参数绕过熔断，也不得把本地退出码伪装为平台公开发布。
 
 # Modification History
+| maintenance-v1 | 2026-10-12 | Codex | 直跑入口接入维护准入与同项子进程凭据。 |
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.5.66 | 2026-10-09 | Codex | 按实测管理 API 的标题前置与换行星号序列化绑定完整正文，保持 ID 字符串精度。 |
@@ -2568,6 +2569,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+from video_processing.core.maintenance_child import single_script
+
+
+@single_script
 def main() -> int:
     args = parse_args()
     from video_processing.core.task_lease import TaskLease, TaskLeaseBusy

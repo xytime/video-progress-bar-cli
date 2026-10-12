@@ -10,6 +10,8 @@
 | 1.0.0 | 2026-10-07 | Antigravity | 新增独立/通用视频抖音提交流水线执行器，支持不可变 ticket 绑定与审计追踪。 |
 | 1.1.0 | 2026-10-09 | Antigravity | 支持检测并同步视频资产哈希变更，重置并签发最新成片启动凭据。 |
 | 1.2.0 | 2026-10-09 | Antigravity | 遵循 DAL 封装宪法，使用 PipelineDB.reset_douyin_publication_for_reupload 替代原生 SQL。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -39,6 +41,9 @@ logger = logging.getLogger(__name__)
 UPLOAD_TIMEOUT_SECONDS = 25 * 60
 
 
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+from video_processing.core.maintenance_child import single_script, child_continuation
+
 def _completion_for_exit_code(exit_code: int) -> tuple[str, str]:
     """按是否可能点击最终发布保守映射抖音上传器退出码。"""
     if exit_code == 6:
@@ -54,6 +59,7 @@ def _completion_for_exit_code(exit_code: int) -> tuple[str, str]:
     return "FAILED", f"抖音上传器返回 exit={exit_code}；未获得受理证据，不自动重试。"
 
 
+@single_script
 def main() -> int:
     parser = argparse.ArgumentParser(description="Submit generic video to Douyin")
     parser.add_argument("--video", required=True, type=Path, help="Video path")

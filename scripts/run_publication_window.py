@@ -27,6 +27,8 @@ crontab 每分钟调用一次本脚本，确保完成处理与审查的候选无
 | 1.8.1 | 2026-09-01 | Codex | 每轮输出抖音发布策略实效指纹，定位 cron 与源码载入偏差。 |
 | 1.8.2 | 2026-09-02 | Codex | 英语世界抖音管理页回查在领取账本前遵循持久阶段熔断，避免无效访问消耗回查窗口。 |
 | 1.8.3 | 2026-09-02 | Codex | 英语世界抖音同步恢复独立正数单轮上限；零值不领取，避免历史受理项被连续提交。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -71,6 +73,9 @@ TRIM_STATE_PATH = PROJECT_ROOT / "output" / "publication_window_last_trim.json"
 _HEARTBEAT_INTERVAL_SEC = 60
 
 
+from video_processing.core.maintenance_child import run_admitted
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -78,7 +83,7 @@ def _now_iso() -> str:
 def _git_revision() -> str:
     """读取本次实例启动时的 Git revision；不可用时显式标记未知。"""
     try:
-        result = subprocess.run(
+        result = run_admitted(
             ["git", "rev-parse", "HEAD"],
             cwd=PROJECT_ROOT,
             capture_output=True,
@@ -136,6 +141,7 @@ def _start_heartbeat(
     return stop_event, thread
 
 
+@entry
 def run_publication_window() -> int:
     """串行执行一轮完整流水线；仅在已有巡航仍运行时跳过。"""
     LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -215,6 +221,7 @@ def run_publication_window() -> int:
     return 0
 
 
+@entry
 def dispatch_one_deferred_english_world_submission() -> None:
     """仅在专属发布窗口内唤起一条自动授权项；不处理人工、失败或未确认状态。"""
     if (
@@ -231,7 +238,7 @@ def dispatch_one_deferred_english_world_submission() -> None:
     if not item:
         return
     review_id = str(item["id"])
-    result = subprocess.run(
+    result = run_admitted(
         [
             str(PROJECT_ROOT / ".venv/bin/python"),
             str(PROJECT_ROOT / "scripts/submit_english_world_review.py"),
@@ -255,6 +262,7 @@ def dispatch_one_deferred_english_world_submission() -> None:
         )
 
 
+@entry
 def dispatch_one_english_world_douyin_submission() -> None:
     """按独立正数上限同步视频号已受理且从未建抖音账本的英语世界审核项。"""
     if (
@@ -272,7 +280,7 @@ def dispatch_one_english_world_douyin_submission() -> None:
         if not item:
             return
         review_id = str(item["id"])
-        result = subprocess.run(
+        result = run_admitted(
             [
                 str(PROJECT_ROOT / ".venv/bin/python"),
                 str(PROJECT_ROOT / "scripts/submit_english_world_douyin.py"),
@@ -294,6 +302,7 @@ def dispatch_one_english_world_douyin_submission() -> None:
             return
 
 
+@guarded("english-douyin-readback")
 def reconcile_one_english_world_douyin_submission() -> None:
     """按完整标题和文案只读回查一条英语世界抖音审核项；绝不上传。"""
     if (
@@ -358,7 +367,7 @@ def reconcile_one_english_world_douyin_submission() -> None:
             return
         try:
             try:
-                result = subprocess.run(
+                result = run_admitted(
                     command,
                     cwd=PROJECT_ROOT,
                     capture_output=True,
@@ -483,6 +492,7 @@ def _has_explicit_published_readback(evidence_dir: Path, platform_post_id: str) 
     )
 
 
+@guarded("english-wechat-readback")
 def reconcile_one_english_world_submission(*, review_id: str | None = None) -> bool:
     """按同次提交绑定的原生 ID 回查一条英语世界作品；不上传、不按标题匹配。"""
     pipeline_lock = PROJECT_ROOT / "output" / "pipeline.lock"
@@ -523,7 +533,7 @@ def reconcile_one_english_world_submission(*, review_id: str | None = None) -> b
             if not settings.wechat_headless:
                 command.append("--no-headless")
             try:
-                result = subprocess.run(
+                result = run_admitted(
                     command,
                     cwd=PROJECT_ROOT,
                     capture_output=True,
@@ -592,6 +602,7 @@ def _latest_english_world_failure_stage() -> str:
     return "无可用记录"
 
 
+@guarded("english-delivery-alert")
 def alert_english_world_publication_gap(*, now: datetime | None = None) -> bool:
     """有生产窗口且 24 小时无新增公开确认时至多尝试一次 P1 提醒。"""
     observed = now or datetime.now(timezone.utc)
@@ -762,6 +773,7 @@ def _trim_log_to_recent_days(
         return False
 
 
+@entry
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(

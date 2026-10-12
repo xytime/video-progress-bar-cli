@@ -16,6 +16,8 @@
 # | 1.2.0 | 2026-08-30 | Codex | 单独识别已获 Telegram 接受的生产失败回执，避免误报成未交付。 |
 # | 1.1.0 | 2026-08-29 | Codex | 监控器按 09:15/19:00 实际触发时刻分别映射 07:00/16:30，修复晚间仍检查早班。 |
 # | 1.0.0 | 2026-08-27 | Codex | 新增 07:00/16:30 窗口后的回执监测、缺席自愈和持久健康账本。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 from __future__ import annotations
@@ -38,6 +40,8 @@ SCHEDULED_LOG_PATTERN = re.compile(r"^run_(?P<date>\d{4}-\d{2}-\d{2})_(?P<clock>
 ACCEPTED_DELIVERY_KINDS = {"review", "review_and_auto_submission"}
 ACCEPTED_FAILURE_KINDS = {"failure_notice"}
 
+
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
 
 @dataclass(frozen=True)
 class MonitorPaths:
@@ -251,6 +255,7 @@ def _run_missing_window_recovery(paths: MonitorPaths) -> int:
         return 124
 
 
+@guarded("english-schedule-recovery")
 def monitor_slot(
     paths: MonitorPaths,
     *,
@@ -355,6 +360,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+@entry
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv if argv is not None else sys.argv[1:])
     project_root = args.project_root.resolve()

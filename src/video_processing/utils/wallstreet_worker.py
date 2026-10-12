@@ -4,6 +4,8 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-09 | Codex | 借助现有 cron 和内核锁恢复二创队列，无 Codex GUI 依赖 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 import subprocess
 import time
@@ -12,6 +14,9 @@ from video_processing.core.task_lease import TaskLease, TaskLeaseBusy, read_leas
 from video_processing.utils.subprocess_env import build_subprocess_env
 
 
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+
+@guarded("wallstreet-launch")
 def ensure_wallstreet_worker():
     root = settings.project_root
     out = settings.default_output_dir

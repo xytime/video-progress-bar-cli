@@ -5,6 +5,7 @@
 
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
+| maintenance-v1 | 2026-10-12 | Codex | 旧业务写事务共用维护准入；初始化兼容迁移及已接纳回写保留。 |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
 | 3.95.1 | 2026-10-10 | Codex | AI 封面完成与二创入队共用事务，避免发布执行者抢跑漏单。 |
 | 3.95.0 | 2026-10-09 | Codex | 独立华尔街版本账本、原子就绪纳入及二创浏览器启动凭据。 |
@@ -194,6 +195,7 @@ import time
 import hashlib
 import hmac
 import secrets
+from contextlib import closing
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Collection, List, Dict, Any, Optional, Sequence
@@ -254,6 +256,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         return normalized_state
 
     def __init__(self, db_path: str = "pipeline.db", *, read_only: bool = False):
+        self._initializing_schema = True
         # 默认在项目根目录的 output 文件夹内创建数据库
         # 如果是绝对路径则直接使用
         if not os.path.isabs(db_path):
@@ -276,6 +279,9 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             # 确保目录存在
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
             self._init_db()
+        self._initializing_schema = False
+        from ..core.maintenance import running
+        if not self._read_only and running():
             self.reconcile_pending_ghost_tasks()
         
     @contextmanager
@@ -298,11 +304,70 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         # 后续 DAL 连接静默失去 ON DELETE/ON UPDATE 约束。
         conn.execute("PRAGMA foreign_keys=ON;")
         conn.row_factory = sqlite3.Row
+        admission = {}
+        if not self._initializing_schema and not self._read_only:
+            from ..core.maintenance import gate, current, MaintenanceDenied
+            mutating = {sqlite3.SQLITE_INSERT, sqlite3.SQLITE_UPDATE, sqlite3.SQLITE_DELETE,
+                        sqlite3.SQLITE_CREATE_TABLE, sqlite3.SQLITE_DROP_TABLE,
+                        sqlite3.SQLITE_ALTER_TABLE, sqlite3.SQLITE_CREATE_INDEX, sqlite3.SQLITE_DROP_INDEX}
+
+            def authorize(action, _arg1, _arg2, _database, _trigger):
+                if action not in mutating:
+                    return sqlite3.SQLITE_OK
+                if "failure" in admission:
+                    return sqlite3.SQLITE_DENY
+                parent = current()
+                if "context" in admission or (parent is not None and parent.row["phase"] == "ACTIVE"):
+                    return sqlite3.SQLITE_OK
+                try:
+                    context = gate().admit("legacy-db-write", "transaction:" + secrets.token_hex(8))
+                    ticket = context.__enter__()
+                    admission["context"] = context
+                    ticket.start()
+                    return sqlite3.SQLITE_OK
+                except MaintenanceDenied as exc:
+                    admission["failure"] = exc
+                    return sqlite3.SQLITE_DENY
+
+            conn.set_authorizer(authorize)
         try:
             with conn:
                 yield conn
+        except sqlite3.DatabaseError:
+            if "failure" in admission:
+                raise admission["failure"]
+            raise
         finally:
-            conn.close()
+            try:
+                conn.close()
+            finally:
+                if "context" in admission:
+                    admission["context"].__exit__(None, None, None)
+
+    @staticmethod
+    def maintenance_active_work(path) -> list[dict]:
+        """维护退出/恢复只读账本核对；不初始化、不恢复、不改写在途任务。"""
+        with closing(sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=2)) as conn:
+            conn.row_factory = sqlite3.Row
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            checks = {
+                "processed_videos": ("status", ("PROCESSING", "PUBLISH_PRECHECK", "DOWNLOADING", "COPYWRITING", "TRANSCRIBING", "RENDERING", "PUBLISHING")),
+                "english_world_jobs": ("state", ("RESEARCHING",)),
+                "english_world_review_items": ("state", ("SUBMITTING",)),
+                "douyin_publications": ("state", ("SUBMITTING",)),
+                "kuaishou_publications": ("state", ("SUBMITTING",)),
+                "wallstreet_publications": ("state", ("SUBMITTING",)),
+                "wechat_review_notifications": ("delivery_state", ("PROCESSING",)),
+                "highlight_jobs": ("state", ("ANALYZING",)),
+            }
+            rows = []
+            for table, (column, values) in checks.items():
+                if table not in tables:
+                    continue
+                count = conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {column} IN ({','.join('?' for _ in values)})", values).fetchone()[0]
+                if count:
+                    rows.append({"table": table, "count": count})
+            return rows
 
     def _migrate_publication_subjects_if_needed(self) -> None:
         if self._read_only or not self.db_path or self.db_path == ":memory:":

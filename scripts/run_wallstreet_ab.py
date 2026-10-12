@@ -9,6 +9,8 @@
 | 1.1.0 | 2026-10-10 | Codex | 具名补队、普通 A 强回读衔接和抖音原生 ID 字段修复。 |
 | 1.0.0 | 2026-10-09 | Codex | 程序化固化 mobile-2 与可恢复配对试验，复用既有平台闸门 |
 | 1.0.1 | 2026-10-09 | Codex | 外部字幕策划等待明确授权，本地脚本与普通 A 持续运行 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 from __future__ import annotations
 import argparse
@@ -40,6 +42,10 @@ from video_processing.utils.wechat_product_context import video_product_context
 from video_processing.utils.wechat_product_task import freeze_task_product_decision, write_product_task_arguments
 from video_processing.utils.wechat_product_execution import product_artifacts_digest, product_observation_generation, product_task_preflight
 
+
+from video_processing.core.maintenance_child import run_admitted
+from video_processing.core.maintenance import claimed as claim_unit, current, entry, guarded, gate, running, MaintenanceDenied
+from video_processing.core.maintenance_runtime import registered
 
 def write_json(path,value):
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -91,6 +97,7 @@ def validate_package(package):
     content_gate(package)
 
 
+@guarded("wallstreet-package", lambda db, pair: "pair:" + str(pair["id"]))
 def build_package(db,pair):
     pair_view = next(p for p in db.get_wallstreet_pairs() if p['id']==pair['id'])
     video = db.get_video_by_youtube_id(pair_view['youtube_id'],slice_index=pair_view['slice_index'])
@@ -172,7 +179,7 @@ def command(publication,package,evidence,*,verify=False,ticket=None,product_deci
 def run_command(args,evidence):
     evidence.mkdir(parents=True,exist_ok=True)
     with (evidence/'uploader.log').open('a') as log:
-        return subprocess.run(args,cwd=ROOT,env=build_subprocess_env(include_telegram=False),
+        return run_admitted(args,cwd=ROOT,env=build_subprocess_env(include_telegram=False),
                               stdout=log,stderr=log,timeout=1800,check=False).returncode
 
 
@@ -259,131 +266,139 @@ def reconcile(db):
     db.recover_unstarted_wallstreet_douyin()
     now = time.time()
     for publication in db.get_wallstreet_publications():
-        if publication['state']=='PUBLISHED':
+        with gate().admit("wallstreet-publication", "wallstreet:" + str(publication["id"])) as ticket:
+            if publication['state']=='PUBLISHED':
+                if publication['variant']=='A':
+                    db.sync_wallstreet_normal_a(publication['id'])
+                continue
+            if publication['next_readback_at']>now:
+                continue
             if publication['variant']=='A':
-                db.sync_wallstreet_normal_a(publication['id'])
-            continue
-        if publication['next_readback_at']>now:
-            continue
-        if publication['variant']=='A':
-            legacy = (db.get_wechat_publication(publication['youtube_id'],slice_index=publication['slice_index']) if publication['platform']=='wechat'
-                      else db.get_douyin_publication(publication['youtube_id'],publication['slice_index']))
-            if not legacy:
-                continue
-            # 不把旧账本 PUBLISHED 直接视作强原生 ID 证据，仍只读回查管理页。
-            out = settings.default_output_dir
-            prefix = publication['youtube_id']+(f"_s{publication['slice_index']}" if publication['slice_index'] else '')
-            package = {'copy':str(out/f'{prefix}_copy.txt'),'title':str(out/f'{prefix}_title.txt')}
-            publication['platform_post_id'] = legacy.get(
-                'platform_post_id' if publication['platform']=='wechat' else 'external_post_id') or publication.get('platform_post_id')
-            if publication['platform']=='douyin' and not publication['platform_post_id']:
-                # 抖音受理不返回原生 ID；仅已提交 A 可按既有完整正文契约只读取 ID。
-                if legacy['state'] not in {'UNDER_REVIEW','PUBLISHED'} or legacy['attempt_count'] < 1:
+                legacy = (db.get_wechat_publication(publication['youtube_id'],slice_index=publication['slice_index']) if publication['platform']=='wechat'
+                          else db.get_douyin_publication(publication['youtube_id'],publication['slice_index']))
+                if not legacy:
                     continue
-            if publication['platform']=='wechat' and not publication['platform_post_id']:
+                # 不把旧账本 PUBLISHED 直接视作强原生 ID 证据，仍只读回查管理页。
+                out = settings.default_output_dir
+                prefix = publication['youtube_id']+(f"_s{publication['slice_index']}" if publication['slice_index'] else '')
+                package = {'copy':str(out/f'{prefix}_copy.txt'),'title':str(out/f'{prefix}_title.txt')}
+                publication['platform_post_id'] = legacy.get(
+                    'platform_post_id' if publication['platform']=='wechat' else 'external_post_id') or publication.get('platform_post_id')
+                if publication['platform']=='douyin' and not publication['platform_post_id']:
+                    # 抖音受理不返回原生 ID；仅已提交 A 可按既有完整正文契约只读取 ID。
+                    if legacy['state'] not in {'UNDER_REVIEW','PUBLISHED'} or legacy['attempt_count'] < 1:
+                        continue
+                if publication['platform']=='wechat' and not publication['platform_post_id']:
+                    continue
+                if publication['platform']=='wechat' and legacy.get('evidence_path'):
+                    receipt = Path(legacy['evidence_path']).parent/'submission_receipt.json'
+                    if receipt.is_file():
+                        publication['identity_receipt'] = str(receipt)
+            elif publication['state'] in {'SUBMITTING','UNCERTAIN','UNDER_REVIEW'}:
+                if not publication['package_json']:
+                    continue
+                package = json.loads(publication['package_json'])
+                if publication['platform']=='wechat' and not publication['platform_post_id']:
+                    # 没有原生 ID 不猜视频号作品，继续保留结果不明，供人工恢复绑定。
+                    continue
+            else:
                 continue
-            if publication['platform']=='wechat' and legacy.get('evidence_path'):
-                receipt = Path(legacy['evidence_path']).parent/'submission_receipt.json'
+            if publication['variant']=='B' and publication['platform']=='wechat':
+                recorded = Path(publication['evidence_path']) if publication.get('evidence_path') else None
+                receipt = ((recorded if recorded.is_dir() else recorded.parent)/'submission_receipt.json' if recorded
+                           else Path(package['video']).parent/'submissions'/f"wechat-{publication['id']}"/'submission_receipt.json')
                 if receipt.is_file():
                     publication['identity_receipt'] = str(receipt)
-        elif publication['state'] in {'SUBMITTING','UNCERTAIN','UNDER_REVIEW'}:
-            if not publication['package_json']:
+            evidence = settings.default_output_dir/'wallstreet_ab'/str(publication['pair_id'])/'readback'/f"{publication['id']}-{int(now)}"
+            try:
+                with TaskLease(settings.default_output_dir/f"{publication['platform']}_publish_priority.lock",stage='A/B只读回查'):
+                    ticket.start()
+                    code = run_command(command(publication,package,evidence,verify=True),evidence)
+                    apply_readback(db,publication,evidence,code)
+            except TaskLeaseBusy:
                 continue
-            package = json.loads(publication['package_json'])
-            if publication['platform']=='wechat' and not publication['platform_post_id']:
-                # 没有原生 ID 不猜视频号作品，继续保留结果不明，供人工恢复绑定。
-                continue
-        else:
-            continue
-        if publication['variant']=='B' and publication['platform']=='wechat':
-            recorded = Path(publication['evidence_path']) if publication.get('evidence_path') else None
-            receipt = ((recorded if recorded.is_dir() else recorded.parent)/'submission_receipt.json' if recorded
-                       else Path(package['video']).parent/'submissions'/f"wechat-{publication['id']}"/'submission_receipt.json')
-            if receipt.is_file():
-                publication['identity_receipt'] = str(receipt)
-        evidence = settings.default_output_dir/'wallstreet_ab'/str(publication['pair_id'])/'readback'/f"{publication['id']}-{int(now)}"
-        try:
-            with TaskLease(settings.default_output_dir/f"{publication['platform']}_publish_priority.lock",stage='A/B只读回查'):
-                code = run_command(command(publication,package,evidence,verify=True),evidence)
-                apply_readback(db,publication,evidence,code)
-        except TaskLeaseBusy:
-            continue
-        except Exception as exc:
-            logging.warning('作品回查失败 id=%s %s',publication['id'],type(exc).__name__)
-            db.observe_wallstreet_publication(publication['id'],state='UNCERTAIN',evidence_path=str(evidence/'uploader.log'),error=type(exc).__name__)
+            except Exception as exc:
+                logging.warning('作品回查失败 id=%s %s',publication['id'],type(exc).__name__)
+                db.observe_wallstreet_publication(publication['id'],state='UNCERTAIN',evidence_path=str(evidence/'uploader.log'),error=type(exc).__name__)
 
 
 def submit_ready(db):
     if settings.wechat_publishing_paused or not settings.is_public_publish_window():
         return
     for pub in db.get_wallstreet_publications():
-        if pub['variant']!='B' or pub['state']!='WAITING' or not pub['package_json']:
-            continue
-        if pub['platform']=='douyin' and not settings.enable_douyin_browser_publishing:
-            continue
-        package = json.loads(pub['package_json'])
-        evidence = Path(package['video']).parent/'submissions'/f"{pub['platform']}-{pub['id']}"/f'attempt-{time.time_ns()}'
-        try:
-            lock = 'wechat_publish_priority.lock' if pub['platform']=='wechat' else 'douyin_submission.lock'
-            with TaskLease(settings.default_output_dir/lock,stage='二创提交'):
-                validate_package(package)
-                product_decision = None
-                if pub['platform']=='wechat':
-                    source = db.get_video_by_youtube_id(pub['youtube_id'],slice_index=pub['slice_index'])
-                    if not source:
-                        raise ValueError('微信 B 缺少原视频商品上下文')
-                    context = dict(source, **video_product_context(settings.default_output_dir,source))
-                    # A 和 B 是两个发布实体：原视频受理状态不代表 B 已经提交。
-                    context.update(status=pub['state'],wallstreet_publication_id=pub['id'],variant='B')
-                    product_decision = freeze_task_product_decision(db,f"wallstreet:wechat:B:{pub['id']}",
-                        context,settings.wechat_product_policy_path)
-                    if not product_task_preflight(product_decision,settings.default_output_dir,
-                            product_artifacts_digest(Path(package['video']),Path(package['copy']),Path(package['cover'])),
-                            observation_generation=product_observation_generation(settings.wechat_product_policy_path)):
-                        continue
-                claim = db.claim_wallstreet_submission(pub['id'],package_sha256=payload_hash(package),
-                    video_path=package['video'],asset_sha256=sha256(Path(package['video'])),evidence_path=str(evidence))
-                if not claim:
-                    continue
-                try:
-                    pub.update(claim)
+        with gate().admit("wallstreet-publication", "wallstreet:" + str(pub["id"])) as ticket:
+            if pub['variant']!='B' or pub['state']!='WAITING' or not pub['package_json']:
+                continue
+            if pub['platform']=='douyin' and not settings.enable_douyin_browser_publishing:
+                continue
+            package = json.loads(pub['package_json'])
+            evidence = Path(package['video']).parent/'submissions'/f"{pub['platform']}-{pub['id']}"/f'attempt-{time.time_ns()}'
+            try:
+                lock = 'wechat_publish_priority.lock' if pub['platform']=='wechat' else 'douyin_submission.lock'
+                with TaskLease(settings.default_output_dir/lock,stage='二创提交'):
+                    ticket.start()
+                    validate_package(package)
+                    product_decision = None
                     if pub['platform']=='wechat':
-                        write_json(evidence/'attempt_claim.json', {key:claim[key] for key in
-                            ('id','attempt_token','attempt_count','package_sha256','asset_sha256','video_path','evidence_path')})
-                    code = run_command(command(pub,package,evidence,ticket=claim,product_decision=product_decision),evidence)
-                    apply_readback(db,pub,evidence,code,product_decision=product_decision)
-                except Exception as exc:
-                    db.observe_wallstreet_publication(pub['id'],state='UNCERTAIN',attempt_token=claim['attempt_token'],
-                        evidence_path=str(evidence/'uploader.log'),error=type(exc).__name__)
-        except TaskLeaseBusy:
-            continue
-        except Exception as exc:
-            logging.warning('B 提交前校验延后 id=%s %s',pub['id'],type(exc).__name__)
+                        source = db.get_video_by_youtube_id(pub['youtube_id'],slice_index=pub['slice_index'])
+                        if not source:
+                            raise ValueError('微信 B 缺少原视频商品上下文')
+                        context = dict(source, **video_product_context(settings.default_output_dir,source))
+                        # A 和 B 是两个发布实体：原视频受理状态不代表 B 已经提交。
+                        context.update(status=pub['state'],wallstreet_publication_id=pub['id'],variant='B')
+                        product_decision = freeze_task_product_decision(db,f"wallstreet:wechat:B:{pub['id']}",
+                            context,settings.wechat_product_policy_path)
+                        if not product_task_preflight(product_decision,settings.default_output_dir,
+                                product_artifacts_digest(Path(package['video']),Path(package['copy']),Path(package['cover'])),
+                                observation_generation=product_observation_generation(settings.wechat_product_policy_path)):
+                            continue
+                    claim = db.claim_wallstreet_submission(pub['id'],package_sha256=payload_hash(package),
+                        video_path=package['video'],asset_sha256=sha256(Path(package['video'])),evidence_path=str(evidence))
+                    if not claim:
+                        continue
+                    try:
+                        pub.update(claim)
+                        if pub['platform']=='wechat':
+                            write_json(evidence/'attempt_claim.json', {key:claim[key] for key in
+                                ('id','attempt_token','attempt_count','package_sha256','asset_sha256','video_path','evidence_path')})
+                        code = run_command(command(pub,package,evidence,ticket=claim,product_decision=product_decision),evidence)
+                        apply_readback(db,pub,evidence,code,product_decision=product_decision)
+                    except Exception as exc:
+                        db.observe_wallstreet_publication(pub['id'],state='UNCERTAIN',attempt_token=claim['attempt_token'],
+                            evidence_path=str(evidence/'uploader.log'),error=type(exc).__name__)
+            except TaskLeaseBusy:
+                continue
+            except Exception as exc:
+                logging.warning('B 提交前校验延后 id=%s %s',pub['id'],type(exc).__name__)
 
 
+@entry
 def run_once(db,*,render_only=False):
     if not render_only:
         reconcile(db)
         submit_ready(db)
     if read_lease_owner(settings.default_output_dir/'pipeline.lock'):
         return
-    pair = db.claim_wallstreet_render(lease_seconds=settings.wallstreet_ab_render_lease_seconds)
-    if not pair:
-        return
-    stop = threading.Event()
-    def renew():
-        while not stop.wait(60):
-            db.renew_wallstreet_render(pair['id'],pair['lease_token'],settings.wallstreet_ab_render_lease_seconds)
-    thread = threading.Thread(target=renew,daemon=True); thread.start()
-    try:
-        package = build_package(db,pair)
-        if not db.finish_wallstreet_render(pair['id'],pair['lease_token'],package=package):
-            raise ValueError('二创租约失效，禁止采用产物')
-    except Exception as exc:
-        logging.exception('二创加工失败；保留 A')
-        db.finish_wallstreet_render(pair['id'],pair['lease_token'],error=str(exc))
-    finally:
-        stop.set();thread.join(timeout=2)
+    with claim_unit("wallstreet-render", lambda: db.claim_wallstreet_render(lease_seconds=settings.wallstreet_ab_render_lease_seconds),
+                    lambda row: "pair:" + str(row["id"])) as pair:
+        if not pair:
+            return
+        stop = threading.Event()
+        admission = current()
+        def renew():
+            with admission.bind():
+                while not stop.wait(60):
+                    db.renew_wallstreet_render(pair['id'],pair['lease_token'],settings.wallstreet_ab_render_lease_seconds)
+        thread = threading.Thread(target=renew,daemon=True); thread.start()
+        try:
+            package = build_package(db,pair)
+            if not db.finish_wallstreet_render(pair['id'],pair['lease_token'],package=package):
+                raise ValueError('二创租约失效，禁止采用产物')
+        except Exception as exc:
+            logging.exception('二创加工失败；保留 A')
+            db.finish_wallstreet_render(pair['id'],pair['lease_token'],error=str(exc))
+        finally:
+            stop.set();thread.join(timeout=2)
     if not render_only:
         submit_ready(db)
 
@@ -415,6 +430,8 @@ def report(db):
                 for pub in publications]}
 
 
+@entry
+@registered("wallstreet-worker")
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--once',action='store_true')
@@ -474,7 +491,7 @@ def main():
     try:
         with TaskLease(settings.default_output_dir/'wallstreet_worker.lock',stage='二创独立执行者'):
             stopped = threading.Event()
-            revision = subprocess.run(['git','rev-parse','HEAD'],cwd=ROOT,capture_output=True,text=True,timeout=5).stdout.strip()
+            revision = run_admitted(['git','rev-parse','HEAD'],cwd=ROOT,capture_output=True,text=True,timeout=5).stdout.strip()
             from video_processing.censor_engine import current_rules_fingerprint
             from video_processing.processors.insight_processor import render_spec
             adopted = render_spec()

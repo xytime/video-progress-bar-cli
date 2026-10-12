@@ -97,6 +97,8 @@
 | 5.7.0 | 2026-09-19 | Codex | 评论互动开关启用时，以登录态派生共享锁覆盖完整浏览器会话。 |
 | 5.8.0 | 2026-09-20 | Codex | 发表前选择“不显示位置”并回读显示值；未确认时保留证据并阻断提交。 |
 | 5.9.0 | 2026-09-25 | Codex | 列表无短标题时以本次完整文案精确绑定唯一新增原生 ID；会话刷新不再伪装成重新登录。 |
+
+| maintenance-v1 | 2026-10-12 | Codex | 接入共用维护准入，保留原业务资格。 |
 """
 
 import os
@@ -182,6 +184,9 @@ MANAGEMENT_VERIFY_ATTEMPTS = 2
 MANAGEMENT_VERIFY_RETRY_DELAY_MS = 1_500
 NO_LOCATION_TEXT = "不显示位置"
 
+
+from video_processing.core.maintenance import entry, guarded, gate, running, MaintenanceDenied
+from video_processing.core.maintenance_child import single_script, child_continuation
 
 def _original_declaration_publish_allowed(
     *,
@@ -3709,6 +3714,7 @@ def run_uploader(
         logger.warning("Publish could NOT be confirmed — returning UNCONFIRMED(3) so pipeline will NOT mark PUBLISHED/GC.")
         return 3
 
+@single_script
 def main():
     parser = argparse.ArgumentParser(description="Upload and publish videos to WeChat Channels.")
     parser.add_argument("--video",         help="Path to vertical MP4 video file")
