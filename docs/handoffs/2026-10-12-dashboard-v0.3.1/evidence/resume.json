@@ -1,0 +1,25 @@
+{
+  "at": 1791794941.719237,
+  "result": {
+    "schema": 1,
+    "version": 4,
+    "state": "RUNNING",
+    "reason": "v0.3.1 来源指纹还原核验及关闭搜索上线",
+    "at": 1791794941.704184
+  },
+  "verified_source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+  "protections": {
+    "enable_public_publish_windows": false,
+    "market_guard_policy": "optionsense",
+    "enable_market_hours_guard": true,
+    "wechat_publishing_paused": false,
+    "enable_douyin_browser_publishing": true,
+    "enable_kuaishou_browser_publishing": false,
+    "enable_wechat_comment_interaction": true,
+    "wechat_keepalive_enabled": true
+  },
+  "search": "OFF",
+  "jobs": 0,
+  "search_used": 0,
+  "general_used": 0
+}

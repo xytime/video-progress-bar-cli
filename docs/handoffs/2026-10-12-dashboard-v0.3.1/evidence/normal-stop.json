@@ -1,0 +1,37 @@
+{
+  "at": 1791794727.3079019,
+  "ui_stopped": [
+    32397,
+    22803
+  ],
+  "method": "full inspection, normal SIGTERM then launchd bootout to remove KeepAlive registration",
+  "shutdown_log": [
+    "INFO:     Shutting down",
+    "INFO:     Application shutdown complete.",
+    "INFO:     Finished server process [32397]",
+    "INFO:     Shutting down",
+    "INFO:     Application shutdown complete.",
+    "INFO:     Finished server process [22803]"
+  ],
+  "ready_worker": {
+    "role": "ready-worker",
+    "protocol": 1,
+    "source_hash": "c434f13c86c9e61afe10c854afcb70c70775d7651091f121a74e15eded9afd7a",
+    "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+    "birth": "1791785298.251257",
+    "pid": 33005,
+    "started_at": "2026-10-12T06:08:18.623166+00:00"
+  },
+  "after": {
+    "schema": 1,
+    "version": 3,
+    "state": "MAINTENANCE",
+    "reason": "v0.3.1 来源指纹还原核验及关闭搜索上线",
+    "at": 1791794356.097245,
+    "active": [],
+    "unknown": [],
+    "phase": "IDLE",
+    "workers": {},
+    "safe": true
+  }
+}

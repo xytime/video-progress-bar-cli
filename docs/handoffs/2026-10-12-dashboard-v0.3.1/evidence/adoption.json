@@ -1,0 +1,16 @@
+{
+  "old": "e1399711e6c0a50f01a7e793174ebfd49e5bacc7",
+  "adopted": "79e2c4527dda44181de3c40959adbabb5f899df3",
+  "preserved_dirty": [
+    ".gitignore",
+    "config/wechat_products.json",
+    "scripts/submit_generic_douyin.py",
+    "src/video_processing/db/database.py",
+    "src/video_processing/processors/caption_processor.py",
+    "src/video_processing/utils/subtitle_translation_provider.py",
+    "src/video_processing/utils/vocab_helper.py"
+  ],
+  "three_way_overlay": [
+    "src/video_processing/db/database.py"
+  ]
+}

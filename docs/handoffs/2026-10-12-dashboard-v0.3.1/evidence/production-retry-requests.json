@@ -1,0 +1,14 @@
+{
+  "requests": [
+    {
+      "method": "GET",
+      "path": "/api/topic-candidates/state"
+    },
+    {
+      "method": "GET",
+      "path": "/api/topic-candidates/videos"
+    }
+  ],
+  "truncated": false,
+  "hasMore": false
+}

@@ -1,0 +1,219 @@
+{
+  "at": 1791795467.428096,
+  "head": "79e2c4527dda44181de3c40959adbabb5f899df3",
+  "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+  "workers": {
+    "ui": {
+      "role": "ui",
+      "protocol": 1,
+      "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794804.363831",
+      "pid": 24148,
+      "started_at": "2026-10-12T08:46:46.077778+00:00"
+    },
+    "auto-pipeline": {
+      "role": "auto-pipeline",
+      "protocol": 1,
+      "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794804.363831",
+      "pid": 24148,
+      "started_at": "2026-10-12T08:46:46.173290+00:00"
+    },
+    "queue-runner": {
+      "role": "queue-runner",
+      "protocol": 1,
+      "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794804.363831",
+      "pid": 24148,
+      "started_at": "2026-10-12T08:46:46.173918+00:00"
+    },
+    "ready-supervisor": {
+      "role": "ready-supervisor",
+      "protocol": 1,
+      "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794804.363831",
+      "pid": 24148,
+      "started_at": "2026-10-12T08:46:46.173338+00:00"
+    },
+    "keepalive-watchdog": {
+      "role": "keepalive-watchdog",
+      "protocol": 1,
+      "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794804.363831",
+      "pid": 24148,
+      "started_at": "2026-10-12T08:46:46.173892+00:00"
+    },
+    "ready-worker": {
+      "role": "ready-worker",
+      "protocol": 1,
+      "source_hash": "89a9990e846918743aad2757477c88f95791e8e1c1bc60c62d3a23722466d6b4",
+      "cwd": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "birth": "1791794942.364211",
+      "pid": 24650,
+      "started_at": "2026-10-12T08:49:02.767402+00:00"
+    }
+  },
+  "maintenance": {
+    "schema": 1,
+    "version": 4,
+    "state": "RUNNING",
+    "reason": "v0.3.1 来源指纹还原核验及关闭搜索上线",
+    "at": 1791794941.704184,
+    "active": [],
+    "unknown": [],
+    "phase": "IDLE"
+  },
+  "health": {
+    "initialized_at": 1791794806.095968,
+    "cleaned_at": 1791795466.903685,
+    "failed_at": null,
+    "code": null,
+    "ready": true,
+    "stopped_off_confirmed": null
+  },
+  "capabilities": {
+    "topic_available": true,
+    "search_enabled": false
+  },
+  "topic_state": {
+    "control": {
+      "mode": "OFF",
+      "version": 5
+    },
+    "maintenance": {
+      "state": "RUNNING",
+      "phase": "IDLE"
+    },
+    "topics": [
+      {
+        "id": "523824a166d24a59bba04d4f146c50fc",
+        "name": "AI产业与算力",
+        "query": "AI infrastructure investment",
+        "category": "科技产业",
+        "lookback_days": 7,
+        "valid_days": 7,
+        "identity": "24010e2072d2148376d74d2318bd9274e76e6ba7cff0c673fff49eb194e4043c",
+        "expires_at": "2026-10-19T06:05:39.340958+00:00",
+        "status": "PAUSED",
+        "version": 3,
+        "last_run_at": null,
+        "candidate_count": 0
+      }
+    ],
+    "jobs": [],
+    "budget": {
+      "day": "2026-10-12",
+      "search": 0,
+      "general": 0
+    },
+    "search_open": false,
+    "can_enable": false,
+    "search_gate": {
+      "code": "SEARCH_CLOSED",
+      "message": "生产搜索尚未开放"
+    },
+    "limits": {
+      "search": 20,
+      "general": 40
+    }
+  },
+  "attention_totals": {
+    "delivery": 245,
+    "blocked": 102,
+    "execution": 147
+  },
+  "lan_status": {
+    "/topic-candidates": 403,
+    "/api/topic-candidates/state": 403
+  },
+  "dirty_preserved": [
+    ".gitignore",
+    "config/wechat_products.json",
+    "scripts/submit_generic_douyin.py",
+    "src/video_processing/db/database.py",
+    "src/video_processing/processors/caption_processor.py",
+    "src/video_processing/utils/subtitle_translation_provider.py",
+    "src/video_processing/utils/vocab_helper.py"
+  ],
+  "cron_restored_exact": true,
+  "protections": {
+    "enable_public_publish_windows": false,
+    "market_guard_policy": "optionsense",
+    "enable_market_hours_guard": true,
+    "wechat_publishing_paused": false,
+    "enable_douyin_browser_publishing": true,
+    "enable_kuaishou_browser_publishing": false,
+    "enable_wechat_comment_interaction": true,
+    "wechat_keepalive_enabled": true
+  },
+  "launchd": [
+    {
+      "label": "com.videopipeline.ai-cover-doer",
+      "loaded": true,
+      "state_lines": [
+        "state = not running",
+        "last exit code = 0",
+        "state = active",
+        "state = active"
+      ]
+    },
+    {
+      "label": "com.videopipeline.bot",
+      "loaded": true,
+      "state_lines": [
+        "state = spawn scheduled",
+        "last exit code = 78: EX_CONFIG",
+        "state = active",
+        "state = active"
+      ]
+    },
+    {
+      "label": "com.videopipeline.english-world-daily",
+      "loaded": true,
+      "state_lines": [
+        "state = not running",
+        "last exit code = (never exited)"
+      ]
+    },
+    {
+      "label": "com.videopipeline.english-world-forced-recovery",
+      "loaded": true,
+      "state_lines": [
+        "state = not running",
+        "last exit code = (never exited)"
+      ]
+    },
+    {
+      "label": "com.videopipeline.english-world-monitor",
+      "loaded": true,
+      "state_lines": [
+        "state = not running",
+        "last exit code = (never exited)"
+      ]
+    },
+    {
+      "label": "com.videopipeline.periodic-qa-report",
+      "loaded": true,
+      "state_lines": [
+        "state = not running",
+        "last exit code = (never exited)"
+      ]
+    },
+    {
+      "label": "com.videopipeline.ui",
+      "loaded": true,
+      "state_lines": [
+        "state = running",
+        "pid = 24148",
+        "last exit code = (never exited)",
+        "state = active",
+        "state = active"
+      ]
+    }
+  ]
+}
