@@ -34,3 +34,13 @@
 - 恢复历史先载入草稿，返回类型配置查看；再保存生成新版本。导入在弹窗执行原可靠资料校验，防止覆盖未保存草稿；未接入实时同步展示状态，不伪造可执行刷新。
 - 对话框使用原生 dialog 的焦点隔离、Escape与焦点恢复，关键保存中不允许关闭。错误为文本，必填校验关联字段并定位；loading/empty/error明确，页面自然滚动。
 - 主题/字号继承控制台偏好，日期固定使用 zh-CN / Asia/Shanghai。目标：语义HTML、可见焦点、手机无横向溢出，暗/亮/高对比可读。没有承诺其他未实测平台/读屏软件。
+
+## 共享工作台 v0.3
+
+| Capability | Canonical owner | Source of truth | Allowed variants | Verification |
+|---|---|---|---|---|
+| Navigation | src/web/static/js/console_navigation.js | docs/specs/dashboard-home-ia-v0.3.md | 桌面侧栏、移动 dialog 共享一份导航 | tests/browser/test_dashboard_workspace.py |
+| Layout | src/web/static/css/console_workspace.css | DESIGN.md / dashboard.css 语义变量 | 总览、列表、商品与专题共享外框 | tests/browser/test_dashboard_workspace.py |
+| Readonly overview | src/web/static/js/dashboard_workspace.js | 现有列表 total_count；只读 capabilities | 成功、旧数据、空态、失败 | tests/browser/test_dashboard_workspace.py |
+
+根路径 view/tab/search/size/page 及全部既有筛选由 URL 恢复；旧 tab 链接仍支持。导航不提交业务操作，离开商品页复用现有草稿确认；专题模态编辑保持原焦点隔离。根路径内部切换保留手动表单值。首页点击数字进入同口径的全时间列表，受理与公开分开。404/不可用候选禁用入口并保留说明；OFF 仍可进入管理页面。

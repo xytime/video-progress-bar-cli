@@ -1,0 +1,185 @@
+"""v0.3：真实 Chromium、FastAPI 与临时 SQLite 验证总览和导航，不连接生产。
+
+# Modification History
+| Version | Date | Author | Description |
+| --- | --- | --- | --- |
+| 1.0.0 | 2026-10-12 | Codex | H01–H14 首页口径、只读、恢复、失败、移动端证据 |
+"""
+from pathlib import Path
+from urllib.parse import urlsplit
+
+import pytest
+from fastapi.testclient import TestClient
+from playwright.sync_api import expect
+
+from tests.browser_fixtures import chromium
+from video_processing.db.database import PipelineDB
+from web import app as web_app
+
+
+@pytest.fixture
+def workspace(chromium, tmp_path, monkeypatch):
+    db = PipelineDB(str(tmp_path / 'workspace.db'))
+    for yid, score, status in [('unscored',0,'PENDING'),('eligible',90,'PENDING'),
+                              ('making',85,'PROCESSING'),('failed',20,'FAILED')]:
+        db.add_video(yid, '运营验收 '+yid, 'UC-fixture', score=score, source='MONITOR')
+        db.update_video_status(yid,status)
+    monkeypatch.setattr(web_app,'db',db)
+    monkeypatch.setattr(web_app.settings,'topic_search_enabled',False)
+    client=TestClient(web_app.app,base_url='http://127.0.0.1:9100',client=('127.0.0.1',50000))
+    page=chromium.new_page(viewport=dict(width=1366,height=768))
+    state=dict(writes=[],errors=[],offline=False,capability_status=200,requests=[])
+    page.on('pageerror',lambda error:state['errors'].append(str(error)))
+    def route_handler(route):
+        req=route.request;url=urlsplit(req.url);state['requests'].append(url.path)
+        if req.method!='GET':
+            state['writes'].append(req.url);route.fulfill(status=500,json={'detail':'禁止写入'});return
+        if state['offline'] and url.path=='/api/videos':
+            route.fulfill(status=503,json={'detail':'隔离故障'});return
+        if url.path=='/api/console/capabilities' and state['capability_status']!=200:
+            route.fulfill(status=state['capability_status'],json={'detail':'未采用或故障'});return
+        if url.hostname not in ('127.0.0.1',):
+            route.fulfill(status=404,body='离线验收');return
+        response=client.get(url.path+('?' + url.query if url.query else ''))
+        route.fulfill(status=response.status_code,body=response.content,headers=dict(response.headers))
+    page.route('**/*',route_handler)
+    page.goto('http://127.0.0.1:9100/')
+    expect(page.locator('#overview-feedback')).to_contain_text('最后成功')
+    page.evaluate('clearTimeout(refreshTimeoutId); scheduleNextRefresh=()=>{}')
+    yield page,client,state,db
+    page.close();client.close()
+    assert not state['errors']
+    assert not state['writes']
+
+
+def evidence(page,name):
+    folder=Path(__file__).resolve().parents[2]/'output/test-evidence/dashboard-workspace'
+    folder.mkdir(parents=True,exist_ok=True)
+    page.screenshot(path=str(folder/(name+'.png')),full_page=True)
+
+
+def test_home_entry_counts_readonly_and_first_screen(workspace):
+    page,client,state,db=workspace
+    expect(page.locator('.console-primary')).to_have_count(5)
+    expect(page.locator('#console-search-state')).to_contain_text('生产搜索关闭')
+    for tab in ('waitlist','active','ready','error'):
+        total=client.get('/api/videos',params={'tab':tab,'created_window':'all'}).json()['total_count']
+        expect(page.locator('#overview-'+tab)).to_have_text(str(total))
+    assert client.get('/api/stats').json()['pending']!=client.get('/api/videos?tab=queue').json()['total_count']
+    for selector in ('#btn-run-pipeline','#channel-list','#video-url-input','#workspace-list'):
+        expect(page.locator(selector)).not_to_be_visible()
+    for selector in ('.console-shortcuts [data-topic-entry]','.console-attention a:first-child','.console-tasks h2'):
+        box=page.locator(selector).bounding_box();assert box and box['y']+box['height']<=768
+    assert '/api/channels' not in state['requests']
+    assert '/api/ai-audit/summary' not in state['requests']
+    evidence(page,'overview-desktop')
+    page.locator('#overview-error').click()
+    expect(page.locator('#activity-count')).to_have_text('1')
+    assert 'created_window=all' in page.url
+    expect(page.locator('#video-filter-created-window')).to_have_value('all')
+
+
+def test_url_restore_back_and_existing_deep_link(workspace):
+    page,client,state,db=workspace
+    page.goto('http://127.0.0.1:9100/?tab=waitlist&search=unscored&created_window=all&size=50')
+    expect(page.locator('#workspace-title')).to_have_text('选题中心')
+    expect(page.locator('#video-filter-search')).to_have_value('unscored')
+    expect(page.locator('#activity-count')).to_have_text('1')
+    page.locator('.console-primary[data-section=production]').click()
+    expect(page.locator('#workspace-title')).to_have_text('生产队列')
+    page.go_back()
+    expect(page.locator('#video-filter-search')).to_have_value('unscored')
+    expect(page.locator('#video-filter-size')).to_have_value('50')
+    page.reload();expect(page.locator('#activity-count')).to_have_text('1')
+    page.go_forward();expect(page.locator('#workspace-title')).to_have_text('生产队列')
+
+
+def test_failed_read_stale_recovery_and_missing_adoption(workspace):
+    page,client,state,db=workspace
+    old=page.locator('#overview-active').inner_text();state['offline']=True
+    page.locator('#overview-retry').click();expect(page.locator('#overview-feedback')).to_contain_text('旧数据')
+    expect(page.locator('#overview-active')).to_have_text(old)
+    state['capability_status']=404;page.locator('#overview-retry').click()
+    expect(page.locator('#console-search-state')).to_contain_text('尚未采用')
+    entry=page.locator('.console-shortcuts [data-topic-entry]')
+    expect(entry).to_be_disabled()
+    entry.focus();page.keyboard.press('Enter')
+    assert urlsplit(page.url).path=='/'
+    page.reload();expect(page.locator('#overview-feedback')).to_contain_text('暂无可信数据')
+    expect(page.locator('#overview-active')).to_have_text('—')
+    state['offline']=False;state['capability_status']=200
+    page.locator('#overview-retry').click();expect(page.locator('#overview-feedback')).to_contain_text('最后成功')
+    evidence(page,'recovered-read')
+
+
+@pytest.mark.parametrize('width,theme,size',[(390,'dark','standard'),(1024,'light','large'),(1366,'contrast','xlarge'),(1920,'dark','large')])
+def test_responsive_themes_and_keyboard(workspace,width,theme,size):
+    page,client,state,db=workspace
+    page.evaluate('(p)=>localStorage.setItem("vp-display-preferences",JSON.stringify(p))',dict(theme=theme,size=size))
+    page.set_viewport_size(dict(width=width,height=844));page.reload()
+    expect(page.locator('#overview-feedback')).to_contain_text('最后成功')
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    if width<=1024:
+        page.locator('.console-menu').focus();page.keyboard.press('Enter')
+        expect(page.locator('.console-drawer')).to_be_visible()
+        expect(page.locator('.console-drawer a[href="/topic-candidates"]')).to_be_visible()
+        page.keyboard.press('Escape');expect(page.locator('.console-menu')).to_be_focused()
+    evidence(page,f'overview-{width}-{theme}-{size}')
+    page.emulate_media(reduced_motion='reduce')
+    assert page.locator('.console-metric').first.evaluate('el=>getComputedStyle(el).animationName')=='none'
+
+
+def test_configuration_and_manual_form_do_not_share_home(workspace):
+    page,client,state,db=workspace
+    page.locator('.console-primary[data-section=operations]').click()
+    expect(page.locator('#channel-list')).to_be_visible()
+    expect(page.locator('#btn-run-pipeline')).to_be_visible()
+    page.locator('.console-subnav a[href*="tab=manual"]').click()
+    expect(page.locator('#video-url-input')).to_be_visible()
+    page.locator('#video-url-input').fill('https://youtu.be/draft-only')
+    page.locator('.console-primary[data-section=overview]').click()
+    expect(page.locator('#video-url-input')).not_to_be_visible()
+    page.locator('.console-subnav a[href*="tab=manual"]').click()
+    expect(page.locator('#video-url-input')).to_have_value('https://youtu.be/draft-only')
+    page.locator('.console-subnav a[href*="tab=waitlist"]').click()
+    expect(page.locator('#workspace-list')).to_be_visible()
+
+
+@pytest.mark.parametrize('theme',['dark','light','contrast'])
+def test_contrast_large_first_screen_and_zoom(workspace,theme):
+    page,client,state,db=workspace
+    page.evaluate('(theme)=>localStorage.setItem("vp-display-preferences",JSON.stringify({theme,size:"large"}))',theme)
+    page.reload();expect(page.locator('#overview-feedback')).to_contain_text('最后成功')
+    for selector in ('.console-shortcuts [data-topic-entry]','.console-attention a:first-child','.console-tasks h2'):
+        box=page.locator(selector).bounding_box();assert box and box['y']+box['height']<=768
+    ratios=page.evaluate('''() => {
+      const rgb=c=>(c.match(/[\\d.]+/g)||[]).map(Number);
+      const blend=(a,b)=>a.slice(0,3).map((v,i)=>v*(a[3]??1)+b[i]*(1-(a[3]??1)));
+      function bg(el){if(!el)return [255,255,255];return blend(rgb(getComputedStyle(el).backgroundColor),bg(el.parentElement));}
+      const l=c=>c.map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4).reduce((a,v,i)=>a+v*[.2126,.7152,.0722][i],0);
+      return [...document.querySelectorAll('.console-rail a,.console-metric span,.console-attention a span,.console-shortcuts p,.console-task small')].map(el=>{
+        const a=l(rgb(getComputedStyle(el).color)),b=l(bg(el));return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+      });
+    }''')
+    assert ratios and min(ratios)>=4.5
+    # 桌面 200% 缩放等效 CSS viewport：1366 / 2，浏览器自动重排保持导航可达。
+    page.set_viewport_size(dict(width=683,height=384))
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    page.locator('.console-menu').click()
+    expect(page.locator('.console-drawer a[href="/topic-candidates"]')).to_be_visible()
+    for selector in ('.console-drawer button','.console-drawer a'):
+        assert all(row['height']>=44 for row in page.locator(selector).evaluate_all('els=>els.map(el=>({height:el.getBoundingClientRect().height}))'))
+    page.keyboard.press('Escape');evidence(page,'zoom200-'+theme)
+
+
+def test_local_capability_and_remote_boundary(workspace):
+    page,client,state,db=workspace
+    data=client.get('/api/console/capabilities').json()
+    assert data==dict(topic_available=True,search_enabled=False)
+    assert client.get('/topic-candidates').status_code==200
+    remote=TestClient(web_app.app,client=('192.0.2.1',50000))
+    try:
+        assert remote.get('/api/console/capabilities').json()['topic_available'] is False
+        assert remote.get('/topic-candidates').status_code==403
+    finally:
+        remote.close()

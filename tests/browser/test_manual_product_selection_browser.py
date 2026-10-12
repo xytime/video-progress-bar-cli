@@ -63,7 +63,7 @@ def manual_ui(chromium):
 
     page.route('**/*',route_handler)
     # 各测试可在首次加载前设定慢响应或失败；不以脚本注入操作绕过用户控件。
-    state['navigate'] = lambda:page.goto('http://manual-test.invalid/',wait_until='domcontentloaded')
+    state['navigate'] = lambda:page.goto('http://manual-test.invalid/?view=topics&tab=manual',wait_until='domcontentloaded')
     state['release_add'] = lambda:add_response(state.pop('add_route'))
     yield page,state
     page.close()
@@ -96,7 +96,7 @@ def test_defaults_none_and_success_resets_all_inputs(manual_ui):
     expect(page.locator('#video-url-input')).to_have_value('')
     expect(page.locator('#video-product')).to_have_value('')
     expect(page.locator('#video-content-type')).to_have_value('GENERAL')
-    page.locator('#tab-queue').click()
+    page.locator('.console-primary[data-section=production]').click()
     expect(page.locator('#row-manual-video .product-intent-detail')).to_contain_text('手动明确不绑定商品')
 
 
@@ -152,7 +152,7 @@ def test_historical_exact_identity_can_be_selected_with_pending_session_verifica
     expect(page.locator('#add-video-feedback')).to_contain_text('已保存指定商品')
     assert state['writes'][0]['product_intent'] == 'PRODUCT'
     assert state['writes'][0]['product_alias'] == 'unconfigured'
-    page.locator('#tab-queue').click()
+    page.locator('.console-primary[data-section=production]').click()
     expect(page.locator('#row-manual-video .product-intent-detail')).to_contain_text('不代表平台已挂载')
 
 
@@ -172,7 +172,7 @@ def test_catalog_failure_retry_preserves_url_and_trim(manual_ui):
     page.locator('#btn-add-video').click()
     expect(page.locator('#add-video-feedback')).to_contain_text('已保存指定商品')
     assert state['writes'][0]['product_alias']=='unconfigured'
-    page.locator('#tab-queue').click()
+    page.locator('.console-primary[data-section=production]').click()
     expect(page.locator('#row-manual-video .product-intent-detail')).to_contain_text('ID 70001001')
     expect(page.locator('#row-manual-video .product-intent-detail')).to_contain_text('不代表平台已挂载')
 

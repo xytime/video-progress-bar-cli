@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <!--
   Modification History:
+  | 2026-10-12 | Codex | v0.3 共享五区导航、只读总览、列表 URL 恢复及可见区域刷新。 |
   | 2026-09-26 | Antigravity | 修复移动端静态 CSS 强缓存，添加版本号；移动端卡片 4 大核心指标升级为 2x2 紧凑自适应排版，解决超长换行重叠；修复状态徽章坚排拆字 Bug。 |
   | 2026-09-26 | Antigravity | 任务数据中心全 Tab 来源发布/入库时间统一；移动端卡片重构（状态置于封面下方、四大指标紧凑汇聚、已发布高辨识度区分）；iOS 桌面 icon 设为 📺。 |
   | 2026-09-23 | Codex | 待筛选来源发布时间补充 ET 时分、BJ 入库时间与四档相对新鲜度展示。 |
@@ -42,7 +43,7 @@
   | 2026-09-20 | Gemini | 增强 normalizeSourcePublishedDate 容错提取能力，防御历史非标格式导致发布时间显示为未知。 |
   -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>📺 Video Pipeline Control Center</title>
+  <title>工作总览 · 视频运营工作台</title>
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
   <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png" />
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icon-192.png" />
@@ -93,22 +94,17 @@
   </script>
   <link rel="stylesheet" href="/static/css/dashboard.css?v=20260926_2" />
   <link rel="stylesheet" href="/static/css/manual_products.css?v=20261011_1" />
+<link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-1">
+<script defer src="/static/js/console_navigation.js?v=20261012-1"></script>
+<script defer src="/static/js/dashboard_workspace.js?v=20261012-1"></script>
 </head>
 <body>
 <div class="app">
 
   <!-- Header -->
   <header>
-    <div class="logo">
-      <div class="logo-icon">📺</div>
-      <div>
-        <div class="logo-text">Video Pipeline Control Center</div>
-        <div class="logo-sub">全自动视频加工 · 翻译 · 微信视频号发布</div>
-      </div>
-    </div>
+    <h1 id="workspace-title">工作总览</h1>
     <div class="header-right">
-      <a href="/product-settings" class="btn-tool-prefs">商品挂载</a>
-      <a href="/topic-candidates" class="btn-tool-prefs">关键词追踪</a>
       <a id="ai-audit-mini" href="/api/ai-audit/summary" target="_blank" title="打开 AI 处理审计数据" style="font-size:0.75rem;color:var(--text2);text-decoration:none;padding:5px 9px;border:1px solid var(--border);border-radius:8px;white-space:nowrap;">🤖 AI 审计加载中…</a>
       <button id="btn-wechat-login" class="btn-wechat" onclick="wechatLogin()" title="微信 Session 过期时点击，弹出浏览器扫码">
         📱 微信登录
@@ -117,9 +113,8 @@
         ⚡ 强制插队运行
       </button>
       <button id="btn-toggle-preferences" class="btn-tool-prefs" onclick="toggleDisplayPreferences()" title="外观风格与字号设置">
-        ⚙️ 外观偏好
+        外观偏好
       </button>
-      <div class="live-badge"><div class="live-dot"></div>LIVE · 3s</div>
       <div id="last-update">--:--:--</div>
     </div>
   </header>
@@ -148,7 +143,7 @@
   <div class="global-funnel-panel" id="global-funnel-panel">
     <div class="panel-header" style="padding: 12px 20px;">
       <div style="display:flex; align-items:center; gap:10px;">
-        <div class="panel-title" style="font-size: 0.9375rem;">📊 全局生产转化态势 (Global Funnel)</div>
+        <div class="panel-title" style="font-size: 0.9375rem;">生产概览</div>
         <span id="gf-latest-info" style="font-size:0.75rem; color:var(--text3);"></span>
       </div>
       <div class="funnel-tabs" id="global-funnel-tabs" style="display:flex; gap:6px;">
@@ -160,41 +155,41 @@
       </div>
     </div>
     <div class="global-funnel-body">
-      <div class="gf-stage-card gf-stage-ingested" id="gf-card-ingested" onclick="onFunnelCardClick('ingested', 'waitlist', '1. 采集入库')" title="点击下钻查看当前漏斗时间范围内的采集入库">
-        <div class="gf-stage-num" id="gf-ingested">0</div>
-        <div class="gf-stage-title">📥 1. 采集入库</div>
+      <button type="button" class="gf-stage-card gf-stage-ingested" id="gf-card-ingested" onclick="onFunnelCardClick('ingested', 'waitlist', '1. 采集入库')" title="点击下钻查看当前漏斗时间范围内的采集入库">
+        <div class="gf-stage-num" id="gf-ingested">—</div>
+        <div class="gf-stage-title">1. 采集入库</div>
         <div class="gf-stage-sub">全网监控抓取基准 100%</div>
-      </div>
-      <div class="gf-stage-card gf-stage-qualified" id="gf-card-qualified" onclick="onFunnelCardClick('qualified', 'queue', '2. 评分入围 (≥75分)')" title="点击下钻查看当前漏斗时间范围评分≥75入围视频">
-        <div class="gf-stage-num" id="gf-qualified">0</div>
-        <div class="gf-stage-title">⭐ 2. 评分入围</div>
-        <div class="gf-stage-sub">入围率 <b id="gf-qual-rate">0.0%</b></div>
-      </div>
-      <div class="gf-stage-card gf-stage-processed" id="gf-card-processed" onclick="onFunnelCardClick('processed', 'active', '3. 制作加工')" title="点击下钻查看当前漏斗时间范围内的制作加工任务">
-        <div class="gf-stage-num" id="gf-processed">0</div>
-        <div class="gf-stage-title">⚙️ 3. 制作加工</div>
-        <div class="gf-stage-sub">制作率 <b id="gf-proc-rate">0.0%</b></div>
-      </div>
-      <div class="gf-stage-card gf-stage-published" id="gf-card-published" onclick="onFunnelCardClick('published', 'completed', '4. 终审发布')" title="点击下钻查看当前漏斗时间范围内已公开发布视频">
-        <div class="gf-stage-num" id="gf-published">0</div>
-        <div class="gf-stage-title">🚀 4. 终审发布</div>
-        <div class="gf-stage-sub">发布率 <b id="gf-pub-rate">0.0%</b> · 总转化 <b id="gf-overall-rate" style="color:var(--green)">0.0%</b></div>
-      </div>
+      </button>
+      <button type="button" class="gf-stage-card gf-stage-qualified" id="gf-card-qualified" onclick="onFunnelCardClick('qualified', 'queue', '2. 评分入围 (≥75分)')" title="点击下钻查看当前漏斗时间范围评分≥75入围视频">
+        <div class="gf-stage-num" id="gf-qualified">—</div>
+        <div class="gf-stage-title">2. 评分入围</div>
+        <div class="gf-stage-sub">入围率 <b id="gf-qual-rate">—</b></div>
+      </button>
+      <button type="button" class="gf-stage-card gf-stage-processed" id="gf-card-processed" onclick="onFunnelCardClick('processed', 'active', '3. 制作加工')" title="点击下钻查看当前漏斗时间范围内的制作加工任务">
+        <div class="gf-stage-num" id="gf-processed">—</div>
+        <div class="gf-stage-title">3. 制作加工</div>
+        <div class="gf-stage-sub">制作率 <b id="gf-proc-rate">—</b></div>
+      </button>
+      <button type="button" class="gf-stage-card gf-stage-published" id="gf-card-published" onclick="onFunnelCardClick('published', 'completed', '4. 终审发布')" title="查看当前时间范围内的已完成记录，不等于所有平台公开确认">
+        <div class="gf-stage-num" id="gf-published">—</div>
+        <div class="gf-stage-title">4. 完成记录</div>
+        <div class="gf-stage-sub">发布率 <b id="gf-pub-rate">—</b> · 总转化 <b id="gf-overall-rate" style="color:var(--green)">—</b></div>
+      </button>
       <div class="gf-diag-card" id="gf-card-diag" title="点击按当前漏斗时间范围查看异常或策略拦截">
         <div class="gf-diag-item" id="gf-diag-failed" onclick="onFunnelCardClick('failed', 'error', '异常失败')" style="cursor:pointer;" title="点击下钻查看当前漏斗时间范围异常失败记录">
           <span class="gf-diag-label">异常失败:</span>
-          <span class="gf-diag-val gf-val-failed" id="gf-failed">0</span>
+          <span class="gf-diag-val gf-val-failed" id="gf-failed">—</span>
         </div>
         <div class="gf-diag-item" id="gf-diag-blocked" onclick="onFunnelCardClick('blocked', 'error', '策略/敏感词拦截')" style="cursor:pointer;" title="点击下钻查看当前漏斗时间范围策略拦截记录">
           <span class="gf-diag-label">策略拦截:</span>
-          <span class="gf-diag-val gf-val-blocked" id="gf-blocked">0</span>
+          <span class="gf-diag-val gf-val-blocked" id="gf-blocked">—</span>
         </div>
       </div>
     </div>
   </div>
 
   <!-- Stats Cards (即时队列概览) -->
-  <div class="stats-grid" style="margin-bottom: 18px;">
+  <div class="stats-grid" hidden aria-hidden="true">
     <div class="stat-card card-total" onclick="switchTab('waitlist')" style="cursor: pointer;" title="点击查看待筛选列表">
       <div class="stat-label">总视频数</div>
       <div class="stat-value" id="s-total">0</div>
@@ -260,7 +255,7 @@
     <!-- Activity Data Table -->
     <div class="panel">
       <div class="panel-header" style="border-bottom:none; padding-bottom:0;">
-        <div class="panel-title">⚡ 任务数据中心 <span class="panel-badge" id="activity-count">0</span></div>
+        <div class="panel-title">记录列表 <span class="panel-badge" id="activity-count">0</span></div>
         <div id="new-data-hint" style="font-size:0.75rem;color:var(--accent);cursor:pointer;display:none;" onclick="loadVideos(1)">✨ 有新动态，点击刷新</div>
       </div>
 
@@ -275,7 +270,7 @@
         <button class="tab-btn" id="tab-completed" onclick="switchTab('completed')">已完成</button>
         <button class="tab-btn" id="tab-error" onclick="switchTab('error')">出错异常</button>
         <button class="tab-btn" id="tab-high_likes" onclick="switchTab('high_likes')">✨ 近期高互动</button>
-        <button class="tab-btn" id="tab-hotwords" onclick="switchTab('hotwords')">🔥 热词监控</button>
+        <button class="tab-btn" id="tab-hotwords" onclick="switchTab('hotwords')">热词线索</button>
       </div>
 
       <!-- 漏斗大盘下钻联动指示横幅 -->
@@ -548,7 +543,7 @@
     </div>
   </div>
 
-  <footer>Video Pipeline Control Center · Auto-refresh every 3s · <a href="/api/stats" target="_blank" style="color:var(--accent2);text-decoration:none;">/api/stats</a></footer>
+  <footer>视频运营工作台 · <a href="/api/stats" target="_blank" style="color:var(--accent2);text-decoration:none;">/api/stats</a></footer>
   <div id="toast-container"></div>
   <div id="channel-funnel-popover" class="channel-funnel-popover"></div>
 
@@ -852,7 +847,7 @@
       const d = await r.json();
       // 快速切换窗口或自动刷新时，只允许最新且匹配当前筛选的响应回写。
       if (requestId !== _globalFunnelRequestId || win !== filterState.createdWindow) return;
-      if (!d.success || !d.metrics) return;
+      if (!r.ok || !d.success || !d.metrics) throw new Error('漏斗读取失败');
       const m = d.metrics;
       animateNumber(document.getElementById('gf-ingested'), m.total_ingested || 0);
       animateNumber(document.getElementById('gf-qualified'), m.qualified || 0);
@@ -880,7 +875,10 @@
         if (m.latest_published_at) parts.push(`最新发布: ${relativeTime(m.latest_published_at)}`);
         infoEl.textContent = parts.length ? `(${parts.join(' · ')})` : '';
       }
-    } catch(e) { console.warn('global funnel fetch error', e); }
+    } catch(e) {
+      if (requestId !== _globalFunnelRequestId || win !== filterState.createdWindow) return;
+      document.getElementById('gf-latest-info').textContent = '读取失败 · 下方如有读数均为旧数据';
+    }
   }
 
   function toggleDisplayPreferences() {
@@ -1240,15 +1238,16 @@
   }
 
   function switchTab(tab, overrides = {}) {
+    window.DashboardWorkspace?.selectTab(tab);
     // [Claude_Sonnet_4.6_Thinking_planning] 热词面板独立显示/隐藏
     const hwPanel  = document.getElementById('hotwords-panel');
-    const mainBody = document.querySelector('.panel-body');
+    const mainBody = document.querySelector('#workspace-list > .panel-body');
     const pgn      = document.querySelector('.pagination');
     const batchBar = document.getElementById('batch-action-bar');
 
     if (overrides.funnelStage !== undefined) {
       filterState.funnelStage = overrides.funnelStage;
-    } else if (currentFunnelStage) {
+    } else if (currentFunnelStage && !window.DashboardWorkspace?.restoring()) {
       clearFunnelDrilldown(false);
     }
 
@@ -1271,7 +1270,9 @@
     document.getElementById('new-data-hint').style.display = 'none';
     exitEditMode(false);
 
+    if (tab === 'manual') { invalidateVideoRequest(); return; }
     if (tab === 'hotwords') {
+      window.DashboardWorkspace?.persist();
       invalidateVideoRequest();
       _renderedVideoQuery = null;
       _currentVideosMap = {};
@@ -1336,7 +1337,9 @@
       document.getElementById('new-data-hint').style.display = 'none';
     }
 
-    if (currentTab === 'hotwords') return;
+    if (currentTab === 'hotwords' || currentTab === 'manual') return;
+    if (window.DashboardWorkspace && !['topics','production','publications'].includes(window.DashboardWorkspace.view())) return;
+    window.DashboardWorkspace?.persist();
     const query = videoQueryKey();
     const requestId = invalidateVideoRequest();
     const controller = new AbortController();
@@ -1586,7 +1589,7 @@
         const zhTitleHtml = `<div class="video-zh-title" style="display:flex; align-items:center;">${treeToggle}${escapeHtml(displayTitle)}</div>`;
         const enTitleHtml = `<a class="video-title-link ${score < 80 ? 'video-title-dim' : ''}"
           href="https://www.youtube.com/watch?v=${v.youtube_id}" target="_blank" rel="noopener"
-          onclick="event.stopPropagation()">${escapeHtml(v.title || '—')}</a>`;
+          onclick="event.stopPropagation()">${escapeHtml(v.title === displayTitle ? '查看原视频' : v.title || '查看原视频')}</a>`;
         const sourceZhHtml = v.title_mismatch && v.zh_title
           ? `<div class="video-title-link video-title-dim" title="本地源标题翻译，非平台发布标题">源译名：${escapeHtml(v.zh_title)}</div>`
           : '';
@@ -2968,7 +2971,7 @@
       } catch (e) { /* 瞬时网络错误，忽略，下一轮再试 */ }
     }
   }
-  setInterval(updateDownloadProgress, 1500);
+  setInterval(() => { if(window.DashboardWorkspace?.view()==='production') updateDownloadProgress(); }, 1500);
 
   // [Gemini_2.0_Flash_fast] Damped Swipe-Down-To-Dismiss for Cover Lightbox
   let lbStartY = 0;
@@ -3018,7 +3021,7 @@
 
   // [Gemini_2.0_Flash_fast] 检测剪贴板中的 Youtube 链接并提示一键填入
   async function checkClipboardForYoutube() {
-    if (document.visibilityState !== 'visible') return;
+    if (document.visibilityState !== 'visible' || currentTab !== 'manual') return;
     try {
       const text = await navigator.clipboard.readText();
       const prompt = document.getElementById('clipboard-smart-paste-prompt');
@@ -3256,46 +3259,11 @@
 
   let refreshTimeoutId = null;
   let currentRefreshInterval = 3000;
-  const MIN_REFRESH_INTERVAL = 3000;
+  const MIN_REFRESH_INTERVAL = 15000;
   const MAX_REFRESH_INTERVAL = 30000;
 
   async function refresh() {
-    if (document.visibilityState === 'hidden') {
-      // Page is sleeping, check again later but don't fetch stats
-      scheduleNextRefresh();
-      return;
-    }
-
-    try {
-      await Promise.all([
-        fetchStats(),
-        fetchGlobalFunnel(),
-        typeof fetchChannels === 'function' ? fetchChannels() : Promise.resolve(),
-        fetchAiAuditSummary(),
-      ]);
-
-      if (currentTab === 'waitlist' && currentPage === 1) {
-        await loadVideos();
-      } else {
-        // 智能刷新
-        const activeEl = document.getElementById('s-active');
-        const pendingEl = document.getElementById('s-pending');
-        const currentTotalActive = (parseInt(activeEl ? activeEl.textContent : 0) || 0) +
-                                   (parseInt(pendingEl ? pendingEl.textContent : 0) || 0);
-        if (lastTotalActive !== -1 && currentTotalActive !== lastTotalActive) {
-          const hint = document.getElementById('new-data-hint');
-          if (hint) hint.style.display = 'block';
-        }
-        lastTotalActive = currentTotalActive;
-      }
-      // Restore default 3s interval on success
-      currentRefreshInterval = MIN_REFRESH_INTERVAL;
-    } catch (e) {
-      console.warn('Stats refresh error, backing off:', e);
-      // Exponential backoff up to 30s
-      currentRefreshInterval = Math.min(currentRefreshInterval * 1.5, MAX_REFRESH_INTERVAL);
-    }
-
+    if (document.visibilityState !== 'hidden') await window.DashboardWorkspace?.refresh();
     scheduleNextRefresh();
   }
 
@@ -3312,34 +3280,29 @@
     }
   });
 
-  // Initial load + interval setup
-  // 读取持久化的 Tab 并进行高亮和视图渲染初始化 (Gemini_3.5_Flash_planning)
-  const savedTab = localStorage.getItem('video_pipeline_active_tab') || 'waitlist';
-  currentTab = savedTab;
-
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  const savedTabBtn = document.getElementById('tab-' + savedTab);
-  if (savedTabBtn) savedTabBtn.classList.add('active');
-
-  const bar = document.getElementById('batch-action-bar');
-  const qBarInit = document.getElementById('queue-action-bar');
-  if (savedTab === 'waitlist') {
-    if (bar) bar.classList.add('visible');
-    if (qBarInit) qBarInit.style.display = 'none';
-    exitEditMode(); // 待筛选模式下默认展示 Normal View
-  } else if (savedTab === 'queue') {
-    if (bar) bar.classList.remove('visible');
-    if (qBarInit) qBarInit.style.display = 'flex';
-    exitEditMode();
-  } else {
-    if (bar) bar.classList.remove('visible');
-    if (qBarInit) qBarInit.style.display = 'none';
-    exitEditMode(); // 隐藏并清空编辑状态
-  }
-
-  loadVideos(); // 无条件加载初始 Tab 数据 (Gemini_3.5_Flash_planning)
-  loadBackfillPreview();
-  refresh();
+  // URL 为工作区和列表状态的所有者；旧 tab 深链接仍能恢复。
+  window.DashboardLegacy = {
+    tab: () => currentTab, query: videoQueryKey, invalidate: invalidateVideoRequest,
+    audit: fetchAiAuditSummary, startRefresh: scheduleNextRefresh,
+    funnel: fetchGlobalFunnel,
+    restore(params, tab) {
+      currentTab = tab;
+      currentPage = Math.max(1, Number(params.get('page')) || 1);
+      const defaults = {search:'',channel:'',sort:'source_published_at_desc',size:20,
+        scoreBand:'all',errorType:'all',status:'all',engagementWindowDays:3,
+        includeProcessed:false,includeExpired:false,createdWindow:'all',funnelStage:null};
+      const keys = {scoreBand:'score_band',errorType:'error_type',engagementWindowDays:'engagement_window_days',
+        includeProcessed:'include_processed',includeExpired:'include_expired',createdWindow:'created_window',funnelStage:'funnel_stage'};
+      Object.entries(defaults).forEach(([key,fallback])=>{
+        const value=params.get(keys[key] || key);
+        filterState[key]=value===null?fallback:typeof fallback==='boolean'?value==='true':typeof fallback==='number'?Number(value)||fallback:value;
+      });
+      if (![20,50,100].includes(filterState.size)) filterState.size=20;
+      document.querySelectorAll('.tab-btn').forEach(el=>el.classList.toggle('active',el.id==='tab-'+tab));
+      currentFunnelStage=filterState.funnelStage;
+      syncFilterControls();switchTab(tab);
+    },
+  };
 
   // ── [Claude_Sonnet_4.6_Thinking_planning] 热词监控 Tab 逻辑 ────────────
   let _hwLoading = false;
@@ -3430,16 +3393,6 @@
     }).join('');
   }
 
-  // 初始化时若 savedTab 为 hotwords，执行热词面板显示逻辑
-  if (savedTab === 'hotwords') {
-    const hwPanel  = document.getElementById('hotwords-panel');
-    const mainBody = document.querySelector('.panel-body');
-    const pgn      = document.querySelector('.pagination');
-    if (hwPanel)  hwPanel.style.display  = 'block';
-    if (mainBody) mainBody.style.display = 'none';
-    if (pgn)      pgn.style.display      = 'none';
-    loadHotwords();
-  }
 </script>
 
 <!-- [Gemini_2.5_Pro_planning] Cover Lightbox Overlay -->

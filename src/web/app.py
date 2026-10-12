@@ -1375,6 +1375,17 @@ def dashboard():
     )
 
 
+@app.get("/api/console/capabilities")
+def console_capabilities(request: Request):
+    """只读入口与配置摘要；不建立候选会话、不启动搜索或触发服务恢复。"""
+    import ipaddress
+    try:
+        local = bool(request.client and ipaddress.ip_address(request.client.host).is_loopback)
+    except ValueError:
+        local = False
+    return {"topic_available": local, "search_enabled": bool(settings.topic_search_enabled)}
+
+
 @app.api_route("/apple-touch-icon.png", methods=["GET", "HEAD"])
 @app.api_route("/apple-touch-icon-precomposed.png", methods=["GET", "HEAD"])
 def apple_touch_icon():

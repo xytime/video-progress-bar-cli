@@ -76,6 +76,7 @@ def test_ready_tab_explains_wait_and_keeps_platform_result_separate(dashboard, t
                  publication_target="视频号")
     counts = dict.fromkeys(("waitlist", "queue", "active", "wechat_deferred", "local_accepted", "review", "completed", "error"), 0)
     state["payload"] = dict(_payload([video], total=1), total_pages=1, tab_counts=dict(counts, ready=1))
+    page.locator(".console-primary[data-section=production]").click()
     page.locator("#tab-ready").click()
     row = page.locator("#row-ready-video")
     row.wait_for()
@@ -208,7 +209,7 @@ def test_chinese_statuses_match_table_platform_and_details(dashboard):
         "NEW_UNMAPPED": "待核验", "__proto__": "待核验",
     }
     state["payload"] = _payload([_video(f"status-{i}", code) for i, code in enumerate(labels)])
-    page.locator("#tab-review").click()
+    page.locator(".console-primary[data-section=publications]").click()
     page.locator("#row-status-0").wait_for()
     for i, (code, label) in enumerate(labels.items()):
         row = page.locator(f"#row-status-{i}")
@@ -247,8 +248,8 @@ def test_platform_display_state_takes_precedence_and_unknown_is_not_unqueued(das
 def test_old_tab_response_cannot_overwrite_new_tab(dashboard, older_ok):
     page, state = dashboard
     _hold_video_requests(page)
-    page.locator("#tab-review").click()
-    page.locator("#tab-waitlist").click()
+    page.locator(".console-primary[data-section=publications]").click()
+    page.locator(".console-subnav a[href*=\"tab=waitlist\"]").click()
     assert page.evaluate("pendingVideoRequests[0].signal.aborted")
     page.evaluate("payload => pendingVideoRequests[1].finish(payload)", state["payload"])
     page.locator("#row-first").wait_for()
@@ -264,8 +265,8 @@ def test_old_tab_response_cannot_overwrite_new_tab(dashboard, older_ok):
 def test_hotwords_invalidates_pending_video_requests(dashboard):
     page, state = dashboard
     _hold_video_requests(page)
-    page.locator("#tab-review").click()
-    page.locator("#tab-hotwords").click()
+    page.locator(".console-primary[data-section=publications]").click()
+    page.locator(".console-subnav a[href*=\"tab=hotwords\"]").click()
     assert page.evaluate("pendingVideoRequests[0].signal.aborted")
     page.evaluate("payload => pendingVideoRequests[0].finish(payload)", state["payload"])
     assert page.locator("#hotwords-panel").is_visible()
@@ -282,8 +283,8 @@ def test_same_query_latest_refresh_wins_and_query_failure_can_retry(dashboard):
     page.locator("#row-newest").wait_for()
     page.evaluate("payload => pendingVideoRequests[0].finish(payload)", state["payload"])
     assert page.evaluate("Object.keys(_currentVideosMap)") == ["newest"]
-    page.locator("#tab-review").click()
-    page.locator("#tab-waitlist").click()
+    page.locator(".console-primary[data-section=publications]").click()
+    page.locator(".console-subnav a[href*=\"tab=waitlist\"]").click()
     page.evaluate("() => pendingVideoRequests[3].finish({detail: '测试失败'}, false)")
     page.get_by_text("列表加载失败，请重试刷新。", exact=True).wait_for()
     assert page.evaluate("Object.keys(_currentVideosMap)") == []
