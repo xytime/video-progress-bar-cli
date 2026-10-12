@@ -362,6 +362,20 @@ def run_offline_4path_demo() -> Dict[str, Any]:
     return results
 
 
+# 与 PipelineDB 默认路径一致；测试可替换
+DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent / "output" / "pipeline.db"
+
+
+def _read_only_refusal(db_path):
+    """只读检视的前置检查：库不存在或有未检查点的 WAL 时拒绝（immutable 读取活动 WAL 库不安全）。"""
+    if db_path is None or not db_path.exists():
+        return "DB_NOT_FOUND: 只读模式不会创建数据库"
+    wal = Path(str(db_path) + "-wal")
+    if wal.exists() and wal.stat().st_size > 0:
+        return "ACTIVE_WAL: 数据库存在未检查点的 WAL，拒绝以 immutable 方式读取"
+    return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="视频号二级回复自动化处理")
     parser.add_argument("--post-id", type=str, help="视频号平台作品 exportId")
@@ -377,18 +391,20 @@ def main():
         print(json.dumps(results, ensure_ascii=False, indent=2))
         return 0
 
-    db = PipelineDB()
-
-    if args.reconcile:
-        logger.info("[Reconcile] 启动 UNCERTAIN 任务只读对账审计...")
-        res = run_reconcile_inspection(db, args.post_id)
-        print(json.dumps(res, ensure_ascii=False, indent=2))
-        return 0
-
-    if args.dry_run:
-        logger.info("[DryRun] 启动本地只读模式，不执行任何外部操作或写事务。")
-        post_id = args.post_id or "export/default_dry_run"
-        res = run_dry_run_inspection(db, post_id)
+    # 先决定模式，再打开数据库：只读模式绝不构造可写 PipelineDB（会触发建表/迁移/幽灵任务整理）
+    if args.reconcile or args.dry_run:
+        db_path = DEFAULT_DB_PATH
+        refuse = _read_only_refusal(db_path)
+        if refuse:
+            print(json.dumps({"mode": "inspection", "refused": refuse}, ensure_ascii=False, indent=2))
+            return 2
+        db = PipelineDB(db_path=str(db_path), read_only=True)
+        if args.reconcile:
+            logger.info("[Reconcile] 本地 UNCERTAIN 任务只读检视（不访问平台）...")
+            res = run_reconcile_inspection(db, args.post_id)
+        else:
+            logger.info("[DryRun] 本地只读模式，不执行任何外部操作或写事务。")
+            res = run_dry_run_inspection(db, args.post_id or "export/default_dry_run")
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return 0
 
@@ -400,8 +416,9 @@ def main():
         logger.info("enable_wechat_secondary_reply_live_submission 提交闸门未开启，安全停止真实发送。")
         return 0
 
-    logger.info("开始执行二级回复任务流...")
-    return 0
+    # 真实发送链路尚未接线（M3 之前不实现）：明确拒绝，不得静默返回成功
+    logger.error("真实二级回复执行链路尚未接线，拒绝运行（退出码 3）。")
+    return 3
 
 
 if __name__ == "__main__":
