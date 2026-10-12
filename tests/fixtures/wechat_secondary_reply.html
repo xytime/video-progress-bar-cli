@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>隔离视频号二级回复测试夹具</title></head>
+<body>
+  <main id="cards">
+    <button class="post-card" data-object-id="export/synth_post_other">其他视频</button>
+    <button class="post-card" data-object-id="export/synth_video_888">深度解读视频</button>
+  </main>
+  <section id="detail-host"></section>
+  <script>
+    window.fixtureState = {mode: 'success', submitClicked: 0};
+    const host = document.querySelector('#detail-host');
+    document.querySelectorAll('.post-card').forEach(card => card.addEventListener('click', () => {
+      const id = card.dataset.objectId;
+      host.innerHTML = `
+        <article data-current-object-id="${id}">
+          <div class="comment-item-main" data-comment-id="synth_cmt_101">
+            <span class="nickname">用户大伟</span>
+            <p class="content">非常深刻的宏观分析！</p>
+            <button type="button" class="reply-btn" data-reply>回复</button>
+            <div class="reply-compose" hidden>
+              <textarea placeholder="回复用户大伟" data-comment-editor></textarea>
+              <button type="button" data-submit>发送</button>
+            </div>
+            <div class="level-two" data-level-two></div>
+          </div>
+          <div class="comment-item-main" data-comment-id="synth_cmt_104">
+            <span class="nickname">用户老李</span>
+            <p class="content">作者之前回复过的评论</p>
+            <div class="level-two" data-level-two>
+              <div class="sub-comment" data-author-role="author">六维时空号(作者): 之前已回复过</div>
+            </div>
+          </div>
+        </article>`;
+      const detail = host.firstElementChild;
+      const c1 = detail.querySelector("[data-comment-id='synth_cmt_101']");
+      c1.querySelector('[data-reply]').addEventListener('click', () => {
+        c1.querySelector('.reply-compose').hidden = false;
+      });
+      c1.querySelector('[data-submit]').addEventListener('click', async () => {
+        window.fixtureState.submitClicked++;
+        const content = c1.querySelector('textarea').value;
+        const mode = window.fixtureState.mode;
+
+        let reqExportId = id;
+        let reqRootId = "synth_cmt_101";
+
+        if (mode === 'wrong-export-id') {
+          reqExportId = "export/synth_post_wrong";
+        }
+        if (mode === 'wrong-root-id') {
+          reqRootId = "synth_cmt_wrong";
+        }
+
+        const payload = {
+          exportId: reqExportId,
+          rootCommentId: reqRootId,
+          replyCommentId: reqRootId,
+          content: content,
+          clientId: "synth-client-id-123",
+          _log_finder_id: "v2_synthetic_author_finder_id@finder"
+        };
+
+        if (mode === 'drop-response') {
+          fetch('/cgi-bin/mmfinderassistant-bin/comment/create_comment', {
+            method: 'POST',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify(payload)
+          }).catch(() => {});
+          return;
+        }
+
+        try {
+          const response = await fetch('/cgi-bin/mmfinderassistant-bin/comment/create_comment', {
+            method: 'POST',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify(payload)
+          });
+          const resJson = await response.json();
+          if (resJson.errCode === 0) {
+            const node = document.createElement('div');
+            node.className = "sub-comment";
+            node.dataset.commentId = resJson.data.commentId;
+            node.dataset.authorRole = 'author';
+            node.textContent = content;
+            c1.querySelector('[data-level-two]').appendChild(node);
+          }
+        } catch (err) {}
+      });
+    }));
+  </script>
+</body>
+</html>

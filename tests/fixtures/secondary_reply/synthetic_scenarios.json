@@ -1,0 +1,179 @@
+{
+  "T01_single_viewer_no_author_top": {
+    "description": "无首评且只有一条观众评论",
+    "comment": [
+      {
+        "commentId": "synth_cmt_only_1",
+        "commentNickname": "独立观众A",
+        "commentContent": "这个角度很有启发，期待下一期。",
+        "commentCreatetime": "1791779717",
+        "commentLikeCount": 1,
+        "downContinueFlag": 0,
+        "visibleFlag": 0,
+        "displayFlag": 0,
+        "readFlag": false,
+        "username": "",
+        "replyCommentId": "",
+        "replyContent": "",
+        "levelTwoComment": []
+      }
+    ],
+    "commentCount": 1,
+    "downContinueFlag": 0,
+    "lastBuff": ""
+  },
+  "T02_pagination_first_level_active": {
+    "description": "一级评论仍有分页 (downContinueFlag=1)",
+    "comment": [
+      {
+        "commentId": "1503000000000000001",
+        "commentNickname": "Davie 大伟",
+        "commentContent": "Singapore is a totalitarian society demanding total compliance.",
+        "commentCreatetime": "1791779717",
+        "commentLikeCount": 3,
+        "downContinueFlag": 0,
+        "visibleFlag": 0,
+        "displayFlag": 1,
+        "readFlag": false,
+        "username": "",
+        "replyCommentId": "",
+        "replyContent": "",
+        "levelTwoComment": []
+      },
+      {
+        "commentId": "1503000000000000002",
+        "commentNickname": "wy",
+        "commentContent": "对比法国 可能真的是这样",
+        "commentCreatetime": "1791779380",
+        "commentLikeCount": 0,
+        "downContinueFlag": 0,
+        "visibleFlag": 0,
+        "displayFlag": 0,
+        "readFlag": false,
+        "username": "",
+        "replyCommentId": "",
+        "replyContent": "",
+        "levelTwoComment": []
+      }
+    ],
+    "commentCount": 5,
+    "downContinueFlag": 1,
+    "lastBuff": "synth_pagination_buff_page1"
+  },
+  "T02_secondary_level_unsupported": {
+    "description": "二级回复存在未知分页/折叠标志",
+    "comment": [
+      {
+        "commentId": "synth_cmt_unsupported_fold",
+        "commentNickname": "测试折叠观众",
+        "commentContent": "评论内容包含折叠未展开子树",
+        "commentCreatetime": "1791779717",
+        "commentLikeCount": 5,
+        "downContinueFlag": 1,
+        "visibleFlag": 0,
+        "displayFlag": 0,
+        "readFlag": false,
+        "username": "",
+        "replyCommentId": "",
+        "replyContent": "",
+        "levelTwoComment": [
+          {
+            "commentId": "synth_cmt_fold_sub1",
+            "commentNickname": "路人甲",
+            "commentContent": "子回复",
+            "commentCreatetime": "1791779800",
+            "commentLikeCount": 0,
+            "downContinueFlag": 1,
+            "visibleFlag": 0,
+            "displayFlag": 0,
+            "readFlag": false,
+            "username": "",
+            "replyCommentId": "synth_cmt_unsupported_fold",
+            "replyContent": "评论内容包含折叠未展开子树",
+            "levelTwoComment": []
+          }
+        ]
+      }
+    ],
+    "commentCount": 1,
+    "downContinueFlag": 0,
+    "lastBuff": ""
+  },
+  "T03_duplicate_nickname_content_different_ids": {
+    "description": "同昵称同文本不同 ID",
+    "comment": [
+      {
+        "commentId": "synth_cmt_dup_001",
+        "commentNickname": "热心市民李先生",
+        "commentContent": "讲得很透彻，支持！",
+        "commentCreatetime": "1791779000",
+        "commentLikeCount": 2,
+        "downContinueFlag": 0,
+        "visibleFlag": 0,
+        "displayFlag": 0,
+        "readFlag": false,
+        "username": "",
+        "replyCommentId": "",
+        "replyContent": "",
+        "levelTwoComment": []
+      },
+      {
+        "commentId": "synth_cmt_dup_002",
+        "commentNickname": "热心市民李先生",
+        "commentContent": "讲得很透彻，支持！",
+        "commentCreatetime": "1791779500",
+        "commentLikeCount": 0,
+        "downContinueFlag": 0,
+        "visibleFlag": 0,
+        "displayFlag": 0,
+        "readFlag": false,
+        "username": "",
+        "replyCommentId": "",
+        "replyContent": "",
+        "levelTwoComment": []
+      }
+    ],
+    "commentCount": 2,
+    "downContinueFlag": 0,
+    "lastBuff": ""
+  },
+  "T04_author_already_replied": {
+    "description": "作者已在手机端回复此一级评论",
+    "comment": [
+      {
+        "commentId": "synth_cmt_already_replied_parent",
+        "commentNickname": "观点提问者",
+        "commentContent": "请问下期会做宏观货币政策吗？",
+        "commentCreatetime": "1791770000",
+        "commentLikeCount": 4,
+        "downContinueFlag": 0,
+        "visibleFlag": 0,
+        "displayFlag": 0,
+        "readFlag": true,
+        "username": "",
+        "replyCommentId": "",
+        "replyContent": "",
+        "levelTwoComment": [
+          {
+            "commentId": "synth_cmt_author_reply_sub",
+            "commentNickname": "六维时空号",
+            "commentContent": "感谢关注，下周将推出美元流动性深度拆解。\nThanks for following; next week we will dive into USD liquidity.",
+            "commentCreatetime": "1791770500",
+            "commentLikeCount": 2,
+            "downContinueFlag": 0,
+            "visibleFlag": 1,
+            "displayFlag": 2,
+            "readFlag": true,
+            "username": "v2_synthetic_author_finder_id@finder",
+            "replyCommentId": "synth_cmt_already_replied_parent",
+            "replyContent": "请问下期会做宏观货币政策吗？",
+            "levelTwoComment": []
+          }
+        ]
+      }
+    ],
+    "commentCount": 1,
+    "downContinueFlag": 0,
+    "lastBuff": ""
+  }
+}

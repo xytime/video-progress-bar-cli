@@ -1,0 +1,58 @@
+{
+  "baseline_commit": "0419de50cfd806353256db607878bdd34a096878",
+  "branch": "task/secondary-reply-m0-m2",
+  "delivery_state": "CANDIDATE_READY_FOR_REVIEW",
+  "feature_flags": {
+    "enable_wechat_secondary_reply": false,
+    "enable_wechat_secondary_reply_live_submission": false
+  },
+  "acceptance_checks": {
+    "T01_scheme_a_contract": "PASSED",
+    "T02_input_comment_budget_and_hash": "PASSED",
+    "T03_audience_comments_ingestion": "PASSED",
+    "T04_author_already_replied_safe_skip": "PASSED",
+    "T05_atomic_claim_and_submit_intent": "PASSED",
+    "T06_network_precheck_route_guard": "PASSED",
+    "T07_quotas_and_window_enforcement": "PASSED",
+    "T08_dropped_response_uncertain_reconcile": "PASSED",
+    "T09_tombstone_survives_task_deletion": "PASSED",
+    "T10_telegram_approval_workflow": "PASSED",
+    "T11_dual_channel_censorship_gate": "PASSED",
+    "T12_prompt_injection_defense": "PASSED",
+    "T13_corpus_40_samples_integrity": "PASSED",
+    "T14_feature_flags_default_false": "PASSED",
+    "T15_cli_dry_run_zero_side_effect": "PASSED",
+    "T16_isolated_browser_chromium_e2e": "PASSED"
+  },
+  "isolated_test_receipts": [
+    "/private/tmp/video-pytest-94kbbl2w",
+    "/private/tmp/video-pytest-ypo948vx"
+  ],
+  "offline_demo_evidence": {
+    "command": "PYTHONPATH=src .venv/bin/python scripts/wechat_secondary_reply.py --demo",
+    "status": "PASSED",
+    "paths_verified": 4
+  },
+  "files_touched": [
+    ".env.example",
+    "src/config/settings.py",
+    "src/video_processing/db/database.py",
+    "docs/specs/secondary_reply_m0_m2_spec.md",
+    "src/video_processing/interaction/secondary_reply_contract.py",
+    "src/video_processing/interaction/secondary_reply_service.py",
+    "src/video_processing/interaction/secondary_reply_approval.py",
+    "src/video_processing/interaction/secondary_reply_browser_adapter.py",
+    "scripts/wechat_secondary_reply.py",
+    "tests/fixtures/secondary_reply/sanitized_api_responses.json",
+    "tests/fixtures/secondary_reply/synthetic_scenarios.json",
+    "tests/fixtures/secondary_reply/corpus_40_samples.json",
+    "tests/fixtures/wechat_secondary_reply.html",
+    "tests/unit/test_secondary_reply_contract_and_dal.py",
+    "tests/unit/test_secondary_reply_service_and_corpus.py",
+    "tests/browser/test_secondary_reply_browser.py"
+  ],
+  "unverified_aspects": [
+    "Production live WeChat Channels endpoints (intentionally blocked by enable_wechat_secondary_reply_live_submission=False)",
+    "Real external Telegram Bot API network round-trip (verified with FakeApprovalTransport and contract parsing)"
+  ]
+}

@@ -29,6 +29,7 @@
 | 3.62.0 | 2026-09-18 | Antigravity | 解耦英语世界生产触发与发布窗口，增加专属发布窗口与库存水位控制。 |
 | 3.61.11 | 2026-09-17 | Antigravity | 新增英语世界每日发布上限 english_world_daily_publish_limit，默认 10。 |
 | 3.61.10 | 2026-09-17 | Antigravity | 默认 YouTube 认证探针改为白名单稳定视频，避免历史样例被 bot 风控误杀。 |
+| 3.66.0 | 2026-10-12 | Codex | 新增视频号二级回复独立开关、审批人配置与配额时段限制，默认关闭。 |
 | 3.63.0 | 2026-09-19 | Antigravity | 新增 enable_wechat_comment_interaction 特性开关，默认关闭确保生产零风险与开发隔离。 |
 | language-v1 | 2026-09-09 | Codex | 英语世界独立语言审校专用开关、模型与超时，默认影子关闭。 |
 | 3.61.9 | 2026-09-08 | Codex | 仪表盘可显式绑定全部 IPv4 网卡，便于局域网直接访问；浏览器来源仍由控制面同源守卫校验。 |
@@ -232,6 +233,17 @@ class Settings(BaseSettings):
     # 视频号评论区首评引导开关。默认关闭；关闭时不得派发评论任务。
     # 共享代码/DB 变更仍须隔离回归，实际平台验收及启用需要另行授权。
     enable_wechat_comment_interaction: bool = False
+
+    # 视频号二级回复（作者回复一级观众评论）总开关与安全闸门。默认严格关闭。
+    enable_wechat_secondary_reply: bool = False
+    enable_wechat_secondary_reply_live_submission: bool = False
+    wechat_reply_approver_telegram_id: Optional[str] = None
+    wechat_reply_approver_chat_id: Optional[str] = None
+    wechat_reply_hourly_quota: int = Field(default=10, ge=1, le=100)
+    wechat_reply_max_per_video: int = Field(default=3, ge=1, le=10)
+    wechat_reply_min_interval_seconds: int = Field(default=15, ge=5, le=300)
+    wechat_reply_window_start_shanghai: str = "08:30"
+    wechat_reply_window_end_shanghai: str = "23:00"
 
     # 常规视频号发布默认尝试挂载图书商品；失败且清空就绪时允许无商品继续。
     enable_wechat_product_link: bool = True

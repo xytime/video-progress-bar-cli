@@ -1,0 +1,283 @@
+{
+  "comment_list": {
+    "endpoint": "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/comment_list",
+    "status": 201,
+    "data": {
+      "errCode": 0,
+      "errMsg": "request successful",
+      "data": {
+        "comment": [
+          {
+            "commentId": "1503000000000000001",
+            "commentNickname": "Davie 大伟",
+            "commentContent": "Singapore is a totalitarian society demanding total compliance.",
+            "commentCreatetime": "1791779717",
+            "commentLikeCount": 3,
+            "downContinueFlag": 0,
+            "visibleFlag": 0,
+            "displayFlag": 1,
+            "readFlag": false,
+            "username": "",
+            "replyCommentId": "",
+            "replyContent": "",
+            "levelTwoComment": []
+          },
+          {
+            "commentId": "1503000000000000002",
+            "commentNickname": "wy",
+            "commentContent": "对比法国 可能真的是这样",
+            "commentCreatetime": "1791779380",
+            "commentLikeCount": 0,
+            "downContinueFlag": 0,
+            "visibleFlag": 0,
+            "displayFlag": 0,
+            "readFlag": false,
+            "username": "",
+            "replyCommentId": "",
+            "replyContent": "",
+            "levelTwoComment": []
+          },
+          {
+            "commentId": "1503000000000000003",
+            "commentNickname": "飞哥随话",
+            "commentContent": "这不都挺Happy吗",
+            "commentCreatetime": "1791778763",
+            "commentLikeCount": 0,
+            "downContinueFlag": 0,
+            "visibleFlag": 0,
+            "displayFlag": 8,
+            "readFlag": false,
+            "username": "v2_synthetic_viewer_feige_id@finder",
+            "replyCommentId": "",
+            "replyContent": "",
+            "levelTwoComment": []
+          },
+          {
+            "commentId": "1503000000000000004",
+            "commentNickname": "jia",
+            "commentContent": "一年四季酷热",
+            "commentCreatetime": "1791777202",
+            "commentLikeCount": 0,
+            "downContinueFlag": 0,
+            "visibleFlag": 0,
+            "displayFlag": 524288,
+            "readFlag": false,
+            "username": "",
+            "replyCommentId": "",
+            "replyContent": "",
+            "levelTwoComment": []
+          },
+          {
+            "commentId": "1503000000000000005",
+            "commentNickname": "六维时空号",
+            "commentContent": "你认同视频里的判断吗？\nA 认同\nB 保留意见\n说说你的理由。",
+            "commentCreatetime": "1791774505",
+            "commentLikeCount": 0,
+            "downContinueFlag": 0,
+            "visibleFlag": 0,
+            "displayFlag": 131074,
+            "readFlag": true,
+            "username": "v2_synthetic_author_finder_id@finder",
+            "replyCommentId": "",
+            "replyContent": "",
+            "levelTwoComment": []
+          }
+        ],
+        "commentCount": 5,
+        "downContinueFlag": 0,
+        "lastBuff": "synth_buffer_token_abc123"
+      }
+    }
+  },
+  "create_comment_replies": [
+    {
+      "user": "Davie 大伟",
+      "style": "MACRO (宏观视角 / 开放式互动)",
+      "request": {
+        "endpoint": "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/create_comment",
+        "exportId": "export/synth_video_888",
+        "rootCommentId": "1503000000000000001",
+        "replyCommentId": "1503000000000000001",
+        "content": "小国缺乏战略纵深，对极致秩序与效率的执念，本质是地缘脆弱性下的生存代偿。你认为在大国博弈加剧的周期里，这种“精密仪器”式的治理模式韧性几何？\nFor a city-state without strategic depth, rigid efficiency is an existential hedge against geopolitical vulnerability. Amid rising global volatility, how durable is this precision-engineered social order?",
+        "clientId": "synth-client-1503000000000000001",
+        "_log_finder_id": "v2_synthetic_author_finder_id@finder",
+        "comment": {
+          "commentId": "1503000000000000001",
+          "commentNickname": "Davie 大伟",
+          "commentContent": "Singapore is a totalitarian society demanding total compliance.",
+          "commentCreatetime": "1791779717",
+          "commentLikeCount": 6,
+          "downContinueFlag": 0,
+          "visibleFlag": 0,
+          "displayFlag": 1,
+          "readFlag": true,
+          "username": "",
+          "replyCommentId": "",
+          "replyContent": "",
+          "levelTwoComment": []
+        }
+      },
+      "response": {
+        "status": 201,
+        "errCode": 0,
+        "errMsg": "request successful",
+        "data": {
+          "commentId": "1503000000000000011",
+          "clientId": "synth-client-1503000000000000001",
+          "comment": {
+            "commentId": "1503000000000000011",
+            "commentNickname": "",
+            "commentContent": "小国缺乏战略纵深，对极致秩序与效率的执念，本质是地缘脆弱性下的生存代偿。你认为在大国博弈加剧的周期里，这种“精密仪器”式的治理模式韧性几何？\nFor a city-state without strategic depth, rigid efficiency is an existential hedge against geopolitical vulnerability. Amid rising global volatility, how durable is this precision-engineered social order?",
+            "commentCreatetime": "1791782835",
+            "commentLikeCount": 0,
+            "downContinueFlag": 0,
+            "visibleFlag": 1,
+            "displayFlag": 2,
+            "readFlag": false,
+            "username": "v2_synthetic_author_finder_id@finder",
+            "replyCommentId": "1503000000000000001",
+            "replyContent": "Singapore is a totalitarian society demanding total compliance.",
+            "levelTwoComment": []
+          },
+          "baseResp": {
+            "errcode": 0,
+            "errmsg": ""
+          }
+        }
+      }
+    },
+    {
+      "user": "wy",
+      "style": "PHILOSOPHICAL (哲理思辨 / 对比剖析)",
+      "request": {
+        "endpoint": "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/create_comment",
+        "exportId": "export/synth_video_888",
+        "rootCommentId": "1503000000000000002",
+        "replyCommentId": "1503000000000000002",
+        "content": "法式松弛以让渡部分社会效率为代价，换取个体浪漫与街头权利；新加坡则以让渡部分个体边界，换取绝对的安全与极致繁荣。文明没有标答，不过是各自签署并履行的社会契约。\nFrance sacrifices collective efficiency for romantic individualism; Singapore trades personal frontiers for impeccable security. Civilizations offer no absolute answers—only divergent social contracts and their costs.",
+        "clientId": "synth-client-1503000000000000002",
+        "_log_finder_id": "v2_synthetic_author_finder_id@finder",
+        "comment": {
+          "commentId": "1503000000000000002",
+          "commentNickname": "wy",
+          "commentContent": "对比法国 可能真的是这样",
+          "commentCreatetime": "1791779380",
+          "commentLikeCount": 1,
+          "downContinueFlag": 0,
+          "visibleFlag": 0,
+          "displayFlag": 0,
+          "readFlag": true,
+          "username": "",
+          "replyCommentId": "",
+          "replyContent": "",
+          "levelTwoComment": []
+        }
+      },
+      "response": {
+        "status": 201,
+        "errCode": 0,
+        "errMsg": "request successful",
+        "data": {
+          "commentId": "1503000000000000012",
+          "clientId": "synth-client-1503000000000000002",
+          "comment": {
+            "commentId": "1503000000000000012",
+            "commentNickname": "",
+            "commentContent": "法式松弛以让渡部分社会效率为代价，换取个体浪漫与街头权利；新加坡则以让渡部分个体边界，换取绝对的安全与极致繁荣。文明没有标答，不过是各自签署并履行的社会契约。\nFrance sacrifices collective efficiency for romantic individualism; Singapore trades personal frontiers for impeccable security. Civilizations offer no absolute answers—only divergent social contracts and their costs.",
+            "commentCreatetime": "1791782846",
+            "commentLikeCount": 0,
+            "downContinueFlag": 0,
+            "visibleFlag": 1,
+            "displayFlag": 2,
+            "readFlag": false,
+            "username": "v2_synthetic_author_finder_id@finder",
+            "replyCommentId": "1503000000000000002",
+            "replyContent": "对比法国 可能真的是这样",
+            "levelTwoComment": []
+          },
+          "baseResp": {
+            "errcode": 0,
+            "errmsg": ""
+          }
+        }
+      }
+    },
+    {
+      "user": "jia",
+      "style": "HUMOROUS (幽默互动 / 机智风趣)",
+      "request": {
+        "endpoint": "/micro/interaction/cgi-bin/mmfinderassistant-bin/comment/create_comment",
+        "exportId": "export/synth_video_888",
+        "rootCommentId": "1503000000000000004",
+        "replyCommentId": "1503000000000000004",
+        "content": "李光耀先生曾言“空调是改变新加坡命运的最伟大发明”——在室外 40 度酷暑与室内 18 度寒冬的反复拉扯中，身体和神经确实很难学会真正的松弛。\nLee Kuan Yew once called air conditioning the single most impactful invention in Singapore's history. Oscillating between equatorial heat and 18°C indoor chill, true relaxation remains elusive.",
+        "clientId": "synth-client-1503000000000000004",
+        "_log_finder_id": "v2_synthetic_author_finder_id@finder",
+        "comment": {
+          "commentId": "1503000000000000004",
+          "commentNickname": "jia",
+          "commentContent": "一年四季酷热",
+          "commentCreatetime": "1791777202",
+          "commentLikeCount": 0,
+          "downContinueFlag": 0,
+          "visibleFlag": 0,
+          "displayFlag": 524288,
+          "readFlag": true,
+          "username": "",
+          "replyCommentId": "",
+          "replyContent": "",
+          "levelTwoComment": [
+            {
+              "commentId": "1503000000000000041",
+              "commentNickname": "Dinah9105",
+              "commentContent": "最高温度三十五度，你想象的酷热吧？",
+              "commentCreatetime": "1791781726",
+              "commentLikeCount": 1,
+              "downContinueFlag": 0,
+              "visibleFlag": 0,
+              "displayFlag": 8,
+              "readFlag": true,
+              "username": "v2_synthetic_viewer_finder_id@finder",
+              "replyCommentId": "1503000000000000004",
+              "replyContent": "一年四季酷热",
+              "levelTwoComment": []
+            }
+          ]
+        }
+      },
+      "response": {
+        "status": 201,
+        "errCode": 0,
+        "errMsg": "request successful",
+        "data": {
+          "commentId": "1503000000000000014",
+          "clientId": "synth-client-1503000000000000004",
+          "comment": {
+            "commentId": "1503000000000000014",
+            "commentNickname": "",
+            "commentContent": "李光耀先生曾言“空调是改变新加坡命运的最伟大发明”——在室外 40 度酷暑与室内 18 度寒冬的反复拉扯中，身体和神经确实很难学会真正的松弛。\nLee Kuan Yew once called air conditioning the single most impactful invention in Singapore's history. Oscillating between equatorial heat and 18°C indoor chill, true relaxation remains elusive.",
+            "commentCreatetime": "1791782856",
+            "commentLikeCount": 0,
+            "downContinueFlag": 0,
+            "visibleFlag": 1,
+            "displayFlag": 2,
+            "readFlag": false,
+            "username": "v2_synthetic_author_finder_id@finder",
+            "replyCommentId": "1503000000000000004",
+            "replyContent": "一年四季酷热",
+            "levelTwoComment": []
+          },
+          "baseResp": {
+            "errcode": 0,
+            "errmsg": ""
+          }
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "source_head": "0419de50cfd806353256db607878bdd34a096878",
+    "author_finder_id": "v2_synthetic_author_finder_id@finder",
+    "export_id": "export/synth_video_888"
+  }
+}
