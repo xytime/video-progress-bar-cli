@@ -7,26 +7,27 @@
     "enable_wechat_secondary_reply_live_submission": false
   },
   "acceptance_checks": {
-    "T01_scheme_a_contract": "PASSED",
-    "T02_input_comment_budget_and_hash": "PASSED",
-    "T03_audience_comments_ingestion": "PASSED",
+    "T01_comment_discovery_and_parsing": "PASSED",
+    "T02_pagination_completeness_and_folded_blocking": "PASSED",
+    "T03_comment_id_disambiguation": "PASSED",
     "T04_author_already_replied_safe_skip": "PASSED",
-    "T05_atomic_claim_and_submit_intent": "PASSED",
-    "T06_network_precheck_route_guard": "PASSED",
-    "T07_quotas_and_window_enforcement": "PASSED",
-    "T08_dropped_response_uncertain_reconcile": "PASSED",
+    "T05_atomic_claim_and_anti_duplicate_submission": "PASSED",
+    "T06_network_precheck_route_guard_and_account_verification": "PASSED",
+    "T07_approval_fingerprint_invalidation_and_single_consumption": "PASSED",
+    "T08_dropped_response_uncertain_read_only_reconcile": "PASSED",
     "T09_tombstone_survives_task_deletion": "PASSED",
-    "T10_telegram_approval_workflow": "PASSED",
-    "T11_dual_channel_censorship_gate": "PASSED",
-    "T12_prompt_injection_defense": "PASSED",
-    "T13_corpus_40_samples_integrity": "PASSED",
-    "T14_feature_flags_default_false": "PASSED",
-    "T15_cli_dry_run_zero_side_effect": "PASSED",
-    "T16_isolated_browser_chromium_e2e": "PASSED"
+    "T10_dual_confirmation_platform_and_dom_readback": "PASSED",
+    "T11_fact_evidence_refs_and_dual_channel_censorship": "PASSED",
+    "T12_strict_schema_and_prompt_injection_defense": "PASSED",
+    "T13_corpus_40_samples_integrity_and_pending_human_review": "PASSED",
+    "T14_shanghai_window_and_shared_rate_limiting": "PASSED",
+    "T15_cli_dry_run_and_reconcile_zero_side_effect": "PASSED",
+    "T16_isolated_browser_chromium_e2e_closed_loop": "PASSED"
   },
   "isolated_test_receipts": [
-    "/private/tmp/video-pytest-94kbbl2w",
-    "/private/tmp/video-pytest-ypo948vx"
+    "/private/tmp/video-pytest-nf2fo9o_",
+    "/private/tmp/video-pytest-nyarp__u",
+    "/private/tmp/video-pytest-4v_w4ga9"
   ],
   "offline_demo_evidence": {
     "command": "PYTHONPATH=src .venv/bin/python scripts/wechat_secondary_reply.py --demo",

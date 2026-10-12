@@ -9,6 +9,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-12 | Antigravity | 增加 REPLY 意图下 evidence_refs 事实依据校验 (T11) 与严格跨字段安全拦截 |
 | 1.0.0 | 2026-10-12 | Codex | 初始创建：实现二级回复生成门面、双语双通道审查门禁与提示注入防御 |
 """
 
@@ -289,7 +290,11 @@ class SecondaryReplyService:
             # 1. 严格格式校验
             validate_reply_length_and_format(draft.chinese_reply, draft.english_reply)
 
-            # 2. 首轮内容安全与政策审查
+            # 2. 检查事实依据引用 (T11: 绝不凭空捏造事实来源)
+            if not draft.evidence_refs or not all(isinstance(ref, str) and ref.strip() for ref in draft.evidence_refs):
+                raise SecondaryReplyContractError("生成建议回复必须包含有效的事实来源证据引用 (evidence_refs)")
+
+            # 3. 首轮内容安全与政策审查
             is_safe, error_detail = self.censor.check_reply_safety(
                 chinese_reply=draft.chinese_reply,
                 english_reply=draft.english_reply,

@@ -6,6 +6,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                                                    |
 |---------|------------|-------------------------------------|--------------------------------------------------------------------------------|
+| 3.97.0 | 2026-10-12 | Antigravity | 强化二级回复审批指纹与原子预占，补齐 SKIPPED 与 UNCERTAIN 只读对账 DAL 方法，统一时区与共享配额。 |
 | 3.96.0 | 2026-10-12 | Codex | 新增视频号二级回复观众评论、任务状态机、防重账本与尝试历史 DAL，支持原子预占与配额检查。 |
 | 3.95.1 | 2026-10-10 | Codex | AI 封面完成与二创入队共用事务，避免发布执行者抢跑漏单。 |
 | 3.95.0 | 2026-10-09 | Codex | 独立华尔街版本账本、原子就绪纳入及二创浏览器启动凭据。 |
@@ -2132,6 +2133,9 @@ class PipelineDB(WallstreetExperimentDAL):
                     approved_at TIMESTAMP DEFAULT NULL,
                     approval_expires_at TIMESTAMP DEFAULT NULL,
                     is_token_consumed INTEGER DEFAULT 0,
+                    bound_source_comment_hash TEXT DEFAULT NULL,
+                    bound_draft_revision INTEGER DEFAULT NULL,
+                    bound_reply_text_hash TEXT DEFAULT NULL,
                     lease_token TEXT DEFAULT NULL,
                     lease_expires_at TIMESTAMP DEFAULT NULL,
                     submit_intent_at TIMESTAMP DEFAULT NULL,
@@ -2152,6 +2156,16 @@ class PipelineDB(WallstreetExperimentDAL):
                 CREATE INDEX IF NOT EXISTS idx_wechat_secondary_reply_tasks_token
                 ON wechat_secondary_reply_tasks(approval_token)
             ''')
+
+            # 自迁移检查并补充绑定字段
+            cursor.execute("PRAGMA table_info(wechat_secondary_reply_tasks)")
+            sec_task_existing_cols = {col[1] for col in cursor.fetchall()}
+            if "bound_source_comment_hash" not in sec_task_existing_cols:
+                cursor.execute("ALTER TABLE wechat_secondary_reply_tasks ADD COLUMN bound_source_comment_hash TEXT DEFAULT NULL")
+            if "bound_draft_revision" not in sec_task_existing_cols:
+                cursor.execute("ALTER TABLE wechat_secondary_reply_tasks ADD COLUMN bound_draft_revision INTEGER DEFAULT NULL")
+            if "bound_reply_text_hash" not in sec_task_existing_cols:
+                cursor.execute("ALTER TABLE wechat_secondary_reply_tasks ADD COLUMN bound_reply_text_hash TEXT DEFAULT NULL")
 
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS wechat_secondary_reply_idempotency_ledger (
@@ -11970,10 +11984,28 @@ class PipelineDB(WallstreetExperimentDAL):
         lease_token: str,
         *,
         now: Optional[datetime.datetime] = None,
+        enforce_shared_quota: bool = False,
     ) -> bool:
-        """在浏览器点击提交前持久化不可重发边界。"""
-        now_text = self._wechat_interaction_timestamp(now)
+        """在浏览器点击提交前持久化不可重发边界。支持共享配额原子预占。"""
+        now_dt = now or datetime.datetime.now(datetime.timezone.utc)
+        if now_dt.tzinfo is None:
+            now_dt = now_dt.replace(tzinfo=datetime.timezone.utc)
+        now_text = self._wechat_interaction_timestamp(now_dt)
         with self.get_connection() as conn:
+            if enforce_shared_quota:
+                row_cur = conn.execute(
+                    "SELECT platform_post_id FROM wechat_interactions WHERE id = ?",
+                    (int(interaction_id),)
+                ).fetchone()
+                if row_cur:
+                    post_id = str(row_cur["platform_post_id"])
+                    quota_ok, quota_msg = self._check_reply_quota_conn(
+                        conn, post_id, now_dt, is_secondary_reply=False
+                    )
+                    if not quota_ok:
+                        self._logger.warning(f"[WeChatInteraction] 共享配额拦截首评发评: {quota_msg}")
+                        return False
+
             cursor = conn.execute(
                 '''
                 UPDATE wechat_interactions
@@ -12707,17 +12739,40 @@ class PipelineDB(WallstreetExperimentDAL):
         approval_token: str,
         expires_at_iso: str,
         approver_id: Optional[str] = None,
+        source_comment_hash: Optional[str] = None,
+        draft_revision: Optional[int] = None,
+        reply_text_hash: Optional[str] = None,
     ) -> bool:
         """服务端绑定随机审批 Token 与过期时间，状态置为 PENDING_REVIEW。"""
         with self.get_connection() as conn:
+            task = conn.execute(
+                "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?",
+                (int(task_id),),
+            ).fetchone()
+            if not task:
+                return False
+
+            rev = draft_revision if draft_revision is not None else int(task["revision"])
+            text_to_hash = task["formatted_reply"] or f"{task['chinese_reply']}\n{task['english_reply']}"
+            t_hash = reply_text_hash or hashlib.sha256(unicodedata.normalize("NFC", text_to_hash).encode("utf-8")).hexdigest()
+
+            s_hash = source_comment_hash
+            if not s_hash:
+                c_row = conn.execute(
+                    "SELECT content_hash FROM wechat_audience_comments WHERE platform_post_id = ? AND comment_id = ?",
+                    (task["platform_post_id"], task["comment_id"]),
+                ).fetchone()
+                s_hash = c_row["content_hash"] if c_row else ""
+
             cur = conn.execute(
                 """
                 UPDATE wechat_secondary_reply_tasks
                 SET approval_token = ?, approval_expires_at = ?, approver_id = ?,
+                    bound_source_comment_hash = ?, bound_draft_revision = ?, bound_reply_text_hash = ?,
                     status = 'PENDING_REVIEW', is_token_consumed = 0, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ? AND status IN ('DRAFTED', 'PENDING_REVIEW')
                 """,
-                (approval_token, expires_at_iso, approver_id, int(task_id)),
+                (approval_token, expires_at_iso, approver_id, s_hash, rev, t_hash, int(task_id)),
             )
             conn.commit()
             return cur.rowcount > 0
@@ -12759,6 +12814,24 @@ class PipelineDB(WallstreetExperimentDAL):
             if task["approver_id"] and str(task["approver_id"]) != str(approver_id):
                 return False, "APPROVER_MISMATCH"
 
+            # 校验绑定的草稿版本与正文指纹 (T07: 草稿变更不放行)
+            if task["bound_draft_revision"] is not None and task["revision"] != task["bound_draft_revision"]:
+                return False, "DRAFT_REVISION_CHANGED"
+
+            current_text = task["formatted_reply"] or f"{task['chinese_reply']}\n{task['english_reply']}"
+            current_t_hash = hashlib.sha256(unicodedata.normalize("NFC", current_text).encode("utf-8")).hexdigest()
+            if task["bound_reply_text_hash"] and task["bound_reply_text_hash"] != current_t_hash:
+                return False, "DRAFT_TEXT_CHANGED"
+
+            # 校验源评论指纹 (T07: 评论变更不放行)
+            if task["bound_source_comment_hash"]:
+                c_row = conn.execute(
+                    "SELECT content_hash FROM wechat_audience_comments WHERE platform_post_id = ? AND comment_id = ?",
+                    (task["platform_post_id"], task["comment_id"]),
+                ).fetchone()
+                if c_row and c_row["content_hash"] != task["bound_source_comment_hash"]:
+                    return False, "SOURCE_COMMENT_CHANGED"
+
             new_status = "APPROVED" if action == "APPROVE" else "REJECTED"
             conn.execute(
                 """
@@ -12786,6 +12859,7 @@ class PipelineDB(WallstreetExperimentDAL):
         now_iso = now.strftime("%Y-%m-%d %H:%M:%S")
 
         with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             query = "SELECT * FROM wechat_secondary_reply_tasks WHERE "
             params: List[Any] = []
             if task_id is not None:
@@ -12800,16 +12874,18 @@ class PipelineDB(WallstreetExperimentDAL):
                 return None
 
             tid = int(row["id"])
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE wechat_secondary_reply_tasks
                 SET status = 'CLAIMED', lease_token = ?, lease_expires_at = ?,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = ? AND (status = 'APPROVED' OR (status = 'CLAIMED' AND lease_expires_at < ?))
                 """,
-                (token, expires_at, tid),
+                (token, expires_at, tid, now_iso),
             )
             conn.commit()
+            if cur.rowcount == 0:
+                return None
             claimed = conn.execute(
                 "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?", (tid,)
             ).fetchone()
@@ -12820,44 +12896,56 @@ class PipelineDB(WallstreetExperimentDAL):
         platform_post_id: str,
         now_utc: Optional[datetime.datetime] = None,
     ) -> Tuple[bool, str]:
-        """核查运营安全预算与限制条件。
-
-        约束：
-        1. 上海时间窗口 08:30 <= time < 23:00
-        2. 单视频累计最多 3 条二级回复（首评不占此额度，且永不在午夜重置）
-        3. 账号滚动 60 分钟最多 10 次提交（首评与二级回复共计）
-        4. 最小提交间隔 15 秒
-        """
+        """核查运营安全预算与限制条件。"""
         now = now_utc or datetime.datetime.now(datetime.timezone.utc)
-        shanghai_tz = datetime.timezone(datetime.timedelta(hours=8))
-        now_sh = now.astimezone(shanghai_tz)
-        current_time_str = now_sh.strftime("%H:%M")
-        if not ("08:30" <= current_time_str < "23:00"):
-            return False, f"Outside Shanghai submission window (08:30-23:00): currently {current_time_str}"
-
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=datetime.timezone.utc)
         with self.get_connection() as conn:
-            return self._check_reply_quota_conn(conn, platform_post_id, now)
+            return self._check_reply_quota_conn(conn, platform_post_id, now, is_secondary_reply=True)
 
     def _check_reply_quota_conn(
         self,
         conn: sqlite3.Connection,
         platform_post_id: str,
         now_utc: datetime.datetime,
+        is_secondary_reply: bool = True,
     ) -> Tuple[bool, str]:
-        """事务内共享配额核查实现。"""
-        # 1. 单视频累计上限 3 条（永不午夜重置）
-        row = conn.execute(
-            """
-            SELECT COUNT(*) FROM wechat_secondary_reply_idempotency_ledger
-            WHERE platform_post_id = ? AND status IN ('INTENT', 'UNCERTAIN', 'VERIFIED')
-            """,
-            (platform_post_id,),
-        ).fetchone()
-        video_count = row[0] if row else 0
-        if video_count >= 3:
-            return False, f"Single video secondary reply limit reached ({video_count} >= 3)"
+        """事务内共享配额核查实现。
 
-        # 2. 账号滚动 60 分钟上限 10 次（首评 + 二级回复）
+        遵循：
+        1. 上海时间窗口 settings.wechat_reply_window_start_shanghai <= time < settings.wechat_reply_window_end_shanghai
+        2. 单视频累计最多 settings.wechat_reply_max_per_video 条二级回复（首评不占此额度，且永不在午夜重置）
+        3. 账号滚动 60 分钟最多 settings.wechat_reply_hourly_quota 次提交（首评与二级回复共计）
+        4. 最小提交间隔 settings.wechat_reply_min_interval_seconds 秒
+        """
+        if now_utc.tzinfo is None:
+            now_utc = now_utc.replace(tzinfo=datetime.timezone.utc)
+
+        # 1. 上海时间窗口核查 (原子事务内必须核验)
+        shanghai_tz = datetime.timezone(datetime.timedelta(hours=8))
+        now_sh = now_utc.astimezone(shanghai_tz)
+        current_time_str = now_sh.strftime("%H:%M")
+        win_start = getattr(settings, "wechat_reply_window_start_shanghai", "08:30")
+        win_end = getattr(settings, "wechat_reply_window_end_shanghai", "23:00")
+        if not (win_start <= current_time_str < win_end):
+            return False, f"Outside Shanghai submission window ({win_start}-{win_end}): currently {current_time_str}"
+
+        # 2. 单视频累计上限（仅二级回复受限，首评不占此额度，且永不午夜重置）
+        max_per_vid = getattr(settings, "wechat_reply_max_per_video", 3)
+        if is_secondary_reply:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) FROM wechat_secondary_reply_idempotency_ledger
+                WHERE platform_post_id = ? AND status IN ('INTENT', 'UNCERTAIN', 'VERIFIED')
+                """,
+                (platform_post_id,),
+            ).fetchone()
+            video_count = row[0] if row else 0
+            if video_count >= max_per_vid:
+                return False, f"Single video secondary reply limit reached ({video_count} >= {max_per_vid})"
+
+        # 3. 账号滚动 60 分钟上限（首评 + 二级回复共计）
+        hourly_limit = getattr(settings, "wechat_reply_hourly_quota", 10)
         window_start_utc = (now_utc - datetime.timedelta(minutes=60)).strftime("%Y-%m-%d %H:%M:%S")
 
         # 首评计数
@@ -12865,7 +12953,7 @@ class PipelineDB(WallstreetExperimentDAL):
             """
             SELECT COUNT(*) FROM wechat_interactions
             WHERE status IN ('COMMENTED', 'SUBMIT_INTENT', 'UNCERTAIN')
-              AND COALESCE(submit_intent_at, commented_at, updated_at, created_at) >= ?
+              AND datetime(COALESCE(submit_intent_at, commented_at, updated_at, created_at)) >= datetime(?)
             """,
             (window_start_utc,),
         ).fetchone()
@@ -12876,41 +12964,42 @@ class PipelineDB(WallstreetExperimentDAL):
             """
             SELECT COUNT(*) FROM wechat_secondary_reply_idempotency_ledger
             WHERE status IN ('INTENT', 'UNCERTAIN', 'VERIFIED')
-              AND created_at >= ?
+              AND datetime(created_at) >= datetime(?)
             """,
             (window_start_utc,),
         ).fetchone()
         secondary_count = row_sec[0] if row_sec else 0
 
         total_rolling = initial_count + secondary_count
-        if total_rolling >= 10:
-            return False, f"Account rolling 60m submission limit reached ({total_rolling} >= 10: {initial_count} initial + {secondary_count} secondary)"
+        if total_rolling >= hourly_limit:
+            return False, f"Account rolling 60m submission limit reached ({total_rolling} >= {hourly_limit}: {initial_count} initial + {secondary_count} secondary)"
 
-        # 3. 最小提交间隔 15 秒
-        interval_start_utc = (now_utc - datetime.timedelta(seconds=15)).strftime("%Y-%m-%d %H:%M:%S")
+        # 4. 最小提交间隔
+        min_interval = getattr(settings, "wechat_reply_min_interval_seconds", 15)
+        interval_start_utc = (now_utc - datetime.timedelta(seconds=min_interval)).strftime("%Y-%m-%d %H:%M:%S")
         row_recent_init = conn.execute(
             """
             SELECT 1 FROM wechat_interactions
             WHERE status IN ('COMMENTED', 'SUBMIT_INTENT', 'UNCERTAIN')
-              AND COALESCE(submit_intent_at, commented_at, updated_at, created_at) >= ?
+              AND datetime(COALESCE(submit_intent_at, commented_at, updated_at, created_at)) >= datetime(?)
             LIMIT 1
             """,
             (interval_start_utc,),
         ).fetchone()
         if row_recent_init:
-            return False, "Rate limit: minimum submission interval 15s violated by recent initial comment"
+            return False, f"Rate limit: minimum submission interval {min_interval}s violated by recent initial comment"
 
         row_recent_sec = conn.execute(
             """
             SELECT 1 FROM wechat_secondary_reply_idempotency_ledger
             WHERE status IN ('INTENT', 'UNCERTAIN', 'VERIFIED')
-              AND created_at >= ?
+              AND datetime(created_at) >= datetime(?)
             LIMIT 1
             """,
             (interval_start_utc,),
         ).fetchone()
         if row_recent_sec:
-            return False, "Rate limit: minimum submission interval 15s violated by recent secondary reply"
+            return False, f"Rate limit: minimum submission interval {min_interval}s violated by recent secondary reply"
 
         return True, "OK"
 
@@ -13176,3 +13265,116 @@ class PipelineDB(WallstreetExperimentDAL):
                 (platform_post_id, root_comment_id),
             ).fetchone()
             return dict(row) if row else None
+
+    def record_secondary_reply_skipped(
+        self,
+        task_id: int,
+        *,
+        reason: str = "SKIPPED_ALREADY_REPLIED",
+        evidence_path: Optional[str] = None,
+    ) -> bool:
+        """跳过二级回复（例如：作者已在手机端或先前回复过），记录状态为 SKIPPED。"""
+        with self.get_connection() as conn:
+            task = conn.execute(
+                "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?",
+                (int(task_id),),
+            ).fetchone()
+            if not task:
+                return False
+            # 若已明确提交成功 VERIFIED，不得改写为 SKIPPED
+            if task["status"] == "VERIFIED":
+                return False
+
+            conn.execute(
+                """
+                UPDATE wechat_secondary_reply_tasks
+                SET status = 'SKIPPED', error_message = ?, evidence_path = COALESCE(?, evidence_path),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (reason, evidence_path, int(task_id)),
+            )
+            conn.commit()
+            return True
+
+    def get_uncertain_secondary_reply_tasks(
+        self, platform_post_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """获取所有处于 UNCERTAIN 状态需进行只读对账的二级回复任务。"""
+        with self.get_connection() as conn:
+            if platform_post_id:
+                rows = conn.execute(
+                    "SELECT * FROM wechat_secondary_reply_tasks WHERE status = 'UNCERTAIN' AND platform_post_id = ? ORDER BY id ASC",
+                    (platform_post_id,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM wechat_secondary_reply_tasks WHERE status = 'UNCERTAIN' ORDER BY id ASC"
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    def reconcile_secondary_reply_uncertain(
+        self,
+        task_id: int,
+        *,
+        verified: bool,
+        platform_reply_comment_id: Optional[str] = None,
+        evidence_path: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> bool:
+        """只读对账决策落地：若在平台回读确认存在则转为 VERIFIED，若证实未出站且不存在则转为 FAILED，绝不盲目重发。"""
+        with self.get_connection() as conn:
+            task = conn.execute(
+                "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?",
+                (int(task_id),),
+            ).fetchone()
+            if not task or task["status"] != "UNCERTAIN":
+                return False
+
+            post_id = task["platform_post_id"]
+            root_id = task["comment_id"]
+
+            if verified:
+                now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                conn.execute(
+                    """
+                    UPDATE wechat_secondary_reply_tasks
+                    SET status = 'VERIFIED',
+                        platform_reply_comment_id = COALESCE(?, platform_reply_comment_id),
+                        evidence_path = COALESCE(?, evidence_path),
+                        verified_at = COALESCE(verified_at, ?),
+                        error_message = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (platform_reply_comment_id, evidence_path, now_iso, int(task_id)),
+                )
+                conn.execute(
+                    """
+                    UPDATE wechat_secondary_reply_idempotency_ledger
+                    SET status = 'VERIFIED',
+                        reply_comment_id = COALESCE(?, reply_comment_id),
+                        verified_at = COALESCE(verified_at, ?)
+                    WHERE platform_post_id = ? AND root_comment_id = ?
+                    """,
+                    (platform_reply_comment_id, now_iso, post_id, root_id),
+                )
+            else:
+                err_msg = reason or "只读对账确认：平台未找到该回复，置为终态失败以防误重试"
+                conn.execute(
+                    """
+                    UPDATE wechat_secondary_reply_tasks
+                    SET status = 'FAILED',
+                        error_message = ?,
+                        evidence_path = COALESCE(?, evidence_path),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (err_msg, evidence_path, int(task_id)),
+                )
+                # 防重账本保持 UNCERTAIN，永久作为防盲发防重试墓碑
+
+            conn.commit()
+            return True
+
+

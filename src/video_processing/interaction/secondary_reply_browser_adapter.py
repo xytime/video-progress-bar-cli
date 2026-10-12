@@ -13,6 +13,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-12 | Antigravity | 强化路由守卫（检查账号、必填字段与防重复出站 T05/T06）、补全独立回读严格校验 (T10)、联动 SKIPPED 状态 (T04) |
 | 1.0.0 | 2026-10-12 | Codex | 初始创建：实现二级回复浏览器适配器、路由前置守卫、提交意图原子持久化与双重回读验证 |
 """
 
@@ -65,7 +66,7 @@ def _normalized_text(value: object) -> str:
 class SecondaryReplySubmissionGuard:
     """二级回复网络发送前强校验守卫 (Route Guard)。
 
-    任何非受信来源、错作品、错 root/reply ID、错账号、错正文均在网络发送前硬拦截。
+    任何非受信来源、错作品、错 root/reply ID、错账号、错正文、缺少必填字段或重复出站请求均在网络发送前硬拦截。
     """
 
     def __init__(
@@ -73,10 +74,12 @@ class SecondaryReplySubmissionGuard:
         expected_export_id: str,
         expected_root_comment_id: str,
         expected_content: str,
+        expected_finder_id: Optional[str] = None,
     ) -> None:
         self.expected_export_id = expected_export_id
         self.expected_root_comment_id = expected_root_comment_id
         self.expected_content = expected_content
+        self.expected_finder_id = expected_finder_id
         self.requests: List[Dict[str, Any]] = []
         self.mismatched_requests: List[Dict[str, Any]] = []
         self.responses: List[Dict[str, Any]] = []
@@ -89,6 +92,16 @@ class SecondaryReplySubmissionGuard:
         url_path = urlparse(request.url).path
         if url_path not in COMMENT_SUBMIT_PATHS:
             return True
+
+        # T05: 防重复出站发评请求（页面重复请求硬拦截）
+        if self.requests:
+            logger.error("[SecondaryReplySubmissionGuard] 拦截到重复出站发评请求，触发硬阻断！")
+            self.mismatched_requests.append({
+                "reason": "DUPLICATE_SUBMISSION",
+                "details": "一次流程仅允许最多一次出站发评请求",
+                "url": request.url,
+            })
+            return False
 
         is_safe_origin = is_official_wechat_origin(request.url) or request.url.startswith("http://wechat-fixture.invalid")
         if not is_safe_origin:
@@ -110,10 +123,22 @@ class SecondaryReplySubmissionGuard:
             })
             return False
 
+        # T06: 必填字段缺失核验
+        for req_f in ("exportId", "rootCommentId", "replyCommentId", "content"):
+            if not payload.get(req_f):
+                logger.error("[SecondaryReplySubmissionGuard] 拦截到缺少必填字段 %s 的出站请求", req_f)
+                self.mismatched_requests.append({
+                    "reason": "MISSING_REQUIRED_FIELD",
+                    "details": f"Missing required field: {req_f}",
+                    "payload": payload,
+                })
+                return False
+
         req_export_id = str(payload.get("exportId") or "").strip()
         req_root_id = str(payload.get("rootCommentId") or "").strip()
         req_reply_id = str(payload.get("replyCommentId") or "").strip()
         req_content = str(payload.get("content") or "").strip()
+        req_finder_id = str(payload.get("_log_finder_id") or payload.get("username") or "").strip()
 
         # 核心契约核对
         mismatches = []
@@ -124,10 +149,12 @@ class SecondaryReplySubmissionGuard:
         if req_reply_id != self.expected_root_comment_id:
             mismatches.append(f"replyCommentId mismatch: '{req_reply_id}' != '{self.expected_root_comment_id}'")
         if _normalized_text(req_content) != _normalized_text(self.expected_content):
-            mismatches.append(f"content mismatch")
+            mismatches.append("content mismatch")
+        if self.expected_finder_id and req_finder_id and req_finder_id != self.expected_finder_id:
+            mismatches.append(f"account mismatch: '{req_finder_id}' != '{self.expected_finder_id}'")
 
         if mismatches:
-            logger.error("[SecondaryReplySubmissionGuard] 网络发送前守卫拦截到错帖/错ID请求: %s", mismatches)
+            logger.error("[SecondaryReplySubmissionGuard] 网络发送前守卫拦截到错帖/错ID/错账号请求: %s", mismatches)
             self.mismatched_requests.append({
                 "reason": "FIELD_MISMATCH",
                 "details": mismatches,
@@ -344,6 +371,20 @@ class SecondaryReplyBrowserAdapter:
                 page.screenshot(path=str(evidence_img))
             except Exception:
                 pass
+            if verify_only:
+                if db:
+                    db.record_secondary_reply_success(
+                        task_id=task_id,
+                        platform_reply_comment_id="reconciled_existing_reply",
+                        evidence_path=str(evidence_img),
+                    )
+                return "VERIFIED", str(evidence_img), "对账确认：作者二级回复已存在于平台"
+            if db:
+                db.record_secondary_reply_skipped(
+                    task_id=task_id,
+                    reason="AUTHOR_ALREADY_REPLIED",
+                    evidence_path=str(evidence_img),
+                )
             return "SKIPPED_ALREADY_REPLIED", str(evidence_img), "作者已在手机端或先前回复此评论"
 
         if parent_item is None:
@@ -418,15 +459,42 @@ class SecondaryReplyBrowserAdapter:
         except Exception:
             pass
 
-        # 双重成功确认：平台返回成功 且 独立回读确认存在
+        # T10 铁律：双重成功确认 — 平台返回成功 且 独立回读确认存在于父评论下
         if api_success:
-            if db and new_reply_id:
-                db.record_secondary_reply_success(
-                    task_id=task_id,
-                    platform_reply_comment_id=new_reply_id,
-                    evidence_path=str(evidence_img),
+            readback_ok = False
+            if parent_item is not None:
+                # 检查父评论节点下是否存在新 commentId、作者标识或回复文案前缀
+                readback_loc = parent_item.locator(
+                    f"[data-comment-id='{new_reply_id}'], .sub-comment:has-text('{_normalized_text(reply_content)[:12]}')"
                 )
-            return "VERIFIED", str(evidence_img), None
+                if readback_loc.count() > 0:
+                    readback_ok = True
+                else:
+                    author_sub = parent_item.locator(".level-two, [data-level-two]").locator(
+                        "[data-author-role='author'], :has-text('作者')"
+                    )
+                    if author_sub.count() > 0:
+                        readback_ok = True
+
+            if readback_ok:
+                if db and new_reply_id:
+                    db.record_secondary_reply_success(
+                        task_id=task_id,
+                        platform_reply_comment_id=new_reply_id,
+                        evidence_path=str(evidence_img),
+                    )
+                return "VERIFIED", str(evidence_img), None
+            else:
+                logger.warning(
+                    "[SecondaryReplyBrowser] 平台返回 201 成功，但独立回读未找到回复节点（可能延迟或被隐藏），转入 UNCERTAIN 对账"
+                )
+                if db:
+                    db.record_secondary_reply_uncertain(
+                        task_id=task_id,
+                        error_message="平台接口成功返回 201，但页面独立回读未找到回复节点，转入只读对账",
+                        evidence_path=str(evidence_img),
+                    )
+                return "UNCERTAIN", str(evidence_img), "平台返回 201 但独立回读未确认，转入 UNCERTAIN"
 
         # 若发出了请求但未收到明确成功回执，必须进入 UNCERTAIN 只读对账
         if guard.requests:

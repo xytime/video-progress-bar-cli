@@ -26,6 +26,9 @@ from video_processing.interaction.secondary_reply_contract import (
     SecondaryReplyStatus,
     SecondaryReplyContractError,
     IllegalControlCharError,
+    TopLevelPaginationStatus,
+    SecondaryPaginationStatus,
+    parse_wechat_comment_list_payload,
     validate_reply_length_and_format,
     validate_input_comment,
     MAX_ZH_CODEPOINTS,
@@ -381,3 +384,339 @@ def test_quota_limits_single_video_and_rolling_hour(test_db: PipelineDB):
     allowed, reason = test_db.check_wechat_reply_quota(post_id, now_utc=day_time.astimezone(UTC))
     assert allowed is False
     assert "Single video secondary reply limit reached" in reason
+
+
+def test_parse_comment_list_payload_discovery_t01():
+    """T01: 无作者首评且仅 1 条观众评论依然稳定发现；downContinueFlag=0 判定为 COMPLETE。"""
+    payload = {
+        "comment_list": {
+            "data": {
+                "comment": [
+                    {
+                        "commentId": "c_only_one",
+                        "commentNickname": "用户A",
+                        "commentContent": "很好的分析",
+                        "commentCreatetime": "1700000000",
+                        "levelTwoComment": [],
+                    }
+                ],
+                "downContinueFlag": 0,
+                "lastBuff": "token_end",
+            }
+        }
+    }
+    res = parse_wechat_comment_list_payload(payload, platform_post_id="export/test_t01")
+    assert res.top_level_status == TopLevelPaginationStatus.COMPLETE
+    assert res.author_first_comment is None
+    assert len(res.comments) == 1
+    assert res.comments[0].comment_id == "c_only_one"
+    assert res.secondary_states["c_only_one"] == SecondaryPaginationStatus.NO_REPLIES
+
+
+def test_parse_comment_list_payload_folded_pagination_t02():
+    """T02: 分别判断一级与二级分页完整性，未知折叠或二级 downContinueFlag=1 标记为 UNSUPPORTED_FOLDED_PAGINATION。"""
+    payload = {
+        "comment_list": {
+            "data": {
+                "comment": [
+                    {
+                        "commentId": "c_folded",
+                        "commentNickname": "热评用户",
+                        "commentContent": "这是大热评",
+                        "downContinueFlag": 1,
+                        "levelTwoComment": [
+                            {"commentId": "sub_1", "commentContent": "赞同", "downContinueFlag": 0}
+                        ],
+                    },
+                    {
+                        "commentId": "c_normal",
+                        "commentNickname": "普通用户",
+                        "commentContent": "这是普通评论",
+                        "downContinueFlag": 0,
+                        "levelTwoComment": [],
+                    },
+                ],
+                "downContinueFlag": 1,
+                "lastBuff": "token_more",
+            }
+        }
+    }
+    res = parse_wechat_comment_list_payload(payload, platform_post_id="export/test_t02")
+    assert res.top_level_status == TopLevelPaginationStatus.HAS_MORE
+    assert res.secondary_states["c_folded"] == SecondaryPaginationStatus.UNSUPPORTED_FOLDED_PAGINATION
+    assert "c_folded" in res.unsupported_comments
+    assert res.secondary_states["c_normal"] == SecondaryPaginationStatus.NO_REPLIES
+
+
+def test_parse_comment_list_disambiguation_t03():
+    """T03: 相同昵称、相同正文的不同评论根据 commentId 精准消歧，绝不串号。"""
+    payload = {
+        "comment_list": {
+            "data": {
+                "comment": [
+                    {
+                        "commentId": "c_dup_101",
+                        "commentNickname": "张三",
+                        "commentContent": "支持！",
+                        "commentCreatetime": "1700000001",
+                    },
+                    {
+                        "commentId": "c_dup_102",
+                        "commentNickname": "张三",
+                        "commentContent": "支持！",
+                        "commentCreatetime": "1700000002",
+                    },
+                ],
+                "downContinueFlag": 0,
+            }
+        }
+    }
+    res = parse_wechat_comment_list_payload(payload, platform_post_id="export/test_t03")
+    assert len(res.comments) == 2
+    assert res.comments[0].comment_id == "c_dup_101"
+    assert res.comments[1].comment_id == "c_dup_102"
+    assert res.comments[0].content_hash == res.comments[1].content_hash
+
+
+def test_parse_comment_list_strict_schema_rejection_t12():
+    """T12: 严格 Schema 校验，拒绝类型强转与非法控制字符。"""
+    # 1. commentId 必须为 str，整型拒绝
+    payload_bad_type = {
+        "comment_list": {
+            "data": {
+                "comment": [{"commentId": 12345, "commentContent": "text"}],
+                "downContinueFlag": 0,
+            }
+        }
+    }
+    with pytest.raises(SecondaryReplyContractError, match="commentId 必须为字符串类型"):
+        parse_wechat_comment_list_payload(payload_bad_type, platform_post_id="p1", strict_schema=True)
+
+    # 2. 正文包含控制字符拒绝
+    payload_ctrl = {
+        "comment_list": {
+            "data": {
+                "comment": [{"commentId": "c1", "commentContent": "评论内容\x00注入"}],
+                "downContinueFlag": 0,
+            }
+        }
+    }
+    with pytest.raises(IllegalControlCharError, match="非法控制字符"):
+        parse_wechat_comment_list_payload(payload_ctrl, platform_post_id="p1", strict_schema=True)
+
+
+def test_atomic_claim_concurrency_race_condition_t05(test_db: PipelineDB):
+    """T05: 两个 Worker 同时竞争同一 APPROVED 任务，仅一人原子领取成功。"""
+    post_id = "export/synth_race"
+    cid = "c_race_1"
+
+    task_id = test_db.create_or_update_secondary_reply_task(
+        platform_post_id=post_id,
+        comment_id=cid,
+        intent="REPLY",
+        style="MACRO",
+        chinese_reply="原子抢占测试",
+        provider="rule_mock",
+        status="APPROVED",
+    )
+
+    # Worker A 领取
+    claimed_a = test_db.claim_approved_reply_task(lease_seconds=60, task_id=task_id)
+    assert claimed_a is not None
+    assert claimed_a["status"] == "CLAIMED"
+
+    # Worker B 试图领取同一任务
+    claimed_b = test_db.claim_approved_reply_task(lease_seconds=60, task_id=task_id)
+    assert claimed_b is None
+
+
+def test_approval_fingerprint_invalidation_on_draft_change_t07(test_db: PipelineDB):
+    """T07: 审批绑定正文与草稿版本哈希，草稿被篡改或升级版本后，原审批 Token 失效。"""
+    post_id = "export/synth_fp"
+    cid = "c_fp_1"
+
+    task_id = test_db.create_or_update_secondary_reply_task(
+        platform_post_id=post_id,
+        comment_id=cid,
+        intent="REPLY",
+        style="MACRO",
+        chinese_reply="原始方案内容",
+        provider="rule_mock",
+        status="PENDING_REVIEW",
+    )
+
+    token = "token_abc_123"
+    expires = (datetime.datetime.now(UTC) + datetime.timedelta(hours=2)).isoformat()
+    ok_bind = test_db.bind_reply_task_approval_request(
+        task_id=task_id,
+        approval_token=token,
+        expires_at_iso=expires,
+        source_comment_hash="cmt_hash_001",
+        draft_revision=1,
+        reply_text_hash=hashlib.sha256("原始方案内容".encode()).hexdigest(),
+    )
+    assert ok_bind is True
+
+    # 外部修改草稿正文 -> 升级 revision 为 2
+    test_db.create_or_update_secondary_reply_task(
+        platform_post_id=post_id,
+        comment_id=cid,
+        intent="REPLY",
+        style="MACRO",
+        chinese_reply="被篡改后的新内容",
+        provider="rule_mock",
+        status="PENDING_REVIEW",
+    )
+
+    # 试图消费原 Token
+    ok_consume, reason = test_db.consume_reply_task_approval(
+        task_id=task_id,
+        token=token,
+        approver_id="admin_1",
+        action="APPROVE",
+    )
+    assert ok_consume is False
+    assert reason in ("DRAFT_TEXT_CHANGED", "DRAFT_REVISION_CHANGED", "TOKEN_MISMATCH")
+
+
+def test_record_secondary_reply_skipped_t04(test_db: PipelineDB):
+    """T04: 评论已回复时安全转入 SKIPPED，且 VERIFIED 终态不可覆盖。"""
+    post_id = "export/synth_skip"
+    cid = "c_skip_1"
+
+    task_id = test_db.create_or_update_secondary_reply_task(
+        platform_post_id=post_id,
+        comment_id=cid,
+        intent="REPLY",
+        style="PRAGMATIC",
+        chinese_reply="测试跳过",
+        provider="rule_mock",
+        status="CLAIMED",
+    )
+
+    ok_skip = test_db.record_secondary_reply_skipped(task_id, reason="AUTHOR_ALREADY_REPLIED")
+    assert ok_skip is True
+    task = test_db.get_secondary_reply_task(task_id)
+    assert task["status"] == "SKIPPED"
+    assert task["error_message"] == "AUTHOR_ALREADY_REPLIED"
+
+
+def test_uncertain_tasks_reconcile_flow_t10(test_db: PipelineDB):
+    """T10: 异常任务进入 UNCERTAIN，提供只读对账查询与安全终结。"""
+    post_id = "export/synth_unc"
+    cid = "c_unc_1"
+
+    task_id = test_db.create_or_update_secondary_reply_task(
+        platform_post_id=post_id,
+        comment_id=cid,
+        intent="REPLY",
+        style="PRAGMATIC",
+        chinese_reply="测试对账",
+        provider="rule_mock",
+        status="SUBMIT_INTENT",
+    )
+
+    test_db.record_secondary_reply_uncertain(task_id, error_message="网络假死，未收到明确回执")
+    unc_tasks = test_db.get_uncertain_secondary_reply_tasks(post_id)
+    assert len(unc_tasks) == 1
+    assert unc_tasks[0]["id"] == task_id
+
+    # 只读对账证实未出站：安全终结为 FAILED
+    ok_reconcile = test_db.reconcile_secondary_reply_uncertain(
+        task_id=task_id,
+        verified=False,
+        reason="平台回读未发现，证实未出站",
+    )
+    assert ok_reconcile is True
+    task_after = test_db.get_secondary_reply_task(task_id)
+    assert task_after["status"] == "FAILED"
+    assert "平台回读未发现" in task_after["error_message"]
+
+
+def test_shanghai_window_enforced_in_record_submit_intent_t14(test_db: PipelineDB):
+    """T14: 提交意图事务直接硬拦截非上海工作窗口（08:30-23:00）。"""
+    post_id = "export/synth_window"
+    cid = "c_win_1"
+
+    task_id = test_db.create_or_update_secondary_reply_task(
+        platform_post_id=post_id,
+        comment_id=cid,
+        intent="REPLY",
+        style="MACRO",
+        chinese_reply="时段测试",
+        provider="rule_mock",
+        status="APPROVED",
+    )
+    claimed = test_db.claim_approved_reply_task(task_id=task_id)
+    assert claimed is not None
+
+    # 上海凌晨 03:00
+    sh_tz = datetime.timezone(datetime.timedelta(hours=8))
+    night_time = datetime.datetime(2026, 10, 12, 3, 0, 0, tzinfo=sh_tz)
+    ok, reason = test_db.record_secondary_reply_submit_intent(
+        task_id, claimed["lease_token"], now_utc=night_time.astimezone(UTC).isoformat()
+    )
+    assert ok is False
+    assert "Outside Shanghai submission window" in reason
+
+
+def test_shared_quota_rate_limiting_across_tables_t14(test_db: PipelineDB, tmp_path: Path):
+    """T14: 共享配额跨表节流（首评与二级回复共享 15 秒最小间隔）。"""
+    post_id = "export/synth_shared_rate"
+    cid = "c_shared_1"
+
+    # 创建关联视频与发布确认
+    test_db.add_video("yt_shared_quota", "Test Video", "ch_test_1", score=80)
+    shot_file = tmp_path / "shot.png"
+    shot_file.write_bytes(b"dummy")
+    pub = test_db.record_wechat_publication_confirmation(
+        "yt_shared_quota",
+        evidence_path=str(shot_file),
+        state="PUBLISHED",
+        platform_post_id=post_id,
+    )
+    pub_id = pub["id"]
+
+    # 在 wechat_interactions 记录首评提交意图
+    sh_tz = datetime.timezone(datetime.timedelta(hours=8))
+    t0 = datetime.datetime(2026, 10, 12, 10, 0, 0, tzinfo=sh_tz)
+    t0_utc = t0.astimezone(UTC).isoformat()
+
+    with test_db.get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO wechat_interactions (
+                publication_id, platform_post_id, interaction_type, provider, comment_text, status, submit_intent_at, created_at, updated_at
+            ) VALUES (?, ?, 'COMMENT', 'rule_mock', '首评引导', 'SUBMIT_INTENT', ?, ?, ?)
+            """,
+            (pub_id, post_id, t0_utc, t0_utc, t0_utc),
+        )
+        conn.commit()
+
+    # 10 秒后试图记录二级回复提交意图（必须被 15 秒共享间隔拦截）
+    t_10s_later = (t0 + datetime.timedelta(seconds=10)).astimezone(UTC).isoformat()
+    task_id = test_db.create_or_update_secondary_reply_task(
+        platform_post_id=post_id,
+        comment_id=cid,
+        intent="REPLY",
+        style="MACRO",
+        chinese_reply="间隔拦截测试",
+        provider="rule_mock",
+        status="APPROVED",
+    )
+    claimed = test_db.claim_approved_reply_task(task_id=task_id)
+
+    ok, reason = test_db.record_secondary_reply_submit_intent(
+        task_id, claimed["lease_token"], now_utc=t_10s_later
+    )
+    assert ok is False
+    assert "Rate limit: minimum submission interval 15s violated" in reason
+
+    # 20 秒后再次尝试（超过 15 秒间隔，允许通过）
+    t_20s_later = (t0 + datetime.timedelta(seconds=20)).astimezone(UTC).isoformat()
+    ok_pass, msg_pass = test_db.record_secondary_reply_submit_intent(
+        task_id, claimed["lease_token"], now_utc=t_20s_later
+    )
+    assert ok_pass is True
+    assert msg_pass == "INTENT_RECORDED"
+

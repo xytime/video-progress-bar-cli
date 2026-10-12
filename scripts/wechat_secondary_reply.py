@@ -7,6 +7,7 @@ dry-run 模式下数据库完全只读，不启动浏览器、不调用外部 AP
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-12 | Antigravity | 接入严格 API 载荷解析器 (T01/T02/T03/T12) 与只读对账 (--reconcile) 审计支持 |
 | 1.1.0 | 2026-10-12 | Codex | 新增 --demo 离线 4 路径重现验证套件（成功防重/守卫拦截/异常对账/墓碑持久） |
 | 1.0.0 | 2026-10-12 | Codex | 初始创建：实现二级回复 CLI、dry-run、审批流与状态机调度 |
 """
@@ -41,6 +42,9 @@ from video_processing.interaction.secondary_reply_contract import (
     AudienceCommentRecord,
     SecondaryReplyIntent,
     SecondaryReplyStyle,
+    TopLevelPaginationStatus,
+    SecondaryPaginationStatus,
+    parse_wechat_comment_list_payload,
     validate_input_comment,
 )
 from video_processing.interaction.secondary_reply_service import (
@@ -66,12 +70,24 @@ def run_dry_run_inspection(db: PipelineDB, platform_post_id: str) -> Dict[str, A
     }
 
 
+def run_reconcile_inspection(db: PipelineDB, platform_post_id: Optional[str] = None) -> Dict[str, Any]:
+    """对 UNCERTAIN 状态的二级回复任务进行只读对账审计，零写操作零副作用。"""
+    tasks = db.get_uncertain_secondary_reply_tasks(platform_post_id)
+    return {
+        "platform_post_id": platform_post_id,
+        "uncertain_count": len(tasks),
+        "tasks": tasks,
+        "mode": "RECONCILE_READ_ONLY",
+        "recommendation": "对账模式仅执行只读回查与审计，绝不自动盲目重发出站请求",
+    }
+
+
 def run_offline_4path_demo() -> Dict[str, Any]:
     """离线 4 路径重现验证 Demo。
 
-    1. 路径一（成功与防重）：发现 -> 起草 -> 虚拟审批 -> 提交意图落盘 -> 回执与回读 -> VERIFIED。二次运行被防重账本拦截。
+    1. 路径一（成功与防重）：解析真实载荷 -> 发现入库 -> 起草 -> 虚拟审批 -> 提交意图落盘 -> 回执与回读 -> VERIFIED。二次运行被防重账本拦截。
     2. 路径二（前置路由守卫）：错作品 exportId 或错 rootCommentId 在网络发送前硬拦截，零出站流量。
-    3. 路径三（异常只读对账）：提交后网络丢包/假死，安全转入 UNCERTAIN，禁止二次盲发。
+    3. 路径三（异常只读对账）：提交后网络丢包/假死，安全转入 UNCERTAIN，执行只读对账。
     4. 路径四（墓碑持久保护）：任务被物理删除后，独立防重账本墓碑依然阻断重发。
     """
     logger.info("开始执行离线 4 路径重现验证 Demo...")
@@ -85,30 +101,47 @@ def run_offline_4path_demo() -> Dict[str, Any]:
         # 路径一：全链路成功与二次防重拦截
         # ==========================================
         logger.info("[Demo] 路径一：开始全链路成功与二次防重验证...")
-        post_id = "export/demo_video_001"
-        root_id = "demo_root_cmt_101"
-        comment_text = "降息周期对普通居民资产配置有什么建议？"
+        post_id = "export/synth_video_888"
+        fixture_path = PROJECT_ROOT / "tests" / "fixtures" / "secondary_reply" / "sanitized_api_responses.json"
+        with open(fixture_path, "r", encoding="utf-8") as f:
+            fixture_data = json.load(f)
 
-        # 1. 发现并入库观众评论
-        norm_content, is_trunc, content_hash = validate_input_comment(comment_text)
-        db.save_discovered_audience_comments(post_id, [{
-            "comment_id": root_id,
-            "nickname": "用户老王",
-            "content": norm_content,
-            "createtime": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-        }])
-        comment_rec = AudienceCommentRecord(
+        # 1. 严格 API 载荷解析（T01/T02/T03/T12）
+        parse_res = parse_wechat_comment_list_payload(
+            fixture_data["comment_list"],
             platform_post_id=post_id,
-            comment_id=root_id,
-            nickname="用户老王",
-            content=norm_content,
-            content_hash=content_hash,
-            createtime=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            author_username="v2_synthetic_author_finder_id@finder",
+            strict_schema=True,
         )
+        assert parse_res.top_level_status == TopLevelPaginationStatus.COMPLETE
+        assert parse_res.author_first_comment is not None
+        assert parse_res.author_first_comment.is_author is True
+        assert len(parse_res.comments) >= 1
+
+        db.save_discovered_audience_comments(
+            post_id,
+            [
+                {
+                    "comment_id": c.comment_id,
+                    "nickname": c.nickname,
+                    "content": c.content,
+                    "createtime": c.createtime,
+                }
+                for c in parse_res.comments
+            ],
+        )
+
+        target_comment = parse_res.comments[0]
+        root_id = target_comment.comment_id
 
         # 2. 生成起草（规则引擎保证符合 Scheme A 契约）
         service = SecondaryReplyService(censor=SecondaryReplyCensor())
-        draft = service.generate_draft(comment=comment_rec, video_context={"title": "全球货币与资产配置解析"})
+        draft = service.generate_draft(
+            comment=target_comment,
+            video_context={"title": "全球货币与资产配置解析"},
+        )
+        assert draft.intent == SecondaryReplyIntent.REPLY
+        assert draft.evidence_refs
 
         # 3. 创建任务并派发 Telegram 审批请求
         task_id_1 = db.create_or_update_secondary_reply_task(
@@ -119,6 +152,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
             chinese_reply=draft.chinese_reply,
             english_reply=draft.english_reply,
             formatted_reply=draft.formatted_reply,
+            evidence_refs=draft.evidence_refs,
             provider="rule_engine",
             status="PENDING_REVIEW",
         )
@@ -172,6 +206,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
             intent="REPLY",
             style="MACRO",
             chinese_reply="尝试再次回复",
+            evidence_refs=["secondary_retry_evidence"],
             provider="rule_engine",
             status="APPROVED",
         )
@@ -193,13 +228,14 @@ def run_offline_4path_demo() -> Dict[str, Any]:
         }
 
         # ==========================================
-        # 路径二：前置路由守卫拦截错作品/错评论
+        # 路径二：前置路由守卫拦截错作品/错评论/错账号/缺字段
         # ==========================================
         logger.info("[Demo] 路径二：开始前置路由守卫拦截错作品验证...")
         guard = SecondaryReplySubmissionGuard(
-            expected_export_id="export/demo_video_001",
-            expected_root_comment_id="demo_root_cmt_101",
+            expected_export_id=post_id,
+            expected_root_comment_id=root_id,
             expected_content=draft.formatted_reply,
+            expected_finder_id="v2_synthetic_author_finder_id@finder",
         )
 
         class FakeInterceptedRequest:
@@ -207,9 +243,10 @@ def run_offline_4path_demo() -> Dict[str, Any]:
             url = "https://channels.weixin.qq.com/cgi-bin/mmfinderassistant-bin/comment/create_comment"
             post_data_json = {
                 "exportId": "export/WRONG_VIDEO_999",
-                "rootCommentId": "demo_root_cmt_101",
-                "replyCommentId": "demo_root_cmt_101",
+                "rootCommentId": root_id,
+                "replyCommentId": root_id,
                 "content": draft.formatted_reply,
+                "_log_finder_id": "v2_synthetic_author_finder_id@finder",
             }
 
         guard_pass = guard.capture_request(FakeInterceptedRequest())
@@ -236,6 +273,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
             intent="REPLY",
             style="PRAGMATIC",
             chinese_reply="测试异常场景",
+            evidence_refs=["evidence_path3"],
             provider="rule_engine",
             status="APPROVED",
         )
@@ -258,12 +296,26 @@ def run_offline_4path_demo() -> Dict[str, Any]:
         assert task_3["status"] == "UNCERTAIN"
         assert ledger_3["status"] == "UNCERTAIN"
 
+        # 验证只读对账查询
+        uncertain_tasks = db.get_uncertain_secondary_reply_tasks(post_id)
+        assert any(t["id"] == task_id_3 for t in uncertain_tasks)
+
+        # 模拟只读对账安全终结
+        db.reconcile_secondary_reply_uncertain(
+            task_id=task_id_3,
+            verified=False,
+            reason="对账确认：平台未找到该回复",
+        )
+        task_3_reconciled = db.get_secondary_reply_task(task_id_3)
+        assert task_3_reconciled["status"] == "FAILED"
+
         results["path_3_drop_uncertain_reconcile"] = {
             "status": "PASSED",
             "task_id": task_id_3,
             "task_status": task_3["status"],
             "ledger_status": ledger_3["status"],
             "error_message": task_3["error_message"],
+            "reconciled_status": task_3_reconciled["status"],
         }
 
         # ==========================================
@@ -286,6 +338,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
             intent="REPLY",
             style="MACRO",
             chinese_reply="重新创建的任务尝试提交",
+            evidence_refs=["evidence_tombstone"],
             provider="rule_engine",
             status="APPROVED",
         )
@@ -326,6 +379,12 @@ def main():
 
     db = PipelineDB()
 
+    if args.reconcile:
+        logger.info("[Reconcile] 启动 UNCERTAIN 任务只读对账审计...")
+        res = run_reconcile_inspection(db, args.post_id)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
+
     if args.dry_run:
         logger.info("[DryRun] 启动本地只读模式，不执行任何外部操作或写事务。")
         post_id = args.post_id or "export/default_dry_run"
@@ -347,3 +406,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+
