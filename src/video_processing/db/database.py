@@ -13136,6 +13136,11 @@ class PipelineDB(WallstreetExperimentDAL):
             ).fetchone()
             if not task:
                 return False
+            # 仅允许已落意图/未知状态的任务转 VERIFIED，且必须有真实的原生回复 ID
+            if task["status"] not in ("SUBMIT_INTENT", "UNCERTAIN"):
+                return False
+            if not (platform_reply_comment_id or "").strip():
+                return False
 
             post_id = task["platform_post_id"]
             root_id = task["comment_id"]
@@ -13330,8 +13335,21 @@ class PipelineDB(WallstreetExperimentDAL):
         platform_reply_comment_id: Optional[str] = None,
         evidence_path: Optional[str] = None,
         reason: Optional[str] = None,
+        outcome: Optional[str] = None,
     ) -> bool:
-        """只读对账决策落地：若在平台回读确认存在则转为 VERIFIED，若证实未出站且不存在则转为 FAILED，绝不盲目重发。"""
+        """只读对账决策落地，三种结果互不混淆，且任何结果都不会触发重发：
+
+        - FOUND：回读确认存在 -> VERIFIED（需调用方提供原生回复 ID）
+        - NOT_OBSERVED_INCOMPLETE：没看到但无法证明未发出（分页/折叠/延迟）-> 保持 UNCERTAIN，仅记录备注
+        - CONFIRMED_NOT_SENT：完整遍历后确认未发出 -> FAILED；防重账本保留为墓碑，不自动放行重发
+        未显式给出 outcome 时：verified=True 视为 FOUND，verified=False 保守视为 NOT_OBSERVED_INCOMPLETE。
+        """
+        outcome = outcome or ("FOUND" if verified else "NOT_OBSERVED_INCOMPLETE")
+        if outcome not in ("FOUND", "NOT_OBSERVED_INCOMPLETE", "CONFIRMED_NOT_SENT"):
+            raise ValueError(f"未知对账结果: {outcome}")
+        verified = outcome == "FOUND"
+        if verified and not (platform_reply_comment_id or "").strip():
+            return False  # 没有真实原生回复 ID 不得判 VERIFIED
         with self.get_connection() as conn:
             task = conn.execute(
                 "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?",
@@ -13368,8 +13386,13 @@ class PipelineDB(WallstreetExperimentDAL):
                     """,
                     (platform_reply_comment_id, now_iso, post_id, root_id),
                 )
+            elif outcome == "NOT_OBSERVED_INCOMPLETE":
+                conn.execute(
+                    "UPDATE wechat_secondary_reply_tasks SET error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (reason or "对账未观察到回复，但无法证明未发出，保持 UNCERTAIN", int(task_id)),
+                )
             else:
-                err_msg = reason or "只读对账确认：平台未找到该回复，置为终态失败以防误重试"
+                err_msg = reason or "只读对账确认：完整遍历后平台未找到该回复"
                 conn.execute(
                     """
                     UPDATE wechat_secondary_reply_tasks

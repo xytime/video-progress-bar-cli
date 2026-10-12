@@ -304,6 +304,7 @@ def run_offline_4path_demo() -> Dict[str, Any]:
         db.reconcile_secondary_reply_uncertain(
             task_id=task_id_3,
             verified=False,
+            outcome="CONFIRMED_NOT_SENT",
             reason="对账确认：平台未找到该回复",
         )
         task_3_reconciled = db.get_secondary_reply_task(task_id_3)

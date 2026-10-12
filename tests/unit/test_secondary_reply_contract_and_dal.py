@@ -626,6 +626,7 @@ def test_uncertain_tasks_reconcile_flow_t10(test_db: PipelineDB):
     ok_reconcile = test_db.reconcile_secondary_reply_uncertain(
         task_id=task_id,
         verified=False,
+        outcome="CONFIRMED_NOT_SENT",
         reason="平台回读未发现，证实未出站",
     )
     assert ok_reconcile is True
@@ -721,3 +722,19 @@ def test_shared_quota_rate_limiting_across_tables_t14(test_db: PipelineDB, tmp_p
     assert ok_pass is True
     assert msg_pass == "INTENT_RECORDED"
 
+
+
+def test_reconcile_not_observed_keeps_uncertain_and_found_needs_real_id(test_db: PipelineDB):
+    """R2：没看到 != 没发出；FOUND 必须带真实回复 ID。"""
+    task_id = test_db.create_or_update_secondary_reply_task(
+        platform_post_id="export/synth_rec", comment_id="c_rec", intent="REPLY", style="MACRO",
+        chinese_reply="对账", provider="rule_mock", status="SUBMIT_INTENT",
+    )
+    test_db.record_secondary_reply_uncertain(task_id, error_message="丢响应")
+    assert test_db.reconcile_secondary_reply_uncertain(task_id, verified=False) is True
+    assert test_db.get_secondary_reply_task(task_id)["status"] == "UNCERTAIN"
+    assert any(t["id"] == task_id for t in test_db.get_uncertain_secondary_reply_tasks("export/synth_rec"))
+    assert test_db.reconcile_secondary_reply_uncertain(task_id, verified=True) is False  # 缺真实 ID
+    assert test_db.get_secondary_reply_task(task_id)["status"] == "UNCERTAIN"
+    assert test_db.reconcile_secondary_reply_uncertain(task_id, verified=True, platform_reply_comment_id="real_1") is True
+    assert test_db.get_secondary_reply_task(task_id)["status"] == "VERIFIED"
