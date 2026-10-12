@@ -23,6 +23,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -75,7 +76,10 @@ class SecondaryReplySubmissionGuard:
         expected_root_comment_id: str,
         expected_content: str,
         expected_finder_id: Optional[str] = None,
+        trusted_origins: Tuple[str, ...] = (),
     ) -> None:
+        # 显式注入的受信测试源（如离线 fixture），生产默认为空，不再硬编码域名豁免
+        self.trusted_origins = tuple(trusted_origins)
         self.expected_export_id = expected_export_id
         self.expected_root_comment_id = expected_root_comment_id
         self.expected_content = expected_content
@@ -103,7 +107,9 @@ class SecondaryReplySubmissionGuard:
             })
             return False
 
-        is_safe_origin = is_official_wechat_origin(request.url) or request.url.startswith("http://wechat-fixture.invalid")
+        is_safe_origin = is_official_wechat_origin(request.url) or any(
+            request.url.startswith(o) for o in self.trusted_origins
+        )
         if not is_safe_origin:
             self.mismatched_requests.append({
                 "reason": "UNTRUSTED_ORIGIN",
@@ -148,9 +154,15 @@ class SecondaryReplySubmissionGuard:
             mismatches.append(f"rootCommentId mismatch: '{req_root_id}' != '{self.expected_root_comment_id}'")
         if req_reply_id != self.expected_root_comment_id:
             mismatches.append(f"replyCommentId mismatch: '{req_reply_id}' != '{self.expected_root_comment_id}'")
-        if _normalized_text(req_content) != _normalized_text(self.expected_content):
+        # 正文必须与获批全文逐字一致（仅做 NFC 归一化，不折叠空白/换行）
+        if unicodedata.normalize("NFC", str(payload.get("content"))) != unicodedata.normalize("NFC", self.expected_content):
             mismatches.append("content mismatch")
-        if self.expected_finder_id and req_finder_id and req_finder_id != self.expected_finder_id:
+        # 账号强校验：未配置期望账号、请求缺账号字段或不一致，一律拒绝
+        if not self.expected_finder_id:
+            mismatches.append("expected account not configured")
+        elif not req_finder_id:
+            mismatches.append("account field missing in request")
+        elif req_finder_id != self.expected_finder_id:
             mismatches.append(f"account mismatch: '{req_finder_id}' != '{self.expected_finder_id}'")
 
         if mismatches:
@@ -217,6 +229,8 @@ class SecondaryReplyBrowserAdapter:
         before_submit: Optional[Callable[[], bool]] = None,
         verify_only: bool = False,
         db: Optional[PipelineDB] = None,
+        expected_finder_id: Optional[str] = None,
+        trusted_origins: Tuple[str, ...] = (),
     ) -> SecondaryBrowserResult:
         """执行二级回复提交或只读对账。
 
@@ -244,7 +258,10 @@ class SecondaryReplyBrowserAdapter:
             return "FAILED", None, f"登录态文件不存在: {self.state_path}"
 
         attempt_dir = self._new_evidence_dir(evidence_dir)
-        guard = SecondaryReplySubmissionGuard(post_id, root_id, content)
+        guard = SecondaryReplySubmissionGuard(
+            post_id, root_id, content,
+            expected_finder_id=expected_finder_id, trusted_origins=trusted_origins,
+        )
 
         try:
             with WeChatSessionLock(self.state_path, timeout_seconds=self.lock_timeout_seconds):

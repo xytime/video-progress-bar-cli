@@ -554,6 +554,7 @@ def test_approval_fingerprint_invalidation_on_draft_change_t07(test_db: Pipeline
         source_comment_hash="cmt_hash_001",
         draft_revision=1,
         reply_text_hash=hashlib.sha256("原始方案内容".encode()).hexdigest(),
+        approver_id="admin_1",
     )
     assert ok_bind is True
 

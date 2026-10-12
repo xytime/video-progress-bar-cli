@@ -12792,6 +12792,7 @@ class PipelineDB(WallstreetExperimentDAL):
         now_iso = now_utc_iso or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")  # 写锁内完成校验与消费，防并发审批
             task = conn.execute(
                 "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?",
                 (int(task_id),),
@@ -12802,7 +12803,10 @@ class PipelineDB(WallstreetExperimentDAL):
                 return False, f"INVALID_STATUS: {task['status']}"
             if task["is_token_consumed"]:
                 return False, "TOKEN_ALREADY_CONSUMED"
-            if task["approval_token"] != token:
+            # 必须是完整 token 的精确、定长比较；空 token 或前缀一律拒绝
+            stored_token = task["approval_token"] or ""
+            if (not token or not stored_token or len(token) != len(stored_token)
+                    or not secrets.compare_digest(stored_token.encode(), token.encode())):
                 return False, "TOKEN_MISMATCH"
             if task["approval_expires_at"] and task["approval_expires_at"] < now_iso:
                 conn.execute(
@@ -12811,7 +12815,7 @@ class PipelineDB(WallstreetExperimentDAL):
                 )
                 conn.commit()
                 return False, "TOKEN_EXPIRED"
-            if task["approver_id"] and str(task["approver_id"]) != str(approver_id):
+            if not task["approver_id"] or str(task["approver_id"]) != str(approver_id):
                 return False, "APPROVER_MISMATCH"
 
             # 校验绑定的草稿版本与正文指纹 (T07: 草稿变更不放行)
@@ -12829,19 +12833,23 @@ class PipelineDB(WallstreetExperimentDAL):
                     "SELECT content_hash FROM wechat_audience_comments WHERE platform_post_id = ? AND comment_id = ?",
                     (task["platform_post_id"], task["comment_id"]),
                 ).fetchone()
-                if c_row and c_row["content_hash"] != task["bound_source_comment_hash"]:
+                if not c_row or c_row["content_hash"] != task["bound_source_comment_hash"]:
                     return False, "SOURCE_COMMENT_CHANGED"
 
             new_status = "APPROVED" if action == "APPROVE" else "REJECTED"
-            conn.execute(
+            cur = conn.execute(
                 """
                 UPDATE wechat_secondary_reply_tasks
                 SET status = ?, is_token_consumed = 1, approver_id = ?,
                     approved_at = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                WHERE id = ? AND is_token_consumed = 0
+                  AND status IN ('PENDING_REVIEW', 'DRAFTED') AND approval_token = ?
                 """,
-                (new_status, str(approver_id), now_iso, int(task_id)),
+                (new_status, str(approver_id), now_iso, int(task_id), stored_token),
             )
+            if cur.rowcount != 1:
+                conn.rollback()
+                return False, "TOKEN_ALREADY_CONSUMED"
             conn.commit()
             return True, new_status
 
@@ -13031,6 +13039,7 @@ class PipelineDB(WallstreetExperimentDAL):
         now_iso = now_dt.strftime("%Y-%m-%d %H:%M:%S")
 
         with self.get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")  # 写锁内完成配额检查与预占，防并发超额
             task = conn.execute(
                 "SELECT * FROM wechat_secondary_reply_tasks WHERE id = ?",
                 (int(task_id),),

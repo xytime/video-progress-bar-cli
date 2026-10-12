@@ -91,7 +91,7 @@ def format_approval_html_and_keyboard(
 
     # 构造 callback_data: rep:{task_id}:{token_16}:{action}
     # 严格保证 callback_data 的 UTF-8 字节数 <= 64 字节！
-    short_token = token[:16]
+    short_token = token  # 使用完整 token（22 字符，callback_data 仍 < 64 字节），禁止截断前缀匹配
     app_data = f"rep:{task_id}:{short_token}:app"
     rej_data = f"rep:{task_id}:{short_token}:rej"
 
@@ -217,6 +217,7 @@ def handle_approval_callback(
     callback_data: str,
     user_id: str,
     admin_ids_override: Optional[str] = None,
+    chat_id: Optional[str] = None,
 ) -> Tuple[bool, str]:
     """处理审批按钮回调并原子执行状态机消费。"""
     # 格式: rep:{task_id}:{token}:{action}
@@ -229,7 +230,9 @@ def handle_approval_callback(
     except ValueError:
         return False, "INVALID_TASK_ID"
 
-    token_prefix = parts[2]
+    callback_token = parts[2]
+    if not callback_token:
+        return False, "TOKEN_MISMATCH"
     action_code = parts[3]
     action = "APPROVE" if action_code == "app" else ("REJECT" if action_code == "rej" else None)
     if not action:
@@ -244,13 +247,14 @@ def handle_approval_callback(
     if not task:
         return False, "TASK_NOT_FOUND"
 
-    stored_token = task.get("approval_token") or ""
-    if not stored_token.startswith(token_prefix):
-        return False, "TOKEN_MISMATCH"
+    # 若调用方提供了 chat 身份，必须与配置的审批私聊一致（失败关闭）
+    configured_chat = str(getattr(settings, "wechat_reply_approver_chat_id", "") or "")
+    if chat_id is not None and configured_chat and str(chat_id) != configured_chat:
+        return False, "CHAT_MISMATCH"
 
     return db.consume_reply_task_approval(
         task_id=task_id,
-        token=stored_token,
+        token=callback_token,
         approver_id=str(user_id),
         action=action,
     )

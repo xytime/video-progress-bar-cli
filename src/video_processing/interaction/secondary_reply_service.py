@@ -112,6 +112,14 @@ class SecondaryReplyCensor:
         return True, None
 
 
+def allowed_evidence_refs(video_context: Optional[Dict[str, Any]]) -> List[str]:
+    """从上游提供的材料白名单取可引用的证据 ID（video_context['evidence'] 为 {ref_id: 片段文本}）。"""
+    evidence = (video_context or {}).get("evidence")
+    if not isinstance(evidence, dict):
+        return []
+    return [k for k, v in evidence.items() if isinstance(k, str) and k.strip() and isinstance(v, str) and v.strip()]
+
+
 class RuleSecondaryReplyProvider:
     """基于确定性规则与受控语料的二级回复生成器。"""
 
@@ -210,6 +218,22 @@ class RuleSecondaryReplyProvider:
                 provider="rule_secondary_provider",
             )
 
+        # 6a. 没有经审核的材料就不能声称“有依据”：转人工，绝不凭空编造 evidence_refs
+        allowed_refs = allowed_evidence_refs(video_context)
+        if not allowed_refs:
+            return SecondaryReplyDraft(
+                platform_post_id=comment.platform_post_id,
+                comment_id=comment.comment_id,
+                intent=SecondaryReplyIntent.MANUAL,
+                style=preferred_style or SecondaryReplyStyle.PRAGMATIC,
+                chinese_reply="",
+                english_reply="",
+                formatted_reply="",
+                reason_code="NO_REVIEWED_VIDEO_MATERIAL",
+                evidence_refs=[],
+                provider="rule_secondary_provider",
+            )
+
         # 6. 有实质价值的提问或观点分享 -> 生成高质回复
         style = preferred_style or SecondaryReplyStyle.MACRO
         video_title = (video_context or {}).get("title") or "深度分析"
@@ -220,25 +244,25 @@ class RuleSecondaryReplyProvider:
             zh = "这涉及核心底层逻辑与外部变量的博弈，更详细的数据可参考正文推演。"
             en = "This reflects core structural trade-offs amid external shifts."
             reason = "ANSWER_ANALYTICAL_QUERY"
-            evidence = ["video_transcript_analysis"]
+            evidence = [allowed_refs[0]]  # 仅引用调用方提供且已审核的材料
         elif "对比" in content or "相比" in content:
             style = SecondaryReplyStyle.PHILOSOPHICAL
             zh = "两种路径各有约束与代价，本质是不同发展阶段下的选择取舍。"
             en = "Divergent paths reflect distinct constraints and trade-offs."
             reason = "COMPARATIVE_ANALYSIS"
-            evidence = ["comparative_framework"]
+            evidence = [allowed_refs[0]]  # 仅引用调用方提供且已审核的材料
         elif "哈哈" in content or "乐" in content or "有意思" in content:
             style = SecondaryReplyStyle.HUMOROUS
             zh = "观察入微，现实运行中的反差往往比设计好的剧本更具戏剧性。"
             en = "Keen observation; systemic irony often eclipses fiction."
             reason = "HUMOROUS_RESONANCE"
-            evidence = ["context_nuance"]
+            evidence = [allowed_refs[0]]  # 仅引用调用方提供且已审核的材料
         else:
             style = SecondaryReplyStyle.PRAGMATIC
             zh = "感谢深度探讨，这一视角对理解后续行业周期演进很有价值。"
             en = "Appreciate the thoughtful insight on industry evolution."
             reason = "CONSTRUCTIVE_FEEDBACK"
-            evidence = ["domain_context"]
+            evidence = [allowed_refs[0]]  # 仅引用调用方提供且已审核的材料
 
         zh_nfc, en_nfc, formatted = validate_reply_length_and_format(zh, en)
 
@@ -293,6 +317,10 @@ class SecondaryReplyService:
             # 2. 检查事实依据引用 (T11: 绝不凭空捏造事实来源)
             if not draft.evidence_refs or not all(isinstance(ref, str) and ref.strip() for ref in draft.evidence_refs):
                 raise SecondaryReplyContractError("生成建议回复必须包含有效的事实来源证据引用 (evidence_refs)")
+            # 引用必须全部来自上游提供的材料白名单，未知引用拒绝
+            allowed = set(allowed_evidence_refs(video_context))
+            if not set(draft.evidence_refs) <= allowed:
+                raise SecondaryReplyContractError("evidence_refs 含未提供的来源引用")
 
             # 3. 首轮内容安全与政策审查
             is_safe, error_detail = self.censor.check_reply_safety(

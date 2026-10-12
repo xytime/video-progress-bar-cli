@@ -124,6 +124,8 @@ def _run_secondary(
         expected_export_id=platform_post_id,
         expected_root_comment_id=root_comment_id,
         expected_content=reply_content,
+        expected_finder_id="v2_synthetic_author_finder_id@finder",
+        trusted_origins=("http://wechat-fixture.invalid",),
     )
     harness["current_guard"][0] = guard
 
