@@ -138,7 +138,8 @@ def run_offline_4path_demo() -> Dict[str, Any]:
         service = SecondaryReplyService(censor=SecondaryReplyCensor())
         draft = service.generate_draft(
             comment=target_comment,
-            video_context={"title": "全球货币与资产配置解析"},
+            video_context={"title": "全球货币与资产配置解析",
+                           "evidence": {"fixture_segment_1": "【合成夹具材料，仅用于离线演示】"}},
         )
         assert draft.intent == SecondaryReplyIntent.REPLY
         assert draft.evidence_refs
