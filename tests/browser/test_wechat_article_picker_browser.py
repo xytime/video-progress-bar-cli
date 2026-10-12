@@ -234,3 +234,63 @@ def test_browser_end_to_end_article_execution_and_pre_submit_gate(page, tmp_path
     # 验证发表前若卡片被清空，终验必须失败
     picker.cancel_and_clear(timeout_ms=1000)
     assert finalize_article_before_submit(payload, picker, tmp_path) is False
+
+
+def test_article_picker_recognizes_product_child_attributes(page):
+    """测试当商品 ID 位于子元素链接或属性时，文章选择器依然将其准确互斥识别为 PRODUCT。"""
+    # 无 choosen-link-wrap 显式标识，data-product-id 位于子链接
+    html = f'''
+    <div class="post-component-choose-wrap">
+      <div class="choose-content">
+        <a href="https://channels.weixin.qq.com/shop?productId={PRODUCT_TARGET.product_id}" class="name">{PRODUCT_TARGET.title}</a>
+      </div>
+    </div>
+    <button>发表</button>
+    '''
+    page.set_content(html)
+    article_picker = PlaywrightArticlePicker(page)
+    with pytest.raises(BindingIdentityUnavailable, match="NON_ARTICLE_ATTACHMENT_PRESENT:PRODUCT"):
+        article_picker.read_binding(timeout_ms=500)
+
+
+def test_article_picker_cancel_and_clear_with_confirm_dialog(page):
+    """测试当点击移除后弹出二次确认弹窗时，cancel_and_clear 能够正确点击确认并恢复 unbound。"""
+    html = '''
+    <div id="container">
+      <div class="link-display-wrap" style="display:none;">选择链接</div>
+      <div class="post-component-choose-wrap" id="card_wrap">
+        <div class="choose-content" data-url="__URL__">
+          <span class="name">__TITLE__</span>
+        </div>
+        <button class="close-icon" onclick="document.querySelector('#confirm_remove_dialog').hidden=false">移除</button>
+      </div>
+
+      <!-- 二次移除确认弹窗 -->
+      <div role="dialog" class="weui-desktop-dialog" id="confirm_remove_dialog" hidden>
+        <div class="weui-desktop-dialog__hd">确认移除该公众号文章链接？</div>
+        <div class="weui-desktop-dialog__ft">
+          <button onclick="document.querySelector('#confirm_remove_dialog').hidden=true">取消</button>
+          <button id="btn_confirm_remove" onclick="doRemove()">确定</button>
+        </div>
+      </div>
+
+      <button>发表</button>
+    </div>
+    <script>
+      function doRemove() {
+        document.querySelector('#confirm_remove_dialog').hidden = true;
+        document.querySelector('#card_wrap').outerHTML = '';
+        document.querySelector('.link-display-wrap').style.display = 'block';
+      }
+    </script>
+    '''.replace("__URL__", ARTICLE_TARGET.url).replace("__TITLE__", ARTICLE_TARGET.title)
+
+    page.set_content(html)
+    picker = PlaywrightArticlePicker(page)
+    assert picker.read_binding(timeout_ms=500) is not None
+
+    cleared = picker.cancel_and_clear(timeout_ms=2000)
+    assert cleared is True
+    assert picker.read_binding(timeout_ms=500) is None
+    assert picker.ready_to_submit(timeout_ms=500) is True
+

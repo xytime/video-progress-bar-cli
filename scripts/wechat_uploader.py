@@ -717,7 +717,16 @@ def _compare_management_article_receipt(record: dict, identity_receipt: Path | N
                 or (expected.get('platform_object_nonce') and expected['platform_object_nonce'] != record.get('platform_object_nonce'))):
             return result
         expected_type = expected.get('attachment_type')
+        result['expected'] = {
+            'attachment_type': expected_type,
+            'article_url': expected.get('article_url'),
+            'article_title': expected.get('article_title'),
+            'article_binding_confirmed': expected.get('article_binding_confirmed'),
+            'unbound_confirmed': expected.get('unbound_confirmed'),
+        }
         if expected_type == 'ARTICLE':
+            if expected.get('article_binding_confirmed') is not True:
+                return result
             expected_url = expected.get('article_url')
             matches = (observed.get('state') == 'BOUND' and observed.get('actual_article_url') == expected_url)
             result['state'] = 'MATCH' if matches else 'MISMATCH'
@@ -727,6 +736,7 @@ def _compare_management_article_receipt(record: dict, identity_receipt: Path | N
         return result
     except (OSError, ValueError, TypeError):
         return result
+
 
 
 
@@ -3709,8 +3719,15 @@ def run_uploader(
             # 商品未绑定。如果指定了强制商品 --require-bound-product，则不可降级，终止发布返回 14
             if require_bound_product:
                 logger.error("Product binding required by --require-bound-product but product is not bound; stopping.")
+                if task_product is not None and task_product.get('require_product'):
+                    from video_processing.utils.wechat_product_execution import record_pre_submit_product_block
+                    record_pre_submit_product_block(
+                        task_product, evidence_root, settings.wechat_product_status_path,
+                        state_file.parent, product_artifacts, 'BOUND_PRODUCT_VERIFICATION_FAILED'
+                    )
                 browser.close()
                 return 14
+
 
             # 普通商品不可用且清退成功，或无商品任务：可尝试文章挂接
             if task_article is not None:

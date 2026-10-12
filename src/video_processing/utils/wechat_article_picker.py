@@ -7,6 +7,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-12 | Antigravity | 增强微前端商品卡片互斥识别（支持子元素属性与链接）；cancel_and_clear 支持二次移除确认弹窗。 |
 | 1.0.0 | 2026-10-12 | Codex | 初始实现：支持公众号文章注入、跨主体确认、表单回读、身份冲突拦截与安全清退。 |
 """
 
@@ -36,9 +37,11 @@ const binding = () => {
     // 检查是否有商品卡片（如果是商品，明确标识为 PRODUCT）
     const productCards = Array.from(scope.querySelectorAll('.post-component-choose-wrap .choose-content')).filter(visible);
     const chosenLinkWraps = Array.from(scope.querySelectorAll('.choosen-link-wrap')).filter(visible);
-    if (chosenLinkWraps.some(e => text(e).includes('商品')) || productCards.some(c => c.hasAttribute('data-product-id'))) {
+    if (chosenLinkWraps.some(e => text(e).includes('商品')) ||
+        productCards.some(c => c.hasAttribute('data-product-id') || !!c.querySelector('[data-product-id], a[href*="productId"], a[href*="product_id"]'))) {
         return {type: 'PRODUCT'};
     }
+
 
     // 检查是否有文章卡片
     const articleCards = Array.from(scope.querySelectorAll('.post-component-choose-wrap .choose-content, .article-link-wrap, .link-display-wrap')).filter(visible);
@@ -263,9 +266,15 @@ class PlaywrightArticlePicker:
                     .find(e => visible(e) && (/^(移除|删除|×|x)$/i.test(text(e)) || e.classList.contains('close-icon')));
             }
             if (visible(b)) b.click();
+            // 处理点击移除后可能弹出的二次确认弹窗（如“确定删除/移除该链接？”）
+            for (const d of dialogs().filter(d => /确定|确认|移除|删除/.test(text(d)))) {
+                const cb = button(d, /^(确定|确认)$/);
+                if (cb) cb.click();
+            }
         """, end)
         # 轮询确认弹窗销毁且恢复未绑定状态
         return bool(self._poll("return !dialogs().length && binding().unbound === true;", end))
+
 
     def ready_to_submit(self, *, timeout_ms: int) -> bool:
         """正向确认无弹窗遮挡且发表按钮可用。"""

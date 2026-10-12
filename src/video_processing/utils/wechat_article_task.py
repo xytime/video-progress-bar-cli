@@ -3,11 +3,13 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-12 | Antigravity | 完善任务契约审计字段：增加配置版本、SHA-256 摘要与强制挂接标识 (require_article)。 |
 | 1.0.0 | 2026-10-12 | Codex | 初始实现：文章任务决策冻结、读取与 CLI 参数生成。 |
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from video_processing.core.wechat_article_policy import is_valid_mp_article_url
@@ -17,14 +19,19 @@ PUBLISHER_CAPABILITY = "wechat-article-task-v1"
 
 
 def load_article_policy(policy_path: Path) -> dict:
-    """加载公众号文章配置文件。"""
+    """加载公众号文章配置文件并返回配置内容及摘要。"""
     path = Path(policy_path)
     if not path.exists():
-        return {"version": "1.0.0", "articles": {}}
+        return {"version": "1.0.0", "digest": "MISSING", "articles": {}}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        content = path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        data = json.loads(content.decode("utf-8"))
+        data["digest"] = digest
+        data.setdefault("version", "1.0.0")
+        return data
     except Exception:
-        return {"version": "1.0.0", "articles": {}}
+        return {"version": "1.0.0", "digest": "CORRUPT", "articles": {}}
 
 
 def get_article_for_video(video_id: str, policy_path: Path) -> dict | None:
@@ -46,20 +53,39 @@ def get_article_for_video(video_id: str, policy_path: Path) -> dict | None:
     return {
         "url": url.strip(),
         "title": str(entry.get("title") or "").strip(),
+        "require_article": bool(entry.get("require_article", False)),
+        "config_version": str(config.get("version", "1.0.0")),
+        "config_digest": str(config.get("digest", "")),
     }
 
 
-def freeze_task_article_decision(task_id: str, article_info: dict | None) -> dict | None:
+def freeze_task_article_decision(
+    task_id: str,
+    article_info: dict | None,
+    *,
+    policy_path: Path | None = None,
+) -> dict | None:
     """将单次任务的文章挂接决策冻结为快照字典。"""
     if not article_info:
         return None
     url = article_info.get("url")
     if not is_valid_mp_article_url(url):
         return None
+
+    config_version = article_info.get("config_version", "1.0.0")
+    config_digest = article_info.get("config_digest", "")
+    if policy_path is not None and not config_digest:
+        policy = load_article_policy(policy_path)
+        config_version = policy.get("version", "1.0.0")
+        config_digest = policy.get("digest", "")
+
     return {
         "task_id": task_id,
         "url": url.strip(),
         "title": str(article_info.get("title") or "").strip(),
+        "require_article": bool(article_info.get("require_article", False)),
+        "config_version": str(config_version),
+        "config_digest": str(config_digest),
         "publisher_capability": PUBLISHER_CAPABILITY,
     }
 
@@ -84,3 +110,4 @@ def read_article_task_decision(path: Path) -> dict:
     if not is_valid_mp_article_url(url):
         raise ValueError(f"文章任务包含非法 URL: {url!r}")
     return payload
+

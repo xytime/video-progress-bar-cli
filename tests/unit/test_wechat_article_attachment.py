@@ -63,6 +63,12 @@ def test_article_feature_flag_default_is_disabled():
         (VALID_MP_URL, True),
         ("http://mp.weixin.qq.com/s/abcdef123456", True),
         ("https://mp.weixin.qq.com/s?__biz=MzA1MjU4&mid=2650&idx=1&sn=xyz", True),
+        ("https://mp.weixin.qq.com/settings", False),  # 路径边界漏洞：非文章路径
+        ("https://mp.weixin.qq.com/shop", False),  # 路径边界漏洞：非文章路径
+        ("https://mp.weixin.qq.com/service", False),  # 路径边界漏洞：非文章路径
+        ("https://attacker@mp.weixin.qq.com/s/123", False),  # 凭据注入
+        ("https://mp.weixin.qq.com:8080/s/123", False),  # 非标端口
+        ("https://mp.weixin.qq.com/s/123 with space", False),  # 空格
         ("https://weixin.qq.com/s/abcdef", False),  # 域名非 mp.weixin.qq.com
         ("https://qq.com/s/abcdef", False),
         ("https://evil.com/?mp.weixin.qq.com", False),
@@ -75,6 +81,7 @@ def test_article_feature_flag_default_is_disabled():
 )
 def test_is_valid_mp_article_url(url, valid):
     assert is_valid_mp_article_url(url) is valid
+
 
 
 def test_article_identity_creation():
@@ -100,11 +107,14 @@ def test_article_policy_load_and_lookup(tmp_path):
 
     loaded = load_article_policy(policy_file)
     assert loaded["version"] == "1.0.0"
+    assert len(loaded["digest"]) == 64
 
     found = get_article_for_video("test_video_1", policy_file)
     assert found is not None
     assert found["url"] == VALID_MP_URL
     assert found["title"] == VALID_TITLE
+    assert found["config_version"] == "1.0.0"
+    assert found["config_digest"] == loaded["digest"]
 
     # 切片前缀回退
     found_slice = get_article_for_video("test_video_1_s01", policy_file)
@@ -117,10 +127,12 @@ def test_article_policy_load_and_lookup(tmp_path):
 
 
 def test_article_task_decision_freeze_and_args(tmp_path):
-    info = {"url": VALID_MP_URL, "title": VALID_TITLE}
+    info = {"url": VALID_MP_URL, "title": VALID_TITLE, "config_version": "1.0.0", "config_digest": "abcdef123456"}
     decision = freeze_task_article_decision("task_001", info)
     assert decision["task_id"] == "task_001"
     assert decision["url"] == VALID_MP_URL
+    assert decision["config_version"] == "1.0.0"
+    assert decision["config_digest"] == "abcdef123456"
 
     args = write_article_task_arguments(decision, tmp_path)
     assert len(args) == 2
@@ -129,6 +141,7 @@ def test_article_task_decision_freeze_and_args(tmp_path):
 
     read_back = read_article_task_decision(Path(args[1]))
     assert read_back == decision
+
 
 
 # ── 3. 模拟选择器与仲裁矩阵 (S01 ~ S08 / TC01 ~ TC10) ─────────────────────────
@@ -343,6 +356,7 @@ def test_g3_management_readback_strictly_matches_native_post_identity(tmp_path):
         "platform_object_nonce": "nonce_1",
         "attachment_type": "ARTICLE",
         "article_url": VALID_MP_URL,
+        "article_binding_confirmed": True,
     }), encoding="utf-8")
 
     # 场景 A: 同一作品，extReading 包含目标文章 -> MATCH
@@ -362,6 +376,7 @@ def test_g3_management_readback_strictly_matches_native_post_identity(tmp_path):
     }
     result = _compare_management_article_receipt(matching_record, receipt_file)
     assert result["state"] == "MATCH"
+    assert result["expected"]["article_url"] == VALID_MP_URL
 
     # 场景 B: 另一作品（不同 post_id），即使挂载了相同文章 -> UNVERIFIED (杜绝旧作品冒充)
     impostor_record = {
@@ -398,3 +413,137 @@ def test_g3_management_readback_strictly_matches_native_post_identity(tmp_path):
     }
     result_tampered = _compare_management_article_receipt(tampered_record, receipt_file)
     assert result_tampered["state"] == "MISMATCH"
+
+
+def test_g3_management_readback_rejects_unconfirmed_submission(tmp_path):
+    """G3: 未确认绑定的提交回执（article_binding_confirmed!=True）严禁宣称匹配。"""
+    receipt_file = tmp_path / "submission_receipt.json"
+    receipt_file.write_text(json.dumps({
+        "platform_post_id": "post_unconfirmed_1",
+        "attachment_type": "ARTICLE",
+        "article_url": VALID_MP_URL,
+        "article_binding_confirmed": False,
+    }), encoding="utf-8")
+
+    record = {
+        "platform_post_id": "post_unconfirmed_1",
+        "article_observation": {
+            "state": "BOUND",
+            "actual_article_url": VALID_MP_URL,
+        }
+    }
+    result = _compare_management_article_receipt(record, receipt_file)
+    assert result["state"] == "UNVERIFIED"
+
+
+def test_g2_finalize_article_rejects_task_or_config_mismatch(tmp_path):
+    """G2: 任务标识、配置版本/摘要或请求 URL 发生漂移时，发表前核验坚决阻断。"""
+    (tmp_path / "article_selection_receipt.json").write_text(json.dumps({
+        "task_id": "task_REAL",
+        "config_version": "1.0.0",
+        "config_digest": "digest_REAL",
+        "requested_url": VALID_MP_URL,
+        "actual_url": VALID_MP_URL,
+        "state": "BOUND",
+        "binding_confirmed": True,
+        "unbound_confirmed": False,
+    }), encoding="utf-8")
+
+    picker = MockArticlePicker(initial_binding=ArticleIdentity(url=VALID_MP_URL))
+
+    # 1. 任务 ID 不匹配
+    assert finalize_article_before_submit({
+        "task_id": "task_IMPOSTOR",
+        "config_version": "1.0.0",
+        "config_digest": "digest_REAL",
+        "url": VALID_MP_URL,
+    }, picker, tmp_path) is False
+
+    # 2. 配置摘要漂移
+    assert finalize_article_before_submit({
+        "task_id": "task_REAL",
+        "config_version": "1.0.0",
+        "config_digest": "digest_DRIFTED",
+        "url": VALID_MP_URL,
+    }, picker, tmp_path) is False
+
+    # 3. 目标 URL 不匹配
+    assert finalize_article_before_submit({
+        "task_id": "task_REAL",
+        "config_version": "1.0.0",
+        "config_digest": "digest_REAL",
+        "url": "https://mp.weixin.qq.com/s/another_url",
+    }, picker, tmp_path) is False
+
+    # 4. 全部吻合 -> 放行
+    assert finalize_article_before_submit({
+        "task_id": "task_REAL",
+        "config_version": "1.0.0",
+        "config_digest": "digest_REAL",
+        "url": VALID_MP_URL,
+    }, picker, tmp_path) is True
+
+
+def test_g2_finalize_none_rejects_blocked_receipts(tmp_path):
+    """G2 & 仲裁防逃逸：若选品或文章回执处于 BLOCKED，绝对禁止按纯视频提交！"""
+    product_picker = MockProductPicker(binding=None)
+    article_picker = MockArticlePicker(initial_binding=None)
+
+    # 场景 1: 文章因身份冲突或清退失败被 BLOCKED
+    (tmp_path / "article_selection_receipt.json").write_text(json.dumps({
+        "state": "BLOCKED",
+        "binding_confirmed": False,
+        "unbound_confirmed": False,
+        "reason": "IDENTITY_CONFLICT",
+    }), encoding="utf-8")
+    assert finalize_none_before_submit(tmp_path, product_picker, article_picker) is False
+
+    # 场景 2: 文章回执恢复为合法清退 SKIPPED，但商品被 BLOCKED
+    (tmp_path / "article_selection_receipt.json").write_text(json.dumps({
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "state": "BLOCKED",
+        "binding_confirmed": False,
+        "unbound_confirmed": False,
+    }), encoding="utf-8")
+    assert finalize_none_before_submit(tmp_path, product_picker, article_picker) is False
+
+    # 场景 3: 商品与文章均明确为合法未绑定 -> 放行纯视频
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+    assert finalize_none_before_submit(tmp_path, product_picker, article_picker) is True
+
+
+def test_mandatory_article_fails_closed_on_invalid_url_and_timeout(tmp_path):
+    """强制文章任务 (require_article=True) 遇到非法 URL 或超时，坚决 Fail-Closed，禁止降级！"""
+    # 场景 1: 强制文章任务遭遇非法 URL
+    bad_payload = {
+        "task_id": "mand_1",
+        "url": "https://invalid.com/article",
+        "require_article": True,
+    }
+    picker = MockArticlePicker()
+    assert execute_article_task(bad_payload, picker, tmp_path) is False
+    receipt_1 = json.loads((tmp_path / "article_selection_receipt.json").read_text())
+    assert receipt_1["state"] == "BLOCKED"
+    assert receipt_1["binding_required"] is True
+
+    # 场景 2: 强制文章任务遭遇注入超时（即使清退成功亦禁止降级）
+    timeout_payload = {
+        "task_id": "mand_2",
+        "url": VALID_MP_URL,
+        "require_article": True,
+    }
+    timeout_picker = MockArticlePicker(attach_error=TimeoutError("timeout"), cancel_result=True)
+    product_picker = MockProductPicker()
+    assert execute_article_task(timeout_payload, timeout_picker, tmp_path, product_picker=product_picker) is False
+    receipt_2 = json.loads((tmp_path / "article_selection_receipt.json").read_text())
+    assert receipt_2["state"] == "BLOCKED"
+    assert receipt_2["binding_required"] is True
+
