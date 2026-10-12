@@ -1019,10 +1019,8 @@ def startup_event():
     lease.__enter__()
     _maintenance_ui_lease = lease
     _scheduler_stop = threading.Event()
-    # [Claude_Sonnet_4.6_Thinking_planning] BUG-1: 在主线程注册 SIGTERM handler
-    if settings.enable_sigterm_kill:
-        from video_processing import pipeline_manager as _pm
-        signal.signal(signal.SIGTERM, _pm._sigterm_handler)
+    # Web 生命周期信号归 Uvicorn；流水线标志处理器不负责退出服务器。
+    # 维护工具已在发 SIGTERM 前核实在途为空，不能覆盖服务器正常退出处理。
 
     _scheduler_threads = [threading.Thread(target=target, args=(_scheduler_stop,), daemon=True, name=name)
                           for target, name in (

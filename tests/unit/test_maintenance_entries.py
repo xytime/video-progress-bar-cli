@@ -304,3 +304,26 @@ def test_m05_cli_enter_acknowledges_saved_state_without_claiming_safe(isolated_r
     status = subprocess.run([sys.executable, str(script), 'status'], capture_output=True, text=True, timeout=10)
     assert status.returncode == 2
     assert isolated_running_maintenance.status()['state'] == 'MAINTENANCE'
+
+
+def test_ui_startup_preserves_uvicorn_sigterm_handler(isolated_running_maintenance, monkeypatch):
+    """生产同条件：启用旧 SIGTERM flag，真实服务器信号 owner 仍能正常退出。"""
+    import uvicorn
+    from web import app as web
+    isolated_running_maintenance.enter('Uvicorn 正常退出回归')
+    monkeypatch.setattr(web.settings,'enable_sigterm_kill',True)
+    server=uvicorn.Server(uvicorn.Config(web.app))
+    original=signal.getsignal(signal.SIGTERM)
+    with server.capture_signals():
+        expected=signal.getsignal(signal.SIGTERM)
+        web.startup_event()
+        try:
+            assert signal.getsignal(signal.SIGTERM)==expected
+            os.kill(os.getpid(),signal.SIGTERM)
+            assert server.should_exit is True
+            server._captured_signals.clear()  # 测试处理完毕，不向 pytest 外层重放退出。
+        finally:
+            web.release_maintenance_ui_role()
+    assert signal.getsignal(signal.SIGTERM)==original
+    assert web._maintenance_ui_lease is None
+    assert not any(thread.is_alive() for thread in web._scheduler_threads)

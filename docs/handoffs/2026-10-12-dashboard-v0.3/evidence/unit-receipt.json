@@ -1,0 +1,25 @@
+{
+  "source": "/private/var/folders/1d/mkk8l0cd595chsbbv6hfp5ym0000gn/T/topic-integration-overlay-k41va_4s",
+  "snapshot": "/private/tmp/video-pytest-j9tj6kzt/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.13
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit",
+    "--ignore=tests/unit/test_dashboard_interactions.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "6bc7477973acc0cec23bbab3ab469af4f9e384d27ae0139d83a83515b903cc44",
+  "profile_sha256": "0a29b2ca992926b29a6613a3eadd2966de436fc0c2de096a6c394a0510442956",
+  "browser_runtime": null,
+  "browser_runtime_sha256": null,
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 337.625
+  },
+  "finished_at": "2026-10-12T05:56:17.258792+00:00"
+}
