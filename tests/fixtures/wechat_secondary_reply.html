@@ -34,6 +34,15 @@
         </article>`;
       const detail = host.firstElementChild;
       const c1 = detail.querySelector("[data-comment-id='synth_cmt_101']");
+      // 服务器持久化的回复（由路由桩注入，页面重新加载后仍存在）；与下方“乐观 DOM 节点”区分
+      (window.__serverReplies || []).forEach(r => {
+        const n = document.createElement('div');
+        n.className = 'sub-comment';
+        n.dataset.commentId = r.commentId;
+        n.dataset.authorRole = 'author';
+        n.textContent = r.content;
+        c1.querySelector('[data-level-two]').appendChild(n);
+      });
       c1.querySelector('[data-reply]').addEventListener('click', () => {
         c1.querySelector('.reply-compose').hidden = false;
       });

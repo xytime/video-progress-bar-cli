@@ -35,12 +35,14 @@ def secondary_reply_harness(chromium, tmp_path):
     page = chromium.new_page(viewport={"width": 1280, "height": 800})
     writes = []
     current_guard = [None]
+    server_replies = []  # 模拟服务器持久化数据：仅它能在刷新后被读回
 
     def route_handler(route):
         request = route.request
         path = request.url.split("?", 1)[0].replace("http://wechat-fixture.invalid", "")
         if request.is_navigation_request():
-            route.fulfill(content_type="text/html", body=FIXTURE_HTML.read_text(encoding="utf-8"))
+            inject = "<script>window.__serverReplies = %s;</script>" % json.dumps(server_replies, ensure_ascii=False)
+            route.fulfill(content_type="text/html", body=inject + FIXTURE_HTML.read_text(encoding="utf-8"))
             return
         if request.method == "POST":
             payload = request.post_data_json
@@ -61,6 +63,8 @@ def secondary_reply_harness(chromium, tmp_path):
                     route.fulfill(json={"errCode": -1, "errMsg": "platform rejected"})
                     return
                 else:
+                    if mode != "success-not-persisted":
+                        server_replies.append({"commentId": "synth_new_reply_999", "content": payload.get("content")})
                     route.fulfill(json={
                         "errCode": 0,
                         "errMsg": "request successful",
@@ -90,6 +94,7 @@ def secondary_reply_harness(chromium, tmp_path):
         yield {
             "page": page,
             "writes": writes,
+            "server_replies": server_replies,
             "current_guard": current_guard,
             "state_file": state_file,
             "db": db,
@@ -217,6 +222,9 @@ def test_browser_flow_success_and_second_run_idempotency(secondary_reply_harness
         ok, reason = db.record_secondary_reply_submit_intent(task_id_second, claimed_sec["lease_token"], now_utc=now_later)
         return ok
 
+    # 模拟页面读取不到已发回复（折叠/延迟）：此时只能靠独立防重账本拦截，不能重发
+    harness["server_replies"].clear()
+    writes_before = len(harness["writes"])
     status2, _, err2 = _run_secondary(
         harness,
         task_id=task_id_second,
@@ -229,6 +237,7 @@ def test_browser_flow_success_and_second_run_idempotency(secondary_reply_harness
     # 意图落盘被阻断，未发出出站请求
     assert status2 == "FAILED"
     assert "持久化提交意图失败" in (err2 or "")
+    assert len(harness["writes"]) == writes_before  # 第二次没有任何出站写请求
 
 
 def test_browser_flow_skips_when_author_already_replied(secondary_reply_harness):
@@ -363,3 +372,23 @@ def test_browser_flow_guard_intercepts_wrong_export_id(secondary_reply_harness):
 
     assert status == "FAILED"
     assert "发送前路由守卫拦截" in (err or "")
+
+
+def test_browser_flow_optimistic_dom_not_persisted_is_uncertain(secondary_reply_harness):
+    """平台返回成功、页面有乐观节点，但刷新后服务器数据没有该回复 -> 不得 VERIFIED。"""
+    harness = secondary_reply_harness
+    db = harness["db"]
+    post_id, root_id, content = "export/synth_video_888", "synth_cmt_101", "乐观节点测试回复"
+    task_id = db.create_or_update_secondary_reply_task(
+        platform_post_id=post_id, comment_id=root_id, intent="REPLY", style="MACRO",
+        chinese_reply=content, english_reply="Optimistic.", formatted_reply=content,
+        provider="rule_mock", status="APPROVED",
+    )
+    claimed = db.claim_approved_reply_task(task_id=task_id, lease_seconds=7200)
+    status, _evidence, _err = _run_secondary(
+        harness, task_id=task_id, platform_post_id=post_id, root_comment_id=root_id,
+        reply_content=content, mode="success-not-persisted",
+        before_submit=lambda: db.record_secondary_reply_submit_intent(task_id, claimed["lease_token"])[0],
+    )
+    assert status == "UNCERTAIN"
+    assert db.get_secondary_reply_task(task_id)["status"] != "VERIFIED"

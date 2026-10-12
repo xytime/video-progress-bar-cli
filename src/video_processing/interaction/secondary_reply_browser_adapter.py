@@ -389,13 +389,8 @@ class SecondaryReplyBrowserAdapter:
             except Exception:
                 pass
             if verify_only:
-                if db:
-                    db.record_secondary_reply_success(
-                        task_id=task_id,
-                        platform_reply_comment_id="reconciled_existing_reply",
-                        evidence_path=str(evidence_img),
-                    )
-                return "VERIFIED", str(evidence_img), "对账确认：作者二级回复已存在于平台"
+                # 只读对账仅发现“作者已有回复”，但没有本任务的原生回复 ID，不得伪造 ID 或标记成功
+                return "FOUND_UNVERIFIED", str(evidence_img), "对账发现作者二级回复存在，但无法绑定到本任务的原生回复 ID，需人工确认"
             if db:
                 db.record_secondary_reply_skipped(
                     task_id=task_id,
@@ -479,19 +474,24 @@ class SecondaryReplyBrowserAdapter:
         # T10 铁律：双重成功确认 — 平台返回成功 且 独立回读确认存在于父评论下
         if api_success:
             readback_ok = False
-            if parent_item is not None:
-                # 检查父评论节点下是否存在新 commentId、作者标识或回复文案前缀
-                readback_loc = parent_item.locator(
-                    f"[data-comment-id='{new_reply_id}'], .sub-comment:has-text('{_normalized_text(reply_content)[:12]}')"
-                )
-                if readback_loc.count() > 0:
-                    readback_ok = True
-                else:
-                    author_sub = parent_item.locator(".level-two, [data-level-two]").locator(
-                        "[data-author-role='author'], :has-text('作者')"
-                    )
-                    if author_sub.count() > 0:
-                        readback_ok = True
+            # 必须有非空的平台回复 ID，且在“重新加载页面”后由服务器数据渲染出同 ID、同文
+            if new_reply_id:
+                try:
+                    page.reload()
+                    page.wait_for_timeout(1500)
+                    card2 = self._resolve_video_card(page, platform_post_id, video_title, published_description)
+                    if card2 is not None:
+                        card2.click()
+                        page.wait_for_timeout(1500)
+                        replied, parent2 = self._check_author_already_replied(page, root_comment_id)
+                        if parent2 is not None:
+                            node = parent2.locator(f"[data-comment-id='{new_reply_id}']")
+                            if node.count() == 1:
+                                shown = unicodedata.normalize("NFC", node.first.inner_text() or "")
+                                if unicodedata.normalize("NFC", reply_content) in shown:
+                                    readback_ok = True
+                except Exception as exc:  # 回读异常不得判成功
+                    logger.warning("[SecondaryReplyBrowser] 重新加载回读异常: %s", exc)
 
             if readback_ok:
                 if db and new_reply_id:
@@ -545,11 +545,6 @@ class SecondaryReplyBrowserAdapter:
             cards = page.locator(".comment-feed-wrap:visible, .post-card:visible").filter(has_text=clean_hint)
             if cards.count() == 1:
                 return cards.first
-
-        # 3. 兜底尝试
-        all_cards = page.locator(".comment-feed-wrap:visible, .post-card:visible")
-        if all_cards.count() == 1:
-            return all_cards.first
 
         return None
 
