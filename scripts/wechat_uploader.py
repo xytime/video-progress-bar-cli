@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.23.0 | 2026-10-12 | Codex | 支持公众号文章挂接一期：商品优先与文章降级仲裁、超时安全清退、身份冲突阻断、独立发表前核验与管理页文章回读。 |
 | 5.22.0 | 2026-10-12 | Codex | 区分商家 outProductId 与视频号 productId；精确选中行或绑定原回执的原生对应关系才允许核验一致。 |
 | 5.21.0 | 2026-10-12 | Codex | 正式挂商品验收可显式要求最终实读绑定；保留逐次选品原因，日常可选挂接不变。 |
 | 5.20.0 | 2026-10-11 | Codex | 商品挂接失败且清空就绪时允许无商品继续，兼容旧参数和冻结任务。 |
@@ -618,6 +619,24 @@ def _management_product_observation(record: dict) -> dict:
     return observed
 
 
+def _management_article_observation(record: dict) -> dict:
+    """从原生作品记录提取公众号文章挂接属性。"""
+    observed = {'state': 'UNVERIFIED'}
+    desc = record.get('desc')
+    ext_reading = desc.get('extReading') if isinstance(desc, dict) else None
+    if isinstance(ext_reading, dict):
+        if ext_reading == {}:
+            observed.update(state='UNBOUND', actual_article_url=None, actual_article_title=None)
+        else:
+            url = str(ext_reading.get('link') or ext_reading.get('url') or '').strip()
+            title = str(ext_reading.get('title') or '').strip()
+            if url:
+                observed.update(state='BOUND', actual_article_url=url, actual_article_title=title)
+        observed['identity_source'] = 'POST_LIST_DESC_EXT_READING'
+    return observed
+
+
+
 def _compare_management_product_receipt(record: dict, identity_receipt: Path | None) -> dict:
     """只比较同一原生作品的最终表单证据，缺证据或未知商品状态保持未核实。"""
     observed = record.get('product_observation') or {}
@@ -680,6 +699,35 @@ def _compare_management_product_receipt(record: dict, identity_receipt: Path | N
         return result
     except (OSError, ValueError, TypeError):
         return result
+
+
+def _compare_management_article_receipt(record: dict, identity_receipt: Path | None) -> dict:
+    """比较同一原生作品的文章挂接回执。若缺少作品原生身份或未知文章状态保持 UNVERIFIED。"""
+    observed = record.get('article_observation') or {}
+    result = {'state': 'UNVERIFIED', 'actual': observed}
+    if identity_receipt is None:
+        return result
+    try:
+        expected = json.loads(Path(identity_receipt).read_text(encoding='utf-8'))
+        if not isinstance(expected, dict) or not isinstance(observed, dict):
+            return result
+        # 必须具有唯一匹配的原生作品 ID
+        if (not expected.get('platform_post_id')
+                or expected.get('platform_post_id') not in {record.get('platform_post_id'), record.get('platform_export_id')}
+                or (expected.get('platform_object_nonce') and expected['platform_object_nonce'] != record.get('platform_object_nonce'))):
+            return result
+        expected_type = expected.get('attachment_type')
+        if expected_type == 'ARTICLE':
+            expected_url = expected.get('article_url')
+            matches = (observed.get('state') == 'BOUND' and observed.get('actual_article_url') == expected_url)
+            result['state'] = 'MATCH' if matches else 'MISMATCH'
+        elif expected_type in ('NONE', 'PRODUCT'):
+            matches = (observed.get('state') == 'UNBOUND')
+            result['state'] = 'MATCH' if matches else 'MISMATCH'
+        return result
+    except (OSError, ValueError, TypeError):
+        return result
+
 
 
 def _management_detail_product_observation(payload: object, post_id: str, nonce: str) -> dict:
@@ -783,6 +831,7 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
             "identity_source": "post_list_api",
             "platform_status": str(record["status"]) if record.get("status") is not None else "",
             "product_observation": _management_product_observation(record),
+            "article_observation": _management_article_observation(record),
         }
     return cards
 
@@ -909,6 +958,30 @@ def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> No
                 if selection.get('actual_platform_product_id') is not None:
                     receipt.update(product_platform_id=selection['actual_platform_product_id'],
                                    product_platform_id_source='SELECTED_PUBLIC_ROW')
+                receipt['attachment_type'] = 'PRODUCT'
+
+        article_task_path = evidence_dir / "article_task_decision.json"
+        if article_task_path.exists():
+            article_task = json.loads(article_task_path.read_text(encoding="utf-8"))
+            receipt = dict(receipt, article_task_id=article_task.get('task_id'),
+                           article_requested_url=article_task.get('url'),
+                           article_requested_title=article_task.get('title'))
+        article_selection_path = evidence_dir / "article_pre_submit_readback.json"
+        if article_selection_path.exists():
+            art_selection = json.loads(article_selection_path.read_text(encoding='utf-8'))
+            if art_selection.get('final_verified') is True:
+                receipt = dict(receipt,
+                               article_binding_confirmed=True,
+                               article_url=art_selection.get('actual_url'),
+                               article_title=art_selection.get('actual_title'),
+                               attachment_type='ARTICLE')
+        none_selection_path = evidence_dir / "none_pre_submit_readback.json"
+        if none_selection_path.exists():
+            none_selection = json.loads(none_selection_path.read_text(encoding='utf-8'))
+            if none_selection.get('final_verified') is True:
+                receipt = dict(receipt,
+                               attachment_type='NONE',
+                               unbound_confirmed=True)
         receipt_path = evidence_dir / "submission_receipt.json"
         temporary_path = receipt_path.with_suffix(".json.tmp")
         temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, sort_keys=True), encoding="utf-8")
@@ -1251,6 +1324,8 @@ def verify_management_publication_by_id(
                     "component_state": record.get("component_state"),
                     "product_observation": record.get("product_observation", {'state': 'UNVERIFIED'}),
                     "product_verification": _compare_management_product_receipt(record, identity_receipt),
+                    "article_observation": record.get("article_observation", {'state': 'UNVERIFIED'}),
+                    "article_verification": _compare_management_article_receipt(record, identity_receipt),
                     **_management_public_time(record, state),
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as exc:
@@ -2247,6 +2322,9 @@ def run_uploader(
     stop_before_submit: bool = False,
     require_bound_product: bool = False,
     product_task_decision: str | None = None,
+    article_url: str | None = None,
+    article_title: str | None = None,
+    article_task_decision: str | None = None,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
 
@@ -2255,6 +2333,7 @@ def run_uploader(
     evidence_root = Path(evidence_dir) if evidence_dir else Path("output") / "wechat_evidence"
     task_product = None
     product_artifacts = None
+    task_article = None
 
     if require_original_declaration and not declare_original and not verify_only:
         logger.error("Original declaration is required for this submission but was explicitly disabled.")
@@ -2331,6 +2410,27 @@ def run_uploader(
         except (OSError, ValueError, KeyError, TypeError):
             logger.error("Invalid product task contract before browser launch.")
             return 1
+
+    if article_task_decision and not login_only and not verify_only:
+        from video_processing.utils.wechat_article_task import read_article_task_decision
+        try:
+            task_article = read_article_task_decision(Path(article_task_decision))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            logger.error("Invalid article task contract before browser launch: %s", exc)
+            return 1
+    elif article_url and not login_only and not verify_only:
+        from video_processing.core.wechat_article_policy import is_valid_mp_article_url
+        if is_valid_mp_article_url(article_url):
+            task_article = {
+                "task_id": "cli_article",
+                "url": article_url.strip(),
+                "title": (article_title or "").strip(),
+                "publisher_capability": "wechat-article-task-v1",
+            }
+        else:
+            logger.error("Invalid article url before browser launch: %r", article_url)
+            return 1
+
 
     with sync_playwright() as p:
         logger.info("Launching browser...")
@@ -3549,8 +3649,15 @@ def run_uploader(
         # 商品任务契约优先于旧全局开关与 --require-product。显式 NONE 绝不被补挂。
         from video_processing.utils.wechat_product_task import read_product_task_decision
         from video_processing.utils.wechat_product_execution import execute_product_task
+        from video_processing.utils.wechat_article_picker import PlaywrightArticlePicker
+        from video_processing.utils.wechat_article_execution import (
+            execute_article_task, finalize_article_before_submit, finalize_none_before_submit
+        )
         # 同一实例保留本次平台选中行证据；不得在最终核验时丢失或重建。
         product_picker = PlaywrightProductPicker(page)
+        article_picker = PlaywrightArticlePicker(page)
+        expected_attachment = "NONE"
+
         try:
             if product_task_decision:
                 # 沿用浏览器启动前已校验契约及实际观察代次，不能重置等待输入。
@@ -3574,14 +3681,63 @@ def run_uploader(
                 if not product_result.submission_allowed:
                     browser.close()
                     return 1
+            elif task_article is not None:
+                pass
             else:
-                logger.error("Missing explicit product task decision; refusing ambiguous submission.")
+                logger.error("Missing explicit product or article task decision; refusing ambiguous submission.")
                 browser.close()
                 return 1
         except (ValueError, OSError) as exc:
             _write_product_selection_receipt(evidence_root, required=True, error="PRODUCT_CONTRACT_INVALID:" + type(exc).__name__)
             browser.close()
             return 1
+
+        # 检查商品最终选品回执：是否成功绑定了商品
+        product_receipt_path = evidence_root / 'product_selection_receipt.json'
+        product_bound = False
+        if product_receipt_path.exists():
+            try:
+                prod_data = json.loads(product_receipt_path.read_text(encoding='utf-8'))
+                if prod_data.get('state') == 'BOUND' and prod_data.get('binding_confirmed') is True:
+                    product_bound = True
+            except Exception:
+                product_bound = False
+
+        if product_bound:
+            expected_attachment = "PRODUCT"
+        else:
+            # 商品未绑定。如果指定了强制商品 --require-bound-product，则不可降级，终止发布返回 14
+            if require_bound_product:
+                logger.error("Product binding required by --require-bound-product but product is not bound; stopping.")
+                browser.close()
+                return 14
+
+            # 普通商品不可用且清退成功，或无商品任务：可尝试文章挂接
+            if task_article is not None:
+                article_ok = execute_article_task(
+                    task_article, article_picker, evidence_root,
+                    timeout_seconds=settings.wechat_article_timeout_seconds,
+                    product_picker=product_picker,
+                )
+                if not article_ok:
+                    _capture_wechat_evidence(page, evidence_root, "article_contract_failed")
+                    browser.close()
+                    return 1
+
+                article_receipt_path = evidence_root / 'article_selection_receipt.json'
+                if article_receipt_path.exists():
+                    try:
+                        art_data = json.loads(article_receipt_path.read_text(encoding='utf-8'))
+                        if art_data.get('state') == 'BOUND' and art_data.get('binding_confirmed') is True:
+                            expected_attachment = "ARTICLE"
+                        elif art_data.get('state') in ('SKIPPED', 'UNBOUND') and art_data.get('unbound_confirmed') is True:
+                            expected_attachment = "NONE"
+                        else:
+                            expected_attachment = "UNKNOWN"
+                    except Exception:
+                        expected_attachment = "UNKNOWN"
+            else:
+                expected_attachment = "NONE"
 
         # ── 10. 发表前清理残留遮罩 ───────────────────────────────────────────────
         # [Claude_Sonnet_4.6_Thinking_planning] v2.0.0 bugfix:
@@ -3608,7 +3764,8 @@ def run_uploader(
                 browser.close()
                 return 1
 
-        if task_product is not None or (evidence_root / 'product_selection_receipt.json').exists():
+        # Step 5: 发表前专属最终核验
+        if expected_attachment == "PRODUCT":
             from video_processing.utils.wechat_product_execution import finalize_product_before_submit
             if not finalize_product_before_submit(task_product, product_picker, evidence_root,
                                                    require_bound=require_bound_product):
@@ -3621,6 +3778,20 @@ def run_uploader(
                                                     else 'BINDING_CHANGED_BEFORE_SUBMIT')
                 browser.close()
                 return 14 if task_product is not None and task_product['require_product'] else 1
+        elif expected_attachment == "ARTICLE":
+            if not finalize_article_before_submit(task_article, article_picker, evidence_root):
+                logger.error("Final article state does not satisfy submission verification; stopping before submission.")
+                browser.close()
+                return 1
+        elif expected_attachment == "NONE":
+            if not finalize_none_before_submit(evidence_root, product_picker, article_picker):
+                logger.error("Final none-attachment state does not satisfy submission verification; stopping before submission.")
+                browser.close()
+                return 1
+        else:
+            logger.error("Unknown expected attachment state (%s); stopping before submission.", expected_attachment)
+            browser.close()
+            return 1
 
         submitted_short_title = _read_confirmed_submission_title(page, short_title_clean)
         if not draft:
@@ -3761,6 +3932,9 @@ def main():
         "--stop-before-submit", action="store_true",
         help="完成所有表单填充与商品挂载核验后停止在提交前，不点击发表或存草稿",
     )
+    parser.add_argument("--article-url", help="已发表的微信公众号文章 URL (https://mp.weixin.qq.com/s/...)")
+    parser.add_argument("--article-title", help="公众号文章标题")
+    parser.add_argument("--article-task-decision", help="冻结的公众号文章挂接任务契约 JSON 路径")
     parser.set_defaults(headless=True)
     args = parser.parse_args()
 
@@ -3797,6 +3971,9 @@ def main():
             source_channel_id = args.source_channel_id,
             stop_before_submit = args.stop_before_submit,
             require_bound_product = args.require_bound_product,
+            article_url = args.article_url,
+            article_title = args.article_title,
+            article_task_decision = args.article_task_decision,
         )
     except Exception as exc:
         if not _is_playwright_target_closed(exc):
