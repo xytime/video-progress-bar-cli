@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-12 | Antigravity | 修复 P1: finalize_none 补全商品与文章任务一致性检查（task_id/config_version/digest/url/required/缺失回执拒绝）；清理竞争回执防御 P2。 |
 | 1.1.0 | 2026-10-12 | Antigravity | 修复 G2 漏洞与仲裁逃逸：严格检查 payload 一致性（task_id/config_version/digest/url）；finalize_none 坚决阻断 BLOCKED 状态；支持 require_article 强制文章不降级。 |
 | 1.0.0 | 2026-10-12 | Codex | 初始实现：文章注入执行、超时清退降级、身份冲突阻断、发表前独立核验与纯视频四项齐备核验。 |
 """
@@ -222,6 +223,8 @@ def finalize_article_before_submit(
     evidence_dir = Path(evidence_dir)
     readback = evidence_dir / "article_pre_submit_readback.json"
     readback.unlink(missing_ok=True)
+    (evidence_dir / "product_pre_submit_readback.json").unlink(missing_ok=True)
+    (evidence_dir / "none_pre_submit_readback.json").unlink(missing_ok=True)
     try:
         receipt_path = evidence_dir / "article_selection_receipt.json"
         if not receipt_path.exists():
@@ -277,6 +280,11 @@ def finalize_none_before_submit(
     evidence_dir: Path,
     product_picker,
     article_picker,
+    product_payload: dict | None = None,
+    article_payload: dict | None = None,
+    *,
+    require_bound_product: bool = False,
+    require_bound_article: bool = False,
 ) -> bool:
     """发表前瞬间正向核验证实四项齐备无挂接。
 
@@ -288,15 +296,36 @@ def finalize_none_before_submit(
     同时具备防回归与防逃逸保护：
     - 如果此前的选品或文章回执曾是 BOUND，绝对禁止静默降级为 NONE；
     - 如果选品或文章回执处于 BLOCKED、异常或未确认清退，严格禁止按纯视频提交！
+    - 若传入本次商品/文章任务快照，严格核验任务一致性（task_id, config_version, config_digest, required, url）；
+    - 若指定了任务快照，其应有回执缺失时坚决拒绝按纯视频提交；
+    - 历史旧任务回执与配置漂移坚决阻断。
     """
     evidence_dir = Path(evidence_dir)
     readback = evidence_dir / "none_pre_submit_readback.json"
     readback.unlink(missing_ok=True)
+    (evidence_dir / "product_pre_submit_readback.json").unlink(missing_ok=True)
+    (evidence_dir / "article_pre_submit_readback.json").unlink(missing_ok=True)
     try:
-        # 商品回执核验：曾绑定或处于阻断状态，均严禁以纯视频提交
+        # 商品回执核验
         product_receipt_path = evidence_dir / "product_selection_receipt.json"
         prod_receipt = None
-        if product_receipt_path.exists():
+        if product_payload is not None:
+            if not product_receipt_path.exists():
+                return False
+            prod_receipt = json.loads(product_receipt_path.read_text(encoding="utf-8"))
+            if any(prod_receipt.get(k) != product_payload.get(k) for k in ("task_id", "config_version", "config_digest")):
+                return False
+            if prod_receipt.get("required") is not product_payload.get("require_product"):
+                return False
+            if require_bound_product or prod_receipt.get("binding_required") is True:
+                return False
+            if prod_receipt.get("state") not in ("UNBOUND", "SKIPPED"):
+                return False
+            if prod_receipt.get("unbound_confirmed") is not True or prod_receipt.get("binding_confirmed") is not False:
+                return False
+            if prod_receipt.get("actual_product_id") or prod_receipt.get("actual_title"):
+                return False
+        elif product_receipt_path.exists():
             prod_receipt = json.loads(product_receipt_path.read_text(encoding="utf-8"))
             if prod_receipt.get("state") in ("BOUND", "BLOCKED"):
                 return False
@@ -304,11 +333,33 @@ def finalize_none_before_submit(
                 return False
             if prod_receipt.get("unbound_confirmed") is not True:
                 return False
+            if require_bound_product:
+                return False
 
-        # 文章回执核验：曾绑定或处于阻断状态，均严禁以纯视频提交
+        # 文章回执核验
         article_receipt_path = evidence_dir / "article_selection_receipt.json"
         art_receipt = None
-        if article_receipt_path.exists():
+        if article_payload is not None:
+            if not article_receipt_path.exists():
+                return False
+            art_receipt = json.loads(article_receipt_path.read_text(encoding="utf-8"))
+            if art_receipt.get("task_id") != article_payload.get("task_id"):
+                return False
+            if article_payload.get("config_version") and art_receipt.get("config_version") != article_payload.get("config_version"):
+                return False
+            if article_payload.get("config_digest") and art_receipt.get("config_digest") != article_payload.get("config_digest"):
+                return False
+            if article_payload.get("url") and art_receipt.get("requested_url") != article_payload.get("url"):
+                return False
+            if require_bound_article or article_payload.get("require_article") is True or art_receipt.get("binding_required") is True:
+                return False
+            if art_receipt.get("state") not in ("UNBOUND", "SKIPPED"):
+                return False
+            if art_receipt.get("unbound_confirmed") is not True or art_receipt.get("binding_confirmed") is not False:
+                return False
+            if art_receipt.get("actual_url") or art_receipt.get("actual_title"):
+                return False
+        elif article_receipt_path.exists():
             art_receipt = json.loads(article_receipt_path.read_text(encoding="utf-8"))
             if art_receipt.get("state") in ("BOUND", "BLOCKED"):
                 return False
@@ -316,17 +367,19 @@ def finalize_none_before_submit(
                 return False
             if art_receipt.get("unbound_confirmed") is not True:
                 return False
+            if require_bound_article:
+                return False
 
         # 检查商品与文章实读均为 None
-        if product_picker.read_binding(timeout_ms=3000) is not None:
+        if product_picker is not None and product_picker.read_binding(timeout_ms=3000) is not None:
             return False
-        if article_picker.read_binding(timeout_ms=3000) is not None:
+        if article_picker is not None and article_picker.read_binding(timeout_ms=3000) is not None:
             return False
 
         # 检查表单就绪
-        if not product_picker.ready_to_submit(timeout_ms=3000):
+        if product_picker is not None and not product_picker.ready_to_submit(timeout_ms=3000):
             return False
-        if not article_picker.ready_to_submit(timeout_ms=3000):
+        if article_picker is not None and not article_picker.ready_to_submit(timeout_ms=3000):
             return False
 
         atomic_json(readback, {
@@ -335,6 +388,8 @@ def finalize_none_before_submit(
             "unbound_confirmed": True,
             "product_receipt_state": prod_receipt.get("state") if prod_receipt else None,
             "article_receipt_state": art_receipt.get("state") if art_receipt else None,
+            "product_task_id": product_payload.get("task_id") if product_payload else (prod_receipt.get("task_id") if prod_receipt else None),
+            "article_task_id": article_payload.get("task_id") if article_payload else (art_receipt.get("task_id") if art_receipt else None),
         })
         return True
     except Exception:

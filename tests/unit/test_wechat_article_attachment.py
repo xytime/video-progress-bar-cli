@@ -11,6 +11,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.1.0 | 2026-10-12 | Antigravity | 补充 P1/P2 回归测试：NONE 分支旧回执/配置漂移/应有回执缺失拒绝测试；上传器开关隔离与显式参数阻断测试；证据目录复用防 NONE 覆盖测试。 |
 | 1.0.0 | 2026-10-12 | Codex | 初始实现：全量覆盖公众号文章挂接一期核心契约、仲裁矩阵与 G1~G3 保护门禁。 |
 """
 
@@ -39,6 +40,7 @@ from video_processing.utils.wechat_article_execution import (
 from video_processing.utils.wechat_product_picker import BindingIdentityUnavailable
 from scripts.wechat_uploader import (
     _compare_management_article_receipt,
+    _finalize_submission_attachments,
     _management_article_observation,
     _write_submission_receipt,
     EXIT_SUBMITTED_FOR_REVIEW,
@@ -546,4 +548,449 @@ def test_mandatory_article_fails_closed_on_invalid_url_and_timeout(tmp_path):
     receipt_2 = json.loads((tmp_path / "article_selection_receipt.json").read_text())
     assert receipt_2["state"] == "BLOCKED"
     assert receipt_2["binding_required"] is True
+
+
+# ── 7. P1/P2 回归门禁：任务一致性、开关隔离与回执防覆盖 ─────────────────────
+
+
+def test_g2_finalize_none_rejects_missing_required_receipt(tmp_path):
+    """P1 门禁：传入本次商品或文章任务时，若应有回执缺失，坚决拒绝提交！"""
+    product_picker = MockProductPicker(binding=None)
+    article_picker = MockArticlePicker(initial_binding=None)
+
+    # 场景 1: 传入本次商品任务，但商品回执缺失
+    product_task = {
+        "task_id": "prod_task_1",
+        "config_version": "1.0",
+        "config_digest": "dig_prod",
+        "require_product": False,
+    }
+    assert finalize_none_before_submit(
+        tmp_path, product_picker, article_picker, product_payload=product_task
+    ) is False
+
+    # 场景 2: 补充有效商品回执后，传入本次文章任务，但文章回执缺失
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "task_id": "prod_task_1",
+        "config_version": "1.0",
+        "config_digest": "dig_prod",
+        "required": False,
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    article_task = {
+        "task_id": "art_task_1",
+        "config_version": "1.0",
+        "config_digest": "dig_art",
+        "url": VALID_MP_URL,
+    }
+    assert finalize_none_before_submit(
+        tmp_path, product_picker, article_picker,
+        product_payload=product_task, article_payload=article_task
+    ) is False
+
+
+def test_g2_finalize_none_rejects_old_task_receipt(tmp_path):
+    """P1 门禁：当前任务与回执的 task_id 不符（旧任务回执残存），坚决拒绝提交！"""
+    product_picker = MockProductPicker(binding=None)
+    article_picker = MockArticlePicker(initial_binding=None)
+
+    # 场景 1: 商品回执属于历史旧任务
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "task_id": "old_prod_task",
+        "config_version": "1.0",
+        "config_digest": "dig_prod",
+        "required": False,
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    current_prod_task = {
+        "task_id": "new_prod_task",
+        "config_version": "1.0",
+        "config_digest": "dig_prod",
+        "require_product": False,
+    }
+    assert finalize_none_before_submit(
+        tmp_path, product_picker, article_picker, product_payload=current_prod_task
+    ) is False
+
+    # 场景 2: 商品回执匹配，但文章回执属于历史旧任务
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "task_id": "new_prod_task",
+        "config_version": "1.0",
+        "config_digest": "dig_prod",
+        "required": False,
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    (tmp_path / "article_selection_receipt.json").write_text(json.dumps({
+        "task_id": "old_art_task",
+        "config_version": "1.0",
+        "config_digest": "dig_art",
+        "requested_url": VALID_MP_URL,
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    current_art_task = {
+        "task_id": "new_art_task",
+        "config_version": "1.0",
+        "config_digest": "dig_art",
+        "url": VALID_MP_URL,
+    }
+    assert finalize_none_before_submit(
+        tmp_path, product_picker, article_picker,
+        product_payload=current_prod_task, article_payload=current_art_task
+    ) is False
+
+
+def test_g2_finalize_none_rejects_config_drift(tmp_path):
+    """P1 门禁：当前任务与回执版本/摘要/URL漂移，坚决拒绝提交！"""
+    product_picker = MockProductPicker(binding=None)
+    article_picker = MockArticlePicker(initial_binding=None)
+
+    # 场景 1: 商品配置版本漂移
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "task_id": "task_1",
+        "config_version": "v1.0",
+        "config_digest": "digest_A",
+        "required": False,
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    drifted_prod_task = {
+        "task_id": "task_1",
+        "config_version": "v2.0",  # 漂移
+        "config_digest": "digest_A",
+        "require_product": False,
+    }
+    assert finalize_none_before_submit(
+        tmp_path, product_picker, article_picker, product_payload=drifted_prod_task
+    ) is False
+
+    # 场景 2: 文章配置摘要漂移
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "task_id": "task_1",
+        "config_version": "v1.0",
+        "config_digest": "digest_A",
+        "required": False,
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+    (tmp_path / "article_selection_receipt.json").write_text(json.dumps({
+        "task_id": "art_1",
+        "config_version": "v1.0",
+        "config_digest": "digest_X",
+        "requested_url": VALID_MP_URL,
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    drifted_art_task = {
+        "task_id": "art_1",
+        "config_version": "v1.0",
+        "config_digest": "digest_Y",  # 漂移
+        "url": VALID_MP_URL,
+    }
+    valid_prod_task = {
+        "task_id": "task_1",
+        "config_version": "v1.0",
+        "config_digest": "digest_A",
+        "require_product": False,
+    }
+    assert finalize_none_before_submit(
+        tmp_path, product_picker, article_picker,
+        product_payload=valid_prod_task, article_payload=drifted_art_task
+    ) is False
+
+
+def test_g2_finalize_none_succeeds_with_consistent_tasks_and_downgrade(tmp_path):
+    """P1 门禁：商品与文章任务一致、降级清退真实确证且页面干净时，正向放行纯视频。"""
+    product_picker = MockProductPicker(binding=None)
+    article_picker = MockArticlePicker(initial_binding=None)
+
+    prod_task = {
+        "task_id": "task_prod_ok",
+        "config_version": "v1.0",
+        "config_digest": "digest_P",
+        "require_product": False,
+    }
+    (tmp_path / "product_selection_receipt.json").write_text(json.dumps({
+        "task_id": "task_prod_ok",
+        "config_version": "v1.0",
+        "config_digest": "digest_P",
+        "required": False,
+        "state": "SKIPPED",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    art_task = {
+        "task_id": "task_art_ok",
+        "config_version": "v1.0",
+        "config_digest": "digest_A",
+        "url": VALID_MP_URL,
+    }
+    (tmp_path / "article_selection_receipt.json").write_text(json.dumps({
+        "task_id": "task_art_ok",
+        "config_version": "v1.0",
+        "config_digest": "digest_A",
+        "requested_url": VALID_MP_URL,
+        "state": "UNBOUND",
+        "binding_confirmed": False,
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    assert finalize_none_before_submit(
+        tmp_path, product_picker, article_picker,
+        product_payload=prod_task, article_payload=art_task
+    ) is True
+
+    readback = json.loads((tmp_path / "none_pre_submit_readback.json").read_text())
+    assert readback["final_verified"] is True
+    assert readback["attachment_type"] == "NONE"
+    assert readback["product_task_id"] == "task_prod_ok"
+    assert readback["article_task_id"] == "task_art_ok"
+
+
+def test_p1_uploader_switch_disabled_rejects_explicit_article_arguments(tmp_path, monkeypatch):
+    """P1 门禁：enable_wechat_article_link=False 时，显式文章参数被严格拦截，禁止绕过，不启动浏览器。"""
+    from scripts.wechat_uploader import run_uploader
+    from unittest.mock import patch
+
+    monkeypatch.setattr(settings, "enable_wechat_article_link", False)
+
+    video = tmp_path / "video.mp4"
+    copy = tmp_path / "copy.txt"
+    cover = tmp_path / "cover.jpg"
+    video.write_bytes(b"video")
+    copy.write_text("copy", encoding="utf-8")
+    cover.write_bytes(b"cover")
+
+    # 1. 显式 --article-url
+    with patch("scripts.wechat_uploader.sync_playwright") as mock_pw:
+        code = run_uploader(
+            video_path=str(video),
+            copy_path=str(copy),
+            cover_path=str(cover),
+            state_path=str(tmp_path / "state.json"),
+            article_url=VALID_MP_URL,
+        )
+        assert code == 1
+        mock_pw.assert_not_called()
+
+    # 2. 显式 --article-task-decision
+    decision_file = tmp_path / "art_decision.json"
+    decision_file.write_text(json.dumps({"task_id": "art_1", "url": VALID_MP_URL}))
+    with patch("scripts.wechat_uploader.sync_playwright") as mock_pw:
+        code = run_uploader(
+            video_path=str(video),
+            copy_path=str(copy),
+            cover_path=str(cover),
+            state_path=str(tmp_path / "state.json"),
+            article_task_decision=str(decision_file),
+        )
+        assert code == 1
+        mock_pw.assert_not_called()
+
+
+def test_p2_submission_receipt_isolated_from_stale_none_readback(tmp_path):
+    """P2 门禁：证据目录复用存在旧 none 回执时，本次文章回读绝不被覆盖为 NONE。"""
+    import time
+
+    # 构造更早的旧 NONE 回执
+    stale_none = tmp_path / "none_pre_submit_readback.json"
+    stale_none.write_text(json.dumps({
+        "final_verified": True,
+        "attachment_type": "NONE",
+        "unbound_confirmed": True,
+    }), encoding="utf-8")
+
+    time.sleep(0.05)
+
+    # 构造本次文章回执
+    art_readback = tmp_path / "article_pre_submit_readback.json"
+    art_readback.write_text(json.dumps({
+        "final_verified": True,
+        "attachment_type": "ARTICLE",
+        "actual_url": VALID_MP_URL,
+        "actual_title": VALID_TITLE,
+    }), encoding="utf-8")
+
+    # 测试显式传入 expected_attachment="ARTICLE"
+    _write_submission_receipt(
+        tmp_path,
+        {"platform_post_id": "native_post_101", "platform_object_nonce": "nonce_101"},
+        expected_attachment="ARTICLE",
+    )
+    receipt = json.loads((tmp_path / "submission_receipt.json").read_text())
+    assert receipt["attachment_type"] == "ARTICLE"
+    assert receipt["article_url"] == VALID_MP_URL
+    assert receipt["article_binding_confirmed"] is True
+
+    # 测试未显式传入 expected_attachment 时，基于最新修改时间同样正确识别 ARTICLE
+    _write_submission_receipt(
+        tmp_path,
+        {"platform_post_id": "native_post_102", "platform_object_nonce": "nonce_102"},
+    )
+    receipt_auto = json.loads((tmp_path / "submission_receipt.json").read_text())
+    assert receipt_auto["attachment_type"] == "ARTICLE"
+    assert receipt_auto["article_url"] == VALID_MP_URL
+
+
+def test_p1_finalize_submission_attachments_routing(tmp_path):
+    """P1 门禁：_finalize_submission_attachments 在开关开启与关闭下的执行分支隔离验证。"""
+    from unittest.mock import MagicMock, patch
+
+    mock_prod_picker = MagicMock()
+    mock_art_picker = MagicMock()
+
+    # 1. 开关关闭 (enable_article_link=False)
+    with patch("video_processing.utils.wechat_product_execution.finalize_product_before_submit") as mock_fin_prod, \
+         patch("video_processing.utils.wechat_article_execution.finalize_none_before_submit") as mock_fin_none, \
+         patch("video_processing.utils.wechat_article_execution.finalize_article_before_submit") as mock_fin_art:
+
+        # 1a. 无商品任务且无回执 -> 直接放行 (True, 0)
+        ok, code = _finalize_submission_attachments(
+            evidence_root=tmp_path,
+            product_picker=mock_prod_picker,
+            article_picker=mock_art_picker,
+            task_product=None,
+            task_article=None,
+            expected_attachment="NONE",
+            require_bound_product=False,
+            enable_article_link=False,
+        )
+        assert ok is True and code == 0
+        mock_fin_prod.assert_not_called()
+        mock_fin_none.assert_not_called()
+        mock_fin_art.assert_not_called()
+
+        # 1b. 有非强制商品任务，商品核验成功 -> (True, 0)
+        mock_fin_prod.return_value = True
+        ok, code = _finalize_submission_attachments(
+            evidence_root=tmp_path,
+            product_picker=mock_prod_picker,
+            article_picker=mock_art_picker,
+            task_product={"require_product": False},
+            task_article={"url": VALID_MP_URL},
+            expected_attachment="NONE",
+            require_bound_product=False,
+            enable_article_link=False,
+        )
+        assert ok is True and code == 0
+        mock_fin_prod.assert_called_once()
+        mock_fin_none.assert_not_called()
+        mock_fin_art.assert_not_called()
+        mock_fin_prod.reset_mock()
+
+        # 1c. 有强制商品任务，商品核验失败 -> 必须返回 (False, 14)，不可调用文章逻辑
+        mock_fin_prod.return_value = False
+        ok, code = _finalize_submission_attachments(
+            evidence_root=tmp_path,
+            product_picker=mock_prod_picker,
+            article_picker=mock_art_picker,
+            task_product={"require_product": True},
+            task_article=None,
+            expected_attachment="NONE",
+            require_bound_product=True,
+            enable_article_link=False,
+        )
+        assert ok is False and code == 14
+        mock_fin_none.assert_not_called()
+        mock_fin_art.assert_not_called()
+        mock_fin_prod.reset_mock()
+
+    # 2. 开关开启 (enable_article_link=True)
+    with patch("video_processing.utils.wechat_product_execution.finalize_product_before_submit") as mock_fin_prod, \
+         patch("video_processing.utils.wechat_article_execution.finalize_none_before_submit") as mock_fin_none, \
+         patch("video_processing.utils.wechat_article_execution.finalize_article_before_submit") as mock_fin_art:
+
+        # 2a. expected_attachment="PRODUCT" 路由到商品门禁
+        mock_fin_prod.return_value = True
+        ok, code = _finalize_submission_attachments(
+            evidence_root=tmp_path,
+            product_picker=mock_prod_picker,
+            article_picker=mock_art_picker,
+            task_product={"require_product": True},
+            task_article=None,
+            expected_attachment="PRODUCT",
+            require_bound_product=True,
+            enable_article_link=True,
+        )
+        assert ok is True and code == 0
+        mock_fin_prod.assert_called_once_with(
+            {"require_product": True}, mock_prod_picker, tmp_path, require_bound=True
+        )
+        mock_fin_none.assert_not_called()
+        mock_fin_art.assert_not_called()
+        mock_fin_prod.reset_mock()
+
+        # 2b. expected_attachment="ARTICLE" 路由到文章门禁
+        mock_fin_art.return_value = True
+        ok, code = _finalize_submission_attachments(
+            evidence_root=tmp_path,
+            product_picker=mock_prod_picker,
+            article_picker=mock_art_picker,
+            task_product=None,
+            task_article={"url": VALID_MP_URL},
+            expected_attachment="ARTICLE",
+            require_bound_product=False,
+            enable_article_link=True,
+        )
+        assert ok is True and code == 0
+        mock_fin_art.assert_called_once_with({"url": VALID_MP_URL}, mock_art_picker, tmp_path)
+        mock_fin_prod.assert_not_called()
+        mock_fin_none.assert_not_called()
+        mock_fin_art.reset_mock()
+
+        # 2c. expected_attachment="NONE" 路由到全量 NONE 门禁，透传双任务 payload
+        mock_fin_none.return_value = True
+        ok, code = _finalize_submission_attachments(
+            evidence_root=tmp_path,
+            product_picker=mock_prod_picker,
+            article_picker=mock_art_picker,
+            task_product={"require_product": False},
+            task_article={"url": VALID_MP_URL},
+            expected_attachment="NONE",
+            require_bound_product=False,
+            enable_article_link=True,
+        )
+        assert ok is True and code == 0
+        mock_fin_none.assert_called_once_with(
+            tmp_path,
+            mock_prod_picker,
+            mock_art_picker,
+            product_payload={"require_product": False},
+            article_payload={"url": VALID_MP_URL},
+            require_bound_product=False,
+        )
+        mock_fin_prod.assert_not_called()
+        mock_fin_art.assert_not_called()
+        mock_fin_none.reset_mock()
+
+        # 2d. expected_attachment 为非法值 -> (False, 1)
+        ok, code = _finalize_submission_attachments(
+            evidence_root=tmp_path,
+            product_picker=mock_prod_picker,
+            article_picker=mock_art_picker,
+            task_product=None,
+            task_article=None,
+            expected_attachment="INVALID",
+            require_bound_product=False,
+            enable_article_link=True,
+        )
+        assert ok is False and code == 1
+
 
