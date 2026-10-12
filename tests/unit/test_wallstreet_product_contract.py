@@ -112,6 +112,8 @@ def test_product_unavailable_submits_b_without_product_and_never_reuploads(setup
         decision=read_product_task_decision(Path(args[args.index('--product-task-decision')+1]));calls.append(decision)
         assert execute_product_task(decision,UnavailablePicker(),evidence,tmp_path/'product-status.json',
             wait_output=tmp_path,artifacts_digest=product_artifacts_digest(Path(package['video']),Path(package['copy']),Path(package['cover'])))
+        from video_processing.utils.wechat_product_execution import finalize_product_before_submit
+        assert finalize_product_before_submit(decision,UnavailablePicker(),evidence)
         _write_submission_receipt(evidence,accepted_receipt(decision))
         actual=json.loads((evidence/'submission_receipt.json').read_text())
         assert actual['product_unbound_confirmed'] and not actual['product_id']

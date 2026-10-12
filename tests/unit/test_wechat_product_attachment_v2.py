@@ -3,6 +3,7 @@
 # Modification History
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
+| 1.2.0 | 2026-10-12 | Codex | 验证逐次失败证据保留，显式挂商品验收拒绝无绑定，日常降级保持。 |
 | 1.1.0 | 2026-10-11 | Codex | 缺商品可继续，覆盖旧等待释放、身份清理、两入口回执及已提交保护。 |
 """
 from concurrent.futures import ThreadPoolExecutor
@@ -100,7 +101,7 @@ def product_fixture(tmp_path):
 def test_unbound_receipt_satisfies_english_submission_and_final_form_gate(tmp_path):
     from scripts.submit_english_world_review import _product_receipt_is_confirmed
     from video_processing.core.wechat_product_policy import ProductLookup, ProductIdentity
-    from video_processing.utils.wechat_product_execution import verify_product_before_submit
+    from video_processing.utils.wechat_product_execution import finalize_product_before_submit
     active=product_fixture(tmp_path)
     db=PipelineDB(str(tmp_path/'db.sqlite'))
     selected=validate_manual_product(active,'product_700007')
@@ -111,10 +112,18 @@ def test_unbound_receipt_satisfies_english_submission_and_final_form_gate(tmp_pa
     picker=Unavailable()
     evidence=tmp_path/'evidence'
     assert execute_product_task(task,picker,evidence,tmp_path/'status')
-    assert verify_product_before_submit(task,picker)
+    receipt=json.loads((evidence/'product_selection_receipt.json').read_text())
+    assert receipt['attempts'] == len(receipt['attempt_records']) == 3
+    assert all(r['product_id'] == selected['product_id'] and r['title'] == selected['title']
+               and r['outcome'] == 'TARGET_UNAVAILABLE' for r in receipt['attempt_records'])
+    assert receipt['fallback_reason'] == 'DEFAULT_PRODUCT_NOT_BOUND'
+    assert receipt['state'] == 'UNBOUND' and receipt['actual_product_id'] is None
+    assert finalize_product_before_submit(task,picker,evidence)
     assert _product_receipt_is_confirmed(evidence,task)
+    assert not finalize_product_before_submit(task,picker,evidence,require_bound=True)
+    assert not (evidence/'product_pre_submit_readback.json').exists()
     picker.binding=ProductIdentity('wrong','残留商品')
-    assert not verify_product_before_submit(task,picker)
+    assert not finalize_product_before_submit(task,picker,evidence)
     path=evidence/'product_selection_receipt.json'
     receipt=json.loads(path.read_text())
     receipt['unbound_confirmed']=False;path.write_text(json.dumps(receipt))
@@ -125,6 +134,7 @@ def test_unbound_receipt_satisfies_english_submission_and_final_form_gate(tmp_pa
 
 def test_full_catalog_exact_manual_no_fallback_and_frozen_versions(tmp_path):
     from video_processing.core.wechat_product_policy import ProductLookup, ProductIdentity
+    from video_processing.utils.wechat_product_execution import finalize_product_before_submit
     active=product_fixture(tmp_path)
     options=manual_product_options(active)
     selected=validate_manual_product(active,'product_700007')
@@ -143,7 +153,12 @@ def test_full_catalog_exact_manual_no_fallback_and_frozen_versions(tmp_path):
             assert product==ProductIdentity('700007',selected['title'])
             return ProductLookup.AVAILABLE
         def select(self,product,**kwargs):self.binding=product
-    assert execute_product_task(task,ExactPicker(),tmp_path/'evidence',tmp_path/'status.json')
+    picker=ExactPicker()
+    assert execute_product_task(task,picker,tmp_path/'evidence',tmp_path/'status.json')
+    assert finalize_product_before_submit(task,picker,tmp_path/'evidence',require_bound=True)
+    proof=json.loads((tmp_path/'evidence/product_pre_submit_readback.json').read_text())
+    assert proof['binding_required'] and proof['final_verified'] and proof['state']=='BOUND'
+    assert (proof['actual_product_id'],proof['actual_title'])==(selected['product_id'],selected['title'])
     config=json.loads(active.read_text());config['version']='changed-later';active.write_text(json.dumps(config))
     assert freeze_task_product_decision(db,'manual',context,active)==task
     assert task['config_version']!='changed-later'
@@ -267,7 +282,7 @@ def test_sql_wait_filter_before_limit_no_queue_starvation(tmp_path,monkeypatch):
     # More than any fixed small scan limit: filtering must occur before LIMIT.
     for n in range(35):
         yid=f'blocked{n:03d}'
-        db.add_video(yid,yid,'channel',score=100,product_intent='AUTO')
+        db.add_video(yid,yid,'channel',score=150-n,product_intent='AUTO')
         db.mark_video_ready_for_publication(yid)
         ProductWaitStore(out/'wechat_product_waits.json').defer(f'pipeline:{yid}:0',reason='PRODUCT_UNAVAILABLE',
             config_digest='policy',artifacts_digest='media',submission_state='NOT_SUBMITTED',
@@ -284,7 +299,8 @@ def test_sql_wait_filter_before_limit_no_queue_starvation(tmp_path,monkeypatch):
     with store._locked() as rows:rows['tasks']['pipeline:blocked000:0']['next_check_at']=0
     assert worker.dispatch_once(manager)==1 and manager.called[-1]=='blocked000'
     with store._locked() as rows:rows['tasks']['pipeline:blocked000:0']['state']='BLOCKED'
-    assert worker.dispatch_once(manager)==1 and manager.called[-1]=='blocked000'
+    with store._locked() as rows:rows['tasks']['pipeline:blocked000:0']['reason']='CANNOT_CONFIRM_CLEARED'
+    assert worker.dispatch_once(manager)==1 and manager.called[-1]=='blocked001'
     with store._locked() as rows:
         for row in rows['tasks'].values():row['submission_state']='UNCERTAIN'
     assert worker.dispatch_once(manager)==1 and manager.called[-1]=='available'

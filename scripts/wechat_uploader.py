@@ -3,6 +3,8 @@
 # Modification History
 | Version | Date       | Author                              | Description                                              |
 |---------|------------|-------------------------------------|----------------------------------------------------------|
+| 5.22.0 | 2026-10-12 | Codex | 区分商家 outProductId 与视频号 productId；精确选中行或绑定原回执的原生对应关系才允许核验一致。 |
+| 5.21.0 | 2026-10-12 | Codex | 正式挂商品验收可显式要求最终实读绑定；保留逐次选品原因，日常可选挂接不变。 |
 | 5.20.0 | 2026-10-11 | Codex | 商品挂接失败且清空就绪时允许无商品继续，兼容旧参数和冻结任务。 |
 | 5.19.0 | 2026-10-10 | Antigravity | 接入有界图书商品挂载（财经/新闻/默认），仅当 binding_confirmed=True 时允许发表。 |
 | 5.18.0 | 2026-10-10 | Codex | 同会话回执保留 nonce；跨会话精确关联及公开日期与原生时间一致性校验。 |
@@ -306,6 +308,7 @@ def _write_product_selection_receipt(
         "actual_title": result.actual.title if (result and result.actual) else None,
         "fallback_reason": result.fallback_reason if result else None,
         "attempts": result.attempts if result else 0,
+        "attempt_records": list(result.attempt_records) if result else [],
         "elapsed_seconds": result.elapsed_seconds if result else 0.0,
     }
     try:
@@ -582,6 +585,169 @@ def _collect_management_cards(page) -> dict[str, dict[str, str]]:
     }
 
 
+def _management_product_observation(record: dict) -> dict:
+    """保留原生记录的商品字段结构及公开商品身份，未知结构不推断未挂接。
+
+    不保存响应全文、描述、用户资料或会话信息；仅用于同作品核验诊断。
+    """
+    public_identity = {'productId', 'product_id', 'goodsId', 'goods_id',
+                       'productTitle', 'productName', 'goodsName', 'goods_name'}
+    def shape(value, depth=0):
+        if depth > 6:
+            return 'DEPTH_LIMIT'
+        if isinstance(value, dict):
+            return {key: child if key in public_identity and isinstance(child, (str, int))
+                    else shape(child, depth + 1) for key, child in value.items()}
+        if isinstance(value, list):
+            return [shape(child, depth + 1) for child in value[:5]]
+        if value is None:
+            return None
+        return type(value).__name__
+    observed = {'state': 'UNVERIFIED', 'native_record_shape': shape(record)}
+    desc = record.get('desc')
+    product = desc.get('product') if isinstance(desc, dict) else None
+    # 已实读的 post_list 原生 desc.product，空对象明确表示没有商品。
+    # 缺字段/未知类型没有这种语义，不能按空值推断。
+    if isinstance(product, dict):
+        if product == {}:
+            observed.update(state='UNBOUND', actual_product_id=None, actual_title=None)
+        elif (isinstance(product.get('productId'), str) and product['productId'].strip()
+              and isinstance(product.get('title'), str) and product['title'].strip()):
+            observed.update(state='BOUND', actual_product_id=product['productId'], actual_title=product['title'])
+        observed['identity_source'] = 'POST_LIST_DESC_PRODUCT'
+    return observed
+
+
+def _compare_management_product_receipt(record: dict, identity_receipt: Path | None) -> dict:
+    """只比较同一原生作品的最终表单证据，缺证据或未知商品状态保持未核实。"""
+    observed = record.get('product_observation') or {}
+    result = {'state': 'UNVERIFIED', 'actual': observed}
+    if identity_receipt is None:
+        return result
+    try:
+        expected = json.loads(identity_receipt.read_text())
+        if not isinstance(expected, dict) or not isinstance(observed, dict):
+            return result
+        if (not expected.get('platform_post_id')
+                or expected.get('platform_post_id') not in {record.get('platform_post_id'), record.get('platform_export_id')}
+                or (expected.get('platform_object_nonce') and expected['platform_object_nonce'] != record.get('platform_object_nonce'))
+                or expected.get('product_identity_source') not in {'FINAL_FORM_READBACK', 'DOM_SELECTION_AND_UNCHANGED_FORM'}):
+            return result
+        result['expected'] = {key: expected.get(key) for key in (
+            'product_id', 'product_platform_id', 'product_title', 'product_binding_confirmed', 'product_unbound_confirmed')}
+        if observed.get('state') == 'BOUND':
+            platform_product_id = expected.get('product_platform_id')
+            if platform_product_id is not None:
+                if (not isinstance(platform_product_id, str) or not platform_product_id.isdigit()
+                        or expected.get('product_platform_id_source') != 'SELECTED_PUBLIC_ROW'):
+                    return result
+                result['mapping_source'] = 'SELECTED_PUBLIC_ROW'
+            else:
+                # 旧回执保持原样；补充凭据必须绑定原文件哈希、作品 ID/nonce，以及同条原生商品记录。
+                supplement = identity_receipt.with_name('product_identity_mapping.json')
+                if supplement.exists():
+                    mapping = json.loads(supplement.read_text())
+                    native = mapping.get('native_product') if isinstance(mapping, dict) else None
+                    if (not isinstance(native, dict) or mapping.get('schema_version') != 1
+                            or mapping.get('source') != 'PLATFORM_CATALOG_READBACK'
+                            or mapping.get('catalog_response_path') not in {
+                                '/shop-faas/mmecfinderassistantnode/live/cgi/get_all_window_products',
+                                '/shop-faas/mmecfinderassistantnode/live/cgi/search_products'}
+                            or mapping.get('submission_receipt_sha256') != hashlib.sha256(identity_receipt.read_bytes()).hexdigest()
+                            or mapping.get('platform_post_id') != expected['platform_post_id']
+                            or not expected.get('platform_object_nonce')
+                            or mapping.get('platform_object_nonce') != expected['platform_object_nonce']
+                            or record.get('platform_object_nonce') != expected['platform_object_nonce']
+                            or native.get('outProductId') != expected.get('product_id')
+                            or native.get('title') != expected.get('product_title')
+                            or not isinstance(native.get('productId'), str) or not native['productId'].isdigit()):
+                        return result
+                    platform_product_id = native['productId']
+                    result['mapping_source'] = mapping['source']
+                    result['mapping_evidence'] = str(supplement)
+            result['expected']['product_platform_id'] = platform_product_id
+            matches = (expected.get('product_binding_confirmed') is True
+                       and expected.get('product_unbound_confirmed') is False
+                       and (platform_product_id or expected.get('product_id'), expected.get('product_title')) ==
+                       (observed.get('actual_product_id'), observed.get('actual_title')))
+        elif observed.get('state') == 'UNBOUND':
+            matches = (expected.get('product_unbound_confirmed') is True
+                       and expected.get('product_binding_confirmed') is False
+                       and expected.get('product_id') is None and expected.get('product_title') is None)
+        else:
+            return result
+        result['state'] = 'MATCH' if matches else 'MISMATCH'
+        return result
+    except (OSError, ValueError, TypeError):
+        return result
+
+
+def _management_detail_product_observation(payload: object, post_id: str, nonce: str) -> dict:
+    """成功的同作品完整详情可证明商品字段未设置；残缺列表不能证明。"""
+    unknown = {'state': 'UNVERIFIED'}
+    if not isinstance(payload, dict) or type(payload.get('errCode')) is not int or payload['errCode'] != 0:
+        return unknown
+    data = payload.get('data')
+    post = data.get('object') if isinstance(data, dict) else None
+    if (not isinstance(post, dict) or post.get('objectId') != post_id
+            or not nonce or post.get('objectNonce') != nonce):
+        return unknown
+    observed = _management_product_observation(post)
+    desc = post.get('desc')
+    if not isinstance(desc, dict):
+        return unknown
+    # get_post_info 的完整原生 desc 在未挂商品时省略 product/component。
+    # 只接受同时提供媒体、正文、标题及修改信息的详情，拒绝错误/截断/另一作品。
+    if (observed['state'] == 'UNVERIFIED' and 'product' not in desc and 'component' not in desc
+            and isinstance(desc.get('media'), list) and len(desc['media']) == 1
+            and isinstance(desc['media'][0], dict)
+            and isinstance(desc['media'][0].get('videoPlayLen'), int) and desc['media'][0]['videoPlayLen'] > 0
+            and isinstance(desc.get('description'), str)
+            and isinstance(desc.get('shortTitle'), list) and len(desc['shortTitle']) == 1
+            and isinstance(desc['shortTitle'][0], dict)
+            and isinstance(desc['shortTitle'][0].get('shortTitle'), str)
+            and desc.get('extReading') == {} and isinstance(desc.get('modFeedInfo'), dict)):
+        observed.update(state='UNBOUND', actual_product_id=None, actual_title=None,
+                        absence_evidence='COMPLETE_POST_INFO_WITHOUT_PRODUCT_OR_COMPONENT')
+    observed.update(identity_source='POST_INFO_EXACT_WORK', platform_post_id=post_id,
+                    platform_object_nonce=nonce)
+    return observed
+
+
+def _read_management_product_detail(page, evidence_root: Path, record: dict) -> dict:
+    """从唯一原生作品的编辑入口只读详情；不修改字段、不点击完成。"""
+    unknown = {'state': 'UNVERIFIED'}
+    post_id = record.get('platform_post_id')
+    nonce = record.get('platform_object_nonce')
+    if not isinstance(post_id, str) or not isinstance(nonce, str) or not nonce:
+        return unknown
+    try:
+        matched = page.locator('.post-feed-item').evaluate_all('''(nodes, identity) => {
+            const matches = nodes.filter(n => n.__vue__?.$props?.post?.objectId === identity.id &&
+                n.__vue__?.$props?.post?.objectNonce === identity.nonce);
+            if (matches.length !== 1) return false;
+            matches[0].setAttribute('data-product-readback-target', 'true');
+            return true;
+        }''', {'id': post_id, 'nonce': nonce})
+        if matched is not True:
+            return unknown
+        target = page.locator('[data-product-readback-target=true]')
+        if target.count() != 1:
+            return unknown
+        target.hover(timeout=3000)
+        control = page.locator('[data-product-readback-target=true] .edit-cover-item .opr-item')
+        if control.count() != 1 or not control.is_visible():
+            return unknown
+        with page.expect_response(lambda response: response.url.split('?', 1)[0].endswith('/post/get_post_info'), timeout=15000) as response:
+            control.click(timeout=3000)
+        observed = _management_detail_product_observation(response.value.json(), post_id, nonce)
+        _capture_wechat_evidence(page, evidence_root, 'product_detail_readback')
+        return observed
+    except Exception as exc:
+        logger.info('Same-work product detail unavailable: %s', type(exc).__name__)
+        return unknown
+
+
 def _collect_management_cards_from_post_list_payload(payload: object) -> dict[str, dict[str, str]]:
     """从作品管理原生列表响应提取 objectId，绝不从标题反向寻找历史作品。"""
     if not isinstance(payload, dict):
@@ -616,6 +782,7 @@ def _collect_management_cards_from_post_list_payload(payload: object) -> dict[st
             "short_title": short_title,
             "identity_source": "post_list_api",
             "platform_status": str(record["status"]) if record.get("status") is not None else "",
+            "product_observation": _management_product_observation(record),
         }
     return cards
 
@@ -726,13 +893,22 @@ def _write_submission_receipt(evidence_dir: Path, receipt: dict[str, str]) -> No
                            product_config_version=product_task.get('config_version'),
                            product_config_digest=product_task.get('config_digest'),
                            product_attachment_reason=product_task['reason'])
-        selection_path = evidence_dir / 'product_selection_receipt.json'
+        selection_path = evidence_dir / 'product_pre_submit_readback.json'
         if selection_path.exists():
             selection = json.loads(selection_path.read_text(encoding='utf-8'))
-            receipt = dict(receipt, product_binding_confirmed=selection.get('binding_confirmed'),
-                           product_binding_required=selection.get('binding_required'),
-                           product_unbound_confirmed=selection.get('unbound_confirmed'),
-                           product_id=selection.get('actual_product_id'), product_title=selection.get('actual_title'))
+            valid = selection.get('final_verified') is True
+            if product_task_path.exists():
+                valid = valid and all(selection.get(key) == product_task.get(key)
+                                      for key in ('task_id', 'config_version', 'config_digest'))
+            if valid:
+                receipt = dict(receipt, product_binding_confirmed=selection.get('binding_confirmed'),
+                               product_binding_required=selection.get('binding_required'),
+                               product_unbound_confirmed=selection.get('unbound_confirmed'),
+                               product_id=selection.get('actual_product_id'), product_title=selection.get('actual_title'),
+                               product_identity_source=selection['identity_source'])
+                if selection.get('actual_platform_product_id') is not None:
+                    receipt.update(product_platform_id=selection['actual_platform_product_id'],
+                                   product_platform_id_source='SELECTED_PUBLIC_ROW')
         receipt_path = evidence_dir / "submission_receipt.json"
         temporary_path = receipt_path.with_suffix(".json.tmp")
         temporary_path.write_text(json.dumps(receipt, ensure_ascii=False, sort_keys=True), encoding="utf-8")
@@ -1015,10 +1191,13 @@ def verify_management_publication_by_id(
     normalized_post_id = (platform_post_id or "").strip()
     nonce = _submission_identity_nonce(identity_receipt, normalized_post_id)
     for attempt in range(MANAGEMENT_VERIFY_ATTEMPTS):
-        cards, loaded = (
-            _load_management_cards(page, search_title=expected_title)
-            if expected_title else _load_management_cards(page)
-        )
+        # 标题搜索会过滤正文且可能清空同 ID 的 DOM；先按原生身份查当前页。
+        cards, loaded = _load_management_cards(page)
+        if expected_title and loaded and not any(
+            normalized_post_id in {card.get('platform_post_id'), card.get('platform_export_id')}
+            or (nonce and card.get('platform_object_nonce') == nonce) for card in cards.values()
+        ):
+            cards, loaded = _load_management_cards(page, search_title=expected_title)
         matches = [card for card in cards.values() if normalized_post_id in {
             card.get("platform_post_id"), card.get("platform_export_id")
         }] if loaded else []
@@ -1050,6 +1229,12 @@ def verify_management_publication_by_id(
                 state = classify_management_component(record.get("component_state"))
                 if state == MANAGEMENT_PUBLISHED:
                     reason = "DOM_POSTED_PUBLIC_COMPONENT"
+            # 在只读详情导航之前保存作品管理页，保留公开状态的原始页面证据。
+            _capture_wechat_evidence(page, evidence_root, f"management_{state.lower()}")
+            if identity_receipt and (record.get('product_observation') or {}).get('state') == 'UNVERIFIED':
+                detail = _read_management_product_detail(page, evidence_root, record)
+                if detail.get('state') in {'BOUND', 'UNBOUND'}:
+                    record['product_observation'] = detail
             try:
                 evidence_root.mkdir(parents=True, exist_ok=True)
                 (evidence_root / "management_readback.json").write_text(json.dumps({
@@ -1064,11 +1249,12 @@ def verify_management_publication_by_id(
                     "state": state,
                     "reason": reason,
                     "component_state": record.get("component_state"),
+                    "product_observation": record.get("product_observation", {'state': 'UNVERIFIED'}),
+                    "product_verification": _compare_management_product_receipt(record, identity_receipt),
                     **_management_public_time(record, state),
                 }, ensure_ascii=False, indent=2), encoding="utf-8")
             except OSError as exc:
                 logger.warning("Unable to persist management readback diagnostics: %s", type(exc).__name__)
-            _capture_wechat_evidence(page, evidence_root, f"management_{state.lower()}")
             return state, record.get("platform_url", "")
         if attempt + 1 < MANAGEMENT_VERIFY_ATTEMPTS:
             logger.info(
@@ -2059,6 +2245,7 @@ def run_uploader(
     require_product: bool = False,
     source_channel_id: str | None = None,
     stop_before_submit: bool = False,
+    require_bound_product: bool = False,
     product_task_decision: str | None = None,
 ) -> int:
     """运行 Playwright 微信上传自动化"""
@@ -3362,10 +3549,12 @@ def run_uploader(
         # 商品任务契约优先于旧全局开关与 --require-product。显式 NONE 绝不被补挂。
         from video_processing.utils.wechat_product_task import read_product_task_decision
         from video_processing.utils.wechat_product_execution import execute_product_task
+        # 同一实例保留本次平台选中行证据；不得在最终核验时丢失或重建。
+        product_picker = PlaywrightProductPicker(page)
         try:
             if product_task_decision:
                 # 沿用浏览器启动前已校验契约及实际观察代次，不能重置等待输入。
-                if not execute_product_task(task_product, PlaywrightProductPicker(page), evidence_root,
+                if not execute_product_task(task_product, product_picker, evidence_root,
                                             settings.wechat_product_status_path,
                                             wait_output=state_file.parent, artifacts_digest=product_artifacts):
                     _capture_wechat_evidence(page, evidence_root, "product_contract_failed")
@@ -3377,7 +3566,7 @@ def run_uploader(
                 policy = load_policy(settings.wechat_product_policy_path)
                 decision = policy.decide(category=category, source_channel_id=source_channel_id)
                 record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path, phase="STARTED")
-                product_result = select_optional_product(decision=decision, picker=PlaywrightProductPicker(page),
+                product_result = select_optional_product(decision=decision, picker=product_picker,
                                                          timeout_seconds=decision.timeout_seconds)
                 _write_product_selection_receipt(evidence_root, required=True, result=product_result)
                 record_adoption(policy, decision, evidence_root, settings.wechat_product_status_path,
@@ -3419,16 +3608,19 @@ def run_uploader(
                 browser.close()
                 return 1
 
-        if task_product is not None:
-            from video_processing.utils.wechat_product_execution import verify_product_before_submit
-            if not verify_product_before_submit(task_product, PlaywrightProductPicker(page)):
-                logger.error("Product binding changed after form cleanup; stopping before submission.")
-                if task_product['require_product']:
+        if task_product is not None or (evidence_root / 'product_selection_receipt.json').exists():
+            from video_processing.utils.wechat_product_execution import finalize_product_before_submit
+            if not finalize_product_before_submit(task_product, product_picker, evidence_root,
+                                                   require_bound=require_bound_product):
+                logger.error("Final product state does not satisfy submission verification; stopping before submission.")
+                if task_product is not None and task_product['require_product']:
                     from video_processing.utils.wechat_product_execution import record_pre_submit_product_block
                     record_pre_submit_product_block(task_product, evidence_root, settings.wechat_product_status_path,
-                                                    state_file.parent, product_artifacts, 'BINDING_CHANGED_BEFORE_SUBMIT')
+                                                    state_file.parent, product_artifacts,
+                                                    'BOUND_PRODUCT_VERIFICATION_FAILED' if require_bound_product
+                                                    else 'BINDING_CHANGED_BEFORE_SUBMIT')
                 browser.close()
-                return 14 if task_product['require_product'] else 1
+                return 14 if task_product is not None and task_product['require_product'] else 1
 
         submitted_short_title = _read_confirmed_submission_title(page, short_title_clean)
         if not draft:
@@ -3559,6 +3751,10 @@ def main():
         help="尝试挂接商品；失败且表单清空就绪时允许无商品继续",
     )
     parser.add_argument(
+        "--require-bound-product", action="store_true",
+        help="仅正式挂商品验收使用：最终未实读到精确绑定就停止在发表前；日常发布默认关闭",
+    )
+    parser.add_argument(
         "--source-channel-id", help="来源 YouTube 频道 ID，用于精确识别华尔街等垂直选品",
     )
     parser.add_argument(
@@ -3600,6 +3796,7 @@ def main():
             require_product = args.require_product,
             source_channel_id = args.source_channel_id,
             stop_before_submit = args.stop_before_submit,
+            require_bound_product = args.require_bound_product,
         )
     except Exception as exc:
         if not _is_playwright_target_closed(exc):

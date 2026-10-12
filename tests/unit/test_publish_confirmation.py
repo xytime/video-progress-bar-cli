@@ -356,6 +356,9 @@ class TestExactSubmissionIdentity:
                 "short_title": "",
                 "identity_source": "post_list_api",
                 "platform_status": "3",
+                "product_observation": {"state": "UNVERIFIED", "native_record_shape": {
+                    "objectId": "str", "desc": "str", "status": "int",
+                }},
             },
         }
 

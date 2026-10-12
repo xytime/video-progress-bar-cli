@@ -1416,7 +1416,7 @@
 
       const TERMINAL  = new Set(['PUBLISHED','FAILED']);  // [Claude_Sonnet_4.6_Thinking_planning] LOGIN_REQUIRED removed: it is retryable, not terminal
       const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
-      const STUCK     = new Set(['DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
+      const STUCK     = new Set(['PROCESSING','DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
 
       const hasLoginRequired = d.videos.some(v => v.status === 'LOGIN_REQUIRED');
       const wechatBtn = document.getElementById('btn-wechat-login');
@@ -2352,7 +2352,7 @@
 
         const TERMINAL  = new Set(['PUBLISHED','FAILED']);  // [Claude_Sonnet_4.6_Thinking_planning] LOGIN_REQUIRED removed: it is retryable
         const RETRYABLE = new Set(['FAILED','LOGIN_REQUIRED']);
-        const STUCK     = new Set(['DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
+        const STUCK     = new Set(['PROCESSING','DOWNLOADING','TRANSCRIBING','COPYWRITING','PUBLISHING']);
 
         const childRowsHtml = slices.map(s => {
           const score = s.score ?? 0;
@@ -2712,6 +2712,7 @@
         loadVideos();
         fetchStats();
       } else {
+        if (await refreshMissingTask(res)) return;
         showToast('❌ 删除失败: ' + (res.error || '未知错误'), 'error');
         if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
       }
@@ -2799,6 +2800,7 @@
         loadVideos();
         fetchStats();
       } else {
+        if (await refreshMissingTask(d)) return;
         showToast('❌ 停止失败: ' + (d.error || '未知错误'), 'error');
         if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
       }
@@ -2806,6 +2808,14 @@
       showToast('❌ 网络错误: ' + e.message, 'error');
       if (btn) { btn.disabled = false; btn.innerHTML = oldText; }
     }
+  }
+
+  // 后台可在用户操作前移除任务；回读列表，不把过期行当作删除成功。
+  async function refreshMissingTask(result) {
+    if (result.error !== '视频不存在') return false;
+    await Promise.all([loadVideos(), fetchStats()]);
+    showToast('该任务记录已不存在，已刷新列表', 'error');
+    return true;
   }
 
   let currentDeleteYoutubeId = null;
@@ -2861,6 +2871,10 @@
           fetchStats();
           closeDeleteModal();
         } else {
+          if (await refreshMissingTask(d)) {
+            closeDeleteModal();
+            return;
+          }
           showToast('❌ 删除失败: ' + (d.error || '未知错误'), 'error');
           confirmBtn.disabled = false;
           confirmBtn.innerHTML = '确认删除 (Delete)';

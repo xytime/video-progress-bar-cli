@@ -38,7 +38,8 @@ class ProductWaitStore:
         return sorted(self._read()['tasks'].values(), key=lambda r:r['updated_at'], reverse=True)
 
     def defer(self, task_key: str, *, reason: str, config_digest: str, artifacts_digest: str,
-              submission_state: str, wait_policy=None, observation_generation: str | None = None):
+              submission_state: str, wait_policy=None, observation_generation: str | None = None,
+              count_failed_attempt: bool = False):
         if not task_key or len(task_key) > 200 or not config_digest or not artifacts_digest:
             raise ValueError('等待记录需要稳定任务标识、策略摘要和产物摘要')
         policy = validate_wait_policy(wait_policy or DEFAULT_WAIT_POLICY)
@@ -46,6 +47,10 @@ class ProductWaitStore:
         with self._locked() as data:
             old = data['tasks'].get(task_key, {})
             checks = old.get('checks', 0)
+            if count_failed_attempt:
+                if observation_generation is not None and observation_generation != old.get('observed_generation'):
+                    checks = 0
+                checks += 1
             # 只有确定尚未提交才允许自动重新检查；结果不明必须先查原作品。
             state = 'WAITING' if reason in WAIT_REASONS else 'BLOCKED'
             if submission_state != 'NOT_SUBMITTED':
