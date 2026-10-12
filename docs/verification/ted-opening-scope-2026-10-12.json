@@ -1,0 +1,295 @@
+{
+  "verified_at_utc": "2026-10-12T02:53:36.839200+00:00",
+  "production_root": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+  "source_code_git_revision": "17e01c4808d3f565b974fec09f8d87de0761197d",
+  "cleanup_module_sha256": "82c2c9e7e7ff937ad76080484e8f881acfa3f3dd685b08821ea53321ffdf61cd",
+  "packaging_manifest_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+  "suffix_template_count": 1,
+  "service_source_preparation": {
+    "ted_source_cleanup_enabled": true,
+    "ted_opening_trim_enabled": true,
+    "recipe": "ted-source-cleanup-v1"
+  },
+  "service_pid": 92877,
+  "ready_executor": {
+    "pid": 93216,
+    "stage": "IDLE",
+    "current_video": null,
+    "git_revision": "17e01c4808d3f565b974fec09f8d87de0761197d",
+    "ted_source_cleanup_enabled": true,
+    "ted_opening_trim_enabled": true,
+    "ted_source_cleanup_recipe": "ted-source-cleanup-v1",
+    "heartbeat_at": 1791773568.4421
+  },
+  "natural_tasks": [
+    {
+      "video": {
+        "youtube_id": "CKAyfGItpgg",
+        "channel_id": "UCAuUUnT6oDeKwE6v1NGQxug",
+        "title": "How to Start Any Conversation the Right Way | Chris Fenning | TED",
+        "status": "SUBMITTED_BOUND",
+        "slice_index": 0,
+        "trim_start": null,
+        "trim_end": null
+      },
+      "receipt": {
+        "recipe": "ted-source-cleanup-v1",
+        "offset_seconds": 0.0,
+        "end_seconds": 667.457596,
+        "source_sha256": "6fc2dfba106fe6a42e67b6c9664a0bebcc856cffc57cb1d2ec31a2d2f6934654",
+        "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_duration": 667.457596,
+        "source_bytes": 86754210,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING",
+        "analysis_seconds": 0.233
+      },
+      "source_sha256_matches_receipt": true,
+      "source_duration": 667.457596,
+      "vertical_duration": 667.457007,
+      "vertical_sha256": "2541dc0934247dbae6e04f51e38a563a669247e2c39b882669f95b80f2b463b5"
+    },
+    {
+      "video": {
+        "youtube_id": "65LZk_S9HBY",
+        "channel_id": "UCsT0YIqwnpJCM-mx7-gSA4Q",
+        "title": "How caregiving makes you a better leader | GeVonna Fassett | TEDxSIUC",
+        "status": "SUBMITTED_BOUND",
+        "slice_index": 0,
+        "trim_start": null,
+        "trim_end": null
+      },
+      "receipt": {
+        "recipe": "ted-source-cleanup-v1",
+        "offset_seconds": 0.0,
+        "end_seconds": 933.860136,
+        "source_sha256": "79cea266cef6213b1bf6ad1b78b9fa638df559e31ad691203275bd7d25c65b0e",
+        "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_duration": 933.860136,
+        "source_bytes": 126775205,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING",
+        "analysis_seconds": 0.273
+      },
+      "source_sha256_matches_receipt": true,
+      "source_duration": 933.860136,
+      "vertical_duration": 933.86,
+      "vertical_sha256": "2f32f8d233a1738d9f21f13a2f26cba4ddbd34e2eae1bc740d9a3e4676d9dfb6"
+    },
+    {
+      "video": {
+        "youtube_id": "Hgh8L_aNiCA",
+        "channel_id": "UCAuUUnT6oDeKwE6v1NGQxug",
+        "title": "Here’s your reminder that you are enough — and you always will be #WorldMentalHealthDay",
+        "status": "SUBMITTED_BOUND",
+        "slice_index": 0,
+        "trim_start": null,
+        "trim_end": null
+      },
+      "receipt": {
+        "recipe": "ted-source-cleanup-v1",
+        "offset_seconds": 0.0,
+        "end_seconds": 177.075374,
+        "source_sha256": "2dfb832bb65b4c210f2f0b3afb3dfb4cc1c96651370a26242b94705af52a9111",
+        "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_duration": 177.075374,
+        "source_bytes": 9101218,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING",
+        "analysis_seconds": 0.057
+      },
+      "source_sha256_matches_receipt": true,
+      "source_duration": 177.075374,
+      "vertical_duration": 177.075011,
+      "vertical_sha256": "f47ef71667a1bfdefbc526687a865497b865277e7f9a16d782629ec22b5ab1b5"
+    },
+    {
+      "video": {
+        "youtube_id": "tBfHI8sNWVU",
+        "channel_id": "UCAuUUnT6oDeKwE6v1NGQxug",
+        "title": "The Three Words That Saved My Life | Blake Mycoskie | TED",
+        "status": "SUBMITTED_BOUND",
+        "slice_index": 0,
+        "trim_start": null,
+        "trim_end": null
+      },
+      "receipt": {
+        "recipe": "ted-source-cleanup-v1",
+        "offset_seconds": 0.0,
+        "end_seconds": 937.366349,
+        "source_sha256": "fb3ebbc404757721c9e47e51509c38b401db35b7ec481d9ac5adfc3696f2d5b4",
+        "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_duration": 937.366349,
+        "source_bytes": 43584120,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING",
+        "analysis_seconds": 0.167
+      },
+      "source_sha256_matches_receipt": true,
+      "source_duration": 937.366349,
+      "vertical_duration": 937.366009,
+      "vertical_sha256": "b1929ebcffe23cf6dcf6e9e75af6f254f388c9d1a02c0378abec022191bc538c"
+    }
+  ],
+  "production_entry_probe": [
+    {
+      "id": "NRkHdspgnI8",
+      "selected_original": false,
+      "receipt": {
+        "recipe": "ted-source-cleanup-v1",
+        "offset_seconds": 21.04,
+        "end_seconds": 915.2,
+        "source_sha256": "822c1edb2550a88e64ecec78414a429e8ebf6a4f77233f13559db3f5639436be",
+        "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_duration": 922.969977,
+        "source_bytes": 70891014,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "TEDxNorthernQuarter-brand-sponsor-opening"
+          },
+          {
+            "edge": "suffix",
+            "reference_id": "TEDxNorthernQuarter-sponsor-account-ending"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING",
+        "analysis_seconds": 1.924,
+        "output_sha256": "ae3509c0b3516cce7626efdf82159f57a3d5a8a7ed2d3849269d96ae5d04c4cf",
+        "output_bytes": 104483196,
+        "encode_and_decode_seconds": 40.989,
+        "removed_seconds": 28.809977
+      },
+      "elapsed_seconds": 43.194,
+      "source_bytes_unchanged": true
+    },
+    {
+      "id": "CKAyfGItpgg",
+      "selected_original": true,
+      "receipt": {
+        "recipe": "ted-source-cleanup-v1",
+        "offset_seconds": 0.0,
+        "end_seconds": 667.457596,
+        "source_sha256": "6fc2dfba106fe6a42e67b6c9664a0bebcc856cffc57cb1d2ec31a2d2f6934654",
+        "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_duration": 667.457596,
+        "source_bytes": 86754210,
+        "references": [],
+        "reason": "UNVERIFIED_AV_PACKAGING",
+        "analysis_seconds": 0.07
+      },
+      "elapsed_seconds": 0.364,
+      "source_bytes_unchanged": true
+    },
+    {
+      "kind": "synthetic_truncated_media_not_real_accuracy",
+      "selected_original": true,
+      "receipt": {
+        "recipe": "ted-source-cleanup-v1",
+        "offset_seconds": 0.0,
+        "end_seconds": null,
+        "source_sha256": "1d8b6372e4a2c8fa1bd69d86183658fd40e086e74d07f41fee64e4b5b0492194",
+        "packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "reason": "UNAVAILABLE_CalledProcessError",
+        "failure_code": "CalledProcessError"
+      }
+    }
+  ],
+  "diagnostic_process_tracking_events": 6,
+  "production_db_initialized_or_written_by_probe": false,
+  "full_pipeline_or_publication_triggered_by_probe": false,
+  "limits": "Natural examples all retained unknown packaging; verified trim is an explicit diagnostic, not a new production trim or public-readback claim.",
+  "isolated_regression": {
+    "passed": 83,
+    "pytest_summary": "83 passed in 39.00s",
+    "receipt": {
+      "source": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+      "snapshot": "/private/tmp/video-pytest-atbecodu/sandbox/repo",
+      "probe": {
+        "exit_code": 0,
+        "seconds": 0.078
+      },
+      "pytest_arguments": [
+        "-q",
+        "tests/unit/test_ted_source_cleanup.py",
+        "tests/unit/test_speech_opening.py",
+        "tests/unit/test_speech_opening_runtime.py",
+        "tests/unit/test_insight_processor_v2.py",
+        "tests/unit/test_ready_publication_dispatch.py"
+      ],
+      "timeout_seconds": 600,
+      "source_manifest_sha256": "04964450f9ad36767bf1457bfcfc033ce8279391f70dca7dbda51109be933842",
+      "profile_sha256": "26cd988cab92dbefdaaf3cc6a4096f5d7f8a88628a36bebaaf12fa8b6738d7a2",
+      "browser_runtime": null,
+      "browser_runtime_sha256": null,
+      "media_runtime": {
+        "models": {
+          "tiny": {
+            "source": "/Volumes/EXT2T/AppDataOffload/ryusei/ML/whisper/tiny.pt",
+            "snapshot": "/private/tmp/video-pytest-atbecodu/sandbox/cache/whisper/tiny.pt",
+            "sha256": "65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9",
+            "bytes": 75572083
+          },
+          "base": {
+            "source": "/Volumes/EXT2T/AppDataOffload/ryusei/ML/whisper/base.pt",
+            "snapshot": "/private/tmp/video-pytest-atbecodu/sandbox/cache/whisper/base.pt",
+            "sha256": "ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e",
+            "bytes": 145262807
+          }
+        },
+        "metadata_sha256": "79ecbed714783b6230931a3dba6d5da6d386e2d44f9fc27256e4fc72751e1f62",
+        "model_cache": "/private/tmp/video-pytest-atbecodu/sandbox/cache/whisper",
+        "cpu_threads": 2
+      },
+      "media_runtime_sha256": "498f712816ea9b716625b23bd0ecea61256d7324faaf6cc569321ea4147c523a",
+      "pytest": {
+        "exit_code": 0,
+        "seconds": 39.626
+      },
+      "finished_at": "2026-10-12T02:51:05.408764+00:00"
+    },
+    "boundary_denials": {
+      "outside_read_denied": true,
+      "outside_write_denied": true,
+      "network_denied": true,
+      "outside_signal_denied": true,
+      "data_volume_alias_read_denied": true,
+      "child_write_denied": true
+    },
+    "evidence_directory": "/Users/ryusei/.codex/worktrees/f600/Video-precessing/output/verification/ted-opening-scope-2026-10-12",
+    "limit": "synthetic media and TTS/alignment substitutes verify composition and failure paths, not TED accuracy or real full-length new ASR"
+  },
+  "confirmed_scope": {
+    "priority": "opening_cleanup",
+    "tail": "existing_verified_packaging_only_no_expansion",
+    "speech": "complete_first_and_last_speech_preserved",
+    "secondary_intro": "content_audio_duration_and_composition_preserved",
+    "uncertain_or_failure": "original_source_without_manual_confirmation"
+  },
+  "final_runtime_readback": {
+    "service_pid": 92877,
+    "source_preparation": {
+      "ted_source_cleanup_enabled": true,
+      "ted_opening_trim_enabled": true,
+      "recipe": "ted-source-cleanup-v1"
+    },
+    "active": 1,
+    "ready_executor": {
+      "pid": 93216,
+      "stage": "IDLE",
+      "current_video": null,
+      "git_revision": "17e01c4808d3f565b974fec09f8d87de0761197d",
+      "ted_source_cleanup_enabled": true,
+      "ted_source_cleanup_recipe": "ted-source-cleanup-v1",
+      "heartbeat_at": 1791773752.898806
+    },
+    "heartbeat_age_seconds": 4.73
+  }
+}
