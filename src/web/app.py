@@ -242,7 +242,7 @@ _wechat_login_thread: Optional[threading.Thread] = None
 _WECHAT_AUTO_RELOGIN_FLAG = "wechat_auto_relogin_started.flag"
 
 _VIDEO_TABS = {"waitlist", "queue", "ready", "active", "wechat_deferred", "review", "completed", "error", "high_likes"}
-_VIDEO_SORTS = {"default", "score_desc", "views_desc", "like_rate_desc", "source_published_at_desc", "upload_date_desc"}
+_VIDEO_SORTS = {"updated_at_desc","default", "score_desc", "views_desc", "like_rate_desc", "source_published_at_desc", "upload_date_desc"}
 _SCORE_BANDS = {"all", "unscored", "below_50", "50_74", "80_plus"}
 _ERROR_TYPES = {"all", "channel_policy", "login", "youtube_403", "copy_quality", "censorship_p0", "other"}
 _ENGAGEMENT_WINDOWS = {1, 3, 7, 30}
@@ -1716,9 +1716,12 @@ def get_videos(
     include_expired: bool = False,
     created_window: str = "all",
     funnel_stage: Optional[str] = None,
+    attention_kind: Optional[str] = None,
 ):
     """在服务端筛选和稳定排序后分页返回列表及准确总数。"""
     _validate_video_list_query(tab, size, search, sort, score_band, error_type, status, engagement_window_days, created_window, funnel_stage)
+    if attention_kind and (attention_kind not in {"delivery","blocked","execution","review","policy"} or funnel_stage):
+        raise HTTPException(422, "unknown or conflicting attention kind")
     page = max(1, page)
     videos, total_count = db.get_paginated_videos(
         tab, page, size, search=search.strip(), channel=channel.strip(), sort=sort,
@@ -1726,7 +1729,7 @@ def get_videos(
         engagement_window_days=engagement_window_days, include_processed=include_processed,
         include_expired=include_expired,
         created_window=created_window,
-        funnel_stage=funnel_stage,
+        funnel_stage=funnel_stage, attention_kind=attention_kind,
     )
     for video in videos:
         video['product_decision'] = db.get_product_task_decision(f"pipeline:{video['youtube_id']}:{video.get('slice_index') or 0}")
@@ -2196,6 +2199,12 @@ def resume_channel(channel_id: str):
     if not ok:
         return {"success": False, "error": "频道不存在或不允许恢复"}
     return {"success": True, "channel_id": channel_id, "status": "APPROVED"}
+
+
+@app.get("/api/console/attention")
+def get_console_attention():
+    """只读关注事项；摘要与落地页复用 DAL 分类。"""
+    return db.get_attention_summary()
 
 
 @app.get("/api/funnel")

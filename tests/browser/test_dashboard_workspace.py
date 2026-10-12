@@ -183,3 +183,39 @@ def test_local_capability_and_remote_boundary(workspace):
         assert remote.get('/topic-candidates').status_code==403
     finally:
         remote.close()
+
+
+def test_v031_attention_link_restore_and_empty(workspace):
+    page,client,state,db=workspace
+    page.locator('#attention-main a').click()
+    expect(page.locator('#attention-filter-banner')).to_be_visible()
+    expect(page.locator('#attention-filter-label')).to_have_text('执行异常待排查')
+    expect(page.locator('#activity-count')).to_have_text('1')
+    assert 'attention_kind=execution' in page.url and 'sort=updated_at_desc' in page.url
+    page.reload();expect(page.locator('#attention-filter-label')).to_have_text('执行异常待排查')
+    expect(page.locator('#activity-count')).to_have_text('1')
+    page.locator('#attention-filter-banner button').click()
+    expect(page.locator('#attention-filter-banner')).not_to_be_visible()
+    page.go_back();expect(page.locator('#attention-filter-banner')).to_be_visible()
+    page.locator('.console-primary[data-section=overview]').click()
+    page.go_back();expect(page.locator('#attention-filter-banner')).to_be_visible()
+    page.go_forward();expect(page.locator('#workspace-overview')).to_be_visible()
+    db.update_video_status('failed','PUBLISHED')
+    page.locator('#overview-retry').click()
+    expect(page.locator('#attention-main')).to_contain_text('当前没有这些待核实或受阻事项')
+    evidence(page,'v031-empty-attention')
+
+
+def test_v031_cohort_zero_and_low_score_completion(workspace):
+    page,client,state,db=workspace
+    with db.get_connection() as conn:
+        conn.execute('UPDATE processed_videos SET score=20')
+    db.update_video_status('failed','SUBMITTED_BOUND')
+    page.locator('#overview-retry').click()
+    expect(page.locator('#global-funnel-panel')).to_contain_text('无符合口径记录')
+    expect(page.locator('#gf-qualified')).to_have_text('0')
+    expect(page.locator('#global-funnel-panel')).not_to_contain_text('发布率')
+    page.locator('.gf-stage-card').nth(3).click()
+    expect(page.locator('#activity-count')).to_have_text('1')
+    assert 'funnel_stage=published' in page.url
+    evidence(page,'v031-local-records-drilldown')

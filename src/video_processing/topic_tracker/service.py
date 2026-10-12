@@ -274,12 +274,17 @@ class TopicTracker:
         control = self.db.topic_control()
         try:
             self._ready()
-            search_open = control["mode"] == "DISCOVERY_ONLY" and self.adapter.configured()
-        except TopicError:
-            search_open = False
+            if not self.adapter.configured():
+                raise TopicError("NO_API", "未配置官方 API", 403)
+            can_enable = True
+            reason_code, reason = ("MODE_OFF", "手动搜索已关闭") if control["mode"] == "OFF" else ("OK", "可手动搜索")
+        except TopicError as exc:
+            can_enable = False
+            reason_code, reason = exc.code, str(exc)
+        search_open = can_enable and control["mode"] == "DISCOVERY_ONLY"
         from ..core.maintenance import gate
         maintenance = gate().status()
         return dict(control=control, maintenance=dict(state=maintenance["state"], phase=maintenance["phase"]), topics=self.db.topic_list(self.clock()),
                     jobs=self.db.topic_jobs(), budget=self.db.topic_budget(self.config.topic_quota_project, self.clock()),
-                    search_open=search_open,
+                    search_open=search_open, can_enable=can_enable, search_gate=dict(code=reason_code, message=reason),
                     limits=dict(search=self.config.topic_search_daily_limit, general=self.config.topic_general_daily_limit))

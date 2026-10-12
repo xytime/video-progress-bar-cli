@@ -34,8 +34,8 @@ def test_browser_cannot_read_outside_file_or_connect_network(chromium):
 def test_dashboard_render_and_selection_evidence(dashboard, viewport):
     page, state = dashboard
     page.set_viewport_size(viewport)
-    assert page.url == "http://dashboard-test.invalid/"
-    assert page.title() == "📺 Video Pipeline Control Center"
+    assert page.url == "http://dashboard-test.invalid/?view=topics&tab=waitlist"
+    assert page.title() == "选题中心 · 视频运营工作台"
     assert page.locator("#row-first").is_visible()
     assert not page.locator("#platform-detail-modal").is_visible()
     page.locator("#batch-normal-view .btn-batch-del").click()

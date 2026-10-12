@@ -9,8 +9,8 @@
   const overview=document.createElement('section'); overview.id='workspace-overview'; overview.setAttribute('aria-label','工作总览');
   overview.innerHTML=`<div class="console-notice"><p id="console-search-state" role="status">正在核实关键词工作台状态…</p><a data-topic-entry href="/topic-candidates">关键词追踪 →</a></div>
     <div class="console-metrics">${['waitlist','active','ready','error'].map(tab=>`<a class="console-metric" href="${listURL(tab)}"><span>${label[tab]}</span><strong id="overview-${tab}">—</strong><span>当前列表 · 全部入库时间</span></a>`).join('')}</div>
-    <div class="console-overview-grid"><section class="console-panel"><h2>需关注</h2><div class="console-attention">${['wechat_deferred','error','review'].map(tab=>`<a href="${listURL(tab)}"><span>${label[tab]} <b id="attention-${tab}">—</b></span><span>查看记录 →</span></a>`).join('')}</div><p>本地受理不等于公开发布；请先核实投递结果。</p>
-    <div class="console-tasks"><h2>当前任务</h2><div id="overview-tasks" aria-live="polite">正在读取制作与待发布记录…</div></div></section>
+    <div class="console-overview-grid"><section class="console-panel"><h2>建议先查看</h2><p>按事项类型排序，非严重度评级 · 全部入库时间</p><div class="console-attention" id="attention-main">正在读取关注事项…</div><p>投递结果未核实前，请勿重复提交。</p>
+    <div class="console-tasks"><h2>当前任务</h2><div id="overview-tasks" aria-live="polite">正在读取制作与待发布记录…</div></div><details class="console-observation"><summary>观察与历史</summary><p>根据现有错误记录分类；规则已阻止的事项可按需复核。</p><div id="attention-observation"></div><a href="${listURL('error')}">全部异常记录 →</a></details></section>
     <aside class="console-panel console-shortcuts"><h2>常用入口</h2><a data-topic-entry href="/topic-candidates">关键词追踪 <span>→</span></a><a href="/?view=production&tab=queue">生产队列 <span>→</span></a><a href="/product-settings">商品挂载 <span>→</span></a><p id="overview-feedback" role="status">正在读取概览…</p><button type="button" id="overview-retry" class="btn-tool-prefs">重新读取</button></aside></div>`;
   const app=document.querySelector('.app'); app.insertBefore(overview,$('global-funnel-panel'));
   const table=document.querySelector('.main-grid > .panel'); table.id='workspace-list';
@@ -68,15 +68,32 @@
       row.append(info,stage,link);target.append(row);
     });
   }
+  const attentionLabels={delivery:['投递结果待核实','核实投递结果','review'],blocked:['登录/恢复受阻','查看阻塞原因','error'],execution:['执行异常待排查','查看错误详情','error'],review:['平台审核中','查看审核记录','review'],policy:['内容规则拦截','按需复核','error']};
+  function attentionRows(data) {
+    const main=$('attention-main'), other=$('attention-observation');main.replaceChildren();other.replaceChildren();
+    ['delivery','blocked','execution','review','policy'].forEach(kind=>{
+      const item=data[kind], [name,action,tab]=attentionLabels[kind];
+      if(!Number.isInteger(item?.count))throw new Error('关注数据格式不完整');
+      const link=document.createElement('a');link.href=listURL(tab)+'&attention_kind='+kind+'&sort=updated_at_desc';
+      link.dataset.attention=kind; if(!item.count)link.className='console-zero';
+      const info=document.createElement('span');info.textContent=name+' '+item.count;
+      const date=new Date(String(item.updated_at||'').replace(' ','T')+'Z');
+      const time=document.createElement('small');time.textContent='记录最近更新：'+(Number.isNaN(date.valueOf())?'未记录':date.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})+'（北京时间）');info.append(time);
+      const next=document.createElement('span');next.textContent=action+' →';link.append(info,next);
+      (['review','policy'].includes(kind)||!item.count?other:main).append(link);
+    });
+    if(!main.children.length) main.textContent='当前没有这些待核实或受阻事项。';
+  }
   async function loadOverview() {
     if(busy)return;busy=true;const generation=++overviewGeneration;$('overview-retry').disabled=true;
     try {
-      const tabs=['waitlist','active','ready','error','wechat_deferred','review'];
-      const results=await Promise.all(tabs.map(tab=>readJSON('/api/videos?tab='+tab+'&size=20&created_window=all')));
+      const tabs=['waitlist','active','ready','error'];
+      const [results,attention]=await Promise.all([Promise.all(tabs.map(tab=>readJSON('/api/videos?tab='+tab+'&size=20&created_window=all'))),readJSON('/api/console/attention')]);
       if(generation!==overviewGeneration||view!=='overview')return;
       if(results.some(d=>!Number.isInteger(d.total_count)||!Array.isArray(d.videos)))throw new Error('列表数据格式不完整');
       const data=Object.fromEntries(tabs.map((tab,i)=>[tab,results[i]]));
       tabs.forEach(tab=>{[$('overview-'+tab),$('attention-'+tab)].filter(Boolean).forEach(el=>el.textContent=data[tab].total_count);});
+      attentionRows(attention);
       taskRows(['active','ready'].flatMap(tab=>data[tab].videos.map(video=>({tab,video}))));
       lastSuccess=new Date().toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai'});
       $('overview-feedback').textContent='列表概览 · 最后成功读取 '+lastSuccess+'（北京时间）';$('overview-feedback').classList.remove('console-error');
@@ -85,7 +102,7 @@
       if(generation!==overviewGeneration||view!=='overview')return;
       $('overview-feedback').textContent=lastSuccess?'读取失败，当前为旧数据 · 最后成功 '+lastSuccess:'读取失败，暂无可信数据。请重新读取。';$('overview-feedback').classList.add('console-error');
       $('last-update').textContent=lastSuccess?'旧数据 · '+lastSuccess:'读取失败';
-      if(!lastSuccess)$('overview-tasks').textContent='任务读取失败，请重新读取。';
+      if(!lastSuccess){$('overview-tasks').textContent='任务读取失败，请重新读取。';$('attention-main').textContent='关注事项读取失败，请重新读取。';}
     } finally {busy=false;$('overview-retry').disabled=false;}
   }
   async function refresh() {

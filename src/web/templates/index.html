@@ -94,9 +94,9 @@
   </script>
   <link rel="stylesheet" href="/static/css/dashboard.css?v=20260926_2" />
   <link rel="stylesheet" href="/static/css/manual_products.css?v=20261011_1" />
-<link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-1">
+<link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-031">
 <script defer src="/static/js/console_navigation.js?v=20261012-1"></script>
-<script defer src="/static/js/dashboard_workspace.js?v=20261012-1"></script>
+<script defer src="/static/js/dashboard_workspace.js?v=20261012-031"></script>
 </head>
 <body>
 <div class="app">
@@ -143,37 +143,38 @@
   <div class="global-funnel-panel" id="global-funnel-panel">
     <div class="panel-header" style="padding: 12px 20px;">
       <div style="display:flex; align-items:center; gap:10px;">
-        <div class="panel-title" style="font-size: 0.9375rem;">生产概览</div>
+        <div class="panel-title" style="font-size: 0.9375rem;">按入库批次的流程概览</div>
         <span id="gf-latest-info" style="font-size:0.75rem; color:var(--text3);"></span>
       </div>
       <div class="funnel-tabs" id="global-funnel-tabs" style="display:flex; gap:6px;">
-        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-24h" onclick="switchGlobalFunnelWindow('24h')">最近 24 小时</button>
-        <button class="btn-channel-action btn-channel-funnel active" id="gf-tab-today_bj" onclick="switchGlobalFunnelWindow('today_bj')">今日 (BJ)</button>
-        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-7d" onclick="switchGlobalFunnelWindow('7d')">近 7 天</button>
-        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-30d" onclick="switchGlobalFunnelWindow('30d')">近 30 天</button>
-        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-all" onclick="switchGlobalFunnelWindow('all')">全生命周期</button>
+        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-24h" onclick="switchGlobalFunnelWindow('24h')">近 24 小时入库</button>
+        <button class="btn-channel-action btn-channel-funnel active" id="gf-tab-today_bj" onclick="switchGlobalFunnelWindow('today_bj')">今日入库（北京时间）</button>
+        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-7d" onclick="switchGlobalFunnelWindow('7d')">近 7 天入库</button>
+        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-30d" onclick="switchGlobalFunnelWindow('30d')">近 30 天入库</button>
+        <button class="btn-channel-action btn-channel-funnel" id="gf-tab-all" onclick="switchGlobalFunnelWindow('all')">全部入库</button>
       </div>
     </div>
+    <details class="cohort-help"><summary>指标口径：按入库时间统计父任务；含提交受理，未证明平台公开</summary><p>入围指评分 ≥75。制作环节使用当前状态集合，非历史事件累计；完成集合为 PUBLISHED / SUBMITTED_BOUND。入围比例只计算入围集合内记录，分母为零显示 —。</p></details>
     <div class="global-funnel-body">
       <button type="button" class="gf-stage-card gf-stage-ingested" id="gf-card-ingested" onclick="onFunnelCardClick('ingested', 'waitlist', '1. 采集入库')" title="点击下钻查看当前漏斗时间范围内的采集入库">
         <div class="gf-stage-num" id="gf-ingested">—</div>
         <div class="gf-stage-title">1. 采集入库</div>
-        <div class="gf-stage-sub">全网监控抓取基准 100%</div>
+        <div class="gf-stage-sub">所选入库窗口内的父任务</div>
       </button>
       <button type="button" class="gf-stage-card gf-stage-qualified" id="gf-card-qualified" onclick="onFunnelCardClick('qualified', 'queue', '2. 评分入围 (≥75分)')" title="点击下钻查看当前漏斗时间范围评分≥75入围视频">
         <div class="gf-stage-num" id="gf-qualified">—</div>
         <div class="gf-stage-title">2. 评分入围</div>
         <div class="gf-stage-sub">入围率 <b id="gf-qual-rate">—</b></div>
       </button>
-      <button type="button" class="gf-stage-card gf-stage-processed" id="gf-card-processed" onclick="onFunnelCardClick('processed', 'active', '3. 制作加工')" title="点击下钻查看当前漏斗时间范围内的制作加工任务">
+      <button type="button" class="gf-stage-card gf-stage-processed" id="gf-card-processed" onclick="onFunnelCardClick('processed', 'active', '3. 已进入制作环节')" title="点击下钻查看当前漏斗时间范围内的制作加工任务">
         <div class="gf-stage-num" id="gf-processed">—</div>
-        <div class="gf-stage-title">3. 制作加工</div>
-        <div class="gf-stage-sub">制作率 <b id="gf-proc-rate">—</b></div>
+        <div class="gf-stage-title">3. 已进入制作环节</div>
+        <div class="gf-stage-sub">入围记录进入制作环节占比 <b id="gf-proc-rate">—</b></div>
       </button>
-      <button type="button" class="gf-stage-card gf-stage-published" id="gf-card-published" onclick="onFunnelCardClick('published', 'completed', '4. 终审发布')" title="查看当前时间范围内的已完成记录，不等于所有平台公开确认">
+      <button type="button" class="gf-stage-card gf-stage-published" id="gf-card-published" onclick="onFunnelCardClick('published', 'completed', '4. 本地提交/完成记录')" title="查看当前时间范围内的已完成记录，不等于所有平台公开确认">
         <div class="gf-stage-num" id="gf-published">—</div>
-        <div class="gf-stage-title">4. 完成记录</div>
-        <div class="gf-stage-sub">发布率 <b id="gf-pub-rate">—</b> · 总转化 <b id="gf-overall-rate" style="color:var(--green)">—</b></div>
+        <div class="gf-stage-title">4. 本地提交/完成记录</div>
+        <div class="gf-stage-sub">入围记录本地提交/完成率 <b id="gf-pub-rate">—</b> · 入库记录本地提交/完成占比 <b id="gf-overall-rate" style="color:var(--green)">—</b></div>
       </button>
       <div class="gf-diag-card" id="gf-card-diag" title="点击按当前漏斗时间范围查看异常或策略拦截">
         <div class="gf-diag-item" id="gf-diag-failed" onclick="onFunnelCardClick('failed', 'error', '异常失败')" style="cursor:pointer;" title="点击下钻查看当前漏斗时间范围异常失败记录">
@@ -274,6 +275,7 @@
       </div>
 
       <!-- 漏斗大盘下钻联动指示横幅 -->
+      <div id="attention-filter-banner" class="console-notice" hidden><span>关注分类：<b id="attention-filter-label"></b> · 当前数据已刷新 · 根据现有错误记录分类，未知原因需判断</span><button type="button" onclick="filterState.attentionKind=null;document.getElementById('attention-filter-banner').hidden=true;loadVideos(1)">清除关注分类</button></div>
       <div id="funnel-active-banner" class="funnel-active-banner" style="display:none;">
         <div style="display:flex; align-items:center; gap:8px;">
           <span class="funnel-banner-icon">🎯</span>
@@ -286,7 +288,7 @@
       <div id="video-filter-bar" aria-label="视频列表筛选与排序">
         <input id="video-filter-search" type="search" placeholder="搜索中文/英文标题或 YouTube ID" onkeydown="if(event.key === 'Enter') applyVideoFilters()" />
         <select id="video-filter-channel" onchange="applyVideoFilters()"><option value="">全部频道</option></select>
-        <select id="video-filter-sort" onchange="applyVideoFilters()">
+        <select id="video-filter-sort" onchange="applyVideoFilters()"><option value="updated_at_desc">记录更新时间从新到旧</option>
           <option value="source_published_at_desc">来源发布日期：新到旧</option>
           <option value="score_desc">分数：高到低</option>
           <option value="views_desc">观看数：高到低</option>
@@ -747,7 +749,7 @@
   }
 
   function animateNumber(el, newVal) {
-    const old = parseInt(el.textContent) || 0;
+    const old = Number.parseInt(el.textContent, 10);
     if (old === newVal) return;
     el.textContent = newVal;
     el.classList.add('updated');
@@ -818,12 +820,14 @@
     const overrides = {
       createdWindow: filterState.createdWindow,
       funnelStage: stage,
+      attentionKind: null,
     };
     if (stage === 'failed') {
       overrides.errorType = 'all';
     } else if (stage === 'blocked') {
       overrides.errorType = 'channel_policy';
     }
+    filterState.search='';filterState.channel='';filterState.sort='updated_at_desc';
     switchTab(targetTab, overrides);
   }
 
@@ -857,22 +861,24 @@
       animateNumber(document.getElementById('gf-blocked'), m.censor_blocked || 0);
 
       const elQualRate = document.getElementById('gf-qual-rate');
-      if (elQualRate) elQualRate.textContent = `${(m.qualification_rate || 0).toFixed(1)}%`;
+      const c=m.cohort;
+      const ratio=(n,d)=>d ? `${(n/d*100).toFixed(1)}%（${n}/${d}）` : '—（无符合口径记录）';
+      if (elQualRate) elQualRate.textContent = ratio(c.qualified,c.ingested);
 
       const elProcRate = document.getElementById('gf-proc-rate');
-      if (elProcRate) elProcRate.textContent = `${(m.processing_rate || 0).toFixed(1)}%`;
+      if (elProcRate) elProcRate.textContent = ratio(c.qualified_processed,c.qualified);
 
       const elPubRate = document.getElementById('gf-pub-rate');
-      if (elPubRate) elPubRate.textContent = `${(m.publishing_rate || 0).toFixed(1)}%`;
+      if (elPubRate) elPubRate.textContent = ratio(c.qualified_local_completed,c.qualified);
 
       const elOverallRate = document.getElementById('gf-overall-rate');
-      if (elOverallRate) elOverallRate.textContent = `${(m.overall_conversion_rate || 0).toFixed(1)}%`;
+      if (elOverallRate) elOverallRate.textContent = ratio(c.local_completed,c.ingested);
 
       const infoEl = document.getElementById('gf-latest-info');
       if (infoEl) {
         const parts = [];
         if (m.latest_ingested_at) parts.push(`最新采集: ${relativeTime(m.latest_ingested_at)}`);
-        if (m.latest_published_at) parts.push(`最新发布: ${relativeTime(m.latest_published_at)}`);
+        if (m.latest_published_at) parts.push(`本地提交/完成记录最近更新: ${relativeTime(m.latest_published_at)}`);
         infoEl.textContent = parts.length ? `(${parts.join(' · ')})` : '';
       }
     } catch(e) {
@@ -1047,6 +1053,7 @@
     includeExpired: false,
     createdWindow: 'today_bj',
     funnelStage: null,
+    attentionKind: null,
   };
   let _selectedYids = new Set();
   let _currentVideosMap = {};
@@ -1063,6 +1070,7 @@
       include_expired: String(filterState.includeExpired),
       created_window: filterState.createdWindow || 'all',
     };
+    if(filterState.attentionKind) params.attention_kind=filterState.attentionKind;
     if (filterState.funnelStage) {
       params.funnel_stage = filterState.funnelStage;
     }
@@ -1239,6 +1247,11 @@
 
   function switchTab(tab, overrides = {}) {
     window.DashboardWorkspace?.selectTab(tab);
+    if(!window.DashboardWorkspace?.restoring()) filterState.attentionKind=overrides.attentionKind||null;
+    const attentionBanner=document.getElementById('attention-filter-banner');
+    attentionBanner.hidden=!filterState.attentionKind;
+    const attentionNames={delivery:'投递结果待核实',blocked:'登录/恢复受阻',execution:'执行异常待排查',review:'平台审核中',policy:'内容规则拦截'};
+    document.getElementById('attention-filter-label').textContent=attentionNames[filterState.attentionKind]||'';
     // [Claude_Sonnet_4.6_Thinking_planning] 热词面板独立显示/隐藏
     const hwPanel  = document.getElementById('hotwords-panel');
     const mainBody = document.querySelector('#workspace-list > .panel-body');
@@ -3290,9 +3303,9 @@
       currentPage = Math.max(1, Number(params.get('page')) || 1);
       const defaults = {search:'',channel:'',sort:'source_published_at_desc',size:20,
         scoreBand:'all',errorType:'all',status:'all',engagementWindowDays:3,
-        includeProcessed:false,includeExpired:false,createdWindow:'all',funnelStage:null};
+        includeProcessed:false,includeExpired:false,createdWindow:'all',funnelStage:null,attentionKind:null};
       const keys = {scoreBand:'score_band',errorType:'error_type',engagementWindowDays:'engagement_window_days',
-        includeProcessed:'include_processed',includeExpired:'include_expired',createdWindow:'created_window',funnelStage:'funnel_stage'};
+        includeProcessed:'include_processed',includeExpired:'include_expired',createdWindow:'created_window',funnelStage:'funnel_stage',attentionKind:'attention_kind'};
       Object.entries(defaults).forEach(([key,fallback])=>{
         const value=params.get(keys[key] || key);
         filterState[key]=value===null?fallback:typeof fallback==='boolean'?value==='true':typeof fallback==='number'?Number(value)||fallback:value;

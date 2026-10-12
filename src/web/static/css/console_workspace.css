@@ -78,3 +78,23 @@
   .console-layout .global-funnel-body { display:grid; grid-template-columns:1fr 1fr; }
 }
 @media(prefers-reduced-motion:reduce) { .console-layout * { animation:none!important; transition:none!important; scroll-behavior:auto!important; } }
+
+/* v0.3.1：关注事项使用业务分类，零项收于辅助区；窄屏任务先于总量。 */
+.console-attention small,.console-observation small { display:block; color:var(--text2); font-size:.75rem; }
+.console-observation { margin-top:14px; }
+.console-observation a { display:flex; justify-content:space-between; gap:12px; padding:8px 0; color:var(--text2); }
+.console-zero { opacity:.7; }
+.cohort-help { padding:8px 20px; color:var(--text2); font-size:.875rem; }
+.console-layout .gf-stage-sub { white-space:normal; overflow-wrap:anywhere; }
+.read-feedback { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.read-feedback p { flex:1 1 240px; overflow-wrap:anywhere; }
+@media(max-width:650px) {
+  #workspace-overview { display:flex; flex-direction:column; }
+  .console-notice { order:0; }
+  .console-overview-grid { order:1; }
+  .console-metrics { order:2; }
+  .console-attention a { align-items:flex-start; }
+  .console-attention a span:last-child { white-space:normal; }
+}
+
+.console-notice[hidden] { display:none; }

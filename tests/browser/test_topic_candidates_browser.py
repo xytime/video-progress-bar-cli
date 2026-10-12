@@ -21,10 +21,11 @@ def ui(chromium,topic_client):
     client,tracker=topic_client
     page=chromium.new_page(viewport=dict(width=1280,height=900))
     errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
-    flags=dict(offline=False, conflict=False)
+    flags=dict(offline=False, conflict=False, failures=set(), writes=[])
     def route_handler(route):
         req=route.request;url=urlsplit(req.url)
-        if flags['offline'] and url.path.startswith('/api/'):
+        if req.method != 'GET': flags['writes'].append((req.method,url.path))
+        if (flags['offline'] and url.path.startswith('/api/')) or url.path in flags['failures']:
             route.fulfill(status=503,json=dict(detail='隔离服务暂不可用'));return
         if flags['conflict'] and req.method in ('PUT','POST'):
             route.fulfill(status=409,json=dict(detail=dict(code='STALE',message='资料已更新，请重新载入')));return
@@ -122,7 +123,7 @@ def test_a20_filter_empty_clear_and_zero_success(ui):
     page.get_by_role('button',name='搜索候选',exact=True).click()
     expect(page.locator('#jobs')).to_contain_text('本轮无结果')
     page.locator('#candidate-query').fill('中文不存在')
-    expect(page.locator('#candidates')).to_contain_text('暂无符合条件')
+    expect(page.locator('#candidates')).to_contain_text('当前筛选没有匹配')
     page.locator('#clear-query').click();expect(page.locator('#candidate-query')).to_have_value('')
     evidence(page,'empty-search')
 
@@ -228,3 +229,84 @@ def test_m13_maintenance_crud_two_restarts_and_boundary(chromium, tracker, isola
     finally:
         page.close()
     assert not errors
+
+
+def test_v031_independent_read_recovery_and_draft(ui):
+    page,tracker,flags=ui
+    create(page);run(tracker,tracker.db.topic_list(tracker.clock())[0]);page.locator('#reload').click()
+    expect(page.locator('.candidate-card')).to_have_count(1)
+    baseline=len(flags['writes']);calls=len(tracker.adapter.calls)
+    flags['failures']={'/api/topic-candidates/state'}
+    page.locator('#reload').click()
+    expect(page.locator('#state-feedback')).to_contain_text('旧数据')
+    expect(page.locator('#candidate-feedback')).to_contain_text('已读取')
+    expect(page.locator('#new-topic')).to_be_disabled()
+    flags['failures']={'/api/topic-candidates/videos'}
+    page.locator('#reload').click()
+    expect(page.locator('#state-feedback')).to_contain_text('已读取')
+    expect(page.locator('#candidate-feedback')).to_contain_text('旧数据')
+    expect(page.locator('.candidate-card')).to_have_count(1)
+    page.locator('#candidate-query').fill('不同筛选')
+    expect(page.locator('#candidate-feedback')).to_contain_text('暂无可信数据')
+    expect(page.locator('.candidate-card')).to_have_count(0)
+    expect(page.locator('#candidate-previous-filter')).to_be_visible()
+    flags['failures']=set();page.locator('#candidate-previous-filter').click()
+    expect(page.locator('.candidate-card')).to_have_count(1)
+    expect(page.locator('#candidate-feedback')).to_contain_text('已读取')
+    assert len(flags['writes'])==baseline and len(tracker.adapter.calls)==calls
+    page.locator('#new-topic').click();page.locator('#topic-name').fill('冲突草稿')
+    page.locator('#topic-query').fill('energy science');flags['conflict']=True
+    page.locator('#topic-save').click();expect(page.locator('#form-feedback')).to_contain_text('已更新')
+    # 保持模态框，触发底层只读重试：读取成功不可清除保存冲突与草稿。
+    page.locator('#reload').evaluate('el=>el.click()')
+    expect(page.locator('#state-feedback')).to_contain_text('已读取')
+    expect(page.locator('#form-feedback')).to_contain_text('已更新')
+    expect(page.locator('#topic-name')).to_have_value('冲突草稿')
+    evidence(page,'v031-conflict-preserved')
+
+
+def test_v031_first_failure_timeout_and_late_response(ui):
+    page,tracker,flags=ui
+    flags['offline']=True;page.reload()
+    expect(page.locator('#state-feedback')).to_contain_text('暂无可信数据')
+    expect(page.locator('#candidate-feedback')).to_contain_text('暂无可信数据')
+    expect(page.locator('#topics')).to_have_attribute('aria-busy','false')
+    expect(page.locator('#candidates')).to_have_attribute('aria-busy','false')
+    flags['offline']=False;page.locator('#reload').click()
+    expect(page.locator('#new-topic')).to_be_enabled()
+    # 一个忽略取消且晚到的失败响应，不能覆盖后发的成功。
+    page.evaluate('''() => {const original=window.fetch;let once=true;
+      window.fetch=(url,opts)=>{if(String(url).includes('/state')&&once){once=false;
+        return new Promise(resolve=>window.releaseOld=()=>resolve(new Response(JSON.stringify({detail:'晚到故障'}),{status:503})))}
+        return original(url,opts)};}''')
+    page.locator('#state-retry').click();page.locator('#state-retry').click()
+    expect(page.locator('#state-feedback')).to_contain_text('已读取')
+    page.evaluate('window.releaseOld()')
+    expect(page.locator('#state-feedback')).not_to_contain_text('晚到故障')
+    page.evaluate('''() => {const original=window.fetch;window.fetch=(url,opts)=>String(url).includes('/videos?') ?
+      new Promise((resolve,reject)=>opts.signal.addEventListener('abort',()=>reject(new DOMException('timeout','AbortError')))) : original(url,opts);}''')
+    page.clock.install();page.locator('#candidate-retry').click();page.clock.fast_forward(12001)
+    expect(page.locator('#candidate-feedback')).to_contain_text('读取超时')
+    expect(page.locator('#candidates')).to_have_attribute('aria-busy','false')
+    assert not flags['writes'] and not tracker.adapter.calls
+    evidence(page,'v031-timeout')
+
+
+def test_v031_off_reenable_and_gate_reasons(ui):
+    page,tracker,flags=ui
+    create(page)
+    page.locator('#mode-button').click();expect(page.locator('#mode-button')).to_have_text('开启手动搜索')
+    expect(page.locator('#mode-button')).to_be_enabled()
+    expect(page.locator('#mode-state')).to_contain_text('手动搜索已关闭')
+    page.locator('#mode-button').click();expect(page.locator('#mode-button')).to_have_text('关闭搜索')
+    assert not tracker.adapter.calls
+    tracker.config.is_us_market_guard_window=lambda now:True
+    page.locator('#reload').click();expect(page.locator('.topic-row')).to_contain_text('保护')
+    expect(page.get_by_role('button',name='搜索候选',exact=True)).to_be_disabled()
+    tracker.config.is_us_market_guard_window=lambda now:False
+    tracker.config.topic_search_daily_limit=0
+    page.locator('#reload').click();expect(page.locator('.topic-row')).to_contain_text('今日预算不足')
+    tracker.config.topic_search_daily_limit=20
+    page.locator('#reload').click();expect(page.get_by_role('button',name='搜索候选',exact=True)).to_be_enabled()
+    page.get_by_role('button',name='暂停',exact=True).click()
+    expect(page.locator('.topic-row')).to_contain_text('专题已暂停')

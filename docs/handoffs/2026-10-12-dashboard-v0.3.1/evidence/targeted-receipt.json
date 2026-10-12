@@ -1,0 +1,33 @@
+{
+  "source": "/private/var/folders/1d/mkk8l0cd595chsbbv6hfp5ym0000gn/T/topic-integration-overlay-2r6dklp6",
+  "snapshot": "/private/tmp/video-pytest-e831bzgp/sandbox/repo",
+  "probe": {
+    "exit_code": 0,
+    "seconds": 0.074
+  },
+  "pytest_arguments": [
+    "-q",
+    "tests/unit/test_dashboard_home_fixes.py",
+    "tests/browser/test_dashboard_workspace.py",
+    "tests/browser/test_product_settings_browser.py",
+    "tests/browser/test_topic_candidates_browser.py",
+    "tests/browser/test_manual_product_selection_browser.py",
+    "tests/unit/test_dashboard_interactions.py"
+  ],
+  "timeout_seconds": 600,
+  "source_manifest_sha256": "590cb30efb341da90d8e44780977ffabd8d9444ddec4bd000e61dcbd81d2e599",
+  "profile_sha256": "1cad91860c92d1523344e776fb86dec9118259411ec88a4e727b79d3b4e1369e",
+  "browser_runtime": {
+    "revision": "1223",
+    "version": "148.0.7778.96",
+    "executable": "/private/tmp/video-pytest-e831bzgp/sandbox/browser/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "browser_runtime_sha256": "25cc8d533964bc1ac34e63c057cf54755759f784ddd91b4251affd3f057fd2e5",
+  "media_runtime": null,
+  "media_runtime_sha256": null,
+  "pytest": {
+    "exit_code": 0,
+    "seconds": 77.885
+  },
+  "finished_at": "2026-10-12T07:09:29.439594+00:00"
+}

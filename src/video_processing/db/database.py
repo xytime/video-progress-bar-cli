@@ -3108,6 +3108,8 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 SUM(CASE WHEN score >= 75 THEN 1 ELSE 0 END) as qualified,
                 SUM(CASE WHEN status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'PUBLISHED', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'WECHAT_DEFERRED', 'LOCAL_ACCEPTED') THEN 1 ELSE 0 END) as processed,
                 SUM(CASE WHEN status IN ('PUBLISHED', 'SUBMITTED_BOUND') THEN 1 ELSE 0 END) as published,
+                SUM(CASE WHEN score >= 75 AND status IN ('PUBLISHED', 'SUBMITTED_BOUND') THEN 1 ELSE 0 END) as qualified_local_completed,
+                SUM(CASE WHEN score >= 75 AND status IN ('DOWNLOADING', 'TRANSCRIBING', 'COPYWRITING', 'PUBLISHING', 'PUBLISHED', 'SUBMITTED_BOUND', 'SUBMITTED_UNBOUND', 'WECHAT_DEFERRED', 'LOCAL_ACCEPTED') THEN 1 ELSE 0 END) as qualified_processed,
                 SUM(CASE WHEN status = 'FAILED' THEN 1 ELSE 0 END) as failed,
                 SUM(CASE WHEN censor_tag IS NOT NULL THEN 1 ELSE 0 END) as censor_blocked,
                 MAX(created_at) as latest_ingested_at,
@@ -3155,6 +3157,14 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
                 "processing_rate": round(proc_rate, 2),
                 "publishing_rate": round(pub_rate, 2),
                 "overall_conversion_rate": round(overall_rate, 2),
+                "cohort": {
+                    "ingested": ingested, "qualified": qualified, "processed": processed,
+                    "local_completed": published,
+                    "qualified_local_completed": row["qualified_local_completed"] or 0,
+                    "qualified_processed": row["qualified_processed"] or 0,
+                    "local_records_updated_at": row["latest_published_at"],
+                    "basis": "parent_created_at", "timezone": "Asia/Shanghai",
+                },
                 "latest_ingested_at": row["latest_ingested_at"],
                 "latest_published_at": row["latest_published_at"],
             }
@@ -6062,6 +6072,40 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             raise ValueError(f"Unknown error type: {error_type}")
         return categories[error_type]
 
+    @staticmethod
+    def _attention_case() -> str:
+        """主事项互斥分类；只考察当前异常家庭，正常切片旧错误不参与。"""
+        fault = "f.status IN ('FAILED', 'LOGIN_REQUIRED')"
+        related = "(f.id = pv.id OR (pv.status = 'SEGMENTED' AND f.parent_id = pv.id))"
+        message = "(COALESCE(f.error_msg, '') || ' ' || COALESCE(f.censor_tag, ''))"
+        login = f"(f.status = 'LOGIN_REQUIRED' OR {message} LIKE '%LOGIN_REQUIRED%' OR {message} LIKE '%cookie%' OR {message} LIKE '%登录%')"
+        policy = f"({message} LIKE '%Channel Policy%' OR {message} LIKE '%频道策略%' OR {message} LIKE '%Censorship P0%' OR {message} LIKE '%政治安全违禁%')"
+        # 同一错误含技术故障也不降级为纯策略观察项。
+        technical = ' OR '.join(f"{message} LIKE '%{word}%'" for word in
+                                ('timeout', 'network', 'traceback', 'exception', '连接', '超时', 'COPYWRITING', 'quality gate'))
+        exists = lambda extra: f"EXISTS (SELECT 1 FROM processed_videos f WHERE {related} AND {fault} AND ({extra}))"
+        error = "(pv.status IN ('FAILED','LOGIN_REQUIRED') OR (pv.status='SEGMENTED' AND " + exists('1=1') + "))"
+        return f"""CASE
+            WHEN pv.status IN ('UNCERTAIN','SUBMITTED_UNBOUND','SUBMITTED_BOUND') THEN 'delivery'
+            WHEN pv.status='WECHAT_DEFERRED' OR ({error} AND {exists(login)}) THEN 'blocked'
+            WHEN {error} AND {exists('1=1')} AND NOT {exists(f'NOT {policy} OR {technical}')} THEN 'policy'
+            WHEN {error} THEN 'execution'
+            WHEN pv.status='UNDER_REVIEW' THEN 'review'
+            ELSE NULL END"""
+
+    def get_attention_summary(self) -> Dict[str, Any]:
+        """一次只读查询保证数量、最近更新时间来自同一快照。"""
+        with self.get_connection() as conn:
+            rows = conn.execute(f"""WITH classified AS MATERIALIZED (
+                SELECT {self._attention_case()} AS kind, updated_at
+                FROM processed_videos pv WHERE pv.parent_id IS NULL)
+                SELECT kind, COUNT(*) AS count,
+                       MAX(CASE WHEN datetime(updated_at) IS NOT NULL THEN updated_at END) AS updated_at
+                FROM classified WHERE kind IS NOT NULL GROUP BY kind""").fetchall()
+        result = {kind: dict(count=0, updated_at=None) for kind in ('delivery','blocked','execution','review','policy')}
+        result.update({row['kind']: dict(count=row['count'], updated_at=row['updated_at']) for row in rows})
+        return result
+
     def get_video_filter_channels(self, tab: str, engagement_window_days: int = 3) -> List[str]:
         """返回当前场景可选频道，供控制面下拉框使用，不改变任何视频状态。"""
         condition, params = self._build_video_tab_condition(tab, engagement_window_days)
@@ -6093,9 +6137,15 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
         include_expired: bool = False,
         created_window: str = 'all',
         funnel_stage: Optional[str] = None,
+        attention_kind: Optional[str] = None,
     ) -> tuple[List[Dict[str, Any]], int]:
         """在 SQL 层先筛选、稳定排序，再返回当前页及同一谓词下的准确总数。"""
-        if funnel_stage:
+        if attention_kind:
+            if attention_kind not in {'delivery','blocked','execution','review','policy'} or funnel_stage:
+                raise ValueError('Unknown or conflicting attention kind')
+            clauses = ["pv.parent_id IS NULL", f"({self._attention_case()}) = ?"]
+            query_params = [attention_kind]
+        elif funnel_stage:
             stage_conditions = {
                 'ingested': "pv.parent_id IS NULL",
                 'qualified': "pv.score >= 75 AND pv.parent_id IS NULL",
@@ -6162,6 +6212,7 @@ class PipelineDB(TopicCandidateDAL, WallstreetExperimentDAL):
             "ELSE NULL END"
         )
         order_by = {
+            'updated_at_desc': 'datetime(pv.updated_at) DESC, pv.id ASC',
             'score_desc': 'pv.score DESC, pv.id ASC',
             'views_desc': '(pv.view_count IS NULL) ASC, pv.view_count DESC, pv.id ASC',
             'like_rate_desc': '(pv.like_count IS NULL OR pv.view_count IS NULL OR pv.view_count <= 0) ASC, CAST(pv.like_count AS REAL) / NULLIF(pv.view_count, 0) DESC, pv.id ASC',

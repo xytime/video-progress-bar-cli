@@ -4,11 +4,12 @@
 <meta name="topic-csrf" content="__TOPIC_CSRF__"><title>关键词追踪 · 视频控制台</title>
 <script src="/static/js/topic_display_preferences.js?v=1"></script>
 <link rel="stylesheet" href="/static/css/dashboard.css"><link rel="stylesheet" href="/static/css/product_settings.css?v=20261011-redesign">
-<link rel="stylesheet" href="/static/css/topic_candidates.css?v=1"><script defer src="/static/js/topic_candidates.js?v=1"></script>
-<link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-1"><script defer src="/static/js/console_navigation.js?v=20261012-1"></script></head><body><main class="product-settings topic-workbench">
+<link rel="stylesheet" href="/static/css/topic_candidates.css?v=1"><script defer src="/static/js/topic_candidates.js?v=20261012-031"></script>
+<link rel="stylesheet" href="/static/css/console_workspace.css?v=20261012-031"><script defer src="/static/js/console_navigation.js?v=20261012-1"></script></head><body><main class="product-settings topic-workbench">
 <nav class="breadcrumbs" aria-label="当前位置"><a href="/">视频控制台</a><span aria-hidden="true"> / </span><span aria-current="page">关键词追踪</span></nav>
 <header class="page-header"><div><h1>关键词追踪</h1><p class="hint">搜索近期视频，收藏选题意向。</p></div><div class="header-actions"><button disabled id="reload" type="button">重新载入</button><button id="new-topic" class="primary" type="button" disabled>新建专题</button></div></header>
-<div class="status-banner"><div><p id="mode-state" role="status">正在读取运行状态…</p><p id="budget" class="hint"></p></div><button id="mode-button" type="button" disabled>开启手动搜索</button></div>
+<div class="status-banner"><div><p id="mode-state" role="status">正在读取运行状态…</p><p id="gate-reason" class="hint"></p><p id="budget" class="hint"></p></div><button id="mode-button" type="button" disabled>开启手动搜索</button></div>
+<div class="read-feedback"><p id="state-feedback" role="status" aria-live="polite"></p><button disabled id="state-retry" type="button">重试运行状态</button></div>
 <p id="feedback" role="status" aria-live="polite"></p>
 <section aria-labelledby="topics-heading"><div class="section-head"><h2 id="topics-heading">专题</h2><span class="hint">最多 10 个有效专题；保存后不会自动搜索。</span></div><div id="topics" aria-busy="true"><p>正在载入专题…</p></div></section>
 <section aria-labelledby="pool-heading"><div class="section-head"><h2 id="pool-heading">候选池</h2><span class="hint">收藏仅保存选题意向。</span></div>
@@ -18,6 +19,7 @@
 <div><label for="eligibility-filter">规则状态</label><select id="eligibility-filter"><option value="">全部</option><option value="CHECKABLE">可人工核实</option><option value="INCOMPLETE">资料不足</option><option value="RESTRICTED">规则受限</option><option value="UNAVAILABLE">不可用</option></select></div>
 <div class="candidate-search"><label for="candidate-query">标题或频道</label><input id="candidate-query" type="search" maxlength="120" placeholder="搜索已有候选"><button disabled id="clear-query" type="button" aria-label="清空候选搜索">清空</button></div>
 </form>
+<div class="read-feedback"><p id="candidate-feedback" role="status" aria-live="polite"></p><button disabled id="candidate-retry" type="button">重试候选列表</button><button disabled id="candidate-previous-filter" type="button" hidden>返回上次成功条件</button></div>
 <div id="candidates" aria-busy="true"><p>正在载入候选…</p></div><div class="candidate-pagination"><p id="candidate-range" class="hint"></p><div><button id="previous" type="button" disabled>上一页</button><button id="next" type="button" disabled>下一页</button></div></div></section>
 <section aria-labelledby="jobs-heading"><h2 id="jobs-heading">最近搜索</h2><div id="jobs"></div><details><summary id="audit-open">操作记录</summary><div id="audit-records"></div></details></section>
 <dialog id="topic-editor" aria-labelledby="editor-title"><form id="topic-form" novalidate><div class="dialog-head"><h2 id="editor-title">新建专题</h2><button disabled id="editor-close" type="button" aria-label="关闭专题编辑">×</button></div><div class="dialog-body">

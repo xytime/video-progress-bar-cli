@@ -1,0 +1,45 @@
+{
+  "captured_at": "2026-10-12T06:32:10.520011+00:00",
+  "spec": "/Users/ryusei/.codex/worktrees/2d17/Video-precessing/docs/specs/dashboard-home-fixes-v0.3.1.md",
+  "status": "DRAFT_AWAITING_CONFIRMATION",
+  "missing_local_links": [],
+  "acceptance_ids": [
+    "R01",
+    "R02",
+    "R03",
+    "R04",
+    "R05",
+    "R06",
+    "R07",
+    "R08",
+    "R09",
+    "R10",
+    "R11",
+    "R12",
+    "R13",
+    "R14",
+    "P01",
+    "P02",
+    "S01",
+    "S02",
+    "S03",
+    "S04"
+  ],
+  "duplicate_ids": false,
+  "worktree_head": "e1399711e6c0a50f01a7e793174ebfd49e5bacc7",
+  "production_head": "e1399711e6c0a50f01a7e793174ebfd49e5bacc7",
+  "capabilities": {
+    "topic_available": true,
+    "search_enabled": false
+  },
+  "changes_this_turn": "specification only; no product code or production runtime mutation",
+  "unresolved": [
+    "specification confirmation",
+    "production credential project binding",
+    "all shared callers including other hosts",
+    "fresh actual-project quota",
+    "v0.3.1 implementation and acceptance",
+    "controlled deployment",
+    "bounded real trial and final manual opening"
+  ]
+}
