@@ -1,0 +1,74 @@
+{
+  "at": 1791785282.44824,
+  "hosts": {
+    "localhost": {
+      "home": 200,
+      "topic_page": 200,
+      "maintenance": {
+        "state": "MAINTENANCE",
+        "phase": "IDLE"
+      },
+      "topic": {
+        "name": "AI产业与算力",
+        "query": "AI infrastructure investment",
+        "state": "PAUSED"
+      },
+      "mode_rejected": {
+        "detail": {
+          "code": "MAINTENANCE",
+          "message": "维护状态不允许领取新工作"
+        }
+      },
+      "search_rejected": {
+        "detail": {
+          "code": "MAINTENANCE",
+          "message": "维护状态不允许领取新工作"
+        }
+      },
+      "mode": "OFF",
+      "jobs": 0,
+      "budget": {
+        "day": "2026-10-11",
+        "search": 0,
+        "general": 0
+      }
+    },
+    "127.0.0.1": {
+      "home": 200,
+      "topic_page": 200,
+      "maintenance": {
+        "state": "MAINTENANCE",
+        "phase": "IDLE"
+      },
+      "topic": {
+        "name": "AI产业与算力",
+        "query": "AI infrastructure investment",
+        "state": "PAUSED"
+      },
+      "mode_rejected": {
+        "detail": {
+          "code": "MAINTENANCE",
+          "message": "维护状态不允许领取新工作"
+        }
+      },
+      "search_rejected": {
+        "detail": {
+          "code": "MAINTENANCE",
+          "message": "维护状态不允许领取新工作"
+        }
+      },
+      "mode": "OFF",
+      "jobs": 0,
+      "budget": {
+        "day": "2026-10-11",
+        "search": 0,
+        "general": 0
+      }
+    }
+  },
+  "lan": {
+    "/topic-candidates": 403,
+    "/api/topic-candidates/health": 403,
+    "/api/topic-candidates/state": 403
+  }
+}
