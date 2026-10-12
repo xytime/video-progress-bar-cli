@@ -1,0 +1,1662 @@
+{
+  "schema": 1,
+  "date": "2026-10-12",
+  "author": {
+    "agent": "Codex",
+    "specific_model": "unknown"
+  },
+  "artifact_root": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/verification/ted-two-openings-2026-10-12",
+  "finals": [
+    {
+      "id": "CKAyfGItpgg",
+      "title": "职场对话三步开场",
+      "entry": "PipelineManager._prepare_speech_opening",
+      "receipt": {
+        "recipe": "ted-source-cleanup-v1",
+        "offset_seconds": 3.5,
+        "end_seconds": 667.457596,
+        "source_sha256": "6fc2dfba106fe6a42e67b6c9664a0bebcc856cffc57cb1d2ec31a2d2f6934654",
+        "packaging_sha256": "8f5477baee66fa289d786a9aa504572637a555f40436f1eae0822a788dfd406b",
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_duration": 667.457596,
+        "source_bytes": 86754210,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "TED-particle-brand-50fps"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING",
+        "analysis_seconds": 0.812,
+        "output_sha256": "b86251c6015efe0fe41fd284e26695d83cf5d74f5f45a488bc8c3832934283f3",
+        "output_bytes": 114992740,
+        "encode_and_decode_seconds": 115.65,
+        "removed_seconds": 3.5
+      },
+      "final": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/verification/ted-two-openings-2026-10-12/finals/CKAyfGItpgg_vertical_interactive.mp4",
+      "final_sha256": "ef83b17347ad9bf5a0e4e283bc3fd79645c923e6778f0a2cd5d8b9c36744855d",
+      "final_duration": 663.973991,
+      "subtitles": {
+        "events": 288,
+        "texts_unchanged": true,
+        "kind": "existing_bilingual_translation_mapped_not_new_full_asr",
+        "first": "I want to be long-winded and unclear\n \n我想滔滔不绝、含糊不清",
+        "last": "Thank you\n \n谢谢"
+      },
+      "editorial_binding_verified": true,
+      "base_streams": {
+        "start_seconds": [
+          0.0,
+          0.0
+        ],
+        "end_seconds": [
+          663.9,
+          663.973991
+        ],
+        "duration": 663.973991
+      },
+      "final_streams": {
+        "start_seconds": [
+          0.0,
+          0.0
+        ],
+        "end_seconds": [
+          663.9,
+          663.973991
+        ],
+        "duration": 663.973991
+      },
+      "base_audio": {
+        "compared_seconds": 663,
+        "minimum": 0.9853246808052063,
+        "median": 0.9996164441108704,
+        "samples": [
+          5311661,
+          5311797
+        ],
+        "lowest_windows": [
+          [
+            50,
+            0.9853246808052063
+          ],
+          [
+            591,
+            0.9936460852622986
+          ],
+          [
+            220,
+            0.994429349899292
+          ],
+          [
+            660,
+            0.9952242374420166
+          ],
+          [
+            411,
+            0.9952918291091919
+          ]
+        ]
+      },
+      "speech": {
+        "first": {
+          "original": {
+            "text": " I want to be long-winded and unclear. It's not a common opening line. Most people won't tell us when they're going to be long-winded, but we know. We can tell pretty quickly if someone's going to get to the...",
+            "words": [
+              "i",
+              "want",
+              "to",
+              "be",
+              "long",
+              "winded",
+              "and",
+              "unclear",
+              "it",
+              "s",
+              "not",
+              "a",
+              "common",
+              "opening",
+              "line",
+              "most",
+              "people",
+              "won",
+              "t",
+              "tell",
+              "us",
+              "when",
+              "they",
+              "re",
+              "going",
+              "to",
+              "be",
+              "long",
+              "winded",
+              "but",
+              "we",
+              "know",
+              "we",
+              "can",
+              "tell",
+              "pretty",
+              "quickly",
+              "if",
+              "someone",
+              "s",
+              "going",
+              "to",
+              "get",
+              "to",
+              "the"
+            ]
+          },
+          "final": {
+            "text": " I want to be long-winded and unclear. It's not a common opening line. Most people won't tell us when they're going to be long-winded, but we know. We can tell pretty quickly if someone's going to get to the point, or if we are in for a long and...",
+            "words": [
+              "i",
+              "want",
+              "to",
+              "be",
+              "long",
+              "winded",
+              "and",
+              "unclear",
+              "it",
+              "s",
+              "not",
+              "a",
+              "common",
+              "opening",
+              "line",
+              "most",
+              "people",
+              "won",
+              "t",
+              "tell",
+              "us",
+              "when",
+              "they",
+              "re",
+              "going",
+              "to",
+              "be",
+              "long",
+              "winded",
+              "but",
+              "we",
+              "know",
+              "we",
+              "can",
+              "tell",
+              "pretty",
+              "quickly",
+              "if",
+              "someone",
+              "s",
+              "going",
+              "to",
+              "get",
+              "to",
+              "the",
+              "point",
+              "or",
+              "if",
+              "we",
+              "are",
+              "in",
+              "for",
+              "a",
+              "long",
+              "and"
+            ]
+          }
+        },
+        "last": {
+          "original": {
+            "text": " I said you gave them or understood what it was about. How much smoother, how much easier would our jobs be? That, ladies and gentlemen, is the power of the first minute. Thank you. Applause.",
+            "words": [
+              "i",
+              "said",
+              "you",
+              "gave",
+              "them",
+              "or",
+              "understood",
+              "what",
+              "it",
+              "was",
+              "about",
+              "how",
+              "much",
+              "smoother",
+              "how",
+              "much",
+              "easier",
+              "would",
+              "our",
+              "jobs",
+              "be",
+              "that",
+              "ladies",
+              "and",
+              "gentlemen",
+              "is",
+              "the",
+              "power",
+              "of",
+              "the",
+              "first",
+              "minute",
+              "thank",
+              "you",
+              "applause"
+            ]
+          },
+          "final": {
+            "text": " said you gave them or understood what it was about. How much smoother, how much easier would our jobs be? That, ladies and gentlemen, is the power of the first minute. Thank you.",
+            "words": [
+              "said",
+              "you",
+              "gave",
+              "them",
+              "or",
+              "understood",
+              "what",
+              "it",
+              "was",
+              "about",
+              "how",
+              "much",
+              "smoother",
+              "how",
+              "much",
+              "easier",
+              "would",
+              "our",
+              "jobs",
+              "be",
+              "that",
+              "ladies",
+              "and",
+              "gentlemen",
+              "is",
+              "the",
+              "power",
+              "of",
+              "the",
+              "first",
+              "minute",
+              "thank",
+              "you"
+            ]
+          },
+          "closing_section_anchor": "is the power of the first minute thank you",
+          "excerpt_seconds": 18,
+          "asr_is_auxiliary_not_word_accuracy_proof": true
+        }
+      },
+      "reused_rendered_files": true,
+      "protected_artifacts_sha256": {
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/original_video/CKAyfGItpgg.mp4": "6fc2dfba106fe6a42e67b6c9664a0bebcc856cffc57cb1d2ec31a2d2f6934654",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/CKAyfGItpgg.ass": "fb7c1e4e0568da3603b50e5c596820d3926ef6de2dd771dfa62833439f0f523f",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/CKAyfGItpgg_vertical.mp4": "2541dc0934247dbae6e04f51e38a563a669247e2c39b882669f95b80f2b463b5",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/CKAyfGItpgg_vertical_interactive.mp4": "220ee19130e30d43d8416eeffe615c6e5371d79ae73be9727703cd3301c1f7b2"
+      },
+      "elapsed_seconds": 38.98,
+      "render_seconds": 38.285,
+      "source_and_history_unchanged": true
+    },
+    {
+      "id": "65LZk_S9HBY",
+      "title": "照护如何塑造领导力",
+      "entry": "PipelineManager._prepare_speech_opening",
+      "receipt": {
+        "recipe": "ted-source-cleanup-v1",
+        "offset_seconds": 10.0,
+        "end_seconds": 933.860136,
+        "source_sha256": "79cea266cef6213b1bf6ad1b78b9fa638df559e31ad691203275bd7d25c65b0e",
+        "packaging_sha256": "8f5477baee66fa289d786a9aa504572637a555f40436f1eae0822a788dfd406b",
+        "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+        "source_duration": 933.860136,
+        "source_bytes": 126775205,
+        "references": [
+          {
+            "edge": "prefix",
+            "reference_id": "TEDxSIUC-2026-brand-sponsor-opening"
+          }
+        ],
+        "reason": "VERIFIED_AV_PACKAGING",
+        "analysis_seconds": 0.827,
+        "output_sha256": "04be4eceecf91d7a79e38db90d437594cda58bbc87ff488c39fa0d523a523b47",
+        "output_bytes": 199086912,
+        "encode_and_decode_seconds": 90.557,
+        "removed_seconds": 10.0
+      },
+      "final": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/verification/ted-two-openings-2026-10-12/finals/65LZk_S9HBY_vertical_interactive.mp4",
+      "final_sha256": "b595395e01b18538ae806233d3b384ec19aadb079bff30fec0c328773adfd5b7",
+      "final_duration": 923.875011,
+      "subtitles": {
+        "events": 196,
+        "texts_unchanged": true,
+        "kind": "existing_bilingual_translation_mapped_not_new_full_asr",
+        "first": "I did locker room interviews with the likes of\nMichael Jordan, Dr. J. and Magic Johnson\n \n我曾在更衣室采访过迈克尔·乔丹、J博士\n和魔术师约翰逊等人",
+        "last": "They'll understand what they became\n \n他们会明白自己成为什么样的人"
+      },
+      "editorial_binding_verified": true,
+      "base_streams": {
+        "start_seconds": [
+          0.0,
+          0.0
+        ],
+        "end_seconds": [
+          923.789533,
+          923.875011
+        ],
+        "duration": 923.875011
+      },
+      "final_streams": {
+        "start_seconds": [
+          0.0,
+          0.0
+        ],
+        "end_seconds": [
+          923.789533,
+          923.875011
+        ],
+        "duration": 923.875011
+      },
+      "base_audio": {
+        "compared_seconds": 922,
+        "minimum": 0.970396876335144,
+        "median": 0.9993288218975067,
+        "samples": [
+          7390881,
+          7391005
+        ],
+        "lowest_windows": [
+          [
+            386,
+            0.970396876335144
+          ],
+          [
+            251,
+            0.9763287901878357
+          ],
+          [
+            542,
+            0.9869985580444336
+          ],
+          [
+            38,
+            0.9908483624458313
+          ],
+          [
+            869,
+            0.9937881231307983
+          ]
+        ]
+      },
+      "speech": {
+        "first": {
+          "original": {
+            "text": " I did locker room interviews with the likes of Michael Jordan, Dr. J. and Magic Johnson. I did sit down interviews in athletes' homes. And when I needed a...",
+            "words": [
+              "i",
+              "did",
+              "locker",
+              "room",
+              "interviews",
+              "with",
+              "the",
+              "likes",
+              "of",
+              "michael",
+              "jordan",
+              "dr",
+              "j",
+              "and",
+              "magic",
+              "johnson",
+              "i",
+              "did",
+              "sit",
+              "down",
+              "interviews",
+              "in",
+              "athletes",
+              "homes",
+              "and",
+              "when",
+              "i",
+              "needed",
+              "a"
+            ]
+          },
+          "final": {
+            "text": " I did locker room interviews with the likes of Michael Jordan, Dr. J. and Magic Johnson. I did sit down interviews and athlete's homes. And when I needed a quote, coach Jimmy Johnson's office door was always open to me. A level of justice no other reporter had at that time.",
+            "words": [
+              "i",
+              "did",
+              "locker",
+              "room",
+              "interviews",
+              "with",
+              "the",
+              "likes",
+              "of",
+              "michael",
+              "jordan",
+              "dr",
+              "j",
+              "and",
+              "magic",
+              "johnson",
+              "i",
+              "did",
+              "sit",
+              "down",
+              "interviews",
+              "and",
+              "athlete",
+              "s",
+              "homes",
+              "and",
+              "when",
+              "i",
+              "needed",
+              "a",
+              "quote",
+              "coach",
+              "jimmy",
+              "johnson",
+              "s",
+              "office",
+              "door",
+              "was",
+              "always",
+              "open",
+              "to",
+              "me",
+              "a",
+              "level",
+              "of",
+              "justice",
+              "no",
+              "other",
+              "reporter",
+              "had",
+              "at",
+              "that",
+              "time"
+            ]
+          }
+        },
+        "last": {
+          "original": {
+            "text": " but would not have pursued had I not been a caregiver. And despite everything that I've accomplished professionally, caregiver is still the most important job I ever had. Caregiving is not a detour from leadership. It is leadership practice under pressure. And that's where the consequences matter. And the next time someone walks into a room after caregiving, we won't ask what they did. We'll understand what they decay. The next time someone walks into a room after caregiving,",
+            "words": [
+              "but",
+              "would",
+              "not",
+              "have",
+              "pursued",
+              "had",
+              "i",
+              "not",
+              "been",
+              "a",
+              "caregiver",
+              "and",
+              "despite",
+              "everything",
+              "that",
+              "i",
+              "ve",
+              "accomplished",
+              "professionally",
+              "caregiver",
+              "is",
+              "still",
+              "the",
+              "most",
+              "important",
+              "job",
+              "i",
+              "ever",
+              "had",
+              "caregiving",
+              "is",
+              "not",
+              "a",
+              "detour",
+              "from",
+              "leadership",
+              "it",
+              "is",
+              "leadership",
+              "practice",
+              "under",
+              "pressure",
+              "and",
+              "that",
+              "s",
+              "where",
+              "the",
+              "consequences",
+              "matter",
+              "and",
+              "the",
+              "next",
+              "time",
+              "someone",
+              "walks",
+              "into",
+              "a",
+              "room",
+              "after",
+              "caregiving",
+              "we",
+              "won",
+              "t",
+              "ask",
+              "what",
+              "they",
+              "did",
+              "we",
+              "ll",
+              "understand",
+              "what",
+              "they",
+              "decay",
+              "the",
+              "next",
+              "time",
+              "someone",
+              "walks",
+              "into",
+              "a",
+              "room",
+              "after",
+              "caregiving"
+            ]
+          },
+          "final": {
+            "text": " but would not have pursued had I not been a caregiver. And despite everything that I've accomplished professionally, caregiver is still the most important job I ever had. Caregiving is not a detour from leadership. It is leadership practice under pressure, and that's where the consequences matter. And the next time someone walks into a room after caregiving, we won't ask what they did. We'll understand what they decay. The next time someone walks into a room after caregiving,",
+            "words": [
+              "but",
+              "would",
+              "not",
+              "have",
+              "pursued",
+              "had",
+              "i",
+              "not",
+              "been",
+              "a",
+              "caregiver",
+              "and",
+              "despite",
+              "everything",
+              "that",
+              "i",
+              "ve",
+              "accomplished",
+              "professionally",
+              "caregiver",
+              "is",
+              "still",
+              "the",
+              "most",
+              "important",
+              "job",
+              "i",
+              "ever",
+              "had",
+              "caregiving",
+              "is",
+              "not",
+              "a",
+              "detour",
+              "from",
+              "leadership",
+              "it",
+              "is",
+              "leadership",
+              "practice",
+              "under",
+              "pressure",
+              "and",
+              "that",
+              "s",
+              "where",
+              "the",
+              "consequences",
+              "matter",
+              "and",
+              "the",
+              "next",
+              "time",
+              "someone",
+              "walks",
+              "into",
+              "a",
+              "room",
+              "after",
+              "caregiving",
+              "we",
+              "won",
+              "t",
+              "ask",
+              "what",
+              "they",
+              "did",
+              "we",
+              "ll",
+              "understand",
+              "what",
+              "they",
+              "decay",
+              "the",
+              "next",
+              "time",
+              "someone",
+              "walks",
+              "into",
+              "a",
+              "room",
+              "after",
+              "caregiving"
+            ]
+          },
+          "closing_section_anchor": "caregiving is not a detour from leadership it is leadership practice under pressure",
+          "excerpt_seconds": 60,
+          "asr_is_auxiliary_not_word_accuracy_proof": true
+        }
+      },
+      "reused_rendered_files": true,
+      "protected_artifacts_sha256": {
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/original_video/65LZk_S9HBY.mp4": "79cea266cef6213b1bf6ad1b78b9fa638df559e31ad691203275bd7d25c65b0e",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/65LZk_S9HBY.ass": "d063ee18dcb196a36bb48aa9e155a1b37554610658c9255ba828fe1535384f26",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/65LZk_S9HBY_vertical.mp4": "2f32f8d233a1738d9f21f13a2f26cba4ddbd34e2eae1bc740d9a3e4676d9dfb6",
+        "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/65LZk_S9HBY_vertical_interactive.mp4": "01707cf8135b09dc5ee168ea02745a1a4f6fcf61092f75d7a1e19d07589f468b"
+      },
+      "elapsed_seconds": 63.788,
+      "render_seconds": 63.474,
+      "source_and_history_unchanged": true
+    }
+  ],
+  "independent_comparison": [
+    {
+      "id": "CKAyfGItpgg",
+      "final_audio_seconds": 657,
+      "final_audio_min": 0.9845492243766785,
+      "final_audio_median": 0.9995821118354797,
+      "known_pop_cue_seconds_excluded": [
+        15,
+        16,
+        17,
+        648,
+        649
+      ],
+      "audio_samples": [
+        5311661,
+        5311797
+      ],
+      "subtitle_events": 288,
+      "subtitle_texts_unchanged": true,
+      "subtitle_max_rounding_ms": 0,
+      "visual": [
+        {
+          "final_second": 0.2,
+          "source_second": 3.7,
+          "foreground_psnr": 46.28602216818123
+        },
+        {
+          "final_second": 1,
+          "source_second": 4.5,
+          "foreground_psnr": 39.472904208511956
+        },
+        {
+          "final_second": 5,
+          "source_second": 8.5,
+          "foreground_psnr": 40.43403197745729
+        },
+        {
+          "final_second": 30,
+          "source_second": 33.5,
+          "foreground_psnr": 40.8454405378594
+        },
+        {
+          "final_second": 331.9869955,
+          "source_second": 335.4869955,
+          "foreground_psnr": 40.22532131857159
+        },
+        {
+          "final_second": 658.973991,
+          "source_second": 662.473991,
+          "foreground_psnr": 41.436984478342616
+        }
+      ],
+      "contact_sheet": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/verification/ted-two-openings-2026-10-12/CKAyfGItpgg-final-evidence.jpg"
+    },
+    {
+      "id": "65LZk_S9HBY",
+      "final_audio_seconds": 917,
+      "final_audio_min": 0.9701185822486877,
+      "final_audio_median": 0.9993059039115906,
+      "known_pop_cue_seconds_excluded": [
+        15,
+        16,
+        17,
+        908,
+        909
+      ],
+      "audio_samples": [
+        7390881,
+        7391005
+      ],
+      "subtitle_events": 196,
+      "subtitle_texts_unchanged": true,
+      "subtitle_max_rounding_ms": 0,
+      "visual": [
+        {
+          "final_second": 0.2,
+          "source_second": 10.2,
+          "foreground_psnr": 37.55841589873483
+        },
+        {
+          "final_second": 1,
+          "source_second": 11.0,
+          "foreground_psnr": 36.94209759320178
+        },
+        {
+          "final_second": 5,
+          "source_second": 15.0,
+          "foreground_psnr": 36.81858373194502
+        },
+        {
+          "final_second": 30,
+          "source_second": 40.0,
+          "foreground_psnr": 35.535852382344764
+        },
+        {
+          "final_second": 461.9375055,
+          "source_second": 471.9375055,
+          "foreground_psnr": 27.074798545829637
+        },
+        {
+          "final_second": 918.875011,
+          "source_second": 928.875011,
+          "foreground_psnr": 38.2669029999365
+        }
+      ],
+      "contact_sheet": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/verification/ted-two-openings-2026-10-12/65LZk_S9HBY-final-evidence.jpg"
+    }
+  ],
+  "production_entry": {
+    "time": 1791780527.7028182,
+    "production_root": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+    "git_revision": "25a849215ad0b3d999ff0941e7e3fb360b436cf6",
+    "entry_module": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/src/video_processing/pipeline_manager.py",
+    "entry_sha256": "81aea78f2bdbcad3cf1f51a5db5871b30d57a2e755f7641ebd67ffb6675cd319",
+    "cleanup_sha256": "82c2c9e7e7ff937ad76080484e8f881acfa3f3dd685b08821ea53321ffdf61cd",
+    "packaging_sha256": "8f5477baee66fa289d786a9aa504572637a555f40436f1eae0822a788dfd406b",
+    "settings": {
+      "ted_source_cleanup": true,
+      "ted_opening_trim": true
+    },
+    "runtime": {
+      "active": 0,
+      "source_preparation": {
+        "ted_source_cleanup_enabled": true,
+        "ted_opening_trim_enabled": true,
+        "recipe": "ted-source-cleanup-v1"
+      },
+      "resource_control": {
+        "ffmpeg_config": "/Users/ryusei/Library/Application Support/VideoProcessing/ffmpeg-slot/resource-limits.json",
+        "ffmpeg_limit": 1,
+        "ffmpeg_config_error": null,
+        "ffmpeg_guard_enabled": true,
+        "pid": 724
+      },
+      "server_time": "12:48:47"
+    },
+    "executor": {
+      "pid": 1058,
+      "stage": "IDLE",
+      "current_video": null,
+      "git_revision": "25a849215ad0b3d999ff0941e7e3fb360b436cf6",
+      "heartbeat_at": 1791780523.961764,
+      "ted_source_cleanup_enabled": true,
+      "ted_opening_trim_enabled": true,
+      "ted_source_cleanup_recipe": "ted-source-cleanup-v1"
+    },
+    "cases": [
+      {
+        "id": "CKAyfGItpgg",
+        "selected": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/verification/ted-two-openings-2026-10-12/production-entry/speech_opening/CKAyfGItpgg/CKAyfGItpgg.mp4",
+        "receipt": {
+          "recipe": "ted-source-cleanup-v1",
+          "offset_seconds": 3.5,
+          "end_seconds": 667.457596,
+          "source_sha256": "6fc2dfba106fe6a42e67b6c9664a0bebcc856cffc57cb1d2ec31a2d2f6934654",
+          "packaging_sha256": "8f5477baee66fa289d786a9aa504572637a555f40436f1eae0822a788dfd406b",
+          "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+          "source_duration": 667.457596,
+          "source_bytes": 86754210,
+          "references": [
+            {
+              "edge": "prefix",
+              "reference_id": "TED-particle-brand-50fps"
+            }
+          ],
+          "reason": "VERIFIED_AV_PACKAGING",
+          "analysis_seconds": 0.602,
+          "output_sha256": "b86251c6015efe0fe41fd284e26695d83cf5d74f5f45a488bc8c3832934283f3",
+          "output_bytes": 114992740,
+          "encode_and_decode_seconds": 152.867,
+          "removed_seconds": 3.5
+        },
+        "source_unchanged": true,
+        "seconds": 154.11
+      },
+      {
+        "id": "65LZk_S9HBY",
+        "selected": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/verification/ted-two-openings-2026-10-12/production-entry/speech_opening/65LZk_S9HBY/65LZk_S9HBY.mp4",
+        "receipt": {
+          "recipe": "ted-source-cleanup-v1",
+          "offset_seconds": 10.0,
+          "end_seconds": 933.860136,
+          "source_sha256": "79cea266cef6213b1bf6ad1b78b9fa638df559e31ad691203275bd7d25c65b0e",
+          "packaging_sha256": "8f5477baee66fa289d786a9aa504572637a555f40436f1eae0822a788dfd406b",
+          "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+          "source_duration": 933.860136,
+          "source_bytes": 126775205,
+          "references": [
+            {
+              "edge": "prefix",
+              "reference_id": "TEDxSIUC-2026-brand-sponsor-opening"
+            }
+          ],
+          "reason": "VERIFIED_AV_PACKAGING",
+          "analysis_seconds": 1.886,
+          "output_sha256": "04be4eceecf91d7a79e38db90d437594cda58bbc87ff488c39fa0d523a523b47",
+          "output_bytes": 199086912,
+          "encode_and_decode_seconds": 166.883,
+          "removed_seconds": 10.0
+        },
+        "source_unchanged": true,
+        "seconds": 169.809
+      },
+      {
+        "id": "Hgh8L_aNiCA",
+        "selected": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/original_video/Hgh8L_aNiCA.mp4",
+        "receipt": {
+          "recipe": "ted-source-cleanup-v1",
+          "offset_seconds": 0.0,
+          "end_seconds": 177.075374,
+          "source_sha256": "2dfb832bb65b4c210f2f0b3afb3dfb4cc1c96651370a26242b94705af52a9111",
+          "packaging_sha256": "8f5477baee66fa289d786a9aa504572637a555f40436f1eae0822a788dfd406b",
+          "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+          "source_duration": 177.075374,
+          "source_bytes": 9101218,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING",
+          "analysis_seconds": 0.04
+        },
+        "source_unchanged": true,
+        "seconds": 0.504
+      }
+    ],
+    "synthetic_fault": {
+      "recipe": "ted-source-cleanup-v1",
+      "offset_seconds": 0.0,
+      "end_seconds": null,
+      "source_sha256": "25786661fb56fdef2f8998b98916501420f34d72773ba3cccf05b527603189d4",
+      "packaging_sha256": "8f5477baee66fa289d786a9aa504572637a555f40436f1eae0822a788dfd406b",
+      "prefix_manifest_sha256": "b17075ca3b502b1d7dcedd36d3a9c5c18249470cad929f76b46ea7ece36a55c4",
+      "reason": "UNAVAILABLE_ValueError",
+      "failure_code": "MISSING_AV_STREAM"
+    },
+    "tracked_pid_events": [
+      {
+        "args": [
+          "CKAyfGItpgg",
+          47535
+        ],
+        "kwargs": {
+          "slice_index": 0
+        }
+      },
+      {
+        "args": [
+          "CKAyfGItpgg",
+          47506
+        ],
+        "kwargs": {
+          "slice_index": 0
+        }
+      },
+      {
+        "args": [
+          "65LZk_S9HBY",
+          50029
+        ],
+        "kwargs": {
+          "slice_index": 0
+        }
+      },
+      {
+        "args": [
+          "65LZk_S9HBY",
+          47506
+        ],
+        "kwargs": {
+          "slice_index": 0
+        }
+      },
+      {
+        "args": [
+          "Hgh8L_aNiCA",
+          53939
+        ],
+        "kwargs": {
+          "slice_index": 0
+        }
+      },
+      {
+        "args": [
+          "Hgh8L_aNiCA",
+          47506
+        ],
+        "kwargs": {
+          "slice_index": 0
+        }
+      },
+      {
+        "args": [
+          "synthetic-truncated",
+          53953
+        ],
+        "kwargs": {
+          "slice_index": 0
+        }
+      },
+      {
+        "args": [
+          "synthetic-truncated",
+          47506
+        ],
+        "kwargs": {
+          "slice_index": 0
+        }
+      }
+    ],
+    "no_production_dal_or_publication_called": true
+  },
+  "deployment": {
+    "time": 1791780202.316225,
+    "production_root": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing",
+    "branch": "main",
+    "old_packaging_sha256": "e7ce1d73ff271f042c311e1772ea25a4bed2f1c006a993b580a407976dc44a2d",
+    "new_packaging_sha256": "8f5477baee66fa289d786a9aa504572637a555f40436f1eae0822a788dfd406b",
+    "idle_guard": {
+      "active": 0,
+      "dashboard_pid": 724,
+      "executor_pid": 1058,
+      "executor_stage": "IDLE",
+      "heartbeat": 1791780200.533107
+    },
+    "pipeline_lock_acquired": true,
+    "paths": [
+      "resources/ted-source-packaging.json",
+      "docs/verification/tools/ted_two_final_media.py",
+      "docs/verification/tools/ted_production_entry.py"
+    ],
+    "activation": "new cleanup subprocess reads manifest per call; processing Python code unchanged",
+    "no_service_restart_or_publication_triggered": true
+  },
+  "real_regression": {
+    "cases": [
+      {
+        "id": "1qmF_znXxrE",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 233.499864,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "c3eaca96b9cc545b74d0f2744e25d58b21bdc9b1aa04d8d85e9848642ec0d99c",
+        "source_unchanged": true,
+        "seconds": 0.165
+      },
+      {
+        "id": "Uk31lVtda2g",
+        "scenario": "品牌片头后讲话",
+        "expected_offset": 8.5,
+        "decision": {
+          "offset_seconds": 8.5,
+          "end_seconds": 854.447891,
+          "references": [
+            {
+              "edge": "prefix",
+              "reference_id": "Uk31lVtda2g"
+            }
+          ],
+          "reason": "VERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "3c22ccf29833c7f6fa367387593612ad0033dfb33591415f05c0b64246b4aa57",
+        "source_unchanged": true,
+        "seconds": 106.51
+      },
+      {
+        "id": "6xbG8OLQYys",
+        "scenario": "品牌片头后讲话",
+        "expected_offset": 7,
+        "decision": {
+          "offset_seconds": 7,
+          "end_seconds": 823.008073,
+          "references": [
+            {
+              "edge": "prefix",
+              "reference_id": "6xbG8OLQYys"
+            }
+          ],
+          "reason": "VERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "525d03add8fc797434273cea75305c2bffef8e45d61b5ff95c90f05cc123b783",
+        "source_unchanged": true,
+        "seconds": 8.566
+      },
+      {
+        "id": "1aY-puP8oOw",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 559.020408,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "82303a21c46597a2677153c72c9465d268121391b80ab153640a03e130b466ab",
+        "source_unchanged": true,
+        "seconds": 0.163
+      },
+      {
+        "id": "txf8CrI5z-k",
+        "scenario": "先唱歌再解释，表演属于内容",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 470.204082,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "71b91c410a781553646a8b4db62f254960beadb110a7dd8a4eb0192512e527fc",
+        "source_unchanged": true,
+        "seconds": 0.074
+      },
+      {
+        "id": "y64RDBeR19c",
+        "scenario": "手风琴演示，无讲话的音乐内容",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 485.877551,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "1471c079058b14af26914210570fb4373f976e7722686d2ae1c0011fd1fb2e2c",
+        "source_unchanged": true,
+        "seconds": 0.124
+      },
+      {
+        "id": "n4WktuDT49I",
+        "scenario": "音乐示范与讲话混合",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 817.063764,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "9c506dc99a2dc22ecf9ca1d8be5bcf7d09d0c6573619859357a62c8f41fef7f5",
+        "source_unchanged": true,
+        "seconds": 4.91
+      },
+      {
+        "id": "535jVKx0_DI",
+        "scenario": "品牌片头后讲话",
+        "expected_offset": 10.5,
+        "decision": {
+          "offset_seconds": 10.5,
+          "end_seconds": 674.075283,
+          "references": [
+            {
+              "edge": "prefix",
+              "reference_id": "535jVKx0_DI"
+            }
+          ],
+          "reason": "VERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "a82a64bc57d5c23be59919326ce6430d511df42c4919cb1c86279f4ef6d647ad",
+        "source_unchanged": true,
+        "seconds": 5.865
+      },
+      {
+        "id": "2SS8xDcsXCM",
+        "scenario": "掌声及早期含混信号，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 433.934512,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "2f049545f0467b019055b6d4d3b537c09aebc1b8c9ee256afe6220c294d312d3",
+        "source_unchanged": true,
+        "seconds": 0.075
+      },
+      {
+        "id": "AlY6ztT12Ps",
+        "scenario": "赞助卡、讲者及屏幕文字",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 825.817687,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "416f267ff8bdfaed24709320e5d2690431485d21ce1c02999c997656890e27dc",
+        "source_unchanged": true,
+        "seconds": 1.211
+      },
+      {
+        "id": "P1hob_amyIg",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 890.369161,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "11e8eb412aa54d4ce0e8027e89a65ec91e7e555fe99f35f16c3b1dd4f35791cd",
+        "source_unchanged": true,
+        "seconds": 5.848
+      },
+      {
+        "id": "rU-Awn4m2VY",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 1078.822313,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "515f11e9a320cf2de2418f19e8af9cfa5055facf072009cd0ffdbcb0981eaaad",
+        "source_unchanged": true,
+        "seconds": 2.41
+      },
+      {
+        "id": "DTwHfQR-_Ac",
+        "scenario": "品牌片头后讲话",
+        "expected_offset": 8.5,
+        "decision": {
+          "offset_seconds": 8.5,
+          "end_seconds": 788.2478,
+          "references": [
+            {
+              "edge": "prefix",
+              "reference_id": "DTwHfQR-_Ac"
+            }
+          ],
+          "reason": "VERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "f364f6a5a3d4d30167ae08d2dab5bfbaef880bb991fdb0dd142be3dea0ab9c7c",
+        "source_unchanged": true,
+        "seconds": 4.674
+      },
+      {
+        "id": "BDA2oTj_6KI",
+        "scenario": "先掌声后讲话，未登记舞台画面",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 1165.827483,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "738cda3d9d9ee9f2b664e10a8cc0ddc2cb55acb0019f9ef27118b62ee2eebff8",
+        "source_unchanged": true,
+        "seconds": 0.206
+      },
+      {
+        "id": "CfuEK3U6Bog",
+        "scenario": "品牌片头后讲话",
+        "expected_offset": 8,
+        "decision": {
+          "offset_seconds": 8,
+          "end_seconds": 1099.279093,
+          "references": [
+            {
+              "edge": "prefix",
+              "reference_id": "CfuEK3U6Bog"
+            }
+          ],
+          "reason": "VERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "ac5b2573da8f98f23aebcef00957caa7f24e1aa31dbc83f5a2a4f8e98713949a",
+        "source_unchanged": true,
+        "seconds": 3.161
+      },
+      {
+        "id": "1eCX3na89-U",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 583.4478,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "647a33a94b22bcb1918ea2d9251b66f1b0b81b62e7a4d092cdffa999ecf26234",
+        "source_unchanged": true,
+        "seconds": 0.939
+      },
+      {
+        "id": "27SwlEfTbUI",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 592.480363,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "5f9d6de70d132ab142a6a68cb6b754e93bd781518be120ea812c94bf1d226140",
+        "source_unchanged": true,
+        "seconds": 0.943
+      },
+      {
+        "id": "2L5jOA6JnHc",
+        "scenario": "品牌片头后讲话",
+        "expected_offset": 8.5,
+        "decision": {
+          "offset_seconds": 8.5,
+          "end_seconds": 1364.334875,
+          "references": [
+            {
+              "edge": "prefix",
+              "reference_id": "Uk31lVtda2g"
+            }
+          ],
+          "reason": "VERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "2d794f24083e8d05f6d84a2fee896cd127124f0261068805d8b5449ee5040162",
+        "source_unchanged": true,
+        "seconds": 2.223
+      },
+      {
+        "id": "PKN3b8hmzWg",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 790.732336,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "9df86629752dc0ec2dd3b8d5dea8997dd80abe72b3365dcd9027a4cfb9629957",
+        "source_unchanged": true,
+        "seconds": 0.08
+      },
+      {
+        "id": "Lk7d0xG3AZk",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 993.976599,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "dbf543d1d1aa1a3e2b73575a725d932a8a4ab59ae443f9dca65d77a6dcab863c",
+        "source_unchanged": true,
+        "seconds": 0.965
+      },
+      {
+        "id": "0lQtYesj_yI",
+        "scenario": "主题文字只在开场卡出现",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 598.215692,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "91b18327efa1acd8ede5f1cd66f1c77c684e3217c18946c7e20d1004a988c9e0",
+        "source_unchanged": true,
+        "seconds": 0.977
+      },
+      {
+        "id": "-_GCY_ZQyUs",
+        "scenario": "讲者照片及主题只在开场卡出现",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 663.324444,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "3446319979b379ed229051043dce0a1c253d3c9b78b88f4db4871cf0b9d32041",
+        "source_unchanged": true,
+        "seconds": 0.959
+      },
+      {
+        "id": "81iS7JsTGmk",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 605.413878,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "1039b266b097f1e4240b5ed45865ea90d147765ffcc8e02dc6ba43ae2736e8d6",
+        "source_unchanged": true,
+        "seconds": 3.798
+      },
+      {
+        "id": "Hd8npxrnpuo",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 422.626395,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "509931e0ae21309d5e3b53b1fdd490923090304c2498e88570c3da9cac2dd59b",
+        "source_unchanged": true,
+        "seconds": 1.177
+      },
+      {
+        "id": "jCbITOCoxpo",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 498.764626,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "b0e50ca00c3662fd08b73851937a6752099d9b04b26b5b7d2037217c68e973ad",
+        "source_unchanged": true,
+        "seconds": 1.012
+      },
+      {
+        "id": "gduYQKmz05M",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 123.924898,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "b81bec3a52d39c4e39d0367096de249e5b6bda8276b159ad9b514ae81ee393f0",
+        "source_unchanged": true,
+        "seconds": 0.033
+      },
+      {
+        "id": "9Ff4S1FJdRM",
+        "scenario": "开头疑似讲话或收益不足，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 817.365624,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "56c7038e2edfd6780abb6fd6b283a234793f98e83cfdf05397cf9db5a7ae183b",
+        "source_unchanged": true,
+        "seconds": 0.086
+      },
+      {
+        "id": "5SNEMFH7NlE",
+        "scenario": "立即短问候，保留随后内容",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 973.589478,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "a24d31ec34db5bdc43aaab3d22d692c5b362bf07b00e731d9cfd9303589b439a",
+        "source_unchanged": true,
+        "seconds": 0.17
+      },
+      {
+        "id": "pT0HuZM4Tf0",
+        "scenario": "早期含混信号，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 376.952744,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "03c654fc63b5957f8d297d73d7606a0d9d8e6fc39050a0739455fb4d74b48cc2",
+        "source_unchanged": true,
+        "seconds": 0.057
+      },
+      {
+        "id": "oyRxhiAC9u8",
+        "scenario": "访谈从讲话开始，保留",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 1247.468844,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "8535257f3bb8607adf3d2d3dbe86fa10635e52df25f97f0a20e1bca21e91ca3e",
+        "source_unchanged": true,
+        "seconds": 0.129
+      },
+      {
+        "id": "Hgh8L_aNiCA",
+        "scenario": "讲话立即开始及重要提醒文字",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 177.075374,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "2dfb832bb65b4c210f2f0b3afb3dfb4cc1c96651370a26242b94705af52a9111",
+        "source_unchanged": true,
+        "seconds": 0.032
+      },
+      {
+        "id": "tBfHI8sNWVU",
+        "scenario": "讲话立即开始",
+        "expected_offset": 0,
+        "decision": {
+          "offset_seconds": 0.0,
+          "end_seconds": 937.366349,
+          "references": [],
+          "reason": "UNVERIFIED_AV_PACKAGING"
+        },
+        "source_sha256": "fb3ebbc404757721c9e47e51509c38b401db35b7ec481d9ac5adfc3696f2d5b4",
+        "source_unchanged": true,
+        "seconds": 1.034
+      }
+    ],
+    "unavailable": []
+  },
+  "coverage": {
+    "real_files": 34,
+    "trimmed": 8,
+    "preserved": 26,
+    "new_template_reference_files": 2,
+    "general_accuracy_not_estimated": true
+  },
+  "tests": {
+    "passed": 94,
+    "media_passed": 74,
+    "ready_dispatch_passed": 20,
+    "receipts": {
+      "isolated-media-tests": {
+        "source": "/Users/ryusei/.codex/worktrees/f600/Video-precessing",
+        "snapshot": "/private/tmp/video-pytest-kibblfrh/sandbox/repo",
+        "probe": {
+          "exit_code": 0,
+          "seconds": 0.077
+        },
+        "pytest_arguments": [
+          "-q",
+          "tests/unit/test_ted_source_cleanup.py",
+          "tests/unit/test_speech_opening.py",
+          "tests/unit/test_speech_opening_runtime.py",
+          "tests/unit/test_insight_processor_v2.py",
+          "tests/unit/test_insight_editorial.py"
+        ],
+        "timeout_seconds": 600,
+        "source_manifest_sha256": "b8560578978a970c5d03c0b51c959e65d5d6c822e8cbdb292b95118a097902c5",
+        "profile_sha256": "aa04f5193fd7d3757138470e7730e78717644b09fce35de4fef5b74610c5ca78",
+        "browser_runtime": null,
+        "browser_runtime_sha256": null,
+        "media_runtime": {
+          "models": {
+            "tiny": {
+              "source": "/Volumes/EXT2T/AppDataOffload/ryusei/ML/whisper/tiny.pt",
+              "snapshot": "/private/tmp/video-pytest-kibblfrh/sandbox/cache/whisper/tiny.pt",
+              "sha256": "65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9",
+              "bytes": 75572083
+            },
+            "base": {
+              "source": "/Volumes/EXT2T/AppDataOffload/ryusei/ML/whisper/base.pt",
+              "snapshot": "/private/tmp/video-pytest-kibblfrh/sandbox/cache/whisper/base.pt",
+              "sha256": "ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e",
+              "bytes": 145262807
+            }
+          },
+          "metadata_sha256": "79ecbed714783b6230931a3dba6d5da6d386e2d44f9fc27256e4fc72751e1f62",
+          "model_cache": "/private/tmp/video-pytest-kibblfrh/sandbox/cache/whisper",
+          "cpu_threads": 2
+        },
+        "media_runtime_sha256": "b80fffa935fc235c77c526c7cd3ae1f1c8c2cc523698a4fe72142cf2af2fdeee",
+        "pytest": {
+          "exit_code": 0,
+          "seconds": 77.982
+        },
+        "finished_at": "2026-10-12T04:19:21.385548+00:00"
+      },
+      "isolated-ready-tests": {
+        "source": "/Users/ryusei/.codex/worktrees/f600/Video-precessing",
+        "snapshot": "/private/tmp/video-pytest-ckx8ew9x/sandbox/repo",
+        "probe": {
+          "exit_code": 0,
+          "seconds": 0.149
+        },
+        "pytest_arguments": [
+          "-q",
+          "tests/unit/test_ready_publication_dispatch.py"
+        ],
+        "timeout_seconds": 600,
+        "source_manifest_sha256": "8a3ff640aeacde6820b915a0301465dac5e0ea4b2af970ba01189c4ddfecb21d",
+        "profile_sha256": "897be6a61c41664e3ad105dff0416fd44adfc5ccb573e0d66d060e01b65c4bae",
+        "browser_runtime": null,
+        "browser_runtime_sha256": null,
+        "media_runtime": null,
+        "media_runtime_sha256": null,
+        "pytest": {
+          "exit_code": 0,
+          "seconds": 5.012
+        },
+        "finished_at": "2026-10-12T04:21:58.811913+00:00"
+      }
+    }
+  },
+  "migration": [
+    {
+      "path": "real-regression.json",
+      "sha256": "0278e47e14d4e5d8e2902c0bf75605349c67484c0b804ab1d5d3807cfc681c04",
+      "bytes": 14610
+    },
+    {
+      "path": "65LZk_S9HBY-vad.json",
+      "sha256": "59ef297836a28e10e9e816737c4011e90973d4540343518301e560581dec034b",
+      "bytes": 13431
+    },
+    {
+      "path": "CKAyfGItpgg-asr.json",
+      "sha256": "952da6a672fc8cee346d4f06e5bbc8a83b826795e96ec0e444595697e65b7c3c",
+      "bytes": 15212
+    },
+    {
+      "path": "CKAyfGItpgg-boundary.jpg",
+      "sha256": "11055071087f228115c7fdea0e0c589ea4bd88cda0c23903231ef6a33e6d3ad4",
+      "bytes": 16942
+    },
+    {
+      "path": "65LZk_S9HBY-asr.json",
+      "sha256": "bc6cc3445446b873ed79026c68e793776520a740f9b72b40ff1fdeffba56d57a",
+      "bytes": 12152
+    },
+    {
+      "path": "CKAyfGItpgg-vad.json",
+      "sha256": "b29069f9f8bba983d3abe36164247d7de857a72db911ad03b1ed271018b8e1b7",
+      "bytes": 13169
+    },
+    {
+      "path": "65LZk_S9HBY-boundary.jpg",
+      "sha256": "47acbebc05c2cd5f2f72e752c7afbd3c46c740662c9da04c1621e5aa5e5ecfcb",
+      "bytes": 55374
+    },
+    {
+      "path": "65LZk_S9HBY-opening-frames.jpg",
+      "sha256": "37ff55697afcb797ee7376b886afd26f8891c175b0bdc47272254816fe1e408c",
+      "bytes": 98326
+    },
+    {
+      "path": "CKAyfGItpgg-opening-frames.jpg",
+      "sha256": "88fa8672038a7280d01c14bb0cf832867bf2769c24a830c27b5cfd48a3e6cd9d",
+      "bytes": 94468
+    },
+    {
+      "path": "finals/CKAyfGItpgg_interrupted_vertical.mp4",
+      "sha256": "18bc1e4629ac6e6e850869ed8a54b86c0cacabd308f40618c1677d07a135f16f",
+      "bytes": 43394793
+    },
+    {
+      "path": "finals/speech_opening/CKAyfGItpgg/CKAyfGItpgg.opening.json",
+      "sha256": "f8ea3b54874da8fb90e2921bd89ca0cde858dc8524f5566508234f7e54effa04",
+      "bytes": 782
+    },
+    {
+      "path": "finals/speech_opening/CKAyfGItpgg/CKAyfGItpgg.mp4",
+      "sha256": "b86251c6015efe0fe41fd284e26695d83cf5d74f5f45a488bc8c3832934283f3",
+      "bytes": 114992740
+    },
+    {
+      "path": "finals/speech_opening/CKAyfGItpgg/CKAyfGItpgg.ass",
+      "sha256": "aedc5db7831e663258f8b88f8194559939d195b853875419528c7389da11b827",
+      "bytes": 69229
+    }
+  ],
+  "limits": {
+    "not_new_full_asr_or_translation": true,
+    "two_natural_sources_have_no_separate_editorial_intro": true,
+    "editorial_full_composition_regression_uses_synthetic_media_and_tts_timing_substitutes": true,
+    "production_probe_is_not_a_natural_new_job": true,
+    "no_publication_or_reposting": true,
+    "suffix_scope_unchanged": true,
+    "unknown_packaging_preserves_source": true
+  },
+  "delivery_receipt": "/Volumes/EXT2T/MacMini4_SSD/PycharmProjects/Video-precessing/output/verification/ted-two-openings-2026-10-12/delivery.json"
+}

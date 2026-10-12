@@ -4,6 +4,7 @@
 | Version | Date | Author | Description |
 | --- | --- | --- | --- |
 | 1.0.0 | 2026-10-10 | Codex | 全音画匹配、缓存修复、失败重试、旧绑定及生产入口。 |
+| 1.1.0 | 2026-10-12 | Codex | 新模板使未成片的旧保留收据重新检测；文件名不参与判断。 |
 """
 import json
 from pathlib import Path
@@ -58,6 +59,27 @@ def test_real_decode_both_edges_and_corrupt_cache_recovery(packaged_source, tmp_
     cleanup.media.validate_prepared(repaired, 6.5)
     repaired.with_suffix(".opening.json").write_text("broken")
     assert cleanup.prepare_source(packaged_source, target)[0] == repaired
+
+
+def test_new_manifest_invalidates_untrimmed_receipt_before_render(packaged_source, tmp_path):
+    manifest = cleanup.PACKAGING
+    verified = manifest.read_bytes()
+    manifest.write_text('{"version":1,"prefixes":[],"suffixes":[]}')
+    output = tmp_path / "prepared"
+    selected, old = cleanup.prepare_source(packaged_source, output)
+    assert selected == packaged_source and old["reason"] == "UNVERIFIED_AV_PACKAGING"
+    manifest.write_bytes(verified)
+    selected, new = cleanup.prepare_source(packaged_source, output)
+    assert selected != packaged_source and new["offset_seconds"] == 3.5
+    assert old["packaging_sha256"] != new["packaging_sha256"]
+
+
+def test_verified_packaging_does_not_depend_on_source_name(packaged_source, tmp_path):
+    renamed = packaged_source.with_name("unrelated-source-name.mp4")
+    renamed.write_bytes(packaged_source.read_bytes())
+    selected, receipt = cleanup.prepare_source(renamed, tmp_path / "prepared")
+    assert selected != renamed and receipt["offset_seconds"] == 3.5
+    assert receipt["end_seconds"] == 10
 
 
 @pytest.mark.parametrize("filter_name", ["volume=0.1", "hue=s=0"])
