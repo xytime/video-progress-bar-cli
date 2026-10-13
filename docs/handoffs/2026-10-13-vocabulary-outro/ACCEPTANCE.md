@@ -25,3 +25,16 @@
 
 此记录的测试和渲染证据不替代生产采用回执。生产目录有无关未提交开发工作，采用须保留并通过整合清单与维护门禁。
 回退本功能时，在维护窗口精确回退本次新增模块/CLI及 pipeline_manager 接线，保留源片、派生 MP4、回执与账本，不回滚数据库，不触发重发。恢复原选片方法后仍使用原基础成片。
+
+## 已完成生产采用
+
+实现提交 `a3c4d90` 已在受控维护窗口合入生产 main。期间其他会话已更新主干，故先同步到 `c797b6b`，再使用生产现有 runtime 文件建立整合测试副本；整合回归 **211 passed**，未把其他人的改动纳入本次提交。
+
+整合测试证据：`/Volumes/EXT2T/AppDataOffload/ryusei/TestRuns/video-pytest-altx1mds`；测试清单 SHA-256：`940d5b54665c855d9c726c3dab7f970e8809d773bcbe37074fd1d972401ae1ec`。部署 plan 核验全部最终 runtime 文件与此清单一致。
+
+真实维护部署回执：`/Users/ryusei/Library/Application Support/VideoProcessing/deployments/vocabulary-outro-20261013/`。
+`journal.json`：baseline、freeze、stop、backup、adopt、start、resume、restore、verify 九步完成，COMPLETE，pending=null。
+数据库一致性备份 integrity=ok；源码采用校验保留原 dirty 和未跟踪清单；调度按原状恢复。
+最终回读 maintenance=RUNNING/IDLE、搜索 OFF、jobs=[]。新运行源码指纹 `f105dd793478ede7013468bda5989b435bfe929a21b874a35f932860992039fb`，UI PID 68922；此为采用时快照，不保证未来 PID 或任务状态不变。
+
+生产目录新 CLI 对同一真实样片再次读取，输出 mtime 不变，缓存复用通过；只读 settings 核对 `enable_wechat_article_link=false`。本次未运行全量 pipeline、上传器或发布命令，未创建验收用生产任务。
