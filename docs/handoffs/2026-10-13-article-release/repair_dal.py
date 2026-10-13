@@ -32,8 +32,10 @@ class PipelineDB(BasePipelineDB):
     """一次性运维 DAL；不安装到生产业务路径，不允许通用目标参数。"""
 
     @staticmethod
-    def repair_snapshot(path):
-        with closing(sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+    def repair_snapshot(path, *, verified_backup=False):
+        # immutable 只用于已验证的一致性备份；活库必须正常读取 WAL。
+        suffix = "?mode=ro&immutable=1" if verified_backup else "?mode=ro"
+        with closing(sqlite3.connect(Path(path).resolve().as_uri() + suffix, uri=True)) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute("SELECT * FROM processed_videos WHERE id=?", (TARGET["id"],)).fetchone()
             return dict(row) if row else None

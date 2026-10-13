@@ -125,7 +125,8 @@ def test_controlled_recovery_chain(record, tmp_path, monkeypatch, isolated_runni
     directory = tmp_path / 'deployment'
     directory.mkdir()
     (directory / 'plan.json').write_text('{}')
-    dal.PipelineDB.maintenance_backup(path, directory / 'ledger-inspection.sqlite')
+    proof = dal.PipelineDB.maintenance_backup(path, directory / 'ledger-inspection.sqlite')
+    recovery.write_json(directory/'ledger-inspection-backup.json', proof)
     control = isolated_running_maintenance
     while control.status()['version'] < 9:
         value = control.status()
